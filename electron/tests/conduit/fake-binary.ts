@@ -11,9 +11,19 @@
 import http from 'node:http';
 
 const port = parseInt(process.env.FAKE_CONDUIT_PORT ?? '8008', 10);
+const ignoreSigterm = process.env.FAKE_IGNORE_SIGTERM === '1';
+// When set, /health holds the socket open forever (never responds). Used to
+// exercise stopConduit's SIGKILL escalation and healthCheck's per-request
+// timeout clamping: the client must abort via AbortSignal.timeout.
+const noHealth = process.env.FAKE_NO_HEALTH === '1';
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
+    if (noHealth) {
+      // Intentionally never call res.end(): the connection hangs until the
+      // client aborts it. This is the "unhealthy / hung endpoint" shape.
+      return;
+    }
     res.writeHead(200).end('OK');
   } else {
     res.writeHead(404).end();
@@ -32,8 +42,16 @@ server.listen(port, '127.0.0.1', () => {
   process.stdout.write(`READY:${actual}\n`);
 });
 
-// Graceful shutdown on SIGTERM (sent by stopConduit). Close outstanding
-// connections then exit 0 so the manager's exit handler resolves cleanly.
-process.on('SIGTERM', () => {
-  server.close(() => process.exit(0));
-});
+if (ignoreSigterm) {
+  // Swallow SIGTERM so only SIGKILL (which cannot be caught) can stop us.
+  // Verifies stopConduit's force-kill escalation path.
+  process.on('SIGTERM', () => {
+    process.stdout.write('fake-conduit: ignoring SIGTERM\n');
+  });
+} else {
+  // Graceful shutdown on SIGTERM (sent by stopConduit). Close outstanding
+  // connections then exit 0 so the manager's exit handler resolves cleanly.
+  process.on('SIGTERM', () => {
+    server.close(() => process.exit(0));
+  });
+}
