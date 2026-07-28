@@ -2,6 +2,9 @@
   "name": "@momo-studio/electron",
   "private": true,
   "version": "0.1.0",
+  "description": "Momo Studio — 个人桌面端多 agent 协作平台",
+  "author": "Momo Studio",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "main": "dist/main/index.js",
   "scripts": {

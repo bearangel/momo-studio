@@ -42,14 +42,8 @@ jobs:
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (dmg)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --mac
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --mac --publish never
         env:
-          # 代码签名（如有证书可取消注释）
-          # CSC_LINK: ${{ secrets.MAC_CERTIFICATE }}
-          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          # NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
-          # NOTARIZE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # NOTARIZE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload macOS artifacts
@@ -97,7 +91,7 @@ jobs:
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (AppImage + deb)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --linux
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --linux --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -142,7 +136,7 @@ jobs:
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (nsis exe)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --win
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
