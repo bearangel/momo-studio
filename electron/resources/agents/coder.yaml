@@ -1,5 +1,7 @@
 # 程序员 — 根据需求实现代码，支持多种编程语言。
-# 应用启动时由 builtin.ts 幂等注册到 SQLite（source=builtin）。
+# pm-agent 的子 agent：通过 parentAgentId 关联，install pm-agent 时自动跟随注册。
+# 也可单独添加到 workspace（addToWorkspace 不受 type 限制）。
+# 应用启动时由 builtin.ts 两阶段注册到 SQLite（source=builtin）。
 apiVersion: v1
 kind: AgentDefinition
 metadata:
@@ -9,7 +11,9 @@ metadata:
   description: 根据需求实现代码，支持多种编程语言
   iconEmoji: "💻"
 spec:
-  type: standalone
+  type: sub
+  # parentAgentId 是 slug 引用，builtin.ts 注册时解析为 pm-agent 的实际 id
+  parentAgentId: pm-agent
   runtime: declarative
   declarative:
     systemPrompt: |

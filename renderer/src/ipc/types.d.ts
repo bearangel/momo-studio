@@ -54,6 +54,10 @@ export interface AgentDefinition {
   iconEmoji: string;
   /** 父 agent ID（仅 type='sub' 时有值），用于 UI 展示主子 agent 分组 */
   parentAgentId?: string;
+  /** 默认 MCP server 引用（Layer 1 能力），与 electron 端 McpRef 对齐 */
+  defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
+  /** 默认 Skill 引用（Layer 1 能力），与 electron 端 SkillRef 对齐 */
+  defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
 }
 
 export interface AgentAssignment {
