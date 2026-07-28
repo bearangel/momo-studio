@@ -7,10 +7,16 @@ const proc = process as NodeProcessWithResources;
 function perOsFilename(): string {
   const platform = process.platform;
   const arch = process.arch;
-  if (platform === 'win32') return 'conduit-windows-x64.exe';
-  if (platform === 'darwin') return arch === 'arm64' ? 'conduit-darwin-arm64' : 'conduit-darwin-x64';
-  if (platform === 'linux') return 'conduit-linux-x64';
-  throw new Error(`Unsupported platform: ${platform}-${arch}`);
+  // Conduwuit (formerly Conduit) ships Linux static binaries only.
+  // macOS/Windows: no native binary — must run Conduwuit via Docker.
+  if (platform === 'linux') {
+    if (arch === 'arm64') return 'static-aarch64-unknown-linux-musl';
+    if (arch === 'x64') return 'static-x86_64-unknown-linux-musl';
+  }
+  throw new Error(
+    `No Conduwuit binary for ${platform}-${arch}. ` +
+      'On macOS/Windows, run Conduwuit via Docker and connect to it externally.',
+  );
 }
 
 /**

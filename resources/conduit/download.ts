@@ -1,14 +1,16 @@
 // resources/conduit/download.ts
 // Runs on `pnpm postinstall` at root.
-// Downloads pre-built Conduit binary for current OS/arch into ./resources/conduit/
+// Downloads pre-built Conduwuit (formerly Conduit) binary for current OS/arch.
+// NOTE: Conduwuit only ships Linux static binaries. macOS/Windows users must
+// run Conduwuit via Docker (see docs/dev/conduwuit-docker.md).
 // Errors are logged but do NOT fail the install (dev may be offline).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-const CONDUIT_VERSION = 'v0.9.0'; // TODO: pin to specific Conduit release tag
-const BASE_URL = `https://github.com/girlbossceo/conduit/releases/download/${CONDUIT_VERSION}`;
+const CONDUWUIT_VERSION = 'v0.4.6';
+const BASE_URL = `https://github.com/girlbossceo/conduwuit/releases/download/${CONDUWUIT_VERSION}`;
 
 interface PlatformTarget {
   platform: string;
@@ -19,34 +21,62 @@ interface PlatformTarget {
 function detectTarget(): PlatformTarget {
   const platform = process.platform;
   const arch = process.arch;
+  // Conduwuit only ships Linux static binaries.
+  // On macOS/Windows, return a sentinel that download() will skip with guidance.
   const map: Record<string, Record<string, PlatformTarget>> = {
-    darwin: {
-      arm64: { platform: 'darwin', arch: 'arm64', filename: 'conduit-darwin-arm64' },
-      x64: { platform: 'darwin', arch: 'x64', filename: 'conduit-darwin-x64' },
-    },
     linux: {
-      x64: { platform: 'linux', arch: 'x64', filename: 'conduit-linux-x64' },
-    },
-    win32: {
-      x64: { platform: 'windows', arch: 'x64', filename: 'conduit-windows-x64.exe' },
+      arm64: {
+        platform: 'linux',
+        arch: 'arm64',
+        filename: 'static-aarch64-unknown-linux-musl',
+      },
+      x64: {
+        platform: 'linux',
+        arch: 'x64',
+        filename: 'static-x86_64-unknown-linux-musl',
+      },
     },
   };
   const target = map[platform]?.[arch];
   if (!target) {
-    throw new Error(`Unsupported platform: ${platform}-${arch}`);
+    return {
+      platform,
+      arch,
+      filename: `UNSUPPORTED-${platform}-${arch}`,
+    };
   }
   return target;
 }
 
 async function download(target: PlatformTarget): Promise<void> {
+  if (target.filename.startsWith('UNSUPPORTED-')) {
+    console.warn(
+      `[conduwuit] No pre-built binary for ${target.platform}/${target.arch}.`,
+    );
+    console.warn(
+      '[conduwuit] Conduwuit only ships Linux binaries. On macOS/Windows, run Conduwuit via Docker:',
+    );
+    console.warn('  docker run -d --name conduwuit -p 8008:8008 \\');
+    console.warn(
+      '    -v ~/.agent-platform/conduwuit-data:/data \\',
+    );
+    console.warn(
+      '    ghcr.io/girlbossceo/conduwuit:latest',
+    );
+    console.warn(
+      '[conduwuit] Then configure the app to connect to your Docker-hosted Conduwuit.',
+    );
+    return;
+  }
+
   const outDir = __dirname;
   const outPath = path.join(outDir, target.filename);
   if (fs.existsSync(outPath)) {
-    console.log(`[conduit] ${target.filename} already exists, skipping download`);
+    console.log(`[conduwuit] ${target.filename} already exists, skipping download`);
     return;
   }
   const url = `${BASE_URL}/${target.filename}`;
-  console.log(`[conduit] Downloading ${url}`);
+  console.log(`[conduwuit] Downloading ${url}`);
   try {
     const response = await fetch(url);
     if (!response.ok || !response.body) {
@@ -59,11 +89,11 @@ async function download(target: PlatformTarget): Promise<void> {
     if (process.platform !== 'win32') {
       fs.chmodSync(outPath, 0o755);
     }
-    console.log(`[conduit] Saved to ${outPath}`);
+    console.log(`[conduwuit] Saved to ${outPath}`);
   } catch (err) {
-    console.warn(`[conduit] Download failed: ${(err as Error).message}`);
+    console.warn(`[conduwuit] Download failed: ${(err as Error).message}`);
     console.warn(
-      '[conduit] You may need to manually place the binary. See docs/dev/conduit-manual.md for instructions.',
+      '[conduwuit] You may need to manually place the binary. See docs/dev/conduwuit-docker.md for Docker alternative.',
     );
   }
 }
@@ -75,7 +105,7 @@ if (require.main === module) {
     try {
       await download(detectTarget());
     } catch (err) {
-      console.error('[conduit] Fatal:', err);
+      console.error('[conduwuit] Fatal:', err);
       process.exit(0);
     }
   })();
