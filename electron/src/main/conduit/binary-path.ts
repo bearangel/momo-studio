@@ -23,12 +23,24 @@ function perOsFilename(): string {
  * Detect whether we are running inside a *packaged* Electron app. We cannot use
  * electron's `app.isPackaged` here (importing electron would pull the renderer
  * module graph into a Node-only test context and break unit tests), so we infer
- * it from the two markers Electron itself injects into the process object:
- * `process.versions.electron` is present in any Electron runtime, and
- * `process.resourcesPath` is set only for an asar/unpacked packaged build.
+ * it from the markers Electron itself injects into the process object:
+ *
+ *   - `process.defaultApp` is `true` under `electron .` (dev mode) and
+ *     unset/false in a packaged build — this is the canonical "dev vs packaged"
+ *     signal. Without it, a dev run that happens to set resourcesPath (e.g.
+ *     inside a DevContainer) would be misdetected as packaged and the binary
+ *     path would resolve to a non-existent resources/conduit location.
+ *   - `process.versions.electron` is present in any Electron runtime.
+ *   - `process.resourcesPath` is set only for an asar/unpacked packaged build.
+ *
+ * All three must line up: NOT defaultApp, AND electron present, AND resourcesPath set.
  */
 function isPackaged(): boolean {
-  return typeof process.versions.electron === 'string' && !!proc.resourcesPath;
+  return (
+    !process.defaultApp &&
+    !!proc.resourcesPath &&
+    typeof process.versions.electron === 'string'
+  );
 }
 
 export function resolveConduitBinaryPath(): string {
