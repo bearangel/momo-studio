@@ -1,0 +1,23 @@
+{
+  "name": "agentplatform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal desktop multi-agent collaboration platform",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@9.0.0",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "dev": "pnpm --filter ./electron dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "postinstall": "pnpm --filter ./renderer postinstall && tsx resources/conduit/download.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.0.0",
+    "eslint": "^9.0.0"
+  }
+}

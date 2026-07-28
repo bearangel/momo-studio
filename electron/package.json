@@ -1,0 +1,32 @@
+{
+  "name": "@ap/electron",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "concurrently \"tsc -p tsconfig.json --watch\" \"electron .\"",
+    "test": "vitest run --config vitest.config.ts --passWithNoTests",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "keytar": "^7.9.0",
+    "matrix-js-sdk": "^34.0.0",
+    "electron-log": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "electron": "^30.0.0",
+    "concurrently": "^8.2.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "typescript-eslint": "^8.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+coverage/
+.vite/
+resources/conduit/conduit-*
+!resources/conduit/.gitignore
+!resources/conduit/download.ts
+.omo
+.pnpm-store
+docs
+.superpowers
