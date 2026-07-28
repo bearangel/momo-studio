@@ -42,7 +42,15 @@ describe('im.store', () => {
 
   it('selectRoom loads messages for the room', async () => {
     const messages: ImMessage[] = [
-      { eventId: 'e1', roomId: '!room1:localhost', sender: '@a:localhost', body: 'hi', timestamp: 1 },
+      {
+        eventId: 'e1',
+        roomId: '!room1:localhost',
+        sender: '@a:localhost',
+        body: 'hi',
+        eventType: 'm.room.message',
+        content: {},
+        timestamp: 1,
+      },
     ];
     mockApi.im.getMessages.mockResolvedValue(messages);
 
@@ -56,6 +64,8 @@ describe('im.store', () => {
       roomId: '!room1:localhost',
       sender: '@b:localhost',
       body: 'hello',
+      eventType: 'm.room.message',
+      content: {},
       timestamp: 2,
     };
     useImStore.getState().receiveMessage(msg);
@@ -68,6 +78,8 @@ describe('im.store', () => {
       roomId: '!room1:localhost',
       sender: '@b:localhost',
       body: 'dup',
+      eventType: 'm.room.message',
+      content: {},
       timestamp: 3,
     };
     useImStore.getState().receiveMessage(msg);

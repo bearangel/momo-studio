@@ -24,6 +24,9 @@ interface AgentDefRow {
   source: string;
   description: string;
   icon_emoji: string;
+  parent_agent_id: string | null;
+  default_mcps: string;
+  default_skills: string;
 }
 
 /** agent_assignments 行的弱类型映射 */
@@ -54,6 +57,9 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     source: row.source as AgentDefinition['source'],
     description: row.description,
     iconEmoji: row.icon_emoji,
+    parentAgentId: row.parent_agent_id ?? undefined,
+    defaultMcps: JSON.parse(row.default_mcps) as AgentDefinition['defaultMcps'],
+    defaultSkills: JSON.parse(row.default_skills) as AgentDefinition['defaultSkills'],
   };
 }
 
@@ -74,8 +80,8 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
-     (id, name, slug, version, type, runtime, system_prompt, model_provider, model_name, default_tools, source, description, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, name, slug, version, type, runtime, system_prompt, model_provider, model_name, default_tools, source, description, icon_emoji, parent_agent_id, default_mcps, default_skills)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     def.id,
     def.name,
@@ -90,6 +96,9 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     def.source,
     def.description,
     def.iconEmoji,
+    def.parentAgentId ?? null,
+    JSON.stringify(def.defaultMcps),
+    JSON.stringify(def.defaultSkills),
   );
 }
 

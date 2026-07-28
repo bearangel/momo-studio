@@ -1,10 +1,12 @@
 // renderer/src/components/agent/AgentList.tsx
-// 当前 workspace 内已分配的 agent 列表 + "添加 agent" 按钮。
-// 每个 agent 显示名称、状态徽章（运行中/已停止）、停止按钮。
-import { useEffect } from 'react';
+// 当前 workspace 内已分配的 agent 列表 + "添加 agent" 按钮 + 选中后的能力配置详情面板。
+// 每个 agent 显示名称、状态徽章（运行中/已停止）、停止按钮；点击展开能力配置。
+import { useEffect, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
+import { CapabilityConfig } from './CapabilityConfig';
+import { cn } from '../../lib/cn';
 
 interface Props {
   onAdd: () => void;
@@ -14,6 +16,7 @@ export function AgentList({ onAdd }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { assignments, definitions, running, loading, loadDefinitions, loadAssignments } =
     useAgentStore();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDefinitions();
@@ -23,8 +26,10 @@ export function AgentList({ onAdd }: Props) {
     if (workspace) void loadAssignments(workspace.id);
   }, [workspace, loadAssignments]);
 
-  // 按 definitionId 反查 agent 定义（取名称/图标）
+  // 按 definitionId 反查 agent 定义（取名称/图标/默认能力）
   const defMap = new Map(definitions.map((d) => [d.id, d]));
+  const selected = assignments.find((a) => a.instanceId === selectedId) ?? null;
+  const selectedDef = selected ? defMap.get(selected.agentDefinitionId) : undefined;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -48,10 +53,15 @@ export function AgentList({ onAdd }: Props) {
             {assignments.map((a) => {
               const def = defMap.get(a.agentDefinitionId);
               const isRunning = running[a.instanceId] === true;
+              const isSelected = selectedId === a.instanceId;
               return (
                 <li
                   key={a.instanceId}
-                  className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-tertiary border border-border-subtle"
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-tertiary border cursor-pointer',
+                    isSelected ? 'border-accent-blue' : 'border-border-subtle',
+                  )}
+                  onClick={() => setSelectedId(isSelected ? null : a.instanceId)}
                 >
                   <span className="text-xl">{def?.iconEmoji ?? '🤖'}</span>
                   <div className="flex-1 min-w-0">
@@ -74,7 +84,10 @@ export function AgentList({ onAdd }: Props) {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => void useAgentStore.getState().stopAgent(a.instanceId)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void useAgentStore.getState().stopAgent(a.instanceId);
+                      }}
                     >
                       停止
                     </Button>
@@ -85,6 +98,24 @@ export function AgentList({ onAdd }: Props) {
           </ul>
         )}
       </div>
+
+      {workspace && selected && (
+        <div className="border-t border-border-subtle p-4 max-h-[45%] overflow-auto bg-bg-secondary">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-sm text-neutral-200">
+              {selectedDef?.iconEmoji ?? '🤖'} {selectedDef?.name ?? 'agent'} · 能力
+            </div>
+            <button
+              type="button"
+              className="text-xs text-neutral-500 hover:text-neutral-300"
+              onClick={() => setSelectedId(null)}
+            >
+              收起
+            </button>
+          </div>
+          <CapabilityConfig workspaceId={workspace.id} agentDef={selectedDef} />
+        </div>
+      )}
     </div>
   );
 }

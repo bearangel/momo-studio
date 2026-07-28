@@ -30,6 +30,7 @@ const api: ApiSurface = {
   },
   agent: {
     addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
+    assignMain: (input) => invoke('agent:assignMain', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     list: () => invoke('agent:list'),
     assign: (workspaceId, defId, botUserId) =>
@@ -51,6 +52,19 @@ const api: ApiSurface = {
         ipcRenderer.off('im:message', handler);
       };
     },
+  },
+  mcp: {
+    register: (config) => invoke('mcp:register', config),
+    start: (workspaceId, mcpName) => invoke('mcp:start', workspaceId, mcpName),
+    listTools: (workspaceId, mcpName) => invoke('mcp:listTools', workspaceId, mcpName),
+    callTool: (workspaceId, mcpName, toolName, args) =>
+      invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
+    stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
+  },
+  allocation: {
+    get: (workspaceId) => invoke('allocation:get', workspaceId),
+    add: (workspaceId, type, ref) => invoke('allocation:add', workspaceId, type, ref),
+    remove: (workspaceId, type, ref) => invoke('allocation:remove', workspaceId, type, ref),
   },
 };
 

@@ -58,4 +58,68 @@ describe('agent/manifest-parser', () => {
     const yaml = VALID_YAML.replace('systemPrompt: "你是一名需求分析师"', '');
     expect(() => parseAgentManifest(yaml)).toThrow('systemPrompt');
   });
+
+  it('解析 type=main + parentAgentId（slug 引用）+ defaultMcps/defaultSkills', () => {
+    const yaml = `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 子
+  slug: sub-a
+  version: 1.0.0
+spec:
+  type: sub
+  parentAgentId: pm-agent
+  runtime: declarative
+  declarative:
+    systemPrompt: "子 agent"
+    model:
+      provider: openai
+      model: gpt-4o
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+  defaultMcps:
+    - kind: mcp
+      ref: filesystem
+      versionRange: "^1.0.0"
+  defaultSkills:
+    - kind: skill
+      ref: code-review
+`;
+    const def = parseAgentManifest(yaml);
+    expect(def.type).toBe('sub');
+    // parentAgentId 在解析阶段保留为 slug 字符串，builtin.ts 后续解析为 UUID
+    expect(def.parentAgentId).toBe('pm-agent');
+    expect(def.defaultMcps).toHaveLength(1);
+    expect(def.defaultMcps[0]).toEqual({ kind: 'mcp', ref: 'filesystem', versionRange: '^1.0.0' });
+    expect(def.defaultSkills).toHaveLength(1);
+    expect(def.defaultSkills[0]).toEqual({ kind: 'skill', ref: 'code-review', versionRange: undefined });
+  });
+
+  it('不支持的 type 抛错', () => {
+    const yaml = VALID_YAML.replace('type: standalone', 'type: hybrid');
+    expect(() => parseAgentManifest(yaml)).toThrow('spec.type');
+  });
+
+  it('非 sub 类型声明 parentAgentId 抛错', () => {
+    const yaml = `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 主
+  slug: main-a
+  version: 1.0.0
+spec:
+  type: main
+  parentAgentId: other
+  runtime: declarative
+  declarative:
+    systemPrompt: "x"
+    model:
+      provider: openai
+      model: gpt-4o
+`;
+    expect(() => parseAgentManifest(yaml)).toThrow('parentAgentId');
+  });
 });

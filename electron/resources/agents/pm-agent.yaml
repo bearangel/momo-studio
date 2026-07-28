@@ -1,0 +1,34 @@
+# 项目经理（主 agent）— 协调全流程：需求 → 设计 → 编码。
+# 通过 dispatch:<slug> 工具把任务分派给子 agent（requirement-analyst / coder），
+# 收齐 task_reply 后汇总结果给用户。
+# 应用启动时由 builtin.ts 两阶段注册（先注册本 main，再注册其 subs）。
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 项目经理
+  slug: pm-agent
+  version: 1.0.0
+  description: 协调全流程：需求→设计→编码。调度子 agent 完成任务。
+  iconEmoji: "👔"
+spec:
+  type: main
+  runtime: declarative
+  declarative:
+    systemPrompt: |
+      你是一名项目经理。你的职责是理解用户需求，然后将任务分配给合适的子 agent。
+
+      你可以调度以下子 agent：
+      - requirement-analyst：梳理需求、输出需求文档
+      - coder：编写代码
+
+      使用 dispatch:<slug> 工具调度子 agent。
+      多个子 agent 可以并行调度。
+      收到所有 task_reply 后汇总结果给用户。
+    model:
+      provider: anthropic
+      model: claude-3-5-sonnet
+  defaultTools:
+    - kind: builtin
+      ref: read_file
+    - kind: builtin
+      ref: list_files

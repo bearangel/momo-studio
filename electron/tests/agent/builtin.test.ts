@@ -101,4 +101,95 @@ describe('agent/builtin', () => {
     expect(defs).toHaveLength(1);
     expect(defs[0]!.slug).toBe('requirement-analyst');
   });
+
+  it('两阶段注册：sub 的 parentAgentId slug 被解析为父 agent 的实际 id', () => {
+    const agentDir = path.join(tmpRoot, 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    // 文件顺序故意把 sub 放在 main 前面，验证两阶段不依赖文件顺序
+    fs.writeFileSync(
+      path.join(agentDir, 'a-sub.yaml'),
+      `apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 子
+  slug: sub-x
+  version: 1.0.0
+spec:
+  type: sub
+  parentAgentId: main-x
+  runtime: declarative
+  declarative:
+    systemPrompt: "子"
+    model:
+      provider: openai
+      model: gpt-4o
+`,
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(agentDir, 'b-main.yaml'),
+      `apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 主
+  slug: main-x
+  version: 1.0.0
+spec:
+  type: main
+  runtime: declarative
+  declarative:
+    systemPrompt: "主"
+    model:
+      provider: anthropic
+      model: claude-3-5-sonnet
+`,
+      'utf-8',
+    );
+    setBuiltinAgentsDir(agentDir);
+
+    registerBuiltinAgents();
+
+    const defs = listAgentDefinitions();
+    expect(defs).toHaveLength(2);
+    const main = defs.find((d) => d.slug === 'main-x')!;
+    const sub = defs.find((d) => d.slug === 'sub-x')!;
+    expect(main).toBeDefined();
+    expect(sub).toBeDefined();
+    // sub 的 parentAgentId 已从 slug "main-x" 解析为父 agent 的真实 UUID
+    expect(sub.parentAgentId).toBe(main.id);
+    expect(sub.type).toBe('sub');
+  });
+
+  it('sub 引用的父 slug 不存在时仍注册（parentAgentId 回退为 undefined）', () => {
+    const agentDir = path.join(tmpRoot, 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'orphan-sub.yaml'),
+      `apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 孤儿子
+  slug: orphan
+  version: 1.0.0
+spec:
+  type: sub
+  parentAgentId: missing-parent
+  runtime: declarative
+  declarative:
+    systemPrompt: "x"
+    model:
+      provider: openai
+      model: gpt-4o
+`,
+      'utf-8',
+    );
+    setBuiltinAgentsDir(agentDir);
+
+    registerBuiltinAgents();
+
+    const defs = listAgentDefinitions();
+    expect(defs).toHaveLength(1);
+    // 父 slug 解析失败，parentAgentId 回退为 undefined（不阻塞注册）
+    expect(defs[0]!.parentAgentId).toBeUndefined();
+  });
 });

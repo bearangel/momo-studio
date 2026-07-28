@@ -6,6 +6,8 @@ import { registerWorkspaceHandlers } from '../workspace/ipc.handlers';
 import { registerFileHandlers } from '../files/ipc.handlers';
 import { registerAgentHandlers } from '../agent/ipc.handlers';
 import { registerImHandlers } from '../im/ipc.handlers';
+import { registerMcpHandlers } from '../mcp/ipc.handlers';
+import { registerAllocationHandlers } from '../workspace/ipc.handlers';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
@@ -15,4 +17,6 @@ export function registerIpcHandlers(): void {
   registerFileHandlers();
   registerAgentHandlers();
   registerImHandlers();
+  registerMcpHandlers();
+  registerAllocationHandlers();
 }

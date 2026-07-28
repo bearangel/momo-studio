@@ -16,6 +16,7 @@ import { createMatrixClient } from './client';
 import { startConduit } from '../conduit/manager';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
+import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE } from '../agent/dispatch';
 
 /** 主进程推送到 renderer 的消息载荷（与 renderer ImMessage 结构一致） */
 export interface MatrixMessagePayload {
@@ -23,8 +24,19 @@ export interface MatrixMessagePayload {
   roomId: string;
   sender: string;
   body: string;
+  /** Matrix event type，用于 renderer 区分渲染（普通消息 / dispatch / task_reply） */
+  eventType: string;
+  /** 原始 event content，dispatch/task_reply 卡片从中读取结构化字段 */
+  content: Record<string, unknown>;
   timestamp: number;
 }
+
+/** /sync 监听并同步到 renderer 的 event type 白名单 */
+const SYNCED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'm.room.message',
+  DISPATCH_EVENT_TYPE,
+  TASK_REPLY_EVENT_TYPE,
+]);
 
 /** 房间摘要（与 renderer ImRoomInfo 结构一致） */
 export interface RoomInfoPayload {
@@ -48,9 +60,9 @@ export function setMainWindow(win: BrowserWindow | null): void {
   mainWindow = win;
 }
 
-/** 从 MatrixEvent 提取消息载荷，非文本消息或缺字段时返回 null */
+/** 从 MatrixEvent 提取消息载荷；非白名单类型或缺 body 字段时返回 null */
 function eventToMessage(event: MatrixEvent): MatrixMessagePayload | null {
-  const content = event.getContent();
+  const content = event.getContent() as Record<string, unknown> | undefined;
   const body = content?.body;
   if (typeof body !== 'string') return null;
   return {
@@ -58,6 +70,8 @@ function eventToMessage(event: MatrixEvent): MatrixMessagePayload | null {
     roomId: event.getRoomId() ?? '',
     sender: event.getSender() ?? '',
     body,
+    eventType: event.getType(),
+    content: content ?? {},
     timestamp: event.getTs() ?? Date.now(),
   };
 }
@@ -86,9 +100,9 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
   // 避免初始同步回放的历史事件被当作"新消息"推送。
   await waitForPrepared(client);
 
-  // 注册事件监听：m.room.message 推送到 renderer
+  // 注册事件监听：白名单内 event type（m.room.message + dispatch + task_reply）推送到 renderer
   client.on(ClientEvent.Event, (event: MatrixEvent) => {
-    if (event.getType() !== 'm.room.message') return;
+    if (!SYNCED_EVENT_TYPES.has(event.getType())) return;
     if (event.isRedacted()) return;
     const msg = eventToMessage(event);
     if (msg) pushMessage(msg);
@@ -168,14 +182,14 @@ export function getJoinedRooms(): RoomInfoPayload[] {
   }));
 }
 
-/** 获取指定房间的历史消息（默认最近 50 条 m.room.message） */
+/** 获取指定房间的历史消息（默认最近 50 条白名单内 event） */
 export function getRoomMessages(roomId: string, limit = 50): MatrixMessagePayload[] {
   if (!client) return [];
   const room = client.getRoom(roomId);
   if (!room) return [];
   const events = room.getLiveTimeline().getEvents();
   return events
-    .filter((e) => e.getType() === 'm.room.message')
+    .filter((e) => SYNCED_EVENT_TYPES.has(e.getType()))
     .map(eventToMessage)
     .filter((m): m is MatrixMessagePayload => m !== null)
     .slice(-limit);
