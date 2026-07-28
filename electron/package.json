@@ -36,6 +36,10 @@
         ]
       },
       {
+        "from": "./resources/agents",
+        "to": "agents"
+      },
+      {
         "from": "../renderer/dist",
         "to": "renderer"
       }
@@ -63,11 +67,15 @@
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "electron-log": "^5.1.0",
+    "js-yaml": "^5.2.2",
     "keytar": "^7.9.0",
-    "matrix-js-sdk": "^31.0.0"
+    "matrix-js-sdk": "^31.0.0",
+    "simple-git": "^3.36.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^1.6.0",
     "concurrently": "^8.2.0",

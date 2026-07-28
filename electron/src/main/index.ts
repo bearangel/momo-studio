@@ -4,6 +4,8 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
+import { setMainWindow, stopSync } from './matrix/sync-manager';
+import { registerBuiltinAgents } from './agent/builtin';
 import { logger } from './logger';
 
 // Single-instance lock: if a second instance tries to launch, the first wins
@@ -20,6 +22,9 @@ app.whenReady().then(async () => {
     runMigrations();
     logger.info('Migrations complete');
 
+    // 1b. 注册内置 agent（须在 migrations 之后、IPC 之前，否则 renderer 拉不到）
+    registerBuiltinAgents();
+
     // 2. Conduit pre-warm. Conduit is lazy-started on first auth request,
     //    but we kick it off now so the first onboarding step is faster.
     //    Failures are non-fatal: auth will retry on demand.
@@ -33,7 +38,8 @@ app.whenReady().then(async () => {
     registerIpcHandlers();
 
     // 4. Window
-    createMainWindow();
+    const win = createMainWindow();
+    setMainWindow(win);
   } catch (err) {
     logger.error('Fatal startup error', {
       error: err instanceof Error ? err.message : String(err),
@@ -56,4 +62,5 @@ app.on('activate', () => {
 // synchronously here since Electron does not await async before-quit handlers.
 app.on('before-quit', () => {
   void stopConduit();
+  void stopSync();
 });
