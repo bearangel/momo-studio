@@ -15,14 +15,10 @@ export function generateConduitConfig(opts: ConduitConfigOptions): string {
 server_name = "${opts.serverName}"
 database_path = "${opts.dataDir}"
 database_backend = "sqlite"
-
-[global.network]
 port = ${opts.port}
-bind = "127.0.0.1"  # Local only; never expose to LAN
-
-[global.allow_registration]
+address = "127.0.0.1"
 allow_registration = true
-# Disabled after first admin account is created.
+yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
 `;
 }
 

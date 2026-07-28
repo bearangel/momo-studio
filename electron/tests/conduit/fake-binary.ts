@@ -18,13 +18,18 @@ const ignoreSigterm = process.env.FAKE_IGNORE_SIGTERM === '1';
 const noHealth = process.env.FAKE_NO_HEALTH === '1';
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
+  // Manager health-checks via /_matrix/client/versions (Conduwuit's always-on
+  // endpoint). Legacy /health kept for backward compat with older test code.
+  if (req.url === '/_matrix/client/versions' || req.url === '/health') {
     if (noHealth) {
-      // Intentionally never call res.end(): the connection hangs until the
-      // client aborts it. This is the "unhealthy / hung endpoint" shape.
       return;
     }
-    res.writeHead(200).end('OK');
+    if (req.url === '/_matrix/client/versions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ versions: ['v1.11'] }));
+    } else {
+      res.writeHead(200).end('OK');
+    }
   } else {
     res.writeHead(404).end();
   }

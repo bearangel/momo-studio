@@ -179,7 +179,7 @@ export async function healthCheck(timeoutMs = 5000): Promise<boolean> {
     const remaining = deadline - Date.now();
     const requestTimeout = Math.min(HEALTH_REQUEST_TIMEOUT_MS, remaining);
     try {
-      const response = await fetch(`${BASE_URL}/health`, {
+      const response = await fetch(`${BASE_URL}/_matrix/client/versions`, {
         signal: AbortSignal.timeout(requestTimeout),
       });
       if (response.ok) return true;
