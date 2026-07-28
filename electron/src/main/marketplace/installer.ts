@@ -20,6 +20,9 @@ import { dump as yamlDump } from 'js-yaml';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { resolveUserDataDir } from '../paths';
+import { parseAgentManifest } from '../agent/manifest-parser';
+import { saveAgentDefinition } from '../agent/crud';
+import { registerMcpDefinition } from '../mcp/host-manager';
 import type { MarketplaceItem } from './types';
 
 const execAsync = promisify(exec);
@@ -83,7 +86,69 @@ export async function installPackage(
   ).run(id, item.id, item.type, item.slug, item.version, cachePath, item.checksum);
 
   logger.info('包已安装', { slug: item.slug, type: item.type, cachePath });
+
+  // 安装成功后按 type 自动注册到对应定义表。注册失败不阻断安装（仅告警）。
+  try {
+    registerInstalledPackage(item, cachePath);
+  } catch (err) {
+    logger.warn('自动注册失败，包已安装但未注册到定义表', {
+      slug: item.slug,
+      type: item.type,
+      error: (err as Error).message,
+    });
+  }
+
   return { cachePath };
+}
+
+/**
+ * 按 type 把已安装包注册到对应定义表，使其可在平台内被引用：
+ *   - agent：解析 cachePath/manifest.yaml → saveAgentDefinition（source='marketplace'）
+ *   - skill：写 skill_definitions 表（slug + cachePath）
+ *   - mcp：读 cachePath/package.json → registerMcpDefinition（command='npx'）
+ * 任何分支抛错由调用方捕获（不阻断安装）。
+ */
+function registerInstalledPackage(item: MarketplaceItem, cachePath: string): void {
+  if (item.type === 'agent') {
+    const manifestPath = path.join(cachePath, 'manifest.yaml');
+    const yamlContent = fs.readFileSync(manifestPath, 'utf-8');
+    const def = parseAgentManifest(yamlContent);
+    def.source = 'marketplace';
+    saveAgentDefinition(def);
+    logger.info('Marketplace agent 已注册到定义表', { slug: item.slug, id: def.id });
+  } else if (item.type === 'skill') {
+    const id = crypto.randomUUID();
+    const db = getDb();
+    db.prepare(
+      `INSERT OR REPLACE INTO skill_definitions
+       (id, name, slug, version, description, allowed_tools, cache_path, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      item.name,
+      item.slug,
+      item.version,
+      item.description,
+      '[]',
+      cachePath,
+      JSON.stringify(item.tags),
+    );
+    logger.info('Marketplace skill 已注册到定义表', { slug: item.slug, id });
+  } else if (item.type === 'mcp') {
+    const pkgPath = path.join(cachePath, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      name: string;
+      version: string;
+    };
+    registerMcpDefinition({
+      id: crypto.randomUUID(),
+      name: pkg.name,
+      version: pkg.version,
+      command: 'npx',
+      args: [pkg.name],
+    });
+    logger.info('Marketplace mcp 已注册到定义表', { slug: item.slug, name: pkg.name });
+  }
 }
 
 /** 下载文件到本地（流式写盘） */

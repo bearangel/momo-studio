@@ -46,7 +46,7 @@ export interface AgentDefinition {
   systemPrompt: string;
   model: ModelRef;
   defaultTools: ToolRef[];
-  source: 'builtin' | 'custom';
+  source: 'builtin' | 'custom' | 'marketplace';
   description: string;
   iconEmoji: string;
 
