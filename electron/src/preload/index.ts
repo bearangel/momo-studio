@@ -70,6 +70,9 @@ const api: ApiSurface = {
     get: (workspaceId) => invoke('gitPolicy:get', workspaceId),
     set: (workspaceId, policy) => invoke('gitPolicy:set', workspaceId, policy),
   },
+  audit: {
+    getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

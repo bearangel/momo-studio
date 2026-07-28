@@ -162,6 +162,28 @@ export interface GitPolicy {
   };
 }
 
+/** 审计日志查询入参（可选筛选 + 分页），与 electron 端 ToolCallQueryOpts 对齐 */
+export interface ToolCallQueryOpts {
+  limit?: number;
+  offset?: number;
+  agentBotUserId?: string;
+  toolName?: string;
+}
+
+/** 单条工具调用审计记录，与 electron 端 ToolCallRecord 对齐 */
+export interface ToolCallRecord {
+  id: string;
+  workspaceId: string;
+  agentBotUserId: string;
+  taskId: string | null;
+  toolName: string;
+  inputSummary: string;
+  outputSummary: string;
+  success: boolean;
+  durationMs: number;
+  timestamp: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -238,6 +260,10 @@ export interface ApiSurface {
     get(workspaceId: string): Promise<GitPolicy>;
     /** 覆盖写入某 workspace 的 Git Policy */
     set(workspaceId: string, policy: GitPolicy): Promise<void>;
+  };
+  audit: {
+    /** 分页查询某 workspace 的工具调用审计记录（最新优先） */
+    getToolCalls(workspaceId: string, opts?: ToolCallQueryOpts): Promise<ToolCallRecord[]>;
   };
 }
 
