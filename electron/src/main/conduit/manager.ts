@@ -58,9 +58,8 @@ export function isConduitRunning(): boolean {
  */
 export async function startConduit(): Promise<ConduitInfo> {
   // macOS 没有原生 Conduwuit 二进制（只发布 Linux），跳过内置启动。
-  // 假设外部已运行（通常通过 Docker：docker run -p 8008:8008 ...），做一次
-  // 健康检查确认可达后直接返回；不可达则抛出明确错误引导用户先启动外部实例。
-  if (process.platform === 'darwin') {
+  // 但测试模式下（setBinaryOverride 注入了假二进制），走正常流程不走 macOS 分支。
+  if (process.platform === 'darwin' && !binaryOverride) {
     logger.info('macOS: 跳过内置 Conduwuit 启动（需外部运行，如 Docker）');
     const ok = await healthCheck(3000);
     if (!ok) {

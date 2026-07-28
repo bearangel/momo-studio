@@ -61,7 +61,7 @@ describe('conduit/manager', () => {
     await stopConduit();
   });
 
-  it(
+  it.skipIf(process.platform === 'win32')(
     'escalates to SIGKILL when SIGTERM is ignored',
     async () => {
       // Fake ignores SIGTERM entirely, so only SIGKILL can stop it. This

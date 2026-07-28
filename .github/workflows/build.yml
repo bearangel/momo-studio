@@ -76,7 +76,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev libgnome-keyring-dev
+          sudo apt-get install -y libsecret-1-dev
 
       - name: Install dependencies
         run: pnpm install
