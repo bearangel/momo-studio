@@ -34,3 +34,11 @@ export function resolveLogsDir(): string {
   }
   return dir;
 }
+
+export function resolveSkillsDir(): string {
+  const dir = path.join(resolveUserDataDir(), 'skills');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}

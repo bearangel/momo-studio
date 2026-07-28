@@ -7,6 +7,7 @@
 //   - agent:createFromYaml / list / assign / listAssignments —— 低层能力
 //   - agent:start / stop —— 单独控制已分配 agent 的启停
 import { ipcMain } from 'electron';
+import path from 'node:path';
 import { logger } from '../logger';
 import { parseAgentManifest } from './manifest-parser';
 import {
@@ -19,16 +20,28 @@ import {
 import { getWorkspace } from '../workspace/crud';
 import { getSecret, setSecret } from '../storage/keychain';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
-import { registerAgentBot } from './bot-registrar';
+import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
-import type { AgentAssignment } from './types';
+import { resolveSkillsDir } from '../paths';
+import type { AgentAssignment, SkillRef } from './types';
+import type { RuntimeSkillRef, SubAgentRef } from './builtin-tools';
 
 // Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。
 const HOMESERVER_URL = 'http://127.0.0.1:8008';
 
 /** LLM API key 在 keychain 中的存储 key 前缀 */
 const llmApiKeyStorageKey = (instanceId: string): string => `agent.${instanceId}.llm_api_key`;
+
+/**
+ * 把 agent manifest 的 SkillRef 列表解析成子进程可用的 RuntimeSkillRef。
+ * cachePath 按 <userData>/skills/<slug> 约定解析；skill 包尚未安装时该路径可能不存在，
+ * 子进程 SkillRegistry.register 会抛错并被 try/catch 跳过（不阻塞 agent 上线）。
+ */
+function resolveSkillRefs(refs: SkillRef[]): RuntimeSkillRef[] {
+  const skillsDir = resolveSkillsDir();
+  return refs.map((r) => ({ slug: r.ref, cachePath: path.join(skillsDir, r.ref) }));
+}
 
 /** agent:addToWorkspace 入参 */
 export interface AddToWorkspaceInput {
@@ -84,27 +97,31 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   // 查找全部归属该 main 的 sub agent 定义（parentAgentId 指向 main.id）
   const subDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
 
-  const results: AgentAssignment[] = [];
-  // 先安装 main，再依次安装各 sub，保证返回顺序与日志可读
+  // Phase 1：注册 bot + 分配 + 邀请 + 存 key（先完成全部账号编排，收集每个 agent 的信息）。
+  // 拆成两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId——
+  // dispatch:<slug> 工具的执行依赖它。
+  const installed: Array<{ def: typeof mainDef; assignment: AgentAssignment; bot: RegisteredBot }> = [];
   for (const def of [mainDef, ...subDefs]) {
-    // 1. 注册 bot Matrix 账号（token 自动存 keychain）
     const bot = await registerAgentBot({
       slug: def.slug,
       workspaceName: workspace.name,
       ownerUserId: workspace.ownerId,
       homeserverUrl: HOMESERVER_URL,
     });
-
-    // 2. 分配 agent 到 workspace（DB 记录，绑定 botMatrixUserId）
     const assignment = assignAgentToWorkspace(workspaceId, def.id, bot.botUserId);
-
-    // 3. 邀请 bot 进团队群（用 owner 的 client 发 invite）
     await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
-
-    // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
     await setSecret(llmApiKeyStorageKey(assignment.instanceId), llmApiKey);
+    installed.push({ def, assignment, bot });
+  }
 
-    // 5. 启动 runtime 子进程
+  // 主 agent 名下的 sub 列表（构建 dispatch:<slug> 工具用）
+  const subAgents: SubAgentRef[] = installed
+    .filter((it) => it.def.type === 'sub')
+    .map((it) => ({ slug: it.def.slug, botUserId: it.bot.botUserId, description: it.def.description }));
+
+  // Phase 2：启动 runtime。main 携带 subAgents；其余 agent 的 subAgents 为空。
+  const results: AgentAssignment[] = [];
+  for (const { def, assignment, bot } of installed) {
     spawnAgent({
       instanceId: assignment.instanceId,
       workspaceId,
@@ -117,8 +134,11 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
       modelName: def.model.model,
       llmApiKey,
       teamRoomId: workspace.teamRoomId,
+      agentType: def.type,
+      subAgents: def.type === 'main' ? subAgents : [],
+      skills: resolveSkillRefs(def.defaultSkills),
+      mcpNames: def.defaultMcps.map((m) => m.ref),
     });
-
     results.push(assignment);
   }
 
@@ -181,6 +201,9 @@ export function registerAgentHandlers(): void {
         modelName: def.model.model,
         llmApiKey,
         teamRoomId: workspace.teamRoomId,
+        agentType: def.type,
+        skills: resolveSkillRefs(def.defaultSkills),
+        mcpNames: def.defaultMcps.map((m) => m.ref),
       });
 
       logger.info('Agent 已添加到 workspace 并启动', {
@@ -285,6 +308,9 @@ export function registerAgentHandlers(): void {
         modelName: def.model.model,
         llmApiKey,
         teamRoomId,
+        agentType: def.type,
+        skills: resolveSkillRefs(def.defaultSkills),
+        mcpNames: def.defaultMcps.map((m) => m.ref),
       });
 
       return { instanceId: assignment.instanceId };

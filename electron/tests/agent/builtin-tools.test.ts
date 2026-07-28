@@ -14,7 +14,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { WorkspaceFS } from '../../src/main/files/workspace-fs';
-import { getBuiltinToolDefs, executeBuiltinTool } from '../../src/main/agent/builtin-tools';
+import {
+  getBuiltinToolDefs,
+  executeBuiltinTool,
+  getVirtualToolDefs,
+  getDispatchToolDefs,
+} from '../../src/main/agent/builtin-tools';
+import { SkillRegistry } from '../../src/main/skill/registry';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-builtin-test-${Date.now()}`);
 let wsFs: WorkspaceFS;
@@ -135,5 +141,79 @@ describe('agent/builtin-tools 安全与错误', () => {
     await expect(
       executeBuiltinTool('not_a_tool', { path: 'x' }, wsFs),
     ).rejects.toThrow('未知工具');
+  });
+});
+
+const skillTmp = path.join(os.tmpdir(), `ap-builtin-skill-${Date.now()}`);
+
+describe('agent/builtin-tools getVirtualToolDefs（skill 渐进式披露）', () => {
+  beforeEach(() => {
+    fs.mkdirSync(skillTmp, { recursive: true });
+  });
+  afterEach(() => {
+    fs.rmSync(skillTmp, { recursive: true, force: true });
+  });
+
+  it('空注册表返回 []（避免向 LLM 暴露必然失败的虚拟工具）', () => {
+    const registry = new SkillRegistry();
+    expect(getVirtualToolDefs(registry)).toEqual([]);
+  });
+
+  it('注册了 skill 时返回 loadSkill + readResource 两个工具', () => {
+    const skillDir = path.join(skillTmp, 'demo-skill');
+    fs.mkdirSync(skillDir);
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: demo-skill\ndescription: 演示\n---\n正文',
+    );
+    const registry = new SkillRegistry();
+    registry.register(skillDir);
+
+    const defs = getVirtualToolDefs(registry);
+    const names = defs.map((d) => d.name);
+    expect(names).toEqual(['loadSkill', 'readResource']);
+  });
+
+  it('每个虚拟工具有合法的 schema 与必填字段', () => {
+    const skillDir = path.join(skillTmp, 's2');
+    fs.mkdirSync(skillDir);
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: s2\ndescription: x\n---\n正文',
+    );
+    const registry = new SkillRegistry();
+    registry.register(skillDir);
+
+    const defs = getVirtualToolDefs(registry);
+    const loadSkill = defs.find((d) => d.name === 'loadSkill')!;
+    expect(loadSkill.inputSchema.properties).toHaveProperty('name');
+    expect(loadSkill.inputSchema.required).toEqual(['name']);
+
+    const readResource = defs.find((d) => d.name === 'readResource')!;
+    expect(readResource.inputSchema.required).toEqual(['skill', 'path']);
+  });
+});
+
+describe('agent/builtin-tools getDispatchToolDefs（主→子调度工具）', () => {
+  it('为每个 sub agent 生成一个 dispatch:<slug> 工具', () => {
+    const subs = [
+      { slug: 'coder', botUserId: '@coder.bot:localhost', description: '写代码' },
+      { slug: 'reviewer', botUserId: '@reviewer.bot:localhost', description: '代码审查' },
+    ];
+    const defs = getDispatchToolDefs(subs);
+    expect(defs.map((d) => d.name)).toEqual(['dispatch:coder', 'dispatch:reviewer']);
+    expect(defs[0]!.description).toBe('写代码');
+    expect(defs[0]!.inputSchema.required).toEqual(['task']);
+  });
+
+  it('sub 描述为空时回退到通用描述', () => {
+    const defs = getDispatchToolDefs([
+      { slug: 'worker', botUserId: '@worker.bot:localhost', description: '' },
+    ]);
+    expect(defs[0]!.description).toBe('调度子 agent: worker');
+  });
+
+  it('空 sub 列表返回 []', () => {
+    expect(getDispatchToolDefs([])).toEqual([]);
   });
 });

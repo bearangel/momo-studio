@@ -177,7 +177,7 @@ export class McpClient {
             pending.resolve(msg.result);
           }
         }
-      } catch (err) {
+      } catch {
         logger.warn(`MCP ${this.config.name} JSON 解析失败`, { line: line.slice(0, 100) });
       }
     }

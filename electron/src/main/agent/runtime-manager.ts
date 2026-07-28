@@ -12,6 +12,8 @@
 import { fork, spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { logger } from '../logger';
+import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
+import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
 export interface AgentRuntimeOpts {
@@ -26,6 +28,15 @@ export interface AgentRuntimeOpts {
   modelName: string;
   llmApiKey: string;
   teamRoomId: string;
+  // === M2 集成（可选；缺省时 runtime 退化为纯文件工具模式） ===
+  /** agent 形态，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
+  agentType?: 'standalone' | 'main' | 'sub';
+  /** 主 agent 名下的子 agent 列表（仅 type='main' 时有意义），用于构建 dispatch:<slug> 工具 */
+  subAgents?: SubAgentRef[];
+  /** 已安装 skill 引用，子进程启动时据此初始化 SkillRegistry */
+  skills?: RuntimeSkillRef[];
+  /** 该 agent 可用的 MCP server 名列表，工具定义在启动时通过 IPC 向主进程发现 */
+  mcpNames?: string[];
 }
 
 // runtime 进程池：instanceId → 子进程句柄
@@ -87,9 +98,71 @@ export function spawnAgent(opts: AgentRuntimeOpts): void {
     logger.error('Agent 子进程启动失败', err);
     runtimes.delete(opts.instanceId);
   });
+  // 子进程 → 主进程的 MCP 工具调用桥接（MCP Host 在主进程，agent 子进程通过 IPC 请求）
+  child.on('message', (msg: unknown) => {
+    handleChildMessage(child, opts.workspaceId, msg);
+  });
 
   runtimes.set(opts.instanceId, child);
   logger.info('Agent 子进程已启动', { instanceId: opts.instanceId, bot: opts.botUserId });
+}
+
+/**
+ * 处理 agent 子进程发来的 IPC 消息。当前仅响应 mcp:listTools / mcp:callTool 两类
+ * 请求——MCP Host（进程池）在主进程内，子进程无法直接访问，故通过 IPC 转发。
+ * 未知消息类型静默忽略，便于未来扩展其它 IPC 协议而不破坏旧子进程。
+ */
+function handleChildMessage(child: ChildProcess, workspaceId: string, msg: unknown): void {
+  const m = msg as {
+    type?: string;
+    id?: string;
+    mcpName?: string;
+    toolName?: string;
+    args?: Record<string, unknown>;
+  };
+  if (!m.type) return;
+  if (m.type === 'mcp:listTools' && m.id && m.mcpName) {
+    void handleChildListTools(child, workspaceId, m.id, m.mcpName);
+  } else if (m.type === 'mcp:callTool' && m.id && m.mcpName && m.toolName && m.args) {
+    void handleChildCallTool(child, workspaceId, m.id, m.mcpName, m.toolName, m.args);
+  }
+}
+
+/** 子进程请求列出某 MCP 的工具（启动时发现工具定义用）；自动确保 MCP 已启动 */
+async function handleChildListTools(
+  child: ChildProcess,
+  workspaceId: string,
+  id: string,
+  mcpName: string,
+): Promise<void> {
+  try {
+    const config = getMcpConfig(mcpName);
+    if (!config) throw new Error(`MCP ${mcpName} 未注册`);
+    await getOrStartMcp(workspaceId, config);
+    const tools = await listMcpTools(workspaceId, mcpName);
+    child.send?.({ type: 'mcp:toolsResult', id, tools });
+  } catch (err) {
+    child.send?.({ type: 'mcp:toolsError', id, error: (err as Error).message });
+  }
+}
+
+/** 子进程请求调用某 MCP 工具；自动确保 MCP 已启动（防止 discovery 失败后调用也失败） */
+async function handleChildCallTool(
+  child: ChildProcess,
+  workspaceId: string,
+  id: string,
+  mcpName: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const config = getMcpConfig(mcpName);
+    if (config) await getOrStartMcp(workspaceId, config);
+    const result = await callMcpTool(workspaceId, mcpName, toolName, args);
+    child.send?.({ type: 'mcp:result', id, result });
+  } catch (err) {
+    child.send?.({ type: 'mcp:error', id, error: (err as Error).message });
+  }
 }
 
 /** 停止指定 instanceId 的 agent 子进程；不存在则 no-op */
