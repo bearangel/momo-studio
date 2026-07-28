@@ -1,0 +1,194 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 v1.0.0，留空则从 package.json 读取）'
+        required: false
+
+jobs:
+  # ============ macOS ============
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build renderer
+        run: pnpm --filter @momo-studio/renderer build
+
+      - name: Build electron
+        run: pnpm --filter @momo-studio/electron build
+
+      - name: Rebuild native modules for Electron
+        run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
+
+      - name: Package (dmg)
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --mac
+        env:
+          # 代码签名（如有证书可取消注释）
+          # CSC_LINK: ${{ secrets.MAC_CERTIFICATE }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          # NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
+          # NOTARIZE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # NOTARIZE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-artifacts
+          path: |
+            electron/dist-installers/*.dmg
+            electron/dist-installers/*.zip
+          retention-days: 30
+
+  # ============ Linux ============
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev libgnome-keyring-dev
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build renderer
+        run: pnpm --filter @momo-studio/renderer build
+
+      - name: Build electron
+        run: pnpm --filter @momo-studio/electron build
+
+      - name: Rebuild native modules for Electron
+        run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
+
+      - name: Package (AppImage + deb)
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            electron/dist-installers/*.AppImage
+            electron/dist-installers/*.deb
+            electron/dist-installers/*.snap
+          retention-days: 30
+
+  # ============ Windows ============
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build renderer
+        run: pnpm --filter @momo-studio/renderer build
+
+      - name: Build electron
+        run: pnpm --filter @momo-studio/electron build
+
+      - name: Rebuild native modules for Electron
+        run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
+
+      - name: Package (nsis exe)
+        run: pnpm --filter @momo-studio/electron exec electron-builder -- --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            electron/dist-installers/*.exe
+            electron/dist-installers/*.nsis.7z
+          retention-days: 30
+
+  # ============ 发布 Release ============
+  release:
+    needs: [build-mac, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-artifacts
+          path: artifacts/mac
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts/linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts
+          path: artifacts/windows
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/mac/*
+            artifacts/linux/*
+            artifacts/windows/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
