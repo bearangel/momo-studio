@@ -23,8 +23,8 @@ npx pnpm@9.0.0 install
 npx pnpm@9.0.0 test
 
 # 单独跑一个 workspace
-npx pnpm@9.0.0 --filter @momo-studio/electron test
-npx pnpm@9.0.0 --filter @momo-studio/renderer test
+npx pnpm@9.0.0 --filter momo-studio-electron test
+npx pnpm@9.0.0 --filter momo-studio-renderer test
 
 # 跑单个测试文件
 cd electron && npx pnpm@9.0.0 vitest run tests/conduit/manager.test.ts
@@ -58,7 +58,7 @@ tests/      — Playwright e2e 测试
 docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 ```
 
-两个 workspace 包名：`@momo-studio/electron`、`@momo-studio/renderer`。
+两个 workspace 包名：`momo-studio-electron`、`momo-studio-renderer`。
 
 ### Electron 主进程是 CommonJS
 

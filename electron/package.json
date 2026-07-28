@@ -1,5 +1,5 @@
 {
-  "name": "@momo-studio/electron",
+  "name": "momo-studio-electron",
   "private": true,
   "version": "0.1.0",
   "description": "Momo Studio — 个人桌面端多 agent 协作平台",

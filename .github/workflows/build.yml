@@ -33,16 +33,16 @@ jobs:
         run: pnpm test
 
       - name: Build renderer
-        run: pnpm --filter @momo-studio/renderer build
+        run: pnpm --filter ./renderer build
 
       - name: Build electron
-        run: pnpm --filter @momo-studio/electron build
+        run: pnpm --filter ./electron build
 
       - name: Rebuild native modules for Electron
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (dmg)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --mac --publish never
+        run: pnpm --filter ./electron exec electron-builder -- --mac --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -82,16 +82,16 @@ jobs:
         run: pnpm test
 
       - name: Build renderer
-        run: pnpm --filter @momo-studio/renderer build
+        run: pnpm --filter ./renderer build
 
       - name: Build electron
-        run: pnpm --filter @momo-studio/electron build
+        run: pnpm --filter ./electron build
 
       - name: Rebuild native modules for Electron
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (AppImage + deb)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --linux --publish never
+        run: pnpm --filter ./electron exec electron-builder -- --linux --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -127,16 +127,16 @@ jobs:
         run: pnpm test
 
       - name: Build renderer
-        run: pnpm --filter @momo-studio/renderer build
+        run: pnpm --filter ./renderer build
 
       - name: Build electron
-        run: pnpm --filter @momo-studio/electron build
+        run: pnpm --filter ./electron build
 
       - name: Rebuild native modules for Electron
         run: cd electron && npx electron-rebuild -f -w better-sqlite3 -w keytar
 
       - name: Package (nsis exe)
-        run: pnpm --filter @momo-studio/electron exec electron-builder -- --win --publish never
+        run: pnpm --filter ./electron exec electron-builder -- --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
