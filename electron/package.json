@@ -1,0 +1,82 @@
+{
+  "name": "@ap/electron",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "concurrently \"tsc -p tsconfig.json --watch\" \"electron .\"",
+    "test": "vitest run --config vitest.config.ts --passWithNoTests",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "dist": "pnpm build && pnpm --filter ../renderer build && electron-builder",
+    "pack": "pnpm build && pnpm --filter ../renderer build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "io.agentplatform.desktop",
+    "productName": "AgentPlatform",
+    "directories": {
+      "output": "dist-installers",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/*.ts"
+    ],
+    "extraResources": [
+      {
+        "from": "../resources/conduit",
+        "to": "conduit",
+        "filter": [
+          "conduit-*"
+        ]
+      },
+      {
+        "from": "../renderer/dist",
+        "to": "renderer"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "electron-log": "^5.1.0",
+    "keytar": "^7.9.0",
+    "matrix-js-sdk": "^31.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "concurrently": "^8.2.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^1.6.0"
+  }
+}
