@@ -14,6 +14,7 @@ import { MessageInput } from '../im/MessageInput';
 import { AgentList } from '../agent/AgentList';
 import { AddAgentDialog } from '../agent/AddAgentDialog';
 import { SettingsView } from '../settings/SettingsView';
+import { MarketplaceView } from '../marketplace/MarketplaceView';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -30,6 +31,11 @@ export function MiddlePanel() {
     },
     [workspace, openFile],
   );
+
+  // marketplace 视图：浏览/搜索/安装 agent/mcp/skill，不需要 workspace 上下文
+  if (activeView === 'marketplace') {
+    return <MarketplaceView />;
+  }
 
   // 无 workspace 时显示引导
   if (!workspace) {
@@ -83,13 +89,10 @@ export function MiddlePanel() {
     return <SettingsView />;
   }
 
-  // marketplace 视图暂保留占位
+  // 兜底（所有 ViewKey 已在上方分支处理，理论上不可达）
   return (
     <div className="flex-1 flex items-center justify-center text-neutral-500">
-      <div className="text-center">
-        <div className="text-4xl mb-2">🛒</div>
-        <p className="text-sm">Coming in M1+</p>
-      </div>
+      <p className="text-sm">未知视图</p>
     </div>
   );
 }
