@@ -179,11 +179,14 @@ T1 (init) ──► T2 (paths/logger) ──► T3 (SQLite + migrations)
 
 **Files:**
 - Create: `/workspace/package.json`, `/workspace/pnpm-workspace.yaml`, `/workspace/tsconfig.base.json`, `/workspace/.gitignore`, `/workspace/.editorconfig`, `/workspace/.prettierrc`, `/workspace/eslint.config.mjs`
-- Create: `/workspace/electron/package.json`, `/workspace/electron/tsconfig.json`
+- Create: `/workspace/electron/package.json`, `/workspace/electron/tsconfig.json`, `/workspace/electron/vitest.config.ts`
+- Create: `/workspace/electron/src/main/.gitkeep`, `/workspace/electron/tests/.gitkeep` (placeholder so TypeScript include tree is non-empty)
 - Create: `/workspace/renderer/package.json`, `/workspace/renderer/tsconfig.json`, `/workspace/renderer/vite.config.ts`, `/workspace/renderer/index.html`
+- Create: `/workspace/renderer/src/.gitkeep` (placeholder)
+- Create: `/workspace/resources/conduit/.gitignore`, `/workspace/resources/conduit/download.ts` (download script referenced by root postinstall)
 
 **Interfaces:**
-- Produces: `pnpm install` works; `pnpm test` runs zero tests successfully; `pnpm lint` passes on empty files.
+- Produces: `pnpm install` works (Electron binary download may take a few minutes; allowed to fail gracefully if offline); `pnpm test` runs zero tests successfully; `pnpm typecheck` succeeds on placeholder source trees.
 
 - [ ] **Step 1: Create root `package.json`**
 
@@ -207,7 +210,7 @@ T1 (init) ──► T2 (paths/logger) ──► T3 (SQLite + migrations)
   "devDependencies": {
     "tsx": "^4.0.0",
     "typescript": "^5.4.0",
-    "typescript-eslint": "^7.0.0",
+    "typescript-eslint": "^8.0.0",
     "eslint": "^9.0.0"
   }
 }
@@ -337,7 +340,7 @@ export default tseslint.config(
     "typescript": "^5.4.0",
     "vitest": "^1.6.0",
     "@vitest/coverage-v8": "^1.6.0",
-    "typescript-eslint": "^7.0.0",
+    "typescript-eslint": "^8.0.0",
     "eslint": "^9.0.0",
     "tsx": "^4.0.0"
   }
@@ -398,7 +401,7 @@ export default tseslint.config(
     "autoprefixer": "^10.4.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
-    "typescript-eslint": "^7.0.0",
+    "typescript-eslint": "^8.0.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.0"
@@ -468,17 +471,141 @@ export default defineConfig({
 }
 ```
 
-- [ ] **Step 14: Run `pnpm install`**
+- [ ] **Step 14: Create `electron/vitest.config.ts`**
+
+Required because `electron/package.json`'s `test` script references `--config vitest.config.ts`.
+
+```typescript
+// electron/vitest.config.ts
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    include: ['tests/**/*.test.ts'],
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+    },
+  },
+});
+```
+
+- [ ] **Step 15: Create placeholder `.gitkeep` files**
+
+TypeScript's `tsc --noEmit` errors with TS18003 ("No inputs were found") when `include` matches zero files. Add empty placeholders so the include tree is non-empty. These get replaced by real source files in later tasks.
+
+```bash
+mkdir -p /workspace/electron/src/main /workspace/electron/tests
+mkdir -p /workspace/renderer/src
+touch /workspace/electron/src/main/.gitkeep
+touch /workspace/electron/tests/.gitkeep
+touch /workspace/renderer/src/.gitkeep
+```
+
+- [ ] **Step 16: Create `resources/conduit/.gitignore`**
+
+```gitignore
+conduit-*
+```
+
+- [ ] **Step 17: Create `resources/conduit/download.ts`**
+
+Required because the root `package.json` `postinstall` script invokes `tsx resources/conduit/download.ts`. This script must exist before `pnpm install` runs. (Task 5 only adds the path-resolution logic; the script itself belongs here.)
+
+```typescript
+// resources/conduit/download.ts
+// Runs on `pnpm postinstall` at root.
+// Downloads pre-built Conduit binary for current OS/arch into ./resources/conduit/
+// Errors are logged but do NOT fail the install (dev may be offline).
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+
+const CONDUIT_VERSION = 'v0.9.0'; // TODO: pin to specific Conduit release tag
+const BASE_URL = `https://github.com/girlbossceo/conduit/releases/download/${CONDUIT_VERSION}`;
+
+interface PlatformTarget {
+  platform: string;
+  arch: string;
+  filename: string;
+}
+
+function detectTarget(): PlatformTarget {
+  const platform = process.platform;
+  const arch = process.arch;
+  const map: Record<string, Record<string, PlatformTarget>> = {
+    darwin: {
+      arm64: { platform: 'darwin', arch: 'arm64', filename: 'conduit-darwin-arm64' },
+      x64: { platform: 'darwin', arch: 'x64', filename: 'conduit-darwin-x64' },
+    },
+    linux: {
+      x64: { platform: 'linux', arch: 'x64', filename: 'conduit-linux-x64' },
+    },
+    win32: {
+      x64: { platform: 'windows', arch: 'x64', filename: 'conduit-windows-x64.exe' },
+    },
+  };
+  const target = map[platform]?.[arch];
+  if (!target) {
+    throw new Error(`Unsupported platform: ${platform}-${arch}`);
+  }
+  return target;
+}
+
+async function download(target: PlatformTarget): Promise<void> {
+  const outDir = __dirname;
+  const outPath = path.join(outDir, target.filename);
+  if (fs.existsSync(outPath)) {
+    console.log(`[conduit] ${target.filename} already exists, skipping download`);
+    return;
+  }
+  const url = `${BASE_URL}/${target.filename}`;
+  console.log(`[conduit] Downloading ${url}`);
+  try {
+    const response = await fetch(url);
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    await pipeline(
+      response.body as unknown as NodeJS.ReadableStream,
+      fs.createWriteStream(outPath),
+    );
+    if (process.platform !== 'win32') {
+      fs.chmodSync(outPath, 0o755);
+    }
+    console.log(`[conduit] Saved to ${outPath}`);
+  } catch (err) {
+    console.warn(`[conduit] Download failed: ${(err as Error).message}`);
+    console.warn(
+      '[conduit] You may need to manually place the binary. See docs/dev/conduit-manual.md for instructions.',
+    );
+  }
+}
+
+if (require.main === module) {
+  download(detectTarget()).catch((err) => {
+    console.error('[conduit] Fatal:', err);
+    // Do NOT exit non-zero; allow pnpm install to continue.
+    process.exit(0);
+  });
+}
+```
+
+- [ ] **Step 18: Run `pnpm install`**
 
 Run: `cd /workspace && pnpm install`
-Expected: dependencies installed, `resources/conduit/download.ts` runs in postinstall (may fail gracefully if offline — see Task 5).
+Expected: dependencies installed. The Electron binary postinstall may take 1-3 minutes on first run. The Conduit download (run by root postinstall) will fail gracefully if GitHub is unreachable — that's OK for Task 1's deliverables; the path-resolution logic in Task 5 still works against a missing file (only the lifecycle manager in Task 7 requires the real binary).
 
-- [ ] **Step 15: Verify `pnpm test` and `pnpm typecheck` succeed on empty projects**
+If `pnpm` is not installed globally, use `npx pnpm@9.0.0 install`. If `better-sqlite3` native build fails on newer Node, use Node 20 LTS.
+
+- [ ] **Step 19: Verify `pnpm test` and `pnpm typecheck` succeed**
 
 Run: `cd /workspace && pnpm test && pnpm typecheck`
-Expected: both succeed (no tests yet, no type errors).
+Expected: both succeed. `pnpm test` runs zero tests in each workspace (passes vacuously with the vitest configs in place). `pnpm typecheck` succeeds against the placeholder `.gitkeep` files.
 
-- [ ] **Step 16: Commit**
+- [ ] **Step 20: Commit**
 
 ```bash
 git add -A
@@ -935,107 +1062,22 @@ git commit -m "feat(main): add keychain wrapper with injectable impl for tests"
 ## Task 5: Conduit binary path resolution
 
 **Files:**
-- Create: `resources/conduit/download.ts`, `resources/conduit/.gitignore`
 - Create: `electron/src/main/conduit/binary-path.ts`
 - Test: `electron/tests/conduit/binary-path.test.ts`
 
+> **Note:** `resources/conduit/download.ts` and `resources/conduit/.gitignore` are created in Task 1 (the root `postinstall` script depends on `download.ts` existing before `pnpm install`). This task only adds the runtime path-resolution logic.
+
 **Interfaces:**
 - Produces:
-  - `resolveConduitBinaryPath(): string` — returns absolute path to the bundled Conduit binary for the current OS/arch. Throws if not found.
+  - `resolveConduitBinaryPath(): string` — returns absolute path to the bundled Conduit binary for the current OS/arch.
 
 **Spike decision (from Global Constraints):**
 - Conduit binaries downloaded by `resources/conduit/download.ts` (run as npm postinstall) into `resources/conduit/conduit-<platform>-<arch>[.exe]`.
 - Filenames: `conduit-darwin-arm64`, `conduit-darwin-x64`, `conduit-linux-x64`, `conduit-windows-x64.exe`.
-- All paths are gitignored except `.gitignore` and `download.ts`.
 
-> **If `download.ts` fails (offline), M0 still works in dev — the test mocks the binary path resolution. Real Electron launch in Task 14 will require a successful download. Provide manual fallback in README.**
+> **If `download.ts` failed at install time (offline), M0 still works in dev — the path-resolution test only checks the returned string, not the file's existence. The lifecycle test in Task 7 will require the real binary; provide manual fallback in README (Task 20).**
 
-- [ ] **Step 1: Create `resources/conduit/.gitignore`**
-
-```gitignore
-conduit-*
-```
-
-- [ ] **Step 2: Create `resources/conduit/download.ts`**
-
-```typescript
-// resources/conduit/download.ts
-// Runs on `pnpm postinstall` at root.
-// Downloads pre-built Conduit binary for current OS/arch into ./resources/conduit/
-// Errors are logged but do NOT fail the install (dev may be offline).
-
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import https from 'node:https';
-import { pipeline } from 'node:stream/promises';
-
-const CONDUIT_VERSION = 'v0.9.0'; // TODO: pin to specific Conduit release tag
-const BASE_URL = `https://github.com/girlbossceo/conduit/releases/download/${CONDUIT_VERSION}`;
-
-interface PlatformTarget {
-  platform: string;
-  arch: string;
-  filename: string;
-}
-
-function detectTarget(): PlatformTarget {
-  const platform = process.platform;
-  const arch = process.arch;
-  const map: Record<string, Record<string, PlatformTarget>> = {
-    darwin: {
-      arm64: { platform: 'darwin', arch: 'arm64', filename: 'conduit-darwin-arm64' },
-      x64: { platform: 'darwin', arch: 'x64', filename: 'conduit-darwin-x64' },
-    },
-    linux: {
-      x64: { platform: 'linux', arch: 'x64', filename: 'conduit-linux-x64' },
-    },
-    win32: {
-      x64: { platform: 'windows', arch: 'x64', filename: 'conduit-windows-x64.exe' },
-    },
-  };
-  const target = map[platform]?.[arch];
-  if (!target) {
-    throw new Error(`Unsupported platform: ${platform}-${arch}`);
-  }
-  return target;
-}
-
-async function download(target: PlatformTarget): Promise<void> {
-  const outDir = __dirname;
-  const outPath = path.join(outDir, target.filename);
-  if (fs.existsSync(outPath)) {
-    console.log(`[conduit] ${target.filename} already exists, skipping download`);
-    return;
-  }
-  const url = `${BASE_URL}/${target.filename}`;
-  console.log(`[conduit] Downloading ${url}`);
-  try {
-    const response = await fetch(url);
-    if (!response.ok || !response.body) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    await pipeline(response.body as unknown as NodeJS.ReadableStream, fs.createWriteStream(outPath));
-    if (process.platform !== 'win32') {
-      fs.chmodSync(outPath, 0o755);
-    }
-    console.log(`[conduit] Saved to ${outPath}`);
-  } catch (err) {
-    console.warn(`[conduit] Download failed: ${(err as Error).message}`);
-    console.warn('[conduit] You may need to manually place the binary. See README.md for instructions.');
-  }
-}
-
-if (require.main === module) {
-  download(detectTarget()).catch((err) => {
-    console.error('[conduit] Fatal:', err);
-    // Do NOT exit with non-zero; allow pnpm install to continue.
-    process.exit(0);
-  });
-}
-```
-
-- [ ] **Step 3: Write the failing test for `binary-path.ts`**
+- [ ] **Step 1: Write the failing test for `binary-path.ts`**
 
 ```typescript
 // electron/tests/conduit/binary-path.test.ts
@@ -1057,12 +1099,12 @@ describe('conduit/binary-path', () => {
 });
 ```
 
-- [ ] **Step 4: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd /workspace/electron && pnpm vitest run tests/conduit/binary-path.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 5: Implement `binary-path.ts`**
+- [ ] **Step 3: Implement `binary-path.ts`**
 
 ```typescript
 // electron/src/main/conduit/binary-path.ts
@@ -1090,19 +1132,18 @@ export function resolveConduitBinaryPath(): string {
 }
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /workspace/electron && pnpm vitest run tests/conduit/binary-path.test.ts`
 Expected: PASS.
 
 > If the binary file itself does not exist (download failed), the path resolution test still passes because it only checks the returned string. The lifecycle test in Task 7 will check actual existence.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add resources/conduit/.gitignore resources/conduit/download.ts \
-        electron/src/main/conduit/binary-path.ts electron/tests/conduit/binary-path.test.ts
-git commit -m "feat(main): add Conduit binary download + path resolution"
+git add electron/src/main/conduit/binary-path.ts electron/tests/conduit/binary-path.test.ts
+git commit -m "feat(main): add Conduit binary path resolution"
 ```
 
 ---
