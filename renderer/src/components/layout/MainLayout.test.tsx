@@ -1,9 +1,10 @@
 // renderer/src/components/layout/MainLayout.test.tsx
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MainLayout } from './MainLayout';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useImStore } from '../../stores/im.store';
 import type { Workspace } from '../../ipc/types';
 
 // 测试用 workspace 桩数据
@@ -19,9 +20,22 @@ const STUB_WORKSPACE: Workspace = {
   iconEmoji: '📁',
 };
 
+// MainLayout 的 useEffect 会调用 ipc.im.startSync / onMessage / loadRooms(getRooms)，
+// 必须提供桩 window.api，否则渲染时抛错。
+const mockApi = {
+  im: {
+    startSync: vi.fn().mockResolvedValue(undefined),
+    send: vi.fn().mockResolvedValue(undefined),
+    getRooms: vi.fn().mockResolvedValue([]),
+    getMessages: vi.fn().mockResolvedValue([]),
+    onMessage: vi.fn().mockReturnValue(() => {}),
+  },
+};
+
 describe('MainLayout', () => {
   beforeEach(() => {
-    // 重置两个 store，保证测试间状态确定
+    Object.assign(globalThis, { window: { api: mockApi } });
+    // 重置三个 store，保证测试间状态确定
     useUiStore.setState({ activeView: 'im' });
     useWorkspaceStore.setState({
       workspaces: [],
@@ -29,6 +43,11 @@ describe('MainLayout', () => {
       loading: false,
       error: null,
     });
+    useImStore.getState().reset();
+    // startSync 返回永不 resolve 的 promise，防止 useEffect 异步链触发 store 状态更新
+    // 导致 act() 冲突——布局测试不验证 IM 同步行为（由 im.store.test.ts 覆盖）
+    mockApi.im.startSync.mockImplementation(() => new Promise(() => {}));
+    mockApi.im.getRooms.mockResolvedValue([]);
   });
 
   it('renders left rail with all 5 nav icons', () => {
@@ -53,12 +72,12 @@ describe('MainLayout', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows "Coming in M1+" placeholder for IM view when a workspace is active', () => {
+  it('shows IM room list when IM view is active with a workspace', () => {
     useWorkspaceStore.setState({
       workspaces: [STUB_WORKSPACE],
       activeWorkspaceId: STUB_WORKSPACE.id,
     });
     render(<MainLayout />);
-    expect(screen.getByText(/coming in m1/i)).toBeInTheDocument();
+    expect(screen.getByText(/暂无房间/i)).toBeInTheDocument();
   });
 });

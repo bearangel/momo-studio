@@ -1,0 +1,191 @@
+// electron/src/main/matrix/sync-manager.ts
+//
+// 主进程管理 Matrix /sync 长连接：
+// - 从 DB + keychain 恢复用户会话后创建 Matrix client
+// - 启动 /sync，新消息通过 webContents.send('im:message') 推送到 renderer
+// - 暴露 sendMessage / getJoinedRooms / getRoomMessages 供 IPC handler 调用
+//
+// 设计决策：Matrix /sync 在主进程而非 renderer 运行，原因：
+// 1. matrix-js-sdk 是 CJS，renderer 是 ESM（会冲突）
+// 2. token 在 keychain（仅主进程能访问）
+// 3. /sync 是长连接，适合主进程统一管理生命周期
+import { ClientEvent, SyncState, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk';
+import type { BrowserWindow } from 'electron';
+import { logger } from '../logger';
+import { createMatrixClient } from './client';
+import { startConduit } from '../conduit/manager';
+import { getSecret } from '../storage/keychain';
+import { getDb } from '../storage/db';
+
+/** 主进程推送到 renderer 的消息载荷（与 renderer ImMessage 结构一致） */
+export interface MatrixMessagePayload {
+  eventId: string;
+  roomId: string;
+  sender: string;
+  body: string;
+  timestamp: number;
+}
+
+/** 房间摘要（与 renderer ImRoomInfo 结构一致） */
+export interface RoomInfoPayload {
+  roomId: string;
+  name: string;
+}
+
+/** DB kv_store 中存储的会话记录（与 authFlows.ts 的 StoredSession 结构一致） */
+interface StoredSession {
+  userId: string;
+  deviceId: string;
+}
+
+const CURRENT_USER_KEY = 'current_user_session';
+
+let client: MatrixClient | null = null;
+let mainWindow: BrowserWindow | null = null;
+
+/** 由 main/index.ts 在创建主窗口后调用，注册窗口引用用于推送消息 */
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindow = win;
+}
+
+/** 从 MatrixEvent 提取消息载荷，非文本消息或缺字段时返回 null */
+function eventToMessage(event: MatrixEvent): MatrixMessagePayload | null {
+  const content = event.getContent();
+  const body = content?.body;
+  if (typeof body !== 'string') return null;
+  return {
+    eventId: event.getId() ?? '',
+    roomId: event.getRoomId() ?? '',
+    sender: event.getSender() ?? '',
+    body,
+    timestamp: event.getTs() ?? Date.now(),
+  };
+}
+
+/** 推送单条消息到 renderer（窗口已销毁时静默跳过） */
+function pushMessage(msg: MatrixMessagePayload): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('im:message', msg);
+}
+
+/**
+ * 启动 Matrix /sync。等待初始同步完成（SyncState.Prepared）后注册事件监听。
+ * 幂等：若已有 client 在运行则直接返回。
+ */
+export async function startSync(matrixClient: MatrixClient): Promise<void> {
+  if (client) {
+    logger.warn('Matrix /sync 已在运行，跳过重复启动');
+    return;
+  }
+  client = matrixClient;
+
+  // 启动客户端长轮询
+  await client.startClient({ initialSyncLimit: 50 });
+
+  // 等待首次 PREPARED（初始 sync 完成、room 可读）后再注册消息监听，
+  // 避免初始同步回放的历史事件被当作"新消息"推送。
+  await waitForPrepared(client);
+
+  // 注册事件监听：m.room.message 推送到 renderer
+  client.on(ClientEvent.Event, (event: MatrixEvent) => {
+    if (event.getType() !== 'm.room.message') return;
+    if (event.isRedacted()) return;
+    const msg = eventToMessage(event);
+    if (msg) pushMessage(msg);
+  });
+
+  logger.info('Matrix /sync 已启动，消息将推送到 renderer');
+}
+
+/** 等待客户端进入 PREPARED 同步状态（初始 sync 完成） */
+function waitForPrepared(c: MatrixClient): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const handler = (state: SyncState, lastState: SyncState | null): void => {
+      if (state === SyncState.Prepared) {
+        c.off(ClientEvent.Sync, handler);
+        resolve();
+      } else if (state === SyncState.Error && lastState !== SyncState.Error) {
+        c.off(ClientEvent.Sync, handler);
+        reject(new Error('Matrix 初始同步失败'));
+      }
+    };
+    c.on(ClientEvent.Sync, handler);
+  });
+}
+
+/**
+ * 从 DB + keychain 恢复会话，创建 Matrix client 并启动 /sync。
+ * 由 im:startSync IPC handler 调用（renderer 在登录后触发）。
+ */
+export async function startSyncFromSession(): Promise<void> {
+  if (client) {
+    logger.warn('Matrix /sync 已在运行，跳过');
+    return;
+  }
+
+  const session = readSession();
+  if (!session) {
+    throw new Error('无活跃会话，请先登录');
+  }
+
+  const token = await getSecret(`user.${session.userId}.matrix_token`);
+  if (!token) {
+    throw new Error('Matrix access token 丢失，请重新登录');
+  }
+
+  const { baseUrl } = await startConduit();
+  const matrixClient = createMatrixClient({
+    baseUrl,
+    userId: session.userId,
+    accessToken: token,
+    deviceId: session.deviceId,
+  });
+
+  await startSync(matrixClient);
+}
+
+/** 读取 kv_store 中的当前会话记录 */
+function readSession(): StoredSession | undefined {
+  const row = getDb()
+    .prepare('SELECT value FROM kv_store WHERE key = ?')
+    .get(CURRENT_USER_KEY) as { value: string } | undefined;
+  if (!row) return undefined;
+  return JSON.parse(row.value) as StoredSession;
+}
+
+/** 发送文本消息到指定 room */
+export async function sendMessage(roomId: string, body: string): Promise<void> {
+  if (!client) throw new Error('Matrix client 未初始化（sync 未启动）');
+  await client.sendEvent(roomId, 'm.room.message', { msgtype: 'm.text', body }, '');
+}
+
+/** 获取已加入的房间列表（含房间名，无名字时回退到 roomId） */
+export function getJoinedRooms(): RoomInfoPayload[] {
+  if (!client) return [];
+  return client.getRooms().map((room) => ({
+    roomId: room.roomId,
+    name: room.name || room.roomId,
+  }));
+}
+
+/** 获取指定房间的历史消息（默认最近 50 条 m.room.message） */
+export function getRoomMessages(roomId: string, limit = 50): MatrixMessagePayload[] {
+  if (!client) return [];
+  const room = client.getRoom(roomId);
+  if (!room) return [];
+  const events = room.getLiveTimeline().getEvents();
+  return events
+    .filter((e) => e.getType() === 'm.room.message')
+    .map(eventToMessage)
+    .filter((m): m is MatrixMessagePayload => m !== null)
+    .slice(-limit);
+}
+
+/** 停止 /sync 并清理 client 引用 */
+export async function stopSync(): Promise<void> {
+  if (client) {
+    client.stopClient();
+    client = null;
+    logger.info('Matrix /sync 已停止');
+  }
+}

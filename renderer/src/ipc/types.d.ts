@@ -68,6 +68,19 @@ export interface StartAgentInput {
   llmApiKey: string;
 }
 
+export interface ImMessage {
+  eventId: string;
+  roomId: string;
+  sender: string;
+  body: string;
+  timestamp: number;
+}
+
+export interface ImRoomInfo {
+  roomId: string;
+  name: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -97,6 +110,13 @@ export interface ApiSurface {
     listAssignments(workspaceId: string): Promise<AgentAssignment[]>;
     start(opts: StartAgentInput): Promise<{ instanceId: string }>;
     stop(instanceId: string): Promise<{ ok: boolean }>;
+  };
+  im: {
+    startSync(): Promise<void>;
+    send(roomId: string, body: string): Promise<void>;
+    getRooms(): Promise<ImRoomInfo[]>;
+    getMessages(roomId: string): Promise<ImMessage[]>;
+    onMessage(callback: (msg: ImMessage) => void): () => void;
   };
 }
 

@@ -8,6 +8,9 @@ import { useEditorStore } from '../../stores/editor.store';
 import { ipc } from '../../ipc/client';
 import { FileTree } from '../files/FileTree';
 import { CodeEditor } from '../editor/CodeEditor';
+import { RoomList } from '../im/RoomList';
+import { MessageList } from '../im/MessageList';
+import { MessageInput } from '../im/MessageInput';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -48,12 +51,24 @@ export function MiddlePanel() {
     );
   }
 
+  // im 视图：左侧房间列表 + 右侧消息流和输入框
+  if (activeView === 'im') {
+    return (
+      <div className="flex-1 flex">
+        <RoomList />
+        <div className="flex-1 flex flex-col min-w-0">
+          <MessageList />
+          <MessageInput />
+        </div>
+      </div>
+    );
+  }
+
   // 其他视图暂保留占位
   return (
     <div className="flex-1 flex items-center justify-center text-neutral-500">
       <div className="text-center">
         <div className="text-4xl mb-2">
-          {activeView === 'im' && '💬'}
           {activeView === 'agents' && '🤖'}
           {activeView === 'marketplace' && '🛒'}
           {activeView === 'settings' && '⚙'}

@@ -1,6 +1,6 @@
 // electron/src/preload/index.ts
-import { contextBridge, ipcRenderer } from 'electron';
-import type { ApiSurface } from '../../../renderer/src/ipc/types';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { ApiSurface, ImMessage } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
@@ -36,6 +36,19 @@ const api: ApiSurface = {
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),
+  },
+  im: {
+    startSync: () => invoke('im:startSync'),
+    send: (roomId, body) => invoke('im:send', roomId, body),
+    getRooms: () => invoke('im:getRooms'),
+    getMessages: (roomId) => invoke('im:getMessages', roomId),
+    onMessage: (callback) => {
+      const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
+      ipcRenderer.on('im:message', handler);
+      return () => {
+        ipcRenderer.off('im:message', handler);
+      };
+    },
   },
 };
 

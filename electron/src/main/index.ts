@@ -4,6 +4,7 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
+import { setMainWindow, stopSync } from './matrix/sync-manager';
 import { logger } from './logger';
 
 // Single-instance lock: if a second instance tries to launch, the first wins
@@ -33,7 +34,8 @@ app.whenReady().then(async () => {
     registerIpcHandlers();
 
     // 4. Window
-    createMainWindow();
+    const win = createMainWindow();
+    setMainWindow(win);
   } catch (err) {
     logger.error('Fatal startup error', {
       error: err instanceof Error ? err.message : String(err),
@@ -56,4 +58,5 @@ app.on('activate', () => {
 // synchronously here since Electron does not await async before-quit handlers.
 app.on('before-quit', () => {
   void stopConduit();
+  void stopSync();
 });

@@ -1,6 +1,5 @@
 // electron/src/main/ipc/system.handlers.ts
 import { ipcMain, app } from 'electron';
-import os from 'node:os';
 import { isConduitRunning } from '../conduit/manager';
 import { resolveUserDataDir } from '../paths';
 import { logger } from '../logger';
