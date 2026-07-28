@@ -53,6 +53,14 @@ const api: ApiSurface = {
       };
     },
   },
+  mcp: {
+    register: (config) => invoke('mcp:register', config),
+    start: (workspaceId, mcpName) => invoke('mcp:start', workspaceId, mcpName),
+    listTools: (workspaceId, mcpName) => invoke('mcp:listTools', workspaceId, mcpName),
+    callTool: (workspaceId, mcpName, toolName, args) =>
+      invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
+    stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

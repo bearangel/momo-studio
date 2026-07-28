@@ -102,6 +102,23 @@ export interface ImRoomInfo {
   name: string;
 }
 
+/** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+/** MCP server 定义（mcp:register 入参，与 electron 端 McpServerConfig 对齐） */
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  version: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -147,6 +164,23 @@ export interface ApiSurface {
     getRooms(): Promise<ImRoomInfo[]>;
     getMessages(roomId: string): Promise<ImMessage[]>;
     onMessage(callback: (msg: ImMessage) => void): () => void;
+  };
+  mcp: {
+    /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
+    register(config: McpServerConfig): Promise<void>;
+    /** 启动某 workspace 内的 MCP 进程（进程池复用） */
+    start(workspaceId: string, mcpName: string): Promise<void>;
+    /** 列出某 workspace 内已启动 MCP 暴露的工具 */
+    listTools(workspaceId: string, mcpName: string): Promise<McpToolInfo[]>;
+    /** 调用某 workspace 内已启动 MCP 的指定工具，返回拼接后的文本输出 */
+    callTool(
+      workspaceId: string,
+      mcpName: string,
+      toolName: string,
+      args: Record<string, unknown>,
+    ): Promise<string>;
+    /** 停止某 workspace 内的指定 MCP 进程 */
+    stop(workspaceId: string, mcpName: string): Promise<void>;
   };
 }
 
