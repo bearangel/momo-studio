@@ -27,6 +27,31 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `.trim(),
   },
+  {
+    version: 2,
+    sql: `
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  directory_path TEXT NOT NULL,
+  matrix_space_id TEXT NOT NULL,
+  git_initialized INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_id TEXT NOT NULL,
+  icon_emoji TEXT NOT NULL DEFAULT '📁'
+);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+  workspace_id TEXT NOT NULL,
+  matrix_user_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'owner',
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (workspace_id, matrix_user_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
