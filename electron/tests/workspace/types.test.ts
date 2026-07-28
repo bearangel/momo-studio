@@ -10,6 +10,7 @@ describe('workspace/types', () => {
       description: '',
       directoryPath: '/tmp/test',
       matrixSpaceId: '!space:localhost',
+      teamRoomId: '!team:localhost',
       gitInitialized: false,
       createdAt: '2026-01-01T00:00:00Z',
       ownerId: '@alice:localhost',
@@ -17,6 +18,7 @@ describe('workspace/types', () => {
     };
     expect(ws.id).toBe('test-id');
     expect(ws.name).toBe('测试工作空间');
+    expect(ws.teamRoomId).toBe('!team:localhost');
   });
 
   it('CreateWorkspaceInput 只需 name + directoryPath', () => {

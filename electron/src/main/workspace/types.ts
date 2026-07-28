@@ -10,6 +10,8 @@ export interface Workspace {
   description: string;
   directoryPath: string;
   matrixSpaceId: string;
+  /** workspace 内"团队群" room ID（用户 + 所有 agent bot 交流的房间），004 迁移引入 */
+  teamRoomId: string;
   gitInitialized: boolean;
   createdAt: string;
   ownerId: string;

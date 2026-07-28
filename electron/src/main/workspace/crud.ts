@@ -18,6 +18,7 @@ interface WorkspaceRow {
   description: string;
   directory_path: string;
   matrix_space_id: string;
+  team_room_id: string;
   git_initialized: number;
   created_at: string;
   owner_id: string;
@@ -32,6 +33,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     description: row.description,
     directoryPath: row.directory_path,
     matrixSpaceId: row.matrix_space_id,
+    teamRoomId: row.team_room_id,
     gitInitialized: row.git_initialized === 1,
     createdAt: row.created_at,
     ownerId: row.owner_id,
@@ -42,11 +44,15 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
 /**
  * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
  * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。
+ *
+ * @param teamRoomId workspace 内"团队群" room ID（由调用方先在 Matrix 创建好后传入），
+ *                   不传则留空（旧调用方兼容；新流程都会传）。
  */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   ownerUserId: string,
   matrixSpaceId: string,
+  teamRoomId = '',
 ): Promise<Workspace> {
   const id = randomUUID();
   const dir = path.resolve(input.directoryPath);
@@ -67,14 +73,15 @@ export async function createWorkspace(
 
   const db = getDb();
   db.prepare(
-    `INSERT INTO workspaces (id, name, description, directory_path, matrix_space_id, git_initialized, owner_id, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO workspaces (id, name, description, directory_path, matrix_space_id, team_room_id, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.name,
     input.description ?? '',
     dir,
     matrixSpaceId,
+    teamRoomId,
     gitInitialized ? 1 : 0,
     ownerUserId,
     input.iconEmoji ?? '📁',

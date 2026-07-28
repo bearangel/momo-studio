@@ -29,6 +29,7 @@ const api: ApiSurface = {
     list: (wsId, dir) => invoke('file:list', wsId, dir),
   },
   agent: {
+    addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     list: () => invoke('agent:list'),
     assign: (workspaceId, defId, botUserId) =>
@@ -36,6 +37,7 @@ const api: ApiSurface = {
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),
+    isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
   },
   im: {
     startSync: () => invoke('im:startSync'),

@@ -36,6 +36,10 @@
         ]
       },
       {
+        "from": "./resources/agents",
+        "to": "agents"
+      },
+      {
         "from": "../renderer/dist",
         "to": "renderer"
       }

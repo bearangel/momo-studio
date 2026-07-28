@@ -1,7 +1,7 @@
 // renderer/src/components/layout/MiddlePanel.tsx
 // 中间面板：根据 activeView 渲染对应视图。
 // files 视图 = 左 FileTree + 右 CodeEditor；其他视图暂保留占位
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -11,11 +11,14 @@ import { CodeEditor } from '../editor/CodeEditor';
 import { RoomList } from '../im/RoomList';
 import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
+import { AgentList } from '../agent/AgentList';
+import { AddAgentDialog } from '../agent/AddAgentDialog';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
+  const [showAddAgent, setShowAddAgent] = useState(false);
 
   // 点击文件 → 通过 IPC 读取内容 → 打开到编辑器 tab
   const handleSelectFile = useCallback(
@@ -64,12 +67,21 @@ export function MiddlePanel() {
     );
   }
 
+  // agents 视图：当前 workspace 的 agent 列表 + 添加对话框
+  if (activeView === 'agents') {
+    return (
+      <>
+        <AgentList onAdd={() => setShowAddAgent(true)} />
+        {showAddAgent && <AddAgentDialog onClose={() => setShowAddAgent(false)} />}
+      </>
+    );
+  }
+
   // 其他视图暂保留占位
   return (
     <div className="flex-1 flex items-center justify-center text-neutral-500">
       <div className="text-center">
         <div className="text-4xl mb-2">
-          {activeView === 'agents' && '🤖'}
           {activeView === 'marketplace' && '🛒'}
           {activeView === 'settings' && '⚙'}
         </div>

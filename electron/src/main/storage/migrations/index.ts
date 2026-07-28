@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS agent_assignments (
 );
 `.trim(),
   },
+  {
+    version: 4,
+    sql: `
+-- team_room_id：workspace 内的"团队群" room ID。workspace 创建时同时创建一个
+-- team room（用户 + 所有 agent bot 都在此 room 内交流），存到这里供后续
+-- agent 启动 / 邀请 bot 使用。migration 由 schema_migrations 保证只执行一次，
+-- 故直接用 ALTER TABLE ADD COLUMN（无需 IF NOT EXISTS 守卫）。
+ALTER TABLE workspaces ADD COLUMN team_room_id TEXT NOT NULL DEFAULT '';
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

@@ -32,12 +32,23 @@ describe('workspace/crud', () => {
       { name: '测试项目', directoryPath: wsDir },
       '@alice:localhost',
       '!space:localhost',
+      '!team:localhost',
     );
     expect(ws.name).toBe('测试项目');
     expect(ws.directoryPath).toBe(wsDir);
+    expect(ws.teamRoomId).toBe('!team:localhost');
     expect(fs.existsSync(wsDir)).toBe(true);
     expect(fs.existsSync(path.join(wsDir, '.git'))).toBe(true);
     expect(ws.gitInitialized).toBe(true);
+  });
+
+  it('createWorkspace 不传 teamRoomId 时默认空字符串', async () => {
+    const ws = await createWorkspace(
+      { name: 'X', directoryPath: path.join(tmpRoot, 'no-team') },
+      '@alice:localhost',
+      '!space:localhost',
+    );
+    expect(ws.teamRoomId).toBe('');
   });
 
   it('listWorkspaces 返回所有 workspace', async () => {

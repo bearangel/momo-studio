@@ -19,6 +19,7 @@
 import {
   createClient,
   ClientEvent,
+  RoomEvent,
   SyncState,
   type MatrixClient,
   type MatrixEvent,
@@ -111,11 +112,30 @@ async function main(): Promise<void> {
     accessToken: config.botAccessToken,
   });
 
+  // 注册自动接受邀请：bot 被 owner 邀请进 team room 后需主动 join 才能收发消息。
+  // 必须在 startClient 之前注册，否则初始同步回放的 invite 事件会错过。
+  // joinRoom 对已是成员的 room 是幂等的（服务端返回成功），故可安全调用。
+  client.on(RoomEvent.MyMembership, (room: Room, membership: string) => {
+    if (membership === 'invite') {
+      void client.joinRoom(room.roomId).catch((err: unknown) => {
+        process.stderr.write(`加入 room 失败 ${room.roomId}: ${(err as Error).message}\n`);
+      });
+    }
+  });
+
   // 启动 /sync 长轮询
   await client.startClient({ initialSyncLimit: 20 });
 
   // 等待首次 PREPARED（初始 sync 完成、room 可读）后再发消息
   await waitForPrepared(client);
+
+  // 显式 join team room（兜底：即使 invite 事件因时序未触发 MyMembership，
+  // 这里也能保证 bot 进入 team room）。已加入时服务端幂等返回成功。
+  try {
+    await client.joinRoom(config.teamRoomId);
+  } catch (err) {
+    process.stderr.write(`joinRoom team room 失败: ${(err as Error).message}\n`);
+  }
 
   await client.sendEvent(
     config.teamRoomId,
