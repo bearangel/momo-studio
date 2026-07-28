@@ -64,6 +64,11 @@ export function parseAgentManifest(yamlContent: string): AgentDefinition {
     source: 'custom',
     description: raw.metadata!.description ?? '',
     iconEmoji: raw.metadata!.iconEmoji ?? '🤖',
+    // M2 字段：parentAgentId / defaultMcps / defaultSkills 的 YAML schema 解析
+    // 留待后续 task（manifest schema 升级）；此处保持最小可用默认。
+    parentAgentId: undefined,
+    defaultMcps: [],
+    defaultSkills: [],
   };
 }
 

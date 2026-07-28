@@ -94,6 +94,55 @@ CREATE TABLE IF NOT EXISTS agent_assignments (
 ALTER TABLE workspaces ADD COLUMN team_room_id TEXT NOT NULL DEFAULT '';
 `.trim(),
   },
+  {
+    version: 5,
+    sql: `
+-- M2 扩展：agent_definitions 加上 parent_agent_id（主子关联）+ default_mcps +
+-- default_skills（运行时能力引用）。原 v4 已被 team_room_id 占用，故本迁移用
+-- v5 避免 conflict。schema_migrations 表保证每条 migration 只执行一次。
+
+ALTER TABLE agent_definitions ADD COLUMN parent_agent_id TEXT;
+ALTER TABLE agent_definitions ADD COLUMN default_mcps TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE agent_definitions ADD COLUMN default_skills TEXT NOT NULL DEFAULT '[]';
+
+-- workspace 级能力分配（MCP / Skill），主键三列组合保证同一能力不会被重复加
+-- 入同一 workspace。
+CREATE TABLE IF NOT EXISTS workspace_allocations (
+  workspace_id TEXT NOT NULL,
+  capability_type TEXT NOT NULL,
+  capability_ref TEXT NOT NULL,
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (workspace_id, capability_type, capability_ref),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+
+-- MCP server 定义：注册到平台后可被 agent 通过 McpRef 引用。name 唯一。
+CREATE TABLE IF NOT EXISTS mcp_definitions (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL UNIQUE,
+  version TEXT NOT NULL,
+  transport TEXT NOT NULL DEFAULT 'stdio',
+  command TEXT NOT NULL,
+  args TEXT NOT NULL DEFAULT '[]',
+  env TEXT NOT NULL DEFAULT '{}',
+  capabilities TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Skill 定义：注册到平台后可被 agent 通过 SkillRef 引用。slug 唯一。
+CREATE TABLE IF NOT EXISTS skill_definitions (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  version TEXT NOT NULL,
+  description TEXT NOT NULL,
+  allowed_tools TEXT NOT NULL DEFAULT '[]',
+  cache_path TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
