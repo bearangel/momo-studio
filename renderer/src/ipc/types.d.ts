@@ -18,6 +18,25 @@ export interface AuthResult {
   deviceId: string;
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  directoryPath: string;
+  matrixSpaceId: string;
+  gitInitialized: boolean;
+  createdAt: string;
+  ownerId: string;
+  iconEmoji: string;
+}
+
+export interface CreateWorkspaceInput {
+  name: string;
+  description?: string;
+  directoryPath: string;
+  iconEmoji?: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -28,5 +47,11 @@ export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
     getConduitStatus(): Promise<ConduitStatus>;
+  };
+  workspace: {
+    create(input: CreateWorkspaceInput): Promise<Workspace>;
+    list(): Promise<Workspace[]>;
+    get(id: string): Promise<Workspace | null>;
+    delete(id: string): Promise<void>;
   };
 }

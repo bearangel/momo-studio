@@ -17,6 +17,12 @@ const api: ApiSurface = {
     getInfo: () => invoke('system:getInfo'),
     getConduitStatus: () => invoke('system:getConduitStatus'),
   },
+  workspace: {
+    create: (input) => invoke('workspace:create', input),
+    list: () => invoke('workspace:list'),
+    get: (id) => invoke('workspace:get', id),
+    delete: (id) => invoke('workspace:delete', id),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
