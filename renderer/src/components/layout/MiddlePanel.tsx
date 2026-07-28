@@ -13,6 +13,7 @@ import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
 import { AgentList } from '../agent/AgentList';
 import { AddAgentDialog } from '../agent/AddAgentDialog';
+import { SettingsView } from '../settings/SettingsView';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -77,14 +78,16 @@ export function MiddlePanel() {
     );
   }
 
-  // 其他视图暂保留占位
+  // settings 视图：Git Policy 配置 + 审计日志
+  if (activeView === 'settings') {
+    return <SettingsView />;
+  }
+
+  // marketplace 视图暂保留占位
   return (
     <div className="flex-1 flex items-center justify-center text-neutral-500">
       <div className="text-center">
-        <div className="text-4xl mb-2">
-          {activeView === 'marketplace' && '🛒'}
-          {activeView === 'settings' && '⚙'}
-        </div>
+        <div className="text-4xl mb-2">🛒</div>
         <p className="text-sm">Coming in M1+</p>
       </div>
     </div>

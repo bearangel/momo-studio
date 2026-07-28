@@ -57,6 +57,20 @@ export function isConduitRunning(): boolean {
  * a start is in flight joins the same promise rather than spawning again.
  */
 export async function startConduit(): Promise<ConduitInfo> {
+  // macOS 没有原生 Conduwuit 二进制（只发布 Linux），跳过内置启动。
+  // 假设外部已运行（通常通过 Docker：docker run -p 8008:8008 ...），做一次
+  // 健康检查确认可达后直接返回；不可达则抛出明确错误引导用户先启动外部实例。
+  if (process.platform === 'darwin') {
+    logger.info('macOS: 跳过内置 Conduwuit 启动（需外部运行，如 Docker）');
+    const ok = await healthCheck(3000);
+    if (!ok) {
+      throw new Error(
+        'macOS: 外部 Conduwuit 未在 127.0.0.1:8008 运行。请先启动（如 docker run -p 8008:8008 ...）',
+      );
+    }
+    return { port: CONDUIT_PORT, baseUrl: BASE_URL };
+  }
+
   if (isConduitRunning()) {
     return { port: CONDUIT_PORT, baseUrl: BASE_URL };
   }

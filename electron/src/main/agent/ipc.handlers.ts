@@ -18,13 +18,15 @@ import {
   listAssignments,
 } from './crud';
 import { getWorkspace } from '../workspace/crud';
+import { getAllocation } from '../workspace/allocation';
+import { mergeCapabilities } from './capability-merger';
 import { getSecret, setSecret } from '../storage/keychain';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
 import { resolveSkillsDir } from '../paths';
-import type { AgentAssignment, SkillRef } from './types';
+import type { AgentAssignment } from './types';
 import type { RuntimeSkillRef, SubAgentRef } from './builtin-tools';
 
 // Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。
@@ -34,13 +36,16 @@ const HOMESERVER_URL = 'http://127.0.0.1:8008';
 const llmApiKeyStorageKey = (instanceId: string): string => `agent.${instanceId}.llm_api_key`;
 
 /**
- * 把 agent manifest 的 SkillRef 列表解析成子进程可用的 RuntimeSkillRef。
+ * 把 skill slug 列表解析成子进程可用的 RuntimeSkillRef。
  * cachePath 按 <userData>/skills/<slug> 约定解析；skill 包尚未安装时该路径可能不存在，
  * 子进程 SkillRegistry.register 会抛错并被 try/catch 跳过（不阻塞 agent 上线）。
+ *
+ * 接收 string[] 而非 SkillRef[]：T13 接线后入参来自 mergeCapabilities 的输出
+ * （def.defaultSkills ∪ workspace allocation，已去重为 ref 字符串列表）。
  */
-function resolveSkillRefs(refs: SkillRef[]): RuntimeSkillRef[] {
+function resolveSkillSlugs(slugs: string[]): RuntimeSkillRef[] {
   const skillsDir = resolveSkillsDir();
-  return refs.map((r) => ({ slug: r.ref, cachePath: path.join(skillsDir, r.ref) }));
+  return slugs.map((slug) => ({ slug, cachePath: path.join(skillsDir, slug) }));
 }
 
 /** agent:addToWorkspace 入参 */
@@ -119,9 +124,14 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     .filter((it) => it.def.type === 'sub')
     .map((it) => ({ slug: it.def.slug, botUserId: it.bot.botUserId, description: it.def.description }));
 
+  // T13：合并三层能力（def 默认 ∪ workspace allocation），workspace 内所有 agent 共享。
+  // allocation 按 workspace 取一次（同一 workspace 内不变），在循环内按各 def 合并。
+  const allocation = getAllocation(workspaceId);
+
   // Phase 2：启动 runtime。main 携带 subAgents；其余 agent 的 subAgents 为空。
   const results: AgentAssignment[] = [];
   for (const { def, assignment, bot } of installed) {
+    const merged = mergeCapabilities(def, allocation);
     spawnAgent({
       instanceId: assignment.instanceId,
       workspaceId,
@@ -137,8 +147,8 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
       ownerUserId: workspace.ownerId,
       agentType: def.type,
       subAgents: def.type === 'main' ? subAgents : [],
-      skills: resolveSkillRefs(def.defaultSkills),
-      mcpNames: def.defaultMcps.map((m) => m.ref),
+      skills: resolveSkillSlugs(merged.skills),
+      mcpNames: merged.mcps,
     });
     results.push(assignment);
   }
@@ -189,7 +199,11 @@ export function registerAgentHandlers(): void {
       // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
       await setSecret(llmApiKeyStorageKey(assignment.instanceId), llmApiKey);
 
-      // 5. 启动 runtime 子进程
+      // 5. 合并三层能力（T13）：def 默认 ∪ workspace allocation，去重后传给 runtime
+      const allocation = getAllocation(workspaceId);
+      const merged = mergeCapabilities(def, allocation);
+
+      // 6. 启动 runtime 子进程
       spawnAgent({
         instanceId: assignment.instanceId,
         workspaceId,
@@ -204,8 +218,8 @@ export function registerAgentHandlers(): void {
         teamRoomId: workspace.teamRoomId,
         ownerUserId: workspace.ownerId,
         agentType: def.type,
-        skills: resolveSkillRefs(def.defaultSkills),
-        mcpNames: def.defaultMcps.map((m) => m.ref),
+        skills: resolveSkillSlugs(merged.skills),
+        mcpNames: merged.mcps,
       });
 
       logger.info('Agent 已添加到 workspace 并启动', {
@@ -298,6 +312,10 @@ export function registerAgentHandlers(): void {
         throw new Error('LLM API key 丢失，请重新添加 agent');
       }
 
+      // T13：重启时同样合并三层能力（def 默认 ∪ workspace allocation）
+      const allocation = getAllocation(workspaceId);
+      const merged = mergeCapabilities(def, allocation);
+
       spawnAgent({
         instanceId: assignment.instanceId,
         workspaceId,
@@ -312,8 +330,8 @@ export function registerAgentHandlers(): void {
         teamRoomId,
         ownerUserId: workspace.ownerId,
         agentType: def.type,
-        skills: resolveSkillRefs(def.defaultSkills),
-        mcpNames: def.defaultMcps.map((m) => m.ref),
+        skills: resolveSkillSlugs(merged.skills),
+        mcpNames: merged.mcps,
       });
 
       return { instanceId: assignment.instanceId };

@@ -36,6 +36,8 @@ import {
 } from 'matrix-js-sdk';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
+import { logToolCall } from './tool-audit';
+import { assertToolAllowed } from './tool-permission';
 import {
   getBuiltinToolDefs,
   executeBuiltinTool,
@@ -75,6 +77,11 @@ interface RuntimeConfig {
   subAgents: SubAgentRef[];
   skills: RuntimeSkillRef[];
   mcpNames: string[];
+  // === M3 工具权限白名单 ===
+  /** 允许的工具名列表；空数组表示不启用白名单（全部放行，仅 deniedTools 生效） */
+  allowedTools: string[];
+  /** 禁止的工具名列表（优先级高于 allowedTools，命中即拒绝） */
+  deniedTools: string[];
 }
 
 /** 工具调用循环上限，防止 LLM 无限调用工具导致子进程卡死 */
@@ -128,6 +135,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     subAgents,
     skills,
     mcpNames,
+    allowedTools,
+    deniedTools,
   } = r;
   if (
     typeof botUserId !== 'string' ||
@@ -162,6 +171,13 @@ function parseConfig(raw: unknown): RuntimeConfig {
   const resolvedMcpNames = Array.isArray(mcpNames)
     ? mcpNames.filter((n): n is string => typeof n === 'string')
     : [];
+  // M3 工具权限：缺省/不合法时按"不限制"处理（空 allowedTools = 全放行，空 deniedTools = 无禁用）
+  const resolvedAllowedTools = Array.isArray(allowedTools)
+    ? allowedTools.filter((n): n is string => typeof n === 'string')
+    : [];
+  const resolvedDeniedTools = Array.isArray(deniedTools)
+    ? deniedTools.filter((n): n is string => typeof n === 'string')
+    : [];
   return {
     botUserId,
     botAccessToken,
@@ -178,6 +194,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     subAgents: resolvedSubAgents,
     skills: resolvedSkills,
     mcpNames: resolvedMcpNames,
+    allowedTools: resolvedAllowedTools,
+    deniedTools: resolvedDeniedTools,
   };
 }
 
@@ -493,8 +511,8 @@ async function runChatLoop(
 }
 
 /**
- * 统一工具执行路由：按工具名前缀分派到 builtin / 虚拟(skill) / dispatch / MCP 四类执行器。
- * 未知工具抛错（由 chat loop 捕获转成 tool result，LLM 可见并自我纠正）。
+ * 统一工具执行路由（含审计插桩）：计时 + try/finally 包装 doExecuteTool，
+ * 无论成功或失败都通过 IPC 发送审计日志。原路由逻辑见 doExecuteTool。
  */
 async function executeTool(
   call: LLMToolCall,
@@ -502,7 +520,42 @@ async function executeTool(
   client: MatrixClient,
   config: RuntimeConfig,
 ): Promise<string> {
+  const startTime = Date.now();
+  let success = true;
+  let output = '';
+  try {
+    output = await doExecuteTool(call, ctx, client, config);
+    return output;
+  } catch (err) {
+    success = false;
+    output = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    logToolCall({
+      toolName: call.name,
+      inputSummary: JSON.stringify(call.arguments),
+      outputSummary: output,
+      success,
+      durationMs: Date.now() - startTime,
+    });
+  }
+}
+
+/**
+ * 统一工具执行路由：按工具名前缀分派到 builtin / 虚拟(skill) / dispatch / MCP 四类执行器。
+ * 未知工具抛错（由 chat loop 捕获转成 tool result，LLM 可见并自我纠正）。
+ */
+async function doExecuteTool(
+  call: LLMToolCall,
+  ctx: RuntimeContext,
+  client: MatrixClient,
+  config: RuntimeConfig,
+): Promise<string> {
   const name = call.name;
+
+  // M3 工具权限强制：deniedTools 优先于 allowedTools。抛错由 executeTool 的审计
+  // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tool-permission.ts。
+  assertToolAllowed(name, config);
 
   if (name === 'read_file' || name === 'write_file' || name === 'list_files') {
     return executeBuiltinTool(name, call.arguments, ctx.wsFs);

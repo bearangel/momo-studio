@@ -10,8 +10,10 @@
 // 在后续任务（T14+T15）实现；当前 runtime-entry 只做登录 + 发"已上线"消息。
 
 import { fork, spawn, type ChildProcess, type Serializable } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../logger';
+import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 
@@ -39,6 +41,11 @@ export interface AgentRuntimeOpts {
   skills?: RuntimeSkillRef[];
   /** 该 agent 可用的 MCP server 名列表，工具定义在启动时通过 IPC 向主进程发现 */
   mcpNames?: string[];
+  // === M3 工具权限白名单 ===
+  /** 允许的工具名列表；空/缺省 = 不启用白名单（全部放行） */
+  allowedTools?: string[];
+  /** 禁止的工具名列表（优先级高于 allowedTools） */
+  deniedTools?: string[];
 }
 
 // runtime 进程池：instanceId → 子进程句柄
@@ -53,15 +60,134 @@ export function setRuntimeEntryOverride(cmd: string[] | null): void {
   runtimeEntryOverride = cmd;
 }
 
+// === 崩溃自动重启 + Circuit Breaker ===
+
+/** 最多自动重启次数（超过后 circuit breaker 触发，不再重启） */
+const MAX_RESTART_ATTEMPTS = 3;
+/** 递增延迟：第 1 次重启等 2s，第 2 次等 5s，第 3 次等 10s */
+const RESTART_DELAYS_MS = [2000, 5000, 10000];
+
+/** 每个 agent 实例的重启计数 + 待触发的定时器句柄 */
+interface RestartState {
+  count: number;
+  timer: NodeJS.Timeout | null;
+}
+
+/** instanceId → 重启状态 */
+const restartCounts = new Map<string, RestartState>();
+
 /**
- * 启动一个 agent 子进程，按 instanceId 注册到进程池。
- *
- * 生产路径用 fork() 拉起编译后的 runtime-entry.js；测试路径在
- * runtimeEntryOverride 设置时改用 spawn() 拉起假脚本（argv 形如
- * ['node', '--import', 'tsx', fakeScript]）。两种路径都会建立 IPC 通道
- * （stdio 末位 'ipc'）并把配置塞进 AGENT_CONFIG 环境变量。
+ * 标记被主动停止的实例（stopAgent/stopAllAgents 调用时添加）。
+ * exit handler 检查此集合：若存在则跳过自动重启——SIGTERM 导致的退出
+ * code 通常是 null（≠ 0），若不拦截会被误判为崩溃而触发重启。
+ */
+const stoppedManually = new Set<string>();
+
+/** 测试钩子：覆盖重启延迟数组，使单测不必等待真实的 2s/5s/10s */
+let restartDelaysOverride: number[] | null = null;
+
+/** 测试钩子：设置重启延迟覆盖（传 null 恢复默认） */
+export function setRestartDelaysOverride(delays: number[] | null): void {
+  restartDelaysOverride = delays;
+}
+
+/** 测试钩子：获取某实例当前的重启次数 */
+export function getRestartCount(instanceId: string): number {
+  return restartCounts.get(instanceId)?.count ?? 0;
+}
+
+/** 测试钩子：某实例是否有挂起的重启定时器（用于测试区分"等待重启"和"circuit breaker 已触发"） */
+export function hasPendingRestart(instanceId: string): boolean {
+  return restartCounts.get(instanceId)?.timer != null;
+}
+
+/** 测试钩子：清空全部重启状态（清 timer + 清计数 + 清 stopped 标记） */
+export function __resetRestartState(): void {
+  for (const state of restartCounts.values()) {
+    if (state.timer) clearTimeout(state.timer);
+  }
+  restartCounts.clear();
+  stoppedManually.clear();
+}
+
+/**
+ * 处理 agent 子进程退出事件：
+ *   - 正常退出（code=0）或被主动停止 → 清理计数，不重启
+ *   - 崩溃（code≠0 且非主动停止）→ 按递增延迟自动重启，最多 MAX_RESTART_ATTEMPTS 次
+ *   - 超过上限 → circuit breaker 触发，不再重启（避免无限崩溃-重启循环）
+ */
+function handleAgentExit(instanceId: string, code: number | null, opts: AgentRuntimeOpts): void {
+  runtimes.delete(instanceId);
+  logger.warn('Agent 子进程退出', { instanceId, code });
+
+  const wasStoppedManually = stoppedManually.has(instanceId);
+  stoppedManually.delete(instanceId);
+
+  // 正常退出或手动停止 → 不重启
+  if (code === 0 || wasStoppedManually) {
+    restartCounts.delete(instanceId);
+    return;
+  }
+
+  // Circuit breaker 检查
+  const state = restartCounts.get(instanceId) ?? { count: 0, timer: null };
+  if (state.count >= MAX_RESTART_ATTEMPTS) {
+    logger.error('Agent 达到崩溃重启上限，不再自动重启', {
+      instanceId,
+      attempts: state.count,
+    });
+    // TODO: 通过 IPC 通知 UI
+    return;
+  }
+
+  const delays = restartDelaysOverride ?? RESTART_DELAYS_MS;
+  const delay = delays[state.count] ?? delays[delays.length - 1] ?? 10000;
+  state.count++;
+  logger.info('Agent 将在崩溃后重启', {
+    instanceId,
+    attempt: state.count,
+    delayMs: delay,
+  });
+
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    try {
+      doSpawnAgent(opts);
+      logger.info('Agent 重启成功', { instanceId, attempt: state.count });
+    } catch (err) {
+      logger.error('Agent 重启失败', { instanceId, error: (err as Error).message });
+    }
+  }, delay);
+
+  restartCounts.set(instanceId, state);
+}
+
+/**
+ * 手动重置 circuit breaker。用户在 UI 点"重启"时调用——清除挂起重启定时器
+ * + 重置计数，使后续崩溃能重新走完整的重启流程。
+ */
+export function resetRestartCount(instanceId: string): void {
+  const state = restartCounts.get(instanceId);
+  if (state?.timer) clearTimeout(state.timer);
+  restartCounts.delete(instanceId);
+}
+
+/**
+ * 启动一个 agent 子进程（公共入口）。用户主动启动时重置 circuit breaker，
+ * 确保不是从之前的崩溃恢复状态开始。
  */
 export function spawnAgent(opts: AgentRuntimeOpts): void {
+  stoppedManually.delete(opts.instanceId);
+  resetRestartCount(opts.instanceId);
+  doSpawnAgent(opts);
+}
+
+/**
+ * 实际的 spawn 逻辑。生产路径用 fork() 拉起编译后的 runtime-entry.js；测试路径
+ * 在 runtimeEntryOverride 设置时改用 spawn() 拉起假脚本。崩溃重启时直接调用
+ * 本函数（不经过 spawnAgent 包装，避免重置正在递增的计数）。
+ */
+function doSpawnAgent(opts: AgentRuntimeOpts): void {
   const env = { ...process.env, AGENT_CONFIG: JSON.stringify(opts) };
 
   let child: ChildProcess;
@@ -90,9 +216,8 @@ export function spawnAgent(opts: AgentRuntimeOpts): void {
   child.stderr?.on('data', (chunk) => {
     logger.warn(`[agent:${opts.instanceId}] ${String(chunk).trimEnd()}`);
   });
-  child.on('exit', (code, signal) => {
-    logger.warn('Agent 子进程退出', { instanceId: opts.instanceId, code, signal });
-    runtimes.delete(opts.instanceId);
+  child.on('exit', (code) => {
+    handleAgentExit(opts.instanceId, code, opts);
   });
   // spawn 在无法启动二进制（ENOENT 等）时 emit 'error' 而非 'exit'；
   // 不监听会变成未捕获异常，故在此兜底并清理进程池。
@@ -102,7 +227,7 @@ export function spawnAgent(opts: AgentRuntimeOpts): void {
   });
   // 子进程 → 主进程的 MCP 工具调用桥接（MCP Host 在主进程，agent 子进程通过 IPC 请求）
   child.on('message', (msg: unknown) => {
-    handleChildMessage(child, opts.workspaceId, msg);
+    handleChildMessage(child, opts, msg);
   });
 
   runtimes.set(opts.instanceId, child);
@@ -110,23 +235,73 @@ export function spawnAgent(opts: AgentRuntimeOpts): void {
 }
 
 /**
- * 处理 agent 子进程发来的 IPC 消息。当前仅响应 mcp:listTools / mcp:callTool 两类
- * 请求——MCP Host（进程池）在主进程内，子进程无法直接访问，故通过 IPC 转发。
+ * 处理 agent 子进程发来的 IPC 消息。当前响应三类消息：
+ *   - mcp:listTools / mcp:callTool：MCP Host 在主进程，子进程通过 IPC 转发
+ *   - audit:toolCall：工具调用审计日志，写入 tool_calls 表
  * 未知消息类型静默忽略，便于未来扩展其它 IPC 协议而不破坏旧子进程。
  */
-function handleChildMessage(child: ChildProcess, workspaceId: string, msg: unknown): void {
+function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: unknown): void {
   const m = msg as {
     type?: string;
     id?: string;
     mcpName?: string;
     toolName?: string;
     args?: Record<string, unknown>;
+    inputSummary?: string;
+    outputSummary?: string;
+    success?: boolean;
+    durationMs?: number;
   };
   if (!m.type) return;
   if (m.type === 'mcp:listTools' && m.id && m.mcpName) {
-    void handleChildListTools(child, workspaceId, m.id, m.mcpName);
+    void handleChildListTools(child, opts.workspaceId, m.id, m.mcpName);
   } else if (m.type === 'mcp:callTool' && m.id && m.mcpName && m.toolName && m.args) {
-    void handleChildCallTool(child, workspaceId, m.id, m.mcpName, m.toolName, m.args);
+    void handleChildCallTool(child, opts.workspaceId, m.id, m.mcpName, m.toolName, m.args);
+  } else if (m.type === 'audit:toolCall' && typeof m.toolName === 'string') {
+    handleAuditToolCall(opts, {
+      toolName: m.toolName,
+      inputSummary: m.inputSummary,
+      outputSummary: m.outputSummary,
+      success: m.success,
+      durationMs: m.durationMs,
+    });
+  }
+}
+
+/**
+ * 审计桥接：把子进程通过 IPC 发来的工具调用审计日志写入 tool_calls 表。
+ * 子进程无法直接访问主进程的 DB 连接，故通过 process.send → child.on('message)
+ * 转发到此。写入失败只记录日志不抛出（审计不应阻塞 agent 运行）。
+ */
+function handleAuditToolCall(
+  opts: AgentRuntimeOpts,
+  m: {
+    toolName: string;
+    inputSummary?: string;
+    outputSummary?: string;
+    success?: boolean;
+    durationMs?: number;
+  },
+): void {
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO tool_calls
+         (id, workspace_id, agent_bot_user_id, task_id, tool_name, input_summary, output_summary, success, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      opts.workspaceId,
+      opts.botUserId,
+      null,
+      m.toolName,
+      m.inputSummary ?? '',
+      m.outputSummary ?? '',
+      m.success === false ? 0 : 1,
+      m.durationMs ?? 0,
+    );
+  } catch (err) {
+    logger.error('审计日志写入失败', { error: (err as Error).message });
   }
 }
 
@@ -184,6 +359,9 @@ async function handleChildCallTool(
 export function stopAgent(instanceId: string): void {
   const child = runtimes.get(instanceId);
   if (!child) return;
+  // 标记为主动停止，使 exit handler 跳过自动重启
+  stoppedManually.add(instanceId);
+  resetRestartCount(instanceId);
   child.kill('SIGTERM');
   runtimes.delete(instanceId);
   logger.info('Agent 子进程已请求停止', { instanceId });
@@ -192,7 +370,9 @@ export function stopAgent(instanceId: string): void {
 /** 停止全部运行中的 agent 子进程（应用退出时调用） */
 export function stopAllAgents(): void {
   const count = runtimes.size;
-  for (const child of runtimes.values()) {
+  for (const [instanceId, child] of runtimes) {
+    stoppedManually.add(instanceId);
+    resetRestartCount(instanceId);
     child.kill('SIGTERM');
   }
   runtimes.clear();

@@ -66,6 +66,13 @@ const api: ApiSurface = {
     add: (workspaceId, type, ref) => invoke('allocation:add', workspaceId, type, ref),
     remove: (workspaceId, type, ref) => invoke('allocation:remove', workspaceId, type, ref),
   },
+  gitPolicy: {
+    get: (workspaceId) => invoke('gitPolicy:get', workspaceId),
+    set: (workspaceId, policy) => invoke('gitPolicy:set', workspaceId, policy),
+  },
+  audit: {
+    getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

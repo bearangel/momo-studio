@@ -25,6 +25,7 @@ const stubs = vi.hoisted(() => ({
   inviteBotToRoom: vi.fn(),
   getOwnerMatrixClient: vi.fn(),
   getWorkspace: vi.fn(),
+  getAllocation: vi.fn(),
   setSecret: vi.fn(),
   spawnAgent: vi.fn(),
 }));
@@ -54,6 +55,12 @@ vi.mock('../../src/main/matrix/session', () => ({
 
 vi.mock('../../src/main/workspace/crud', () => ({
   getWorkspace: stubs.getWorkspace,
+}));
+
+// T13：ipc.handlers 现在调用 getAllocation 合并 workspace 级能力。mock 返回空分配，
+// 使 mergeCapabilities(def, empty) === def 默认能力，保持测试原有断言语义。
+vi.mock('../../src/main/workspace/allocation', () => ({
+  getAllocation: stubs.getAllocation,
 }));
 
 vi.mock('../../src/main/storage/keychain', () => ({
@@ -147,6 +154,7 @@ function installDeterministicStubs(): void {
     },
   );
   stubs.getWorkspace.mockReturnValue(WORKSPACE);
+  stubs.getAllocation.mockReturnValue({ workspaceId: WORKSPACE_ID, tools: [], mcps: [], skills: [] });
   stubs.setSecret.mockResolvedValue(undefined);
 }
 
