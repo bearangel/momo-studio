@@ -50,3 +50,17 @@ export async function createRoomInSpace(
   logger.info('Room 已创建并加入 Space', { name, roomId, spaceId });
   return roomId;
 }
+
+/**
+ * 邀请用户（通常是 agent bot）加入指定 room。
+ * bot 账号必须先被邀请、再 accept 后才能读取/发送 room 内的消息。
+ * 调用方需保证 client 已具备该 room 的邀请权限（通常是 room 创建者/owner）。
+ */
+export async function inviteBotToRoom(
+  client: MatrixClient,
+  roomId: string,
+  botUserId: string,
+): Promise<void> {
+  await client.invite(roomId, botUserId);
+  logger.info('已邀请用户加入 room', { roomId, botUserId });
+}

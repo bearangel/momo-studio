@@ -61,6 +61,13 @@ export interface AgentAssignment {
   createdAt: string;
 }
 
+export interface StartAgentInput {
+  assignment: AgentAssignment;
+  workspaceId: string;
+  teamRoomId: string;
+  llmApiKey: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -88,6 +95,8 @@ export interface ApiSurface {
     list(): Promise<AgentDefinition[]>;
     assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
     listAssignments(workspaceId: string): Promise<AgentAssignment[]>;
+    start(opts: StartAgentInput): Promise<{ instanceId: string }>;
+    stop(instanceId: string): Promise<{ ok: boolean }>;
   };
 }
 

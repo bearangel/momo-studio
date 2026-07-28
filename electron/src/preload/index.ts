@@ -34,6 +34,8 @@ const api: ApiSurface = {
     assign: (workspaceId, defId, botUserId) =>
       invoke('agent:assign', workspaceId, defId, botUserId),
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
+    start: (opts) => invoke('agent:start', opts),
+    stop: (instanceId) => invoke('agent:stop', instanceId),
   },
 };
 
