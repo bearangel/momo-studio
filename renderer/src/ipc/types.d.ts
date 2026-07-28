@@ -119,6 +119,17 @@ export interface McpServerConfig {
   env?: Record<string, string>;
 }
 
+/** 能力类型：tool（内置工具）/ mcp（MCP server）/ skill（技能），与 electron 端 CapabilityType 对齐 */
+export type CapabilityType = 'tool' | 'mcp' | 'skill';
+
+/** 某 workspace 的全部能力分配（按类型分桶），与 electron 端 WorkspaceAllocation 对齐 */
+export interface WorkspaceAllocation {
+  workspaceId: string;
+  tools: string[];
+  mcps: string[];
+  skills: string[];
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -181,6 +192,14 @@ export interface ApiSurface {
     ): Promise<string>;
     /** 停止某 workspace 内的指定 MCP 进程 */
     stop(workspaceId: string, mcpName: string): Promise<void>;
+  };
+  allocation: {
+    /** 读取某 workspace 的全部能力分配（按 tool/mcp/skill 分桶） */
+    get(workspaceId: string): Promise<WorkspaceAllocation>;
+    /** 增加一条能力分配（重复添加幂等） */
+    add(workspaceId: string, type: CapabilityType, ref: string): Promise<void>;
+    /** 移除一条能力分配 */
+    remove(workspaceId: string, type: CapabilityType, ref: string): Promise<void>;
   };
 }
 

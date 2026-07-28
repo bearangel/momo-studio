@@ -61,6 +61,11 @@ const api: ApiSurface = {
       invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
     stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
   },
+  allocation: {
+    get: (workspaceId) => invoke('allocation:get', workspaceId),
+    add: (workspaceId, type, ref) => invoke('allocation:add', workspaceId, type, ref),
+    remove: (workspaceId, type, ref) => invoke('allocation:remove', workspaceId, type, ref),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

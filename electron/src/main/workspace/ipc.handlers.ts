@@ -8,6 +8,12 @@
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace } from './crud';
+import {
+  getAllocation,
+  addAllocation,
+  removeAllocation,
+  type CapabilityType,
+} from './allocation';
 import { createMatrixSpace, createRoomInSpace } from '../matrix/rooms';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
 import type { CreateWorkspaceInput } from './types';
@@ -41,4 +47,35 @@ export function registerWorkspaceHandlers(): void {
   });
 
   logger.info('Workspace IPC handlers 已注册');
+}
+
+/**
+ * 注册 allocation:* IPC handlers —— workspace 级能力分配 CRUD。
+ * 与 workspace:* 分开注册（通道命名空间不同），但仍归属 workspace 域。
+ */
+export function registerAllocationHandlers(): void {
+  // 读取某 workspace 的全部能力分配（按 tool/mcp/skill 分桶）
+  ipcMain.handle('allocation:get', async (_evt, workspaceId: string) => {
+    return getAllocation(workspaceId);
+  });
+
+  // 增加一条能力分配（INSERT OR IGNORE，重复添加幂等）
+  ipcMain.handle(
+    'allocation:add',
+    async (_evt, workspaceId: string, type: CapabilityType, ref: string) => {
+      addAllocation(workspaceId, type, ref);
+      return;
+    },
+  );
+
+  // 移除一条能力分配
+  ipcMain.handle(
+    'allocation:remove',
+    async (_evt, workspaceId: string, type: CapabilityType, ref: string) => {
+      removeAllocation(workspaceId, type, ref);
+      return;
+    },
+  );
+
+  logger.info('Allocation IPC handlers 已注册');
 }
