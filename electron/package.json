@@ -71,7 +71,8 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "Momo Studio"
+      "maintainer": "Momo Studio",
+      "executableName": "momo-studio"
     },
     "win": {
       "target": [
