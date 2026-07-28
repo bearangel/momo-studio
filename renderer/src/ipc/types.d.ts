@@ -54,4 +54,15 @@ export interface ApiSurface {
     get(id: string): Promise<Workspace | null>;
     delete(id: string): Promise<void>;
   };
+  file: {
+    read(workspaceId: string, filePath: string): Promise<string>;
+    write(workspaceId: string, filePath: string, content: string): Promise<void>;
+    list(workspaceId: string, dirPath: string): Promise<DirEntry[]>;
+  };
+}
+
+export interface DirEntry {
+  name: string;
+  isDirectory: boolean;
+  size: number;
 }

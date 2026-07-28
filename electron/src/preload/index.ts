@@ -23,6 +23,11 @@ const api: ApiSurface = {
     get: (id) => invoke('workspace:get', id),
     delete: (id) => invoke('workspace:delete', id),
   },
+  file: {
+    read: (wsId, path) => invoke('file:read', wsId, path),
+    write: (wsId, path, content) => invoke('file:write', wsId, path, content),
+    list: (wsId, dir) => invoke('file:list', wsId, dir),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
