@@ -30,6 +30,7 @@ const api: ApiSurface = {
   },
   agent: {
     addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
+    assignMain: (input) => invoke('agent:assignMain', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     list: () => invoke('agent:list'),
     assign: (workspaceId, defId, botUserId) =>

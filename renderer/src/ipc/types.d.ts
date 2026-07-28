@@ -52,6 +52,8 @@ export interface AgentDefinition {
   source: string;
   description: string;
   iconEmoji: string;
+  /** 父 agent ID（仅 type='sub' 时有值），用于 UI 展示主子 agent 分组 */
+  parentAgentId?: string;
 }
 
 export interface AgentAssignment {
@@ -73,6 +75,17 @@ export interface StartAgentInput {
 export interface AddToWorkspaceInput {
   workspaceId: string;
   agentDefinitionId: string;
+  llmApiKey: string;
+}
+
+/**
+ * agent:assignMain 入参 — 安装 main agent 时自动跟随注册其全部 sub agent。
+ * mainDefId 指向 type='main' 的定义；该 main 名下所有 parentAgentId 指向它的
+ * sub 定义会被一并安装。
+ */
+export interface AssignMainInput {
+  workspaceId: string;
+  mainDefId: string;
   llmApiKey: string;
 }
 
@@ -114,6 +127,11 @@ export interface ApiSurface {
   agent: {
     /** 一键编排：注册 bot + 分配 + 邀请进团队群 + 存 API key + 启动 runtime */
     addToWorkspace(input: AddToWorkspaceInput): Promise<AgentAssignment>;
+    /**
+     * 安装 main agent 并自动跟随注册其全部 sub agent（每个 agent 执行与
+     * addToWorkspace 等价的全套编排）。返回全部新建 assignment（首条为 main）。
+     */
+    assignMain(input: AssignMainInput): Promise<AgentAssignment[]>;
     createFromYaml(yaml: string): Promise<AgentDefinition>;
     list(): Promise<AgentDefinition[]>;
     assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;

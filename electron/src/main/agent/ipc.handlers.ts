@@ -37,6 +37,100 @@ export interface AddToWorkspaceInput {
   llmApiKey: string;
 }
 
+/**
+ * agent:assignMain 入参 —— 安装一个 main agent 时自动跟随注册其全部 sub agent。
+ * 与 addToWorkspace 的区别：assignMain 接收的是 main 定义 ID，会一次性把该 main
+ * 名下所有 parentAgentId 指向它的 sub 定义也安装到位。
+ */
+export interface AssignMainInput {
+  workspaceId: string;
+  /** main agent 定义 ID（type='main'） */
+  mainDefId: string;
+  /** LLM API key，存入 keychain 供 main 及其全部 sub 实例的 runtime 共用 */
+  llmApiKey: string;
+}
+
+/**
+ * 安装一个 main agent，并自动跟随注册其全部 sub agent（listAgentDefinitions 中
+ * parentAgentId 指向该 main 的定义）。对每个 agent（main + subs）执行与
+ * agent:addToWorkspace 等价的全套编排：
+ *   注册 bot 账号 → 分配到 workspace → 邀请进团队群 → 存 LLM API key → 启动 runtime。
+ *
+ * 设计取舍：
+ *   - teamRoomId 从 workspace 取（单一数据源），与 addToWorkspace 一致，不信任 renderer 传入；
+ *   - owner 用 workspace.ownerId（而非 getCurrentUserId），与 addToWorkspace 一致；
+ *   - 所有实例共用同一把 llmApiKey（用户级 API key），逐个存入各自 instance 的 keychain key；
+ *   - 任一步骤失败即抛错，不做回滚（与 addToWorkspace 的失败语义一致）。
+ *
+ * 导出该函数以便单测直接调用（绕过 ipcMain），handler 层只做薄封装。
+ *
+ * @returns 全部新建的 assignment 列表（首条为 main，其后按 sub 定义顺序排列）
+ */
+export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssignment[]> {
+  const { workspaceId, mainDefId, llmApiKey } = opts;
+
+  const mainDef = getAgentDefinition(mainDefId);
+  if (!mainDef) throw new Error(`未找到 agent 定义: ${mainDefId}`);
+
+  const workspace = getWorkspace(workspaceId);
+  if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
+  if (!workspace.teamRoomId) {
+    throw new Error('workspace 尚未创建团队群（teamRoomId 为空）');
+  }
+
+  // owner 的 Matrix client（用于把各 bot 邀请进团队群）；从 keychain 恢复 token 构造，不启动 sync
+  const ownerClient = await getOwnerMatrixClient();
+
+  // 查找全部归属该 main 的 sub agent 定义（parentAgentId 指向 main.id）
+  const subDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
+
+  const results: AgentAssignment[] = [];
+  // 先安装 main，再依次安装各 sub，保证返回顺序与日志可读
+  for (const def of [mainDef, ...subDefs]) {
+    // 1. 注册 bot Matrix 账号（token 自动存 keychain）
+    const bot = await registerAgentBot({
+      slug: def.slug,
+      workspaceName: workspace.name,
+      ownerUserId: workspace.ownerId,
+      homeserverUrl: HOMESERVER_URL,
+    });
+
+    // 2. 分配 agent 到 workspace（DB 记录，绑定 botMatrixUserId）
+    const assignment = assignAgentToWorkspace(workspaceId, def.id, bot.botUserId);
+
+    // 3. 邀请 bot 进团队群（用 owner 的 client 发 invite）
+    await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
+
+    // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
+    await setSecret(llmApiKeyStorageKey(assignment.instanceId), llmApiKey);
+
+    // 5. 启动 runtime 子进程
+    spawnAgent({
+      instanceId: assignment.instanceId,
+      workspaceId,
+      workspaceDir: workspace.directoryPath,
+      botUserId: bot.botUserId,
+      botAccessToken: bot.botAccessToken,
+      homeserverUrl: HOMESERVER_URL,
+      systemPrompt: def.systemPrompt,
+      modelProvider: def.model.provider,
+      modelName: def.model.model,
+      llmApiKey,
+      teamRoomId: workspace.teamRoomId,
+    });
+
+    results.push(assignment);
+  }
+
+  logger.info('Main agent 及其 sub agents 已安装并启动', {
+    workspaceId,
+    mainDefId,
+    mainSlug: mainDef.slug,
+    subCount: subDefs.length,
+  });
+  return results;
+}
+
 /** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerAgentHandlers(): void {
   // 一键编排：注册 bot 账号 → 分配到 workspace → 邀请 bot 进团队群 →
@@ -96,6 +190,13 @@ export function registerAgentHandlers(): void {
       });
       return assignment;
     },
+  );
+
+  // 安装 main agent 并自动跟随注册其全部 sub agent（主子安装入口）。
+  // 实际逻辑在 assignMainAgent 中，handler 仅做薄封装便于单测。
+  ipcMain.handle(
+    'agent:assignMain',
+    async (_evt, opts: AssignMainInput) => assignMainAgent(opts),
   );
 
   // 从 YAML manifest 字符串创建 agent 定义并持久化。校验失败会抛错（parseAgentManifest），由 IPC 层转为 rejection。
