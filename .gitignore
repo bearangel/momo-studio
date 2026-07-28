@@ -7,6 +7,8 @@ dist-installers/
 .env.local
 coverage/
 .vite/
+test-results/
+playwright-report/
 resources/conduit/conduit-*
 !resources/conduit/.gitignore
 !resources/conduit/download.ts
