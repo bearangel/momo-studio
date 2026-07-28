@@ -32,12 +32,17 @@
         "from": "../resources/conduit",
         "to": "conduit",
         "filter": [
+          "static-*",
           "conduit-*"
         ]
       },
       {
         "from": "./resources/agents",
         "to": "agents"
+      },
+      {
+        "from": "../resources/marketplace",
+        "to": "marketplace"
       },
       {
         "from": "../renderer/dist",

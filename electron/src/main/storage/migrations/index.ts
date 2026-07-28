@@ -174,6 +174,24 @@ CREATE TABLE IF NOT EXISTS git_policies (
 );
 `.trim(),
   },
+  {
+    version: 8,
+    sql: `
+-- M4：Marketplace 已安装包登记表。item_id 对应 catalog 内 MarketplaceItem.id
+-- （INSERT OR REPLACE 做幂等覆盖），cache_path 指向解压后的本地缓存目录。
+-- 不加外键：catalog item 不在 DB 内，是外部数据源。
+CREATE TABLE IF NOT EXISTS installed_packages (
+  id TEXT PRIMARY KEY NOT NULL,
+  item_id TEXT NOT NULL,
+  item_type TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  version TEXT NOT NULL,
+  cache_path TEXT NOT NULL,
+  installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  checksum TEXT NOT NULL
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

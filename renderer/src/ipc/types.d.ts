@@ -184,6 +184,49 @@ export interface ToolCallRecord {
   timestamp: string;
 }
 
+/**
+ * Marketplace 可安装项，与 electron 端 MarketplaceItem 对齐。
+ * renderer 端独立定义（跨进程不共享类型，仅结构对齐）。
+ */
+export interface MarketplaceItem {
+  id: string;
+  type: 'agent' | 'mcp' | 'skill';
+  slug: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  readme: string;
+  tags: string[];
+  category: string;
+  iconEmoji: string;
+  verificationStatus: 'unverified' | 'community' | 'verified' | 'official';
+  /** 下载地址（空串表示 builtin 内联项） */
+  downloadUrl: string;
+  /** sha256 hex 校验和（空串表示不校验） */
+  checksum: string;
+  sizeBytes: number;
+  installCount: number;
+}
+
+/** Marketplace catalog 顶层结构，与 electron 端 Catalog 对齐 */
+export interface MarketplaceCatalog {
+  version: string;
+  updatedAt: string;
+  items: MarketplaceItem[];
+}
+
+/** 已安装包记录，与 electron 端 InstalledPackage 对齐 */
+export interface InstalledPackage {
+  id: string;
+  itemId: string;
+  itemType: string;
+  slug: string;
+  version: string;
+  cachePath: string;
+  installedAt: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -264,6 +307,18 @@ export interface ApiSurface {
   audit: {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */
     getToolCalls(workspaceId: string, opts?: ToolCallQueryOpts): Promise<ToolCallRecord[]>;
+  };
+  marketplace: {
+    /** 获取 catalog（远程优先，失败回退本地内置） */
+    getCatalog(catalogUrl?: string): Promise<MarketplaceCatalog>;
+    /** 关键词 + 类型搜索 catalog（关键词命中 name/description/slug/tags） */
+    search(query: string, type?: 'agent' | 'mcp' | 'skill'): Promise<MarketplaceItem[]>;
+    /** 安装一个 marketplace 包（返回缓存目录路径） */
+    install(item: MarketplaceItem): Promise<{ cachePath: string }>;
+    /** 列出全部已安装包（最新优先） */
+    listInstalled(): Promise<InstalledPackage[]>;
+    /** 卸载一个包（按 itemId） */
+    uninstall(itemId: string): Promise<void>;
   };
 }
 
