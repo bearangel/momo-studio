@@ -138,6 +138,30 @@ export interface WorkspaceAllocation {
   skills: string[];
 }
 
+/** 一条可识别的 commit message 模式，与 electron 端 CommitPattern 对齐 */
+export interface CommitPattern {
+  code: string;
+  name: string;
+  regex: string;
+  example: string;
+}
+
+/** commit message 校验级别，与 electron 端 CommitValidation 对齐 */
+export type CommitValidation = 'strict' | 'warning' | 'none';
+
+/** 一份完整的 Git Policy 配置，与 electron 端 GitPolicy 对齐 */
+export interface GitPolicy {
+  allowAgentCommits: boolean;
+  defaultBranch: string;
+  fallbackBranchPattern: string;
+  commitMessage: {
+    template: string;
+    patterns: CommitPattern[];
+    validation: CommitValidation;
+    trailers: Array<{ key: string; value: string }>;
+  };
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -208,6 +232,12 @@ export interface ApiSurface {
     add(workspaceId: string, type: CapabilityType, ref: string): Promise<void>;
     /** 移除一条能力分配 */
     remove(workspaceId: string, type: CapabilityType, ref: string): Promise<void>;
+  };
+  gitPolicy: {
+    /** 读取某 workspace 的 Git Policy（未配置返回默认） */
+    get(workspaceId: string): Promise<GitPolicy>;
+    /** 覆盖写入某 workspace 的 Git Policy */
+    set(workspaceId: string, policy: GitPolicy): Promise<void>;
   };
 }
 

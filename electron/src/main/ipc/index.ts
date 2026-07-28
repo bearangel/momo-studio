@@ -8,6 +8,7 @@ import { registerAgentHandlers } from '../agent/ipc.handlers';
 import { registerImHandlers } from '../im/ipc.handlers';
 import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
+import { registerGitPolicyHandlers } from '../workspace/git-policy';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
@@ -19,4 +20,5 @@ export function registerIpcHandlers(): void {
   registerImHandlers();
   registerMcpHandlers();
   registerAllocationHandlers();
+  registerGitPolicyHandlers();
 }
