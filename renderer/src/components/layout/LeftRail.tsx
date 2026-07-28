@@ -1,6 +1,7 @@
 // renderer/src/components/layout/LeftRail.tsx
 import { cn } from '../../lib/cn';
 import { useUiStore, type ViewKey } from '../../stores/ui.store';
+import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher';
 
 interface NavItem {
   key: ViewKey;
@@ -22,6 +23,11 @@ export function LeftRail() {
 
   return (
     <div className="w-14 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2">
+      {/* workspace 切换器：顶部下拉切换 / 新建 workspace */}
+      <div className="relative">
+        <WorkspaceSwitcher />
+      </div>
+      <div className="w-8 h-px bg-border-subtle my-1" />
       {NAV_ITEMS.map((item) => (
         <button
           key={item.key}
