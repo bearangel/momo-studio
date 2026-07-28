@@ -48,6 +48,42 @@ export interface LLMProvider {
 /** 对 LLM API 的单次请求超时（毫秒）—— API 挂起时避免 agent 子进程永久阻塞 */
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
 
+/** 最大重试次数（初次请求 + 重试 = maxRetries+1 次总尝试） */
+const MAX_LLM_RETRIES = 3;
+/** 指数退避延迟：第 1 次重试等 1s，第 2 次等 2s，第 3 次等 4s */
+const RETRY_DELAYS_MS = [1000, 2000, 4000];
+/** 可重试的 HTTP 状态码（服务端错误 + 限流） */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
+
+/**
+ * 带指数退避重试的 fetch 包装。对可重试错误（429/500/502/503 + 网络异常）
+ * 按 RETRY_DELAYS_MS 退避后重试；对客户端错误（400/401/403 等）直接返回
+ * 响应（由调用方判断 !response.ok 后抛出业务异常，不浪费重试配额）。
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries: number = MAX_LLM_RETRIES,
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
+        return response;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      lastError = err as Error;
+    }
+    if (attempt < maxRetries) {
+      const delay = RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]!;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastError ?? new Error('LLM 请求失败（重试耗尽）');
+}
+
 /** 统一的 LLM provider 工厂：按 model.provider 选择实现 */
 export function createLLMProvider(model: ModelRef, apiKey: string): LLMProvider {
   if (model.provider === 'openai') {
@@ -80,7 +116,7 @@ class OpenAIProvider implements LLMProvider {
       }));
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -168,7 +204,7 @@ class AnthropicProvider implements LLMProvider {
       }));
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
