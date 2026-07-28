@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bearangel/workspace.git"
+    "url": "https://github.com/bearangel/momo-studio.git"
   },
   "type": "commonjs",
   "main": "dist/main/index.js",
