@@ -93,7 +93,7 @@ export class McpClient {
     const result = await this.sendRequest('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'AgentPlatform', version: '0.1.0' },
+      clientInfo: { name: 'Momo Studio', version: '0.1.0' },
     });
     logger.info(`MCP ${this.config.name} 握手成功`, {
       protocolVersion: (result as { protocolVersion?: string }).protocolVersion,

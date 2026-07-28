@@ -1,5 +1,5 @@
 {
-  "name": "@ap/electron",
+  "name": "@momo-studio/electron",
   "private": true,
   "version": "0.1.0",
   "type": "commonjs",
@@ -14,8 +14,8 @@
     "pack": "pnpm build && pnpm --filter ../renderer build && electron-builder --dir"
   },
   "build": {
-    "appId": "io.agentplatform.desktop",
-    "productName": "AgentPlatform",
+    "appId": "io.momo-studio.desktop",
+    "productName": "Momo Studio",
     "directories": {
       "output": "dist-installers",
       "buildResources": "build"

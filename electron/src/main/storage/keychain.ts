@@ -2,7 +2,7 @@
 import type * as Keytar from 'keytar';
 import { logger } from '../logger';
 
-const SERVICE_NAME = 'AgentPlatform';
+const SERVICE_NAME = 'Momo Studio';
 
 export interface KeychainImpl {
   setSecret(key: string, value: string): Promise<void>;

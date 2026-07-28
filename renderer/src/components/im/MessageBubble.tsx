@@ -1,8 +1,8 @@
 // renderer/src/components/im/MessageBubble.tsx
 //
 // 单条消息渲染入口。根据 eventType 分发：
-//   - io.agentplatform.dispatch   → 紫色 DispatchCard
-//   - io.agentplatform.task_reply → 状态色 TaskReplyCard
+//   - io.momo-studio.dispatch   → 紫色 DispatchCard
+//   - io.momo-studio.task_reply → 状态色 TaskReplyCard
 //   - 其余（m.room.message 等）   → 普通气泡（自己右对齐蓝色，他人左对齐灰色）
 // 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）。
 import ReactMarkdown from 'react-markdown';
@@ -19,10 +19,10 @@ interface Props {
 }
 
 export function MessageBubble({ message, isSelf }: Props) {
-  if (message.eventType === 'io.agentplatform.dispatch') {
+  if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} />;
   }
-  if (message.eventType === 'io.agentplatform.task_reply') {
+  if (message.eventType === 'io.momo-studio.task_reply') {
     return <TaskReplyCard message={message} />;
   }
 

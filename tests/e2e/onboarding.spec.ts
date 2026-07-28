@@ -34,8 +34,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 
-// Resolve modules through the @ap/electron workspace package. `electron` and
-// `better-sqlite3` are dependencies of @ap/electron, not the workspace root, so
+// Resolve modules through the @momo-studio/electron workspace package. `electron` and
+// `better-sqlite3` are dependencies of @momo-studio/electron, not the workspace root, so
 // a plain `require('electron')` from this root-level test would fail under
 // pnpm's isolated node_modules layout. createRequire scoped to the workspace
 // package.json makes the resolution deterministic.
@@ -111,7 +111,7 @@ test('full onboarding flow', async () => {
 
   // If the better-sqlite3 native binding is loadable from the test process,
   // additionally assert the kv_store row that the register flow writes. The
-  // binding lives in @ap/electron; on some CI images it may not be importable
+  // binding lives in @momo-studio/electron; on some CI images it may not be importable
   // from outside the Electron process, so this check is best-effort and the
   // visible main shell above remains the hard gate.
   let BetterSqlite3: typeof import('better-sqlite3') | undefined;

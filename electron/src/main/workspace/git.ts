@@ -10,8 +10,8 @@ import { logger } from '../logger';
 export async function initGitRepo(directoryPath: string): Promise<void> {
   const git = simpleGit(directoryPath);
   await git.init();
-  await git.addConfig('user.name', 'AgentPlatform');
-  await git.addConfig('user.email', 'agentplatform@localhost');
+  await git.addConfig('user.name', 'Momo Studio');
+  await git.addConfig('user.email', 'momo-studio@localhost');
   // 创建空 commit，确保 default branch 真实存在（而非仅 git init 后的 unborn）
   await git.commit('init: workspace 初始化', [], { '--allow-empty': null });
   logger.info('Git 仓库已初始化', { directoryPath });

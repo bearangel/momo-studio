@@ -1,7 +1,7 @@
 // renderer/src/components/im/TaskReplyCard.tsx
 //
 // task_reply 消息卡片：子 agent 向主 agent 回报任务状态。
-// 字段取自 io.agentplatform.task_reply event content：
+// 字段取自 io.momo-studio.task_reply event content：
 //   status (in_progress|completed|failed|needs_input), body, task_id, progress_pct?
 // 卡片配色按 status 映射到语义状态 token（绿/蓝/红/琥珀）。
 import ReactMarkdown from 'react-markdown';

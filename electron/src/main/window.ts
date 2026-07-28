@@ -13,7 +13,7 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     backgroundColor: '#1a1a1a',
-    title: 'AgentPlatform',
+    title: 'Momo Studio',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,

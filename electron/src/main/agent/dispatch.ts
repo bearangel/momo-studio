@@ -1,12 +1,12 @@
 // electron/src/main/agent/dispatch.ts
 //
 // Dispatch / Task Reply 消息类型 — 主子 agent 通过 Matrix 自定义事件
-// （io.agentplatform.dispatch / io.agentplatform.task_reply）传递任务调度指令与回执。
+// （io.momo-studio.dispatch / io.momo-studio.task_reply）传递任务调度指令与回执。
 // 纯函数模块，不持有任何外部副作用，便于单测。
 
 import { randomUUID } from 'node:crypto';
 
-/** dispatch 消息内容（Matrix event type: io.agentplatform.dispatch） */
+/** dispatch 消息内容（Matrix event type: io.momo-studio.dispatch） */
 export interface DispatchContent {
   body: string;
   task_id: string;
@@ -15,7 +15,7 @@ export interface DispatchContent {
   deadline_ms?: number;
 }
 
-/** task_reply 消息内容（Matrix event type: io.agentplatform.task_reply） */
+/** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
 export interface TaskReplyContent {
   body: string;
   task_id: string;
@@ -23,8 +23,8 @@ export interface TaskReplyContent {
   progress_pct?: number;
 }
 
-export const DISPATCH_EVENT_TYPE = 'io.agentplatform.dispatch';
-export const TASK_REPLY_EVENT_TYPE = 'io.agentplatform.task_reply';
+export const DISPATCH_EVENT_TYPE = 'io.momo-studio.dispatch';
+export const TASK_REPLY_EVENT_TYPE = 'io.momo-studio.task_reply';
 
 /** 构造一条 dispatch 消息：自动生成 task_id（UUID v4） */
 export function buildDispatchMessage(opts: {

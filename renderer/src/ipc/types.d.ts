@@ -98,7 +98,7 @@ export interface ImMessage {
   roomId: string;
   sender: string;
   body: string;
-  /** Matrix event type，普通消息为 'm.room.message'，自定义消息为 'io.agentplatform.dispatch' / 'io.agentplatform.task_reply' */
+  /** Matrix event type，普通消息为 'm.room.message'，自定义消息为 'io.momo-studio.dispatch' / 'io.momo-studio.task_reply' */
   eventType: string;
   /** 原始 event content，自定义消息卡片从中读取结构化字段 */
   content: Record<string, unknown>;

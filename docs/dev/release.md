@@ -43,23 +43,23 @@ cd electron && npx electron-rebuild -f -w better-sqlite3
 ### 3. 产出安装包
 
 ```bash
-npx pnpm@9.0.0 --filter @ap/electron dist
+npx pnpm@9.0.0 --filter @momo-studio/electron dist
 ```
 
 产物输出到 `electron/dist-installers/`：
-- macOS arm64：`AgentPlatform-1.0.0-arm64.dmg`
-- macOS x64：`AgentPlatform-1.0.0.dmg`
-- Linux x64：`AgentPlatform-1.0.0.AppImage`、`AgentPlatform-1.0.0.deb`
+- macOS arm64：`Momo Studio-1.0.0-arm64.dmg`
+- macOS x64：`Momo Studio-1.0.0.dmg`
+- Linux x64：`Momo Studio-1.0.0.AppImage`、`Momo Studio-1.0.0.deb`
 - Windows：v1 不产出（计划 v2）。
 
 ### 4. 校验产物
 
 ```bash
 # macOS
-hdiutil verify electron/dist-installers/AgentPlatform-1.0.0-arm64.dmg
+hdiutil verify electron/dist-installers/Momo Studio-1.0.0-arm64.dmg
 
 # Linux
-sha256sum electron/dist-installers/AgentPlatform-1.0.0.AppImage
+sha256sum electron/dist-installers/Momo Studio-1.0.0.AppImage
 ```
 
 把 SHA256 写入 GitHub Release 的 description。

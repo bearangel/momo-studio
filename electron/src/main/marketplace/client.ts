@@ -16,7 +16,7 @@ import type { Catalog, MarketplaceItem } from './types';
 
 /** 远程 catalog 默认地址（占位；真实仓库地址在 release 阶段替换） */
 const DEFAULT_CATALOG_URL =
-  'https://raw.githubusercontent.com/agentplatform/marketplace/main/resources/marketplace/catalog.json';
+  'https://raw.githubusercontent.com/momo-studio/marketplace/main/resources/marketplace/catalog.json';
 
 /** 本地内置 catalog（与源码一同分发，远程不可达时兜底） */
 const LOCAL_CATALOG_PATH = path.join(

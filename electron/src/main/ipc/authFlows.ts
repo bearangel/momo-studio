@@ -105,7 +105,7 @@ export async function loginFlow(
   const raw: unknown = await client.login('m.login.password', {
     user: opts.username,
     password: opts.password,
-    initial_device_display_name: 'AgentPlatform Desktop',
+    initial_device_display_name: 'Momo Studio Desktop',
   });
   const response = pickAuthFields(raw);
 

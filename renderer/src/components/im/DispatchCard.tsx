@@ -1,7 +1,7 @@
 // renderer/src/components/im/DispatchCard.tsx
 //
 // dispatch 消息卡片（紫色）：主 agent 向子 agent 调度任务。
-// 字段取自 io.agentplatform.dispatch event content：
+// 字段取自 io.momo-studio.dispatch event content：
 //   dispatch_from → dispatch_to, body, task_id, deadline_ms?
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';

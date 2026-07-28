@@ -18,7 +18,7 @@ Detailed setup for new contributors. See `README.md` for the short version.
 
 ```bash
 git clone <repo-url>
-cd agentplatform
+cd momo-studio
 pnpm install
 ```
 

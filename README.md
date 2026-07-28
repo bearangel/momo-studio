@@ -1,4 +1,4 @@
-# AgentPlatform
+# Momo Studio
 
 个人桌面端多 agent 协作平台：把可声明的 agent、可扩展的 MCP/Skill 市场、IM 通道和受控的文件沙箱，全部装进一个本地 Electron 应用。
 
@@ -61,7 +61,7 @@
 
 ```bash
 git clone <repo>
-cd agentplatform
+cd momo-studio
 nvm use 20
 npx pnpm@9.0.0 install
 ```
@@ -91,8 +91,8 @@ npx pnpm@9.0.0 test:e2e        # 端到端集成测试（需要已构建应用�
 ### 单独跑某个 workspace
 
 ```bash
-npx pnpm@9.0.0 --filter @ap/electron test
-npx pnpm@9.0.0 --filter @ap/renderer test
+npx pnpm@9.0.0 --filter @momo-studio/electron test
+npx pnpm@9.0.0 --filter @momo-studio/renderer test
 ```
 
 ## 打包
@@ -100,7 +100,7 @@ npx pnpm@9.0.0 --filter @ap/renderer test
 ```bash
 nvm use 20
 npx pnpm@9.0.0 build                       # 先构建 renderer + electron
-npx pnpm@9.0.0 --filter @ap/electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
+npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
 ```
 
 产物输出到 `electron/dist-installers/`。
@@ -120,7 +120,7 @@ docs/
   dev/         开发者指南（setup / conduit-manual / release）
 ```
 
-两个 workspace 包名：`@ap/electron`、`@ap/renderer`。
+两个 workspace 包名：`@momo-studio/electron`、`@momo-studio/renderer`。
 
 ## 已知限制
 
