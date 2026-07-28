@@ -28,6 +28,7 @@
       "buildResources": "build"
     },
     "publish": null,
+    "executableName": "momo-studio",
     "files": [
       "dist/**/*",
       "node_modules/**/*",
