@@ -8,6 +8,8 @@ import {
   type AuthDeps,
 } from '../../src/main/ipc/authFlows';
 
+const SESSION = { userId: '@alice:localhost', deviceId: 'DEV' };
+
 function makeStubMatrixClient(): MatrixClient {
   return {
     register: vi.fn().mockResolvedValue({
@@ -41,20 +43,20 @@ describe('auth flows', () => {
   it('registerFlow starts Conduit, registers user, persists token', async () => {
     const deps = makeDeps();
     const result = await registerFlow({ username: 'alice', password: 'pass' }, deps);
-    expect(result).toEqual({ userId: '@alice:localhost', deviceId: 'DEV' });
+    expect(result).toEqual(SESSION);
     expect(deps.startConduit).toHaveBeenCalled();
     expect(deps.setSecret).toHaveBeenCalledWith('user.@alice:localhost.matrix_token', 'tok');
     expect(deps.dbRun).toHaveBeenCalledWith(
       'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
-      'current_user_id',
-      JSON.stringify('@alice:localhost'),
+      'current_user_session',
+      JSON.stringify(SESSION),
     );
   });
 
   it('loginFlow logs in and persists token', async () => {
     const deps = makeDeps();
     const result = await loginFlow({ username: 'alice', password: 'pass' }, deps);
-    expect(result).toEqual({ userId: '@alice:localhost', deviceId: 'DEV' });
+    expect(result).toEqual(SESSION);
     expect(deps.setSecret).toHaveBeenCalled();
     expect(deps.dbRun).toHaveBeenCalled();
   });
@@ -68,7 +70,7 @@ describe('auth flows', () => {
 
   it('getCurrentUserFlow returns null when DB has user but token missing', async () => {
     const deps = makeDeps({
-      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify('@alice:localhost') }),
+      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify(SESSION) }),
       getSecret: vi.fn().mockResolvedValue(null),
     });
     const result = await getCurrentUserFlow(deps);
@@ -77,10 +79,10 @@ describe('auth flows', () => {
 
   it('getCurrentUserFlow returns user when DB has user and token present', async () => {
     const deps = makeDeps({
-      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify('@alice:localhost') }),
+      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify(SESSION) }),
       getSecret: vi.fn().mockResolvedValue('tok'),
     });
     const result = await getCurrentUserFlow(deps);
-    expect(result).toEqual({ userId: '@alice:localhost', accessToken: 'tok' });
+    expect(result).toEqual(SESSION);
   });
 });

@@ -13,11 +13,21 @@ function perOsFilename(): string {
   throw new Error(`Unsupported platform: ${platform}-${arch}`);
 }
 
+/**
+ * Detect whether we are running inside a *packaged* Electron app. We cannot use
+ * electron's `app.isPackaged` here (importing electron would pull the renderer
+ * module graph into a Node-only test context and break unit tests), so we infer
+ * it from the two markers Electron itself injects into the process object:
+ * `process.versions.electron` is present in any Electron runtime, and
+ * `process.resourcesPath` is set only for an asar/unpacked packaged build.
+ */
+function isPackaged(): boolean {
+  return typeof process.versions.electron === 'string' && !!proc.resourcesPath;
+}
+
 export function resolveConduitBinaryPath(): string {
-  // From electron/src/main/conduit/, walk up to <root>/resources/conduit/<binary>
-  // In production (packaged), this lives under process.resourcesPath.
   const filename = perOsFilename();
-  if (proc.env.NODE_ENV === 'production' && proc.resourcesPath) {
+  if (isPackaged() && proc.resourcesPath) {
     return path.join(proc.resourcesPath, 'conduit', filename);
   }
   // Dev mode: walk up from this compiled file to repo root.

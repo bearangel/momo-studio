@@ -30,6 +30,17 @@ function tokenKey(userId: string): string {
   return `user.${userId}.matrix_token`;
 }
 
+/**
+ * Persisted session shape stored in kv_store under `current_user_session`.
+ * Mirrors the renderer's `AuthResult` ({ userId, deviceId }) so the IPC channel
+ * can restore a session without leaking the access token (which stays in the
+ * OS keychain and is consumed only by the main process).
+ */
+interface StoredSession {
+  userId: string;
+  deviceId: string;
+}
+
 /** Subset of Matrix register/login response that we consume. */
 interface MatrixAuthResponse {
   user_id: string;
@@ -57,9 +68,9 @@ function pickAuthFields(raw: unknown): MatrixAuthResponse {
   return { user_id: r.user_id, access_token: r.access_token, device_id: r.device_id };
 }
 
-const CURRENT_USER_KEY = 'current_user_id';
+const CURRENT_USER_KEY = 'current_user_session';
 
-/** Register a brand-new user, persist token + current user pointer. */
+/** Register a brand-new user, persist token + current user session. */
 export async function registerFlow(
   opts: { username: string; password: string },
   deps: AuthDeps,
@@ -74,18 +85,16 @@ export async function registerFlow(
   });
   const response = pickAuthFields(raw);
 
+  // The access token stays in the OS keychain (consumed by the main process
+  // when it spins up the Matrix client); it is never returned to the renderer.
   await deps.setSecret(tokenKey(response.user_id), response.access_token);
-  deps.dbRun(
-    'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
-    CURRENT_USER_KEY,
-    JSON.stringify(response.user_id),
-  );
+  persistSession(deps, { userId: response.user_id, deviceId: response.device_id });
 
   logger.info('User registered', { userId: response.user_id });
   return { userId: response.user_id, deviceId: response.device_id };
 }
 
-/** Log in an existing user, persist token + current user pointer. */
+/** Log in an existing user, persist token + current user session. */
 export async function loginFlow(
   opts: { username: string; password: string },
   deps: AuthDeps,
@@ -101,41 +110,53 @@ export async function loginFlow(
   const response = pickAuthFields(raw);
 
   await deps.setSecret(tokenKey(response.user_id), response.access_token);
-  deps.dbRun(
-    'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
-    CURRENT_USER_KEY,
-    JSON.stringify(response.user_id),
-  );
+  persistSession(deps, { userId: response.user_id, deviceId: response.device_id });
 
   logger.info('User logged in', { userId: response.user_id });
   return { userId: response.user_id, deviceId: response.device_id };
 }
 
+/** Write the session object (JSON) to kv_store under `current_user_session`. */
+function persistSession(deps: AuthDeps, session: StoredSession): void {
+  deps.dbRun(
+    'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
+    CURRENT_USER_KEY,
+    JSON.stringify(session),
+  );
+}
+
 /**
  * Resolve the current user from DB + keychain. Returns null in three cases:
- *  - no `current_user_id` row in kv_store (never logged in / logged out)
+ *  - no `current_user_session` row in kv_store (never logged in / logged out)
  *  - row exists but the keychain token was wiped (treat as logged out)
- *  - row exists and token present -> return user
+ *  - row exists and token present -> return { userId, deviceId } (matches the
+ *    renderer's AuthResult; the access token is intentionally not exposed).
  */
 export async function getCurrentUserFlow(
   deps: AuthDeps,
-): Promise<{ userId: string; accessToken: string } | null> {
+): Promise<{ userId: string; deviceId: string } | null> {
+  const session = readSession(deps);
+  if (!session) return null;
+  const accessToken = await deps.getSecret(tokenKey(session.userId));
+  if (!accessToken) return null;
+  return { userId: session.userId, deviceId: session.deviceId };
+}
+
+/** Forget the current user: delete the token + DB session row. Idempotent. */
+export async function logoutFlow(deps: AuthDeps): Promise<void> {
+  const session = readSession(deps);
+  if (!session) return;
+  await deps.deleteSecret(tokenKey(session.userId));
+  deps.dbRun('DELETE FROM kv_store WHERE key = ?', CURRENT_USER_KEY);
+  logger.info('User logged out', { userId: session.userId });
+}
+
+/** Read and JSON-parse the persisted session row, or undefined if absent/corrupt. */
+function readSession(deps: AuthDeps): StoredSession | undefined {
   const stored = deps.dbGet<{ value: string }>(
     'SELECT value FROM kv_store WHERE key = ?',
     CURRENT_USER_KEY,
   );
-  if (!stored) return null;
-  const userId: string = JSON.parse(stored.value);
-  const accessToken = await deps.getSecret(tokenKey(userId));
-  if (!accessToken) return null;
-  return { userId, accessToken };
-}
-
-/** Forget the current user: delete the token + DB pointer. Idempotent. */
-export async function logoutFlow(deps: AuthDeps): Promise<void> {
-  const current = await getCurrentUserFlow(deps);
-  if (!current) return;
-  await deps.deleteSecret(tokenKey(current.userId));
-  deps.dbRun('DELETE FROM kv_store WHERE key = ?', CURRENT_USER_KEY);
-  logger.info('User logged out', { userId: current.userId });
+  if (!stored) return undefined;
+  return JSON.parse(stored.value) as StoredSession;
 }

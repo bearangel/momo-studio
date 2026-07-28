@@ -1,5 +1,5 @@
 // electron/src/main/window.ts
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { logger } from './logger';
 
@@ -31,7 +31,13 @@ export function createMainWindow(): BrowserWindow {
     void win.loadURL(DEV_SERVER_URL);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'dist', 'index.html'));
+    // Packaged: electron-builder copies the renderer build into resources/renderer/.
+    // Dev (built, not packaged): the renderer lives at <repo>/renderer/dist/.
+    // __dirname here is electron/dist/main/, so three `..` reaches the repo root.
+    const rendererPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'renderer', 'index.html')
+      : path.join(__dirname, '..', '..', '..', 'renderer', 'dist', 'index.html');
+    void win.loadFile(rendererPath);
   }
 
   return win;

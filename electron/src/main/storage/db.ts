@@ -35,7 +35,7 @@ export function runMigrations(): void {
   const migrations = loadMigrations();
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
-    logger.info('Applying migration', { version: m.version, file: m.filename });
+    logger.info('Applying migration', { version: m.version });
     const sql = readMigrationSql(m);
     db.exec(sql);
     db.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(m.version);

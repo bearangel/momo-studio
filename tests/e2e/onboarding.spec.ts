@@ -68,7 +68,6 @@ test('full onboarding flow', async () => {
       ...process.env,
       // Force the app to use our throwaway dir for state.db, conduit-data, etc.
       AP_USER_DATA_DIR: tmpUserData,
-      NODE_ENV: 'production',
     },
     colorScheme: 'dark',
   });
@@ -127,12 +126,13 @@ test('full onboarding flow', async () => {
     try {
       const row = db
         .prepare('SELECT value FROM kv_store WHERE key = ?')
-        .get('current_user_id') as { value: string } | undefined;
-      expect(row, 'kv_store should contain current_user_id').toBeDefined();
-      // The stored value is JSON.stringify("<@user:server>").
-      expect(typeof JSON.parse(row!.value), 'current_user_id value should be a string').toBe(
-        'string',
-      );
+        .get('current_user_session') as { value: string } | undefined;
+      expect(row, 'kv_store should contain current_user_session').toBeDefined();
+      // The stored value is JSON.stringify({ userId, deviceId }) and must round-trip
+      // back to the renderer's AuthResult shape.
+      const session = JSON.parse(row!.value) as { userId: unknown; deviceId: unknown };
+      expect(typeof session.userId, 'session.userId should be a string').toBe('string');
+      expect(typeof session.deviceId, 'session.deviceId should be a string').toBe('string');
     } finally {
       db.close();
     }
