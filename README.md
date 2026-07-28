@@ -122,6 +122,79 @@ docs/
 
 两个 workspace 包名：`@momo-studio/electron`、`@momo-studio/renderer`。
 
+## 研发演进路线图
+
+### v1.0.0 — 单机自洽 ✅ 已发布
+
+本地优先的 agent 编排平台。一个用户、一台机器、开箱即用。
+
+- ✅ Electron + React + Conduwuit 一体化桌面应用
+- ✅ Workspace 管理（目录映射 + git init）
+- ✅ Declarative agent（YAML manifest + LLM chat loop + 工具执行）
+- ✅ 主子 agent 调度（IM dispatch/task_reply 协议）
+- ✅ MCP stdio transport（共享进程池）
+- ✅ Skill 渐进式披露（SKILL.md 三层加载）
+- ✅ IM（Matrix /sync + Markdown + @mention）
+- ✅ Marketplace 浏览/搜索/安装
+- ✅ 安全（WorkspaceFS + sandbox + 审计 + Git policy + 崩溃重启 + LLM 重试）
+
+### v1.1 — 打磨与补全（计划中）
+
+不引入新架构，聚焦 v1 遗留项和体验优化。
+
+- 🔲 `.gitignore` 裸 `docs` 条目清理
+- 🔲 重启自动恢复 agent runtime（持久化运行状态）
+- 🔲 打包后 YAML/migration 路径适配（内置资源动态定位）
+- 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
+- 🔲 Windows 沙箱（AppContainer）
+- 🔲 macOS sandbox-exec 实测验证
+- 🔲 CHANGELOG.md + 版本号规范
+
+### v2.0 — 多人协作 + 进阶 Agent（设计中）
+
+从"单机工具"进化为"团队平台"。
+
+- 🔲 **多 peer P2P 协作** — 多用户通过协调服务器互联，共享 workspace
+- 🔲 **Git remote 同步** — workspace 文件通过 bare repo 跨 peer 同步
+- 🔲 **跨 peer agent 调度** — @ 对方的 agent，任务经 Matrix 路由
+- 🔲 **Agent SDK（programmatic runtime）** — TypeScript/Python 自定义 agent 生命周期
+- 🔲 **External runtime 桥接** — 接入 OpenCode / Codex / Claude Code
+- 🔲 **MCP HTTP/SSE transport** — 远端 MCP server 接入
+- 🔲 **Marketplace 上架** — 用户上传 agent/mcp/skill 包
+- 🔲 **E2E 加密** — 人 ↔ 人 DM 加密
+- 🔲 **消息搜索** — 全文检索 Matrix 历史
+- 🔲 **Electron 主进程 ESM 转换** — 解除 matrix-js-sdk v31 锁定
+- 🔲 **macOS 原生 Conduwuit 或内置 Docker 编排**
+
+### v2.1 — 效率增强（概念阶段）
+
+- 🔲 **分支工作流** — agent 工作在独立 branch，PR 式合并
+- 🔲 **Agent 并发多任务** — 每 agent 内部 task queue
+- 🔲 **Token 配额管理** — 月度 LLM token 预算控制
+- 🔲 **LSP 集成** — Monaco 编辑器语言服务（TS/Python）
+- 🔲 **协作实时编辑** — 多 peer 同时编辑同一文件（CRDT）
+
+### v3.0+ — 生态扩展（远期愿景）
+
+- 🔲 **Federation** — 跨 homeserver 联邦
+- 🔲 **私有 Marketplace** — 企业内部包管理
+- 🔲 **付费/计费** — Marketplace 交易
+- 🔲 **Headless agent runner** — 7×24 服务端 agent
+- 🔲 **移动端** — iOS/Android（只读 + IM）
+- 🔲 **NAT 打洞** — peer 直连，省协调服务器带宽
+- 🔲 **自动能力发现** — agent 自动搜索并安装缺失 skill
+- 🔲 **Agent 自定义代码 hook** — 运行时注入用户代码
+
+### 技术债务跟踪
+
+| 问题 | 影响 | 计划解决版本 |
+|---|---|---|
+| matrix-js-sdk 锁定 v31（v34 ESM 冲突） | 无法用最新 SDK 特性 | v2.0 ESM 转换 |
+| Conduwuit 无 macOS 二进制 | macOS 需 Docker | v2.0 |
+| OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
+| 无 CHANGELOG | 版本追踪缺失 | v1.1 |
+| Marketplace 无签名验证 | 不可信包风险 | v2.0 |
+
 ## 已知限制
 
 - Conduwuit 仅 Linux 原生二进制，macOS / Windows 需 Docker 桥接。
