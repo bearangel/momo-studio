@@ -41,6 +41,11 @@ export interface AgentRuntimeOpts {
   skills?: RuntimeSkillRef[];
   /** 该 agent 可用的 MCP server 名列表，工具定义在启动时通过 IPC 向主进程发现 */
   mcpNames?: string[];
+  // === M3 工具权限白名单 ===
+  /** 允许的工具名列表；空/缺省 = 不启用白名单（全部放行） */
+  allowedTools?: string[];
+  /** 禁止的工具名列表（优先级高于 allowedTools） */
+  deniedTools?: string[];
 }
 
 // runtime 进程池：instanceId → 子进程句柄

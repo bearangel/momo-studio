@@ -37,6 +37,7 @@ import {
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { logToolCall } from './tool-audit';
+import { assertToolAllowed } from './tool-permission';
 import {
   getBuiltinToolDefs,
   executeBuiltinTool,
@@ -76,6 +77,11 @@ interface RuntimeConfig {
   subAgents: SubAgentRef[];
   skills: RuntimeSkillRef[];
   mcpNames: string[];
+  // === M3 工具权限白名单 ===
+  /** 允许的工具名列表；空数组表示不启用白名单（全部放行，仅 deniedTools 生效） */
+  allowedTools: string[];
+  /** 禁止的工具名列表（优先级高于 allowedTools，命中即拒绝） */
+  deniedTools: string[];
 }
 
 /** 工具调用循环上限，防止 LLM 无限调用工具导致子进程卡死 */
@@ -129,6 +135,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     subAgents,
     skills,
     mcpNames,
+    allowedTools,
+    deniedTools,
   } = r;
   if (
     typeof botUserId !== 'string' ||
@@ -163,6 +171,13 @@ function parseConfig(raw: unknown): RuntimeConfig {
   const resolvedMcpNames = Array.isArray(mcpNames)
     ? mcpNames.filter((n): n is string => typeof n === 'string')
     : [];
+  // M3 工具权限：缺省/不合法时按"不限制"处理（空 allowedTools = 全放行，空 deniedTools = 无禁用）
+  const resolvedAllowedTools = Array.isArray(allowedTools)
+    ? allowedTools.filter((n): n is string => typeof n === 'string')
+    : [];
+  const resolvedDeniedTools = Array.isArray(deniedTools)
+    ? deniedTools.filter((n): n is string => typeof n === 'string')
+    : [];
   return {
     botUserId,
     botAccessToken,
@@ -179,6 +194,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     subAgents: resolvedSubAgents,
     skills: resolvedSkills,
     mcpNames: resolvedMcpNames,
+    allowedTools: resolvedAllowedTools,
+    deniedTools: resolvedDeniedTools,
   };
 }
 
@@ -535,6 +552,10 @@ async function doExecuteTool(
   config: RuntimeConfig,
 ): Promise<string> {
   const name = call.name;
+
+  // M3 工具权限强制：deniedTools 优先于 allowedTools。抛错由 executeTool 的审计
+  // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tool-permission.ts。
+  assertToolAllowed(name, config);
 
   if (name === 'read_file' || name === 'write_file' || name === 'list_files') {
     return executeBuiltinTool(name, call.arguments, ctx.wsFs);
