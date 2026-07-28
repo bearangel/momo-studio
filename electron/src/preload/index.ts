@@ -73,6 +73,13 @@ const api: ApiSurface = {
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
   },
+  marketplace: {
+    getCatalog: (catalogUrl) => invoke('marketplace:getCatalog', catalogUrl),
+    search: (query, type) => invoke('marketplace:search', query, type),
+    install: (item) => invoke('marketplace:install', item),
+    listInstalled: () => invoke('marketplace:listInstalled'),
+    uninstall: (itemId) => invoke('marketplace:uninstall', itemId),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
