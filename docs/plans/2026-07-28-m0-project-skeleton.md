@@ -203,6 +203,12 @@ T1 (init) ──► T2 (paths/logger) ──► T3 (SQLite + migrations)
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "postinstall": "pnpm --filter ./renderer postinstall && tsx resources/conduit/download.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^7.0.0",
+    "eslint": "^9.0.0"
   }
 }
 ```
@@ -1468,38 +1474,45 @@ git commit -m "feat(main): add Matrix client factory"
 ```typescript
 // electron/tests/matrix/auth.test.ts
 import { describe, it, expect, vi } from 'vitest';
+import type { MatrixClient } from 'matrix-js-sdk';
 import { registerAdmin, login, logout } from '../../src/main/matrix/auth';
 
-function makeStubClient(registerResponse: unknown, loginResponse: unknown) {
+interface StubResponses {
+  registerResponse: unknown;
+  loginResponse: unknown;
+}
+
+function makeStubClient(responses: StubResponses): MatrixClient {
   return {
-    register: vi.fn().mockResolvedValue(registerResponse),
-    login: vi.fn().mockResolvedValue(loginResponse),
+    register: vi.fn().mockResolvedValue(responses.registerResponse),
+    login: vi.fn().mockResolvedValue(responses.loginResponse),
     logout: vi.fn().mockResolvedValue(undefined),
-  } as any;
+    stopClient: vi.fn(),
+  } as unknown as MatrixClient;
 }
 
 describe('matrix/auth', () => {
   it('registerAdmin returns userId + accessToken + deviceId', async () => {
-    const client = makeStubClient(
-      { user_id: '@alice:localhost', access_token: 'tok-1', device_id: 'DEV-1' },
-      {},
-    );
+    const client = makeStubClient({
+      registerResponse: { user_id: '@alice:localhost', access_token: 'tok-1', device_id: 'DEV-1' },
+      loginResponse: {},
+    });
     const result = await registerAdmin(client, 'alice', 'pass');
     expect(result).toEqual({ userId: '@alice:localhost', accessToken: 'tok-1', deviceId: 'DEV-1' });
     expect(client.register).toHaveBeenCalledWith('alice', 'pass', undefined, expect.any(Object));
   });
 
   it('login returns userId + accessToken + deviceId', async () => {
-    const client = makeStubClient(
-      {},
-      { user_id: '@alice:localhost', access_token: 'tok-2', device_id: 'DEV-2' },
-    );
+    const client = makeStubClient({
+      registerResponse: {},
+      loginResponse: { user_id: '@alice:localhost', access_token: 'tok-2', device_id: 'DEV-2' },
+    });
     const result = await login(client, 'alice', 'pass');
     expect(result).toEqual({ userId: '@alice:localhost', accessToken: 'tok-2', deviceId: 'DEV-2' });
   });
 
   it('logout calls client.logout', async () => {
-    const client = makeStubClient({}, {});
+    const client = makeStubClient({ registerResponse: {}, loginResponse: {} });
     await logout(client);
     expect(client.logout).toHaveBeenCalled();
   });
@@ -1524,16 +1537,49 @@ export interface AuthResult {
   deviceId: string;
 }
 
+/** Subset of Matrix register/login response that we consume. */
+interface MatrixAuthResponse {
+  user_id: string;
+  access_token: string;
+  device_id: string;
+}
+
+function pickAuthFields(raw: unknown): MatrixAuthResponse {
+  if (
+    typeof raw !== 'object' ||
+    raw === null ||
+    !('user_id' in raw) ||
+    !('access_token' in raw) ||
+    !('device_id' in raw)
+  ) {
+    throw new Error('Matrix auth response missing required fields');
+  }
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.user_id !== 'string' ||
+    typeof r.access_token !== 'string' ||
+    typeof r.device_id !== 'string'
+  ) {
+    throw new Error('Matrix auth response fields have wrong type');
+  }
+  return {
+    user_id: r.user_id,
+    access_token: r.access_token,
+    device_id: r.device_id,
+  };
+}
+
 export async function registerAdmin(
   client: MatrixClient,
   username: string,
   password: string,
 ): Promise<AuthResult> {
   logger.info('Registering user', { username });
-  const response: any = await client.register(username, password, undefined, {
+  const raw: unknown = await client.register(username, password, undefined, {
     type: 'm.login.dummy',
     auth: { type: 'm.login.dummy' },
   });
+  const response = pickAuthFields(raw);
   return {
     userId: response.user_id,
     accessToken: response.access_token,
@@ -1547,11 +1593,12 @@ export async function login(
   password: string,
 ): Promise<AuthResult> {
   logger.info('Logging in user', { username });
-  const response: any = await client.login('m.login.password', {
+  const raw: unknown = await client.login('m.login.password', {
     user: username,
     password,
     initial_device_display_name: 'AgentPlatform Desktop',
   });
+  const response = pickAuthFields(raw);
   return {
     userId: response.user_id,
     accessToken: response.access_token,
@@ -1743,12 +1790,17 @@ git commit -m "feat(ipc): add typed IPC bridge with channel namespaces + stubs"
 
 ```typescript
 // electron/tests/ipc/authFlows.test.ts
-import { describe, it, expect, vi } from 'vitest';
-import { registerFlow, loginFlow, getCurrentUserFlow } from '../../src/main/ipc/authFlows';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MatrixClient } from 'matrix-js-sdk';
+import {
+  registerFlow,
+  loginFlow,
+  getCurrentUserFlow,
+  type AuthDeps,
+} from '../../src/main/ipc/authFlows';
 
-const deps = {
-  startConduit: vi.fn().mockResolvedValue({ port: 8008, baseUrl: 'http://127.0.0.1:8008' }),
-  createMatrixClient: vi.fn().mockReturnValue({
+function makeStubMatrixClient(): MatrixClient {
+  return {
     register: vi.fn().mockResolvedValue({
       user_id: '@alice:localhost',
       access_token: 'tok',
@@ -1760,53 +1812,67 @@ const deps = {
       device_id: 'DEV',
     }),
     stopClient: vi.fn(),
-  } as any),
-  setSecret: vi.fn().mockResolvedValue(undefined),
-  getSecret: vi.fn().mockResolvedValue(null),
-  deleteSecret: vi.fn().mockResolvedValue(undefined),
-  dbRun: vi.fn(),
-};
+  } as unknown as MatrixClient;
+}
+
+function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
+  return {
+    startConduit: vi.fn().mockResolvedValue({ port: 8008, baseUrl: 'http://127.0.0.1:8008' }),
+    createMatrixClient: vi.fn().mockReturnValue(makeStubMatrixClient()),
+    setSecret: vi.fn().mockResolvedValue(undefined),
+    getSecret: vi.fn().mockResolvedValue(null),
+    deleteSecret: vi.fn().mockResolvedValue(undefined),
+    dbRun: vi.fn(),
+    dbGet: vi.fn().mockReturnValue(undefined),
+    ...overrides,
+  };
+}
 
 describe('auth flows', () => {
   it('registerFlow starts Conduit, registers user, persists token', async () => {
+    const deps = makeDeps();
     const result = await registerFlow({ username: 'alice', password: 'pass' }, deps);
     expect(result).toEqual({ userId: '@alice:localhost', deviceId: 'DEV' });
     expect(deps.startConduit).toHaveBeenCalled();
-    expect(deps.setSecret).toHaveBeenCalledWith(
-      'user.@alice:localhost.matrix_token',
-      'tok',
+    expect(deps.setSecret).toHaveBeenCalledWith('user.@alice:localhost.matrix_token', 'tok');
+    expect(deps.dbRun).toHaveBeenCalledWith(
+      'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
+      'current_user_id',
+      JSON.stringify('@alice:localhost'),
     );
-    expect(deps.dbRun).toHaveBeenCalled();
   });
 
   it('loginFlow logs in and persists token', async () => {
+    const deps = makeDeps();
     const result = await loginFlow({ username: 'alice', password: 'pass' }, deps);
     expect(result).toEqual({ userId: '@alice:localhost', deviceId: 'DEV' });
     expect(deps.setSecret).toHaveBeenCalled();
+    expect(deps.dbRun).toHaveBeenCalled();
   });
 
-  it('getCurrentUserFlow returns null when no stored user', async () => {
-    deps.getSecret.mockResolvedValueOnce(null);
+  it('getCurrentUserFlow returns null when no stored user in DB', async () => {
+    const deps = makeDeps({ dbGet: vi.fn().mockReturnValue(undefined) });
+    const result = await getCurrentUserFlow(deps);
+    expect(result).toBeNull();
+    expect(deps.getSecret).not.toHaveBeenCalled();
+  });
+
+  it('getCurrentUserFlow returns null when DB has user but token missing', async () => {
+    const deps = makeDeps({
+      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify('@alice:localhost') }),
+      getSecret: vi.fn().mockResolvedValue(null),
+    });
     const result = await getCurrentUserFlow(deps);
     expect(result).toBeNull();
   });
 
-  it('getCurrentUserFlow returns user when stored', async () => {
-    deps.getSecret.mockImplementation((key: string) =>
-      key === 'kv.current_user_id'
-        ? Promise.resolve('@alice:localhost')
-        : key === 'user.@alice:localhost.matrix_token'
-          ? Promise.resolve('tok')
-          : Promise.resolve(null),
-    );
-    // Also need to mock DB query for current user
-    deps.getSecret.mockReset();
-    deps.getSecret.mockImplementation((key: string) =>
-      key === 'user.@alice:localhost.matrix_token' ? Promise.resolve('tok') : Promise.resolve(null),
-    );
-    // For simplicity: change getCurrentUserFlow to read from keychain only
-    const result = await getCurrentUserFlow(deps as any);
-    expect(result).toBeNull();
+  it('getCurrentUserFlow returns user when DB has user and token present', async () => {
+    const deps = makeDeps({
+      dbGet: vi.fn().mockReturnValue({ value: JSON.stringify('@alice:localhost') }),
+      getSecret: vi.fn().mockResolvedValue('tok'),
+    });
+    const result = await getCurrentUserFlow(deps);
+    expect(result).toEqual({ userId: '@alice:localhost', accessToken: 'tok' });
   });
 });
 ```
@@ -1820,11 +1886,12 @@ Expected: FAIL — module not found.
 
 ```typescript
 // electron/src/main/ipc/authFlows.ts
+import type { MatrixClient } from 'matrix-js-sdk';
 import { logger } from '../logger';
 
 export interface AuthDeps {
   startConduit(): Promise<{ port: number; baseUrl: string }>;
-  createMatrixClient(opts: { baseUrl: string; userId?: string; accessToken?: string }): any;
+  createMatrixClient(opts: { baseUrl: string; userId?: string; accessToken?: string }): MatrixClient;
   setSecret(key: string, value: string): Promise<void>;
   getSecret(key: string): Promise<string | null>;
   deleteSecret(key: string): Promise<void>;
@@ -1836,6 +1903,28 @@ function tokenKey(userId: string): string {
   return `user.${userId}.matrix_token`;
 }
 
+/** Subset of Matrix auth response we care about. */
+interface MatrixAuthResponse {
+  user_id: string;
+  access_token: string;
+  device_id: string;
+}
+
+function pickAuthFields(raw: unknown): MatrixAuthResponse {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('Matrix auth response is not an object');
+  }
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.user_id !== 'string' ||
+    typeof r.access_token !== 'string' ||
+    typeof r.device_id !== 'string'
+  ) {
+    throw new Error('Matrix auth response missing or mistyped required fields');
+  }
+  return { user_id: r.user_id, access_token: r.access_token, device_id: r.device_id };
+}
+
 export async function registerFlow(
   opts: { username: string; password: string },
   deps: AuthDeps,
@@ -1843,25 +1932,20 @@ export async function registerFlow(
   const { baseUrl } = await deps.startConduit();
   const client = deps.createMatrixClient({ baseUrl });
 
-  // Note: register response includes userId that we need to know upfront for token storage
-  // Conduit returns full user_id; we need to construct it for the token key.
-  // For 'localhost' server name, user_id is @<username>:localhost.
-  const response = await client.register(opts.username, opts.password, undefined, {
+  const raw: unknown = await client.register(opts.username, opts.password, undefined, {
     type: 'm.login.dummy',
   });
-  const userId: string = response.user_id;
-  const accessToken: string = response.access_token;
-  const deviceId: string = response.device_id;
+  const response = pickAuthFields(raw);
 
-  await deps.setSecret(tokenKey(userId), accessToken);
+  await deps.setSecret(tokenKey(response.user_id), response.access_token);
   deps.dbRun(
     'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
     'current_user_id',
-    JSON.stringify(userId),
+    JSON.stringify(response.user_id),
   );
 
-  logger.info('User registered', { userId });
-  return { userId, deviceId };
+  logger.info('User registered', { userId: response.user_id });
+  return { userId: response.user_id, deviceId: response.device_id };
 }
 
 export async function loginFlow(
@@ -1870,24 +1954,22 @@ export async function loginFlow(
 ): Promise<{ userId: string; deviceId: string }> {
   const { baseUrl } = await deps.startConduit();
   const client = deps.createMatrixClient({ baseUrl });
-  const response = await client.login('m.login.password', {
+  const raw: unknown = await client.login('m.login.password', {
     user: opts.username,
     password: opts.password,
     initial_device_display_name: 'AgentPlatform Desktop',
   });
-  const userId: string = response.user_id;
-  const accessToken: string = response.access_token;
-  const deviceId: string = response.device_id;
+  const response = pickAuthFields(raw);
 
-  await deps.setSecret(tokenKey(userId), accessToken);
+  await deps.setSecret(tokenKey(response.user_id), response.access_token);
   deps.dbRun(
     'INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)',
     'current_user_id',
-    JSON.stringify(userId),
+    JSON.stringify(response.user_id),
   );
 
-  logger.info('User logged in', { userId });
-  return { userId, deviceId };
+  logger.info('User logged in', { userId: response.user_id });
+  return { userId: response.user_id, deviceId: response.device_id };
 }
 
 export async function getCurrentUserFlow(
@@ -2101,7 +2183,7 @@ const mockApi = {
 };
 
 beforeEach(() => {
-  (globalThis as any).window = { api: mockApi };
+  Object.assign(globalThis, { window: { api: mockApi } });
   mockApi.auth.getCurrentUser.mockResolvedValue(null);
   useAuthStore.getState().reset();
 });
@@ -2300,7 +2382,7 @@ export function createMainWindow(): BrowserWindow {
 
 ```typescript
 // electron/src/main/index.ts
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
@@ -2350,11 +2432,7 @@ app.on('before-quit', async () => {
   const { stopConduit } = await import('./conduit/manager');
   await stopConduit();
 });
-
-import { BrowserWindow } from 'electron';
 ```
-
-> **Note:** The last `import { BrowserWindow }` at the bottom is intentionally misplaced in this example to demonstrate a fix needed. Move it to the top with the other imports. The reviewer will catch this; ensure your actual code has imports consolidated at the top.
 
 - [ ] **Step 3: Build main process**
 
@@ -2467,7 +2545,7 @@ const mockApi = {
 };
 
 beforeEach(() => {
-  (globalThis as any).window = { api: mockApi };
+  Object.assign(globalThis, { window: { api: mockApi } });
   useAuthStore.getState().reset();
   mockApi.auth.register.mockClear();
 });
