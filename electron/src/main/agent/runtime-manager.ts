@@ -10,8 +10,10 @@
 // 在后续任务（T14+T15）实现；当前 runtime-entry 只做登录 + 发"已上线"消息。
 
 import { fork, spawn, type ChildProcess, type Serializable } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { logger } from '../logger';
+import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 
@@ -228,8 +230,9 @@ function doSpawnAgent(opts: AgentRuntimeOpts): void {
 }
 
 /**
- * 处理 agent 子进程发来的 IPC 消息。当前仅响应 mcp:listTools / mcp:callTool 两类
- * 请求——MCP Host（进程池）在主进程内，子进程无法直接访问，故通过 IPC 转发。
+ * 处理 agent 子进程发来的 IPC 消息。当前响应三类消息：
+ *   - mcp:listTools / mcp:callTool：MCP Host 在主进程，子进程通过 IPC 转发
+ *   - audit:toolCall：工具调用审计日志，写入 tool_calls 表
  * 未知消息类型静默忽略，便于未来扩展其它 IPC 协议而不破坏旧子进程。
  */
 function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: unknown): void {
@@ -239,12 +242,61 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     mcpName?: string;
     toolName?: string;
     args?: Record<string, unknown>;
+    inputSummary?: string;
+    outputSummary?: string;
+    success?: boolean;
+    durationMs?: number;
   };
   if (!m.type) return;
   if (m.type === 'mcp:listTools' && m.id && m.mcpName) {
     void handleChildListTools(child, opts.workspaceId, m.id, m.mcpName);
   } else if (m.type === 'mcp:callTool' && m.id && m.mcpName && m.toolName && m.args) {
     void handleChildCallTool(child, opts.workspaceId, m.id, m.mcpName, m.toolName, m.args);
+  } else if (m.type === 'audit:toolCall' && typeof m.toolName === 'string') {
+    handleAuditToolCall(opts, {
+      toolName: m.toolName,
+      inputSummary: m.inputSummary,
+      outputSummary: m.outputSummary,
+      success: m.success,
+      durationMs: m.durationMs,
+    });
+  }
+}
+
+/**
+ * 审计桥接：把子进程通过 IPC 发来的工具调用审计日志写入 tool_calls 表。
+ * 子进程无法直接访问主进程的 DB 连接，故通过 process.send → child.on('message)
+ * 转发到此。写入失败只记录日志不抛出（审计不应阻塞 agent 运行）。
+ */
+function handleAuditToolCall(
+  opts: AgentRuntimeOpts,
+  m: {
+    toolName: string;
+    inputSummary?: string;
+    outputSummary?: string;
+    success?: boolean;
+    durationMs?: number;
+  },
+): void {
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO tool_calls
+         (id, workspace_id, agent_bot_user_id, task_id, tool_name, input_summary, output_summary, success, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      opts.workspaceId,
+      opts.botUserId,
+      null,
+      m.toolName,
+      m.inputSummary ?? '',
+      m.outputSummary ?? '',
+      m.success === false ? 0 : 1,
+      m.durationMs ?? 0,
+    );
+  } catch (err) {
+    logger.error('审计日志写入失败', { error: (err as Error).message });
   }
 }
 

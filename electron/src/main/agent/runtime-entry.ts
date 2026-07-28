@@ -36,6 +36,7 @@ import {
 } from 'matrix-js-sdk';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
+import { logToolCall } from './tool-audit';
 import {
   getBuiltinToolDefs,
   executeBuiltinTool,
@@ -493,10 +494,41 @@ async function runChatLoop(
 }
 
 /**
+ * 统一工具执行路由（含审计插桩）：计时 + try/finally 包装 doExecuteTool，
+ * 无论成功或失败都通过 IPC 发送审计日志。原路由逻辑见 doExecuteTool。
+ */
+async function executeTool(
+  call: LLMToolCall,
+  ctx: RuntimeContext,
+  client: MatrixClient,
+  config: RuntimeConfig,
+): Promise<string> {
+  const startTime = Date.now();
+  let success = true;
+  let output = '';
+  try {
+    output = await doExecuteTool(call, ctx, client, config);
+    return output;
+  } catch (err) {
+    success = false;
+    output = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    logToolCall({
+      toolName: call.name,
+      inputSummary: JSON.stringify(call.arguments),
+      outputSummary: output,
+      success,
+      durationMs: Date.now() - startTime,
+    });
+  }
+}
+
+/**
  * 统一工具执行路由：按工具名前缀分派到 builtin / 虚拟(skill) / dispatch / MCP 四类执行器。
  * 未知工具抛错（由 chat loop 捕获转成 tool result，LLM 可见并自我纠正）。
  */
-async function executeTool(
+async function doExecuteTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
   client: MatrixClient,

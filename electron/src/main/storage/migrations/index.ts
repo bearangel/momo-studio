@@ -143,6 +143,25 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
 );
 `.trim(),
   },
+  {
+    version: 6,
+    sql: `
+CREATE TABLE IF NOT EXISTS tool_calls (
+  id TEXT PRIMARY KEY NOT NULL,
+  workspace_id TEXT NOT NULL,
+  agent_bot_user_id TEXT NOT NULL,
+  task_id TEXT,
+  tool_name TEXT NOT NULL,
+  input_summary TEXT NOT NULL DEFAULT '',
+  output_summary TEXT NOT NULL DEFAULT '',
+  success INTEGER NOT NULL DEFAULT 1,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_workspace_ts ON tool_calls(workspace_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_agent ON tool_calls(agent_bot_user_id);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

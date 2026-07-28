@@ -47,4 +47,20 @@ describe('storage/db', () => {
     ).n;
     expect(count).toBe(1);
   });
+
+  it('runMigrations creates tool_calls table with indexes（migration v6）', () => {
+    runMigrations();
+    const db = getDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as { name: string }[];
+    expect(tables.map((t) => t.name)).toContain('tool_calls');
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tool_calls'")
+      .all() as { name: string }[];
+    const indexNames = indexes.map((i) => i.name);
+    expect(indexNames).toContain('idx_tool_calls_workspace_ts');
+    expect(indexNames).toContain('idx_tool_calls_agent');
+  });
 });
