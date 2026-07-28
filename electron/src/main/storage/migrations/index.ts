@@ -52,6 +52,38 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 );
 `.trim(),
   },
+  {
+    version: 3,
+    sql: `
+CREATE TABLE IF NOT EXISTS agent_definitions (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  version TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'standalone',
+  runtime TEXT NOT NULL DEFAULT 'declarative',
+  system_prompt TEXT NOT NULL,
+  model_provider TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  default_tools TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'custom',
+  description TEXT NOT NULL DEFAULT '',
+  icon_emoji TEXT NOT NULL DEFAULT '🤖',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_assignments (
+  instance_id TEXT PRIMARY KEY NOT NULL,
+  workspace_id TEXT NOT NULL,
+  agent_definition_id TEXT NOT NULL,
+  bot_matrix_user_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (agent_definition_id) REFERENCES agent_definitions(id) ON DELETE CASCADE
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

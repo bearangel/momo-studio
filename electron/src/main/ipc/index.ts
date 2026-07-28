@@ -4,6 +4,7 @@ import { registerAuthHandlers } from './auth.handlers';
 import { registerSystemHandlers } from './system.handlers';
 import { registerWorkspaceHandlers } from '../workspace/ipc.handlers';
 import { registerFileHandlers } from '../files/ipc.handlers';
+import { registerAgentHandlers } from '../agent/ipc.handlers';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
@@ -11,4 +12,5 @@ export function registerIpcHandlers(): void {
   registerSystemHandlers();
   registerWorkspaceHandlers();
   registerFileHandlers();
+  registerAgentHandlers();
 }

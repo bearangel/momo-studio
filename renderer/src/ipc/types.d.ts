@@ -37,6 +37,30 @@ export interface CreateWorkspaceInput {
   iconEmoji?: string;
 }
 
+export interface AgentDefinition {
+  id: string;
+  name: string;
+  slug: string;
+  version: string;
+  type: string;
+  runtime: string;
+  systemPrompt: string;
+  model: { provider: string; model: string };
+  defaultTools: Array<{ kind: string; ref: string }>;
+  source: string;
+  description: string;
+  iconEmoji: string;
+}
+
+export interface AgentAssignment {
+  instanceId: string;
+  workspaceId: string;
+  agentDefinitionId: string;
+  botMatrixUserId: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -58,6 +82,12 @@ export interface ApiSurface {
     read(workspaceId: string, filePath: string): Promise<string>;
     write(workspaceId: string, filePath: string, content: string): Promise<void>;
     list(workspaceId: string, dirPath: string): Promise<DirEntry[]>;
+  };
+  agent: {
+    createFromYaml(yaml: string): Promise<AgentDefinition>;
+    list(): Promise<AgentDefinition[]>;
+    assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
+    listAssignments(workspaceId: string): Promise<AgentAssignment[]>;
   };
 }
 

@@ -28,6 +28,13 @@ const api: ApiSurface = {
     write: (wsId, path, content) => invoke('file:write', wsId, path, content),
     list: (wsId, dir) => invoke('file:list', wsId, dir),
   },
+  agent: {
+    createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
+    list: () => invoke('agent:list'),
+    assign: (workspaceId, defId, botUserId) =>
+      invoke('agent:assign', workspaceId, defId, botUserId),
+    listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
