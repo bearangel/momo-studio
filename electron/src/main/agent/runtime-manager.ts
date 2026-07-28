@@ -9,7 +9,7 @@
 // 注意：本模块只负责 spawn/stop 骨架。完整的 chat loop（LLM 调用、工具执行）
 // 在后续任务（T14+T15）实现；当前 runtime-entry 只做登录 + 发"已上线"消息。
 
-import { fork, spawn, type ChildProcess } from 'node:child_process';
+import { fork, spawn, type ChildProcess, type Serializable } from 'node:child_process';
 import path from 'node:path';
 import { logger } from '../logger';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
@@ -28,6 +28,8 @@ export interface AgentRuntimeOpts {
   modelName: string;
   llmApiKey: string;
   teamRoomId: string;
+  /** workspace owner 的 Matrix userId，子进程据此只接受 owner 邀请（防恶意 room） */
+  ownerUserId: string;
   // === M2 集成（可选；缺省时 runtime 退化为纯文件工具模式） ===
   /** agent 形态，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
   agentType?: 'standalone' | 'main' | 'sub';
@@ -128,6 +130,19 @@ function handleChildMessage(child: ChildProcess, workspaceId: string, msg: unkno
   }
 }
 
+/**
+ * 安全向子进程发 IPC 消息：子进程退出后 channel 关闭，直接 send 会抛 EPIPE
+ * 导致主进程崩溃。connected 检查 + try/catch 双保险（处理检查与发送之间的竞态）。
+ */
+function safeChildSend(child: ChildProcess, msg: Serializable): void {
+  if (!child.connected) return;
+  try {
+    child.send?.(msg);
+  } catch {
+    // 子进程退出与发送之间的竞态，忽略
+  }
+}
+
 /** 子进程请求列出某 MCP 的工具（启动时发现工具定义用）；自动确保 MCP 已启动 */
 async function handleChildListTools(
   child: ChildProcess,
@@ -140,9 +155,9 @@ async function handleChildListTools(
     if (!config) throw new Error(`MCP ${mcpName} 未注册`);
     await getOrStartMcp(workspaceId, config);
     const tools = await listMcpTools(workspaceId, mcpName);
-    child.send?.({ type: 'mcp:toolsResult', id, tools });
+    safeChildSend(child, { type: 'mcp:toolsResult', id, tools });
   } catch (err) {
-    child.send?.({ type: 'mcp:toolsError', id, error: (err as Error).message });
+    safeChildSend(child, { type: 'mcp:toolsError', id, error: (err as Error).message });
   }
 }
 
@@ -159,9 +174,9 @@ async function handleChildCallTool(
     const config = getMcpConfig(mcpName);
     if (config) await getOrStartMcp(workspaceId, config);
     const result = await callMcpTool(workspaceId, mcpName, toolName, args);
-    child.send?.({ type: 'mcp:result', id, result });
+    safeChildSend(child, { type: 'mcp:result', id, result });
   } catch (err) {
-    child.send?.({ type: 'mcp:error', id, error: (err as Error).message });
+    safeChildSend(child, { type: 'mcp:error', id, error: (err as Error).message });
   }
 }
 

@@ -78,4 +78,19 @@ describe('mcp/client', () => {
     await client.disconnect();
     expect(client.isConnected).toBe(false);
   }, 10000);
+
+  it('connect 不存在的命令时拒绝而非崩溃（spawn error 兜底）', async () => {
+    const config: McpServerConfig = {
+      id: 'enoent',
+      name: 'no-such-mcp',
+      version: '1.0.0',
+      command: 'this-command-does-not-exist-anywhere-12345',
+      args: [],
+    };
+    const client = new McpClient(config);
+    // spawn ENOENT 触发 'error' 事件；无 'error' 监听会变成未捕获异常。
+    // 此处验证 connect 会 reject（initialize 握手被 error handler reject）。
+    await expect(client.connect()).rejects.toThrow();
+    expect(client.isConnected).toBe(false);
+  }, 10000);
 });

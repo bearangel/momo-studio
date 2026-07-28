@@ -45,6 +45,9 @@ export interface LLMProvider {
   chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse>;
 }
 
+/** 对 LLM API 的单次请求超时（毫秒）—— API 挂起时避免 agent 子进程永久阻塞 */
+const LLM_REQUEST_TIMEOUT_MS = 90_000;
+
 /** 统一的 LLM provider 工厂：按 model.provider 选择实现 */
 export function createLLMProvider(model: ModelRef, apiKey: string): LLMProvider {
   if (model.provider === 'openai') {
@@ -84,6 +87,7 @@ class OpenAIProvider implements LLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -172,6 +176,7 @@ class AnthropicProvider implements LLMProvider {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {

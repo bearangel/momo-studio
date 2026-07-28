@@ -30,6 +30,7 @@ function makeOpts(instanceId: string): AgentRuntimeOpts {
     modelName: 'gpt-4o',
     llmApiKey: 'key',
     teamRoomId: '!room:localhost',
+    ownerUserId: '@owner:localhost',
   };
 }
 

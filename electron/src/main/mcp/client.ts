@@ -77,6 +77,17 @@ export class McpClient {
       }
       this.pending.clear();
     });
+    // spawn 失败（ENOENT 等）emit 'error' 而非 'exit'；不监听会变成未捕获异常导致主进程崩溃。
+    // 在此兜底：清理 proc + reject 全部 pending（与 'exit' 处理器一致）。
+    this.proc.on('error', (err: Error) => {
+      logger.error(`MCP ${this.config.name} spawn 错误`, { error: err.message });
+      this.proc = null;
+      for (const [, entry] of this.pending) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error(`MCP server 启动失败: ${err.message}`));
+      }
+      this.pending.clear();
+    });
 
     // MCP initialize 握手
     const result = await this.sendRequest('initialize', {

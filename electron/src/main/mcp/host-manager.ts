@@ -25,9 +25,11 @@ interface McpDefinitionRow {
   env: string;
 }
 
-// 按 workspace 分组的 MCP 客户端池
+// 按 workspace 分组的 MCP 客户端池。
+// 存 Promise<McpClient> 而非 McpClient：并发调用 getOrStartMcp 时共享同一个
+// in-flight Promise，避免重复 spawn 同一个 MCP server。
 // key = `${workspaceId}:${mcpName}`
-const pool = new Map<string, McpClient>();
+const pool = new Map<string, Promise<McpClient>>();
 
 function poolKey(workspaceId: string, mcpName: string): string {
   return `${workspaceId}:${mcpName}`;
@@ -35,8 +37,11 @@ function poolKey(workspaceId: string, mcpName: string): string {
 
 /**
  * 启动或复用某 workspace 内指定 MCP server 的客户端实例。
- * 同一 workspace + 同一 mcpName 只持有一个 McpClient（进程复用）；
- * 若已存在但已断开（子进程退出），则重新建立连接。
+ * 同一 workspace + 同一 mcpName 只持有一个 McpClient（进程复用）。
+ *
+ * 并发防护：pool 存的是 in-flight Promise。多个调用同时到达时，第一个写入 Promise
+ * 后其余调用 await 同一 Promise，只 spawn 一次。若已存在但已断开（子进程退出）或上次
+ * 启动失败，则重新建立连接。
  */
 export async function getOrStartMcp(
   workspaceId: string,
@@ -44,22 +49,32 @@ export async function getOrStartMcp(
 ): Promise<McpClient> {
   const key = poolKey(workspaceId, config.name);
   const existing = pool.get(key);
-  if (existing && existing.isConnected) return existing;
-
-  const client = new McpClient(config);
-  await client.connect();
-  pool.set(key, client);
-  logger.info('MCP server 已启动', { workspaceId, name: config.name });
-  return client;
+  if (existing) {
+    try {
+      const client = await existing;
+      if (client.isConnected) return client;
+    } catch {
+      // 上次启动失败，落到下方重新启动
+    }
+  }
+  // in-flight Promise：并发调用共享，只 spawn 一次
+  const promise = (async (): Promise<McpClient> => {
+    const client = new McpClient(config);
+    await client.connect();
+    logger.info('MCP server 已启动', { workspaceId, name: config.name });
+    return client;
+  })();
+  pool.set(key, promise);
+  return promise;
 }
 
 /** 列出某 workspace 内已启动 MCP server 暴露的工具。未启动会抛错。 */
 export async function listMcpTools(workspaceId: string, mcpName: string): Promise<McpToolInfo[]> {
   const key = poolKey(workspaceId, mcpName);
-  const client = pool.get(key);
-  if (!client || !client.isConnected) {
-    throw new Error(`MCP ${mcpName} 未启动`);
-  }
+  const promise = pool.get(key);
+  if (!promise) throw new Error(`MCP ${mcpName} 未启动`);
+  const client = await promise;
+  if (!client.isConnected) throw new Error(`MCP ${mcpName} 未启动`);
   return client.listTools();
 }
 
@@ -75,10 +90,10 @@ export async function callMcpTool(
   args: Record<string, unknown>,
 ): Promise<string> {
   const key = poolKey(workspaceId, mcpName);
-  const client = pool.get(key);
-  if (!client || !client.isConnected) {
-    throw new Error(`MCP ${mcpName} 未启动`);
-  }
+  const promise = pool.get(key);
+  if (!promise) throw new Error(`MCP ${mcpName} 未启动`);
+  const client = await promise;
+  if (!client.isConnected) throw new Error(`MCP ${mcpName} 未启动`);
   const result = await client.callTool(toolName, args);
   // 提取文本内容
   return result.content
@@ -90,30 +105,45 @@ export async function callMcpTool(
 /** 停止并移除某 workspace 内的指定 MCP server 实例。未启动则静默跳过。 */
 export async function stopMcp(workspaceId: string, mcpName: string): Promise<void> {
   const key = poolKey(workspaceId, mcpName);
-  const client = pool.get(key);
-  if (client) {
+  const promise = pool.get(key);
+  pool.delete(key);
+  if (!promise) return;
+  // 先从池中删除，再 await disconnect；启动失败/已退出的 promise await 会抛错，忽略
+  try {
+    const client = await promise;
     await client.disconnect();
-    pool.delete(key);
+  } catch {
+    // 启动失败或进程已退出，无需 disconnect
   }
 }
 
 /**
  * 停止某 workspace 名下的全部 MCP server 实例。
  * workspace 销毁时调用，确保子进程不会泄漏。
- * 先收集 key 再统一删除，避免边遍历边修改 Map。
+ * 并发 disconnect 各实例以加快回收；单实例失败不影响其余。
  */
 export async function stopAllMcpForWorkspace(workspaceId: string): Promise<void> {
   const toStop: string[] = [];
   for (const key of pool.keys()) {
-    if (key.startsWith(`${workspaceId}:`)) {
-      toStop.push(key);
-    }
+    if (key.startsWith(`${workspaceId}:`)) toStop.push(key);
   }
-  for (const key of toStop) {
-    const client = pool.get(key);
-    if (client) await client.disconnect();
+  // 先收集并删除全部 key，再并发 await+disconnect（避免边遍历边改 Map）
+  const promises = toStop.map((key) => {
+    const p = pool.get(key);
     pool.delete(key);
-  }
+    return p;
+  });
+  await Promise.all(
+    promises.map(async (p) => {
+      if (!p) return;
+      try {
+        const client = await p;
+        await client.disconnect();
+      } catch {
+        // 启动失败或进程已退出，忽略
+      }
+    }),
+  );
 }
 
 /** 从 SQLite 读取已注册的 MCP server 定义（按 name 查找）。不存在返回 null。 */

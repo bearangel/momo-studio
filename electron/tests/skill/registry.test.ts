@@ -84,6 +84,29 @@ describe('skill/registry', () => {
     expect(() => registry.loadResource('nope', 'x.md')).toThrow('不存在');
   });
 
+  it('loadResource 拒绝路径穿越（../ 与绝对路径）', () => {
+    const skillDir = path.join(tmpDir, 'safe-skill');
+    fs.mkdirSync(skillDir);
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: safe-skill\ndescription: 沙箱测试\n---\n正文',
+    );
+    // 在 cachePath 之外放一个诱饵文件，验证穿越无法读取它
+    const secretDir = path.join(tmpDir, 'secret');
+    fs.mkdirSync(secretDir);
+    fs.writeFileSync(path.join(secretDir, 'passwd'), 'root:x:0:0');
+
+    const registry = new SkillRegistry();
+    registry.register(skillDir);
+
+    // ../ 穿越到 cachePath 之外
+    expect(() => registry.loadResource('safe-skill', '../secret/passwd')).toThrow('越界');
+    // 绝对路径（指向 cachePath 之外）
+    expect(() => registry.loadResource('safe-skill', path.join(secretDir, 'passwd'))).toThrow(
+      '越界',
+    );
+  });
+
   it('getIndex 空注册表返回空字符串', () => {
     const registry = new SkillRegistry();
     expect(registry.getIndex()).toBe('');

@@ -35,7 +35,8 @@ const mockApi = {
 
 describe('MainLayout', () => {
   beforeEach(() => {
-    Object.assign(globalThis, { window: { api: mockApi } });
+    // 只设置 api，不替换整个 window（保留 jsdom Window 的其它属性与方法）
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     // 重置三个 store，保证测试间状态确定
     useUiStore.setState({ activeView: 'im' });
     useWorkspaceStore.setState({

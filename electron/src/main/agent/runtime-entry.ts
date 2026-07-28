@@ -62,6 +62,8 @@ interface RuntimeConfig {
   botAccessToken: string;
   homeserverUrl: string;
   teamRoomId: string;
+  /** workspace owner 的 Matrix userId —— 仅接受此人发出的 room 邀请（防恶意 room 渗透） */
+  ownerUserId: string;
   systemPrompt: string;
   modelProvider: 'openai' | 'anthropic';
   modelName: string;
@@ -115,6 +117,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     botAccessToken,
     homeserverUrl,
     teamRoomId,
+    ownerUserId,
     systemPrompt,
     modelProvider,
     modelName,
@@ -131,6 +134,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     typeof botAccessToken !== 'string' ||
     typeof homeserverUrl !== 'string' ||
     typeof teamRoomId !== 'string' ||
+    typeof ownerUserId !== 'string' ||
     typeof systemPrompt !== 'string' ||
     typeof modelProvider !== 'string' ||
     typeof modelName !== 'string' ||
@@ -140,7 +144,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
   ) {
     throw new Error(
       'AGENT_CONFIG 缺少必要字段（botUserId/botAccessToken/homeserverUrl/teamRoomId/' +
-        'systemPrompt/modelProvider/modelName/llmApiKey/workspaceDir/workspaceId）',
+        'ownerUserId/systemPrompt/modelProvider/modelName/llmApiKey/workspaceDir/workspaceId）',
     );
   }
   if (modelProvider !== 'openai' && modelProvider !== 'anthropic') {
@@ -163,6 +167,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     botAccessToken,
     homeserverUrl,
     teamRoomId,
+    ownerUserId,
     systemPrompt,
     modelProvider,
     modelName,
@@ -203,13 +208,19 @@ async function main(): Promise<void> {
     accessToken: config.botAccessToken,
   });
 
-  // 注册自动接受邀请：bot 被 owner 邀请进 team room 后需主动 join 才能收发消息。
+  // 只接受 owner 发出的邀请：bot 被邀请进恶意 room 后若 auto-join 会导致数据泄露。
+  // Matrix invite 事件（m.room.member, membership=invite）的 sender 即邀请者。
   client.on(RoomEvent.MyMembership, (room: Room, membership: string) => {
-    if (membership === 'invite') {
-      void client.joinRoom(room.roomId).catch((err: unknown) => {
-        process.stderr.write(`加入 room 失败 ${room.roomId}: ${(err as Error).message}\n`);
-      });
+    if (membership !== 'invite') return;
+    const events = room.getLiveTimeline().getEvents();
+    const lastEvent = events[events.length - 1];
+    if (lastEvent?.getSender() !== config.ownerUserId) {
+      process.stderr.write(`拒绝非 owner 邀请: ${room.roomId}\n`);
+      return;
     }
+    void client.joinRoom(room.roomId).catch((err: unknown) => {
+      process.stderr.write(`加入 room 失败 ${room.roomId}: ${(err as Error).message}\n`);
+    });
   });
 
   await client.startClient({ initialSyncLimit: 20 });
@@ -279,15 +290,29 @@ ${skillIndex}`
   return { wsFs, skillRegistry, tools, systemPrompt };
 }
 
+/** 等待 Matrix sync 的最长时限，超时则判定 sync 不可达（避免永久挂起） */
+const SYNC_TIMEOUT_MS = 60_000;
+
 /**
  * 等待客户端进入 PREPARED 同步状态（初始 sync 完成）。
+ * 加 60s 超时 + Error 状态处理：sync 一直失败时拒绝而非永久挂起。
  */
 function waitForPrepared(client: MatrixClient): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      client.off(ClientEvent.Sync, handler);
+      reject(new Error('等待 Matrix sync 超时（60s）'));
+    }, SYNC_TIMEOUT_MS);
+
     const handler = (state: SyncState): void => {
       if (state === SyncState.Prepared) {
+        clearTimeout(timeout);
         client.off(ClientEvent.Sync, handler);
         resolve();
+      } else if (state === SyncState.Error) {
+        clearTimeout(timeout);
+        client.off(ClientEvent.Sync, handler);
+        reject(new Error('Matrix sync 失败'));
       }
     };
     client.on(ClientEvent.Sync, handler);
@@ -309,6 +334,11 @@ async function handleEvent(
   const eventType = event.getType();
   const sender = event.getSender();
 
+  // 安全白名单：只处理 team room 的事件。被邀请进恶意 room 后处理其消息会导致数据泄露，
+  // 也防止伪造的 task_reply/dispatch 从其它 room 投递。
+  const roomId = event.getRoomId();
+  if (!roomId || roomId !== config.teamRoomId) return;
+
   if (eventType === TASK_REPLY_EVENT_TYPE) {
     if (sender === config.botUserId) return; // 忽略自己发的回执
     handleTaskReply(event.getContent());
@@ -329,9 +359,6 @@ async function handleEvent(
 
   if (eventType !== 'm.room.message') return;
   if (sender === config.botUserId) return;
-
-  const roomId = event.getRoomId();
-  if (!roomId) return;
 
   const content = event.getContent();
   const body = typeof content.body === 'string' ? content.body : '';
@@ -526,6 +553,9 @@ const pendingReplies = new Map<string, PendingReply>();
 /**
  * 主 agent 执行 dispatch：<slug> 工具——构建 dispatch 消息发到 team room，
  * 然后等待对应 task_id 的 task_reply（超时 DISPATCH_REPLY_TIMEOUT_MS）。
+ *
+ * 防竞态：必须先注册 pending 再发送消息。若先发送后注册，子 agent 极快回执时
+ * task_reply 会在 pending.set 之前到达，handleTaskReply 找不到 pending 导致回执丢失。
  */
 async function executeDispatch(
   subSlug: string,
@@ -536,6 +566,7 @@ async function executeDispatch(
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
 
+  // task_id 在此生成（buildDispatchMessage 内部 randomUUID）
   const dispatch = buildDispatchMessage({
     body: task,
     fromBotUserId: config.botUserId,
@@ -543,9 +574,8 @@ async function executeDispatch(
     deadlineMs: DISPATCH_REPLY_TIMEOUT_MS,
   });
 
-  await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
-
-  return new Promise<string>((resolve, reject) => {
+  // 先注册 pending，再发送——防竞态（见上方注释）
+  const resultPromise = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
       if (pendingReplies.has(dispatch.content.task_id)) {
         pendingReplies.delete(dispatch.content.task_id);
@@ -558,17 +588,24 @@ async function executeDispatch(
     }, DISPATCH_REPLY_TIMEOUT_MS);
     pendingReplies.set(dispatch.content.task_id, { resolve, reject, timer });
   });
+
+  await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
+
+  return resultPromise;
 }
 
 /**
  * 处理收到的 task_reply：若匹配某个 pending dispatch 则 resolve/reject 其 Promise。
- * completed → resolve(body)；其它状态（in_progress/failed/needs_input）→ reject。
+ * in_progress → 进度通知，保持 pending（子 agent 处理中途合法地先发此状态）；
+ * completed → resolve(body)；failed/needs_input → reject。
  */
 function handleTaskReply(content: Record<string, unknown>): void {
   const reply = parseTaskReply(content);
   if (!reply) return;
   const pending = pendingReplies.get(reply.task_id);
   if (!pending) return;
+  // 进度通知：保持 pending 不变，继续等待最终 completed/failed
+  if (reply.status === 'in_progress') return;
   clearTimeout(pending.timer);
   pendingReplies.delete(reply.task_id);
   if (reply.status === 'completed') {
