@@ -1,35 +1,31 @@
 // renderer/src/components/im/MessageBubble.tsx
 //
-// 单条消息气泡。自己的消息右对齐蓝色，其他人左对齐灰色。
-// 消息体用 react-markdown 渲染（支持 GFM 表格、删除线等）。
+// 单条消息渲染入口。根据 eventType 分发：
+//   - io.agentplatform.dispatch   → 紫色 DispatchCard
+//   - io.agentplatform.task_reply → 状态色 TaskReplyCard
+//   - 其余（m.room.message 等）   → 普通气泡（自己右对齐蓝色，他人左对齐灰色）
+// 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）。
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
 import { cn } from '../../lib/cn';
+import { avatarEmoji, shortName } from './avatars';
+import { DispatchCard } from './DispatchCard';
+import { TaskReplyCard } from './TaskReplyCard';
 
 interface Props {
   message: ImMessage;
   isSelf: boolean;
 }
 
-/** 从 Matrix userId（如 @alice:localhost）提取短名（alice） */
-function shortName(userId: string): string {
-  const match = /^@([^:]+):/.exec(userId);
-  return match?.[1] ?? userId;
-}
-
-const AVATAR_EMOJIS = ['🦊', '🐱', '🐼', '🐨', '🦁', '🐯', '🐸', '🐵', '🦉', '🐧'];
-
-/** 基于用户 ID 稳定哈希生成 emoji 头像 */
-function avatarEmoji(userId: string): string {
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = (hash * 31 + userId.charCodeAt(i)) | 0;
-  }
-  return AVATAR_EMOJIS[Math.abs(hash) % AVATAR_EMOJIS.length]!;
-}
-
 export function MessageBubble({ message, isSelf }: Props) {
+  if (message.eventType === 'io.agentplatform.dispatch') {
+    return <DispatchCard message={message} />;
+  }
+  if (message.eventType === 'io.agentplatform.task_reply') {
+    return <TaskReplyCard message={message} />;
+  }
+
   return (
     <div className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}>
       <div className="w-8 h-8 shrink-0 rounded-full bg-bg-tertiary flex items-center justify-center text-base select-none">
