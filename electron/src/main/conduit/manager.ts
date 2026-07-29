@@ -68,9 +68,9 @@ export async function startConduit(): Promise<ConduitInfo> {
 }
 
 async function doStartConduit(): Promise<ConduitInfo> {
-  // Windows: Tuwunel 是 Unix-only，通过 Docker 容器运行
+  // Windows: 优先 WSL2，回退 Docker
   if (process.platform === 'win32') {
-    return await startConduitViaDocker();
+    return await startConduitViaWSLOrDocker();
   }
 
   const dataDir = resolveConduitDir();
@@ -198,42 +198,91 @@ export async function healthCheck(timeoutMs = 5000): Promise<boolean> {
   return false;
 }
 
-async function startConduitViaDocker(): Promise<ConduitInfo> {
+async function startConduitViaWSLOrDocker(): Promise<ConduitInfo> {
   const dataDir = resolveConduitDir();
   await writeConduitConfig({ port: CONDUIT_PORT, serverName: 'localhost', dataDir });
 
-  // Windows 路径 → Docker 挂载路径（C:\Users\... → //c/Users/...）
-  const dockerPath = dataDir.replace(/\\/g, '/').replace(/^([A-Z]:)/, (_, drive) => `//${drive.toLowerCase()}`);
+  const { exec, execFile } = require('node:child_process') as {
+    exec: typeof import('node:child_process').exec;
+    execFile: typeof import('node:child_process').execFile;
+  };
+  const execAsync = (cmd: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      exec(cmd, (err: Error | null, stdout: string) => (err ? reject(err) : resolve(stdout)));
+    });
+  };
 
-  const containerName = 'momo-studio-tuwunel';
-
+  // 方案 1: WSL2（Windows 11 自带，轻量，无需额外安装）
   try {
-    const { exec } = require('node:child_process') as { exec: typeof import('node:child_process').exec };
-    const execAsync = (cmd: string): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        exec(cmd, (err: Error | null) => (err ? reject(err) : resolve()));
-      });
-    };
-
-    await execAsync(`docker rm -f ${containerName} 2>nul`).catch(() => {});
-    await execAsync(
-      `docker run -d --name ${containerName} -p 8008:8008 ` +
-      `-v "${dockerPath}:/data" ` +
-      `ghcr.io/matrix-construct/tuwunel:latest`,
-    );
-    logger.info('Windows: Tuwunel Docker 容器已启动', { containerName });
-  } catch (err) {
-    logger.error('Windows: Docker 启动失败，请确保 Docker Desktop 已运行', { error: (err as Error).message });
-    throw new Error(
-      'Windows 需要运行 Docker Desktop 来启动 Tuwunel。\n' +
-      '请安装并启动 Docker Desktop 后重试。\n' +
-      '下载: https://www.docker.com/products/docker-desktop/',
-    );
+    const wslStatus = await execAsync('wsl --status 2>nul').catch(() => '');
+    if (wslStatus.includes('Running') || wslStatus.includes('Default')) {
+      logger.info('Windows: 检测到 WSL2，通过 WSL 启动 Tuwunel');
+      return await startConduitViaWSL(execAsync, dataDir);
+    }
+  } catch {
+    // WSL 不可用
   }
+
+  // 方案 2: Docker Desktop
+  try {
+    const dockerOk = await execAsync('docker info 2>nul').catch(() => '');
+    if (dockerOk.includes('Server')) {
+      logger.info('Windows: 检测到 Docker，通过 Docker 启动 Tuwunel');
+      return await startConduitViaDocker(execAsync, dataDir);
+    }
+  } catch {
+    // Docker 不可用
+  }
+
+  throw new Error(
+    'Windows 需要 WSL2 或 Docker Desktop 来运行 Tuwunel。\n\n' +
+    '推荐 WSL2（Windows 11 自带）：\n' +
+    '  wsl --install\n\n' +
+    '或安装 Docker Desktop：\n' +
+    '  https://www.docker.com/products/docker-desktop/',
+  );
+}
+
+async function startConduitViaWSL(
+  execAsync: (cmd: string) => Promise<string>,
+  dataDir: string,
+): Promise<ConduitInfo> {
+  // Windows 路径转 WSL 路径: C:\Users\...\data → /mnt/c/Users/.../data
+  const wslDataDir = dataDir.replace(/\\/g, '/').replace(/^([A-Z]):/i, (_, drive) => `/mnt/${drive.toLowerCase()}`);
+  const wslConfigPath = `${wslDataDir}/conduit.toml`;
+
+  // 在 WSL 中下载 Tuwunel 并运行
+  const arch = process.arch === 'arm64' ? 'aarch64-v8' : 'x86_64-v1';
+  const downloadUrl = `https://github.com/matrix-construct/tuwunel/releases/download/v1.8.2/v1.8.2-release-all-${arch}-linux-gnu-tuwunel.zst`;
+  const wslBinaryPath = `${wslDataDir}/tuwunel`;
+
+  await execAsync(`wsl bash -c "mkdir -p '${wslDataDir}'"`).catch(() => {});
+  await execAsync(`wsl bash -c "test -f '${wslBinaryPath}' || (curl -sL '${downloadUrl}' | zstd -d -fo '${wslBinaryPath}' && chmod +x '${wslBinaryPath}')"`);
+  await execAsync(`wsl bash -c "nohup '${wslBinaryPath}' -c '${wslConfigPath}' > '${wslDataDir}/tuwunel.log' 2>&1 &"`);
+
+  logger.info('Windows: WSL Tuwunel 已启动', { wslBinaryPath });
 
   const ok = await healthCheck(30000);
-  if (!ok) {
-    throw new Error('Tuwunel Docker 容器启动超时（30s），请检查 Docker 日志。');
-  }
+  if (!ok) throw new Error('WSL Tuwunel 启动超时（30s）');
+  return { port: CONDUIT_PORT, baseUrl: BASE_URL };
+}
+
+async function startConduitViaDocker(
+  execAsync: (cmd: string) => Promise<string>,
+  dataDir: string,
+): Promise<ConduitInfo> {
+  const dockerPath = dataDir.replace(/\\/g, '/').replace(/^([A-Z]:)/i, (_, drive) => `//${drive.toLowerCase()}`);
+  const containerName = 'momo-studio-tuwunel';
+
+  await execAsync(`docker rm -f ${containerName} 2>nul`).catch(() => {});
+  await execAsync(
+    `docker run -d --name ${containerName} -p 8008:8008 ` +
+    `-v "${dockerPath}:/data" ` +
+    `ghcr.io/matrix-construct/tuwunel:latest`,
+  );
+  logger.info('Windows: Docker Tuwunel 容器已启动', { containerName });
+
+  const ok = await healthCheck(30000);
+  if (!ok) throw new Error('Docker Tuwunel 启动超时（30s）');
   return { port: CONDUIT_PORT, baseUrl: BASE_URL };
 }
