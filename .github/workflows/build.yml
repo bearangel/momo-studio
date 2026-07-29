@@ -31,10 +31,19 @@ jobs:
       - name: Configure git auth for Cargo git deps
         run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Install dependencies
-        run: pnpm install
+      - name: Get Tuwunel commit hash
+        id: tuwunel-ver
+        run: echo "hash=$(git ls-remote https://github.com/matrix-construct/tuwunel.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
 
-      - name: Build Conduwuit (macOS)
+      - name: Cache Tuwunel binary (macOS)
+        id: cache-tuwunel-mac
+        uses: actions/cache@v4
+        with:
+          path: resources/conduit/tuwunel-darwin-arm64
+          key: tuwunel-darwin-arm64-${{ steps.tuwunel-ver.outputs.hash }}
+
+      - name: Build Tuwunel (macOS)
+        if: steps.cache-tuwunel-mac.outputs.cache-hit != 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
@@ -43,6 +52,9 @@ jobs:
           cargo build --release
           cp target/release/tuwunel "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
           chmod +x "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
+
+      - name: Install dependencies
+        run: pnpm install
 
       - name: Typecheck
         run: pnpm typecheck
