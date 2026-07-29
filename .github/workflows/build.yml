@@ -38,7 +38,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
-          git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
+          git clone --depth 1 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
           cargo build --release
           cp target/release/conduit "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
@@ -147,7 +147,7 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
-          git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
+          git clone --depth 1 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
           cargo build --release
           cp target/release/conduit.exe "${{ github.workspace }}/resources/conduit/conduwuit-windows-x64.exe"
