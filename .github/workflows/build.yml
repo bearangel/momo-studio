@@ -32,6 +32,8 @@ jobs:
         run: pnpm install
 
       - name: Build Conduwuit (macOS)
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
           git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
@@ -136,6 +138,8 @@ jobs:
 
       - name: Build Conduwuit (Windows)
         shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
           git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
