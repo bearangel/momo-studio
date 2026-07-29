@@ -44,6 +44,7 @@ const api: ApiSurface = {
   im: {
     startSync: () => invoke('im:startSync'),
     send: (roomId, body) => invoke('im:send', roomId, body),
+    sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
     getRooms: () => invoke('im:getRooms'),
     getMessages: (roomId) => invoke('im:getMessages', roomId),
     onMessage: (callback) => {

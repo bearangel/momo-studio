@@ -280,6 +280,7 @@ export interface ApiSurface {
   im: {
     startSync(): Promise<void>;
     send(roomId: string, body: string): Promise<void>;
+    sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
     getRooms(): Promise<ImRoomInfo[]>;
     getMessages(roomId: string): Promise<ImMessage[]>;
     onMessage(callback: (msg: ImMessage) => void): () => void;

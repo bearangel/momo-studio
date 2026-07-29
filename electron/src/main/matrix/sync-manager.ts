@@ -174,6 +174,24 @@ export async function sendMessage(roomId: string, body: string): Promise<void> {
   await client.sendEvent(roomId, 'm.room.message', { msgtype: 'm.text', body }, '');
 }
 
+export async function sendMessageWithMentions(
+  roomId: string,
+  body: string,
+  mentionedUserIds: string[],
+): Promise<void> {
+  if (!client) throw new Error('Matrix client 未初始化（sync 未启动）');
+  await client.sendEvent(
+    roomId,
+    'm.room.message',
+    {
+      msgtype: 'm.text',
+      body,
+      'm.mentions': { user_ids: mentionedUserIds },
+    },
+    '',
+  );
+}
+
 /** 获取已加入的房间列表（含房间名，无名字时回退到 roomId） */
 export function getJoinedRooms(): RoomInfoPayload[] {
   if (!client) return [];

@@ -79,6 +79,22 @@ export const useImStore = create<ImState>((set, get) => ({
     const { activeRoomId } = get();
     if (!activeRoomId) return;
     await ipc.im.send(activeRoomId, body);
+    // 乐观更新：立即在 UI 显示自己发的消息
+    set((state) => {
+      const map = new Map(state.messagesByRoom);
+      const existing = map.get(activeRoomId) ?? [];
+      const optimisticMsg: ImMessage = {
+        eventId: `local-${Date.now()}`,
+        roomId: activeRoomId,
+        sender: '',
+        body,
+        eventType: 'm.room.message',
+        content: {},
+        timestamp: Date.now(),
+      };
+      map.set(activeRoomId, [...existing, optimisticMsg]);
+      return { messagesByRoom: map };
+    });
   },
 
   reset: () =>
