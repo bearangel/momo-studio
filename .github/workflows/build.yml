@@ -35,7 +35,7 @@ jobs:
         run: |
           git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
-          cargo build --release --no-default-features --features sqlite,brotli,zstd,gzip,console
+          cargo build --release
           cp target/release/conduit "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
           chmod +x "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
 
@@ -139,7 +139,7 @@ jobs:
         run: |
           git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
           cd /tmp/conduwuit
-          cargo build --release --no-default-features --features sqlite,brotli,zstd,gzip,console
+          cargo build --release
           cp target/release/conduit.exe "${{ github.workspace }}/resources/conduit/conduwuit-windows-x64.exe"
 
       - name: Typecheck
