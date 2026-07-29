@@ -10,6 +10,7 @@ export interface ModelRef {
   provider: 'openai' | 'anthropic';
   model: string;
   apiKeyRef?: string;
+  baseUrl?: string;
 }
 
 /** Agent 工具引用 */

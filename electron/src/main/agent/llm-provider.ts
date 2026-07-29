@@ -87,10 +87,10 @@ async function fetchWithRetry(
 /** 统一的 LLM provider 工厂：按 model.provider 选择实现 */
 export function createLLMProvider(model: ModelRef, apiKey: string): LLMProvider {
   if (model.provider === 'openai') {
-    return new OpenAIProvider(model.model, apiKey);
+    return new OpenAIProvider(model.model, apiKey, model.baseUrl);
   }
   if (model.provider === 'anthropic') {
-    return new AnthropicProvider(model.model, apiKey);
+    return new AnthropicProvider(model.model, apiKey, model.baseUrl);
   }
   throw new Error(`不支持的 LLM provider: ${model.provider}`);
 }
@@ -98,9 +98,10 @@ export function createLLMProvider(model: ModelRef, apiKey: string): LLMProvider 
 // --- OpenAI 实现 ---
 
 class OpenAIProvider implements LLMProvider {
-  constructor(private model: string, private apiKey: string) {}
+  constructor(private model: string, private apiKey: string, private baseUrl?: string) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
+    const apiUrl = `${this.baseUrl ?? 'https://api.openai.com'}/v1/chat/completions`;
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map((m) => this.toOpenAIMessage(m)),
@@ -116,7 +117,7 @@ class OpenAIProvider implements LLMProvider {
       }));
     }
 
-    const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRetry(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -181,7 +182,7 @@ class OpenAIProvider implements LLMProvider {
 // --- Anthropic 实现 ---
 
 class AnthropicProvider implements LLMProvider {
-  constructor(private model: string, private apiKey: string) {}
+  constructor(private model: string, private apiKey: string, private baseUrl?: string) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
     // Anthropic 把 system 单独传，messages 只含 user/assistant
@@ -204,7 +205,8 @@ class AnthropicProvider implements LLMProvider {
       }));
     }
 
-    const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+    const apiUrl = `${this.baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
+    const response = await fetchWithRetry(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

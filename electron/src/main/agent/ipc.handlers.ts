@@ -253,6 +253,7 @@ export function registerAgentHandlers(): void {
     systemPrompt: string;
     modelProvider: string;
     modelName: string;
+    modelBaseUrl?: string;
     iconEmoji?: string;
   }) => {
     const { randomUUID } = await import('node:crypto');
@@ -267,6 +268,7 @@ export function registerAgentHandlers(): void {
       model: {
         provider: input.modelProvider as 'openai' | 'anthropic',
         model: input.modelName,
+        baseUrl: input.modelBaseUrl,
       },
       defaultTools: [
         { kind: 'builtin', ref: 'read_file' },

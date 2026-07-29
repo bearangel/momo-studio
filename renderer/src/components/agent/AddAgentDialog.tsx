@@ -26,6 +26,7 @@ export function AddAgentDialog({ onClose }: Props) {
   const [newPrompt, setNewPrompt] = useState('');
   const [newProvider, setNewProvider] = useState('openai');
   const [newModel, setNewModel] = useState('gpt-4o');
+  const [newBaseUrl, setNewBaseUrl] = useState('');
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -50,13 +51,14 @@ export function AddAgentDialog({ onClose }: Props) {
     setCreating(true);
     setError(null);
     try {
-      const def = await ipc.agent.createCustom({
+      const def =       await ipc.agent.createCustom({
         name: newName.trim(),
         slug: newSlug.trim().toLowerCase().replace(/\s+/g, '-'),
         description: `自定义 agent: ${newName.trim()}`,
         systemPrompt: newPrompt.trim(),
         modelProvider: newProvider,
         modelName: newModel.trim(),
+        modelBaseUrl: newBaseUrl.trim() || undefined,
         iconEmoji: '🤖',
       });
       await loadDefinitions();
@@ -124,6 +126,17 @@ export function AddAgentDialog({ onClose }: Props) {
                 </div>
                 <Input label="模型名" value={newModel} onChange={(e) => setNewModel(e.target.value)} placeholder="gpt-4o" />
               </div>
+              <Input
+                label="Base URL（可选，兼容 OpenAI 格式的第三方供应商）"
+                value={newBaseUrl}
+                onChange={(e) => setNewBaseUrl(e.target.value)}
+                placeholder="留空=官方 API；如 https://open.bigmodel.cn/api/paas/v4"
+              />
+              {newBaseUrl && (
+                <div className="text-xs text-neutral-500">
+                  将请求发送到：<code className="text-accent-blue">{newBaseUrl}/v1/chat/completions</code>
+                </div>
+              )}
               {error && <div className="text-red-400 text-sm">{error}</div>}
               <div className="flex gap-2 justify-end mt-2">
                 <Button variant="ghost" type="button" onClick={() => { setMode('select'); setError(null); }}>返回选择</Button>

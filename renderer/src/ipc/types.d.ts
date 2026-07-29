@@ -265,6 +265,7 @@ export interface ApiSurface {
       systemPrompt: string;
       modelProvider: string;
       modelName: string;
+      modelBaseUrl?: string;
       iconEmoji?: string;
     }): Promise<AgentDefinition>;
     list(): Promise<AgentDefinition[]>;
