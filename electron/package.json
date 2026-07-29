@@ -43,7 +43,7 @@
         "filter": [
           "static-*",
           "conduit-*",
-          "conduwuit-*"
+          "tuwunel-*"
         ]
       },
       {

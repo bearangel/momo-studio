@@ -8,16 +8,15 @@ function perOsFilename(): string {
   const platform = process.platform;
   const arch = process.arch;
   if (platform === 'linux') {
-    if (arch === 'arm64') return 'static-aarch64-unknown-linux-musl';
-    if (arch === 'x64') return 'static-x86_64-unknown-linux-musl';
+    return arch === 'arm64' ? 'tuwunel-linux-arm64' : 'tuwunel-linux-x64';
   }
   if (platform === 'darwin') {
-    return arch === 'arm64' ? 'conduwuit-darwin-arm64' : 'conduwuit-darwin-x64';
+    return arch === 'arm64' ? 'tuwunel-darwin-arm64' : 'tuwunel-darwin-x64';
   }
   if (platform === 'win32') {
-    return 'conduwuit-windows-x64.exe';
+    return 'tuwunel-windows-x64.exe';
   }
-  throw new Error(`No Conduwuit binary for ${platform}-${arch}.`);
+  throw new Error(`No Tuwunel binary for ${platform}-${arch}.`);
 }
 
 /**

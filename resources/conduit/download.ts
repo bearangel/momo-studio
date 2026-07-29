@@ -1,111 +1,101 @@
 // resources/conduit/download.ts
 // Runs on `pnpm postinstall` at root.
-// Downloads pre-built Conduwuit (formerly Conduit) binary for current OS/arch.
-// NOTE: Conduwuit only ships Linux static binaries. macOS/Windows users must
-// run Conduwuit via Docker (see docs/dev/conduwuit-docker.md).
-// Errors are logged but do NOT fail the install (dev may be offline).
+// Downloads pre-built Tuwunel binary (Conduwuit official successor) for Linux.
+// macOS/Windows: CI compiles from source, postinstall skips.
+// Errors are logged but do NOT fail the install.
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 
-const CONDUWUIT_VERSION = 'v0.4.6';
-const BASE_URL = `https://github.com/girlbossceo/conduwuit/releases/download/${CONDUWUIT_VERSION}`;
+const TUWUNEL_VERSION = 'v1.8.2';
+const BASE_URL = `https://github.com/matrix-construct/tuwunel/releases/download/${TUWUNEL_VERSION}`;
 
 interface PlatformTarget {
   platform: string;
   arch: string;
-  filename: string;
+  urlFilename: string;
+  outputFilename: string;
 }
 
 function detectTarget(): PlatformTarget {
   const platform = process.platform;
   const arch = process.arch;
-  // Conduwuit only ships Linux static binaries.
-  // On macOS/Windows, return a sentinel that download() will skip with guidance.
   const map: Record<string, Record<string, PlatformTarget>> = {
     linux: {
       arm64: {
-        platform: 'linux',
-        arch: 'arm64',
-        filename: 'static-aarch64-unknown-linux-musl',
+        platform: 'linux', arch: 'arm64',
+        urlFilename: `${TUWUNEL_VERSION}-release-all-aarch64-v8-linux-gnu-tuwunel.zst`,
+        outputFilename: 'tuwunel-linux-arm64',
       },
       x64: {
-        platform: 'linux',
-        arch: 'x64',
-        filename: 'static-x86_64-unknown-linux-musl',
+        platform: 'linux', arch: 'x64',
+        urlFilename: `${TUWUNEL_VERSION}-release-all-x86_64-v1-linux-gnu-tuwunel.zst`,
+        outputFilename: 'tuwunel-linux-x64',
       },
     },
   };
   const target = map[platform]?.[arch];
   if (!target) {
-    return {
-      platform,
-      arch,
-      filename: `UNSUPPORTED-${platform}-${arch}`,
-    };
+    return { platform, arch, urlFilename: '', outputFilename: `UNSUPPORTED-${platform}-${arch}` };
   }
   return target;
 }
 
 async function download(target: PlatformTarget): Promise<void> {
-  if (target.filename.startsWith('UNSUPPORTED-')) {
-    console.warn(
-      `[conduwuit] No pre-built binary for ${target.platform}/${target.arch}.`,
-    );
-    console.warn(
-      '[conduwuit] Conduwuit only ships Linux binaries. On macOS/Windows, run Conduwuit via Docker:',
-    );
-    console.warn('  docker run -d --name conduwuit -p 8008:8008 \\');
-    console.warn(
-      '    -v ~/.agent-platform/conduwuit-data:/data \\',
-    );
-    console.warn(
-      '    ghcr.io/girlbossceo/conduwuit:latest',
-    );
-    console.warn(
-      '[conduwuit] Then configure the app to connect to your Docker-hosted Conduwuit.',
-    );
+  if (target.urlFilename === '') {
+    console.warn(`[tuwunel] No pre-built binary for ${target.platform}/${target.arch}.`);
+    console.warn('[tuwunel] CI will compile from source.');
     return;
   }
 
   const outDir = __dirname;
-  const outPath = path.join(outDir, target.filename);
+  const outPath = path.join(outDir, target.outputFilename);
   if (fs.existsSync(outPath)) {
-    console.log(`[conduwuit] ${target.filename} already exists, skipping download`);
+    console.log(`[tuwunel] ${target.outputFilename} already exists, skipping download`);
     return;
   }
-  const url = `${BASE_URL}/${target.filename}`;
-  console.log(`[conduwuit] Downloading ${url}`);
+
+  const url = `${BASE_URL}/${target.urlFilename}`;
+  console.log(`[tuwunel] Downloading ${url}`);
   try {
     const response = await fetch(url);
     if (!response.ok || !response.body) {
       throw new Error(`HTTP ${response.status}`);
     }
+    const archivePath = path.join(outDir, target.urlFilename);
     await pipeline(
       response.body as unknown as NodeJS.ReadableStream,
-      fs.createWriteStream(outPath),
+      fs.createWriteStream(archivePath),
     );
-    if (process.platform !== 'win32') {
-      fs.chmodSync(outPath, 0o755);
+
+    try {
+      execSync(`zstd -d -f "${archivePath}" -o "${outPath}"`, { stdio: 'pipe' });
+    } catch {
+      execSync(`python3 -c "
+import zstandard
+with open('${archivePath}', 'rb') as f:
+    data = zstandard.ZstdDecompressor().decompress(f.read())
+with open('${outPath}', 'wb') as f:
+    f.write(data)
+"`, { stdio: 'pipe' });
     }
-    console.log(`[conduwuit] Saved to ${outPath}`);
+    fs.unlinkSync(archivePath);
+    fs.chmodSync(outPath, 0o755);
+    console.log(`[tuwunel] Saved to ${outPath}`);
   } catch (err) {
-    console.warn(`[conduwuit] Download failed: ${(err as Error).message}`);
-    console.warn(
-      '[conduwuit] You may need to manually place the binary. See docs/dev/conduwuit-docker.md for Docker alternative.',
-    );
+    console.warn(`[tuwunel] Download failed: ${(err as Error).message}`);
+    console.warn('[tuwunel] CI will compile from source instead.');
   }
 }
 
 if (require.main === module) {
-  // IIFE: detectTarget() may throw synchronously on unsupported platforms,
-  // which would escape .catch(); wrap to keep install non-fatal.
   (async () => {
     try {
       await download(detectTarget());
     } catch (err) {
-      console.error('[conduwuit] Fatal:', err);
+      console.error('[tuwunel] Fatal:', err);
       process.exit(0);
     }
   })();

@@ -8,18 +8,18 @@ describe('conduit/binary-path', () => {
     expect(typeof p).toBe('string');
     if (process.platform === 'linux') {
       if (process.arch === 'arm64') {
-        expect(p).toMatch(/static-aarch64-unknown-linux-musl$/);
+        expect(p).toMatch(/tuwunel-linux-arm64$/);
       } else {
-        expect(p).toMatch(/static-x86_64-unknown-linux-musl$/);
+        expect(p).toMatch(/tuwunel-linux-x64$/);
       }
     } else if (process.platform === 'darwin') {
       if (process.arch === 'arm64') {
-        expect(p).toMatch(/conduwuit-darwin-arm64$/);
+        expect(p).toMatch(/tuwunel-darwin-arm64$/);
       } else {
-        expect(p).toMatch(/conduwuit-darwin-x64$/);
+        expect(p).toMatch(/tuwunel-darwin-x64$/);
       }
     } else if (process.platform === 'win32') {
-      expect(p).toMatch(/conduwuit-windows-x64\.exe$/);
+      expect(p).toMatch(/tuwunel-windows-x64\.exe$/);
     }
   });
 });

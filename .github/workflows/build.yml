@@ -38,11 +38,11 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
-          git clone --depth 1 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
-          cd /tmp/conduwuit
+          git clone --depth 1 https://github.com/matrix-construct/tuwunel.git /tmp/tuwunel
+          cd /tmp/tuwunel
           cargo build --release
-          cp target/release/conduit "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
-          chmod +x "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
+          cp target/release/tuwunel "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
+          chmod +x "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
 
       - name: Typecheck
         run: pnpm typecheck
@@ -147,10 +147,10 @@ jobs:
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
         run: |
-          git clone --depth 1 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
-          cd /tmp/conduwuit
+          git clone --depth 1 https://github.com/matrix-construct/tuwunel.git /tmp/tuwunel
+          cd /tmp/tuwunel
           cargo build --release
-          cp target/release/conduit.exe "${{ github.workspace }}/resources/conduit/conduwuit-windows-x64.exe"
+          cp target/release/tuwunel.exe "${{ github.workspace }}/resources/conduit/tuwunel-windows-x64.exe"
 
       - name: Typecheck
         run: pnpm typecheck
