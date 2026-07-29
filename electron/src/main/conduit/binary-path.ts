@@ -19,6 +19,11 @@ function perOsFilename(): string {
   throw new Error(`No Tuwunel binary for ${platform}-${arch}.`);
 }
 
+/** Windows 没有 Tuwunel 原生二进制（Unix-only 代码），需要 Docker/WSL2 */
+export function isWindowsDockerMode(): boolean {
+  return process.platform === 'win32';
+}
+
 /**
  * Detect whether we are running inside a *packaged* Electron app. We cannot use
  * electron's `app.isPackaged` here (importing electron would pull the renderer

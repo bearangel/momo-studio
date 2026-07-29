@@ -142,21 +142,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build Tuwunel (Windows)
-        shell: bash
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
-          RUSTFLAGS: '--cfg tuwunel_jemalloc_disable'
-        run: |
-          git clone --depth 1 https://github.com/matrix-construct/tuwunel.git /tmp/tuwunel
-          cd /tmp/tuwunel
-          # Windows MSVC 不支持 jemalloc 的 configure 脚本，用系统 allocator
-          set -e
-          sed -i 's/jemalloc = "0.5"/jemalloc = { version = "0.5", optional = true }/' Cargo.toml
-          sed -i 's/"jemalloc"/"jemalloc?"/' Cargo.toml
-          cargo build --release --no-default-features
-          cp target/release/tuwunel.exe "${{ github.workspace }}/resources/conduit/tuwunel-windows-x64.exe"
-
       - name: Typecheck
         run: pnpm typecheck
 

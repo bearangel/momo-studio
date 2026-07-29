@@ -68,6 +68,11 @@ export async function startConduit(): Promise<ConduitInfo> {
 }
 
 async function doStartConduit(): Promise<ConduitInfo> {
+  // Windows: Tuwunel 是 Unix-only，通过 Docker 容器运行
+  if (process.platform === 'win32') {
+    return await startConduitViaDocker();
+  }
+
   const dataDir = resolveConduitDir();
   const configPath = await writeConduitConfig({
     port: CONDUIT_PORT,
@@ -191,4 +196,44 @@ export async function healthCheck(timeoutMs = 5000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, sleepMs));
   }
   return false;
+}
+
+async function startConduitViaDocker(): Promise<ConduitInfo> {
+  const dataDir = resolveConduitDir();
+  await writeConduitConfig({ port: CONDUIT_PORT, serverName: 'localhost', dataDir });
+
+  // Windows 路径 → Docker 挂载路径（C:\Users\... → //c/Users/...）
+  const dockerPath = dataDir.replace(/\\/g, '/').replace(/^([A-Z]:)/, (_, drive) => `//${drive.toLowerCase()}`);
+
+  const containerName = 'momo-studio-tuwunel';
+
+  try {
+    const { exec } = require('node:child_process') as { exec: typeof import('node:child_process').exec };
+    const execAsync = (cmd: string): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        exec(cmd, (err: Error | null) => (err ? reject(err) : resolve()));
+      });
+    };
+
+    await execAsync(`docker rm -f ${containerName} 2>nul`).catch(() => {});
+    await execAsync(
+      `docker run -d --name ${containerName} -p 8008:8008 ` +
+      `-v "${dockerPath}:/data" ` +
+      `ghcr.io/matrix-construct/tuwunel:latest`,
+    );
+    logger.info('Windows: Tuwunel Docker 容器已启动', { containerName });
+  } catch (err) {
+    logger.error('Windows: Docker 启动失败，请确保 Docker Desktop 已运行', { error: (err as Error).message });
+    throw new Error(
+      'Windows 需要运行 Docker Desktop 来启动 Tuwunel。\n' +
+      '请安装并启动 Docker Desktop 后重试。\n' +
+      '下载: https://www.docker.com/products/docker-desktop/',
+    );
+  }
+
+  const ok = await healthCheck(30000);
+  if (!ok) {
+    throw new Error('Tuwunel Docker 容器启动超时（30s），请检查 Docker 日志。');
+  }
+  return { port: CONDUIT_PORT, baseUrl: BASE_URL };
 }
