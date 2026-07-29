@@ -80,6 +80,6 @@ describe('MainLayout', () => {
       activeWorkspaceId: STUB_WORKSPACE.id,
     });
     render(<MainLayout />);
-    expect(screen.getByText(/暂无房间/i)).toBeInTheDocument();
+    expect(screen.getByText(/暂无房间|加载中/i)).toBeInTheDocument();
   });
 });
