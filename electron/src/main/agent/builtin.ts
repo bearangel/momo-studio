@@ -22,8 +22,12 @@ import { saveAgentDefinition, listAgentDefinitions } from './crud';
 import { logger } from '../logger';
 import type { AgentDefinition } from './types';
 
-/** 内置 agent YAML 所在目录（dev 模式下相对 __dirname 解析） */
-const BUILTIN_AGENTS_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'agents');
+function resolveBuiltinAgentsDir(): string {
+  if (process.resourcesPath && !process.defaultApp) {
+    return path.join(process.resourcesPath, 'agents');
+  }
+  return path.join(__dirname, '..', '..', '..', 'resources', 'agents');
+}
 
 /** 测试钩子：覆盖内置 agent 目录路径；传 null 恢复默认 */
 let dirOverride: string | null = null;
@@ -40,7 +44,7 @@ interface ParsedEntry {
 
 /** 注册所有内置 agent 定义。幂等——已存在的不重复生成新 id。 */
 export function registerBuiltinAgents(): void {
-  const dir = dirOverride ?? BUILTIN_AGENTS_DIR;
+  const dir = dirOverride ?? resolveBuiltinAgentsDir();
   if (!fs.existsSync(dir)) {
     logger.warn('内置 agent 目录不存在，跳过注册', { dir });
     return;

@@ -258,6 +258,15 @@ export interface ApiSurface {
      */
     assignMain(input: AssignMainInput): Promise<AgentAssignment[]>;
     createFromYaml(yaml: string): Promise<AgentDefinition>;
+    createCustom(input: {
+      name: string;
+      slug: string;
+      description: string;
+      systemPrompt: string;
+      modelProvider: string;
+      modelName: string;
+      iconEmoji?: string;
+    }): Promise<AgentDefinition>;
     list(): Promise<AgentDefinition[]>;
     assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
     listAssignments(workspaceId: string): Promise<AgentAssignment[]>;

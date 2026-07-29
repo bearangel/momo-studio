@@ -246,6 +246,44 @@ export function registerAgentHandlers(): void {
     return def;
   });
 
+  ipcMain.handle('agent:createCustom', async (_evt, input: {
+    name: string;
+    slug: string;
+    description: string;
+    systemPrompt: string;
+    modelProvider: string;
+    modelName: string;
+    iconEmoji?: string;
+  }) => {
+    const { randomUUID } = await import('node:crypto');
+    const def: import('./types').AgentDefinition = {
+      id: randomUUID(),
+      name: input.name,
+      slug: input.slug,
+      version: '1.0.0',
+      type: 'standalone',
+      runtime: 'declarative',
+      systemPrompt: input.systemPrompt,
+      model: {
+        provider: input.modelProvider as 'openai' | 'anthropic',
+        model: input.modelName,
+      },
+      defaultTools: [
+        { kind: 'builtin', ref: 'read_file' },
+        { kind: 'builtin', ref: 'write_file' },
+        { kind: 'builtin', ref: 'list_files' },
+      ],
+      defaultMcps: [],
+      defaultSkills: [],
+      source: 'custom',
+      description: input.description,
+      iconEmoji: input.iconEmoji ?? '🤖',
+    };
+    saveAgentDefinition(def);
+    logger.info('自定义 Agent 定义已创建', { slug: def.slug });
+    return def;
+  });
+
   // 列出全部已持久化的 agent 定义
   ipcMain.handle('agent:list', async () => {
     return listAgentDefinitions();
