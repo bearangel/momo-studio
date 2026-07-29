@@ -69,6 +69,7 @@ interface RuntimeConfig {
   systemPrompt: string;
   modelProvider: 'openai' | 'anthropic';
   modelName: string;
+  modelBaseUrl?: string;
   llmApiKey: string;
   workspaceDir: string;
   // === M2 集成 ===
@@ -128,6 +129,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     systemPrompt,
     modelProvider,
     modelName,
+    modelBaseUrl,
     llmApiKey,
     workspaceDir,
     workspaceId,
@@ -187,6 +189,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     systemPrompt,
     modelProvider,
     modelName,
+    modelBaseUrl: typeof modelBaseUrl === 'string' ? modelBaseUrl : undefined,
     llmApiKey,
     workspaceDir,
     workspaceId,
@@ -467,7 +470,7 @@ async function runChatLoop(
   ctx: RuntimeContext,
 ): Promise<string> {
   const llm = createLLMProvider(
-    { provider: config.modelProvider, model: config.modelName },
+    { provider: config.modelProvider, model: config.modelName, baseUrl: config.modelBaseUrl },
     config.llmApiKey,
   );
 

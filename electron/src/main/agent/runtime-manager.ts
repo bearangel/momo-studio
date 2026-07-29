@@ -28,6 +28,7 @@ export interface AgentRuntimeOpts {
   systemPrompt: string;
   modelProvider: string;
   modelName: string;
+  modelBaseUrl?: string;
   llmApiKey: string;
   teamRoomId: string;
   /** workspace owner 的 Matrix userId，子进程据此只接受 owner 邀请（防恶意 room） */
