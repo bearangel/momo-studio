@@ -2,33 +2,24 @@
 //
 // Marketplace catalog 客户端：fetchCatalog（远程优先、本地回退）+
 // searchItems（关键词 + 类型过滤）+ groupByCategory（UI 分组展示）。
-//
-// 本地回退路径基于 __dirname 计算：源文件位于
-//   <root>/electron/src/main/marketplace/client.ts
-// 回退 4 层（marketplace → main → src → electron → <root>）即到项目根，
-// 再拼接 resources/marketplace/catalog.json。打包后该路径可能不存在，
-// 但此时远程 catalog 通常可用，本地回退仅作 best-effort。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
 import type { Catalog, MarketplaceItem } from './types';
 
-/** 远程 catalog 默认地址（占位；真实仓库地址在 release 阶段替换） */
 const DEFAULT_CATALOG_URL =
   'https://raw.githubusercontent.com/momo-studio/marketplace/main/resources/marketplace/catalog.json';
 
-/** 本地内置 catalog（与源码一同分发，远程不可达时兜底） */
-const LOCAL_CATALOG_PATH = path.join(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  '..',
-  'resources',
-  'marketplace',
-  'catalog.json',
-);
+/** 解析本地 catalog 路径（打包后从 resources 目录加载，dev 从源码目录加载） */
+function resolveLocalCatalogPath(): string {
+  // 打包模式：process.resourcesPath 指向 app/Contents/Resources/ (macOS) 或 resources/ (Linux/Win)
+  if (process.resourcesPath && !process.defaultApp) {
+    return path.join(process.resourcesPath, 'marketplace', 'catalog.json');
+  }
+  // Dev 模式：从编译后的 dist 向上找源码目录
+  return path.resolve(__dirname, '..', '..', '..', '..', 'resources', 'marketplace', 'catalog.json');
+}
 
 /** 获取 catalog：优先远程，失败回退本地内置 */
 export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
@@ -48,7 +39,7 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   }
 
   // 回退到本地
-  const local = JSON.parse(fs.readFileSync(LOCAL_CATALOG_PATH, 'utf-8')) as Catalog;
+  const local = JSON.parse(fs.readFileSync(resolveLocalCatalogPath(), 'utf-8')) as Catalog;
   logger.info('Marketplace catalog 已加载（本地）', { items: local.items.length });
   return local;
 }
