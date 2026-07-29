@@ -177,19 +177,28 @@ export async function sendMessage(roomId: string, body: string): Promise<void> {
 /** 获取已加入的房间列表（含房间名，无名字时回退到 roomId） */
 export function getJoinedRooms(): RoomInfoPayload[] {
   if (!client) return [];
-  return client.getRooms().map((room) => {
-    const name = room.name || room.roomId;
-    const isSystem = isSystemRoom(room, name);
-    return {
-      roomId: room.roomId,
-      name: isSystem ? '⚙️ 系统通知' : name,
-      isSystem,
-    };
-  }).sort((a, b) => {
-    if (a.isSystem && !b.isSystem) return 1;
-    if (!a.isSystem && b.isSystem) return -1;
-    return 0;
-  });
+  return client.getRooms()
+    .filter((room) => {
+      const state = room.getMyMembership();
+      if (state !== 'join') return false;
+      const createEvent = room.currentState.getStateEvents('m.room.create', '');
+      const roomType = createEvent?.getContent()?.type as string | undefined;
+      return roomType !== 'm.space';
+    })
+    .map((room) => {
+      const name = room.name || room.roomId;
+      const isSystem = isSystemRoom(room, name);
+      return {
+        roomId: room.roomId,
+        name: isSystem ? '⚙️ 系统通知' : name,
+        isSystem,
+      };
+    })
+    .sort((a, b) => {
+      if (a.isSystem && !b.isSystem) return 1;
+      if (!a.isSystem && b.isSystem) return -1;
+      return 0;
+    });
 }
 
 function isSystemRoom(room: { roomId: string; name: string }, name: string): boolean {
