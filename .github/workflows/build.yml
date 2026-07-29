@@ -26,8 +26,18 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: pnpm install
+
+      - name: Build Conduwuit (macOS)
+        run: |
+          git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
+          cd /tmp/conduwuit
+          cargo build --release --no-default-features --features sqlite,brotli,zstd,gzip,console
+          cp target/release/conduit "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
+          chmod +x "${{ github.workspace }}/resources/conduit/conduwuit-darwin-arm64"
 
       - name: Typecheck
         run: pnpm typecheck
@@ -105,7 +115,6 @@ jobs:
           path: |
             electron/dist-installers/*.AppImage
             electron/dist-installers/*.deb
-            electron/dist-installers/*.snap
           retention-days: 30
 
   # ============ Windows ============
@@ -120,8 +129,18 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: pnpm install
+
+      - name: Build Conduwuit (Windows)
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v0.4.6 https://github.com/girlbossceo/conduwuit.git /tmp/conduwuit
+          cd /tmp/conduwuit
+          cargo build --release --no-default-features --features sqlite,brotli,zstd,gzip,console
+          cp target/release/conduit.exe "${{ github.workspace }}/resources/conduit/conduwuit-windows-x64.exe"
 
       - name: Typecheck
         run: pnpm typecheck
@@ -149,7 +168,6 @@ jobs:
           name: windows-artifacts
           path: |
             electron/dist-installers/*.exe
-            electron/dist-installers/*.nsis.7z
           retention-days: 30
 
   # ============ 发布 Release ============

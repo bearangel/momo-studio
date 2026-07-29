@@ -7,16 +7,17 @@ const proc = process as NodeProcessWithResources;
 function perOsFilename(): string {
   const platform = process.platform;
   const arch = process.arch;
-  // Conduwuit (formerly Conduit) ships Linux static binaries only.
-  // macOS/Windows: no native binary — must run Conduwuit via Docker.
   if (platform === 'linux') {
     if (arch === 'arm64') return 'static-aarch64-unknown-linux-musl';
     if (arch === 'x64') return 'static-x86_64-unknown-linux-musl';
   }
-  throw new Error(
-    `No Conduwuit binary for ${platform}-${arch}. ` +
-      'On macOS/Windows, run Conduwuit via Docker and connect to it externally.',
-  );
+  if (platform === 'darwin') {
+    return arch === 'arm64' ? 'conduwuit-darwin-arm64' : 'conduwuit-darwin-x64';
+  }
+  if (platform === 'win32') {
+    return 'conduwuit-windows-x64.exe';
+  }
+  throw new Error(`No Conduwuit binary for ${platform}-${arch}.`);
 }
 
 /**

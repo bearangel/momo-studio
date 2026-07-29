@@ -42,7 +42,8 @@
         "to": "conduit",
         "filter": [
           "static-*",
-          "conduit-*"
+          "conduit-*",
+          "conduwuit-*"
         ]
       },
       {
