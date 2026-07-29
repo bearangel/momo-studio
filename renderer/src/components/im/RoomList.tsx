@@ -50,13 +50,19 @@ export function RoomList() {
           type="button"
           onClick={() => void selectRoom(room.roomId)}
           className={cn(
-            'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2',
+            'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center gap-2',
             room.roomId === activeRoomId
               ? 'bg-bg-tertiary border-accent-blue text-neutral-100'
               : 'border-transparent text-neutral-300 hover:bg-bg-tertiary/60',
           )}
         >
-          <span className="truncate block">{room.name}</span>
+          {room.isSystem && <span className="text-xs">⚙️</span>}
+          <span className="truncate flex-1">{room.name}</span>
+          {room.isSystem && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400 shrink-0">
+              系统
+            </span>
+          )}
         </button>
       ))}
     </div>

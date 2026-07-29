@@ -42,6 +42,7 @@ const SYNCED_EVENT_TYPES: ReadonlySet<string> = new Set([
 export interface RoomInfoPayload {
   roomId: string;
   name: string;
+  isSystem?: boolean;
 }
 
 /** DB kv_store 中存储的会话记录（与 authFlows.ts 的 StoredSession 结构一致） */
@@ -176,10 +177,35 @@ export async function sendMessage(roomId: string, body: string): Promise<void> {
 /** 获取已加入的房间列表（含房间名，无名字时回退到 roomId） */
 export function getJoinedRooms(): RoomInfoPayload[] {
   if (!client) return [];
-  return client.getRooms().map((room) => ({
-    roomId: room.roomId,
-    name: room.name || room.roomId,
-  }));
+  return client.getRooms().map((room) => {
+    const name = room.name || room.roomId;
+    const isSystem = isSystemRoom(room, name);
+    return {
+      roomId: room.roomId,
+      name: isSystem ? '⚙️ 系统通知' : name,
+      isSystem,
+    };
+  }).sort((a, b) => {
+    if (a.isSystem && !b.isSystem) return 1;
+    if (!a.isSystem && b.isSystem) return -1;
+    return 0;
+  });
+}
+
+function isSystemRoom(room: { roomId: string; name: string }, name: string): boolean {
+  const lowerName = name.toLowerCase();
+  if (lowerName.includes('admin room') || lowerName.includes('server notice')) return true;
+  const realRoom = client?.getRoom(room.roomId);
+  if (!realRoom) return false;
+  const members = realRoom.getJoinedMembers();
+  if (members.length === 2) {
+    const hasServerBot = members.some((m) => {
+      const localpart = ((m.userId ?? '').split(':')[0] ?? '').toLowerCase();
+      return localpart === '@conduit' || localpart === '@tuwunel' || localpart === '@notices';
+    });
+    return hasServerBot;
+  }
+  return false;
 }
 
 /** 获取指定房间的历史消息（默认最近 50 条白名单内 event） */

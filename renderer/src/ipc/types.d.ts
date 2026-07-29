@@ -108,6 +108,7 @@ export interface ImMessage {
 export interface ImRoomInfo {
   roomId: string;
   name: string;
+  isSystem?: boolean;
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
