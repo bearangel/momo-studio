@@ -61,7 +61,7 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
-      const apiKey = await getSecret(`llm.agent.${row.instance_id}.apikey`);
+      const apiKey = await getSecret(`agent.${row.instance_id}.llm_api_key`);
       if (!apiKey) {
         logger.warn('Agent API key 丢失，跳过', { instanceId: row.instance_id });
         failed++;
