@@ -5,6 +5,7 @@
 // 实际的 Matrix 操作委托给 matrix/sync-manager。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
+import { startConduit } from '../conduit/manager';
 import {
   startSyncFromSession,
   sendMessage,
@@ -15,9 +16,11 @@ import {
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerImHandlers(): void {
-  // 启动 Matrix /sync：主进程从 keychain 恢复 token + 创建 client + 开始长轮询。
-  // 幂等：已运行时直接返回。resolve 后房间列表即可查询。
+  // 先等 Conduit 就绪：renderer 在 app 启动早期就调 im:startSync，
+  // 此时 Conduit 可能还没 bind 端口（RocksDB 打开 + schema migration 需要数百 ms）。
+  // startConduit 内部有 pendingStart 去重，多次调用安全。
   ipcMain.handle('im:startSync', async () => {
+    await startConduit();
     await startSyncFromSession();
   });
 
