@@ -33,12 +33,17 @@ app.whenReady().then(async () => {
     const win = createMainWindow();
     setMainWindow(win);
 
-    // 5. 如果已有登录会话，自动恢复：启动 sync + 自动启动已分配的 agent
-    void autoRestoreSession().catch((err) => {
-      logger.warn('Session restore failed (user may need to re-login)', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    // 5. 如果已有登录会话，等待 Conduit 就绪后自动恢复 sync + agent
+    void (async () => {
+      try {
+        await startConduit();
+        await autoRestoreSession();
+      } catch (err) {
+        logger.info('Session restore deferred', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
   } catch (err) {
     logger.error('Fatal startup error', {
       error: err instanceof Error ? err.message : String(err),

@@ -94,12 +94,14 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
   }
   client = matrixClient;
 
-  // 启动客户端长轮询
-  await client.startClient({ initialSyncLimit: 50 });
-
-  // 等待首次 PREPARED（初始 sync 完成、room 可读）后再注册消息监听，
-  // 避免初始同步回放的历史事件被当作"新消息"推送。
-  await waitForPrepared(client);
+  try {
+    await client.startClient({ initialSyncLimit: 50 });
+    await waitForPrepared(client);
+  } catch (err) {
+    client = null;
+    logger.error('Matrix /sync 启动失败，已清理 client', { error: (err as Error).message });
+    throw err;
+  }
 
   // 注册事件监听：白名单内 event type（m.room.message + dispatch + task_reply）推送到 renderer
   client.on(ClientEvent.Event, (event: MatrixEvent) => {
