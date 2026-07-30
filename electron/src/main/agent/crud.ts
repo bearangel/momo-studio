@@ -20,6 +20,7 @@ interface AgentDefRow {
   system_prompt: string;
   model_provider: string;
   model_name: string;
+  model_base_url: string | null;
   default_tools: string;
   source: string;
   description: string;
@@ -52,6 +53,7 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     model: {
       provider: row.model_provider as AgentDefinition['model']['provider'],
       model: row.model_name,
+      baseUrl: row.model_base_url ?? undefined,
     },
     defaultTools: JSON.parse(row.default_tools) as ToolRef[],
     source: row.source as AgentDefinition['source'],
@@ -80,8 +82,8 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
-     (id, name, slug, version, type, runtime, system_prompt, model_provider, model_name, default_tools, source, description, icon_emoji, parent_agent_id, default_mcps, default_skills)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, name, slug, version, type, runtime, system_prompt, model_provider, model_name, model_base_url, default_tools, source, description, icon_emoji, parent_agent_id, default_mcps, default_skills)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     def.id,
     def.name,
@@ -92,6 +94,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     def.systemPrompt,
     def.model.provider,
     def.model.model,
+    def.model.baseUrl ?? null,
     JSON.stringify(def.defaultTools),
     def.source,
     def.description,

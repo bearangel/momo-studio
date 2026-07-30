@@ -192,6 +192,15 @@ CREATE TABLE IF NOT EXISTS installed_packages (
 );
 `.trim(),
   },
+  {
+    version: 9,
+    sql: `
+-- 补齐 agent_definitions.model_base_url 列。M1 漏建此列，导致自定义 agent 配置的
+-- baseUrl 被静默丢弃，运行时全部 fallback 到 OpenAI 默认 endpoint（GLM/DeepSeek
+-- 等自定义 baseUrl 永远不生效）。
+ALTER TABLE agent_definitions ADD COLUMN model_base_url TEXT;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
