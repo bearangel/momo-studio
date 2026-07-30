@@ -34,6 +34,10 @@ let binaryOverride: string[] | null = null;
 // In-flight start so concurrent startConduit() callers share one spawn instead
 // of racing past the isConduitRunning() check and spawning multiple children.
 let pendingStart: Promise<ConduitInfo> | null = null;
+// 只有 healthCheck 通过后才置 true。isConduitRunning() 只检测进程是否活着，
+// 但进程 spawn 后仍需数百 ms 打开 RocksDB + bind 端口，期间端口不可达。
+// startConduit() 用此标志区分"进程已 spawn 但未就绪"和"完全就绪"。
+let conduitReady = false;
 
 export interface ConduitInfo {
   port: number;
@@ -51,13 +55,12 @@ export function isConduitRunning(): boolean {
 }
 
 /**
- * Start Conduit if not already running. Writes the config, spawns the binary,
- * and blocks until /health responds or the startup deadline (15s) elapses.
- * Idempotent for both sequential and concurrent callers: a second call while
- * a start is in flight joins the same promise rather than spawning again.
+ * Start Conduit if not already running AND ready. Writes the config, spawns the
+ * binary, and blocks until healthCheck passes or the startup deadline (15s)
+ * elapses. Idempotent: concurrent callers share one spawn via pendingStart.
  */
 export async function startConduit(): Promise<ConduitInfo> {
-  if (isConduitRunning()) {
+  if (conduitReady && isConduitRunning()) {
     return { port: CONDUIT_PORT, baseUrl: BASE_URL };
   }
   if (pendingStart) return pendingStart;
@@ -106,13 +109,19 @@ async function doStartConduit(): Promise<ConduitInfo> {
   // uncaught exception, so handle it here and drop our handle.
   proc.on('error', (err) => {
     logger.error('Conduit process error', err);
-    if (conduitProcess === proc) conduitProcess = null;
+    if (conduitProcess === proc) {
+      conduitProcess = null;
+      conduitReady = false;
+    }
   });
   proc.on('exit', (code, signal) => {
     logger.warn('Conduit exited', { code, signal });
     // Only clear if this is still the current process; a replacement may have
     // already taken over (defensive — not currently reachable but cheap).
-    if (conduitProcess === proc) conduitProcess = null;
+    if (conduitProcess === proc) {
+      conduitProcess = null;
+      conduitReady = false;
+    }
   });
 
   const ok = await healthCheck(15000);
@@ -121,6 +130,7 @@ async function doStartConduit(): Promise<ConduitInfo> {
     throw new Error('Conduit failed health check within 15s');
   }
 
+  conduitReady = true;
   logger.info('Conduit started', { baseUrl: BASE_URL });
   return { port: CONDUIT_PORT, baseUrl: BASE_URL };
 }
@@ -148,6 +158,7 @@ export async function stopConduit(): Promise<void> {
       // fresh replacement, and clearing that would orphan it.
       if (conduitProcess === proc) {
         conduitProcess = null;
+        conduitReady = false;
       }
       logger.info('Conduit stopped');
       resolve();
