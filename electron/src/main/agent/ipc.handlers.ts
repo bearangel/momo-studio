@@ -20,7 +20,7 @@ import {
 import { getWorkspace } from '../workspace/crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
-import { getSecret, setSecret } from '../storage/keychain';
+import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
@@ -313,8 +313,16 @@ export function registerAgentHandlers(): void {
 
   ipcMain.handle('agent:removeAssignment', async (_evt, instanceId: string) => {
     stopAgent(instanceId);
+    const row = getDb()
+      .prepare('SELECT bot_matrix_user_id FROM agent_assignments WHERE instance_id = ?')
+      .get(instanceId) as { bot_matrix_user_id?: string } | undefined;
+    if (row?.bot_matrix_user_id) {
+      await deleteSecret(`bot.${row.bot_matrix_user_id}.matrix_token`).catch((e) =>
+        logger.warn('清理 bot token 失败（非致命）', { error: String(e) }),
+      );
+    }
     getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
-    logger.info('Agent 分配已删除', { instanceId });
+    logger.info('Agent 分配已删除', { instanceId, botUserId: row?.bot_matrix_user_id });
     return { ok: true };
   });
 

@@ -56,12 +56,20 @@ function generateBotPassword(): string {
   return randomBytes(24).toString('base64url').slice(0, 32);
 }
 
+/** 生成 6 字符随机后缀，避免同名 bot 重建时与 Matrix 服务器上残留账号冲突 */
+function randomSuffix(): string {
+  return randomBytes(4).toString('base64url').slice(0, 6);
+}
+
 /**
  * 注册一个 agent bot 账号到 Conduwuit，并把 access token 存入 keychain。
  *
- * bot 用户名规则：<slug>.<workspaceSlug>.<ownerLocalpart>
+ * bot 用户名规则：<slug>.<workspaceSlug>.<ownerLocalpart>.<shortId>
  * 例如 slug=requirement-analyst, workspace=proj-x, owner=@alice:localhost
- *   → username = requirement-analyst.proj-x.alice
+ *   → username = requirement-analyst.proj-x.alice.aB3xY9
+ *
+ * 末尾的 6 字符随机后缀保证：即使删除 agent 后 Matrix 服务器上的账号仍存在，
+ * 重新创建同名 agent 也不会触发 M_USER_IN_USE 冲突。
  */
 export async function registerAgentBot(opts: RegisterAgentBotOpts): Promise<RegisteredBot> {
   const slug = slugifySegment(opts.slug);
@@ -71,7 +79,7 @@ export async function registerAgentBot(opts: RegisterAgentBotOpts): Promise<Regi
   if (!slug || !workspaceSlug || !ownerLocalpart) {
     throw new Error('无法从入参生成合法的 bot 用户名（slug/workspaceName/ownerUserId 任一为空）');
   }
-  const username = `${slug}.${workspaceSlug}.${ownerLocalpart}`;
+  const username = `${slug}.${workspaceSlug}.${ownerLocalpart}.${randomSuffix()}`;
 
   // createMatrixClient 仅做 baseUrl 配置；register 不需要已有 session。
   const client = createMatrixClient({ baseUrl: opts.homeserverUrl });

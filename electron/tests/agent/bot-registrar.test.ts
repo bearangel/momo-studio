@@ -2,7 +2,7 @@
 //
 // bot-registrar 单元测试：mock matrix/client 的 createMatrixClient（让其返回的
 // client.register 是受控桩）与 keychain 的 setSecret，验证
-//   1. bot 用户名按 <slug>.<workspaceSlug>.<ownerLocalpart> 规则生成
+//   1. bot 用户名按 <slug>.<workspaceSlug>.<ownerLocalpart>.<6字符随机后缀> 规则生成
 //   2. 随机密码长度为 32
 //   3. access token 以 bot.<userId>.matrix_token 存入 keychain
 //   4. 注册返回缺字段时抛错
@@ -47,7 +47,7 @@ describe('agent/bot-registrar', () => {
     });
 
     expect(mockRegister).toHaveBeenCalledWith(
-      'requirement-analyst.proj-x.alice',
+      expect.stringMatching(/^requirement-analyst\.proj-x\.alice\.[A-Za-z0-9_-]{6}$/),
       expect.any(String),
       null,
       { type: 'm.login.dummy' },
@@ -98,7 +98,7 @@ describe('agent/bot-registrar', () => {
     });
 
     const username = mockRegister.mock.calls[0]![0];
-    expect(username).toBe('req-analyst.my-project-x.alice');
+    expect(username).toMatch(/^req-analyst\.my-project-x\.alice\.[A-Za-z0-9_-]{6}$/);
   });
 
   it('注册返回缺少字段时抛错', async () => {
