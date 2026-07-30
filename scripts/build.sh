@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
-# 构建：typecheck + build 两个 workspace
 set -euo pipefail
-
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm use 20
-
+if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh"; nvm use 20 2>/dev/null || nvm use 22 2>/dev/null || true; fi
+NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
+if [ "$NODE_MAJOR" -lt 20 ]; then echo "❌ 需要 Node 20+，当前 $(node -v)"; exit 1; fi
 cd "$(dirname "$0")/.."
-
 echo "📝 Typecheck..."
 npx pnpm@9.0.0 typecheck
-
 echo "🔨 Build..."
 npx pnpm@9.0.0 build
-
 echo "✅ Build 完成"

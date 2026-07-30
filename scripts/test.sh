@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# 测试模式：重建 Node.js native binding + 跑全部测试
-# 注意：vitest 运行在 Node.js 上，需要 Node 版 native binding（不是 Electron 版）
 set -euo pipefail
-
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-nvm use 20
-
+if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh"; nvm use 20 2>/dev/null || nvm use 22 2>/dev/null || true; fi
+NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
+if [ "$NODE_MAJOR" -lt 20 ]; then echo "❌ 需要 Node 20+，当前 $(node -v)"; exit 1; fi
 cd "$(dirname "$0")/.."
-
 echo "📦 重建 Node.js native binding（vitest 用）..."
 npx pnpm@9.0.0 rebuild better-sqlite3
-
 echo "🧪 运行测试..."
 npx pnpm@9.0.0 test
