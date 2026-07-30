@@ -101,7 +101,9 @@ class OpenAIProvider implements LLMProvider {
   constructor(private model: string, private apiKey: string, private baseUrl?: string) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
-    const apiUrl = `${this.baseUrl ?? 'https://api.openai.com'}/v1/chat/completions`;
+    const apiUrl = this.baseUrl
+      ? `${this.baseUrl}/chat/completions`
+      : 'https://api.openai.com/v1/chat/completions';
     const body: Record<string, unknown> = {
       model: this.model,
       messages: messages.map((m) => this.toOpenAIMessage(m)),
