@@ -16,13 +16,13 @@ export function MessageInput() {
   const sendMessage = useImStore((s) => s.sendMessage);
   const loadRooms = useImStore((s) => s.loadRooms);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { assignments, loadAssignments } = useAgentStore();
+  const { assignments, running, loadAssignments } = useAgentStore();
 
   useEffect(() => {
     if (workspace) void loadAssignments(workspace.id);
   }, [workspace, loadAssignments]);
 
-  const agentsInWorkspace = assignments.filter((a) => a.enabled);
+  const agentsInWorkspace = assignments.filter((a) => a.enabled && running[a.instanceId] === true);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
