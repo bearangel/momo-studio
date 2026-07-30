@@ -143,14 +143,15 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
       systemPrompt: def.systemPrompt,
       modelProvider: def.model.provider,
       modelName: def.model.model,
+      modelBaseUrl: def.model.baseUrl,
       llmApiKey,
       teamRoomId: workspace.teamRoomId,
       ownerUserId: workspace.ownerId,
       agentType: def.type,
-      subAgents: def.type === 'main' ? subAgents : [],
       skills: resolveSkillSlugs(merged.skills),
       mcpNames: merged.mcps,
     });
+
     results.push(assignment);
   }
 
@@ -215,6 +216,7 @@ export function registerAgentHandlers(): void {
         systemPrompt: def.systemPrompt,
         modelProvider: def.model.provider,
         modelName: def.model.model,
+        modelBaseUrl: def.model.baseUrl,
         llmApiKey,
         teamRoomId: workspace.teamRoomId,
         ownerUserId: workspace.ownerId,
@@ -382,6 +384,7 @@ export function registerAgentHandlers(): void {
         systemPrompt: def.systemPrompt,
         modelProvider: def.model.provider,
         modelName: def.model.model,
+        modelBaseUrl: def.model.baseUrl,
         llmApiKey,
         teamRoomId,
         ownerUserId: workspace.ownerId,
