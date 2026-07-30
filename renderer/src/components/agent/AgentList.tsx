@@ -93,6 +93,27 @@ export function AgentList({ onAdd }: Props) {
                       停止
                     </Button>
                   )}
+                  {!isRunning && workspace && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void ipc.agent
+                          .start({
+                            assignment: a,
+                            workspaceId: workspace.id,
+                            teamRoomId: workspace.teamRoomId,
+                          })
+                          .then(() => loadAssignments(workspace.id))
+                          .catch((err) =>
+                            alert(`启动失败：${err instanceof Error ? err.message : String(err)}`),
+                          );
+                      }}
+                    >
+                      启动
+                    </Button>
+                  )}
                   <button
                     type="button"
                     title="删除 agent"
