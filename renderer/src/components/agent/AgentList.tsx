@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
+import { ipc } from '../../ipc/client';
 import { CapabilityConfig } from './CapabilityConfig';
 import { cn } from '../../lib/cn';
 
@@ -92,6 +93,22 @@ export function AgentList({ onAdd }: Props) {
                       停止
                     </Button>
                   )}
+                  <button
+                    type="button"
+                    title="删除 agent"
+                    className="text-neutral-500 hover:text-red-400 text-sm px-1"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`确定删除 agent「${def?.name ?? '未知'}」？\n将停止运行 + 移除分配记录。`)) {
+                        void useAgentStore.getState().stopAgent(a.instanceId);
+                        void ipc.agent.removeAssignment(a.instanceId).then(() => {
+                          void loadAssignments(workspace?.id ?? '');
+                        });
+                      }
+                    }}
+                  >
+                    🗑
+                  </button>
                 </li>
               );
             })}

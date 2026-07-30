@@ -39,6 +39,7 @@ const api: ApiSurface = {
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),
+    removeAssignment: (instanceId) => invoke('agent:removeAssignment', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
   },
   im: {

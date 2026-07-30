@@ -275,6 +275,7 @@ export interface ApiSurface {
     /** 重启已分配 agent（API key 从 keychain 恢复） */
     start(opts: StartAgentInput): Promise<{ instanceId: string }>;
     stop(instanceId: string): Promise<{ ok: boolean }>;
+    removeAssignment(instanceId: string): Promise<{ ok: boolean }>;
     isRunning(instanceId: string): Promise<boolean>;
   };
   im: {

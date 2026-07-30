@@ -21,6 +21,7 @@ import { getWorkspace } from '../workspace/crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
 import { getSecret, setSecret } from '../storage/keychain';
+import { getDb } from '../storage/db';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
@@ -307,6 +308,13 @@ export function registerAgentHandlers(): void {
   // 停止指定 instanceId 的 agent 子进程
   ipcMain.handle('agent:stop', async (_evt, instanceId: string) => {
     stopAgent(instanceId);
+    return { ok: true };
+  });
+
+  ipcMain.handle('agent:removeAssignment', async (_evt, instanceId: string) => {
+    stopAgent(instanceId);
+    getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
+    logger.info('Agent 分配已删除', { instanceId });
     return { ok: true };
   });
 
