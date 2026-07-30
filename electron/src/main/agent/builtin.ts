@@ -1,19 +1,13 @@
 // electron/src/main/agent/builtin.ts
 //
-// 应用启动时把内置 agent 定义（resources/agents/*.yaml）幂等注册到 SQLite。
-// 幂等策略：按 slug 查找已存在的记录，存在则复用其 id（保证 instance 稳定），
-// 否则 parseAgentManifest 生成新 id 后写入；source 统一标记为 'builtin'。
+// 把 resources/agents/*.yaml 解析为 AgentDefinition 并幂等写入 SQLite。
+//
+// ⚠️ 自 v1.1 起启动流程不再调用 registerBuiltinAgents()——内置 agent 改为通过
+// marketplace 按需安装。本模块保留仅为单元测试与未来"恢复默认 agent"按钮使用。
 //
 // 两阶段注册：parentAgentId 在 YAML 里是 slug 引用（非 UUID），需要先注册
 // main/standalone agent 拿到实际 id，再把 sub agent 的 parentAgentId slug
-// 解析为父 agent 的真实 id 后注册。故流程为：
-//   Phase 1: 解析全部 YAML（parentAgentId 暂存为 slug 字符串）
-//   Phase 2a: 注册无 parentAgentId 的 def（main/standalone），建立 slug→id 映射
-//   Phase 2b: 注册有 parentAgentId 的 def（sub），解析 slug→父 id
-//
-// 目录解析：编译产物 dist/main/agent/builtin.js 的 __dirname 向上三级回到
-// electron/ 根，再拼 resources/agents。打包后该路径不存在（asar），此时
-// readdirSync 会返回空，注册被跳过——不影响应用启动。
+// 解析为父 agent 的真实 id 后注册。
 
 import fs from 'node:fs';
 import path from 'node:path';

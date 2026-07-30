@@ -5,7 +5,6 @@ import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession } from './matrix/sync-manager';
-import { registerBuiltinAgents } from './agent/builtin';
 import { autoStartAgents } from './agent/auto-start';
 import { logger } from './logger';
 
@@ -19,8 +18,6 @@ app.whenReady().then(async () => {
 
     runMigrations();
     logger.info('Migrations complete');
-
-    registerBuiltinAgents();
 
     void startConduit().catch((err) => {
       logger.error('Conduit pre-start failed (will retry on auth)', {

@@ -21,7 +21,7 @@ import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { resolveUserDataDir } from '../paths';
 import { parseAgentManifest } from '../agent/manifest-parser';
-import { saveAgentDefinition } from '../agent/crud';
+import { saveAgentDefinition, listAgentDefinitions } from '../agent/crud';
 import { registerMcpDefinition } from '../mcp/host-manager';
 import type { MarketplaceItem } from './types';
 
@@ -114,6 +114,8 @@ function registerInstalledPackage(item: MarketplaceItem, cachePath: string): voi
     const yamlContent = fs.readFileSync(manifestPath, 'utf-8');
     const def = parseAgentManifest(yamlContent);
     def.source = 'marketplace';
+    const existing = listAgentDefinitions().find((d) => d.slug === def.slug);
+    if (existing) def.id = existing.id;
     saveAgentDefinition(def);
     logger.info('Marketplace agent 已注册到定义表', { slug: item.slug, id: def.id });
   } else if (item.type === 'skill') {
