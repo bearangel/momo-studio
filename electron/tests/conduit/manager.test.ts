@@ -14,7 +14,7 @@ import {
 
 // Per-test scratch dir under the OS temp root so resolveConduitDir() (driven by
 // AP_USER_DATA_DIR) writes its generated conduit.toml somewhere disposable and
-// never clobbers the developer's real ~/.agent-platform.
+// never clobbers the developer's real ~/.momo-studio.
 const tmpRoot = path.join(os.tmpdir(), `ap-conduit-test-${Date.now()}`);
 // Reference the .ts source directly: tsx (registered via --import tsx on the
 // spawned argv) handles .ts natively, so no pre-compile step is needed.

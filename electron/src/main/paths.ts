@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 function defaultUserDataDir(): string {
-  return path.join(os.homedir(), '.agent-platform');
+  return path.join(os.homedir(), '.momo-studio');
 }
 
 export function resolveUserDataDir(): string {

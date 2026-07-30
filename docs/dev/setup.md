@@ -59,7 +59,7 @@ The Electron app launches. You should see the welcome onboarding step. Walk thro
 
 ## 5. Debugging
 
-- Main process logs: `~/.agent-platform/logs/main.log`
+- Main process logs: `~/.momo-studio/logs/main.log`
 - Conduit logs: stdout captured into main process log
 - Renderer DevTools: View → Toggle Developer Tools (when running dev)
 
@@ -68,7 +68,7 @@ The Electron app launches. You should see the welcome onboarding step. Walk thro
 To wipe all local data and start over:
 
 ```bash
-rm -rf ~/.agent-platform
+rm -rf ~/.momo-studio
 ```
 
 This removes: SQLite state, Conduit data dir, logs. Keychain entries remain (clean them via Keychain Access / `secret-tool`).

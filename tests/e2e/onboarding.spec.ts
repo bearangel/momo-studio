@@ -46,7 +46,7 @@ const REPO_ROOT = path.join(__dirname, '..', '..');
 const ELECTRON_APP_DIR = path.join(REPO_ROOT, 'electron');
 
 // Isolated user-data dir per run so the test never touches the operator's real
-// ~/.agent-platform and never picks up a stale registered user.
+// ~/.momo-studio and never picks up a stale registered user.
 const tmpUserData = path.join(os.tmpdir(), `ap-e2e-${Date.now()}`);
 
 test.beforeAll(() => {

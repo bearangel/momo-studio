@@ -40,4 +40,4 @@ Should print Conduit's version.
 pnpm dev
 ```
 
-The Electron app detects the binary and starts Conduit as a child process. Watch `~/.agent-platform/logs/main.log` for the startup line.
+The Electron app detects the binary and starts Conduit as a child process. Watch `~/.momo-studio/logs/main.log` for the startup line.
