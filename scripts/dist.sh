@@ -13,6 +13,9 @@ case "$PLATFORM" in
   *) echo "不支持: $PLATFORM（可选: mac / linux / win）"; exit 1 ;;
 esac
 
+# 检查依赖是否已安装
+if [ ! -d node_modules ]; then echo "❌ node_modules 不存在，请先运行: ./scripts/setup.sh"; exit 1; fi
+
 cd "$(dirname "$0")/.."
 echo "📦 重建 Electron native binding..."
 npx pnpm@9.0.0 --filter ./electron exec -- npx @electron/rebuild -f -w better-sqlite3 -w keytar

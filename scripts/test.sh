@@ -3,6 +3,9 @@ set -euo pipefail
 if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh"; nvm use 20 2>/dev/null || nvm use 22 2>/dev/null || true; fi
 NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt 20 ]; then echo "❌ 需要 Node 20+，当前 $(node -v)"; exit 1; fi
+# 检查依赖是否已安装
+if [ ! -d node_modules ]; then echo "❌ node_modules 不存在，请先运行: ./scripts/setup.sh"; exit 1; fi
+
 cd "$(dirname "$0")/.."
 echo "📦 重建 Node.js native binding（vitest 用）..."
 npx pnpm@9.0.0 rebuild better-sqlite3
