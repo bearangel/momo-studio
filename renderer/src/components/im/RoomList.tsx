@@ -5,6 +5,7 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateRoomDialog } from './CreateRoomDialog';
+import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
 
 export function RoomList() {
@@ -18,6 +19,7 @@ export function RoomList() {
 
   // 新建房间对话框状态 + 邀请候选（当前 workspace 内启用的 agent bot）
   const [createOpen, setCreateOpen] = useState(false);
+  const [renaming, setRenaming] = useState<{ roomId: string; oldName: string } | null>(null);
   const { assignments } = useAgentStore();
 
   const inviteCandidates = assignments
@@ -27,10 +29,15 @@ export function RoomList() {
       displayName: a.botMatrixUserId?.split(':')[0]?.slice(1) ?? a.botMatrixUserId,
     }));
 
-  const handleRename = async (roomId: string, oldName: string) => {
-    const name = prompt('新房间名', oldName);
-    if (name && name.trim() && name !== oldName) {
-      await ipc.im.renameRoom(roomId, name.trim());
+  const handleRename = (roomId: string, oldName: string) => {
+    setRenaming({ roomId, oldName });
+  };
+
+  const submitRename = async (name: string) => {
+    const target = renaming;
+    setRenaming(null);
+    if (target && name.trim() && name !== target.oldName) {
+      await ipc.im.renameRoom(target.roomId, name.trim());
       refreshRoomList();
     }
   };
@@ -155,6 +162,14 @@ export function RoomList() {
         onCreated={() => refreshRoomList()}
         inviteCandidates={inviteCandidates}
       />
+      {renaming && (
+        <PromptDialog
+          title="重命名房间"
+          defaultValue={renaming.oldName}
+          onSubmit={submitRename}
+          onClose={() => setRenaming(null)}
+        />
+      )}
     </div>
   );
 }
