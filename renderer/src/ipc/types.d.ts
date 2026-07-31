@@ -273,6 +273,9 @@ export interface ApiSurface {
     read(workspaceId: string, filePath: string): Promise<string>;
     write(workspaceId: string, filePath: string, content: string): Promise<void>;
     list(workspaceId: string, dirPath: string): Promise<DirEntry[]>;
+    create(workspaceId: string, filePath: string, type: 'file' | 'dir'): Promise<void>;
+    delete(workspaceId: string, filePath: string): Promise<void>;
+    rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
   };
   agent: {
     /** 一键编排：注册 bot + 分配 + 邀请进团队群 + 存 API key + 启动 runtime */

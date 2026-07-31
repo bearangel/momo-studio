@@ -50,5 +50,36 @@ export function registerFileHandlers(): void {
     return wsFs.listDir(dirPath);
   });
 
+  // 新建文件（type='file'）或目录（type='dir'）
+  ipcMain.handle(
+    'file:create',
+    async (_evt, workspaceId: string, filePath: string, type: 'file' | 'dir') => {
+      const wsFs = getWorkspaceFs(workspaceId);
+      if (type === 'dir') {
+        await wsFs.createDir(filePath);
+      } else {
+        await wsFs.createFile(filePath);
+      }
+      logger.info('已创建', { workspaceId, filePath, type });
+    },
+  );
+
+  // 删除文件或目录（递归）
+  ipcMain.handle('file:delete', async (_evt, workspaceId: string, filePath: string) => {
+    const wsFs = getWorkspaceFs(workspaceId);
+    await wsFs.deletePath(filePath);
+    logger.info('已删除', { workspaceId, filePath });
+  });
+
+  // 重命名/移动（src→dst 全路径）
+  ipcMain.handle(
+    'file:rename',
+    async (_evt, workspaceId: string, srcPath: string, dstPath: string) => {
+      const wsFs = getWorkspaceFs(workspaceId);
+      await wsFs.rename(srcPath, dstPath);
+      logger.info('已重命名/移动', { workspaceId, srcPath, dstPath });
+    },
+  );
+
   logger.info('File IPC handlers 已注册');
 }

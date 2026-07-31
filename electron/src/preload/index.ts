@@ -29,6 +29,9 @@ const api: ApiSurface = {
     read: (wsId, path) => invoke('file:read', wsId, path),
     write: (wsId, path, content) => invoke('file:write', wsId, path, content),
     list: (wsId, dir) => invoke('file:list', wsId, dir),
+    create: (wsId, filePath, type) => invoke('file:create', wsId, filePath, type),
+    delete: (wsId, filePath) => invoke('file:delete', wsId, filePath),
+    rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
   },
   agent: {
     addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
