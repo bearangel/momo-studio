@@ -8,6 +8,7 @@ import { Button } from '../ui/Button';
 import { ipc } from '../../ipc/client';
 import type { AgentAssignment, AgentDefinition } from '../../ipc/types';
 import { AddAgentDialog } from './AddAgentDialog';
+import { AgentOrchestrator } from './AgentOrchestrator';
 import { CapabilityConfig } from './CapabilityConfig';
 import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
@@ -24,6 +25,8 @@ export function AgentList({ onAdd }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [keyPrompt, setKeyPrompt] = useState<string | null>(null);
+  // 视图模式：list=平铺列表，orchestrate=树形编排
+  const [viewMode, setViewMode] = useState<'list' | 'orchestrate'>('list');
 
   useEffect(() => {
     void loadDefinitions();
@@ -71,12 +74,36 @@ export function AgentList({ onAdd }: Props) {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
         <h2 className="text-sm font-semibold text-neutral-200">Agents</h2>
-        <Button size="sm" onClick={onAdd} disabled={!workspace}>
-          + 添加 agent
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 视图切换：列表 / 编排 */}
+          <div className="flex rounded-md bg-bg-tertiary border border-border-subtle">
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={'px-2 py-1 text-xs rounded-l-md ' +
+                (viewMode === 'list' ? 'bg-accent-blue text-white' : 'text-neutral-400 hover:text-neutral-200')}
+            >
+              列表
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('orchestrate')}
+              className={'px-2 py-1 text-xs rounded-r-md ' +
+                (viewMode === 'orchestrate' ? 'bg-accent-blue text-white' : 'text-neutral-400 hover:text-neutral-200')}
+            >
+              编排
+            </button>
+          </div>
+          <Button size="sm" onClick={onAdd} disabled={!workspace}>
+            + 添加 agent
+          </Button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-3">
+      {viewMode === 'orchestrate' ? (
+        <AgentOrchestrator />
+      ) : (
+        <div className="flex-1 overflow-auto p-3">
         {loading && assignments.length === 0 ? (
           <div className="text-center text-neutral-500 text-sm py-8">加载中…</div>
         ) : assignments.length === 0 ? (
@@ -225,7 +252,8 @@ export function AgentList({ onAdd }: Props) {
             })}
           </ul>
         )}
-      </div>
+        </div>
+      )}
 
       {workspace && selected && (
         <div className="border-t border-border-subtle p-4 max-h-[45%] overflow-auto bg-bg-secondary">
