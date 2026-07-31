@@ -7,6 +7,7 @@ import { ipc } from '../../ipc/client';
 import { CreateRoomDialog } from './CreateRoomDialog';
 import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
+import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 
 export function RoomList() {
   const rooms = useImStore((s) => s.rooms);
@@ -21,12 +22,13 @@ export function RoomList() {
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ roomId: string; oldName: string } | null>(null);
   const { assignments } = useAgentStore();
+  const botNameMap = useBotNameMap();
 
   const inviteCandidates = assignments
     .filter((a) => a.enabled)
     .map((a) => ({
       userId: a.botMatrixUserId,
-      displayName: a.botMatrixUserId?.split(':')[0]?.slice(1) ?? a.botMatrixUserId,
+      displayName: resolveBotName(a.botMatrixUserId, botNameMap),
     }));
 
   const handleRename = (roomId: string, oldName: string) => {

@@ -4,6 +4,7 @@ import { useImStore } from '../../stores/im.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
+import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 import type { AgentAssignment } from '../../ipc/types';
 
 export function MessageInput() {
@@ -17,11 +18,15 @@ export function MessageInput() {
   const sendMessage = useImStore((s) => s.sendMessage);
   const loadRooms = useImStore((s) => s.loadRooms);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { assignments, running, loadAssignments } = useAgentStore();
+  const { assignments, running, loadAssignments, definitions, loadDefinitions } = useAgentStore();
+  const botNameMap = useBotNameMap();
 
   useEffect(() => {
-    if (workspace) void loadAssignments(workspace.id);
-  }, [workspace, loadAssignments]);
+    if (workspace) {
+      void loadAssignments(workspace.id);
+      if (definitions.length === 0) void loadDefinitions();
+    }
+  }, [workspace, loadAssignments, definitions.length, loadDefinitions]);
 
   const agentsInWorkspace = assignments.filter(
     (a) =>
@@ -82,7 +87,7 @@ export function MessageInput() {
   const selectMention = (agent: AgentAssignment) => {
     const before = text.slice(0, mentionStart);
     const after = text.slice(mentionStart + mentionQuery.length + 1);
-    const display = agent.botMatrixUserId?.split(':')[0]?.slice(1) ?? '';
+    const display = resolveBotName(agent.botMatrixUserId ?? '', botNameMap);
     const newText = `${before}@${display} ${after}`;
     setText(newText);
     setPendingMentions((prev) =>
@@ -92,10 +97,11 @@ export function MessageInput() {
   };
 
   const filteredAgents = mentionQuery
-    ? agentsInWorkspace.filter((a) => {
-        const name = a.botMatrixUserId?.split(':')[0]?.slice(1) ?? ''.toLowerCase();
-        return name.includes(mentionQuery.toLowerCase());
-      })
+    ? agentsInWorkspace.filter((a) =>
+        resolveBotName(a.botMatrixUserId ?? '', botNameMap)
+          .toLowerCase()
+          .includes(mentionQuery.toLowerCase()),
+      )
     : agentsInWorkspace;
 
   return (
@@ -104,7 +110,7 @@ export function MessageInput() {
         <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
           <div className="px-3 py-1 text-xs text-neutral-500">选择要 @ 的 agent</div>
           {filteredAgents.map((agent) => {
-            const displayName = agent.botMatrixUserId?.split(':')[0]?.slice(1) ?? '';
+            const displayName = resolveBotName(agent.botMatrixUserId ?? '', botNameMap);
             return (
               <button
                 key={agent.instanceId}
@@ -123,7 +129,7 @@ export function MessageInput() {
       {pendingMentions.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
           {pendingMentions.map((userId) => {
-            const name = userId?.split(':')[0]?.slice(1) ?? '';
+            const name = resolveBotName(userId, botNameMap);
             return (
               <button
                 key={userId}

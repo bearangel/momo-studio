@@ -2,10 +2,10 @@
 //
 // 消息流：读取当前激活 room 的消息列表，自动滚动到底部。
 // 空态分三种：未选 room / 加载中 / 无消息。
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useImStore } from '../../stores/im.store';
 import { useAuthStore } from '../../stores/auth.store';
-import { useAgentStore } from '../../stores/agent.store';
+import { useBotNameMap } from '../../lib/useBotNames';
 import { MessageBubble } from './MessageBubble';
 
 export function MessageList() {
@@ -15,20 +15,8 @@ export function MessageList() {
   );
   const loading = useImStore((s) => s.loading);
   const currentUserId = useAuthStore((s) => s.user?.userId ?? null);
-  const assignments = useAgentStore((s) => s.assignments);
-  const definitions = useAgentStore((s) => s.definitions);
+  const botNameByUserId = useBotNameMap();
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  // bot Matrix userId → 配置名称（assignments join definitions）
-  const botNameByUserId = useMemo(() => {
-    const defById = new Map(definitions.map((d) => [d.id, d]));
-    const m = new Map<string, string>();
-    for (const a of assignments) {
-      const def = defById.get(a.agentDefinitionId);
-      if (def) m.set(a.botMatrixUserId, def.name);
-    }
-    return m;
-  }, [assignments, definitions]);
 
   // 消息列表变化时滚动到底部
   useEffect(() => {
