@@ -177,16 +177,36 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
 /**
  * 删除 agent 分配：停止运行 → 让 bot 离开所有房间（避免成员列表残留）→
  * 删 bot token → 清空悬空 coordinator 引用 → 删 assignment 行。
+ * 若删除的是 main agent，则先级联删除同 workspace 内其全部 sub agent 分配
+ * （subDef.parentAgentId === mainDef.id），确保主子关系整体退出。
  * 导出供单测直接调用（绕过 ipcMain）。
  */
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
   stopAgent(instanceId);
   const row = getDb()
-    .prepare('SELECT bot_matrix_user_id, workspace_id FROM agent_assignments WHERE instance_id = ?')
-    .get(instanceId) as { bot_matrix_user_id?: string; workspace_id?: string } | undefined;
+    .prepare('SELECT bot_matrix_user_id, workspace_id, agent_definition_id FROM agent_assignments WHERE instance_id = ?')
+    .get(instanceId) as
+    | { bot_matrix_user_id?: string; workspace_id?: string; agent_definition_id?: string }
+    | undefined;
   if (!row) return;
   const botUserId = row.bot_matrix_user_id;
   const workspaceId = row.workspace_id;
+  const defId = row.agent_definition_id;
+
+  // 级联删除 main 时连带删除其同 workspace 内 parentAgentId 指向该 main 的全部 subs
+  if (defId && workspaceId) {
+    const def = getAgentDefinition(defId);
+    if (def?.type === 'main') {
+      const wsAssignments = listAssignments(workspaceId);
+      for (const subA of wsAssignments) {
+        if (subA.instanceId === instanceId) continue;
+        const subDef = getAgentDefinition(subA.agentDefinitionId);
+        if (subDef?.parentAgentId === defId) {
+          await removeAgentAssignment(subA.instanceId);
+        }
+      }
+    }
+  }
 
   if (botUserId) {
     await makeBotLeaveAllRooms(botUserId).catch((e) =>
