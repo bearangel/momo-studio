@@ -83,11 +83,10 @@ export function decideResponse(opts: {
   return 'skip';
 }
 
-/** 协调 agent 自动前置的 system prompt 引导 */
-const COORDINATOR_GUIDANCE = `你是本团队群的协调 agent。当群里收到没有明确指名 @ 的消息时，由你接待：
+/** 协调 agent 自动接待时的上下文提示（仅团队群无 @ 时注入用户消息前；直接 @ 时不注入） */
+const COORDINATOR_AUTO_RECEPTION_HINT = `[你是本群的协调 agent。这条消息没有指名 @ 任何人，由你自动接待：
 - 能自己回答的直接回答；
-- 需要专项能力时，用 dispatch:<子agent> 工具把子任务派给合适的子 agent，等其回传结果后汇总回复用户。
-- 不要对已经 @ 了别的 agent 的消息插嘴。`;
+- 需要专项能力时用 dispatch:<子agent> 工具把子任务派给合适的子 agent，等其回传结果后汇总回复。]`;
 
 /** runtime-manager 通过 AGENT_CONFIG 传入的完整配置 */
 interface RuntimeConfig {
@@ -332,10 +331,7 @@ async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContex
     }
   }
 
-  // 协调 agent 自动前置引导（见上方 COORDINATOR_GUIDANCE）
-  const basePrompt = config.isCoordinator
-    ? `${COORDINATOR_GUIDANCE}\n\n${config.systemPrompt}`
-    : config.systemPrompt;
+  const basePrompt = config.systemPrompt;
 
   // Layer 1 渐进式披露：把 skill 索引注入 system prompt
   const skillIndex = skillRegistry.getIndex();
@@ -453,8 +449,14 @@ async function handleEvent(
   });
   if (decision === 'skip') return;
 
+  // 协调 agent 自动接待（团队群无 @）时注入上下文提示；直接 @ 时用原始消息
+  const effectiveBody =
+    !mentioned && config.isCoordinator
+      ? `${COORDINATOR_AUTO_RECEPTION_HINT}\n\n${body}`
+      : body;
+
   try {
-    const reply = await runChatLoop(client, roomId, body, config, ctx);
+    const reply = await runChatLoop(client, roomId, effectiveBody, config, ctx);
     await client.sendEvent(
       roomId,
       'm.room.message',
