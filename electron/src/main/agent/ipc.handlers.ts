@@ -150,6 +150,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
       agentType: def.type,
       skills: resolveSkillSlugs(merged.skills),
       mcpNames: merged.mcps,
+      isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
     });
 
     results.push(assignment);
@@ -223,6 +224,7 @@ export function registerAgentHandlers(): void {
         agentType: def.type,
         skills: resolveSkillSlugs(merged.skills),
         mcpNames: merged.mcps,
+        isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       });
 
       logger.info('Agent 已添加到 workspace 并启动', {
@@ -391,6 +393,7 @@ export function registerAgentHandlers(): void {
         agentType: def.type,
         skills: resolveSkillSlugs(merged.skills),
         mcpNames: merged.mcps,
+        isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       });
 
       return { instanceId: assignment.instanceId };

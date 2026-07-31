@@ -96,6 +96,7 @@ export async function autoStartAgents(): Promise<void> {
         subAgents: [],
         skills: [],
         mcpNames: merged.mcps,
+        isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
       });
 
       started++;
