@@ -40,6 +40,40 @@ export function FileTree({ onSelectFile }: Props) {
         >
           折叠
         </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!workspace) return;
+            const name = window.prompt('新文件名（可含子目录，如 src/foo.ts）：', '');
+            if (!name?.trim()) return;
+            try {
+              await useFileStore.getState().createPath(workspace.id, name.trim(), 'file');
+            } catch (e) {
+              alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
+            }
+          }}
+          title="新建文件"
+          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+        >
+          📄＋
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!workspace) return;
+            const name = window.prompt('新目录名：', '');
+            if (!name?.trim()) return;
+            try {
+              await useFileStore.getState().createPath(workspace.id, name.trim(), 'dir');
+            } catch (e) {
+              alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
+            }
+          }}
+          title="新建文件夹"
+          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+        >
+          📁＋
+        </button>
       </div>
       <FileTreeView dirPath="." depth={0} onSelectFile={onSelectFile} />
     </div>
