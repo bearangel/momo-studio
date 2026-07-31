@@ -64,17 +64,22 @@ export type ResponseDecision = 'respond' | 'skip';
 /**
  * 决定本 agent 是否响应某条团队群消息。三路互斥，不重复响应（详见 v1.1 设计 3.4）：
  *   1. 明确 @ 我 → 响应（原有路径）
- *   2. 没人被 @ + 在团队群 + 我是协调 agent → 自动接待
- *   3. 其它（@ 了别人 / 非团队群 / 我不是协调） → 跳过
+ *   2. 没人被 @ + 在团队群 + 我是协调 agent + 发送者是 owner → 自动接待
+ *      （仅接待 owner 的无指名消息；子 agent 的直接回复没有 m.mentions，
+ *       若不限制会与"@ 别人不插嘴"冲突——协调会抢答子 agent 的回执）
+ *   3. 其它（@ 了别人 / 非团队群 / 我不是协调 / 非 owner 发送） → 跳过
  */
 export function decideResponse(opts: {
   mentioned: boolean;
   hasAnyMention: boolean;
   isTeamRoom: boolean;
   isCoordinator: boolean;
+  isOwnerMessage: boolean;
 }): ResponseDecision {
   if (opts.mentioned) return 'respond';
-  if (!opts.hasAnyMention && opts.isTeamRoom && opts.isCoordinator) return 'respond';
+  if (!opts.hasAnyMention && opts.isTeamRoom && opts.isCoordinator && opts.isOwnerMessage) {
+    return 'respond';
+  }
   return 'skip';
 }
 
@@ -424,12 +429,15 @@ async function handleEvent(
   const mentions = content['m.mentions'] as { user_ids?: string[] } | undefined;
   const mentioned = mentions?.user_ids?.includes(config.botUserId) ?? false;
   const hasAnyMention = (mentions?.user_ids?.length ?? 0) > 0;
-  // 三路互斥触发：@我 / 没人@且我是协调 / 否则跳过（详见 v1.1 设计 3.4）
+  // 仅对 owner 的无指名消息自动接待，不抢答子 agent 的直接回复（其消息无 m.mentions）
+  const isOwnerMessage = sender === config.ownerUserId;
+  // 三路互斥触发：@我 / 没人@且我是协调且是owner / 否则跳过（详见 v1.1 设计 3.4）
   const decision = decideResponse({
     mentioned,
     hasAnyMention,
     isTeamRoom: true, // handleEvent 顶部守卫已过滤，到此处 roomId 必为 teamRoomId
     isCoordinator: config.isCoordinator,
+    isOwnerMessage,
   });
   if (decision === 'skip') return;
 
