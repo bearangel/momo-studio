@@ -15,6 +15,7 @@ describe('workspace/types', () => {
       createdAt: '2026-01-01T00:00:00Z',
       ownerId: '@alice:localhost',
       iconEmoji: '📁',
+      coordinatorInstanceId: null,
     };
     expect(ws.id).toBe('test-id');
     expect(ws.name).toBe('测试工作空间');

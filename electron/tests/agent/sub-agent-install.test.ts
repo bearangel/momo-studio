@@ -94,6 +94,7 @@ const WORKSPACE: Workspace = {
   createdAt: '2026-07-28',
   ownerId: '@alice:localhost',
   iconEmoji: '📁',
+  coordinatorInstanceId: null,
 };
 
 function makeDef(overrides: Partial<AgentDefinition>): AgentDefinition {
