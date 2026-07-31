@@ -157,6 +157,16 @@ docs/
 - ✅ 文件 CRUD（新建 / 改名 / 删除 / 移动；走 WorkspaceFS 路径防御；editor tab 联动）
 - ✅ 团队群自动调度（主 agent 默认接待非 @ 消息；@ 别人/子 agent 回复不插嘴；复用主→子 dispatch）
 
+#### v1.2 功能补全
+
+- 🔲 **主/子 agent 编排 UI（委派调度）** — v1.1.1 测试发现：runtime 与 IPC 层已完整实现主→子 dispatch（`assignMainAgent` + `dispatch:<slug>` 工具），但**无 UI 入口**。当前所有经"添加 agent"创建的 agent 均为 `standalone`，无 dispatch 工具，协调 agent 无法把任务派给专项 agent。v1.2 需加 UI 指定某 agent 为 main、建立 `parentAgentId` 主子关系、经 `assignMain` 一次编排，让协调 agent 真正能委派。
+- 🔲 keychain slot helper 去重（`agent.<id>.llm_api_key` 的 `llmApiKeyRef` 与 `llmApiKeyStorageKey` 合并为一处）
+- 🔲 `stopRunningInstancesByDefinition` 实际停止分支补测（isAgentRunning=true 路径）
+- 🔲 `updateAgentDefinition` 的 modelBaseUrl undefined→'' 往返保真（写 NULL 而非空串）
+- 🔲 文件树折叠状态 localStorage 持久化（按 workspaceId）
+- 🔲 协调 agent 设定后可选自动重启（替代当前"手动停止+启动"）
+- 🔲 `setCoordinator` store 动作异常 catch + 文件 CRUD 操作 try/catch 一致化
+
 #### 基础设施项（推迟到 v1.2）
 
 - 🔲 `.gitignore` 裸 `docs` 条目清理
