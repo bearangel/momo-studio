@@ -15,6 +15,5 @@ resources/conduit/static-*
 !resources/conduit/download.ts
 .omo
 .pnpm-store
-docs
 .superpowers
 .devcontainer

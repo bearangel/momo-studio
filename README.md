@@ -160,22 +160,24 @@ docs/
 #### v1.2 功能补全
 
 - ✅ **主/子 agent 编排 UI（委派调度）** — v1.2 M3 实现完整编排：runtime subAgents 传递修复 + auto-start 重启重建 + slug→UUID 解析 + IPC 角色/父 agent 校验 + 编排视图（列表/编排切换，树形展示 main→sub 关系，添加子/解除/设为主操作）+ AddAgentDialog 角色选择 + main 定义子 agent 勾选 + AgentList 角色徽标分组 + 移除级联。
-- 🔲 keychain slot helper 去重（`agent.<id>.llm_api_key` 的 `llmApiKeyRef` 与 `llmApiKeyStorageKey` 合并为一处）
-- 🔲 `stopRunningInstancesByDefinition` 实际停止分支补测（isAgentRunning=true 路径）
-- 🔲 `updateAgentDefinition` 的 modelBaseUrl undefined→'' 往返保真（写 NULL 而非空串）
-- 🔲 文件树折叠状态 localStorage 持久化（按 workspaceId）
-- 🔲 协调 agent 设定后可选自动重启（替代当前"手动停止+启动"）
-- 🔲 `setCoordinator` store 动作异常 catch + 文件 CRUD 操作 try/catch 一致化
+- ✅ keychain slot helper 去重（`llmApiKeyRef` 统一使用）
+- ✅ `stopRunningInstancesByDefinition` 实际停止分支补测（isAgentRunning=true 路径）
+- ✅ `updateAgentDefinition` 的 modelBaseUrl 往返保真（写 NULL 而非空串）
+- ✅ 文件树折叠状态 localStorage 持久化
+- ✅ 协调 agent 设定后自动重启（不再提示手动操作）
+- ✅ `setCoordinator` store 动作异常 catch + 文件 CRUD 操作 try/catch 一致化
+- ✅ 编排视图 main 节点折叠/展开
+- ✅ assignMain 重复安装守卫 + 编排视图孤儿子 agent 可见性
 
 #### 基础设施项（推迟到 v1.2）
 
-- 🔲 `.gitignore` 裸 `docs` 条目清理
+- ✅ `.gitignore` 裸 `docs` 条目清理
 - 🔲 重启自动恢复 agent runtime（持久化运行状态）
 - 🔲 打包后 YAML/migration 路径适配（内置资源动态定位）
 - 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
 - 🔲 Windows 沙箱（AppContainer）
 - 🔲 macOS sandbox-exec 实测验证
-- 🔲 CHANGELOG.md + 版本号规范
+- ✅ CHANGELOG.md + 版本号规范
 
 ### v2.0 — 多人协作 + 进阶 Agent（设计中）
 
