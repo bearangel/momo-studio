@@ -38,9 +38,22 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
     );
   }
 
+  // 根目录（dirPath === '.'）渲染折叠头行：点击 toggleDir('.') 切换整棵树的显隐
+  const isRoot = dirPath === '.';
+
   return (
     <div>
-      {entries.map((entry) => {
+      {isRoot && (
+        <button
+          type="button"
+          onClick={() => toggleDir('.')}
+          className="w-full text-left py-1 text-xs uppercase tracking-wide text-neutral-500 hover:bg-bg-tertiary flex items-center gap-1 rounded"
+        >
+          <span>{expanded ? '▼' : '▶'}</span>
+          <span>工作区文件</span>
+        </button>
+      )}
+      {(!isRoot || expanded) && entries.map((entry) => {
         // 拼接全路径：根目录下直接用文件名，否则拼上父路径
         const fullPath = dirPath === '.' ? entry.name : `${dirPath}/${entry.name}`;
         const isSelected = selectedFile === fullPath;

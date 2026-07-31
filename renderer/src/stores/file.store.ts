@@ -18,6 +18,10 @@ interface FileState {
   toggleDir: (dirPath: string) => void;
   // 记录选中的文件
   selectFile: (filePath: string) => void;
+  // 折叠全部目录，回到仅根目录展开的初始状态
+  collapseAll: () => void;
+  // 失效指定目录缓存并重新拉取（刷新）
+  refreshDir: (workspaceId: string, dirPath: string) => Promise<void>;
 }
 
 export const useFileStore = create<FileState>((set) => ({
@@ -48,4 +52,21 @@ export const useFileStore = create<FileState>((set) => ({
   },
 
   selectFile: (filePath) => set({ selectedFile: filePath }),
+
+  collapseAll: () => set({ expandedDirs: new Set(['.']) }),
+
+  refreshDir: async (workspaceId, dirPath) => {
+    // 先失效缓存再重新加载，确保触发 UI 重渲染
+    set((state) => {
+      const tree = new Map(state.tree);
+      tree.delete(dirPath);
+      return { tree };
+    });
+    const entries = await ipc.file.list(workspaceId, dirPath);
+    set((state) => {
+      const tree = new Map(state.tree);
+      tree.set(dirPath, entries);
+      return { tree };
+    });
+  },
 }));
