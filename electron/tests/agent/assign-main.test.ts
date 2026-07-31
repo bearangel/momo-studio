@@ -13,7 +13,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import { saveAgentDefinition } from '../../src/main/agent/crud';
+import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
 
 // mock runtime-manager（捕获 spawnAgent 参数）。
@@ -180,5 +180,66 @@ describe('assignMainAgent', () => {
     await expect(
       assignMainAgent({ workspaceId: ws.id, mainDefId: 'main-dup', llmApiKey: 'k' }),
     ).rejects.toThrow('已安装');
+  });
+
+  it('已独立安装的 sub 不会被 assignMain 重复安装（I2）', async () => {
+    saveAgentDefinition({
+      id: 'main-i2', name: 'PM', slug: 'pm-i2', version: '1.0', type: 'main',
+      runtime: 'declarative', systemPrompt: '你是 PM',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'builtin', description: 'PM', iconEmoji: '📋',
+      defaultMcps: [], defaultSkills: [],
+    });
+    saveAgentDefinition({
+      id: 'sub-i2-a', name: 'Coder', slug: 'coder-i2', version: '1.0', type: 'sub',
+      runtime: 'declarative', systemPrompt: '你是程序员',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'builtin', description: '写代码', iconEmoji: '🔗',
+      parentAgentId: 'main-i2',
+      defaultMcps: [], defaultSkills: [],
+    });
+    saveAgentDefinition({
+      id: 'sub-i2-b', name: 'QA', slug: 'qa-i2', version: '1.0', type: 'sub',
+      runtime: 'declarative', systemPrompt: '你是测试',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'builtin', description: '测代码', iconEmoji: '🔗',
+      parentAgentId: 'main-i2',
+      defaultMcps: [], defaultSkills: [],
+    });
+
+    const ws = await createWorkspace(
+      { name: 'w-i2', description: '', directoryPath: path.join(tmpRoot, 'ws-i2'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t-i2:localhost',
+    );
+
+    // 预装 sub-i2-a（模拟用户之前独立安装过该 sub）
+    const preInstalled = assignAgentToWorkspace(ws.id, 'sub-i2-a', '@coder-i2-pre:localhost');
+
+    const { assignMainAgent } = await import('../../src/main/agent/ipc.handlers');
+    const results = await assignMainAgent({
+      workspaceId: ws.id,
+      mainDefId: 'main-i2',
+      llmApiKey: 'k',
+    });
+
+    // ★ I2 核心断言：main + sub-i2-b 被安装（2 个），sub-i2-a 被跳过（已存在）
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.agentDefinitionId)).toEqual(['main-i2', 'sub-i2-b']);
+
+    // main 的 subAgents 仍包含全部 subs（含预装的 sub-i2-a，因为 DB 里有它的 assignment）
+    const mainSpawn = spawnAgentMock.mock.calls.find(
+      (call: unknown[]) => (call[0] as { agentType?: string }).agentType === 'main',
+    );
+    expect(mainSpawn).toBeDefined();
+    const mainOpts = mainSpawn![0] as { subAgents?: Array<{ slug: string }> };
+    expect(mainOpts.subAgents).toHaveLength(2);
+    expect(mainOpts.subAgents!.map((s) => s.slug).sort()).toEqual(['coder-i2', 'qa-i2']);
+
+    // 预装的 assignment 仍然存在（未被覆盖）
+    const { listAssignments } = await import('../../src/main/agent/crud');
+    const wsAssignments = listAssignments(ws.id);
+    const coderAssignments = wsAssignments.filter((a) => a.agentDefinitionId === 'sub-i2-a');
+    expect(coderAssignments).toHaveLength(1);
+    expect(coderAssignments[0]!.instanceId).toBe(preInstalled.instanceId);
   });
 });

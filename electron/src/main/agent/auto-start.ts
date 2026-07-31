@@ -3,18 +3,15 @@
 // 应用启动时自动恢复已分配的 agent。
 // 读取所有 workspace 的 enabled agent assignment，
 // 从 keychain 恢复 API key 后 spawn runtime 子进程。
-// main agent 的 subAgents 从 DB 中的 definition parentAgentId 关系重建。
+// main agent 的 subAgents 由 buildSpawnOpts 从 DB 中的 definition parentAgentId 关系重建。
 
 import { getDb } from '../storage/db';
 import { getSecret } from '../storage/keychain';
 import { spawnAgent, isAgentRunning } from './runtime-manager';
-import { getAgentDefinition, listAssignments } from './crud';
+import { getAgentDefinition, listAssignments, llmApiKeyRef } from './crud';
 import { getWorkspace } from '../workspace/crud';
-import { getAllocation } from '../workspace/allocation';
-import { mergeCapabilities } from './capability-merger';
+import { buildSpawnOpts } from './spawn-helpers';
 import { logger } from '../logger';
-import type { AgentAssignment } from './types';
-import type { SubAgentRef } from './builtin-tools';
 
 interface AssignmentRow {
   instance_id: string;
@@ -22,31 +19,6 @@ interface AssignmentRow {
   agent_definition_id: string;
   bot_matrix_user_id: string;
   enabled: number;
-}
-
-/**
- * 为指定 workspace 内的 main agent 重建 subAgents 引用。
- * 遍历该 workspace 全部 assignment，找出 parentAgentId 指向该 main definition 的 sub assignment。
- */
-function rebuildSubAgents(
-  workspaceId: string,
-  mainDefId: string,
-  wsAssignments: AgentAssignment[],
-): SubAgentRef[] {
-  const subs: SubAgentRef[] = [];
-  for (const assignment of wsAssignments) {
-    if (assignment.instanceId === '') continue;
-    const subDef = getAgentDefinition(assignment.agentDefinitionId);
-    if (!subDef) continue;
-    if (subDef.parentAgentId === mainDefId) {
-      subs.push({
-        slug: subDef.slug,
-        botUserId: assignment.botMatrixUserId,
-        description: subDef.description,
-      });
-    }
-  }
-  return subs;
 }
 
 export async function autoStartAgents(): Promise<void> {
@@ -78,7 +50,7 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
-      const apiKey = await getSecret(`agent.${row.instance_id}.llm_api_key`);
+      const apiKey = await getSecret(llmApiKeyRef(row.instance_id));
       if (!apiKey) {
         logger.warn('Agent API key 丢失，跳过', { instanceId: row.instance_id });
         failed++;
@@ -92,42 +64,34 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
-      const allocation = getAllocation(row.workspace_id);
-      const merged = mergeCapabilities(def, allocation);
+      spawnAgent(
+        buildSpawnOpts({
+          instanceId: row.instance_id,
+          botUserId: row.bot_matrix_user_id,
+          workspaceId: row.workspace_id,
+          workspaceDir: ws.directoryPath,
+          teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+          ownerUserId: ws.ownerId,
+          def,
+          botAccessToken: token,
+          llmApiKey: apiKey,
+          isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
+        }),
+      );
 
-      // 为 main agent 从 DB 重建 subAgents（R2 修复）
-      let subAgents: SubAgentRef[] = [];
-      if (def.type === 'main') {
-        const wsAssignments = listAssignments(row.workspace_id);
-        subAgents = rebuildSubAgents(row.workspace_id, def.id, wsAssignments);
-      }
-
-      spawnAgent({
-        instanceId: row.instance_id,
-        workspaceId: row.workspace_id,
-        workspaceDir: ws.directoryPath,
-        botUserId: row.bot_matrix_user_id,
-        botAccessToken: token,
-        homeserverUrl: 'http://127.0.0.1:8008',
-        systemPrompt: def.systemPrompt,
-        modelProvider: def.model.provider,
-        modelName: def.model.model,
-        modelBaseUrl: def.model.baseUrl,
-        llmApiKey: apiKey,
-        teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
-        ownerUserId: ws.ownerId,
-        agentType: def.type,
-        subAgents,
-        skills: [],
-        mcpNames: merged.mcps,
-        isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
-      });
+      // main agent 的 sub 数量（日志用）
+      const subCount = def.type === 'main'
+        ? listAssignments(row.workspace_id).filter((a) => {
+            const subDef = getAgentDefinition(a.agentDefinitionId);
+            return subDef?.parentAgentId === def.id;
+          }).length
+        : 0;
 
       started++;
       logger.info('Agent 已自启动', {
         slug: def.slug,
         instanceId: row.instance_id,
-        subAgentCount: subAgents.length,
+        subAgentCount: subCount,
       });
     } catch (err) {
       failed++;

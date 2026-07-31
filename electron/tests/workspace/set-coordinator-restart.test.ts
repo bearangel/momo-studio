@@ -113,6 +113,40 @@ function makeStandaloneDef(): AgentDefinition {
   return def;
 }
 
+/**
+ * 构造 main + 2 个 sub 定义并落库，返回 main def。
+ * 用于测试协调重启路径下 main agent 的 subAgents 重建（C1）。
+ */
+function makeMainWithSubs(): AgentDefinition {
+  const main: AgentDefinition = {
+    id: 'main-coord', name: 'PM', slug: 'pm-coord', version: '1.0', type: 'main',
+    runtime: 'declarative', systemPrompt: '你是 PM',
+    model: { provider: 'openai', model: 'gpt-4o' },
+    defaultTools: [], source: 'custom', description: 'PM', iconEmoji: '📋',
+    defaultMcps: [], defaultSkills: [],
+  };
+  const sub1: AgentDefinition = {
+    id: 'sub-coord-1', name: 'Coder', slug: 'coder-coord', version: '1.0', type: 'sub',
+    runtime: 'declarative', systemPrompt: '写代码',
+    model: { provider: 'openai', model: 'gpt-4o' },
+    defaultTools: [], source: 'custom', description: 'coder', iconEmoji: '🔗',
+    parentAgentId: 'main-coord',
+    defaultMcps: [], defaultSkills: [],
+  };
+  const sub2: AgentDefinition = {
+    id: 'sub-coord-2', name: 'QA', slug: 'qa-coord', version: '1.0', type: 'sub',
+    runtime: 'declarative', systemPrompt: '测试',
+    model: { provider: 'openai', model: 'gpt-4o' },
+    defaultTools: [], source: 'custom', description: 'qa', iconEmoji: '🔗',
+    parentAgentId: 'main-coord',
+    defaultMcps: [], defaultSkills: [],
+  };
+  saveAgentDefinition(main);
+  saveAgentDefinition(sub1);
+  saveAgentDefinition(sub2);
+  return main;
+}
+
 describe('setCoordinator 自动重启', () => {
   it('实例运行中：设定协调后自动停止并以 isCoordinator=true 重启', async () => {
     const def = makeStandaloneDef();
@@ -197,5 +231,45 @@ describe('setCoordinator 自动重启', () => {
 
     expect(stopAgentMock).not.toHaveBeenCalled();
     expect(spawnAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('main agent 协调重启 → spawnAgent 收到正确的 subAgents（C1）', async () => {
+    const mainDef = makeMainWithSubs();
+    const ws = await createWorkspace(
+      {
+        name: 'w-main-coord',
+        description: '',
+        directoryPath: path.join(tmpRoot, 'ws-main-coord'),
+        iconEmoji: '📁',
+      },
+      '@o:localhost',
+      '!s-mc:localhost',
+      '!t-mc:localhost',
+    );
+
+    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@pm-coord:localhost');
+    assignAgentToWorkspace(ws.id, 'sub-coord-1', '@coder-coord:localhost');
+    assignAgentToWorkspace(ws.id, 'sub-coord-2', '@qa-coord:localhost');
+
+    memStore.set(`agent.${mainAssignment.instanceId}.llm_api_key`, 'llm-key');
+    memStore.set('bot.@pm-coord:localhost.matrix_token', 'mx-token');
+
+    isAgentRunningMock.mockImplementation(() => true);
+
+    const handler = handlers.get('workspace:setCoordinator')!;
+    await handler({}, ws.id, mainAssignment.instanceId);
+
+    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
+    const opts = spawnAgentMock.mock.calls[0]![0] as {
+      agentType?: string;
+      isCoordinator?: boolean;
+      subAgents?: Array<{ slug: string; botUserId: string }>;
+    };
+    expect(opts.agentType).toBe('main');
+    expect(opts.isCoordinator).toBe(true);
+    // ★ C1 核心断言：协调重启后 main 仍携带全部 subAgents
+    expect(opts.subAgents).toBeDefined();
+    expect(opts.subAgents).toHaveLength(2);
+    expect(opts.subAgents!.map((s) => s.slug).sort()).toEqual(['coder-coord', 'qa-coord']);
   });
 });

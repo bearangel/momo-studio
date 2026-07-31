@@ -7,7 +7,6 @@
 //   - agent:createFromYaml / list / assign / listAssignments —— 低层能力
 //   - agent:start / stop —— 单独控制已分配 agent 的启停
 import { ipcMain } from 'electron';
-import path from 'node:path';
 import { logger } from '../logger';
 import { parseAgentManifest } from './manifest-parser';
 import {
@@ -19,8 +18,6 @@ import {
   llmApiKeyRef,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
-import { getAllocation } from '../workspace/allocation';
-import { mergeCapabilities } from './capability-merger';
 import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
@@ -29,25 +26,8 @@ import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
 import { getSyncingClient } from '../matrix/sync-manager';
 import { createMatrixClient } from '../matrix/client';
-import { resolveSkillsDir } from '../paths';
+import { buildSpawnOpts, HOMESERVER_URL } from './spawn-helpers';
 import type { AgentAssignment } from './types';
-import type { RuntimeSkillRef, SubAgentRef } from './builtin-tools';
-
-// Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。
-const HOMESERVER_URL = 'http://127.0.0.1:8008';
-
-/**
- * 把 skill slug 列表解析成子进程可用的 RuntimeSkillRef。
- * cachePath 按 <userData>/skills/<slug> 约定解析；skill 包尚未安装时该路径可能不存在，
- * 子进程 SkillRegistry.register 会抛错并被 try/catch 跳过（不阻塞 agent 上线）。
- *
- * 接收 string[] 而非 SkillRef[]：T13 接线后入参来自 mergeCapabilities 的输出
- * （def.defaultSkills ∪ workspace allocation，已去重为 ref 字符串列表）。
- */
-function resolveSkillSlugs(slugs: string[]): RuntimeSkillRef[] {
-  const skillsDir = resolveSkillsDir();
-  return slugs.map((slug) => ({ slug, cachePath: path.join(skillsDir, slug) }));
-}
 
 /** agent:addToWorkspace 入参 */
 export interface AddToWorkspaceInput {
@@ -112,9 +92,14 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   // 查找全部归属该 main 的 sub agent 定义（parentAgentId 指向 main.id）
   const allSubDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
   // 按 selectedSubDefIds 过滤；undefined = 全部安装
-  const subDefs = selectedSubDefIds
+  const selectedSubDefs = selectedSubDefIds
     ? allSubDefs.filter((d) => selectedSubDefIds.includes(d.id))
     : allSubDefs;
+
+  // I2 修复：跳过已安装的 sub（避免重复分配同一个定义到 workspace）。
+  // 不抛错而是静默跳过——允许用户先独立安装某个 sub，再整体安装 main+subs。
+  const installedDefIds = new Set(existingAssignments.map((a) => a.agentDefinitionId));
+  const subDefs = selectedSubDefs.filter((d) => !installedDefIds.has(d.id));
 
   // Phase 1：注册 bot + 分配 + 邀请 + 存 key（先完成全部账号编排，收集每个 agent 的信息）。
   // 拆成两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId——
@@ -133,39 +118,23 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     installed.push({ def, assignment, bot });
   }
 
-  // 主 agent 名下的 sub 列表（构建 dispatch:<slug> 工具用）
-  const subAgents: SubAgentRef[] = installed
-    .filter((it) => it.def.type === 'sub')
-    .map((it) => ({ slug: it.def.slug, botUserId: it.bot.botUserId, description: it.def.description }));
-
-  // T13：合并三层能力（def 默认 ∪ workspace allocation），workspace 内所有 agent 共享。
-  // allocation 按 workspace 取一次（同一 workspace 内不变），在循环内按各 def 合并。
-  const allocation = getAllocation(workspaceId);
-
-  // Phase 2：启动 runtime。main 携带 subAgents；其余 agent 的 subAgents 为空。
+  // Phase 2：启动 runtime。buildSpawnOpts 内部为 main agent 从 DB 重建 subAgents。
   const results: AgentAssignment[] = [];
   for (const { def, assignment, bot } of installed) {
-    const merged = mergeCapabilities(def, allocation);
-    spawnAgent({
-      instanceId: assignment.instanceId,
-      workspaceId,
-      workspaceDir: workspace.directoryPath,
-      botUserId: bot.botUserId,
-      botAccessToken: bot.botAccessToken,
-      homeserverUrl: HOMESERVER_URL,
-      systemPrompt: def.systemPrompt,
-      modelProvider: def.model.provider,
-      modelName: def.model.model,
-      modelBaseUrl: def.model.baseUrl,
-      llmApiKey,
-      teamRoomId: workspace.teamRoomId,
-      ownerUserId: workspace.ownerId,
-      agentType: def.type,
-      subAgents: def.type === 'main' ? subAgents : [],
-      skills: resolveSkillSlugs(merged.skills),
-      mcpNames: merged.mcps,
-      isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
-    });
+    spawnAgent(
+      buildSpawnOpts({
+        instanceId: assignment.instanceId,
+        botUserId: bot.botUserId,
+        workspaceId,
+        workspaceDir: workspace.directoryPath,
+        teamRoomId: workspace.teamRoomId!,
+        ownerUserId: workspace.ownerId,
+        def,
+        botAccessToken: bot.botAccessToken,
+        llmApiKey,
+        isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
+      }),
+    );
 
     results.push(assignment);
   }
@@ -290,30 +259,21 @@ export function registerAgentHandlers(): void {
       // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
       await setSecret(llmApiKeyRef(assignment.instanceId), llmApiKey);
 
-      // 5. 合并三层能力（T13）：def 默认 ∪ workspace allocation，去重后传给 runtime
-      const allocation = getAllocation(workspaceId);
-      const merged = mergeCapabilities(def, allocation);
-
-      // 6. 启动 runtime 子进程
-      spawnAgent({
-        instanceId: assignment.instanceId,
-        workspaceId,
-        workspaceDir: workspace.directoryPath,
-        botUserId: bot.botUserId,
-        botAccessToken: bot.botAccessToken,
-        homeserverUrl: HOMESERVER_URL,
-        systemPrompt: def.systemPrompt,
-        modelProvider: def.model.provider,
-        modelName: def.model.model,
-        modelBaseUrl: def.model.baseUrl,
-        llmApiKey,
-        teamRoomId: workspace.teamRoomId,
-        ownerUserId: workspace.ownerId,
-        agentType: def.type,
-        skills: resolveSkillSlugs(merged.skills),
-        mcpNames: merged.mcps,
-        isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
-      });
+      // 5. 启动 runtime 子进程（buildSpawnOpts 内部合并三层能力 + 为 main 重建 subAgents）
+      spawnAgent(
+        buildSpawnOpts({
+          instanceId: assignment.instanceId,
+          botUserId: bot.botUserId,
+          workspaceId,
+          workspaceDir: workspace.directoryPath,
+          teamRoomId: workspace.teamRoomId,
+          ownerUserId: workspace.ownerId,
+          def,
+          botAccessToken: bot.botAccessToken,
+          llmApiKey,
+          isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
+        }),
+      );
 
       logger.info('Agent 已添加到 workspace 并启动', {
         slug: def.slug,
@@ -539,29 +499,20 @@ export function registerAgentHandlers(): void {
         throw new Error('LLM API key 丢失，请重新添加 agent');
       }
 
-      // T13：重启时同样合并三层能力（def 默认 ∪ workspace allocation）
-      const allocation = getAllocation(workspaceId);
-      const merged = mergeCapabilities(def, allocation);
-
-      spawnAgent({
-        instanceId: assignment.instanceId,
-        workspaceId,
-        workspaceDir: workspace.directoryPath,
-        botUserId: assignment.botMatrixUserId,
-        botAccessToken,
-        homeserverUrl: HOMESERVER_URL,
-        systemPrompt: def.systemPrompt,
-        modelProvider: def.model.provider,
-        modelName: def.model.model,
-        modelBaseUrl: def.model.baseUrl,
-        llmApiKey,
-        teamRoomId,
-        ownerUserId: workspace.ownerId,
-        agentType: def.type,
-        skills: resolveSkillSlugs(merged.skills),
-        mcpNames: merged.mcps,
-        isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
-      });
+      spawnAgent(
+        buildSpawnOpts({
+          instanceId: assignment.instanceId,
+          botUserId: assignment.botMatrixUserId,
+          workspaceId,
+          workspaceDir: workspace.directoryPath,
+          teamRoomId,
+          ownerUserId: workspace.ownerId,
+          def,
+          botAccessToken,
+          llmApiKey,
+          isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
+        }),
+      );
 
       return { instanceId: assignment.instanceId };
     },
