@@ -215,6 +215,15 @@ CREATE TABLE IF NOT EXISTS model_providers (
 );
 `.trim(),
   },
+  {
+    version: 11,
+    sql: `
+-- coordinator_instance_id：workspace 的"协调 agent"实例 ID。
+-- NULL = 未指定（保持 v1.0 行为：团队群消息必须 @）；非空 = 该 assignment 的 instanceId，
+-- 团队群里没有 @ 的消息由该实例自动接待（详见 v1.1 设计 3.4）。nullable，无 DEFAULT。
+ALTER TABLE workspaces ADD COLUMN coordinator_instance_id TEXT;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

@@ -79,4 +79,11 @@ describe('storage/db', () => {
     const cols = db.prepare('PRAGMA table_info(model_providers)').all() as { name: string }[];
     expect(cols.map((c) => c.name)).toContain('is_default');
   });
+
+  it('runMigrations 给 workspaces 加 coordinator_instance_id 列（migration v11）', () => {
+    runMigrations();
+    const db = getDb();
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain('coordinator_instance_id');
+  });
 });
