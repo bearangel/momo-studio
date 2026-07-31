@@ -73,6 +73,7 @@ describe('workspace.store', () => {
     await expect(useWorkspaceStore.getState().setCoordinator('ws-1', 'inst-1')).rejects.toBe(
       error,
     );
+    expect(mockApi.workspace.setCoordinator).toHaveBeenCalledWith('ws-1', 'inst-1');
     expect(useWorkspaceStore.getState().error).toBe('刷新工作区失败');
   });
 

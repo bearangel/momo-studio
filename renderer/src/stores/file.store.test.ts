@@ -72,6 +72,17 @@ describe('file.store CRUD', () => {
     expect(mockApi.file.list).not.toHaveBeenCalled();
   });
 
+  it('createPath 刷新失败时抛错并写入 error', async () => {
+    const error = new Error('刷新失败');
+    mockApi.file.list.mockRejectedValue(error);
+
+    await expect(useFileStore.getState().createPath('ws-1', 'src/foo.ts', 'file')).rejects.toBe(
+      error,
+    );
+
+    expect(useFileStore.getState().error).toBe('刷新失败');
+  });
+
   it('deletePath 调用 IPC、清除旧 error 并刷新父目录缓存', async () => {
     useFileStore.setState({ error: '旧错误' });
     const { deletePath } = useFileStore.getState();
@@ -91,6 +102,15 @@ describe('file.store CRUD', () => {
 
     expect(useFileStore.getState().error).toBe('删除失败');
     expect(mockApi.file.list).not.toHaveBeenCalled();
+  });
+
+  it('deletePath 刷新失败时抛错并写入 error', async () => {
+    const error = new Error('刷新失败');
+    mockApi.file.list.mockRejectedValue(error);
+
+    await expect(useFileStore.getState().deletePath('ws-1', 'src/foo.ts')).rejects.toBe(error);
+
+    expect(useFileStore.getState().error).toBe('刷新失败');
   });
 
   it('renamePath 同目录改名只刷新一次父目录并清除旧 error', async () => {
@@ -130,6 +150,17 @@ describe('file.store CRUD', () => {
     expect(useFileStore.getState().error).toBe('重命名失败');
     expect(mockApi.file.list).not.toHaveBeenCalled();
   });
+
+  it('renamePath 刷新失败时抛错并写入 error', async () => {
+    const error = new Error('刷新失败');
+    mockApi.file.list.mockRejectedValue(error);
+
+    await expect(
+      useFileStore.getState().renamePath('ws-1', 'src/a.ts', 'src/b.ts'),
+    ).rejects.toBe(error);
+
+    expect(useFileStore.getState().error).toBe('刷新失败');
+  });
 });
 
 describe('file.store expandedDirs 持久化', () => {
@@ -138,6 +169,19 @@ describe('file.store expandedDirs 持久化', () => {
 
     expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
     expect(localStorage.getItem('fileTree.expandedDirs')).toBe('[".","src"]');
+  });
+
+  it('toggleDir 在 localStorage 写入失败时仍更新内存状态', () => {
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('QuotaExceededError');
+      });
+
+    useFileStore.getState().toggleDir('src');
+
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
+    setItemSpy.mockRestore();
   });
 
   it('collapseAll 持久化仅展开根目录', () => {
