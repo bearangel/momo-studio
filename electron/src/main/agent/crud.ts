@@ -6,7 +6,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
+import { setSecret } from '../storage/keychain';
 import { logger } from '../logger';
+import { isAgentRunning, stopAgent } from './runtime-manager';
 import type { AgentDefinition, AgentAssignment, ToolRef } from './types';
 
 /** agent_definitions 行的弱类型映射，仅用于 DB 读写边界 */
@@ -154,4 +156,75 @@ export function listAssignments(workspaceId: string): AgentAssignment[] {
     .prepare('SELECT * FROM agent_assignments WHERE workspace_id = ?')
     .all(workspaceId) as AgentAssignmentRow[];
   return rows.map(rowToAssignment);
+}
+
+/** keychain 引用 key：agent.<instanceId>.llm_api_key（与 ipc.handlers 一致） */
+export function llmApiKeyRef(instanceId: string): string {
+  return `agent.${instanceId}.llm_api_key`;
+}
+
+/**
+ * 更新 agent 定义（定义层字段，不含 apiKey）。详见 v1.1 设计 3.1。
+ * slug 只读（身份标识），不在此函数可改字段内。
+ */
+export function updateAgentDefinition(input: {
+  id: string;
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  modelProvider?: string;
+  modelName?: string;
+  modelBaseUrl?: string;
+  iconEmoji?: string;
+}): AgentDefinition {
+  const existing = getAgentDefinition(input.id);
+  if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
+  const db = getDb();
+  // model 三字段合并更新
+  const newProvider = input.modelProvider ?? existing.model.provider;
+  const newModel = input.modelName ?? existing.model.model;
+  const newBaseUrl = input.modelBaseUrl !== undefined ? input.modelBaseUrl : (existing.model.baseUrl ?? '');
+  db.prepare(
+    `UPDATE agent_definitions SET
+       name = ?, description = ?, system_prompt = ?,
+       model_provider = ?, model_name = ?, model_base_url = ?,
+       icon_emoji = ?
+     WHERE id = ?`,
+  ).run(
+    input.name ?? existing.name,
+    input.description ?? existing.description,
+    input.systemPrompt ?? existing.systemPrompt,
+    newProvider,
+    newModel,
+    newBaseUrl,
+    input.iconEmoji ?? existing.iconEmoji,
+    input.id,
+  );
+  return getAgentDefinition(input.id)!;
+}
+
+/** 列出某定义的全部 assignment instanceId（调用方再按 isAgentRunning 过滤） */
+export function listRunningInstanceIdsByDefinition(definitionId: string): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT instance_id FROM agent_assignments WHERE agent_definition_id = ?')
+    .all(definitionId) as { instance_id: string }[];
+  return rows.map((r) => r.instance_id);
+}
+
+/** 更新实例的 LLM apiKey（写入 keychain 槽 agent.<instanceId>.llm_api_key） */
+export async function updateAgentApiKey(instanceId: string, newKey: string): Promise<void> {
+  await setSecret(llmApiKeyRef(instanceId), newKey);
+}
+
+/** 停止某定义的全部运行中实例（编辑 def 后调用，让用户手动重启应用新配置） */
+export function stopRunningInstancesByDefinition(definitionId: string): string[] {
+  const stopped: string[] = [];
+  for (const instanceId of listRunningInstanceIdsByDefinition(definitionId)) {
+    if (isAgentRunning(instanceId)) {
+      stopAgent(instanceId);
+      stopped.push(instanceId);
+    }
+  }
+  return stopped;
 }
