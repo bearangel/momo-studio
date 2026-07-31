@@ -5,7 +5,7 @@
 // IPC 约定：通过 globalThis.window.api 提供桩（与 Onboarding/AddAgentDialog 测试一致），
 // 不直接 vi.mock('../../ipc/client')。stores 用 vi.mock 做组件级隔离。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { AgentDefinition, AgentAssignment } from '../../ipc/types';
 
 // 测试用 agent 定义：1 个 main（PM）+ 1 个 sub（Coder，挂在 PM 下）+ 1 个 standalone（Helper）
@@ -72,5 +72,26 @@ describe('AgentOrchestrator', () => {
     expect(screen.getByText('[main]')).toBeDefined();
     // standalone 有 [设为主 agent] 按钮
     expect(screen.getByText('设为主 agent')).toBeDefined();
+  });
+
+  it('main 节点默认展开（▾），子节点可见', () => {
+    render(<AgentOrchestrator />);
+    expect(screen.getByRole('button', { name: '▾' })).toBeDefined();
+    expect(screen.getByText('Coder')).toBeDefined();
+  });
+
+  it('点击折叠按钮后隐藏子节点并切换为 ▸，再点恢复', () => {
+    render(<AgentOrchestrator />);
+    const toggle = screen.getByRole('button', { name: '▾' });
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: '▸' })).toBeDefined();
+    expect(screen.queryByText('Coder')).toBeNull();
+    expect(screen.queryByText('+ 添加子 agent')).toBeNull();
+
+    // 折叠后原按钮 DOM 已被新状态替换，需重新查询
+    fireEvent.click(screen.getByRole('button', { name: '▸' }));
+    expect(screen.getByRole('button', { name: '▾' })).toBeDefined();
+    expect(screen.getByText('Coder')).toBeDefined();
   });
 });

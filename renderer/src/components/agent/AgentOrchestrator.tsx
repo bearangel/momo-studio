@@ -12,6 +12,7 @@ export function AgentOrchestrator() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { assignments, definitions, running, loadAssignments } = useAgentStore();
   const [pickingParentFor, setPickingParentFor] = useState<string | null>(null);
+  const [collapsedMains, setCollapsedMains] = useState<Set<string>>(new Set());
 
   const defMap = new Map(definitions.map((d) => [d.id, d]));
 
@@ -93,12 +94,25 @@ export function AgentOrchestrator() {
                 <span className="text-xl">📋</span>
                 <span className="text-sm text-neutral-100 flex-1">{mainDef.name}</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">[main]</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new Set(collapsedMains);
+                    if (next.has(mainDef.id)) next.delete(mainDef.id);
+                    else next.add(mainDef.id);
+                    setCollapsedMains(next);
+                  }}
+                  className="text-xs text-neutral-400 hover:text-neutral-200"
+                >
+                  {collapsedMains.has(mainDef.id) ? '▸' : '▾'}
+                </button>
                 <span className={'text-xs px-2 py-0.5 rounded-full ' +
                   (running[mainA.instanceId] ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
                   {running[mainA.instanceId] ? '运行中' : '已停止'}
                 </span>
               </div>
-              {/* 子节点 */}
+              {/* 子节点（折叠时隐藏） */}
+              {!collapsedMains.has(mainDef.id) && (
               <ul className="flex flex-col gap-1 ml-6">
                 {subs.map((subA) => {
                   const subDef = defMap.get(subA.agentDefinitionId);
@@ -150,6 +164,7 @@ export function AgentOrchestrator() {
                   </li>
                 )}
               </ul>
+              )}
             </li>
           );
         })}
