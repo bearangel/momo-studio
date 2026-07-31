@@ -13,6 +13,7 @@ import { startConduit } from '../conduit/manager';
 import { createMatrixClient } from '../matrix/client';
 import { setSecret, getSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
+import { stopSync } from '../matrix/sync-manager';
 import { logger } from '../logger';
 
 // Constructed once at module load. Each field delegates to the existing module
@@ -45,6 +46,8 @@ export function registerAuthHandlers(): void {
   });
   ipcMain.handle('auth:logout', async () => {
     await logoutFlow(deps);
+    // 登出后停止 /sync，避免 getSyncingClient() 继续暴露已撤销 token 的 client
+    await stopSync();
     return;
   });
   logger.info('Auth IPC handlers registered');

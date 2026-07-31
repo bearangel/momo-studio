@@ -11,6 +11,8 @@ interface ProviderState {
   updateProvider: (input: { id: string; name?: string; baseUrl?: string; apiKey?: string; defaultModel?: string; isDefault?: boolean }) => Promise<void>;
   deleteProvider: (id: string) => Promise<void>;
   setDefault: (id: string) => Promise<void>;
+  /** 清空供应商列表（登出时调用） */
+  clear: () => void;
 }
 
 export const useProviderStore = create<ProviderState>((set) => ({
@@ -41,4 +43,5 @@ export const useProviderStore = create<ProviderState>((set) => ({
     const providers = await ipc.provider.list();
     set({ providers });
   },
+  clear: () => set({ providers: [], loading: false }),
 }));

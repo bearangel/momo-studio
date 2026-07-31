@@ -11,6 +11,7 @@ export function RoomList() {
   const activeRoomId = useImStore((s) => s.activeRoomId);
   const selectRoom = useImStore((s) => s.selectRoom);
   const loadRooms = useImStore((s) => s.loadRooms);
+  const refreshRoomList = useImStore((s) => s.refreshRoomList);
   const loading = useImStore((s) => s.loading);
 
   // 新建房间对话框状态 + 邀请候选（当前 workspace 内启用的 agent bot）
@@ -28,7 +29,7 @@ export function RoomList() {
     const name = prompt('新房间名', oldName);
     if (name && name.trim() && name !== oldName) {
       await ipc.im.renameRoom(roomId, name.trim());
-      await loadRooms();
+      refreshRoomList();
     }
   };
 
@@ -37,7 +38,7 @@ export function RoomList() {
     try {
       const r = await ipc.im.dissolveRoom(roomId);
       if (!r.dissolved) alert('部分成员凭证丢失，已退出但未完全解散');
-      await loadRooms();
+      refreshRoomList();
     } catch (err) {
       alert(`解散失败：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -138,7 +139,7 @@ export function RoomList() {
       <CreateRoomDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={() => void loadRooms()}
+        onCreated={() => refreshRoomList()}
         inviteCandidates={inviteCandidates}
       />
     </div>

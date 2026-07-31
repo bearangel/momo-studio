@@ -18,6 +18,8 @@ interface ImState {
 
   /** 拉取房间列表，默认激活第一个房间并加载其消息 */
   loadRooms: () => Promise<void>;
+  /** 房间列表刷新：立即拉一次 + 延迟再拉一次（兜底 /sync 延迟，避免 create/rename/dissolve 后列表陈旧） */
+  refreshRoomList: () => void;
   /** 切换激活房间并加载该房间历史消息与成员 */
   selectRoom: (roomId: string) => Promise<void>;
   /** 拉取指定房间成员列表（含身份标识） */
@@ -50,6 +52,14 @@ export const useImStore = create<ImState>((set, get) => ({
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
     }
+  },
+
+  // 房间列表刷新：立即拉一次 + 延迟再拉一次（兜底 /sync 延迟，避免 create/rename/dissolve 后列表陈旧）
+  refreshRoomList: () => {
+    void get().loadRooms();
+    setTimeout(() => {
+      void get().loadRooms();
+    }, 1000);
   },
 
   selectRoom: async (roomId) => {

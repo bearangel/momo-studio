@@ -2,6 +2,8 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { AuthResult } from '../ipc/types';
+import { useImStore } from './im.store';
+import { useProviderStore } from './provider.store';
 
 export type AuthStatus = 'unknown' | 'unauthenticated' | 'authenticated';
 
@@ -62,6 +64,9 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     await ipc.auth.logout();
+    // 登出时清空会话相关状态，避免下一个登录用户看到上个用户的房间/成员/供应商
+    useImStore.getState().reset();
+    useProviderStore.getState().clear();
     set({ status: 'unauthenticated', user: null });
   },
 
