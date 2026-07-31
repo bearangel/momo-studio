@@ -116,3 +116,50 @@ describe('updateAgentApiKey', () => {
     expect(memStore.get(`agent.${assignment.instanceId}.llm_api_key`)).toBe('new-secret');
   });
 });
+
+describe('updateAgentDefinition — type + parentAgentId', () => {
+  it('更新 type 为 main', () => {
+    sampleDef(); // def-1 是 standalone
+    const updated = updateAgentDefinition({ id: 'def-1', type: 'main' });
+    expect(updated.type).toBe('main');
+  });
+
+  it('更新 type 为 sub 并设 parentAgentId', () => {
+    // 先创建 main def
+    saveAgentDefinition({
+      id: 'main-def', name: 'Main', slug: 'main-def', version: '1.0', type: 'main',
+      runtime: 'declarative', systemPrompt: 'p',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
+      defaultMcps: [], defaultSkills: [],
+    });
+    sampleDef(); // def-1 是 standalone
+    const updated = updateAgentDefinition({ id: 'def-1', type: 'sub', parentAgentId: 'main-def' });
+    expect(updated.type).toBe('sub');
+    expect(updated.parentAgentId).toBe('main-def');
+  });
+
+  it('更新 type 为 standalone 时清除 parentAgentId', () => {
+    // 先把 def-1 设为 sub
+    saveAgentDefinition({
+      id: 'main-def', name: 'Main', slug: 'main-def', version: '1.0', type: 'main',
+      runtime: 'declarative', systemPrompt: 'p',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
+      defaultMcps: [], defaultSkills: [],
+    });
+    sampleDef();
+    updateAgentDefinition({ id: 'def-1', type: 'sub', parentAgentId: 'main-def' });
+    // 再改回 standalone
+    const updated = updateAgentDefinition({ id: 'def-1', type: 'standalone' });
+    expect(updated.type).toBe('standalone');
+    expect(updated.parentAgentId).toBeUndefined();
+  });
+
+  it('不传 type 时保留原 type', () => {
+    sampleDef();
+    updateAgentDefinition({ id: 'def-1', type: 'main' });
+    const updated = updateAgentDefinition({ id: 'def-1', name: '新名' });
+    expect(updated.type).toBe('main');
+  });
+});

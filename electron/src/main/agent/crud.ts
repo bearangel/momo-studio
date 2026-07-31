@@ -166,6 +166,8 @@ export function llmApiKeyRef(instanceId: string): string {
 /**
  * 更新 agent 定义（定义层字段，不含 apiKey）。详见 v1.1 设计 3.1。
  * slug 只读（身份标识），不在此函数可改字段内。
+ * v1.2 扩展：支持 type（standalone/main/sub）与 parentAgentId 字段，
+ * 子类型（sub）必须挂父 agent；standalone/main 改写时自动清空 parentAgentId。
  */
 export function updateAgentDefinition(input: {
   id: string;
@@ -176,6 +178,8 @@ export function updateAgentDefinition(input: {
   modelName?: string;
   modelBaseUrl?: string;
   iconEmoji?: string;
+  type?: 'standalone' | 'main' | 'sub';
+  parentAgentId?: string;
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
@@ -184,11 +188,18 @@ export function updateAgentDefinition(input: {
   const newProvider = input.modelProvider ?? existing.model.provider;
   const newModel = input.modelName ?? existing.model.model;
   const newBaseUrl = input.modelBaseUrl !== undefined ? input.modelBaseUrl : (existing.model.baseUrl ?? '');
+  // type 与 parentAgentId 合并更新：
+  // 不传 type 则保留原值；传 standalone/main 时清空 parentAgentId；
+  // 传 sub 时若显式给 parentAgentId 则覆盖，否则保留原值。
+  const newType = input.type ?? existing.type;
+  const newParentAgentId = newType === 'sub'
+    ? (input.parentAgentId !== undefined ? input.parentAgentId : existing.parentAgentId)
+    : undefined;
   db.prepare(
     `UPDATE agent_definitions SET
        name = ?, description = ?, system_prompt = ?,
        model_provider = ?, model_name = ?, model_base_url = ?,
-       icon_emoji = ?
+       icon_emoji = ?, type = ?, parent_agent_id = ?
      WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
@@ -198,6 +209,8 @@ export function updateAgentDefinition(input: {
     newModel,
     newBaseUrl,
     input.iconEmoji ?? existing.iconEmoji,
+    newType,
+    newParentAgentId ?? null,
     input.id,
   );
   return getAgentDefinition(input.id)!;
