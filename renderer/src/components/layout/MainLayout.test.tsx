@@ -32,6 +32,10 @@ const mockApi = {
     getMessages: vi.fn().mockResolvedValue([]),
     onMessage: vi.fn().mockReturnValue(() => {}),
   },
+  agent: {
+    onRuntimeChanged: vi.fn().mockReturnValue(() => {}),
+    isRunning: vi.fn().mockResolvedValue(false),
+  },
 };
 
 describe('MainLayout', () => {

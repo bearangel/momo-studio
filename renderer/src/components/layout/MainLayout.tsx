@@ -6,10 +6,12 @@ import { LeftRail } from './LeftRail';
 import { MiddlePanel } from './MiddlePanel';
 import { ipc } from '../../ipc/client';
 import { useImStore } from '../../stores/im.store';
+import { useAgentStore } from '../../stores/agent.store';
 
 export function MainLayout() {
   const loadRooms = useImStore((s) => s.loadRooms);
   const receiveMessage = useImStore((s) => s.receiveMessage);
+  const syncRunningStates = useAgentStore((s) => s.syncRunningStates);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +34,15 @@ export function MainLayout() {
       cleanup();
     };
   }, [loadRooms, receiveMessage]);
+
+  // 主进程在 agent 运行态变化（自动恢复完成/启停）时通知，重新同步 running，
+  // 修复首次启动时 @ 候选为空（renderer 首次同步早于 autoStartAgents 完成）
+  useEffect(() => {
+    const cleanup = ipc.agent.onRuntimeChanged(() => {
+      void syncRunningStates();
+    });
+    return cleanup;
+  }, [syncRunningStates]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg-primary">

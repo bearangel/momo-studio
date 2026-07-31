@@ -88,6 +88,12 @@ function pushMessage(msg: MatrixMessagePayload): void {
   mainWindow.webContents.send('im:message', msg);
 }
 
+/** 通知 renderer：agent 运行态变化（启动/停止/自动恢复完成），让其重新同步 running 状态 */
+export function broadcastRuntimeChanged(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('agent:runtimeChanged');
+}
+
 /**
  * 启动 Matrix /sync。等待初始同步完成（SyncState.Prepared）后注册事件监听。
  * 幂等：若已有 client 在运行则直接返回。

@@ -13,6 +13,7 @@ export function MessageInput() {
   const [mentionStart, setMentionStart] = useState(-1);
   const [pendingMentions, setPendingMentions] = useState<string[]>([]);
   const activeRoomId = useImStore((s) => s.activeRoomId);
+  const members = useImStore((s) => s.members);
   const sendMessage = useImStore((s) => s.sendMessage);
   const loadRooms = useImStore((s) => s.loadRooms);
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -22,7 +23,12 @@ export function MessageInput() {
     if (workspace) void loadAssignments(workspace.id);
   }, [workspace, loadAssignments]);
 
-  const agentsInWorkspace = assignments.filter((a) => a.enabled && running[a.instanceId] === true);
+  const agentsInWorkspace = assignments.filter(
+    (a) =>
+      a.enabled &&
+      running[a.instanceId] === true &&
+      members.some((m) => m.userId === a.botMatrixUserId),
+  );
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();

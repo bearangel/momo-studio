@@ -4,7 +4,7 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
-import { setMainWindow, stopSync, startSyncFromSession } from './matrix/sync-manager';
+import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
 import { autoStartAgents } from './agent/auto-start';
 import { logger } from './logger';
 
@@ -55,6 +55,8 @@ async function autoRestoreSession(): Promise<void> {
     logger.info('Session restored: Matrix sync started');
     await autoStartAgents();
     logger.info('Session restore complete: agents auto-started');
+    // 通知 renderer 重新同步 running（renderer 首次同步可能早于 autoStartAgents 完成，导致 @ 候选为空）
+    broadcastRuntimeChanged();
   } catch (err) {
     logger.info('No active session or restore failed', {
       error: err instanceof Error ? err.message : String(err),

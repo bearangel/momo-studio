@@ -315,6 +315,7 @@ export interface ApiSurface {
       iconEmoji?: string;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
     updateApiKey(instanceId: string, apiKey: string): Promise<{ ok: boolean }>;
+    onRuntimeChanged(callback: () => void): () => void;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

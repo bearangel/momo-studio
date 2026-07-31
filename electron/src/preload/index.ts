@@ -48,6 +48,13 @@ const api: ApiSurface = {
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
     updateDefinition: (input) => invoke('agent:updateDefinition', input),
     updateApiKey: (instanceId, apiKey) => invoke('agent:updateApiKey', instanceId, apiKey),
+    onRuntimeChanged: (callback) => {
+      const handler = (): void => callback();
+      ipcRenderer.on('agent:runtimeChanged', handler);
+      return () => {
+        ipcRenderer.off('agent:runtimeChanged', handler);
+      };
+    },
   },
   provider: {
     list: () => invoke('provider:list'),
