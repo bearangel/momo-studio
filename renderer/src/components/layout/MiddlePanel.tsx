@@ -5,12 +5,14 @@ import { useCallback, useState } from 'react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
+import { useImStore } from '../../stores/im.store';
 import { ipc } from '../../ipc/client';
 import { FileTree } from '../files/FileTree';
 import { CodeEditor } from '../editor/CodeEditor';
 import { RoomList } from '../im/RoomList';
 import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
+import { MembersPanel } from '../im/MembersPanel';
 import { AgentList } from '../agent/AgentList';
 import { AddAgentDialog } from '../agent/AddAgentDialog';
 import { SettingsView } from '../settings/SettingsView';
@@ -20,6 +22,7 @@ export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
+  const activeRoomId = useImStore((s) => s.activeRoomId);
   const [showAddAgent, setShowAddAgent] = useState(false);
 
   // 点击文件 → 通过 IPC 读取内容 → 打开到编辑器 tab
@@ -61,7 +64,7 @@ export function MiddlePanel() {
     );
   }
 
-  // im 视图：左侧房间列表 + 右侧消息流和输入框
+  // im 视图：左侧房间列表 + 中间消息流和输入框 + 右侧成员面板
   if (activeView === 'im') {
     return (
       <div className="flex-1 flex">
@@ -70,6 +73,7 @@ export function MiddlePanel() {
           <MessageList />
           <MessageInput />
         </div>
+        {activeRoomId && <MembersPanel />}
       </div>
     );
   }

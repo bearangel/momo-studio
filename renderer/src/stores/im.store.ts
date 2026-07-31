@@ -6,19 +6,22 @@
 //  2. 被动接收：主进程 /sync 推送 → onMessage → receiveMessage（实时消息）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ImMessage, ImRoomInfo } from '../ipc/types';
+import type { ImMessage, ImRoomInfo, RoomMember } from '../ipc/types';
 
 interface ImState {
   rooms: ImRoomInfo[];
   activeRoomId: string | null;
   messagesByRoom: Map<string, ImMessage[]>;
+  members: RoomMember[];
   loading: boolean;
   error: string | null;
 
   /** 拉取房间列表，默认激活第一个房间并加载其消息 */
   loadRooms: () => Promise<void>;
-  /** 切换激活房间并加载该房间历史消息 */
+  /** 切换激活房间并加载该房间历史消息与成员 */
   selectRoom: (roomId: string) => Promise<void>;
+  /** 拉取指定房间成员列表（含身份标识） */
+  loadMembers: (roomId: string) => Promise<void>;
   /** 接收主进程推送的实时消息（去重） */
   receiveMessage: (msg: ImMessage) => void;
   /** 向当前激活房间发送消息 */
@@ -31,6 +34,7 @@ export const useImStore = create<ImState>((set, get) => ({
   rooms: [],
   activeRoomId: null,
   messagesByRoom: new Map(),
+  members: [],
   loading: false,
   error: null,
 
@@ -57,8 +61,19 @@ export const useImStore = create<ImState>((set, get) => ({
         map.set(roomId, messages);
         return { messagesByRoom: map, loading: false };
       });
+      // 与消息加载并行触发成员加载（不阻塞消息渲染）
+      void get().loadMembers(roomId);
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
+    }
+  },
+
+  loadMembers: async (roomId) => {
+    try {
+      const members = await ipc.im.getMembers(roomId);
+      set({ members });
+    } catch {
+      set({ members: [] });
     }
   },
 
@@ -102,6 +117,7 @@ export const useImStore = create<ImState>((set, get) => ({
       rooms: [],
       activeRoomId: null,
       messagesByRoom: new Map(),
+      members: [],
       loading: false,
       error: null,
     }),
