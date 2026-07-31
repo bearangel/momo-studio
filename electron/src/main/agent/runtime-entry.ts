@@ -58,6 +58,32 @@ import {
   type DispatchContent,
 } from './dispatch';
 
+/** 协调 agent 触发判定结果：响应或跳过 */
+export type ResponseDecision = 'respond' | 'skip';
+
+/**
+ * 决定本 agent 是否响应某条团队群消息。三路互斥，不重复响应（详见 v1.1 设计 3.4）：
+ *   1. 明确 @ 我 → 响应（原有路径）
+ *   2. 没人被 @ + 在团队群 + 我是协调 agent → 自动接待
+ *   3. 其它（@ 了别人 / 非团队群 / 我不是协调） → 跳过
+ */
+export function decideResponse(opts: {
+  mentioned: boolean;
+  hasAnyMention: boolean;
+  isTeamRoom: boolean;
+  isCoordinator: boolean;
+}): ResponseDecision {
+  if (opts.mentioned) return 'respond';
+  if (!opts.hasAnyMention && opts.isTeamRoom && opts.isCoordinator) return 'respond';
+  return 'skip';
+}
+
+/** 协调 agent 自动前置的 system prompt 引导 */
+const COORDINATOR_GUIDANCE = `你是本团队群的协调 agent。当群里收到没有明确指名 @ 的消息时，由你接待：
+- 能自己回答的直接回答；
+- 需要专项能力时，用 dispatch:<子agent> 工具把子任务派给合适的子 agent，等其回传结果后汇总回复用户。
+- 不要对已经 @ 了别的 agent 的消息插嘴。`;
+
 /** runtime-manager 通过 AGENT_CONFIG 传入的完整配置 */
 interface RuntimeConfig {
   botUserId: string;
@@ -803,7 +829,12 @@ function loadRecentHistory(
   return history;
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`Fatal: ${(err as Error).message}\n`);
-  process.exit(1);
-});
+// 仅在被 runtime-manager fork（注入 AGENT_CONFIG 环境变量）时启动主流程；
+// 其它场景（如单测 import 本模块以测 decideResponse 纯函数）不触发 main()，
+// 避免在缺少配置时 parseConfig 抛错 → process.exit(1) 把测试进程一并杀掉。
+if (process.env.AGENT_CONFIG !== undefined) {
+  main().catch((err: unknown) => {
+    process.stderr.write(`Fatal: ${(err as Error).message}\n`);
+    process.exit(1);
+  });
+}
