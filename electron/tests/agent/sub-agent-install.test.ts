@@ -39,6 +39,7 @@ vi.mock('../../src/main/agent/crud', () => ({
   listAgentDefinitions: stubs.listAgentDefinitions,
   assignAgentToWorkspace: stubs.assignAgentToWorkspace,
   listAssignments: vi.fn(),
+  llmApiKeyRef: (instanceId: string) => `agent.${instanceId}.llm_api_key`,
 }));
 
 vi.mock('../../src/main/agent/bot-registrar', () => ({

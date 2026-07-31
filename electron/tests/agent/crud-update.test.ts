@@ -69,6 +69,18 @@ describe('updateAgentDefinition', () => {
     expect(updated.model.baseUrl).toBe('');
   });
 
+  it('modelBaseUrl 不传时保留原 NULL（不漂移为空串）', () => {
+    saveAgentDefinition({
+      id: 'def-null-base', name: 'NullBase', slug: 'null-base', version: '1.0', type: 'standalone',
+      runtime: 'declarative', systemPrompt: 'p',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
+      defaultMcps: [], defaultSkills: [],
+    });
+    const updated = updateAgentDefinition({ id: 'def-null-base', name: '新名' });
+    expect(updated.model.baseUrl).toBeUndefined();
+  });
+
   it('不存在的 id 抛错', () => {
     expect(() => updateAgentDefinition({ id: 'nope', name: 'x' })).toThrow();
   });
@@ -161,5 +173,43 @@ describe('updateAgentDefinition — type + parentAgentId', () => {
     updateAgentDefinition({ id: 'def-1', type: 'main' });
     const updated = updateAgentDefinition({ id: 'def-1', name: '新名' });
     expect(updated.type).toBe('main');
+  });
+});
+
+describe('stopRunningInstancesByDefinition', () => {
+  it('isAgentRunning=true 时停止并加入返回列表', async () => {
+    const { isAgentRunning, stopAgent } = await import('../../src/main/agent/runtime-manager');
+    vi.mocked(isAgentRunning).mockImplementation(() => true);
+    vi.mocked(stopAgent).mockClear();
+
+    const def = sampleDef();
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
+    );
+    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost');
+
+    const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
+    const stopped = stopRunningInstancesByDefinition(def.id);
+    expect(stopped).toHaveLength(1);
+    expect(stopAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('isAgentRunning=false 时不停止', async () => {
+    const { isAgentRunning, stopAgent } = await import('../../src/main/agent/runtime-manager');
+    vi.mocked(isAgentRunning).mockImplementation(() => false);
+    vi.mocked(stopAgent).mockClear();
+
+    const def = sampleDef();
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
+    );
+    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost');
+
+    const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
+    const stopped = stopRunningInstancesByDefinition(def.id);
+    expect(stopped).toHaveLength(0);
+    expect(stopAgent).not.toHaveBeenCalled();
   });
 });

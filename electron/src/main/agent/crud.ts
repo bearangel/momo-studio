@@ -187,7 +187,7 @@ export function updateAgentDefinition(input: {
   // model 三字段合并更新
   const newProvider = input.modelProvider ?? existing.model.provider;
   const newModel = input.modelName ?? existing.model.model;
-  const newBaseUrl = input.modelBaseUrl !== undefined ? input.modelBaseUrl : (existing.model.baseUrl ?? '');
+  const newBaseUrl = input.modelBaseUrl !== undefined ? input.modelBaseUrl : (existing.model.baseUrl ?? null);
   // type 与 parentAgentId 合并更新：
   // 不传 type 则保留原值；传 standalone/main 时清空 parentAgentId；
   // 传 sub 时若显式给 parentAgentId 则覆盖，否则保留原值。

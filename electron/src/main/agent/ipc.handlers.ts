@@ -16,6 +16,7 @@ import {
   getAgentDefinition,
   assignAgentToWorkspace,
   listAssignments,
+  llmApiKeyRef,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
 import { getAllocation } from '../workspace/allocation';
@@ -34,9 +35,6 @@ import type { RuntimeSkillRef, SubAgentRef } from './builtin-tools';
 
 // Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。
 const HOMESERVER_URL = 'http://127.0.0.1:8008';
-
-/** LLM API key 在 keychain 中的存储 key 前缀 */
-const llmApiKeyStorageKey = (instanceId: string): string => `agent.${instanceId}.llm_api_key`;
 
 /**
  * 把 skill slug 列表解析成子进程可用的 RuntimeSkillRef。
@@ -124,7 +122,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     });
     const assignment = assignAgentToWorkspace(workspaceId, def.id, bot.botUserId);
     await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
-    await setSecret(llmApiKeyStorageKey(assignment.instanceId), llmApiKey);
+      await setSecret(llmApiKeyRef(assignment.instanceId), llmApiKey);
     installed.push({ def, assignment, bot });
   }
 
@@ -283,7 +281,7 @@ export function registerAgentHandlers(): void {
       await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
 
       // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
-      await setSecret(llmApiKeyStorageKey(assignment.instanceId), llmApiKey);
+      await setSecret(llmApiKeyRef(assignment.instanceId), llmApiKey);
 
       // 5. 合并三层能力（T13）：def 默认 ∪ workspace allocation，去重后传给 runtime
       const allocation = getAllocation(workspaceId);
@@ -529,7 +527,7 @@ export function registerAgentHandlers(): void {
       }
 
       // LLM API key 从 keychain 恢复（addToWorkspace 时存入）
-      const llmApiKey = await getSecret(llmApiKeyStorageKey(assignment.instanceId));
+      const llmApiKey = await getSecret(llmApiKeyRef(assignment.instanceId));
       if (!llmApiKey) {
         throw new Error('LLM API key 丢失，请重新添加 agent');
       }
