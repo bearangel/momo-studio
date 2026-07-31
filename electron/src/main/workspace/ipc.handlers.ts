@@ -6,6 +6,7 @@
 // 已登录用户的 Matrix client 由 matrix/session.getOwnerMatrixClient 提供
 // （从 keychain 恢复 token，构造一次性 client，不启动 /sync）。
 import { ipcMain } from 'electron';
+import path from 'node:path';
 import { logger } from '../logger';
 import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, setWorkspaceCoordinator } from './crud';
 import {
@@ -16,7 +17,16 @@ import {
 } from './allocation';
 import { createMatrixSpace, createRoomInSpace } from '../matrix/rooms';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
+import { stopAgent, spawnAgent, isAgentRunning } from '../agent/runtime-manager';
+import { getAgentDefinition, listAssignments } from '../agent/crud';
+import { mergeCapabilities } from '../agent/capability-merger';
+import { getSecret } from '../storage/keychain';
+import { resolveSkillsDir } from '../paths';
 import type { CreateWorkspaceInput } from './types';
+import type { RuntimeSkillRef } from '../agent/builtin-tools';
+
+// Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。
+const HOMESERVER_URL = 'http://127.0.0.1:8008';
 
 /** 注册 workspace:* IPC handlers。重复注册会被 Electron 拒绝，故仅调用一次。 */
 export function registerWorkspaceHandlers(): void {
@@ -46,11 +56,17 @@ export function registerWorkspaceHandlers(): void {
     return;
   });
 
-  // 设置/清空协调 agent
+  // 设置/清空协调 agent；若目标实例正在运行，自动停止并重启以应用新的 isCoordinator 标志
   ipcMain.handle(
     'workspace:setCoordinator',
     async (_evt, workspaceId: string, instanceId: string | null) => {
       setWorkspaceCoordinator(workspaceId, instanceId);
+
+      // 设定协调后自动重启运行中的实例；清空（null）或未运行则跳过
+      if (instanceId !== null) {
+        await restartCoordinatorInstance(workspaceId, instanceId);
+      }
+
       return { ok: true };
     },
   );
@@ -62,6 +78,62 @@ export function registerWorkspaceHandlers(): void {
   });
 
   logger.info('Workspace IPC handlers 已注册');
+}
+
+/**
+ * 设定协调 agent 后，若目标实例正在运行，自动停止并以 isCoordinator=true 重启，
+ * 使新的协调标志立即对 runtime 子进程生效（取代旧版"提示用户手动停止+启动"）。
+ *
+ * 实例未运行 / assignment 不存在 / 定义已删除 / keychain 缺 token 或 apiKey 时，
+ * 静默跳过重启（仅 coordinatorInstanceId 已写入 DB，下次启动时自然带上标志）。
+ */
+async function restartCoordinatorInstance(
+  workspaceId: string,
+  instanceId: string,
+): Promise<void> {
+  const ws = getWorkspace(workspaceId);
+  if (!ws || !isAgentRunning(instanceId)) return;
+
+  const assignment = listAssignments(workspaceId).find((a) => a.instanceId === instanceId);
+  if (!assignment) return;
+
+  const def = getAgentDefinition(assignment.agentDefinitionId);
+  if (!def) return;
+
+  stopAgent(instanceId);
+
+  const apiKey = await getSecret(`agent.${instanceId}.llm_api_key`);
+  const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
+  if (!apiKey || !token) return;
+
+  const merged = mergeCapabilities(def, getAllocation(workspaceId));
+  const skillsDir = resolveSkillsDir();
+  const skills: RuntimeSkillRef[] = merged.skills.map((s) => ({
+    slug: s,
+    cachePath: path.join(skillsDir, s),
+  }));
+
+  spawnAgent({
+    instanceId: assignment.instanceId,
+    workspaceId,
+    workspaceDir: ws.directoryPath,
+    botUserId: assignment.botMatrixUserId,
+    botAccessToken: token,
+    homeserverUrl: HOMESERVER_URL,
+    systemPrompt: def.systemPrompt,
+    modelProvider: def.model.provider,
+    modelName: def.model.model,
+    modelBaseUrl: def.model.baseUrl,
+    llmApiKey: apiKey,
+    teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+    ownerUserId: ws.ownerId,
+    agentType: def.type,
+    subAgents: [],
+    skills,
+    mcpNames: merged.mcps,
+    isCoordinator: true,
+  });
+  logger.info('协调 agent 已自动重启', { instanceId });
 }
 
 /**

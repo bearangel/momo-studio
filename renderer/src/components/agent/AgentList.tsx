@@ -202,9 +202,7 @@ export function AgentList({ onAdd }: Props) {
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!workspace) return;
-                        void setCoordinator(workspace.id, a.instanceId).then(() =>
-                          alert('已设为协调 agent。若该实例正在运行，请停止后重新启动以生效。'),
-                        );
+                        void setCoordinator(workspace.id, a.instanceId);
                       }}
                       className="text-xs text-neutral-400 hover:text-amber-400 disabled:opacity-40"
                     >
