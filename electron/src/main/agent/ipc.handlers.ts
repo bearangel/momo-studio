@@ -306,9 +306,26 @@ export function registerAgentHandlers(): void {
     async (_evt, opts: AssignMainInput) => assignMainAgent(opts),
   );
 
-  // 从 YAML manifest 字符串创建 agent 定义并持久化。校验失败会抛错（parseAgentManifest），由 IPC 层转为 rejection。
+  // 从 YAML manifest 字符串创建 agent 定义并持久化。
+  // YAML 中的 parentAgentId 是父 agent 的 slug 引用，此处解析为已注册父 agent
+  // 的 UUID（与 assignMainAgent 按 UUID 匹配的前提保持一致）。校验失败会抛错，
+  // 由 IPC 层转为 rejection。
   ipcMain.handle('agent:createFromYaml', async (_evt, yamlContent: string) => {
     const def = parseAgentManifest(yamlContent);
+    // R3 修复：sub agent 的 parentAgentId 从 slug 解析为 UUID
+    if (def.type === 'sub' && def.parentAgentId) {
+      const parentSlug = def.parentAgentId;
+      const parentDef = listAgentDefinitions().find((d) => d.slug === parentSlug);
+      if (parentDef) {
+        def.parentAgentId = parentDef.id;
+      } else {
+        logger.warn('YAML 创建的 sub agent parentAgentId slug 未找到对应父 agent', {
+          slug: def.slug,
+          parentSlug,
+        });
+        def.parentAgentId = undefined;
+      }
+    }
     saveAgentDefinition(def);
     logger.info('Agent 定义已创建', { slug: def.slug });
     return def;
