@@ -85,6 +85,13 @@ export function RoomList() {
     );
   }
 
+  // 系统通知 + 团队群顶置，其余按原序（stable sort 保持相对顺序）
+  const sortedRooms = [...rooms].sort((a, b) => {
+    const priority = (r: (typeof rooms)[number]) =>
+      r.isSystem ? 0 : workspaces.some((w) => w.teamRoomId === r.roomId) ? 1 : 2;
+    return priority(a) - priority(b);
+  });
+
   return (
     <div className="w-60 shrink-0 border-r border-border-subtle bg-bg-secondary overflow-auto">
       {/* 顶部新建按钮 */}
@@ -95,7 +102,7 @@ export function RoomList() {
       >
         + 新建房间
       </button>
-      {rooms.map((room) => (
+      {sortedRooms.map((room) => (
         // 外层 group 让 group-hover 生效；非 system 房间悬停时叠加操作按钮
         <div key={room.roomId} className="group relative">
           <button
