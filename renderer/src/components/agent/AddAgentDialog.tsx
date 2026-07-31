@@ -7,12 +7,15 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { ipc } from '../../ipc/client';
+import type { AgentDefinition } from '../../ipc/types';
 
 interface Props {
   onClose: () => void;
+  /** 编辑模式：传入则预填并走 updateDefinition；缺省=创建模式 */
+  editingDef?: AgentDefinition | null;
 }
 
-export function AddAgentDialog({ onClose }: Props) {
+export function AddAgentDialog({ onClose, editingDef }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { definitions, loadDefinitions, addAgent } = useAgentStore();
   const [selectedDefId, setSelectedDefId] = useState<string>('');
@@ -20,7 +23,7 @@ export function AddAgentDialog({ onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [mode, setMode] = useState<'select' | 'create'>('select');
+  const [mode, setMode] = useState<'select' | 'create' | 'edit'>(editingDef ? 'edit' : 'select');
 
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
@@ -33,6 +36,19 @@ export function AddAgentDialog({ onClose }: Props) {
   // 供应商下拉：选已注册供应商自动填充 baseUrl/model/apiKey，"自定义…"走手动输入
   const { providers, loadProviders } = useProviderStore();
   const [providerId, setProviderId] = useState<string>('custom');
+
+  // 编辑模式：用传入 definition 预填全部字段（slug 仅展示，提交时不可改）
+  useEffect(() => {
+    if (editingDef && mode === 'edit') {
+      setNewName(editingDef.name);
+      setNewSlug(editingDef.slug);
+      setNewPrompt(editingDef.systemPrompt);
+      setNewProvider(editingDef.model.provider);
+      setNewModel(editingDef.model.model);
+      setNewBaseUrl(editingDef.model.baseUrl ?? '');
+      setProviderId('custom');
+    }
+  }, [editingDef, mode]);
 
   useEffect(() => {
     void loadDefinitions();
@@ -72,7 +88,25 @@ export function AddAgentDialog({ onClose }: Props) {
     setCreating(true);
     setError(null);
     try {
-      const def =       await ipc.agent.createCustom({
+      if (mode === 'edit' && editingDef) {
+        const { stoppedInstanceIds } = await ipc.agent.updateDefinition({
+          id: editingDef.id,
+          name: newName.trim(),
+          description: `自定义 agent: ${newName.trim()}`,
+          systemPrompt: newPrompt.trim(),
+          modelProvider: newProvider,
+          modelName: newModel.trim(),
+          modelBaseUrl: newBaseUrl.trim() || undefined,
+          iconEmoji: editingDef.iconEmoji || '🤖',
+        });
+        await loadDefinitions();
+        if (stoppedInstanceIds.length > 0) {
+          alert(`Agent 配置已更新。${stoppedInstanceIds.length} 个运行中的实例已停止，请点击启动以应用新配置。`);
+        }
+        onClose();
+        return;
+      }
+      const def = await ipc.agent.createCustom({
         name: newName.trim(),
         slug: newSlug.trim().toLowerCase().replace(/\s+/g, '-'),
         description: `自定义 agent: ${newName.trim()}`,
@@ -117,12 +151,12 @@ export function AddAgentDialog({ onClose }: Props) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto">
-        {mode === 'create' ? (
+        {mode !== 'select' ? (
           <form onSubmit={handleCreate}>
-            <h2 className="text-xl font-bold mb-4">创建自定义 agent</h2>
+            <h2 className="text-xl font-bold mb-4">{mode === 'edit' ? '编辑 agent' : '创建自定义 agent'}</h2>
             <div className="flex flex-col gap-3">
               <Input label="名称" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="如：代码审查员" />
-              <Input label="标识符 (slug)" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="如：code-reviewer" />
+              <Input label="标识符 (slug)" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="如：code-reviewer" readOnly={mode === 'edit'} />
               <div className="flex flex-col gap-1">
                 <label className="text-sm text-neutral-300">系统提示词</label>
                 <textarea
@@ -175,9 +209,13 @@ export function AddAgentDialog({ onClose }: Props) {
               )}
               {error && <div className="text-red-400 text-sm">{error}</div>}
               <div className="flex gap-2 justify-end mt-2">
-                <Button variant="ghost" type="button" onClick={() => { setMode('select'); setError(null); }}>返回选择</Button>
+                {mode === 'edit' ? (
+                  <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
+                ) : (
+                  <Button variant="ghost" type="button" onClick={() => { setMode('select'); setError(null); }}>返回选择</Button>
+                )}
                 <Button type="submit" disabled={creating || !newName || !newSlug || !newPrompt}>
-                  {creating ? '创建中…' : '创建'}
+                  {creating ? (mode === 'edit' ? '保存中…' : '创建中…') : (mode === 'edit' ? '保存' : '创建')}
                 </Button>
               </div>
             </div>

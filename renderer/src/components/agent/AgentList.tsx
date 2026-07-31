@@ -6,6 +6,8 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { ipc } from '../../ipc/client';
+import type { AgentDefinition } from '../../ipc/types';
+import { AddAgentDialog } from './AddAgentDialog';
 import { CapabilityConfig } from './CapabilityConfig';
 import { cn } from '../../lib/cn';
 
@@ -19,6 +21,7 @@ export function AgentList({ onAdd }: Props) {
   const { assignments, definitions, running, loading, loadDefinitions, loadAssignments } =
     useAgentStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
 
   useEffect(() => {
     void loadDefinitions();
@@ -149,6 +152,39 @@ export function AgentList({ onAdd }: Props) {
                   )}
                   <button
                     type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingDef(def ?? null);
+                    }}
+                    className="text-xs text-neutral-400 hover:text-neutral-200"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void (async () => {
+                        const key = window.prompt('输入新的 API Key：');
+                        if (key === null) return;
+                        if (!key.trim()) {
+                          alert('API Key 不能为空');
+                          return;
+                        }
+                        try {
+                          await ipc.agent.updateApiKey(a.instanceId, key.trim());
+                          alert('API Key 已更新。若该实例正在运行，需停止后重新启动才生效。');
+                        } catch (err) {
+                          alert(`更新失败：${err instanceof Error ? err.message : String(err)}`);
+                        }
+                      })();
+                    }}
+                    className="text-xs text-neutral-400 hover:text-neutral-200"
+                  >
+                    更新密钥
+                  </button>
+                  <button
+                    type="button"
                     title="删除 agent"
                     className="text-neutral-500 hover:text-red-400 text-sm px-1"
                     onClick={(e) => {
@@ -186,6 +222,16 @@ export function AgentList({ onAdd }: Props) {
           </div>
           <CapabilityConfig workspaceId={workspace.id} agentDef={selectedDef} />
         </div>
+      )}
+
+      {editingDef && (
+        <AddAgentDialog
+          editingDef={editingDef}
+          onClose={async () => {
+            setEditingDef(null);
+            if (workspace) await loadAssignments(workspace.id);
+          }}
+        />
       )}
     </div>
   );
