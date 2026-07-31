@@ -159,7 +159,7 @@ docs/
 
 #### v1.2 功能补全
 
-- 🔲 **主/子 agent 编排 UI（委派调度）** — v1.1.1 测试发现：runtime 与 IPC 层已完整实现主→子 dispatch（`assignMainAgent` + `dispatch:<slug>` 工具），但**无 UI 入口**。当前所有经"添加 agent"创建的 agent 均为 `standalone`，无 dispatch 工具，协调 agent 无法把任务派给专项 agent。v1.2 需加 UI 指定某 agent 为 main、建立 `parentAgentId` 主子关系、经 `assignMain` 一次编排，让协调 agent 真正能委派。
+- ✅ **主/子 agent 编排 UI（委派调度）** — v1.2 M3 实现完整编排：runtime subAgents 传递修复 + auto-start 重启重建 + slug→UUID 解析 + IPC 角色/父 agent 校验 + 编排视图（列表/编排切换，树形展示 main→sub 关系，添加子/解除/设为主操作）+ AddAgentDialog 角色选择 + main 定义子 agent 勾选 + AgentList 角色徽标分组 + 移除级联。
 - 🔲 keychain slot helper 去重（`agent.<id>.llm_api_key` 的 `llmApiKeyRef` 与 `llmApiKeyStorageKey` 合并为一处）
 - 🔲 `stopRunningInstancesByDefinition` 实际停止分支补测（isAgentRunning=true 路径）
 - 🔲 `updateAgentDefinition` 的 modelBaseUrl undefined→'' 往返保真（写 NULL 而非空串）
