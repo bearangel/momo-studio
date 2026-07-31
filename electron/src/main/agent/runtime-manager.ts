@@ -47,6 +47,9 @@ export interface AgentRuntimeOpts {
   allowedTools?: string[];
   /** 禁止的工具名列表（优先级高于 allowedTools） */
   deniedTools?: string[];
+  // === v1.1 M2 协调 agent ===
+  /** 本实例是否为所属 workspace 的协调 agent（团队群非@消息由其接待） */
+  isCoordinator?: boolean;
 }
 
 // runtime 进程池：instanceId → 子进程句柄

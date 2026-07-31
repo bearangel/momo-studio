@@ -109,6 +109,8 @@ interface RuntimeConfig {
   allowedTools: string[];
   /** 禁止的工具名列表（优先级高于 allowedTools，命中即拒绝） */
   deniedTools: string[];
+  // === v1.1 M2 协调 agent ===
+  isCoordinator: boolean;
 }
 
 /** 工具调用循环上限，防止 LLM 无限调用工具导致子进程卡死 */
@@ -165,6 +167,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames,
     allowedTools,
     deniedTools,
+    isCoordinator,
   } = r;
   if (
     typeof botUserId !== 'string' ||
@@ -225,6 +228,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames: resolvedMcpNames,
     allowedTools: resolvedAllowedTools,
     deniedTools: resolvedDeniedTools,
+    // v1.1 M2：缺省/类型不符时按"非协调"处理（旧配置向后兼容）
+    isCoordinator: typeof isCoordinator === 'boolean' ? isCoordinator : false,
   };
 }
 
@@ -316,16 +321,21 @@ async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContex
     }
   }
 
+  // 协调 agent 自动前置引导（见上方 COORDINATOR_GUIDANCE）
+  const basePrompt = config.isCoordinator
+    ? `${COORDINATOR_GUIDANCE}\n\n${config.systemPrompt}`
+    : config.systemPrompt;
+
   // Layer 1 渐进式披露：把 skill 索引注入 system prompt
   const skillIndex = skillRegistry.getIndex();
   const systemPrompt = skillIndex
-    ? `${config.systemPrompt}
+    ? `${basePrompt}
 
 ## 已安装技能索引
 以下是你可用的技能。当任务匹配某技能描述时，应主动调用 loadSkill('<name>') 加载完整指令。
 
 ${skillIndex}`
-    : config.systemPrompt;
+    : basePrompt;
 
   const tools: LLMToolDef[] = [
     ...getBuiltinToolDefs(),
@@ -413,7 +423,15 @@ async function handleEvent(
   // Matrix v11 的 m.mentions 字段：{ user_ids: ['@bot:server', ...] }
   const mentions = content['m.mentions'] as { user_ids?: string[] } | undefined;
   const mentioned = mentions?.user_ids?.includes(config.botUserId) ?? false;
-  if (!mentioned) return;
+  const hasAnyMention = (mentions?.user_ids?.length ?? 0) > 0;
+  // 三路互斥触发：@我 / 没人@且我是协调 / 否则跳过（详见 v1.1 设计 3.4）
+  const decision = decideResponse({
+    mentioned,
+    hasAnyMention,
+    isTeamRoom: true, // handleEvent 顶部守卫已过滤，到此处 roomId 必为 teamRoomId
+    isCoordinator: config.isCoordinator,
+  });
+  if (decision === 'skip') return;
 
   try {
     const reply = await runChatLoop(client, roomId, body, config, ctx);
