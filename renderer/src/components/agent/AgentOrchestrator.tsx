@@ -169,6 +169,43 @@ export function AgentOrchestrator() {
           );
         })}
 
+        {/* 孤立 sub：parentAgentId 非空但 parent 未安装到 workspace */}
+        {(() => {
+          const orphanSubs = assignments.filter((a) => {
+            const def = defMap.get(a.agentDefinitionId);
+            if (!def?.parentAgentId) return false;
+            // parent 未在此 workspace 内安装
+            const parentInstalled = assignments.some(
+              (pa) => defMap.get(pa.agentDefinitionId)?.id === def.parentAgentId,
+            );
+            return !parentInstalled;
+          });
+          if (orphanSubs.length === 0) return null;
+          return (
+            <>
+              <div className="text-xs text-neutral-500 px-3 pt-2">未分组子 agent</div>
+              {orphanSubs.map((sa) => {
+                const def = defMap.get(sa.agentDefinitionId);
+                if (!def) return null;
+                return (
+                  <li key={sa.instanceId} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-tertiary border border-border-subtle">
+                    <span className="text-xl">🔗</span>
+                    <span className="text-sm text-neutral-100 flex-1">{def.name}</span>
+                    <span className="text-[10px] text-neutral-500">父 agent 未安装</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleUnlink(def.id)}
+                      className="text-xs text-neutral-400 hover:text-red-400"
+                    >
+                      解除
+                    </button>
+                  </li>
+                );
+              })}
+            </>
+          );
+        })()}
+
         {/* standalone 节点 */}
         {standaloneAssignments.map((sa) => {
           const def = defMap.get(sa.agentDefinitionId);

@@ -93,6 +93,13 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   const mainDef = getAgentDefinition(mainDefId);
   if (!mainDef) throw new Error(`未找到 agent 定义: ${mainDefId}`);
 
+  // 守卫：检查 mainDef 是否已安装到该 workspace
+  const existingAssignments = listAssignments(workspaceId);
+  const alreadyInstalled = existingAssignments.some((a) => a.agentDefinitionId === mainDefId);
+  if (alreadyInstalled) {
+    throw new Error('该 main agent 已安装到此 workspace，请先移除后再重新安装');
+  }
+
   const workspace = getWorkspace(workspaceId);
   if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
   if (!workspace.teamRoomId) {

@@ -38,7 +38,8 @@ vi.mock('../../src/main/agent/crud', () => ({
   getAgentDefinition: stubs.getAgentDefinition,
   listAgentDefinitions: stubs.listAgentDefinitions,
   assignAgentToWorkspace: stubs.assignAgentToWorkspace,
-  listAssignments: vi.fn(),
+  // 默认返回空数组以符合真实 listAssignments 契约（assignMainAgent 守卫依赖 .some）
+  listAssignments: vi.fn(() => []),
   llmApiKeyRef: (instanceId: string) => `agent.${instanceId}.llm_api_key`,
 }));
 

@@ -159,4 +159,26 @@ describe('assignMainAgent', () => {
     expect(mainOpts.subAgents).toHaveLength(1);
     expect((mainOpts.subAgents![0] as { slug: string }).slug).toBe('sub-a');
   });
+
+  it('重复安装同一 main → 抛错', async () => {
+    // 准备 main 定义
+    saveAgentDefinition({
+      id: 'main-dup', name: 'PM', slug: 'pm-dup', version: '1.0', type: 'main',
+      runtime: 'declarative', systemPrompt: '你是 PM',
+      model: { provider: 'openai', model: 'gpt-4o' },
+      defaultTools: [], source: 'builtin', description: 'PM', iconEmoji: '📋',
+      defaultMcps: [], defaultSkills: [],
+    });
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws-dup'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
+    );
+    // 第一次安装
+    const { assignMainAgent } = await import('../../src/main/agent/ipc.handlers');
+    await assignMainAgent({ workspaceId: ws.id, mainDefId: 'main-dup', llmApiKey: 'k' });
+    // 第二次安装 → 应抛错
+    await expect(
+      assignMainAgent({ workspaceId: ws.id, mainDefId: 'main-dup', llmApiKey: 'k' }),
+    ).rejects.toThrow('已安装');
+  });
 });
