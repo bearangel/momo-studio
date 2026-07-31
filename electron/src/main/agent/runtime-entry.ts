@@ -402,10 +402,16 @@ async function handleEvent(
   const eventType = event.getType();
   const sender = event.getSender();
 
-  // 安全白名单：只处理 team room 的事件。被邀请进恶意 room 后处理其消息会导致数据泄露，
-  // 也防止伪造的 task_reply/dispatch 从其它 room 投递。
   const roomId = event.getRoomId();
-  if (!roomId || roomId !== config.teamRoomId) return;
+  if (!roomId) return;
+
+  const isTeamRoom = roomId === config.teamRoomId;
+
+  // dispatch / task_reply 仅限 team room：防恶意 room 投递伪造调度或回执。
+  // m.room.message 允许任意已加入房间，但仅响应直接 @ 本 bot 的消息（decideResponse 控制）。
+  if (!isTeamRoom && (eventType === DISPATCH_EVENT_TYPE || eventType === TASK_REPLY_EVENT_TYPE)) {
+    return;
+  }
 
   if (eventType === TASK_REPLY_EVENT_TYPE) {
     if (sender === config.botUserId) return; // 忽略自己发的回执
@@ -441,7 +447,7 @@ async function handleEvent(
   const decision = decideResponse({
     mentioned,
     hasAnyMention,
-    isTeamRoom: true, // handleEvent 顶部守卫已过滤，到此处 roomId 必为 teamRoomId
+    isTeamRoom,
     isCoordinator: config.isCoordinator,
     isOwnerMessage,
   });
