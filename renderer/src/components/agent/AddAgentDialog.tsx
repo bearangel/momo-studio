@@ -2,6 +2,7 @@
 // 添加 agent 对话框：选择已有定义 或 创建自定义 agent + 输入 LLM API key + 提交。
 import { useEffect, useState, type FormEvent } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
+import { useProviderStore } from '../../stores/provider.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -29,9 +30,17 @@ export function AddAgentDialog({ onClose }: Props) {
   const [newBaseUrl, setNewBaseUrl] = useState('');
   const [creating, setCreating] = useState(false);
 
+  // 供应商下拉：选已注册供应商自动填充 baseUrl/model/apiKey，"自定义…"走手动输入
+  const { providers, loadProviders } = useProviderStore();
+  const [providerId, setProviderId] = useState<string>('custom');
+
   useEffect(() => {
     void loadDefinitions();
   }, [loadDefinitions]);
+
+  useEffect(() => {
+    void loadProviders();
+  }, [loadProviders]);
 
   useEffect(() => {
     if (definitions.length > 0 && !selectedDefId) {
@@ -41,6 +50,18 @@ export function AddAgentDialog({ onClose }: Props) {
 
   const selectedDef = definitions.find((d) => d.id === selectedDefId);
   const providerLabel = selectedDef?.model.provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
+
+  // 选择供应商：填 baseUrl+modelName（defaultModel），并预填 apiKey 供后续"添加并启动"复用
+  const handleProviderChange = async (id: string) => {
+    setProviderId(id);
+    if (id === 'custom') return;
+    const p = providers.find((x) => x.id === id);
+    if (!p) return;
+    setNewBaseUrl(p.baseUrl);
+    setNewModel(p.defaultModel ?? '');
+    const key = await ipc.provider.getApiKey(p.id);
+    if (key) setApiKey(key);
+  };
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -111,6 +132,21 @@ export function AddAgentDialog({ onClose }: Props) {
                   rows={4}
                   className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none resize-y"
                 />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-sm text-neutral-300">供应商</label>
+                <select
+                  value={providerId}
+                  onChange={(e) => void handleProviderChange(e.target.value)}
+                  className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none"
+                >
+                  <option value="custom">自定义…</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}{p.isDefault ? '（默认）' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="flex gap-3">
                 <div className="flex flex-col gap-1 flex-1">
