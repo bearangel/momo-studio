@@ -16,9 +16,11 @@ import { TaskReplyCard } from './TaskReplyCard';
 interface Props {
   message: ImMessage;
   isSelf: boolean;
+  /** bot 的配置名称（如有），优先于 shortName 展示 */
+  senderName?: string;
 }
 
-export function MessageBubble({ message, isSelf }: Props) {
+export function MessageBubble({ message, isSelf, senderName }: Props) {
   if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} />;
   }
@@ -33,7 +35,7 @@ export function MessageBubble({ message, isSelf }: Props) {
       </div>
       <div className={cn('max-w-[70%] flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}>
         {!isSelf && (
-          <span className="text-xs text-neutral-400 px-1">{shortName(message.sender)}</span>
+          <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(message.sender)}</span>
         )}
         <div
           className={cn(
