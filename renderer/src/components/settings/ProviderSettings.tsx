@@ -14,8 +14,11 @@ export function ProviderSettings() {
   const openCreate = () => { setEditing(null); setDialogOpen(true); };
   const openEdit = (p: ModelProvider) => { setEditing(p); setDialogOpen(true); };
   const handleDelete = async (p: ModelProvider) => {
-    if (confirm(`确定删除供应商「${p.name}」？\n已使用该供应商的 agent 不受影响（持有副本）。`)) {
+    if (!confirm(`确定删除供应商「${p.name}」？\n已使用该供应商的 agent 不受影响（持有副本）。`)) return;
+    try {
       await deleteProvider(p.id);
+    } catch (err) {
+      alert(`删除失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -48,6 +51,7 @@ export function ProviderSettings() {
         ))}
       </div>
       <ProviderDialog
+        key={editing?.id ?? 'new'}
         open={dialogOpen}
         editing={editing}
         onClose={() => setDialogOpen(false)}
