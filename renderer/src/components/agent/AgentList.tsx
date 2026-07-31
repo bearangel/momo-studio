@@ -9,6 +9,7 @@ import { ipc } from '../../ipc/client';
 import type { AgentDefinition } from '../../ipc/types';
 import { AddAgentDialog } from './AddAgentDialog';
 import { CapabilityConfig } from './CapabilityConfig';
+import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
 
 interface Props {
@@ -22,6 +23,7 @@ export function AgentList({ onAdd }: Props) {
     useAgentStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
+  const [keyPrompt, setKeyPrompt] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDefinitions();
@@ -164,20 +166,7 @@ export function AgentList({ onAdd }: Props) {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void (async () => {
-                        const key = window.prompt('输入新的 API Key：');
-                        if (key === null) return;
-                        if (!key.trim()) {
-                          alert('API Key 不能为空');
-                          return;
-                        }
-                        try {
-                          await ipc.agent.updateApiKey(a.instanceId, key.trim());
-                          alert('API Key 已更新。若该实例正在运行，需停止后重新启动才生效。');
-                        } catch (err) {
-                          alert(`更新失败：${err instanceof Error ? err.message : String(err)}`);
-                        }
-                      })();
+                      setKeyPrompt(a.instanceId);
                     }}
                     className="text-xs text-neutral-400 hover:text-neutral-200"
                   >
@@ -231,6 +220,28 @@ export function AgentList({ onAdd }: Props) {
             setEditingDef(null);
             if (workspace) await loadAssignments(workspace.id);
           }}
+        />
+      )}
+      {keyPrompt && (
+        <PromptDialog
+          title="更新 API Key"
+          label="输入新的 API Key（运行中的实例需重启才生效）"
+          password
+          onSubmit={async (key) => {
+            const instanceId = keyPrompt;
+            setKeyPrompt(null);
+            if (!key.trim()) {
+              alert('API Key 不能为空');
+              return;
+            }
+            try {
+              await ipc.agent.updateApiKey(instanceId, key.trim());
+              alert('API Key 已更新。若该实例正在运行，需停止后重新启动才生效。');
+            } catch (err) {
+              alert(`更新失败：${err instanceof Error ? err.message : String(err)}`);
+            }
+          }}
+          onClose={() => setKeyPrompt(null)}
         />
       )}
     </div>

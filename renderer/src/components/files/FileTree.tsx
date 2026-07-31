@@ -1,6 +1,8 @@
 // renderer/src/components/files/FileTree.tsx
 // 文件树入口组件：顶部工具条（刷新 / 全部折叠）+ 从根目录 '.' 开始递归渲染，纵向排列并可滚动
+import { useState } from 'react';
 import { FileTreeView } from './FileTreeView';
+import { PromptDialog } from '../common/PromptDialog';
 import { useFileStore } from '../../stores/file.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 
@@ -13,11 +15,23 @@ export function FileTree({ onSelectFile }: Props) {
   const collapseAll = useFileStore((s) => s.collapseAll);
   const refreshDir = useFileStore((s) => s.refreshDir);
   const workspace = useWorkspaceStore((s) => s.getActive());
+  const [creating, setCreating] = useState<'file' | 'dir' | null>(null);
 
   // 刷新当前 workspace 根目录：失效缓存后重新拉取
   const handleRefresh = () => {
     if (workspace) {
       void refreshDir(workspace.id, '.');
+    }
+  };
+
+  const handleCreate = async (name: string) => {
+    const type = creating;
+    setCreating(null);
+    if (!name.trim() || !workspace || !type) return;
+    try {
+      await useFileStore.getState().createPath(workspace.id, name.trim(), type);
+    } catch (e) {
+      alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -42,40 +56,32 @@ export function FileTree({ onSelectFile }: Props) {
         </button>
         <button
           type="button"
-          onClick={async () => {
-            if (!workspace) return;
-            const name = window.prompt('新文件名（可含子目录，如 src/foo.ts）：', '');
-            if (!name?.trim()) return;
-            try {
-              await useFileStore.getState().createPath(workspace.id, name.trim(), 'file');
-            } catch (e) {
-              alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
-            }
-          }}
+          onClick={() => workspace && setCreating('file')}
+          disabled={!workspace}
           title="新建文件"
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+          className="text-xs text-neutral-400 hover:text-neutral-200 px-1 disabled:opacity-40"
         >
           📄＋
         </button>
         <button
           type="button"
-          onClick={async () => {
-            if (!workspace) return;
-            const name = window.prompt('新目录名：', '');
-            if (!name?.trim()) return;
-            try {
-              await useFileStore.getState().createPath(workspace.id, name.trim(), 'dir');
-            } catch (e) {
-              alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
-            }
-          }}
+          onClick={() => workspace && setCreating('dir')}
+          disabled={!workspace}
           title="新建文件夹"
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+          className="text-xs text-neutral-400 hover:text-neutral-200 px-1 disabled:opacity-40"
         >
           📁＋
         </button>
       </div>
       <FileTreeView dirPath="." depth={0} onSelectFile={onSelectFile} />
+      {creating && (
+        <PromptDialog
+          title={creating === 'file' ? '新文件名' : '新目录名'}
+          placeholder={creating === 'file' ? '可含子目录，如 src/foo.ts' : '如 docs'}
+          onSubmit={handleCreate}
+          onClose={() => setCreating(null)}
+        />
+      )}
     </div>
   );
 }

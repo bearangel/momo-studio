@@ -5,6 +5,7 @@ import { useFileStore } from '../../stores/file.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { FileContextMenu } from './FileContextMenu';
+import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
 
 interface Props {
@@ -27,6 +28,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
   // 行内重命名状态：目标路径与当前输入值
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
+  // 移动目标目录输入状态
+  const [moving, setMoving] = useState<{ path: string } | null>(null);
 
   const entries = tree.get(dirPath);
   const expanded = expandedDirs.has(dirPath);
@@ -136,18 +139,25 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
             await deletePath(workspace.id, menu.path);
             closeTabIfPath(menu.path);
           }}
-          onMove={async () => {
-            const dstDir = window.prompt(
-              `移动「${menu.path}」到目录（输入目标目录相对路径，如 src/utils）：`,
-              '',
-            );
-            if (!dstDir) return;
-            const name = menu.path.split('/').pop() ?? '';
-            const dst = `${dstDir.replace(/\/$/, '')}/${name}`;
-            await renamePath(workspace.id, menu.path, dst);
-            renameTab(menu.path, dst);
-          }}
+          onMove={() => setMoving({ path: menu.path })}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {moving && workspace && (
+        <PromptDialog
+          title={`移动「${moving.path}」`}
+          label="目标目录相对路径（如 src/utils）"
+          placeholder="src/utils"
+          onSubmit={async (dstDir) => {
+            const path = moving.path;
+            setMoving(null);
+            if (!dstDir.trim()) return;
+            const name = path.split('/').pop() ?? '';
+            const dst = `${dstDir.trim().replace(/\/$/, '')}/${name}`;
+            await renamePath(workspace.id, path, dst);
+            renameTab(path, dst);
+          }}
+          onClose={() => setMoving(null)}
         />
       )}
       {renaming && workspace && (
