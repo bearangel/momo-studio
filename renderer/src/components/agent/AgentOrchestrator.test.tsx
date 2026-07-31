@@ -5,7 +5,7 @@
 // IPC 约定：通过 globalThis.window.api 提供桩（与 Onboarding/AddAgentDialog 测试一致），
 // 不直接 vi.mock('../../ipc/client')。stores 用 vi.mock 做组件级隔离。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { AgentDefinition, AgentAssignment } from '../../ipc/types';
 
 // 测试用 agent 定义：1 个 main（PM）+ 1 个 sub（Coder，挂在 PM 下）+ 1 个 standalone（Helper）
@@ -50,7 +50,7 @@ vi.mock('../../stores/workspace.store', () => ({
 
 // IPC 桩：ipc/client 的 Proxy 在调用时读取 globalThis.window.api，故只需提供 api 对象
 const mockApi = {
-  agent: { updateDefinition: vi.fn(async () => ({ definition: {}, stoppedInstanceIds: [] })) },
+  agent: { updateDefinition: vi.fn(async () => ({ definition: {}, stoppedInstanceIds: [] as string[] })) },
 };
 
 // 动态导入，确保 vi.mock 在组件加载前生效
@@ -93,5 +93,89 @@ describe('AgentOrchestrator', () => {
     fireEvent.click(screen.getByRole('button', { name: '▸' }));
     expect(screen.getByRole('button', { name: '▾' })).toBeDefined();
     expect(screen.getByText('Coder')).toBeDefined();
+  });
+});
+
+describe('AgentOrchestrator 关系操作停止实例后提示重启', () => {
+  it('设为主 agent 停止实例时弹出重启提示', async () => {
+    mockApi.agent.updateDefinition.mockResolvedValueOnce({
+      definition: {},
+      stoppedInstanceIds: ['inst-1', 'inst-2'],
+    });
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    render(<AgentOrchestrator />);
+    fireEvent.click(screen.getByText('设为主 agent'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('2 个实例已停止，请重启以应用新配置。');
+    });
+    expect(mockApi.agent.updateDefinition).toHaveBeenCalledWith({ id: 'sa1', type: 'main' });
+    alertSpy.mockRestore();
+  });
+
+  it('解除父子关系停止实例时弹出重启提示', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockApi.agent.updateDefinition.mockResolvedValueOnce({
+      definition: {},
+      stoppedInstanceIds: ['inst-1'],
+    });
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    render(<AgentOrchestrator />);
+    // Coder 子节点的"解除"按钮
+    fireEvent.click(screen.getAllByText('解除')[0]!);
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('1 个实例已停止，请重启以应用新配置。');
+    });
+    expect(mockApi.agent.updateDefinition).toHaveBeenCalledWith({
+      id: 's1',
+      type: 'standalone',
+      parentAgentId: undefined,
+    });
+    alertSpy.mockRestore();
+  });
+
+  it('添加子 agent 停止实例时弹出重启提示', async () => {
+    mockApi.agent.updateDefinition.mockResolvedValueOnce({
+      definition: {},
+      stoppedInstanceIds: ['inst-1'],
+    });
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    render(<AgentOrchestrator />);
+    fireEvent.click(screen.getByText('+ 添加子 agent'));
+    // 展开的下拉选择 standalone candidate（Helper / sa1）
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'sa1' } });
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('1 个实例已停止，请重启以应用新配置。');
+    });
+    expect(mockApi.agent.updateDefinition).toHaveBeenCalledWith({
+      id: 'sa1',
+      type: 'sub',
+      parentAgentId: 'm1',
+    });
+    alertSpy.mockRestore();
+  });
+
+  it('未停止实例时不弹出提示', async () => {
+    mockApi.agent.updateDefinition.mockResolvedValueOnce({
+      definition: {},
+      stoppedInstanceIds: [],
+    });
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    render(<AgentOrchestrator />);
+    fireEvent.click(screen.getByText('设为主 agent'));
+
+    // 给异步链路足够时间，确认 alert 不被调用
+    await waitFor(() => {
+      expect(mockApi.agent.updateDefinition).toHaveBeenCalled();
+    });
+    expect(alertSpy).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
   });
 });

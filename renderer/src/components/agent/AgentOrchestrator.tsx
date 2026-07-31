@@ -44,12 +44,15 @@ export function AgentOrchestrator() {
 
   const handleAddSub = async (mainDefId: string, subDefId: string) => {
     try {
-      await ipc.agent.updateDefinition({
+      const { stoppedInstanceIds } = await ipc.agent.updateDefinition({
         id: subDefId,
         type: 'sub',
         parentAgentId: mainDefId,
       });
       if (workspace) await loadAssignments(workspace.id);
+      if (stoppedInstanceIds.length > 0) {
+        alert(`${stoppedInstanceIds.length} 个实例已停止，请重启以应用新配置。`);
+      }
     } catch (err) {
       alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -59,12 +62,15 @@ export function AgentOrchestrator() {
   const handleUnlink = async (subDefId: string) => {
     if (!confirm('确定解除该子 agent 的父子关系？')) return;
     try {
-      await ipc.agent.updateDefinition({
+      const { stoppedInstanceIds } = await ipc.agent.updateDefinition({
         id: subDefId,
         type: 'standalone',
         parentAgentId: undefined,
       });
       if (workspace) await loadAssignments(workspace.id);
+      if (stoppedInstanceIds.length > 0) {
+        alert(`${stoppedInstanceIds.length} 个实例已停止，请重启以应用新配置。`);
+      }
     } catch (err) {
       alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -72,8 +78,11 @@ export function AgentOrchestrator() {
 
   const handleSetAsMain = async (defId: string) => {
     try {
-      await ipc.agent.updateDefinition({ id: defId, type: 'main' });
+      const { stoppedInstanceIds } = await ipc.agent.updateDefinition({ id: defId, type: 'main' });
       if (workspace) await loadAssignments(workspace.id);
+      if (stoppedInstanceIds.length > 0) {
+        alert(`${stoppedInstanceIds.length} 个实例已停止，请重启以应用新配置。`);
+      }
     } catch (err) {
       alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
     }
