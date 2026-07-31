@@ -1,6 +1,6 @@
 // renderer/src/components/files/FileTree.tsx
 // 文件树入口组件：顶部工具条（刷新 / 全部折叠）+ 从根目录 '.' 开始递归渲染，纵向排列并可滚动
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FileTreeView } from './FileTreeView';
 import { PromptDialog } from '../common/PromptDialog';
 import { useFileStore } from '../../stores/file.store';
@@ -14,8 +14,14 @@ interface Props {
 export function FileTree({ onSelectFile }: Props) {
   const collapseAll = useFileStore((s) => s.collapseAll);
   const refreshDir = useFileStore((s) => s.refreshDir);
+  const initWorkspace = useFileStore((s) => s.initWorkspace);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const [creating, setCreating] = useState<'file' | 'dir' | null>(null);
+
+  // workspace 切换时加载该 workspace 的展开态（按 workspace 隔离持久化）
+  useEffect(() => {
+    if (workspace) initWorkspace(workspace.id);
+  }, [workspace, initWorkspace]);
 
   // 刷新当前 workspace 根目录：失效缓存后重新拉取
   const handleRefresh = () => {

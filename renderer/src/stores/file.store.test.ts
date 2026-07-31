@@ -22,12 +22,13 @@ const mockApi = {
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   localStorage.clear();
-  // 重置 store 状态：空缓存 + 仅根展开
+  // 重置 store 状态：空缓存 + 仅根展开 + 未激活 workspace
   useFileStore.setState({
     tree: new Map(),
     expandedDirs: new Set(['.']),
     selectedFile: null,
     error: null,
+    workspaceId: null,
   });
   mockApi.file.create.mockResolvedValue(undefined);
   mockApi.file.delete.mockResolvedValue(undefined);
@@ -163,15 +164,58 @@ describe('file.store CRUD', () => {
   });
 });
 
-describe('file.store expandedDirs 持久化', () => {
-  it('toggleDir 持久化展开目录', () => {
+describe('file.store expandedDirs 按 workspace 隔离持久化', () => {
+  it('initWorkspace 从该 workspace 专属 key 恢复展开目录', () => {
+    localStorage.setItem('fileTree.expanded.ws-1', '[".","src"]');
+
+    useFileStore.getState().initWorkspace('ws-1');
+
+    expect(useFileStore.getState().workspaceId).toBe('ws-1');
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
+  });
+
+  it('initWorkspace 无持久化数据时默认仅展开根目录', () => {
+    useFileStore.getState().initWorkspace('ws-2');
+
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.']);
+  });
+
+  it('initWorkspace 同一 workspace 重复调用不重新加载（保留内存态）', () => {
+    localStorage.setItem('fileTree.expanded.ws-1', '[".","src"]');
+    useFileStore.getState().initWorkspace('ws-1');
+    // 手动改写内存态，使其与持久化数据不一致（绕过持久化）
+    useFileStore.setState({ expandedDirs: new Set(['.']) });
+
+    useFileStore.getState().initWorkspace('ws-1');
+
+    // guard 生效：未重新从 localStorage 读取 src
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.']);
+  });
+
+  it('切换 workspace 加载各自独立的展开态', () => {
+    localStorage.setItem('fileTree.expanded.ws-1', '[".","src"]');
+    localStorage.setItem('fileTree.expanded.ws-2', '[".","docs"]');
+
+    useFileStore.getState().initWorkspace('ws-1');
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
+
+    useFileStore.getState().initWorkspace('ws-2');
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'docs']);
+  });
+
+  it('toggleDir 持久化到当前 workspace 的专属 key', () => {
+    useFileStore.getState().initWorkspace('ws-1');
+
     useFileStore.getState().toggleDir('src');
 
     expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
-    expect(localStorage.getItem('fileTree.expandedDirs')).toBe('[".","src"]');
+    expect(localStorage.getItem('fileTree.expanded.ws-1')).toBe('[".","src"]');
+    // 不污染其他 workspace
+    expect(localStorage.getItem('fileTree.expanded.ws-2')).toBeNull();
   });
 
   it('toggleDir 在 localStorage 写入失败时仍更新内存状态', () => {
+    useFileStore.getState().initWorkspace('ws-1');
     const setItemSpy = vi
       .spyOn(Storage.prototype, 'setItem')
       .mockImplementation(() => {
@@ -184,21 +228,21 @@ describe('file.store expandedDirs 持久化', () => {
     setItemSpy.mockRestore();
   });
 
-  it('collapseAll 持久化仅展开根目录', () => {
+  it('collapseAll 持久化仅展开根目录到当前 workspace', () => {
+    useFileStore.getState().initWorkspace('ws-1');
     useFileStore.setState({ expandedDirs: new Set(['.', 'src']) });
 
     useFileStore.getState().collapseAll();
 
     expect([...useFileStore.getState().expandedDirs]).toEqual(['.']);
-    expect(localStorage.getItem('fileTree.expandedDirs')).toBe('["."]');
+    expect(localStorage.getItem('fileTree.expanded.ws-1')).toBe('["."]');
   });
 
-  it('初始化时从 localStorage 恢复展开目录', async () => {
-    localStorage.setItem('fileTree.expandedDirs', '[".","src"]');
-    vi.resetModules();
+  it('未初始化 workspace 时 toggleDir 仅更新内存（不写持久化）', () => {
+    // workspaceId 为 null（未调用 initWorkspace）
+    useFileStore.getState().toggleDir('src');
 
-    const { useFileStore: restoredFileStore } = await import('./file.store');
-
-    expect([...restoredFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
+    expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
+    expect(localStorage.length).toBe(0);
   });
 });

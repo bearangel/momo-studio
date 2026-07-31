@@ -12,9 +12,13 @@ interface FileState {
   // 当前选中的文件全路径（相对 workspace 根）
   selectedFile: string | null;
   error: string | null;
+  // 当前激活的 workspace ID，用于按 workspace 隔离展开态持久化（null=未初始化）
+  workspaceId: string | null;
 
   // 拉取指定目录的条目并写入缓存
   loadDir: (workspaceId: string, dirPath: string) => Promise<void>;
+  // 切换激活 workspace：从专属 key 加载展开态；同一 workspace 重复调用不重载
+  initWorkspace: (workspaceId: string) => void;
   // 切换目录展开/折叠状态
   toggleDir: (dirPath: string) => void;
   // 记录选中的文件
@@ -31,20 +35,25 @@ interface FileState {
   renamePath: (workspaceId: string, srcPath: string, dstPath: string) => Promise<void>;
 }
 
+// 按 workspace 隔离的展开态持久化 key
+const expandedKey = (workspaceId: string): string => `fileTree.expanded.${workspaceId}`;
+
+// 将展开态写入当前 workspace 的专属 key；无 workspace 或写入失败时静默
+const persistExpanded = (workspaceId: string | null, expanded: Set<string>): void => {
+  if (!workspaceId) return;
+  try {
+    localStorage.setItem(expandedKey(workspaceId), JSON.stringify([...expanded]));
+  } catch {
+    // localStorage 写入失败不影响内存中的展开状态
+  }
+};
+
 export const useFileStore = create<FileState>((set, get) => ({
   tree: new Map(),
-  expandedDirs: new Set<string>(
-    (() => {
-      try {
-        const stored = localStorage.getItem('fileTree.expandedDirs');
-        return stored ? (JSON.parse(stored) as string[]) : ['.'];
-      } catch {
-        return ['.'];
-      }
-    })(),
-  ),
+  expandedDirs: new Set<string>(['.']),
   selectedFile: null,
   error: null,
+  workspaceId: null,
 
   loadDir: async (workspaceId, dirPath) => {
     const entries = await ipc.file.list(workspaceId, dirPath);
@@ -56,6 +65,19 @@ export const useFileStore = create<FileState>((set, get) => ({
     });
   },
 
+  initWorkspace: (workspaceId) => {
+    // 同一 workspace 重复初始化直接跳过，避免覆盖内存中的展开态
+    if (get().workspaceId === workspaceId) return;
+    let expanded: Set<string>;
+    try {
+      const stored = localStorage.getItem(expandedKey(workspaceId));
+      expanded = new Set(stored ? (JSON.parse(stored) as string[]) : ['.']);
+    } catch {
+      expanded = new Set(['.']);
+    }
+    set({ workspaceId, expandedDirs: expanded });
+  },
+
   toggleDir: (dirPath) => {
     set((state) => {
       const expanded = new Set(state.expandedDirs);
@@ -64,11 +86,7 @@ export const useFileStore = create<FileState>((set, get) => ({
       } else {
         expanded.add(dirPath);
       }
-      try {
-        localStorage.setItem('fileTree.expandedDirs', JSON.stringify([...expanded]));
-      } catch {
-        // localStorage 写入失败不影响内存中的展开状态
-      }
+      persistExpanded(state.workspaceId, expanded);
       return { expandedDirs: expanded };
     });
   },
@@ -77,11 +95,7 @@ export const useFileStore = create<FileState>((set, get) => ({
 
   collapseAll: () => {
     const expanded = new Set(['.']);
-    try {
-      localStorage.setItem('fileTree.expandedDirs', JSON.stringify([...expanded]));
-    } catch {
-      // localStorage 写入失败不影响内存中的展开状态
-    }
+    persistExpanded(get().workspaceId, expanded);
     set({ expandedDirs: expanded });
   },
 
