@@ -23,6 +23,7 @@ interface WorkspaceRow {
   created_at: string;
   owner_id: string;
   icon_emoji: string;
+  coordinator_instance_id: string | null;
 }
 
 /** SQLite 行 → 领域对象（snake_case → camelCase） */
@@ -38,6 +39,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     createdAt: row.created_at,
     ownerId: row.owner_id,
     iconEmoji: row.icon_emoji,
+    coordinatorInstanceId: row.coordinator_instance_id,
   };
 }
 
@@ -116,4 +118,14 @@ export function deleteWorkspace(id: string): void {
   const db = getDb();
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
   logger.info('Workspace 已删除', { id });
+}
+
+/** 设置/清空 workspace 的协调 agent。null 表示清空。 */
+export function setWorkspaceCoordinator(workspaceId: string, instanceId: string | null): void {
+  const db = getDb();
+  const result = db.prepare('UPDATE workspaces SET coordinator_instance_id = ? WHERE id = ?').run(
+    instanceId,
+    workspaceId,
+  );
+  if (result.changes === 0) throw new Error(`Workspace 不存在: ${workspaceId}`);
 }

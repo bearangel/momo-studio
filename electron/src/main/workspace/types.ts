@@ -16,6 +16,8 @@ export interface Workspace {
   createdAt: string;
   ownerId: string;
   iconEmoji: string;
+  /** 该 workspace 的"协调 agent"实例 ID（team 群非@消息的默认接待者）；null=未指定 */
+  coordinatorInstanceId: string | null;
 }
 
 /** 创建 workspace 时的输入 */
