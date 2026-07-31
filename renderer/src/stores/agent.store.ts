@@ -24,6 +24,13 @@ interface AgentState {
   syncRunningStates: () => Promise<void>;
   /** 一键添加 agent 到 workspace（编排由主进程完成），成功后刷新列表 */
   addAgent: (workspaceId: string, defId: string, apiKey: string) => Promise<void>;
+  /** 安装 main agent 及其子 agents（编排由主进程完成） */
+  assignMainAgent: (
+    workspaceId: string,
+    mainDefId: string,
+    apiKey: string,
+    selectedSubDefIds?: string[],
+  ) => Promise<void>;
   /** 停止运行中的 agent 实例 */
   stopAgent: (instanceId: string) => Promise<void>;
   reset: () => void;
@@ -79,6 +86,28 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       set((state) => ({
         assignments: [...state.assignments, assignment],
         running: { ...state.running, [assignment.instanceId]: true },
+      }));
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  assignMainAgent: async (workspaceId, mainDefId, apiKey, selectedSubDefIds) => {
+    set({ error: null });
+    try {
+      const newAssignments = await ipc.agent.assignMain({
+        workspaceId,
+        mainDefId,
+        llmApiKey: apiKey,
+        selectedSubDefIds,
+      });
+      // assignMain 已启动 runtime，全部标记为运行中
+      const newRunning: Record<string, boolean> = {};
+      for (const a of newAssignments) newRunning[a.instanceId] = true;
+      set((state) => ({
+        assignments: [...state.assignments, ...newAssignments],
+        running: { ...state.running, ...newRunning },
       }));
     } catch (err) {
       set({ error: (err as Error).message });

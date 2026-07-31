@@ -29,6 +29,24 @@ const MOCK_ASSIGNMENT: AgentAssignment = {
   createdAt: '2026-01-01T00:00:00Z',
 };
 
+const MOCK_MAIN_ASSIGNMENT: AgentAssignment = {
+  instanceId: 'main-i',
+  workspaceId: 'ws-1',
+  agentDefinitionId: 'main-d',
+  botMatrixUserId: '@main:localhost',
+  enabled: true,
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+const MOCK_SUB_ASSIGNMENT: AgentAssignment = {
+  instanceId: 'sub-i',
+  workspaceId: 'ws-1',
+  agentDefinitionId: 'sub-d',
+  botMatrixUserId: '@sub:localhost',
+  enabled: true,
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
 const mockApi = {
   agent: {
     list: vi.fn().mockResolvedValue(MOCK_DEFS),
@@ -36,6 +54,7 @@ const mockApi = {
     addToWorkspace: vi.fn().mockResolvedValue(MOCK_ASSIGNMENT),
     stop: vi.fn().mockResolvedValue({ ok: true }),
     isRunning: vi.fn().mockResolvedValue(true),
+    assignMain: vi.fn().mockResolvedValue([MOCK_MAIN_ASSIGNMENT, MOCK_SUB_ASSIGNMENT]),
   },
 };
 
@@ -46,7 +65,9 @@ beforeEach(() => {
   mockApi.agent.listAssignments.mockResolvedValue([MOCK_ASSIGNMENT]);
   mockApi.agent.addToWorkspace.mockResolvedValue(MOCK_ASSIGNMENT);
   mockApi.agent.isRunning.mockResolvedValue(true);
+  mockApi.agent.assignMain.mockResolvedValue([MOCK_MAIN_ASSIGNMENT, MOCK_SUB_ASSIGNMENT]);
   mockApi.agent.stop.mockClear();
+  mockApi.agent.assignMain.mockClear();
 });
 
 describe('agent.store', () => {
@@ -89,5 +110,25 @@ describe('agent.store', () => {
     await useAgentStore.getState().stopAgent('inst-1');
     expect(mockApi.agent.stop).toHaveBeenCalledWith('inst-1');
     expect(useAgentStore.getState().running['inst-1']).toBe(false);
+  });
+});
+
+describe('assignMainAgent', () => {
+  it('调 IPC 后追加 assignments 并标记运行中', async () => {
+    await useAgentStore.getState().assignMainAgent('ws-1', 'main-d', 'sk-test');
+    const { assignments, running } = useAgentStore.getState();
+    expect(assignments).toHaveLength(2);
+    expect(running['main-i']).toBe(true);
+    expect(running['sub-i']).toBe(true);
+  });
+
+  it('selectedSubDefIds 传给 IPC', async () => {
+    await useAgentStore.getState().assignMainAgent('ws-1', 'main-d', 'sk-test', ['sub-d']);
+    expect(mockApi.agent.assignMain).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      mainDefId: 'main-d',
+      llmApiKey: 'sk-test',
+      selectedSubDefIds: ['sub-d'],
+    });
   });
 });
