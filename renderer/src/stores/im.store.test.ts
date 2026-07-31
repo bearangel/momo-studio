@@ -93,6 +93,13 @@ describe('im.store', () => {
     expect(mockApi.im.send).toHaveBeenCalledWith('!room1:localhost', 'hello');
   });
 
+  it('sendMessage 不插入本地乐观消息（SDK local echo 经 sync-manager 推送，避免重复与错误归属）', async () => {
+    await useImStore.getState().loadRooms();
+    await useImStore.getState().sendMessage('hello');
+    const msgs = useImStore.getState().messagesByRoom.get('!room1:localhost') ?? [];
+    expect(msgs.some((m) => m.sender === '' || m.eventId.startsWith('local-'))).toBe(false);
+  });
+
   it('sendMessage is a no-op when no room is active', async () => {
     await useImStore.getState().sendMessage('hello');
     expect(mockApi.im.send).not.toHaveBeenCalled();

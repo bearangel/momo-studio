@@ -107,23 +107,9 @@ export const useImStore = create<ImState>((set, get) => ({
   sendMessage: async (body) => {
     const { activeRoomId } = get();
     if (!activeRoomId) return;
+    // 不做本地乐观插入：SDK local echo 经 sync-manager 推回 receiveMessage（自带正确 sender）。
+    // 手动乐观会因 eventId 不可去重 + sender='' 错误归属，产生"别人重复我的消息"幻影。
     await ipc.im.send(activeRoomId, body);
-    // 乐观更新：立即在 UI 显示自己发的消息
-    set((state) => {
-      const map = new Map(state.messagesByRoom);
-      const existing = map.get(activeRoomId) ?? [];
-      const optimisticMsg: ImMessage = {
-        eventId: `local-${Date.now()}`,
-        roomId: activeRoomId,
-        sender: '',
-        body,
-        eventType: 'm.room.message',
-        content: {},
-        timestamp: Date.now(),
-      };
-      map.set(activeRoomId, [...existing, optimisticMsg]);
-      return { messagesByRoom: map };
-    });
   },
 
   reset: () =>
