@@ -15,6 +15,7 @@ interface Props {
 
 export function AgentList({ onAdd }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
+  const setCoordinator = useWorkspaceStore((s) => s.setCoordinator);
   const { assignments, definitions, running, loading, loadDefinitions, loadAssignments } =
     useAgentStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -66,8 +67,13 @@ export function AgentList({ onAdd }: Props) {
                 >
                   <span className="text-xl">{def?.iconEmoji ?? '🤖'}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-neutral-100 truncate">
-                      {def?.name ?? a.agentDefinitionId}
+                    <div className="text-sm text-neutral-100 flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{def?.name ?? a.agentDefinitionId}</span>
+                      {workspace?.coordinatorInstanceId === a.instanceId && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 shrink-0">
+                          协调
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-neutral-500 truncate">{a.botMatrixUserId}</div>
                   </div>
@@ -113,6 +119,33 @@ export function AgentList({ onAdd }: Props) {
                     >
                       启动
                     </Button>
+                  )}
+                  {workspace && workspace.coordinatorInstanceId === a.instanceId ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void setCoordinator(workspace.id, null);
+                      }}
+                      className="text-xs text-amber-400 hover:text-amber-300"
+                    >
+                      取消协调
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!workspace}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!workspace) return;
+                        void setCoordinator(workspace.id, a.instanceId).then(() =>
+                          alert('已设为协调 agent。若该实例正在运行，请停止后重新启动以生效。'),
+                        );
+                      }}
+                      className="text-xs text-neutral-400 hover:text-amber-400 disabled:opacity-40"
+                    >
+                      ⭐ 设为协调
+                    </button>
                   )}
                   <button
                     type="button"

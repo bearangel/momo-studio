@@ -18,6 +18,8 @@ interface WorkspaceState {
   select: (id: string) => void;
   // 获取当前激活的 workspace（无则 null）
   getActive: () => Workspace | null;
+  // 设为/取消协调 agent（instanceId=null 表示取消），完成后刷新 workspaces
+  setCoordinator: (workspaceId: string, instanceId: string | null) => Promise<void>;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -52,5 +54,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   getActive: () => {
     const { workspaces, activeWorkspaceId } = get();
     return workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  },
+
+  setCoordinator: async (workspaceId, instanceId) => {
+    await ipc.workspace.setCoordinator(workspaceId, instanceId);
+    // 刷新 workspace 列表以拿到新的 coordinatorInstanceId
+    const list = await ipc.workspace.list();
+    set({ workspaces: list });
   },
 }));
