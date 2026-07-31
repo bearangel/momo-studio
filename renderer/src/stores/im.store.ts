@@ -61,11 +61,11 @@ export const useImStore = create<ImState>((set, get) => ({
         map.set(roomId, messages);
         return { messagesByRoom: map, loading: false };
       });
-      // 与消息加载并行触发成员加载（不阻塞消息渲染）
-      void get().loadMembers(roomId);
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
     }
+    // 放在 try 外：即使消息拉取失败也刷新成员，避免显示上个房间的陈旧成员
+    void get().loadMembers(roomId);
   },
 
   loadMembers: async (roomId) => {
