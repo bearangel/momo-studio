@@ -228,6 +228,16 @@ export interface InstalledPackage {
   installedAt: string;
 }
 
+/** 全局模型供应商（注册表项，不含 apiKey） */
+export interface ModelProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  defaultModel: string | null;
+  isDefault: boolean;
+  createdAt: string;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -277,6 +287,16 @@ export interface ApiSurface {
     stop(instanceId: string): Promise<{ ok: boolean }>;
     removeAssignment(instanceId: string): Promise<{ ok: boolean }>;
     isRunning(instanceId: string): Promise<boolean>;
+  };
+  provider: {
+    list(): Promise<ModelProvider[]>;
+    get(id: string): Promise<ModelProvider | null>;
+    create(input: { name: string; baseUrl: string; apiKey: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
+    update(input: { id: string; name?: string; baseUrl?: string; apiKey?: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
+    delete(id: string): Promise<{ ok: boolean }>;
+    setDefault(id: string): Promise<{ ok: boolean }>;
+    testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
+    getApiKey(id: string): Promise<string | null>;
   };
   im: {
     startSync(): Promise<void>;

@@ -42,6 +42,16 @@ const api: ApiSurface = {
     removeAssignment: (instanceId) => invoke('agent:removeAssignment', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
   },
+  provider: {
+    list: () => invoke('provider:list'),
+    get: (id) => invoke('provider:get', id),
+    create: (input) => invoke('provider:create', input),
+    update: (input) => invoke('provider:update', input),
+    delete: (id) => invoke('provider:delete', id),
+    setDefault: (id) => invoke('provider:setDefault', id),
+    testConnection: (input) => invoke('provider:testConnection', input),
+    getApiKey: (id) => invoke('provider:getApiKey', id),
+  },
   im: {
     startSync: () => invoke('im:startSync'),
     send: (roomId, body) => invoke('im:send', roomId, body),

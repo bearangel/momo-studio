@@ -2,6 +2,7 @@
 import { app, BrowserWindow } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
+import { registerProviderHandlers } from './agent/provider-ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession } from './matrix/sync-manager';
@@ -26,6 +27,7 @@ app.whenReady().then(async () => {
     });
 
     registerIpcHandlers();
+    registerProviderHandlers();
 
     const win = createMainWindow();
     setMainWindow(win);
