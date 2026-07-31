@@ -266,15 +266,21 @@ async function main(): Promise<void> {
   });
 
   // 只接受 owner 发出的邀请：bot 被邀请进恶意 room 后若 auto-join 会导致数据泄露。
-  // Matrix invite 事件（m.room.member, membership=invite）的 sender 即邀请者。
+  // 邀请者 = bot 的 m.room.member(invite) 事件的 sender。
+  // 不用 getLiveTimeline().getEvents()——对未加入的 invite 房间该时间线为空，
+  // lastEvent 恒 undefined → 误判为非 owner → 拒绝所有新房间邀请（仅团队群因启动时
+  // 显式 joinRoom 而幸免）。改从 membership 事件取 sender。
   client.on(RoomEvent.MyMembership, (room: Room, membership: string) => {
     if (membership !== 'invite') return;
-    const events = room.getLiveTimeline().getEvents();
-    const lastEvent = events[events.length - 1];
-    if (lastEvent?.getSender() !== config.ownerUserId) {
-      process.stderr.write(`拒绝非 owner 邀请: ${room.roomId}\n`);
+    const inviteEvent = room.getMember(config.botUserId)?.events.member;
+    const inviter = inviteEvent?.getSender();
+    if (inviter !== config.ownerUserId) {
+      process.stderr.write(
+        `拒绝非 owner 邀请: ${room.roomId} (inviter=${inviter ?? 'unknown'}, owner=${config.ownerUserId})\n`,
+      );
       return;
     }
+    process.stderr.write(`接受 owner 邀请，加入 room: ${room.roomId}\n`);
     void client.joinRoom(room.roomId).catch((err: unknown) => {
       process.stderr.write(`加入 room 失败 ${room.roomId}: ${(err as Error).message}\n`);
     });
