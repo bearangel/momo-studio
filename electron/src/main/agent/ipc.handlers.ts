@@ -340,14 +340,27 @@ export function registerAgentHandlers(): void {
     modelName: string;
     modelBaseUrl?: string;
     iconEmoji?: string;
+    type?: 'standalone' | 'main' | 'sub';
+    parentAgentId?: string;
   }) => {
     const { randomUUID } = await import('node:crypto');
+    const type = input.type ?? 'standalone';
+
+    // 校验：sub 必须挂在一个 type='main' 的父 agent 上。
+    // 不允许指向不存在 / 非 main 的 agent，避免产生孤儿 sub。
+    if (type === 'sub') {
+      if (!input.parentAgentId) throw new Error('子 agent 必须指定父主 agent');
+      const parent = getAgentDefinition(input.parentAgentId);
+      if (!parent) throw new Error('父 agent 不存在');
+      if (parent.type !== 'main') throw new Error('父 agent 不是 main 类型');
+    }
+
     const def: import('./types').AgentDefinition = {
       id: randomUUID(),
       name: input.name,
       slug: input.slug,
       version: '1.0.0',
-      type: 'standalone',
+      type,
       runtime: 'declarative',
       systemPrompt: input.systemPrompt,
       model: {
@@ -365,9 +378,11 @@ export function registerAgentHandlers(): void {
       source: 'custom',
       description: input.description,
       iconEmoji: input.iconEmoji ?? '🤖',
+      // standalone/main 不挂父 agent；sub 使用传入的 parentAgentId
+      parentAgentId: type === 'sub' ? input.parentAgentId : undefined,
     };
     saveAgentDefinition(def);
-    logger.info('自定义 Agent 定义已创建', { slug: def.slug });
+    logger.info('自定义 Agent 定义已创建', { slug: def.slug, type: def.type });
     return def;
   });
 
@@ -383,8 +398,32 @@ export function registerAgentHandlers(): void {
       modelName?: string;
       modelBaseUrl?: string;
       iconEmoji?: string;
+      type?: 'standalone' | 'main' | 'sub';
+      parentAgentId?: string;
     }) => {
       const { updateAgentDefinition, stopRunningInstancesByDefinition } = await import('./crud');
+
+      // 校验：若调用方显式传入 type 且非 'main'，且当前定义是 main 且仍有 sub 挂靠，
+      // 拒绝降级（避免产生孤儿 sub：assignMainAgent 按 parentAgentId=mainId 找不到归属）
+      if (input.type && input.type !== 'main') {
+        const existing = getAgentDefinition(input.id);
+        if (existing?.type === 'main') {
+          const hasSubs = listAgentDefinitions().some((d) => d.parentAgentId === input.id);
+          if (hasSubs) {
+            throw new Error('该 main agent 仍有子 agent 关联，请先解除所有子 agent 的关联');
+          }
+        }
+      }
+
+      // 校验：若目标 type 为 sub 且显式给出 parentAgentId，必须指向一个 type='main' 的 agent，
+      // 且不能是自己（自引用会让 assignMainAgent 误把 sub 视为自己的父）
+      if (input.type === 'sub' && input.parentAgentId) {
+        const parent = getAgentDefinition(input.parentAgentId);
+        if (!parent) throw new Error('父 agent 不存在');
+        if (parent.type !== 'main') throw new Error('父 agent 不是 main 类型');
+        if (input.parentAgentId === input.id) throw new Error('不能将自身设为父 agent');
+      }
+
       const updated = updateAgentDefinition(input);
       const stopped = stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {

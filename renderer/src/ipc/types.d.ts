@@ -93,6 +93,8 @@ export interface AssignMainInput {
   workspaceId: string;
   mainDefId: string;
   llmApiKey: string;
+  /** 要安装的子 agent 定义 ID 列表；undefined = 全部安装 */
+  selectedSubDefIds?: string[];
 }
 
 export interface ImMessage {
@@ -295,6 +297,8 @@ export interface ApiSurface {
       modelName: string;
       modelBaseUrl?: string;
       iconEmoji?: string;
+      type?: 'standalone' | 'main' | 'sub';
+      parentAgentId?: string;
     }): Promise<AgentDefinition>;
     list(): Promise<AgentDefinition[]>;
     assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
@@ -313,6 +317,8 @@ export interface ApiSurface {
       modelName?: string;
       modelBaseUrl?: string;
       iconEmoji?: string;
+      type?: 'standalone' | 'main' | 'sub';
+      parentAgentId?: string;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
     updateApiKey(instanceId: string, apiKey: string): Promise<{ ok: boolean }>;
     onRuntimeChanged(callback: () => void): () => void;
