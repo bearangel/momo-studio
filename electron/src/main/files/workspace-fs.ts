@@ -97,4 +97,37 @@ export class WorkspaceFS {
       return false;
     }
   }
+
+  /** 创建空文件（touch）。父目录自动创建。 */
+  async createFile(relativePath: string): Promise<void> {
+    const abs = this.assertInWorkspace(relativePath);
+    const dir = path.dirname(abs);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    await fs.promises.writeFile(abs, '');
+  }
+
+  /** 递归创建目录（mkdir -p）。 */
+  async createDir(relativePath: string): Promise<void> {
+    const abs = this.assertInWorkspace(relativePath);
+    await fs.promises.mkdir(abs, { recursive: true });
+  }
+
+  /** 删除文件或目录（目录递归）。 */
+  async deletePath(relativePath: string): Promise<void> {
+    const abs = this.assertInWorkspace(relativePath);
+    await fs.promises.rm(abs, { recursive: true, force: false });
+  }
+
+  /** 重命名/移动。源和目标都经 assertInWorkspace 校验。 */
+  async rename(srcRelativePath: string, dstRelativePath: string): Promise<void> {
+    const srcAbs = this.assertInWorkspace(srcRelativePath);
+    const dstAbs = this.assertInWorkspace(dstRelativePath);
+    const dstDir = path.dirname(dstAbs);
+    if (!fs.existsSync(dstDir)) {
+      fs.mkdirSync(dstDir, { recursive: true });
+    }
+    await fs.promises.rename(srcAbs, dstAbs);
+  }
 }
