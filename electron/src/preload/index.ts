@@ -58,6 +58,10 @@ const api: ApiSurface = {
     sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
     getRooms: () => invoke('im:getRooms'),
     getMessages: (roomId) => invoke('im:getMessages', roomId),
+    createRoom: (input) => invoke('im:createRoom', input),
+    renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
+    dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),
+    getMembers: (roomId) => invoke('im:getMembers', roomId),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
       ipcRenderer.on('im:message', handler);

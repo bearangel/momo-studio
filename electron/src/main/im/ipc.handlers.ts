@@ -43,5 +43,33 @@ export function registerImHandlers(): void {
     return getRoomMessages(roomId);
   });
 
+  // 新建房间（私聊/群组）
+  ipcMain.handle(
+    'im:createRoom',
+    async (_evt, input: { name: string; isDirect: boolean; inviteUserIds: string[] }) => {
+      const { createRoom } = await import('./room-ops');
+      return createRoom(input);
+    },
+  );
+
+  // 重命名房间
+  ipcMain.handle('im:renameRoom', async (_evt, roomId: string, name: string) => {
+    const { renameRoom } = await import('./room-ops');
+    await renameRoom(roomId, name);
+    return { ok: true };
+  });
+
+  // 解散/退出房间（自适应）
+  ipcMain.handle('im:dissolveRoom', async (_evt, roomId: string) => {
+    const { dissolveRoom } = await import('./room-ops');
+    return dissolveRoom(roomId);
+  });
+
+  // 查询房间成员
+  ipcMain.handle('im:getMembers', async (_evt, roomId: string) => {
+    const { getRoomMembers } = await import('./room-ops');
+    return getRoomMembers(roomId);
+  });
+
   logger.info('IM IPC handlers 已注册');
 }

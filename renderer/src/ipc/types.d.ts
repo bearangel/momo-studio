@@ -111,6 +111,16 @@ export interface ImRoomInfo {
   isSystem?: boolean;
 }
 
+/** 房间成员（含身份标识） */
+export interface RoomMember {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  powerLevel: number;
+  isBot: boolean;
+  isLocalUser: boolean;
+}
+
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
 export interface McpToolInfo {
   name: string;
@@ -304,6 +314,10 @@ export interface ApiSurface {
     sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
     getRooms(): Promise<ImRoomInfo[]>;
     getMessages(roomId: string): Promise<ImMessage[]>;
+    createRoom(input: { name: string; isDirect: boolean; inviteUserIds: string[] }): Promise<{ roomId: string }>;
+    renameRoom(roomId: string, name: string): Promise<{ ok: boolean }>;
+    dissolveRoom(roomId: string): Promise<{ dissolved: boolean }>;
+    getMembers(roomId: string): Promise<RoomMember[]>;
     onMessage(callback: (msg: ImMessage) => void): () => void;
   };
   mcp: {
