@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useImStore } from '../../stores/im.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateRoomDialog } from './CreateRoomDialog';
 import { cn } from '../../lib/cn';
@@ -13,6 +14,7 @@ export function RoomList() {
   const loadRooms = useImStore((s) => s.loadRooms);
   const refreshRoomList = useImStore((s) => s.refreshRoomList);
   const loading = useImStore((s) => s.loading);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
 
   // 新建房间对话框状态 + 邀请候选（当前 workspace 内启用的 agent bot）
   const [createOpen, setCreateOpen] = useState(false);
@@ -107,33 +109,44 @@ export function RoomList() {
               </span>
             )}
           </button>
-          {/* 非系统房间加悬停操作：✏️重命名 / 🗑解散。系统房间（含团队群）受保护，无操作 */}
-          {!room.isSystem && (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
-              <button
-                type="button"
-                title="重命名"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleRename(room.roomId, room.name);
-                }}
-                className="text-neutral-500 hover:text-neutral-200 text-xs"
-              >
-                ✏️
-              </button>
-              <button
-                type="button"
-                title="解散"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleDissolve(room.roomId, room.name);
-                }}
-                className="text-neutral-500 hover:text-red-400 text-xs"
-              >
-                🗑
-              </button>
-            </span>
-          )}
+          {/* 团队群（任一 workspace 的 teamRoomId）受保护，显示锁标记、无解散/重命名 */}
+          {(() => {
+            const isTeamRoom = workspaces.some((w) => w.teamRoomId === room.roomId);
+            if (isTeamRoom) {
+              return (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500" title="团队群随 workspace 删除">
+                  🔒
+                </span>
+              );
+            }
+            if (room.isSystem) return null;
+            return (
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <button
+                  type="button"
+                  title="重命名"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleRename(room.roomId, room.name);
+                  }}
+                  className="text-neutral-500 hover:text-neutral-200 text-xs"
+                >
+                  ✏️
+                </button>
+                <button
+                  type="button"
+                  title="解散"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDissolve(room.roomId, room.name);
+                  }}
+                  className="text-neutral-500 hover:text-red-400 text-xs"
+                >
+                  🗑
+                </button>
+              </span>
+            );
+          })()}
         </div>
       ))}
       <CreateRoomDialog

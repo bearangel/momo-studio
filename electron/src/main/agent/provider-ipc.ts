@@ -13,20 +13,37 @@ import {
 interface TestConnectionInput { baseUrl: string; apiKey: string; model: string; }
 interface TestConnectionResult { ok: boolean; error?: string; }
 
+/** 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄 */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0';
+}
+
 /** 发最小 chat completion 请求验证连通性（不落库） */
 export async function testProviderConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+  // scheme 校验：仅 http(s)；http 仅允许本机（本地 Ollama 等），非本机必须 https
+  let parsed: URL;
   try {
-    const url = input.baseUrl.endsWith('/v1')
-      ? `${input.baseUrl}/chat/completions`
-      : `${input.baseUrl.replace(/\/$/, '')}/chat/completions`;
-    const resp = await fetch(url, {
+    parsed = new URL(input.baseUrl);
+  } catch {
+    return { ok: false, error: 'baseUrl 格式无效' };
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { ok: false, error: '仅支持 http/https 协议' };
+  }
+  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
+    return { ok: false, error: '非本机地址必须使用 https（防止凭据被截获）' };
+  }
+  try {
+    const base = input.baseUrl.replace(/\/$/, '');
+    const resp = await fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` },
       body: JSON.stringify({ model: input.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
     });
+    // 不回传远端响应体（消除 SSRF 读出通道），仅回状态码
     if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      return { ok: false, error: `HTTP ${resp.status}: ${body.slice(0, 200)}` };
+      return { ok: false, error: `HTTP ${resp.status}` };
     }
     return { ok: true };
   } catch (err) {
@@ -48,8 +65,8 @@ export function registerProviderHandlers(): void {
     updateProvider(input),
   );
 
-  ipcMain.handle('provider:delete', (_e, id: string) => {
-    void deleteProvider(id);
+  ipcMain.handle('provider:delete', async (_e, id: string) => {
+    await deleteProvider(id);
     return { ok: true };
   });
 

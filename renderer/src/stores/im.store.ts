@@ -44,9 +44,13 @@ export const useImStore = create<ImState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const roomList = await ipc.im.getRooms();
-      const activeId = roomList.length > 0 ? roomList[0]!.roomId : null;
+      // 保留当前选中房间（若仍存在）；仅初次加载或选中房间消失才回退首条
+      const cur = get().activeRoomId;
+      const stillThere = cur != null && roomList.some((r) => r.roomId === cur);
+      const activeId = stillThere ? cur : (roomList[0]?.roomId ?? null);
       set({ rooms: roomList, activeRoomId: activeId, loading: false });
-      if (activeId) {
+      // 仅选中房间变更时才重载消息流，避免刷新时闪烁
+      if (activeId && activeId !== cur) {
         await get().selectRoom(activeId);
       }
     } catch (err) {

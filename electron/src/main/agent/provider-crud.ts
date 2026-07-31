@@ -77,7 +77,13 @@ export async function createProvider(input: {
     id, input.name, input.baseUrl, apiKeyRef,
     input.defaultModel ?? null, input.isDefault ? 1 : 0,
   );
-  await setSecret(apiKeyRef, input.apiKey);
+  // keychain 写入与 DB 无法跨存储原子化：失败时回滚 DB 行，避免留下无密钥的孤儿供应商
+  try {
+    await setSecret(apiKeyRef, input.apiKey);
+  } catch (err) {
+    db.prepare('DELETE FROM model_providers WHERE id = ?').run(id);
+    throw err;
+  }
   if (input.isDefault) setDefaultProvider(id);
   logger.info('供应商已创建', { id, name: input.name });
   return getProvider(id)!;
