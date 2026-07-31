@@ -60,6 +60,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
 
         // 目录节点：可展开/折叠，展开时递归渲染子树
         if (entry.isDirectory) {
+          // 该子目录自身的展开态（区别于组件级根展开态 expanded）
+          const entryExpanded = expandedDirs.has(fullPath);
           return (
             <div key={fullPath}>
               <button
@@ -69,11 +71,11 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
                 )}
                 style={{ paddingLeft: depth * 16 }}
               >
-                <span className="text-xs">{expanded ? '▼' : '▶'}</span>
-                <span>{expanded ? '📂' : '📁'}</span>
+                <span className="text-xs">{entryExpanded ? '▼' : '▶'}</span>
+                <span>{entryExpanded ? '📂' : '📁'}</span>
                 <span className="truncate">{entry.name}</span>
               </button>
-              {expanded && (
+              {entryExpanded && (
                 <FileTreeView
                   dirPath={fullPath}
                   depth={depth + 1}
