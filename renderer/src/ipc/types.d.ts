@@ -30,6 +30,8 @@ export interface Workspace {
   createdAt: string;
   ownerId: string;
   iconEmoji: string;
+  /** 该 workspace 的"协调 agent"实例 ID；null=未指定 */
+  coordinatorInstanceId: string | null;
 }
 
 export interface CreateWorkspaceInput {
@@ -264,6 +266,8 @@ export interface ApiSurface {
     list(): Promise<Workspace[]>;
     get(id: string): Promise<Workspace | null>;
     delete(id: string): Promise<void>;
+    setCoordinator(workspaceId: string, instanceId: string | null): Promise<{ ok: boolean }>;
+    getCoordinator(workspaceId: string): Promise<{ instanceId: string | null }>;
   };
   file: {
     read(workspaceId: string, filePath: string): Promise<string>;

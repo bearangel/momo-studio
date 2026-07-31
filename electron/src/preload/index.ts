@@ -22,6 +22,8 @@ const api: ApiSurface = {
     list: () => invoke('workspace:list'),
     get: (id) => invoke('workspace:get', id),
     delete: (id) => invoke('workspace:delete', id),
+    setCoordinator: (id, instanceId) => invoke('workspace:setCoordinator', id, instanceId),
+    getCoordinator: (id) => invoke('workspace:getCoordinator', id),
   },
   file: {
     read: (wsId, path) => invoke('file:read', wsId, path),

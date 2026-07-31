@@ -19,6 +19,7 @@ const STUB_WORKSPACE: Workspace = {
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
   iconEmoji: '📁',
+  coordinatorInstanceId: null,
 };
 
 // MainLayout 的 useEffect 会调用 ipc.im.startSync / onMessage / loadRooms(getRooms)，

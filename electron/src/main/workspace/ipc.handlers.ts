@@ -7,7 +7,7 @@
 // （从 keychain 恢复 token，构造一次性 client，不启动 /sync）。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
-import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace } from './crud';
+import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, setWorkspaceCoordinator } from './crud';
 import {
   getAllocation,
   addAllocation,
@@ -44,6 +44,21 @@ export function registerWorkspaceHandlers(): void {
   ipcMain.handle('workspace:delete', async (_evt, id: string) => {
     deleteWorkspace(id);
     return;
+  });
+
+  // 设置/清空协调 agent
+  ipcMain.handle(
+    'workspace:setCoordinator',
+    async (_evt, workspaceId: string, instanceId: string | null) => {
+      setWorkspaceCoordinator(workspaceId, instanceId);
+      return { ok: true };
+    },
+  );
+
+  // 查询当前协调 agent
+  ipcMain.handle('workspace:getCoordinator', async (_evt, workspaceId: string) => {
+    const ws = getWorkspace(workspaceId);
+    return { instanceId: ws?.coordinatorInstanceId ?? null };
   });
 
   logger.info('Workspace IPC handlers 已注册');
