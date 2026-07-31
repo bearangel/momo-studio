@@ -22,9 +22,15 @@ interface FileState {
   collapseAll: () => void;
   // 失效指定目录缓存并重新拉取（刷新）
   refreshDir: (workspaceId: string, dirPath: string) => Promise<void>;
+  // 新建文件或目录，完成后刷新其父目录缓存
+  createPath: (workspaceId: string, filePath: string, type: 'file' | 'dir') => Promise<void>;
+  // 删除文件或目录，完成后刷新其父目录缓存
+  deletePath: (workspaceId: string, filePath: string) => Promise<void>;
+  // 重命名/移动，完成后刷新源与目标父目录缓存
+  renamePath: (workspaceId: string, srcPath: string, dstPath: string) => Promise<void>;
 }
 
-export const useFileStore = create<FileState>((set) => ({
+export const useFileStore = create<FileState>((set, get) => ({
   tree: new Map(),
   expandedDirs: new Set(['.']),
   selectedFile: null,
@@ -68,5 +74,26 @@ export const useFileStore = create<FileState>((set) => ({
       tree.set(dirPath, entries);
       return { tree };
     });
+  },
+
+  createPath: async (workspaceId, filePath, type) => {
+    await ipc.file.create(workspaceId, filePath, type);
+    // 取父目录路径：根目录下文件父目录为 '.'；否则截到最后一个 '/'
+    const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
+    await get().refreshDir(workspaceId, parent);
+  },
+
+  deletePath: async (workspaceId, filePath) => {
+    await ipc.file.delete(workspaceId, filePath);
+    const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
+    await get().refreshDir(workspaceId, parent);
+  },
+
+  renamePath: async (workspaceId, srcPath, dstPath) => {
+    await ipc.file.rename(workspaceId, srcPath, dstPath);
+    const srcParent = srcPath.includes('/') ? srcPath.slice(0, srcPath.lastIndexOf('/')) : '.';
+    const dstParent = dstPath.includes('/') ? dstPath.slice(0, dstPath.lastIndexOf('/')) : '.';
+    await get().refreshDir(workspaceId, srcParent);
+    if (srcParent !== dstParent) await get().refreshDir(workspaceId, dstParent);
   },
 }));
