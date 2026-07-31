@@ -69,6 +69,8 @@ export interface AssignMainInput {
   mainDefId: string;
   /** LLM API key，存入 keychain 供 main 及其全部 sub 实例的 runtime 共用 */
   llmApiKey: string;
+  /** 要安装的子 agent 定义 ID 列表；undefined = 全部安装 */
+  selectedSubDefIds?: string[];
 }
 
 /**
@@ -88,7 +90,7 @@ export interface AssignMainInput {
  * @returns 全部新建的 assignment 列表（首条为 main，其后按 sub 定义顺序排列）
  */
 export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssignment[]> {
-  const { workspaceId, mainDefId, llmApiKey } = opts;
+  const { workspaceId, mainDefId, llmApiKey, selectedSubDefIds } = opts;
 
   const mainDef = getAgentDefinition(mainDefId);
   if (!mainDef) throw new Error(`未找到 agent 定义: ${mainDefId}`);
@@ -103,7 +105,11 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   const ownerClient = await getOwnerMatrixClient();
 
   // 查找全部归属该 main 的 sub agent 定义（parentAgentId 指向 main.id）
-  const subDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
+  const allSubDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
+  // 按 selectedSubDefIds 过滤；undefined = 全部安装
+  const subDefs = selectedSubDefIds
+    ? allSubDefs.filter((d) => selectedSubDefIds.includes(d.id))
+    : allSubDefs;
 
   // Phase 1：注册 bot + 分配 + 邀请 + 存 key（先完成全部账号编排，收集每个 agent 的信息）。
   // 拆成两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId——
@@ -150,6 +156,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
       teamRoomId: workspace.teamRoomId,
       ownerUserId: workspace.ownerId,
       agentType: def.type,
+      subAgents: def.type === 'main' ? subAgents : [],
       skills: resolveSkillSlugs(merged.skills),
       mcpNames: merged.mcps,
       isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
