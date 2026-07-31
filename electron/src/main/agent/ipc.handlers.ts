@@ -291,6 +291,39 @@ export function registerAgentHandlers(): void {
     return def;
   });
 
+  // 编辑 agent 定义（定义层字段）；停止受影响的运行中实例，让用户手动重启应用新配置
+  ipcMain.handle(
+    'agent:updateDefinition',
+    async (_evt, input: {
+      id: string;
+      name?: string;
+      description?: string;
+      systemPrompt?: string;
+      modelProvider?: string;
+      modelName?: string;
+      modelBaseUrl?: string;
+      iconEmoji?: string;
+    }) => {
+      const { updateAgentDefinition, stopRunningInstancesByDefinition } = await import('./crud');
+      const updated = updateAgentDefinition(input);
+      const stopped = stopRunningInstancesByDefinition(input.id);
+      if (stopped.length > 0) {
+        logger.info('Agent 定义更新，已停止运行中实例', { id: input.id, stopped: stopped.length });
+      }
+      return { definition: updated, stoppedInstanceIds: stopped };
+    },
+  );
+
+  // 更新实例 apiKey（写入 keychain 槽 agent.<instanceId>.llm_api_key）
+  ipcMain.handle(
+    'agent:updateApiKey',
+    async (_evt, instanceId: string, apiKey: string) => {
+      const { updateAgentApiKey } = await import('./crud');
+      await updateAgentApiKey(instanceId, apiKey);
+      return { ok: true };
+    },
+  );
+
   // 列出全部已持久化的 agent 定义
   ipcMain.handle('agent:list', async () => {
     return listAgentDefinitions();

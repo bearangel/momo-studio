@@ -49,7 +49,7 @@ export interface AgentDefinition {
   type: string;
   runtime: string;
   systemPrompt: string;
-  model: { provider: string; model: string };
+  model: { provider: string; model: string; baseUrl?: string };
   defaultTools: Array<{ kind: string; ref: string }>;
   source: string;
   description: string;
@@ -301,6 +301,17 @@ export interface ApiSurface {
     stop(instanceId: string): Promise<{ ok: boolean }>;
     removeAssignment(instanceId: string): Promise<{ ok: boolean }>;
     isRunning(instanceId: string): Promise<boolean>;
+    updateDefinition(input: {
+      id: string;
+      name?: string;
+      description?: string;
+      systemPrompt?: string;
+      modelProvider?: string;
+      modelName?: string;
+      modelBaseUrl?: string;
+      iconEmoji?: string;
+    }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
+    updateApiKey(instanceId: string, apiKey: string): Promise<{ ok: boolean }>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

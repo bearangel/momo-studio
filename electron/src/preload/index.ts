@@ -43,6 +43,8 @@ const api: ApiSurface = {
     stop: (instanceId) => invoke('agent:stop', instanceId),
     removeAssignment: (instanceId) => invoke('agent:removeAssignment', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
+    updateDefinition: (input) => invoke('agent:updateDefinition', input),
+    updateApiKey: (instanceId, apiKey) => invoke('agent:updateApiKey', instanceId, apiKey),
   },
   provider: {
     list: () => invoke('provider:list'),
