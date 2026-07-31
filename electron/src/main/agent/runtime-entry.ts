@@ -123,8 +123,10 @@ const MAX_TOOL_ROUNDS = 10;
 /** 加载到上下文中的最近历史消息条数 */
 const HISTORY_LIMIT = 10;
 
-/** 等待子 agent task_reply 的超时时间（毫秒） */
-const DISPATCH_REPLY_TIMEOUT_MS = 60_000;
+/** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
+const DISPATCH_STAGE_TIMEOUTS_MS = [180_000, 360_000];
+/** dispatch 总最大等待时间（所有阶段之和） */
+const DISPATCH_TOTAL_TIMEOUT_MS = DISPATCH_STAGE_TIMEOUTS_MS.reduce((a, b) => a + b, 0);
 
 /** 单次 MCP IPC 调用的超时时间（毫秒） */
 const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -667,6 +669,8 @@ interface PendingReply {
   resolve: (body: string) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  stage: number;
+  subSlug: string;
 }
 
 /** pending dispatch 回执：task_id → 等待中的 Promise（主 agent 发出 dispatch 后注册） */
@@ -688,32 +692,55 @@ async function executeDispatch(
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
 
-  // task_id 在此生成（buildDispatchMessage 内部 randomUUID）
   const dispatch = buildDispatchMessage({
     body: task,
     fromBotUserId: config.botUserId,
     toBotUserId: sub.botUserId,
-    deadlineMs: DISPATCH_REPLY_TIMEOUT_MS,
+    deadlineMs: DISPATCH_TOTAL_TIMEOUT_MS,
   });
 
-  // 先注册 pending，再发送——防竞态（见上方注释）
+  // 先注册 pending，再发送——防竞态
   const resultPromise = new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (pendingReplies.has(dispatch.content.task_id)) {
-        pendingReplies.delete(dispatch.content.task_id);
-        reject(
-          new Error(
-            `等待子 agent ${subSlug} 回复超时（${DISPATCH_REPLY_TIMEOUT_MS / 1000}s）`,
-          ),
-        );
-      }
-    }, DISPATCH_REPLY_TIMEOUT_MS);
-    pendingReplies.set(dispatch.content.task_id, { resolve, reject, timer });
+    pendingReplies.set(dispatch.content.task_id, {
+      resolve,
+      reject,
+      timer: setTimeout(() => {}, 0), // 占位，armDispatchTimer 会替换
+      stage: 0,
+      subSlug,
+    });
+    armDispatchTimer(dispatch.content.task_id);
   });
 
   await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
 
   return resultPromise;
+}
+
+/**
+ * 渐进式超时计时器管理：
+ * stage 0 → 等待 3 分钟 → 超时则进入 stage 1
+ * stage 1 → 等待 6 分钟 → 超时则最终判失败
+ * 收到 in_progress 时调用此函数重置当前阶段计时器。
+ */
+function armDispatchTimer(taskId: string): void {
+  const pending = pendingReplies.get(taskId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  const timeoutMs = DISPATCH_STAGE_TIMEOUTS_MS[pending.stage];
+  if (timeoutMs === undefined) return;
+  pending.timer = setTimeout(() => {
+    if (pending.stage < DISPATCH_STAGE_TIMEOUTS_MS.length - 1) {
+      pending.stage++;
+      console.log(`[dispatch] 等待 ${pending.subSlug} 超时，进入第 ${pending.stage + 1} 阶段`, { taskId });
+      armDispatchTimer(taskId);
+    } else {
+      pendingReplies.delete(taskId);
+      const totalMin = Math.round(DISPATCH_TOTAL_TIMEOUT_MS / 60000);
+      pending.reject(new Error(
+        `等待子 agent ${pending.subSlug} 回复超时（已等待 ${totalMin} 分钟）。任务可能仍在后台执行，请直接查看该 agent 的回复。`,
+      ));
+    }
+  }, timeoutMs);
 }
 
 /**
@@ -725,9 +752,14 @@ function handleTaskReply(content: Record<string, unknown>): void {
   const reply = parseTaskReply(content);
   if (!reply) return;
   const pending = pendingReplies.get(reply.task_id);
-  if (!pending) return;
-  // 进度通知：保持 pending 不变，继续等待最终 completed/failed
-  if (reply.status === 'in_progress') return;
+  if (!pending) {
+    console.warn(`[dispatch] 收到迟到的 task_reply（taskId=${reply.task_id}, status=${reply.status}）— 已超时或已处理`);
+    return;
+  }
+  if (reply.status === 'in_progress') {
+    armDispatchTimer(reply.task_id);
+    return;
+  }
   clearTimeout(pending.timer);
   pendingReplies.delete(reply.task_id);
   if (reply.status === 'completed') {

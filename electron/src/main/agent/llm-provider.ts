@@ -64,11 +64,13 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   maxRetries: number = MAX_LLM_RETRIES,
+  timeoutMs: number = LLM_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      // 每次重试创建新的超时 signal（避免复用已 aborted 的 signal 导致重试瞬间失败）
+      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
       if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
         return response;
       }
@@ -126,7 +128,6 @@ class OpenAIProvider implements LLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -216,7 +217,6 @@ class AnthropicProvider implements LLMProvider {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
