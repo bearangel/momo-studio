@@ -9,6 +9,7 @@
 import { Preset, Visibility } from 'matrix-js-sdk';
 import { logger } from '../logger';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
+import { getSyncingClient } from '../matrix/sync-manager';
 import { createMatrixClient } from '../matrix/client';
 import { listWorkspaces } from '../workspace/crud';
 import { getSecret } from '../storage/keychain';
@@ -62,7 +63,10 @@ export async function dissolveRoom(roomId: string): Promise<{ dissolved: boolean
   if (isProtectedRoom(roomId)) {
     throw new Error('团队群随 workspace 删除，不能单独解散');
   }
-  const client = await getOwnerMatrixClient();
+  // 房间成员列表必须从同步中的 client 读取：getOwnerMatrixClient 返回未启动 sync 的
+  // client，其本地 store 为空，getRoom 恒返回 undefined、getJoinedMembers 恒为空。
+  const client = getSyncingClient();
+  if (!client) throw new Error('IM 尚未同步，请稍后再试');
   const room = client.getRoom(roomId);
   if (!room) throw new Error(`未找到房间: ${roomId}`);
 
@@ -101,7 +105,10 @@ export async function dissolveRoom(roomId: string): Promise<{ dissolved: boolean
 }
 
 export async function getRoomMembers(roomId: string): Promise<RoomMemberInfo[]> {
-  const client = await getOwnerMatrixClient();
+  // 同 dissolveRoom：成员列表需从同步中的 client 读取。成员面板可能在 sync 完成前
+  // 渲染，此时返回空数组而非抛错，避免面板白屏。
+  const client = getSyncingClient();
+  if (!client) return [];
   const room = client.getRoom(roomId);
   if (!room) return [];
   const localUser = getCurrentUserId();

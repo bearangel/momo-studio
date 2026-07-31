@@ -61,6 +61,11 @@ export function setMainWindow(win: BrowserWindow | null): void {
   mainWindow = win;
 }
 
+/** 返回当前同步中的 Matrix client（未启动 sync 时为 null）。供 room-ops 等需要读取房间状态的模块使用。 */
+export function getSyncingClient(): MatrixClient | null {
+  return client;
+}
+
 /** 从 MatrixEvent 提取消息载荷；非白名单类型或缺 body 字段时返回 null */
 function eventToMessage(event: MatrixEvent): MatrixMessagePayload | null {
   const content = event.getContent() as Record<string, unknown> | undefined;
