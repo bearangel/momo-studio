@@ -17,7 +17,7 @@ import {
   assignAgentToWorkspace,
   listAssignments,
 } from './crud';
-import { getWorkspace } from '../workspace/crud';
+import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
 import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
@@ -26,6 +26,8 @@ import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
+import { getSyncingClient } from '../matrix/sync-manager';
+import { createMatrixClient } from '../matrix/client';
 import { resolveSkillsDir } from '../paths';
 import type { AgentAssignment } from './types';
 import type { RuntimeSkillRef, SubAgentRef } from './builtin-tools';
@@ -163,6 +165,60 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     subCount: subDefs.length,
   });
   return results;
+}
+
+/**
+ * 删除 agent 分配：停止运行 → 让 bot 离开所有房间（避免成员列表残留）→
+ * 删 bot token → 清空悬空 coordinator 引用 → 删 assignment 行。
+ * 导出供单测直接调用（绕过 ipcMain）。
+ */
+export async function removeAgentAssignment(instanceId: string): Promise<void> {
+  stopAgent(instanceId);
+  const row = getDb()
+    .prepare('SELECT bot_matrix_user_id, workspace_id FROM agent_assignments WHERE instance_id = ?')
+    .get(instanceId) as { bot_matrix_user_id?: string; workspace_id?: string } | undefined;
+  if (!row) return;
+  const botUserId = row.bot_matrix_user_id;
+  const workspaceId = row.workspace_id;
+
+  if (botUserId) {
+    await makeBotLeaveAllRooms(botUserId).catch((e) =>
+      logger.warn('bot 离开房间失败（非致命，继续清理）', { botUserId, error: String(e) }),
+    );
+    await deleteSecret(`bot.${botUserId}.matrix_token`).catch((e) =>
+      logger.warn('清理 bot token 失败（非致命）', { error: String(e) }),
+    );
+  }
+
+  // 被删实例若是协调 agent，清空引用，避免 workspaces.coordinator_instance_id 悬空
+  if (workspaceId) {
+    const ws = getWorkspace(workspaceId);
+    if (ws?.coordinatorInstanceId === instanceId) {
+      setWorkspaceCoordinator(workspaceId, null);
+    }
+  }
+
+  getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
+  logger.info('Agent 分配已删除', { instanceId, botUserId, workspaceId });
+}
+
+/** 用 bot 自身 token 创建临时 client，让它离开所有当前已加入的房间（经 owner syncing client 枚举） */
+async function makeBotLeaveAllRooms(botUserId: string): Promise<void> {
+  const token = await getSecret(`bot.${botUserId}.matrix_token`);
+  if (!token) return;
+  const syncingClient = getSyncingClient();
+  if (!syncingClient) return;
+  const botClient = createMatrixClient({ baseUrl: HOMESERVER_URL, userId: botUserId, accessToken: token });
+  const joinedRooms = syncingClient
+    .getRooms()
+    .filter((r) => (r.getMember(botUserId)?.membership ?? '') === 'join');
+  for (const room of joinedRooms) {
+    try {
+      await botClient.leave(room.roomId);
+    } catch (err) {
+      logger.warn('bot 离开单个房间失败', { botUserId, roomId: room.roomId, err: String(err) });
+    }
+  }
 }
 
 /** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
@@ -349,17 +405,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle('agent:removeAssignment', async (_evt, instanceId: string) => {
-    stopAgent(instanceId);
-    const row = getDb()
-      .prepare('SELECT bot_matrix_user_id FROM agent_assignments WHERE instance_id = ?')
-      .get(instanceId) as { bot_matrix_user_id?: string } | undefined;
-    if (row?.bot_matrix_user_id) {
-      await deleteSecret(`bot.${row.bot_matrix_user_id}.matrix_token`).catch((e) =>
-        logger.warn('清理 bot token 失败（非致命）', { error: String(e) }),
-      );
-    }
-    getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
-    logger.info('Agent 分配已删除', { instanceId, botUserId: row?.bot_matrix_user_id });
+    await removeAgentAssignment(instanceId);
     return { ok: true };
   });
 
