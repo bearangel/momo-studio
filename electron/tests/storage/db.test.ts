@@ -63,4 +63,20 @@ describe('storage/db', () => {
     expect(indexNames).toContain('idx_tool_calls_workspace_ts');
     expect(indexNames).toContain('idx_tool_calls_agent');
   });
+
+  it('runMigrations 创建 model_providers 表', () => {
+    runMigrations();
+    const db = getDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as { name: string }[];
+    expect(tables.map((t) => t.name)).toContain('model_providers');
+  });
+
+  it('model_providers 表有 is_default 列', () => {
+    runMigrations();
+    const db = getDb();
+    const cols = db.prepare('PRAGMA table_info(model_providers)').all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain('is_default');
+  });
 });

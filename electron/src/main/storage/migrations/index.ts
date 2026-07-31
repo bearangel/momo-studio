@@ -201,6 +201,20 @@ CREATE TABLE IF NOT EXISTS installed_packages (
 ALTER TABLE agent_definitions ADD COLUMN model_base_url TEXT;
 `.trim(),
   },
+  {
+    version: 10,
+    sql: `
+CREATE TABLE IF NOT EXISTS model_providers (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL UNIQUE,
+  base_url TEXT NOT NULL,
+  api_key_ref TEXT NOT NULL,
+  default_model TEXT,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
