@@ -1,12 +1,12 @@
 // renderer/src/components/agent/AgentList.tsx
 // 当前 workspace 内已分配的 agent 列表 + "添加 agent" 按钮 + 选中后的能力配置详情面板。
 // 每个 agent 显示名称、状态徽章（运行中/已停止）、停止按钮；点击展开能力配置。
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { ipc } from '../../ipc/client';
-import type { AgentDefinition } from '../../ipc/types';
+import type { AgentAssignment, AgentDefinition } from '../../ipc/types';
 import { AddAgentDialog } from './AddAgentDialog';
 import { CapabilityConfig } from './CapabilityConfig';
 import { PromptDialog } from '../common/PromptDialog';
@@ -38,6 +38,35 @@ export function AgentList({ onAdd }: Props) {
   const selected = assignments.find((a) => a.instanceId === selectedId) ?? null;
   const selectedDef = selected ? defMap.get(selected.agentDefinitionId) : undefined;
 
+  // 按 definition 的 parentAgentId 关系对 assignments 分组：
+  // main 排在前，其 subs 紧随其后缩进，standalone 独立
+  const sortedAssignments = useMemo(() => {
+    const mains = assignments.filter((a) => {
+      const def = defMap.get(a.agentDefinitionId);
+      return def?.type === 'main';
+    });
+    const subsOfMain = (mainAssignment: AgentAssignment): AgentAssignment[] => {
+      const mainDef = defMap.get(mainAssignment.agentDefinitionId);
+      if (!mainDef) return [];
+      return assignments.filter((a) => {
+        const def = defMap.get(a.agentDefinitionId);
+        return def?.parentAgentId === mainDef.id;
+      });
+    };
+    const standalone = assignments.filter((a) => {
+      const def = defMap.get(a.agentDefinitionId);
+      return def?.type !== 'main' && !def?.parentAgentId;
+    });
+    // 交织排列：每个 main 后跟其 subs，然后 standalone
+    const result: AgentAssignment[] = [];
+    for (const m of mains) {
+      result.push(m);
+      result.push(...subsOfMain(m));
+    }
+    result.push(...standalone);
+    return result;
+  }, [assignments, defMap]);
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
@@ -57,20 +86,23 @@ export function AgentList({ onAdd }: Props) {
           </div>
         ) : (
           <ul className="flex flex-col gap-2">
-            {assignments.map((a) => {
+            {sortedAssignments.map((a) => {
               const def = defMap.get(a.agentDefinitionId);
               const isRunning = running[a.instanceId] === true;
               const isSelected = selectedId === a.instanceId;
+              const isSub = def?.type === 'sub' || !!def?.parentAgentId;
+              const roleIcon = def?.type === 'main' ? '📋' : def?.type === 'sub' ? '🔗' : '🤖';
               return (
                 <li
                   key={a.instanceId}
                   className={cn(
                     'flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-tertiary border cursor-pointer',
                     isSelected ? 'border-accent-blue' : 'border-border-subtle',
+                    isSub && 'ml-6',
                   )}
                   onClick={() => setSelectedId(isSelected ? null : a.instanceId)}
                 >
-                  <span className="text-xl">{def?.iconEmoji ?? '🤖'}</span>
+                  <span className="text-xl">{roleIcon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-neutral-100 flex items-center gap-1.5 min-w-0">
                       <span className="truncate">{def?.name ?? a.agentDefinitionId}</span>
