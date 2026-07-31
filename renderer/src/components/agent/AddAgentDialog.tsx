@@ -17,7 +17,7 @@ interface Props {
 
 export function AddAgentDialog({ onClose, editingDef }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { definitions, loadDefinitions, addAgent } = useAgentStore();
+  const { definitions, loadDefinitions, addAgent, assignMainAgent } = useAgentStore();
   const [selectedDefId, setSelectedDefId] = useState<string>('');
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +32,12 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
   const [newModel, setNewModel] = useState('gpt-4o');
   const [newBaseUrl, setNewBaseUrl] = useState('');
   const [creating, setCreating] = useState(false);
+  // 角色：standalone（独立）/ main（主，可调度子）/ sub（挂在某 main 下）
+  const [newType, setNewType] = useState<'standalone' | 'main' | 'sub'>('standalone');
+  // sub 角色时的父主 agent ID
+  const [newParentId, setNewParentId] = useState<string>('');
+  // 选中 main 定义时，要随主 agent 一起安装的子 agent 集合
+  const [selectedSubIds, setSelectedSubIds] = useState<Set<string>>(new Set());
 
   // 供应商下拉：选已注册供应商自动填充 baseUrl/model/apiKey，"自定义…"走手动输入
   const { providers, loadProviders } = useProviderStore();
@@ -47,6 +53,8 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
       setNewModel(editingDef.model.model);
       setNewBaseUrl(editingDef.model.baseUrl ?? '');
       setProviderId('custom');
+      setNewType(editingDef.type as 'standalone' | 'main' | 'sub');
+      setNewParentId(editingDef.parentAgentId ?? '');
     }
   }, [editingDef, mode]);
 
@@ -66,6 +74,25 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
 
   const selectedDef = definitions.find((d) => d.id === selectedDefId);
   const providerLabel = selectedDef?.model.provider === 'anthropic' ? 'Anthropic' : 'OpenAI';
+
+  // 选中 main 定义时，默认勾选全部子 agent；非 main 清空
+  useEffect(() => {
+    if (selectedDef?.type === 'main') {
+      const subIds = definitions
+        .filter((d) => d.parentAgentId === selectedDef.id)
+        .map((d) => d.id);
+      setSelectedSubIds(new Set(subIds));
+    } else {
+      setSelectedSubIds(new Set());
+    }
+  }, [selectedDefId, definitions, selectedDef]);
+
+  // 所有 main 定义（供创建 sub 时选择父 agent、以及子角色下拉禁用判断）
+  const mainDefs = definitions.filter((d) => d.type === 'main');
+  // 当前选中 main 定义下的全部子 agent（供勾选区渲染）
+  const subDefsOfSelected = selectedDef?.type === 'main'
+    ? definitions.filter((d) => d.parentAgentId === selectedDef.id)
+    : [];
 
   // 选择供应商：填 baseUrl+modelName（defaultModel），并预填 apiKey 供后续"添加并启动"复用
   const handleProviderChange = async (id: string) => {
@@ -98,6 +125,8 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
           modelName: newModel.trim(),
           modelBaseUrl: newBaseUrl.trim() || undefined,
           iconEmoji: editingDef.iconEmoji || '🤖',
+          type: newType,
+          parentAgentId: newType === 'sub' ? newParentId : undefined,
         });
         await loadDefinitions();
         if (stoppedInstanceIds.length > 0) {
@@ -115,6 +144,8 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
         modelName: newModel.trim(),
         modelBaseUrl: newBaseUrl.trim() || undefined,
         iconEmoji: '🤖',
+        type: newType,
+        parentAgentId: newType === 'sub' ? newParentId : undefined,
       });
       await loadDefinitions();
       setSelectedDefId(def.id);
@@ -139,7 +170,17 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
     setLoading(true);
     setError(null);
     try {
-      await addAgent(workspace.id, selectedDefId, apiKey.trim());
+      if (selectedDef?.type === 'main') {
+        // main 定义走 assignMain（一次性安装 main + 选中的 subs）
+        await assignMainAgent(
+          workspace.id,
+          selectedDefId,
+          apiKey.trim(),
+          Array.from(selectedSubIds),
+        );
+      } else {
+        await addAgent(workspace.id, selectedDefId, apiKey.trim());
+      }
       onClose();
     } catch (err) {
       setError((err as Error).message);
@@ -157,6 +198,37 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
             <div className="flex flex-col gap-3">
               <Input label="名称" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="如：代码审查员" />
               <Input label="标识符 (slug)" value={newSlug} onChange={(e) => setNewSlug(e.target.value)} placeholder="如：code-reviewer" readOnly={mode === 'edit'} />
+              {/* 角色选择：决定该 agent 在主子调度中的位置 */}
+              <div className="flex flex-col gap-1">
+                <label className="text-sm text-neutral-300">角色</label>
+                <select
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as 'standalone' | 'main' | 'sub')}
+                  className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100"
+                >
+                  <option value="standalone">独立 agent</option>
+                  <option value="main">主 agent（可调度子 agent）</option>
+                  <option value="sub" disabled={mainDefs.length === 0}>
+                    子 agent{mainDefs.length === 0 ? '（需先创建主 agent）' : ''}
+                  </option>
+                </select>
+              </div>
+              {/* 子角色：选择父主 agent */}
+              {newType === 'sub' && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm text-neutral-300">父主 agent</label>
+                  <select
+                    value={newParentId}
+                    onChange={(e) => setNewParentId(e.target.value)}
+                    className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100"
+                  >
+                    <option value="">选择...</option>
+                    {mainDefs.map((m) => (
+                      <option key={m.id} value={m.id}>{m.iconEmoji} {m.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="flex flex-col gap-1">
                 <label className="text-sm text-neutral-300">系统提示词</label>
                 <textarea
@@ -251,6 +323,27 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
                       模型：{selectedDef.model.provider} / {selectedDef.model.model}
                     </div>
                   )}
+                  {/* main 定义：展示子 agent 勾选区，随主 agent 一起安装 */}
+                  {selectedDef?.type === 'main' && subDefsOfSelected.length > 0 && (
+                    <div className="flex flex-col gap-2 p-3 rounded-md bg-bg-tertiary border border-border-subtle">
+                      <div className="text-sm text-neutral-300">子 Agent（随主 agent 一起安装）</div>
+                      {subDefsOfSelected.map((sub) => (
+                        <label key={sub.id} className="flex items-center gap-2 text-sm text-neutral-200">
+                          <input
+                            type="checkbox"
+                            checked={selectedSubIds.has(sub.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedSubIds);
+                              if (e.target.checked) next.add(sub.id);
+                              else next.delete(sub.id);
+                              setSelectedSubIds(next);
+                            }}
+                          />
+                          {sub.iconEmoji} {sub.name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
                   <Input
                     label={`${providerLabel} API key`}
                     type="password"
@@ -273,7 +366,9 @@ export function AddAgentDialog({ onClose, editingDef }: Props) {
                 <div className="flex gap-2 justify-end mt-2">
                   <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
                   <Button type="submit" disabled={loading || !selectedDefId || !apiKey}>
-                    {loading ? '添加中…' : '添加并启动'}
+                    {loading
+                      ? '安装中…'
+                      : selectedDef?.type === 'main' ? '安装主 agent' : '添加并启动'}
                   </Button>
                 </div>
               )}
