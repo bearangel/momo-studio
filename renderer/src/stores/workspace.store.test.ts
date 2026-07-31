@@ -30,8 +30,9 @@ const mockApi = {
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   // 重置 store 状态，保证测试间隔离
-  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null });
+  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, error: null });
   mockApi.workspace.list.mockResolvedValue([MOCK_WS]);
+  mockApi.workspace.setCoordinator.mockResolvedValue({ ok: true });
   mockApi.workspace.setCoordinator.mockClear();
   mockApi.workspace.list.mockClear();
 });
@@ -52,5 +53,34 @@ describe('workspace.store', () => {
     await useWorkspaceStore.getState().setCoordinator('ws-1', null);
 
     expect(mockApi.workspace.setCoordinator).toHaveBeenCalledWith('ws-1', null);
+  });
+
+  it('setCoordinator IPC 失败时抛错并写入 error', async () => {
+    const error = new Error('设置协调失败');
+    mockApi.workspace.setCoordinator.mockRejectedValue(error);
+
+    await expect(useWorkspaceStore.getState().setCoordinator('ws-1', 'inst-1')).rejects.toBe(
+      error,
+    );
+    expect(useWorkspaceStore.getState().error).toBe('设置协调失败');
+    expect(mockApi.workspace.list).not.toHaveBeenCalled();
+  });
+
+  it('setCoordinator 刷新列表失败时抛错并写入 error', async () => {
+    const error = new Error('刷新工作区失败');
+    mockApi.workspace.list.mockRejectedValue(error);
+
+    await expect(useWorkspaceStore.getState().setCoordinator('ws-1', 'inst-1')).rejects.toBe(
+      error,
+    );
+    expect(useWorkspaceStore.getState().error).toBe('刷新工作区失败');
+  });
+
+  it('setCoordinator 成功前清除旧 error', async () => {
+    useWorkspaceStore.setState({ error: '旧错误' });
+
+    await useWorkspaceStore.getState().setCoordinator('ws-1', 'inst-1');
+
+    expect(useWorkspaceStore.getState().error).toBeNull();
   });
 });

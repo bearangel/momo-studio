@@ -57,9 +57,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setCoordinator: async (workspaceId, instanceId) => {
-    await ipc.workspace.setCoordinator(workspaceId, instanceId);
-    // 刷新 workspace 列表以拿到新的 coordinatorInstanceId
-    const list = await ipc.workspace.list();
-    set({ workspaces: list });
+    set({ error: null });
+    try {
+      await ipc.workspace.setCoordinator(workspaceId, instanceId);
+      // 刷新 workspace 列表以拿到新的 coordinatorInstanceId
+      const list = await ipc.workspace.list();
+      set({ workspaces: list });
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
   },
 }));

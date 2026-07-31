@@ -11,6 +11,7 @@ interface FileState {
   expandedDirs: Set<string>;
   // 当前选中的文件全路径（相对 workspace 根）
   selectedFile: string | null;
+  error: string | null;
 
   // 拉取指定目录的条目并写入缓存
   loadDir: (workspaceId: string, dirPath: string) => Promise<void>;
@@ -32,8 +33,18 @@ interface FileState {
 
 export const useFileStore = create<FileState>((set, get) => ({
   tree: new Map(),
-  expandedDirs: new Set(['.']),
+  expandedDirs: new Set<string>(
+    (() => {
+      try {
+        const stored = localStorage.getItem('fileTree.expandedDirs');
+        return stored ? (JSON.parse(stored) as string[]) : ['.'];
+      } catch {
+        return ['.'];
+      }
+    })(),
+  ),
   selectedFile: null,
+  error: null,
 
   loadDir: async (workspaceId, dirPath) => {
     const entries = await ipc.file.list(workspaceId, dirPath);
@@ -53,13 +64,26 @@ export const useFileStore = create<FileState>((set, get) => ({
       } else {
         expanded.add(dirPath);
       }
+      try {
+        localStorage.setItem('fileTree.expandedDirs', JSON.stringify([...expanded]));
+      } catch {
+        // localStorage 写入失败不影响内存中的展开状态
+      }
       return { expandedDirs: expanded };
     });
   },
 
   selectFile: (filePath) => set({ selectedFile: filePath }),
 
-  collapseAll: () => set({ expandedDirs: new Set(['.']) }),
+  collapseAll: () => {
+    const expanded = new Set(['.']);
+    try {
+      localStorage.setItem('fileTree.expandedDirs', JSON.stringify([...expanded]));
+    } catch {
+      // localStorage 写入失败不影响内存中的展开状态
+    }
+    set({ expandedDirs: expanded });
+  },
 
   refreshDir: async (workspaceId, dirPath) => {
     // 先失效缓存再重新加载，确保触发 UI 重渲染
@@ -77,23 +101,41 @@ export const useFileStore = create<FileState>((set, get) => ({
   },
 
   createPath: async (workspaceId, filePath, type) => {
-    await ipc.file.create(workspaceId, filePath, type);
-    // 取父目录路径：根目录下文件父目录为 '.'；否则截到最后一个 '/'
-    const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
-    await get().refreshDir(workspaceId, parent);
+    set({ error: null });
+    try {
+      await ipc.file.create(workspaceId, filePath, type);
+      // 取父目录路径：根目录下文件父目录为 '.'；否则截到最后一个 '/'
+      const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
+      await get().refreshDir(workspaceId, parent);
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
   },
 
   deletePath: async (workspaceId, filePath) => {
-    await ipc.file.delete(workspaceId, filePath);
-    const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
-    await get().refreshDir(workspaceId, parent);
+    set({ error: null });
+    try {
+      await ipc.file.delete(workspaceId, filePath);
+      const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
+      await get().refreshDir(workspaceId, parent);
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
   },
 
   renamePath: async (workspaceId, srcPath, dstPath) => {
-    await ipc.file.rename(workspaceId, srcPath, dstPath);
-    const srcParent = srcPath.includes('/') ? srcPath.slice(0, srcPath.lastIndexOf('/')) : '.';
-    const dstParent = dstPath.includes('/') ? dstPath.slice(0, dstPath.lastIndexOf('/')) : '.';
-    await get().refreshDir(workspaceId, srcParent);
-    if (srcParent !== dstParent) await get().refreshDir(workspaceId, dstParent);
+    set({ error: null });
+    try {
+      await ipc.file.rename(workspaceId, srcPath, dstPath);
+      const srcParent = srcPath.includes('/') ? srcPath.slice(0, srcPath.lastIndexOf('/')) : '.';
+      const dstParent = dstPath.includes('/') ? dstPath.slice(0, dstPath.lastIndexOf('/')) : '.';
+      await get().refreshDir(workspaceId, srcParent);
+      if (srcParent !== dstParent) await get().refreshDir(workspaceId, dstParent);
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
   },
 }));
