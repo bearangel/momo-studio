@@ -8,7 +8,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
-import { cn } from '../../lib/cn';
 import { avatarEmoji } from './avatars';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 import { MessageFrame } from './MessageFrame';
