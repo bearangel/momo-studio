@@ -22,7 +22,7 @@ interface Props {
 
 export function MessageBubble({ message, isSelf, senderName }: Props) {
   if (message.eventType === 'io.momo-studio.dispatch') {
-    return <DispatchCard message={message} />;
+    return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
   if (message.eventType === 'io.momo-studio.task_reply') {
     return <TaskReplyCard message={message} />;

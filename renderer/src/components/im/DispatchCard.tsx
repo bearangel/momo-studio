@@ -1,16 +1,22 @@
 // renderer/src/components/im/DispatchCard.tsx
 //
-// dispatch 消息卡片（紫色）：主 agent 向子 agent 调度任务。
+// dispatch 消息卡片：主 agent 向子 agent 调度任务。
 // 字段取自 io.momo-studio.dispatch event content：
 //   dispatch_from → dispatch_to, body, task_id, deadline_ms?
+// 对话化重构：走 MessageFrame（frame 头 = 主 agent 头像+名 = dispatch_from），
+// 卡片内只紧凑显示 target（dispatch_to），去除冗余 from。
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
+import { cn } from '../../lib/cn';
 import { avatarEmoji } from './avatars';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
+import { MessageFrame } from './MessageFrame';
 
 interface Props {
   message: ImMessage;
+  isSelf: boolean;
+  senderName?: string;
 }
 
 interface DispatchFields {
@@ -39,32 +45,38 @@ function readDispatch(content: Record<string, unknown> | undefined): DispatchFie
   };
 }
 
-export function DispatchCard({ message }: Props) {
+export function DispatchCard({ message, isSelf, senderName }: Props) {
   const botNameMap = useBotNameMap();
   const fields = readDispatch(message.content);
-  // 解析失败时回退为普通消息渲染，保证不丢消息
+  // 解析失败时回退为普通气泡渲染（走 frame 保留归属），保证不丢消息
   if (!fields) {
+    const rawContentBody = message.content.body;
     return (
-      <div className="mx-4 my-1 rounded-lg bg-bg-tertiary px-3 py-2 text-sm text-neutral-300">
-        {message.body}
-      </div>
+      <MessageFrame
+        message={message}
+        isSelf={isSelf}
+        senderName={senderName}
+        bubbleClassName="bg-bg-tertiary text-neutral-300"
+      >
+        {typeof rawContentBody === 'string' ? rawContentBody : message.body}
+      </MessageFrame>
     );
   }
 
   return (
-    <div className="mx-4 my-2 rounded-lg border border-accent-purple/40 bg-accent-purple/10 px-3 py-2">
-      <div className="flex items-center gap-2 text-xs">
-        <span className="font-medium text-accent-purple">任务调度</span>
-        <span className="text-neutral-500">#{fields.taskId.slice(0, 8)}</span>
-      </div>
-
-      <div className="mt-1.5 flex items-center gap-2 text-sm">
-        <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden>{avatarEmoji(fields.from)}</span>
-          <span className="text-neutral-200">{resolveBotName(fields.from, botNameMap)}</span>
+    <MessageFrame
+      message={message}
+      isSelf={isSelf}
+      senderName={senderName}
+      bubbleClassName="border border-accent-purple/40 bg-accent-purple/10"
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="inline-flex items-center rounded bg-accent-purple/20 px-1.5 py-0.5 font-medium text-accent-purple">
+          调度
         </span>
+        <span className="text-neutral-500">#{fields.taskId.slice(0, 8)}</span>
         <span className="text-neutral-500">→</span>
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1">
           <span aria-hidden>{avatarEmoji(fields.to)}</span>
           <span className="text-neutral-200">{resolveBotName(fields.to, botNameMap)}</span>
         </span>
@@ -79,6 +91,6 @@ export function DispatchCard({ message }: Props) {
           截止：{new Date(fields.deadlineMs).toLocaleString()}
         </div>
       )}
-    </div>
+    </MessageFrame>
   );
 }
