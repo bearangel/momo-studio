@@ -115,6 +115,7 @@ interface RuntimeConfig {
   deniedTools: string[];
   // === v1.1 M2 协调 agent ===
   isCoordinator: boolean;
+  devMode: boolean;
 }
 
 /** 工具调用循环上限，防止 LLM 无限调用工具导致子进程卡死 */
@@ -174,6 +175,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     allowedTools,
     deniedTools,
     isCoordinator,
+    devMode,
   } = r;
   if (
     typeof botUserId !== 'string' ||
@@ -236,6 +238,7 @@ function parseConfig(raw: unknown): RuntimeConfig {
     deniedTools: resolvedDeniedTools,
     // v1.1 M2：缺省/类型不符时按"非协调"处理（旧配置向后兼容）
     isCoordinator: typeof isCoordinator === 'boolean' ? isCoordinator : false,
+    devMode: typeof devMode === 'boolean' ? devMode : false,
   };
 }
 
@@ -257,8 +260,19 @@ function isRuntimeSkillRef(v: unknown): v is RuntimeSkillRef {
   return typeof o.slug === 'string' && typeof o.cachePath === 'string';
 }
 
+let traceEnabled = false;
+
+function trace(event: string, fields?: Record<string, unknown>): void {
+  if (!traceEnabled) return;
+  const parts = fields
+    ? ' ' + Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(' ')
+    : '';
+  process.stdout.write(`${event}${parts}\n`);
+}
+
 async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
+  traceEnabled = config.devMode;
 
   const client: MatrixClient = createClient({
     baseUrl: config.homeserverUrl,
@@ -449,7 +463,14 @@ async function handleEvent(
     isCoordinator: config.isCoordinator,
     isOwnerMessage,
   });
-  if (decision === 'skip') return;
+  if (decision === 'skip') {
+    trace('→ 跳过', { reason: decision, mentioned, coordinator: config.isCoordinator });
+    return;
+  }
+
+  trace('→ 决定响应', { mentioned, coordinator: config.isCoordinator });
+
+  trace('→ 收到消息', { room: roomId.slice(0, 12), from: (sender ?? '?').slice(0, 15), body: `${body.length}字` });
 
   // 协调 agent 自动接待（团队群无 @）时注入上下文提示；直接 @ 时用原始消息
   const effectiveBody =
@@ -459,6 +480,7 @@ async function handleEvent(
 
   try {
     const reply = await runChatLoop(client, roomId, effectiveBody, config, ctx);
+    trace('→ 回复', { room: roomId.slice(0, 12), body: `${reply.length}字` });
     await client.sendEvent(
       roomId,
       'm.room.message',
@@ -493,6 +515,7 @@ async function handleDispatch(
   const roomId = event.getRoomId();
   if (!roomId) return;
 
+  trace('→ 收到 dispatch', { from: event.getSender()?.slice(0, 15), task: `${dispatch.body.length}字` });
   const inProgress = buildTaskReply({
     body: '开始处理...',
     taskId: dispatch.task_id,
@@ -503,9 +526,11 @@ async function handleDispatch(
     .catch((err: unknown) => {
       process.stderr.write(`发送 in_progress 失败: ${(err as Error).message}\n`);
     });
+  trace('→ 发送 in_progress');
 
   try {
     const result = await runChatLoop(client, roomId, dispatch.body, config, ctx);
+    trace('→ 发送 completed', { body: `${result.length}字` });
     const completed = buildTaskReply({
       body: result,
       taskId: dispatch.task_id,
@@ -549,7 +574,10 @@ async function runChatLoop(
   ];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    trace(`→ LLM #${round + 1}`, { provider: config.modelProvider, model: config.modelName, msg: messages.length, tools: ctx.tools.length });
+    const startMs = Date.now();
     const response = await llm.chat(messages, ctx.tools);
+    trace(`← LLM #${round + 1}`, { ms: Date.now() - startMs, finish: response.finishReason, calls: response.toolCalls.length });
 
     if (response.toolCalls.length > 0) {
       messages.push({
@@ -594,12 +622,15 @@ async function executeTool(
   const startTime = Date.now();
   let success = true;
   let output = '';
+  trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
     output = await doExecuteTool(call, ctx, client, config);
+    trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
     success = false;
     output = err instanceof Error ? err.message : String(err);
+    trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✗' });
     throw err;
   } finally {
     logToolCall({
@@ -692,6 +723,8 @@ async function executeDispatch(
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
 
+  trace('→ dispatch', { target: subSlug, task: `${task.length}字` });
+
   const dispatch = buildDispatchMessage({
     body: task,
     fromBotUserId: config.botUserId,
@@ -757,9 +790,11 @@ function handleTaskReply(content: Record<string, unknown>): void {
     return;
   }
   if (reply.status === 'in_progress') {
+    trace('← reply: in_progress');
     armDispatchTimer(reply.task_id);
     return;
   }
+  trace('← reply', { status: reply.status, body: `${reply.body.length}字` });
   clearTimeout(pending.timer);
   pendingReplies.delete(reply.task_id);
   if (reply.status === 'completed') {

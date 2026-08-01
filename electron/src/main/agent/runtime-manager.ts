@@ -50,6 +50,8 @@ export interface AgentRuntimeOpts {
   // === v1.1 M2 协调 agent ===
   /** 本实例是否为所属 workspace 的协调 agent（团队群非@消息由其接待） */
   isCoordinator?: boolean;
+  /** dev 模式标志（由 doSpawnAgent 根据 !app.isPackaged 自动注入） */
+  devMode?: boolean;
 }
 
 // runtime 进程池：instanceId → 子进程句柄
@@ -192,7 +194,8 @@ export function spawnAgent(opts: AgentRuntimeOpts): void {
  * 本函数（不经过 spawnAgent 包装，避免重置正在递增的计数）。
  */
 function doSpawnAgent(opts: AgentRuntimeOpts): void {
-  const env = { ...process.env, AGENT_CONFIG: JSON.stringify(opts) };
+  const config = { ...opts, devMode: process.env.NODE_ENV !== 'production' };
+  const env = { ...process.env, AGENT_CONFIG: JSON.stringify(config) };
 
   let child: ChildProcess;
   if (runtimeEntryOverride) {

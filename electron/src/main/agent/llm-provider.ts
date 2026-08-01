@@ -80,6 +80,8 @@ async function fetchWithRetry(
     }
     if (attempt < maxRetries) {
       const delay = RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]!;
+      const statusCode = lastError.message.match(/HTTP (\d+)/)?.[1] ?? 'timeout';
+      process.stdout.write(`→ LLM 重试 #${attempt + 1} (status=${statusCode}, 退避=${delay}ms)\n`);
       await new Promise((r) => setTimeout(r, delay));
     }
   }
