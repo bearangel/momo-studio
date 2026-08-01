@@ -20,15 +20,24 @@ interface Props {
 
 export function MessageFrame({ message, isSelf, senderName, bubbleClassName, children }: Props) {
   return (
-    <div className={cn('flex gap-2 px-4 py-1 min-w-0 overflow-hidden', isSelf ? 'flex-row-reverse' : 'flex-row')}>
+    <div
+      className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}
+      style={{ minWidth: 0, overflow: 'hidden' }}
+    >
       <div className="w-8 h-8 shrink-0 rounded-full bg-bg-tertiary flex items-center justify-center text-base select-none">
         {avatarEmoji(message.sender)}
       </div>
-      <div className={cn('max-w-[70%] min-w-0 flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}>
+      <div
+        className={cn('flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}
+        style={{ minWidth: 0, maxWidth: '70%', overflow: 'hidden' }}
+      >
         {!isSelf && (
           <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(message.sender)}</span>
         )}
-        <div className={cn('rounded-lg px-3 py-2 text-sm break-words overflow-hidden', bubbleClassName)}>
+        <div
+          className={cn('rounded-lg px-3 py-2 text-sm break-words', bubbleClassName)}
+          style={{ overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}
+        >
           {children}
         </div>
       </div>
