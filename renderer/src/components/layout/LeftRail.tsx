@@ -22,7 +22,7 @@ export function LeftRail() {
   const setActiveView = useUiStore((s) => s.setActiveView);
 
   return (
-    <div className="w-14 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2">
+    <div className="w-14 shrink-0 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2">
       {/* workspace 切换器：顶部下拉切换 / 新建 workspace */}
       <div className="relative">
         <WorkspaceSwitcher />

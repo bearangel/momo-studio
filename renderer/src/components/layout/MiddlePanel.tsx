@@ -67,7 +67,7 @@ export function MiddlePanel() {
   // im 视图：左侧房间列表 + 中间消息流和输入框 + 右侧成员面板
   if (activeView === 'im') {
     return (
-      <div className="flex-1 flex">
+      <div className="flex-1 flex min-w-0">
         <RoomList />
         <div className="flex-1 flex flex-col min-w-0">
           <MessageList />

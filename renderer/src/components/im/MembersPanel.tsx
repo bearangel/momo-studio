@@ -6,7 +6,7 @@ export function MembersPanel() {
   const members = useImStore((s) => s.members);
   const botNameMap = useBotNameMap();
   return (
-    <aside className="w-48 shrink-0 border-l border-border-subtle bg-bg-secondary overflow-auto">
+    <aside className="hidden lg:flex w-48 shrink-0 border-l border-border-subtle bg-bg-secondary overflow-auto">
       <div className="px-3 py-2 text-xs text-neutral-500 border-b border-border-subtle">成员（{members.length}）</div>
       {members.map((m) => (
         <div key={m.userId} className="px-3 py-2 flex items-center gap-2 text-sm text-neutral-300">
