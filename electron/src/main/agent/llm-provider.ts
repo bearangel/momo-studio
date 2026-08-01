@@ -45,8 +45,8 @@ export interface LLMProvider {
   chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse>;
 }
 
-/** 对 LLM API 的单次请求超时（毫秒）—— API 挂起时避免 agent 子进程永久阻塞 */
-const LLM_REQUEST_TIMEOUT_MS = 90_000;
+/** 对 LLM API 的单次请求超时（毫秒）—— 复杂生成任务可能需要数分钟 */
+const LLM_REQUEST_TIMEOUT_MS = 300_000;
 
 /** 最大重试次数（初次请求 + 重试 = maxRetries+1 次总尝试） */
 const MAX_LLM_RETRIES = 3;
