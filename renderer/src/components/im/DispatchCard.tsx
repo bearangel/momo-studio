@@ -81,7 +81,7 @@ export function DispatchCard({ message, isSelf, senderName }: Props) {
         </span>
       </div>
 
-      <div className="mt-1.5 text-sm text-neutral-100 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
+      <div className="mt-1.5 text-sm text-neutral-100 overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{fields.body}</ReactMarkdown>
       </div>
 

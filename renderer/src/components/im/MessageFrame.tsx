@@ -20,7 +20,7 @@ interface Props {
 
 export function MessageFrame({ message, isSelf, senderName, bubbleClassName, children }: Props) {
   return (
-    <div className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}>
+    <div className={cn('flex gap-2 px-4 py-1 min-w-0 overflow-hidden', isSelf ? 'flex-row-reverse' : 'flex-row')}>
       <div className="w-8 h-8 shrink-0 rounded-full bg-bg-tertiary flex items-center justify-center text-base select-none">
         {avatarEmoji(message.sender)}
       </div>
