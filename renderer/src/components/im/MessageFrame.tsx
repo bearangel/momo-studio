@@ -24,11 +24,11 @@ export function MessageFrame({ message, isSelf, senderName, bubbleClassName, chi
       <div className="w-8 h-8 shrink-0 rounded-full bg-bg-tertiary flex items-center justify-center text-base select-none">
         {avatarEmoji(message.sender)}
       </div>
-      <div className={cn('max-w-[70%] flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}>
+      <div className={cn('max-w-[70%] min-w-0 flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}>
         {!isSelf && (
           <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(message.sender)}</span>
         )}
-        <div className={cn('rounded-lg px-3 py-2 text-sm break-words', bubbleClassName)}>
+        <div className={cn('rounded-lg px-3 py-2 text-sm break-words overflow-hidden', bubbleClassName)}>
           {children}
         </div>
       </div>
