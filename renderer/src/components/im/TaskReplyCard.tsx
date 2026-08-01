@@ -3,14 +3,18 @@
 // task_reply 消息卡片：子 agent 向主 agent 回报任务状态。
 // 字段取自 io.momo-studio.task_reply event content：
 //   status (in_progress|completed|failed|needs_input), body, task_id, progress_pct?
-// 卡片配色按 status 映射到语义状态 token（绿/蓝/红/琥珀）。
+// 对话化重构：走 MessageFrame（frame 头 = 子 agent 头像+名），补齐此前完全缺失的归属。
+// 名字由 senderName prop 传入（MessageFrame 渲染），卡片本身不调 useBotNameMap。
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
 import { cn } from '../../lib/cn';
+import { MessageFrame } from './MessageFrame';
 
 interface Props {
   message: ImMessage;
+  isSelf: boolean;
+  senderName?: string;
 }
 
 type ReplyStatus = 'in_progress' | 'completed' | 'failed' | 'needs_input';
@@ -79,14 +83,20 @@ function readReply(content: Record<string, unknown> | undefined): TaskReplyField
   };
 }
 
-export function TaskReplyCard({ message }: Props) {
+export function TaskReplyCard({ message, isSelf, senderName }: Props) {
   const fields = readReply(message.content);
-  // 解析失败时回退为普通消息渲染，保证不丢消息
+  // 解析失败时回退为普通气泡渲染（走 frame 保留归属），保证不丢消息
   if (!fields) {
+    const rawContentBody = message.content.body;
     return (
-      <div className="mx-4 my-1 rounded-lg bg-bg-tertiary px-3 py-2 text-sm text-neutral-300">
-        {message.body}
-      </div>
+      <MessageFrame
+        message={message}
+        isSelf={isSelf}
+        senderName={senderName}
+        bubbleClassName="bg-bg-tertiary text-neutral-300"
+      >
+        {typeof rawContentBody === 'string' ? rawContentBody : message.body}
+      </MessageFrame>
     );
   }
 
@@ -95,9 +105,16 @@ export function TaskReplyCard({ message }: Props) {
     fields.progressPct !== undefined ? Math.max(0, Math.min(100, fields.progressPct)) : null;
 
   return (
-    <div className={cn('mx-4 my-2 rounded-lg border px-3 py-2', style.border, style.bg)}>
+    <MessageFrame
+      message={message}
+      isSelf={isSelf}
+      senderName={senderName}
+      bubbleClassName={cn('border', style.border, style.bg)}
+    >
       <div className="flex items-center gap-2 text-xs">
-        <span className={cn('font-medium', style.text)}>{style.label}</span>
+        <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 font-medium', style.text)}>
+          {style.label}
+        </span>
         <span className="text-neutral-500">#{fields.taskId.slice(0, 8)}</span>
       </div>
 
@@ -110,6 +127,6 @@ export function TaskReplyCard({ message }: Props) {
           <div className={cn('h-full rounded-full', style.bar)} style={{ width: `${pct}%` }} />
         </div>
       )}
-    </div>
+    </MessageFrame>
   );
 }

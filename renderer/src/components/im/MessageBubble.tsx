@@ -25,7 +25,7 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
     return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
   if (message.eventType === 'io.momo-studio.task_reply') {
-    return <TaskReplyCard message={message} />;
+    return <TaskReplyCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
 
   return (
