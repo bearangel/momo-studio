@@ -1,13 +1,11 @@
 // electron/src/main/agent/llm-provider.ts
 //
 // 统一的 LLM provider 抽象层。对外暴露 createLLMProvider 工厂 + LLMProvider 接口，
-// 内部按 model.provider 分派到 OpenAI / Anthropic 两个实现。
+// 内部按 platform（显式传入或 baseUrl 自动检测）分派到 OpenAI / Anthropic 两个实现。
 // 两家实现都直接走 fetch + 各自的 REST API（不引入官方 SDK），便于裁剪依赖、统一错误处理。
 // Anthropic 的两点特殊语义已在此封装：
 //   1. system 是请求体顶层字段，不在 messages 数组里
 //   2. tool_use 返回在 content 数组中（type: 'tool_use'），需扁平化为 LLMToolCall
-
-import type { ModelRef } from './types';
 
 /** 对话消息（system / user / assistant / tool_result 四种角色的统一表示） */
 export interface LLMMessage {
@@ -88,15 +86,26 @@ async function fetchWithRetry(
   throw lastError ?? new Error('LLM 请求失败（重试耗尽）');
 }
 
-/** 统一的 LLM provider 工厂：按 model.provider 选择实现 */
-export function createLLMProvider(model: ModelRef, apiKey: string): LLMProvider {
-  if (model.provider === 'openai') {
+/** 按 baseUrl 启发式检测 platform：anthropic.com 域名 → anthropic，其余 → openai（OpenAI 兼容） */
+function detectPlatform(baseUrl?: string): 'openai' | 'anthropic' {
+  if (baseUrl && baseUrl.includes('anthropic.com')) return 'anthropic';
+  return 'openai';
+}
+
+/** 统一的 LLM provider 工厂。
+ *  platform 显式传入时优先用；缺省时按 baseUrl 自动检测（OpenAI 兼容为默认）。 */
+export function createLLMProvider(
+  model: { provider?: 'openai' | 'anthropic'; model: string; baseUrl?: string },
+  apiKey: string,
+): LLMProvider {
+  const provider = model.provider ?? detectPlatform(model.baseUrl);
+  if (provider === 'openai') {
     return new OpenAIProvider(model.model, apiKey, model.baseUrl);
   }
-  if (model.provider === 'anthropic') {
+  if (provider === 'anthropic') {
     return new AnthropicProvider(model.model, apiKey, model.baseUrl);
   }
-  throw new Error(`不支持的 LLM provider: ${model.provider}`);
+  throw new Error(`不支持的 LLM provider: ${provider}`);
 }
 
 // --- OpenAI 实现 ---

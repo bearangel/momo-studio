@@ -1,22 +1,24 @@
 // electron/src/main/agent/spawn-helpers.ts
 //
-// Agent spawn 共享逻辑：rebuildSubAgents + buildSpawnOpts。
-// 把 4 个 spawn 站点（assignMainAgent / agent:start / autoStartAgents /
-// restartCoordinatorInstance）共用的 subAgents 重建 + opts 构建逻辑集中到一处，
-// 避免 main agent 在某条重启路径上丢失 dispatch 工具（C1 修复）。
+// Agent spawn 共享逻辑：rebuildSubAgents + resolveApiKey + buildSpawnOpts。
+// 把多个 spawn 站点（assignMainAgent / agent:start / autoStartAgents /
+// restartCoordinatorInstance）共用的 subAgents 重建 + apiKey 解析 + opts 构建逻辑
+// 集中到一处，避免 main agent 在某条重启路径上丢失 dispatch 工具（C1 修复）。
 //
-// 设计要点：
-//   - rebuildSubAgents 从 DB 的 definition.parentAgentId + assignment 关系重建
-//     subAgents 引用，使 main agent 在任何重启路径（手动 agent:start、协调重启、
-//     应用启动恢复）都能拿到完整的 dispatch:<slug> 工具集。
-//   - buildSpawnOpts 统一构造 AgentRuntimeOpts，避免各站点字段遗漏（C1 根因）。
+// v1.3 改造要点：
+//   - subAgents 来源改为按 assignment.parent_instance_id 查询（不再读 def.parentAgentId）
+//   - apiKey 解析：override ?? provider key（spawn 前主进程解析，传给子进程）
+//   - role 来自 assignment（不再从 def.type 推断）
+//   - modelBaseUrl 来自 provider.baseUrl（spawn 前查 model_providers 表）
 
 import path from 'node:path';
-import { getAgentDefinition, listAssignments } from './crud';
+import { getAgentDefinition, listAssignments, listSubAssignments } from './crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
 import { resolveSkillsDir } from '../paths';
-import type { AgentDefinition, AgentAssignment } from './types';
+import { getProvider } from './provider-crud';
+import { getSecret } from '../storage/keychain';
+import type { AgentDefinition, AgentRole } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-manager';
 
@@ -24,34 +26,49 @@ import type { AgentRuntimeOpts } from './runtime-manager';
 export const HOMESERVER_URL = 'http://127.0.0.1:8008';
 
 /**
- * 为指定 workspace 内的 main agent 重建 subAgents 引用。
- * 遍历该 workspace 全部 assignment，找出 parentAgentId 指向该 main definition 的 sub assignment。
+ * 为指定 workspace 内的 main assignment 重建 subAgents 引用。
+ * v1.3：按 assignment.parent_instance_id 查询同 ws 的 role='sub' assignments，
+ * 不再读 def.parentAgentId（已删除）。
  *
  * @param workspaceId 目标 workspace
- * @param mainDefId main agent 定义 ID
- * @param wsAssignments 可选：调用方预取的 workspace assignments（避免重复查 DB）；不传则内部 listAssignments
+ * @param mainInstanceId main assignment 的 instanceId
  * @returns sub agent 引用列表（slug + botUserId + description）
  */
 export function rebuildSubAgents(
   workspaceId: string,
-  mainDefId: string,
-  wsAssignments?: AgentAssignment[],
+  mainInstanceId: string,
 ): SubAgentRef[] {
-  const assignments = wsAssignments ?? listAssignments(workspaceId);
+  const subAssignments = listSubAssignments(workspaceId, mainInstanceId);
   const subs: SubAgentRef[] = [];
-  for (const assignment of assignments) {
-    if (assignment.instanceId === '') continue;
-    const subDef = getAgentDefinition(assignment.agentDefinitionId);
+  for (const sub of subAssignments) {
+    const subDef = getAgentDefinition(sub.agentDefinitionId);
     if (!subDef) continue;
-    if (subDef.parentAgentId === mainDefId) {
-      subs.push({
-        slug: subDef.slug,
-        botUserId: assignment.botMatrixUserId,
-        description: subDef.description,
-      });
-    }
+    subs.push({
+      slug: subDef.slug,
+      botUserId: sub.botMatrixUserId,
+      description: subDef.description,
+    });
   }
   return subs;
+}
+
+/**
+ * 解析 assignment 启动用的 API key：
+ * 1. 优先读 keychain 'agent.<instanceId>.api_key_override'
+ * 2. fallback 到 'provider.<providerId>.api_key'
+ * 3. 都没有则抛错（提示用户检查供应商设置）
+ */
+export async function resolveApiKey(
+  instanceId: string,
+  providerId: string,
+): Promise<string> {
+  const override = await getSecret(`agent.${instanceId}.api_key_override`);
+  if (override) return override;
+  const providerKey = await getSecret(`provider.${providerId}.api_key`);
+  if (!providerKey) {
+    throw new Error(`供应商 API key 丢失，请检查设置 → 供应商（providerId=${providerId}）`);
+  }
+  return providerKey;
 }
 
 /**
@@ -74,6 +91,9 @@ export interface BuildSpawnOptsInput {
   ownerUserId: string;
   def: AgentDefinition;
   botAccessToken: string;
+  /** 来自 assignment.role（v1.3：不再从 def.type 推断） */
+  role: AgentRole;
+  /** spawn 前主进程已解析的 LLM API key（override ?? provider key） */
   llmApiKey: string;
   isCoordinator: boolean;
 }
@@ -81,13 +101,11 @@ export interface BuildSpawnOptsInput {
 /**
  * 构建完整的 AgentRuntimeOpts，供 spawnAgent 使用。
  *
- * 该函数是所有 spawn 站点的唯一 opts 构建入口，保证：
- *   1. main agent 的 subAgents 从 DB 重建（C1 核心修复：避免重启路径丢失 dispatch 工具）；
- *   2. 三层能力合并（def 默认 ∪ workspace allocation）一致应用；
- *   3. skills 解析逻辑统一（cachePath 约定一致）。
- *
- * 调用方只需提供已恢复的 token / apiKey + 基本 identity 字段，
- * 其余（subAgents / skills / mcps / homeserverUrl）由本函数内部推导。
+ * v1.3 改造：
+ *   1. role 来自 assignment（外部传入）；subAgents 按 main 的 instanceId 查同 ws subs；
+ *   2. modelBaseUrl 来自 provider.baseUrl（v1.3 删 def.model.baseUrl）；
+ *   3. createLLMProvider 调用端按 baseUrl 自动检测 platform，AGENT_CONFIG 不再带 modelProvider；
+ *   4. def.modelProviderId 必须非空（未配置时拒绝 spawn）。
  */
 export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   const {
@@ -99,13 +117,27 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     ownerUserId,
     def,
     botAccessToken,
+    role,
     llmApiKey,
     isCoordinator,
   } = input;
 
-  // 为 main agent 从 DB 重建 subAgents（C1：保证 dispatch 工具在所有重启路径可用）
+  // 校验 def 已配置 provider
+  if (!def.modelProviderId) {
+    throw new Error(
+      `agent 定义「${def.name}」未配置 modelProviderId，请到 Agent 库配置`,
+    );
+  }
+
+  // 取 provider baseUrl（runtime 据此自动检测 platform + 调对应 REST API）
+  const provider = getProvider(def.modelProviderId);
+  if (!provider) {
+    throw new Error(`供应商不存在: ${def.modelProviderId}`);
+  }
+
+  // 为 main assignment 从 DB 重建 subAgents（C1：保证 dispatch 工具在所有重启路径可用）
   const subAgents: SubAgentRef[] =
-    def.type === 'main' ? rebuildSubAgents(workspaceId, def.id) : [];
+    role === 'main' ? rebuildSubAgents(workspaceId, instanceId) : [];
 
   // 合并三层能力（def 默认 ∪ workspace allocation）
   const allocation = getAllocation(workspaceId);
@@ -119,13 +151,14 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     botAccessToken,
     homeserverUrl: HOMESERVER_URL,
     systemPrompt: def.systemPrompt,
-    modelProvider: def.model.provider,
-    modelName: def.model.model,
-    modelBaseUrl: def.model.baseUrl,
+    // v1.3：runtime 收到 modelName + modelBaseUrl + llmApiKey 即可，
+    // createLLMProvider 按 baseUrl 自动检测 platform
+    modelName: def.modelName,
+    modelBaseUrl: provider.baseUrl,
     llmApiKey,
     teamRoomId,
     ownerUserId,
-    agentType: def.type,
+    role,
     subAgents,
     skills: resolveSkillSlugs(merged.skills),
     mcpNames: merged.mcps,

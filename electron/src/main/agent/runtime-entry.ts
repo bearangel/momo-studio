@@ -97,14 +97,15 @@ interface RuntimeConfig {
   /** workspace owner 的 Matrix userId —— 仅接受此人发出的 room 邀请（防恶意 room 渗透） */
   ownerUserId: string;
   systemPrompt: string;
-  modelProvider: 'openai' | 'anthropic';
+  // v1.3：移除 modelProvider，createLLMProvider 按 baseUrl 自动检测 platform
   modelName: string;
   modelBaseUrl?: string;
   llmApiKey: string;
   workspaceDir: string;
   // === M2 集成 ===
   workspaceId: string;
-  agentType: 'standalone' | 'main' | 'sub';
+  /** v1.3 重命名（原 agentType） */
+  role: 'standalone' | 'main' | 'sub';
   subAgents: SubAgentRef[];
   skills: RuntimeSkillRef[];
   mcpNames: string[];
@@ -162,13 +163,12 @@ function parseConfig(raw: unknown): RuntimeConfig {
     teamRoomId,
     ownerUserId,
     systemPrompt,
-    modelProvider,
     modelName,
     modelBaseUrl,
     llmApiKey,
     workspaceDir,
     workspaceId,
-    agentType,
+    role,
     subAgents,
     skills,
     mcpNames,
@@ -184,7 +184,6 @@ function parseConfig(raw: unknown): RuntimeConfig {
     typeof teamRoomId !== 'string' ||
     typeof ownerUserId !== 'string' ||
     typeof systemPrompt !== 'string' ||
-    typeof modelProvider !== 'string' ||
     typeof modelName !== 'string' ||
     typeof llmApiKey !== 'string' ||
     typeof workspaceDir !== 'string' ||
@@ -192,15 +191,12 @@ function parseConfig(raw: unknown): RuntimeConfig {
   ) {
     throw new Error(
       'AGENT_CONFIG 缺少必要字段（botUserId/botAccessToken/homeserverUrl/teamRoomId/' +
-        'ownerUserId/systemPrompt/modelProvider/modelName/llmApiKey/workspaceDir/workspaceId）',
+        'ownerUserId/systemPrompt/modelName/llmApiKey/workspaceDir/workspaceId）',
     );
   }
-  if (modelProvider !== 'openai' && modelProvider !== 'anthropic') {
-    throw new Error(`不支持的 modelProvider: ${modelProvider}`);
-  }
-  // M2 字段：校验类型，缺省/不合法时用安全默认值（兼容旧配置 + 容错）
-  const resolvedAgentType =
-    agentType === 'main' || agentType === 'sub' ? agentType : 'standalone';
+  // v1.3 字段：role（原 agentType 重命名）；缺省/不合法时按 standalone 处理
+  const resolvedRole =
+    role === 'main' || role === 'sub' ? role : 'standalone';
   const resolvedSubAgents = Array.isArray(subAgents)
     ? (subAgents.filter(isSubAgentRef) as SubAgentRef[])
     : [];
@@ -224,13 +220,12 @@ function parseConfig(raw: unknown): RuntimeConfig {
     teamRoomId,
     ownerUserId,
     systemPrompt,
-    modelProvider,
     modelName,
     modelBaseUrl: typeof modelBaseUrl === 'string' ? modelBaseUrl : undefined,
     llmApiKey,
     workspaceDir,
     workspaceId,
-    agentType: resolvedAgentType,
+    role: resolvedRole,
     subAgents: resolvedSubAgents,
     skills: resolvedSkills,
     mcpNames: resolvedMcpNames,
@@ -357,7 +352,7 @@ ${skillIndex}`
     ...getBuiltinToolDefs(),
     ...getVirtualToolDefs(skillRegistry),
     ...(await discoverMcpTools(config)),
-    ...(config.agentType === 'main' ? getDispatchToolDefs(config.subAgents) : []),
+    ...(config.role === 'main' ? getDispatchToolDefs(config.subAgents) : []),
   ];
 
   return { wsFs, skillRegistry, tools, systemPrompt };
@@ -556,7 +551,7 @@ async function runChatLoop(
   ctx: RuntimeContext,
 ): Promise<string> {
   const llm = createLLMProvider(
-    { provider: config.modelProvider, model: config.modelName, baseUrl: config.modelBaseUrl },
+    { model: config.modelName, baseUrl: config.modelBaseUrl },
     config.llmApiKey,
   );
 
@@ -567,7 +562,7 @@ async function runChatLoop(
   ];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    trace(`→ LLM #${round + 1}`, { provider: config.modelProvider, model: config.modelName, msg: messages.length, tools: ctx.tools.length });
+    trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: ctx.tools.length });
     const startMs = Date.now();
     const response = await llm.chat(messages, ctx.tools);
     trace(`← LLM #${round + 1}`, { ms: Date.now() - startMs, finish: response.finishReason, calls: response.toolCalls.length });

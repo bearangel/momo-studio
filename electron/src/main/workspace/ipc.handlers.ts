@@ -115,6 +115,8 @@ async function restartCoordinatorInstance(
       ownerUserId: ws.ownerId,
       def,
       botAccessToken: token,
+      // v1.3：role 来自 assignment；协调重启保留原 role
+      role: assignment.role,
       llmApiKey: apiKey,
       isCoordinator: true,
     }),

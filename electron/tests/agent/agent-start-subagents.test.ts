@@ -1,85 +1,41 @@
 // electron/tests/agent/agent-start-subagents.test.ts
 //
-// C1 回归测试：main agent 通过 agent:start 手动重启后，
-// spawnAgent 仍能收到正确的 subAgents 数组（dispatch 工具不丢失）。
+// C1 回归测试（v1.3）：rebuildSubAgents 从 assignment.parent_instance_id 重建 subAgents，
+// 保证 main agent 重启时 dispatch:<slug> 工具集不丢失。
 //
-// 捕获方式：mock electron.ipcMain.handle 捕获 agent:start 回调，直接调用。
-// runtime-manager 被 mock（避免 fork 真实子进程）；allocation 被 mock 返回空分配；
-// matrix 层被 mock（模块加载需要）；其余走真实实现（DB + keychain + crud）。
+// v1.3 改造：原 v1.2 测试通过完整 IPC agent:start 流程验证；v1.3 改为直接测 rebuildSubAgents
+// （T7 会重写 ipc.handlers.ts，到时再加 agent:start 端到端测试）。
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
+import { rebuildSubAgents } from '../../src/main/agent/spawn-helpers';
 import { createWorkspace } from '../../src/main/workspace/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
-// 捕获 ipcMain.handle 注册的回调
-const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
-// runtime-manager mock 引用
-const { spawnAgentMock } = vi.hoisted(() => ({ spawnAgentMock: vi.fn() }));
-
 vi.mock('../../src/main/agent/runtime-manager', () => ({
-  spawnAgent: spawnAgentMock,
-  stopAgent: vi.fn(),
   isAgentRunning: vi.fn(() => false),
+  stopAgent: vi.fn(),
 }));
 
-// mock allocation：返回空分配
-vi.mock('../../src/main/workspace/allocation', () => ({
-  getAllocation: vi.fn(() => ({ workspaceId: '', tools: [], skills: [], mcps: [] })),
-}));
-
-// mock matrix 层（ipc.handlers 模块加载需要这些导入存在）
-vi.mock('../../src/main/matrix/rooms', () => ({ inviteBotToRoom: vi.fn() }));
-vi.mock('../../src/main/matrix/session', () => ({ getOwnerMatrixClient: vi.fn() }));
-vi.mock('../../src/main/matrix/sync-manager', () => ({ getSyncingClient: vi.fn() }));
-vi.mock('../../src/main/matrix/client', () => ({ createMatrixClient: vi.fn() }));
-vi.mock('../../src/main/agent/bot-registrar', () => ({ registerAgentBot: vi.fn() }));
-
-// mock electron：捕获 ipcMain.handle 注册的 handler
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
-      handlers.set(channel, fn);
-    },
-  },
-}));
-
-let registerAgentHandlers: () => void;
-
-const tmpRoot = path.join(os.tmpdir(), `ap-start-subs-${Date.now()}-${process.pid}`);
+const tmpRoot = path.join(os.tmpdir(), `ap-rebuild-subs-${Date.now()}-${process.pid}`);
 const memStore = new Map<string, string>();
 const memKeychain: KeychainImpl = {
-  async setSecret(k, v) {
-    memStore.set(k, v);
-  },
-  async getSecret(k) {
-    return memStore.get(k) ?? null;
-  },
-  async deleteSecret(k) {
-    memStore.delete(k);
-  },
+  async setSecret(k, v) { memStore.set(k, v); },
+  async getSecret(k) { return memStore.get(k) ?? null; },
+  async deleteSecret(k) { memStore.delete(k); },
 };
-
-beforeAll(async () => {
-  const mod = await import('../../src/main/agent/ipc.handlers');
-  registerAgentHandlers = mod.registerAgentHandlers;
-});
 
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   setKeychainImpl(memKeychain);
   runMigrations();
-  handlers.clear();
-  registerAgentHandlers();
-  spawnAgentMock.mockClear();
 });
-
 afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -87,80 +43,78 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-/** 构造 main agent 定义（带 2 个 sub）并落库 */
-function setupMainWithSubs(): {
-  mainDef: AgentDefinition;
-  mainAssignment: { instanceId: string; agentDefinitionId: string; botMatrixUserId: string };
-} {
-  const mainDef: AgentDefinition = {
-    id: 'main-c1', name: 'PM', slug: 'pm-c1', version: '1.0', type: 'main',
-    runtime: 'declarative', systemPrompt: '你是 PM',
-    model: { provider: 'openai', model: 'gpt-4o' },
-    defaultTools: [], source: 'builtin', description: 'PM agent', iconEmoji: '📋',
+function makeDef(id: string, slug: string, name: string, description: string): AgentDefinition {
+  return {
+    id, name, slug, version: '1.0',
+    runtime: 'declarative', systemPrompt: '...',
+    defaultTools: [], source: 'builtin',
+    description, iconEmoji: '🤖',
     defaultMcps: [], defaultSkills: [],
+    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
   };
-  const sub1: AgentDefinition = {
-    id: 'sub-c1-1', name: 'Coder', slug: 'coder-c1', version: '1.0', type: 'sub',
-    runtime: 'declarative', systemPrompt: '你是程序员',
-    model: { provider: 'openai', model: 'gpt-4o' },
-    defaultTools: [], source: 'builtin', description: '写代码', iconEmoji: '🔗',
-    parentAgentId: 'main-c1',
-    defaultMcps: [], defaultSkills: [],
-  };
-  const sub2: AgentDefinition = {
-    id: 'sub-c1-2', name: 'QA', slug: 'qa-c1', version: '1.0', type: 'sub',
-    runtime: 'declarative', systemPrompt: '你是测试',
-    model: { provider: 'openai', model: 'gpt-4o' },
-    defaultTools: [], source: 'builtin', description: '测代码', iconEmoji: '🔗',
-    parentAgentId: 'main-c1',
-    defaultMcps: [], defaultSkills: [],
-  };
-  saveAgentDefinition(mainDef);
-  saveAgentDefinition(sub1);
-  saveAgentDefinition(sub2);
-  return { mainDef, mainAssignment: { instanceId: '', agentDefinitionId: '', botMatrixUserId: '' } };
 }
 
-describe('agent:start — main agent 重启后 subAgents 不丢失（C1）', () => {
-  it('main agent 通过 agent:start 手动启动 → spawnAgent 收到正确 subAgents', async () => {
-    setupMainWithSubs();
+describe('rebuildSubAgents — v1.3 assignment.parent_instance_id', () => {
+  it('main assignment 的 subs 通过 parent_instance_id 关联，返回正确 sub 引用', async () => {
+    saveAgentDefinition(makeDef('main-c1', 'pm', 'PM', '主 agent'));
+    saveAgentDefinition(makeDef('sub-c1-1', 'coder', 'Coder', '写代码'));
+    saveAgentDefinition(makeDef('sub-c1-2', 'qa', 'QA', '测代码'));
 
     const ws = await createWorkspace(
-      { name: 'w-c1', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!team-c1:localhost',
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
     );
 
-    // 分配 main + 2 subs 到 workspace（模拟 assignMain 已安装的场景）
-    const mainAssignment = assignAgentToWorkspace(ws.id, 'main-c1', '@pm-c1:localhost');
-    assignAgentToWorkspace(ws.id, 'sub-c1-1', '@coder-c1:localhost');
-    assignAgentToWorkspace(ws.id, 'sub-c1-2', '@qa-c1:localhost');
+    // v1.3：分配时显式传 role + parentInstanceId 建立关系
+    const mainAssignment = assignAgentToWorkspace(ws.id, 'main-c1', '@pm:localhost', 'main');
+    assignAgentToWorkspace(ws.id, 'sub-c1-1', '@coder:localhost', 'sub', mainAssignment.instanceId);
+    assignAgentToWorkspace(ws.id, 'sub-c1-2', '@qa:localhost', 'sub', mainAssignment.instanceId);
 
-    // 预填 keychain：agent:start 需要从中恢复 apiKey 和 bot token
-    memStore.set(`agent.${mainAssignment.instanceId}.llm_api_key`, 'llm-key');
-    memStore.set('bot.@pm-c1:localhost.matrix_token', 'mx-token');
+    // 调用 rebuildSubAgents：传 main assignment 的 instanceId
+    const subs = rebuildSubAgents(ws.id, mainAssignment.instanceId);
 
-    // 调用 agent:start handler
-    const handler = handlers.get('agent:start')!;
-    await handler({}, {
-      assignment: mainAssignment,
-      workspaceId: ws.id,
-      teamRoomId: ws.teamRoomId!,
-    });
+    expect(subs).toHaveLength(2);
+    expect(subs.map((s) => s.slug).sort()).toEqual(['coder', 'qa']);
+    expect(subs.map((s) => s.botUserId).sort()).toEqual(['@coder:localhost', '@qa:localhost']);
+    // description 来自 def
+    const coder = subs.find((s) => s.slug === 'coder')!;
+    expect(coder.description).toBe('写代码');
+  });
 
-    // ★ C1 核心断言：spawnAgent 收到了 main 的 subAgents
-    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
-    const opts = spawnAgentMock.mock.calls[0]![0] as {
-      agentType?: string;
-      subAgents?: Array<{ slug: string; botUserId: string }>;
-    };
-    expect(opts.agentType).toBe('main');
-    expect(opts.subAgents).toBeDefined();
-    expect(opts.subAgents).toHaveLength(2);
-    expect(opts.subAgents!.map((s) => s.slug).sort()).toEqual(['coder-c1', 'qa-c1']);
-    // botUserId 来自 DB assignment 记录
-    expect(opts.subAgents!.map((s) => s.botUserId).sort()).toEqual([
-      '@coder-c1:localhost',
-      '@qa-c1:localhost',
-    ]);
+  it('main 没有 subs 时返回空数组', async () => {
+    saveAgentDefinition(makeDef('lone-main', 'lone', 'Lone', '孤主'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
+    );
+    const main = assignAgentToWorkspace(ws.id, 'lone-main', '@lone:localhost', 'main');
+
+    const subs = rebuildSubAgents(ws.id, main.instanceId);
+    expect(subs).toHaveLength(0);
+  });
+
+  it('不同 ws 的同 defId assignment 不串扰（parentInstanceId 只在本 ws 内有效）', async () => {
+    saveAgentDefinition(makeDef('main-c1', 'pm', 'PM', '主'));
+    saveAgentDefinition(makeDef('sub-c1', 'coder', 'Coder', '子'));
+
+    const ws1 = await createWorkspace(
+      { name: 'w1', description: '', directoryPath: path.join(tmpRoot, 'w1'), iconEmoji: '📁' },
+      '@o:localhost', '!s1:localhost', '!t1:localhost',
+    );
+    const ws2 = await createWorkspace(
+      { name: 'w2', description: '', directoryPath: path.join(tmpRoot, 'w2'), iconEmoji: '📁' },
+      '@o:localhost', '!s2:localhost', '!t2:localhost',
+    );
+
+    // ws1: main + sub 关联
+    const main1 = assignAgentToWorkspace(ws1.id, 'main-c1', '@m1:localhost', 'main');
+    assignAgentToWorkspace(ws1.id, 'sub-c1', '@s1:localhost', 'sub', main1.instanceId);
+
+    // ws2: 只有 main，无 sub
+    const main2 = assignAgentToWorkspace(ws2.id, 'main-c1', '@m2:localhost', 'main');
+
+    // ws2 的 main 不应看到 ws1 的 sub（assignment 隔离）
+    const subs2 = rebuildSubAgents(ws2.id, main2.instanceId);
+    expect(subs2).toHaveLength(0);
   });
 });

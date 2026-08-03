@@ -26,17 +26,17 @@ export interface AgentRuntimeOpts {
   botAccessToken: string;
   homeserverUrl: string;
   systemPrompt: string;
-  modelProvider: string;
+  /** v1.3：仅传 modelName + modelBaseUrl + llmApiKey；platform 由 createLLMProvider 按 baseUrl 自动检测 */
   modelName: string;
   modelBaseUrl?: string;
   llmApiKey: string;
   teamRoomId: string;
   /** workspace owner 的 Matrix userId，子进程据此只接受 owner 邀请（防恶意 room） */
   ownerUserId: string;
-  // === M2 集成（可选；缺省时 runtime 退化为纯文件工具模式） ===
-  /** agent 形态，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
-  agentType?: 'standalone' | 'main' | 'sub';
-  /** 主 agent 名下的子 agent 列表（仅 type='main' 时有意义），用于构建 dispatch:<slug> 工具 */
+  // === v1.3 重命名（原 agentType） ===
+  /** agent 角色，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
+  role?: 'standalone' | 'main' | 'sub';
+  /** 主 agent 名下的子 agent 列表（仅 role='main' 时有意义），用于构建 dispatch:<slug> 工具 */
   subAgents?: SubAgentRef[];
   /** 已安装 skill 引用，子进程启动时据此初始化 SkillRegistry */
   skills?: RuntimeSkillRef[];
