@@ -1,8 +1,10 @@
 // renderer/src/components/im/MessageBubble.test.tsx
 // MessageBubble 路由行为：按 eventType 分发到 DispatchCard/TaskReplyCard/普通气泡，
 // 并正确透传 isSelf + senderName。用 vi.mock 把卡片替换为可控桩，隔离 store 依赖。
+// v1.4：补充增强气泡测试——content 含 io.momo-studio.thinking / tool_calls 时渲染
+// ThinkingSection + ToolCallChip（这两个组件不 mock，测真实集成）。
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { ImMessage } from '../../ipc/types';
 
 // 把两个卡片 mock 成带 testid 的桩，便于断言"哪个被渲染"+ 捕获 props
@@ -72,5 +74,102 @@ describe('MessageBubble 路由', () => {
     expect(screen.getByText('码农')).toBeInTheDocument();
     expect(screen.queryByTestId('dispatch')).not.toBeInTheDocument();
     expect(screen.queryByTestId('task-reply')).not.toBeInTheDocument();
+  });
+});
+
+describe('MessageBubble 增强（agent 持久化字段）', () => {
+  it('content 含 io.momo-studio.thinking → 渲染 ThinkingSection', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '回复正文',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.thinking': '深度分析中...' },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    // ThinkingSection 的 toggle 按钮可见
+    expect(screen.getByText(/思考过程/)).toBeInTheDocument();
+    // 正文也渲染
+    expect(screen.getByText('回复正文')).toBeInTheDocument();
+  });
+
+  it('ThinkingSection 展开后显示 thinking 内容（content 正确透传）', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '回复',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.thinking': '我在认真思考' },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    // 默认折叠：内容不可见
+    expect(screen.queryByText('我在认真思考')).not.toBeInTheDocument();
+    // 点击展开
+    fireEvent.click(screen.getByText(/思考过程/));
+    expect(screen.getByText('我在认真思考')).toBeInTheDocument();
+  });
+
+  it('content 含 io.momo-studio.tool_calls → 渲染 ToolCallChip', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '回复正文',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          { name: 'read_file', args: { path: 'a.ts' }, result: '内容', success: true },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    // ToolCallChip 头部的工具名可见
+    expect(screen.getByText('read_file')).toBeInTheDocument();
+    // 正文也渲染
+    expect(screen.getByText('回复正文')).toBeInTheDocument();
+    // 不应渲染 ThinkingSection
+    expect(screen.queryByText(/思考过程/)).not.toBeInTheDocument();
+  });
+
+  it('thinking + tool_calls 同时存在 → 两者都渲染', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '最终回复',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.thinking': '先想想',
+        'io.momo-studio.tool_calls': [
+          { name: 'grep', args: { q: 'x' }, result: '命中', success: true },
+          { name: 'bash', args: { cmd: 'ls' }, result: 'done', success: false },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    expect(screen.getByText(/思考过程/)).toBeInTheDocument();
+    // 两个工具名都可见
+    expect(screen.getByText('grep')).toBeInTheDocument();
+    expect(screen.getByText('bash')).toBeInTheDocument();
+    expect(screen.getByText('最终回复')).toBeInTheDocument();
+  });
+
+  it('content 仅含 stream_session_id（无 thinking/tools）→ 普通气泡', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '纯文本回复',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.stream_session_id': 'sess-123' },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    expect(screen.getByText('纯文本回复')).toBeInTheDocument();
+    // 无 ThinkingSection
+    expect(screen.queryByText(/思考过程/)).not.toBeInTheDocument();
+  });
+
+  it('tool_calls 字段格式非法（非数组）→ 安全降级为普通气泡', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '回复',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.tool_calls': '不是数组' },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    expect(screen.getByText('回复')).toBeInTheDocument();
+    // 非法格式被 extractAgentMeta 过滤，不渲染工具卡片
   });
 });

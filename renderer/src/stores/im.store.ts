@@ -4,9 +4,16 @@
 // 消息来源有两条路径：
 //  1. 主动拉取：selectRoom → ipc.im.getMessages（历史消息）
 //  2. 被动接收：主进程 /sync 推送 → onMessage → receiveMessage（实时消息）
+//
+// v1.4：receiveMessage 收到带 io.momo-studio.stream_session_id 的 agent 最终消息时，
+//   调用 stream.store.clearCompleted 移除对应的临时流式气泡——即"流式→持久化替换"。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { ImMessage, ImRoomInfo, RoomMember } from '../ipc/types';
+import { useStreamStore } from './stream.store';
+
+/** Matrix event content 中标记 agent 最终回复的自定义键（值=streamSessionId） */
+const STREAM_SESSION_ID_KEY = 'io.momo-studio.stream_session_id';
 
 interface ImState {
   rooms: ImRoomInfo[];
@@ -109,6 +116,7 @@ export const useImStore = create<ImState>((set, get) => ({
   },
 
   receiveMessage: (msg) => {
+    let wasNew = false;
     set((state) => {
       const map = new Map(state.messagesByRoom);
       const existing = map.get(msg.roomId) ?? [];
@@ -117,8 +125,18 @@ export const useImStore = create<ImState>((set, get) => ({
         return state;
       }
       map.set(msg.roomId, [...existing, msg]);
+      wasNew = true;
       return { messagesByRoom: map };
     });
+
+    // 流式→持久化替换：agent 最终消息（带 stream_session_id）到达时，
+    // 清理对应的临时流式气泡。重复回放的消息不重复触发（其流式态早已清理）。
+    if (wasNew) {
+      const sessionId = msg.content[STREAM_SESSION_ID_KEY];
+      if (typeof sessionId === 'string' && sessionId) {
+        useStreamStore.getState().clearCompleted(sessionId);
+      }
+    }
   },
 
   sendMessage: async (body) => {

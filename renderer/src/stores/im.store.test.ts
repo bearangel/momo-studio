@@ -1,6 +1,7 @@
 // renderer/src/stores/im.store.test.ts
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useImStore } from './im.store';
+import { useStreamStore } from './stream.store';
 import type { ImMessage, ImRoomInfo } from '../ipc/types';
 
 const MOCK_ROOMS_A: ImRoomInfo[] = [
@@ -146,5 +147,136 @@ describe('im.store — workspace 隔离', () => {
     // 同 workspace 再 load：activeRoomId 保持选中（不退回首条）
     await useImStore.getState().loadRooms('ws-a');
     expect(useImStore.getState().activeRoomId).toBe('!a2:localhost');
+  });
+});
+
+describe('im.store — 流式→持久化替换', () => {
+  beforeEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+  });
+
+  it('收到带 stream_session_id 的消息时清理对应临时流式状态', () => {
+    // 预置一个活跃流式会话
+    useStreamStore.setState({
+      streams: new Map([
+        [
+          'sess-1',
+          {
+            streamSessionId: 'sess-1',
+            roomId: '!a1:localhost',
+            botUserId: '@bot:local',
+            thinking: '',
+            text: '流式中...',
+            toolCalls: [],
+            status: 'streaming' as const,
+          },
+        ],
+      ]),
+    });
+    expect(useStreamStore.getState().streams.has('sess-1')).toBe(true);
+
+    // 推送 agent 最终消息（带 stream_session_id）
+    const finalMsg: ImMessage = {
+      eventId: 'e-final',
+      roomId: '!a1:localhost',
+      sender: '@bot:local',
+      body: '最终回复',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.stream_session_id': 'sess-1' },
+      timestamp: 10,
+    };
+    useImStore.getState().receiveMessage(finalMsg);
+
+    // 临时流式状态应已被清理
+    expect(useStreamStore.getState().streams.has('sess-1')).toBe(false);
+    // 消息应已写入列表
+    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toContainEqual(finalMsg);
+  });
+
+  it('重复回放的消息不重复触发 clearCompleted', () => {
+    useStreamStore.setState({
+      streams: new Map([
+        [
+          'sess-2',
+          {
+            streamSessionId: 'sess-2',
+            roomId: '!a1:localhost',
+            botUserId: '@bot:local',
+            thinking: '',
+            text: '',
+            toolCalls: [],
+            status: 'streaming' as const,
+          },
+        ],
+      ]),
+    });
+
+    const finalMsg: ImMessage = {
+      eventId: 'e-dup',
+      roomId: '!a1:localhost',
+      sender: '@bot:local',
+      body: '回复',
+      eventType: 'm.room.message',
+      content: { 'io.momo-studio.stream_session_id': 'sess-2' },
+      timestamp: 11,
+    };
+
+    // 第一次推送：清理 sess-2
+    useImStore.getState().receiveMessage(finalMsg);
+    expect(useStreamStore.getState().streams.has('sess-2')).toBe(false);
+
+    // 重新预置 sess-2（模拟 race：end chunk 在 Matrix 消息之后到达重建态）
+    useStreamStore.setState({
+      streams: new Map([
+        [
+          'sess-2',
+          {
+            streamSessionId: 'sess-2',
+            roomId: '!a1:localhost',
+            botUserId: '@bot:local',
+            thinking: '',
+            text: '',
+            toolCalls: [],
+            status: 'streaming' as const,
+          },
+        ],
+      ]),
+    });
+
+    // 第二次推送相同 eventId：去重，不触发 clearCompleted
+    useImStore.getState().receiveMessage(finalMsg);
+    expect(useStreamStore.getState().streams.has('sess-2')).toBe(true);
+  });
+
+  it('不含 stream_session_id 的消息不影响流式状态', () => {
+    useStreamStore.setState({
+      streams: new Map([
+        [
+          'sess-3',
+          {
+            streamSessionId: 'sess-3',
+            roomId: '!a1:localhost',
+            botUserId: '@bot:local',
+            thinking: '',
+            text: '',
+            toolCalls: [],
+            status: 'streaming' as const,
+          },
+        ],
+      ]),
+    });
+
+    const normalMsg: ImMessage = {
+      eventId: 'e-normal',
+      roomId: '!a1:localhost',
+      sender: '@user:local',
+      body: '普通消息',
+      eventType: 'm.room.message',
+      content: {},
+      timestamp: 12,
+    };
+    useImStore.getState().receiveMessage(normalMsg);
+
+    expect(useStreamStore.getState().streams.has('sess-3')).toBe(true);
   });
 });
