@@ -224,6 +224,62 @@ CREATE TABLE IF NOT EXISTS model_providers (
 ALTER TABLE workspaces ADD COLUMN coordinator_instance_id TEXT;
 `.trim(),
   },
+  {
+    version: 12,
+    sql: `
+-- agent 定义/分配解耦：把角色和父子关系从 definition 剥离到 assignment，
+-- definition 改为 workspace-scoped（workspace_id 可空），模型配置改为引用 model_providers 表。
+-- 现有 assignment 强制重配 provider（model_provider_id 留 NULL）。
+
+-- 1. agent_definitions 新增列（model_name 已存在，无需重复加）
+ALTER TABLE agent_definitions ADD COLUMN workspace_id TEXT;
+ALTER TABLE agent_definitions ADD COLUMN model_provider_id TEXT;
+
+-- 2. agent_assignments 新增列
+ALTER TABLE agent_assignments ADD COLUMN role TEXT NOT NULL DEFAULT 'standalone';
+ALTER TABLE agent_assignments ADD COLUMN parent_instance_id TEXT;
+ALTER TABLE agent_assignments ADD COLUMN has_api_key_override INTEGER NOT NULL DEFAULT 0;
+
+-- 3. 索引：按 workspace 过滤定义 / 按 parent 查 subs
+CREATE INDEX IF NOT EXISTS idx_agent_definitions_workspace ON agent_definitions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_assignments_parent ON agent_assignments(workspace_id, parent_instance_id);
+
+-- 4. 数据回填：assignment.role 从老 def.type 推导
+UPDATE agent_assignments
+SET role = (
+  SELECT CASE d.type
+    WHEN 'main' THEN 'main'
+    WHEN 'sub' THEN 'sub'
+    ELSE 'standalone'
+  END
+  FROM agent_definitions d
+  WHERE d.id = agent_assignments.agent_definition_id
+);
+
+-- 5. 数据回填：assignment.parent_instance_id 从老 def.parent_agent_id + 同 ws 父 assignment 推导
+-- SQLite UPDATE 不支持表别名，直接用 outer 表名引用列
+UPDATE agent_assignments
+SET parent_instance_id = (
+  SELECT pa.instance_id
+  FROM agent_definitions d
+  JOIN agent_assignments pa
+    ON pa.agent_definition_id = d.parent_agent_id
+    AND pa.workspace_id = agent_assignments.workspace_id
+  WHERE d.id = agent_assignments.agent_definition_id
+    AND d.parent_agent_id IS NOT NULL
+)
+WHERE EXISTS (
+  SELECT 1 FROM agent_definitions d
+  WHERE d.id = agent_assignments.agent_definition_id AND d.parent_agent_id IS NOT NULL
+);
+
+-- 6. 删除旧列（SQLite 3.35+ 支持 DROP COLUMN）
+ALTER TABLE agent_definitions DROP COLUMN type;
+ALTER TABLE agent_definitions DROP COLUMN parent_agent_id;
+ALTER TABLE agent_definitions DROP COLUMN model_provider;
+ALTER TABLE agent_definitions DROP COLUMN model_base_url;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
