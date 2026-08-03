@@ -18,7 +18,7 @@ export function MembersPanel() {
   };
 
   return (
-    <aside className="w-48 min-w-[9rem] border-l border-border-subtle bg-bg-secondary overflow-auto">
+    <aside className="absolute right-0 top-0 bottom-0 w-56 border-l border-border-subtle bg-bg-secondary shadow-xl overflow-auto z-30">
       <div className="px-3 py-2 text-xs text-neutral-500 border-b border-border-subtle">
         成员（{members.length}）
       </div>

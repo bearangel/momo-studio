@@ -1,7 +1,7 @@
 // renderer/src/components/layout/MiddlePanel.tsx
 // 中间面板：根据 activeView 渲染对应视图。
 // files 视图 = 左 FileTree + 右 CodeEditor；其他视图暂保留占位
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -13,6 +13,7 @@ import { RoomList } from '../im/RoomList';
 import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
 import { MembersPanel } from '../im/MembersPanel';
+import { InputToolbar } from '../im/InputToolbar';
 import { AgentList } from '../agent/AgentList';
 import { AddAgentDialog } from '../agent/AddAgentDialog';
 import { SettingsView } from '../settings/SettingsView';
@@ -23,7 +24,13 @@ export function MiddlePanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
   const activeRoomId = useImStore((s) => s.activeRoomId);
+  const [showMembers, setShowMembers] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
+
+  // 切换房间时关闭成员浮层，避免新房间显示旧成员
+  useEffect(() => {
+    setShowMembers(false);
+  }, [activeRoomId]);
 
   // 点击文件 → 通过 IPC 读取内容 → 打开到编辑器 tab
   const handleSelectFile = useCallback(
@@ -64,16 +71,31 @@ export function MiddlePanel() {
     );
   }
 
-  // im 视图：左侧房间列表 + 中间消息流和输入框 + 右侧成员面板
+  // im 视图：左侧房间列表 + 中间消息流和工具条和输入框 + 成员浮层（按需）
   if (activeView === 'im') {
     return (
       <div className="flex-1 flex min-w-0">
         <RoomList />
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 relative">
           <MessageList />
+          <InputToolbar
+            showMembers={showMembers}
+            onToggleMembers={() => setShowMembers((v) => !v)}
+            disabled={!activeRoomId}
+          />
           <MessageInput />
+          {showMembers && activeRoomId && (
+            <>
+              {/* 透明 backdrop：点击关闭浮层（仅覆盖 chat 列，不影响 RoomList） */}
+              <div
+                className="absolute inset-0 z-20"
+                onClick={() => setShowMembers(false)}
+                data-testid="members-backdrop"
+              />
+              <MembersPanel />
+            </>
+          )}
         </div>
-        {activeRoomId && <MembersPanel />}
       </div>
     );
   }

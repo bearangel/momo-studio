@@ -78,4 +78,12 @@ describe('MembersPanel 在线/离线标签', () => {
     render(<MembersPanel />);
     expect(screen.getByText(/成员（4）/)).toBeInTheDocument();
   });
+
+  it('浮层定位为 absolute right-0（覆盖模式）', () => {
+    const { container } = render(<MembersPanel />);
+    const aside = container.querySelector('aside');
+    expect(aside?.className).toContain('absolute');
+    expect(aside?.className).toContain('right-0');
+    expect(aside?.className).toContain('z-30');
+  });
 });
