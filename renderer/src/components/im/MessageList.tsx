@@ -18,20 +18,23 @@ export function MessageList() {
   const botNameByUserId = useBotNameMap();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);
+  const prevRoomIdRef = useRef<string | null>(activeRoomId);
 
   // 消息列表变化时滚动到底部。
-  // 首次渲染（含从其他视图切回 IM）用 'auto' 瞬间跳到底部，避免从顶部平滑滚动的视觉跳跃；
-  // 后续新消息到达用 'smooth' 平滑滚动。
+  // 组件首次渲染（含从其他视图切回 IM）或房间切换时用 'auto' 瞬间定位到最新消息，
+  // 避免长历史会话从顶部平滑滚动很久；同一房间新消息到达用 'smooth' 平滑滚动。
   // 用容器 scrollTo 而非 scrollIntoView：后者在 flex + overflow 容器内不可靠。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const isRoomChange = prevRoomIdRef.current !== activeRoomId;
+    prevRoomIdRef.current = activeRoomId;
     el.scrollTo({
       top: el.scrollHeight,
-      behavior: isFirstRender.current ? 'auto' : 'smooth',
+      behavior: isFirstRender.current || isRoomChange ? 'auto' : 'smooth',
     });
     isFirstRender.current = false;
-  }, [messages]);
+  }, [messages, activeRoomId]);
 
   if (!activeRoomId) {
     return (
