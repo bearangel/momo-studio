@@ -12,10 +12,13 @@
 import { fork, spawn, type ChildProcess, type Serializable } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
+import { resolveMaxToolCalls } from '../settings/crud';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
+import type { StreamChunk } from './stream-chunk';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
 export interface AgentRuntimeOpts {
@@ -56,6 +59,52 @@ export interface AgentRuntimeOpts {
 
 // runtime 进程池：instanceId → 子进程句柄
 const runtimes = new Map<string, ChildProcess>();
+
+// === v1.4 流式转发状态 ===
+
+/**
+ * 活跃流式会话：roomId → { streamSessionId, child }。
+ * 用于 abortStream 按 roomId 定位要中断的子进程会话。
+ * start chunk 加入，end chunk / 子进程退出时移除。
+ */
+const activeStreams = new Map<string, { streamSessionId: string; child: ChildProcess }>();
+
+/**
+ * 主窗口引用（由 main/index.ts 通过 setMainWindow 注入）。
+ * 流式 chunk 需经 webContents.send('agent:stream') 推到 renderer，
+ * 而 runtime-manager 自身不持有窗口，故需外部注入。
+ */
+let mainWindow: BrowserWindow | null = null;
+
+/** 由 main/index.ts 在创建主窗口后调用，注册窗口引用用于推送流式 chunk */
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindow = win;
+}
+
+/** 转发流式 chunk 到 renderer（窗口未就绪/已销毁时静默跳过） */
+function relayStreamChunk(chunk: StreamChunk): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('agent:stream', chunk);
+  }
+}
+
+/**
+ * 中断指定房间的活跃流式会话。
+ * 通过 IPC 向子进程发送 { type:'abort', streamSessionId }，
+ * 子进程的 abortListener（runtime-entry.ts）据此触发 AbortController.abort()。
+ */
+export function abortStream(roomId: string): void {
+  const entry = activeStreams.get(roomId);
+  if (!entry) return;
+  safeChildSend(entry.child, { type: 'abort', streamSessionId: entry.streamSessionId });
+}
+
+/** 注册流式相关 IPC handler（agent:abortStream） */
+export function registerStreamIpc(): void {
+  ipcMain.handle('agent:abortStream', (_event, roomId: string) => {
+    abortStream(roomId);
+  });
+}
 
 // 测试钩子：非 null 时用指定 argv 代替真实 runtime-entry.js（参考
 // conduit/manager 的 setBinaryOverride，使单测能 fork 一个可控的假脚本）。
@@ -122,9 +171,28 @@ export function __resetRestartState(): void {
  *   - 崩溃（code≠0 且非主动停止）→ 按递增延迟自动重启，最多 MAX_RESTART_ATTEMPTS 次
  *   - 超过上限 → circuit breaker 触发，不再重启（避免无限崩溃-重启循环）
  */
-function handleAgentExit(instanceId: string, code: number | null, opts: AgentRuntimeOpts): void {
+function handleAgentExit(
+  instanceId: string,
+  code: number | null,
+  opts: AgentRuntimeOpts,
+  child: ChildProcess,
+): void {
   runtimes.delete(instanceId);
   logger.warn('Agent 子进程退出', { instanceId, code });
+
+  // v1.4：清理该子进程名下的活跃流式会话，并向 renderer 发 end(error) 兜底
+  // （正常结束时子进程已发过 end chunk，此处 activeStreams 已空，不会重复发）
+  for (const [roomId, entry] of activeStreams) {
+    if (entry.child === child) {
+      relayStreamChunk({
+        type: 'end',
+        streamSessionId: entry.streamSessionId,
+        finishReason: 'error',
+        error: 'Agent 进程退出',
+      });
+      activeStreams.delete(roomId);
+    }
+  }
 
   const wasStoppedManually = stoppedManually.has(instanceId);
   stoppedManually.delete(instanceId);
@@ -224,7 +292,7 @@ function doSpawnAgent(opts: AgentRuntimeOpts): void {
     logger.warn(`[agent:${opts.instanceId}] ${String(chunk).trimEnd()}`);
   });
   child.on('exit', (code) => {
-    handleAgentExit(opts.instanceId, code, opts);
+    handleAgentExit(opts.instanceId, code, opts, child);
   });
   // spawn 在无法启动二进制（ENOENT 等）时 emit 'error' 而非 'exit'；
   // 不监听会变成未捕获异常，故在此兜底并清理进程池。
@@ -258,8 +326,51 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     outputSummary?: string;
     success?: boolean;
     durationMs?: number;
+    // v1.4 流式 chunk 字段
+    streamSessionId?: string;
+    roomId?: string;
+    botUserId?: string;
+    delta?: string;
+    result?: string;
+    finishReason?: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
+    error?: string;
+    // v1.4 预算解析请求字段
+    maxToolCalls?: number;
   };
   if (!m.type) return;
+
+  // v1.4：流式 chunk → 转发到 renderer + 维护 activeStreams
+  if (
+    m.type === 'start' ||
+    m.type === 'thinking' ||
+    m.type === 'text' ||
+    m.type === 'tool_call' ||
+    m.type === 'tool_result' ||
+    m.type === 'end'
+  ) {
+    relayStreamChunk(msg as StreamChunk);
+    if (m.type === 'start' && m.streamSessionId && m.roomId) {
+      activeStreams.set(m.roomId, { streamSessionId: m.streamSessionId, child });
+    }
+    if (m.type === 'end' && m.streamSessionId) {
+      // end chunk 只带 streamSessionId，按它反查 roomId 删除
+      for (const [roomId, entry] of activeStreams) {
+        if (entry.streamSessionId === m.streamSessionId) {
+          activeStreams.delete(roomId);
+          break;
+        }
+      }
+    }
+    return;
+  }
+
+  // v1.4：预算解析请求（子进程无法直接读 DB，向主进程请求房间级 maxToolCalls）
+  if (m.type === 'settings:resolveMaxToolCalls' && m.id && m.roomId) {
+    const maxToolCalls = resolveMaxToolCalls(m.roomId);
+    safeChildSend(child, { type: 'settings:resolved', id: m.id, maxToolCalls });
+    return;
+  }
+
   if (m.type === 'mcp:listTools' && m.id && m.mcpName) {
     void handleChildListTools(child, opts.workspaceId, m.id, m.mcpName);
   } else if (m.type === 'mcp:callTool' && m.id && m.mcpName && m.toolName && m.args) {

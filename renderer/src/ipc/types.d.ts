@@ -283,6 +283,35 @@ export interface RoomSettings {
   maxToolCalls: number | null;
 }
 
+/**
+ * 流式 IPC chunk（v1.4），与 electron 端 stream-chunk.ts 的 StreamChunk 对齐。
+ * 子进程 process.send → 主进程转发 → renderer 经 api.agent.onStream 接收。
+ * renderer 用 streamSessionId 聚合同一次响应的所有 chunk 到一个临时气泡。
+ */
+export type StreamChunk =
+  | { type: 'start'; streamSessionId: string; roomId: string; botUserId: string }
+  | { type: 'thinking'; streamSessionId: string; delta: string }
+  | { type: 'text'; streamSessionId: string; delta: string }
+  | {
+      type: 'tool_call';
+      streamSessionId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+    }
+  | {
+      type: 'tool_result';
+      streamSessionId: string;
+      toolName: string;
+      result: string;
+      success: boolean;
+    }
+  | {
+      type: 'end';
+      streamSessionId: string;
+      finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
+      error?: string;
+    };
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -362,6 +391,10 @@ export interface ApiSurface {
     /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填） */
     getBuiltinSuggestions(): Promise<BuiltinSuggestionMap>;
     onRuntimeChanged(callback: () => void): () => void;
+    /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
+    onStream(callback: (chunk: StreamChunk) => void): () => void;
+    /** v1.4：中断指定房间的活跃流式会话 */
+    abortStream(roomId: string): Promise<void>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

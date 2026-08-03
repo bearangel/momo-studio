@@ -1,6 +1,6 @@
 // electron/src/preload/index.ts
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { ApiSurface, ImMessage } from '../../../renderer/src/ipc/types';
+import type { ApiSurface, ImMessage, StreamChunk } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
@@ -60,6 +60,14 @@ const api: ApiSurface = {
         ipcRenderer.off('agent:runtimeChanged', handler);
       };
     },
+    onStream: (callback) => {
+      const handler = (_evt: IpcRendererEvent, chunk: StreamChunk): void => callback(chunk);
+      ipcRenderer.on('agent:stream', handler);
+      return () => {
+        ipcRenderer.off('agent:stream', handler);
+      };
+    },
+    abortStream: (roomId: string) => invoke('agent:abortStream', roomId),
   },
   provider: {
     list: () => invoke('provider:list'),

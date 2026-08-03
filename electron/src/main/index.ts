@@ -5,6 +5,7 @@ import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
+import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
 import { autoStartAgents } from './agent/auto-start';
 import { logger } from './logger';
 
@@ -29,6 +30,7 @@ app.whenReady().then(async () => {
 
     const win = createMainWindow();
     setMainWindow(win);
+    setRuntimeMainWindow(win);
 
     // 5. 如果已有登录会话，等待 Conduit 就绪后自动恢复 sync + agent
     void (async () => {
