@@ -26,6 +26,7 @@ export function ThinkingSection({ content, isStreaming }: Props) {
     <div style={{ marginBottom: 8 }}>
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         style={{
           display: 'flex',

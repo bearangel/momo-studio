@@ -65,6 +65,7 @@ export function ToolCallChip({
     <div style={{ marginBottom: 4 }}>
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         style={{
           display: 'flex',
