@@ -38,9 +38,22 @@ export interface LLMResponse {
   finishReason: 'stop' | 'tool_use';
 }
 
+/** 流式 delta（从 SSE stream 归一化） */
+export type StreamDelta =
+  | { type: 'thinking'; content: string }
+  | { type: 'text'; content: string }
+  | { type: 'tool_use'; toolCall: LLMToolCall }
+  | { type: 'done'; finishReason: 'stop' | 'tool_use' };
+
 /** 统一 provider 接口 */
 export interface LLMProvider {
   chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse>;
+  /** 流式接口；signal 用于中断 */
+  chatStream(
+    messages: LLMMessage[],
+    tools: LLMToolDef[] | undefined,
+    signal: AbortSignal,
+  ): AsyncIterable<StreamDelta>;
 }
 
 /** 对 LLM API 的单次请求超时（毫秒）—— 复杂生成任务可能需要数分钟 */
@@ -92,6 +105,25 @@ function detectPlatform(baseUrl?: string): 'openai' | 'anthropic' {
   return 'openai';
 }
 
+/** 把统一 LLMMessage 映射为 OpenAI 的 messages 元素格式 */
+function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
+  if (m.role === 'tool' && m.toolCallId) {
+    return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
+  }
+  if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+    return {
+      role: 'assistant',
+      content: m.content || null,
+      tool_calls: m.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+      })),
+    };
+  }
+  return { role: m.role, content: m.content };
+}
+
 /** 统一的 LLM provider 工厂。
  *  platform 显式传入时优先用；缺省时按 baseUrl 自动检测（OpenAI 兼容为默认）。 */
 export function createLLMProvider(
@@ -119,7 +151,7 @@ class OpenAIProvider implements LLMProvider {
       : 'https://api.openai.com/v1/chat/completions';
     const body: Record<string, unknown> = {
       model: this.model,
-      messages: messages.map((m) => this.toOpenAIMessage(m)),
+      messages: messages.map((m) => toOpenAIMessage(m)),
     };
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -173,23 +205,12 @@ class OpenAIProvider implements LLMProvider {
     };
   }
 
-  /** 把统一 LLMMessage 映射为 OpenAI 的 messages 元素格式 */
-  private toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
-    if (m.role === 'tool' && m.toolCallId) {
-      return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
-    }
-    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-      return {
-        role: 'assistant',
-        content: m.content || null,
-        tool_calls: m.toolCalls.map((tc) => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-        })),
-      };
-    }
-    return { role: m.role, content: m.content };
+  async *chatStream(
+    messages: LLMMessage[],
+    tools: LLMToolDef[] | undefined,
+    signal: AbortSignal,
+  ): AsyncIterable<StreamDelta> {
+    yield* chatStreamOpenAI(this.model, this.baseUrl, this.apiKey, messages, tools, signal);
   }
 }
 
@@ -286,4 +307,332 @@ class AnthropicProvider implements LLMProvider {
     }
     return { role: m.role, content: m.content };
   }
+
+  async *chatStream(
+    messages: LLMMessage[],
+    tools: LLMToolDef[] | undefined,
+    signal: AbortSignal,
+  ): AsyncIterable<StreamDelta> {
+    yield* chatStreamAnthropic(this.model, this.baseUrl, this.apiKey, messages, tools, signal);
+  }
+}
+
+// --- 流式实现（chatStream） ---
+
+/**
+ * OpenAI 兼容 SSE 流式解析。
+ *
+ * 直接使用 fetch（不经过 fetchWithRetry），原因：
+ *  1. fetchWithRetry 会用 AbortSignal.timeout 覆盖调用方 signal，使 abort 无法传播到 response.body
+ *  2. 流式响应已部分消费后重试会产生重复 delta，语义上无意义
+ *
+ * abort 支持通过 Promise.race 实现：将 reader.read() 与一个在 signal abort 时 reject 的 promise 竞速。
+ * （fetch 被 mock 时不连接 signal 到 response.body，必须显式竞速才能中断读取。）
+ */
+async function* chatStreamOpenAI(
+  model: string,
+  baseUrl: string | undefined,
+  apiKey: string,
+  messages: LLMMessage[],
+  tools: LLMToolDef[] | undefined,
+  signal: AbortSignal,
+): AsyncIterable<StreamDelta> {
+  const url = `${baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`;
+  const body: Record<string, unknown> = {
+    model,
+    messages: messages.map(toOpenAIMessage),
+    stream: true,
+  };
+  if (tools && tools.length > 0) {
+    body.tools = tools.map((t) => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.inputSchema },
+    }));
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`LLM 流式请求失败: HTTP ${response.status} ${errText}`);
+  }
+
+  // 非 SSE → 降级到非流式解析（整条 JSON 一次性返回）
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    const json = (await response.json()) as {
+      choices?: { message?: { content?: string }; finish_reason?: string }[];
+    };
+    const content = json.choices?.[0]?.message?.content ?? '';
+    if (content) yield { type: 'text', content };
+    yield { type: 'done', finishReason: 'stop' };
+    return;
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  // tool_calls 累积器：按 index 合并 arguments fragment（OpenAI 把参数拆成多个 delta 发送）
+  const toolCallMap = new Map<number, { id: string; name: string; argsBuffer: string }>();
+  let finishReason: 'stop' | 'tool_use' = 'stop';
+
+  const abortPromise = buildAbortPromise(signal);
+
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), abortPromise]);
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // 最后一条可能不完整，留到下次拼接
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        let parsed: { choices?: { delta?: Record<string, unknown>; finish_reason?: string }[] };
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        const choice = parsed.choices?.[0];
+        if (!choice) continue;
+
+        // thinking（reasoning_content — DeepSeek / OpenAI o1 系列的思维链）
+        const reasoning = (choice.delta as { reasoning_content?: string })?.reasoning_content;
+        if (typeof reasoning === 'string' && reasoning.length > 0) {
+          yield { type: 'thinking', content: reasoning };
+        }
+
+        // 正文文本
+        const text = (choice.delta as { content?: string })?.content;
+        if (typeof text === 'string' && text.length > 0) {
+          yield { type: 'text', content: text };
+        }
+
+        // tool_calls 累积（按 index 合并 id / name / arguments fragments）
+        const toolCallsRaw = (
+          choice.delta as {
+            tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
+          }
+        )?.tool_calls;
+        if (Array.isArray(toolCallsRaw)) {
+          for (const tc of toolCallsRaw) {
+            const existing = toolCallMap.get(tc.index);
+            if (existing) {
+              existing.argsBuffer += tc.function?.arguments ?? '';
+            } else {
+              toolCallMap.set(tc.index, {
+                id: tc.id ?? '',
+                name: tc.function?.name ?? '',
+                argsBuffer: tc.function?.arguments ?? '',
+              });
+            }
+          }
+        }
+
+        if (choice.finish_reason === 'tool_calls') finishReason = 'tool_use';
+        if (choice.finish_reason === 'stop') finishReason = 'stop';
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+
+  // 流结束后发出累积完整的 tool_use delta
+  for (const [, tc] of toolCallMap) {
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(tc.argsBuffer || '{}');
+    } catch {
+      args = { _raw: tc.argsBuffer };
+    }
+    yield { type: 'tool_use', toolCall: { id: tc.id, name: tc.name, arguments: args } };
+  }
+
+  yield { type: 'done', finishReason };
+}
+
+/**
+ * Anthropic SSE 流式解析（含 thinking 支持）。
+ * Anthropic 的 SSE 事件类型：
+ *  - content_block_start: 标记 text / thinking / tool_use 块开始
+ *  - content_block_delta: 增量内容（thinking_delta / text_delta / input_json_delta）
+ *  - message_stop: 消息结束
+ */
+async function* chatStreamAnthropic(
+  model: string,
+  baseUrl: string | undefined,
+  apiKey: string,
+  messages: LLMMessage[],
+  tools: LLMToolDef[] | undefined,
+  signal: AbortSignal,
+): AsyncIterable<StreamDelta> {
+  const url = `${baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
+  const body: Record<string, unknown> = {
+    model,
+    // max_tokens 必须大于 thinking.budget_tokens（10000），否则 Anthropic 报 400
+    max_tokens: 16384,
+    stream: true,
+    messages: messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+      })),
+  };
+  const systemMsg = messages.find((m) => m.role === 'system');
+  if (systemMsg) body.system = systemMsg.content;
+
+  // 开启 thinking（Claude extended thinking）
+  body.thinking = { type: 'enabled', budget_tokens: 10000 };
+
+  if (tools && tools.length > 0) {
+    body.tools = tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
+    }));
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Anthropic 流式请求失败: HTTP ${response.status} ${errText}`);
+  }
+
+  // 非 SSE → 降级
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    const json = (await response.json()) as { content?: { type: string; text?: string }[] };
+    const text = json.content?.find((b) => b.type === 'text')?.text ?? '';
+    if (text) yield { type: 'text', content: text };
+    yield { type: 'done', finishReason: 'stop' };
+    return;
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  // tool_use 累积：content_block index → { id, name, argsBuffer }
+  const toolUseMap = new Map<number, { id: string; name: string; argsBuffer: string }>();
+  let finishReason: 'stop' | 'tool_use' = 'stop';
+
+  const abortPromise = buildAbortPromise(signal);
+
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), abortPromise]);
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        let event: {
+          type: string;
+          delta?: Record<string, unknown>;
+          content_block?: Record<string, unknown>;
+          index?: number;
+        };
+        try {
+          event = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        if (event.type === 'content_block_delta') {
+          const deltaType = (event.delta as { type?: string })?.type;
+          if (deltaType === 'thinking_delta') {
+            const thinking = (event.delta as { thinking?: string })?.thinking;
+            if (thinking) yield { type: 'thinking', content: thinking };
+          }
+          if (deltaType === 'text_delta') {
+            const text = (event.delta as { text?: string })?.text;
+            if (text) yield { type: 'text', content: text };
+          }
+          if (deltaType === 'input_json_delta') {
+            const partial = (event.delta as { partial_json?: string })?.partial_json;
+            if (partial && event.index !== undefined) {
+              const existing = toolUseMap.get(event.index);
+              if (existing) existing.argsBuffer += partial;
+            }
+          }
+        }
+
+        // tool_use 块开始——记录 id / name，后续 input_json_delta 填充 arguments
+        if (event.type === 'content_block_start' && event.content_block) {
+          const cb = event.content_block as { type?: string; id?: string; name?: string };
+          if (cb.type === 'tool_use' && event.index !== undefined) {
+            toolUseMap.set(event.index, {
+              id: cb.id ?? '',
+              name: cb.name ?? '',
+              argsBuffer: '',
+            });
+            finishReason = 'tool_use';
+          }
+        }
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+
+  for (const [, tc] of toolUseMap) {
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(tc.argsBuffer || '{}');
+    } catch {
+      args = { _raw: tc.argsBuffer };
+    }
+    yield { type: 'tool_use', toolCall: { id: tc.id, name: tc.name, arguments: args } };
+  }
+
+  yield { type: 'done', finishReason };
+}
+
+/**
+ * 构造一个在 signal abort 时 reject 的 promise，用于与 reader.read() 竞速实现中断。
+ * 如果 signal 已 abort，promise 立即 reject。
+ */
+function buildAbortPromise(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    if (signal.aborted) {
+      const e = new Error('流式请求被中断');
+      e.name = 'AbortError';
+      reject(e);
+      return;
+    }
+    signal.addEventListener(
+      'abort',
+      () => {
+        const e = new Error('流式请求被中断');
+        e.name = 'AbortError';
+        reject(e);
+      },
+      { once: true },
+    );
+  });
 }
