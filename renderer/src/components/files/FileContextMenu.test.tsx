@@ -81,4 +81,22 @@ describe('FileContextMenu', () => {
     expect(screen.getByText('移动到…')).toBeInTheDocument();
     expect(screen.getByText(/删除/)).toBeInTheDocument();
   });
+
+  it('根级空白区菜单：只传 onNewFile/onNewDir 时不渲染重命名/移动/删除', () => {
+    render(
+      <FileContextMenu
+        x={100}
+        y={100}
+        isDirectory={true}
+        onNewFile={() => {}}
+        onNewDir={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText('新建文件')).toBeInTheDocument();
+    expect(screen.getByText('新建文件夹')).toBeInTheDocument();
+    expect(screen.queryByText('重命名')).not.toBeInTheDocument();
+    expect(screen.queryByText('移动到…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/删除/)).not.toBeInTheDocument();
+  });
 });

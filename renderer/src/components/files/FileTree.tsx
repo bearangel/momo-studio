@@ -1,8 +1,10 @@
 // renderer/src/components/files/FileTree.tsx
 // 文件树入口组件：顶部工具条（刷新 / 全部折叠 / 新建）+ 从根目录 '.' 开始递归渲染。
 // 工具栏新建按钮的落点跟随 selectedDir；切回 files 视图时刷新已缓存目录。
+// 点击空白区选中根目录；右键空白区弹出根级操作菜单（VS Code 风格）。
 import { useState, useEffect } from 'react';
 import { FileTreeView } from './FileTreeView';
+import { FileContextMenu } from './FileContextMenu';
 import { PromptDialog } from '../common/PromptDialog';
 import { useFileStore } from '../../stores/file.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -21,6 +23,8 @@ export function FileTree({ onSelectFile }: Props) {
   const activeView = useUiStore((s) => s.activeView);
   const selectedDir = useFileStore((s) => s.selectedDir);
   const [creating, setCreating] = useState<'file' | 'dir' | null>(null);
+  // 空白区右键菜单位置
+  const [emptyMenu, setEmptyMenu] = useState<{ x: number; y: number } | null>(null);
 
   // workspace 切换时加载该 workspace 的展开态（按 workspace 隔离持久化）
   useEffect(() => {
@@ -55,12 +59,28 @@ export function FileTree({ onSelectFile }: Props) {
     }
   };
 
+  // 点击空白区（非文件/文件夹按钮）时选中根目录
+  const handleEmptyClick = (e: React.MouseEvent) => {
+    if (!(e.target as HTMLElement).closest('button')) {
+      useFileStore.getState().selectDir('.');
+    }
+  };
+
+  // 右键空白区时选中根目录并弹出根级操作菜单
+  const handleEmptyContextMenu = (e: React.MouseEvent) => {
+    if (!(e.target as HTMLElement).closest('button')) {
+      e.preventDefault();
+      useFileStore.getState().selectDir('.');
+      setEmptyMenu({ x: e.clientX, y: e.clientY });
+    }
+  };
+
   // tooltip 文案：选中根目录时不显示「（到 .）」，子目录显示「（到 {dir}）」
   const targetLabel = selectedDir && selectedDir !== '.' ? `（到 ${selectedDir}）` : '';
 
   return (
-    <div className="flex flex-col h-full overflow-auto">
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-border-subtle sticky top-0 bg-bg-secondary z-10">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-border-subtle bg-bg-secondary z-10">
         <button
           type="button"
           onClick={handleRefresh}
@@ -96,7 +116,23 @@ export function FileTree({ onSelectFile }: Props) {
           📁＋
         </button>
       </div>
-      <FileTreeView dirPath="." depth={0} onSelectFile={onSelectFile} />
+      <div
+        className="flex-1 overflow-auto px-2 py-1"
+        onClick={handleEmptyClick}
+        onContextMenu={handleEmptyContextMenu}
+      >
+        <FileTreeView dirPath="." depth={0} onSelectFile={onSelectFile} />
+      </div>
+      {emptyMenu && (
+        <FileContextMenu
+          x={emptyMenu.x}
+          y={emptyMenu.y}
+          isDirectory={true}
+          onNewFile={() => setCreating('file')}
+          onNewDir={() => setCreating('dir')}
+          onClose={() => setEmptyMenu(null)}
+        />
+      )}
       {creating && (
         <PromptDialog
           title={creating === 'file' ? `新文件名${targetLabel}` : `新目录名${targetLabel}`}

@@ -1,17 +1,19 @@
 // renderer/src/components/files/FileContextMenu.tsx
-// 文件/目录右键菜单：目录级新建 + 重命名 / 删除 / 移动。位置由调用方通过 clientX/Y 传入。
+// 文件/目录右键菜单：所有回调可选，按需渲染。
+// 目录级新建（onNewFile/onNewDir）+ 重命名/移动/删除（onRename/onMove/onDelete）。
+// 根级空白区菜单只传 onNewFile/onNewDir，不传文件操作项。
 interface Props {
   x: number;
   y: number;
   isDirectory: boolean;
-  onRename: () => void;
-  onDelete: () => void;
-  onMove: () => void;
   onClose: () => void;
   /** 仅 isDirectory=true 时渲染：在该目录内新建文件 */
   onNewFile?: () => void;
   /** 仅 isDirectory=true 时渲染：在该目录内新建文件夹 */
   onNewDir?: () => void;
+  onRename?: () => void;
+  onDelete?: () => void;
+  onMove?: () => void;
 }
 
 export function FileContextMenu({
@@ -25,6 +27,9 @@ export function FileContextMenu({
   onNewFile,
   onNewDir,
 }: Props) {
+  const hasNewItems = isDirectory && (onNewFile || onNewDir);
+  const hasFileOps = onRename || onMove;
+
   return (
     <>
       {/* 全屏遮罩：点击或右键关闭菜单 */}
@@ -40,8 +45,7 @@ export function FileContextMenu({
         className="fixed z-50 bg-bg-secondary border border-border-subtle rounded shadow-lg py-1 text-sm text-neutral-200 min-w-[120px]"
         style={{ left: x, top: y }}
       >
-        {/* 目录级新建：仅在右键目标是目录时显示 */}
-        {isDirectory && (
+        {hasNewItems && (
           <>
             {onNewFile && (
               <li>
@@ -71,46 +75,56 @@ export function FileContextMenu({
                 </button>
               </li>
             )}
-            <li className="border-t border-border-subtle my-1" />
+            {hasFileOps !== undefined && (hasFileOps || onDelete) && (
+              <li className="border-t border-border-subtle my-1" />
+            )}
           </>
         )}
-        <li>
-          <button
-            type="button"
-            onClick={() => {
-              onRename();
-              onClose();
-            }}
-            className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
-          >
-            重命名
-          </button>
-        </li>
-        <li>
-          <button
-            type="button"
-            onClick={() => {
-              onMove();
-              onClose();
-            }}
-            className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
-          >
-            移动到…
-          </button>
-        </li>
-        <li className="border-t border-border-subtle my-1" />
-        <li>
-          <button
-            type="button"
-            onClick={() => {
-              onDelete();
-              onClose();
-            }}
-            className="w-full text-left px-3 py-1 hover:bg-bg-tertiary text-red-400"
-          >
-            删除{isDirectory ? '（含子项）' : ''}
-          </button>
-        </li>
+        {onRename && (
+          <li>
+            <button
+              type="button"
+              onClick={() => {
+                onRename();
+                onClose();
+              }}
+              className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+            >
+              重命名
+            </button>
+          </li>
+        )}
+        {onMove && (
+          <li>
+            <button
+              type="button"
+              onClick={() => {
+                onMove();
+                onClose();
+              }}
+              className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+            >
+              移动到…
+            </button>
+          </li>
+        )}
+        {onDelete && (
+          <>
+            {hasFileOps && <li className="border-t border-border-subtle my-1" />}
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  onDelete();
+                  onClose();
+                }}
+                className="w-full text-left px-3 py-1 hover:bg-bg-tertiary text-red-400"
+              >
+                删除{isDirectory ? '（含子项）' : ''}
+              </button>
+            </li>
+          </>
+        )}
       </ul>
     </>
   );
