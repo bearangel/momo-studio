@@ -124,7 +124,7 @@ docs/
 
 ## 研发演进路线图
 
-### v1.0.0 — 单机自洽 ✅ 已发布
+### v1.0 — 单机自洽 ✅ 已发布
 
 本地优先的 agent 编排平台。一个用户、一台机器、开箱即用。
 
@@ -138,65 +138,63 @@ docs/
 - ✅ Marketplace 浏览/搜索/安装
 - ✅ 安全（WorkspaceFS + sandbox + 审计 + Git policy + 崩溃重启 + LLM 重试）
 
-### v1.1 — 打磨与补全（已完成）
+### v1.1 — 打磨与补全 ✅ 已发布
 
 不引入新架构，聚焦 v1 遗留项和体验优化。
 
-#### v1.1.0 — IM 房间管理 + 设置基座（M1，已完成）
-
-- ✅ 会话房间新增 / 重命名 / 自适应解散（本地全员离开清空；团队群受保护）
+- ✅ 会话房间新增 / 重命名 / 自适应解散（团队群受保护）
 - ✅ 群成员查看（⭐自己 / 🤖bot / 管理 徽标）
-- ✅ 设置页分类导航（左导航 + 右内容）
-- ✅ 全局模型供应商注册表（baseUrl + apiKey 入 keychain；创建 agent 时下拉自动填充）
-- ✅ Agent 创建表单接供应商下拉
+- ✅ 设置页分类导航 + 全局模型供应商注册表（baseUrl + apiKey 入 keychain）
+- ✅ Agent 创建后可编辑（apiKey 独立更新；保存后停止运行中实例并提示重启）
+- ✅ 文件 CRUD（新建 / 改名 / 删除 / 移动；走 WorkspaceFS 路径防御）
+- ✅ 团队群自动调度（主 agent 默认接待非 @ 消息；@ 别人不插嘴）
 
-#### v1.1.1 — Agent 编辑 + 文件操作 + 团队群调度（M2，已完成）
+### v1.2 — 功能补全 + IM 体验优化 ✅ 已发布
 
-- ✅ Agent 创建后可编辑（定义层；apiKey 独立更新；保存后停止运行中实例并提示重启）
-- ✅ 文件树折叠修复（根级 + 子目录折叠；刷新/全部折叠工具条）
-- ✅ 文件 CRUD（新建 / 改名 / 删除 / 移动；走 WorkspaceFS 路径防御；editor tab 联动）
-- ✅ 团队群自动调度（主 agent 默认接待非 @ 消息；@ 别人/子 agent 回复不插嘴；复用主→子 dispatch）
+**Agent 编排**
 
-#### v1.2 功能补全
+- ✅ 主/子 agent 编排 UI（委派调度）— runtime subAgents 传递修复 + auto-start 重启重建 + slug→UUID 解析 + IPC 角色/父 agent 校验 + 编排视图（树形展示 main→sub 关系）+ AddAgentDialog 角色选择 + AgentList 角色徽标分组 + 移除级联
 
-- ✅ **主/子 agent 编排 UI（委派调度）** — v1.2 M3 实现完整编排：runtime subAgents 传递修复 + auto-start 重启重建 + slug→UUID 解析 + IPC 角色/父 agent 校验 + 编排视图（列表/编排切换，树形展示 main→sub 关系，添加子/解除/设为主操作）+ AddAgentDialog 角色选择 + main 定义子 agent 勾选 + AgentList 角色徽标分组 + 移除级联。
+**质量打磨**
+
 - ✅ keychain slot helper 去重（`llmApiKeyRef` 统一使用）
-- ✅ `stopRunningInstancesByDefinition` 实际停止分支补测（isAgentRunning=true 路径）
-- ✅ `updateAgentDefinition` 的 modelBaseUrl 往返保真（写 NULL 而非空串）
-- ✅ 文件树折叠状态 localStorage 持久化
-- ✅ 协调 agent 设定后自动重启（不再提示手动操作）
-- ✅ `setCoordinator` store 动作异常 catch + 文件 CRUD 操作 try/catch 一致化
-- ✅ 编排视图 main 节点折叠/展开
+- ✅ modelBaseUrl 往返保真 + stopRunningInstances 补测
+- ✅ 文件树折叠 localStorage 持久化 + 协调 agent 自动重启
+- ✅ setCoordinator / 文件 CRUD 异常处理一致化
 - ✅ assignMain 重复安装守卫 + 编排视图孤儿子 agent 可见性
+- ✅ `.gitignore` 裸 `docs` 清理 + CHANGELOG.md
 
-#### 基础设施项（推迟到 v1.2）
+**Dev 运维**
 
-- ✅ `.gitignore` 裸 `docs` 条目清理
+- ✅ Dev 模式 agent 行为日志 — `trace()` 函数 + 14 个插桩点（消息接收/LLM 调用/工具执行/dispatch/reply）
+- ✅ LLM 请求超时 90s → 300s；dispatch 渐进式超时 3min→6min→fail
+
+**IM 会话体验**
+
+- ✅ 卡片归属与对话化视觉 — 抽取 `MessageFrame` 共享外壳（头像+名字+左右对齐），三类消息统一外壳；TaskReplyCard 补齐 agent 归属；DispatchCard 紧凑化
+- ✅ 缩窗布局响应式修复 — LeftRail 永不压扁；RoomList/MembersPanel 可缩；MessageList 禁水平滚动
+- ✅ Tailwind 任意值 class bug 规避 — 改用 inline style 约束宽度
+- ✅ IM 工具条 + 成员按需浮层 — InputToolbar（成员切换按钮 + 预留扩展位）；MembersPanel 改 absolute 浮层（backdrop 关闭）；移除上线消息，改为在线/离线 badge
+
+**测试覆盖**
+
+- ✅ renderer 全套 105 测试（含 MessageFrame/DispatchCard/TaskReplyCard/MessageBubble/InputToolbar/MembersPanel 共 40 个 IM 组件测试）
+
+**待办基础设施项**
+
 - 🔲 重启自动恢复 agent runtime（持久化运行状态）
-- 🔲 打包后 YAML/migration 路径适配（内置资源动态定位）
+- 🔲 打包后 YAML/migration 路径适配
 - 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
-- 🔲 Windows 沙箱（AppContainer）
-- 🔲 macOS sandbox-exec 实测验证
-- ✅ CHANGELOG.md + 版本号规范
+- 🔲 Windows / macOS 沙箱实测
 
-#### v1.2 IM 体验优化（已完成）
-
-- ✅ **Dev 模式 agent 行为日志** — `trace()` 函数 + 14 个插桩点（消息接收/LLM 调用/工具执行/dispatch/reply），dev 模式终端实时输出 agent 行为摘要
-- ✅ **LLM 请求超时优化** — 单次请求 90s → 300s；dispatch 渐进式超时 3min→6min→fail
-- ✅ **IM 卡片归属与对话化视觉** — 抽取 `MessageFrame` 共享消息外壳（头像+名字+左右对齐），三类消息（普通文本/dispatch/task_reply）统一外壳；TaskReplyCard 补齐此前完全缺失的 agent 归属；DispatchCard 去冗余 from 紧凑显示 target
-- ✅ **缩窗布局响应式修复** — LeftRail `shrink-0` 永不压扁；RoomList/MembersPanel 可缩；MiddlePanel `min-w-0`；MessageList 禁用水平滚动
-- ✅ **Tailwind 任意值 class bug 规避** — 发现 Tailwind JIT 不生成 `max-w-[70%]` 等任意值 class，改用 inline style 约束宽度
-- ✅ **IM 工具条 + 成员浮层 + 上下线标签** — InputToolbar 工具条（成员切换按钮 + 预留扩展位）；MembersPanel 从常驻改为按需浮层（absolute 定位 + backdrop 关闭）；移除 agent 启动上线消息，改为成员面板在线/离线 badge（绿/灰）
-- ✅ 29 + 11 个新增 IM 组件测试（MessageFrame/DispatchCard/TaskReplyCard/MessageBubble/InputToolbar/MembersPanel），renderer 全套 105 测试通过
-
-### v2.0 — 多人协作 + 进阶 Agent（设计中）
+### v2.0 — 多人协作 + 进阶 Agent 🔲 设计中
 
 从"单机工具"进化为"团队平台"。
 
 - 🔲 **多 peer P2P 协作** — 多用户通过协调服务器互联，共享 workspace
 - 🔲 **Git remote 同步** — workspace 文件通过 bare repo 跨 peer 同步
 - 🔲 **跨 peer agent 调度** — @ 对方的 agent，任务经 Matrix 路由
-- 🔲 **Agent SDK（programmatic runtime）** — TypeScript/Python 自定义 agent 生命周期
+- 🔲 **Agent SDK** — TypeScript/Python 自定义 agent 生命周期
 - 🔲 **External runtime 桥接** — 接入 OpenCode / Codex / Claude Code
 - 🔲 **MCP HTTP/SSE transport** — 远端 MCP server 接入
 - 🔲 **Marketplace 上架** — 用户上传 agent/mcp/skill 包
@@ -205,24 +203,22 @@ docs/
 - 🔲 **Electron 主进程 ESM 转换** — 解除 matrix-js-sdk v31 锁定
 - 🔲 **macOS 原生 Conduwuit 或内置 Docker 编排**
 
-### v2.1 — 效率增强（概念阶段）
+### v2.1 — 效率增强 🔲 概念阶段
 
-- 🔲 **分支工作流** — agent 工作在独立 branch，PR 式合并
-- 🔲 **Agent 并发多任务** — 每 agent 内部 task queue
-- 🔲 **Token 配额管理** — 月度 LLM token 预算控制
-- 🔲 **LSP 集成** — Monaco 编辑器语言服务（TS/Python）
-- 🔲 **协作实时编辑** — 多 peer 同时编辑同一文件（CRDT）
+- 🔲 分支工作流（agent 工作在独立 branch，PR 式合并）
+- 🔲 Agent 并发多任务（内部 task queue）
+- 🔲 Token 配额管理
+- 🔲 LSP 集成（Monaco 编辑器语言服务）
+- 🔲 协作实时编辑（CRDT）
 
-### v3.0+ — 生态扩展（远期愿景）
+### v3.0+ — 生态扩展 🔲 远期愿景
 
-- 🔲 **Federation** — 跨 homeserver 联邦
-- 🔲 **私有 Marketplace** — 企业内部包管理
-- 🔲 **付费/计费** — Marketplace 交易
-- 🔲 **Headless agent runner** — 7×24 服务端 agent
-- 🔲 **移动端** — iOS/Android（只读 + IM）
-- 🔲 **NAT 打洞** — peer 直连，省协调服务器带宽
-- 🔲 **自动能力发现** — agent 自动搜索并安装缺失 skill
-- 🔲 **Agent 自定义代码 hook** — 运行时注入用户代码
+- 🔲 Federation（跨 homeserver 联邦）
+- 🔲 私有 Marketplace + 付费/计费
+- 🔲 Headless agent runner（7×24 服务端）
+- 🔲 移动端（iOS/Android 只读 + IM）
+- 🔲 NAT 打洞（peer 直连）
+- 🔲 Agent 自动能力发现 + 自定义代码 hook
 
 ### 技术债务跟踪
 
