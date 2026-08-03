@@ -1,38 +1,39 @@
 // electron/src/main/agent/crud.ts
 //
 // Agent 定义与 workspace 分配的持久化层。
-// agent_definitions 用 INSERT OR REPLACE 实现 upsert（以 id 为主键，重新导入同 id 的 manifest 会覆盖旧版本）；
-// agent_assignments 每次分配生成新的 instance_id，便于同一 workspace 中同一 agent 定义挂多个 bot 账号。
+//
+// v1.3 重构（migration v12）：definition 不再含 type/parent/model 字段（移到 assignment 或
+// model_providers 引用）；assignment 加 role/parent_instance_id/has_api_key_override。
+// agent_definitions 用 INSERT OR REPLACE 实现 upsert（以 id 为主键）。
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { setSecret } from '../storage/keychain';
 import { logger } from '../logger';
 import { isAgentRunning, stopAgent } from './runtime-manager';
-import type { AgentDefinition, AgentAssignment, ToolRef } from './types';
+import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef } from './types';
 
-/** agent_definitions 行的弱类型映射，仅用于 DB 读写边界 */
+/** agent_definitions 行的弱类型映射（v1.3 schema） */
 interface AgentDefRow {
   id: string;
   name: string;
   slug: string;
   version: string;
-  type: string;
   runtime: string;
   system_prompt: string;
-  model_provider: string;
-  model_name: string;
-  model_base_url: string | null;
   default_tools: string;
+  default_mcps: string;
+  default_skills: string;
   source: string;
   description: string;
   icon_emoji: string;
-  parent_agent_id: string | null;
-  default_mcps: string;
-  default_skills: string;
+  created_at: string;
+  workspace_id: string | null;
+  model_provider_id: string | null;
+  model_name: string;
 }
 
-/** agent_assignments 行的弱类型映射 */
+/** agent_assignments 行的弱类型映射（v1.3 schema） */
 interface AgentAssignmentRow {
   instance_id: string;
   workspace_id: string;
@@ -40,6 +41,9 @@ interface AgentAssignmentRow {
   bot_matrix_user_id: string;
   enabled: number;
   created_at: string;
+  role: string;
+  parent_instance_id: string | null;
+  has_api_key_override: number;
 }
 
 /** 将 DB 行（snake_case + JSON 字符串）转换为强类型 AgentDefinition */
@@ -49,25 +53,21 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     name: row.name,
     slug: row.slug,
     version: row.version,
-    type: row.type as AgentDefinition['type'],
     runtime: row.runtime as AgentDefinition['runtime'],
     systemPrompt: row.system_prompt,
-    model: {
-      provider: row.model_provider as AgentDefinition['model']['provider'],
-      model: row.model_name,
-      baseUrl: row.model_base_url ?? undefined,
-    },
     defaultTools: JSON.parse(row.default_tools) as ToolRef[],
     source: row.source as AgentDefinition['source'],
     description: row.description,
     iconEmoji: row.icon_emoji,
-    parentAgentId: row.parent_agent_id ?? undefined,
     defaultMcps: JSON.parse(row.default_mcps) as AgentDefinition['defaultMcps'],
     defaultSkills: JSON.parse(row.default_skills) as AgentDefinition['defaultSkills'],
+    workspaceId: row.workspace_id,
+    modelProviderId: row.model_provider_id,
+    modelName: row.model_name,
   };
 }
 
-/** 将 DB 行转换为强类型 AgentAssignment（enabled 由 0/1 映射为 boolean） */
+/** 将 DB 行转换为强类型 AgentAssignment */
 function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
   return {
     instanceId: row.instance_id,
@@ -76,6 +76,9 @@ function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
     botMatrixUserId: row.bot_matrix_user_id,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
+    role: row.role as AgentRole,
+    parentInstanceId: row.parent_instance_id,
+    hasApiKeyOverride: row.has_api_key_override === 1,
   };
 }
 
@@ -84,35 +87,47 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
-     (id, name, slug, version, type, runtime, system_prompt, model_provider, model_name, model_base_url, default_tools, source, description, icon_emoji, parent_agent_id, default_mcps, default_skills)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    def.id,
-    def.name,
-    def.slug,
-    def.version,
-    def.type,
-    def.runtime,
-    def.systemPrompt,
-    def.model.provider,
-    def.model.model,
-    def.model.baseUrl ?? null,
-    JSON.stringify(def.defaultTools),
-    def.source,
-    def.description,
-    def.iconEmoji,
-    def.parentAgentId ?? null,
-    JSON.stringify(def.defaultMcps),
-    JSON.stringify(def.defaultSkills),
-  );
+      (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
+       source, description, icon_emoji, workspace_id, model_provider_id, model_name)
+     VALUES
+      (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
+       @source, @description, @icon_emoji, @workspace_id, @model_provider_id, @model_name)`,
+  ).run({
+    id: def.id,
+    name: def.name,
+    slug: def.slug,
+    version: def.version,
+    runtime: def.runtime,
+    system_prompt: def.systemPrompt,
+    default_tools: JSON.stringify(def.defaultTools),
+    default_mcps: JSON.stringify(def.defaultMcps ?? []),
+    default_skills: JSON.stringify(def.defaultSkills ?? []),
+    source: def.source,
+    description: def.description,
+    icon_emoji: def.iconEmoji,
+    workspace_id: def.workspaceId,
+    model_provider_id: def.modelProviderId,
+    model_name: def.modelName,
+  });
 }
 
-/** 列出全部 agent 定义，按创建时间倒序（最新导入的排前面） */
-export function listAgentDefinitions(): AgentDefinition[] {
+/**
+ * 列出 agent 定义。workspaceId 提供时只返回 global + 该 workspace scoped + 全部 builtin。
+ * workspaceId 缺省时返回全部。
+ */
+export function listAgentDefinitions(workspaceId?: string): AgentDefinition[] {
   const db = getDb();
-  const rows = db
-    .prepare('SELECT * FROM agent_definitions ORDER BY created_at DESC')
-    .all() as AgentDefRow[];
+  const rows = workspaceId
+    ? db
+        .prepare(
+          `SELECT * FROM agent_definitions
+           WHERE workspace_id IS NULL OR workspace_id = ?
+           ORDER BY source ASC, created_at DESC`,
+        )
+        .all(workspaceId) as AgentDefRow[]
+    : db
+        .prepare('SELECT * FROM agent_definitions ORDER BY source ASC, created_at DESC')
+        .all() as AgentDefRow[];
   return rows.map(rowToDef);
 }
 
@@ -125,7 +140,13 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
   return row ? rowToDef(row) : null;
 }
 
-/** 把某个 agent 定义分配到指定 workspace，绑定一个 bot matrix 账号，返回新建的 assignment */
+/**
+ * 把某个 agent 定义分配到指定 workspace，绑定一个 bot matrix 账号，返回新建的 assignment。
+ *
+ * v1.3：role + parentInstanceId 在 assignment 级。本函数 v1.3 兼容版仅写默认 role='standalone'；
+ * 带 role/parent 的版本由 addToWorkspace helper（ipc.handlers.ts）调用，
+ * 或 T4 引入的扩展签名 assignAgentToWorkspaceWithRole。
+ */
 export function assignAgentToWorkspace(
   workspaceId: string,
   agentDefinitionId: string,
@@ -133,6 +154,7 @@ export function assignAgentToWorkspace(
 ): AgentAssignment {
   const instanceId = randomUUID();
   const db = getDb();
+  // role/parent_instance_id/has_api_key_override 走 schema 默认值
   db.prepare(
     `INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id)
      VALUES (?, ?, ?, ?)`,
@@ -158,59 +180,42 @@ export function listAssignments(workspaceId: string): AgentAssignment[] {
   return rows.map(rowToAssignment);
 }
 
-/** keychain 引用 key：agent.<instanceId>.llm_api_key（与 ipc.handlers 一致） */
+/** keychain 引用 key：agent.<instanceId>.llm_api_key（旧版兼容；v1.3 起优先用 api_key_override） */
 export function llmApiKeyRef(instanceId: string): string {
   return `agent.${instanceId}.llm_api_key`;
 }
 
 /**
- * 更新 agent 定义（定义层字段，不含 apiKey）。详见 v1.1 设计 3.1。
- * slug 只读（身份标识），不在此函数可改字段内。
- * v1.2 扩展：支持 type（standalone/main/sub）与 parentAgentId 字段，
- * 子类型（sub）必须挂父 agent；standalone/main 改写时自动清空 parentAgentId。
+ * 更新 agent 定义字段（v1.3 schema：不含 type/parent/model_provider/model_base_url）。
+ * workspaceId 显式传 null 表示转 global；传字符串表示绑定该 workspace；undefined 不改。
  */
 export function updateAgentDefinition(input: {
   id: string;
   name?: string;
   description?: string;
   systemPrompt?: string;
-  modelProvider?: string;
-  modelName?: string;
-  modelBaseUrl?: string;
   iconEmoji?: string;
-  type?: 'standalone' | 'main' | 'sub';
-  parentAgentId?: string;
+  /** NULL=global，string=该 workspace 私有；undefined=不改 */
+  workspaceId?: string | null;
+  modelProviderId?: string;
+  modelName?: string;
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
   const db = getDb();
-  // model 三字段合并更新
-  const newProvider = input.modelProvider ?? existing.model.provider;
-  const newModel = input.modelName ?? existing.model.model;
-  const newBaseUrl = input.modelBaseUrl !== undefined ? input.modelBaseUrl : (existing.model.baseUrl ?? null);
-  // type 与 parentAgentId 合并更新：
-  // 不传 type 则保留原值；传 standalone/main 时清空 parentAgentId；
-  // 传 sub 时若显式给 parentAgentId 则覆盖，否则保留原值。
-  const newType = input.type ?? existing.type;
-  const newParentAgentId = newType === 'sub'
-    ? (input.parentAgentId !== undefined ? input.parentAgentId : existing.parentAgentId)
-    : undefined;
   db.prepare(
     `UPDATE agent_definitions SET
-       name = ?, description = ?, system_prompt = ?,
-       model_provider = ?, model_name = ?, model_base_url = ?,
-       icon_emoji = ?, type = ?, parent_agent_id = ?
+       name = ?, description = ?, system_prompt = ?, icon_emoji = ?,
+       workspace_id = ?, model_provider_id = ?, model_name = ?
      WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     input.description ?? existing.description,
     input.systemPrompt ?? existing.systemPrompt,
-    newProvider,
-    newModel,
-    newBaseUrl,
     input.iconEmoji ?? existing.iconEmoji,
-    newType,
-    newParentAgentId ?? null,
+    input.workspaceId !== undefined ? input.workspaceId : existing.workspaceId,
+    input.modelProviderId !== undefined ? input.modelProviderId : existing.modelProviderId,
+    input.modelName ?? existing.modelName,
     input.id,
   );
   return getAgentDefinition(input.id)!;
@@ -225,7 +230,7 @@ export function listRunningInstanceIdsByDefinition(definitionId: string): string
   return rows.map((r) => r.instance_id);
 }
 
-/** 更新实例的 LLM apiKey（写入 keychain 槽 agent.<instanceId>.llm_api_key） */
+/** 更新实例的 LLM apiKey（旧版：写入 keychain agent.<instanceId>.llm_api_key） */
 export async function updateAgentApiKey(instanceId: string, newKey: string): Promise<void> {
   await setSecret(llmApiKeyRef(instanceId), newKey);
 }

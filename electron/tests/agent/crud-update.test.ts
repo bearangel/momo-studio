@@ -1,4 +1,6 @@
+// electron/tests/agent/crud-update.test.ts
 // updateAgentDefinition + updateAgentApiKey + listRunningInstanceIdsByDefinition 单测
+// v1.3 schema：AgentDefinition 无 type/parent/model；新增 workspaceId/modelProviderId/modelName
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,14 +8,15 @@ import fs from 'node:fs';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import {
-  saveAgentDefinition, getAgentDefinition,
+  saveAgentDefinition,
+  getAgentDefinition,
   assignAgentToWorkspace,
-  updateAgentDefinition, listRunningInstanceIdsByDefinition, updateAgentApiKey,
+  updateAgentDefinition,
+  listRunningInstanceIdsByDefinition,
+  updateAgentApiKey,
 } from '../../src/main/agent/crud';
-// createWorkspace 实际定义在 workspace/crud，不在 agent/crud（brief 笔误）
 import { createWorkspace } from '../../src/main/workspace/crud';
 
-// mock runtime-manager（避免真实子进程）
 vi.mock('../../src/main/agent/runtime-manager', () => ({
   isAgentRunning: vi.fn(() => false),
   stopAgent: vi.fn(),
@@ -21,8 +24,6 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
 
 const tmpRoot = path.join(os.tmpdir(), `ap-crud-update-${Date.now()}`);
 const memStore = new Map<string, string>();
-// 注意：KeychainImpl 实际接口是 setSecret(key,value)/getSecret(key)/deleteSecret(key)（2 参），
-// 不是 keytar 原生 setPassword(service,key,value)（3 参）。
 const memKeychain: KeychainImpl = {
   async setSecret(k, v) { memStore.set(k, v); },
   async getSecret(k) { return memStore.get(k) ?? null; },
@@ -42,19 +43,19 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-// sampleDef 构建 def-1 并落库后返回持久化对象（saveAgentDefinition 返回 void）
+/** 构建 def-1 并落库后返回持久化对象 */
 const sampleDef = () => {
   saveAgentDefinition({
-    id: 'def-1', name: 'Agent', slug: 'agent', version: '1.0', type: 'standalone',
+    id: 'def-1', name: 'Agent', slug: 'agent', version: '1.0',
     runtime: 'declarative', systemPrompt: '原 prompt',
-    model: { provider: 'openai', model: 'gpt-4o' },
     defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
     defaultMcps: [], defaultSkills: [],
+    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
   });
   return getAgentDefinition('def-1')!;
 };
 
-describe('updateAgentDefinition', () => {
+describe('updateAgentDefinition — v1.3 schema', () => {
   it('更新指定字段，未传字段保留原值', () => {
     sampleDef();
     const updated = updateAgentDefinition({ id: 'def-1', name: '新名', systemPrompt: '新 prompt' });
@@ -63,22 +64,46 @@ describe('updateAgentDefinition', () => {
     expect(updated.slug).toBe('agent'); // 未传保留
   });
 
-  it('modelBaseUrl 传空字符串清空', () => {
+  it('更新 modelProviderId 和 modelName', () => {
     sampleDef();
-    const updated = updateAgentDefinition({ id: 'def-1', modelBaseUrl: '' });
-    expect(updated.model.baseUrl).toBe('');
+    const updated = updateAgentDefinition({
+      id: 'def-1',
+      modelProviderId: 'prov-2',
+      modelName: 'claude-3',
+    });
+    expect(updated.modelProviderId).toBe('prov-2');
+    expect(updated.modelName).toBe('claude-3');
   });
 
-  it('modelBaseUrl 不传时保留原 NULL（不漂移为空串）', () => {
+  it('workspaceId 显式传 null 转 global', () => {
+    // 先建一个 workspace-scoped def
     saveAgentDefinition({
-      id: 'def-null-base', name: 'NullBase', slug: 'null-base', version: '1.0', type: 'standalone',
+      id: 'def-ws', name: 'WS', slug: 'ws', version: '1.0',
       runtime: 'declarative', systemPrompt: 'p',
-      model: { provider: 'openai', model: 'gpt-4o' },
       defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
       defaultMcps: [], defaultSkills: [],
+      workspaceId: 'ws-1', modelProviderId: 'prov-1', modelName: 'gpt-4o',
     });
-    const updated = updateAgentDefinition({ id: 'def-null-base', name: '新名' });
-    expect(updated.model.baseUrl).toBeUndefined();
+    const updated = updateAgentDefinition({ id: 'def-ws', workspaceId: null });
+    expect(updated.workspaceId).toBeNull();
+  });
+
+  it('workspaceId 传字符串绑定该 workspace', () => {
+    sampleDef(); // def-1 默认 global
+    const updated = updateAgentDefinition({ id: 'def-1', workspaceId: 'ws-new' });
+    expect(updated.workspaceId).toBe('ws-new');
+  });
+
+  it('workspaceId 不传时保留原值', () => {
+    saveAgentDefinition({
+      id: 'def-ws', name: 'WS', slug: 'ws', version: '1.0',
+      runtime: 'declarative', systemPrompt: 'p',
+      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
+      defaultMcps: [], defaultSkills: [],
+      workspaceId: 'ws-1', modelProviderId: 'prov-1', modelName: 'gpt-4o',
+    });
+    const updated = updateAgentDefinition({ id: 'def-ws', name: '改名' });
+    expect(updated.workspaceId).toBe('ws-1');
   });
 
   it('不存在的 id 抛错', () => {
@@ -87,10 +112,11 @@ describe('updateAgentDefinition', () => {
 });
 
 describe('listRunningInstanceIdsByDefinition', () => {
-  it('返回该 def 的全部 assignment instanceId（运行状态由调用方过滤）', async () => {
+  it('返回该 def 的全部 assignment instanceId', async () => {
     const def = sampleDef();
     const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' }, '@o:localhost', '!s:localhost', '!t:localhost',
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
     );
     assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost');
     assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost');
@@ -101,15 +127,16 @@ describe('listRunningInstanceIdsByDefinition', () => {
   it('其它 def 的 assignment 不计入', async () => {
     const def1 = sampleDef();
     saveAgentDefinition({
-      id: 'def-2', name: 'B', slug: 'b', version: '1.0', type: 'standalone',
+      id: 'def-2', name: 'B', slug: 'b', version: '1.0',
       runtime: 'declarative', systemPrompt: 'p',
-      model: { provider: 'openai', model: 'gpt-4o' },
       defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
       defaultMcps: [], defaultSkills: [],
+      workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
     });
     const def2 = getAgentDefinition('def-2')!;
     const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' }, '@o:localhost', '!s:localhost', '!t:localhost',
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
     );
     assignAgentToWorkspace(ws.id, def1.id, '@bot1:localhost');
     assignAgentToWorkspace(ws.id, def2.id, '@bot2:localhost');
@@ -117,62 +144,16 @@ describe('listRunningInstanceIdsByDefinition', () => {
   });
 });
 
-describe('updateAgentApiKey', () => {
+describe('updateAgentApiKey (legacy)', () => {
   it('写入实例 keychain 槽 agent.<instanceId>.llm_api_key', async () => {
     const def = sampleDef();
     const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' }, '@o:localhost', '!s:localhost', '!t:localhost',
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
+      '@o:localhost', '!s:localhost', '!t:localhost',
     );
     const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost');
     await updateAgentApiKey(assignment.instanceId, 'new-secret');
     expect(memStore.get(`agent.${assignment.instanceId}.llm_api_key`)).toBe('new-secret');
-  });
-});
-
-describe('updateAgentDefinition — type + parentAgentId', () => {
-  it('更新 type 为 main', () => {
-    sampleDef(); // def-1 是 standalone
-    const updated = updateAgentDefinition({ id: 'def-1', type: 'main' });
-    expect(updated.type).toBe('main');
-  });
-
-  it('更新 type 为 sub 并设 parentAgentId', () => {
-    // 先创建 main def
-    saveAgentDefinition({
-      id: 'main-def', name: 'Main', slug: 'main-def', version: '1.0', type: 'main',
-      runtime: 'declarative', systemPrompt: 'p',
-      model: { provider: 'openai', model: 'gpt-4o' },
-      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
-      defaultMcps: [], defaultSkills: [],
-    });
-    sampleDef(); // def-1 是 standalone
-    const updated = updateAgentDefinition({ id: 'def-1', type: 'sub', parentAgentId: 'main-def' });
-    expect(updated.type).toBe('sub');
-    expect(updated.parentAgentId).toBe('main-def');
-  });
-
-  it('更新 type 为 standalone 时清除 parentAgentId', () => {
-    // 先把 def-1 设为 sub
-    saveAgentDefinition({
-      id: 'main-def', name: 'Main', slug: 'main-def', version: '1.0', type: 'main',
-      runtime: 'declarative', systemPrompt: 'p',
-      model: { provider: 'openai', model: 'gpt-4o' },
-      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
-      defaultMcps: [], defaultSkills: [],
-    });
-    sampleDef();
-    updateAgentDefinition({ id: 'def-1', type: 'sub', parentAgentId: 'main-def' });
-    // 再改回 standalone
-    const updated = updateAgentDefinition({ id: 'def-1', type: 'standalone' });
-    expect(updated.type).toBe('standalone');
-    expect(updated.parentAgentId).toBeUndefined();
-  });
-
-  it('不传 type 时保留原 type', () => {
-    sampleDef();
-    updateAgentDefinition({ id: 'def-1', type: 'main' });
-    const updated = updateAgentDefinition({ id: 'def-1', name: '新名' });
-    expect(updated.type).toBe('main');
   });
 });
 
