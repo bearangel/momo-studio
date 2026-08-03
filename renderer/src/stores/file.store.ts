@@ -178,6 +178,18 @@ export const useFileStore = create<FileState>((set, get) => ({
   /** 刷新所有已缓存目录（视图切换时同步外部变更） */
   refreshAllCached: async (workspaceId) => {
     const cachedDirs = [...get().tree.keys()];
-    await Promise.all(cachedDirs.map((dir) => get().refreshDir(workspaceId, dir)));
+    // 直接并行拉取并更新缓存，不复用 refreshDir：
+    // refreshDir 的 delete-then-set 会让 entries 短暂变为 undefined，触发 FileTreeView
+    // 已缓存目录的 useEffect 重复调用 loadDir，导致 list 被调两次（一次直接、一次 loadDir）。
+    await Promise.all(
+      cachedDirs.map(async (dir) => {
+        const entries = await ipc.file.list(workspaceId, dir);
+        set((state) => {
+          const tree = new Map(state.tree);
+          tree.set(dir, entries);
+          return { tree };
+        });
+      }),
+    );
   },
 }));
