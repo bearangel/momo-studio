@@ -116,6 +116,12 @@ const api: ApiSurface = {
     listInstalled: () => invoke('marketplace:listInstalled'),
     uninstall: (itemId) => invoke('marketplace:uninstall', itemId),
   },
+  settings: {
+    getGlobal: () => invoke('settings:getGlobal'),
+    updateGlobal: (patch) => invoke('settings:updateGlobal', patch),
+    getRoom: (roomId: string) => invoke('settings:getRoom', roomId),
+    updateRoom: (roomId: string, patch) => invoke('settings:updateRoom', roomId, patch),
+  },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),
   },

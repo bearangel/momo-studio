@@ -280,6 +280,20 @@ ALTER TABLE agent_definitions DROP COLUMN model_provider;
 ALTER TABLE agent_definitions DROP COLUMN model_base_url;
 `.trim(),
   },
+  {
+    version: 13,
+    sql: `
+-- v1.4：房间级配置（工具调用上限等）。max_tool_calls 语义：
+--   NULL  = 继承全局默认（global_settings.maxToolCalls）
+--   0     = 禁用工具调用（纯对话模式）
+--   -1    = 无限制
+--   N > 0 = 最多 N 次工具调用
+CREATE TABLE IF NOT EXISTS room_settings (
+  room_id TEXT PRIMARY KEY NOT NULL,
+  max_tool_calls INTEGER
+);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

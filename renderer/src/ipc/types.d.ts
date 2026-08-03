@@ -271,6 +271,18 @@ export interface ModelProvider {
   createdAt: string;
 }
 
+/** 全局会话配置（v1.4：工具调用上限等），与 electron 端 GlobalSettings 对齐 */
+export interface GlobalSettings {
+  /** 工具调用上限默认值。-1=无限, 0=禁用, N=上限 */
+  maxToolCalls: number;
+}
+
+/** 房间级会话配置（v1.4），与 electron 端 RoomSettings 对齐 */
+export interface RoomSettings {
+  /** NULL=继承全局 */
+  maxToolCalls: number | null;
+}
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
@@ -430,6 +442,16 @@ export interface ApiSurface {
     listInstalled(): Promise<InstalledPackage[]>;
     /** 卸载一个包（按 itemId） */
     uninstall(itemId: string): Promise<void>;
+  };
+  settings: {
+    /** 读取全局会话配置（未配置返回默认值） */
+    getGlobal(): Promise<GlobalSettings>;
+    /** 部分更新全局配置，返回更新后的完整配置 */
+    updateGlobal(patch: Partial<GlobalSettings>): Promise<GlobalSettings>;
+    /** 读取房间级配置（不存在返回 null 字段） */
+    getRoom(roomId: string): Promise<RoomSettings>;
+    /** 部分更新房间级配置，返回更新后的完整配置 */
+    updateRoom(roomId: string, patch: Partial<RoomSettings>): Promise<RoomSettings>;
   };
 }
 
