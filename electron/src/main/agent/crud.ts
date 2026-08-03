@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
-import { setSecret } from '../storage/keychain';
+import { setSecret, deleteSecret } from '../storage/keychain';
 import { logger } from '../logger';
 import { isAgentRunning, stopAgent } from './runtime-manager';
 import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef } from './types';
@@ -141,34 +141,150 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
 }
 
 /**
- * 把某个 agent 定义分配到指定 workspace，绑定一个 bot matrix 账号，返回新建的 assignment。
+ * 把某个 agent 定义分配到指定 workspace，绑定 bot 账号，写 role + parent_instance_id。
  *
- * v1.3：role + parentInstanceId 在 assignment 级。本函数 v1.3 兼容版仅写默认 role='standalone'；
- * 带 role/parent 的版本由 addToWorkspace helper（ipc.handlers.ts）调用，
- * 或 T4 引入的扩展签名 assignAgentToWorkspaceWithRole。
+ * v1.3：角色和父子关系在 assignment 级。校验：
+ *  - role='sub' 必须传 parentInstanceId（同 ws 的 main assignment）
+ *  - role!='sub' 不能传 parentInstanceId（强制 NULL）
  */
 export function assignAgentToWorkspace(
   workspaceId: string,
   agentDefinitionId: string,
   botMatrixUserId: string,
+  role: AgentRole,
+  parentInstanceId: string | null = null,
 ): AgentAssignment {
+  // 校验：role='sub' 必须有 parent
+  if (role === 'sub' && !parentInstanceId) {
+    throw new Error("role='sub' 必须指定 parentInstanceId");
+  }
+  // 校验：role!='sub' 时 parent 必须为 null
+  if (role !== 'sub' && parentInstanceId !== null) {
+    throw new Error(`role='${role}' 不可有 parentInstanceId`);
+  }
+
   const instanceId = randomUUID();
   const db = getDb();
-  // role/parent_instance_id/has_api_key_override 走 schema 默认值
   db.prepare(
-    `INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id)
-     VALUES (?, ?, ?, ?)`,
-  ).run(instanceId, workspaceId, agentDefinitionId, botMatrixUserId);
+    `INSERT INTO agent_assignments
+      (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, role, parent_instance_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(instanceId, workspaceId, agentDefinitionId, botMatrixUserId, role, parentInstanceId);
 
   const row = db
     .prepare('SELECT * FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as AgentAssignmentRow;
   logger.info('Agent 已分配到 workspace', {
-    workspaceId,
-    agentDefinitionId,
-    botMatrixUserId,
+    workspaceId, agentDefinitionId, botMatrixUserId, role,
   });
   return rowToAssignment(row);
+}
+
+/** 修改现有 assignment 的角色/父。校验循环引用；UPDATE 不停止 runtime（IPC 层负责）。
+ *  role!='sub' 时强制 parentInstanceId=NULL（即使传值也清空）。
+ */
+export function updateAssignmentRole(
+  instanceId: string,
+  role: AgentRole,
+  parentInstanceId: string | null = null,
+): void {
+  if (role === 'sub' && !parentInstanceId) {
+    throw new Error("role='sub' 必须指定 parentInstanceId");
+  }
+  // role!='sub' 时强制 parent=NULL（无视传入值）
+  const effectiveParent = role === 'sub' ? parentInstanceId : null;
+
+  // 校验循环引用：parent 链中不能包含自己
+  if (effectiveParent) {
+    const visited = new Set<string>();
+    let cur: string | null = effectiveParent;
+    while (cur) {
+      if (cur === instanceId) {
+        throw new Error('循环引用：parent 链中包含自己');
+      }
+      if (visited.has(cur)) break; // 防御性，避免极端情况下死循环
+      visited.add(cur);
+      const row = getDb()
+        .prepare('SELECT parent_instance_id FROM agent_assignments WHERE instance_id = ?')
+        .get(cur) as { parent_instance_id: string | null } | undefined;
+      cur = row?.parent_instance_id ?? null;
+    }
+  }
+
+  getDb()
+    .prepare('UPDATE agent_assignments SET role = ?, parent_instance_id = ? WHERE instance_id = ?')
+    .run(role, effectiveParent, instanceId);
+}
+
+/**
+ * 设置/清除 assignment 的 API key override。
+ *  - 非空 apiKey：写入 keychain 'agent.<instanceId>.api_key_override' + DB 标志=1
+ *  - null：删除 keychain + DB 标志=0（回退到供应商默认 key）
+ */
+export async function updateAssignmentApiKey(
+  instanceId: string,
+  apiKey: string | null,
+): Promise<void> {
+  const key = `agent.${instanceId}.api_key_override`;
+  const db = getDb();
+  if (apiKey === null) {
+    await deleteSecret(key);
+    db.prepare('UPDATE agent_assignments SET has_api_key_override = 0 WHERE instance_id = ?')
+      .run(instanceId);
+  } else {
+    await setSecret(key, apiKey);
+    db.prepare('UPDATE agent_assignments SET has_api_key_override = 1 WHERE instance_id = ?')
+      .run(instanceId);
+  }
+}
+
+/** 列出某 workspace 内、parent_instance_id 等于指定值的所有 assignment（查 subs） */
+export function listSubAssignments(
+  workspaceId: string,
+  parentInstanceId: string,
+): AgentAssignment[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM agent_assignments
+       WHERE workspace_id = ? AND parent_instance_id = ?
+       ORDER BY created_at ASC`,
+    )
+    .all(workspaceId, parentInstanceId) as AgentAssignmentRow[];
+  return rows.map(rowToAssignment);
+}
+
+/**
+ * 删除自定义 agent 定义。builtin 不可删。
+ * 级联：停止全部引用此 def 的运行中实例 → 让 bot 离开房间（IPC 层负责）→
+ * 清除 API key override（keychain）→ 删 assignment → 删 def 行。
+ */
+export async function deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
+  const def = getAgentDefinition(defId);
+  if (!def) throw new Error(`未找到 agent 定义: ${defId}`);
+  if (def.source === 'builtin') throw new Error('builtin agent 不可删除');
+
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT * FROM agent_assignments WHERE agent_definition_id = ?')
+    .all(defId) as AgentAssignmentRow[];
+
+  const stopped: string[] = [];
+  for (const row of rows) {
+    if (isAgentRunning(row.instance_id)) {
+      stopAgent(row.instance_id);
+      stopped.push(row.instance_id);
+    }
+    // 清除 API key override
+    if (row.has_api_key_override === 1) {
+      await deleteSecret(`agent.${row.instance_id}.api_key_override`);
+    }
+    db.prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(row.instance_id);
+  }
+
+  db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
+  logger.info('agent 定义已删除', { defId, stoppedCount: stopped.length });
+  return { stoppedInstanceIds: stopped };
 }
 
 /** 列出某 workspace 下所有 agent 分配记录 */

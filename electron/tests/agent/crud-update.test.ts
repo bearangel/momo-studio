@@ -118,8 +118,8 @@ describe('listRunningInstanceIdsByDefinition', () => {
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost');
-    assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost');
+    assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost', 'standalone');
+    assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost', 'standalone');
     const ids = listRunningInstanceIdsByDefinition(def.id);
     expect(ids).toHaveLength(2);
   });
@@ -138,8 +138,8 @@ describe('listRunningInstanceIdsByDefinition', () => {
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    assignAgentToWorkspace(ws.id, def1.id, '@bot1:localhost');
-    assignAgentToWorkspace(ws.id, def2.id, '@bot2:localhost');
+    assignAgentToWorkspace(ws.id, def1.id, '@bot1:localhost', 'standalone');
+    assignAgentToWorkspace(ws.id, def2.id, '@bot2:localhost', 'standalone');
     expect(listRunningInstanceIdsByDefinition(def1.id)).toHaveLength(1);
   });
 });
@@ -151,7 +151,7 @@ describe('updateAgentApiKey (legacy)', () => {
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost');
+    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost', 'standalone');
     await updateAgentApiKey(assignment.instanceId, 'new-secret');
     expect(memStore.get(`agent.${assignment.instanceId}.llm_api_key`)).toBe('new-secret');
   });
@@ -168,7 +168,7 @@ describe('stopRunningInstancesByDefinition', () => {
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost');
+    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
     const stopped = stopRunningInstancesByDefinition(def.id);
@@ -186,7 +186,7 @@ describe('stopRunningInstancesByDefinition', () => {
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost');
+    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
     const stopped = stopRunningInstancesByDefinition(def.id);
