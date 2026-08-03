@@ -11,6 +11,8 @@ interface FileState {
   expandedDirs: Set<string>;
   // 当前选中的文件全路径（相对 workspace 根）
   selectedFile: string | null;
+  /** 当前选中目录（新建文件的落点）。'.' 表示根目录。不持久化 */
+  selectedDir: string;
   error: string | null;
   // 当前激活的 workspace ID，用于按 workspace 隔离展开态持久化（null=未初始化）
   workspaceId: string | null;
@@ -23,6 +25,8 @@ interface FileState {
   toggleDir: (dirPath: string) => void;
   // 记录选中的文件
   selectFile: (filePath: string) => void;
+  /** 设为当前选中目录（单击文件夹时调用） */
+  selectDir: (dirPath: string) => void;
   // 折叠全部目录，回到仅根目录展开的初始状态
   collapseAll: () => void;
   // 失效指定目录缓存并重新拉取（刷新）
@@ -33,6 +37,8 @@ interface FileState {
   deletePath: (workspaceId: string, filePath: string) => Promise<void>;
   // 重命名/移动，完成后刷新源与目标父目录缓存
   renamePath: (workspaceId: string, srcPath: string, dstPath: string) => Promise<void>;
+  /** 刷新所有已缓存目录（视图切换时同步外部变更） */
+  refreshAllCached: (workspaceId: string) => Promise<void>;
 }
 
 // 按 workspace 隔离的展开态持久化 key
@@ -52,6 +58,7 @@ export const useFileStore = create<FileState>((set, get) => ({
   tree: new Map(),
   expandedDirs: new Set<string>(['.']),
   selectedFile: null,
+  selectedDir: '.',
   error: null,
   workspaceId: null,
 
@@ -75,7 +82,8 @@ export const useFileStore = create<FileState>((set, get) => ({
     } catch {
       expanded = new Set(['.']);
     }
-    set({ workspaceId, expandedDirs: expanded });
+    // 切换 workspace 时重置选中目录为根（selectedDir 不跨 workspace 持久化）
+    set({ workspaceId, expandedDirs: expanded, selectedDir: '.' });
   },
 
   toggleDir: (dirPath) => {
@@ -92,6 +100,8 @@ export const useFileStore = create<FileState>((set, get) => ({
   },
 
   selectFile: (filePath) => set({ selectedFile: filePath }),
+
+  selectDir: (dirPath) => set({ selectedDir: dirPath }),
 
   collapseAll: () => {
     const expanded = new Set(['.']);
@@ -133,6 +143,11 @@ export const useFileStore = create<FileState>((set, get) => ({
       await ipc.file.delete(workspaceId, filePath);
       const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.';
       await get().refreshDir(workspaceId, parent);
+      // 维护 selectedDir 一致性：删除的路径是 selectedDir 本身或其祖先时重置为根
+      const sel = get().selectedDir;
+      if (sel === filePath || sel.startsWith(filePath + '/')) {
+        set({ selectedDir: '.' });
+      }
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -147,9 +162,22 @@ export const useFileStore = create<FileState>((set, get) => ({
       const dstParent = dstPath.includes('/') ? dstPath.slice(0, dstPath.lastIndexOf('/')) : '.';
       await get().refreshDir(workspaceId, srcParent);
       if (srcParent !== dstParent) await get().refreshDir(workspaceId, dstParent);
+      // 维护 selectedDir 一致性：重命名的是 selectedDir 本身或其祖先时同步更新
+      const sel = get().selectedDir;
+      if (sel === srcPath) {
+        set({ selectedDir: dstPath });
+      } else if (sel.startsWith(srcPath + '/')) {
+        set({ selectedDir: dstPath + sel.slice(srcPath.length) });
+      }
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
     }
+  },
+
+  /** 刷新所有已缓存目录（视图切换时同步外部变更） */
+  refreshAllCached: async (workspaceId) => {
+    const cachedDirs = [...get().tree.keys()];
+    await Promise.all(cachedDirs.map((dir) => get().refreshDir(workspaceId, dir)));
   },
 }));

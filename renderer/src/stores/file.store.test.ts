@@ -22,11 +22,12 @@ const mockApi = {
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   localStorage.clear();
-  // 重置 store 状态：空缓存 + 仅根展开 + 未激活 workspace
+  // 重置 store 状态：空缓存 + 仅根展开 + 未激活 workspace + 根目录为选中目录
   useFileStore.setState({
     tree: new Map(),
     expandedDirs: new Set(['.']),
     selectedFile: null,
+    selectedDir: '.',
     error: null,
     workspaceId: null,
   });
@@ -244,5 +245,96 @@ describe('file.store expandedDirs 按 workspace 隔离持久化', () => {
 
     expect([...useFileStore.getState().expandedDirs]).toEqual(['.', 'src']);
     expect(localStorage.length).toBe(0);
+  });
+});
+
+describe('file.store selectedDir', () => {
+  it('selectDir 设置当前选中目录', () => {
+    useFileStore.getState().selectDir('src');
+    expect(useFileStore.getState().selectedDir).toBe('src');
+  });
+
+  it('selectDir 根目录', () => {
+    useFileStore.getState().selectDir('.');
+    expect(useFileStore.getState().selectedDir).toBe('.');
+  });
+
+  it('selectedDir 不持久化（initWorkspace 不读取它）', () => {
+    localStorage.setItem('fileTree.expanded.ws-1', '["." ,"src"]');
+    useFileStore.setState({ selectedDir: 'src' });
+    useFileStore.getState().initWorkspace('ws-1');
+    // initWorkspace 重置 selectedDir 为 '.'
+    expect(useFileStore.getState().selectedDir).toBe('.');
+  });
+
+  it('deletePath 删除选中目录本身时重置 selectedDir 为 "."', async () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    await useFileStore.getState().deletePath('ws-1', 'src');
+    expect(useFileStore.getState().selectedDir).toBe('.');
+  });
+
+  it('deletePath 删除选中目录的子目录时不重置 selectedDir', async () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    await useFileStore.getState().deletePath('ws-1', 'src/nested');
+    expect(useFileStore.getState().selectedDir).toBe('src');
+  });
+
+  it('deletePath 删除选中目录的祖先时重置 selectedDir 为 "."', async () => {
+    // selectedDir 是 src/utils，删除 src（祖先）应重置
+    useFileStore.setState({ selectedDir: 'src/utils' });
+    await useFileStore.getState().deletePath('ws-1', 'src');
+    expect(useFileStore.getState().selectedDir).toBe('.');
+  });
+
+  it('deletePath 删除无关目录时不影响 selectedDir', async () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    await useFileStore.getState().deletePath('ws-1', 'docs');
+    expect(useFileStore.getState().selectedDir).toBe('src');
+  });
+
+  it('renamePath 重命名选中目录本身时更新 selectedDir', async () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    await useFileStore.getState().renamePath('ws-1', 'src', 'lib');
+    expect(useFileStore.getState().selectedDir).toBe('lib');
+  });
+
+  it('renamePath 重命名选中目录的祖先时更新 selectedDir 前缀', async () => {
+    // selectedDir 是 src/utils，src 改名为 lib，selectedDir 应变为 lib/utils
+    useFileStore.setState({ selectedDir: 'src/utils' });
+    await useFileStore.getState().renamePath('ws-1', 'src', 'lib');
+    expect(useFileStore.getState().selectedDir).toBe('lib/utils');
+  });
+
+  it('renamePath 重命名无关目录时不影响 selectedDir', async () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    await useFileStore.getState().renamePath('ws-1', 'docs', 'documentation');
+    expect(useFileStore.getState().selectedDir).toBe('src');
+  });
+});
+
+describe('file.store refreshAllCached', () => {
+  it('并行刷新所有已缓存目录', async () => {
+    // 预置三个已缓存目录
+    useFileStore.setState({
+      tree: new Map([
+        ['.', ROOT_ENTRIES],
+        ['src', SUB_ENTRIES],
+        ['docs', ROOT_ENTRIES],
+      ]),
+    });
+
+    await useFileStore.getState().refreshAllCached('ws-1');
+
+    // 每个缓存 key 都被 list 重新拉取
+    expect(mockApi.file.list).toHaveBeenCalledTimes(3);
+    expect(mockApi.file.list).toHaveBeenCalledWith('ws-1', '.');
+    expect(mockApi.file.list).toHaveBeenCalledWith('ws-1', 'src');
+    expect(mockApi.file.list).toHaveBeenCalledWith('ws-1', 'docs');
+  });
+
+  it('空缓存时不调任何 list', async () => {
+    useFileStore.setState({ tree: new Map() });
+    await useFileStore.getState().refreshAllCached('ws-1');
+    expect(mockApi.file.list).not.toHaveBeenCalled();
   });
 });
