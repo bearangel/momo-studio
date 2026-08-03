@@ -61,7 +61,7 @@ describe('TaskReplyCard', () => {
 
   it('无 progress_pct 时不显示进度条', () => {
     const { container } = render(<TaskReplyCard message={makeReply('completed')} isSelf={false} senderName="码农" />);
-    const bar = container.querySelector('[style*="width:');
+    const bar = container.querySelector('[style^="width"]');
     expect(bar).toBeNull();
   });
 
