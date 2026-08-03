@@ -14,8 +14,7 @@ import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
-import { AgentList } from '../agent/AgentList';
-import { AddAgentDialog } from '../agent/AddAgentDialog';
+import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { MarketplaceView } from '../marketplace/MarketplaceView';
 
@@ -25,7 +24,6 @@ export function MiddlePanel() {
   const openFile = useEditorStore((s) => s.openFile);
   const activeRoomId = useImStore((s) => s.activeRoomId);
   const [showMembers, setShowMembers] = useState(false);
-  const [showAddAgent, setShowAddAgent] = useState(false);
 
   // 切换房间时关闭成员浮层，避免新房间显示旧成员
   useEffect(() => {
@@ -100,14 +98,9 @@ export function MiddlePanel() {
     );
   }
 
-  // agents 视图：当前 workspace 的 agent 列表 + 添加对话框
+  // agents 视图：Tab 容器（本工作空间 / Agent 库）
   if (activeView === 'agents') {
-    return (
-      <>
-        <AgentList onAdd={() => setShowAddAgent(true)} />
-        {showAddAgent && <AddAgentDialog onClose={() => setShowAddAgent(false)} />}
-      </>
-    );
+    return <AgentsView />;
   }
 
   // settings 视图：Git Policy 配置 + 审计日志
