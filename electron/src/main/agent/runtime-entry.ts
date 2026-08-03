@@ -311,15 +311,8 @@ async function main(): Promise<void> {
   }
 
   // 构建运行时上下文：初始化 SkillRegistry、发现 MCP 工具、合并工具列表、注入 skill 索引。
-  // 在发"已上线"前完成，确保首条消息到达时工具已就绪。
+  // 在注册事件监听前完成，确保首条消息到达时工具已就绪。
   const ctx = await buildRuntimeContext(config);
-
-  await client.sendEvent(
-    config.teamRoomId,
-    'm.room.message',
-    { msgtype: 'm.text', body: '✅ 已上线，等待任务' },
-    '',
-  );
 
   client.on(ClientEvent.Event, (event: MatrixEvent) => {
     void handleEvent(client, event, config, ctx);
