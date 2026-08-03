@@ -4,22 +4,13 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MessageFrame } from './MessageFrame';
-import type { ImMessage } from '../../ipc/types';
 
-const msg: ImMessage = {
-  eventId: '$evt:local',
-  roomId: '!room:local',
-  sender: '@coder:local',
-  body: '',
-  eventType: 'm.room.message',
-  content: {},
-  timestamp: 0,
-};
+const SENDER = '@coder:local';
 
 describe('MessageFrame', () => {
   it('非自己消息时显示 senderName', () => {
     render(
-      <MessageFrame message={msg} isSelf={false} senderName="coder-bot">
+      <MessageFrame sender={SENDER} isSelf={false} senderName="coder-bot">
         <span>正文</span>
       </MessageFrame>,
     );
@@ -29,7 +20,7 @@ describe('MessageFrame', () => {
 
   it('senderName 缺失时回退到 shortName（@coder:local → coder）', () => {
     render(
-      <MessageFrame message={msg} isSelf={false}>
+      <MessageFrame sender={SENDER} isSelf={false}>
         <span>正文</span>
       </MessageFrame>,
     );
@@ -38,7 +29,7 @@ describe('MessageFrame', () => {
 
   it('自己消息（isSelf）时不显示名字', () => {
     render(
-      <MessageFrame message={msg} isSelf={true} senderName="coder-bot">
+      <MessageFrame sender={SENDER} isSelf={true} senderName="coder-bot">
         <span>正文</span>
       </MessageFrame>,
     );
@@ -47,7 +38,7 @@ describe('MessageFrame', () => {
 
   it('bubbleClassName 应用到内层气泡 div', () => {
     render(
-      <MessageFrame message={msg} isSelf={false} bubbleClassName="border-accent-purple/40 bg-accent-purple/10">
+      <MessageFrame sender={SENDER} isSelf={false} bubbleClassName="border-accent-purple/40 bg-accent-purple/10">
         <span data-testid="child">x</span>
       </MessageFrame>,
     );
@@ -58,7 +49,7 @@ describe('MessageFrame', () => {
 
   it('渲染 children', () => {
     render(
-      <MessageFrame message={msg} isSelf={false}>
+      <MessageFrame sender={SENDER} isSelf={false}>
         <span data-testid="child">子内容</span>
       </MessageFrame>,
     );

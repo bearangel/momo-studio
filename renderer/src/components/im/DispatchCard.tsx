@@ -52,7 +52,7 @@ export function DispatchCard({ message, isSelf, senderName }: Props) {
     const rawContentBody = message.content.body;
     return (
       <MessageFrame
-        message={message}
+        sender={message.sender}
         isSelf={isSelf}
         senderName={senderName}
         bubbleClassName="bg-bg-tertiary text-neutral-300"
@@ -64,7 +64,7 @@ export function DispatchCard({ message, isSelf, senderName }: Props) {
 
   return (
     <MessageFrame
-      message={message}
+      sender={message.sender}
       isSelf={isSelf}
       senderName={senderName}
       bubbleClassName="border border-accent-purple/40 bg-accent-purple/10"

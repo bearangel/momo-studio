@@ -31,7 +31,7 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
 
   return (
     <MessageFrame
-      message={message}
+      sender={message.sender}
       isSelf={isSelf}
       senderName={senderName}
       bubbleClassName={cn(isSelf ? 'bg-accent-blue text-white' : 'bg-bg-tertiary text-neutral-100')}
