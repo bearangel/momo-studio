@@ -6,7 +6,7 @@
 
 ## 状态
 
-**v1.3 — 开发中**
+**v1.3 — Released**
 
 v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/specs/2026-08-03-agent-definition-assignment-separation-design.md`。
 
@@ -185,6 +185,75 @@ docs/
 
 - ✅ renderer 全套 105 测试（含 MessageFrame/DispatchCard/TaskReplyCard/MessageBubble/InputToolbar/MembersPanel 共 40 个 IM 组件测试）
 
+### v1.3 — Agent 定义/分配解耦 + Workspace 隔离 ✅ 已发布
+
+v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「在某 workspace 怎么用」混在一起，定义全局共享无 workspace 边界。v1.3 彻底解耦。
+
+**架构重构（Migration v12）**
+
+- ✅ AgentDefinition 删 `type` / `parentAgentId` / `model.provider` / `model.baseUrl`；加 `workspaceId`（NULL=全局）/ `modelProviderId`（引用供应商表）/ `modelName`
+- ✅ AgentAssignment 加 `role`（standalone/main/sub）/ `parentInstanceId`（同 ws 父 assignment）/ `hasApiKeyOverride`（DB 标志）
+- ✅ 数据回填：role 从老 def.type 推导；parent_instance_id 从老 def.parentAgentId + 同 ws 父 assignment 推导
+- ✅ Keychain 新增 `agent.<instanceId>.api_key_override`（可选 per-assignment override）
+
+**角色与父子关系剥离**
+
+- ✅ 彻底从 definition 剥离到 assignment — 同一 agent def 在不同 workspace 可当不同角色
+- ✅ `assignAgentToWorkspace` 接 role + parentInstanceId（校验循环引用）
+- ✅ `updateAssignmentRole` 支持运行时改角色（从 main 改非 main 时级联停止 subs）
+- ✅ `deleteDefinition` builtin 不可删；custom 级联清理 assignment + keychain + def
+
+**模型供应商化**
+
+- ✅ AgentDefinition 引用 `model_providers` 表（不再硬编码 platform/model/baseUrl）
+- ✅ `resolveApiKey`：override ?? provider key（keychain 解析）
+- ✅ `createLLMProvider` 按 baseUrl 自动检测 platform（anthropic.com → anthropic，其余 → openai 兼容）
+- ✅ 现有 assignment 强制重配 provider（model_provider_id 留 NULL，启动时拒绝）
+
+**自定义 Agent Workspace 隔离**
+
+- ✅ 创建自定义 agent 时选 scope（默认 workspace-scoped，可选全局共享）
+- ✅ `listAgentDefinitions(workspaceId?)` 按 `workspace_id IS NULL OR = ?` 过滤
+- ✅ 切换 workspace 时 Agent 库只显示 global + 当前 ws scoped + builtin
+- ✅ 删除 workspace 级联删除 scoped custom def（global 不受影响）
+
+**Builtin 加载策略**
+
+- ✅ YAML 仍可写 `type` / `parentAgentId` / `model.provider`（向后兼容）
+- ✅ 不写入 DB（schema 已删除）；存内存 `builtinSuggestions` Map
+- ✅ UI 添加 builtin 时预填建议角色 + platform
+
+**UI 双 Tab 重构**
+
+- ✅ `AgentsView`：Tab 容器（本工作空间 / Agent 库）
+- ✅ `WorkspaceAgentsPanel`：按 main→sub 树形分组 + 孤儿 sub 警告 + 启停 + 移除 + 协调设置
+- ✅ `AgentLibrary`：builtin/全局/工作空间三组 + 搜索 + 配置/编辑/删除
+- ✅ `DefinitionEditor`：三模式（create/edit/configure builtin）
+- ✅ `AddToWorkspaceDialog`：选 def + role + parent + apiKeyOverride
+- ✅ `AssignmentRoleEditor` / `AssignmentApiKeyEditor`：运行时改角色/密钥
+
+**IM 房间按 Workspace 隔离**
+
+- ✅ `getRoomsForWorkspace(workspaceId?)`：按 Matrix Space `m.space.child` 成员过滤
+- ✅ 新建房间自动加入当前 workspace 的 Space
+- ✅ 切换 workspace 时 IM store 重置（rooms/messages/activeRoom 全清）
+
+**工作空间与编辑器体验**
+
+- ✅ 新建工作空间原生目录选择对话框（Electron `dialog.showOpenDialog`）
+- ✅ 全量中文化（7 处 workspace → 工作空间 + Onboarding 英文翻译）
+- ✅ Monaco 编辑器中文 locale（官方 NLS 本地打包，离线优先）
+- ✅ 文件树增强（单击文件夹选中 + 目录级右键新建 + 空白区操作 + 工具栏跟随选中目录）
+- ✅ 文件树选中状态互斥（文件↔文件夹）+ 根目录可选中
+
+**测试覆盖**
+
+- ✅ Electron 305/308（3 个 conduit flaky 预存）；Renderer 131/131；Typecheck 双 clean
+- ✅ Migration v12 回填测试（7 用例，含孤儿 sub 边界）
+- ✅ crud assignment 测试（15 用例：role/parent/循环引用/级联删除）
+- ✅ builtin suggestions 测试（7 用例：v1.3 schema + suggestions Map）
+- ✅ agent.store 测试（11 用例：v1.3 新签名 + 新 actions）
+
 **待办基础设施项**
 
 - 🔲 重启自动恢复 agent runtime（持久化运行状态）
@@ -234,6 +303,9 @@ docs/
 | Conduwuit 无 macOS 二进制 | macOS 需 Docker | v2.0 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
+| **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测（`anthropic.com` → anthropic，其余 → openai）；非标准域名可能误判 | v1.4 加 platform 列 |
+| **v1.2→v1.3 升级需重配 provider** | migration v12 后 def.modelProviderId=NULL，现有 assignment 无法启动直到用户在 Agent 库配置 provider | 一次性升级成本，无回滚方案 |
+| **3 个 conduit/manager 测试 flaky** | SIGKILL/healthCheck/timeout 偶发失败 | 待排查测试时序 |
 
 ## 已知限制
 
@@ -241,6 +313,8 @@ docs/
 - `matrix-js-sdk` 锁定 v31，升级 v32+ 需要先把主进程迁到 ESM（v2 任务）。
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
+- **v1.3 升级后现有 agent 需手动重配 provider**——migration v12 删除了 def 上的 model 字段，用户需到 Agent 库为每个 def 选 modelProviderId + modelName 后才能启动。
+- **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
 
 ## 许可
 
