@@ -29,7 +29,7 @@
 
 ## 3. Schema 改动 + 迁移
 
-### 3.1 新增迁移文件 `007_agent_role_separation.sql`
+### 3.1 新增迁移文件 `012_agent_role_separation.sql`
 
 #### 阶段 1：加列
 
@@ -670,7 +670,7 @@ interface ParsedManifest {
 
 | 文件 | 改动 |
 |---|---|
-| `electron/src/main/storage/migrations/007_agent_role_separation.sql` | 新增（实际是 TS 内联字符串） |
+| `electron/src/main/storage/migrations/012_agent_role_separation.sql` | 新增（实际是 TS 内联字符串） |
 | `electron/src/main/storage/migrations/index.ts` | 注册新迁移 |
 | `electron/src/main/agent/types.ts` | AgentDefinition 删 type/parent/model；AgentAssignment 加 role/parent/hasApiKeyOverride；新增 BuiltinSuggestion 类型 |
 | `electron/src/main/agent/crud.ts` | listDefinitions(workspaceId?) 过滤；assignAgentToWorkspace 写 role/parent；deleteDefinition 级联；updateAssignmentRole 校验循环引用；updateAssignmentApiKey keychain 操作；listAssignments 返回 hasApiKeyOverride |
