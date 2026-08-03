@@ -15,11 +15,17 @@ interface ImState {
   members: RoomMember[];
   loading: boolean;
   error: string | null;
+  /** 当前 rooms 所属的 workspace ID；切换 workspace 时重置全部 IM 状态 */
+  currentWorkspaceId: string | null;
 
-  /** 拉取房间列表，默认激活第一个房间并加载其消息 */
-  loadRooms: () => Promise<void>;
+  /**
+   * 拉取房间列表，默认激活第一个房间并加载其消息。
+   * workspaceId 与当前不同时先重置状态（清空 rooms/messages/active room），
+   * 保证切换工作空间后旧 workspace 的房间不会残留显示。
+   */
+  loadRooms: (workspaceId?: string) => Promise<void>;
   /** 房间列表刷新：立即拉一次 + 延迟再拉一次（兜底 /sync 延迟，避免 create/rename/dissolve 后列表陈旧） */
-  refreshRoomList: () => void;
+  refreshRoomList: (workspaceId?: string) => void;
   /** 切换激活房间并加载该房间历史消息与成员 */
   selectRoom: (roomId: string) => Promise<void>;
   /** 拉取指定房间成员列表（含身份标识） */
@@ -39,11 +45,22 @@ export const useImStore = create<ImState>((set, get) => ({
   members: [],
   loading: false,
   error: null,
+  currentWorkspaceId: null,
 
-  loadRooms: async () => {
+  loadRooms: async (workspaceId) => {
+    // 切换 workspace 时清空旧 workspace 的房间、消息、成员、激活房间
+    if (workspaceId && workspaceId !== get().currentWorkspaceId) {
+      set({
+        currentWorkspaceId: workspaceId,
+        rooms: [],
+        activeRoomId: null,
+        messagesByRoom: new Map(),
+        members: [],
+      });
+    }
     set({ loading: true, error: null });
     try {
-      const roomList = await ipc.im.getRooms();
+      const roomList = await ipc.im.getRooms(workspaceId);
       // 保留当前选中房间（若仍存在）；仅初次加载或选中房间消失才回退首条
       const cur = get().activeRoomId;
       const stillThere = cur != null && roomList.some((r) => r.roomId === cur);
@@ -59,10 +76,10 @@ export const useImStore = create<ImState>((set, get) => ({
   },
 
   // 房间列表刷新：立即拉一次 + 延迟再拉一次（兜底 /sync 延迟，避免 create/rename/dissolve 后列表陈旧）
-  refreshRoomList: () => {
-    void get().loadRooms();
+  refreshRoomList: (workspaceId) => {
+    void get().loadRooms(workspaceId);
     setTimeout(() => {
-      void get().loadRooms();
+      void get().loadRooms(workspaceId);
     }, 1000);
   },
 
@@ -120,5 +137,6 @@ export const useImStore = create<ImState>((set, get) => ({
       members: [],
       loading: false,
       error: null,
+      currentWorkspaceId: null,
     }),
 }));

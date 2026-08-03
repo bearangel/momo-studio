@@ -1,6 +1,7 @@
 // 新建房间对话框：名称 + 类型（私聊/群组）+ 邀请对象
 import { useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 
 interface Props {
   open: boolean;
@@ -14,6 +15,7 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
   const [name, setName] = useState('');
   const [isDirect, setIsDirect] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   if (!open) return null;
 
   const toggle = (id: string) =>
@@ -23,7 +25,12 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
     e.preventDefault();
     if (!name.trim()) return;
     try {
-      await ipc.im.createRoom({ name: name.trim(), isDirect, inviteUserIds: selected });
+      await ipc.im.createRoom({
+        name: name.trim(),
+        isDirect,
+        inviteUserIds: selected,
+        workspaceId: activeWorkspaceId ?? undefined,
+      });
       onCreated();
       onClose();
       setName(''); setSelected([]); setIsDirect(false);

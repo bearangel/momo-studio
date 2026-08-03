@@ -3,16 +3,19 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useImStore } from './im.store';
 import type { ImMessage, ImRoomInfo } from '../ipc/types';
 
-const MOCK_ROOMS: ImRoomInfo[] = [
-  { roomId: '!room1:localhost', name: 'Room 1' },
-  { roomId: '!room2:localhost', name: 'Room 2' },
+const MOCK_ROOMS_A: ImRoomInfo[] = [
+  { roomId: '!a1:localhost', name: 'A 房间 1' },
+  { roomId: '!a2:localhost', name: 'A 房间 2' },
+];
+const MOCK_ROOMS_B: ImRoomInfo[] = [
+  { roomId: '!b1:localhost', name: 'B 房间 1' },
 ];
 
 const mockApi = {
   im: {
     startSync: vi.fn().mockResolvedValue(undefined),
     send: vi.fn().mockResolvedValue(undefined),
-    getRooms: vi.fn().mockResolvedValue(MOCK_ROOMS),
+    getRooms: vi.fn(),
     getMessages: vi.fn().mockResolvedValue([]),
     onMessage: vi.fn().mockReturnValue(() => {}),
   },
@@ -21,7 +24,8 @@ const mockApi = {
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   useImStore.getState().reset();
-  mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS);
+  mockApi.im.getRooms.mockReset();
+  mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_A);
   mockApi.im.getMessages.mockResolvedValue([]);
   mockApi.im.send.mockClear();
 });
@@ -30,7 +34,7 @@ describe('im.store', () => {
   it('loadRooms populates rooms and activates the first room', async () => {
     await useImStore.getState().loadRooms();
     expect(useImStore.getState().rooms).toHaveLength(2);
-    expect(useImStore.getState().activeRoomId).toBe('!room1:localhost');
+    expect(useImStore.getState().activeRoomId).toBe('!a1:localhost');
   });
 
   it('loadRooms with empty rooms leaves activeRoomId null', async () => {
@@ -44,7 +48,7 @@ describe('im.store', () => {
     const messages: ImMessage[] = [
       {
         eventId: 'e1',
-        roomId: '!room1:localhost',
+        roomId: '!a1:localhost',
         sender: '@a:localhost',
         body: 'hi',
         eventType: 'm.room.message',
@@ -54,14 +58,14 @@ describe('im.store', () => {
     ];
     mockApi.im.getMessages.mockResolvedValue(messages);
 
-    await useImStore.getState().selectRoom('!room1:localhost');
-    expect(useImStore.getState().messagesByRoom.get('!room1:localhost')).toEqual(messages);
+    await useImStore.getState().selectRoom('!a1:localhost');
+    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toEqual(messages);
   });
 
   it('receiveMessage appends to the room message list', () => {
     const msg: ImMessage = {
       eventId: 'e2',
-      roomId: '!room1:localhost',
+      roomId: '!a1:localhost',
       sender: '@b:localhost',
       body: 'hello',
       eventType: 'm.room.message',
@@ -69,13 +73,13 @@ describe('im.store', () => {
       timestamp: 2,
     };
     useImStore.getState().receiveMessage(msg);
-    expect(useImStore.getState().messagesByRoom.get('!room1:localhost')).toContainEqual(msg);
+    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toContainEqual(msg);
   });
 
   it('receiveMessage deduplicates by eventId', () => {
     const msg: ImMessage = {
       eventId: 'e3',
-      roomId: '!room1:localhost',
+      roomId: '!a1:localhost',
       sender: '@b:localhost',
       body: 'dup',
       eventType: 'm.room.message',
@@ -84,24 +88,63 @@ describe('im.store', () => {
     };
     useImStore.getState().receiveMessage(msg);
     useImStore.getState().receiveMessage(msg);
-    expect(useImStore.getState().messagesByRoom.get('!room1:localhost')).toHaveLength(1);
+    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toHaveLength(1);
   });
 
   it('sendMessage calls ipc.im.send with the active room id', async () => {
     await useImStore.getState().loadRooms();
     await useImStore.getState().sendMessage('hello');
-    expect(mockApi.im.send).toHaveBeenCalledWith('!room1:localhost', 'hello');
+    expect(mockApi.im.send).toHaveBeenCalledWith('!a1:localhost', 'hello');
   });
 
   it('sendMessage 不插入本地乐观消息（SDK local echo 经 sync-manager 推送，避免重复与错误归属）', async () => {
     await useImStore.getState().loadRooms();
     await useImStore.getState().sendMessage('hello');
-    const msgs = useImStore.getState().messagesByRoom.get('!room1:localhost') ?? [];
+    const msgs = useImStore.getState().messagesByRoom.get('!a1:localhost') ?? [];
     expect(msgs.some((m) => m.sender === '' || m.eventId.startsWith('local-'))).toBe(false);
   });
 
   it('sendMessage is a no-op when no room is active', async () => {
     await useImStore.getState().sendMessage('hello');
     expect(mockApi.im.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('im.store — workspace 隔离', () => {
+  it('loadRooms(workspaceId) 把 workspaceId 透传给 IPC', async () => {
+    await useImStore.getState().loadRooms('ws-a');
+    expect(mockApi.im.getRooms).toHaveBeenCalledWith('ws-a');
+  });
+
+  it('切换 workspace 时清空旧 workspace 的房间、消息、激活房间', async () => {
+    // 先在 workspace A 建立状态
+    mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_A);
+    await useImStore.getState().loadRooms('ws-a');
+    await useImStore.getState().selectRoom('!a1:localhost');
+    expect(useImStore.getState().rooms).toHaveLength(2);
+    expect(useImStore.getState().activeRoomId).toBe('!a1:localhost');
+    expect(useImStore.getState().messagesByRoom.size).toBeGreaterThan(0);
+    expect(useImStore.getState().currentWorkspaceId).toBe('ws-a');
+
+    // 切换到 workspace B：旧 workspace 的房间和消息应清空
+    mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_B);
+    await useImStore.getState().loadRooms('ws-b');
+    expect(useImStore.getState().rooms).toEqual(MOCK_ROOMS_B);
+    expect(useImStore.getState().activeRoomId).toBe('!b1:localhost');
+    // 旧 workspace 房间的消息缓存应已清除
+    expect(useImStore.getState().messagesByRoom.has('!a1:localhost')).toBe(false);
+    expect(useImStore.getState().messagesByRoom.has('!a2:localhost')).toBe(false);
+    expect(useImStore.getState().currentWorkspaceId).toBe('ws-b');
+  });
+
+  it('同一 workspace 重复 loadRooms 不重置状态（保留当前选中房间）', async () => {
+    mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_A);
+    await useImStore.getState().loadRooms('ws-a');
+    await useImStore.getState().selectRoom('!a2:localhost');
+    expect(useImStore.getState().activeRoomId).toBe('!a2:localhost');
+
+    // 同 workspace 再 load：activeRoomId 保持选中（不退回首条）
+    await useImStore.getState().loadRooms('ws-a');
+    expect(useImStore.getState().activeRoomId).toBe('!a2:localhost');
   });
 });

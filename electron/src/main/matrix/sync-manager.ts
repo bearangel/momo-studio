@@ -16,6 +16,7 @@ import { createMatrixClient } from './client';
 import { startConduit } from '../conduit/manager';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
+import { getWorkspace } from '../workspace/crud';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE } from '../agent/dispatch';
 
 /** 主进程推送到 renderer 的消息载荷（与 renderer ImMessage 结构一致） */
@@ -215,6 +216,56 @@ export function getJoinedRooms(): RoomInfoPayload[] {
       const createEvent = room.currentState.getStateEvents('m.room.create', '');
       const roomType = createEvent?.getContent()?.type as string | undefined;
       return roomType !== 'm.space';
+    })
+    .map((room) => {
+      const name = room.name || room.roomId;
+      const isSystem = isSystemRoom(room, name);
+      return {
+        roomId: room.roomId,
+        name: isSystem ? '⚙️ 系统通知' : name,
+        isSystem,
+      };
+    })
+    .sort((a, b) => {
+      if (a.isSystem && !b.isSystem) return 1;
+      if (!a.isSystem && b.isSystem) return -1;
+      return 0;
+    });
+}
+
+/**
+ * 获取指定 workspace 范围内的房间：该 workspace 的 Matrix Space 子房间 + 团队群 +
+ * 系统通知房间（系统通知对所有 workspace 全局可见）。workspaceId 缺省时返回全部已加入房间。
+ */
+export function getRoomsForWorkspace(workspaceId?: string): RoomInfoPayload[] {
+  if (!client) return [];
+  if (!workspaceId) return getJoinedRooms();
+
+  const ws = getWorkspace(workspaceId);
+  if (!ws) return [];
+
+  // 收集本 workspace 的 Space 子房间 ID + 团队群
+  const allowedRoomIds = new Set<string>();
+  const spaceRoom = client.getRoom(ws.matrixSpaceId);
+  if (spaceRoom) {
+    const childEvents = spaceRoom.currentState.getStateEvents('m.space.child');
+    for (const evt of childEvents) {
+      const stateKey = evt.getStateKey();
+      if (stateKey) allowedRoomIds.add(stateKey);
+    }
+  }
+  if (ws.teamRoomId) allowedRoomIds.add(ws.teamRoomId);
+
+  return client.getRooms()
+    .filter((room) => {
+      const state = room.getMyMembership();
+      if (state !== 'join') return false;
+      const createEvent = room.currentState.getStateEvents('m.room.create', '');
+      const roomType = createEvent?.getContent()?.type as string | undefined;
+      if (roomType === 'm.space') return false;
+      const name = room.name || room.roomId;
+      // 系统通知房间全局可见；其余房间必须属于本 workspace
+      return isSystemRoom(room, name) || allowedRoomIds.has(room.roomId);
     })
     .map((room) => {
       const name = room.name || room.roomId;

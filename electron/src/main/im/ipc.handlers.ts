@@ -10,7 +10,7 @@ import {
   startSyncFromSession,
   sendMessage,
   sendMessageWithMentions,
-  getJoinedRooms,
+  getRoomsForWorkspace,
   getRoomMessages,
 } from '../matrix/sync-manager';
 
@@ -33,9 +33,9 @@ export function registerImHandlers(): void {
     await sendMessageWithMentions(roomId, body, userIds);
   });
 
-  // 获取已加入的房间列表（含房间名）
-  ipcMain.handle('im:getRooms', async () => {
-    return getJoinedRooms();
+  // 获取已加入的房间列表（含房间名）。workspaceId 提供时只返回该 workspace 范围内的房间。
+  ipcMain.handle('im:getRooms', async (_evt, workspaceId?: string) => {
+    return getRoomsForWorkspace(workspaceId);
   });
 
   // 获取指定 room 的历史消息

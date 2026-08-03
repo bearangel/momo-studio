@@ -17,6 +17,7 @@ export function RoomList() {
   const refreshRoomList = useImStore((s) => s.refreshRoomList);
   const loading = useImStore((s) => s.loading);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
   // 新建房间对话框状态 + 邀请候选（当前 workspace 内启用的 agent bot）
   const [createOpen, setCreateOpen] = useState(false);
@@ -56,8 +57,9 @@ export function RoomList() {
   };
 
   useEffect(() => {
-    void loadRooms();
-  }, [loadRooms]);
+    // 切换 workspace 时按当前 workspace 过滤房间；首次加载若 workspace 尚未就绪则拉全部
+    void loadRooms(activeWorkspaceId ?? undefined);
+  }, [loadRooms, activeWorkspaceId]);
 
   if (loading && rooms.length === 0) {
     return (

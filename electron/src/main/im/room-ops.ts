@@ -11,13 +11,15 @@ import { logger } from '../logger';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
 import { getSyncingClient } from '../matrix/sync-manager';
 import { createMatrixClient } from '../matrix/client';
-import { listWorkspaces } from '../workspace/crud';
+import { getWorkspace, listWorkspaces } from '../workspace/crud';
 import { getSecret } from '../storage/keychain';
 
 export interface CreateRoomInput {
   name: string;
   isDirect: boolean;
   inviteUserIds: string[];
+  /** 把新建房间加入此 workspace 的 Matrix Space（让房间在该 workspace 内可见） */
+  workspaceId?: string;
 }
 
 export interface RoomMemberInfo {
@@ -44,6 +46,34 @@ export async function createRoom(input: CreateRoomInput): Promise<{ roomId: stri
     is_direct: input.isDirect,
   });
   const roomId = (resp as unknown as { room_id: string }).room_id;
+
+  // 把新建房间加入当前 workspace 的 Space，使其在该 workspace 内可见。
+  // 用 sendStateEvent 发 m.space.child：stateKey = 子房间 ID，content = { via }。
+  if (input.workspaceId) {
+    const ws = getWorkspace(input.workspaceId);
+    if (ws) {
+      try {
+        await client.sendStateEvent(
+          ws.matrixSpaceId,
+          'm.space.child',
+          { via: [client.getDomain() ?? 'localhost'] },
+          roomId,
+        );
+        logger.info('房间已加入 workspace Space', {
+          roomId,
+          workspaceId: input.workspaceId,
+          spaceId: ws.matrixSpaceId,
+        });
+      } catch (err) {
+        logger.warn('加入 Space 失败（房间已创建）', {
+          roomId,
+          workspaceId: input.workspaceId,
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
+
   logger.info('房间已创建', { name: input.name, roomId, isDirect: input.isDirect });
   return { roomId };
 }

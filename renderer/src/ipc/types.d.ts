@@ -337,9 +337,16 @@ export interface ApiSurface {
     startSync(): Promise<void>;
     send(roomId: string, body: string): Promise<void>;
     sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
-    getRooms(): Promise<ImRoomInfo[]>;
+    /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
+    getRooms(workspaceId?: string): Promise<ImRoomInfo[]>;
     getMessages(roomId: string): Promise<ImMessage[]>;
-    createRoom(input: { name: string; isDirect: boolean; inviteUserIds: string[] }): Promise<{ roomId: string }>;
+    createRoom(input: {
+      name: string;
+      isDirect: boolean;
+      inviteUserIds: string[];
+      /** 把新建房间加入此 workspace 的 Space（让其在此 workspace 内可见） */
+      workspaceId?: string;
+    }): Promise<{ roomId: string }>;
     renameRoom(roomId: string, name: string): Promise<{ ok: boolean }>;
     dissolveRoom(roomId: string): Promise<{ dissolved: boolean }>;
     getMembers(roomId: string): Promise<RoomMember[]>;
