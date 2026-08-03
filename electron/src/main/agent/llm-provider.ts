@@ -124,6 +124,44 @@ function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
   return { role: m.role, content: m.content };
 }
 
+/**
+ * 把统一 LLMMessage 映射为 Anthropic 的 messages 元素格式。
+ * - tool 角色 → user + tool_result content block
+ * - assistant + toolCalls → assistant + content 数组（text + tool_use blocks）
+ * - 其它 → 直接 role + content
+ *
+ * 提取为模块级函数，chat() 和 chatStream() 共用，避免流式路径丢失 toolCalls（M5 修复）。
+ */
+function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
+  if (m.role === 'tool') {
+    return {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: m.toolCallId,
+          content: m.content,
+        },
+      ],
+    };
+  }
+  if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+    return {
+      role: 'assistant',
+      content: [
+        ...(m.content ? [{ type: 'text', text: m.content }] : []),
+        ...m.toolCalls.map((tc) => ({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.name,
+          input: tc.arguments,
+        })),
+      ],
+    };
+  }
+  return { role: m.role, content: m.content };
+}
+
 /** 统一的 LLM provider 工厂。
  *  platform 显式传入时优先用；缺省时按 baseUrl 自动检测（OpenAI 兼容为默认）。 */
 export function createLLMProvider(
@@ -227,7 +265,7 @@ class AnthropicProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model: this.model,
       max_tokens: 4096,
-      messages: conversationMessages.map((m) => this.toAnthropicMessage(m)),
+      messages: conversationMessages.map((m) => toAnthropicMessage(m)),
     };
     if (systemMsg) {
       body.system = systemMsg.content;
@@ -279,33 +317,7 @@ class AnthropicProvider implements LLMProvider {
 
   /** 把统一 LLMMessage 映射为 Anthropic 的 messages 元素格式（tool_result 用 user 角色） */
   private toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
-    if (m.role === 'tool') {
-      return {
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: m.toolCallId,
-            content: m.content,
-          },
-        ],
-      };
-    }
-    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-      return {
-        role: 'assistant',
-        content: [
-          ...(m.content ? [{ type: 'text', text: m.content }] : []),
-          ...m.toolCalls.map((tc) => ({
-            type: 'tool_use',
-            id: tc.id,
-            name: tc.name,
-            input: tc.arguments,
-          })),
-        ],
-      };
-    }
-    return { role: m.role, content: m.content };
+    return toAnthropicMessage(m);
   }
 
   async *chatStream(
@@ -485,10 +497,7 @@ async function* chatStreamAnthropic(
     stream: true,
     messages: messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
-      })),
+      .map(toAnthropicMessage),
   };
   const systemMsg = messages.find((m) => m.role === 'system');
   if (systemMsg) body.system = systemMsg.content;

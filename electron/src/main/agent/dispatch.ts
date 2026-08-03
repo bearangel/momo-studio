@@ -13,6 +13,8 @@ export interface DispatchContent {
   dispatch_from: string;
   dispatch_to: string;
   deadline_ms?: number;
+  /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
+  tool_budget?: number;
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -21,6 +23,8 @@ export interface TaskReplyContent {
   task_id: string;
   status: 'in_progress' | 'completed' | 'failed' | 'needs_input';
   progress_pct?: number;
+  /** v1.4：子 agent 报告本任务使用的工具调用次数 */
+  tool_calls_used?: number;
 }
 
 export const DISPATCH_EVENT_TYPE = 'io.momo-studio.dispatch';
@@ -32,6 +36,8 @@ export function buildDispatchMessage(opts: {
   fromBotUserId: string;
   toBotUserId: string;
   deadlineMs?: number;
+  /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
+  toolBudget?: number;
 }): { eventType: typeof DISPATCH_EVENT_TYPE; content: DispatchContent } {
   return {
     eventType: DISPATCH_EVENT_TYPE,
@@ -41,6 +47,7 @@ export function buildDispatchMessage(opts: {
       dispatch_from: opts.fromBotUserId,
       dispatch_to: opts.toBotUserId,
       deadline_ms: opts.deadlineMs,
+      tool_budget: opts.toolBudget,
     },
   };
 }
@@ -51,6 +58,8 @@ export function buildTaskReply(opts: {
   taskId: string;
   status: TaskReplyContent['status'];
   progressPct?: number;
+  /** v1.4：子 agent 报告本任务使用的工具调用次数 */
+  toolCallsUsed?: number;
 }): { eventType: typeof TASK_REPLY_EVENT_TYPE; content: TaskReplyContent } {
   return {
     eventType: TASK_REPLY_EVENT_TYPE,
@@ -59,6 +68,7 @@ export function buildTaskReply(opts: {
       task_id: opts.taskId,
       status: opts.status,
       progress_pct: opts.progressPct,
+      tool_calls_used: opts.toolCallsUsed,
     },
   };
 }
@@ -73,6 +83,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
     dispatch_from: content.dispatch_from as string,
     dispatch_to: content.dispatch_to as string,
     deadline_ms: content.deadline_ms as number | undefined,
+    tool_budget: content.tool_budget as number | undefined,
   };
 }
 
@@ -85,5 +96,6 @@ export function parseTaskReply(content: Record<string, unknown>): TaskReplyConte
     task_id: content.task_id,
     status: content.status as TaskReplyContent['status'],
     progress_pct: content.progress_pct as number | undefined,
+    tool_calls_used: content.tool_calls_used as number | undefined,
   };
 }

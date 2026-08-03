@@ -34,6 +34,7 @@ import {
   type MatrixEvent,
   type Room,
 } from 'matrix-js-sdk';
+import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { logToolCall } from './tool-audit';
@@ -48,6 +49,7 @@ import {
 } from './builtin-tools';
 import { SkillRegistry } from '../skill/registry';
 import type { McpToolInfo } from '../mcp/types';
+import { sendStreamChunk } from './stream-chunk';
 import {
   buildDispatchMessage,
   buildTaskReply,
@@ -89,7 +91,7 @@ const COORDINATOR_AUTO_RECEPTION_HINT = `[你是本群的协调 agent。这条�
 - 需要专项能力时用 dispatch:<子agent> 工具把子任务派给合适的子 agent，等其回传结果后汇总回复。]`;
 
 /** runtime-manager 通过 AGENT_CONFIG 传入的完整配置 */
-interface RuntimeConfig {
+export interface RuntimeConfig {
   botUserId: string;
   botAccessToken: string;
   homeserverUrl: string;
@@ -117,10 +119,16 @@ interface RuntimeConfig {
   // === v1.1 M2 协调 agent ===
   isCoordinator: boolean;
   devMode: boolean;
+  // === v1.4 流式 + 工具预算 ===
+  /** 工具调用上限。-1=无限, 0=禁用, N=上限。由 handleEvent/handleDispatch 通过 IPC 解析后覆盖 */
+  maxToolCalls: number;
 }
 
-/** 工具调用循环上限，防止 LLM 无限调用工具导致子进程卡死 */
-const MAX_TOOL_ROUNDS = 10;
+/** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
+const DEFAULT_MAX_TOOL_CALLS = 10;
+
+/** resolveMaxToolCalls IPC 请求的超时时间（毫秒），超时后回退到 DEFAULT_MAX_TOOL_CALLS */
+const RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS = 5_000;
 
 /** 加载到上下文中的最近历史消息条数 */
 const HISTORY_LIMIT = 10;
@@ -138,7 +146,7 @@ const MCP_CALL_TIMEOUT_MS = 30_000;
  * 把 SkillRegistry / 工具列表 / system prompt 等可复用状态集中管理，
  * 避免每条消息都重新发现工具或重新注册 skill。
  */
-interface RuntimeContext {
+export interface RuntimeContext {
   wsFs: WorkspaceFS;
   skillRegistry: SkillRegistry;
   tools: LLMToolDef[];
@@ -234,6 +242,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     // v1.1 M2：缺省/类型不符时按"非协调"处理（旧配置向后兼容）
     isCoordinator: typeof isCoordinator === 'boolean' ? isCoordinator : false,
     devMode: typeof devMode === 'boolean' ? devMode : false,
+    // v1.4：默认 10，由 handleEvent/handleDispatch 通过 IPC 解析后覆盖
+    maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : 10,
   };
 }
 
@@ -467,14 +477,9 @@ async function handleEvent(
       : body;
 
   try {
-    const reply = await runChatLoop(client, roomId, effectiveBody, config, ctx);
-    trace('→ 回复', { room: roomId.slice(0, 12), body: `${reply.length}字` });
-    await client.sendEvent(
-      roomId,
-      'm.room.message',
-      { msgtype: 'm.text', body: reply },
-      '',
-    );
+    const maxToolCalls = await resolveMaxToolCalls(roomId);
+    const configWithBudget: RuntimeConfig = { ...config, maxToolCalls };
+    await runChatLoop(client, roomId, effectiveBody, configWithBudget, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`chat loop 异常: ${msg}\n`);
@@ -517,12 +522,20 @@ async function handleDispatch(
   trace('→ 发送 in_progress');
 
   try {
-    const result = await runChatLoop(client, roomId, dispatch.body, config, ctx);
-    trace('→ 发送 completed', { body: `${result.length}字` });
+    // 预算优先级：dispatch 消息携带的 tool_budget > 房间级 IPC 解析
+    const maxToolCalls =
+      dispatch.tool_budget !== undefined
+        ? dispatch.tool_budget
+        : await resolveMaxToolCalls(roomId);
+    const configWithBudget: RuntimeConfig = { ...config, maxToolCalls };
+    const stats: RunChatLoopStats = { toolCallsUsed: 0 };
+    const result = await runChatLoop(client, roomId, dispatch.body, configWithBudget, ctx, stats);
+    trace('→ 发送 completed', { body: `${result.length}字`, tools: stats.toolCallsUsed });
     const completed = buildTaskReply({
       body: result,
       taskId: dispatch.task_id,
       status: 'completed',
+      toolCallsUsed: stats.toolCallsUsed,
     });
     await client.sendEvent(roomId, completed.eventType, completed.content, '');
   } catch (err) {
@@ -539,62 +552,257 @@ async function handleDispatch(
   }
 }
 
+/** runChatLoop 的统计输出（handleDispatch 据此上报 task_reply.tool_calls_used） */
+export interface RunChatLoopStats {
+  toolCallsUsed: number;
+}
+
+/** 持久化到 Matrix 消息的工具调用记录（renderer 渲染卡片用） */
+interface ToolCallRecord {
+  name: string;
+  args: Record<string, unknown>;
+  result: string;
+  success: boolean;
+}
+
 /**
- * 完整 chat loop：组装上下文 → 循环调用 LLM（含工具执行）→ 返回最终文本。
- * 注意：本函数只返回最终文本，不负责发送（由调用方决定用 m.room.message 还是 task_reply）。
+ * 完整 chat loop（v1.4 流式版）：组装上下文 → 循环调用 chatStream →
+ * 逐 chunk 通过 process.send 推送到 renderer → 最终发送 m.room.message 持久化。
+ *
+ * 返回值：最终文本（handleDispatch 据此构建 task_reply body）。
+ * 副作用：发送流式 chunk + 最终 m.room.message（含 thinking / tool_calls 元数据）。
+ *
+ * 预算管理：maxToolCalls=-1 映射 Infinity（无限），0 禁用工具（传 undefined 给 LLM），
+ * N>0 递减，耗尽时发 end(budget_exhausted)。
+ * 中断支持：监听 process('message') 的 abort 指令，触发 AbortController.abort()。
  */
-async function runChatLoop(
+export async function runChatLoop(
   client: MatrixClient,
   roomId: string,
   currentBody: string,
   config: RuntimeConfig,
   ctx: RuntimeContext,
+  stats?: RunChatLoopStats,
 ): Promise<string> {
   const llm = createLLMProvider(
     { model: config.modelName, baseUrl: config.modelBaseUrl },
     config.llmApiKey,
   );
 
+  const budgetHint = formatBudgetHint(config.maxToolCalls);
+  const systemContent = budgetHint
+    ? ctx.systemPrompt + budgetHint
+    : ctx.systemPrompt;
+
   const messages: LLMMessage[] = [
-    { role: 'system', content: ctx.systemPrompt },
+    { role: 'system', content: systemContent },
     ...loadRecentHistory(client, roomId, config),
     { role: 'user', content: currentBody },
   ];
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: ctx.tools.length });
-    const startMs = Date.now();
-    const response = await llm.chat(messages, ctx.tools);
-    trace(`← LLM #${round + 1}`, { ms: Date.now() - startMs, finish: response.finishReason, calls: response.toolCalls.length });
+  const streamSessionId = randomUUID();
+  const maxToolCalls = config.maxToolCalls;
+  let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
+  let toolCallCount = 0;
+  const toolCallHistory: ToolCallRecord[] = [];
 
-    if (response.toolCalls.length > 0) {
-      messages.push({
-        role: 'assistant',
-        content: response.content,
-        toolCalls: response.toolCalls,
-      });
-      for (const tc of response.toolCalls) {
-        try {
-          const result = await executeTool(tc, ctx, client, config);
-          messages.push({ role: 'tool', content: result, toolCallId: tc.id });
-        } catch (err) {
-          // 工具执行失败也作为 tool result 回传，让 LLM 看到错误并自我纠正
-          const errMsg = err instanceof Error ? err.message : String(err);
-          messages.push({
-            role: 'tool',
-            content: `工具执行失败: ${errMsg}`,
-            toolCallId: tc.id,
-          });
+  const abortController = new AbortController();
+  const abortListener = (msg: unknown): void => {
+    const m = msg as { type?: string; streamSessionId?: string };
+    if (m.type === 'abort' && m.streamSessionId === streamSessionId) {
+      abortController.abort();
+    }
+  };
+  process.on('message', abortListener);
+
+  sendStreamChunk({
+    type: 'start',
+    streamSessionId,
+    roomId,
+    botUserId: config.botUserId,
+  });
+
+  for (let round = 0; ; round++) {
+    const tools = budgetRemaining <= 0 ? undefined : ctx.tools;
+    trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: tools?.length ?? 0 });
+
+    let accumulatedText = '';
+    let accumulatedThinking = '';
+    const toolCalls: LLMToolCall[] = [];
+    let finishReason: 'stop' | 'tool_use' = 'stop';
+
+    try {
+      for await (const delta of llm.chatStream(messages, tools, abortController.signal)) {
+        switch (delta.type) {
+          case 'thinking':
+            accumulatedThinking += delta.content;
+            sendStreamChunk({ type: 'thinking', streamSessionId, delta: delta.content });
+            break;
+          case 'text':
+            accumulatedText += delta.content;
+            sendStreamChunk({ type: 'text', streamSessionId, delta: delta.content });
+            break;
+          case 'tool_use':
+            toolCalls.push(delta.toolCall);
+            break;
+          case 'done':
+            finishReason = delta.finishReason;
+            break;
         }
       }
-      continue;
+    } catch (err) {
+      process.off('message', abortListener);
+      if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
+        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+        if (stats) stats.toolCallsUsed = toolCallCount;
+        return accumulatedText;
+      }
+      sendStreamChunk({
+        type: 'end',
+        streamSessionId,
+        finishReason: 'error',
+        error: (err as Error).message,
+      });
+      if (stats) stats.toolCallsUsed = toolCallCount;
+      throw err;
     }
 
-    return response.content.trim() || '(空回复)';
-  }
+    if (finishReason === 'stop' || toolCalls.length === 0) {
+      process.off('message', abortListener);
+      const finalText = accumulatedText.trim() || '(空回复)';
+      await sendFinalMessage(
+        client,
+        roomId,
+        streamSessionId,
+        finalText,
+        accumulatedThinking,
+        toolCallHistory,
+      );
+      sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+      if (stats) stats.toolCallsUsed = toolCallCount;
+      return finalText;
+    }
 
-  process.stderr.write(`chat loop 达到 ${MAX_TOOL_ROUNDS} 轮上限仍未结束\n`);
-  return `⚠️ 工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，已停止`;
+    messages.push({ role: 'assistant', content: accumulatedText, toolCalls });
+
+    for (const tc of toolCalls) {
+      if (budgetRemaining <= 0) {
+        process.off('message', abortListener);
+        const finalText = accumulatedText.trim() || '(工具预算耗尽)';
+        await sendFinalMessage(
+          client,
+          roomId,
+          streamSessionId,
+          finalText,
+          accumulatedThinking,
+          toolCallHistory,
+        );
+        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
+        if (stats) stats.toolCallsUsed = toolCallCount;
+        return finalText;
+      }
+
+      sendStreamChunk({
+        type: 'tool_call',
+        streamSessionId,
+        toolName: tc.name,
+        args: tc.arguments,
+      });
+
+      // dispatch 工具传剩余预算（减去本次 dispatch 本身占用的 1 次）
+      let dispatchToolBudget: number | undefined;
+      if (tc.name.startsWith('dispatch:')) {
+        dispatchToolBudget =
+          budgetRemaining === Infinity ? -1 : Math.max(0, budgetRemaining - 1);
+      }
+
+      let result: string;
+      let success = true;
+      try {
+        result = await executeTool(tc, ctx, client, config, dispatchToolBudget);
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          toolName: tc.name,
+          result,
+          success: true,
+        });
+      } catch (err) {
+        success = false;
+        result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          toolName: tc.name,
+          result,
+          success: false,
+        });
+      }
+
+      toolCallHistory.push({ name: tc.name, args: tc.arguments, result, success });
+      toolCallCount++;
+      budgetRemaining--;
+
+      messages.push({ role: 'tool', content: result, toolCallId: tc.id });
+    }
+  }
+}
+
+/**
+ * 格式化预算提示，注入 system prompt 末尾。
+ * -1（无限）→ 不提示；0 → 禁用；N → 提示上限。
+ */
+export function formatBudgetHint(maxToolCalls: number): string {
+  if (maxToolCalls === -1) return '';
+  if (maxToolCalls === 0) return '\n\n## 工具调用预算\n本任务禁止使用任何工具。';
+  return `\n\n## 工具调用预算\n本任务工具调用上限：${maxToolCalls} 次（所有参与 agent 共享此预算）。请合理规划工具使用。`;
+}
+
+/**
+ * 发送最终 Matrix m.room.message（含持久化元数据）。
+ * renderer 据此渲染 thinking 折叠区 + 工具调用卡片 + 正文。
+ */
+async function sendFinalMessage(
+  client: MatrixClient,
+  roomId: string,
+  streamSessionId: string,
+  text: string,
+  thinking: string,
+  toolCalls: ToolCallRecord[],
+): Promise<void> {
+  const content: Record<string, unknown> = {
+    msgtype: 'm.text',
+    body: text,
+    'io.momo-studio.stream_session_id': streamSessionId,
+  };
+  if (thinking) content['io.momo-studio.thinking'] = thinking;
+  if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
+  await client.sendEvent(roomId, 'm.room.message', content, '');
+}
+
+/**
+ * 通过 IPC 向主进程请求某房间的有效 maxToolCalls。
+ * 主进程的 handler 在 Task 4 实现；在此之前超时回退到 DEFAULT_MAX_TOOL_CALLS。
+ */
+async function resolveMaxToolCalls(roomId: string): Promise<number> {
+  if (!process.send) return DEFAULT_MAX_TOOL_CALLS;
+  return new Promise<number>((resolve) => {
+    const id = randomUUID();
+    const timer = setTimeout(() => {
+      process.off('message', handler);
+      resolve(DEFAULT_MAX_TOOL_CALLS);
+    }, RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS);
+    const handler = (msg: unknown): void => {
+      const m = msg as { type?: string; id?: string; maxToolCalls?: number };
+      if (m.type === 'settings:resolved' && m.id === id) {
+        clearTimeout(timer);
+        process.off('message', handler);
+        resolve(typeof m.maxToolCalls === 'number' ? m.maxToolCalls : DEFAULT_MAX_TOOL_CALLS);
+      }
+    };
+    process.on('message', handler);
+    process.send?.({ type: 'settings:resolveMaxToolCalls', id, roomId });
+  });
 }
 
 /**
@@ -606,13 +814,14 @@ async function executeTool(
   ctx: RuntimeContext,
   client: MatrixClient,
   config: RuntimeConfig,
+  toolBudget?: number,
 ): Promise<string> {
   const startTime = Date.now();
   let success = true;
   let output = '';
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, client, config);
+    output = await doExecuteTool(call, ctx, client, config, toolBudget);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -640,6 +849,7 @@ async function doExecuteTool(
   ctx: RuntimeContext,
   client: MatrixClient,
   config: RuntimeConfig,
+  toolBudget?: number,
 ): Promise<string> {
   const name = call.name;
 
@@ -661,7 +871,7 @@ async function doExecuteTool(
   if (name.startsWith('dispatch:')) {
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
-    return executeDispatch(subSlug, task, client, config);
+    return executeDispatch(subSlug, task, client, config, toolBudget);
   }
   if (name.startsWith('mcp:')) {
     // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接
@@ -707,17 +917,19 @@ async function executeDispatch(
   task: string,
   client: MatrixClient,
   config: RuntimeConfig,
+  toolBudget?: number,
 ): Promise<string> {
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
 
-  trace('→ dispatch', { target: subSlug, task: `${task.length}字` });
+  trace('→ dispatch', { target: subSlug, task: `${task.length}字`, budget: toolBudget });
 
   const dispatch = buildDispatchMessage({
     body: task,
     fromBotUserId: config.botUserId,
     toBotUserId: sub.botUserId,
     deadlineMs: DISPATCH_TOTAL_TIMEOUT_MS,
+    toolBudget,
   });
 
   // 先注册 pending，再发送——防竞态
