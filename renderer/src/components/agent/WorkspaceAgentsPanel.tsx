@@ -16,7 +16,7 @@ import type { AgentAssignment } from '../../ipc/types';
 export function WorkspaceAgentsPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const setCoordinator = useWorkspaceStore((s) => s.setCoordinator);
-  const { assignments, definitions, running, loadAssignments, stopAgent } = useAgentStore();
+  const { assignments, definitions, running, loadAssignments, stopAgent, startAgent } = useAgentStore();
 
   const [addOpen, setAddOpen] = useState(false);
   const [roleEditing, setRoleEditing] = useState<AgentAssignment | null>(null);
@@ -51,6 +51,15 @@ export function WorkspaceAgentsPanel() {
     if (workspace) await loadAssignments(workspace.id);
   };
 
+  const handleStart = (a: AgentAssignment): void => {
+    if (!workspace?.teamRoomId) return;
+    void startAgent(a, workspace.id, workspace.teamRoomId);
+  };
+
+  const handleStop = (a: AgentAssignment): void => {
+    void stopAgent(a.instanceId);
+  };
+
   if (viewMode === 'orchestrate') {
     return <AgentOrchestrator onBack={() => setViewMode('list')} />;
   }
@@ -74,7 +83,7 @@ export function WorkspaceAgentsPanel() {
               <AssignmentRow
                 key={a.instanceId} a={a} defMap={defMap} running={running}
                 workspace={workspace} setCoordinator={setCoordinator}
-                onEditRole={setRoleEditing} onEditKey={setKeyEditing} onRemove={handleRemove}
+                onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
               />
             ))}
           </Section>
@@ -87,13 +96,13 @@ export function WorkspaceAgentsPanel() {
                 <AssignmentRow
                   a={main} defMap={defMap} running={running}
                   workspace={workspace} setCoordinator={setCoordinator}
-                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onRemove={handleRemove}
+                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                 />
                 {subsOf(main.instanceId).map((sub) => (
                   <div key={sub.instanceId} className="pl-6">
                     <AssignmentRow
                       a={sub} defMap={defMap} running={running}
-                      onEditRole={setRoleEditing} onEditKey={setKeyEditing} onRemove={handleRemove}
+                      onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                     />
                   </div>
                 ))}
@@ -108,7 +117,7 @@ export function WorkspaceAgentsPanel() {
               <div key={sub.instanceId} className="border border-amber-500/30 rounded p-2 bg-amber-500/5">
                 <AssignmentRow
                   a={sub} defMap={defMap} running={running}
-                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onRemove={handleRemove}
+                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                 />
                 <div className="text-xs text-amber-500 mt-1 pl-8">
                   建议为此 agent 选择父主 agent，或改为独立角色
@@ -155,8 +164,10 @@ interface RowProps {
   a: AgentAssignment;
   defMap: Map<string, { name: string; iconEmoji: string }>;
   running: Record<string, boolean>;
-  workspace?: { id: string; coordinatorInstanceId: string | null } | null;
+  workspace?: { id: string; teamRoomId: string; coordinatorInstanceId: string | null } | null;
   setCoordinator?: (wsId: string, instanceId: string) => Promise<void>;
+  onStart?: (a: AgentAssignment) => void;
+  onStop?: (a: AgentAssignment) => void;
   onEditRole: (a: AgentAssignment) => void;
   onEditKey: (a: AgentAssignment) => void;
   onRemove: (a: AgentAssignment) => Promise<void>;
@@ -164,6 +175,7 @@ interface RowProps {
 
 function AssignmentRow({
   a, defMap, running, workspace, setCoordinator,
+  onStart, onStop,
   onEditRole, onEditKey, onRemove,
 }: RowProps) {
   const def = defMap.get(a.agentDefinitionId);
@@ -182,6 +194,10 @@ function AssignmentRow({
         {isRunning ? '▶ 运行中' : '⏸ 已停止'}
       </span>
       <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
+        {isRunning
+          ? onStop && <button type="button" onClick={() => onStop(a)} className="text-xs text-neutral-400 hover:text-red-400">停止</button>
+          : onStart && <button type="button" onClick={() => onStart(a)} className="text-xs text-neutral-400 hover:text-green-400">启动</button>
+        }
         {setCoordinator && workspace && !isCoord && (
           <button
             type="button"

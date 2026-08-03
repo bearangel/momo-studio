@@ -47,6 +47,11 @@ interface AgentState {
   ) => Promise<void>;
   updateAssignmentApiKey: (instanceId: string, apiKey: string | null) => Promise<void>;
   stopAgent: (instanceId: string) => Promise<void>;
+  startAgent: (
+    assignment: AgentAssignment,
+    workspaceId: string,
+    teamRoomId: string,
+  ) => Promise<void>;
   reset: () => void;
 }
 
@@ -182,6 +187,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       await ipc.agent.stop(instanceId);
       set((state) => ({
         running: { ...state.running, [instanceId]: false },
+      }));
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  startAgent: async (assignment, workspaceId, teamRoomId) => {
+    set({ error: null });
+    try {
+      await ipc.agent.start({ assignment, workspaceId, teamRoomId });
+      set((state) => ({
+        running: { ...state.running, [assignment.instanceId]: true },
       }));
     } catch (err) {
       set({ error: (err as Error).message });
