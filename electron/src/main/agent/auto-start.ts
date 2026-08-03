@@ -2,16 +2,21 @@
 //
 // 应用启动时自动恢复已分配的 agent。
 // 读取所有 workspace 的 enabled agent assignment，
-// 从 keychain 恢复 API key 后 spawn runtime 子进程。
-// main agent 的 subAgents 由 buildSpawnOpts 从 DB 中的 definition parentAgentId 关系重建。
+// 从 keychain 恢复 API key + bot token 后 spawn runtime 子进程。
+//
+// v1.3 改造：
+//   - role 来自 assignment（不再从 def.type 推断）
+//   - subAgents 由 buildSpawnOpts 按 assignment.parent_instance_id 重建
+//   - apiKey 解析走 resolveApiKey（override ?? provider key）；def.modelProviderId=NULL 时跳过
+//   - 老的 llmApiKeyRef keychain key 仅作 fallback（向后兼容）
 
 import { getDb } from '../storage/db';
-import { getSecret } from '../storage/keychain';
 import { spawnAgent, isAgentRunning } from './runtime-manager';
-import { getAgentDefinition, listAssignments, llmApiKeyRef } from './crud';
+import { getAgentDefinition, listSubAssignments } from './crud';
 import { getWorkspace } from '../workspace/crud';
-import { buildSpawnOpts } from './spawn-helpers';
+import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { logger } from '../logger';
+import type { AgentRole } from './types';
 
 interface AssignmentRow {
   instance_id: string;
@@ -19,6 +24,7 @@ interface AssignmentRow {
   agent_definition_id: string;
   bot_matrix_user_id: string;
   enabled: number;
+  role: string;
 }
 
 export async function autoStartAgents(): Promise<void> {
@@ -31,6 +37,7 @@ export async function autoStartAgents(): Promise<void> {
 
   let started = 0;
   let failed = 0;
+  let skipped = 0;
 
   for (const row of rows) {
     if (isAgentRunning(row.instance_id)) continue;
@@ -43,6 +50,15 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
+      // v1.3：def 未配置 provider 时跳过（强制用户重配）
+      if (!def.modelProviderId) {
+        logger.warn('Agent 定义未配置 modelProviderId，跳过自启动', {
+          slug: def.slug, instanceId: row.instance_id,
+        });
+        skipped++;
+        continue;
+      }
+
       const ws = getWorkspace(row.workspace_id);
       if (!ws) {
         logger.warn('Workspace 不存在，跳过', { wsId: row.workspace_id });
@@ -50,14 +66,9 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
-      const apiKey = await getSecret(llmApiKeyRef(row.instance_id));
-      if (!apiKey) {
-        logger.warn('Agent API key 丢失，跳过', { instanceId: row.instance_id });
-        failed++;
-        continue;
-      }
+      const apiKey = await resolveApiKey(row.instance_id, def.modelProviderId);
 
-      const token = await getSecret(`bot.${row.bot_matrix_user_id}.matrix_token`);
+      const token = await getBotToken(row.bot_matrix_user_id);
       if (!token) {
         logger.warn('Bot Matrix token 丢失，跳过', { botUserId: row.bot_matrix_user_id });
         failed++;
@@ -73,24 +84,23 @@ export async function autoStartAgents(): Promise<void> {
           teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
           ownerUserId: ws.ownerId,
           def,
+          role: row.role as AgentRole,
           botAccessToken: token,
           llmApiKey: apiKey,
           isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
         }),
       );
 
-      // main agent 的 sub 数量（日志用）
-      const subCount = def.type === 'main'
-        ? listAssignments(row.workspace_id).filter((a) => {
-            const subDef = getAgentDefinition(a.agentDefinitionId);
-            return subDef?.parentAgentId === def.id;
-          }).length
+      // main agent 的 sub 数量（日志用，按 assignment.parent_instance_id 查）
+      const subCount = row.role === 'main'
+        ? listSubAssignments(row.workspace_id, row.instance_id).length
         : 0;
 
       started++;
       logger.info('Agent 已自启动', {
         slug: def.slug,
         instanceId: row.instance_id,
+        role: row.role,
         subAgentCount: subCount,
       });
     } catch (err) {
@@ -102,5 +112,11 @@ export async function autoStartAgents(): Promise<void> {
     }
   }
 
-  logger.info('Agent 自启动完成', { started, failed, total: rows.length });
+  logger.info('Agent 自启动完成', { started, failed, skipped, total: rows.length });
+}
+
+/** 从 keychain 取 bot Matrix token（封装 helper，便于日志统一） */
+async function getBotToken(botUserId: string): Promise<string | null> {
+  const { getSecret } = await import('../storage/keychain');
+  return getSecret(`bot.${botUserId}.matrix_token`);
 }

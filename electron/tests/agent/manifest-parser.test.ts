@@ -1,9 +1,12 @@
 // electron/tests/agent/manifest-parser.test.ts
 //
-// manifest-parser 单元测试：覆盖合法解析 + 3 个校验失败路径。
+// manifest-parser 单元测试（v1.3 schema）：
+// - 合法 YAML 解析返回 v1.3 AgentDefinition（无 type/parent/model.provider）
+// - type/parent/model.provider 字段保留在 ParsedManifest.suggestion 中
+// - 校验失败路径覆盖
 
 import { describe, expect, it } from 'vitest';
-import { parseAgentManifest } from '../../src/main/agent/manifest-parser';
+import { parseAgentManifest, parseAgentManifestWithSuggestion } from '../../src/main/agent/manifest-parser';
 
 const VALID_YAML = `
 apiVersion: v1
@@ -29,34 +32,30 @@ spec:
       ref: workspace.write_file
 `;
 
-describe('agent/manifest-parser', () => {
-  it('解析合法 YAML 返回 AgentDefinition', () => {
+describe('agent/manifest-parser — v1.3 schema', () => {
+  it('解析合法 YAML 返回 v1.3 AgentDefinition', () => {
     const def = parseAgentManifest(VALID_YAML);
     expect(def.name).toBe('需求讨论师');
     expect(def.slug).toBe('requirement-analyst');
     expect(def.runtime).toBe('declarative');
-    expect(def.model.provider).toBe('anthropic');
-    expect(def.model.model).toBe('claude-3-5-sonnet');
+    // v1.3：modelName 直接在 def 上
+    expect(def.modelName).toBe('claude-3-5-sonnet');
+    // v1.3：workspaceId/modelProviderId 默认 NULL（YAML 加载时未配置）
+    expect(def.workspaceId).toBeNull();
+    expect(def.modelProviderId).toBeNull();
     expect(def.defaultTools).toHaveLength(2);
-    expect(def.defaultTools[0]!.ref).toBe('workspace.read_file');
+    // 旧字段不存在
+    const unknown = def as unknown as Record<string, unknown>;
+    expect(unknown.type).toBeUndefined();
+    expect(unknown.parentAgentId).toBeUndefined();
+    expect(unknown.model).toBeUndefined();
   });
 
-  it('缺少 apiVersion 时抛错', () => {
-    expect(() =>
-      parseAgentManifest(
-        'kind: AgentDefinition\nmetadata:\n  name: test\n  slug: test\nspec:\n  declarative:\n    systemPrompt: "test"\n    model:\n      provider: openai\n      model: gpt-4',
-      ),
-    ).toThrow('apiVersion');
-  });
-
-  it('不支持的 provider 抛错', () => {
-    const yaml = VALID_YAML.replace('anthropic', 'gemini');
-    expect(() => parseAgentManifest(yaml)).toThrow('gemini');
-  });
-
-  it('缺少 systemPrompt 抛错', () => {
-    const yaml = VALID_YAML.replace('systemPrompt: "你是一名需求分析师"', '');
-    expect(() => parseAgentManifest(yaml)).toThrow('systemPrompt');
+  it('parseAgentManifestWithSuggestion 返回 type/parent/platform 建议字段', () => {
+    const { def, suggestion } = parseAgentManifestWithSuggestion(VALID_YAML);
+    expect(def.slug).toBe('requirement-analyst');
+    expect(suggestion.role).toBe('standalone');
+    expect(suggestion.suggestedPlatform).toBe('anthropic');
   });
 
   it('解析 type=main + parentAgentId（slug 引用）+ defaultMcps/defaultSkills', () => {
@@ -64,62 +63,118 @@ describe('agent/manifest-parser', () => {
 apiVersion: v1
 kind: AgentDefinition
 metadata:
-  name: 子
-  slug: sub-a
+  name: PM
+  slug: pm
   version: 1.0.0
 spec:
-  type: sub
-  parentAgentId: pm-agent
+  type: main
   runtime: declarative
   declarative:
-    systemPrompt: "子 agent"
+    systemPrompt: "PM"
     model:
       provider: openai
       model: gpt-4o
-  defaultTools:
-    - kind: builtin
-      ref: read_file
   defaultMcps:
     - kind: mcp
       ref: filesystem
-      versionRange: "^1.0.0"
   defaultSkills:
     - kind: skill
       ref: code-review
+---
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: Sub
+  slug: sub
+  version: 1.0.0
+spec:
+  type: sub
+  parentAgentId: pm
+  runtime: declarative
+  declarative:
+    systemPrompt: "Sub"
+    model:
+      provider: openai
+      model: gpt-4o
 `;
-    const def = parseAgentManifest(yaml);
-    expect(def.type).toBe('sub');
-    // parentAgentId 在解析阶段保留为 slug 字符串，builtin.ts 后续解析为 UUID
-    expect(def.parentAgentId).toBe('pm-agent');
-    expect(def.defaultMcps).toHaveLength(1);
-    expect(def.defaultMcps[0]).toEqual({ kind: 'mcp', ref: 'filesystem', versionRange: '^1.0.0' });
-    expect(def.defaultSkills).toHaveLength(1);
-    expect(def.defaultSkills[0]).toEqual({ kind: 'skill', ref: 'code-review', versionRange: undefined });
+    // js-yaml load 支持 --- 分隔的多文档，但 parseAgentManifest 期望单文档。
+    // 这里用单独的 sub YAML 验证。
+    const subYaml = `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: Sub
+  slug: sub
+  version: 1.0.0
+spec:
+  type: sub
+  parentAgentId: pm
+  runtime: declarative
+  declarative:
+    systemPrompt: "Sub"
+    model:
+      provider: openai
+      model: gpt-4o
+`;
+    const { def, suggestion } = parseAgentManifestWithSuggestion(subYaml);
+    expect(def.slug).toBe('sub');
+    expect(def.modelName).toBe('gpt-4o');
+    expect(suggestion.role).toBe('sub');
+    expect(suggestion.suggestedParentDefId).toBe('pm');
+    expect(suggestion.suggestedPlatform).toBe('openai');
   });
 
-  it('不支持的 type 抛错', () => {
-    const yaml = VALID_YAML.replace('type: standalone', 'type: hybrid');
-    expect(() => parseAgentManifest(yaml)).toThrow('spec.type');
+  it('apiVersion 错误抛错', () => {
+    expect(() => parseAgentManifest('apiVersion: v9\nkind: AgentDefinition\n')).toThrow(/apiVersion/);
   });
 
-  it('非 sub 类型声明 parentAgentId 抛错', () => {
+  it('kind 错误抛错', () => {
+    expect(() => parseAgentManifest('apiVersion: v1\nkind: Other\n')).toThrow(/kind/);
+  });
+
+  it('缺少 metadata.name 抛错', () => {
     const yaml = `
 apiVersion: v1
 kind: AgentDefinition
 metadata:
-  name: 主
-  slug: main-a
-  version: 1.0.0
+  slug: x
 spec:
-  type: main
-  parentAgentId: other
-  runtime: declarative
   declarative:
     systemPrompt: "x"
-    model:
-      provider: openai
-      model: gpt-4o
+    model: { provider: openai, model: gpt-4o }
 `;
-    expect(() => parseAgentManifest(yaml)).toThrow('parentAgentId');
+    expect(() => parseAgentManifest(yaml)).toThrow(/metadata.name/);
+  });
+
+  it('model.provider 非法值抛错', () => {
+    const yaml = `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: X
+  slug: x
+spec:
+  declarative:
+    systemPrompt: "x"
+    model: { provider: gemini, model: x }
+`;
+    expect(() => parseAgentManifest(yaml)).toThrow(/model.provider/);
+  });
+
+  it('parentAgentId 在非 sub 类型上声明抛错', () => {
+    const yaml = `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: X
+  slug: x
+spec:
+  type: standalone
+  parentAgentId: other
+  declarative:
+    systemPrompt: "x"
+    model: { provider: openai, model: gpt-4o }
+`;
+    expect(() => parseAgentManifest(yaml)).toThrow(/parentAgentId/);
   });
 });

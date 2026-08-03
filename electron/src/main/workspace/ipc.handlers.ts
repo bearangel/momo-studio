@@ -17,8 +17,8 @@ import {
 import { createMatrixSpace, createRoomInSpace } from '../matrix/rooms';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
 import { stopAgent, spawnAgent, isAgentRunning } from '../agent/runtime-manager';
-import { getAgentDefinition, listAssignments, llmApiKeyRef } from '../agent/crud';
-import { buildSpawnOpts } from '../agent/spawn-helpers';
+import { getAgentDefinition, listAssignments } from '../agent/crud';
+import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
 import { getSecret } from '../storage/keychain';
 import type { CreateWorkspaceInput } from './types';
 
@@ -99,9 +99,11 @@ async function restartCoordinatorInstance(
 
   // I1 修复：先恢复 keychain，确认 apiKey + token 都在，再停止旧实例。
   // 否则若 key 丢失，agent 会停在已停止状态无法重启。
-  const apiKey = await getSecret(llmApiKeyRef(instanceId));
+  // v1.3：apiKey 走 resolveApiKey（override ?? provider key）；def.modelProviderId 必须已配置
+  if (!def.modelProviderId) return;
+  const apiKey = await resolveApiKey(instanceId, def.modelProviderId);
   const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
-  if (!apiKey || !token) return;
+  if (!token) return;
 
   stopAgent(instanceId);
 

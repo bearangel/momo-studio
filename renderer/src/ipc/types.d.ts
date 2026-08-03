@@ -299,47 +299,56 @@ export interface ApiSurface {
     rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
   };
   agent: {
-    /** 一键编排：注册 bot + 分配 + 邀请进团队群 + 存 API key + 启动 runtime */
+    /** v1.3：一键编排（带 role + parentInstanceId + apiKeyOverride） */
     addToWorkspace(input: AddToWorkspaceInput): Promise<AgentAssignment>;
-    /**
-     * 安装 main agent 并自动跟随注册其全部 sub agent（每个 agent 执行与
-     * addToWorkspace 等价的全套编排）。返回全部新建 assignment（首条为 main）。
-     */
+    /** v1.3：安装 main + 自动跟随 sub */
     assignMain(input: AssignMainInput): Promise<AgentAssignment[]>;
     createFromYaml(yaml: string): Promise<AgentDefinition>;
+    /** v1.3：scope + modelProviderId + modelName；不含 type/parent/modelProvider/modelBaseUrl */
     createCustom(input: {
       name: string;
       slug: string;
       description: string;
       systemPrompt: string;
-      modelProvider: string;
-      modelName: string;
-      modelBaseUrl?: string;
       iconEmoji?: string;
-      type?: 'standalone' | 'main' | 'sub';
-      parentAgentId?: string;
+      scope: 'global' | 'workspace';
+      modelProviderId: string;
+      modelName: string;
     }): Promise<AgentDefinition>;
-    list(): Promise<AgentDefinition[]>;
+    /** v1.3：可选 workspaceId 过滤 */
+    list(workspaceId?: string): Promise<AgentDefinition[]>;
     assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
     listAssignments(workspaceId: string): Promise<AgentAssignment[]>;
-    /** 重启已分配 agent（API key 从 keychain 恢复） */
     start(opts: StartAgentInput): Promise<{ instanceId: string }>;
     stop(instanceId: string): Promise<{ ok: boolean }>;
     removeAssignment(instanceId: string): Promise<{ ok: boolean }>;
     isRunning(instanceId: string): Promise<boolean>;
+    /** v1.3：scope + modelProviderId + modelName；不含 type/parent */
     updateDefinition(input: {
       id: string;
       name?: string;
       description?: string;
       systemPrompt?: string;
-      modelProvider?: string;
-      modelName?: string;
-      modelBaseUrl?: string;
       iconEmoji?: string;
-      type?: 'standalone' | 'main' | 'sub';
-      parentAgentId?: string;
+      scope?: 'global' | 'workspace';
+      modelProviderId?: string;
+      modelName?: string;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
-    updateApiKey(instanceId: string, apiKey: string): Promise<{ ok: boolean }>;
+    /** v1.3 新增：修改 assignment 的 role + parentInstanceId */
+    updateAssignmentRole(
+      instanceId: string,
+      role: AgentRole,
+      parentInstanceId?: string,
+    ): Promise<{ stoppedInstanceIds: string[] }>;
+    /** v1.3 新增：设置/清除 API key override（apiKey=null 清除） */
+    updateAssignmentApiKey(
+      instanceId: string,
+      apiKey: string | null,
+    ): Promise<{ ok: boolean }>;
+    /** v1.3 新增：删除自定义 def（builtin 不可删；级联清理 assignment） */
+    deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }>;
+    /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填） */
+    getBuiltinSuggestions(): Promise<BuiltinSuggestionMap>;
     onRuntimeChanged(callback: () => void): () => void;
   };
   provider: {

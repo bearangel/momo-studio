@@ -1,11 +1,21 @@
 // electron/src/main/agent/ipc.handlers.ts
 //
-// Agent 相关的 IPC handler 注册入口。
+// Agent 相关的 IPC handler 注册入口（v1.3 schema）。
+//
 // 暴露给渲染进程的能力：
-//   - agent:addToWorkspace —— 一键编排：注册 bot 账号 + 分配到 workspace +
-//     邀请 bot 进团队群 + 存 LLM API key + 启动 runtime（UI 主要入口）
-//   - agent:createFromYaml / list / assign / listAssignments —— 低层能力
-//   - agent:start / stop —— 单独控制已分配 agent 的启停
+//   - agent:addToWorkspace —— 一键编排（带 role + parentInstanceId + apiKeyOverride）
+//   - agent:assignMain —— 安装 main + 自动跟随 sub
+//   - agent:createFromYaml / list / listAssignments —— 低层
+//   - agent:createCustom / updateDefinition / deleteDefinition —— def 管理
+//   - agent:updateAssignmentRole / updateAssignmentApiKey —— assignment 编辑
+//   - agent:start / stop / removeAssignment / isRunning / getBuiltinSuggestions
+//
+// v1.3 改造要点：
+//   - addToWorkspace/assignMain 写 role + parent_instance_id（不再写 def.type/parentAgentId）
+//   - apiKey 解析走 resolveApiKey（override ?? provider key），不再用单独 llmApiKey 入参
+//   - createCustom/updateDefinition 不含 type/parent/model 字段；含 scope/modelProviderId/modelName
+//   - 删除 updateApiKey；新增 updateAssignmentApiKey / deleteDefinition /
+//     updateAssignmentRole / getBuiltinSuggestions
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { parseAgentManifest } from './manifest-parser';
@@ -15,10 +25,15 @@ import {
   getAgentDefinition,
   assignAgentToWorkspace,
   listAssignments,
-  llmApiKeyRef,
+  updateAssignmentRole as crudUpdateAssignmentRole,
+  updateAssignmentApiKey as crudUpdateAssignmentApiKey,
+  listSubAssignments,
+  deleteDefinition as crudDeleteDefinition,
+  updateAgentDefinition,
+  stopRunningInstancesByDefinition,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
-import { getSecret, setSecret, deleteSecret } from '../storage/keychain';
+import { getSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
@@ -26,52 +41,47 @@ import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
 import { getSyncingClient } from '../matrix/sync-manager';
 import { createMatrixClient } from '../matrix/client';
-import { buildSpawnOpts, HOMESERVER_URL } from './spawn-helpers';
-import type { AgentAssignment } from './types';
+import { buildSpawnOpts, HOMESERVER_URL, resolveApiKey } from './spawn-helpers';
+import { getBuiltinSuggestionsMap } from './builtin';
+import type { AgentAssignment, AgentDefinition, AgentRole } from './types';
+import { randomUUID } from 'node:crypto';
 
-/** agent:addToWorkspace 入参 */
+/** agent:addToWorkspace 入参（v1.3） */
 export interface AddToWorkspaceInput {
   workspaceId: string;
   agentDefinitionId: string;
-  llmApiKey: string;
+  role: AgentRole;
+  /** role='sub' 时必填：同 ws 内 main assignment 的 instanceId */
+  parentInstanceId?: string;
+  /** 可选；非空 = 写 keychain override；空 = 用供应商 key */
+  apiKeyOverride?: string;
 }
 
-/**
- * agent:assignMain 入参 —— 安装一个 main agent 时自动跟随注册其全部 sub agent。
- * 与 addToWorkspace 的区别：assignMain 接收的是 main 定义 ID，会一次性把该 main
- * 名下所有 parentAgentId 指向它的 sub 定义也安装到位。
- */
+/** agent:assignMain 入参（v1.3） */
 export interface AssignMainInput {
   workspaceId: string;
-  /** main agent 定义 ID（type='main'） */
   mainDefId: string;
-  /** LLM API key，存入 keychain 供 main 及其全部 sub 实例的 runtime 共用 */
-  llmApiKey: string;
-  /** 要安装的子 agent 定义 ID 列表；undefined = 全部安装 */
+  /** 可选；非空 = 写 keychain override；空 = 用供应商 key */
+  apiKeyOverride?: string;
+  /** 要安装的子 agent 定义 ID 列表；undefined = 不安装任何 sub（仅 main） */
   selectedSubDefIds?: string[];
 }
 
 /**
- * 安装一个 main agent，并自动跟随注册其全部 sub agent（listAgentDefinitions 中
- * parentAgentId 指向该 main 的定义）。对每个 agent（main + subs）执行与
- * agent:addToWorkspace 等价的全套编排：
- *   注册 bot 账号 → 分配到 workspace → 邀请进团队群 → 存 LLM API key → 启动 runtime。
+ * 安装一个 main agent，并自动跟随注册选中的 sub agent。
+ * v1.3：role/parent_instance_id 写在 assignment 上（不写 def）。
+ * 任一步骤失败即抛错，不做回滚（与原 addToWorkspace 失败语义一致）。
  *
- * 设计取舍：
- *   - teamRoomId 从 workspace 取（单一数据源），与 addToWorkspace 一致，不信任 renderer 传入；
- *   - owner 用 workspace.ownerId（而非 getCurrentUserId），与 addToWorkspace 一致；
- *   - 所有实例共用同一把 llmApiKey（用户级 API key），逐个存入各自 instance 的 keychain key；
- *   - 任一步骤失败即抛错，不做回滚（与 addToWorkspace 的失败语义一致）。
- *
- * 导出该函数以便单测直接调用（绕过 ipcMain），handler 层只做薄封装。
- *
- * @returns 全部新建的 assignment 列表（首条为 main，其后按 sub 定义顺序排列）
+ * 校验：main def 和全部 selectedSubDefIds 都必须有 modelProviderId（未配置 → throw）。
  */
 export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssignment[]> {
-  const { workspaceId, mainDefId, llmApiKey, selectedSubDefIds } = opts;
+  const { workspaceId, mainDefId, apiKeyOverride, selectedSubDefIds } = opts;
 
   const mainDef = getAgentDefinition(mainDefId);
   if (!mainDef) throw new Error(`未找到 agent 定义: ${mainDefId}`);
+  if (!mainDef.modelProviderId) {
+    throw new Error(`main agent「${mainDef.name}」未配置 modelProviderId，请先到 Agent 库配置`);
+  }
 
   // 守卫：检查 mainDef 是否已安装到该 workspace
   const existingAssignments = listAssignments(workspaceId);
@@ -86,41 +96,68 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     throw new Error('workspace 尚未创建团队群（teamRoomId 为空）');
   }
 
-  // owner 的 Matrix client（用于把各 bot 邀请进团队群）；从 keychain 恢复 token 构造，不启动 sync
+  // 查找选中的 sub 定义；校验全部已配置 provider
+  const subDefs: AgentDefinition[] = [];
+  if (selectedSubDefIds && selectedSubDefIds.length > 0) {
+    for (const subDefId of selectedSubDefIds) {
+      const subDef = getAgentDefinition(subDefId);
+      if (!subDef) throw new Error(`未找到子 agent 定义: ${subDefId}`);
+      if (!subDef.modelProviderId) {
+        throw new Error(`子 agent「${subDef.name}」未配置 modelProviderId，请先到 Agent 库配置`);
+      }
+      subDefs.push(subDef);
+    }
+  }
+
+  // I2：跳过已安装的 sub（避免重复分配同一 def 到 workspace）
+  const installedDefIds = new Set(existingAssignments.map((a) => a.agentDefinitionId));
+  const newSubDefs = subDefs.filter((d) => !installedDefIds.has(d.id));
+
+  // owner 的 Matrix client（用于把各 bot 邀请进团队群）
   const ownerClient = await getOwnerMatrixClient();
 
-  // 查找全部归属该 main 的 sub agent 定义（parentAgentId 指向 main.id）
-  const allSubDefs = listAgentDefinitions().filter((d) => d.parentAgentId === mainDef.id);
-  // 按 selectedSubDefIds 过滤；undefined = 全部安装
-  const selectedSubDefs = selectedSubDefIds
-    ? allSubDefs.filter((d) => selectedSubDefIds.includes(d.id))
-    : allSubDefs;
+  // Phase 1：注册 bot + 分配 + 邀请 + 存 apiKeyOverride（如有）
+  // 拆两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId
+  const installed: Array<{ def: AgentDefinition; assignment: AgentAssignment; bot: RegisteredBot }> = [];
 
-  // I2 修复：跳过已安装的 sub（避免重复分配同一个定义到 workspace）。
-  // 不抛错而是静默跳过——允许用户先独立安装某个 sub，再整体安装 main+subs。
-  const installedDefIds = new Set(existingAssignments.map((a) => a.agentDefinitionId));
-  const subDefs = selectedSubDefs.filter((d) => !installedDefIds.has(d.id));
+  // 1a. 安装 main（role='main'）
+  const mainBot = await registerAgentBot({
+    slug: mainDef.slug,
+    workspaceName: workspace.name,
+    ownerUserId: workspace.ownerId,
+    homeserverUrl: HOMESERVER_URL,
+  });
+  const mainAssignment = assignAgentToWorkspace(
+    workspaceId, mainDef.id, mainBot.botUserId, 'main',
+  );
+  await inviteBotToRoom(ownerClient, workspace.teamRoomId, mainBot.botUserId);
+  if (apiKeyOverride) {
+    await crudUpdateAssignmentApiKey(mainAssignment.instanceId, apiKeyOverride);
+  }
+  installed.push({ def: mainDef, assignment: mainAssignment, bot: mainBot });
 
-  // Phase 1：注册 bot + 分配 + 邀请 + 存 key（先完成全部账号编排，收集每个 agent 的信息）。
-  // 拆成两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId——
-  // dispatch:<slug> 工具的执行依赖它。
-  const installed: Array<{ def: typeof mainDef; assignment: AgentAssignment; bot: RegisteredBot }> = [];
-  for (const def of [mainDef, ...subDefs]) {
-    const bot = await registerAgentBot({
-      slug: def.slug,
+  // 1b. 安装 subs（role='sub', parentInstanceId=mainAssignment.instanceId）
+  for (const subDef of newSubDefs) {
+    const subBot = await registerAgentBot({
+      slug: subDef.slug,
       workspaceName: workspace.name,
       ownerUserId: workspace.ownerId,
       homeserverUrl: HOMESERVER_URL,
     });
-    const assignment = assignAgentToWorkspace(workspaceId, def.id, bot.botUserId);
-    await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
-      await setSecret(llmApiKeyRef(assignment.instanceId), llmApiKey);
-    installed.push({ def, assignment, bot });
+    const subAssignment = assignAgentToWorkspace(
+      workspaceId, subDef.id, subBot.botUserId, 'sub', mainAssignment.instanceId,
+    );
+    await inviteBotToRoom(ownerClient, workspace.teamRoomId, subBot.botUserId);
+    if (apiKeyOverride) {
+      await crudUpdateAssignmentApiKey(subAssignment.instanceId, apiKeyOverride);
+    }
+    installed.push({ def: subDef, assignment: subAssignment, bot: subBot });
   }
 
-  // Phase 2：启动 runtime。buildSpawnOpts 内部为 main agent 从 DB 重建 subAgents。
+  // Phase 2：启动 runtime（subAgents 由 buildSpawnOpts 内部按 parent_instance_id 重建）
   const results: AgentAssignment[] = [];
   for (const { def, assignment, bot } of installed) {
+    const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId!);
     spawnAgent(
       buildSpawnOpts({
         instanceId: assignment.instanceId,
@@ -130,55 +167,42 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
         teamRoomId: workspace.teamRoomId!,
         ownerUserId: workspace.ownerId,
         def,
+        role: assignment.role,
         botAccessToken: bot.botAccessToken,
-        llmApiKey,
+        llmApiKey: apiKey,
         isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       }),
     );
-
     results.push(assignment);
   }
 
   logger.info('Main agent 及其 sub agents 已安装并启动', {
-    workspaceId,
-    mainDefId,
-    mainSlug: mainDef.slug,
-    subCount: subDefs.length,
+    workspaceId, mainDefId, mainSlug: mainDef.slug, subCount: newSubDefs.length,
   });
   return results;
 }
 
 /**
- * 删除 agent 分配：停止运行 → 让 bot 离开所有房间（避免成员列表残留）→
- * 删 bot token → 清空悬空 coordinator 引用 → 删 assignment 行。
- * 若删除的是 main agent，则先级联删除同 workspace 内其全部 sub agent 分配
- * （subDef.parentAgentId === mainDef.id），确保主子关系整体退出。
- * 导出供单测直接调用（绕过 ipcMain）。
+ * 删除 agent 分配：停止运行 → 让 bot 离开所有房间 → 删 bot token →
+ * 清空悬空 coordinator 引用 → 删 assignment 行。
+ * v1.3：若删除的是 role='main'，则级联删除同 ws 内 parent_instance_id 指向它的全部 subs。
  */
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
   stopAgent(instanceId);
   const row = getDb()
-    .prepare('SELECT bot_matrix_user_id, workspace_id, agent_definition_id FROM agent_assignments WHERE instance_id = ?')
+    .prepare('SELECT bot_matrix_user_id, workspace_id, role FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as
-    | { bot_matrix_user_id?: string; workspace_id?: string; agent_definition_id?: string }
+    | { bot_matrix_user_id?: string; workspace_id?: string; role?: string }
     | undefined;
   if (!row) return;
   const botUserId = row.bot_matrix_user_id;
   const workspaceId = row.workspace_id;
-  const defId = row.agent_definition_id;
 
-  // 级联删除 main 时连带删除其同 workspace 内 parentAgentId 指向该 main 的全部 subs
-  if (defId && workspaceId) {
-    const def = getAgentDefinition(defId);
-    if (def?.type === 'main') {
-      const wsAssignments = listAssignments(workspaceId);
-      for (const subA of wsAssignments) {
-        if (subA.instanceId === instanceId) continue;
-        const subDef = getAgentDefinition(subA.agentDefinitionId);
-        if (subDef?.parentAgentId === defId) {
-          await removeAgentAssignment(subA.instanceId);
-        }
-      }
+  // v1.3 级联：main 被删时连带删除同 ws 内 parent_instance_id 指向它的 subs
+  if (row.role === 'main' && workspaceId) {
+    const subs = listSubAssignments(workspaceId, instanceId);
+    for (const sub of subs) {
+      await removeAgentAssignment(sub.instanceId);
     }
   }
 
@@ -191,7 +215,10 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
     );
   }
 
-  // 被删实例若是协调 agent，清空引用，避免 workspaces.coordinator_instance_id 悬空
+  // 清除 API key override（如有）
+  await deleteSecret(`agent.${instanceId}.api_key_override`).catch(() => {});
+
+  // 被删实例若是协调 agent，清空引用
   if (workspaceId) {
     const ws = getWorkspace(workspaceId);
     if (ws?.coordinatorInstanceId === instanceId) {
@@ -203,7 +230,7 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
   logger.info('Agent 分配已删除', { instanceId, botUserId, workspaceId });
 }
 
-/** 用 bot 自身 token 创建临时 client，让它离开所有当前已加入的房间（经 owner syncing client 枚举） */
+/** 用 bot 自身 token 创建临时 client，让它离开所有当前已加入的房间 */
 async function makeBotLeaveAllRooms(botUserId: string): Promise<void> {
   const token = await getSecret(`bot.${botUserId}.matrix_token`);
   if (!token) return;
@@ -224,16 +251,17 @@ async function makeBotLeaveAllRooms(botUserId: string): Promise<void> {
 
 /** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerAgentHandlers(): void {
-  // 一键编排：注册 bot 账号 → 分配到 workspace → 邀请 bot 进团队群 →
-  // 存 LLM API key → 启动 runtime。UI "添加 agent" 按钮的主入口。
-  // 任一步骤失败都抛错，由 renderer 转为用户可见的错误提示。
+  // 一键编排：注册 bot + 分配（带 role/parent）+ 邀请 + 启动 runtime
   ipcMain.handle(
     'agent:addToWorkspace',
     async (_evt, input: AddToWorkspaceInput) => {
-      const { workspaceId, agentDefinitionId, llmApiKey } = input;
+      const { workspaceId, agentDefinitionId, role, parentInstanceId, apiKeyOverride } = input;
 
       const def = getAgentDefinition(agentDefinitionId);
       if (!def) throw new Error(`未找到 agent 定义: ${agentDefinitionId}`);
+      if (!def.modelProviderId) {
+        throw new Error(`agent 定义「${def.name}」未配置 modelProviderId，请先到 Agent 库配置`);
+      }
 
       const workspace = getWorkspace(workspaceId);
       if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
@@ -241,7 +269,6 @@ export function registerAgentHandlers(): void {
         throw new Error('workspace 尚未创建团队群（teamRoomId 为空）');
       }
 
-      // 1. 注册 bot Matrix 账号（token 自动存 keychain）
       const bot = await registerAgentBot({
         slug: def.slug,
         workspaceName: workspace.name,
@@ -249,17 +276,18 @@ export function registerAgentHandlers(): void {
         homeserverUrl: HOMESERVER_URL,
       });
 
-      // 2. 分配 agent 到 workspace（DB 记录，绑定 botMatrixUserId）
-      const assignment = assignAgentToWorkspace(workspaceId, agentDefinitionId, bot.botUserId);
+      const assignment = assignAgentToWorkspace(
+        workspaceId, agentDefinitionId, bot.botUserId, role, parentInstanceId ?? null,
+      );
 
-      // 3. 邀请 bot 进团队群（用 owner 的 client 发 invite）
       const ownerClient = await getOwnerMatrixClient();
       await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
 
-      // 4. LLM API key 存 keychain（runtime 启动时不再需要 renderer 传入）
-      await setSecret(llmApiKeyRef(assignment.instanceId), llmApiKey);
+      if (apiKeyOverride) {
+        await crudUpdateAssignmentApiKey(assignment.instanceId, apiKeyOverride);
+      }
 
-      // 5. 启动 runtime 子进程（buildSpawnOpts 内部合并三层能力 + 为 main 重建 subAgents）
+      const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
       spawnAgent(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
@@ -269,109 +297,80 @@ export function registerAgentHandlers(): void {
           teamRoomId: workspace.teamRoomId,
           ownerUserId: workspace.ownerId,
           def,
+          role: assignment.role,
           botAccessToken: bot.botAccessToken,
-          llmApiKey,
+          llmApiKey: apiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
       );
 
       logger.info('Agent 已添加到 workspace 并启动', {
-        slug: def.slug,
-        workspaceId,
-        instanceId: assignment.instanceId,
+        slug: def.slug, workspaceId, instanceId: assignment.instanceId, role,
       });
       return assignment;
     },
   );
 
-  // 安装 main agent 并自动跟随注册其全部 sub agent（主子安装入口）。
-  // 实际逻辑在 assignMainAgent 中，handler 仅做薄封装便于单测。
   ipcMain.handle(
     'agent:assignMain',
     async (_evt, opts: AssignMainInput) => assignMainAgent(opts),
   );
 
-  // 从 YAML manifest 字符串创建 agent 定义并持久化。
-  // YAML 中的 parentAgentId 是父 agent 的 slug 引用，此处解析为已注册父 agent
-  // 的 UUID（与 assignMainAgent 按 UUID 匹配的前提保持一致）。校验失败会抛错，
-  // 由 IPC 层转为 rejection。
+  // 从 YAML 创建 agent 定义。v1.3：不再做 parentAgentId slug→UUID 解析
+  //（角色/父子关系已移到 assignment 级，def 不再存这些字段）
   ipcMain.handle('agent:createFromYaml', async (_evt, yamlContent: string) => {
     const def = parseAgentManifest(yamlContent);
-    // R3 修复：sub agent 的 parentAgentId 从 slug 解析为 UUID
-    if (def.type === 'sub' && def.parentAgentId) {
-      const parentSlug = def.parentAgentId;
-      const parentDef = listAgentDefinitions().find((d) => d.slug === parentSlug);
-      if (parentDef) {
-        def.parentAgentId = parentDef.id;
-      } else {
-        logger.warn('YAML 创建的 sub agent parentAgentId slug 未找到对应父 agent', {
-          slug: def.slug,
-          parentSlug,
-        });
-        def.parentAgentId = undefined;
-      }
-    }
     saveAgentDefinition(def);
-    logger.info('Agent 定义已创建', { slug: def.slug });
+    logger.info('Agent 定义已创建（来自 YAML）', { slug: def.slug });
     return def;
   });
 
-  ipcMain.handle('agent:createCustom', async (_evt, input: {
-    name: string;
-    slug: string;
-    description: string;
-    systemPrompt: string;
-    modelProvider: string;
-    modelName: string;
-    modelBaseUrl?: string;
-    iconEmoji?: string;
-    type?: 'standalone' | 'main' | 'sub';
-    parentAgentId?: string;
-  }) => {
-    const { randomUUID } = await import('node:crypto');
-    const type = input.type ?? 'standalone';
+  // 创建自定义 agent 定义（v1.3：scope + modelProviderId + modelName）
+  ipcMain.handle(
+    'agent:createCustom',
+    async (_evt, input: {
+      name: string;
+      slug: string;
+      description: string;
+      systemPrompt: string;
+      iconEmoji?: string;
+      scope: 'global' | 'workspace';
+      modelProviderId: string;
+      modelName: string;
+    }) => {
+      // 解析 scope → workspaceId
+      const workspaceId = input.scope === 'workspace'
+        ? (input as { workspaceId?: string }).workspaceId ?? null
+        : null;
 
-    // 校验：sub 必须挂在一个 type='main' 的父 agent 上。
-    // 不允许指向不存在 / 非 main 的 agent，避免产生孤儿 sub。
-    if (type === 'sub') {
-      if (!input.parentAgentId) throw new Error('子 agent 必须指定父主 agent');
-      const parent = getAgentDefinition(input.parentAgentId);
-      if (!parent) throw new Error('父 agent 不存在');
-      if (parent.type !== 'main') throw new Error('父 agent 不是 main 类型');
-    }
+      const def: AgentDefinition = {
+        id: randomUUID(),
+        name: input.name,
+        slug: input.slug,
+        version: '1.0.0',
+        runtime: 'declarative',
+        systemPrompt: input.systemPrompt,
+        defaultTools: [
+          { kind: 'builtin', ref: 'read_file' },
+          { kind: 'builtin', ref: 'write_file' },
+          { kind: 'builtin', ref: 'list_files' },
+        ],
+        defaultMcps: [],
+        defaultSkills: [],
+        source: 'custom',
+        description: input.description,
+        iconEmoji: input.iconEmoji ?? '🤖',
+        workspaceId,
+        modelProviderId: input.modelProviderId,
+        modelName: input.modelName,
+      };
+      saveAgentDefinition(def);
+      logger.info('自定义 Agent 定义已创建', { slug: def.slug, scope: input.scope });
+      return def;
+    },
+  );
 
-    const def: import('./types').AgentDefinition = {
-      id: randomUUID(),
-      name: input.name,
-      slug: input.slug,
-      version: '1.0.0',
-      type,
-      runtime: 'declarative',
-      systemPrompt: input.systemPrompt,
-      model: {
-        provider: input.modelProvider as 'openai' | 'anthropic',
-        model: input.modelName,
-        baseUrl: input.modelBaseUrl,
-      },
-      defaultTools: [
-        { kind: 'builtin', ref: 'read_file' },
-        { kind: 'builtin', ref: 'write_file' },
-        { kind: 'builtin', ref: 'list_files' },
-      ],
-      defaultMcps: [],
-      defaultSkills: [],
-      source: 'custom',
-      description: input.description,
-      iconEmoji: input.iconEmoji ?? '🤖',
-      // standalone/main 不挂父 agent；sub 使用传入的 parentAgentId
-      parentAgentId: type === 'sub' ? input.parentAgentId : undefined,
-    };
-    saveAgentDefinition(def);
-    logger.info('自定义 Agent 定义已创建', { slug: def.slug, type: def.type });
-    return def;
-  });
-
-  // 编辑 agent 定义（定义层字段）；停止受影响的运行中实例，让用户手动重启应用新配置
+  // 编辑 agent 定义（v1.3：scope + modelProviderId + modelName；不含 type/parent）
   ipcMain.handle(
     'agent:updateDefinition',
     async (_evt, input: {
@@ -379,37 +378,28 @@ export function registerAgentHandlers(): void {
       name?: string;
       description?: string;
       systemPrompt?: string;
-      modelProvider?: string;
-      modelName?: string;
-      modelBaseUrl?: string;
       iconEmoji?: string;
-      type?: 'standalone' | 'main' | 'sub';
-      parentAgentId?: string;
+      scope?: 'global' | 'workspace';
+      modelProviderId?: string;
+      modelName?: string;
     }) => {
-      const { updateAgentDefinition, stopRunningInstancesByDefinition } = await import('./crud');
+      // scope 转 workspaceId
+      const workspaceId = input.scope === 'global'
+        ? null
+        : input.scope === 'workspace'
+          ? (input as { workspaceId?: string }).workspaceId
+          : undefined;
 
-      // 校验：若调用方显式传入 type 且非 'main'，且当前定义是 main 且仍有 sub 挂靠，
-      // 拒绝降级（避免产生孤儿 sub：assignMainAgent 按 parentAgentId=mainId 找不到归属）
-      if (input.type && input.type !== 'main') {
-        const existing = getAgentDefinition(input.id);
-        if (existing?.type === 'main') {
-          const hasSubs = listAgentDefinitions().some((d) => d.parentAgentId === input.id);
-          if (hasSubs) {
-            throw new Error('该 main agent 仍有子 agent 关联，请先解除所有子 agent 的关联');
-          }
-        }
-      }
-
-      // 校验：若目标 type 为 sub 且显式给出 parentAgentId，必须指向一个 type='main' 的 agent，
-      // 且不能是自己（自引用会让 assignMainAgent 误把 sub 视为自己的父）
-      if (input.type === 'sub' && input.parentAgentId) {
-        const parent = getAgentDefinition(input.parentAgentId);
-        if (!parent) throw new Error('父 agent 不存在');
-        if (parent.type !== 'main') throw new Error('父 agent 不是 main 类型');
-        if (input.parentAgentId === input.id) throw new Error('不能将自身设为父 agent');
-      }
-
-      const updated = updateAgentDefinition(input);
+      const updated = updateAgentDefinition({
+        id: input.id,
+        name: input.name,
+        description: input.description,
+        systemPrompt: input.systemPrompt,
+        iconEmoji: input.iconEmoji,
+        modelProviderId: input.modelProviderId,
+        modelName: input.modelName,
+        workspaceId,
+      });
       const stopped = stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {
         logger.info('Agent 定义更新，已停止运行中实例', { id: input.id, stopped: stopped.length });
@@ -418,35 +408,29 @@ export function registerAgentHandlers(): void {
     },
   );
 
-  // 更新实例 apiKey（写入 keychain 槽 agent.<instanceId>.llm_api_key）
+  // 删除自定义 agent 定义（builtin 不可删；级联清理 assignment）
   ipcMain.handle(
-    'agent:updateApiKey',
-    async (_evt, instanceId: string, apiKey: string) => {
-      const { updateAgentApiKey } = await import('./crud');
-      await updateAgentApiKey(instanceId, apiKey);
-      return { ok: true };
-    },
+    'agent:deleteDefinition',
+    async (_evt, defId: string) => crudDeleteDefinition(defId),
   );
 
-  // 列出全部已持久化的 agent 定义
-  ipcMain.handle('agent:list', async () => {
-    return listAgentDefinitions();
+  // 列出 agent 定义（v1.3：可选 workspaceId 过滤）
+  ipcMain.handle('agent:list', async (_evt, workspaceId?: string) => {
+    return listAgentDefinitions(workspaceId);
   });
 
-  // 把 agent 定义分配到 workspace，绑定一个 bot matrix 账号
   ipcMain.handle(
     'agent:assign',
     async (_evt, workspaceId: string, agentDefinitionId: string, botMatrixUserId: string) => {
-      return assignAgentToWorkspace(workspaceId, agentDefinitionId, botMatrixUserId);
+      // 低层 API：保留向后兼容，默认 role='standalone'
+      return assignAgentToWorkspace(workspaceId, agentDefinitionId, botMatrixUserId, 'standalone');
     },
   );
 
-  // 查询某 workspace 下的全部 agent 分配记录
   ipcMain.handle('agent:listAssignments', async (_evt, workspaceId: string) => {
     return listAssignments(workspaceId);
   });
 
-  // 停止指定 instanceId 的 agent 子进程
   ipcMain.handle('agent:stop', async (_evt, instanceId: string) => {
     stopAgent(instanceId);
     return { ok: true };
@@ -457,13 +441,61 @@ export function registerAgentHandlers(): void {
     return { ok: true };
   });
 
-  // 查询指定 instanceId 的 agent 是否正在运行（UI 据此显示 running/stopped 状态）
   ipcMain.handle('agent:isRunning', async (_evt, instanceId: string) => {
     return isAgentRunning(instanceId);
   });
 
-  // 重启已分配的 agent：从 keychain 恢复 API key + bot token 后 spawn
-  // （应用重启后 agent 不会自动恢复，需用户手动重启或后续实现自动恢复）
+  // 修改 assignment 的 role + parent（含循环引用校验）
+  // 主进程只更新 DB；调用方需自行停止 + 重启 runtime 才能应用新角色
+  ipcMain.handle(
+    'agent:updateAssignmentRole',
+    async (
+      _evt,
+      instanceId: string,
+      role: AgentRole,
+      parentInstanceId?: string,
+    ) => {
+      crudUpdateAssignmentRole(instanceId, role, parentInstanceId ?? null);
+
+      // 如从 main 改为非 main，停止其全部 subs（它们失去父）
+      const wsRow = instanceId
+        ? (getDb()
+            .prepare('SELECT workspace_id FROM agent_assignments WHERE instance_id = ?')
+            .get(instanceId) as { workspace_id: string } | undefined)
+        : undefined;
+      const wsId = wsRow?.workspace_id ?? '';
+      const allAssignments = wsId ? listAssignments(wsId) : [];
+      const stopped: string[] = [];
+      const current = allAssignments.find((a) => a.instanceId === instanceId);
+      // 仅当从 main 改为非 main 时级联停止 subs
+      if (current && current.role === 'main' && role !== 'main') {
+        const oldSubs = listSubAssignments(current.workspaceId, instanceId);
+        for (const sub of oldSubs) {
+          if (isAgentRunning(sub.instanceId)) {
+            stopAgent(sub.instanceId);
+            stopped.push(sub.instanceId);
+          }
+        }
+      }
+      return { stoppedInstanceIds: stopped };
+    },
+  );
+
+  // 设置/清除 assignment 的 API key override
+  ipcMain.handle(
+    'agent:updateAssignmentApiKey',
+    async (_evt, instanceId: string, apiKey: string | null) => {
+      await crudUpdateAssignmentApiKey(instanceId, apiKey);
+      return { ok: true };
+    },
+  );
+
+  // 返回 builtin 建议 Map（UI 添加 builtin 时预填 role/platform）
+  ipcMain.handle('agent:getBuiltinSuggestions', async () => {
+    return getBuiltinSuggestionsMap();
+  });
+
+  // 重启 agent：从 keychain 恢复 token + 解析 apiKey，spawn runtime
   ipcMain.handle(
     'agent:start',
     async (
@@ -480,24 +512,21 @@ export function registerAgentHandlers(): void {
       if (!def) {
         throw new Error(`未找到 agent 定义: ${assignment.agentDefinitionId}`);
       }
+      if (!def.modelProviderId) {
+        throw new Error(`agent 定义「${def.name}」未配置 modelProviderId，请到 Agent 库配置`);
+      }
 
       const workspace = getWorkspace(workspaceId);
       if (!workspace) {
         throw new Error(`未找到 workspace: ${workspaceId}`);
       }
 
-      const botAccessToken = await getSecret(
-        `bot.${assignment.botMatrixUserId}.matrix_token`,
-      );
+      const botAccessToken = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
       if (!botAccessToken) {
         throw new Error('Bot access token 丢失（请先注册 bot 账号）');
       }
 
-      // LLM API key 从 keychain 恢复（addToWorkspace 时存入）
-      const llmApiKey = await getSecret(llmApiKeyRef(assignment.instanceId));
-      if (!llmApiKey) {
-        throw new Error('LLM API key 丢失，请重新添加 agent');
-      }
+      const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
       spawnAgent(
         buildSpawnOpts({
@@ -508,6 +537,7 @@ export function registerAgentHandlers(): void {
           teamRoomId,
           ownerUserId: workspace.ownerId,
           def,
+          role: assignment.role,
           botAccessToken,
           llmApiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,

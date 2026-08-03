@@ -38,7 +38,7 @@ const api: ApiSurface = {
     assignMain: (input) => invoke('agent:assignMain', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     createCustom: (input) => invoke('agent:createCustom', input),
-    list: () => invoke('agent:list'),
+    list: (workspaceId?: string) => invoke('agent:list', workspaceId),
     assign: (workspaceId, defId, botUserId) =>
       invoke('agent:assign', workspaceId, defId, botUserId),
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
@@ -47,7 +47,12 @@ const api: ApiSurface = {
     removeAssignment: (instanceId) => invoke('agent:removeAssignment', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
     updateDefinition: (input) => invoke('agent:updateDefinition', input),
-    updateApiKey: (instanceId, apiKey) => invoke('agent:updateApiKey', instanceId, apiKey),
+    updateAssignmentRole: (instanceId: string, role: 'standalone' | 'main' | 'sub', parentInstanceId?: string) =>
+      invoke('agent:updateAssignmentRole', instanceId, role, parentInstanceId),
+    updateAssignmentApiKey: (instanceId: string, apiKey: string | null) =>
+      invoke('agent:updateAssignmentApiKey', instanceId, apiKey),
+    deleteDefinition: (defId: string) => invoke('agent:deleteDefinition', defId),
+    getBuiltinSuggestions: () => invoke('agent:getBuiltinSuggestions'),
     onRuntimeChanged: (callback) => {
       const handler = (): void => callback();
       ipcRenderer.on('agent:runtimeChanged', handler);

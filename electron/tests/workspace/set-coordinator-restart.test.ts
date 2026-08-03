@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
@@ -77,6 +77,11 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   setKeychainImpl(memKeychain);
   runMigrations();
+  // v1.3：buildSpawnOpts 读 model_providers 表，需预建 provider 记录
+  getDb().prepare(
+    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default)
+     VALUES ('prov-1', 'Test Provider', 'https://api.openai.com', 'provider.prov-1.api_key', 'gpt-4o', 1)`,
+  ).run();
   handlers.clear();
   registerWorkspaceHandlers();
   stopAgentMock.mockClear();
@@ -98,16 +103,17 @@ function makeStandaloneDef(): AgentDefinition {
     name: 'A',
     slug: 'a',
     version: '1.0',
-    type: 'standalone',
     runtime: 'declarative',
     systemPrompt: 'p',
-    model: { provider: 'openai', model: 'gpt-4o' },
     defaultTools: [],
     source: 'custom',
     description: 'd',
     iconEmoji: '🤖',
     defaultMcps: [],
     defaultSkills: [],
+    workspaceId: null,
+    modelProviderId: 'prov-1',
+    modelName: 'gpt-4o',
   };
   saveAgentDefinition(def);
   return def;
@@ -116,30 +122,29 @@ function makeStandaloneDef(): AgentDefinition {
 /**
  * 构造 main + 2 个 sub 定义并落库，返回 main def。
  * 用于测试协调重启路径下 main agent 的 subAgents 重建（C1）。
+ * v1.3：def 不含 type/parent；subs 通过 assignment.parent_instance_id 关联。
  */
 function makeMainWithSubs(): AgentDefinition {
   const main: AgentDefinition = {
-    id: 'main-coord', name: 'PM', slug: 'pm-coord', version: '1.0', type: 'main',
+    id: 'main-coord', name: 'PM', slug: 'pm-coord', version: '1.0',
     runtime: 'declarative', systemPrompt: '你是 PM',
-    model: { provider: 'openai', model: 'gpt-4o' },
     defaultTools: [], source: 'custom', description: 'PM', iconEmoji: '📋',
     defaultMcps: [], defaultSkills: [],
+    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
   };
   const sub1: AgentDefinition = {
-    id: 'sub-coord-1', name: 'Coder', slug: 'coder-coord', version: '1.0', type: 'sub',
+    id: 'sub-coord-1', name: 'Coder', slug: 'coder-coord', version: '1.0',
     runtime: 'declarative', systemPrompt: '写代码',
-    model: { provider: 'openai', model: 'gpt-4o' },
     defaultTools: [], source: 'custom', description: 'coder', iconEmoji: '🔗',
-    parentAgentId: 'main-coord',
     defaultMcps: [], defaultSkills: [],
+    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
   };
   const sub2: AgentDefinition = {
-    id: 'sub-coord-2', name: 'QA', slug: 'qa-coord', version: '1.0', type: 'sub',
+    id: 'sub-coord-2', name: 'QA', slug: 'qa-coord', version: '1.0',
     runtime: 'declarative', systemPrompt: '测试',
-    model: { provider: 'openai', model: 'gpt-4o' },
     defaultTools: [], source: 'custom', description: 'qa', iconEmoji: '🔗',
-    parentAgentId: 'main-coord',
     defaultMcps: [], defaultSkills: [],
+    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
   };
   saveAgentDefinition(main);
   saveAgentDefinition(sub1);
@@ -161,9 +166,9 @@ describe('setCoordinator 自动重启', () => {
       '!s:localhost',
       '!t:localhost',
     );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot:localhost');
+    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
     // 预填 keychain：runtime 重启需要 LLM apiKey 与 bot matrix token
-    memStore.set(`agent.${assignment.instanceId}.llm_api_key`, 'llm-key');
+    memStore.set('provider.prov-1.api_key', 'llm-key');
     memStore.set('bot.@bot:localhost.matrix_token', 'mx-token');
 
     // 模拟实例正在运行
@@ -197,8 +202,8 @@ describe('setCoordinator 自动重启', () => {
       '!s2:localhost',
       '!t2:localhost',
     );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost');
-    memStore.set(`agent.${assignment.instanceId}.llm_api_key`, 'llm-key');
+    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost', 'standalone');
+    memStore.set('provider.prov-1.api_key', 'llm-key');
     memStore.set('bot.@bot2:localhost.matrix_token', 'mx-token');
 
     // 实例未运行（isAgentRunningMock 默认返回 false）
@@ -222,7 +227,7 @@ describe('setCoordinator 自动重启', () => {
       '!s3:localhost',
       '!t3:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot3:localhost');
+    assignAgentToWorkspace(ws.id, def.id, '@bot3:localhost', 'standalone');
     isAgentRunningMock.mockImplementation(() => true);
 
     const handler = handlers.get('workspace:setCoordinator')!;
@@ -247,11 +252,13 @@ describe('setCoordinator 自动重启', () => {
       '!t-mc:localhost',
     );
 
-    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@pm-coord:localhost');
-    assignAgentToWorkspace(ws.id, 'sub-coord-1', '@coder-coord:localhost');
-    assignAgentToWorkspace(ws.id, 'sub-coord-2', '@qa-coord:localhost');
+    // v1.3：显式传 role + parentInstanceId 建立主子关系
+    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@pm-coord:localhost', 'main');
+    assignAgentToWorkspace(ws.id, 'sub-coord-1', '@coder-coord:localhost', 'sub', mainAssignment.instanceId);
+    assignAgentToWorkspace(ws.id, 'sub-coord-2', '@qa-coord:localhost', 'sub', mainAssignment.instanceId);
 
-    memStore.set(`agent.${mainAssignment.instanceId}.llm_api_key`, 'llm-key');
+    // v1.3：apiKey 走 provider key（resolveApiKey 读 provider.prov-1.api_key）
+    memStore.set('provider.prov-1.api_key', 'llm-key');
     memStore.set('bot.@pm-coord:localhost.matrix_token', 'mx-token');
 
     isAgentRunningMock.mockImplementation(() => true);
@@ -261,11 +268,11 @@ describe('setCoordinator 自动重启', () => {
 
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
     const opts = spawnAgentMock.mock.calls[0]![0] as {
-      agentType?: string;
+      role?: string;
       isCoordinator?: boolean;
       subAgents?: Array<{ slug: string; botUserId: string }>;
     };
-    expect(opts.agentType).toBe('main');
+    expect(opts.role).toBe('main');
     expect(opts.isCoordinator).toBe(true);
     // ★ C1 核心断言：协调重启后 main 仍携带全部 subAgents
     expect(opts.subAgents).toBeDefined();
