@@ -716,10 +716,12 @@ export async function runChatLoop(
           budgetRemaining === Infinity ? -1 : Math.max(0, budgetRemaining - 1);
       }
 
+      const isDispatch = tc.name.startsWith('dispatch:');
+      const dispatchInfo = isDispatch ? { toolCallsUsed: 0 } : undefined;
       let result: string;
       let success = true;
       try {
-        result = await executeTool(tc, ctx, client, config, dispatchToolBudget);
+        result = await executeTool(tc, ctx, client, config, dispatchToolBudget, dispatchInfo);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -741,7 +743,10 @@ export async function runChatLoop(
 
       toolCallHistory.push({ name: tc.name, args: tc.arguments, result, success });
       toolCallCount++;
-      budgetRemaining--;
+      budgetRemaining--; // dispatch 本身计 1 次
+      if (dispatchInfo && dispatchInfo.toolCallsUsed > 0 && budgetRemaining !== Infinity) {
+        budgetRemaining -= dispatchInfo.toolCallsUsed;
+      }
 
       messages.push({ role: 'tool', content: result, toolCallId: tc.id });
     }
@@ -815,13 +820,14 @@ async function executeTool(
   client: MatrixClient,
   config: RuntimeConfig,
   toolBudget?: number,
+  dispatchInfo?: { toolCallsUsed: number },
 ): Promise<string> {
   const startTime = Date.now();
   let success = true;
   let output = '';
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, client, config, toolBudget);
+    output = await doExecuteTool(call, ctx, client, config, toolBudget, dispatchInfo);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -850,6 +856,7 @@ async function doExecuteTool(
   client: MatrixClient,
   config: RuntimeConfig,
   toolBudget?: number,
+  dispatchInfo?: { toolCallsUsed: number },
 ): Promise<string> {
   const name = call.name;
 
@@ -871,7 +878,9 @@ async function doExecuteTool(
   if (name.startsWith('dispatch:')) {
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
-    return executeDispatch(subSlug, task, client, config, toolBudget);
+    const dispatchResult = await executeDispatch(subSlug, task, client, config, toolBudget);
+    if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
+    return dispatchResult.body;
   }
   if (name.startsWith('mcp:')) {
     // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接
@@ -895,7 +904,8 @@ function argToString(value: unknown, field: string): string {
 // === Dispatch：主 agent 等待子 agent 回执 ===
 
 interface PendingReply {
-  resolve: (body: string) => void;
+  /** v1.4：resolve 携带 body + toolCallsUsed，供主 agent 扣减共享预算 */
+  resolve: (value: { body: string; toolCallsUsed: number }) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
   stage: number;
@@ -912,13 +922,13 @@ const pendingReplies = new Map<string, PendingReply>();
  * 防竞态：必须先注册 pending 再发送消息。若先发送后注册，子 agent 极快回执时
  * task_reply 会在 pending.set 之前到达，handleTaskReply 找不到 pending 导致回执丢失。
  */
-async function executeDispatch(
+export async function executeDispatch(
   subSlug: string,
   task: string,
   client: MatrixClient,
   config: RuntimeConfig,
   toolBudget?: number,
-): Promise<string> {
+): Promise<{ body: string; toolCallsUsed: number }> {
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
 
@@ -933,7 +943,7 @@ async function executeDispatch(
   });
 
   // 先注册 pending，再发送——防竞态
-  const resultPromise = new Promise<string>((resolve, reject) => {
+  const resultPromise = new Promise<{ body: string; toolCallsUsed: number }>((resolve, reject) => {
     pendingReplies.set(dispatch.content.task_id, {
       resolve,
       reject,
@@ -981,7 +991,7 @@ function armDispatchTimer(taskId: string): void {
  * in_progress → 进度通知，保持 pending（子 agent 处理中途合法地先发此状态）；
  * completed → resolve(body)；failed/needs_input → reject。
  */
-function handleTaskReply(content: Record<string, unknown>): void {
+export function handleTaskReply(content: Record<string, unknown>): void {
   const reply = parseTaskReply(content);
   if (!reply) return;
   const pending = pendingReplies.get(reply.task_id);
@@ -998,7 +1008,7 @@ function handleTaskReply(content: Record<string, unknown>): void {
   clearTimeout(pending.timer);
   pendingReplies.delete(reply.task_id);
   if (reply.status === 'completed') {
-    pending.resolve(reply.body);
+    pending.resolve({ body: reply.body, toolCallsUsed: reply.tool_calls_used ?? 0 });
   } else {
     pending.reject(new Error(`子 agent 回复状态 "${reply.status}": ${reply.body}`));
   }

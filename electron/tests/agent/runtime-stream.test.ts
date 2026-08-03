@@ -17,6 +17,8 @@ import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
   formatBudgetHint,
+  executeDispatch,
+  handleTaskReply,
   type RuntimeConfig,
   type RuntimeContext,
   type RunChatLoopStats,
@@ -431,5 +433,52 @@ describe('formatBudgetHint', () => {
     const hint = formatBudgetHint(5);
     expect(hint).toContain('5');
     expect(hint).toContain('工具调用上限');
+  });
+});
+
+describe('dispatch 共享预算扣减', () => {
+  it('executeDispatch + handleTaskReply 正确传递 toolCallsUsed', async () => {
+    const client = mockClient();
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+    });
+
+    const dispatchPromise = executeDispatch('researcher', '帮我查资料', client, config, 9);
+
+    const dispatchContent = vi.mocked(client.sendEvent).mock.calls[0]![2] as unknown as {
+      task_id: string;
+    };
+    handleTaskReply({
+      task_id: dispatchContent.task_id,
+      body: '资料已找到',
+      status: 'completed',
+      tool_calls_used: 5,
+    });
+
+    const result = await dispatchPromise;
+    expect(result).toEqual({ body: '资料已找到', toolCallsUsed: 5 });
+  });
+
+  it('tool_calls_used 缺省时默认为 0', async () => {
+    const client = mockClient();
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+    });
+
+    const dispatchPromise = executeDispatch('researcher', '任务', client, config);
+
+    const dispatchContent = vi.mocked(client.sendEvent).mock.calls[0]![2] as unknown as {
+      task_id: string;
+    };
+    handleTaskReply({
+      task_id: dispatchContent.task_id,
+      body: '完成了',
+      status: 'completed',
+    });
+
+    const result = await dispatchPromise;
+    expect(result).toEqual({ body: '完成了', toolCallsUsed: 0 });
   });
 });
