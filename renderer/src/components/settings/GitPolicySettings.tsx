@@ -121,7 +121,7 @@ export function GitPolicySettings({ workspaceId }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-neutral-200">Git Policy</h3>
-          <p className="text-xs text-neutral-500">约束 agent 在本 workspace 的 commit 行为</p>
+          <p className="text-xs text-neutral-500">约束 agent 在本工作空间的 commit 行为</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={() => void handleReset()} disabled={saving}>

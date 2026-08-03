@@ -111,6 +111,9 @@ const api: ApiSurface = {
     listInstalled: () => invoke('marketplace:listInstalled'),
     uninstall: (itemId) => invoke('marketplace:uninstall', itemId),
   },
+  dialog: {
+    pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

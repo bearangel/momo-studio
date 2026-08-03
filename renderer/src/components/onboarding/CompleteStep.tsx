@@ -15,9 +15,9 @@ export function CompleteStep({ onComplete }: Props) {
   return (
     <div className="flex flex-col items-center gap-4 p-12">
       <div className="text-5xl" aria-hidden="true">✓</div>
-      <h1 className="text-2xl font-bold">You're all set</h1>
-      <p className="text-neutral-400">Taking you to your workspace…</p>
-      <Button onClick={onComplete}>Continue</Button>
+      <h1 className="text-2xl font-bold">设置完成</h1>
+      <p className="text-neutral-400">正在进入你的工作空间…</p>
+      <Button onClick={onComplete}>继续</Button>
     </div>
   );
 }

@@ -50,7 +50,7 @@ export function CapabilityConfig({ workspaceId, agentDef }: Props) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-neutral-200">能力配置</h3>
-        <span className="text-xs text-neutral-500">workspace 共享能力对所有 agent 生效</span>
+          <span className="text-xs text-neutral-500">工作空间共享能力对所有 agent 生效</span>
       </div>
 
       {groups.map((g) => (

@@ -53,7 +53,7 @@ export function MiddlePanel() {
       <div className="flex-1 flex items-center justify-center text-neutral-500">
         <div className="text-center">
           <div className="text-4xl mb-2">📁</div>
-          <p className="text-sm">创建或选择一个 workspace 开始</p>
+          <p className="text-sm">创建或选择一个工作空间开始</p>
         </div>
       </div>
     );

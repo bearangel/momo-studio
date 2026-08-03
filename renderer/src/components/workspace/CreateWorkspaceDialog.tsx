@@ -1,8 +1,9 @@
 // renderer/src/components/workspace/CreateWorkspaceDialog.tsx
-// 创建 workspace 对话框：输入名称和目录路径，
+// 新建工作空间对话框：输入名称、选择本地目录，
 // 提交后调用 store.create 并关闭
 import { useState, type FormEvent } from 'react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 
@@ -16,6 +17,13 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
   const [dir, setDir] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const handlePickDirectory = async (): Promise<void> => {
+    const picked = await ipc.dialog.pickDirectory({
+      title: '选择工作空间目录',
+    });
+    if (picked) setDir(picked);
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -45,20 +53,34 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
         onSubmit={handleSubmit}
         className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md"
       >
-        <h2 className="text-xl font-bold mb-4">新建 workspace</h2>
+        <h2 className="text-xl font-bold mb-4">新建工作空间</h2>
         <div className="flex flex-col gap-3">
           <Input
             label="名称"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="我的项目"
+            autoFocus
           />
-          <Input
-            label="目录路径"
-            value={dir}
-            onChange={(e) => setDir(e.target.value)}
-            placeholder="~/projects/my-app"
-          />
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-neutral-300">目录路径</label>
+            <div className="flex gap-2">
+              <Input
+                value={dir}
+                onChange={(e) => setDir(e.target.value)}
+                placeholder="点击右侧按钮选择目录"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handlePickDirectory}
+                className="shrink-0"
+              >
+                选择目录
+              </Button>
+            </div>
+          </div>
           {error && <div className="text-red-400 text-sm">{error}</div>}
           <div className="flex gap-2 justify-end mt-2">
             <Button variant="ghost" type="button" onClick={onClose}>

@@ -130,7 +130,7 @@ export function RoomList() {
             const isTeamRoom = workspaces.some((w) => w.teamRoomId === room.roomId);
             if (isTeamRoom) {
               return (
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500" title="团队群随 workspace 删除">
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500"       title="团队群随工作空间删除">
                   🔒
                 </span>
               );

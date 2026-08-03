@@ -75,7 +75,7 @@ describe('MainLayout', () => {
   it('shows workspace prompt when no workspace is active', () => {
     render(<MainLayout />);
     expect(
-      screen.getByText(/创建或选择一个 workspace 开始/i),
+      screen.getByText(/创建或选择一个工作空间开始/i),
     ).toBeInTheDocument();
   });
 

@@ -24,7 +24,7 @@ export function WorkspaceSwitcher() {
         type="button"
         onClick={() => setOpen(!open)}
         className="w-10 h-10 flex items-center justify-center rounded-md text-lg hover:bg-bg-tertiary"
-        title={active?.name ?? '选择 workspace'}
+        title={active?.name ?? '选择工作空间'}
       >
         {active?.iconEmoji ?? '\u{1F4C1}'}
       </button>
@@ -57,7 +57,7 @@ export function WorkspaceSwitcher() {
               }}
               className="w-full text-left px-3 py-2 text-sm text-accent-blue hover:bg-bg-tertiary"
             >
-              + 新建 workspace
+              + 新建工作空间
             </button>
           </div>
         </div>

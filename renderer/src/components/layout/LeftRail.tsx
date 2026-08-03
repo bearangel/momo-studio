@@ -23,7 +23,7 @@ export function LeftRail() {
 
   return (
     <div className="w-14 shrink-0 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2">
-      {/* workspace 切换器：顶部下拉切换 / 新建 workspace */}
+      {/* 工作空间切换器：顶部下拉切换 / 新建工作空间 */}
       <div className="relative">
         <WorkspaceSwitcher />
       </div>

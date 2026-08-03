@@ -380,6 +380,10 @@ export interface ApiSurface {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */
     getToolCalls(workspaceId: string, opts?: ToolCallQueryOpts): Promise<ToolCallRecord[]>;
   };
+  dialog: {
+    /** 弹出原生目录选择对话框，返回绝对路径；用户取消返回 null */
+    pickDirectory(opts?: { title?: string; defaultPath?: string }): Promise<string | null>;
+  };
   marketplace: {
     /** 获取 catalog（远程优先，失败回退本地内置） */
     getCatalog(catalogUrl?: string): Promise<MarketplaceCatalog>;

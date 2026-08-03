@@ -12,6 +12,7 @@ import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
 import { registerMarketplaceHandlers } from '../marketplace/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
+import { registerDialogHandlers } from './dialog.handlers';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
@@ -27,4 +28,5 @@ export function registerIpcHandlers(): void {
   registerAuditHandlers();
   registerMarketplaceHandlers();
   registerProviderHandlers();
+  registerDialogHandlers();
 }
