@@ -3,10 +3,20 @@
 // Declarative agent YAML manifest 解析器。
 // 输入 K8s 风格的 YAML（apiVersion/kind/metadata/spec），校验必填字段后输出 AgentDefinition。
 // 任何校验失败都会收集到错误列表一次性抛出，避免反复试错。
+//
+// v1.3：YAML 仍可写 type/parentAgentId/model.provider 字段（向后兼容），
+// 但这些字段不进 DB（DB schema 已删除），而是路由到 ParsedManifest.suggestion
+// 供 builtin 加载时填充内存建议 Map（UI 默认值用）。
 
 import { load } from 'js-yaml';
 import { randomUUID } from 'node:crypto';
-import type { AgentDefinition, ModelRef, McpRef, SkillRef } from './types';
+import type {
+  AgentDefinition,
+  AgentRole,
+  BuiltinSuggestion,
+  McpRef,
+  SkillRef,
+} from './types';
 
 /** YAML manifest 原始结构（解析后的弱类型形态，仅用于校验阶段） */
 interface RawManifest {
@@ -30,12 +40,7 @@ interface RawManifest {
       };
     };
     defaultTools?: Array<{ kind?: string; ref?: string }>;
-    // === M2 manifest schema 扩展 ===
-    /**
-     * 父 agent slug 引用（仅 type='sub' 时有意义）。
-     * 注意：这里是 slug 字符串而非 UUID——builtin.ts 两阶段注册时会把 slug
-     * 解析为已注册父 agent 的实际 id。YAML 编写时无法预知 UUID，故用 slug。
-     */
+    /** 父 agent slug 引用（仅 type='sub' 时有意义；builtin.ts 解析为 defId） */
     parentAgentId?: string;
     defaultMcps?: Array<{ kind?: string; ref?: string; versionRange?: string }>;
     defaultSkills?: Array<{ kind?: string; ref?: string; versionRange?: string }>;
@@ -45,8 +50,23 @@ interface RawManifest {
 /** 支持的 agent 类型白名单 */
 const ALLOWED_TYPES = new Set(['standalone', 'main', 'sub']);
 
-/** 解析 YAML manifest 为 AgentDefinition。失败时抛出 Error。 */
+/** parseAgentManifestWithSuggestion 的返回值：DB 字段 + UI 建议字段 */
+export interface ParsedManifest {
+  def: AgentDefinition;
+  suggestion: BuiltinSuggestion;
+}
+
+/**
+ * 解析 YAML manifest 为 v1.3 AgentDefinition。
+ * 返回的 def 不含 type/parent/model.provider 字段（已从 schema 删除）；
+ * 这些信息只在 parseAgentManifestWithSuggestion 的 suggestion 字段中保留供 UI 用。
+ */
 export function parseAgentManifest(yamlContent: string): AgentDefinition {
+  return parseAgentManifestWithSuggestion(yamlContent).def;
+}
+
+/** 解析 YAML manifest，附带建议字段（builtin 加载用）。失败时抛出 Error。 */
+export function parseAgentManifestWithSuggestion(yamlContent: string): ParsedManifest {
   const raw = load(yamlContent) as RawManifest;
   const errors = validateRawManifest(raw);
   if (errors.length > 0) {
@@ -57,21 +77,16 @@ export function parseAgentManifest(yamlContent: string): AgentDefinition {
   const decl = spec.declarative!;
   const model = decl.model!;
 
-  // type 缺省为 standalone；显式给出但不在白名单内则校验失败（防止 YAML 拼错）
-  const type = (spec.type as AgentDefinition['type']) ?? 'standalone';
+  // v1.3：type/parent 仅作为建议字段（不进 DB）
+  const type = (spec.type as AgentRole) ?? 'standalone';
 
-  return {
+  const def: AgentDefinition = {
     id: randomUUID(),
     name: raw.metadata!.name!,
     slug: raw.metadata!.slug!,
     version: raw.metadata!.version!,
-    type,
     runtime: 'declarative',
     systemPrompt: decl.systemPrompt!,
-    model: {
-      provider: model.provider as ModelRef['provider'],
-      model: model.model!,
-    },
     defaultTools: (spec.defaultTools ?? []).map((t) => ({
       kind: 'builtin' as const,
       ref: t.ref!,
@@ -79,12 +94,21 @@ export function parseAgentManifest(yamlContent: string): AgentDefinition {
     source: 'custom',
     description: raw.metadata!.description ?? '',
     iconEmoji: raw.metadata!.iconEmoji ?? '🤖',
-    // parentAgentId 此处保留为 slug 字符串（YAML 原值）；builtin.ts 注册阶段
-    // 会把它解析为父 agent 的实际 UUID。非 sub 类型或未声明时为 undefined。
-    parentAgentId: spec.parentAgentId,
     defaultMcps: (spec.defaultMcps ?? []).map(parseMcpRef),
     defaultSkills: (spec.defaultSkills ?? []).map(parseSkillRef),
+    // v1.3 新字段：YAML 加载时默认 global + provider 未配置（用户后续配置）
+    workspaceId: null,
+    modelProviderId: null,
+    modelName: model.model!,
   };
+
+  const suggestion: BuiltinSuggestion = {
+    role: type,
+    suggestedParentDefId: spec.parentAgentId,
+    suggestedPlatform: model.provider as 'openai' | 'anthropic',
+  };
+
+  return { def, suggestion };
 }
 
 /** 解析单条 MCP 引用，ref 缺失时抛错（避免静默吞掉无效条目） */
@@ -115,7 +139,7 @@ function validateRawManifest(raw: RawManifest): string[] {
     errors.push(`model.provider 仅支持 "openai" 或 "anthropic"，收到 "${provider}"`);
   }
 
-  // type 白名单校验：缺省时 parseAgentManifest 回退 standalone，此处只校验显式非法值
+  // type 白名单校验：缺省时 parseAgentManifestWithSuggestion 回退 standalone，此处只校验显式非法值
   const type = raw.spec?.type;
   if (type !== undefined && !ALLOWED_TYPES.has(type)) {
     errors.push(`spec.type 仅支持 "standalone" / "main" / "sub"，收到 "${type}"`);

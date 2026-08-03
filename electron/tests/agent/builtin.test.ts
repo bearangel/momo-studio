@@ -1,10 +1,12 @@
 // electron/tests/agent/builtin.test.ts
 //
-// registerBuiltinAgents 单元测试：
+// registerBuiltinAgents 单元测试（v1.3 schema）：
 //   1. 从临时目录读取 YAML 并注册到 SQLite，source 标记为 builtin
-//   2. 幂等：重复注册不生成新 id（复用已有记录的 id）
+//   2. 幂等：重复注册不生成新 id（builtin-${slug} 确定性命名）
 //   3. 目录不存在时静默跳过（不抛错）
 //   4. 单个 YAML 解析失败不阻断其余文件注册
+//   5. type/parent/platform 入内存 suggestions Map，不进 DB
+//   6. builtin def modelProviderId=NULL，modelName 来自 YAML
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -12,7 +14,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
-import { registerBuiltinAgents, setBuiltinAgentsDir } from '../../src/main/agent/builtin';
+import {
+  registerBuiltinAgents,
+  setBuiltinAgentsDir,
+  getBuiltinSuggestionsMap,
+  clearBuiltinSuggestionsForTest,
+} from '../../src/main/agent/builtin';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-builtin-test-${Date.now()}`);
 
@@ -40,16 +47,18 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  clearBuiltinSuggestionsForTest();
 });
 
 afterEach(() => {
   closeDb();
   setBuiltinAgentsDir(null);
+  clearBuiltinSuggestionsForTest();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
 });
 
-describe('agent/builtin', () => {
+describe('agent/builtin — v1.3 schema', () => {
   it('从目录读取 YAML 并注册为 builtin agent', () => {
     const agentDir = path.join(tmpRoot, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
@@ -63,9 +72,18 @@ describe('agent/builtin', () => {
     expect(defs[0]!.slug).toBe('requirement-analyst');
     expect(defs[0]!.source).toBe('builtin');
     expect(defs[0]!.name).toBe('需求讨论师');
+    // v1.3 新字段
+    expect(defs[0]!.workspaceId).toBeNull(); // builtin 永远 global
+    expect(defs[0]!.modelProviderId).toBeNull(); // builtin 待用户配置
+    expect(defs[0]!.modelName).toBe('claude-3-5-sonnet');
+    // 旧字段不存在
+    const unknown = defs[0] as unknown as Record<string, unknown>;
+    expect(unknown.type).toBeUndefined();
+    expect(unknown.parentAgentId).toBeUndefined();
+    expect(unknown.model).toBeUndefined();
   });
 
-  it('幂等：重复注册复用已有 id', () => {
+  it('幂等：重复注册复用确定性 id（builtin-${slug}）', () => {
     const agentDir = path.join(tmpRoot, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(path.join(agentDir, 'requirement-analyst.yaml'), VALID_YAML, 'utf-8');
@@ -74,12 +92,12 @@ describe('agent/builtin', () => {
     registerBuiltinAgents();
     const firstRun = listAgentDefinitions();
     expect(firstRun).toHaveLength(1);
-    const firstId = firstRun[0]!.id;
+    expect(firstRun[0]!.id).toBe('builtin-requirement-analyst');
 
     registerBuiltinAgents();
     const secondRun = listAgentDefinitions();
     expect(secondRun).toHaveLength(1);
-    expect(secondRun[0]!.id).toBe(firstId);
+    expect(secondRun[0]!.id).toBe('builtin-requirement-analyst');
   });
 
   it('目录不存在时静默跳过', () => {
@@ -101,11 +119,13 @@ describe('agent/builtin', () => {
     expect(defs).toHaveLength(1);
     expect(defs[0]!.slug).toBe('requirement-analyst');
   });
+});
 
-  it('两阶段注册：sub 的 parentAgentId slug 被解析为父 agent 的实际 id', () => {
+describe('agent/builtin — suggestions Map', () => {
+  it('YAML 的 type/parent/platform 进 suggestions Map，不进 DB', () => {
     const agentDir = path.join(tmpRoot, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
-    // 文件顺序故意把 sub 放在 main 前面，验证两阶段不依赖文件顺序
+    // 文件顺序故意把 sub 放在 main 前面，验证不依赖文件顺序
     fs.writeFileSync(
       path.join(agentDir, 'a-sub.yaml'),
       `apiVersion: v1
@@ -149,18 +169,29 @@ spec:
 
     registerBuiltinAgents();
 
+    // DB 无 type/parent/model.provider
     const defs = listAgentDefinitions();
     expect(defs).toHaveLength(2);
-    const main = defs.find((d) => d.slug === 'main-x')!;
-    const sub = defs.find((d) => d.slug === 'sub-x')!;
-    expect(main).toBeDefined();
-    expect(sub).toBeDefined();
-    // sub 的 parentAgentId 已从 slug "main-x" 解析为父 agent 的真实 UUID
-    expect(sub.parentAgentId).toBe(main.id);
-    expect(sub.type).toBe('sub');
+    for (const d of defs) {
+      const unknown = d as unknown as Record<string, unknown>;
+      expect(unknown.type).toBeUndefined();
+      expect(unknown.parentAgentId).toBeUndefined();
+    }
+
+    // suggestions Map 含 type/parent/platform
+    const map = getBuiltinSuggestionsMap();
+    const mainEntry = map['builtin-main-x'];
+    const subEntry = map['builtin-sub-x'];
+    expect(mainEntry).toBeDefined();
+    expect(mainEntry.role).toBe('main');
+    expect(mainEntry.suggestedPlatform).toBe('anthropic');
+    expect(subEntry).toBeDefined();
+    expect(subEntry.role).toBe('sub');
+    expect(subEntry.suggestedParentDefId).toBe('builtin-main-x');
+    expect(subEntry.suggestedPlatform).toBe('openai');
   });
 
-  it('sub 引用的父 slug 不存在时仍注册（parentAgentId 回退为 undefined）', () => {
+  it('sub 引用的父 slug 不存在时仍注册（suggestedParentDefId 解析失败保留 slug-derived id）', () => {
     const agentDir = path.join(tmpRoot, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
@@ -189,7 +220,24 @@ spec:
 
     const defs = listAgentDefinitions();
     expect(defs).toHaveLength(1);
-    // 父 slug 解析失败，parentAgentId 回退为 undefined（不阻塞注册）
-    expect(defs[0]!.parentAgentId).toBeUndefined();
+    expect(defs[0]!.id).toBe('builtin-orphan');
+
+    const map = getBuiltinSuggestionsMap();
+    expect(map['builtin-orphan']).toBeDefined();
+    expect(map['builtin-orphan'].role).toBe('sub');
+    // 父 slug 解析为 `builtin-missing-parent`（即使该 def 不存在，仍保留作建议）
+    expect(map['builtin-orphan'].suggestedParentDefId).toBe('builtin-missing-parent');
+  });
+
+  it('clearBuiltinSuggestionsForTest 清空 Map', () => {
+    const agentDir = path.join(tmpRoot, 'agents');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'r.yaml'), VALID_YAML, 'utf-8');
+    setBuiltinAgentsDir(agentDir);
+    registerBuiltinAgents();
+    expect(Object.keys(getBuiltinSuggestionsMap())).toHaveLength(1);
+
+    clearBuiltinSuggestionsForTest();
+    expect(Object.keys(getBuiltinSuggestionsMap())).toHaveLength(0);
   });
 });
