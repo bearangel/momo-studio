@@ -8,6 +8,7 @@ import { SettingsNav } from './SettingsNav';
 import { GitPolicySettings } from './GitPolicySettings';
 import { AuditLog } from './AuditLog';
 import { ProviderSettings } from './ProviderSettings';
+import { ConversationSettings } from './ConversationSettings';
 
 export function SettingsView() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -26,6 +27,7 @@ export function SettingsView() {
       <SettingsNav />
       <div className="flex-1 overflow-auto p-6 max-w-4xl">
         {active === 'model_provider' && <ProviderSettings />}
+        {active === 'conversation' && <ConversationSettings />}
         {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
         {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
       </div>

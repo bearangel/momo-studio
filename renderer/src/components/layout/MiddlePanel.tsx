@@ -14,6 +14,7 @@ import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
+import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { MarketplaceView } from '../marketplace/MarketplaceView';
@@ -23,6 +24,7 @@ export function MiddlePanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
   const activeRoomId = useImStore((s) => s.activeRoomId);
+  const rooms = useImStore((s) => s.rooms);
   const [showMembers, setShowMembers] = useState(false);
 
   // 切换房间时关闭成员浮层，避免新房间显示旧成员
@@ -71,10 +73,18 @@ export function MiddlePanel() {
 
   // im 视图：左侧房间列表 + 中间消息流和工具条和输入框 + 成员浮层（按需）
   if (activeView === 'im') {
+    const activeRoom = rooms.find((r) => r.roomId === activeRoomId);
     return (
       <div className="flex-1 flex min-w-0">
         <RoomList />
         <div className="flex-1 flex flex-col min-w-0 relative">
+          {/* 房间头部：房间名 + 工具上限徽标 */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
+            <span className="text-sm text-neutral-100 truncate flex-1">
+              {activeRoom ? activeRoom.name : '未选择房间'}
+            </span>
+            {activeRoomId && <RoomToolBudgetBadge roomId={activeRoomId} />}
+          </div>
           <MessageList />
           <InputToolbar
             showMembers={showMembers}

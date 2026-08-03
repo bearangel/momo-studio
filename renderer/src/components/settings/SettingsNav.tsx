@@ -4,6 +4,7 @@ import { cn } from '../../lib/cn';
 
 const CATEGORIES: { key: SettingsCategory; label: string; icon: string }[] = [
   { key: 'model_provider', label: '模型供应商', icon: '🤖' },
+  { key: 'conversation', label: '会话设置', icon: '💬' },
   { key: 'git_policy', label: 'Git 策略', icon: '🔀' },
   { key: 'audit_log', label: '审计日志', icon: '📋' },
 ];
