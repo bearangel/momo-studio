@@ -46,6 +46,8 @@ interface StreamStoreState {
 function statusFromFinishReason(reason: string): StreamState['status'] {
   if (reason === 'stop') return 'done';
   if (reason === 'interrupted') return 'interrupted';
+  // budget_exhausted 是计划内终止（agent 达到工具上限后停止），视为已完成而非出错
+  if (reason === 'budget_exhausted') return 'done';
   return 'error';
 }
 
