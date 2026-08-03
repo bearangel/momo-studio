@@ -6,7 +6,7 @@
 
 ## 状态
 
-**v1.0.0 — Released**
+**v1.2 — Released**
 
 ## 特性
 
@@ -138,7 +138,7 @@ docs/
 - ✅ Marketplace 浏览/搜索/安装
 - ✅ 安全（WorkspaceFS + sandbox + 审计 + Git policy + 崩溃重启 + LLM 重试）
 
-### v1.1 — 打磨与补全（进行中）
+### v1.1 — 打磨与补全（已完成）
 
 不引入新架构，聚焦 v1 遗留项和体验优化。
 
@@ -179,6 +179,16 @@ docs/
 - 🔲 macOS sandbox-exec 实测验证
 - ✅ CHANGELOG.md + 版本号规范
 
+#### v1.2 IM 体验优化（已完成）
+
+- ✅ **Dev 模式 agent 行为日志** — `trace()` 函数 + 14 个插桩点（消息接收/LLM 调用/工具执行/dispatch/reply），dev 模式终端实时输出 agent 行为摘要
+- ✅ **LLM 请求超时优化** — 单次请求 90s → 300s；dispatch 渐进式超时 3min→6min→fail
+- ✅ **IM 卡片归属与对话化视觉** — 抽取 `MessageFrame` 共享消息外壳（头像+名字+左右对齐），三类消息（普通文本/dispatch/task_reply）统一外壳；TaskReplyCard 补齐此前完全缺失的 agent 归属；DispatchCard 去冗余 from 紧凑显示 target
+- ✅ **缩窗布局响应式修复** — LeftRail `shrink-0` 永不压扁；RoomList/MembersPanel 可缩；MiddlePanel `min-w-0`；MessageList 禁用水平滚动
+- ✅ **Tailwind 任意值 class bug 规避** — 发现 Tailwind JIT 不生成 `max-w-[70%]` 等任意值 class，改用 inline style 约束宽度
+- ✅ **IM 工具条 + 成员浮层 + 上下线标签** — InputToolbar 工具条（成员切换按钮 + 预留扩展位）；MembersPanel 从常驻改为按需浮层（absolute 定位 + backdrop 关闭）；移除 agent 启动上线消息，改为成员面板在线/离线 badge（绿/灰）
+- ✅ 29 + 11 个新增 IM 组件测试（MessageFrame/DispatchCard/TaskReplyCard/MessageBubble/InputToolbar/MembersPanel），renderer 全套 105 测试通过
+
 ### v2.0 — 多人协作 + 进阶 Agent（设计中）
 
 从"单机工具"进化为"团队平台"。
@@ -218,10 +228,10 @@ docs/
 
 | 问题 | 影响 | 计划解决版本 |
 |---|---|---|
+| **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
 | matrix-js-sdk 锁定 v31（v34 ESM 冲突） | 无法用最新 SDK 特性 | v2.0 ESM 转换 |
 | Conduwuit 无 macOS 二进制 | macOS 需 Docker | v2.0 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
-| 无 CHANGELOG | 版本追踪缺失 | v1.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
 
 ## 已知限制
@@ -229,6 +239,7 @@ docs/
 - Conduwuit 仅 Linux 原生二进制，macOS / Windows 需 Docker 桥接。
 - `matrix-js-sdk` 锁定 v31，升级 v32+ 需要先把主进程迁到 ESM（v2 任务）。
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
+- **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
 
 ## 许可
 
