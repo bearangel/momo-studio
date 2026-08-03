@@ -16,11 +16,21 @@ export function MessageList() {
   const loading = useImStore((s) => s.loading);
   const currentUserId = useAuthStore((s) => s.user?.userId ?? null);
   const botNameByUserId = useBotNameMap();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isFirstRender = useRef(true);
 
-  // 消息列表变化时滚动到底部
+  // 消息列表变化时滚动到底部。
+  // 首次渲染（含从其他视图切回 IM）用 'auto' 瞬间跳到底部，避免从顶部平滑滚动的视觉跳跃；
+  // 后续新消息到达用 'smooth' 平滑滚动。
+  // 用容器 scrollTo 而非 scrollIntoView：后者在 flex + overflow 容器内不可靠。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: isFirstRender.current ? 'auto' : 'smooth',
+    });
+    isFirstRender.current = false;
   }, [messages]);
 
   if (!activeRoomId) {
@@ -48,7 +58,7 @@ export function MessageList() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden py-4">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
       {messages.map((msg) => (
         <MessageBubble
           key={msg.eventId}
@@ -57,7 +67,6 @@ export function MessageList() {
           senderName={botNameByUserId.get(msg.sender)}
         />
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }
