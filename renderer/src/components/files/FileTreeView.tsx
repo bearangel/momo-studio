@@ -60,8 +60,14 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
       {isRoot && (
         <button
           type="button"
-          onClick={() => toggleDir('.')}
-          className="w-full text-left py-1 text-xs uppercase tracking-wide text-neutral-500 hover:bg-bg-tertiary flex items-center gap-1 rounded"
+          onClick={() => {
+            selectDir('.');
+            toggleDir('.');
+          }}
+          className={cn(
+            'w-full text-left py-1 text-xs uppercase tracking-wide text-neutral-500 hover:bg-bg-tertiary flex items-center gap-1 rounded',
+            selectedDir === '.' && 'bg-accent-blue/20 text-neutral-300',
+          )}
         >
           <span>{expanded ? '▼' : '▶'}</span>
           <span>工作区文件</span>

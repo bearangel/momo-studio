@@ -99,9 +99,12 @@ export const useFileStore = create<FileState>((set, get) => ({
     });
   },
 
-  selectFile: (filePath) => set({ selectedFile: filePath }),
+  // 选中文件时重置选中目录为根：避免文件与文件夹同时高亮；
+  // 且选中文件意味着用户当前焦点在文件内容而非目录创建上下文。
+  selectFile: (filePath) => set({ selectedFile: filePath, selectedDir: '.' }),
 
-  selectDir: (dirPath) => set({ selectedDir: dirPath }),
+  // 选中目录时清空文件选中：同一时刻只有一项高亮。
+  selectDir: (dirPath) => set({ selectedDir: dirPath, selectedFile: null }),
 
   collapseAll: () => {
     const expanded = new Set(['.']);

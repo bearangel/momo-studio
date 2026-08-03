@@ -249,13 +249,22 @@ describe('file.store expandedDirs 按 workspace 隔离持久化', () => {
 });
 
 describe('file.store selectedDir', () => {
-  it('selectDir 设置当前选中目录', () => {
+  it('selectDir 设置当前选中目录并清空文件选中', () => {
+    useFileStore.setState({ selectedFile: 'src/a.ts' });
     useFileStore.getState().selectDir('src');
     expect(useFileStore.getState().selectedDir).toBe('src');
+    expect(useFileStore.getState().selectedFile).toBeNull();
   });
 
   it('selectDir 根目录', () => {
     useFileStore.getState().selectDir('.');
+    expect(useFileStore.getState().selectedDir).toBe('.');
+  });
+
+  it('selectFile 设置选中文件并重置 selectedDir 为根', () => {
+    useFileStore.setState({ selectedDir: 'src' });
+    useFileStore.getState().selectFile('src/a.ts');
+    expect(useFileStore.getState().selectedFile).toBe('src/a.ts');
     expect(useFileStore.getState().selectedDir).toBe('.');
   });
 
