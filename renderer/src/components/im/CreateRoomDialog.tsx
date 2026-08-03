@@ -65,9 +65,14 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
         inviteUserIds: selected,
         workspaceId: activeWorkspaceId ?? undefined,
       });
-      // 非继承全局时，写入房间级配置
+      // 非继承全局时，写入房间级配置。
+      // 房间已创建成功，settings 写入失败不应阻断流程（房间客观存在）。
       if (maxToolCalls !== null) {
-        await ipc.settings.updateRoom(roomId, { maxToolCalls });
+        try {
+          await ipc.settings.updateRoom(roomId, { maxToolCalls });
+        } catch {
+          // settings 写入失败仅告警，不阻断房间创建流程
+        }
       }
       onCreated();
       onClose();
