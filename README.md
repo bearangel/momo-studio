@@ -29,7 +29,7 @@ v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/
 - 完整运行历史与工具调用审计
 
 ### 即时通讯（IM）
-- 本地 Conduwuit（Matrix 兼容协议）服务端，零外部依赖
+- 本地 Tuwunel（Matrix 兼容协议）服务端，零外部依赖
 - 支持私聊和房间消息
 - Agent 在 IM 内可被 `@` 唤起，并以 Markdown 流式回复
 - 客户端渲染支持代码块、表格、链接、引用块
@@ -60,7 +60,7 @@ v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/
 - **Node.js 20 LTS**：Node 26+ 会破坏 `better-sqlite3` 原生编译（`ERR_DLOPEN_FAILED`）。容器默认是 Node 26，先 `nvm use 20`。
 - **pnpm 9+**
 - 平台：macOS（arm64 / x64）或 Linux（x64）。Windows 是 v2 任务。
-- Conduwuit 仅发布 Linux 二进制；macOS / Windows 需要 Docker 运行 Conduwuit（见 `docs/dev/conduit-manual.md`）。
+- Tuwunel（Conduwuit 继任者）当前仅预编译 Linux 二进制；macOS / Windows 待本地预编译（见 `docs/dev/conduit-manual.md`）。
 
 ## 安装
 
@@ -71,7 +71,7 @@ nvm use 20
 npx pnpm@9.0.0 install
 ```
 
-`postinstall` 会下载预编译的 Conduwuit 二进制。如果下载失败（离线环境），见 `docs/dev/conduit-manual.md` 手动放置。
+`postinstall` 会下载预编译的 Tuwunel 二进制。如果下载失败（离线环境），见 `docs/dev/conduit-manual.md` 手动放置。
 
 > **`matrix-js-sdk` 锁版本说明**：仓库锁定 `^31.0.0`（不是 `^34`）。v34 是纯 ESM，与本仓库的 CommonJS Electron 主进程冲突，`pnpm install` 会报 `ERR_REQUIRE_ESM`。lockfile 已反映这个降级。
 
@@ -117,7 +117,7 @@ npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .d
 ```
 electron/      Electron 主进程（CommonJS, Node.js）
 renderer/      React UI（ESM, Vite）
-resources/     Conduwuit 二进制 + 下载脚本
+resources/     Tuwunel 二进制 + 下载脚本
 tests/         Playwright 端到端测试
 docs/
   specs/       设计文档
@@ -133,7 +133,7 @@ docs/
 
 本地优先的 agent 编排平台。一个用户、一台机器、开箱即用。
 
-- ✅ Electron + React + Conduwuit 一体化桌面应用
+- ✅ Electron + React + Tuwunel 一体化桌面应用
 - ✅ Workspace 管理（目录映射 + git init）
 - ✅ Declarative agent（YAML manifest + LLM chat loop + 工具执行）
 - ✅ 主子 agent 调度（IM dispatch/task_reply 协议）
@@ -275,7 +275,6 @@ v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「�
 - 🔲 **E2E 加密** — 人 ↔ 人 DM 加密
 - 🔲 **消息搜索** — 全文检索 Matrix 历史
 - 🔲 **Electron 主进程 ESM 转换** — 解除 matrix-js-sdk v31 锁定
-- 🔲 **macOS 原生 Conduwuit 或内置 Docker 编排**
 
 ### v2.1 — 效率增强 🔲 概念阶段
 
@@ -300,20 +299,17 @@ v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「�
 |---|---|---|
 | **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
 | matrix-js-sdk 锁定 v31（v34 ESM 冲突） | 无法用最新 SDK 特性 | v2.0 ESM 转换 |
-| Conduwuit 无 macOS 二进制 | macOS 需 Docker | v2.0 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
 | **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测（`anthropic.com` → anthropic，其余 → openai）；非标准域名可能误判 | v1.4 加 platform 列 |
-| **v1.2→v1.3 升级需重配 provider** | migration v12 后 def.modelProviderId=NULL，现有 assignment 无法启动直到用户在 Agent 库配置 provider | 一次性升级成本，无回滚方案 |
 | **3 个 conduit/manager 测试 flaky** | SIGKILL/healthCheck/timeout 偶发失败 | 待排查测试时序 |
 
 ## 已知限制
 
-- Conduwuit 仅 Linux 原生二进制，macOS / Windows 需 Docker 桥接。
+- Tuwunel（原 Conduwuit 继任者）当前仅预编译 Linux 二进制，macOS / Windows 版本待本地预编译。
 - `matrix-js-sdk` 锁定 v31，升级 v32+ 需要先把主进程迁到 ESM（v2 任务）。
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
-- **v1.3 升级后现有 agent 需手动重配 provider**——migration v12 删除了 def 上的 model 字段，用户需到 Agent 库为每个 def 选 modelProviderId + modelName 后才能启动。
 - **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
 
 ## 许可
