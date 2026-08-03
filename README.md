@@ -6,7 +6,9 @@
 
 ## 状态
 
-**v1.2 — Released**
+**v1.3 — 开发中**
+
+v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/specs/2026-08-03-agent-definition-assignment-separation-design.md`。
 
 ## 特性
 
@@ -18,7 +20,10 @@
 
 ### Agent
 - YAML 声明式定义（frontmatter + prompt body）
-- 内置 Anthropic / OpenAI / Ollama 三个 LLM provider
+- v1.3：定义与分配解耦——身份/能力/模型在 def；角色/父子在 assignment
+- v1.3：自定义 agent 可 workspace 隔离（默认私有，可选全局共享）
+- v1.3：UI 双 Tab（本工作空间 + Agent 库管理）
+- 内置 Anthropic / OpenAI 两个 LLM provider；v1.3 改为 provider 引用模式（baseUrl + keychain）
 - 工具系统：内置（bash / file_read / file_write / git）+ MCP 工具
 - 主子调度：父 agent 通过 `dispatch` 派发子任务，子任务通过 `task_reply` 回传结果
 - 完整运行历史与工具调用审计
