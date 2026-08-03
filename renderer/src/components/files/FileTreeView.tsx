@@ -18,7 +18,7 @@ interface Props {
 }
 
 export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
-  const { tree, expandedDirs, selectedFile, loadDir, toggleDir, selectFile, deletePath, renamePath } =
+  const { tree, expandedDirs, selectedFile, selectedDir, loadDir, toggleDir, selectFile, selectDir, deletePath, renamePath, createPath } =
     useFileStore();
   const closeTabIfPath = useEditorStore((s) => s.closeTabIfPath);
   const renameTab = useEditorStore((s) => s.renameTab);
@@ -30,6 +30,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
   // 移动目标目录输入状态
   const [moving, setMoving] = useState<{ path: string } | null>(null);
+  // 目录内新建状态：目标目录 + 类型（file/dir）
+  const [creatingInDir, setCreatingInDir] = useState<{ dir: string; type: 'file' | 'dir' } | null>(null);
 
   const entries = tree.get(dirPath);
   const expanded = expandedDirs.has(dirPath);
@@ -77,13 +79,17 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           return (
             <div key={fullPath}>
               <button
-                onClick={() => toggleDir(fullPath)}
+                onClick={() => {
+                  selectDir(fullPath);
+                  toggleDir(fullPath);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setMenu({ x: e.clientX, y: e.clientY, path: fullPath, isDirectory: true });
                 }}
                 className={cn(
                   'w-full text-left py-1 text-sm hover:bg-bg-tertiary flex items-center gap-1 rounded',
+                  selectedDir === fullPath && 'bg-accent-blue/20',
                 )}
                 style={{ paddingLeft: depth * 16 }}
               >
@@ -130,6 +136,16 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           x={menu.x}
           y={menu.y}
           isDirectory={menu.isDirectory}
+          onNewFile={
+            menu.isDirectory
+              ? () => setCreatingInDir({ dir: menu.path, type: 'file' })
+              : undefined
+          }
+          onNewDir={
+            menu.isDirectory
+              ? () => setCreatingInDir({ dir: menu.path, type: 'dir' })
+              : undefined
+          }
           onRename={() =>
             setRenaming({ path: menu.path, value: menu.path.split('/').pop() ?? '' })
           }
@@ -158,6 +174,25 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
             renameTab(path, dst);
           }}
           onClose={() => setMoving(null)}
+        />
+      )}
+      {creatingInDir && workspace && (
+        <PromptDialog
+          title={creatingInDir.type === 'file' ? `在「${creatingInDir.dir}」内新文件名` : `在「${creatingInDir.dir}」内新目录名`}
+          placeholder={creatingInDir.type === 'file' ? '如 foo.ts' : '如 utils'}
+          onSubmit={async (name) => {
+            const dir = creatingInDir.dir;
+            const type = creatingInDir.type;
+            setCreatingInDir(null);
+            if (!name.trim()) return;
+            const fullPath = `${dir}/${name.trim()}`;
+            try {
+              await createPath(workspace.id, fullPath, type);
+            } catch (e) {
+              alert(`创建失败：${e instanceof Error ? e.message : String(e)}`);
+            }
+          }}
+          onClose={() => setCreatingInDir(null)}
         />
       )}
       {renaming && workspace && (
