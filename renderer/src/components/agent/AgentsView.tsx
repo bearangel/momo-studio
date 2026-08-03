@@ -24,7 +24,7 @@ export function AgentsView() {
   }, [loadBuiltinSuggestions]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-w-0 h-full">
       <div className="flex border-b border-border-subtle shrink-0">
         <button
           type="button"
@@ -51,7 +51,7 @@ export function AgentsView() {
           Agent 库
         </button>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto min-w-0">
         {tab === 'workspace' ? <WorkspaceAgentsPanel /> : <AgentLibrary />}
       </div>
     </div>
