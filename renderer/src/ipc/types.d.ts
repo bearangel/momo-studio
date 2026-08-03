@@ -41,25 +41,29 @@ export interface CreateWorkspaceInput {
   iconEmoji?: string;
 }
 
+export type AgentRole = 'standalone' | 'main' | 'sub';
+
 export interface AgentDefinition {
   id: string;
   name: string;
   slug: string;
   version: string;
-  type: string;
   runtime: string;
   systemPrompt: string;
-  model: { provider: string; model: string; baseUrl?: string };
   defaultTools: Array<{ kind: string; ref: string }>;
   source: string;
   description: string;
   iconEmoji: string;
-  /** 父 agent ID（仅 type='sub' 时有值），用于 UI 展示主子 agent 分组 */
-  parentAgentId?: string;
   /** 默认 MCP server 引用（Layer 1 能力），与 electron 端 McpRef 对齐 */
   defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
   /** 默认 Skill 引用（Layer 1 能力），与 electron 端 SkillRef 对齐 */
   defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
+  /** NULL=全局共享；非 NULL=该 workspace 私有 */
+  workspaceId: string | null;
+  /** NULL=builtin 未配置；custom 必填 */
+  modelProviderId: string | null;
+  /** 模型名 */
+  modelName: string;
 }
 
 export interface AgentAssignment {
@@ -69,7 +73,21 @@ export interface AgentAssignment {
   botMatrixUserId: string;
   enabled: boolean;
   createdAt: string;
+  /** 角色（在 assignment 级而非 definition 级） */
+  role: AgentRole;
+  /** 父 assignment 的 instanceId（仅 role='sub' 时有值） */
+  parentInstanceId: string | null;
+  /** 有无 API key override（实际 key 在 keychain） */
+  hasApiKeyOverride: boolean;
 }
+
+/** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */
+export interface BuiltinSuggestion {
+  role: AgentRole;
+  suggestedParentDefId?: string;
+  suggestedPlatform?: 'openai' | 'anthropic';
+}
+export type BuiltinSuggestionMap = Record<string, BuiltinSuggestion>;
 
 export interface StartAgentInput {
   assignment: AgentAssignment;
@@ -81,18 +99,19 @@ export interface StartAgentInput {
 export interface AddToWorkspaceInput {
   workspaceId: string;
   agentDefinitionId: string;
-  llmApiKey: string;
+  role: AgentRole;
+  parentInstanceId?: string;
+  apiKeyOverride?: string;
 }
 
 /**
  * agent:assignMain 入参 — 安装 main agent 时自动跟随注册其全部 sub agent。
- * mainDefId 指向 type='main' 的定义；该 main 名下所有 parentAgentId 指向它的
- * sub 定义会被一并安装。
+ * 内部行为：写 assignment.role='main'（首条）+ role='sub'（其余）+ parent_instance_id 链。
  */
 export interface AssignMainInput {
   workspaceId: string;
   mainDefId: string;
-  llmApiKey: string;
+  apiKeyOverride?: string;
   /** 要安装的子 agent 定义 ID 列表；undefined = 全部安装 */
   selectedSubDefIds?: string[];
 }
