@@ -605,6 +605,7 @@ export async function runChatLoop(
   let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
   let toolCallCount = 0;
   const toolCallHistory: ToolCallRecord[] = [];
+  let accumulatedThinking = '';
 
   const abortController = new AbortController();
   const abortListener = (msg: unknown): void => {
@@ -627,7 +628,6 @@ export async function runChatLoop(
     trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: tools?.length ?? 0 });
 
     let accumulatedText = '';
-    let accumulatedThinking = '';
     const toolCalls: LLMToolCall[] = [];
     let finishReason: 'stop' | 'tool_use' = 'stop';
 

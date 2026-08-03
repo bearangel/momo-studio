@@ -315,11 +315,6 @@ class AnthropicProvider implements LLMProvider {
     };
   }
 
-  /** 把统一 LLMMessage 映射为 Anthropic 的 messages 元素格式（tool_result 用 user 角色） */
-  private toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
-    return toAnthropicMessage(m);
-  }
-
   async *chatStream(
     messages: LLMMessage[],
     tools: LLMToolDef[] | undefined,
