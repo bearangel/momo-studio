@@ -825,9 +825,75 @@ export function formatBudgetHint(maxToolCalls: number): string {
   return `\n\n## 工具调用预算\n本任务工具调用上限：${maxToolCalls} 次（所有参与 agent 共享此预算）。请合理规划工具使用。`;
 }
 
+/** Matrix PDU 上限 65535 字节；留 ~10KB 给协议开销，内容限制 55KB */
+const MAX_EVENT_CONTENT_BYTES = 55_000;
+
+/**
+ * 截断工具调用记录中的大字段：result 截到 200 字符，args 值截到 500 字符。
+ * 复杂任务（如 read_file 大文件、write_file 整个文件内容）的工具记录极易撑爆 PDU。
+ */
+function truncateToolCallFields(calls: ToolCallRecord[]): ToolCallRecord[] {
+  return calls.map((tc) => ({
+    name: tc.name,
+    success: tc.success,
+    result: tc.result.length > 200 ? tc.result.slice(0, 200) + '...' : tc.result,
+    args: truncateArgs(tc.args),
+  }));
+}
+
+/** 截断 args 对象中超过 500 字符的字符串值 */
+function truncateArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string' && value.length > 500) {
+      out[key] = value.slice(0, 500) + '...';
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/**
+ * 渐进式截断 event content，确保 JSON 序列化后不超过 MAX_EVENT_CONTENT_BYTES。
+ * 降级顺序：截断工具字段 → 截断 thinking → 删除 thinking → 删除 tool_calls。
+ * body（正文）永远保留——最坏情况用户至少能看到最终回复。
+ */
+function fitEventContent(
+  content: Record<string, unknown>,
+  thinking: string,
+  toolCalls: ToolCallRecord[],
+): Record<string, unknown> {
+  const jsonSize = (obj: unknown): number => Buffer.byteLength(JSON.stringify(obj), 'utf-8');
+
+  // 0级：完整内容
+  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+
+  // 1级：截断工具调用中的大字段
+  if (toolCalls.length > 0) {
+    content['io.momo-studio.tool_calls'] = truncateToolCallFields(toolCalls);
+    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+  }
+
+  // 2级：截断 thinking 到 3000 字符
+  if (thinking) {
+    content['io.momo-studio.thinking'] = thinking.slice(0, 3000) + '\n...(思考过程已截断)';
+    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+  }
+
+  // 3级：删除 thinking
+  delete content['io.momo-studio.thinking'];
+  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+
+  // 4级：删除 tool_calls（只保留 body 正文）
+  delete content['io.momo-studio.tool_calls'];
+  return content;
+}
+
 /**
  * 发送最终 Matrix m.room.message（含持久化元数据）。
  * renderer 据此渲染 thinking 折叠区 + 工具调用卡片 + 正文。
+ * 渐进式截断防止 PDU 超过 64KB 限制（复杂任务 tool_calls + thinking 可达数万字）。
  */
 async function sendFinalMessage(
   client: MatrixClient,
@@ -849,7 +915,11 @@ async function sendFinalMessage(
   if (parentStreamSessionId) {
     content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
   }
-  await client.sendEvent(roomId, 'm.room.message', content, '');
+
+  // 渐进式截断，确保不超 Matrix PDU 限制
+  const fitted = fitEventContent(content, thinking, toolCalls);
+
+  await client.sendEvent(roomId, 'm.room.message', fitted, '');
 }
 
 /**
