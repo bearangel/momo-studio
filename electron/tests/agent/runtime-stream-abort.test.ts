@@ -118,7 +118,8 @@ describe('v1.4 嵌套流式中断传播', () => {
     expect(children?.has('sub-sess-nest')).toBe(true);
 
     // 父子两侧都在 activeStreams 中注册（不同 roomId → 不同 entry）
-    const activeSessions = new Set([...__getActiveStreams().values()].map((e) => e.streamSessionId));
+    // v1.5.1：activeStreams 改为 Map<roomId, Array>，values() 是数组的数组，需 flat
+    const activeSessions = new Set([...__getActiveStreams().values()].flat().map((e) => e.streamSessionId));
     expect(activeSessions.has('pm-sess-nest')).toBe(true);
     expect(activeSessions.has('sub-sess-nest')).toBe(true);
   });

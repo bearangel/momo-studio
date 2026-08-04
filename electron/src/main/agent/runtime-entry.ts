@@ -181,6 +181,12 @@ export interface RuntimeContext {
   sendStreamChunk: (chunk: StreamChunk) => void;
   /** 工具模块注册表（启动时构建一次，doExecuteTool 复用） */
   toolModules: ToolModule[];
+  /**
+   * v1.5.1：当前 chat loop 的 abortSignal。
+   * executeDispatch 监听此 signal，被中断时立即 reject（否则 PM 在 await dispatch
+   * 阻塞 6 分钟渐进式超时期间无法响应停止按钮）。
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -698,6 +704,9 @@ export async function runChatLoop(
   let accumulatedText = '';
 
   const abortController = new AbortController();
+  // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
+  // 使 PM 在 await dispatch 期间也能响应中断
+  ctx.abortSignal = abortController.signal;
   const abortListener = (msg: unknown): void => {
     const m = msg as { type?: string; streamSessionId?: string };
     if (m.type === 'abort' && m.streamSessionId === streamSessionId) {
@@ -1124,7 +1133,8 @@ export async function doExecuteTool(
   if (name.startsWith('dispatch:')) {
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
-    const dispatchResult = await executeDispatch(subSlug, task, client, config, toolBudget, toolStreamSessionId);
+    // v1.5.1：传 abortSignal，PM 在 await dispatch 时也能响应停止按钮
+    const dispatchResult = await executeDispatch(subSlug, task, client, config, toolBudget, toolStreamSessionId, ctx.abortSignal);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
   }
@@ -1176,6 +1186,11 @@ export async function executeDispatch(
   toolBudget?: number,
   /** v1.4 嵌套：子 agent 流 session ID，写入 dispatch 消息供子 agent 关联 PM 气泡 */
   toolStreamSessionId?: string,
+  /**
+   * v1.5.1：PM chat loop 的 abortSignal。被 abort 时立即 reject（清理 pendingReplies），
+   * 否则 PM 会阻塞到渐进式超时（3+6=9 分钟）才退出，期间停止按钮无效。
+   */
+  signal?: AbortSignal,
 ): Promise<{ body: string; toolCallsUsed: number }> {
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
@@ -1201,6 +1216,22 @@ export async function executeDispatch(
       subSlug,
     });
     armDispatchTimer(dispatch.content.task_id);
+
+    // v1.5.1：监听 abortSignal，被中断时立即清理 + reject（不等渐进式超时）
+    if (signal) {
+      const onAbort = (): void => {
+        const entry = pendingReplies.get(dispatch.content.task_id);
+        if (entry) {
+          clearTimeout(entry.timer);
+          pendingReplies.delete(dispatch.content.task_id);
+        }
+        const err = new Error('dispatch 被中断');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 
   await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
