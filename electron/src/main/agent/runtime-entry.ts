@@ -581,6 +581,14 @@ interface ToolCallRecord {
   args: Record<string, unknown>;
   result: string;
   success: boolean;
+  /** v1.4 嵌套：dispatch 委派标记 */
+  isDispatch?: boolean;
+  /** v1.4 嵌套：子 agent 流式 session ID（renderer 据此查找子 agent 的 StreamState） */
+  subStreamSessionId?: string;
+  /** v1.4 嵌套：子 agent 展示名 */
+  subAgentName?: string;
+  /** v1.4 嵌套：子 agent emoji 头像 */
+  subAgentAvatar?: string;
 }
 
 /**
@@ -806,7 +814,20 @@ export async function runChatLoop(
         });
       }
 
-      toolCallHistory.push({ name: tc.name, args: tc.arguments, result, success });
+      const subAgentName = isDispatch
+        ? (config.subAgents.find((s) => s.slug === tc.name.slice('dispatch:'.length))?.description
+          ?? config.subAgents.find((s) => s.slug === tc.name.slice('dispatch:'.length))?.slug
+          ?? tc.name)
+        : undefined;
+      toolCallHistory.push({
+        name: tc.name, args: tc.arguments, result, success,
+        ...(isDispatch ? {
+          isDispatch: true,
+          subStreamSessionId,
+          subAgentName,
+          subAgentAvatar: '🤖',
+        } : {}),
+      });
       toolCallCount++;
       budgetRemaining--; // dispatch 本身计 1 次
       if (dispatchInfo && dispatchInfo.toolCallsUsed > 0 && budgetRemaining !== Infinity) {

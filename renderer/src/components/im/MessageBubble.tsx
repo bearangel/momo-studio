@@ -13,7 +13,8 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
-import type { DispatchChild } from '../../stores/stream.store';
+import type { DispatchChild, StreamState } from '../../stores/stream.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
 import { DispatchChip } from './DispatchChip';
@@ -128,6 +129,8 @@ function buildHistoryDispatchChild(tc: PersistedToolCall, index: number): Dispat
 }
 
 export function MessageBubble({ message, isSelf, senderName }: Props) {
+  const streams = useStreamStore((s) => s.streams);
+
   if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
@@ -168,15 +171,19 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
             ))}
           </div>
         )}
-        {/* v1.4 嵌套：dispatch chips 历史模式（不传 subStream——展开时无嵌套正文，PM body 已含关键信息） */}
+        {/* v1.4 嵌套：dispatch chips 历史模式——从 streams Map 查找子 agent StreamState */}
         {dispatchToolCalls.length > 0 && (
           <div style={{ marginBottom: 8 }}>
-            {dispatchToolCalls.map((tc, i) => (
-              <DispatchChip
-                key={tc.subStreamSessionId ?? `hist-dispatch-${i}`}
-                child={buildHistoryDispatchChild(tc, i)}
-              />
-            ))}
+            {dispatchToolCalls.map((tc, i) => {
+              const child = buildHistoryDispatchChild(tc, i);
+              return (
+                <DispatchChip
+                  key={child.subStreamSessionId}
+                  child={child}
+                  subStream={streams.get(child.subStreamSessionId)}
+                />
+              );
+            })}
           </div>
         )}
         {/* 正文：与普通气泡一致的 markdown 渲染样式 */}
