@@ -12,6 +12,8 @@ import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
 import { ToolCallChip } from './ToolCallChip';
 import { DispatchChip } from './DispatchChip';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Props {
   stream: StreamState;
@@ -103,8 +105,8 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
       )}
 
       {stream.text && (
-        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          <span className="text-sm whitespace-pre-wrap break-words">{stream.text}</span>
+        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
           {isStreaming && (
             <span
               aria-label="流式光标"

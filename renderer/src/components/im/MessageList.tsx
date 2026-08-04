@@ -98,6 +98,7 @@ export function MessageList() {
           message={msg}
           isSelf={msg.sender === currentUserId}
           senderName={botNameByUserId.get(msg.sender)}
+          allMessages={messages}
         />
       ))}
       {activeRoomStreams.map((stream) => (

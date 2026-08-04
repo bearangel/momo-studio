@@ -11,6 +11,8 @@
 import type { StreamState } from '../../stores/stream.store';
 import { ThinkingSection } from './ThinkingSection';
 import { ToolCallChip } from './ToolCallChip';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Props {
   /** 子 agent 的流式聚合状态（从 streams Map 按 subStreamSessionId 查找后传入） */
@@ -49,8 +51,8 @@ export function SubAgentSection({ stream }: Props) {
       )}
 
       {stream.text && (
-        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          <span className="text-sm whitespace-pre-wrap break-words">{stream.text}</span>
+        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
           {isStreaming && (
             <span
               aria-label="子 agent 流式光标"

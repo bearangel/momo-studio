@@ -28,6 +28,8 @@ interface Props {
   isSelf: boolean;
   /** bot 的配置名称（如有），优先于 shortName 展示 */
   senderName?: string;
+  /** 同房间的全部消息（用于从 Matrix 历史重建子 agent StreamState） */
+  allMessages?: ImMessage[];
 }
 
 /** agent 持久化到 Matrix 消息的单条工具调用记录（与 electron 端 ToolCallRecord 对齐） */
@@ -106,6 +108,31 @@ function extractAgentMeta(content: Record<string, unknown>): {
   return { thinking, toolCalls };
 }
 
+/**
+ * 从 Matrix 历史消息重建子 agent 的 StreamState（重启后 stream Map 为空时的 fallback）。
+ * 从子 agent 的 m.room.message 中提取 thinking / tool_calls / body，
+ * 构造一个 status='done' 的只读 StreamState 供 DispatchChip 展示。
+ */
+function buildStreamFromMessage(msg: ImMessage, subStreamSessionId: string): StreamState {
+  const { thinking, toolCalls } = extractAgentMeta(msg.content);
+  return {
+    streamSessionId: subStreamSessionId,
+    roomId: msg.roomId,
+    botUserId: msg.sender,
+    thinking,
+    text: msg.body,
+    toolCalls: toolCalls.map((tc) => ({
+      toolName: tc.name,
+      args: tc.args,
+      result: tc.result,
+      success: tc.success,
+      isExecuting: false,
+    })),
+    status: 'done',
+    dispatchChildren: [],
+  };
+}
+
 /** 判断持久化的 tool call 是否为 dispatch 委派（显式标记或 name 前缀 dispatch:） */
 function isDispatchToolCall(tc: PersistedToolCall): boolean {
   return tc.isDispatch === true || tc.name.startsWith('dispatch:');
@@ -128,7 +155,7 @@ function buildHistoryDispatchChild(tc: PersistedToolCall, index: number): Dispat
   };
 }
 
-export function MessageBubble({ message, isSelf, senderName }: Props) {
+export function MessageBubble({ message, isSelf, senderName, allMessages }: Props) {
   const streams = useStreamStore((s) => s.streams);
 
   if (message.eventType === 'io.momo-studio.dispatch') {
@@ -171,16 +198,23 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
             ))}
           </div>
         )}
-        {/* v1.4 嵌套：dispatch chips 历史模式——从 streams Map 查找子 agent StreamState */}
+        {/* v1.4 嵌套：dispatch chips — 优先从 streams Map 查找实时 StreamState，
+            重启后从 Matrix 历史消息重建（按 parent_stream_session_id 匹配子 agent 消息） */}
         {dispatchToolCalls.length > 0 && (
           <div style={{ marginBottom: 8 }}>
             {dispatchToolCalls.map((tc, i) => {
               const child = buildHistoryDispatchChild(tc, i);
+              const liveStream = streams.get(child.subStreamSessionId);
+              const historyChildMsg = allMessages?.find(
+                (m) => m.content?.['io.momo-studio.parent_stream_session_id'] === child.subStreamSessionId,
+              );
+              const subStream = liveStream
+                ?? (historyChildMsg ? buildStreamFromMessage(historyChildMsg, child.subStreamSessionId) : undefined);
               return (
                 <DispatchChip
                   key={child.subStreamSessionId}
                   child={child}
-                  subStream={streams.get(child.subStreamSessionId)}
+                  subStream={subStream}
                 />
               );
             })}
