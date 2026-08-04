@@ -1,19 +1,27 @@
 // electron/src/main/agent/builtin-tools.ts
 //
-// 把 WorkspaceFS 包装成 LLM 可调用的工具定义 + 执行器。供 runtime-entry 的
-// chat loop 使用：getBuiltinToolDefs() 返回 JSON Schema 风格的工具声明（喂给
-// LLM），executeBuiltinTool() 执行单个工具调用并把结果序列化为字符串（作为
-// tool result 回传给 LLM）。
+// 残余的 LLM 工具声明工具——非真正的「工具调用」，只是给 LLM 看的能力占位。
+// 真正的工具实现（read_file / write_file / list_files）已在 v1.5 Task 4 拆分到
+// tools/file-tools.ts，本文件只保留与 runtime 元数据强耦合的两类工具声明：
 //
-// 设计要点：
-//   - 工具的路径参数都是相对 workspace 根目录；实际沙箱校验由 WorkspaceFS
-//     .assertInWorkspace() 完成（含路径穿越 / 符号链接逃逸 / .git 保护）。
-//   - 执行失败时抛错，由调用方（chat loop）捕获并转成 tool result 文本回传
-//     给 LLM，使 LLM 能看到错误并自我纠正，而不是中断整轮对话。
+//   - getVirtualToolDefs：渐进式披露的 loadSkill / readResource 虚拟工具。
+//     执行由 runtime-entry 内联处理（不经过 ToolModule 路由）。
+//   - getDispatchToolDefs：主 agent 给每个 sub agent 注册 dispatch:<slug> 工具。
+//     执行也由 runtime-entry 内联处理（发 dispatch 消息 → 等 task_reply）。
+//
+// 兼容说明：v1.4 直接 import getBuiltinToolDefs/executeBuiltinTool 的 runtime-entry
+// 暂时通过下面的 re-export shim 继续工作；Task 5 会把它切换到
+// tools/index.ts 的注册中心，并移除这些 shim。
 
-import type { WorkspaceFS } from '../files/workspace-fs';
 import type { LLMToolDef } from './llm-provider';
 import { SkillRegistry } from '../skill/registry';
+import {
+  getFileToolDefs,
+  executeFileTool,
+} from './tools/file-tools';
+
+// 兼容性 re-export——runtime-entry.ts 还在 import 老名字，Task 5 切换后删除。
+export { getFileToolDefs as getBuiltinToolDefs, executeFileTool as executeBuiltinTool };
 
 /**
  * 子 agent 引用（仅主 agent 的 config 携带）。
@@ -35,92 +43,6 @@ export interface RuntimeSkillRef {
   slug: string;
   /** skill 包在磁盘上的绝对路径（须含 SKILL.md） */
   cachePath: string;
-}
-
-/** 返回所有内置工具的声明（read_file / write_file / list_files） */
-export function getBuiltinToolDefs(): LLMToolDef[] {
-  return [
-    {
-      name: 'read_file',
-      description: '读取 workspace 内的文件内容（UTF-8 文本）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '相对 workspace 根目录的文件路径' },
-        },
-        required: ['path'],
-      },
-    },
-    {
-      name: 'write_file',
-      description: '写入文件到 workspace（覆盖已有内容，父目录自动创建）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '相对 workspace 根目录的文件路径' },
-          content: { type: 'string', description: '要写入的文件内容' },
-        },
-        required: ['path', 'content'],
-      },
-    },
-    {
-      name: 'list_files',
-      description: '列出指定目录下的文件和子目录（默认列 workspace 根目录）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '相对 workspace 根目录的目录路径（默认 "."）' },
-        },
-      },
-    },
-  ];
-}
-
-/**
- * 执行一个内置工具调用。
- *
- * @param toolName 工具名（read_file / write_file / list_files）
- * @param args LLM 返回的已解析参数对象
- * @param wsFs workspace 文件系统实例（提供路径沙箱）
- * @returns 工具执行结果，序列化为字符串（回传给 LLM 作为 tool result）
- * @throws 路径越界 / IO 失败 / 未知工具时抛错，由调用方转成 tool result 文本
- */
-export async function executeBuiltinTool(
-  toolName: string,
-  args: Record<string, unknown>,
-  wsFs: WorkspaceFS,
-): Promise<string> {
-  switch (toolName) {
-    case 'read_file': {
-      const filePath = parseStringArg(args.path, 'path');
-      const content = await wsFs.readFile(filePath);
-      return content.toString('utf-8');
-    }
-    case 'write_file': {
-      const filePath = parseStringArg(args.path, 'path');
-      const content = parseStringArg(args.content, 'content');
-      await wsFs.writeFile(filePath, content);
-      return `文件已写入: ${filePath}`;
-    }
-    case 'list_files': {
-      const dirPath = typeof args.path === 'string' ? args.path : '.';
-      const entries = await wsFs.listDir(dirPath);
-      if (entries.length === 0) return '(空目录)';
-      return entries
-        .map((e) => `${e.isDirectory ? '📁' : '📄'} ${e.name}${e.isDirectory ? '/' : ''}`)
-        .join('\n');
-    }
-    default:
-      throw new Error(`未知工具: ${toolName}`);
-  }
-}
-
-/** 从 args 中取出一个 string 字段，缺失或类型不符时抛错（给 LLM 明确反馈） */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  }
-  return value;
 }
 
 /**
