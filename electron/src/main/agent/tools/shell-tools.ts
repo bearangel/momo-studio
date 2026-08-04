@@ -182,13 +182,28 @@ export class ShellTools implements ToolModule {
         try { child.kill('SIGKILL'); } catch { /* 子进程已退出 */ }
       }, timeoutMs);
 
+      // v1.5.1：监听外部 abortSignal（chat loop 中断）。被 abort 时立即 SIGKILL + resolve，
+      // 不等子进程自然结束。否则 bash sleep 65 即使停止按钮按下也要等 65s 才返回。
+      let aborted = false;
+      const onAbort = (): void => {
+        if (aborted || killed) return;
+        aborted = true;
+        try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
+      };
+      if (ctx.abortSignal) {
+        if (ctx.abortSignal.aborted) onAbort();
+        else ctx.abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
         const parts: string[] = [`exit_code: ${code ?? 'null'}`];
         if (killed) parts.push(`(超时 ${timeoutMs}ms，已强杀)`);
+        if (aborted) parts.push('(用户中断，已强杀)');
         if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
         if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
-        if (!stdout && !stderr && code === 0) parts.push('(无输出)');
+        if (!stdout && !stderr && code === 0 && !aborted && !killed) parts.push('(无输出)');
         // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
         resolve(parts.join('\n\n'));
       });

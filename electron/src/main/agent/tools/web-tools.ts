@@ -157,7 +157,7 @@ export class WebTools implements ToolModule {
   async execute(
     name: string,
     args: Record<string, unknown>,
-    _ctx: ToolContext,
+    ctx: ToolContext,
   ): Promise<string> {
     if (name !== 'webfetch') throw new Error(`未知 web 工具: ${name}`);
 
@@ -178,6 +178,14 @@ export class WebTools implements ToolModule {
     // 是超时还是网络错误。
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    // v1.5.1：外部 abortSignal（chat loop 中断）联动本工具 controller，
+    // 被 abort 时立即 abort fetch + 抛错，不等响应自然返回。
+    if (ctx.abortSignal) {
+      if (ctx.abortSignal.aborted) controller.abort();
+      else ctx.abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
     let response: Response;
     try {
       response = await fetch(url, {
@@ -191,6 +199,8 @@ export class WebTools implements ToolModule {
     } catch (err) {
       clearTimeout(timer);
       if (controller.signal.aborted) {
+        // v1.5.1：外部中断优先识别（abortSignal.aborted），其次判超时
+        if (ctx.abortSignal?.aborted) throw new Error('webfetch 被中断');
         throw new Error(`webfetch 超时（${timeoutMs}ms）`);
       }
       throw new Error(`webfetch 失败: ${err instanceof Error ? err.message : String(err)}`);

@@ -19,6 +19,12 @@ export interface ToolContext {
   roomId: string;
   sendStreamChunk: (chunk: StreamChunk) => void;
   permissionConfig: ToolPermissionConfig;
+  /**
+   * v1.5.1：当前 chat loop 的 abortSignal。
+   * 长任务工具（bash/webfetch）应监听此 signal，被中断时立即清理（SIGKILL 子进程 / abort fetch）
+   * 并 resolve "已中断"，否则会等到自身 timeout 才返回，期间用户停止按钮无效。
+   */
+  abortSignal?: AbortSignal;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */

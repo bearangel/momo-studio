@@ -1119,6 +1119,8 @@ export async function doExecuteTool(
       roomId: ctx.roomId,
       sendStreamChunk: ctx.sendStreamChunk,
       permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+      // v1.5.1：长任务工具（bash/webfetch）监听此 signal，停止按钮立即生效
+      abortSignal: ctx.abortSignal,
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }
