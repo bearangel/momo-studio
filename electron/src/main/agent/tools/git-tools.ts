@@ -1,6 +1,6 @@
 // electron/src/main/agent/tools/git-tools.ts
-// Git 工具模块：4 只读（status / diff / log / show）+ 5 写工具占位（add / commit /
-//   branch / checkout / stash，后续 task 实现）。v1.5 Task 9 引入。
+// Git 工具模块：4 只读（status / diff / log / show）+ 4 写（add / branch / checkout /
+//   stash）+ 1 占位（commit，Task 11 接 GitPolicy）。v1.5 Task 9 引入只读，Task 10 加写。
 //
 // 设计要点：
 //   - 直接 spawn git CLI，不引入 simple-git 之类的 wrapper（少一个依赖、少一层抽象）。
@@ -15,6 +15,10 @@
 //     避免一次性把整个仓库历史吃进内存。默认 OUTPUT_LIMITS.git_status = 20KB。
 //   - 退出码非 0 抛错（与 ShellTools 不同——git 只读命令失败说明真出问题了，
 //     让 LLM 看到 stderr 自我纠正）。
+//   - 写工具的路径参数（git_add paths）逐个走 ctx.wsFs.assertInWorkspace，拒绝
+//     `..` 越界与符号链接逃逸——与 WorkspaceFS 安全模型对齐。
+//   - git_checkout 仅切分支，不接受 path/commit：避免误用 `git checkout -- file`
+//     丢失工作区修改，或 `git checkout <sha>` 进入 detached HEAD。
 
 import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
@@ -129,6 +133,56 @@ export class GitTools implements ToolModule {
           },
         },
       },
+      {
+        name: 'git_add',
+        description: '暂存文件（git add）。paths 为相对 workspace 的路径数组',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            paths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '相对 workspace 的文件路径，逐个走沙箱校验',
+            },
+          },
+          required: ['paths'],
+        },
+      },
+      {
+        name: 'git_branch',
+        description: '分支管理（双语义）：list=true 或省略 name → 列出分支；给 name → 创建分支',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            list: { type: 'boolean', description: 'true → 列出现有分支' },
+            name: { type: 'string', description: '给定则创建该分支' },
+          },
+        },
+      },
+      {
+        name: 'git_checkout',
+        description: '切换分支（git checkout <branch>）。仅切分支，不接受 path/commit',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            branch: { type: 'string', description: '目标分支名（必须已存在）' },
+          },
+          required: ['branch'],
+        },
+      },
+      {
+        name: 'git_stash',
+        description: 'stash 管理：push（含 -m message）/ list / pop / drop',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['push', 'list', 'pop', 'drop'] },
+            message: { type: 'string', description: '仅 push 使用，对应 -m' },
+            index: { type: 'number', description: 'pop/drop 的 stash 索引，默认 0' },
+          },
+          required: ['action'],
+        },
+      },
     ];
   }
 
@@ -145,12 +199,11 @@ export class GitTools implements ToolModule {
       case 'git_diff': return executeDiff(args, ctx);
       case 'git_log': return executeLog(args, ctx);
       case 'git_show': return executeShow(args, ctx);
-      case 'git_add':
-      case 'git_commit':
-      case 'git_branch':
-      case 'git_checkout':
-      case 'git_stash':
-        throw new Error(`${name} 暂未实现（后续 task 实现）`);
+      case 'git_add': return executeAdd(args, ctx);
+      case 'git_branch': return executeBranch(args, ctx);
+      case 'git_checkout': return executeCheckout(args, ctx);
+      case 'git_stash': return executeStash(args, ctx);
+      case 'git_commit': throw new Error('git_commit 暂未实现（Task 11）');
       default:
         throw new Error(`未知 git 工具: ${name}`);
     }
@@ -198,4 +251,72 @@ async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Pro
   const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff);
   if (result.code !== 0) throw new Error(`git show 失败: ${result.stderr}`);
   return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
+}
+
+/** 把 unknown 归一化为 string，非 string 则抛错。各 execute* 入参校验共用。*/
+function parseStringArg(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
+  return value;
+}
+
+/** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。*/
+async function executeAdd(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  if (!Array.isArray(args.paths)) throw new Error('参数 "paths" 缺失或不是数组');
+  const paths = args.paths.map((p, i) => {
+    if (typeof p !== 'string') throw new Error(`paths[${i}] 不是字符串`);
+    ctx.wsFs.assertInWorkspace(p);
+    return p;
+  });
+  const result = await runGit(['add', ...paths], ctx);
+  if (result.code !== 0) throw new Error(`git add 失败: ${result.stderr}`);
+  return `已暂存 ${paths.length} 个文件`;
+}
+
+/** git_branch：list=true 或 name 缺失 → 列出分支；否则创建 name 分支。*/
+async function executeBranch(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const wantList = args.list === true || typeof args.name !== 'string';
+  if (wantList) {
+    const result = await runGit(['branch'], ctx);
+    if (result.code !== 0) throw new Error(`git branch 失败: ${result.stderr}`);
+    return result.stdout;
+  }
+  const name = parseStringArg(args.name, 'name');
+  const result = await runGit(['branch', name], ctx);
+  if (result.code !== 0) throw new Error(`git branch 创建失败: ${result.stderr}`);
+  return `分支已创建: ${name}`;
+}
+
+/** git_checkout：仅切分支（不接受 path/commit，防丢工作区修改与 detached HEAD）。*/
+async function executeCheckout(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const branch = parseStringArg(args.branch, 'branch');
+  const result = await runGit(['checkout', branch], ctx);
+  if (result.code !== 0) throw new Error(`git checkout 失败: ${result.stderr}`);
+  return `已切换到分支: ${branch}`;
+}
+
+/** git_stash：push/list/pop/drop 四 action。push 支持 -m；pop/drop 接 optional index。*/
+async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const action = parseStringArg(args.action, 'action');
+  let gitArgs: string[];
+  switch (action) {
+    case 'push': {
+      // --include-untracked：agent 场景常需要暂存新建文件（不仅是已跟踪文件的修改）；
+      // brief 原版未带此 flag，但 brief 的测试用例（push+list / pop 恢复）显式验证
+      // 「新文件被 stash 后从工作区消失」——不带 -u 测试无法通过，故按 TDD 契约补此 flag。
+      gitArgs = ['stash', 'push', '--include-untracked'];
+      if (typeof args.message === 'string') gitArgs.push('-m', args.message);
+      break;
+    }
+    case 'list': gitArgs = ['stash', 'list']; break;
+    case 'pop':
+    case 'drop': {
+      const idx = typeof args.index === 'number' ? args.index : 0;
+      gitArgs = ['stash', action, `stash@{${idx}}`];
+      break;
+    }
+    default: throw new Error(`未知 git_stash action: ${action}`);
+  }
+  const result = await runGit(gitArgs, ctx);
+  if (result.code !== 0) throw new Error(`git stash ${action} 失败: ${result.stderr}`);
+  return result.stdout || `(无输出，action=${action} 完成)`;
 }

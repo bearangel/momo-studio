@@ -100,3 +100,74 @@ describe('git_show', () => {
     await expect(tools.execute('git_show', { commit: 'nonexistent' }, ctx)).rejects.toThrow();
   });
 });
+
+describe('git_add', () => {
+  it('单文件', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'hello');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['a.txt'] }, ctx);
+    const status = execSync('git status --porcelain', { cwd: tmpDir }).toString();
+    expect(status).toMatch(/^A\s+a\.txt/);
+  });
+
+  it('多文件', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), '1');
+    await fs.promises.writeFile(path.join(tmpDir, 'b.txt'), '2');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['a.txt', 'b.txt'] }, ctx);
+    const status = execSync('git status --porcelain', { cwd: tmpDir }).toString();
+    expect(status).toContain('a.txt');
+    expect(status).toContain('b.txt');
+  });
+});
+
+describe('git_branch', () => {
+  it('列出分支', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    const tools = new GitTools();
+    expect(await tools.execute('git_branch', { list: true }, ctx)).toContain('main');
+  });
+
+  it('创建新分支', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    const tools = new GitTools();
+    await tools.execute('git_branch', { name: 'feature' }, ctx);
+    expect(execSync('git branch', { cwd: tmpDir }).toString()).toContain('feature');
+  });
+});
+
+describe('git_checkout', () => {
+  it('切到已有分支', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    execSync('git branch feature', { cwd: tmpDir });
+    const tools = new GitTools();
+    await tools.execute('git_checkout', { branch: 'feature' }, ctx);
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir }).toString().trim()).toBe('feature');
+  });
+
+  it('不存在抛错', async () => {
+    const tools = new GitTools();
+    await expect(tools.execute('git_checkout', { branch: 'nonexistent' }, ctx)).rejects.toThrow();
+  });
+});
+
+describe('git_stash', () => {
+  it('push + list', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'uncommitted');
+    const tools = new GitTools();
+    await tools.execute('git_stash', { action: 'push', message: 'test stash' }, ctx);
+    const list = await tools.execute('git_stash', { action: 'list' }, ctx);
+    expect(list).toContain('test stash');
+    expect(fs.existsSync(path.join(tmpDir, 'a.txt'))).toBe(false);
+  });
+
+  it('pop 恢复', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'uncommitted');
+    const tools = new GitTools();
+    await tools.execute('git_stash', { action: 'push' }, ctx);
+    await tools.execute('git_stash', { action: 'pop' }, ctx);
+    expect(fs.existsSync(path.join(tmpDir, 'a.txt'))).toBe(true);
+  });
+});
