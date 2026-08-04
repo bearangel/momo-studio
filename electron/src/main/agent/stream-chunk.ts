@@ -14,9 +14,29 @@
  * - tool_call: 工具调用发起（卡片）
  * - tool_result: 工具调用完成（卡片更新结果）
  * - end: 流式会话结束（finishReason 区分正常/预算耗尽/中断/错误）
+ *
+ * v1.4 嵌套字段（仅在嵌套场景出现）：
+ * - start.parentStreamSessionId: 子 agent 标识其所属 PM 的 stream session，renderer 据此把子流
+ *   嵌套渲染到 PM 气泡内的 dispatch chip 下方
+ * - start.subAgentName / subAgentAvatar: 子 agent 的展示名与头像（chip 头部用）
+ * - tool_call.isDispatch: 标记该 tool_call 是 PM 的 dispatch 委派（与普通工具调用区分）
+ * - tool_call.subStreamSessionId: PM 发起的本次子 agent 流 session ID（与子 start 的
+ *   streamSessionId 对应，renderer 据此把子 stream 关联到 dispatch chip）
+ * - tool_result.subStatus: dispatch 完成状态（completed / failed / timeout），用于更新 chip 状态
  */
 export type StreamChunk =
-  | { type: 'start'; streamSessionId: string; roomId: string; botUserId: string }
+  | {
+      type: 'start';
+      streamSessionId: string;
+      roomId: string;
+      botUserId: string;
+      /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
+      parentStreamSessionId?: string;
+      /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
+      subAgentName?: string;
+      /** v1.4 嵌套：子 agent emoji 头像（dispatch chip 头部显示） */
+      subAgentAvatar?: string;
+    }
   | { type: 'thinking'; streamSessionId: string; delta: string }
   | { type: 'text'; streamSessionId: string; delta: string }
   | {
@@ -24,6 +44,14 @@ export type StreamChunk =
       streamSessionId: string;
       toolName: string;
       args: Record<string, unknown>;
+      /** v1.4 嵌套：标记此 tool_call 为 PM 的 dispatch 委派（区分普通工具调用） */
+      isDispatch?: boolean;
+      /** v1.4 嵌套：本次委派创建的子 agent 流 session ID（关联子 agent start chunk） */
+      subStreamSessionId?: string;
+      /** v1.4 嵌套：被委派子 agent 的展示名 */
+      subAgentName?: string;
+      /** v1.4 嵌套：被委派子 agent 的 emoji 头像 */
+      subAgentAvatar?: string;
     }
   | {
       type: 'tool_result';
@@ -31,6 +59,8 @@ export type StreamChunk =
       toolName: string;
       result: string;
       success: boolean;
+      /** v1.4 嵌套：dispatch 完成状态（completed=成功 / failed=子 agent 报错 / timeout=超时） */
+      subStatus?: 'completed' | 'failed' | 'timeout';
     }
   | {
       type: 'end';

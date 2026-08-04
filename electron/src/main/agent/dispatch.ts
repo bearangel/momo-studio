@@ -15,6 +15,8 @@ export interface DispatchContent {
   deadline_ms?: number;
   /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
   tool_budget?: number;
+  /** v1.4 嵌套：子 agent 流式 session ID，用于关联 PM 气泡内的嵌套展示 */
+  tool_stream_session_id?: string;
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -38,6 +40,8 @@ export function buildDispatchMessage(opts: {
   deadlineMs?: number;
   /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
   toolBudget?: number;
+  /** v1.4 嵌套：子 agent 流式 session ID（关联到 PM 气泡的 dispatch chip） */
+  toolStreamSessionId?: string;
 }): { eventType: typeof DISPATCH_EVENT_TYPE; content: DispatchContent } {
   return {
     eventType: DISPATCH_EVENT_TYPE,
@@ -48,6 +52,7 @@ export function buildDispatchMessage(opts: {
       dispatch_to: opts.toBotUserId,
       deadline_ms: opts.deadlineMs,
       tool_budget: opts.toolBudget,
+      tool_stream_session_id: opts.toolStreamSessionId,
     },
   };
 }
@@ -84,6 +89,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
     dispatch_to: content.dispatch_to as string,
     deadline_ms: content.deadline_ms as number | undefined,
     tool_budget: content.tool_budget as number | undefined,
+    tool_stream_session_id: content.tool_stream_session_id as string | undefined,
   };
 }
 
