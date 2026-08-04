@@ -40,16 +40,16 @@ import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef }
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
 import {
-  getBuiltinToolDefs,
-  executeBuiltinTool,
   getVirtualToolDefs,
   getDispatchToolDefs,
   type SubAgentRef,
   type RuntimeSkillRef,
 } from './builtin-tools';
+import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
+import type { ToolModule, ToolContext } from './tools/types';
 import { SkillRegistry } from '../skill/registry';
 import type { McpToolInfo } from '../mcp/types';
-import { sendStreamChunk } from './stream-chunk';
+import { sendStreamChunk, type StreamChunk } from './stream-chunk';
 import {
   buildDispatchMessage,
   buildTaskReply,
@@ -127,6 +127,13 @@ export interface RuntimeConfig {
   botName?: string;
   /** v1.4 嵌套：bot emoji 头像（来自 agent_definitions.icon_emoji） */
   botAvatar?: string;
+  // === v1.5 工具库共享上下文 ===
+  /** 当前活跃的 Matrix room ID；运行时未必可知，FileTools 不消费，留空字符串兼容 */
+  roomId?: string;
+  /** 流式会话 ID（每条用户消息分配新 UUID）；同 roomId，FileTools 不消费 */
+  streamSessionId?: string;
+  /** 父 agent 流式会话 ID（v1.4 dispatch 嵌套场景）；非嵌套时为 undefined */
+  parentStreamSessionId?: string;
 }
 
 /** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
@@ -157,6 +164,21 @@ export interface RuntimeContext {
   tools: LLMToolDef[];
   /** 含 skill 索引的完整 system prompt（Layer 1 已注入） */
   systemPrompt: string;
+  // === v1.5 工具库共享上下文（与 ToolContext 对齐，子集） ===
+  /** workspace UUID——FileTools 不消费，Phase 2+ 的 git/lsp/todo 按 workspace 索引 store */
+  workspaceId: string;
+  /** workspace 绝对路径——Phase 2+ 的 ShellTools/GitTools 的 cwd */
+  workspaceDir: string;
+  /** 当前 Matrix room ID；Phase 1 FileTools 不消费 */
+  roomId: string;
+  /** 流式会话 ID（每条用户消息分配新 UUID）；Phase 1 FileTools 不消费 */
+  streamSessionId: string;
+  /** 父 agent 流式会话 ID（v1.4 dispatch 嵌套场景）；非嵌套时为 undefined */
+  parentStreamSessionId?: string;
+  /** 流式 chunk 推送回调（兼容 v1.4 wire format：直接 process.send(chunk)） */
+  sendStreamChunk: (chunk: StreamChunk) => void;
+  /** 工具模块注册表（启动时构建一次，doExecuteTool 复用） */
+  toolModules: ToolModule[];
 }
 
 /**
@@ -251,6 +273,12 @@ function parseConfig(raw: unknown): RuntimeConfig {
     maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : 10,
     botName: typeof r.botName === 'string' ? r.botName : undefined,
     botAvatar: typeof r.botAvatar === 'string' ? r.botAvatar : undefined,
+    // v1.5：roomId/streamSessionId 缺省空字符串（runtime-manager 不带 per-message 状态）；
+    //   parentStreamSessionId 缺省 undefined（非嵌套场景）。FileTools 不消费此三字段。
+    roomId: typeof r.roomId === 'string' ? r.roomId : '',
+    streamSessionId: typeof r.streamSessionId === 'string' ? r.streamSessionId : '',
+    parentStreamSessionId:
+      typeof r.parentStreamSessionId === 'string' ? r.parentStreamSessionId : undefined,
   };
 }
 
@@ -335,8 +363,8 @@ async function main(): Promise<void> {
 
 /**
  * 构建运行时上下文：初始化 SkillRegistry、发现 MCP 工具定义、合并全部工具列表、
- * 把 skill 索引注入 system prompt。单个 skill 注册失败或 MCP 发现失败均不致命——
- * 记录日志后跳过，保证 agent 仍能以剩余能力上线。
+ * 把 skill 索引注入 system prompt、构建工具模块注册表（v1.5）。单个 skill 注册失败或
+ * MCP 发现失败均不致命——记录日志后跳过，保证 agent 仍能以剩余能力上线。
  */
 async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContext> {
   const wsFs = new WorkspaceFS(config.workspaceDir);
@@ -365,14 +393,42 @@ async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContex
 ${skillIndex}`
     : basePrompt;
 
+  // v1.5：在 buildRuntimeContext 内一次性构建工具注册中心；permissionConfig 在
+  //   doExecuteTool 前置 assertToolAllowed 时校验（注册中心仅持有模块列表，不重复）。
+  //   wire format 必须保持 { type, ... } 与 v1.4 一致——runtime-manager.handleChildMessage
+  //   据 m.type 分发到对应渲染器，包成 { type: 'stream:chunk', chunk } 会丢 type 导致不转发。
+  const toolModules = buildToolRegistry({
+    wsFs,
+    workspaceId: config.workspaceId,
+    workspaceDir: config.workspaceDir,
+    skillRegistry,
+    streamSessionId: config.streamSessionId ?? '',
+    parentStreamSessionId: config.parentStreamSessionId,
+    roomId: config.roomId ?? '',
+    sendStreamChunk,
+    permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+  });
+
   const tools: LLMToolDef[] = [
-    ...getBuiltinToolDefs(),
+    ...getAllToolDefs(toolModules),
     ...getVirtualToolDefs(skillRegistry),
     ...(await discoverMcpTools(config)),
     ...(config.role === 'main' ? getDispatchToolDefs(config.subAgents) : []),
   ];
 
-  return { wsFs, skillRegistry, tools, systemPrompt };
+  return {
+    wsFs,
+    skillRegistry,
+    tools,
+    systemPrompt,
+    workspaceId: config.workspaceId,
+    workspaceDir: config.workspaceDir,
+    roomId: config.roomId ?? '',
+    streamSessionId: config.streamSessionId ?? '',
+    parentStreamSessionId: config.parentStreamSessionId,
+    sendStreamChunk,
+    toolModules,
+  };
 }
 
 /** 等待 Matrix sync 的最长时限，超时则判定 sync 不可达（避免永久挂起） */
@@ -1028,7 +1084,21 @@ async function doExecuteTool(
   assertToolAllowed(name, config);
 
   if (name === 'read_file' || name === 'write_file' || name === 'list_files') {
-    return executeBuiltinTool(name, call.arguments, ctx.wsFs);
+    // v1.5：文件工具委托给 tools/index.ts 注册中心；FileTools.handles() 路由。
+    //   行为零变更——FileTools.executeFileTool 与原 builtin-tools 中的 executeFileTool 实现一致。
+    //   permissionConfig 在前置 assertToolAllowed 已校验，注册中心内不再重复。
+    const toolCtx: ToolContext = {
+      wsFs: ctx.wsFs,
+      workspaceId: ctx.workspaceId,
+      workspaceDir: ctx.workspaceDir,
+      skillRegistry: ctx.skillRegistry,
+      streamSessionId: ctx.streamSessionId,
+      parentStreamSessionId: ctx.parentStreamSessionId,
+      roomId: ctx.roomId,
+      sendStreamChunk: ctx.sendStreamChunk,
+      permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+    };
+    return executeToolModule(call.name, call.arguments, toolCtx, ctx.toolModules);
   }
   if (name === 'loadSkill') {
     return ctx.skillRegistry.loadFull(argToString(call.arguments.name, 'name'));

@@ -1,27 +1,21 @@
 // electron/src/main/agent/builtin-tools.ts
 //
 // 残余的 LLM 工具声明工具——非真正的「工具调用」，只是给 LLM 看的能力占位。
-// 真正的工具实现（read_file / write_file / list_files）已在 v1.5 Task 4 拆分到
-// tools/file-tools.ts，本文件只保留与 runtime 元数据强耦合的两类工具声明：
+// 真正的工具实现（read_file / write_file / list_files）已在 v1.5 拆分到
+// tools/file-tools.ts（Task 4）+ 通过 tools/index.ts 注册中心接入（Task 5）；
+// 本文件只保留与 runtime 元数据强耦合的两类工具声明：
 //
 //   - getVirtualToolDefs：渐进式披露的 loadSkill / readResource 虚拟工具。
-//     执行由 runtime-entry 内联处理（不经过 ToolModule 路由）。
+//     执行由 runtime-entry 内联处理（不经过 ToolModule 路由——Skill 索引已在 ctx.systemPrompt，
+//     SkillRegistry 直接由 runtime-entry 调用 loadFull/loadResource）。
 //   - getDispatchToolDefs：主 agent 给每个 sub agent 注册 dispatch:<slug> 工具。
 //     执行也由 runtime-entry 内联处理（发 dispatch 消息 → 等 task_reply）。
 //
-// 兼容说明：v1.4 直接 import getBuiltinToolDefs/executeBuiltinTool 的 runtime-entry
-// 暂时通过下面的 re-export shim 继续工作；Task 5 会把它切换到
-// tools/index.ts 的注册中心，并移除这些 shim。
+//   Task 4 留下的 re-export shim 已在 Task 5 移除——getBuiltinToolDefs/executeBuiltinTool
+//   已从 runtime-entry.ts 删除，此文件恢复精简声明。
 
 import type { LLMToolDef } from './llm-provider';
 import { SkillRegistry } from '../skill/registry';
-import {
-  getFileToolDefs,
-  executeFileTool,
-} from './tools/file-tools';
-
-// 兼容性 re-export——runtime-entry.ts 还在 import 老名字，Task 5 切换后删除。
-export { getFileToolDefs as getBuiltinToolDefs, executeFileTool as executeBuiltinTool };
 
 /**
  * 子 agent 引用（仅主 agent 的 config 携带）。

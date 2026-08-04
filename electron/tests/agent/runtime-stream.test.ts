@@ -23,6 +23,7 @@ import {
   type RuntimeContext,
   type RunChatLoopStats,
 } from '../../src/main/agent/runtime-entry';
+import { buildToolRegistry } from '../../src/main/agent/tools';
 
 // === Mock 状态 ===
 
@@ -108,6 +109,22 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     skillRegistry: mockSkillRegistry,
     tools: [],
     systemPrompt: 'You are a helpful assistant.',
+    // v1.5：FileTools 经 ctx.toolModules 路由；其他新增字段留占位
+    workspaceId: 'ws-1',
+    workspaceDir: '/tmp/test',
+    roomId: '!room:localhost',
+    streamSessionId: 'test-session',
+    sendStreamChunk: () => {},
+    toolModules: buildToolRegistry({
+      wsFs: mockWsFs,
+      workspaceId: 'ws-1',
+      workspaceDir: '/tmp/test',
+      skillRegistry: mockSkillRegistry,
+      streamSessionId: 'test-session',
+      roomId: '!room:localhost',
+      sendStreamChunk: () => {},
+      permissionConfig: { allowedTools: [], deniedTools: [] },
+    }),
     ...overrides,
   };
 }
