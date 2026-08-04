@@ -1,8 +1,8 @@
 // electron/src/main/agent/tools/index.ts
 // 工具注册中心。已接入 FileTools（8 个文件工具）+ SearchTools（grep / glob）+
 //   ShellTools（bash，workspace 内自由 shell）+ GitTools（git 9 工具）+
-//   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）；
-//   后续 phase 追加 LspTools。
+//   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）+
+//   LspTools（lsp_diagnostics + lsp_find_references，条件注册——仅 TS/JS workspace）。
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -14,9 +14,10 @@ import { ShellTools } from './shell-tools';
 import { GitTools } from './git-tools';
 import { WebTools } from './web-tools';
 import { TodoTools } from './todo-tools';
+import { LspTools } from './lsp-tools';
 
-export function buildToolRegistry(_ctx: ToolContext): ToolModule[] {
-  return [
+export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
+  const modules: ToolModule[] = [
     new FileTools(),
     new SearchTools(),
     new ShellTools(),
@@ -24,6 +25,9 @@ export function buildToolRegistry(_ctx: ToolContext): ToolModule[] {
     new WebTools(),
     new TodoTools(),
   ];
+  const lsp = LspTools.create(ctx);
+  if (lsp) modules.push(lsp);
+  return modules;
 }
 
 export function getAllToolDefs(modules: ToolModule[]): LLMToolDef[] {
