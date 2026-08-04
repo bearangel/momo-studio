@@ -14,6 +14,8 @@ import { useStreamStore } from './stream.store';
 
 /** Matrix event content 中标记 agent 最终回复的自定义键（值=streamSessionId） */
 const STREAM_SESSION_ID_KEY = 'io.momo-studio.stream_session_id';
+/** 子 agent 最终消息携带此字段（值=PM 的 streamSessionId）——有此字段说明是嵌套子消息，不应清理其 StreamState */
+const PARENT_STREAM_SESSION_ID_KEY = 'io.momo-studio.parent_stream_session_id';
 
 interface ImState {
   rooms: ImRoomInfo[];
@@ -131,9 +133,12 @@ export const useImStore = create<ImState>((set, get) => ({
 
     // 流式→持久化替换：agent 最终消息（带 stream_session_id）到达时，
     // 清理对应的临时流式气泡。重复回放的消息不重复触发（其流式态早已清理）。
+    // 子 agent 消息（含 parent_stream_session_id）不清理——其 StreamState 需保留
+    // 供 PM 气泡内 DispatchChip 展开查看子 agent 工作内容。
     if (wasNew) {
       const sessionId = msg.content[STREAM_SESSION_ID_KEY];
-      if (typeof sessionId === 'string' && sessionId) {
+      const isChildMessage = !!msg.content[PARENT_STREAM_SESSION_ID_KEY];
+      if (typeof sessionId === 'string' && sessionId && !isChildMessage) {
         useStreamStore.getState().clearCompleted(sessionId);
       }
     }
