@@ -122,6 +122,11 @@ export interface RuntimeConfig {
   // === v1.4 流式 + 工具预算 ===
   /** 工具调用上限。-1=无限, 0=禁用, N=上限。由 handleEvent/handleDispatch 通过 IPC 解析后覆盖 */
   maxToolCalls: number;
+  // === v1.4 嵌套流式 ===
+  /** v1.4 嵌套：bot 展示名（子 agent 嵌套 chip 头部显示，来自 agent_definitions.name） */
+  botName?: string;
+  /** v1.4 嵌套：bot emoji 头像（来自 agent_definitions.icon_emoji） */
+  botAvatar?: string;
 }
 
 /** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
@@ -244,6 +249,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     devMode: typeof devMode === 'boolean' ? devMode : false,
     // v1.4：默认 10，由 handleEvent/handleDispatch 通过 IPC 解析后覆盖
     maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : 10,
+    botName: typeof r.botName === 'string' ? r.botName : undefined,
+    botAvatar: typeof r.botAvatar === 'string' ? r.botAvatar : undefined,
   };
 }
 
@@ -529,7 +536,18 @@ async function handleDispatch(
         : await resolveMaxToolCalls(roomId);
     const configWithBudget: RuntimeConfig = { ...config, maxToolCalls };
     const stats: RunChatLoopStats = { toolCallsUsed: 0 };
-    const result = await runChatLoop(client, roomId, dispatch.body, configWithBudget, ctx, stats);
+    // v1.4 嵌套：把 PM 生成的子 stream session ID 透传给 runChatLoop，
+    // 子 agent 的 start chunk 据此关联到 PM 气泡内的 dispatch chip
+    const parentStreamSessionId = dispatch.tool_stream_session_id;
+    const result = await runChatLoop(
+      client,
+      roomId,
+      dispatch.body,
+      configWithBudget,
+      ctx,
+      stats,
+      parentStreamSessionId,
+    );
     trace('→ 发送 completed', { body: `${result.length}字`, tools: stats.toolCallsUsed });
     const completed = buildTaskReply({
       body: result,
@@ -583,6 +601,8 @@ export async function runChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
   stats?: RunChatLoopStats,
+  /** v1.4 嵌套：子 agent 收到 dispatch 时传入 PM 的 streamSessionId，start chunk 据此关联 */
+  parentStreamSessionId?: string,
 ): Promise<string> {
   const llm = createLLMProvider(
     { model: config.modelName, baseUrl: config.modelBaseUrl },
@@ -621,6 +641,15 @@ export async function runChatLoop(
     streamSessionId,
     roomId,
     botUserId: config.botUserId,
+    // v1.4 嵌套：子 agent 携带父 session ID + 自身展示信息，renderer 据此把子流
+    // 嵌套渲染到 PM 气泡内对应 dispatch chip 下方
+    ...(parentStreamSessionId
+      ? {
+          parentStreamSessionId,
+          subAgentName: config.botName,
+          subAgentAvatar: config.botAvatar,
+        }
+      : {}),
   });
 
   for (let round = 0; ; round++) {
@@ -677,6 +706,7 @@ export async function runChatLoop(
         finalText,
         accumulatedThinking,
         toolCallHistory,
+        parentStreamSessionId,
       );
       sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
       if (stats) stats.toolCallsUsed = toolCallCount;
@@ -696,48 +726,80 @@ export async function runChatLoop(
           finalText,
           accumulatedThinking,
           toolCallHistory,
+          parentStreamSessionId,
         );
         sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
       }
 
-      sendStreamChunk({
-        type: 'tool_call',
-        streamSessionId,
-        toolName: tc.name,
-        args: tc.arguments,
-      });
+      const isDispatch = tc.name.startsWith('dispatch:');
+
+      // v1.4 嵌套：dispatch 工具预生成子 stream session ID，发增强 tool_call chunk
+      // 携带 isDispatch/subStreamSessionId/subAgentName/subAgentAvatar，renderer 据此
+      // 在 PM 气泡内渲染 dispatch chip 并等待子 agent 的 start chunk 关联
+      let subStreamSessionId: string | undefined;
+      if (isDispatch) {
+        subStreamSessionId = randomUUID();
+        const subSlug = tc.name.slice('dispatch:'.length);
+        const subRef = config.subAgents.find((s) => s.slug === subSlug);
+        const subAgentName = subRef?.description ?? subRef?.slug ?? tc.name;
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          toolName: tc.name,
+          args: tc.arguments,
+          isDispatch: true,
+          subStreamSessionId,
+          subAgentName,
+          subAgentAvatar: '🤖',
+        });
+      } else {
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          toolName: tc.name,
+          args: tc.arguments,
+        });
+      }
 
       // dispatch 工具传剩余预算（减去本次 dispatch 本身占用的 1 次）
       let dispatchToolBudget: number | undefined;
-      if (tc.name.startsWith('dispatch:')) {
+      if (isDispatch) {
         dispatchToolBudget =
           budgetRemaining === Infinity ? -1 : Math.max(0, budgetRemaining - 1);
       }
 
-      const isDispatch = tc.name.startsWith('dispatch:');
       const dispatchInfo = isDispatch ? { toolCallsUsed: 0 } : undefined;
       let result: string;
       let success = true;
       try {
-        result = await executeTool(tc, ctx, client, config, dispatchToolBudget, dispatchInfo);
+        result = await executeTool(tc, ctx, client, config, dispatchToolBudget, dispatchInfo, subStreamSessionId);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
           toolName: tc.name,
           result,
           success: true,
+          ...(isDispatch ? { subStatus: 'completed' as const } : {}),
         });
       } catch (err) {
         success = false;
-        result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        result = `工具执行失败: ${errMsg}`;
+        // dispatch 超时（executeDispatch 的渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
+        const subStatus = isDispatch
+          ? errMsg.includes('超时')
+            ? ('timeout' as const)
+            : ('failed' as const)
+          : undefined;
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
           toolName: tc.name,
           result,
           success: false,
+          ...(subStatus ? { subStatus } : {}),
         });
       }
 
@@ -774,6 +836,8 @@ async function sendFinalMessage(
   text: string,
   thinking: string,
   toolCalls: ToolCallRecord[],
+  /** v1.4 嵌套：子 agent 的最终消息携带此字段，renderer/MessageList 据此把它嵌套到 PM 气泡 */
+  parentStreamSessionId?: string,
 ): Promise<void> {
   const content: Record<string, unknown> = {
     msgtype: 'm.text',
@@ -782,6 +846,9 @@ async function sendFinalMessage(
   };
   if (thinking) content['io.momo-studio.thinking'] = thinking;
   if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
+  if (parentStreamSessionId) {
+    content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
+  }
   await client.sendEvent(roomId, 'm.room.message', content, '');
 }
 
@@ -821,13 +888,15 @@ async function executeTool(
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
+  /** v1.4 嵌套：dispatch 工具的子 stream session ID，透传到 executeDispatch → buildDispatchMessage */
+  toolStreamSessionId?: string,
 ): Promise<string> {
   const startTime = Date.now();
   let success = true;
   let output = '';
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, client, config, toolBudget, dispatchInfo);
+    output = await doExecuteTool(call, ctx, client, config, toolBudget, dispatchInfo, toolStreamSessionId);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -857,6 +926,7 @@ async function doExecuteTool(
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
+  toolStreamSessionId?: string,
 ): Promise<string> {
   const name = call.name;
 
@@ -878,7 +948,7 @@ async function doExecuteTool(
   if (name.startsWith('dispatch:')) {
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
-    const dispatchResult = await executeDispatch(subSlug, task, client, config, toolBudget);
+    const dispatchResult = await executeDispatch(subSlug, task, client, config, toolBudget, toolStreamSessionId);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
   }
@@ -928,6 +998,8 @@ export async function executeDispatch(
   client: MatrixClient,
   config: RuntimeConfig,
   toolBudget?: number,
+  /** v1.4 嵌套：子 agent 流 session ID，写入 dispatch 消息供子 agent 关联 PM 气泡 */
+  toolStreamSessionId?: string,
 ): Promise<{ body: string; toolCallsUsed: number }> {
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
@@ -940,6 +1012,7 @@ export async function executeDispatch(
     toBotUserId: sub.botUserId,
     deadlineMs: DISPATCH_TOTAL_TIMEOUT_MS,
     toolBudget,
+    toolStreamSessionId,
   });
 
   // 先注册 pending，再发送——防竞态

@@ -163,5 +163,8 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     skills: resolveSkillSlugs(merged.skills),
     mcpNames: merged.mcps,
     isCoordinator,
+    // v1.4 嵌套：传 bot 展示信息，子 agent start chunk 据此填充 chip 头部
+    botName: def.name,
+    botAvatar: def.iconEmoji,
   };
 }

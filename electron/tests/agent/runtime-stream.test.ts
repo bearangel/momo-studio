@@ -482,3 +482,188 @@ describe('dispatch 共享预算扣减', () => {
     expect(result).toEqual({ body: '完成了', toolCallsUsed: 0 });
   });
 });
+
+describe('v1.4 嵌套：dispatch 流式 chip', () => {
+  const originalSend = process.send;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+  });
+
+  it('dispatch tool_call chunk 携带 isDispatch + subStreamSessionId + subAgent 信息', async () => {
+    const toolCall = {
+      id: 'c1',
+      name: 'dispatch:researcher',
+      arguments: { task: '查资料' },
+    };
+
+    mockProviderMultiRound([
+      [{ type: 'tool_use', toolCall }, { type: 'done', finishReason: 'tool_use' }],
+      [{ type: 'text', content: '汇总完成' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+
+    const client = mockClient();
+    // 拦截 dispatch 事件，自动回 task_reply 来 resolve pending
+    vi.mocked(client.sendEvent).mockImplementation(async (_roomId, eventType, content) => {
+      if (eventType === 'io.momo-studio.dispatch') {
+        const taskId = (content as { task_id: string }).task_id;
+        setTimeout(() => {
+          handleTaskReply({
+            task_id: taskId,
+            body: '资料已找到',
+            status: 'completed',
+            tool_calls_used: 0,
+          });
+        }, 0);
+      }
+      return { event_id: '$test:localhost' };
+    });
+
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: '研究员' }],
+    });
+
+    await runChatLoop(client, '!room:localhost', '帮我查资料', config, makeContext());
+
+    const chunks = streamChunks();
+    const toolCallChunk = chunks.find(
+      (c) => c.type === 'tool_call',
+    ) as {
+      toolName: string;
+      isDispatch?: boolean;
+      subStreamSessionId?: string;
+      subAgentName?: string;
+      subAgentAvatar?: string;
+    };
+    expect(toolCallChunk.toolName).toBe('dispatch:researcher');
+    expect(toolCallChunk.isDispatch).toBe(true);
+    expect(toolCallChunk.subStreamSessionId).toBeTruthy();
+    expect(toolCallChunk.subAgentName).toBe('研究员');
+    expect(toolCallChunk.subAgentAvatar).toBe('🤖');
+  });
+
+  it('dispatch 成功后 tool_result chunk 携带 subStatus=completed', async () => {
+    const toolCall = {
+      id: 'c1',
+      name: 'dispatch:researcher',
+      arguments: { task: '查资料' },
+    };
+
+    mockProviderMultiRound([
+      [{ type: 'tool_use', toolCall }, { type: 'done', finishReason: 'tool_use' }],
+      [{ type: 'text', content: '完成' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+
+    const client = mockClient();
+    vi.mocked(client.sendEvent).mockImplementation(async (_roomId, eventType, content) => {
+      if (eventType === 'io.momo-studio.dispatch') {
+        const taskId = (content as { task_id: string }).task_id;
+        setTimeout(() => {
+          handleTaskReply({ task_id: taskId, body: 'ok', status: 'completed', tool_calls_used: 0 });
+        }, 0);
+      }
+      return { event_id: '$test:localhost' };
+    });
+
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'R' }],
+    });
+
+    await runChatLoop(client, '!room:localhost', 'hi', config, makeContext());
+
+    const chunks = streamChunks();
+    const toolResultChunk = chunks.find(
+      (c) => c.type === 'tool_result',
+    ) as { subStatus?: string; success: boolean };
+    expect(toolResultChunk.success).toBe(true);
+    expect(toolResultChunk.subStatus).toBe('completed');
+  });
+
+  it('子 agent start chunk 携带 parentStreamSessionId + subAgentName/Avatar', async () => {
+    mockProvider([{ type: 'text', content: 'done' }, { type: 'done', finishReason: 'stop' }]);
+
+    await runChatLoop(
+      mockClient(),
+      '!room:localhost',
+      'task',
+      makeConfig({ botName: '研究员', botAvatar: '🔬' }),
+      makeContext(),
+      undefined,
+      'parent-session-123',
+    );
+
+    const startChunk = streamChunks().find(
+      (c) => c.type === 'start',
+    ) as {
+      parentStreamSessionId?: string;
+      subAgentName?: string;
+      subAgentAvatar?: string;
+    };
+    expect(startChunk.parentStreamSessionId).toBe('parent-session-123');
+    expect(startChunk.subAgentName).toBe('研究员');
+    expect(startChunk.subAgentAvatar).toBe('🔬');
+  });
+
+  it('无 parentStreamSessionId 时 start chunk 不含嵌套字段', async () => {
+    mockProvider([{ type: 'text', content: 'done' }, { type: 'done', finishReason: 'stop' }]);
+
+    await runChatLoop(mockClient(), '!room:localhost', 'hi', makeConfig(), makeContext());
+
+    const startChunk = streamChunks().find(
+      (c) => c.type === 'start',
+    ) as {
+      parentStreamSessionId?: string;
+      subAgentName?: string;
+    };
+    expect(startChunk.parentStreamSessionId).toBeUndefined();
+    expect(startChunk.subAgentName).toBeUndefined();
+  });
+
+  it('子 agent 最终消息携带 io.momo-studio.parent_stream_session_id', async () => {
+    mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
+
+    const client = mockClient();
+    await runChatLoop(
+      client,
+      '!room:localhost',
+      'task',
+      makeConfig(),
+      makeContext(),
+      undefined,
+      'parent-session-456',
+    );
+
+    expect(client.sendEvent).toHaveBeenCalledWith(
+      '!room:localhost',
+      'm.room.message',
+      expect.objectContaining({
+        'io.momo-studio.parent_stream_session_id': 'parent-session-456',
+      }),
+      '',
+    );
+  });
+
+  it('无 parentStreamSessionId 时最终消息不含 parent_stream_session_id', async () => {
+    mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
+
+    const client = mockClient();
+    await runChatLoop(client, '!room:localhost', 'hi', makeConfig(), makeContext());
+
+    const call = vi.mocked(client.sendEvent).mock.calls.find(
+      ([, type]) => type === 'm.room.message',
+    );
+    const content = call?.[2] as Record<string, unknown> | undefined;
+    expect(content?.['io.momo-studio.parent_stream_session_id']).toBeUndefined();
+  });
+});

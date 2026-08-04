@@ -55,6 +55,11 @@ export interface AgentRuntimeOpts {
   isCoordinator?: boolean;
   /** dev 模式标志（由 doSpawnAgent 根据 !app.isPackaged 自动注入） */
   devMode?: boolean;
+  // === v1.4 嵌套流式 ===
+  /** bot 展示名（子 agent 嵌套时 chip 头部显示，来自 agent_definitions.name） */
+  botName?: string;
+  /** bot emoji 头像（来自 agent_definitions.icon_emoji） */
+  botAvatar?: string;
 }
 
 // runtime 进程池：instanceId → 子进程句柄
