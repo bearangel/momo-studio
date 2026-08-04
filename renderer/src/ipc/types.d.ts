@@ -284,6 +284,16 @@ export interface RoomSettings {
 }
 
 /**
+ * v1.5 TodoTools 任务项。与 electron 端 tools/todo-types.ts 的 TodoItem 对齐。
+ * 因 renderer 无法直接 import electron 源码，这里维持一份等价的本地定义。
+ */
+export interface TodoItem {
+  id: string;
+  subject: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+/**
  * 流式 IPC chunk（v1.4），与 electron 端 stream-chunk.ts 的 StreamChunk 对齐。
  * 子进程 process.send → 主进程转发 → renderer 经 api.agent.onStream 接收。
  * renderer 用 streamSessionId 聚合同一次响应的所有 chunk 到一个临时气泡。
@@ -296,6 +306,9 @@ export interface RoomSettings {
  * - tool_call.subStreamSessionId: PM 发起的本次子 agent 流 session ID（与子 start 的
  *   streamSessionId 对应，renderer 据此把子 stream 关联到 dispatch chip）
  * - tool_result.subStatus: dispatch 完成状态（completed / failed / timeout），用于更新 chip 状态
+ *
+ * v1.5 新增：
+ * - todo_update: todowrite 工具调用导致的任务列表全量替换，renderer 据此更新 todo 面板
  */
 export type StreamChunk =
   | {
@@ -334,6 +347,16 @@ export type StreamChunk =
       success: boolean;
       /** v1.4 嵌套：dispatch 完成状态（completed=成功 / failed=子 agent 报错 / timeout=超时） */
       subStatus?: 'completed' | 'failed' | 'timeout';
+    }
+  | {
+      /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
+      type: 'todo_update';
+      streamSessionId: string;
+      roomId: string;
+      /** 完整任务列表（覆盖式）；空数组 = 清空 */
+      todos: TodoItem[];
+      /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
+      parentStreamSessionId?: string;
     }
   | {
       type: 'end';

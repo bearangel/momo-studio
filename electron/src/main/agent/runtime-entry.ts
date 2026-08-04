@@ -47,6 +47,8 @@ import {
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
 import type { ToolModule, ToolContext } from './tools/types';
+import { getTodosForSession } from './tools/todo-tools';
+import type { TodoItem } from './tools/todo-types';
 import { SkillRegistry } from '../skill/registry';
 import type { McpToolInfo } from '../mcp/types';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
@@ -774,6 +776,7 @@ export async function runChatLoop(
         accumulatedThinking,
         toolCallHistory,
         parentStreamSessionId,
+        getTodosForSession(streamSessionId),
       );
       sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
       if (stats) stats.toolCallsUsed = toolCallCount;
@@ -794,6 +797,7 @@ export async function runChatLoop(
           accumulatedThinking,
           toolCallHistory,
           parentStreamSessionId,
+          getTodosForSession(streamSessionId),
         );
         sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
@@ -973,6 +977,9 @@ function fitEventContent(
  * 发送最终 Matrix m.room.message（含持久化元数据）。
  * renderer 据此渲染 thinking 折叠区 + 工具调用卡片 + 正文。
  * 渐进式截断防止 PDU 超过 64KB 限制（复杂任务 tool_calls + thinking 可达数万字）。
+ *
+ * v1.5：todos 参数携带该会话的最终任务列表，写入 `io.momo-studio.todos` 字段，
+ * renderer 重启后可据此还原 todo 面板（与 thinking / tool_calls 同等的持久化待遇）。
  */
 async function sendFinalMessage(
   client: MatrixClient,
@@ -983,6 +990,8 @@ async function sendFinalMessage(
   toolCalls: ToolCallRecord[],
   /** v1.4 嵌套：子 agent 的最终消息携带此字段，renderer/MessageList 据此把它嵌套到 PM 气泡 */
   parentStreamSessionId?: string,
+  /** v1.5 todowrite：本会话的最终任务列表；空数组不写入（避免无意义的空字段） */
+  todos?: TodoItem[],
 ): Promise<void> {
   const content: Record<string, unknown> = {
     msgtype: 'm.text',
@@ -994,6 +1003,7 @@ async function sendFinalMessage(
   if (parentStreamSessionId) {
     content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
   }
+  if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
 
   // 渐进式截断，确保不超 Matrix PDU 限制
   const fitted = fitEventContent(content, thinking, toolCalls);

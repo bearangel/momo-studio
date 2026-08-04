@@ -4,15 +4,18 @@
 // 主进程转发到 renderer 渲染流式 UI。
 // 每个 chunk 都带 streamSessionId，renderer 用它聚合到同一个临时消息气泡。
 
+import type { TodoItem } from './tools/todo-types';
+
 /**
  * 流式 IPC 消息（子进程 → 主进程 → renderer）。
  *
- * 生命周期：start → (thinking | text | tool_call | tool_result)* → end
+ * 生命周期：start → (thinking | text | tool_call | tool_result | todo_update)* → end
  * - start: 标记流式会话开始（renderer 据此创建临时气泡）
  * - thinking: 思维链增量（折叠区）
  * - text: 正文文本增量（逐字流式）
  * - tool_call: 工具调用发起（卡片）
  * - tool_result: 工具调用完成（卡片更新结果）
+ * - todo_update: v1.5 todowrite 全量替换任务列表（携带完整 todos 数组）
  * - end: 流式会话结束（finishReason 区分正常/预算耗尽/中断/错误）
  *
  * v1.4 嵌套字段（仅在嵌套场景出现）：
@@ -61,6 +64,16 @@ export type StreamChunk =
       success: boolean;
       /** v1.4 嵌套：dispatch 完成状态（completed=成功 / failed=子 agent 报错 / timeout=超时） */
       subStatus?: 'completed' | 'failed' | 'timeout';
+    }
+  | {
+      /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
+      type: 'todo_update';
+      streamSessionId: string;
+      roomId: string;
+      /** 完整任务列表（覆盖式）；空数组 = 清空 */
+      todos: TodoItem[];
+      /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
+      parentStreamSessionId?: string;
     }
   | {
       type: 'end';
