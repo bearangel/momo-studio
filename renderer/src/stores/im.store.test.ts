@@ -188,13 +188,13 @@ describe('im.store — 流式→持久化替换', () => {
     };
     useImStore.getState().receiveMessage(finalMsg);
 
-    // 临时流式状态应已被清理
-    expect(useStreamStore.getState().streams.has('sess-1')).toBe(false);
+    // StreamState 保留（不再 clearCompleted——AgentStreamBubble 完成后仍渲染）
+    expect(useStreamStore.getState().streams.has('sess-1')).toBe(true);
     // 消息应已写入列表
     expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toContainEqual(finalMsg);
   });
 
-  it('重复回放的消息不重复触发 clearCompleted', () => {
+  it('重复回放的消息不重复写入消息列表', () => {
     useStreamStore.setState({
       streams: new Map([
         [
@@ -223,32 +223,14 @@ describe('im.store — 流式→持久化替换', () => {
       timestamp: 11,
     };
 
-    // 第一次推送：清理 sess-2
-    useImStore.getState().receiveMessage(finalMsg);
-    expect(useStreamStore.getState().streams.has('sess-2')).toBe(false);
-
-    // 重新预置 sess-2（模拟 race：end chunk 在 Matrix 消息之后到达重建态）
-    useStreamStore.setState({
-      streams: new Map([
-        [
-          'sess-2',
-          {
-            streamSessionId: 'sess-2',
-            roomId: '!a1:localhost',
-            botUserId: '@bot:local',
-            thinking: '',
-            text: '',
-            toolCalls: [],
-            status: 'streaming' as const,
-            dispatchChildren: [],
-          },
-        ],
-      ]),
-    });
-
-    // 第二次推送相同 eventId：去重，不触发 clearCompleted
+    // 第一次推送
     useImStore.getState().receiveMessage(finalMsg);
     expect(useStreamStore.getState().streams.has('sess-2')).toBe(true);
+
+    // 第二次推送相同 eventId：去重，不再写入
+    useImStore.getState().receiveMessage(finalMsg);
+    const msgs = useImStore.getState().messagesByRoom.get('!a1:localhost') ?? [];
+    expect(msgs.filter((m) => m.eventId === 'e-dup')).toHaveLength(1);
   });
 
   it('不含 stream_session_id 的消息不影响流式状态', () => {

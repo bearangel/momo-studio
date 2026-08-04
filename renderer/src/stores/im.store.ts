@@ -131,17 +131,10 @@ export const useImStore = create<ImState>((set, get) => ({
       return { messagesByRoom: map };
     });
 
-    // 流式→持久化替换：agent 最终消息（带 stream_session_id）到达时，
-    // 清理对应的临时流式气泡。重复回放的消息不重复触发（其流式态早已清理）。
-    // 子 agent 消息（含 parent_stream_session_id）不清理——其 StreamState 需保留
-    // 供 PM 气泡内 DispatchChip 展开查看子 agent 工作内容。
-    if (wasNew) {
-      const sessionId = msg.content[STREAM_SESSION_ID_KEY];
-      const isChildMessage = !!msg.content[PARENT_STREAM_SESSION_ID_KEY];
-      if (typeof sessionId === 'string' && sessionId && !isChildMessage) {
-        useStreamStore.getState().clearCompleted(sessionId);
-      }
-    }
+    // 流式→持久化：不再调用 clearCompleted。
+    // AgentStreamBubble 完成后仍保留在 streams Map 中（status=done），
+    // MessageList 通过 stream_session_id 去重避免重复渲染。
+    // 刷新页面后 StreamState 丢失，Matrix 消息自然接管（MessageBubble 渲染）。
   },
 
   sendMessage: async (body) => {

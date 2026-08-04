@@ -25,12 +25,15 @@ export function MessageList() {
   const isFirstRender = useRef(true);
   const prevRoomIdRef = useRef<string | null>(activeRoomId);
 
-  // 当前房间的活跃流式会话（status=streaming）
+  // 当前房间的所有流式会话（含 streaming/done/interrupted/error）。
+  // 不仅限 streaming——完成后仍保留 AgentStreamBubble 展示完整 thinking/tools/dispatch chips，
+  // 避免流式→持久化替换导致内容丢失。对应 Matrix 消息通过 stream_session_id 去重隐藏。
   const activeRoomStreams = activeRoomId
-    ? Array.from(streams.values()).filter(
-        (s) => s.roomId === activeRoomId && s.status === 'streaming',
-      )
+    ? Array.from(streams.values()).filter((s) => s.roomId === activeRoomId)
     : [];
+
+  // 已有 StreamState 的 streamSessionId 集合——用于过滤重复的 Matrix 消息
+  const streamSessionIds = new Set(activeRoomStreams.map((s) => s.streamSessionId));
 
   // 消息或流式状态变化时滚动到底部。
   // 组件首次渲染（含从其他视图切回 IM）或房间切换时用 'auto' 瞬间定位到最新消息，
@@ -80,6 +83,9 @@ export function MessageList() {
     if (msg.eventType === 'io.momo-studio.dispatch') return false;
     if (msg.eventType === 'io.momo-studio.task_reply') return false;
     if (msg.content?.['io.momo-studio.parent_stream_session_id']) return false;
+    // 已有 StreamState 渲染为 AgentStreamBubble 的消息不再重复渲染为 MessageBubble
+    const sessionId = msg.content?.['io.momo-studio.stream_session_id'];
+    if (typeof sessionId === 'string' && streamSessionIds.has(sessionId)) return false;
     return true;
   });
 
