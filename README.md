@@ -6,9 +6,9 @@
 
 ## 状态
 
-**v1.4 — Released**
+**v1.5 — Released**
 
-v1.4 流式回复 + 可配置工具调用上限 + 多 agent 委派嵌套展示。详见 `docs/specs/2026-08-03-v1.4-streaming-and-configurable-tool-limit-design.md`。
+v1.5 内置工具库扩充——7 类 24 个工具对标 opencode，模块化工具架构（8 模块 + shared 三层）+ 集成测试。v1.4 流式回复 + 可配置工具调用上限 + 多 agent 委派嵌套展示仍可用，详见 `docs/specs/2026-08-03-v1.4-streaming-and-configurable-tool-limit-design.md`。
 
 ## 特性
 
@@ -314,6 +314,60 @@ v1.3 最大体验短板：agent 回复无流式反馈、工具调用上限硬编
 - 🔲 重启自动恢复 agent runtime（持久化运行状态）
 - 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
 - 🔲 Windows / macOS 沙箱实测
+
+### v1.5 — 内置工具库扩充 ✅ 已发布
+
+v1.4 之前 agent 仅 3 个工具（read/write/list）。v1.5 系统性补全 7 类共 24 个工具，对标 opencode 工具集水平。
+
+**文件操作（8 工具）**
+- ✅ read_file / write_file / list_files（v1.4 已有，搬迁）
+- ✅ edit_file（str_replace 唯一匹配 + 失败回写文件头）
+- ✅ mkdir / rm / mv / exists（暴露 WorkspaceFS 能力）
+
+**搜索（2 工具）**
+- ✅ grep（JS 正则，50 条上限）
+- ✅ glob（文件名匹配，200 条上限）
+- ✅ 自动加载 workspace .gitignore（mtime 缓存）
+
+**Shell（1 工具）**
+- ✅ bash（workspace 内自由 shell）
+- ✅ 黑名单：rm -rf /、mkfs、dd、fork bomb、关机、git commit
+- ✅ 环境变量白名单（不传 API key/token）
+- ✅ 10KB 输出截断 + 30s 超时
+
+**Git（9 工具）**
+- ✅ status / diff / log / show（只读）
+- ✅ add / branch / checkout / stash（写）
+- ✅ commit 走 GitPolicy 三层校验（allowAgentCommits + 分支保护 + message pattern）
+- ✅ 拦截 -c key=val 防绕过身份追踪
+- ✅ 不提供 push/merge/reset（保留给人）
+
+**Web（1 工具）**
+- ✅ webfetch（HTTP 强制升级 HTTPS，HTML→Markdown）
+- ✅ CSS 选择器提取
+- ✅ 双阶段截断（100KB 原始 + 50KB 转换）
+
+**Todo（1 工具）**
+- ✅ todowrite（全量替换协议，会话内 store）
+- ✅ UI 可见（TodoSection 嵌入 AgentStreamBubble/SubAgentSection）
+- ✅ Matrix 持久化 + 重启还原
+
+**LSP（2 工具，仅 TS/JS workspace）**
+- ✅ lsp_diagnostics（错误/警告）
+- ✅ lsp_find_references（含定义）
+- ✅ typescript-language-server 集成
+- ✅ 懒启动 + 5 分钟闲置 shutdown
+
+**架构重构**
+- ✅ 工具按类别拆 8 模块 + shared 层（output-truncate/audit/permission）
+- ✅ 统一 ToolModule 接口 + tools/index.ts 注册中心
+- ✅ tool-permission 扩展通配符（lsp_* / git_* / mcp:github:*）
+- ✅ 沿用 v1.4 三层安全（WorkspaceFS + tool-permission + GitPolicy）
+
+**测试覆盖**
+- ✅ Electron 全套测试通过（108+ 新增单元测试 + 集成测试）
+- ✅ Typecheck 双 clean
+- ✅ 三阶段迁移（搬迁 → file-tools → 其他模块递增），每阶段独立可测
 
 从"单机工具"进化为"团队平台"。
 
