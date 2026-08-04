@@ -6,9 +6,9 @@
 
 ## 状态
 
-**v1.3 — Released**
+**v1.4 — Released**
 
-v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/specs/2026-08-03-agent-definition-assignment-separation-design.md`。
+v1.4 流式回复 + 可配置工具调用上限 + 多 agent 委派嵌套展示。详见 `docs/specs/2026-08-03-v1.4-streaming-and-configurable-tool-limit-design.md`。
 
 ## 特性
 
@@ -31,7 +31,9 @@ v1.3 重大重构：agent 定义/分配解耦 + workspace 隔离。详见 `docs/
 ### 即时通讯（IM）
 - 本地 Tuwunel（Matrix 兼容协议）服务端，零外部依赖
 - 支持私聊和房间消息
-- Agent 在 IM 内可被 `@` 唤起，并以 Markdown 流式回复
+- Agent 在 IM 内可被 `@` 唤起，v1.4 流式回复（thinking 折叠 + 工具调用卡片 + Markdown 逐字输出）
+- v1.4 多 agent 委派嵌套展示：dispatch/task_reply 不再作为独立消息，嵌套在 PM 气泡的 DispatchChip 内
+- v1.4 可配置工具调用上限：全局默认 + 房间级覆盖 + per-task 重置（0-无限）
 - 客户端渲染支持代码块、表格、链接、引用块
 
 ### MCP（Model Context Protocol）
@@ -261,7 +263,57 @@ v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「�
 - 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
 - 🔲 Windows / macOS 沙箱实测
 
-### v2.0 — 多人协作 + 进阶 Agent 🔲 设计中
+### v1.4 — 流式回复 + 可配置工具上限 + 委派嵌套 ✅ 已发布
+
+v1.3 最大体验短板：agent 回复无流式反馈、工具调用上限硬编码 10 次、多 agent 委派场景消息混乱。v1.4 全面优化会话体验。
+
+**流式回复（双通道架构）**
+
+- ✅ LLM Provider `chatStream` — OpenAI/Anthropic SSE 流式解析，含 thinking 捕获（reasoning_content / thinking_delta）
+- ✅ 双通道传输 — IPC 实时推送 chunk（< 100ms）+ Matrix 持久化最终消息（含 thinking + tool_calls 元数据）
+- ✅ 流式气泡 — AgentStreamBubble：thinking 折叠区 + 工具调用卡片 + Markdown 正文 + 状态栏 + 停止按钮
+- ✅ 中断重置 — 用户发新消息或点停止 → AbortController 跨进程中断 → 新任务新预算
+- ✅ 非 SSE 降级 — 不支持流式的 provider 自动降级到 `chat()` 一次性返回
+- ✅ PDU 渐进式截断 — 最终消息超 55KB 时逐级削减（工具字段 → thinking → 删除 thinking → 删除 tool_calls），body 永远保留
+
+**可配置工具调用上限**
+
+- ✅ Migration v13 — `room_settings` 表（房间级 `max_tool_calls`，NULL=继承全局）
+- ✅ 全局默认 — Settings → 会话设置 → 工具调用上限（-1=无限 / 0=禁用 / N=上限）
+- ✅ 房间级覆盖 — 创建房间时选 + 房间头部徽标修改
+- ✅ Per-task 重置 — 每条用户消息 = 新任务 = 新预算池
+- ✅ 共享预算 — main + sub agent 共用，dispatch 传 `tool_budget`，task_reply 回 `tool_calls_used`
+- ✅ 预算注入 system prompt — agent 感知预算上限自行规划
+
+**多 agent 委派嵌套展示**
+
+- ✅ DispatchChip — 委派 chip（4 状态：排队/执行中/完成/失败），点击展开查看子 agent 工作
+- ✅ SubAgentSection — 嵌套工作区（thinking + 工具调用 + Markdown 正文）
+- ✅ 并行委派 — 多 chip 纵向堆叠，各自独立状态 + 进度指示器
+- ✅ 消息过滤 — dispatch/task_reply/子 agent 消息不作为顶层独立消息（仅嵌套在 PM 气泡内）
+- ✅ 历史还原 — 重启后从 Matrix 历史重建子 agent StreamState（按 `parent_stream_session_id` 关联）
+- ✅ 中断传播 — PM abort 自动传播到子 agent（`streamChildren` 映射）
+
+**滚动管理**
+
+- ✅ 智能自动滚动 — 仅在用户处于底部 120px 范围内时跟随；滚向上查看历史不被干扰
+- ✅ 瞬移滚动 — `behavior: 'auto'` 消除 smooth 动画叠加抖动
+
+**测试覆盖**
+
+- ✅ Electron 352/355（3 个 conduit flaky 预存）；Renderer 232/232；Typecheck 双 clean
+- ✅ Migration v13 测试 + settings CRUD（12 用例）
+- ✅ LLM Provider chatStream 测试（8 用例：OpenAI/Anthropic SSE + 降级 + abort）
+- ✅ Runtime streaming 测试（20 用例：chunk 序列 + 预算 + abort + dispatch 嵌套）
+- ✅ Stream store 嵌套测试（10 用例：dispatchChildren + parentStreamSessionId 关联）
+- ✅ DispatchChip / SubAgentSection / AgentStreamBubble 组件测试
+- ✅ 中断传播测试（7 用例：嵌套映射 + abort 传播 + 清理）
+
+**待办基础设施项**
+
+- 🔲 重启自动恢复 agent runtime（持久化运行状态）
+- 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
+- 🔲 Windows / macOS 沙箱实测
 
 从"单机工具"进化为"团队平台"。
 
@@ -301,8 +353,10 @@ v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「�
 | matrix-js-sdk 锁定 v31（v34 ESM 冲突） | 无法用最新 SDK 特性 | v2.0 ESM 转换 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
-| **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测（`anthropic.com` → anthropic，其余 → openai）；非标准域名可能误判 | v1.4 加 platform 列 |
+| **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测；非标准域名可能误判 | v1.5 加 platform 列 |
 | **3 个 conduit/manager 测试 flaky** | SIGKILL/healthCheck/timeout 偶发失败 | 待排查测试时序 |
+| **同房中断限制** | activeStreams 按 roomId 索引，PM 与子 agent 同房时子覆盖 PM entry | v1.5 改按 streamSessionId 索引 |
+| **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
 
 ## 已知限制
 
@@ -311,6 +365,8 @@ v1.2 最大架构债务：`agent_definitions` 表把「agent 是什么」与「�
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
 - **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
+- **同房中断限制**——PM 与子 agent 同在 team room 时，`activeStreams` 按 roomId 索引导致子覆盖 PM entry，dispatch 进行中点「停止」可能只中断子 agent。
+- **旧消息子 agent 工具条**——v1.4 修复前生成的消息缺少 `subStreamSessionId`（被 PDU 截断丢弃），重启后 DispatchChip 无法展开查看历史。新消息正常。
 
 ## 许可
 
