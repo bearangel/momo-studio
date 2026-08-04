@@ -864,6 +864,27 @@ export async function runChatLoop(
           ...(isDispatch ? { subStatus: 'completed' as const } : {}),
         });
       } catch (err) {
+        // v1.5.2: 工具因 abort 失败（executeDispatch 监听 signal 立即 reject / bash 被 SIGKILL 等）
+        // 立即跳出整个 chat loop，不推 tool_result 给 LLM——否则 LLM 看到失败结果后重试，
+        // 形成"中断-重试-中断"死循环（用户症状：停止按钮按下后 agent 仍持续输出）。
+        if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
+          process.off('message', abortListener);
+          const finalText = accumulatedText.trim() || '(中断)';
+          await sendFinalMessage(
+            client,
+            roomId,
+            streamSessionId,
+            finalText,
+            accumulatedThinking,
+            toolCallHistory,
+            parentStreamSessionId,
+            getTodosForSession(streamSessionId),
+          );
+          sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+          if (stats) stats.toolCallsUsed = toolCallCount;
+          return finalText;
+        }
+
         success = false;
         const errMsg = err instanceof Error ? err.message : String(err);
         result = `工具执行失败: ${errMsg}`;

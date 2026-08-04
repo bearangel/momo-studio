@@ -134,7 +134,7 @@ export class ShellTools implements ToolModule {
     const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
     const shellArgs = process.platform === 'win32' ? ['/c', command] : ['-c', command];
 
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
       const child = spawn(shell, shellArgs, {
         cwd: ctx.workspaceDir,
         env,
@@ -198,12 +198,19 @@ export class ShellTools implements ToolModule {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
+        // v1.5.2: 外部中断时抛 AbortError，chat loop 据此跳出整个循环（不推 tool_result 给 LLM）。
+        // 不抛的话 LLM 看到 "(用户中断)" 结果仍会重试，形成死循环。
+        if (aborted) {
+          const e = new Error('bash 被中断');
+          e.name = 'AbortError';
+          reject(e);
+          return;
+        }
         const parts: string[] = [`exit_code: ${code ?? 'null'}`];
         if (killed) parts.push(`(超时 ${timeoutMs}ms，已强杀)`);
-        if (aborted) parts.push('(用户中断，已强杀)');
         if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
         if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
-        if (!stdout && !stderr && code === 0 && !aborted && !killed) parts.push('(无输出)');
+        if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
         // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
         resolve(parts.join('\n\n'));
       });

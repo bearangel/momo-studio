@@ -34,14 +34,12 @@ describe('ShellTools abortSignal 响应', () => {
     const startAbort = Date.now();
     controller.abort();
 
-    const result = await promise;
+    // v1.5.2: bash 被 abort 时 reject AbortError（chat loop 据此跳出，不推结果给 LLM 防死循环）
+    await expect(promise).rejects.toThrow(/被中断/);
     const elapsed = Date.now() - startAbort;
 
     // 验证：100ms 内返回（不是 30s 后）
     expect(elapsed).toBeLessThan(1000);
-    // 验证：返回结果含"用户中断"标记
-    expect(result).toContain('用户中断');
-    expect(result).toContain('已强杀');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
