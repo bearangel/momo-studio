@@ -6,10 +6,12 @@
 // 流式正文（含闪烁光标）和底部状态栏（status 文案 + 停止按钮）。
 // 收到 Matrix 最终消息后由 MessageList/clearCompleted 移除本气泡。
 import type { StreamState } from '../../stores/stream.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { ipc } from '../../ipc/client';
 import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
 import { ToolCallChip } from './ToolCallChip';
+import { DispatchChip } from './DispatchChip';
 
 interface Props {
   stream: StreamState;
@@ -44,6 +46,17 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
   const statusColor = STATUS_COLOR[stream.status];
   const statusDot = STATUS_DOT[stream.status];
 
+  // v1.4 嵌套：从 store 查找子 agent 的 StreamState（按 subStreamSessionId），
+  // 透传给 DispatchChip 以便展开时渲染 SubAgentSection
+  const streams = useStreamStore((s) => s.streams);
+
+  // 进度指示器：有未完成的 dispatch 时显示「等待 X/Y 子任务完成」
+  const dispatchTotal = stream.dispatchChildren.length;
+  const dispatchCompleted = stream.dispatchChildren.filter(
+    (c) => c.status === 'completed' || c.status === 'failed',
+  ).length;
+  const showProgress = dispatchTotal > 0 && dispatchCompleted < dispatchTotal;
+
   return (
     <MessageFrame
       sender={stream.botUserId}
@@ -66,6 +79,26 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
               defaultExpanded={isStreaming}
             />
           ))}
+        </div>
+      )}
+
+      {/* v1.4 嵌套：dispatch 委派 chips（在工具卡片之后、正文之前渲染） */}
+      {dispatchTotal > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {stream.dispatchChildren.map((child) => (
+            <DispatchChip
+              key={child.subStreamSessionId}
+              child={child}
+              subStream={streams.get(child.subStreamSessionId)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* v1.4 嵌套：进度指示器（全部完成时不渲染） */}
+      {showProgress && (
+        <div style={{ fontSize: 11, color: '#888', margin: '4px 0' }}>
+          ⏳ 等待 {dispatchCompleted}/{dispatchTotal} 子任务完成
         </div>
       )}
 

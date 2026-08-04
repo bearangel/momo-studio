@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { StreamState } from '../../stores/stream.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { AgentStreamBubble } from './AgentStreamBubble';
 
 const abortStreamMock = vi.fn().mockResolvedValue(undefined);
@@ -32,6 +33,8 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
 describe('AgentStreamBubble', () => {
   beforeEach(() => {
     abortStreamMock.mockClear();
+    // 重置 stream store（避免 dispatch chips 测试间的状态泄漏）
+    useStreamStore.setState({ streams: new Map() });
   });
 
   it('streaming 状态显示「流式中」和停止按钮', () => {
@@ -96,5 +99,102 @@ describe('AgentStreamBubble', () => {
     // 没有正文，但组件整体仍应渲染（状态栏存在）
     expect(screen.getByText(/流式中/)).toBeInTheDocument();
     expect(container.firstChild).not.toBeNull();
+  });
+});
+
+describe('AgentStreamBubble — dispatch chips 集成', () => {
+  beforeEach(() => {
+    // 重置 stream store（避免 dispatch chips 测试间的状态泄漏）
+    useStreamStore.setState({ streams: new Map() });
+  });
+
+  it('有 dispatchChildren 时渲染对应的 DispatchChip（显示子 agent 名字）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          dispatchChildren: [
+            { subStreamSessionId: 'child-1', subAgentName: '研究员', status: 'executing' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('研究员')).toBeInTheDocument();
+    // DispatchChip 头行的 📤 标记（ThinkingSection 用 💭，不会冲突）
+    expect(screen.getByText('📤')).toBeInTheDocument();
+  });
+
+  it('多个 dispatchChildren 时全部渲染', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          dispatchChildren: [
+            { subStreamSessionId: 'c1', subAgentName: '研究员', status: 'executing' },
+            { subStreamSessionId: 'c2', subAgentName: '码农', status: 'queued' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('研究员')).toBeInTheDocument();
+    expect(screen.getByText('码农')).toBeInTheDocument();
+  });
+
+  it('无 dispatchChildren 时不渲染 dispatch chip', () => {
+    render(<AgentStreamBubble stream={makeStream({ dispatchChildren: [] })} />);
+    expect(screen.queryByText('📤')).not.toBeInTheDocument();
+  });
+
+  it('进度指示器显示已完成/总数计数（等待 1/2 子任务完成）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          dispatchChildren: [
+            { subStreamSessionId: 'c1', subAgentName: 'A', status: 'completed' },
+            { subStreamSessionId: 'c2', subAgentName: 'B', status: 'executing' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText(/等待 1\/2 子任务完成/)).toBeInTheDocument();
+  });
+
+  it('全部子任务完成时不显示进度指示器', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          dispatchChildren: [
+            { subStreamSessionId: 'c1', subAgentName: 'A', status: 'completed' },
+            { subStreamSessionId: 'c2', subAgentName: 'B', status: 'failed' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.queryByText(/子任务完成/)).not.toBeInTheDocument();
+  });
+
+  it('从 store 查找子 stream 并透传给 DispatchChip（子 agent 正文可见）', () => {
+    // 预置子 agent 的 StreamState 到 store（streams.get(subStreamSessionId) 查找路径）
+    const childStream: StreamState = {
+      streamSessionId: 'child-1',
+      roomId: '!room:server',
+      botUserId: '@child:server',
+      thinking: '',
+      text: '子任务实时输出',
+      toolCalls: [],
+      status: 'streaming',
+      dispatchChildren: [],
+    };
+    useStreamStore.setState({ streams: new Map([['child-1', childStream]]) });
+
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          dispatchChildren: [
+            { subStreamSessionId: 'child-1', subAgentName: '码农', status: 'executing' },
+          ],
+        })}
+      />,
+    );
+    // executing 默认展开 + subStream 已透传 → 子 agent 正文可见
+    expect(screen.getByText('子任务实时输出')).toBeInTheDocument();
   });
 });
