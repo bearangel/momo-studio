@@ -78,7 +78,7 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
               result={tc.result}
               success={tc.success ?? true}
               isExecuting={tc.isExecuting}
-              defaultExpanded={isStreaming}
+              defaultExpanded={false}
             />
           ))}
         </div>

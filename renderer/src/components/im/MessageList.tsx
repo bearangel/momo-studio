@@ -24,6 +24,13 @@ export function MessageList() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);
   const prevRoomIdRef = useRef<string | null>(activeRoomId);
+  const isNearBottomRef = useRef(true);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
 
   // 当前房间的顶层流式会话（排除子 agent——子 agent 的 stream 有 parentStreamSessionId，
   // 仅在 PM 气泡的 DispatchChip 内嵌套渲染，不作为独立顶层气泡）。
@@ -45,10 +52,12 @@ export function MessageList() {
     if (!el) return;
     const isRoomChange = prevRoomIdRef.current !== activeRoomId;
     prevRoomIdRef.current = activeRoomId;
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior: isFirstRender.current || isRoomChange ? 'auto' : 'smooth',
-    });
+
+    if (isFirstRender.current || isRoomChange) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    } else if (isNearBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    }
     isFirstRender.current = false;
   }, [messages, activeRoomId, activeRoomStreams]);
 
@@ -91,7 +100,7 @@ export function MessageList() {
   });
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
+    <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
       {visibleMessages.map((msg) => (
         <MessageBubble
           key={msg.eventId}

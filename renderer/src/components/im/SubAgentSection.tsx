@@ -44,7 +44,7 @@ export function SubAgentSection({ stream }: Props) {
               result={tc.result}
               success={tc.success ?? true}
               isExecuting={tc.isExecuting}
-              defaultExpanded={isStreaming}
+              defaultExpanded={false}
             />
           ))}
         </div>
