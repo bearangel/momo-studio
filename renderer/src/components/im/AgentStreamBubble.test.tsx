@@ -24,6 +24,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     text: '',
     toolCalls: [],
     status: 'streaming',
+    dispatchChildren: [],
     ...overrides,
   };
 }

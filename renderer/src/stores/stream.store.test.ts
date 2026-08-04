@@ -169,3 +169,278 @@ describe('stream.store', () => {
     expect(streams.has('s2')).toBe(true);
   });
 });
+
+// ───────────────────────── v1.4 嵌套 dispatch ─────────────────────────
+
+describe('stream.store — v1.4 嵌套 dispatch', () => {
+  beforeEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+    streamCallbacks.length = 0;
+  });
+
+  it('tool_call(isDispatch) 在父 stream 登记一个 status=queued 的 dispatchChild（不混入 toolCalls）', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: { task: '写代码' },
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+      subAgentAvatar: '🤖',
+    });
+
+    const pm = useStreamStore.getState().streams.get('pm1');
+    expect(pm?.toolCalls).toHaveLength(0); // dispatch 不混入普通 toolCalls
+    expect(pm?.dispatchChildren).toHaveLength(1);
+    const child = pm?.dispatchChildren[0];
+    expect(child?.subStreamSessionId).toBe('sub1');
+    expect(child?.subAgentName).toBe('Coder');
+    expect(child?.subAgentAvatar).toBe('🤖');
+    expect(child?.status).toBe('queued');
+  });
+
+  it('普通 tool_call（无 isDispatch）仍走 toolCalls 分支，不影响 dispatchChildren', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({ type: 'tool_call', streamSessionId: 'pm1', toolName: 'read_file', args: {} });
+
+    const pm = useStreamStore.getState().streams.get('pm1');
+    expect(pm?.toolCalls).toHaveLength(1);
+    expect(pm?.dispatchChildren).toHaveLength(0);
+  });
+
+  it('start(parentStreamSessionId) 创建子 stream 并把父的对应 DispatchChild 置为 executing', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'start',
+      streamSessionId: 'sub1',
+      roomId: '!r',
+      botUserId: '@sub',
+      parentStreamSessionId: 'pm1',
+      subAgentName: 'Coder',
+    });
+
+    const sub = useStreamStore.getState().streams.get('sub1');
+    expect(sub).toBeDefined();
+    expect(sub?.parentStreamSessionId).toBe('pm1');
+    expect(sub?.dispatchChildren).toEqual([]);
+
+    const pm = useStreamStore.getState().streams.get('pm1');
+    expect(pm?.dispatchChildren[0]?.status).toBe('executing');
+  });
+
+  it('tool_result(subStatus=completed) 把最后一个未终结 DispatchChild 置为 completed', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'tool_result',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      result: '完成',
+      success: true,
+      subStatus: 'completed',
+    });
+
+    expect(useStreamStore.getState().streams.get('pm1')?.dispatchChildren[0]?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('tool_result(subStatus=failed/timeout) 把对应 DispatchChild 置为 failed', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'tool_result',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      result: '超时',
+      success: false,
+      subStatus: 'timeout',
+    });
+
+    expect(useStreamStore.getState().streams.get('pm1')?.dispatchChildren[0]?.status).toBe(
+      'failed',
+    );
+  });
+
+  it('子 agent end(stop) 把父的对应 DispatchChild 置为 completed，子 stream 自身 status=done', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'start',
+      streamSessionId: 'sub1',
+      roomId: '!r',
+      botUserId: '@sub',
+      parentStreamSessionId: 'pm1',
+    });
+    emit({ type: 'end', streamSessionId: 'sub1', finishReason: 'stop' });
+
+    const sub = useStreamStore.getState().streams.get('sub1');
+    expect(sub?.status).toBe('done');
+    expect(sub?.finishReason).toBe('stop');
+    expect(useStreamStore.getState().streams.get('pm1')?.dispatchChildren[0]?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('子 agent end(error) 把父的对应 DispatchChild 置为 failed', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'start',
+      streamSessionId: 'sub1',
+      roomId: '!r',
+      botUserId: '@sub',
+      parentStreamSessionId: 'pm1',
+    });
+    emit({ type: 'end', streamSessionId: 'sub1', finishReason: 'error', error: '崩溃' });
+
+    expect(useStreamStore.getState().streams.get('pm1')?.dispatchChildren[0]?.status).toBe(
+      'failed',
+    );
+  });
+
+  it('子 agent end(budget_exhausted) 视为 completed', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'start',
+      streamSessionId: 'sub1',
+      roomId: '!r',
+      botUserId: '@sub',
+      parentStreamSessionId: 'pm1',
+    });
+    emit({ type: 'end', streamSessionId: 'sub1', finishReason: 'budget_exhausted' });
+
+    expect(useStreamStore.getState().streams.get('pm1')?.dispatchChildren[0]?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('子 stream 的常规 chunk（thinking/text/tool_call/tool_result）正常更新子 StreamState', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'start',
+      streamSessionId: 'sub1',
+      roomId: '!r',
+      botUserId: '@sub',
+      parentStreamSessionId: 'pm1',
+    });
+    emit({ type: 'thinking', streamSessionId: 'sub1', delta: '思考' });
+    emit({ type: 'text', streamSessionId: 'sub1', delta: '回复' });
+    emit({ type: 'tool_call', streamSessionId: 'sub1', toolName: 'read_file', args: { p: 'a' } });
+    emit({
+      type: 'tool_result',
+      streamSessionId: 'sub1',
+      toolName: 'read_file',
+      result: '内容',
+      success: true,
+    });
+
+    const sub = useStreamStore.getState().streams.get('sub1');
+    expect(sub?.thinking).toBe('思考');
+    expect(sub?.text).toBe('回复');
+    expect(sub?.toolCalls).toHaveLength(1);
+    expect(sub?.toolCalls[0]?.toolName).toBe('read_file');
+    expect(sub?.toolCalls[0]?.result).toBe('内容');
+    expect(sub?.toolCalls[0]?.isExecuting).toBe(false);
+  });
+
+  it('多个并行 dispatch 各自独立登记为 dispatchChildren', () => {
+    useStreamStore.getState().init();
+    emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:coder',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub1',
+      subAgentName: 'Coder',
+    });
+    emit({
+      type: 'tool_call',
+      streamSessionId: 'pm1',
+      toolName: 'dispatch:reviewer',
+      args: {},
+      isDispatch: true,
+      subStreamSessionId: 'sub2',
+      subAgentName: 'Reviewer',
+    });
+
+    const pm = useStreamStore.getState().streams.get('pm1');
+    expect(pm?.dispatchChildren).toHaveLength(2);
+    expect(pm?.dispatchChildren[0]?.subStreamSessionId).toBe('sub1');
+    expect(pm?.dispatchChildren[0]?.status).toBe('queued');
+    expect(pm?.dispatchChildren[1]?.subStreamSessionId).toBe('sub2');
+    expect(pm?.dispatchChildren[1]?.status).toBe('queued');
+  });
+});
