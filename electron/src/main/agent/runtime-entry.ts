@@ -1078,7 +1078,7 @@ async function executeTool(
  * 统一工具执行路由：按工具名前缀分派到 builtin / 虚拟(skill) / dispatch / MCP 四类执行器。
  * 未知工具抛错（由 chat loop 捕获转成 tool result，LLM 可见并自我纠正）。
  */
-async function doExecuteTool(
+export async function doExecuteTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
   client: MatrixClient,
@@ -1093,10 +1093,13 @@ async function doExecuteTool(
   // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tools/shared/permission.ts。
   assertToolAllowed(name, config);
 
-  if (name === 'read_file' || name === 'write_file' || name === 'list_files') {
-    // v1.5：文件工具委托给 tools/index.ts 注册中心；FileTools.handles() 路由。
-    //   行为零变更——FileTools.executeFileTool 与原 builtin-tools 中的 executeFileTool 实现一致。
-    //   permissionConfig 在前置 assertToolAllowed 已校验，注册中心内不再重复。
+  // v1.5：内置工具统一委托给 tools/index.ts 注册中心。按 ToolModule.handles() 路由——
+  //   覆盖 file/search/shell/git/web/todo/lsp 全部 7 类 24 个工具（含 21 个 v1.5 新增：
+  //   edit_file/mkdir/rm/mv/exists/grep/glob/bash/git_*/webfetch/todowrite/lsp_*）。
+  //   必须置于 loadSkill/readResource/dispatch:/mcp: 之前——后者是带特殊路由需求的虚拟/
+  //   前缀工具，与注册中心正交，不存在名字冲突（注册中心不含这些名字），故前置不会误吞。
+  //   permissionConfig 在前置 assertToolAllowed 已校验，注册中心内不再重复。
+  if (ctx.toolModules.some((m) => m.handles(name))) {
     const toolCtx: ToolContext = {
       wsFs: ctx.wsFs,
       workspaceId: ctx.workspaceId,
@@ -1108,7 +1111,7 @@ async function doExecuteTool(
       sendStreamChunk: ctx.sendStreamChunk,
       permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
     };
-    return executeToolModule(call.name, call.arguments, toolCtx, ctx.toolModules);
+    return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }
   if (name === 'loadSkill') {
     return ctx.skillRegistry.loadFull(argToString(call.arguments.name, 'name'));
