@@ -173,3 +173,114 @@ describe('MessageBubble 增强（agent 持久化字段）', () => {
     // 非法格式被 extractAgentMeta 过滤，不渲染工具卡片
   });
 });
+
+describe('MessageBubble 历史 dispatch chips（v1.4）', () => {
+  it('tool_calls 含 dispatch: 前缀 → 渲染 DispatchChip（不渲染 ToolCallChip）', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: 'PM 汇总',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          { name: 'dispatch:coder', args: { task: '写代码' }, result: '完成', success: true },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    // DispatchChip 头行的 📤 图标可见
+    expect(screen.getByText('📤')).toBeInTheDocument();
+    // 子 agent 名从 slug 推导（dispatch:coder → coder）
+    expect(screen.getByText('coder')).toBeInTheDocument();
+    // completed 状态文案可见
+    expect(screen.getByText(/完成/)).toBeInTheDocument();
+    // 不应作为 ToolCallChip 渲染（完整工具名 dispatch:coder 不出现）
+    expect(screen.queryByText('dispatch:coder')).not.toBeInTheDocument();
+    // 正文仍渲染
+    expect(screen.getByText('PM 汇总')).toBeInTheDocument();
+  });
+
+  it('tool_calls 含 isDispatch:true + subAgentName → DispatchChip 显示 subAgentName', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '已委派',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          {
+            name: 'dispatch:researcher',
+            args: {},
+            result: 'ok',
+            success: true,
+            isDispatch: true,
+            subStreamSessionId: 'sub-sess-1',
+            subAgentName: '研究员',
+            subAgentAvatar: '🔬',
+          },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    // 使用持久化的 subAgentName（而非 slug）
+    expect(screen.getByText('研究员')).toBeInTheDocument();
+    expect(screen.getByText('🔬')).toBeInTheDocument();
+    expect(screen.getByText('📤')).toBeInTheDocument();
+  });
+
+  it('dispatch 失败（success:false）→ DispatchChip 显示失败状态', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '委派出错',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          { name: 'dispatch:coder', args: {}, result: '超时', success: false },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    expect(screen.getByText('📤')).toBeInTheDocument();
+    // failed 状态文案
+    expect(screen.getByText(/失败/)).toBeInTheDocument();
+  });
+
+  it('dispatch + 普通工具混合 → DispatchChip 与 ToolCallChip 共存', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '综合回复',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          { name: 'read_file', args: { path: 'a.ts' }, result: '内容', success: true },
+          { name: 'dispatch:coder', args: {}, result: 'done', success: true },
+          { name: 'bash', args: { cmd: 'ls' }, result: 'out', success: true },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    // 普通工具作为 ToolCallChip（工具名可见）
+    expect(screen.getByText('read_file')).toBeInTheDocument();
+    expect(screen.getByText('bash')).toBeInTheDocument();
+    // dispatch 作为 DispatchChip
+    expect(screen.getByText('📤')).toBeInTheDocument();
+    expect(screen.getByText('coder')).toBeInTheDocument();
+    // dispatch:coder 不作为 ToolCallChip 渲染
+    expect(screen.queryByText('dispatch:coder')).not.toBeInTheDocument();
+  });
+
+  it('仅普通 tool_calls（无 dispatch）→ 不渲染 DispatchChip', () => {
+    const msg: ImMessage = {
+      eventId: '$1', roomId: '!r', sender: '@bot:local', body: '纯工具回复',
+      eventType: 'm.room.message',
+      content: {
+        'io.momo-studio.tool_calls': [
+          { name: 'read_file', args: { path: 'b.ts' }, result: 'x', success: true },
+        ],
+      },
+      timestamp: 0,
+    };
+    render(<MessageBubble message={msg} isSelf={false} senderName="码农" />);
+    expect(screen.getByText('read_file')).toBeInTheDocument();
+    // 无 DispatchChip（无 📤 图标）
+    expect(screen.queryByText('📤')).not.toBeInTheDocument();
+  });
+});

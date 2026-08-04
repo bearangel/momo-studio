@@ -73,9 +73,19 @@ export function MessageList() {
     );
   }
 
+  // v1.4 嵌套：dispatch/task_reply/子 agent 回复（含 parent_stream_session_id）
+  // 不作为顶层独立消息渲染——它们已嵌套在 PM 气泡的 dispatch chip 内。
+  // 仅过滤渲染层，store 原始消息保留（历史还原仍可访问）。
+  const visibleMessages = (messages ?? []).filter((msg) => {
+    if (msg.eventType === 'io.momo-studio.dispatch') return false;
+    if (msg.eventType === 'io.momo-studio.task_reply') return false;
+    if (msg.content?.['io.momo-studio.parent_stream_session_id']) return false;
+    return true;
+  });
+
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
-      {messages?.map((msg) => (
+      {visibleMessages.map((msg) => (
         <MessageBubble
           key={msg.eventId}
           message={msg}

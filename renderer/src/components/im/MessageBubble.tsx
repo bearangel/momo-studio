@@ -13,8 +13,10 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
+import type { DispatchChild } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
+import { DispatchChip } from './DispatchChip';
 import { TaskReplyCard } from './TaskReplyCard';
 import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
@@ -33,6 +35,14 @@ interface PersistedToolCall {
   args: Record<string, unknown>;
   result: string;
   success: boolean;
+  /** v1.4 嵌套：标记为 PM 的 dispatch 委派（渲染为 DispatchChip 而非 ToolCallChip） */
+  isDispatch?: boolean;
+  /** v1.4 嵌套：子 agent 流式 session ID（关联到 dispatch chip） */
+  subStreamSessionId?: string;
+  /** v1.4 嵌套：子 agent 展示名 */
+  subAgentName?: string;
+  /** v1.4 嵌套：子 agent emoji 头像 */
+  subAgentAvatar?: string;
 }
 
 /** Matrix event content 中的 io.momo-studio.* 自定义键 */
@@ -72,15 +82,49 @@ function extractAgentMeta(content: Record<string, unknown>): {
       args !== null &&
       !Array.isArray(args)
     ) {
+      // v1.4 嵌套：提取 dispatch 元数据（可选字段，类型守卫后写入）
+      const isDispatch = obj.isDispatch === true ? true : undefined;
+      const subStreamSessionId =
+        typeof obj.subStreamSessionId === 'string' ? obj.subStreamSessionId : undefined;
+      const subAgentName =
+        typeof obj.subAgentName === 'string' ? obj.subAgentName : undefined;
+      const subAgentAvatar =
+        typeof obj.subAgentAvatar === 'string' ? obj.subAgentAvatar : undefined;
       toolCalls.push({
         name,
         args: args as Record<string, unknown>,
         result,
         success,
+        isDispatch,
+        subStreamSessionId,
+        subAgentName,
+        subAgentAvatar,
       });
     }
   }
   return { thinking, toolCalls };
+}
+
+/** 判断持久化的 tool call 是否为 dispatch 委派（显式标记或 name 前缀 dispatch:） */
+function isDispatchToolCall(tc: PersistedToolCall): boolean {
+  return tc.isDispatch === true || tc.name.startsWith('dispatch:');
+}
+
+/**
+ * 从持久化的 dispatch tool call 构造 DispatchChip 所需的 DispatchChild（历史模式）。
+ * 历史期无实时 StreamState，status 由 success 推导；subAgentName 缺失时从
+ * dispatch:<slug> 名推导，subStreamSessionId 缺失时用稳定占位 key。
+ */
+function buildHistoryDispatchChild(tc: PersistedToolCall, index: number): DispatchChild {
+  const slug = tc.name.startsWith('dispatch:')
+    ? tc.name.slice('dispatch:'.length)
+    : tc.name;
+  return {
+    subStreamSessionId: tc.subStreamSessionId ?? `hist-dispatch-${index}`,
+    subAgentName: tc.subAgentName ?? slug,
+    subAgentAvatar: tc.subAgentAvatar,
+    status: tc.success ? 'completed' : 'failed',
+  };
 }
 
 export function MessageBubble({ message, isSelf, senderName }: Props) {
@@ -96,6 +140,11 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
   const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0;
 
   if (hasAgentMeta) {
+    // v1.4 嵌套：分离 dispatch 委派与普通工具调用——前者渲染为 DispatchChip（历史模式，
+    // 无实时 StreamState，仅展示完成/失败状态），后者保持 ToolCallChip 行为
+    const regularToolCalls = toolCalls.filter((tc) => !isDispatchToolCall(tc));
+    const dispatchToolCalls = toolCalls.filter(isDispatchToolCall);
+
     // 增强气泡：与 AgentStreamBubble 完成态视觉一致（灰底 + 边框）
     return (
       <MessageFrame
@@ -105,9 +154,9 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
         bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
       >
         {thinking && <ThinkingSection content={thinking} />}
-        {toolCalls.length > 0 && (
+        {regularToolCalls.length > 0 && (
           <div style={{ marginBottom: 8 }}>
-            {toolCalls.map((tc, i) => (
+            {regularToolCalls.map((tc, i) => (
               <ToolCallChip
                 key={`${tc.name}-${i}`}
                 toolName={tc.name}
@@ -115,6 +164,17 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
                 result={tc.result}
                 success={tc.success}
                 defaultExpanded={false}
+              />
+            ))}
+          </div>
+        )}
+        {/* v1.4 嵌套：dispatch chips 历史模式（不传 subStream——展开时无嵌套正文，PM body 已含关键信息） */}
+        {dispatchToolCalls.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            {dispatchToolCalls.map((tc, i) => (
+              <DispatchChip
+                key={tc.subStreamSessionId ?? `hist-dispatch-${i}`}
+                child={buildHistoryDispatchChild(tc, i)}
               />
             ))}
           </div>
