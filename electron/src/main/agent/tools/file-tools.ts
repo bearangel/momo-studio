@@ -1,6 +1,6 @@
 // electron/src/main/agent/tools/file-tools.ts
-// 文件操作工具模块：read_file / write_file / list_files（v1.4 搬迁）。
-// Task 6 会在此模块加 edit_file / mkdir / rm / mv / exists。
+// 文件操作工具模块：read_file / write_file / list_files / edit_file /
+//   mkdir / rm / mv / exists（v1.4 搬迁 + v1.5 Task 6 扩展）。
 //
 // 设计要点：
 //   - 工具的路径参数都是相对 workspace 根目录；实际沙箱校验由 WorkspaceFS
@@ -12,11 +12,12 @@
 //     注册中心的首批 module；Task 5 把它接入 registry 后会替换 runtime-entry
 //     对此模块的直接调用。
 
+import fs from 'node:fs';
 import type { WorkspaceFS } from '../../files/workspace-fs';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 
-/** 返回所有文件工具的声明（read_file / write_file / list_files） */
+/** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
 export function getFileToolDefs(): LLMToolDef[] {
   return [
     {
@@ -52,6 +53,58 @@ export function getFileToolDefs(): LLMToolDef[] {
         },
       },
     },
+    {
+      name: 'edit_file',
+      description: '通过精确字符串匹配增量编辑文件。oldString 必须在文件中唯一出现，否则报错。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '相对 workspace 根目录的文件路径' },
+          oldString: { type: 'string', description: '要被替换的原文字符串（须精确匹配，含空白/缩进）' },
+          newString: { type: 'string', description: '替换后的新字符串' },
+        },
+        required: ['path', 'oldString', 'newString'],
+      },
+    },
+    {
+      name: 'mkdir',
+      description: '创建目录（递归创建父目录）',
+      inputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'rm',
+      description: '删除文件或目录（递归）',
+      inputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'mv',
+      description: '移动/重命名文件或目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          src: { type: 'string', description: '源路径' },
+          dst: { type: 'string', description: '目标路径' },
+        },
+        required: ['src', 'dst'],
+      },
+    },
+    {
+      name: 'exists',
+      description: '检查路径是否存在',
+      inputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    },
   ];
 }
 
@@ -69,7 +122,7 @@ function parseStringArg(value: unknown, name: string): string {
 /**
  * 执行一个文件工具调用。
  *
- * @param toolName 工具名（read_file / write_file / list_files）
+ * @param toolName 工具名（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists）
  * @param args LLM 返回的已解析参数对象
  * @param wsFs workspace 文件系统实例（提供路径沙箱）
  * @returns 工具执行结果，序列化为字符串（回传给 LLM 作为 tool result）
@@ -100,6 +153,53 @@ export async function executeFileTool(
         .map((e) => `${e.isDirectory ? '📁' : '📄'} ${e.name}${e.isDirectory ? '/' : ''}`)
         .join('\n');
     }
+    case 'edit_file': {
+      const filePath = parseStringArg(args.path, 'path');
+      const oldStr = parseStringArg(args.oldString, 'oldString');
+      const newStr = parseStringArg(args.newString, 'newString');
+      if (oldStr === newStr) throw new Error('oldString 与 newString 相同，无操作');
+
+      const abs = wsFs.assertInWorkspace(filePath);
+      if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
+
+      const original = await fs.promises.readFile(abs, 'utf-8');
+      const firstIdx = original.indexOf(oldStr);
+      if (firstIdx === -1) {
+        const preview = original.slice(0, 500);
+        throw new Error(`oldString 未在文件中找到。文件开头 500 字符:\n${preview}`);
+      }
+      const lastIdx = original.lastIndexOf(oldStr);
+      if (firstIdx !== lastIdx) {
+        throw new Error(`oldString 在文件中出现多次（${original.split(oldStr).length - 1} 处），请提供更长上下文以唯一定位`);
+      }
+
+      const updated = original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length);
+      await fs.promises.writeFile(abs, updated, 'utf-8');
+
+      const beforeLines = original.slice(0, firstIdx).split('\n');
+      const startLine = Math.max(0, beforeLines.length - 2);
+      return `已编辑 ${filePath}（第 ${startLine + 1} 行附近）`;
+    }
+    case 'mkdir': {
+      const dirPath = parseStringArg(args.path, 'path');
+      await wsFs.createDir(dirPath);
+      return `目录已创建: ${dirPath}`;
+    }
+    case 'rm': {
+      const targetPath = parseStringArg(args.path, 'path');
+      await wsFs.deletePath(targetPath);
+      return `已删除: ${targetPath}`;
+    }
+    case 'mv': {
+      const src = parseStringArg(args.src, 'src');
+      const dst = parseStringArg(args.dst, 'dst');
+      await wsFs.rename(src, dst);
+      return `已移动: ${src} → ${dst}`;
+    }
+    case 'exists': {
+      const checkPath = parseStringArg(args.path, 'path');
+      return (await wsFs.exists(checkPath)) ? '存在' : '不存在';
+    }
     default:
       throw new Error(`未知工具: ${toolName}`);
   }
@@ -116,7 +216,7 @@ export class FileTools implements ToolModule {
   }
 
   handles(name: string): boolean {
-    return name === 'read_file' || name === 'write_file' || name === 'list_files';
+    return ['read_file', 'write_file', 'list_files', 'edit_file', 'mkdir', 'rm', 'mv', 'exists'].includes(name);
   }
 
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
