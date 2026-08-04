@@ -858,8 +858,7 @@ const MAX_EVENT_CONTENT_BYTES = 55_000;
  */
 function truncateToolCallFields(calls: ToolCallRecord[]): ToolCallRecord[] {
   return calls.map((tc) => ({
-    name: tc.name,
-    success: tc.success,
+    ...tc,
     result: tc.result.length > 200 ? tc.result.slice(0, 200) + '...' : tc.result,
     args: truncateArgs(tc.args),
   }));
