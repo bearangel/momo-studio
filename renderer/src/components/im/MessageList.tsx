@@ -25,11 +25,12 @@ export function MessageList() {
   const isFirstRender = useRef(true);
   const prevRoomIdRef = useRef<string | null>(activeRoomId);
 
-  // 当前房间的所有流式会话（含 streaming/done/interrupted/error）。
-  // 不仅限 streaming——完成后仍保留 AgentStreamBubble 展示完整 thinking/tools/dispatch chips，
-  // 避免流式→持久化替换导致内容丢失。对应 Matrix 消息通过 stream_session_id 去重隐藏。
+  // 当前房间的顶层流式会话（排除子 agent——子 agent 的 stream 有 parentStreamSessionId，
+  // 仅在 PM 气泡的 DispatchChip 内嵌套渲染，不作为独立顶层气泡）。
   const activeRoomStreams = activeRoomId
-    ? Array.from(streams.values()).filter((s) => s.roomId === activeRoomId)
+    ? Array.from(streams.values()).filter(
+        (s) => s.roomId === activeRoomId && !s.parentStreamSessionId,
+      )
     : [];
 
   // 已有 StreamState 的 streamSessionId 集合——用于过滤重复的 Matrix 消息
