@@ -38,7 +38,7 @@ import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { logToolCall } from './tools/shared/audit';
-import { assertToolAllowed } from './tool-permission';
+import { assertToolAllowed } from './tools/shared/permission';
 import {
   getBuiltinToolDefs,
   executeBuiltinTool,
@@ -1024,7 +1024,7 @@ async function doExecuteTool(
   const name = call.name;
 
   // M3 工具权限强制：deniedTools 优先于 allowedTools。抛错由 executeTool 的审计
-  // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tool-permission.ts。
+  // 包装捕获并记为失败，再回传给 LLM 自我纠正。判定逻辑见 tools/shared/permission.ts。
   assertToolAllowed(name, config);
 
   if (name === 'read_file' || name === 'write_file' || name === 'list_files') {
