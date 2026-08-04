@@ -75,6 +75,18 @@ const runtimes = new Map<string, ChildProcess>();
 const activeStreams = new Map<string, { streamSessionId: string; child: ChildProcess }>();
 
 /**
+ * v1.4 嵌套流式：父 streamSessionId → 子 streamSessionId 集合（dispatch 委派关系）。
+ *
+ * 当 PM 通过 dispatch 派发子任务时，子 agent 的 start chunk 携带 parentStreamSessionId，
+ * handleChildMessage 据此把子 session 加入父的子集合。abortStream(roomId) 中断 PM 时
+ * 据此把中断传播到所有活跃子 agent；end chunk / 子进程退出时清理对应记录。
+ *
+ * 与 activeStreams 的区别：activeStreams 按 roomId 跟踪「谁在哪个房间流」，streamChildren
+ * 按 streamSessionId 跟踪「谁是谁的子流」——前者解决中断入口，后者解决中断传播。
+ */
+const streamChildren = new Map<string, Set<string>>();
+
+/**
  * 主窗口引用（由 main/index.ts 通过 setMainWindow 注入）。
  * 流式 chunk 需经 webContents.send('agent:stream') 推到 renderer，
  * 而 runtime-manager 自身不持有窗口，故需外部注入。
@@ -97,11 +109,28 @@ function relayStreamChunk(chunk: StreamChunk): void {
  * 中断指定房间的活跃流式会话。
  * 通过 IPC 向子进程发送 { type:'abort', streamSessionId }，
  * 子进程的 abortListener（runtime-entry.ts）据此触发 AbortController.abort()。
+ *
+ * v1.4 嵌套：若被中断的会话有子 agent 流（PM dispatch 场景），同步向所有活跃子 agent
+ * 进程发送 abort，使 PM 的中断能级联到正在执行的子任务。子 session 与 PM 可能同房也可能
+ * 异房，故按 streamSessionId 在 activeStreams 中反查子进程句柄。
  */
 export function abortStream(roomId: string): void {
   const entry = activeStreams.get(roomId);
   if (!entry) return;
+
+  // 中断 PM 自身的流式会话
   safeChildSend(entry.child, { type: 'abort', streamSessionId: entry.streamSessionId });
+
+  // v1.4 嵌套：传播中断到所有子 agent 流式会话
+  const children = streamChildren.get(entry.streamSessionId);
+  if (!children) return;
+  for (const childSessionId of children) {
+    for (const [, activeEntry] of activeStreams) {
+      if (activeEntry.streamSessionId === childSessionId) {
+        safeChildSend(activeEntry.child, { type: 'abort', streamSessionId: childSessionId });
+      }
+    }
+  }
 }
 
 /** 注册流式相关 IPC handler（agent:abortStream） */
@@ -189,6 +218,11 @@ function handleAgentExit(
   // （正常结束时子进程已发过 end chunk，此处 activeStreams 已空，不会重复发）
   for (const [roomId, entry] of activeStreams) {
     if (entry.child === child) {
+      // v1.4 嵌套：清理该 session 在 streamChildren 中的记录（自身作为父 + 作为某父的子）
+      streamChildren.delete(entry.streamSessionId);
+      for (const [, siblings] of streamChildren) {
+        siblings.delete(entry.streamSessionId);
+      }
       relayStreamChunk({
         type: 'end',
         streamSessionId: entry.streamSessionId,
@@ -356,6 +390,14 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     relayStreamChunk(msg as StreamChunk);
     if (m.type === 'start' && m.streamSessionId && m.roomId) {
       activeStreams.set(m.roomId, { streamSessionId: m.streamSessionId, child });
+      // v1.4 嵌套：子 agent start chunk 含 parentStreamSessionId 时建立父子映射，
+      // abortStream 据此把中断从 PM 传播到子 agent
+      const startChunk = msg as StreamChunk;
+      if (startChunk.type === 'start' && startChunk.parentStreamSessionId) {
+        const siblings = streamChildren.get(startChunk.parentStreamSessionId) ?? new Set<string>();
+        siblings.add(startChunk.streamSessionId);
+        streamChildren.set(startChunk.parentStreamSessionId, siblings);
+      }
     }
     if (m.type === 'end' && m.streamSessionId) {
       // end chunk 只带 streamSessionId，按它反查 roomId 删除
@@ -364,6 +406,11 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
           activeStreams.delete(roomId);
           break;
         }
+      }
+      // v1.4 嵌套：清理该 session 自身的子映射，并从父的子集合中移除（双向清理防泄漏）
+      streamChildren.delete(m.streamSessionId);
+      for (const [, siblings] of streamChildren) {
+        siblings.delete(m.streamSessionId);
       }
     }
     return;
@@ -507,4 +554,22 @@ export function stopAllAgents(): void {
 /** 指定 instanceId 的 agent 是否正在运行 */
 export function isAgentRunning(instanceId: string): boolean {
   return runtimes.has(instanceId);
+}
+
+// === v1.4 测试钩子（仅用于单测验证嵌套流式映射，生产代码不调用） ===
+
+/** 测试钩子：读取 streamChildren 映射（验证父→子嵌套关系建立） */
+export function __getStreamChildren(): ReadonlyMap<string, ReadonlySet<string>> {
+  return streamChildren;
+}
+
+/** 测试钩子：读取 activeStreams 映射（验证按 roomId 注册的活跃会话） */
+export function __getActiveStreams(): ReadonlyMap<string, { streamSessionId: string }> {
+  return activeStreams;
+}
+
+/** 测试钩子：清空 streamChildren + activeStreams（单测间隔离） */
+export function __resetStreamState(): void {
+  streamChildren.clear();
+  activeStreams.clear();
 }
