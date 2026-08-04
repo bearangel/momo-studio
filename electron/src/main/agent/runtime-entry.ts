@@ -620,7 +620,10 @@ export async function runChatLoop(
     { role: 'user', content: currentBody },
   ];
 
-  const streamSessionId = randomUUID();
+  // 子 agent（dispatch 模式）复用 PM 分配的 subStreamSessionId 作为自身 session ID，
+  // 使 renderer 的 DispatchChip 能通过 streams.get(subStreamSessionId) 找到子 agent 的 StreamState。
+  // 顶层 agent（普通消息）生成新 UUID。
+  const streamSessionId = parentStreamSessionId ?? randomUUID();
   const maxToolCalls = config.maxToolCalls;
   let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
   let toolCallCount = 0;
