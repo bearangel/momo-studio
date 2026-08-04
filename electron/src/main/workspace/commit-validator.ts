@@ -71,3 +71,51 @@ export function isCommitBlocked(message: string, policy: GitPolicy): boolean {
   }
   return !validateCommitMessage(message, policy).valid;
 }
+
+/**
+ * 渲染 fallback 分支名 —— 把 fallbackBranchPattern 里的占位符替换成实际值。
+ *
+ * 支持的占位符：
+ *   {agent_slug} → ctx.agentSlug（调用方传入的 agent 标识，如 'agent'）
+ *   {task_id}    → ctx.taskId（通常用 streamSessionId，保证同一次会话复用同一分支）
+ *
+ * 纯字符串 replace，不做额外校验——pattern 里的非法字符（如空格）由 git 自行报错。
+ * 未出现的占位符保持原样（不影响已渲染的部分）。
+ */
+export function renderFallbackBranch(
+  pattern: string,
+  ctx: { agentSlug: string; taskId: string },
+): string {
+  return pattern.replace('{agent_slug}', ctx.agentSlug).replace('{task_id}', ctx.taskId);
+}
+
+/**
+ * 渲染最终 commit message —— 把 template 里的 {summary} 占位符替换成 message，
+ * 追加可选的 description 作为 commit body，最后拼接 trailers。
+ *
+ * 逻辑：
+ *   1. template.replace('{summary}', message) 得到首行
+ *   2. 若 description 提供，空行隔开后追加为 body（多行）
+ *   3. trailers 数组逐条拼成 `Key: Value` 追加到末尾（git trailer 惯例）
+ *
+ * template 里其他占位符（如 {type} / {taskId}）当前不替换——这些字段在 agent 提交
+ * 链路中没有可靠来源，保留原样由调用方在设计 template 时自行取舍。
+ */
+export function renderCommitMessage(
+  message: string,
+  description: string | undefined,
+  commitMsgPolicy: GitPolicy['commitMessage'],
+): string {
+  const firstLine = commitMsgPolicy.template.replace('{summary}', message);
+  const lines: string[] = [firstLine];
+  // description 作为 commit body：空行隔开后追加（git commit message 惯例）
+  if (description) {
+    lines.push('');
+    lines.push(description);
+  }
+  // trailers 追加到末尾，每条一行 `Key: Value`
+  for (const trailer of commitMsgPolicy.trailers) {
+    lines.push(`${trailer.key}: ${trailer.value}`);
+  }
+  return lines.join('\n');
+}

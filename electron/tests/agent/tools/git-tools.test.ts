@@ -16,6 +16,8 @@ import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { GitTools } from '../../../src/main/agent/tools/git-tools';
+import { runMigrations, closeDb } from '../../../src/main/storage/db';
+import { setGitPolicy, getGitPolicy } from '../../../src/main/workspace/git-policy';
 
 let tmpRoot: string;
 let tmpDir: string;
@@ -169,5 +171,67 @@ describe('git_stash', () => {
     await tools.execute('git_stash', { action: 'push' }, ctx);
     await tools.execute('git_stash', { action: 'pop' }, ctx);
     expect(fs.existsSync(path.join(tmpDir, 'a.txt'))).toBe(true);
+  });
+});
+
+// Task 11：git_commit + GitPolicy 三层校验
+//   - DB 初始化用 runMigrations() + closeDb()（仓库实际 API，brief 中的 initDb 不存在）
+//   - AP_USER_DATA_DIR 指向 tmpRoot（文件级 beforeEach 已创建），afterEach 先关库再由
+//     文件级 afterEach 删目录——释放文件句柄后再清理。
+describe('git_commit + GitPolicy', () => {
+  beforeEach(() => {
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    setGitPolicy('test-ws', {
+      allowAgentCommits: true,
+      defaultBranch: 'main',
+      fallbackBranchPattern: 'agent/{agent_slug}/{task_id}',
+      commitMessage: {
+        template: '{type}{taskId} {summary}',
+        patterns: [
+          { code: 'chore', name: 'Conventional', regex: '^(feat|fix|chore|docs|refactor|test)(\\(.+\\))?:\\s+.+', example: 'feat(api): add endpoint' },
+        ],
+        validation: 'strict',
+        trailers: [],
+      },
+    });
+  });
+
+  afterEach(() => {
+    closeDb();
+    delete process.env.AP_USER_DATA_DIR;
+  });
+
+  it('合规 message 通过', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'hello');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['a.txt'] }, ctx);
+    const result = await tools.execute('git_commit', { message: 'feat: add a' }, ctx);
+    expect(result).toContain('main');
+  });
+
+  it('strict 模式不合规 message 抛错', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'hello');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['a.txt'] }, ctx);
+    await expect(tools.execute('git_commit', { message: 'bad message' }, ctx)).rejects.toThrow(/不合规/);
+  });
+
+  it('allowAgentCommits=false 抛错', async () => {
+    setGitPolicy('test-ws', { ...getGitPolicy('test-ws'), allowAgentCommits: false });
+    const tools = new GitTools();
+    await expect(tools.execute('git_commit', { message: 'feat: x' }, ctx)).rejects.toThrow(/allowAgentCommits/);
+  });
+
+  it('在 defaultBranch 上自动切到 fallback', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    await fs.promises.writeFile(path.join(tmpDir, 'a.txt'), 'hello');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['a.txt'] }, ctx);
+    await tools.execute('git_commit', { message: 'feat: a' }, ctx);
+    const current = execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir }).toString().trim();
+    expect(current).toMatch(/^agent\//);
   });
 });

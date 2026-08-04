@@ -24,6 +24,13 @@ import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
+import { getGitPolicy } from '../../workspace/git-policy';
+import {
+  validateCommitMessage,
+  isCommitBlocked,
+  renderFallbackBranch,
+  renderCommitMessage,
+} from '../../workspace/commit-validator';
 
 /** git 子进程的默认超时（毫秒）。到点 SIGKILL。*/
 const GIT_TIMEOUT_MS = 10_000;
@@ -149,6 +156,18 @@ export class GitTools implements ToolModule {
         },
       },
       {
+        name: 'git_commit',
+        description: '提交暂存区到本地仓库。message 经 workspace GitPolicy 校验（branch + commit message pattern）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', description: 'commit message 首行' },
+            description: { type: 'string', description: 'commit body（可选）' },
+          },
+          required: ['message'],
+        },
+      },
+      {
         name: 'git_branch',
         description: '分支管理（双语义）：list=true 或省略 name → 列出分支；给 name → 创建分支',
         inputSchema: {
@@ -203,7 +222,7 @@ export class GitTools implements ToolModule {
       case 'git_branch': return executeBranch(args, ctx);
       case 'git_checkout': return executeCheckout(args, ctx);
       case 'git_stash': return executeStash(args, ctx);
-      case 'git_commit': throw new Error('git_commit 暂未实现（Task 11）');
+      case 'git_commit': return executeCommit(args, ctx);
       default:
         throw new Error(`未知 git 工具: ${name}`);
     }
@@ -319,4 +338,74 @@ async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Pr
   const result = await runGit(gitArgs, ctx);
   if (result.code !== 0) throw new Error(`git stash ${action} 失败: ${result.stderr}`);
   return result.stdout || `(无输出，action=${action} 完成)`;
+}
+
+/**
+ * git_commit：走 GitPolicy 三层校验后提交。
+ *
+ * 三层校验：
+ *   1. allowAgentCommits 总开关——false 直接拒绝
+ *   2. 分支保护——当前在 defaultBranch 时自动 checkout -b 到 fallback 分支
+ *   3. commit message pattern——isCommitBlocked 判定（strict 违规阻断 / warning 告警）
+ *
+ * 校验失败（strict 违规）时回切 defaultBranch + 删 fallback 分支，不留空分支。
+ * warning 违规不阻断提交，在返回值末尾追加告警。
+ */
+async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const message = parseStringArg(args.message, 'message');
+  const description = typeof args.description === 'string' ? args.description : undefined;
+
+  const policy = getGitPolicy(ctx.workspaceId);
+
+  // 第一层：总开关
+  if (!policy.allowAgentCommits) {
+    throw new Error('GitPolicy 禁止 agent 自动提交（allowAgentCommits=false）');
+  }
+
+  // 第二层：分支保护——在 defaultBranch 上不允许直接提交，自动切到 fallback
+  const branchResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], ctx);
+  if (branchResult.code !== 0) throw new Error(`获取当前分支失败: ${branchResult.stderr}`);
+  const currentBranch = branchResult.stdout.trim();
+
+  let branchSwitchedTo: string | null = null;
+  if (currentBranch === policy.defaultBranch) {
+    const fallback = renderFallbackBranch(policy.fallbackBranchPattern, {
+      agentSlug: 'agent',
+      taskId: ctx.streamSessionId,
+    });
+    const switchResult = await runGit(['checkout', '-b', fallback], ctx);
+    if (switchResult.code !== 0) throw new Error(`自动切到 fallback 分支失败: ${switchResult.stderr}`);
+    branchSwitchedTo = fallback;
+  }
+
+  // 第三层：commit message pattern 校验
+  // isCommitBlocked 仅在 strict + 不合规时返回 true；warning/none 不阻断
+  const blocked = isCommitBlocked(message, policy);
+  if (blocked) {
+    // 回切 defaultBranch + 删 fallback 分支，避免残留空分支
+    if (branchSwitchedTo) {
+      await runGit(['checkout', policy.defaultBranch], ctx);
+      await runGit(['branch', '-D', branchSwitchedTo], ctx);
+    }
+    const validation = validateCommitMessage(message, policy);
+    throw new Error(
+      `commit message 不合规: ${validation.error ?? '未匹配任何 pattern'}\n期望格式示例: ${policy.commitMessage.patterns.map((p) => p.example).join(' / ')}`,
+    );
+  }
+
+  const finalMessage = renderCommitMessage(message, description, policy.commitMessage);
+  const result = await runGit(['commit', '-m', finalMessage], ctx);
+  if (result.code !== 0) throw new Error(`git commit 失败: ${result.stderr}`);
+
+  const parts: string[] = [];
+  if (branchSwitchedTo) {
+    parts.push(`(从 ${policy.defaultBranch} 自动切到分支: ${branchSwitchedTo})`);
+  }
+  parts.push(result.stdout);
+  // warning 级别违规：提交已成功，但追加告警供 agent 感知
+  const postCheck = validateCommitMessage(message, policy);
+  if (!postCheck.valid && !blocked) {
+    parts.push(`⚠️ GitPolicy warning: ${postCheck.error ?? 'message 不符合规则'}`);
+  }
+  return parts.join('\n');
 }
