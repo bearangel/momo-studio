@@ -10,6 +10,7 @@ import { useStreamStore } from '../../stores/stream.store';
 import { ipc } from '../../ipc/client';
 import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
+import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
 import { DispatchChip } from './DispatchChip';
 import ReactMarkdown from 'react-markdown';
@@ -67,6 +68,10 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
       bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
     >
       <ThinkingSection content={stream.thinking} isStreaming={isStreaming} />
+
+      {stream.todos && stream.todos.length > 0 && (
+        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
+      )}
 
       {stream.toolCalls.length > 0 && (
         <div style={{ marginBottom: 8 }}>

@@ -12,7 +12,7 @@
 //   ThinkingSection + ToolCallChip 列表 + 正文，视觉与 AgentStreamBubble 完成态一致。
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ImMessage } from '../../ipc/types';
+import type { ImMessage, TodoItem } from '../../ipc/types';
 import type { DispatchChild, StreamState } from '../../stores/stream.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
@@ -51,6 +51,7 @@ interface PersistedToolCall {
 /** Matrix event content 中的 io.momo-studio.* 自定义键 */
 const THINKING_KEY = 'io.momo-studio.thinking';
 const TOOL_CALLS_KEY = 'io.momo-studio.tool_calls';
+const TODOS_KEY = 'io.momo-studio.todos';
 
 /**
  * 从 Matrix event content 安全提取 agent 持久化字段。
@@ -109,6 +110,31 @@ function extractAgentMeta(content: Record<string, unknown>): {
 }
 
 /**
+ * v1.5：从 Matrix event content 安全提取 io.momo-studio.todos 字段。
+ * 逐条校验 id/subject 字符串 + status 枚举值，避免脏数据导致渲染崩溃。
+ */
+function extractTodos(content: Record<string, unknown>): TodoItem[] {
+  const raw = content[TODOS_KEY];
+  if (!Array.isArray(raw)) return [];
+  const todos: TodoItem[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const obj = item as Record<string, unknown>;
+    const id = obj.id;
+    const subject = obj.subject;
+    const status = obj.status;
+    if (
+      typeof id === 'string' &&
+      typeof subject === 'string' &&
+      (status === 'pending' || status === 'in_progress' || status === 'completed')
+    ) {
+      todos.push({ id, subject, status });
+    }
+  }
+  return todos;
+}
+
+/**
  * 从 Matrix 历史消息重建子 agent 的 StreamState（重启后 stream Map 为空时的 fallback）。
  * 从子 agent 的 m.room.message 中提取 thinking / tool_calls / body，
  * 构造一个 status='done' 的只读 StreamState 供 DispatchChip 展示。
@@ -130,6 +156,7 @@ function buildStreamFromMessage(msg: ImMessage, subStreamSessionId: string): Str
     })),
     status: 'done',
     dispatchChildren: [],
+    todos: extractTodos(msg.content),
   };
 }
 

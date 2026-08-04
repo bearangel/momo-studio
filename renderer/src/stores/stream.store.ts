@@ -15,7 +15,7 @@
 //   判定是否嵌套渲染）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { StreamChunk } from '../ipc/types';
+import type { StreamChunk, TodoItem } from '../ipc/types';
 
 /** 单次工具调用事件（流式生命周期内可能多次） */
 export interface ToolCallEvent {
@@ -52,6 +52,8 @@ export interface StreamState {
   dispatchChildren: DispatchChild[];
   /** v1.4 嵌套：父 agent 的 streamSessionId（仅子 agent stream 使用；为空表示顶层 stream） */
   parentStreamSessionId?: string;
+  /** v1.5 todowrite 工具的任务列表（todo_update chunk 全量替换） */
+  todos?: TodoItem[];
 }
 
 interface StreamStoreState {
@@ -135,6 +137,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
             toolCalls: [],
             status: 'streaming',
             dispatchChildren: [],
+            todos: [],
             parentStreamSessionId: chunk.parentStreamSessionId,
           });
           // 嵌套：子 agent start 通知父 stream 把对应 DispatchChild 置为 'executing'
@@ -207,6 +210,10 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
             }
             break;
           }
+          case 'todo_update':
+            // v1.5：todowrite 工具全量替换任务列表（覆盖式）
+            updated.todos = chunk.todos ?? [];
+            break;
           case 'end':
             updated.status = statusFromFinishReason(chunk.finishReason);
             updated.finishReason = chunk.finishReason;

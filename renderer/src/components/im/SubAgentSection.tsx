@@ -10,6 +10,7 @@
 // 本组件是「去壳的 AgentStreamBubble 内芯」：思考区 + 工具卡片 + 正文（含流式光标）。
 import type { StreamState } from '../../stores/stream.store';
 import { ThinkingSection } from './ThinkingSection';
+import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -33,6 +34,10 @@ export function SubAgentSection({ stream }: Props) {
       }}
     >
       <ThinkingSection content={stream.thinking} isStreaming={isStreaming} />
+
+      {stream.todos && stream.todos.length > 0 && (
+        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
+      )}
 
       {stream.toolCalls.length > 0 && (
         <div style={{ marginBottom: 8 }}>
