@@ -37,7 +37,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
-import { logToolCall } from './tool-audit';
+import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tool-permission';
 import {
   getBuiltinToolDefs,
