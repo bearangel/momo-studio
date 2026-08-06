@@ -102,23 +102,23 @@ export const useImStore = create<ImState>((set, get) => ({
 
   selectRoom: async (roomId) => {
     set({ activeRoomId: roomId, loading: true });
-    // 切房时重置分页状态（新房间不知道是否还有更早历史，视为 true 触发首次可加载）
-    set((s) => {
-      const loading = new Map(s.loadingOlderByRoom);
-      loading.delete(roomId);
-      const hasMore = new Map(s.hasMoreByRoom);
-      hasMore.delete(roomId);
-      return { loadingOlderByRoom: loading, hasMoreByRoom: hasMore };
-    });
-    try {
-      const messages = await ipc.im.getMessages(roomId);
-      set((state) => {
-        const map = new Map(state.messagesByRoom);
-        map.set(roomId, messages);
-        return { messagesByRoom: map, loading: false };
-      });
-    } catch (err) {
-      set({ loading: false, error: (err as Error).message });
+    // v1.5.4：仅当 store 内没有该房间消息时才拉取（首次进入）。
+    // 切回已访问过的房间时保留之前分页加载的全部消息，避免被 getMessages 的 slice(-50) 截断覆盖。
+    // 实时新消息由 receiveMessage 主动追加，无需重新拉取。
+    const hasMessages = get().messagesByRoom.has(roomId);
+    if (hasMessages) {
+      set({ loading: false });
+    } else {
+      try {
+        const messages = await ipc.im.getMessages(roomId);
+        set((state) => {
+          const map = new Map(state.messagesByRoom);
+          map.set(roomId, messages);
+          return { messagesByRoom: map, loading: false };
+        });
+      } catch (err) {
+        set({ loading: false, error: (err as Error).message });
+      }
     }
     // 放在 try 外：即使消息拉取失败也刷新成员，避免显示上个房间的陈旧成员
     void get().loadMembers(roomId);
@@ -197,5 +197,7 @@ export const useImStore = create<ImState>((set, get) => ({
       loading: false,
       error: null,
       currentWorkspaceId: null,
+      loadingOlderByRoom: new Map(),
+      hasMoreByRoom: new Map(),
     }),
 }));

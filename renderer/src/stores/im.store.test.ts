@@ -342,18 +342,27 @@ describe('im.store loadOlder', () => {
     expect(messages.map((m) => m.eventId)).toEqual(['o1', 'e1', 'e2']);
   });
 
-  it('selectRoom 切换时重置分页状态', async () => {
+  it('selectRoom 切回已访问房间时保留分页累积（不重新拉取覆盖）', async () => {
     mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
     await useImStore.getState().selectRoom('!r:localhost');
-    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [mk('o1', 'old')],
+      hasMore: false,
+    });
     await useImStore.getState().loadOlder('!r:localhost');
-    expect(useImStore.getState().hasMoreByRoom.get('!r:localhost')).toBe(false);
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
 
-    // 重新进房间应重置 hasMore
-    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
+    // 切到别的房间
+    mockApi.im.getMessages.mockResolvedValueOnce([mk('x1', 'x')]);
+    await useImStore.getState().selectRoom('!other:localhost');
+
+    // 切回——getMessages 不应被再次调用（保留累积）
+    mockApi.im.getMessages.mockClear();
     await useImStore.getState().selectRoom('!r:localhost');
-    expect(useImStore.getState().hasMoreByRoom.has('!r:localhost')).toBe(false);
-    // 实际应被 delete，下次 loadOlder 默认视为 true
-    expect(useImStore.getState().loadingOlderByRoom.has('!r:localhost')).toBe(false);
+    expect(mockApi.im.getMessages).not.toHaveBeenCalled();
+    // 消息仍是 2 条（e1 + o1），未被 slice(-50) 覆盖
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
+    // hasMore 仍为 false（matrix-js-sdk timeline 真的没更多历史）
+    expect(useImStore.getState().hasMoreByRoom.get('!r:localhost')).toBe(false);
   });
 });
