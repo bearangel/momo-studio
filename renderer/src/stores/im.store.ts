@@ -26,6 +26,10 @@ interface ImState {
   error: string | null;
   /** 当前 rooms 所属的 workspace ID；切换 workspace 时重置全部 IM 状态 */
   currentWorkspaceId: string | null;
+  /** v1.5.4：分页加载状态——roomId → 是否正在加载更早消息（防抖） */
+  loadingOlderByRoom: Map<string, boolean>;
+  /** v1.5.4：分页是否还有更早历史——roomId → boolean；undefined 视为 true（初始） */
+  hasMoreByRoom: Map<string, boolean>;
 
   /**
    * 拉取房间列表，默认激活第一个房间并加载其消息。
@@ -43,6 +47,8 @@ interface ImState {
   receiveMessage: (msg: ImMessage) => void;
   /** 向当前激活房间发送消息 */
   sendMessage: (body: string) => Promise<void>;
+  /** v1.5.4：向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
+  loadOlder: (roomId: string) => Promise<void>;
   /** 重置全部状态（登出时调用） */
   reset: () => void;
 }
@@ -55,6 +61,8 @@ export const useImStore = create<ImState>((set, get) => ({
   loading: false,
   error: null,
   currentWorkspaceId: null,
+  loadingOlderByRoom: new Map(),
+  hasMoreByRoom: new Map(),
 
   loadRooms: async (workspaceId) => {
     // 切换 workspace 时清空旧 workspace 的房间、消息、成员、激活房间
@@ -94,6 +102,14 @@ export const useImStore = create<ImState>((set, get) => ({
 
   selectRoom: async (roomId) => {
     set({ activeRoomId: roomId, loading: true });
+    // 切房时重置分页状态（新房间不知道是否还有更早历史，视为 true 触发首次可加载）
+    set((s) => {
+      const loading = new Map(s.loadingOlderByRoom);
+      loading.delete(roomId);
+      const hasMore = new Map(s.hasMoreByRoom);
+      hasMore.delete(roomId);
+      return { loadingOlderByRoom: loading, hasMoreByRoom: hasMore };
+    });
     try {
       const messages = await ipc.im.getMessages(roomId);
       set((state) => {
@@ -106,6 +122,33 @@ export const useImStore = create<ImState>((set, get) => ({
     }
     // 放在 try 外：即使消息拉取失败也刷新成员，避免显示上个房间的陈旧成员
     void get().loadMembers(roomId);
+  },
+
+  loadOlder: async (roomId) => {
+    // 防抖：已在加载中跳过
+    if (get().loadingOlderByRoom.get(roomId)) return;
+    // 到底短路：服务端明确告知无更多历史时跳过
+    if (get().hasMoreByRoom.get(roomId) === false) return;
+
+    set((s) => ({ loadingOlderByRoom: new Map(s.loadingOlderByRoom).set(roomId, true) }));
+    try {
+      const result = await ipc.im.loadOlderMessages(roomId, 30);
+      set((s) => {
+        const map = new Map(s.messagesByRoom);
+        const existing = map.get(roomId) ?? [];
+        // 前置拼接：新拉到的更早消息排在已有消息之前
+        // 去重：服务端偶尔在边界重复推送已有消息，按 eventId 过滤
+        const existingIds = new Set(existing.map((m) => m.eventId));
+        const dedupedNew = result.messages.filter((m) => !existingIds.has(m.eventId));
+        map.set(roomId, [...dedupedNew, ...existing]);
+
+        const loading = new Map(s.loadingOlderByRoom).set(roomId, false);
+        const hasMore = new Map(s.hasMoreByRoom).set(roomId, result.hasMore);
+        return { messagesByRoom: map, loadingOlderByRoom: loading, hasMoreByRoom: hasMore };
+      });
+    } catch {
+      set((s) => ({ loadingOlderByRoom: new Map(s.loadingOlderByRoom).set(roomId, false) }));
+    }
   },
 
   loadMembers: async (roomId) => {

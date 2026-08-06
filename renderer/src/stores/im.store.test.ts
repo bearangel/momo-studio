@@ -18,6 +18,7 @@ const mockApi = {
     send: vi.fn().mockResolvedValue(undefined),
     getRooms: vi.fn(),
     getMessages: vi.fn().mockResolvedValue([]),
+    loadOlderMessages: vi.fn(),
     onMessage: vi.fn().mockReturnValue(() => {}),
   },
 };
@@ -29,6 +30,7 @@ beforeEach(() => {
   mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_A);
   mockApi.im.getMessages.mockResolvedValue([]);
   mockApi.im.send.mockClear();
+  mockApi.im.loadOlderMessages.mockReset();
 });
 
 describe('im.store', () => {
@@ -264,5 +266,94 @@ describe('im.store — 流式→持久化替换', () => {
     useImStore.getState().receiveMessage(normalMsg);
 
     expect(useStreamStore.getState().streams.has('sess-3')).toBe(true);
+  });
+});
+
+describe('im.store loadOlder', () => {
+  const mk = (id: string, body: string): ImMessage => ({
+    eventId: id,
+    roomId: '!r:localhost',
+    sender: '@u:localhost',
+    body,
+    eventType: 'm.room.message',
+    content: { body },
+    timestamp: Date.now(),
+  });
+
+  it('前置拼接新拉到的更早消息', async () => {
+    const existing = [mk('e1', 'newest'), mk('e2', 'older')];
+    mockApi.im.getMessages.mockResolvedValueOnce(existing);
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    const olderBatch = [mk('o1', 'oldest1'), mk('o2', 'oldest2')];
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: olderBatch, hasMore: true });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
+    expect(messages.map((m) => m.eventId)).toEqual(['o1', 'o2', 'e1', 'e2']);
+  });
+
+  it('hasMore=false 时短路不发 IPC', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
+    await useImStore.getState().selectRoom('!r:localhost');
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    mockApi.im.loadOlderMessages.mockClear();
+    await useImStore.getState().loadOlder('!r:localhost');
+    expect(mockApi.im.loadOlderMessages).not.toHaveBeenCalled();
+  });
+
+  it('加载中再次触发会被防抖（不重复 IPC）', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    let resolveLoad!: (v: { messages: ImMessage[]; hasMore: boolean }) => void;
+    const pending = new Promise<{ messages: ImMessage[]; hasMore: boolean }>((r) => {
+      resolveLoad = r;
+    });
+    mockApi.im.loadOlderMessages.mockImplementationOnce(() => pending);
+
+    // 启动第一次 loadOlder（不 await，让它停在 ipc 调用）
+    const p1 = useImStore.getState().loadOlder('!r:localhost');
+    // 此时 loadingOlder=true，第二次应被 store 防抖 return（不调 IPC）
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    expect(mockApi.im.loadOlderMessages).toHaveBeenCalledTimes(1);
+
+    // resolve 让第一次完成，避免悬挂 promise
+    resolveLoad({ messages: [], hasMore: true });
+    await p1;
+  });
+
+  it('按 eventId 去重（服务端边界重复）', async () => {
+    const existing = [mk('e1', 'a'), mk('e2', 'b')];
+    mockApi.im.getMessages.mockResolvedValueOnce(existing);
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    // 服务端在边界重复推送 e2 + 新的 o1
+    const olderBatch = [mk('e2', 'b-dup'), mk('o1', 'oldest')];
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: olderBatch, hasMore: true });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
+    expect(messages.map((m) => m.eventId)).toEqual(['o1', 'e1', 'e2']);
+  });
+
+  it('selectRoom 切换时重置分页状态', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
+    await useImStore.getState().selectRoom('!r:localhost');
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await useImStore.getState().loadOlder('!r:localhost');
+    expect(useImStore.getState().hasMoreByRoom.get('!r:localhost')).toBe(false);
+
+    // 重新进房间应重置 hasMore
+    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
+    await useImStore.getState().selectRoom('!r:localhost');
+    expect(useImStore.getState().hasMoreByRoom.has('!r:localhost')).toBe(false);
+    // 实际应被 delete，下次 loadOlder 默认视为 true
+    expect(useImStore.getState().loadingOlderByRoom.has('!r:localhost')).toBe(false);
   });
 });

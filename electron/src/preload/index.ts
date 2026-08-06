@@ -85,6 +85,8 @@ const api: ApiSurface = {
     sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
     getRooms: (workspaceId) => invoke('im:getRooms', workspaceId),
     getMessages: (roomId) => invoke('im:getMessages', roomId),
+  loadOlderMessages: (roomId: string, count?: number) =>
+    invoke('im:loadOlderMessages', roomId, count),
     createRoom: (input) => invoke('im:createRoom', input),
     renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
     dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),

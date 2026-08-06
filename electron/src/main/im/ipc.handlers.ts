@@ -12,6 +12,7 @@ import {
   sendMessageWithMentions,
   getRoomsForWorkspace,
   getRoomMessages,
+  loadOlderMessages,
 } from '../matrix/sync-manager';
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
@@ -41,6 +42,11 @@ export function registerImHandlers(): void {
   // 获取指定 room 的历史消息
   ipcMain.handle('im:getMessages', async (_evt, roomId: string) => {
     return getRoomMessages(roomId);
+  });
+
+  // 向前翻页加载更早的历史消息（用户滚到顶部时触发）
+  ipcMain.handle('im:loadOlderMessages', async (_evt, roomId: string, count?: number) => {
+    return loadOlderMessages(roomId, count);
   });
 
   // 新建房间（私聊/群组）

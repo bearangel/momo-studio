@@ -466,6 +466,11 @@ export interface ApiSurface {
     /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
     getRooms(workspaceId?: string): Promise<ImRoomInfo[]>;
     getMessages(roomId: string): Promise<ImMessage[]>;
+    /** 向前翻页加载更早的历史消息（用户滚到顶部时触发） */
+    loadOlderMessages(
+      roomId: string,
+      count?: number,
+    ): Promise<{ messages: ImMessage[]; hasMore: boolean }>;
     createRoom(input: {
       name: string;
       isDirect: boolean;

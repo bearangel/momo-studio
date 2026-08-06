@@ -18,6 +18,13 @@ export function MessageList() {
     activeRoomId ? s.messagesByRoom.get(activeRoomId) : undefined,
   );
   const loading = useImStore((s) => s.loading);
+  const loadingOlder = useImStore((s) =>
+    activeRoomId ? s.loadingOlderByRoom.get(activeRoomId) ?? false : false,
+  );
+  const hasMore = useImStore((s) =>
+    activeRoomId ? s.hasMoreByRoom.get(activeRoomId) ?? true : true,
+  );
+  const loadOlder = useImStore((s) => s.loadOlder);
   const currentUserId = useAuthStore((s) => s.user?.userId ?? null);
   const botNameByUserId = useBotNameMap();
   const streams = useStreamStore((s) => s.streams);
@@ -25,12 +32,34 @@ export function MessageList() {
   const isFirstRender = useRef(true);
   const prevRoomIdRef = useRef<string | null>(activeRoomId);
   const isNearBottomRef = useRef(true);
+  // v1.5.4：分页加载期间的滚动位置保持——loadOlder 前记 scrollHeight，
+  // useEffect 检测到 messages 增长且 pendingScrollRestore 有值时恢复相对位置
+  const pendingScrollRestore = useRef<number | null>(null);
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    // 滚到顶部触发向前翻页（防抖在 store 内处理；到底短路在 store + 这里双重判断）
+    if (el.scrollTop === 0 && activeRoomId && !loadingOlder && hasMore) {
+      pendingScrollRestore.current = el.scrollHeight;
+      void loadOlder(activeRoomId);
+    }
   };
+
+  // v1.5.4：messages 增长 + 有待恢复的滚动位置 → 把 scrollTop 调到新内容下方
+  // （视觉上用户停在原位置，新历史加载到上方不干扰）
+  useEffect(() => {
+    if (pendingScrollRestore.current === null) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const prevHeight = pendingScrollRestore.current;
+    pendingScrollRestore.current = null;
+    const delta = el.scrollHeight - prevHeight;
+    if (delta > 0) {
+      el.scrollTop = delta;
+    }
+  }, [messages, loadingOlder]);
 
   // 当前房间的顶层流式会话（排除子 agent——子 agent 的 stream 有 parentStreamSessionId，
   // 仅在 PM 气泡的 DispatchChip 内嵌套渲染，不作为独立顶层气泡）。
@@ -52,6 +81,11 @@ export function MessageList() {
     if (!el) return;
     const isRoomChange = prevRoomIdRef.current !== activeRoomId;
     prevRoomIdRef.current = activeRoomId;
+    // 分页加载时不触发"滚到底部"——否则会把用户从顶部拉回底部，破坏视觉位置
+    if (pendingScrollRestore.current !== null) {
+      isFirstRender.current = false;
+      return;
+    }
 
     if (isFirstRender.current || isRoomChange) {
       el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
@@ -101,6 +135,13 @@ export function MessageList() {
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
+      {/* v1.5.4：分页加载状态指示——加载中显示提示；已到顶部（无更早历史）显示分隔线 */}
+      {activeRoomId && loadingOlder && (
+        <div className="text-center text-xs text-neutral-500 py-2">加载历史中…</div>
+      )}
+      {activeRoomId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
+        <div className="text-center text-xs text-neutral-500 py-2">— 已到顶部 —</div>
+      )}
       {visibleMessages.map((msg) => (
         <MessageBubble
           key={msg.eventId}

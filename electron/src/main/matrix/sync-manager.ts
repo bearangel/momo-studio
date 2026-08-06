@@ -312,6 +312,40 @@ export function getRoomMessages(roomId: string, limit = 50): MatrixMessagePayloa
     .slice(-limit);
 }
 
+/**
+ * 向前翻页加载更早的历史消息。
+ * matrix-js-sdk 的 paginateEventTimeline 会原地扩展 timeline（向前填充），
+ * 多次调用会持续向更早的历史延伸。
+ *
+ * @param roomId 目标房间
+ * @param count 本次请求条数（默认 30，服务端可能返回更多或更少）
+ * @returns 新拉到的白名单消息（按时间正序）+ 是否还有更早的历史
+ */
+export async function loadOlderMessages(
+  roomId: string,
+  count = 30,
+): Promise<{ messages: MatrixMessagePayload[]; hasMore: boolean }> {
+  if (!client) return { messages: [], hasMore: false };
+  const room = client.getRoom(roomId);
+  if (!room) return { messages: [], hasMore: false };
+  const timeline = room.getLiveTimeline();
+  const beforeCount = timeline.getEvents().length;
+
+  const hasMore = await client.paginateEventTimeline(timeline, { backwards: true, limit: count });
+  const afterEvents = timeline.getEvents();
+  // timeline 原地扩展：新拉到的历史事件在数组前部，本次新增数量 = afterCount - beforeCount
+  const newEventCount = Math.max(0, afterEvents.length - beforeCount);
+  const newEvents = afterEvents.slice(0, newEventCount);
+
+  return {
+    messages: newEvents
+      .filter((e) => SYNCED_EVENT_TYPES.has(e.getType()))
+      .map(eventToMessage)
+      .filter((m): m is MatrixMessagePayload => m !== null),
+    hasMore,
+  };
+}
+
 /** 停止 /sync 并清理 client 引用 */
 export async function stopSync(): Promise<void> {
   if (client) {
