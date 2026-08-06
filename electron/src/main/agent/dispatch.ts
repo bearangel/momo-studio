@@ -31,6 +31,28 @@ export interface TaskReplyContent {
 
 export const DISPATCH_EVENT_TYPE = 'io.momo-studio.dispatch';
 export const TASK_REPLY_EVENT_TYPE = 'io.momo-studio.task_reply';
+/**
+ * v1.5.3：PM 中断 dispatch 时发此 event 到 team room。
+ * 子 agent 在 handleDispatch 期间监听此 event 匹配 task_id，触发本地 abortController。
+ * 解决时序竞态：abortStream 走 IPC（同步），但子 agent 此时可能还没启动 + 注册到 activeStreams，
+ * 主进程找不到它；Matrix event 持久化，子 agent 后续启动时也能收到。
+ */
+export const ABORT_DISPATCH_EVENT_TYPE = 'io.momo-studio.abort_dispatch';
+
+/** 构造一条 abort_dispatch 消息（PM 中断时通知子 agent 终止） */
+export function buildAbortDispatchMessage(opts: {
+  taskId: string;
+  /** v1.4 嵌套：子 agent 流 session ID（便于子 agent 多任务场景下精确匹配） */
+  subStreamSessionId?: string;
+}): { eventType: typeof ABORT_DISPATCH_EVENT_TYPE; content: { task_id: string; sub_stream_session_id?: string } } {
+  return {
+    eventType: ABORT_DISPATCH_EVENT_TYPE,
+    content: {
+      task_id: opts.taskId,
+      ...(opts.subStreamSessionId ? { sub_stream_session_id: opts.subStreamSessionId } : {}),
+    },
+  };
+}
 
 /** 构造一条 dispatch 消息：自动生成 task_id（UUID v4） */
 export function buildDispatchMessage(opts: {

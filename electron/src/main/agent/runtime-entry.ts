@@ -59,6 +59,8 @@ import {
   parseTaskReply,
   DISPATCH_EVENT_TYPE,
   TASK_REPLY_EVENT_TYPE,
+  ABORT_DISPATCH_EVENT_TYPE,
+  buildAbortDispatchMessage,
   type DispatchContent,
 } from './dispatch';
 
@@ -603,23 +605,46 @@ async function handleDispatch(
     // v1.4 嵌套：把 PM 生成的子 stream session ID 透传给 runChatLoop，
     // 子 agent 的 start chunk 据此关联到 PM 气泡内的 dispatch chip
     const parentStreamSessionId = dispatch.tool_stream_session_id;
-    const result = await runChatLoop(
-      client,
-      roomId,
-      dispatch.body,
-      configWithBudget,
-      ctx,
-      stats,
-      parentStreamSessionId,
-    );
-    trace('→ 发送 completed', { body: `${result.length}字`, tools: stats.toolCallsUsed });
-    const completed = buildTaskReply({
-      body: result,
-      taskId: dispatch.task_id,
-      status: 'completed',
-      toolCallsUsed: stats.toolCallsUsed,
-    });
-    await client.sendEvent(roomId, completed.eventType, completed.content, '');
+
+    // v1.5.3：监听 team_room 的 abort_dispatch event，PM 中断时触发本地 abortController。
+    // 解决时序竞态：PM 中断时本子进程可能还没注册到主进程 activeStreams，
+    // 主进程的 abortStream IPC 找不到本子进程；Matrix event 兜底确保一定能收到。
+    const dispatchAbort = new AbortController();
+    const abortHandler = (event: MatrixEvent): void => {
+      if (event.getType() !== ABORT_DISPATCH_EVENT_TYPE) return;
+      const content = event.getContent() as { task_id?: string };
+      if (content.task_id === dispatch.task_id) {
+        dispatchAbort.abort();
+      }
+    };
+    client.on(ClientEvent.Event, abortHandler);
+    // 兜底：如果 signal 已 abort（极小概率，PM 在 sendEvent 之前就中断），立即触发
+    if (dispatchAbort.signal.aborted) {
+      dispatchAbort.abort();
+    }
+
+    try {
+      const result = await runChatLoop(
+        client,
+        roomId,
+        dispatch.body,
+        configWithBudget,
+        ctx,
+        stats,
+        parentStreamSessionId,
+        dispatchAbort.signal,
+      );
+      trace('→ 发送 completed', { body: `${result.length}字`, tools: stats.toolCallsUsed });
+      const completed = buildTaskReply({
+        body: result,
+        taskId: dispatch.task_id,
+        status: 'completed',
+        toolCallsUsed: stats.toolCallsUsed,
+      });
+      await client.sendEvent(roomId, completed.eventType, completed.content, '');
+    } finally {
+      client.off(ClientEvent.Event, abortHandler);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`dispatch 任务执行失败: ${msg}\n`);
@@ -675,6 +700,11 @@ export async function runChatLoop(
   stats?: RunChatLoopStats,
   /** v1.4 嵌套：子 agent 收到 dispatch 时传入 PM 的 streamSessionId，start chunk 据此关联 */
   parentStreamSessionId?: string,
+  /**
+   * v1.5.3：外部 abort signal（如 handleDispatch 监听 team_room 的 abort_dispatch event）。
+   * 被触发时转发到本地 abortController，统一走原有的 abort 路径（chatStream reject / 工具 catch 跳出）。
+   */
+  externalAbortSignal?: AbortSignal,
 ): Promise<string> {
   const llm = createLLMProvider(
     { model: config.modelName, baseUrl: config.modelBaseUrl },
@@ -707,6 +737,11 @@ export async function runChatLoop(
   // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
   // 使 PM 在 await dispatch 期间也能响应中断
   ctx.abortSignal = abortController.signal;
+  // v1.5.3：转发外部 abort signal（如 handleDispatch 监听 team_room 的 abort_dispatch event）
+  if (externalAbortSignal) {
+    if (externalAbortSignal.aborted) abortController.abort();
+    else externalAbortSignal.addEventListener('abort', () => abortController.abort(), { once: true });
+  }
   const abortListener = (msg: unknown): void => {
     const m = msg as { type?: string; streamSessionId?: string };
     if (m.type === 'abort' && m.streamSessionId === streamSessionId) {
@@ -1248,6 +1283,16 @@ export async function executeDispatch(
           clearTimeout(entry.timer);
           pendingReplies.delete(dispatch.content.task_id);
         }
+        // v1.5.3：发 abort_dispatch event 兜底通知子 agent。
+        // 子 agent 此时可能还没启动 + 注册到主进程 activeStreams，主进程的 abortStream 找不到它；
+        // Matrix event 持久化保证子 agent 后续启动时也能收到并终止。
+        const abortEvt = buildAbortDispatchMessage({
+          taskId: dispatch.content.task_id,
+          subStreamSessionId: toolStreamSessionId,
+        });
+        client.sendEvent(config.teamRoomId, abortEvt.eventType, abortEvt.content, '').catch(() => {
+          // Matrix 发送失败不影响 PM 本地的 abort 流程
+        });
         const err = new Error('dispatch 被中断');
         err.name = 'AbortError';
         reject(err);
