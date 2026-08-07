@@ -139,6 +139,11 @@ export class ShellTools implements ToolModule {
         cwd: ctx.workspaceDir,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // v1.5.6: detached 让 bash 成为新进程组的 leader（child.pid === pgid）。
+        // 这使 process.kill(-pid) 能 SIGKILL 整个进程组（bash + curl/python/node 等子进程）。
+        // 不加 detached 时 child.kill 只杀 bash 自身，子进程继续运行持有 stdio pipe，
+        // 导致 close 事件不触发，Promise 卡住——用户报"timeoutMs 15s 实际远大于"的根因。
+        detached: true,
         windowsHide: true,
       });
 
@@ -146,6 +151,13 @@ export class ShellTools implements ToolModule {
       let stderr = '';
       let truncated = false;
       let killed = false;
+      // v1.5.6: 防重复 resolve/reject——close 事件 + 兜底 timer 可能竞争
+      let settled = false;
+      const guard = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
 
       // 输出按 OUTPUT_LIMITS.bash_stdout / bash_stderr 截断。逻辑：
       //   1) 已满 → 直接丢弃本 chunk，同时置 truncated=true；
@@ -176,19 +188,43 @@ export class ShellTools implements ToolModule {
         }
       });
 
-      // 超时定时器：到点 SIGKILL 子进程；SIGKILL 不可被捕获，立即生效。
+      // v1.5.6: 杀整个进程组（bash + 所有子进程）。
+      // detached 模式下 child.pid 就是 pgid；process.kill(-pid) 给全组发 SIGKILL。
+      // SIGKILL 不可被捕获/忽略，即使 nohup'd 的进程也会被杀。
+      const killProcessGroup = (): void => {
+        if (!child.pid) return;
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // 进程组杀失败（已退出/权限），降级杀 child 自身
+          try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
+        }
+      };
+
+      // 超时定时器：到点 SIGKILL 整个进程组。
       const timer = setTimeout(() => {
         killed = true;
-        try { child.kill('SIGKILL'); } catch { /* 子进程已退出 */ }
+        killProcessGroup();
+        // v1.5.6 兜底：进程组 SIGKILL 后 close 事件通常 100ms 内触发。
+        // 但极端情况（如 nohup'd 进程脱离了进程组 / 内核级 hang）可能不触发。
+        // 2s 后强制 resolve 避免 Promise 永久挂起（用户看到"超时远大于设定"的兜底）。
+        setTimeout(() => {
+          guard(() => {
+            const parts = [`exit_code: null`, `(超时 ${timeoutMs}ms，已强杀进程组 + 2s 兜底结束)`];
+            if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(已截断)' : ''}`);
+            if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(已截断)' : ''}`);
+            resolve(parts.join('\n\n'));
+          });
+        }, 2000);
       }, timeoutMs);
 
       // v1.5.1：监听外部 abortSignal（chat loop 中断）。被 abort 时立即 SIGKILL + resolve，
       // 不等子进程自然结束。否则 bash sleep 65 即使停止按钮按下也要等 65s 才返回。
       let aborted = false;
       const onAbort = (): void => {
-        if (aborted || killed) return;
+        if (aborted || killed || settled) return;
         aborted = true;
-        try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
+        killProcessGroup();
       };
       if (ctx.abortSignal) {
         if (ctx.abortSignal.aborted) onAbort();
@@ -196,29 +232,34 @@ export class ShellTools implements ToolModule {
       }
 
       child.on('close', (code) => {
-        clearTimeout(timer);
-        if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
-        // v1.5.2: 外部中断时抛 AbortError，chat loop 据此跳出整个循环（不推 tool_result 给 LLM）。
-        // 不抛的话 LLM 看到 "(用户中断)" 结果仍会重试，形成死循环。
-        if (aborted) {
-          const e = new Error('bash 被中断');
-          e.name = 'AbortError';
-          reject(e);
-          return;
-        }
-        const parts: string[] = [`exit_code: ${code ?? 'null'}`];
-        if (killed) parts.push(`(超时 ${timeoutMs}ms，已强杀)`);
-        if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
-        if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
-        if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
-        // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
-        resolve(parts.join('\n\n'));
+        guard(() => {
+          clearTimeout(timer);
+          if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
+          // v1.5.2: 外部中断时抛 AbortError，chat loop 据此跳出整个循环（不推 tool_result 给 LLM）。
+          // 不抛的话 LLM 看到 "(用户中断)" 结果仍会重试，形成死循环。
+          if (aborted) {
+            const e = new Error('bash 被中断');
+            e.name = 'AbortError';
+            reject(e);
+            return;
+          }
+          const parts: string[] = [`exit_code: ${code ?? 'null'}`];
+          if (killed) parts.push(`(超时 ${timeoutMs}ms，已强杀)`);
+          if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
+          if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
+          if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
+          // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
+          resolve(parts.join('\n\n'));
+        });
       });
 
       // spawn 本身失败（如 shell 不存在）：转成文本结果而非抛错。
       child.on('error', (err) => {
-        clearTimeout(timer);
-        resolve(`shell 启动失败: ${err.message}`);
+        guard(() => {
+          clearTimeout(timer);
+          if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
+          resolve(`shell 启动失败: ${err.message}`);
+        });
       });
     });
   }
