@@ -803,7 +803,19 @@ export async function runChatLoop(
       : {}),
   });
 
+  // v1.5.6: 循环检测——记录最近工具调用，连续重复 N 次强制终止
+  const recentToolCallSignatures: string[] = [];
+  const MAX_DUPLICATE_TOOLS = 3;
+
   for (let round = 0; ; round++) {
+    // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
+    if (messages.length > 30 && round > 0) {
+      messages.push({
+        role: 'system',
+        content: '[系统提示] 对话历史已较长（' + messages.length + ' 条消息）。如果感到困惑或重复，请调用 compact 工具压缩上下文（写一份 ≥200 字符的总结），然后继续工作。',
+      });
+    }
+
     const tools = budgetRemaining <= 0 ? undefined : ctx.tools;
     trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: tools?.length ?? 0 });
 
@@ -867,6 +879,27 @@ export async function runChatLoop(
     messages.push({ role: 'assistant', content: accumulatedText, toolCalls });
 
     for (const tc of toolCalls) {
+      // v1.5.6: 循环检测——同名 + 同参数连续重复 MAX_DUPLICATE_TOOLS 次强制终止。
+      // 防 LLM 上下文爆炸后失忆，每轮重复相同操作（如反复 list_files 同一目录）。
+      const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+      recentToolCallSignatures.push(sig);
+      if (recentToolCallSignatures.length > MAX_DUPLICATE_TOOLS) {
+        recentToolCallSignatures.shift();
+      }
+      const dupCount = recentToolCallSignatures.filter((s) => s === sig).length;
+      if (dupCount >= MAX_DUPLICATE_TOOLS) {
+        process.off('message', abortListener);
+        const finalText = accumulatedText.trim() || `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${tc.name}，已强制终止防循环)`;
+        await sendFinalMessage(
+          client, roomId, streamSessionId, finalText,
+          accumulatedThinking, toolCallHistory, parentStreamSessionId,
+          getTodosForSession(streamSessionId),
+        );
+        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+        if (stats) stats.toolCallsUsed = toolCallCount;
+        return finalText;
+      }
+
       if (budgetRemaining <= 0) {
         process.off('message', abortListener);
         const finalText = accumulatedText.trim() || '(工具预算耗尽)';
