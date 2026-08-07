@@ -444,6 +444,21 @@ ${skillIndex}`
         required: ['summary'],
       },
     },
+    // v1.5.6 compact：LLM 主动压缩上下文
+    {
+      name: 'compact',
+      description: '压缩对话历史。当多轮对话累积导致上下文过长（>20 轮或接近模型上下文上限）时调用，把整个历史总结为一条 user 消息，保留 system prompt，清空旧 messages。后续工作基于总结继续。要求 summary 至少 200 字符，覆盖：已完成任务、关键决策、未完成步骤、重要文件/变量名。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: '完整对话总结（≥200 字符）：已完成 + 关键决策 + 未完成 + 重要标识符',
+          },
+        },
+        required: ['summary'],
+      },
+    },
   ];
 
   return {
@@ -732,9 +747,9 @@ export async function runChatLoop(
   );
 
   const budgetHint = formatBudgetHint(config.maxToolCalls);
-  const systemContent = budgetHint
-    ? ctx.systemPrompt + budgetHint
-    : ctx.systemPrompt;
+  // v1.5.6 C3：PM 自动 dispatch 教学——主 agent 角色 + 有 subAgents 时注入任务拆分指南
+  const dispatchHint = formatDispatchHint(config);
+  const systemContent = ctx.systemPrompt + budgetHint + dispatchHint;
 
   const messages: LLMMessage[] = [
     { role: 'system', content: systemContent },
@@ -951,6 +966,69 @@ export async function runChatLoop(
         continue;
       }
 
+      // v1.5.6 compact：LLM 主动压缩上下文。调此工具时把整个对话历史替换为
+      // [system, {role: user, content: 历史总结}]，chat loop 继续。
+      // 解决长任务多轮对话累积导致 LLM 上下文爆炸 / 失忆问题。
+      if (tc.name === 'compact') {
+        const summary = typeof tc.arguments.summary === 'string' ? tc.arguments.summary : '';
+        if (!summary || summary.length < 50) {
+          // summary 过短拒绝（防 LLM 滥用清空上下文）：要求至少 50 字符覆盖关键信息
+          messages.push({
+            role: 'assistant',
+            content: '',
+            toolCalls: [tc],
+          });
+          messages.push({
+            role: 'tool',
+            content: 'compact 失败：summary 过短（< 50 字符）。请写一份完整的对话总结，覆盖已完成的任务、关键决策、未完成的步骤、重要文件/变量名。最小 200 字符。',
+            toolCallId: tc.id,
+          });
+          toolCallCount++;
+          budgetRemaining--;
+          continue;
+        }
+
+        const oldMsgCount = messages.length;
+        // 重置对话历史：保留 system prompt（messages[0]），其余替换为压缩后的总结
+        const systemMsg = messages[0]!;
+        messages.length = 0;
+        messages.push(systemMsg);
+        messages.push({
+          role: 'user',
+          content: `[历史对话总结]\n${summary}\n\n[请基于此总结继续工作]`,
+        });
+
+        // 推 stream chunk 让 renderer 知道发生了 compact（可选 UI 提示）
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          toolName: 'compact',
+          args: tc.arguments,
+        });
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          toolName: 'compact',
+          result: `上下文已压缩：${oldMsgCount} 条消息 → 1 条总结（${summary.length} 字符）。继续工作`,
+          success: true,
+        });
+
+        // tool_result 推回 LLM（基于新 messages 数组）
+        messages.push({
+          role: 'assistant',
+          content: '',
+          toolCalls: [tc],
+        });
+        messages.push({
+          role: 'tool',
+          content: `上下文已压缩（${oldMsgCount} → 2 条消息）。请继续基于总结工作。`,
+          toolCallId: tc.id,
+        });
+        toolCallCount++;
+        budgetRemaining--;
+        continue;
+      }
+
       const isDispatch = tc.name.startsWith('dispatch:');
 
       // v1.4 嵌套：dispatch 工具预生成子 stream session ID，发增强 tool_call chunk
@@ -1075,6 +1153,37 @@ export function formatBudgetHint(maxToolCalls: number): string {
   if (maxToolCalls === -1) return '';
   if (maxToolCalls === 0) return '\n\n## 工具调用预算\n本任务禁止使用任何工具。';
   return `\n\n## 工具调用预算\n本任务工具调用上限：${maxToolCalls} 次（所有参与 agent 共享此预算）。请合理规划工具使用。`;
+}
+
+/**
+ * v1.5.6 C3：为主 agent（main role + 有 subAgents）注入任务拆分教学 prompt。
+ * 教 LLM 在以下场景主动 dispatch 给 sub agent：
+ *   - 任务涉及多文件 / 多模块（>3 文件）
+ *   - 任务可并行（多个独立子任务）
+ *   - 任务超出单一 agent 上下文承受（大 review / 大型实现）
+ *
+ * 子 agent 列表注入让 LLM 知道可用资源和擅长领域。
+ * 非 main 角色 / 无 subAgents → 返回空字符串（不影响 standalone agent）。
+ */
+export function formatDispatchHint(config: RuntimeConfig): string {
+  if (config.role !== 'main' || config.subAgents.length === 0) return '';
+  const subList = config.subAgents
+    .map((s) => `- dispatch:${s.slug} — ${s.description}`)
+    .join('\n');
+  return `\n\n## 任务拆分指南（PM 角色）
+你是主 agent（PM），有以下子 agent 可委派：
+${subList}
+
+**主动拆分原则**：
+1. 任务涉及 ≥3 个文件、多个模块、或可并行子任务时，**优先 dispatch 给合适的子 agent**，不要全部自己做
+2. 每个子任务描述清晰、自包含（不要让子 agent 猜测上下文）
+3. 子 agent 完成后会有回执，PM 整合结果再回复用户
+4. 任务简单（<3 文件 / 单步）时自己做，不必每次都 dispatch
+
+**长任务自身管理**：
+- 多轮对话累积时调 \`compact\` 工具压缩上下文（≥200 字符总结）
+- 单段回复超 ~3KB 时调 \`task_complete\` 分段持久化（最多 5 段）
+- 大文件用 \`read_file\` 的 offset/limit 分页读取（默认 2000 行/次）`;
 }
 
 /** Matrix PDU 上限 65535 字节；留 ~10KB 给协议开销，内容限制 55KB */
@@ -1212,15 +1321,38 @@ async function sendFinalMessage(
     body: text,
     'io.momo-studio.stream_session_id': streamSessionId,
   };
-  if (thinking) content['io.momo-studio.thinking'] = thinking;
-  if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
-  if (parentStreamSessionId) {
-    content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
-  }
-  if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
   // v1.5.5：dispatch 单独持久化，避免 tool_calls 被 4 级截断删除时丢失
   const dispatches = extractDispatches(toolCalls);
   if (dispatches.length > 0) content['io.momo-studio.dispatches'] = dispatches;
+  if (parentStreamSessionId) {
+    content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
+  }
+
+  // v1.5.6 持久化分层：大 thinking/tool_calls/todos 存 SQLite，Matrix event 只引 meta_id
+  // 判定阈值 5KB：小于此值继续直接放 Matrix（兼容旧渲染路径，简单消息不多一次 IPC）
+  const toolCallsJson = toolCalls.length > 0 ? JSON.stringify(toolCalls) : '';
+  const todosJson = todos && todos.length > 0 ? JSON.stringify(todos) : '';
+  if (shouldSplitMeta(thinking, toolCallsJson, todosJson)) {
+    const metaId = await requestWriteAgentMeta({
+      thinking: thinking || undefined,
+      toolCalls: toolCallsJson || undefined,
+      todos: todosJson || undefined,
+    });
+    if (metaId) {
+      // 分层成功：Matrix event 只存 meta_id，不存 thinking/tool_calls/todos
+      content['io.momo-studio.agent_meta_id'] = metaId;
+    } else {
+      // 分层失败（IPC 错误/超时）：降级到全字段入 Matrix（原有路径）
+      if (thinking) content['io.momo-studio.thinking'] = thinking;
+      if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
+      if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
+    }
+  } else {
+    // 小内容：直接放 Matrix event（无 IPC 开销）
+    if (thinking) content['io.momo-studio.thinking'] = thinking;
+    if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
+    if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
+  }
 
   // 渐进式截断，确保不超 Matrix PDU 限制
   const fitted = fitEventContent(content, thinking, toolCalls);
@@ -1276,6 +1408,54 @@ async function resolveMaxToolCalls(roomId: string): Promise<number> {
     process.on('message', handler);
     process.send?.({ type: 'settings:resolveMaxToolCalls', id, roomId });
   });
+}
+
+/**
+ * v1.5.6：子进程通过 IPC 请求主进程写入 agent_meta 表。
+ * 返回 meta_id（成功）或 null（失败/超时——子进程降级到原 Matrix 全字段持久化）。
+ */
+async function requestWriteAgentMeta(input: {
+  thinking?: string;
+  toolCalls?: string;
+  todos?: string;
+}): Promise<string | null> {
+  if (!process.send) return null;
+  return new Promise<string | null>((resolve) => {
+    const id = randomUUID();
+    const timer = setTimeout(() => {
+      process.off('message', handler);
+      console.warn('[requestWriteAgentMeta] IPC 超时，降级到 Matrix 全字段');
+      resolve(null);
+    }, 5000);
+    const handler = (msg: unknown): void => {
+      const m = msg as { type?: string; id?: string; metaId?: string; error?: string };
+      if (m.type === 'agent:metaWritten' && m.id === id) {
+        clearTimeout(timer);
+        process.off('message', handler);
+        if (m.error) {
+          console.warn(`[requestWriteAgentMeta] 写入失败：${m.error}，降级到 Matrix 全字段`);
+          resolve(null);
+        } else {
+          resolve(m.metaId ?? null);
+        }
+      }
+    };
+    process.on('message', handler);
+    process.send?.({ type: 'agent:writeMeta', id, ...input });
+  });
+}
+
+/**
+ * v1.5.6：判定是否需要持久化分层。
+ * thinking + toolCalls JSON + todos JSON 总字节 > 5KB 时分层（存 SQLite，Matrix 只引 meta_id）
+ */
+function shouldSplitMeta(thinking: string, toolCallsJson: string, todosJson: string): boolean {
+  return (
+    Buffer.byteLength(thinking, 'utf-8') +
+    Buffer.byteLength(toolCallsJson, 'utf-8') +
+    Buffer.byteLength(todosJson, 'utf-8') >
+    5000
+  );
 }
 
 /**

@@ -294,6 +294,23 @@ CREATE TABLE IF NOT EXISTS room_settings (
 );
 `.trim(),
   },
+  {
+    version: 14,
+    sql: `
+-- v1.5.6：持久化分层——大 thinking/tool_calls/todos 存 SQLite，Matrix event 只存 body + agent_meta_id
+-- 解决 PDU 64KB 限制导致的 4-5 级截断丢元数据问题
+-- sendFinalMessage 在内容超 ~5KB 时写入此表，Matrix event 引用 meta_id
+-- renderer 读消息时如发现 io.momo-studio.agent_meta_id 字段，调 IPC 拉完整元数据
+CREATE TABLE IF NOT EXISTS agent_meta (
+  meta_id TEXT PRIMARY KEY NOT NULL,
+  thinking TEXT,
+  tool_calls TEXT,
+  todos TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_meta_created ON agent_meta(created_at);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

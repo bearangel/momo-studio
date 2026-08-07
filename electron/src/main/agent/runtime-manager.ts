@@ -15,6 +15,7 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
+import { writeAgentMeta } from '../storage/agent-meta';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import { resolveMaxToolCalls } from '../settings/crud';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
@@ -396,6 +397,11 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     error?: string;
     // v1.4 预算解析请求字段
     maxToolCalls?: number;
+  // v1.5.6 agent:writeMeta（持久化分层）
+  thinking?: string;
+  toolCalls?: string;
+  todos?: string;
+  metaId?: string;
   };
   if (!m.type) return;
 
@@ -447,6 +453,25 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
   if (m.type === 'settings:resolveMaxToolCalls' && m.id && m.roomId) {
     const maxToolCalls = resolveMaxToolCalls(m.roomId);
     safeChildSend(child, { type: 'settings:resolved', id: m.id, maxToolCalls });
+    return;
+  }
+
+  // v1.5.6：子进程请求写入 agent_meta（持久化分层：大 thinking/tool_calls 不入 Matrix event）
+  if (m.type === 'agent:writeMeta' && m.id) {
+    try {
+      const metaId = writeAgentMeta({
+        thinking: typeof m.thinking === 'string' ? m.thinking : undefined,
+        toolCalls: typeof m.toolCalls === 'string' ? m.toolCalls : undefined,
+        todos: typeof m.todos === 'string' ? m.todos : undefined,
+      });
+      safeChildSend(child, { type: 'agent:metaWritten', id: m.id, metaId });
+    } catch (err) {
+      safeChildSend(child, {
+        type: 'agent:metaWritten',
+        id: m.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return;
   }
 
