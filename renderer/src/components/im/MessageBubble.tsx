@@ -52,6 +52,8 @@ interface PersistedToolCall {
 const THINKING_KEY = 'io.momo-studio.thinking';
 const TOOL_CALLS_KEY = 'io.momo-studio.tool_calls';
 const TODOS_KEY = 'io.momo-studio.todos';
+/** v1.5.5：dispatch 单独持久化字段（不被 fitEventContent 4级截断删除） */
+const DISPATCHES_KEY = 'io.momo-studio.dispatches';
 
 /**
  * 从 Matrix event content 安全提取 agent 持久化字段。
@@ -182,6 +184,41 @@ function buildHistoryDispatchChild(tc: PersistedToolCall, index: number): Dispat
   };
 }
 
+/**
+ * v1.5.5：从 io.momo-studio.dispatches 字段提取 dispatch 列表。
+ * 该字段独立于 tool_calls，fitEventContent 4级截断删除 tool_calls 时不会丢失。
+ * 返回 PersistedToolCall[] 形状以复用 buildHistoryDispatchChild 逻辑。
+ */
+function extractDispatchesField(content: Record<string, unknown>): PersistedToolCall[] {
+  const raw = content[DISPATCHES_KEY];
+  if (!Array.isArray(raw)) return [];
+  const result: PersistedToolCall[] = [];
+  raw.forEach((item, i) => {
+    if (typeof item !== 'object' || item === null) return;
+    const d = item as {
+      name?: unknown;
+      success?: unknown;
+      subStreamSessionId?: unknown;
+      subAgentName?: unknown;
+      subAgentAvatar?: unknown;
+    };
+    if (typeof d.name !== 'string') return;
+    result.push({
+      name: d.name,
+      args: {},
+      result: '',
+      success: d.success !== false,
+      isDispatch: true,
+      ...(typeof d.subStreamSessionId === 'string' ? { subStreamSessionId: d.subStreamSessionId } : {}),
+      ...(typeof d.subAgentName === 'string' ? { subAgentName: d.subAgentName } : {}),
+      ...(typeof d.subAgentAvatar === 'string' ? { subAgentAvatar: d.subAgentAvatar } : {}),
+      // 无 subStreamSessionId 时用稳定占位（与 buildHistoryDispatchChild 一致）
+      ...(typeof d.subStreamSessionId !== 'string' ? { subStreamSessionId: `hist-dispatch-field-${i}` } : {}),
+    });
+  });
+  return result;
+}
+
 export function MessageBubble({ message, isSelf, senderName, allMessages }: Props) {
   const streams = useStreamStore((s) => s.streams);
 
@@ -194,13 +231,22 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
 
   // 检测 agent 持久化字段：有 thinking 或 tool_calls 时渲染增强气泡
   const { thinking, toolCalls } = extractAgentMeta(message.content);
-  const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0;
+  // v1.5.5：dispatches 单独字段也算 agent 元数据（即使 thinking+tool_calls 被 4级截断全删，
+  // 只要 dispatches 在就要渲染 DispatchChip）
+  const hasDispatchesField = extractDispatchesField(message.content).length > 0;
+  const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0 || hasDispatchesField;
 
   if (hasAgentMeta) {
     // v1.4 嵌套：分离 dispatch 委派与普通工具调用——前者渲染为 DispatchChip（历史模式，
     // 无实时 StreamState，仅展示完成/失败状态），后者保持 ToolCallChip 行为
     const regularToolCalls = toolCalls.filter((tc) => !isDispatchToolCall(tc));
-    const dispatchToolCalls = toolCalls.filter(isDispatchToolCall);
+    // v1.5.5：优先读独立的 dispatches 字段（不被 PDU 截断）；
+    // 旧消息（v1.5.5 前）没有此字段，fallback 从 tool_calls 提取
+    const dispatchFieldCalls = extractDispatchesField(message.content);
+    const dispatchToolCalls =
+      dispatchFieldCalls.length > 0
+        ? dispatchFieldCalls
+        : toolCalls.filter(isDispatchToolCall);
 
     // 增强气泡：与 AgentStreamBubble 完成态视觉一致（灰底 + 边框）
     return (

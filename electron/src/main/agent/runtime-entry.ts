@@ -1004,8 +1004,12 @@ function truncateArgs(args: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * 渐进式截断 event content，确保 JSON 序列化后不超过 MAX_EVENT_CONTENT_BYTES。
- * 降级顺序：截断工具字段 → 截断 thinking → 删除 thinking → 删除 tool_calls。
- * body（正文）永远保留——最坏情况用户至少能看到最终回复。
+ * 降级顺序：截断工具字段 → 截断 thinking → 删除 thinking → 删除 tool_calls → 截断 body。
+ * body（正文）保留优先级最低但仍兜底（最坏情况至少能发出消息，避免 sendEvent 抛错导致
+ * chat loop 把 sendFinal 失败当 dispatch 失败 retry，形成死循环）。
+ *
+ * v1.5.5：`io.momo-studio.dispatches` 字段永不参与截断——dispatch 元数据小（每个 ~100 字节）
+ * 但删除后重启 DispatchChip 完全消失。dispatch 单独存字段而非混在 tool_calls 内。
  */
 function fitEventContent(
   content: Record<string, unknown>,
@@ -1033,10 +1037,45 @@ function fitEventContent(
   delete content['io.momo-studio.thinking'];
   if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
 
-  // 4级：删除 tool_calls（只保留 body 正文）
+  // 4级：删除 tool_calls（只保留 body + dispatches）
   delete content['io.momo-studio.tool_calls'];
+  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+
+  // 5级：body 截断到 10KB（最坏情况，至少能发出去，不让 sendEvent 抛错）
+  const bodyStr = typeof content.body === 'string' ? content.body : '';
+  if (bodyStr.length > 10_000) {
+    content.body = bodyStr.slice(0, 10_000) + '\n\n...(正文已截断，原长度 ' + bodyStr.length + ' 字符)';
+    delete content['io.momo-studio.todos'];
+  }
   return content;
 }
+
+/**
+ * 从 toolCallHistory 提取 dispatch 委派项，单独持久化到 `io.momo-studio.dispatches`。
+ * 与 tool_calls 分离的原因：fitEventContent 4 级删除 tool_calls 时不会丢失 dispatch 元数据，
+ * 重启后 DispatchChip 仍可还原。
+ */
+function extractDispatches(toolCalls: ToolCallRecord[]): Array<{
+  name: string;
+  success: boolean;
+  subStreamSessionId?: string;
+  subAgentName?: string;
+  subAgentAvatar?: string;
+}> {
+  return toolCalls
+    .filter((tc) => tc.isDispatch === true || tc.name.startsWith('dispatch:'))
+    .map((tc) => ({
+      name: tc.name,
+      success: tc.success,
+      ...(tc.subStreamSessionId ? { subStreamSessionId: tc.subStreamSessionId } : {}),
+      ...(tc.subAgentName ? { subAgentName: tc.subAgentName } : {}),
+      ...(tc.subAgentAvatar ? { subAgentAvatar: tc.subAgentAvatar } : {}),
+    }));
+}
+
+/** v1.5.5：导出供单测验证 PDU 截断时 dispatches 字段保留 */
+export const __fitEventContentForTest = fitEventContent;
+export const __extractDispatchesForTest = extractDispatches;
 
 /**
  * 发送最终 Matrix m.room.message（含持久化元数据）。
@@ -1069,11 +1108,39 @@ async function sendFinalMessage(
     content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
   }
   if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
+  // v1.5.5：dispatch 单独持久化，避免 tool_calls 被 4 级截断删除时丢失
+  const dispatches = extractDispatches(toolCalls);
+  if (dispatches.length > 0) content['io.momo-studio.dispatches'] = dispatches;
 
   // 渐进式截断，确保不超 Matrix PDU 限制
   const fitted = fitEventContent(content, thinking, toolCalls);
 
-  await client.sendEvent(roomId, 'm.room.message', fitted, '');
+  // v1.5.5：sendEvent 兜底——即使 fitEventContent 后仍超 PDU（极端情况），
+  // 也不能让 sendFinalMessage 抛错（chat loop 会把失败当 dispatch 错误重试，死循环）。
+  // 降级到 body-only 重发；仍失败则吞掉错误并打 warning（消息丢失好过死循环）。
+  try {
+    await client.sendEvent(roomId, 'm.room.message', fitted, '');
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[sendFinalMessage] sendEvent 失败 (${errMsg})，降级到 body-only 重发`);
+    const minimal: Record<string, unknown> = {
+      msgtype: 'm.text',
+      body: typeof fitted.body === 'string' ? fitted.body.slice(0, 10_000) : '(正文超长)',
+      'io.momo-studio.stream_session_id': streamSessionId,
+    };
+    if (dispatches.length > 0) minimal['io.momo-studio.dispatches'] = dispatches;
+    if (parentStreamSessionId) {
+      minimal['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
+    }
+    try {
+      await client.sendEvent(roomId, 'm.room.message', minimal, '');
+    } catch (err2) {
+      // 极端情况（服务端故障/网络断）：吞掉错误，避免 chat loop 死循环
+      console.error(
+        `[sendFinalMessage] body-only 重发也失败：${err2 instanceof Error ? err2.message : String(err2)}`,
+      );
+    }
+  }
 }
 
 /**
