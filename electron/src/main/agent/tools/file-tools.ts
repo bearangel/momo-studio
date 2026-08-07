@@ -22,11 +22,19 @@ export function getFileToolDefs(): LLMToolDef[] {
   return [
     {
       name: 'read_file',
-      description: '读取 workspace 内的文件内容（UTF-8 文本）',
+      description: '读取 workspace 内的文件内容（UTF-8 文本）。大文件用 offset+limit 分页读取，避免一次性塞满 LLM 上下文。',
       inputSchema: {
         type: 'object',
         properties: {
           path: { type: 'string', description: '相对 workspace 根目录的文件路径' },
+          offset: {
+            type: 'number',
+            description: '起始行号（1-based，默认 1）。配合 limit 分页读大文件',
+          },
+          limit: {
+            type: 'number',
+            description: '本次返回最大行数（默认 2000）。文件超过此规模时尾部会提示"用 offset=N 继续读"',
+          },
         },
         required: ['path'],
       },
@@ -136,8 +144,40 @@ export async function executeFileTool(
   switch (toolName) {
     case 'read_file': {
       const filePath = parseStringArg(args.path, 'path');
+      // v1.5.6：分页参数（offset 1-based；limit 默认 2000，opencode 标准做法）
+      const offset = typeof args.offset === 'number' && args.offset > 0
+        ? Math.floor(args.offset)
+        : 1;
+      const limit = typeof args.limit === 'number' && args.limit > 0
+        ? Math.floor(args.limit)
+        : 2000;
+      // 上限保护：单次最多 5000 行（防 LLM 误传巨大 limit 撑爆 LLM 上下文）
+      const effectiveLimit = Math.min(limit, 5000);
+
       const content = await wsFs.readFile(filePath);
-      return content.toString('utf-8');
+      const text = content.toString('utf-8');
+      const allLines = text.split('\n');
+      const totalLines = allLines.length;
+
+      // 边界：offset 超出文件总行数
+      if (offset > totalLines) {
+        return `(空) 文件共 ${totalLines} 行，offset=${offset} 超出范围`;
+      }
+
+      const sliceEnd = Math.min(offset - 1 + effectiveLimit, totalLines);
+      const pageLines = allLines.slice(offset - 1, sliceEnd);
+      const parts: string[] = [pageLines.join('\n')];
+
+      // 尾部提示：还有更多行 → 教 LLM 用 offset=sliceEnd+1 继续
+      if (sliceEnd < totalLines) {
+        parts.push(
+          `\n\n...(共 ${totalLines} 行，已显示第 ${offset}-${sliceEnd} 行；用 offset=${sliceEnd + 1} 继续读取)`,
+        );
+      } else if (offset > 1) {
+        // 已经读到末尾但本次是分页读取 → 提示这是末段
+        parts.push(`\n\n（文件末尾，共 ${totalLines} 行）`);
+      }
+      return parts.join('');
     }
     case 'write_file': {
       const filePath = parseStringArg(args.path, 'path');

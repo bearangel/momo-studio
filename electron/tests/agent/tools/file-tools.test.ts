@@ -76,6 +76,73 @@ describe('agent/tools/file-tools read_file', () => {
   it('缺失 path 参数抛错', async () => {
     await expect(executeFileTool('read_file', {}, wsFs)).rejects.toThrow('path');
   });
+
+  // v1.5.6 分页测试
+  it('offset+limit 分页读取小段', async () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    await wsFs.writeFile('big.txt', lines.join('\n'));
+    const result = await executeFileTool(
+      'read_file',
+      { path: 'big.txt', offset: 10, limit: 5 },
+      wsFs,
+    );
+    expect(result).toContain('line 10');
+    expect(result).toContain('line 14');
+    expect(result).not.toContain('line 15');
+    expect(result).toMatch(/offset=15/); // 尾部提示下一段 offset
+  });
+
+  it('默认 limit=2000，大文件分页提示', async () => {
+    const lines = Array.from({ length: 3000 }, (_, i) => `l${i + 1}`);
+    await wsFs.writeFile('huge.txt', lines.join('\n'));
+    const result = await executeFileTool('read_file', { path: 'huge.txt' }, wsFs);
+    expect(result).toContain('l1\n');
+    expect(result).toContain('l2000');
+    expect(result).not.toContain('l2001');
+    expect(result).toMatch(/共 3000 行.*offset=2001/);
+  });
+
+  it('offset 超出文件总行数返回空提示', async () => {
+    await wsFs.writeFile('small.txt', 'only one line');
+    const result = await executeFileTool(
+      'read_file',
+      { path: 'small.txt', offset: 100 },
+      wsFs,
+    );
+    expect(result).toMatch(/共 1 行.*offset=100 超出范围/);
+  });
+
+  it('读到末尾显示文件末尾标记', async () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `x${i + 1}`);
+    await wsFs.writeFile('med.txt', lines.join('\n'));
+    const result = await executeFileTool(
+      'read_file',
+      { path: 'med.txt', offset: 40, limit: 20 },
+      wsFs,
+    );
+    expect(result).toContain('x40');
+    expect(result).toContain('x50');
+    expect(result).toMatch(/文件末尾.*共 50 行/);
+  });
+
+  it('limit 上限保护（防 LLM 误传巨大 limit）', async () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `y${i + 1}`);
+    await wsFs.writeFile('cap.txt', lines.join('\n'));
+    // 即使 limit=99999，实际最多返回 5000 行（这里文件只有 100，返回全部 + 末尾标记）
+    const result = await executeFileTool(
+      'read_file',
+      { path: 'cap.txt', limit: 99999 },
+      wsFs,
+    );
+    expect(result).toContain('y1');
+    expect(result).toContain('y100');
+  });
+
+  it('完整读小文件无分页提示（向后兼容）', async () => {
+    await wsFs.writeFile('tiny.txt', 'short\nfile');
+    const result = await executeFileTool('read_file', { path: 'tiny.txt' }, wsFs);
+    expect(result).toBe('short\nfile');
+  });
 });
 
 describe('agent/tools/file-tools write_file', () => {

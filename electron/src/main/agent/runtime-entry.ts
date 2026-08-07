@@ -424,6 +424,26 @@ ${skillIndex}`
     ...getVirtualToolDefs(skillRegistry),
     ...(await discoverMcpTools(config)),
     ...(config.role === 'main' ? getDispatchToolDefs(config.subAgents) : []),
+    // v1.5.6 task_complete 主动分段——chat loop 内联处理（不走 ToolModule）。
+    // 让 LLM 知道这个工具存在；执行逻辑在 runChatLoop 工具循环顶部。
+    {
+      name: 'task_complete',
+      description: '完成本段回复并持久化为一条消息。当回复内容超过约 3KB 或完成阶段性子任务时调用，把当前累积文本作为一段发出，然后继续输出下一段。避免长回复触发 PDU 截断丢失 thinking/tool_calls。最多 5 段。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: '本段内容（写入 Matrix 消息 body）',
+          },
+          nextStep: {
+            type: 'string',
+            description: '下一段要做什么（提示自己继续；可选）',
+          },
+        },
+        required: ['summary'],
+      },
+    },
   ];
 
   return {
@@ -729,6 +749,8 @@ export async function runChatLoop(
   const maxToolCalls = config.maxToolCalls;
   let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
   let toolCallCount = 0;
+  // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
+  let segmentCount = 0;
   const toolCallHistory: ToolCallRecord[] = [];
   let accumulatedThinking = '';
   let accumulatedText = '';
@@ -846,6 +868,87 @@ export async function runChatLoop(
         sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
+      }
+
+      // v1.5.6：task_complete 主动分段——LLM 调此工具时持久化当前累积 text 为一条
+      // Matrix 消息，然后重置 accumulatedText 继续下一段。chat loop 不退出。
+      // 防止 LLM 单次回复超 PDU 64KB 触发 4 级截断丢 thinking/tool_calls/dispatches。
+      if (tc.name === 'task_complete') {
+        const summary = typeof tc.arguments.summary === 'string' ? tc.arguments.summary : '';
+        const nextStep = typeof tc.arguments.nextStep === 'string' ? tc.arguments.nextStep : '';
+        segmentCount++;
+        if (segmentCount > MAX_TASK_SEGMENTS) {
+          // 防无限分段：超过上限时强制结束 chat loop
+          process.off('message', abortListener);
+          const finalText = accumulatedText.trim() || summary || '(分段上限)';
+          await sendFinalMessage(
+            client, roomId, streamSessionId, finalText,
+            accumulatedThinking, toolCallHistory, parentStreamSessionId,
+            getTodosForSession(streamSessionId),
+          );
+          sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+          if (stats) stats.toolCallsUsed = toolCallCount;
+          return finalText;
+        }
+
+        // 持久化当前段：summary（如有）优先，否则用 accumulatedText
+        const segText = summary || accumulatedText.trim() || '(空段)';
+        // 分段持久化的 session id 加后缀，避免与最终消息冲突
+        const segSessionId = `${streamSessionId}#seg${segmentCount}`;
+        try {
+          await client.sendEvent(
+            roomId,
+            'm.room.message',
+            {
+              msgtype: 'm.text',
+              body: segText,
+              'io.momo-studio.stream_session_id': segSessionId,
+              ...(parentStreamSessionId
+                ? { 'io.momo-studio.parent_stream_session_id': parentStreamSessionId }
+                : {}),
+              'io.momo-studio.segment_index': segmentCount,
+              'io.momo-studio.segment_of': streamSessionId,
+            },
+            '',
+          );
+        } catch (err) {
+          // 持久化失败不致命：LLM 仍能继续工作，只是这一段没存到 Matrix
+          console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
+        }
+
+        // 重置累积，让 LLM 下一轮生成新段
+        accumulatedText = '';
+        accumulatedThinking = '';
+
+        // 推 stream chunk 让 renderer 知道分段了（可选 UI 提示）
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          toolName: 'task_complete',
+          args: tc.arguments,
+        });
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          toolName: 'task_complete',
+          result: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已持久化。${nextStep ? `继续：${nextStep}` : '继续工作'}`,
+          success: true,
+        });
+
+        // tool_result 推回 LLM，提示继续
+        messages.push({
+          role: 'assistant',
+          content: summary,
+          toolCalls: [tc],
+        });
+        messages.push({
+          role: 'tool',
+          content: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已发送。${nextStep ? `下一步：${nextStep}` : '请继续工作，输出到合适段落时再次调用 task_complete'}`,
+          toolCallId: tc.id,
+        });
+        toolCallCount++;
+        budgetRemaining--;
+        continue;
       }
 
       const isDispatch = tc.name.startsWith('dispatch:');
@@ -976,6 +1079,13 @@ export function formatBudgetHint(maxToolCalls: number): string {
 
 /** Matrix PDU 上限 65535 字节；留 ~10KB 给协议开销，内容限制 55KB */
 const MAX_EVENT_CONTENT_BYTES = 55_000;
+
+/**
+ * v1.5.6 task_complete 最大分段次数。
+ * 防止 LLM 误用（每次 task_complete 都触发 sendEvent + 重置上下文，无限分段会浪费 token + 持久化垃圾）。
+ * 5 段足够覆盖典型长任务（每段 ~5KB → 总 25KB，仍在 PDU 内但已分批）。
+ */
+const MAX_TASK_SEGMENTS = 5;
 
 /**
  * 截断工具调用记录中的大字段：result 截到 200 字符，args 值截到 500 字符。
