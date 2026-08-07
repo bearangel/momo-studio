@@ -201,30 +201,38 @@ export class ShellTools implements ToolModule {
         }
       };
 
-      // 超时定时器：到点 SIGKILL 整个进程组。
-      const timer = setTimeout(() => {
-        killed = true;
-        killProcessGroup();
-        // v1.5.6 兜底：进程组 SIGKILL 后 close 事件通常 100ms 内触发。
-        // 但极端情况（如 nohup'd 进程脱离了进程组 / 内核级 hang）可能不触发。
-        // 2s 后强制 resolve 避免 Promise 永久挂起（用户看到"超时远大于设定"的兜底）。
-        setTimeout(() => {
+      // v1.5.6: 兜底 resolve——进程组 SIGKILL 后 close 事件可能仍不触发
+      //（极端 hang / 子进程脱离了进程组 / stdio 未关）。
+      // timeout 和 abort 两个路径共用此兜底，防 Promise 永久卡住。
+      let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+      const armFallback = (reason: string): void => {
+        if (fallbackTimer) return; // 已在倒计时
+        fallbackTimer = setTimeout(() => {
           guard(() => {
-            const parts = [`exit_code: null`, `(超时 ${timeoutMs}ms，已强杀进程组 + 2s 兜底结束)`];
+            const parts = [`exit_code: null`, `(${reason}，进程组已杀 + 2s 兜底结束)`];
             if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(已截断)' : ''}`);
             if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(已截断)' : ''}`);
             resolve(parts.join('\n\n'));
           });
         }, 2000);
+      };
+
+      // 超时定时器：到点 SIGKILL 整个进程组 + 启动 2s 兜底。
+      const timer = setTimeout(() => {
+        killed = true;
+        killProcessGroup();
+        armFallback(`超时 ${timeoutMs}ms`);
       }, timeoutMs);
 
-      // v1.5.1：监听外部 abortSignal（chat loop 中断）。被 abort 时立即 SIGKILL + resolve，
-      // 不等子进程自然结束。否则 bash sleep 65 即使停止按钮按下也要等 65s 才返回。
+      // v1.5.1：监听外部 abortSignal（chat loop 中断）。被 abort 时立即 SIGKILL + 兜底。
       let aborted = false;
       const onAbort = (): void => {
         if (aborted || killed || settled) return;
         aborted = true;
         killProcessGroup();
+        // v1.5.6: abort 也要启动兜底 timer——跟 timeout 路径一样，
+        // 进程组 SIGKILL 后 close 可能不触发（子进程持有 stdio），不兜底会卡住。
+        armFallback('用户中断');
       };
       if (ctx.abortSignal) {
         if (ctx.abortSignal.aborted) onAbort();
@@ -234,6 +242,7 @@ export class ShellTools implements ToolModule {
       child.on('close', (code) => {
         guard(() => {
           clearTimeout(timer);
+          if (fallbackTimer) clearTimeout(fallbackTimer);
           if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
           // v1.5.2: 外部中断时抛 AbortError，chat loop 据此跳出整个循环（不推 tool_result 给 LLM）。
           // 不抛的话 LLM 看到 "(用户中断)" 结果仍会重试，形成死循环。
@@ -257,6 +266,7 @@ export class ShellTools implements ToolModule {
       child.on('error', (err) => {
         guard(() => {
           clearTimeout(timer);
+          if (fallbackTimer) clearTimeout(fallbackTimer);
           if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
           resolve(`shell 启动失败: ${err.message}`);
         });
