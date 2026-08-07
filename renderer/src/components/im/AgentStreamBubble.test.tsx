@@ -26,6 +26,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     toolCalls: [],
     status: 'streaming',
     dispatchChildren: [],
+    startedAt: Date.now(),
     ...overrides,
   };
 }
@@ -182,6 +183,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
       toolCalls: [],
       status: 'streaming',
       dispatchChildren: [],
+    startedAt: Date.now(),
     };
     useStreamStore.setState({ streams: new Map([['child-1', childStream]]) });
 

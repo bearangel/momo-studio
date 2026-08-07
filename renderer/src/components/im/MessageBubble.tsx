@@ -159,6 +159,7 @@ function buildStreamFromMessage(msg: ImMessage, subStreamSessionId: string): Str
     status: 'done',
     dispatchChildren: [],
     todos: extractTodos(msg.content),
+    startedAt: msg.timestamp,
   };
 }
 

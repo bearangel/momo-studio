@@ -33,6 +33,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     toolCalls: [],
     status: 'streaming',
     dispatchChildren: [],
+    startedAt: Date.now(),
     ...overrides,
   };
 }

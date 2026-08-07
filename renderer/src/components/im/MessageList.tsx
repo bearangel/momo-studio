@@ -133,6 +133,17 @@ export function MessageList() {
     return true;
   });
 
+  // v1.5.6: messages + streams 合并按 timestamp 混合排序，避免 stream 永远在末尾。
+  // 用户报"msg3 出现在 agent 回复前面"就是因为 messages 在前 streams 在后分两段渲染。
+  // 现在统一按时间排序：messages 用 msg.timestamp，streams 用 stream.startedAt。
+  type MixedItem =
+    | { kind: 'message'; msg: (typeof visibleMessages)[number]; ts: number }
+    | { kind: 'stream'; stream: typeof activeRoomStreams[number]; ts: number };
+  const mixedItems: MixedItem[] = [
+    ...visibleMessages.map((msg) => ({ kind: 'message' as const, msg, ts: msg.timestamp })),
+    ...activeRoomStreams.map((stream) => ({ kind: 'stream' as const, stream, ts: stream.startedAt })),
+  ].sort((a, b) => a.ts - b.ts);
+
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
       {/* v1.5.4：分页加载状态指示——加载中显示提示；已到顶部（无更早历史）显示分隔线 */}
@@ -142,22 +153,23 @@ export function MessageList() {
       {activeRoomId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
         <div className="text-center text-xs text-neutral-500 py-2">— 已到顶部 —</div>
       )}
-      {visibleMessages.map((msg) => (
-        <MessageBubble
-          key={msg.eventId}
-          message={msg}
-          isSelf={msg.sender === currentUserId}
-          senderName={botNameByUserId.get(msg.sender)}
-          allMessages={messages}
-        />
-      ))}
-      {activeRoomStreams.map((stream) => (
-        <AgentStreamBubble
-          key={stream.streamSessionId}
-          stream={stream}
-          senderName={botNameByUserId.get(stream.botUserId)}
-        />
-      ))}
+      {mixedItems.map((item) =>
+        item.kind === 'message' ? (
+          <MessageBubble
+            key={item.msg.eventId}
+            message={item.msg}
+            isSelf={item.msg.sender === currentUserId}
+            senderName={botNameByUserId.get(item.msg.sender)}
+            allMessages={messages}
+          />
+        ) : (
+          <AgentStreamBubble
+            key={item.stream.streamSessionId}
+            stream={item.stream}
+            senderName={botNameByUserId.get(item.stream.botUserId)}
+          />
+        ),
+      )}
     </div>
   );
 }

@@ -54,6 +54,8 @@ export interface StreamState {
   parentStreamSessionId?: string;
   /** v1.5 todowrite 工具的任务列表（todo_update chunk 全量替换） */
   todos?: TodoItem[];
+  /** v1.5.6: start chunk 时间戳——MessageList 据此跟 Matrix 消息混合排序 */
+  startedAt: number;
 }
 
 interface StreamStoreState {
@@ -139,6 +141,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
             dispatchChildren: [],
             todos: [],
             parentStreamSessionId: chunk.parentStreamSessionId,
+            startedAt: Date.now(),
           });
           // 嵌套：子 agent start 通知父 stream 把对应 DispatchChild 置为 'executing'
           if (chunk.parentStreamSessionId) {
