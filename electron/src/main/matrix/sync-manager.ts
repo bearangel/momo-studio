@@ -305,6 +305,18 @@ export function getRoomMessages(roomId: string, limit = 50): MatrixMessagePayloa
   const room = client.getRoom(roomId);
   if (!room) return [];
   const events = room.getLiveTimeline().getEvents();
+  // v1.5.7 诊断：统计 timeline 中所有 event type 分布
+  const typeCounts: Record<string, number> = {};
+  for (const e of events) {
+    const t = e.getType();
+    typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+  }
+  logger.info('[getRoomMessages诊断]', {
+    roomId: roomId.slice(0, 12),
+    totalEvents: events.length,
+    typeCounts,
+    syncedTypes: [...SYNCED_EVENT_TYPES],
+  });
   return events
     .filter((e) => SYNCED_EVENT_TYPES.has(e.getType()))
     .map(eventToMessage)
