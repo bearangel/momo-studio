@@ -1237,23 +1237,23 @@ const MAX_EVENT_CONTENT_BYTES = 55_000;
 const MAX_TASK_SEGMENTS = 5;
 
 /**
- * 截断工具调用记录中的大字段：result 截到 200 字符，args 值截到 500 字符。
- * 复杂任务（如 read_file 大文件、write_file 整个文件内容）的工具记录极易撑爆 PDU。
+ * 截断工具调用记录中的大字段。
+ * v1.5.7：更激进截断（result 80 字符，args 150 字符），防几十次工具调用撑爆 PDU。
  */
 function truncateToolCallFields(calls: ToolCallRecord[]): ToolCallRecord[] {
   return calls.map((tc) => ({
     ...tc,
-    result: tc.result.length > 200 ? tc.result.slice(0, 200) + '...' : tc.result,
+    result: tc.result.length > 80 ? tc.result.slice(0, 80) + '...' : tc.result,
     args: truncateArgs(tc.args),
   }));
 }
 
-/** 截断 args 对象中超过 500 字符的字符串值 */
+/** 截断 args 对象中超过 150 字符的字符串值 */
 function truncateArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    if (typeof value === 'string' && value.length > 500) {
-      out[key] = value.slice(0, 500) + '...';
+    if (typeof value === 'string' && value.length > 150) {
+      out[key] = value.slice(0, 150) + '...';
     } else {
       out[key] = value;
     }
@@ -1296,11 +1296,29 @@ function fitEventContent(
   delete content['io.momo-studio.thinking'];
   if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
 
-  // 4级：删除 tool_calls（只保留 body + dispatches）
+  // 4级：v1.5.7 不再全删 tool_calls——保留最近 N 条，逐步减少
+  const allCalls = Array.isArray(content['io.momo-studio.tool_calls']) ? content['io.momo-studio.tool_calls'] as ToolCallRecord[] : [];
+  for (const keep of [30, 20, 10, 5]) {
+    if (allCalls.length > keep) {
+      const kept = allCalls.slice(-keep);
+      content['io.momo-studio.tool_calls'] = kept;
+      // dispatches 只保留对应的
+      const keptIds = new Set(kept.map((c) => c.subStreamSessionId).filter(Boolean));
+      if (Array.isArray(content['io.momo-studio.dispatches'])) {
+        const allDisps = content['io.momo-studio.dispatches'] as Array<{ subStreamSessionId?: string }>;
+        content['io.momo-studio.dispatches'] = allDisps.filter((d) =>
+          !d.subStreamSessionId || keptIds.has(d.subStreamSessionId),
+        );
+      }
+    }
+    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
+  }
+
+  // 5级：仍然超——删所有 tool_calls（最后手段）
   delete content['io.momo-studio.tool_calls'];
   if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
 
-  // 5级：body 截断到 10KB（最坏情况，至少能发出去，不让 sendEvent 抛错）
+  // 6级：body 截断到 10KB
   const bodyStr = typeof content.body === 'string' ? content.body : '';
   if (bodyStr.length > 10_000) {
     content.body = bodyStr.slice(0, 10_000) + '\n\n...(正文已截断，原长度 ' + bodyStr.length + ' 字符)';
@@ -1486,19 +1504,11 @@ async function requestWriteAgentMeta(input: {
 }
 
 /**
- * v1.5.6：判定是否需要持久化分层。
- * v1.5.7 修复：阈值 30KB——thinking+toolCalls+todos 超 30KB 时分层存 SQLite。
- * 30KB 留 25KB 给 body+dispatches+其他元数据，总计 < 55KB PDU 限制。
- * 低于此阈值 fitEventContent 不会触发 4 级删 tool_calls。
- * renderer MessageBubble + buildStreamFromMessage 通过 agent:getMeta IPC 加载。
+ * v1.5.7：禁用持久化分层。renderer agent_meta 异步加载不稳定，改为全字段入 Matrix event
+ * + fitEventContent 渐进截断（保留最近 N 条 tool_calls 而非全删）。
  */
-function shouldSplitMeta(thinking: string, toolCallsJson: string, todosJson: string): boolean {
-  return (
-    Buffer.byteLength(thinking, 'utf-8') +
-    Buffer.byteLength(toolCallsJson, 'utf-8') +
-    Buffer.byteLength(todosJson, 'utf-8') >
-    30_000
-  );
+function shouldSplitMeta(_thinking: string, _toolCallsJson: string, _todosJson: string): boolean {
+  return false;
 }
 
 /**
