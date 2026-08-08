@@ -1487,14 +1487,18 @@ async function requestWriteAgentMeta(input: {
 
 /**
  * v1.5.6：判定是否需要持久化分层。
- * thinking + toolCalls JSON + todos JSON 总字节 > 5KB 时分层（存 SQLite，Matrix 只引 meta_id）
+ * v1.5.7 修复：阈值从 5KB 提到 50KB——renderer MessageBubble 尚未实现 agent_meta
+ * 异步加载（agent:getMeta IPC 已注册但没调用方），5KB 阈值导致大多数 agent 回复
+ * 的 thinking/tool_calls 被存到 SQLite 而非 Matrix event，重启后全部"丢失"。
+ * 提到 50KB（接近 PDU 55KB 限制）后，只有极端大消息才分层；绝大多数消息直接放
+ * Matrix event，extractAgentMeta 正常读取。50KB 阈值仍由 fitEventContent 兜底截断。
  */
 function shouldSplitMeta(thinking: string, toolCallsJson: string, todosJson: string): boolean {
   return (
     Buffer.byteLength(thinking, 'utf-8') +
     Buffer.byteLength(toolCallsJson, 'utf-8') +
     Buffer.byteLength(todosJson, 'utf-8') >
-    5000
+    50_000
   );
 }
 
