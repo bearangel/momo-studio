@@ -17,6 +17,8 @@ export function MessageList() {
   const messages = useImStore((s) =>
     activeRoomId ? s.messagesByRoom.get(activeRoomId) : undefined,
   );
+  // v1.5.7: team room 消息——合并到 allMessages 让 DispatchChip 跨房间搜索子 agent 消息
+  const teamRoomMessages = useImStore((s) => s.teamRoomMessages);
   const loading = useImStore((s) => s.loading);
   const loadingOlder = useImStore((s) =>
     activeRoomId ? s.loadingOlderByRoom.get(activeRoomId) ?? false : false,
@@ -160,7 +162,7 @@ export function MessageList() {
             message={item.msg}
             isSelf={item.msg.sender === currentUserId}
             senderName={botNameByUserId.get(item.msg.sender)}
-            allMessages={messages}
+            allMessages={[...(messages ?? []), ...teamRoomMessages]}
           />
         ) : (
           <AgentStreamBubble
