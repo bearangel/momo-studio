@@ -20,10 +20,16 @@ const NAV_ITEMS: NavItem[] = [
 export function LeftRail() {
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
+  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
 
   return (
-    <div className="w-14 shrink-0 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2">
-      {/* 工作空间切换器：顶部下拉切换 / 新建工作空间 */}
+    <div
+      className={cn(
+        'shrink-0 bg-bg-secondary border-r border-border-subtle flex flex-col items-center py-3 gap-2 transition-all duration-300 overflow-hidden',
+        collapsed ? 'w-0 border-r-0' : 'w-14',
+      )}
+    >
       <div className="relative">
         <WorkspaceSwitcher />
       </div>
@@ -46,6 +52,17 @@ export function LeftRail() {
           {item.icon}
         </button>
       ))}
+      {/* v1.5.7: 底部收起按钮 */}
+      <div className="mt-auto">
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          title="收起侧边栏"
+          className="w-10 h-10 flex items-center justify-center rounded-md text-lg text-neutral-400 hover:bg-bg-tertiary"
+        >
+          ◀
+        </button>
+      </div>
     </div>
   );
 }

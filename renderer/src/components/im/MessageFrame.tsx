@@ -15,6 +15,8 @@ interface Props {
   senderName?: string;
   /** 内层气泡 className（边框/背景/文字色由调用方按消息类型决定） */
   bubbleClassName?: string;
+  /** v1.5.7: 气泡最大宽度百分比（默认 70%，agent 流式气泡传 85% 加宽） */
+  maxWidthPct?: number;
   children: ReactNode;
 }
 
@@ -24,7 +26,7 @@ interface Props {
  * 只依赖 sender（Matrix userId），不绑定完整 ImMessage —— 流式气泡只有 botUserId 也能复用。
  * isSelf 决定左右对齐与自己消息隐藏名字。
  */
-export function MessageFrame({ sender, isSelf, senderName, bubbleClassName, children }: Props) {
+export function MessageFrame({ sender, isSelf, senderName, bubbleClassName, maxWidthPct = 70, children }: Props) {
   return (
     <div
       className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}
@@ -35,7 +37,7 @@ export function MessageFrame({ sender, isSelf, senderName, bubbleClassName, chil
       </div>
       <div
         className={cn('flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}
-        style={{ minWidth: 0, maxWidth: '70%', overflow: 'hidden' }}
+        style={{ minWidth: 0, maxWidth: `${maxWidthPct}%`, overflow: 'hidden' }}
       >
         {!isSelf && (
           <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(sender)}</span>

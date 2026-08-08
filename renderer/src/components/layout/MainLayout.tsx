@@ -7,11 +7,14 @@ import { MiddlePanel } from './MiddlePanel';
 import { ipc } from '../../ipc/client';
 import { useImStore } from '../../stores/im.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useUiStore } from '../../stores/ui.store';
 
 export function MainLayout() {
   const loadRooms = useImStore((s) => s.loadRooms);
   const receiveMessage = useImStore((s) => s.receiveMessage);
   const syncRunningStates = useAgentStore((s) => s.syncRunningStates);
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,6 +50,17 @@ export function MainLayout() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg-primary">
       <LeftRail />
+      {/* v1.5.7: 侧边栏收起时显示展开按钮 */}
+      {sidebarCollapsed && (
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          title="展开侧边栏"
+          className="shrink-0 w-8 bg-bg-secondary border-r border-border-subtle flex items-center justify-center text-neutral-400 hover:bg-bg-tertiary transition-colors"
+        >
+          ▶
+        </button>
+      )}
       <MiddlePanel />
     </div>
   );
