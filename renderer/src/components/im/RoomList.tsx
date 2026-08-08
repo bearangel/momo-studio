@@ -63,7 +63,7 @@ export function RoomList() {
 
   if (loading && rooms.length === 0) {
     return (
-      <div className="w-60 min-w-[12rem] border-r border-border-subtle bg-bg-secondary flex items-center justify-center">
+      <div className="w-full h-full bg-bg-secondary flex items-center justify-center">
         <p className="text-sm text-neutral-500">加载中…</p>
       </div>
     );
@@ -71,7 +71,7 @@ export function RoomList() {
 
   if (rooms.length === 0) {
     return (
-      <div className="w-60 min-w-[12rem] border-r border-border-subtle bg-bg-secondary flex flex-col items-center justify-center gap-2">
+      <div className="w-full h-full bg-bg-secondary flex flex-col items-center justify-center gap-2">
         <div className="text-3xl">💬</div>
         <p className="text-sm text-neutral-500 px-4 text-center">
           暂无房间
@@ -97,7 +97,7 @@ export function RoomList() {
   });
 
   return (
-    <div className="w-60 min-w-[12rem] border-r border-border-subtle bg-bg-secondary overflow-auto">
+    <div className="w-full h-full bg-bg-secondary overflow-auto">
       {/* 顶部新建按钮 */}
       <button
         type="button"

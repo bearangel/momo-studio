@@ -18,6 +18,7 @@ import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { MarketplaceView } from '../marketplace/MarketplaceView';
+import { ResizableSidebar } from '../common/ResizableSidebar';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -63,9 +64,9 @@ export function MiddlePanel() {
   if (activeView === 'files') {
     return (
       <div className="flex-1 flex">
-        <div className="w-64 border-r border-border-subtle bg-bg-secondary overflow-auto">
+        <ResizableSidebar storageKey="files-sidebar" minWidth={180} maxWidth={500} defaultWidth={256} collapsedLabel="文件">
           <FileTree onSelectFile={handleSelectFile} />
-        </div>
+        </ResizableSidebar>
         <CodeEditor />
       </div>
     );
@@ -76,7 +77,9 @@ export function MiddlePanel() {
     const activeRoom = rooms.find((r) => r.roomId === activeRoomId);
     return (
       <div className="flex-1 flex min-w-0">
-        <RoomList />
+        <ResizableSidebar storageKey="im-sidebar" minWidth={180} maxWidth={400} defaultWidth={240} collapsedLabel="会话">
+          <RoomList />
+        </ResizableSidebar>
         <div className="flex-1 flex flex-col min-w-0 relative">
           {/* 房间头部：房间名 + 工具上限徽标 */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
