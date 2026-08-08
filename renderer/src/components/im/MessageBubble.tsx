@@ -360,15 +360,20 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
               const subStream = liveStream
                 ?? (historyChildMsg ? buildStreamFromMessage(historyChildMsg, child.subStreamSessionId) : undefined);
               // v1.5.7 诊断
+              const allParentIds = allMessages
+                ?.filter((m) => m.content?.['io.momo-studio.parent_stream_session_id'])
+                .map((m) => ({
+                  parentId: String(m.content?.['io.momo-studio.parent_stream_session_id']).slice(0, 8),
+                  eventId: m.eventId?.slice(0, 12),
+                  sender: m.sender?.slice(0, 15),
+                  hasToolCalls: 'io.momo-studio.tool_calls' in (m.content ?? {}),
+                })) ?? [];
               console.log('[DispatchChip诊断]', {
                 childSubStreamId: child.subStreamSessionId?.slice(0, 8),
                 hasLiveStream: !!liveStream,
                 hasHistoryMsg: !!historyChildMsg,
-                historyMsgKeys: historyChildMsg ? Object.keys(historyChildMsg.content ?? {}).filter((k) => k.startsWith('io.momo')) : [],
-                hasSubStream: !!subStream,
-                subStreamThinkingLen: subStream?.thinking?.length ?? -1,
-                subStreamToolCallsLen: subStream?.toolCalls?.length ?? -1,
-                subStreamEventsLen: subStream?.events?.length ?? -1,
+                allParentIds,
+                totalMessages: allMessages?.length ?? 0,
               });
               return (
                 <DispatchChip
