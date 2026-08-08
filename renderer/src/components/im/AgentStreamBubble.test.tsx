@@ -17,7 +17,7 @@ const mockApi = { agent: { abortStream: abortStreamMock } };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
 function makeStream(overrides: Partial<StreamState> = {}): StreamState {
-  return {
+  const base: StreamState = {
     streamSessionId: 's1',
     roomId: '!room:server',
     botUserId: '@bot:server',
@@ -27,8 +27,40 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     status: 'streaming',
     dispatchChildren: [],
     startedAt: Date.now(),
+    events: [],
     ...overrides,
   };
+  // v1.5.7: 如果 events 为空，从旧字段自动生成（兼容旧测试代码）
+  if (base.events.length === 0) {
+    const evs: StreamState['events'] = [];
+    if (base.thinking) evs.push({ id: 'ev-think', type: 'thinking', content: base.thinking });
+    for (const dc of base.dispatchChildren) {
+      evs.push({
+        id: `ev-disp-${dc.subStreamSessionId}`,
+        type: 'tool_call',
+        toolName: `dispatch:${dc.subAgentName}`,
+        args: {},
+        isExecuting: dc.status === 'executing' || dc.status === 'queued',
+        isDispatch: true,
+        subStreamSessionId: dc.subStreamSessionId,
+        subAgentName: dc.subAgentName,
+      });
+    }
+    for (const tc of base.toolCalls) {
+      evs.push({
+        id: `ev-tc-${tc.toolName}-${Math.random()}`,
+        type: 'tool_call',
+        toolName: tc.toolName,
+        args: tc.args,
+        result: tc.result,
+        success: tc.success,
+        isExecuting: tc.isExecuting ?? false,
+      });
+    }
+    if (base.text) evs.push({ id: 'ev-text', type: 'text', content: base.text });
+    base.events = evs;
+  }
+  return base;
 }
 
 describe('AgentStreamBubble', () => {
@@ -184,6 +216,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
       status: 'streaming',
       dispatchChildren: [],
     startedAt: Date.now(),
+    events: [],
     };
     useStreamStore.setState({ streams: new Map([['child-1', childStream]]) });
 

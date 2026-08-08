@@ -37,6 +37,28 @@ export interface DispatchChild {
   status: 'queued' | 'executing' | 'completed' | 'failed';
 }
 
+/**
+ * v1.5.7 时间线事件——按 chunk 到达顺序记录，AgentStreamBubble 据此按时间线渲染。
+ * 替代旧的 thinking + text + toolCalls 分区式渲染（用户报"无法区分会话链路"）。
+ */
+export type StreamEvent =
+  | { id: string; type: 'thinking'; content: string }
+  | { id: string; type: 'text'; content: string }
+  | {
+      id: string;
+      type: 'tool_call';
+      toolName: string;
+      args: Record<string, unknown>;
+      result?: string;
+      success?: boolean;
+      isExecuting: boolean;
+      isDispatch?: boolean;
+      subStreamSessionId?: string;
+      subAgentName?: string;
+      subAgentAvatar?: string;
+    }
+  | { id: string; type: 'todo'; todos: TodoItem[] };
+
 /** 单次流式响应的聚合状态，对应一个临时气泡 */
 export interface StreamState {
   streamSessionId: string;
@@ -56,6 +78,8 @@ export interface StreamState {
   todos?: TodoItem[];
   /** v1.5.6: start chunk 时间戳——MessageList 据此跟 Matrix 消息混合排序 */
   startedAt: number;
+  /** v1.5.7: 时间线事件流——AgentStreamBubble 按此渲染（替代分区字段） */
+  events: StreamEvent[];
 }
 
 interface StreamStoreState {
@@ -129,7 +153,6 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         const streams = new Map(state.streams);
 
         if (chunk.type === 'start') {
-          // 创建子/父 StreamState（统一初始化 dispatchChildren）
           streams.set(chunk.streamSessionId, {
             streamSessionId: chunk.streamSessionId,
             roomId: chunk.roomId,
@@ -142,8 +165,8 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
             todos: [],
             parentStreamSessionId: chunk.parentStreamSessionId,
             startedAt: Date.now(),
+            events: [],
           });
-          // 嵌套：子 agent start 通知父 stream 把对应 DispatchChild 置为 'executing'
           if (chunk.parentStreamSessionId) {
             setParentDispatchChildStatus(
               streams,
@@ -156,19 +179,32 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         }
 
         const existing = streams.get(chunk.streamSessionId);
-        if (!existing) return {}; // 未知 session，忽略（可能 init 前的迟到 chunk）
+        if (!existing) return {};
 
-        const updated: StreamState = { ...existing };
+        const updated: StreamState = { ...existing, events: [...existing.events] };
+        const evs = updated.events;
+        const lastEv = evs.length > 0 ? evs[evs.length - 1] : undefined;
+
         switch (chunk.type) {
           case 'thinking':
             updated.thinking = existing.thinking + chunk.delta;
+            // v1.5.7: 如果上一个事件也是 thinking，追加到它；否则新建
+            if (lastEv && lastEv.type === 'thinking') {
+              evs[evs.length - 1] = { ...lastEv, content: lastEv.content + chunk.delta };
+            } else {
+              evs.push({ id: crypto.randomUUID(), type: 'thinking', content: chunk.delta });
+            }
             break;
           case 'text':
             updated.text = existing.text + chunk.delta;
+            if (lastEv && lastEv.type === 'text') {
+              evs[evs.length - 1] = { ...lastEv, content: lastEv.content + chunk.delta };
+            } else {
+              evs.push({ id: crypto.randomUUID(), type: 'text', content: chunk.delta });
+            }
             break;
           case 'tool_call':
             if (chunk.isDispatch && chunk.subStreamSessionId) {
-              // dispatch 委派：登记到 dispatchChildren（不混入普通 toolCalls）
               updated.dispatchChildren = [
                 ...existing.dispatchChildren,
                 {
@@ -184,11 +220,23 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
                 { toolName: chunk.toolName, args: chunk.args, isExecuting: true },
               ];
             }
+            // v1.5.7: push 到时间线
+            evs.push({
+              id: crypto.randomUUID(),
+              type: 'tool_call',
+              toolName: chunk.toolName,
+              args: chunk.args,
+              isExecuting: true,
+              ...(chunk.isDispatch ? {
+                isDispatch: true,
+                subStreamSessionId: chunk.subStreamSessionId,
+                subAgentName: chunk.subAgentName,
+                subAgentAvatar: chunk.subAgentAvatar,
+              } : {}),
+            });
             break;
           case 'tool_result': {
             if (chunk.subStatus) {
-              // dispatch 结果：更新最后一个未终结 DispatchChild 的状态
-              // completed→completed；failed/timeout→failed
               const finalStatus: DispatchChild['status'] =
                 chunk.subStatus === 'completed' ? 'completed' : 'failed';
               updated.dispatchChildren = setLastPendingChildStatus(
@@ -196,7 +244,6 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
                 finalStatus,
               );
             } else {
-              // 普通工具结果：从后往前找最后一个同名且仍在执行的工具，置为已完成
               const calls = [...existing.toolCalls];
               for (let i = calls.length - 1; i >= 0; i--) {
                 if (calls[i]!.toolName === chunk.toolName && calls[i]!.isExecuting) {
@@ -211,11 +258,33 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
               }
               updated.toolCalls = calls;
             }
+            // v1.5.7: 更新时间线中对应的 tool_call 事件
+            for (let i = evs.length - 1; i >= 0; i--) {
+              const ev = evs[i];
+              if (ev && ev.type === 'tool_call' && ev.toolName === chunk.toolName && ev.isExecuting) {
+                evs[i] = {
+                  ...ev,
+                  result: chunk.result,
+                  success: chunk.success,
+                  isExecuting: false,
+                };
+                break;
+              }
+            }
             break;
           }
           case 'todo_update':
-            // v1.5：todowrite 工具全量替换任务列表（覆盖式）
             updated.todos = chunk.todos ?? [];
+            // v1.5.7: todo 是全量替换，更新最后一个 todo 事件或新建
+            let lastTodoIdx = -1;
+            for (let i = evs.length - 1; i >= 0; i--) {
+              if (evs[i]!.type === 'todo') { lastTodoIdx = i; break; }
+            }
+            if (lastTodoIdx >= 0) {
+              evs[lastTodoIdx] = { ...(evs[lastTodoIdx] as { id: string }), type: 'todo', todos: chunk.todos ?? [] };
+            } else {
+              evs.push({ id: crypto.randomUUID(), type: 'todo', todos: chunk.todos ?? [] });
+            }
             break;
           case 'end':
             updated.status = statusFromFinishReason(chunk.finishReason);

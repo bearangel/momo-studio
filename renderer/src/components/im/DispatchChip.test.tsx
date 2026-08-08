@@ -34,6 +34,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     status: 'streaming',
     dispatchChildren: [],
     startedAt: Date.now(),
+    events: [],
     ...overrides,
   };
 }

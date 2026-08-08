@@ -49,16 +49,16 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
   const statusColor = STATUS_COLOR[stream.status];
   const statusDot = STATUS_DOT[stream.status];
 
-  // v1.4 嵌套：从 store 查找子 agent 的 StreamState（按 subStreamSessionId），
-  // 透传给 DispatchChip 以便展开时渲染 SubAgentSection
   const streams = useStreamStore((s) => s.streams);
 
-  // 进度指示器：有未完成的 dispatch 时显示「等待 X/Y 子任务完成」
   const dispatchTotal = stream.dispatchChildren.length;
   const dispatchCompleted = stream.dispatchChildren.filter(
     (c) => c.status === 'completed' || c.status === 'failed',
   ).length;
   const showProgress = dispatchTotal > 0 && dispatchCompleted < dispatchTotal;
+
+  // v1.5.7: 判断是否最后一个事件（用于流式光标定位）
+  const lastEvent = stream.events.length > 0 ? stream.events[stream.events.length - 1] : undefined;
 
   return (
     <MessageFrame
@@ -67,65 +67,83 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
       senderName={senderName}
       bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
     >
-      <ThinkingSection content={stream.thinking} isStreaming={isStreaming} />
+      {/* v1.5.7: 时间线渲染——按事件到达顺序显示 thinking/text/tool_call/todo/dispatch */}
+      {stream.events.map((event) => {
+        switch (event.type) {
+          case 'thinking':
+            return (
+              <ThinkingSection
+                key={event.id}
+                content={event.content}
+                isStreaming={isStreaming && lastEvent?.id === event.id}
+              />
+            );
+          case 'text':
+            return (
+              <div
+                key={event.id}
+                className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30"
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{event.content}</ReactMarkdown>
+                {isStreaming && lastEvent?.id === event.id && (
+                  <span
+                    aria-label="流式光标"
+                    style={{
+                      display: 'inline-block',
+                      width: 2,
+                      height: 14,
+                      background: statusColor,
+                      marginLeft: 2,
+                      verticalAlign: 'text-bottom',
+                      animation: 'momo-stream-blink 1s infinite',
+                    }}
+                  />
+                )}
+              </div>
+            );
+          case 'tool_call':
+            // dispatch 委派渲染为 DispatchChip
+            if (event.isDispatch && event.subStreamSessionId) {
+              const child = stream.dispatchChildren.find(
+                (c) => c.subStreamSessionId === event.subStreamSessionId,
+              );
+              if (child) {
+                return (
+                  <DispatchChip
+                    key={event.id}
+                    child={child}
+                    subStream={streams.get(event.subStreamSessionId)}
+                  />
+                );
+              }
+            }
+            return (
+              <ToolCallChip
+                key={event.id}
+                toolName={event.toolName}
+                args={event.args}
+                result={event.result}
+                success={event.success ?? true}
+                isExecuting={event.isExecuting}
+                defaultExpanded={false}
+              />
+            );
+          case 'todo':
+            return (
+              <TodoSection
+                key={event.id}
+                todos={event.todos}
+                isStreaming={isStreaming && lastEvent?.id === event.id}
+              />
+            );
+          default:
+            return null;
+        }
+      })}
 
-      {stream.todos && stream.todos.length > 0 && (
-        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
-      )}
-
-      {stream.toolCalls.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          {stream.toolCalls.map((tc, i) => (
-            <ToolCallChip
-              key={`${tc.toolName}-${i}`}
-              toolName={tc.toolName}
-              args={tc.args}
-              result={tc.result}
-              success={tc.success ?? true}
-              isExecuting={tc.isExecuting}
-              defaultExpanded={false}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* v1.4 嵌套：dispatch 委派 chips（在工具卡片之后、正文之前渲染） */}
-      {dispatchTotal > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          {stream.dispatchChildren.map((child) => (
-            <DispatchChip
-              key={child.subStreamSessionId}
-              child={child}
-              subStream={streams.get(child.subStreamSessionId)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* v1.4 嵌套：进度指示器（全部完成时不渲染） */}
       {showProgress && (
         <div style={{ fontSize: 11, color: '#888', margin: '4px 0' }}>
           ⏳ 等待 {dispatchCompleted}/{dispatchTotal} 子任务完成
-        </div>
-      )}
-
-      {stream.text && (
-        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
-          {isStreaming && (
-            <span
-              aria-label="流式光标"
-              style={{
-                display: 'inline-block',
-                width: 2,
-                height: 14,
-                background: statusColor,
-                marginLeft: 2,
-                verticalAlign: 'text-bottom',
-                animation: 'momo-stream-blink 1s infinite',
-              }}
-            />
-          )}
         </div>
       )}
 
@@ -170,7 +188,6 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
         )}
       </div>
 
-      {/* 流式光标闪烁动画（作用域到本气泡） */}
       <style>{`@keyframes momo-stream-blink{0%,50%{opacity:1}51%,100%{opacity:0}}`}</style>
     </MessageFrame>
   );

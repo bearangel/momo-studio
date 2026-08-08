@@ -143,6 +143,34 @@ function extractTodos(content: Record<string, unknown>): TodoItem[] {
  */
 function buildStreamFromMessage(msg: ImMessage, subStreamSessionId: string): StreamState {
   const { thinking, toolCalls } = extractAgentMeta(msg.content);
+  // v1.5.7: 从历史消息重建时间线事件流——按 thinking → tool_calls → text 顺序
+  const events: StreamState['events'] = [];
+  if (thinking) {
+    events.push({ id: crypto.randomUUID(), type: 'thinking', content: thinking });
+  }
+  for (const tc of toolCalls) {
+    events.push({
+      id: crypto.randomUUID(),
+      type: 'tool_call',
+      toolName: tc.name,
+      args: tc.args,
+      result: tc.result,
+      success: tc.success,
+      isExecuting: false,
+      ...(tc.isDispatch ? {
+        isDispatch: true,
+        subStreamSessionId: tc.subStreamSessionId,
+        subAgentName: tc.subAgentName,
+      } : {}),
+    });
+  }
+  if (msg.body) {
+    events.push({ id: crypto.randomUUID(), type: 'text', content: msg.body });
+  }
+  const extractedTodos = extractTodos(msg.content);
+  if (extractedTodos.length > 0) {
+    events.push({ id: crypto.randomUUID(), type: 'todo', todos: extractedTodos });
+  }
   return {
     streamSessionId: subStreamSessionId,
     roomId: msg.roomId,
@@ -158,8 +186,9 @@ function buildStreamFromMessage(msg: ImMessage, subStreamSessionId: string): Str
     })),
     status: 'done',
     dispatchChildren: [],
-    todos: extractTodos(msg.content),
+    todos: extractedTodos,
     startedAt: msg.timestamp,
+    events,
   };
 }
 
