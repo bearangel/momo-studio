@@ -290,6 +290,28 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
   const hasMetaId = typeof metaId === 'string';
   const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0 || hasDispatchesField || hasMetaId;
 
+  // v1.5.7 诊断：确认重启后 content 字段是否完整
+  if (hasAgentMeta || message.sender !== 'useImStore-sender-check') {
+    const contentKeys = Object.keys(message.content ?? {});
+    const hasThinking = THINKING_KEY in (message.content ?? {});
+    const hasToolCalls = TOOL_CALLS_KEY in (message.content ?? {});
+    const hasDispatches = DISPATCHES_KEY in (message.content ?? {});
+    if (contentKeys.some((k) => k.startsWith('io.momo-studio'))) {
+      console.log('[MessageBubble诊断]', {
+        eventId: message.eventId?.slice(0, 12),
+        sender: message.sender?.slice(0, 15),
+        contentKeys: contentKeys.filter((k) => k.startsWith('io.momo-studio')),
+        hasThinking,
+        hasToolCalls,
+        hasDispatches,
+        extractedThinkingLen: thinking.length,
+        extractedToolCallsLen: toolCalls.length,
+        hasDispatchesField,
+        hasAgentMeta,
+      });
+    }
+  }
+
   if (hasAgentMeta) {
     // v1.4 嵌套：分离 dispatch 委派与普通工具调用——前者渲染为 DispatchChip（历史模式，
     // 无实时 StreamState，仅展示完成/失败状态），后者保持 ToolCallChip 行为
