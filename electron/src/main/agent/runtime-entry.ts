@@ -878,6 +878,13 @@ export async function runChatLoop(
 
     messages.push({ role: 'assistant', content: accumulatedText, toolCalls });
 
+    // v1.5.6: 每轮 push 后重置累积文本——否则 accumulatedText 跨轮叠加，
+    // 后续轮次的 assistant content 会包含之前所有轮的文本。
+    // LLM 看到大量重复的自己说过的话 → 模仿 → 无限重复输出。
+    // 根因不是上下文长度（1M tokens 17 轮用不到 2%），是文本累积导致 LLM 行为退化。
+    accumulatedText = '';
+    accumulatedThinking = '';
+
     for (const tc of toolCalls) {
       // v1.5.6: 循环检测——同名 + 同参数连续重复 MAX_DUPLICATE_TOOLS 次强制终止。
       // 防 LLM 上下文爆炸后失忆，每轮重复相同操作（如反复 list_files 同一目录）。
