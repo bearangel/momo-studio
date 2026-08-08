@@ -10,9 +10,11 @@
 // v1.4：普通 m.room.message 若含 io.momo-studio.thinking / io.momo-studio.tool_calls
 //   持久化字段（agent 最终回复由 runtime sendFinalMessage 写入），渲染增强气泡——
 //   ThinkingSection + ToolCallChip 列表 + 正文，视觉与 AgentStreamBubble 完成态一致。
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImMessage, TodoItem } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
 import type { DispatchChild, StreamState } from '../../stores/stream.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
@@ -252,6 +254,27 @@ function extractDispatchesField(content: Record<string, unknown>): PersistedTool
 export function MessageBubble({ message, isSelf, senderName, allMessages }: Props) {
   const streams = useStreamStore((s) => s.streams);
 
+  // v1.5.7: 异步加载 agent_meta（持久化分层时 thinking/tool_calls 在 SQLite 而非 Matrix event）
+  const metaId = message.content?.['io.momo-studio.agent_meta_id'];
+  const [agentMeta, setAgentMeta] = useState<{ thinking: string; toolCalls: PersistedToolCall[] } | null>(null);
+
+  useEffect(() => {
+    if (typeof metaId !== 'string') return;
+    let cancelled = false;
+    ipc.agent.getMeta(metaId).then((m) => {
+      if (cancelled || !m) return;
+      try {
+        setAgentMeta({
+          thinking: m.thinking ?? '',
+          toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) as PersistedToolCall[] : [],
+        });
+      } catch {
+        // JSON 解析失败降级到 Matrix event 字段
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [metaId]);
+
   if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
@@ -259,12 +282,13 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
     return <TaskReplyCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
 
-  // 检测 agent 持久化字段：有 thinking 或 tool_calls 时渲染增强气泡
-  const { thinking, toolCalls } = extractAgentMeta(message.content);
-  // v1.5.5：dispatches 单独字段也算 agent 元数据（即使 thinking+tool_calls 被 4级截断全删，
-  // 只要 dispatches 在就要渲染 DispatchChip）
+  // 检测 agent 持久化字段：优先用 agent_meta（SQLite），否则用 Matrix event 内嵌字段
+  const eventMeta = extractAgentMeta(message.content);
+  const thinking = agentMeta?.thinking ?? eventMeta.thinking;
+  const toolCalls = agentMeta?.toolCalls ?? eventMeta.toolCalls;
   const hasDispatchesField = extractDispatchesField(message.content).length > 0;
-  const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0 || hasDispatchesField;
+  const hasMetaId = typeof metaId === 'string';
+  const hasAgentMeta = thinking.length > 0 || toolCalls.length > 0 || hasDispatchesField || hasMetaId;
 
   if (hasAgentMeta) {
     // v1.4 嵌套：分离 dispatch 委派与普通工具调用——前者渲染为 DispatchChip（历史模式，
