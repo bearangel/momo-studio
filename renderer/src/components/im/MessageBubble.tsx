@@ -359,6 +359,17 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
               );
               const subStream = liveStream
                 ?? (historyChildMsg ? buildStreamFromMessage(historyChildMsg, child.subStreamSessionId) : undefined);
+              // v1.5.7 诊断
+              console.log('[DispatchChip诊断]', {
+                childSubStreamId: child.subStreamSessionId?.slice(0, 8),
+                hasLiveStream: !!liveStream,
+                hasHistoryMsg: !!historyChildMsg,
+                historyMsgKeys: historyChildMsg ? Object.keys(historyChildMsg.content ?? {}).filter((k) => k.startsWith('io.momo')) : [],
+                hasSubStream: !!subStream,
+                subStreamThinkingLen: subStream?.thinking?.length ?? -1,
+                subStreamToolCallsLen: subStream?.toolCalls?.length ?? -1,
+                subStreamEventsLen: subStream?.events?.length ?? -1,
+              });
               return (
                 <DispatchChip
                   key={child.subStreamSessionId}
