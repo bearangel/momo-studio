@@ -1,4 +1,3 @@
-// renderer/src/components/onboarding/AccountSetupStep.tsx
 import { useState, type FormEvent } from 'react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -7,9 +6,10 @@ import { useAuthStore } from '../../stores/auth.store';
 interface Props {
   onNext: () => void;
   onBack: () => void;
+  onSwitchToLogin: () => void;
 }
 
-export function AccountSetupStep({ onNext, onBack }: Props) {
+export function AccountSetupStep({ onNext, onBack, onSwitchToLogin }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -23,36 +23,36 @@ export function AccountSetupStep({ onNext, onBack }: Props) {
     e.preventDefault();
     setLocalError(null);
     if (password !== confirm) {
-      setLocalError('Passwords do not match');
+      setLocalError('两次输入的密码不一致');
       return;
     }
     if (password.length < 6) {
-      setLocalError('Password must be at least 6 characters');
+      setLocalError('密码至少 6 位');
       return;
     }
     try {
       await register({ username, password });
       onNext();
     } catch {
-      // error is in store
+      // 错误在 store.error 显示
     }
   };
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-12 max-w-md mx-auto w-full">
-      <h2 className="text-2xl font-bold">Create your account</h2>
+      <h2 className="text-2xl font-bold">创建账号</h2>
       <p className="text-sm text-neutral-400">
-        This account is stored locally on the built-in homeserver. No data leaves your machine.
+        账号存储在本地内置服务端，数据不会离开你的设备。
       </p>
       <Input
-        label="Username"
+        label="用户名"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
         autoComplete="username"
         required
       />
       <Input
-        label="Password"
+        label="密码"
         type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
@@ -60,7 +60,7 @@ export function AccountSetupStep({ onNext, onBack }: Props) {
         required
       />
       <Input
-        label="Confirm password"
+        label="确认密码"
         type="password"
         value={confirm}
         onChange={(e) => setConfirm(e.target.value)}
@@ -71,11 +71,18 @@ export function AccountSetupStep({ onNext, onBack }: Props) {
         <div className="text-red-400 text-sm" role="alert">{localError ?? storeError}</div>
       )}
       <div className="flex gap-3 justify-end">
-        <Button variant="ghost" type="button" onClick={onBack}>Back</Button>
+        <Button variant="ghost" type="button" onClick={onBack}>返回</Button>
         <Button type="submit" disabled={loading || !username}>
-          {loading ? 'Creating…' : 'Create account'}
+          {loading ? '创建中…' : '创建账号'}
         </Button>
       </div>
+      <button
+        type="button"
+        onClick={onSwitchToLogin}
+        className="text-sm text-neutral-400 hover:text-neutral-200 text-center"
+      >
+        已有账号？点击登录
+      </button>
     </form>
   );
 }

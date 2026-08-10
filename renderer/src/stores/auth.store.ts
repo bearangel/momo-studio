@@ -12,6 +12,8 @@ interface AuthState {
   user: AuthResult | null;
   error: string | null;
   loading: boolean;
+  /** v1.5.7: 是否曾有会话（true 时 Onboarding 直接显示登录而非注册向导） */
+  wasAuthenticated: boolean;
 
   loadCurrent: () => Promise<void>;
   register: (opts: { username: string; password: string }) => Promise<void>;
@@ -25,6 +27,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   error: null,
   loading: false,
+  wasAuthenticated: false,
 
   loadCurrent: async () => {
     set({ loading: true, error: null });
@@ -64,11 +67,10 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     await ipc.auth.logout();
-    // 登出时清空会话相关状态，避免下一个登录用户看到上个用户的房间/成员/供应商
     useImStore.getState().reset();
     useProviderStore.getState().clear();
-    set({ status: 'unauthenticated', user: null });
+    set({ status: 'unauthenticated', user: null, wasAuthenticated: true });
   },
 
-  reset: () => set({ status: 'unknown', user: null, error: null, loading: false }),
+  reset: () => set({ status: 'unknown', user: null, error: null, loading: false, wasAuthenticated: true }),
 }));

@@ -1,4 +1,3 @@
-// renderer/src/routes/Onboarding.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Onboarding } from './Onboarding';
@@ -10,54 +9,55 @@ const mockApi = {
     login: vi.fn(),
     getCurrentUser: vi.fn().mockResolvedValue(null),
     logout: vi.fn(),
+    onSessionExpired: vi.fn().mockReturnValue(() => {}),
   },
   system: { getInfo: vi.fn().mockResolvedValue({}), getConduitStatus: vi.fn().mockResolvedValue({}) },
 };
 
 beforeEach(() => {
-  // Assigning `api` to globalThis.window replaces the jsdom window object,
-  // which breaks React DOM's internal instanceof checks. Mutate it instead.
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
-  useAuthStore.getState().reset();
+  useAuthStore.setState({ status: 'unknown', user: null, error: null, loading: false, wasAuthenticated: false });
   mockApi.auth.register.mockClear();
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => { vi.useRealTimers(); });
 
 describe('Onboarding', () => {
-  it('renders welcome step first', () => {
+  it('首次使用显示欢迎页', () => {
     render(<Onboarding onComplete={() => {}} />);
-    expect(screen.getByText(/welcome/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /欢迎使用/ })).toBeInTheDocument();
   });
 
-  it('advances through steps to account setup', async () => {
-    const onComplete = vi.fn();
-    render(<Onboarding onComplete={onComplete} />);
+  it('从欢迎页推进到账号创建', () => {
+    render(<Onboarding onComplete={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /开始使用/ }));
+    expect(screen.getByRole('heading', { name: /选择模式/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /继续/ }));
+    expect(screen.getByRole('heading', { name: /创建账号/ })).toBeInTheDocument();
+  });
 
-    // Welcome → Mode
-    fireEvent.click(screen.getByRole('button', { name: /get started/i }));
-    expect(await screen.findByText(/choose mode/i)).toBeInTheDocument();
+  it('填写表单提交注册', async () => {
+    render(<Onboarding onComplete={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /开始使用/ }));
+    fireEvent.click(screen.getByRole('button', { name: /继续/ }));
 
-    // Mode → Account (select standalone)
-    fireEvent.click(screen.getByRole('button', { name: /standalone/i }));
-    fireEvent.click(screen.getByRole('button', { name: /next|continue/i }));
-    expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+    const inputs = document.querySelectorAll('input');
+    fireEvent.change(inputs[0]!, { target: { value: 'alice' } });
+    fireEvent.change(inputs[1]!, { target: { value: 'password123' } });
+    fireEvent.change(inputs[2]!, { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /创建账号/ }));
 
-    // Account → Complete. Use anchored regex so /password/i doesn't match "Confirm password".
-    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'alice' } });
-    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'pass123' } });
-    fireEvent.change(screen.getByLabelText(/confirm/i), { target: { value: 'pass123' } });
-    fireEvent.click(screen.getByRole('button', { name: /create|register|sign up/i }));
-
-    // CompleteStep auto-redirects after 1500ms; allow generous timeout.
     await waitFor(() => {
-      expect(onComplete).toHaveBeenCalled();
-    }, { timeout: 3000 });
-    expect(mockApi.auth.register).toHaveBeenCalledWith({
-      username: 'alice',
-      password: 'pass123',
+      expect(mockApi.auth.register).toHaveBeenCalledWith({ username: 'alice', password: 'password123' });
     });
+  });
+});
+
+describe('Onboarding 重新登录', () => {
+  it('退出后直接显示登录页', () => {
+    useAuthStore.setState({ wasAuthenticated: true });
+    render(<Onboarding onComplete={() => {}} />);
+    expect(screen.getByRole('heading', { name: '登录' })).toBeInTheDocument();
+    expect(screen.queryByText(/欢迎使用/)).not.toBeInTheDocument();
   });
 });

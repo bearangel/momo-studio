@@ -1,4 +1,3 @@
-// renderer/src/components/onboarding/CompleteStep.tsx
 import { useEffect } from 'react';
 import { Button } from '../ui/Button';
 
