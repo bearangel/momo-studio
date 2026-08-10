@@ -15,8 +15,18 @@ interface Props {
   senderName?: string;
   /** 内层气泡 className（边框/背景/文字色由调用方按消息类型决定） */
   bubbleClassName?: string;
-  /** v1.5.7: 气泡最大宽度百分比（默认 70%，agent 流式气泡传 85% 加宽） */
+  /**
+   * v1.5.7: 气泡最大宽度百分比（默认 70%，agent 流式气泡传 90% 加宽）。
+   * v1.5.8: 仅当 fillWidth=false 时是上限（内容短时气泡收缩）。
+   */
   maxWidthPct?: number;
+  /**
+   * v1.5.8: true 时气泡列强制占 maxWidthPct% 宽度（不再随内容收缩）。
+   * agent 气泡内容丰富（thinking + 多 tool_call + markdown），用 maxWidth 模式
+   * 会被内容 natural width 限制导致视觉上比期望窄。fillWidth=true 让气泡列固定宽度，
+   * 内层气泡撑满，视觉一致。
+   */
+  fillWidth?: boolean;
   children: ReactNode;
 }
 
@@ -26,7 +36,15 @@ interface Props {
  * 只依赖 sender（Matrix userId），不绑定完整 ImMessage —— 流式气泡只有 botUserId 也能复用。
  * isSelf 决定左右对齐与自己消息隐藏名字。
  */
-export function MessageFrame({ sender, isSelf, senderName, bubbleClassName, maxWidthPct = 70, children }: Props) {
+export function MessageFrame({
+  sender,
+  isSelf,
+  senderName,
+  bubbleClassName,
+  maxWidthPct = 70,
+  fillWidth = false,
+  children,
+}: Props) {
   return (
     <div
       className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}
@@ -37,14 +55,19 @@ export function MessageFrame({ sender, isSelf, senderName, bubbleClassName, maxW
       </div>
       <div
         className={cn('flex flex-col gap-0.5', isSelf ? 'items-end' : 'items-start')}
-        style={{ minWidth: 0, maxWidth: `${maxWidthPct}%`, overflow: 'hidden' }}
+        style={{
+          minWidth: 0,
+          // v1.5.8: fillWidth=true 强制占满（agent 气泡），否则为上限（普通消息随内容收缩）
+          [fillWidth ? 'width' : 'maxWidth']: `${maxWidthPct}%`,
+          overflow: 'hidden',
+        }}
       >
         {!isSelf && (
           <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(sender)}</span>
         )}
         <div
           className={cn('rounded-lg px-3 py-2 text-sm break-words', bubbleClassName)}
-          style={{ overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}
+          style={{ overflow: 'hidden', minWidth: 0, width: fillWidth ? '100%' : undefined, maxWidth: '100%' }}
         >
           {children}
         </div>
