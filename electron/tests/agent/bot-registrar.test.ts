@@ -83,6 +83,28 @@ describe('agent/bot-registrar', () => {
     );
   });
 
+  it('v1.5.8：password 同时以 bot.<userId>.matrix_password 存入 keychain（应对 Conduwuit 重启）', async () => {
+    mockRegister.mockResolvedValue({
+      user_id: '@bot.pw.alice:localhost',
+      access_token: 'tok',
+      device_id: 'D',
+    });
+
+    await registerAgentBot({
+      slug: 'bot',
+      workspaceName: 'pw',
+      ownerUserId: '@alice:localhost',
+      homeserverUrl: 'http://127.0.0.1:8008',
+    });
+
+    // 注册时传入的 password 应同时被存入 keychain（用于 token 失效后 re-login）
+    const password = mockRegister.mock.calls[0]![1] as string;
+    expect(mockSetSecret).toHaveBeenCalledWith(
+      'bot.@bot.pw.alice:localhost.matrix_password',
+      password,
+    );
+  });
+
   it('大小写/空格被规范化为小写短横线段', async () => {
     mockRegister.mockResolvedValue({
       user_id: '@req-analyst.my-project-x.alice:localhost',

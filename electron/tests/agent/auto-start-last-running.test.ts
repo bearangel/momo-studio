@@ -26,9 +26,13 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
 
 // v1.5.8：mock matrix client，支持按 botUserId 路由 whoami 返回值
 const whoamiImpl = vi.hoisted(() => vi.fn().mockResolvedValue({ user_id: '@bot:localhost' }));
+// v1.5.8：mock matrix client 的 login（token 失效后 re-login 路径用）
+const loginImpl = vi.hoisted(() => vi.fn().mockResolvedValue({ access_token: 'fresh-token' }));
 vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: (opts: { userId?: string }) => ({
+  createMatrixClient: (opts: { userId?: string; accessToken?: string }) => ({
     whoami: () => whoamiImpl(opts.userId),
+    login: (type: string, params: { user: string; password: string }) =>
+      loginImpl(type, params),
   }),
 }));
 
@@ -57,6 +61,8 @@ beforeEach(() => {
   isAgentRunningMock.mockImplementation(() => false);
   whoamiImpl.mockReset();
   whoamiImpl.mockResolvedValue({ user_id: '@bot:localhost' });
+  loginImpl.mockReset();
+  loginImpl.mockResolvedValue({ access_token: 'fresh-token' });
 });
 
 afterEach(() => {
@@ -229,5 +235,73 @@ describe('autoStartAgents: token 预验证', () => {
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
     const arg = spawnAgentMock.mock.calls[0]![0] as { instanceId: string };
     expect(arg.instanceId).toBe('inst-good');
+  });
+});
+
+describe('autoStartAgents: token 失效后 password re-login', () => {
+  it('token 失效且有 password → re-login 拿新 token → spawn', async () => {
+    saveAgentDefinition(makeDef('def-relogin', 'relogin'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'rl'), iconEmoji: '📁' },
+      '@o:localhost', '!srl:localhost', '!trl:localhost',
+    );
+    insertAssignment('inst-relogin', ws.id, 'def-relogin', '@bot.rl:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.rl:localhost.matrix_token', 'stale-token');
+    memStore.set('bot.@bot.rl:localhost.matrix_password', 'the-password');
+
+    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
+    loginImpl.mockResolvedValue({ access_token: 'new-token-from-login' });
+
+    await autoStartAgents();
+
+    expect(loginImpl).toHaveBeenCalledWith('m.login.password', {
+      user: 'bot.rl',  // bot localpart（去 @ 和 :localhost）
+      password: 'the-password',
+      initial_device_display_name: 'Momo Studio Agent Bot',
+    });
+    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
+    const arg = spawnAgentMock.mock.calls[0]![0] as { botAccessToken: string };
+    expect(arg.botAccessToken).toBe('new-token-from-login');
+    expect(memStore.get('bot.@bot.rl:localhost.matrix_token')).toBe('new-token-from-login');
+  });
+
+  it('token 失效但无 password（v1.5.8 前老 bot）→ 跳过 spawn', async () => {
+    saveAgentDefinition(makeDef('def-nopw', 'nopw'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'np'), iconEmoji: '📁' },
+      '@o:localhost', '!snp:localhost', '!tnp:localhost',
+    );
+    insertAssignment('inst-nopw', ws.id, 'def-nopw', '@bot.np:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.np:localhost.matrix_token', 'stale');
+    // 不设 password（模拟 v1.5.8 前注册的 bot）
+
+    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
+
+    await autoStartAgents();
+
+    expect(loginImpl).not.toHaveBeenCalled();
+    expect(spawnAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('token 失效 + re-login 也失败（password 错） → 跳过 spawn', async () => {
+    saveAgentDefinition(makeDef('def-badpw', 'badpw'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'bp'), iconEmoji: '📁' },
+      '@o:localhost', '!sbp:localhost', '!tbp:localhost',
+    );
+    insertAssignment('inst-badpw', ws.id, 'def-badpw', '@bot.bp:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.bp:localhost.matrix_token', 'stale');
+    memStore.set('bot.@bot.bp:localhost.matrix_password', 'wrong-password');
+
+    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
+    loginImpl.mockRejectedValue(new Error('M_FORBIDDEN: Invalid password'));
+
+    await autoStartAgents();
+
+    expect(loginImpl).toHaveBeenCalled();
+    expect(spawnAgentMock).not.toHaveBeenCalled();
   });
 });

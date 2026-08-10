@@ -74,26 +74,38 @@ export async function autoStartAgents(): Promise<void> {
 
       const apiKey = await resolveApiKey(row.instance_id, def.modelProviderId);
 
-      const token = await getBotToken(row.bot_matrix_user_id);
-      if (!token) {
+      const rawToken = await getBotToken(row.bot_matrix_user_id);
+      if (!rawToken) {
         logger.warn('Bot Matrix token 丢失，跳过', { botUserId: row.bot_matrix_user_id });
         failed++;
         continue;
       }
 
       // v1.5.8：spawn 前主动验证 token——避免失效 token 触发子进程崩溃重启循环（matrix-js-sdk 收到 M_UNKNOWN_TOKEN 会 fatal exit）
+      let token = rawToken;
       const tokenCheck = await verifyBotToken(row.bot_matrix_user_id, token);
       if (!tokenCheck.ok) {
-        logger.warn('Bot Matrix token 在服务端失效，跳过自启动', {
-          instanceId: row.instance_id,
-          botUserId: row.bot_matrix_user_id,
-          slug: def.slug,
-          reason: tokenCheck.reason,
-          tokenPrefix: `${token.slice(0, 8)}…`,
-          hint: '在 UI 删除该 agent 后重新安装（bot password 不存，无法重新颁发 token）',
-        });
-        failed++;
-        continue;
+        // token 失效——尝试用 keychain 里的 password 重新 login（应对 Conduwuit 重启 token 丢失）
+        const relogin = await tryReloginBot(row.bot_matrix_user_id);
+        if (relogin.ok) {
+          token = relogin.token;
+          logger.info('Bot token 失效，已用 password 重新登录获得新 token', {
+            instanceId: row.instance_id,
+            botUserId: row.bot_matrix_user_id,
+            slug: def.slug,
+          });
+        } else {
+          logger.warn('Bot Matrix token 在服务端失效且无 password 可恢复，跳过自启动', {
+            instanceId: row.instance_id,
+            botUserId: row.bot_matrix_user_id,
+            slug: def.slug,
+            reason: tokenCheck.reason,
+            tokenPrefix: `${token.slice(0, 8)}…`,
+            hint: '老 bot（v1.5.8 前注册）未存 password，请在 UI 删除该 agent 后重新安装',
+          });
+          failed++;
+          continue;
+        }
       }
 
       spawnAgent(
@@ -111,8 +123,6 @@ export async function autoStartAgents(): Promise<void> {
           isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
         }),
       );
-
-      // main agent 的 sub 数量（日志用，按 assignment.parent_instance_id 查）
       const subCount = row.role === 'main'
         ? listSubAssignments(row.workspace_id, row.instance_id).length
         : 0;
@@ -163,5 +173,44 @@ async function verifyBotToken(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: msg };
+  }
+}
+
+/**
+ * v1.5.8：token 失效时用 keychain 里的 password 重新登录拿新 token。
+ * 应对 Conduwuit 重启导致 token 全部丢失的场景（user 用 password 重新 login，
+ * bot 同理——前提是注册时已把 password 存入 keychain）。
+ *
+ * 成功则把新 token 写回 keychain（更新 token 缓存）。
+ *
+ * @returns ok=true + 新 token；ok=false + reason（无 password / login 失败）
+ */
+async function tryReloginBot(
+  botUserId: string,
+): Promise<{ ok: true; token: string } | { ok: false; reason: string }> {
+  const { getSecret, setSecret } = await import('../storage/keychain');
+  const password = await getSecret(`bot.${botUserId}.matrix_password`);
+  if (!password) {
+    return { ok: false, reason: 'keychain 无 bot password（v1.5.8 前注册的 bot 不存 password）' };
+  }
+
+  // bot userId 的 localpart——matrix m.login.password 接受 localpart 作为 user
+  const localpart = botUserId.replace(/^@|:.*$/g, '');
+  try {
+    const client = createMatrixClient({ baseUrl: HOMESERVER_URL });
+    const raw = await client.login('m.login.password', {
+      user: localpart,
+      password,
+      initial_device_display_name: 'Momo Studio Agent Bot',
+    });
+    const response = raw as { access_token?: string };
+    if (typeof response.access_token !== 'string') {
+      return { ok: false, reason: 'login 返回缺 access_token' };
+    }
+    await setSecret(`bot.${botUserId}.matrix_token`, response.access_token);
+    return { ok: true, token: response.access_token };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `login 失败: ${msg}` };
   }
 }

@@ -83,7 +83,10 @@ export async function registerAgentBot(opts: RegisterAgentBotOpts): Promise<Regi
 
   // createMatrixClient 仅做 baseUrl 配置；register 不需要已有 session。
   const client = createMatrixClient({ baseUrl: opts.homeserverUrl });
-  const raw: unknown = await client.register(username, generateBotPassword(), null, {
+  // v1.5.8：保留 password 用于 Conduwuit 重启后自动 re-login（access token 在
+  // Conduwuit 是内存态，进程重启即丢，仅靠 token 无法恢复 bot 会话）
+  const password = generateBotPassword();
+  const raw: unknown = await client.register(username, password, null, {
     type: 'm.login.dummy',
   });
 
@@ -98,6 +101,7 @@ export async function registerAgentBot(opts: RegisterAgentBotOpts): Promise<Regi
   }
 
   await setSecret(`bot.${response.user_id}.matrix_token`, response.access_token);
+  await setSecret(`bot.${response.user_id}.matrix_password`, password);
   logger.info('Agent bot 已注册', { botUserId: response.user_id, username });
 
   return {
