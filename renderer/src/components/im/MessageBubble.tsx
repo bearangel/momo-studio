@@ -324,13 +324,14 @@ export function MessageBubble({ message, isSelf, senderName, allMessages }: Prop
         ? dispatchFieldCalls
         : toolCalls.filter(isDispatchToolCall);
 
-    // 增强气泡：与 AgentStreamBubble 完成态视觉一致（灰底 + 边框）
+    // 增强气泡：与 AgentStreamBubble 完成态视觉一致（灰底 + 边框 + 90% 宽度）
     return (
       <MessageFrame
         sender={message.sender}
         isSelf={isSelf}
         senderName={senderName}
         bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
+        maxWidthPct={90}
       >
         {thinking && <ThinkingSection content={thinking} />}
         {regularToolCalls.length > 0 && (

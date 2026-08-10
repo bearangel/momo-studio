@@ -66,7 +66,7 @@ export function AgentStreamBubble({ stream, senderName }: Props) {
       isSelf={false}
       senderName={senderName}
       bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
-      maxWidthPct={85}
+      maxWidthPct={90}
     >
       {/* v1.5.7: 时间线渲染——按事件到达顺序显示 thinking/text/tool_call/todo/dispatch */}
       {stream.events.map((event) => {
