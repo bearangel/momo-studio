@@ -24,12 +24,17 @@ interface AssignmentRow {
   agent_definition_id: string;
   bot_matrix_user_id: string;
   enabled: number;
+  /** v1.5.8：用户最近运行意图（1=运行 / 0=主动下线） */
+  last_running: number;
   role: string;
 }
 
 export async function autoStartAgents(): Promise<void> {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM agent_assignments WHERE enabled = 1').all() as AssignmentRow[];
+  // v1.5.8：只启动 enabled=1（assignment 存在）AND last_running=1（用户未主动下线）的 agent
+  const rows = db
+    .prepare('SELECT * FROM agent_assignments WHERE enabled = 1 AND last_running = 1')
+    .all() as AssignmentRow[];
   if (rows.length === 0) {
     logger.info('没有需要自启动的 agent');
     return;

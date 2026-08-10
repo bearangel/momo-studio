@@ -311,6 +311,18 @@ CREATE TABLE IF NOT EXISTS agent_meta (
 CREATE INDEX IF NOT EXISTS idx_agent_meta_created ON agent_meta(created_at);
 `.trim(),
   },
+  {
+    version: 15,
+    sql: `
+-- v1.5.8：记录用户对每个 agent 的「最近运行意图」
+--   1 = 用户希望运行（手动上线 / 新分配后默认）
+--   0 = 用户主动下线
+-- spawnAgent 写 1；stopAgent（手动）写 0；崩溃/退出不改
+-- autoStartAgents 查询条件：enabled=1 AND last_running=1
+-- 存量数据默认 1（老用户升级后全部自动恢复，与历史期望一致）
+ALTER TABLE agent_assignments ADD COLUMN last_running INTEGER NOT NULL DEFAULT 1;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

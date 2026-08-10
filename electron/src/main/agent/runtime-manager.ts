@@ -314,6 +314,17 @@ export function resetRestartCount(instanceId: string): void {
 export function spawnAgent(opts: AgentRuntimeOpts): void {
   stoppedManually.delete(opts.instanceId);
   resetRestartCount(opts.instanceId);
+  // v1.5.8：记录用户运行意图（崩溃/退出路径不走 spawnAgent，不会误改）
+  try {
+    getDb()
+      .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
+      .run(opts.instanceId);
+  } catch (err) {
+    logger.warn('写入 last_running=1 失败（不阻塞启动）', {
+      instanceId: opts.instanceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   doSpawnAgent(opts);
 }
 
@@ -584,6 +595,17 @@ export function stopAgent(instanceId: string): void {
   // 标记为主动停止，使 exit handler 跳过自动重启
   stoppedManually.add(instanceId);
   resetRestartCount(instanceId);
+  // v1.5.8：记录用户下线意图（崩溃/退出路径不调 stopAgent，不会误改 last_running）
+  try {
+    getDb()
+      .prepare('UPDATE agent_assignments SET last_running = 0 WHERE instance_id = ?')
+      .run(instanceId);
+  } catch (err) {
+    logger.warn('写入 last_running=0 失败（不阻塞停止）', {
+      instanceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   child.kill('SIGTERM');
   runtimes.delete(instanceId);
   logger.info('Agent 子进程已请求停止', { instanceId });
