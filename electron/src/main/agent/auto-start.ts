@@ -14,7 +14,8 @@ import { getDb } from '../storage/db';
 import { spawnAgent, isAgentRunning } from './runtime-manager';
 import { getAgentDefinition, listSubAssignments } from './crud';
 import { getWorkspace } from '../workspace/crud';
-import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
+import { buildSpawnOpts, resolveApiKey, HOMESERVER_URL } from './spawn-helpers';
+import { createMatrixClient } from '../matrix/client';
 import { logger } from '../logger';
 import type { AgentRole } from './types';
 
@@ -80,6 +81,21 @@ export async function autoStartAgents(): Promise<void> {
         continue;
       }
 
+      // v1.5.8：spawn 前主动验证 token——避免失效 token 触发子进程崩溃重启循环（matrix-js-sdk 收到 M_UNKNOWN_TOKEN 会 fatal exit）
+      const tokenCheck = await verifyBotToken(row.bot_matrix_user_id, token);
+      if (!tokenCheck.ok) {
+        logger.warn('Bot Matrix token 在服务端失效，跳过自启动', {
+          instanceId: row.instance_id,
+          botUserId: row.bot_matrix_user_id,
+          slug: def.slug,
+          reason: tokenCheck.reason,
+          tokenPrefix: `${token.slice(0, 8)}…`,
+          hint: '在 UI 删除该 agent 后重新安装（bot password 不存，无法重新颁发 token）',
+        });
+        failed++;
+        continue;
+      }
+
       spawnAgent(
         buildSpawnOpts({
           instanceId: row.instance_id,
@@ -124,4 +140,28 @@ export async function autoStartAgents(): Promise<void> {
 async function getBotToken(botUserId: string): Promise<string | null> {
   const { getSecret } = await import('../storage/keychain');
   return getSecret(`bot.${botUserId}.matrix_token`);
+}
+
+/**
+ * v1.5.8：用 bot token 调 Conduwuit 的 /account/whoami 验证 token 是否仍被服务端认可。
+ * 失败常见原因：Conduwuit 数据被清/重启换 DB、token 被 Matrix 服务器主动撤销、keychain 残留旧环境 token。
+ * 用GET /whoami 而非 startClient：避免触发 pushrules 等重流程，单次往返即得答案。
+ */
+async function verifyBotToken(
+  botUserId: string,
+  token: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const client = createMatrixClient({
+      baseUrl: HOMESERVER_URL,
+      userId: botUserId,
+      accessToken: token,
+    });
+    // whoami 是 matrix-js-sdk 的轻量认证探测端点；401 → 抛 MatrixError
+    await client.whoami();
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: msg };
+  }
 }

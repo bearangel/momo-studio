@@ -24,6 +24,14 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
   isAgentRunning: isAgentRunningMock,
 }));
 
+// v1.5.8：mock matrix client，支持按 botUserId 路由 whoami 返回值
+const whoamiImpl = vi.hoisted(() => vi.fn().mockResolvedValue({ user_id: '@bot:localhost' }));
+vi.mock('../../src/main/matrix/client', () => ({
+  createMatrixClient: (opts: { userId?: string }) => ({
+    whoami: () => whoamiImpl(opts.userId),
+  }),
+}));
+
 // 在 mock 之后导入被测模块
 import { autoStartAgents } from '../../src/main/agent/auto-start';
 
@@ -47,6 +55,8 @@ beforeEach(() => {
   ).run();
   spawnAgentMock.mockClear();
   isAgentRunningMock.mockImplementation(() => false);
+  whoamiImpl.mockReset();
+  whoamiImpl.mockResolvedValue({ user_id: '@bot:localhost' });
 });
 
 afterEach(() => {
@@ -156,5 +166,68 @@ describe('autoStartAgents: last_running 过滤', () => {
     await autoStartAgents();
 
     expect(spawnAgentMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('autoStartAgents: token 预验证', () => {
+  it('whoami 成功时正常 spawn', async () => {
+    saveAgentDefinition(makeDef('def-ok', 'ok'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ok'), iconEmoji: '📁' },
+      '@o:localhost', '!sok:localhost', '!tok:localhost',
+    );
+    insertAssignment('inst-ok', ws.id, 'def-ok', '@bot.ok:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.ok:localhost.matrix_token', 'mx-token');
+    whoamiImpl.mockResolvedValue({ user_id: '@bot.ok:localhost' });
+
+    await autoStartAgents();
+
+    expect(whoamiImpl).toHaveBeenCalledTimes(1);
+    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('whoami 抛 M_UNKNOWN_TOKEN 时不 spawn（避免崩溃循环）', async () => {
+    saveAgentDefinition(makeDef('def-stale', 'stale'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'stale'), iconEmoji: '📁' },
+      '@o:localhost', '!sstale:localhost', '!tstale:localhost',
+    );
+    insertAssignment('inst-stale', ws.id, 'def-stale', '@bot.stale:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.stale:localhost.matrix_token', 'stale-token');
+    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN: Unknown access token.'));
+
+    await autoStartAgents();
+
+    expect(whoamiImpl).toHaveBeenCalledTimes(1);
+    expect(spawnAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('混合：valid token 启动，invalid token 跳过', async () => {
+    saveAgentDefinition(makeDef('def-good', 'good'));
+    saveAgentDefinition(makeDef('def-bad', 'bad'));
+    const ws = await createWorkspace(
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'mix'), iconEmoji: '📁' },
+      '@o:localhost', '!smix:localhost', '!tmix:localhost',
+    );
+    insertAssignment('inst-good', ws.id, 'def-good', '@bot.good:localhost', 1, 1);
+    insertAssignment('inst-bad', ws.id, 'def-bad', '@bot.bad:localhost', 1, 1);
+    memStore.set('provider.prov-1.api_key', 'llm-key');
+    memStore.set('bot.@bot.good:localhost.matrix_token', 'good-token');
+    memStore.set('bot.@bot.bad:localhost.matrix_token', 'bad-token');
+    // 按 userId 精确路由（避免 SQL 顺序依赖）
+    whoamiImpl.mockImplementation((userId: string) => {
+      if (userId === '@bot.bad:localhost') {
+        return Promise.reject(new Error('M_UNKNOWN_TOKEN'));
+      }
+      return Promise.resolve({ user_id: userId });
+    });
+
+    await autoStartAgents();
+
+    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
+    const arg = spawnAgentMock.mock.calls[0]![0] as { instanceId: string };
+    expect(arg.instanceId).toBe('inst-good');
   });
 });
