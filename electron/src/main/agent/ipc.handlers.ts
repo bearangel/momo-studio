@@ -231,21 +231,43 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
   logger.info('Agent 分配已删除', { instanceId, botUserId, workspaceId });
 }
 
-/** 用 bot 自身 token 创建临时 client，让它离开所有当前已加入的房间 */
+/**
+ * 让 bot 离开所有已加入的房间。
+ *
+ * v1.5.8：优先用 owner client kick bot（admin 路径，不依赖 bot token）——
+ * 因为 Conduwuit 重启会让所有 access token 失效，此时 bot 自己的 token 已不可用，
+ * 用 botClient.leave 会 401 失败被 catch → bot 实际没离开 → 成员列表里残留。
+ * owner kick 是 admin 操作（owner power level=100），无论 bot token 状态都能成功。
+ *
+ * Fallback：owner kick 失败时（罕见，如权限配置异常），尝试用 bot 自己 token leave。
+ */
 async function makeBotLeaveAllRooms(botUserId: string): Promise<void> {
-  const token = await getSecret(`bot.${botUserId}.matrix_token`);
-  if (!token) return;
   const syncingClient = getSyncingClient();
   if (!syncingClient) return;
-  const botClient = createMatrixClient({ baseUrl: HOMESERVER_URL, userId: botUserId, accessToken: token });
   const joinedRooms = syncingClient
     .getRooms()
     .filter((r) => (r.getMember(botUserId)?.membership ?? '') === 'join');
+
   for (const room of joinedRooms) {
     try {
-      await botClient.leave(room.roomId);
-    } catch (err) {
-      logger.warn('bot 离开单个房间失败', { botUserId, roomId: room.roomId, err: String(err) });
+      await syncingClient.kick(room.roomId, botUserId);
+    } catch (kickErr) {
+      const token = await getSecret(`bot.${botUserId}.matrix_token`);
+      if (!token) {
+        logger.warn('owner kick 失败且 bot token 丢失，bot 未离开房间', {
+          botUserId, roomId: room.roomId, kickErr: String(kickErr),
+        });
+        continue;
+      }
+      try {
+        const botClient = createMatrixClient({ baseUrl: HOMESERVER_URL, userId: botUserId, accessToken: token });
+        await botClient.leave(room.roomId);
+      } catch (leaveErr) {
+        logger.warn('bot 离开单个房间失败（owner kick 与 bot leave 都失败）', {
+          botUserId, roomId: room.roomId,
+          kickErr: String(kickErr), leaveErr: String(leaveErr),
+        });
+      }
     }
   }
 }
