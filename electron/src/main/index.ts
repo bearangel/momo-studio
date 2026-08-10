@@ -57,12 +57,19 @@ async function autoRestoreSession(): Promise<void> {
     logger.info('Session restored: Matrix sync started');
     await autoStartAgents();
     logger.info('Session restore complete: agents auto-started');
-    // 通知 renderer 重新同步 running（renderer 首次同步可能早于 autoStartAgents 完成，导致 @ 候选为空）
     broadcastRuntimeChanged();
   } catch (err) {
-    logger.info('No active session or restore failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.info('No active session or restore failed', { error: msg });
+    // v1.5.7: token 失效时通知 renderer 跳转登录页
+    // 延迟 1s 发送，确保 renderer 已 mount 并注册了监听
+    setTimeout(() => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('auth:sessionExpired', { reason: msg });
+        logger.info('Notified renderer: session expired');
+      }
+    }, 1000);
   }
 }
 

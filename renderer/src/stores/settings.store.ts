@@ -1,7 +1,7 @@
 // 设置页当前激活分类状态
 import { create } from 'zustand';
 
-export type SettingsCategory = 'model_provider' | 'git_policy' | 'audit_log' | 'conversation';
+export type SettingsCategory = 'model_provider' | 'git_policy' | 'audit_log' | 'conversation' | 'account';
 
 interface SettingsState {
   activeCategory: SettingsCategory;

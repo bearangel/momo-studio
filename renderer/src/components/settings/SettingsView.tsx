@@ -9,6 +9,7 @@ import { GitPolicySettings } from './GitPolicySettings';
 import { AuditLog } from './AuditLog';
 import { ProviderSettings } from './ProviderSettings';
 import { ConversationSettings } from './ConversationSettings';
+import { AccountSettings } from './AccountSettings';
 
 export function SettingsView() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -30,6 +31,7 @@ export function SettingsView() {
         {active === 'conversation' && <ConversationSettings />}
         {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
         {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
+        {active === 'account' && <AccountSettings />}
       </div>
     </div>
   );

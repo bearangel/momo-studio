@@ -12,6 +12,13 @@ const api: ApiSurface = {
     login: (opts) => invoke('auth:login', opts),
     getCurrentUser: () => invoke('auth:getCurrentUser'),
     logout: () => invoke('auth:logout'),
+    onSessionExpired: (callback: (reason: string) => void) => {
+      const handler = (_evt: IpcRendererEvent, data: { reason: string }): void => callback(data.reason);
+      ipcRenderer.on('auth:sessionExpired', handler);
+      return () => {
+        ipcRenderer.off('auth:sessionExpired', handler);
+      };
+    },
   },
   system: {
     getInfo: () => invoke('system:getInfo'),

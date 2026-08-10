@@ -371,6 +371,8 @@ export interface ApiSurface {
     login(opts: { username: string; password: string }): Promise<AuthResult>;
     getCurrentUser(): Promise<AuthResult | null>;
     logout(): Promise<void>;
+    /** v1.5.7: token 失效时主进程通知 renderer 跳转登录页 */
+    onSessionExpired(callback: (reason: string) => void): () => void;
   };
   system: {
     getInfo(): Promise<SystemInfo>;
