@@ -191,13 +191,15 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
   stopAgent(instanceId);
   const row = getDb()
-    .prepare('SELECT bot_matrix_user_id, workspace_id, role FROM agent_assignments WHERE instance_id = ?')
+    .prepare('SELECT bot_matrix_user_id, workspace_id, role, parent_instance_id FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as
-    | { bot_matrix_user_id?: string; workspace_id?: string; role?: string }
+    | { bot_matrix_user_id?: string; workspace_id?: string; role?: string; parent_instance_id?: string }
     | undefined;
   if (!row) return;
   const botUserId = row.bot_matrix_user_id;
   const workspaceId = row.workspace_id;
+  // v1.5.8：删除前记下 parent_main_id（删完之后行就没了，无法再查）
+  const parentMainId = row.parent_instance_id;
 
   // v1.3 级联：main 被删时连带删除同 ws 内 parent_instance_id 指向它的 subs
   if (row.role === 'main' && workspaceId) {
@@ -229,6 +231,66 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
 
   getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
   logger.info('Agent 分配已删除', { instanceId, botUserId, workspaceId });
+
+  // v1.5.8：若删的是 sub，重启父 main agent 让其 subAgents 重建
+  // （否则 PM 内存里的 subAgents 残留已删 sub 的 botUserId，dispatch_to 永远不匹配）
+  // 级联删除场景：父 main 已 stop（isAgentRunning=false），重启会被静默跳过
+  if (row.role === 'sub' && workspaceId && parentMainId) {
+    await restartMainForSubChange(workspaceId, parentMainId);
+  }
+}
+
+/**
+ * v1.5.8：sub agent 变更（add/remove）后重启父 main agent，让它的 subAgents 配置
+ * 重建自当前 DB——否则 PM 内存里的 subAgents 会残留旧/缺新 sub 的 botUserId，
+ * dispatch event 的 dispatch_to 与新 sub 不匹配 → 子 agent 静默丢弃 → PM 等到超时。
+ *
+ * 静默跳过条件：
+ *   - main 当前未运行（DB 已更新，下次启动自然带上新 subAgents）
+ *   - main assignment 不存在（已被删）
+ *   - keychain 缺 token / apiKey
+ */
+async function restartMainForSubChange(
+  workspaceId: string,
+  mainInstanceId: string,
+): Promise<void> {
+  if (!isAgentRunning(mainInstanceId)) return;
+
+  const ws = getWorkspace(workspaceId);
+  if (!ws) return;
+
+  const assignment = listAssignments(workspaceId).find(
+    (a) => a.instanceId === mainInstanceId,
+  );
+  if (!assignment) return;
+
+  const def = getAgentDefinition(assignment.agentDefinitionId);
+  if (!def || !def.modelProviderId) return;
+
+  const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
+  const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
+  if (!token) return;
+
+  stopAgent(mainInstanceId);
+  spawnAgent(
+    buildSpawnOpts({
+      instanceId: assignment.instanceId,
+      botUserId: assignment.botMatrixUserId,
+      workspaceId,
+      workspaceDir: ws.directoryPath,
+      teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+      ownerUserId: ws.ownerId,
+      def,
+      botAccessToken: token,
+      role: assignment.role,
+      llmApiKey: apiKey,
+      isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
+    }),
+  );
+  logger.info('Main agent 因 sub 变更已重启（重建 subAgents）', {
+    mainInstanceId,
+    workspaceId,
+  });
 }
 
 /**
@@ -330,6 +392,12 @@ export function registerAgentHandlers(): void {
       logger.info('Agent 已添加到 workspace 并启动', {
         slug: def.slug, workspaceId, instanceId: assignment.instanceId, role,
       });
+
+      // v1.5.8：若新增的是 sub，重启父 main 让 subAgents 重建（含新 sub 的 botUserId）
+      if (role === 'sub' && parentInstanceId) {
+        await restartMainForSubChange(workspaceId, parentInstanceId);
+      }
+
       return assignment;
     },
   );
