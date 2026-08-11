@@ -101,6 +101,5 @@ LSP diagnostics（RegisterMcpDialog.tsx）：0 errors / 0 warnings。
 
 ## Commit
 
-`feat(agent): RegisterMcpDialog 表单式注册自定义 MCP server`
-**Commit**: `dbf31254efb9b08560b5a05fa636f77d17ec58e7`
+**Commit**: `bdfa9375ea3c0dc3888aefbf6dc927166be6a77f`
 
