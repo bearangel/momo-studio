@@ -2,6 +2,25 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.0] — 2026-08-11
+
+### 新增
+- **三层能力配置**：DefinitionEditor 加 Tab + 类别分组 checkbox，编辑 Layer 1 defaultTools / defaultMcps / defaultSkills
+- **Layer 3 per-assignment override**：AddToWorkspaceDialog + WorkspaceAgentsPanel「调整能力」按钮（AssignmentCapabilitiesDialog），对 builtin/自定义 agent 做 add+remove delta
+- **新建 custom agent 默认"安全最小集"**：read/write/list/edit/grep/glob/todowrite + dispatch-if-main（不再默认全放行）
+- **Marketplace 自定义 MCP 入口**：顶部「+ 添加 MCP」（RegisterMcpDialog 表单式注册 name/command/args/env，写入 mcp_definitions 标记 source='custom'）
+- **Marketplace 自定义 Skill 入口**：顶部「+ 上传 Skill」（UploadSkillDialog 本地 zip 包上传，解压校验 SKILL.md）
+- **自定义资源管理区**：MarketplaceView 底部列出已注册自定义 MCP / 已上传 Skill，可删除
+- **CapabilityConfig 增强**：builtin agent 显示「编辑 def」「调整实例能力」两个增强按钮入口
+
+### 修复
+- **关键 bug**：`buildSpawnOpts` 把 `mergeCapabilities` 的 `merged.tools` 注入 `RuntimeConfig.allowedTools`——之前完全丢弃导致 permission 层走空数组全放行，所有 agent 实际能用全部 24 个工具，能力白名单形同虚设
+
+### 改动
+- **Migration v16**：新增 `agent_assignment_capabilities` 表（Layer 3 deltas：add_tools/remove_tools/add_mcps/remove_mcps/add_skills/remove_skills）；`mcp_definitions` 加 `source`（builtin/custom/marketplace）+ `installed_at` 列
+- **builtin default_tools 修复**：Migration 同步 builtin YAML 到 DB（之前 DB 里 builtin def 的 default_tools 为空）；三个 builtin YAML defaultTools 扩展为 24 工具全集（保持 v1.5 行为，升级无感）
+- **mergeCapabilities 扩展**：支持 Layer 3 deltas 合并（builtin 全集 + add/remove delta 正确产出 tools/mcps/skills）
+
 ## [Unreleased] — v1.2
 
 ### v1.2.0 — 主/子 Agent 编排（M3）

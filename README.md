@@ -6,9 +6,9 @@
 
 ## 状态
 
-**v1.5 — Released**
+**v1.6 — Released**
 
-v1.5 内置工具库扩充——7 类 24 个工具对标 opencode，模块化工具架构（8 模块 + shared 三层）+ 集成测试。v1.4 流式回复 + 可配置工具调用上限 + 多 agent 委派嵌套展示仍可用，详见 `docs/specs/2026-08-03-v1.4-streaming-and-configurable-tool-limit-design.md`。
+v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`merged.tools` 丢失导致能力白名单形同虚设），新增三层能力配置 UI（DefinitionEditor 编辑 Layer 1 + AddToWorkspaceDialog/WorkspaceAgentsPanel 做 Layer 3 per-assignment override）+ Marketplace 自定义入口（MCP 表单注册 + Skill zip 上传）。v1.5 内置工具库（7 类 24 工具）仍可用，详见 `docs/specs/2026-08-11-v1.6-capability-config-design.md`。
 
 ## 特性
 
@@ -24,7 +24,7 @@ v1.5 内置工具库扩充——7 类 24 个工具对标 opencode，模块化工
 - v1.3：自定义 agent 可 workspace 隔离（默认私有，可选全局共享）
 - v1.3：UI 双 Tab（本工作空间 + Agent 库管理）
 - 内置 Anthropic / OpenAI 两个 LLM provider；v1.3 改为 provider 引用模式（baseUrl + keychain）
-- 工具系统：内置（bash / file_read / file_write / git）+ MCP 工具
+- 工具系统：v1.5 内置 7 类 24 个工具（文件/搜索/Shell/Git/Web/Todo/LSP）+ MCP 工具；v1.6 三层能力配置（Definition 默认集 + Assignment override + per-assignment delta）
 - 主子调度：父 agent 通过 `dispatch` 派发子任务，子任务通过 `task_reply` 回传结果
 - 完整运行历史与工具调用审计
 
@@ -368,6 +368,42 @@ v1.4 之前 agent 仅 3 个工具（read/write/list）。v1.5 系统性补全 7 
 - ✅ Electron 全套测试通过（108+ 新增单元测试 + 集成测试）
 - ✅ Typecheck 双 clean
 - ✅ 三阶段迁移（搬迁 → file-tools → 其他模块递增），每阶段独立可测
+
+### v1.6 — Agent 能力配置 + Marketplace 自定义上传 ✅ 已发布
+
+v1.5 把工具库扩到 24 个后暴露三处断裂：(1) 关键 bug——`buildSpawnOpts` 把 `mergeCapabilities` 的 `merged.tools` 字段完全丢弃，`RuntimeConfig.allowedTools` 永远 undefined，permission 层走空数组全放行，**所有 agent 实际能用全部 24 个工具**，能力白名单形同虚设；(2) `DefinitionEditor` 自定义 agent 表单完全没有 defaultTools/defaultMcps/defaultSkills 编辑入口；(3) Marketplace 只能浏览远程 catalog，没有自定义注册入口（后端 IPC 早已存在但 UI 没按钮调用）。v1.6 系统性补齐能力配置能力。
+
+**关键 Bug 修复**
+- ✅ `buildSpawnOpts` 把 `merged.tools` 注入 `RuntimeConfig.allowedTools`——之前完全丢弃导致 permission 全放行
+- ✅ 合并函数 `mergeCapabilities` 扩展 Layer 3（assignment deltas add+remove）正确产出 `tools`/`mcps`/`skills`
+
+**三层能力配置架构**
+- ✅ Layer 1（Definition）— `DefinitionEditor` 加 Tab + 类别分组 checkbox，编辑 defaultTools / defaultMcps / defaultSkills
+- ✅ Layer 2（Assignment）— builtin/自定义 agent 均可参与
+- ✅ Layer 3（Override）— `AddToWorkspaceDialog` 与 `WorkspaceAgentsPanel`「调整能力」按钮做 per-assignment add+remove delta（`AssignmentCapabilitiesDialog`）
+- ✅ 新建 custom agent 默认勾选"安全最小集"（read/write/list/edit/grep/glob/todowrite + dispatch-if-main）
+
+**Marketplace 自定义入口**
+- ✅ 顶部「+ 添加 MCP」——`RegisterMcpDialog` 表单式注册（name/command/args/env），写入 `mcp_definitions` 标记 `source='custom'`
+- ✅ 顶部「+ 上传 Skill」——`UploadSkillDialog` 本地 zip 包上传，解压校验 SKILL.md，写入 skills 目录
+- ✅ 底部自定义资源管理区——已注册自定义 MCP / 已上传 Skill 可删除
+
+**CapabilityConfig 增强（v1.5 兼容）**
+- ✅ builtin agent（不可编辑 Layer 1）显示「编辑 def」「调整实例能力」两个增强按钮入口
+- ✅ v1.5 升级路径——旧 builtin agent 行为不变（仍 24 工具全开，defaultTools 扩展为全集）
+
+**Migration v16**
+- ✅ 新增 `agent_assignment_capabilities` 表（Layer 3 deltas：add_tools/remove_tools/add_mcps/remove_mcps/add_skills/remove_skills）
+- ✅ `mcp_definitions` 加 `source`（builtin/custom/marketplace）+ `installed_at` 列
+- ✅ 三个 builtin YAML `defaultTools` 扩展为 24 工具全集（保持 v1.5 行为）
+- ✅ builtin default_tools 修复——Migration 同步 builtin YAML 到 DB（之前 DB 里 builtin def 的 default_tools 为空）
+
+**测试覆盖**
+- ✅ Electron 534/534 passed（81 test files）；Renderer 341/341 passed（35 test files）；Typecheck 双 clean
+- ✅ Migration v16 测试 + assignment-capabilities CRUD（含 add/remove delta 边界）
+- ✅ mergeCapabilities Layer 3 合并测试（含 builtin 全集 + delta 叠加）
+- ✅ buildSpawnOpts 注入 allowedTools 回归测试（防止 bug 复发）
+- ✅ DefinitionEditor / AddToWorkspaceDialog / AssignmentCapabilitiesDialog / RegisterMcpDialog / UploadSkillDialog / CapabilityConfig 组件测试
 
 从"单机工具"进化为"团队平台"。
 
