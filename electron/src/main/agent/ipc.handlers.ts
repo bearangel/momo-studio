@@ -44,6 +44,11 @@ import { getSyncingClient } from '../matrix/sync-manager';
 import { createMatrixClient } from '../matrix/client';
 import { buildSpawnOpts, HOMESERVER_URL, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
+import {
+  getAssignmentDeltas,
+  setAssignmentDeltas,
+  type AssignmentDeltas,
+} from './assignment-capabilities';
 import type { AgentAssignment, AgentDefinition, AgentRole } from './types';
 import { randomUUID } from 'node:crypto';
 
@@ -585,6 +590,19 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:getBuiltinSuggestions', async () => {
     return getBuiltinSuggestionsMap();
   });
+
+  // v1.6：读取某 assignment 的能力 delta（Layer 3）。无 delta 时返回全空对象。
+  ipcMain.handle('agent:getAssignmentDeltas', async (_evt, instanceId: string) => {
+    return getAssignmentDeltas(instanceId);
+  });
+
+  // v1.6：全量替换某 assignment 的能力 delta（幂等；事务内 DELETE + INSERT）。
+  ipcMain.handle(
+    'agent:setAssignmentDeltas',
+    async (_evt, instanceId: string, deltas: AssignmentDeltas) => {
+      setAssignmentDeltas(instanceId, deltas);
+    },
+  );
 
   // 重启 agent：从 keychain 恢复 token + 解析 apiKey，spawn runtime
   ipcMain.handle(

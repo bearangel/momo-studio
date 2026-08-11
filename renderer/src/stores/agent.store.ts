@@ -11,6 +11,7 @@ import type {
   AgentDefinition,
   AgentAssignment,
   AgentRole,
+  AssignmentDeltas,
   BuiltinSuggestionMap,
 } from '../ipc/types';
 
@@ -46,6 +47,10 @@ interface AgentState {
     parentInstanceId?: string,
   ) => Promise<void>;
   updateAssignmentApiKey: (instanceId: string, apiKey: string | null) => Promise<void>;
+  /** v1.6：读取某 assignment 的能力 delta（Layer 3） */
+  getAssignmentDeltas: (instanceId: string) => Promise<AssignmentDeltas>;
+  /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
+  setAssignmentDeltas: (instanceId: string, deltas: AssignmentDeltas) => Promise<void>;
   stopAgent: (instanceId: string) => Promise<void>;
   startAgent: (
     assignment: AgentAssignment,
@@ -175,6 +180,26 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       await ipc.agent.updateAssignmentApiKey(instanceId, apiKey);
       const wsId = get().assignments.find((a) => a.instanceId === instanceId)?.workspaceId;
       if (wsId) await get().loadAssignments(wsId);
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  getAssignmentDeltas: async (instanceId) => {
+    set({ error: null });
+    try {
+      return await ipc.agent.getAssignmentDeltas(instanceId);
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  setAssignmentDeltas: async (instanceId, deltas) => {
+    set({ error: null });
+    try {
+      await ipc.agent.setAssignmentDeltas(instanceId, deltas);
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;

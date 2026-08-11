@@ -172,6 +172,20 @@ export interface WorkspaceAllocation {
   skills: string[];
 }
 
+/**
+ * Per-assignment 能力 delta（Layer 3），与 electron 端 assignment-capabilities.ts 的
+ * AssignmentDeltas 对齐。renderer 端独立定义（跨 workspace 不共享类型，仅结构对齐）。
+ * 由 Task 9 的 DefinitionEditor / Task 11 的 AddToWorkspaceDialog 消费。
+ */
+export interface AssignmentDeltas {
+  addedTools: string[];
+  removedTools: string[];
+  addedMcps: string[];
+  removedMcps: string[];
+  addedSkills: string[];
+  removedSkills: string[];
+}
+
 /** 一条可识别的 commit message 模式，与 electron 端 CommitPattern 对齐 */
 export interface CommitPattern {
   code: string;
@@ -455,6 +469,10 @@ export interface ApiSurface {
     deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }>;
     /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填） */
     getBuiltinSuggestions(): Promise<BuiltinSuggestionMap>;
+    /** v1.6：读取某 assignment 的能力 delta（Layer 3，全空对象 = 无 delta） */
+    getAssignmentDeltas(instanceId: string): Promise<AssignmentDeltas>;
+    /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
+    setAssignmentDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
     onRuntimeChanged(callback: () => void): () => void;
     /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
     onStream(callback: (chunk: StreamChunk) => void): () => void;
