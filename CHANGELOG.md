@@ -2,6 +2,11 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.3] — 2026-08-11
+
+### 修复
+- **关键 bug**：UploadSkillDialog 上传 zip 永远报"未找到 SKILL.md"——根因是 Electron IPC buffer 传输损坏。renderer 经 preload 用 `Buffer.from(arrayBuffer)` 创建的 Node Buffer 跨 contextBridge 经 `ipcRenderer.invoke` structured clone 时，底层 ArrayBuffer view 关联断裂，main process 收到的是损坏数据。修复：preload 改用标准 `Uint8Array` view（structured clone 标准类型），main process IPC handler 加 `Buffer.isBuffer` 守卫自己转回 Buffer。
+
 ## [1.6.2] — 2026-08-11
 
 ### 新增

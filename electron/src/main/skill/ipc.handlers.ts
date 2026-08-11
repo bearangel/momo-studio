@@ -19,10 +19,13 @@ export function registerSkillHandlers(): void {
     return listInstalled();
   });
 
-  // 上传自定义 skill zip。buffer 由 renderer 从 File.arrayBuffer() 转来。
+  // 上传自定义 skill zip。
+  // v1.6.3: renderer 经 preload 用 Uint8Array 传输（preload 不用 Buffer.from——
+  // contextBridge 里 Node Buffer 跨 IPC structured clone 会损坏）；main 收到后转回 Buffer。
   ipcMain.handle(
     'skill:uploadZip',
-    async (_evt, buffer: Buffer, filename: string) => {
+    async (_evt, data: Uint8Array | Buffer, filename: string) => {
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       return uploadSkillZip(buffer, filename);
     },
   );

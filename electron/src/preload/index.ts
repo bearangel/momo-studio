@@ -154,7 +154,10 @@ const api: ApiSurface = {
     listInstalled: () => invoke<InstalledSkill[]>('skill:listInstalled'),
     // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
     uploadZip: (buffer: ArrayBuffer, filename: string) =>
-      invoke<UploadedSkill[]>('skill:uploadZip', Buffer.from(buffer), filename),
+      // v1.6.3: 不能用 Buffer.from(buffer)——contextBridge 里 Node Buffer 跨 IPC
+      // structured clone 时底层 ArrayBuffer view 关联会断，main 收到的是损坏数据。
+      // 用标准 Uint8Array view 让 structured clone 正确拷贝，main process 自己转回 Buffer。
+      invoke<UploadedSkill[]>('skill:uploadZip', new Uint8Array(buffer), filename),
     // v1.6：删除自定义上传的 skill（builtin/marketplace 抛错）
     deleteCustom: (slug: string) => invoke('skill:deleteCustom', slug),
   },
