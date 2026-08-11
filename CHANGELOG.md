@@ -2,6 +2,25 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.2] — 2026-08-11
+
+### 新增
+- **zip-uploader 支持三种 zip 结构**：
+  - 模式 A（扁平）——`SKILL.md` 在根目录，slug 取 frontmatter.name 转 kebab-case，否则 zip filename 去 `.zip`。修复 macOS 用户 Finder 压缩的 xlsx.zip 场景（之前报"SKILL.md 未找到"）
+  - 模式 B（单子目录包裹）——`<slug>/SKILL.md`（向后兼容，slug = 子目录名）
+  - 模式 C（多子目录批量）——一个 zip 含多个 `<slug>/SKILL.md`，每个独立安装为一个 skill
+- **自动忽略 OS 元数据**：`__MACOSX/` 整目录、`.DS_Store`、`._*`（macOS AppleDouble 资源叉）、`Thumbs.db`、`*.bak`——解压时跳过，不写进 skill 目录
+- **批量安装幂等**：模式 C 下每个 skill 独立判断 SHA256（同 hash 跳过，不同 hash 覆盖），返回数组记录全部处理结果
+
+### 改动（Breaking Change）
+- **IPC 返回类型 `skill:uploadZip`**：`{ slug, description }` → `UploadedSkill[]`（即使只装 1 个 skill 也返回长度 1 的数组）。协调点：`zip-uploader.ts` / `ipc.handlers.ts` / `preload/index.ts` / `types.d.ts` / `UploadSkillDialog.tsx` 全部对齐
+- `filename` 参数现在被使用（之前 `_filename`）：扁平结构时作为 slug 来源
+- `UploadSkillDialog` 成功提示：1 个 skill 显示"已安装：slug（desc）"，多个显示"已安装 N 个 skill：a, b, c"
+
+### 修复
+- **Fix #1**：macOS 用户 Finder 压缩 zip 含 `__MACOSX/` 元数据导致"SKILL.md 未找到"——扁平结构现在合法支持 + 元数据自动忽略
+- **Fix #2**：扁平结构（SKILL.md 在根目录）之前合法但 slug 退化为 `'unnamed'`，现在 frontmatter.name > filename 优先级正确
+
 ## [1.6.1] — 2026-08-11
 
 ### 修复

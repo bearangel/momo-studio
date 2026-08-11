@@ -6,11 +6,13 @@
 
 ## 状态
 
-**v1.6.1 — Released**
+**v1.6.2 — Released**
 
 v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`merged.tools` 丢失导致能力白名单形同虚设），新增三层能力配置 UI（DefinitionEditor 编辑 Layer 1 + AddToWorkspaceDialog/WorkspaceAgentsPanel 做 Layer 3 per-assignment override）+ Marketplace 自定义入口（MCP 表单注册 + Skill zip 上传）。v1.5 内置工具库（7 类 24 工具）仍可用，详见 `docs/specs/2026-08-11-v1.6-capability-config-design.md`。
 
-**v1.6.1** 修复三处 v1.6 review 发现的问题：AddToWorkspaceDialog Layer 3 deltas 首次 spawn 不生效（落库后未重启）；marketplace 安装 builtin agent 时 `defaultTools` 为空（改为写入 24 工具全集，与 Migration v16 builtin YAML 同步）；`DefinitionEditor` 与 `capability-helpers` 的 `defToCapabilities` 重复定义合并。详见 `CHANGELOG.md`。
+**v1.6.1** 修复三处 v1.6 review 发现的问题：AddToWorkspaceDialog Layer 3 deltas 首次 spawn 不生效（落库后未重启）；marketplace 安装 builtin agent 时 `defaultTools` 为空（改为写入 24 工具全集，与 Migration v16 builtin YAML 同步）；`DefinitionEditor` 与 `capability-helpers` 的 `defToCapabilities` 重复定义合并。
+
+**v1.6.2** 扩展 zip-uploader 支持三种 zip 结构 + 一个 zip 多 skill 批量安装 + 自动忽略 macOS/Windows 元数据：模式 A（扁平，`SKILL.md` 在根目录，slug 取 frontmatter.name 或 zip filename）修复 macOS 用户 Finder 压缩的 xlsx.zip 场景；模式 B（单子目录包裹）保持向后兼容；模式 C（多子目录批量）支持一个 zip 安装多个 skill。IPC 返回类型 breaking change：`{ slug, description }` → `UploadedSkill[]`。详见 `CHANGELOG.md`。
 
 ## 特性
 
@@ -389,6 +391,12 @@ v1.5 把工具库扩到 24 个后暴露三处断裂：(1) 关键 bug——`build
 - ✅ 顶部「+ 添加 MCP」——`RegisterMcpDialog` 表单式注册（name/command/args/env），写入 `mcp_definitions` 标记 `source='custom'`
 - ✅ 顶部「+ 上传 Skill」——`UploadSkillDialog` 本地 zip 包上传，解压校验 SKILL.md，写入 skills 目录
 - ✅ 底部自定义资源管理区——已注册自定义 MCP / 已上传 Skill 可删除
+
+**v1.6.2 zip-uploader 扩展**
+- ✅ 三种 zip 结构：扁平（`SKILL.md` 在根目录）/ 单子目录包裹 / 多子目录批量（一个 zip 装多个 skill）
+- ✅ 自动忽略 macOS/Windows 元数据（`__MACOSX/`、`.DS_Store`、`._*`、`Thumbs.db`、`*.bak`）
+- ✅ slug 决策优先级：frontmatter.name > zip filename（扁平）/ 子目录名（包裹）
+- ⚠️ Breaking change：IPC `skill:uploadZip` 返回类型从 `{ slug, description }` 改为 `UploadedSkill[]`
 
 **CapabilityConfig 增强（v1.5 兼容）**
 - ✅ builtin agent（不可编辑 Layer 1）显示「编辑 def」「调整实例能力」两个增强按钮入口

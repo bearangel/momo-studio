@@ -69,9 +69,15 @@ export function UploadSkillDialog({ onClose, onSuccess }: Props) {
     try {
       // readFileAsArrayBuffer 拿到 ArrayBuffer；preload 层 Buffer.from(buffer) 转 Node Buffer，
       // 再经 ipcRenderer.invoke 序列化传给主进程 skill:uploadZip handler。
+      // v1.6.2 起后端返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量三种 zip 结构）。
       const buffer = await readFileAsArrayBuffer(file);
-      const result = await ipc.skill.uploadZip(buffer, file.name);
-      setSuccessMsg(`已安装：${result.slug}（${result.description}）`);
+      const skills = await ipc.skill.uploadZip(buffer, file.name);
+      // 成功提示：1 个显示 skill 名 + 描述；多个显示数量 + slug 列表
+      const msg =
+        skills.length === 1
+          ? `已安装：${skills[0]!.slug}（${skills[0]!.description}）`
+          : `已安装 ${skills.length} 个 skill：${skills.map((s) => s.slug).join(', ')}`;
+      setSuccessMsg(msg);
       onSuccess();
       onClose();
     } catch (err) {
@@ -122,8 +128,10 @@ export function UploadSkillDialog({ onClose, onSuccess }: Props) {
               disabled={lockAll}
             />
             <p className="text-xs text-neutral-500 mt-1">
-              zip 内需包含 <code>{'<slug>/SKILL.md'}</code> 结构，SKILL.md 顶部要有
-              YAML frontmatter（含 name / description）。
+              支持三种 zip 结构：扁平（<code>SKILL.md</code> 在根目录）、
+              单子目录包裹（<code>{'<slug>/SKILL.md'}</code>）、多子目录批量（多个
+              <code>{'<slug>/'}</code>）。SKILL.md 顶部要有 YAML frontmatter（含
+              name / description）。macOS 的 <code>__MACOSX</code> 元数据会自动忽略。
             </p>
           </div>
 

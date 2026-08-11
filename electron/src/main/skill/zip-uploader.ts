@@ -2,12 +2,19 @@
 //
 // 自定义 Skill zip 上传：解压 + SHA256 校验 + 注册到 <userData>/skills/<slug>/。
 //
-// zip 结构要求：`<slug>/SKILL.md` + 可选 `<slug>/resources/*`。
+// v1.6.2 起支持三种 zip 结构：
+//   - 模式 A（扁平）：SKILL.md 在根目录，slug 取 frontmatter.name 或 zip filename
+//   - 模式 B（单子目录包裹）：<slug>/SKILL.md，slug = 子目录名（向后兼容）
+//   - 模式 C（多子目录批量）：一个 zip 含多个 <slug>/SKILL.md，每个独立安装
+//
+// 校验规则：
 //   - 缺 SKILL.md → 抛错
-//   - 多个 SKILL.md（多个一级子目录）→ 抛错
-//   - 同 slug 同 SHA256 → 幂等返回（不重写）
+//   - SKILL.md 路径深度 > 2 段（如 a/b/SKILL.md）→ 抛错
+//   - 自动忽略 OS 元数据：__MACOSX/、.DS_Store、._*、Thumbs.db、*.bak
+//   - 同 slug 同 SHA256 → 幂等跳过（不重写）
 //   - 同 slug 不同 SHA256 → 备份旧目录后覆盖
-//   - 所有 entry 做路径防御（含 `..` 的跳过）
+//   - 每个 skill 独立判断幂等（批量场景部分跳过部分覆盖）
+//   - 所有 entry 做三层路径防御（entryName 含 `..` / rel 含 `..` / resolved 沙箱）
 //
 // .sha256 标记文件写在 <targetDir>/.sha256——这是区分 custom（用户上传）vs
 // marketplace（市场安装写 skill_definitions 表，cache_path 在别处）的关键：
@@ -31,6 +38,17 @@ export interface InstalledSkill {
   source: 'builtin' | 'marketplace' | 'custom';
   /** 安装时间 ISO 字符串；builtin 为 null */
   installedAt: string | null;
+}
+
+/**
+ * v1.6.2：单次 zip 上传的返回结构（uploadSkillZip 返回数组，即使只装一个 skill）。
+ * 与 InstalledSkill 的区别：不含 source / installedAt（这两个由 listInstalled 二次解析）。
+ */
+export interface UploadedSkill {
+  slug: string;
+  /** 展示名（来自 frontmatter.name，无则用 slug 兜底） */
+  name: string;
+  description: string;
 }
 
 /** 自定义 skill zip 存放目录（<userData>/skills/）。内部统一走此函数。 */
@@ -61,6 +79,35 @@ function parseFrontmatter(md: string): SkillFrontmatter {
 }
 
 /**
+ * v1.6.2：判断某 entry 是否为 OS 元数据（解压时跳过）。
+ * macOS Finder 压缩会注入 __MACOSX/ + ._* AppleDouble；Windows 资源管理器注入 Thumbs.db。
+ * 用户上传场景必须忽略这些，否则会把垃圾文件写进 skill 目录。
+ */
+function isIgnoredEntry(entryName: string): boolean {
+  const norm = entryName.replace(/\\/g, '/');
+  if (norm.startsWith('__MACOSX/')) return true;
+  // 逐段检查：.DS_Store / Thumbs.db / ._ 开头（AppleDouble 资源叉）/ .bak 后缀
+  for (const seg of norm.split('/')) {
+    if (seg === '.DS_Store' || seg === 'Thumbs.db') return true;
+    if (seg.startsWith('._')) return true;
+    if (seg.endsWith('.bak')) return true;
+  }
+  return false;
+}
+
+/**
+ * v1.6.2：frontmatter.name → slug（kebab-case）。扁平结构（SKILL.md 在根目录）时使用。
+ * 例："My Cool Skill" → "my-cool-skill"。空串则由调用方 fallback 到 zip filename。
+ */
+function nameToSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+/**
  * 解析内置 skill 目录（dev: <repo>/electron/resources/skills/，packaged: resourcesPath/skills）。
  * 与 agent/builtin.ts 的 resolveBuiltinAgentsDir 同款模式。目录不存在时 listInstalled 返回空。
  */
@@ -73,100 +120,132 @@ function resolveBuiltinSkillsDir(): string {
 
 /**
  * 上传 zip → 解压到 <skillsDir>/<slug>/ + 写 .sha256 标记。
- * 返回 slug + description（从 frontmatter 解析）。
+ *
+ * v1.6.2 支持三种结构（详见文件头注释）。返回 UploadedSkill[]——即使只装一个 skill
+ * 也返回长度为 1 的数组（IPC 返回类型 breaking change，调用方需协调）。
+ *
+ * 每个 skill 独立做 SHA256 幂等判断：同 hash 跳过，不同 hash 覆盖。
+ * 因此批量场景（模式 C）下部分 skill 可能跳过、部分覆盖，结果数组记录全部处理结果。
  */
-export function uploadSkillZip(
-  buffer: Buffer,
-  _filename: string,
-): { slug: string; description: string } {
+export function uploadSkillZip(buffer: Buffer, filename: string): UploadedSkill[] {
   const zip = new AdmZip(buffer);
-  const entries = zip.getEntries();
+  const allEntries = zip.getEntries();
 
-  // 找全部 SKILL.md（路径形如 <slug>/SKILL.md 或 SKILL.md）
-  const skillEntries = entries.filter(
+  // 找全部 SKILL.md entry（过滤掉 OS 元数据后）
+  const skillEntries = allEntries.filter(
     (e) =>
-      !e.isDirectory && (e.entryName.endsWith('/SKILL.md') || e.entryName === 'SKILL.md'),
+      !e.isDirectory &&
+      !isIgnoredEntry(e.entryName) &&
+      (e.entryName === 'SKILL.md' || e.entryName.endsWith('/SKILL.md')),
   );
   if (skillEntries.length === 0) {
-    throw new Error('zip 内未找到 SKILL.md（要求 <slug>/SKILL.md 结构）');
-  }
-  if (skillEntries.length > 1) {
-    // 多个 SKILL.md = 多个一级子目录（如 a/SKILL.md + b/SKILL.md）
-    throw new Error('zip 根目录包含多个子目录（应有且仅有一个 <slug>/ 包裹 SKILL.md）');
+    throw new Error('zip 内未找到 SKILL.md（要求 SKILL.md 在根目录或 <slug>/SKILL.md 结构）');
   }
 
-  const skillEntry = skillEntries[0];
-  if (!skillEntry) {
-    throw new Error('zip 内未找到 SKILL.md（解析异常）');
-  }
-
-  // 校验 SKILL.md 路径深度：<slug>/SKILL.md（2 段）或 SKILL.md（1 段）
-  const parts = skillEntry.entryName.split('/');
-  if (parts.length > 2) {
-    throw new Error(`SKILL.md 路径过深：${skillEntry.entryName}（要求 <slug>/SKILL.md）`);
-  }
-  // parts[0] 在 noUncheckedIndexedAccess 下为 string | undefined，显式判空
-  const slug = parts.length === 2 && parts[0] ? parts[0] : 'unnamed';
-  if (slug.includes('..') || slug.includes('/') || slug.includes('\\')) {
-    throw new Error(`非法 slug：${slug}`);
-  }
-
-  // 解析 frontmatter 取 description
-  const md = skillEntry.getData().toString('utf-8');
-  const front = parseFrontmatter(md);
-  const description = front.description ?? '';
-
-  // SHA256 幂等检查（对 buffer 整体取 hash）
+  // 整个 zip 的 SHA256——批量场景下所有 skill 共享同一 hash（因为是同一个 zip）
   const hash = crypto.createHash('sha256').update(buffer).digest('hex');
   const skillsDir = getSkillsDir();
-  const targetDir = path.join(skillsDir, slug);
-  const hashFile = path.join(targetDir, '.sha256');
+  const results: UploadedSkill[] = [];
 
-  if (fs.existsSync(hashFile)) {
-    const existingHash = fs.readFileSync(hashFile, 'utf-8').trim();
-    if (existingHash === hash) {
-      logger.info('Skill zip 同 hash 幂等返回', { slug, hash });
-      return { slug, description };
-    }
-  }
-
-  // 覆盖：备份旧目录并立即清理（同 slug 不同 hash）
-  if (fs.existsSync(targetDir)) {
-    const bak = `${targetDir}.bak.${Date.now()}`;
-    fs.renameSync(targetDir, bak);
-    fs.rmSync(bak, { recursive: true, force: true });
-  }
-
-  // 解压到目标目录——对每个 entry 做路径防御
-  fs.mkdirSync(targetDir, { recursive: true });
-  const resolvedTarget = path.resolve(targetDir);
-  for (const entry of entries) {
-    if (entry.isDirectory) continue;
-    // 路径防御 1：原始 entryName 含 `..` 一律跳过
-    if (entry.entryName.includes('..')) continue;
-
-    // 剥离 <slug>/ 前缀得到相对路径
-    const rel = entry.entryName.startsWith(`${slug}/`)
-      ? entry.entryName.slice(slug.length + 1)
-      : entry.entryName;
-    // 路径防御 2：相对路径为空或含 `..` 一律跳过
-    if (!rel || rel.includes('..')) continue;
-
-    const dest = path.join(targetDir, rel);
-    // 路径防御 3：解析后必须在 targetDir 内（防符号链接 / 绝对路径穿越）
-    const resolvedDest = path.resolve(dest);
-    if (resolvedDest !== resolvedTarget && !resolvedDest.startsWith(resolvedTarget + path.sep)) {
-      continue;
+  for (const skillEntry of skillEntries) {
+    // 校验 SKILL.md 路径深度：≤ 2 段（SKILL.md 或 <slug>/SKILL.md）
+    const parts = skillEntry.entryName.split('/');
+    if (parts.length > 2) {
+      throw new Error(
+        `SKILL.md 路径过深：${skillEntry.entryName}（要求 SKILL.md 或 <slug>/SKILL.md）`,
+      );
     }
 
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, entry.getData());
+    // 解析 frontmatter 取 name + description
+    const md = skillEntry.getData().toString('utf-8');
+    const front = parseFrontmatter(md);
+    const name = front.name ?? '';
+    const description = front.description ?? '';
+
+    // 推断 slug：
+    //   - <subdir>/SKILL.md → slug = 子目录名（frontmatter.name 不覆盖，模式 B/C）
+    //   - SKILL.md（根目录）→ slug = frontmatter.name 转 kebab → 否则 filename 去 .zip（模式 A）
+    let slug: string;
+    if (parts.length === 2 && parts[0]) {
+      slug = parts[0];
+    } else {
+      const fromName = nameToSlug(name);
+      slug = fromName || filename.replace(/\.zip$/i, '');
+    }
+
+    // slug 合法性：空串 / 含 `..` / 含路径分隔符 → 抛错（路径防御前置）
+    if (!slug || slug.includes('..') || slug.includes('/') || slug.includes('\\')) {
+      throw new Error(`非法 slug：${slug || '(空)'}`);
+    }
+
+    const targetDir = path.join(skillsDir, slug);
+    const hashFile = path.join(targetDir, '.sha256');
+
+    // SHA256 幂等检查：同 hash 跳过（每个 skill 独立判断）
+    let skipped = false;
+    if (fs.existsSync(hashFile)) {
+      const existingHash = fs.readFileSync(hashFile, 'utf-8').trim();
+      if (existingHash === hash) {
+        logger.info('Skill zip 同 hash 幂等跳过', { slug, hash });
+        skipped = true;
+      }
+    }
+
+    if (!skipped) {
+      // 覆盖：备份旧目录并立即清理（同 slug 不同 hash）
+      if (fs.existsSync(targetDir)) {
+        const bak = `${targetDir}.bak.${Date.now()}`;
+        fs.renameSync(targetDir, bak);
+        fs.rmSync(bak, { recursive: true, force: true });
+      }
+
+      // 解压到目标目录——对每个 entry 做三层路径防御
+      fs.mkdirSync(targetDir, { recursive: true });
+      const resolvedTarget = path.resolve(targetDir);
+      // 扁平结构（SKILL.md 在根目录）→ 收集全部非元数据 entry；
+      // 包裹结构 → 仅收集 <slug>/ 前缀下的 entry
+      const isFlat = parts.length === 1;
+
+      for (const entry of allEntries) {
+        if (entry.isDirectory) continue;
+        // OS 元数据忽略（__MACOSX / .DS_Store / Thumbs.db / ._ / *.bak）
+        if (isIgnoredEntry(entry.entryName)) continue;
+        // 路径防御 1：原始 entryName 含 `..` 一律跳过
+        if (entry.entryName.includes('..')) continue;
+
+        let rel: string;
+        if (isFlat) {
+          rel = entry.entryName;
+        } else {
+          if (!entry.entryName.startsWith(`${slug}/`)) continue;
+          rel = entry.entryName.slice(slug.length + 1);
+        }
+        // 路径防御 2：相对路径为空或含 `..` 一律跳过
+        if (!rel || rel.includes('..')) continue;
+
+        const dest = path.join(targetDir, rel);
+        // 路径防御 3：解析后必须在 targetDir 内（防符号链接 / 绝对路径穿越）
+        const resolvedDest = path.resolve(dest);
+        if (
+          resolvedDest !== resolvedTarget &&
+          !resolvedDest.startsWith(resolvedTarget + path.sep)
+        ) {
+          continue;
+        }
+
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+      }
+
+      // 写 hash 标记文件——区分 custom（有此文件）vs marketplace（无此文件）的关键
+      fs.writeFileSync(hashFile, hash);
+      logger.info('Skill zip 上传成功', { slug, hash });
+    }
+
+    results.push({ slug, name: name || slug, description });
   }
 
-  // 写 hash 标记文件——区分 custom（有此文件）vs marketplace（无此文件）的关键
-  fs.writeFileSync(hashFile, hash);
-  logger.info('Skill zip 上传成功', { slug, hash });
-  return { slug, description };
+  return results;
 }
 
 /**

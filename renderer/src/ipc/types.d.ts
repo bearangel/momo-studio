@@ -331,6 +331,17 @@ export interface InstalledSkill {
 }
 
 /**
+ * v1.6.2：单次 zip 上传返回结构（skill:uploadZip 返回数组，即使只装一个 skill）。
+ * 与 InstalledSkill 的区别：不含 source / installedAt（这两个由 listInstalled 二次解析）。
+ */
+export interface UploadedSkill {
+  slug: string;
+  /** 展示名（来自 frontmatter.name，无则用 slug 兜底） */
+  name: string;
+  description: string;
+}
+
+/**
  * v1.5 TodoTools 任务项。与 electron 端 tools/todo-types.ts 的 TodoItem 对齐。
  * 因 renderer 无法直接 import electron 源码，这里维持一份等价的本地定义。
  */
@@ -628,8 +639,11 @@ export interface ApiSurface {
   skill: {
     /** v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类） */
     listInstalled(): Promise<InstalledSkill[]>;
-    /** v1.6：上传自定义 skill zip（解压到 <userData>/skills/<slug>/） */
-    uploadZip(buffer: ArrayBuffer, filename: string): Promise<{ slug: string; description: string }>;
+    /**
+     * v1.6：上传自定义 skill zip（解压到 <userData>/skills/<slug>/）。
+     * v1.6.2 起返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量三种 zip 结构）。
+     */
+    uploadZip(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
     /** v1.6：删除自定义上传的 skill（builtin/marketplace 抛错） */
     deleteCustom(slug: string): Promise<void>;
   };

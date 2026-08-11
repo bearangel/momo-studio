@@ -1,6 +1,6 @@
 // electron/src/preload/index.ts
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { ApiSurface, AssignmentDeltas, ImMessage, InstalledSkill, StreamChunk } from '../../../renderer/src/ipc/types';
+import type { ApiSurface, AssignmentDeltas, ImMessage, InstalledSkill, StreamChunk, UploadedSkill } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
@@ -152,9 +152,9 @@ const api: ApiSurface = {
   skill: {
     // v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类）
     listInstalled: () => invoke<InstalledSkill[]>('skill:listInstalled'),
-    // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）
+    // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
     uploadZip: (buffer: ArrayBuffer, filename: string) =>
-      invoke<{ slug: string; description: string }>('skill:uploadZip', Buffer.from(buffer), filename),
+      invoke<UploadedSkill[]>('skill:uploadZip', Buffer.from(buffer), filename),
     // v1.6：删除自定义上传的 skill（builtin/marketplace 抛错）
     deleteCustom: (slug: string) => invoke('skill:deleteCustom', slug),
   },

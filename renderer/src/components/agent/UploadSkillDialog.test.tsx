@@ -1,14 +1,16 @@
 // renderer/src/components/agent/UploadSkillDialog.test.tsx
 //
-// v1.6 Task 14：UploadSkillDialog 测试——本地 zip 上传自定义 skill。
+// v1.6.2：UploadSkillDialog 测试——本地 zip 上传自定义 skill。
+// v1.6.2 起 ipc.skill.uploadZip 返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量）。
 //
 // 行为约定：
 //   - 渲染：标题 + [选择文件...] 按钮 + 取消 / 上传 按钮
 //   - 初始状态：未选文件 → 「上传」按钮 disabled
 //   - 选择 zip 文件 → 文件名回显
 //   - 点击「上传」→ 读 ArrayBuffer → ipc.skill.uploadZip(buffer, filename)
-//   - 成功 → onSuccess() + onClose()
-//   - 失败（zip 缺 SKILL.md / 多根目录 / 解压失败）→ 红字错误，弹窗保持打开
+//   - 成功（1 个 skill）→ 显示 "已安装：slug（desc）" + onSuccess() + onClose()
+//   - 成功（N 个 skill）→ 显示 "已安装 N 个 skill：a, b, c"
+//   - 失败（缺 SKILL.md / 路径过深 / 解压失败）→ 红字错误，弹窗保持打开
 //   - 上传中 → 按钮 disabled（防双击）
 //
 // Mock 策略：window.api.skill.uploadZip 桩 + File 构造模拟用户选文件。
@@ -24,7 +26,7 @@ const mockApi = {
 
 beforeEach(() => {
   uploadZip.mockReset();
-  uploadZip.mockResolvedValue({ slug: 'demo-skill', description: '示例 skill' });
+  uploadZip.mockResolvedValue([{ slug: 'demo-skill', name: 'Demo', description: '示例 skill' }]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -78,7 +80,7 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     expect(view[0]).toBe(0x50);
   });
 
-  it('上传成功 → 触发 onSuccess + onClose', async () => {
+  it('上传成功（1 个 skill）→ 触发 onSuccess + onClose', async () => {
     const onClose = vi.fn();
     const onSuccess = vi.fn();
     render(<UploadSkillDialog onClose={onClose} onSuccess={onSuccess} />);
@@ -92,8 +94,10 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('上传成功 → 显示成功提示（含 slug）', async () => {
-    uploadZip.mockResolvedValue({ slug: 'demo-skill', description: '示例 skill' });
+  it('上传成功（1 个 skill）→ 显示成功提示（含 slug + 描述）', async () => {
+    uploadZip.mockResolvedValue([
+      { slug: 'demo-skill', name: 'Demo', description: '示例 skill' },
+    ]);
     render(<UploadSkillDialog onClose={() => {}} onSuccess={() => {}} />);
     pickZip(new File([new Uint8Array([0])], 'ok.zip', { type: 'application/zip' }));
 
@@ -102,10 +106,30 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     await waitFor(() => {
       expect(screen.getByText(/demo-skill/)).toBeInTheDocument();
     });
+    expect(screen.getByText(/示例 skill/)).toBeInTheDocument();
+  });
+
+  it('上传成功（多个 skill 批量）→ 显示 "已安装 N 个 skill：a, b"', async () => {
+    uploadZip.mockResolvedValue([
+      { slug: 'skill-a', name: 'A', description: 'a' },
+      { slug: 'skill-b', name: 'B', description: 'b' },
+    ]);
+    render(<UploadSkillDialog onClose={() => {}} onSuccess={() => {}} />);
+    pickZip(new File([new Uint8Array([0])], 'batch.zip', { type: 'application/zip' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '上传' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/已安装 2 个 skill/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/skill-a/)).toBeInTheDocument();
+    expect(screen.getByText(/skill-b/)).toBeInTheDocument();
   });
 
   it('失败（zip 缺 SKILL.md）→ 红字错误，弹窗保持打开，onSuccess 不触发', async () => {
-    uploadZip.mockRejectedValueOnce(new Error('zip 内未找到 SKILL.md（要求 <slug>/SKILL.md 结构）'));
+    uploadZip.mockRejectedValueOnce(
+      new Error('zip 内未找到 SKILL.md（要求 SKILL.md 在根目录或 <slug>/SKILL.md 结构）'),
+    );
     const onClose = vi.fn();
     const onSuccess = vi.fn();
     render(<UploadSkillDialog onClose={onClose} onSuccess={onSuccess} />);
@@ -120,23 +144,24 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
-  it('失败（多根目录）→ 红字错误展示具体原因', async () => {
+  it('失败（SKILL.md 路径过深）→ 红字错误展示具体原因', async () => {
     uploadZip.mockRejectedValueOnce(
-      new Error('zip 根目录包含多个子目录（应有且仅有一个 <slug>/ 包裹 SKILL.md）'),
+      new Error('SKILL.md 路径过深：a/b/SKILL.md（要求 SKILL.md 或 <slug>/SKILL.md）'),
     );
     render(<UploadSkillDialog onClose={() => {}} onSuccess={() => {}} />);
-    pickZip(new File([new Uint8Array([0])], 'multi.zip', { type: 'application/zip' }));
+    pickZip(new File([new Uint8Array([0])], 'deep.zip', { type: 'application/zip' }));
 
     fireEvent.click(screen.getByRole('button', { name: '上传' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/多个子目录/)).toBeInTheDocument();
+      expect(screen.getByText(/路径过深/)).toBeInTheDocument();
     });
   });
 
   it('上传中 → 按钮 disabled（防双击），uploadZip 仅被调一次', async () => {
     // 用未决 Promise 卡住上传
-    let resolveUpload: (v: { slug: string; description: string }) => void = () => {};
+    let resolveUpload: (v: Array<{ slug: string; name: string; description: string }>) => void =
+      () => {};
     uploadZip.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -160,7 +185,7 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     });
 
     // 解除卡死，让组件清理
-    resolveUpload({ slug: 'slow', description: '' });
+    resolveUpload([{ slug: 'slow', name: 'Slow', description: '' }]);
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '上传' })).toBeEnabled();
     });

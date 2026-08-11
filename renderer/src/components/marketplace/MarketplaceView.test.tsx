@@ -110,7 +110,7 @@ beforeEach(() => {
   deleteCustomSkill.mockResolvedValue(undefined);
   mcpRegister.mockResolvedValue(undefined);
   mcpStart.mockResolvedValue(undefined);
-  skillUploadZip.mockResolvedValue({ slug: 'x', description: '' });
+  skillUploadZip.mockResolvedValue([{ slug: 'x', name: 'x', description: '' }]);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api =
     mockApi;
