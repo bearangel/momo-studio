@@ -33,7 +33,7 @@ interface AgentState {
     role: AgentRole,
     parentInstanceId?: string,
     apiKeyOverride?: string,
-  ) => Promise<void>;
+  ) => Promise<AgentAssignment>;
   assignMainAgent: (
     workspaceId: string,
     mainDefId: string,
@@ -122,6 +122,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         assignments: [...state.assignments, assignment],
         running: { ...state.running, [assignment.instanceId]: true },
       }));
+      return assignment;
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;

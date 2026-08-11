@@ -127,6 +127,12 @@ describe('agent.store — v1.3', () => {
     expect(useAgentStore.getState().error).toBe('bot 注册失败');
   });
 
+  it('addAgent 返回新创建的 AgentAssignment（供调用方捕获 instanceId 写 Layer 3 deltas）', async () => {
+    const result = await useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone');
+    expect(result).toEqual(MOCK_ASSIGNMENT);
+    expect(result.instanceId).toBe('inst-1');
+  });
+
   it('stopAgent 调用 stop 并标记为未运行', async () => {
     await useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone');
     expect(useAgentStore.getState().running['inst-1']).toBe(true);

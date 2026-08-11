@@ -19,16 +19,13 @@ import {
   SAFE_MINIMUM_TOOLS,
   TOOL_CATEGORIES,
 } from '../../lib/tool-catalog';
+// Capabilities 类型自 v1.6 Task 11 起抽到 capability-helpers 共享 lib；本地 import 供组件
+// 自身 props 使用，同时 re-export 保持现有 `import { type Capabilities } from './CapabilityTabs'` 不破。
+import { type Capabilities } from '../../lib/capability-helpers';
+export type { Capabilities };
 import type { RegisteredMcp, InstalledSkill } from '../../ipc/types';
 
 type Tab = 'tools' | 'mcp' | 'skill';
-
-/** 能力集合：三类能力的当前勾选值（绝对集合，与 mode 无关） */
-export interface Capabilities {
-  tools: string[];
-  mcps: string[];
-  skills: string[];
-}
 
 export interface CapabilityTabsProps {
   mode: 'edit' | 'override' | 'readonly';
