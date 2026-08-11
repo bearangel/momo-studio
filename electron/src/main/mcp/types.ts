@@ -12,6 +12,26 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** v1.6：来源标识。'marketplace' 装的不可删（需走卸载按钮），'custom' 可删。缺省按 'marketplace' 处理 */
+  source?: 'marketplace' | 'custom';
+  /** v1.6：注册时间 ISO 字符串。缺省时由 DB 列默认值 datetime('now') 填充 */
+  installedAt?: string;
+}
+
+/**
+ * v1.6：listRegistered 返回的项。与 McpServerConfig 的区别是 source / installedAt 在
+ * DB 中都有 NOT NULL DEFAULT，从 DB 读出的行这两个字段必然有值，故用独立类型表达「必填」。
+ * renderer 端的 RegisteredMcp 与此结构对齐。
+ */
+export interface RegisteredMcp {
+  id: string;
+  name: string;
+  version: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  source: 'marketplace' | 'custom';
+  installedAt: string;
 }
 
 /** MCP 工具信息（从 tools/list 响应解析） */

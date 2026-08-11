@@ -159,6 +159,25 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** v1.6：来源标识。'marketplace' 不可删（走卸载按钮），'custom' 可删 */
+  source?: 'marketplace' | 'custom';
+  /** v1.6：注册时间 ISO 字符串（缺省时 DB 列默认值填充） */
+  installedAt?: string;
+}
+
+/**
+ * v1.6：已注册 MCP 项（mcp:listRegistered 返回），与 electron 端 RegisteredMcp 对齐。
+ * source / installedAt 在 DB 中为 NOT NULL DEFAULT，故这两个字段必填。
+ */
+export interface RegisteredMcp {
+  id: string;
+  name: string;
+  version: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  source: 'marketplace' | 'custom';
+  installedAt: string;
 }
 
 /** 能力类型：tool（内置工具）/ mcp（MCP server）/ skill（技能），与 electron 端 CapabilityType 对齐 */
@@ -516,6 +535,10 @@ export interface ApiSurface {
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
     register(config: McpServerConfig): Promise<void>;
+    /** v1.6：列出所有已注册 MCP（含 source / installedAt，按 installedAt 倒序） */
+    listRegistered(): Promise<RegisteredMcp[]>;
+    /** v1.6：删除自定义 MCP（marketplace 装的会 reject，提示走卸载按钮） */
+    deleteRegistered(name: string): Promise<void>;
     /** 启动某 workspace 内的 MCP 进程（进程池复用） */
     start(workspaceId: string, mcpName: string): Promise<void>;
     /** 列出某 workspace 内已启动 MCP 暴露的工具 */

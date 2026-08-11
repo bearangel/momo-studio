@@ -12,7 +12,7 @@
 import { McpClient } from './client';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import type { McpServerConfig, McpToolInfo } from './types';
+import type { McpServerConfig, McpToolInfo, RegisteredMcp } from './types';
 
 /** mcp_definitions 表的一行原始结构（getMcpConfig 读取时做类型断言用） */
 interface McpDefinitionRow {
@@ -150,8 +150,10 @@ export async function stopAllMcpForWorkspace(workspaceId: string): Promise<void>
 export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
-    .prepare('SELECT id, name, version, transport, command, args, env FROM mcp_definitions WHERE name = ?')
-    .get(mcpName) as McpDefinitionRow | undefined;
+    .prepare(
+      'SELECT id, name, version, transport, command, args, env, source, installed_at FROM mcp_definitions WHERE name = ?',
+    )
+    .get(mcpName) as (McpDefinitionRow & { source: string; installed_at: string }) | undefined;
   if (!row) return null;
   return {
     id: row.id,
@@ -160,18 +162,22 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
     command: row.command,
     args: JSON.parse(row.args) as string[],
     env: (JSON.parse(row.env) as Record<string, string>) ?? {},
+    source: row.source as 'marketplace' | 'custom',
+    installedAt: row.installed_at,
   };
 }
 
 /**
  * 注册（或覆盖）一条 MCP server 定义到 SQLite。
  * transport 固定为 stdio（当前仅支持 stdio 传输），name 唯一冲突时整体替换。
+ * source 缺省按 'marketplace' 写入（与 DB 列默认值一致），installed_at 由 DB 默认值填充。
  */
 export function registerMcpDefinition(config: McpServerConfig): void {
   const db = getDb();
   db.prepare(
-    `INSERT OR REPLACE INTO mcp_definitions (id, name, version, transport, command, args, env)
-     VALUES (?, ?, ?, 'stdio', ?, ?, ?)`,
+    `INSERT OR REPLACE INTO mcp_definitions
+       (id, name, version, transport, command, args, env, source)
+     VALUES (?, ?, ?, 'stdio', ?, ?, ?, ?)`,
   ).run(
     config.id,
     config.name,
@@ -179,6 +185,59 @@ export function registerMcpDefinition(config: McpServerConfig): void {
     config.command,
     JSON.stringify(config.args),
     JSON.stringify(config.env ?? {}),
+    config.source ?? 'marketplace',
   );
-  logger.info('MCP 定义已注册', { name: config.name });
+  logger.info('MCP 定义已注册', { name: config.name, source: config.source ?? 'marketplace' });
+}
+
+/**
+ * v1.6：列出所有已注册 MCP（含 source 区分），按 installed_at 倒序（最新优先）。
+ * DB 列 source / installed_at 均为 NOT NULL DEFAULT，故返回项这两个字段必填。
+ */
+export function listRegistered(): RegisteredMcp[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      'SELECT id, name, version, command, args, env, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
+    )
+    .all() as Array<{
+    id: string;
+    name: string;
+    version: string;
+    command: string;
+    args: string;
+    env: string;
+    source: string;
+    installed_at: string;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    version: r.version,
+    command: r.command,
+    args: JSON.parse(r.args) as string[],
+    env: r.env ? (JSON.parse(r.env) as Record<string, string>) : undefined,
+    source: r.source as 'marketplace' | 'custom',
+    installedAt: r.installed_at,
+  }));
+}
+
+/**
+ * v1.6：删除已注册 MCP（按 name）。marketplace 装的不可删——提示用户走卸载按钮
+ * （卸载会同步清理缓存目录与 installed_packages 记录，单纯删 mcp_definitions 行会留下孤儿）。
+ * 不存在的 name 静默跳过（幂等）。
+ */
+export function deleteRegistered(name: string): void {
+  const db = getDb();
+  const row = db.prepare('SELECT source FROM mcp_definitions WHERE name = ?').get(name) as
+    | { source: string }
+    | undefined;
+  if (!row) return;
+  if (row.source === 'marketplace') {
+    throw new Error(
+      `MCP ${name} 是 marketplace 安装的，请用卸载按钮移除（卸载会同步清理缓存目录）`,
+    );
+  }
+  db.prepare('DELETE FROM mcp_definitions WHERE name = ?').run(name);
+  logger.info('MCP 定义已删除', { name });
 }

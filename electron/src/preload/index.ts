@@ -114,6 +114,10 @@ const api: ApiSurface = {
   },
   mcp: {
     register: (config) => invoke('mcp:register', config),
+    // v1.6：列出所有已注册 MCP（含 source 区分）
+    listRegistered: () => invoke('mcp:listRegistered'),
+    // v1.6：删除自定义 MCP（marketplace 装的会 reject）
+    deleteRegistered: (name: string) => invoke('mcp:deleteRegistered', name),
     start: (workspaceId, mcpName) => invoke('mcp:start', workspaceId, mcpName),
     listTools: (workspaceId, mcpName) => invoke('mcp:listTools', workspaceId, mcpName),
     callTool: (workspaceId, mcpName, toolName, args) =>

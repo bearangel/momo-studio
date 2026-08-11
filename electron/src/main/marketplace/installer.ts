@@ -148,6 +148,7 @@ function registerInstalledPackage(item: MarketplaceItem, cachePath: string): voi
       version: pkg.version,
       command: 'npx',
       args: [pkg.name],
+      source: 'marketplace',
     });
     logger.info('Marketplace mcp 已注册到定义表', { slug: item.slug, name: pkg.name });
   }
