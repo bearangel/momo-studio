@@ -2,6 +2,13 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.1] — 2026-08-11
+
+### 修复
+- **Layer 3 deltas 首次 spawn 不生效**：`AddToWorkspaceDialog` 在 `setAssignmentDeltas` 成功后未重启 agent，用户在折叠区改的 add/remove 工具不会反映到首次 spawn（agent 已在 `addAgent` 时 spawn，deltas 是后落库的）。修复为：deltas 落库后自动 `stopAgent` + `startAgent`；workspace 已删除则只 stop。
+- **builtin marketplace 安装包 `defaultTools` 为空**：`installer.createInlinePackage` 之前写 `defaultTools: []`，导致 marketplace 安装的 builtin agent 落库后 `def.defaultTools` 为空，Layer 3 弹窗显示「默认 0 工具」误导用户。修复为：从 `ALL_BUILTIN_TOOLS` 生成 24 工具的 `[{kind:'builtin', ref}]` 数组，与 Migration v16 builtin YAML 同步策略一致。
+- **`defToCapabilities` 重复定义**：`DefinitionEditor` 本地副本与 `capability-helpers` 完全重复，移除本地副本改 import 共享版本。
+
 ## [1.6.0] — 2026-08-11
 
 ### 新增

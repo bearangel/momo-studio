@@ -23,6 +23,7 @@ import { resolveUserDataDir } from '../paths';
 import { parseAgentManifest } from '../agent/manifest-parser';
 import { saveAgentDefinition, listAgentDefinitions } from '../agent/crud';
 import { registerMcpDefinition } from '../mcp/host-manager';
+import { ALL_BUILTIN_TOOLS } from '../agent/tools/catalog';
 import type { MarketplaceItem } from './types';
 
 const execAsync = promisify(exec);
@@ -207,7 +208,9 @@ function createInlinePackage(item: MarketplaceItem, cachePath: string): void {
           systemPrompt: item.readme,
           model: { provider: 'anthropic', model: 'claude-3-5-sonnet' },
         },
-        defaultTools: [] as Array<Record<string, unknown>>,
+        // builtin agent 安装后等价于 builtin def：默认必须含全部 24 工具
+        // （与 v1.5 builtin YAML + Migration v16 同步策略一致），否则 def.defaultTools 落库为空。
+        defaultTools: ALL_BUILTIN_TOOLS.map((ref) => ({ kind: 'builtin', ref })),
       },
     };
     fs.writeFileSync(path.join(cachePath, 'manifest.yaml'), yamlDump(manifest));

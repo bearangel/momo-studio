@@ -26,16 +26,19 @@ import type {
 const allocationGet = vi.fn();
 const listRegistered = vi.fn();
 const listInstalled = vi.fn();
+const workspaceGet = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
   mcp: { listRegistered },
   skill: { listInstalled },
+  workspace: { get: workspaceGet },
 };
 
-// store action 桩
 const addAgentMock = vi.fn();
 const setAssignmentDeltasMock = vi.fn();
+const stopAgentMock = vi.fn();
+const startAgentMock = vi.fn();
 
 const WS: Workspace = {
   id: 'ws-1',
@@ -96,12 +99,18 @@ beforeEach(() => {
   listInstalled.mockReset();
   addAgentMock.mockReset();
   setAssignmentDeltasMock.mockReset();
+  workspaceGet.mockReset();
+  stopAgentMock.mockReset();
+  startAgentMock.mockReset();
 
   allocationGet.mockResolvedValue(mockEmptyAllocation());
   listRegistered.mockResolvedValue([]);
   listInstalled.mockResolvedValue([]);
   addAgentMock.mockResolvedValue(NEW_ASSIGNMENT);
   setAssignmentDeltasMock.mockResolvedValue(undefined);
+  workspaceGet.mockResolvedValue(WS);
+  stopAgentMock.mockResolvedValue(undefined);
+  startAgentMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -130,8 +139,8 @@ beforeEach(() => {
     updateAssignmentApiKey: vi.fn(),
     getAssignmentDeltas: vi.fn(),
     setAssignmentDeltas: setAssignmentDeltasMock,
-    stopAgent: vi.fn(),
-    startAgent: vi.fn(),
+    stopAgent: stopAgentMock,
+    startAgent: startAgentMock,
     reset: vi.fn(),
   });
 });
@@ -209,5 +218,61 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
     expect(setAssignmentDeltasMock).not.toHaveBeenCalled();
+  });
+
+  it('填了 deltas 后提交 → setAssignmentDeltas 后自动 stop+start 重启（顺序正确）', async () => {
+    render(<AddToWorkspaceDialog preselectedDef={DEF} onClose={() => {}} />);
+    fireEvent.click(screen.getByText(/能力调整（可选）/));
+    await waitFor(() => {
+      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
+
+    await waitFor(() => {
+      expect(addAgentMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(setAssignmentDeltasMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(stopAgentMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(startAgentMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(stopAgentMock).toHaveBeenCalledWith('inst-new');
+
+    const [assignmentArg, wsIdArg, teamRoomIdArg] = startAgentMock.mock.calls[0]!;
+    expect(assignmentArg).toBe(NEW_ASSIGNMENT);
+    expect(wsIdArg).toBe('ws-1');
+    expect(teamRoomIdArg).toBe('!team:server');
+
+    expect(workspaceGet).toHaveBeenCalledWith('ws-1');
+
+    const addAgentOrder = addAgentMock.mock.invocationCallOrder[0]!;
+    const setDeltasOrder = setAssignmentDeltasMock.mock.invocationCallOrder[0]!;
+    const stopOrder = stopAgentMock.mock.invocationCallOrder[0]!;
+    const startOrder = startAgentMock.mock.invocationCallOrder[0]!;
+    expect(addAgentOrder).toBeLessThan(setDeltasOrder);
+    expect(setDeltasOrder).toBeLessThan(stopOrder);
+    expect(stopOrder).toBeLessThan(startOrder);
+  });
+
+  it('填了 deltas 且 workspace 已删除 → 只 stop 不 start', async () => {
+    workspaceGet.mockResolvedValueOnce(null);
+    render(<AddToWorkspaceDialog preselectedDef={DEF} onClose={() => {}} />);
+    fireEvent.click(screen.getByText(/能力调整（可选）/));
+    await waitFor(() => {
+      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
+
+    await waitFor(() => {
+      expect(stopAgentMock).toHaveBeenCalledTimes(1);
+    });
+    expect(startAgentMock).not.toHaveBeenCalled();
   });
 });

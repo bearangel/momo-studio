@@ -30,8 +30,15 @@ const EMPTY_CAPS: Capabilities = { tools: [], mcps: [], skills: [] };
 
 export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { definitions, assignments, builtinSuggestions, addAgent, setAssignmentDeltas } =
-    useAgentStore();
+  const {
+    definitions,
+    assignments,
+    builtinSuggestions,
+    addAgent,
+    setAssignmentDeltas,
+    stopAgent,
+    startAgent,
+  } = useAgentStore();
 
   const [defId, setDefId] = useState(preselectedDef?.id ?? '');
   const [role, setRole] = useState<AgentRole>('standalone');
@@ -108,6 +115,12 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
       const deltas = computeDeltas(overrideValue, defaultCaps);
       if (!isEmptyDeltas(deltas)) {
         await setAssignmentDeltas(newAssignment.instanceId, deltas);
+        // addAgent 已内部 spawn（用的还是 deltas 落库前的能力），必须重启让新 deltas 生效
+        const ws = await ipc.workspace.get(workspace.id);
+        await stopAgent(newAssignment.instanceId);
+        if (ws) {
+          await startAgent(newAssignment, ws.id, ws.teamRoomId);
+        }
       }
       onClose();
     } catch (err) {

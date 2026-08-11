@@ -6,9 +6,11 @@
 
 ## 状态
 
-**v1.6 — Released**
+**v1.6.1 — Released**
 
 v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`merged.tools` 丢失导致能力白名单形同虚设），新增三层能力配置 UI（DefinitionEditor 编辑 Layer 1 + AddToWorkspaceDialog/WorkspaceAgentsPanel 做 Layer 3 per-assignment override）+ Marketplace 自定义入口（MCP 表单注册 + Skill zip 上传）。v1.5 内置工具库（7 类 24 工具）仍可用，详见 `docs/specs/2026-08-11-v1.6-capability-config-design.md`。
+
+**v1.6.1** 修复三处 v1.6 review 发现的问题：AddToWorkspaceDialog Layer 3 deltas 首次 spawn 不生效（落库后未重启）；marketplace 安装 builtin agent 时 `defaultTools` 为空（改为写入 24 工具全集，与 Migration v16 builtin YAML 同步）；`DefinitionEditor` 与 `capability-helpers` 的 `defToCapabilities` 重复定义合并。详见 `CHANGELOG.md`。
 
 ## 特性
 

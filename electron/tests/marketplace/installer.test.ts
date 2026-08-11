@@ -84,6 +84,20 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(installed[0]!.cachePath).toBe(cachePath);
   });
 
+  it('agent 类型 manifest.yaml 含全部 24 个 builtin defaultTools', async () => {
+    const { cachePath } = await installPackage(makeItem());
+    const manifest = yamlLoad(
+      fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
+    ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
+    expect(manifest.spec.defaultTools).toHaveLength(24);
+    expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
+    const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
+    expect(refs).toContain('bash');
+    expect(refs).toContain('read_file');
+    expect(refs).toContain('git_commit');
+    expect(refs).toContain('lsp_diagnostics');
+  });
+
   it('skill 类型生成 SKILL.md', async () => {
     const item = makeItem({
       id: 'test-skill',

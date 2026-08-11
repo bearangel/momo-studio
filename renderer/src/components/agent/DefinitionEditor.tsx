@@ -14,21 +14,13 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
+import { defToCapabilities } from '../../lib/capability-helpers';
 import type { AgentDefinition } from '../../ipc/types';
 
 interface Props {
   mode: 'create' | 'edit' | 'configure';
   def?: AgentDefinition;
   onClose: () => void;
-}
-
-/** 把 AgentDefinition 的 Ref 形态能力（含 kind 字段）扁平化为 CapabilityTabs 期望的 string[] */
-function defToCapabilities(def: AgentDefinition): Capabilities {
-  return {
-    tools: def.defaultTools.map((t) => t.ref),
-    mcps: (def.defaultMcps ?? []).map((m) => m.ref),
-    skills: (def.defaultSkills ?? []).map((s) => s.ref),
-  };
 }
 
 export function DefinitionEditor({ mode, def, onClose }: Props) {
