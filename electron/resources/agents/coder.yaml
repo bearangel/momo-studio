@@ -39,3 +39,45 @@ spec:
       ref: write_file
     - kind: builtin
       ref: list_files
+    - kind: builtin
+      ref: edit_file
+    - kind: builtin
+      ref: mkdir
+    - kind: builtin
+      ref: rm
+    - kind: builtin
+      ref: mv
+    - kind: builtin
+      ref: exists
+    - kind: builtin
+      ref: grep
+    - kind: builtin
+      ref: glob
+    - kind: builtin
+      ref: bash
+    - kind: builtin
+      ref: git_status
+    - kind: builtin
+      ref: git_diff
+    - kind: builtin
+      ref: git_log
+    - kind: builtin
+      ref: git_show
+    - kind: builtin
+      ref: git_add
+    - kind: builtin
+      ref: git_commit
+    - kind: builtin
+      ref: git_branch
+    - kind: builtin
+      ref: git_checkout
+    - kind: builtin
+      ref: git_stash
+    - kind: builtin
+      ref: webfetch
+    - kind: builtin
+      ref: todowrite
+    - kind: builtin
+      ref: lsp_diagnostics
+    - kind: builtin
+      ref: lsp_find_references

@@ -4,12 +4,48 @@
 // `.sql` files. This is deliberate: `tsc` emits only `.js`, so loose `.sql`
 // assets would never reach `dist/`, and a `__dirname`/`readdirSync` lookup would
 // silently return `[]` in the packaged app, leaving the DB with no tables. By
-// keeping the SQL in-source, the compiled module is fully self-contained.
+// keeping the SQL in-source, the compiled module is fully-contained.
 
 export interface Migration {
   version: number;
   sql: string;
 }
+
+/**
+ * v1.6 builtin agent 的 24 工具全集，序列化为 agent_definitions.default_tools 列的 JSON 格式。
+ *
+ * 这个常量在模块加载时通过 JSON.stringify 预计算，v16 migration 用模板字符串插值
+ * 嵌入 UPDATE 语句（SQL 单引号字面量内可安全包含 JSON 的双引号，无需转义）。
+ *
+ * 工具列表与 agent/tools/catalog.ts 的 ALL_BUILTIN_TOOLS 必须保持一致——
+ * 这里刻意不 import catalog，因为 migration SQL 必须是自包含的纯字符串
+ * （打包后 catalog 路径可能变化，但已应用的 migration SQL 写入 schema_migrations
+ * 后不可变）。两者的一致性由 tools-catalog.test.ts + 本文件测试共同守护。
+ *
+ * 导出供 016-assignment-capabilities.test.ts 验证 builtin 修复 UPDATE 的正确性。
+ */
+const BUILTIN_TOOL_REFS = [
+  // 文件（8）
+  'read_file', 'write_file', 'list_files', 'edit_file',
+  'mkdir', 'rm', 'mv', 'exists',
+  // 搜索（2）
+  'grep', 'glob',
+  // Shell（1）
+  'bash',
+  // Git（9）
+  'git_status', 'git_diff', 'git_log', 'git_show',
+  'git_add', 'git_commit', 'git_branch', 'git_checkout', 'git_stash',
+  // Web（1）
+  'webfetch',
+  // Todo（1）
+  'todowrite',
+  // LSP（2）
+  'lsp_diagnostics', 'lsp_find_references',
+] as const;
+
+export const BUILTIN_DEFAULT_TOOLS_JSON = JSON.stringify(
+  BUILTIN_TOOL_REFS.map((ref) => ({ kind: 'builtin', ref })),
+);
 
 const MIGRATIONS: Migration[] = [
   {
@@ -321,6 +357,39 @@ CREATE INDEX IF NOT EXISTS idx_agent_meta_created ON agent_meta(created_at);
 -- autoStartAgents 查询条件：enabled=1 AND last_running=1
 -- 存量数据默认 1（老用户升级后全部自动恢复，与历史期望一致）
 ALTER TABLE agent_assignments ADD COLUMN last_running INTEGER NOT NULL DEFAULT 1;
+`.trim(),
+  },
+  {
+    version: 16,
+    sql: `
+-- v1.6 能力配置：per-assignment 能力 delta + mcp_definitions 来源追踪 + builtin 默认工具修复
+--
+-- 1. agent_assignment_capabilities：Layer 3 能力 delta 表。
+--    每个 assignment 可在此基础上 add/remove 具体的 tool/mcp/skill，
+--    运行时与 agent_definitions.default_tools 合并生成最终能力集。
+--    ON DELETE CASCADE：assignment 删除时 delta 自动清理，无需应用层手动清。
+--    依赖 PRAGMA foreign_keys = ON（getDb() 已启用）。
+CREATE TABLE IF NOT EXISTS agent_assignment_capabilities (
+  assignment_id   TEXT NOT NULL REFERENCES agent_assignments(instance_id) ON DELETE CASCADE,
+  capability_type TEXT NOT NULL CHECK (capability_type IN ('tool','mcp','skill')),
+  mode            TEXT NOT NULL CHECK (mode IN ('add','remove')),
+  ref             TEXT NOT NULL,
+  PRIMARY KEY (assignment_id, capability_type, mode, ref)
+);
+
+-- 2. mcp_definitions 加 source 列：区分市场安装（'marketplace'）vs 用户自定义（'custom'）。
+--    v1.6 marketplace 支持上传自定义 MCP 包，UI 需据此区分展示与卸载逻辑。
+ALTER TABLE mcp_definitions ADD COLUMN source TEXT NOT NULL DEFAULT 'marketplace';
+
+-- 3. mcp_definitions 加 installed_at 列：记录实际安装时间（区别于 created_at 的注册时间）。
+ALTER TABLE mcp_definitions ADD COLUMN installed_at TEXT NOT NULL DEFAULT (datetime('now'));
+
+-- 4. builtin default_tools 修复：v1.5 builtin YAML 只写了 3 工具到 DB，v1.6 扩展为 24 工具。
+--    schema_migrations 保证此 UPDATE 只执行一次；BUILTIN_DEFAULT_TOOLS_JSON 在模块顶部
+--    预计算，JSON 双引号在 SQL 单引号字面量内是合法字符，无需转义。
+UPDATE agent_definitions
+SET default_tools = '${BUILTIN_DEFAULT_TOOLS_JSON}'
+WHERE source = 'builtin';
 `.trim(),
   },
 ];
