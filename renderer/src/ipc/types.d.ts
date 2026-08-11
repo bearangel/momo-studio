@@ -461,12 +461,20 @@ export interface ApiSurface {
     createCustom(input: {
       name: string;
       slug: string;
-      description: string;
+      description?: string;
       systemPrompt: string;
       iconEmoji?: string;
       scope: 'global' | 'workspace';
       modelProviderId: string;
       modelName: string;
+      /** v1.6：scope='workspace' 时由调用方填入当前 activeWorkspaceId；缺省 = null（global） */
+      workspaceId?: string;
+      /** v1.6：默认工具；缺省 = SAFE_MINIMUM_TOOLS（在主进程 createCustomDef 内兜底） */
+      defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
+      /** v1.6：默认 MCP；缺省 = [] */
+      defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
+      /** v1.6：默认 Skill；缺省 = [] */
+      defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }): Promise<AgentDefinition>;
     /** v1.3：可选 workspaceId 过滤 */
     list(workspaceId?: string): Promise<AgentDefinition[]>;
@@ -486,6 +494,12 @@ export interface ApiSurface {
       scope?: 'global' | 'workspace';
       modelProviderId?: string;
       modelName?: string;
+      /** v1.6：scope='workspace' 时由调用方填入当前 activeWorkspaceId */
+      workspaceId?: string;
+      /** v1.6：undefined=不改；传值（含 []）= 覆盖 */
+      defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
+      defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
+      defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
     /** v1.3 新增：修改 assignment 的 role + parentInstanceId */
     updateAssignmentRole(

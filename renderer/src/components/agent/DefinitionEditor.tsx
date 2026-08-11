@@ -1,5 +1,10 @@
 // renderer/src/components/agent/DefinitionEditor.tsx
 // def 创建/编辑/配置 builtin 对话框
+//
+// v1.6 Task 9：底部加「能力配置」区，复用 CapabilityTabs。
+// - create 模式：默认勾选 SAFE_MINIMUM_TOOLS，提交时把 capabilities 转为 ToolRef/McpRef/SkillRef 传 IPC
+// - edit 模式：从 def.defaultTools/Mcps/Skills 初始化
+// - configure（builtin）模式：CapabilityTabs mode='readonly'，提交按钮不传 default*
 import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -7,12 +12,23 @@ import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
+import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
 import type { AgentDefinition } from '../../ipc/types';
 
 interface Props {
   mode: 'create' | 'edit' | 'configure';
   def?: AgentDefinition;
   onClose: () => void;
+}
+
+/** 把 AgentDefinition 的 Ref 形态能力（含 kind 字段）扁平化为 CapabilityTabs 期望的 string[] */
+function defToCapabilities(def: AgentDefinition): Capabilities {
+  return {
+    tools: def.defaultTools.map((t) => t.ref),
+    mcps: (def.defaultMcps ?? []).map((m) => m.ref),
+    skills: (def.defaultSkills ?? []).map((s) => s.ref),
+  };
 }
 
 export function DefinitionEditor({ mode, def, onClose }: Props) {
@@ -30,6 +46,14 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const [providerId, setProviderId] = useState('');
   const [modelName, setModelName] = useState('');
   const [scope, setScope] = useState<'global' | 'workspace'>('workspace');
+  // create 模式默认 = SAFE_MINIMUM_TOOLS；edit/configure 模式从 def.defaultTools/Mcps/Skills 加载
+  const [capabilities, setCapabilities] = useState<Capabilities>(
+    mode === 'create'
+      ? { tools: [...SAFE_MINIMUM_TOOLS], mcps: [], skills: [] }
+      : def
+        ? defToCapabilities(def)
+        : { tools: [...SAFE_MINIMUM_TOOLS], mcps: [], skills: [] },
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -44,6 +68,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setProviderId(def.modelProviderId ?? '');
       setModelName(def.modelName);
       setScope(def.workspaceId === null ? 'global' : 'workspace');
+      setCapabilities(defToCapabilities(def));
     }
   }, [def, mode]);
 
@@ -68,6 +93,11 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
     setSaving(true);
     setError(null);
     try {
+      // 把 string[] 转换为强类型 Ref[]（kind 字段：tools='builtin'，mcps='mcp'，skills='skill'）
+      const defaultTools = capabilities.tools.map((ref) => ({ kind: 'builtin' as const, ref }));
+      const defaultMcps = capabilities.mcps.map((ref) => ({ kind: 'mcp' as const, ref }));
+      const defaultSkills = capabilities.skills.map((ref) => ({ kind: 'skill' as const, ref }));
+
       if (mode === 'create') {
         await ipc.agent.createCustom({
           name: name.trim(),
@@ -78,6 +108,10 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           scope,
           modelProviderId: providerId,
           modelName: modelName.trim(),
+          workspaceId: scope === 'workspace' ? (activeWorkspaceId ?? undefined) : undefined,
+          defaultTools,
+          defaultMcps,
+          defaultSkills,
         });
       } else if (def) {
         const input: Parameters<typeof ipc.agent.updateDefinition>[0] = {
@@ -87,9 +121,13 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           iconEmoji,
           modelProviderId: providerId,
           modelName: modelName.trim(),
+          defaultTools,
+          defaultMcps,
+          defaultSkills,
         };
         if (!isBuiltin) {
           input.scope = scope;
+          input.workspaceId = scope === 'workspace' ? (activeWorkspaceId ?? undefined) : undefined;
         }
         await ipc.agent.updateDefinition(input);
       }
@@ -185,6 +223,21 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
               </div>
             </div>
           )}
+
+          {/* v1.6 能力配置区：create/edit 可改；configure(builtin) 只读 */}
+          <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+            <div className="text-sm text-neutral-300">能力配置</div>
+            {isBuiltin && (
+              <div className="text-xs text-neutral-500">
+                builtin 默认能力不可改；添加到 workspace 后可用 Layer 3 override
+              </div>
+            )}
+            <CapabilityTabs
+              mode={isBuiltin ? 'readonly' : 'edit'}
+              value={capabilities}
+              onChange={(next) => setCapabilities(next)}
+            />
+          </div>
 
           {error && <div className="text-red-400 text-sm">{error}</div>}
           <div className="flex gap-2 justify-end mt-2">

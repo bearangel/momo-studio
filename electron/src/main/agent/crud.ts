@@ -11,7 +11,59 @@ import { getDb } from '../storage/db';
 import { setSecret, deleteSecret } from '../storage/keychain';
 import { logger } from '../logger';
 import { isAgentRunning, stopAgent } from './runtime-manager';
-import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef } from './types';
+import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
+import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
+
+/**
+ * v1.6 Task 9：createCustomDef 入参。
+ * defaultTools/Mcps/Skills 可选；缺省时分别为 SAFE_MINIMUM_TOOLS / [] / []。
+ */
+export interface CreateCustomDefInput {
+  name: string;
+  slug: string;
+  /** 可选；缺省 = 空串 */
+  description?: string;
+  systemPrompt: string;
+  /** 可选；缺省 = '🤖' */
+  iconEmoji?: string;
+  modelProviderId: string;
+  modelName: string;
+  /** v1.6：默认工具，缺省 = SAFE_MINIMUM_TOOLS（kind='builtin'） */
+  defaultTools?: ToolRef[];
+  /** v1.6：默认 MCP，缺省 = [] */
+  defaultMcps?: McpRef[];
+  /** v1.6：默认 Skill，缺省 = [] */
+  defaultSkills?: SkillRef[];
+}
+
+/**
+ * v1.6 Task 9：创建自定义 agent 定义。
+ * 不再 inline 在 ipc.handlers 里，便于单测 + 复用。
+ * workspaceId 传 null=global，传字符串=该 workspace 私有。
+ */
+export function createCustomDef(workspaceId: string | null, input: CreateCustomDefInput): AgentDefinition {
+  const def: AgentDefinition = {
+    id: randomUUID(),
+    name: input.name,
+    slug: input.slug,
+    version: '1.0.0',
+    runtime: 'declarative',
+    systemPrompt: input.systemPrompt,
+    // 缺省 = SAFE_MINIMUM_TOOLS（kind='builtin'），避免新 agent 在用户未审查情况下拿到 bash 等高危权限
+    defaultTools: input.defaultTools ?? SAFE_MINIMUM_TOOLS.map((ref) => ({ kind: 'builtin' as const, ref })),
+    defaultMcps: input.defaultMcps ?? [],
+    defaultSkills: input.defaultSkills ?? [],
+    source: 'custom',
+    description: input.description ?? '',
+    iconEmoji: input.iconEmoji ?? '🤖',
+    workspaceId,
+    modelProviderId: input.modelProviderId,
+    modelName: input.modelName,
+  };
+  saveAgentDefinition(def);
+  logger.info('自定义 Agent 定义已创建', { slug: def.slug, workspaceId });
+  return def;
+}
 
 /** agent_definitions 行的弱类型映射（v1.3 schema） */
 interface AgentDefRow {
@@ -304,6 +356,8 @@ export function llmApiKeyRef(instanceId: string): string {
 /**
  * 更新 agent 定义字段（v1.3 schema：不含 type/parent/model_provider/model_base_url）。
  * workspaceId 显式传 null 表示转 global；传字符串表示绑定该 workspace；undefined 不改。
+ *
+ * v1.6：新增可选 defaultTools/defaultMcps/defaultSkills 入参，含则更新，不含保留原值（向后兼容）。
  */
 export function updateAgentDefinition(input: {
   id: string;
@@ -315,6 +369,12 @@ export function updateAgentDefinition(input: {
   workspaceId?: string | null;
   modelProviderId?: string;
   modelName?: string;
+  /** v1.6：默认工具；undefined=不改，传值（含空数组）= 覆盖 */
+  defaultTools?: ToolRef[];
+  /** v1.6：默认 MCP；undefined=不改，传值（含空数组）= 覆盖 */
+  defaultMcps?: McpRef[];
+  /** v1.6：默认 Skill；undefined=不改，传值（含空数组）= 覆盖 */
+  defaultSkills?: SkillRef[];
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
@@ -322,7 +382,8 @@ export function updateAgentDefinition(input: {
   db.prepare(
     `UPDATE agent_definitions SET
        name = ?, description = ?, system_prompt = ?, icon_emoji = ?,
-       workspace_id = ?, model_provider_id = ?, model_name = ?
+       workspace_id = ?, model_provider_id = ?, model_name = ?,
+       default_tools = ?, default_mcps = ?, default_skills = ?
      WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
@@ -332,6 +393,9 @@ export function updateAgentDefinition(input: {
     input.workspaceId !== undefined ? input.workspaceId : existing.workspaceId,
     input.modelProviderId !== undefined ? input.modelProviderId : existing.modelProviderId,
     input.modelName ?? existing.modelName,
+    input.defaultTools !== undefined ? JSON.stringify(input.defaultTools) : JSON.stringify(existing.defaultTools),
+    input.defaultMcps !== undefined ? JSON.stringify(input.defaultMcps) : JSON.stringify(existing.defaultMcps),
+    input.defaultSkills !== undefined ? JSON.stringify(input.defaultSkills) : JSON.stringify(existing.defaultSkills),
     input.id,
   );
   return getAgentDefinition(input.id)!;

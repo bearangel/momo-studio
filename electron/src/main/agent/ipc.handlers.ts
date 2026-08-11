@@ -30,6 +30,7 @@ import {
   listSubAssignments,
   deleteDefinition as crudDeleteDefinition,
   updateAgentDefinition,
+  createCustomDef,
   stopRunningInstancesByDefinition,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
@@ -50,7 +51,6 @@ import {
   type AssignmentDeltas,
 } from './assignment-capabilities';
 import type { AgentAssignment, AgentDefinition, AgentRole } from './types';
-import { randomUUID } from 'node:crypto';
 
 /** agent:addToWorkspace 入参（v1.3） */
 export interface AddToWorkspaceInput {
@@ -421,52 +421,33 @@ export function registerAgentHandlers(): void {
     return def;
   });
 
-  // 创建自定义 agent 定义（v1.3：scope + modelProviderId + modelName）
+  // 创建自定义 agent 定义（v1.3：scope + modelProviderId + modelName；v1.6：可选 defaultTools/Mcps/Skills）
   ipcMain.handle(
     'agent:createCustom',
     async (_evt, input: {
       name: string;
       slug: string;
-      description: string;
+      description?: string;
       systemPrompt: string;
       iconEmoji?: string;
       scope: 'global' | 'workspace';
       modelProviderId: string;
       modelName: string;
+      /** v1.6：可选 workspaceId（scope='workspace' 时必传，调用方负责）；缺省 = null */
+      workspaceId?: string;
+      /** v1.6：可选默认工具集，缺省由 createCustomDef 走 SAFE_MINIMUM_TOOLS */
+      defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
+      defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
+      defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }) => {
-      // 解析 scope → workspaceId
       const workspaceId = input.scope === 'workspace'
-        ? (input as { workspaceId?: string }).workspaceId ?? null
+        ? input.workspaceId ?? null
         : null;
-
-      const def: AgentDefinition = {
-        id: randomUUID(),
-        name: input.name,
-        slug: input.slug,
-        version: '1.0.0',
-        runtime: 'declarative',
-        systemPrompt: input.systemPrompt,
-        defaultTools: [
-          { kind: 'builtin', ref: 'read_file' },
-          { kind: 'builtin', ref: 'write_file' },
-          { kind: 'builtin', ref: 'list_files' },
-        ],
-        defaultMcps: [],
-        defaultSkills: [],
-        source: 'custom',
-        description: input.description,
-        iconEmoji: input.iconEmoji ?? '🤖',
-        workspaceId,
-        modelProviderId: input.modelProviderId,
-        modelName: input.modelName,
-      };
-      saveAgentDefinition(def);
-      logger.info('自定义 Agent 定义已创建', { slug: def.slug, scope: input.scope });
-      return def;
+      return createCustomDef(workspaceId, input);
     },
   );
 
-  // 编辑 agent 定义（v1.3：scope + modelProviderId + modelName；不含 type/parent）
+  // 编辑 agent 定义（v1.3：scope + modelProviderId + modelName；v1.6：可选 defaultTools/Mcps/Skills）
   ipcMain.handle(
     'agent:updateDefinition',
     async (_evt, input: {
@@ -478,12 +459,17 @@ export function registerAgentHandlers(): void {
       scope?: 'global' | 'workspace';
       modelProviderId?: string;
       modelName?: string;
+      /** v1.6：可选 workspaceId（scope='workspace' 时必传） */
+      workspaceId?: string;
+      /** v1.6：undefined=不改；传值（含 []）= 覆盖 */
+      defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
+      defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
+      defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }) => {
-      // scope 转 workspaceId
       const workspaceId = input.scope === 'global'
         ? null
         : input.scope === 'workspace'
-          ? (input as { workspaceId?: string }).workspaceId
+          ? input.workspaceId
           : undefined;
 
       const updated = updateAgentDefinition({
@@ -495,6 +481,9 @@ export function registerAgentHandlers(): void {
         modelProviderId: input.modelProviderId,
         modelName: input.modelName,
         workspaceId,
+        defaultTools: input.defaultTools,
+        defaultMcps: input.defaultMcps,
+        defaultSkills: input.defaultSkills,
       });
       const stopped = stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {
