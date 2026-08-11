@@ -9,6 +9,7 @@ import { ipc } from '../../ipc/client';
 import { AddToWorkspaceDialog } from './AddToWorkspaceDialog';
 import { AssignmentRoleEditor } from './AssignmentRoleEditor';
 import { AssignmentApiKeyEditor } from './AssignmentApiKeyEditor';
+import { AssignmentCapabilitiesDialog } from './AssignmentCapabilitiesDialog';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/cn';
@@ -22,6 +23,8 @@ export function WorkspaceAgentsPanel() {
   const [addOpen, setAddOpen] = useState(false);
   const [roleEditing, setRoleEditing] = useState<AgentAssignment | null>(null);
   const [keyEditing, setKeyEditing] = useState<AgentAssignment | null>(null);
+  // v1.6 Task 12：当前正在调整能力（Layer 3 override）的 assignment；非 null 时渲染弹窗
+  const [adjustingAssignment, setAdjustingAssignment] = useState<AgentAssignment | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'orchestrate'>('list');
 
   useEffect(() => {
@@ -87,7 +90,9 @@ export function WorkspaceAgentsPanel() {
               <AssignmentRow
                 key={a.instanceId} a={a} defMap={defMap} running={running}
                 workspace={workspace} setCoordinator={setCoordinator}
-                onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
+                onEditRole={setRoleEditing} onEditKey={setKeyEditing}
+                onAdjustCapabilities={setAdjustingAssignment}
+                onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
               />
             ))}
           </Section>
@@ -100,13 +105,17 @@ export function WorkspaceAgentsPanel() {
                 <AssignmentRow
                   a={main} defMap={defMap} running={running}
                   workspace={workspace} setCoordinator={setCoordinator}
-                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
+                  onEditRole={setRoleEditing} onEditKey={setKeyEditing}
+                  onAdjustCapabilities={setAdjustingAssignment}
+                  onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                 />
                 {subsOf(main.instanceId).map((sub) => (
                   <div key={sub.instanceId} className="pl-6">
                     <AssignmentRow
                       a={sub} defMap={defMap} running={running}
-                      onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
+                      onEditRole={setRoleEditing} onEditKey={setKeyEditing}
+                      onAdjustCapabilities={setAdjustingAssignment}
+                      onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                     />
                   </div>
                 ))}
@@ -121,7 +130,9 @@ export function WorkspaceAgentsPanel() {
               <div key={sub.instanceId} className="border border-amber-500/30 rounded p-2 bg-amber-500/5">
                 <AssignmentRow
                   a={sub} defMap={defMap} running={running}
-                  onEditRole={setRoleEditing} onEditKey={setKeyEditing} onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
+                  onEditRole={setRoleEditing} onEditKey={setKeyEditing}
+                  onAdjustCapabilities={setAdjustingAssignment}
+                  onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
                 />
                 <div className="text-xs text-amber-500 mt-1 pl-8">
                   建议为此 agent 选择父主 agent，或改为独立角色
@@ -146,6 +157,17 @@ export function WorkspaceAgentsPanel() {
       )}
       {keyEditing && (
         <AssignmentApiKeyEditor assignment={keyEditing} onClose={() => setKeyEditing(null)} />
+      )}
+      {adjustingAssignment && (
+        <AssignmentCapabilitiesDialog
+          assignment={adjustingAssignment}
+          def={definitions.find((d) => d.id === adjustingAssignment.agentDefinitionId)!}
+          onClose={() => {
+            setAdjustingAssignment(null);
+            // setAssignmentDeltas 不像 updateAssignmentRole/Key 那样内部刷新列表，需显式刷新
+            if (workspace) void loadAssignments(workspace.id);
+          }}
+        />
       )}
     </div>
   );
@@ -174,13 +196,14 @@ interface RowProps {
   onStop?: (a: AgentAssignment) => void;
   onEditRole: (a: AgentAssignment) => void;
   onEditKey: (a: AgentAssignment) => void;
+  onAdjustCapabilities: (a: AgentAssignment) => void;
   onRemove: (a: AgentAssignment) => Promise<void>;
 }
 
 function AssignmentRow({
   a, defMap, running, workspace, setCoordinator,
   onStart, onStop,
-  onEditRole, onEditKey, onRemove,
+  onEditRole, onEditKey, onAdjustCapabilities, onRemove,
 }: RowProps) {
   const def = defMap.get(a.agentDefinitionId);
   const isCoord = workspace?.coordinatorInstanceId === a.instanceId;
@@ -216,6 +239,9 @@ function AssignmentRow({
         </button>
         <button type="button" onClick={() => onEditKey(a)} className="text-xs text-neutral-400 hover:text-neutral-200">
           更新密钥
+        </button>
+        <button type="button" onClick={() => onAdjustCapabilities(a)} className="text-xs text-neutral-400 hover:text-neutral-200">
+          ⚙ 调整能力
         </button>
         <button type="button" onClick={() => void onRemove(a)} className="text-xs text-neutral-400 hover:text-red-400">
           移除
