@@ -90,6 +90,7 @@
     }
   },
   "dependencies": {
+    "adm-zip": "^0.6.0",
     "better-sqlite3": "^11.0.0",
     "cheerio": "1",
     "electron-log": "^5.1.0",
@@ -103,6 +104,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
+    "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",

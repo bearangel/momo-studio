@@ -1,6 +1,6 @@
 // electron/src/preload/index.ts
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { ApiSurface, AssignmentDeltas, ImMessage, StreamChunk } from '../../../renderer/src/ipc/types';
+import type { ApiSurface, AssignmentDeltas, ImMessage, InstalledSkill, StreamChunk } from '../../../renderer/src/ipc/types';
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
@@ -148,6 +148,15 @@ const api: ApiSurface = {
     updateGlobal: (patch) => invoke('settings:updateGlobal', patch),
     getRoom: (roomId: string) => invoke('settings:getRoom', roomId),
     updateRoom: (roomId: string, patch) => invoke('settings:updateRoom', roomId, patch),
+  },
+  skill: {
+    // v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类）
+    listInstalled: () => invoke<InstalledSkill[]>('skill:listInstalled'),
+    // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）
+    uploadZip: (buffer: ArrayBuffer, filename: string) =>
+      invoke<{ slug: string; description: string }>('skill:uploadZip', Buffer.from(buffer), filename),
+    // v1.6：删除自定义上传的 skill（builtin/marketplace 抛错）
+    deleteCustom: (slug: string) => invoke('skill:deleteCustom', slug),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

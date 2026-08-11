@@ -317,6 +317,20 @@ export interface RoomSettings {
 }
 
 /**
+ * v1.6：已安装 Skill（skill:listInstalled 返回），与 electron 端 InstalledSkill 对齐。
+ * source 区分三类来源，UI 据此控制删除/卸载按钮可见性。
+ */
+export interface InstalledSkill {
+  slug: string;
+  name: string;
+  description: string;
+  /** builtin=应用内置 / marketplace=市场安装 / custom=用户 zip 上传 */
+  source: 'builtin' | 'marketplace' | 'custom';
+  /** 安装时间 ISO 字符串；builtin 为 null */
+  installedAt: string | null;
+}
+
+/**
  * v1.5 TodoTools 任务项。与 electron 端 tools/todo-types.ts 的 TodoItem 对齐。
  * 因 renderer 无法直接 import electron 源码，这里维持一份等价的本地定义。
  */
@@ -596,6 +610,14 @@ export interface ApiSurface {
     getRoom(roomId: string): Promise<RoomSettings>;
     /** 部分更新房间级配置，返回更新后的完整配置 */
     updateRoom(roomId: string, patch: Partial<RoomSettings>): Promise<RoomSettings>;
+  };
+  skill: {
+    /** v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类） */
+    listInstalled(): Promise<InstalledSkill[]>;
+    /** v1.6：上传自定义 skill zip（解压到 <userData>/skills/<slug>/） */
+    uploadZip(buffer: ArrayBuffer, filename: string): Promise<{ slug: string; description: string }>;
+    /** v1.6：删除自定义上传的 skill（builtin/marketplace 抛错） */
+    deleteCustom(slug: string): Promise<void>;
   };
 }
 
