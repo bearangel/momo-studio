@@ -6,24 +6,46 @@
 //   Layer 3：assignment extra —— schema 未引入，暂以占位说明
 //
 // Layer 2 增删走 capability.store → allocation:* IPC。无选中 agent 时仅显示 Layer 2。
+//
+// v1.6 Task 16：顶部新增两个增强按钮入口（均通过可选 callback 注入，未提供则不渲染，
+// 保证向后兼容现有调用站点）：
+//   - onEditDefinition：仅 custom agent（source !== 'builtin'）显示，跳到 DefinitionEditor edit 模式
+//   - onAdjustAssignment：builtin/custom 均可，需 activeAssignment 存在，跳到 AssignmentCapabilitiesDialog
 import { useEffect, useState, type FormEvent } from 'react';
 import { useCapabilityStore } from '../../stores/capability.store';
 import { Button } from '../ui/Button';
-import type { AgentDefinition, CapabilityType } from '../../ipc/types';
+import type { AgentAssignment, AgentDefinition, CapabilityType } from '../../ipc/types';
 
 interface Props {
   workspaceId: string;
   agentDef?: AgentDefinition;
+  /** 当前 assignment（提供且 onAdjustAssignment 也提供时显示「调整本实例能力」按钮） */
+  activeAssignment?: AgentAssignment;
+  /** custom agent 时显示「编辑 def 默认能力」按钮，点击跳到 DefinitionEditor edit 模式 */
+  onEditDefinition?: (defId: string) => void;
+  /** 点击「调整本实例能力」打开 AssignmentCapabilitiesDialog（Layer 3 override） */
+  onAdjustAssignment?: (assignment: AgentAssignment) => void;
 }
 
 type Group = { type: CapabilityType; label: string; layer1: string[]; layer2: string[] };
 
-export function CapabilityConfig({ workspaceId, agentDef }: Props) {
+export function CapabilityConfig({
+  workspaceId,
+  agentDef,
+  activeAssignment,
+  onEditDefinition,
+  onAdjustAssignment,
+}: Props) {
   const { allocation, load, add, remove } = useCapabilityStore();
 
   useEffect(() => {
     void load(workspaceId);
   }, [workspaceId, load]);
+
+  // 「编辑 def 默认能力」：仅 custom agent（builtin 默认能力不可改）+ callback 提供
+  const showEditDefButton = !!onEditDefinition && !!agentDef && agentDef.source !== 'builtin';
+  // 「调整本实例能力」：builtin/custom 均可，需 activeAssignment + callback 同时提供
+  const showAdjustAssignmentButton = !!onAdjustAssignment && !!activeAssignment;
 
   const groups: Group[] = [
     {
@@ -52,6 +74,29 @@ export function CapabilityConfig({ workspaceId, agentDef }: Props) {
         <h3 className="text-sm font-semibold text-neutral-200">能力配置</h3>
           <span className="text-xs text-neutral-500">工作空间共享能力对所有 agent 生效</span>
       </div>
+
+      {(showEditDefButton || showAdjustAssignmentButton) && (
+        <div className="flex flex-wrap gap-2">
+          {showEditDefButton && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onEditDefinition!(agentDef!.id)}
+            >
+              编辑 def 默认能力
+            </Button>
+          )}
+          {showAdjustAssignmentButton && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onAdjustAssignment!(activeAssignment!)}
+            >
+              调整本实例能力
+            </Button>
+          )}
+        </div>
+      )}
 
       {groups.map((g) => (
         <CapabilityGroup
