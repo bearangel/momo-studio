@@ -15,6 +15,7 @@ import path from 'node:path';
 import { getAgentDefinition, listAssignments, listSubAssignments } from './crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
+import { getAssignmentDeltas } from './assignment-capabilities';
 import { resolveSkillsDir } from '../paths';
 import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
@@ -139,9 +140,13 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   const subAgents: SubAgentRef[] =
     role === 'main' ? rebuildSubAgents(workspaceId, instanceId) : [];
 
-  // 合并三层能力（def 默认 ∪ workspace allocation）
+  // 合并三层能力（Layer 1 def 默认 ∪ Layer 2 workspace allocation ∪/- Layer 3 per-assignment delta）
+  // v1.6 修复：merged.tools 必须注入 opts.allowedTools。v1.5 此处丢弃 merged.tools，
+  // 导致 RuntimeConfig.allowedTools 永远 undefined、permission.ts 全放行——所有 agent
+  // 实际能用全部 24 个工具，与 def.defaultTools 配置完全无关（严重安全 bug）。
   const allocation = getAllocation(workspaceId);
-  const merged = mergeCapabilities(def, allocation);
+  const deltas = getAssignmentDeltas(instanceId);
+  const merged = mergeCapabilities(def, allocation, deltas);
 
   return {
     instanceId,
@@ -160,6 +165,8 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     ownerUserId,
     role,
     subAgents,
+    // v1.6 修复：allowedTools 来自三层合并后的 merged.tools（非 undefined）
+    allowedTools: merged.tools,
     skills: resolveSkillSlugs(merged.skills),
     mcpNames: merged.mcps,
     isCoordinator,
