@@ -58,7 +58,7 @@ export function registerResourceHandlers(): void {
 
   // resource:delete — 按 source + type 路由到底层删除函数
   //   - builtin        → 抛错（系统预置不可移除）
-  //   - marketplace    → uninstallPackage(item.id)（按 installed_packages.item_id 查删）
+  //   - marketplace    → uninstallPackage(catalogItem.id)（按 installed_packages.item_id 查删）
   //   - custom + mcp   → deleteRegistered(item.slug)（按 mcp_definitions.name 查删）
   //   - custom + skill → deleteCustomSkill(item.slug)（按 skills 目录名查删）
   //   - custom + agent → deleteDefinition(item.slug)（按 agent_definitions.slug 查删）
@@ -70,9 +70,17 @@ export function registerResourceHandlers(): void {
       throw new Error(`${sourceLabel(item.source)}不可移除：「${item.name}」`);
     }
     switch (item.source) {
-      case 'marketplace':
-        // uninstallPackage 按 installed_packages.item_id 查找；ResourceItem.id 即资源全局 id
-        return uninstallPackage(item.id);
+      case 'marketplace': {
+        // 警告：uninstallPackage 按 installed_packages.item_id 查删——该列存的是 catalog 的
+        // MarketplaceItem.id（opaque），不是 ResourceItem.id。直接传 item.id 会查无此行 →
+        // 静默 no-op（用户以为删成功但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id。
+        const catalog = await fetchCatalog();
+        const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
+        if (!catalogItem) {
+          throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
+        }
+        return uninstallPackage(catalogItem.id);
+      }
       case 'custom':
         if (item.type === 'mcp') return deleteRegistered(item.slug);
         if (item.type === 'skill') return deleteCustomSkill(item.slug);

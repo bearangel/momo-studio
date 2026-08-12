@@ -123,7 +123,80 @@ return installPackage(catalogItem);                 // 传完整 MarketplaceItem
 
 ## Concerns
 
-1. **`uninstallPackage(item.id)` 的实际 DB 行为可能有问题**（非本 task 阻塞项）：
+1. **`uninstallPackage(item.id)` 的实际 DB 行为可能有问题**（非本 task 阻塞项）:
    `uninstallPackage` 底层按 `installed_packages.item_id` 查删，而 `item_id` 在 `installPackage` 时存的是 `MarketplaceItem.id`（catalog.json 内的 id，例如 UUID 或数字）。但 `ResourceItem.id` 是 `${source}-${type}-${slug}` 格式。两者可能不一致，导致真实卸载失败。测试因 mock 而通过。**修复方向**：要么在 ResourceItem 中保留原 MarketplaceItem.id，要么改 uninstallPackage 按 slug 查删——属后续 task 范畴。
 
 2. **`resource:install` 无测试断言**：brief 未提供 install 路由的 expect，仅 mock。实现按 `installPackage(MarketplaceItem)` 真实签名编写（fetchCatalog + 按 slug 找原 item），逻辑正确但缺自动化回归保护。建议后续 Phase 2 补 install 集成测试。
+
+## Fix: uninstallPackage 参数 bug
+
+**Reviewer 发现（Important）**：`resource:delete` 的 marketplace 分支 `uninstallPackage(item.id)` 传错了参数——`item.id` 是 `ResourceItem.id`（buildResourceId 生成的 `'marketplace-skill-remote'`），但 `uninstallPackage` 按 `installed_packages.item_id` 查删，该列存的是 catalog 的 `MarketplaceItem.id`（opaque，如 `'skill-code-review'`）。两者不同 → DB 查无此行 → `if (!row) return;` 静默 no-op → 用户以为删成功但实际没删。
+
+**测试假绿原因**：原测试 `expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote')` 是自我指涉——既 mock 了 uninstallPackage 又断言它收到了 buggy 实现传入的同一个值，所以无论实现传什么都能通过。
+
+### 修复前后对比
+
+**`electron/src/main/resource/ipc.handlers.ts`** `resource:delete` marketplace 分支：
+
+```diff
+-      case 'marketplace':
+-        // uninstallPackage 按 installed_packages.item_id 查找；ResourceItem.id 即资源全局 id
+-        return uninstallPackage(item.id);
++      case 'marketplace': {
++        // 警告：uninstallPackage 按 installed_packages.item_id 查删——该列存的是 catalog 的
++        // MarketplaceItem.id（opaque），不是 ResourceItem.id。直接传 item.id 会查无此行 →
++        // 静默 no-op（用户以为删成功但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id。
++        const catalog = await fetchCatalog();
++        const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
++        if (!catalogItem) {
++          throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
++        }
++        return uninstallPackage(catalogItem.id);
++      }
+```
+
+模式与 `resource:install` handler 完全一致——都通过 `fetchCatalog` + slug 反查 catalog 原 item。
+
+### 测试断言改动
+
+**`electron/tests/resource/ipc-handlers.test.ts`**：
+
+1. 新增 `vi.mock('../../src/main/marketplace/client', ...)`，返回含 slug=`'remote'` 的 catalog item，**id 刻意设为 `'catalog-id-remote'`（不同于 ResourceItem.id `'marketplace-skill-remote'`）**——这样断言可区分两种 id，回归保护 buggy 实现重新出现。
+
+2. 测试名改：`marketplace-* 路由到 uninstallPackage` → `marketplace-* 路由到 uninstallPackage（传 catalog id，非 ResourceItem.id）`
+
+3. 断言改：
+```diff
+-    expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote');
++    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote');
+```
+
+**关键**：若有人把 handler 改回 `uninstallPackage(item.id)`，断言 `catalog-id-remote` != 实参 `'marketplace-skill-remote'`，测试立刻失败 → 真正的回归保护（不再是自我指涉）。
+
+### 测试运行结果
+
+```
+# 单文件（target test）
+✓ tests/resource/ipc-handlers.test.ts  (7 tests) 6ms
+Test Files  1 passed (1)
+     Tests  7 passed (7)
+
+# electron 全套
+Test Files  86 passed (86)
+     Tests  580 passed (580)
+
+# typecheck（electron + renderer 双 workspace）
+electron typecheck: Done
+renderer typecheck: Done
+```
+
+零 typecheck 错误，零测试回归。
+
+### Commit
+
+见实际 commit hash（本节对应 fix commit）。
+
+### 修复后 Concerns 状态
+
+- Concern #1（`uninstallPackage` 参数 bug）：✅ **已修复**。改为 fetchCatalog 按 slug 反查 catalog id，与 install handler 一致。
+- Concern #2（`resource:install` 无测试断言）：🔲 **仍未覆盖**。本 fix 未触及 install 分支测试，建议后续 task 补 install 路由的 expect 断言（mock fetchCatalog + installPackage，验证 `installPackage` 收到完整 MarketplaceItem 对象）。

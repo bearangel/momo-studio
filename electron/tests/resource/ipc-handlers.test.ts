@@ -25,6 +25,35 @@ vi.mock('../../src/main/marketplace/installer', () => ({
   uninstallPackage: vi.fn(),
 }));
 
+// mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
+// 以回归保护"误传 ResourceItem.id 给 uninstallPackage"的静默 no-op bug。
+vi.mock('../../src/main/marketplace/client', () => ({
+  fetchCatalog: vi.fn(async () => ({
+    version: '1.0',
+    updatedAt: '2026-08-11',
+    items: [
+      {
+        id: 'catalog-id-remote',
+        type: 'skill',
+        slug: 'remote',
+        name: 'Remote',
+        version: '1',
+        author: '@x',
+        description: 'd',
+        readme: 'r',
+        tags: [],
+        category: 'c',
+        iconEmoji: '📦',
+        verificationStatus: 'community',
+        downloadUrl: 'http://x',
+        checksum: 'x',
+        sizeBytes: 0,
+        installCount: 0,
+      },
+    ],
+  })),
+}));
+
 import { ipcMain } from 'electron';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
@@ -123,7 +152,7 @@ describe('registerResourceHandlers', () => {
     expect(deleteDefinition).toHaveBeenCalledWith('uuid1');
   });
 
-  it('resource:delete marketplace-* 路由到 uninstallPackage', async () => {
+  it('resource:delete marketplace-* 路由到 uninstallPackage（传 catalog id，非 ResourceItem.id）', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'marketplace-skill-remote',
       type: 'skill',
@@ -136,6 +165,8 @@ describe('registerResourceHandlers', () => {
     const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
     const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
     await handler({}, 'marketplace-skill-remote');
-    expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote');
+    // 必须传 catalog 的 MarketplaceItem.id（'catalog-id-remote'），不是 ResourceItem.id
+    // （'marketplace-skill-remote'）——后者会让 uninstallPackage 查无此行触发静默 no-op。
+    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote');
   });
 });
