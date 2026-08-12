@@ -1016,6 +1016,10 @@ export async function runChatLoop(
           console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
         }
 
+        // v1.7.4 诊断日志：分段持久化字段快照（用于排查重启还原字段丢失）
+        const incrementalCount = toolCallHistory.length - lastSegmentToolCallCount;
+        console.error(`[trace] task_complete segment: segmentIndex=${segmentCount}, bodyLength=${segText.length}, thinkingLength=${accumulatedThinking.length}, toolCallsIncremental=${incrementalCount}, toolCallsOffset=${lastSegmentToolCallCount}, parentStreamSessionId=${parentStreamSessionId ?? 'null'}`);
+
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
         accumulatedThinking = '';
@@ -1461,6 +1465,16 @@ async function sendFinalMessage(
 
   // 渐进式截断，确保不超 Matrix PDU 限制
   const fitted = fitEventContent(content, thinking, toolCalls);
+
+  // v1.7.4 诊断日志：记录最终消息的字段大小 + 截断级别
+  const fitLevel = (() => {
+    const size = Buffer.byteLength(JSON.stringify(fitted), 'utf-8');
+    if (size > MAX_EVENT_CONTENT_BYTES) return 'truncated-fallback';
+    if (thinking && !fitted['io.momo-studio.thinking']) return 'thinking-deleted';
+    if (toolCalls.length > 0 && !fitted['io.momo-studio.tool_calls']) return 'tool_calls-deleted';
+    return 'full';
+  })();
+  console.error(`[trace] sendFinalMessage: bodyLength=${text.length}, thinkingLength=${thinking.length}, toolCallsCount=${toolCalls.length}, dispatchedThroughMeta=${!!fitted['io.momo-studio.agent_meta_id']}, fitLevel=${fitLevel}, parentStreamSessionId=${parentStreamSessionId ?? 'null'}`);
 
   // v1.5.5：sendEvent 兜底——即使 fitEventContent 后仍超 PDU（极端情况），
   // 也不能让 sendFinalMessage 抛错（chat loop 会把失败当 dispatch 错误重试，死循环）。
@@ -1948,6 +1962,8 @@ function loadRecentHistory(
       history.push({ role: 'user', content: msgBody });
     }
   }
+  // v1.7.4 诊断日志：历史加载决策（用于排查子 agent fresh session / 上下文污染）
+  console.error(`[trace] loadRecentHistory: roomId=${roomId}, historyCount=${history.length}, botUserId=${config.botUserId}`);
   return history;
 }
 
