@@ -1,75 +1,111 @@
-# Task 1 Report — v1.5 工具库骨架
+# Task 1 Report — v1.7 资源库 types.ts（统一类型 + 资源 ID 工具）
 
-**Status**: DONE
-**Date**: 2026-08-04
-**Branch**: main (local commit only, 未推送)
+**Commit**: `333e9e5`
+**Base**: `2b0e7f5`（v1.7 计划已合）
+**状态**: DONE — 5/5 新增 passed，electron 全套 552/552 passed（零回归），typecheck 双 clean，LSP 无 diagnostics
 
-## 实施概述
+> v1.6 周期的同名 report 已归档为 `task-1-report-v1.6-archived.md`（gitignored，仅本地保留）。
 
-按 `/workspace/.superpowers/sdd/task-1-brief.md` 创建 v1.5 内置工具库的最小骨架,引入 `ToolModule` / `ToolContext` 接口与统一截断策略,Phase 1 仅占位注册中心,后续 Phase 2 起逐步填充实现。
+## 实施摘要
 
-## 文件变更
+新建 `electron/src/main/resource/types.ts`（v1.7 资源库的基石文件，后续 14 个 task 全部引用）：
 
-| 文件 | 操作 | 说明 |
-|---|---|---|
-| `electron/src/main/agent/tools/types.ts` | 新建 | `ToolContext` / `ToolModule` 接口 + `UnknownToolError` |
-| `electron/src/main/agent/tools/shared/output-truncate.ts` | 新建 | `OUTPUT_LIMITS` 常量 + `truncateString` / `truncateArray` |
-| `electron/src/main/agent/tools/shared/permission.ts` | 新建 | `ToolPermissionConfig` stub(Task 3 会补全 `assertToolAllowed`) |
-| `electron/src/main/agent/tools/index.ts` | 新建 | `buildToolRegistry` / `getAllToolDefs` / `executeTool` 占位实现 |
-| `/workspace/.superpowers/sdd/task-1-report.md` | 新建 | 本报告(被 `.gitignore` 忽略,`git add -f` 强制) |
+- **类型**：`ResourceType`（`'agent' | 'mcp' | 'skill'`）/ `ResourceSource`（`'builtin' | 'marketplace' | 'custom' | 'p2p'`）/ `ResourceFilter` / `ResourceItem`
+- **ID 工具**：`buildResourceId(source, type, slug)` 拼 `${source}-${type}-${slug}`；`parseResourceId(id)` 用白名单正则反解三元组（非法返回 `null`）
+- **展示工具**：`sourceLabel(source)` 返回中文文案（builtin=系统预置 / custom=我的上传 / marketplace=网络资源 / p2p=P2P 共享）
 
-未触碰任何其它文件,符合"只创建指定三个文件 + 必要 stub"的 scope 约束。最初 brief 列出三个源文件,但 `types.ts` 必须 import `./shared/permission` 才能 typecheck 通过;经用户裁决,允许追加 `shared/permission.ts` 最小 stub(Task 3 完整覆写)。
+`ResourceItem` 采用「扁平通用顶层字段 + 四个可选 source namespace」的形状：列表渲染只需顶层字段，详情面板按 source 切到对应 namespace。字段名严格按 brief（后续 task 引用，不可改名）。
 
-## 验证结果
+测试 `electron/tests/resource/types.test.ts` 覆盖 brief 给定的 5 个用例：buildResourceId 拼接、parseResourceId 反解（含 UUID slug）、parseResourceId 非法 id 四种边界、buildResourceId↔parseResourceId 互逆、sourceLabel 中文文案。
 
-- **LSP diagnostics**: 四个新文件 `No diagnostics found`(electron workspace 内 0 error)
-- **Typecheck (Node 20)**:
-  ```
-  > momo-studio@0.1.0 typecheck /workspace
-  > pnpm -r typecheck
-  electron typecheck: Done
-  renderer typecheck: Done
-  ```
-  与 brief 预期"双 Done"完全一致。
-- **未运行** `pnpm test`:brief 仅要求 typecheck 验证,且本任务纯类型骨架无运行时行为需要测试。
+## TDD 5 步输出
 
-## 命令执行记录
+### Step 1 — 写失败测试（RED 准备）
 
-```bash
-# 1. 启动 LSP diagnostics
-lsp_diagnostics electron/src/main/agent/tools/types.ts  # No diagnostics
-lsp_diagnostics electron/src/main/agent/tools/index.ts  # No diagnostics
-lsp_diagnostics electron/src/main/agent/tools/shared/output-truncate.ts  # No diagnostics
-lsp_diagnostics electron/src/main/agent/tools/shared/permission.ts  # No diagnostics
+按 brief 逐字写 `electron/tests/resource/types.test.ts`（5 个 it 用例 + 顶部加中文文件头注释，与仓库其它测试风格一致）。
 
-# 2. typecheck
-export PATH="/home/ai-agent/.nvm/versions/node/v20.20.2/bin:$PATH"
-node -v                                                  # v20.20.2
-npx pnpm@9.0.0 typecheck                                 # electron + renderer Done
+### Step 2 — 跑测试确认失败（RED 验证）
+
+```
+❯ tests/resource/types.test.ts  (0 test)
+ FAIL  tests/resource/types.test.ts
+Error: Failed to load url ../../src/main/resource/types (resolved id: ../../src/main/resource/types)
+       in /workspace/electron/tests/resource/types.test.ts. Does the file exist?
+Test Files  1 failed (1)
+     Tests  no tests
 ```
 
-## 自查要点
+失败原因 = 模块不存在（feature missing），非 typo / 非测试自身错误。RED 确认。
 
-- **TypeScript strict 合规**:无 `any` / `@ts-ignore` / `as any`;`as const` 用于 `OUTPUT_LIMITS`;所有 `import type` 显式标注;`Error` 子类用 `instanceof` 友好(本任务不涉及 throw 路径)。
-- **命名**:负形式 `deniedTools` 沿用 brief 既有语义(deny-list),非 smell;`UnknownToolError` 表正向意图(错误即未知工具);未引入 `if/else` 区分 tag 类型的场景。
-- **耦合面**:仅声明对外契约,未引入任何实现层依赖(没有 `../llm-provider` 的运行时 import),占位 index.ts 严格不引用任何具体模块,符合 Phase 1 占位要求。
-- **参数数量**:`ToolContext` 字段 9 个,超过 3 但属于"共享上下文对象"领域类型,而非"借用 dict 包装多个独立参数"smell;brief 明确要求这些字段全保留。
-- **未触碰 main 之外**:commit 仅包含 4 个新源文件 + 本报告,未引入 `dist/`、未触动 `package.json`、未触动既有测试。
-- **未来任务路径**:
-  - Task 2+:在 `tools/` 下增加 `bash/file/git/...` 模块,实现 `ToolModule` 接口
-  - Task 3:覆写 `shared/permission.ts` 加 `assertToolAllowed`
-  - `executeTool` 已就绪,Phase 2 起 `buildToolRegistry` 只需返回 `[...modules]`
+### Step 3 — 实现 types.ts（GREEN）
 
-## 风险与遗留
+按 brief 代码实现 `electron/src/main/resource/types.ts`（保留 brief 给定的正则 `/^(builtin|marketplace|custom|p2p)-(agent|mcp|skill)-(.+)$/`，并补充与仓库 `marketplace/types.ts` 一致的中文 JSDoc）。
 
-- `_ctx` 参数以 `_` 前缀标记 unused,TS strict 不会抱怨(本仓库未启用 `noUnusedParameters`,确认未启用 — `tsc --noEmit` 通过即证)。
-- `parentStreamSessionId?: string` 使用 optional 而非 `string | undefined`;与 brief 字面一致,如启用 `exactOptionalPropertyTypes` 需保持调用方不显式传 `undefined`(非本次范围)。
-- `UnknownToolError.message` 使用中文,沿用 brief 既有错误文案风格,符合项目既有 i18n 习惯(项目内既有错误也用中文)。
+### Step 4 — 跑测试确认通过（GREEN 验证）
 
-## 最终 Commit SHA
+```
+✓ tests/resource/types.test.ts  (5 tests) 2ms
+Test Files  1 passed (1)
+     Tests  5 passed (5)
+```
 
-**`f9ea796192d32179400b3fe39b2b8e74d6fed3e0`** — 父提交 `f2d80b6 docs(plan): v1.5 内置工具库实施计划`
+### Step 5 — commit
 
-- 5 files changed, 172 insertions(+)
-- 本地 commit,未推送(`Don't push to remote` 约束)
-- commit message 遵循仓库 SEMANTIC + 中文风格(feat(v1.5): ...)与历史一致
+```
+git add electron/src/main/resource/types.ts electron/tests/resource/types.test.ts
+git commit -m "feat(resource): v1.7 types.ts 统一类型 + 资源 ID 工具"
+→ [main 333e9e5] 2 files changed, 177 insertions(+)
+```
+
+## Self-Review
+
+### parseResourceId 正则边界（4 种非法输入全覆盖）
+
+正则：`/^(builtin|marketplace|custom|p2p)-(agent|mcp|skill)-(.+)$/`
+
+| 输入 | 匹配结果 | 原因 | 测试用例 |
+|---|---|---|---|
+| `'invalid'` | 不匹配 → `null` | 不含两个 `-` 分隔的三段 | ✓ `'invalid'` |
+| `'builtin-agent-'` | 不匹配 → `null` | `.+` 要求 ≥1 字符，空 slug 判负 | ✓ 空 slug |
+| `'unknown-agent-foo'` | 不匹配 → `null` | `unknown` 不在 source 白名单交替组 | ✓ 未知 source |
+| `'builtin-unknown-foo'` | 不匹配 → `null` | `unknown` 不在 type 白名单交替组 | ✓ 未知 type |
+
+合法边界：
+- `'custom-agent-abc-123-def'` → slug = `'abc-123-def'`（`.+` 贪婪，允许 UUID 连字符）
+- `'marketplace-skill-xlsx-remote'` → slug = `'xlsx-remote'`（互逆测试覆盖）
+- `'builtin-agent-pm-agent-extra'` → slug = `'pm-agent-extra'`（首段 source/type 被 `^` + 交替组锚定，不会错切）
+
+`if (!m || !m[3]) return null;` 中的 `!m[3]` 是防御性冗余（`.+` 已保证非空），保留以提高可读性。无 `as any` / `@ts-ignore`，两处 `as ResourceSource` / `as ResourceType` 是从已通过白名单正则的捕获组窄化，类型安全。
+
+### ResourceItem 字段完整性（对照 brief 逐字段核对）
+
+顶层通用字段（11 个）：`id` / `type` / `source` / `slug` / `name` / `description` / `version?` / `iconEmoji?` / `installed` / `installable` / `removable` ✓
+
+可选 source namespace（4 个）：
+- `builtin?: { category?; tags? }` ✓
+- `marketplace?: { author; readme; downloadUrl; checksum; verificationStatus; sizeBytes?; installCount?; tags; category }` ✓
+- `custom?: { installedAt; mcpConfig?; skillFrontmatter?; agentSystemPromptHash? }` ✓
+- `p2p?: { peerId; peerName }` ✓
+
+字段名、可选性、嵌套形状与 brief 100% 一致；后续 14 个 task（registry / IPC / store / UI）按此契约引用，无需调整。
+
+### 仓库约束符合性
+
+- TS strict：无 `any` / `@ts-ignore` / `as any`（LSP `No diagnostics found`）
+- 中文注释：文件头说明 + 每个 export 都有中文 JSDoc
+- Conventional commit：`feat(resource): ...`
+- 未触动 working tree 中无关的 v1.6 时期 report 修改（task-5 / task-11 / v1.6.2-fix）
+
+## 验证证据
+
+| 验证项 | 命令 | 结果 |
+|---|---|---|
+| 单文件测试 | `vitest run tests/resource/types.test.ts` | 5 passed |
+| electron 全套回归 | `vitest run` | 552 passed / 82 files（含 conduit flaky 测试也过） |
+| typecheck（双 workspace） | `pnpm -r typecheck` | electron Done / renderer Done |
+| LSP（实现文件） | `lsp_diagnostics` types.ts | No diagnostics |
+| LSP（测试文件） | `lsp_diagnostics` types.test.ts | 仅 2 个 hint 6133（brief 要求的 `import type` 未在 assertion 中消费，编译期擦除，不影响 typecheck） |
+
+## Concerns
+
+无。本 task 是纯类型 + 纯函数（无副作用、无 IO、无 IPC），TDD 5/5 通过，零回归。后续 task 2+ 在此基础上构建 registry / IPC 时如遇字段调整需求，应回头修订本文件并同步 brief。
