@@ -112,6 +112,8 @@ const api: ApiSurface = {
     renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
     dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),
     getMembers: (roomId) => invoke('im:getMembers', roomId),
+    exportRoomMessages: (roomId: string, limit: number) =>
+      invoke<{ filename: string; content: string }>('im:exportRoomMessages', roomId, limit),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
       ipcRenderer.on('im:message', handler);

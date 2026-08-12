@@ -613,6 +613,8 @@ export interface ApiSurface {
     renameRoom(roomId: string, name: string): Promise<{ ok: boolean }>;
     dissolveRoom(roomId: string): Promise<{ dissolved: boolean }>;
     getMembers(roomId: string): Promise<RoomMember[]>;
+    /** 导出指定房间最近 limit 条会话为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载。 */
+    exportRoomMessages(roomId: string, limit: number): Promise<{ filename: string; content: string }>;
     onMessage(callback: (msg: ImMessage) => void): () => void;
   };
   mcp: {
