@@ -778,6 +778,9 @@ export async function runChatLoop(
   let toolCallCount = 0;
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
+  // v1.7.4 Bug 4：记录上次 task_complete 分段时的 toolCallHistory 长度，
+  // 用于本段只持久化增量工具调用（避免每段重复全量历史）。
+  let lastSegmentToolCallCount = 0;
   const toolCallHistory: ToolCallRecord[] = [];
   let accumulatedThinking = '';
   let accumulatedText = '';
@@ -981,9 +984,17 @@ export async function runChatLoop(
               ...(accumulatedThinking
                 ? { 'io.momo-studio.thinking': accumulatedThinking }
                 : {}),
-              ...(toolCallHistory.length > 0
-                ? { 'io.momo-studio.tool_calls': [...toolCallHistory] }
-                : {}),
+              // v1.7.4 Bug 4：增量持久化——本段只带自上次分段以来新增的 tool_calls，
+              // 避免每段重复全量（v1.7.3 全量快照导致用户导出 3 段消息工具调用列表完全相同）。
+              // tool_calls_offset 字段记录本段起始索引，renderer 重建时按 offset 还原顺序。
+              ...(() => {
+                const incremental = toolCallHistory.slice(lastSegmentToolCallCount);
+                if (incremental.length === 0) return {};
+                return {
+                  'io.momo-studio.tool_calls': incremental,
+                  'io.momo-studio.tool_calls_offset': lastSegmentToolCallCount,
+                };
+              })(),
             },
             '',
           );
@@ -995,6 +1006,8 @@ export async function runChatLoop(
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
         accumulatedThinking = '';
+        // v1.7.4 Bug 4：记录本次分段位置，下次分段从这里开始算增量
+        lastSegmentToolCallCount = toolCallHistory.length;
 
         // 推 stream chunk 让 renderer 知道分段了（可选 UI 提示）
         sendStreamChunk({
