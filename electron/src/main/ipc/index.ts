@@ -11,7 +11,6 @@ import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
 import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
-import { registerMarketplaceHandlers } from '../marketplace/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
 import { registerSkillHandlers } from '../skill/ipc.handlers';
@@ -31,7 +30,6 @@ export function registerIpcHandlers(): void {
   registerAllocationHandlers();
   registerGitPolicyHandlers();
   registerAuditHandlers();
-  registerMarketplaceHandlers();
   registerProviderHandlers();
   registerSettingsIpc();
   registerSkillHandlers();

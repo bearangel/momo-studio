@@ -17,8 +17,7 @@ import type { AgentDefinition } from '../../ipc/types';
 
 const createCustom = vi.fn();
 const updateDefinition = vi.fn();
-const listRegistered = vi.fn();
-const listInstalled = vi.fn();
+const resourceList = vi.fn();
 
 const mockApi = {
   agent: {
@@ -26,8 +25,7 @@ const mockApi = {
     updateDefinition,
     list: vi.fn().mockResolvedValue([]),
   },
-  mcp: { listRegistered },
-  skill: { listInstalled },
+  resource: { list: resourceList },
 };
 
 beforeEach(() => {
@@ -35,8 +33,7 @@ beforeEach(() => {
   updateDefinition.mockReset();
   createCustom.mockResolvedValue({});
   updateDefinition.mockResolvedValue({ definition: {}, stoppedInstanceIds: [] });
-  listRegistered.mockResolvedValue([]);
-  listInstalled.mockResolvedValue([]);
+  resourceList.mockResolvedValue([]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   useWorkspaceStore.setState({

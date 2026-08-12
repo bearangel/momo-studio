@@ -23,7 +23,7 @@ import {
 // 自身 props 使用，同时 re-export 保持现有 `import { type Capabilities } from './CapabilityTabs'` 不破。
 import { type Capabilities } from '../../lib/capability-helpers';
 export type { Capabilities };
-import type { RegisteredMcp, InstalledSkill } from '../../ipc/types';
+import type { ResourceItem } from '../../ipc/types';
 
 type Tab = 'tools' | 'mcp' | 'skill';
 
@@ -49,13 +49,18 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export function CapabilityTabs({ mode, defaultValue, value, onChange }: CapabilityTabsProps) {
   const [tab, setTab] = useState<Tab>('tools');
-  const [mcps, setMcps] = useState<RegisteredMcp[]>([]);
-  const [skills, setSkills] = useState<InstalledSkill[]>([]);
+  // v1.7：mcps / skills 拉取自统一 ipc.resource.list；filter installed 只展示已安装项。
+  const [mcps, setMcps] = useState<ResourceItem[]>([]);
+  const [skills, setSkills] = useState<ResourceItem[]>([]);
 
   // 拉取动态列表：已注册 MCP + 已安装 Skill（仅展示用，不影响 value）
   useEffect(() => {
-    void ipc.mcp.listRegistered().then(setMcps);
-    void ipc.skill.listInstalled().then(setSkills);
+    void ipc.resource
+      .list({ type: 'mcp' })
+      .then((items) => setMcps(items.filter((i) => i.installed)));
+    void ipc.resource
+      .list({ type: 'skill' })
+      .then((items) => setSkills(items.filter((i) => i.installed)));
   }, []);
 
   const readonly = mode === 'readonly';
@@ -169,18 +174,18 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
             </div>
           ) : (
             mcps.map((m) => {
-              const checked = value.mcps.includes(m.name);
+              const checked = value.mcps.includes(m.slug);
               return (
                 <label
-                  key={m.name}
+                  key={m.slug}
                   className="flex items-center gap-1 text-xs text-neutral-300"
                 >
                   <input
                     type="checkbox"
-                    aria-label={m.name}
+                    aria-label={m.slug}
                     checked={checked}
                     disabled={readonly}
-                    onChange={(e) => toggleItem('mcps', m.name, e.target.checked)}
+                    onChange={(e) => toggleItem('mcps', m.slug, e.target.checked)}
                   />
                   {m.name}
                   <span className="text-neutral-500">[{m.source}]</span>

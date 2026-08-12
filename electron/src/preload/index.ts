@@ -4,7 +4,6 @@ import type {
   ApiSurface,
   AssignmentDeltas,
   ImMessage,
-  InstalledSkill,
   ResourceFilter,
   ResourceItem,
   StreamChunk,
@@ -123,10 +122,6 @@ const api: ApiSurface = {
   },
   mcp: {
     register: (config) => invoke('mcp:register', config),
-    // v1.6：列出所有已注册 MCP（含 source 区分）
-    listRegistered: () => invoke('mcp:listRegistered'),
-    // v1.6：删除自定义 MCP（marketplace 装的会 reject）
-    deleteRegistered: (name: string) => invoke('mcp:deleteRegistered', name),
     start: (workspaceId, mcpName) => invoke('mcp:start', workspaceId, mcpName),
     listTools: (workspaceId, mcpName) => invoke('mcp:listTools', workspaceId, mcpName),
     callTool: (workspaceId, mcpName, toolName, args) =>
@@ -145,13 +140,6 @@ const api: ApiSurface = {
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
   },
-  marketplace: {
-    getCatalog: (catalogUrl) => invoke('marketplace:getCatalog', catalogUrl),
-    search: (query, type) => invoke('marketplace:search', query, type),
-    install: (item) => invoke('marketplace:install', item),
-    listInstalled: () => invoke('marketplace:listInstalled'),
-    uninstall: (itemId) => invoke('marketplace:uninstall', itemId),
-  },
   settings: {
     getGlobal: () => invoke('settings:getGlobal'),
     updateGlobal: (patch) => invoke('settings:updateGlobal', patch),
@@ -159,16 +147,12 @@ const api: ApiSurface = {
     updateRoom: (roomId: string, patch) => invoke('settings:updateRoom', roomId, patch),
   },
   skill: {
-    // v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类）
-    listInstalled: () => invoke<InstalledSkill[]>('skill:listInstalled'),
     // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
     uploadZip: (buffer: ArrayBuffer, filename: string) =>
       // v1.6.3: 不能用 Buffer.from(buffer)——contextBridge 里 Node Buffer 跨 IPC
       // structured clone 时底层 ArrayBuffer view 关联会断，main 收到的是损坏数据。
       // 用标准 Uint8Array view 让 structured clone 正确拷贝，main process 自己转回 Buffer。
       invoke<UploadedSkill[]>('skill:uploadZip', new Uint8Array(buffer), filename),
-    // v1.6：删除自定义上传的 skill（builtin/marketplace 抛错）
-    deleteCustom: (slug: string) => invoke('skill:deleteCustom', slug),
   },
   resource: {
     // v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选

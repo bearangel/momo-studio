@@ -22,16 +22,14 @@ import type {
   WorkspaceAllocation,
 } from '../../ipc/types';
 
-// ---- mock IPC 桩（CapabilityTabs 直接走 ipc 拉 MCP/Skill；折叠区加载走 allocation.get） ----
+// ---- mock IPC 桩（CapabilityTabs 直接走 ipc.resource.list 拉 MCP/Skill；折叠区加载走 allocation.get） ----
 const allocationGet = vi.fn();
-const listRegistered = vi.fn();
-const listInstalled = vi.fn();
+const resourceList = vi.fn();
 const workspaceGet = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
-  mcp: { listRegistered },
-  skill: { listInstalled },
+  resource: { list: resourceList },
   workspace: { get: workspaceGet },
 };
 
@@ -95,8 +93,7 @@ function mockEmptyAllocation(): WorkspaceAllocation {
 
 beforeEach(() => {
   allocationGet.mockReset();
-  listRegistered.mockReset();
-  listInstalled.mockReset();
+  resourceList.mockReset();
   addAgentMock.mockReset();
   setAssignmentDeltasMock.mockReset();
   workspaceGet.mockReset();
@@ -104,8 +101,7 @@ beforeEach(() => {
   startAgentMock.mockReset();
 
   allocationGet.mockResolvedValue(mockEmptyAllocation());
-  listRegistered.mockResolvedValue([]);
-  listInstalled.mockResolvedValue([]);
+  resourceList.mockResolvedValue([]);
   addAgentMock.mockResolvedValue(NEW_ASSIGNMENT);
   setAssignmentDeltasMock.mockResolvedValue(undefined);
   workspaceGet.mockResolvedValue(WS);

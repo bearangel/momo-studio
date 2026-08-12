@@ -19,8 +19,7 @@ import type { AgentAssignment, AgentDefinition, AssignmentDeltas, WorkspaceAlloc
 // ---- mock IPC 桩（capability tabs / allocation / workspace.get 直接走 ipc） ----
 const allocationGet = vi.fn();
 const workspaceGet = vi.fn();
-const listRegistered = vi.fn();
-const listInstalled = vi.fn();
+const resourceList = vi.fn();
 
 // store action 桩（组件经 useAgentStore 调用）
 const getAssignmentDeltasMock = vi.fn();
@@ -32,8 +31,7 @@ const syncRunningStatesMock = vi.fn();
 const mockApi = {
   allocation: { get: allocationGet },
   workspace: { get: workspaceGet },
-  mcp: { listRegistered },
-  skill: { listInstalled },
+  resource: { list: resourceList },
 };
 
 const EMPTY_DELTAS: AssignmentDeltas = {
@@ -48,8 +46,7 @@ const EMPTY_DELTAS: AssignmentDeltas = {
 beforeEach(() => {
   allocationGet.mockReset();
   workspaceGet.mockReset();
-  listRegistered.mockReset();
-  listInstalled.mockReset();
+  resourceList.mockReset();
   getAssignmentDeltasMock.mockReset();
   setAssignmentDeltasMock.mockReset();
   stopAgentMock.mockReset();
@@ -58,8 +55,7 @@ beforeEach(() => {
 
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
-  listRegistered.mockResolvedValue([]);
-  listInstalled.mockResolvedValue([]);
+  resourceList.mockResolvedValue([]);
   getAssignmentDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
   setAssignmentDeltasMock.mockResolvedValue(undefined);
   stopAgentMock.mockResolvedValue(undefined);

@@ -5,12 +5,13 @@
 //
 // 暴露通道：
 //   - mcp:register        注册一条 MCP server 定义到 SQLite（不启动进程）
-//   - mcp:listRegistered  v1.6：列出所有已注册 MCP（含 source 区分）
-//   - mcp:deleteRegistered v1.6：删除自定义 MCP（marketplace 装的抛错，走卸载按钮）
 //   - mcp:start           从 SQLite 读取定义并启动该 workspace 内的 MCP 进程（进程池复用）
 //   - mcp:listTools       列出某 workspace 内已启动 MCP 暴露的工具
 //   - mcp:callTool        调用某 workspace 内已启动 MCP 的指定工具
 //   - mcp:stop            停止某 workspace 内的指定 MCP 进程
+//
+// v1.7：mcp:listRegistered / mcp:deleteRegistered 已废弃删除，统一走 resource:list /
+// resource:delete。底层函数 listRegistered / deleteRegistered 保留（resource/ 内部复用）。
 
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
@@ -20,8 +21,6 @@ import {
   callMcpTool,
   stopMcp,
   registerMcpDefinition,
-  listRegistered,
-  deleteRegistered,
   getMcpConfig,
 } from './host-manager';
 import type { McpServerConfig } from './types';
@@ -31,17 +30,6 @@ export function registerMcpHandlers(): void {
   // 注册一条 MCP server 定义（持久化，不启动进程）。name 唯一，重复注册会整体覆盖。
   ipcMain.handle('mcp:register', async (_evt, config: McpServerConfig) => {
     registerMcpDefinition(config);
-    return;
-  });
-
-  // v1.6：列出所有已注册 MCP（含 source / installedAt），UI 据此区分展示与卸载逻辑。
-  ipcMain.handle('mcp:listRegistered', async () => {
-    return listRegistered();
-  });
-
-  // v1.6：删除自定义 MCP。marketplace 装的抛错（提示用卸载按钮），不存在的 name 静默跳过。
-  ipcMain.handle('mcp:deleteRegistered', async (_evt, name: string) => {
-    deleteRegistered(name);
     return;
   });
 

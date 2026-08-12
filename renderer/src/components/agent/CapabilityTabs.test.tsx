@@ -19,21 +19,20 @@ import { SAFE_MINIMUM_TOOLS, ALL_BUILTIN_TOOLS } from '../../lib/tool-catalog';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
-const { mockListRegistered, mockListInstalled } = vi.hoisted(() => ({
-  mockListRegistered: vi.fn(),
-  mockListInstalled: vi.fn(),
+// v1.7：mcp + skill 都走统一 ipc.resource.list({ type })，单 mock 按 filter.type 分流。
+const { mockResourceList } = vi.hoisted(() => ({
+  mockResourceList: vi.fn(),
 }));
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
-    mcp: { listRegistered: mockListRegistered },
-    skill: { listInstalled: mockListInstalled },
+    resource: { list: mockResourceList },
   },
 }));
 
 beforeEach(() => {
-  mockListRegistered.mockResolvedValue([]);
-  mockListInstalled.mockResolvedValue([]);
+  // 默认空：任意 type 查询都返回空数组（Tab 切换到空态用例依赖此默认）
+  mockResourceList.mockResolvedValue([]);
 });
 
 /** 默认 edit 模式 props（方便每个 case 覆盖单字段） */
@@ -62,7 +61,6 @@ describe('CapabilityTabs — Tab 结构', () => {
   });
 
   it('点击 MCP Tab 切换到 MCP 面板', async () => {
-    mockListRegistered.mockResolvedValue([]);
     render(<CapabilityTabs {...defaultProps()} />);
     fireEvent.click(screen.getByText('MCP'));
     await waitFor(() => {
@@ -71,7 +69,6 @@ describe('CapabilityTabs — Tab 结构', () => {
   });
 
   it('点击 Skill Tab 切换到 Skill 面板', async () => {
-    mockListInstalled.mockResolvedValue([]);
     render(<CapabilityTabs {...defaultProps()} />);
     fireEvent.click(screen.getByText('Skill'));
     await waitFor(() => {
@@ -279,18 +276,23 @@ describe('CapabilityTabs — override 模式（Layer 3 弹窗）', () => {
 });
 
 describe('CapabilityTabs — MCP Tab 动态列表', () => {
-  it('ipc.mcp.listRegistered 返回的 MCP 渲染为可勾选项', async () => {
-    mockListRegistered.mockResolvedValue([
-      {
-        id: 'm1',
-        name: 'filesystem',
-        version: '1.0.0',
-        command: 'npx',
-        args: [],
-        source: 'custom',
-        installedAt: '2026-01-01T00:00:00Z',
-      },
-    ]);
+  it('ipc.resource.list type=mcp 返回的 MCP 渲染为可勾选项', async () => {
+    mockResourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type !== 'mcp') return [];
+      return [
+        {
+          id: 'custom-mcp-filesystem',
+          type: 'mcp',
+          source: 'custom',
+          slug: 'filesystem',
+          name: 'filesystem',
+          description: '',
+          installed: true,
+          installable: false,
+          removable: true,
+        },
+      ];
+    });
     render(<CapabilityTabs {...defaultProps()} />);
     fireEvent.click(screen.getByText('MCP'));
     await waitFor(() => {
@@ -299,17 +301,22 @@ describe('CapabilityTabs — MCP Tab 动态列表', () => {
   });
 
   it('勾选 MCP → onChange.mcps 加入', async () => {
-    mockListRegistered.mockResolvedValue([
-      {
-        id: 'm1',
-        name: 'github',
-        version: '1.0.0',
-        command: 'npx',
-        args: [],
-        source: 'marketplace',
-        installedAt: '2026-01-01T00:00:00Z',
-      },
-    ]);
+    mockResourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type !== 'mcp') return [];
+      return [
+        {
+          id: 'marketplace-mcp-github',
+          type: 'mcp',
+          source: 'marketplace',
+          slug: 'github',
+          name: 'github',
+          description: '',
+          installed: true,
+          installable: false,
+          removable: true,
+        },
+      ];
+    });
     const onChange = vi.fn();
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
     fireEvent.click(screen.getByText('MCP'));
@@ -323,19 +330,51 @@ describe('CapabilityTabs — MCP Tab 动态列表', () => {
       skills: [],
     });
   });
+
+  it('未安装的 MCP 不展示（filter i.installed）', async () => {
+    mockResourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type !== 'mcp') return [];
+      return [
+        {
+          id: 'marketplace-mcp-remote',
+          type: 'mcp',
+          source: 'marketplace',
+          slug: 'remote',
+          name: 'remote',
+          description: '',
+          installed: false,
+          installable: true,
+          removable: false,
+        },
+      ];
+    });
+    render(<CapabilityTabs {...defaultProps()} />);
+    fireEvent.click(screen.getByText('MCP'));
+    await waitFor(() => {
+      expect(screen.getByText(/尚未注册任何 MCP/)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText('remote')).not.toBeInTheDocument();
+  });
 });
 
 describe('CapabilityTabs — Skill Tab 动态列表', () => {
-  it('ipc.skill.listInstalled 返回的 Skill 渲染为可勾选项', async () => {
-    mockListInstalled.mockResolvedValue([
-      {
-        slug: 'code-review',
-        name: '代码审查',
-        description: '审查代码变更',
-        source: 'builtin',
-        installedAt: null,
-      },
-    ]);
+  it('ipc.resource.list type=skill 返回的 Skill 渲染为可勾选项', async () => {
+    mockResourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type !== 'skill') return [];
+      return [
+        {
+          id: 'builtin-skill-code-review',
+          type: 'skill',
+          source: 'builtin',
+          slug: 'code-review',
+          name: '代码审查',
+          description: '审查代码变更',
+          installed: true,
+          installable: false,
+          removable: false,
+        },
+      ];
+    });
     render(<CapabilityTabs {...defaultProps()} />);
     fireEvent.click(screen.getByText('Skill'));
     await waitFor(() => {
@@ -344,15 +383,22 @@ describe('CapabilityTabs — Skill Tab 动态列表', () => {
   });
 
   it('勾选 Skill → onChange.skills 加入', async () => {
-    mockListInstalled.mockResolvedValue([
-      {
-        slug: 'debugging',
-        name: '调试',
-        description: '系统化调试流程',
-        source: 'builtin',
-        installedAt: null,
-      },
-    ]);
+    mockResourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type !== 'skill') return [];
+      return [
+        {
+          id: 'builtin-skill-debugging',
+          type: 'skill',
+          source: 'builtin',
+          slug: 'debugging',
+          name: '调试',
+          description: '系统化调试流程',
+          installed: true,
+          installable: false,
+          removable: false,
+        },
+      ];
+    });
     const onChange = vi.fn();
     render(<CapabilityTabs {...defaultProps({ onChange })} />);
     fireEvent.click(screen.getByText('Skill'));

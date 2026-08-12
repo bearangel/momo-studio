@@ -165,21 +165,6 @@ export interface McpServerConfig {
   installedAt?: string;
 }
 
-/**
- * v1.6：已注册 MCP 项（mcp:listRegistered 返回），与 electron 端 RegisteredMcp 对齐。
- * source / installedAt 在 DB 中为 NOT NULL DEFAULT，故这两个字段必填。
- */
-export interface RegisteredMcp {
-  id: string;
-  name: string;
-  version: string;
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-  source: 'marketplace' | 'custom';
-  installedAt: string;
-}
-
 /** 能力类型：tool（内置工具）/ mcp（MCP server）/ skill（技能），与 electron 端 CapabilityType 对齐 */
 export type CapabilityType = 'tool' | 'mcp' | 'skill';
 
@@ -317,22 +302,8 @@ export interface RoomSettings {
 }
 
 /**
- * v1.6：已安装 Skill（skill:listInstalled 返回），与 electron 端 InstalledSkill 对齐。
- * source 区分三类来源，UI 据此控制删除/卸载按钮可见性。
- */
-export interface InstalledSkill {
-  slug: string;
-  name: string;
-  description: string;
-  /** builtin=应用内置 / marketplace=市场安装 / custom=用户 zip 上传 */
-  source: 'builtin' | 'marketplace' | 'custom';
-  /** 安装时间 ISO 字符串；builtin 为 null */
-  installedAt: string | null;
-}
-
-/**
  * v1.6.2：单次 zip 上传返回结构（skill:uploadZip 返回数组，即使只装一个 skill）。
- * 与 InstalledSkill 的区别：不含 source / installedAt（这两个由 listInstalled 二次解析）。
+ * 与 electron 端的 InstalledSkill 区别：不含 source / installedAt（这两个由 listResources 二次解析）。
  */
 export interface UploadedSkill {
   slug: string;
@@ -647,10 +618,6 @@ export interface ApiSurface {
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
     register(config: McpServerConfig): Promise<void>;
-    /** v1.6：列出所有已注册 MCP（含 source / installedAt，按 installedAt 倒序） */
-    listRegistered(): Promise<RegisteredMcp[]>;
-    /** v1.6：删除自定义 MCP（marketplace 装的会 reject，提示走卸载按钮） */
-    deleteRegistered(name: string): Promise<void>;
     /** 启动某 workspace 内的 MCP 进程（进程池复用） */
     start(workspaceId: string, mcpName: string): Promise<void>;
     /** 列出某 workspace 内已启动 MCP 暴露的工具 */
@@ -687,18 +654,6 @@ export interface ApiSurface {
     /** 弹出原生目录选择对话框，返回绝对路径；用户取消返回 null */
     pickDirectory(opts?: { title?: string; defaultPath?: string }): Promise<string | null>;
   };
-  marketplace: {
-    /** 获取 catalog（远程优先，失败回退本地内置） */
-    getCatalog(catalogUrl?: string): Promise<MarketplaceCatalog>;
-    /** 关键词 + 类型搜索 catalog（关键词命中 name/description/slug/tags） */
-    search(query: string, type?: 'agent' | 'mcp' | 'skill'): Promise<MarketplaceItem[]>;
-    /** 安装一个 marketplace 包（返回缓存目录路径） */
-    install(item: MarketplaceItem): Promise<{ cachePath: string }>;
-    /** 列出全部已安装包（最新优先） */
-    listInstalled(): Promise<InstalledPackage[]>;
-    /** 卸载一个包（按 itemId） */
-    uninstall(itemId: string): Promise<void>;
-  };
   settings: {
     /** 读取全局会话配置（未配置返回默认值） */
     getGlobal(): Promise<GlobalSettings>;
@@ -710,15 +665,11 @@ export interface ApiSurface {
     updateRoom(roomId: string, patch: Partial<RoomSettings>): Promise<RoomSettings>;
   };
   skill: {
-    /** v1.6：列出所有已安装 skill（builtin + marketplace + custom 三类） */
-    listInstalled(): Promise<InstalledSkill[]>;
     /**
      * v1.6：上传自定义 skill zip（解压到 <userData>/skills/<slug>/）。
      * v1.6.2 起返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量三种 zip 结构）。
      */
     uploadZip(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
-    /** v1.6：删除自定义上传的 skill（builtin/marketplace 抛错） */
-    deleteCustom(slug: string): Promise<void>;
   };
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
