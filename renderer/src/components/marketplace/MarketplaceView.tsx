@@ -56,7 +56,7 @@ export function MarketplaceView() {
   const [registeredMcps, setRegisteredMcps] = useState<RegisteredMcp[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
 
-  /** 拉取自定义资源列表（MCP + Skill 并行）。错误吞掉——自定义资源区是辅助展示，不应阻塞主流程。 */
+  /** 拉取自定义资源列表（MCP + Skill 并行）。错误打到 console——之前静默吞错让用户看不到 listInstalled 失败的真实原因。 */
   const refreshCustomResources = async (): Promise<void> => {
     try {
       const [mcps, skills] = await Promise.all([
@@ -65,8 +65,8 @@ export function MarketplaceView() {
       ]);
       setRegisteredMcps(mcps);
       setInstalledSkills(skills);
-    } catch {
-      // 静默：自定义资源区失败不影响 marketplace 主功能
+    } catch (err) {
+      console.error('[MarketplaceView] refreshCustomResources 失败', err);
     }
   };
 
@@ -188,8 +188,8 @@ export function MarketplaceView() {
           )}
         </div>
 
-        {/* 底部自定义资源管理区：折叠 details。custom 项可删，marketplace/builtin 仅展示。 */}
-        <details className="border-t border-border-subtle px-4 py-3">
+        {/* 底部自定义资源管理区：v1.6.3 改为默认 open（之前折叠导致用户看不到上传的 skill）。custom 项可删，marketplace/builtin 仅展示。 */}
+        <details open className="border-t border-border-subtle px-4 py-3">
           <summary className="text-sm text-neutral-300 cursor-pointer select-none">
             已注册的自定义资源（MCP {registeredMcps.length} · Skill {installedSkills.length}）
           </summary>

@@ -78,8 +78,11 @@ export function UploadSkillDialog({ onClose, onSuccess }: Props) {
           ? `已安装：${skills[0]!.slug}（${skills[0]!.description}）`
           : `已安装 ${skills.length} 个 skill：${skills.map((s) => s.slug).join(', ')}`;
       setSuccessMsg(msg);
+      // v1.6.3 修复：先触发父组件刷新，再关弹窗。之前立即 onClose 导致：
+      // (a) 用户看不到 successMsg（dialog 已 unmount）
+      // (b) 父组件刷新结果用户看不到（弹窗刚关，列表更新被忽略）
       onSuccess();
-      onClose();
+      // 不立即 onClose——保留成功消息让用户看到，用户手动点关闭/取消
     } catch (err) {
       setError((err as Error).message);
     } finally {

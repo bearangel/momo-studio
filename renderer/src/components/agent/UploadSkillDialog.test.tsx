@@ -80,7 +80,7 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     expect(view[0]).toBe(0x50);
   });
 
-  it('上传成功（1 个 skill）→ 触发 onSuccess + onClose', async () => {
+  it('上传成功（1 个 skill）→ 触发 onSuccess + 显示成功消息（v1.6.3 起不立即 onClose，让用户看到反馈）', async () => {
     const onClose = vi.fn();
     const onSuccess = vi.fn();
     render(<UploadSkillDialog onClose={onClose} onSuccess={onSuccess} />);
@@ -91,7 +91,10 @@ describe('UploadSkillDialog — 本地 zip 上传自定义 skill', () => {
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalledTimes(1);
     });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // v1.6.3：成功后保留弹窗显示 successMsg，不立即 onClose
+    expect(onClose).not.toHaveBeenCalled();
+    // 成功消息显示（mock 默认返回 slug=demo-skill）
+    expect(screen.getByText(/已安装：demo-skill/)).toBeInTheDocument();
   });
 
   it('上传成功（1 个 skill）→ 显示成功提示（含 slug + 描述）', async () => {

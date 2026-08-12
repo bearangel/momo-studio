@@ -2,6 +2,14 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.4] — 2026-08-11
+
+### 修复
+- **Marketplace 自定义资源区看不到上传的 skill**：根因双重——
+  1. `<details>` 默认折叠，用户不知道点击展开；改为 `defaultOpen`
+  2. `UploadSkillDialog` 成功后立即 `onClose()` 把弹窗关了，用户来不及看 successMsg 反馈；改为只 `setSuccessMsg + onSuccess`，弹窗保留显示「已安装：xxx」，用户手动关闭
+- **refreshCustomResources 错误之前静默吞掉**：现在打到 `console.error`，DevTools 可看到 listInstalled 失败的真实原因（之前用户排查时看不到任何信号）
+
 ## [1.6.3] — 2026-08-11
 
 ### 修复
