@@ -83,7 +83,7 @@ describe('thinking 渲染', () => {
 });
 
 describe('tool_calls 渲染', () => {
-  it('表格：工具/参数/结果', () => {
+  it('逐个工具块：名称 + 参数代码块 + 结果代码块', () => {
     const msg = mkMsg({
       sender: '@bot.x:localhost',
       botName: 'A',
@@ -98,13 +98,12 @@ describe('tool_calls 渲染', () => {
     });
     const out = formatRoomToMarkdown([msg], meta);
     expect(out).toContain('**🔧 工具调用**');
-    expect(out).toContain('| 工具 | 参数 | 结果 |');
-    expect(out).toContain('`read_file`');
+    expect(out).toContain('**1. `read_file`** ✅ 成功');
     expect(out).toContain('"path": "docs/spec.md"');
-    expect(out).toContain('✅ 成功');
+    expect(out).toContain('文件内容...');
   });
 
-  it('result 超 500 字符：表格摘要 + 单独代码块展开完整', () => {
+  it('result 超 500 字符：完整结果代码块展开', () => {
     const longResult = 'x'.repeat(800);
     const msg = mkMsg({
       sender: '@bot.x:localhost',
@@ -119,10 +118,10 @@ describe('tool_calls 渲染', () => {
       },
     });
     const out = formatRoomToMarkdown([msg], meta);
-    // 表格摘要显示总字符数
-    expect(out).toContain('✅ 成功（返回 800 字符）');
+    // 标题含成功标记
+    expect(out).toContain('✅ 成功');
     // 完整结果在代码块（不折叠）
-    expect(out).toContain('**📄 read_file 完整结果（800 字符）**');
+    expect(out).toContain('结果（返回 800 字符）');
     expect(out).toContain(longResult);
   });
 

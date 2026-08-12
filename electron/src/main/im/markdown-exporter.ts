@@ -75,35 +75,35 @@ function renderThinking(content: Record<string, unknown>): string {
   return `**💭 thinking**\n\n${lines.join('\n')}\n\n`;
 }
 
-function renderToolCall(tc: ToolCallRecord): string {
+function renderToolCall(tc: ToolCallRecord, index: number): string {
   const status = tc.success ? '✅ 成功' : '❌ 失败';
   const isLarge = tc.result.length > LARGE_RESULT_THRESHOLD;
 
-  let tableResultCell: string;
+  // v1.7.3: 不用 Markdown 表格——表格单元格内不能有换行符，
+  // 而 JSON 参数和文件 result 都是多行的，直接破坏表格行结构。
+  // 改用逐个工具块格式：标题行 + 参数代码块 + 结果代码块。
+  let out = `**${index}. \`${tc.name}\`** ${status}\n\n`;
+
+  out += '参数：\n\n' + toJsonBlock(tc.args) + '\n\n';
+
   if (isLarge) {
-    tableResultCell = `${status}（返回 ${tc.result.length} 字符）`;
-  } else {
-    tableResultCell = tc.result ? `${status}（${escapePipe(tc.result.slice(0, TABLE_RESULT_PREVIEW))}${tc.result.length > TABLE_RESULT_PREVIEW ? '...' : ''}）` : status;
+    out += `结果（返回 ${tc.result.length} 字符）：\n\n\`\`\`\n${tc.result}\n\`\`\`\n`;
+  } else if (tc.result) {
+    const preview = tc.result.slice(0, TABLE_RESULT_PREVIEW);
+    const ellipsis = tc.result.length > TABLE_RESULT_PREVIEW ? '...' : '';
+    out += `结果：\n\n\`\`\`\n${preview}${ellipsis}\n\`\`\`\n`;
   }
 
-  const args = toJsonBlock(tc.args).replace(/\n/g, '\n  ').slice(0, -3); // indent args in table cell
-  let table = `| 工具 | 参数 | 结果 |\n|---|---|---|\n`;
-  table += `| \`${tc.name}\` | ${args} | ${tableResultCell} |`;
-
-    // v1.7.3: 大 result 改用代码块（不折叠）替代 <details>——所有渲染器兼容
-    if (isLarge) {
-      table += `\n\n**📄 ${tc.name} 完整结果（${tc.result.length} 字符）**\n\n\`\`\`\n${tc.result}\n\`\`\``;
-    }
-
-  return table;
+  return out;
 }
 
 function renderToolCalls(content: Record<string, unknown>): string {
   const calls = content[TOOL_CALLS_KEY];
   if (!Array.isArray(calls) || calls.length === 0) return '';
   let out = '**🔧 工具调用**\n\n';
+  let i = 1;
   for (const c of calls) {
-    out += renderToolCall(c as ToolCallRecord) + '\n\n';
+    out += renderToolCall(c as ToolCallRecord, i++) + '\n';
   }
   return out;
 }
