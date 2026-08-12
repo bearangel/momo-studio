@@ -975,6 +975,15 @@ export async function runChatLoop(
                 : {}),
               'io.momo-studio.segment_index': segmentCount,
               'io.momo-studio.segment_of': streamSessionId,
+              // v1.7.3 修复：分段消息带上 thinking + tool_calls 快照（在清零之前）。
+              // 之前分段消息只有 body，thinking/tool_calls 全部丢失——导出和重启后无法
+              // 看到分段消息的诊断数据。每段带上当前快照（可能跨段重复，但优先保证不丢）。
+              ...(accumulatedThinking
+                ? { 'io.momo-studio.thinking': accumulatedThinking }
+                : {}),
+              ...(toolCallHistory.length > 0
+                ? { 'io.momo-studio.tool_calls': [...toolCallHistory] }
+                : {}),
             },
             '',
           );
