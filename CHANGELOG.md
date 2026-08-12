@@ -2,6 +2,23 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.7.4] — 2026-08-12
+
+### 修复
+- **Bug 2（多段消息归组）**：MessageList 按 `io.momo-studio.segment_of` 字段归组多段 task_complete 消息，重启后 UI 显示与重启前一致——之前 N 段消息显示为 N 个独立气泡
+- **Bug 3（事件顺序）**：多段消息由新组件 SegmentStack 按段顺序（segment_index）纵向堆叠，单段消息保持原顺序不变
+- **Bug 4（增量 tool_calls）**：task_complete 分段 tool_calls 改为增量持久化（v1.7.3 全量快照导致每段重复显示所有工具调用）；新增 `io.momo-studio.tool_calls_offset` 字段
+- **Bug 5（子 agent fresh session）**：dispatch 子 agent 跳过 `loadRecentHistory`——之前无差别加载房间历史，子 agent 误判任务已完成（输出"您好👋 之前的工作总结已加载完毕"）。参考 opencode task 工具设计：子 agent 是 fresh session，只看到 system + task prompt
+
+### 新增
+- 新组件 `SegmentStack`：多段消息纵向堆叠渲染（顶部聚合标签 + 每段段号分隔）
+- 新类型 `SegmentGroup`：归组数据结构
+- 诊断日志插桩：`task_complete` 分段 / `sendFinalMessage` / `loadRecentHistory` 关键决策点 trace 输出
+- 测试：`segment-message-restart.test.ts` (3) + `dispatch-fresh-session.test.ts` (4) + `MessageList.segment.test.ts` (5) + `SegmentStack.test.tsx` (2)
+
+### 已知限制
+- v1.7.3 之前的旧分段消息已永久丢失 thinking/tool_calls（Matrix event 不可变）
+
 ## [1.7.0] — 2026-08-11
 
 ### 重构（Breaking Change）

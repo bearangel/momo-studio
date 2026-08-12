@@ -508,7 +508,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
 - **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
 - **同房中断限制**——PM 与子 agent 同在 team room 时，`activeStreams` 按 roomId 索引导致子覆盖 PM entry，dispatch 进行中点「停止」可能只中断子 agent。
-- **旧消息子 agent 工具条**——v1.4 修复前生成的消息缺少 `subStreamSessionId`（被 PDU 截断丢弃），重启后 DispatchChip 无法展开查看历史。新消息正常。
+- **旧消息（v1.7.3 之前）分段消息丢失 thinking/tool_calls**——Matrix event 不可变，已永久丢失。v1.7.3+ 新消息正常，v1.7.4 起多段归组渲染。
 
 ## 许可
 
