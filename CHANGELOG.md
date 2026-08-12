@@ -2,6 +2,41 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.7.0] — 2026-08-11
+
+### 重构（Breaking Change）
+- **资源库取代 Marketplace**：UI 重命名（MarketplaceView → ResourceLibraryView）+ 数据模型统一（`ResourceItem` 取代 MarketplaceItem / InstalledSkill / RegisteredMcp 三结构）
+- **取消底部"自定义资源"折叠区**：custom 资源直接出现在主网格（按 source 过滤）
+- **IPC 统一**：`resource:list` / `resource:getDetail` / `resource:install` / `resource:delete` 四通道，取代 `mcp:listRegistered` / `mcp:deleteRegistered` / `skill:listInstalled` / `skill:deleteCustom` / `marketplace:*` 等多套通道
+- **资源 ID 命名约定**：`${source}-${type}-${slug}`——全局唯一 + 可路由（parseResourceId 反解三元组）
+
+### 新增
+- 双层 tab（类型 + 来源）AND 过滤 + 单按钮「+ 添加资源 ▼」下拉菜单（创建 Agent / 添加 MCP / 上传 Skill）
+- SourceBadge 组件（4 source 颜色 + 文案：系统预置/我的上传/网络资源/P2P 共享）
+- ResourceDetail 按 source 分支详情面板（builtin/marketplace/custom 字段差异分支显示）
+- ResourceCard 统一卡片（install/removable 状态 + 删除/安装按钮）
+- listResources 三源合并（builtin + marketplace + custom），filter 短路 + fetchCatalog 失败容错（catalog 拉失败时仅返回 builtin+custom，不阻断 UI）
+- resource.store 双层 tab 状态机 + 安装/删除流程
+
+### 删除
+- `renderer/src/components/marketplace/` 目录（MarketplaceView / ItemCard / ItemDetail）
+- `renderer/src/stores/marketplace.store.ts`
+- IPC: `mcp:listRegistered` / `mcp:deleteRegistered` / `skill:listInstalled` / `skill:deleteCustom` / `marketplace:*`（5 通道）
+- preload 6 个废弃绑定 + `marketplace` 命名空间
+- types.d.ts: `RegisteredMcp` / `InstalledSkill` 类型 + ApiSurface 对应字段
+
+### 修复
+- v1.6.x 累积 bug 修复——`uninstallPackage` 之前传 `ResourceItem.id`（格式 `marketplace-mcp-foo`）但底层需要 catalog opaque id，导致 marketplace delete 静默 no-op；改为正确传 catalog opaque id
+
+### 不动
+- DB schema（Migration v0-v16 完全兼容，无新 migration）
+- 底层函数（`listRegistered` / `listInstalled` / `installPackage` / `uninstallPackage` 等保留，作 `resource/` 内部复用）
+- 现有 add 弹窗（RegisterMcpDialog / UploadSkillDialog / DefinitionEditor 保留，仅 IPC 调用层改名）
+- builtin catalog 内容（catalog.json 不动，5 项全部归 `source='builtin'`）
+
+### 架构预留
+- `ResourceItem.source` enum 四值（`builtin` / `marketplace` / `custom` / `p2p`）——v2 agent 互联时加 `listP2PResources()` 即可接入
+
 ## [1.6.4] — 2026-08-11
 
 ### 修复

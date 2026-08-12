@@ -6,13 +6,11 @@
 
 ## 状态
 
-**v1.6.2 — Released**
+**v1.7.0 — Released**
 
-v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`merged.tools` 丢失导致能力白名单形同虚设），新增三层能力配置 UI（DefinitionEditor 编辑 Layer 1 + AddToWorkspaceDialog/WorkspaceAgentsPanel 做 Layer 3 per-assignment override）+ Marketplace 自定义入口（MCP 表单注册 + Skill zip 上传）。v1.5 内置工具库（7 类 24 工具）仍可用，详见 `docs/specs/2026-08-11-v1.6-capability-config-design.md`。
+v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折叠区统一为一个"资源库"视图，三类 source（系统预置 / 我的上传 / 网络资源）通过双层 tab 正交过滤。数据模型 `ResourceItem` 取代 `MarketplaceItem` / `InstalledSkill` / `RegisteredMcp` 三结构；IPC 统一为 `resource:list` / `resource:getDetail` / `resource:install` / `resource:delete` 四通道。架构预留 `source='p2p'` 字段，v2 agent 互联时直接接入。详见 `docs/specs/2026-08-11-v1.7-resource-library-design.md`。
 
-**v1.6.1** 修复三处 v1.6 review 发现的问题：AddToWorkspaceDialog Layer 3 deltas 首次 spawn 不生效（落库后未重启）；marketplace 安装 builtin agent 时 `defaultTools` 为空（改为写入 24 工具全集，与 Migration v16 builtin YAML 同步）；`DefinitionEditor` 与 `capability-helpers` 的 `defToCapabilities` 重复定义合并。
-
-**v1.6.2** 扩展 zip-uploader 支持三种 zip 结构 + 一个 zip 多 skill 批量安装 + 自动忽略 macOS/Windows 元数据：模式 A（扁平，`SKILL.md` 在根目录，slug 取 frontmatter.name 或 zip filename）修复 macOS 用户 Finder 压缩的 xlsx.zip 场景；模式 B（单子目录包裹）保持向后兼容；模式 C（多子目录批量）支持一个 zip 安装多个 skill。IPC 返回类型 breaking change：`{ slug, description }` → `UploadedSkill[]`。详见 `CHANGELOG.md`。
+**v1.6.x** v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`merged.tools` 丢失导致能力白名单形同虚设），新增三层能力配置 UI（DefinitionEditor 编辑 Layer 1 + AddToWorkspaceDialog/WorkspaceAgentsPanel 做 Layer 3 per-assignment override）+ Marketplace 自定义入口（MCP 表单注册 + Skill zip 上传）；v1.6.2 扩展 zip-uploader 支持三种 zip 结构 + 一个 zip 多 skill 批量安装 + 自动忽略 macOS/Windows 元数据。详见 `docs/specs/2026-08-11-v1.6-capability-config-design.md` 和 `CHANGELOG.md`。
 
 ## 特性
 
@@ -49,11 +47,11 @@ v1.6 Agent 能力配置 + Marketplace 自定义上传——修复关键 bug（`m
 - 渐进式披露：`SKILL.md` frontmatter 元数据始终可用，正文按需加载到上下文
 - 内置 skill：git-workflow、code-review、debugging、markdown-format
 
-### Marketplace
-- 浏览 / 搜索 / 安装 agent / skill / mcp 三类包
-- 安装包自动注册到主进程的 agent / skill / mcp 定义列表
-- 支持 zip 包下载 + SHA256 checksum 校验
-- 市场源可通过设置页切换（默认 + 自定义 URL）
+### 资源库（v1.7 重构）
+- 三类 source 统一管理：系统预置 / 我的上传 / 网络资源（v2 加 P2P 共享）
+- 主网格双层 tab（类型 × 来源）+ 搜索 + 统一 ResourceCard 卡片
+- 「+ 添加资源」下拉菜单：创建 Agent / 添加 MCP / 上传 Skill
+- 取代 v1.6 Marketplace + 底部"自定义资源"折叠区
 
 ### 安全
 - `WorkspaceFS`：所有路径经过验证，禁止 `..` 越界与符号链接逃逸
@@ -414,6 +412,50 @@ v1.5 把工具库扩到 24 个后暴露三处断裂：(1) 关键 bug——`build
 - ✅ mergeCapabilities Layer 3 合并测试（含 builtin 全集 + delta 叠加）
 - ✅ buildSpawnOpts 注入 allowedTools 回归测试（防止 bug 复发）
 - ✅ DefinitionEditor / AddToWorkspaceDialog / AssignmentCapabilitiesDialog / RegisterMcpDialog / UploadSkillDialog / CapabilityConfig 组件测试
+
+### v1.7 — 资源库（取代 Marketplace）✅ 已发布
+
+v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义资源折叠区"——形成两套 UI：marketplace 装的资源在主网格，自定义上传的在折叠区，用户体验割裂。v1.7 重新定位整个功能：**"商场"改为"资源库"**，统一管理 agent / mcp / skill 三类共享资源 + 三类 source。
+
+**架构重构（Breaking Change）**
+- ✅ MarketplaceView → ResourceLibraryView——UI 重命名 + 路由切换
+- ✅ `ResourceItem` 统一数据模型——取代 MarketplaceItem / InstalledSkill / RegisteredMcp 三结构
+- ✅ 资源 ID 命名约定 `${source}-${type}-${slug}`——全局唯一 + 可路由（parseResourceId 反解三元组）
+- ✅ 取消底部"自定义资源"折叠区——custom 资源直接出现在主网格（按 source 过滤）
+
+**IPC 统一（4 通道）**
+- ✅ `resource:list` / `resource:getDetail` / `resource:install` / `resource:delete`——取代 `mcp:listRegistered` / `mcp:deleteRegistered` / `skill:listInstalled` / `skill:deleteCustom` / `marketplace:*` 多套通道
+- ✅ listResources 三源合并（builtin + marketplace + custom）+ filter 短路 + fetchCatalog 失败容错
+- ✅ delete 按 source 路由（builtin 抛错 / marketplace uninstall / custom 按 type 路由）
+
+**UI 双层 Tab**
+- ✅ 类型 tab（全部/Agent/MCP/Skill）+ 来源 tab（全部/系统预置/我的上传/网络资源）AND 过滤
+- ✅ 单按钮「+ 添加资源 ▼」下拉菜单——创建 Agent / 添加 MCP / 上传 Skill
+- ✅ SourceBadge 组件（4 source 颜色 + 文案）
+- ✅ ResourceDetail 按 source 分支详情面板
+- ✅ ResourceCard 统一卡片（install/removable 状态 + 删除/安装按钮）
+
+**直接删除（不保留兼容）**
+- ✅ `renderer/src/components/marketplace/` 目录（MarketplaceView / ItemCard / ItemDetail）
+- ✅ `renderer/src/stores/marketplace.store.ts`
+- ✅ preload 6 个废弃绑定 + marketplace 命名空间
+- ✅ types.d.ts: RegisteredMcp / InstalledSkill 类型 + ApiSurface 对应字段
+
+**架构预留**
+- ✅ `source='p2p'` 字段——v2 agent 互联时加 `listP2PResources()` 即可
+- ✅ ResourceItem.source enum 四值（builtin / marketplace / custom / p2p）
+
+**测试覆盖**
+- ✅ Typecheck 双 clean（electron + renderer）
+- ✅ resource/library 三源合并 + filter 短路 + fetchCatalog 容错测试
+- ✅ SourceBadge / ResourceCard / ResourceDetail / AddResourceMenu / ResourceLibraryView 组件测试
+- ✅ resource.store 双层 tab + 安装/删除流程测试
+
+**待办基础设施项**
+
+- 🔲 重启自动恢复 agent runtime（持久化运行状态）
+- 🔲 e2e 测试跑通（xvfb + 真实 LLM API key）
+- 🔲 Windows / macOS 沙箱实测
 
 从"单机工具"进化为"团队平台"。
 
