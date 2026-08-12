@@ -56,6 +56,14 @@ export interface AgentDefinition {
   modelProviderId: string | null;
   /** 模型名（如 gpt-4o, claude-3-opus） */
   modelName: string;
+
+  // === v1.7 新增 ===
+  /**
+   * 创建时间 ISO 字符串（DB 列 created_at，行入库时由 datetime('now') 默认填充）。
+   * builtin 内联 YAML 加载时为 undefined（无 DB 记录）。v1.7 resource/custom.ts
+   * 用作 ResourceItem.custom.installedAt。
+   */
+  createdAt?: string;
 }
 
 /** Agent 在 workspace 中的实例化（角色与父子关系存这里，不存 definition） */

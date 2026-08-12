@@ -116,6 +116,7 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     workspaceId: row.workspace_id,
     modelProviderId: row.model_provider_id,
     modelName: row.model_name,
+    createdAt: row.created_at,
   };
 }
 
