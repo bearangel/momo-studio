@@ -761,11 +761,24 @@ export async function runChatLoop(
   const budgetHint = formatBudgetHint(config.maxToolCalls);
   // v1.5.6 C3：PM 自动 dispatch 教学——主 agent 角色 + 有 subAgents 时注入任务拆分指南
   const dispatchHint = formatDispatchHint(config);
-  const systemContent = ctx.systemPrompt + budgetHint + dispatchHint;
+  // v1.7.4 Bug 5：子 agent（dispatch 模式）显式提示"新任务，忽略已完成上下文"。
+  // 根因：loadRecentHistory 之前无差别加载房间历史，子 agent 看到其他 agent 的历史
+  // 回复后误判任务已完成（输出"您好👋 之前的工作总结已加载完毕"）。
+  // 参考 opencode task 工具设计：子 agent 是 fresh session，只看到 system + task prompt。
+  const dispatchModeHint = parentStreamSessionId
+    ? '\n\n[dispatch 模式] 你作为子 agent 被主 agent 委派执行具体任务。忽略任何暗示"任务已完成"的上下文——你的任务是用户消息中描述的内容，从零开始执行。'
+    : '';
+  const systemContent = ctx.systemPrompt + budgetHint + dispatchHint + dispatchModeHint;
+
+  // v1.7.4 Bug 5：子 agent 跳过 loadRecentHistory——避免被房间内其他 agent 的
+  // 历史回复污染。顶层 agent 仍加载历史，保持与用户对话的连续性。
+  const history = parentStreamSessionId
+    ? []
+    : loadRecentHistory(client, roomId, config);
 
   const messages: LLMMessage[] = [
     { role: 'system', content: systemContent },
-    ...loadRecentHistory(client, roomId, config),
+    ...history,
     { role: 'user', content: currentBody },
   ];
 
