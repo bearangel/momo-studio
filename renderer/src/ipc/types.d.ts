@@ -342,6 +342,79 @@ export interface UploadedSkill {
 }
 
 /**
+ * v1.7 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）。
+ * 与 electron 端 resource/types.ts 的 ResourceType 对齐。
+ */
+export type ResourceType = 'agent' | 'mcp' | 'skill';
+
+/**
+ * v1.7 资源来源：
+ *   - builtin      系统预置（随应用分发，不可删除）
+ *   - marketplace  网络资源（远程 catalog 下载安装）
+ *   - custom       我的上传（用户本地注册 / 上传）
+ *   - p2p          P2P 共享（v2 引入）
+ * 与 electron 端 resource/types.ts 的 ResourceSource 对齐。
+ */
+export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'p2p';
+
+/**
+ * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。
+ * 与 electron 端 resource/types.ts 的 ResourceFilter 对齐。
+ */
+export interface ResourceFilter {
+  type?: ResourceType;
+  source?: ResourceSource;
+}
+
+/**
+ * v1.7 统一资源项——前端 UI/IPC 的核心数据结构。
+ * 顶层字段对所有 source 通用；source 特有信息放在对应的可选 namespace 字段中。
+ * 与 electron 端 resource/types.ts 的 ResourceItem 对齐（renderer 端独立定义，仅结构对齐）。
+ */
+export interface ResourceItem {
+  /** 资源全局唯一 id，格式 `${source}-${type}-${slug}` */
+  id: string;
+  type: ResourceType;
+  source: ResourceSource;
+  /** source 内业务标识（agent slug / mcp name / skill slug），不含前缀 */
+  slug: string;
+  /** 展示名（i18n 后的名字，区别于 slug） */
+  name: string;
+  description: string;
+  version?: string;
+  iconEmoji?: string;
+  /** 是否已安装到本地（builtin 永远 true） */
+  installed: boolean;
+  /** 是否可安装（builtin = false；p2p 未确认时 = false） */
+  installable: boolean;
+  /** 是否可删除（仅 builtin = false） */
+  removable: boolean;
+  /** builtin 项的扩展元数据 */
+  builtin?: { category?: string; tags?: string[] };
+  /** marketplace 项的扩展元数据 */
+  marketplace?: {
+    author: string;
+    readme: string;
+    downloadUrl: string;
+    checksum: string;
+    verificationStatus: 'official' | 'verified' | 'community' | 'unverified';
+    sizeBytes?: number;
+    installCount?: number;
+    tags: string[];
+    category: string;
+  };
+  /** custom 项的扩展元数据 */
+  custom?: {
+    installedAt: string;
+    mcpConfig?: { command: string; args: string[]; env?: Record<string, string> };
+    skillFrontmatter?: { name?: string; version?: string };
+    agentSystemPromptHash?: string;
+  };
+  /** p2p 项的扩展元数据 */
+  p2p?: { peerId: string; peerName: string };
+}
+
+/**
  * v1.5 TodoTools 任务项。与 electron 端 tools/todo-types.ts 的 TodoItem 对齐。
  * 因 renderer 无法直接 import electron 源码，这里维持一份等价的本地定义。
  */
@@ -646,6 +719,16 @@ export interface ApiSurface {
     uploadZip(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
     /** v1.6：删除自定义上传的 skill（builtin/marketplace 抛错） */
     deleteCustom(slug: string): Promise<void>;
+  };
+  resource: {
+    /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
+    list(filter?: ResourceFilter): Promise<ResourceItem[]>;
+    /** v1.7：按 id 查单个资源详情（找不到返回 null） */
+    getDetail(id: string): Promise<ResourceItem | null>;
+    /** v1.7：安装 marketplace 资源（builtin/custom 不可安装，抛错） */
+    install(id: string): Promise<void>;
+    /** v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 按 type 三分支） */
+    delete(id: string): Promise<void>;
   };
 }
 

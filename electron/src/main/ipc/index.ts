@@ -15,6 +15,7 @@ import { registerMarketplaceHandlers } from '../marketplace/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
 import { registerSkillHandlers } from '../skill/ipc.handlers';
+import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerDialogHandlers } from './dialog.handlers';
 
 export function registerIpcHandlers(): void {
@@ -34,5 +35,6 @@ export function registerIpcHandlers(): void {
   registerProviderHandlers();
   registerSettingsIpc();
   registerSkillHandlers();
+  registerResourceHandlers();
   registerDialogHandlers();
 }
