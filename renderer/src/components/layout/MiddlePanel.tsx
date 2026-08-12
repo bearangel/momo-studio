@@ -15,6 +15,7 @@ import { MessageInput } from '../im/MessageInput';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
+import { ExportChatButton } from '../im/ExportChatButton';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -87,6 +88,7 @@ export function MiddlePanel() {
               {activeRoom ? activeRoom.name : '未选择房间'}
             </span>
             {activeRoomId && <RoomToolBudgetBadge roomId={activeRoomId} />}
+            {activeRoomId && <ExportChatButton roomId={activeRoomId} />}
           </div>
           <MessageList />
           <InputToolbar
