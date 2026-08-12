@@ -325,6 +325,13 @@ export function getRoomMessages(roomId: string, limit = 50): MatrixMessagePayloa
     .filter((e) => SYNCED_EVENT_TYPES.has(e.getType()))
     .map(eventToMessage)
     .filter((m): m is MatrixMessagePayload => m !== null)
+    .sort((a, b) => {
+      // v1.7.3 修复：同一 timestamp（毫秒精度相同）内多条消息排序不稳定，
+      // 导致重启 agent 后 /sync 重新构建 timeline 时消息顺序变化。
+      // 加 eventId 字典序做稳定二级排序，保证多次拉取顺序一致。
+      if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+      return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
+    })
     .slice(-limit);
 }
 

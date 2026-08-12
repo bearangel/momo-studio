@@ -130,12 +130,15 @@ function groupDispatchAndReplies(messages: ExportMessage[]): {
       topLevels.push(m);
     } else if (m.eventType === TASK_REPLY_EVENT_TYPE) {
       const taskId = (m.content as { task_id?: string }).task_id;
-      if (taskId) {
+      // v1.7.3 修复：只有 dispatch 也在消息列表中时才嵌套进 dispatch 块。
+      // dispatch 被 slice(-limit) 截断时，task_reply 无父块可嵌套 →
+      // 作为顶层消息渲染（兜底），避免静默丢失。
+      if (taskId && dispatchByTaskId.has(taskId)) {
         const list = repliesByTaskId.get(taskId) ?? [];
         list.push(m);
         repliesByTaskId.set(taskId, list);
       } else {
-        topLevels.push(m);  // orphan reply
+        topLevels.push(m);
       }
     } else {
       topLevels.push(m);
