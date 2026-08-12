@@ -188,7 +188,12 @@ function renderMessage(msg: ExportMessage, dispatchReplies: Map<string, ExportMe
   }
 
   // 普通 m.room.message
-  const isBot = msg.sender.startsWith('@bot.');
+  // v1.7.3 修复：不能只靠 sender.startsWith('@bot.') 判断 bot——实际 agent userId
+  // 格式是 @<slug>.<workspaceSlug>.<ownerLocalpart>.<suffix>:localhost（如
+  // @sisyphus.momo-test.stbearangel.u3nx4w:localhost），不带 bot. 前缀。
+  // 改为优先用 IPC handler 反查注入的 botName 字段判断；sender.startsWith
+  // 仅作 fallback（兼容历史 @bot.xxx 格式）。
+  const isBot = msg.botName !== null || msg.sender.startsWith('@bot.');
   const icon = isBot ? '🤖' : '👤';
   const role = isBot ? (msg.botName ?? shortName(msg.sender)) : '用户';
   // Matrix sender 已是 @user:host 形式，无需额外 @ 前缀
