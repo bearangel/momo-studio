@@ -9,8 +9,60 @@ import { useImStore } from '../../stores/im.store';
 import { useAuthStore } from '../../stores/auth.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { useBotNameMap } from '../../lib/useBotNames';
+import type { ImMessage } from '../../ipc/types';
 import { MessageBubble } from './MessageBubble';
 import { AgentStreamBubble } from './AgentStreamBubble';
+import { SegmentStack } from './SegmentStack';
+import type { SegmentGroup } from './types';
+
+/**
+ * v1.7.4 Bug 2：按 io.momo-studio.segment_of 字段归组多段 task_complete 消息。
+ *
+ * 重启还原场景：runtime 写了 segment_of + segment_index 字段，但 v1.7.3 之前
+ * renderer 不识别——重启后 N 段消息显示为 N 个独立气泡，与重启前 UI 完全不同。
+ * 现按 segment_of 聚合为 SegmentGroup，交给 SegmentStack 纵向堆叠渲染。
+ *
+ * 单段消息（无 segment_of，或归组后只有一段）保持原 MessageBubble 渲染。
+ */
+function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> {
+  const segmentMap = new Map<string, ImMessage[]>();
+  const standalone: ImMessage[] = [];
+
+  for (const msg of messages) {
+    const segmentOf = msg.content?.['io.momo-studio.segment_of'];
+    if (typeof segmentOf === 'string') {
+      if (!segmentMap.has(segmentOf)) segmentMap.set(segmentOf, []);
+      segmentMap.get(segmentOf)!.push(msg);
+    } else {
+      standalone.push(msg);
+    }
+  }
+
+  const result: Array<ImMessage | SegmentGroup> = [...standalone];
+  for (const [streamSessionId, segments] of segmentMap) {
+    // 按 segment_index 升序排序
+    segments.sort((a, b) => {
+      const ai = (a.content?.['io.momo-studio.segment_index'] as number) ?? 0;
+      const bi = (b.content?.['io.momo-studio.segment_index'] as number) ?? 0;
+      return ai - bi;
+    });
+    if (segments.length === 1) {
+      // 单段消息不归组（fallback 到普通 MessageBubble）
+      const only = segments[0];
+      if (only) result.push(only);
+    } else if (segments.length > 1) {
+      const last = segments[segments.length - 1];
+      result.push({
+        kind: 'segment-group',
+        streamSessionId,
+        segments,
+        lastSegmentAt: last ? last.timestamp : Date.now(),
+      });
+    }
+  }
+  return result;
+}
+
 
 export function MessageList() {
   const activeRoomId = useImStore((s) => s.activeRoomId);
@@ -138,11 +190,18 @@ export function MessageList() {
   // v1.5.6: messages + streams 合并按 timestamp 混合排序，避免 stream 永远在末尾。
   // 用户报"msg3 出现在 agent 回复前面"就是因为 messages 在前 streams 在后分两段渲染。
   // 现在统一按时间排序：messages 用 msg.timestamp，streams 用 stream.startedAt。
+  // v1.7.4：多段消息先按 segment_of 归组为 SegmentGroup（用 lastSegmentAt 排序）。
+  const groupedItems = groupBySegment(visibleMessages);
   type MixedItem =
-    | { kind: 'message'; msg: (typeof visibleMessages)[number]; ts: number }
+    | { kind: 'message'; msg: ImMessage; ts: number }
+    | { kind: 'segment-group'; group: SegmentGroup; ts: number }
     | { kind: 'stream'; stream: typeof activeRoomStreams[number]; ts: number };
   const mixedItems: MixedItem[] = [
-    ...visibleMessages.map((msg) => ({ kind: 'message' as const, msg, ts: msg.timestamp })),
+    ...groupedItems.map((item) =>
+      'kind' in item && item.kind === 'segment-group'
+        ? { kind: 'segment-group' as const, group: item, ts: item.lastSegmentAt }
+        : { kind: 'message' as const, msg: item as ImMessage, ts: (item as ImMessage).timestamp },
+    ),
     ...activeRoomStreams.map((stream) => ({ kind: 'stream' as const, stream, ts: stream.startedAt })),
   ].sort((a, b) => a.ts - b.ts);
 
@@ -155,23 +214,37 @@ export function MessageList() {
       {activeRoomId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
         <div className="text-center text-xs text-neutral-500 py-2">— 已到顶部 —</div>
       )}
-      {mixedItems.map((item) =>
-        item.kind === 'message' ? (
-          <MessageBubble
-            key={item.msg.eventId}
-            message={item.msg}
-            isSelf={item.msg.sender === currentUserId}
-            senderName={botNameByUserId.get(item.msg.sender)}
-            allMessages={[...(messages ?? []), ...teamRoomMessages]}
-          />
-        ) : (
+      {mixedItems.map((item) => {
+        if (item.kind === 'segment-group') {
+          return (
+            <SegmentStack
+              key={`seg-${item.group.streamSessionId}`}
+              group={item.group}
+              isSelf={item.group.segments[0]?.sender === currentUserId}
+              senderName={botNameByUserId.get(item.group.segments[0]?.sender ?? '')}
+              allMessages={[...(messages ?? []), ...teamRoomMessages]}
+            />
+          );
+        }
+        if (item.kind === 'message') {
+          return (
+            <MessageBubble
+              key={item.msg.eventId}
+              message={item.msg}
+              isSelf={item.msg.sender === currentUserId}
+              senderName={botNameByUserId.get(item.msg.sender)}
+              allMessages={[...(messages ?? []), ...teamRoomMessages]}
+            />
+          );
+        }
+        return (
           <AgentStreamBubble
             key={item.stream.streamSessionId}
             stream={item.stream}
             senderName={botNameByUserId.get(item.stream.botUserId)}
           />
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }
