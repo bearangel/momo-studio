@@ -70,17 +70,15 @@ describe('agent 文本消息', () => {
 });
 
 describe('thinking 渲染', () => {
-  it('折叠为 <details><summary>💭 thinking</summary>', () => {
+  it('渲染为 **💭 thinking** + 引用块（> 前缀）', () => {
     const msg = mkMsg({
       sender: '@bot.x:localhost',
       botName: 'A',
       content: { 'io.momo-studio.thinking': '用户想读文件...' },
     });
     const out = formatRoomToMarkdown([msg], meta);
-    expect(out).toContain('<details>');
-    expect(out).toContain('<summary>💭 thinking（点击展开）</summary>');
-    expect(out).toContain('用户想读文件...');
-    expect(out).toContain('</details>');
+    expect(out).toContain('**💭 thinking**');
+    expect(out).toContain('> 用户想读文件...');
   });
 });
 
@@ -106,7 +104,7 @@ describe('tool_calls 渲染', () => {
     expect(out).toContain('✅ 成功');
   });
 
-  it('result 超 500 字符：表格摘要 + 单独 <details> 折叠完整', () => {
+  it('result 超 500 字符：表格摘要 + 单独代码块展开完整', () => {
     const longResult = 'x'.repeat(800);
     const msg = mkMsg({
       sender: '@bot.x:localhost',
@@ -121,10 +119,10 @@ describe('tool_calls 渲染', () => {
       },
     });
     const out = formatRoomToMarkdown([msg], meta);
-    // 表格摘要显示前 200 字符 + 总字符数
+    // 表格摘要显示总字符数
     expect(out).toContain('✅ 成功（返回 800 字符）');
-    // 完整结果在单独 <details>
-    expect(out).toContain('<summary>📄 read_file 完整结果（点击展开）</summary>');
+    // 完整结果在代码块（不折叠）
+    expect(out).toContain('**📄 read_file 完整结果（800 字符）**');
     expect(out).toContain(longResult);
   });
 

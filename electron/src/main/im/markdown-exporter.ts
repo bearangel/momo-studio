@@ -7,8 +7,8 @@
 // 渲染规则详见 spec Section 6.2：
 //   - 用户消息：## 👤 用户 @userId — 时间
 //   - agent 文本：## 🤖 {botName ?? shortName(sender)} @botId — 时间
-//   - thinking：<details><summary>💭 thinking</summary> ... </details>
-//   - tool_calls：表格（工具/参数/结果），result > 500 字符单独 <details> 折叠
+//   - thinking：**💭 thinking** + 引用块（> 前缀），v1.7.3 改用 Markdown 原生替代 <details>
+//   - tool_calls：表格（工具/参数/结果），result > 500 字符单独代码块展开（不折叠）
 //   - dispatch：📨 委派子 agent 块 + task_reply 嵌套进同一块（不作为顶层消息）
 //
 // 大 result 阈值 500 字符：表格只放摘要「✅ 成功（返回 N 字符）」，
@@ -70,7 +70,9 @@ function escapePipe(s: string): string {
 function renderThinking(content: Record<string, unknown>): string {
   const thinking = content[THINKING_KEY];
   if (typeof thinking !== 'string' || !thinking) return '';
-  return `<details>\n<summary>💭 thinking（点击展开）</summary>\n\n${thinking}\n\n</details>\n\n`;
+  // v1.7.3: 改用 Markdown 引用块替代 <details>——所有渲染器兼容
+  const lines = thinking.split('\n').map((l) => `> ${l}`);
+  return `**💭 thinking**\n\n${lines.join('\n')}\n\n`;
 }
 
 function renderToolCall(tc: ToolCallRecord): string {
@@ -88,10 +90,10 @@ function renderToolCall(tc: ToolCallRecord): string {
   let table = `| 工具 | 参数 | 结果 |\n|---|---|---|\n`;
   table += `| \`${tc.name}\` | ${args} | ${tableResultCell} |`;
 
-  // 大 result 单独折叠
-  if (isLarge) {
-    table += `\n\n<details>\n<summary>📄 ${tc.name} 完整结果（点击展开）</summary>\n\n\`\`\`\n${tc.result}\n\`\`\`\n\n</details>`;
-  }
+    // v1.7.3: 大 result 改用代码块（不折叠）替代 <details>——所有渲染器兼容
+    if (isLarge) {
+      table += `\n\n**📄 ${tc.name} 完整结果（${tc.result.length} 字符）**\n\n\`\`\`\n${tc.result}\n\`\`\``;
+    }
 
   return table;
 }
@@ -155,8 +157,9 @@ function renderDispatchBlock(msg: ExportMessage, replies: ExportMessage[]): stri
     dispatch_to: string;
   };
   const subAgentName = shortName(content.dispatch_to);
+  // v1.7.3: 改用 Markdown 引用块替代 <details>——所有渲染器兼容
   let out = '**📨 委派子 agent：' + subAgentName + '**\n\n';
-  out += `<details>\n<summary>📦 子 agent ${subAgentName} 工作过程（点击展开）</summary>\n\n`;
+  out += `**📦 子 agent ${subAgentName} 工作过程：**\n\n`;
 
   // 任务描述
   if (msg.body) {
@@ -178,7 +181,7 @@ function renderDispatchBlock(msg: ExportMessage, replies: ExportMessage[]): stri
     }
   }
 
-  out += `</details>\n`;
+  out += `---\n`;
   return out;
 }
 
