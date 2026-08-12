@@ -17,7 +17,7 @@ import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
-import { MarketplaceView } from '../marketplace/MarketplaceView';
+import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { ResizableSidebar } from '../common/ResizableSidebar';
 
 export function MiddlePanel() {
@@ -43,9 +43,9 @@ export function MiddlePanel() {
     [workspace, openFile],
   );
 
-  // marketplace 视图：浏览/搜索/安装 agent/mcp/skill，不需要 workspace 上下文
+  // 资源库视图（v1.7：原 marketplace 视图统一为资源库，三源合并）：浏览/搜索/安装 agent/mcp/skill，不需要 workspace 上下文
   if (activeView === 'marketplace') {
-    return <MarketplaceView />;
+    return <ResourceLibraryView />;
   }
 
   // 无 workspace 时显示引导

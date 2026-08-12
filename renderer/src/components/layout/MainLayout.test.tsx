@@ -62,7 +62,7 @@ describe('MainLayout', () => {
     expect(screen.getByLabelText('View: IM')).toBeInTheDocument();
     expect(screen.getByLabelText('View: Files')).toBeInTheDocument();
     expect(screen.getByLabelText('View: Agents')).toBeInTheDocument();
-    expect(screen.getByLabelText('View: Marketplace')).toBeInTheDocument();
+    expect(screen.getByLabelText('View: 资源库')).toBeInTheDocument();
     expect(screen.getByLabelText('View: Settings')).toBeInTheDocument();
   });
 
