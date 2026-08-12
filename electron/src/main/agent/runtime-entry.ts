@@ -461,6 +461,18 @@ ${skillIndex}`
     },
   ];
 
+  // v1.7.1 修复：把动态注册的工具（loadSkill / readResource / dispatch:* / mcp:*
+  // / task_complete / compact）加进 allowedTools 白名单。
+  // 否则 v1.6 T4 修复 allowedTools 真正生效后，这些虚拟/动态工具虽暴露给 LLM
+  // 但调用时被 permission.ts 拒绝（"工具 X 不在允许列表中"）。
+  // 这些工具的暴露本身已受控（有 skill 才暴露 loadSkill；main 才暴露 dispatch:*；
+  // 配置 MCP 才暴露 mcp:*），故加入白名单不削弱安全模型——它们是 agent 能力配置的
+  // 直接体现，与 read_file/bash 等内置工具同等地位。
+  if (config.allowedTools.length > 0) {
+    const dynamicNames = tools.map((t) => t.name);
+    config.allowedTools = [...new Set([...config.allowedTools, ...dynamicNames])];
+  }
+
   return {
     wsFs,
     skillRegistry,
