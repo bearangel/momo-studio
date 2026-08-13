@@ -445,6 +445,92 @@ CREATE INDEX IF NOT EXISTS idx_events_msg_seq ON message_events(message_id, seq)
 DROP TABLE IF EXISTS agent_meta;
 `.trim(),
   },
+  {
+    version: 19,
+    sql: `
+-- B 子系统：任务模型——tasks 表 + conflict_strategy + agent_definitions 扩展
+-- 详见 docs/specs/2026-08-13-platform-redesign-overview.md
+--
+-- tasks 表是"双模型"的 Task 侧真相源：
+--   - 用户在 IM 房间内 @ 一个 agent 时，IM dispatch 协议层把意图升级为 Task
+--   - 调度器按 priority / scheduled_at 把 task 派发到执行 room
+--   - agent 完成 task 后回写 status + actual_tokens + completed_at
+--   - 25 字段覆盖：身份 / 来源（哪个房间哪条消息触发）/ 执行（哪个 agent 在哪个 room）/
+--     调度（priority / 定时 / 重复 / 截止）/ D 子系统扩展（D 任务看板用）/
+--     C 子系统扩展（C P2P 路由用 source_node_id）/ 时间戳
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id                    TEXT PRIMARY KEY NOT NULL,
+  workspace_id          TEXT NOT NULL,
+  title                 TEXT NOT NULL,
+  description           TEXT NOT NULL DEFAULT '',
+  status                TEXT NOT NULL DEFAULT 'draft',
+
+  source_room_id        TEXT,
+  source_message_id     TEXT,
+  creator_user_id       TEXT NOT NULL,
+
+  execution_room_id     TEXT,
+  assignee_agent_id     TEXT,
+
+  priority              INTEGER NOT NULL DEFAULT 0,
+  scheduled_at          INTEGER,
+  recurrence_rule       TEXT,
+  deadline_at           INTEGER,
+
+  queue_position        INTEGER,
+  runtime_instance_id   TEXT,
+  estimated_tokens      INTEGER,
+  actual_tokens         INTEGER,
+  tool_calls_used       INTEGER DEFAULT 0,
+  error_message         TEXT,
+  source_node_id        TEXT,
+
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  started_at            INTEGER,
+  completed_at          INTEGER,
+
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+
+-- 索引：四类热查询路径
+--   - workspace 列表 + 按 status 过滤（任务看板主视图）
+--   - 按执行 room 找任务（dispatch 完成后查询子任务结果）
+--   - 按 agent 查当前活跃任务（concurrency 控制 max_concurrent_tasks）
+--   - 按 scheduled_at 找待调度任务（调度器轮询）
+CREATE INDEX IF NOT EXISTS idx_tasks_ws_status ON tasks(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_exec_room ON tasks(execution_room_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee  ON tasks(assignee_agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_at) WHERE scheduled_at IS NOT NULL;
+
+-- messages.task_id 已在 v17 加为普通列；SQLite 不支持 ALTER TABLE ADD CONSTRAINT，
+-- 故此处用 trigger 模拟 ON DELETE SET NULL：删除 task 时把 messages.task_id 自动置 NULL，
+-- 比 drop + recreate messages 表轻量得多（messages 是 A 子系统的核心表，重建风险大）。
+CREATE TRIGGER IF NOT EXISTS messages_task_id_null_on_delete
+  AFTER DELETE ON tasks
+  FOR EACH ROW
+  BEGIN
+    UPDATE messages SET task_id = NULL WHERE task_id = OLD.id;
+  END;
+
+-- room_settings.conflict_strategy：当 agent 在已运行任务的房间里被 @ 时如何处理。
+--   ask（默认）= 询问用户要不要中断旧任务；
+--   queue      = 排队等旧任务完成；
+--   preempt    = 直接中断旧任务接新任务；
+--   reject     = 拒绝新任务。
+ALTER TABLE room_settings ADD COLUMN conflict_strategy TEXT NOT NULL DEFAULT 'ask';
+
+-- agent_definitions.max_concurrent_tasks：单个 agent 实例最多同时运行的任务数。
+--   默认 1（v1.x 行为：每个 agent 同时只跑一个任务）；
+--   C 子系统会让某些 agent 设更高值（如 dispatch router）。
+ALTER TABLE agent_definitions ADD COLUMN max_concurrent_tasks INTEGER NOT NULL DEFAULT 1;
+
+-- agent_definitions.default_conflict_strategy：与 room_settings.conflict_strategy 同语义，
+-- 房间级未配置时继承 agent 定义。
+ALTER TABLE agent_definitions ADD COLUMN default_conflict_strategy TEXT NOT NULL DEFAULT 'ask';
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
