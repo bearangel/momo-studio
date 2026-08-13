@@ -31,8 +31,6 @@ interface ImState {
   loadingOlderByRoom: Map<string, boolean>;
   /** v1.5.4：分页是否还有更早历史——roomId → boolean；undefined 视为 true（初始） */
   hasMoreByRoom: Map<string, boolean>;
-  /** v1.5.7：team room 消息缓存——DispatchChip 跨房间搜索子 agent 消息 */
-  teamRoomMessages: ImMessage[];
 
   /**
    * 拉取房间列表，默认激活第一个房间并加载其消息。
@@ -44,8 +42,6 @@ interface ImState {
   refreshRoomList: (workspaceId?: string) => void;
   /** 切换激活房间并加载该房间历史消息与成员 */
   selectRoom: (roomId: string) => Promise<void>;
-  /** v1.5.7: 加载 team room 消息（DispatchChip 跨房间搜索子 agent 消息） */
-  loadTeamRoomMessages: () => Promise<void>;
   /** 拉取指定房间成员列表（含身份标识） */
   loadMembers: (roomId: string) => Promise<void>;
   /** 接收主进程推送的实时消息（按 SQLite messages.id 去重） */
@@ -74,7 +70,6 @@ export const useImStore = create<ImState>((set, get) => ({
   currentWorkspaceId: null,
   loadingOlderByRoom: new Map(),
   hasMoreByRoom: new Map(),
-  teamRoomMessages: [],
 
   loadRooms: async (workspaceId) => {
     // 切换 workspace 时清空旧 workspace 的房间、消息、成员、激活房间
@@ -148,20 +143,6 @@ export const useImStore = create<ImState>((set, get) => ({
     }
     // 放在 try 外：即使消息拉取失败也刷新成员，避免显示上个房间的陈旧成员
     void get().loadMembers(roomId);
-    // v1.5.7: 加载 team room 消息（DispatchChip 跨房间搜索子 agent 消息用）
-    void get().loadTeamRoomMessages();
-  },
-
-  loadTeamRoomMessages: async () => {
-    try {
-      const { useWorkspaceStore } = await import('./workspace.store');
-      const ws = useWorkspaceStore.getState().getActive();
-      if (!ws?.teamRoomId) return;
-      const { messages } = await ipc.im.getMessages(ws.teamRoomId);
-      set({ teamRoomMessages: messages });
-    } catch {
-      // 静默失败——team room 消息是辅助数据
-    }
   },
 
   loadOlder: async (roomId) => {

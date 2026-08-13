@@ -7,7 +7,6 @@
 // 内部按段顺序（segment_index）纵向堆叠，每段间用段号标签分隔。
 // 每段保留独立的 MessageBubble（含自己的 MessageFrame），不破坏现有视觉。
 
-import type { ImMessage } from '../../ipc/types';
 import type { SegmentGroup } from './types';
 import { MessageBubble } from './MessageBubble';
 
@@ -18,15 +17,12 @@ interface SegmentStackProps {
   isSelf?: boolean;
   /** bot 名称（透传给每段 MessageBubble） */
   senderName?: string;
-  /** 同房间的全部消息（DispatchChip 重建子 agent 用） */
-  allMessages: ImMessage[];
 }
 
 export function SegmentStack({
   group,
   isSelf,
   senderName,
-  allMessages,
 }: SegmentStackProps): JSX.Element {
   const { segments } = group;
   const totalSegments = segments.length;
@@ -53,7 +49,6 @@ export function SegmentStack({
               message={seg}
               isSelf={isSelf ?? false}
               senderName={senderName}
-              allMessages={allMessages}
             />
           </div>
         );

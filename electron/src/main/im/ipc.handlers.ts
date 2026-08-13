@@ -16,7 +16,6 @@ import {
   sendMessage,
   sendMessageWithMentions,
   getRoomsForWorkspace,
-  getRoomMessages,
 } from '../matrix/sync-manager';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listAssignments, getAgentDefinition } from '../agent/crud';

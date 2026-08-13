@@ -438,6 +438,13 @@ CREATE TABLE IF NOT EXISTS message_events (
 CREATE INDEX IF NOT EXISTS idx_events_msg_seq ON message_events(message_id, seq);
 `.trim(),
   },
+  {
+    version: 18,
+    sql: `
+-- A 子系统：删除 agent_meta 表（已废弃，富元数据统一在 message_events）
+DROP TABLE IF EXISTS agent_meta;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

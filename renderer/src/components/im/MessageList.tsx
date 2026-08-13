@@ -65,7 +65,6 @@ export function MessageList() {
   const messages = useImStore((s) =>
     activeRoomId ? s.messagesByRoom.get(activeRoomId) : undefined,
   );
-  const teamRoomMessages = useImStore((s) => s.teamRoomMessages);
   const loading = useImStore((s) => s.loading);
   const loadingOlder = useImStore((s) =>
     activeRoomId ? s.loadingOlderByRoom.get(activeRoomId) ?? false : false,
@@ -173,7 +172,6 @@ export function MessageList() {
               group={item}
               isSelf={item.segments[0]?.sender === currentUserId}
               senderName={botNameByUserId.get(item.segments[0]?.sender ?? '')}
-              allMessages={[...messages, ...teamRoomMessages]}
             />
           );
         }
@@ -184,7 +182,6 @@ export function MessageList() {
             message={msg}
             isSelf={msg.sender === currentUserId}
             senderName={botNameByUserId.get(msg.sender)}
-            allMessages={[...messages, ...teamRoomMessages]}
           />
         );
       })}

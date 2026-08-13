@@ -34,7 +34,6 @@ import {
   stopRunningInstancesByDefinition,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
-import { readAgentMeta } from '../storage/agent-meta';
 import { getSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
@@ -645,11 +644,6 @@ export function registerAgentHandlers(): void {
       return { instanceId: assignment.instanceId };
     },
   );
-
-  // v1.5.6：renderer 读消息时拉取 agent 元数据（thinking/tool_calls/todos 持久化分层）
-  ipcMain.handle('agent:getMeta', async (_evt, metaId: string) => {
-    return readAgentMeta(metaId);
-  });
 
   logger.info('Agent IPC handlers 已注册');
 }

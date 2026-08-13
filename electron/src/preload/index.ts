@@ -52,8 +52,6 @@ const api: ApiSurface = {
   agent: {
     addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
     assignMain: (input) => invoke('agent:assignMain', input),
-    // v1.5.6：renderer 拉取 agent_meta（持久化分层）
-    getMeta: (metaId: string) => invoke('agent:getMeta', metaId),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     createCustom: (input) => invoke('agent:createCustom', input),
     list: (workspaceId?: string) => invoke('agent:list', workspaceId),

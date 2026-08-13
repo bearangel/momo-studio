@@ -3,14 +3,13 @@
 // 单条消息渲染入口。根据 eventType 分发：
 //   - io.momo-studio.dispatch   → DispatchCard（紫色，走 MessageFrame）
 //   - io.momo-studio.task_reply → TaskReplyCard（状态色，走 MessageFrame）
-//   - m.room.message（含活跃 stream） → AgentStreamBubble（流式聚合渲染）
+//   - m.room.message（含活跃 stream 或已完成带富信息） → AgentStreamBubble
 //   - 其余 → 普通气泡（走 MessageFrame，自己蓝/他人灰）
 //
 // v2.0 A 子系统重写：
 //   - 按 message.id 查 stream.store.get()，streaming 时渲染 AgentStreamBubble
-//   - 删除旧版从 message.content 提取 io.momo-studio.* 富字段的逻辑
-//     （thinking/tool_calls/dispatches 改由 message_events 表 + aggregateEvents 重建，
-//      在 stream.store 内聚合，本组件只判断 streaming/静态两种状态）
+//   - 已完成（done/failed/aborted）但带富信息（thinking/工具调用/dispatches）时
+//     也走 AgentStreamBubble——从 message_events 聚合重建，重启后一致
 //   - 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -27,13 +26,11 @@ interface Props {
   isSelf: boolean;
   /** bot 的配置名称（如有），优先于 shortName 展示 */
   senderName?: string;
-  /** 同房间的全部消息（SegmentStack / DispatchChip 跨房间搜索用） */
-  allMessages?: ImMessage[];
 }
 
 export function MessageBubble({ message, isSelf, senderName }: Props) {
-  // A 子系统：按 message.id 查 stream。streaming 时用 AgentStreamBubble 渲染富信息，
-  // 否则渲染静态消息（基于 message.body）。
+  // A 子系统：按 message.id 查 stream。streaming 或已完成带富信息时用 AgentStreamBubble
+  // 渲染（thinking/工具调用/dispatches 从 message_events 聚合），否则渲染静态消息。
   const stream = useStreamStore((s) => s.streams.get(message.id));
 
   if (message.eventType === 'io.momo-studio.dispatch') {
@@ -43,11 +40,19 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
     return <TaskReplyCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
 
-  if (stream && stream.status === 'streaming') {
+  // 流式中 OR 已完成但带富信息（thinking/工具调用/dispatches）：用 AgentStreamBubble 渲染。
+  // AgentStreamBubble 内部按 status 控制流式光标/停止按钮/状态栏，done 时仅显示静态富信息。
+  if (
+    stream &&
+    (stream.status === 'streaming' ||
+      stream.thinking.length > 0 ||
+      stream.toolCalls.length > 0 ||
+      stream.dispatches.length > 0)
+  ) {
     return <AgentStreamBubble stream={stream} message={message} senderName={senderName} />;
   }
 
-  // 静态气泡（已完成或无 stream）
+  // 静态气泡（普通文本消息，或已完成但无富信息的 agent 回复）
   return (
     <MessageFrame
       sender={message.sender}

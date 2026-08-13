@@ -16,7 +16,6 @@ const { imState, authState } = vi.hoisted(() => ({
     loading: false,
     loadingOlderByRoom: new Map<string, boolean>(),
     hasMoreByRoom: new Map<string, boolean>(),
-    teamRoomMessages: [],
     loadOlder: () => Promise.resolve(),
   },
   authState: { user: { userId: '@me:server' } },

@@ -8,9 +8,10 @@ import { SegmentStack } from '../SegmentStack';
 import type { SegmentGroup } from '../types';
 import type { ImMessage } from '../../../ipc/types';
 
-// MessageBubble 内部依赖 useStreamStore，提供 mock
+// MessageBubble 内部依赖 useStreamStore，提供 mock（需正确应用 selector）
 vi.mock('../../../stores/stream.store', () => ({
-  useStreamStore: () => ({ streams: new Map() }),
+  useStreamStore: (selector: (s: { streams: Map<string, unknown> }) => unknown) =>
+    selector({ streams: new Map() }),
 }));
 
 import { vi } from 'vitest';
@@ -52,7 +53,7 @@ describe('SegmentStack', () => {
       lastSegmentAt: 250,
     };
 
-    render(<SegmentStack group={group} allMessages={[]} />);
+    render(<SegmentStack group={group} />);
 
     expect(screen.getByText('第一段内容')).toBeInTheDocument();
     expect(screen.getByText('第二段内容')).toBeInTheDocument();
@@ -74,7 +75,7 @@ describe('SegmentStack', () => {
       lastSegmentAt: 150,
     };
 
-    const { container } = render(<SegmentStack group={group} allMessages={[]} />);
+    const { container } = render(<SegmentStack group={group} />);
     expect(container.querySelector('[data-testid="segment-stack"]')).not.toBeNull();
   });
 });

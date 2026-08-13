@@ -1,7 +1,10 @@
 // electron/tests/im/markdown-exporter.test.ts
 //
-// formatRoomToMarkdown 纯函数测试：覆盖文件头 / 用户消息 / agent 文本 /
-// thinking 折叠 / tool_calls 表格 / dispatch 嵌套 / 多消息分隔 共 11 个用例。
+// formatRoomToMarkdown 纯函数测试。
+//
+// v2.0 A 子系统简化：
+//   - 导出器仅输出 body + 时间戳 + sender（富字段 thinking/tool_calls/dispatch 已废弃）
+//   - dispatch/task_reply 消息作为顶层消息统一渲染（不再分组嵌套）
 import { describe, it, expect } from 'vitest';
 import { formatRoomToMarkdown, type ExportMessage, type ExportMeta } from '../../src/main/im/markdown-exporter';
 
@@ -69,118 +72,29 @@ describe('agent 文本消息', () => {
   });
 });
 
-describe('thinking 渲染', () => {
-  it('渲染为 **💭 thinking** + 引用块（> 前缀）', () => {
+describe('dispatch/task_reply 消息（A 子系统：统一顶层渲染）', () => {
+  it('dispatch 消息作为顶层消息渲染 body', () => {
     const msg = mkMsg({
-      sender: '@bot.x:localhost',
-      botName: 'A',
-      content: { 'io.momo-studio.thinking': '用户想读文件...' },
-    });
-    const out = formatRoomToMarkdown([msg], meta);
-    expect(out).toContain('**💭 thinking**');
-    expect(out).toContain('> 用户想读文件...');
-  });
-});
-
-describe('tool_calls 渲染', () => {
-  it('逐个工具块：名称 + 参数代码块 + 结果代码块', () => {
-    const msg = mkMsg({
-      sender: '@bot.x:localhost',
-      botName: 'A',
-      content: {
-        'io.momo-studio.tool_calls': [{
-          name: 'read_file',
-          args: { path: 'docs/spec.md' },
-          result: '文件内容...',
-          success: true,
-        }],
-      },
-    });
-    const out = formatRoomToMarkdown([msg], meta);
-    expect(out).toContain('**🔧 工具调用**');
-    expect(out).toContain('**1. `read_file`** ✅ 成功');
-    expect(out).toContain('"path": "docs/spec.md"');
-    expect(out).toContain('文件内容...');
-  });
-
-  it('result 超 500 字符：完整结果代码块展开', () => {
-    const longResult = 'x'.repeat(800);
-    const msg = mkMsg({
-      sender: '@bot.x:localhost',
-      botName: 'A',
-      content: {
-        'io.momo-studio.tool_calls': [{
-          name: 'read_file',
-          args: { path: 'big.txt' },
-          result: longResult,
-          success: true,
-        }],
-      },
-    });
-    const out = formatRoomToMarkdown([msg], meta);
-    // 标题含成功标记
-    expect(out).toContain('✅ 成功');
-    // 完整结果在代码块（不折叠）
-    expect(out).toContain('结果（返回 800 字符）');
-    expect(out).toContain(longResult);
-  });
-
-  it('失败 tool_call：❌ + error message', () => {
-    const msg = mkMsg({
-      sender: '@bot.x:localhost',
-      botName: 'A',
-      content: {
-        'io.momo-studio.tool_calls': [{
-          name: 'bash',
-          args: { cmd: 'rm -rf /' },
-          result: '命令被黑名单拒绝',
-          success: false,
-        }],
-      },
-    });
-    const out = formatRoomToMarkdown([msg], meta);
-    expect(out).toContain('❌ 失败');
-    expect(out).toContain('命令被黑名单拒绝');
-  });
-});
-
-describe('dispatch 嵌套', () => {
-  it('渲染为 📨 委派块 + 子 agent 信息', () => {
-    const dispatchMsg = mkMsg({
-      eventId: 'd1',
       eventType: 'io.momo-studio.dispatch',
       sender: '@bot.pm:localhost',
       botName: '项目经理',
       body: '实现第 3 章',
-      content: {
-        body: '实现第 3 章',
-        task_id: 't1',
-        dispatch_from: '@bot.pm:localhost',
-        dispatch_to: '@bot.coder:localhost',
-      },
-      timestamp: Date.parse('2026-08-12T13:20:15+08:00'),
     });
-    const replyMsg = mkMsg({
-      eventId: 'r1',
+    const out = formatRoomToMarkdown([msg], meta);
+    expect(out).toContain('## 🤖 项目经理 @bot.pm:localhost');
+    expect(out).toContain('实现第 3 章');
+  });
+
+  it('task_reply 消息作为顶层消息渲染 body', () => {
+    const msg = mkMsg({
       eventType: 'io.momo-studio.task_reply',
       sender: '@bot.coder:localhost',
       botName: 'coder',
       body: '已完成',
-      content: {
-        body: '已完成',
-        task_id: 't1',
-        status: 'completed',
-      },
-      timestamp: Date.parse('2026-08-12T13:25:00+08:00'),
     });
-    const out = formatRoomToMarkdown([dispatchMsg, replyMsg], meta);
-    // dispatch 作为顶层消息
-    expect(out).toContain('📨 委派子 agent：coder');
-    // task_reply 嵌套进 dispatch 块（不作为顶层 ## 标题）
-    expect(out).toContain('子 agent coder 工作过程');
+    const out = formatRoomToMarkdown([msg], meta);
+    expect(out).toContain('## 🤖 coder @bot.coder:localhost');
     expect(out).toContain('已完成');
-    // task_reply 不应作为顶层消息标题
-    expect(out).not.toMatch(/## 🤖 coder @bot\.coder:localhost — 2026-08-12 13:25:00\n\n已完成\n\n---/);
   });
 });
 

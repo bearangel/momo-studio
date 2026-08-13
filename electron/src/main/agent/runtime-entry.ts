@@ -709,22 +709,6 @@ export interface RunChatLoopStats {
   toolCallsUsed: number;
 }
 
-/** 持久化到 Matrix 消息的工具调用记录（renderer 渲染卡片用） */
-interface ToolCallRecord {
-  name: string;
-  args: Record<string, unknown>;
-  result: string;
-  success: boolean;
-  /** v1.4 嵌套：dispatch 委派标记 */
-  isDispatch?: boolean;
-  /** v1.4 嵌套：子 agent 流式 session ID（renderer 据此查找子 agent 的 StreamState） */
-  subStreamSessionId?: string;
-  /** v1.4 嵌套：子 agent 展示名 */
-  subAgentName?: string;
-  /** v1.4 嵌套：子 agent emoji 头像 */
-  subAgentAvatar?: string;
-}
-
 /**
  * 完整 chat loop（v1.4 流式版）：组装上下文 → 循环调用 chatStream →
  * 逐 chunk 通过 process.send 推送到 renderer → 最终发送 m.room.message 持久化。
@@ -789,10 +773,6 @@ export async function runChatLoop(
   let toolCallCount = 0;
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
-  // v1.7.4 Bug 4：记录上次 task_complete 分段时的 toolCallHistory 长度，
-  // 用于本段只持久化增量工具调用（避免每段重复全量历史）。
-  let lastSegmentToolCallCount = 0;
-  const toolCallHistory: ToolCallRecord[] = [];
   let accumulatedThinking = '';
   let accumulatedText = '';
 
@@ -976,8 +956,6 @@ export async function runChatLoop(
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
         accumulatedThinking = '';
-        // v1.7.4 Bug 4：记录本次分段位置，下次分段从这里开始算增量
-        lastSegmentToolCallCount = toolCallHistory.length;
 
         // 推 stream chunk 让 renderer 知道分段了（可选 UI 提示）
         sendStreamChunk({
@@ -1163,20 +1141,6 @@ export async function runChatLoop(
         });
       }
 
-      const subAgentName = isDispatch
-        ? (config.subAgents.find((s) => s.slug === tc.name.slice('dispatch:'.length))?.description
-          ?? config.subAgents.find((s) => s.slug === tc.name.slice('dispatch:'.length))?.slug
-          ?? tc.name)
-        : undefined;
-      toolCallHistory.push({
-        name: tc.name, args: tc.arguments, result, success,
-        ...(isDispatch ? {
-          isDispatch: true,
-          subStreamSessionId,
-          subAgentName,
-          subAgentAvatar: '🤖',
-        } : {}),
-      });
       toolCallCount++;
       budgetRemaining--; // dispatch 本身计 1 次
       if (dispatchInfo && dispatchInfo.toolCallsUsed > 0 && budgetRemaining !== Infinity) {

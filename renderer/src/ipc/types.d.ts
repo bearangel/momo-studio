@@ -566,16 +566,6 @@ export interface ApiSurface {
   agent: {
     /** v1.3：一键编排（带 role + parentInstanceId + apiKeyOverride） */
     addToWorkspace(input: AddToWorkspaceInput): Promise<AgentAssignment>;
-    /**
-     * v1.5.6：拉取 agent_meta（持久化分层——大 thinking/tool_calls/todos 存 SQLite）
-     * 返回 null 时降级到 Matrix event 内嵌字段
-     */
-    getMeta(metaId: string): Promise<{
-      metaId: string;
-      thinking: string | null;
-      toolCalls: string | null;
-      todos: string | null;
-    } | null>;
     /** v1.3：安装 main + 自动跟随 sub */
     assignMain(input: AssignMainInput): Promise<AgentAssignment[]>;
     createFromYaml(yaml: string): Promise<AgentDefinition>;

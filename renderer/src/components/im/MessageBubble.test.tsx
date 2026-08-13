@@ -147,3 +147,37 @@ describe('MessageBubble streaming 分支（A 子系统）', () => {
     expect(screen.getByText('失败前的正文')).toBeInTheDocument();
   });
 });
+
+describe('MessageBubble 已完成带富信息分支（A9：done 显示富信息）', () => {
+  it('stream.status=done 且有 thinking → AgentStreamBubble', () => {
+    mockStreams.clear();
+    mockStreams.set('m1', makeStream({ messageId: 'm1', status: 'done', thinking: '我在思考' }));
+    const msg = makeMsg('m1', { body: '已完成正文' });
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    expect(screen.getByTestId('agent-stream')).toBeInTheDocument();
+  });
+
+  it('stream.status=done 且有 toolCalls → AgentStreamBubble', () => {
+    mockStreams.clear();
+    mockStreams.set('m1', makeStream({
+      messageId: 'm1',
+      status: 'done',
+      toolCalls: [{ callId: 'c1', toolName: 'read_file', args: {}, result: 'ok', success: true }],
+    }));
+    const msg = makeMsg('m1', { body: '已完成正文' });
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    expect(screen.getByTestId('agent-stream')).toBeInTheDocument();
+  });
+
+  it('stream.status=done 且有 dispatches → AgentStreamBubble', () => {
+    mockStreams.clear();
+    mockStreams.set('m1', makeStream({
+      messageId: 'm1',
+      status: 'done',
+      dispatches: [{ callId: 'd1', subStreamSessionId: 's1', subAgentName: 'coder', task: 't', status: 'completed' }],
+    }));
+    const msg = makeMsg('m1', { body: '已完成正文' });
+    render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
+    expect(screen.getByTestId('agent-stream')).toBeInTheDocument();
+  });
+});
