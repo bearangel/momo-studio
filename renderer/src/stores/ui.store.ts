@@ -1,7 +1,7 @@
 // renderer/src/stores/ui.store.ts
 import { create } from 'zustand';
 
-export type ViewKey = 'im' | 'files' | 'agents' | 'marketplace' | 'settings';
+export type ViewKey = 'im' | 'files' | 'agents' | 'marketplace' | 'settings' | 'tasks';
 
 interface UiState {
   activeView: ViewKey;

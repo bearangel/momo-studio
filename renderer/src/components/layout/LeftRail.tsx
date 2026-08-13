@@ -13,6 +13,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'im', icon: '\u{1F4AC}', label: 'View: IM' },
   { key: 'files', icon: '\u{1F4C1}', label: 'View: Files' },
   { key: 'agents', icon: '\u{1F916}', label: 'View: Agents' },
+  { key: 'tasks', icon: '\u{1F4CB}', label: 'View: 任务看板' },
   { key: 'marketplace', icon: '\u{1F6D2}', label: 'View: 资源库' },
   { key: 'settings', icon: '\u2699', label: 'View: Settings' },
 ];

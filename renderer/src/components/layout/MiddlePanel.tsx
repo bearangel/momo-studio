@@ -19,6 +19,7 @@ import { ExportChatButton } from '../im/ExportChatButton';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
+import { TaskBoardView } from '../task-board/TaskBoardView';
 import { ResizableSidebar } from '../common/ResizableSidebar';
 
 export function MiddlePanel() {
@@ -118,6 +119,15 @@ export function MiddlePanel() {
   // agents 视图：Tab 容器（本工作空间 / Agent 库）
   if (activeView === 'agents') {
     return <AgentsView />;
+  }
+
+  // tasks 视图：任务看板（D 子系统 D7）—— Linear 风格列表 + 侧滑详情
+  if (activeView === 'tasks') {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <TaskBoardView workspaceId={workspace.id} />
+      </div>
+    );
   }
 
   // settings 视图：Git Policy 配置 + 审计日志
