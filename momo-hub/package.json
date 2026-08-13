@@ -1,0 +1,33 @@
+{
+  "name": "momo-hub",
+  "version": "1.0.0",
+  "description": "Momo Studio 互联网模式的中转服务器（WebSocket + 节点路由 + presence）",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc --watch",
+    "test": "echo \"No tests yet (hub is deployed/tested in production)\" && exit 0"
+  },
+  "keywords": [
+    "momo-studio",
+    "hub",
+    "websocket",
+    "p2p",
+    "relay"
+  ],
+  "author": "Momo Studio",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.6.3"
+  }
+}
