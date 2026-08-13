@@ -32,6 +32,11 @@ import {
   __resetEventBufferForTest,
   __flushEventBufferForTest,
 } from '../../src/main/agent/runtime-manager';
+import {
+  __setMemoryProviderForTest,
+  __resetMemoryProviderForTest,
+  type MemoryProvider,
+} from '../../src/main/memory';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
   getMessageByStreamSessionId,
@@ -302,9 +307,18 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
 describe('runChatLoop: task_complete 分段发 segment_boundary chunk', () => {
   const originalSend = process.send;
 
+  const stubProvider: MemoryProvider = {
+    getTaskContext: async () => null,
+    getConversationContext: async () => ({ messages: [] }),
+    getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
+    getUserContext: async () => ({ preferences: [] }),
+    getWorkspaceContext: async () => null,
+  };
+
   beforeEach(() => {
     sentChunks.length = 0;
     vi.mocked(createLLMProvider).mockReset();
+    __setMemoryProviderForTest(stubProvider);
     process.send = ((msg: unknown): boolean => {
       sentChunks.push(msg);
       return true;
@@ -313,6 +327,7 @@ describe('runChatLoop: task_complete 分段发 segment_boundary chunk', () => {
 
   afterEach(() => {
     process.send = originalSend;
+    __resetMemoryProviderForTest();
   });
 
   /** 从 sentChunks 过滤 segment_boundary chunk */

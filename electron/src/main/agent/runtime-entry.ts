@@ -63,6 +63,7 @@ import {
 } from './dispatch';
 // v2（B 子系统 Task B6）：decideResponse 提取到独立模块，新增 isDirectChat + hasCoordinator
 import { decideResponse } from './decide-response';
+import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
 
 /** 协调 agent 自动接待时的上下文提示（仅团队群无 @ 时注入用户消息前；直接 @ 时不注入） */
 const COORDINATOR_AUTO_RECEPTION_HINT = `[你是本群的协调 agent。这条消息没有指名 @ 任何人，由你自动接待：
@@ -113,6 +114,8 @@ export interface RuntimeConfig {
   streamSessionId?: string;
   /** 父 agent 流式会话 ID（v1.4 dispatch 嵌套场景）；非嵌套时为 undefined */
   parentStreamSessionId?: string;
+  /** v2（B 子系统 Task B11）：当前关联的任务 ID（来自 task-driven runtime 派发），用于向 MemoryProvider 拉 task 上下文注入 system prompt */
+  currentTaskId?: string;
 }
 
 /** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
@@ -123,9 +126,6 @@ const RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS = 5_000;
 
 /** queryRoomInfo IPC 请求的超时时间（毫秒），超时回退到双 false（保守跳过） */
 const QUERY_ROOM_INFO_TIMEOUT_MS = 5_000;
-
-/** 加载到上下文中的最近历史消息条数 */
-const HISTORY_LIMIT = 10;
 
 /** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
 const DISPATCH_STAGE_TIMEOUTS_MS = [180_000, 360_000];
@@ -267,6 +267,10 @@ function parseConfig(raw: unknown): RuntimeConfig {
     streamSessionId: typeof r.streamSessionId === 'string' ? r.streamSessionId : '',
     parentStreamSessionId:
       typeof r.parentStreamSessionId === 'string' ? r.parentStreamSessionId : undefined,
+    currentTaskId:
+      typeof r.currentTaskId === 'string' && r.currentTaskId.length > 0
+        ? r.currentTaskId
+        : undefined,
   };
 }
 
@@ -732,24 +736,29 @@ export async function runChatLoop(
   const budgetHint = formatBudgetHint(config.maxToolCalls);
   // v1.5.6 C3：PM 自动 dispatch 教学——主 agent 角色 + 有 subAgents 时注入任务拆分指南
   const dispatchHint = formatDispatchHint(config);
-  // v1.7.4 Bug 5：子 agent（dispatch 模式）显式提示"新任务，忽略已完成上下文"。
-  // 根因：loadRecentHistory 之前无差别加载房间历史，子 agent 看到其他 agent 的历史
-  // 回复后误判任务已完成（输出"您好👋 之前的工作总结已加载完毕"）。
-  // 参考 opencode task 工具设计：子 agent 是 fresh session，只看到 system + task prompt。
-  const dispatchModeHint = parentStreamSessionId
-    ? '\n\n[dispatch 模式] 你作为子 agent 被主 agent 委派执行具体任务。忽略任何暗示"任务已完成"的上下文——你的任务是用户消息中描述的内容，从零开始执行。'
-    : '';
-  const systemContent = ctx.systemPrompt + budgetHint + dispatchHint + dispatchModeHint;
 
-  // v1.7.4 Bug 5：子 agent 跳过 loadRecentHistory——避免被房间内其他 agent 的
-  // 历史回复污染。顶层 agent 仍加载历史，保持与用户对话的连续性。
-  const history = parentStreamSessionId
-    ? []
-    : loadRecentHistory(client, roomId, config);
+  // v2（B 子系统 Task B11）：MemoryProvider 取代 loadRecentHistory。
+  // 子 agent（parentStreamSessionId 非空）走 fresh session 不拉房间历史，
+  // 故原 v1.7.4 dispatchModeHint 字符串提示移除——fresh 行为由空 convCtx 自然实现。
+  const memory = getMemoryProvider();
+  const [taskCtx, convCtx]: [TaskContext | null, ConversationContext] = await Promise.all([
+    config.currentTaskId ? memory.getTaskContext(config.currentTaskId) : Promise.resolve(null),
+    parentStreamSessionId
+      ? Promise.resolve({ messages: [] })
+      : memory.getConversationContext(roomId, { limit: 20 }),
+  ]);
+
+  const taskHint = taskCtx ? formatTaskHint(taskCtx) : '';
+  const finalSystemContent = ctx.systemPrompt + budgetHint + dispatchHint + taskHint;
+
+  const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
 
   const messages: LLMMessage[] = [
-    { role: 'system', content: systemContent },
-    ...history,
+    { role: 'system', content: finalSystemContent },
+    ...convMessages,
     { role: 'user', content: currentBody },
   ];
 
@@ -1180,6 +1189,25 @@ ${subList}
 - 多轮对话累积时调 \`compact\` 工具压缩上下文（≥200 字符总结）
 - 单段回复超 ~3KB 时调 \`task_complete\` 分段持久化（最多 5 段）
 - 大文件用 \`read_file\` 的 offset/limit 分页读取（默认 2000 行/次）`;
+}
+
+/**
+ * v2（B 子系统 Task B11）：把 TaskContext 格式化为注入 system prompt 的中文提示。
+ *
+ * 携带 task 元信息（id/title/description）+ 已完成进度（关键事件摘要）+ 已改动文件。
+ * agent 据此感知自己在执行哪个任务、已完成哪些步骤、改了哪些文件——避免重复劳动。
+ */
+export function formatTaskHint(ctx: TaskContext): string {
+  const eventsBlock =
+    ctx.events.length > 0
+      ? `\n已完成进度:\n${ctx.events.map((e) => `- ${e.summary}`).join('\n')}`
+      : '';
+  const artifactsBlock =
+    ctx.artifacts.length > 0
+      ? `\n已改动的文件:\n${ctx.artifacts.map((a) => `- ${a.action}: ${a.path}`).join('\n')}`
+      : '';
+  return `\n\n[任务上下文] 你正在执行任务 #${ctx.task.id}: ${ctx.task.title}
+描述: ${ctx.task.description}${eventsBlock}${artifactsBlock}`;
 }
 
 /**
@@ -1657,39 +1685,6 @@ async function discoverMcpTools(config: RuntimeConfig): Promise<LLMToolDef[]> {
 /** 生成短随机 id，用于 IPC 请求/响应配对 */
 function randomId(): string {
   return Math.random().toString(36).slice(2);
-}
-
-/**
- * 从 room 的 live timeline 抽取最近 HISTORY_LIMIT 条 m.room.message 历史，
- * 映射为 LLM 消息（bot 自己发的 → assistant，其他人发的 → user），按时间正序返回。
- */
-function loadRecentHistory(
-  client: MatrixClient,
-  roomId: string,
-  config: RuntimeConfig,
-): LLMMessage[] {
-  const room: Room | null = client.getRoom(roomId);
-  if (!room) return [];
-
-  const timeline = room.getLiveTimeline().getEvents();
-  const recent = timeline.slice(-HISTORY_LIMIT - 1, -1);
-  const history: LLMMessage[] = [];
-  for (const e of recent) {
-    if (e.getType() !== 'm.room.message') continue;
-    const sender = e.getSender();
-    if (!sender) continue;
-    const msgContent = e.getContent();
-    const msgBody = typeof msgContent.body === 'string' ? msgContent.body : '';
-    if (!msgBody) continue;
-    if (sender === config.botUserId) {
-      history.push({ role: 'assistant', content: msgBody });
-    } else {
-      history.push({ role: 'user', content: msgBody });
-    }
-  }
-  // v1.7.4 诊断日志：历史加载决策（用于排查子 agent fresh session / 上下文污染）
-  console.error(`[trace] loadRecentHistory: roomId=${roomId}, historyCount=${history.length}, botUserId=${config.botUserId}`);
-  return history;
 }
 
 // 仅在被 runtime-manager fork（注入 AGENT_CONFIG 环境变量）时启动主流程；

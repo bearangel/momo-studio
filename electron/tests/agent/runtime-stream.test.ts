@@ -24,6 +24,27 @@ import {
   type RunChatLoopStats,
 } from '../../src/main/agent/runtime-entry';
 import { buildToolRegistry } from '../../src/main/agent/tools';
+import {
+  __setMemoryProviderForTest,
+  __resetMemoryProviderForTest,
+  type MemoryProvider,
+} from '../../src/main/memory';
+
+// B11：MemoryProvider stub。默认空对话 + 无 task（messages = [system, user]）；单测通过 mockProviderOverride 覆盖。
+let mockProviderOverride: Partial<MemoryProvider> | null = null;
+const stubMemoryProvider: MemoryProvider = {
+  getTaskContext: async (taskId: string) =>
+    mockProviderOverride?.getTaskContext
+      ? mockProviderOverride.getTaskContext(taskId)
+      : null,
+  getConversationContext: async (roomId: string, opts) =>
+    mockProviderOverride?.getConversationContext
+      ? mockProviderOverride.getConversationContext(roomId, opts)
+      : { messages: [] },
+  getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
+  getUserContext: async () => ({ preferences: [] }),
+  getWorkspaceContext: async () => null,
+};
 
 // === Mock 状态 ===
 
@@ -137,6 +158,8 @@ describe('runChatLoop streaming', () => {
   beforeEach(() => {
     sentChunks.length = 0;
     vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
     process.send = ((msg: unknown): boolean => {
       sentChunks.push(msg);
       return true;
@@ -145,6 +168,7 @@ describe('runChatLoop streaming', () => {
 
   afterEach(() => {
     process.send = originalSend;
+    __resetMemoryProviderForTest();
   });
 
   it('正常完成：发 start → text → end(stop)，并发送最终 m.room.message', async () => {
@@ -504,6 +528,8 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
   beforeEach(() => {
     sentChunks.length = 0;
     vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
     process.send = ((msg: unknown): boolean => {
       sentChunks.push(msg);
       return true;
@@ -512,6 +538,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
 
   afterEach(() => {
     process.send = originalSend;
+    __resetMemoryProviderForTest();
   });
 
   it('dispatch tool_call chunk 携带 isDispatch + subStreamSessionId + subAgent 信息', async () => {
