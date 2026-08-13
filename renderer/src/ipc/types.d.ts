@@ -467,6 +467,38 @@ export type StreamChunk =
       error?: string;
     };
 
+/**
+ * A 子系统：事件溯源——单条 stream chunk 落盘一行。
+ *
+ * 与 StreamChunk（IPC 实时通道）的区别：
+ * - StreamChunk 是 transient 的 IPC 事件，由 renderer stream.store 聚合；
+ * - MessageEventRow 是持久化的 DB 行，A 子系统重启后从 message_events 表重建流状态。
+ *
+ * 两路用同一份 events 数组 + 同一个 aggregateEvents 函数聚合，
+ * 保证实时显示和重启显示完全一致（A 子系统核心不变量）。
+ */
+export interface MessageEventRow {
+  id: string;
+  messageId: string;
+  seq: number;
+  eventType:
+    | 'thinking_delta'
+    | 'text_delta'
+    | 'tool_call_start'
+    | 'tool_call_result'
+    | 'todo_update'
+    | 'dispatch_start'
+    | 'dispatch_result'
+    | 'segment_boundary'
+    | 'status_change'
+    | 'final';
+  payload: Record<string, unknown>;
+  createdAt: number;
+}
+
+/** MessageEventRow[] 批量推送（IPC 通道 im:message_event_batch） */
+export type MessageEventBatch = MessageEventRow[];
+
 export interface ApiSurface {
   auth: {
     register(opts: { username: string; password: string }): Promise<AuthResult>;
