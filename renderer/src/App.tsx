@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { useAuthStore } from './stores/auth.store';
-import { useStreamStore } from './stores/stream.store';
 import { ipc } from './ipc/client';
 import { subscribeImChannels } from './stores/im.store';
 import { Onboarding } from './routes/Onboarding';
@@ -15,12 +14,9 @@ export function App() {
     }
   }, [status, loadCurrent]);
 
-  useEffect(() => {
-    const unsubscribe = useStreamStore.getState().init();
-    return unsubscribe;
-  }, []);
-
   // A 子系统：全局 IM 通道订阅（im:message + im:message_event_batch）。
+  // subscribeImChannels 内部同时喂 im.store 和 stream.store——同一份 batch 既累积到
+  // im.store.eventsByMessage（重启还原用），又聚合到 stream.store.streams（UI 实时渲染用）。
   // 放在 App 顶层保证整个生命周期只订阅一次，避免视图切换重复注册。
   useEffect(() => {
     const unsubscribe = subscribeImChannels();

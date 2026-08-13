@@ -1,324 +1,118 @@
 // renderer/src/stores/stream.store.ts
 //
-// 流式 chunk 状态管理（v1.4）。
-// init() 注册 ipc.agent.onStream 回调，按 chunk.type 聚合到 StreamState。
-// MessageList 读取当前房间的 streaming 状态渲染 AgentStreamBubble；
-// 收到 Matrix 最终消息（含 stream_session_id）后调 clearCompleted 清理临时态。
+// A 子系统重写：基于 message_events 事件流聚合 StreamState。
 //
-// v1.4 嵌套支持（Task 3）：
-// - dispatch tool_call 在父 stream 的 dispatchChildren 中登记一个 DispatchChild（status='queued'）
-// - 子 agent start chunk（携带 parentStreamSessionId）创建独立 StreamState 存入同一 streams Map，
-//   同时把父 stream 对应的 DispatchChild 置为 'executing'
-// - 子 agent 的 end chunk 把父 stream 对应的 DispatchChild 置为终态（completed/failed）
-// - PM 的 tool_result(subStatus) 是 dispatch 结果，更新对应 DispatchChild 终态
-// - 子 stream 的 thinking/text/tool_call/tool_result 正常更新（renderer 通过 parentStreamSessionId
-//   判定是否嵌套渲染）
+// 数据来源（两条路径走同一份 events + 同一个 aggregateEvents 函数，UI 必然一致）：
+//   - 实时：ipc.im.onMessageEventBatch 推送（主进程 MessageEventBuffer 每 50ms flush）
+//   - 重启：ipc.im.getMessages 返回的 eventsByMessage（selectRoom 时一次性拉取）
+//
+// 核心不变量：renderer 实时显示与重启后显示完全一致——因为两路都用 aggregateEvents
+// 处理同一份 MessageEventRow 数组。
+//
+// v2.0 A 子系统相对 v1.4 的根本变化：
+//   - streams Map 改为 keyed by messageId（不再用 streamSessionId）
+//   - 删除 ipc.agent.onStream 订阅（旧 StreamChunk 通道废弃）
+//   - 删除 init() / clearCompleted()（聚合由 events 驱动，不再需要手动清理）
+//   - StreamState extends AggregatedStream（共用聚合输出类型）
 import { create } from 'zustand';
-import { ipc } from '../ipc/client';
-import type { StreamChunk, TodoItem } from '../ipc/types';
-
-/** 单次工具调用事件（流式生命周期内可能多次） */
-export interface ToolCallEvent {
-  toolName: string;
-  args: Record<string, unknown>;
-  /** 工具结果文本；执行中时 undefined */
-  result?: string;
-  /** 是否成功；执行中时 undefined */
-  success?: boolean;
-  /** 是否执行中（true 显示 ⏳） */
-  isExecuting?: boolean;
-}
-
-/** dispatch chip 内的子 agent 委派状态（v1.4 嵌套） */
-export interface DispatchChild {
-  subStreamSessionId: string;
-  subAgentName: string;
-  subAgentAvatar?: string;
-  status: 'queued' | 'executing' | 'completed' | 'failed';
-}
+import type { MessageEventRow } from '../ipc/types';
+import { aggregateEvents, type AggregatedStream } from '../lib/stream-aggregator';
 
 /**
- * v1.5.7 时间线事件——按 chunk 到达顺序记录，AgentStreamBubble 据此按时间线渲染。
- * 替代旧的 thinking + text + toolCalls 分区式渲染（用户报"无法区分会话链路"）。
+ * A 子系统 StreamState。
+ *
+ * extends AggregatedStream（A5 共用聚合函数输出）+ 补充会话上下文字段。
+ *
+ * A5 的 AggregatedStream 缺 3 个会话上下文字段（streamSessionId / botUserId /
+ * parentStreamSessionId）——这些不在 events 里（events 只描述内容），需要从 message
+ * 推断。本 task 在 StreamState 内补齐为可选字段，消费方按需从 message 关联。
  */
-export type StreamEvent =
-  | { id: string; type: 'thinking'; content: string }
-  | { id: string; type: 'text'; content: string }
-  | {
-      id: string;
-      type: 'tool_call';
-      toolName: string;
-      args: Record<string, unknown>;
-      result?: string;
-      success?: boolean;
-      isExecuting: boolean;
-      isDispatch?: boolean;
-      subStreamSessionId?: string;
-      subAgentName?: string;
-      subAgentAvatar?: string;
-    }
-  | { id: string; type: 'todo'; todos: TodoItem[] };
-
-/** 单次流式响应的聚合状态，对应一个临时气泡 */
-export interface StreamState {
-  streamSessionId: string;
-  roomId: string;
-  botUserId: string;
-  thinking: string;
-  text: string;
-  toolCalls: ToolCallEvent[];
-  status: 'streaming' | 'done' | 'interrupted' | 'error';
-  finishReason?: string;
-  error?: string;
-  /** v1.4 嵌套：dispatch 委派的子 agent 列表（仅 PM/父 stream 使用） */
-  dispatchChildren: DispatchChild[];
-  /** v1.4 嵌套：父 agent 的 streamSessionId（仅子 agent stream 使用；为空表示顶层 stream） */
-  parentStreamSessionId?: string;
-  /** v1.5 todowrite 工具的任务列表（todo_update chunk 全量替换） */
-  todos?: TodoItem[];
-  /** v1.5.6: start chunk 时间戳——MessageList 据此跟 Matrix 消息混合排序 */
+export interface StreamState extends AggregatedStream {
+  /** 关联 SQLite messages.id（streams Map 的 key，A 子系统改用 messageId 索引） */
+  messageId: string;
+  /** 第一条 event 的 createdAt（用于消息混合排序） */
   startedAt: number;
-  /** v1.5.7: 时间线事件流——AgentStreamBubble 按此渲染（替代分区字段） */
-  events: StreamEvent[];
+  /** A5 缺失字段补齐：从 message.streamSessionId 推断 */
+  streamSessionId?: string;
+  /** A5 缺失字段补齐：从 message.sender 推断 */
+  botUserId?: string;
+  /** A5 缺失字段补齐：从 message.parentStreamSessionId 推断 */
+  parentStreamSessionId?: string;
 }
 
 interface StreamStoreState {
-  /** streamSessionId → 聚合状态（父/子 stream 共存于同一 Map） */
+  /** messageId → 聚合状态（A 子系统：keyed by messageId，不再用 streamSessionId） */
   streams: Map<string, StreamState>;
-  /** 注册 ipc.agent.onStream 回调，返回取消订阅函数（App 挂载时调用） */
-  init: () => () => void;
-  /** 删除指定 session（收到 Matrix 最终消息后清理临时态） */
-  clearCompleted: (streamSessionId: string) => void;
-}
-
-/** end chunk 的 finishReason → StreamState.status 映射 */
-function statusFromFinishReason(reason: string): StreamState['status'] {
-  if (reason === 'stop') return 'done';
-  if (reason === 'interrupted') return 'interrupted';
-  // budget_exhausted 是计划内终止（agent 达到工具上限后停止），视为已完成而非出错
-  if (reason === 'budget_exhausted') return 'done';
-  return 'error';
-}
-
-/**
- * 更新父 stream 的 dispatchChildren 中匹配 subStreamSessionId 的子项状态（v1.4 嵌套）。
- * 直接 mutate 传入的 streams Map（已在 set() 内拷贝过的副本）。
- */
-function setParentDispatchChildStatus(
-  streams: Map<string, StreamState>,
-  parentStreamSessionId: string,
-  childStreamSessionId: string,
-  status: DispatchChild['status'],
-): void {
-  const parent = streams.get(parentStreamSessionId);
-  if (!parent) return;
-  let touched = false;
-  const children = parent.dispatchChildren.map((c) => {
-    if (c.subStreamSessionId === childStreamSessionId) {
-      touched = true;
-      return { ...c, status };
-    }
-    return c;
-  });
-  if (!touched) return;
-  streams.set(parentStreamSessionId, { ...parent, dispatchChildren: children });
+  /**
+   * 接收主进程 MessageEventBuffer flush 推送的批量 events。
+   * 累积到内部 eventLog 后重新聚合所有受影响的 messageId。
+   */
+  applyEventBatch: (batch: MessageEventRow[]) => void;
+  /**
+   * 重启场景：从 IPC im.getMessages 拉到的 events 初始化指定 messageId 的 StreamState。
+   * 与实时路径走同一个 aggregateEvents，保证重启后聚合一致。
+   */
+  hydrateFromEvents: (messageId: string, events: MessageEventRow[]) => void;
+  /** 清空所有 streams + 累积 events（切换 workspace / 登出时调用） */
+  reset: () => void;
 }
 
 /**
- * 更新最后一个未终结的 dispatchChild 状态（tool_result(subStatus) 场景）。
- * 由于 tool_result 不携带 subStreamSessionId，按"最后一个 queued/executing 的子项"匹配。
- * 与子 agent end chunk 的状态更新互为冗余兜底（end chunk 优先命中）。
+ * 模块级累积 events 缓冲（按 messageId 分桶）。
+ *
+ * 放在模块级而非 store state：events 缓冲本身不需要触发 React 重渲染（只有聚合后的
+ * streams Map 变化才需要），避免每次 set 都深拷贝大数组。
  */
-function setLastPendingChildStatus(
-  children: DispatchChild[],
-  status: DispatchChild['status'],
-): DispatchChild[] {
-  const next = [...children];
-  for (let i = next.length - 1; i >= 0; i--) {
-    const c = next[i]!;
-    if (c.status === 'queued' || c.status === 'executing') {
-      next[i] = { ...c, status };
-      break;
-    }
-  }
-  return next;
-}
+const eventLogByMessage = new Map<string, MessageEventRow[]>();
 
 export const useStreamStore = create<StreamStoreState>((set) => ({
   streams: new Map(),
 
-  init: () => {
-    const unsubscribe = ipc.agent.onStream((chunk) => {
-      set((state) => {
-        const streams = new Map(state.streams);
-
-        if (chunk.type === 'start') {
-          streams.set(chunk.streamSessionId, {
-            streamSessionId: chunk.streamSessionId,
-            roomId: chunk.roomId,
-            botUserId: chunk.botUserId,
-            thinking: '',
-            text: '',
-            toolCalls: [],
-            status: 'streaming',
-            dispatchChildren: [],
-            todos: [],
-            parentStreamSessionId: chunk.parentStreamSessionId,
-            startedAt: Date.now(),
-            events: [],
-          });
-          if (chunk.parentStreamSessionId) {
-            setParentDispatchChildStatus(
-              streams,
-              chunk.parentStreamSessionId,
-              chunk.streamSessionId,
-              'executing',
-            );
-          }
-          return { streams };
-        }
-
-        const existing = streams.get(chunk.streamSessionId);
-        if (!existing) return {};
-
-        const updated: StreamState = { ...existing, events: [...existing.events] };
-        const evs = updated.events;
-        const lastEv = evs.length > 0 ? evs[evs.length - 1] : undefined;
-
-        switch (chunk.type) {
-          case 'thinking':
-            updated.thinking = existing.thinking + chunk.delta;
-            // v1.5.7: 如果上一个事件也是 thinking，追加到它；否则新建
-            if (lastEv && lastEv.type === 'thinking') {
-              evs[evs.length - 1] = { ...lastEv, content: lastEv.content + chunk.delta };
-            } else {
-              evs.push({ id: crypto.randomUUID(), type: 'thinking', content: chunk.delta });
-            }
-            break;
-          case 'text':
-            updated.text = existing.text + chunk.delta;
-            if (lastEv && lastEv.type === 'text') {
-              evs[evs.length - 1] = { ...lastEv, content: lastEv.content + chunk.delta };
-            } else {
-              evs.push({ id: crypto.randomUUID(), type: 'text', content: chunk.delta });
-            }
-            break;
-          case 'tool_call':
-            if (chunk.isDispatch && chunk.subStreamSessionId) {
-              updated.dispatchChildren = [
-                ...existing.dispatchChildren,
-                {
-                  subStreamSessionId: chunk.subStreamSessionId,
-                  subAgentName: chunk.subAgentName ?? '',
-                  subAgentAvatar: chunk.subAgentAvatar,
-                  status: 'queued',
-                },
-              ];
-            } else {
-              updated.toolCalls = [
-                ...existing.toolCalls,
-                { toolName: chunk.toolName, args: chunk.args, isExecuting: true },
-              ];
-            }
-            // v1.5.7: push 到时间线
-            evs.push({
-              id: crypto.randomUUID(),
-              type: 'tool_call',
-              toolName: chunk.toolName,
-              args: chunk.args,
-              isExecuting: true,
-              ...(chunk.isDispatch ? {
-                isDispatch: true,
-                subStreamSessionId: chunk.subStreamSessionId,
-                subAgentName: chunk.subAgentName,
-                subAgentAvatar: chunk.subAgentAvatar,
-              } : {}),
-            });
-            break;
-          case 'tool_result': {
-            if (chunk.subStatus) {
-              const finalStatus: DispatchChild['status'] =
-                chunk.subStatus === 'completed' ? 'completed' : 'failed';
-              updated.dispatchChildren = setLastPendingChildStatus(
-                existing.dispatchChildren,
-                finalStatus,
-              );
-            } else {
-              const calls = [...existing.toolCalls];
-              for (let i = calls.length - 1; i >= 0; i--) {
-                if (calls[i]!.toolName === chunk.toolName && calls[i]!.isExecuting) {
-                  calls[i] = {
-                    ...calls[i]!,
-                    result: chunk.result,
-                    success: chunk.success,
-                    isExecuting: false,
-                  };
-                  break;
-                }
-              }
-              updated.toolCalls = calls;
-            }
-            // v1.5.7: 更新时间线中对应的 tool_call 事件
-            for (let i = evs.length - 1; i >= 0; i--) {
-              const ev = evs[i];
-              if (ev && ev.type === 'tool_call' && ev.toolName === chunk.toolName && ev.isExecuting) {
-                evs[i] = {
-                  ...ev,
-                  result: chunk.result,
-                  success: chunk.success,
-                  isExecuting: false,
-                };
-                break;
-              }
-            }
-            break;
-          }
-          case 'todo_update':
-            updated.todos = chunk.todos ?? [];
-            // v1.5.7: todo 是全量替换，更新最后一个 todo 事件或新建
-            let lastTodoIdx = -1;
-            for (let i = evs.length - 1; i >= 0; i--) {
-              if (evs[i]!.type === 'todo') { lastTodoIdx = i; break; }
-            }
-            if (lastTodoIdx >= 0) {
-              evs[lastTodoIdx] = { ...(evs[lastTodoIdx] as { id: string }), type: 'todo', todos: chunk.todos ?? [] };
-            } else {
-              evs.push({ id: crypto.randomUUID(), type: 'todo', todos: chunk.todos ?? [] });
-            }
-            break;
-          case 'end':
-            updated.status = statusFromFinishReason(chunk.finishReason);
-            updated.finishReason = chunk.finishReason;
-            updated.error = chunk.error;
-            break;
-        }
-        streams.set(chunk.streamSessionId, updated);
-
-        // 嵌套：子 agent end 通知父 stream 把对应 DispatchChild 置为终态
-        if (chunk.type === 'end' && existing.parentStreamSessionId) {
-          const childFinalStatus: DispatchChild['status'] =
-            chunk.finishReason === 'stop' || chunk.finishReason === 'budget_exhausted'
-              ? 'completed'
-              : 'failed';
-          setParentDispatchChildStatus(
-            streams,
-            existing.parentStreamSessionId,
-            chunk.streamSessionId,
-            childFinalStatus,
-          );
-        }
-
-        return { streams };
-      });
+  applyEventBatch: (batch) => {
+    if (batch.length === 0) return;
+    // 累积到 eventLog（按 messageId 分桶 + 按 id 去重 + 按 seq 升序）
+    for (const e of batch) {
+      const list = eventLogByMessage.get(e.messageId) ?? [];
+      // 去重：启动时 hydrateFromEvents 与首批实时推送可能重叠
+      if (list.some((x) => x.id === e.id)) continue;
+      list.push(e);
+      list.sort((a, b) => a.seq - b.seq);
+      eventLogByMessage.set(e.messageId, list);
+    }
+    // 重新聚合所有受影响的 messageId
+    set((state) => {
+      const newStreams = new Map(state.streams);
+      const affectedIds = new Set(batch.map((e) => e.messageId));
+      for (const msgId of affectedIds) {
+        const events = eventLogByMessage.get(msgId) ?? [];
+        const aggregated = aggregateEvents(events);
+        newStreams.set(msgId, {
+          ...aggregated,
+          messageId: msgId,
+          startedAt: events[0]?.createdAt ?? Date.now(),
+        });
+      }
+      return { streams: newStreams };
     });
-    return unsubscribe;
   },
 
-  clearCompleted: (streamSessionId) => {
+  hydrateFromEvents: (messageId, events) => {
+    // 用传入的 events 覆盖该 messageId 的 eventLog（重启场景：IPC 拉的是权威全量）
+    eventLogByMessage.set(messageId, [...events].sort((a, b) => a.seq - b.seq));
     set((state) => {
-      const streams = new Map(state.streams);
-      streams.delete(streamSessionId);
-      return { streams };
+      const newStreams = new Map(state.streams);
+      const aggregated = aggregateEvents(eventLogByMessage.get(messageId) ?? []);
+      newStreams.set(messageId, {
+        ...aggregated,
+        messageId,
+        startedAt: events[0]?.createdAt ?? Date.now(),
+      });
+      return { streams: newStreams };
     });
+  },
+
+  reset: () => {
+    eventLogByMessage.clear();
+    set({ streams: new Map() });
   },
 }));

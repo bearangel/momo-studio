@@ -16,13 +16,27 @@
 //
 // 展开且传入 subStream 时渲染 <SubAgentSection stream={subStream} />。
 import { useEffect, useState } from 'react';
-import type { DispatchChild, StreamState } from '../../stores/stream.store';
+import type { StreamState } from '../../stores/stream.store';
 import { SubAgentSection } from './SubAgentSection';
 
+/**
+ * dispatch chip 内的子 agent 委派状态。
+ *
+ * v2.0 A 子系统：从 stream.store 移到 DispatchChip 本地定义（stream.store 重写后
+ * 不再 export DispatchChild）。字段与 AggregatedDispatch 子集对齐（A9 完整重写后
+ * 可直接复用 AggregatedDispatch）。
+ */
+export interface DispatchChild {
+  subStreamSessionId: string;
+  subAgentName: string;
+  subAgentAvatar?: string;
+  status: 'queued' | 'executing' | 'completed' | 'failed';
+}
+
 interface DispatchChipProps {
-  /** 子 agent 委派状态（来自父 stream 的 dispatchChildren） */
+  /** 子 agent 委派状态（来自父 stream 的 dispatches，由调用方映射为 DispatchChild） */
   child: DispatchChild;
-  /** 子 agent 的流式聚合状态（从 streams Map 按 subStreamSessionId 查找后传入；可能尚未到达） */
+  /** 子 agent 的流式聚合状态（可能尚未到达；A9 完整实现 subStream 查找） */
   subStream?: StreamState;
 }
 

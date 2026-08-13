@@ -344,22 +344,21 @@ describe('im.store — 流式→持久化替换', () => {
   });
 
   it('收到 agent 最终消息时写入列表（StreamState 由 MessageList 通过 streamSessionId 去重处理）', () => {
-    // 预置一个活跃流式会话
+    // 预置一个活跃流式会话（A 子系统：streams Map keyed by messageId）
     useStreamStore.setState({
       streams: new Map([
         [
           'sess-1',
           {
-            streamSessionId: 'sess-1',
-            roomId: '!a1:localhost',
-            botUserId: '@bot:local',
             thinking: '',
             text: '流式中...',
             toolCalls: [],
+            todos: [],
+            dispatches: [],
             status: 'streaming' as const,
-            dispatchChildren: [],
-            startedAt: Date.now(),
             events: [],
+            messageId: 'sess-1',
+            startedAt: Date.now(),
           },
         ],
       ]),
@@ -395,16 +394,15 @@ describe('im.store — 流式→持久化替换', () => {
         [
           'sess-3',
           {
-            streamSessionId: 'sess-3',
-            roomId: '!a1:localhost',
-            botUserId: '@bot:local',
             thinking: '',
             text: '',
             toolCalls: [],
+            todos: [],
+            dispatches: [],
             status: 'streaming' as const,
-            dispatchChildren: [],
-            startedAt: Date.now(),
             events: [],
+            messageId: 'sess-3',
+            startedAt: Date.now(),
           },
         ],
       ]),

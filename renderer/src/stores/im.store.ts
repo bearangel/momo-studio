@@ -14,6 +14,7 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { ImMessage, ImRoomInfo, MessageEventRow, RoomMember } from '../ipc/types';
+import { useStreamStore } from './stream.store';
 
 interface ImState {
   rooms: ImRoomInfo[];
@@ -265,11 +266,16 @@ export const useImStore = create<ImState>((set, get) => ({
  * 在 App.tsx 顶层调用一次，订阅两条通道：
  *   - im:message           → 实时消息（含本地 echo、agent 最终消息）
  *   - im:message_event_batch → 流式 events 批量推送（thinking/tool_call 等增量）
+ * 同一份 event batch 同时喂给 im.store（累积到 eventsByMessage，重启还原用）
+ * 和 stream.store（聚合到 streams，UI 实时渲染用），保证两条路径数据一致。
  * 返回 unsubscribe 函数。
  */
 export function subscribeImChannels(): () => void {
   const off1 = ipc.im.onMessage((msg) => useImStore.getState().receiveMessage(msg));
-  const off2 = ipc.im.onMessageEventBatch((batch) => useImStore.getState().onIncomingEventBatch(batch));
+  const off2 = ipc.im.onMessageEventBatch((batch) => {
+    useImStore.getState().onIncomingEventBatch(batch);
+    useStreamStore.getState().applyEventBatch(batch);
+  });
   return () => {
     off1();
     off2();

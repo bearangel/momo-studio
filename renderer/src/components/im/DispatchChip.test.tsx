@@ -9,7 +9,8 @@
 //   - 用户手动 toggle 后抑制后续自动行为（userToggled 标志）
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import type { DispatchChild, StreamState } from '../../stores/stream.store';
+import type { StreamState } from '../../stores/stream.store';
+import type { DispatchChild } from './DispatchChip';
 import { DispatchChip } from './DispatchChip';
 
 /** 构造 DispatchChild（默认 queued） */
@@ -22,19 +23,18 @@ function makeChild(overrides: Partial<DispatchChild> = {}): DispatchChild {
   };
 }
 
-/** 构造子 agent StreamState（含可断言的正文文本） */
+/** 构造子 agent StreamState（A 子系统：extends AggregatedStream 字段集） */
 function makeStream(overrides: Partial<StreamState> = {}): StreamState {
   return {
-    streamSessionId: 'sub-1',
-    roomId: '!room:server',
-    botUserId: '@coder:server',
     thinking: '',
     text: '子任务输出文本',
     toolCalls: [],
+    todos: [],
+    dispatches: [],
     status: 'streaming',
-    dispatchChildren: [],
-    startedAt: Date.now(),
     events: [],
+    messageId: 'sub-1',
+    startedAt: Date.now(),
     ...overrides,
   };
 }

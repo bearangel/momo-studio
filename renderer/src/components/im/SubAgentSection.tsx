@@ -46,9 +46,9 @@ export function SubAgentSection({ stream }: Props) {
               key={`${tc.toolName}-${i}`}
               toolName={tc.toolName}
               args={tc.args}
-              result={tc.result}
+              result={tc.result ?? undefined}
               success={tc.success ?? true}
-              isExecuting={tc.isExecuting}
+              isExecuting={tc.result === null}
               defaultExpanded={false}
             />
           ))}
