@@ -126,6 +126,8 @@ function getEventBuffer(): MessageEventBuffer {
   if (!eventBuffer) {
     eventBuffer = new MessageEventBuffer({
       onFlush: (events) => {
+        // headless / 测试环境 BrowserWindow 可能为 undefined，静默跳过 IPC 推送
+        if (!BrowserWindow) return;
         const win = BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) return;
         win.webContents.send('im:message_event_batch', events);
@@ -141,16 +143,27 @@ export function __resetEventBufferForTest(): void {
   eventBuffer = null;
 }
 
+/** 测试用：导出 routeChunkToBuffer 以便单测直接验证 chunk → SQLite 映射 */
+export function __routeChunkToBufferForTest(chunk: StreamChunk): void {
+  routeChunkToBuffer(chunk);
+}
+
+/** 测试用：强制 flush 当前 buffer（确保 pending events 落盘后再断言） */
+export function __flushEventBufferForTest(): void {
+  if (eventBuffer) eventBuffer.flush();
+}
+
 /**
  * 把单个 StreamChunk 转换为 MessageEventBuffer.append 调用（A 子系统写入路径）。
  *
  * 映射关系：
- *   start          → INSERT messages 行（status='streaming'）+ append status_change
- *   thinking/text  → append thinking_delta / text_delta
- *   tool_call      → append tool_call_start（callId 由 runtime-entry 在 chunk 内携带）
- *   tool_result    → append tool_call_result（callId 配对同一工具调用）
- *   todo_update    → append todo_update
- *   end            → UPDATE messages status + flush + append final
+ *   start             → INSERT messages 行（status='streaming'）+ append status_change
+ *   thinking/text     → append thinking_delta / text_delta
+ *   tool_call         → append tool_call_start（callId 由 runtime-entry 在 chunk 内携带）
+ *   tool_result       → append tool_call_result（callId 配对同一工具调用）
+ *   todo_update       → append todo_update
+ *   segment_boundary  → INSERT 分段 messages 行（segment_of/segment_index）+ append final
+ *   end               → UPDATE messages status + flush + append final
  *
  * DB 未就绪（测试环境/表未迁移）时整包 try/catch 静默跳过——buffer 落盘是 best-effort，
  * 不应阻塞 renderer 流式显示（relayStreamChunk 仍正常工作）。
@@ -244,6 +257,33 @@ function routeChunkToBuffer(chunk: StreamChunk): void {
           eventType: 'todo_update',
           payload: { todos: chunk.todos },
         });
+        return;
+      }
+      case 'segment_boundary': {
+        // A7 fix：分段边界 → INSERT 独立分段 message row。
+        // 父 message 必须已存在（由前置的 start chunk 创建）；不存在则静默跳过。
+        // 分段 message 仅存 body 快照 + segment_of/segment_index；后续 events 仍关联父 message。
+        const parentMsg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!parentMsg) return;
+        const segMsg = insertMessage({
+          roomId: parentMsg.roomId,
+          sender: parentMsg.sender,
+          eventType: 'm.room.message',
+          body: chunk.segmentBody,
+          streamSessionId: chunk.segmentStreamSessionId,
+          segmentOf: chunk.streamSessionId,
+          segmentIndex: chunk.segmentIndex,
+          parentStreamSessionId: parentMsg.parentStreamSessionId,
+          workspaceId: parentMsg.workspaceId,
+          status: 'done',
+        });
+        const segBuf = getEventBuffer();
+        segBuf.append({
+          messageId: segMsg.id,
+          eventType: 'final',
+          payload: { body: chunk.segmentBody },
+        });
+        segBuf.flush();
         return;
       }
       case 'end': {
@@ -587,6 +627,7 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     m.type === 'tool_call' ||
     m.type === 'tool_result' ||
     m.type === 'todo_update' ||
+    m.type === 'segment_boundary' ||
     m.type === 'end'
   ) {
     relayStreamChunk(msg as StreamChunk);

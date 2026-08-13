@@ -88,6 +88,28 @@ export type StreamChunk =
       streamSessionId: string;
       finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
       error?: string;
+    }
+  | {
+      /**
+       * A7 fix：task_complete 主动分段边界信号。
+       *
+       * runtime-entry 在 task_complete 分段持久化（Matrix event 已发）后发此 chunk，
+       * 主进程 routeChunkToBuffer 据此 INSERT 一条独立的分段 message row
+       * （segment_of=父 streamSessionId, segment_index=N, status='done'）。
+       *
+       * 设计选择（简化方案）：分段 message 仅存本段 body 快照（已经写入 Matrix），
+       * 不切换后续 chunk 的路由——后续 thinking/text/tool_call 仍关联到父 message。
+       * 这样 aggregateEvents 在父 message 上看到完整执行流，分段 message 只承载"分段产出"。
+       */
+      type: 'segment_boundary';
+      /** 父 stream session id（本段归属的会话） */
+      streamSessionId: string;
+      /** 第几段（1-based） */
+      segmentIndex: number;
+      /** 本段最终 body 快照 */
+      segmentBody: string;
+      /** 本段独立的 stream session id（如 "ss-1#seg1"，与 Matrix event 内一致） */
+      segmentStreamSessionId: string;
     };
 
 /**

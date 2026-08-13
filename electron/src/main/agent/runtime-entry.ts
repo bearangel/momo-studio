@@ -963,6 +963,16 @@ export async function runChatLoop(
           console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
         }
 
+        // A7 fix：通知主进程为这段创建独立的 SQLite message row（segment_of/segment_index）。
+        // 主进程 routeChunkToBuffer 据此 INSERT 分段行；后续 events 仍关联父 message。
+        sendStreamChunk({
+          type: 'segment_boundary',
+          streamSessionId,
+          segmentIndex: segmentCount,
+          segmentBody: segText,
+          segmentStreamSessionId: segSessionId,
+        });
+
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
         accumulatedThinking = '';

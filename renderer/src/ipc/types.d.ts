@@ -488,6 +488,18 @@ export type StreamChunk =
       streamSessionId: string;
       finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
       error?: string;
+    }
+  | {
+      /** A7 fix：task_complete 主动分段边界，触发主进程 INSERT 独立分段 message row */
+      type: 'segment_boundary';
+      /** 父 stream session id */
+      streamSessionId: string;
+      /** 第几段（1-based） */
+      segmentIndex: number;
+      /** 本段最终 body 快照 */
+      segmentBody: string;
+      /** 本段独立 stream session id（如 "ss-1#seg1"） */
+      segmentStreamSessionId: string;
     };
 
 /**
