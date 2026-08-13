@@ -139,6 +139,17 @@ export function getMessageByStreamSessionId(streamSessionId: string): MessageRow
   return row ? rowToCamel(row) : null;
 }
 
+/**
+ * 按 matrix_event_id 查询消息行。
+ * A final fix（C1）：sync-manager 监听 Matrix /sync 时，用 matrix_event_id 做幂等去重——
+ * 同一 Matrix event 不能二次 INSERT（避免 /sync 重放、重启回放产生重复消息）。
+ */
+export function getMessageByMatrixEventId(matrixEventId: string): MessageRow | null {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM messages WHERE matrix_event_id = ?').get(matrixEventId) as SqlRow | undefined;
+  return row ? rowToCamel(row) : null;
+}
+
 export function listMessagesByRoom(roomId: string, opts?: { limit?: number; beforeTs?: number }): MessageRow[] {
   const db = getDb();
   const limit = opts?.limit ?? 1000;

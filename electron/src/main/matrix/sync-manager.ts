@@ -18,6 +18,13 @@ import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { getWorkspace } from '../workspace/crud';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE } from '../agent/dispatch';
+import {
+  insertMessage,
+  updateMessageMatrixEventId,
+  getMessageByStreamSessionId,
+  getMessageByMatrixEventId,
+  type MessageRow,
+} from '../storage/messages/repo';
 
 /** 主进程推送到 renderer 的消息载荷（与 renderer ImMessage 结构一致） */
 export interface MatrixMessagePayload {
@@ -38,6 +45,13 @@ const SYNCED_EVENT_TYPES: ReadonlySet<string> = new Set([
   DISPATCH_EVENT_TYPE,
   TASK_REPLY_EVENT_TYPE,
 ]);
+
+/**
+ * Agent 最终消息在 Matrix event content 里保留的关联线索（A7 改造后唯一保留的富字段）。
+ * sync-manager 据此把 /sync 回声与 routeChunkToBuffer 已落盘的 agent messages 行关联，
+ * 避免对同一 agent 消息二次 INSERT（routeChunkToBuffer 不持有 matrix_event_id）。
+ */
+const STREAM_SESSION_ID_KEY = 'io.momo-studio.stream_session_id';
 
 /** 房间摘要（与 renderer ImRoomInfo 结构一致） */
 export interface RoomInfoPayload {
@@ -83,10 +97,20 @@ function eventToMessage(event: MatrixEvent): MatrixMessagePayload | null {
   };
 }
 
-/** 推送单条消息到 renderer（窗口已销毁时静默跳过） */
-function pushMessage(msg: MatrixMessagePayload): void {
+/**
+ * 推送 SQLite MessageRow 到 renderer（ImMessage 形状）。
+ * A final fix（C1+I2）：dispatch/task_reply/远程 m.room.message 落盘后用此通道推送，
+ * 字段（id/createdAt/status/...）与 renderer ImMessage 完全对齐，消除旧 MatrixMessagePayload
+ * 运行时形状不匹配（id=undefined 导致去重失败、排序错乱）。
+ */
+function pushMessageRow(msg: MessageRow): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('im:message', msg);
+}
+
+/** 当前登录用户的 Matrix user ID（未登录返回 null）。用于在 /sync 回声中识别本地用户消息 */
+function getLocalUserId(): string | null {
+  return readSession()?.userId ?? null;
 }
 
 /** 通知 renderer：agent 运行态变化（启动/停止/自动恢复完成），让其重新同步 running 状态 */
@@ -115,12 +139,60 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
     throw err;
   }
 
-  // 注册事件监听：白名单内 event type（m.room.message + dispatch + task_reply）推送到 renderer
+  // 注册事件监听：白名单内 event type（m.room.message + dispatch + task_reply）。
+  // A final fix（C1+I2）：所有消息统一 INSERT SQLite 后再 push MessageRow（ImMessage 形状），
+  // 不再直接推 MatrixMessagePayload。三层去重保证同一 Matrix event 不二次落盘：
+  //   1. matrix_event_id 已存在 → /sync 重放/重启回放，跳过
+  //   2. m.room.message 且 sender == 本地用户 → 已在 im:send 落盘，跳过（避免本地回声重复）
+  //   3. m.room.message 且 content 带 stream_session_id 且对应行已存在 → agent 消息，
+  //      routeChunkToBuffer 已落盘，回填 matrix_event_id 后跳过
+  // dispatch / task_reply / 远程 m.room.message → INSERT（source='matrix'）+ push。
   client.on(ClientEvent.Event, (event: MatrixEvent) => {
     if (!SYNCED_EVENT_TYPES.has(event.getType())) return;
     if (event.isRedacted()) return;
-    const msg = eventToMessage(event);
-    if (msg) pushMessage(msg);
+
+    const matrixEventId = event.getId() ?? '';
+    const eventType = event.getType();
+    const sender = event.getSender() ?? '';
+    const roomId = event.getRoomId() ?? '';
+    const content = (event.getContent() as Record<string, unknown> | undefined) ?? {};
+    const body = typeof content.body === 'string' ? content.body : '';
+
+    // 去重层 1：matrix_event_id 已落盘 → /sync 重放，跳过
+    if (matrixEventId && getMessageByMatrixEventId(matrixEventId)) return;
+
+    if (eventType === 'm.room.message') {
+      // 去重层 2：本地用户消息已在 im:send INSERT（source='local'），跳过 /sync 回声
+      const localUserId = getLocalUserId();
+      if (localUserId && sender === localUserId) return;
+
+      // 去重层 3：agent 消息（content 带 stream_session_id，routeChunkToBuffer 已落盘）
+      const ssIdRaw = content[STREAM_SESSION_ID_KEY];
+      if (typeof ssIdRaw === 'string' && ssIdRaw !== '') {
+        const existing = getMessageByStreamSessionId(ssIdRaw);
+        if (existing) {
+          // 回填 matrix_event_id（routeChunkToBuffer 不持有 event_id，此处补齐，便于后续去重/导出）
+          if (!existing.matrixEventId && matrixEventId) {
+            updateMessageMatrixEventId(existing.id, matrixEventId);
+          }
+          return;
+        }
+      }
+
+      // 缺 body 字段的 m.room.message（与旧 eventToMessage 行为一致）不落盘
+      if (body === '') return;
+    }
+
+    // dispatch / task_reply / 远程 m.room.message：INSERT + push
+    const msg = insertMessage({
+      roomId,
+      sender,
+      eventType,
+      body,
+      matrixEventId: matrixEventId || null,
+      source: 'matrix',
+    });
+    pushMessageRow(msg);
   });
 
   logger.info('Matrix /sync 已启动，消息将推送到 renderer');
@@ -182,19 +254,24 @@ function readSession(): StoredSession | undefined {
   return JSON.parse(row.value) as StoredSession;
 }
 
-/** 发送文本消息到指定 room */
-export async function sendMessage(roomId: string, body: string): Promise<void> {
+/**
+ * 发送文本消息到指定 room。
+ * A final fix（C1）：返回 matrix event_id，供 im:send 回填到 SQLite messages.matrix_event_id
+ * （/sync 回声去重 + 导出关联）。
+ */
+export async function sendMessage(roomId: string, body: string): Promise<{ eventId: string | null }> {
   if (!client) throw new Error('Matrix client 未初始化（sync 未启动）');
-  await client.sendEvent(roomId, 'm.room.message', { msgtype: 'm.text', body }, '');
+  const res = await client.sendEvent(roomId, 'm.room.message', { msgtype: 'm.text', body }, '');
+  return { eventId: parseEventId(res) };
 }
 
 export async function sendMessageWithMentions(
   roomId: string,
   body: string,
   mentionedUserIds: string[],
-): Promise<void> {
+): Promise<{ eventId: string | null }> {
   if (!client) throw new Error('Matrix client 未初始化（sync 未启动）');
-  await client.sendEvent(
+  const res = await client.sendEvent(
     roomId,
     'm.room.message',
     {
@@ -204,6 +281,16 @@ export async function sendMessageWithMentions(
     },
     '',
   );
+  return { eventId: parseEventId(res) };
+}
+
+/** matrix-js-sdk sendEvent 返回值形状不确定（{event_id} 或空），统一提取 event_id */
+function parseEventId(res: unknown): string | null {
+  if (res && typeof res === 'object' && 'event_id' in res) {
+    const id = (res as { event_id: unknown }).event_id;
+    return typeof id === 'string' ? id : null;
+  }
+  return null;
 }
 
 /** 获取已加入的房间列表（含房间名，无名字时回退到 roomId） */

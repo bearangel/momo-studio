@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // vi.mock 提升到 import 之前；工厂引用的可变桩需用 vi.hoisted 提前声明
-const { ipcHandlers, roomOpsMocks } = vi.hoisted(() => {
+const { ipcHandlers, roomOpsMocks, repoMocks } = vi.hoisted(() => {
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
   return {
     ipcHandlers,
@@ -15,6 +15,29 @@ const { ipcHandlers, roomOpsMocks } = vi.hoisted(() => {
       renameRoom: vi.fn(async () => undefined),
       dissolveRoom: vi.fn(async () => ({ dissolved: true })),
       getRoomMembers: vi.fn(async () => []),
+    },
+    repoMocks: {
+      insertMessage: vi.fn(() => ({
+        id: 'msg-uuid',
+        roomId: '!r:localhost',
+        sender: '@owner:home',
+        eventType: 'm.room.message',
+        body: 'hi',
+        streamSessionId: null,
+        parentStreamSessionId: null,
+        segmentOf: null,
+        segmentIndex: null,
+        status: 'done',
+        source: 'local',
+        matrixEventId: null,
+        workspaceId: null,
+        taskId: null,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      updateMessageMatrixEventId: vi.fn(() => undefined),
+      listMessagesByRoom: vi.fn(() => []),
+      listOlderMessages: vi.fn(() => []),
     },
   };
 });
@@ -25,6 +48,7 @@ vi.mock('electron', () => ({
       ipcHandlers.set(channel, fn);
     },
   },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
 vi.mock('../../src/main/logger', () => ({
@@ -37,10 +61,21 @@ vi.mock('../../src/main/conduit/manager', () => ({
 
 vi.mock('../../src/main/matrix/sync-manager', () => ({
   startSyncFromSession: vi.fn(async () => undefined),
-  sendMessage: vi.fn(async () => undefined),
-  sendMessageWithMentions: vi.fn(async () => undefined),
+  // A final fix：sendMessage 现返回 { eventId }
+  sendMessage: vi.fn(async () => ({ eventId: '$evt:home' })),
+  sendMessageWithMentions: vi.fn(async () => ({ eventId: '$evt:home' })),
   getJoinedRooms: vi.fn(() => []),
   getRoomMessages: vi.fn(() => []),
+}));
+
+vi.mock('../../src/main/matrix/session', () => ({
+  getCurrentUserId: vi.fn(() => '@owner:home'),
+}));
+
+vi.mock('../../src/main/storage/messages/repo', () => repoMocks);
+
+vi.mock('../../src/main/storage/messages/events-repo', () => ({
+  listEventsByMessage: vi.fn(() => []),
 }));
 
 // 关键：拦截 ipc.handlers 内的动态 import('./room-ops')
@@ -51,6 +86,7 @@ import { registerImHandlers } from '../../src/main/im/ipc.handlers';
 beforeEach(() => {
   ipcHandlers.clear();
   Object.values(roomOpsMocks).forEach((m) => m.mockClear());
+  Object.values(repoMocks).forEach((m) => m.mockClear());
   registerImHandlers();
 });
 
@@ -100,5 +136,37 @@ describe('im:getMembers handler', () => {
     const res = await ipcHandlers.get('im:getMembers')!({} as never, '!r:localhost');
     expect(roomOpsMocks.getRoomMembers).toHaveBeenCalledWith('!r:localhost');
     expect(res).toEqual([{ userId: '@o:localhost' }]);
+  });
+});
+
+describe('im:send handler（A final fix C1：用户消息写 SQLite）', () => {
+  it('INSERT SQLite（source=local）+ 发 Matrix + 回填 matrix_event_id', async () => {
+    const { sendMessage } = await import('../../src/main/matrix/sync-manager');
+    await ipcHandlers.get('im:send')!({} as never, '!r:localhost', '你好');
+
+    // 1. INSERT 调用：sender=当前用户、eventType=m.room.message、body 原样
+    expect(repoMocks.insertMessage).toHaveBeenCalledTimes(1);
+    expect(repoMocks.insertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: '!r:localhost',
+        sender: '@owner:home',
+        eventType: 'm.room.message',
+        body: '你好',
+      }),
+    );
+    // 2. 发 Matrix
+    expect(sendMessage).toHaveBeenCalledWith('!r:localhost', '你好');
+    // 3. 回填 matrix_event_id（sendMessage mock 返回 $evt:home）
+    expect(repoMocks.updateMessageMatrixEventId).toHaveBeenCalledWith('msg-uuid', '$evt:home');
+  });
+
+  it('Matrix 发送失败时消息仍保留在 SQLite（本地优先，仅 warn）', async () => {
+    const { sendMessage } = await import('../../src/main/matrix/sync-manager');
+    (sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network down'));
+    await ipcHandlers.get('im:send')!({} as never, '!r:localhost', '离线消息');
+
+    expect(repoMocks.insertMessage).toHaveBeenCalled();
+    // 失败时不回填
+    expect(repoMocks.updateMessageMatrixEventId).not.toHaveBeenCalled();
   });
 });

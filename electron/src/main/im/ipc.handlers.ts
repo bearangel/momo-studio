@@ -8,7 +8,7 @@
 //   - im:getMessages / im:loadOlderMessages / im:getMessageEvents 直接走 SQLite repo
 //   - im:exportRoomMessages 也改读 SQLite（content 富字段丢失，A9 改造 markdown-exporter 时补齐）
 //   - Matrix sync-manager 仍负责实时消息推送（im:message）和房间列表
-import { ipcMain } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import { logger } from '../logger';
 import { startConduit } from '../conduit/manager';
 import {
@@ -17,10 +17,17 @@ import {
   sendMessageWithMentions,
   getRoomsForWorkspace,
 } from '../matrix/sync-manager';
+import { getCurrentUserId } from '../matrix/session';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listAssignments, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
-import { listMessagesByRoom, listOlderMessages } from '../storage/messages/repo';
+import {
+  insertMessage,
+  updateMessageMatrixEventId,
+  listMessagesByRoom,
+  listOlderMessages,
+  type MessageRow,
+} from '../storage/messages/repo';
 import {
   listEventsByMessage,
   type MessageEventRow,
@@ -36,13 +43,16 @@ export function registerImHandlers(): void {
     await startSyncFromSession();
   });
 
-  // 发送文本消息到指定 room
+  // A final fix（C1）：用户消息写路径补齐 SQLite INSERT。
+  // spec 写路径：im:send → INSERT messages row（source='local'）→ push im:message →
+  //   发 Matrix → 回填 matrix_event_id。重启后 im:getMessages 直接从 SQLite 还原用户消息，
+  //   不再依赖 Matrix /sync 回放（旧路径载荷 id=undefined 导致错序/重复/字段缺失）。
   ipcMain.handle('im:send', async (_evt, roomId: string, body: string) => {
-    await sendMessage(roomId, body);
+    await sendUserMessage(roomId, body);
   });
 
   ipcMain.handle('im:sendWithMentions', async (_evt, roomId: string, body: string, userIds: string[]) => {
-    await sendMessageWithMentions(roomId, body, userIds);
+    await sendUserMessage(roomId, body, userIds);
   });
 
   // 获取已加入的房间列表（含房间名）。workspaceId 提供时只返回该 workspace 范围内的房间。
@@ -168,4 +178,45 @@ export function registerImHandlers(): void {
   );
 
   logger.info('IM IPC handlers 已注册');
+}
+
+/**
+ * 用户消息写路径（A final fix C1）。
+ * 顺序：INSERT SQLite（source='local'）→ push MessageRow → 发 Matrix → 回填 matrix_event_id。
+ * - INSERT 在发送前：本地优先，Matrix 发送失败时消息仍在 SQLite，重启可还原。
+ * - push 在发送前：renderer 立即显示（无需等 Matrix 往返）。
+ * - matrix_event_id 回填：sync-manager 用它在 /sync 回声中按 sender=本地用户跳过，避免重复。
+ *   即使回填前 /sync 已到，本地用户消息也会被 sync-manager 第二层去重拦截。
+ */
+async function sendUserMessage(
+  roomId: string,
+  body: string,
+  mentionedUserIds?: string[],
+): Promise<void> {
+  const ownerUserId = getCurrentUserId();
+  if (!ownerUserId) throw new Error('未登录，无法发送消息');
+
+  const msg = insertMessage({
+    roomId,
+    sender: ownerUserId,
+    eventType: 'm.room.message',
+    body,
+  });
+  pushMessageRow(msg);
+
+  try {
+    const { eventId } = mentionedUserIds
+      ? await sendMessageWithMentions(roomId, body, mentionedUserIds)
+      : await sendMessage(roomId, body);
+    if (eventId) updateMessageMatrixEventId(msg.id, eventId);
+  } catch (err) {
+    logger.warn('Matrix 发送失败，消息仅保留在本地 SQLite', { error: (err as Error).message });
+  }
+}
+
+/** 推送 SQLite MessageRow 到 renderer（与 ImMessage 字段完全对齐，跨 IPC 形状一致） */
+function pushMessageRow(msg: MessageRow): void {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('im:message', msg);
 }
