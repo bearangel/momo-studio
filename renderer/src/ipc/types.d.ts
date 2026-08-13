@@ -186,6 +186,7 @@ export interface TaskApiSurface {
   /** B8 实现：拉起 execution room + transition 到 in_progress */
   start(id: string, opts: { executionRoomId?: string; createNewRoom?: boolean }): Promise<{
     executionRoomId: string;
+    createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
 }

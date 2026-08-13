@@ -180,8 +180,9 @@ const api: ApiSurface = {
     get: (id) => invoke<TaskRow | null>('task:get', id),
     update: (id, patch) => invoke<void>('task:update', id, patch),
     transition: (id, to, extraPatch) => invoke<TaskRow>('task:transition', id, to, extraPatch),
-    // B8 实现 handler；B7 只桥接，调用会报 No handler registered
-    start: (id, opts) => invoke<{ executionRoomId: string }>('task:start', id, opts),
+    // B8：execution_room 决策树 + 转 in_progress + 锁定 execution_room
+    start: (id, opts) =>
+      invoke<{ executionRoomId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
   },
   dialog: {

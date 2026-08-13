@@ -9,7 +9,7 @@
 //   - task:update      部分字段更新（绕过状态机；正常路径请用 task:transition）
 //   - task:transition  状态机驱动的状态转换（可带 extraPatch 副作用字段）
 //   - task:cancel      等价 transition(id, 'cancelled')
-//   - task:start       B8 实现（execution_room 决策树）；B7 不注册 handler
+//   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
 //
 // 设计要点：
 //   - renderer 的 create 入参不含 creatorUserId（安全考虑：不信任 renderer 传的用户身份），
@@ -28,6 +28,7 @@ import {
   type TaskRow,
   type TaskStatus,
 } from '../storage/tasks/repo';
+import { startTask, type StartTaskOpts } from './starter';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -104,8 +105,20 @@ export function registerTaskHandlers(): void {
     transitionTaskStatus(id, 'cancelled');
   });
 
-  // task:start 在 B8 实现（涉及 execution_room 决策树 + agent runtime 拉起）
-  // B7 不注册 handler；若 renderer 误调用，Electron 会抛 "No handler registered for 'task:start'"
+  ipcMain.handle(
+    'task:start',
+    async (
+      _evt,
+      id: string,
+      opts?: StartTaskOpts,
+    ): Promise<{ executionRoomId: string; createdNewRoom: boolean }> => {
+      const result = await startTask(id, opts);
+      return {
+        executionRoomId: result.executionRoomId,
+        createdNewRoom: result.createdNewRoom,
+      };
+    },
+  );
 
   logger.info('Task IPC handlers 已注册');
 }
