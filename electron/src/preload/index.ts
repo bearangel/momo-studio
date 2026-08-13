@@ -184,6 +184,8 @@ const api: ApiSurface = {
     start: (id, opts) =>
       invoke<{ executionRoomId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
+    // B9：任务冲突处理（5 策略）
+    resolveConflict: (input) => invoke('task:resolveConflict', input),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

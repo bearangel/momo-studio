@@ -154,7 +154,10 @@ export interface TaskRow {
  *   - transition：状态机驱动的状态转换，可带 extraPatch 副作用字段。
  *   - start：B8 实现（execution_room 决策树）；B7 只声明类型 + preload 桥接，handler 留空。
  *   - cancel：等价 transition(id, 'cancelled') 的快捷通道。
+ *   - resolveConflict：B9 实现——任务冲突处理（5 策略），ConflictDialog 选完策略后调此通道。
  */
+export type ConflictStrategy = 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
+
 export interface TaskApiSurface {
   create(input: {
     workspaceId: string;
@@ -189,6 +192,19 @@ export interface TaskApiSurface {
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
+  /** B9：任务冲突处理——ConflictDialog 选完策略后调此通道，main process 执行副作用 */
+  resolveConflict(input: {
+    newTaskId: string;
+    currentTaskId: string;
+    currentRoomId: string;
+    strategy: ConflictStrategy;
+  }): Promise<
+    | { action: 'queue'; newTaskId: string }
+    | { action: 'preempt'; newTaskId: string; pausedTaskId: string }
+    | { action: 'fork'; newTaskId: string; newExecutionRoomId: string }
+    | { action: 'reject'; reason: string }
+    | { action: 'ask' }
+  >;
 }
 
 export interface StartAgentInput {
@@ -416,10 +432,12 @@ export interface GlobalSettings {
   maxToolCalls: number;
 }
 
-/** 房间级会话配置（v1.4），与 electron 端 RoomSettings 对齐 */
+/** 房间级会话配置（v1.4 + B9），与 electron 端 RoomSettings 对齐 */
 export interface RoomSettings {
   /** NULL=继承全局 */
   maxToolCalls: number | null;
+  /** 任务冲突策略（migration v19 加列，默认 'ask'） */
+  conflictStrategy: 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
 }
 
 /**

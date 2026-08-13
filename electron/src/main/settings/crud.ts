@@ -11,14 +11,24 @@ export interface GlobalSettings {
   maxToolCalls: number;
 }
 
-/** 房间级会话配置 */
+/**
+ * 房间级会话配置（v1.4 + B9）。
+ *   - maxToolCalls：NULL=继承全局
+ *   - conflictStrategy：任务冲突策略（migration v19 加列，默认 'ask'）
+ */
 export interface RoomSettings {
   /** NULL=继承全局 */
   maxToolCalls: number | null;
+  /**
+   * 任务冲突策略：当 agent 在已运行任务的房间里被 @ 时如何处理。
+   * migration v19 列默认值 'ask'，getRoomSettings 对未存在的房间行也返回 'ask'。
+   */
+  conflictStrategy: 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
 }
 
 const GLOBAL_KEY = 'global_settings';
 const DEFAULT_MAX_TOOL_CALLS = 10;
+const DEFAULT_CONFLICT_STRATEGY = 'ask' as const;
 
 /** 读取全局配置；不存在时返回默认值 */
 export function getGlobalSettings(): GlobalSettings {
@@ -44,14 +54,20 @@ export function updateGlobalSettings(patch: Partial<GlobalSettings>): void {
   ).run(GLOBAL_KEY, JSON.stringify(merged));
 }
 
-/** 读取房间配置；不存在返回 null 字段 */
+/** 读取房间配置；不存在返回 null 字段 + 默认 conflictStrategy */
 export function getRoomSettings(roomId: string): RoomSettings {
   const db = getDb();
   const row = db
-    .prepare('SELECT max_tool_calls FROM room_settings WHERE room_id = ?')
-    .get(roomId) as { max_tool_calls: number | null } | undefined;
-  if (!row) return { maxToolCalls: null };
-  return { maxToolCalls: row.max_tool_calls };
+    .prepare('SELECT max_tool_calls, conflict_strategy FROM room_settings WHERE room_id = ?')
+    .get(roomId) as { max_tool_calls: number | null; conflict_strategy?: string } | undefined;
+  if (!row) {
+    return { maxToolCalls: null, conflictStrategy: DEFAULT_CONFLICT_STRATEGY };
+  }
+  const strategy = (row.conflict_strategy ?? DEFAULT_CONFLICT_STRATEGY) as RoomSettings['conflictStrategy'];
+  return {
+    maxToolCalls: row.max_tool_calls,
+    conflictStrategy: strategy,
+  };
 }
 
 /** 部分更新房间配置 */
@@ -60,9 +76,11 @@ export function updateRoomSettings(roomId: string, patch: Partial<RoomSettings>)
   const merged = { ...current, ...patch };
   const db = getDb();
   db.prepare(
-    `INSERT INTO room_settings (room_id, max_tool_calls) VALUES (?, ?)
-     ON CONFLICT(room_id) DO UPDATE SET max_tool_calls = excluded.max_tool_calls`,
-  ).run(roomId, merged.maxToolCalls);
+    `INSERT INTO room_settings (room_id, max_tool_calls, conflict_strategy) VALUES (?, ?, ?)
+     ON CONFLICT(room_id) DO UPDATE SET
+       max_tool_calls = excluded.max_tool_calls,
+       conflict_strategy = excluded.conflict_strategy`,
+  ).run(roomId, merged.maxToolCalls, merged.conflictStrategy);
 }
 
 /**

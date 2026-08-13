@@ -29,6 +29,8 @@ import {
   type TaskStatus,
 } from '../storage/tasks/repo';
 import { startTask, type StartTaskOpts } from './starter';
+import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
+import { executeConflictResolution } from './conflict-executor';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -117,6 +119,28 @@ export function registerTaskHandlers(): void {
         executionRoomId: result.executionRoomId,
         createdNewRoom: result.createdNewRoom,
       };
+    },
+  );
+
+  // B9：当用户在 execution_room 内 @agent 启动新任务、但当前会话已有 in_progress
+  // 任务时，ConflictDialog（或自动策略）调此通道。触发条件检测在 B11 runtime-entry。
+  ipcMain.handle(
+    'task:resolveConflict',
+    async (
+      _evt,
+      input: {
+        newTaskId: string;
+        currentTaskId: string;
+        currentRoomId: string;
+        strategy: ConflictStrategy;
+      },
+    ) => {
+      const resolution = resolveConflict(input);
+      return executeConflictResolution(resolution, {
+        newTaskId: input.newTaskId,
+        currentTaskId: input.currentTaskId,
+        currentRoomId: input.currentRoomId,
+      });
     },
   );
 

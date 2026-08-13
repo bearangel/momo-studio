@@ -66,6 +66,26 @@ describe('settings/crud', () => {
     });
   });
 
+  describe('房间冲突策略 conflictStrategy', () => {
+    it('默认 conflictStrategy = ask（migration v19 列默认值）', () => {
+      const s = getRoomSettings('!room2:server');
+      expect(s.conflictStrategy).toBe('ask');
+    });
+
+    it('更新 conflictStrategy', () => {
+      updateRoomSettings('!room2:server', { conflictStrategy: 'preempt' });
+      expect(getRoomSettings('!room2:server').conflictStrategy).toBe('preempt');
+    });
+
+    it('部分更新 conflictStrategy 不影响 maxToolCalls', () => {
+      updateRoomSettings('!room2:server', { maxToolCalls: 5 });
+      updateRoomSettings('!room2:server', { conflictStrategy: 'queue' });
+      const s = getRoomSettings('!room2:server');
+      expect(s.maxToolCalls).toBe(5);
+      expect(s.conflictStrategy).toBe('queue');
+    });
+  });
+
   describe('resolveMaxToolCalls 优先级', () => {
     it('房间级覆盖全局', () => {
       updateGlobalSettings({ maxToolCalls: 10 });
