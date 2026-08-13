@@ -102,7 +102,8 @@
     "matrix-js-sdk": "^31.0.0",
     "simple-git": "^3.36.0",
     "turndown": "7",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -111,6 +112,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
     "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.5.13",
     "@vitest/coverage-v8": "^1.6.0",
     "concurrently": "^8.2.0",
     "electron": "^30.0.0",
