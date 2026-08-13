@@ -61,31 +61,8 @@ import {
   buildAbortDispatchMessage,
   type DispatchContent,
 } from './dispatch';
-
-/** 协调 agent 触发判定结果：响应或跳过 */
-export type ResponseDecision = 'respond' | 'skip';
-
-/**
- * 决定本 agent 是否响应某条团队群消息。三路互斥，不重复响应（详见 v1.1 设计 3.4）：
- *   1. 明确 @ 我 → 响应（原有路径）
- *   2. 没人被 @ + 在团队群 + 我是协调 agent + 发送者是 owner → 自动接待
- *      （仅接待 owner 的无指名消息；子 agent 的直接回复没有 m.mentions，
- *       若不限制会与"@ 别人不插嘴"冲突——协调会抢答子 agent 的回执）
- *   3. 其它（@ 了别人 / 非团队群 / 我不是协调 / 非 owner 发送） → 跳过
- */
-export function decideResponse(opts: {
-  mentioned: boolean;
-  hasAnyMention: boolean;
-  isTeamRoom: boolean;
-  isCoordinator: boolean;
-  isOwnerMessage: boolean;
-}): ResponseDecision {
-  if (opts.mentioned) return 'respond';
-  if (!opts.hasAnyMention && opts.isTeamRoom && opts.isCoordinator && opts.isOwnerMessage) {
-    return 'respond';
-  }
-  return 'skip';
-}
+// v2（B 子系统 Task B6）：decideResponse 提取到独立模块，新增 isDirectChat + hasCoordinator
+import { decideResponse } from './decide-response';
 
 /** 协调 agent 自动接待时的上下文提示（仅团队群无 @ 时注入用户消息前；直接 @ 时不注入） */
 const COORDINATOR_AUTO_RECEPTION_HINT = `[你是本群的协调 agent。这条消息没有指名 @ 任何人，由你自动接待：
@@ -143,6 +120,9 @@ const DEFAULT_MAX_TOOL_CALLS = 10;
 
 /** resolveMaxToolCalls IPC 请求的超时时间（毫秒），超时后回退到 DEFAULT_MAX_TOOL_CALLS */
 const RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS = 5_000;
+
+/** queryRoomInfo IPC 请求的超时时间（毫秒），超时回退到双 false（保守跳过） */
+const QUERY_ROOM_INFO_TIMEOUT_MS = 5_000;
 
 /** 加载到上下文中的最近历史消息条数 */
 const HISTORY_LIMIT = 10;
@@ -571,13 +551,22 @@ async function handleEvent(
   const hasAnyMention = (mentions?.user_ids?.length ?? 0) > 0;
   // 仅对 owner 的无指名消息自动接待，不抢答子 agent 的直接回复（其消息无 m.mentions）
   const isOwnerMessage = sender === config.ownerUserId;
-  // 三路互斥触发：@我 / 没人@且我是协调且是owner / 否则跳过（详见 v1.1 设计 3.4）
+
+  // v2（B 子系统 Task B6）：通过 IPC 向主进程查询 isDirectChat + hasCoordinator。
+  // 子进程无 DB 访问 + 无主进程 Matrix syncing client 状态，必须走 IPC。
+  // 超时（5s）回退到双 false（保守跳过——不误判单聊 / 不误触发 PM 自动接待）。
+  const roomInfo = await queryRoomInfo(roomId);
+
+  // 三路互斥触发：单聊 / @我 / 没人@且我是协调且是owner / 否则跳过
+  // 详见 decide-response.ts 场景 1.1 / 1.2 / 1.3
   const decision = decideResponse({
     mentioned,
     hasAnyMention,
     isTeamRoom,
     isCoordinator: config.isCoordinator,
     isOwnerMessage,
+    isDirectChat: roomInfo.isDirectChat,
+    hasCoordinator: roomInfo.hasCoordinator,
   });
   if (decision === 'skip') {
     trace('→ 跳过', { reason: decision, mentioned, coordinator: config.isCoordinator });
@@ -1265,6 +1254,46 @@ async function resolveMaxToolCalls(roomId: string): Promise<number> {
     };
     process.on('message', handler);
     process.send?.({ type: 'settings:resolveMaxToolCalls', id, roomId });
+  });
+}
+
+/**
+ * v2（B 子系统 Task B6）：通过 IPC 向主进程查询房间的 isDirectChat + hasCoordinator。
+ *
+ * 子进程无 DB 访问（hasCoordinator 需查 workspaces.coordinator_instance_id），
+ * 也无主进程 Matrix syncing client 的完整房间成员状态（isDirectChat 需 getJoinedMembers），
+ * 故必须走 IPC 到主进程，由 room-info.ts 的 helper 计算。
+ *
+ * 超时回退到双 false——保守跳过（不误判单聊 / 不误触发 PM 自动接待）。
+ */
+async function queryRoomInfo(
+  roomId: string,
+): Promise<{ isDirectChat: boolean; hasCoordinator: boolean }> {
+  const fallback = { isDirectChat: false, hasCoordinator: false };
+  if (!process.send) return fallback;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      process.off('message', handler);
+      resolve(fallback);
+    }, QUERY_ROOM_INFO_TIMEOUT_MS);
+    const handler = (msg: unknown): void => {
+      const m = msg as {
+        type?: string;
+        roomId?: string;
+        isDirectChat?: boolean;
+        hasCoordinator?: boolean;
+      };
+      if (m.type === 'query-room-info-result' && m.roomId === roomId) {
+        clearTimeout(timer);
+        process.off('message', handler);
+        resolve({
+          isDirectChat: !!m.isDirectChat,
+          hasCoordinator: !!m.hasCoordinator,
+        });
+      }
+    };
+    process.on('message', handler);
+    process.send?.({ type: 'query-room-info', roomId });
   });
 }
 

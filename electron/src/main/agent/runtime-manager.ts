@@ -17,6 +17,9 @@ import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import { resolveMaxToolCalls } from '../settings/crud';
+// v2（B 子系统 Task B6）：room-info helper 给 agent runtime 子进程查 isDirectChat/hasCoordinator
+import { getSyncingClient } from '../matrix/sync-manager';
+import { isDirectChat, hasWorkspaceCoordinator } from '../matrix/room-info';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { StreamChunk } from './stream-chunk';
 import { MessageEventBuffer } from '../storage/messages/event-buffer';
@@ -671,6 +674,20 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
   if (m.type === 'settings:resolveMaxToolCalls' && m.id && m.roomId) {
     const maxToolCalls = resolveMaxToolCalls(m.roomId);
     safeChildSend(child, { type: 'settings:resolved', id: m.id, maxToolCalls });
+    return;
+  }
+
+  // v2（B 子系统 Task B6）：房间信息查询（子进程无 DB / 主进程 syncing client）
+  if (m.type === 'query-room-info' && typeof m.roomId === 'string') {
+    const syncingClient = getSyncingClient();
+    const isDirect = isDirectChat(syncingClient, m.roomId, opts.ownerUserId);
+    const hasCoord = hasWorkspaceCoordinator(opts.workspaceId);
+    safeChildSend(child, {
+      type: 'query-room-info-result',
+      roomId: m.roomId,
+      isDirectChat: isDirect,
+      hasCoordinator: hasCoord,
+    });
     return;
   }
 
