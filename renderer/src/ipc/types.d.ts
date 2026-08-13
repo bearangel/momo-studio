@@ -108,11 +108,86 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
-/** 任务行（renderer 视图，与 electron 端 TaskRow 子集对齐）。 */
+/**
+ * 任务行（renderer 视图，与 electron 端 storage/tasks/repo.ts 的 TaskRow 完整对齐）。
+ *
+ * B7 之前是 { id, title, status } 三字段子集；B7 task.store 需要 update/transition
+ * 全字段 patch + 存储完整行，故扩展为全字段镜像。MentionInput 等只读 id/title/status
+ * 的消费者不受影响（多余字段直接忽略）。
+ */
 export interface TaskRow {
   id: string;
+  workspaceId: string;
   title: string;
+  description: string;
   status: TaskStatus;
+  sourceRoomId: string | null;
+  sourceMessageId: string | null;
+  creatorUserId: string;
+  executionRoomId: string | null;
+  assigneeAgentId: string | null;
+  priority: number;
+  scheduledAt: number | null;
+  recurrenceRule: string | null;
+  deadlineAt: number | null;
+  /** D 阶段占位字段（D 子系统填值） */
+  queuePosition: number | null;
+  runtimeInstanceId: string | null;
+  estimatedTokens: number | null;
+  actualTokens: number | null;
+  toolCallsUsed: number;
+  errorMessage: string | null;
+  sourceNodeId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+/**
+ * 任务相关 IPC 接口（B 子系统）。
+ *
+ *   - create：新建任务（status 默认 'draft'）。creatorUserId 由 main process 从当前
+ *     登录会话注入，renderer 不传。
+ *   - list / get：查询。
+ *   - update：部分字段更新（绕过状态机；正常路径请用 transition）。
+ *   - transition：状态机驱动的状态转换，可带 extraPatch 副作用字段。
+ *   - start：B8 实现（execution_room 决策树）；B7 只声明类型 + preload 桥接，handler 留空。
+ *   - cancel：等价 transition(id, 'cancelled') 的快捷通道。
+ */
+export interface TaskApiSurface {
+  create(input: {
+    workspaceId: string;
+    title: string;
+    description?: string;
+    priority?: number;
+    sourceRoomId?: string | null;
+    sourceMessageId?: string | null;
+    assigneeAgentId?: string | null;
+    scheduledAt?: number | null;
+    deadlineAt?: number | null;
+  }): Promise<TaskRow>;
+  list(opts: {
+    workspaceId?: string;
+    status?: TaskStatus | TaskStatus[];
+    assigneeAgentId?: string;
+    executionRoomId?: string;
+    sourceRoomId?: string;
+    orderBy?: 'priority' | 'scheduled_at' | 'created_at';
+    limit?: number;
+  }): Promise<TaskRow[]>;
+  get(id: string): Promise<TaskRow | null>;
+  update(id: string, patch: Partial<Omit<TaskRow, 'id' | 'createdAt'>>): Promise<void>;
+  transition(
+    id: string,
+    to: TaskStatus,
+    extraPatch?: Partial<Omit<TaskRow, 'id' | 'createdAt'>>,
+  ): Promise<TaskRow>;
+  /** B8 实现：拉起 execution room + transition 到 in_progress */
+  start(id: string, opts: { executionRoomId?: string; createNewRoom?: boolean }): Promise<{
+    executionRoomId: string;
+  }>;
+  cancel(id: string): Promise<void>;
 }
 
 export interface StartAgentInput {
@@ -784,6 +859,7 @@ export interface ApiSurface {
     /** v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 按 type 三分支） */
     delete(id: string): Promise<void>;
   };
+  task: TaskApiSurface;
 }
 
 export interface DirEntry {

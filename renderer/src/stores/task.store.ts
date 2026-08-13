@@ -1,21 +1,31 @@
 // renderer/src/stores/task.store.ts
 //
 // 任务状态管理（B 子系统）:
-//   - tasks：当前 workspace 内的任务列表（status in draft/pending/assigned 用于 # 菜单）
-//   - 加载/清理入口：loadTasks（IPC 接入留待 B6/B7 chat loop 改造）、reset
+//   - tasks：当前 workspace 内的任务列表（# 菜单 / 看板消费）
+//   - load：拉取 workspace 任务列表（仅 pending 态：draft/pending/assigned，用于 # 菜单）
+//   - create / update / transition：包装 ipc.task.*，成功后同步更新本地 tasks
 //
-// 现阶段 store 只承载数据 + 占位 loadTasks，IPC 通道（task:list / task:create / task:update）
-// 由 B 后续任务在 main process 暴露后接入；MentionInput 当前只读 `tasks` 字段。
+// zustand 单例 store；workspace 切换时由布局层调 reset() 清空再 load(nextWorkspaceId)。
 import { create } from 'zustand';
-import type { TaskRow } from '../ipc/types';
+import { ipc } from '../ipc/client';
+import type { TaskRow, TaskStatus } from '../ipc/types';
+
+/** # 菜单只展示未完结任务（draft/pending/assigned） */
+const PENDING_STATUSES: TaskStatus[] = ['draft', 'pending', 'assigned'];
 
 interface TaskState {
   tasks: TaskRow[];
   loading: boolean;
   error: string | null;
 
-  /** 占位 action：实际 IPC 接入留待后续 task。当前实现只把入参写入 store。 */
-  loadTasks: (workspaceId: string) => Promise<void>;
+  load: (workspaceId: string) => Promise<void>;
+  create: (input: Parameters<typeof ipc.task.create>[0]) => Promise<TaskRow>;
+  update: (id: string, patch: Partial<Omit<TaskRow, 'id' | 'createdAt'>>) => Promise<void>;
+  transition: (
+    id: string,
+    to: TaskStatus,
+    extraPatch?: Partial<Omit<TaskRow, 'id' | 'createdAt'>>,
+  ) => Promise<void>;
   reset: () => void;
 }
 
@@ -24,10 +34,30 @@ export const useTaskStore = create<TaskState>((set) => ({
   loading: false,
   error: null,
 
-  loadTasks: async (_workspaceId: string) => {
-    // B6/B7 在 main process 暴露 task:list IPC 后，这里调用 ipc.task.list(workspaceId)
-    // 并 set({ tasks, loading: false })。当前保持空实现以不阻塞 UI 组件联调。
-    set({ loading: false });
+  load: async (workspaceId) => {
+    set({ loading: true, error: null });
+    try {
+      const tasks = await ipc.task.list({ workspaceId, status: PENDING_STATUSES });
+      set({ tasks, loading: false });
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message });
+    }
+  },
+
+  create: async (input) => {
+    const created = await ipc.task.create(input);
+    set((s) => ({ tasks: [...s.tasks, created] }));
+    return created;
+  },
+
+  update: async (id, patch) => {
+    await ipc.task.update(id, patch);
+    set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
+  },
+
+  transition: async (id, to, extraPatch) => {
+    const updated = await ipc.task.transition(id, to, extraPatch);
+    set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
   },
 
   reset: () => set({ tasks: [], loading: false, error: null }),

@@ -8,6 +8,7 @@ import type {
   ResourceFilter,
   ResourceItem,
   StreamChunk,
+  TaskRow,
   UploadedSkill,
 } from '../../../renderer/src/ipc/types';
 
@@ -172,6 +173,16 @@ const api: ApiSurface = {
     install: (id: string) => invoke<void>('resource:install', id),
     // v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 三分支）
     delete: (id: string) => invoke<void>('resource:delete', id),
+  },
+  task: {
+    create: (input) => invoke<TaskRow>('task:create', input),
+    list: (opts) => invoke<TaskRow[]>('task:list', opts),
+    get: (id) => invoke<TaskRow | null>('task:get', id),
+    update: (id, patch) => invoke<void>('task:update', id, patch),
+    transition: (id, to, extraPatch) => invoke<TaskRow>('task:transition', id, to, extraPatch),
+    // B8 实现 handler；B7 只桥接，调用会报 No handler registered
+    start: (id, opts) => invoke<{ executionRoomId: string }>('task:start', id, opts),
+    cancel: (id) => invoke<void>('task:cancel', id),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

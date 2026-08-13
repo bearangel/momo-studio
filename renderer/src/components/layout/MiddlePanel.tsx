@@ -95,6 +95,8 @@ export function MiddlePanel() {
             showMembers={showMembers}
             onToggleMembers={() => setShowMembers((v) => !v)}
             disabled={!activeRoomId}
+            workspaceId={workspace.id}
+            activeRoomId={activeRoomId ?? undefined}
           />
           <MessageInput />
           {showMembers && activeRoomId && (
