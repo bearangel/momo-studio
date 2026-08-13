@@ -531,6 +531,39 @@ ALTER TABLE agent_definitions ADD COLUMN max_concurrent_tasks INTEGER NOT NULL D
 ALTER TABLE agent_definitions ADD COLUMN default_conflict_strategy TEXT NOT NULL DEFAULT 'ask';
 `.trim(),
   },
+  {
+    version: 21,
+    sql: `
+-- D 子系统：并发控制字段
+-- 详见 docs/plans/2026-08-13-platform-redesign-d-task-board-concurrency.md Task D1
+--
+-- 1. global_settings 从 kv_store JSON 升为独立单行配置表
+--    v1.4 当时只用 JSON blob 存唯一字段 maxToolCalls（key='global_settings' in kv_store）；
+--    v2.0 D 子系统需要 SQL 级默认值 + 按字段查询/索引（并发控制器
+--    SELECT max_concurrent_tasks FROM global_settings WHERE id=1）。
+--    单行配置表：id 固定 1（CHECK 约束保证），新增列都是 NOT NULL DEFAULT，避免
+--    并发控制器热路径做 NULL 判断。新代码从此表读，老代码（settings/crud.ts）继续
+--    读 kv_store 不冲突——v21 暂不迁移老数据，预留 v2.x 把 maxToolCalls 也迁入。
+-- 2. model_providers 加 max_rpm / max_tpm（限流字段）
+--    v2 D 子系统由 ProviderTokenBucket（Task D2）按 provider 限流，limit 字段持久化到
+--    model_providers 行（用户按 provider 一次性配置）。nullable = 未配置 = 不限流，
+--    兼容 v1.x 的"无限制"默认行为。
+
+CREATE TABLE IF NOT EXISTS global_settings (
+  id                   INTEGER PRIMARY KEY CHECK (id = 1),
+  max_concurrent_tasks INTEGER NOT NULL DEFAULT 3,
+  warm_pool_size       INTEGER NOT NULL DEFAULT 2,
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 插入默认行（id=1）。schema_migrations 保证 v21 只跑一次；防御编程，
+-- INSERT OR IGNORE 让重复跑（理论上不会发生）不会因 PK 冲突炸掉。
+INSERT OR IGNORE INTO global_settings (id, max_concurrent_tasks, warm_pool_size) VALUES (1, 3, 2);
+
+ALTER TABLE model_providers ADD COLUMN max_rpm INTEGER;
+ALTER TABLE model_providers ADD COLUMN max_tpm INTEGER;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
