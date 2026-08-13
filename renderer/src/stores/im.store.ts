@@ -2,25 +2,25 @@
 //
 // IM 状态管理：房间列表 + 消息流 + 发送。
 // 消息来源有两条路径：
-//  1. 主动拉取：selectRoom → ipc.im.getMessages（历史消息）
-//  2. 被动接收：主进程 /sync 推送 → onMessage → receiveMessage（实时消息）
+//  1. 主动拉取：selectRoom → ipc.im.getMessages（历史消息 + eventsByMessage）
+//  2. 被动接收：主进程推送 → onMessage / onMessageEventBatch → store action（实时消息）
 //
-// v1.4：receiveMessage 收到带 io.momo-studio.stream_session_id 的 agent 最终消息时，
-//   调用 stream.store.clearCompleted 移除对应的临时流式气泡——即"流式→持久化替换"。
+// v2.0 A 子系统：消息唯一真相源切换到 SQLite。
+//   - messages 表是消息正文（id / body / sender / createdAt...）
+//   - message_events 表是流式事件溯源（thinking_delta / tool_call_start...）
+//   - renderer 通过 stream-aggregator 的 aggregateEvents(events) 重建 StreamState
+//   - 实时显示（增量 events 推送）和重启显示（一次性 loadAll events）走同一份聚合逻辑
+//   - 不再从 Matrix event content 提取 io.momo-studio.* 富字段
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ImMessage, ImRoomInfo, RoomMember } from '../ipc/types';
-import { useStreamStore } from './stream.store';
-
-/** Matrix event content 中标记 agent 最终回复的自定义键（值=streamSessionId） */
-const STREAM_SESSION_ID_KEY = 'io.momo-studio.stream_session_id';
-/** 子 agent 最终消息携带此字段（值=PM 的 streamSessionId）——有此字段说明是嵌套子消息，不应清理其 StreamState */
-const PARENT_STREAM_SESSION_ID_KEY = 'io.momo-studio.parent_stream_session_id';
+import type { ImMessage, ImRoomInfo, MessageEventRow, RoomMember } from '../ipc/types';
 
 interface ImState {
   rooms: ImRoomInfo[];
   activeRoomId: string | null;
   messagesByRoom: Map<string, ImMessage[]>;
+  /** A 子系统：messageId → events（流式事件溯源，按 seq 升序） */
+  eventsByMessage: Map<string, MessageEventRow[]>;
   members: RoomMember[];
   loading: boolean;
   error: string | null;
@@ -47,8 +47,13 @@ interface ImState {
   loadTeamRoomMessages: () => Promise<void>;
   /** 拉取指定房间成员列表（含身份标识） */
   loadMembers: (roomId: string) => Promise<void>;
-  /** 接收主进程推送的实时消息（去重） */
+  /** 接收主进程推送的实时消息（按 SQLite messages.id 去重） */
   receiveMessage: (msg: ImMessage) => void;
+  /**
+   * A 子系统：接收主进程 MessageEventBuffer flush 推送的批量 events。
+   * 按 eventsByMessage 累积，同 event id 不重复。
+   */
+  onIncomingEventBatch: (batch: MessageEventRow[]) => void;
   /** 向当前激活房间发送消息 */
   sendMessage: (body: string) => Promise<void>;
   /** v1.5.4：向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
@@ -61,6 +66,7 @@ export const useImStore = create<ImState>((set, get) => ({
   rooms: [],
   activeRoomId: null,
   messagesByRoom: new Map(),
+  eventsByMessage: new Map(),
   members: [],
   loading: false,
   error: null,
@@ -77,6 +83,7 @@ export const useImStore = create<ImState>((set, get) => ({
         rooms: [],
         activeRoomId: null,
         messagesByRoom: new Map(),
+        eventsByMessage: new Map(),
         members: [],
       });
     }
@@ -108,18 +115,25 @@ export const useImStore = create<ImState>((set, get) => ({
   selectRoom: async (roomId) => {
     set({ activeRoomId: roomId, loading: true });
     // v1.5.4：仅当 store 内没有该房间消息时才拉取（首次进入）。
-    // 切回已访问过的房间时保留之前分页加载的全部消息，避免被 getMessages 的 slice(-50) 截断覆盖。
+    // 切回已访问过的房间时保留之前分页加载的全部消息，避免被 getMessages 的 limit 截断覆盖。
     // 实时新消息由 receiveMessage 主动追加，无需重新拉取。
     const hasMessages = get().messagesByRoom.has(roomId);
     if (hasMessages) {
       set({ loading: false });
     } else {
       try {
-        const messages = await ipc.im.getMessages(roomId);
+        const { messages, eventsByMessage } = await ipc.im.getMessages(roomId);
         set((state) => {
-          const map = new Map(state.messagesByRoom);
-          map.set(roomId, messages);
-          return { messagesByRoom: map, loading: false };
+          const msgMap = new Map(state.messagesByRoom);
+          msgMap.set(roomId, messages);
+          const evMap = new Map(state.eventsByMessage);
+          for (const [msgId, evs] of Object.entries(eventsByMessage)) {
+            evMap.set(msgId, evs);
+          }
+          // hasMore 初始保持 undefined（视为 true）——SQLite listMessagesByRoom 默认
+          // limit=1000，小房间也不能断定无更多历史。首次 loadOlder 调用会用 IPC 返回的
+          // hasMore 字段（基于本批是否填满 count）赋权威值。
+          return { messagesByRoom: msgMap, eventsByMessage: evMap, loading: false };
         });
       } catch (err) {
         set({ loading: false, error: (err as Error).message });
@@ -136,8 +150,8 @@ export const useImStore = create<ImState>((set, get) => ({
       const { useWorkspaceStore } = await import('./workspace.store');
       const ws = useWorkspaceStore.getState().getActive();
       if (!ws?.teamRoomId) return;
-      const msgs = await ipc.im.getMessages(ws.teamRoomId);
-      set({ teamRoomMessages: msgs });
+      const { messages } = await ipc.im.getMessages(ws.teamRoomId);
+      set({ teamRoomMessages: messages });
     } catch {
       // 静默失败——team room 消息是辅助数据
     }
@@ -149,21 +163,36 @@ export const useImStore = create<ImState>((set, get) => ({
     // 到底短路：服务端明确告知无更多历史时跳过
     if (get().hasMoreByRoom.get(roomId) === false) return;
 
+    const existing = get().messagesByRoom.get(roomId) ?? [];
+    if (existing.length === 0) return;
+    // A 子系统：用当前可见消息的最小 createdAt 作为 beforeTs
+    const beforeTs = existing.reduce((min, m) => Math.min(min, m.createdAt), Number.MAX_SAFE_INTEGER);
+
     set((s) => ({ loadingOlderByRoom: new Map(s.loadingOlderByRoom).set(roomId, true) }));
     try {
-      const result = await ipc.im.loadOlderMessages(roomId, 30);
+      const result = await ipc.im.loadOlderMessages(roomId, beforeTs, 30);
       set((s) => {
         const map = new Map(s.messagesByRoom);
-        const existing = map.get(roomId) ?? [];
+        const cur = map.get(roomId) ?? [];
         // 前置拼接：新拉到的更早消息排在已有消息之前
-        // 去重：服务端偶尔在边界重复推送已有消息，按 eventId 过滤
-        const existingIds = new Set(existing.map((m) => m.eventId));
-        const dedupedNew = result.messages.filter((m) => !existingIds.has(m.eventId));
-        map.set(roomId, [...dedupedNew, ...existing]);
+        // 去重：服务端偶尔在边界重复推送已有消息，按 SQLite messages.id 过滤
+        const existingIds = new Set(cur.map((m) => m.id));
+        const dedupedNew = result.messages.filter((m) => !existingIds.has(m.id));
+        map.set(roomId, [...dedupedNew, ...cur]);
+
+        const evMap = new Map(s.eventsByMessage);
+        for (const [msgId, evs] of Object.entries(result.eventsByMessage)) {
+          evMap.set(msgId, evs);
+        }
 
         const loading = new Map(s.loadingOlderByRoom).set(roomId, false);
         const hasMore = new Map(s.hasMoreByRoom).set(roomId, result.hasMore);
-        return { messagesByRoom: map, loadingOlderByRoom: loading, hasMoreByRoom: hasMore };
+        return {
+          messagesByRoom: map,
+          eventsByMessage: evMap,
+          loadingOlderByRoom: loading,
+          hasMoreByRoom: hasMore,
+        };
       });
     } catch {
       set((s) => ({ loadingOlderByRoom: new Map(s.loadingOlderByRoom).set(roomId, false) }));
@@ -180,30 +209,39 @@ export const useImStore = create<ImState>((set, get) => ({
   },
 
   receiveMessage: (msg) => {
-    let wasNew = false;
     set((state) => {
       const map = new Map(state.messagesByRoom);
       const existing = map.get(msg.roomId) ?? [];
-      // 按 eventId 去重，避免初始同步回放与推送重复
-      if (existing.some((m) => m.eventId === msg.eventId)) {
+      // 按 SQLite messages.id 去重，避免初始同步回放与推送重复
+      if (existing.some((m) => m.id === msg.id)) {
         return state;
       }
       map.set(msg.roomId, [...existing, msg]);
-      wasNew = true;
       return { messagesByRoom: map };
     });
+    // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，
+    // 不再在此处读 Matrix content 字段（content 已废弃）。
+  },
 
-    // 流式→持久化：不再调用 clearCompleted。
-    // AgentStreamBubble 完成后仍保留在 streams Map 中（status=done），
-    // MessageList 通过 stream_session_id 去重避免重复渲染。
-    // 刷新页面后 StreamState 丢失，Matrix 消息自然接管（MessageBubble 渲染）。
+  onIncomingEventBatch: (batch) => {
+    if (batch.length === 0) return;
+    set((state) => {
+      const evMap = new Map(state.eventsByMessage);
+      for (const e of batch) {
+        const list = evMap.get(e.messageId) ?? [];
+        // 同 event id 不重复（flush 边界回放保护）
+        if (list.some((x) => x.id === e.id)) continue;
+        evMap.set(e.messageId, [...list, e]);
+      }
+      return { eventsByMessage: evMap };
+    });
   },
 
   sendMessage: async (body) => {
     const { activeRoomId } = get();
     if (!activeRoomId) return;
     // 不做本地乐观插入：SDK local echo 经 sync-manager 推回 receiveMessage（自带正确 sender）。
-    // 手动乐观会因 eventId 不可去重 + sender='' 错误归属，产生"别人重复我的消息"幻影。
+    // 手动乐观会因 id 不可去重 + sender='' 错误归属，产生"别人重复我的消息"幻影。
     await ipc.im.send(activeRoomId, body);
   },
 
@@ -212,6 +250,7 @@ export const useImStore = create<ImState>((set, get) => ({
       rooms: [],
       activeRoomId: null,
       messagesByRoom: new Map(),
+      eventsByMessage: new Map(),
       members: [],
       loading: false,
       error: null,
@@ -220,3 +259,19 @@ export const useImStore = create<ImState>((set, get) => ({
       hasMoreByRoom: new Map(),
     }),
 }));
+
+/**
+ * A 子系统：全局 IM 通道订阅。
+ * 在 App.tsx 顶层调用一次，订阅两条通道：
+ *   - im:message           → 实时消息（含本地 echo、agent 最终消息）
+ *   - im:message_event_batch → 流式 events 批量推送（thinking/tool_call 等增量）
+ * 返回 unsubscribe 函数。
+ */
+export function subscribeImChannels(): () => void {
+  const off1 = ipc.im.onMessage((msg) => useImStore.getState().receiveMessage(msg));
+  const off2 = ipc.im.onMessageEventBatch((batch) => useImStore.getState().onIncomingEventBatch(batch));
+  return () => {
+    off1();
+    off2();
+  };
+}

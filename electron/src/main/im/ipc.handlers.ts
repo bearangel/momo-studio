@@ -3,6 +3,11 @@
 // IM 相关 IPC handler 注册入口。
 // 暴露给渲染进程的能力：启动 /sync、发送消息、查询房间列表和历史消息。
 // 实际的 Matrix 操作委托给 matrix/sync-manager。
+//
+// v2.0 A 子系统：历史消息读路径已切换到 SQLite（messages + message_events 表）。
+//   - im:getMessages / im:loadOlderMessages / im:getMessageEvents 直接走 SQLite repo
+//   - im:exportRoomMessages 也改读 SQLite（content 富字段丢失，A9 改造 markdown-exporter 时补齐）
+//   - Matrix sync-manager 仍负责实时消息推送（im:message）和房间列表
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { startConduit } from '../conduit/manager';
@@ -12,11 +17,15 @@ import {
   sendMessageWithMentions,
   getRoomsForWorkspace,
   getRoomMessages,
-  loadOlderMessages,
 } from '../matrix/sync-manager';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listAssignments, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
+import { listMessagesByRoom, listOlderMessages } from '../storage/messages/repo';
+import {
+  listEventsByMessage,
+  type MessageEventRow,
+} from '../storage/messages/events-repo';
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerImHandlers(): void {
@@ -42,14 +51,31 @@ export function registerImHandlers(): void {
     return getRoomsForWorkspace(workspaceId);
   });
 
-  // 获取指定 room 的历史消息
+  // A 子系统：从 SQLite 读 messages + 每条 message 的 events（替代旧 getRoomMessages）
   ipcMain.handle('im:getMessages', async (_evt, roomId: string) => {
-    return getRoomMessages(roomId);
+    const messages = listMessagesByRoom(roomId);
+    const eventsByMessage: Record<string, MessageEventRow[]> = {};
+    for (const m of messages) {
+      eventsByMessage[m.id] = listEventsByMessage(m.id);
+    }
+    return { messages, eventsByMessage };
   });
 
-  // 向前翻页加载更早的历史消息（用户滚到顶部时触发）
-  ipcMain.handle('im:loadOlderMessages', async (_evt, roomId: string, count?: number) => {
-    return loadOlderMessages(roomId, count);
+  // A 子系统：向前翻页——返回 SQLite 里 created_at < beforeTs 的消息
+  ipcMain.handle('im:loadOlderMessages', async (_evt, roomId: string, beforeTs: number, count = 30) => {
+    const messages = listOlderMessages(roomId, beforeTs, count);
+    const eventsByMessage: Record<string, MessageEventRow[]> = {};
+    for (const m of messages) {
+      eventsByMessage[m.id] = listEventsByMessage(m.id);
+    }
+    // hasMore: 如果本批满了，可能还有更早的
+    const hasMore = messages.length >= count;
+    return { messages, eventsByMessage, hasMore };
+  });
+
+  // A 子系统：拉取单条 message 的全部 events（按 seq 升序）
+  ipcMain.handle('im:getMessageEvents', async (_evt, messageId: string) => {
+    return listEventsByMessage(messageId);
   });
 
   // 新建房间（私聊/群组）
@@ -82,16 +108,18 @@ export function registerImHandlers(): void {
 
   // 导出指定房间最近 limit 条会话为 Markdown 文件。
   // 返回 { filename, content }，renderer 用 Blob + 触发下载，无需主进程访问磁盘。
-  // 注意：getRoomMessages 不支持 offset 分页（只能返回最近 N 条），所以一次性拉取。
+  //
+  // v2.0 A 子系统过渡：已切换到从 SQLite 读 messages。当前限制：MessageRow 无 content
+  // 富字段，thinking/tool_calls/dispatch 元数据丢失（content 仅填空对象）。
+  // A9 改造 markdown-exporter 时会改从 message_events 表 + aggregateEvents 重建这些字段。
   ipcMain.handle(
     'im:exportRoomMessages',
     async (_evt, roomId: string, limit: number): Promise<{ filename: string; content: string }> => {
-      // 1. 一次性拉取 limit 条消息（getRoomMessages 不支持 offset 分页）
-      const messages = getRoomMessages(roomId, limit);
+      // 1. 从 SQLite 拉 limit 条消息
+      const rows = listMessagesByRoom(roomId, { limit });
 
       // 2. 反查 agent name：listAssignments 需要 workspaceId，所以遍历所有 workspace，
       //    收集全部 assignment，构造 botUserId → agentName 映射。
-      //    一个 bot 在多 workspace 可能有多个 assignment，但 definition.name 一致，所以后者覆盖无副作用。
       const botNameMap = new Map<string, string>();
       for (const ws of listWorkspaces()) {
         for (const a of listAssignments(ws.id)) {
@@ -100,9 +128,15 @@ export function registerImHandlers(): void {
         }
       }
 
-      // 3. 注入 botName
-      const exportMessages: ExportMessage[] = messages.map((m) => ({
-        ...m,
+      // 3. MessageRow → ExportMessage 适配（content 暂为空对象，A9 补齐富字段）
+      const exportMessages: ExportMessage[] = rows.map((m) => ({
+        eventId: m.matrixEventId ?? m.id,
+        roomId: m.roomId,
+        sender: m.sender,
+        body: m.body,
+        eventType: m.eventType,
+        content: {},
+        timestamp: m.createdAt,
         botName: botNameMap.get(m.sender) ?? null,
       }));
 
@@ -115,11 +149,10 @@ export function registerImHandlers(): void {
         roomId,
         exportedAt: new Date(),
         requestedLimit: limit,
-        actualCount: messages.length,
+        actualCount: rows.length,
       });
 
       // 6. 生成 filename：momo-session-<safeRoomName>-<YYYYMMDD-HHmm>.md
-      //    CJK 房间名经过 [^\w-] 替换后可能为空，回退到 roomId（已 sanitize）
       const pad = (n: number): string => n.toString().padStart(2, '0');
       const d = new Date();
       const dateStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;

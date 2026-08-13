@@ -16,22 +16,27 @@ vi.mock('../../../stores/stream.store', () => ({
 import { vi } from 'vitest';
 
 const mkSegMsg = (
-  eventId: string,
+  id: string,
   body: string,
   segmentIndex: number,
   segmentOf: string,
 ): ImMessage => ({
-  eventId,
+  id,
   roomId: 'r1',
   sender: '@bot:localhost',
   body,
   eventType: 'm.room.message',
-  timestamp: 100 + segmentIndex * 50,
-  content: {
-    body,
-    'io.momo-studio.segment_of': segmentOf,
-    'io.momo-studio.segment_index': segmentIndex,
-  },
+  streamSessionId: null,
+  parentStreamSessionId: null,
+  segmentOf,
+  segmentIndex,
+  status: 'done',
+  source: 'local',
+  matrixEventId: null,
+  workspaceId: null,
+  taskId: null,
+  createdAt: 100 + segmentIndex * 50,
+  updatedAt: 100 + segmentIndex * 50,
 });
 
 describe('SegmentStack', () => {

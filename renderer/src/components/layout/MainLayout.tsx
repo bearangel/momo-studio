@@ -1,6 +1,7 @@
 // renderer/src/components/layout/MainLayout.tsx
 // 顶层布局：左导航栏 + 中间面板。
-// 负责在认证后启动 Matrix /sync（主进程）并注册实时消息推送监听。
+// 负责在认证后启动 Matrix /sync（主进程）。
+// v2.0 A 子系统：实时消息订阅已上移到 App.tsx 的 subscribeImChannels，这里只触发首屏拉取。
 import { useEffect } from 'react';
 import { LeftRail } from './LeftRail';
 import { MiddlePanel } from './MiddlePanel';
@@ -10,7 +11,6 @@ import { useAgentStore } from '../../stores/agent.store';
 
 export function MainLayout() {
   const loadRooms = useImStore((s) => s.loadRooms);
-  const receiveMessage = useImStore((s) => s.receiveMessage);
   const syncRunningStates = useAgentStore((s) => s.syncRunningStates);
 
   useEffect(() => {
@@ -24,16 +24,10 @@ export function MainLayout() {
       }
     })();
 
-    // 注册主进程消息推送监听，实时消息写入 store
-    const cleanup = ipc.im.onMessage((msg) => {
-      receiveMessage(msg);
-    });
-
     return () => {
       cancelled = true;
-      cleanup();
     };
-  }, [loadRooms, receiveMessage]);
+  }, [loadRooms]);
 
   // 主进程在 agent 运行态变化（自动恢复完成/启停）时通知，重新同步 running，
   // 修复首次启动时 @ 候选为空（renderer 首次同步早于 autoStartAgents 完成）

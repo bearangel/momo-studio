@@ -39,13 +39,11 @@ export function SegmentStack({
         </div>
       )}
       {segments.map((seg, idx) => {
-        const segIndex =
-          (seg.content?.['io.momo-studio.segment_index'] as number | undefined) ??
-          idx + 1;
+        const segIndex = seg.segmentIndex ?? idx + 1;
         const showSegmentLabel = totalSegments > 1;
 
         return (
-          <div key={seg.eventId} className="flex flex-col gap-1">
+          <div key={seg.id} className="flex flex-col gap-1">
             {showSegmentLabel && (
               <div className="text-[10px] text-neutral-600 font-mono px-2 self-start">
                 — 第 {segIndex} 段 —

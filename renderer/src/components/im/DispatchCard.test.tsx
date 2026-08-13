@@ -1,6 +1,9 @@
 // renderer/src/components/im/DispatchCard.test.tsx
 // DispatchCard 对话化后的渲染行为：归属（frame 头）+ 紧凑 target + 解析失败回退。
 // useBotNameMap 读 agent.store，用 vi.mock 隔离成受控映射。
+//
+// v2.0 A 子系统：ImMessage 已删除 content 字段，DispatchCard 仍通过 @ts-expect-error
+// 读取 message.content（A9 改造）。测试用 Object.assign 挂 legacy content 到对象上。
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ImMessage } from '../../ipc/types';
@@ -13,22 +16,45 @@ vi.mock('../../lib/useBotNames', () => ({
 
 import { DispatchCard } from './DispatchCard';
 
-function makeDispatch(overrides: Partial<ImMessage> = {}): ImMessage {
-  return {
-    eventId: '$d1:local',
+interface DispatchLegacy {
+  body?: string;
+  task_id?: string;
+  dispatch_from?: string;
+  dispatch_to?: string;
+  deadline_ms?: number;
+}
+
+function makeDispatch(
+  overrides: Partial<ImMessage> & { legacyContent?: DispatchLegacy } = {},
+): ImMessage {
+  const { legacyContent, ...rest } = overrides;
+  const base: ImMessage = {
+    id: 'd1',
     roomId: '!team:local',
     sender: '@coordinator:local',
     body: '',
     eventType: 'io.momo-studio.dispatch',
-    content: {
-      body: '请实现登录页',
-      task_id: 'task-abc1234567',
-      dispatch_from: '@coordinator:local',
-      dispatch_to: '@coder:local',
-    },
-    timestamp: 0,
-    ...overrides,
+    streamSessionId: null,
+    parentStreamSessionId: null,
+    segmentOf: null,
+    segmentIndex: null,
+    status: 'done',
+    source: 'local',
+    matrixEventId: null,
+    workspaceId: null,
+    taskId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...rest,
   };
+  const content: DispatchLegacy = legacyContent ?? {
+    body: '请实现登录页',
+    task_id: 'task-abc1234567',
+    dispatch_from: '@coordinator:local',
+    dispatch_to: '@coder:local',
+  };
+  Object.assign(base, { content });
+  return base;
 }
 
 describe('DispatchCard', () => {
@@ -56,7 +82,7 @@ describe('DispatchCard', () => {
 
   it('有 deadline_ms 时显示截止时间', () => {
     const msg = makeDispatch({
-      content: {
+      legacyContent: {
         body: '任务',
         task_id: 'task-abc1234567',
         dispatch_from: '@coordinator:local',
@@ -74,7 +100,9 @@ describe('DispatchCard', () => {
   });
 
   it('content 缺 task_id 时回退为普通气泡（仍走 frame 保留归属）', () => {
-    const msg = makeDispatch({ content: { body: '畸形', dispatch_from: '@c:local', dispatch_to: '@d:local' } });
+    const msg = makeDispatch({
+      legacyContent: { body: '畸形', dispatch_from: '@c:local', dispatch_to: '@d:local' },
+    });
     render(<DispatchCard message={msg} isSelf={false} senderName="协调员" />);
     expect(screen.getByText('畸形')).toBeInTheDocument();
     expect(screen.getByText('协调员')).toBeInTheDocument();

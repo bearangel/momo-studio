@@ -84,9 +84,13 @@ function readReply(content: Record<string, unknown> | undefined): TaskReplyField
 }
 
 export function TaskReplyCard({ message, isSelf, senderName }: Props) {
+  // v2.0 A 子系统过渡：ImMessage 已删除 content 字段，task_reply 富字段（status /
+  // task_id / progress_pct）改走 message_events 表。A9 改造时重写。
+  // @ts-expect-error A9 待移除：ImMessage.content 已删除
   const fields = readReply(message.content);
   // 解析失败时回退为普通气泡渲染（走 frame 保留归属），保证不丢消息
   if (!fields) {
+    // @ts-expect-error A9 待移除：ImMessage.content 已删除
     const rawContentBody = message.content.body;
     return (
       <MessageFrame

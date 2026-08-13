@@ -4,6 +4,7 @@ import type {
   ApiSurface,
   AssignmentDeltas,
   ImMessage,
+  MessageEventBatch,
   ResourceFilter,
   ResourceItem,
   StreamChunk,
@@ -106,8 +107,9 @@ const api: ApiSurface = {
     sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
     getRooms: (workspaceId) => invoke('im:getRooms', workspaceId),
     getMessages: (roomId) => invoke('im:getMessages', roomId),
-  loadOlderMessages: (roomId: string, count?: number) =>
-    invoke('im:loadOlderMessages', roomId, count),
+    loadOlderMessages: (roomId: string, beforeTs: number, count?: number) =>
+      invoke('im:loadOlderMessages', roomId, beforeTs, count),
+    getMessageEvents: (messageId: string) => invoke('im:getMessageEvents', messageId),
     createRoom: (input) => invoke('im:createRoom', input),
     renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
     dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),
@@ -119,6 +121,13 @@ const api: ApiSurface = {
       ipcRenderer.on('im:message', handler);
       return () => {
         ipcRenderer.off('im:message', handler);
+      };
+    },
+    onMessageEventBatch: (callback) => {
+      const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
+      ipcRenderer.on('im:message_event_batch', handler);
+      return () => {
+        ipcRenderer.off('im:message_event_batch', handler);
       };
     },
   },

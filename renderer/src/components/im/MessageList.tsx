@@ -23,16 +23,18 @@ import type { SegmentGroup } from './types';
  * 现按 segment_of 聚合为 SegmentGroup，交给 SegmentStack 纵向堆叠渲染。
  *
  * 单段消息（无 segment_of，或归组后只有一段）保持原 MessageBubble 渲染。
+ *
+ * v2.0 A 子系统：segmentOf / segmentIndex / createdAt 直接来自 SQLite messages 表字段，
+ * 不再从 Matrix event content 读取。
  */
 function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> {
   const segmentMap = new Map<string, ImMessage[]>();
   const standalone: ImMessage[] = [];
 
   for (const msg of messages) {
-    const segmentOf = msg.content?.['io.momo-studio.segment_of'];
-    if (typeof segmentOf === 'string') {
-      if (!segmentMap.has(segmentOf)) segmentMap.set(segmentOf, []);
-      segmentMap.get(segmentOf)!.push(msg);
+    if (typeof msg.segmentOf === 'string') {
+      if (!segmentMap.has(msg.segmentOf)) segmentMap.set(msg.segmentOf, []);
+      segmentMap.get(msg.segmentOf)!.push(msg);
     } else {
       standalone.push(msg);
     }
@@ -40,12 +42,8 @@ function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> 
 
   const result: Array<ImMessage | SegmentGroup> = [...standalone];
   for (const [streamSessionId, segments] of segmentMap) {
-    // 按 segment_index 升序排序
-    segments.sort((a, b) => {
-      const ai = (a.content?.['io.momo-studio.segment_index'] as number) ?? 0;
-      const bi = (b.content?.['io.momo-studio.segment_index'] as number) ?? 0;
-      return ai - bi;
-    });
+    // 按 segment_index 升序排序（null 视为 0）
+    segments.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
     if (segments.length === 1) {
       // 单段消息不归组（fallback 到普通 MessageBubble）
       const only = segments[0];
@@ -56,7 +54,7 @@ function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> 
         kind: 'segment-group',
         streamSessionId,
         segments,
-        lastSegmentAt: last ? last.timestamp : Date.now(),
+        lastSegmentAt: last ? last.createdAt : Date.now(),
       });
     }
   }
@@ -177,20 +175,21 @@ export function MessageList() {
   // v1.4 嵌套：dispatch/task_reply/子 agent 回复（含 parent_stream_session_id）
   // 不作为顶层独立消息渲染——它们已嵌套在 PM 气泡的 dispatch chip 内。
   // 仅过滤渲染层，store 原始消息保留（历史还原仍可访问）。
+  // v2.0 A 子系统：stream_session_id / parent_stream_session_id 来自 SQLite messages 字段。
   const visibleMessages = (messages ?? []).filter((msg) => {
     if (msg.eventType === 'io.momo-studio.dispatch') return false;
     if (msg.eventType === 'io.momo-studio.task_reply') return false;
-    if (msg.content?.['io.momo-studio.parent_stream_session_id']) return false;
+    if (msg.parentStreamSessionId) return false;
     // 已有 StreamState 渲染为 AgentStreamBubble 的消息不再重复渲染为 MessageBubble
-    const sessionId = msg.content?.['io.momo-studio.stream_session_id'];
-    if (typeof sessionId === 'string' && streamSessionIds.has(sessionId)) return false;
+    if (typeof msg.streamSessionId === 'string' && streamSessionIds.has(msg.streamSessionId)) return false;
     return true;
   });
 
-  // v1.5.6: messages + streams 合并按 timestamp 混合排序，避免 stream 永远在末尾。
+  // v1.5.6: messages + streams 合并按 createdAt 混合排序，避免 stream 永远在末尾。
   // 用户报"msg3 出现在 agent 回复前面"就是因为 messages 在前 streams 在后分两段渲染。
-  // 现在统一按时间排序：messages 用 msg.timestamp，streams 用 stream.startedAt。
+  // 现在统一按时间排序：messages 用 msg.createdAt，streams 用 stream.startedAt。
   // v1.7.4：多段消息先按 segment_of 归组为 SegmentGroup（用 lastSegmentAt 排序）。
+  // v2.0 A 子系统：createdAt 来自 SQLite messages 表（替代旧 Matrix event timestamp）。
   const groupedItems = groupBySegment(visibleMessages);
   type MixedItem =
     | { kind: 'message'; msg: ImMessage; ts: number }
@@ -200,7 +199,7 @@ export function MessageList() {
     ...groupedItems.map((item) =>
       'kind' in item && item.kind === 'segment-group'
         ? { kind: 'segment-group' as const, group: item, ts: item.lastSegmentAt }
-        : { kind: 'message' as const, msg: item as ImMessage, ts: (item as ImMessage).timestamp },
+        : { kind: 'message' as const, msg: item as ImMessage, ts: (item as ImMessage).createdAt },
     ),
     ...activeRoomStreams.map((stream) => ({ kind: 'stream' as const, stream, ts: stream.startedAt })),
   ].sort((a, b) => a.ts - b.ts);
@@ -229,7 +228,7 @@ export function MessageList() {
         if (item.kind === 'message') {
           return (
             <MessageBubble
-              key={item.msg.eventId}
+              key={item.msg.id}
               message={item.msg}
               isSelf={item.msg.sender === currentUserId}
               senderName={botNameByUserId.get(item.msg.sender)}

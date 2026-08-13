@@ -36,15 +36,16 @@ vi.mock('../../lib/useBotNames', () => ({
   useBotNameMap: () => new Map(),
 }));
 
-// 桩 MessageBubble：渲染 body + data-event-type/data-event-id，便于断言通过过滤的消息
+// 桩 MessageBubble：渲染 body + data-event-type/data-msg-id，便于断言通过过滤的消息
+// v2.0 A 子系统：改读 m.id / m.body（不再读 eventId / content.body）
 vi.mock('./MessageBubble', () => ({
   MessageBubble: ({ message }: { message: ImMessage }) => (
     <div
       data-testid="bubble"
       data-event-type={message.eventType}
-      data-event-id={message.eventId}
+      data-msg-id={message.id}
     >
-      {typeof message.content.body === 'string' ? message.content.body : message.body}
+      {message.body}
     </div>
   ),
 }));
@@ -54,15 +55,24 @@ vi.mock('./AgentStreamBubble', () => ({
 
 import { MessageList } from './MessageList';
 
-/** 构造 ImMessage（默认普通 m.room.message） */
-function makeMsg(overrides: Partial<ImMessage> & { eventId: string }): ImMessage {
+/** 构造 ImMessage（默认普通 m.room.message）。v2.0 A 子系统：字段对齐 SQLite messages 表 row */
+function makeMsg(overrides: Partial<ImMessage> & { id: string }): ImMessage {
   return {
     roomId: '!room:server',
     sender: '@bot:server',
     body: '',
     eventType: 'm.room.message',
-    content: {},
-    timestamp: 0,
+    streamSessionId: null,
+    parentStreamSessionId: null,
+    segmentOf: null,
+    segmentIndex: null,
+    status: 'done',
+    source: 'local',
+    matrixEventId: null,
+    workspaceId: null,
+    taskId: null,
+    createdAt: 0,
+    updatedAt: 0,
     ...overrides,
   };
 }
@@ -81,11 +91,11 @@ beforeEach(() => {
 describe('MessageList v1.4 过滤', () => {
   it('过滤 io.momo-studio.dispatch 事件（不独立渲染）', () => {
     renderWith([
-      makeMsg({ eventId: '$1', body: '普通消息' }),
+      makeMsg({ id: 'm1', body: '普通消息' }),
       makeMsg({
-        eventId: '$2',
+        id: 'm2',
+        body: '委派内容',
         eventType: 'io.momo-studio.dispatch',
-        content: { body: '委派内容' },
       }),
     ]);
     expect(screen.getByText('普通消息')).toBeInTheDocument();
@@ -95,11 +105,11 @@ describe('MessageList v1.4 过滤', () => {
 
   it('过滤 io.momo-studio.task_reply 事件', () => {
     renderWith([
-      makeMsg({ eventId: '$1', body: '用户提问' }),
+      makeMsg({ id: 'm1', body: '用户提问' }),
       makeMsg({
-        eventId: '$2',
+        id: 'm2',
+        body: '回执内容',
         eventType: 'io.momo-studio.task_reply',
-        content: { body: '回执内容' },
       }),
     ]);
     expect(screen.getByText('用户提问')).toBeInTheDocument();
@@ -107,13 +117,13 @@ describe('MessageList v1.4 过滤', () => {
     expect(screen.getAllByTestId('bubble')).toHaveLength(1);
   });
 
-  it('过滤含 io.momo-studio.parent_stream_session_id 的 m.room.message', () => {
+  it('过滤含 parentStreamSessionId 的 m.room.message', () => {
     renderWith([
-      makeMsg({ eventId: '$1', body: 'PM 回复' }),
+      makeMsg({ id: 'm1', body: 'PM 回复' }),
       makeMsg({
-        eventId: '$2',
+        id: 'm2',
         body: '子 agent 嵌套回复',
-        content: { body: '子 agent 嵌套回复', 'io.momo-studio.parent_stream_session_id': 'sess-1' },
+        parentStreamSessionId: 'sess-1',
       }),
     ]);
     expect(screen.getByText('PM 回复')).toBeInTheDocument();
@@ -124,23 +134,23 @@ describe('MessageList v1.4 过滤', () => {
 
   it('普通消息 + 三类过滤事件混合 → 仅普通消息渲染', () => {
     renderWith([
-      makeMsg({ eventId: '$1', body: '第一条普通' }),
+      makeMsg({ id: 'm1', body: '第一条普通' }),
       makeMsg({
-        eventId: '$2',
+        id: 'm2',
+        body: '委派',
         eventType: 'io.momo-studio.dispatch',
-        content: { body: '委派' },
       }),
       makeMsg({
-        eventId: '$3',
+        id: 'm3',
+        body: '回执',
         eventType: 'io.momo-studio.task_reply',
-        content: { body: '回执' },
       }),
       makeMsg({
-        eventId: '$4',
+        id: 'm4',
         body: '子回复',
-        content: { body: '子回复', 'io.momo-studio.parent_stream_session_id': 'sess-x' },
+        parentStreamSessionId: 'sess-x',
       }),
-      makeMsg({ eventId: '$5', body: '第二条普通' }),
+      makeMsg({ id: 'm5', body: '第二条普通' }),
     ]);
     const bubbles = screen.getAllByTestId('bubble');
     expect(bubbles).toHaveLength(2);
@@ -151,15 +161,15 @@ describe('MessageList v1.4 过滤', () => {
     expect(screen.queryByText('子回复')).not.toBeInTheDocument();
   });
 
-  it('无 parent_stream_session_id 的普通 m.room.message 不被过滤', () => {
+  it('无 parentStreamSessionId 的普通 m.room.message 不被过滤', () => {
     renderWith([
       makeMsg({
-        eventId: '$1',
+        id: 'm1',
         body: '正常 agent 回复',
-        content: { 'io.momo-studio.stream_session_id': 'sess-9' },
+        streamSessionId: 'sess-9',
       }),
     ]);
-    // 仅含 stream_session_id（非 parent_）的消息应正常渲染
+    // 仅含 streamSessionId（非 parent_）的消息应正常渲染
     expect(screen.getByText('正常 agent 回复')).toBeInTheDocument();
     expect(screen.getAllByTestId('bubble')).toHaveLength(1);
   });
@@ -167,9 +177,9 @@ describe('MessageList v1.4 过滤', () => {
   it('全部消息都被过滤时 → 渲染空（不报错，无 bubble）', () => {
     renderWith([
       makeMsg({
-        eventId: '$1',
+        id: 'm1',
+        body: '委派',
         eventType: 'io.momo-studio.dispatch',
-        content: { body: '委派' },
       }),
     ]);
     expect(screen.queryAllByTestId('bubble')).toHaveLength(0);

@@ -116,16 +116,35 @@ export interface AssignMainInput {
   selectedSubDefIds?: string[];
 }
 
+/**
+ * A 子系统：IM 消息（SQLite messages 表 row）。
+ *
+ * v2.0 重构：从 Matrix event payload 改为 SQLite 唯一真相源。
+ * 关键变化：
+ *   - id（SQLite UUID）替代 eventId（Matrix event ID）
+ *   - createdAt 替代 timestamp
+ *   - 删除 content 字段（不再从 Matrix event 富字段读取——
+ *     thinking/tool_calls/dispatches 等改由 message_events 表 + aggregateEvents 重建）
+ *
+ * 与 electron 端 MessageRow 结构对齐（renderer 端独立定义，仅结构对齐）。
+ */
 export interface ImMessage {
-  eventId: string;
+  id: string; // SQLite messages.id（UUID）
   roomId: string;
   sender: string;
   body: string;
-  /** Matrix event type，普通消息为 'm.room.message'，自定义消息为 'io.momo-studio.dispatch' / 'io.momo-studio.task_reply' */
   eventType: string;
-  /** 原始 event content，自定义消息卡片从中读取结构化字段 */
-  content: Record<string, unknown>;
-  timestamp: number;
+  streamSessionId: string | null;
+  parentStreamSessionId: string | null;
+  segmentOf: string | null;
+  segmentIndex: number | null;
+  status: 'streaming' | 'done' | 'failed' | 'aborted';
+  source: 'local' | 'lan' | 'hub' | 'matrix';
+  matrixEventId: string | null;
+  workspaceId: string | null;
+  taskId: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ImRoomInfo {
@@ -629,12 +648,28 @@ export interface ApiSurface {
     sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
     /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
     getRooms(workspaceId?: string): Promise<ImRoomInfo[]>;
-    getMessages(roomId: string): Promise<ImMessage[]>;
-    /** 向前翻页加载更早的历史消息（用户滚到顶部时触发） */
+    /**
+     * A 子系统：从 SQLite 拉 messages + 每条 message 的 events，
+     * renderer 用 stream-aggregator 重建 StreamState。
+     */
+    getMessages(
+      roomId: string,
+    ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+    /**
+     * 向前翻页：返回 SQLite 里 created_at < beforeTs 的消息。
+     * beforeTs 由调用方从当前可见消息的最小 createdAt 推导。
+     */
     loadOlderMessages(
       roomId: string,
+      beforeTs: number,
       count?: number,
-    ): Promise<{ messages: ImMessage[]; hasMore: boolean }>;
+    ): Promise<{
+      messages: ImMessage[];
+      eventsByMessage: Record<string, MessageEventRow[]>;
+      hasMore: boolean;
+    }>;
+    /** 拉取单条 message 的全部 events（按 seq 升序） */
+    getMessageEvents(messageId: string): Promise<MessageEventRow[]>;
     createRoom(input: {
       name: string;
       isDirect: boolean;
@@ -648,6 +683,8 @@ export interface ApiSurface {
     /** 导出指定房间最近 limit 条会话为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载。 */
     exportRoomMessages(roomId: string, limit: number): Promise<{ filename: string; content: string }>;
     onMessage(callback: (msg: ImMessage) => void): () => void;
+    /** A 子系统：订阅 stream chunk 批量推送（主进程 MessageEventBuffer flush 时触发） */
+    onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
   };
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */

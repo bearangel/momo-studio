@@ -1,8 +1,14 @@
 // renderer/src/stores/im.store.test.ts
+//
+// v2.0 A 子系统：测试已对齐新的 IPC 契约：
+//   - getMessages 返回 { messages, eventsByMessage }
+//   - loadOlderMessages 接受 (roomId, beforeTs, count) 返回 { messages, eventsByMessage, hasMore }
+//   - ImMessage 字段对齐 SQLite messages 表 row（id 替代 eventId，createdAt 替代 timestamp，删除 content）
+//   - 新增 onIncomingEventBatch action（im:message_event_batch 触发）
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useImStore } from './im.store';
 import { useStreamStore } from './stream.store';
-import type { ImMessage, ImRoomInfo } from '../ipc/types';
+import type { ImMessage, ImRoomInfo, MessageEventRow } from '../ipc/types';
 
 const MOCK_ROOMS_A: ImRoomInfo[] = [
   { roomId: '!a1:localhost', name: 'A 房间 1' },
@@ -17,18 +23,55 @@ const mockApi = {
     startSync: vi.fn().mockResolvedValue(undefined),
     send: vi.fn().mockResolvedValue(undefined),
     getRooms: vi.fn(),
-    getMessages: vi.fn().mockResolvedValue([]),
+    getMessages: vi.fn(),
     loadOlderMessages: vi.fn(),
+    getMessageEvents: vi.fn().mockResolvedValue([]),
     onMessage: vi.fn().mockReturnValue(() => {}),
+    onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
   },
 };
+
+/** 构造一条 ImMessage（默认 m.room.message，createdAt 单调递增由调用方指定） */
+function mk(id: string, body: string, createdAt = 0): ImMessage {
+  return {
+    id,
+    roomId: '!r:localhost',
+    sender: '@u:localhost',
+    body,
+    eventType: 'm.room.message',
+    streamSessionId: null,
+    parentStreamSessionId: null,
+    segmentOf: null,
+    segmentIndex: null,
+    status: 'done',
+    source: 'local',
+    matrixEventId: null,
+    workspaceId: null,
+    taskId: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+/** 构造 MessageEventRow（默认 text_delta） */
+function mkEvent(id: string, messageId: string, seq: number): MessageEventRow {
+  return {
+    id,
+    messageId,
+    seq,
+    eventType: 'text_delta',
+    payload: { delta: 'x' },
+    createdAt: 0,
+  };
+}
 
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   useImStore.getState().reset();
   mockApi.im.getRooms.mockReset();
   mockApi.im.getRooms.mockResolvedValue(MOCK_ROOMS_A);
-  mockApi.im.getMessages.mockResolvedValue([]);
+  mockApi.im.getMessages.mockReset();
+  mockApi.im.getMessages.mockResolvedValue({ messages: [], eventsByMessage: {} });
   mockApi.im.send.mockClear();
   mockApi.im.loadOlderMessages.mockReset();
 });
@@ -47,51 +90,29 @@ describe('im.store', () => {
     expect(useImStore.getState().activeRoomId).toBeNull();
   });
 
-  it('selectRoom loads messages for the room', async () => {
-    const messages: ImMessage[] = [
-      {
-        eventId: 'e1',
-        roomId: '!a1:localhost',
-        sender: '@a:localhost',
-        body: 'hi',
-        eventType: 'm.room.message',
-        content: {},
-        timestamp: 1,
-      },
-    ];
-    mockApi.im.getMessages.mockResolvedValue(messages);
+  it('selectRoom loads messages + events for the room', async () => {
+    const messages: ImMessage[] = [mk('m1', 'hi', 1)];
+    const eventsByMessage: Record<string, MessageEventRow[]> = {
+      m1: [mkEvent('e1', 'm1', 0)],
+    };
+    mockApi.im.getMessages.mockResolvedValue({ messages, eventsByMessage });
 
     await useImStore.getState().selectRoom('!a1:localhost');
     expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toEqual(messages);
+    expect(useImStore.getState().eventsByMessage.get('m1')).toEqual(eventsByMessage.m1);
   });
 
   it('receiveMessage appends to the room message list', () => {
-    const msg: ImMessage = {
-      eventId: 'e2',
-      roomId: '!a1:localhost',
-      sender: '@b:localhost',
-      body: 'hello',
-      eventType: 'm.room.message',
-      content: {},
-      timestamp: 2,
-    };
+    const msg = mk('m2', 'hello', 2);
     useImStore.getState().receiveMessage(msg);
-    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toContainEqual(msg);
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')).toContainEqual(msg);
   });
 
-  it('receiveMessage deduplicates by eventId', () => {
-    const msg: ImMessage = {
-      eventId: 'e3',
-      roomId: '!a1:localhost',
-      sender: '@b:localhost',
-      body: 'dup',
-      eventType: 'm.room.message',
-      content: {},
-      timestamp: 3,
-    };
+  it('receiveMessage deduplicates by SQLite messages.id', () => {
+    const msg = mk('m3', 'dup', 3);
     useImStore.getState().receiveMessage(msg);
     useImStore.getState().receiveMessage(msg);
-    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toHaveLength(1);
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')).toHaveLength(1);
   });
 
   it('sendMessage calls ipc.im.send with the active room id', async () => {
@@ -104,7 +125,7 @@ describe('im.store', () => {
     await useImStore.getState().loadRooms();
     await useImStore.getState().sendMessage('hello');
     const msgs = useImStore.getState().messagesByRoom.get('!a1:localhost') ?? [];
-    expect(msgs.some((m) => m.sender === '' || m.eventId.startsWith('local-'))).toBe(false);
+    expect(msgs.some((m) => m.sender === '' || m.id.startsWith('local-'))).toBe(false);
   });
 
   it('sendMessage is a no-op when no room is active', async () => {
@@ -152,12 +173,177 @@ describe('im.store — workspace 隔离', () => {
   });
 });
 
+describe('im.store — onIncomingEventBatch（A 子系统新增）', () => {
+  it('空 batch 是 no-op', () => {
+    const before = useImStore.getState().eventsByMessage.size;
+    useImStore.getState().onIncomingEventBatch([]);
+    expect(useImStore.getState().eventsByMessage.size).toBe(before);
+  });
+
+  it('批量 events 按 messageId 累积到 eventsByMessage', () => {
+    useImStore.getState().onIncomingEventBatch([
+      mkEvent('e1', 'm1', 0),
+      mkEvent('e2', 'm1', 1),
+      mkEvent('e3', 'm2', 0),
+    ]);
+    expect(useImStore.getState().eventsByMessage.get('m1')).toHaveLength(2);
+    expect(useImStore.getState().eventsByMessage.get('m2')).toHaveLength(1);
+  });
+
+  it('同 event id 不重复（flush 边界回放保护）', () => {
+    useImStore.getState().onIncomingEventBatch([mkEvent('e1', 'm1', 0)]);
+    useImStore.getState().onIncomingEventBatch([mkEvent('e1', 'm1', 0)]); // 同 id
+    expect(useImStore.getState().eventsByMessage.get('m1')).toHaveLength(1);
+  });
+});
+
+describe('im.store loadOlder', () => {
+  it('前置拼接新拉到的更早消息', async () => {
+    // 当前已有消息 m1(50), m2(60)
+    const existing = [mk('m1', 'newest', 50), mk('m2', 'older', 60)];
+    mockApi.im.getMessages.mockResolvedValueOnce({ messages: existing, eventsByMessage: {} });
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    // 翻页：返回更早的消息 m3(10), m4(20)
+    const olderBatch = [mk('m3', 'oldest1', 10), mk('m4', 'oldest2', 20)];
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: olderBatch,
+      eventsByMessage: {},
+      hasMore: true,
+    });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
+    expect(messages.map((m) => m.id)).toEqual(['m3', 'm4', 'm1', 'm2']);
+    // beforeTs 应是当前最小 createdAt = 50
+    expect(mockApi.im.loadOlderMessages).toHaveBeenCalledWith('!r:localhost', 50, 30);
+  });
+
+  it('hasMore=false 时短路不发 IPC', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [],
+      eventsByMessage: {},
+      hasMore: false,
+    });
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    mockApi.im.loadOlderMessages.mockClear();
+    await useImStore.getState().loadOlder('!r:localhost');
+    expect(mockApi.im.loadOlderMessages).not.toHaveBeenCalled();
+  });
+
+  it('加载中再次触发会被防抖（不重复 IPC）', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    let resolveLoad!: (v: { messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]>; hasMore: boolean }) => void;
+    const pending = new Promise<{
+      messages: ImMessage[];
+      eventsByMessage: Record<string, MessageEventRow[]>;
+      hasMore: boolean;
+    }>((r) => {
+      resolveLoad = r;
+    });
+    mockApi.im.loadOlderMessages.mockImplementationOnce(() => pending);
+
+    // 启动第一次 loadOlder（不 await，让它停在 ipc 调用）
+    const p1 = useImStore.getState().loadOlder('!r:localhost');
+    // 此时 loadingOlder=true，第二次应被 store 防抖 return（不调 IPC）
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    expect(mockApi.im.loadOlderMessages).toHaveBeenCalledTimes(1);
+
+    // resolve 让第一次完成，避免悬挂 promise
+    resolveLoad({ messages: [], eventsByMessage: {}, hasMore: true });
+    await p1;
+  });
+
+  it('按 SQLite messages.id 去重（服务端边界重复）', async () => {
+    const existing = [mk('m1', 'a', 10), mk('m2', 'b', 20)];
+    mockApi.im.getMessages.mockResolvedValueOnce({ messages: existing, eventsByMessage: {} });
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    // 服务端在边界重复推送 m1 + 新的 m0
+    const olderBatch = [mk('m1', 'a-dup', 10), mk('m0', 'oldest', 5)];
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: olderBatch,
+      eventsByMessage: {},
+      hasMore: true,
+    });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
+    expect(messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2']);
+  });
+
+  it('loadOlder 同时把新拉消息的 events 合并进 eventsByMessage', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+
+    const olderEvents: Record<string, MessageEventRow[]> = {
+      m0: [mkEvent('e-old', 'm0', 0)],
+    };
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [mk('m0', 'old', 5)],
+      eventsByMessage: olderEvents,
+      hasMore: false,
+    });
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    expect(useImStore.getState().eventsByMessage.get('m0')).toEqual(olderEvents.m0);
+  });
+
+  it('selectRoom 切回已访问房间时保留分页累积（不重新拉取覆盖）', async () => {
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [mk('m0', 'old', 5)],
+      eventsByMessage: {},
+      hasMore: false,
+    });
+    await useImStore.getState().loadOlder('!r:localhost');
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
+
+    // 切到别的房间
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('x1', 'x', 100)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!other:localhost');
+
+    // 切回——getMessages 不应被再次调用（保留累积）
+    mockApi.im.getMessages.mockClear();
+    await useImStore.getState().selectRoom('!r:localhost');
+    expect(mockApi.im.getMessages).not.toHaveBeenCalled();
+    // 消息仍是 2 条（m0 + m1），未被覆盖
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
+    // hasMore 仍为 false
+    expect(useImStore.getState().hasMoreByRoom.get('!r:localhost')).toBe(false);
+  });
+});
+
 describe('im.store — 流式→持久化替换', () => {
   beforeEach(() => {
     useStreamStore.setState({ streams: new Map() });
   });
 
-  it('收到带 stream_session_id 的消息时清理对应临时流式状态', () => {
+  it('收到 agent 最终消息时写入列表（StreamState 由 MessageList 通过 streamSessionId 去重处理）', () => {
     // 预置一个活跃流式会话
     useStreamStore.setState({
       streams: new Map([
@@ -172,74 +358,38 @@ describe('im.store — 流式→持久化替换', () => {
             toolCalls: [],
             status: 'streaming' as const,
             dispatchChildren: [],
-    startedAt: Date.now(),
-    events: [],
+            startedAt: Date.now(),
+            events: [],
           },
         ],
       ]),
     });
     expect(useStreamStore.getState().streams.has('sess-1')).toBe(true);
 
-    // 推送 agent 最终消息（带 stream_session_id）
-    const finalMsg: ImMessage = {
-      eventId: 'e-final',
-      roomId: '!a1:localhost',
-      sender: '@bot:local',
-      body: '最终回复',
-      eventType: 'm.room.message',
-      content: { 'io.momo-studio.stream_session_id': 'sess-1' },
-      timestamp: 10,
-    };
+    // 推送 agent 最终消息（带 streamSessionId——A 子系统：来自 SQLite messages.streamSessionId 字段）
+    const finalMsg = mk('m-final', '最终回复', 10);
+    finalMsg.streamSessionId = 'sess-1';
     useImStore.getState().receiveMessage(finalMsg);
 
     // StreamState 保留（不再 clearCompleted——AgentStreamBubble 完成后仍渲染）
     expect(useStreamStore.getState().streams.has('sess-1')).toBe(true);
     // 消息应已写入列表
-    expect(useImStore.getState().messagesByRoom.get('!a1:localhost')).toContainEqual(finalMsg);
+    expect(useImStore.getState().messagesByRoom.get('!r:localhost')).toContainEqual(finalMsg);
   });
 
   it('重复回放的消息不重复写入消息列表', () => {
-    useStreamStore.setState({
-      streams: new Map([
-        [
-          'sess-2',
-          {
-            streamSessionId: 'sess-2',
-            roomId: '!a1:localhost',
-            botUserId: '@bot:local',
-            thinking: '',
-            text: '',
-            toolCalls: [],
-            status: 'streaming' as const,
-            dispatchChildren: [],
-    startedAt: Date.now(),
-    events: [],
-          },
-        ],
-      ]),
-    });
-
-    const finalMsg: ImMessage = {
-      eventId: 'e-dup',
-      roomId: '!a1:localhost',
-      sender: '@bot:local',
-      body: '回复',
-      eventType: 'm.room.message',
-      content: { 'io.momo-studio.stream_session_id': 'sess-2' },
-      timestamp: 11,
-    };
+    const finalMsg = mk('m-dup', '回复', 11);
 
     // 第一次推送
     useImStore.getState().receiveMessage(finalMsg);
-    expect(useStreamStore.getState().streams.has('sess-2')).toBe(true);
 
-    // 第二次推送相同 eventId：去重，不再写入
+    // 第二次推送相同 id：去重，不再写入
     useImStore.getState().receiveMessage(finalMsg);
-    const msgs = useImStore.getState().messagesByRoom.get('!a1:localhost') ?? [];
-    expect(msgs.filter((m) => m.eventId === 'e-dup')).toHaveLength(1);
+    const msgs = useImStore.getState().messagesByRoom.get('!r:localhost') ?? [];
+    expect(msgs.filter((m) => m.id === 'm-dup')).toHaveLength(1);
   });
 
-  it('不含 stream_session_id 的消息不影响流式状态', () => {
+  it('不含 streamSessionId 的消息不影响流式状态', () => {
     useStreamStore.setState({
       streams: new Map([
         [
@@ -253,122 +403,16 @@ describe('im.store — 流式→持久化替换', () => {
             toolCalls: [],
             status: 'streaming' as const,
             dispatchChildren: [],
-    startedAt: Date.now(),
-    events: [],
+            startedAt: Date.now(),
+            events: [],
           },
         ],
       ]),
     });
 
-    const normalMsg: ImMessage = {
-      eventId: 'e-normal',
-      roomId: '!a1:localhost',
-      sender: '@user:local',
-      body: '普通消息',
-      eventType: 'm.room.message',
-      content: {},
-      timestamp: 12,
-    };
+    const normalMsg = mk('m-normal', '普通消息', 12);
     useImStore.getState().receiveMessage(normalMsg);
 
     expect(useStreamStore.getState().streams.has('sess-3')).toBe(true);
-  });
-});
-
-describe('im.store loadOlder', () => {
-  const mk = (id: string, body: string): ImMessage => ({
-    eventId: id,
-    roomId: '!r:localhost',
-    sender: '@u:localhost',
-    body,
-    eventType: 'm.room.message',
-    content: { body },
-    timestamp: Date.now(),
-  });
-
-  it('前置拼接新拉到的更早消息', async () => {
-    const existing = [mk('e1', 'newest'), mk('e2', 'older')];
-    mockApi.im.getMessages.mockResolvedValueOnce(existing);
-    await useImStore.getState().selectRoom('!r:localhost');
-
-    const olderBatch = [mk('o1', 'oldest1'), mk('o2', 'oldest2')];
-    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: olderBatch, hasMore: true });
-
-    await useImStore.getState().loadOlder('!r:localhost');
-
-    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
-    expect(messages.map((m) => m.eventId)).toEqual(['o1', 'o2', 'e1', 'e2']);
-  });
-
-  it('hasMore=false 时短路不发 IPC', async () => {
-    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
-    await useImStore.getState().selectRoom('!r:localhost');
-    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
-    await useImStore.getState().loadOlder('!r:localhost');
-
-    mockApi.im.loadOlderMessages.mockClear();
-    await useImStore.getState().loadOlder('!r:localhost');
-    expect(mockApi.im.loadOlderMessages).not.toHaveBeenCalled();
-  });
-
-  it('加载中再次触发会被防抖（不重复 IPC）', async () => {
-    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
-    await useImStore.getState().selectRoom('!r:localhost');
-
-    let resolveLoad!: (v: { messages: ImMessage[]; hasMore: boolean }) => void;
-    const pending = new Promise<{ messages: ImMessage[]; hasMore: boolean }>((r) => {
-      resolveLoad = r;
-    });
-    mockApi.im.loadOlderMessages.mockImplementationOnce(() => pending);
-
-    // 启动第一次 loadOlder（不 await，让它停在 ipc 调用）
-    const p1 = useImStore.getState().loadOlder('!r:localhost');
-    // 此时 loadingOlder=true，第二次应被 store 防抖 return（不调 IPC）
-    await useImStore.getState().loadOlder('!r:localhost');
-
-    expect(mockApi.im.loadOlderMessages).toHaveBeenCalledTimes(1);
-
-    // resolve 让第一次完成，避免悬挂 promise
-    resolveLoad({ messages: [], hasMore: true });
-    await p1;
-  });
-
-  it('按 eventId 去重（服务端边界重复）', async () => {
-    const existing = [mk('e1', 'a'), mk('e2', 'b')];
-    mockApi.im.getMessages.mockResolvedValueOnce(existing);
-    await useImStore.getState().selectRoom('!r:localhost');
-
-    // 服务端在边界重复推送 e2 + 新的 o1
-    const olderBatch = [mk('e2', 'b-dup'), mk('o1', 'oldest')];
-    mockApi.im.loadOlderMessages.mockResolvedValueOnce({ messages: olderBatch, hasMore: true });
-
-    await useImStore.getState().loadOlder('!r:localhost');
-
-    const messages = useImStore.getState().messagesByRoom.get('!r:localhost')!;
-    expect(messages.map((m) => m.eventId)).toEqual(['o1', 'e1', 'e2']);
-  });
-
-  it('selectRoom 切回已访问房间时保留分页累积（不重新拉取覆盖）', async () => {
-    mockApi.im.getMessages.mockResolvedValueOnce([mk('e1', 'a')]);
-    await useImStore.getState().selectRoom('!r:localhost');
-    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
-      messages: [mk('o1', 'old')],
-      hasMore: false,
-    });
-    await useImStore.getState().loadOlder('!r:localhost');
-    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
-
-    // 切到别的房间
-    mockApi.im.getMessages.mockResolvedValueOnce([mk('x1', 'x')]);
-    await useImStore.getState().selectRoom('!other:localhost');
-
-    // 切回——getMessages 不应被再次调用（保留累积）
-    mockApi.im.getMessages.mockClear();
-    await useImStore.getState().selectRoom('!r:localhost');
-    expect(mockApi.im.getMessages).not.toHaveBeenCalled();
-    // 消息仍是 2 条（e1 + o1），未被 slice(-50) 覆盖
-    expect(useImStore.getState().messagesByRoom.get('!r:localhost')!.length).toBe(2);
-    // hasMore 仍为 false（matrix-js-sdk timeline 真的没更多历史）
-    expect(useImStore.getState().hasMoreByRoom.get('!r:localhost')).toBe(false);
   });
 });
