@@ -190,6 +190,14 @@ const api: ApiSurface = {
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),
   },
+  p2p: {
+    // C8：P2P 节点发现 + 信任管理
+    getIdentity: () => invoke('p2p:getIdentity'),
+    getDiscoveredNodes: () => invoke('p2p:getDiscoveredNodes'),
+    addTrustedNode: (nodeId: string) => invoke('p2p:addTrustedNode', nodeId),
+    removeTrustedNode: (nodeId: string) => invoke('p2p:removeTrustedNode', nodeId),
+    listTrustedNodes: () => invoke('p2p:listTrustedNodes'),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

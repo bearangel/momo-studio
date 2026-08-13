@@ -10,6 +10,7 @@ import { AuditLog } from './AuditLog';
 import { ProviderSettings } from './ProviderSettings';
 import { ConversationSettings } from './ConversationSettings';
 import { AccountSettings } from './AccountSettings';
+import { NodeDiscoveryPanel } from '../p2p/NodeDiscoveryPanel';
 
 export function SettingsView() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -31,6 +32,7 @@ export function SettingsView() {
         {active === 'conversation' && <ConversationSettings />}
         {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
         {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
+        {active === 'p2p' && <NodeDiscoveryPanel />}
         {active === 'account' && <AccountSettings />}
       </div>
     </div>

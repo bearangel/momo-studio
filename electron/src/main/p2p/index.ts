@@ -1,0 +1,150 @@
+// electron/src/main/p2p/index.ts
+//
+// P2P 子系统入口（C 子系统 C8）——初始化 + IPC handlers。
+//
+// 设计要点：
+//   - initP2p() 加载或生成 NodeIdentity，串起 LocalTransport + LanTransport + Router + P2pSync。
+//     模块级单例（router/lanTransport/sync）保证 IPC handlers 能拿到运行时引用。
+//   - registerP2pHandlers() 暴露 5 个 IPC：
+//       p2p:getIdentity         当前节点身份
+//       p2p:getDiscoveredNodes  发现的节点列表（带 trusted 标记）
+//       p2p:addTrustedNode      信任节点（按 nodeId 从 discoveredNodes 查公钥）
+//       p2p:removeTrustedNode   取消信任
+//       p2p:listTrustedNodes    信任节点完整列表
+//   - 本 task 不实际接入 main/index.ts 启动流程（C8 仅提供函数，C9+ 集成）。
+//
+// 与 C7 sync.ts 的关系：
+//   sync 通过 router.onIncoming(handler) 订阅，router opts.onIncoming 兼容回调保留空函数。
+//   onRemoteMessage 当前空实现——后续 task 接入 messages repo 调 insertMessage。
+import { ipcMain } from 'electron';
+import { Router } from './router';
+import { LocalTransport } from './local-transport';
+import { LanTransport } from './lan-transport';
+import {
+  loadIdentity,
+  generateIdentity,
+  saveIdentity,
+} from './identity';
+import {
+  listTrustedNodes,
+  addTrustedNode,
+  removeTrustedNode,
+  isTrusted,
+  getTrustedPublicKey,
+} from './trust-store';
+import { P2pSync, type SyncMessage } from './sync';
+
+/** 模块级单例（initP2p 创建，IPC handlers / stopP2p 引用） */
+let router: Router | null = null;
+let lanTransport: LanTransport | null = null;
+let sync: P2pSync | null = null;
+/** 当前节点身份缓存（getIdentity handler 用） */
+let currentIdentity: { nodeId: string; displayName: string } | null = null;
+
+/**
+ * 初始化 P2P 子系统。
+ * 加载或生成 NodeIdentity → 创建 LocalTransport + LanTransport + Router + P2pSync → start。
+ * 幂等：重复调用会先停止旧实例（防止 mDNS 端口泄漏）。
+ */
+export async function initP2p(): Promise<void> {
+  // 幂等保护：重复调用先清理旧实例
+  if (router) {
+    await stopP2p();
+  }
+
+  // 1. 节点身份：加载或生成
+  let id = loadIdentity();
+  if (!id) {
+    id = generateIdentity('My Momo Node');
+    saveIdentity(id);
+  }
+  currentIdentity = { nodeId: id.nodeId, displayName: id.displayName };
+
+  // 2. 传输层：本地（无 IO）+ 局域网（mDNS + TCP）
+  const local = new LocalTransport(id);
+  lanTransport = new LanTransport({
+    identity: id,
+    trustStore: { isTrusted, getTrustedPublicKey },
+  });
+
+  // 3. 路由层：按 nodeId 选 transport
+  // onIncoming 兼容回调保留空函数——C7 sync 通过 router.onIncoming(handler) 订阅
+  router = new Router({
+    localNodeId: id.nodeId,
+    localTransport: local,
+    lanTransport,
+    onIncoming: () => {
+      // sync.start() 订阅 router.onIncoming 接管所有入站消息
+    },
+  });
+  await router.start();
+
+  // 4. 应用层同步：把对端 message 写本地（onRemoteMessage 后续接入 messages repo）
+  sync = new P2pSync({
+    router,
+    localNodeId: id.nodeId,
+    onRemoteMessage: (_msg: SyncMessage) => {
+      // TODO(C9+): import messages repo，调用 insertMessage(msg, source='lan')
+    },
+  });
+  sync.start();
+}
+
+/**
+ * 停止 P2P 子系统，释放所有传输层资源（TCP 连接 + mDNS 广告）。
+ * 反向顺序：sync → router（router.stop 会停掉所有 transport）。
+ */
+export async function stopP2p(): Promise<void> {
+  sync?.stop();
+  sync = null;
+  await router?.stop();
+  router = null;
+  lanTransport = null;
+  currentIdentity = null;
+}
+
+/**
+ * 注册 P2P IPC handlers（5 个 p2p: 通道）。
+ * 必须在 initP2p() 之后调用（getIdentity / getDiscoveredNodes 依赖模块单例）。
+ *
+ * 幂等性：Electron ipcMain.handle 重复注册同通道会抛错；调用方需保证只调一次。
+ */
+export function registerP2pHandlers(): void {
+  ipcMain.handle('p2p:getIdentity', () => currentIdentity);
+
+  ipcMain.handle('p2p:getDiscoveredNodes', () => {
+    if (!lanTransport) return [];
+    const trusted = new Set(listTrustedNodes().map((n) => n.nodeId));
+    return lanTransport.discoverNodes().map((n) => ({
+      nodeId: n.nodeId,
+      displayName: n.displayName,
+      transport: n.transport,
+      trusted: trusted.has(n.nodeId),
+      lastSeen: n.lastSeen,
+    }));
+  });
+
+  ipcMain.handle('p2p:addTrustedNode', async (_evt, nodeId: string) => {
+    if (!lanTransport) throw new Error('P2P 子系统未初始化');
+    const node = lanTransport.discoverNodes().find((n) => n.nodeId === nodeId);
+    if (!node) throw new Error(`未发现节点 ${nodeId}`);
+    addTrustedNode({
+      nodeId: node.nodeId,
+      displayName: node.displayName,
+      publicKey: node.publicKey,
+      trustedAt: Date.now(),
+    });
+  });
+
+  ipcMain.handle('p2p:removeTrustedNode', (_evt, nodeId: string) => {
+    removeTrustedNode(nodeId);
+  });
+
+  ipcMain.handle('p2p:listTrustedNodes', () =>
+    listTrustedNodes().map((n) => ({
+      nodeId: n.nodeId,
+      displayName: n.displayName,
+      trustedAt: n.trustedAt,
+    })),
+  );
+}
