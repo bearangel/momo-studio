@@ -124,6 +124,12 @@ export const useImStore = create<ImState>((set, get) => ({
     } else {
       try {
         const { messages, eventsByMessage } = await ipc.im.getMessages(roomId);
+        // A8 fix：把 events 灌入 stream.store，让重启后能从 events 重建 StreamState。
+        // 否则 MessageBubble 查 stream.store.get(message.id) 返回 undefined，所有历史
+        // agent 消息都只渲染 message.body，thinking/toolCalls/dispatches 富信息不显示。
+        for (const [msgId, evs] of Object.entries(eventsByMessage)) {
+          useStreamStore.getState().hydrateFromEvents(msgId, evs);
+        }
         set((state) => {
           const msgMap = new Map(state.messagesByRoom);
           msgMap.set(roomId, messages);
@@ -172,6 +178,11 @@ export const useImStore = create<ImState>((set, get) => ({
     set((s) => ({ loadingOlderByRoom: new Map(s.loadingOlderByRoom).set(roomId, true) }));
     try {
       const result = await ipc.im.loadOlderMessages(roomId, beforeTs, 30);
+      // A8 fix：翻页拉到更早消息的 events 也要灌入 stream.store（与 selectRoom 一致）。
+      // hydrateFromEvents 是幂等覆盖式写入，边界重复推送同一 messageId 也安全。
+      for (const [msgId, evs] of Object.entries(result.eventsByMessage)) {
+        useStreamStore.getState().hydrateFromEvents(msgId, evs);
+      }
       set((s) => {
         const map = new Map(s.messagesByRoom);
         const cur = map.get(roomId) ?? [];

@@ -338,6 +338,107 @@ describe('im.store loadOlder', () => {
   });
 });
 
+describe('im.store — 重启场景：hydrateFromEvents 接线（A8 fix）', () => {
+  beforeEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+  });
+
+  it('selectRoom 后把 eventsByMessage 喂给 stream.store.hydrateFromEvents（重建 StreamState）', async () => {
+    // IPC 返回带 final 事件的 eventsByMessage——模拟重启后从 SQLite 拉的完整 events
+    const messages: ImMessage[] = [mk('m1', 'hi', 1), mk('m2', 'done', 2)];
+    const eventsByMessage: Record<string, MessageEventRow[]> = {
+      m1: [mkEvent('e1', 'm1', 0), mkEvent('e2', 'm1', 1)],
+      m2: [
+        mkEvent('e3', 'm2', 0),
+        { ...mkEvent('e4', 'm2', 1), eventType: 'final', payload: {} },
+      ],
+    };
+    mockApi.im.getMessages.mockResolvedValue({ messages, eventsByMessage });
+
+    await useImStore.getState().selectRoom('!a1:localhost');
+
+    // 两个 messageId 都应已重建 StreamState
+    const s1 = useStreamStore.getState().streams.get('m1');
+    expect(s1).toBeDefined();
+    expect(s1!.messageId).toBe('m1');
+    const s2 = useStreamStore.getState().streams.get('m2');
+    expect(s2).toBeDefined();
+    expect(s2!.messageId).toBe('m2');
+    // m2 含 final 事件，status=done
+    expect(s2!.status).toBe('done');
+  });
+
+  it('selectRoom 时 eventsByMessage 为空数组也应安全处理（无流式历史消息不抛错）', async () => {
+    const messages: ImMessage[] = [mk('m1', 'plain', 1)];
+    mockApi.im.getMessages.mockResolvedValue({ messages, eventsByMessage: {} });
+
+    await expect(useImStore.getState().selectRoom('!a1:localhost')).resolves.not.toThrow();
+  });
+
+  it('loadOlder 后老消息的 events 也灌入 stream.store（翻页场景）', async () => {
+    // 先 selectRoom 初始化房间
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+    expect(useStreamStore.getState().streams.size).toBe(0);
+
+    // 翻页：返回 m0 + events（含 final → status=done）
+    const olderEvents: Record<string, MessageEventRow[]> = {
+      m0: [
+        mkEvent('e-old-1', 'm0', 0),
+        { ...mkEvent('e-old-2', 'm0', 1), eventType: 'final', payload: {} },
+      ],
+    };
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [mk('m0', 'old', 5)],
+      eventsByMessage: olderEvents,
+      hasMore: false,
+    });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    // m0 应已被 hydrate 到 stream.store
+    const s0 = useStreamStore.getState().streams.get('m0');
+    expect(s0).toBeDefined();
+    expect(s0!.messageId).toBe('m0');
+    expect(s0!.status).toBe('done');
+  });
+
+  it('loadOlder 对边界重复的 messageId 不重复 hydrate（已是最新，覆盖式写入幂等）', async () => {
+    // 初始化：m1 已在 stream.store
+    mockApi.im.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {
+        m1: [mkEvent('e1', 'm1', 0)],
+      },
+    });
+    await useImStore.getState().selectRoom('!r:localhost');
+    expect(useStreamStore.getState().streams.get('m1')).toBeDefined();
+
+    // 翻页：m1 在边界重复推送——新加 final event
+    const olderEvents: Record<string, MessageEventRow[]> = {
+      m1: [
+        mkEvent('e1', 'm1', 0),
+        { ...mkEvent('e-final', 'm1', 1), eventType: 'final', payload: {} },
+      ],
+    };
+    mockApi.im.loadOlderMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'dup', 5)],
+      eventsByMessage: olderEvents,
+      hasMore: false,
+    });
+
+    await useImStore.getState().loadOlder('!r:localhost');
+
+    // m1 应被 hydrate 覆盖——final 事件后 status=done
+    const s1 = useStreamStore.getState().streams.get('m1');
+    expect(s1).toBeDefined();
+    expect(s1!.status).toBe('done');
+  });
+});
+
 describe('im.store — 流式→持久化替换', () => {
   beforeEach(() => {
     useStreamStore.setState({ streams: new Map() });
