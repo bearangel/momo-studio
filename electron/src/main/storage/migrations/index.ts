@@ -392,6 +392,52 @@ SET default_tools = '${BUILTIN_DEFAULT_TOOLS_JSON}'
 WHERE source = 'builtin';
 `.trim(),
   },
+  {
+    version: 17,
+    sql: `
+-- A 子系统：消息源统一——SQLite 升为唯一真相源
+-- 1. messages：所有 IM 消息统一表（user / agent / dispatch / task_reply）
+-- 2. message_events：事件溯源表（所有 stream chunk 落一行）
+-- 详见 docs/specs/2026-08-13-platform-redesign-overview.md
+
+CREATE TABLE IF NOT EXISTS messages (
+  id                       TEXT PRIMARY KEY NOT NULL,
+  room_id                  TEXT NOT NULL,
+  sender                   TEXT NOT NULL,
+  event_type               TEXT NOT NULL,
+  body                     TEXT NOT NULL DEFAULT '',
+  stream_session_id        TEXT,
+  parent_stream_session_id TEXT,
+  segment_of               TEXT,
+  segment_index            INTEGER,
+  status                   TEXT NOT NULL DEFAULT 'done',
+  source                   TEXT NOT NULL DEFAULT 'local',
+  matrix_event_id          TEXT,
+  workspace_id             TEXT,
+  task_id                  TEXT,
+  created_at               INTEGER NOT NULL,
+  updated_at               INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_stream       ON messages(stream_session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_parent       ON messages(parent_stream_session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_task         ON messages(task_id);
+
+CREATE TABLE IF NOT EXISTS message_events (
+  id           TEXT PRIMARY KEY NOT NULL,
+  message_id   TEXT NOT NULL,
+  seq          INTEGER NOT NULL,
+  event_type   TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  UNIQUE(message_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_msg_seq ON message_events(message_id, seq);
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
