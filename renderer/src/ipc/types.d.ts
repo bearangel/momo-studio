@@ -79,6 +79,11 @@ export interface AgentAssignment {
   parentInstanceId: string | null;
   /** 有无 API key override（实际 key 在 keychain） */
   hasApiKeyOverride: boolean;
+  /**
+   * UI 展示用的 agent 名称（可选，由 main process 在 listAssignments 时 join 注入）。
+   * 缺失时回退到 botMatrixUserId。Mention 菜单 / TaskChip 优先用此字段。
+   */
+  agentName?: string;
 }
 
 /** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */
@@ -88,6 +93,27 @@ export interface BuiltinSuggestion {
   suggestedPlatform?: 'openai' | 'anthropic';
 }
 export type BuiltinSuggestionMap = Record<string, BuiltinSuggestion>;
+
+/**
+ * 任务状态（与 electron/src/main/storage/tasks/state-machine.ts 的 TaskStatus 同步）。
+ * 这里只声明当前 UI 需要的最小子集；后续 B 子系统任务可扩展字段。
+ */
+export type TaskStatus =
+  | 'draft'
+  | 'pending'
+  | 'assigned'
+  | 'in_progress'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+/** 任务行（renderer 视图，与 electron 端 TaskRow 子集对齐）。 */
+export interface TaskRow {
+  id: string;
+  title: string;
+  status: TaskStatus;
+}
 
 export interface StartAgentInput {
   assignment: AgentAssignment;
