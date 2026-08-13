@@ -47,8 +47,6 @@ import {
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
 import type { ToolModule, ToolContext } from './tools/types';
-import { getTodosForSession } from './tools/todo-tools';
-import type { TodoItem } from './tools/todo-types';
 import { SkillRegistry } from '../skill/registry';
 import type { McpToolInfo } from '../mcp/types';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
@@ -889,16 +887,7 @@ export async function runChatLoop(
     if (finishReason === 'stop' || toolCalls.length === 0) {
       process.off('message', abortListener);
       const finalText = accumulatedText.trim() || '(空回复)';
-      await sendFinalMessage(
-        client,
-        roomId,
-        streamSessionId,
-        finalText,
-        accumulatedThinking,
-        toolCallHistory,
-        parentStreamSessionId,
-        getTodosForSession(streamSessionId),
-      );
+      await sendFinalMessage(client, roomId, streamSessionId, finalText);
       sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
       if (stats) stats.toolCallsUsed = toolCallCount;
       return finalText;
@@ -925,11 +914,7 @@ export async function runChatLoop(
       if (dupCount >= MAX_DUPLICATE_TOOLS) {
         process.off('message', abortListener);
         const finalText = accumulatedText.trim() || `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${tc.name}，已强制终止防循环)`;
-        await sendFinalMessage(
-          client, roomId, streamSessionId, finalText,
-          accumulatedThinking, toolCallHistory, parentStreamSessionId,
-          getTodosForSession(streamSessionId),
-        );
+        await sendFinalMessage(client, roomId, streamSessionId, finalText);
         sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
@@ -938,16 +923,7 @@ export async function runChatLoop(
       if (budgetRemaining <= 0) {
         process.off('message', abortListener);
         const finalText = accumulatedText.trim() || '(工具预算耗尽)';
-        await sendFinalMessage(
-          client,
-          roomId,
-          streamSessionId,
-          finalText,
-          accumulatedThinking,
-          toolCallHistory,
-          parentStreamSessionId,
-          getTodosForSession(streamSessionId),
-        );
+        await sendFinalMessage(client, roomId, streamSessionId, finalText);
         sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
@@ -964,11 +940,7 @@ export async function runChatLoop(
           // 防无限分段：超过上限时强制结束 chat loop
           process.off('message', abortListener);
           const finalText = accumulatedText.trim() || summary || '(分段上限)';
-          await sendFinalMessage(
-            client, roomId, streamSessionId, finalText,
-            accumulatedThinking, toolCallHistory, parentStreamSessionId,
-            getTodosForSession(streamSessionId),
-          );
+          await sendFinalMessage(client, roomId, streamSessionId, finalText);
           sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
           if (stats) stats.toolCallsUsed = toolCallCount;
           return finalText;
@@ -979,46 +951,17 @@ export async function runChatLoop(
         // 分段持久化的 session id 加后缀，避免与最终消息冲突
         const segSessionId = `${streamSessionId}#seg${segmentCount}`;
         try {
-          await client.sendEvent(
-            roomId,
-            'm.room.message',
-            {
-              msgtype: 'm.text',
-              body: segText,
-              'io.momo-studio.stream_session_id': segSessionId,
-              ...(parentStreamSessionId
-                ? { 'io.momo-studio.parent_stream_session_id': parentStreamSessionId }
-                : {}),
-              'io.momo-studio.segment_index': segmentCount,
-              'io.momo-studio.segment_of': streamSessionId,
-              // v1.7.3 修复：分段消息带上 thinking + tool_calls 快照（在清零之前）。
-              // 之前分段消息只有 body，thinking/tool_calls 全部丢失——导出和重启后无法
-              // 看到分段消息的诊断数据。每段带上当前快照（可能跨段重复，但优先保证不丢）。
-              ...(accumulatedThinking
-                ? { 'io.momo-studio.thinking': accumulatedThinking }
-                : {}),
-              // v1.7.4 Bug 4：增量持久化——本段只带自上次分段以来新增的 tool_calls，
-              // 避免每段重复全量（v1.7.3 全量快照导致用户导出 3 段消息工具调用列表完全相同）。
-              // tool_calls_offset 字段记录本段起始索引，renderer 重建时按 offset 还原顺序。
-              ...(() => {
-                const incremental = toolCallHistory.slice(lastSegmentToolCallCount);
-                if (incremental.length === 0) return {};
-                return {
-                  'io.momo-studio.tool_calls': incremental,
-                  'io.momo-studio.tool_calls_offset': lastSegmentToolCallCount,
-                };
-              })(),
-            },
-            '',
-          );
+          // A7：Matrix event 仅发 body（联网备份用）。thinking/tool_calls/segment 元数据
+          // 由 routeChunkToBuffer 落 SQLite message_events 表（A 子系统唯一真相源）。
+          await client.sendEvent(roomId, 'm.room.message', {
+            msgtype: 'm.text',
+            body: segText,
+            'io.momo-studio.stream_session_id': segSessionId,
+          }, '');
         } catch (err) {
           // 持久化失败不致命：LLM 仍能继续工作，只是这一段没存到 Matrix
           console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
         }
-
-        // v1.7.4 诊断日志：分段持久化字段快照（用于排查重启还原字段丢失）
-        const incrementalCount = toolCallHistory.length - lastSegmentToolCallCount;
-        console.error(`[trace] task_complete segment: segmentIndex=${segmentCount}, bodyLength=${segText.length}, thinkingLength=${accumulatedThinking.length}, toolCallsIncremental=${incrementalCount}, toolCallsOffset=${lastSegmentToolCallCount}, parentStreamSessionId=${parentStreamSessionId ?? 'null'}`);
 
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
@@ -1030,12 +973,14 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_call',
           streamSessionId,
+          callId: tc.id,
           toolName: 'task_complete',
           args: tc.arguments,
         });
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
+          callId: tc.id,
           toolName: 'task_complete',
           result: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已持久化。${nextStep ? `继续：${nextStep}` : '继续工作'}`,
           success: true,
@@ -1093,12 +1038,14 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_call',
           streamSessionId,
+          callId: tc.id,
           toolName: 'compact',
           args: tc.arguments,
         });
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
+          callId: tc.id,
           toolName: 'compact',
           result: `上下文已压缩：${oldMsgCount} 条消息 → 1 条总结（${summary.length} 字符）。继续工作`,
           success: true,
@@ -1134,6 +1081,7 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_call',
           streamSessionId,
+          callId: tc.id,
           toolName: tc.name,
           args: tc.arguments,
           isDispatch: true,
@@ -1145,6 +1093,7 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_call',
           streamSessionId,
+          callId: tc.id,
           toolName: tc.name,
           args: tc.arguments,
         });
@@ -1165,6 +1114,7 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
+          callId: tc.id,
           toolName: tc.name,
           result,
           success: true,
@@ -1177,16 +1127,7 @@ export async function runChatLoop(
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
           process.off('message', abortListener);
           const finalText = accumulatedText.trim() || '(中断)';
-          await sendFinalMessage(
-            client,
-            roomId,
-            streamSessionId,
-            finalText,
-            accumulatedThinking,
-            toolCallHistory,
-            parentStreamSessionId,
-            getTodosForSession(streamSessionId),
-          );
+          await sendFinalMessage(client, roomId, streamSessionId, finalText);
           sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
           if (stats) stats.toolCallsUsed = toolCallCount;
           return finalText;
@@ -1204,6 +1145,7 @@ export async function runChatLoop(
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
+          callId: tc.id,
           toolName: tc.name,
           result,
           success: false,
@@ -1277,9 +1219,6 @@ ${subList}
 - 大文件用 \`read_file\` 的 offset/limit 分页读取（默认 2000 行/次）`;
 }
 
-/** Matrix PDU 上限 65535 字节；留 ~10KB 给协议开销，内容限制 55KB */
-const MAX_EVENT_CONTENT_BYTES = 55_000;
-
 /**
  * v1.5.6 task_complete 最大分段次数。
  * 防止 LLM 误用（每次 task_complete 都触发 sendEvent + 重置上下文，无限分段会浪费 token + 持久化垃圾）。
@@ -1288,217 +1227,43 @@ const MAX_EVENT_CONTENT_BYTES = 55_000;
 const MAX_TASK_SEGMENTS = 5;
 
 /**
- * 截断工具调用记录中的大字段。
- * v1.5.7：更激进截断（result 80 字符，args 150 字符），防几十次工具调用撑爆 PDU。
- */
-function truncateToolCallFields(calls: ToolCallRecord[]): ToolCallRecord[] {
-  return calls.map((tc) => ({
-    ...tc,
-    result: tc.result.length > 80 ? tc.result.slice(0, 80) + '...' : tc.result,
-    args: truncateArgs(tc.args),
-  }));
-}
-
-/** 截断 args 对象中超过 150 字符的字符串值 */
-function truncateArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (typeof value === 'string' && value.length > 150) {
-      out[key] = value.slice(0, 150) + '...';
-    } else {
-      out[key] = value;
-    }
-  }
-  return out;
-}
-
-/**
- * 渐进式截断 event content，确保 JSON 序列化后不超过 MAX_EVENT_CONTENT_BYTES。
- * 降级顺序：截断工具字段 → 截断 thinking → 删除 thinking → 删除 tool_calls → 截断 body。
- * body（正文）保留优先级最低但仍兜底（最坏情况至少能发出消息，避免 sendEvent 抛错导致
- * chat loop 把 sendFinal 失败当 dispatch 失败 retry，形成死循环）。
+ * 发送最终 Matrix m.room.message（仅 body——联网备份用）。
  *
- * v1.5.5：`io.momo-studio.dispatches` 字段永不参与截断——dispatch 元数据小（每个 ~100 字节）
- * 但删除后重启 DispatchChip 完全消失。dispatch 单独存字段而非混在 tool_calls 内。
- */
-function fitEventContent(
-  content: Record<string, unknown>,
-  thinking: string,
-  toolCalls: ToolCallRecord[],
-): Record<string, unknown> {
-  const jsonSize = (obj: unknown): number => Buffer.byteLength(JSON.stringify(obj), 'utf-8');
-
-  // 0级：完整内容
-  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-
-  // 1级：截断工具调用中的大字段
-  if (toolCalls.length > 0) {
-    content['io.momo-studio.tool_calls'] = truncateToolCallFields(toolCalls);
-    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-  }
-
-  // 2级：截断 thinking 到 3000 字符
-  if (thinking) {
-    content['io.momo-studio.thinking'] = thinking.slice(0, 3000) + '\n...(思考过程已截断)';
-    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-  }
-
-  // 3级：删除 thinking
-  delete content['io.momo-studio.thinking'];
-  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-
-  // 4级：v1.5.7 不再全删 tool_calls——保留最近 N 条，逐步减少
-  const allCalls = Array.isArray(content['io.momo-studio.tool_calls']) ? content['io.momo-studio.tool_calls'] as ToolCallRecord[] : [];
-  for (const keep of [30, 20, 10, 5]) {
-    if (allCalls.length > keep) {
-      const kept = allCalls.slice(-keep);
-      content['io.momo-studio.tool_calls'] = kept;
-      // dispatches 只保留对应的
-      const keptIds = new Set(kept.map((c) => c.subStreamSessionId).filter(Boolean));
-      if (Array.isArray(content['io.momo-studio.dispatches'])) {
-        const allDisps = content['io.momo-studio.dispatches'] as Array<{ subStreamSessionId?: string }>;
-        content['io.momo-studio.dispatches'] = allDisps.filter((d) =>
-          !d.subStreamSessionId || keptIds.has(d.subStreamSessionId),
-        );
-      }
-    }
-    if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-  }
-
-  // 5级：仍然超——删所有 tool_calls（最后手段）
-  delete content['io.momo-studio.tool_calls'];
-  if (jsonSize(content) <= MAX_EVENT_CONTENT_BYTES) return content;
-
-  // 6级：body 截断到 10KB
-  const bodyStr = typeof content.body === 'string' ? content.body : '';
-  if (bodyStr.length > 10_000) {
-    content.body = bodyStr.slice(0, 10_000) + '\n\n...(正文已截断，原长度 ' + bodyStr.length + ' 字符)';
-    delete content['io.momo-studio.todos'];
-  }
-  return content;
-}
-
-/**
- * 从 toolCallHistory 提取 dispatch 委派项，单独持久化到 `io.momo-studio.dispatches`。
- * 与 tool_calls 分离的原因：fitEventContent 4 级删除 tool_calls 时不会丢失 dispatch 元数据，
- * 重启后 DispatchChip 仍可还原。
- */
-function extractDispatches(toolCalls: ToolCallRecord[]): Array<{
-  name: string;
-  success: boolean;
-  subStreamSessionId?: string;
-  subAgentName?: string;
-  subAgentAvatar?: string;
-}> {
-  return toolCalls
-    .filter((tc) => tc.isDispatch === true || tc.name.startsWith('dispatch:'))
-    .map((tc) => ({
-      name: tc.name,
-      success: tc.success,
-      ...(tc.subStreamSessionId ? { subStreamSessionId: tc.subStreamSessionId } : {}),
-      ...(tc.subAgentName ? { subAgentName: tc.subAgentName } : {}),
-      ...(tc.subAgentAvatar ? { subAgentAvatar: tc.subAgentAvatar } : {}),
-    }));
-}
-
-/** v1.5.5：导出供单测验证 PDU 截断时 dispatches 字段保留 */
-export const __fitEventContentForTest = fitEventContent;
-export const __extractDispatchesForTest = extractDispatches;
-
-/**
- * 发送最终 Matrix m.room.message（含持久化元数据）。
- * renderer 据此渲染 thinking 折叠区 + 工具调用卡片 + 正文。
- * 渐进式截断防止 PDU 超过 64KB 限制（复杂任务 tool_calls + thinking 可达数万字）。
+ * A7 改造：thinking / tool_calls / todos / dispatches / parent_stream_session_id 等
+ * 富字段不再写入 Matrix event content（A 子系统改由 SQLite message_events 表承载，
+ * routeChunkToBuffer 在主进程侧把 stream chunk 落盘）。Matrix event 退化为纯 body 备份，
+ * 仅保留 stream_session_id 用于 Matrix↔SQLite 行关联。
  *
- * v1.5：todos 参数携带该会话的最终任务列表，写入 `io.momo-studio.todos` 字段，
- * renderer 重启后可据此还原 todo 面板（与 thinking / tool_calls 同等的持久化待遇）。
+ * sendEvent 兜底：即使 body 超长或网络故障，也不能让本函数抛错——chat loop 会把失败
+ * 当 dispatch 错误重试形成死循环。降级到截断 body 重发；仍失败则吞掉错误。
  */
 async function sendFinalMessage(
   client: MatrixClient,
   roomId: string,
   streamSessionId: string,
   text: string,
-  thinking: string,
-  toolCalls: ToolCallRecord[],
-  /** v1.4 嵌套：子 agent 的最终消息携带此字段，renderer/MessageList 据此把它嵌套到 PM 气泡 */
-  parentStreamSessionId?: string,
-  /** v1.5 todowrite：本会话的最终任务列表；空数组不写入（避免无意义的空字段） */
-  todos?: TodoItem[],
 ): Promise<void> {
   const content: Record<string, unknown> = {
     msgtype: 'm.text',
     body: text,
     'io.momo-studio.stream_session_id': streamSessionId,
   };
-  // v1.5.5：dispatch 单独持久化，避免 tool_calls 被 4 级截断删除时丢失
-  const dispatches = extractDispatches(toolCalls);
-  if (dispatches.length > 0) content['io.momo-studio.dispatches'] = dispatches;
-  if (parentStreamSessionId) {
-    content['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
-  }
-
-  // v1.5.6 持久化分层：大 thinking/tool_calls/todos 存 SQLite，Matrix event 只引 meta_id
-  // 判定阈值 5KB：小于此值继续直接放 Matrix（兼容旧渲染路径，简单消息不多一次 IPC）
-  const toolCallsJson = toolCalls.length > 0 ? JSON.stringify(toolCalls) : '';
-  const todosJson = todos && todos.length > 0 ? JSON.stringify(todos) : '';
-  if (shouldSplitMeta(thinking, toolCallsJson, todosJson)) {
-    const metaId = await requestWriteAgentMeta({
-      thinking: thinking || undefined,
-      toolCalls: toolCallsJson || undefined,
-      todos: todosJson || undefined,
-    });
-    if (metaId) {
-      // 分层成功：Matrix event 只存 meta_id，不存 thinking/tool_calls/todos
-      content['io.momo-studio.agent_meta_id'] = metaId;
-    } else {
-      // 分层失败（IPC 错误/超时）：降级到全字段入 Matrix（原有路径）
-      if (thinking) content['io.momo-studio.thinking'] = thinking;
-      if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
-      if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
-    }
-  } else {
-    // 小内容：直接放 Matrix event（无 IPC 开销）
-    if (thinking) content['io.momo-studio.thinking'] = thinking;
-    if (toolCalls.length > 0) content['io.momo-studio.tool_calls'] = toolCalls;
-    if (todos && todos.length > 0) content['io.momo-studio.todos'] = todos;
-  }
-
-  // 渐进式截断，确保不超 Matrix PDU 限制
-  const fitted = fitEventContent(content, thinking, toolCalls);
-
-  // v1.7.4 诊断日志：记录最终消息的字段大小 + 截断级别
-  const fitLevel = (() => {
-    const size = Buffer.byteLength(JSON.stringify(fitted), 'utf-8');
-    if (size > MAX_EVENT_CONTENT_BYTES) return 'truncated-fallback';
-    if (thinking && !fitted['io.momo-studio.thinking']) return 'thinking-deleted';
-    if (toolCalls.length > 0 && !fitted['io.momo-studio.tool_calls']) return 'tool_calls-deleted';
-    return 'full';
-  })();
-  console.error(`[trace] sendFinalMessage: bodyLength=${text.length}, thinkingLength=${thinking.length}, toolCallsCount=${toolCalls.length}, dispatchedThroughMeta=${!!fitted['io.momo-studio.agent_meta_id']}, fitLevel=${fitLevel}, parentStreamSessionId=${parentStreamSessionId ?? 'null'}`);
-
-  // v1.5.5：sendEvent 兜底——即使 fitEventContent 后仍超 PDU（极端情况），
-  // 也不能让 sendFinalMessage 抛错（chat loop 会把失败当 dispatch 错误重试，死循环）。
-  // 降级到 body-only 重发；仍失败则吞掉错误并打 warning（消息丢失好过死循环）。
   try {
-    await client.sendEvent(roomId, 'm.room.message', fitted, '');
+    await client.sendEvent(roomId, 'm.room.message', content, '');
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.warn(`[sendFinalMessage] sendEvent 失败 (${errMsg})，降级到 body-only 重发`);
+    console.warn(`[sendFinalMessage] sendEvent 失败 (${errMsg})，降级到截断 body 重发`);
     const minimal: Record<string, unknown> = {
       msgtype: 'm.text',
-      body: typeof fitted.body === 'string' ? fitted.body.slice(0, 10_000) : '(正文超长)',
+      body: text.length > 10_000 ? text.slice(0, 10_000) + '\n\n...(正文已截断)' : text,
       'io.momo-studio.stream_session_id': streamSessionId,
     };
-    if (dispatches.length > 0) minimal['io.momo-studio.dispatches'] = dispatches;
-    if (parentStreamSessionId) {
-      minimal['io.momo-studio.parent_stream_session_id'] = parentStreamSessionId;
-    }
     try {
       await client.sendEvent(roomId, 'm.room.message', minimal, '');
     } catch (err2) {
       // 极端情况（服务端故障/网络断）：吞掉错误，避免 chat loop 死循环
       console.error(
-        `[sendFinalMessage] body-only 重发也失败：${err2 instanceof Error ? err2.message : String(err2)}`,
+        `[sendFinalMessage] 截断 body 重发也失败：${err2 instanceof Error ? err2.message : String(err2)}`,
       );
     }
   }
@@ -1527,49 +1292,6 @@ async function resolveMaxToolCalls(roomId: string): Promise<number> {
     process.on('message', handler);
     process.send?.({ type: 'settings:resolveMaxToolCalls', id, roomId });
   });
-}
-
-/**
- * v1.5.6：子进程通过 IPC 请求主进程写入 agent_meta 表。
- * 返回 meta_id（成功）或 null（失败/超时——子进程降级到原 Matrix 全字段持久化）。
- */
-async function requestWriteAgentMeta(input: {
-  thinking?: string;
-  toolCalls?: string;
-  todos?: string;
-}): Promise<string | null> {
-  if (!process.send) return null;
-  return new Promise<string | null>((resolve) => {
-    const id = randomUUID();
-    const timer = setTimeout(() => {
-      process.off('message', handler);
-      console.warn('[requestWriteAgentMeta] IPC 超时，降级到 Matrix 全字段');
-      resolve(null);
-    }, 5000);
-    const handler = (msg: unknown): void => {
-      const m = msg as { type?: string; id?: string; metaId?: string; error?: string };
-      if (m.type === 'agent:metaWritten' && m.id === id) {
-        clearTimeout(timer);
-        process.off('message', handler);
-        if (m.error) {
-          console.warn(`[requestWriteAgentMeta] 写入失败：${m.error}，降级到 Matrix 全字段`);
-          resolve(null);
-        } else {
-          resolve(m.metaId ?? null);
-        }
-      }
-    };
-    process.on('message', handler);
-    process.send?.({ type: 'agent:writeMeta', id, ...input });
-  });
-}
-
-/**
- * v1.5.7：禁用持久化分层。renderer agent_meta 异步加载不稳定，改为全字段入 Matrix event
- * + fitEventContent 渐进截断（保留最近 N 条 tool_calls 而非全删）。
- */
-function shouldSplitMeta(_thinking: string, _toolCallsJson: string, _todosJson: string): boolean {
-  return false;
 }
 
 /**

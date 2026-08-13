@@ -449,6 +449,8 @@ export type StreamChunk =
   | {
       type: 'tool_call';
       streamSessionId: string;
+      /** A7：工具调用唯一 ID（tool_call ↔ tool_result 配对用，MessageEventBuffer 据此落盘） */
+      callId: string;
       toolName: string;
       args: Record<string, unknown>;
       /** v1.4 嵌套：标记此 tool_call 为 PM 的 dispatch 委派（区分普通工具调用） */
@@ -463,6 +465,8 @@ export type StreamChunk =
   | {
       type: 'tool_result';
       streamSessionId: string;
+      /** A7：配对的 tool_call callId（与对应 tool_call chunk 的 callId 一致） */
+      callId: string;
       toolName: string;
       result: string;
       success: boolean;

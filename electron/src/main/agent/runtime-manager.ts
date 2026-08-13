@@ -15,11 +15,16 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
-import { writeAgentMeta } from '../storage/agent-meta';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import { resolveMaxToolCalls } from '../settings/crud';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { StreamChunk } from './stream-chunk';
+import { MessageEventBuffer } from '../storage/messages/event-buffer';
+import {
+  insertMessage,
+  updateMessageStatus,
+  getMessageByStreamSessionId,
+} from '../storage/messages/repo';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
 export interface AgentRuntimeOpts {
@@ -105,6 +110,169 @@ export function setMainWindow(win: BrowserWindow | null): void {
 function relayStreamChunk(chunk: StreamChunk): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('agent:stream', chunk);
+  }
+}
+
+// === A7：stream chunk → MessageEventBuffer 落盘 ===
+
+/**
+ * 全局 MessageEventBuffer 单例。聚批 stream chunk 后单事务写入 message_events 表，
+ * flush 时批量推送给 renderer（im:message_event_batch 通道）。
+ * 单例简化生命周期管理；内部 pending 数组操作同步，并发安全。
+ */
+let eventBuffer: MessageEventBuffer | null = null;
+
+function getEventBuffer(): MessageEventBuffer {
+  if (!eventBuffer) {
+    eventBuffer = new MessageEventBuffer({
+      onFlush: (events) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return;
+        win.webContents.send('im:message_event_batch', events);
+      },
+    });
+  }
+  return eventBuffer;
+}
+
+/** 测试用：重置单例（清 pending + 销毁 timer） */
+export function __resetEventBufferForTest(): void {
+  eventBuffer?.destroy();
+  eventBuffer = null;
+}
+
+/**
+ * 把单个 StreamChunk 转换为 MessageEventBuffer.append 调用（A 子系统写入路径）。
+ *
+ * 映射关系：
+ *   start          → INSERT messages 行（status='streaming'）+ append status_change
+ *   thinking/text  → append thinking_delta / text_delta
+ *   tool_call      → append tool_call_start（callId 由 runtime-entry 在 chunk 内携带）
+ *   tool_result    → append tool_call_result（callId 配对同一工具调用）
+ *   todo_update    → append todo_update
+ *   end            → UPDATE messages status + flush + append final
+ *
+ * DB 未就绪（测试环境/表未迁移）时整包 try/catch 静默跳过——buffer 落盘是 best-effort，
+ * 不应阻塞 renderer 流式显示（relayStreamChunk 仍正常工作）。
+ */
+function routeChunkToBuffer(chunk: StreamChunk): void {
+  let msg;
+  try {
+    switch (chunk.type) {
+      case 'start': {
+        insertMessage({
+          roomId: chunk.roomId,
+          sender: chunk.botUserId,
+          eventType: 'm.room.message',
+          body: '',
+          streamSessionId: chunk.streamSessionId,
+          parentStreamSessionId: chunk.parentStreamSessionId ?? null,
+          status: 'streaming',
+        });
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'status_change',
+          payload: { status: 'streaming' },
+        });
+        return;
+      }
+      case 'thinking': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'thinking_delta',
+          payload: { delta: chunk.delta },
+        });
+        return;
+      }
+      case 'text': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'text_delta',
+          payload: { delta: chunk.delta },
+        });
+        return;
+      }
+      case 'tool_call': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'tool_call_start',
+          payload: {
+            callId: chunk.callId,
+            toolName: chunk.toolName,
+            args: chunk.args,
+            ...(chunk.isDispatch
+              ? {
+                  isDispatch: true,
+                  subStreamSessionId: chunk.subStreamSessionId,
+                  subAgentName: chunk.subAgentName,
+                  subAgentAvatar: chunk.subAgentAvatar,
+                }
+              : {}),
+          },
+        });
+        return;
+      }
+      case 'tool_result': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'tool_call_result',
+          payload: {
+            callId: chunk.callId,
+            toolName: chunk.toolName,
+            result: chunk.result,
+            success: chunk.success,
+            ...(chunk.subStatus ? { subStatus: chunk.subStatus } : {}),
+          },
+        });
+        return;
+      }
+      case 'todo_update': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        getEventBuffer().append({
+          messageId: msg.id,
+          eventType: 'todo_update',
+          payload: { todos: chunk.todos },
+        });
+        return;
+      }
+      case 'end': {
+        msg = getMessageByStreamSessionId(chunk.streamSessionId);
+        if (!msg) return;
+        const status =
+          chunk.finishReason === 'stop'
+            ? 'done'
+            : chunk.finishReason === 'interrupted'
+              ? 'aborted'
+              : 'failed';
+        updateMessageStatus(msg.id, status);
+        const buf = getEventBuffer();
+        buf.flush();
+        buf.append({
+          messageId: msg.id,
+          eventType: 'final',
+          payload: { status, error: chunk.error },
+        });
+        buf.flush();
+        return;
+      }
+    }
+  } catch (err) {
+    // DB 未就绪 / messages 表不存在（测试环境）→ 静默跳过，不阻塞流式显示
+    logger.debug('routeChunkToBuffer 跳过（DB 未就绪或表不存在）', {
+      chunkType: chunk.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -408,24 +576,22 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     error?: string;
     // v1.4 预算解析请求字段
     maxToolCalls?: number;
-  // v1.5.6 agent:writeMeta（持久化分层）
-  thinking?: string;
-  toolCalls?: string;
-  todos?: string;
-  metaId?: string;
   };
   if (!m.type) return;
 
-  // v1.4：流式 chunk → 转发到 renderer + 维护 activeStreams
+  // v1.4：流式 chunk → 转发到 renderer + 维护 activeStreams + A7 落盘到 MessageEventBuffer
   if (
     m.type === 'start' ||
     m.type === 'thinking' ||
     m.type === 'text' ||
     m.type === 'tool_call' ||
     m.type === 'tool_result' ||
+    m.type === 'todo_update' ||
     m.type === 'end'
   ) {
     relayStreamChunk(msg as StreamChunk);
+    // A7：stream chunk 同步落 SQLite message_events 表（best-effort，DB 未就绪时静默跳过）
+    routeChunkToBuffer(msg as StreamChunk);
     if (m.type === 'start' && m.streamSessionId && m.roomId) {
       // v1.5.1：同房间可能已有其他活跃 stream（PM + 子 agent 同 team room），追加而非覆盖
       const roomEntries = activeStreams.get(m.roomId) ?? [];
@@ -464,25 +630,6 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
   if (m.type === 'settings:resolveMaxToolCalls' && m.id && m.roomId) {
     const maxToolCalls = resolveMaxToolCalls(m.roomId);
     safeChildSend(child, { type: 'settings:resolved', id: m.id, maxToolCalls });
-    return;
-  }
-
-  // v1.5.6：子进程请求写入 agent_meta（持久化分层：大 thinking/tool_calls 不入 Matrix event）
-  if (m.type === 'agent:writeMeta' && m.id) {
-    try {
-      const metaId = writeAgentMeta({
-        thinking: typeof m.thinking === 'string' ? m.thinking : undefined,
-        toolCalls: typeof m.toolCalls === 'string' ? m.toolCalls : undefined,
-        todos: typeof m.todos === 'string' ? m.todos : undefined,
-      });
-      safeChildSend(child, { type: 'agent:metaWritten', id: m.id, metaId });
-    } catch (err) {
-      safeChildSend(child, {
-        type: 'agent:metaWritten',
-        id: m.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
     return;
   }
 

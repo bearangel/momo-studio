@@ -197,11 +197,12 @@ describe('runChatLoop streaming', () => {
     expect(thinking).toHaveLength(1);
     expect((thinking[0] as { delta: string }).delta).toBe('Let me think...');
 
-    // 最终消息应含 io.momo-studio.thinking 字段
+    // A7：thinking 不再写入 Matrix event（改由 SQLite message_events 承载）。
+    // 最终消息只含 body + msgtype + stream_session_id。
     expect(client.sendEvent).toHaveBeenCalledWith(
       '!room:localhost',
       'm.room.message',
-      expect.objectContaining({ 'io.momo-studio.thinking': 'Let me think...' }),
+      expect.objectContaining({ msgtype: 'm.text', body: 'Answer' }),
       '',
     );
   });
@@ -258,15 +259,12 @@ describe('runChatLoop streaming', () => {
     expect(toolResultChunk.toolName).toBe('read_file');
     expect(toolResultChunk.success).toBe(true);
 
-    // 最终消息含 io.momo-studio.tool_calls
+    // A7：tool_calls 不再写入 Matrix event（改由 SQLite message_events 承载）。
+    // 最终消息只含 body + msgtype。
     expect(client.sendEvent).toHaveBeenCalledWith(
       '!room:localhost',
       'm.room.message',
-      expect.objectContaining({
-        'io.momo-studio.tool_calls': expect.arrayContaining([
-          expect.objectContaining({ name: 'read_file', success: true }),
-        ]),
-      }),
+      expect.objectContaining({ msgtype: 'm.text', body: 'Done' }),
       '',
     );
   });
@@ -647,7 +645,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
     expect(startChunk.subAgentName).toBeUndefined();
   });
 
-  it('子 agent 最终消息携带 io.momo-studio.parent_stream_session_id', async () => {
+  it('子 agent start chunk 携带 parentStreamSessionId（A7：嵌套关系改由 stream chunk 承载）', async () => {
     mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
 
     const client = mockClient();
@@ -661,17 +659,15 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       'parent-session-456',
     );
 
-    expect(client.sendEvent).toHaveBeenCalledWith(
-      '!room:localhost',
-      'm.room.message',
-      expect.objectContaining({
-        'io.momo-studio.parent_stream_session_id': 'parent-session-456',
-      }),
-      '',
-    );
+    // A7：parent_stream_session_id 不再写入 Matrix event；改由 start chunk 携带，
+    // routeChunkToBuffer 据此写入 messages.parent_stream_session_id 列。
+    const startChunk = streamChunks().find((c) => c.type === 'start') as {
+      parentStreamSessionId?: string;
+    };
+    expect(startChunk.parentStreamSessionId).toBe('parent-session-456');
   });
 
-  it('无 parentStreamSessionId 时最终消息不含 parent_stream_session_id', async () => {
+  it('A7：最终消息只含 body + stream_session_id（无 io.momo-studio 富字段）', async () => {
     mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
 
     const client = mockClient();
@@ -681,6 +677,12 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       ([, type]) => type === 'm.room.message',
     );
     const content = call?.[2] as Record<string, unknown> | undefined;
+    // 富字段全部移除（thinking/tool_calls/todos/dispatches/parent_stream_session_id/agent_meta_id）
     expect(content?.['io.momo-studio.parent_stream_session_id']).toBeUndefined();
+    expect(content?.['io.momo-studio.thinking']).toBeUndefined();
+    expect(content?.['io.momo-studio.tool_calls']).toBeUndefined();
+    // 仅保留 stream_session_id（Matrix↔SQLite 行关联用）+ body + msgtype
+    expect(content?.['io.momo-studio.stream_session_id']).toBeDefined();
+    expect(content?.body).toBeDefined();
   });
 });

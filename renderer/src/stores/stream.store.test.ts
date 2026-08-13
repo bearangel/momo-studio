@@ -74,6 +74,7 @@ describe('stream.store', () => {
     emit({ type: 'start', streamSessionId: 's1', roomId: '!r1', botUserId: '@b' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-1',
       streamSessionId: 's1',
       toolName: 'read_file',
       args: { path: 'a.ts' },
@@ -89,9 +90,10 @@ describe('stream.store', () => {
   it('tool_result chunk 更新匹配的执行中工具（成功）', () => {
     useStreamStore.getState().init();
     emit({ type: 'start', streamSessionId: 's1', roomId: '!r1', botUserId: '@b' });
-    emit({ type: 'tool_call', streamSessionId: 's1', toolName: 'read_file', args: { path: 'a' } });
+    emit({ type: 'tool_call', callId: 'inline-call', streamSessionId: 's1', toolName: 'read_file', args: { path: 'a' } });
     emit({
       type: 'tool_result',
+      callId: 'test-result-1',
       streamSessionId: 's1',
       toolName: 'read_file',
       result: 'file content',
@@ -107,9 +109,9 @@ describe('stream.store', () => {
   it('tool_result 匹配最后一个执行中的同名工具（多次同名调用）', () => {
     useStreamStore.getState().init();
     emit({ type: 'start', streamSessionId: 's1', roomId: '!r1', botUserId: '@b' });
-    emit({ type: 'tool_call', streamSessionId: 's1', toolName: 'grep', args: { q: '1' } });
-    emit({ type: 'tool_call', streamSessionId: 's1', toolName: 'grep', args: { q: '2' } });
-    emit({ type: 'tool_result', streamSessionId: 's1', toolName: 'grep', result: 'r2', success: true });
+    emit({ type: 'tool_call', callId: 'inline-call', streamSessionId: 's1', toolName: 'grep', args: { q: '1' } });
+    emit({ type: 'tool_call', callId: 'inline-call', streamSessionId: 's1', toolName: 'grep', args: { q: '2' } });
+    emit({ type: 'tool_result', callId: 'inline-result', streamSessionId: 's1', toolName: 'grep', result: 'r2', success: true });
 
     const calls = useStreamStore.getState().streams.get('s1')?.toolCalls;
     expect(calls?.[0]?.isExecuting).toBe(true); // 第一个仍在执行
@@ -183,6 +185,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-2',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: { task: '写代码' },
@@ -205,7 +208,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
   it('普通 tool_call（无 isDispatch）仍走 toolCalls 分支，不影响 dispatchChildren', () => {
     useStreamStore.getState().init();
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
-    emit({ type: 'tool_call', streamSessionId: 'pm1', toolName: 'read_file', args: {} });
+    emit({ type: 'tool_call', callId: 'inline-call', streamSessionId: 'pm1', toolName: 'read_file', args: {} });
 
     const pm = useStreamStore.getState().streams.get('pm1');
     expect(pm?.toolCalls).toHaveLength(1);
@@ -217,6 +220,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-3',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -247,6 +251,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-4',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -256,6 +261,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     });
     emit({
       type: 'tool_result',
+      callId: 'test-result-2',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       result: '完成',
@@ -273,6 +279,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-5',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -282,6 +289,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     });
     emit({
       type: 'tool_result',
+      callId: 'test-result-3',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       result: '超时',
@@ -299,6 +307,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-6',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -328,6 +337,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-7',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -354,6 +364,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-8',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -380,6 +391,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-9',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -396,9 +408,10 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     });
     emit({ type: 'thinking', streamSessionId: 'sub1', delta: '思考' });
     emit({ type: 'text', streamSessionId: 'sub1', delta: '回复' });
-    emit({ type: 'tool_call', streamSessionId: 'sub1', toolName: 'read_file', args: { p: 'a' } });
+    emit({ type: 'tool_call', callId: 'inline-call', streamSessionId: 'sub1', toolName: 'read_file', args: { p: 'a' } });
     emit({
       type: 'tool_result',
+      callId: 'test-result-4',
       streamSessionId: 'sub1',
       toolName: 'read_file',
       result: '内容',
@@ -419,6 +432,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     emit({ type: 'start', streamSessionId: 'pm1', roomId: '!r', botUserId: '@pm' });
     emit({
       type: 'tool_call',
+      callId: 'test-call-10',
       streamSessionId: 'pm1',
       toolName: 'dispatch:coder',
       args: {},
@@ -428,6 +442,7 @@ describe('stream.store — v1.4 嵌套 dispatch', () => {
     });
     emit({
       type: 'tool_call',
+      callId: 'test-call-11',
       streamSessionId: 'pm1',
       toolName: 'dispatch:reviewer',
       args: {},

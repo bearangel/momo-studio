@@ -68,9 +68,16 @@ function rowToCamel(r: SqlRow): MessageRow {
   };
 }
 
+/**
+ * 插入一条 message 行。
+ *
+ * 必填：roomId / sender / eventType / body。其余字段（含可空的 streamSessionId 等）
+ * 全部可选——实现层用 `?? null` 兜底。这样调用方只需传关心的字段（如 A7 的
+ * routeChunkToBuffer 只传 roomId/sender/eventType/body/streamSessionId/status）。
+ */
 export function insertMessage(
-  input: Omit<MessageRow, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'source'> &
-    Partial<Pick<MessageRow, 'id' | 'status' | 'source'>>,
+  input: Pick<MessageRow, 'roomId' | 'sender' | 'eventType' | 'body'> &
+    Partial<Omit<MessageRow, 'roomId' | 'sender' | 'eventType' | 'body'>>,
 ): MessageRow {
   const db = getDb();
   const now = Date.now();
