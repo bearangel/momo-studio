@@ -47,20 +47,37 @@ export class Router {
   private readonly opts: RouterOpts;
   /** onMessage 解注册函数集合，stop() 时统一调用 */
   private unsubscribers: Array<() => void> = [];
+  /** onIncoming 订阅 handler 集合（与 opts.onIncoming 并行触发，保留 C4 兼容） */
+  private incomingHandlers = new Set<(msg: IncomingMessage) => void>();
 
   constructor(opts: RouterOpts) {
     this.opts = opts;
   }
 
+  /**
+   * 订阅入站消息。返回解注册函数。
+   * 与 opts.onIncoming 并行触发——C4 调用方走后者，本接口供 C7 sync.ts 等模块订阅。
+   */
+  onIncoming(handler: (msg: IncomingMessage) => void): () => void {
+    this.incomingHandlers.add(handler);
+    return () => {
+      this.incomingHandlers.delete(handler);
+    };
+  }
+
   /** 启动：注册入站转发 + 启动所有 transport */
   async start(): Promise<void> {
-    // 注册入站消息转发——各 transport 的 onMessage 透传给统一 onIncoming
-    this.unsubscribers.push(this.opts.localTransport.onMessage(this.opts.onIncoming));
+    // 派发器：同时通知 opts.onIncoming 兼容回调 + 所有 onIncoming 订阅者
+    const dispatch = (m: IncomingMessage): void => {
+      this.opts.onIncoming(m);
+      for (const h of this.incomingHandlers) h(m);
+    };
+    this.unsubscribers.push(this.opts.localTransport.onMessage(dispatch));
     if (this.opts.lanTransport) {
-      this.unsubscribers.push(this.opts.lanTransport.onMessage(this.opts.onIncoming));
+      this.unsubscribers.push(this.opts.lanTransport.onMessage(dispatch));
     }
     if (this.opts.hubTransport) {
-      this.unsubscribers.push(this.opts.hubTransport.onMessage(this.opts.onIncoming));
+      this.unsubscribers.push(this.opts.hubTransport.onMessage(dispatch));
     }
 
     // 启动 transport——启动顺序：local（无 IO）→ lan（TCP server + mDNS）→ hub

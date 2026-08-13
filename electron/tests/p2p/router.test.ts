@@ -187,4 +187,59 @@ describe('Router', () => {
     expect(lanHandlers.length).toBe(0);
     expect(hubHandlers.length).toBe(0);
   });
+
+  it('onIncoming(handler) 订阅：所有订阅者都收到入站消息（与 opts.onIncoming 并行）', async () => {
+    const registeredHandlers: Array<(m: IncomingMessage) => void> = [];
+    const local: TransportLayer = {
+      type: 'local',
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      send: vi.fn().mockResolvedValue(undefined),
+      discoverNodes: vi.fn().mockReturnValue([]),
+      onMessage: vi.fn((h: (m: IncomingMessage) => void) => {
+        registeredHandlers.push(h);
+        return () => {
+          const i = registeredHandlers.indexOf(h);
+          if (i >= 0) registeredHandlers.splice(i, 1);
+        };
+      }),
+    };
+
+    const incoming = vi.fn();
+    const subscribed1 = vi.fn();
+    const subscribed2 = vi.fn();
+
+    const router = new Router({
+      localNodeId: 'me',
+      localTransport: local,
+      onIncoming: incoming,
+    });
+
+    // 订阅两个独立 handler（C7 sync.ts 走这条路径）
+    const unsub1 = router.onIncoming(subscribed1);
+    const unsub2 = router.onIncoming(subscribed2);
+
+    await router.start();
+
+    const msg: IncomingMessage = {
+      fromNodeId: 'peer1',
+      payload: { targetNodeId: 'me', type: 'message', body: { x: 1 } },
+      receivedAt: 1,
+    };
+    registeredHandlers[0]!(msg);
+
+    // opts.onIncoming + 两个订阅者都应被调用
+    expect(incoming).toHaveBeenCalledWith(msg);
+    expect(subscribed1).toHaveBeenCalledWith(msg);
+    expect(subscribed2).toHaveBeenCalledWith(msg);
+
+    // 取消订阅 1 后再 emit，subscribed1 不再触发
+    unsub1();
+    registeredHandlers[0]!(msg);
+    expect(subscribed1).toHaveBeenCalledTimes(1);
+    expect(subscribed2).toHaveBeenCalledTimes(2);
+
+    unsub2();
+    await router.stop();
+  });
 });
