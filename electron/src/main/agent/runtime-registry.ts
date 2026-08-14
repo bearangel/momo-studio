@@ -104,6 +104,11 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
 
     logger.info('task-driven runtime 已创建', { instanceId, botUserId });
 
+    // v2 修复（final review M1）：补齐 init/lazy 路径不对称——lazy 路径也要
+    // populate buckets，否则 dispatcher 对缺失 bucket 不限流放行（潜伏点）。
+    // 幂等：重复调用安全（Map 覆盖写）。
+    populateProviderBuckets();
+
     // v2 修复：第一次 runner 注册时 lazy 启动 RouterService
     // （ensureRouterService 内部已 null 检查，幂等安全）。动态 import 避免顶层循环依赖
     // （router-bootstrap → sync-manager → 间接触达 runtime-registry）。
