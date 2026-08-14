@@ -227,16 +227,23 @@ async function sendUserMessage(
 
   // B 子系统：冲突触发检测。当前房间是某 in_progress 任务的 execution_room 且消息
   // mention 了另一个任务时，推 im:conflict 事件给 renderer 弹 ConflictDialog。
-  const conflict = detectConflict(roomId, body, {
-    findInProgressTaskByRoom: (r) =>
-      listTasks({ executionRoomId: r, status: 'in_progress', limit: 1 })[0] ?? null,
-    getTask,
-  });
-  if (conflict) {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('im:conflict', conflict);
+  // try/catch 保护——冲突检测失败（如 tasks 表不存在）不应阻塞消息发送。
+  try {
+    const conflict = detectConflict(roomId, body, {
+      findInProgressTaskByRoom: (r) =>
+        listTasks({ executionRoomId: r, status: 'in_progress', limit: 1 })[0] ?? null,
+      getTask,
+    });
+    if (conflict) {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('im:conflict', conflict);
+      }
     }
+  } catch (err) {
+    logger.warn('冲突检测失败（不阻塞消息发送）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
