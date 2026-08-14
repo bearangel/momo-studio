@@ -1,30 +1,21 @@
 // electron/src/main/index.ts
+//
+// Electron 主进程入口——app 生命周期编排。
+//
+// task-driven runtime 初始化逻辑已抽取到 ./agent/init-runtime.ts（便于测试 + 关注点分离）。
+// 本文件仅负责：migrations → TaskScheduler → Conduit → IPC → Window → session restore → cleanup。
 import { app, BrowserWindow } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
-import { runMigrations, getDb } from './storage/db';
+import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged, setRouterService } from './matrix/sync-manager';
 import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
-import { resolveBotToken } from './agent/auto-start';
 import { initP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
-import { RouterService } from './agent/router-service';
-import { TaskDispatcher, type AgentAssignmentInfo } from './task/dispatcher';
-import {
-  agentRunners,
-  providerBuckets,
-  createTaskDrivenRuntime,
-  populateProviderBuckets,
-  destroyAllTaskDrivenRuntimes,
-} from './agent/runtime-registry';
-import { listAssignments, getAgentDefinition } from './agent/crud';
-import { listWorkspaces } from './workspace/crud';
-import { buildSpawnOpts, resolveApiKey } from './agent/spawn-helpers';
-import type { AgentRole } from './agent/types';
-
-let routerService: RouterService | null = null;
+import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
+import { initTaskDrivenRuntime } from './agent/init-runtime';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -75,7 +66,10 @@ async function autoRestoreSession(): Promise<void> {
   try {
     await startSyncFromSession();
     logger.info('Session restored: Matrix sync started');
-    await initTaskDrivenRuntime();
+    // Task 5：initTaskDrivenRuntime 返回 RouterService 实例（无 runner 时 null），
+    // 注入 sync-manager 供消息路由使用。
+    const svc = await initTaskDrivenRuntime();
+    if (svc) setRouterService(svc);
     logger.info('Task-driven runtime initialized');
     broadcastRuntimeChanged();
   } catch (err) {
@@ -99,113 +93,6 @@ async function autoRestoreSession(): Promise<void> {
   });
 }
 
-/**
- * task-driven runtime 初始化：遍历所有 workspace 的 assignment，
- * 为每个 task_driven=1 的 agent 创建 WarmPool + AgentRunner → 预热 → 启动 RouterService。
- * task_driven=0 的 agent 走 v1 autoStartAgents（由 auth handler 登录流程触发）。
- */
-async function initTaskDrivenRuntime(): Promise<void> {
-  for (const ws of listWorkspaces()) {
-    for (const assignment of listAssignments(ws.id)) {
-      if (agentRunners.has(assignment.instanceId)) continue;
-      if (!assignment.enabled) continue;
-
-      const def = getAgentDefinition(assignment.agentDefinitionId);
-      if (!def) continue;
-      if (def.taskDriven === false) continue;
-      if (!def.modelProviderId) {
-        logger.warn('Agent 未配置 modelProviderId，跳过 task-driven 初始化', {
-          instanceId: assignment.instanceId, slug: def.slug,
-        });
-        continue;
-      }
-
-      try {
-        const botAccessToken = await resolveBotToken(assignment.botMatrixUserId);
-        if (!botAccessToken) {
-          logger.warn('Bot token 丢失，跳过', { instanceId: assignment.instanceId });
-          continue;
-        }
-        const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
-
-        const runtimeConfig = buildSpawnOpts({
-          instanceId: assignment.instanceId,
-          botUserId: assignment.botMatrixUserId,
-          workspaceId: ws.id,
-          workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
-          ownerUserId: ws.ownerId,
-          def,
-          botAccessToken,
-          llmApiKey,
-          role: assignment.role as AgentRole,
-          isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
-        });
-
-        const pool = createTaskDrivenRuntime(runtimeConfig);
-
-        await pool.warm(assignment.instanceId).catch((err) => {
-          logger.warn('WarmPool 预热失败', {
-            instanceId: assignment.instanceId, error: String(err),
-          });
-        });
-
-        logger.info('task-driven agent 已初始化', {
-          slug: def.slug, instanceId: assignment.instanceId, role: assignment.role,
-        });
-      } catch (err) {
-        logger.warn('task-driven agent 初始化失败', {
-          instanceId: assignment.instanceId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  if (agentRunners.size === 0) {
-    logger.info('无 task-driven agent，跳过 RouterService 初始化');
-    return;
-  }
-
-  populateProviderBuckets();
-
-  const dispatcher = new TaskDispatcher({
-    runners: agentRunners,
-    buckets: providerBuckets,
-    getAgentAssignment: (instanceId) => getAssignmentInfo(instanceId),
-    getGlobalMax: () => getGlobalMax(),
-  });
-
-  routerService = new RouterService({ runners: agentRunners, dispatcher });
-  routerService.start();
-  setRouterService(routerService);
-  logger.info('RouterService 已启动', { runnerCount: agentRunners.size });
-}
-
-function getAssignmentInfo(instanceId: string): AgentAssignmentInfo | null {
-  const row = getDb().prepare(
-    `SELECT a.agent_definition_id, d.model_provider_id, d.max_concurrent_tasks
-     FROM agent_assignments a
-     JOIN agent_definitions d ON a.agent_definition_id = d.id
-     WHERE a.instance_id = ?`,
-  ).get(instanceId) as
-    | { agent_definition_id: string; model_provider_id: string | null; max_concurrent_tasks: number }
-    | undefined;
-  if (!row?.model_provider_id) return null;
-  return {
-    agentDefinitionId: row.agent_definition_id,
-    modelProviderId: row.model_provider_id,
-    maxConcurrentTasks: row.max_concurrent_tasks,
-  };
-}
-
-function getGlobalMax(): number {
-  const row = getDb().prepare(
-    'SELECT max_concurrent_tasks FROM global_settings WHERE id = 1',
-  ).get() as { max_concurrent_tasks: number } | undefined;
-  return row?.max_concurrent_tasks ?? 3;
-}
-
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -217,7 +104,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   destroyAllTaskDrivenRuntimes();
   setRouterService(null);
-  routerService = null;
 
   stopTaskRuntime();
   void stopConduit();
