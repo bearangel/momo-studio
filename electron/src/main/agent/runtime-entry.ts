@@ -701,6 +701,7 @@ async function handleDispatch(
     body: '开始处理...',
     taskId: dispatch.task_id,
     status: 'in_progress',
+    replyTo: dispatch.dispatch_from,
   });
   await client
     .sendEvent(roomId, inProgress.eventType, inProgress.content, '')
@@ -755,6 +756,7 @@ async function handleDispatch(
         taskId: dispatch.task_id,
         status: 'completed',
         toolCallsUsed: stats.toolCallsUsed,
+        replyTo: dispatch.dispatch_from,
       });
       await client.sendEvent(roomId, completed.eventType, completed.content, '');
     } finally {
@@ -767,6 +769,7 @@ async function handleDispatch(
       body: `任务失败: ${msg}`,
       taskId: dispatch.task_id,
       status: 'failed',
+      replyTo: dispatch.dispatch_from,
     });
     await client
       .sendEvent(roomId, failed.eventType, failed.content, '')
@@ -1256,6 +1259,29 @@ export async function runChatLoop(
  * 错误处理：try/catch 包裹 runChatLoop，失败时发 end(error) chunk + task-end IPC + exit(1)。
  * 不重试——上层 RouterService / AgentRunner 可在 task-end 后决定是否重新派发。
  */
+
+/**
+ * I3 修复：发送 task-end IPC 后等 IPC channel flush 再 exit，避免 exit 抢先丢弃消息。
+ *
+ * process.send 是异步 IPC 写——紧接 process.exit 可能导致 task-end 未 flush 就退出。
+ * Node.js 的 process.send 支持回调（flushed 后触发），故：
+ *   1. process.send(msg, callback) → callback 内 exit
+ *   2. 2 秒兜底超时防 callback 永不触发（极端情况如 IPC channel 已断）
+ *   3. process.send 不存在（非 fork 模式）时直接 exit
+ */
+function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): void {
+  const send = process.send;
+  if (!send) {
+    process.exit(exitCode);
+    return;
+  }
+  const forceTimer = setTimeout(() => process.exit(exitCode), 2000);
+  send(msg, () => {
+    clearTimeout(forceTimer);
+    process.exit(exitCode);
+  });
+}
+
 export async function runTaskChatLoop(
   cfg: TaskConfig,
   client: MatrixClient,
@@ -1307,15 +1333,14 @@ export async function runTaskChatLoop(
       finishReason: 'error',
       error: msg,
     });
-    process.send?.({ type: 'task-end', streamSessionId, taskId, error: msg });
-    process.exit(1);
+    sendTaskEndAndExit({ type: 'task-end', streamSessionId, taskId, error: msg }, 1);
     return;
   }
 
-  // 成功路径：通知主进程 task 完成（AgentRunner 据此 release runtime + 更新 task 状态机），
-  // 然后退出 runtime 子进程。task-driven 模式下 runtime 是单次使用资源。
-  process.send?.({ type: 'task-end', streamSessionId, taskId, toolCallsUsed: stats.toolCallsUsed });
-  process.exit(0);
+  sendTaskEndAndExit(
+    { type: 'task-end', streamSessionId, taskId, toolCallsUsed: stats.toolCallsUsed },
+    0,
+  );
 }
 
 /**

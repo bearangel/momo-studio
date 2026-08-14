@@ -19,6 +19,9 @@ import { getDb } from '../storage/db';
 import { getWorkspace } from '../workspace/crud';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE } from '../agent/dispatch';
 import type { RoutedEvent } from '../agent/router-service';
+import { agentRunners } from '../agent/runtime-registry';
+import { resolveMessageTarget, type BotCandidate, type WorkspaceRoutingInfo } from '../agent/message-target-resolver';
+import { isDirectChat, hasWorkspaceCoordinator } from './room-info';
 import {
   insertMessage,
   updateMessageMatrixEventId,
@@ -125,6 +128,70 @@ function getLocalUserId(): string | null {
   return readSession()?.userId ?? null;
 }
 
+/**
+ * C1 修复：为 m.room.message 解析目标 task-driven agent 的 assignmentId。
+ *
+ * 遍历 room 中的 task-driven runner（agentRunners），按 botUserId 匹配 room 成员，
+ * 然后用 resolveMessageTarget（封装 decideResponse 三种场景）选出应响应的 agent。
+ *
+ * 主进程有 Matrix client + DB 直连，无需像 runtime-entry 那样走 IPC 查询 room info。
+ *
+ * @returns 目标 assignmentId；无 agent 应响应时返回 null（RouterService 收到 null 时不派发 m.room.message）
+ */
+function resolveDirectTargetAssignmentId(event: MatrixEvent): string | null {
+  if (!client) return null;
+  const roomId = event.getRoomId();
+  if (!roomId) return null;
+
+  const room = client.getRoom(roomId);
+  if (!room) return null;
+
+  const memberUserIds = new Set(room.getJoinedMembers().map((m) => m.userId));
+
+  // 从 agentRunners 收集 room 中的 task-driven candidate
+  const candidates: BotCandidate[] = [];
+  let firstWorkspaceId: string | null = null;
+
+  for (const runner of agentRunners.values()) {
+    if (!memberUserIds.has(runner.botUserId)) continue;
+    if (firstWorkspaceId === null) {
+      firstWorkspaceId = runner.workspaceId;
+    }
+    candidates.push({
+      botUserId: runner.botUserId,
+      assignmentId: runner.assignmentId,
+      workspaceId: runner.workspaceId,
+      isCoordinator: false,
+    });
+  }
+
+  if (candidates.length === 0 || firstWorkspaceId === null) return null;
+
+  const workspace = getWorkspace(firstWorkspaceId);
+  if (!workspace) return null;
+
+  for (const c of candidates) {
+    c.isCoordinator = workspace.coordinatorInstanceId === c.assignmentId;
+  }
+
+  const routingInfo: WorkspaceRoutingInfo = {
+    ownerId: workspace.ownerId,
+    teamRoomId: workspace.teamRoomId,
+    hasCoordinator: hasWorkspaceCoordinator(workspace.id),
+  };
+
+  return resolveMessageTarget(
+    {
+      sender: event.getSender() ?? '',
+      roomId,
+      content: (event.getContent() as Record<string, unknown>) ?? {},
+      isDirectChat: isDirectChat(client, roomId, workspace.ownerId),
+      candidates,
+    },
+    routingInfo,
+  );
+}
+
 /** 通知 renderer：agent 运行态变化（启动/停止/自动恢复完成），让其重新同步 running 状态 */
 export function broadcastRuntimeChanged(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -207,11 +274,15 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
     pushMessageRow(msg);
 
     // task-driven：路由到 RouterService（A 子系统 INSERT 之后）
-    // directTargetAssignmentId 未传（null）→ 仅 task_reply 广播生效；
-    // m.room.message / dispatch 的 room→agent 解析在后续 task 实现。
+    // C1 修复：m.room.message 需先解析目标 assignmentId（decideResponse 三场景），
+    // 否则 RouterService.routeUserMessage 因 directTargetAssignmentId=null 跳过派发。
+    // dispatch / task_reply 的目标由 event content 自解析（dispatch_to / reply_to），不需预解析。
     if (routerService) {
       const localUserId = getLocalUserId();
-      void routerService.routeMatrixEvent(event, localUserId ?? '', null);
+      const directTarget = eventType === 'm.room.message'
+        ? resolveDirectTargetAssignmentId(event)
+        : null;
+      void routerService.routeMatrixEvent(event, localUserId ?? '', null, directTarget ?? undefined);
     }
   });
 

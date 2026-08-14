@@ -188,7 +188,12 @@ export class RouterService {
    * 把 snake_case content 转成 camelCase notification 后调用 AgentRunner.notifyTaskReply，
    * runner 内部按 taskId 匹配 activeTasks 找到对应子进程并 IPC 推送。
    *
-   * @param assignmentId 已知的 PM runner key（精确通知）；未提供时广播给所有 runner（兼容旧路径）
+   * 路由优先级（I2 修复）：
+   *   1. event content.reply_to 存在 → findAssignmentByBotUserId 精确反查目标 PM runner
+   *   2. assignmentId 参数（sync-manager 已解析）→ 精确通知
+   *   3. 都没有 → 广播给所有 runner（向后兼容旧 task_reply event）
+   *
+   * @param assignmentId 已知的 PM runner key（精确通知）；未提供时尝试 reply_to 或广播
    */
   private async routeTaskReply(event: RoutedEvent, assignmentId?: string): Promise<void> {
     const content = event.getContent();
@@ -205,8 +210,15 @@ export class RouterService {
         : {}),
     };
 
-    if (assignmentId) {
-      const runner = this.opts.runners.get(assignmentId);
+    // reply_to 存在时精确反查目标 PM runner（避免广播）
+    let targetAssignmentId = assignmentId;
+    if (!targetAssignmentId && typeof content.reply_to === 'string') {
+      const lookup = this.opts.findAssignmentByBotUserId ?? defaultFindAssignmentByBotUserId;
+      targetAssignmentId = lookup(content.reply_to) ?? undefined;
+    }
+
+    if (targetAssignmentId) {
+      const runner = this.opts.runners.get(targetAssignmentId);
       if (runner) {
         await runner.notifyTaskReply(notification);
       }

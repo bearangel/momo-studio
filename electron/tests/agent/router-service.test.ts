@@ -158,4 +158,60 @@ describe('RouterService', () => {
 
     expect(mockRunner.executeTask).not.toHaveBeenCalled();
   });
+
+  it('task_reply 带 reply_to 时精确路由到目标 PM（不广播）', async () => {
+    const pmRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
+    const otherRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
+    const runners = new Map([
+      ['inst-pm', pmRunner],
+      ['inst-other', otherRunner],
+    ]);
+    const findAssignmentByBotUserId = vi.fn((botUserId: string) => {
+      if (botUserId === '@pm:home') return 'inst-pm';
+      return null;
+    });
+    const svc = new RouterService({
+      runners,
+      dispatcher: { tryPickup: vi.fn() } as never,
+      findAssignmentByBotUserId,
+    });
+
+    await svc.routeMatrixEvent(
+      mkMockEvent('io.momo-studio.task_reply', {
+        body: '完成',
+        task_id: 'task-123',
+        status: 'completed',
+        reply_to: '@pm:home',
+      }),
+      '@sub:home',
+      '!room:home',
+    );
+
+    expect(findAssignmentByBotUserId).toHaveBeenCalledWith('@pm:home');
+    expect(pmRunner.notifyTaskReply).toHaveBeenCalledTimes(1);
+    expect(otherRunner.notifyTaskReply).not.toHaveBeenCalled();
+  });
+
+  it('task_reply 无 reply_to 且无 assignmentId 时广播（向后兼容）', async () => {
+    const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
+    const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
+    const runners = new Map([
+      ['inst-1', r1],
+      ['inst-2', r2],
+    ]);
+    const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+    await svc.routeMatrixEvent(
+      mkMockEvent('io.momo-studio.task_reply', {
+        body: '完成',
+        task_id: 'task-old',
+        status: 'completed',
+      }),
+      '@sub:home',
+      null,
+    );
+
+    expect(r1.notifyTaskReply).toHaveBeenCalledTimes(1);
+    expect(r2.notifyTaskReply).toHaveBeenCalledTimes(1);
+  });
 });

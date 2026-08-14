@@ -84,6 +84,10 @@ export class AgentRunner {
     this.opts = opts;
   }
 
+  get assignmentId(): string { return this.opts.agentAssignmentId; }
+  get botUserId(): string { return this.opts.agentBotUserId; }
+  get workspaceId(): string { return this.opts.workspaceId; }
+
   /**
    * 启动一个 task（含 ephemeral chat）。
    *

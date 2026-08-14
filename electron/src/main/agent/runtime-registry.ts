@@ -21,7 +21,7 @@ import { spawnAgent, handleStreamChunk, type AgentRuntimeOpts } from './runtime-
 import { WarmPool } from './warm-pool';
 import { AgentRunner } from './agent-runner';
 import { spawnForAgent } from './runtime-spawner';
-import type { ProviderTokenBucket } from './llm/token-bucket';
+import { ProviderTokenBucket } from './llm/token-bucket';
 
 // ─── 全局注册表 ───────────────────────────────────────────────────────────
 
@@ -156,6 +156,29 @@ export function findAssignmentByBotUserId(botUserId: string): string | null {
     .prepare('SELECT instance_id FROM agent_assignments WHERE bot_matrix_user_id = ?')
     .get(botUserId) as { instance_id: string } | undefined;
   return row?.instance_id ?? null;
+}
+
+/**
+ * 从 model_providers 表填充 providerBuckets（I1 修复）。
+ * 只有 max_rpm 或 max_tpm 非空的 provider 才创建桶（NULL = 不限流，无需桶）。
+ * 已存在的桶不覆盖（支持运行时动态新增 provider 后幂等调用）。
+ */
+export function populateProviderBuckets(): void {
+  const rows = getDb()
+    .prepare('SELECT id, max_rpm, max_tpm FROM model_providers')
+    .all() as Array<{ id: string; max_rpm: number | null; max_tpm: number | null }>;
+
+  for (const row of rows) {
+    if (row.max_rpm === null && row.max_tpm === null) continue;
+    if (providerBuckets.has(row.id)) continue;
+    providerBuckets.set(
+      row.id,
+      new ProviderTokenBucket({
+        ...(row.max_rpm !== null ? { maxRpm: row.max_rpm } : {}),
+        ...(row.max_tpm !== null ? { maxTpm: row.max_tpm } : {}),
+      }),
+    );
+  }
 }
 
 /**

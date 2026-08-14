@@ -36,15 +36,17 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
 
 import { spawnAgent } from '../../src/main/agent/runtime-manager';
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
-import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createWorkspace } from '../../src/main/workspace/crud';
 import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
 import {
   agentRunners,
   agentWarmPools,
+  providerBuckets,
   startAgentRuntime,
   createTaskDrivenRuntime,
   findAssignmentByBotUserId,
+  populateProviderBuckets,
   destroyAllTaskDrivenRuntimes,
   __clearRuntimeRegistryForTest,
 } from '../../src/main/agent/runtime-registry';
@@ -181,6 +183,48 @@ describe('runtime-registry', () => {
       destroyAllTaskDrivenRuntimes();
       expect(agentRunners.size).toBe(0);
       expect(agentWarmPools.size).toBe(0);
+    });
+  });
+
+  describe('populateProviderBuckets', () => {
+    function insertProvider(id: string, maxRpm: number | null, maxTpm: number | null): void {
+      getDb()
+        .prepare(
+          `INSERT INTO model_providers (id, name, base_url, api_key_ref, max_rpm, max_tpm)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, id, 'http://localhost', 'ref', maxRpm, maxTpm);
+    }
+
+    it('为有 max_rpm/max_tpm 的 provider 创建桶', () => {
+      insertProvider('prov-rpm', 60, null);
+      insertProvider('prov-tpm', null, 10000);
+      insertProvider('prov-both', 30, 5000);
+
+      populateProviderBuckets();
+
+      expect(providerBuckets.has('prov-rpm')).toBe(true);
+      expect(providerBuckets.has('prov-tpm')).toBe(true);
+      expect(providerBuckets.has('prov-both')).toBe(true);
+    });
+
+    it('max_rpm 和 max_tpm 都为 NULL 的 provider 不创建桶', () => {
+      insertProvider('prov-unlimited', null, null);
+
+      populateProviderBuckets();
+
+      expect(providerBuckets.has('prov-unlimited')).toBe(false);
+    });
+
+    it('幂等：重复调用不覆盖已存在的桶', () => {
+      insertProvider('prov-idem', 100, null);
+      populateProviderBuckets();
+      const bucket1 = providerBuckets.get('prov-idem');
+
+      populateProviderBuckets();
+      const bucket2 = providerBuckets.get('prov-idem');
+
+      expect(bucket1).toBe(bucket2);
     });
   });
 });

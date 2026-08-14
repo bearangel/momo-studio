@@ -180,14 +180,18 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     mockProviderOverride = null;
     __setMemoryProviderForTest(stubMemoryProvider);
 
-    // process.send 同时捕获 stream chunk 和 task-end IPC
-    process.send = ((msg: unknown): boolean => {
+    // process.send 同时捕获 stream chunk 和 task-end IPC（callback 形式兼容 sendTaskEndAndExit）
+    process.send = ((
+      msg: unknown,
+      callback?: (err: Error | null) => void,
+    ): boolean => {
       const m = msg as { type?: string };
       if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
         sentChunks.push(msg);
       } else {
         sentIpc.push(msg);
       }
+      if (callback) callback(null);
       return true;
     }) as NonNullable<typeof process.send>;
 

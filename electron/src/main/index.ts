@@ -16,6 +16,7 @@ import {
   agentRunners,
   providerBuckets,
   createTaskDrivenRuntime,
+  populateProviderBuckets,
   destroyAllTaskDrivenRuntimes,
 } from './agent/runtime-registry';
 import { listAssignments, getAgentDefinition } from './agent/crud';
@@ -165,6 +166,8 @@ async function initTaskDrivenRuntime(): Promise<void> {
     logger.info('无 task-driven agent，跳过 RouterService 初始化');
     return;
   }
+
+  populateProviderBuckets();
 
   const dispatcher = new TaskDispatcher({
     runners: agentRunners,

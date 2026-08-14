@@ -27,6 +27,9 @@ export interface TaskReplyContent {
   progress_pct?: number;
   /** v1.4：子 agent 报告本任务使用的工具调用次数 */
   tool_calls_used?: number;
+  /** v2（I2 修复）：目标 PM 的 botUserId，用于 RouterService 精确路由（避免广播）。
+   * 缺省时 RouterService 回退到广播所有 runner（向后兼容旧 task_reply event）。 */
+  reply_to?: string;
 }
 
 export const DISPATCH_EVENT_TYPE = 'io.momo-studio.dispatch';
@@ -87,6 +90,8 @@ export function buildTaskReply(opts: {
   progressPct?: number;
   /** v1.4：子 agent 报告本任务使用的工具调用次数 */
   toolCallsUsed?: number;
+  /** v2（I2 修复）：目标 PM 的 botUserId，用于精确路由 */
+  replyTo?: string;
 }): { eventType: typeof TASK_REPLY_EVENT_TYPE; content: TaskReplyContent } {
   return {
     eventType: TASK_REPLY_EVENT_TYPE,
@@ -96,6 +101,7 @@ export function buildTaskReply(opts: {
       status: opts.status,
       progress_pct: opts.progressPct,
       tool_calls_used: opts.toolCallsUsed,
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
     },
   };
 }
@@ -125,5 +131,6 @@ export function parseTaskReply(content: Record<string, unknown>): TaskReplyConte
     status: content.status as TaskReplyContent['status'],
     progress_pct: content.progress_pct as number | undefined,
     tool_calls_used: content.tool_calls_used as number | undefined,
+    reply_to: content.reply_to as string | undefined,
   };
 }
