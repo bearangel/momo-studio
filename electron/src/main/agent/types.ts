@@ -64,6 +64,17 @@ export interface AgentDefinition {
    * 用作 ResourceItem.custom.installedAt。
    */
   createdAt?: string;
+
+  // === v2 task-driven runtime 切换（migration v22） ===
+  /**
+   * 是否使用 task-driven runtime（v2 架构）。
+   * - true / undefined（缺省）= task-driven：runtime 由 WarmPool + AgentRunner 管理
+   * - false = v1 fallback：runtime 由 runtime-manager.spawnAgent 管理
+   *
+   * DB 列 task_driven（INTEGER NOT NULL DEFAULT 1），rowToDef 映射为 boolean。
+   * undefined 表示 builtin YAML 未写 DB 的场景（按 task-driven 处理）。
+   */
+  taskDriven?: boolean;
 }
 
 /** Agent 在 workspace 中的实例化（角色与父子关系存这里，不存 definition） */

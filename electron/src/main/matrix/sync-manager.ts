@@ -18,6 +18,7 @@ import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { getWorkspace } from '../workspace/crud';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE } from '../agent/dispatch';
+import type { RoutedEvent } from '../agent/router-service';
 import {
   insertMessage,
   updateMessageMatrixEventId,
@@ -70,6 +71,17 @@ const CURRENT_USER_KEY = 'current_user_session';
 
 let client: MatrixClient | null = null;
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * task-driven runtime 的 RouterService 引用（由 main/index.ts initTaskDrivenRuntime 注入）。
+ * 非空时，/sync 收到的新 event 在 A 子系统 INSERT 之后经此路由到对应 AgentRunner。
+ */
+let routerService: { routeMatrixEvent: (event: RoutedEvent, ownerUserId: string, targetAssignmentId: string | null, directTargetAssignmentId?: string) => Promise<void> } | null = null;
+
+/** 由 main/index.ts 在 initTaskDrivenRuntime 完成后注入 RouterService */
+export function setRouterService(svc: typeof routerService): void {
+  routerService = svc;
+}
 
 /** 由 main/index.ts 在创建主窗口后调用，注册窗口引用用于推送消息 */
 export function setMainWindow(win: BrowserWindow | null): void {
@@ -193,6 +205,14 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
       source: 'matrix',
     });
     pushMessageRow(msg);
+
+    // task-driven：路由到 RouterService（A 子系统 INSERT 之后）
+    // directTargetAssignmentId 未传（null）→ 仅 task_reply 广播生效；
+    // m.room.message / dispatch 的 room→agent 解析在后续 task 实现。
+    if (routerService) {
+      const localUserId = getLocalUserId();
+      void routerService.routeMatrixEvent(event, localUserId ?? '', null);
+    }
   });
 
   logger.info('Matrix /sync 已启动，消息将推送到 renderer');

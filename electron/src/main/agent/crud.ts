@@ -83,6 +83,7 @@ interface AgentDefRow {
   workspace_id: string | null;
   model_provider_id: string | null;
   model_name: string;
+  task_driven: number;
 }
 
 /** agent_assignments 行的弱类型映射（v1.3 schema） */
@@ -117,6 +118,7 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     modelProviderId: row.model_provider_id,
     modelName: row.model_name,
     createdAt: row.created_at,
+    taskDriven: row.task_driven === 1,
   };
 }
 

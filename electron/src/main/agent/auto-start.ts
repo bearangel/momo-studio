@@ -177,6 +177,23 @@ async function verifyBotToken(
 }
 
 /**
+ * 完整的 bot token 解析流程：keychain 取 token → whoami 验证 → 失效则 password re-login。
+ * task-driven runtime（initTaskDrivenRuntime）和 v1 autoStartAgents 共用此逻辑。
+ *
+ * @returns 有效 token；keychain 无 token 或 re-login 也失败时返回 null
+ */
+export async function resolveBotToken(botUserId: string): Promise<string | null> {
+  const rawToken = await getBotToken(botUserId);
+  if (!rawToken) return null;
+
+  const tokenCheck = await verifyBotToken(botUserId, rawToken);
+  if (tokenCheck.ok) return rawToken;
+
+  const relogin = await tryReloginBot(botUserId);
+  return relogin.ok ? relogin.token : null;
+}
+
+/**
  * v1.5.8：token 失效时用 keychain 里的 password 重新登录拿新 token。
  * 应对 Conduwuit 重启导致 token 全部丢失的场景（user 用 password 重新 login，
  * bot 同理——前提是注册时已把 password 存入 keychain）。

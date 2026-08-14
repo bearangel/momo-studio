@@ -39,11 +39,11 @@ export interface TaskReplyNotification {
 }
 
 /** Matrix event 的最小子集形状（与 matrix-js-sdk MatrixEvent 兼容） */
-interface RoutedEvent {
+export interface RoutedEvent {
   getType(): string;
   getContent(): Record<string, unknown>;
-  getSender(): string;
-  getRoomId(): string;
+  getSender(): string | undefined;
+  getRoomId(): string | undefined;
 }
 
 export class RouterService {
@@ -98,7 +98,7 @@ export class RouterService {
   private async routeUserMessage(event: RoutedEvent, assignmentId: string): Promise<void> {
     const content = event.getContent();
     const body = typeof content.body === 'string' ? content.body : '';
-    const roomId = event.getRoomId();
+    const roomId = event.getRoomId() ?? '';
 
     const runner = this.opts.runners.get(assignmentId);
     if (!runner) {
@@ -141,7 +141,7 @@ export class RouterService {
     const streamSessionId = randomUUID();
     const task: TaskConfig = {
       taskId,
-      executionRoomId: event.getRoomId(),
+      executionRoomId: event.getRoomId() ?? '',
       body,
       streamSessionId,
       dispatchContext: {

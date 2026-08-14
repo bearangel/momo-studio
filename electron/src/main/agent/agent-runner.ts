@@ -60,8 +60,8 @@ export interface AgentRunnerOpts {
   agentBotUserId: string;
   /** 所属 workspace ID */
   workspaceId: string;
-  /** runtime 配置（复用 runtime-manager.ts 的 AgentRuntimeOpts；spawn 由 warmPool 注入） */
-  config: AgentRuntimeOpts;
+  /** runtime 配置（task-driven 模式下由 warmPool spawn 注入，runner 自身不直接使用） */
+  config?: AgentRuntimeOpts;
   /** 共享 warm pool（多个 AgentRunner 可共用同一 pool） */
   warmPool: WarmPool;
 }

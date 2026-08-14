@@ -157,6 +157,15 @@ export function __flushEventBufferForTest(): void {
 }
 
 /**
+ * task-driven runtime 的 chunk 入口——relay 到 renderer + 落盘 SQLite。
+ * WarmPool spawn 的子进程 chunk 经此函数走与 v1 runtime-manager 相同的双通道。
+ */
+export function handleStreamChunk(chunk: StreamChunk): void {
+  relayStreamChunk(chunk);
+  routeChunkToBuffer(chunk);
+}
+
+/**
  * 把单个 StreamChunk 转换为 MessageEventBuffer.append 调用（A 子系统写入路径）。
  *
  * 映射关系：
