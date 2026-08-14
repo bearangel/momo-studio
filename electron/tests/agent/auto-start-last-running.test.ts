@@ -13,15 +13,15 @@ import { saveAgentDefinition } from '../../src/main/agent/crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
-// mock runtime-manager：捕获 spawnAgent / isAgentRunning 调用，避免 fork 真实子进程
-const { spawnAgentMock, isAgentRunningMock } = vi.hoisted(() => ({
+// mock runtime-manager：捕获 spawnAgent / isV1SubprocessAlive 调用，避免 fork 真实子进程
+const { spawnAgentMock, isV1SubprocessAliveMock } = vi.hoisted(() => ({
   spawnAgentMock: vi.fn(),
-  isAgentRunningMock: vi.fn(() => false),
+  isV1SubprocessAliveMock: vi.fn(() => false),
 }));
 
 vi.mock('../../src/main/agent/runtime-manager', () => ({
   spawnAgent: spawnAgentMock,
-  isAgentRunning: isAgentRunningMock,
+  isV1SubprocessAlive: isV1SubprocessAliveMock,
 }));
 
 // v1.5.8：mock matrix client，支持按 botUserId 路由 whoami 返回值
@@ -58,7 +58,7 @@ beforeEach(() => {
      VALUES ('prov-1', 'Test', 'https://api.openai.com', 'provider.prov-1.api_key', 'gpt-4o', 1)`,
   ).run();
   spawnAgentMock.mockClear();
-  isAgentRunningMock.mockImplementation(() => false);
+  isV1SubprocessAliveMock.mockImplementation(() => false);
   whoamiImpl.mockReset();
   whoamiImpl.mockResolvedValue({ user_id: '@bot:localhost' });
   loginImpl.mockReset();
@@ -159,7 +159,7 @@ describe('autoStartAgents: last_running 过滤', () => {
     expect(ids.sort()).toEqual(['inst-a', 'inst-c']);
   });
 
-  it('已在运行的 agent（isAgentRunning=true）不重复 spawn', async () => {
+  it('已在运行的 agent（isV1SubprocessAlive=true）不重复 spawn', async () => {
     saveAgentDefinition(makeDef('def-running', 'running'));
     const ws = await createWorkspace(
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws4'), iconEmoji: '📁' },
@@ -168,7 +168,7 @@ describe('autoStartAgents: last_running 过滤', () => {
     insertAssignment('inst-running', ws.id, 'def-running', '@bot.r:localhost', 1, 1);
     memStore.set('provider.prov-1.api_key', 'llm-key');
     memStore.set('bot.@bot.r:localhost.matrix_token', 'mx-token');
-    isAgentRunningMock.mockImplementation(() => true);
+    isV1SubprocessAliveMock.mockImplementation(() => true);
 
     await autoStartAgents();
 
@@ -304,5 +304,23 @@ describe('autoStartAgents: token 失效后 password re-login', () => {
 
     expect(loginImpl).toHaveBeenCalled();
     expect(spawnAgentMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Task 2 review C1 修复验证：直接调 isV1SubprocessAlive。
+ *
+ * 本文件顶部 vi.mock 替换了整个 runtime-manager 模块（仅暴露 spawnAgent 与 isV1SubprocessAlive），
+ * 所以这里用 vi.importActual 取出真实模块的 isV1SubprocessAlive，绕过 mock。
+ * 验证函数存在 + runtimes Map 空时返回 false。
+ */
+describe('isV1SubprocessAlive (Task 2 fix C1)', () => {
+  it('runtimes Map 为空时返回 false', async () => {
+    const actual = await vi.importActual<typeof import('../../src/main/agent/runtime-manager')>(
+      '../../src/main/agent/runtime-manager',
+    );
+    // runtimes Map 在模块初始化时为空；任何 id 都应返回 false
+    expect(actual.isV1SubprocessAlive('inst-not-in-map')).toBe(false);
+    expect(actual.isV1SubprocessAlive('any-id')).toBe(false);
   });
 });

@@ -876,6 +876,16 @@ export function isAgentRunning(instanceId: string): boolean {
   return row?.last_running === 1;
 }
 
+/**
+ * v1 子进程是否在跑（仅查 runtimes Map，不查 DB）。
+ * Task 2 review C1 修复：与 isAgentRunning 解耦——后者现查 DB last_running（用户视角语义）。
+ * 本函数仅供 v1 fallback 路径（auto-start.ts）使用，避免重复 spawn。
+ * 与 isAgentRunning 的区别：本函数严格匹配"v1 子进程是否真活着"，不被 DB 状态影响。
+ */
+export function isV1SubprocessAlive(instanceId: string): boolean {
+  return runtimes.has(instanceId);
+}
+
 // === v1.4 测试钩子（仅用于单测验证嵌套流式映射，生产代码不调用） ===
 
 /** 测试钩子：读取 streamChildren 映射（验证父→子嵌套关系建立） */

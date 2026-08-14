@@ -9,7 +9,8 @@
 //   - auth 登录流程也调 autoStartAgents——在 task-driven 模式下，
 //     initTaskDrivenRuntime 已在 autoRestoreSession 中先于 autoStartAgents 调用，
 //     task_driven=1 的 agent 已在 agentRunners/agentWarmPools 中，本函数的
-//     isAgentRunning 守卫会自动跳过它们（不重复启动）。
+//     isV1SubprocessAlive 仅查 v1 runtimes Map（与 task-driven 路径解耦）；
+//     task-driven agent 由下方的 def.taskDriven !== false 守卫跳过。
 //
 // v1.3 改造：
 //   - role 来自 assignment（不再从 def.type 推断）
@@ -18,7 +19,7 @@
 //   - 老的 llmApiKeyRef keychain key 仅作 fallback（向后兼容）
 
 import { getDb } from '../storage/db';
-import { spawnAgent, isAgentRunning } from './runtime-manager';
+import { spawnAgent, isV1SubprocessAlive } from './runtime-manager';
 import { getAgentDefinition, listSubAssignments } from './crud';
 import { getWorkspace } from '../workspace/crud';
 import { buildSpawnOpts, resolveApiKey, HOMESERVER_URL } from './spawn-helpers';
@@ -44,9 +45,13 @@ interface AssignmentRow {
  *   - task_driven=1 的 agent 由 initTaskDrivenRuntime 接管，本函数不再处理它们。
  *   - task_driven=0 的 agent 继续走 v1 spawn 路径（保留向后兼容）。
  *
- * 幂等：已运行的 agent（含 task-driven 在 agentRunners 中的）会被 isAgentRunning 跳过。
- * v2 修复：isAgentRunning 查 DB last_running（用户启动意图），task-driven agent
- * 即便不在 v1 runtimes Map 也正确返回 true（只要 DB 标为 running），不会重复启动。
+ * 幂等：v1 子进程已在 runtimes Map 中的 agent 会被 isV1SubprocessAlive 跳过，避免重复 spawn。
+ * 注意：isV1SubprocessAlive 只看 v1 runtimes Map——不查 DB last_running（用户启动意图）。
+ *       task-driven agent（task_driven=1）不在本路径检查范围内，由 def.taskDriven !== false 跳过。
+ *
+ * Task 2 review C1 修复：原 isAgentRunning 已改查 DB（语义=用户启动意图），
+ *   而本函数 SELECT 已过滤 last_running=1，导致 isAgentRunning 守卫永远为真，
+ *   spawnAgent 永不调用 → 自启动成 no-op。改用 isV1SubprocessAlive 恢复 v1 重复 spawn 防护。
  */
 export async function autoStartAgents(): Promise<void> {
   const db = getDb();
@@ -64,7 +69,7 @@ export async function autoStartAgents(): Promise<void> {
   let skipped = 0;
 
   for (const row of rows) {
-    if (isAgentRunning(row.instance_id)) continue;
+    if (isV1SubprocessAlive(row.instance_id)) continue;
 
     try {
       const def = getAgentDefinition(row.agent_definition_id);
