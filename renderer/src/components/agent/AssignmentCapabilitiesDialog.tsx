@@ -51,8 +51,6 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
   const setAssignmentDeltasAction = useAgentStore((s) => s.setAssignmentDeltas);
   const stopAgent = useAgentStore((s) => s.stopAgent);
   const startAgent = useAgentStore((s) => s.startAgent);
-  const syncRunningStates = useAgentStore((s) => s.syncRunningStates);
-  const running = useAgentStore((s) => s.running[assignment.instanceId] ?? false);
 
   // def 默认能力（Layer 1，不含 workspace allocation）
   const defCaps = useMemo(() => defToCapabilities(def), [def]);
@@ -97,11 +95,6 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
     };
   }, [assignment.workspaceId, assignment.instanceId, defCaps, getAssignmentDeltas]);
 
-  // 同步当前运行状态（决定保存后是否提示重启）
-  useEffect(() => {
-    void syncRunningStates();
-  }, [syncRunningStates]);
-
   async function handleSave(): Promise<void> {
     setSaving(true);
     setError(null);
@@ -110,8 +103,8 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
       await setAssignmentDeltasAction(assignment.instanceId, newDeltas);
       const changed = !deltasEqual(newDeltas, initialDeltas);
       setInitialDeltas(newDeltas);
-      // delta 真实变化 + agent 运行中 → 提示重启；否则直接关闭
-      if (changed && running) {
+      // v2 修复：用 assignment.lastRunning 判断 agent 是否运行中
+      if (changed && assignment.lastRunning) {
         setPendingRestart(true);
       } else {
         onClose();

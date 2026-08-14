@@ -1,5 +1,5 @@
 // 群成员侧栏：显示当前选中房间的成员，含身份标识 + agent 在线/离线状态。
-// bot 成员通过 agent.store 的 running 状态判断在线/离线，显示对应 badge。
+// bot 成员通过 assignment.lastRunning 判断在线/离线，显示对应 badge。
 import { useImStore } from '../../stores/im.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useBotNameMap } from '../../lib/useBotNames';
@@ -8,13 +8,13 @@ import { cn } from '../../lib/cn';
 export function MembersPanel() {
   const members = useImStore((s) => s.members);
   const botNameMap = useBotNameMap();
-  const { assignments, running } = useAgentStore();
+  const assignments = useAgentStore((s) => s.assignments);
 
-  /** 查 member userId 对应的 agent 是否在运行。无 assignment 返回 null（不显示标签） */
+  /** 查 member userId 对应的 agent 是否在线（基于 assignment.lastRunning）。无 assignment 返回 null（不显示标签） */
   const isAgentOnline = (userId: string): boolean | null => {
     const a = assignments.find((item) => item.botMatrixUserId === userId);
     if (!a) return null;
-    return running[a.instanceId] === true;
+    return a.lastRunning;
   };
 
   return (

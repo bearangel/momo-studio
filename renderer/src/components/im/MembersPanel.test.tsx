@@ -1,6 +1,6 @@
 // renderer/src/components/im/MembersPanel.test.tsx
 // MembersPanel 成员列表：在线/离线 badge 渲染。
-// mock im.store（selector 模式）+ agent.store（返回受控 assignments/running）+ useBotNames。
+// mock im.store（selector 模式）+ agent.store（selector 模式，返回受控 assignments）+ useBotNames。
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { AgentAssignment, RoomMember } from '../../ipc/types';
@@ -16,16 +16,12 @@ const mockAssignments: AgentAssignment[] = [
     role: 'standalone', parentInstanceId: null, hasApiKeyOverride: false,
     lastRunning: false },
 ];
-const mockRunning: Record<string, boolean> = {
-  'inst-online': true,
-  'inst-offline': false,
-};
 
 vi.mock('../../stores/agent.store', () => ({
-  useAgentStore: vi.fn(() => ({
-    assignments: mockAssignments,
-    running: mockRunning,
-  })),
+  useAgentStore: vi.fn((selector?: (s: { assignments: AgentAssignment[] }) => unknown) => {
+    const state = { assignments: mockAssignments };
+    return selector ? selector(state) : state;
+  }),
 }));
 vi.mock('../../lib/useBotNames', () => ({
   useBotNameMap: () => new Map([['@online-bot:local', '在线Agent'], ['@offline-bot:local', '离线Agent']]),

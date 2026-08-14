@@ -26,7 +26,6 @@ const getAssignmentDeltasMock = vi.fn();
 const setAssignmentDeltasMock = vi.fn();
 const stopAgentMock = vi.fn();
 const startAgentMock = vi.fn();
-const syncRunningStatesMock = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
@@ -51,7 +50,6 @@ beforeEach(() => {
   setAssignmentDeltasMock.mockReset();
   stopAgentMock.mockReset();
   startAgentMock.mockReset();
-  syncRunningStatesMock.mockReset();
 
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
@@ -60,21 +58,18 @@ beforeEach(() => {
   setAssignmentDeltasMock.mockResolvedValue(undefined);
   stopAgentMock.mockResolvedValue(undefined);
   startAgentMock.mockResolvedValue(undefined);
-  syncRunningStatesMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   useAgentStore.setState({
     definitions: [],
     assignments: [],
-    running: {},
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn(),
     loadAssignments: vi.fn(),
     loadBuiltinSuggestions: vi.fn(),
-    syncRunningStates: syncRunningStatesMock,
     addAgent: vi.fn(),
     assignMainAgent: vi.fn(),
     deleteDefinition: vi.fn(),
@@ -123,10 +118,6 @@ function buildDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
     modelName: 'm',
     ...overrides,
   };
-}
-
-function setRunning(running: boolean): void {
-  useAgentStore.setState({ running: { 'inst-1': running } });
 }
 
 describe('AssignmentCapabilitiesDialog — 加载', () => {
@@ -295,7 +286,6 @@ describe('AssignmentCapabilitiesDialog — 保存全量', () => {
 
 describe('AssignmentCapabilitiesDialog — 重启提示', () => {
   it('agent 运行中 + delta 变化 → 保存后显示重启提示', async () => {
-    setRunning(true);
     render(
       <AssignmentCapabilitiesDialog
         assignment={buildAssignment()}
@@ -319,7 +309,6 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
   });
 
   it('点击 [立即重启] → stopAgent + startAgent + onClose', async () => {
-    setRunning(true);
     workspaceGet.mockResolvedValueOnce({
       id: 'ws-1',
       name: 'WS',
@@ -366,11 +355,10 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
   });
 
   it('agent 未运行 → 保存后直接关闭（不弹重启提示）', async () => {
-    setRunning(false);
     const onClose = vi.fn();
     render(
       <AssignmentCapabilitiesDialog
-        assignment={buildAssignment()}
+        assignment={buildAssignment({ lastRunning: false })}
         def={buildDef()}
         onClose={onClose}
       />,
@@ -390,7 +378,6 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
   });
 
   it('点击 [稍后] → 关闭弹窗（不重启）', async () => {
-    setRunning(true);
     const onClose = vi.fn();
     render(
       <AssignmentCapabilitiesDialog

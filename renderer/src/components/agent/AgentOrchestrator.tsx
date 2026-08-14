@@ -13,7 +13,7 @@ interface Props {
 
 export function AgentOrchestrator({ onBack }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { assignments, definitions, running, updateAssignmentRole } = useAgentStore();
+  const { assignments, definitions, updateAssignmentRole } = useAgentStore();
   const [pickingParentFor, setPickingParentFor] = useState<string | null>(null);
   const [collapsedMains, setCollapsedMains] = useState<Set<string>>(new Set());
 
@@ -93,8 +93,8 @@ export function AgentOrchestrator({ onBack }: Props) {
                     {collapsedMains.has(mainA.instanceId) ? '▸' : '▾'}
                   </button>
                   <span className={'text-xs px-2 py-0.5 rounded-full ' +
-                    (running[mainA.instanceId] ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
-                    {running[mainA.instanceId] ? '运行中' : '已停止'}
+                    (mainA.lastRunning ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
+                    {mainA.lastRunning ? '运行中' : '已停止'}
                   </span>
                 </div>
                 {!collapsedMains.has(mainA.instanceId) && (
@@ -107,8 +107,8 @@ export function AgentOrchestrator({ onBack }: Props) {
                           <span className="text-base">{subDef.iconEmoji}</span>
                           <span className="text-sm text-neutral-200 flex-1">{subDef.name}</span>
                           <span className={'text-xs px-2 py-0.5 rounded-full ' +
-                            (running[subA.instanceId] ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
-                            {running[subA.instanceId] ? '运行中' : '已停止'}
+                            (subA.lastRunning ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
+                            {subA.lastRunning ? '运行中' : '已停止'}
                           </span>
                           <button
                             type="button"
@@ -167,8 +167,8 @@ export function AgentOrchestrator({ onBack }: Props) {
                 <span className="text-sm text-neutral-100 flex-1">{def.name}</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-500/20 text-neutral-400">[standalone]</span>
                 <span className={'text-xs px-2 py-0.5 rounded-full ' +
-                  (running[sa.instanceId] ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
-                  {running[sa.instanceId] ? '运行中' : '已停止'}
+                  (sa.lastRunning ? 'bg-green-500/20 text-green-400' : 'bg-neutral-500/20 text-neutral-400')}>
+                  {sa.lastRunning ? '运行中' : '已停止'}
                 </span>
                 <button
                   type="button"

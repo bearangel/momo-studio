@@ -18,7 +18,7 @@ import type { AgentAssignment } from '../../ipc/types';
 export function WorkspaceAgentsPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const setCoordinator = useWorkspaceStore((s) => s.setCoordinator);
-  const { assignments, definitions, running, loadAssignments, stopAgent, startAgent } = useAgentStore();
+  const { assignments, definitions, loadAssignments, stopAgent, startAgent } = useAgentStore();
 
   const [addOpen, setAddOpen] = useState(false);
   const [roleEditing, setRoleEditing] = useState<AgentAssignment | null>(null);
@@ -88,7 +88,7 @@ export function WorkspaceAgentsPanel() {
           <Section title="独立 agent">
             {standalones.map((a) => (
               <AssignmentRow
-                key={a.instanceId} a={a} defMap={defMap} running={running}
+                key={a.instanceId} a={a} defMap={defMap}
                 workspace={workspace} setCoordinator={setCoordinator}
                 onEditRole={setRoleEditing} onEditKey={setKeyEditing}
                 onAdjustCapabilities={setAdjustingAssignment}
@@ -103,7 +103,7 @@ export function WorkspaceAgentsPanel() {
             {mains.map((main) => (
               <div key={main.instanceId} className="space-y-1">
                 <AssignmentRow
-                  a={main} defMap={defMap} running={running}
+                  a={main} defMap={defMap}
                   workspace={workspace} setCoordinator={setCoordinator}
                   onEditRole={setRoleEditing} onEditKey={setKeyEditing}
                   onAdjustCapabilities={setAdjustingAssignment}
@@ -112,7 +112,7 @@ export function WorkspaceAgentsPanel() {
                 {subsOf(main.instanceId).map((sub) => (
                   <div key={sub.instanceId} className="pl-6">
                     <AssignmentRow
-                      a={sub} defMap={defMap} running={running}
+                      a={sub} defMap={defMap}
                       onEditRole={setRoleEditing} onEditKey={setKeyEditing}
                       onAdjustCapabilities={setAdjustingAssignment}
                       onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
@@ -129,7 +129,7 @@ export function WorkspaceAgentsPanel() {
             {orphanSubs.map((sub) => (
               <div key={sub.instanceId} className="border border-amber-500/30 rounded p-2 bg-amber-500/5">
                 <AssignmentRow
-                  a={sub} defMap={defMap} running={running}
+                  a={sub} defMap={defMap}
                   onEditRole={setRoleEditing} onEditKey={setKeyEditing}
                   onAdjustCapabilities={setAdjustingAssignment}
                   onStart={handleStart} onStop={handleStop} onRemove={handleRemove}
@@ -189,7 +189,6 @@ function Section({ title, titleClass, children }: {
 interface RowProps {
   a: AgentAssignment;
   defMap: Map<string, { name: string; iconEmoji: string }>;
-  running: Record<string, boolean>;
   workspace?: { id: string; teamRoomId: string; coordinatorInstanceId: string | null } | null;
   setCoordinator?: (wsId: string, instanceId: string) => Promise<void>;
   onStart?: (a: AgentAssignment) => void;
@@ -201,13 +200,13 @@ interface RowProps {
 }
 
 function AssignmentRow({
-  a, defMap, running, workspace, setCoordinator,
+  a, defMap, workspace, setCoordinator,
   onStart, onStop,
   onEditRole, onEditKey, onAdjustCapabilities, onRemove,
 }: RowProps) {
   const def = defMap.get(a.agentDefinitionId);
   const isCoord = workspace?.coordinatorInstanceId === a.instanceId;
-  const isRunning = !!running[a.instanceId];
+  const isRunning = a.lastRunning;
 
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-bg-tertiary/50 rounded group">

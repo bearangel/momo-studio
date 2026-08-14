@@ -18,7 +18,7 @@ export function MessageInput() {
   const sendMessage = useImStore((s) => s.sendMessage);
   const loadRooms = useImStore((s) => s.loadRooms);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { assignments, running, loadAssignments, definitions, loadDefinitions } = useAgentStore();
+  const { assignments, loadAssignments, definitions, loadDefinitions } = useAgentStore();
   const botNameMap = useBotNameMap();
 
   useEffect(() => {
@@ -31,7 +31,7 @@ export function MessageInput() {
   const agentsInWorkspace = assignments.filter(
     (a) =>
       a.enabled &&
-      running[a.instanceId] === true &&
+      a.lastRunning &&
       members.some((m) => m.userId === a.botMatrixUserId),
   );
 

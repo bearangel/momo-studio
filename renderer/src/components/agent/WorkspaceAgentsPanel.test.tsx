@@ -79,15 +79,12 @@ const ASSIGNMENT: AgentAssignment = {
 
 // store action 桩
 const loadAssignmentsMock = vi.fn();
-const syncRunningStatesMock = vi.fn();
 
 beforeEach(() => {
   dialogMock.mockReset();
   loadAssignmentsMock.mockReset();
-  syncRunningStatesMock.mockReset();
 
   loadAssignmentsMock.mockResolvedValue(undefined);
-  syncRunningStatesMock.mockResolvedValue(undefined);
 
   useWorkspaceStore.setState({
     workspaces: [WS],
@@ -99,14 +96,12 @@ beforeEach(() => {
   useAgentStore.setState({
     definitions: [DEF],
     assignments: [ASSIGNMENT],
-    running: {},
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn(),
     loadAssignments: loadAssignmentsMock,
     loadBuiltinSuggestions: vi.fn(),
-    syncRunningStates: syncRunningStatesMock,
     addAgent: vi.fn(),
     assignMainAgent: vi.fn(),
     deleteDefinition: vi.fn(),

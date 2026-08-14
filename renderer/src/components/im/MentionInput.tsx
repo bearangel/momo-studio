@@ -69,6 +69,7 @@ export function MentionInput({
     if (menuType !== 'agent') return [];
     const q = query.toLowerCase();
     return assignments.filter((a) => {
+      if (!a.lastRunning) return false;
       const name = a.agentName ?? a.botMatrixUserId;
       return !q || name.toLowerCase().includes(q);
     });
