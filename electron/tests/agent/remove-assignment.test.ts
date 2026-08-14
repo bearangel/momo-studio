@@ -65,6 +65,8 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   startAgentRuntime: (opts: unknown) => mocks.spawnAgentMock(opts),
+  // I1 修复后 restartMainForSubChange 改用 stopAgentRuntime；委托 stopAgentMock 保持断言语义
+  stopAgentRuntime: async (id: string) => mocks.stopAgentMock(id),
 }));
 vi.mock('../../src/main/agent/crud', () => ({
   listAssignments: mocks.listAssignmentsMock,

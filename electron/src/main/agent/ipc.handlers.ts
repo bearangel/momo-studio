@@ -277,7 +277,10 @@ async function restartMainForSubChange(
   const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
   if (!token) return;
 
-  stopAgent(mainInstanceId);
+  // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
+  // 旧实现对 task-driven main 无效——stopAgent 早返（runtimes 无 entry），
+  // ensureTaskDrivenRuntime 见 pool 仍在跳过 runner 重建 → subAgents 列表不刷新。
+  await stopAgentRuntime(mainInstanceId);
   await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,

@@ -95,6 +95,13 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
     });
     agentRunners.set(instanceId, runner);
 
+    // v2 修复（final review C1）：与 stopAgentRuntime 对称——写 last_running=1。
+    // 否则 stop（写 0）→ start 循环后 DB 仍为 0，renderer reload 看到 lastRunning=false，
+    // UI 显示离线而 runner 实际在运行。v1 spawnAgent 路径内部已写 1，此处补 task-driven 路径。
+    getDb()
+      .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
+      .run(instanceId);
+
     logger.info('task-driven runtime 已创建', { instanceId, botUserId });
   }
 
@@ -140,6 +147,12 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     warmPool: pool,
   });
   agentRunners.set(instanceId, runner);
+
+  // v2 修复（final review C1）：与 ensureTaskDrivenRuntime 对称——写 last_running=1。
+  // init 路径仅对 last_running=1 的 agent 调用，此处写入幂等；防御性保持双轨对称。
+  getDb()
+    .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
+    .run(instanceId);
 
   return pool;
 }

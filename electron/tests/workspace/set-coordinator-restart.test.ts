@@ -37,6 +37,8 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   startAgentRuntime: (opts: unknown) => spawnAgentMock(opts),
+  // I1 修复后 restartCoordinatorInstance 改用 stopAgentRuntime；委托 stopAgentMock 保持断言语义
+  stopAgentRuntime: async (id: string) => stopAgentMock(id),
 }));
 
 // mock allocation：避免依赖 workspace_allocations 表，返回空分配即可

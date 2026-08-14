@@ -16,8 +16,8 @@ import {
 } from './allocation';
 import { createMatrixSpace, createRoomInSpace } from '../matrix/rooms';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
-import { stopAgent, isAgentRunning } from '../agent/runtime-manager';
-import { startAgentRuntime } from '../agent/runtime-registry';
+import { isAgentRunning } from '../agent/runtime-manager';
+import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
 import { getAgentDefinition, listAssignments } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
 import { getSecret } from '../storage/keychain';
@@ -106,7 +106,10 @@ async function restartCoordinatorInstance(
   const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
   if (!token) return;
 
-  stopAgent(instanceId);
+  // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
+  // 旧实现对 task-driven agent 无效——stopAgent 早返（runtimes 无 entry），
+  // ensureTaskDrivenRuntime 见 pool 仍在跳过 runner 重建 → isCoordinator 标志不生效。
+  await stopAgentRuntime(instanceId);
 
   await startAgentRuntime(
     buildSpawnOpts({
