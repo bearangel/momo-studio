@@ -16,6 +16,7 @@ import { registerSettingsIpc } from '../settings/ipc.handlers';
 import { registerSkillHandlers } from '../skill/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
+import { registerP2pHandlers } from '../p2p';
 import { registerDialogHandlers } from './dialog.handlers';
 
 export function registerIpcHandlers(): void {
@@ -36,5 +37,6 @@ export function registerIpcHandlers(): void {
   registerSkillHandlers();
   registerResourceHandlers();
   registerTaskHandlers();
+  registerP2pHandlers();
   registerDialogHandlers();
 }

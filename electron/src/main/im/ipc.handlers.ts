@@ -32,6 +32,7 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
+import { broadcastLocalMessage } from '../p2p';
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerImHandlers(): void {
@@ -212,6 +213,15 @@ async function sendUserMessage(
   } catch (err) {
     logger.warn('Matrix 发送失败，消息仅保留在本地 SQLite', { error: (err as Error).message });
   }
+
+  // C 子系统：本地新消息 fire-and-forget 广播给信任的 P2P 对端。
+  // sync 未初始化时 broadcastLocalMessage 静默返回，无副作用。
+  void broadcastLocalMessage({
+    roomId,
+    sender: ownerUserId,
+    body,
+    eventType: 'm.room.message',
+  });
 }
 
 /** 推送 SQLite MessageRow 到 renderer（与 ImMessage 字段完全对齐，跨 IPC 形状一致） */

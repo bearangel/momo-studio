@@ -15,8 +15,9 @@
 //
 // 与 C7 sync.ts 的关系：
 //   sync 通过 router.onIncoming(handler) 订阅，router opts.onIncoming 兼容回调保留空函数。
-//   onRemoteMessage 当前空实现——后续 task 接入 messages repo 调 insertMessage。
-import { ipcMain } from 'electron';
+//   onRemoteMessage → handleRemoteMessage：把对端 message 写入 SQLite（source='lan'）+ 推 renderer。
+//   broadcastLocalMessage：本地新消息出站触发，委托 sync.broadcastNewMessage 广播给信任节点。
+import { BrowserWindow, ipcMain } from 'electron';
 import { Router } from './router';
 import { LocalTransport } from './local-transport';
 import { LanTransport } from './lan-transport';
@@ -33,6 +34,8 @@ import {
   getTrustedPublicKey,
 } from './trust-store';
 import { P2pSync, type SyncMessage } from './sync';
+import { insertMessage } from '../storage/messages/repo';
+import { logger } from '../logger';
 
 /** 模块级单例（initP2p 创建，IPC handlers / stopP2p 引用） */
 let router: Router | null = null;
@@ -79,15 +82,59 @@ export async function initP2p(): Promise<void> {
   });
   await router.start();
 
-  // 4. 应用层同步：把对端 message 写本地（onRemoteMessage 后续接入 messages repo）
+  // 4. 应用层同步：把对端 message 写本地 SQLite + 推 renderer
   sync = new P2pSync({
     router,
     localNodeId: id.nodeId,
-    onRemoteMessage: (_msg: SyncMessage) => {
-      // TODO(C9+): import messages repo，调用 insertMessage(msg, source='lan')
-    },
+    onRemoteMessage: handleRemoteMessage,
   });
   sync.start();
+}
+
+/**
+ * 入站应用层：收到对端 message → 写入 SQLite（source='lan'）→ 推 renderer。
+ *
+ * source 统一用 'lan' 标识所有 P2P 来源（LAN mDNS + hub 中转）——
+ * 区分具体传输层由 router/transport 负责，应用层只需知道"非本地产生"。
+ * 失败时记录日志但不抛出（入站消息丢失不影响 P2P 链路稳定性）。
+ */
+export function handleRemoteMessage(msg: SyncMessage): void {
+  try {
+    const row = insertMessage({
+      roomId: msg.roomId,
+      sender: msg.sender,
+      eventType: msg.eventType,
+      body: msg.body,
+      source: 'lan',
+    });
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('im:message', row);
+    }
+  } catch (err) {
+    logger.warn('P2P 入站消息写入失败', {
+      roomId: msg.roomId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * 出站应用层：本地新消息 → 广播给所有信任节点。
+ *
+ * sync 未初始化（P2P 未启用）时静默返回——调用方无需关心 P2P 状态。
+ * 由 im:send 路径在 insertMessage 后 fire-and-forget 调用。
+ */
+export async function broadcastLocalMessage(msg: SyncMessage): Promise<void> {
+  if (!sync) return;
+  try {
+    await sync.broadcastNewMessage(msg);
+  } catch (err) {
+    logger.warn('P2P 出站广播失败', {
+      roomId: msg.roomId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

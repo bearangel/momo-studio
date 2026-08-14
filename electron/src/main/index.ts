@@ -7,6 +7,7 @@ import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
 import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
 import { autoStartAgents } from './agent/auto-start';
+import { initP2p } from './p2p';
 import { logger } from './logger';
 
 if (!app.requestSingleInstanceLock()) {
@@ -71,6 +72,14 @@ async function autoRestoreSession(): Promise<void> {
       }
     }, 1000);
   }
+
+  // C 子系统：P2P 联网初始化（async 不阻塞启动；失败仅记录日志）。
+  // 放在 session restore 之后——无登录会话时 P2P 仍可启动（节点发现/信任管理不依赖 Matrix）。
+  void initP2p().catch((err) => {
+    logger.warn('P2P 子系统初始化失败（不影响主流程）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 }
 
 app.on('window-all-closed', () => {
