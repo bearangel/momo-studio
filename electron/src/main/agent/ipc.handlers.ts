@@ -301,6 +301,24 @@ async function restartMainForSubChange(
 }
 
 /**
+ * v2 修复：若 instanceId 是 sub，重启其 parent main。
+ * 用于 agent:start / agent:stop 末尾——sub 状态变化时让 main 的 dispatch 工具列表刷新。
+ *
+ * 内部委托 restartMainForSubChange（已存在），仅在 instanceId 是 sub 时执行。
+ * standalone / main / parent 不存在时 no-op。
+ */
+async function maybeRestartMainForSubChange(instanceId: string): Promise<void> {
+  const row = getDb()
+    .prepare('SELECT workspace_id, role, parent_instance_id FROM agent_assignments WHERE instance_id = ?')
+    .get(instanceId) as
+      | { workspace_id: string; role: string; parent_instance_id: string | null }
+      | undefined;
+  if (row?.role === 'sub' && row.parent_instance_id) {
+    await restartMainForSubChange(row.workspace_id, row.parent_instance_id);
+  }
+}
+
+/**
  * 让 bot 离开所有已加入的房间。
  *
  * v1.5.8：优先用 owner client kick bot（admin 路径，不依赖 bot token）——
@@ -521,6 +539,7 @@ export function registerAgentHandlers(): void {
 
   ipcMain.handle('agent:stop', async (_evt, instanceId: string) => {
     await stopAgentRuntime(instanceId);
+    await maybeRestartMainForSubChange(instanceId);
     return { ok: true };
   });
 
@@ -645,6 +664,8 @@ export function registerAgentHandlers(): void {
         }),
         def.taskDriven !== false,
       );
+
+      await maybeRestartMainForSubChange(assignment.instanceId);
 
       return { instanceId: assignment.instanceId };
     },
