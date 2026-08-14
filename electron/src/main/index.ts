@@ -8,6 +8,7 @@ import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged 
 import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
 import { autoStartAgents } from './agent/auto-start';
 import { initP2p } from './p2p';
+import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
 
 if (!app.requestSingleInstanceLock()) {
@@ -20,6 +21,9 @@ app.whenReady().then(async () => {
 
     runMigrations();
     logger.info('Migrations complete');
+
+    // D 子系统：启动 TaskScheduler（调度层）——提升 pending→assigned，执行层走 v1 runtime。
+    initTaskRuntime();
 
     void startConduit().catch((err) => {
       logger.error('Conduit pre-start failed (will retry on auth)', {
@@ -91,6 +95,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  stopTaskRuntime();
   void stopConduit();
   void stopSync();
 });
