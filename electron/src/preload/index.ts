@@ -129,6 +129,16 @@ const api: ApiSurface = {
         ipcRenderer.off('im:message_event_batch', handler);
       };
     },
+    onConflict: (callback) => {
+      const handler = (
+        _e: IpcRendererEvent,
+        data: { newTaskId: string; currentTaskId: string; currentRoomId: string },
+      ): void => callback(data);
+      ipcRenderer.on('im:conflict', handler);
+      return () => {
+        ipcRenderer.off('im:conflict', handler);
+      };
+    },
   },
   mcp: {
     register: (config) => invoke('mcp:register', config),

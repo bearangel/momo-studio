@@ -811,6 +811,14 @@ export interface ApiSurface {
     onMessage(callback: (msg: ImMessage) => void): () => void;
     /** A 子系统：订阅 stream chunk 批量推送（主进程 MessageEventBuffer flush 时触发） */
     onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
+    /** B 子系统：订阅任务冲突检测推送（execution_room 内 mention 另一个任务时触发） */
+    onConflict(
+      callback: (conflict: {
+        newTaskId: string;
+        currentTaskId: string;
+        currentRoomId: string;
+      }) => void,
+    ): () => void;
   };
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */

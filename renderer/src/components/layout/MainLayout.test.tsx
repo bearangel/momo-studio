@@ -31,6 +31,7 @@ const mockApi = {
     getRooms: vi.fn().mockResolvedValue([]),
     getMessages: vi.fn().mockResolvedValue([]),
     onMessage: vi.fn().mockReturnValue(() => {}),
+    onConflict: vi.fn().mockReturnValue(() => {}),
   },
   agent: {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),

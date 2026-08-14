@@ -33,6 +33,8 @@ import {
   type MessageEventRow,
 } from '../storage/messages/events-repo';
 import { broadcastLocalMessage } from '../p2p';
+import { detectConflict } from '../task/conflict-detector';
+import { listTasks, getTask } from '../storage/tasks/repo';
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerImHandlers(): void {
@@ -222,6 +224,20 @@ async function sendUserMessage(
     body,
     eventType: 'm.room.message',
   });
+
+  // B 子系统：冲突触发检测。当前房间是某 in_progress 任务的 execution_room 且消息
+  // mention 了另一个任务时，推 im:conflict 事件给 renderer 弹 ConflictDialog。
+  const conflict = detectConflict(roomId, body, {
+    findInProgressTaskByRoom: (r) =>
+      listTasks({ executionRoomId: r, status: 'in_progress', limit: 1 })[0] ?? null,
+    getTask,
+  });
+  if (conflict) {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('im:conflict', conflict);
+    }
+  }
 }
 
 /** 推送 SQLite MessageRow 到 renderer（与 ImMessage 字段完全对齐，跨 IPC 形状一致） */

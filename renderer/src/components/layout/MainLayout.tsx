@@ -5,6 +5,7 @@
 import { useEffect } from 'react';
 import { LeftRail } from './LeftRail';
 import { MiddlePanel } from './MiddlePanel';
+import { ConflictDialogMount } from '../im/ConflictDialogMount';
 import { ipc } from '../../ipc/client';
 import { useImStore } from '../../stores/im.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -42,6 +43,7 @@ export function MainLayout() {
     <div className="flex h-screen w-screen overflow-hidden bg-bg-primary">
       <LeftRail />
       <MiddlePanel />
+      <ConflictDialogMount />
     </div>
   );
 }
