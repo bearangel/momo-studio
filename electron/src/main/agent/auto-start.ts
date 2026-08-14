@@ -41,17 +41,19 @@ interface AssignmentRow {
 /**
  * v1 自动启动入口。
  *
- * task-driven 模式下（T7 改造）：
- *   - task_driven=1 的 agent 由 initTaskDrivenRuntime 接管，本函数不再处理它们。
- *   - task_driven=0 的 agent 继续走 v1 spawn 路径（保留向后兼容）。
+ * 行为：
+ *   - 查询 enabled=1 AND last_running=1 的 assignment
+ *   - 对每个：
+ *     - def.taskDriven !== false → 跳过（v2 修复：由 initTaskDrivenRuntime 接管）
+ *     - def.taskDriven === false → 走 v1 spawnAgent 路径
  *
- * 幂等：v1 子进程已在 runtimes Map 中的 agent 会被 isV1SubprocessAlive 跳过，避免重复 spawn。
- * 注意：isV1SubprocessAlive 只看 v1 runtimes Map——不查 DB last_running（用户启动意图）。
- *       task-driven agent（task_driven=1）不在本路径检查范围内，由 def.taskDriven !== false 跳过。
+ * v2 架构下：
+ *   - task-driven agent 的注册 + WarmPool 预热由 initTaskDrivenRuntime 完成（init-runtime.ts 独立模块）
+ *   - 本函数仅作为 v1 fallback 路径保留（task_driven=0 的 agent）
+ *   - isAgentRunning 现查询 DB last_running（不再查 runtimes Map）
+ *   - isV1SubprocessAlive 用于 v1 重复 spawn 防护（auto-start.ts 内部）
  *
- * Task 2 review C1 修复：原 isAgentRunning 已改查 DB（语义=用户启动意图），
- *   而本函数 SELECT 已过滤 last_running=1，导致 isAgentRunning 守卫永远为真，
- *   spawnAgent 永不调用 → 自启动成 no-op。改用 isV1SubprocessAlive 恢复 v1 重复 spawn 防护。
+ * v1.5.8：保留原 token 验证 + 失效 re-login 流程
  */
 export async function autoStartAgents(): Promise<void> {
   const db = getDb();
