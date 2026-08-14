@@ -9,13 +9,14 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
-import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged, setRouterService } from './matrix/sync-manager';
+import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
 import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
 import { initP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
 import { initTaskDrivenRuntime } from './agent/init-runtime';
+import { destroyRouterService } from './agent/router-bootstrap';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -66,7 +67,7 @@ async function autoRestoreSession(): Promise<void> {
   try {
     await startSyncFromSession();
     logger.info('Session restored: Matrix sync started');
-    // initTaskDrivenRuntime 内部经 router-bootstrap.setRouterService 注入 RouterService
+    // initTaskDrivenRuntime 内部通过 router-bootstrap.ensureRouterService lazy 启动 RouterService
     await initTaskDrivenRuntime();
     logger.info('Task-driven runtime initialized');
     broadcastRuntimeChanged();
@@ -101,7 +102,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   destroyAllTaskDrivenRuntimes();
-  setRouterService(null);
+  destroyRouterService();
 
   stopTaskRuntime();
   void stopConduit();
