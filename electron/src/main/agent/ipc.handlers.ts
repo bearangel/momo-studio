@@ -36,7 +36,8 @@ import {
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
 import { getSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
-import { spawnAgent, stopAgent, isAgentRunning } from './runtime-manager';
+import { stopAgent, isAgentRunning } from './runtime-manager';
+import { startAgentRuntime } from './runtime-registry';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
@@ -163,7 +164,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   const results: AgentAssignment[] = [];
   for (const { def, assignment, bot } of installed) {
     const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId!);
-    spawnAgent(
+    await startAgentRuntime(
       buildSpawnOpts({
         instanceId: assignment.instanceId,
         botUserId: bot.botUserId,
@@ -177,6 +178,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
         llmApiKey: apiKey,
         isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       }),
+      def.taskDriven !== false,
     );
     results.push(assignment);
   }
@@ -276,7 +278,7 @@ async function restartMainForSubChange(
   if (!token) return;
 
   stopAgent(mainInstanceId);
-  spawnAgent(
+  await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,
       botUserId: assignment.botMatrixUserId,
@@ -290,6 +292,7 @@ async function restartMainForSubChange(
       llmApiKey: apiKey,
       isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
     }),
+    def.taskDriven !== false,
   );
   logger.info('Main agent 因 sub 变更已重启（重建 subAgents）', {
     mainInstanceId,
@@ -377,7 +380,7 @@ export function registerAgentHandlers(): void {
       }
 
       const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
-      spawnAgent(
+      await startAgentRuntime(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
           botUserId: bot.botUserId,
@@ -391,6 +394,7 @@ export function registerAgentHandlers(): void {
           llmApiKey: apiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
+        def.taskDriven !== false,
       );
 
       logger.info('Agent 已添加到 workspace 并启动', {
@@ -625,7 +629,7 @@ export function registerAgentHandlers(): void {
 
       const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
-      spawnAgent(
+      await startAgentRuntime(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
           botUserId: assignment.botMatrixUserId,
@@ -639,6 +643,7 @@ export function registerAgentHandlers(): void {
           llmApiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
+        def.taskDriven !== false,
       );
 
       return { instanceId: assignment.instanceId };

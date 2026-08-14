@@ -20,6 +20,7 @@ import { logger } from '../logger';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
+import { findAssignmentByBotUserId as defaultFindAssignmentByBotUserId } from './runtime-registry';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -27,6 +28,11 @@ export interface RouterServiceOpts {
   runners: Map<string, AgentRunner>;
   /** 任务调度器（pickup 决策 + 三层并发控制；routeUserMessage 不经过它——ephemeral chat 直接派发） */
   dispatcher: TaskDispatcher;
+  /**
+   * 按 botUserId 反查 assignmentId——dispatch 路由自解析用。
+   * 缺省用 runtime-registry 的 DB 查询；测试可注入 mock 避免依赖 DB。
+   */
+  findAssignmentByBotUserId?: (botUserId: string) => string | null;
 }
 
 /** notifyTaskReply 的入参（camelCase；由 task_reply event 的 snake_case content 转换而来） */
@@ -57,7 +63,8 @@ export class RouterService {
    * @param _ownerUserId workspace owner 的 Matrix userId（保留给 T8 abort/权限判定）
    * @param _targetAssignmentId 房间级目标 assignment（群组默认接待 agent）；当前 3 条路由
    *   都用 directTargetAssignmentId 精确派发，此参数预留给 T8 的群组广播场景
-   * @param directTargetAssignmentId 单聊/已解析的直接目标 runner key；未传则 m.room.message/dispatch 不派发
+   * @param directTargetAssignmentId 单聊/已解析的直接目标 runner key。
+   *   m.room.message 未传时不派发；dispatch 未传时 routeDispatch 内部从 dispatch_to 反查。
    */
   async routeMatrixEvent(
     event: RoutedEvent,
@@ -74,9 +81,9 @@ export class RouterService {
           }
           break;
         case DISPATCH_EVENT_TYPE:
-          if (directTargetAssignmentId) {
-            await this.routeDispatch(event, directTargetAssignmentId);
-          }
+          // dispatch 目标由 content.dispatch_to 决定——即使 directTargetAssignmentId
+          // 未传（sync-manager 当前传 null），routeDispatch 内部会反查。
+          await this.routeDispatch(event, directTargetAssignmentId);
           break;
         case TASK_REPLY_EVENT_TYPE:
           await this.routeTaskReply(event, directTargetAssignmentId);
@@ -120,14 +127,34 @@ export class RouterService {
    * PM dispatch event → sub-agent 的 dispatch ephemeral task。
    * 把 dispatch content 的 dispatch_from / task_id / tool_budget / tool_stream_session_id
    * 组装成 dispatchContext 注入 executeTask，子进程 runtime-entry 据此跑 handleDispatch 流程。
+   *
+   * 目标 assignment 解析优先级：
+   *   1. directAssignmentId（sync-manager 已解析的直接目标）
+   *   2. content.dispatch_to → findAssignmentByBotUserId 反查
    */
-  private async routeDispatch(event: RoutedEvent, assignmentId: string): Promise<void> {
+  private async routeDispatch(event: RoutedEvent, directAssignmentId?: string): Promise<void> {
     const content = event.getContent();
     const dispatchFrom = content.dispatch_from;
     const taskId = content.task_id;
     // 关键字段缺失 → 无法关联 task_reply，直接丢弃
     if (typeof dispatchFrom !== 'string' || typeof taskId !== 'string') {
       logger.warn('routeDispatch content 缺关键字段', { content });
+      return;
+    }
+
+    // 优先用直接指定的目标；未指定时从 dispatch_to 反查 assignment
+    let assignmentId = directAssignmentId;
+    if (!assignmentId) {
+      const dispatchTo = content.dispatch_to;
+      if (typeof dispatchTo === 'string') {
+        const lookup = this.opts.findAssignmentByBotUserId ?? defaultFindAssignmentByBotUserId;
+        assignmentId = lookup(dispatchTo) ?? undefined;
+      }
+    }
+    if (!assignmentId) {
+      logger.warn('routeDispatch 无法解析目标 assignment', {
+        dispatchTo: content.dispatch_to, taskId,
+      });
       return;
     }
 

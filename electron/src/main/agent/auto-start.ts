@@ -1,8 +1,15 @@
 // electron/src/main/agent/auto-start.ts
 //
-// 应用启动时自动恢复已分配的 agent。
-// 读取所有 workspace 的 enabled agent assignment，
-// 从 keychain 恢复 API key + bot token 后 spawn runtime 子进程。
+// 应用启动时自动恢复已分配的 agent（v1 fallback 路径）。
+//
+// task-driven 架构（T7 改造）：
+//   - task_driven=1 的 agent 由 main/index.ts 的 initTaskDrivenRuntime 接管
+//     （创建 WarmPool + AgentRunner + 预热 + 启动 RouterService）。
+//   - task_driven=0 的 agent 仍走本函数的 v1 spawn 路径（长期运行子进程）。
+//   - auth 登录流程也调 autoStartAgents——在 task-driven 模式下，
+//     initTaskDrivenRuntime 已在 autoRestoreSession 中先于 autoStartAgents 调用，
+//     task_driven=1 的 agent 已在 agentRunners/agentWarmPools 中，本函数的
+//     isAgentRunning 守卫会自动跳过它们（不重复启动）。
 //
 // v1.3 改造：
 //   - role 来自 assignment（不再从 def.type 推断）
@@ -30,6 +37,19 @@ interface AssignmentRow {
   role: string;
 }
 
+/**
+ * v1 自动启动入口。
+ *
+ * task-driven 模式下（T7 改造）：
+ *   - task_driven=1 的 agent 由 initTaskDrivenRuntime 接管，本函数不再处理它们。
+ *   - task_driven=0 的 agent 继续走 v1 spawn 路径（保留向后兼容）。
+ *
+ * 幂等：已运行的 agent（含 task-driven 在 agentRunners 中的）会被 isAgentRunning 跳过。
+ * 注意：task-driven agent 在 agentRunners 中但不一定在 v1 runtimes 中——
+ * isAgentRunning 查的是 v1 runtimes Map，对 task-driven agent 返回 false。
+ * 但 task-driven agent 已由 initTaskDrivenRuntime 启动，本函数对它们也无操作需要做
+ * （它们不需要 v1 spawn）。def.taskDriven === true 时 continue 跳过即可。
+ */
 export async function autoStartAgents(): Promise<void> {
   const db = getDb();
   // v1.5.8：只启动 enabled=1（assignment 存在）AND last_running=1（用户未主动下线）的 agent
@@ -53,6 +73,12 @@ export async function autoStartAgents(): Promise<void> {
       if (!def) {
         logger.warn('Agent 定义不存在，跳过', { defId: row.agent_definition_id });
         failed++;
+        continue;
+      }
+
+      // T7：task_driven=1 的 agent 由 initTaskDrivenRuntime 接管，跳过 v1 spawn
+      if (def.taskDriven !== false) {
+        skipped++;
         continue;
       }
 
@@ -128,7 +154,7 @@ export async function autoStartAgents(): Promise<void> {
         : 0;
 
       started++;
-      logger.info('Agent 已自启动', {
+      logger.info('Agent 已自启动（v1 路径）', {
         slug: def.slug,
         instanceId: row.instance_id,
         role: row.role,
@@ -143,7 +169,7 @@ export async function autoStartAgents(): Promise<void> {
     }
   }
 
-  logger.info('Agent 自启动完成', { started, failed, skipped, total: rows.length });
+  logger.info('Agent 自启动完成（v1 fallback）', { started, failed, skipped, total: rows.length });
 }
 
 /** 从 keychain 取 bot Matrix token（封装 helper，便于日志统一） */

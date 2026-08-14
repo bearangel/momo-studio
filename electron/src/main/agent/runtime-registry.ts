@@ -1,0 +1,179 @@
+// electron/src/main/agent/runtime-registry.ts
+//
+// task-driven runtime 全局注册中心——持有 agentRunners / agentWarmPools / providerBuckets
+// 三个全局 Map，供 main/index.ts、IPC handlers、RouterService 共享访问。
+//
+// 从 main/index.ts 提取到独立模块的原因：
+//   - IPC handler（agent:addToWorkspace / agent:start 等）需要读写 agentRunners/agentWarmPools
+//   - RouterService 需要只读访问 runners Map（构造时传入引用，后续动态添加可见）
+//   - 避免循环依赖（main/index.ts ↔ ipc.handlers.ts）
+//
+// 关键函数：
+//   - startAgentRuntime(opts, taskDriven)：IPC handler 调用入口——taskDriven=true 走 WarmPool
+//     预热（含按需创建），taskDriven=false 走 v1 spawnAgent fallback
+//   - createTaskDrivenRuntime(opts)：为单个 assignment 创建 WarmPool + AgentRunner + 注册 + 预热
+//   - findAssignmentByBotUserId(botUserId)：按 bot_matrix_user_id 反查 instance_id（dispatch 路由用）
+//   - destroyAllTaskDrivenRuntimes()：进程退出时清理（before-quit 调用）
+
+import { logger } from '../logger';
+import { getDb } from '../storage/db';
+import { spawnAgent, handleStreamChunk, type AgentRuntimeOpts } from './runtime-manager';
+import { WarmPool } from './warm-pool';
+import { AgentRunner } from './agent-runner';
+import { spawnForAgent } from './runtime-spawner';
+import type { ProviderTokenBucket } from './llm/token-bucket';
+
+// ─── 全局注册表 ───────────────────────────────────────────────────────────
+
+/** assignmentId（instance_id）→ AgentRunner */
+export const agentRunners = new Map<string, AgentRunner>();
+
+/** assignmentId → WarmPool */
+export const agentWarmPools = new Map<string, WarmPool>();
+
+/** modelProviderId → ProviderTokenBucket（LLM 限流共享桶） */
+export const providerBuckets = new Map<string, ProviderTokenBucket>();
+
+// ─── 核心函数 ─────────────────────────────────────────────────────────────
+
+/**
+ * IPC handler 调用入口——根据 taskDriven 标志分流：
+ *   - taskDriven=true：确保 WarmPool + AgentRunner 存在（不存在则创建），然后预热
+ *   - taskDriven=false：走 v1 spawnAgent（长期运行子进程模式）
+ *
+ * 替代 IPC handler 中的直接 spawnAgent(opts) 调用。
+ * opts 已由调用方通过 buildSpawnOpts 构造完毕。
+ *
+ * @param opts 已构建的 AgentRuntimeOpts（含 instanceId / botUserId / workspaceId 等）
+ * @param taskDriven agent 定义是否 task_driven=1
+ */
+export async function startAgentRuntime(
+  opts: AgentRuntimeOpts,
+  taskDriven: boolean,
+): Promise<void> {
+  if (taskDriven) {
+    await ensureTaskDrivenRuntime(opts);
+  } else {
+    // v1 fallback：直接 spawn 长期运行子进程
+    spawnAgent(opts);
+  }
+}
+
+/**
+ * 确保指定 assignment 的 task-driven runtime 已就绪：
+ *   1. WarmPool 不存在 → 创建（spawn 回调闭包捕获 opts）+ 注册
+ *   2. AgentRunner 不存在 → 创建 + 注册
+ *   3. 预热池（补到 poolSize）
+ *
+ * 幂等：已存在的 pool/runner 不会重建，仅触发 warm 补充。
+ */
+async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
+  const { instanceId, botUserId, workspaceId } = opts;
+
+  if (!agentWarmPools.has(instanceId)) {
+    const pool = new WarmPool({
+      poolSize: 2,
+      spawn: async (agentId) => {
+        const runtime = await spawnForAgent({
+          assignmentId: agentId,
+          runtimeConfig: opts,
+          onChunk: (chunk) => handleStreamChunk(chunk),
+          onExit: (code) => {
+            logger.info('task-driven runtime 退出', { agentId, code });
+          },
+        });
+        return runtime.child;
+      },
+    });
+    agentWarmPools.set(instanceId, pool);
+
+    const runner = new AgentRunner({
+      agentAssignmentId: instanceId,
+      agentBotUserId: botUserId,
+      workspaceId,
+      warmPool: pool,
+    });
+    agentRunners.set(instanceId, runner);
+
+    logger.info('task-driven runtime 已创建', { instanceId, botUserId });
+  }
+
+  const pool = agentWarmPools.get(instanceId)!;
+  await pool.warm(instanceId).catch((err) => {
+    logger.warn('WarmPool 预热失败', { instanceId, error: String(err) });
+  });
+}
+
+/**
+ * 为单个 assignment 创建 task-driven runtime——由 initTaskDrivenRuntime 在启动时遍历调用。
+ * 与 ensureTaskDrivenRuntime 的区别：本函数不做幂等检查（调用方保证），
+ * 且返回创建的 pool 供调用方记录日志。
+ *
+ * @returns 创建的 WarmPool；已存在时返回已有的
+ */
+export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
+  const { instanceId, botUserId, workspaceId } = opts;
+
+  const existing = agentWarmPools.get(instanceId);
+  if (existing) return existing;
+
+  const pool = new WarmPool({
+    poolSize: 2,
+    spawn: async (agentId) => {
+      const runtime = await spawnForAgent({
+        assignmentId: agentId,
+        runtimeConfig: opts,
+        onChunk: (chunk) => handleStreamChunk(chunk),
+        onExit: (code) => {
+          logger.info('task-driven runtime 退出', { agentId, code });
+        },
+      });
+      return runtime.child;
+    },
+  });
+  agentWarmPools.set(instanceId, pool);
+
+  const runner = new AgentRunner({
+    agentAssignmentId: instanceId,
+    agentBotUserId: botUserId,
+    workspaceId,
+    warmPool: pool,
+  });
+  agentRunners.set(instanceId, runner);
+
+  return pool;
+}
+
+/**
+ * 按 bot_matrix_user_id 反查 assignment 的 instance_id。
+ * 用于 RouterService.routeDispatch：dispatch event 的 dispatch_to 是目标 agent 的 botUserId，
+ * 需反查 assignmentId 才能从 runners Map 取到对应 AgentRunner。
+ *
+ * @returns instance_id；未找到时返回 null
+ */
+export function findAssignmentByBotUserId(botUserId: string): string | null {
+  const row = getDb()
+    .prepare('SELECT instance_id FROM agent_assignments WHERE bot_matrix_user_id = ?')
+    .get(botUserId) as { instance_id: string } | undefined;
+  return row?.instance_id ?? null;
+}
+
+/**
+ * 销毁所有 task-driven runtime——进程退出（before-quit）时调用。
+ * 反注册全部 runner + 销毁全部 pool + 清空 Map。
+ */
+export function destroyAllTaskDrivenRuntimes(): void {
+  for (const runner of agentRunners.values()) runner.destroy();
+  for (const pool of agentWarmPools.values()) pool.destroyAll();
+  agentRunners.clear();
+  agentWarmPools.clear();
+}
+
+// ─── 测试辅助 ─────────────────────────────────────────────────────────────
+
+/** 测试用：清空全部全局 Map（避免跨用例污染） */
+export function __clearRuntimeRegistryForTest(): void {
+  agentRunners.clear();
+  agentWarmPools.clear();
+  providerBuckets.clear();
+}

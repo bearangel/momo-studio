@@ -63,6 +63,9 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
   isAgentRunning: mocks.isAgentRunningMock,
   spawnAgent: mocks.spawnAgentMock,
 }));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  startAgentRuntime: (opts: unknown) => mocks.spawnAgentMock(opts),
+}));
 vi.mock('../../src/main/agent/crud', () => ({
   listAssignments: mocks.listAssignmentsMock,
   listSubAssignments: mocks.listSubAssignmentsMock,

@@ -35,6 +35,9 @@ vi.mock('../../src/main/agent/runtime-manager', () => ({
   spawnAgent: spawnAgentMock,
   isAgentRunning: isAgentRunningMock,
 }));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  startAgentRuntime: (opts: unknown) => spawnAgentMock(opts),
+}));
 
 // mock allocation：避免依赖 workspace_allocations 表，返回空分配即可
 vi.mock('../../src/main/workspace/allocation', () => ({

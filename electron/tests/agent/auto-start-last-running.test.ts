@@ -79,6 +79,7 @@ function makeDef(id: string, slug: string): AgentDefinition {
     defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
     defaultMcps: [], defaultSkills: [],
     workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
+    taskDriven: false,
   };
 }
 

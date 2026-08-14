@@ -5,26 +5,25 @@ import { registerIpcHandlers } from './ipc';
 import { runMigrations, getDb } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged, setRouterService } from './matrix/sync-manager';
-import { setMainWindow as setRuntimeMainWindow, handleStreamChunk } from './agent/runtime-manager';
+import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
 import { resolveBotToken } from './agent/auto-start';
 import { initP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
-import { WarmPool } from './agent/warm-pool';
-import { AgentRunner } from './agent/agent-runner';
 import { RouterService } from './agent/router-service';
 import { TaskDispatcher, type AgentAssignmentInfo } from './task/dispatcher';
-import type { ProviderTokenBucket } from './agent/llm/token-bucket';
-import { spawnForAgent } from './agent/runtime-spawner';
+import {
+  agentRunners,
+  providerBuckets,
+  createTaskDrivenRuntime,
+  destroyAllTaskDrivenRuntimes,
+} from './agent/runtime-registry';
 import { listAssignments, getAgentDefinition } from './agent/crud';
 import { listWorkspaces } from './workspace/crud';
 import { buildSpawnOpts, resolveApiKey } from './agent/spawn-helpers';
 import type { AgentRole } from './agent/types';
 
 let routerService: RouterService | null = null;
-const agentRunners = new Map<string, AgentRunner>();
-const agentWarmPools = new Map<string, WarmPool>();
-const providerBuckets = new Map<string, ProviderTokenBucket>();
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -142,29 +141,7 @@ async function initTaskDrivenRuntime(): Promise<void> {
           isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
         });
 
-        const pool = new WarmPool({
-          poolSize: 2,
-          spawn: async (agentId) => {
-            const runtime = await spawnForAgent({
-              assignmentId: agentId,
-              runtimeConfig,
-              onChunk: (chunk) => handleStreamChunk(chunk),
-              onExit: (code) => {
-                logger.info('task-driven runtime 退出', { agentId, code });
-              },
-            });
-            return runtime.child;
-          },
-        });
-        agentWarmPools.set(assignment.instanceId, pool);
-
-        const runner = new AgentRunner({
-          agentAssignmentId: assignment.instanceId,
-          agentBotUserId: assignment.botMatrixUserId,
-          workspaceId: ws.id,
-          warmPool: pool,
-        });
-        agentRunners.set(assignment.instanceId, runner);
+        const pool = createTaskDrivenRuntime(runtimeConfig);
 
         await pool.warm(assignment.instanceId).catch((err) => {
           logger.warn('WarmPool 预热失败', {
@@ -235,10 +212,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-  for (const runner of agentRunners.values()) runner.destroy();
-  for (const pool of agentWarmPools.values()) pool.destroyAll();
-  agentRunners.clear();
-  agentWarmPools.clear();
+  destroyAllTaskDrivenRuntimes();
   setRouterService(null);
   routerService = null;
 

@@ -143,10 +143,10 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
       (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
-       source, description, icon_emoji, workspace_id, model_provider_id, model_name)
+       source, description, icon_emoji, workspace_id, model_provider_id, model_name, task_driven)
      VALUES
       (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
-       @source, @description, @icon_emoji, @workspace_id, @model_provider_id, @model_name)`,
+       @source, @description, @icon_emoji, @workspace_id, @model_provider_id, @model_name, @task_driven)`,
   ).run({
     id: def.id,
     name: def.name,
@@ -163,6 +163,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     workspace_id: def.workspaceId,
     model_provider_id: def.modelProviderId,
     model_name: def.modelName,
+    task_driven: def.taskDriven === false ? 0 : 1,
   });
 }
 

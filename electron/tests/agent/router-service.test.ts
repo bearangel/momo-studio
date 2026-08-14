@@ -101,4 +101,61 @@ describe('RouterService', () => {
       expect.objectContaining({ taskId: 'task-123' }),
     );
   });
+
+  it('dispatch 未传 directTargetAssignmentId 时从 dispatch_to 自解析', async () => {
+    const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-3' }) };
+    const runners = new Map([['inst-sub', mockRunner]]);
+    const findAssignmentByBotUserId = vi.fn((botUserId: string) => {
+      if (botUserId === '@sub:home') return 'inst-sub';
+      return null;
+    });
+    const svc = new RouterService({
+      runners,
+      dispatcher: { tryPickup: vi.fn() } as never,
+      findAssignmentByBotUserId,
+    });
+
+    await svc.routeMatrixEvent(
+      mkMockEvent('io.momo-studio.dispatch', {
+        body: '写测试',
+        task_id: 'task-456',
+        dispatch_from: '@pm:home',
+        dispatch_to: '@sub:home',
+      }),
+      '@pm:home',
+      null,
+    );
+
+    expect(findAssignmentByBotUserId).toHaveBeenCalledWith('@sub:home');
+    expect(mockRunner.executeTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-456',
+        dispatchContext: expect.objectContaining({ fromBotUserId: '@pm:home' }),
+      }),
+    );
+  });
+
+  it('dispatch 自解析失败（findAssignmentByBotUserId 返回 null）时不派发', async () => {
+    const mockRunner = { executeTask: vi.fn() };
+    const runners = new Map([['inst-sub', mockRunner]]);
+    const findAssignmentByBotUserId = vi.fn(() => null);
+    const svc = new RouterService({
+      runners,
+      dispatcher: { tryPickup: vi.fn() } as never,
+      findAssignmentByBotUserId,
+    });
+
+    await svc.routeMatrixEvent(
+      mkMockEvent('io.momo-studio.dispatch', {
+        body: '写测试',
+        task_id: 'task-789',
+        dispatch_from: '@pm:home',
+        dispatch_to: '@unknown:home',
+      }),
+      '@pm:home',
+      null,
+    );
+
+    expect(mockRunner.executeTask).not.toHaveBeenCalled();
+  });
 });
