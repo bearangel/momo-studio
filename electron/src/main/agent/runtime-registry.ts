@@ -192,6 +192,49 @@ export function destroyAllTaskDrivenRuntimes(): void {
   agentWarmPools.clear();
 }
 
+/**
+ * 销毁单个 task-driven runtime（runner + WarmPool），从全局 Map 移除。
+ * - runner.destroy() 反注册 handler + release 活跃 runtime
+ * - pool.destroyAll() kill 池中所有 warm 子进程
+ * - 从 agentRunners + agentWarmPools Map 移除
+ *
+ * 不存在 instanceId 时 no-op（用于 stopAgentRuntime 兼容 v1-only agent）。
+ */
+export function destroyTaskDrivenRuntime(instanceId: string): void {
+  const runner = agentRunners.get(instanceId);
+  if (runner) {
+    runner.destroy();
+    agentRunners.delete(instanceId);
+  }
+  const pool = agentWarmPools.get(instanceId);
+  if (pool) {
+    pool.destroyAll();
+    agentWarmPools.delete(instanceId);
+  }
+}
+
+/**
+ * 统一的 agent 停止入口（v2 修复）。
+ * 双轨销毁：v1 子进程（如有）+ v2 task-driven runtime（如有）+ DB last_running=0。
+ *
+ * 设计：v1 路径调用 runtime-manager.stopAgent（已 UPDATE last_running=0）；
+ * v2 路径调用 destroyTaskDrivenRuntime。两者幂等，重复 UPDATE 不冲突。
+ *
+ * @param instanceId agent_assignment 主键
+ */
+export async function stopAgentRuntime(instanceId: string): Promise<void> {
+  // 1. v1 子进程（如有）—— stopAgent 内部已 UPDATE last_running=0
+  const { stopAgent } = await import('./runtime-manager');
+  stopAgent(instanceId);
+  // 2. v2 task-driven runtime（如有）
+  destroyTaskDrivenRuntime(instanceId);
+  // 3. 幂等再写一次（v1 stopAgent 已做；本行确保 v2-only 路径也覆盖）
+  getDb()
+    .prepare('UPDATE agent_assignments SET last_running = 0 WHERE instance_id = ?')
+    .run(instanceId);
+  logger.info('stopAgentRuntime 完成（双轨销毁 + DB 同步）', { instanceId });
+}
+
 // ─── 测试辅助 ─────────────────────────────────────────────────────────────
 
 /** 测试用：清空全部全局 Map（避免跨用例污染） */

@@ -6,6 +6,8 @@
 //   3. startAgentRuntime(taskDriven=true)：创建 WarmPool + AgentRunner + 注册到全局 Map
 //   4. createTaskDrivenRuntime：幂等性（重复调用不重建）
 //   5. destroyAllTaskDrivenRuntimes：清空全部 Map
+//   6. destroyTaskDrivenRuntime：销毁单 agent 的 runner + WarmPool
+//   7. stopAgentRuntime：v1 stopAgent + v2 destroy + DB last_running=0 三合一
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
@@ -17,6 +19,7 @@ import type { ChildProcess } from 'node:child_process';
 vi.mock('../../src/main/agent/runtime-manager', () => ({
   spawnAgent: vi.fn(),
   handleStreamChunk: vi.fn(),
+  stopAgent: vi.fn(),
 }));
 
 // mock runtime-spawner（避免真实 fork 子进程）
@@ -34,7 +37,7 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
   }),
 }));
 
-import { spawnAgent } from '../../src/main/agent/runtime-manager';
+import { spawnAgent, stopAgent } from '../../src/main/agent/runtime-manager';
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createWorkspace } from '../../src/main/workspace/crud';
@@ -48,10 +51,14 @@ import {
   findAssignmentByBotUserId,
   populateProviderBuckets,
   destroyAllTaskDrivenRuntimes,
+  destroyTaskDrivenRuntime,
+  stopAgentRuntime,
   __clearRuntimeRegistryForTest,
 } from '../../src/main/agent/runtime-registry';
 import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-manager';
 import type { AgentDefinition } from '../../src/main/agent/types';
+import type { AgentRunner } from '../../src/main/agent/agent-runner';
+import type { WarmPool } from '../../src/main/agent/warm-pool';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-runtime-registry-${Date.now()}`);
 
@@ -107,6 +114,7 @@ describe('runtime-registry', () => {
     __clearRuntimeRegistryForTest();
     vi.mocked(spawnAgent).mockClear();
     vi.mocked(spawnForAgent).mockClear();
+    vi.mocked(stopAgent).mockClear();
   });
   afterEach(() => {
     closeDb();
@@ -225,6 +233,85 @@ describe('runtime-registry', () => {
       const bucket2 = providerBuckets.get('prov-idem');
 
       expect(bucket1).toBe(bucket2);
+    });
+  });
+
+  describe('destroyTaskDrivenRuntime + stopAgentRuntime (Task 3)', () => {
+    it('destroyTaskDrivenRuntime 移除 runner + pool 并调用 destroy/destroyAll', () => {
+      const instId = 'inst-destroy-1';
+      const fakeRunner = {
+        assignmentId: instId,
+        botUserId: '@bot:localhost',
+        workspaceId: 'ws-test',
+        destroy: vi.fn(),
+        executeTask: vi.fn(),
+        abortStream: vi.fn(),
+        activeTaskCount: vi.fn().mockReturnValue(0),
+        notifyTaskReply: vi.fn(),
+      } as unknown as AgentRunner;
+      const fakePool = {
+        warm: vi.fn(),
+        acquire: vi.fn(),
+        release: vi.fn(),
+        size: vi.fn().mockReturnValue(0),
+        destroyAll: vi.fn(),
+      } as unknown as WarmPool;
+      agentRunners.set(instId, fakeRunner);
+      agentWarmPools.set(instId, fakePool);
+
+      destroyTaskDrivenRuntime(instId);
+
+      expect(agentRunners.has(instId)).toBe(false);
+      expect(agentWarmPools.has(instId)).toBe(false);
+      expect(fakeRunner.destroy).toHaveBeenCalledOnce();
+      expect(fakePool.destroyAll).toHaveBeenCalledOnce();
+    });
+
+    it('destroyTaskDrivenRuntime 对不存在的 instanceId 是 no-op', () => {
+      expect(() => destroyTaskDrivenRuntime('inst-not-exist')).not.toThrow();
+    });
+
+    it('stopAgentRuntime 调用 v1 stopAgent + v2 destroy + 写 last_running=0', async () => {
+      const ws = await createWorkspace(
+        { name: 'WS-stop', description: '', directoryPath: path.join(tmpRoot, 'ws-stop'), iconEmoji: '📁' },
+        '@u:localhost', '!s:localhost', '!t:localhost',
+      );
+      saveAgentDefinition(mkDef({ id: 'def-stop' }));
+      const assignment = assignAgentToWorkspace(ws.id, 'def-stop', '@bot-stop:localhost', 'standalone');
+      const instId = assignment.instanceId;
+
+      const fakeRunner = {
+        assignmentId: instId,
+        botUserId: '@bot-stop:localhost',
+        workspaceId: ws.id,
+        destroy: vi.fn(),
+        executeTask: vi.fn(),
+        abortStream: vi.fn(),
+        activeTaskCount: vi.fn(),
+        notifyTaskReply: vi.fn(),
+      } as unknown as AgentRunner;
+      const fakePool = {
+        warm: vi.fn(),
+        acquire: vi.fn(),
+        release: vi.fn(),
+        size: vi.fn(),
+        destroyAll: vi.fn(),
+      } as unknown as WarmPool;
+      agentRunners.set(instId, fakeRunner);
+      agentWarmPools.set(instId, fakePool);
+
+      await stopAgentRuntime(instId);
+
+      expect(stopAgent).toHaveBeenCalledWith(instId);
+      expect(fakeRunner.destroy).toHaveBeenCalledOnce();
+      expect(fakePool.destroyAll).toHaveBeenCalledOnce();
+      expect(agentRunners.has(instId)).toBe(false);
+      expect(agentWarmPools.has(instId)).toBe(false);
+
+      const row = getDb()
+        .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+        .get(instId) as { last_running: number };
+      expect(row.last_running).toBe(0);
     });
   });
 });
