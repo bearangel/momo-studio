@@ -37,7 +37,7 @@ import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
 import { getSecret, deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { stopAgent, isAgentRunning } from './runtime-manager';
-import { startAgentRuntime } from './runtime-registry';
+import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { registerAgentBot, type RegisteredBot } from './bot-registrar';
 import { inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
@@ -520,7 +520,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle('agent:stop', async (_evt, instanceId: string) => {
-    stopAgent(instanceId);
+    await stopAgentRuntime(instanceId);
     return { ok: true };
   });
 
