@@ -42,6 +42,7 @@ export function rebuildSubAgents(
   const subAssignments = listSubAssignments(workspaceId, mainInstanceId);
   const subs: SubAgentRef[] = [];
   for (const sub of subAssignments) {
+    if (!sub.lastRunning) continue;  // v2 修复：仅启动的 sub 才在 dispatch 工具列表
     const subDef = getAgentDefinition(sub.agentDefinitionId);
     if (!subDef) continue;
     subs.push({
