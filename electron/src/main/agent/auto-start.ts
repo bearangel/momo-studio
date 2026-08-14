@@ -45,10 +45,8 @@ interface AssignmentRow {
  *   - task_driven=0 的 agent 继续走 v1 spawn 路径（保留向后兼容）。
  *
  * 幂等：已运行的 agent（含 task-driven 在 agentRunners 中的）会被 isAgentRunning 跳过。
- * 注意：task-driven agent 在 agentRunners 中但不一定在 v1 runtimes 中——
- * isAgentRunning 查的是 v1 runtimes Map，对 task-driven agent 返回 false。
- * 但 task-driven agent 已由 initTaskDrivenRuntime 启动，本函数对它们也无操作需要做
- * （它们不需要 v1 spawn）。def.taskDriven === true 时 continue 跳过即可。
+ * v2 修复：isAgentRunning 查 DB last_running（用户启动意图），task-driven agent
+ * 即便不在 v1 runtimes Map 也正确返回 true（只要 DB 标为 running），不会重复启动。
  */
 export async function autoStartAgents(): Promise<void> {
   const db = getDb();

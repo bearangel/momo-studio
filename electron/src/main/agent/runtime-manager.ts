@@ -842,6 +842,18 @@ export function stopAllAgents(): void {
   for (const [instanceId, child] of runtimes) {
     stoppedManually.add(instanceId);
     resetRestartCount(instanceId);
+    // v2：与 stopAgent 保持一致——停止时同步写 last_running=0，
+    // 否则 isAgentRunning 仍按 DB 返回 true（spawnAgent 写的 1 还在）。
+    try {
+      getDb()
+        .prepare('UPDATE agent_assignments SET last_running = 0 WHERE instance_id = ?')
+        .run(instanceId);
+    } catch (err) {
+      logger.warn('写入 last_running=0 失败（不阻塞停止）', {
+        instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     child.kill('SIGTERM');
   }
   runtimes.clear();
@@ -850,9 +862,18 @@ export function stopAllAgents(): void {
   }
 }
 
-/** 指定 instanceId 的 agent 是否正在运行 */
+/**
+ * 指定 instanceId 的 agent 是否正在运行。
+ *  v2 修复：查询 DB last_running 字段（用户启动意图），不再查 v1 runtimes Map。
+ *  原因：task-driven agent 在 agentRunners Map（runtime-registry.ts），
+ *  旧实现仅查 v1 runtimes 永远返回 false，导致 UI 显示所有 agent 离线。
+ *  语义变更：本函数现表示"用户标记为运行"，所有 callers 行为一致。
+ */
 export function isAgentRunning(instanceId: string): boolean {
-  return runtimes.has(instanceId);
+  const row = getDb()
+    .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+    .get(instanceId) as { last_running: number } | undefined;
+  return row?.last_running === 1;
 }
 
 // === v1.4 测试钩子（仅用于单测验证嵌套流式映射，生产代码不调用） ===
