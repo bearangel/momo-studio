@@ -1,5 +1,16 @@
 // electron/src/main/agent/runtime-manager.ts
 //
+// @deprecated v2.0：task-driven runtime 架构切换后，本文件不再使用。
+// 保留作为 v1 fallback（agent_definitions.task_driven=0 时）。
+// 下个大版本删除。
+//
+// v2 替代：
+//   - spawnAgent → runtime-spawner.spawnForAgent + WarmPool.warm
+//   - stopAgent → WarmPool.destroyAll
+//   - registerStreamIpc → RouterService + AgentRunner
+//
+// 【注意】registerStreamIpc 仍被 ipc/index.ts 调用——v2 模式下不注册 handler 但函数保留。
+//
 // Agent runtime 子进程生命周期管理。每个 agent 实例（instanceId）在独立的
 // Node 子进程中运行，主进程通过进程池（Map<instanceId, ChildProcess>）跟踪。
 // 子进程入口是同目录编译后的 runtime-entry.js，配置通过环境变量
