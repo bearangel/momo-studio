@@ -103,6 +103,19 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
       .run(instanceId);
 
     logger.info('task-driven runtime 已创建', { instanceId, botUserId });
+
+    // v2 修复：第一次 runner 注册时 lazy 启动 RouterService
+    // （ensureRouterService 内部已 null 检查，幂等安全）。动态 import 避免顶层循环依赖
+    // （router-bootstrap → sync-manager → 间接触达 runtime-registry）。
+    try {
+      const { ensureRouterService } = await import('./router-bootstrap');
+      await ensureRouterService(agentRunners, providerBuckets);
+    } catch (err) {
+      logger.warn('ensureRouterService 失败（runner 已注册但 router 未启动）', {
+        instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const pool = agentWarmPools.get(instanceId)!;

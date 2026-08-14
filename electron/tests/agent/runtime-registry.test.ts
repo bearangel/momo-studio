@@ -37,8 +37,17 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
   }),
 }));
 
+// mock router-bootstrap（Task R2：避免真实启动 RouterService；
+// 仅验证 ensureTaskDrivenRuntime 是否调用了 ensureRouterService）
+vi.mock('../../src/main/agent/router-bootstrap', () => ({
+  ensureRouterService: vi.fn().mockResolvedValue(undefined),
+  destroyRouterService: vi.fn(),
+  __resetRouterServiceForTest: vi.fn(),
+}));
+
 import { spawnAgent, stopAgent } from '../../src/main/agent/runtime-manager';
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
+import { ensureRouterService } from '../../src/main/agent/router-bootstrap';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createWorkspace } from '../../src/main/workspace/crud';
 import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
@@ -115,6 +124,7 @@ describe('runtime-registry', () => {
     vi.mocked(spawnAgent).mockClear();
     vi.mocked(spawnForAgent).mockClear();
     vi.mocked(stopAgent).mockClear();
+    vi.mocked(ensureRouterService).mockClear();
   });
   afterEach(() => {
     closeDb();
@@ -191,6 +201,28 @@ describe('runtime-registry', () => {
       destroyAllTaskDrivenRuntimes();
       expect(agentRunners.size).toBe(0);
       expect(agentWarmPools.size).toBe(0);
+    });
+  });
+
+  describe('ensureTaskDrivenRuntime 触发 ensureRouterService (Task R2)', () => {
+    it('创建新 runner 后调用 ensureRouterService', async () => {
+      const opts = mkMinimalOpts('inst-r2-1', '@bot-r2-1:home');
+      await startAgentRuntime(opts, true);
+
+      expect(ensureRouterService).toHaveBeenCalledOnce();
+      // 验证传入的是 Map 引用（应使用 runtime-registry 的全局 agentRunners + providerBuckets）
+      const call = vi.mocked(ensureRouterService).mock.calls[0];
+      expect(call[0]).toBe(agentRunners);
+      expect(call[1]).toBe(providerBuckets);
+    });
+
+    it('runner 已存在时（幂等调用）不再触发 ensureRouterService', async () => {
+      const opts = mkMinimalOpts('inst-r2-2', '@bot-r2-2:home');
+      await startAgentRuntime(opts, true);  // 首次：创建 runner + 触发 ensureRouterService
+      vi.mocked(ensureRouterService).mockClear();
+
+      await startAgentRuntime(opts, true);  // 二次：pool 已存在，跳过 ensure 块
+      expect(ensureRouterService).not.toHaveBeenCalled();
     });
   });
 
