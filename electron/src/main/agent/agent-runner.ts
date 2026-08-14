@@ -25,6 +25,31 @@ export interface TaskConfig {
   streamSessionId: string;
   /** 消息 metadata（mentions 等） */
   mentions?: string[];
+  /**
+   * dispatch 模式：父 agent（PM）派来的任务上下文。
+   * 设置时本 task 是 sub-agent 收到 PM 的 dispatch（走 handleDispatch 流程）；
+   * 未设置时是顶层用户消息触发的 ephemeral chat。
+   * 形状与 runtime-entry 的 TaskConfigMsg.dispatchContext 保持一致。
+   */
+  dispatchContext?: {
+    /** PM 的 Matrix userId（dispatch event 的 dispatch_from） */
+    fromBotUserId: string;
+    /** dispatch event 的 task_id（用于回 task_reply 关联） */
+    task_id: string;
+    /** PM 分配给本 sub-agent 的工具预算 */
+    tool_budget?: number;
+    /** PM 的 streamSessionId（renderer 据此把子 agent 流嵌套渲染到 PM 气泡内对应 chip） */
+    tool_stream_session_id?: string;
+  };
+}
+
+/** notifyTaskReply 的入参——camelCase（由 RouterService 从 task_reply event 转换而来） */
+export interface TaskReplyNotification {
+  taskId: string;
+  status: string;
+  body: string;
+  progressPct?: number;
+  toolCallsUsed?: number;
 }
 
 /** AgentRunner 构造选项 */
@@ -104,6 +129,7 @@ export class AgentRunner {
       body: task.body,
       streamSessionId: task.streamSessionId,
       mentions: task.mentions ?? [],
+      ...(task.dispatchContext ? { dispatchContext: task.dispatchContext } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };
@@ -123,6 +149,21 @@ export class AgentRunner {
   /** 当前活跃 task 数（per-agent 并发检查用） */
   activeTaskCount(): number {
     return this.activeTasks.size;
+  }
+
+  /**
+   * 通知正在执行某 task 的 runtime 收到了 task_reply（来自子 agent 的回执）。
+   * 按 taskId 在 activeTasks 中匹配（ephemeral chat 的 taskId=null 永不匹配），
+   * 命中后通过 IPC 把 reply 推给对应子进程，由 runtime-entry 的 pending dispatch 等待逻辑消费。
+   * 找不到匹配的活跃 task 时 no-op（可能已结束或从未启动）。
+   */
+  async notifyTaskReply(reply: TaskReplyNotification): Promise<void> {
+    for (const active of this.activeTasks.values()) {
+      if (active.taskId !== null && active.taskId === reply.taskId) {
+        active.runtime.child.send({ type: 'task-reply', reply });
+        return;
+      }
+    }
   }
 
   /**
