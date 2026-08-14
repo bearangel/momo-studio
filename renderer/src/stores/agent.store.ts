@@ -2,9 +2,11 @@
 //
 // Agent 状态管理（v1.3）：
 //   - definitions：当前可见的 agent 定义（global + 当前 ws scoped + builtin）
-//   - assignments：当前 workspace 内已分配的 agent 实例（含 role + parent）
-//   - running：instanceId → 是否运行中
+//   - assignments：当前 workspace 内已分配的 agent 实例（含 role + parent + lastRunning）
 //   - builtinSuggestions：builtin YAML 的角色/platform 建议（UI 预填用）
+//
+// v2 修复：删除 running state（Record<string,boolean>），单一数据源 =
+// assignment.lastRunning（从 DB 同步）。stopAgent/startAgent 改为 reload assignments。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
@@ -18,7 +20,6 @@ import type {
 interface AgentState {
   definitions: AgentDefinition[];
   assignments: AgentAssignment[];
-  running: Record<string, boolean>;
   builtinSuggestions: BuiltinSuggestionMap;
   loading: boolean;
   error: string | null;
@@ -26,7 +27,6 @@ interface AgentState {
   loadDefinitions: (workspaceId?: string) => Promise<void>;
   loadAssignments: (workspaceId: string) => Promise<void>;
   loadBuiltinSuggestions: () => Promise<void>;
-  syncRunningStates: () => Promise<void>;
   addAgent: (
     workspaceId: string,
     defId: string,
@@ -63,7 +63,6 @@ interface AgentState {
 export const useAgentStore = create<AgentState>((set, get) => ({
   definitions: [],
   assignments: [],
-  running: {},
   builtinSuggestions: {},
   loading: false,
   error: null,
@@ -83,7 +82,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     try {
       const list = await ipc.agent.listAssignments(workspaceId);
       set({ assignments: list, loading: false });
-      await get().syncRunningStates();
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
     }
@@ -98,16 +96,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  syncRunningStates: async () => {
-    const { assignments } = get();
-    const entries = await Promise.all(
-      assignments.map(async (a) => [a.instanceId, await ipc.agent.isRunning(a.instanceId)] as const),
-    );
-    const running: Record<string, boolean> = {};
-    for (const [id, isRunning] of entries) running[id] = isRunning;
-    set({ running });
-  },
-
   addAgent: async (workspaceId, defId, role, parentInstanceId, apiKeyOverride) => {
     set({ error: null });
     try {
@@ -120,7 +108,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       });
       set((state) => ({
         assignments: [...state.assignments, assignment],
-        running: { ...state.running, [assignment.instanceId]: true },
       }));
       return assignment;
     } catch (err) {
@@ -138,11 +125,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         apiKeyOverride,
         selectedSubDefIds,
       });
-      const newRunning: Record<string, boolean> = {};
-      for (const a of newAssignments) newRunning[a.instanceId] = true;
       set((state) => ({
         assignments: [...state.assignments, ...newAssignments],
-        running: { ...state.running, ...newRunning },
       }));
     } catch (err) {
       set({ error: (err as Error).message });
@@ -211,9 +195,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ error: null });
     try {
       await ipc.agent.stop(instanceId);
-      set((state) => ({
-        running: { ...state.running, [instanceId]: false },
-      }));
+      // v2 修复：reload assignments 反映新 lastRunning 状态
+      const stopped = get().assignments.find((a) => a.instanceId === instanceId);
+      if (stopped) {
+        await get().loadAssignments(stopped.workspaceId);
+      }
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -224,9 +210,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ error: null });
     try {
       await ipc.agent.start({ assignment, workspaceId, teamRoomId });
-      set((state) => ({
-        running: { ...state.running, [assignment.instanceId]: true },
-      }));
+      // v2 修复：reload assignments 反映新 lastRunning 状态
+      await get().loadAssignments(workspaceId);
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -237,7 +222,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({
       definitions: [],
       assignments: [],
-      running: {},
       builtinSuggestions: {},
       loading: false,
       error: null,

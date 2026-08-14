@@ -102,11 +102,11 @@ describe('agent.store — v1.3', () => {
     expect(useAgentStore.getState().definitions).toHaveLength(1);
   });
 
-  it('loadAssignments 填充 assignments 并同步运行状态', async () => {
+  it('loadAssignments 填充 assignments', async () => {
     await useAgentStore.getState().loadAssignments('ws-1');
     expect(mockApi.agent.listAssignments).toHaveBeenCalledWith('ws-1');
     expect(useAgentStore.getState().assignments).toHaveLength(1);
-    expect(useAgentStore.getState().running['inst-1']).toBe(true);
+    expect(useAgentStore.getState().assignments[0]?.lastRunning).toBe(true);
   });
 
   it('addAgent 透传 role + parentInstanceId + apiKeyOverride', async () => {
@@ -119,7 +119,6 @@ describe('agent.store — v1.3', () => {
       apiKeyOverride: undefined,
     });
     expect(useAgentStore.getState().assignments).toContainEqual(MOCK_ASSIGNMENT);
-    expect(useAgentStore.getState().running['inst-1']).toBe(true);
   });
 
   it('addAgent 失败时抛错并写入 error', async () => {
@@ -136,13 +135,17 @@ describe('agent.store — v1.3', () => {
     expect(result.instanceId).toBe('inst-1');
   });
 
-  it('stopAgent 调用 stop 并标记为未运行', async () => {
+  it('stopAgent 调用 stop 并重新加载 assignments（反映 lastRunning）', async () => {
     await useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone');
-    expect(useAgentStore.getState().running['inst-1']).toBe(true);
+    expect(useAgentStore.getState().assignments).toContainEqual(MOCK_ASSIGNMENT);
+
+    // stop 后 listAssignments 返回 lastRunning=false 的 assignment
+    const stoppedAssignment = { ...MOCK_ASSIGNMENT, lastRunning: false };
+    mockApi.agent.listAssignments.mockResolvedValueOnce([stoppedAssignment]);
 
     await useAgentStore.getState().stopAgent('inst-1');
     expect(mockApi.agent.stop).toHaveBeenCalledWith('inst-1');
-    expect(useAgentStore.getState().running['inst-1']).toBe(false);
+    expect(useAgentStore.getState().assignments[0]?.lastRunning).toBe(false);
   });
 
   it('deleteDefinition 调用 IPC + 刷新 definitions', async () => {
@@ -177,12 +180,12 @@ describe('agent.store — v1.3', () => {
 });
 
 describe('assignMainAgent — v1.3', () => {
-  it('调 IPC 后追加 assignments 并标记运行中', async () => {
+  it('调 IPC 后追加 assignments', async () => {
     await useAgentStore.getState().assignMainAgent('ws-1', 'main-d');
-    const { assignments, running } = useAgentStore.getState();
+    const { assignments } = useAgentStore.getState();
     expect(assignments).toHaveLength(2);
-    expect(running['main-i']).toBe(true);
-    expect(running['sub-i']).toBe(true);
+    expect(assignments.find((a) => a.instanceId === 'main-i')?.lastRunning).toBe(true);
+    expect(assignments.find((a) => a.instanceId === 'sub-i')?.lastRunning).toBe(false);
   });
 
   it('apiKeyOverride + selectedSubDefIds 透传', async () => {
