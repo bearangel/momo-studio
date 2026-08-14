@@ -116,6 +116,50 @@ export interface RuntimeConfig {
   parentStreamSessionId?: string;
   /** v2（B 子系统 Task B11）：当前关联的任务 ID（来自 task-driven runtime 派发），用于向 MemoryProvider 拉 task 上下文注入 system prompt */
   currentTaskId?: string;
+  /**
+   * v2（task-driven 切换 Task T3）：runtime 运行模式。
+   * - true（默认）：task-driven 模式，不监听 Matrix event，仅通过 task-config IPC 触发 chat loop。
+   * - false：v1 fallback，仍调 client.startClient + 注册 ClientEvent.Event handler（保留旧路径用于回退）。
+   */
+  taskDriven?: boolean;
+}
+
+/**
+ * v2（task-driven 切换 Task T3）：task-config IPC 消息体。
+ *
+ * 由主进程 AgentRunner.executeTask 通过 child.send({ type: 'task-config', ... }) 注入，
+ * runtime 收到后调用 runTaskChatLoop 启动 chat loop。
+ *
+ * 与 agent-runner.ts 的 TaskConfig 字段保持兼容（taskId / executionRoomId / body /
+ * streamSessionId / mentions），额外加 dispatchContext 承载 PM dispatch 时的父 agent 上下文。
+ */
+export interface TaskConfig {
+  type: 'task-config';
+  /** task 主键；null = ephemeral chat（非 task 调度的即时对话） */
+  taskId: string | null;
+  /** 执行房间 ID（agent 在此房间输出流式回复 + 持久化最终 m.room.message） */
+  executionRoomId: string;
+  /** 用户输入的正文（替代 v1 的 Matrix event body） */
+  body: string;
+  /** 流式会话 ID（贯穿 start→end chunk 的唯一标识；由 AgentRunner 分配，不在此处 randomUUID） */
+  streamSessionId: string;
+  /** 消息 metadata（mentions 等）；当前 runTaskChatLoop 不消费，留给后续 RouterService 扩展 */
+  mentions?: string[];
+  /**
+   * dispatch 模式：父 agent（PM）派来的任务上下文。
+   * 设置时本 task 是 sub-agent 收到 PM 的 dispatch；
+   * 未设置时是顶层用户消息触发的 ephemeral chat。
+   */
+  dispatchContext?: {
+    /** PM 的 Matrix userId（dispatch event 的 from） */
+    fromBotUserId: string;
+    /** dispatch event 的 task_id（用于回 task_reply 关联） */
+    task_id: string;
+    /** PM 分配给本 sub-agent 的工具预算 */
+    tool_budget?: number;
+    /** PM 的 streamSessionId（用于 renderer 把子 agent 流嵌套渲染到 PM 气泡内对应 chip 下方） */
+    tool_stream_session_id?: string;
+  };
 }
 
 /** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
@@ -271,6 +315,9 @@ function parseConfig(raw: unknown): RuntimeConfig {
       typeof r.currentTaskId === 'string' && r.currentTaskId.length > 0
         ? r.currentTaskId
         : undefined,
+    // v2（task-driven 切换 T3）：缺省/类型不符时按 true 处理（默认 task-driven 模式）；
+    //   显式 false 时走 v1 fallback（client.startClient + ClientEvent.Event 监听）
+    taskDriven: typeof r.taskDriven === 'boolean' ? r.taskDriven : true,
   };
 }
 
@@ -346,11 +393,41 @@ async function main(): Promise<void> {
   // 在注册事件监听前完成，确保首条消息到达时工具已就绪。
   const ctx = await buildRuntimeContext(config);
 
-  client.on(ClientEvent.Event, (event: MatrixEvent) => {
-    void handleEvent(client, event, config, ctx);
-  });
+  // v2（task-driven 切换 T3）：按 taskDriven 切换运行模式。
+  //   - true（默认）：不监听 Matrix event，仅通过 task-config IPC 触发 chat loop。
+  //     Matrix client 仍用于发消息（sendFinalMessage / dispatch event / task_reply），只是不监听入站 event。
+  //   - false：v1 fallback，仍调 startClient + 注册 ClientEvent.Event handler（保留旧路径用于回退测试）。
+  const isTaskDriven = config.taskDriven !== false;
 
-  process.stdout.write('Agent runtime 已启动\n');
+  if (isTaskDriven) {
+    process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
+
+    // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})
+    // 注入 task 配置，runtime 收到后调 runTaskChatLoop 跑一次 chat loop 并退出。
+    // shutdown handler：runtime-spawner.stopRuntime 发此消息优雅退出。
+    const taskMessageListener = async (msg: unknown): Promise<void> => {
+      if (typeof msg !== 'object' || msg === null) return;
+      const m = msg as { type?: string };
+
+      if (m.type === 'task-config') {
+        try {
+          await runTaskChatLoop(msg as TaskConfig, client, config, ctx);
+        } catch (err) {
+          process.stderr.write(`task-config 处理失败: ${(err as Error).message}\n`);
+          process.exit(1);
+        }
+      } else if (m.type === 'shutdown') {
+        process.stdout.write('收到 shutdown 信号，退出 runtime\n');
+        process.exit(0);
+      }
+    };
+    process.on('message', taskMessageListener);
+  } else {
+    process.stdout.write('Agent runtime 已启动（v1 模式，fallback）\n');
+    client.on(ClientEvent.Event, (event: MatrixEvent) => {
+      void handleEvent(client, event, config, ctx);
+    });
+  }
 }
 
 /**
@@ -727,6 +804,14 @@ export async function runChatLoop(
    * 被触发时转发到本地 abortController，统一走原有的 abort 路径（chatStream reject / 工具 catch 跳出）。
    */
   externalAbortSignal?: AbortSignal,
+  /**
+   * v2（task-driven 切换 T3）：由 AgentRunner 分配的 streamSessionId（task-driven 模式）。
+   *
+   * 优先级：streamSessionIdOverride > parentStreamSessionId > randomUUID()。
+   * - v1 路径（handleEvent / handleDispatch）：不传，沿用 `parentStreamSessionId ?? randomUUID()`。
+   * - v2 task-driven 路径（runTaskChatLoop）：传 cfg.streamSessionId，由 AgentRunner 统一分配。
+   */
+  streamSessionIdOverride?: string,
 ): Promise<string> {
   const llm = createLLMProvider(
     { model: config.modelName, baseUrl: config.modelBaseUrl },
@@ -765,7 +850,8 @@ export async function runChatLoop(
   // 子 agent（dispatch 模式）复用 PM 分配的 subStreamSessionId 作为自身 session ID，
   // 使 renderer 的 DispatchChip 能通过 streams.get(subStreamSessionId) 找到子 agent 的 StreamState。
   // 顶层 agent（普通消息）生成新 UUID。
-  const streamSessionId = parentStreamSessionId ?? randomUUID();
+  // v2 task-driven：AgentRunner 通过 streamSessionIdOverride 传入预分配的 session ID（替代 randomUUID）。
+  const streamSessionId = streamSessionIdOverride ?? parentStreamSessionId ?? randomUUID();
   const maxToolCalls = config.maxToolCalls;
   let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
   let toolCallCount = 0;
@@ -1148,6 +1234,88 @@ export async function runChatLoop(
       messages.push({ role: 'tool', content: result, toolCallId: tc.id });
     }
   }
+}
+
+/**
+ * v2（task-driven 切换 T3）：task-driven 模式入口——接收主进程通过 task-config IPC 注入的
+ * TaskConfig，构造 chat loop 上下文，调用 runChatLoop 跑完整 LLM + 工具循环，结束后
+ * 通知主进程 + 退出 runtime 子进程。
+ *
+ * 与 v1 路径（handleEvent → runChatLoop）的区别：
+ *   - 输入源：TaskConfig IPC（取代 Matrix m.room.message / dispatch event）
+ *   - streamSessionId：由 AgentRunner 预分配（cfg.streamSessionId），不再 randomUUID
+ *   - 任务关联：cfg.taskId 注入 RuntimeConfig.currentTaskId → MemoryProvider.getTaskContext 拉 task 上下文
+ *   - dispatch 嵌套：cfg.dispatchContext 设置时把 tool_stream_session_id 作为 parentStreamSessionId 传入
+ *   - 生命周期：单 task 完成后立即 process.exit(0)（runtime 不再常驻）
+ *
+ * 主进程 → runtime IPC 契约：
+ *   - 入：{ type: 'task-config', taskId, executionRoomId, body, streamSessionId, mentions?, dispatchContext? }
+ *   - 出：{ type: 'task-end', streamSessionId, taskId }（task 完成或 abort 后发）
+ *   - chunk 流：复用 v1 的 sendStreamChunk（start/thinking/text/tool_call/tool_result/end）
+ *
+ * 错误处理：try/catch 包裹 runChatLoop，失败时发 end(error) chunk + task-end IPC + exit(1)。
+ * 不重试——上层 RouterService / AgentRunner 可在 task-end 后决定是否重新派发。
+ */
+export async function runTaskChatLoop(
+  cfg: TaskConfig,
+  client: MatrixClient,
+  config: RuntimeConfig,
+  ctx: RuntimeContext,
+): Promise<void> {
+  const { taskId, executionRoomId: roomId, body, streamSessionId, dispatchContext } = cfg;
+
+  // 1. 构造 task-driven 专用的 RuntimeConfig：
+  //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
+  //    - maxToolCalls：dispatchContext.tool_budget 优先（PM 分配的子任务预算），否则沿用 config（房间级 / 全局默认）
+  const taskConfig: RuntimeConfig = {
+    ...config,
+    ...(taskId ? { currentTaskId: taskId } : {}),
+    ...(dispatchContext?.tool_budget !== undefined
+      ? { maxToolCalls: dispatchContext.tool_budget }
+      : {}),
+  };
+
+  // 2. parentStreamSessionId：dispatchContext 设置时为 PM 的 streamSessionId，
+  //    用于 renderer 把子 agent 流嵌套渲染到 PM 气泡内对应 dispatch chip 下方。
+  //    与 streamSessionId（cfg.streamSessionId）解耦：v2 中 sub-agent 用自己的 session ID，
+  //    不再像 v1 那样复用 PM 的 tool_stream_session_id 作为自身 ID。
+  const parentStreamSessionId = dispatchContext?.tool_stream_session_id;
+
+  // 3. 跑 chat loop——runChatLoop 内部完成 system prompt 构造 / MemoryProvider 拉 / 工具循环 / abort 处理。
+  //    stats 用于在 task-end IPC 里上报工具调用次数。
+  const stats: RunChatLoopStats = { toolCallsUsed: 0 };
+
+  try {
+    await runChatLoop(
+      client,
+      roomId,
+      body,
+      taskConfig,
+      ctx,
+      stats,
+      parentStreamSessionId,
+      undefined, // task-driven 模式暂无外部 abort_dispatch event 监听（PM 通过 IPC 直接 abort）
+      streamSessionId, // AgentRunner 预分配的 streamSessionId，覆盖 randomUUID
+    );
+  } catch (err) {
+    // runChatLoop 抛错：发 end(error) chunk 兜底（若 runChatLoop 内未发），再 task-end + exit(1)
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`runTaskChatLoop 异常: ${msg}\n`);
+    sendStreamChunk({
+      type: 'end',
+      streamSessionId,
+      finishReason: 'error',
+      error: msg,
+    });
+    process.send?.({ type: 'task-end', streamSessionId, taskId, error: msg });
+    process.exit(1);
+    return;
+  }
+
+  // 成功路径：通知主进程 task 完成（AgentRunner 据此 release runtime + 更新 task 状态机），
+  // 然后退出 runtime 子进程。task-driven 模式下 runtime 是单次使用资源。
+  process.send?.({ type: 'task-end', streamSessionId, taskId, toolCallsUsed: stats.toolCallsUsed });
+  process.exit(0);
 }
 
 /**
