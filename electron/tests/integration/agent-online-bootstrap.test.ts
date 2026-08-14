@@ -78,10 +78,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-/** 清空全局 runtime 注册表（避免跨用例污染） */
+/** 清空全局 runtime 注册表 + RouterService 单例（避免跨用例污染） */
 async function clearRegistry(): Promise<void> {
   const reg = await import('../../src/main/agent/runtime-registry');
+  const router = await import('../../src/main/agent/router-bootstrap');
   reg.__clearRuntimeRegistryForTest();
+  router.__resetRouterServiceForTest();
 }
 
 // ─── 测试用例 ───────────────────────────────────────────────────────────────
@@ -127,7 +129,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
 
     // 5. 调用被测函数
     const { initTaskDrivenRuntime } = await import('../../src/main/agent/init-runtime');
-    const svc = await initTaskDrivenRuntime();
+    await initTaskDrivenRuntime();
 
     // 6. 断言过滤结果
     const { agentRunners, createTaskDrivenRuntime } = await import('../../src/main/agent/runtime-registry');
@@ -143,8 +145,9 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     expect(agentRunners.has('inst-online')).toBe(true);
     expect(agentRunners.has('inst-offline')).toBe(false);
 
-    // 6c. 至少一个 runner → RouterService 被创建并返回
-    expect(svc).not.toBeNull();
+    // 6c. Task R3：函数改返回 void；RouterService lazy 启动验证在
+    // tests/agent/router-bootstrap.test.ts 单独覆盖（检查 ensureRouterService
+    // 实际行为 + setRouterService 调用）。
   });
 
   it('last_running 全为 0 时不创建 RouterService，返回 null', async () => {
@@ -175,10 +178,9 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     ).run('inst-only-off', 'ws-task5b', 'def-only-off', '@bot-only:localhost');
 
     const { initTaskDrivenRuntime } = await import('../../src/main/agent/init-runtime');
-    const svc = await initTaskDrivenRuntime();
+    await initTaskDrivenRuntime();
 
-    // 无 runner 注册 → 跳过 RouterService → 返回 null
-    expect(svc).toBeNull();
+    // 无 runner 注册 → 跳过 RouterService / ensureRouterService（init-runtime 内部 early return）
   });
 
   it('enabled=0 但 last_running=1 的 assignment 也被跳过（双重过滤）', async () => {
@@ -209,11 +211,10 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     ).run('inst-disabled', 'ws-task5c', 'def-disabled', '@bot-disabled:localhost');
 
     const { initTaskDrivenRuntime } = await import('../../src/main/agent/init-runtime');
-    const svc = await initTaskDrivenRuntime();
+    await initTaskDrivenRuntime();
 
     const { agentRunners, createTaskDrivenRuntime } = await import('../../src/main/agent/runtime-registry');
     expect(vi.mocked(createTaskDrivenRuntime)).not.toHaveBeenCalled();
     expect(agentRunners.has('inst-disabled')).toBe(false);
-    expect(svc).toBeNull();
   });
 });

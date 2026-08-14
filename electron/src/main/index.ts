@@ -66,10 +66,8 @@ async function autoRestoreSession(): Promise<void> {
   try {
     await startSyncFromSession();
     logger.info('Session restored: Matrix sync started');
-    // Task 5：initTaskDrivenRuntime 返回 RouterService 实例（无 runner 时 null），
-    // 注入 sync-manager 供消息路由使用。
-    const svc = await initTaskDrivenRuntime();
-    if (svc) setRouterService(svc);
+    // initTaskDrivenRuntime 内部经 router-bootstrap.setRouterService 注入 RouterService
+    await initTaskDrivenRuntime();
     logger.info('Task-driven runtime initialized');
     broadcastRuntimeChanged();
   } catch (err) {

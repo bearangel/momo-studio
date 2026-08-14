@@ -8,14 +8,15 @@
 //
 // 核心逻辑：
 //   遍历所有 workspace 的 assignment，为每个 task_driven=1 且 enabled=1 且
-//   last_running=1 的 agent 创建 WarmPool + AgentRunner → 预热 → 启动 RouterService。
+//   last_running=1 的 agent 创建 WarmPool + AgentRunner → 预热 → 经 router-bootstrap
+//   统一入口 ensureRouterService 启动 RouterService。
 //   - task_driven=1 但 last_running=0：跳过（用户主动下线意图，不自动恢复）。
 //   - task_driven=0：跳过（走 v1 autoStartAgents，由 auth handler 登录流程触发）。
 //
-// 返回 RouterService 实例（供 main/index.ts 注入 sync-manager）；无 runner 时返回 null。
+// 启动 RouterService 由 router-bootstrap 内部完成（setRouterService 调用同步发生）；
+// 本函数返回 void，调用方无需拿到 RouterService 实例。
 
 import { logger } from '../logger';
-import { getDb } from '../storage/db';
 import { listAssignments, getAgentDefinition } from './crud';
 import { listWorkspaces } from '../workspace/crud';
 import { resolveBotToken } from './auto-start';
@@ -26,14 +27,12 @@ import {
   populateProviderBuckets,
 } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
-import { RouterService } from './router-service';
-import { TaskDispatcher, type AgentAssignmentInfo } from '../task/dispatcher';
 import type { AgentRole } from './types';
 
 /**
  * task-driven runtime 初始化：遍历所有 workspace 的 assignment，
  * 为每个 task_driven=1 且 enabled=1 且 last_running=1 的 agent 创建 WarmPool +
- * AgentRunner → 预热 → 启动 RouterService。
+ * AgentRunner → 预热 → 触发 RouterService 统一 lazy 启动入口。
  *
  * 过滤层级（全部 AND）：
  *   1. agentRunners 已存在 → 跳过（幂等）
@@ -42,10 +41,8 @@ import type { AgentRole } from './types';
  *   4. def 不存在 → 跳过
  *   5. def.taskDriven === false → 跳过（v1 路径处理）
  *   6. def.modelProviderId 为空 → 跳过（未配置 provider）
- *
- * @returns RouterService 实例（至少一个 runner 注册时）；否则 null
  */
-export async function initTaskDrivenRuntime(): Promise<RouterService | null> {
+export async function initTaskDrivenRuntime(): Promise<void> {
   for (const ws of listWorkspaces()) {
     for (const assignment of listAssignments(ws.id)) {
       if (agentRunners.has(assignment.instanceId)) continue;
@@ -105,51 +102,15 @@ export async function initTaskDrivenRuntime(): Promise<RouterService | null> {
 
   if (agentRunners.size === 0) {
     logger.info('无 task-driven agent，跳过 RouterService 初始化');
-    return null;
+    return;
   }
 
   populateProviderBuckets();
 
-  const dispatcher = new TaskDispatcher({
-    runners: agentRunners,
-    buckets: providerBuckets,
-    getAgentAssignment: (instanceId) => getAssignmentInfo(instanceId),
-    getGlobalMax: () => getGlobalMax(),
-  });
-
-  const routerService = new RouterService({ runners: agentRunners, dispatcher });
-  routerService.start();
-  logger.info('RouterService 已启动', { runnerCount: agentRunners.size });
-  return routerService;
-}
-
-/**
- * 按 instanceId 查 assignment 的调度元数据（供 TaskDispatcher 并发控制）。
- * model_provider_id 为空时返回 null（agent 未配置 provider，不参与 task 调度）。
- */
-function getAssignmentInfo(instanceId: string): AgentAssignmentInfo | null {
-  const row = getDb().prepare(
-    `SELECT a.agent_definition_id, d.model_provider_id, d.max_concurrent_tasks
-     FROM agent_assignments a
-     JOIN agent_definitions d ON a.agent_definition_id = d.id
-     WHERE a.instance_id = ?`,
-  ).get(instanceId) as
-    | { agent_definition_id: string; model_provider_id: string | null; max_concurrent_tasks: number }
-    | undefined;
-  if (!row?.model_provider_id) return null;
-  return {
-    agentDefinitionId: row.agent_definition_id,
-    modelProviderId: row.model_provider_id,
-    maxConcurrentTasks: row.max_concurrent_tasks,
-  };
-}
-
-/**
- * 读取全局并发上限（global_settings 表）。表不存在该行时默认 3。
- */
-function getGlobalMax(): number {
-  const row = getDb().prepare(
-    'SELECT max_concurrent_tasks FROM global_settings WHERE id = 1',
-  ).get() as { max_concurrent_tasks: number } | undefined;
-  return row?.max_concurrent_tasks ?? 3;
+  // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + setRouterService）。
+  // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op。动态 import 避开
+  // router-bootstrap → sync-manager → ... → runtime-registry 顶层循环依赖。
+  const { ensureRouterService } = await import('./router-bootstrap');
+  await ensureRouterService(agentRunners, providerBuckets);
+  logger.info('initTaskDrivenRuntime 完成', { runnerCount: agentRunners.size });
 }
