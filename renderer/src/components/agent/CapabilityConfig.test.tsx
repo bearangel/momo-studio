@@ -73,6 +73,7 @@ function buildAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignm
     role: 'standalone',
     parentInstanceId: null,
     hasApiKeyOverride: false,
+    lastRunning: true,
     ...overrides,
   };
 }

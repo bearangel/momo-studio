@@ -93,6 +93,15 @@ export interface AgentAssignment {
   parentInstanceId: string | null;
   /** 有无 API key override（实际 key 在 keychain agent.<instanceId>.api_key_override） */
   hasApiKeyOverride: boolean;
+
+  // === v2 修复（Task 1）：用户最近运行意图 ===
+  /**
+   * 用户最近运行意图——"agent 在线"的唯一权威源（v2 修复）。
+   *  - true  = 用户启动过（在线）
+   *  - false = 用户主动停止或从未启动（离线）
+   * DB 列 last_running（INTEGER NOT NULL DEFAULT 1），rowToAssignment 映射为 boolean。
+   */
+  lastRunning: boolean;
 }
 
 /** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */

@@ -97,6 +97,8 @@ interface AgentAssignmentRow {
   role: string;
   parent_instance_id: string | null;
   has_api_key_override: number;
+  /** v1.5.8 DB 列；v2 修复补映射 */
+  last_running: number;
 }
 
 /** 将 DB 行（snake_case + JSON 字符串）转换为强类型 AgentDefinition */
@@ -134,6 +136,7 @@ function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
     role: row.role as AgentRole,
     parentInstanceId: row.parent_instance_id,
     hasApiKeyOverride: row.has_api_key_override === 1,
+    lastRunning: row.last_running === 1,
   };
 }
 

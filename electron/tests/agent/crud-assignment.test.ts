@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import {
   saveAgentDefinition,
@@ -207,5 +207,54 @@ describe('deleteDefinition — 级联清理', () => {
 
     await deleteDefinition('c-1');
     expect(memStore.has(`agent.${a.instanceId}.api_key_override`)).toBe(false);
+  });
+});
+
+/**
+ * Task 1（v2 agent 在线语义修复）：rowToAssignment 必须把 DB 列 last_running
+ * 映射到 AgentAssignment.lastRunning（boolean）。DB 列已存在（v1.5.8 引入），
+ * 本 task 仅补 TS 类型 + row 映射。
+ *
+ * 用 helper 建好 ws/def/assignment 骨架，再 UPDATE last_running 决定测试值；
+ * 比直接写 raw SQL INSERT 干净，且 schema 演进时只需改 helper，不需动测试。
+ */
+describe('AgentAssignment.lastRunning 字段映射 (Task 1)', () => {
+  function makeIsolatedWs(prefix: string): string {
+    const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    getDb()
+      .prepare(
+        `INSERT INTO workspaces (id, name, owner_id, directory_path, matrix_space_id)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(id, 'test', '@owner:localhost', '/tmp', '!space:localhost');
+    return id;
+  }
+
+  it('row.last_running=1 → assignment.lastRunning=true', () => {
+    const localWsId = makeIsolatedWs('ws-test-last-running');
+    saveAgentDefinition(makeDef('def-lr-1'));
+    assignAgentToWorkspace(localWsId, 'def-lr-1', '@bot1:localhost', 'standalone');
+
+    getDb()
+      .prepare('UPDATE agent_assignments SET last_running = 1 WHERE workspace_id = ?')
+      .run(localWsId);
+
+    const list = listAssignments(localWsId);
+    expect(list).toHaveLength(1);
+    expect(list[0].lastRunning).toBe(true);
+  });
+
+  it('row.last_running=0 → assignment.lastRunning=false', () => {
+    const localWsId = makeIsolatedWs('ws-test-last-running-off');
+    saveAgentDefinition(makeDef('def-lr-2'));
+    assignAgentToWorkspace(localWsId, 'def-lr-2', '@bot2:localhost', 'standalone');
+
+    getDb()
+      .prepare('UPDATE agent_assignments SET last_running = 0 WHERE workspace_id = ?')
+      .run(localWsId);
+
+    const list = listAssignments(localWsId);
+    expect(list).toHaveLength(1);
+    expect(list[0].lastRunning).toBe(false);
   });
 });

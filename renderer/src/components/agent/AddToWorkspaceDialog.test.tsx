@@ -62,6 +62,7 @@ const NEW_ASSIGNMENT: AgentAssignment = {
   role: 'standalone',
   parentInstanceId: null,
   hasApiKeyOverride: false,
+  lastRunning: true,
 };
 
 function buildDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {

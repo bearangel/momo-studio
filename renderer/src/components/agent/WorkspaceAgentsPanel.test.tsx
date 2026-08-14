@@ -74,6 +74,7 @@ const ASSIGNMENT: AgentAssignment = {
   role: 'standalone',
   parentInstanceId: null,
   hasApiKeyOverride: false,
+  lastRunning: true,
 };
 
 // store action 桩

@@ -9,10 +9,12 @@ import type { AgentAssignment, RoomMember } from '../../ipc/types';
 const mockAssignments: AgentAssignment[] = [
   { instanceId: 'inst-online', workspaceId: 'w1', agentDefinitionId: 'd1',
     botMatrixUserId: '@online-bot:local', enabled: true, createdAt: '',
-    role: 'standalone', parentInstanceId: null, hasApiKeyOverride: false },
+    role: 'standalone', parentInstanceId: null, hasApiKeyOverride: false,
+    lastRunning: true },
   { instanceId: 'inst-offline', workspaceId: 'w1', agentDefinitionId: 'd2',
     botMatrixUserId: '@offline-bot:local', enabled: true, createdAt: '',
-    role: 'standalone', parentInstanceId: null, hasApiKeyOverride: false },
+    role: 'standalone', parentInstanceId: null, hasApiKeyOverride: false,
+    lastRunning: false },
 ];
 const mockRunning: Record<string, boolean> = {
   'inst-online': true,

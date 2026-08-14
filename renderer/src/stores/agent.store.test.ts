@@ -34,6 +34,7 @@ const MOCK_ASSIGNMENT: AgentAssignment = {
   role: 'standalone',
   parentInstanceId: null,
   hasApiKeyOverride: false,
+  lastRunning: true,
 };
 
 const MOCK_MAIN_ASSIGNMENT: AgentAssignment = {
@@ -46,6 +47,7 @@ const MOCK_MAIN_ASSIGNMENT: AgentAssignment = {
   role: 'main',
   parentInstanceId: null,
   hasApiKeyOverride: false,
+  lastRunning: true,
 };
 
 const MOCK_SUB_ASSIGNMENT: AgentAssignment = {
@@ -58,6 +60,7 @@ const MOCK_SUB_ASSIGNMENT: AgentAssignment = {
   role: 'sub',
   parentInstanceId: 'main-i',
   hasApiKeyOverride: false,
+  lastRunning: false,
 };
 
 const mockApi = {

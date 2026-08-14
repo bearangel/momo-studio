@@ -84,6 +84,9 @@ export interface AgentAssignment {
    * 缺失时回退到 botMatrixUserId。Mention 菜单 / TaskChip 优先用此字段。
    */
   agentName?: string;
+  /** v2 修复：用户最近运行意图（true=在线/false=离线）。
+   *  来源：DB agent_assignments.last_running；与 electron 端 AgentAssignment 对齐。 */
+  lastRunning: boolean;
 }
 
 /** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */
