@@ -26,13 +26,7 @@ import os from 'node:os';
 // ─── Mock 重依赖（必须在静态 import 之前提升） ─────────────────────────────
 // 这些 mock 拦截「外部副作用」，保留 lazy init 链路自身的真实代码执行。
 
-// 1. auto-start：resolveBotToken 返回 fake-token（避免 keychain / Matrix 登录）
-vi.mock('../../src/main/agent/auto-start', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/main/agent/auto-start')>();
-  return { ...actual, resolveBotToken: vi.fn().mockResolvedValue('fake-bot-token') };
-});
-
-// 2. spawn-helpers：buildSpawnOpts 回显关键字段，resolveApiKey 返回 fake-key
+// 1. spawn-helpers：buildSpawnOpts 回显关键字段，resolveApiKey 返回 fake-key
 vi.mock('../../src/main/agent/spawn-helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/spawn-helpers')>();
   return {
@@ -54,7 +48,7 @@ vi.mock('../../src/main/agent/spawn-helpers', async (importOriginal) => {
   };
 });
 
-// 3. runtime-spawner：spawnForAgent 返回 fake child（避免真 fork 子进程）
+// 2. runtime-spawner：spawnForAgent 返回 fake child（避免真 fork 子进程）
 //    WarmPool 只用到 child.kill()；AgentRunner 本测试不触达 executeTask。
 vi.mock('../../src/main/agent/runtime-spawner', () => ({
   spawnForAgent: vi.fn().mockResolvedValue({
@@ -64,7 +58,7 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
   }),
 }));
 
-// 4. internal-event-bridge：setBridgeRouter 用 vi.fn 替换以便断言（其余 export 保留真实）
+// 3. internal-event-bridge：setBridgeRouter 用 vi.fn 替换以便断言（其余 export 保留真实）
 //    用 vi.hoisted 声明 mock——vi.mock 工厂会被 vitest 提升到文件顶部，
 //    普通顶层 const 此时还未初始化（TDZ），vi.hoisted 保证 mock 与 factory 同步提升。
 const { setBridgeRouterMock } = vi.hoisted(() => ({
@@ -215,7 +209,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(typeof svc.routeEvent).toBe('function');
   });
 
-  it('场景 2: 空状态 → startAgentRuntime(taskDriven=true) 单 agent 启动 → setBridgeRouter 被调用', async () => {
+  it('场景 2: 空状态 → startAgentRuntime 单 agent 启动 → setBridgeRouter 被调用', async () => {
     // startAgentRuntime 是 agent:start IPC handler 路径
     const { startAgentRuntime } = await import('../../src/main/agent/runtime-registry');
 
@@ -250,7 +244,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     };
 
     // 调用被测函数（模拟 agent:start IPC handler 路径）
-    await startAgentRuntime(opts, true);
+    await startAgentRuntime(opts);
 
     // 断言 1：runner 已注册
     expect(agentRunners.has(instanceId)).toBe(true);

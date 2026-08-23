@@ -7,7 +7,7 @@
 //
 // scanPickup 当前是 no-op（返回 false）——完整的 pickup → executeTask 链路需要
 // runtime-spawner + runtime-entry task-config 协议（v2 架构迁移）。
-// 现阶段：调度层启用（scheduled 任务能自动提升状态），执行层仍走 v1 runtime-manager。
+// 现阶段：调度层启用（scheduled 任务能自动提升状态），执行层由 task-driven runtime 承载。
 import { TaskScheduler } from './scheduler';
 import { logger } from '../logger';
 

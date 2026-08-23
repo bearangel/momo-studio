@@ -20,10 +20,11 @@ import {
 import { createWorkspace } from '../../src/main/workspace/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  spawnAgent: vi.fn(),
-  stopAgent: vi.fn(),
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
+}));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-cascade-${Date.now()}`);

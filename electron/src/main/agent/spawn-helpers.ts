@@ -1,8 +1,8 @@
 // electron/src/main/agent/spawn-helpers.ts
 //
 // Agent spawn 共享逻辑：rebuildSubAgents + resolveApiKey + buildSpawnOpts。
-// 把多个 spawn 站点（assignMainAgent / agent:start / autoStartAgents /
-// restartCoordinatorInstance）共用的 subAgents 重建 + apiKey 解析 + opts 构建逻辑
+// 把多个 spawn 站点（assignMainAgent / agent:start / restartCoordinatorInstance /
+// initTaskDrivenRuntime）共用的 subAgents 重建 + apiKey 解析 + opts 构建逻辑
 // 集中到一处，避免 main agent 在某条重启路径上丢失 dispatch 工具（C1 修复）。
 //
 // v1.3 改造要点：
@@ -23,7 +23,7 @@ import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
 import type { AgentDefinition, AgentRole } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
-import type { AgentRuntimeOpts } from './runtime-manager';
+import type { AgentRuntimeOpts } from './runtime-config';
 
 /**
  * 为指定 workspace 内的 main assignment 重建 subAgents 引用。

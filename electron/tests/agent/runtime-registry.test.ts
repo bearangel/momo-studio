@@ -2,25 +2,17 @@
 //
 // runtime-registry 模块测试——覆盖 task-driven runtime 全局注册表的核心函数：
 
-//   2. startAgentRuntime(taskDriven=false)：走 v1 spawnAgent fallback
-//   3. startAgentRuntime(taskDriven=true)：创建 WarmPool + AgentRunner + 注册到全局 Map
-//   4. createTaskDrivenRuntime：幂等性（重复调用不重建）
-//   5. destroyAllTaskDrivenRuntimes：清空全部 Map
-//   6. destroyTaskDrivenRuntime：销毁单 agent 的 runner + WarmPool
-//   7. stopAgentRuntime：v1 stopAgent + v2 destroy + DB last_running=0 三合一
+//   1. startAgentRuntime：创建 WarmPool + AgentRunner + 注册到全局 Map（幂等）
+//   2. createTaskDrivenRuntime：幂等性（重复调用不重建）
+//   3. destroyAllTaskDrivenRuntimes：清空全部 Map
+//   4. destroyTaskDrivenRuntime：销毁单 agent 的 runner + WarmPool
+//   5. stopAgentRuntime：销毁 runtime + DB last_running=0
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
-
-// mock runtime-manager（避免真实 spawn + handleStreamChunk 副作用）
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  spawnAgent: vi.fn(),
-  handleStreamChunk: vi.fn(),
-  stopAgent: vi.fn(),
-}));
 
 // mock runtime-spawner（避免真实 fork 子进程）
 vi.mock('../../src/main/agent/runtime-spawner', () => ({
@@ -45,7 +37,6 @@ vi.mock('../../src/main/agent/router-bootstrap', () => ({
   __resetRouterServiceForTest: vi.fn(),
 }));
 
-import { spawnAgent, stopAgent } from '../../src/main/agent/runtime-manager';
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
 import { ensureRouterService } from '../../src/main/agent/router-bootstrap';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
@@ -63,7 +54,7 @@ import {
   stopAgentRuntime,
   __clearRuntimeRegistryForTest,
 } from '../../src/main/agent/runtime-registry';
-import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-manager';
+import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-config';
 import type { AgentDefinition } from '../../src/main/agent/types';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import type { WarmPool } from '../../src/main/agent/warm-pool';
@@ -118,9 +109,7 @@ describe('runtime-registry', () => {
     process.env.AP_USER_DATA_DIR = tmpRoot;
     runMigrations();
     __clearRuntimeRegistryForTest();
-    vi.mocked(spawnAgent).mockClear();
     vi.mocked(spawnForAgent).mockClear();
-    vi.mocked(stopAgent).mockClear();
     vi.mocked(ensureRouterService).mockClear();
   });
   afterEach(() => {
@@ -128,31 +117,21 @@ describe('runtime-registry', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  describe('startAgentRuntime', () => {
-    it('taskDriven=false 走 v1 spawnAgent', async () => {
-      const opts = mkMinimalOpts('inst-v1', '@bot-v1:home');
-      await startAgentRuntime(opts, false);
-
-      expect(spawnAgent).toHaveBeenCalledWith(opts);
-      expect(agentRunners.has('inst-v1')).toBe(false);
-      expect(agentWarmPools.has('inst-v1')).toBe(false);
-    });
-
-    it('taskDriven=true 创建 WarmPool + AgentRunner 并注册到全局 Map', async () => {
+  describe('startAgentRuntime（单轨）', () => {
+    it('创建 WarmPool + AgentRunner 并注册到全局 Map', async () => {
       const opts = mkMinimalOpts('inst-td', '@bot-td:home');
-      await startAgentRuntime(opts, true);
+      await startAgentRuntime(opts);
 
-      expect(spawnAgent).not.toHaveBeenCalled();
       expect(agentRunners.has('inst-td')).toBe(true);
       expect(agentWarmPools.has('inst-td')).toBe(true);
       expect(spawnForAgent).toHaveBeenCalled();
     });
 
-    it('taskDriven=true 幂等：重复调用不重建已存在的 pool/runner', async () => {
+    it('幂等：重复调用不重建已存在的 pool/runner', async () => {
       const opts = mkMinimalOpts('inst-td2', '@bot-td2:home');
-      await startAgentRuntime(opts, true);
+      await startAgentRuntime(opts);
       const runnerBefore = agentRunners.get('inst-td2');
-      await startAgentRuntime(opts, true);
+      await startAgentRuntime(opts);
       const runnerAfter = agentRunners.get('inst-td2');
 
       expect(runnerAfter).toBe(runnerBefore);
@@ -174,7 +153,7 @@ describe('runtime-registry', () => {
   describe('destroyAllTaskDrivenRuntimes', () => {
     it('清空全部 Map', async () => {
       const opts = mkMinimalOpts('inst-dest', '@bot-dest:home');
-      await startAgentRuntime(opts, true);
+      await startAgentRuntime(opts);
       expect(agentRunners.size).toBeGreaterThan(0);
 
       destroyAllTaskDrivenRuntimes();
@@ -186,7 +165,7 @@ describe('runtime-registry', () => {
   describe('ensureTaskDrivenRuntime 触发 ensureRouterService (Task R2)', () => {
     it('创建新 runner 后调用 ensureRouterService', async () => {
       const opts = mkMinimalOpts('inst-r2-1', '@bot-r2-1:home');
-      await startAgentRuntime(opts, true);
+      await startAgentRuntime(opts);
 
       expect(ensureRouterService).toHaveBeenCalledOnce();
       // 验证传入的是 Map 引用（应使用 runtime-registry 的全局 agentRunners + providerBuckets）
@@ -197,10 +176,10 @@ describe('runtime-registry', () => {
 
     it('runner 已存在时（幂等调用）不再触发 ensureRouterService', async () => {
       const opts = mkMinimalOpts('inst-r2-2', '@bot-r2-2:home');
-      await startAgentRuntime(opts, true);  // 首次：创建 runner + 触发 ensureRouterService
+      await startAgentRuntime(opts);  // 首次：创建 runner + 触发 ensureRouterService
       vi.mocked(ensureRouterService).mockClear();
 
-      await startAgentRuntime(opts, true);  // 二次：pool 已存在，跳过 ensure 块
+      await startAgentRuntime(opts);  // 二次：pool 已存在，跳过 ensure 块
       expect(ensureRouterService).not.toHaveBeenCalled();
     });
   });
@@ -282,7 +261,7 @@ describe('runtime-registry', () => {
       expect(() => destroyTaskDrivenRuntime('inst-not-exist')).not.toThrow();
     });
 
-    it('stopAgentRuntime 调用 v1 stopAgent + v2 destroy + 写 last_running=0', async () => {
+    it('stopAgentRuntime 销毁 runtime 并写 last_running=0', async () => {
       const ws = await createWorkspace(
         { name: 'WS-stop', description: '', directoryPath: path.join(tmpRoot, 'ws-stop'), iconEmoji: '📁' },
         '@u:localhost', '!s:localhost', '!t:localhost',
@@ -313,7 +292,6 @@ describe('runtime-registry', () => {
 
       await stopAgentRuntime(instId);
 
-      expect(stopAgent).toHaveBeenCalledWith(instId);
       expect(fakeRunner.destroy).toHaveBeenCalledOnce();
       expect(fakePool.destroyAll).toHaveBeenCalledOnce();
       expect(agentRunners.has(instId)).toBe(false);

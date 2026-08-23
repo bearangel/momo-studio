@@ -13,7 +13,7 @@ import {
   removeAllocation,
   type CapabilityType,
 } from './allocation';
-import { isAgentRunning } from '../agent/runtime-manager';
+import { isAgentRunning } from '../agent/runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
 import { getAgentDefinition, listAssignments } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
@@ -108,7 +108,6 @@ async function restartCoordinatorInstance(
       llmApiKey: apiKey,
       isCoordinator: true,
     }),
-    def.taskDriven !== false,
   );
   logger.info('协调 agent 已自动重启', { instanceId });
 }

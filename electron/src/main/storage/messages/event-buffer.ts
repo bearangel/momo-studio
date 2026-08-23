@@ -8,7 +8,7 @@
 //   - 50ms 窗口 / 30 条阈值 → 用户感受延迟 < 50ms（人类感知下限）
 //   - IPC 推送批量（session:message_event_batch）减少内核切换开销
 //
-// 单例由 A8 在 im:message_event 通道注册时创建；A9 改造 runtime-manager 时使用。
+// 单例由 A8 在 im:message_event 通道注册时创建；stream-relay 消费。
 import type { MessageEventRow } from './events-repo';
 import { insertEventBatch, nextSeqForMessage } from './events-repo';
 

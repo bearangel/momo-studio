@@ -1,23 +1,16 @@
 // electron/src/main/agent/router-service.ts
 //
-// 主进程消息路由中心——task-driven 架构的核心。
-// 替代 v1 的 runtime 自己监听 Matrix event：所有 Matrix event 统一经此分流。
+// 主进程消息路由中心——task-driven 架构的核心。所有输入源统一经此分流：
+//   - im/session-service（用户会话消息）→ routeUserChat
+//   - internal-event-bridge（子进程 dispatch / task_reply / abort_dispatch 内部事件）
+//     → routeDispatch / routeTaskReply / routeAbortDispatch
+//   - m.room.message 类型保留给旧 event shape 适配（shape → plain 转换后委托 routeUserChat）
 //
-// 流程：
-//   sync-manager 收到 Matrix event → RouterService.routeEvent
-//     → m.room.message                → routeUserChat（ephemeral chat task → AgentRunner.executeTask）
-//     → io.momo-studio.dispatch        → routeDispatch（dispatch ephemeral task，含 dispatchContext → AgentRunner.executeTask）
-//     → io.momo-studio.task_reply      → routeTaskReply（通知正在执行的 PM runtime → AgentRunner.notifyTaskReply）
-//     → io.momo-studio.abort_dispatch  → routeAbortDispatch（T8 完整实现）
-//
-// 第 4 个参数 directTargetAssignmentId 是已解析好的目标 runner key
-// （由 sync-manager / runtime-entry 根据房间类型 + decideResponse 预先决定），
-// 这样 RouterService 自身不做 decideResponse 判定，只负责按 event 类型构造 task 并派发。
-// decideResponse / parseMentions 在上层 sync-manager 调用前已使用，此处不再重复。
+// 第 4 个参数 directTargetAssignmentId 是已解析好的目标 runner key，
+// RouterService 自身不做目标判定，只负责按 event 类型构造 task 并派发。
 //
 // T4 解耦：routeUserChat 是 public plain 参数入口——其他输入源
-// （未来的 session-ops、IPC handler、CLI）不经过 Matrix event shape 也可直接派发 chat task。
-// routeEvent 内部对 m.room.message 分支仅做 shape → plain 转换后委托 routeUserChat。
+// （session-ops、IPC handler、CLI）不经过 event shape 也可直接派发 chat task。
 
 import { randomUUID } from 'node:crypto';
 import { logger } from '../logger';
@@ -42,9 +35,9 @@ export interface TaskReplyNotification {
   toolCallsUsed?: number;
 }
 
-/** routeUserChat 的 plain 入参——任意输入源（Matrix event shape、IPC、CLI）共用 */
+/** routeUserChat 的 plain 入参——任意输入源（event shape 适配、IPC、CLI）共用 */
 export interface RouteUserChatInput {
-  /** 目标会话 id（Matrix room_id、session_id 或未来的 CLI session id） */
+  /** 目标会话 id（session_id 或未来的 CLI session id） */
   sessionId: string;
   /** 目标 runner 的 assignmentId（runners Map 的 key） */
   assignmentId: string;
@@ -55,10 +48,8 @@ export interface RouteUserChatInput {
 }
 
 /**
- * Matrix event 的最小子集形状（与 matrix-js-sdk MatrixEvent 兼容）。
- * 重命名为 InternalEvent——含义扩展为「RouterService 内部消费的 event 形状」，
- * 桥接层（sync-manager）从 Matrix event 转过来时按此 shape 构造，
- * 未来若引入非 Matrix 输入源也按此 shape 适配。
+ * RouterService 内部消费的 event 形状（历史沿用 Matrix event 的方法式接口）。
+ * 桥接层（internal-event-bridge）从子进程 IPC 消息按此 shape 构造。
  */
 export interface InternalEvent {
   getType(): string;
@@ -67,14 +58,11 @@ export interface InternalEvent {
   getRoomId(): string | undefined;
 }
 
-/** 保留旧名别名——sync-manager 等旧调用点代码引用兼容性；新代码直接用 InternalEvent。 */
-export type RoutedEvent = InternalEvent;
-
 export class RouterService {
   constructor(private readonly opts: RouterServiceOpts) {}
 
   /**
-   * Plain 参数入口——不依赖 Matrix event shape。
+   * Plain 参数入口——不依赖 event shape。
    * 把 plain 入参构造为 ephemeral chat TaskConfig 派发给目标 runner。
    *
    * 不经过 TaskDispatcher——ephemeral chat 是即时响应，不走 assigned 任务队列。
@@ -99,13 +87,13 @@ export class RouterService {
   }
 
   /**
-   * 路由单个 Matrix event。按 event 类型分流，找不到匹配类型时静默忽略。
-   * 任一路由分支抛错都被 catch 记录，不阻塞 sync-manager 的后续 event 处理。
+   * 路由单个内部 event。按 event 类型分流，找不到匹配类型时静默忽略。
+   * 任一路由分支抛错都被 catch 记录，不阻塞调用方的后续 event 处理。
    *
-   * @param event Matrix event（getType/getContent/getSender/getRoomId）
-   * @param _ownerUserId workspace owner 的 Matrix userId（保留给 T8 abort/权限判定）
+   * @param event 内部 event（getType/getContent/getSender/getRoomId）
+   * @param _ownerUserId workspace owner 的 userId（保留给 abort/权限判定）
    * @param _targetAssignmentId 房间级目标 assignment（群组默认接待 agent）；当前 3 条路由
-   *   都用 directTargetAssignmentId 精确派发，此参数预留给 T8 的群组广播场景
+   *   都用 directTargetAssignmentId 精确派发，此参数预留给群组广播场景
    * @param directTargetAssignmentId 单聊/已解析的直接目标 runner key。
    *   m.room.message 未传时不派发；dispatch 未传时 routeDispatch 内部从 dispatch_to 反查。
    */
@@ -129,7 +117,7 @@ export class RouterService {
           break;
         case DISPATCH_EVENT_TYPE:
           // dispatch 目标由 content.dispatch_to 决定——即使 directTargetAssignmentId
-          // 未传（sync-manager 当前传 null），routeDispatch 内部会反查。
+          // 未传时 routeDispatch 内部会从 dispatch_to 反查。
           await this.routeDispatch(event, directTargetAssignmentId);
           break;
         case TASK_REPLY_EVENT_TYPE:
@@ -241,7 +229,7 @@ export class RouterService {
       }
       return;
     }
-    // 未指定 runner → 广播（保留给未来 sync-manager 未解析目标时的兜底）
+    // 未指定 runner → 广播（保留给调用方未解析目标时的兜底）
     for (const runner of this.opts.runners.values()) {
       await runner.notifyTaskReply(notification);
     }
@@ -250,7 +238,7 @@ export class RouterService {
   /**
    * abort_dispatch event → 中断正在执行的 sub-agent task。
    * T8 完整实现：按 task_id 找到 runner → runner.abortStream(streamSessionId)。
-   * 当前仅记录日志，不抛错（避免阻塞 sync-manager）。
+   * 当前仅记录日志，不抛错（避免阻塞调用方）。
    */
   private async routeAbortDispatch(event: InternalEvent): Promise<void> {
     const content = event.getContent();

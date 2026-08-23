@@ -28,7 +28,6 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
-  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
@@ -146,7 +145,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'task body',
       makeConfig(),
@@ -177,7 +175,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig(),
@@ -204,7 +201,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'task',
       makeConfig(),
@@ -263,7 +259,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       '继续',
       makeConfig({ currentTaskId: 'task-001' }),

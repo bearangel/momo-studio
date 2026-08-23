@@ -2,7 +2,7 @@
 //
 // 工具调用审计日志的子进程端发送器。runtime-entry 运行在独立子进程中，
 // 无法直接访问主进程的 SQLite 连接，故通过 IPC（process.send）把审计
-// 数据转发到主进程，由 runtime-manager 的 handleAuditToolCall 写入 DB。
+// 数据转发到主进程，由 runtime-spawner 的审计桥接写入 DB。
 //
 // 每条审计记录截断到 500 字符，避免超长工具输出（如 read_file 大文件）
 // 导致 IPC 消息过大或 DB 膨胀。

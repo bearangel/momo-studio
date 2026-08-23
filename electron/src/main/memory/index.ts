@@ -9,7 +9,7 @@
 //   - __setMemoryProviderForTest(p)：注入 mock 或替代实现
 //   - __resetMemoryProviderForTest()：重置回默认 SQLiteMemoryProvider
 //
-// 设计参考 runtime-manager.ts 的 singleton 模式。
+// singleton 模式。
 import { SQLiteMemoryProvider } from './sqlite-provider';
 import type { MemoryProvider } from './types';
 

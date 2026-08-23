@@ -32,10 +32,11 @@ vi.mock('../../src/main/logger', () => ({
 }));
 
 // v1 runtime 机器 mock（本测试不启动真实子进程）
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  stopAgent: vi.fn(),
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  spawnAgent: vi.fn(),
+}));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
 }));
 
 // runtime-registry：保留真实 Maps，只把 startAgentRuntime 替成 spy

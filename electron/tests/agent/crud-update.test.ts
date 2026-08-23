@@ -17,9 +17,11 @@ import {
 } from '../../src/main/agent/crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
 
-vi.mock('../../src/main/agent/runtime-manager', () => ({
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  stopAgent: vi.fn(),
+}));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-crud-update-${Date.now()}`);
@@ -159,9 +161,10 @@ describe('updateAgentApiKey (legacy)', () => {
 
 describe('stopRunningInstancesByDefinition', () => {
   it('isAgentRunning=true 时停止并加入返回列表', async () => {
-    const { isAgentRunning, stopAgent } = await import('../../src/main/agent/runtime-manager');
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
     vi.mocked(isAgentRunning).mockImplementation(() => true);
-    vi.mocked(stopAgent).mockClear();
+    vi.mocked(stopAgentRuntime).mockClear();
 
     const def = sampleDef();
     const ws = await createWorkspace(
@@ -171,15 +174,16 @@ describe('stopRunningInstancesByDefinition', () => {
     assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
-    const stopped = stopRunningInstancesByDefinition(def.id);
+    const stopped = await stopRunningInstancesByDefinition(def.id);
     expect(stopped).toHaveLength(1);
-    expect(stopAgent).toHaveBeenCalledTimes(1);
+    expect(stopAgentRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('isAgentRunning=false 时不停止', async () => {
-    const { isAgentRunning, stopAgent } = await import('../../src/main/agent/runtime-manager');
+    const { isAgentRunning } = await import('../../src/main/agent/runtime-status');
+    const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
     vi.mocked(isAgentRunning).mockImplementation(() => false);
-    vi.mocked(stopAgent).mockClear();
+    vi.mocked(stopAgentRuntime).mockClear();
 
     const def = sampleDef();
     const ws = await createWorkspace(
@@ -189,8 +193,8 @@ describe('stopRunningInstancesByDefinition', () => {
     assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
-    const stopped = stopRunningInstancesByDefinition(def.id);
+    const stopped = await stopRunningInstancesByDefinition(def.id);
     expect(stopped).toHaveLength(0);
-    expect(stopAgent).not.toHaveBeenCalled();
+    expect(stopAgentRuntime).not.toHaveBeenCalled();
   });
 });

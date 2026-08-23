@@ -1,7 +1,7 @@
 // electron/src/main/agent/runtime-spawner.ts
 //
 // task-driven runtime spawn 适配层——v2 完整实现。
-// 替代 runtime-manager.spawnAgent，提供 WarmPool 需要的 spawn 接口。
+// 提供 WarmPool 需要的 spawn 接口。
 //
 // 流程：
 //   1. buildSpawnOpts 构造完整 AgentRuntimeOpts（复用 spawn-helpers）
@@ -16,8 +16,7 @@ import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
 
-// 复用 runtime-manager 的 AgentRuntimeOpts 类型（避免重复定义）
-import type { AgentRuntimeOpts } from './runtime-manager';
+import type { AgentRuntimeOpts } from './runtime-config';
 
 export interface SpawnedRuntime {
   child: ChildProcess;
@@ -38,7 +37,7 @@ const SHUTDOWN_TIMEOUT_MS = 5000;
 export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const { assignmentId, runtimeConfig, onChunk, onExit } = opts;
 
-  // AGENT_CONFIG 环境变量传递 runtime config（与 v1 runtime-manager 一致）
+  // AGENT_CONFIG 环境变量传递 runtime config
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AGENT_CONFIG: JSON.stringify(runtimeConfig),

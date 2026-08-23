@@ -41,12 +41,9 @@ vi.mock('../../src/main/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-// mock runtime-manager（v1 路径走 vi.fn；避免真实 kill 子进程）
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  stopAgent: vi.fn(),
+// mock runtime-status（避免真实 DB 读）
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  spawnAgent: vi.fn(),
-  handleStreamChunk: vi.fn(),
 }));
 
 // mock runtime-spawner（避免真实 fork 子进程）；WarmPool / AgentRunner 保持真实

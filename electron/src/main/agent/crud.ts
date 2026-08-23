@@ -10,7 +10,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { setSecret, deleteSecret } from '../storage/keychain';
 import { logger } from '../logger';
-import { isAgentRunning, stopAgent } from './runtime-manager';
+import { isAgentRunning } from './runtime-status';
+import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
 
@@ -186,7 +187,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     workspace_id: def.workspaceId,
     model_provider_id: def.modelProviderId,
     model_name: def.modelName,
-    task_driven: def.taskDriven === false ? 0 : 1,
+    task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
   });
 }
 
@@ -351,7 +352,7 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
   const stopped: string[] = [];
   for (const row of rows) {
     if (isAgentRunning(row.instance_id)) {
-      stopAgent(row.instance_id);
+      await stopAgentRuntime(row.instance_id);
       stopped.push(row.instance_id);
     }
     // 清除 API key override
@@ -443,11 +444,11 @@ export async function updateAgentApiKey(instanceId: string, newKey: string): Pro
 }
 
 /** 停止某定义的全部运行中实例（编辑 def 后调用，让用户手动重启应用新配置） */
-export function stopRunningInstancesByDefinition(definitionId: string): string[] {
+export async function stopRunningInstancesByDefinition(definitionId: string): Promise<string[]> {
   const stopped: string[] = [];
   for (const instanceId of listRunningInstanceIdsByDefinition(definitionId)) {
     if (isAgentRunning(instanceId)) {
-      stopAgent(instanceId);
+      await stopAgentRuntime(instanceId);
       stopped.push(instanceId);
     }
   }

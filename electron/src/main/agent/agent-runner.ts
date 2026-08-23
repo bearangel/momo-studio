@@ -6,12 +6,11 @@
 //     通过 IPC 注入 task config → 子进程跑 chat loop → end chunk → release runtime。
 // v2：多 task 并发（warm pool 多 acquire）。
 //
-// 与 runtime-manager.ts 的关系：runtime-manager 是 v1 的"长期运行 agent"模式
-// （一个 agent 一个常驻子进程），AgentRunner 取代它转为"task-driven"模式
-// （task 来了 acquire，结束 release）。AgentRuntimeOpts 类型仍复用，spawn 实现
-// 由 runtime-spawner（后续 task）接管。
+// spawn 实现由 runtime-spawner 提供（fork runtime-entry）；配置类型 AgentRuntimeOpts
+// 定义在 runtime-config.ts（Task 13 起 v1 runtime-manager 双轨已删除，本模块是
+// 唯一的 runtime 执行入口）。
 import type { WarmPool, WarmRuntime } from './warm-pool';
-import type { AgentRuntimeOpts } from './runtime-manager';
+import type { AgentRuntimeOpts } from './runtime-config';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -156,17 +155,19 @@ export class AgentRunner {
   }
 
   /**
-   * 通知正在执行某 task 的 runtime 收到了 task_reply（来自子 agent 的回执）。
-   * 按 taskId 在 activeTasks 中匹配（ephemeral chat 的 taskId=null 永不匹配），
-   * 命中后通过 IPC 把 reply 推给对应子进程，由 runtime-entry 的 pending dispatch 等待逻辑消费。
-   * 找不到匹配的活跃 task 时 no-op（可能已结束或从未启动）。
+   * 通知正在执行任务的 runtime 收到了 task_reply（来自子 agent 的回执），
+   * 通过 IPC 推给本 runner 的全部活跃子进程，由 runtime-entry 的 pendingReplies
+   * 等待逻辑按 task_id 精确匹配消费。
+   *
+   * 不在 runner 侧按 reply.taskId 过滤：dispatch 的 task_id 由 PM 子进程内的
+   * executeDispatch 生成（buildDispatchMessage randomUUID），runner 无法感知；
+   * PM 的活跃 task 通常是 ephemeral chat（taskId=null），旧的按 taskId 匹配
+   * 永不命中 → 回执静默丢弃。转发给全部活跃子进程是安全的——子进程
+   * handleTaskReply 找不到匹配 pending 时仅记录日志。
    */
   async notifyTaskReply(reply: TaskReplyNotification): Promise<void> {
     for (const active of this.activeTasks.values()) {
-      if (active.taskId !== null && active.taskId === reply.taskId) {
-        active.runtime.child.send({ type: 'task-reply', reply });
-        return;
-      }
+      active.runtime.child.send({ type: 'task-reply', reply });
     }
   }
 

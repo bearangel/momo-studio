@@ -1,20 +1,17 @@
 // electron/src/main/agent/stream-relay.ts
 //
-// 流式 chunk 中继层（Task 6：从 runtime-manager 平移出的独立模块）。
+// 流式 chunk 中继层（独立模块）。
 //
 // 职责（双通道）：
 //   1. relay：chunk → renderer（'agent:stream' 通道，主窗口注入）
 //   2. 落盘：chunk → MessageEventBuffer → messages / message_events 表，
 //      flush 时批量推送 'session:message_event_batch'（Task 8 已从 im:message_event_batch 改名）
 //
-// 中断：abortStreamBySessionId(streamSessionId)——按 streamSessionId 精确中断
-// （替代 runtime-manager 按 roomId 索引的旧方案，修掉"同房中断限制"技术债）。
+// 中断：abortStreamBySessionId(streamSessionId)——按 streamSessionId 精确中断。
 // 为避免循环依赖（stream-relay 不得 import runtime-registry），采用注册反转：
 // runtime-registry 模块初始化时通过 setAbortResolver 注入实际广播逻辑
 // （遍历 agentRunners，逐 runner 调 abortStream；各 runner 内部按活跃表自然过滤）。
 //
-// 与 runtime-manager 的关系：v1 fallback 的 handleChildMessage / handleAgentExit
-// 仍复用本模块的 handleStreamChunk / relayStreamChunk（v1 机器保留在 runtime-manager）。
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
@@ -89,7 +86,7 @@ export function __flushEventBufferForTest(): void {
 
 /**
  * task-driven runtime 的 chunk 入口——relay 到 renderer + 落盘 SQLite。
- * WarmPool spawn 的子进程 chunk 经此函数走与 v1 runtime-manager 相同的双通道。
+ * WarmPool spawn 的子进程 chunk 经此函数走双通道（renderer 推送 + SQLite 落盘）。
  */
 export function handleStreamChunk(chunk: StreamChunk): void {
   relayStreamChunk(chunk);
@@ -276,7 +273,7 @@ export function setAbortResolver(fn: ((streamSessionId: string) => boolean) | nu
 
 /**
  * 中断指定 streamSessionId 的活跃流式会话。
- * 替代 runtime-manager 的 abortStream(roomId)——按 streamSessionId 精确定位，
+ * 按 streamSessionId 精确定位中断（旧 v1 按 roomId 索引），
  * PM 与子 agent 同房时不再互相覆盖（修掉"同房中断限制"技术债）。
  *
  * @returns 是否有 runner 接收了广播（未注入 resolver 时 false）

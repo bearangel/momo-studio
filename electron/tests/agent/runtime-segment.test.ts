@@ -19,7 +19,6 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
-  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
@@ -156,7 +155,6 @@ describe('runChatLoop: task_complete 分段发 segment_boundary chunk', () => {
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       '做一个长任务',
       makeConfig(),
@@ -205,7 +203,6 @@ describe('runChatLoop: task_complete 分段发 segment_boundary chunk', () => {
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       '长任务',
       makeConfig(),

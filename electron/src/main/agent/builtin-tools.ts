@@ -10,6 +10,8 @@
 //     SkillRegistry 直接由 runtime-entry 调用 loadFull/loadResource）。
 //   - getDispatchToolDefs：主 agent 给每个 sub agent 注册 dispatch:<slug> 工具。
 //     执行也由 runtime-entry 内联处理（发 dispatch 消息 → 等 task_reply）。
+//   - getBuiltinLoopToolDefs：task_complete 主动分段 / compact 上下文压缩两个
+//     chat loop 内联工具的声明（执行逻辑在 runChatLoop 工具循环顶部，不走 ToolModule）。
 //
 //   Task 4 留下的 re-export shim 已在 Task 5 移除——getBuiltinToolDefs/executeBuiltinTool
 //   已从 runtime-entry.ts 删除，此文件恢复精简声明。
@@ -89,4 +91,47 @@ export function getDispatchToolDefs(subAgents: SubAgentRef[]): LLMToolDef[] {
       required: ['task'],
     },
   }));
+}
+
+/**
+ * chat loop 内联处理的两个内置工具声明（Task 13 自 runtime-entry.ts 迁出）：
+ *   - task_complete：LLM 主动分段——把当前累积文本作为一段持久化后继续输出，
+ *     防长回复触发 PDU 截断丢失 thinking/tool_calls（最多 5 段）。
+ *   - compact：LLM 主动压缩上下文——多轮累积后把历史总结为一条 user 消息。
+ */
+export function getBuiltinLoopToolDefs(): LLMToolDef[] {
+  return [
+    {
+      name: 'task_complete',
+      description: '完成本段回复并持久化为一条消息。当回复内容超过约 3KB 或完成阶段性子任务时调用，把当前累积文本作为一段发出，然后继续输出下一段。避免长回复触发 PDU 截断丢失 thinking/tool_calls。最多 5 段。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: '本段内容（写入消息 body）',
+          },
+          nextStep: {
+            type: 'string',
+            description: '下一段要做什么（提示自己继续；可选）',
+          },
+        },
+        required: ['summary'],
+      },
+    },
+    {
+      name: 'compact',
+      description: '压缩对话历史。当多轮对话累积导致上下文过长（>20 轮或接近模型上下文上限）时调用，把整个历史总结为一条 user 消息，保留 system prompt，清空旧 messages。后续工作基于总结继续。要求 summary 至少 200 字符，覆盖：已完成任务、关键决策、未完成步骤、重要文件/变量名。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: '完整对话总结（≥200 字符）：已完成 + 关键决策 + 未完成 + 重要标识符',
+          },
+        },
+        required: ['summary'],
+      },
+    },
+  ];
 }

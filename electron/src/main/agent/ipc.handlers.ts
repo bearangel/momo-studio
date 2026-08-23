@@ -41,7 +41,7 @@ import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
 import { deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { addSessionMember } from '../storage/sessions/repo';
-import { stopAgent, isAgentRunning } from './runtime-manager';
+import { isAgentRunning } from './runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
@@ -162,7 +162,6 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
         llmApiKey: apiKey,
         isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       }),
-      def.taskDriven !== false,
     );
     results.push(assignment);
   }
@@ -180,7 +179,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
  * v2（Task 10）：agent 无 Matrix 身份，不再做离房 / bot token 清理。
  */
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
-  stopAgent(instanceId);
+  await stopAgentRuntime(instanceId);
   const row = getDb()
     .prepare('SELECT agent_user_id, workspace_id, role, parent_instance_id FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as
@@ -250,9 +249,6 @@ async function restartMainForSubChange(
 
   const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
-  // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
-  // 旧实现对 task-driven main 无效——stopAgent 早返（runtimes 无 entry），
-  // ensureTaskDrivenRuntime 见 pool 仍在跳过 runner 重建 → subAgents 列表不刷新。
   await stopAgentRuntime(mainInstanceId);
   await startAgentRuntime(
     buildSpawnOpts({
@@ -266,7 +262,6 @@ async function restartMainForSubChange(
       llmApiKey: apiKey,
       isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
     }),
-    def.taskDriven !== false,
   );
   logger.info('Main agent 因 sub 变更已重启（重建 subAgents）', {
     mainInstanceId,
@@ -335,7 +330,6 @@ export function registerAgentHandlers(): void {
           llmApiKey: apiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
-        def.taskDriven !== false,
       );
 
       logger.info('Agent 已添加到 workspace 并启动', {
@@ -429,7 +423,7 @@ export function registerAgentHandlers(): void {
         defaultMcps: input.defaultMcps,
         defaultSkills: input.defaultSkills,
       });
-      const stopped = stopRunningInstancesByDefinition(input.id);
+      const stopped = await stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {
         logger.info('Agent 定义更新，已停止运行中实例', { id: input.id, stopped: stopped.length });
       }
@@ -502,7 +496,7 @@ export function registerAgentHandlers(): void {
         const oldSubs = listSubAssignments(current.workspaceId, instanceId);
         for (const sub of oldSubs) {
           if (isAgentRunning(sub.instanceId)) {
-            stopAgent(sub.instanceId);
+            await stopAgentRuntime(sub.instanceId);
             stopped.push(sub.instanceId);
           }
         }
@@ -577,7 +571,6 @@ export function registerAgentHandlers(): void {
           llmApiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
-        def.taskDriven !== false,
       );
 
       await maybeRestartMainForSubChange(assignment.instanceId);
