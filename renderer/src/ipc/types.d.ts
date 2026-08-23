@@ -413,10 +413,24 @@ export interface ModelProvider {
   platform: ProviderPlatform;
 }
 
-/** 全局会话配置（v1.4：工具调用上限等），与 electron 端 GlobalSettings 对齐 */
+/** 默认模型引用：指向某供应商模型列表中的一个模型（v2.0 P2 起） */
+export interface DefaultModelRef {
+  providerId: string;
+  modelId: string;
+}
+
+/** 全局会话配置（v1.4：工具调用上限；v2.0 P2：审计配额 + 四类默认模型），
+ * 与 electron 端 GlobalSettings 对齐。renderer 端独立定义，仅结构对齐。 */
 export interface GlobalSettings {
   /** 工具调用上限默认值。-1=无限, 0=禁用, N=上限 */
   maxToolCalls: number;
+  /** 审计日志全局容量上限（MB）；workspace 级可覆盖。默认 100。 */
+  auditQuotaMb: number;
+  /** 四类默认模型（P2 只存不消费；向量/重排 2.1 知识库启用，会话 fallback P3 接线） */
+  defaultChatModel?: DefaultModelRef;
+  defaultMultimodalModel?: DefaultModelRef;
+  defaultEmbeddingModel?: DefaultModelRef;
+  defaultRerankModel?: DefaultModelRef;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */

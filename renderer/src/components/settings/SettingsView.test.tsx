@@ -107,19 +107,20 @@ describe('SettingsView', () => {
     expect(useUiStore.getState().activeView).toBe('settings');
   });
 
-  it('点击「默认模型」分类切换 activeCategory 并渲染占位', () => {
+  it('点击「默认模型」分类切换 activeCategory 并渲染面板', () => {
     render(<SettingsView />);
     fireEvent.click(screen.getByRole('button', { name: /默认模型/ }));
     expect(useSettingsStore.getState().activeCategory).toBe('default_model');
-    expect(screen.getByText('默认模型设置——T7 实现')).toBeInTheDocument();
+    // 面板挂载后会拉 settings.getGlobal，断言面板标题存在
+    expect(screen.getByRole('heading', { name: '默认模型' })).toBeInTheDocument();
   });
 
-  it('点击「关于」分类切换 activeCategory 并渲染占位', () => {
+  it('点击「关于」分类切换 activeCategory 并渲染面板', () => {
     render(<SettingsView />);
     fireEvent.click(screen.getByRole('button', { name: /关于/ }));
     expect(useSettingsStore.getState().activeCategory).toBe('about');
-    // 「关于」同时出现在菜单按钮与面板标题，用占位文案断言面板已挂载
-    expect(screen.getByText('关于——T7 实现')).toBeInTheDocument();
+    // 「关于」同时出现在菜单按钮与面板标题，用 heading 断言面板已挂载
+    expect(screen.getByRole('heading', { name: '关于' })).toBeInTheDocument();
   });
 
   it('SettingsNav 宽度 190px', () => {
