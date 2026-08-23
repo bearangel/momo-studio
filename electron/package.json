@@ -38,15 +38,6 @@
     ],
     "extraResources": [
       {
-        "from": "../resources/conduit",
-        "to": "conduit",
-        "filter": [
-          "static-*",
-          "conduit-*",
-          "tuwunel-*"
-        ]
-      },
-      {
         "from": "./resources/agents",
         "to": "agents"
       },
@@ -99,7 +90,6 @@
     "ignore": "5",
     "js-yaml": "^5.2.2",
     "keytar": "^7.9.0",
-    "matrix-js-sdk": "^31.0.0",
     "simple-git": "^3.36.0",
     "turndown": "7",
     "tweetnacl": "^1.0.3",

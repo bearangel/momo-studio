@@ -31,8 +31,19 @@ export type StreamChunk =
   | {
       type: 'start';
       streamSessionId: string;
-      roomId: string;
-      botUserId: string;
+      /**
+       * Task 6 字段迁移：原 roomId。会话 ID（v2 语义：messages.session_id 的值）。
+       * 发端（runtime-entry runChatLoop）传入执行房间的 roomId，值语义与迁移前一致。
+       */
+      sessionId: string;
+      /**
+       * Task 6 字段迁移：原 botUserId。发送方 agent 标识——本任务仅重命名，
+       * 值实际为 `config.agentUserId`（agent 本地身份字符串，如
+       * `'agent-coder-a1b2c3'`），由 runtime-entry.runChatLoop 在构造 start
+       * chunk 时填入。renderer 端 `botNameMap` 按双键（assignmentId +
+       * agentUserId）反查 agent 展示名，详见 spec §5.2 实现注。
+       */
+      senderAgentId: string;
       /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
       parentStreamSessionId?: string;
       /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
@@ -77,7 +88,8 @@ export type StreamChunk =
       /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
       type: 'todo_update';
       streamSessionId: string;
-      roomId: string;
+      /** Task 6 字段迁移：原 roomId。会话 ID（与 start.sessionId 同值语义）。 */
+      sessionId: string;
       /** 完整任务列表（覆盖式）；空数组 = 清空 */
       todos: TodoItem[];
       /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */

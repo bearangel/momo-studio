@@ -4,19 +4,19 @@
 // 点击打开 popup 修改面板（继承全局 / 禁用 / 无限制 / 自定义）。
 // 需同时加载房间级配置（getRoom）和全局默认（getGlobal）以显示"继承全局 (N次)"。
 //
-// 有效值优先级：room_settings.max_tool_calls（非 null）→ global_settings.maxToolCalls。
+// 有效值优先级：sessions.settings_json 的 maxToolCalls（非 null）→ global_settings.maxToolCalls。
 // 徽标文案：-1 → "∞"，0 → "禁用"，N → "N次"。
 import { useState, useEffect } from 'react';
 import { ipc } from '../../ipc/client';
-import type { GlobalSettings, RoomSettings } from '../../ipc/types';
+import type { GlobalSettings, SessionSettings } from '../../ipc/types';
 
 interface Props {
-  roomId: string;
+  sessionId: string;
 }
 
 type Choice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
-export function RoomToolBudgetBadge({ roomId }: Props) {
+export function RoomToolBudgetBadge({ sessionId }: Props) {
   const [roomValue, setRoomValue] = useState<number | null>(null);
   const [globalDefault, setGlobalDefault] = useState(10);
   const [editing, setEditing] = useState(false);
@@ -29,13 +29,13 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
   useEffect(() => {
     setRoomValue(null);
     setEditing(false);
-    void ipc.settings.getRoom(roomId).then((s: RoomSettings) => {
+    void ipc.settings.getSession(sessionId).then((s: SessionSettings) => {
       setRoomValue(s.maxToolCalls);
     });
     void ipc.settings.getGlobal().then((s: GlobalSettings) => {
       setGlobalDefault(s.maxToolCalls);
     });
-  }, [roomId]);
+  }, [sessionId]);
 
   const effective = roomValue ?? globalDefault;
   const badgeLabel = effective === -1 ? '∞' : effective === 0 ? '禁用' : `${effective}次`;
@@ -66,7 +66,7 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
             : Number(draftCustom);
     setSaving(true);
     try {
-      const updated = await ipc.settings.updateRoom(roomId, { maxToolCalls: val });
+      const updated = await ipc.settings.updateSession(sessionId, { maxToolCalls: val });
       setRoomValue(updated.maxToolCalls);
       setEditing(false);
     } finally {

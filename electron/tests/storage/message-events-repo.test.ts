@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 function seedMessage(): string {
-  return insertMessage({ roomId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+  return insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
 }
 
 describe('message_events repo', () => {

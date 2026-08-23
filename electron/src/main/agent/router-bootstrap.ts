@@ -17,7 +17,8 @@
 
 import { RouterService } from './router-service';
 import { TaskDispatcher, type AgentAssignmentInfo } from '../task/dispatcher';
-import { setRouterService } from '../matrix/sync-manager';
+import { setBridgeRouter } from './internal-event-bridge';
+import { setSessionRouter } from '../im/session-service';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import type { AgentRunner } from './agent-runner';
@@ -31,7 +32,12 @@ let currentRouterService: RouterService | null = null;
  *
  * - 已启动（currentRouterService 非 null）→ no-op
  * - runners.size === 0 → no-op（防御性，正常路径不触发）
- * - 首次调用 → 创建 TaskDispatcher + 创建 RouterService + setRouterService
+ * - 首次调用 → 创建 TaskDispatcher + 创建 RouterService + setBridgeRouter
+ *
+ * v2（P1 Task 5）：RouterService 注入方式改为内部事件桥（setBridgeRouter）——
+ * runtime 子进程的 dispatch/task_reply 经 child IPC 直达 routeEvent，
+ * 不再绕道 Matrix /sync。sync-manager 的 setRouterService 导出保留
+ * （阶段三 Task 12 删除），router-bootstrap 不再调用它。
  *
  * @param runners agentRunners Map 引用（后续新增 runner 自动可见，因 RouterService 持有 Map 引用）
  * @param buckets providerBuckets Map 引用（dispatcher 用于 LLM 限流）
@@ -52,23 +58,25 @@ export async function ensureRouterService(
 
   currentRouterService = new RouterService({ runners, dispatcher });
   currentRouterService.start();
-  setRouterService(currentRouterService);
+  setBridgeRouter(currentRouterService);
+  setSessionRouter(currentRouterService);
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }
 
 /**
  * 销毁 RouterService（before-quit 时调用）。
- * 反向清理：setRouterService(null) + 释放模块引用。
+ * 反向清理：setBridgeRouter(null) + 释放模块引用。
  * 已 null 时 no-op。
  */
 export function destroyRouterService(): void {
   if (!currentRouterService) return;
-  setRouterService(null);
+  setBridgeRouter(null);
+  setSessionRouter(null);
   currentRouterService = null;
   logger.info('RouterService 已销毁');
 }
 
-/** 测试用：重置模块状态（清 currentRouterService，不调 sync-manager） */
+/** 测试用：重置模块状态（清 currentRouterService，不调 bridge） */
 export function __resetRouterServiceForTest(): void {
   currentRouterService = null;
 }

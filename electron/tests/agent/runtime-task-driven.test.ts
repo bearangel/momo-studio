@@ -13,9 +13,11 @@
 //
 // runChatLoop 内部行为（LLM 调用 / 工具执行 / abort）由 runtime-stream.test.ts 覆盖；
 // 本测试只验证 runTaskChatLoop 的包装层 + IPC 契约。
+//
+// v2（P1 Task 5）：runTaskChatLoop 不再接收 Matrix client（task-driven 模式无 client，
+// dispatch 经内部事件桥、最终消息由 chunk 路径落盘），调用签名改为 (cfg, config, ctx)。
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -32,6 +34,7 @@ import {
   type RuntimeContext,
   type TaskConfig,
 } from '../../src/main/agent/runtime-entry';
+import { executeDispatch, handleTaskReplyIpc } from '../../src/main/agent/dispatch-wait';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
   __setMemoryProviderForTest,
@@ -82,20 +85,11 @@ function mockProviderThrow(err: Error): void {
   });
 }
 
-function mockClient(): MatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
-}
-
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -152,7 +146,7 @@ function makeTaskConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
   return {
     type: 'task-config',
     taskId: null,
-    executionRoomId: '!room:localhost',
+    executionSessionId: '!room:localhost',
     body: 'hi',
     streamSessionId: 'task-session-001',
     ...overrides,
@@ -216,7 +210,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ streamSessionId: 'my-fixed-session-id' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -236,7 +229,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-abc-123' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -255,7 +247,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: null }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -272,12 +263,11 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     await runTaskChatLoop(
       makeTaskConfig({
         dispatchContext: {
-          fromBotUserId: '@pm:localhost',
+          fromAssignmentId: 'inst-pm',
           task_id: 'dispatch-1',
           tool_budget: 5,
         },
       }),
-      mockClient(),
       makeConfig({ maxToolCalls: 99 }),
       makeContext(),
     );
@@ -299,12 +289,11 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
       makeTaskConfig({
         streamSessionId: 'sub-session-001',
         dispatchContext: {
-          fromBotUserId: '@pm:localhost',
+          fromAssignmentId: 'inst-pm',
           task_id: 'dispatch-1',
           tool_stream_session_id: 'pm-session-999',
         },
       }),
-      mockClient(),
       makeConfig({ botName: '子 agent', botAvatar: '🔧' }),
       makeContext(),
     );
@@ -328,7 +317,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-done-1', streamSessionId: 'sess-done' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -352,7 +340,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-fail', streamSessionId: 'sess-fail' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -386,7 +373,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig(),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -399,6 +385,174 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
   });
 });
 
+describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
+  const originalSend = process.send;
+  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    sentIpc.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
+    process.send = ((
+      msg: unknown,
+      callback?: (err: Error | null) => void,
+    ): boolean => {
+      const m = msg as { type?: string };
+      if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
+        sentChunks.push(msg);
+      } else {
+        sentIpc.push(msg);
+      }
+      if (callback) callback(null);
+      return true;
+    }) as NonNullable<typeof process.send>;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+    exitSpy.mockRestore();
+  });
+
+  /** 从 sentIpc 里找 task_reply 内部事件信封 */
+  function findReplyEvent():
+    | { eventType: string; sessionId: string; sender: string; content: Record<string, unknown> }
+    | undefined {
+    return sentIpc.find(
+      (m) => (m as { type?: string }).type === 'momo-internal-event',
+    ) as
+      | { eventType: string; sessionId: string; sender: string; content: Record<string, unknown> }
+      | undefined;
+  }
+
+  it('dispatchContext 设置且成功完成 → 发 task_reply 内部事件（completed + reply_to + body）', async () => {
+    mockProvider([
+      { type: 'text', content: '报告完成' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig({
+        streamSessionId: 'sub-sess-r1',
+        dispatchContext: {
+          fromAssignmentId: 'inst-pm',
+          task_id: 'task-disp-1',
+          tool_budget: 5,
+        },
+      }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    const evt = findReplyEvent();
+    expect(evt).toBeDefined();
+    expect(evt!.eventType).toBe('io.momo-studio.task_reply');
+    expect(evt!.content.task_id).toBe('task-disp-1');
+    expect(evt!.content.status).toBe('completed');
+    expect(evt!.content.body).toBe('报告完成');
+    expect(evt!.content.reply_to).toBe('inst-pm');
+  });
+
+  it('dispatchContext 设置且 runChatLoop 抛错 → 发 failed 回执（body 为错误信息）', async () => {
+    mockProviderThrow(new Error('LLM 连接失败'));
+
+    await runTaskChatLoop(
+      makeTaskConfig({
+        streamSessionId: 'sub-sess-r2',
+        dispatchContext: { fromAssignmentId: 'inst-pm', task_id: 'task-disp-2' },
+      }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    const evt = findReplyEvent();
+    expect(evt).toBeDefined();
+    expect(evt!.eventType).toBe('io.momo-studio.task_reply');
+    expect(evt!.content.task_id).toBe('task-disp-2');
+    expect(evt!.content.status).toBe('failed');
+    expect(evt!.content.body).toContain('LLM 连接失败');
+    expect(evt!.content.reply_to).toBe('inst-pm');
+  });
+
+  it('无 dispatchContext（顶层 ephemeral chat）→ 不发 task_reply', async () => {
+    mockProvider([
+      { type: 'text', content: 'hi' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig({ streamSessionId: 'sub-sess-r3' }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    expect(findReplyEvent()).toBeUndefined();
+  });
+});
+
+describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）', () => {
+  const originalSend = process.send;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    sentIpc.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
+    // executeDispatch 经 process.send 发 dispatch 内部事件——mock 捕获即可（不路由）
+    process.send = ((msg: unknown): boolean => {
+      const m = msg as { type?: string };
+      if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
+        sentChunks.push(msg);
+      } else {
+        sentIpc.push(msg);
+      }
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+  });
+
+  it('把 camelCase 通知转成 task_reply content 并 resolve 对应的 pending dispatch', async () => {
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'worker', assignmentId: 'inst-worker', description: '执行者' }],
+    });
+
+    const dispatchPromise = executeDispatch('worker', '干活', config, 5);
+
+    // 从捕获的内部事件里取 dispatch 的 task_id（子进程侧不可预知）
+    const dispatchEvt = sentIpc.find(
+      (m) =>
+        (m as { type?: string }).type === 'momo-internal-event' &&
+        (m as { eventType?: string }).eventType === 'io.momo-studio.dispatch',
+    ) as { content: { task_id: string } };
+    expect(dispatchEvt).toBeDefined();
+
+    // 模拟主进程 AgentRunner.notifyTaskReply 下发的 IPC 消息（camelCase）
+    handleTaskReplyIpc({
+      type: 'task-reply',
+      reply: { taskId: dispatchEvt.content.task_id, status: 'completed', body: '干完了', toolCallsUsed: 3 },
+    });
+
+    await expect(dispatchPromise).resolves.toEqual({ body: '干完了', toolCallsUsed: 3 });
+  });
+
+  it('非 task-reply 消息（shutdown / task-config）→ 忽略不抛错', () => {
+    expect(() => {
+      handleTaskReplyIpc({ type: 'shutdown' });
+      handleTaskReplyIpc(null);
+      handleTaskReplyIpc({ type: 'task-reply' }); // 缺 reply 字段
+    }).not.toThrow();
+  });
+});
+
 describe('parseConfig taskDriven 字段', () => {
   // 通过环境变量间接测试 parseConfig（parseConfig 不是 export 的，但 main() 用它）
   // 这里直接 import parseConfig 不行（未 export），改为验证 RuntimeConfig 类型 + 行为
@@ -406,11 +560,9 @@ describe('parseConfig taskDriven 字段', () => {
 
   it('taskDriven 字段在 RuntimeConfig 类型上可选', () => {
     const config: RuntimeConfig = {
-      botUserId: '@bot:localhost',
-      botAccessToken: 'token',
-      homeserverUrl: 'http://localhost:8008',
-      teamRoomId: '!team:localhost',
-      ownerUserId: '@owner:localhost',
+      agentAssignmentId: 'inst-bot',
+      agentUserId: 'agent-bot-x1',
+      teamSessionId: '!team:localhost',
       systemPrompt: '',
       modelName: 'm',
       llmApiKey: 'k',

@@ -17,22 +17,8 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: ApiSurface = {
-  auth: {
-    register: (opts) => invoke('auth:register', opts),
-    login: (opts) => invoke('auth:login', opts),
-    getCurrentUser: () => invoke('auth:getCurrentUser'),
-    logout: () => invoke('auth:logout'),
-    onSessionExpired: (callback: (reason: string) => void) => {
-      const handler = (_evt: IpcRendererEvent, data: { reason: string }): void => callback(data.reason);
-      ipcRenderer.on('auth:sessionExpired', handler);
-      return () => {
-        ipcRenderer.off('auth:sessionExpired', handler);
-      };
-    },
-  },
   system: {
     getInfo: () => invoke('system:getInfo'),
-    getConduitStatus: () => invoke('system:getConduitStatus'),
   },
   workspace: {
     create: (input) => invoke('workspace:create', input),
@@ -56,8 +42,8 @@ const api: ApiSurface = {
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     createCustom: (input) => invoke('agent:createCustom', input),
     list: (workspaceId?: string) => invoke('agent:list', workspaceId),
-    assign: (workspaceId, defId, botUserId) =>
-      invoke('agent:assign', workspaceId, defId, botUserId),
+    assign: (workspaceId, defId, agentUserId) =>
+      invoke('agent:assign', workspaceId, defId, agentUserId),
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),
@@ -88,7 +74,7 @@ const api: ApiSurface = {
         ipcRenderer.off('agent:stream', handler);
       };
     },
-    abortStream: (roomId: string) => invoke('agent:abortStream', roomId),
+    abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
   },
   provider: {
     list: () => invoke('provider:list'),
@@ -100,35 +86,9 @@ const api: ApiSurface = {
     testConnection: (input) => invoke('provider:testConnection', input),
     getApiKey: (id) => invoke('provider:getApiKey', id),
   },
+  // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
+  // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
   im: {
-    startSync: () => invoke('im:startSync'),
-    send: (roomId, body) => invoke('im:send', roomId, body),
-    sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
-    getRooms: (workspaceId) => invoke('im:getRooms', workspaceId),
-    getMessages: (roomId) => invoke('im:getMessages', roomId),
-    loadOlderMessages: (roomId: string, beforeTs: number, count?: number) =>
-      invoke('im:loadOlderMessages', roomId, beforeTs, count),
-    getMessageEvents: (messageId: string) => invoke('im:getMessageEvents', messageId),
-    createRoom: (input) => invoke('im:createRoom', input),
-    renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
-    dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),
-    getMembers: (roomId) => invoke('im:getMembers', roomId),
-    exportRoomMessages: (roomId: string, limit: number) =>
-      invoke<{ filename: string; content: string }>('im:exportRoomMessages', roomId, limit),
-    onMessage: (callback) => {
-      const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
-      ipcRenderer.on('im:message', handler);
-      return () => {
-        ipcRenderer.off('im:message', handler);
-      };
-    },
-    onMessageEventBatch: (callback) => {
-      const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
-      ipcRenderer.on('im:message_event_batch', handler);
-      return () => {
-        ipcRenderer.off('im:message_event_batch', handler);
-      };
-    },
     onConflict: (callback) => {
       const handler = (
         _e: IpcRendererEvent,
@@ -148,6 +108,37 @@ const api: ApiSurface = {
       invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
     stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
   },
+  session: {
+    // v2.0 P1 Task 8：会话内核命名空间（纯 SQLite，无 Matrix）。
+    // invoke 通道 9 个（session.ipc.handlers.ts）+ 推送 2 个
+    // （session:message / session:message_event_batch）。
+    list: (workspaceId?: string) => invoke('session:list', workspaceId),
+    get: (sessionId: string) => invoke('session:get', sessionId),
+    create: (input) => invoke('session:create', input),
+    rename: (sessionId: string, title: string) => invoke('session:rename', sessionId, title),
+    delete: (sessionId: string) => invoke('session:delete', sessionId),
+    send: (sessionId: string, body: string, mentionedAssignmentIds?: string[]) =>
+      invoke('session:send', sessionId, body, mentionedAssignmentIds),
+    getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
+    loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
+      invoke('session:loadOlder', sessionId, beforeTs, count),
+    exportMessages: (sessionId: string, limit: number) =>
+      invoke<{ filename: string; content: string }>('session:exportMessages', sessionId, limit),
+    onMessage: (callback) => {
+      const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
+      ipcRenderer.on('session:message', handler);
+      return () => {
+        ipcRenderer.off('session:message', handler);
+      };
+    },
+    onMessageEventBatch: (callback) => {
+      const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
+      ipcRenderer.on('session:message_event_batch', handler);
+      return () => {
+        ipcRenderer.off('session:message_event_batch', handler);
+      };
+    },
+  },
   allocation: {
     get: (workspaceId) => invoke('allocation:get', workspaceId),
     add: (workspaceId, type, ref) => invoke('allocation:add', workspaceId, type, ref),
@@ -163,8 +154,8 @@ const api: ApiSurface = {
   settings: {
     getGlobal: () => invoke('settings:getGlobal'),
     updateGlobal: (patch) => invoke('settings:updateGlobal', patch),
-    getRoom: (roomId: string) => invoke('settings:getRoom', roomId),
-    updateRoom: (roomId: string, patch) => invoke('settings:updateRoom', roomId, patch),
+    getSession: (sessionId: string) => invoke('settings:getSession', sessionId),
+    updateSession: (sessionId: string, patch) => invoke('settings:updateSession', sessionId, patch),
   },
   skill: {
     // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
@@ -190,9 +181,9 @@ const api: ApiSurface = {
     get: (id) => invoke<TaskRow | null>('task:get', id),
     update: (id, patch) => invoke<void>('task:update', id, patch),
     transition: (id, to, extraPatch) => invoke<TaskRow>('task:transition', id, to, extraPatch),
-    // B8：execution_room 决策树 + 转 in_progress + 锁定 execution_room
+    // B8：execution_session 决策树 + 转 in_progress + 锁定 execution_session
     start: (id, opts) =>
-      invoke<{ executionRoomId: string; createdNewRoom: boolean }>('task:start', id, opts),
+      invoke<{ executionSessionId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),

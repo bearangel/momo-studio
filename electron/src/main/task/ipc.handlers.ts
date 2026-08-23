@@ -3,7 +3,7 @@
 // task: 命名空间 IPC handler（B 子系统 B7）。
 //
 // 暴露通道：
-//   - task:create      新建任务（creatorUserId 由 main process 从当前登录会话注入）
+//   - task:create      新建任务（creatorUserId 由 main process 注入常量 'owner'）
 //   - task:list        多维过滤 + 排序查询
 //   - task:get         按 id 查单条
 //   - task:update      部分字段更新（绕过状态机；正常路径请用 task:transition）
@@ -12,13 +12,11 @@
 //   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
 //
 // 设计要点：
-//   - renderer 的 create 入参不含 creatorUserId（安全考虑：不信任 renderer 传的用户身份），
-//     main process 从 readSession() 取当前登录 userId 注入。
-//   - 未登录时 task:create 抛错（creatorUserId 是 NOT NULL 列）。
+//   - v2（Task 11）：无登录概念——creatorUserId 由 main process 注入结构常量 'owner'
+//     （单用户本地应用；原从 Matrix 登录会话读取，不信任 renderer 传身份的原则不变）。
 //   - task:list 直接转发 listTasks 的 opts 结构（workspaceId / status / assigneeAgentId 等）。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
-import { getCurrentUserId } from '../matrix/session';
 import {
   insertTask,
   listTasks,
@@ -38,7 +36,7 @@ interface CreateInput {
   title: string;
   description?: string;
   priority?: number;
-  sourceRoomId?: string | null;
+  sourceSessionId?: string | null;
   sourceMessageId?: string | null;
   assigneeAgentId?: string | null;
   scheduledAt?: number | null;
@@ -50,25 +48,22 @@ interface ListOpts {
   workspaceId?: string;
   status?: TaskStatus | TaskStatus[];
   assigneeAgentId?: string;
-  executionRoomId?: string;
-  sourceRoomId?: string;
+  executionSessionId?: string;
+  sourceSessionId?: string;
   orderBy?: 'priority' | 'scheduled_at' | 'created_at';
   limit?: number;
 }
 
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
-    const creatorUserId = getCurrentUserId();
-    if (!creatorUserId) {
-      throw new Error('task:create 失败：未登录（creatorUserId 不可为空）');
-    }
+    // v2（Task 11）：单用户本地应用——creatorUserId 固定 'owner'（NOT NULL 列）
     return insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
-      creatorUserId,
+      creatorUserId: 'owner',
       description: input.description,
       priority: input.priority,
-      sourceRoomId: input.sourceRoomId,
+      sourceSessionId: input.sourceSessionId,
       sourceMessageId: input.sourceMessageId,
       assigneeAgentId: input.assigneeAgentId,
       scheduledAt: input.scheduledAt,
@@ -113,10 +108,10 @@ export function registerTaskHandlers(): void {
       _evt,
       id: string,
       opts?: StartTaskOpts,
-    ): Promise<{ executionRoomId: string; createdNewRoom: boolean }> => {
+    ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
       const result = await startTask(id, opts);
       return {
-        executionRoomId: result.executionRoomId,
+        executionSessionId: result.executionSessionId,
         createdNewRoom: result.createdNewRoom,
       };
     },

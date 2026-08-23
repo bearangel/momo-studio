@@ -7,7 +7,7 @@
 // 测试直接调用捕获的回调 —— 验证的是真实生产 handler（而非逻辑副本），与
 // agent/ipc-validation.test.ts 同一约定。
 //
-// runtime-manager 被 mock（避免 fork 真实子进程）；allocation 被 mock 返回空分配；
+// runtime-status / runtime-registry 被 mock（避免真实子进程与 DB 读写）；allocation 被 mock 返回空分配；
 // 其余（storage/db + keychain + workspace/crud + agent/crud + capability-merger）走真实实现。
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
@@ -22,17 +22,15 @@ import type { AgentDefinition } from '../../src/main/agent/types';
 
 // 捕获 ipcMain.handle 注册的回调（vi.hoisted 保证在 vi.mock 工厂提升前就绪）
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
-// runtime-manager mock 引用同样需要 hoisted
+// runtime mock 引用需要 hoisted
 const { stopAgentMock, spawnAgentMock, isAgentRunningMock } = vi.hoisted(() => ({
   stopAgentMock: vi.fn(),
   spawnAgentMock: vi.fn(),
   isAgentRunningMock: vi.fn(() => false),
 }));
 
-// mock runtime-manager：避免 fork 真实子进程；通过 isAgentRunningMock 控制运行状态
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  stopAgent: stopAgentMock,
-  spawnAgent: spawnAgentMock,
+// mock runtime-status：通过 isAgentRunningMock 控制运行状态
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: isAgentRunningMock,
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
@@ -190,7 +188,8 @@ describe('setCoordinator 自动重启', () => {
     const opts = spawnAgentMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(opts.instanceId).toBe(assignment.instanceId);
     expect(opts.isCoordinator).toBe(true);
-    expect(opts.botUserId).toBe('@bot:localhost');
+    expect(opts.agentUserId).toBe(assignment.agentUserId);
+    expect(opts.teamSessionId).toBe(ws.teamSessionId);
     expect(opts.workspaceId).toBe(ws.id);
   });
 
@@ -275,7 +274,7 @@ describe('setCoordinator 自动重启', () => {
     const opts = spawnAgentMock.mock.calls[0]![0] as {
       role?: string;
       isCoordinator?: boolean;
-      subAgents?: Array<{ slug: string; botUserId: string }>;
+      subAgents?: Array<{ slug: string; assignmentId: string }>;
     };
     expect(opts.role).toBe('main');
     expect(opts.isCoordinator).toBe(true);

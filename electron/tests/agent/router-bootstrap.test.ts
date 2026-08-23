@@ -3,21 +3,26 @@
 // RouterService lazy 启动器（router-bootstrap.ts）单元测试。
 //
 // 覆盖 5 个用例：
-//   1. 首次调用：启动 RouterService + setRouterService
+//   1. 首次调用：启动 RouterService + setBridgeRouter（内部事件桥注入）
 //   2. 二次调用：no-op（currentRouterService 已存在）
 //   3. runners.size === 0 时 no-op
-//   4. destroyRouterService：清理 + setRouterService(null)
+//   4. destroyRouterService：清理 + setBridgeRouter(null)
 //   5. destroyRouterService 在 currentRouterService=null 时 no-op
 //
-// setRouterService（sync-manager）/ logger / TaskDispatcher 全部 mock，
+// v2（P1 Task 5）：RouterService 注入目标由 sync-manager 的 setRouterService
+// 改为 internal-event-bridge 的 setBridgeRouter（dispatch/task_reply 脱离 Matrix
+// 传输），断言同步替换；sync-manager 侧导出保留但 router-bootstrap 不再调用。
+//
+// setBridgeRouter（internal-event-bridge）/ logger / TaskDispatcher 全部 mock，
 // 测试聚焦于 router-bootstrap 模块自身的状态机。
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Mock setRouterService（sync-manager 模块）避免依赖 Matrix client
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  setRouterService: vi.fn(),
-}));
+// Mock setBridgeRouter（internal-event-bridge 模块）避免模块级 router 状态污染
+vi.mock('../../src/main/agent/internal-event-bridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/agent/internal-event-bridge')>();
+  return { ...actual, setBridgeRouter: vi.fn() };
+});
 
 // Mock logger（不输出噪声）
 vi.mock('../../src/main/logger', () => ({
@@ -34,7 +39,7 @@ import {
   destroyRouterService,
   __resetRouterServiceForTest,
 } from '../../src/main/agent/router-bootstrap';
-import { setRouterService } from '../../src/main/matrix/sync-manager';
+import { setBridgeRouter } from '../../src/main/agent/internal-event-bridge';
 import { RouterService } from '../../src/main/agent/router-service';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import type { ProviderTokenBucket } from '../../src/main/agent/llm/token-bucket';
@@ -43,7 +48,7 @@ import type { ProviderTokenBucket } from '../../src/main/agent/llm/token-bucket'
 function makeFakeRunner(id: string): AgentRunner {
   return {
     assignmentId: id,
-    botUserId: `@${id}:localhost`,
+    agentUserId: `agent-${id}`,
     workspaceId: 'ws-test',
     executeTask: vi.fn(),
     abortStream: vi.fn(),
@@ -65,18 +70,18 @@ describe('router-bootstrap (Task 1)', () => {
     vi.clearAllMocks();
   });
 
-  it('首次调用：启动 RouterService + setRouterService', async () => {
+  it('首次调用：启动 RouterService + setBridgeRouter', async () => {
     const runners = new Map<string, AgentRunner>();
     runners.set('inst-1', makeFakeRunner('inst-1'));
     const buckets = makeFakeBuckets();
 
     await ensureRouterService(runners, buckets);
 
-    expect(setRouterService).toHaveBeenCalledOnce();
+    expect(setBridgeRouter).toHaveBeenCalledOnce();
     // 验证传入的是 RouterService 实例（或 duck-type 兼容对象）
-    const svc = (setRouterService as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
+    const svc = (setBridgeRouter as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
     expect(svc).toBeDefined();
-    expect(typeof (svc as RouterService).routeMatrixEvent).toBe('function');
+    expect(typeof (svc as RouterService).routeEvent).toBe('function');
   });
 
   it('二次调用：no-op（currentRouterService 已存在）', async () => {
@@ -87,8 +92,8 @@ describe('router-bootstrap (Task 1)', () => {
     await ensureRouterService(runners, buckets);
     await ensureRouterService(runners, buckets);  // 第二次
 
-    // setRouterService 应只被调用 1 次（首次启动时）
-    expect(setRouterService).toHaveBeenCalledOnce();
+    // setBridgeRouter 应只被调用 1 次（首次启动时）
+    expect(setBridgeRouter).toHaveBeenCalledOnce();
   });
 
   it('runners.size === 0 时 no-op', async () => {
@@ -97,10 +102,10 @@ describe('router-bootstrap (Task 1)', () => {
 
     await ensureRouterService(runners, buckets);
 
-    expect(setRouterService).not.toHaveBeenCalled();
+    expect(setBridgeRouter).not.toHaveBeenCalled();
   });
 
-  it('destroyRouterService：清理 + setRouterService(null)', async () => {
+  it('destroyRouterService：清理 + setBridgeRouter(null)', async () => {
     const runners = new Map<string, AgentRunner>();
     runners.set('inst-1', makeFakeRunner('inst-1'));
     const buckets = makeFakeBuckets();
@@ -109,12 +114,12 @@ describe('router-bootstrap (Task 1)', () => {
 
     destroyRouterService();
 
-    expect(setRouterService).toHaveBeenCalledWith(null);
+    expect(setBridgeRouter).toHaveBeenCalledWith(null);
   });
 
   it('destroyRouterService 在 currentRouterService=null 时 no-op', () => {
     expect(() => destroyRouterService()).not.toThrow();
-    // setRouterService 不应被调用（无 service 可销毁）
-    expect(setRouterService).not.toHaveBeenCalled();
+    // setBridgeRouter 不应被调用（无 service 可销毁）
+    expect(setBridgeRouter).not.toHaveBeenCalled();
   });
 });

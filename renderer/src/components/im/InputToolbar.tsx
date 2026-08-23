@@ -10,12 +10,12 @@ interface Props {
   showMembers: boolean;
   /** 切换成员浮层 */
   onToggleMembers: () => void;
-  /** 无选中房间时禁用 */
+  /** 无选中会话时禁用 */
   disabled: boolean;
   /** 当前 workspace ID（提供时渲染创建任务按钮） */
   workspaceId?: string;
-  /** 当前房间 ID（CreateTaskButton 的 sourceRoomId） */
-  activeRoomId?: string;
+  /** 当前会话 ID（CreateTaskButton 的 sourceSessionId） */
+  activeSessionId?: string;
 }
 
 export function InputToolbar({
@@ -23,7 +23,7 @@ export function InputToolbar({
   onToggleMembers,
   disabled,
   workspaceId,
-  activeRoomId,
+  activeSessionId,
 }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 py-1 border-t border-border-subtle bg-bg-secondary">
@@ -45,8 +45,8 @@ export function InputToolbar({
         <span>👥</span>
         <span>成员</span>
       </button>
-      {workspaceId && activeRoomId && (
-        <CreateTaskButton workspaceId={workspaceId} sourceRoomId={activeRoomId} />
+      {workspaceId && activeSessionId && (
+        <CreateTaskButton workspaceId={workspaceId} sourceSessionId={activeSessionId} />
       )}
       {/* 预留扩展位：附件、表情等未来功能 */}
     </div>

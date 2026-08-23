@@ -22,7 +22,7 @@ vi.mock('../../ipc/client', () => ({
       resolveConflict: vi.fn().mockResolvedValue({ action: 'queue' }),
     },
     settings: {
-      updateRoom: vi.fn().mockResolvedValue({}),
+      updateSession: vi.fn().mockResolvedValue({}),
     },
   },
 }));

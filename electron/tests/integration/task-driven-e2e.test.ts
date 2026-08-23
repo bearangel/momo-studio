@@ -35,7 +35,7 @@ beforeEach(() => {
   // tasks 表对 workspace_id 有外键约束（ON DELETE CASCADE），需先建 workspace 行
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
     )
     .run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
 });
@@ -50,7 +50,7 @@ describe('task-driven runtime e2e', () => {
   it('场景 1：用户普通消息 → ephemeral task → chat loop → 完成 → runtime 销毁', () => {
     // 1. INSERT user message
     insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@owner:home',
       eventType: 'm.room.message',
       body: '@PM 你好',
@@ -59,7 +59,7 @@ describe('task-driven runtime e2e', () => {
 
     // 2. 模拟 runtime 接收 task-config + 跑 chat loop（mock）
     const agentMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -103,7 +103,7 @@ describe('task-driven runtime e2e', () => {
 
     // 2. INSERT user message（含 #T-001 mention）
     insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@owner:home',
       eventType: 'm.room.message',
       body: '@PM #T-001 开始吧',
@@ -112,13 +112,13 @@ describe('task-driven runtime e2e', () => {
 
     // 3. 模拟 RouterService 检测 #mention → startTask（走状态机：assigned → in_progress）
     transitionTaskStatus('T-001', 'in_progress', {
-      executionRoomId: '!room:home',
+      executionSessionId: '!room:home',
       startedAt: Date.now(),
     });
 
     // 4. 模拟 runtime 跑 chat loop
     const agentMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -152,7 +152,7 @@ describe('task-driven runtime e2e', () => {
     // 6. 验证 task 终态 + 流聚合（工具调用配对）
     const task = getTask('T-001');
     expect(task?.status).toBe('completed');
-    expect(task?.executionRoomId).toBe('!room:home');
+    expect(task?.executionSessionId).toBe('!room:home');
 
     const stream = aggregateEvents(listEventsByMessage(agentMsg.id));
     expect(stream.toolCalls.length).toBe(1);
@@ -164,7 +164,7 @@ describe('task-driven runtime e2e', () => {
   it('场景 3：PM dispatch → 子 agent ephemeral task → task_reply', () => {
     // 1. PM 流式消息
     const pmMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@pm:home',
       eventType: 'm.room.message',
       body: '',
@@ -174,17 +174,16 @@ describe('task-driven runtime e2e', () => {
 
     // 2. PM 调 dispatch:programmer → 主进程发 dispatch event → INSERT dispatch message
     const dispatchMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@pm:home',
       eventType: 'io.momo-studio.dispatch',
       body: '写登录页',
-      matrixEventId: '$dispatch:home',
       source: 'matrix',
     });
 
     // 3. RouterService 检测 dispatch → 创建子 agent ephemeral task（子 agent 流式消息）
     const subMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@prog:home',
       eventType: 'm.room.message',
       body: '',
@@ -205,18 +204,17 @@ describe('task-driven runtime e2e', () => {
 
     // 5. 子 agent 完成 → task_reply 消息（回传给 PM）
     const replyMsg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@prog:home',
       eventType: 'io.momo-studio.task_reply',
       body: '登录页已写完',
-      matrixEventId: '$reply:home',
       source: 'matrix',
     });
     buf.destroy();
 
     // 6. 验证全链路消息：PM 流式 / dispatch / 子 agent 流式 / task_reply 都在
     const messages = getDb()
-      .prepare('SELECT event_type FROM messages WHERE room_id = ? ORDER BY created_at')
+      .prepare('SELECT event_type FROM messages WHERE session_id = ? ORDER BY created_at')
       .all('!room:home') as Array<{ event_type: string }>;
     const types = messages.map((m) => m.event_type);
     expect(types).toContain('m.room.message'); // PM + 子 agent 流式
@@ -225,8 +223,6 @@ describe('task-driven runtime e2e', () => {
 
     // 7. 验证子 agent 消息挂在 PM 的 dispatch parent 下（嵌套关系）
     expect(subMsg.parentStreamSessionId).toBe('ss-pm#dispatch-1');
-    expect(dispatchMsg.matrixEventId).toBe('$dispatch:home');
-    expect(replyMsg.matrixEventId).toBe('$reply:home');
 
     // 避免 unused 警告
     expect(pmMsg.streamSessionId).toBe('ss-pm');
@@ -234,7 +230,7 @@ describe('task-driven runtime e2e', () => {
 
   it('场景 4：abort → runtime AbortController 触发 → 退出', () => {
     const msg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',

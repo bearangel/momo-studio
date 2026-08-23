@@ -1,6 +1,6 @@
 // renderer/src/components/im/RoomList.tsx
 import { useEffect, useState } from 'react';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
@@ -10,58 +10,57 @@ import { cn } from '../../lib/cn';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 
 export function RoomList() {
-  const rooms = useImStore((s) => s.rooms);
-  const activeRoomId = useImStore((s) => s.activeRoomId);
-  const selectRoom = useImStore((s) => s.selectRoom);
-  const loadRooms = useImStore((s) => s.loadRooms);
-  const refreshRoomList = useImStore((s) => s.refreshRoomList);
-  const loading = useImStore((s) => s.loading);
+  const sessions = useSessionStore((s) => s.sessions);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const selectSession = useSessionStore((s) => s.selectSession);
+  const loadSessions = useSessionStore((s) => s.loadSessions);
+  const refreshSessionList = useSessionStore((s) => s.refreshSessionList);
+  const loading = useSessionStore((s) => s.loading);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
-  // 新建房间对话框状态 + 邀请候选（当前 workspace 内启用的 agent bot）
+  // 新建会话对话框状态 + 邀请候选（当前 workspace 内启用的 agent assignment）
   const [createOpen, setCreateOpen] = useState(false);
-  const [renaming, setRenaming] = useState<{ roomId: string; oldName: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
   const { assignments } = useAgentStore();
   const botNameMap = useBotNameMap();
 
   const inviteCandidates = assignments
     .filter((a) => a.enabled)
     .map((a) => ({
-      userId: a.botMatrixUserId,
-      displayName: resolveBotName(a.botMatrixUserId, botNameMap),
+      assignmentId: a.instanceId,
+      displayName: resolveBotName(a.agentUserId, botNameMap),
     }));
 
-  const handleRename = (roomId: string, oldName: string) => {
-    setRenaming({ roomId, oldName });
+  const handleRename = (sessionId: string, oldTitle: string) => {
+    setRenaming({ sessionId, oldTitle });
   };
 
   const submitRename = async (name: string) => {
     const target = renaming;
     setRenaming(null);
-    if (target && name.trim() && name !== target.oldName) {
-      await ipc.im.renameRoom(target.roomId, name.trim());
-      refreshRoomList();
+    if (target && name.trim() && name !== target.oldTitle) {
+      await ipc.session.rename(target.sessionId, name.trim());
+      refreshSessionList();
     }
   };
 
-  const handleDissolve = async (roomId: string, name: string) => {
-    if (!confirm(`确定解散房间「${name}」？\n所有成员将被移除。`)) return;
+  const handleDissolve = async (sessionId: string, title: string) => {
+    if (!confirm(`确定解散会话「${title}」？\n所有成员将被移除。`)) return;
     try {
-      const r = await ipc.im.dissolveRoom(roomId);
-      if (!r.dissolved) alert('部分成员凭证丢失，已退出但未完全解散');
-      refreshRoomList();
+      await ipc.session.delete(sessionId);
+      refreshSessionList();
     } catch (err) {
       alert(`解散失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   useEffect(() => {
-    // 切换 workspace 时按当前 workspace 过滤房间；首次加载若 workspace 尚未就绪则拉全部
-    void loadRooms(activeWorkspaceId ?? undefined);
-  }, [loadRooms, activeWorkspaceId]);
+    // 切换 workspace 时按当前 workspace 过滤会话；首次加载若 workspace 尚未就绪则拉全部
+    void loadSessions(activeWorkspaceId ?? undefined);
+  }, [loadSessions, activeWorkspaceId]);
 
-  if (loading && rooms.length === 0) {
+  if (loading && sessions.length === 0) {
     return (
       <div className="w-full h-full bg-bg-secondary flex items-center justify-center">
         <p className="text-sm text-neutral-500">加载中…</p>
@@ -69,7 +68,7 @@ export function RoomList() {
     );
   }
 
-  if (rooms.length === 0) {
+  if (sessions.length === 0) {
     return (
       <div className="w-full h-full bg-bg-secondary flex flex-col items-center justify-center gap-2">
         <div className="text-3xl">💬</div>
@@ -80,7 +79,7 @@ export function RoomList() {
         </p>
         <button
           type="button"
-          onClick={() => void loadRooms()}
+          onClick={() => void loadSessions()}
           className="text-xs text-accent-blue hover:underline mt-1"
         >
           刷新
@@ -89,10 +88,11 @@ export function RoomList() {
     );
   }
 
-  // 系统通知 + 团队群顶置，其余按原序（stable sort 保持相对顺序）
-  const sortedRooms = [...rooms].sort((a, b) => {
-    const priority = (r: (typeof rooms)[number]) =>
-      r.isSystem ? 0 : workspaces.some((w) => w.teamRoomId === r.roomId) ? 1 : 2;
+  // 团队会话顶置，其余按原序（stable sort 保持相对顺序）。
+  // v2.0 P1 Task 9：SessionSummary 无 isSystem 标记，系统房间概念随 Matrix 通道退役。
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const priority = (s: (typeof sessions)[number]) =>
+      workspaces.some((w) => w.teamSessionId === s.id) ? 1 : 2;
     return priority(a) - priority(b);
   });
 
@@ -106,38 +106,31 @@ export function RoomList() {
       >
         + 新建房间
       </button>
-      {sortedRooms.map((room) => (
-        // 外层 group 让 group-hover 生效；非 system 房间悬停时叠加操作按钮
-        <div key={room.roomId} className="group relative">
+      {sortedSessions.map((session) => (
+        // 外层 group 让 group-hover 生效；非团队会话悬停时叠加操作按钮
+        <div key={session.id} className="group relative">
           <button
             type="button"
-            onClick={() => void selectRoom(room.roomId)}
+            onClick={() => void selectSession(session.id)}
             className={cn(
               'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center gap-2',
-              room.roomId === activeRoomId
+              session.id === activeSessionId
                 ? 'bg-bg-tertiary border-accent-blue text-neutral-100'
                 : 'border-transparent text-neutral-300 hover:bg-bg-tertiary/60',
             )}
           >
-            {room.isSystem && <span className="text-xs">⚙️</span>}
-            <span className="truncate flex-1">{room.name}</span>
-            {room.isSystem && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400 shrink-0">
-                系统
-              </span>
-            )}
+            <span className="truncate flex-1">{session.title}</span>
           </button>
-          {/* 团队群（任一 workspace 的 teamRoomId）受保护，显示锁标记、无解散/重命名 */}
+          {/* 团队会话（任一 workspace 的 teamSessionId）受保护，显示锁标记、无解散/重命名 */}
           {(() => {
-            const isTeamRoom = workspaces.some((w) => w.teamRoomId === room.roomId);
-            if (isTeamRoom) {
+            const isTeamSession = workspaces.some((w) => w.teamSessionId === session.id);
+            if (isTeamSession) {
               return (
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500"       title="团队群随工作空间删除">
                   🔒
                 </span>
               );
             }
-            if (room.isSystem) return null;
             return (
               <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
                 <button
@@ -145,7 +138,7 @@ export function RoomList() {
                   title="重命名"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void handleRename(room.roomId, room.name);
+                    void handleRename(session.id, session.title);
                   }}
                   className="text-neutral-500 hover:text-neutral-200 text-xs"
                 >
@@ -156,7 +149,7 @@ export function RoomList() {
                   title="解散"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void handleDissolve(room.roomId, room.name);
+                    void handleDissolve(session.id, session.title);
                   }}
                   className="text-neutral-500 hover:text-red-400 text-xs"
                 >
@@ -170,13 +163,13 @@ export function RoomList() {
       <CreateRoomDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={() => refreshRoomList()}
+        onCreated={() => refreshSessionList()}
         inviteCandidates={inviteCandidates}
       />
       {renaming && (
         <PromptDialog
           title="重命名房间"
-          defaultValue={renaming.oldName}
+          defaultValue={renaming.oldTitle}
           onSubmit={submitRename}
           onClose={() => setRenaming(null)}
         />

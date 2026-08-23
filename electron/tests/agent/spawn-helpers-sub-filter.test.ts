@@ -33,15 +33,15 @@ beforeEach(() => {
   const db = getDb();
   // 准备 workspace + main def + 3 个 sub def（其中 2 个 last_running=1）
   const wsId = 'ws-sub-filter';
-  // v1.3 后 workspaces 必填 matrix_space_id（NOT NULL，团队群 room ID）
-  db.prepare(`INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`)
+  // v1.3 后 workspaces 必填 team_session_id（NOT NULL，团队群 room ID）
+  db.prepare(`INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`)
     .run(wsId, 'test', '/tmp', '!space:localhost', '@owner:localhost');
 
   // main
   db.prepare(`INSERT INTO agent_definitions (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
       VALUES (?, ?, ?, ?, 'declarative', '', '[]', '[]', '[]', 'builtin', '', '🤖', NULL, '', 1)`)
     .run('def-main', 'Main', 'main', '1.0.0');
-  db.prepare(`INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+  db.prepare(`INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
       VALUES (?, ?, ?, ?, 1, 1, 'main', NULL, 0)`)
     .run('inst-main', wsId, 'def-main', '@main:localhost');
 
@@ -50,7 +50,7 @@ beforeEach(() => {
     db.prepare(`INSERT INTO agent_definitions (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
         VALUES (?, ?, ?, ?, 'declarative', '', '[]', '[]', '[]', 'builtin', '', '🤖', NULL, '', 1)`)
       .run(`def-${subId}`, subId, subId, '1.0.0');
-    db.prepare(`INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+    db.prepare(`INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
         VALUES (?, ?, ?, ?, 1, ?, 'sub', ?, 0)`)
       .run(`inst-${subId}`, wsId, `def-${subId}`, `@${subId}:localhost`, lastRun, 'inst-main');
   }

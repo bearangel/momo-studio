@@ -87,16 +87,16 @@ export class TaskDispatcher {
     //    先 transition 到 in_progress（占住状态机槽位，避免并发 pickup 同一 task），
     //    再 try executeTask；executeTask 失败时 in_progress → failed 合法回退。
     const streamSessionId = randomUUID();
-    const executionRoomId = nextTask.executionRoomId ?? nextTask.sourceRoomId ?? '';
+    const executionSessionId = nextTask.executionSessionId ?? nextTask.sourceSessionId ?? '';
     transitionTaskStatus(nextTask.id, 'in_progress', {
-      executionRoomId: nextTask.executionRoomId ?? nextTask.sourceRoomId,
+      executionSessionId: nextTask.executionSessionId ?? nextTask.sourceSessionId,
       startedAt: now,
       runtimeInstanceId: streamSessionId,
     });
     try {
       await runner.executeTask({
         taskId: nextTask.id,
-        executionRoomId,
+        executionSessionId,
         // pickup 时 body 为空——子 agent 从 MemoryProvider 拉任务描述，
         // 而不是把 prompt 内联到 executeTask 调用里
         body: '',

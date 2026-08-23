@@ -18,9 +18,11 @@ import {
 import { createWorkspace } from '../../src/main/workspace/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
-vi.mock('../../src/main/agent/runtime-manager', () => ({
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  stopAgent: vi.fn(),
+}));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-crud-assignment-${Date.now()}`);
@@ -223,7 +225,7 @@ describe('AgentAssignment.lastRunning 字段映射 (Task 1)', () => {
     const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     getDb()
       .prepare(
-        `INSERT INTO workspaces (id, name, owner_id, directory_path, matrix_space_id)
+        `INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id)
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(id, 'test', '@owner:localhost', '/tmp', '!space:localhost');

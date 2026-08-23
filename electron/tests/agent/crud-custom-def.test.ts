@@ -20,9 +20,11 @@ import {
 import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
 import type { AgentDefinition, ToolRef, McpRef, SkillRef } from '../../src/main/agent/types';
 
-vi.mock('../../src/main/agent/runtime-manager', () => ({
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  stopAgent: vi.fn(),
+}));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
 }));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-crud-custom-${Date.now()}`);

@@ -147,7 +147,8 @@ export class TodoTools implements ToolModule {
     const chunk: StreamChunk = {
       type: 'todo_update',
       streamSessionId: ctx.streamSessionId,
-      roomId: ctx.roomId,
+      // Task 6 字段迁移：roomId→sessionId（值语义不变，仍是会话/房间 ID）
+      sessionId: ctx.roomId,
       todos: newTodos,
       ...(ctx.parentStreamSessionId
         ? { parentStreamSessionId: ctx.parentStreamSessionId }

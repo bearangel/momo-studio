@@ -12,7 +12,7 @@ import { TaskReplyCard } from './TaskReplyCard';
 function makeReply(overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id: 'r1',
-    roomId: '!team:local',
+    sessionId: '!team:local',
     sender: '@coder:local',
     body: '任务完成结果',
     eventType: 'io.momo-studio.task_reply',
@@ -22,7 +22,6 @@ function makeReply(overrides: Partial<ImMessage> = {}): ImMessage {
     segmentIndex: null,
     status: 'done',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: 'task-abc1234567',
     createdAt: 0,

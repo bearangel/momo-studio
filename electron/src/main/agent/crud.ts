@@ -6,13 +6,34 @@
 // model_providers 引用）；assignment 加 role/parent_instance_id/has_api_key_override。
 // agent_definitions 用 INSERT OR REPLACE 实现 upsert（以 id 为主键）。
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { setSecret, deleteSecret } from '../storage/keychain';
 import { logger } from '../logger';
-import { isAgentRunning, stopAgent } from './runtime-manager';
+import { isAgentRunning } from './runtime-status';
+import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
+
+/** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
+function slugify(input: string): string {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/** 6 字符随机后缀（base64url 字母表），保证同名 agent 重复分配不撞身份 */
+function randomSuffix(): string {
+  return randomBytes(4).toString('base64url').slice(0, 6);
+}
+
+/**
+ * v2（Task 10）：生成本地 agent 身份 `agent-<slug>-<6位随机后缀>`。
+ * 取代在 Matrix homeserver 上注册 bot 账号——agent_user_id 仅是本地展示/引用键，
+ * 不再对应任何远端账号，也因此无需 keychain 凭据。
+ */
+export function generateAgentUserId(slug: string): string {
+  const normalized = slugify(slug) || 'agent';
+  return `agent-${normalized}-${randomSuffix()}`;
+}
 
 /**
  * v1.6 Task 9：createCustomDef 入参。
@@ -91,7 +112,7 @@ interface AgentAssignmentRow {
   instance_id: string;
   workspace_id: string;
   agent_definition_id: string;
-  bot_matrix_user_id: string;
+  agent_user_id: string;
   enabled: number;
   created_at: string;
   role: string;
@@ -130,7 +151,7 @@ function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
     instanceId: row.instance_id,
     workspaceId: row.workspace_id,
     agentDefinitionId: row.agent_definition_id,
-    botMatrixUserId: row.bot_matrix_user_id,
+    agentUserId: row.agent_user_id,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     role: row.role as AgentRole,
@@ -166,7 +187,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     workspace_id: def.workspaceId,
     model_provider_id: def.modelProviderId,
     model_name: def.modelName,
-    task_driven: def.taskDriven === false ? 0 : 1,
+    task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
   });
 }
 
@@ -209,7 +230,7 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
 export function assignAgentToWorkspace(
   workspaceId: string,
   agentDefinitionId: string,
-  botMatrixUserId: string,
+  agentUserId: string,
   role: AgentRole,
   parentInstanceId: string | null = null,
 ): AgentAssignment {
@@ -226,15 +247,15 @@ export function assignAgentToWorkspace(
   const db = getDb();
   db.prepare(
     `INSERT INTO agent_assignments
-      (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, role, parent_instance_id)
+      (instance_id, workspace_id, agent_definition_id, agent_user_id, role, parent_instance_id)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(instanceId, workspaceId, agentDefinitionId, botMatrixUserId, role, parentInstanceId);
+  ).run(instanceId, workspaceId, agentDefinitionId, agentUserId, role, parentInstanceId);
 
   const row = db
     .prepare('SELECT * FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as AgentAssignmentRow;
   logger.info('Agent 已分配到 workspace', {
-    workspaceId, agentDefinitionId, botMatrixUserId, role,
+    workspaceId, agentDefinitionId, agentUserId, role,
   });
   return rowToAssignment(row);
 }
@@ -331,7 +352,7 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
   const stopped: string[] = [];
   for (const row of rows) {
     if (isAgentRunning(row.instance_id)) {
-      stopAgent(row.instance_id);
+      await stopAgentRuntime(row.instance_id);
       stopped.push(row.instance_id);
     }
     // 清除 API key override
@@ -423,11 +444,11 @@ export async function updateAgentApiKey(instanceId: string, newKey: string): Pro
 }
 
 /** 停止某定义的全部运行中实例（编辑 def 后调用，让用户手动重启应用新配置） */
-export function stopRunningInstancesByDefinition(definitionId: string): string[] {
+export async function stopRunningInstancesByDefinition(definitionId: string): Promise<string[]> {
   const stopped: string[] = [];
   for (const instanceId of listRunningInstanceIdsByDefinition(definitionId)) {
     if (isAgentRunning(instanceId)) {
-      stopAgent(instanceId);
+      await stopAgentRuntime(instanceId);
       stopped.push(instanceId);
     }
   }

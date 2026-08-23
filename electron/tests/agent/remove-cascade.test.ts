@@ -20,15 +20,12 @@ import {
 import { createWorkspace } from '../../src/main/workspace/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  spawnAgent: vi.fn(),
-  stopAgent: vi.fn(),
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
 }));
-vi.mock('../../src/main/matrix/rooms', () => ({ inviteBotToRoom: vi.fn() }));
-vi.mock('../../src/main/matrix/session', () => ({ getOwnerMatrixClient: vi.fn(async () => ({})) }));
-vi.mock('../../src/main/matrix/sync-manager', () => ({ getSyncingClient: vi.fn(() => null) }));
-vi.mock('../../src/main/matrix/client', () => ({ createMatrixClient: vi.fn(() => ({})) }));
+vi.mock('../../src/main/agent/runtime-registry', () => ({
+  stopAgentRuntime: vi.fn(),
+}));
 
 const tmpRoot = path.join(os.tmpdir(), `ap-cascade-${Date.now()}`);
 const memStore = new Map<string, string>();

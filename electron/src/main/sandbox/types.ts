@@ -6,7 +6,7 @@
 // 设计要点：
 //   - SandboxSpawnOpts 携带子进程启动所需的全部信息（入口、env、workspace 目录、
 //     网络白名单、资源限额）。各平台实现可选择性地应用这些约束。
-//   - SandboxProcess 对 Node 的 ChildProcess 做薄封装，只暴露 runtime-manager
+//   - SandboxProcess 对 Node 的 ChildProcess 做薄封装，只暴露调用方
 //     需要的字段（pid / stdio / IPC / kill），便于用 fake provider 做单测。
 //   - platformName 用于日志和审计，标识当前实际生效的隔离策略。
 
@@ -27,7 +27,7 @@ export interface SandboxSpawnOpts {
 }
 
 /**
- * 沙箱进程句柄。对 Node ChildProcess 的子集封装，只暴露 runtime-manager
+ * 沙箱进程句柄。对 Node ChildProcess 的子集封装，只暴露调用方
  * 实际依赖的字段，避免把整个 ChildProcess 类型泄漏到接口里（也方便测试 mock）。
  */
 export interface SandboxProcess {
@@ -47,7 +47,7 @@ export interface SandboxProcess {
 
 /**
  * 平台沙箱提供者。每个目标 OS 一个实现类。
- * runtime-manager 通过 getSandboxProvider() 获取当前平台的实例。
+ * 调用方通过 getSandboxProvider() 获取当前平台的实例。
  */
 export interface SandboxProvider {
   /** 按 opts 启动一个沙箱子进程并返回句柄 */

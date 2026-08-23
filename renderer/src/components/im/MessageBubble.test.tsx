@@ -41,7 +41,7 @@ import { MessageBubble } from './MessageBubble';
 function makeMsg(id: string, overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id,
-    roomId: '!r',
+    sessionId: '!r',
     sender: '@bot:local',
     body: '',
     eventType: 'm.room.message',
@@ -51,7 +51,6 @@ function makeMsg(id: string, overrides: Partial<ImMessage> = {}): ImMessage {
     segmentIndex: null,
     status: 'done',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: null,
     createdAt: 0,

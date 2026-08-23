@@ -56,7 +56,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -64,7 +64,7 @@ describe('AgentRunner', () => {
 
     const result = await runner.executeTask({
       taskId: null,
-      executionRoomId: '!room:home',
+      executionSessionId: '!room:home',
       body: 'hi',
       streamSessionId: 'ss-1',
     });
@@ -86,7 +86,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -94,7 +94,7 @@ describe('AgentRunner', () => {
 
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });
@@ -114,7 +114,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -122,7 +122,7 @@ describe('AgentRunner', () => {
 
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });
@@ -139,19 +139,57 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
     });
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });
     runner.destroy();
     // destroy → release → child.kill（与 warm-pool.test.ts 同断言模式）
     expect(child.kill).toHaveBeenCalled();
+  });
+
+  it('notifyTaskReply 转发给活跃 ephemeral task 的子进程（PM 等待 dispatch 场景）', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('agent-1');
+
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst-pm',
+      agentUserId: 'agent-bot-x1',
+      workspaceId: 'ws1',
+      config: {} as never,
+      warmPool,
+    });
+
+    // PM 正在跑 ephemeral chat（taskId=null）时收到子 agent 的回执。
+    // dispatch 的 task_id 由 PM 子进程内部生成，runner 无法按 taskId 匹配——
+    // 必须转发给活跃子进程，由子进程的 pendingReplies 精确匹配。
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-1',
+    });
+
+    await runner.notifyTaskReply({
+      taskId: 'task-dispatch-9',
+      status: 'completed',
+      body: 'ok',
+      toolCallsUsed: 2,
+    });
+
+    expect(child.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'task-reply',
+        reply: expect.objectContaining({ taskId: 'task-dispatch-9', status: 'completed', body: 'ok' }),
+      }),
+    );
   });
 });

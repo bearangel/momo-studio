@@ -1,6 +1,6 @@
 // electron/src/main/audit/query.ts
 //
-// 审计日志查询 —— 从 tool_calls 表（migration v6 创建，由 runtime-manager 插桩写入）
+// 审计日志查询 —— 从 tool_calls 表（migration v6 创建，由子进程审计 IPC 插桩写入）
 // 分页读取某 workspace 的工具调用记录，供 UI 展示。
 //
 // 查询按 timestamp 倒序（最新优先），命中 (workspace_id, timestamp) 复合索引。

@@ -28,7 +28,7 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
   getDb().prepare(
-    `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
   ).run('ws1', 'Test', '/tmp/ws1', '!space:home', '@owner:home');
 });
 
@@ -50,11 +50,11 @@ describe('SQLiteMemoryProvider', () => {
         creatorUserId: '@owner:home',
       });
       transitionTaskStatus(task.id, 'assigned');
-      transitionTaskStatus(task.id, 'in_progress', { executionRoomId: 'r1' });
+      transitionTaskStatus(task.id, 'in_progress', { executionSessionId: 'r1' });
 
       // task 执行过的事件：thinking_delta + tool_call_start + tool_call_result + final
       const msg = insertMessage({
-        roomId: 'r1',
+        sessionId: 'r1',
         sender: '@bot:home',
         eventType: 'm.room.message',
         body: '',
@@ -108,15 +108,15 @@ describe('SQLiteMemoryProvider', () => {
     it('返回最近 N 条消息（按时间升序，user 和 assistant 分开）', async () => {
       const t = Date.now();
       insertMessage({
-        roomId: 'r1',
-        sender: '@owner:home',
+        sessionId: 'r1',
+        sender: 'owner',
         eventType: 'm.room.message',
         body: 'hi',
         createdAt: t,
       });
       insertMessage({
-        roomId: 'r1',
-        sender: '@bot:home',
+        sessionId: 'r1',
+        sender: 'agent-coder-a1b2c3',
         eventType: 'm.room.message',
         body: 'hello',
         createdAt: t + 1,
@@ -128,12 +128,72 @@ describe('SQLiteMemoryProvider', () => {
       expect(ctx.messages[1]).toMatchObject({ role: 'assistant', content: 'hello' });
     });
 
+    // sender 角色判定（v2 P1 修复）：新身份格式 `agent-<slug>-<suffix>`
+    // 不再含 'bot' 字符串。role 应一律按 `sender === 'owner'` 判定：
+    //   - sender === 'owner' → role 'user'
+    //   - 其他（含旧 @bot:* 与新 agent-*）→ role 'assistant'
+    it('sender=agent-* 新身份 → role assistant（不含 bot 子串判定修复）', async () => {
+      const t = Date.now();
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'owner',
+        eventType: 'm.room.message',
+        body: '请帮我看看',
+        createdAt: t,
+      });
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'agent-coder-a1b2c3',
+        eventType: 'm.room.message',
+        body: '好的，我先看一下',
+        createdAt: t + 1,
+      });
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'agent-reviewer-d4e5f6',
+        eventType: 'm.room.message',
+        body: '代码看起来 OK',
+        createdAt: t + 2,
+      });
+
+      const ctx = await provider.getConversationContext('r2', { limit: 10 });
+      expect(ctx.messages.length).toBe(3);
+      expect(ctx.messages[0]).toMatchObject({
+        role: 'user',
+        content: '请帮我看看',
+        sender: 'owner',
+      });
+      expect(ctx.messages[1]).toMatchObject({
+        role: 'assistant',
+        content: '好的，我先看一下',
+        sender: 'agent-coder-a1b2c3',
+      });
+      expect(ctx.messages[2]).toMatchObject({
+        role: 'assistant',
+        content: '代码看起来 OK',
+        sender: 'agent-reviewer-d4e5f6',
+      });
+    });
+
+    it('sender=owner → role user（新身份语义）', async () => {
+      insertMessage({
+        sessionId: 'r3',
+        sender: 'owner',
+        eventType: 'm.room.message',
+        body: 'hi from owner',
+      });
+
+      const ctx = await provider.getConversationContext('r3', { limit: 10 });
+      expect(ctx.messages.length).toBe(1);
+      expect(ctx.messages[0]).toMatchObject({ role: 'user', sender: 'owner' });
+    });
+
     it('支持 limit + beforeTs', async () => {
       // insertMessage 内部固定用 Date.now() 作 createdAt，外部传入值被忽略。
       // 用 setTimeout 制造递增时间戳，再读全部找出 m2 时间戳作为 beforeTs 分页点。
       for (let i = 0; i < 5; i++) {
         insertMessage({
-          roomId: 'r1',
+          sessionId: 'r1',
           sender: '@owner:home',
           eventType: 'm.room.message',
           body: `m${i}`,

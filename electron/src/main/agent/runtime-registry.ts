@@ -9,15 +9,20 @@
 //   - 避免循环依赖（main/index.ts ↔ ipc.handlers.ts）
 //
 // 关键函数：
-//   - startAgentRuntime(opts, taskDriven)：IPC handler 调用入口——taskDriven=true 走 WarmPool
-//     预热（含按需创建），taskDriven=false 走 v1 spawnAgent fallback
-//   - createTaskDrivenRuntime(opts)：为单个 assignment 创建 WarmPool + AgentRunner + 注册 + 预热
-//   - findAssignmentByBotUserId(botUserId)：按 bot_matrix_user_id 反查 instance_id（dispatch 路由用）
+//   - startAgentRuntime(opts)：IPC handler 调用入口——确保 WarmPool + AgentRunner 存在并预热
+//     （Task 13 起 v1 spawnAgent 双轨分支已删除，全部 agent 走 task-driven）
+//   - createTaskDrivenRuntime(opts)：为单个 assignment 创建 WarmPool + AgentRunner + 注册
+//   - stopAgentRuntime(instanceId)：统一停止入口（销毁 runner/pool + DB last_running=0）
 //   - destroyAllTaskDrivenRuntimes()：进程退出时清理（before-quit 调用）
+//
+// v2（Task 10）：dispatch_to/reply_to 值已是 assignmentId，RouterService 直接以 runners
+// key 定位——findAssignmentByAgentUserId 反查已删除。
 
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
-import { spawnAgent, handleStreamChunk, type AgentRuntimeOpts } from './runtime-manager';
+import type { AgentRuntimeOpts } from './runtime-config';
+// Task 6：chunk 中继（handleStreamChunk）由 stream-relay 承载
+import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner } from './agent-runner';
 import { spawnForAgent } from './runtime-spawner';
@@ -34,29 +39,29 @@ export const agentWarmPools = new Map<string, WarmPool>();
 /** modelProviderId → ProviderTokenBucket（LLM 限流共享桶） */
 export const providerBuckets = new Map<string, ProviderTokenBucket>();
 
+// Task 6：注册按 streamSessionId 中断的解析器（注册反转，避免 stream-relay ↔ 本模块循环依赖）。
+// 广播语义：遍历全部 runner 逐个调 abortStream，各 runner 内部按自身活跃表自然过滤——
+// 只有持有该 streamSessionId 的 runner 会真正下发 abort IPC。
+setAbortResolver((streamSessionId) => {
+  for (const runner of agentRunners.values()) {
+    runner.abortStream(streamSessionId);
+  }
+  return agentRunners.size > 0;
+});
+
 // ─── 核心函数 ─────────────────────────────────────────────────────────────
 
 /**
- * IPC handler 调用入口——根据 taskDriven 标志分流：
- *   - taskDriven=true：确保 WarmPool + AgentRunner 存在（不存在则创建），然后预热
- *   - taskDriven=false：走 v1 spawnAgent（长期运行子进程模式）
+ * IPC handler 调用入口——确保指定 assignment 的 task-driven runtime 就绪
+ * （WarmPool + AgentRunner 不存在则创建），然后预热。
  *
- * 替代 IPC handler 中的直接 spawnAgent(opts) 调用。
+ * 替代 IPC handler 中的直接 spawn 调用。
  * opts 已由调用方通过 buildSpawnOpts 构造完毕。
  *
- * @param opts 已构建的 AgentRuntimeOpts（含 instanceId / botUserId / workspaceId 等）
- * @param taskDriven agent 定义是否 task_driven=1
+ * @param opts 已构建的 AgentRuntimeOpts（含 instanceId / agentUserId / workspaceId 等）
  */
-export async function startAgentRuntime(
-  opts: AgentRuntimeOpts,
-  taskDriven: boolean,
-): Promise<void> {
-  if (taskDriven) {
-    await ensureTaskDrivenRuntime(opts);
-  } else {
-    // v1 fallback：直接 spawn 长期运行子进程
-    spawnAgent(opts);
-  }
+export async function startAgentRuntime(opts: AgentRuntimeOpts): Promise<void> {
+  await ensureTaskDrivenRuntime(opts);
 }
 
 /**
@@ -68,7 +73,7 @@ export async function startAgentRuntime(
  * 幂等：已存在的 pool/runner 不会重建，仅触发 warm 补充。
  */
 async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
-  const { instanceId, botUserId, workspaceId } = opts;
+  const { instanceId, agentUserId, workspaceId } = opts;
 
   if (!agentWarmPools.has(instanceId)) {
     const pool = new WarmPool({
@@ -89,20 +94,20 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
 
     const runner = new AgentRunner({
       agentAssignmentId: instanceId,
-      agentBotUserId: botUserId,
+      agentUserId,
       workspaceId,
       warmPool: pool,
     });
     agentRunners.set(instanceId, runner);
 
-    // v2 修复（final review C1）：与 stopAgentRuntime 对称——写 last_running=1。
-    // 否则 stop（写 0）→ start 循环后 DB 仍为 0，renderer reload 看到 lastRunning=false，
-    // UI 显示离线而 runner 实际在运行。v1 spawnAgent 路径内部已写 1，此处补 task-driven 路径。
+    // 与 stopAgentRuntime 对称——写 last_running=1。否则 stop（写 0）→ start
+    // 循环后 DB 仍为 0，renderer reload 看到 lastRunning=false，UI 显示离线
+    // 而 runner 实际在运行。
     getDb()
       .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
       .run(instanceId);
 
-    logger.info('task-driven runtime 已创建', { instanceId, botUserId });
+    logger.info('task-driven runtime 已创建', { instanceId, agentUserId });
 
     // v2 修复（final review M1）：补齐 init/lazy 路径不对称——lazy 路径也要
     // populate buckets，否则 dispatcher 对缺失 bucket 不限流放行（潜伏点）。
@@ -137,7 +142,7 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
  * @returns 创建的 WarmPool；已存在时返回已有的
  */
 export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
-  const { instanceId, botUserId, workspaceId } = opts;
+  const { instanceId, agentUserId, workspaceId } = opts;
 
   const existing = agentWarmPools.get(instanceId);
   if (existing) return existing;
@@ -160,7 +165,7 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
 
   const runner = new AgentRunner({
     agentAssignmentId: instanceId,
-    agentBotUserId: botUserId,
+    agentUserId,
     workspaceId,
     warmPool: pool,
   });
@@ -173,20 +178,6 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     .run(instanceId);
 
   return pool;
-}
-
-/**
- * 按 bot_matrix_user_id 反查 assignment 的 instance_id。
- * 用于 RouterService.routeDispatch：dispatch event 的 dispatch_to 是目标 agent 的 botUserId，
- * 需反查 assignmentId 才能从 runners Map 取到对应 AgentRunner。
- *
- * @returns instance_id；未找到时返回 null
- */
-export function findAssignmentByBotUserId(botUserId: string): string | null {
-  const row = getDb()
-    .prepare('SELECT instance_id FROM agent_assignments WHERE bot_matrix_user_id = ?')
-    .get(botUserId) as { instance_id: string } | undefined;
-  return row?.instance_id ?? null;
 }
 
 /**
@@ -229,7 +220,7 @@ export function destroyAllTaskDrivenRuntimes(): void {
  * - pool.destroyAll() kill 池中所有 warm 子进程
  * - 从 agentRunners + agentWarmPools Map 移除
  *
- * 不存在 instanceId 时 no-op（用于 stopAgentRuntime 兼容 v1-only agent）。
+ * 不存在 instanceId 时 no-op。
  */
 export function destroyTaskDrivenRuntime(instanceId: string): void {
   const runner = agentRunners.get(instanceId);
@@ -245,25 +236,17 @@ export function destroyTaskDrivenRuntime(instanceId: string): void {
 }
 
 /**
- * 统一的 agent 停止入口（v2 修复）。
- * 双轨销毁：v1 子进程（如有）+ v2 task-driven runtime（如有）+ DB last_running=0。
- *
- * 设计：v1 路径调用 runtime-manager.stopAgent（已 UPDATE last_running=0）；
- * v2 路径调用 destroyTaskDrivenRuntime。两者幂等，重复 UPDATE 不冲突。
+ * 统一的 agent 停止入口。
+ * 销毁 task-driven runtime（runner + WarmPool）+ 写 DB last_running=0。
  *
  * @param instanceId agent_assignment 主键
  */
 export async function stopAgentRuntime(instanceId: string): Promise<void> {
-  // 1. v1 子进程（如有）—— stopAgent 内部已 UPDATE last_running=0
-  const { stopAgent } = await import('./runtime-manager');
-  stopAgent(instanceId);
-  // 2. v2 task-driven runtime（如有）
   destroyTaskDrivenRuntime(instanceId);
-  // 3. 幂等再写一次（v1 stopAgent 已做；本行确保 v2-only 路径也覆盖）
   getDb()
     .prepare('UPDATE agent_assignments SET last_running = 0 WHERE instance_id = ?')
     .run(instanceId);
-  logger.info('stopAgentRuntime 完成（双轨销毁 + DB 同步）', { instanceId });
+  logger.info('stopAgentRuntime 完成（销毁 runtime + DB 同步）', { instanceId });
 }
 
 // ─── 测试辅助 ─────────────────────────────────────────────────────────────

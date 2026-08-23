@@ -2,7 +2,7 @@
 //
 // ExportChatButton 行为测试：
 //   - 点击「导出」按钮 → 弹窗打开，数量输入默认 100
-//   - 确认 → 调 ipc.im.exportRoomMessages(roomId, 100)
+//   - 确认 → 调 ipc.session.exportMessages(sessionId, 100)
 //   - 成功 → Blob URL + <a download> 触发下载 + 关闭弹窗
 //   - 失败 → 红字错误 + 弹窗保持打开
 //   - 导出中按钮 disabled（防双击）
@@ -12,7 +12,7 @@ import { ExportChatButton } from './ExportChatButton';
 
 const exportMock = vi.fn();
 const mockApi = {
-  im: { exportRoomMessages: exportMock },
+  session: { exportMessages: exportMock },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -42,25 +42,25 @@ describe('ExportChatButton', () => {
   });
 
   it('点击按钮 → 弹窗（数量输入默认 100）', () => {
-    render(<ExportChatButton roomId="!r1:localhost" />);
+    render(<ExportChatButton sessionId="sess-r1" />);
     fireEvent.click(screen.getByRole('button', { name: /导出/ }));
     expect(screen.getByDisplayValue('100')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确定' })).toBeInTheDocument();
   });
 
-  it('确认 → 调 ipc.im.exportRoomMessages(roomId, 100)', async () => {
+  it('确认 → 调 ipc.session.exportMessages(sessionId, 100)', async () => {
     exportMock.mockResolvedValueOnce({ filename: 'momo-session-x.md', content: '# test' });
-    render(<ExportChatButton roomId="!r1:localhost" />);
+    render(<ExportChatButton sessionId="sess-r1" />);
     fireEvent.click(screen.getByRole('button', { name: /导出/ }));
     fireEvent.click(screen.getByRole('button', { name: '确定' }));
     await waitFor(() => {
-      expect(exportMock).toHaveBeenCalledWith('!r1:localhost', 100);
+      expect(exportMock).toHaveBeenCalledWith('sess-r1', 100);
     });
   });
 
   it('成功 → Blob URL + <a download> 触发下载 + 关闭弹窗', async () => {
     exportMock.mockResolvedValueOnce({ filename: 'session.md', content: '# content' });
-    render(<ExportChatButton roomId="!r1:localhost" />);
+    render(<ExportChatButton sessionId="sess-r1" />);
     fireEvent.click(screen.getByRole('button', { name: /导出/ }));
     fireEvent.click(screen.getByRole('button', { name: '确定' }));
     await waitFor(() => {
@@ -72,7 +72,7 @@ describe('ExportChatButton', () => {
 
   it('失败 → 红字错误 + 弹窗保持打开', async () => {
     exportMock.mockRejectedValueOnce(new Error('房间不存在'));
-    render(<ExportChatButton roomId="!bad:localhost" />);
+    render(<ExportChatButton sessionId="sess-bad" />);
     fireEvent.click(screen.getByRole('button', { name: /导出/ }));
     fireEvent.click(screen.getByRole('button', { name: '确定' }));
     await waitFor(() => {
@@ -83,7 +83,7 @@ describe('ExportChatButton', () => {
 
   it('导出中按钮 disabled（防双击）', async () => {
     exportMock.mockImplementationOnce(() => new Promise(() => {})); // never resolve
-    render(<ExportChatButton roomId="!r1:localhost" />);
+    render(<ExportChatButton sessionId="sess-r1" />);
     fireEvent.click(screen.getByRole('button', { name: /导出/ }));
     fireEvent.click(screen.getByRole('button', { name: '确定' }));
     await waitFor(() => {

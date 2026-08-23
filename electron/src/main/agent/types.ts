@@ -69,7 +69,7 @@ export interface AgentDefinition {
   /**
    * 是否使用 task-driven runtime（v2 架构）。
    * - true / undefined（缺省）= task-driven：runtime 由 WarmPool + AgentRunner 管理
-   * - false = v1 fallback：runtime 由 runtime-manager.spawnAgent 管理
+   * - false = v1 长存进程模式（Task 13 起已删除，列值恒 1，保留做历史数据兼容）
    *
    * DB 列 task_driven（INTEGER NOT NULL DEFAULT 1），rowToDef 映射为 boolean。
    * undefined 表示 builtin YAML 未写 DB 的场景（按 task-driven 处理）。
@@ -82,7 +82,7 @@ export interface AgentAssignment {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
-  botMatrixUserId: string;
+  agentUserId: string;
   enabled: boolean;
   createdAt: string;
 

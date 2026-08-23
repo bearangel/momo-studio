@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MainLayout } from './MainLayout';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import type { Workspace } from '../../ipc/types';
 
 // 测试用 workspace 桩数据
@@ -13,8 +13,7 @@ const STUB_WORKSPACE: Workspace = {
   name: 'Test',
   description: '',
   directoryPath: '/tmp/test',
-  matrixSpaceId: '!space:test',
-  teamRoomId: '!team:test',
+  teamSessionId: 'sess-team',
   gitInitialized: false,
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
@@ -22,15 +21,14 @@ const STUB_WORKSPACE: Workspace = {
   coordinatorInstanceId: null,
 };
 
-// MainLayout 的 useEffect 会调用 ipc.im.startSync / onMessage / loadRooms(getRooms)，
-// 必须提供桩 window.api，否则渲染时抛错。
+// MainLayout 的 useEffect 会调用 session.list（首屏拉取）+ im.onConflict
+// （ConflictDialogMount 挂载），必须提供桩 window.api，否则渲染时抛错。
+// v2.0 P1 Task 9：无 im.startSync 步骤（会话内核纯 SQLite）。
 const mockApi = {
+  session: {
+    list: vi.fn().mockResolvedValue([]),
+  },
   im: {
-    startSync: vi.fn().mockResolvedValue(undefined),
-    send: vi.fn().mockResolvedValue(undefined),
-    getRooms: vi.fn().mockResolvedValue([]),
-    getMessages: vi.fn().mockResolvedValue([]),
-    onMessage: vi.fn().mockReturnValue(() => {}),
     onConflict: vi.fn().mockReturnValue(() => {}),
   },
   agent: {
@@ -51,11 +49,8 @@ describe('MainLayout', () => {
       loading: false,
       error: null,
     });
-    useImStore.getState().reset();
-    // startSync 返回永不 resolve 的 promise，防止 useEffect 异步链触发 store 状态更新
-    // 导致 act() 冲突——布局测试不验证 IM 同步行为（由 im.store.test.ts 覆盖）
-    mockApi.im.startSync.mockImplementation(() => new Promise(() => {}));
-    mockApi.im.getRooms.mockResolvedValue([]);
+    useSessionStore.getState().reset();
+    mockApi.session.list.mockResolvedValue([]);
   });
 
   it('renders left rail with all 5 nav icons', () => {
@@ -87,5 +82,10 @@ describe('MainLayout', () => {
     });
     render(<MainLayout />);
     expect(screen.getByText(/暂无房间|加载中/i)).toBeInTheDocument();
+  });
+
+  it('挂载时触发 session.list 首屏拉取（无 im.startSync）', () => {
+    render(<MainLayout />);
+    expect(mockApi.session.list).toHaveBeenCalled();
   });
 });

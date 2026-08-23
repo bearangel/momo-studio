@@ -1,12 +1,11 @@
 // electron/src/main/ipc/index.ts
 import { logger } from '../logger';
-import { registerAuthHandlers } from './auth.handlers';
 import { registerSystemHandlers } from './system.handlers';
 import { registerWorkspaceHandlers } from '../workspace/ipc.handlers';
 import { registerFileHandlers } from '../files/ipc.handlers';
 import { registerAgentHandlers } from '../agent/ipc.handlers';
-import { registerStreamIpc } from '../agent/runtime-manager';
-import { registerImHandlers } from '../im/ipc.handlers';
+import { registerStreamIpc } from '../agent/stream-relay';
+import { registerSessionIpcHandlers } from '../im/session.ipc.handlers';
 import { registerMcpHandlers } from '../mcp/ipc.handlers';
 import { registerAllocationHandlers } from '../workspace/ipc.handlers';
 import { registerGitPolicyHandlers } from '../workspace/git-policy';
@@ -21,13 +20,12 @@ import { registerDialogHandlers } from './dialog.handlers';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
-  registerAuthHandlers();
   registerSystemHandlers();
   registerWorkspaceHandlers();
   registerFileHandlers();
   registerAgentHandlers();
   registerStreamIpc();
-  registerImHandlers();
+  registerSessionIpcHandlers();
   registerMcpHandlers();
   registerAllocationHandlers();
   registerGitPolicyHandlers();

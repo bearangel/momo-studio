@@ -14,7 +14,7 @@ export function useBotNameMap(): Map<string, string> {
     const m = new Map<string, string>();
     for (const a of assignments) {
       const def = defById.get(a.agentDefinitionId);
-      if (def) m.set(a.botMatrixUserId, def.name);
+      if (def) m.set(a.agentUserId, def.name);
     }
     return m;
   }, [assignments, definitions]);

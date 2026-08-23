@@ -8,10 +8,21 @@
 //     富信息统一在 message_events 表（renderer 端用 aggregateEvents 重建）。
 //   - 导出器简化为仅输出 body + 时间戳 + sender（富信息导出留 v2 后续增强）。
 //   - 所有消息统一渲染为顶层条目（不再分组 dispatch/task_reply 嵌套）。
+//
+// v2.0 P1 Task 12：原 extends MatrixMessagePayload（matrix/sync-manager 已删），
+// 字段就地展开——形状与 SQLite MessageRow 导出视图一致。
 
-import type { MatrixMessagePayload } from '../matrix/sync-manager';
-
-export interface ExportMessage extends MatrixMessagePayload {
+export interface ExportMessage {
+  /** 消息唯一标识（SQLite messages.id） */
+  eventId: string;
+  /** 所属会话 ID */
+  roomId: string;
+  sender: string;
+  body: string;
+  /** 事件类型（m.room.message / dispatch / task_reply；renderer 渲染分支依据） */
+  eventType: string;
+  content: Record<string, unknown>;
+  timestamp: number;
   botName: string | null;
 }
 

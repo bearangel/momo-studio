@@ -1,19 +1,21 @@
 // electron/tests/settings/settings.test.ts
 //
-// v1.4 settings/crud 测试：全局/房间配置 CRUD + 优先级解析。
+// v1.4 settings/crud 测试：全局/会话配置 CRUD + 优先级解析。
+// v23：room_settings 表已删除，会话级配置存 sessions.settings_json（经 crud 转调 sessions repo）。
 // DB 隔离采用仓库既定模式：process.env.AP_USER_DATA_DIR 指向临时目录 + closeDb 复位单例。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
   getGlobalSettings,
   updateGlobalSettings,
-  getRoomSettings,
-  updateRoomSettings,
+  getSessionSettings,
+  updateSessionSettings,
   resolveMaxToolCalls,
 } from '../../src/main/settings/crud';
+import { insertSession } from '../../src/main/storage/sessions/repo';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-settings-test-${Date.now()}`);
 
@@ -21,6 +23,14 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  // sessions.workspace_id 外键依赖
+  getDb()
+    .prepare(
+      `INSERT INTO workspaces
+         (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run('ws1', 'WS', '', '/tmp', 0, '@owner:s', '📁');
 });
 
 afterEach(() => {
@@ -48,58 +58,65 @@ describe('settings/crud', () => {
     });
   });
 
-  describe('房间配置', () => {
-    it('默认 max_tool_calls = null（继承全局）', () => {
-      const s = getRoomSettings('!room1:server');
-      expect(s.maxToolCalls).toBeNull();
+  describe('会话配置', () => {
+    it('默认 maxToolCalls = null（继承全局）', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
+      expect(getSessionSettings(s.id).maxToolCalls).toBeNull();
     });
 
-    it('更新房间 max_tool_calls', () => {
-      updateRoomSettings('!room1:server', { maxToolCalls: 20 });
-      expect(getRoomSettings('!room1:server').maxToolCalls).toBe(20);
+    it('更新会话 maxToolCalls', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
+      updateSessionSettings(s.id, { maxToolCalls: 20 });
+      expect(getSessionSettings(s.id).maxToolCalls).toBe(20);
     });
 
     it('清回 null（继承全局）', () => {
-      updateRoomSettings('!room1:server', { maxToolCalls: 20 });
-      updateRoomSettings('!room1:server', { maxToolCalls: null });
-      expect(getRoomSettings('!room1:server').maxToolCalls).toBeNull();
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
+      updateSessionSettings(s.id, { maxToolCalls: 20 });
+      updateSessionSettings(s.id, { maxToolCalls: null });
+      expect(getSessionSettings(s.id).maxToolCalls).toBeNull();
     });
   });
 
-  describe('房间冲突策略 conflictStrategy', () => {
-    it('默认 conflictStrategy = ask（migration v19 列默认值）', () => {
-      const s = getRoomSettings('!room2:server');
-      expect(s.conflictStrategy).toBe('ask');
+  describe('会话冲突策略 conflictStrategy', () => {
+    it('默认 conflictStrategy = ask', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 2' });
+      expect(getSessionSettings(s.id).conflictStrategy).toBe('ask');
     });
 
     it('更新 conflictStrategy', () => {
-      updateRoomSettings('!room2:server', { conflictStrategy: 'preempt' });
-      expect(getRoomSettings('!room2:server').conflictStrategy).toBe('preempt');
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 2' });
+      updateSessionSettings(s.id, { conflictStrategy: 'preempt' });
+      expect(getSessionSettings(s.id).conflictStrategy).toBe('preempt');
     });
 
     it('部分更新 conflictStrategy 不影响 maxToolCalls', () => {
-      updateRoomSettings('!room2:server', { maxToolCalls: 5 });
-      updateRoomSettings('!room2:server', { conflictStrategy: 'queue' });
-      const s = getRoomSettings('!room2:server');
-      expect(s.maxToolCalls).toBe(5);
-      expect(s.conflictStrategy).toBe('queue');
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 2' });
+      updateSessionSettings(s.id, { maxToolCalls: 5 });
+      updateSessionSettings(s.id, { conflictStrategy: 'queue' });
+      const cfg = getSessionSettings(s.id);
+      expect(cfg.maxToolCalls).toBe(5);
+      expect(cfg.conflictStrategy).toBe('queue');
     });
   });
 
   describe('resolveMaxToolCalls 优先级', () => {
-    it('房间级覆盖全局', () => {
+    it('会话级覆盖全局', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
       updateGlobalSettings({ maxToolCalls: 10 });
-      updateRoomSettings('!room1:server', { maxToolCalls: 50 });
-      expect(resolveMaxToolCalls('!room1:server')).toBe(50);
+      updateSessionSettings(s.id, { maxToolCalls: 50 });
+      expect(resolveMaxToolCalls(s.id)).toBe(50);
     });
 
-    it('房间 null 继承全局', () => {
+    it('会话 null 继承全局', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
       updateGlobalSettings({ maxToolCalls: 30 });
-      expect(resolveMaxToolCalls('!room1:server')).toBe(30);
+      expect(resolveMaxToolCalls(s.id)).toBe(30);
     });
 
-    it('全局和房间都未设 → 默认 10', () => {
-      expect(resolveMaxToolCalls('!room1:server')).toBe(10);
+    it('全局和会话都未设 → 默认 10', () => {
+      const s = insertSession({ workspaceId: 'ws1', title: '会话 1' });
+      expect(resolveMaxToolCalls(s.id)).toBe(10);
     });
   });
 });

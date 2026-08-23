@@ -28,9 +28,8 @@ describe('runtime-spawner', () => {
       assignmentId: 'inst1',
       runtimeConfig: {
         instanceId: 'inst1', workspaceId: 'ws1', workspaceDir: '/tmp',
-        botUserId: '@bot:home', botAccessToken: 'token', homeserverUrl: 'http://localhost',
-        systemPrompt: '', modelName: 'gpt-4', llmApiKey: 'key', teamRoomId: '!room:home',
-        ownerUserId: '@owner:home',
+        agentAssignmentId: 'inst1', agentUserId: 'agent-bot-x1', teamSessionId: 'sess-team',
+        systemPrompt: '', modelName: 'gpt-4', llmApiKey: 'key',
       } as never,
       onChunk: vi.fn(),
       onExit: vi.fn(),

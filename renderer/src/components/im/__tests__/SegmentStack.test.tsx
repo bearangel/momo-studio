@@ -23,7 +23,7 @@ const mkSegMsg = (
   segmentOf: string,
 ): ImMessage => ({
   id,
-  roomId: 'r1',
+  sessionId: 'r1',
   sender: '@bot:localhost',
   body,
   eventType: 'm.room.message',
@@ -33,7 +33,6 @@ const mkSegMsg = (
   segmentIndex,
   status: 'done',
   source: 'local',
-  matrixEventId: null,
   workspaceId: null,
   taskId: null,
   createdAt: 100 + segmentIndex * 50,

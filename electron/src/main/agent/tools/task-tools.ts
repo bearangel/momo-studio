@@ -31,7 +31,7 @@ import {
   listTasks as listTasksRepo,
   type TaskRow,
 } from '../../storage/tasks/repo';
-import { listMessagesByRoom, type MessageRow } from '../../storage/messages/repo';
+import { listMessagesBySession, type MessageRow } from '../../storage/messages/repo';
 import {
   listEventsByMessage,
   type MessageEventRow,
@@ -89,15 +89,15 @@ export async function readTask(taskId: string): Promise<ReadTaskResult | null> {
 /**
  * read_task_history：取 task 执行房间内的 messages。
  *
- * task 还没进入 in_progress 状态（没有 execution_room_id）时返回空数组。
+ * task 还没进入 in_progress 状态（没有 execution_session_id）时返回空数组。
  * 这里不过滤 task_id——execution_room 是任务专属房间，room_id 唯一对应
  *   task，但保险起见调用方应在 messages 表查 task_id 也带上（本工具按
  *     brief 语义只按 room 拉）。
  */
 export async function readTaskHistory(taskId: string): Promise<MessageRow[]> {
   const task = getTask(taskId);
-  if (!task?.executionRoomId) return [];
-  return listMessagesByRoom(task.executionRoomId);
+  if (!task?.executionSessionId) return [];
+  return listMessagesBySession(task.executionSessionId);
 }
 
 /**
@@ -180,8 +180,8 @@ export type ListTasksOptions = Parameters<typeof listTasksRepo>[0];
 /**
  * list_tasks：按过滤条件列出任务。
  *
- * 纯透传 listTasksRepo——workspaceId / status / assigneeAgentId / executionRoomId /
- *   sourceRoomId / orderBy / limit。返回 TaskRow 数组。
+ * 纯透传 listTasksRepo——workspaceId / status / assigneeAgentId / executionSessionId /
+ *   sourceSessionId / orderBy / limit。返回 TaskRow 数组。
  */
 export async function listTasks(opts: ListTasksOptions): Promise<TaskRow[]> {
   return listTasksRepo(opts);

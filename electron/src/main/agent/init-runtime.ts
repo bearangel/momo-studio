@@ -7,11 +7,10 @@
 //   2. 关注点分离——index.ts 只负责 app 生命周期编排，不承载 runtime 遍历细节。
 //
 // 核心逻辑：
-//   遍历所有 workspace 的 assignment，为每个 task_driven=1 且 enabled=1 且
-//   last_running=1 的 agent 创建 WarmPool + AgentRunner → 预热 → 经 router-bootstrap
-//   统一入口 ensureRouterService 启动 RouterService。
-//   - task_driven=1 但 last_running=0：跳过（用户主动下线意图，不自动恢复）。
-//   - task_driven=0：跳过（走 v1 autoStartAgents，由 auth handler 登录流程触发）。
+//   遍历所有 workspace 的 assignment，为每个 enabled=1 且 last_running=1 的
+//   agent 创建 WarmPool + AgentRunner → 预热 → 经 router-bootstrap 统一入口
+//   ensureRouterService 启动 RouterService。
+//   last_running=0：跳过（用户主动下线意图，不自动恢复）。
 //
 // 启动 RouterService 由 router-bootstrap 内部完成（setRouterService 调用同步发生）；
 // 本函数返回 void，调用方无需拿到 RouterService 实例。
@@ -19,7 +18,6 @@
 import { logger } from '../logger';
 import { listAssignments, getAgentDefinition } from './crud';
 import { listWorkspaces } from '../workspace/crud';
-import { resolveBotToken } from './auto-start';
 import {
   agentRunners,
   providerBuckets,
@@ -39,8 +37,7 @@ import type { AgentRole } from './types';
  *   2. assignment.enabled === false → 跳过
  *   3. assignment.lastRunning === false → 跳过（Task 5 核心：用户主动下线意图）
  *   4. def 不存在 → 跳过
- *   5. def.taskDriven === false → 跳过（v1 路径处理）
- *   6. def.modelProviderId 为空 → 跳过（未配置 provider）
+ *   5. def.modelProviderId 为空 → 跳过（未配置 provider）
  */
 export async function initTaskDrivenRuntime(): Promise<void> {
   for (const ws of listWorkspaces()) {
@@ -50,7 +47,6 @@ export async function initTaskDrivenRuntime(): Promise<void> {
       if (!assignment.lastRunning) continue; // ← Task 5：仅恢复用户意图为「在线」的 agent
       const def = getAgentDefinition(assignment.agentDefinitionId);
       if (!def) continue;
-      if (def.taskDriven === false) continue;
       if (!def.modelProviderId) {
         logger.warn('Agent 未配置 modelProviderId，跳过 task-driven 初始化', {
           instanceId: assignment.instanceId, slug: def.slug,
@@ -59,22 +55,16 @@ export async function initTaskDrivenRuntime(): Promise<void> {
       }
 
       try {
-        const botAccessToken = await resolveBotToken(assignment.botMatrixUserId);
-        if (!botAccessToken) {
-          logger.warn('Bot token 丢失，跳过', { instanceId: assignment.instanceId });
-          continue;
-        }
+        // v2（Task 10）：agent 无 Matrix 凭据，仅需解析 LLM API key
         const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
         const runtimeConfig = buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: assignment.botMatrixUserId,
+          agentUserId: assignment.agentUserId,
           workspaceId: ws.id,
           workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
-          ownerUserId: ws.ownerId,
+          teamSessionId: ws.teamSessionId ?? '',
           def,
-          botAccessToken,
           llmApiKey,
           role: assignment.role as AgentRole,
           isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
@@ -107,9 +97,10 @@ export async function initTaskDrivenRuntime(): Promise<void> {
 
   populateProviderBuckets();
 
-  // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + setRouterService）。
-  // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op。动态 import 避开
-  // router-bootstrap → sync-manager → ... → runtime-registry 顶层循环依赖。
+  // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + 注入）。
+  // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op（Task 5 起注入
+  // 目标为 internal-event-bridge 的 setBridgeRouter）。动态 import 避开
+  // router-bootstrap → router-service → runtime-registry 顶层循环依赖。
   const { ensureRouterService } = await import('./router-bootstrap');
   await ensureRouterService(agentRunners, providerBuckets);
   logger.info('initTaskDrivenRuntime 完成', { runnerCount: agentRunners.size });

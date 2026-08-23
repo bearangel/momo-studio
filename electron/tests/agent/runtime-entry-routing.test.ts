@@ -22,7 +22,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import type { MatrixClient } from 'matrix-js-sdk';
 import { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { LLMToolCall } from '../../src/main/agent/llm-provider';
@@ -31,9 +30,6 @@ import {
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
-
-// bash 工具不触碰 MatrixClient；这些路径下传桩对象即可。
-const client = {} as unknown as MatrixClient;
 
 let tmpDir: string;
 let ctx: RuntimeContext;
@@ -46,11 +42,9 @@ function call(name: string, args: Record<string, unknown>): LLMToolCall {
 /** 构造最小 RuntimeConfig——assertToolAllowed 仅读 allowedTools/deniedTools */
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: '',
     modelName: 'test',
     llmApiKey: 'k',
@@ -105,7 +99,7 @@ afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('doExecuteTool 工具路由（v1.5 注册中心修复回归）', () => {
   it('v1.5 文件工具 exists 命中注册中心，返回"存在"', async () => {
-    const out = await doExecuteTool(call('exists', { path: '.' }), ctx, client, makeConfig());
+    const out = await doExecuteTool(call('exists', { path: '.' }), ctx, makeConfig());
     expect(out).toBe('存在');
   });
 
@@ -113,26 +107,25 @@ describe('doExecuteTool 工具路由（v1.5 注册中心修复回归）', () => 
     const out = await doExecuteTool(
       call('bash', { command: 'echo routing_ok' }),
       ctx,
-      client,
       makeConfig(),
     );
     expect(out).toContain('routing_ok');
   });
 
   it('原 v1.4 工具 list_files 迁移到注册中心后仍正常（向后兼容）', async () => {
-    const out = await doExecuteTool(call('list_files', { path: '.' }), ctx, client, makeConfig());
+    const out = await doExecuteTool(call('list_files', { path: '.' }), ctx, makeConfig());
     expect(typeof out).toBe('string');
   });
 
   it('未知工具名仍抛"未知工具"', async () => {
     await expect(
-      doExecuteTool(call('__nonexistent_v1_5_routing_test__', {}), ctx, client, makeConfig()),
+      doExecuteTool(call('__nonexistent_v1_5_routing_test__', {}), ctx, makeConfig()),
     ).rejects.toThrow('未知工具');
   });
 
   it('工具权限 deniedTools 在路由前生效（命中 bash 即拒绝）', async () => {
     await expect(
-      doExecuteTool(call('bash', { command: 'echo x' }), ctx, client, makeConfig({ deniedTools: ['bash'] })),
+      doExecuteTool(call('bash', { command: 'echo x' }), ctx, makeConfig({ deniedTools: ['bash'] })),
     ).rejects.toThrow('被禁止使用');
   });
 });

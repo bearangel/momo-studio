@@ -13,13 +13,13 @@ describe('agent/dispatch', () => {
   it('buildDispatchMessage 生成正确的 event type + content', () => {
     const msg = buildDispatchMessage({
       body: '帮我写需求文档',
-      fromBotUserId: '@pm-agent:localhost',
-      toBotUserId: '@req-agent:localhost',
+      fromAssignmentId: 'inst-pm',
+      toAssignmentId: 'inst-req',
     });
     expect(msg.eventType).toBe(DISPATCH_EVENT_TYPE);
     expect(msg.content.body).toBe('帮我写需求文档');
-    expect(msg.content.dispatch_from).toBe('@pm-agent:localhost');
-    expect(msg.content.dispatch_to).toBe('@req-agent:localhost');
+    expect(msg.content.dispatch_from).toBe('inst-pm');
+    expect(msg.content.dispatch_to).toBe('inst-req');
     expect(msg.content.task_id).toHaveLength(36); // UUID
   });
 
@@ -27,11 +27,11 @@ describe('agent/dispatch', () => {
     const parsed = parseDispatchEvent({
       body: 'test',
       task_id: 'abc-123',
-      dispatch_from: '@a:localhost',
-      dispatch_to: '@b:localhost',
+      dispatch_from: 'inst-a',
+      dispatch_to: 'inst-b',
     });
     expect(parsed?.task_id).toBe('abc-123');
-    expect(parsed?.dispatch_to).toBe('@b:localhost');
+    expect(parsed?.dispatch_to).toBe('inst-b');
   });
 
   it('parseDispatchEvent 缺字段返回 null', () => {

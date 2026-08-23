@@ -3,7 +3,6 @@
 // 测试 runChatLoop 的流式 chunk 发送、预算管理、abort 逻辑。
 // 不测完整 Matrix 集成——mock createLLMProvider 的 chatStream + MatrixClient + process.send。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -16,13 +15,12 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
-  formatBudgetHint,
-  executeDispatch,
-  handleTaskReply,
   type RuntimeConfig,
   type RuntimeContext,
   type RunChatLoopStats,
 } from '../../src/main/agent/runtime-entry';
+import { executeDispatch, handleTaskReply } from '../../src/main/agent/dispatch-wait';
+import { formatBudgetHint } from '../../src/main/agent/prompt-hints';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
   __setMemoryProviderForTest,
@@ -77,24 +75,25 @@ function mockProvider(deltas: StreamDelta[]): void {
   mockProviderMultiRound([deltas]);
 }
 
-// === Mock MatrixClient ===
+// === 内部事件捕获（dispatch 经 process.send 的 momo-internal-event 信封发出） ===
 
-function mockClient(): MatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
+/** 从 sentChunks（含全部 IPC 消息）里找指定 eventType 的内部事件 content */
+function findInternalEventContent(eventType: string): Record<string, unknown> | undefined {
+  const evt = sentChunks.find(
+    (m) =>
+      (m as { type?: string }).type === 'momo-internal-event' &&
+      (m as { eventType?: string }).eventType === eventType,
+  ) as { content?: Record<string, unknown> } | undefined;
+  return evt?.content;
 }
 
 // === Mock RuntimeConfig ===
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -171,16 +170,14 @@ describe('runChatLoop streaming', () => {
     __resetMemoryProviderForTest();
   });
 
-  it('正常完成：发 start → text → end(stop)，并发送最终 m.room.message', async () => {
+  it('正常完成：发 start → text → end(stop)', async () => {
     mockProvider([
       { type: 'text', content: 'Hello' },
       { type: 'text', content: ' world' },
       { type: 'done', finishReason: 'stop' },
     ]);
 
-    const client = mockClient();
     const result = await runChatLoop(
-      client,
       '!room:localhost',
       'hi',
       makeConfig(),
@@ -196,14 +193,6 @@ describe('runChatLoop streaming', () => {
     expect((chunks[2] as { delta: string }).delta).toBe(' world');
     const endChunk = chunks.find((c) => c.type === 'end') as { finishReason: string };
     expect(endChunk.finishReason).toBe('stop');
-
-    // 验证最终 m.room.message 已发送
-    expect(client.sendEvent).toHaveBeenCalledWith(
-      '!room:localhost',
-      'm.room.message',
-      expect.objectContaining({ msgtype: 'm.text', body: 'Hello world' }),
-      '',
-    );
   });
 
   it('thinking 增量：发 thinking chunk 并持久化到最终消息', async () => {
@@ -213,22 +202,12 @@ describe('runChatLoop streaming', () => {
       { type: 'done', finishReason: 'stop' },
     ]);
 
-    const client = mockClient();
-    await runChatLoop(client, '!room:localhost', 'hi', makeConfig(), makeContext());
+    await runChatLoop('!room:localhost', 'hi', makeConfig(), makeContext());
 
     const chunks = streamChunks();
     const thinking = chunks.filter((c) => c.type === 'thinking');
     expect(thinking).toHaveLength(1);
     expect((thinking[0] as { delta: string }).delta).toBe('Let me think...');
-
-    // A7：thinking 不再写入 Matrix event（改由 SQLite message_events 承载）。
-    // 最终消息只含 body + msgtype + stream_session_id。
-    expect(client.sendEvent).toHaveBeenCalledWith(
-      '!room:localhost',
-      'm.room.message',
-      expect.objectContaining({ msgtype: 'm.text', body: 'Answer' }),
-      '',
-    );
   });
 
   it('工具调用：发 tool_call → tool_result → text → end(stop)', async () => {
@@ -245,7 +224,6 @@ describe('runChatLoop streaming', () => {
       [{ type: 'text', content: 'Done' }, { type: 'done', finishReason: 'stop' }],
     ]);
 
-    const client = mockClient();
     const ctx = makeContext({
       tools: [
         {
@@ -257,7 +235,6 @@ describe('runChatLoop streaming', () => {
     });
 
     const result = await runChatLoop(
-      client,
       '!room:localhost',
       'read test.txt',
       makeConfig(),
@@ -282,15 +259,6 @@ describe('runChatLoop streaming', () => {
     };
     expect(toolResultChunk.toolName).toBe('read_file');
     expect(toolResultChunk.success).toBe(true);
-
-    // A7：tool_calls 不再写入 Matrix event（改由 SQLite message_events 承载）。
-    // 最终消息只含 body + msgtype。
-    expect(client.sendEvent).toHaveBeenCalledWith(
-      '!room:localhost',
-      'm.room.message',
-      expect.objectContaining({ msgtype: 'm.text', body: 'Done' }),
-      '',
-    );
   });
 
   it('预算耗尽：发 end(budget_exhausted)', async () => {
@@ -305,7 +273,6 @@ describe('runChatLoop streaming', () => {
     ]);
 
     const result = await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig({ maxToolCalls: 1 }),
@@ -328,7 +295,6 @@ describe('runChatLoop streaming', () => {
     ]);
 
     const result = await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig({ maxToolCalls: 0 }),
@@ -357,7 +323,6 @@ describe('runChatLoop streaming', () => {
     mockProviderMultiRound(rounds);
 
     const result = await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig({ maxToolCalls: -1 }),
@@ -390,7 +355,6 @@ describe('runChatLoop streaming', () => {
     });
 
     const promise = runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig(),
@@ -428,7 +392,6 @@ describe('runChatLoop streaming', () => {
 
     const stats: RunChatLoopStats = { toolCallsUsed: 0 };
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig({ maxToolCalls: 10 }),
@@ -439,23 +402,22 @@ describe('runChatLoop streaming', () => {
     expect(stats.toolCallsUsed).toBe(2);
   });
 
-  it('start chunk 携带 roomId 和 botUserId', async () => {
+  it('start chunk 携带 sessionId 和 senderAgentId（Task 6 字段迁移）', async () => {
     mockProvider([{ type: 'text', content: 'hi' }, { type: 'done', finishReason: 'stop' }]);
 
     await runChatLoop(
-      mockClient(),
       '!special:localhost',
       'hello',
-      makeConfig({ botUserId: '@mybot:localhost' }),
+      makeConfig({ agentUserId: 'agent-mybot-x1' }),
       makeContext(),
     );
 
     const startChunk = streamChunks().find((c) => c.type === 'start') as {
-      roomId: string;
-      botUserId: string;
+      sessionId: string;
+      senderAgentId: string;
     };
-    expect(startChunk.roomId).toBe('!special:localhost');
-    expect(startChunk.botUserId).toBe('@mybot:localhost');
+    expect(startChunk.sessionId).toBe('!special:localhost');
+    expect(startChunk.senderAgentId).toBe('agent-mybot-x1');
   });
 });
 
@@ -476,16 +438,29 @@ describe('formatBudgetHint', () => {
 });
 
 describe('dispatch 共享预算扣减', () => {
+  const originalSend = process.send;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+  });
+
   it('executeDispatch + handleTaskReply 正确传递 toolCallsUsed', async () => {
-    const client = mockClient();
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
-    const dispatchPromise = executeDispatch('researcher', '帮我查资料', client, config, 9);
+    const dispatchPromise = executeDispatch('researcher', '帮我查资料', config, 9);
 
-    const dispatchContent = vi.mocked(client.sendEvent).mock.calls[0]![2] as unknown as {
+    const dispatchContent = findInternalEventContent('io.momo-studio.dispatch') as {
       task_id: string;
     };
     handleTaskReply({
@@ -500,15 +475,14 @@ describe('dispatch 共享预算扣减', () => {
   });
 
   it('tool_calls_used 缺省时默认为 0', async () => {
-    const client = mockClient();
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
-    const dispatchPromise = executeDispatch('researcher', '任务', client, config);
+    const dispatchPromise = executeDispatch('researcher', '任务', config);
 
-    const dispatchContent = vi.mocked(client.sendEvent).mock.calls[0]![2] as unknown as {
+    const dispatchContent = findInternalEventContent('io.momo-studio.dispatch') as {
       task_id: string;
     };
     handleTaskReply({
@@ -553,29 +527,34 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       [{ type: 'text', content: '汇总完成' }, { type: 'done', finishReason: 'stop' }],
     ]);
 
-    const client = mockClient();
-    // 拦截 dispatch 事件，自动回 task_reply 来 resolve pending
-    vi.mocked(client.sendEvent).mockImplementation(async (_roomId, eventType, content) => {
-      if (eventType === 'io.momo-studio.dispatch') {
-        const taskId = (content as { task_id: string }).task_id;
-        setTimeout(() => {
-          handleTaskReply({
-            task_id: taskId,
-            body: '资料已找到',
-            status: 'completed',
-            tool_calls_used: 0,
-          });
-        }, 0);
+    // process.send 拦截 dispatch 内部事件，自动回 task_reply 来 resolve pending。
+    // executeDispatch 同步注册 pending 后同步 send——事件到达时 pending 已就绪。
+    const dispatchInterceptor = (msg: unknown): boolean => {
+      const m = msg as { type?: string; eventType?: string; content?: { task_id?: string } };
+      if (m?.type === 'momo-internal-event' && m.eventType === 'io.momo-studio.dispatch') {
+        const taskId = m.content?.task_id;
+        if (taskId) {
+          setTimeout(() => {
+            handleTaskReply({
+              task_id: taskId,
+              body: '资料已找到',
+              status: 'completed',
+              tool_calls_used: 0,
+            });
+          }, 0);
+        }
       }
-      return { event_id: '$test:localhost' };
-    });
+      sentChunks.push(msg);
+      return true;
+    };
+    process.send = dispatchInterceptor as NonNullable<typeof process.send>;
 
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: '研究员' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' }],
     });
 
-    await runChatLoop(client, '!room:localhost', '帮我查资料', config, makeContext());
+    await runChatLoop('!room:localhost', '帮我查资料', config, makeContext());
 
     const chunks = streamChunks();
     const toolCallChunk = chunks.find(
@@ -606,23 +585,27 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       [{ type: 'text', content: '完成' }, { type: 'done', finishReason: 'stop' }],
     ]);
 
-    const client = mockClient();
-    vi.mocked(client.sendEvent).mockImplementation(async (_roomId, eventType, content) => {
-      if (eventType === 'io.momo-studio.dispatch') {
-        const taskId = (content as { task_id: string }).task_id;
-        setTimeout(() => {
-          handleTaskReply({ task_id: taskId, body: 'ok', status: 'completed', tool_calls_used: 0 });
-        }, 0);
+    const dispatchInterceptor = (msg: unknown): boolean => {
+      const m = msg as { type?: string; eventType?: string; content?: { task_id?: string } };
+      if (m?.type === 'momo-internal-event' && m.eventType === 'io.momo-studio.dispatch') {
+        const taskId = m.content?.task_id;
+        if (taskId) {
+          setTimeout(() => {
+            handleTaskReply({ task_id: taskId, body: 'ok', status: 'completed', tool_calls_used: 0 });
+          }, 0);
+        }
       }
-      return { event_id: '$test:localhost' };
-    });
+      sentChunks.push(msg);
+      return true;
+    };
+    process.send = dispatchInterceptor as NonNullable<typeof process.send>;
 
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'R' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'R' }],
     });
 
-    await runChatLoop(client, '!room:localhost', 'hi', config, makeContext());
+    await runChatLoop('!room:localhost', 'hi', config, makeContext());
 
     const chunks = streamChunks();
     const toolResultChunk = chunks.find(
@@ -636,7 +619,6 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
     mockProvider([{ type: 'text', content: 'done' }, { type: 'done', finishReason: 'stop' }]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'task',
       makeConfig({ botName: '研究员', botAvatar: '🔬' }),
@@ -660,7 +642,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
   it('无 parentStreamSessionId 时 start chunk 不含嵌套字段', async () => {
     mockProvider([{ type: 'text', content: 'done' }, { type: 'done', finishReason: 'stop' }]);
 
-    await runChatLoop(mockClient(), '!room:localhost', 'hi', makeConfig(), makeContext());
+    await runChatLoop('!room:localhost', 'hi', makeConfig(), makeContext());
 
     const startChunk = streamChunks().find(
       (c) => c.type === 'start',
@@ -672,12 +654,10 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
     expect(startChunk.subAgentName).toBeUndefined();
   });
 
-  it('子 agent start chunk 携带 parentStreamSessionId（A7：嵌套关系改由 stream chunk 承载）', async () => {
+  it('子 agent start chunk 携带 parentStreamSessionId（嵌套关系由 stream chunk 承载）', async () => {
     mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
 
-    const client = mockClient();
     await runChatLoop(
-      client,
       '!room:localhost',
       'task',
       makeConfig(),
@@ -686,30 +666,11 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       'parent-session-456',
     );
 
-    // A7：parent_stream_session_id 不再写入 Matrix event；改由 start chunk 携带，
-    // routeChunkToBuffer 据此写入 messages.parent_stream_session_id 列。
+    // parent_stream_session_id 由 start chunk 携带，routeChunkToBuffer 据此写入
+    // messages.parent_stream_session_id 列。
     const startChunk = streamChunks().find((c) => c.type === 'start') as {
       parentStreamSessionId?: string;
     };
     expect(startChunk.parentStreamSessionId).toBe('parent-session-456');
-  });
-
-  it('A7：最终消息只含 body + stream_session_id（无 io.momo-studio 富字段）', async () => {
-    mockProvider([{ type: 'text', content: 'result' }, { type: 'done', finishReason: 'stop' }]);
-
-    const client = mockClient();
-    await runChatLoop(client, '!room:localhost', 'hi', makeConfig(), makeContext());
-
-    const call = vi.mocked(client.sendEvent).mock.calls.find(
-      ([, type]) => type === 'm.room.message',
-    );
-    const content = call?.[2] as Record<string, unknown> | undefined;
-    // 富字段全部移除（thinking/tool_calls/todos/dispatches/parent_stream_session_id/agent_meta_id）
-    expect(content?.['io.momo-studio.parent_stream_session_id']).toBeUndefined();
-    expect(content?.['io.momo-studio.thinking']).toBeUndefined();
-    expect(content?.['io.momo-studio.tool_calls']).toBeUndefined();
-    // 仅保留 stream_session_id（Matrix↔SQLite 行关联用）+ body + msgtype
-    expect(content?.['io.momo-studio.stream_session_id']).toBeDefined();
-    expect(content?.body).toBeDefined();
   });
 });

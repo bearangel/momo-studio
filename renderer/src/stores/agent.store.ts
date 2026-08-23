@@ -52,11 +52,7 @@ interface AgentState {
   /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
   setAssignmentDeltas: (instanceId: string, deltas: AssignmentDeltas) => Promise<void>;
   stopAgent: (instanceId: string) => Promise<void>;
-  startAgent: (
-    assignment: AgentAssignment,
-    workspaceId: string,
-    teamRoomId: string,
-  ) => Promise<void>;
+  startAgent: (assignment: AgentAssignment, workspaceId: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -206,10 +202,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  startAgent: async (assignment, workspaceId, teamRoomId) => {
+  startAgent: async (assignment, workspaceId) => {
     set({ error: null });
     try {
-      await ipc.agent.start({ assignment, workspaceId, teamRoomId });
+      await ipc.agent.start({ assignment, workspaceId });
       // v2 修复：reload assignments 反映新 lastRunning 状态
       await get().loadAssignments(workspaceId);
     } catch (err) {

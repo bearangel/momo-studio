@@ -1,6 +1,6 @@
 // renderer/src/components/im/ExportChatButton.tsx
 //
-// 会话导出按钮：弹窗（数量输入默认 100）+ 调 ipc.im.exportRoomMessages +
+// 会话导出按钮：弹窗（数量输入默认 100）+ 调 ipc.session.exportMessages +
 // 用 Blob + <a download> 触发浏览器原生下载（macOS Finder save sheet）。
 //
 // 失败时红字展示错误，弹窗保持打开；导出中所有按钮 disabled 防双击。
@@ -9,10 +9,10 @@ import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 
 interface Props {
-  roomId: string;
+  sessionId: string;
 }
 
-export function ExportChatButton({ roomId }: Props) {
+export function ExportChatButton({ sessionId }: Props) {
   const [open, setOpen] = useState(false);
   const [limit, setLimit] = useState(100);
   const [exporting, setExporting] = useState(false);
@@ -23,7 +23,7 @@ export function ExportChatButton({ roomId }: Props) {
     setExporting(true);
     setError(null);
     try {
-      const { filename, content } = await ipc.im.exportRoomMessages(roomId, limit);
+      const { filename, content } = await ipc.session.exportMessages(sessionId, limit);
       // Blob + a.download 触发浏览器下载
       const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
       const url = URL.createObjectURL(blob);

@@ -12,7 +12,6 @@
 //   4. currentTaskId 非空 → getTaskContext 被调用，taskHint 注入 system prompt
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import {
   __setMemoryProviderForTest,
@@ -47,20 +46,18 @@ function mockProvider(deltas: StreamDelta[]): void {
   });
 }
 
-function mockClient(): MatrixClient {
+function mockClient(): LegacyMatrixClient {
   return {
     getRoom: vi.fn().mockReturnValue(null),
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
+  } as unknown as LegacyMatrixClient;
 }
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: '你是研发工程师。',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -148,7 +145,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'task body',
       makeConfig(),
@@ -179,7 +175,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'hi',
       makeConfig(),
@@ -206,7 +201,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       'task',
       makeConfig(),
@@ -231,7 +225,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       task: {
         id: 'task-001',
         workspaceId: 'ws-1',
-        executionRoomId: null,
+        executionSessionId: null,
         title: '实现登录页',
         description: '完成登录页 UI 与表单校验',
         status: 'in_progress',
@@ -265,7 +259,6 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     ]);
 
     await runChatLoop(
-      mockClient(),
       '!room:localhost',
       '继续',
       makeConfig({ currentTaskId: 'task-001' }),

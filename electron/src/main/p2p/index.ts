@@ -101,7 +101,7 @@ export async function initP2p(): Promise<void> {
 export function handleRemoteMessage(msg: SyncMessage): void {
   try {
     const row = insertMessage({
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       sender: msg.sender,
       eventType: msg.eventType,
       body: msg.body,
@@ -109,11 +109,13 @@ export function handleRemoteMessage(msg: SyncMessage): void {
     });
     const win = BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
-      win.webContents.send('im:message', row);
+      // v2.0 P1 Task 12：推送通道由 im:message 改名 session:message（最后一个旧通道
+      // 发送方），preload 反向桥已随之移除。
+      win.webContents.send('session:message', row);
     }
   } catch (err) {
     logger.warn('P2P 入站消息写入失败', {
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -131,7 +133,7 @@ export async function broadcastLocalMessage(msg: SyncMessage): Promise<void> {
     await sync.broadcastNewMessage(msg);
   } catch (err) {
     logger.warn('P2P 出站广播失败', {
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       error: err instanceof Error ? err.message : String(err),
     });
   }

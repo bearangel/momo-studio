@@ -8,23 +8,23 @@
 //     所有副作用（startTask / transitionTaskStatus / 新建 room）由 IPC handler 层
 //     根据 resolution.action 执行。这样便于单元测试，也避免在 resolver 内做 IO
 //     导致重复测试 Matrix 客户端 mock。
-//   - 策略从 room_settings.conflict_strategy 读取（每会话配置，由调用方注入 ctx.strategy）。
+//   - 策略从 sessions.settings_json 的 conflictStrategy 读取（每会话配置，由调用方注入 ctx.strategy）。
 //     默认 'ask'（弹 ConflictDialog 让用户选）。
-//   - fork 分支返回**占位 newExecutionRoomId**（!fork-<timestamp>:home）——
+//   - fork 分支返回**占位 newExecutionSessionId**（!fork-<timestamp>:home）——
 //     IPC handler 拿到后会调用 startTask(newTask, { createNewRoom: true }) 实际创建
-//     新会话并把 newExecutionRoomId 替换为真实 room id（详见 ipc.handlers.ts）。
+//     新会话并把 newExecutionSessionId 替换为真实 room id（详见 ipc.handlers.ts）。
 //
 // 5 策略语义：
 //   ask    → 返回 ask，UI 弹窗让用户选（默认值）
 //   queue  → newTask 保持 assigned，等当前任务完成后调度器自动 pickup（D 阶段 pickup 机制）
-//   preempt→ 暂停当前任务（→ paused）+ 立即 startTask(newTask, { executionRoomId: currentRoomId })
+//   preempt→ 暂停当前任务（→ paused）+ 立即 startTask(newTask, { executionSessionId: currentRoomId })
 //   fork   → startTask(newTask, { createNewRoom: true })，新任务在新会话执行，当前任务不受影响
 //   reject → 拒绝新任务（用户需改换会话或在别处启动）
 
-/** 冲突处理策略：room_settings.conflict_strategy 与 agent_definitions.default_conflict_strategy 同语义 */
+/** 冲突处理策略：sessions.settings_json 的 conflictStrategy 与 agent_definitions.default_conflict_strategy 同语义 */
 export type ConflictStrategy = 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
 
-/** 冲突上下文：调用方（IPC handler / runtime-entry）从 room_settings 读取策略后注入 */
+/** 冲突上下文：调用方（IPC handler / runtime-entry）从 sessions.settings_json 读取策略后注入 */
 export interface ConflictContext {
   /** 想启动的新任务 id */
   newTaskId: string;
@@ -32,7 +32,7 @@ export interface ConflictContext {
   currentTaskId: string;
   /** 当前会话 id */
   currentRoomId: string;
-  /** 冲突处理策略（从 room_settings 读取，未配置时调用方应传 'ask'） */
+  /** 冲突处理策略（从 sessions.settings_json 读取，未配置时调用方应传 'ask'） */
   strategy: ConflictStrategy;
 }
 
@@ -47,7 +47,7 @@ export interface ConflictContext {
 export type ConflictResolution =
   | { action: 'queue'; newTaskId: string }
   | { action: 'preempt'; newTaskId: string; pausedTaskId: string }
-  | { action: 'fork'; newTaskId: string; newExecutionRoomId: string }
+  | { action: 'fork'; newTaskId: string; newExecutionSessionId: string }
   | { action: 'reject'; reason: string }
   | { action: 'ask' };
 
@@ -55,7 +55,7 @@ export type ConflictResolution =
  * 纯函数：根据 strategy 决定如何处理冲突。
  *
  * 调用方约定：
- *   - runtime-entry 检测到冲突 → 读 room_settings.conflict_strategy → strategy='ask' 时
+ *   - runtime-entry 检测到冲突 → 读 sessions.settings_json 的 conflictStrategy → strategy='ask' 时
  *     通知 renderer 弹 ConflictDialog；非 ask 时直接调 task:resolveConflict 执行
  *   - task:resolveConflict handler 内再次调用本函数得到 resolution，按 action 执行副作用
  *
@@ -70,7 +70,7 @@ export function resolveConflict(ctx: ConflictContext): ConflictResolution {
 
     case 'preempt':
       // IPC handler 负责：transitionTaskStatus(currentTaskId, 'paused') +
-      // startTask(newTaskId, { executionRoomId: currentRoomId })
+      // startTask(newTaskId, { executionSessionId: currentRoomId })
       return {
         action: 'preempt',
         newTaskId: ctx.newTaskId,
@@ -78,13 +78,13 @@ export function resolveConflict(ctx: ConflictContext): ConflictResolution {
       };
 
     case 'fork':
-      // 占位 newExecutionRoomId——IPC handler 拿到后调 startTask(newTaskId, { createNewRoom: true })
-      // 创建真实新会话，startTask 返回的 executionRoomId 才是最终值。
+      // 占位 newExecutionSessionId——IPC handler 拿到后调 startTask(newTaskId, { createNewRoom: true })
+      // 创建真实新会话，startTask 返回的 executionSessionId 才是最终值。
       // 这里返回占位 ID 仅用于让 resolution 结构完整（测试可断言字段存在），不直接使用。
       return {
         action: 'fork',
         newTaskId: ctx.newTaskId,
-        newExecutionRoomId: `!fork-${Date.now()}:home`,
+        newExecutionSessionId: `!fork-${Date.now()}:home`,
       };
 
     case 'reject':

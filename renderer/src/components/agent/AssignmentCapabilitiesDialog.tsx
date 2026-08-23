@@ -123,7 +123,7 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
       const ws = await ipc.workspace.get(assignment.workspaceId);
       await stopAgent(assignment.instanceId);
       if (ws) {
-        await startAgent(assignment, ws.id, ws.teamRoomId);
+        await startAgent(assignment, ws.id);
       }
       onClose();
     } catch (err) {

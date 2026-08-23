@@ -7,25 +7,13 @@ export interface SystemInfo {
   userDataDir: string;
 }
 
-export interface ConduitStatus {
-  running: boolean;
-  baseUrl: string | null;
-  port: number | null;
-}
-
-export interface AuthResult {
-  userId: string;
-  deviceId: string;
-}
-
 export interface Workspace {
   id: string;
   name: string;
   description: string;
   directoryPath: string;
-  matrixSpaceId: string;
-  /** workspace 内"团队群" room ID（用户 + agent bot 交流房间），004 迁移引入 */
-  teamRoomId: string;
+  /** workspace 内"团队会话" ID（用户 + agent bot 交流会话），004 迁移引入；v23 更名 */
+  teamSessionId: string;
   gitInitialized: boolean;
   createdAt: string;
   ownerId: string;
@@ -70,7 +58,7 @@ export interface AgentAssignment {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
-  botMatrixUserId: string;
+  agentUserId: string;
   enabled: boolean;
   createdAt: string;
   /** 角色（在 assignment 级而非 definition 级） */
@@ -81,7 +69,7 @@ export interface AgentAssignment {
   hasApiKeyOverride: boolean;
   /**
    * UI 展示用的 agent 名称（可选，由 main process 在 listAssignments 时 join 注入）。
-   * 缺失时回退到 botMatrixUserId。Mention 菜单 / TaskChip 优先用此字段。
+   * 缺失时回退到 agentUserId。Mention 菜单 / TaskChip 优先用此字段。
    */
   agentName?: string;
   /** v2 修复：用户最近运行意图（true=在线/false=离线）。
@@ -124,10 +112,10 @@ export interface TaskRow {
   title: string;
   description: string;
   status: TaskStatus;
-  sourceRoomId: string | null;
+  sourceSessionId: string | null;
   sourceMessageId: string | null;
   creatorUserId: string;
-  executionRoomId: string | null;
+  executionSessionId: string | null;
   assigneeAgentId: string | null;
   priority: number;
   scheduledAt: number | null;
@@ -167,7 +155,7 @@ export interface TaskApiSurface {
     title: string;
     description?: string;
     priority?: number;
-    sourceRoomId?: string | null;
+    sourceSessionId?: string | null;
     sourceMessageId?: string | null;
     assigneeAgentId?: string | null;
     scheduledAt?: number | null;
@@ -177,8 +165,8 @@ export interface TaskApiSurface {
     workspaceId?: string;
     status?: TaskStatus | TaskStatus[];
     assigneeAgentId?: string;
-    executionRoomId?: string;
-    sourceRoomId?: string;
+    executionSessionId?: string;
+    sourceSessionId?: string;
     orderBy?: 'priority' | 'scheduled_at' | 'created_at';
     limit?: number;
   }): Promise<TaskRow[]>;
@@ -189,9 +177,9 @@ export interface TaskApiSurface {
     to: TaskStatus,
     extraPatch?: Partial<Omit<TaskRow, 'id' | 'createdAt'>>,
   ): Promise<TaskRow>;
-  /** B8 实现：拉起 execution room + transition 到 in_progress */
-  start(id: string, opts: { executionRoomId?: string; createNewRoom?: boolean }): Promise<{
-    executionRoomId: string;
+  /** B8 实现：拉起 execution session + transition 到 in_progress */
+  start(id: string, opts: { executionSessionId?: string; createNewRoom?: boolean }): Promise<{
+    executionSessionId: string;
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
@@ -204,7 +192,7 @@ export interface TaskApiSurface {
   }): Promise<
     | { action: 'queue'; newTaskId: string }
     | { action: 'preempt'; newTaskId: string; pausedTaskId: string }
-    | { action: 'fork'; newTaskId: string; newExecutionRoomId: string }
+    | { action: 'fork'; newTaskId: string; newExecutionSessionId: string }
     | { action: 'reject'; reason: string }
     | { action: 'ask' }
   >;
@@ -213,7 +201,6 @@ export interface TaskApiSurface {
 export interface StartAgentInput {
   assignment: AgentAssignment;
   workspaceId: string;
-  teamRoomId: string;
 }
 
 /** agent:addToWorkspace 入参 — UI "添加 agent" 一键编排入口 */
@@ -251,7 +238,7 @@ export interface AssignMainInput {
  */
 export interface ImMessage {
   id: string; // SQLite messages.id（UUID）
-  roomId: string;
+  sessionId: string;
   sender: string;
   body: string;
   eventType: string;
@@ -261,27 +248,10 @@ export interface ImMessage {
   segmentIndex: number | null;
   status: 'streaming' | 'done' | 'failed' | 'aborted';
   source: 'local' | 'lan' | 'hub' | 'matrix';
-  matrixEventId: string | null;
   workspaceId: string | null;
   taskId: string | null;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface ImRoomInfo {
-  roomId: string;
-  name: string;
-  isSystem?: boolean;
-}
-
-/** 房间成员（含身份标识） */
-export interface RoomMember {
-  userId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  powerLevel: number;
-  isBot: boolean;
-  isLocalUser: boolean;
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
@@ -435,8 +405,8 @@ export interface GlobalSettings {
   maxToolCalls: number;
 }
 
-/** 房间级会话配置（v1.4 + B9），与 electron 端 RoomSettings 对齐 */
-export interface RoomSettings {
+/** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
+export interface SessionSettings {
   /** NULL=继承全局 */
   maxToolCalls: number | null;
   /** 任务冲突策略（migration v19 加列，默认 'ask'） */
@@ -558,8 +528,10 @@ export type StreamChunk =
   | {
       type: 'start';
       streamSessionId: string;
-      roomId: string;
-      botUserId: string;
+      /** Task 6 字段迁移：原 roomId。会话 ID（与 electron 端 stream-chunk.ts 对齐）。 */
+      sessionId: string;
+      /** Task 6 字段迁移：原 botUserId。发送方 agent 标识（值仍为 bot 的 Matrix userId）。 */
+      senderAgentId: string;
       /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
       parentStreamSessionId?: string;
       /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
@@ -600,7 +572,8 @@ export type StreamChunk =
       /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
       type: 'todo_update';
       streamSessionId: string;
-      roomId: string;
+      /** Task 6 字段迁移：原 roomId。会话 ID（与 start.sessionId 同值语义）。 */
+      sessionId: string;
       /** 完整任务列表（覆盖式）；空数组 = 清空 */
       todos: TodoItem[];
       /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
@@ -654,21 +627,118 @@ export interface MessageEventRow {
   createdAt: number;
 }
 
-/** MessageEventRow[] 批量推送（IPC 通道 im:message_event_batch） */
+/** MessageEventRow[] 批量推送（IPC 通道 session:message_event_batch） */
 export type MessageEventBatch = MessageEventRow[];
 
+/**
+ * v2.0 P1 会话内核：会话类型。chat=普通会话；task_execution=任务执行会话。
+ * 与 electron 端 storage/sessions/repo.ts 的 SessionRow['kind'] 对齐。
+ */
+export type SessionKind = 'chat' | 'task_execution';
+
+/**
+ * v2.0 P1 会话内核：sessions 表行（renderer 镜像）。
+ * 与 electron 端 storage/sessions/repo.ts 的 SessionRow 对齐（跨进程独立定义，仅结构对齐）。
+ */
+export interface SessionRow {
+  id: string;
+  workspaceId: string;
+  title: string;
+  kind: SessionKind;
+  /** 会话级设置（maxToolCalls / conflictStrategy）的 JSON 序列化；null=未配置 */
+  settingsJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** 最后消息时间戳（会话列表排序键）；null=尚无消息 */
+  lastMessageAt: number | null;
+}
+
+/**
+ * v2.0 P1 会话内核：会话成员信息（三表 JOIN 产物）。
+ * 与 electron 端 im/session-ops.ts 的 SessionMemberInfo 对齐。
+ */
+export interface SessionMemberInfo {
+  assignmentId: string;
+  agentName: string;
+  iconEmoji: string;
+  role: AgentRole;
+  /** 用户最近运行意图（true=在线） */
+  lastRunning: boolean;
+  /** 该成员是否为会话所属 workspace 的协调 agent */
+  isCoordinator: boolean;
+}
+
+/**
+ * v2.0 P1 会话内核：会话列表项（含成员）。
+ * 与 electron 端 im/session-ops.ts 的 SessionSummary 对齐。
+ */
+export interface SessionSummary {
+  id: string;
+  workspaceId: string;
+  title: string;
+  kind: SessionKind;
+  lastMessageAt: number | null;
+  members: SessionMemberInfo[];
+}
+
+/**
+ * v2.0 P1 Task 8：session: 命名空间 IPC 契约（会话内核，纯 SQLite 无 Matrix）。
+ *
+ * invoke 通道 9 个（session.ipc.handlers.ts）：
+ *   list / get / create / rename / delete / send / getMessages / loadOlder / exportMessages
+ * 推送通道 2 个：
+ *   session:message             消息行实时推送（载荷 ImMessage）
+ *   session:message_event_batch 流式 events 批量推送（MessageEventBuffer flush）
+ */
+export interface SessionApiSurface {
+  /** 会话列表（含成员）。workspaceId 缺省 = 全部 workspace */
+  list(workspaceId?: string): Promise<SessionSummary[]>;
+  /** 单会话详情。会话不存在时 invoke 抛错 */
+  get(sessionId: string): Promise<{ session: SessionRow; members: SessionMemberInfo[] }>;
+  /** 创建会话（事务写入成员；FK 不合法整笔回滚） */
+  create(input: {
+    workspaceId: string;
+    title: string;
+    memberAssignmentIds?: string[];
+    kind?: SessionKind;
+  }): Promise<SessionRow>;
+  /** 重命名会话 */
+  rename(sessionId: string, title: string): Promise<{ ok: true }>;
+  /** 解散会话。团队会话（随 workspace 生命周期）时 invoke 抛错 */
+  delete(sessionId: string): Promise<{ ok: true }>;
+  /** 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent */
+  send(sessionId: string, body: string, mentionedAssignmentIds?: string[]): Promise<void>;
+  /**
+   * 历史读取：messages + 每条 message 的 events，
+   * renderer 用 stream-aggregator 重建 StreamState。
+   */
+  getMessages(
+    sessionId: string,
+  ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+  /**
+   * 向前翻页：返回 created_at < beforeTs 的消息。
+   * beforeTs 由调用方从当前可见消息的最小 createdAt 推导；count 默认 30。
+   */
+  loadOlder(
+    sessionId: string,
+    beforeTs: number,
+    count?: number,
+  ): Promise<{
+    messages: ImMessage[];
+    eventsByMessage: Record<string, MessageEventRow[]>;
+    hasMore: boolean;
+  }>;
+  /** 导出会话最近 limit 条消息为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载 */
+  exportMessages(sessionId: string, limit: number): Promise<{ filename: string; content: string }>;
+  /** 订阅消息行实时推送（session:message） */
+  onMessage(callback: (msg: ImMessage) => void): () => void;
+  /** 订阅流式 events 批量推送（session:message_event_batch，MessageEventBuffer flush 时触发） */
+  onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
+}
+
 export interface ApiSurface {
-  auth: {
-    register(opts: { username: string; password: string }): Promise<AuthResult>;
-    login(opts: { username: string; password: string }): Promise<AuthResult>;
-    getCurrentUser(): Promise<AuthResult | null>;
-    logout(): Promise<void>;
-    /** v1.5.7: token 失效时主进程通知 renderer 跳转登录页 */
-    onSessionExpired(callback: (reason: string) => void): () => void;
-  };
   system: {
     getInfo(): Promise<SystemInfo>;
-    getConduitStatus(): Promise<ConduitStatus>;
   };
   workspace: {
     create(input: CreateWorkspaceInput): Promise<Workspace>;
@@ -758,8 +828,8 @@ export interface ApiSurface {
     onRuntimeChanged(callback: () => void): () => void;
     /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
     onStream(callback: (chunk: StreamChunk) => void): () => void;
-    /** v1.4：中断指定房间的活跃流式会话 */
-    abortStream(roomId: string): Promise<void>;
+    /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
+    abortStream(streamSessionId: string): Promise<void>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;
@@ -771,49 +841,11 @@ export interface ApiSurface {
     testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
     getApiKey(id: string): Promise<string | null>;
   };
+  /**
+   * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
+   * 仅保留 im:conflict 推送订阅（发送方主进程 session-service；通道名留待 P2 收敛）。
+   */
   im: {
-    startSync(): Promise<void>;
-    send(roomId: string, body: string): Promise<void>;
-    sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
-    /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
-    getRooms(workspaceId?: string): Promise<ImRoomInfo[]>;
-    /**
-     * A 子系统：从 SQLite 拉 messages + 每条 message 的 events，
-     * renderer 用 stream-aggregator 重建 StreamState。
-     */
-    getMessages(
-      roomId: string,
-    ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
-    /**
-     * 向前翻页：返回 SQLite 里 created_at < beforeTs 的消息。
-     * beforeTs 由调用方从当前可见消息的最小 createdAt 推导。
-     */
-    loadOlderMessages(
-      roomId: string,
-      beforeTs: number,
-      count?: number,
-    ): Promise<{
-      messages: ImMessage[];
-      eventsByMessage: Record<string, MessageEventRow[]>;
-      hasMore: boolean;
-    }>;
-    /** 拉取单条 message 的全部 events（按 seq 升序） */
-    getMessageEvents(messageId: string): Promise<MessageEventRow[]>;
-    createRoom(input: {
-      name: string;
-      isDirect: boolean;
-      inviteUserIds: string[];
-      /** 把新建房间加入此 workspace 的 Space（让其在此 workspace 内可见） */
-      workspaceId?: string;
-    }): Promise<{ roomId: string }>;
-    renameRoom(roomId: string, name: string): Promise<{ ok: boolean }>;
-    dissolveRoom(roomId: string): Promise<{ dissolved: boolean }>;
-    getMembers(roomId: string): Promise<RoomMember[]>;
-    /** 导出指定房间最近 limit 条会话为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载。 */
-    exportRoomMessages(roomId: string, limit: number): Promise<{ filename: string; content: string }>;
-    onMessage(callback: (msg: ImMessage) => void): () => void;
-    /** A 子系统：订阅 stream chunk 批量推送（主进程 MessageEventBuffer flush 时触发） */
-    onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
     /** B 子系统：订阅任务冲突检测推送（execution_room 内 mention 另一个任务时触发） */
     onConflict(
       callback: (conflict: {
@@ -823,6 +855,10 @@ export interface ApiSurface {
       }) => void,
     ): () => void;
   };
+  /**
+   * v2.0 P1 Task 8：会话内核命名空间（session.ipc.handlers.ts）。
+   */
+  session: SessionApiSurface;
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
     register(config: McpServerConfig): Promise<void>;
@@ -867,10 +903,10 @@ export interface ApiSurface {
     getGlobal(): Promise<GlobalSettings>;
     /** 部分更新全局配置，返回更新后的完整配置 */
     updateGlobal(patch: Partial<GlobalSettings>): Promise<GlobalSettings>;
-    /** 读取房间级配置（不存在返回 null 字段） */
-    getRoom(roomId: string): Promise<RoomSettings>;
-    /** 部分更新房间级配置，返回更新后的完整配置 */
-    updateRoom(roomId: string, patch: Partial<RoomSettings>): Promise<RoomSettings>;
+    /** 读取会话级配置（不存在返回 null 字段） */
+    getSession(sessionId: string): Promise<SessionSettings>;
+    /** 部分更新会话级配置，返回更新后的完整配置 */
+    updateSession(sessionId: string, patch: Partial<SessionSettings>): Promise<SessionSettings>;
   };
   skill: {
     /**

@@ -15,7 +15,8 @@ import type { TaskRow } from '../storage/tasks/repo';
 const TASK_MENTION_REGEX = /(?:^|\s)#(T-\d+)(?=\s|$)/g;
 
 export interface ConflictDeps {
-  findInProgressTaskByRoom: (roomId: string) => TaskRow | null;
+  /** 按执行会话查 in_progress 任务（Task 2 起 tasks.execution_session_id） */
+  findInProgressTaskByRoom: (sessionId: string) => TaskRow | null;
   getTask: (id: string) => TaskRow | null;
 }
 
@@ -46,18 +47,18 @@ export function parseTaskMentions(body: string): string[] {
  * 检测消息是否触发任务冲突。
  *
  * 条件（全部满足才返回非 null）：
- *   1. 当前房间是某 in_progress 任务的 execution_room
+ *   1. 当前会话是某 in_progress 任务的 execution_session
  *   2. 消息正文含至少一个可解析的 #T-xxx mention（getTask 能查到）
  *   3. mentioned task != 当前 in_progress task
  *
  * 多个 mention 时取第一个满足条件 2+3 的。
  */
 export function detectConflict(
-  roomId: string,
+  sessionId: string,
   body: string,
   deps: ConflictDeps,
 ): ConflictDetectionResult | null {
-  const currentTask = deps.findInProgressTaskByRoom(roomId);
+  const currentTask = deps.findInProgressTaskByRoom(sessionId);
   if (!currentTask) return null;
 
   for (const refId of parseTaskMentions(body)) {
@@ -67,7 +68,7 @@ export function detectConflict(
       return {
         newTaskId: mentioned.id,
         currentTaskId: currentTask.id,
-        currentRoomId: roomId,
+        currentRoomId: sessionId,
       };
     }
   }

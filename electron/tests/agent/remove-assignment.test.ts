@@ -1,8 +1,7 @@
-// removeAgentAssignment：删除 agent 时应让 bot 离开所有房间 + 清理 token + 清空悬空 coordinator
+// removeAgentAssignment：删除 agent 时清理 keychain override + 清空悬空 coordinator
 //
-// v1.5.8：
-//   - 主路径用 owner client kick（不依赖 bot token），fallback 才用 bot 自己 leave
-//   - 删 sub 时重启父 main agent 让其 subAgents 重建（否则 dispatch_to 不匹配 → sub 无响应）
+// v2（Task 10）：agent 无 Matrix 身份——不再离房 / 不删 bot token。
+// v1.5.8：删 sub 时重启父 main agent 让其 subAgents 重建（否则 dispatch 目标失配 → sub 无响应）
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -31,7 +30,7 @@ const mocks = vi.hoisted(() => {
     allReturn: [] as unknown[],
     // db.prepare().get 的返回（控制 SELECT row）
     getReturn: {
-      bot_matrix_user_id: '@bot:localhost',
+      agent_user_id: '@bot:localhost',
       workspace_id: 'ws-1',
       role: 'main',
       parent_instance_id: null,
@@ -58,29 +57,18 @@ vi.mock('../../src/main/storage/db', () => ({
   runMigrations: vi.fn(),
   closeDb: vi.fn(),
 }));
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  stopAgent: mocks.stopAgentMock,
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: mocks.isAgentRunningMock,
-  spawnAgent: mocks.spawnAgentMock,
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   startAgentRuntime: (opts: unknown) => mocks.spawnAgentMock(opts),
-  // I1 修复后 restartMainForSubChange 改用 stopAgentRuntime；委托 stopAgentMock 保持断言语义
+  // restartMainForSubChange 用 stopAgentRuntime；委托 stopAgentMock 保持断言语义
   stopAgentRuntime: async (id: string) => mocks.stopAgentMock(id),
 }));
 vi.mock('../../src/main/agent/crud', () => ({
   listAssignments: mocks.listAssignmentsMock,
   listSubAssignments: mocks.listSubAssignmentsMock,
   getAgentDefinition: mocks.getAgentDefinitionMock,
-}));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: vi.fn(() => ({ leave: mocks.leaveMock })),
-}));
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  getSyncingClient: vi.fn(() => ({
-    getRooms: () => mocks.rooms,
-    kick: mocks.kickMock,
-  })),
 }));
 vi.mock('../../src/main/storage/keychain', () => ({
   getSecret: mocks.getSecretMock,
@@ -97,7 +85,6 @@ vi.mock('../../src/main/agent/spawn-helpers', () => ({
   resolveApiKey: mocks.resolveApiKeyMock,
   HOMESERVER_URL: 'http://127.0.0.1:8008',
 }));
-vi.mock('../../src/main/matrix/session', () => ({ getOwnerMatrixClient: vi.fn(), getCurrentUserId: vi.fn(() => '@o:localhost') }));
 vi.mock('../../src/main/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 import { removeAgentAssignment } from '../../src/main/agent/ipc.handlers';
@@ -124,7 +111,7 @@ beforeEach(() => {
   mocks.getSecretMock.mockResolvedValue('bot-token');
   mocks.allReturn = [];
   mocks.getReturn = {
-    bot_matrix_user_id: '@bot:localhost',
+    agent_user_id: '@bot:localhost',
     workspace_id: 'ws-1',
     role: 'main',
     parent_instance_id: null,
@@ -133,31 +120,13 @@ beforeEach(() => {
 
 describe('removeAgentAssignment', () => {
 
-  it('v1.5.8：用 owner client kick bot 离开它已加入的全部房间（不调 bot leave）', async () => {
+  it('v2（Task 10）：不做任何 Matrix 清理（无 kick / 无 leave / 不删 bot token）', async () => {
     await removeAgentAssignment('inst-1');
-    expect(mocks.kickMock).toHaveBeenCalledTimes(2);
-    const kickedRooms = mocks.kickMock.mock.calls.map((c) => c[0]);
-    expect(kickedRooms).toEqual(expect.arrayContaining(['!team:localhost', '!other:localhost']));
-    expect(kickedRooms).not.toContain('!nope:localhost');
+    expect(mocks.kickMock).not.toHaveBeenCalled();
     expect(mocks.leaveMock).not.toHaveBeenCalled();
-  });
-
-  it('owner kick 失败时 fallback 到 bot 自己 leave', async () => {
-    mocks.kickMock.mockRejectedValue(new Error('M_FORBIDDEN: insufficient power'));
-    await removeAgentAssignment('inst-1');
-    expect(mocks.leaveMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('owner kick 失败且 bot token 丢失 → 不调 leave', async () => {
-    mocks.kickMock.mockRejectedValue(new Error('M_FORBIDDEN'));
-    mocks.getSecretMock.mockResolvedValueOnce(null);
-    await removeAgentAssignment('inst-1');
-    expect(mocks.leaveMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('删除 bot token', async () => {
-    await removeAgentAssignment('inst-1');
-    expect(mocks.deleteSecretMock).toHaveBeenCalledWith('bot.@bot:localhost.matrix_token');
+    expect(mocks.deleteSecretMock).not.toHaveBeenCalledWith('bot.@bot:localhost.matrix_token');
+    // API key override 仍清理
+    expect(mocks.deleteSecretMock).toHaveBeenCalledWith('agent.inst-1.api_key_override');
   });
 
   it('被删实例是协调 agent 时清空 coordinatorInstanceId', async () => {
@@ -176,7 +145,7 @@ describe('removeAgentAssignment', () => {
 describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
   beforeEach(() => {
     mocks.getReturn = {
-      bot_matrix_user_id: '@sub-bot:localhost',
+      agent_user_id: '@sub-bot:localhost',
       workspace_id: 'ws-1',
       role: 'sub',
       parent_instance_id: 'main-inst-1',
@@ -188,7 +157,7 @@ describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
     mocks.listAssignmentsMock.mockReturnValue([{
       instanceId: 'main-inst-1',
       agentDefinitionId: 'def-main',
-      botMatrixUserId: '@main-bot:localhost',
+      agentUserId: '@main-bot:localhost',
       workspaceId: 'ws-1',
       role: 'main',
     }]);
@@ -213,7 +182,7 @@ describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
 
   it('删 main 不触发 main 重启（即使级联删 subs，subs 的 parent 已停）', async () => {
     mocks.getReturn = {
-      bot_matrix_user_id: '@main-bot:localhost',
+      agent_user_id: '@main-bot:localhost',
       workspace_id: 'ws-1',
       role: 'main',
       parent_instance_id: null,

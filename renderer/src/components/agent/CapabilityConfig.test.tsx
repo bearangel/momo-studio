@@ -67,7 +67,7 @@ function buildAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignm
     instanceId: 'inst-1',
     workspaceId: 'ws-1',
     agentDefinitionId: 'def-1',
-    botMatrixUserId: '@bot:server',
+    agentUserId: '@bot:server',
     enabled: true,
     createdAt: '',
     role: 'standalone',

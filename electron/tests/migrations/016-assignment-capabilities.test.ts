@@ -7,34 +7,41 @@
 //   4. builtin agent_definitions 的 default_tools 强制写为 24 工具 JSON
 //   5. cascade delete：assignment 删除时 delta 自动清理
 //
-// DB 隔离沿用仓库既定模式（参考 013/015 测试）：
-//   - process.env.AP_USER_DATA_DIR 指向临时目录
-//   - getDb() 单例 + foreign_keys = ON（cascade 依赖此 PRAGMA）
-//   - closeDb() 在 afterEach 复位单例
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { BUILTIN_DEFAULT_TOOLS_JSON } from '../../src/main/storage/migrations';
+// 注意：v23 会 RENAME workspaces.matrix_space_id 和 agent_assignments.bot_matrix_user_id。
+// 故本测试只 apply 到 v16（applyUpToVersion(16)），不复用 012 之前用
+// runMigrations() + getDb() 单例的写法——后者会把 v23 也跑掉，破坏本测试 INSERT 断言。
+// 模式参照 012-agent-role-separation.test.ts。
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import Database from 'better-sqlite3';
+import type { Database as DB } from 'better-sqlite3';
+import { loadMigrations, BUILTIN_DEFAULT_TOOLS_JSON } from '../../src/main/storage/migrations';
 
-const tmpRoot = path.join(os.tmpdir(), `ap-mig16-test-${Date.now()}`);
+let db: DB;
 
-beforeEach(() => {
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  process.env.AP_USER_DATA_DIR = tmpRoot;
-  runMigrations();
+beforeAll(() => {
+  db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  );
+  const markApplied = db.prepare(
+    'INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)',
+  );
+  for (const m of loadMigrations().filter((m) => m.version <= 16)) {
+    db.exec(m.sql);
+    markApplied.run(m.version);
+  }
 });
 
-afterEach(() => {
-  closeDb();
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  delete process.env.AP_USER_DATA_DIR;
+afterAll(() => {
+  db.close();
 });
 
 describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 + builtin 修复', () => {
   it('创建 agent_assignment_capabilities 表，含 CASCADE 外键', () => {
-    const db = getDb();
     const info = db
       .prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_assignment_capabilities'",
@@ -48,7 +55,6 @@ describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 
   });
 
   it('mcp_definitions 加 source 列，默认 marketplace', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(mcp_definitions)').all() as Array<{
       name: string;
     }>;
@@ -64,7 +70,6 @@ describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 
   });
 
   it('mcp_definitions 加 installed_at 列', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(mcp_definitions)').all() as Array<{
       name: string;
     }>;
@@ -72,7 +77,6 @@ describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 
   });
 
   it('v16 builtin 修复：default_tools 写为 24 工具 JSON', () => {
-    const db = getDb();
     // 模拟 v1.5 旧数据：builtin def 的 default_tools 只有空数组
     db.prepare(
       `INSERT INTO agent_definitions
@@ -80,7 +84,7 @@ describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run('builtin-test', '测试', 'test', '1.0.0', 'declarative', 'prompt', '[]', 'builtin', 'm');
 
-    // migration 在 beforeEach 已执行，但当时表中无 builtin 数据，UPDATE 未命中任何行。
+    // migration 在 beforeAll 已执行，但当时表中无 builtin 数据，UPDATE 未命中任何行。
     // 此处手动执行与 v16 migration 完全相同的 UPDATE（使用同一个导出常量），
     // 验证 SQL 语句 + BUILTIN_DEFAULT_TOOLS_JSON 常量在真实数据上的正确性。
     db.prepare("UPDATE agent_definitions SET default_tools = ? WHERE source = 'builtin'").run(
@@ -97,7 +101,6 @@ describe('migration v16: agent_assignment_capabilities + mcp_definitions 扩展 
   });
 
   it('cascade delete：assignment 删除时 delta 自动清理', () => {
-    const db = getDb();
     // 外键约束要求 agent_definitions + workspaces + agent_assignments 都存在
     db.prepare(
       `INSERT INTO agent_definitions

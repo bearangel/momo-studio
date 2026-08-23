@@ -42,7 +42,7 @@ describe('conflict-resolver', () => {
     if (r.action === 'fork') {
       expect(r.newTaskId).toBe('T-002');
       // 新 room id（Matrix 格式以 '!' 开头）
-      expect(r.newExecutionRoomId).toMatch(/^!/);
+      expect(r.newExecutionSessionId).toMatch(/^!/);
     }
   });
 

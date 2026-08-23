@@ -362,8 +362,8 @@ describe('agent/builtin-tools getVirtualToolDefs（skill 渐进式披露）', ()
 describe('agent/builtin-tools getDispatchToolDefs（主→子调度工具）', () => {
   it('为每个 sub agent 生成一个 dispatch:<slug> 工具', () => {
     const subs = [
-      { slug: 'coder', botUserId: '@coder.bot:localhost', description: '写代码' },
-      { slug: 'reviewer', botUserId: '@reviewer.bot:localhost', description: '代码审查' },
+      { slug: 'coder', assignmentId: 'inst-coder', description: '写代码' },
+      { slug: 'reviewer', assignmentId: 'inst-reviewer', description: '代码审查' },
     ];
     const defs = getDispatchToolDefs(subs);
     expect(defs.map((d) => d.name)).toEqual(['dispatch:coder', 'dispatch:reviewer']);
@@ -373,7 +373,7 @@ describe('agent/builtin-tools getDispatchToolDefs（主→子调度工具）', (
 
   it('sub 描述为空时回退到通用描述', () => {
     const defs = getDispatchToolDefs([
-      { slug: 'worker', botUserId: '@worker.bot:localhost', description: '' },
+      { slug: 'worker', assignmentId: 'inst-worker', description: '' },
     ]);
     expect(defs[0]!.description).toBe('调度子 agent: worker');
   });

@@ -88,7 +88,7 @@ function buildAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignm
     instanceId: 'inst-1',
     workspaceId: 'ws-1',
     agentDefinitionId: 'def-1',
-    botMatrixUserId: '@bot:server',
+    agentUserId: '@bot:server',
     enabled: true,
     createdAt: '',
     role: 'standalone',
@@ -314,8 +314,7 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
       name: 'WS',
       description: '',
       directoryPath: '/tmp',
-      matrixSpaceId: '!space:server',
-      teamRoomId: '!team:server',
+      teamSessionId: '!team:server',
       gitInitialized: true,
       createdAt: '',
       ownerId: 'u',
@@ -346,11 +345,10 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
     await waitFor(() => {
       expect(startAgentMock).toHaveBeenCalledTimes(1);
     });
-    // startAgent 收到 assignment + wsId + teamRoomId
+    // startAgent 收到 assignment + wsId（v2 Task 10：teamRoomId 已从 IPC 入参移除）
     const startArgs = startAgentMock.mock.calls[0]!;
     expect(startArgs[0]?.instanceId).toBe('inst-1');
     expect(startArgs[1]).toBe('ws-1');
-    expect(startArgs[2]).toBe('!team:server');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

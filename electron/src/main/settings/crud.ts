@@ -1,9 +1,11 @@
 // electron/src/main/settings/crud.ts
 //
-// 全局/房间级会话配置的 CRUD + 优先级解析。
-// 全局配置存 kv_store（key='global_settings'，value=JSON），房间配置存 room_settings 表。
+// 全局/会话级配置的 CRUD + 优先级解析。
+// 全局配置存 kv_store（key='global_settings'，value=JSON）；
+// 会话级配置存 sessions.settings_json（v23 起取代 v1 的房间级设置表，读写经 sessions repo 转调）。
 
 import { getDb } from '../storage/db';
+import { getSessionSettings } from '../storage/sessions/repo';
 
 /** 全局会话配置 */
 export interface GlobalSettings {
@@ -11,24 +13,13 @@ export interface GlobalSettings {
   maxToolCalls: number;
 }
 
-/**
- * 房间级会话配置（v1.4 + B9）。
- *   - maxToolCalls：NULL=继承全局
- *   - conflictStrategy：任务冲突策略（migration v19 加列，默认 'ask'）
- */
-export interface RoomSettings {
-  /** NULL=继承全局 */
-  maxToolCalls: number | null;
-  /**
-   * 任务冲突策略：当 agent 在已运行任务的房间里被 @ 时如何处理。
-   * migration v19 列默认值 'ask'，getRoomSettings 对未存在的房间行也返回 'ask'。
-   */
-  conflictStrategy: 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
-}
+// 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
+// 避免 crud 层重复一份 settings_json 解析逻辑。
+export { getSessionSettings, updateSessionSettings } from '../storage/sessions/repo';
+export type { SessionSettings } from '../storage/sessions/repo';
 
 const GLOBAL_KEY = 'global_settings';
 const DEFAULT_MAX_TOOL_CALLS = 10;
-const DEFAULT_CONFLICT_STRATEGY = 'ask' as const;
 
 /** 读取全局配置；不存在时返回默认值 */
 export function getGlobalSettings(): GlobalSettings {
@@ -54,41 +45,12 @@ export function updateGlobalSettings(patch: Partial<GlobalSettings>): void {
   ).run(GLOBAL_KEY, JSON.stringify(merged));
 }
 
-/** 读取房间配置；不存在返回 null 字段 + 默认 conflictStrategy */
-export function getRoomSettings(roomId: string): RoomSettings {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT max_tool_calls, conflict_strategy FROM room_settings WHERE room_id = ?')
-    .get(roomId) as { max_tool_calls: number | null; conflict_strategy?: string } | undefined;
-  if (!row) {
-    return { maxToolCalls: null, conflictStrategy: DEFAULT_CONFLICT_STRATEGY };
-  }
-  const strategy = (row.conflict_strategy ?? DEFAULT_CONFLICT_STRATEGY) as RoomSettings['conflictStrategy'];
-  return {
-    maxToolCalls: row.max_tool_calls,
-    conflictStrategy: strategy,
-  };
-}
-
-/** 部分更新房间配置 */
-export function updateRoomSettings(roomId: string, patch: Partial<RoomSettings>): void {
-  const current = getRoomSettings(roomId);
-  const merged = { ...current, ...patch };
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO room_settings (room_id, max_tool_calls, conflict_strategy) VALUES (?, ?, ?)
-     ON CONFLICT(room_id) DO UPDATE SET
-       max_tool_calls = excluded.max_tool_calls,
-       conflict_strategy = excluded.conflict_strategy`,
-  ).run(roomId, merged.maxToolCalls, merged.conflictStrategy);
-}
-
 /**
- * 解析某房间的有效工具调用上限。
- * 优先级：room_settings.max_tool_calls → global_settings.maxToolCalls → 硬编码 10
+ * 解析某会话的有效工具调用上限。
+ * 优先级：sessions.settings_json 的 maxToolCalls → global_settings.maxToolCalls → 硬编码 10
  */
-export function resolveMaxToolCalls(roomId: string): number {
-  const room = getRoomSettings(roomId);
-  if (room.maxToolCalls !== null) return room.maxToolCalls;
+export function resolveMaxToolCalls(sessionId: string): number {
+  const session = getSessionSettings(sessionId);
+  if (session.maxToolCalls !== null) return session.maxToolCalls;
   return getGlobalSettings().maxToolCalls;
 }

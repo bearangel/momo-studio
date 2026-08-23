@@ -9,10 +9,6 @@ coverage/
 .vite/
 test-results/
 playwright-report/
-resources/conduit/conduit-*
-resources/conduit/static-*
-!resources/conduit/.gitignore
-!resources/conduit/download.ts
 .omo
 .pnpm-store
 .superpowers

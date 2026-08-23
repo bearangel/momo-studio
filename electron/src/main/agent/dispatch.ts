@@ -1,12 +1,14 @@
 // electron/src/main/agent/dispatch.ts
 //
-// Dispatch / Task Reply 消息类型 — 主子 agent 通过 Matrix 自定义事件
-// （io.momo-studio.dispatch / io.momo-studio.task_reply）传递任务调度指令与回执。
+// Dispatch / Task Reply 消息类型 — 主子 agent 的任务调度指令与回执。
+// v2（P1 Task 5）：经 child IPC 内部事件桥传输（事件类型名沿用 Matrix 命名）。
+// v2（Task 10）：dispatch_from / dispatch_to / reply_to 的值从 Matrix userId 改为
+// assignmentId——内容字段名保持不变（对路由层是透明字符串）。
 // 纯函数模块，不持有任何外部副作用，便于单测。
 
 import { randomUUID } from 'node:crypto';
 
-/** dispatch 消息内容（Matrix event type: io.momo-studio.dispatch） */
+/** dispatch 消息内容（v2 Task 10 起经内部事件桥传输）。dispatch_from/dispatch_to 的值是 assignmentId */
 export interface DispatchContent {
   body: string;
   task_id: string;
@@ -57,11 +59,11 @@ export function buildAbortDispatchMessage(opts: {
   };
 }
 
-/** 构造一条 dispatch 消息：自动生成 task_id（UUID v4） */
+/** 构造一条 dispatch 消息：自动生成 task_id（UUID v4）。from/to 均传 assignmentId */
 export function buildDispatchMessage(opts: {
   body: string;
-  fromBotUserId: string;
-  toBotUserId: string;
+  fromAssignmentId: string;
+  toAssignmentId: string;
   deadlineMs?: number;
   /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
   toolBudget?: number;
@@ -73,8 +75,8 @@ export function buildDispatchMessage(opts: {
     content: {
       body: opts.body,
       task_id: randomUUID(),
-      dispatch_from: opts.fromBotUserId,
-      dispatch_to: opts.toBotUserId,
+      dispatch_from: opts.fromAssignmentId,
+      dispatch_to: opts.toAssignmentId,
       deadline_ms: opts.deadlineMs,
       tool_budget: opts.toolBudget,
       tool_stream_session_id: opts.toolStreamSessionId,
@@ -90,7 +92,7 @@ export function buildTaskReply(opts: {
   progressPct?: number;
   /** v1.4：子 agent 报告本任务使用的工具调用次数 */
   toolCallsUsed?: number;
-  /** v2（I2 修复）：目标 PM 的 botUserId，用于精确路由 */
+  /** v2（I2 修复）：目标 PM 的 assignmentId，用于精确路由 */
   replyTo?: string;
 }): { eventType: typeof TASK_REPLY_EVENT_TYPE; content: TaskReplyContent } {
   return {

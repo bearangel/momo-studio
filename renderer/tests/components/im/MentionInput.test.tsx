@@ -58,7 +58,7 @@ describe('MentionInput', () => {
   it('输入 @ 弹出 agent 菜单', () => {
     vi.mocked(useAgentStore).mockReturnValue({
       assignments: [
-        { instanceId: 'i1', botMatrixUserId: '@pm:home', agentName: 'PM-agent', lastRunning: true },
+        { instanceId: 'i1', agentUserId: '@pm:home', agentName: 'PM-agent', lastRunning: true },
       ],
     } as never);
     vi.mocked(useTaskStore).mockReturnValue({ tasks: [] } as never);
@@ -88,7 +88,7 @@ describe('MentionInput', () => {
   it('点击 agent 菜单项插入 chip', () => {
     vi.mocked(useAgentStore).mockReturnValue({
       assignments: [
-        { instanceId: 'i1', botMatrixUserId: '@pm:home', agentName: 'PM-agent', lastRunning: true },
+        { instanceId: 'i1', agentUserId: '@pm:home', agentName: 'PM-agent', lastRunning: true },
       ],
     } as never);
     vi.mocked(useTaskStore).mockReturnValue({ tasks: [] } as never);

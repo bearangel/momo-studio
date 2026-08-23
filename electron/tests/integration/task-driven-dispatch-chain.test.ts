@@ -5,10 +5,10 @@
 // 与 task-driven-e2e.test.ts 的区别：
 //   e2e 测试验证的是"数据层"（INSERT message + append chunk → 聚合正确性）。
 //   本测试验证的是"dispatch 链路"：
-//     Matrix event → RouterService.routeMatrixEvent → AgentRunner.executeTask 被调用
+//     Matrix event → RouterService.routeEvent → AgentRunner.executeTask 被调用
 //
 // 覆盖 C1 修复后的核心链路：
-//   1. m.room.message + directTargetAssignmentId → routeUserMessage → executeTask
+//   1. m.room.message + directTargetAssignmentId → routeUserChat → executeTask
 //   2. m.room.message + directTargetAssignmentId=null → 不派发（验证 guard）
 //   3. dispatch event → routeDispatch → executeTask（含 dispatchContext）
 //   4. task_reply + reply_to → 精确路由 → notifyTaskReply
@@ -45,7 +45,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       dispatcher: { tryPickup: vi.fn() } as never,
     });
 
-    await svc.routeMatrixEvent(
+    await svc.routeEvent(
       mkMockEvent('m.room.message', { body: '你好，帮我做事' }),
       '@user:home',
       '!room:home',
@@ -57,7 +57,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       expect.objectContaining({
         taskId: null,
         body: '你好，帮我做事',
-        executionRoomId: '!room:home',
+        executionSessionId: '!room:home',
       }),
     );
   });
@@ -73,7 +73,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       dispatcher: { tryPickup: vi.fn() } as never,
     });
 
-    await svc.routeMatrixEvent(
+    await svc.routeEvent(
       mkMockEvent('m.room.message', { body: '这条消息不会被派发' }),
       '@user:home',
       null,
@@ -93,14 +93,14 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       dispatcher: { tryPickup: vi.fn() } as never,
     });
 
-    await svc.routeMatrixEvent(
+    await svc.routeEvent(
       mkMockEvent('io.momo-studio.dispatch', {
         body: '写登录页',
         task_id: 'task-dispatch-1',
-        dispatch_from: '@pm:home',
-        dispatch_to: '@sub:home',
+        dispatch_from: 'inst-pm',
+        dispatch_to: 'inst-sub',
       }),
-      '@pm:home',
+      'inst-pm',
       '!room:home',
       'inst-sub',
     );
@@ -110,7 +110,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
         taskId: 'task-dispatch-1',
         body: '写登录页',
         dispatchContext: expect.objectContaining({
-          fromBotUserId: '@pm:home',
+          fromAssignmentId: 'inst-pm',
           task_id: 'task-dispatch-1',
         }),
       }),
@@ -133,22 +133,20 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
-      findAssignmentByBotUserId: (botUserId) =>
-        botUserId === '@pm:home' ? 'inst-pm' : null,
     });
 
-    await svc.routeMatrixEvent(
+    await svc.routeEvent(
       mkMockEvent(
         'io.momo-studio.task_reply',
         {
           body: '完成',
           task_id: 'task-reply-1',
           status: 'completed',
-          reply_to: '@pm:home',
+          reply_to: 'inst-pm',
         },
-        '@sub:home',
+        'inst-sub',
       ),
-      '@sub:home',
+      'inst-sub',
       null,
     );
 
@@ -168,7 +166,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       dispatcher: { tryPickup: vi.fn() } as never,
     });
 
-    await svc.routeMatrixEvent(
+    await svc.routeEvent(
       mkMockEvent(
         'io.momo-studio.task_reply',
         {

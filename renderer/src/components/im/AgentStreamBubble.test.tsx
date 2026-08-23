@@ -3,7 +3,7 @@
 // AgentStreamBubble 渲染行为测试（v2.0 A 子系统重写后）：
 //   - 各状态（streaming/done/failed/aborted）的状态文案
 //   - thinking / toolCalls / dispatches / text 渲染分支
-//   - streaming 时显示停止按钮且点击触发 ipc.agent.abortStream(message.roomId)
+//   - streaming 时显示停止按钮且点击触发 ipc.agent.abortStream(message.sessionId)
 //
 // v2.0 A 子系统变化：
 //   - StreamState extends AggregatedStream（按字段渲染，不再按 events 时间线）
@@ -44,7 +44,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
 function makeMessage(overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id: 'm-stream',
-    roomId: '!room:server',
+    sessionId: '!room:server',
     sender: '@bot:server',
     body: '',
     eventType: 'm.room.message',
@@ -54,7 +54,6 @@ function makeMessage(overrides: Partial<ImMessage> = {}): ImMessage {
     segmentIndex: null,
     status: 'streaming',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: null,
     createdAt: 0,
@@ -143,15 +142,15 @@ describe('AgentStreamBubble', () => {
     expect(screen.getByText('read_file')).toBeInTheDocument();
   });
 
-  it('点击停止按钮调用 ipc.agent.abortStream(message.roomId)', () => {
+  it('点击停止按钮调用 ipc.agent.abortStream(message.streamSessionId)', () => {
     render(
       <AgentStreamBubble
         stream={makeStream()}
-        message={makeMessage({ roomId: '!r:server' })}
+        message={makeMessage({ streamSessionId: 'ss-stop-1' })}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /停止/ }));
-    expect(abortStreamMock).toHaveBeenCalledWith('!r:server');
+    expect(abortStreamMock).toHaveBeenCalledWith('ss-stop-1');
   });
 
   it('streaming 时渲染流式光标', () => {

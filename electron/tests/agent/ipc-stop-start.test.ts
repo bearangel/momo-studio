@@ -1,10 +1,8 @@
 // electron/tests/agent/ipc-stop-start.test.ts
 //
-// Task 4 回归测试——验证 agent:stop IPC handler 走 v2 双轨销毁。
+// Task 4 回归测试——验证 agent:stop IPC handler 走 stopAgentRuntime（单轨销毁）。
 //
-// 旧实现只调 v1 stopAgent（runtime-manager），对 task-driven runner 无效。
-// 新实现应调 stopAgentRuntime（runtime-registry），同时销毁 v2 WarmPool/AgentRunner
-// + 幂等写 DB last_running=0。
+// 销毁 task-driven WarmPool/AgentRunner + 幂等写 DB last_running=0。
 //
 // 通过 mock electron.ipcMain.handle 捕获真实注册的 handler，
 // 测试直接调用捕获的回调 —— 验证的是生产 handler（而非逻辑副本），
@@ -34,12 +32,9 @@ vi.mock('../../src/main/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-// mock runtime-manager（v1 stopAgent 走 vi.fn；避免真实 kill 子进程）
-vi.mock('../../src/main/agent/runtime-manager', () => ({
-  stopAgent: vi.fn(),
+// mock runtime-status（isAgentRunning 走 vi.fn，避免真实 DB 读）
+vi.mock('../../src/main/agent/runtime-status', () => ({
   isAgentRunning: vi.fn(() => false),
-  spawnAgent: vi.fn(),
-  handleStreamChunk: vi.fn(),
 }));
 
 // mock runtime-registry：保留 real Maps + stopAgentRuntime 等；只把 startAgentRuntime 替成 spy
@@ -50,7 +45,7 @@ vi.mock('../../src/main/agent/runtime-registry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/runtime-registry')>();
   return {
     ...actual,
-    startAgentRuntime: vi.fn(async (_opts: unknown, _taskDriven?: boolean) => undefined),
+    startAgentRuntime: vi.fn(async (_opts: unknown) => undefined),
   };
 });
 
@@ -88,22 +83,6 @@ vi.mock('../../src/main/storage/keychain', () => ({
   setSecret: vi.fn(),
   setKeychainImpl: vi.fn(),
 }));
-vi.mock('../../src/main/agent/bot-registrar', () => ({
-  registerAgentBot: vi.fn(),
-}));
-vi.mock('../../src/main/matrix/rooms', () => ({
-  inviteBotToRoom: vi.fn(async () => undefined),
-}));
-vi.mock('../../src/main/matrix/session', () => ({
-  getOwnerMatrixClient: vi.fn(async () => ({})),
-  getCurrentUserId: vi.fn(() => '@o:localhost'),
-}));
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  getSyncingClient: vi.fn(() => null),
-}));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: vi.fn(),
-}));
 vi.mock('../../src/main/agent/spawn-helpers', () => ({
   buildSpawnOpts: vi.fn(() => ({})),
   HOMESERVER_URL: 'http://127.0.0.1:8008',
@@ -118,7 +97,7 @@ vi.mock('../../src/main/agent/assignment-capabilities', () => ({
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { stopAgent, isAgentRunning } from '../../src/main/agent/runtime-manager';
+import { isAgentRunning } from '../../src/main/agent/runtime-status';
 import {
   agentRunners,
   agentWarmPools,
@@ -166,7 +145,6 @@ beforeEach(() => {
      VALUES ('prov-1', 'Test Provider', 'https://api.openai.com', 'provider.prov-1.api_key', 'gpt-4o', 1)`,
   ).run();
   ipcHandlers.clear();
-  vi.mocked(stopAgent).mockClear();
   __clearRuntimeRegistryForTest();
   registerAgentHandlers();
 });
@@ -202,7 +180,7 @@ function makeStandaloneDef(id: string): AgentDefinition {
   return def;
 }
 
-describe('agent:stop IPC handler（Task 4 双轨销毁）', () => {
+describe('agent:stop IPC handler（Task 4 销毁）', () => {
   it('停止 task-driven agent：销毁 runner + 写 last_running=0', async () => {
     // 准备 DB：用 helpers 落库（避免 NOT NULL 约束失败）
     const def = makeStandaloneDef('def-stop-1');
@@ -217,7 +195,7 @@ describe('agent:stop IPC handler（Task 4 双轨销毁）', () => {
     const fakeRunner = {
       destroy: vi.fn(),
       assignmentId: instId,
-      botUserId: '@bot-stop:localhost',
+      agentUserId: 'agent-bot-stop-x1',
       workspaceId: ws.id,
       executeTask: vi.fn(),
       abortStream: vi.fn(),
@@ -246,9 +224,6 @@ describe('agent:stop IPC handler（Task 4 双轨销毁）', () => {
     expect(fakeRunner.destroy).toHaveBeenCalledOnce();
     expect(fakePool.destroyAll).toHaveBeenCalledOnce();
 
-    // 验证：v1 stopAgent 也被调（双轨语义）
-    expect(stopAgent).toHaveBeenCalledWith(instId);
-
     // 验证：DB last_running 写为 0
     const row = getDb()
       .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
@@ -256,13 +231,12 @@ describe('agent:stop IPC handler（Task 4 双轨销毁）', () => {
     expect(row.last_running).toBe(0);
   });
 
-  it('停止不存在的 instanceId 时双轨都不报错（幂等 no-op + DB 幂等写 0）', async () => {
+  it('停止不存在的 instanceId 时不报错（幂等 no-op + DB 幂等写 0）', async () => {
     const handler = ipcHandlers.get('agent:stop');
     expect(handler).toBeDefined();
     const res = await handler!(null, 'inst-nonexistent');
     expect(res).toEqual({ ok: true });
-    // v1 + v2 都接受不存在的 id（stopAgent 是 no-op，destroyTaskDrivenRuntime 是 no-op）
-    expect(stopAgent).toHaveBeenCalledWith('inst-nonexistent');
+    // destroyTaskDrivenRuntime 对不存在的 id 是 no-op
     expect(agentRunners.has('inst-nonexistent')).toBe(false);
     expect(agentWarmPools.has('inst-nonexistent')).toBe(false);
   });
