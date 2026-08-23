@@ -7,10 +7,23 @@
 import { getDb } from '../storage/db';
 import { getSessionSettings } from '../storage/sessions/repo';
 
+/** 默认模型引用：指向某供应商模型列表中的一个模型 */
+export interface DefaultModelRef {
+  providerId: string;
+  modelId: string;
+}
+
 /** 全局会话配置 */
 export interface GlobalSettings {
   /** 工具调用上限默认值。-1=无限, 0=禁用, N=上限 */
   maxToolCalls: number;
+  /** 审计日志全局容量上限（MB）；workspace 级可覆盖。默认 100。 */
+  auditQuotaMb: number;
+  /** 四类默认模型（P2 只存不消费；向量/重排 2.1 知识库启用，会话 fallback P3 接线） */
+  defaultChatModel?: DefaultModelRef;
+  defaultMultimodalModel?: DefaultModelRef;
+  defaultEmbeddingModel?: DefaultModelRef;
+  defaultRerankModel?: DefaultModelRef;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -20,17 +33,28 @@ export type { SessionSettings } from '../storage/sessions/repo';
 
 const GLOBAL_KEY = 'global_settings';
 const DEFAULT_MAX_TOOL_CALLS = 10;
+const DEFAULT_AUDIT_QUOTA_MB = 100;
 
-/** 读取全局配置；不存在时返回默认值 */
+/** 读取全局配置；不存在或字段缺失时返回默认值 */
 export function getGlobalSettings(): GlobalSettings {
   const db = getDb();
   const row = db.prepare('SELECT value FROM kv_store WHERE key = ?').get(GLOBAL_KEY) as
     | { value: string }
     | undefined;
-  if (!row) return { maxToolCalls: DEFAULT_MAX_TOOL_CALLS };
+  if (!row) {
+    return {
+      maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
+      auditQuotaMb: DEFAULT_AUDIT_QUOTA_MB,
+    };
+  }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
   return {
     maxToolCalls: parsed.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
+    auditQuotaMb: parsed.auditQuotaMb ?? DEFAULT_AUDIT_QUOTA_MB,
+    defaultChatModel: parsed.defaultChatModel,
+    defaultMultimodalModel: parsed.defaultMultimodalModel,
+    defaultEmbeddingModel: parsed.defaultEmbeddingModel,
+    defaultRerankModel: parsed.defaultRerankModel,
   };
 }
 

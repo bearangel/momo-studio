@@ -1,4 +1,5 @@
 // electron/src/main/ipc/index.ts
+import { BrowserWindow } from 'electron';
 import { logger } from '../logger';
 import { registerSystemHandlers } from './system.handlers';
 import { registerWorkspaceHandlers } from '../workspace/ipc.handlers';
@@ -17,6 +18,7 @@ import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerP2pHandlers } from '../p2p';
 import { registerDialogHandlers } from './dialog.handlers';
+import { registerWindowIpc } from '../window-ipc';
 
 export function registerIpcHandlers(): void {
   logger.info('Registering IPC handlers');
@@ -37,4 +39,6 @@ export function registerIpcHandlers(): void {
   registerTaskHandlers();
   registerP2pHandlers();
   registerDialogHandlers();
+  // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口
+  registerWindowIpc(() => BrowserWindow.getAllWindows()[0] ?? null);
 }

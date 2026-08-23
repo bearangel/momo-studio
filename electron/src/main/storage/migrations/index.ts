@@ -614,6 +614,29 @@ ALTER TABLE workspaces DROP COLUMN matrix_space_id;
 DROP TABLE IF EXISTS room_settings;
 `.trim(),
   },
+  {
+    version: 24,
+    sql: `
+-- ─── v24：2.0.0 P2 供应商平台/模型列表 + 审计配额 + 默认模型 schema ──────────
+-- 1. model_providers.platform：显式指定 LLM 协议平台（取代 baseUrl 启发式检测，
+--    解决非标准域名的 Anthropic 兼容供应商误判问题）。
+--    SQLite ALTER ADD COLUMN 支持 CHECK 约束；DEFAULT 'openai' 使既有行自动回填。
+-- 2. provider_models：供应商的模型列表（用户手动维护 + 后续拉取 API 填充）。
+--    双主键 (provider_id, model_id) 保证幂等；ON DELETE CASCADE 删供应商时级联清理。
+-- 3. workspaces.audit_quota_mb：workspace 级审计日志容量上限（MB）。
+--    NULL = 未配置，继承全局 GlobalSettings.auditQuotaMb（默认 100）。
+ALTER TABLE model_providers ADD COLUMN platform TEXT NOT NULL DEFAULT 'openai'
+  CHECK (platform IN ('openai', 'anthropic'));
+CREATE TABLE IF NOT EXISTS provider_models (
+  provider_id TEXT NOT NULL REFERENCES model_providers(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+);
+ALTER TABLE workspaces ADD COLUMN audit_quota_mb INTEGER;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

@@ -1,11 +1,13 @@
 // renderer/tests/components/task-board/TaskBoardView.test.tsx
 //
-// TaskBoardView 集成测试（D 子系统 D7-D10）：
+// TaskBoardView 集成测试（P2 Task 3 拆分后）：
 //   1. 渲染顶部标题"任务看板" + 并发状态徽标（从 tasks 本地派生）
-//   2. 渲染任务列表（TaskCard 展示 #ID · 标题）
-//   3. 空态显示"暂无任务"
-//   4. 状态筛选：选"执行中"只留 in_progress 任务
-//   5. 点击任务卡片打开详情侧滑面板
+//   2. 未选中任务 → 主区空态"从左侧选择任务"，不渲染筛选条/任务列表
+//   3. selectedTaskId 非空 → 渲染 TaskDetailPanel（task.get 拉取），
+//      × 关闭回调 setSelectedTaskId(null)
+//
+// 筛选/排序/点击选中已随 TaskFilters/TaskList 迁入侧边栏，由
+// src/components/task-board/TaskSidebarPanel.test.tsx 覆盖。
 //
 // mock 策略：
 //   - task.store：useTaskStore 支持选择器调用 useTaskStore((s) => s.xxx)，
@@ -18,10 +20,28 @@ import type { TaskRow } from '../../../src/ipc/types';
 // ---- mock task.store（支持选择器 + 无选择器两种调用形式）----
 const mockTasks = vi.fn();
 const mockLoad = vi.fn();
+const mockSetSelected = vi.fn();
+/** 测试注入的选中任务（store mock 无订阅，渲染前赋值即可） */
+let mockSelectedTaskId: string | null = null;
 
 vi.mock('../../../src/stores/task.store', () => ({
-  useTaskStore: <T,>(selector?: (s: { tasks: TaskRow[]; load: typeof mockLoad }) => T): T | { tasks: TaskRow[]; load: typeof mockLoad } => {
-    const state = { tasks: mockTasks() as TaskRow[], load: mockLoad };
+  useTaskStore: <T,>(selector?: (s: {
+    tasks: TaskRow[];
+    load: typeof mockLoad;
+    selectedTaskId: string | null;
+    setSelectedTaskId: typeof mockSetSelected;
+  }) => T): T | {
+    tasks: TaskRow[];
+    load: typeof mockLoad;
+    selectedTaskId: string | null;
+    setSelectedTaskId: typeof mockSetSelected;
+  } => {
+    const state = {
+      tasks: mockTasks() as TaskRow[],
+      load: mockLoad,
+      selectedTaskId: mockSelectedTaskId,
+      setSelectedTaskId: mockSetSelected,
+    };
     return selector ? selector(state) : state;
   },
 }));
@@ -81,6 +101,8 @@ describe('TaskBoardView', () => {
     mockTaskGet.mockReset();
     mockTaskStart.mockReset();
     mockTaskCancel.mockReset();
+    mockSetSelected.mockReset();
+    mockSelectedTaskId = null;
     mockLoad.mockResolvedValue(undefined);
   });
 
@@ -95,47 +117,29 @@ describe('TaskBoardView', () => {
     expect(screen.getByText(/并发.*1.*\/.*3.*排队.*1/)).toBeInTheDocument();
   });
 
-  it('渲染任务列表中的任务标题', () => {
+  it('未选中任务时主区为空态"从左侧选择任务"，不渲染筛选条与任务列表', () => {
     mockTasks.mockReturnValue([
       makeTask({ id: 'T-001', title: '实现登录', status: 'in_progress' }),
     ]);
     render(<TaskBoardView workspaceId="ws1" />);
-    expect(screen.getByText(/实现登录/)).toBeInTheDocument();
+    expect(screen.getByText('从左侧选择任务')).toBeInTheDocument();
+    expect(screen.queryByText(/实现登录/)).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('全部状态')).not.toBeInTheDocument();
   });
 
-  it('空态显示"暂无任务"', () => {
-    mockTasks.mockReturnValue([]);
-    render(<TaskBoardView workspaceId="ws1" />);
-    expect(screen.getByText('暂无任务')).toBeInTheDocument();
-  });
-
-  it('状态筛选：选"执行中"只留 in_progress 任务', () => {
-    mockTasks.mockReturnValue([
-      makeTask({ id: 'T-001', title: '执行中任务', status: 'in_progress' }),
-      makeTask({ id: 'T-002', title: '待启动任务', status: 'pending' }),
-    ]);
-    render(<TaskBoardView workspaceId="ws1" />);
-    // 初始两条都可见
-    expect(screen.getByText(/执行中任务/)).toBeInTheDocument();
-    expect(screen.getByText(/待启动任务/)).toBeInTheDocument();
-    // 选择状态筛选 = 执行中
-    const statusSelect = screen.getAllByRole('combobox')[0]!;
-    fireEvent.change(statusSelect, { target: { value: 'in_progress' } });
-    expect(screen.getByText(/执行中任务/)).toBeInTheDocument();
-    expect(screen.queryByText(/待启动任务/)).not.toBeInTheDocument();
-  });
-
-  it('点击任务卡片打开详情面板', async () => {
+  it('selectedTaskId 非空时渲染详情面板，× 关闭调 setSelectedTaskId(null)', async () => {
     const task = makeTask({ id: 'T-001', title: '可点击任务', status: 'pending' });
     mockTasks.mockReturnValue([task]);
     mockTaskGet.mockResolvedValue(task);
+    mockSelectedTaskId = 'T-001';
     render(<TaskBoardView workspaceId="ws1" />);
-    // 点击任务卡片按钮
-    fireEvent.click(screen.getByText(/可点击任务/));
-    // 详情面板出现（标题行 #T-001...）
+
     await waitFor(() => {
       expect(screen.getByText(/#T-001/)).toBeInTheDocument();
     });
     expect(mockTaskGet).toHaveBeenCalledWith('T-001');
+
+    fireEvent.click(screen.getByRole('button', { name: '×' }));
+    expect(mockSetSelected).toHaveBeenCalledWith(null);
   });
 });

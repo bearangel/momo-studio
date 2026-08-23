@@ -14,6 +14,11 @@ const { ipcHandlers, crudMocks, fetchMock } = vi.hoisted(() => {
       deleteProvider: vi.fn(async () => undefined),
       setDefaultProvider: vi.fn(() => undefined),
       getProviderApiKey: vi.fn(async () => 'sk-secret'),
+      fetchRemoteModels: vi.fn(async () => ['m1', 'm2']),
+      listProviderModels: vi.fn(() => []),
+      upsertProviderModel: vi.fn(() => undefined),
+      setProviderModelEnabled: vi.fn(() => undefined),
+      removeProviderModel: vi.fn(() => undefined),
     },
     fetchMock: vi.fn(),
   };
@@ -44,11 +49,12 @@ beforeEach(() => {
 });
 
 describe('provider-ipc handler 注册', () => {
-  it('注册全部 8 个 provider: 通道', () => {
+  it('注册全部 13 个 provider: 通道', () => {
     for (const ch of [
       'provider:list', 'provider:get', 'provider:create', 'provider:update',
       'provider:delete', 'provider:setDefault', 'provider:testConnection',
-      'provider:getApiKey',
+      'provider:getApiKey', 'provider:fetchModels', 'provider:listModels',
+      'provider:addModel', 'provider:setModelEnabled', 'provider:removeModel',
     ]) {
       expect(ipcHandlers.has(ch)).toBe(true);
     }
@@ -68,8 +74,8 @@ describe('provider-ipc CRUD 委托', () => {
     expect(crudMocks.getProvider).toHaveBeenCalledWith('p1');
   });
 
-  it('provider:create → createProvider(input)', async () => {
-    const input = { name: 'X', baseUrl: 'u', apiKey: 'k' };
+  it('provider:create → createProvider(input)（含 platform 透传）', async () => {
+    const input = { name: 'X', baseUrl: 'u', apiKey: 'k', platform: 'anthropic' as const };
     const res = await ipcHandlers.get('provider:create')!({} as never, input);
     expect(crudMocks.createProvider).toHaveBeenCalledWith(input);
     expect(res).toEqual({ id: 'p1' });
@@ -99,6 +105,37 @@ describe('provider-ipc CRUD 委托', () => {
     // 刷新挂起的 floating promise 后断言 deleteProvider 被调用
     await new Promise((r) => setTimeout(r, 0));
     expect(crudMocks.deleteProvider).toHaveBeenCalledWith('p1');
+  });
+});
+
+describe('provider-ipc 模型列表通道（Task 6）', () => {
+  it('provider:fetchModels → fetchRemoteModels(id) 返回 string[]', async () => {
+    const res = await ipcHandlers.get('provider:fetchModels')!({} as never, 'p1');
+    expect(crudMocks.fetchRemoteModels).toHaveBeenCalledWith('p1');
+    expect(res).toEqual(['m1', 'm2']);
+  });
+
+  it('provider:listModels → listProviderModels(id)', () => {
+    crudMocks.listProviderModels.mockReturnValueOnce([{ modelId: 'm1' }]);
+    const res = ipcHandlers.get('provider:listModels')!({} as never, 'p1');
+    expect(crudMocks.listProviderModels).toHaveBeenCalledWith('p1');
+    expect(res).toEqual([{ modelId: 'm1' }]);
+  });
+
+  it('provider:addModel → upsertProviderModel(id, modelId)，返回 undefined（UI 靠 listModels 刷新）', async () => {
+    const res = await ipcHandlers.get('provider:addModel')!({} as never, 'p1', 'm1');
+    expect(crudMocks.upsertProviderModel).toHaveBeenCalledWith('p1', 'm1');
+    expect(res).toBeUndefined();
+  });
+
+  it('provider:setModelEnabled → setProviderModelEnabled(id, modelId, enabled)', async () => {
+    await ipcHandlers.get('provider:setModelEnabled')!({} as never, 'p1', 'm1', false);
+    expect(crudMocks.setProviderModelEnabled).toHaveBeenCalledWith('p1', 'm1', false);
+  });
+
+  it('provider:removeModel → removeProviderModel(id, modelId)', async () => {
+    await ipcHandlers.get('provider:removeModel')!({} as never, 'p1', 'm1');
+    expect(crudMocks.removeProviderModel).toHaveBeenCalledWith('p1', 'm1');
   });
 });
 

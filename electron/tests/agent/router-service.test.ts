@@ -248,4 +248,72 @@ describe('RouterService', () => {
       expect(r2.notifyTaskReply).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('routeAbortDispatch（abort_dispatch 级联传播）', () => {
+    it('abort_dispatch → 广播 abortStream 到全部 runner（以 sub_stream_session_id 精确中断）', async () => {
+      // 广播语义与 notifyTaskReply 一致：各 runner 的 activeTasks 活跃表自然过滤，
+      // 只有持有该子流的 runner 真正下发 abort IPC——此处验证"全部收到广播"。
+      const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
+      const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
+      const runners = new Map([
+        ['inst-pm', r1],
+        ['inst-sub', r2],
+      ]);
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await svc.routeEvent(
+        mkMockEvent('io.momo-studio.abort_dispatch', {
+          task_id: 'task-123',
+          sub_stream_session_id: 'sub-sess-abc',
+        }),
+        'inst-pm',
+        '!room:home',
+      );
+
+      expect(r1.abortStream).toHaveBeenCalledTimes(1);
+      expect(r1.abortStream).toHaveBeenCalledWith('sub-sess-abc');
+      expect(r2.abortStream).toHaveBeenCalledTimes(1);
+      expect(r2.abortStream).toHaveBeenCalledWith('sub-sess-abc');
+      // 级联中断不应触发任何新 task 派发
+      expect(r1.executeTask).not.toHaveBeenCalled();
+      expect(r2.executeTask).not.toHaveBeenCalled();
+    });
+
+    it('abort_dispatch 缺 sub_stream_session_id → 不调任何 runner 的 abortStream', async () => {
+      const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
+      const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
+      const runners = new Map([
+        ['inst-1', r1],
+        ['inst-2', r2],
+      ]);
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await svc.routeEvent(
+        mkMockEvent('io.momo-studio.abort_dispatch', {
+          task_id: 'task-456',
+        }),
+        'inst-pm',
+        '!room:home',
+      );
+
+      expect(r1.abortStream).not.toHaveBeenCalled();
+      expect(r2.abortStream).not.toHaveBeenCalled();
+    });
+
+    it('abort_dispatch 无 runner 时 no-op 不抛错（目标不存在仅 warn）', async () => {
+      const runners = new Map<string, { abortStream: () => void }>();
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await expect(
+        svc.routeEvent(
+          mkMockEvent('io.momo-studio.abort_dispatch', {
+            task_id: 'task-789',
+            sub_stream_session_id: 'sub-sess-gone',
+          }),
+          'inst-pm',
+          '!room:home',
+        ),
+      ).resolves.toBeUndefined();
+    });
+  });
 });

@@ -1,13 +1,15 @@
 // 设置页当前激活分类状态
 import { create } from 'zustand';
 
+// 分类键值需与 SettingsNav 的 CATEGORIES 同步——任一处遗漏会导致死分类。
 export type SettingsCategory =
   | 'model_provider'
+  | 'default_model'
+  | 'conversation'
   | 'git_policy'
   | 'audit_log'
-  | 'conversation'
-  | 'account'
-  | 'p2p';
+  | 'p2p'
+  | 'about';
 
 interface SettingsState {
   activeCategory: SettingsCategory;

@@ -7,7 +7,6 @@ import type {
   MessageEventBatch,
   ResourceFilter,
   ResourceItem,
-  StreamChunk,
   TaskRow,
   UploadedSkill,
 } from '../../../renderer/src/ipc/types';
@@ -19,12 +18,17 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api: ApiSurface = {
   system: {
     getInfo: () => invoke('system:getInfo'),
+    // P2 Task 2：同步注入 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变）
+    getPlatform: () => process.platform,
   },
   workspace: {
     create: (input) => invoke('workspace:create', input),
     list: () => invoke('workspace:list'),
     get: (id) => invoke('workspace:get', id),
     delete: (id) => invoke('workspace:delete', id),
+    // P2 Task 2：重命名 / 在系统文件管理器打开目录
+    rename: (id, name) => invoke('workspace:rename', id, name),
+    openDirectory: (id) => invoke('workspace:openDirectory', id),
     setCoordinator: (id, instanceId) => invoke('workspace:setCoordinator', id, instanceId),
     getCoordinator: (id) => invoke('workspace:getCoordinator', id),
   },
@@ -67,13 +71,6 @@ const api: ApiSurface = {
         ipcRenderer.off('agent:runtimeChanged', handler);
       };
     },
-    onStream: (callback) => {
-      const handler = (_evt: IpcRendererEvent, chunk: StreamChunk): void => callback(chunk);
-      ipcRenderer.on('agent:stream', handler);
-      return () => {
-        ipcRenderer.off('agent:stream', handler);
-      };
-    },
     abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
   },
   provider: {
@@ -85,6 +82,12 @@ const api: ApiSurface = {
     setDefault: (id) => invoke('provider:setDefault', id),
     testConnection: (input) => invoke('provider:testConnection', input),
     getApiKey: (id) => invoke('provider:getApiKey', id),
+    // Task 6：供应商模型列表管理
+    fetchModels: (id) => invoke('provider:fetchModels', id),
+    listModels: (id) => invoke('provider:listModels', id),
+    addModel: (id, modelId) => invoke('provider:addModel', id, modelId),
+    setModelEnabled: (id, modelId, enabled) => invoke('provider:setModelEnabled', id, modelId, enabled),
+    removeModel: (id, modelId) => invoke('provider:removeModel', id, modelId),
   },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
@@ -150,6 +153,10 @@ const api: ApiSurface = {
   },
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
+    // P2 Task 8：容量配额——读取 / 设置（null=回退全局）/ 立即清理
+    getQuota: (workspaceId) => invoke('audit:getQuota', workspaceId),
+    setQuota: (workspaceId, quotaMb) => invoke('audit:setQuota', workspaceId, quotaMb),
+    enforceNow: (workspaceId) => invoke('audit:enforceNow', workspaceId),
   },
   settings: {
     getGlobal: () => invoke('settings:getGlobal'),
@@ -198,6 +205,20 @@ const api: ApiSurface = {
     addTrustedNode: (nodeId: string) => invoke('p2p:addTrustedNode', nodeId),
     removeTrustedNode: (nodeId: string) => invoke('p2p:removeTrustedNode', nodeId),
     listTrustedNodes: () => invoke('p2p:listTrustedNodes'),
+  },
+  window: {
+    // P2 Task 1：自绘 titlebar 窗口控制（send 单向 + is-maximized 查询 + maximized 推送）
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    close: () => ipcRenderer.send('window:close'),
+    isMaximized: () => invoke<boolean>('window:is-maximized'),
+    onMaximizedChanged: (callback: (maximized: boolean) => void) => {
+      const handler = (_evt: IpcRendererEvent, maximized: boolean): void => callback(maximized);
+      ipcRenderer.on('window:maximized-changed', handler);
+      return () => {
+        ipcRenderer.off('window:maximized-changed', handler);
+      };
+    },
   },
 };
 

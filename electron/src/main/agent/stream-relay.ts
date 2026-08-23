@@ -2,10 +2,11 @@
 //
 // 流式 chunk 中继层（独立模块）。
 //
-// 职责（双通道）：
-//   1. relay：chunk → renderer（'agent:stream' 通道，主窗口注入）
-//   2. 落盘：chunk → MessageEventBuffer → messages / message_events 表，
-//      flush 时批量推送 'session:message_event_batch'（Task 8 已从 im:message_event_batch 改名）
+// 职责（P2 Task 10 起单通道）：
+//   落盘：chunk → MessageEventBuffer → messages / message_events 表，
+//   flush 时批量推送 'session:message_event_batch'（Task 8 已从 im:message_event_batch 改名）。
+//   （旧 'agent:stream' 实时推送通道已删除——renderer 早已零订阅，
+//   实时显示统一走 message_event_batch 事件流。）
 //
 // 中断：abortStreamBySessionId(streamSessionId)——按 streamSessionId 精确中断。
 // 为避免循环依赖（stream-relay 不得 import runtime-registry），采用注册反转：
@@ -22,27 +23,6 @@ import {
   updateMessageStatus,
   getMessageByStreamSessionId,
 } from '../storage/messages/repo';
-
-// === relay：chunk → renderer ===
-
-/**
- * 主窗口引用（由 main/index.ts 通过 setMainWindow 注入）。
- * 流式 chunk 需经 webContents.send('agent:stream') 推到 renderer，
- * 而 stream-relay 自身不持有窗口，故需外部注入。
- */
-let mainWindow: BrowserWindow | null = null;
-
-/** 由 main/index.ts 在创建主窗口后调用，注册窗口引用用于推送流式 chunk */
-export function setMainWindow(win: BrowserWindow | null): void {
-  mainWindow = win;
-}
-
-/** 转发流式 chunk 到 renderer（窗口未就绪/已销毁时静默跳过） */
-export function relayStreamChunk(chunk: StreamChunk): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('agent:stream', chunk);
-  }
-}
 
 // === A7：stream chunk → MessageEventBuffer 落盘 ===
 
@@ -85,11 +65,11 @@ export function __flushEventBufferForTest(): void {
 }
 
 /**
- * task-driven runtime 的 chunk 入口——relay 到 renderer + 落盘 SQLite。
- * WarmPool spawn 的子进程 chunk 经此函数走双通道（renderer 推送 + SQLite 落盘）。
+ * task-driven runtime 的 chunk 入口——落盘 SQLite（MessageEventBuffer 聚批）。
+ * WarmPool spawn 的子进程 chunk 经此函数进入唯一通道
+ * （P2 Task 10 已删除 'agent:stream' renderer 直推；实时显示走 event_batch 推送）。
  */
 export function handleStreamChunk(chunk: StreamChunk): void {
-  relayStreamChunk(chunk);
   routeChunkToBuffer(chunk);
 }
 
@@ -106,7 +86,7 @@ export function handleStreamChunk(chunk: StreamChunk): void {
  *   end               → UPDATE messages status + flush + append final
  *
  * DB 未就绪（测试环境/表未迁移）时整包 try/catch 静默跳过——buffer 落盘是 best-effort，
- * 不应阻塞 renderer 流式显示（relayStreamChunk 仍正常工作）。
+ * 不应阻塞子进程 chunk 处理链。
  */
 export function routeChunkToBuffer(chunk: StreamChunk): void {
   let msg;

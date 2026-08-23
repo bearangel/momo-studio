@@ -1,12 +1,16 @@
 // renderer/src/components/layout/MainLayout.tsx
-// 顶层布局：左导航栏 + 中间面板。
+// 顶层布局：活动栏 + 统一侧边栏 + 中间面板。
 // v2.0 P1 Task 9：会话内核纯 SQLite 无 /sync 启动步骤，这里只触发首屏拉取；
 // 实时消息订阅在 App.tsx 的 subscribeSessionChannels。
+// v2.0 P2 Task 2：整窗布局（h-screen w-screen + TitleBar + ConflictDialogMount）
+// 上移到 MainShell，这里改为 flex-1 min-h-0 填充剩余空间。
+// v2.0 P2 Task 3：LeftRail → ActivityBar + ViewSidebar；全局 Ctrl/Cmd+B 折叠侧边栏。
 import { useEffect } from 'react';
-import { LeftRail } from './LeftRail';
+import { ActivityBar } from './ActivityBar';
+import { ViewSidebar } from './ViewSidebar';
 import { MiddlePanel } from './MiddlePanel';
-import { ConflictDialogMount } from '../im/ConflictDialogMount';
 import { ipc } from '../../ipc/client';
+import { useUiStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -40,11 +44,23 @@ export function MainLayout() {
     return cleanup;
   }, [loadAssignments]);
 
+  // 全局 Ctrl/Cmd+B 折叠/展开侧边栏（preventDefault 阻止浏览器默认行为）
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        useUiStore.getState().toggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg-primary">
-      <LeftRail />
+    <div className="flex flex-1 min-h-0 overflow-hidden bg-bg-primary">
+      <ActivityBar />
+      <ViewSidebar />
       <MiddlePanel />
-      <ConflictDialogMount />
     </div>
   );
 }

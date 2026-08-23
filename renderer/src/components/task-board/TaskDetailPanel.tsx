@@ -31,7 +31,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   if (!task) {
     return (
-      <div className="w-96 border-l border-border-subtle p-4 text-sm text-neutral-500">
+      <div className="flex-1 p-4 text-sm text-neutral-500">
         加载中...
       </div>
     );
@@ -49,8 +49,9 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
     void ipc.task.cancel(taskId).then(() => onClose());
   };
 
+  // P2 Task 3：原 w-96 侧滑面板——拆分后成为看板主区内容，flex-1 占满剩余空间
   return (
-    <div className="w-96 border-l border-border-subtle flex flex-col overflow-y-auto shrink-0">
+    <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
       <div className="flex items-center justify-between p-3 border-b border-border-subtle">
         <span className="font-medium">#{task.id.slice(0, 8)}</span>
         <button type="button" onClick={onClose} className="text-neutral-400 hover:text-neutral-100">

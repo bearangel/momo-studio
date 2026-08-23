@@ -3,6 +3,7 @@ export interface SystemInfo {
   platform: string;
   arch: string;
   nodeVersion: string;
+  electronVersion: string;
   appVersion: string;
   userDataDir: string;
 }
@@ -346,6 +347,15 @@ export interface ToolCallRecord {
   timestamp: string;
 }
 
+/** 审计容量配额信息（audit:getQuota 返回），与 electron 端 AuditQuotaInfo 对齐 */
+export interface AuditQuotaInfo {
+  /** 生效配额（MB）——已按 workspace 覆盖 > 全局 > 默认 100 解析 */
+  quotaMb: number;
+  /** 估算占用字节数（文本列长度和 + 行数 × 400） */
+  usedBytes: number;
+  rowCount: number;
+}
+
 /**
  * Marketplace 可安装项，与 electron 端 MarketplaceItem 对齐。
  * renderer 端独立定义（跨进程不共享类型，仅结构对齐）。
@@ -389,20 +399,48 @@ export interface InstalledPackage {
   installedAt: string;
 }
 
+/** LLM 协议平台（与 electron 端 provider-crud.ts 的 ProviderPlatform 对齐） */
+export type ProviderPlatform = 'openai' | 'anthropic';
+
+/** 供应商的模型列表条目（与 electron 端 ProviderModel 对齐，v24 起） */
+export interface ProviderModel {
+  providerId: string;
+  modelId: string;
+  enabled: boolean;
+  addedAt: number;
+}
+
 /** 全局模型供应商（注册表项，不含 apiKey） */
 export interface ModelProvider {
   id: string;
   name: string;
   baseUrl: string;
+  /** @deprecated v2.0 P2 起由 provider_models 模型列表取代，UI 不再展示；DB 列保留（agent 定义快捷填充仍读旧列） */
   defaultModel: string | null;
   isDefault: boolean;
   createdAt: string;
+  /** LLM 协议平台（v24 起显式存储，取代 baseUrl 启发式检测） */
+  platform: ProviderPlatform;
 }
 
-/** 全局会话配置（v1.4：工具调用上限等），与 electron 端 GlobalSettings 对齐 */
+/** 默认模型引用：指向某供应商模型列表中的一个模型（v2.0 P2 起） */
+export interface DefaultModelRef {
+  providerId: string;
+  modelId: string;
+}
+
+/** 全局会话配置（v1.4：工具调用上限；v2.0 P2：审计配额 + 四类默认模型），
+ * 与 electron 端 GlobalSettings 对齐。renderer 端独立定义，仅结构对齐。 */
 export interface GlobalSettings {
   /** 工具调用上限默认值。-1=无限, 0=禁用, N=上限 */
   maxToolCalls: number;
+  /** 审计日志全局容量上限（MB）；workspace 级可覆盖。默认 100。 */
+  auditQuotaMb: number;
+  /** 四类默认模型（P2 只存不消费；向量/重排 2.1 知识库启用，会话 fallback P3 接线） */
+  defaultChatModel?: DefaultModelRef;
+  defaultMultimodalModel?: DefaultModelRef;
+  defaultEmbeddingModel?: DefaultModelRef;
+  defaultRerankModel?: DefaultModelRef;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
@@ -508,102 +546,8 @@ export interface TodoItem {
 }
 
 /**
- * 流式 IPC chunk（v1.4），与 electron 端 stream-chunk.ts 的 StreamChunk 对齐。
- * 子进程 process.send → 主进程转发 → renderer 经 api.agent.onStream 接收。
- * renderer 用 streamSessionId 聚合同一次响应的所有 chunk 到一个临时气泡。
- *
- * v1.4 嵌套字段（仅在嵌套场景出现）：
- * - start.parentStreamSessionId: 子 agent 标识其所属 PM 的 stream session，renderer 据此把子流
- *   嵌套渲染到 PM 气泡内的 dispatch chip 下方
- * - start.subAgentName / subAgentAvatar: 子 agent 的展示名与头像（chip 头部用）
- * - tool_call.isDispatch: 标记该 tool_call 是 PM 的 dispatch 委派（与普通工具调用区分）
- * - tool_call.subStreamSessionId: PM 发起的本次子 agent 流 session ID（与子 start 的
- *   streamSessionId 对应，renderer 据此把子 stream 关联到 dispatch chip）
- * - tool_result.subStatus: dispatch 完成状态（completed / failed / timeout），用于更新 chip 状态
- *
- * v1.5 新增：
- * - todo_update: todowrite 工具调用导致的任务列表全量替换，renderer 据此更新 todo 面板
- */
-export type StreamChunk =
-  | {
-      type: 'start';
-      streamSessionId: string;
-      /** Task 6 字段迁移：原 roomId。会话 ID（与 electron 端 stream-chunk.ts 对齐）。 */
-      sessionId: string;
-      /** Task 6 字段迁移：原 botUserId。发送方 agent 标识（值仍为 bot 的 Matrix userId）。 */
-      senderAgentId: string;
-      /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
-      parentStreamSessionId?: string;
-      /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
-      subAgentName?: string;
-      /** v1.4 嵌套：子 agent emoji 头像（dispatch chip 头部显示） */
-      subAgentAvatar?: string;
-    }
-  | { type: 'thinking'; streamSessionId: string; delta: string }
-  | { type: 'text'; streamSessionId: string; delta: string }
-  | {
-      type: 'tool_call';
-      streamSessionId: string;
-      /** A7：工具调用唯一 ID（tool_call ↔ tool_result 配对用，MessageEventBuffer 据此落盘） */
-      callId: string;
-      toolName: string;
-      args: Record<string, unknown>;
-      /** v1.4 嵌套：标记此 tool_call 为 PM 的 dispatch 委派（区分普通工具调用） */
-      isDispatch?: boolean;
-      /** v1.4 嵌套：本次委派创建的子 agent 流 session ID（关联子 agent start chunk） */
-      subStreamSessionId?: string;
-      /** v1.4 嵌套：被委派子 agent 的展示名 */
-      subAgentName?: string;
-      /** v1.4 嵌套：被委派子 agent 的 emoji 头像 */
-      subAgentAvatar?: string;
-    }
-  | {
-      type: 'tool_result';
-      streamSessionId: string;
-      /** A7：配对的 tool_call callId（与对应 tool_call chunk 的 callId 一致） */
-      callId: string;
-      toolName: string;
-      result: string;
-      success: boolean;
-      /** v1.4 嵌套：dispatch 完成状态（completed=成功 / failed=子 agent 报错 / timeout=超时） */
-      subStatus?: 'completed' | 'failed' | 'timeout';
-    }
-  | {
-      /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
-      type: 'todo_update';
-      streamSessionId: string;
-      /** Task 6 字段迁移：原 roomId。会话 ID（与 start.sessionId 同值语义）。 */
-      sessionId: string;
-      /** 完整任务列表（覆盖式）；空数组 = 清空 */
-      todos: TodoItem[];
-      /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
-      parentStreamSessionId?: string;
-    }
-  | {
-      type: 'end';
-      streamSessionId: string;
-      finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
-      error?: string;
-    }
-  | {
-      /** A7 fix：task_complete 主动分段边界，触发主进程 INSERT 独立分段 message row */
-      type: 'segment_boundary';
-      /** 父 stream session id */
-      streamSessionId: string;
-      /** 第几段（1-based） */
-      segmentIndex: number;
-      /** 本段最终 body 快照 */
-      segmentBody: string;
-      /** 本段独立 stream session id（如 "ss-1#seg1"） */
-      segmentStreamSessionId: string;
-    };
-
-/**
- * A 子系统：事件溯源——单条 stream chunk 落盘一行。
- *
- * 与 StreamChunk（IPC 实时通道）的区别：
- * - StreamChunk 是 transient 的 IPC 事件，由 renderer stream.store 聚合；
- * - MessageEventRow 是持久化的 DB 行，A 子系统重启后从 message_events 表重建流状态。
+ * A 子系统：事件溯源——单条 stream chunk 落盘一行（MessageEventRow 是持久化的 DB 行，
+ * A 子系统重启后从 message_events 表重建流状态）。
  *
  * 两路用同一份 events 数组 + 同一个 aggregateEvents 函数聚合，
  * 保证实时显示和重启显示完全一致（A 子系统核心不变量）。
@@ -739,6 +683,8 @@ export interface SessionApiSurface {
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
+    /** P2 Task 2：preload 同步注入的 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变） */
+    getPlatform(): string;
   };
   workspace: {
     create(input: CreateWorkspaceInput): Promise<Workspace>;
@@ -747,6 +693,10 @@ export interface ApiSurface {
     delete(id: string): Promise<void>;
     setCoordinator(workspaceId: string, instanceId: string | null): Promise<{ ok: boolean }>;
     getCoordinator(workspaceId: string): Promise<{ instanceId: string | null }>;
+    /** P2 Task 2：重命名 workspace（UPDATE name 列） */
+    rename(id: string, name: string): Promise<{ ok: boolean }>;
+    /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */
+    openDirectory(id: string): Promise<{ ok: boolean }>;
   };
   file: {
     read(workspaceId: string, filePath: string): Promise<string>;
@@ -826,20 +776,34 @@ export interface ApiSurface {
     /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
     setAssignmentDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
     onRuntimeChanged(callback: () => void): () => void;
-    /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
-    onStream(callback: (chunk: StreamChunk) => void): () => void;
     /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
     abortStream(streamSessionId: string): Promise<void>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;
     get(id: string): Promise<ModelProvider | null>;
-    create(input: { name: string; baseUrl: string; apiKey: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
-    update(input: { id: string; name?: string; baseUrl?: string; apiKey?: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
+    create(input: {
+      name: string; baseUrl: string; apiKey: string;
+      defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+    }): Promise<ModelProvider>;
+    update(input: {
+      id: string; name?: string; baseUrl?: string; apiKey?: string;
+      defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+    }): Promise<ModelProvider>;
     delete(id: string): Promise<{ ok: boolean }>;
     setDefault(id: string): Promise<{ ok: boolean }>;
     testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
     getApiKey(id: string): Promise<string | null>;
+    /** Task 6：GET {baseUrl}/models 拉取远端模型 id 列表（失败抛 IPC error） */
+    fetchModels(id: string): Promise<string[]>;
+    /** Task 6：某供应商的模型列表（按加入时间升序） */
+    listModels(id: string): Promise<ProviderModel[]>;
+    /** Task 6：手动添加模型（幂等，ghost provider 时抛 FOREIGN KEY 错误） */
+    addModel(id: string, modelId: string): Promise<void>;
+    /** Task 6：切换模型启用状态 */
+    setModelEnabled(id: string, modelId: string, enabled: boolean): Promise<void>;
+    /** Task 6：删除模型条目 */
+    removeModel(id: string, modelId: string): Promise<void>;
   };
   /**
    * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
@@ -893,6 +857,12 @@ export interface ApiSurface {
   audit: {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */
     getToolCalls(workspaceId: string, opts?: ToolCallQueryOpts): Promise<ToolCallRecord[]>;
+    /** 读取某 workspace 的配额与占用 */
+    getQuota(workspaceId: string): Promise<AuditQuotaInfo>;
+    /** 设置 workspace 级配额（MB）；null = 清除覆盖，回退全局 */
+    setQuota(workspaceId: string, quotaMb: number | null): Promise<void>;
+    /** 立即执行滚动清理，返回本次删除条数 */
+    enforceNow(workspaceId: string): Promise<{ deletedCount: number }>;
   };
   dialog: {
     /** 弹出原生目录选择对话框，返回绝对路径；用户取消返回 null */
@@ -950,6 +920,18 @@ export interface ApiSurface {
     listTrustedNodes(): Promise<
       Array<{ nodeId: string; displayName: string; trustedAt: number }>
     >;
+  };
+  /**
+   * P2 Task 1：窗口控制（自绘 titlebar 控件调用）。
+   * minimize/toggleMaximize/close 为单向 send；isMaximized 为 invoke 查询；
+   * onMaximizedChanged 订阅主进程 maximize/unmaximize 推送（图标切换用）。
+   */
+  window: {
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    isMaximized(): Promise<boolean>;
+    onMaximizedChanged(callback: (maximized: boolean) => void): () => void;
   };
 }
 

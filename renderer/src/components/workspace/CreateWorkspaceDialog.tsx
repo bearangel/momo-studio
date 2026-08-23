@@ -9,9 +9,11 @@ import { Input } from '../ui/Input';
 
 interface Props {
   onClose: () => void;
+  /** 内嵌形态（P2 Task 3 首启空态）：不渲染 fixed 遮罩，由父容器定位——避免盖住 TitleBar */
+  embedded?: boolean;
 }
 
-export function CreateWorkspaceDialog({ onClose }: Props) {
+export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
   const { create } = useWorkspaceStore();
   const [name, setName] = useState('');
   const [dir, setDir] = useState('');
@@ -43,6 +45,61 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
     }
   };
 
+  const formContent = (
+    <>
+      <h2 className="text-xl font-bold mb-4">新建工作空间</h2>
+      <div className="flex flex-col gap-3">
+        <Input
+          label="名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="我的项目"
+          autoFocus
+        />
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-neutral-300">目录路径</label>
+          <div className="flex gap-2">
+            <Input
+              value={dir}
+              onChange={(e) => setDir(e.target.value)}
+              placeholder="点击右侧按钮选择目录"
+              className="flex-1"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handlePickDirectory}
+              className="shrink-0"
+            >
+              选择目录
+            </Button>
+          </div>
+        </div>
+        {error && <div className="text-red-400 text-sm">{error}</div>}
+        <div className="flex gap-2 justify-end mt-2">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={loading || !name || !dir}>
+            {loading ? '创建中…' : '创建'}
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+
+  // 内嵌形态：首启空态没有可关闭的上级界面，遮罩点击关闭不适用
+  if (embedded) {
+    return (
+      <form
+        onSubmit={handleSubmit}
+        className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md"
+      >
+        {formContent}
+      </form>
+    );
+  }
+
   return (
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
@@ -53,44 +110,7 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
         onSubmit={handleSubmit}
         className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md"
       >
-        <h2 className="text-xl font-bold mb-4">新建工作空间</h2>
-        <div className="flex flex-col gap-3">
-          <Input
-            label="名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="我的项目"
-            autoFocus
-          />
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">目录路径</label>
-            <div className="flex gap-2">
-              <Input
-                value={dir}
-                onChange={(e) => setDir(e.target.value)}
-                placeholder="点击右侧按钮选择目录"
-                className="flex-1"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={handlePickDirectory}
-                className="shrink-0"
-              >
-                选择目录
-              </Button>
-            </div>
-          </div>
-          {error && <div className="text-red-400 text-sm">{error}</div>}
-          <div className="flex gap-2 justify-end mt-2">
-            <Button variant="ghost" type="button" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit" disabled={loading || !name || !dir}>
-              {loading ? '创建中…' : '创建'}
-            </Button>
-          </div>
-        </div>
+        {formContent}
       </form>
     </div>
   );

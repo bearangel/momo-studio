@@ -17,6 +17,9 @@ interface TaskState {
   tasks: TaskRow[];
   loading: boolean;
   error: string | null;
+  /** 看板选中任务（P2 Task 3 从 TaskBoardView 本地 state 提升：侧边栏写、主区读） */
+  selectedTaskId: string | null;
+  setSelectedTaskId: (id: string | null) => void;
 
   load: (workspaceId: string) => Promise<void>;
   create: (input: Parameters<typeof ipc.task.create>[0]) => Promise<TaskRow>;
@@ -33,6 +36,8 @@ export const useTaskStore = create<TaskState>((set) => ({
   tasks: [],
   loading: false,
   error: null,
+  selectedTaskId: null,
+  setSelectedTaskId: (id) => set({ selectedTaskId: id }),
 
   load: async (workspaceId) => {
     set({ loading: true, error: null });
@@ -60,5 +65,5 @@ export const useTaskStore = create<TaskState>((set) => ({
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
   },
 
-  reset: () => set({ tasks: [], loading: false, error: null }),
+  reset: () => set({ tasks: [], loading: false, error: null, selectedTaskId: null }),
 }));

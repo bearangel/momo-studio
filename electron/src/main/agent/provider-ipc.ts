@@ -8,6 +8,8 @@ import { logger } from '../logger';
 import {
   listProviders, getProvider, createProvider, updateProvider,
   deleteProvider, setDefaultProvider, getProviderApiKey,
+  fetchRemoteModels, listProviderModels, upsertProviderModel,
+  setProviderModelEnabled, removeProviderModel,
 } from './provider-crud';
 
 interface TestConnectionInput { baseUrl: string; apiKey: string; model: string; }
@@ -82,6 +84,25 @@ export function registerProviderHandlers(): void {
 
   // 供 agent 创建表单填充用：按 id 取 apiKey（不随 list 返回）
   ipcMain.handle('provider:getApiKey', async (_e, id: string) => getProviderApiKey(id));
+
+  // ─── 模型列表管理（Task 6）────────────────────────────────────────────────
+  // fetchModels 失败（网络/401/形状不符/ghost）直接抛错 → IPC error 传给 renderer
+
+  ipcMain.handle('provider:fetchModels', (_e, id: string) => fetchRemoteModels(id));
+
+  ipcMain.handle('provider:listModels', (_e, id: string) => listProviderModels(id));
+
+  ipcMain.handle('provider:addModel', (_e, id: string, modelId: string) => {
+    upsertProviderModel(id, modelId);
+  });
+
+  ipcMain.handle('provider:setModelEnabled', (_e, id: string, modelId: string, enabled: boolean) => {
+    setProviderModelEnabled(id, modelId, enabled);
+  });
+
+  ipcMain.handle('provider:removeModel', (_e, id: string, modelId: string) => {
+    removeProviderModel(id, modelId);
+  });
 
   logger.info('Provider IPC handlers 已注册');
 }

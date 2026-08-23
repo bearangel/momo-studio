@@ -1,14 +1,20 @@
 // 供应商注册表前端状态：列表 + CRUD 动作
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ModelProvider } from '../ipc/types';
+import type { ModelProvider, ProviderPlatform } from '../ipc/types';
 
 interface ProviderState {
   providers: ModelProvider[];
   loading: boolean;
   loadProviders: () => Promise<void>;
-  createProvider: (input: { name: string; baseUrl: string; apiKey: string; defaultModel?: string; isDefault?: boolean }) => Promise<void>;
-  updateProvider: (input: { id: string; name?: string; baseUrl?: string; apiKey?: string; defaultModel?: string; isDefault?: boolean }) => Promise<void>;
+  createProvider: (input: {
+    name: string; baseUrl: string; apiKey: string;
+    defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+  }) => Promise<ModelProvider>;
+  updateProvider: (input: {
+    id: string; name?: string; baseUrl?: string; apiKey?: string;
+    defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+  }) => Promise<void>;
   deleteProvider: (id: string) => Promise<void>;
   setDefault: (id: string) => Promise<void>;
   /** 清空供应商列表（登出时调用） */
@@ -24,9 +30,10 @@ export const useProviderStore = create<ProviderState>((set) => ({
     set({ providers, loading: false });
   },
   createProvider: async (input) => {
-    await ipc.provider.create(input);
+    const created = await ipc.provider.create(input);
     const providers = await ipc.provider.list();
     set({ providers });
+    return created;
   },
   updateProvider: async (input) => {
     await ipc.provider.update(input);
