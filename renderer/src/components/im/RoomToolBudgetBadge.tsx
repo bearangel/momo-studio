@@ -11,12 +11,12 @@ import { ipc } from '../../ipc/client';
 import type { GlobalSettings, SessionSettings } from '../../ipc/types';
 
 interface Props {
-  roomId: string;
+  sessionId: string;
 }
 
 type Choice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
-export function RoomToolBudgetBadge({ roomId }: Props) {
+export function RoomToolBudgetBadge({ sessionId }: Props) {
   const [roomValue, setRoomValue] = useState<number | null>(null);
   const [globalDefault, setGlobalDefault] = useState(10);
   const [editing, setEditing] = useState(false);
@@ -29,13 +29,13 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
   useEffect(() => {
     setRoomValue(null);
     setEditing(false);
-    void ipc.settings.getSession(roomId).then((s: SessionSettings) => {
+    void ipc.settings.getSession(sessionId).then((s: SessionSettings) => {
       setRoomValue(s.maxToolCalls);
     });
     void ipc.settings.getGlobal().then((s: GlobalSettings) => {
       setGlobalDefault(s.maxToolCalls);
     });
-  }, [roomId]);
+  }, [sessionId]);
 
   const effective = roomValue ?? globalDefault;
   const badgeLabel = effective === -1 ? '∞' : effective === 0 ? '禁用' : `${effective}次`;
@@ -66,7 +66,7 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
             : Number(draftCustom);
     setSaving(true);
     try {
-      const updated = await ipc.settings.updateSession(roomId, { maxToolCalls: val });
+      const updated = await ipc.settings.updateSession(sessionId, { maxToolCalls: val });
       setRoomValue(updated.maxToolCalls);
       setEditing(false);
     } finally {

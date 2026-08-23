@@ -9,20 +9,20 @@ import type { ImMessage } from '../../ipc/types';
 
 // vi.hoisted 保证 store 状态在 vi.mock 工厂注册前完成初始化（工厂内只定义函数，
 // 实际 state 访问延迟到 render 期，但 hoisted 可规避 TS「used before declaration」告警）。
-const { imState, authState } = vi.hoisted(() => ({
-  imState: {
-    activeRoomId: '!room:server',
-    messagesByRoom: new Map<string, ImMessage[]>(),
+const { sessionState, authState } = vi.hoisted(() => ({
+  sessionState: {
+    activeSessionId: 'sess-room',
+    messagesBySession: new Map<string, ImMessage[]>(),
     loading: false,
-    loadingOlderByRoom: new Map<string, boolean>(),
-    hasMoreByRoom: new Map<string, boolean>(),
+    loadingOlderBySession: new Map<string, boolean>(),
+    hasMoreBySession: new Map<string, boolean>(),
     loadOlder: () => Promise.resolve(),
   },
   authState: { user: { userId: '@me:server' } },
 }));
 
-vi.mock('../../stores/im.store', () => ({
-  useImStore: (selector: (s: typeof imState) => unknown) => selector(imState),
+vi.mock('../../stores/session.store', () => ({
+  useSessionStore: (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
 }));
 vi.mock('../../stores/auth.store', () => ({
   useAuthStore: (selector: (s: typeof authState) => unknown) => selector(authState),
@@ -57,7 +57,7 @@ import { MessageList } from './MessageList';
 /** 构造 ImMessage（默认普通 m.room.message）。v2.0 A 子系统：字段对齐 SQLite messages 表 row */
 function makeMsg(overrides: Partial<ImMessage> & { id: string }): ImMessage {
   return {
-    sessionId: '!room:server',
+    sessionId: 'sess-room',
     sender: '@bot:server',
     body: '',
     eventType: 'm.room.message',
@@ -77,7 +77,7 @@ function makeMsg(overrides: Partial<ImMessage> & { id: string }): ImMessage {
 
 /** 把消息列表注入 mock store 后渲染 MessageList */
 function renderWith(messages: ImMessage[]): void {
-  imState.messagesByRoom = new Map([['!room:server', messages]]);
+  sessionState.messagesBySession = new Map([['sess-room', messages]]);
   render(<MessageList />);
 }
 

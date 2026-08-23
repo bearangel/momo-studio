@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import { ipc } from '../../ipc/client';
 import { AddToWorkspaceDialog } from './AddToWorkspaceDialog';
 import { AssignmentRoleEditor } from './AssignmentRoleEditor';
@@ -53,9 +53,9 @@ export function WorkspaceAgentsPanel() {
     void stopAgent(a.instanceId);
     await ipc.agent.removeAssignment(a.instanceId);
     if (workspace) await loadAssignments(workspace.id);
-    // v1.5.8：bot 被 owner kick 后成员列表需重新读取（成员面板不会自动跟随 sync 更新）
-    const { activeRoomId, loadMembers } = useImStore.getState();
-    if (activeRoomId) await loadMembers(activeRoomId);
+    // v1.5.8：bot 被 owner kick 后成员列表需重新读取（成员面板不会自动跟随更新）
+    const { activeSessionId, loadMembers } = useSessionStore.getState();
+    if (activeSessionId) await loadMembers(activeSessionId);
   };
 
   const handleStart = (a: AgentAssignment): void => {

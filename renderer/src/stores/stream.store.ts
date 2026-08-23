@@ -3,8 +3,8 @@
 // A 子系统重写：基于 message_events 事件流聚合 StreamState。
 //
 // 数据来源（两条路径走同一份 events + 同一个 aggregateEvents 函数，UI 必然一致）：
-//   - 实时：ipc.im.onMessageEventBatch 推送（主进程 MessageEventBuffer 每 50ms flush）
-//   - 重启：ipc.im.getMessages 返回的 eventsByMessage（selectRoom 时一次性拉取）
+//   - 实时：ipc.session.onMessageEventBatch 推送（主进程 MessageEventBuffer 每 50ms flush）
+//   - 重启：ipc.session.getMessages 返回的 eventsByMessage（selectSession 时一次性拉取）
 //
 // 核心不变量：renderer 实时显示与重启后显示完全一致——因为两路都用 aggregateEvents
 // 处理同一份 MessageEventRow 数组。

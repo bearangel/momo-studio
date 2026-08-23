@@ -7,7 +7,7 @@
 // 每条 message 是否流式由 MessageBubble 内部按 message.id 查 stream.store 判断——
 // streaming 时 MessageBubble 渲染 AgentStreamBubble，否则渲染静态消息。
 import { useEffect, useRef } from 'react';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import { useAuthStore } from '../../stores/auth.store';
 import { useBotNameMap } from '../../lib/useBotNames';
 import type { ImMessage } from '../../ipc/types';
@@ -61,23 +61,23 @@ function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> 
 
 
 export function MessageList() {
-  const activeRoomId = useImStore((s) => s.activeRoomId);
-  const messages = useImStore((s) =>
-    activeRoomId ? s.messagesByRoom.get(activeRoomId) : undefined,
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const messages = useSessionStore((s) =>
+    activeSessionId ? s.messagesBySession.get(activeSessionId) : undefined,
   );
-  const loading = useImStore((s) => s.loading);
-  const loadingOlder = useImStore((s) =>
-    activeRoomId ? s.loadingOlderByRoom.get(activeRoomId) ?? false : false,
+  const loading = useSessionStore((s) => s.loading);
+  const loadingOlder = useSessionStore((s) =>
+    activeSessionId ? s.loadingOlderBySession.get(activeSessionId) ?? false : false,
   );
-  const hasMore = useImStore((s) =>
-    activeRoomId ? s.hasMoreByRoom.get(activeRoomId) ?? true : true,
+  const hasMore = useSessionStore((s) =>
+    activeSessionId ? s.hasMoreBySession.get(activeSessionId) ?? true : true,
   );
-  const loadOlder = useImStore((s) => s.loadOlder);
+  const loadOlder = useSessionStore((s) => s.loadOlder);
   const currentUserId = useAuthStore((s) => s.user?.userId ?? null);
   const botNameByUserId = useBotNameMap();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);
-  const prevRoomIdRef = useRef<string | null>(activeRoomId);
+  const prevRoomIdRef = useRef<string | null>(activeSessionId);
   const isNearBottomRef = useRef(true);
   const pendingScrollRestore = useRef<number | null>(null);
 
@@ -85,9 +85,9 @@ export function MessageList() {
     const el = scrollRef.current;
     if (!el) return;
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (el.scrollTop === 0 && activeRoomId && !loadingOlder && hasMore) {
+    if (el.scrollTop === 0 && activeSessionId && !loadingOlder && hasMore) {
       pendingScrollRestore.current = el.scrollHeight;
-      void loadOlder(activeRoomId);
+      void loadOlder(activeSessionId);
     }
   };
 
@@ -106,8 +106,8 @@ export function MessageList() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const isRoomChange = prevRoomIdRef.current !== activeRoomId;
-    prevRoomIdRef.current = activeRoomId;
+    const isRoomChange = prevRoomIdRef.current !== activeSessionId;
+    prevRoomIdRef.current = activeSessionId;
     if (pendingScrollRestore.current !== null) {
       isFirstRender.current = false;
       return;
@@ -119,9 +119,9 @@ export function MessageList() {
       el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
     }
     isFirstRender.current = false;
-  }, [messages, activeRoomId]);
+  }, [messages, activeSessionId]);
 
-  if (!activeRoomId) {
+  if (!activeSessionId) {
     return (
       <div className="flex-1 flex items-center justify-center text-neutral-500">
         <p className="text-sm">选择一个房间开始对话</p>
@@ -158,10 +158,10 @@ export function MessageList() {
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
-      {activeRoomId && loadingOlder && (
+      {activeSessionId && loadingOlder && (
         <div className="text-center text-xs text-neutral-500 py-2">加载历史中…</div>
       )}
-      {activeRoomId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
+      {activeSessionId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
         <div className="text-center text-xs text-neutral-500 py-2">— 已到顶部 —</div>
       )}
       {groupedItems.map((item) => {

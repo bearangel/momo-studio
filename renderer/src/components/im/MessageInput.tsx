@@ -1,9 +1,8 @@
 // renderer/src/components/im/MessageInput.tsx
 import { useState, useCallback, useEffect, type KeyboardEvent } from 'react';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { ipc } from '../../ipc/client';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 import type { AgentAssignment } from '../../ipc/types';
 
@@ -12,11 +11,13 @@ export function MessageInput() {
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStart, setMentionStart] = useState(-1);
+  // v2.0 P1 Task 9：pendingMentions 存 assignmentId（instanceId），
+  // 经 store.sendMessage(body, mentionedAssignmentIds) 透传给 session:send。
   const [pendingMentions, setPendingMentions] = useState<string[]>([]);
-  const activeRoomId = useImStore((s) => s.activeRoomId);
-  const members = useImStore((s) => s.members);
-  const sendMessage = useImStore((s) => s.sendMessage);
-  const loadRooms = useImStore((s) => s.loadRooms);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const members = useSessionStore((s) => s.members);
+  const sendMessage = useSessionStore((s) => s.sendMessage);
+  const loadSessions = useSessionStore((s) => s.loadSessions);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { assignments, loadAssignments, definitions, loadDefinitions } = useAgentStore();
   const botNameMap = useBotNameMap();
@@ -32,28 +33,24 @@ export function MessageInput() {
     (a) =>
       a.enabled &&
       a.lastRunning &&
-      members.some((m) => m.userId === a.agentUserId),
+      members.some((m) => m.assignmentId === a.instanceId),
   );
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || !activeRoomId) return;
+    if (!trimmed || !activeSessionId) return;
     const mentions = pendingMentions.length > 0 ? [...pendingMentions] : undefined;
     setText('');
     setPendingMentions([]);
     setMentionMenuOpen(false);
     try {
-      if (mentions) {
-        await ipc.im.sendWithMentions(activeRoomId, trimmed, mentions);
-      } else {
-        await sendMessage(trimmed);
-      }
-      await loadRooms();
-    } catch (err) {
+      await sendMessage(trimmed, mentions);
+      await loadSessions();
+    } catch {
       setText(trimmed);
       if (mentions) setPendingMentions(mentions);
     }
-  }, [text, activeRoomId, pendingMentions, sendMessage, loadRooms]);
+  }, [text, activeSessionId, pendingMentions, sendMessage, loadSessions]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -91,9 +88,16 @@ export function MessageInput() {
     const newText = `${before}@${display} ${after}`;
     setText(newText);
     setPendingMentions((prev) =>
-      prev.includes(agent.agentUserId) ? prev : [...prev, agent.agentUserId],
+      prev.includes(agent.instanceId) ? prev : [...prev, agent.instanceId],
     );
     setMentionMenuOpen(false);
+  };
+
+  /** assignmentId → 展示名（mention chip 用；回退 agentName → agentUserId 解析） */
+  const mentionDisplayName = (assignmentId: string): string => {
+    const a = assignments.find((x) => x.instanceId === assignmentId);
+    if (!a) return assignmentId;
+    return a.agentName ?? resolveBotName(a.agentUserId ?? '', botNameMap);
   };
 
   const filteredAgents = mentionQuery
@@ -128,13 +132,13 @@ export function MessageInput() {
 
       {pendingMentions.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
-          {pendingMentions.map((userId) => {
-            const name = resolveBotName(userId, botNameMap);
+          {pendingMentions.map((assignmentId) => {
+            const name = mentionDisplayName(assignmentId);
             return (
               <button
-                key={userId}
+                key={assignmentId}
                 type="button"
-                onClick={() => setPendingMentions((prev) => prev.filter((m) => m !== userId))}
+                onClick={() => setPendingMentions((prev) => prev.filter((m) => m !== assignmentId))}
                 className="text-xs px-2 py-0.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-red-500/20 hover:text-red-400"
               >
                 @{name} ×
@@ -148,8 +152,8 @@ export function MessageInput() {
         value={text}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        disabled={!activeRoomId}
-        placeholder={activeRoomId ? '输入消息，Enter 发送。输入 @ 选择 agent' : '请先选择房间'}
+        disabled={!activeSessionId}
+        placeholder={activeSessionId ? '输入消息，Enter 发送。输入 @ 选择 agent' : '请先选择房间'}
         rows={2}
         className="w-full resize-none rounded-md bg-bg-tertiary border border-border-subtle px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-accent-blue focus:outline-none disabled:opacity-50"
       />

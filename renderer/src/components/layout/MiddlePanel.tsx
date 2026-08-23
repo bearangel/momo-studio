@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
-import { useImStore } from '../../stores/im.store';
+import { useSessionStore } from '../../stores/session.store';
 import { ipc } from '../../ipc/client';
 import { FileTree } from '../files/FileTree';
 import { CodeEditor } from '../editor/CodeEditor';
@@ -26,14 +26,14 @@ export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
-  const activeRoomId = useImStore((s) => s.activeRoomId);
-  const rooms = useImStore((s) => s.rooms);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
   const [showMembers, setShowMembers] = useState(false);
 
-  // 切换房间时关闭成员浮层，避免新房间显示旧成员
+  // 切换会话时关闭成员浮层，避免新会话显示旧成员
   useEffect(() => {
     setShowMembers(false);
-  }, [activeRoomId]);
+  }, [activeSessionId]);
 
   // 点击文件 → 通过 IPC 读取内容 → 打开到编辑器 tab
   const handleSelectFile = useCallback(
@@ -74,33 +74,33 @@ export function MiddlePanel() {
     );
   }
 
-  // im 视图：左侧房间列表 + 中间消息流和工具条和输入框 + 成员浮层（按需）
+  // im 视图：左侧会话列表 + 中间消息流和工具条和输入框 + 成员浮层（按需）
   if (activeView === 'im') {
-    const activeRoom = rooms.find((r) => r.roomId === activeRoomId);
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
     return (
       <div className="flex-1 flex min-w-0">
         <ResizableSidebar storageKey="im-sidebar" minWidth={180} maxWidth={400} defaultWidth={240} collapsedLabel="会话">
           <RoomList />
         </ResizableSidebar>
         <div className="flex-1 flex flex-col min-w-0 relative">
-          {/* 房间头部：房间名 + 工具上限徽标 */}
+          {/* 会话头部：会话名 + 工具上限徽标 */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
             <span className="text-sm text-neutral-100 truncate flex-1">
-              {activeRoom ? activeRoom.name : '未选择房间'}
+              {activeSession ? activeSession.title : '未选择房间'}
             </span>
-            {activeRoomId && <RoomToolBudgetBadge roomId={activeRoomId} />}
-            {activeRoomId && <ExportChatButton roomId={activeRoomId} />}
+            {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
+            {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
           </div>
           <MessageList />
           <InputToolbar
             showMembers={showMembers}
             onToggleMembers={() => setShowMembers((v) => !v)}
-            disabled={!activeRoomId}
+            disabled={!activeSessionId}
             workspaceId={workspace.id}
-            activeRoomId={activeRoomId ?? undefined}
+            activeSessionId={activeSessionId ?? undefined}
           />
           <MessageInput />
-          {showMembers && activeRoomId && (
+          {showMembers && activeSessionId && (
             <>
               {/* 透明 backdrop：点击关闭浮层（仅覆盖 chat 列，不影响 RoomList） */}
               <div

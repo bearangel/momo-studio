@@ -1,7 +1,8 @@
-// 新建房间对话框：名称 + 类型（私聊/群组）+ 邀请对象 + 工具调用上限
+// 新建房间对话框：名称 + 邀请对象 + 工具调用上限
 //
-// v1.4：新增工具调用上限选择器（继承全局 / 禁用 / 无限制 / 自定义）。
-// 创建房间后，若选择非"继承全局"，调用 ipc.settings.updateRoom 写入房间级配置。
+// v2.0 P1 Task 9：底层走 session:create（纯 SQLite，memberAssignmentIds 为
+// assignment 实例）。v1.4 的 isDirect（Matrix 私聊标记）无 session 等价概念，随通道退役。
+// 创建会话后，若选择非"继承全局"，调用 ipc.settings.updateSession 写入会话级配置。
 import { useState, useEffect, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -11,15 +12,14 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
-  /** 可邀请对象（当前 workspace 的 agent bot userId 列表） */
-  inviteCandidates: { userId: string; displayName: string }[];
+  /** 可邀请对象（当前 workspace 的 agent assignment 列表） */
+  inviteCandidates: { assignmentId: string; displayName: string }[];
 }
 
 type ToolLimitChoice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
 export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }: Props) {
   const [name, setName] = useState('');
-  const [isDirect, setIsDirect] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [toolChoice, setToolChoice] = useState<ToolLimitChoice>('inherit');
   const [customValue, setCustomValue] = useState('10');
@@ -57,26 +57,27 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (!activeWorkspaceId) return;
     const maxToolCalls = resolveMaxToolCalls();
     try {
-      const { roomId } = await ipc.im.createRoom({
-        name: name.trim(),
-        isDirect,
-        inviteUserIds: selected,
-        workspaceId: activeWorkspaceId ?? undefined,
+      const session = await ipc.session.create({
+        workspaceId: activeWorkspaceId,
+        title: name.trim(),
+        memberAssignmentIds: selected,
+        kind: 'chat',
       });
-      // 非继承全局时，写入房间级配置。
-      // 房间已创建成功，settings 写入失败不应阻断流程（房间客观存在）。
+      // 非继承全局时，写入会话级配置。
+      // 会话已创建成功，settings 写入失败不应阻断流程（会话客观存在）。
       if (maxToolCalls !== null) {
         try {
-          await ipc.settings.updateSession(roomId, { maxToolCalls });
+          await ipc.settings.updateSession(session.id, { maxToolCalls });
         } catch {
-          // settings 写入失败仅告警，不阻断房间创建流程
+          // settings 写入失败仅告警，不阻断会话创建流程
         }
       }
       onCreated();
       onClose();
-      setName(''); setSelected([]); setIsDirect(false);
+      setName(''); setSelected([]);
       setToolChoice('inherit');
     } catch (err) {
       alert(`创建失败：${err instanceof Error ? err.message : String(err)}`);
@@ -92,16 +93,12 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
           <input value={name} onChange={(e) => setName(e.target.value)} required
             className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100" />
         </label>
-        <label className="flex items-center gap-2 text-xs text-neutral-300">
-          <input type="checkbox" checked={isDirect} onChange={(e) => setIsDirect(e.target.checked)} />
-          私聊（单人对单）
-        </label>
         <div className="text-xs text-neutral-400">邀请对象（当前 workspace 的 agent）
           <div className="mt-1 flex flex-col gap-1 max-h-40 overflow-auto">
             {inviteCandidates.length === 0 && <span className="text-neutral-500">暂无可邀请 agent</span>}
             {inviteCandidates.map((c) => (
-              <label key={c.userId} className="flex items-center gap-2 text-sm text-neutral-300">
-                <input type="checkbox" checked={selected.includes(c.userId)} onChange={() => toggle(c.userId)} />
+              <label key={c.assignmentId} className="flex items-center gap-2 text-sm text-neutral-300">
+                <input type="checkbox" checked={selected.includes(c.assignmentId)} onChange={() => toggle(c.assignmentId)} />
                 {c.displayName}
               </label>
             ))}

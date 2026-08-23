@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { AuthResult } from '../ipc/types';
-import { useImStore } from './im.store';
+import { useSessionStore } from './session.store';
 import { useProviderStore } from './provider.store';
 
 export type AuthStatus = 'unknown' | 'unauthenticated' | 'authenticated';
@@ -67,7 +67,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     await ipc.auth.logout();
-    useImStore.getState().reset();
+    useSessionStore.getState().reset();
     useProviderStore.getState().clear();
     set({ status: 'unauthenticated', user: null, wasAuthenticated: true });
   },

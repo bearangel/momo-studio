@@ -33,7 +33,7 @@ describe('RoomToolBudgetBadge', () => {
 
   it('继承全局时显示全局默认值 (10次)', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: null });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => {
       expect(screen.getByText('10次')).toBeInTheDocument();
     });
@@ -41,7 +41,7 @@ describe('RoomToolBudgetBadge', () => {
 
   it('房间级覆盖 (20) 时显示 20次', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: 20 });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => {
       expect(screen.getByText('20次')).toBeInTheDocument();
     });
@@ -49,7 +49,7 @@ describe('RoomToolBudgetBadge', () => {
 
   it('有效值 -1 显示 ∞', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: -1 });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => {
       expect(screen.getByText('∞')).toBeInTheDocument();
     });
@@ -57,7 +57,7 @@ describe('RoomToolBudgetBadge', () => {
 
   it('有效值 0 显示 禁用', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: 0 });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => {
       expect(screen.getByText('禁用')).toBeInTheDocument();
     });
@@ -65,7 +65,7 @@ describe('RoomToolBudgetBadge', () => {
 
   it('点击徽标打开 popup，含 4 个选项', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: null });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTitle('工具调用上限'));
@@ -78,7 +78,7 @@ describe('RoomToolBudgetBadge', () => {
   it('选择"禁用工具"并保存，调用 updateSession({ maxToolCalls: 0 })', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: null });
     updateSessionMock.mockResolvedValue({ maxToolCalls: 0 });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTitle('工具调用上限'));
@@ -86,7 +86,7 @@ describe('RoomToolBudgetBadge', () => {
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => {
-      expect(updateSessionMock).toHaveBeenCalledWith('!room:server', { maxToolCalls: 0 });
+      expect(updateSessionMock).toHaveBeenCalledWith('sess-room', { maxToolCalls: 0 });
     });
   });
 
@@ -94,7 +94,7 @@ describe('RoomToolBudgetBadge', () => {
     // 房间当前为 20（覆盖），切回继承全局
     getSessionMock.mockResolvedValue({ maxToolCalls: 20 });
     updateSessionMock.mockResolvedValue({ maxToolCalls: null });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('20次')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTitle('工具调用上限'));
@@ -103,13 +103,13 @@ describe('RoomToolBudgetBadge', () => {
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => {
-      expect(updateSessionMock).toHaveBeenCalledWith('!room:server', { maxToolCalls: null });
+      expect(updateSessionMock).toHaveBeenCalledWith('sess-room', { maxToolCalls: null });
     });
   });
 
   it('点击 backdrop 关闭 popup（不保存）', async () => {
     getSessionMock.mockResolvedValue({ maxToolCalls: null });
-    render(<RoomToolBudgetBadge roomId="!room:server" />);
+    render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTitle('工具调用上限'));
