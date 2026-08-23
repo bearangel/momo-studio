@@ -7,7 +7,9 @@
 //   1. buildSpawnOpts 构造完整 AgentRuntimeOpts（复用 spawn-helpers）
 //   2. fork runtime-entry.js（AGENT_CONFIG 环境变量传 config）
 //   3. 注册 message handler（chunk 转发 → onChunk 回调；audit:toolCall →
-//      审计落库 + 周期性配额巡检，P2 Task 8 恢复 v1 被删的审计桥）
+//      审计落库 + 周期性配额巡检，P2 Task 8 恢复 v1 被删的审计桥；
+//      mcp:listTools / mcp:callTool → 复用 host-manager 按 id 回写响应，
+//      P2 Task 9 恢复 task-driven 路径的 MCP 工具可用性）
 //   4. 注册 exit handler（→ onExit 回调）
 //   5. 返回 SpawnedRuntime 给 WarmPool
 
@@ -18,6 +20,7 @@ import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
 import { insertToolCall } from '../audit/insert';
 import { enforceAuditQuota } from '../audit/quota';
+import { listMcpTools, callMcpTool } from '../mcp/host-manager';
 
 import type { AgentRuntimeOpts } from './runtime-config';
 
@@ -61,6 +64,19 @@ interface AuditToolCallChildMsg {
   durationMs?: unknown;
 }
 
+/**
+ * 子进程 mcp 请求消息的宽松形状（mcp-bridge.ts 定型的线协议）。
+ * 响应按 id 回写且不带 type 字段——子进程只按 m.id 配对，不检查 type。
+ */
+interface McpChildRequestMsg {
+  type?: string;
+  id?: unknown;
+  workspaceId?: unknown;
+  mcpName?: unknown;
+  toolName?: unknown;
+  args?: unknown;
+}
+
 export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const { assignmentId, runtimeConfig, onChunk, onExit } = opts;
 
@@ -76,12 +92,13 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
   });
 
-  // 注册 message handler（chunk 转发）
-  const messageHandler = (msg: unknown): void => {
+  // 注册 message handler（chunk 转发）。handler 为 async：仅 mcp 分支含 await，
+  // handleChildMessage / audit 分支仍同步执行，优先语义与 T8 行为不变。
+  const messageHandler = async (msg: unknown): Promise<void> => {
     // 内部事件（dispatch/task_reply/abort_dispatch）优先转给桥处理；已消费则不进 chunk 通道
     if (handleChildMessage(msg)) return;
     if (typeof msg !== 'object' || msg === null) return;
-    const m = msg as AuditToolCallChildMsg;
+    const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
     // 审计桥（P2 Task 8，恢复 v1 被删的桥接）：子进程 audit.ts 的 process.send
     // 载荷无 workspace/agent 身份，用 spawn 闭包的 runtimeConfig 补全。
     // durationMs 可能是字符串/浮点/NaN（IPC 类型漂移），收敛为安全整数。
@@ -102,11 +119,37 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       }
       return;
     }
+    // MCP 桥（P2 Task 9）：子进程 mcp-bridge.ts 的工具发现/调用请求，复用
+    // 主进程 host-manager 进程池，按 id 回写配对响应（字段经 String() 收敛，
+    // 与 audit 分支同样容忍 IPC 类型漂移）。id 非字符串时无法配对，落入下方忽略。
+    if (m.type === 'mcp:listTools' && typeof m.id === 'string') {
+      try {
+        const tools = await listMcpTools(String(m.workspaceId), String(m.mcpName));
+        child.send({ id: m.id, tools });
+      } catch (err) {
+        child.send({ id: m.id, error: (err as Error).message });
+      }
+      return;
+    }
+    if (m.type === 'mcp:callTool' && typeof m.id === 'string') {
+      try {
+        const result = await callMcpTool(
+          String(m.workspaceId),
+          String(m.mcpName),
+          String(m.toolName),
+          (m.args as Record<string, unknown>) ?? {},
+        );
+        child.send({ id: m.id, result });
+      } catch (err) {
+        child.send({ id: m.id, error: (err as Error).message });
+      }
+      return;
+    }
     // StreamChunk 类型的消息转发给 onChunk
     if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'todo_update', 'end', 'segment_boundary'].includes(m.type)) {
       onChunk(msg as StreamChunk);
     }
-    // 其他类型的消息（task-end / mcp 请求等）由调用方在 child.on('message') 内处理
+    // 其他类型的消息（task-end 等）由调用方在 child.on('message') 内处理
   };
   child.on('message', messageHandler);
 
