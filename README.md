@@ -6,6 +6,20 @@
 
 ## 状态
 
+**v2.0.0-p2 — UI 骨架与设置（开发中，未发布）**
+
+2.0.0 第二期：应用壳与设置重构。详见 `docs/plans/2026-08-23-v2.0.0-p2-ui-shell.md`。
+
+- **无边框窗口 + 自绘 TitleBar**——frameless（mac 保留红绿灯），workspace tab + 窗口控制 IPC + 状态持久化；Linux 路径 xvfb 冒烟通过
+- **活动栏 + 统一侧边栏**——LeftRail / WorkspaceSwitcher 退役；ActivityBar 切换主视图，全局 Ctrl/Cmd+B 折叠侧边栏
+- **设置独立界面**——AccountSettings 内嵌页退役；独立设置界面（分类导航 + 菜单重排）
+- **模型服务两列管理**——provider platform 显式化（migration v24：provider platform / provider_models / audit 配额列）+ 模型列表管理
+- **默认模型四类 + 关于页**——默认模型按场景四类选择；About 显示 Electron 版本
+- **审计容量滚动删除**——audit 表配额上限 + 滚动删除；`audit:toolCall` 子进程桥恢复
+- **MCP 子进程桥恢复**——task-driven 执行路径重新可用 MCP 工具（死通道防御 + 进程池惰性填充）
+- **abort 级联传播**——`abort_dispatch` 中断子 agent；删除 `agent:stream` 死推送
+- 待办：mac 主机交互验收（真实拖拽 tab / 红绿灯）、P3 半成品处置 + IPC 收敛
+
 **v2.0.0-p1 — 会话内核（开发中，未发布）**
 
 2.0.0 第一期：传输层内迁，终结 v1/v2 双轨。详见 `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` 与 `docs/plans/2026-08-23-v2.0.0-p1-session-core.md`。
@@ -14,7 +28,7 @@
 - **sessions 数据模型（migration v23）**——`sessions` / `session_members` 表取代 Matrix room；workspace 隔离 = 外键；会话级配置（工具上限/冲突策略）存 `settings_json`
 - **传输层内迁**——SessionService + 进程内事件分发（RouterService 切输入源），消息/委派不再经过外部协议服务器
 - **task_reply 回传链接线**——删除 v1 长存进程双轨，dispatch/task_reply 走内部事件桥，子 agent 结果可靠回传
-- 待办：P2 UI 骨架、P3 半成品处置 + IPC 收敛、P4 局域网联网、P5 升级体验
+- 待办：P3 半成品处置 + IPC 收敛、P4 局域网联网、P5 升级体验
 
 **v1.7.0 — Released**
 
