@@ -439,7 +439,7 @@ describe('runChatLoop streaming', () => {
     expect(stats.toolCallsUsed).toBe(2);
   });
 
-  it('start chunk 携带 roomId 和 botUserId', async () => {
+  it('start chunk 携带 sessionId 和 senderAgentId（Task 6 字段迁移）', async () => {
     mockProvider([{ type: 'text', content: 'hi' }, { type: 'done', finishReason: 'stop' }]);
 
     await runChatLoop(
@@ -451,11 +451,11 @@ describe('runChatLoop streaming', () => {
     );
 
     const startChunk = streamChunks().find((c) => c.type === 'start') as {
-      roomId: string;
-      botUserId: string;
+      sessionId: string;
+      senderAgentId: string;
     };
-    expect(startChunk.roomId).toBe('!special:localhost');
-    expect(startChunk.botUserId).toBe('@mybot:localhost');
+    expect(startChunk.sessionId).toBe('!special:localhost');
+    expect(startChunk.senderAgentId).toBe('@mybot:localhost');
   });
 });
 

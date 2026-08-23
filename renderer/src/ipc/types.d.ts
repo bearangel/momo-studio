@@ -556,8 +556,10 @@ export type StreamChunk =
   | {
       type: 'start';
       streamSessionId: string;
-      roomId: string;
-      botUserId: string;
+      /** Task 6 字段迁移：原 roomId。会话 ID（与 electron 端 stream-chunk.ts 对齐）。 */
+      sessionId: string;
+      /** Task 6 字段迁移：原 botUserId。发送方 agent 标识（值仍为 bot 的 Matrix userId）。 */
+      senderAgentId: string;
       /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
       parentStreamSessionId?: string;
       /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
@@ -598,7 +600,8 @@ export type StreamChunk =
       /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
       type: 'todo_update';
       streamSessionId: string;
-      roomId: string;
+      /** Task 6 字段迁移：原 roomId。会话 ID（与 start.sessionId 同值语义）。 */
+      sessionId: string;
       /** 完整任务列表（覆盖式）；空数组 = 清空 */
       todos: TodoItem[];
       /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
@@ -756,8 +759,8 @@ export interface ApiSurface {
     onRuntimeChanged(callback: () => void): () => void;
     /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
     onStream(callback: (chunk: StreamChunk) => void): () => void;
-    /** v1.4：中断指定房间的活跃流式会话 */
-    abortStream(roomId: string): Promise<void>;
+    /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
+    abortStream(streamSessionId: string): Promise<void>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

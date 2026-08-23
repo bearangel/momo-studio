@@ -142,15 +142,15 @@ describe('AgentStreamBubble', () => {
     expect(screen.getByText('read_file')).toBeInTheDocument();
   });
 
-  it('点击停止按钮调用 ipc.agent.abortStream(message.sessionId)', () => {
+  it('点击停止按钮调用 ipc.agent.abortStream(message.streamSessionId)', () => {
     render(
       <AgentStreamBubble
         stream={makeStream()}
-        message={makeMessage({ sessionId: '!r:server' })}
+        message={makeMessage({ streamSessionId: 'ss-stop-1' })}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /停止/ }));
-    expect(abortStreamMock).toHaveBeenCalledWith('!r:server');
+    expect(abortStreamMock).toHaveBeenCalledWith('ss-stop-1');
   });
 
   it('streaming 时渲染流式光标', () => {

@@ -10,7 +10,7 @@ import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
-import { setMainWindow as setRuntimeMainWindow } from './agent/runtime-manager';
+import { setMainWindow as setRuntimeMainWindow } from './agent/stream-relay';
 import { initP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';

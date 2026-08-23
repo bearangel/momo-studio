@@ -16,13 +16,14 @@ import {
   spawnAgent,
   stopAllAgents,
   abortStream,
-  setMainWindow,
   setRuntimeEntryOverride,
   __getStreamChildren,
   __getActiveStreams,
   __resetStreamState,
   type AgentRuntimeOpts,
 } from '../../src/main/agent/runtime-manager';
+// Task 6：setMainWindow（relay 窗口注入）随流式中继迁至 stream-relay
+import { setMainWindow } from '../../src/main/agent/stream-relay';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 
 const fakeStream = path.join(__dirname, 'fake-runtime-stream.ts');

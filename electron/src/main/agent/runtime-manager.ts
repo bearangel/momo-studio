@@ -7,9 +7,11 @@
 // v2 替代：
 //   - spawnAgent → runtime-spawner.spawnForAgent + WarmPool.warm
 //   - stopAgent → WarmPool.destroyAll
-//   - registerStreamIpc → RouterService + AgentRunner
+//   - registerStreamIpc / chunk 中继 / 按 session 中断 → stream-relay.ts（Task 6 拆出）
 //
-// 【注意】registerStreamIpc 仍被 ipc/index.ts 调用——v2 模式下不注册 handler 但函数保留。
+// 【注意】本文件现仅保留 v1 机器（spawn/stop/崩溃重启/activeStreams 中断）。
+// 流式 chunk 的 relay + SQLite 落盘（handleStreamChunk/routeChunkToBuffer）与
+// agent:abortStream IPC 注册已迁至 stream-relay.ts，此处按需 import 复用。
 //
 // Agent runtime 子进程生命周期管理。每个 agent 实例（instanceId）在独立的
 // Node 子进程中运行，主进程通过进程池（Map<instanceId, ChildProcess>）跟踪。
@@ -23,7 +25,6 @@
 import { fork, spawn, type ChildProcess, type Serializable } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
@@ -33,12 +34,7 @@ import { getSyncingClient } from '../matrix/sync-manager';
 import { isDirectChat, hasWorkspaceCoordinator } from '../matrix/room-info';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { StreamChunk } from './stream-chunk';
-import { MessageEventBuffer } from '../storage/messages/event-buffer';
-import {
-  insertMessage,
-  updateMessageStatus,
-  getMessageByStreamSessionId,
-} from '../storage/messages/repo';
+import { handleStreamChunk, relayStreamChunk } from './stream-relay';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
 export interface AgentRuntimeOpts {
@@ -109,235 +105,12 @@ const activeStreams = new Map<string, Array<{ streamSessionId: string; child: Ch
 const streamChildren = new Map<string, Set<string>>();
 
 /**
- * 主窗口引用（由 main/index.ts 通过 setMainWindow 注入）。
- * 流式 chunk 需经 webContents.send('agent:stream') 推到 renderer，
- * 而 runtime-manager 自身不持有窗口，故需外部注入。
+ * 主窗口引用已随 relayStreamChunk 迁至 stream-relay.ts（setMainWindow）。
+ * 主进程入口请改为从 stream-relay import setMainWindow 注入窗口。
  */
-let mainWindow: BrowserWindow | null = null;
 
-/** 由 main/index.ts 在创建主窗口后调用，注册窗口引用用于推送流式 chunk */
-export function setMainWindow(win: BrowserWindow | null): void {
-  mainWindow = win;
-}
-
-/** 转发流式 chunk 到 renderer（窗口未就绪/已销毁时静默跳过） */
-function relayStreamChunk(chunk: StreamChunk): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('agent:stream', chunk);
-  }
-}
-
-// === A7：stream chunk → MessageEventBuffer 落盘 ===
-
-/**
- * 全局 MessageEventBuffer 单例。聚批 stream chunk 后单事务写入 message_events 表，
- * flush 时批量推送给 renderer（im:message_event_batch 通道）。
- * 单例简化生命周期管理；内部 pending 数组操作同步，并发安全。
- */
-let eventBuffer: MessageEventBuffer | null = null;
-
-function getEventBuffer(): MessageEventBuffer {
-  if (!eventBuffer) {
-    eventBuffer = new MessageEventBuffer({
-      onFlush: (events) => {
-        // headless / 测试环境 BrowserWindow 可能为 undefined，静默跳过 IPC 推送
-        if (!BrowserWindow) return;
-        const win = BrowserWindow.getAllWindows()[0];
-        if (!win || win.isDestroyed()) return;
-        win.webContents.send('im:message_event_batch', events);
-      },
-    });
-  }
-  return eventBuffer;
-}
-
-/** 测试用：重置单例（清 pending + 销毁 timer） */
-export function __resetEventBufferForTest(): void {
-  eventBuffer?.destroy();
-  eventBuffer = null;
-}
-
-/** 测试用：导出 routeChunkToBuffer 以便单测直接验证 chunk → SQLite 映射 */
-export function __routeChunkToBufferForTest(chunk: StreamChunk): void {
-  routeChunkToBuffer(chunk);
-}
-
-/** 测试用：强制 flush 当前 buffer（确保 pending events 落盘后再断言） */
-export function __flushEventBufferForTest(): void {
-  if (eventBuffer) eventBuffer.flush();
-}
-
-/**
- * task-driven runtime 的 chunk 入口——relay 到 renderer + 落盘 SQLite。
- * WarmPool spawn 的子进程 chunk 经此函数走与 v1 runtime-manager 相同的双通道。
- */
-export function handleStreamChunk(chunk: StreamChunk): void {
-  relayStreamChunk(chunk);
-  routeChunkToBuffer(chunk);
-}
-
-/**
- * 把单个 StreamChunk 转换为 MessageEventBuffer.append 调用（A 子系统写入路径）。
- *
- * 映射关系：
- *   start             → INSERT messages 行（status='streaming'）+ append status_change
- *   thinking/text     → append thinking_delta / text_delta
- *   tool_call         → append tool_call_start（callId 由 runtime-entry 在 chunk 内携带）
- *   tool_result       → append tool_call_result（callId 配对同一工具调用）
- *   todo_update       → append todo_update
- *   segment_boundary  → INSERT 分段 messages 行（segment_of/segment_index）+ append final
- *   end               → UPDATE messages status + flush + append final
- *
- * DB 未就绪（测试环境/表未迁移）时整包 try/catch 静默跳过——buffer 落盘是 best-effort，
- * 不应阻塞 renderer 流式显示（relayStreamChunk 仍正常工作）。
- */
-function routeChunkToBuffer(chunk: StreamChunk): void {
-  let msg;
-  try {
-    switch (chunk.type) {
-      case 'start': {
-        insertMessage({
-          sessionId: chunk.roomId,
-          sender: chunk.botUserId,
-          eventType: 'm.room.message',
-          body: '',
-          streamSessionId: chunk.streamSessionId,
-          parentStreamSessionId: chunk.parentStreamSessionId ?? null,
-          status: 'streaming',
-        });
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'status_change',
-          payload: { status: 'streaming' },
-        });
-        return;
-      }
-      case 'thinking': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'thinking_delta',
-          payload: { delta: chunk.delta },
-        });
-        return;
-      }
-      case 'text': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'text_delta',
-          payload: { delta: chunk.delta },
-        });
-        return;
-      }
-      case 'tool_call': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'tool_call_start',
-          payload: {
-            callId: chunk.callId,
-            toolName: chunk.toolName,
-            args: chunk.args,
-            ...(chunk.isDispatch
-              ? {
-                  isDispatch: true,
-                  subStreamSessionId: chunk.subStreamSessionId,
-                  subAgentName: chunk.subAgentName,
-                  subAgentAvatar: chunk.subAgentAvatar,
-                }
-              : {}),
-          },
-        });
-        return;
-      }
-      case 'tool_result': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'tool_call_result',
-          payload: {
-            callId: chunk.callId,
-            toolName: chunk.toolName,
-            result: chunk.result,
-            success: chunk.success,
-            ...(chunk.subStatus ? { subStatus: chunk.subStatus } : {}),
-          },
-        });
-        return;
-      }
-      case 'todo_update': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        getEventBuffer().append({
-          messageId: msg.id,
-          eventType: 'todo_update',
-          payload: { todos: chunk.todos },
-        });
-        return;
-      }
-      case 'segment_boundary': {
-        // A7 fix：分段边界 → INSERT 独立分段 message row。
-        // 父 message 必须已存在（由前置的 start chunk 创建）；不存在则静默跳过。
-        // 分段 message 仅存 body 快照 + segment_of/segment_index；后续 events 仍关联父 message。
-        const parentMsg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!parentMsg) return;
-        const segMsg = insertMessage({
-          sessionId: parentMsg.sessionId,
-          sender: parentMsg.sender,
-          eventType: 'm.room.message',
-          body: chunk.segmentBody,
-          streamSessionId: chunk.segmentStreamSessionId,
-          segmentOf: chunk.streamSessionId,
-          segmentIndex: chunk.segmentIndex,
-          parentStreamSessionId: parentMsg.parentStreamSessionId,
-          workspaceId: parentMsg.workspaceId,
-          status: 'done',
-        });
-        const segBuf = getEventBuffer();
-        segBuf.append({
-          messageId: segMsg.id,
-          eventType: 'final',
-          payload: { body: chunk.segmentBody },
-        });
-        segBuf.flush();
-        return;
-      }
-      case 'end': {
-        msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
-        const status =
-          chunk.finishReason === 'stop'
-            ? 'done'
-            : chunk.finishReason === 'interrupted'
-              ? 'aborted'
-              : 'failed';
-        updateMessageStatus(msg.id, status);
-        const buf = getEventBuffer();
-        buf.flush();
-        buf.append({
-          messageId: msg.id,
-          eventType: 'final',
-          payload: { status, error: chunk.error },
-        });
-        buf.flush();
-        return;
-      }
-    }
-  } catch (err) {
-    // DB 未就绪 / messages 表不存在（测试环境）→ 静默跳过，不阻塞流式显示
-    logger.debug('routeChunkToBuffer 跳过（DB 未就绪或表不存在）', {
-      chunkType: chunk.type,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
+// === A7：stream chunk 落盘中继已整体迁至 stream-relay.ts（Task 6） ===
+// handleStreamChunk / routeChunkToBuffer / getEventBuffer / 测试钩子均在 stream-relay 导出。
 
 /**
  * 中断指定房间的活跃流式会话。
@@ -379,12 +152,9 @@ export function abortStream(roomId: string): void {
   }
 }
 
-/** 注册流式相关 IPC handler（agent:abortStream） */
-export function registerStreamIpc(): void {
-  ipcMain.handle('agent:abortStream', (_event, roomId: string) => {
-    abortStream(roomId);
-  });
-}
+// agent:abortStream IPC 注册已迁至 stream-relay.ts（registerStreamIpc，
+// 按 streamSessionId 中断）。abortStream(roomId) 保留为 v1 fallback 内部机器，
+// 仅供 runtime-stream-abort 集成测试直接调用。
 
 // 测试钩子：非 null 时用指定 argv 代替真实 runtime-entry.js（参考
 // conduit/manager 的 setBinaryOverride，使单测能 fork 一个可控的假脚本）。
@@ -629,16 +399,17 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     outputSummary?: string;
     success?: boolean;
     durationMs?: number;
-    // v1.4 流式 chunk 字段
+    // v1.4 流式 chunk 字段（Task 6：start/todo_update 的 roomId→sessionId、botUserId→senderAgentId）
     streamSessionId?: string;
-    roomId?: string;
-    botUserId?: string;
+    sessionId?: string;
+    senderAgentId?: string;
     delta?: string;
     result?: string;
     finishReason?: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
     error?: string;
-    // v1.4 预算解析请求字段
+    // v1.4 预算解析 / 房间信息查询 IPC 消息仍用 roomId（非 StreamChunk，字段未迁移）
     maxToolCalls?: number;
+    roomId?: string;
   };
   if (!m.type) return;
 
@@ -653,14 +424,13 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     m.type === 'segment_boundary' ||
     m.type === 'end'
   ) {
-    relayStreamChunk(msg as StreamChunk);
-    // A7：stream chunk 同步落 SQLite message_events 表（best-effort，DB 未就绪时静默跳过）
-    routeChunkToBuffer(msg as StreamChunk);
-    if (m.type === 'start' && m.streamSessionId && m.roomId) {
+    handleStreamChunk(msg as StreamChunk);
+    if (m.type === 'start' && m.streamSessionId && m.sessionId) {
       // v1.5.1：同房间可能已有其他活跃 stream（PM + 子 agent 同 team room），追加而非覆盖
-      const roomEntries = activeStreams.get(m.roomId) ?? [];
+      // Task 6：start chunk 改携带 sessionId（值 = 房间/会话 ID），activeStreams 键沿用该值
+      const roomEntries = activeStreams.get(m.sessionId) ?? [];
       roomEntries.push({ streamSessionId: m.streamSessionId, child });
-      activeStreams.set(m.roomId, roomEntries);
+      activeStreams.set(m.sessionId, roomEntries);
       // v1.4 嵌套：子 agent start chunk 含 parentStreamSessionId 时建立父子映射，
       // abortStream 据此把中断从 PM 传播到子 agent
       const startChunk = msg as StreamChunk;

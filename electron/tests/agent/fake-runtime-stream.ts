@@ -21,11 +21,12 @@ if (!sessionId || !roomId) {
 process.stdout.write(`READY ${sessionId}\n`);
 
 // 发送 start chunk（模拟 runtime-entry 的 sendStreamChunk({ type: 'start', ... })）
+// Task 6 字段迁移：roomId→sessionId、botUserId→senderAgentId
 const startChunk: Record<string, unknown> = {
   type: 'start',
   streamSessionId: sessionId,
-  roomId,
-  botUserId: '@fake-stream:localhost',
+  sessionId: roomId,
+  senderAgentId: '@fake-stream:localhost',
 };
 if (parentId) {
   startChunk.parentStreamSessionId = parentId;

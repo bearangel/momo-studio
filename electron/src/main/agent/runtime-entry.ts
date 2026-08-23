@@ -896,8 +896,10 @@ export async function runChatLoop(
   sendStreamChunk({
     type: 'start',
     streamSessionId,
-    roomId,
-    botUserId: config.botUserId,
+    // Task 6 字段迁移：roomId→sessionId、botUserId→senderAgentId（值语义不变，
+    // senderAgentId 仍携带 bot 的 Matrix userId；Task 7/10 起改传 assignmentId）
+    sessionId: roomId,
+    senderAgentId: config.botUserId,
     // v1.4 嵌套：子 agent 携带父 session ID + 自身展示信息，renderer 据此把子流
     // 嵌套渲染到 PM 气泡内对应 dispatch chip 下方
     ...(parentStreamSessionId

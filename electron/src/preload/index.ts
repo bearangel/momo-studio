@@ -88,7 +88,7 @@ const api: ApiSurface = {
         ipcRenderer.off('agent:stream', handler);
       };
     },
-    abortStream: (roomId: string) => invoke('agent:abortStream', roomId),
+    abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
   },
   provider: {
     list: () => invoke('provider:list'),

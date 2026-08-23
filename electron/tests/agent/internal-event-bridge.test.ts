@@ -94,7 +94,7 @@ describe('主进程侧：handleChildMessage（child IPC → RouterService）', (
     router = mkMockRouter();
     setBridgeRouter(router);
 
-    expect(handleChildMessage({ type: 'start', streamSessionId: 's1', roomId: '!r', botUserId: '@b:h' })).toBe(false);
+    expect(handleChildMessage({ type: 'start', streamSessionId: 's1', sessionId: '!r', senderAgentId: '@b:h' })).toBe(false);
     expect(handleChildMessage({ type: 'text', streamSessionId: 's1', delta: 'x' })).toBe(false);
     expect(handleChildMessage({ type: 'task-end', streamSessionId: 's1', taskId: null })).toBe(false);
     expect(handleChildMessage(null)).toBe(false);

@@ -3,15 +3,12 @@
 // A7 fix 测试：task_complete 多段消息分段时，主进程应为每段 INSERT 独立的
 // message row（segment_of / segment_index 字段正确），不丢失段分隔信号。
 //
-// 两路覆盖：
-//   1. routeChunkToBuffer（主进程侧）：segment_boundary chunk → SQLite 分段 row
-//   2. runChatLoop（子进程侧）：task_complete 分段时发 segment_boundary chunk
+// 覆盖：runChatLoop（子进程侧）——task_complete 分段时发 segment_boundary chunk。
+// 主进程侧 routeChunkToBuffer 的分段落盘用例已随 Task 6 平移到
+// stream-relay.test.ts（routeChunkToBuffer 迁至 stream-relay.ts）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import type { MatrixClient } from 'matrix-js-sdk';
-import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
+import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 
@@ -28,37 +25,10 @@ import {
 } from '../../src/main/agent/runtime-entry';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
-  __routeChunkToBufferForTest,
-  __resetEventBufferForTest,
-  __flushEventBufferForTest,
-} from '../../src/main/agent/runtime-manager';
-import {
   __setMemoryProviderForTest,
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
-import { runMigrations, closeDb } from '../../src/main/storage/db';
-import {
-  getMessageByStreamSessionId,
-  listMessagesBySession,
-} from '../../src/main/storage/messages/repo';
-import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
-
-// === DB 测试夹具 ===
-
-const tmpRoot = path.join(os.tmpdir(), `ap-seg-${Date.now()}`);
-
-function setupDb(): void {
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  process.env.AP_USER_DATA_DIR = tmpRoot;
-  runMigrations();
-}
-
-function teardownDb(): void {
-  closeDb();
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  delete process.env.AP_USER_DATA_DIR;
-}
 
 // === runChatLoop 测试夹具（沿用 runtime-stream.test.ts 模式）===
 
@@ -142,167 +112,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
   };
 }
 
-// === 测试 1：routeChunkToBuffer segment_boundary → SQLite 分段 row ===
-
-describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', () => {
-  beforeEach(() => {
-    setupDb();
-    __resetEventBufferForTest();
-  });
-
-  afterEach(() => {
-    __resetEventBufferForTest();
-    teardownDb();
-  });
-
-  it('segment_boundary chunk 在 messages 表插入独立分段 row（segment_of/segment_index 正确）', () => {
-    // 1. 先发 start chunk 建父 message
-    __routeChunkToBufferForTest({
-      type: 'start',
-      streamSessionId: 'ss-1',
-      roomId: '!room:localhost',
-      botUserId: '@bot:localhost',
-    });
-    const parent = getMessageByStreamSessionId('ss-1');
-    expect(parent).not.toBeNull();
-    expect(parent!.sender).toBe('@bot:localhost');
-
-    // 2. 发 segment_boundary chunk（模拟 task_complete 第 1 段）
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-1',
-      segmentIndex: 1,
-      segmentBody: '第一段内容',
-      segmentStreamSessionId: 'ss-1#seg1',
-    });
-    __flushEventBufferForTest();
-
-    // 3. messages 表应有 2 行（父 + 分段）
-    const rows = listMessagesBySession('!room:localhost');
-    expect(rows).toHaveLength(2);
-
-    // 4. 分段 row 字段正确
-    const seg = getMessageByStreamSessionId('ss-1#seg1');
-    expect(seg).not.toBeNull();
-    expect(seg!.segmentOf).toBe('ss-1');
-    expect(seg!.segmentIndex).toBe(1);
-    expect(seg!.body).toBe('第一段内容');
-    expect(seg!.status).toBe('done');
-    expect(seg!.sender).toBe('@bot:localhost');
-    expect(seg!.sessionId).toBe('!room:localhost');
-  });
-
-  it('多段分段：每段一条独立 row，segment_index 递增', () => {
-    __routeChunkToBufferForTest({
-      type: 'start',
-      streamSessionId: 'ss-2',
-      roomId: '!room:localhost',
-      botUserId: '@bot:localhost',
-    });
-
-    // 第 1 段
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-2',
-      segmentIndex: 1,
-      segmentBody: '段一',
-      segmentStreamSessionId: 'ss-2#seg1',
-    });
-    // 第 2 段
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-2',
-      segmentIndex: 2,
-      segmentBody: '段二',
-      segmentStreamSessionId: 'ss-2#seg2',
-    });
-    __flushEventBufferForTest();
-
-    const rows = listMessagesBySession('!room:localhost');
-    // 父 + 2 段 = 3 行
-    expect(rows).toHaveLength(3);
-
-    const seg1 = getMessageByStreamSessionId('ss-2#seg1');
-    expect(seg1!.segmentIndex).toBe(1);
-    expect(seg1!.segmentOf).toBe('ss-2');
-    const seg2 = getMessageByStreamSessionId('ss-2#seg2');
-    expect(seg2!.segmentIndex).toBe(2);
-    expect(seg2!.segmentOf).toBe('ss-2');
-  });
-
-  it('父 message 不存在时静默跳过（不抛错）', () => {
-    // 不发 start chunk，直接发 segment_boundary —— 父 message 不存在
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-orphan',
-      segmentIndex: 1,
-      segmentBody: '孤儿段',
-      segmentStreamSessionId: 'ss-orphan#seg1',
-    });
-    __flushEventBufferForTest();
-
-    // 不应插入任何 row
-    const rows = listMessagesBySession('!room:localhost');
-    expect(rows).toHaveLength(0);
-  });
-
-  it('分段 row 关联一条 final event（携带 body）', () => {
-    __routeChunkToBufferForTest({
-      type: 'start',
-      streamSessionId: 'ss-3',
-      roomId: '!room:localhost',
-      botUserId: '@bot:localhost',
-    });
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-3',
-      segmentIndex: 1,
-      segmentBody: '段内容',
-      segmentStreamSessionId: 'ss-3#seg1',
-    });
-    __flushEventBufferForTest();
-
-    const seg = getMessageByStreamSessionId('ss-3#seg1');
-    const events = listEventsByMessage(seg!.id);
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    const finalEvent = events.find((e) => e.eventType === 'final');
-    expect(finalEvent).toBeDefined();
-    expect(finalEvent!.payload.body).toBe('段内容');
-  });
-
-  it('segment_boundary 后父 message 的后续 events 仍关联父（路由不切换）', () => {
-    __routeChunkToBufferForTest({
-      type: 'start',
-      streamSessionId: 'ss-4',
-      roomId: '!room:localhost',
-      botUserId: '@bot:localhost',
-    });
-    // 分段
-    __routeChunkToBufferForTest({
-      type: 'segment_boundary',
-      streamSessionId: 'ss-4',
-      segmentIndex: 1,
-      segmentBody: '段一',
-      segmentStreamSessionId: 'ss-4#seg1',
-    });
-    // 分段后的 text chunk 仍用父 streamSessionId —— 应关联父 message
-    __routeChunkToBufferForTest({
-      type: 'text',
-      streamSessionId: 'ss-4',
-      delta: '继续输出',
-    });
-    __flushEventBufferForTest();
-
-    const parent = getMessageByStreamSessionId('ss-4')!;
-    const parentEvents = listEventsByMessage(parent.id);
-    // status_change + text_delta（分段后的 text 关联父）
-    const textEvent = parentEvents.find((e) => e.eventType === 'text_delta');
-    expect(textEvent).toBeDefined();
-    expect(textEvent!.payload.delta).toBe('继续输出');
-  });
-});
-
-// === 测试 2：runChatLoop task_complete 分段时发 segment_boundary chunk ===
+// === runChatLoop task_complete 分段时发 segment_boundary chunk ===
 
 describe('runChatLoop: task_complete 分段发 segment_boundary chunk', () => {
   const originalSend = process.send;

@@ -17,7 +17,9 @@
 
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
-import { spawnAgent, handleStreamChunk, type AgentRuntimeOpts } from './runtime-manager';
+import { spawnAgent, type AgentRuntimeOpts } from './runtime-manager';
+// Task 6：chunk 中继（handleStreamChunk）自 runtime-manager 迁至 stream-relay
+import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner } from './agent-runner';
 import { spawnForAgent } from './runtime-spawner';
@@ -33,6 +35,16 @@ export const agentWarmPools = new Map<string, WarmPool>();
 
 /** modelProviderId → ProviderTokenBucket（LLM 限流共享桶） */
 export const providerBuckets = new Map<string, ProviderTokenBucket>();
+
+// Task 6：注册按 streamSessionId 中断的解析器（注册反转，避免 stream-relay ↔ 本模块循环依赖）。
+// 广播语义：遍历全部 runner 逐个调 abortStream，各 runner 内部按自身活跃表自然过滤——
+// 只有持有该 streamSessionId 的 runner 会真正下发 abort IPC。
+setAbortResolver((streamSessionId) => {
+  for (const runner of agentRunners.values()) {
+    runner.abortStream(streamSessionId);
+  }
+  return agentRunners.size > 0;
+});
 
 // ─── 核心函数 ─────────────────────────────────────────────────────────────
 

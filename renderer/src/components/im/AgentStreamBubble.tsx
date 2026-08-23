@@ -161,7 +161,10 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
           <button
             type="button"
             onClick={() => {
-              void ipc.agent.abortStream(message.sessionId);
+              // Task 6：按 streamSessionId 精确中断（流式消息行必带；缺失时静默跳过）
+              if (message.streamSessionId) {
+                void ipc.agent.abortStream(message.streamSessionId);
+              }
             }}
             style={{
               marginLeft: 'auto',
