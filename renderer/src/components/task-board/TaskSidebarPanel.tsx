@@ -53,12 +53,14 @@ export function TaskSidebarPanel() {
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-3 pt-3 pb-1 shrink-0">
         <span className="text-sm font-medium text-neutral-200">任务</span>
+        {/* 无 workspace 时 CreateWorkspaceDialog 无宿主，禁用入口避免死按钮 */}
         <button
           type="button"
           aria-label="新建任务"
           title="新建任务"
           onClick={() => setCreateOpen(true)}
-          className="text-neutral-400 hover:text-neutral-100 text-sm px-1 rounded"
+          disabled={!workspace}
+          className="text-neutral-400 hover:text-neutral-100 disabled:opacity-40 disabled:hover:text-neutral-400 text-sm px-1 rounded"
         >
           ＋
         </button>
