@@ -3,8 +3,8 @@
 // task-driven 模式下 m.room.message 的目标 agent 解析——纯函数模块。
 //
 // C1 修复核心：sync-manager 收到 m.room.message 后，调用本模块的 resolveMessageTarget
-// 计算应响应的 assignmentId，再传给 RouterService.routeMatrixEvent 的第 4 参数
-// (directTargetAssignmentId)。RouterService 据此调用 routeUserMessage → AgentRunner.executeTask。
+// 计算应响应的 assignmentId，再传给 RouterService.routeEvent 的第 4 参数
+// (directTargetAssignmentId)。RouterService 据此调用 routeUserChat → AgentRunner.executeTask。
 //
 // 从 runtime-entry.handleEvent 提取的原因（与 decide-response.ts 同理）：
 //   1. 纯函数便于单元测试——不依赖 Matrix client / DB / 子进程

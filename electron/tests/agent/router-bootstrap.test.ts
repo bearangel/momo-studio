@@ -76,7 +76,7 @@ describe('router-bootstrap (Task 1)', () => {
     // 验证传入的是 RouterService 实例（或 duck-type 兼容对象）
     const svc = (setRouterService as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
     expect(svc).toBeDefined();
-    expect(typeof (svc as RouterService).routeMatrixEvent).toBe('function');
+    expect(typeof (svc as RouterService).routeEvent).toBe('function');
   });
 
   it('二次调用：no-op（currentRouterService 已存在）', async () => {

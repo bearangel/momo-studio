@@ -4,8 +4,8 @@
 // 替代 v1 的 runtime 自己监听 Matrix event：所有 Matrix event 统一经此分流。
 //
 // 流程：
-//   sync-manager 收到 Matrix event → RouterService.routeMatrixEvent
-//     → m.room.message                → routeUserMessage（ephemeral chat task → AgentRunner.executeTask）
+//   sync-manager 收到 Matrix event → RouterService.routeEvent
+//     → m.room.message                → routeUserChat（ephemeral chat task → AgentRunner.executeTask）
 //     → io.momo-studio.dispatch        → routeDispatch（dispatch ephemeral task，含 dispatchContext → AgentRunner.executeTask）
 //     → io.momo-studio.task_reply      → routeTaskReply（通知正在执行的 PM runtime → AgentRunner.notifyTaskReply）
 //     → io.momo-studio.abort_dispatch  → routeAbortDispatch（T8 完整实现）
@@ -14,25 +14,29 @@
 // （由 sync-manager / runtime-entry 根据房间类型 + decideResponse 预先决定），
 // 这样 RouterService 自身不做 decideResponse 判定，只负责按 event 类型构造 task 并派发。
 // decideResponse / parseMentions 在上层 sync-manager 调用前已使用，此处不再重复。
+//
+// T4 解耦：routeUserChat 是 public plain 参数入口——其他输入源
+// （未来的 session-ops、IPC handler、CLI）不经过 Matrix event shape 也可直接派发 chat task。
+// routeEvent 内部对 m.room.message 分支仅做 shape → plain 转换后委托 routeUserChat。
 
 import { randomUUID } from 'node:crypto';
 import { logger } from '../logger';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
-import { findAssignmentByBotUserId as defaultFindAssignmentByBotUserId } from './runtime-registry';
+import { findAssignmentByAgentUserId as defaultFindAssignmentByAgentUserId } from './runtime-registry';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
   /** assignmentId（instance_id）→ runner */
   runners: Map<string, AgentRunner>;
-  /** 任务调度器（pickup 决策 + 三层并发控制；routeUserMessage 不经过它——ephemeral chat 直接派发） */
+  /** 任务调度器（pickup 决策 + 三层并发控制；routeUserChat 不经过它——ephemeral chat 直接派发） */
   dispatcher: TaskDispatcher;
   /**
-   * 按 botUserId 反查 assignmentId——dispatch 路由自解析用。
+   * 按 agentUserId 反查 assignmentId——dispatch/task_reply 路由自解析用。
    * 缺省用 runtime-registry 的 DB 查询；测试可注入 mock 避免依赖 DB。
    */
-  findAssignmentByBotUserId?: (botUserId: string) => string | null;
+  findAssignmentByAgentUserId?: (agentUserId: string) => string | null;
 }
 
 /** notifyTaskReply 的入参（camelCase；由 task_reply event 的 snake_case content 转换而来） */
@@ -44,16 +48,61 @@ export interface TaskReplyNotification {
   toolCallsUsed?: number;
 }
 
-/** Matrix event 的最小子集形状（与 matrix-js-sdk MatrixEvent 兼容） */
-export interface RoutedEvent {
+/** routeUserChat 的 plain 入参——任意输入源（Matrix event shape、IPC、CLI）共用 */
+export interface RouteUserChatInput {
+  /** 目标会话 id（Matrix room_id、session_id 或未来的 CLI session id） */
+  sessionId: string;
+  /** 目标 runner 的 assignmentId（runners Map 的 key） */
+  assignmentId: string;
+  /** 用户输入正文 */
+  body: string;
+  /** 可选：外部已生成的流 id；缺省自动 randomUUID() */
+  streamSessionId?: string;
+}
+
+/**
+ * Matrix event 的最小子集形状（与 matrix-js-sdk MatrixEvent 兼容）。
+ * 重命名为 InternalEvent——含义扩展为「RouterService 内部消费的 event 形状」，
+ * 桥接层（sync-manager）从 Matrix event 转过来时按此 shape 构造，
+ * 未来若引入非 Matrix 输入源也按此 shape 适配。
+ */
+export interface InternalEvent {
   getType(): string;
   getContent(): Record<string, unknown>;
   getSender(): string | undefined;
   getRoomId(): string | undefined;
 }
 
+/** 保留旧名别名——sync-manager 等旧调用点代码引用兼容性；新代码直接用 InternalEvent。 */
+export type RoutedEvent = InternalEvent;
+
 export class RouterService {
   constructor(private readonly opts: RouterServiceOpts) {}
+
+  /**
+   * Plain 参数入口——不依赖 Matrix event shape。
+   * 把 plain 入参构造为 ephemeral chat TaskConfig 派发给目标 runner。
+   *
+   * 不经过 TaskDispatcher——ephemeral chat 是即时响应，不走 assigned 任务队列。
+   *
+   * @returns 派发完成（runner.executeTask 自身 resolve 后本方法 resolve）；
+   *          runner 不存在时静默跳过并 warn 日志，不抛错。
+   */
+  async routeUserChat(input: RouteUserChatInput): Promise<void> {
+    const runner = this.opts.runners.get(input.assignmentId);
+    if (!runner) {
+      logger.warn('routeUserChat 未找到 runner', { assignmentId: input.assignmentId });
+      return;
+    }
+
+    const task: TaskConfig = {
+      taskId: null,
+      executionSessionId: input.sessionId,
+      body: input.body,
+      streamSessionId: input.streamSessionId ?? randomUUID(),
+    };
+    await runner.executeTask(task);
+  }
 
   /**
    * 路由单个 Matrix event。按 event 类型分流，找不到匹配类型时静默忽略。
@@ -66,8 +115,8 @@ export class RouterService {
    * @param directTargetAssignmentId 单聊/已解析的直接目标 runner key。
    *   m.room.message 未传时不派发；dispatch 未传时 routeDispatch 内部从 dispatch_to 反查。
    */
-  async routeMatrixEvent(
-    event: RoutedEvent,
+  async routeEvent(
+    event: InternalEvent,
     _ownerUserId: string,
     _targetAssignmentId: string | null,
     directTargetAssignmentId?: string,
@@ -77,7 +126,11 @@ export class RouterService {
       switch (type) {
         case 'm.room.message':
           if (directTargetAssignmentId) {
-            await this.routeUserMessage(event, directTargetAssignmentId);
+            await this.routeUserChat({
+              sessionId: event.getRoomId() ?? '',
+              assignmentId: directTargetAssignmentId,
+              body: this.extractBody(event.getContent()),
+            });
           }
           break;
         case DISPATCH_EVENT_TYPE:
@@ -97,30 +150,10 @@ export class RouterService {
     }
   }
 
-  /**
-   * 用户文本消息 → ephemeral chat task。
-   * 创建一个 taskId=null 的即时对话 task，交给目标 runner 执行。
-   * 不经过 TaskDispatcher——ephemeral chat 是即时响应，不走 assigned 任务队列。
-   */
-  private async routeUserMessage(event: RoutedEvent, assignmentId: string): Promise<void> {
-    const content = event.getContent();
-    const body = typeof content.body === 'string' ? content.body : '';
-    const roomId = event.getRoomId() ?? '';
-
-    const runner = this.opts.runners.get(assignmentId);
-    if (!runner) {
-      logger.warn('routeUserMessage 未找到 runner', { assignmentId });
-      return;
-    }
-
-    const streamSessionId = randomUUID();
-    const task: TaskConfig = {
-      taskId: null,
-      executionSessionId: roomId,
-      body,
-      streamSessionId,
-    };
-    await runner.executeTask(task);
+  /** 从 event content 提取 body 文本；非 string 时降级为空串。 */
+  private extractBody(content: Record<string, unknown>): string {
+    const body = content.body;
+    return typeof body === 'string' ? body : '';
   }
 
   /**
@@ -130,9 +163,9 @@ export class RouterService {
    *
    * 目标 assignment 解析优先级：
    *   1. directAssignmentId（sync-manager 已解析的直接目标）
-   *   2. content.dispatch_to → findAssignmentByBotUserId 反查
+   *   2. content.dispatch_to → findAssignmentByAgentUserId 反查
    */
-  private async routeDispatch(event: RoutedEvent, directAssignmentId?: string): Promise<void> {
+  private async routeDispatch(event: InternalEvent, directAssignmentId?: string): Promise<void> {
     const content = event.getContent();
     const dispatchFrom = content.dispatch_from;
     const taskId = content.task_id;
@@ -147,7 +180,7 @@ export class RouterService {
     if (!assignmentId) {
       const dispatchTo = content.dispatch_to;
       if (typeof dispatchTo === 'string') {
-        const lookup = this.opts.findAssignmentByBotUserId ?? defaultFindAssignmentByBotUserId;
+        const lookup = this.opts.findAssignmentByAgentUserId ?? defaultFindAssignmentByAgentUserId;
         assignmentId = lookup(dispatchTo) ?? undefined;
       }
     }
@@ -164,7 +197,7 @@ export class RouterService {
       return;
     }
 
-    const body = typeof content.body === 'string' ? content.body : '';
+    const body = this.extractBody(content);
     const streamSessionId = randomUUID();
     const task: TaskConfig = {
       taskId,
@@ -189,13 +222,13 @@ export class RouterService {
    * runner 内部按 taskId 匹配 activeTasks 找到对应子进程并 IPC 推送。
    *
    * 路由优先级（I2 修复）：
-   *   1. event content.reply_to 存在 → findAssignmentByBotUserId 精确反查目标 PM runner
+   *   1. event content.reply_to 存在 → findAssignmentByAgentUserId 精确反查目标 PM runner
    *   2. assignmentId 参数（sync-manager 已解析）→ 精确通知
    *   3. 都没有 → 广播给所有 runner（向后兼容旧 task_reply event）
    *
    * @param assignmentId 已知的 PM runner key（精确通知）；未提供时尝试 reply_to 或广播
    */
-  private async routeTaskReply(event: RoutedEvent, assignmentId?: string): Promise<void> {
+  private async routeTaskReply(event: InternalEvent, assignmentId?: string): Promise<void> {
     const content = event.getContent();
     const taskId = content.task_id;
     if (typeof taskId !== 'string') return;
@@ -203,7 +236,7 @@ export class RouterService {
     const notification: TaskReplyNotification = {
       taskId,
       status: typeof content.status === 'string' ? content.status : '',
-      body: typeof content.body === 'string' ? content.body : '',
+      body: this.extractBody(content),
       ...(typeof content.progress_pct === 'number' ? { progressPct: content.progress_pct } : {}),
       ...(typeof content.tool_calls_used === 'number'
         ? { toolCallsUsed: content.tool_calls_used }
@@ -213,7 +246,7 @@ export class RouterService {
     // reply_to 存在时精确反查目标 PM runner（避免广播）
     let targetAssignmentId = assignmentId;
     if (!targetAssignmentId && typeof content.reply_to === 'string') {
-      const lookup = this.opts.findAssignmentByBotUserId ?? defaultFindAssignmentByBotUserId;
+      const lookup = this.opts.findAssignmentByAgentUserId ?? defaultFindAssignmentByAgentUserId;
       targetAssignmentId = lookup(content.reply_to) ?? undefined;
     }
 
@@ -235,7 +268,7 @@ export class RouterService {
    * T8 完整实现：按 task_id 找到 runner → runner.abortStream(streamSessionId)。
    * 当前仅记录日志，不抛错（避免阻塞 sync-manager）。
    */
-  private async routeAbortDispatch(event: RoutedEvent): Promise<void> {
+  private async routeAbortDispatch(event: InternalEvent): Promise<void> {
     const content = event.getContent();
     const taskId = content.task_id;
     if (typeof taskId !== 'string') return;

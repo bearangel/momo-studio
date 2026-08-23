@@ -211,10 +211,10 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     // 断言 2：setRouterService 被调用恰好 1 次
     expect(setRouterServiceMock).toHaveBeenCalledTimes(1);
 
-    // 断言 3：传入的是带 routeMatrixEvent 方法的对象（RouterService duck-type）
+    // 断言 3：传入的是带 routeEvent 方法的对象（RouterService duck-type）
     const svc = setRouterServiceMock.mock.calls[0][0];
     expect(svc).toBeDefined();
-    expect(typeof svc.routeMatrixEvent).toBe('function');
+    expect(typeof svc.routeEvent).toBe('function');
   });
 
   it('场景 2: 空状态 → startAgentRuntime(taskDriven=true) 单 agent 启动 → setRouterService 被调用', async () => {
@@ -262,9 +262,9 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     // 断言 2：setRouterService 被调用（单 agent 路径同样触发 lazy init）
     expect(setRouterServiceMock).toHaveBeenCalledTimes(1);
 
-    // 断言 3：传入 RouterService 实例（duck-type routeMatrixEvent）
+    // 断言 3：传入 RouterService 实例（duck-type routeEvent）
     const svc = setRouterServiceMock.mock.calls[0][0];
-    expect(typeof svc.routeMatrixEvent).toBe('function');
+    expect(typeof svc.routeEvent).toBe('function');
   });
 
   it('场景 3: 批量 initTaskDrivenRuntime 注册 2 agents → setRouterService 仅调用 1 次（幂等）', async () => {
@@ -299,6 +299,6 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
 
     // 断言 3：首次调用传入的 runnerCount=2（dispatcher 持有 Map 引用，后续新增可见）
     const svc = setRouterServiceMock.mock.calls[0][0];
-    expect(typeof svc.routeMatrixEvent).toBe('function');
+    expect(typeof svc.routeEvent).toBe('function');
   });
 });

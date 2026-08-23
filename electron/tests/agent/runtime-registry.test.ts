@@ -1,7 +1,7 @@
 // electron/tests/agent/runtime-registry.test.ts
 //
 // runtime-registry 模块测试——覆盖 task-driven runtime 全局注册表的核心函数：
-//   1. findAssignmentByBotUserId：按 agent_user_id 反查 instance_id（DB 查询）
+//   1. findAssignmentByAgentUserId：按 agent_user_id 反查 instance_id（DB 查询）
 //   2. startAgentRuntime(taskDriven=false)：走 v1 spawnAgent fallback
 //   3. startAgentRuntime(taskDriven=true)：创建 WarmPool + AgentRunner + 注册到全局 Map
 //   4. createTaskDrivenRuntime：幂等性（重复调用不重建）
@@ -57,7 +57,7 @@ import {
   providerBuckets,
   startAgentRuntime,
   createTaskDrivenRuntime,
-  findAssignmentByBotUserId,
+  findAssignmentByAgentUserId,
   populateProviderBuckets,
   destroyAllTaskDrivenRuntimes,
   destroyTaskDrivenRuntime,
@@ -131,7 +131,7 @@ describe('runtime-registry', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  describe('findAssignmentByBotUserId', () => {
+  describe('findAssignmentByAgentUserId', () => {
     it('按 agent_user_id 反查到 instance_id', async () => {
       const ws = await createWorkspace(
         { name: 'WS', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
@@ -140,12 +140,12 @@ describe('runtime-registry', () => {
       saveAgentDefinition(mkDef({ id: 'def-x' }));
       const assignment = assignAgentToWorkspace(ws.id, 'def-x', '@bot-xyz:localhost', 'standalone');
 
-      const found = findAssignmentByBotUserId('@bot-xyz:localhost');
+      const found = findAssignmentByAgentUserId('@bot-xyz:localhost');
       expect(found).toBe(assignment.instanceId);
     });
 
     it('未找到时返回 null', () => {
-      expect(findAssignmentByBotUserId('@nonexistent:localhost')).toBeNull();
+      expect(findAssignmentByAgentUserId('@nonexistent:localhost')).toBeNull();
     });
   });
 

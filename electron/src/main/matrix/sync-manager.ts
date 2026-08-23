@@ -77,7 +77,7 @@ let mainWindow: BrowserWindow | null = null;
  * task-driven runtime 的 RouterService 引用（由 main/index.ts initTaskDrivenRuntime 注入）。
  * 非空时，/sync 收到的新 event 在 A 子系统 INSERT 之后经此路由到对应 AgentRunner。
  */
-let routerService: { routeMatrixEvent: (event: RoutedEvent, ownerUserId: string, targetAssignmentId: string | null, directTargetAssignmentId?: string) => Promise<void> } | null = null;
+let routerService: { routeEvent: (event: RoutedEvent, ownerUserId: string, targetAssignmentId: string | null, directTargetAssignmentId?: string) => Promise<void> } | null = null;
 
 /** 由 main/index.ts 在 initTaskDrivenRuntime 完成后注入 RouterService */
 export function setRouterService(svc: typeof routerService): void {
@@ -269,7 +269,7 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
       const directTarget = eventType === 'm.room.message'
         ? resolveDirectTargetAssignmentId(event)
         : null;
-      void routerService.routeMatrixEvent(event, localUserId ?? '', null, directTarget ?? undefined);
+      void routerService.routeEvent(event, localUserId ?? '', null, directTarget ?? undefined);
     }
   });
 
