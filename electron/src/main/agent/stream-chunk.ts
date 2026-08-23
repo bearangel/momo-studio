@@ -38,7 +38,10 @@ export type StreamChunk =
       sessionId: string;
       /**
        * Task 6 字段迁移：原 botUserId。发送方 agent 标识——本任务仅重命名，
-       * 值仍为 bot 的 Matrix userId；Task 7/10 起发端改传 assignmentId。
+       * 值实际为 `config.agentUserId`（agent 本地身份字符串，如
+       * `'agent-coder-a1b2c3'`），由 runtime-entry.runChatLoop 在构造 start
+       * chunk 时填入。renderer 端 `botNameMap` 按双键（assignmentId +
+       * agentUserId）反查 agent 展示名，详见 spec §5.2 实现注。
        */
       senderAgentId: string;
       /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */

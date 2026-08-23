@@ -237,15 +237,17 @@ export class RouterService {
 
   /**
    * abort_dispatch event → 中断正在执行的 sub-agent task。
-   * T8 完整实现：按 task_id 找到 runner → runner.abortStream(streamSessionId)。
-   * 当前仅记录日志，不抛错（避免阻塞调用方）。
+   *
+   * 当前为日志占位（P2 实现传播）：仅记 info 日志，不抛错（避免阻塞调用方）。
+   * 完整实现需按 task_id 反查正在执行的 runner + 该 task 对应的 streamSessionId，
+   * 然后调 runner.abortStream(streamSessionId) 跨进程取消子 agent runtime。
    */
   private async routeAbortDispatch(event: InternalEvent): Promise<void> {
     const content = event.getContent();
     const taskId = content.task_id;
     if (typeof taskId !== 'string') return;
-    // TODO(T8): 按 task_id 反查正在执行的 runner + streamSessionId → runner.abortStream
-    logger.info('abort_dispatch event 收到（T8 完整实现）', { taskId });
+    // TODO(P2): 按 task_id 反查正在执行的 runner + streamSessionId → runner.abortStream
+    logger.info('abort_dispatch event 收到（路由占位，P2 实现传播）', { taskId });
   }
 
   /** 启动钩子（当前仅日志；预留给 T8 注册 dispatcher 终态回调） */

@@ -109,14 +109,14 @@ describe('SQLiteMemoryProvider', () => {
       const t = Date.now();
       insertMessage({
         sessionId: 'r1',
-        sender: '@owner:home',
+        sender: 'owner',
         eventType: 'm.room.message',
         body: 'hi',
         createdAt: t,
       });
       insertMessage({
         sessionId: 'r1',
-        sender: '@bot:home',
+        sender: 'agent-coder-a1b2c3',
         eventType: 'm.room.message',
         body: 'hello',
         createdAt: t + 1,
@@ -126,6 +126,66 @@ describe('SQLiteMemoryProvider', () => {
       expect(ctx.messages.length).toBe(2);
       expect(ctx.messages[0]).toMatchObject({ role: 'user', content: 'hi' });
       expect(ctx.messages[1]).toMatchObject({ role: 'assistant', content: 'hello' });
+    });
+
+    // sender 角色判定（v2 P1 修复）：新身份格式 `agent-<slug>-<suffix>`
+    // 不再含 'bot' 字符串。role 应一律按 `sender === 'owner'` 判定：
+    //   - sender === 'owner' → role 'user'
+    //   - 其他（含旧 @bot:* 与新 agent-*）→ role 'assistant'
+    it('sender=agent-* 新身份 → role assistant（不含 bot 子串判定修复）', async () => {
+      const t = Date.now();
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'owner',
+        eventType: 'm.room.message',
+        body: '请帮我看看',
+        createdAt: t,
+      });
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'agent-coder-a1b2c3',
+        eventType: 'm.room.message',
+        body: '好的，我先看一下',
+        createdAt: t + 1,
+      });
+      insertMessage({
+        sessionId: 'r2',
+        sender: 'agent-reviewer-d4e5f6',
+        eventType: 'm.room.message',
+        body: '代码看起来 OK',
+        createdAt: t + 2,
+      });
+
+      const ctx = await provider.getConversationContext('r2', { limit: 10 });
+      expect(ctx.messages.length).toBe(3);
+      expect(ctx.messages[0]).toMatchObject({
+        role: 'user',
+        content: '请帮我看看',
+        sender: 'owner',
+      });
+      expect(ctx.messages[1]).toMatchObject({
+        role: 'assistant',
+        content: '好的，我先看一下',
+        sender: 'agent-coder-a1b2c3',
+      });
+      expect(ctx.messages[2]).toMatchObject({
+        role: 'assistant',
+        content: '代码看起来 OK',
+        sender: 'agent-reviewer-d4e5f6',
+      });
+    });
+
+    it('sender=owner → role user（新身份语义）', async () => {
+      insertMessage({
+        sessionId: 'r3',
+        sender: 'owner',
+        eventType: 'm.room.message',
+        body: 'hi from owner',
+      });
+
+      const ctx = await provider.getConversationContext('r3', { limit: 10 });
+      expect(ctx.messages.length).toBe(1);
+      expect(ctx.messages[0]).toMatchObject({ role: 'user', sender: 'owner' });
     });
 
     it('支持 limit + beforeTs', async () => {

@@ -162,15 +162,19 @@ export class SQLiteMemoryProvider implements MemoryProvider {
 /**
  * message → ContextMessage 转换。
  *
- * role 启发式：
- *   - sender 含 'bot'（@bot / .bot. 等） → assistant
- *   - 其余 → user
+ * role 启发式（v2 P1）：
+ *   - sender === 'owner' → user（用户在 v2 会话里的固定身份字符串）
+ *   - 其余（含旧 '@bot:home' 与新 'agent-<slug>-<suffix>'）→ assistant
  *
- * 这是 v1 简化判断——B10 任务工具集成时应改成接收 message 内的显式 isBot 标志
- * （matrix user id 命名约定不可靠，跨 homeserver 时 '@bot:home' 可能不是 agent）。
+ * 原本用 `m.sender.includes('bot')` 子串判定——v2 新身份 'agent-coder-a1b2c3'
+ * 不含 'bot'，导致 agent 历史被注入为 role 'user'，LLM 上下文错乱。改为只
+ * 排除唯一的 'owner' 标识，其余一律视为 agent/assistant。
+ *
+ * 后续若引入更多用户身份字符串，再扩展 allowlist 即可（不引入黑名单 'bot'
+ * 等不可靠字符串匹配）。
  */
 function messageToContext(m: MessageRow): ContextMessage {
-  const isBot = m.sender.includes('bot');
+  const isBot = m.sender !== 'owner';
   return {
     role: isBot ? 'assistant' : 'user',
     content: m.body,
