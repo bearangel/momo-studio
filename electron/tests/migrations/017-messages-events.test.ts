@@ -5,29 +5,42 @@
 //   2. message_events 表 schema（含 UNIQUE(message_id, seq) 约束 + 索引）
 //   3. 外键 ON DELETE CASCADE（删 message 自动清 events）
 //   4. 默认值（status='done', source='local', body='')
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+//
+// 注意：v23 会 RENAME COLUMN messages.room_id TO session_id + DROP COLUMN matrix_event_id。
+// 故本测试只 apply 到 v17（applyUpToVersion(17)），不复用 012 之前用
+// runMigrations() + getDb() 单例的写法——后者会把 v23 也跑掉，破坏本测试断言。
+// 模式参照 012-agent-role-separation.test.ts。
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import Database from 'better-sqlite3';
+import type { Database as DB } from 'better-sqlite3';
+import { loadMigrations } from '../../src/main/storage/migrations';
 
-const tmpRoot = path.join(os.tmpdir(), `ap-mig17-test-${Date.now()}`);
+let db: DB;
 
-beforeEach(() => {
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  process.env.AP_USER_DATA_DIR = tmpRoot;
-  runMigrations();
+beforeAll(() => {
+  db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  );
+  const markApplied = db.prepare(
+    'INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)',
+  );
+  for (const m of loadMigrations().filter((m) => m.version <= 17)) {
+    db.exec(m.sql);
+    markApplied.run(m.version);
+  }
 });
 
-afterEach(() => {
-  closeDb();
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  delete process.env.AP_USER_DATA_DIR;
+afterAll(() => {
+  db.close();
 });
 
 describe('migration v17: messages + message_events', () => {
   it('创建 messages 表，含所有字段', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string; type: string; notnull: number; dflt_value: string | null }>;
     const colMap = new Map(cols.map((c) => [c.name, c]));
 
@@ -56,13 +69,11 @@ describe('migration v17: messages + message_events', () => {
   });
 
   it('messages 表主键为 id', () => {
-    const db = getDb();
     const pk = db.prepare('PRAGMA table_info(messages)').all() as Array<{ pk: number; name: string }>;
     expect(pk.find((c) => c.pk === 1)?.name).toBe('id');
   });
 
   it('messages 表有索引（room+created, stream, parent, task）', () => {
-    const db = getDb();
     const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='messages'").all() as Array<{ name: string }>;
     const indexNames = indexes.map((i) => i.name);
     expect(indexNames).toContain('idx_messages_room_created');
@@ -72,7 +83,6 @@ describe('migration v17: messages + message_events', () => {
   });
 
   it('创建 message_events 表，含 UNIQUE(message_id, seq) 约束', () => {
-    const db = getDb();
     const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='message_events'").get() as { sql: string };
     expect(sql.sql).toContain('message_id');
     expect(sql.sql).toContain('seq');
@@ -82,13 +92,11 @@ describe('migration v17: messages + message_events', () => {
   });
 
   it('message_events 有索引 idx_events_msg_seq', () => {
-    const db = getDb();
     const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='message_events'").all() as Array<{ name: string }>;
     expect(indexes.map((i) => i.name)).toContain('idx_events_msg_seq');
   });
 
   it('外键 ON DELETE CASCADE：删 message 自动清对应 events', () => {
-    const db = getDb();
     db.prepare('PRAGMA foreign_keys = ON').run();
     db.prepare(
       `INSERT INTO messages (id, room_id, sender, event_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -103,7 +111,6 @@ describe('migration v17: messages + message_events', () => {
   });
 
   it('UNIQUE(message_id, seq) 约束生效', () => {
-    const db = getDb();
     db.prepare(
       `INSERT INTO messages (id, room_id, sender, event_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
     ).run('m1', 'r1', '@a:home', 'm.room.message', Date.now(), Date.now());

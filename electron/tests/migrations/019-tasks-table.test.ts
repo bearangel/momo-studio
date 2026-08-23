@@ -7,29 +7,42 @@
 //   4. room_settings 加 conflict_strategy 列（默认 'ask'）
 //   5. agent_definitions 加 max_concurrent_tasks 列（默认 1）
 //   6. agent_definitions 加 default_conflict_strategy 列（默认 'ask'）
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+//
+// 注意：v23 会 RENAME COLUMN tasks.execution_room_id / source_room_id + DROP COLUMN
+// workspaces.matrix_space_id + DROP TABLE room_settings。故本测试只 apply 到 v19
+// （applyUpToVersion(19)），不复用 012 之前用 runMigrations() + getDb() 单例的写法——
+// 后者会把 v23 也跑掉，破坏本测试断言。模式参照 012-agent-role-separation.test.ts。
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import Database from 'better-sqlite3';
+import type { Database as DB } from 'better-sqlite3';
+import { loadMigrations } from '../../src/main/storage/migrations';
 
-const tmpRoot = path.join(os.tmpdir(), `ap-mig19-${Date.now()}`);
+let db: DB;
 
-beforeEach(() => {
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  process.env.AP_USER_DATA_DIR = tmpRoot;
-  runMigrations();
+beforeAll(() => {
+  db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  );
+  const markApplied = db.prepare(
+    'INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)',
+  );
+  for (const m of loadMigrations().filter((m) => m.version <= 19)) {
+    db.exec(m.sql);
+    markApplied.run(m.version);
+  }
 });
 
-afterEach(() => {
-  closeDb();
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  delete process.env.AP_USER_DATA_DIR;
+afterAll(() => {
+  db.close();
 });
 
 describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩展', () => {
   it('创建 tasks 表，含所有字段', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
     const names = cols.map((c) => c.name);
     expect(names).toEqual(expect.arrayContaining([
@@ -44,7 +57,6 @@ describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩
   });
 
   it('tasks 表索引齐全', () => {
-    const db = getDb();
     const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tasks'").all() as Array<{ name: string }>;
     const names = idx.map((i) => i.name);
     expect(names).toContain('idx_tasks_ws_status');
@@ -54,7 +66,6 @@ describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩
   });
 
   it('messages.task_id 加 FK 指向 tasks.id（ON DELETE SET NULL）', () => {
-    const db = getDb();
     // v19 用 trigger 模拟 ON DELETE SET NULL：删除 task 时把 messages.task_id 置 NULL
     const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as Array<{ name: string }>;
     const trigName = triggers.find((t) => t.name === 'messages_task_id_null_on_delete');
@@ -78,7 +89,6 @@ describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩
   });
 
   it('room_settings 加 conflict_strategy 列，默认 ask', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(room_settings)').all() as Array<{ name: string; dflt_value: string | null }>;
     const col = cols.find((c) => c.name === 'conflict_strategy');
     expect(col).toBeDefined();
@@ -86,7 +96,6 @@ describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩
   });
 
   it('agent_definitions 加 max_concurrent_tasks 列，默认 1', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(agent_definitions)').all() as Array<{ name: string; dflt_value: string | null }>;
     const col = cols.find((c) => c.name === 'max_concurrent_tasks');
     expect(col).toBeDefined();
@@ -94,7 +103,6 @@ describe('migration v19: tasks table + conflict_strategy + agent_definitions 扩
   });
 
   it('agent_definitions 加 default_conflict_strategy 列，默认 ask', () => {
-    const db = getDb();
     const cols = db.prepare('PRAGMA table_info(agent_definitions)').all() as Array<{ name: string; dflt_value: string | null }>;
     const col = cols.find((c) => c.name === 'default_conflict_strategy');
     expect(col).toBeDefined();
