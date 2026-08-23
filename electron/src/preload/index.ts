@@ -19,7 +19,6 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api: ApiSurface = {
   system: {
     getInfo: () => invoke('system:getInfo'),
-    getConduitStatus: () => invoke('system:getConduitStatus'),
   },
   workspace: {
     create: (input) => invoke('workspace:create', input),
@@ -87,34 +86,9 @@ const api: ApiSurface = {
     testConnection: (input) => invoke('provider:testConnection', input),
     getApiKey: (id) => invoke('provider:getApiKey', id),
   },
+  // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
+  // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
   im: {
-    send: (roomId, body) => invoke('im:send', roomId, body),
-    sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
-    getRooms: (workspaceId) => invoke('im:getRooms', workspaceId),
-    getMessages: (roomId) => invoke('im:getMessages', roomId),
-    loadOlderMessages: (roomId: string, beforeTs: number, count?: number) =>
-      invoke('im:loadOlderMessages', roomId, beforeTs, count),
-    getMessageEvents: (messageId: string) => invoke('im:getMessageEvents', messageId),
-    createRoom: (input) => invoke('im:createRoom', input),
-    renameRoom: (roomId, name) => invoke('im:renameRoom', roomId, name),
-    dissolveRoom: (roomId) => invoke('im:dissolveRoom', roomId),
-    getMembers: (roomId) => invoke('im:getMembers', roomId),
-    exportRoomMessages: (roomId: string, limit: number) =>
-      invoke<{ filename: string; content: string }>('im:exportRoomMessages', roomId, limit),
-    onMessage: (callback) => {
-      const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
-      ipcRenderer.on('im:message', handler);
-      return () => {
-        ipcRenderer.off('im:message', handler);
-      };
-    },
-    onMessageEventBatch: (callback) => {
-      const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
-      ipcRenderer.on('im:message_event_batch', handler);
-      return () => {
-        ipcRenderer.off('im:message_event_batch', handler);
-      };
-    },
     onConflict: (callback) => {
       const handler = (
         _e: IpcRendererEvent,
@@ -152,15 +126,9 @@ const api: ApiSurface = {
       invoke<{ filename: string; content: string }>('session:exportMessages', sessionId, limit),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
-      // 反向桥（Task 9）：session-service 已发 session:message，但 sync-manager /
-      // p2p / im.ipc.handlers 仍发 im:message（发送方在 Task 11/12 删除/改名）。
-      // 桥接期内 session.onMessage 同时监听新旧通道，保证 Matrix /sync 与 P2P
-      // 消息也能到达 session.store。无发送方会同时发两个通道，不会重复触发。
       ipcRenderer.on('session:message', handler);
-      ipcRenderer.on('im:message', handler);
       return () => {
         ipcRenderer.off('session:message', handler);
-        ipcRenderer.off('im:message', handler);
       };
     },
     onMessageEventBatch: (callback) => {

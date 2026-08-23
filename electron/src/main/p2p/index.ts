@@ -109,7 +109,9 @@ export function handleRemoteMessage(msg: SyncMessage): void {
     });
     const win = BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
-      win.webContents.send('im:message', row);
+      // v2.0 P1 Task 12：推送通道由 im:message 改名 session:message（最后一个旧通道
+      // 发送方），preload 反向桥已随之移除。
+      win.webContents.send('session:message', row);
     }
   } catch (err) {
     logger.warn('P2P 入站消息写入失败', {

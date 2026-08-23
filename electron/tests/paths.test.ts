@@ -1,6 +1,6 @@
 // electron/tests/paths.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolveUserDataDir, resolveConduitDir, resolveDbPath } from '../src/main/paths';
+import { resolveUserDataDir, resolveDbPath } from '../src/main/paths';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -21,12 +21,6 @@ describe('paths', () => {
     const result = resolveUserDataDir();
     expect(result).toBe(tmpRoot);
     expect(fs.existsSync(tmpRoot)).toBe(true);
-  });
-
-  it('resolveConduitDir returns <userData>/conduit-data', () => {
-    const result = resolveConduitDir();
-    expect(result).toBe(path.join(tmpRoot, 'conduit-data'));
-    expect(fs.existsSync(result)).toBe(true);
   });
 
   it('resolveDbPath returns <userData>/state.db', () => {

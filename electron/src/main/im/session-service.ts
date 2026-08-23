@@ -36,11 +36,21 @@ export function setSessionRouter(svc: SessionRouter | null): void {
   router = svc;
 }
 
-/** 模块级注入：主窗口引用（push session:message / im:conflict 用） */
+/** 模块级注入：主窗口引用（push session:message / im:conflict / agent:runtimeChanged 用） */
 let mainWindow: BrowserWindow | null = null;
 
 export function setSessionMainWindow(win: BrowserWindow | null): void {
   mainWindow = win;
+}
+
+/**
+ * 通知 renderer：agent 运行态变化（启动/停止/自动恢复完成），让其重新同步 running 状态。
+ * v2.0 P1 Task 12：原属 matrix/sync-manager（随 Matrix 全家删除迁此）——推送通道
+ * 名 'agent:runtimeChanged' 保持不变，renderer 订阅方无感知。
+ */
+export function broadcastRuntimeChanged(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('agent:runtimeChanged');
 }
 
 /**

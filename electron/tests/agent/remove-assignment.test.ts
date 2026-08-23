@@ -72,15 +72,6 @@ vi.mock('../../src/main/agent/crud', () => ({
   listSubAssignments: mocks.listSubAssignmentsMock,
   getAgentDefinition: mocks.getAgentDefinitionMock,
 }));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: vi.fn(() => ({ leave: mocks.leaveMock })),
-}));
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  getSyncingClient: vi.fn(() => ({
-    getRooms: () => mocks.rooms,
-    kick: mocks.kickMock,
-  })),
-}));
 vi.mock('../../src/main/storage/keychain', () => ({
   getSecret: mocks.getSecretMock,
   deleteSecret: mocks.deleteSecretMock,
@@ -96,7 +87,6 @@ vi.mock('../../src/main/agent/spawn-helpers', () => ({
   resolveApiKey: mocks.resolveApiKeyMock,
   HOMESERVER_URL: 'http://127.0.0.1:8008',
 }));
-vi.mock('../../src/main/matrix/session', () => ({ getOwnerMatrixClient: vi.fn(), getCurrentUserId: vi.fn(() => '@o:localhost') }));
 vi.mock('../../src/main/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 import { removeAgentAssignment } from '../../src/main/agent/ipc.handlers';

@@ -12,7 +12,6 @@
 //   4. currentTaskId 非空 → getTaskContext 被调用，taskHint 注入 system prompt
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import {
   __setMemoryProviderForTest,
@@ -29,6 +28,7 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
+  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
@@ -47,11 +47,11 @@ function mockProvider(deltas: StreamDelta[]): void {
   });
 }
 
-function mockClient(): MatrixClient {
+function mockClient(): LegacyMatrixClient {
   return {
     getRoom: vi.fn().mockReturnValue(null),
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
+  } as unknown as LegacyMatrixClient;
 }
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {

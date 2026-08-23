@@ -16,7 +16,7 @@ export function App() {
   const [bootstrapped, setBootstrapped] = useState(false);
 
   // 全局会话通道订阅（session:message + session:message_event_batch；
-  // preload 反向桥让 im:message 发送方也走同一 callback）。
+  // Task 12 起全部发送方统一走 session:* 通道，无桥接）。
   // subscribeSessionChannels 内部同时喂 session.store 和 stream.store——同一份 batch
   // 既累积到 session.store.eventsByMessage（重启还原用），又聚合到
   // stream.store.streams（UI 实时渲染用）。

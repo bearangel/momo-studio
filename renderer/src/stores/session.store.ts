@@ -235,8 +235,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (body, mentionedAssignmentIds) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return;
-    // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage
-    // （反向桥同时收 im:message，Matrix /sync 与 P2P 路径推送同样可达）。
+    // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage。
     await ipc.session.send(activeSessionId, body, mentionedAssignmentIds);
   },
 
@@ -258,8 +257,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 /**
  * 全局会话通道订阅（在 App.tsx 顶层调用一次）。
  * 订阅 session 命名空间两条通道：
- *   - session:message             → 实时消息行（preload 反向桥同时监听 im:message，
- *                                    覆盖 sync-manager / p2p 等尚未改名的发送方）
+ *   - session:message             → 实时消息行（session-service / p2p 发送方统一走此通道）
  *   - session:message_event_batch → 流式 events 批量推送（thinking/tool_call 等增量）
  * 同一份 event batch 同时喂给 session.store（累积到 eventsByMessage，重启还原用）
  * 和 stream.store（聚合到 streams，UI 实时渲染用），保证两条路径数据一致。

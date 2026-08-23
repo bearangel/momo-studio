@@ -88,22 +88,6 @@ vi.mock('../../src/main/storage/keychain', () => ({
   setSecret: vi.fn(),
   setKeychainImpl: vi.fn(),
 }));
-vi.mock('../../src/main/agent/bot-registrar', () => ({
-  registerAgentBot: vi.fn(),
-}));
-vi.mock('../../src/main/matrix/rooms', () => ({
-  inviteBotToRoom: vi.fn(async () => undefined),
-}));
-vi.mock('../../src/main/matrix/session', () => ({
-  getOwnerMatrixClient: vi.fn(async () => ({})),
-  getCurrentUserId: vi.fn(() => '@o:localhost'),
-}));
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  getSyncingClient: vi.fn(() => null),
-}));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: vi.fn(),
-}));
 vi.mock('../../src/main/agent/spawn-helpers', () => ({
   buildSpawnOpts: vi.fn(() => ({})),
   HOMESERVER_URL: 'http://127.0.0.1:8008',

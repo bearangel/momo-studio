@@ -76,9 +76,9 @@ describe('P2P 集成接线（I2）', () => {
         }),
       );
 
-      // 验证推送到 renderer
+      // 验证推送到 renderer（Task 12：通道由 im:message 改名 session:message）
       expect(mockWebContentsSend).toHaveBeenCalledTimes(1);
-      expect(mockWebContentsSend).toHaveBeenCalledWith('im:message', inserted);
+      expect(mockWebContentsSend).toHaveBeenCalledWith('session:message', inserted);
     });
 
     it('hub 来源的 message 也走同一路径（source=lan 是 P2P 统一标识）', () => {

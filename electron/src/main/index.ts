@@ -5,19 +5,15 @@
 // task-driven runtime 初始化逻辑已抽取到 ./agent/init-runtime.ts（便于测试 + 关注点分离）。
 // 本文件仅负责：migrations → TaskScheduler → IPC → Window → runtime 初始化 → cleanup。
 //
-// v2.0 P1 Task 11（切换点）：启动链去 Matrix——
-//   - 不再启动 Conduit / Matrix /sync（im:startSync 已删，传输层内迁 SQLite）
-//   - 不再有登录/会话恢复（auth:* IPC 已删，单用户本地应用 sender='owner'）
-//   - 启动即 initTaskDrivenRuntime（SQLite 是唯一状态源，无"等登录"前置条件）
+// v2.0 P1 Task 12：Matrix/Conduit 全家已删——启动链无外部服务进程，无 /sync，
+// 无登录/会话恢复（单用户本地应用 sender='owner'），SQLite 是唯一状态源。
 import { app, BrowserWindow } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
-import { stopConduit } from './conduit/manager';
-import { setMainWindow, stopSync, broadcastRuntimeChanged } from './matrix/sync-manager';
+import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
 import { setMainWindow as setRuntimeMainWindow } from './agent/stream-relay';
-import { setSessionMainWindow } from './im/session-service';
-import { initP2p } from './p2p';
+import { initP2p, stopP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
@@ -41,7 +37,6 @@ app.whenReady().then(async () => {
     registerIpcHandlers();
 
     const win = createMainWindow();
-    setMainWindow(win);
     setRuntimeMainWindow(win);
     setSessionMainWindow(win);
 
@@ -82,9 +77,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   destroyAllTaskDrivenRuntimes();
   destroyRouterService();
-
   stopTaskRuntime();
-  // Conduit / Matrix /sync 已不再启动，以下两个 stop 是无害 no-op（阶段三 Task 12 删除）
-  void stopConduit();
-  void stopSync();
+  void stopP2p();
 });

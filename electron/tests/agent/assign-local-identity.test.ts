@@ -47,26 +47,6 @@ vi.mock('../../src/main/agent/runtime-registry', async (importOriginal) => {
   };
 });
 
-// bot-registrar / matrix：Task 10 后 ipc.handlers 不再 import；
-// 保留 mock 以断言"不再被调用"（RED 阶段当前实现仍会调用）
-vi.mock('../../src/main/agent/bot-registrar', () => ({
-  registerAgentBot: vi.fn(async () => {
-    throw new Error('Task 10 后 agent 分配不应再注册 Matrix bot');
-  }),
-}));
-vi.mock('../../src/main/matrix/rooms', () => ({
-  inviteBotToRoom: vi.fn(async () => undefined),
-}));
-vi.mock('../../src/main/matrix/session', () => ({
-  getOwnerMatrixClient: vi.fn(async () => ({})),
-  getCurrentUserId: vi.fn(() => '@o:localhost'),
-}));
-vi.mock('../../src/main/matrix/sync-manager', () => ({
-  getSyncingClient: vi.fn(() => null),
-}));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: vi.fn(),
-}));
 vi.mock('../../src/main/agent/builtin', () => ({
   getBuiltinSuggestionsMap: vi.fn(() => ({})),
 }));
@@ -77,8 +57,6 @@ import { createWorkspace } from '../../src/main/workspace/crud';
 import { saveAgentDefinition, generateAgentUserId } from '../../src/main/agent/crud';
 import { listSessionMembers } from '../../src/main/storage/sessions/repo';
 import { startAgentRuntime } from '../../src/main/agent/runtime-registry';
-import { registerAgentBot } from '../../src/main/agent/bot-registrar';
-import { inviteBotToRoom } from '../../src/main/matrix/rooms';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
 let registerAgentHandlers: () => void;
@@ -109,8 +87,6 @@ beforeEach(() => {
   memStore.set('provider.prov-1.api_key', 'test-llm-key');
   ipcHandlers.clear();
   vi.mocked(startAgentRuntime).mockClear();
-  vi.mocked(registerAgentBot).mockClear();
-  vi.mocked(inviteBotToRoom).mockClear();
   registerAgentHandlers();
 });
 
@@ -175,10 +151,6 @@ describe('agent:addToWorkspace — 分配即入团队会话（去 Matrix）', ()
     // 团队会话成员表：assignment 自动加入 workspace 团队会话
     const members = listSessionMembers(ws.teamSessionId);
     expect(members.map((m) => m.assignmentId)).toContain(assignment.instanceId);
-
-    // 不再走 Matrix 注册 / 邀请
-    expect(registerAgentBot).not.toHaveBeenCalled();
-    expect(inviteBotToRoom).not.toHaveBeenCalled();
 
     // runtime 启动收到新形状 opts：携带本地身份 + 团队会话 ID，无 Matrix 凭据
     expect(startAgentRuntime).toHaveBeenCalledTimes(1);

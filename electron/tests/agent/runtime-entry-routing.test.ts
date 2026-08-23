@@ -22,18 +22,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import type { MatrixClient } from 'matrix-js-sdk';
 import { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { LLMToolCall } from '../../src/main/agent/llm-provider';
 import {
   doExecuteTool,
+  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
 
 // bash 工具不触碰 MatrixClient；这些路径下传桩对象即可。
-const client = {} as unknown as MatrixClient;
+const client = {} as unknown as LegacyMatrixClient;
 
 let tmpDir: string;
 let ctx: RuntimeContext;

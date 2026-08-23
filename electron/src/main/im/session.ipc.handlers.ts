@@ -5,10 +5,9 @@
 // 消息写入（send）、历史读取（getMessages/loadOlder）与导出（exportMessages）。
 // 全部转调 Task 3 的 session-ops 与 Task 7 的 session-service——本层不含业务逻辑。
 //
-// 推送通道改名（与本文件配套）：
-//   - session:message             ← 用户/agent 消息行推送（session-service.pushMessageRow，Task 7 已改名）
-//   - session:message_event_batch ← 流式 events 批量推送（stream-relay onFlush，Task 8 改名）
-// 旧 im:message / im:message_event_batch 订阅由 preload 桥接兼容（Task 9 切 store 后删除）。
+// 推送通道（Task 12 起 im:message 反向桥已移除，全部发送方统一新通道）：
+//   - session:message             ← 用户/agent 消息行推送（session-service / p2p handleRemoteMessage）
+//   - session:message_event_batch ← 流式 events 批量推送（stream-relay onFlush）
 
 import { ipcMain } from 'electron';
 import { logger } from '../logger';

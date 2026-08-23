@@ -17,6 +17,11 @@
 //
 // v2.0 P1 Task 11：新建 execution 会话改写本地 sessions 表（kind='task_execution'），
 // assignee 直接入 session_members——不再经 Matrix 建房/邀请（getOwnerMatrixClient 已无登录态）。
+//
+// Task 12 原子化：新建会话路径的三步写包（insertSession + addSessionMember +
+// transitionTaskStatus）包在同一 SQLite 事务——任一步失败（典型：assignee 的 FK
+// 不合法）整笔回滚，不留 orphan session / 半启动任务。
+import { getDb } from '../storage/db';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { insertSession, addSessionMember } from '../storage/sessions/repo';
 import { logger } from '../logger';
@@ -72,40 +77,45 @@ export async function startTask(
     );
   }
 
-  // 决策 execution_room：预设 → createNewRoom → source_session → 新建会话
-  let executionSessionId: string;
-  let createdNewRoom = false;
-  if (opts?.executionSessionId) {
-    executionSessionId = opts.executionSessionId;
-  } else if (opts?.createNewRoom) {
-    executionSessionId = createNewTaskRoom(task);
-    createdNewRoom = true;
-  } else if (task.sourceSessionId) {
-    executionSessionId = task.sourceSessionId;
-  } else {
-    executionSessionId = createNewTaskRoom(task);
-    createdNewRoom = true;
-  }
+  // 决策 execution_room + 三步写入，包在同一事务（Task 12 原子化）：
+  // 预设 → createNewRoom → source_session → 新建会话
+  const result = getDb().transaction((o: StartTaskOpts): StartTaskResult => {
+    let executionSessionId: string;
+    let createdNewRoom = false;
+    if (o.executionSessionId) {
+      executionSessionId = o.executionSessionId;
+    } else if (o.createNewRoom) {
+      executionSessionId = createNewTaskRoom(task);
+      createdNewRoom = true;
+    } else if (task.sourceSessionId) {
+      executionSessionId = task.sourceSessionId;
+    } else {
+      executionSessionId = createNewTaskRoom(task);
+      createdNewRoom = true;
+    }
 
-  // 新建会话时把 assignee 加为成员（如果是新建的会话且有指定 assignee）
-  if (createdNewRoom && task.assigneeAgentId) {
-    addSessionMember(executionSessionId, task.assigneeAgentId);
-  }
+    // 新建会话时把 assignee 加为成员（如果是新建的会话且有指定 assignee）
+    if (createdNewRoom && task.assigneeAgentId) {
+      addSessionMember(executionSessionId, task.assigneeAgentId);
+    }
 
-  // 状态机转换 + 锁定 execution_room（assigned/pending → in_progress）
-  const updated = transitionTaskStatus(taskId, 'in_progress', {
-    executionSessionId,
-    startedAt: Date.now(),
-  });
+    // 状态机转换 + 锁定 execution_room（assigned/pending → in_progress）
+    const updated = transitionTaskStatus(taskId, 'in_progress', {
+      executionSessionId,
+      startedAt: Date.now(),
+    });
+
+    return { task: updated, executionSessionId, createdNewRoom };
+  })(opts ?? {});
 
   logger.info('Task 已启动', {
     taskId,
-    executionSessionId,
-    createdNewRoom,
+    executionSessionId: result.executionSessionId,
+    createdNewRoom: result.createdNewRoom,
     assignee: task.assigneeAgentId,
   });
 
-  return { task: updated, executionSessionId, createdNewRoom };
+  return result;
 }
 
 /** 创建任务专属 execution 会话（本地 sessions 表行）。命名约定：任务 #T-XXX: 标题前 20 字。 */

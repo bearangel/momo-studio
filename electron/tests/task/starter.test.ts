@@ -11,6 +11,8 @@
 //   6. 已 in_progress 再次启动且 executionSessionId 不同 → 抛"锁定"错（execution_room 不可改）
 //   7. 新建会话且有 assignee → assignee 写入 session_members（v2 P1 Task 11：本地成员表，
 //      原 Matrix inviteBotToRoom 已删）
+//   8. Task 12 原子性：三步写包任一步失败（assignee FK 不合法）→ 整笔回滚，
+//      无 orphan session、任务停留 assigned
 //
 // 测试隔离：每个 case 独立 tmp 目录 + closeDb + AP_USER_DATA_DIR 重置。
 // tasks 表有 FK 到 workspaces，故每个 case 都 seed 一个 ws1 工作空间。
@@ -157,5 +159,51 @@ describe('startTask execution_room 决策树', () => {
     await expect(startTask(t.id, { executionSessionId: '!second:home' })).rejects.toThrow(
       /锁定|locked/,
     );
+  });
+
+  it('三步写包原子性：addSessionMember FK 失败 → 整笔回滚（无 orphan session，任务停留 assigned）', async () => {
+    // assignee 指向不存在的 assignment——addSessionMember 的 FK 约束必然失败
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-not-exist',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+
+    await expect(startTask(t.id, { createNewRoom: true })).rejects.toThrow();
+
+    // 回滚断言 1：没有留下任何 task_execution 会话（orphan session）
+    const sessions = getDb()
+      .prepare('SELECT id FROM sessions WHERE workspace_id = ?')
+      .all('ws1') as Array<{ id: string }>;
+    expect(sessions).toEqual([]);
+
+    // 回滚断言 2：任务未被推进 in_progress（可重试）
+    const after = getDb()
+      .prepare('SELECT status FROM tasks WHERE id = ?')
+      .get(t.id) as { status: string };
+    expect(after.status).toBe('assigned');
+
+    // 回滚断言 3：补齐 assignee 的 assignment 后重试可成功（半状态未污染后续启动）
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+        VALUES ('def-2', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO agent_assignments
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
+        VALUES ('inst-not-exist', 'ws1', 'def-2', '@inst-not-exist:s', 1, 'standalone', 0)`,
+      )
+      .run();
+    const retry = await startTask(t.id, { createNewRoom: true });
+    expect(retry.task.status).toBe('in_progress');
+    expect(listSessionMembers(retry.executionSessionId).map((m) => m.assignmentId)).toEqual([
+      'inst-not-exist',
+    ]);
   });
 });

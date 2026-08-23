@@ -7,7 +7,6 @@
 // 主进程侧 routeChunkToBuffer 的分段落盘用例已随 Task 6 平移到
 // stream-relay.test.ts（routeChunkToBuffer 迁至 stream-relay.ts）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -20,6 +19,7 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import {
   runChatLoop,
+  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
@@ -46,11 +46,11 @@ function mockProviderMultiRound(rounds: StreamDelta[][]): void {
   });
 }
 
-function mockClient(): MatrixClient {
+function mockClient(): LegacyMatrixClient {
   return {
     getRoom: vi.fn().mockReturnValue(null),
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
+  } as unknown as LegacyMatrixClient;
 }
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {

@@ -7,12 +7,6 @@ export interface SystemInfo {
   userDataDir: string;
 }
 
-export interface ConduitStatus {
-  running: boolean;
-  baseUrl: string | null;
-  port: number | null;
-}
-
 export interface Workspace {
   id: string;
   name: string;
@@ -258,22 +252,6 @@ export interface ImMessage {
   taskId: string | null;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface ImRoomInfo {
-  roomId: string;
-  name: string;
-  isSystem?: boolean;
-}
-
-/** 房间成员（含身份标识） */
-export interface RoomMember {
-  userId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  powerLevel: number;
-  isBot: boolean;
-  isLocalUser: boolean;
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
@@ -761,7 +739,6 @@ export interface SessionApiSurface {
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
-    getConduitStatus(): Promise<ConduitStatus>;
   };
   workspace: {
     create(input: CreateWorkspaceInput): Promise<Workspace>;
@@ -864,48 +841,11 @@ export interface ApiSurface {
     testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
     getApiKey(id: string): Promise<string | null>;
   };
+  /**
+   * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
+   * 仅保留 im:conflict 推送订阅（发送方主进程 session-service；通道名留待 P2 收敛）。
+   */
   im: {
-    send(roomId: string, body: string): Promise<void>;
-    sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
-    /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
-    getRooms(workspaceId?: string): Promise<ImRoomInfo[]>;
-    /**
-     * A 子系统：从 SQLite 拉 messages + 每条 message 的 events，
-     * renderer 用 stream-aggregator 重建 StreamState。
-     */
-    getMessages(
-      roomId: string,
-    ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
-    /**
-     * 向前翻页：返回 SQLite 里 created_at < beforeTs 的消息。
-     * beforeTs 由调用方从当前可见消息的最小 createdAt 推导。
-     */
-    loadOlderMessages(
-      roomId: string,
-      beforeTs: number,
-      count?: number,
-    ): Promise<{
-      messages: ImMessage[];
-      eventsByMessage: Record<string, MessageEventRow[]>;
-      hasMore: boolean;
-    }>;
-    /** 拉取单条 message 的全部 events（按 seq 升序） */
-    getMessageEvents(messageId: string): Promise<MessageEventRow[]>;
-    createRoom(input: {
-      name: string;
-      isDirect: boolean;
-      inviteUserIds: string[];
-      /** 把新建房间加入此 workspace 的 Space（让其在此 workspace 内可见） */
-      workspaceId?: string;
-    }): Promise<{ roomId: string }>;
-    renameRoom(roomId: string, name: string): Promise<{ ok: boolean }>;
-    dissolveRoom(roomId: string): Promise<{ dissolved: boolean }>;
-    getMembers(roomId: string): Promise<RoomMember[]>;
-    /** 导出指定房间最近 limit 条会话为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载。 */
-    exportRoomMessages(roomId: string, limit: number): Promise<{ filename: string; content: string }>;
-    onMessage(callback: (msg: ImMessage) => void): () => void;
-    /** A 子系统：订阅 stream chunk 批量推送（主进程 MessageEventBuffer flush 时触发） */
-    onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
     /** B 子系统：订阅任务冲突检测推送（execution_room 内 mention 另一个任务时触发） */
     onConflict(
       callback: (conflict: {
@@ -917,8 +857,6 @@ export interface ApiSurface {
   };
   /**
    * v2.0 P1 Task 8：会话内核命名空间（session.ipc.handlers.ts）。
-   * 旧 im 命名空间的 onMessage/onMessageEventBatch 在桥接期内同时监听
-   * 新推送通道（session:message / session:message_event_batch），保证旧 UI 不失效。
    */
   session: SessionApiSurface;
   mcp: {

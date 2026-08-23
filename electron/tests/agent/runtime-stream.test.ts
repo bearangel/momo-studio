@@ -3,7 +3,6 @@
 // 测试 runChatLoop 的流式 chunk 发送、预算管理、abort 逻辑。
 // 不测完整 Matrix 集成——mock createLLMProvider 的 chatStream + MatrixClient + process.send。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -19,6 +18,7 @@ import {
   formatBudgetHint,
   executeDispatch,
   handleTaskReply,
+  type LegacyMatrixClient,
   type RuntimeConfig,
   type RuntimeContext,
   type RunChatLoopStats,
@@ -79,11 +79,11 @@ function mockProvider(deltas: StreamDelta[]): void {
 
 // === Mock MatrixClient ===
 
-function mockClient(): MatrixClient {
+function mockClient(): LegacyMatrixClient {
   return {
     getRoom: vi.fn().mockReturnValue(null),
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
+  } as unknown as LegacyMatrixClient;
 }
 
 // === Mock RuntimeConfig ===

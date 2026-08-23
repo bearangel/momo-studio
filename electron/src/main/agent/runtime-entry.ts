@@ -27,7 +27,14 @@
 // MCP 调用通过 process.send/process.on('message') IPC 转发到主进程。统一用
 // process.stdout/stderr 输出，由父进程 runtime-manager 转发到主日志。
 
-import type { MatrixClient } from 'matrix-js-sdk';
+/**
+ * v1 fallback 残留的 Matrix client 最小结构形状（原 matrix-js-sdk MatrixClient 的子集，
+ * Task 12 删 SDK 后就地定义）。task-driven 模式恒传 null——仅保 v1 fallback 死代码
+ * 可编译，Task 13 随 v1 路径整体移除。
+ */
+export interface LegacyMatrixClient {
+  sendEvent(roomId: string, eventType: string, content: object, txnId?: string): Promise<unknown>;
+}
 import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
@@ -499,7 +506,7 @@ export interface RunChatLoopStats {
  * 中断支持：监听 process('message') 的 abort 指令，触发 AbortController.abort()。
  */
 export async function runChatLoop(
-  client: MatrixClient | null,
+  client: LegacyMatrixClient | null,
   roomId: string,
   currentBody: string,
   config: RuntimeConfig,
@@ -1141,7 +1148,7 @@ const MAX_TASK_SEGMENTS = 5;
  * 当 dispatch 错误重试形成死循环。降级到截断 body 重发；仍失败则吞掉错误。
  */
 async function sendFinalMessage(
-  client: MatrixClient | null,
+  client: LegacyMatrixClient | null,
   roomId: string,
   streamSessionId: string,
   text: string,
@@ -1181,7 +1188,7 @@ async function sendFinalMessage(
 async function executeTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
-  client: MatrixClient | null,
+  client: LegacyMatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
@@ -1219,7 +1226,7 @@ async function executeTool(
 export async function doExecuteTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
-  client: MatrixClient | null,
+  client: LegacyMatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
@@ -1316,7 +1323,7 @@ const pendingReplies = new Map<string, PendingReply>();
 export async function executeDispatch(
   subSlug: string,
   task: string,
-  client: MatrixClient | null,
+  client: LegacyMatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   /** v1.4 嵌套：子 agent 流 session ID，写入 dispatch 消息供子 agent 关联 PM 气泡 */
