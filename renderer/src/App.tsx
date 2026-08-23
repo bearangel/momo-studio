@@ -2,12 +2,15 @@
 //
 // v2.0 P1 Task 11：无登录概念——启动分支由 workspace 判定（SQLite 是唯一状态源）。
 //   - 已有 workspace → 直接进入 MainShell
-//   - 无 workspace → 首启全屏创建工作空间对话框（复用 CreateWorkspaceDialog，P2 重设计）
+//   - 无 workspace → 首启空态：TitleBar + 内嵌 CreateWorkspaceDialog
+//     （P2 Task 3 空态也包 TitleBar——frameless 下保留拖拽/关闭；tabs 只剩 ＋，
+//     正好引导创建第一个 workspace）
 import { useEffect, useState } from 'react';
 import { useWorkspaceStore } from './stores/workspace.store';
 import { subscribeSessionChannels } from './stores/session.store';
 import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDialog';
 import { MainShell } from './routes/MainShell';
+import { TitleBar } from './components/layout/TitleBar';
 
 export function App() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -30,10 +33,16 @@ export function App() {
   if (!bootstrapped) return null;
 
   if (workspaces.length === 0) {
-    // 首启空态：CreateWorkspaceDialog 自带 fixed inset-0 遮罩 + 居中表单，
-    // 直接作为全屏空态渲染；创建成功后 store 写入 workspace → 分支翻转进 MainShell。
-    // onClose 重新拉取列表兜底（仍为空则对话框保持）。
-    return <CreateWorkspaceDialog onClose={() => void load()} />;
+    // 首启空态：TitleBar（拖拽/关闭/＋）+ 内嵌创建表单；创建成功后 store 写入
+    // workspace → 分支翻转进 MainShell。onClose 重新拉取列表兜底（仍为空则表单保持）。
+    return (
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-bg-primary">
+        <TitleBar />
+        <div className="flex-1 min-h-0 flex items-center justify-center p-6">
+          <CreateWorkspaceDialog onClose={() => void load()} embedded />
+        </div>
+      </div>
+    );
   }
 
   return <MainShell />;

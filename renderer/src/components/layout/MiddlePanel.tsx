@@ -1,15 +1,12 @@
 // renderer/src/components/layout/MiddlePanel.tsx
-// 中间面板：根据 activeView 渲染对应视图。
-// files 视图 = 左 FileTree + 右 CodeEditor；其他视图暂保留占位
-import { useCallback, useEffect, useState } from 'react';
+// 中间面板：根据 activeView 渲染主区内容。
+// P2 Task 3：im/files 的内嵌 ResizableSidebar 移除——RoomList/FileTree 由
+// ViewSidebar 统一承载，本组件只负责各视图的主区。
+import { useEffect, useState } from 'react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useEditorStore } from '../../stores/editor.store';
 import { useSessionStore } from '../../stores/session.store';
-import { ipc } from '../../ipc/client';
-import { FileTree } from '../files/FileTree';
 import { CodeEditor } from '../editor/CodeEditor';
-import { RoomList } from '../im/RoomList';
 import { MessageList } from '../im/MessageList';
 import { MessageInput } from '../im/MessageInput';
 import { MembersPanel } from '../im/MembersPanel';
@@ -20,12 +17,10 @@ import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
-import { ResizableSidebar } from '../common/ResizableSidebar';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const openFile = useEditorStore((s) => s.openFile);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const [showMembers, setShowMembers] = useState(false);
@@ -34,16 +29,6 @@ export function MiddlePanel() {
   useEffect(() => {
     setShowMembers(false);
   }, [activeSessionId]);
-
-  // 点击文件 → 通过 IPC 读取内容 → 打开到编辑器 tab
-  const handleSelectFile = useCallback(
-    async (filePath: string) => {
-      if (!workspace) return;
-      const content = await ipc.file.read(workspace.id, filePath);
-      openFile(filePath, content);
-    },
-    [workspace, openFile],
-  );
 
   // 资源库视图（v1.7：原 marketplace 视图统一为资源库，三源合并）：浏览/搜索/安装 agent/mcp/skill，不需要 workspace 上下文
   if (activeView === 'marketplace') {
@@ -62,26 +47,20 @@ export function MiddlePanel() {
     );
   }
 
-  // files 视图：左侧文件树 + 右侧编辑器
+  // files 视图：文件树在 ViewSidebar，主区仅编辑器
   if (activeView === 'files') {
     return (
       <div className="flex-1 flex">
-        <ResizableSidebar storageKey="files-sidebar" minWidth={180} maxWidth={500} defaultWidth={256} collapsedLabel="文件">
-          <FileTree onSelectFile={handleSelectFile} />
-        </ResizableSidebar>
         <CodeEditor />
       </div>
     );
   }
 
-  // im 视图：左侧会话列表 + 中间消息流和工具条和输入框 + 成员浮层（按需）
+  // im 视图：会话列表在 ViewSidebar，主区 = 消息流 + 工具条 + 输入框 + 成员浮层（按需）
   if (activeView === 'im') {
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     return (
       <div className="flex-1 flex min-w-0">
-        <ResizableSidebar storageKey="im-sidebar" minWidth={180} maxWidth={400} defaultWidth={240} collapsedLabel="会话">
-          <RoomList />
-        </ResizableSidebar>
         <div className="flex-1 flex flex-col min-w-0 relative">
           {/* 会话头部：会话名 + 工具上限徽标 */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
@@ -121,7 +100,7 @@ export function MiddlePanel() {
     return <AgentsView />;
   }
 
-  // tasks 视图：任务看板（D 子系统 D7）—— Linear 风格列表 + 侧滑详情
+  // tasks 视图：任务看板（D 子系统 D7）——筛选/列表在 ViewSidebar，主区 = 状态栏 + 详情
   if (activeView === 'tasks') {
     return (
       <div className="flex-1 flex flex-col overflow-hidden">

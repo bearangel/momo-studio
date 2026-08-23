@@ -43,6 +43,17 @@ const mockApi = {
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
   },
+  // TitleBar（P2 Task 3 空态接入）：平台 + 窗口控件通道
+  system: {
+    getPlatform: vi.fn().mockReturnValue('linux'),
+  },
+  window: {
+    minimize: vi.fn(),
+    toggleMaximize: vi.fn(),
+    close: vi.fn(),
+    isMaximized: vi.fn().mockResolvedValue(false),
+    onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 beforeEach(() => {
@@ -64,6 +75,17 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     render(<App />);
     expect(await screen.findByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
     expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
+  });
+
+  it('首启空态也渲染 TitleBar（frameless 下可拖拽/关闭，P2 Task 3）', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    render(<App />);
+    await screen.findByRole('heading', { name: '新建工作空间' });
+    // TitleBar 真实渲染：窗口关闭控件可见（TitleBar 未被 fixed 遮罩盖住）
+    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '最小化' })).toBeInTheDocument();
+    // 零 workspace 时 tabs 仅剩 ＋（引导创建第一个 workspace）
+    expect(screen.getByRole('button', { name: '新建工作空间' })).toBeInTheDocument();
   });
 
   it('首启对话框创建成功后进入 MainShell', async () => {
