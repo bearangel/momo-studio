@@ -1,7 +1,7 @@
 // electron/src/main/workspace/crud.ts
 //
 // Workspace CRUD — 在 SQLite + 文件系统中创建、查询、删除一个 workspace。
-// v23：matrix_space_id 列已删除；team_room_id 更名 team_session_id。
+// v23：Matrix space 关联列已删除；团队房间列更名 team_session_id。
 // v2（Task 10）：createWorkspace 内部创建默认团队会话（sessions 表）并回填
 // team_session_id——不再由调用方先建 Matrix room 后传入。
 // git 初始化失败不应阻断 workspace 创建，因此单独 try/catch。

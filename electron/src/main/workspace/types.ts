@@ -1,6 +1,6 @@
 // electron/src/main/workspace/types.ts
 //
-// Workspace 实体 — 对应一个工作空间 + Git 仓库（v23：matrix_space_id 列已删除）。
+// Workspace 实体 — 对应一个工作空间 + Git 仓库（v23：Matrix space 关联列已删除）。
 // 字段定义与 workspaces 表一一对应（camelCase ↔ snake_case）。
 
 /** Workspace 实体 — 对应一个工作空间 + Git 仓库 */

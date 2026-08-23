@@ -1,7 +1,7 @@
 // electron/src/main/storage/sessions/repo.ts
 //
 // sessions / session_members 表 CRUD（2.0.0 P1 会话内核）。
-// 取代 Matrix room：workspace 隔离 = 外键；会话设置存 settings_json（取代 room_settings 表）。
+// 取代 Matrix room：workspace 隔离 = 外键；会话设置存 settings_json（取代 v1 的房间级设置表）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 

@@ -4,7 +4,7 @@
 // 点击打开 popup 修改面板（继承全局 / 禁用 / 无限制 / 自定义）。
 // 需同时加载房间级配置（getRoom）和全局默认（getGlobal）以显示"继承全局 (N次)"。
 //
-// 有效值优先级：room_settings.max_tool_calls（非 null）→ global_settings.maxToolCalls。
+// 有效值优先级：sessions.settings_json 的 maxToolCalls（非 null）→ global_settings.maxToolCalls。
 // 徽标文案：-1 → "∞"，0 → "禁用"，N → "N次"。
 import { useState, useEffect } from 'react';
 import { ipc } from '../../ipc/client';

@@ -2,7 +2,7 @@
 //
 // 全局/会话级配置的 CRUD + 优先级解析。
 // 全局配置存 kv_store（key='global_settings'，value=JSON）；
-// 会话级配置存 sessions.settings_json（v23 取代 room_settings 表，读写经 sessions repo 转调）。
+// 会话级配置存 sessions.settings_json（v23 起取代 v1 的房间级设置表，读写经 sessions repo 转调）。
 
 import { getDb } from '../storage/db';
 import { getSessionSettings } from '../storage/sessions/repo';

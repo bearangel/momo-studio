@@ -8,7 +8,7 @@
 // 用户从 4 个选项中选一个（与 conflict-resolver.ts 的 5 策略对应，去掉 'ask'——
 // 'ask' 就是触发本弹窗本身）。选完后调 ipc.task.resolveConflict 让主进程执行副作用。
 // 可选勾选"本会话记住"——勾选后调 ipc.settings.updateRoom 把 strategy 写入
-// room_settings.conflict_strategy，以后本会话再冲突时自动按此策略处理（不再弹窗）。
+// sessions.settings_json 的 conflictStrategy，以后本会话再冲突时自动按此策略处理（不再弹窗）。
 
 import { useState } from 'react';
 import type { CSSProperties } from 'react';

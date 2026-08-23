@@ -2,7 +2,7 @@
 //
 // settings 命名空间 IPC：全局/会话配置的读写。
 // 注册在 ipcMain.handle('settings:*') 上，preload 桥接到 renderer。
-// v23：room_settings 表已删除，会话级配置转存 sessions.settings_json（经 crud 转调 repo）。
+// v23：v1 的房间级设置表已删除，会话级配置转存 sessions.settings_json（经 crud 转调 repo）。
 
 import { ipcMain } from 'electron';
 import {
