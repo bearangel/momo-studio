@@ -18,6 +18,7 @@
 import { RouterService } from './router-service';
 import { TaskDispatcher, type AgentAssignmentInfo } from '../task/dispatcher';
 import { setBridgeRouter } from './internal-event-bridge';
+import { setSessionRouter } from '../im/session-service';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import type { AgentRunner } from './agent-runner';
@@ -58,6 +59,7 @@ export async function ensureRouterService(
   currentRouterService = new RouterService({ runners, dispatcher });
   currentRouterService.start();
   setBridgeRouter(currentRouterService);
+  setSessionRouter(currentRouterService);
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }
 
@@ -69,6 +71,7 @@ export async function ensureRouterService(
 export function destroyRouterService(): void {
   if (!currentRouterService) return;
   setBridgeRouter(null);
+  setSessionRouter(null);
   currentRouterService = null;
   logger.info('RouterService 已销毁');
 }

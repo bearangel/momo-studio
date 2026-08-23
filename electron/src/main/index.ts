@@ -11,6 +11,7 @@ import { runMigrations } from './storage/db';
 import { startConduit, stopConduit } from './conduit/manager';
 import { setMainWindow, stopSync, startSyncFromSession, broadcastRuntimeChanged } from './matrix/sync-manager';
 import { setMainWindow as setRuntimeMainWindow } from './agent/stream-relay';
+import { setSessionMainWindow } from './im/session-service';
 import { initP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
@@ -43,6 +44,7 @@ app.whenReady().then(async () => {
     const win = createMainWindow();
     setMainWindow(win);
     setRuntimeMainWindow(win);
+    setSessionMainWindow(win);
 
     // 5. 如果已有登录会话，等待 Conduit 就绪后自动恢复 sync + agent
     void (async () => {
