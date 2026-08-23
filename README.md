@@ -6,6 +6,16 @@
 
 ## 状态
 
+**v2.0.0-p1 — 会话内核（开发中，未发布）**
+
+2.0.0 第一期：传输层内迁，终结 v1/v2 双轨。详见 `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` 与 `docs/plans/2026-08-23-v2.0.0-p1-session-core.md`。
+
+- **移除 Matrix/Tuwunel 全家（BREAKING）**——matrix-js-sdk、Conduit 子进程管理、bot 注册器、Space/room 关联列全部删除；升级采用完全重新开始（D5 决策），不做旧数据兼容
+- **sessions 数据模型（migration v23）**——`sessions` / `session_members` 表取代 Matrix room；workspace 隔离 = 外键；会话级配置（工具上限/冲突策略）存 `settings_json`
+- **传输层内迁**——SessionService + 进程内事件分发（RouterService 切输入源），消息/委派不再经过外部协议服务器
+- **task_reply 回传链接线**——删除 v1 长存进程双轨，dispatch/task_reply 走内部事件桥，子 agent 结果可靠回传
+- 待办：P2 UI 骨架、P3 半成品处置 + IPC 收敛、P4 局域网联网、P5 升级体验
+
 **v1.7.0 — Released**
 
 v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折叠区统一为一个"资源库"视图，三类 source（系统预置 / 我的上传 / 网络资源）通过双层 tab 正交过滤。数据模型 `ResourceItem` 取代 `MarketplaceItem` / `InstalledSkill` / `RegisteredMcp` 三结构；IPC 统一为 `resource:list` / `resource:getDetail` / `resource:install` / `resource:delete` 四通道。架构预留 `source='p2p'` 字段，v2 agent 互联时直接接入。详见 `docs/specs/2026-08-11-v1.7-resource-library-design.md`。
@@ -30,12 +40,11 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 - 主子调度：父 agent 通过 `dispatch` 派发子任务，子任务通过 `task_reply` 回传结果
 - 完整运行历史与工具调用审计
 
-### 即时通讯（IM）
-- 本地 Tuwunel（Matrix 兼容协议）服务端，零外部依赖
-- 支持私聊和房间消息
-- Agent 在 IM 内可被 `@` 唤起，v1.4 流式回复（thinking 折叠 + 工具调用卡片 + Markdown 逐字输出）
+### 会话（2.0.0-p1 前为 IM）
+- 2.0.0-p1 起传输层内迁：SQLite sessions 表 + 进程内事件分发，本地零外部依赖（Matrix/Tuwunel 已移除）
+- 支持私聊和团队会话；Agent 在会话内可被 `@` 唤起，v1.4 流式回复（thinking 折叠 + 工具调用卡片 + Markdown 逐字输出）
 - v1.4 多 agent 委派嵌套展示：dispatch/task_reply 不再作为独立消息，嵌套在 PM 气泡的 DispatchChip 内
-- v1.4 可配置工具调用上限：全局默认 + 房间级覆盖 + per-task 重置（0-无限）
+- v1.4 可配置工具调用上限：全局默认 + 会话级覆盖 + per-task 重置（0-无限）
 - 客户端渲染支持代码块、表格、链接、引用块
 
 ### MCP（Model Context Protocol）
@@ -64,7 +73,6 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 - **Node.js 20 LTS**：Node 26+ 会破坏 `better-sqlite3` 原生编译（`ERR_DLOPEN_FAILED`）。容器默认是 Node 26，先 `nvm use 20`。
 - **pnpm 9+**
 - 平台：macOS（arm64 / x64）或 Linux（x64）。Windows 是 v2 任务。
-- Tuwunel（Conduwuit 继任者）当前仅预编译 Linux 二进制；macOS / Windows 待本地预编译（见 `docs/dev/conduit-manual.md`）。
 
 ## 安装
 
@@ -75,18 +83,12 @@ nvm use 20
 npx pnpm@9.0.0 install
 ```
 
-`postinstall` 会下载预编译的 Tuwunel 二进制。如果下载失败（离线环境），见 `docs/dev/conduit-manual.md` 手动放置。
-
-> **`matrix-js-sdk` 锁版本说明**：仓库锁定 `^31.0.0`（不是 `^34`）。v34 是纯 ESM，与本仓库的 CommonJS Electron 主进程冲突，`pnpm install` 会报 `ERR_REQUIRE_ESM`。lockfile 已反映这个降级。
-
 ## 开发
 
 ```bash
 nvm use 20
 npx pnpm@9.0.0 dev
 ```
-
-应用启动后会跑首次注册向导（创建本地 Matrix 账号），完成后进入主界面。
 
 ## 测试
 
@@ -121,7 +123,7 @@ npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .d
 ```
 electron/      Electron 主进程（CommonJS, Node.js）
 renderer/      React UI（ESM, Vite）
-resources/     Tuwunel 二进制 + 下载脚本
+resources/     静态资源（marketplace catalog 等）
 tests/         Playwright 端到端测试
 docs/
   specs/       设计文档
@@ -492,23 +494,17 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 | 问题 | 影响 | 计划解决版本 |
 |---|---|---|
 | **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
-| matrix-js-sdk 锁定 v31（v34 ESM 冲突） | 无法用最新 SDK 特性 | v2.0 ESM 转换 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
 | **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测；非标准域名可能误判 | v1.5 加 platform 列 |
-| **3 个 conduit/manager 测试 flaky** | SIGKILL/healthCheck/timeout 偶发失败 | 待排查测试时序 |
-| **同房中断限制** | activeStreams 按 roomId 索引，PM 与子 agent 同房时子覆盖 PM entry | v1.5 改按 streamSessionId 索引 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
 
 ## 已知限制
 
-- Tuwunel（原 Conduwuit 继任者）当前仅预编译 Linux 二进制，macOS / Windows 版本待本地预编译。
-- `matrix-js-sdk` 锁定 v31，升级 v32+ 需要先把主进程迁到 ESM（v2 任务）。
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
 - **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
-- **同房中断限制**——PM 与子 agent 同在 team room 时，`activeStreams` 按 roomId 索引导致子覆盖 PM entry，dispatch 进行中点「停止」可能只中断子 agent。
-- **旧消息（v1.7.3 之前）分段消息丢失 thinking/tool_calls**——Matrix event 不可变，已永久丢失。v1.7.3+ 新消息正常，v1.7.4 起多段归组渲染。
+- **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；旧库检测/导出/定义导入是 P5 任务。
 
 ## 许可
 
