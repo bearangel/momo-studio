@@ -739,6 +739,8 @@ export interface SessionApiSurface {
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
+    /** P2 Task 2：preload 同步注入的 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变） */
+    getPlatform(): string;
   };
   workspace: {
     create(input: CreateWorkspaceInput): Promise<Workspace>;
@@ -747,6 +749,10 @@ export interface ApiSurface {
     delete(id: string): Promise<void>;
     setCoordinator(workspaceId: string, instanceId: string | null): Promise<{ ok: boolean }>;
     getCoordinator(workspaceId: string): Promise<{ instanceId: string | null }>;
+    /** P2 Task 2：重命名 workspace（UPDATE name 列） */
+    rename(id: string, name: string): Promise<{ ok: boolean }>;
+    /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */
+    openDirectory(id: string): Promise<{ ok: boolean }>;
   };
   file: {
     read(workspaceId: string, filePath: string): Promise<string>;

@@ -21,15 +21,13 @@ const STUB_WORKSPACE: Workspace = {
   coordinatorInstanceId: null,
 };
 
-// MainLayout 的 useEffect 会调用 session.list（首屏拉取）+ im.onConflict
-// （ConflictDialogMount 挂载），必须提供桩 window.api，否则渲染时抛错。
+// MainLayout 的 useEffect 会调用 session.list（首屏拉取）+ agent.onRuntimeChanged，
+// 必须提供桩 window.api，否则渲染时抛错。
 // v2.0 P1 Task 9：无 im.startSync 步骤（会话内核纯 SQLite）。
+// v2.0 P2 Task 2：ConflictDialogMount 上移到 MainShell，im.onConflict 不再由本组件订阅。
 const mockApi = {
   session: {
     list: vi.fn().mockResolvedValue([]),
-  },
-  im: {
-    onConflict: vi.fn().mockReturnValue(() => {}),
   },
   agent: {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),

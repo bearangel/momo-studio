@@ -2,10 +2,11 @@
 // 顶层布局：左导航栏 + 中间面板。
 // v2.0 P1 Task 9：会话内核纯 SQLite 无 /sync 启动步骤，这里只触发首屏拉取；
 // 实时消息订阅在 App.tsx 的 subscribeSessionChannels。
+// v2.0 P2 Task 2：整窗布局（h-screen w-screen + TitleBar + ConflictDialogMount）
+// 上移到 MainShell，这里改为 flex-1 min-h-0 填充剩余空间。
 import { useEffect } from 'react';
 import { LeftRail } from './LeftRail';
 import { MiddlePanel } from './MiddlePanel';
-import { ConflictDialogMount } from '../im/ConflictDialogMount';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -41,10 +42,9 @@ export function MainLayout() {
   }, [loadAssignments]);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg-primary">
+    <div className="flex flex-1 min-h-0 overflow-hidden bg-bg-primary">
       <LeftRail />
       <MiddlePanel />
-      <ConflictDialogMount />
     </div>
   );
 }

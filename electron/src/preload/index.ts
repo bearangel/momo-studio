@@ -19,12 +19,17 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api: ApiSurface = {
   system: {
     getInfo: () => invoke('system:getInfo'),
+    // P2 Task 2：同步注入 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变）
+    getPlatform: () => process.platform,
   },
   workspace: {
     create: (input) => invoke('workspace:create', input),
     list: () => invoke('workspace:list'),
     get: (id) => invoke('workspace:get', id),
     delete: (id) => invoke('workspace:delete', id),
+    // P2 Task 2：重命名 / 在系统文件管理器打开目录
+    rename: (id, name) => invoke('workspace:rename', id, name),
+    openDirectory: (id) => invoke('workspace:openDirectory', id),
     setCoordinator: (id, instanceId) => invoke('workspace:setCoordinator', id, instanceId),
     getCoordinator: (id) => invoke('workspace:getCoordinator', id),
   },

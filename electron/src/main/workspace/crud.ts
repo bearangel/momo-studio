@@ -123,6 +123,14 @@ export function deleteWorkspace(id: string): void {
   logger.info('Workspace 已删除', { id });
 }
 
+/** 重命名 workspace（仅更新 name 列）。不存在时抛错。 */
+export function renameWorkspace(id: string, name: string): void {
+  const db = getDb();
+  const result = db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(name, id);
+  if (result.changes === 0) throw new Error(`Workspace 不存在: ${id}`);
+  logger.info('Workspace 已重命名', { id, name });
+}
+
 /** 设置/清空 workspace 的协调 agent。null 表示清空。 */
 export function setWorkspaceCoordinator(workspaceId: string, instanceId: string | null): void {
   const db = getDb();

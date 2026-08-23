@@ -20,6 +20,10 @@ interface WorkspaceState {
   getActive: () => Workspace | null;
   // 设为/取消协调 agent（instanceId=null 表示取消），完成后刷新 workspaces
   setCoordinator: (workspaceId: string, instanceId: string | null) => Promise<void>;
+  // 删除 workspace 并刷新列表（删除激活项时由 load 回退到首个）；失败抛错给调用方提示
+  remove: (id: string) => Promise<void>;
+  // 重命名 workspace，成功后本地同步名称；失败抛错且本地名称不变
+  rename: (id: string, name: string) => Promise<void>;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -63,6 +67,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       // 刷新 workspace 列表以拿到新的 coordinatorInstanceId
       const list = await ipc.workspace.list();
       set({ workspaces: list });
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  remove: async (id) => {
+    set({ error: null });
+    try {
+      await ipc.workspace.delete(id);
+      await get().load();
+    } catch (err) {
+      set({ error: (err as Error).message });
+      throw err;
+    }
+  },
+
+  rename: async (id, name) => {
+    set({ error: null });
+    try {
+      await ipc.workspace.rename(id, name);
+      set((state) => ({
+        workspaces: state.workspaces.map((w) => (w.id === id ? { ...w, name } : w)),
+      }));
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;

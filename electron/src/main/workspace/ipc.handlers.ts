@@ -4,9 +4,16 @@
 // v2（Task 10）：create 不再联动 Matrix（团队会话由 crud.createWorkspace 在
 // 本地 sessions 表内创建）。
 // v2（Task 11）：无登录概念——单用户本地应用，owner 身份是结构常量 'owner'。
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
 import { logger } from '../logger';
-import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, setWorkspaceCoordinator } from './crud';
+import {
+  createWorkspace,
+  listWorkspaces,
+  getWorkspace,
+  deleteWorkspace,
+  setWorkspaceCoordinator,
+  renameWorkspace,
+} from './crud';
 import {
   getAllocation,
   addAllocation,
@@ -37,6 +44,22 @@ export function registerWorkspaceHandlers(): void {
   ipcMain.handle('workspace:delete', async (_evt, id: string) => {
     deleteWorkspace(id);
     return;
+  });
+
+  // P2 Task 2：重命名 workspace（仅 UPDATE name 列；不存在时抛错给 renderer 提示）
+  ipcMain.handle('workspace:rename', async (_evt, id: string, name: string) => {
+    renameWorkspace(id, name);
+    return { ok: true };
+  });
+
+  // P2 Task 2：在系统文件管理器中打开 workspace 目录。
+  // shell.openPath 失败语义是返回非空错误字符串（而非 reject），转为抛错让 renderer alert。
+  ipcMain.handle('workspace:openDirectory', async (_evt, id: string) => {
+    const ws = getWorkspace(id);
+    if (!ws) throw new Error(`Workspace 不存在: ${id}`);
+    const errMessage = await shell.openPath(ws.directoryPath);
+    if (errMessage !== '') throw new Error(`打开目录失败: ${errMessage}`);
+    return { ok: true };
   });
 
   // 设置/清空协调 agent；若目标实例正在运行，自动停止并重启以应用新的 isCoordinator 标志
