@@ -44,14 +44,12 @@ function makeOpts(instanceId: string): AgentRuntimeOpts {
     instanceId,
     workspaceId: 'ws-abort-test',
     workspaceDir: '/tmp',
-    botUserId: `@bot.${instanceId}:localhost`,
-    botAccessToken: 'tok',
-    homeserverUrl: 'http://127.0.0.1:8008',
+    agentAssignmentId: instanceId,
+    agentUserId: `agent-bot-${instanceId}`,
+    teamSessionId: '!team:localhost',
     systemPrompt: '',
     modelName: 'test-model',
     llmApiKey: 'key',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
   };
 }
 

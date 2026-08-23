@@ -129,7 +129,7 @@ function getLocalUserId(): string | null {
 /**
  * C1 修复：为 m.room.message 解析目标 task-driven agent 的 assignmentId。
  *
- * 遍历 room 中的 task-driven runner（agentRunners），按 botUserId 匹配 room 成员，
+ * 遍历 room 中的 task-driven runner（agentRunners），按 agentUserId 匹配 room 成员，
  * 然后用 resolveMessageTarget（封装 decideResponse 三种场景）选出应响应的 agent。
  *
  * 主进程有 Matrix client + DB 直连，无需像 runtime-entry 那样走 IPC 查询 room info。
@@ -151,12 +151,12 @@ function resolveDirectTargetAssignmentId(event: MatrixEvent): string | null {
   let firstWorkspaceId: string | null = null;
 
   for (const runner of agentRunners.values()) {
-    if (!memberUserIds.has(runner.botUserId)) continue;
+    if (!memberUserIds.has(runner.agentUserId)) continue;
     if (firstWorkspaceId === null) {
       firstWorkspaceId = runner.workspaceId;
     }
     candidates.push({
-      botUserId: runner.botUserId,
+      agentUserId: runner.agentUserId,
       assignmentId: runner.assignmentId,
       workspaceId: runner.workspaceId,
       isCoordinator: false,

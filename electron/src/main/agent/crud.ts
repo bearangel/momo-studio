@@ -6,13 +6,33 @@
 // model_providers 引用）；assignment 加 role/parent_instance_id/has_api_key_override。
 // agent_definitions 用 INSERT OR REPLACE 实现 upsert（以 id 为主键）。
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { setSecret, deleteSecret } from '../storage/keychain';
 import { logger } from '../logger';
 import { isAgentRunning, stopAgent } from './runtime-manager';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
+
+/** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
+function slugify(input: string): string {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/** 6 字符随机后缀（base64url 字母表），保证同名 agent 重复分配不撞身份 */
+function randomSuffix(): string {
+  return randomBytes(4).toString('base64url').slice(0, 6);
+}
+
+/**
+ * v2（Task 10）：生成本地 agent 身份 `agent-<slug>-<6位随机后缀>`。
+ * 取代在 Matrix homeserver 上注册 bot 账号——agent_user_id 仅是本地展示/引用键，
+ * 不再对应任何远端账号，也因此无需 keychain 凭据。
+ */
+export function generateAgentUserId(slug: string): string {
+  const normalized = slugify(slug) || 'agent';
+  return `agent-${normalized}-${randomSuffix()}`;
+}
 
 /**
  * v1.6 Task 9：createCustomDef 入参。

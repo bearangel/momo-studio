@@ -97,10 +97,10 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       mkMockEvent('io.momo-studio.dispatch', {
         body: '写登录页',
         task_id: 'task-dispatch-1',
-        dispatch_from: '@pm:home',
-        dispatch_to: '@sub:home',
+        dispatch_from: 'inst-pm',
+        dispatch_to: 'inst-sub',
       }),
-      '@pm:home',
+      'inst-pm',
       '!room:home',
       'inst-sub',
     );
@@ -110,7 +110,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
         taskId: 'task-dispatch-1',
         body: '写登录页',
         dispatchContext: expect.objectContaining({
-          fromBotUserId: '@pm:home',
+          fromAssignmentId: 'inst-pm',
           task_id: 'task-dispatch-1',
         }),
       }),
@@ -133,8 +133,6 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
-      findAssignmentByAgentUserId: (agentUserId) =>
-        agentUserId === '@pm:home' ? 'inst-pm' : null,
     });
 
     await svc.routeEvent(
@@ -144,11 +142,11 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
           body: '完成',
           task_id: 'task-reply-1',
           status: 'completed',
-          reply_to: '@pm:home',
+          reply_to: 'inst-pm',
         },
-        '@sub:home',
+        'inst-sub',
       ),
-      '@sub:home',
+      'inst-sub',
       null,
     );
 

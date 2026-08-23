@@ -10,6 +10,9 @@
 //   - agent:updateAssignmentRole / updateAssignmentApiKey —— assignment 编辑
 //   - agent:start / stop / removeAssignment / isRunning / getBuiltinSuggestions
 //
+// v2（Task 10）：分配流程去 Matrix——本地身份生成（generateAgentUserId）+
+//   session_members 团队会话成员写入，取代 bot 注册 + 房间邀请；agent:start 无 token。
+//
 // v1.3 改造要点：
 //   - addToWorkspace/assignMain 写 role + parent_instance_id（不再写 def.type/parentAgentId）
 //   - apiKey 解析走 resolveApiKey（override ?? provider key），不再用单独 llmApiKey 入参
@@ -24,6 +27,7 @@ import {
   listAgentDefinitions,
   getAgentDefinition,
   assignAgentToWorkspace,
+  generateAgentUserId,
   listAssignments,
   updateAssignmentRole as crudUpdateAssignmentRole,
   updateAssignmentApiKey as crudUpdateAssignmentApiKey,
@@ -34,16 +38,12 @@ import {
   stopRunningInstancesByDefinition,
 } from './crud';
 import { getWorkspace, setWorkspaceCoordinator } from '../workspace/crud';
-import { getSecret, deleteSecret } from '../storage/keychain';
+import { deleteSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
+import { addSessionMember } from '../storage/sessions/repo';
 import { stopAgent, isAgentRunning } from './runtime-manager';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
-import { registerAgentBot, type RegisteredBot } from './bot-registrar';
-import { inviteBotToRoom } from '../matrix/rooms';
-import { getOwnerMatrixClient } from '../matrix/session';
-import { getSyncingClient } from '../matrix/sync-manager';
-import { createMatrixClient } from '../matrix/client';
-import { buildSpawnOpts, HOMESERVER_URL, resolveApiKey } from './spawn-helpers';
+import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
 import {
   getAssignmentDeltas,
@@ -119,62 +119,46 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   const installedDefIds = new Set(existingAssignments.map((a) => a.agentDefinitionId));
   const newSubDefs = subDefs.filter((d) => !installedDefIds.has(d.id));
 
-  // owner 的 Matrix client（用于把各 bot 邀请进团队群）
-  const ownerClient = await getOwnerMatrixClient();
-
-  // Phase 1：注册 bot + 分配 + 邀请 + 存 apiKeyOverride（如有）
-  // 拆两阶段是为了让 main 在 Phase 2 启动时已知道其全部 sub 的 botUserId
-  const installed: Array<{ def: AgentDefinition; assignment: AgentAssignment; bot: RegisteredBot }> = [];
+  // Phase 1：生成本地身份 + 分配 + 入团队会话 + 存 apiKeyOverride（如有）
+  // v2（Task 10）：不再注册 Matrix bot / 邀请进团队群——本地身份即时生成，
+  // 团队会话成员关系写 session_members 表
+  const installed: Array<{ def: AgentDefinition; assignment: AgentAssignment }> = [];
 
   // 1a. 安装 main（role='main'）
-  const mainBot = await registerAgentBot({
-    slug: mainDef.slug,
-    workspaceName: workspace.name,
-    ownerUserId: workspace.ownerId,
-    homeserverUrl: HOMESERVER_URL,
-  });
   const mainAssignment = assignAgentToWorkspace(
-    workspaceId, mainDef.id, mainBot.botUserId, 'main',
+    workspaceId, mainDef.id, generateAgentUserId(mainDef.slug), 'main',
   );
-  await inviteBotToRoom(ownerClient, workspace.teamSessionId, mainBot.botUserId);
+  addSessionMember(workspace.teamSessionId, mainAssignment.instanceId);
   if (apiKeyOverride) {
     await crudUpdateAssignmentApiKey(mainAssignment.instanceId, apiKeyOverride);
   }
-  installed.push({ def: mainDef, assignment: mainAssignment, bot: mainBot });
+  installed.push({ def: mainDef, assignment: mainAssignment });
 
   // 1b. 安装 subs（role='sub', parentInstanceId=mainAssignment.instanceId）
   for (const subDef of newSubDefs) {
-    const subBot = await registerAgentBot({
-      slug: subDef.slug,
-      workspaceName: workspace.name,
-      ownerUserId: workspace.ownerId,
-      homeserverUrl: HOMESERVER_URL,
-    });
     const subAssignment = assignAgentToWorkspace(
-      workspaceId, subDef.id, subBot.botUserId, 'sub', mainAssignment.instanceId,
+      workspaceId, subDef.id, generateAgentUserId(subDef.slug), 'sub', mainAssignment.instanceId,
     );
-    await inviteBotToRoom(ownerClient, workspace.teamSessionId, subBot.botUserId);
+    addSessionMember(workspace.teamSessionId, subAssignment.instanceId);
     if (apiKeyOverride) {
       await crudUpdateAssignmentApiKey(subAssignment.instanceId, apiKeyOverride);
     }
-    installed.push({ def: subDef, assignment: subAssignment, bot: subBot });
+    installed.push({ def: subDef, assignment: subAssignment });
   }
 
   // Phase 2：启动 runtime（subAgents 由 buildSpawnOpts 内部按 parent_instance_id 重建）
   const results: AgentAssignment[] = [];
-  for (const { def, assignment, bot } of installed) {
+  for (const { def, assignment } of installed) {
     const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId!);
     await startAgentRuntime(
       buildSpawnOpts({
         instanceId: assignment.instanceId,
-        botUserId: bot.botUserId,
+        agentUserId: assignment.agentUserId,
         workspaceId,
         workspaceDir: workspace.directoryPath,
-        teamRoomId: workspace.teamSessionId!,
-        ownerUserId: workspace.ownerId,
+        teamSessionId: workspace.teamSessionId,
         def,
         role: assignment.role,
-        botAccessToken: bot.botAccessToken,
         llmApiKey: apiKey,
         isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
       }),
@@ -190,9 +174,10 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
 }
 
 /**
- * 删除 agent 分配：停止运行 → 让 bot 离开所有房间 → 删 bot token →
- * 清空悬空 coordinator 引用 → 删 assignment 行。
+ * 删除 agent 分配：停止运行 → 清理 keychain override →
+ * 清空悬空 coordinator 引用 → 删 assignment 行（session_members 由 FK CASCADE 清理）。
  * v1.3：若删除的是 role='main'，则级联删除同 ws 内 parent_instance_id 指向它的全部 subs。
+ * v2（Task 10）：agent 无 Matrix 身份，不再做离房 / bot token 清理。
  */
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
   stopAgent(instanceId);
@@ -202,7 +187,6 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
     | { agent_user_id?: string; workspace_id?: string; role?: string; parent_instance_id?: string }
     | undefined;
   if (!row) return;
-  const botUserId = row.agent_user_id;
   const workspaceId = row.workspace_id;
   // v1.5.8：删除前记下 parent_main_id（删完之后行就没了，无法再查）
   const parentMainId = row.parent_instance_id;
@@ -213,15 +197,6 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
     for (const sub of subs) {
       await removeAgentAssignment(sub.instanceId);
     }
-  }
-
-  if (botUserId) {
-    await makeBotLeaveAllRooms(botUserId).catch((e) =>
-      logger.warn('bot 离开房间失败（非致命，继续清理）', { botUserId, error: String(e) }),
-    );
-    await deleteSecret(`bot.${botUserId}.matrix_token`).catch((e) =>
-      logger.warn('清理 bot token 失败（非致命）', { error: String(e) }),
-    );
   }
 
   // 清除 API key override（如有）
@@ -236,7 +211,7 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
   }
 
   getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(instanceId);
-  logger.info('Agent 分配已删除', { instanceId, botUserId, workspaceId });
+  logger.info('Agent 分配已删除', { instanceId, workspaceId });
 
   // v1.5.8：若删的是 sub，重启父 main agent 让其 subAgents 重建
   // （否则 PM 内存里的 subAgents 残留已删 sub 的 botUserId，dispatch_to 永远不匹配）
@@ -254,7 +229,7 @@ export async function removeAgentAssignment(instanceId: string): Promise<void> {
  * 静默跳过条件：
  *   - main 当前未运行（DB 已更新，下次启动自然带上新 subAgents）
  *   - main assignment 不存在（已被删）
- *   - keychain 缺 token / apiKey
+ *   - keychain 缺 apiKey
  */
 async function restartMainForSubChange(
   workspaceId: string,
@@ -274,8 +249,6 @@ async function restartMainForSubChange(
   if (!def || !def.modelProviderId) return;
 
   const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
-  const token = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
-  if (!token) return;
 
   // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
   // 旧实现对 task-driven main 无效——stopAgent 早返（runtimes 无 entry），
@@ -284,13 +257,11 @@ async function restartMainForSubChange(
   await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,
-      botUserId: assignment.agentUserId,
+      agentUserId: assignment.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      teamRoomId: ws.teamSessionId,
-      ownerUserId: ws.ownerId,
+      teamSessionId: ws.teamSessionId,
       def,
-      botAccessToken: token,
       role: assignment.role,
       llmApiKey: apiKey,
       isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,
@@ -321,47 +292,6 @@ async function maybeRestartMainForSubChange(instanceId: string): Promise<void> {
   }
 }
 
-/**
- * 让 bot 离开所有已加入的房间。
- *
- * v1.5.8：优先用 owner client kick bot（admin 路径，不依赖 bot token）——
- * 因为 Conduwuit 重启会让所有 access token 失效，此时 bot 自己的 token 已不可用，
- * 用 botClient.leave 会 401 失败被 catch → bot 实际没离开 → 成员列表里残留。
- * owner kick 是 admin 操作（owner power level=100），无论 bot token 状态都能成功。
- *
- * Fallback：owner kick 失败时（罕见，如权限配置异常），尝试用 bot 自己 token leave。
- */
-async function makeBotLeaveAllRooms(botUserId: string): Promise<void> {
-  const syncingClient = getSyncingClient();
-  if (!syncingClient) return;
-  const joinedRooms = syncingClient
-    .getRooms()
-    .filter((r) => (r.getMember(botUserId)?.membership ?? '') === 'join');
-
-  for (const room of joinedRooms) {
-    try {
-      await syncingClient.kick(room.roomId, botUserId);
-    } catch (kickErr) {
-      const token = await getSecret(`bot.${botUserId}.matrix_token`);
-      if (!token) {
-        logger.warn('owner kick 失败且 bot token 丢失，bot 未离开房间', {
-          botUserId, roomId: room.roomId, kickErr: String(kickErr),
-        });
-        continue;
-      }
-      try {
-        const botClient = createMatrixClient({ baseUrl: HOMESERVER_URL, userId: botUserId, accessToken: token });
-        await botClient.leave(room.roomId);
-      } catch (leaveErr) {
-        logger.warn('bot 离开单个房间失败（owner kick 与 bot leave 都失败）', {
-          botUserId, roomId: room.roomId,
-          kickErr: String(kickErr), leaveErr: String(leaveErr),
-        });
-      }
-    }
-  }
-}
-
 /** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerAgentHandlers(): void {
   // 一键编排：注册 bot + 分配（带 role/parent）+ 邀请 + 启动 runtime
@@ -382,19 +312,11 @@ export function registerAgentHandlers(): void {
         throw new Error('workspace 尚未创建团队群（teamSessionId 为空）');
       }
 
-      const bot = await registerAgentBot({
-        slug: def.slug,
-        workspaceName: workspace.name,
-        ownerUserId: workspace.ownerId,
-        homeserverUrl: HOMESERVER_URL,
-      });
-
+      // v2（Task 10）：本地身份生成 + 团队会话成员写入，取代 bot 注册 + 房间邀请
       const assignment = assignAgentToWorkspace(
-        workspaceId, agentDefinitionId, bot.botUserId, role, parentInstanceId ?? null,
+        workspaceId, agentDefinitionId, generateAgentUserId(def.slug), role, parentInstanceId ?? null,
       );
-
-      const ownerClient = await getOwnerMatrixClient();
-      await inviteBotToRoom(ownerClient, workspace.teamSessionId, bot.botUserId);
+      addSessionMember(workspace.teamSessionId, assignment.instanceId);
 
       if (apiKeyOverride) {
         await crudUpdateAssignmentApiKey(assignment.instanceId, apiKeyOverride);
@@ -404,14 +326,12 @@ export function registerAgentHandlers(): void {
       await startAgentRuntime(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: bot.botUserId,
+          agentUserId: assignment.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
-          teamRoomId: workspace.teamSessionId,
-          ownerUserId: workspace.ownerId,
+          teamSessionId: workspace.teamSessionId,
           def,
           role: assignment.role,
-          botAccessToken: bot.botAccessToken,
           llmApiKey: apiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),
@@ -618,7 +538,7 @@ export function registerAgentHandlers(): void {
     },
   );
 
-  // 重启 agent：从 keychain 恢复 token + 解析 apiKey，spawn runtime
+  // 重启 agent：解析 apiKey 后 spawn runtime（v2 Task 10：无 Matrix token）
   ipcMain.handle(
     'agent:start',
     async (
@@ -626,10 +546,9 @@ export function registerAgentHandlers(): void {
       opts: {
         assignment: AgentAssignment;
         workspaceId: string;
-        teamRoomId: string;
       },
     ) => {
-      const { assignment, workspaceId, teamRoomId } = opts;
+      const { assignment, workspaceId } = opts;
 
       const def = getAgentDefinition(assignment.agentDefinitionId);
       if (!def) {
@@ -644,24 +563,17 @@ export function registerAgentHandlers(): void {
         throw new Error(`未找到 workspace: ${workspaceId}`);
       }
 
-      const botAccessToken = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
-      if (!botAccessToken) {
-        throw new Error('Bot access token 丢失（请先注册 bot 账号）');
-      }
-
       const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
       await startAgentRuntime(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: assignment.agentUserId,
+          agentUserId: assignment.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
-          teamRoomId,
-          ownerUserId: workspace.ownerId,
+          teamSessionId: workspace.teamSessionId,
           def,
           role: assignment.role,
-          botAccessToken,
           llmApiKey,
           isCoordinator: (workspace.coordinatorInstanceId ?? null) === assignment.instanceId,
         }),

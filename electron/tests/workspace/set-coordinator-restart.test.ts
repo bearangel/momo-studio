@@ -190,7 +190,8 @@ describe('setCoordinator 自动重启', () => {
     const opts = spawnAgentMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(opts.instanceId).toBe(assignment.instanceId);
     expect(opts.isCoordinator).toBe(true);
-    expect(opts.botUserId).toBe('@bot:localhost');
+    expect(opts.agentUserId).toBe(assignment.agentUserId);
+    expect(opts.teamSessionId).toBe(ws.teamSessionId);
     expect(opts.workspaceId).toBe(ws.id);
   });
 
@@ -275,7 +276,7 @@ describe('setCoordinator 自动重启', () => {
     const opts = spawnAgentMock.mock.calls[0]![0] as {
       role?: string;
       isCoordinator?: boolean;
-      subAgents?: Array<{ slug: string; botUserId: string }>;
+      subAgents?: Array<{ slug: string; assignmentId: string }>;
     };
     expect(opts.role).toBe('main');
     expect(opts.isCoordinator).toBe(true);

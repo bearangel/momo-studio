@@ -13,6 +13,10 @@
 //   2. def 默认 + workspace allocation 合并 → allowedTools（Layer 1 ∪ Layer 2）
 //   3. Layer 3 deltas 生效：removed 工具不在 allowedTools（Layer 1 ∪ Layer 2 - removed）
 //
+// v2（Task 10）：buildSpawnOpts 入参/出参改为本地身份形状
+//   （agentUserId / teamSessionId，删除 botUserId / botAccessToken / homeserverUrl /
+//   ownerUserId / teamRoomId），首个用例附加形状断言。
+//
 // DB 隔离沿用仓库既定模式（参考 assignment-capabilities-crud.test.ts / T2）：
 //   - process.env.AP_USER_DATA_DIR 指向临时目录
 //   - getDb() 单例 + foreign_keys = ON（cascade 依赖此 PRAGMA）
@@ -60,9 +64,9 @@ function seedWorkspaceAndDef(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, directory_path, team_session_id, team_session_id, git_initialized, owner_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(wsId, 'WS', '/tmp', '!s:r', '!t:r', 0, '@owner:s');
+       (id, name, directory_path, team_session_id, git_initialized, owner_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(wsId, 'WS', '/tmp', 'sess-team', 0, '@owner:s');
   db.prepare(
     `INSERT INTO agent_definitions
        (id, name, slug, version, runtime, system_prompt,
@@ -114,13 +118,11 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
 
     const opts = buildSpawnOpts({
       instanceId: 'inst1',
-      botUserId: '@bot:s',
+      agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamRoomId: '!t:r',
-      ownerUserId: '@owner:s',
+      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file', 'bash']),
-      botAccessToken: 'tok',
       role: 'standalone',
       llmApiKey: 'k',
       isCoordinator: false,
@@ -128,6 +130,16 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
 
     // 回归断言：v1.5 此处为 undefined（bug），修复后必须等于 def 默认工具列表
     expect(opts.allowedTools).toEqual(['read_file', 'bash']);
+
+    // v2（Task 10）：opts 携带本地身份 + 团队会话 ID，不再有 Matrix 凭据字段
+    expect(opts.agentAssignmentId).toBe('inst1');
+    expect(opts.agentUserId).toBe('agent-t-ab12cd');
+    expect(opts.teamSessionId).toBe('sess-1');
+    expect(opts).not.toHaveProperty('botUserId');
+    expect(opts).not.toHaveProperty('botAccessToken');
+    expect(opts).not.toHaveProperty('homeserverUrl');
+    expect(opts).not.toHaveProperty('ownerUserId');
+    expect(opts).not.toHaveProperty('teamRoomId');
   });
 
   it('def 默认 + workspace allocation 合并后注入 allowedTools', () => {
@@ -145,13 +157,11 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
 
     const opts = buildSpawnOpts({
       instanceId: 'inst1',
-      botUserId: '@bot:s',
+      agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamRoomId: '!t:r',
-      ownerUserId: '@owner:s',
+      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file']),
-      botAccessToken: 'tok',
       role: 'standalone',
       llmApiKey: 'k',
       isCoordinator: false,
@@ -177,7 +187,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       `INSERT INTO agent_assignments
          (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
        VALUES (?, ?, ?, ?, 1, 'standalone')`,
-    ).run('inst1', 'ws1', 'def1', '@bot:s');
+    ).run('inst1', 'ws1', 'def1', 'agent-t-ab12cd');
     // Layer 3 delta：移除 bash
     db.prepare(
       'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
@@ -185,13 +195,11 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
 
     const opts = buildSpawnOpts({
       instanceId: 'inst1',
-      botUserId: '@bot:s',
+      agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamRoomId: '!t:r',
-      ownerUserId: '@owner:s',
+      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file', 'bash']),
-      botAccessToken: 'tok',
       role: 'standalone',
       llmApiKey: 'k',
       isCoordinator: false,

@@ -37,19 +37,17 @@ vi.mock('../../src/main/agent/spawn-helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/spawn-helpers')>();
   return {
     ...actual,
-    // 回显 instanceId / botUserId / workspaceId——createTaskDrivenRuntime 用这些做 Map key
-    buildSpawnOpts: vi.fn((input: { instanceId: string; botUserId: string; workspaceId: string }) => ({
+    // 回显 instanceId / agentUserId / workspaceId——createTaskDrivenRuntime 用这些做 Map key
+    buildSpawnOpts: vi.fn((input: { instanceId: string; agentUserId: string; workspaceId: string }) => ({
       instanceId: input.instanceId,
-      botUserId: input.botUserId,
+      agentAssignmentId: input.instanceId,
+      agentUserId: input.agentUserId,
       workspaceId: input.workspaceId,
       workspaceDir: '/tmp',
-      botAccessToken: 'fake-bot-token',
-      homeserverUrl: 'http://localhost:8008',
+      teamSessionId: '!team-lazy:localhost',
       systemPrompt: '',
       modelName: 'gpt-4o',
       llmApiKey: 'fake-llm-key',
-      teamRoomId: '!team:localhost',
-      ownerUserId: '@owner:localhost',
       role: 'standalone' as const,
     })),
     resolveApiKey: vi.fn().mockResolvedValue('fake-llm-key'),
@@ -166,12 +164,12 @@ function seedTaskDrivenDef(defId: string, providerId: string): AgentDefinition {
 function seedOnlineAssignment(
   workspaceId: string,
   defId: string,
-  botUserId: string,
+  agentUserId: string,
 ): string {
   const assignment = assignAgentToWorkspace(
     workspaceId,
     defId,
-    botUserId,
+    agentUserId,
     'standalone',
     null,
   );
@@ -242,14 +240,12 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
       instanceId,
       workspaceId: ws.id,
       workspaceDir: '/tmp',
-      botUserId: '@bot-lazy-2:localhost',
-      botAccessToken: 'fake-bot-token',
-      homeserverUrl: 'http://localhost:8008',
+      agentAssignmentId: instanceId,
+      agentUserId: 'agent-bot-lazy-2',
+      teamSessionId: '!team-lazy-2:localhost',
       systemPrompt: '',
       modelName: 'gpt-4o',
       llmApiKey: 'fake-llm-key',
-      teamRoomId: '!team-lazy-2:localhost',
-      ownerUserId: '@owner:localhost',
       role: 'standalone' as const,
     };
 

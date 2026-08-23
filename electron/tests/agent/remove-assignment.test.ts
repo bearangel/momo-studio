@@ -1,8 +1,7 @@
-// removeAgentAssignment：删除 agent 时应让 bot 离开所有房间 + 清理 token + 清空悬空 coordinator
+// removeAgentAssignment：删除 agent 时清理 keychain override + 清空悬空 coordinator
 //
-// v1.5.8：
-//   - 主路径用 owner client kick（不依赖 bot token），fallback 才用 bot 自己 leave
-//   - 删 sub 时重启父 main agent 让其 subAgents 重建（否则 dispatch_to 不匹配 → sub 无响应）
+// v2（Task 10）：agent 无 Matrix 身份——不再离房 / 不删 bot token。
+// v1.5.8：删 sub 时重启父 main agent 让其 subAgents 重建（否则 dispatch 目标失配 → sub 无响应）
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -133,31 +132,13 @@ beforeEach(() => {
 
 describe('removeAgentAssignment', () => {
 
-  it('v1.5.8：用 owner client kick bot 离开它已加入的全部房间（不调 bot leave）', async () => {
+  it('v2（Task 10）：不做任何 Matrix 清理（无 kick / 无 leave / 不删 bot token）', async () => {
     await removeAgentAssignment('inst-1');
-    expect(mocks.kickMock).toHaveBeenCalledTimes(2);
-    const kickedRooms = mocks.kickMock.mock.calls.map((c) => c[0]);
-    expect(kickedRooms).toEqual(expect.arrayContaining(['!team:localhost', '!other:localhost']));
-    expect(kickedRooms).not.toContain('!nope:localhost');
+    expect(mocks.kickMock).not.toHaveBeenCalled();
     expect(mocks.leaveMock).not.toHaveBeenCalled();
-  });
-
-  it('owner kick 失败时 fallback 到 bot 自己 leave', async () => {
-    mocks.kickMock.mockRejectedValue(new Error('M_FORBIDDEN: insufficient power'));
-    await removeAgentAssignment('inst-1');
-    expect(mocks.leaveMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('owner kick 失败且 bot token 丢失 → 不调 leave', async () => {
-    mocks.kickMock.mockRejectedValue(new Error('M_FORBIDDEN'));
-    mocks.getSecretMock.mockResolvedValueOnce(null);
-    await removeAgentAssignment('inst-1');
-    expect(mocks.leaveMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('删除 bot token', async () => {
-    await removeAgentAssignment('inst-1');
-    expect(mocks.deleteSecretMock).toHaveBeenCalledWith('bot.@bot:localhost.matrix_token');
+    expect(mocks.deleteSecretMock).not.toHaveBeenCalledWith('bot.@bot:localhost.matrix_token');
+    // API key override 仍清理
+    expect(mocks.deleteSecretMock).toHaveBeenCalledWith('agent.inst-1.api_key_override');
   });
 
   it('被删实例是协调 agent 时清空 coordinatorInstanceId', async () => {

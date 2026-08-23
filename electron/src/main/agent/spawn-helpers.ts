@@ -10,9 +10,11 @@
 //   - apiKey 解析：override ?? provider key（spawn 前主进程解析，传给子进程）
 //   - role 来自 assignment（不再从 def.type 推断）
 //   - modelBaseUrl 来自 provider.baseUrl（spawn 前查 model_providers 表）
+// v2（Task 10）：opts 携带本地身份（agentUserId/teamSessionId），不再传 Matrix 凭据；
+//   原 HOMESERVER_URL 常量随 bot token 流程一并移除。
 
 import path from 'node:path';
-import { getAgentDefinition, listAssignments, listSubAssignments } from './crud';
+import { getAgentDefinition, listSubAssignments } from './crud';
 import { getAllocation } from '../workspace/allocation';
 import { mergeCapabilities } from './capability-merger';
 import { getAssignmentDeltas } from './assignment-capabilities';
@@ -23,9 +25,6 @@ import type { AgentDefinition, AgentRole } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-manager';
 
-/** Conduwuit 固定监听 8008（与 conduit/manager.ts 的 CONDUIT_PORT 一致）。 */
-export const HOMESERVER_URL = 'http://127.0.0.1:8008';
-
 /**
  * 为指定 workspace 内的 main assignment 重建 subAgents 引用。
  * v1.3：按 assignment.parent_instance_id 查询同 ws 的 role='sub' assignments，
@@ -33,7 +32,9 @@ export const HOMESERVER_URL = 'http://127.0.0.1:8008';
  *
  * @param workspaceId 目标 workspace
  * @param mainInstanceId main assignment 的 instanceId
- * @returns sub agent 引用列表（slug + botUserId + description）
+ * v2（Task 10）：引用携带 assignmentId（dispatch 路由键），不再携带 Matrix userId。
+ *
+ * @returns sub agent 引用列表（slug + assignmentId + description）
  */
 export function rebuildSubAgents(
   workspaceId: string,
@@ -47,7 +48,7 @@ export function rebuildSubAgents(
     if (!subDef) continue;
     subs.push({
       slug: subDef.slug,
-      botUserId: sub.agentUserId,
+      assignmentId: sub.instanceId,
       description: subDef.description,
     });
   }
@@ -83,16 +84,16 @@ export function resolveSkillSlugs(slugs: string[]): RuntimeSkillRef[] {
   return slugs.map((slug) => ({ slug, cachePath: path.join(skillsDir, slug) }));
 }
 
-/** buildSpawnOpts 的入参 */
+/** buildSpawnOpts 的入参（v2 Task 10：本地身份形状，无 Matrix 凭据） */
 export interface BuildSpawnOptsInput {
   instanceId: string;
-  botUserId: string;
+  /** agent 本地身份（agent_assignments.agent_user_id） */
+  agentUserId: string;
   workspaceId: string;
   workspaceDir: string;
-  teamRoomId: string;
-  ownerUserId: string;
+  /** 团队会话 ID（workspaces.team_session_id，sessions 表主键） */
+  teamSessionId: string;
   def: AgentDefinition;
-  botAccessToken: string;
   /** 来自 assignment.role（v1.3：不再从 def.type 推断） */
   role: AgentRole;
   /** spawn 前主进程已解析的 LLM API key（override ?? provider key） */
@@ -112,13 +113,11 @@ export interface BuildSpawnOptsInput {
 export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   const {
     instanceId,
-    botUserId,
+    agentUserId,
     workspaceId,
     workspaceDir,
-    teamRoomId,
-    ownerUserId,
+    teamSessionId,
     def,
-    botAccessToken,
     role,
     llmApiKey,
     isCoordinator,
@@ -153,17 +152,15 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     instanceId,
     workspaceId,
     workspaceDir,
-    botUserId,
-    botAccessToken,
-    homeserverUrl: HOMESERVER_URL,
+    agentAssignmentId: instanceId,
+    agentUserId,
+    teamSessionId,
     systemPrompt: def.systemPrompt,
     // v1.3：runtime 收到 modelName + modelBaseUrl + llmApiKey 即可，
     // createLLMProvider 按 baseUrl 自动检测 platform
     modelName: def.modelName,
     modelBaseUrl: provider.baseUrl,
     llmApiKey,
-    teamRoomId,
-    ownerUserId,
     role,
     subAgents,
     // v1.6 修复：allowedTools 来自三层合并后的 merged.tools（非 undefined）

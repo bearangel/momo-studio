@@ -22,8 +22,7 @@ import { getDb } from '../storage/db';
 import { spawnAgent, isV1SubprocessAlive } from './runtime-manager';
 import { getAgentDefinition, listSubAssignments } from './crud';
 import { getWorkspace } from '../workspace/crud';
-import { buildSpawnOpts, resolveApiKey, HOMESERVER_URL } from './spawn-helpers';
-import { createMatrixClient } from '../matrix/client';
+import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { logger } from '../logger';
 import type { AgentRole } from './types';
 
@@ -105,51 +104,18 @@ export async function autoStartAgents(): Promise<void> {
 
       const apiKey = await resolveApiKey(row.instance_id, def.modelProviderId);
 
-      const rawToken = await getBotToken(row.agent_user_id);
-      if (!rawToken) {
-        logger.warn('Bot Matrix token 丢失，跳过', { botUserId: row.agent_user_id });
-        failed++;
-        continue;
-      }
-
-      // v1.5.8：spawn 前主动验证 token——避免失效 token 触发子进程崩溃重启循环（matrix-js-sdk 收到 M_UNKNOWN_TOKEN 会 fatal exit）
-      let token = rawToken;
-      const tokenCheck = await verifyBotToken(row.agent_user_id, token);
-      if (!tokenCheck.ok) {
-        // token 失效——尝试用 keychain 里的 password 重新 login（应对 Conduwuit 重启 token 丢失）
-        const relogin = await tryReloginBot(row.agent_user_id);
-        if (relogin.ok) {
-          token = relogin.token;
-          logger.info('Bot token 失效，已用 password 重新登录获得新 token', {
-            instanceId: row.instance_id,
-            botUserId: row.agent_user_id,
-            slug: def.slug,
-          });
-        } else {
-          logger.warn('Bot Matrix token 在服务端失效且无 password 可恢复，跳过自启动', {
-            instanceId: row.instance_id,
-            botUserId: row.agent_user_id,
-            slug: def.slug,
-            reason: tokenCheck.reason,
-            tokenPrefix: `${token.slice(0, 8)}…`,
-            hint: '老 bot（v1.5.8 前注册）未存 password，请在 UI 删除该 agent 后重新安装',
-          });
-          failed++;
-          continue;
-        }
-      }
-
+      // v2（Task 10）：agent 无 Matrix 凭据——不再解析/验证 bot token。
+      // 注意：v1 spawn 的 runtime 子进程会在 taskDriven=false 时直接报错退出
+      // （runtime-entry 已删 Matrix 登录分支），v1 路径整体由 Task 13 移除。
       spawnAgent(
         buildSpawnOpts({
           instanceId: row.instance_id,
-          botUserId: row.agent_user_id,
+          agentUserId: row.agent_user_id,
           workspaceId: row.workspace_id,
           workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamSessionId,
-          ownerUserId: ws.ownerId,
+          teamSessionId: ws.teamSessionId,
           def,
           role: row.role as AgentRole,
-          botAccessToken: token,
           llmApiKey: apiKey,
           isCoordinator: (ws.coordinatorInstanceId ?? null) === row.instance_id,
         }),
@@ -177,88 +143,3 @@ export async function autoStartAgents(): Promise<void> {
   logger.info('Agent 自启动完成（v1 fallback）', { started, failed, skipped, total: rows.length });
 }
 
-/** 从 keychain 取 bot Matrix token（封装 helper，便于日志统一） */
-async function getBotToken(botUserId: string): Promise<string | null> {
-  const { getSecret } = await import('../storage/keychain');
-  return getSecret(`bot.${botUserId}.matrix_token`);
-}
-
-/**
- * v1.5.8：用 bot token 调 Conduwuit 的 /account/whoami 验证 token 是否仍被服务端认可。
- * 失败常见原因：Conduwuit 数据被清/重启换 DB、token 被 Matrix 服务器主动撤销、keychain 残留旧环境 token。
- * 用GET /whoami 而非 startClient：避免触发 pushrules 等重流程，单次往返即得答案。
- */
-async function verifyBotToken(
-  botUserId: string,
-  token: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  try {
-    const client = createMatrixClient({
-      baseUrl: HOMESERVER_URL,
-      userId: botUserId,
-      accessToken: token,
-    });
-    // whoami 是 matrix-js-sdk 的轻量认证探测端点；401 → 抛 MatrixError
-    await client.whoami();
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: msg };
-  }
-}
-
-/**
- * 完整的 bot token 解析流程：keychain 取 token → whoami 验证 → 失效则 password re-login。
- * task-driven runtime（initTaskDrivenRuntime）和 v1 autoStartAgents 共用此逻辑。
- *
- * @returns 有效 token；keychain 无 token 或 re-login 也失败时返回 null
- */
-export async function resolveBotToken(botUserId: string): Promise<string | null> {
-  const rawToken = await getBotToken(botUserId);
-  if (!rawToken) return null;
-
-  const tokenCheck = await verifyBotToken(botUserId, rawToken);
-  if (tokenCheck.ok) return rawToken;
-
-  const relogin = await tryReloginBot(botUserId);
-  return relogin.ok ? relogin.token : null;
-}
-
-/**
- * v1.5.8：token 失效时用 keychain 里的 password 重新登录拿新 token。
- * 应对 Conduwuit 重启导致 token 全部丢失的场景（user 用 password 重新 login，
- * bot 同理——前提是注册时已把 password 存入 keychain）。
- *
- * 成功则把新 token 写回 keychain（更新 token 缓存）。
- *
- * @returns ok=true + 新 token；ok=false + reason（无 password / login 失败）
- */
-async function tryReloginBot(
-  botUserId: string,
-): Promise<{ ok: true; token: string } | { ok: false; reason: string }> {
-  const { getSecret, setSecret } = await import('../storage/keychain');
-  const password = await getSecret(`bot.${botUserId}.matrix_password`);
-  if (!password) {
-    return { ok: false, reason: 'keychain 无 bot password（v1.5.8 前注册的 bot 不存 password）' };
-  }
-
-  // bot userId 的 localpart——matrix m.login.password 接受 localpart 作为 user
-  const localpart = botUserId.replace(/^@|:.*$/g, '');
-  try {
-    const client = createMatrixClient({ baseUrl: HOMESERVER_URL });
-    const raw = await client.login('m.login.password', {
-      user: localpart,
-      password,
-      initial_device_display_name: 'Momo Studio Agent Bot',
-    });
-    const response = raw as { access_token?: string };
-    if (typeof response.access_token !== 'string') {
-      return { ok: false, reason: 'login 返回缺 access_token' };
-    }
-    await setSecret(`bot.${botUserId}.matrix_token`, response.access_token);
-    return { ok: true, token: response.access_token };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `login 失败: ${msg}` };
-  }
-}

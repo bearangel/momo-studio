@@ -217,7 +217,7 @@ describe('agent:stop IPC handler（Task 4 双轨销毁）', () => {
     const fakeRunner = {
       destroy: vi.fn(),
       assignmentId: instId,
-      botUserId: '@bot-stop:localhost',
+      agentUserId: 'agent-bot-stop-x1',
       workspaceId: ws.id,
       executeTask: vi.fn(),
       abortStream: vi.fn(),

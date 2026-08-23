@@ -238,10 +238,9 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
 
     expect(stopAgentMock).toHaveBeenCalledWith('inst-new');
 
-    const [assignmentArg, wsIdArg, teamRoomIdArg] = startAgentMock.mock.calls[0]!;
+    const [assignmentArg, wsIdArg] = startAgentMock.mock.calls[0]!;
     expect(assignmentArg).toBe(NEW_ASSIGNMENT);
     expect(wsIdArg).toBe('ws-1');
-    expect(teamRoomIdArg).toBe('!team:server');
 
     expect(workspaceGet).toHaveBeenCalledWith('ws-1');
 

@@ -55,11 +55,9 @@ function mockClient(): MatrixClient {
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',

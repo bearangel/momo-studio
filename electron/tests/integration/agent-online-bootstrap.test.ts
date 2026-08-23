@@ -23,24 +23,18 @@ import type { AgentRunner } from '../../src/main/agent/agent-runner';
 // ─── Mock 重依赖 ───────────────────────────────────────────────────────────
 // 拦截 keychain / 网络 / fork 子进程调用，使测试可纯逻辑验证过滤行为。
 
-vi.mock('../../src/main/agent/auto-start', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/main/agent/auto-start')>();
-  return {
-    ...actual,
-    resolveBotToken: vi.fn().mockResolvedValue('fake-bot-token'),
-  };
-});
-
 vi.mock('../../src/main/agent/spawn-helpers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/spawn-helpers')>();
   return {
     ...actual,
     resolveApiKey: vi.fn().mockResolvedValue('fake-llm-key'),
-    // 返回最小 opts（仅 instanceId/botUserId/workspaceId），不触发真 provider 查询
+    // 返回最小 opts（仅 instanceId/agentUserId/workspaceId），不触发真 provider 查询
     buildSpawnOpts: vi.fn((input) => ({
       instanceId: input.instanceId,
-      botUserId: input.botUserId,
+      agentAssignmentId: input.instanceId,
+      agentUserId: input.agentUserId,
       workspaceId: input.workspaceId,
+      teamSessionId: input.teamSessionId,
     })),
   };
 });

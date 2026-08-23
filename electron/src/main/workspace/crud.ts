@@ -2,12 +2,15 @@
 //
 // Workspace CRUD — 在 SQLite + 文件系统中创建、查询、删除一个 workspace。
 // v23：matrix_space_id 列已删除；team_room_id 更名 team_session_id。
+// v2（Task 10）：createWorkspace 内部创建默认团队会话（sessions 表）并回填
+// team_session_id——不再由调用方先建 Matrix room 后传入。
 // git 初始化失败不应阻断 workspace 创建，因此单独 try/catch。
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../storage/db';
+import { insertSession } from '../storage/sessions/repo';
 import { logger } from '../logger';
 import type { Workspace, CreateWorkspaceInput } from './types';
 import { initGitRepo } from './git';
@@ -42,16 +45,16 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
 }
 
 /**
- * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
+ * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite →
+ * 创建默认团队会话并回填 team_session_id。
  * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。
  *
- * @param teamSessionId workspace 内"团队会话" ID（由调用方先创建好后传入），
- *                      不传则留空（旧调用方兼容；新流程都会传）。
+ * v2（Task 10）：团队会话是本地 sessions 表行（title='团队会话'，kind='chat'），
+ * 不再创建 Matrix room——用户与 agent 的团队交流全部落 SQLite。
  */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   ownerUserId: string,
-  teamSessionId = '',
 ): Promise<Workspace> {
   const id = randomUUID();
   const dir = path.resolve(input.directoryPath);
@@ -73,17 +76,21 @@ export async function createWorkspace(
   const db = getDb();
   db.prepare(
     `INSERT INTO workspaces (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
   ).run(
     id,
     input.name,
     input.description ?? '',
     dir,
-    teamSessionId,
     gitInitialized ? 1 : 0,
     ownerUserId,
     input.iconEmoji ?? '📁',
   );
+
+  // 默认团队会话：本地 sessions 行 + 回填外键（两步写而非事务——workspace 行
+  // 先落地，会话创建失败时 workspace 仍可用，team_session_id 留空可后补）
+  const teamSession = insertSession({ workspaceId: id, title: '团队会话', kind: 'chat' });
+  db.prepare('UPDATE workspaces SET team_session_id = ? WHERE id = ?').run(teamSession.id, id);
 
   // 添加 owner 为成员（保证授权模型从一开始就有 owner 角色）
   db.prepare(
@@ -91,7 +98,7 @@ export async function createWorkspace(
   ).run(id, ownerUserId);
 
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow;
-  logger.info('Workspace 已创建', { id, name: input.name, dir });
+  logger.info('Workspace 已创建', { id, name: input.name, dir, teamSessionId: teamSession.id });
   return rowToWorkspace(row);
 }
 

@@ -90,11 +90,9 @@ function mockClient(): MatrixClient {
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -446,7 +444,7 @@ describe('runChatLoop streaming', () => {
       mockClient(),
       '!special:localhost',
       'hello',
-      makeConfig({ botUserId: '@mybot:localhost' }),
+      makeConfig({ agentUserId: 'agent-mybot-x1' }),
       makeContext(),
     );
 
@@ -455,7 +453,7 @@ describe('runChatLoop streaming', () => {
       senderAgentId: string;
     };
     expect(startChunk.sessionId).toBe('!special:localhost');
-    expect(startChunk.senderAgentId).toBe('@mybot:localhost');
+    expect(startChunk.senderAgentId).toBe('agent-mybot-x1');
   });
 });
 
@@ -480,7 +478,7 @@ describe('dispatch 共享预算扣减', () => {
     const client = mockClient();
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
     const dispatchPromise = executeDispatch('researcher', '帮我查资料', client, config, 9);
@@ -503,7 +501,7 @@ describe('dispatch 共享预算扣减', () => {
     const client = mockClient();
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'Research' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
     const dispatchPromise = executeDispatch('researcher', '任务', client, config);
@@ -572,7 +570,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
 
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: '研究员' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' }],
     });
 
     await runChatLoop(client, '!room:localhost', '帮我查资料', config, makeContext());
@@ -619,7 +617,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
 
     const config = makeConfig({
       role: 'main',
-      subAgents: [{ slug: 'researcher', botUserId: '@researcher:localhost', description: 'R' }],
+      subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'R' }],
     });
 
     await runChatLoop(client, '!room:localhost', 'hi', config, makeContext());

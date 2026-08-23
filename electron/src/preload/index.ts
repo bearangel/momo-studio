@@ -56,8 +56,8 @@ const api: ApiSurface = {
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     createCustom: (input) => invoke('agent:createCustom', input),
     list: (workspaceId?: string) => invoke('agent:list', workspaceId),
-    assign: (workspaceId, defId, botUserId) =>
-      invoke('agent:assign', workspaceId, defId, botUserId),
+    assign: (workspaceId, defId, agentUserId) =>
+      invoke('agent:assign', workspaceId, defId, agentUserId),
     listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),

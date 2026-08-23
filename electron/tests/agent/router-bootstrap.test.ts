@@ -48,7 +48,7 @@ import type { ProviderTokenBucket } from '../../src/main/agent/llm/token-bucket'
 function makeFakeRunner(id: string): AgentRunner {
   return {
     assignmentId: id,
-    botUserId: `@${id}:localhost`,
+    agentUserId: `agent-${id}`,
     workspaceId: 'ws-test',
     executeTask: vi.fn(),
     abortStream: vi.fn(),

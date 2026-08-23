@@ -2,6 +2,8 @@
 //
 // v1.5.8 autoStartAgents 查询测试：验证 enabled=1 AND last_running=1 的过滤逻辑。
 // runtime-manager 被 mock（避免 fork）；其余走真实 DB + keychain + crud。
+// v2（Task 10）：auto-start 不再解析/验证 bot Matrix token（whoami/re-login
+// 流程已随 agent 去 Matrix 一并移除）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
@@ -22,18 +24,6 @@ const { spawnAgentMock, isV1SubprocessAliveMock } = vi.hoisted(() => ({
 vi.mock('../../src/main/agent/runtime-manager', () => ({
   spawnAgent: spawnAgentMock,
   isV1SubprocessAlive: isV1SubprocessAliveMock,
-}));
-
-// v1.5.8：mock matrix client，支持按 botUserId 路由 whoami 返回值
-const whoamiImpl = vi.hoisted(() => vi.fn().mockResolvedValue({ user_id: '@bot:localhost' }));
-// v1.5.8：mock matrix client 的 login（token 失效后 re-login 路径用）
-const loginImpl = vi.hoisted(() => vi.fn().mockResolvedValue({ access_token: 'fresh-token' }));
-vi.mock('../../src/main/matrix/client', () => ({
-  createMatrixClient: (opts: { userId?: string; accessToken?: string }) => ({
-    whoami: () => whoamiImpl(opts.userId),
-    login: (type: string, params: { user: string; password: string }) =>
-      loginImpl(type, params),
-  }),
 }));
 
 // 在 mock 之后导入被测模块
@@ -59,10 +49,6 @@ beforeEach(() => {
   ).run();
   spawnAgentMock.mockClear();
   isV1SubprocessAliveMock.mockImplementation(() => false);
-  whoamiImpl.mockReset();
-  whoamiImpl.mockResolvedValue({ user_id: '@bot:localhost' });
-  loginImpl.mockReset();
-  loginImpl.mockResolvedValue({ access_token: 'fresh-token' });
 });
 
 afterEach(() => {
@@ -110,8 +96,7 @@ describe('autoStartAgents: last_running 过滤', () => {
       '@o:localhost', '!s1:localhost', '!t1:localhost',
     );
     insertAssignment('inst-up', ws.id, 'def-up', '@bot.up:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.up:localhost.matrix_token', 'mx-token');
+        memStore.set('provider.prov-1.api_key', 'llm-key');
 
     await autoStartAgents();
 
@@ -127,8 +112,7 @@ describe('autoStartAgents: last_running 过滤', () => {
       '@o:localhost', '!s2:localhost', '!t2:localhost',
     );
     insertAssignment('inst-down', ws.id, 'def-down', '@bot.down:localhost', 1, 0);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.down:localhost.matrix_token', 'mx-token');
+        memStore.set('provider.prov-1.api_key', 'llm-key');
 
     await autoStartAgents();
 
@@ -148,9 +132,6 @@ describe('autoStartAgents: last_running 过滤', () => {
     insertAssignment('inst-b', ws.id, 'def-b', '@bot.b:localhost', 1, 0);
     insertAssignment('inst-c', ws.id, 'def-c', '@bot.c:localhost', 1, 1);
     memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.a:localhost.matrix_token', 'ta');
-    memStore.set('bot.@bot.b:localhost.matrix_token', 'tb');
-    memStore.set('bot.@bot.c:localhost.matrix_token', 'tc');
 
     await autoStartAgents();
 
@@ -167,7 +148,6 @@ describe('autoStartAgents: last_running 过滤', () => {
     );
     insertAssignment('inst-running', ws.id, 'def-running', '@bot.r:localhost', 1, 1);
     memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.r:localhost.matrix_token', 'mx-token');
     isV1SubprocessAliveMock.mockImplementation(() => true);
 
     await autoStartAgents();
@@ -176,134 +156,28 @@ describe('autoStartAgents: last_running 过滤', () => {
   });
 });
 
-describe('autoStartAgents: token 预验证', () => {
-  it('whoami 成功时正常 spawn', async () => {
-    saveAgentDefinition(makeDef('def-ok', 'ok'));
+describe('autoStartAgents: v2 无 Matrix token 依赖', () => {
+  it('keychain 无 bot token 也正常 spawn（Task 10 去 Matrix）', async () => {
+    saveAgentDefinition(makeDef('def-notoken', 'notoken'));
     const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ok'), iconEmoji: '📁' },
-      '@o:localhost', '!sok:localhost', '!tok:localhost',
+      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'nt'), iconEmoji: '📁' },
+      '@o:localhost',
     );
-    insertAssignment('inst-ok', ws.id, 'def-ok', '@bot.ok:localhost', 1, 1);
+    insertAssignment('inst-notoken', ws.id, 'def-notoken', 'agent-notoken-x1', 1, 1);
     memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.ok:localhost.matrix_token', 'mx-token');
-    whoamiImpl.mockResolvedValue({ user_id: '@bot.ok:localhost' });
-
-    await autoStartAgents();
-
-    expect(whoamiImpl).toHaveBeenCalledTimes(1);
-    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('whoami 抛 M_UNKNOWN_TOKEN 时不 spawn（避免崩溃循环）', async () => {
-    saveAgentDefinition(makeDef('def-stale', 'stale'));
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'stale'), iconEmoji: '📁' },
-      '@o:localhost', '!sstale:localhost', '!tstale:localhost',
-    );
-    insertAssignment('inst-stale', ws.id, 'def-stale', '@bot.stale:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.stale:localhost.matrix_token', 'stale-token');
-    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN: Unknown access token.'));
-
-    await autoStartAgents();
-
-    expect(whoamiImpl).toHaveBeenCalledTimes(1);
-    expect(spawnAgentMock).not.toHaveBeenCalled();
-  });
-
-  it('混合：valid token 启动，invalid token 跳过', async () => {
-    saveAgentDefinition(makeDef('def-good', 'good'));
-    saveAgentDefinition(makeDef('def-bad', 'bad'));
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'mix'), iconEmoji: '📁' },
-      '@o:localhost', '!smix:localhost', '!tmix:localhost',
-    );
-    insertAssignment('inst-good', ws.id, 'def-good', '@bot.good:localhost', 1, 1);
-    insertAssignment('inst-bad', ws.id, 'def-bad', '@bot.bad:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.good:localhost.matrix_token', 'good-token');
-    memStore.set('bot.@bot.bad:localhost.matrix_token', 'bad-token');
-    // 按 userId 精确路由（避免 SQL 顺序依赖）
-    whoamiImpl.mockImplementation((userId: string) => {
-      if (userId === '@bot.bad:localhost') {
-        return Promise.reject(new Error('M_UNKNOWN_TOKEN'));
-      }
-      return Promise.resolve({ user_id: userId });
-    });
+    // 不设任何 bot.* keychain 条目——v2 路径不读 token，直接 spawn
 
     await autoStartAgents();
 
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
-    const arg = spawnAgentMock.mock.calls[0]![0] as { instanceId: string };
-    expect(arg.instanceId).toBe('inst-good');
-  });
-});
-
-describe('autoStartAgents: token 失效后 password re-login', () => {
-  it('token 失效且有 password → re-login 拿新 token → spawn', async () => {
-    saveAgentDefinition(makeDef('def-relogin', 'relogin'));
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'rl'), iconEmoji: '📁' },
-      '@o:localhost', '!srl:localhost', '!trl:localhost',
-    );
-    insertAssignment('inst-relogin', ws.id, 'def-relogin', '@bot.rl:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.rl:localhost.matrix_token', 'stale-token');
-    memStore.set('bot.@bot.rl:localhost.matrix_password', 'the-password');
-
-    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
-    loginImpl.mockResolvedValue({ access_token: 'new-token-from-login' });
-
-    await autoStartAgents();
-
-    expect(loginImpl).toHaveBeenCalledWith('m.login.password', {
-      user: 'bot.rl',  // bot localpart（去 @ 和 :localhost）
-      password: 'the-password',
-      initial_device_display_name: 'Momo Studio Agent Bot',
-    });
-    expect(spawnAgentMock).toHaveBeenCalledTimes(1);
-    const arg = spawnAgentMock.mock.calls[0]![0] as { botAccessToken: string };
-    expect(arg.botAccessToken).toBe('new-token-from-login');
-    expect(memStore.get('bot.@bot.rl:localhost.matrix_token')).toBe('new-token-from-login');
-  });
-
-  it('token 失效但无 password（v1.5.8 前老 bot）→ 跳过 spawn', async () => {
-    saveAgentDefinition(makeDef('def-nopw', 'nopw'));
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'np'), iconEmoji: '📁' },
-      '@o:localhost', '!snp:localhost', '!tnp:localhost',
-    );
-    insertAssignment('inst-nopw', ws.id, 'def-nopw', '@bot.np:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.np:localhost.matrix_token', 'stale');
-    // 不设 password（模拟 v1.5.8 前注册的 bot）
-
-    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
-
-    await autoStartAgents();
-
-    expect(loginImpl).not.toHaveBeenCalled();
-    expect(spawnAgentMock).not.toHaveBeenCalled();
-  });
-
-  it('token 失效 + re-login 也失败（password 错） → 跳过 spawn', async () => {
-    saveAgentDefinition(makeDef('def-badpw', 'badpw'));
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'bp'), iconEmoji: '📁' },
-      '@o:localhost', '!sbp:localhost', '!tbp:localhost',
-    );
-    insertAssignment('inst-badpw', ws.id, 'def-badpw', '@bot.bp:localhost', 1, 1);
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot.bp:localhost.matrix_token', 'stale');
-    memStore.set('bot.@bot.bp:localhost.matrix_password', 'wrong-password');
-
-    whoamiImpl.mockRejectedValue(new Error('M_UNKNOWN_TOKEN'));
-    loginImpl.mockRejectedValue(new Error('M_FORBIDDEN: Invalid password'));
-
-    await autoStartAgents();
-
-    expect(loginImpl).toHaveBeenCalled();
-    expect(spawnAgentMock).not.toHaveBeenCalled();
+    const arg = spawnAgentMock.mock.calls[0]![0] as {
+      instanceId: string; agentUserId: string; teamSessionId: string;
+      botAccessToken?: string;
+    };
+    expect(arg.instanceId).toBe('inst-notoken');
+    expect(arg.agentUserId).toBe('agent-notoken-x1');
+    expect(arg.teamSessionId).toBe(ws.teamSessionId);
+    expect(arg.botAccessToken).toBeUndefined();
   });
 });
 

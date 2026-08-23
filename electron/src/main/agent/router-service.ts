@@ -24,7 +24,6 @@ import { logger } from '../logger';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
-import { findAssignmentByAgentUserId as defaultFindAssignmentByAgentUserId } from './runtime-registry';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -32,11 +31,6 @@ export interface RouterServiceOpts {
   runners: Map<string, AgentRunner>;
   /** 任务调度器（pickup 决策 + 三层并发控制；routeUserChat 不经过它——ephemeral chat 直接派发） */
   dispatcher: TaskDispatcher;
-  /**
-   * 按 agentUserId 反查 assignmentId——dispatch/task_reply 路由自解析用。
-   * 缺省用 runtime-registry 的 DB 查询；测试可注入 mock 避免依赖 DB。
-   */
-  findAssignmentByAgentUserId?: (agentUserId: string) => string | null;
 }
 
 /** notifyTaskReply 的入参（camelCase；由 task_reply event 的 snake_case content 转换而来） */
@@ -161,9 +155,9 @@ export class RouterService {
    * 把 dispatch content 的 dispatch_from / task_id / tool_budget / tool_stream_session_id
    * 组装成 dispatchContext 注入 executeTask，子进程 runtime-entry 据此跑 handleDispatch 流程。
    *
-   * 目标 assignment 解析优先级：
-   *   1. directAssignmentId（sync-manager 已解析的直接目标）
-   *   2. content.dispatch_to → findAssignmentByAgentUserId 反查
+   * 目标 assignment 解析优先级（v2 Task 10：dispatch_to 值即 assignmentId，无需反查）：
+   *   1. directAssignmentId（调用方已解析的直接目标）
+   *   2. content.dispatch_to → 直接作 runners key
    */
   private async routeDispatch(event: InternalEvent, directAssignmentId?: string): Promise<void> {
     const content = event.getContent();
@@ -175,15 +169,8 @@ export class RouterService {
       return;
     }
 
-    // 优先用直接指定的目标；未指定时从 dispatch_to 反查 assignment
-    let assignmentId = directAssignmentId;
-    if (!assignmentId) {
-      const dispatchTo = content.dispatch_to;
-      if (typeof dispatchTo === 'string') {
-        const lookup = this.opts.findAssignmentByAgentUserId ?? defaultFindAssignmentByAgentUserId;
-        assignmentId = lookup(dispatchTo) ?? undefined;
-      }
-    }
+    const assignmentId =
+      directAssignmentId ?? (typeof content.dispatch_to === 'string' ? content.dispatch_to : undefined);
     if (!assignmentId) {
       logger.warn('routeDispatch 无法解析目标 assignment', {
         dispatchTo: content.dispatch_to, taskId,
@@ -205,7 +192,7 @@ export class RouterService {
       body,
       streamSessionId,
       dispatchContext: {
-        fromBotUserId: dispatchFrom,
+        fromAssignmentId: dispatchFrom,
         task_id: taskId,
         ...(typeof content.tool_budget === 'number' ? { tool_budget: content.tool_budget } : {}),
         ...(typeof content.tool_stream_session_id === 'string'
@@ -221,9 +208,9 @@ export class RouterService {
    * 把 snake_case content 转成 camelCase notification 后调用 AgentRunner.notifyTaskReply，
    * runner 内部按 taskId 匹配 activeTasks 找到对应子进程并 IPC 推送。
    *
-   * 路由优先级（I2 修复）：
-   *   1. event content.reply_to 存在 → findAssignmentByAgentUserId 精确反查目标 PM runner
-   *   2. assignmentId 参数（sync-manager 已解析）→ 精确通知
+   * 路由优先级（v2 Task 10：reply_to 值即 PM 的 assignmentId，直接定位 runner）：
+   *   1. assignmentId 参数（调用方已解析）→ 精确通知
+   *   2. event content.reply_to 存在 → 直接作 runners key 精确通知
    *   3. 都没有 → 广播给所有 runner（向后兼容旧 task_reply event）
    *
    * @param assignmentId 已知的 PM runner key（精确通知）；未提供时尝试 reply_to 或广播
@@ -243,12 +230,9 @@ export class RouterService {
         : {}),
     };
 
-    // reply_to 存在时精确反查目标 PM runner（避免广播）
-    let targetAssignmentId = assignmentId;
-    if (!targetAssignmentId && typeof content.reply_to === 'string') {
-      const lookup = this.opts.findAssignmentByAgentUserId ?? defaultFindAssignmentByAgentUserId;
-      targetAssignmentId = lookup(content.reply_to) ?? undefined;
-    }
+    // reply_to 存在时直接定位目标 PM runner（避免广播）
+    const targetAssignmentId =
+      assignmentId ?? (typeof content.reply_to === 'string' ? content.reply_to : undefined);
 
     if (targetAssignmentId) {
       const runner = this.opts.runners.get(targetAssignmentId);

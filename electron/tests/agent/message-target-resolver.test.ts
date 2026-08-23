@@ -17,14 +17,14 @@ const ws: WorkspaceInfo = {
 };
 
 const pm: BotCandidate = {
-  botUserId: '@pm:home',
+  agentUserId: '@pm:home',
   assignmentId: 'inst-pm',
   workspaceId: 'ws1',
   isCoordinator: true,
 };
 
 const sub: BotCandidate = {
-  botUserId: '@sub:home',
+  agentUserId: '@sub:home',
   assignmentId: 'inst-sub',
   workspaceId: 'ws1',
   isCoordinator: false,

@@ -86,11 +86,9 @@ function mockProviderThrow(err: Error): void {
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
-    botUserId: '@bot:localhost',
-    botAccessToken: 'token',
-    homeserverUrl: 'http://localhost:8008',
-    teamRoomId: '!team:localhost',
-    ownerUserId: '@owner:localhost',
+    agentAssignmentId: 'inst-bot',
+    agentUserId: '@bot:localhost',
+    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -264,7 +262,7 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     await runTaskChatLoop(
       makeTaskConfig({
         dispatchContext: {
-          fromBotUserId: '@pm:localhost',
+          fromAssignmentId: 'inst-pm',
           task_id: 'dispatch-1',
           tool_budget: 5,
         },
@@ -290,7 +288,7 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
       makeTaskConfig({
         streamSessionId: 'sub-session-001',
         dispatchContext: {
-          fromBotUserId: '@pm:localhost',
+          fromAssignmentId: 'inst-pm',
           task_id: 'dispatch-1',
           tool_stream_session_id: 'pm-session-999',
         },
@@ -393,11 +391,9 @@ describe('parseConfig taskDriven 字段', () => {
 
   it('taskDriven 字段在 RuntimeConfig 类型上可选', () => {
     const config: RuntimeConfig = {
-      botUserId: '@bot:localhost',
-      botAccessToken: 'token',
-      homeserverUrl: 'http://localhost:8008',
-      teamRoomId: '!team:localhost',
-      ownerUserId: '@owner:localhost',
+      agentAssignmentId: 'inst-bot',
+      agentUserId: 'agent-bot-x1',
+      teamSessionId: '!team:localhost',
       systemPrompt: '',
       modelName: 'm',
       llmApiKey: 'k',

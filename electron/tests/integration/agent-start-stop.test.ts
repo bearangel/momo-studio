@@ -66,25 +66,23 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
   }),
 }));
 
-// mock spawn-helpers：buildSpawnOpts 透传真实 instanceId/botUserId/workspaceId；
+// mock spawn-helpers：buildSpawnOpts 透传真实 instanceId/agentUserId/workspaceId；
 // resolveApiKey 返回 fake（避免 keychain provider key 查询）
 vi.mock('../../src/main/agent/spawn-helpers', () => ({
   buildSpawnOpts: vi.fn((input: {
     instanceId: string;
-    botUserId: string;
+    agentUserId: string;
     workspaceId: string;
   }) => ({
     instanceId: input.instanceId,
-    botUserId: input.botUserId,
+    agentAssignmentId: input.instanceId,
+    agentUserId: input.agentUserId,
     workspaceId: input.workspaceId,
     workspaceDir: '/tmp',
-    teamRoomId: '!room:home',
-    ownerUserId: '@owner:home',
+    teamSessionId: '!room:home',
     agentDefinitionId: 'def-test',
     slug: 'test-agent',
     systemPrompt: '',
-    modelProvider: { platform: 'openai', baseUrl: 'http://localhost', apiKey: 'k', model: 'm' },
-    botAccessToken: 'tok',
     llmApiKey: 'k',
     role: 'standalone',
     subAgents: [],
@@ -95,7 +93,6 @@ vi.mock('../../src/main/agent/spawn-helpers', () => ({
     isCoordinator: false,
     taskDriven: true,
   })),
-  HOMESERVER_URL: 'http://127.0.0.1:8008',
   resolveApiKey: vi.fn(async () => 'fake-llm-key'),
 }));
 
@@ -219,7 +216,7 @@ function getLastRunning(instanceId: string): number {
 async function seedFixture(
   defId: string,
   lastRunning: 0 | 1,
-): Promise<{ assignment: AgentAssignment; workspaceId: string; teamRoomId: string }> {
+): Promise<{ assignment: AgentAssignment; workspaceId: string }> {
   const def = makeTaskDrivenDef(defId);
   const ws = await createWorkspace(
     {
@@ -239,19 +236,19 @@ async function seedFixture(
     .run(lastRunning, assignment.instanceId);
   // keychain 预置 bot token（agent:start handler 会读）
   memStore.set(`bot.@bot-${defId}:localhost.matrix_token`, 'fake-bot-token');
-  return { assignment, workspaceId: ws.id, teamRoomId: ws.teamSessionId ?? '!t:localhost' };
+  return { assignment, workspaceId: ws.id };
 }
 
 describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review I2）', () => {
   it('task-driven agent: start → DB last_running=1 + runner/pool 注册', async () => {
     // 初值 last_running=0（模拟从未启动或已停止状态）
-    const { assignment, workspaceId, teamRoomId } = await seedFixture('def-start-1', 0);
+    const { assignment, workspaceId } = await seedFixture('def-start-1', 0);
     const instId = assignment.instanceId;
     expect(getLastRunning(instId)).toBe(0);
 
     const handler = ipcHandlers.get('agent:start');
     expect(handler).toBeDefined();
-    const res = await handler!(null, { assignment, workspaceId, teamRoomId });
+    const res = await handler!(null, { assignment, workspaceId });
     expect(res).toEqual({ instanceId: instId });
 
     // C1 关键断言：start 后 DB last_running 必须为 1
@@ -263,12 +260,12 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
 
   it('task-driven agent: stop → DB last_running=0 + runner/pool 销毁', async () => {
     // 先 seed 一个 last_running=1 + runner 已注册的状态（模拟运行中）
-    const { assignment, workspaceId, teamRoomId } = await seedFixture('def-stop-1', 1);
+    const { assignment, workspaceId } = await seedFixture('def-stop-1', 1);
     const instId = assignment.instanceId;
 
     // 先 start 让 runner 真实注册（确保 stop 有东西可销毁）
     const startHandler = ipcHandlers.get('agent:start');
-    await startHandler!(null, { assignment, workspaceId, teamRoomId });
+    await startHandler!(null, { assignment, workspaceId });
     expect(agentRunners.has(instId)).toBe(true);
 
     const stopHandler = ipcHandlers.get('agent:stop');
@@ -284,14 +281,14 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
 
   it('task-driven agent: start → stop → start 循环 DB 状态正确（C1 regression）', async () => {
     // C1 核心场景：stop 写 0 后，第二次 start 必须把 DB 写回 1
-    const { assignment, workspaceId, teamRoomId } = await seedFixture('def-cycle-1', 0);
+    const { assignment, workspaceId } = await seedFixture('def-cycle-1', 0);
     const instId = assignment.instanceId;
 
     const startHandler = ipcHandlers.get('agent:start');
     const stopHandler = ipcHandlers.get('agent:stop');
 
     // 第一次 start
-    await startHandler!(null, { assignment, workspaceId, teamRoomId });
+    await startHandler!(null, { assignment, workspaceId });
     expect(getLastRunning(instId)).toBe(1);
     expect(agentRunners.has(instId)).toBe(true);
 
@@ -301,7 +298,7 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
     expect(agentRunners.has(instId)).toBe(false);
 
     // 第二次 start（C1 关键：必须重新写 last_running=1 + 重建 runner）
-    await startHandler!(null, { assignment, workspaceId, teamRoomId });
+    await startHandler!(null, { assignment, workspaceId });
     expect(getLastRunning(instId)).toBe(1);
     expect(agentRunners.has(instId)).toBe(true);
     expect(agentWarmPools.has(instId)).toBe(true);

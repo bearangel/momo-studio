@@ -23,8 +23,8 @@ import { SkillRegistry } from '../skill/registry';
  */
 export interface SubAgentRef {
   slug: string;
-  /** 子 agent bot 的 Matrix user id（dispatch 消息的 dispatch_to 字段） */
-  botUserId: string;
+  /** 子 agent 的 assignmentId（dispatch 消息 dispatch_to 字段的值，v2 Task 10 起直接作 runners key） */
+  assignmentId: string;
   description: string;
 }
 

@@ -19,7 +19,6 @@
 import { logger } from '../logger';
 import { listAssignments, getAgentDefinition } from './crud';
 import { listWorkspaces } from '../workspace/crud';
-import { resolveBotToken } from './auto-start';
 import {
   agentRunners,
   providerBuckets,
@@ -59,22 +58,16 @@ export async function initTaskDrivenRuntime(): Promise<void> {
       }
 
       try {
-        const botAccessToken = await resolveBotToken(assignment.agentUserId);
-        if (!botAccessToken) {
-          logger.warn('Bot token 丢失，跳过', { instanceId: assignment.instanceId });
-          continue;
-        }
+        // v2（Task 10）：agent 无 Matrix 凭据，仅需解析 LLM API key
         const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
 
         const runtimeConfig = buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: assignment.agentUserId,
+          agentUserId: assignment.agentUserId,
           workspaceId: ws.id,
           workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamSessionId,
-          ownerUserId: ws.ownerId,
+          teamSessionId: ws.teamSessionId ?? '',
           def,
-          botAccessToken,
           llmApiKey,
           role: assignment.role as AgentRole,
           isCoordinator: (ws.coordinatorInstanceId ?? null) === assignment.instanceId,

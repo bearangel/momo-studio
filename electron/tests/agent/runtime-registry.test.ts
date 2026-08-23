@@ -1,7 +1,7 @@
 // electron/tests/agent/runtime-registry.test.ts
 //
 // runtime-registry 模块测试——覆盖 task-driven runtime 全局注册表的核心函数：
-//   1. findAssignmentByAgentUserId：按 agent_user_id 反查 instance_id（DB 查询）
+
 //   2. startAgentRuntime(taskDriven=false)：走 v1 spawnAgent fallback
 //   3. startAgentRuntime(taskDriven=true)：创建 WarmPool + AgentRunner + 注册到全局 Map
 //   4. createTaskDrivenRuntime：幂等性（重复调用不重建）
@@ -57,7 +57,6 @@ import {
   providerBuckets,
   startAgentRuntime,
   createTaskDrivenRuntime,
-  findAssignmentByAgentUserId,
   populateProviderBuckets,
   destroyAllTaskDrivenRuntimes,
   destroyTaskDrivenRuntime,
@@ -71,19 +70,17 @@ import type { WarmPool } from '../../src/main/agent/warm-pool';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-runtime-registry-${Date.now()}`);
 
-function mkMinimalOpts(instanceId: string, botUserId: string): AgentRuntimeOpts {
+function mkMinimalOpts(instanceId: string, agentUserId: string): AgentRuntimeOpts {
   return {
     instanceId,
-    botUserId,
+    agentAssignmentId: instanceId,
+    agentUserId,
     workspaceId: 'ws-1',
     workspaceDir: '/tmp',
-    teamRoomId: '!room:home',
-    ownerUserId: '@owner:home',
+    teamSessionId: 'sess-team-1',
     agentDefinitionId: 'def-1',
     slug: 'test-agent',
     systemPrompt: '',
-    modelProvider: { platform: 'openai', baseUrl: 'http://localhost', apiKey: 'k', model: 'm' },
-    botAccessToken: 'tok',
     llmApiKey: 'k',
     role: 'standalone',
     subAgents: [],
@@ -129,24 +126,6 @@ describe('runtime-registry', () => {
   afterEach(() => {
     closeDb();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
-  });
-
-  describe('findAssignmentByAgentUserId', () => {
-    it('按 agent_user_id 反查到 instance_id', async () => {
-      const ws = await createWorkspace(
-        { name: 'WS', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-        '@u:localhost', '!s:localhost', '!t:localhost',
-      );
-      saveAgentDefinition(mkDef({ id: 'def-x' }));
-      const assignment = assignAgentToWorkspace(ws.id, 'def-x', '@bot-xyz:localhost', 'standalone');
-
-      const found = findAssignmentByAgentUserId('@bot-xyz:localhost');
-      expect(found).toBe(assignment.instanceId);
-    });
-
-    it('未找到时返回 null', () => {
-      expect(findAssignmentByAgentUserId('@nonexistent:localhost')).toBeNull();
-    });
   });
 
   describe('startAgentRuntime', () => {

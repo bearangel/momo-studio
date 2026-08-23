@@ -212,7 +212,6 @@ export interface TaskApiSurface {
 export interface StartAgentInput {
   assignment: AgentAssignment;
   workspaceId: string;
-  teamRoomId: string;
 }
 
 /** agent:addToWorkspace 入参 — UI "添加 agent" 一键编排入口 */

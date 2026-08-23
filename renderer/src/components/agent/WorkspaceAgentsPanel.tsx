@@ -60,7 +60,7 @@ export function WorkspaceAgentsPanel() {
 
   const handleStart = (a: AgentAssignment): void => {
     if (!workspace?.teamSessionId) return;
-    void startAgent(a, workspace.id, workspace.teamSessionId);
+    void startAgent(a, workspace.id);
   };
 
   const handleStop = (a: AgentAssignment): void => {

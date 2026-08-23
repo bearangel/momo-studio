@@ -1,10 +1,11 @@
 // electron/src/main/agent/runtime-entry.ts
 //
-// Agent runtime 子进程入口。由 runtime-manager.ts 通过 fork()/spawn() 启动，
-// 配置通过环境变量 AGENT_CONFIG（JSON）传入。
+// Agent runtime 子进程入口。由 runtime-manager.ts / runtime-spawner.ts 通过
+// fork() 启动，配置通过环境变量 AGENT_CONFIG（JSON）传入。
 //
-// 启动流程：登录 Matrix → 等待首次 sync(PREPARED) → 在 team room 发"已上线" →
-// 监听事件并执行完整 chat loop（LLM 思考 + 工具执行循环）。
+// v2（Task 10）：仅保留 task-driven 模式——入站经 task-config IPC，出站
+// dispatch/abort 经内部事件桥，agent 无 Matrix 身份（旧 v1 Matrix client
+// 分支已删，taskDriven=false 直接报错退出）。
 //
 // M2 集成三条能力线：
 //   - Skill：启动时按 config.skills 初始化 SkillRegistry，索引注入 system prompt
@@ -26,15 +27,7 @@
 // MCP 调用通过 process.send/process.on('message') IPC 转发到主进程。统一用
 // process.stdout/stderr 输出，由父进程 runtime-manager 转发到主日志。
 
-import {
-  createClient,
-  ClientEvent,
-  RoomEvent,
-  SyncState,
-  type MatrixClient,
-  type MatrixEvent,
-  type Room,
-} from 'matrix-js-sdk';
+import type { MatrixClient } from 'matrix-js-sdk';
 import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
@@ -53,35 +46,22 @@ import type { McpToolInfo } from '../mcp/types';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
 import {
   buildDispatchMessage,
-  buildTaskReply,
-  parseDispatchEvent,
   parseTaskReply,
-  DISPATCH_EVENT_TYPE,
-  TASK_REPLY_EVENT_TYPE,
-  ABORT_DISPATCH_EVENT_TYPE,
   buildAbortDispatchMessage,
-  type DispatchContent,
 } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——task-driven 模式的 dispatch/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
 import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
-// v2（B 子系统 Task B6）：decideResponse 提取到独立模块，新增 isDirectChat + hasCoordinator
-import { decideResponse } from './decide-response';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
-
-/** 协调 agent 自动接待时的上下文提示（仅团队群无 @ 时注入用户消息前；直接 @ 时不注入） */
-const COORDINATOR_AUTO_RECEPTION_HINT = `[你是本群的协调 agent。这条消息没有指名 @ 任何人，由你自动接待：
-- 能自己回答的直接回答；
-- 需要专项能力时用 dispatch:<子agent> 工具把子任务派给合适的子 agent，等其回传结果后汇总回复。]`;
 
 /** runtime-manager 通过 AGENT_CONFIG 传入的完整配置 */
 export interface RuntimeConfig {
-  botUserId: string;
-  botAccessToken: string;
-  homeserverUrl: string;
-  teamRoomId: string;
-  /** workspace owner 的 Matrix userId —— 仅接受此人发出的 room 邀请（防恶意 room 渗透） */
-  ownerUserId: string;
+  /** v2（Task 10）：本地身份三件套（取代 botUserId/botAccessToken/homeserverUrl/teamRoomId/ownerUserId） */
+  agentAssignmentId: string;
+  /** agent 本地身份（agent_user_id；展示名映射 + 内部事件 sender） */
+  agentUserId: string;
+  /** 团队会话 ID（sessions 表主键；dispatch/abort 的目标会话） */
+  teamSessionId: string;
   systemPrompt: string;
   // v1.3：移除 modelProvider，createLLMProvider 按 baseUrl 自动检测 platform
   modelName: string;
@@ -104,7 +84,7 @@ export interface RuntimeConfig {
   isCoordinator: boolean;
   devMode: boolean;
   // === v1.4 流式 + 工具预算 ===
-  /** 工具调用上限。-1=无限, 0=禁用, N=上限。由 handleEvent/handleDispatch 通过 IPC 解析后覆盖 */
+  /** 工具调用上限。-1=无限, 0=禁用, N=上限。runTaskChatLoop 按 dispatchContext.tool_budget 覆盖 */
   maxToolCalls: number;
   // === v1.4 嵌套流式 ===
   /** v1.4 嵌套：bot 展示名（子 agent 嵌套 chip 头部显示，来自 agent_definitions.name） */
@@ -123,7 +103,7 @@ export interface RuntimeConfig {
   /**
    * v2（task-driven 切换 Task T3）：runtime 运行模式。
    * - true（默认）：task-driven 模式，不监听 Matrix event，仅通过 task-config IPC 触发 chat loop。
-   * - false：v1 fallback，仍调 client.startClient + 注册 ClientEvent.Event handler（保留旧路径用于回退）。
+   * - false：已不支持（Task 10 起 agent 无 Matrix 身份）——main() 直接报错退出。
    */
   taskDriven?: boolean;
 }
@@ -155,8 +135,8 @@ export interface TaskConfig {
    * 未设置时是顶层用户消息触发的 ephemeral chat。
    */
   dispatchContext?: {
-    /** PM 的 Matrix userId（dispatch event 的 from） */
-    fromBotUserId: string;
+    /** PM 的 assignmentId（dispatch event 的 dispatch_from） */
+    fromAssignmentId: string;
     /** dispatch event 的 task_id（用于回 task_reply 关联） */
     task_id: string;
     /** PM 分配给本 sub-agent 的工具预算 */
@@ -165,15 +145,6 @@ export interface TaskConfig {
     tool_stream_session_id?: string;
   };
 }
-
-/** maxToolCalls 的硬编码兜底默认值（IPC 解析失败或子进程无 process.send 时使用） */
-const DEFAULT_MAX_TOOL_CALLS = 10;
-
-/** resolveMaxToolCalls IPC 请求的超时时间（毫秒），超时后回退到 DEFAULT_MAX_TOOL_CALLS */
-const RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS = 5_000;
-
-/** queryRoomInfo IPC 请求的超时时间（毫秒），超时回退到双 false（保守跳过） */
-const QUERY_ROOM_INFO_TIMEOUT_MS = 5_000;
 
 /** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
 const DISPATCH_STAGE_TIMEOUTS_MS = [180_000, 360_000];
@@ -228,11 +199,9 @@ function parseConfig(raw: unknown): RuntimeConfig {
   }
   const r = raw as Record<string, unknown>;
   const {
-    botUserId,
-    botAccessToken,
-    homeserverUrl,
-    teamRoomId,
-    ownerUserId,
+    agentAssignmentId,
+    agentUserId,
+    teamSessionId,
     systemPrompt,
     modelName,
     modelBaseUrl,
@@ -249,11 +218,9 @@ function parseConfig(raw: unknown): RuntimeConfig {
     devMode,
   } = r;
   if (
-    typeof botUserId !== 'string' ||
-    typeof botAccessToken !== 'string' ||
-    typeof homeserverUrl !== 'string' ||
-    typeof teamRoomId !== 'string' ||
-    typeof ownerUserId !== 'string' ||
+    typeof agentAssignmentId !== 'string' ||
+    typeof agentUserId !== 'string' ||
+    typeof teamSessionId !== 'string' ||
     typeof systemPrompt !== 'string' ||
     typeof modelName !== 'string' ||
     typeof llmApiKey !== 'string' ||
@@ -261,8 +228,8 @@ function parseConfig(raw: unknown): RuntimeConfig {
     typeof workspaceId !== 'string'
   ) {
     throw new Error(
-      'AGENT_CONFIG 缺少必要字段（botUserId/botAccessToken/homeserverUrl/teamRoomId/' +
-        'ownerUserId/systemPrompt/modelName/llmApiKey/workspaceDir/workspaceId）',
+      'AGENT_CONFIG 缺少必要字段（agentAssignmentId/agentUserId/teamSessionId/' +
+        'systemPrompt/modelName/llmApiKey/workspaceDir/workspaceId）',
     );
   }
   // v1.3 字段：role（原 agentType 重命名）；缺省/不合法时按 standalone 处理
@@ -285,11 +252,9 @@ function parseConfig(raw: unknown): RuntimeConfig {
     ? deniedTools.filter((n): n is string => typeof n === 'string')
     : [];
   return {
-    botUserId,
-    botAccessToken,
-    homeserverUrl,
-    teamRoomId,
-    ownerUserId,
+    agentAssignmentId,
+    agentUserId,
+    teamSessionId,
     systemPrompt,
     modelName,
     modelBaseUrl: typeof modelBaseUrl === 'string' ? modelBaseUrl : undefined,
@@ -325,13 +290,13 @@ function parseConfig(raw: unknown): RuntimeConfig {
   };
 }
 
-/** 运行时类型守卫：SubAgentRef 必须含 slug/botUserId/description 三个字符串字段 */
+/** 运行时类型守卫：SubAgentRef 必须含 slug/assignmentId/description 三个字符串字段 */
 function isSubAgentRef(v: unknown): v is SubAgentRef {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   return (
     typeof o.slug === 'string' &&
-    typeof o.botUserId === 'string' &&
+    typeof o.assignmentId === 'string' &&
     typeof o.description === 'string'
   );
 }
@@ -363,80 +328,37 @@ async function main(): Promise<void> {
   //     路径落 SQLite（spec §4.1 ③）。
   //   - false：v1 fallback，仍调 startClient + 注册 ClientEvent.Event handler
   //     （保留旧路径用于回退测试，Task 13 整体删除）。
-  const isTaskDriven = config.taskDriven !== false;
-
-  if (isTaskDriven) {
-    const ctx = await buildRuntimeContext(config);
-    process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
-
-    // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})
-    // 注入 task 配置，runtime 收到后调 runTaskChatLoop 跑一次 chat loop 并退出。
-    // shutdown handler：runtime-spawner.stopRuntime 发此消息优雅退出。
-    const taskMessageListener = async (msg: unknown): Promise<void> => {
-      if (typeof msg !== 'object' || msg === null) return;
-      const m = msg as { type?: string };
-
-      if (m.type === 'task-config') {
-        try {
-          await runTaskChatLoop(msg as TaskConfig, config, ctx);
-        } catch (err) {
-          process.stderr.write(`task-config 处理失败: ${(err as Error).message}\n`);
-          process.exit(1);
-        }
-      } else if (m.type === 'shutdown') {
-        process.stdout.write('收到 shutdown 信号，退出 runtime\n');
-        process.exit(0);
-      }
-    };
-    process.on('message', taskMessageListener);
-    return;
+  // v2（Task 10）：仅保留 task-driven 模式。taskDriven=false 的 v1 Matrix client
+  // 分支已删——agent 无 Matrix 身份后无法登录 homeserver，直接报错退出
+  // （v1 fallback 整体由 Task 13 移除，此处守卫防止旧配置静默错乱）。
+  if (config.taskDriven === false) {
+    process.stderr.write('taskDriven=false（v1 Matrix 模式）已不支持：agent 无 Matrix 身份\n');
+    process.exit(1);
   }
 
-  // ─── v1 fallback 分支：以下 Matrix client 用法整段属于 v1，Task 13 删除 ───
-  const client: MatrixClient = createClient({
-    baseUrl: config.homeserverUrl,
-    userId: config.botUserId,
-    accessToken: config.botAccessToken,
-  });
-
-  // 只接受 owner 发出的邀请：bot 被邀请进恶意 room 后若 auto-join 会导致数据泄露。
-  // 邀请者 = bot 的 m.room.member(invite) 事件的 sender。
-  // 不用 getLiveTimeline().getEvents()——对未加入的 invite 房间该时间线为空，
-  // lastEvent 恒 undefined → 误判为非 owner → 拒绝所有新房间邀请（仅团队群因启动时
-  // 显式 joinRoom 而幸免）。改从 membership 事件取 sender。
-  client.on(RoomEvent.MyMembership, (room: Room, membership: string) => {
-    if (membership !== 'invite') return;
-    const inviteEvent = room.getMember(config.botUserId)?.events.member;
-    const inviter = inviteEvent?.getSender();
-    if (inviter !== config.ownerUserId) {
-      process.stderr.write(
-        `拒绝非 owner 邀请: ${room.roomId} (inviter=${inviter ?? 'unknown'}, owner=${config.ownerUserId})\n`,
-      );
-      return;
-    }
-    process.stderr.write(`接受 owner 邀请，加入 room: ${room.roomId}\n`);
-    void client.joinRoom(room.roomId).catch((err: unknown) => {
-      process.stderr.write(`加入 room 失败 ${room.roomId}: ${(err as Error).message}\n`);
-    });
-  });
-
-  await client.startClient({ initialSyncLimit: 20 });
-  await waitForPrepared(client);
-
-  try {
-    await client.joinRoom(config.teamRoomId);
-  } catch (err) {
-    process.stderr.write(`joinRoom team room 失败: ${(err as Error).message}\n`);
-  }
-
-  // 构建运行时上下文：初始化 SkillRegistry、发现 MCP 工具、合并工具列表、注入 skill 索引。
-  // 在注册事件监听前完成，确保首条消息到达时工具已就绪。
   const ctx = await buildRuntimeContext(config);
+  process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
 
-  process.stdout.write('Agent runtime 已启动（v1 模式，fallback）\n');
-  client.on(ClientEvent.Event, (event: MatrixEvent) => {
-    void handleEvent(client, event, config, ctx);
-  });
+  // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})
+  // 注入 task 配置，runtime 收到后调 runTaskChatLoop 跑一次 chat loop 并退出。
+  // shutdown handler：runtime-spawner.stopRuntime 发此消息优雅退出。
+  const taskMessageListener = async (msg: unknown): Promise<void> => {
+    if (typeof msg !== 'object' || msg === null) return;
+    const m = msg as { type?: string };
+
+    if (m.type === 'task-config') {
+      try {
+        await runTaskChatLoop(msg as TaskConfig, config, ctx);
+      } catch (err) {
+        process.stderr.write(`task-config 处理失败: ${(err as Error).message}\n`);
+        process.exit(1);
+      }
+    } else if (m.type === 'shutdown') {
+      process.stdout.write('收到 shutdown 信号，退出 runtime\n');
+      process.exit(0);
+    }
+  };
+  process.on('message', taskMessageListener);
 }
 
 /**
@@ -556,236 +478,6 @@ ${skillIndex}`
   };
 }
 
-/** 等待 Matrix sync 的最长时限，超时则判定 sync 不可达（避免永久挂起） */
-const SYNC_TIMEOUT_MS = 60_000;
-
-/**
- * 等待客户端进入 PREPARED 同步状态（初始 sync 完成）。
- * 加 60s 超时 + Error 状态处理：sync 一直失败时拒绝而非永久挂起。
- */
-function waitForPrepared(client: MatrixClient): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      client.off(ClientEvent.Sync, handler);
-      reject(new Error('等待 Matrix sync 超时（60s）'));
-    }, SYNC_TIMEOUT_MS);
-
-    const handler = (state: SyncState): void => {
-      if (state === SyncState.Prepared) {
-        clearTimeout(timeout);
-        client.off(ClientEvent.Sync, handler);
-        resolve();
-      } else if (state === SyncState.Error) {
-        clearTimeout(timeout);
-        client.off(ClientEvent.Sync, handler);
-        reject(new Error('Matrix sync 失败'));
-      }
-    };
-    client.on(ClientEvent.Sync, handler);
-  });
-}
-
-/**
- * 处理单条事件，按事件类型路由：
- *   - task_reply：匹配 pending dispatch 等待（主 agent 收到子 agent 的回执）
- *   - dispatch：子 agent 收到主 agent 的任务调度，跑 chat loop 后回 task_reply
- *   - m.room.message：仅响应 @ 提及本 bot 的消息，跑 chat loop 后回普通消息
- */
-async function handleEvent(
-  client: MatrixClient,
-  event: MatrixEvent,
-  config: RuntimeConfig,
-  ctx: RuntimeContext,
-): Promise<void> {
-  const eventType = event.getType();
-  const sender = event.getSender();
-
-  const roomId = event.getRoomId();
-  if (!roomId) return;
-
-  const isTeamRoom = roomId === config.teamRoomId;
-
-  // dispatch / task_reply 仅限 team room：防恶意 room 投递伪造调度或回执。
-  // m.room.message 允许任意已加入房间，但仅响应直接 @ 本 bot 的消息（decideResponse 控制）。
-  if (!isTeamRoom && (eventType === DISPATCH_EVENT_TYPE || eventType === TASK_REPLY_EVENT_TYPE)) {
-    return;
-  }
-
-  if (eventType === TASK_REPLY_EVENT_TYPE) {
-    if (sender === config.botUserId) return; // 忽略自己发的回执
-    handleTaskReply(event.getContent());
-    return;
-  }
-
-  if (eventType === DISPATCH_EVENT_TYPE) {
-    if (sender === config.botUserId) return;
-    const dispatch = parseDispatchEvent(event.getContent());
-    if (!dispatch || dispatch.dispatch_to !== config.botUserId) return;
-    try {
-      await handleDispatch(client, event, config, ctx, dispatch);
-    } catch (err) {
-      process.stderr.write(`dispatch 处理异常: ${(err as Error).message}\n`);
-    }
-    return;
-  }
-
-  if (eventType !== 'm.room.message') return;
-  if (sender === config.botUserId) return;
-
-  const content = event.getContent();
-  const body = typeof content.body === 'string' ? content.body : '';
-
-  // Matrix v11 的 m.mentions 字段：{ user_ids: ['@bot:server', ...] }
-  const mentions = content['m.mentions'] as { user_ids?: string[] } | undefined;
-  const mentioned = mentions?.user_ids?.includes(config.botUserId) ?? false;
-  const hasAnyMention = (mentions?.user_ids?.length ?? 0) > 0;
-  // 仅对 owner 的无指名消息自动接待，不抢答子 agent 的直接回复（其消息无 m.mentions）
-  const isOwnerMessage = sender === config.ownerUserId;
-
-  // v2（B 子系统 Task B6）：通过 IPC 向主进程查询 isDirectChat + hasCoordinator。
-  // 子进程无 DB 访问 + 无主进程 Matrix syncing client 状态，必须走 IPC。
-  // 超时（5s）回退到双 false（保守跳过——不误判单聊 / 不误触发 PM 自动接待）。
-  const roomInfo = await queryRoomInfo(roomId);
-
-  // 三路互斥触发：单聊 / @我 / 没人@且我是协调且是owner / 否则跳过
-  // 详见 decide-response.ts 场景 1.1 / 1.2 / 1.3
-  const decision = decideResponse({
-    mentioned,
-    hasAnyMention,
-    isTeamRoom,
-    isCoordinator: config.isCoordinator,
-    isOwnerMessage,
-    isDirectChat: roomInfo.isDirectChat,
-    hasCoordinator: roomInfo.hasCoordinator,
-  });
-  if (decision === 'skip') {
-    trace('→ 跳过', { reason: decision, mentioned, coordinator: config.isCoordinator });
-    return;
-  }
-
-  trace('→ 决定响应', { mentioned, coordinator: config.isCoordinator });
-
-  trace('→ 收到消息', { room: roomId.slice(0, 12), from: (sender ?? '?').slice(0, 15), body: `${body.length}字` });
-
-  // 协调 agent 自动接待（团队群无 @）时注入上下文提示；直接 @ 时用原始消息
-  const effectiveBody =
-    !mentioned && config.isCoordinator
-      ? `${COORDINATOR_AUTO_RECEPTION_HINT}\n\n${body}`
-      : body;
-
-  try {
-    const maxToolCalls = await resolveMaxToolCalls(roomId);
-    const configWithBudget: RuntimeConfig = { ...config, maxToolCalls };
-    await runChatLoop(client, roomId, effectiveBody, configWithBudget, ctx);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`chat loop 异常: ${msg}\n`);
-    await client.sendEvent(
-      roomId,
-      'm.room.message',
-      { msgtype: 'm.text', body: `⚠️ 处理消息时出错: ${msg}` },
-      '',
-    );
-  }
-}
-
-/**
- * 子 agent 处理主 agent 发来的 dispatch 任务：
- *   1. 回 task_reply(in_progress)
- *   2. 跑 chat loop（dispatch.body 作为用户输入）
- *   3. 把最终输出作为 task_reply(completed) 回传；失败则回 task_reply(failed)
- */
-async function handleDispatch(
-  client: MatrixClient,
-  event: MatrixEvent,
-  config: RuntimeConfig,
-  ctx: RuntimeContext,
-  dispatch: DispatchContent,
-): Promise<void> {
-  const roomId = event.getRoomId();
-  if (!roomId) return;
-
-  trace('→ 收到 dispatch', { from: event.getSender()?.slice(0, 15), task: `${dispatch.body.length}字` });
-  const inProgress = buildTaskReply({
-    body: '开始处理...',
-    taskId: dispatch.task_id,
-    status: 'in_progress',
-    replyTo: dispatch.dispatch_from,
-  });
-  await client
-    .sendEvent(roomId, inProgress.eventType, inProgress.content, '')
-    .catch((err: unknown) => {
-      process.stderr.write(`发送 in_progress 失败: ${(err as Error).message}\n`);
-    });
-  trace('→ 发送 in_progress');
-
-  try {
-    // 预算优先级：dispatch 消息携带的 tool_budget > 房间级 IPC 解析
-    const maxToolCalls =
-      dispatch.tool_budget !== undefined
-        ? dispatch.tool_budget
-        : await resolveMaxToolCalls(roomId);
-    const configWithBudget: RuntimeConfig = { ...config, maxToolCalls };
-    const stats: RunChatLoopStats = { toolCallsUsed: 0 };
-    // v1.4 嵌套：把 PM 生成的子 stream session ID 透传给 runChatLoop，
-    // 子 agent 的 start chunk 据此关联到 PM 气泡内的 dispatch chip
-    const parentStreamSessionId = dispatch.tool_stream_session_id;
-
-    // v1.5.3：监听 team_room 的 abort_dispatch event，PM 中断时触发本地 abortController。
-    // 解决时序竞态：PM 中断时本子进程可能还没注册到主进程 activeStreams，
-    // 主进程的 abortStream IPC 找不到本子进程；Matrix event 兜底确保一定能收到。
-    const dispatchAbort = new AbortController();
-    const abortHandler = (event: MatrixEvent): void => {
-      if (event.getType() !== ABORT_DISPATCH_EVENT_TYPE) return;
-      const content = event.getContent() as { task_id?: string };
-      if (content.task_id === dispatch.task_id) {
-        dispatchAbort.abort();
-      }
-    };
-    client.on(ClientEvent.Event, abortHandler);
-    // 兜底：如果 signal 已 abort（极小概率，PM 在 sendEvent 之前就中断），立即触发
-    if (dispatchAbort.signal.aborted) {
-      dispatchAbort.abort();
-    }
-
-    try {
-      const result = await runChatLoop(
-        client,
-        roomId,
-        dispatch.body,
-        configWithBudget,
-        ctx,
-        stats,
-        parentStreamSessionId,
-        dispatchAbort.signal,
-      );
-      trace('→ 发送 completed', { body: `${result.length}字`, tools: stats.toolCallsUsed });
-      const completed = buildTaskReply({
-        body: result,
-        taskId: dispatch.task_id,
-        status: 'completed',
-        toolCallsUsed: stats.toolCallsUsed,
-        replyTo: dispatch.dispatch_from,
-      });
-      await client.sendEvent(roomId, completed.eventType, completed.content, '');
-    } finally {
-      client.off(ClientEvent.Event, abortHandler);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`dispatch 任务执行失败: ${msg}\n`);
-    const failed = buildTaskReply({
-      body: `任务失败: ${msg}`,
-      taskId: dispatch.task_id,
-      status: 'failed',
-      replyTo: dispatch.dispatch_from,
-    });
-    await client
-      .sendEvent(roomId, failed.eventType, failed.content, '')
-      .catch(() => {});
-  }
-}
-
 /** runChatLoop 的统计输出（handleDispatch 据此上报 task_reply.tool_calls_used） */
 export interface RunChatLoopStats {
   toolCallsUsed: number;
@@ -896,10 +588,11 @@ export async function runChatLoop(
   sendStreamChunk({
     type: 'start',
     streamSessionId,
-    // Task 6 字段迁移：roomId→sessionId、botUserId→senderAgentId（值语义不变，
-    // senderAgentId 仍携带 bot 的 Matrix userId；Task 7/10 起改传 assignmentId）
+    // Task 6 字段迁移：roomId→sessionId、botUserId→senderAgentId。
+    // v2（Task 10）：值 = agent 本地身份 agentUserId（messages.sender 落库 +
+    // renderer botNameMap 据此解析展示名）
     sessionId: roomId,
-    senderAgentId: config.botUserId,
+    senderAgentId: config.agentUserId,
     // v1.4 嵌套：子 agent 携带父 session ID + 自身展示信息，renderer 据此把子流
     // 嵌套渲染到 PM 气泡内对应 dispatch chip 下方
     ...(parentStreamSessionId
@@ -1482,71 +1175,6 @@ async function sendFinalMessage(
 }
 
 /**
- * 通过 IPC 向主进程请求某房间的有效 maxToolCalls。
- * 主进程的 handler 在 Task 4 实现；在此之前超时回退到 DEFAULT_MAX_TOOL_CALLS。
- */
-async function resolveMaxToolCalls(roomId: string): Promise<number> {
-  if (!process.send) return DEFAULT_MAX_TOOL_CALLS;
-  return new Promise<number>((resolve) => {
-    const id = randomUUID();
-    const timer = setTimeout(() => {
-      process.off('message', handler);
-      resolve(DEFAULT_MAX_TOOL_CALLS);
-    }, RESOLVE_MAX_TOOL_CALLS_TIMEOUT_MS);
-    const handler = (msg: unknown): void => {
-      const m = msg as { type?: string; id?: string; maxToolCalls?: number };
-      if (m.type === 'settings:resolved' && m.id === id) {
-        clearTimeout(timer);
-        process.off('message', handler);
-        resolve(typeof m.maxToolCalls === 'number' ? m.maxToolCalls : DEFAULT_MAX_TOOL_CALLS);
-      }
-    };
-    process.on('message', handler);
-    process.send?.({ type: 'settings:resolveMaxToolCalls', id, roomId });
-  });
-}
-
-/**
- * v2（B 子系统 Task B6）：通过 IPC 向主进程查询房间的 isDirectChat + hasCoordinator。
- *
- * 子进程无 DB 访问（hasCoordinator 需查 workspaces.coordinator_instance_id），
- * 也无主进程 Matrix syncing client 的完整房间成员状态（isDirectChat 需 getJoinedMembers），
- * 故必须走 IPC 到主进程，由 room-info.ts 的 helper 计算。
- *
- * 超时回退到双 false——保守跳过（不误判单聊 / 不误触发 PM 自动接待）。
- */
-async function queryRoomInfo(
-  roomId: string,
-): Promise<{ isDirectChat: boolean; hasCoordinator: boolean }> {
-  const fallback = { isDirectChat: false, hasCoordinator: false };
-  if (!process.send) return fallback;
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      process.off('message', handler);
-      resolve(fallback);
-    }, QUERY_ROOM_INFO_TIMEOUT_MS);
-    const handler = (msg: unknown): void => {
-      const m = msg as {
-        type?: string;
-        roomId?: string;
-        isDirectChat?: boolean;
-        hasCoordinator?: boolean;
-      };
-      if (m.type === 'query-room-info-result' && m.roomId === roomId) {
-        clearTimeout(timer);
-        process.off('message', handler);
-        resolve({
-          isDirectChat: !!m.isDirectChat,
-          hasCoordinator: !!m.hasCoordinator,
-        });
-      }
-    };
-    process.on('message', handler);
-    process.send?.({ type: 'query-room-info', roomId });
-  });
-}
-
-/**
  * 统一工具执行路由（含审计插桩）：计时 + try/finally 包装 doExecuteTool，
  * 无论成功或失败都通过 IPC 发送审计日志。原路由逻辑见 doExecuteTool。
  */
@@ -1704,10 +1332,11 @@ export async function executeDispatch(
 
   trace('→ dispatch', { target: subSlug, task: `${task.length}字`, budget: toolBudget });
 
+  // v2（Task 10）：from/to 均为 assignmentId——RouterService 直接以此定位 runner
   const dispatch = buildDispatchMessage({
     body: task,
-    fromBotUserId: config.botUserId,
-    toBotUserId: sub.botUserId,
+    fromAssignmentId: config.agentAssignmentId,
+    toAssignmentId: sub.assignmentId,
     deadlineMs: DISPATCH_TOTAL_TIMEOUT_MS,
     toolBudget,
     toolStreamSessionId,
@@ -1741,11 +1370,11 @@ export async function executeDispatch(
           subStreamSessionId: toolStreamSessionId,
         });
         if (client) {
-          client.sendEvent(config.teamRoomId, abortEvt.eventType, abortEvt.content, '').catch(() => {
+          client.sendEvent(config.teamSessionId, abortEvt.eventType, abortEvt.content, '').catch(() => {
             // Matrix 发送失败不影响 PM 本地的 abort 流程
           });
         } else {
-          sendAbortDispatchEvent(config.teamRoomId, config.botUserId, abortEvt.content);
+          sendAbortDispatchEvent(config.teamSessionId, config.agentUserId, abortEvt.content);
         }
         const err = new Error('dispatch 被中断');
         err.name = 'AbortError';
@@ -1757,12 +1386,12 @@ export async function executeDispatch(
   });
 
   // v2（P1 Task 5）：dispatch 发送按模式分流——task-driven（无 client）经内部事件桥，
-  // sender 用 config.botUserId（子 agent 身份；Task 10 更名 agentUserId 后同步替换）。
+  // sender 携带 agent 本地身份 agentUserId（Task 10）。
   // 展开 DispatchContent 为匿名对象类型以满足协议的 Record<string, unknown> 索引签名。
   if (client) {
-    await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
+    await client.sendEvent(config.teamSessionId, dispatch.eventType, dispatch.content, '');
   } else {
-    sendDispatchEvent(config.teamRoomId, config.botUserId, { ...dispatch.content });
+    sendDispatchEvent(config.teamSessionId, config.agentUserId, { ...dispatch.content });
   }
 
   return resultPromise;

@@ -1,10 +1,8 @@
 // electron/src/main/workspace/ipc.handlers.ts
 //
-// Workspace IPC handlers — 把 T2 的 CRUD 函数包装成 `workspace:*` IPC 通道，
-// 并在 create 时联动 Matrix：先创建 Space + 团队群，再把两个 room ID 落到 DB。
-//
-// 已登录用户的 Matrix client 由 matrix/session.getOwnerMatrixClient 提供
-// （从 keychain 恢复 token，构造一次性 client，不启动 /sync）。
+// Workspace IPC handlers — 把 T2 的 CRUD 函数包装成 `workspace:*` IPC 通道。
+// v2（Task 10）：create 不再联动 Matrix（团队会话由 crud.createWorkspace 在
+// 本地 sessions 表内创建），owner 身份仍取自当前登录会话。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, setWorkspaceCoordinator } from './crud';
@@ -14,13 +12,11 @@ import {
   removeAllocation,
   type CapabilityType,
 } from './allocation';
-import { createPlainRoom } from '../matrix/rooms';
-import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
+import { getCurrentUserId } from '../matrix/session';
 import { isAgentRunning } from '../agent/runtime-manager';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
 import { getAgentDefinition, listAssignments } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
-import { getSecret } from '../storage/keychain';
 import type { CreateWorkspaceInput } from './types';
 
 /** 注册 workspace:* IPC handlers。重复注册会被 Electron 拒绝，故仅调用一次。 */
@@ -29,12 +25,8 @@ export function registerWorkspaceHandlers(): void {
     const userId = getCurrentUserId();
     if (!userId) throw new Error('未登录，无法创建 workspace');
 
-    const client = await getOwnerMatrixClient();
-    // 同时创建团队群：用户 + 所有 agent bot 在此 room 内交流，
-    // room ID 存入 workspace 记录供 agent 启动时引用（v23 过渡：session_id = Matrix room ID）。
-    const teamRoomId = await createPlainRoom(client, `${input.name} · 团队群`);
-
-    return createWorkspace(input, userId, teamRoomId);
+    // v2（Task 10）：团队会话（sessions 表行）由 createWorkspace 内部创建并回填
+    return createWorkspace(input, userId);
   });
 
   ipcMain.handle('workspace:list', async () => {
@@ -78,10 +70,10 @@ export function registerWorkspaceHandlers(): void {
  * 设定协调 agent 后，若目标实例正在运行，自动停止并以 isCoordinator=true 重启，
  * 使新的协调标志立即对 runtime 子进程生效（取代旧版"提示用户手动停止+启动"）。
  *
- * 实例未运行 / assignment 不存在 / 定义已删除 / keychain 缺 token 或 apiKey 时，
+ * 实例未运行 / assignment 不存在 / 定义已删除 / keychain 缺 apiKey 时，
  * 静默跳过重启（仅 coordinatorInstanceId 已写入 DB，下次启动时自然带上标志）。
  *
- * I1 修复：先检查 keychain 是否有 apiKey + token，确认后才 stopAgent，
+ * I1 修复：先检查 keychain 是否有 apiKey，确认后才 stopAgent，
  * 避免「先停后查、查不到就 return」导致 agent 被停死无法恢复。
  */
 async function restartCoordinatorInstance(
@@ -97,13 +89,9 @@ async function restartCoordinatorInstance(
   const def = getAgentDefinition(assignment.agentDefinitionId);
   if (!def) return;
 
-  // I1 修复：先恢复 keychain，确认 apiKey + token 都在，再停止旧实例。
-  // 否则若 key 丢失，agent 会停在已停止状态无法重启。
   // v1.3：apiKey 走 resolveApiKey（override ?? provider key）；def.modelProviderId 必须已配置
   if (!def.modelProviderId) return;
   const apiKey = await resolveApiKey(instanceId, def.modelProviderId);
-  const token = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
-  if (!token) return;
 
   // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
   // 旧实现对 task-driven agent 无效——stopAgent 早返（runtimes 无 entry），
@@ -113,13 +101,11 @@ async function restartCoordinatorInstance(
   await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,
-      botUserId: assignment.agentUserId,
+      agentUserId: assignment.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      teamRoomId: ws.teamSessionId,
-      ownerUserId: ws.ownerId,
+      teamSessionId: ws.teamSessionId,
       def,
-      botAccessToken: token,
       // v1.3：role 来自 assignment；协调重启保留原 role
       role: assignment.role,
       llmApiKey: apiKey,

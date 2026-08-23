@@ -32,8 +32,8 @@ export interface TaskConfig {
    * 形状与 runtime-entry 的 TaskConfigMsg.dispatchContext 保持一致。
    */
   dispatchContext?: {
-    /** PM 的 Matrix userId（dispatch event 的 dispatch_from） */
-    fromBotUserId: string;
+    /** PM 的 assignmentId（dispatch event 的 dispatch_from） */
+    fromAssignmentId: string;
     /** dispatch event 的 task_id（用于回 task_reply 关联） */
     task_id: string;
     /** PM 分配给本 sub-agent 的工具预算 */
@@ -56,8 +56,8 @@ export interface TaskReplyNotification {
 export interface AgentRunnerOpts {
   /** agent_assignment 主键（instanceId） */
   agentAssignmentId: string;
-  /** agent bot 的 Matrix userId（@bot:home） */
-  agentBotUserId: string;
+  /** agent 本地身份（agent_user_id 列；展示名解析用，v2 Task 10 起非 Matrix userId） */
+  agentUserId: string;
   /** 所属 workspace ID */
   workspaceId: string;
   /** runtime 配置（task-driven 模式下由 warmPool spawn 注入，runner 自身不直接使用） */
@@ -85,7 +85,7 @@ export class AgentRunner {
   }
 
   get assignmentId(): string { return this.opts.agentAssignmentId; }
-  get botUserId(): string { return this.opts.agentBotUserId; }
+  get agentUserId(): string { return this.opts.agentUserId; }
   get workspaceId(): string { return this.opts.workspaceId; }
 
   /**

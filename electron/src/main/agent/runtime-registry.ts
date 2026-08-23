@@ -12,8 +12,10 @@
 //   - startAgentRuntime(opts, taskDriven)：IPC handler 调用入口——taskDriven=true 走 WarmPool
 //     预热（含按需创建），taskDriven=false 走 v1 spawnAgent fallback
 //   - createTaskDrivenRuntime(opts)：为单个 assignment 创建 WarmPool + AgentRunner + 注册 + 预热
-//   - findAssignmentByAgentUserId(agentUserId)：按 agent_user_id 反查 instance_id（dispatch 路由用）
 //   - destroyAllTaskDrivenRuntimes()：进程退出时清理（before-quit 调用）
+//
+// v2（Task 10）：dispatch_to/reply_to 值已是 assignmentId，RouterService 直接以 runners
+// key 定位——findAssignmentByAgentUserId 反查已删除。
 
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
@@ -56,7 +58,7 @@ setAbortResolver((streamSessionId) => {
  * 替代 IPC handler 中的直接 spawnAgent(opts) 调用。
  * opts 已由调用方通过 buildSpawnOpts 构造完毕。
  *
- * @param opts 已构建的 AgentRuntimeOpts（含 instanceId / botUserId / workspaceId 等）
+ * @param opts 已构建的 AgentRuntimeOpts（含 instanceId / agentUserId / workspaceId 等）
  * @param taskDriven agent 定义是否 task_driven=1
  */
 export async function startAgentRuntime(
@@ -80,7 +82,7 @@ export async function startAgentRuntime(
  * 幂等：已存在的 pool/runner 不会重建，仅触发 warm 补充。
  */
 async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
-  const { instanceId, botUserId, workspaceId } = opts;
+  const { instanceId, agentUserId, workspaceId } = opts;
 
   if (!agentWarmPools.has(instanceId)) {
     const pool = new WarmPool({
@@ -101,7 +103,7 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
 
     const runner = new AgentRunner({
       agentAssignmentId: instanceId,
-      agentBotUserId: botUserId,
+      agentUserId,
       workspaceId,
       warmPool: pool,
     });
@@ -114,7 +116,7 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
       .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
       .run(instanceId);
 
-    logger.info('task-driven runtime 已创建', { instanceId, botUserId });
+    logger.info('task-driven runtime 已创建', { instanceId, agentUserId });
 
     // v2 修复（final review M1）：补齐 init/lazy 路径不对称——lazy 路径也要
     // populate buckets，否则 dispatcher 对缺失 bucket 不限流放行（潜伏点）。
@@ -149,7 +151,7 @@ async function ensureTaskDrivenRuntime(opts: AgentRuntimeOpts): Promise<void> {
  * @returns 创建的 WarmPool；已存在时返回已有的
  */
 export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
-  const { instanceId, botUserId, workspaceId } = opts;
+  const { instanceId, agentUserId, workspaceId } = opts;
 
   const existing = agentWarmPools.get(instanceId);
   if (existing) return existing;
@@ -172,7 +174,7 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
 
   const runner = new AgentRunner({
     agentAssignmentId: instanceId,
-    agentBotUserId: botUserId,
+    agentUserId,
     workspaceId,
     warmPool: pool,
   });
@@ -185,20 +187,6 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     .run(instanceId);
 
   return pool;
-}
-
-/**
- * 按 agent_user_id 反查 assignment 的 instance_id。
- * 用于 RouterService.routeDispatch：dispatch event 的 dispatch_to 是目标 agent 的 agentUserId，
- * 需反查 assignmentId 才能从 runners Map 取到对应 AgentRunner。
- *
- * @returns instance_id；未找到时返回 null
- */
-export function findAssignmentByAgentUserId(agentUserId: string): string | null {
-  const row = getDb()
-    .prepare('SELECT instance_id FROM agent_assignments WHERE agent_user_id = ?')
-    .get(agentUserId) as { instance_id: string } | undefined;
-  return row?.instance_id ?? null;
 }
 
 /**

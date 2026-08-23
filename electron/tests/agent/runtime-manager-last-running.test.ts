@@ -25,15 +25,13 @@ function makeOpts(instanceId: string, botUserId: string): AgentRuntimeOpts {
     instanceId,
     workspaceId: 'ws-1',
     workspaceDir: '/tmp',
-    botUserId,
-    botAccessToken: 'tok',
-    homeserverUrl: 'http://127.0.0.1:8008',
+    agentUserId: botUserId,
+    agentAssignmentId: instanceId,
     systemPrompt: '',
     modelProvider: 'openai',
     modelName: 'gpt-4o',
     llmApiKey: 'key',
-    teamRoomId: '!room:localhost',
-    ownerUserId: '@owner:localhost',
+    teamSessionId: '!room:localhost',
   };
 }
 

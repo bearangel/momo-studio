@@ -56,7 +56,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -86,7 +86,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -114,7 +114,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,
@@ -139,7 +139,7 @@ describe('AgentRunner', () => {
 
     const runner = new AgentRunner({
       agentAssignmentId: 'inst1',
-      agentBotUserId: '@bot:home',
+      agentUserId: 'agent-bot-x1',
       workspaceId: 'ws1',
       config: {} as never,
       warmPool,

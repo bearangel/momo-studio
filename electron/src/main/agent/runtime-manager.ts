@@ -29,9 +29,6 @@ import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import { getOrStartMcp, listMcpTools, callMcpTool, getMcpConfig } from '../mcp/host-manager';
 import { resolveMaxToolCalls } from '../settings/crud';
-// v2（B 子系统 Task B6）：room-info helper 给 agent runtime 子进程查 isDirectChat/hasCoordinator
-import { getSyncingClient } from '../matrix/sync-manager';
-import { isDirectChat, hasWorkspaceCoordinator } from '../matrix/room-info';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { StreamChunk } from './stream-chunk';
 import { handleStreamChunk, relayStreamChunk } from './stream-relay';
@@ -41,17 +38,20 @@ export interface AgentRuntimeOpts {
   instanceId: string;
   workspaceId: string;
   workspaceDir: string;
-  botUserId: string;
-  botAccessToken: string;
-  homeserverUrl: string;
+  /**
+   * v2（Task 10）：本地身份三件套取代 Matrix 凭据五件套
+   * （botUserId/botAccessToken/homeserverUrl/ownerUserId/teamRoomId 已删除）。
+   * agentAssignmentId 与 instanceId 同值（显式命名，供子进程侧区分语义）；
+   * agentUserId 为展示名映射键；teamSessionId 为团队会话（sessions 表）ID。
+   */
+  agentAssignmentId: string;
+  agentUserId: string;
+  teamSessionId: string;
   systemPrompt: string;
   /** v1.3：仅传 modelName + modelBaseUrl + llmApiKey；platform 由 createLLMProvider 按 baseUrl 自动检测 */
   modelName: string;
   modelBaseUrl?: string;
   llmApiKey: string;
-  teamRoomId: string;
-  /** workspace owner 的 Matrix userId，子进程据此只接受 owner 邀请（防恶意 room） */
-  ownerUserId: string;
   // === v1.3 重命名（原 agentType） ===
   /** agent 角色，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
   role?: 'standalone' | 'main' | 'sub';
@@ -379,7 +379,7 @@ function doSpawnAgent(opts: AgentRuntimeOpts): void {
   });
 
   runtimes.set(opts.instanceId, child);
-  logger.info('Agent 子进程已启动', { instanceId: opts.instanceId, bot: opts.botUserId });
+  logger.info('Agent 子进程已启动', { instanceId: opts.instanceId, agentUserId: opts.agentUserId });
 }
 
 /**
@@ -467,20 +467,6 @@ function handleChildMessage(child: ChildProcess, opts: AgentRuntimeOpts, msg: un
     return;
   }
 
-  // v2（B 子系统 Task B6）：房间信息查询（子进程无 DB / 主进程 syncing client）
-  if (m.type === 'query-room-info' && typeof m.roomId === 'string') {
-    const syncingClient = getSyncingClient();
-    const isDirect = isDirectChat(syncingClient, m.roomId, opts.ownerUserId);
-    const hasCoord = hasWorkspaceCoordinator(opts.workspaceId);
-    safeChildSend(child, {
-      type: 'query-room-info-result',
-      roomId: m.roomId,
-      isDirectChat: isDirect,
-      hasCoordinator: hasCoord,
-    });
-    return;
-  }
-
   if (m.type === 'mcp:listTools' && m.id && m.mcpName) {
     void handleChildListTools(child, opts.workspaceId, m.id, m.mcpName);
   } else if (m.type === 'mcp:callTool' && m.id && m.mcpName && m.toolName && m.args) {
@@ -520,7 +506,7 @@ function handleAuditToolCall(
     ).run(
       randomUUID(),
       opts.workspaceId,
-      opts.botUserId,
+      opts.agentUserId,
       null,
       m.toolName,
       m.inputSummary ?? '',

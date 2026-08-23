@@ -23,8 +23,8 @@ import { decideResponse } from './decide-response';
  * 由调用方（sync-manager）从 Matrix room members + DB 查询组装。
  */
 export interface BotCandidate {
-  /** bot 的 Matrix userId（@bot-xxx:home） */
-  botUserId: string;
+  /** agent 身份键（v2 Task 10 起为本地 agent_user_id；mention 匹配用） */
+  agentUserId: string;
   /** assignment 的 instance_id（RouterService.runners 的 key） */
   assignmentId: string;
   /** 所属 workspace ID */
@@ -85,7 +85,7 @@ export function resolveMessageTarget(
   const isOwnerMessage = params.sender === workspace.ownerId;
 
   for (const candidate of params.candidates) {
-    const mentioned = mentionSet.has(candidate.botUserId);
+    const mentioned = mentionSet.has(candidate.agentUserId);
     const decision = decideResponse({
       mentioned,
       hasAnyMention,

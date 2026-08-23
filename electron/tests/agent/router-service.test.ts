@@ -116,10 +116,11 @@ describe('RouterService', () => {
         mkMockEvent('io.momo-studio.dispatch', {
           body: '写登录页',
           task_id: 'task-123',
-          dispatch_from: '@pm:home',
-          dispatch_to: '@sub:home',
+          // v2（Task 10）：dispatch_from / dispatch_to 的值是 assignmentId（本地身份路由键）
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-sub',
         }),
-        '@pm:home',
+        'inst-pm',
         '!room:home',
         'inst-sub',
       );
@@ -127,7 +128,7 @@ describe('RouterService', () => {
       expect(mockRunner.executeTask).toHaveBeenCalledWith(
         expect.objectContaining({
           taskId: 'task-123',
-          dispatchContext: expect.objectContaining({ fromBotUserId: '@pm:home' }),
+          dispatchContext: expect.objectContaining({ fromAssignmentId: 'inst-pm' }),
         }),
       );
     });
@@ -156,92 +157,70 @@ describe('RouterService', () => {
       );
     });
 
-    it('dispatch 未传 directTargetAssignmentId 时从 dispatch_to 自解析', async () => {
+    it('dispatch 未传 directTargetAssignmentId 时 dispatch_to（assignmentId）直接定位 runner', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-3' }) };
       const runners = new Map([['inst-sub', mockRunner]]);
-      const findAssignmentByAgentUserId = vi.fn((agentUserId: string) => {
-        if (agentUserId === '@sub:home') return 'inst-sub';
-        return null;
-      });
-      const svc = new RouterService({
-        runners,
-        dispatcher: { tryPickup: vi.fn() } as never,
-        findAssignmentByAgentUserId,
-      });
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
         mkMockEvent('io.momo-studio.dispatch', {
           body: '写测试',
           task_id: 'task-456',
-          dispatch_from: '@pm:home',
-          dispatch_to: '@sub:home',
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-sub',
         }),
-        '@pm:home',
+        'inst-pm',
         null,
       );
 
-      expect(findAssignmentByAgentUserId).toHaveBeenCalledWith('@sub:home');
+      // dispatch_to 值即 runners key——无需反查，直接派发
       expect(mockRunner.executeTask).toHaveBeenCalledWith(
         expect.objectContaining({
           taskId: 'task-456',
-          dispatchContext: expect.objectContaining({ fromBotUserId: '@pm:home' }),
+          dispatchContext: expect.objectContaining({ fromAssignmentId: 'inst-pm' }),
         }),
       );
     });
 
-    it('dispatch 自解析失败（findAssignmentByAgentUserId 返回 null）时不派发', async () => {
+    it('dispatch 自解析失败（dispatch_to 不是已知 assignmentId）时不派发', async () => {
       const mockRunner = { executeTask: vi.fn() };
       const runners = new Map([['inst-sub', mockRunner]]);
-      const findAssignmentByAgentUserId = vi.fn(() => null);
-      const svc = new RouterService({
-        runners,
-        dispatcher: { tryPickup: vi.fn() } as never,
-        findAssignmentByAgentUserId,
-      });
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
         mkMockEvent('io.momo-studio.dispatch', {
           body: '写测试',
           task_id: 'task-789',
-          dispatch_from: '@pm:home',
-          dispatch_to: '@unknown:home',
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-unknown',
         }),
-        '@pm:home',
+        'inst-pm',
         null,
       );
 
       expect(mockRunner.executeTask).not.toHaveBeenCalled();
     });
 
-    it('task_reply 带 reply_to 时精确路由到目标 PM（不广播）', async () => {
+    it('task_reply 带 reply_to（assignmentId）时精确路由到目标 PM（不广播）', async () => {
       const pmRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
       const otherRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
       const runners = new Map([
         ['inst-pm', pmRunner],
         ['inst-other', otherRunner],
       ]);
-      const findAssignmentByAgentUserId = vi.fn((agentUserId: string) => {
-        if (agentUserId === '@pm:home') return 'inst-pm';
-        return null;
-      });
-      const svc = new RouterService({
-        runners,
-        dispatcher: { tryPickup: vi.fn() } as never,
-        findAssignmentByAgentUserId,
-      });
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
         mkMockEvent('io.momo-studio.task_reply', {
           body: '完成',
           task_id: 'task-123',
           status: 'completed',
-          reply_to: '@pm:home',
+          reply_to: 'inst-pm',
         }),
-        '@sub:home',
+        'inst-sub',
         '!room:home',
       );
 
-      expect(findAssignmentByAgentUserId).toHaveBeenCalledWith('@pm:home');
       expect(pmRunner.notifyTaskReply).toHaveBeenCalledTimes(1);
       expect(otherRunner.notifyTaskReply).not.toHaveBeenCalled();
     });
