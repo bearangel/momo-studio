@@ -575,6 +575,45 @@ ALTER TABLE model_providers ADD COLUMN max_tpm INTEGER;
 ALTER TABLE agent_definitions ADD COLUMN task_driven INTEGER NOT NULL DEFAULT 1;
 `.trim(),
   },
+  {
+    version: 23,
+    sql: `
+-- ─── v23：2.0.0 P1 会话内核——sessions 取代 Matrix room ────────────────────
+-- 设计依据 docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md §5。
+-- 全新开始（D5）：不做数据回填，仅 schema 变形。
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'task_execution')),
+  settings_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_message_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS session_members (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  assignment_id TEXT NOT NULL REFERENCES agent_assignments(instance_id) ON DELETE CASCADE,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, assignment_id)
+);
+
+ALTER TABLE messages RENAME COLUMN room_id TO session_id;
+ALTER TABLE messages DROP COLUMN matrix_event_id;
+
+ALTER TABLE tasks RENAME COLUMN execution_room_id TO execution_session_id;
+ALTER TABLE tasks RENAME COLUMN source_room_id TO source_session_id;
+
+ALTER TABLE agent_assignments RENAME COLUMN bot_matrix_user_id TO agent_user_id;
+
+ALTER TABLE workspaces RENAME COLUMN team_room_id TO team_session_id;
+ALTER TABLE workspaces DROP COLUMN matrix_space_id;
+
+DROP TABLE IF EXISTS room_settings;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
