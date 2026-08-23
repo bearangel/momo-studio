@@ -546,102 +546,8 @@ export interface TodoItem {
 }
 
 /**
- * 流式 IPC chunk（v1.4），与 electron 端 stream-chunk.ts 的 StreamChunk 对齐。
- * 子进程 process.send → 主进程转发 → renderer 经 api.agent.onStream 接收。
- * renderer 用 streamSessionId 聚合同一次响应的所有 chunk 到一个临时气泡。
- *
- * v1.4 嵌套字段（仅在嵌套场景出现）：
- * - start.parentStreamSessionId: 子 agent 标识其所属 PM 的 stream session，renderer 据此把子流
- *   嵌套渲染到 PM 气泡内的 dispatch chip 下方
- * - start.subAgentName / subAgentAvatar: 子 agent 的展示名与头像（chip 头部用）
- * - tool_call.isDispatch: 标记该 tool_call 是 PM 的 dispatch 委派（与普通工具调用区分）
- * - tool_call.subStreamSessionId: PM 发起的本次子 agent 流 session ID（与子 start 的
- *   streamSessionId 对应，renderer 据此把子 stream 关联到 dispatch chip）
- * - tool_result.subStatus: dispatch 完成状态（completed / failed / timeout），用于更新 chip 状态
- *
- * v1.5 新增：
- * - todo_update: todowrite 工具调用导致的任务列表全量替换，renderer 据此更新 todo 面板
- */
-export type StreamChunk =
-  | {
-      type: 'start';
-      streamSessionId: string;
-      /** Task 6 字段迁移：原 roomId。会话 ID（与 electron 端 stream-chunk.ts 对齐）。 */
-      sessionId: string;
-      /** Task 6 字段迁移：原 botUserId。发送方 agent 标识（值仍为 bot 的 Matrix userId）。 */
-      senderAgentId: string;
-      /** v1.4 嵌套：父 agent 的 streamSessionId（子 agent 用，标识所属 PM 会话） */
-      parentStreamSessionId?: string;
-      /** v1.4 嵌套：子 agent 展示名（dispatch chip 头部显示） */
-      subAgentName?: string;
-      /** v1.4 嵌套：子 agent emoji 头像（dispatch chip 头部显示） */
-      subAgentAvatar?: string;
-    }
-  | { type: 'thinking'; streamSessionId: string; delta: string }
-  | { type: 'text'; streamSessionId: string; delta: string }
-  | {
-      type: 'tool_call';
-      streamSessionId: string;
-      /** A7：工具调用唯一 ID（tool_call ↔ tool_result 配对用，MessageEventBuffer 据此落盘） */
-      callId: string;
-      toolName: string;
-      args: Record<string, unknown>;
-      /** v1.4 嵌套：标记此 tool_call 为 PM 的 dispatch 委派（区分普通工具调用） */
-      isDispatch?: boolean;
-      /** v1.4 嵌套：本次委派创建的子 agent 流 session ID（关联子 agent start chunk） */
-      subStreamSessionId?: string;
-      /** v1.4 嵌套：被委派子 agent 的展示名 */
-      subAgentName?: string;
-      /** v1.4 嵌套：被委派子 agent 的 emoji 头像 */
-      subAgentAvatar?: string;
-    }
-  | {
-      type: 'tool_result';
-      streamSessionId: string;
-      /** A7：配对的 tool_call callId（与对应 tool_call chunk 的 callId 一致） */
-      callId: string;
-      toolName: string;
-      result: string;
-      success: boolean;
-      /** v1.4 嵌套：dispatch 完成状态（completed=成功 / failed=子 agent 报错 / timeout=超时） */
-      subStatus?: 'completed' | 'failed' | 'timeout';
-    }
-  | {
-      /** v1.5 todowrite 全量替换任务列表。每次调用 todowrite 都发一个 chunk，携带完整 todos。 */
-      type: 'todo_update';
-      streamSessionId: string;
-      /** Task 6 字段迁移：原 roomId。会话 ID（与 start.sessionId 同值语义）。 */
-      sessionId: string;
-      /** 完整任务列表（覆盖式）；空数组 = 清空 */
-      todos: TodoItem[];
-      /** v1.5 嵌套：父 agent 的 streamSessionId（子 agent 调 todowrite 时携带） */
-      parentStreamSessionId?: string;
-    }
-  | {
-      type: 'end';
-      streamSessionId: string;
-      finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
-      error?: string;
-    }
-  | {
-      /** A7 fix：task_complete 主动分段边界，触发主进程 INSERT 独立分段 message row */
-      type: 'segment_boundary';
-      /** 父 stream session id */
-      streamSessionId: string;
-      /** 第几段（1-based） */
-      segmentIndex: number;
-      /** 本段最终 body 快照 */
-      segmentBody: string;
-      /** 本段独立 stream session id（如 "ss-1#seg1"） */
-      segmentStreamSessionId: string;
-    };
-
-/**
- * A 子系统：事件溯源——单条 stream chunk 落盘一行。
- *
- * 与 StreamChunk（IPC 实时通道）的区别：
- * - StreamChunk 是 transient 的 IPC 事件，由 renderer stream.store 聚合；
- * - MessageEventRow 是持久化的 DB 行，A 子系统重启后从 message_events 表重建流状态。
+ * A 子系统：事件溯源——单条 stream chunk 落盘一行（MessageEventRow 是持久化的 DB 行，
+ * A 子系统重启后从 message_events 表重建流状态）。
  *
  * 两路用同一份 events 数组 + 同一个 aggregateEvents 函数聚合，
  * 保证实时显示和重启显示完全一致（A 子系统核心不变量）。
@@ -870,8 +776,6 @@ export interface ApiSurface {
     /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
     setAssignmentDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
     onRuntimeChanged(callback: () => void): () => void;
-    /** v1.4：订阅 agent 流式 chunk（thinking/text/tool_call 等），返回取消订阅函数 */
-    onStream(callback: (chunk: StreamChunk) => void): () => void;
     /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
     abortStream(streamSessionId: string): Promise<void>;
   };

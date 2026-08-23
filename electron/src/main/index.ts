@@ -12,7 +12,6 @@ import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
 import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
-import { setMainWindow as setRuntimeMainWindow } from './agent/stream-relay';
 import { initP2p, stopP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
 import { logger } from './logger';
@@ -37,7 +36,6 @@ app.whenReady().then(async () => {
     registerIpcHandlers();
 
     const win = createMainWindow();
-    setRuntimeMainWindow(win);
     setSessionMainWindow(win);
 
     // 启动即初始化 task-driven runtime：无登录概念，SQLite assignments.last_running

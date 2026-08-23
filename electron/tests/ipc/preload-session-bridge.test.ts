@@ -29,6 +29,7 @@ interface ExposedApi {
   im: {
     onConflict: (cb: (conflict: unknown) => void) => () => void;
   };
+  agent: Record<string, unknown>;
   session: {
     onMessage: (cb: (msg: unknown) => void) => () => void;
     onMessageEventBatch: (cb: (batch: unknown) => void) => () => void;
@@ -116,5 +117,17 @@ describe('preload im 命名空间收缩（Task 12）', () => {
     const conflict = { newTaskId: 't2', currentTaskId: 't1', currentRoomId: 's1' };
     handler?.({}, conflict);
     expect(cb).toHaveBeenCalledWith(conflict);
+  });
+});
+
+describe('preload agent:stream 死通道删除（P2 Task 10）', () => {
+  it('不再暴露 agent.onStream，也不再订阅 agent:stream 通道（实时显示走 message_event_batch）', async () => {
+    await import('../../src/preload/index');
+    const api = getExposedApi();
+
+    expect('onStream' in api.agent).toBe(false);
+
+    const channels = ipcRendererOn.mock.calls.map((c) => c[0]);
+    expect(channels).not.toContain('agent:stream');
   });
 });

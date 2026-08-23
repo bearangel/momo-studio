@@ -7,7 +7,6 @@ import type {
   MessageEventBatch,
   ResourceFilter,
   ResourceItem,
-  StreamChunk,
   TaskRow,
   UploadedSkill,
 } from '../../../renderer/src/ipc/types';
@@ -70,13 +69,6 @@ const api: ApiSurface = {
       ipcRenderer.on('agent:runtimeChanged', handler);
       return () => {
         ipcRenderer.off('agent:runtimeChanged', handler);
-      };
-    },
-    onStream: (callback) => {
-      const handler = (_evt: IpcRendererEvent, chunk: StreamChunk): void => callback(chunk);
-      ipcRenderer.on('agent:stream', handler);
-      return () => {
-        ipcRenderer.off('agent:stream', handler);
       };
     },
     abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),

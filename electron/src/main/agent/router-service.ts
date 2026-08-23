@@ -236,21 +236,45 @@ export class RouterService {
   }
 
   /**
-   * abort_dispatch event → 中断正在执行的 sub-agent task。
+   * abort_dispatch event → 级联中断子 agent 的 dispatch task。
    *
-   * 当前为日志占位（P2 实现传播）：仅记 info 日志，不抛错（避免阻塞调用方）。
-   * 完整实现需按 task_id 反查正在执行的 runner + 该 task 对应的 streamSessionId，
-   * 然后调 runner.abortStream(streamSessionId) 跨进程取消子 agent runtime。
+   * PM 子进程的 dispatch-wait onAbort 发出此 event（content 携带
+   * sub_stream_session_id = 子 agent 流 session id，见 dispatch.ts
+   * buildAbortDispatchMessage）。此处对全部 runner 广播
+   * runner.abortStream(subStreamSessionId)——与 notifyTaskReply 广播语义一致，
+   * 各 runner 的 activeTasks 活跃表自然过滤，只有持有该子流的 runner
+   * 真正向子进程下发 abort IPC；找不到目标（流已结束/子 agent 未启动）时
+   * 各 runner 均为 no-op，仅记 warn，不抛错。
+   *
+   * 注意：PM 自身 stream 的中止走 'agent:abortStream' IPC 直达路径
+   * （renderer → abortStreamBySessionId → runtime-registry 广播），不经本路由。
    */
   private async routeAbortDispatch(event: InternalEvent): Promise<void> {
     const content = event.getContent();
     const taskId = content.task_id;
-    if (typeof taskId !== 'string') return;
-    // TODO(P2): 按 task_id 反查正在执行的 runner + streamSessionId → runner.abortStream
-    logger.info('abort_dispatch event 收到（路由占位，P2 实现传播）', { taskId });
+    const subStreamSessionId = content.sub_stream_session_id;
+    // 关键字段缺失 → 无法定位子 agent 流，丢弃（warn 不抛错，避免阻塞桥的后续 event）
+    if (typeof taskId !== 'string' || typeof subStreamSessionId !== 'string') {
+      logger.warn('routeAbortDispatch content 缺关键字段（task_id / sub_stream_session_id）', { content });
+      return;
+    }
+    if (this.opts.runners.size === 0) {
+      logger.warn('routeAbortDispatch 无 runner 可广播（子 agent 未启动或已停止）', {
+        taskId,
+        subStreamSessionId,
+      });
+    }
+    for (const runner of this.opts.runners.values()) {
+      runner.abortStream(subStreamSessionId);
+    }
+    logger.info('abort_dispatch 已广播', {
+      taskId,
+      subStreamSessionId,
+      runnerCount: this.opts.runners.size,
+    });
   }
 
-  /** 启动钩子（当前仅日志；预留给 T8 注册 dispatcher 终态回调） */
+  /** 启动钩子（当前仅日志；RouterService 为 lazy 单例，无其他初始化职责） */
   start(): void {
     logger.info('RouterService 已启动');
   }
