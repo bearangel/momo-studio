@@ -510,14 +510,16 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 | **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
-| **model_providers 表无 platform 字段** | createLLMProvider 按 baseUrl 启发式检测；非标准域名可能误判 | v1.5 加 platform 列 |
+| ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；LLM 运行时接线（`spawn-helpers.ts` 把 `provider.platform` 传入 `createLLMProvider` 的 `model.provider`，替换 baseUrl 启发式）留 P3 | P3 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
+| **provider.platform 运行时接线** | `createLLMProvider` 已接受显式 `model.provider` 参数（`llm-provider.ts:168`），但 `spawn-helpers.ts` 仍未透传；接线后设置页下拉选择可生效，baseUrl 启发式检测随之退役 | P3 |
+| **provider testConnection 空 model 兜底不统一** | Dialog 硬编码 `gpt-3.5-turbo` 作 fallback，配置卡传 `''`，两路径对 `modelName` 校验/拼接行为不一致 | P3 |
 
 ## 已知限制
 
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
-- **LLM platform 按 baseUrl 启发式检测**——非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI。后续加 `model_providers.platform` 列显式指定。
+- **LLM platform 运行时接线未完成（P3 待办）**——设置层已可显式指定 platform（v24 migration + `model_providers.platform` 列 + 设置页显式下拉），但 `spawn-helpers.ts` 仍未把 `provider.platform` 传入 `createLLMProvider` 的 `model.provider`，运行时仍走 baseUrl 启发式检测。非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI；接线完成后此限制解除。
 - **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；旧库检测/导出/定义导入是 P5 任务。
 
 ## 许可
