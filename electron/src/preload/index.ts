@@ -90,6 +90,12 @@ const api: ApiSurface = {
     setDefault: (id) => invoke('provider:setDefault', id),
     testConnection: (input) => invoke('provider:testConnection', input),
     getApiKey: (id) => invoke('provider:getApiKey', id),
+    // Task 6：供应商模型列表管理
+    fetchModels: (id) => invoke('provider:fetchModels', id),
+    listModels: (id) => invoke('provider:listModels', id),
+    addModel: (id, modelId) => invoke('provider:addModel', id, modelId),
+    setModelEnabled: (id, modelId, enabled) => invoke('provider:setModelEnabled', id, modelId, enabled),
+    removeModel: (id, modelId) => invoke('provider:removeModel', id, modelId),
   },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。

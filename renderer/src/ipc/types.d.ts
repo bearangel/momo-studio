@@ -389,14 +389,28 @@ export interface InstalledPackage {
   installedAt: string;
 }
 
+/** LLM 协议平台（与 electron 端 provider-crud.ts 的 ProviderPlatform 对齐） */
+export type ProviderPlatform = 'openai' | 'anthropic';
+
+/** 供应商的模型列表条目（与 electron 端 ProviderModel 对齐，v24 起） */
+export interface ProviderModel {
+  providerId: string;
+  modelId: string;
+  enabled: boolean;
+  addedAt: number;
+}
+
 /** 全局模型供应商（注册表项，不含 apiKey） */
 export interface ModelProvider {
   id: string;
   name: string;
   baseUrl: string;
+  /** @deprecated v2.0 P2 起由 provider_models 模型列表取代，UI 不再展示；DB 列保留（agent 定义快捷填充仍读旧列） */
   defaultModel: string | null;
   isDefault: boolean;
   createdAt: string;
+  /** LLM 协议平台（v24 起显式存储，取代 baseUrl 启发式检测） */
+  platform: ProviderPlatform;
 }
 
 /** 全局会话配置（v1.4：工具调用上限等），与 electron 端 GlobalSettings 对齐 */
@@ -840,12 +854,28 @@ export interface ApiSurface {
   provider: {
     list(): Promise<ModelProvider[]>;
     get(id: string): Promise<ModelProvider | null>;
-    create(input: { name: string; baseUrl: string; apiKey: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
-    update(input: { id: string; name?: string; baseUrl?: string; apiKey?: string; defaultModel?: string; isDefault?: boolean }): Promise<ModelProvider>;
+    create(input: {
+      name: string; baseUrl: string; apiKey: string;
+      defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+    }): Promise<ModelProvider>;
+    update(input: {
+      id: string; name?: string; baseUrl?: string; apiKey?: string;
+      defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+    }): Promise<ModelProvider>;
     delete(id: string): Promise<{ ok: boolean }>;
     setDefault(id: string): Promise<{ ok: boolean }>;
     testConnection(input: { baseUrl: string; apiKey: string; model: string }): Promise<{ ok: boolean; error?: string }>;
     getApiKey(id: string): Promise<string | null>;
+    /** Task 6：GET {baseUrl}/models 拉取远端模型 id 列表（失败抛 IPC error） */
+    fetchModels(id: string): Promise<string[]>;
+    /** Task 6：某供应商的模型列表（按加入时间升序） */
+    listModels(id: string): Promise<ProviderModel[]>;
+    /** Task 6：手动添加模型（幂等，ghost provider 时抛 FOREIGN KEY 错误） */
+    addModel(id: string, modelId: string): Promise<void>;
+    /** Task 6：切换模型启用状态 */
+    setModelEnabled(id: string, modelId: string, enabled: boolean): Promise<void>;
+    /** Task 6：删除模型条目 */
+    removeModel(id: string, modelId: string): Promise<void>;
   };
   /**
    * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，

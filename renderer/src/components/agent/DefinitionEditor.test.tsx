@@ -50,7 +50,7 @@ beforeEach(() => {
 
   useProviderStore.setState({
     providers: [
-      { id: 'prov-1', name: 'P1', baseUrl: 'https://a', defaultModel: 'gpt-4o', isDefault: true, createdAt: '' },
+      { id: 'prov-1', name: 'P1', baseUrl: 'https://a', defaultModel: 'gpt-4o', isDefault: true, createdAt: '', platform: 'openai' as const },
     ],
     loading: false,
     loadProviders: vi.fn(),

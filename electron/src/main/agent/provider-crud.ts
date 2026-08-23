@@ -10,7 +10,6 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { setSecret, getSecret, deleteSecret } from '../storage/keychain';
-
 export interface ModelProviderRow {
   id: string;
   name: string;
@@ -196,4 +195,65 @@ export function removeProviderModel(providerId: string, modelId: string): void {
   db.prepare(
     'DELETE FROM provider_models WHERE provider_id = ? AND model_id = ?',
   ).run(providerId, modelId);
+}
+
+// ─── 远端模型列表拉取（Task 6）───────────────────────────────────────────────
+
+/** 本机回环域名（允许 http，如本地 Ollama）。与 provider-ipc.ts testConnection 的校验互为镜像 */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0';
+}
+
+/**
+ * 从供应商 API 拉取可用模型列表：GET {baseUrl}/models（OpenAI 兼容格式），
+ * Bearer key 取自 keychain。返回 data[].id 字符串数组。
+ * 失败（网络 / 非 2xx / 非 JSON / 形状不符 / ghost provider）一律抛错，
+ * 由 IPC 层转成 renderer 可见的 error。
+ */
+export async function fetchRemoteModels(providerId: string): Promise<string[]> {
+  const provider = getProvider(providerId);
+  if (!provider) throw new Error(`供应商不存在: ${providerId}`);
+  const apiKey = await getProviderApiKey(providerId);
+
+  // SSRF/传输安全校验：镜像 testConnection——http 仅允许本机回环，非本机必须 https
+  let parsed: URL;
+  try {
+    parsed = new URL(provider.baseUrl);
+  } catch {
+    throw new Error('baseUrl 格式无效');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('仅支持 http/https 协议');
+  }
+  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
+    throw new Error('非本机地址必须使用 https（防止凭据被截获）');
+  }
+
+  const base = provider.baseUrl.replace(/\/$/, '');
+  const resp = await fetch(`${base}/models`, {
+    headers: { Authorization: `Bearer ${apiKey ?? ''}` },
+  });
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  let body: unknown;
+  try {
+    body = await resp.json();
+  } catch (err) {
+    throw new Error(`响应不是有效 JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const data = (body as { data?: unknown }).data;
+  if (!Array.isArray(data)) {
+    throw new Error('响应格式不符合 /models 约定（缺少 data 数组）');
+  }
+  const ids: string[] = [];
+  for (const item of data) {
+    const id = (item as { id?: unknown }).id;
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new Error('响应格式不符合 /models 约定（data 条目缺少字符串 id）');
+    }
+    ids.push(id);
+  }
+  return ids;
 }

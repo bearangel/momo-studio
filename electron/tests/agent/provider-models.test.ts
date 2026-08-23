@@ -136,4 +136,10 @@ describe('provider_models CRUD', () => {
     await deleteProvider(p.id);
     expect(listProviderModels(p.id)).toEqual([]);
   });
+
+  it('upsertProviderModel 对不存在的 provider 抛 FOREIGN KEY 约束错误（IPC 层面即 addModel 报错）', () => {
+    // provider:addModel 直接透传 upsertProviderModel——ghost provider 时
+    // SqliteError: FOREIGN KEY constraint failed 会作为 IPC error 传给 renderer
+    expect(() => upsertProviderModel('ghost-provider', 'm1')).toThrow(/FOREIGN KEY/);
+  });
 });
