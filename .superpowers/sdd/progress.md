@@ -321,3 +321,14 @@ Base commit: 9add711
 - README.md:520 已知限制条目勘误——「LLM platform 按 baseUrl 启发式检测」改写为「设置层已可显式指定 platform（v24），但运行时仍走 baseUrl 启发式（P3 待办）」
 - README.md 技术债务跟踪表追加两条 P3——「provider.platform 运行时接线」+「provider testConnection 空 model 兜底不统一」
 - electron/src/main/agent/tools/shared/audit.ts:6-11 头注释纠偏——删除「v2 P1 暂无主进程侧消费者」过时措辞，改写为「runtime-spawner messageHandler audit:toolCall 分支消费 → insertToolCall 落库 + 200 计数配额巡检」如实描述现状（P2 Task 8 已恢复该桥）
+
+### P2 Final review: APPROVED (fix round fdc941b 验证通过)
+- 6 项交叉审计全过（布局组合/provider 链/审计链/MCP 链/死代码/范围扩展）；Deferred-Minor 无 MUST-FIX
+- 修复轮：README 技术债勘误 + platform 接线 P3 记账 + audit.ts 注释纠偏
+- 最终门禁：954/954 + 515/515 + typecheck 双 clean + build + xvfb 冒烟
+
+## P2 ui-shell 全部完成（16 commits, c8f6c90..fdc941b）——已过终审可合并
+
+### 合并前门禁观察（如实记录）
+- 首轮 root test 出现 1 次 renderer 失败（未捕获到用例名，grep 截断）；随后连续 5 轮全绿（515+954 ×2 root 级 + 3 次 renderer 单独）
+- 判定：一次性 flaky（与项目已知 vitest transform cache 偶发 stale 特征吻合）；P3 观察清单记录，若复现需定位捕获用例名
