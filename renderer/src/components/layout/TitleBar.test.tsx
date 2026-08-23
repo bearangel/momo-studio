@@ -117,4 +117,25 @@ describe('TitleBar', () => {
     expect(screen.queryByLabelText('关闭')).not.toBeInTheDocument();
     expect(screen.queryByText('Momo Studio')).not.toBeInTheDocument();
   });
+
+  it('mac 平台在 tabs 之前渲染 78px 红绿灯占位 spacer', () => {
+    mockApi.system.getPlatform.mockReturnValue('darwin');
+    render(<TitleBar />);
+    const tablist = screen.getByRole('tablist');
+    // WorkspaceTabs 把 tablist 包在一层外层 div；spacer 是外层 div 的前一个兄弟
+    const wsTabsRoot = tablist.parentElement as HTMLElement;
+    const spacer = wsTabsRoot.previousElementSibling as HTMLElement | null;
+    expect(spacer).not.toBeNull();
+    expect(spacer?.tagName).toBe('DIV');
+    expect(spacer?.style.width).toBe('78px');
+  });
+
+  it('非 mac 平台不渲染 78px spacer', () => {
+    // 默认平台已是 linux（beforeEach 已设置）
+    render(<TitleBar />);
+    const tablist = screen.getByRole('tablist');
+    const wsTabsRoot = tablist.parentElement as HTMLElement;
+    const spacer = wsTabsRoot.previousElementSibling as HTMLElement | null;
+    expect(spacer?.style.width ?? '').not.toBe('78px');
+  });
 });

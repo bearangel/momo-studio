@@ -35,6 +35,8 @@ export function TitleBar() {
           Momo Studio
         </span>
       )}
+      {/* mac 原生红绿灯占位 ~78x28，把第一个 tab 让出来避免被遮 */}
+      {mac && <div style={{ width: 78 }} className="shrink-0" />}
       <WorkspaceTabs />
       {/* tabs 与窗口控件之间的空白拖拽区 */}
       <div className="flex-1 h-full" />

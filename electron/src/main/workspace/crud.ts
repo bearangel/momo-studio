@@ -123,12 +123,15 @@ export function deleteWorkspace(id: string): void {
   logger.info('Workspace 已删除', { id });
 }
 
-/** 重命名 workspace（仅更新 name 列）。不存在时抛错。 */
+/** 重命名 workspace（仅更新 name 列）。不存在时抛错。空/全空白名拒绝并抛错。 */
 export function renameWorkspace(id: string, name: string): void {
+  // 空名校验：trim 后为空视为空名（防止 "   " 这种全空白绕过）；存 DB 的是 trim 后的值。
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('工作空间名称不能为空');
   const db = getDb();
-  const result = db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(name, id);
+  const result = db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(trimmed, id);
   if (result.changes === 0) throw new Error(`Workspace 不存在: ${id}`);
-  logger.info('Workspace 已重命名', { id, name });
+  logger.info('Workspace 已重命名', { id, name: trimmed });
 }
 
 /** 设置/清空 workspace 的协调 agent。null 表示清空。 */

@@ -97,6 +97,32 @@ describe('workspace:rename', () => {
 
     await expect(handler({}, 'nonexistent', 'x')).rejects.toThrow('Workspace 不存在');
   });
+
+  it('空名或全空白名被拒绝（不更新 DB）', async () => {
+    const ws = await createWorkspace(
+      { name: '原名', directoryPath: path.join(tmpRoot, 'ws-r-empty') },
+      '@o:localhost',
+    );
+    const handler = handlers.get('workspace:rename')!;
+
+    await expect(handler({}, ws.id, '')).rejects.toThrow('工作空间名称不能为空');
+    await expect(handler({}, ws.id, '   ')).rejects.toThrow('工作空间名称不能为空');
+    // 不应被空名覆盖
+    expect(getWorkspace(ws.id)?.name).toBe('原名');
+  });
+
+  it('前后空白的名字会被 trim 后存入 DB', async () => {
+    const ws = await createWorkspace(
+      { name: '原名', directoryPath: path.join(tmpRoot, 'ws-r-trim') },
+      '@o:localhost',
+    );
+    const handler = handlers.get('workspace:rename')!;
+
+    const result = await handler({}, ws.id, '  新名  ');
+
+    expect(result).toEqual({ ok: true });
+    expect(getWorkspace(ws.id)?.name).toBe('新名');
+  });
 });
 
 describe('workspace:openDirectory', () => {
