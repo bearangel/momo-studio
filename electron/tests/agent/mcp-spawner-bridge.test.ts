@@ -8,16 +8,24 @@
 //     全部用 toStrictEqual 锁死精确载荷键
 //   - audit:toolCall 分支（T8）与 mcp 分支共存互不干扰
 //
+// Fix round 1（死通道防御 + 非错误收敛 + 池惰性填充）：
+//   - listTools / callTool 分支先 ensureMcpStarted（getMcpConfig → getOrStartMcp）
+//     再 listMcpTools / callMcpTool——invocationCallOrder 锁调用顺序
+//   - getOrStartMcp 拒绝 / MCP 未注册 → { id, error }
+//   - 死通道竞态：子进程在 await 期间死亡 → child.send 抛 ERR_IPC_CHANNEL_CLOSED
+//     被 sendMcpResponse 吞掉，handler 正常 resolve（无 unhandledRejection 逃逸）
+//   - 非 Error 抛出物（string rejection）→ error 字段收敛为字符串而非 undefined
+//
 // fork 被 mock，message handler 被捕获后直接调用；host-manager / audit 模块被
 // mock（本测试只验证桥的转发逻辑，不碰真 MCP 进程池与真库）。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { McpToolInfo } from '../../src/main/mcp/types';
+import type { McpToolInfo, McpServerConfig } from '../../src/main/mcp/types';
 
 // vi.mock 工厂被提升到 import 之前，用 vi.hoisted 共享 handler 捕获槽与 send spy
 const captured = vi.hoisted(() => ({
   handler: null as ((msg: unknown) => void | Promise<void>) | null,
-  send: vi.fn() as unknown as (...args: unknown[]) => boolean,
+  send: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -37,12 +45,14 @@ vi.mock('node:child_process', () => ({
 vi.mock('../../src/main/mcp/host-manager', () => ({
   listMcpTools: vi.fn(),
   callMcpTool: vi.fn(),
+  getOrStartMcp: vi.fn(),
+  getMcpConfig: vi.fn(),
 }));
 vi.mock('../../src/main/audit/insert', () => ({ insertToolCall: vi.fn() }));
 vi.mock('../../src/main/audit/quota', () => ({ enforceAuditQuota: vi.fn() }));
 
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
-import { listMcpTools, callMcpTool } from '../../src/main/mcp/host-manager';
+import { listMcpTools, callMcpTool, getOrStartMcp, getMcpConfig } from '../../src/main/mcp/host-manager';
 import { insertToolCall } from '../../src/main/audit/insert';
 import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-config';
 
@@ -61,6 +71,14 @@ const runtimeConfig: AgentRuntimeOpts = {
 const SAMPLE_TOOLS: McpToolInfo[] = [
   { name: 'create_issue', description: '建 issue', inputSchema: { type: 'object' } },
 ];
+
+const MCP_CONFIG: McpServerConfig = {
+  id: 'mcp-1',
+  name: 'github',
+  version: '1.0.0',
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-github'],
+};
 
 /** spawn 一个 runtime 并返回捕获到的 message handler */
 async function spawnAndGetHandler(): Promise<(msg: unknown) => void | Promise<void>> {
@@ -83,9 +101,14 @@ function sentPayload(callIdx = 0): unknown {
 
 describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
   beforeEach(() => {
+    // mockReset 清调用 + 实现（clearAllMocks 只清调用，上一测试的
+    // mockRejectedValue 实现会泄漏到下一测试）；再设默认：MCP 已注册 + send 正常回写
     vi.clearAllMocks();
     vi.mocked(listMcpTools).mockReset();
     vi.mocked(callMcpTool).mockReset();
+    vi.mocked(getOrStartMcp).mockReset();
+    vi.mocked(getMcpConfig).mockReset().mockReturnValue(MCP_CONFIG);
+    captured.send.mockImplementation(() => true);
   });
 
   it('mcp:listTools 成功 → 回写恰为 { id, tools }（无 type 字段）', async () => {
@@ -119,6 +142,11 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
       title: 'bug',
       labels: ['p1'],
     });
+    // Fix 2：callTool 分支同样先惰性启动（防御 discovery 被跳过的路径）
+    expect(getOrStartMcp).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(callMcpTool).mock.invocationCallOrder[0],
+    );
     expect(sentPayload()).toStrictEqual({ id: 'req-3', result: 'issue #42 已创建' });
   });
 
@@ -186,5 +214,89 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
       args: {},
     });
     expect(onChunk).not.toHaveBeenCalled();
+  });
+});
+
+describe('runtime-spawner mcp 桥 fix round 1（死通道防御 / 池惰性填充 / 非错误收敛）', () => {
+  beforeEach(() => {
+    // 同上：mockReset 防实现泄漏
+    vi.clearAllMocks();
+    vi.mocked(listMcpTools).mockReset();
+    vi.mocked(callMcpTool).mockReset();
+    vi.mocked(getOrStartMcp).mockReset();
+    vi.mocked(getMcpConfig).mockReset().mockReturnValue(MCP_CONFIG);
+    captured.send.mockImplementation(() => true);
+  });
+
+  it('mcp:listTools 先 ensureMcpStarted（getMcpConfig → getOrStartMcp）再 listMcpTools（顺序锁定）', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(listMcpTools).mockResolvedValue(SAMPLE_TOOLS);
+    await handler({ type: 'mcp:listTools', id: 'fix-o1', workspaceId: 'ws-mcp', mcpName: 'github' });
+    expect(getMcpConfig).toHaveBeenCalledWith('github');
+    expect(getOrStartMcp).toHaveBeenCalledTimes(1);
+    expect(getOrStartMcp).toHaveBeenCalledWith('ws-mcp', MCP_CONFIG);
+    expect(listMcpTools).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(listMcpTools).mock.invocationCallOrder[0],
+    );
+    expect(sentPayload()).toStrictEqual({ id: 'fix-o1', tools: SAMPLE_TOOLS });
+  });
+
+  it('getOrStartMcp 拒绝 → { id, error } 且不调 listMcpTools', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(getOrStartMcp).mockRejectedValue(new Error('MCP server 连接失败'));
+    await handler({ type: 'mcp:listTools', id: 'fix-o2', workspaceId: 'ws-mcp', mcpName: 'github' });
+    expect(listMcpTools).not.toHaveBeenCalled();
+    expect(sentPayload()).toStrictEqual({ id: 'fix-o2', error: 'MCP server 连接失败' });
+  });
+
+  it('MCP 未注册（getMcpConfig 返回 null）→ { id, error } 且不起进程', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(getMcpConfig).mockReturnValue(null);
+    await handler({ type: 'mcp:listTools', id: 'fix-o3', workspaceId: 'ws-mcp', mcpName: 'nope' });
+    expect(getOrStartMcp).not.toHaveBeenCalled();
+    expect(listMcpTools).not.toHaveBeenCalled();
+    expect(sentPayload()).toStrictEqual({ id: 'fix-o3', error: 'MCP nope 未注册' });
+  });
+
+  it('死通道防御（catch 路径）：send 抛 ERR_IPC_CHANNEL_CLOSED 被吞，handler 正常 resolve', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(listMcpTools).mockRejectedValue(new Error('MCP github 未启动'));
+    captured.send.mockImplementation(() => {
+      throw new Error('ERR_IPC_CHANNEL_CLOSED');
+    });
+    await expect(
+      handler({ type: 'mcp:listTools', id: 'fix-d1', workspaceId: 'ws-mcp', mcpName: 'github' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('死通道防御（成功路径）：await 期间子进程死亡 → send 抛错同样被吞', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(listMcpTools).mockResolvedValue(SAMPLE_TOOLS);
+    captured.send.mockImplementation(() => {
+      throw new Error('ERR_IPC_CHANNEL_CLOSED');
+    });
+    await expect(
+      handler({ type: 'mcp:listTools', id: 'fix-d2', workspaceId: 'ws-mcp', mcpName: 'github' }),
+    ).resolves.toBeUndefined();
+    // callTool 分支同构竞态
+    vi.mocked(callMcpTool).mockResolvedValue('ok');
+    await expect(
+      handler({ type: 'mcp:callTool', id: 'fix-d3', workspaceId: 'ws-mcp', mcpName: 'github', toolName: 't', args: {} }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('非 Error 抛出物（string rejection）→ error 收敛为字符串而非 undefined', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(callMcpTool).mockRejectedValue('boom');
+    await handler({
+      type: 'mcp:callTool',
+      id: 'fix-n1',
+      workspaceId: 'ws-mcp',
+      mcpName: 'github',
+      toolName: 't',
+      args: {},
+    });
+    expect(sentPayload()).toStrictEqual({ id: 'fix-n1', error: 'boom' });
   });
 });

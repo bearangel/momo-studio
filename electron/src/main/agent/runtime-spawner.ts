@@ -20,7 +20,8 @@ import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
 import { insertToolCall } from '../audit/insert';
 import { enforceAuditQuota } from '../audit/quota';
-import { listMcpTools, callMcpTool } from '../mcp/host-manager';
+import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
+import type { McpToolInfo } from '../mcp/types';
 
 import type { AgentRuntimeOpts } from './runtime-config';
 
@@ -77,6 +78,33 @@ interface McpChildRequestMsg {
   args?: unknown;
 }
 
+/** mcp 桥回写响应的线协议形状（与子进程 mcp-bridge.ts 的配对解析对齐） */
+type McpBridgeResponse =
+  | { id: string; tools?: McpToolInfo[] }
+  | { id: string; result?: string }
+  | { id: string; error?: string };
+
+/**
+ * 收敛任意 throwable 为消息文本。string rejection 等非 Error 抛出物的
+ * `(err as Error).message` 是 undefined，子进程 `m.error !== undefined` 检查
+ * 会误判为成功空载荷——必须显式 String() 化（与 audit 分支的防御风格一致）。
+ */
+function throwableText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 惰性启动（或复用）workspace 进程池内的指定 MCP server。task-driven 路径没有
+ * v1 的 eager 预启动环节（池为空时 listMcpTools/callMcpTool 直接抛「未启动」），
+ * 响应 mcp 请求前先按 mcp_definitions 定义拉起；已在池中且连接存活时
+ * getOrStartMcp 是廉价 no-op。未注册 / 启动失败抛错，由调用分支回写 {id, error}。
+ */
+async function ensureMcpStarted(workspaceId: string, mcpName: string): Promise<void> {
+  const config = getMcpConfig(mcpName);
+  if (!config) throw new Error(`MCP ${mcpName} 未注册`);
+  await getOrStartMcp(workspaceId, config);
+}
+
 export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   const { assignmentId, runtimeConfig, onChunk, onExit } = opts;
 
@@ -91,6 +119,17 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     env,
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
   });
+
+  // 按线协议回写 MCP 响应。子进程可能已在 await 期间死亡（release kill / 中止
+  // 竞态）——通道关闭时 send 同步抛 ERR_IPC_CHANNEL_CLOSED；吞掉避免 async
+  // listener reject 成 unhandledRejection 崩溃主进程（响应本就无法送达）。
+  const sendMcpResponse = (payload: McpBridgeResponse): void => {
+    try {
+      child.send(payload);
+    } catch {
+      // 通道已关闭，无法回写
+    }
+  };
 
   // 注册 message handler（chunk 转发）。handler 为 async：仅 mcp 分支含 await，
   // handleChildMessage / audit 分支仍同步执行，优先语义与 T8 行为不变。
@@ -124,24 +163,28 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // 与 audit 分支同样容忍 IPC 类型漂移）。id 非字符串时无法配对，落入下方忽略。
     if (m.type === 'mcp:listTools' && typeof m.id === 'string') {
       try {
+        // 惰性填充进程池（task-driven 路径无预启动；已启动时为廉价 no-op）
+        await ensureMcpStarted(String(m.workspaceId), String(m.mcpName));
         const tools = await listMcpTools(String(m.workspaceId), String(m.mcpName));
-        child.send({ id: m.id, tools });
+        sendMcpResponse({ id: m.id, tools });
       } catch (err) {
-        child.send({ id: m.id, error: (err as Error).message });
+        sendMcpResponse({ id: m.id, error: throwableText(err) });
       }
       return;
     }
     if (m.type === 'mcp:callTool' && typeof m.id === 'string') {
       try {
+        // 同上：防御 discovery 被跳过时池为空的调用路径
+        await ensureMcpStarted(String(m.workspaceId), String(m.mcpName));
         const result = await callMcpTool(
           String(m.workspaceId),
           String(m.mcpName),
           String(m.toolName),
           (m.args as Record<string, unknown>) ?? {},
         );
-        child.send({ id: m.id, result });
+        sendMcpResponse({ id: m.id, result });
       } catch (err) {
-        child.send({ id: m.id, error: (err as Error).message });
+        sendMcpResponse({ id: m.id, error: throwableText(err) });
       }
       return;
     }
