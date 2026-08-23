@@ -1,7 +1,7 @@
 // electron/tests/integration/router-lazy-init.test.ts
 //
 // Task 5 集成测试（lazy init 端到端）：验证 RouterService lazy 启动链路在真实场景下
-// 能正确触发——空状态 → 第一个 runner 注册 → setRouterService 被调用。
+// 能正确触发——空状态 → 第一个 runner 注册 → setBridgeRouter 被调用。
 //
 // 这是 v2 修复（RouterService 从 startup-singleton 改为 lazy-singleton）的回归保护。
 // 原 bug：app 启动时若无 runner，RouterService 永远 null，sync-manager 静默丢弃所有
@@ -11,12 +11,12 @@
 // 三个场景覆盖两条触发路径：
 //   - 场景 1：initTaskDrivenRuntime（app 启动批量恢复路径）
 //   - 场景 2：startAgentRuntime（agent:start IPC 单 agent 启动路径）
-//   - 场景 3：批量注册幂等性（2 agents → setRouterService 仅 1 次）
+//   - 场景 3：批量注册幂等性（2 agents → setBridgeRouter 仅 1 次）
 //
 // Mock 策略：拦截 spawn / token / keychain / Matrix 注入侧（避免真 fork + 真 Matrix
 // 连接），保留 initTaskDrivenRuntime / ensureTaskDrivenRuntime / createTaskDrivenRuntime /
-// ensureRouterService 真实逻辑以验证 lazy 链路完整性。setRouterService 用 vi.fn 替换
-// 以便断言调用次数与入参形状。
+// ensureRouterService 真实逻辑以验证 lazy 链路完整性。setBridgeRouter（P1 Task 5 起
+// 的注入目标——内部事件桥）用 vi.fn 替换以便断言调用次数与入参形状。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -66,15 +66,15 @@ vi.mock('../../src/main/agent/runtime-spawner', () => ({
   }),
 }));
 
-// 4. sync-manager：setRouterService 用 vi.fn 替换以便断言（其余 export 保留真实）
+// 4. internal-event-bridge：setBridgeRouter 用 vi.fn 替换以便断言（其余 export 保留真实）
 //    用 vi.hoisted 声明 mock——vi.mock 工厂会被 vitest 提升到文件顶部，
 //    普通顶层 const 此时还未初始化（TDZ），vi.hoisted 保证 mock 与 factory 同步提升。
-const { setRouterServiceMock } = vi.hoisted(() => ({
-  setRouterServiceMock: vi.fn(),
+const { setBridgeRouterMock } = vi.hoisted(() => ({
+  setBridgeRouterMock: vi.fn(),
 }));
-vi.mock('../../src/main/matrix/sync-manager', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/main/matrix/sync-manager')>();
-  return { ...actual, setRouterService: setRouterServiceMock };
+vi.mock('../../src/main/agent/internal-event-bridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/agent/internal-event-bridge')>();
+  return { ...actual, setBridgeRouter: setBridgeRouterMock };
 });
 
 // ─── 静态 import（mock 已生效） ─────────────────────────────────────────────
@@ -101,7 +101,7 @@ beforeEach(() => {
   // 清模块级单例状态（与 beforeEach 一一对应，避免跨用例污染）
   __clearRuntimeRegistryForTest();
   __resetRouterServiceForTest();
-  setRouterServiceMock.mockClear();
+  setBridgeRouterMock.mockClear();
 });
 
 afterEach(() => {
@@ -185,10 +185,10 @@ function seedOnlineAssignment(
 // ─── 测试用例 ───────────────────────────────────────────────────────────────
 
 describe('RouterService lazy init 集成测试 (Task 5)', () => {
-  it('场景 1: 空状态 → initTaskDrivenRuntime 恢复 1 个 last_running=1 agent → setRouterService 被调用', async () => {
-    // 初始断言：注册表空 + setRouterService 未被调用
+  it('场景 1: 空状态 → initTaskDrivenRuntime 恢复 1 个 last_running=1 agent → setBridgeRouter 被调用', async () => {
+    // 初始断言：注册表空 + setBridgeRouter 未被调用
     expect(agentRunners.size).toBe(0);
-    expect(setRouterServiceMock).not.toHaveBeenCalled();
+    expect(setBridgeRouterMock).not.toHaveBeenCalled();
 
     // seed 完整链路：workspace + provider + def + assignment（均用 crud 助手）
     const ws = await createWorkspace(
@@ -208,22 +208,22 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(agentRunners.has(instanceId)).toBe(true);
     expect(agentRunners.size).toBe(1);
 
-    // 断言 2：setRouterService 被调用恰好 1 次
-    expect(setRouterServiceMock).toHaveBeenCalledTimes(1);
+    // 断言 2：setBridgeRouter 被调用恰好 1 次
+    expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：传入的是带 routeEvent 方法的对象（RouterService duck-type）
-    const svc = setRouterServiceMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0][0];
     expect(svc).toBeDefined();
     expect(typeof svc.routeEvent).toBe('function');
   });
 
-  it('场景 2: 空状态 → startAgentRuntime(taskDriven=true) 单 agent 启动 → setRouterService 被调用', async () => {
+  it('场景 2: 空状态 → startAgentRuntime(taskDriven=true) 单 agent 启动 → setBridgeRouter 被调用', async () => {
     // startAgentRuntime 是 agent:start IPC handler 路径
     const { startAgentRuntime } = await import('../../src/main/agent/runtime-registry');
 
     // 初始断言：注册表空
     expect(agentRunners.size).toBe(0);
-    expect(setRouterServiceMock).not.toHaveBeenCalled();
+    expect(setBridgeRouterMock).not.toHaveBeenCalled();
 
     // seed 一条 assignment 行（ensureTaskDrivenRuntime 内部 UPDATE last_running=1 需要此行存在）
     const ws = await createWorkspace(
@@ -259,18 +259,18 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     // 断言 1：runner 已注册
     expect(agentRunners.has(instanceId)).toBe(true);
 
-    // 断言 2：setRouterService 被调用（单 agent 路径同样触发 lazy init）
-    expect(setRouterServiceMock).toHaveBeenCalledTimes(1);
+    // 断言 2：setBridgeRouter 被调用（单 agent 路径同样触发 lazy init）
+    expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：传入 RouterService 实例（duck-type routeEvent）
-    const svc = setRouterServiceMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0][0];
     expect(typeof svc.routeEvent).toBe('function');
   });
 
-  it('场景 3: 批量 initTaskDrivenRuntime 注册 2 agents → setRouterService 仅调用 1 次（幂等）', async () => {
+  it('场景 3: 批量 initTaskDrivenRuntime 注册 2 agents → setBridgeRouter 仅调用 1 次（幂等）', async () => {
     // 初始断言
     expect(agentRunners.size).toBe(0);
-    expect(setRouterServiceMock).not.toHaveBeenCalled();
+    expect(setBridgeRouterMock).not.toHaveBeenCalled();
 
     // seed：1 个 workspace + 1 个 provider（两个 def 共用）+ 2 个 def + 2 个 assignment
     const ws = await createWorkspace(
@@ -293,12 +293,12 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     expect(agentRunners.has(idB)).toBe(true);
     expect(agentRunners.size).toBe(2);
 
-    // 断言 2（核心）：setRouterService 仅被调用 1 次——证明 ensureRouterService 幂等
+    // 断言 2（核心）：setBridgeRouter 仅被调用 1 次——证明 ensureRouterService 幂等
     // 这是 lazy init 修复的关键回归点：批量注册场景下 RouterService 不会被重复创建。
-    expect(setRouterServiceMock).toHaveBeenCalledTimes(1);
+    expect(setBridgeRouterMock).toHaveBeenCalledTimes(1);
 
     // 断言 3：首次调用传入的 runnerCount=2（dispatcher 持有 Map 引用，后续新增可见）
-    const svc = setRouterServiceMock.mock.calls[0][0];
+    const svc = setBridgeRouterMock.mock.calls[0][0];
     expect(typeof svc.routeEvent).toBe('function');
   });
 });

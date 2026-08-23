@@ -14,6 +14,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
+import { handleChildMessage } from './internal-event-bridge';
 
 // 复用 runtime-manager 的 AgentRuntimeOpts 类型（避免重复定义）
 import type { AgentRuntimeOpts } from './runtime-manager';
@@ -51,6 +52,8 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
 
   // 注册 message handler（chunk 转发）
   const messageHandler = (msg: unknown): void => {
+    // 内部事件（dispatch/task_reply/abort_dispatch）优先转给桥处理；已消费则不进 chunk 通道
+    if (handleChildMessage(msg)) return;
     if (typeof msg !== 'object' || msg === null) return;
     // StreamChunk 类型的消息转发给 onChunk
     const m = msg as { type?: string };

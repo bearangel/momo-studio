@@ -107,9 +107,10 @@ export async function initTaskDrivenRuntime(): Promise<void> {
 
   populateProviderBuckets();
 
-  // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + setRouterService）。
-  // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op。动态 import 避开
-  // router-bootstrap → sync-manager → ... → runtime-registry 顶层循环依赖。
+  // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + 注入）。
+  // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op（Task 5 起注入
+  // 目标为 internal-event-bridge 的 setBridgeRouter）。动态 import 避开
+  // router-bootstrap → router-service → runtime-registry 顶层循环依赖。
   const { ensureRouterService } = await import('./router-bootstrap');
   await ensureRouterService(agentRunners, providerBuckets);
   logger.info('initTaskDrivenRuntime 完成', { runnerCount: agentRunners.size });

@@ -12,8 +12,9 @@
 //   - MCP：工具定义启动时通过 IPC 向主进程发现（MCP Host 在主进程），调用时同样
 //     走 IPC（process.send ↔ child.on('message')），工具名格式 mcp:<server>:<tool>。
 //   - Dispatch：主 agent 为每个 sub agent 注册 dispatch:<slug> 工具，执行时发 dispatch
-//     消息到 team room 并等待 task_reply；sub agent 监听 dispatch 事件跑 chat loop 后
-//     回 task_reply。
+//     消息并等待 task_reply；sub agent 收到 dispatch 后跑 chat loop 再回 task_reply。
+//     （v2 P1 Task 5：task-driven 模式下 dispatch/abort_dispatch 经内部事件桥
+//     child IPC 直达主进程 RouterService，不再经 Matrix 传输；v1 fallback 仍走 Matrix。）
 //
 // chat loop 流程（runChatLoop）：
 //   1. 组装上下文（system prompt + 最近 10 条历史 + 当前消息）
@@ -61,6 +62,9 @@ import {
   buildAbortDispatchMessage,
   type DispatchContent,
 } from './dispatch';
+// v2（P1 Task 5）：内部事件桥——task-driven 模式的 dispatch/abort_dispatch 经 child IPC
+// 直达主进程 RouterService，取代 Matrix 自定义 event 传输
+import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
 // v2（B 子系统 Task B6）：decideResponse 提取到独立模块，新增 isDirectChat + hasCoordinator
 import { decideResponse } from './decide-response';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
@@ -353,6 +357,42 @@ async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
   traceEnabled = config.devMode;
 
+  // v2（task-driven 切换 T3 → P1 Task 5）：按 taskDriven 切换运行模式。
+  //   - true（默认）：不创建 Matrix client——入站经 task-config IPC，出站 dispatch/
+  //     abort_dispatch 经内部事件桥（child IPC → RouterService），最终消息由 chunk
+  //     路径落 SQLite（spec §4.1 ③）。
+  //   - false：v1 fallback，仍调 startClient + 注册 ClientEvent.Event handler
+  //     （保留旧路径用于回退测试，Task 13 整体删除）。
+  const isTaskDriven = config.taskDriven !== false;
+
+  if (isTaskDriven) {
+    const ctx = await buildRuntimeContext(config);
+    process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
+
+    // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})
+    // 注入 task 配置，runtime 收到后调 runTaskChatLoop 跑一次 chat loop 并退出。
+    // shutdown handler：runtime-spawner.stopRuntime 发此消息优雅退出。
+    const taskMessageListener = async (msg: unknown): Promise<void> => {
+      if (typeof msg !== 'object' || msg === null) return;
+      const m = msg as { type?: string };
+
+      if (m.type === 'task-config') {
+        try {
+          await runTaskChatLoop(msg as TaskConfig, config, ctx);
+        } catch (err) {
+          process.stderr.write(`task-config 处理失败: ${(err as Error).message}\n`);
+          process.exit(1);
+        }
+      } else if (m.type === 'shutdown') {
+        process.stdout.write('收到 shutdown 信号，退出 runtime\n');
+        process.exit(0);
+      }
+    };
+    process.on('message', taskMessageListener);
+    return;
+  }
+
+  // ─── v1 fallback 分支：以下 Matrix client 用法整段属于 v1，Task 13 删除 ───
   const client: MatrixClient = createClient({
     baseUrl: config.homeserverUrl,
     userId: config.botUserId,
@@ -393,41 +433,10 @@ async function main(): Promise<void> {
   // 在注册事件监听前完成，确保首条消息到达时工具已就绪。
   const ctx = await buildRuntimeContext(config);
 
-  // v2（task-driven 切换 T3）：按 taskDriven 切换运行模式。
-  //   - true（默认）：不监听 Matrix event，仅通过 task-config IPC 触发 chat loop。
-  //     Matrix client 仍用于发消息（sendFinalMessage / dispatch event / task_reply），只是不监听入站 event。
-  //   - false：v1 fallback，仍调 startClient + 注册 ClientEvent.Event handler（保留旧路径用于回退测试）。
-  const isTaskDriven = config.taskDriven !== false;
-
-  if (isTaskDriven) {
-    process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
-
-    // task-config IPC handler：主进程 AgentRunner.executeTask 通过 child.send({type:'task-config',...})
-    // 注入 task 配置，runtime 收到后调 runTaskChatLoop 跑一次 chat loop 并退出。
-    // shutdown handler：runtime-spawner.stopRuntime 发此消息优雅退出。
-    const taskMessageListener = async (msg: unknown): Promise<void> => {
-      if (typeof msg !== 'object' || msg === null) return;
-      const m = msg as { type?: string };
-
-      if (m.type === 'task-config') {
-        try {
-          await runTaskChatLoop(msg as TaskConfig, client, config, ctx);
-        } catch (err) {
-          process.stderr.write(`task-config 处理失败: ${(err as Error).message}\n`);
-          process.exit(1);
-        }
-      } else if (m.type === 'shutdown') {
-        process.stdout.write('收到 shutdown 信号，退出 runtime\n');
-        process.exit(0);
-      }
-    };
-    process.on('message', taskMessageListener);
-  } else {
-    process.stdout.write('Agent runtime 已启动（v1 模式，fallback）\n');
-    client.on(ClientEvent.Event, (event: MatrixEvent) => {
-      void handleEvent(client, event, config, ctx);
-    });
-  }
+  process.stdout.write('Agent runtime 已启动（v1 模式，fallback）\n');
+  client.on(ClientEvent.Event, (event: MatrixEvent) => {
+    void handleEvent(client, event, config, ctx);
+  });
 }
 
 /**
@@ -786,6 +795,10 @@ export interface RunChatLoopStats {
  * 完整 chat loop（v1.4 流式版）：组装上下文 → 循环调用 chatStream →
  * 逐 chunk 通过 process.send 推送到 renderer → 最终发送 m.room.message 持久化。
  *
+ * v2（P1 Task 5）：client 参数放宽为可空——task-driven 模式传 null，
+ * 最终消息与分段消息的 Matrix 发送全部跳过（SQLite 由 chunk 路径 routeChunkToBuffer
+ * 落盘），dispatch 走内部事件桥；v1 fallback 传真实 client，行为不变。
+ *
  * 返回值：最终文本（handleDispatch 据此构建 task_reply body）。
  * 副作用：发送流式 chunk + 最终 m.room.message（含 thinking / tool_calls 元数据）。
  *
@@ -794,7 +807,7 @@ export interface RunChatLoopStats {
  * 中断支持：监听 process('message') 的 abort 指令，触发 AbortController.abort()。
  */
 export async function runChatLoop(
-  client: MatrixClient,
+  client: MatrixClient | null,
   roomId: string,
   currentBody: string,
   config: RuntimeConfig,
@@ -1017,17 +1030,21 @@ export async function runChatLoop(
         const segText = summary || accumulatedText.trim() || '(空段)';
         // 分段持久化的 session id 加后缀，避免与最终消息冲突
         const segSessionId = `${streamSessionId}#seg${segmentCount}`;
-        try {
-          // A7：Matrix event 仅发 body（联网备份用）。thinking/tool_calls/segment 元数据
-          // 由 routeChunkToBuffer 落 SQLite message_events 表（A 子系统唯一真相源）。
-          await client.sendEvent(roomId, 'm.room.message', {
-            msgtype: 'm.text',
-            body: segText,
-            'io.momo-studio.stream_session_id': segSessionId,
-          }, '');
-        } catch (err) {
-          // 持久化失败不致命：LLM 仍能继续工作，只是这一段没存到 Matrix
-          console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
+        // v2（P1 Task 5）：task-driven 模式（client=null）跳过 Matrix 分段备份——
+        // 分段行由 segment_boundary chunk 经主进程 routeChunkToBuffer 落 SQLite
+        if (client) {
+          try {
+            // A7：Matrix event 仅发 body（联网备份用）。thinking/tool_calls/segment 元数据
+            // 由 routeChunkToBuffer 落 SQLite message_events 表（A 子系统唯一真相源）。
+            await client.sendEvent(roomId, 'm.room.message', {
+              msgtype: 'm.text',
+              body: segText,
+              'io.momo-studio.stream_session_id': segSessionId,
+            }, '');
+          } catch (err) {
+            // 持久化失败不致命：LLM 仍能继续工作，只是这一段没存到 Matrix
+            console.warn(`[task_complete] 分段持久化失败：${(err as Error).message}`);
+          }
         }
 
         // A7 fix：通知主进程为这段创建独立的 SQLite message row（segment_of/segment_index）。
@@ -1246,6 +1263,8 @@ export async function runChatLoop(
  *
  * 与 v1 路径（handleEvent → runChatLoop）的区别：
  *   - 输入源：TaskConfig IPC（取代 Matrix m.room.message / dispatch event）
+ *   - 无 Matrix client：出站 dispatch 经内部事件桥，最终消息由 chunk 路径落 SQLite
+ *     （v2 P1 Task 5）
  *   - streamSessionId：由 AgentRunner 预分配（cfg.streamSessionId），不再 randomUUID
  *   - 任务关联：cfg.taskId 注入 RuntimeConfig.currentTaskId → MemoryProvider.getTaskContext 拉 task 上下文
  *   - dispatch 嵌套：cfg.dispatchContext 设置时把 tool_stream_session_id 作为 parentStreamSessionId 传入
@@ -1284,7 +1303,6 @@ function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): voi
 
 export async function runTaskChatLoop(
   cfg: TaskConfig,
-  client: MatrixClient,
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
@@ -1313,7 +1331,9 @@ export async function runTaskChatLoop(
 
   try {
     await runChatLoop(
-      client,
+      // v2（P1 Task 5）：task-driven 模式无 Matrix client——chat loop 出站走
+      // 内部事件桥（dispatch）与 chunk 路径（最终消息 SQLite 落盘）
+      null,
       roomId,
       body,
       taskConfig,
@@ -1413,6 +1433,10 @@ const MAX_TASK_SEGMENTS = 5;
 /**
  * 发送最终 Matrix m.room.message（仅 body——联网备份用）。
  *
+ * v2（P1 Task 5）：client 为 null（task-driven 模式）时直接跳过——最终消息的
+ * 持久化由主进程 chunk 路径（routeChunkToBuffer → messages 表）承载，
+ * 子进程不再发 Matrix 消息（spec §4.1 ③）。
+ *
  * A7 改造：thinking / tool_calls / todos / dispatches / parent_stream_session_id 等
  * 富字段不再写入 Matrix event content（A 子系统改由 SQLite message_events 表承载，
  * routeChunkToBuffer 在主进程侧把 stream chunk 落盘）。Matrix event 退化为纯 body 备份，
@@ -1422,11 +1446,13 @@ const MAX_TASK_SEGMENTS = 5;
  * 当 dispatch 错误重试形成死循环。降级到截断 body 重发；仍失败则吞掉错误。
  */
 async function sendFinalMessage(
-  client: MatrixClient,
+  client: MatrixClient | null,
   roomId: string,
   streamSessionId: string,
   text: string,
 ): Promise<void> {
+  // task-driven 模式无 Matrix client——SQLite 已由 chunk 路径落盘，无需 Matrix 备份
+  if (!client) return;
   const content: Record<string, unknown> = {
     msgtype: 'm.text',
     body: text,
@@ -1525,7 +1551,7 @@ async function queryRoomInfo(
 async function executeTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
-  client: MatrixClient,
+  client: MatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
@@ -1563,7 +1589,7 @@ async function executeTool(
 export async function doExecuteTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
-  client: MatrixClient,
+  client: MatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
@@ -1650,13 +1676,17 @@ const pendingReplies = new Map<string, PendingReply>();
  * 主 agent 执行 dispatch：<slug> 工具——构建 dispatch 消息发到 team room，
  * 然后等待对应 task_id 的 task_reply（超时 DISPATCH_REPLY_TIMEOUT_MS）。
  *
+ * v2（P1 Task 5）：client 为 null（task-driven 模式）时 dispatch / abort_dispatch
+ * 经内部事件桥发送（child IPC → internal-event-bridge → RouterService.routeDispatch），
+ * 不再依赖 Matrix 传输；v1 fallback（client 非空）保留 Matrix sendEvent（Task 13 删除）。
+ *
  * 防竞态：必须先注册 pending 再发送消息。若先发送后注册，子 agent 极快回执时
  * task_reply 会在 pending.set 之前到达，handleTaskReply 找不到 pending 导致回执丢失。
  */
 export async function executeDispatch(
   subSlug: string,
   task: string,
-  client: MatrixClient,
+  client: MatrixClient | null,
   config: RuntimeConfig,
   toolBudget?: number,
   /** v1.4 嵌套：子 agent 流 session ID，写入 dispatch 消息供子 agent 关联 PM 气泡 */
@@ -1702,14 +1732,19 @@ export async function executeDispatch(
         }
         // v1.5.3：发 abort_dispatch event 兜底通知子 agent。
         // 子 agent 此时可能还没启动 + 注册到主进程 activeStreams，主进程的 abortStream 找不到它；
-        // Matrix event 持久化保证子 agent 后续启动时也能收到并终止。
+        // v1：Matrix event 持久化保证子 agent 后续启动时也能收到并终止。
+        // v2（P1 Task 5）：task-driven 模式经内部事件桥发 abort_dispatch。
         const abortEvt = buildAbortDispatchMessage({
           taskId: dispatch.content.task_id,
           subStreamSessionId: toolStreamSessionId,
         });
-        client.sendEvent(config.teamRoomId, abortEvt.eventType, abortEvt.content, '').catch(() => {
-          // Matrix 发送失败不影响 PM 本地的 abort 流程
-        });
+        if (client) {
+          client.sendEvent(config.teamRoomId, abortEvt.eventType, abortEvt.content, '').catch(() => {
+            // Matrix 发送失败不影响 PM 本地的 abort 流程
+          });
+        } else {
+          sendAbortDispatchEvent(config.teamRoomId, config.botUserId, abortEvt.content);
+        }
         const err = new Error('dispatch 被中断');
         err.name = 'AbortError';
         reject(err);
@@ -1719,7 +1754,14 @@ export async function executeDispatch(
     }
   });
 
-  await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
+  // v2（P1 Task 5）：dispatch 发送按模式分流——task-driven（无 client）经内部事件桥，
+  // sender 用 config.botUserId（子 agent 身份；Task 10 更名 agentUserId 后同步替换）。
+  // 展开 DispatchContent 为匿名对象类型以满足协议的 Record<string, unknown> 索引签名。
+  if (client) {
+    await client.sendEvent(config.teamRoomId, dispatch.eventType, dispatch.content, '');
+  } else {
+    sendDispatchEvent(config.teamRoomId, config.botUserId, { ...dispatch.content });
+  }
 
   return resultPromise;
 }

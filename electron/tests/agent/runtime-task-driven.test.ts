@@ -13,9 +13,11 @@
 //
 // runChatLoop 内部行为（LLM 调用 / 工具执行 / abort）由 runtime-stream.test.ts 覆盖；
 // 本测试只验证 runTaskChatLoop 的包装层 + IPC 契约。
+//
+// v2（P1 Task 5）：runTaskChatLoop 不再接收 Matrix client（task-driven 模式无 client，
+// dispatch 经内部事件桥、最终消息由 chunk 路径落盘），调用签名改为 (cfg, config, ctx)。
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -80,13 +82,6 @@ function mockProviderThrow(err: Error): void {
       throw err;
     }),
   });
-}
-
-function mockClient(): MatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as MatrixClient;
 }
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
@@ -216,7 +211,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ streamSessionId: 'my-fixed-session-id' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -236,7 +230,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-abc-123' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -255,7 +248,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: null }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -277,7 +269,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
           tool_budget: 5,
         },
       }),
-      mockClient(),
       makeConfig({ maxToolCalls: 99 }),
       makeContext(),
     );
@@ -304,7 +295,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
           tool_stream_session_id: 'pm-session-999',
         },
       }),
-      mockClient(),
       makeConfig({ botName: '子 agent', botAvatar: '🔧' }),
       makeContext(),
     );
@@ -328,7 +318,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-done-1', streamSessionId: 'sess-done' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -352,7 +341,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig({ taskId: 'task-fail', streamSessionId: 'sess-fail' }),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
@@ -386,7 +374,6 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runTaskChatLoop(
       makeTaskConfig(),
-      mockClient(),
       makeConfig(),
       makeContext(),
     );
