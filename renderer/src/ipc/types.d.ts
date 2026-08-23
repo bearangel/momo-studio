@@ -3,6 +3,7 @@ export interface SystemInfo {
   platform: string;
   arch: string;
   nodeVersion: string;
+  electronVersion: string;
   appVersion: string;
   userDataDir: string;
 }

@@ -17,6 +17,7 @@ const STUB_INFO: SystemInfo = {
   platform: 'darwin',
   arch: 'arm64',
   nodeVersion: 'v20.20.2',
+  electronVersion: 'v33.2.0',
   appVersion: '2.0.0-p2',
   userDataDir: '/Users/test/.momo-studio',
 };
@@ -32,12 +33,13 @@ describe('About', () => {
     expect(screen.getByText('加载中...')).toBeInTheDocument();
   });
 
-  it('加载完成后渲染应用版本/平台/架构/Node 版本四字段', async () => {
+  it('加载完成后渲染应用版本/平台/架构/Electron 版本/Node 版本五字段', async () => {
     getInfoMock.mockResolvedValue(STUB_INFO);
     render(<About />);
     await waitFor(() => expect(screen.getByText('2.0.0-p2')).toBeInTheDocument());
     expect(screen.getByText('darwin')).toBeInTheDocument();
     expect(screen.getByText('arm64')).toBeInTheDocument();
+    expect(screen.getByText('v33.2.0')).toBeInTheDocument();
     expect(screen.getByText('v20.20.2')).toBeInTheDocument();
   });
 

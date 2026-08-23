@@ -43,46 +43,54 @@ export function DefaultModelSettings() {
 
   // 一次性初始化：拉供应商 + 拉已保存字段 + 默认选首供应商首启用模型。
   // initDone flag 保证只跑一次（避免 providers 后续 store 更新重置 picks）。
+  // try/catch 包裹三处 IPC 副作用：loadProviders / settings.getGlobal / provider.listModels，
+  // 任一失败均暴露到 error 横幅，与 About 组件同模式；initDone 仍标记（避免一直重试，错误
+  // 由用户在面板上看到后手动重渲染触发重试——后续如需重试按钮可在此接入）。
   const [initDone, setInitDone] = useState(false);
   useEffect(() => {
     if (initDone) return;
     void (async () => {
-      await loadProviders();
-      const providersList = useProviderStore.getState().providers;
-      const g: GlobalSettings = await ipc.settings.getGlobal();
-      const savedRefs: PicksMap = {
-        defaultChatModel: g.defaultChatModel,
-        defaultMultimodalModel: g.defaultMultimodalModel,
-        defaultEmbeddingModel: g.defaultEmbeddingModel,
-        defaultRerankModel: g.defaultRerankModel,
-      };
-      // 收集需要预拉的 providerId：已保存字段 + 首供应商（用于默认选择）
-      const needList = new Set<string>();
-      for (const ref of Object.values(savedRefs)) {
-        if (ref) needList.add(ref.providerId);
-      }
-      const firstProvider = providersList[0];
-      if (firstProvider) needList.add(firstProvider.id);
-      const entries = await Promise.all(
-        Array.from(needList).map(async (pid) => [pid, await ipc.provider.listModels(pid)] as const),
-      );
-      const models = Object.fromEntries(entries) as ModelsMap;
-      setModelsByProvider(models);
-      // 派生初始 picks：已保存字段直接用；未配置字段用首供应商首启用模型
-      const next: PicksMap = {};
-      for (const card of CARDS) {
-        const saved = savedRefs[card.field];
-        if (saved) {
-          next[card.field] = saved;
-          continue;
+      try {
+        await loadProviders();
+        const providersList = useProviderStore.getState().providers;
+        const g: GlobalSettings = await ipc.settings.getGlobal();
+        const savedRefs: PicksMap = {
+          defaultChatModel: g.defaultChatModel,
+          defaultMultimodalModel: g.defaultMultimodalModel,
+          defaultEmbeddingModel: g.defaultEmbeddingModel,
+          defaultRerankModel: g.defaultRerankModel,
+        };
+        // 收集需要预拉的 providerId：已保存字段 + 首供应商（用于默认选择）
+        const needList = new Set<string>();
+        for (const ref of Object.values(savedRefs)) {
+          if (ref) needList.add(ref.providerId);
         }
-        if (!firstProvider) continue;
-        const firstPid = firstProvider.id;
-        const enabled = (models[firstPid] ?? []).filter((m) => m.enabled);
-        next[card.field] = { providerId: firstPid, modelId: enabled[0]?.modelId ?? '' };
+        const firstProvider = providersList[0];
+        if (firstProvider) needList.add(firstProvider.id);
+        const entries = await Promise.all(
+          Array.from(needList).map(async (pid) => [pid, await ipc.provider.listModels(pid)] as const),
+        );
+        const models = Object.fromEntries(entries) as ModelsMap;
+        setModelsByProvider(models);
+        // 派生初始 picks：已保存字段直接用；未配置字段用首供应商首启用模型
+        const next: PicksMap = {};
+        for (const card of CARDS) {
+          const saved = savedRefs[card.field];
+          if (saved) {
+            next[card.field] = saved;
+            continue;
+          }
+          if (!firstProvider) continue;
+          const firstPid = firstProvider.id;
+          const enabled = (models[firstPid] ?? []).filter((m) => m.enabled);
+          next[card.field] = { providerId: firstPid, modelId: enabled[0]?.modelId ?? '' };
+        }
+        setPicks(next);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setInitDone(true);
       }
-      setPicks(next);
-      setInitDone(true);
     })();
   }, [loadProviders, initDone]);
 

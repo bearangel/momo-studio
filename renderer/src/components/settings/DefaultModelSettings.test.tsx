@@ -186,8 +186,11 @@ describe('DefaultModelSettings', () => {
     await waitFor(() => expect(screen.getByText('会话模型')).toBeInTheDocument());
     fireEvent.click(screen.getAllByRole('button', { name: '清除' })[0] as HTMLElement);
     await waitFor(() => expect(updateGlobalMock).toHaveBeenCalled());
-    expect(updateGlobalMock).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultChatModel: undefined }),
-    );
+    // 锁「键存在且值为 undefined」——区分「真实清除」（键存在 + undefined → JSON 序列化丢弃该键）
+    // 与「键缺失 no-op」（`objectContaining` 也会匹配键缺失场景）。
+    const arg = updateGlobalMock.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(arg).toBeDefined();
+    expect('defaultChatModel' in (arg as Record<string, unknown>)).toBe(true);
+    expect((arg as Record<string, unknown>).defaultChatModel).toBeUndefined();
   });
 });
