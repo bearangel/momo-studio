@@ -17,7 +17,6 @@
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { createPlainRoom, inviteBotToRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient } from '../matrix/session';
-import { getWorkspace } from '../workspace/crud';
 import { logger } from '../logger';
 
 export interface StartTaskResult {
