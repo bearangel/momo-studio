@@ -117,16 +117,25 @@ const api: ApiSurface = {
       invoke<{ filename: string; content: string }>('im:exportRoomMessages', roomId, limit),
     onMessage: (callback) => {
       const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
+      // 兼容桥（Task 8）：主进程发送方已改名 session:message（session-service），
+      // 旧 im.store 仍经 im:message 订阅——桥接期内同时监听新旧通道，Task 9 切换
+      // session.store 后删除本桥。无发送方会同时发两个通道，不会重复触发。
       ipcRenderer.on('im:message', handler);
+      ipcRenderer.on('session:message', handler);
       return () => {
         ipcRenderer.off('im:message', handler);
+        ipcRenderer.off('session:message', handler);
       };
     },
     onMessageEventBatch: (callback) => {
       const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
+      // 兼容桥（Task 8）：stream-relay 批量推送已改名 session:message_event_batch，
+      // 桥接期内同时监听新旧通道；Task 9 切换 session.store 后删除本桥。
       ipcRenderer.on('im:message_event_batch', handler);
+      ipcRenderer.on('session:message_event_batch', handler);
       return () => {
         ipcRenderer.off('im:message_event_batch', handler);
+        ipcRenderer.off('session:message_event_batch', handler);
       };
     },
     onConflict: (callback) => {
@@ -147,6 +156,37 @@ const api: ApiSurface = {
     callTool: (workspaceId, mcpName, toolName, args) =>
       invoke('mcp:callTool', workspaceId, mcpName, toolName, args),
     stop: (workspaceId, mcpName) => invoke('mcp:stop', workspaceId, mcpName),
+  },
+  session: {
+    // v2.0 P1 Task 8：会话内核命名空间（纯 SQLite，无 Matrix）。
+    // invoke 通道 9 个（session.ipc.handlers.ts）+ 推送 2 个
+    // （session:message / session:message_event_batch）。
+    list: (workspaceId?: string) => invoke('session:list', workspaceId),
+    get: (sessionId: string) => invoke('session:get', sessionId),
+    create: (input) => invoke('session:create', input),
+    rename: (sessionId: string, title: string) => invoke('session:rename', sessionId, title),
+    delete: (sessionId: string) => invoke('session:delete', sessionId),
+    send: (sessionId: string, body: string, mentionedAssignmentIds?: string[]) =>
+      invoke('session:send', sessionId, body, mentionedAssignmentIds),
+    getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
+    loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
+      invoke('session:loadOlder', sessionId, beforeTs, count),
+    exportMessages: (sessionId: string, limit: number) =>
+      invoke<{ filename: string; content: string }>('session:exportMessages', sessionId, limit),
+    onMessage: (callback) => {
+      const handler = (_evt: IpcRendererEvent, msg: ImMessage): void => callback(msg);
+      ipcRenderer.on('session:message', handler);
+      return () => {
+        ipcRenderer.off('session:message', handler);
+      };
+    },
+    onMessageEventBatch: (callback) => {
+      const handler = (_e: IpcRendererEvent, batch: MessageEventBatch): void => callback(batch);
+      ipcRenderer.on('session:message_event_batch', handler);
+      return () => {
+        ipcRenderer.off('session:message_event_batch', handler);
+      };
+    },
   },
   allocation: {
     get: (workspaceId) => invoke('allocation:get', workspaceId),

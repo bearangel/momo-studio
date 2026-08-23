@@ -5,7 +5,7 @@
 // 职责（双通道）：
 //   1. relay：chunk → renderer（'agent:stream' 通道，主窗口注入）
 //   2. 落盘：chunk → MessageEventBuffer → messages / message_events 表，
-//      flush 时批量推送 'im:message_event_batch'（Task 8 改名 session:message_event_batch）
+//      flush 时批量推送 'session:message_event_batch'（Task 8 已从 im:message_event_batch 改名）
 //
 // 中断：abortStreamBySessionId(streamSessionId)——按 streamSessionId 精确中断
 // （替代 runtime-manager 按 roomId 索引的旧方案，修掉"同房中断限制"技术债）。
@@ -51,7 +51,7 @@ export function relayStreamChunk(chunk: StreamChunk): void {
 
 /**
  * 全局 MessageEventBuffer 单例。聚批 stream chunk 后单事务写入 message_events 表，
- * flush 时批量推送给 renderer（im:message_event_batch 通道）。
+ * flush 时批量推送给 renderer（session:message_event_batch 通道）。
  * 单例简化生命周期管理；内部 pending 数组操作同步，并发安全。
  */
 let eventBuffer: MessageEventBuffer | null = null;
@@ -64,7 +64,7 @@ export function getEventBuffer(): MessageEventBuffer {
         if (!BrowserWindow) return;
         const win = BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) return;
-        win.webContents.send('im:message_event_batch', events);
+        win.webContents.send('session:message_event_batch', events);
       },
     });
   }

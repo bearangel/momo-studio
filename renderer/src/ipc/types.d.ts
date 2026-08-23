@@ -655,8 +655,114 @@ export interface MessageEventRow {
   createdAt: number;
 }
 
-/** MessageEventRow[] 批量推送（IPC 通道 im:message_event_batch） */
+/** MessageEventRow[] 批量推送（IPC 通道 session:message_event_batch） */
 export type MessageEventBatch = MessageEventRow[];
+
+/**
+ * v2.0 P1 会话内核：会话类型。chat=普通会话；task_execution=任务执行会话。
+ * 与 electron 端 storage/sessions/repo.ts 的 SessionRow['kind'] 对齐。
+ */
+export type SessionKind = 'chat' | 'task_execution';
+
+/**
+ * v2.0 P1 会话内核：sessions 表行（renderer 镜像）。
+ * 与 electron 端 storage/sessions/repo.ts 的 SessionRow 对齐（跨进程独立定义，仅结构对齐）。
+ */
+export interface SessionRow {
+  id: string;
+  workspaceId: string;
+  title: string;
+  kind: SessionKind;
+  /** 会话级设置（maxToolCalls / conflictStrategy）的 JSON 序列化；null=未配置 */
+  settingsJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** 最后消息时间戳（会话列表排序键）；null=尚无消息 */
+  lastMessageAt: number | null;
+}
+
+/**
+ * v2.0 P1 会话内核：会话成员信息（三表 JOIN 产物）。
+ * 与 electron 端 im/session-ops.ts 的 SessionMemberInfo 对齐。
+ */
+export interface SessionMemberInfo {
+  assignmentId: string;
+  agentName: string;
+  iconEmoji: string;
+  role: AgentRole;
+  /** 用户最近运行意图（true=在线） */
+  lastRunning: boolean;
+  /** 该成员是否为会话所属 workspace 的协调 agent */
+  isCoordinator: boolean;
+}
+
+/**
+ * v2.0 P1 会话内核：会话列表项（含成员）。
+ * 与 electron 端 im/session-ops.ts 的 SessionSummary 对齐。
+ */
+export interface SessionSummary {
+  id: string;
+  workspaceId: string;
+  title: string;
+  kind: SessionKind;
+  lastMessageAt: number | null;
+  members: SessionMemberInfo[];
+}
+
+/**
+ * v2.0 P1 Task 8：session: 命名空间 IPC 契约（会话内核，纯 SQLite 无 Matrix）。
+ *
+ * invoke 通道 9 个（session.ipc.handlers.ts）：
+ *   list / get / create / rename / delete / send / getMessages / loadOlder / exportMessages
+ * 推送通道 2 个：
+ *   session:message             消息行实时推送（载荷 ImMessage）
+ *   session:message_event_batch 流式 events 批量推送（MessageEventBuffer flush）
+ */
+export interface SessionApiSurface {
+  /** 会话列表（含成员）。workspaceId 缺省 = 全部 workspace */
+  list(workspaceId?: string): Promise<SessionSummary[]>;
+  /** 单会话详情。会话不存在时 invoke 抛错 */
+  get(sessionId: string): Promise<{ session: SessionRow; members: SessionMemberInfo[] }>;
+  /** 创建会话（事务写入成员；FK 不合法整笔回滚） */
+  create(input: {
+    workspaceId: string;
+    title: string;
+    memberAssignmentIds?: string[];
+    kind?: SessionKind;
+  }): Promise<SessionRow>;
+  /** 重命名会话 */
+  rename(sessionId: string, title: string): Promise<{ ok: true }>;
+  /** 解散会话。团队会话（随 workspace 生命周期）时 invoke 抛错 */
+  delete(sessionId: string): Promise<{ ok: true }>;
+  /** 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent */
+  send(sessionId: string, body: string, mentionedAssignmentIds?: string[]): Promise<void>;
+  /**
+   * 历史读取：messages + 每条 message 的 events，
+   * renderer 用 stream-aggregator 重建 StreamState。
+   */
+  getMessages(
+    sessionId: string,
+  ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+  /**
+   * 向前翻页：返回 created_at < beforeTs 的消息。
+   * beforeTs 由调用方从当前可见消息的最小 createdAt 推导；count 默认 30。
+   */
+  loadOlder(
+    sessionId: string,
+    beforeTs: number,
+    count?: number,
+  ): Promise<{
+    messages: ImMessage[];
+    eventsByMessage: Record<string, MessageEventRow[]>;
+    hasMore: boolean;
+  }>;
+  /** 导出会话最近 limit 条消息为 Markdown。返回 { filename, content }，renderer 用 Blob 触发下载 */
+  exportMessages(sessionId: string, limit: number): Promise<{ filename: string; content: string }>;
+  /** 订阅消息行实时推送（session:message） */
+  onMessage(callback: (msg: ImMessage) => void): () => void;
+  /** 订阅流式 events 批量推送（session:message_event_batch，MessageEventBuffer flush 时触发） */
+  onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
+}
 
 export interface ApiSurface {
   auth: {
@@ -824,6 +930,12 @@ export interface ApiSurface {
       }) => void,
     ): () => void;
   };
+  /**
+   * v2.0 P1 Task 8：会话内核命名空间（session.ipc.handlers.ts）。
+   * 旧 im 命名空间的 onMessage/onMessageEventBatch 在桥接期内同时监听
+   * 新推送通道（session:message / session:message_event_batch），保证旧 UI 不失效。
+   */
+  session: SessionApiSurface;
   mcp: {
     /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
     register(config: McpServerConfig): Promise<void>;
