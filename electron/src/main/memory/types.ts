@@ -117,7 +117,7 @@ export interface MemoryProvider {
   getTaskContext(taskId: string): Promise<TaskContext | null>;
   /** 取房间最近对话（按 createdAt 升序返回，limit + beforeTs 实现分页） */
   getConversationContext(
-    roomId: string,
+    sessionId: string,
     opts?: { limit?: number; beforeTs?: number },
   ): Promise<ConversationContext>;
   /** 取 agent 学习偏好（v1 stub） */

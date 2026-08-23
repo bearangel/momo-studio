@@ -17,7 +17,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 
 vi.mock('../../src/main/matrix/rooms', () => ({
-  createRoomInSpace: vi.fn().mockResolvedValue('!new-room:home'),
+  createPlainRoom: vi.fn().mockResolvedValue('!new-room:home'),
   createMatrixSpace: vi.fn().mockResolvedValue('!new-space:home'),
   inviteBotToRoom: vi.fn().mockResolvedValue(undefined),
 }));
@@ -39,7 +39,7 @@ beforeEach(() => {
   runMigrations();
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
     )
     .run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
 });
@@ -88,7 +88,7 @@ describe('executeConflictResolution', () => {
     expect(result.action).toBe('preempt');
     expect(getTask(current.id)!.status).toBe('paused');
     expect(getTask(next.id)!.status).toBe('in_progress');
-    expect(getTask(next.id)!.executionRoomId).toBe('!room:home');
+    expect(getTask(next.id)!.executionSessionId).toBe('!room:home');
   });
 
   it('fork → newTask 在新会话启动（createdNewRoom）', async () => {
@@ -105,7 +105,7 @@ describe('executeConflictResolution', () => {
     expect(result.action).toBe('fork');
     expect(getTask(next.id)!.status).toBe('in_progress');
     // startTask(createNewRoom: true) → mock 返回 '!new-room:home'
-    expect(getTask(next.id)!.executionRoomId).toBe('!new-room:home');
+    expect(getTask(next.id)!.executionSessionId).toBe('!new-room:home');
   });
 
   it('reject → 无副作用', async () => {

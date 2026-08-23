@@ -28,7 +28,7 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
   getDb().prepare(
-    `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
   ).run('ws1', 'Test', '/tmp/ws1', '!space:home', '@owner:home');
 });
 
@@ -50,11 +50,11 @@ describe('SQLiteMemoryProvider', () => {
         creatorUserId: '@owner:home',
       });
       transitionTaskStatus(task.id, 'assigned');
-      transitionTaskStatus(task.id, 'in_progress', { executionRoomId: 'r1' });
+      transitionTaskStatus(task.id, 'in_progress', { executionSessionId: 'r1' });
 
       // task 执行过的事件：thinking_delta + tool_call_start + tool_call_result + final
       const msg = insertMessage({
-        roomId: 'r1',
+        sessionId: 'r1',
         sender: '@bot:home',
         eventType: 'm.room.message',
         body: '',
@@ -108,14 +108,14 @@ describe('SQLiteMemoryProvider', () => {
     it('返回最近 N 条消息（按时间升序，user 和 assistant 分开）', async () => {
       const t = Date.now();
       insertMessage({
-        roomId: 'r1',
+        sessionId: 'r1',
         sender: '@owner:home',
         eventType: 'm.room.message',
         body: 'hi',
         createdAt: t,
       });
       insertMessage({
-        roomId: 'r1',
+        sessionId: 'r1',
         sender: '@bot:home',
         eventType: 'm.room.message',
         body: 'hello',
@@ -133,7 +133,7 @@ describe('SQLiteMemoryProvider', () => {
       // 用 setTimeout 制造递增时间戳，再读全部找出 m2 时间戳作为 beforeTs 分页点。
       for (let i = 0; i < 5; i++) {
         insertMessage({
-          roomId: 'r1',
+          sessionId: 'r1',
           sender: '@owner:home',
           eventType: 'm.room.message',
           body: `m${i}`,

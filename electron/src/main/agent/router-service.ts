@@ -116,7 +116,7 @@ export class RouterService {
     const streamSessionId = randomUUID();
     const task: TaskConfig = {
       taskId: null,
-      executionRoomId: roomId,
+      executionSessionId: roomId,
       body,
       streamSessionId,
     };
@@ -168,7 +168,7 @@ export class RouterService {
     const streamSessionId = randomUUID();
     const task: TaskConfig = {
       taskId,
-      executionRoomId: event.getRoomId() ?? '',
+      executionSessionId: event.getRoomId() ?? '',
       body,
       streamSessionId,
       dispatchContext: {

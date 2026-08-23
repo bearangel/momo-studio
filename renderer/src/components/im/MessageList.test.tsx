@@ -57,7 +57,7 @@ import { MessageList } from './MessageList';
 /** 构造 ImMessage（默认普通 m.room.message）。v2.0 A 子系统：字段对齐 SQLite messages 表 row */
 function makeMsg(overrides: Partial<ImMessage> & { id: string }): ImMessage {
   return {
-    roomId: '!room:server',
+    sessionId: '!room:server',
     sender: '@bot:server',
     body: '',
     eventType: 'm.room.message',
@@ -67,7 +67,6 @@ function makeMsg(overrides: Partial<ImMessage> & { id: string }): ImMessage {
     segmentIndex: null,
     status: 'done',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: null,
     createdAt: 0,

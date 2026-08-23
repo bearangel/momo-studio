@@ -18,7 +18,7 @@ interface CreateTaskDialogProps {
   preset?: {
     title?: string;
     description?: string;
-    sourceRoomId?: string;
+    sourceSessionId?: string;
     sourceMessageId?: string;
     assigneeAgentId?: string;
   };
@@ -46,7 +46,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setDeadlineAt('');
     ipc.agent.listAssignments(workspaceId).then((list: AgentAssignment[]) => {
       setAssignments(
-        list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName ?? a.botMatrixUserId })),
+        list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName ?? a.agentUserId })),
       );
     });
   }, [open, preset, workspaceId]);
@@ -63,7 +63,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
         title: title.trim(),
         description,
         priority: priorityNum,
-        sourceRoomId: preset?.sourceRoomId ?? null,
+        sourceSessionId: preset?.sourceSessionId ?? null,
         sourceMessageId: preset?.sourceMessageId ?? null,
         assigneeAgentId,
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,

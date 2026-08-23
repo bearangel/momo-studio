@@ -6,7 +6,7 @@
 //
 // v2.0 A 子系统重写：
 //   - StreamState extends AggregatedStream（按字段渲染，不再按 events 时间线）
-//   - 加 message props：从 message 取 roomId/sender（stream 不再携带这些）
+//   - 加 message props：从 message 取 sessionId/sender（stream 不再携带这些）
 //   - stream.dispatches 替代旧 stream.dispatchChildren（AggregatedDispatch → DispatchChild 映射）
 //   - status 枚举改为 streaming/done/failed/aborted
 //   - subStream 查找留给 A9（streams Map 改 keyed by messageId，需 streamSessionId→messageId 反查）
@@ -161,7 +161,7 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
           <button
             type="button"
             onClick={() => {
-              void ipc.agent.abortStream(message.roomId);
+              void ipc.agent.abortStream(message.sessionId);
             }}
             style={{
               marginLeft: 'auto',

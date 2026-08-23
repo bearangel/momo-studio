@@ -12,7 +12,7 @@
 //   - startAgentRuntime(opts, taskDriven)：IPC handler 调用入口——taskDriven=true 走 WarmPool
 //     预热（含按需创建），taskDriven=false 走 v1 spawnAgent fallback
 //   - createTaskDrivenRuntime(opts)：为单个 assignment 创建 WarmPool + AgentRunner + 注册 + 预热
-//   - findAssignmentByBotUserId(botUserId)：按 bot_matrix_user_id 反查 instance_id（dispatch 路由用）
+//   - findAssignmentByBotUserId(botUserId)：按 agent_user_id 反查 instance_id（dispatch 路由用）
 //   - destroyAllTaskDrivenRuntimes()：进程退出时清理（before-quit 调用）
 
 import { logger } from '../logger';
@@ -176,7 +176,7 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
 }
 
 /**
- * 按 bot_matrix_user_id 反查 assignment 的 instance_id。
+ * 按 agent_user_id 反查 assignment 的 instance_id。
  * 用于 RouterService.routeDispatch：dispatch event 的 dispatch_to 是目标 agent 的 botUserId，
  * 需反查 assignmentId 才能从 runners Map 取到对应 AgentRunner。
  *
@@ -184,7 +184,7 @@ export function createTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
  */
 export function findAssignmentByBotUserId(botUserId: string): string | null {
   const row = getDb()
-    .prepare('SELECT instance_id FROM agent_assignments WHERE bot_matrix_user_id = ?')
+    .prepare('SELECT instance_id FROM agent_assignments WHERE agent_user_id = ?')
     .get(botUserId) as { instance_id: string } | undefined;
   return row?.instance_id ?? null;
 }

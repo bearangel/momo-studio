@@ -163,8 +163,8 @@ const api: ApiSurface = {
   settings: {
     getGlobal: () => invoke('settings:getGlobal'),
     updateGlobal: (patch) => invoke('settings:updateGlobal', patch),
-    getRoom: (roomId: string) => invoke('settings:getRoom', roomId),
-    updateRoom: (roomId: string, patch) => invoke('settings:updateRoom', roomId, patch),
+    getSession: (sessionId: string) => invoke('settings:getSession', sessionId),
+    updateSession: (sessionId: string, patch) => invoke('settings:updateSession', sessionId, patch),
   },
   skill: {
     // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
@@ -190,9 +190,9 @@ const api: ApiSurface = {
     get: (id) => invoke<TaskRow | null>('task:get', id),
     update: (id, patch) => invoke<void>('task:update', id, patch),
     transition: (id, to, extraPatch) => invoke<TaskRow>('task:transition', id, to, extraPatch),
-    // B8：execution_room 决策树 + 转 in_progress + 锁定 execution_room
+    // B8：execution_session 决策树 + 转 in_progress + 锁定 execution_session
     start: (id, opts) =>
-      invoke<{ executionRoomId: string; createdNewRoom: boolean }>('task:start', id, opts),
+      invoke<{ executionSessionId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),

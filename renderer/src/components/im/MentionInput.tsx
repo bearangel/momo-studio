@@ -70,7 +70,7 @@ export function MentionInput({
     const q = query.toLowerCase();
     return assignments.filter((a) => {
       if (!a.lastRunning) return false;
-      const name = a.agentName ?? a.botMatrixUserId;
+      const name = a.agentName ?? a.agentUserId;
       return !q || name.toLowerCase().includes(q);
     });
   }, [assignments, menuType, query]);
@@ -141,7 +141,7 @@ export function MentionInput({
       {menuType === 'agent' && filteredAgents.length > 0 && (
         <div style={menuStyle}>
           {filteredAgents.slice(0, 10).map((a) => {
-            const name = a.agentName ?? a.botMatrixUserId;
+            const name = a.agentName ?? a.agentUserId;
             return (
               <button
                 key={a.instanceId}

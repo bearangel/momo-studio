@@ -38,12 +38,12 @@ export async function executeConflictResolution(
   switch (resolution.action) {
     case 'preempt':
       transitionTaskStatus(ctx.currentTaskId, 'paused');
-      await startTask(ctx.newTaskId, { executionRoomId: ctx.currentRoomId });
+      await startTask(ctx.newTaskId, { executionSessionId: ctx.currentRoomId });
       return resolution;
 
     case 'fork':
-      // fork 忽略 resolver 返回的占位 newExecutionRoomId——startTask(createNewRoom:true)
-      // 会创建真实新会话，返回的 executionRoomId 才是最终值。
+      // fork 忽略 resolver 返回的占位 newExecutionSessionId——startTask(createNewRoom:true)
+      // 会创建真实新会话，返回的 executionSessionId 才是最终值。
       await startTask(ctx.newTaskId, { createNewRoom: true });
       return resolution;
 

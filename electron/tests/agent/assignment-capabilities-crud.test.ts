@@ -30,7 +30,7 @@ beforeEach(() => {
   const db = getDb();
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, description, directory_path, matrix_space_id, git_initialized, owner_id, icon_emoji)
+       (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run('ws1', 'WS', '', '/tmp', '!s:r', 0, '@owner:s', '📁');
   db.prepare(
@@ -40,7 +40,7 @@ beforeEach(() => {
   ).run('def1', 'A', 'a', '1', 'declarative', 'p', '[]', 'custom', 'm');
   db.prepare(
     `INSERT INTO agent_assignments
-       (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, role)
+       (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
      VALUES (?, ?, ?, ?, 1, 'standalone')`,
   ).run('inst1', 'ws1', 'def1', '@bot:s');
 });

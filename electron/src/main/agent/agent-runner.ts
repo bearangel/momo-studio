@@ -18,7 +18,7 @@ export interface TaskConfig {
   /** task 主键；null = ephemeral chat（非 task 调度的即时对话） */
   taskId: string | null;
   /** 执行房间 ID（agent 在此房间输出流式回复） */
-  executionRoomId: string;
+  executionSessionId: string;
   /** 用户输入的正文 */
   body: string;
   /** 流式会话 ID（贯穿 start→end chunk 的唯一标识） */
@@ -129,7 +129,7 @@ export class AgentRunner {
     child.send({
       type: 'task-config',
       taskId: task.taskId,
-      executionRoomId: task.executionRoomId,
+      executionSessionId: task.executionSessionId,
       body: task.body,
       streamSessionId: task.streamSessionId,
       mentions: task.mentions ?? [],

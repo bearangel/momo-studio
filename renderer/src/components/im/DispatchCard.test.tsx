@@ -12,7 +12,7 @@ import { DispatchCard } from './DispatchCard';
 function makeDispatch(overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id: 'd1',
-    roomId: '!team:local',
+    sessionId: '!team:local',
     sender: '@coordinator:local',
     body: '请实现登录页',
     eventType: 'io.momo-studio.dispatch',
@@ -22,7 +22,6 @@ function makeDispatch(overrides: Partial<ImMessage> = {}): ImMessage {
     segmentIndex: null,
     status: 'done',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: 'task-abc1234567',
     createdAt: 0,

@@ -35,7 +35,7 @@ const mockApi = {
 function mk(id: string, body: string, createdAt = 0): ImMessage {
   return {
     id,
-    roomId: '!r:localhost',
+    sessionId: '!r:localhost',
     sender: '@u:localhost',
     body,
     eventType: 'm.room.message',
@@ -45,7 +45,6 @@ function mk(id: string, body: string, createdAt = 0): ImMessage {
     segmentIndex: null,
     status: 'done',
     source: 'local',
-    matrixEventId: null,
     workspaceId: null,
     taskId: null,
     createdAt,

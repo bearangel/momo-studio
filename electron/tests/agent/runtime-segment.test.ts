@@ -40,7 +40,7 @@ import {
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
   getMessageByStreamSessionId,
-  listMessagesByRoom,
+  listMessagesBySession,
 } from '../../src/main/storage/messages/repo';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 
@@ -178,7 +178,7 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
     __flushEventBufferForTest();
 
     // 3. messages 表应有 2 行（父 + 分段）
-    const rows = listMessagesByRoom('!room:localhost');
+    const rows = listMessagesBySession('!room:localhost');
     expect(rows).toHaveLength(2);
 
     // 4. 分段 row 字段正确
@@ -189,7 +189,7 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
     expect(seg!.body).toBe('第一段内容');
     expect(seg!.status).toBe('done');
     expect(seg!.sender).toBe('@bot:localhost');
-    expect(seg!.roomId).toBe('!room:localhost');
+    expect(seg!.sessionId).toBe('!room:localhost');
   });
 
   it('多段分段：每段一条独立 row，segment_index 递增', () => {
@@ -218,7 +218,7 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
     });
     __flushEventBufferForTest();
 
-    const rows = listMessagesByRoom('!room:localhost');
+    const rows = listMessagesBySession('!room:localhost');
     // 父 + 2 段 = 3 行
     expect(rows).toHaveLength(3);
 
@@ -242,7 +242,7 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
     __flushEventBufferForTest();
 
     // 不应插入任何 row
-    const rows = listMessagesByRoom('!room:localhost');
+    const rows = listMessagesBySession('!room:localhost');
     expect(rows).toHaveLength(0);
   });
 

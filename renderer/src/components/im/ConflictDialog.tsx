@@ -42,7 +42,7 @@ export function ConflictDialog({
 
   const handleChoose = async (strategy: ResolvableStrategy): Promise<void> => {
     if (remember) {
-      await ipc.settings.updateRoom(currentRoomId, { conflictStrategy: strategy });
+      await ipc.settings.updateSession(currentRoomId, { conflictStrategy: strategy });
     }
     await ipc.task.resolveConflict({ newTaskId, currentTaskId, currentRoomId, strategy });
     onResolved(strategy);

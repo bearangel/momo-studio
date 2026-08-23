@@ -32,7 +32,7 @@ beforeEach(() => {
   runMigrations();
   // seed workspace（tasks 表有 FK 到 workspaces）
   getDb().prepare(
-    `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
   ).run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
 });
 
@@ -78,11 +78,11 @@ describe('tasks repo', () => {
     transitionTaskStatus(t.id, 'pending');
     transitionTaskStatus(t.id, 'assigned');
     const inProgress = transitionTaskStatus(t.id, 'in_progress', {
-      executionRoomId: 'r1',
+      executionSessionId: 'r1',
       startedAt: Date.now(),
     });
     expect(inProgress.status).toBe('in_progress');
-    expect(inProgress.executionRoomId).toBe('r1');
+    expect(inProgress.executionSessionId).toBe('r1');
     expect(inProgress.startedAt).toBeGreaterThan(0);
 
     const completed = transitionTaskStatus(t.id, 'completed', {

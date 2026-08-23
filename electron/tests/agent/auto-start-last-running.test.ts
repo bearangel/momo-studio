@@ -96,7 +96,7 @@ function insertAssignment(
   getDb()
     .prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role)
        VALUES (?, ?, ?, ?, ?, ?, 'standalone')`,
     )
     .run(instanceId, workspaceId, defId, botUserId, enabled, lastRunning);

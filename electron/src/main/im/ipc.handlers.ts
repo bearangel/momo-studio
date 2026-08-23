@@ -23,8 +23,7 @@ import { listAssignments, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
 import {
   insertMessage,
-  updateMessageMatrixEventId,
-  listMessagesByRoom,
+  listMessagesBySession,
   listOlderMessages,
   type MessageRow,
 } from '../storage/messages/repo';
@@ -65,7 +64,7 @@ export function registerImHandlers(): void {
 
   // A 子系统：从 SQLite 读 messages + 每条 message 的 events（替代旧 getRoomMessages）
   ipcMain.handle('im:getMessages', async (_evt, roomId: string) => {
-    const messages = listMessagesByRoom(roomId);
+    const messages = listMessagesBySession(roomId);
     const eventsByMessage: Record<string, MessageEventRow[]> = {};
     for (const m of messages) {
       eventsByMessage[m.id] = listEventsByMessage(m.id);
@@ -128,7 +127,7 @@ export function registerImHandlers(): void {
     'im:exportRoomMessages',
     async (_evt, roomId: string, limit: number): Promise<{ filename: string; content: string }> => {
       // 1. 从 SQLite 拉 limit 条消息
-      const rows = listMessagesByRoom(roomId, { limit });
+      const rows = listMessagesBySession(roomId, { limit });
 
       // 2. 反查 agent name：listAssignments 需要 workspaceId，所以遍历所有 workspace，
       //    收集全部 assignment，构造 botUserId → agentName 映射。
@@ -136,14 +135,14 @@ export function registerImHandlers(): void {
       for (const ws of listWorkspaces()) {
         for (const a of listAssignments(ws.id)) {
           const def = getAgentDefinition(a.agentDefinitionId);
-          if (def) botNameMap.set(a.botMatrixUserId, def.name);
+          if (def) botNameMap.set(a.agentUserId, def.name);
         }
       }
 
       // 3. MessageRow → ExportMessage 适配（content 暂为空对象，A9 补齐富字段）
       const exportMessages: ExportMessage[] = rows.map((m) => ({
-        eventId: m.matrixEventId ?? m.id,
-        roomId: m.roomId,
+        eventId: m.id,
+        roomId: m.sessionId,
         sender: m.sender,
         body: m.body,
         eventType: m.eventType,
@@ -200,18 +199,20 @@ async function sendUserMessage(
   if (!ownerUserId) throw new Error('未登录，无法发送消息');
 
   const msg = insertMessage({
-    roomId,
+    sessionId: roomId,
     sender: ownerUserId,
     eventType: 'm.room.message',
     body,
   });
   pushMessageRow(msg);
 
+  // v23 过渡：matrix_event_id 列已删除，Matrix 发送结果 event id 不再回写 SQLite。
   try {
-    const { eventId } = mentionedUserIds
-      ? await sendMessageWithMentions(roomId, body, mentionedUserIds)
-      : await sendMessage(roomId, body);
-    if (eventId) updateMessageMatrixEventId(msg.id, eventId);
+    if (mentionedUserIds) {
+      await sendMessageWithMentions(roomId, body, mentionedUserIds);
+    } else {
+      await sendMessage(roomId, body);
+    }
   } catch (err) {
     logger.warn('Matrix 发送失败，消息仅保留在本地 SQLite', { error: (err as Error).message });
   }
@@ -231,7 +232,7 @@ async function sendUserMessage(
   try {
     const conflict = detectConflict(roomId, body, {
       findInProgressTaskByRoom: (r) =>
-        listTasks({ executionRoomId: r, status: 'in_progress', limit: 1 })[0] ?? null,
+        listTasks({ executionSessionId: r, status: 'in_progress', limit: 1 })[0] ?? null,
       getTask,
     });
     if (conflict) {

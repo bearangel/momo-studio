@@ -14,7 +14,7 @@ interface Props {
   disabled: boolean;
   /** 当前 workspace ID（提供时渲染创建任务按钮） */
   workspaceId?: string;
-  /** 当前房间 ID（CreateTaskButton 的 sourceRoomId） */
+  /** 当前房间 ID（CreateTaskButton 的 sourceSessionId） */
   activeRoomId?: string;
 }
 
@@ -46,7 +46,7 @@ export function InputToolbar({
         <span>成员</span>
       </button>
       {workspaceId && activeRoomId && (
-        <CreateTaskButton workspaceId={workspaceId} sourceRoomId={activeRoomId} />
+        <CreateTaskButton workspaceId={workspaceId} sourceSessionId={activeRoomId} />
       )}
       {/* 预留扩展位：附件、表情等未来功能 */}
     </div>

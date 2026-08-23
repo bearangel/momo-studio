@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
     allReturn: [] as unknown[],
     // db.prepare().get 的返回（控制 SELECT row）
     getReturn: {
-      bot_matrix_user_id: '@bot:localhost',
+      agent_user_id: '@bot:localhost',
       workspace_id: 'ws-1',
       role: 'main',
       parent_instance_id: null,
@@ -124,7 +124,7 @@ beforeEach(() => {
   mocks.getSecretMock.mockResolvedValue('bot-token');
   mocks.allReturn = [];
   mocks.getReturn = {
-    bot_matrix_user_id: '@bot:localhost',
+    agent_user_id: '@bot:localhost',
     workspace_id: 'ws-1',
     role: 'main',
     parent_instance_id: null,
@@ -176,7 +176,7 @@ describe('removeAgentAssignment', () => {
 describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
   beforeEach(() => {
     mocks.getReturn = {
-      bot_matrix_user_id: '@sub-bot:localhost',
+      agent_user_id: '@sub-bot:localhost',
       workspace_id: 'ws-1',
       role: 'sub',
       parent_instance_id: 'main-inst-1',
@@ -188,7 +188,7 @@ describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
     mocks.listAssignmentsMock.mockReturnValue([{
       instanceId: 'main-inst-1',
       agentDefinitionId: 'def-main',
-      botMatrixUserId: '@main-bot:localhost',
+      agentUserId: '@main-bot:localhost',
       workspaceId: 'ws-1',
       role: 'main',
     }]);
@@ -213,7 +213,7 @@ describe('removeAgentAssignment: v1.5.8 sub 删除触发 main 重启', () => {
 
   it('删 main 不触发 main 重启（即使级联删 subs，subs 的 parent 已停）', async () => {
     mocks.getReturn = {
-      bot_matrix_user_id: '@main-bot:localhost',
+      agent_user_id: '@main-bot:localhost',
       workspace_id: 'ws-1',
       role: 'main',
       parent_instance_id: null,

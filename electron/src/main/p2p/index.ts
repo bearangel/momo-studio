@@ -101,7 +101,7 @@ export async function initP2p(): Promise<void> {
 export function handleRemoteMessage(msg: SyncMessage): void {
   try {
     const row = insertMessage({
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       sender: msg.sender,
       eventType: msg.eventType,
       body: msg.body,
@@ -113,7 +113,7 @@ export function handleRemoteMessage(msg: SyncMessage): void {
     }
   } catch (err) {
     logger.warn('P2P 入站消息写入失败', {
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -131,7 +131,7 @@ export async function broadcastLocalMessage(msg: SyncMessage): Promise<void> {
     await sync.broadcastNewMessage(msg);
   } catch (err) {
     logger.warn('P2P 出站广播失败', {
-      roomId: msg.roomId,
+      sessionId: msg.roomId,
       error: err instanceof Error ? err.message : String(err),
     });
   }

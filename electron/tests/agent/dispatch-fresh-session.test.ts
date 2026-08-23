@@ -231,7 +231,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       task: {
         id: 'task-001',
         workspaceId: 'ws-1',
-        executionRoomId: null,
+        executionSessionId: null,
         title: '实现登录页',
         description: '完成登录页 UI 与表单校验',
         status: 'in_progress',

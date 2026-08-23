@@ -23,9 +23,8 @@ export interface Workspace {
   name: string;
   description: string;
   directoryPath: string;
-  matrixSpaceId: string;
-  /** workspace 内"团队群" room ID（用户 + agent bot 交流房间），004 迁移引入 */
-  teamRoomId: string;
+  /** workspace 内"团队会话" ID（用户 + agent bot 交流会话），004 迁移引入；v23 更名 */
+  teamSessionId: string;
   gitInitialized: boolean;
   createdAt: string;
   ownerId: string;
@@ -70,7 +69,7 @@ export interface AgentAssignment {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
-  botMatrixUserId: string;
+  agentUserId: string;
   enabled: boolean;
   createdAt: string;
   /** 角色（在 assignment 级而非 definition 级） */
@@ -81,7 +80,7 @@ export interface AgentAssignment {
   hasApiKeyOverride: boolean;
   /**
    * UI 展示用的 agent 名称（可选，由 main process 在 listAssignments 时 join 注入）。
-   * 缺失时回退到 botMatrixUserId。Mention 菜单 / TaskChip 优先用此字段。
+   * 缺失时回退到 agentUserId。Mention 菜单 / TaskChip 优先用此字段。
    */
   agentName?: string;
   /** v2 修复：用户最近运行意图（true=在线/false=离线）。
@@ -124,10 +123,10 @@ export interface TaskRow {
   title: string;
   description: string;
   status: TaskStatus;
-  sourceRoomId: string | null;
+  sourceSessionId: string | null;
   sourceMessageId: string | null;
   creatorUserId: string;
-  executionRoomId: string | null;
+  executionSessionId: string | null;
   assigneeAgentId: string | null;
   priority: number;
   scheduledAt: number | null;
@@ -167,7 +166,7 @@ export interface TaskApiSurface {
     title: string;
     description?: string;
     priority?: number;
-    sourceRoomId?: string | null;
+    sourceSessionId?: string | null;
     sourceMessageId?: string | null;
     assigneeAgentId?: string | null;
     scheduledAt?: number | null;
@@ -177,8 +176,8 @@ export interface TaskApiSurface {
     workspaceId?: string;
     status?: TaskStatus | TaskStatus[];
     assigneeAgentId?: string;
-    executionRoomId?: string;
-    sourceRoomId?: string;
+    executionSessionId?: string;
+    sourceSessionId?: string;
     orderBy?: 'priority' | 'scheduled_at' | 'created_at';
     limit?: number;
   }): Promise<TaskRow[]>;
@@ -189,9 +188,9 @@ export interface TaskApiSurface {
     to: TaskStatus,
     extraPatch?: Partial<Omit<TaskRow, 'id' | 'createdAt'>>,
   ): Promise<TaskRow>;
-  /** B8 实现：拉起 execution room + transition 到 in_progress */
-  start(id: string, opts: { executionRoomId?: string; createNewRoom?: boolean }): Promise<{
-    executionRoomId: string;
+  /** B8 实现：拉起 execution session + transition 到 in_progress */
+  start(id: string, opts: { executionSessionId?: string; createNewRoom?: boolean }): Promise<{
+    executionSessionId: string;
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
@@ -204,7 +203,7 @@ export interface TaskApiSurface {
   }): Promise<
     | { action: 'queue'; newTaskId: string }
     | { action: 'preempt'; newTaskId: string; pausedTaskId: string }
-    | { action: 'fork'; newTaskId: string; newExecutionRoomId: string }
+    | { action: 'fork'; newTaskId: string; newExecutionSessionId: string }
     | { action: 'reject'; reason: string }
     | { action: 'ask' }
   >;
@@ -251,7 +250,7 @@ export interface AssignMainInput {
  */
 export interface ImMessage {
   id: string; // SQLite messages.id（UUID）
-  roomId: string;
+  sessionId: string;
   sender: string;
   body: string;
   eventType: string;
@@ -261,7 +260,6 @@ export interface ImMessage {
   segmentIndex: number | null;
   status: 'streaming' | 'done' | 'failed' | 'aborted';
   source: 'local' | 'lan' | 'hub' | 'matrix';
-  matrixEventId: string | null;
   workspaceId: string | null;
   taskId: string | null;
   createdAt: number;
@@ -435,8 +433,8 @@ export interface GlobalSettings {
   maxToolCalls: number;
 }
 
-/** 房间级会话配置（v1.4 + B9），与 electron 端 RoomSettings 对齐 */
-export interface RoomSettings {
+/** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
+export interface SessionSettings {
   /** NULL=继承全局 */
   maxToolCalls: number | null;
   /** 任务冲突策略（migration v19 加列，默认 'ask'） */
@@ -867,10 +865,10 @@ export interface ApiSurface {
     getGlobal(): Promise<GlobalSettings>;
     /** 部分更新全局配置，返回更新后的完整配置 */
     updateGlobal(patch: Partial<GlobalSettings>): Promise<GlobalSettings>;
-    /** 读取房间级配置（不存在返回 null 字段） */
-    getRoom(roomId: string): Promise<RoomSettings>;
-    /** 部分更新房间级配置，返回更新后的完整配置 */
-    updateRoom(roomId: string, patch: Partial<RoomSettings>): Promise<RoomSettings>;
+    /** 读取会话级配置（不存在返回 null 字段） */
+    getSession(sessionId: string): Promise<SessionSettings>;
+    /** 部分更新会话级配置，返回更新后的完整配置 */
+    updateSession(sessionId: string, patch: Partial<SessionSettings>): Promise<SessionSettings>;
   };
   skill: {
     /**

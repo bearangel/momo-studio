@@ -31,9 +31,9 @@ describe('room-ops isProtectedRoom', () => {
     expect(isProtectedRoom('!random:localhost')).toBe(false);
   });
 
-  it('匹配某 workspace team_room_id 的房间受保护', () => {
+  it('匹配某 workspace team_session_id 的房间受保护', () => {
     vi.mocked(listWorkspaces).mockReturnValue([
-      { id: 'w1', teamRoomId: '!team:localhost' } as never,
+      { id: 'w1', teamSessionId: '!team:localhost' } as never,
     ]);
     expect(isProtectedRoom('!team:localhost')).toBe(true);
   });

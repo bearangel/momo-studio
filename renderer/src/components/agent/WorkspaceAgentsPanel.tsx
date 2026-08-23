@@ -59,8 +59,8 @@ export function WorkspaceAgentsPanel() {
   };
 
   const handleStart = (a: AgentAssignment): void => {
-    if (!workspace?.teamRoomId) return;
-    void startAgent(a, workspace.id, workspace.teamRoomId);
+    if (!workspace?.teamSessionId) return;
+    void startAgent(a, workspace.id, workspace.teamSessionId);
   };
 
   const handleStop = (a: AgentAssignment): void => {
@@ -189,7 +189,7 @@ function Section({ title, titleClass, children }: {
 interface RowProps {
   a: AgentAssignment;
   defMap: Map<string, { name: string; iconEmoji: string }>;
-  workspace?: { id: string; teamRoomId: string; coordinatorInstanceId: string | null } | null;
+  workspace?: { id: string; teamSessionId: string; coordinatorInstanceId: string | null } | null;
   setCoordinator?: (wsId: string, instanceId: string) => Promise<void>;
   onStart?: (a: AgentAssignment) => void;
   onStop?: (a: AgentAssignment) => void;

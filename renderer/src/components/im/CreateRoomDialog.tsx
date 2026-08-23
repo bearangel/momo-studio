@@ -69,7 +69,7 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
       // 房间已创建成功，settings 写入失败不应阻断流程（房间客观存在）。
       if (maxToolCalls !== null) {
         try {
-          await ipc.settings.updateRoom(roomId, { maxToolCalls });
+          await ipc.settings.updateSession(roomId, { maxToolCalls });
         } catch {
           // settings 写入失败仅告警，不阻断房间创建流程
         }

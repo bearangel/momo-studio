@@ -60,7 +60,7 @@ function seedWorkspaceAndDef(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, directory_path, matrix_space_id, team_room_id, git_initialized, owner_id)
+       (id, name, directory_path, team_session_id, team_session_id, git_initialized, owner_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(wsId, 'WS', '/tmp', '!s:r', '!t:r', 0, '@owner:s');
   db.prepare(
@@ -175,7 +175,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     // 必须先建 assignment 行（agent_assignment_capabilities 的 FK 依赖）
     db.prepare(
       `INSERT INTO agent_assignments
-         (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, role)
+         (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
        VALUES (?, ?, ?, ?, 1, 'standalone')`,
     ).run('inst1', 'ws1', 'def1', '@bot:s');
     // Layer 3 delta：移除 bash

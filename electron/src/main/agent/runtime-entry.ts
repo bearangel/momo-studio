@@ -130,7 +130,7 @@ export interface RuntimeConfig {
  * 由主进程 AgentRunner.executeTask 通过 child.send({ type: 'task-config', ... }) 注入，
  * runtime 收到后调用 runTaskChatLoop 启动 chat loop。
  *
- * 与 agent-runner.ts 的 TaskConfig 字段保持兼容（taskId / executionRoomId / body /
+ * 与 agent-runner.ts 的 TaskConfig 字段保持兼容（taskId / executionSessionId / body /
  * streamSessionId / mentions），额外加 dispatchContext 承载 PM dispatch 时的父 agent 上下文。
  */
 export interface TaskConfig {
@@ -138,7 +138,7 @@ export interface TaskConfig {
   /** task 主键；null = ephemeral chat（非 task 调度的即时对话） */
   taskId: string | null;
   /** 执行房间 ID（agent 在此房间输出流式回复 + 持久化最终 m.room.message） */
-  executionRoomId: string;
+  executionSessionId: string;
   /** 用户输入的正文（替代 v1 的 Matrix event body） */
   body: string;
   /** 流式会话 ID（贯穿 start→end chunk 的唯一标识；由 AgentRunner 分配，不在此处 randomUUID） */
@@ -1252,7 +1252,7 @@ export async function runChatLoop(
  *   - 生命周期：单 task 完成后立即 process.exit(0)（runtime 不再常驻）
  *
  * 主进程 → runtime IPC 契约：
- *   - 入：{ type: 'task-config', taskId, executionRoomId, body, streamSessionId, mentions?, dispatchContext? }
+ *   - 入：{ type: 'task-config', taskId, executionSessionId, body, streamSessionId, mentions?, dispatchContext? }
  *   - 出：{ type: 'task-end', streamSessionId, taskId }（task 完成或 abort 后发）
  *   - chunk 流：复用 v1 的 sendStreamChunk（start/thinking/text/tool_call/tool_result/end）
  *
@@ -1288,7 +1288,7 @@ export async function runTaskChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
-  const { taskId, executionRoomId: roomId, body, streamSessionId, dispatchContext } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）

@@ -49,7 +49,7 @@ const mkMsg = (
   ts: number,
 ): ImMessage => ({
   id,
-  roomId: 'r1',
+  sessionId: 'r1',
   sender: '@bot:localhost',
   body: `msg-${id}`,
   eventType: 'm.room.message',
@@ -59,7 +59,6 @@ const mkMsg = (
   segmentIndex,
   status: 'done',
   source: 'local',
-  matrixEventId: null,
   workspaceId: null,
   taskId: null,
   createdAt: ts,

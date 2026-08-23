@@ -4,10 +4,10 @@
 //   1. open=false 时不渲染
 //   2. open=true 时渲染 4 个选项按钮（排队/抢占/分流/取消）+ 任务 id 文案
 //   3. 点击"排队"按钮 → 调 ipc.task.resolveConflict({strategy:'queue'}) + onResolved('queue') + onClose
-//   4. 勾选"本会话记住" → 提交时额外调 ipc.settings.updateRoom 写 conflictStrategy
+//   4. 勾选"本会话记住" → 提交时额外调 ipc.settings.updateSession 写 conflictStrategy
 //   5. 点击 overlay（蒙层）关闭弹窗
 //
-// Mock 策略：mock ../../ipc/client，让 ipc.task.resolveConflict / ipc.settings.updateRoom
+// Mock 策略：mock ../../ipc/client，让 ipc.task.resolveConflict / ipc.settings.updateSession
 // 都是 vi.fn() 以断言调用参数。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -21,7 +21,7 @@ const { mockResolveConflict, mockUpdateRoom } = vi.hoisted(() => ({
 vi.mock('../../../src/ipc/client', () => ({
   ipc: {
     task: { resolveConflict: mockResolveConflict },
-    settings: { updateRoom: mockUpdateRoom },
+    settings: { updateSession: mockUpdateRoom },
   },
 }));
 
@@ -93,7 +93,7 @@ describe('ConflictDialog', () => {
     });
   });
 
-  it('勾选"本会话记住" → 提交时额外调 ipc.settings.updateRoom', async () => {
+  it('勾选"本会话记住" → 提交时额外调 ipc.settings.updateSession', async () => {
     render(
       <ConflictDialog
         open={true}
@@ -110,7 +110,7 @@ describe('ConflictDialog', () => {
     // 提交"抢占"
     fireEvent.click(screen.getByRole('button', { name: /抢占/ }));
     await waitFor(() => {
-      // settings.updateRoom 应被调用，patch 包含 conflictStrategy: 'preempt'
+      // settings.updateSession 应被调用，patch 包含 conflictStrategy: 'preempt'
       expect(mockUpdateRoom).toHaveBeenCalledWith('!room:home', { conflictStrategy: 'preempt' });
       expect(mockResolveConflict).toHaveBeenCalled();
     });

@@ -24,6 +24,22 @@ export async function createMatrixSpace(
   return roomId;
 }
 
+/** 创建普通 room（不挂 Space）。v23 过渡：matrix_space_id 列已删除，room 不再挂 Space。 */
+export async function createPlainRoom(
+  client: MatrixClient,
+  name: string,
+): Promise<string> {
+  const response: unknown = await client.createRoom({
+    name,
+    preset: Preset.PrivateChat,
+    visibility: Visibility.Private,
+    invite: [],
+  });
+  const roomId = (response as { room_id: string }).room_id;
+  logger.info('Room 已创建', { name, roomId });
+  return roomId;
+}
+
 /** 创建普通 room 并加入指定 Space */
 export async function createRoomInSpace(
   client: MatrixClient,

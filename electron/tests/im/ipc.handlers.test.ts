@@ -29,13 +29,12 @@ const { ipcHandlers, roomOpsMocks, repoMocks } = vi.hoisted(() => {
         segmentIndex: null,
         status: 'done',
         source: 'local',
-        matrixEventId: null,
+
         workspaceId: null,
         taskId: null,
         createdAt: 1,
         updatedAt: 1,
       })),
-      updateMessageMatrixEventId: vi.fn(() => undefined),
       listMessagesByRoom: vi.fn(() => []),
       listOlderMessages: vi.fn(() => []),
     },
@@ -140,7 +139,7 @@ describe('im:getMembers handler', () => {
 });
 
 describe('im:send handler（A final fix C1：用户消息写 SQLite）', () => {
-  it('INSERT SQLite（source=local）+ 发 Matrix + 回填 matrix_event_id', async () => {
+  it('INSERT SQLite（source=local）+ 发 Matrix（v23：event id 不再回填）', async () => {
     const { sendMessage } = await import('../../src/main/matrix/sync-manager');
     await ipcHandlers.get('im:send')!({} as never, '!r:localhost', '你好');
 
@@ -148,7 +147,7 @@ describe('im:send handler（A final fix C1：用户消息写 SQLite）', () => {
     expect(repoMocks.insertMessage).toHaveBeenCalledTimes(1);
     expect(repoMocks.insertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        roomId: '!r:localhost',
+        sessionId: '!r:localhost',
         sender: '@owner:home',
         eventType: 'm.room.message',
         body: '你好',
@@ -156,8 +155,6 @@ describe('im:send handler（A final fix C1：用户消息写 SQLite）', () => {
     );
     // 2. 发 Matrix
     expect(sendMessage).toHaveBeenCalledWith('!r:localhost', '你好');
-    // 3. 回填 matrix_event_id（sendMessage mock 返回 $evt:home）
-    expect(repoMocks.updateMessageMatrixEventId).toHaveBeenCalledWith('msg-uuid', '$evt:home');
   });
 
   it('Matrix 发送失败时消息仍保留在 SQLite（本地优先，仅 warn）', async () => {
@@ -166,7 +163,5 @@ describe('im:send handler（A final fix C1：用户消息写 SQLite）', () => {
     await ipcHandlers.get('im:send')!({} as never, '!r:localhost', '离线消息');
 
     expect(repoMocks.insertMessage).toHaveBeenCalled();
-    // 失败时不回填
-    expect(repoMocks.updateMessageMatrixEventId).not.toHaveBeenCalled();
   });
 });

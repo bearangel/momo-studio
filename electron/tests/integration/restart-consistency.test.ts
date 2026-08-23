@@ -20,8 +20,7 @@ import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
   insertMessage,
   getMessageByStreamSessionId,
-  getMessageByMatrixEventId,
-  listMessagesByRoom,
+  listMessagesBySession,
 } from '../../src/main/storage/messages/repo';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { MessageEventBuffer } from '../../src/main/storage/messages/event-buffer';
@@ -46,7 +45,7 @@ describe('A 子系统：重启一致性', () => {
   it('模拟 agent 完整回复：实时聚合 == 重启聚合', () => {
     // 1. 启动 message + buffer（onFlush 收集实时推送的 events）
     const msg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -112,7 +111,7 @@ describe('A 子系统：重启一致性', () => {
   it('模拟 dispatch 嵌套：父子 agent 各自的 message 独立但可关联', () => {
     // PM message（父）
     const pmMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@pm:home',
       eventType: 'm.room.message',
       body: '',
@@ -121,7 +120,7 @@ describe('A 子系统：重启一致性', () => {
     });
     // 子 agent message（通过 parentStreamSessionId 关联到 PM）
     const subMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@prog:home',
       eventType: 'm.room.message',
       body: '',
@@ -183,7 +182,7 @@ describe('A 子系统：重启一致性', () => {
     const segMsgIds: string[] = [];
     for (let i = 0; i < 3; i++) {
       const m = insertMessage({
-        roomId: 'r1',
+        sessionId: 'r1',
         sender: '@bot:home',
         eventType: 'm.room.message',
         body: `第${i + 1}段`,
@@ -236,7 +235,7 @@ describe('A 子系统：重启一致性', () => {
 
   it('复杂场景：1000 个 text_delta + 50 个 tool_call 并发不丢数据', () => {
     const msg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -289,7 +288,7 @@ describe('A 子系统：用户消息 + dispatch/task_reply 写路径（C1+I1 回
   it('用户消息 + agent 回复混合：重启后顺序与内容一致', () => {
     // 1. 用户消息（模拟 im:send 写路径，source='local'）
     const userMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@owner:home',
       eventType: 'm.room.message',
       body: '@PM 帮我写登录页',
@@ -297,7 +296,7 @@ describe('A 子系统：用户消息 + dispatch/task_reply 写路径（C1+I1 回
     });
     // 2. agent 回复（routeChunkToBuffer 写路径，streaming）
     const agentMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -311,7 +310,7 @@ describe('A 子系统：用户消息 + dispatch/task_reply 写路径（C1+I1 回
     buf.destroy();
 
     // 3. 重启聚合：从 SQLite 读 messages 按时间序
-    const messages = listMessagesByRoom('r1');
+    const messages = listMessagesBySession('r1');
     expect(messages.length).toBe(2);
     // 用户消息先（created_at 更小），agent 回复后
     expect(messages[0]!.sender).toBe('@owner:home');
@@ -326,29 +325,26 @@ describe('A 子系统：用户消息 + dispatch/task_reply 写路径（C1+I1 回
 
   it('dispatch + task_reply 持久化到 SQLite（经 Matrix 路由的消息可重启还原）', () => {
     // 模拟 sync-manager 监听 Matrix event 后的 INSERT（source='matrix'）
+    // v23：matrix_event_id 列已删除，Matrix 来源仅由 source='matrix' 标识
     const dispatchMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@pm:home',
       eventType: 'io.momo-studio.dispatch',
       body: '写登录页',
-      matrixEventId: '$evt-dispatch:home',
       source: 'matrix',
     });
     const replyMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@prog:home',
       eventType: 'io.momo-studio.task_reply',
       body: '完成',
-      matrixEventId: '$evt-reply:home',
       source: 'matrix',
     });
 
-    const messages = listMessagesByRoom('r1');
+    const messages = listMessagesBySession('r1');
     expect(messages.length).toBe(2);
     expect(messages[0]!.eventType).toBe('io.momo-studio.dispatch');
     expect(messages[1]!.eventType).toBe('io.momo-studio.task_reply');
-    expect(messages[0]!.matrixEventId).toBe('$evt-dispatch:home');
-    expect(messages[1]!.matrixEventId).toBe('$evt-reply:home');
     // 两条都标记 matrix 来源
     expect(messages.every((m) => m.source === 'matrix')).toBe(true);
     // 引用未丢失，模拟 restart 后变量仍可用
@@ -356,42 +352,20 @@ describe('A 子系统：用户消息 + dispatch/task_reply 写路径（C1+I1 回
     expect(replyMsg.id).toBeTruthy();
   });
 
-  it('同 matrix_event_id 不二次落盘：getMessageByMatrixEventId 去重守卫', () => {
-    // 模拟 sync-manager 事件监听的第一层去重：落盘前先查 matrix_event_id
-    const msg = insertMessage({
-      roomId: 'r1',
-      sender: '@remote:home',
-      eventType: 'm.room.message',
-      body: '远程消息',
-      matrixEventId: '$evt-dedup:home',
-      source: 'matrix',
-    });
-    // /sync 重放同一 event：守卫应查到已存在行，跳过二次 INSERT
-    const existing = getMessageByMatrixEventId('$evt-dedup:home');
-    expect(existing).not.toBeNull();
-    expect(existing!.id).toBe(msg.id);
-    // 守卫生效的前提下，房间内只有 1 条
-    expect(listMessagesByRoom('r1').length).toBe(1);
-  });
-
-  it('agent 消息 matrix_event_id 回填后 /sync 回声按 stream_session_id 命中已有行', () => {
-    // routeChunkToBuffer 已落盘 agent 消息（无 matrix_event_id）
+  it('agent 消息 /sync 回声按 stream_session_id 命中已有行', () => {
+    // routeChunkToBuffer 已落盘 agent 消息
     const agentMsg = insertMessage({
-      roomId: 'r1',
+      sessionId: 'r1',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: 'agent 正文',
       streamSessionId: 'ss-backfill',
       status: 'done',
     });
-    expect(agentMsg.matrixEventId).toBeNull();
-    // 模拟 /sync 回声带 stream_session_id：sync-manager 第三层去重命中 + 回填
+    // 模拟 /sync 回声带 stream_session_id：sync-manager 去重层命中已有行
     // 这里验证 repo 层的 getMessageByStreamSessionId 守卫可用（sync-manager 用它做去重）
     const found = getMessageByStreamSessionId('ss-backfill');
     expect(found).not.toBeNull();
     expect(found!.id).toBe(agentMsg.id);
-    // 回填后 matrix_event_id 可查
-    // （updateMessageMatrixEventId 在 sync-manager 内调用，此处验证 repo 接口可用）
-    expect(getMessageByMatrixEventId('$not-yet:home')).toBeNull();
   });
 });

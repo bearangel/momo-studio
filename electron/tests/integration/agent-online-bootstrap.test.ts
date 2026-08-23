@@ -95,7 +95,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
 
     // 1. workspace
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, matrix_space_id) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
     ).run('ws-task5', 'test-ws', '@owner:localhost', '/tmp', '!space-task5:localhost');
 
     // 2. model provider（def.model_provider_id 不可为 NULL，否则被 guard 跳过）
@@ -117,13 +117,13 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     // 4. 两个 assignment：last_running=1（在线） vs last_running=0（用户主动下线）
     db.prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
        VALUES (?, ?, ?, ?, 1, 1, 'standalone', NULL, 0)`,
     ).run('inst-online', 'ws-task5', 'def-online', '@bot-online:localhost');
 
     db.prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
        VALUES (?, ?, ?, ?, 1, 0, 'standalone', NULL, 0)`,
     ).run('inst-offline', 'ws-task5', 'def-offline', '@bot-offline:localhost');
 
@@ -155,7 +155,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     const db = getDb();
 
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, matrix_space_id) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
     ).run('ws-task5b', 'test-ws', '@owner:localhost', '/tmp', '!space-task5b:localhost');
 
     db.prepare(
@@ -173,7 +173,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     // 唯一一个 assignment 为 last_running=0
     db.prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
        VALUES (?, ?, ?, ?, 1, 0, 'standalone', NULL, 0)`,
     ).run('inst-only-off', 'ws-task5b', 'def-only-off', '@bot-only:localhost');
 
@@ -188,7 +188,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     const db = getDb();
 
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, matrix_space_id) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
     ).run('ws-task5c', 'test-ws', '@owner:localhost', '/tmp', '!space-task5c:localhost');
 
     db.prepare(
@@ -206,7 +206,7 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     // enabled=0 AND last_running=1 —— 应被 enabled 过滤拦截
     db.prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
        VALUES (?, ?, ?, ?, 0, 1, 'standalone', NULL, 0)`,
     ).run('inst-disabled', 'ws-task5c', 'def-disabled', '@bot-disabled:localhost');
 

@@ -41,7 +41,7 @@ export interface WorkspaceRoutingInfo {
   /** workspace owner 的 Matrix userId */
   ownerId: string;
   /** workspace 团队群 room ID */
-  teamRoomId: string;
+  teamSessionId: string;
   /** workspace 是否已配置协调 agent（coordinator_instance_id 非空） */
   hasCoordinator: boolean;
 }
@@ -81,7 +81,7 @@ export function resolveMessageTarget(
   const mentions = params.content['m.mentions'] as { user_ids?: string[] } | undefined;
   const mentionSet = new Set(mentions?.user_ids ?? []);
   const hasAnyMention = mentionSet.size > 0;
-  const isTeamRoom = params.roomId === workspace.teamRoomId;
+  const isTeamRoom = params.roomId === workspace.teamSessionId;
   const isOwnerMessage = params.sender === workspace.ownerId;
 
   for (const candidate of params.candidates) {

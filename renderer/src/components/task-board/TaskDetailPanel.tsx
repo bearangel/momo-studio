@@ -76,9 +76,9 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             <div>📅 {new Date(task.scheduledAt).toLocaleString()}</div>
           )}
           {task.deadlineAt && <div>⏰ {new Date(task.deadlineAt).toLocaleString()}</div>}
-          {task.executionRoomId && <div>执行房间: {task.executionRoomId.slice(0, 16)}</div>}
+          {task.executionSessionId && <div>执行房间: {task.executionSessionId.slice(0, 16)}</div>}
         </div>
-        {(task.status === 'in_progress' || task.status === 'paused') && task.executionRoomId && (
+        {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (
           <button
             type="button"
             onClick={() => {

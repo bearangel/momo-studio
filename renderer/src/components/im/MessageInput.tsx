@@ -32,7 +32,7 @@ export function MessageInput() {
     (a) =>
       a.enabled &&
       a.lastRunning &&
-      members.some((m) => m.userId === a.botMatrixUserId),
+      members.some((m) => m.userId === a.agentUserId),
   );
 
   const handleSend = useCallback(async () => {
@@ -87,18 +87,18 @@ export function MessageInput() {
   const selectMention = (agent: AgentAssignment) => {
     const before = text.slice(0, mentionStart);
     const after = text.slice(mentionStart + mentionQuery.length + 1);
-    const display = resolveBotName(agent.botMatrixUserId ?? '', botNameMap);
+    const display = resolveBotName(agent.agentUserId ?? '', botNameMap);
     const newText = `${before}@${display} ${after}`;
     setText(newText);
     setPendingMentions((prev) =>
-      prev.includes(agent.botMatrixUserId) ? prev : [...prev, agent.botMatrixUserId],
+      prev.includes(agent.agentUserId) ? prev : [...prev, agent.agentUserId],
     );
     setMentionMenuOpen(false);
   };
 
   const filteredAgents = mentionQuery
     ? agentsInWorkspace.filter((a) =>
-        resolveBotName(a.botMatrixUserId ?? '', botNameMap)
+        resolveBotName(a.agentUserId ?? '', botNameMap)
           .toLowerCase()
           .includes(mentionQuery.toLowerCase()),
       )
@@ -110,7 +110,7 @@ export function MessageInput() {
         <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
           <div className="px-3 py-1 text-xs text-neutral-500">选择要 @ 的 agent</div>
           {filteredAgents.map((agent) => {
-            const displayName = resolveBotName(agent.botMatrixUserId ?? '', botNameMap);
+            const displayName = resolveBotName(agent.agentUserId ?? '', botNameMap);
             return (
               <button
                 key={agent.instanceId}

@@ -59,7 +59,7 @@ export async function initTaskDrivenRuntime(): Promise<void> {
       }
 
       try {
-        const botAccessToken = await resolveBotToken(assignment.botMatrixUserId);
+        const botAccessToken = await resolveBotToken(assignment.agentUserId);
         if (!botAccessToken) {
           logger.warn('Bot token 丢失，跳过', { instanceId: assignment.instanceId });
           continue;
@@ -68,10 +68,10 @@ export async function initTaskDrivenRuntime(): Promise<void> {
 
         const runtimeConfig = buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: assignment.botMatrixUserId,
+          botUserId: assignment.agentUserId,
           workspaceId: ws.id,
           workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+          teamRoomId: ws.teamSessionId,
           ownerUserId: ws.ownerId,
           def,
           botAccessToken,

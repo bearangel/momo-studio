@@ -12,7 +12,7 @@ import { resolveMessageTarget, type BotCandidate, type WorkspaceInfo } from '../
 
 const ws: WorkspaceInfo = {
   ownerId: '@owner:home',
-  teamRoomId: '!team:home',
+  teamSessionId: '!team:home',
   hasCoordinator: true,
 };
 

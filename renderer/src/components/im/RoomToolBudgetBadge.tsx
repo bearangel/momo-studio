@@ -8,7 +8,7 @@
 // 徽标文案：-1 → "∞"，0 → "禁用"，N → "N次"。
 import { useState, useEffect } from 'react';
 import { ipc } from '../../ipc/client';
-import type { GlobalSettings, RoomSettings } from '../../ipc/types';
+import type { GlobalSettings, SessionSettings } from '../../ipc/types';
 
 interface Props {
   roomId: string;
@@ -29,7 +29,7 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
   useEffect(() => {
     setRoomValue(null);
     setEditing(false);
-    void ipc.settings.getRoom(roomId).then((s: RoomSettings) => {
+    void ipc.settings.getSession(roomId).then((s: SessionSettings) => {
       setRoomValue(s.maxToolCalls);
     });
     void ipc.settings.getGlobal().then((s: GlobalSettings) => {
@@ -66,7 +66,7 @@ export function RoomToolBudgetBadge({ roomId }: Props) {
             : Number(draftCustom);
     setSaving(true);
     try {
-      const updated = await ipc.settings.updateRoom(roomId, { maxToolCalls: val });
+      const updated = await ipc.settings.updateSession(roomId, { maxToolCalls: val });
       setRoomValue(updated.maxToolCalls);
       setEditing(false);
     } finally {

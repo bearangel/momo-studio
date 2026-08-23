@@ -10,14 +10,14 @@
 //     导致重复测试 Matrix 客户端 mock。
 //   - 策略从 room_settings.conflict_strategy 读取（每会话配置，由调用方注入 ctx.strategy）。
 //     默认 'ask'（弹 ConflictDialog 让用户选）。
-//   - fork 分支返回**占位 newExecutionRoomId**（!fork-<timestamp>:home）——
+//   - fork 分支返回**占位 newExecutionSessionId**（!fork-<timestamp>:home）——
 //     IPC handler 拿到后会调用 startTask(newTask, { createNewRoom: true }) 实际创建
-//     新会话并把 newExecutionRoomId 替换为真实 room id（详见 ipc.handlers.ts）。
+//     新会话并把 newExecutionSessionId 替换为真实 room id（详见 ipc.handlers.ts）。
 //
 // 5 策略语义：
 //   ask    → 返回 ask，UI 弹窗让用户选（默认值）
 //   queue  → newTask 保持 assigned，等当前任务完成后调度器自动 pickup（D 阶段 pickup 机制）
-//   preempt→ 暂停当前任务（→ paused）+ 立即 startTask(newTask, { executionRoomId: currentRoomId })
+//   preempt→ 暂停当前任务（→ paused）+ 立即 startTask(newTask, { executionSessionId: currentRoomId })
 //   fork   → startTask(newTask, { createNewRoom: true })，新任务在新会话执行，当前任务不受影响
 //   reject → 拒绝新任务（用户需改换会话或在别处启动）
 
@@ -47,7 +47,7 @@ export interface ConflictContext {
 export type ConflictResolution =
   | { action: 'queue'; newTaskId: string }
   | { action: 'preempt'; newTaskId: string; pausedTaskId: string }
-  | { action: 'fork'; newTaskId: string; newExecutionRoomId: string }
+  | { action: 'fork'; newTaskId: string; newExecutionSessionId: string }
   | { action: 'reject'; reason: string }
   | { action: 'ask' };
 
@@ -70,7 +70,7 @@ export function resolveConflict(ctx: ConflictContext): ConflictResolution {
 
     case 'preempt':
       // IPC handler 负责：transitionTaskStatus(currentTaskId, 'paused') +
-      // startTask(newTaskId, { executionRoomId: currentRoomId })
+      // startTask(newTaskId, { executionSessionId: currentRoomId })
       return {
         action: 'preempt',
         newTaskId: ctx.newTaskId,
@@ -78,13 +78,13 @@ export function resolveConflict(ctx: ConflictContext): ConflictResolution {
       };
 
     case 'fork':
-      // 占位 newExecutionRoomId——IPC handler 拿到后调 startTask(newTaskId, { createNewRoom: true })
-      // 创建真实新会话，startTask 返回的 executionRoomId 才是最终值。
+      // 占位 newExecutionSessionId——IPC handler 拿到后调 startTask(newTaskId, { createNewRoom: true })
+      // 创建真实新会话，startTask 返回的 executionSessionId 才是最终值。
       // 这里返回占位 ID 仅用于让 resolution 结构完整（测试可断言字段存在），不直接使用。
       return {
         action: 'fork',
         newTaskId: ctx.newTaskId,
-        newExecutionRoomId: `!fork-${Date.now()}:home`,
+        newExecutionSessionId: `!fork-${Date.now()}:home`,
       };
 
     case 'reject':

@@ -239,7 +239,7 @@ async function seedFixture(
     .run(lastRunning, assignment.instanceId);
   // keychain 预置 bot token（agent:start handler 会读）
   memStore.set(`bot.@bot-${defId}:localhost.matrix_token`, 'fake-bot-token');
-  return { assignment, workspaceId: ws.id, teamRoomId: ws.teamRoomId ?? '!t:localhost' };
+  return { assignment, workspaceId: ws.id, teamRoomId: ws.teamSessionId ?? '!t:localhost' };
 }
 
 describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review I2）', () => {

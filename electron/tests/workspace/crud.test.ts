@@ -31,12 +31,11 @@ describe('workspace/crud', () => {
     const ws = await createWorkspace(
       { name: '测试项目', directoryPath: wsDir },
       '@alice:localhost',
-      '!space:localhost',
       '!team:localhost',
     );
     expect(ws.name).toBe('测试项目');
     expect(ws.directoryPath).toBe(wsDir);
-    expect(ws.teamRoomId).toBe('!team:localhost');
+    expect(ws.teamSessionId).toBe('!team:localhost');
     expect(fs.existsSync(wsDir)).toBe(true);
     expect(fs.existsSync(path.join(wsDir, '.git'))).toBe(true);
     expect(ws.gitInitialized).toBe(true);
@@ -46,9 +45,8 @@ describe('workspace/crud', () => {
     const ws = await createWorkspace(
       { name: 'X', directoryPath: path.join(tmpRoot, 'no-team') },
       '@alice:localhost',
-      '!space:localhost',
     );
-    expect(ws.teamRoomId).toBe('');
+    expect(ws.teamSessionId).toBe('');
   });
 
   it('listWorkspaces 返回所有 workspace', async () => {

@@ -82,7 +82,7 @@ export interface AgentAssignment {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
-  botMatrixUserId: string;
+  agentUserId: string;
   enabled: boolean;
   createdAt: string;
 

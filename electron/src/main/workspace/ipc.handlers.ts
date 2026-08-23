@@ -14,7 +14,7 @@ import {
   removeAllocation,
   type CapabilityType,
 } from './allocation';
-import { createMatrixSpace, createRoomInSpace } from '../matrix/rooms';
+import { createPlainRoom } from '../matrix/rooms';
 import { getOwnerMatrixClient, getCurrentUserId } from '../matrix/session';
 import { isAgentRunning } from '../agent/runtime-manager';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
@@ -30,12 +30,11 @@ export function registerWorkspaceHandlers(): void {
     if (!userId) throw new Error('未登录，无法创建 workspace');
 
     const client = await getOwnerMatrixClient();
-    const spaceId = await createMatrixSpace(client, input.name);
     // 同时创建团队群：用户 + 所有 agent bot 在此 room 内交流，
-    // 挂到刚创建的 Space 下，room ID 存入 workspace 记录供 agent 启动时引用。
-    const teamRoomId = await createRoomInSpace(client, spaceId, `${input.name} · 团队群`);
+    // room ID 存入 workspace 记录供 agent 启动时引用（v23 过渡：session_id = Matrix room ID）。
+    const teamRoomId = await createPlainRoom(client, `${input.name} · 团队群`);
 
-    return createWorkspace(input, userId, spaceId, teamRoomId);
+    return createWorkspace(input, userId, teamRoomId);
   });
 
   ipcMain.handle('workspace:list', async () => {
@@ -103,7 +102,7 @@ async function restartCoordinatorInstance(
   // v1.3：apiKey 走 resolveApiKey（override ?? provider key）；def.modelProviderId 必须已配置
   if (!def.modelProviderId) return;
   const apiKey = await resolveApiKey(instanceId, def.modelProviderId);
-  const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
+  const token = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
   if (!token) return;
 
   // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
@@ -114,10 +113,10 @@ async function restartCoordinatorInstance(
   await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,
-      botUserId: assignment.botMatrixUserId,
+      botUserId: assignment.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+      teamRoomId: ws.teamSessionId,
       ownerUserId: ws.ownerId,
       def,
       botAccessToken: token,

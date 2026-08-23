@@ -12,7 +12,7 @@ export function MembersPanel() {
 
   /** 查 member userId 对应的 agent 是否在线（基于 assignment.lastRunning）。无 assignment 返回 null（不显示标签） */
   const isAgentOnline = (userId: string): boolean | null => {
-    const a = assignments.find((item) => item.botMatrixUserId === userId);
+    const a = assignments.find((item) => item.agentUserId === userId);
     if (!a) return null;
     return a.lastRunning;
   };

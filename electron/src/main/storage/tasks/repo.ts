@@ -7,7 +7,7 @@
 //   - status 默认 'draft'；toolCallsUsed 默认 0
 //   - transitionTaskStatus 走 state-machine 校验，非法转换抛错；
 //     调度器 / agent runtime 调此方法时可在 extraPatch 里带 startedAt / completedAt /
-//     executionRoomId / assigneeAgentId 等副作用字段（updateTask 自动 merge + bump updated_at）
+//     executionSessionId / assigneeAgentId 等副作用字段（updateTask 自动 merge + bump updated_at）
 //   - updateTask 实现为「读全行 → 合并 patch → 全字段 UPDATE」——任务字段数适中（25 个），
 //     全字段写一次 SQL 比动态拼 SET 子句可读性更高、也无 SQL 注入面。
 import { randomUUID } from 'node:crypto';
@@ -25,10 +25,10 @@ export interface TaskRow {
   title: string;
   description: string;
   status: TaskStatus;
-  sourceRoomId: string | null;
+  sourceSessionId: string | null;
   sourceMessageId: string | null;
   creatorUserId: string;
-  executionRoomId: string | null;
+  executionSessionId: string | null;
   assigneeAgentId: string | null;
   priority: number;
   scheduledAt: number | null;
@@ -55,10 +55,10 @@ type SqlRow = {
   title: string;
   description: string;
   status: string;
-  source_room_id: string | null;
+  source_session_id: string | null;
   source_message_id: string | null;
   creator_user_id: string;
-  execution_room_id: string | null;
+  execution_session_id: string | null;
   assignee_agent_id: string | null;
   priority: number;
   scheduled_at: number | null;
@@ -84,10 +84,10 @@ function rowToCamel(r: SqlRow): TaskRow {
     title: r.title,
     description: r.description,
     status: r.status as TaskStatus,
-    sourceRoomId: r.source_room_id,
+    sourceSessionId: r.source_session_id,
     sourceMessageId: r.source_message_id,
     creatorUserId: r.creator_user_id,
-    executionRoomId: r.execution_room_id,
+    executionSessionId: r.execution_session_id,
     assigneeAgentId: r.assignee_agent_id,
     priority: r.priority,
     scheduledAt: r.scheduled_at,
@@ -132,8 +132,8 @@ export function insertTask(
   db.prepare(
     `INSERT INTO tasks (
       id, workspace_id, title, description, status,
-      source_room_id, source_message_id, creator_user_id,
-      execution_room_id, assignee_agent_id,
+      source_session_id, source_message_id, creator_user_id,
+      execution_session_id, assignee_agent_id,
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message, source_node_id,
       created_at, updated_at, started_at, completed_at
@@ -144,10 +144,10 @@ export function insertTask(
     input.title,
     description,
     status,
-    input.sourceRoomId,
+    input.sourceSessionId,
     input.sourceMessageId,
     input.creatorUserId,
-    input.executionRoomId,
+    input.executionSessionId,
     input.assigneeAgentId,
     priority,
     input.scheduledAt,
@@ -186,8 +186,8 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
   db.prepare(
     `UPDATE tasks SET
       workspace_id=?, title=?, description=?, status=?,
-      source_room_id=?, source_message_id=?, creator_user_id=?,
-      execution_room_id=?, assignee_agent_id=?,
+      source_session_id=?, source_message_id=?, creator_user_id=?,
+      execution_session_id=?, assignee_agent_id=?,
       priority=?, scheduled_at=?, recurrence_rule=?, deadline_at=?,
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?, source_node_id=?,
       updated_at=?, started_at=?, completed_at=?
@@ -197,10 +197,10 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.title,
     next.description,
     next.status,
-    next.sourceRoomId,
+    next.sourceSessionId,
     next.sourceMessageId,
     next.creatorUserId,
-    next.executionRoomId,
+    next.executionSessionId,
     next.assigneeAgentId,
     next.priority,
     next.scheduledAt,
@@ -225,7 +225,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
  *
  * 读当前行 → 状态机断言合法 → updateTask 合并 extraPatch + 新 status。
  * extraPatch 用于传递副作用字段：
- *   - in_progress：executionRoomId / startedAt / assigneeAgentId
+ *   - in_progress：executionSessionId / startedAt / assigneeAgentId
  *   - completed / failed：completedAt / errorMessage
  *   - paused：errorMessage（可选，记录 preempt 原因）
  *
@@ -252,7 +252,7 @@ export function getTask(id: string): TaskRow | null {
 /**
  * 多维过滤 + 排序的任务列表。
  *
- * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionRoomId / sourceRoomId。
+ * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionSessionId / sourceSessionId。
  * 排序：priority（高优先 + created_at 升序兜底）/ scheduled_at（升序，NULLS LAST + created_at 兜底）/
  *       created_at（默认升序）。
  * limit：限制返回行数（无 LIMIT 时全返回）。
@@ -261,8 +261,8 @@ export function listTasks(opts: {
   workspaceId?: string;
   status?: TaskStatus | TaskStatus[];
   assigneeAgentId?: string;
-  executionRoomId?: string;
-  sourceRoomId?: string;
+  executionSessionId?: string;
+  sourceSessionId?: string;
   orderBy?: 'priority' | 'scheduled_at' | 'created_at';
   limit?: number;
 }): TaskRow[] {
@@ -287,13 +287,13 @@ export function listTasks(opts: {
     where.push('assignee_agent_id = ?');
     params.push(opts.assigneeAgentId);
   }
-  if (opts.executionRoomId) {
-    where.push('execution_room_id = ?');
-    params.push(opts.executionRoomId);
+  if (opts.executionSessionId) {
+    where.push('execution_session_id = ?');
+    params.push(opts.executionSessionId);
   }
-  if (opts.sourceRoomId) {
-    where.push('source_room_id = ?');
-    params.push(opts.sourceRoomId);
+  if (opts.sourceSessionId) {
+    where.push('source_session_id = ?');
+    params.push(opts.sourceSessionId);
   }
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const orderClause =

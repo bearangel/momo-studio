@@ -49,7 +49,7 @@ describe('P2P 集成接线（I2）', () => {
     it('远端 message → insertMessage(source=lan) + push im:message 到 renderer', () => {
       const inserted = {
         id: 'msg-1',
-        roomId: '!room1:home',
+        sessionId: '!room1:home',
         sender: '@peer:home',
         body: 'hello',
         eventType: 'm.room.message',
@@ -68,7 +68,7 @@ describe('P2P 集成接线（I2）', () => {
       expect(mockInsertMessage).toHaveBeenCalledTimes(1);
       expect(mockInsertMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          roomId: '!room1:home',
+          sessionId: '!room1:home',
           sender: '@peer:home',
           body: 'hello',
           eventType: 'm.room.message',

@@ -41,7 +41,7 @@ beforeEach(() => {
   runMigrations();
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, matrix_space_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
     )
     .run('ws1', 'Test', '/tmp/ws1', '!space:home', '@owner:home');
 });
@@ -83,16 +83,16 @@ describe('read_task_history', () => {
       creatorUserId: '@owner:home',
     });
     transitionTaskStatus(t.id, 'assigned');
-    transitionTaskStatus(t.id, 'in_progress', { executionRoomId: '!room:home' });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
     insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@owner:home',
       eventType: 'm.room.message',
       body: 'hi',
       taskId: t.id,
     });
     insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: 'hello',
@@ -122,9 +122,9 @@ describe('read_task_progress', () => {
       creatorUserId: '@owner:home',
     });
     transitionTaskStatus(t.id, 'assigned');
-    transitionTaskStatus(t.id, 'in_progress', { executionRoomId: '!room:home' });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
     const msg = insertMessage({
-      roomId: '!room:home',
+      sessionId: '!room:home',
       sender: '@bot:home',
       eventType: 'm.room.message',
       body: '',
@@ -180,7 +180,7 @@ describe('complete_task', () => {
       creatorUserId: '@owner:home',
     });
     transitionTaskStatus(t.id, 'assigned');
-    transitionTaskStatus(t.id, 'in_progress', { executionRoomId: '!room:home' });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
     await completeTask(t.id);
     const updated = await readTask(t.id);
     expect(updated?.status).toBe('completed');
@@ -196,7 +196,7 @@ describe('fail_task', () => {
       creatorUserId: '@owner:home',
     });
     transitionTaskStatus(t.id, 'assigned');
-    transitionTaskStatus(t.id, 'in_progress', { executionRoomId: '!room:home' });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: '!room:home' });
     await failTask(t.id, 'LLM 超时');
     const updated = await readTask(t.id);
     expect(updated?.status).toBe('failed');

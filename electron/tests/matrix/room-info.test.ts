@@ -84,7 +84,7 @@ describe('hasWorkspaceCoordinator', () => {
     runMigrations();
     db.prepare(
       `INSERT INTO workspaces
-         (id, name, description, directory_path, matrix_space_id, git_initialized, owner_id, icon_emoji, coordinator_instance_id)
+         (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji, coordinator_instance_id)
        VALUES (?, ?, '', '', '', 0, '', '📁', ?)`,
     ).run(id, `ws-${id}`, coordinatorInstanceId);
   }

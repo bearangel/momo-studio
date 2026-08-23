@@ -98,8 +98,8 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
 
   const workspace = getWorkspace(workspaceId);
   if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
-  if (!workspace.teamRoomId) {
-    throw new Error('workspace 尚未创建团队群（teamRoomId 为空）');
+  if (!workspace.teamSessionId) {
+    throw new Error('workspace 尚未创建团队群（teamSessionId 为空）');
   }
 
   // 查找选中的 sub 定义；校验全部已配置 provider
@@ -136,7 +136,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
   const mainAssignment = assignAgentToWorkspace(
     workspaceId, mainDef.id, mainBot.botUserId, 'main',
   );
-  await inviteBotToRoom(ownerClient, workspace.teamRoomId, mainBot.botUserId);
+  await inviteBotToRoom(ownerClient, workspace.teamSessionId, mainBot.botUserId);
   if (apiKeyOverride) {
     await crudUpdateAssignmentApiKey(mainAssignment.instanceId, apiKeyOverride);
   }
@@ -153,7 +153,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
     const subAssignment = assignAgentToWorkspace(
       workspaceId, subDef.id, subBot.botUserId, 'sub', mainAssignment.instanceId,
     );
-    await inviteBotToRoom(ownerClient, workspace.teamRoomId, subBot.botUserId);
+    await inviteBotToRoom(ownerClient, workspace.teamSessionId, subBot.botUserId);
     if (apiKeyOverride) {
       await crudUpdateAssignmentApiKey(subAssignment.instanceId, apiKeyOverride);
     }
@@ -170,7 +170,7 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
         botUserId: bot.botUserId,
         workspaceId,
         workspaceDir: workspace.directoryPath,
-        teamRoomId: workspace.teamRoomId!,
+        teamRoomId: workspace.teamSessionId!,
         ownerUserId: workspace.ownerId,
         def,
         role: assignment.role,
@@ -197,12 +197,12 @@ export async function assignMainAgent(opts: AssignMainInput): Promise<AgentAssig
 export async function removeAgentAssignment(instanceId: string): Promise<void> {
   stopAgent(instanceId);
   const row = getDb()
-    .prepare('SELECT bot_matrix_user_id, workspace_id, role, parent_instance_id FROM agent_assignments WHERE instance_id = ?')
+    .prepare('SELECT agent_user_id, workspace_id, role, parent_instance_id FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as
-    | { bot_matrix_user_id?: string; workspace_id?: string; role?: string; parent_instance_id?: string }
+    | { agent_user_id?: string; workspace_id?: string; role?: string; parent_instance_id?: string }
     | undefined;
   if (!row) return;
-  const botUserId = row.bot_matrix_user_id;
+  const botUserId = row.agent_user_id;
   const workspaceId = row.workspace_id;
   // v1.5.8：删除前记下 parent_main_id（删完之后行就没了，无法再查）
   const parentMainId = row.parent_instance_id;
@@ -274,7 +274,7 @@ async function restartMainForSubChange(
   if (!def || !def.modelProviderId) return;
 
   const apiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
-  const token = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
+  const token = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
   if (!token) return;
 
   // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
@@ -284,10 +284,10 @@ async function restartMainForSubChange(
   await startAgentRuntime(
     buildSpawnOpts({
       instanceId: assignment.instanceId,
-      botUserId: assignment.botMatrixUserId,
+      botUserId: assignment.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+      teamRoomId: ws.teamSessionId,
       ownerUserId: ws.ownerId,
       def,
       botAccessToken: token,
@@ -378,8 +378,8 @@ export function registerAgentHandlers(): void {
 
       const workspace = getWorkspace(workspaceId);
       if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
-      if (!workspace.teamRoomId) {
-        throw new Error('workspace 尚未创建团队群（teamRoomId 为空）');
+      if (!workspace.teamSessionId) {
+        throw new Error('workspace 尚未创建团队群（teamSessionId 为空）');
       }
 
       const bot = await registerAgentBot({
@@ -394,7 +394,7 @@ export function registerAgentHandlers(): void {
       );
 
       const ownerClient = await getOwnerMatrixClient();
-      await inviteBotToRoom(ownerClient, workspace.teamRoomId, bot.botUserId);
+      await inviteBotToRoom(ownerClient, workspace.teamSessionId, bot.botUserId);
 
       if (apiKeyOverride) {
         await crudUpdateAssignmentApiKey(assignment.instanceId, apiKeyOverride);
@@ -407,7 +407,7 @@ export function registerAgentHandlers(): void {
           botUserId: bot.botUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
-          teamRoomId: workspace.teamRoomId,
+          teamRoomId: workspace.teamSessionId,
           ownerUserId: workspace.ownerId,
           def,
           role: assignment.role,
@@ -530,9 +530,9 @@ export function registerAgentHandlers(): void {
 
   ipcMain.handle(
     'agent:assign',
-    async (_evt, workspaceId: string, agentDefinitionId: string, botMatrixUserId: string) => {
+    async (_evt, workspaceId: string, agentDefinitionId: string, agentUserId: string) => {
       // 低层 API：保留向后兼容，默认 role='standalone'
-      return assignAgentToWorkspace(workspaceId, agentDefinitionId, botMatrixUserId, 'standalone');
+      return assignAgentToWorkspace(workspaceId, agentDefinitionId, agentUserId, 'standalone');
     },
   );
 
@@ -644,7 +644,7 @@ export function registerAgentHandlers(): void {
         throw new Error(`未找到 workspace: ${workspaceId}`);
       }
 
-      const botAccessToken = await getSecret(`bot.${assignment.botMatrixUserId}.matrix_token`);
+      const botAccessToken = await getSecret(`bot.${assignment.agentUserId}.matrix_token`);
       if (!botAccessToken) {
         throw new Error('Bot access token 丢失（请先注册 bot 账号）');
       }
@@ -654,7 +654,7 @@ export function registerAgentHandlers(): void {
       await startAgentRuntime(
         buildSpawnOpts({
           instanceId: assignment.instanceId,
-          botUserId: assignment.botMatrixUserId,
+          botUserId: assignment.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
           teamRoomId,

@@ -197,7 +197,7 @@ function routeChunkToBuffer(chunk: StreamChunk): void {
     switch (chunk.type) {
       case 'start': {
         insertMessage({
-          roomId: chunk.roomId,
+          sessionId: chunk.roomId,
           sender: chunk.botUserId,
           eventType: 'm.room.message',
           body: '',
@@ -289,7 +289,7 @@ function routeChunkToBuffer(chunk: StreamChunk): void {
         const parentMsg = getMessageByStreamSessionId(chunk.streamSessionId);
         if (!parentMsg) return;
         const segMsg = insertMessage({
-          roomId: parentMsg.roomId,
+          sessionId: parentMsg.sessionId,
           sender: parentMsg.sender,
           eventType: 'm.room.message',
           body: chunk.segmentBody,

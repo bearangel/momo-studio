@@ -24,9 +24,7 @@ import { resolveMessageTarget, type BotCandidate, type WorkspaceRoutingInfo } fr
 import { isDirectChat, hasWorkspaceCoordinator } from './room-info';
 import {
   insertMessage,
-  updateMessageMatrixEventId,
   getMessageByStreamSessionId,
-  getMessageByMatrixEventId,
   type MessageRow,
 } from '../storage/messages/repo';
 
@@ -176,7 +174,7 @@ function resolveDirectTargetAssignmentId(event: MatrixEvent): string | null {
 
   const routingInfo: WorkspaceRoutingInfo = {
     ownerId: workspace.ownerId,
-    teamRoomId: workspace.teamRoomId,
+    teamSessionId: workspace.teamSessionId,
     hasCoordinator: hasWorkspaceCoordinator(workspace.id),
   };
 
@@ -219,43 +217,33 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
   }
 
   // 注册事件监听：白名单内 event type（m.room.message + dispatch + task_reply）。
-  // A final fix（C1+I2）：所有消息统一 INSERT SQLite 后再 push MessageRow（ImMessage 形状），
-  // 不再直接推 MatrixMessagePayload。三层去重保证同一 Matrix event 不二次落盘：
-  //   1. matrix_event_id 已存在 → /sync 重放/重启回放，跳过
-  //   2. m.room.message 且 sender == 本地用户 → 已在 im:send 落盘，跳过（避免本地回声重复）
-  //   3. m.room.message 且 content 带 stream_session_id 且对应行已存在 → agent 消息，
-  //      routeChunkToBuffer 已落盘，回填 matrix_event_id 后跳过
+  // 所有消息统一 INSERT SQLite 后再 push MessageRow（ImMessage 形状）。
+  // v23：messages.matrix_event_id 列已删除，基于 event id 的幂等去重随之移除；
+  // 保留两层去重：
+  //   1. m.room.message 且 sender == 本地用户 → 已在 im:send 落盘，跳过（避免本地回声重复）
+  //   2. m.room.message 且 content 带 stream_session_id 且对应行已存在 → agent 消息，
+  //      routeChunkToBuffer 已落盘，跳过
   // dispatch / task_reply / 远程 m.room.message → INSERT（source='matrix'）+ push。
   client.on(ClientEvent.Event, (event: MatrixEvent) => {
     if (!SYNCED_EVENT_TYPES.has(event.getType())) return;
     if (event.isRedacted()) return;
 
-    const matrixEventId = event.getId() ?? '';
     const eventType = event.getType();
     const sender = event.getSender() ?? '';
     const roomId = event.getRoomId() ?? '';
     const content = (event.getContent() as Record<string, unknown> | undefined) ?? {};
     const body = typeof content.body === 'string' ? content.body : '';
 
-    // 去重层 1：matrix_event_id 已落盘 → /sync 重放，跳过
-    if (matrixEventId && getMessageByMatrixEventId(matrixEventId)) return;
-
     if (eventType === 'm.room.message') {
-      // 去重层 2：本地用户消息已在 im:send INSERT（source='local'），跳过 /sync 回声
+      // 去重层 1：本地用户消息已在 im:send INSERT（source='local'），跳过 /sync 回声
       const localUserId = getLocalUserId();
       if (localUserId && sender === localUserId) return;
 
-      // 去重层 3：agent 消息（content 带 stream_session_id，routeChunkToBuffer 已落盘）
+      // 去重层 2：agent 消息（content 带 stream_session_id，routeChunkToBuffer 已落盘）
       const ssIdRaw = content[STREAM_SESSION_ID_KEY];
       if (typeof ssIdRaw === 'string' && ssIdRaw !== '') {
         const existing = getMessageByStreamSessionId(ssIdRaw);
-        if (existing) {
-          // 回填 matrix_event_id（routeChunkToBuffer 不持有 event_id，此处补齐，便于后续去重/导出）
-          if (!existing.matrixEventId && matrixEventId) {
-            updateMessageMatrixEventId(existing.id, matrixEventId);
-          }
-          return;
-        }
+        if (existing) return;
       }
 
       // 缺 body 字段的 m.room.message（与旧 eventToMessage 行为一致）不落盘
@@ -264,11 +252,10 @@ export async function startSync(matrixClient: MatrixClient): Promise<void> {
 
     // dispatch / task_reply / 远程 m.room.message：INSERT + push
     const msg = insertMessage({
-      roomId,
+      sessionId: roomId,
       sender,
       eventType,
       body,
-      matrixEventId: matrixEventId || null,
       source: 'matrix',
     });
     pushMessageRow(msg);
@@ -422,17 +409,10 @@ export function getRoomsForWorkspace(workspaceId?: string): RoomInfoPayload[] {
   const ws = getWorkspace(workspaceId);
   if (!ws) return [];
 
-  // 收集本 workspace 的 Space 子房间 ID + 团队群
+  // 收集本 workspace 可见房间：团队会话（v23 过渡：Space 子房间过滤随 matrix_space_id
+  // 列删除一并移除，Task 8-11 改为 sessions 表驱动）+ 系统通知房间。
   const allowedRoomIds = new Set<string>();
-  const spaceRoom = client.getRoom(ws.matrixSpaceId);
-  if (spaceRoom) {
-    const childEvents = spaceRoom.currentState.getStateEvents('m.space.child');
-    for (const evt of childEvents) {
-      const stateKey = evt.getStateKey();
-      if (stateKey) allowedRoomIds.add(stateKey);
-    }
-  }
-  if (ws.teamRoomId) allowedRoomIds.add(ws.teamRoomId);
+  if (ws.teamSessionId) allowedRoomIds.add(ws.teamSessionId);
 
   return client.getRooms()
     .filter((room) => {

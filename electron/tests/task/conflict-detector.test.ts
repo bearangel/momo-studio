@@ -15,10 +15,10 @@ function mkTask(overrides: Partial<TaskRow> = {}): TaskRow {
     title: 'task',
     description: '',
     status: 'in_progress',
-    sourceRoomId: null,
+    sourceSessionId: null,
     sourceMessageId: null,
     creatorUserId: '@owner:home',
-    executionRoomId: '!room:home',
+    executionSessionId: '!room:home',
     assigneeAgentId: null,
     priority: 0,
     scheduledAt: null,
@@ -50,7 +50,7 @@ describe('detectConflict', () => {
   });
 
   it('房间有 in_progress 任务 + 消息 mention 另一个存在的任务 → 检测到冲突', () => {
-    const currentTask = mkTask({ id: 'T-001', executionRoomId: '!room:home' });
+    const currentTask = mkTask({ id: 'T-001', executionSessionId: '!room:home' });
     const mentionedTask = mkTask({ id: 'T-002', status: 'assigned' });
     deps.findInProgressTaskByRoom.mockReturnValue(currentTask);
     deps.getTask.mockReturnValue(mentionedTask);

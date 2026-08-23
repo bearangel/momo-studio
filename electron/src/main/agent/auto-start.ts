@@ -31,7 +31,7 @@ interface AssignmentRow {
   instance_id: string;
   workspace_id: string;
   agent_definition_id: string;
-  bot_matrix_user_id: string;
+  agent_user_id: string;
   enabled: number;
   /** v1.5.8：用户最近运行意图（1=运行 / 0=主动下线） */
   last_running: number;
@@ -105,30 +105,30 @@ export async function autoStartAgents(): Promise<void> {
 
       const apiKey = await resolveApiKey(row.instance_id, def.modelProviderId);
 
-      const rawToken = await getBotToken(row.bot_matrix_user_id);
+      const rawToken = await getBotToken(row.agent_user_id);
       if (!rawToken) {
-        logger.warn('Bot Matrix token 丢失，跳过', { botUserId: row.bot_matrix_user_id });
+        logger.warn('Bot Matrix token 丢失，跳过', { botUserId: row.agent_user_id });
         failed++;
         continue;
       }
 
       // v1.5.8：spawn 前主动验证 token——避免失效 token 触发子进程崩溃重启循环（matrix-js-sdk 收到 M_UNKNOWN_TOKEN 会 fatal exit）
       let token = rawToken;
-      const tokenCheck = await verifyBotToken(row.bot_matrix_user_id, token);
+      const tokenCheck = await verifyBotToken(row.agent_user_id, token);
       if (!tokenCheck.ok) {
         // token 失效——尝试用 keychain 里的 password 重新 login（应对 Conduwuit 重启 token 丢失）
-        const relogin = await tryReloginBot(row.bot_matrix_user_id);
+        const relogin = await tryReloginBot(row.agent_user_id);
         if (relogin.ok) {
           token = relogin.token;
           logger.info('Bot token 失效，已用 password 重新登录获得新 token', {
             instanceId: row.instance_id,
-            botUserId: row.bot_matrix_user_id,
+            botUserId: row.agent_user_id,
             slug: def.slug,
           });
         } else {
           logger.warn('Bot Matrix token 在服务端失效且无 password 可恢复，跳过自启动', {
             instanceId: row.instance_id,
-            botUserId: row.bot_matrix_user_id,
+            botUserId: row.agent_user_id,
             slug: def.slug,
             reason: tokenCheck.reason,
             tokenPrefix: `${token.slice(0, 8)}…`,
@@ -142,10 +142,10 @@ export async function autoStartAgents(): Promise<void> {
       spawnAgent(
         buildSpawnOpts({
           instanceId: row.instance_id,
-          botUserId: row.bot_matrix_user_id,
+          botUserId: row.agent_user_id,
           workspaceId: row.workspace_id,
           workspaceDir: ws.directoryPath,
-          teamRoomId: ws.teamRoomId ?? ws.matrixSpaceId,
+          teamRoomId: ws.teamSessionId,
           ownerUserId: ws.ownerId,
           def,
           role: row.role as AgentRole,

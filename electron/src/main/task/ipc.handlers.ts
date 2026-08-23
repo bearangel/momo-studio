@@ -38,7 +38,7 @@ interface CreateInput {
   title: string;
   description?: string;
   priority?: number;
-  sourceRoomId?: string | null;
+  sourceSessionId?: string | null;
   sourceMessageId?: string | null;
   assigneeAgentId?: string | null;
   scheduledAt?: number | null;
@@ -50,8 +50,8 @@ interface ListOpts {
   workspaceId?: string;
   status?: TaskStatus | TaskStatus[];
   assigneeAgentId?: string;
-  executionRoomId?: string;
-  sourceRoomId?: string;
+  executionSessionId?: string;
+  sourceSessionId?: string;
   orderBy?: 'priority' | 'scheduled_at' | 'created_at';
   limit?: number;
 }
@@ -68,7 +68,7 @@ export function registerTaskHandlers(): void {
       creatorUserId,
       description: input.description,
       priority: input.priority,
-      sourceRoomId: input.sourceRoomId,
+      sourceSessionId: input.sourceSessionId,
       sourceMessageId: input.sourceMessageId,
       assigneeAgentId: input.assigneeAgentId,
       scheduledAt: input.scheduledAt,
@@ -113,10 +113,10 @@ export function registerTaskHandlers(): void {
       _evt,
       id: string,
       opts?: StartTaskOpts,
-    ): Promise<{ executionRoomId: string; createdNewRoom: boolean }> => {
+    ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
       const result = await startTask(id, opts);
       return {
-        executionRoomId: result.executionRoomId,
+        executionSessionId: result.executionSessionId,
         createdNewRoom: result.createdNewRoom,
       };
     },

@@ -57,7 +57,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       expect.objectContaining({
         taskId: null,
         body: '你好，帮我做事',
-        executionRoomId: '!room:home',
+        executionSessionId: '!room:home',
       }),
     );
   });

@@ -8,7 +8,7 @@ import { CreateTaskDialog } from './CreateTaskDialog';
 
 interface InlineTaskSuggestionProps {
   workspaceId: string;
-  sourceRoomId: string;
+  sourceSessionId: string;
   sourceMessageId: string;
   suggestedTitle: string;
   suggestedDescription?: string;
@@ -31,7 +31,7 @@ export function InlineTaskSuggestion(props: InlineTaskSuggestionProps) {
         preset={{
           title: props.suggestedTitle,
           description: props.suggestedDescription,
-          sourceRoomId: props.sourceRoomId,
+          sourceSessionId: props.sourceSessionId,
           sourceMessageId: props.sourceMessageId,
           assigneeAgentId: props.assigneeAgentId,
         }}

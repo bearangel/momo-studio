@@ -41,7 +41,7 @@ function insertAssignment(instanceId: string, botUserId: string, lastRunning: nu
   getDb()
     .prepare(
       `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, enabled, last_running, role)
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role)
        VALUES (?, 'ws-1', 'def-x', ?, 1, ?, 'standalone')`,
     )
     .run(instanceId, botUserId, lastRunning);
@@ -50,7 +50,7 @@ function insertAssignment(instanceId: string, botUserId: string, lastRunning: nu
 function seedFixtures(): void {
   const db = getDb();
   db.prepare(
-    `INSERT INTO workspaces (id, name, description, directory_path, matrix_space_id, git_initialized, owner_id, icon_emoji)
+    `INSERT INTO workspaces (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
      VALUES ('ws-1', 'WS', '', '/tmp', '!s:localhost', 0, '@o:localhost', '📁')`,
   ).run();
   db.prepare(

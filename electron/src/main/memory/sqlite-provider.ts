@@ -8,14 +8,14 @@
 //   - getTaskContext：从 messages(task_id=?) 拿所有相关 message，再 listEventsByMessage 拉事件，
 //     按 KEY_EVENT_TYPES 白名单过滤（剔除 thinking_delta/text_delta 这类 noise），
 //     同时从 tool_call_start 提取文件改动作为 artifacts。
-//   - getConversationContext：直接调 listMessagesByRoom，role 用 sender 启发式判断（bot→assistant/owner→user）。
+//   - getConversationContext：直接调 listMessagesBySession，role 用 sender 启发式判断（bot→assistant/owner→user）。
 //   - getAgentContext / getUserContext：v1 stub——返回空对象，调用方代码已就绪，
 //     v2 加实现时无需改调用方。
 //   - getWorkspaceContext：单表 SELECT，无 join。
 import { getDb } from '../storage/db';
 import { getTask } from '../storage/tasks/repo';
 import {
-  listMessagesByRoom,
+  listMessagesBySession,
   type MessageRow,
 } from '../storage/messages/repo';
 import {
@@ -122,10 +122,10 @@ export class SQLiteMemoryProvider implements MemoryProvider {
   }
 
   async getConversationContext(
-    roomId: string,
+    sessionId: string,
     opts?: { limit?: number; beforeTs?: number },
   ): Promise<ConversationContext> {
-    const messages = listMessagesByRoom(roomId, {
+    const messages = listMessagesBySession(sessionId, {
       limit: opts?.limit,
       beforeTs: opts?.beforeTs,
     });

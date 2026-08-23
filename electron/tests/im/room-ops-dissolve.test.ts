@@ -168,7 +168,7 @@ describe('room-ops dissolveRoom', () => {
   });
 
   it('团队群受保护 → 抛错且不调用任何 Matrix 操作', async () => {
-    listWorkspacesMock.mockReturnValue([{ teamRoomId: ROOM_ID }]);
+    listWorkspacesMock.mockReturnValue([{ teamSessionId: ROOM_ID }]);
 
     await expect(dissolveRoom(ROOM_ID)).rejects.toThrow(/团队群/);
     // 不应触达 client / bot leave

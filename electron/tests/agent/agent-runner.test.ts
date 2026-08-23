@@ -64,7 +64,7 @@ describe('AgentRunner', () => {
 
     const result = await runner.executeTask({
       taskId: null,
-      executionRoomId: '!room:home',
+      executionSessionId: '!room:home',
       body: 'hi',
       streamSessionId: 'ss-1',
     });
@@ -94,7 +94,7 @@ describe('AgentRunner', () => {
 
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });
@@ -122,7 +122,7 @@ describe('AgentRunner', () => {
 
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });
@@ -146,7 +146,7 @@ describe('AgentRunner', () => {
     });
     await runner.executeTask({
       taskId: null,
-      executionRoomId: '!r:home',
+      executionSessionId: '!r:home',
       body: 'x',
       streamSessionId: 'ss-1',
     });

@@ -119,7 +119,7 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
         const ws = await ipc.workspace.get(workspace.id);
         await stopAgent(newAssignment.instanceId);
         if (ws) {
-          await startAgent(newAssignment, ws.id, ws.teamRoomId);
+          await startAgent(newAssignment, ws.id, ws.teamSessionId);
         }
       }
       onClose();

@@ -91,7 +91,7 @@ interface AgentAssignmentRow {
   instance_id: string;
   workspace_id: string;
   agent_definition_id: string;
-  bot_matrix_user_id: string;
+  agent_user_id: string;
   enabled: number;
   created_at: string;
   role: string;
@@ -130,7 +130,7 @@ function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
     instanceId: row.instance_id,
     workspaceId: row.workspace_id,
     agentDefinitionId: row.agent_definition_id,
-    botMatrixUserId: row.bot_matrix_user_id,
+    agentUserId: row.agent_user_id,
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     role: row.role as AgentRole,
@@ -209,7 +209,7 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
 export function assignAgentToWorkspace(
   workspaceId: string,
   agentDefinitionId: string,
-  botMatrixUserId: string,
+  agentUserId: string,
   role: AgentRole,
   parentInstanceId: string | null = null,
 ): AgentAssignment {
@@ -226,15 +226,15 @@ export function assignAgentToWorkspace(
   const db = getDb();
   db.prepare(
     `INSERT INTO agent_assignments
-      (instance_id, workspace_id, agent_definition_id, bot_matrix_user_id, role, parent_instance_id)
+      (instance_id, workspace_id, agent_definition_id, agent_user_id, role, parent_instance_id)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(instanceId, workspaceId, agentDefinitionId, botMatrixUserId, role, parentInstanceId);
+  ).run(instanceId, workspaceId, agentDefinitionId, agentUserId, role, parentInstanceId);
 
   const row = db
     .prepare('SELECT * FROM agent_assignments WHERE instance_id = ?')
     .get(instanceId) as AgentAssignmentRow;
   logger.info('Agent 已分配到 workspace', {
-    workspaceId, agentDefinitionId, botMatrixUserId, role,
+    workspaceId, agentDefinitionId, agentUserId, role,
   });
   return rowToAssignment(row);
 }

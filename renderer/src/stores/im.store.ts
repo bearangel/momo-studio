@@ -204,12 +204,12 @@ export const useImStore = create<ImState>((set, get) => ({
   receiveMessage: (msg) => {
     set((state) => {
       const map = new Map(state.messagesByRoom);
-      const existing = map.get(msg.roomId) ?? [];
+      const existing = map.get(msg.sessionId) ?? [];
       // 按 SQLite messages.id 去重，避免初始同步回放与推送重复
       if (existing.some((m) => m.id === msg.id)) {
         return state;
       }
-      map.set(msg.roomId, [...existing, msg]);
+      map.set(msg.sessionId, [...existing, msg]);
       return { messagesByRoom: map };
     });
     // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，

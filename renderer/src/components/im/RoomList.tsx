@@ -28,8 +28,8 @@ export function RoomList() {
   const inviteCandidates = assignments
     .filter((a) => a.enabled)
     .map((a) => ({
-      userId: a.botMatrixUserId,
-      displayName: resolveBotName(a.botMatrixUserId, botNameMap),
+      userId: a.agentUserId,
+      displayName: resolveBotName(a.agentUserId, botNameMap),
     }));
 
   const handleRename = (roomId: string, oldName: string) => {
@@ -92,7 +92,7 @@ export function RoomList() {
   // 系统通知 + 团队群顶置，其余按原序（stable sort 保持相对顺序）
   const sortedRooms = [...rooms].sort((a, b) => {
     const priority = (r: (typeof rooms)[number]) =>
-      r.isSystem ? 0 : workspaces.some((w) => w.teamRoomId === r.roomId) ? 1 : 2;
+      r.isSystem ? 0 : workspaces.some((w) => w.teamSessionId === r.roomId) ? 1 : 2;
     return priority(a) - priority(b);
   });
 
@@ -129,7 +129,7 @@ export function RoomList() {
           </button>
           {/* 团队群（任一 workspace 的 teamRoomId）受保护，显示锁标记、无解散/重命名 */}
           {(() => {
-            const isTeamRoom = workspaces.some((w) => w.teamRoomId === room.roomId);
+            const isTeamRoom = workspaces.some((w) => w.teamSessionId === room.roomId);
             if (isTeamRoom) {
               return (
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500"       title="团队群随工作空间删除">

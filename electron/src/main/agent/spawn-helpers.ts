@@ -47,7 +47,7 @@ export function rebuildSubAgents(
     if (!subDef) continue;
     subs.push({
       slug: subDef.slug,
-      botUserId: sub.botMatrixUserId,
+      botUserId: sub.agentUserId,
       description: subDef.description,
     });
   }

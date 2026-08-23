@@ -152,7 +152,7 @@ function makeTaskConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
   return {
     type: 'task-config',
     taskId: null,
-    executionRoomId: '!room:localhost',
+    executionSessionId: '!room:localhost',
     body: 'hi',
     streamSessionId: 'task-session-001',
     ...overrides,

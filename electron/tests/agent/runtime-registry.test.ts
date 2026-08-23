@@ -1,7 +1,7 @@
 // electron/tests/agent/runtime-registry.test.ts
 //
 // runtime-registry 模块测试——覆盖 task-driven runtime 全局注册表的核心函数：
-//   1. findAssignmentByBotUserId：按 bot_matrix_user_id 反查 instance_id（DB 查询）
+//   1. findAssignmentByBotUserId：按 agent_user_id 反查 instance_id（DB 查询）
 //   2. startAgentRuntime(taskDriven=false)：走 v1 spawnAgent fallback
 //   3. startAgentRuntime(taskDriven=true)：创建 WarmPool + AgentRunner + 注册到全局 Map
 //   4. createTaskDrivenRuntime：幂等性（重复调用不重建）
@@ -132,7 +132,7 @@ describe('runtime-registry', () => {
   });
 
   describe('findAssignmentByBotUserId', () => {
-    it('按 bot_matrix_user_id 反查到 instance_id', async () => {
+    it('按 agent_user_id 反查到 instance_id', async () => {
       const ws = await createWorkspace(
         { name: 'WS', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
         '@u:localhost', '!s:localhost', '!t:localhost',
