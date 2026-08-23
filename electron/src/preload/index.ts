@@ -199,6 +199,20 @@ const api: ApiSurface = {
     removeTrustedNode: (nodeId: string) => invoke('p2p:removeTrustedNode', nodeId),
     listTrustedNodes: () => invoke('p2p:listTrustedNodes'),
   },
+  window: {
+    // P2 Task 1：自绘 titlebar 窗口控制（send 单向 + is-maximized 查询 + maximized 推送）
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    close: () => ipcRenderer.send('window:close'),
+    isMaximized: () => invoke<boolean>('window:is-maximized'),
+    onMaximizedChanged: (callback: (maximized: boolean) => void) => {
+      const handler = (_evt: IpcRendererEvent, maximized: boolean): void => callback(maximized);
+      ipcRenderer.on('window:maximized-changed', handler);
+      return () => {
+        ipcRenderer.off('window:maximized-changed', handler);
+      };
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -951,6 +951,18 @@ export interface ApiSurface {
       Array<{ nodeId: string; displayName: string; trustedAt: number }>
     >;
   };
+  /**
+   * P2 Task 1：窗口控制（自绘 titlebar 控件调用）。
+   * minimize/toggleMaximize/close 为单向 send；isMaximized 为 invoke 查询；
+   * onMaximizedChanged 订阅主进程 maximize/unmaximize 推送（图标切换用）。
+   */
+  window: {
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    isMaximized(): Promise<boolean>;
+    onMaximizedChanged(callback: (maximized: boolean) => void): () => void;
+  };
 }
 
 export interface DirEntry {
