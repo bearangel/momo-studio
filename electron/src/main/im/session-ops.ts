@@ -17,7 +17,7 @@ import { getDb } from '../storage/db';
 import { getWorkspace } from '../workspace/crud';
 import {
   insertSession,
-  renameSession,
+  renameSession as repoRenameSession,
   deleteSession,
   addSessionMember,
   listSessionsByWorkspace,
@@ -48,6 +48,10 @@ export interface SessionSummary {
  * - workspaceId 必须存在（FK 由 sessions.workspace_id 约束）
  * - memberAssignmentIds 元素必须在该 workspace 下合法存在
  *   （FK 由 session_members.assignment_id 约束，依赖 agent_assignments.instance_id）
+ *
+ * 事务原子性：sessions 行与全部 session_members 行在同一事务中提交——任一成员
+ * 写入抛错（典型：FK 命中不存在的 assignment_id），整笔回滚，避免半状态。
+ * 因此函数返回前不会留下 orphan 的空 session。
  */
 export function createSession(input: {
   workspaceId: string;
@@ -57,27 +61,36 @@ export function createSession(input: {
   kind?: SessionRow['kind'];
 }): SessionRow {
   const db = getDb();
-  const row = insertSession({
+  const ids = input.memberAssignmentIds ?? [];
+  const tx = db.transaction((args: {
+    workspaceId: string;
+    title: string;
+    kind: SessionRow['kind'] | undefined;
+    memberIds: string[];
+  }): SessionRow => {
+    const row = insertSession({
+      workspaceId: args.workspaceId,
+      title: args.title,
+      kind: args.kind,
+    });
+    for (const aid of args.memberIds) {
+      addSessionMember(row.id, aid);
+    }
+    return row;
+  });
+  return tx({
     workspaceId: input.workspaceId,
     title: input.title,
     kind: input.kind,
+    memberIds: ids,
   });
-  const ids = input.memberAssignmentIds ?? [];
-  if (ids.length > 0) {
-    db.transaction(() => {
-      for (const aid of ids) {
-        addSessionMember(row.id, aid);
-      }
-    })();
-  }
-  return row;
 }
 
 /**
  * 重命名会话。空串或仅空白不在此层校验——由调用方按业务规则决定。
  */
-export function renameSessionOp(id: string, title: string): void {
-  renameSession(id, title);
+export function renameSession(id: string, title: string): void {
+  repoRenameSession(id, title);
 }
 
 /**

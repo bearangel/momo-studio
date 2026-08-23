@@ -21,7 +21,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 import {
   createSession,
-  renameSessionOp,
+  renameSession,
   deleteSessionOp,
   getSessionsForWorkspace,
   getSessionMembersInfo,
@@ -134,13 +134,34 @@ describe('session-ops', () => {
     expect(row.kind).toBe('task_execution');
   });
 
-  it('renameSessionOp 改 title', () => {
+  it('renameSession 改 title', () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
     const row = insertSession({ workspaceId: 'ws1', title: '旧' });
-    renameSessionOp(row.id, '新');
+    renameSession(row.id, '新');
     const after = db.prepare('SELECT title FROM sessions WHERE id = ?').get(row.id) as { title: string };
     expect(after.title).toBe('新');
+  });
+
+  it('createSession 原子性：成员含不存在 assignment_id → 抛错且 sessions 表无残留', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def1', 'A', '🤖');
+    seedAssignment(db, 'inst1', 'ws1', 'def1', '@bot:s', 'standalone', 1);
+    // 'inst-nope' 不存在 → session_members.assignment_id FK 触发异常
+    expect(() =>
+      createSession({
+        workspaceId: 'ws1',
+        title: '将失败',
+        memberAssignmentIds: ['inst1', 'inst-nope'],
+      }),
+    ).toThrow();
+
+    // 整笔回滚：sessions 表无残留
+    const sessionRows = db.prepare('SELECT id FROM sessions').all() as Array<{ id: string }>;
+    expect(sessionRows).toEqual([]);
+    const memberRows = db.prepare('SELECT assignment_id FROM session_members').all() as unknown[];
+    expect(memberRows).toEqual([]);
   });
 
   it('deleteSessionOp 非团队会话正常删除；cascade 清空 session_members', () => {
