@@ -8,7 +8,6 @@
 // streaming 时 MessageBubble 渲染 AgentStreamBubble，否则渲染静态消息。
 import { useEffect, useRef } from 'react';
 import { useSessionStore } from '../../stores/session.store';
-import { useAuthStore } from '../../stores/auth.store';
 import { useBotNameMap } from '../../lib/useBotNames';
 import type { ImMessage } from '../../ipc/types';
 import { MessageBubble } from './MessageBubble';
@@ -73,7 +72,9 @@ export function MessageList() {
     activeSessionId ? s.hasMoreBySession.get(activeSessionId) ?? true : true,
   );
   const loadOlder = useSessionStore((s) => s.loadOlder);
-  const currentUserId = useAuthStore((s) => s.user?.userId ?? null);
+  // v2.0 P1 Task 11：无登录概念——单用户本地应用，本地用户消息 sender 固定 'owner'
+  // （session-service.sendUserMessage 写入侧约定），气泡左右对齐据此判定
+  const currentUserId = 'owner';
   const botNameByUserId = useBotNameMap();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);

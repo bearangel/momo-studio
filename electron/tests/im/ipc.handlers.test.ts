@@ -54,13 +54,8 @@ vi.mock('../../src/main/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock('../../src/main/conduit/manager', () => ({
-  startConduit: vi.fn(async () => ({ port: 8008, baseUrl: 'http://127.0.0.1:8008' })),
-}));
-
 vi.mock('../../src/main/matrix/sync-manager', () => ({
-  startSyncFromSession: vi.fn(async () => undefined),
-  // A final fix：sendMessage 现返回 { eventId }
+  // v2.0 P1 Task 11：im:startSync 已删除，sync-manager 仅剩 send/getRooms 被 im:send 系列引用
   sendMessage: vi.fn(async () => ({ eventId: '$evt:home' })),
   sendMessageWithMentions: vi.fn(async () => ({ eventId: '$evt:home' })),
   getJoinedRooms: vi.fn(() => []),
@@ -90,8 +85,8 @@ beforeEach(() => {
 });
 
 describe('im/ipc.handlers 注册', () => {
-  it('注册全部 im: 通道（含 M1 新增 4 个）', () => {
-    expect(ipcHandlers.has('im:startSync')).toBe(true);
+  it('注册全部 im: 通道（含 M1 新增 4 个；v2.0 P1 Task 11 已删 im:startSync）', () => {
+    expect(ipcHandlers.has('im:startSync')).toBe(false);
     expect(ipcHandlers.has('im:send')).toBe(true);
     expect(ipcHandlers.has('im:sendWithMentions')).toBe(true);
     expect(ipcHandlers.has('im:getRooms')).toBe(true);

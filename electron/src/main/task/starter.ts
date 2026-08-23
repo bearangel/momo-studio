@@ -14,9 +14,11 @@
 // 重新启动已 in_progress 的任务时：
 //   - 若调用方传的 executionSessionId 与已锁定的不同 → 抛"锁定"错
 //   - 否则幂等返回（不重复 transition，因为状态机 in_progress→in_progress 非法）
+//
+// v2.0 P1 Task 11：新建 execution 会话改写本地 sessions 表（kind='task_execution'），
+// assignee 直接入 session_members——不再经 Matrix 建房/邀请（getOwnerMatrixClient 已无登录态）。
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
-import { createPlainRoom, inviteBotToRoom } from '../matrix/rooms';
-import { getOwnerMatrixClient } from '../matrix/session';
+import { insertSession, addSessionMember } from '../storage/sessions/repo';
 import { logger } from '../logger';
 
 export interface StartTaskResult {
@@ -76,18 +78,18 @@ export async function startTask(
   if (opts?.executionSessionId) {
     executionSessionId = opts.executionSessionId;
   } else if (opts?.createNewRoom) {
-    executionSessionId = await createNewTaskRoom(task);
+    executionSessionId = createNewTaskRoom(task);
     createdNewRoom = true;
   } else if (task.sourceSessionId) {
     executionSessionId = task.sourceSessionId;
   } else {
-    executionSessionId = await createNewTaskRoom(task);
+    executionSessionId = createNewTaskRoom(task);
     createdNewRoom = true;
   }
 
-  // 新建会话时邀请 assignee（如果是新建的 room 且有指定 assignee）
+  // 新建会话时把 assignee 加为成员（如果是新建的会话且有指定 assignee）
   if (createdNewRoom && task.assigneeAgentId) {
-    await inviteAssignee(executionSessionId, task.assigneeAgentId);
+    addSessionMember(executionSessionId, task.assigneeAgentId);
   }
 
   // 状态机转换 + 锁定 execution_room（assigned/pending → in_progress）
@@ -106,22 +108,14 @@ export async function startTask(
   return { task: updated, executionSessionId, createdNewRoom };
 }
 
-/**
- * 创建任务专属 execution_room。命名约定：任务 #T-XXX: 标题前 20 字。
- * v23 过渡：不挂 Matrix Space（列已删除），创建普通 room。
- */
-async function createNewTaskRoom(task: TaskRow): Promise<string> {
+/** 创建任务专属 execution 会话（本地 sessions 表行）。命名约定：任务 #T-XXX: 标题前 20 字。 */
+function createNewTaskRoom(task: TaskRow): string {
   const titlePrefix = task.title.slice(0, 20);
   const roomName = `任务 #${task.id}: ${titlePrefix}`;
-  const client = await getOwnerMatrixClient();
-  return createPlainRoom(client, roomName);
-}
-
-/**
- * 邀请 assignee 加入 execution_room。
- * assigneeAgentId 当前约定为 bot user id（agent instance → Matrix user 映射在 D 子系统细化）。
- */
-async function inviteAssignee(roomId: string, assigneeAgentId: string): Promise<void> {
-  const client = await getOwnerMatrixClient();
-  await inviteBotToRoom(client, roomId, assigneeAgentId);
+  const row = insertSession({
+    workspaceId: task.workspaceId,
+    title: roomName,
+    kind: 'task_execution',
+  });
+  return row.id;
 }

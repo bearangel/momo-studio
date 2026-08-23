@@ -17,19 +17,6 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: ApiSurface = {
-  auth: {
-    register: (opts) => invoke('auth:register', opts),
-    login: (opts) => invoke('auth:login', opts),
-    getCurrentUser: () => invoke('auth:getCurrentUser'),
-    logout: () => invoke('auth:logout'),
-    onSessionExpired: (callback: (reason: string) => void) => {
-      const handler = (_evt: IpcRendererEvent, data: { reason: string }): void => callback(data.reason);
-      ipcRenderer.on('auth:sessionExpired', handler);
-      return () => {
-        ipcRenderer.off('auth:sessionExpired', handler);
-      };
-    },
-  },
   system: {
     getInfo: () => invoke('system:getInfo'),
     getConduitStatus: () => invoke('system:getConduitStatus'),
@@ -101,7 +88,6 @@ const api: ApiSurface = {
     getApiKey: (id) => invoke('provider:getApiKey', id),
   },
   im: {
-    startSync: () => invoke('im:startSync'),
     send: (roomId, body) => invoke('im:send', roomId, body),
     sendWithMentions: (roomId, body, userIds) => invoke('im:sendWithMentions', roomId, body, userIds),
     getRooms: (workspaceId) => invoke('im:getRooms', workspaceId),

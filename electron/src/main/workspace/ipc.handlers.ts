@@ -2,7 +2,8 @@
 //
 // Workspace IPC handlers — 把 T2 的 CRUD 函数包装成 `workspace:*` IPC 通道。
 // v2（Task 10）：create 不再联动 Matrix（团队会话由 crud.createWorkspace 在
-// 本地 sessions 表内创建），owner 身份仍取自当前登录会话。
+// 本地 sessions 表内创建）。
+// v2（Task 11）：无登录概念——单用户本地应用，owner 身份是结构常量 'owner'。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { createWorkspace, listWorkspaces, getWorkspace, deleteWorkspace, setWorkspaceCoordinator } from './crud';
@@ -12,7 +13,6 @@ import {
   removeAllocation,
   type CapabilityType,
 } from './allocation';
-import { getCurrentUserId } from '../matrix/session';
 import { isAgentRunning } from '../agent/runtime-manager';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
 import { getAgentDefinition, listAssignments } from '../agent/crud';
@@ -22,11 +22,8 @@ import type { CreateWorkspaceInput } from './types';
 /** 注册 workspace:* IPC handlers。重复注册会被 Electron 拒绝，故仅调用一次。 */
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle('workspace:create', async (_evt, input: CreateWorkspaceInput) => {
-    const userId = getCurrentUserId();
-    if (!userId) throw new Error('未登录，无法创建 workspace');
-
-    // v2（Task 10）：团队会话（sessions 表行）由 createWorkspace 内部创建并回填
-    return createWorkspace(input, userId);
+    // v2（Task 11）：单用户本地应用——owner 身份为结构常量（原从 Matrix 登录会话读取）
+    return createWorkspace(input, 'owner');
   });
 
   ipcMain.handle('workspace:list', async () => {

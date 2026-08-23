@@ -9,7 +9,7 @@ import type { ImMessage } from '../../ipc/types';
 
 // vi.hoisted 保证 store 状态在 vi.mock 工厂注册前完成初始化（工厂内只定义函数，
 // 实际 state 访问延迟到 render 期，但 hoisted 可规避 TS「used before declaration」告警）。
-const { sessionState, authState } = vi.hoisted(() => ({
+const { sessionState } = vi.hoisted(() => ({
   sessionState: {
     activeSessionId: 'sess-room',
     messagesBySession: new Map<string, ImMessage[]>(),
@@ -18,14 +18,10 @@ const { sessionState, authState } = vi.hoisted(() => ({
     hasMoreBySession: new Map<string, boolean>(),
     loadOlder: () => Promise.resolve(),
   },
-  authState: { user: { userId: '@me:server' } },
 }));
 
 vi.mock('../../stores/session.store', () => ({
   useSessionStore: (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
-}));
-vi.mock('../../stores/auth.store', () => ({
-  useAuthStore: (selector: (s: typeof authState) => unknown) => selector(authState),
 }));
 vi.mock('../../stores/stream.store', () => ({
   useStreamStore: (selector: (s: { streams: Map<string, unknown> }) => unknown) =>

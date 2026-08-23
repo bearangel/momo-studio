@@ -8,23 +8,13 @@
 //   - fork   → startTask(newTask, { createNewRoom: true })
 //   - reject → 无副作用
 //
-// 测试隔离与 starter.test.ts 同：tmp 目录 + closeDb + mock Matrix rooms/session。
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+// 测试隔离与 starter.test.ts 同：tmp 目录 + closeDb。
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
-
-vi.mock('../../src/main/matrix/rooms', () => ({
-  createPlainRoom: vi.fn().mockResolvedValue('!new-room:home'),
-  createMatrixSpace: vi.fn().mockResolvedValue('!new-space:home'),
-  inviteBotToRoom: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('../../src/main/matrix/session', () => ({
-  getOwnerMatrixClient: vi.fn().mockResolvedValue({}),
-  getCurrentUserId: vi.fn().mockReturnValue('@owner:home'),
-}));
 
 const { executeConflictResolution } = await import('../../src/main/task/conflict-executor');
 
@@ -104,8 +94,12 @@ describe('executeConflictResolution', () => {
     );
     expect(result.action).toBe('fork');
     expect(getTask(next.id)!.status).toBe('in_progress');
-    // startTask(createNewRoom: true) → mock 返回 '!new-room:home'
-    expect(getTask(next.id)!.executionSessionId).toBe('!new-room:home');
+    // startTask(createNewRoom: true) → 本地 sessions 表新行（v2 P1 Task 11 起，不再 mock Matrix 房间 id）
+    const executionSessionId = getTask(next.id)!.executionSessionId!;
+    const session = getDb()
+      .prepare('SELECT id, kind FROM sessions WHERE id = ?')
+      .get(executionSessionId) as { id: string; kind: string } | undefined;
+    expect(session?.kind).toBe('task_execution');
   });
 
   it('reject → 无副作用', async () => {

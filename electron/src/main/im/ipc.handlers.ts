@@ -1,18 +1,17 @@
 // electron/src/main/im/ipc.handlers.ts
 //
 // IM 相关 IPC handler 注册入口。
-// 暴露给渲染进程的能力：启动 /sync、发送消息、查询房间列表和历史消息。
-// 实际的 Matrix 操作委托给 matrix/sync-manager。
 //
 // v2.0 A 子系统：历史消息读路径已切换到 SQLite（messages + message_events 表）。
 //   - im:getMessages / im:loadOlderMessages / im:getMessageEvents 直接走 SQLite repo
 //   - im:exportRoomMessages 也改读 SQLite（content 富字段丢失，A9 改造 markdown-exporter 时补齐）
-//   - Matrix sync-manager 仍负责实时消息推送（im:message）和房间列表
+//
+// v2.0 P1 Task 11（切换点）：im:startSync 已删除——用户流量走 session:*（SessionService，
+// 纯 SQLite + 进程内路由），Matrix /sync 不再启动。剩余 im:* 通道为旧 UI 桥接期保留，
+// renderer 已无调用方，阶段三 Task 12 随 Matrix 全家一并删除。
 import { ipcMain, BrowserWindow } from 'electron';
 import { logger } from '../logger';
-import { startConduit } from '../conduit/manager';
 import {
-  startSyncFromSession,
   sendMessage,
   sendMessageWithMentions,
   getRoomsForWorkspace,
@@ -37,14 +36,6 @@ import { listTasks, getTask } from '../storage/tasks/repo';
 
 /** 注册全部 im: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerImHandlers(): void {
-  // 先等 Conduit 就绪：renderer 在 app 启动早期就调 im:startSync，
-  // 此时 Conduit 可能还没 bind 端口（RocksDB 打开 + schema migration 需要数百 ms）。
-  // startConduit 内部有 pendingStart 去重，多次调用安全。
-  ipcMain.handle('im:startSync', async () => {
-    await startConduit();
-    await startSyncFromSession();
-  });
-
   // A final fix（C1）：用户消息写路径补齐 SQLite INSERT。
   // spec 写路径：im:send → INSERT messages row（source='local'）→ push im:message →
   //   发 Matrix → 回填 matrix_event_id。重启后 im:getMessages 直接从 SQLite 还原用户消息，

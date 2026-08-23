@@ -104,6 +104,17 @@ describe('session.store', () => {
     expect(useSessionStore.getState().activeSessionId).toBeNull();
   });
 
+  it('refreshSessionList 只拉取一次（Task 11 移除 1s 兜底双拉取，纯 SQLite 首拉即权威）', async () => {
+    vi.useFakeTimers();
+    try {
+      useSessionStore.getState().refreshSessionList('ws-a');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(mockApi.session.list).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('selectSession loads messages + events for the session', async () => {
     const messages: ImMessage[] = [mk('m1', 'hi', 1)];
     const eventsByMessage: Record<string, MessageEventRow[]> = {

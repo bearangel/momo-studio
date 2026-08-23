@@ -43,7 +43,7 @@ interface SessionState {
    * 保证切换工作空间后旧 workspace 的会话不会残留显示。
    */
   loadSessions: (workspaceId?: string) => Promise<void>;
-  /** 会话列表刷新：立即拉一次 + 延迟再拉一次（兜底推送延迟，避免 create/rename/delete 后列表陈旧） */
+  /** 会话列表刷新：立即拉一次（纯 SQLite 首拉即权威，无推送延迟需要兜底） */
   refreshSessionList: (workspaceId?: string) => void;
   /** 切换激活会话并加载该会话历史消息与成员 */
   selectSession: (sessionId: string) => Promise<void>;
@@ -105,12 +105,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  // 会话列表刷新：立即拉一次 + 延迟再拉一次（兜底推送延迟，避免 create/rename/delete 后列表陈旧）
+  // 纯 SQLite 读路径：首拉即权威，无 Matrix /sync 推送延迟需要二次兜底
   refreshSessionList: (workspaceId) => {
     void get().loadSessions(workspaceId);
-    setTimeout(() => {
-      void get().loadSessions(workspaceId);
-    }, 1000);
   },
 
   selectSession: async (sessionId) => {

@@ -2,39 +2,27 @@
 //
 // startTask execution_room 决策树测试（B8）。
 //
-// 测试覆盖（6 个用例）：
+// 测试覆盖：
 //   1. 用户预设 executionSessionId → 锁定为预设（createdNewRoom=false）
 //   2. 无预设 + source_room 存在 → 锁定 source_room（createdNewRoom=false）
-//   3. createNewRoom=true → 强制新建会话（命名：任务 #T-XXX: 标题前 20 字）
-//   4. 无预设 + 无 source_room → 创建新会话（默认行为）
+//   3. createNewRoom=true → 强制新建会话（本地 sessions 表行，kind=task_execution）
+//   4. 无预设 + 无 source_room → 创建新会话（默认行为，命名：任务 #T-XXX: 标题前 20 字）
 //   5. status 不是 assigned/pending → 抛 status 错（draft / in_progress 锁定场景除外）
 //   6. 已 in_progress 再次启动且 executionSessionId 不同 → 抛"锁定"错（execution_room 不可改）
+//   7. 新建会话且有 assignee → assignee 写入 session_members（v2 P1 Task 11：本地成员表，
+//      原 Matrix inviteBotToRoom 已删）
 //
 // 测试隔离：每个 case 独立 tmp 目录 + closeDb + AP_USER_DATA_DIR 重置。
 // tasks 表有 FK 到 workspaces，故每个 case 都 seed 一个 ws1 工作空间。
-// mock 矩阵 rooms/session：避免真实 Conduit 启动，createPlainRoom 返回固定新 room id。
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { listSessionMembers } from '../../src/main/storage/sessions/repo';
 
-// Mock Matrix rooms / session：避免真实 Conduit 启动。
-// createPlainRoom 返回固定新 room id '!new-room:home'，便于断言。
-vi.mock('../../src/main/matrix/rooms', () => ({
-  createPlainRoom: vi.fn().mockResolvedValue('!new-room:home'),
-  createMatrixSpace: vi.fn().mockResolvedValue('!new-space:home'),
-  inviteBotToRoom: vi.fn().mockResolvedValue(undefined),
-}));
-// getCurrentUserId 是同步函数（session.ts 第 51 行），用 mockReturnValue 同步返回。
-vi.mock('../../src/main/matrix/session', () => ({
-  getOwnerMatrixClient: vi.fn().mockResolvedValue({}),
-  getCurrentUserId: vi.fn().mockReturnValue('@owner:home'),
-}));
-
-// starter.ts 必须延迟 import（在 vi.mock 注册后），
-// 否则模块加载顺序会导致 mock 不生效。
+// starter.ts 必须延迟 import（保持在顶层 await 语义），与实现模块解耦。
 const { startTask } = await import('../../src/main/task/starter');
 
 const tmpRoot = path.join(
@@ -88,7 +76,7 @@ describe('startTask execution_room 决策树', () => {
     expect(result.createdNewRoom).toBe(false);
   });
 
-  it('createNewRoom=true 强制新建会话', async () => {
+  it('createNewRoom=true 强制新建会话（本地 sessions 表，kind=task_execution）', async () => {
     const t = insertTask({
       workspaceId: 'ws1',
       title: 'T1',
@@ -96,11 +84,16 @@ describe('startTask execution_room 决策树', () => {
     });
     transitionTaskStatus(t.id, 'assigned');
     const result = await startTask(t.id, { createNewRoom: true });
-    expect(result.executionSessionId).toBe('!new-room:home');
     expect(result.createdNewRoom).toBe(true);
+    const row = getDb()
+      .prepare('SELECT id, kind, workspace_id FROM sessions WHERE id = ?')
+      .get(result.executionSessionId) as { id: string; kind: string; workspace_id: string };
+    expect(row).toBeDefined();
+    expect(row.kind).toBe('task_execution');
+    expect(row.workspace_id).toBe('ws1');
   });
 
-  it('无预设 + 无 source_room → 创建新会话（命名：任务 #T-XXX: 标题前缀）', async () => {
+  it('无预设 + 无 source_room → 创建新会话（命名：任务 #T-XXX: 标题前 20 字）', async () => {
     const t = insertTask({
       workspaceId: 'ws1',
       title: '实现登录功能详细设计',
@@ -108,8 +101,39 @@ describe('startTask execution_room 决策树', () => {
     });
     transitionTaskStatus(t.id, 'assigned');
     const result = await startTask(t.id);
-    expect(result.executionSessionId).toBe('!new-room:home');
     expect(result.createdNewRoom).toBe(true);
+    const row = getDb()
+      .prepare('SELECT title FROM sessions WHERE id = ?')
+      .get(result.executionSessionId) as { title: string };
+    expect(row.title).toBe(`任务 #${t.id}: 实现登录功能详细设计`);
+  });
+
+  it('新建会话且有 assignee → assignee 写入 session_members', async () => {
+    // session_members 有 FK 到 agent_assignments，先 seed 定义 + assignment
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-1', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO agent_assignments
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
+         VALUES ('inst-agent-1', 'ws1', 'def-1', '@inst-agent-1:s', 1, 'standalone', 0)`,
+      )
+      .run();
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-agent-1',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    const result = await startTask(t.id, { createNewRoom: true });
+    const members = listSessionMembers(result.executionSessionId);
+    expect(members.map((m) => m.assignmentId)).toEqual(['inst-agent-1']);
   });
 
   it('status 不是 assigned/pending → 抛错', async () => {

@@ -13,11 +13,6 @@ export interface ConduitStatus {
   port: number | null;
 }
 
-export interface AuthResult {
-  userId: string;
-  deviceId: string;
-}
-
 export interface Workspace {
   id: string;
   name: string;
@@ -764,14 +759,6 @@ export interface SessionApiSurface {
 }
 
 export interface ApiSurface {
-  auth: {
-    register(opts: { username: string; password: string }): Promise<AuthResult>;
-    login(opts: { username: string; password: string }): Promise<AuthResult>;
-    getCurrentUser(): Promise<AuthResult | null>;
-    logout(): Promise<void>;
-    /** v1.5.7: token 失效时主进程通知 renderer 跳转登录页 */
-    onSessionExpired(callback: (reason: string) => void): () => void;
-  };
   system: {
     getInfo(): Promise<SystemInfo>;
     getConduitStatus(): Promise<ConduitStatus>;
@@ -878,7 +865,6 @@ export interface ApiSurface {
     getApiKey(id: string): Promise<string | null>;
   };
   im: {
-    startSync(): Promise<void>;
     send(roomId: string, body: string): Promise<void>;
     sendWithMentions(roomId: string, body: string, mentionedUserIds: string[]): Promise<void>;
     /** 房间列表。workspaceId 提供时只返回该 workspace 范围内的房间 */
