@@ -347,6 +347,15 @@ export interface ToolCallRecord {
   timestamp: string;
 }
 
+/** 审计容量配额信息（audit:getQuota 返回），与 electron 端 AuditQuotaInfo 对齐 */
+export interface AuditQuotaInfo {
+  /** 生效配额（MB）——已按 workspace 覆盖 > 全局 > 默认 100 解析 */
+  quotaMb: number;
+  /** 估算占用字节数（文本列长度和 + 行数 × 400） */
+  usedBytes: number;
+  rowCount: number;
+}
+
 /**
  * Marketplace 可安装项，与 electron 端 MarketplaceItem 对齐。
  * renderer 端独立定义（跨进程不共享类型，仅结构对齐）。
@@ -944,6 +953,12 @@ export interface ApiSurface {
   audit: {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */
     getToolCalls(workspaceId: string, opts?: ToolCallQueryOpts): Promise<ToolCallRecord[]>;
+    /** 读取某 workspace 的配额与占用 */
+    getQuota(workspaceId: string): Promise<AuditQuotaInfo>;
+    /** 设置 workspace 级配额（MB）；null = 清除覆盖，回退全局 */
+    setQuota(workspaceId: string, quotaMb: number | null): Promise<void>;
+    /** 立即执行滚动清理，返回本次删除条数 */
+    enforceNow(workspaceId: string): Promise<{ deletedCount: number }>;
   };
   dialog: {
     /** 弹出原生目录选择对话框，返回绝对路径；用户取消返回 null */

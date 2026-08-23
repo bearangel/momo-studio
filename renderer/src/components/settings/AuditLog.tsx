@@ -1,15 +1,17 @@
 // renderer/src/components/settings/AuditLog.tsx
 //
-// 工具调用审计日志表格：
+// 工具调用审计日志面板：
+//   - 顶部配额卡（P2 Task 8）：本空间上限 MB 输入（空=继承全局）+
+//     当前占用进度条 + 立即清理按钮（显示删除条数反馈）
 //   - 列：时间 | agent | 工具名 | 成功/失败 | 耗时
 //   - 按 agent / 工具名筛选（输入框，前端对当前页过滤 + 后端精确筛选二选一；
 //     这里用后端精确筛选，保证大数据集分页正确）
 //   - 分页：每页 50 条
 //
-// 数据来自 audit:getToolCalls IPC（→ tool_calls 表，最新优先）。
+// 数据来自 audit:getToolCalls / audit:getQuota / audit:setQuota / audit:enforceNow IPC。
 import { useCallback, useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import { type ToolCallRecord } from '../../ipc/types';
+import { type AuditQuotaInfo, type ToolCallRecord } from '../../ipc/types';
 import { Button } from '../ui/Button';
 
 interface Props {
@@ -18,6 +20,14 @@ interface Props {
 
 const PAGE_SIZE = 50;
 
+/** 字节数人性化显示：1024 进制，保留 1 位小数（26214400 → '25.0 MB'） */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 export function AuditLog({ workspaceId }: Props) {
   const [records, setRecords] = useState<ToolCallRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -25,6 +35,12 @@ export function AuditLog({ workspaceId }: Props) {
   const [offset, setOffset] = useState(0);
   const [agentFilter, setAgentFilter] = useState('');
   const [toolFilter, setToolFilter] = useState('');
+  const [quotaInfo, setQuotaInfo] = useState<AuditQuotaInfo | null>(null);
+  const [quotaInput, setQuotaInput] = useState('');
+  const [quotaError, setQuotaError] = useState<string | null>(null);
+  const [quotaSaving, setQuotaSaving] = useState(false);
+  const [enforcing, setEnforcing] = useState(false);
+  const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,9 +60,64 @@ export function AuditLog({ workspaceId }: Props) {
     }
   }, [workspaceId, offset, agentFilter, toolFilter]);
 
+  const loadQuota = useCallback(async () => {
+    try {
+      setQuotaInfo(await ipc.audit.getQuota(workspaceId));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [workspaceId]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setQuotaInput('');
+    setQuotaError(null);
+    setCleanupMsg(null);
+    void loadQuota();
+  }, [loadQuota]);
+
+  /** 保存上限：空输入 = 清除覆盖（回退全局）；非正数本地拦截报错 */
+  async function saveQuota(): Promise<void> {
+    const trimmed = quotaInput.trim();
+    let quotaMb: number | null = null;
+    if (trimmed !== '') {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) {
+        setQuotaError('上限必须为正数（MB）');
+        return;
+      }
+      quotaMb = n;
+    }
+    setQuotaSaving(true);
+    try {
+      await ipc.audit.setQuota(workspaceId, quotaMb);
+    } catch (err) {
+      setQuotaError((err as Error).message);
+      return;
+    } finally {
+      setQuotaSaving(false);
+    }
+    setQuotaError(null);
+    setCleanupMsg(null);
+    await loadQuota();
+  }
+
+  /** 立即清理：enforceNow 后刷新配额 + 表格 */
+  async function runCleanup(): Promise<void> {
+    setEnforcing(true);
+    try {
+      const { deletedCount } = await ipc.audit.enforceNow(workspaceId);
+      setCleanupMsg(`已清理 ${deletedCount} 条`);
+      await Promise.all([loadQuota(), load()]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setEnforcing(false);
+    }
+  }
 
   // 切换筛选条件时回到第一页
   function applyFilter(): void {
@@ -55,12 +126,60 @@ export function AuditLog({ workspaceId }: Props) {
   }
 
   const hasMore = records.length === PAGE_SIZE;
+  const usedPct =
+    quotaInfo && quotaInfo.quotaMb > 0
+      ? Math.min(100, (quotaInfo.usedBytes / (quotaInfo.quotaMb * 1024 * 1024)) * 100)
+      : 0;
 
   return (
     <section className="flex flex-col gap-3">
       <div>
         <h3 className="text-sm font-semibold text-neutral-200">审计日志</h3>
         <p className="text-xs text-neutral-500">agent 工具调用记录（每页 {PAGE_SIZE} 条）</p>
+      </div>
+
+      {/* 配额卡：上限 + 占用 + 立即清理 */}
+      <div className="border border-border-subtle rounded-md p-3 flex flex-col gap-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-neutral-400">容量上限（MB）</span>
+            <input
+              value={quotaInput}
+              onChange={(e) => setQuotaInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveQuota();
+              }}
+              placeholder="100=继承全局"
+              className="px-2 py-1 text-xs rounded bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none w-36"
+            />
+          </label>
+          <Button size="sm" variant="ghost" disabled={quotaSaving} onClick={() => void saveQuota()}>
+            保存上限
+          </Button>
+          <Button size="sm" variant="ghost" disabled={enforcing} onClick={() => void runCleanup()}>
+            立即清理
+          </Button>
+        </div>
+        {quotaError && <div className="text-red-400 text-xs">{quotaError}</div>}
+        {cleanupMsg && <div className="text-green-400 text-xs">{cleanupMsg}</div>}
+        {quotaInfo && (
+          <div className="flex flex-col gap-1">
+            <div className="h-2 rounded bg-bg-tertiary overflow-hidden">
+              {/* Tailwind 任意值 class 在本仓库不生成 CSS，宽度/颜色用 inline style */}
+              <div
+                data-testid="audit-quota-bar"
+                className="h-2 rounded transition-width"
+                style={{
+                  width: `${usedPct}%`,
+                  backgroundColor: usedPct >= 95 ? '#f87171' : '#3b82f6',
+                }}
+              />
+            </div>
+            <span className="text-xs text-neutral-500">
+              {formatBytes(quotaInfo.usedBytes)} / {quotaInfo.quotaMb} MB · {quotaInfo.rowCount} 条记录
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 筛选栏 */}

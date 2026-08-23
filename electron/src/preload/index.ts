@@ -161,6 +161,10 @@ const api: ApiSurface = {
   },
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
+    // P2 Task 8：容量配额——读取 / 设置（null=回退全局）/ 立即清理
+    getQuota: (workspaceId) => invoke('audit:getQuota', workspaceId),
+    setQuota: (workspaceId, quotaMb) => invoke('audit:setQuota', workspaceId, quotaMb),
+    enforceNow: (workspaceId) => invoke('audit:enforceNow', workspaceId),
   },
   settings: {
     getGlobal: () => invoke('settings:getGlobal'),
