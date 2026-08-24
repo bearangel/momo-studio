@@ -11,6 +11,7 @@ import { app, BrowserWindow } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
+import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from './upgrade/legacy-upgrade';
 import { setSessionMainWindow, broadcastRuntimeChanged } from './im/session-service';
 import { initP2p, stopP2p } from './p2p';
 import { initTaskRuntime, stopTaskRuntime } from './task/runtime-init';
@@ -27,8 +28,28 @@ app.whenReady().then(async () => {
   try {
     logger.info('App starting', { version: app.getVersion() });
 
+    // P5：v1.x 旧库检测 + 自动导出 + 备份重置。必须在 runMigrations 之前——
+    // 旧 schema（appliedMax < 23）一旦跑了 2.0 migrations 列名即被改写，无法再导出。
+    // kv 通知标记延迟到 runMigrations 之后写入（kv_store 表在新库上才建好）。
+    const legacyExportDir = await runLegacyUpgradeIfNeeded();
+    if (legacyExportDir) {
+      logger.info('v1.x 旧库已导出并备份重置，全新 2.0 库即将初始化', {
+        exportDir: legacyExportDir,
+      });
+    }
+
     runMigrations();
     logger.info('Migrations complete');
+
+    if (legacyExportDir) {
+      try {
+        writeLegacyUpgradeNotice(legacyExportDir);
+      } catch (err) {
+        logger.warn('旧库升级通知标记写入失败（不影响启动）', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // D 子系统：启动 TaskScheduler（调度层）——提升 pending→assigned，执行层走 v1 runtime。
     initTaskRuntime();
