@@ -10,7 +10,7 @@
 //
 // 关键类型：
 //   - NodeInfo：节点元数据（id/名称/公钥/传输类型/最近活跃）
-//   - MessagePayload：业务消息包装（type 区分消息/任务/在线/ack）
+//   - MessagePayload：业务消息包装（type 区分消息/任务快照/资源目录/资源请求/资源供给）
 //   - IncomingMessage：传输层收到的消息（带来源 + 时间戳）
 //   - TransportLayer：传输接口（start/stop/send/discoverNodes/onMessage）
 
@@ -38,9 +38,13 @@ export interface MessagePayload {
    * '*' = 广播给所有信任节点（Router 层负责展开）
    */
   targetNodeId: string;
-  /** 消息类型 */
-  type: 'message' | 'task' | 'presence' | 'ack';
-  /** 业务 payload（由 type 决定 schema：messages 行 / tasks 行 / presence 行 / ack 元数据） */
+  /**
+   * 消息类型（P4 收敛为五个实义值）。
+   * 原 'task' | 'presence' | 'ack' 预留位从未有生产发送方，已移除；
+   * 2.1 联网增强（presence 在线广播 / ack 可靠回执）可在此联合再扩展。
+   */
+  type: 'message' | 'task-snapshot' | 'resource-catalog' | 'resource-request' | 'resource-provide';
+  /** 业务 payload（由 type 决定 schema：SyncMessage / TaskSnapshot / ResourceCatalogEntry / ResourceRequest / ResourceProvide） */
   body: Record<string, unknown>;
 }
 
