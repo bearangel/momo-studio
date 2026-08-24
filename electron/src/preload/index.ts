@@ -22,6 +22,10 @@ const api: ApiSurface = {
     getInfo: () => invoke('system:getInfo'),
     // P2 Task 2：同步注入 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变）
     getPlatform: () => process.platform,
+    // P5 Task 2：v1.x → 2.0 旧库升级首启提示（一次性 kv 标记）
+    getUpgradeNotice: () =>
+      invoke<{ exportDir: string } | null>('system:getUpgradeNotice'),
+    dismissUpgradeNotice: () => invoke<void>('system:dismissUpgradeNotice'),
   },
   workspace: {
     create: (input) => invoke('workspace:create', input),

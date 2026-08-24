@@ -4,6 +4,11 @@
 //   - 已有 workspace → 直接渲染 MainShell
 //   - 无 workspace → 全屏首启创建工作空间对话框（复用 CreateWorkspaceDialog）
 //   - 首启创建成功 → 进入 MainShell
+//
+// P5 Task 2：升级首启提示集成
+//   - getUpgradeNotice 命中 + workspace 存在 → MainShell + UpgradeNotice 同屏
+//   - 用户点「知道了」→ 调 dismissUpgradeNotice + 提示消失
+//   - getUpgradeNotice 返回 null → 无提示（既有分支不变）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { Workspace } from './ipc/types';
@@ -46,6 +51,9 @@ const mockApi = {
   // TitleBar（P2 Task 3 空态接入）：平台 + 窗口控件通道
   system: {
     getPlatform: vi.fn().mockReturnValue('linux'),
+    // P5 Task 2：升级提示标记读写
+    getUpgradeNotice: vi.fn().mockResolvedValue(null),
+    dismissUpgradeNotice: vi.fn().mockResolvedValue(undefined),
   },
   window: {
     minimize: vi.fn(),
@@ -60,6 +68,11 @@ beforeEach(() => {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   mockApi.workspace.list.mockReset();
   mockApi.workspace.create.mockReset();
+  mockApi.system.getUpgradeNotice.mockReset();
+  mockApi.system.dismissUpgradeNotice.mockReset();
+  // 默认无升级标记——既有分支断言不受影响
+  mockApi.system.getUpgradeNotice.mockResolvedValue(null);
+  mockApi.system.dismissUpgradeNotice.mockResolvedValue(undefined);
 });
 
 describe('App 启动分支（v2.0 P1 Task 11）', () => {
@@ -113,5 +126,65 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
       });
     });
     expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+  });
+});
+
+describe('App 升级提示集成（P5 Task 2）', () => {
+  it('getUpgradeNotice 命中 + 已有 workspace → MainShell + UpgradeNotice 同屏', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    mockApi.system.getUpgradeNotice.mockResolvedValue({
+      exportDir: '/tmp/upgrade-export-20260824-101530',
+    });
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(await screen.findByTestId('upgrade-notice')).toBeInTheDocument();
+    expect(
+      screen.getByText('/tmp/upgrade-export-20260824-101530'),
+    ).toBeInTheDocument();
+  });
+
+  it('getUpgradeNotice 命中但无 workspace → 首启空态（UpgradeNotice 不渲染——首次启动分支不受影响）', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    mockApi.system.getUpgradeNotice.mockResolvedValue({
+      exportDir: '/tmp/upgrade-export-x',
+    });
+    render(<App />);
+    // 首启空态分支不应展示升级提示——新装用户无标记场景的反向边界
+    expect(await screen.findByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-notice')).not.toBeInTheDocument();
+  });
+
+  it('getUpgradeNotice 返回 null → 不渲染 UpgradeNotice（既有分支不变）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    mockApi.system.getUpgradeNotice.mockResolvedValue(null);
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(screen.queryByTestId('upgrade-notice')).not.toBeInTheDocument();
+  });
+
+  it('点击「知道了」→ 调 dismissUpgradeNotice + UpgradeNotice 消失', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    mockApi.system.getUpgradeNotice.mockResolvedValue({
+      exportDir: '/tmp/upgrade-export-x',
+    });
+    render(<App />);
+    expect(await screen.findByTestId('upgrade-notice')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '知道了' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('upgrade-notice')).not.toBeInTheDocument();
+    });
+    expect(mockApi.system.dismissUpgradeNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it('bootstrapped 后调一次 getUpgradeNotice（不重复调）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    mockApi.system.getUpgradeNotice.mockResolvedValue({
+      exportDir: '/tmp/upgrade-export-x',
+    });
+    render(<App />);
+    await screen.findByTestId('upgrade-notice');
+    // 等下一拍确保无二次调用
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockApi.system.getUpgradeNotice).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,40 @@
 
 ## 状态
 
+**v2.0.0 — Released**
+
+2.0.0 正式发布——五期重构一气呵成：传输层内迁（终结 Matrix/Tuwunel 双轨）、UI 骨架与设置重构、半成品处置与 IPC 收敛、P2P 局域网协作、升级体验收尾。架构上从 v1.x 的「Electron + Matrix/Conduit 子进程 + 双轨 IM」收缩为「单进程 Electron + 内置 SessionService + 进程内事件分发」，本地零外部依赖、消息/委派不再经过外部协议服务器。详见 `docs/specs/2026-07-28-agent-platform-design.md` 与各期实施计划（p1-p5）。
+
+- **五期一句话总结**
+  - **P1 会话内核去 Matrix**——彻底移除 Matrix/Tuwunel 全家（matrix-js-sdk、Conduit 子进程、bot 注册器、Space/room 列）；`sessions` / `session_members` 表取代 Matrix room；SessionService + 进程内事件分发；dispatch/task_reply 走内部事件桥
+  - **P2 UI 骨架与设置**——无边框窗口 + 自绘 TitleBar；活动栏 + 统一侧边栏；设置独立界面；provider platform 显式化（migration v24）；MCP 子进程桥恢复；`agent:stream` 死推送清理
+  - **P3 半成品处置 + IPC 收敛**——`spawn-helpers.ts` 显式透传 `provider.platform`；空 model 源头拦截 + `gpt-3.5-turbo` 兜底退役；#T 双语法输入框 + T-序号任务 id 端到端闭合；资源注册面 IPC 收敛（`resource:registerMcp` / `resource:uploadSkill` 取代 `mcp:register` / `skill:uploadZip`）
+  - **P4 局域网联网**——P2P payload 多类型分发（message / task-snapshot / resource-catalog / resource-request / resource-provide）；任务快照出站广播 + 远端任务只读镜像（spec D7 铁律）；agent/MCP 资源分享 + 一键导入（请求/供给协议 + 30s 超时）
+  - **P5 升级体验**——主进程 boot 链 `runLegacyUpgradeIfNeeded()`（runMigrations **之前**）；旧库（schema_migrations 最大版本 < 23）只读连接全量导出 Markdown（按房间）+ JSON（agent 定义），落 `upgrade-export-<时间戳>/`；`state.db(+wal/shm)` 改名 `.legacy-v1.bak` 备份；renderer 首启右下角非模态卡片一次性提示导出目录
+
+- **升级说明**（v1.x 旧库用户）
+  - **完全重新开始（D5 决策）**——不做旧数据兼容；检测通过后在原路径按 2.0 schema 全新建库，旧库在 runMigrations 前被备份而非删除
+  - **首启自动导出**——检测到旧库即全量导出「房间消息 Markdown + agent 定义 JSON」，目录路径由首启提示告知（位于用户数据目录下 `upgrade-export-YYYYMMDD-HHmmss/`）
+  - **备份路径**——`state.db` / `state.db-wal` / `state.db-shm` 在末尾加后缀重命名为 `state.db.legacy-v1.bak` / `state.db-wal.legacy-v1.bak` / `state.db-shm.legacy-v1.bak` 留在原位置，需要时手动还原（实现见 `electron/src/main/upgrade/legacy-upgrade.ts:60-63`——suffix 追加在 `-wal`/`-shm` 之后）
+  - **首启提示**——右下角非模态卡片（「已升级到 Momo Studio 2.0」+ 说明 + 等宽路径 + 「知道了」），点击「知道了」kv 标记清空，下次启动不再提示
+  - **导出异常不阻塞**——单条失败仅 warn 记录，旧数据完整保留在备份文件中；最坏情况是少一份 Markdown/JSON 导出，**不会丢数据**
+
+- **指引**
+  - **macOS 主机验收清单**——P1/P2 半成品「真实拖拽 tab / 红绿灯 / frameless 标题栏」、P3「platform 下拉选择端到端生效」、P4「两台局域网设备互信 + 资源请求供给 + 任务远端镜像」、P5「1.x 库升级实测（旧库检测 + 导出 + 备份 + 首启提示 + 二次启动不重提示）」
+  - **2.1 清单位置**——P4 遗留 skill 分享（需文件块传输协议）/ 双向看板（当前远端任务仅只读）/ hub 中继；P2/P3 遗留（重启自动恢复 agent runtime / e2e 测试 / Windows 沙箱）
+
+- **DoD 对照**（spec §10 验收标准 × 收官状态，P5 T4 实测）
+
+  | # | 验收标准 | 状态 | 依据 |
+  |---|---|---|---|
+  | 1 | 重启一致性：流式输出中途杀进程重启，UI 展示逐字节一致 | ✅ 单测验证 | restart-consistency 7 场景（实时聚合==重启聚合 / dispatch 嵌套 / 多段 / 千级并发）；真实 LLM 交互实测待 macOS 主机（P1 终审记录） |
+  | 2 | 大上下文：≥1MB 正文 + 500 工具调用事件无截断、顺序正确、重启还原 | ✅ 等价单测 / 主机待验 | 千级 text_delta + 50 tool_call 并发重启一致测试；字面规格（1MB/500）待 macOS 主机实测 |
+  | 3 | 无 Matrix 残留：无 Tuwunel 进程 / 无 matrix-js-sdk / 体积减小 | ✅ 已验证 | P1 删除 54 文件（−3226 行）+ matrix-js-sdk 出库；收官复扫依赖树与锁文件 0 命中；xvfb 冒烟零 Matrix 进程 |
+  | 4 | UI：titlebar tabs + 活动栏 + 设置独立界面；Ctrl/Cmd+B 折叠侧栏 | ✅ 已验证（单测+xvfb） | P2 终审 APPROVED；真实拖拽 tab / 红绿灯交互待 macOS 主机 |
+  | 5 | 设置：模型服务两列 CRUD + 检查连接 + 模型列表；默认模型四类；审计滚动删除 | ✅ 已验证（单测） | P2 终审交叉审计全过（provider 链 / 审计链）；配额滚动删除含滞回回归锁 |
+  | 6 | 联网：两台局域网设备互信后，看板只读镜像 + 资源分享导入可演示 | ✅ 单测 + 单机双进程 / 双机待主机 | P4 终审 APPROVED（107 新测试）；mDNS 发布经第二进程发现验证；双机实测待 macOS 主机 |
+  | 7 | 测试：typecheck 双 clean；健康测试全绿；restart-consistency 扩展大上下文 | ✅ 收官实测 | electron 1074 + renderer 548 全绿零 flake；typecheck 双 clean；build exit 0；electron-builder 产物内嵌版本 2.0.0；xvfb 冒烟双启动通过 |
+
 **v2.0.0-p4 — 局域网联网（开发中，未发布）**
 
 2.0.0 第四期：P2P 局域网协作——任务只读镜像 + 资源分享。详见 `docs/plans/2026-08-23-v2.0.0-p4-lan-sync.md`。
@@ -153,6 +187,7 @@ npx pnpm@9.0.0 --filter @momo-studio/renderer test
 ```bash
 nvm use 20
 npx pnpm@9.0.0 build                       # 先构建 renderer + electron
+NODE_OPTIONS=--max-old-space-size=4096 npx pnpm@9.0.0 build  # 容器/低内存环境防 Vite Monaco OOM（2.1 拆 chunk 根治）
 npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
 ```
 
@@ -547,7 +582,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
-- **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；旧库检测/导出/定义导入是 P5 任务。
+- **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；P5 已实现自动导出（Markdown/JSON 落 `upgrade-export-<时间戳>/`）+ 备份重命名（`state.db.legacy-v1.bak`）+ 首启一次性提示。历史 session/agent 定义需手动导入新库（参考 P5 实施计划）
 
 ## 许可
 

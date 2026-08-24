@@ -1,0 +1,116 @@
+// electron/src/main/upgrade/legacy-upgrade.ts
+//
+// v1.x 旧库升级编排（P5 Task 1）：detect → export → backup → 标记。
+// 主进程 boot 链在 runMigrations 之前调用 runLegacyUpgradeIfNeeded()；
+// kv 标记必须延迟到 runMigrations 之后（kv_store 表在新库上才存在），
+// 由 index.ts 顺序执行：先 runLegacyUpgradeIfNeeded() → runMigrations() → writeLegacyUpgradeNotice()。
+import fs from 'node:fs';
+import path from 'node:path';
+import { resolveDbPath, resolveUserDataDir } from '../paths';
+import { getDb } from '../storage/db';
+import { logger } from '../logger';
+import { detectLegacyDb } from './legacy-detect';
+import { exportLegacyData } from './legacy-export';
+
+export const LEGACY_UPGRADE_NOTICE_KEY = 'legacy_upgrade_notice';
+
+const BACKUP_SUFFIX = '.legacy-v1.bak';
+
+function formatTimestamp(d: Date): string {
+  const pad = (n: number): string => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/**
+ * 旧库升级编排：
+ *   1. detectLegacyDb 判定；非旧库直接返回 null（零副作用）
+ *   2. 旧库 → userData 下建 upgrade-export-<YYYYMMDD-HHmmss>/ 并导出
+ *      （导出异常只 warn 不阻塞——旧数据随后整体进备份，不会丢）
+ *   3. state.db（含 -wal/-shm 若存在）改名加 .legacy-v1.bak 后缀，下次
+ *      runMigrations 在原路径重新初始化全新 2.0 库
+ * 返回导出目录绝对路径；非旧库返回 null。
+ */
+export async function runLegacyUpgradeIfNeeded(): Promise<string | null> {
+  const dbPath = resolveDbPath();
+  const status = detectLegacyDb(dbPath);
+  if (!status.legacy) {
+    return null;
+  }
+  logger.info('检测到 v1.x 旧库，执行导出与备份重置', { dbPath, appliedMax: status.appliedMax });
+
+  const exportDir = path.join(resolveUserDataDir(), `upgrade-export-${formatTimestamp(new Date())}`);
+  fs.mkdirSync(exportDir, { recursive: true });
+
+  try {
+    const result = exportLegacyData(dbPath, exportDir);
+    logger.info('旧库数据已导出', {
+      exportDir,
+      sessionCount: result.sessionCount,
+      agentDefCount: result.agentDefCount,
+    });
+  } catch (err) {
+    logger.warn('旧库导出失败（不阻塞升级，旧数据保留在备份文件中）', {
+      exportDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 导出连接已在 exportLegacyData 内关闭；此处改名三件套（wal/shm 为崩溃残留时才存在）
+  // 主库最后改名：部分失败时主库仍在原位，下次启动重触发检测幂等重试；
+  // 若主库先改名而 wal/shm 残留，下次启动会在陈旧 wal 旁建新库，状态错乱。
+  const backups: string[] = [];
+  for (const p of [`${dbPath}-shm`, `${dbPath}-wal`, dbPath]) {
+    if (fs.existsSync(p)) {
+      fs.renameSync(p, `${p}${BACKUP_SUFFIX}`);
+      backups.push(`${path.basename(p)}${BACKUP_SUFFIX}`);
+    }
+  }
+  logger.info('旧库已备份重置', { dbPath, backups });
+
+  return exportDir;
+}
+
+/**
+ * 写入 kv 升级标记（须在 runMigrations 之后调用——kv_store 表那时才存在）。
+ * 值为 { exportDir }，P5 后续任务的 UI 通知从这里取导出目录。
+ */
+export function writeLegacyUpgradeNotice(exportDir: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(LEGACY_UPGRADE_NOTICE_KEY, JSON.stringify({ exportDir }));
+}
+
+export interface UpgradeNotice {
+  /** 旧库导出目录绝对路径；UI 据此向用户告知备份位置 */
+  exportDir: string;
+}
+
+/**
+ * 读取升级首启标记。无标记 / 值畸形 / 字段缺失 → null（容错，UI 不抛错）。
+ * 仅依赖 kv_store（kv 表在 runMigrations 后存在），调用方须先 runMigrations。
+ */
+export function readUpgradeNotice(): UpgradeNotice | null {
+  const row = getDb()
+    .prepare('SELECT value FROM kv_store WHERE key = ?')
+    .get(LEGACY_UPGRADE_NOTICE_KEY) as { value: string } | undefined;
+  if (!row) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    // 畸形 JSON：视为无标记，避免 UI 启动崩溃
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const exportDir = (parsed as { exportDir?: unknown }).exportDir;
+  if (typeof exportDir !== 'string' || exportDir.length === 0) return null;
+  return { exportDir };
+}
+
+/** 清除升级首启标记（用户点「知道了」后调）。无标记时幂等不抛错。 */
+export function dismissUpgradeNotice(): void {
+  getDb().prepare('DELETE FROM kv_store WHERE key = ?').run(LEGACY_UPGRADE_NOTICE_KEY);
+}
