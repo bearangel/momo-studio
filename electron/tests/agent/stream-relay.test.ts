@@ -10,6 +10,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+
+// mock electron：BrowserWindow.getAllWindows 返回可控假窗口。
+// 回归锁（2.0.0 主机验收 P0-2）：start/segment_boundary INSERT 消息行后必须推
+// session:message 给 renderer——否则 agent 流式气泡实时永远不出现，重启才可见。
+const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+}));
+
 import {
   __routeChunkToBufferForTest,
   __resetEventBufferForTest,
@@ -74,6 +86,20 @@ describe('routeChunkToBuffer: chunk → SQLite 映射', () => {
     const statusEvent = events.find((e) => e.eventType === 'status_change');
     expect(statusEvent).toBeDefined();
     expect(statusEvent!.payload.status).toBe('streaming');
+  });
+
+  it('regression：start chunk INSERT 后推 session:message 给 renderer（实时气泡可见性）', () => {
+    mockSend.mockClear();
+    __routeChunkToBufferForTest({
+      type: 'start',
+      streamSessionId: 'ss-push-1',
+      sessionId: '!room:localhost',
+      senderAgentId: '@bot:localhost',
+    });
+
+    const msg = getMessageByStreamSessionId('ss-push-1');
+    expect(msg).not.toBeNull();
+    expect(mockSend).toHaveBeenCalledWith('session:message', expect.objectContaining({ id: msg!.id, status: 'streaming' }));
   });
 
   it('thinking / text / todo_update chunk 追加对应 events（payload 正确）', () => {
@@ -215,6 +241,9 @@ describe('routeChunkToBuffer: segment_boundary 创建独立分段 message row', 
     expect(seg!.status).toBe('done');
     expect(seg!.sender).toBe('@bot:localhost');
     expect(seg!.sessionId).toBe('!room:localhost');
+
+    // 5. regression：分段 row 也推 session:message（实时分段堆叠可见性）
+    expect(mockSend).toHaveBeenCalledWith('session:message', expect.objectContaining({ id: seg!.id, segmentOf: 'ss-1' }));
   });
 
   it('多段分段：每段一条独立 row，segment_index 递增', () => {

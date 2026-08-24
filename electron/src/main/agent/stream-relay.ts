@@ -54,6 +54,21 @@ export function __resetEventBufferForTest(): void {
   eventBuffer = null;
 }
 
+/**
+ * 推送 agent 消息行到 renderer（'session:message' 通道）。
+ *
+ * start / segment_boundary 分支 INSERT 消息行后必须立即推送——否则 renderer 的
+ * messagesBySession 永远不知道该行存在，agent 流式气泡（含失败错误气泡）实时
+ * 不可见，重启拉历史才出现（2.0.0 主机验收 P0-2）。与 onFlush 推 event batch
+ * 的窗口获取方式一致；非 Electron 环境（测试/headless）静默跳过。
+ */
+function pushSessionMessage(msg: ReturnType<typeof insertMessage>): void {
+  if (!BrowserWindow) return;
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('session:message', msg);
+}
+
 /** 测试用：导出 routeChunkToBuffer 以便单测直接验证 chunk → SQLite 映射 */
 export function __routeChunkToBufferForTest(chunk: StreamChunk): void {
   routeChunkToBuffer(chunk);
@@ -105,6 +120,7 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         });
         msg = getMessageByStreamSessionId(chunk.streamSessionId);
         if (!msg) return;
+        pushSessionMessage(msg);
         getEventBuffer().append({
           messageId: msg.id,
           eventType: 'status_change',
@@ -199,6 +215,7 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           status: 'done',
         });
         const segBuf = getEventBuffer();
+        pushSessionMessage(segMsg);
         segBuf.append({
           messageId: segMsg.id,
           eventType: 'final',
