@@ -5,8 +5,8 @@
 // 点击整行触发 onSelect，高亮选中态。
 import type { TaskRow, TaskStatus } from '../../ipc/types';
 
-/** 8 状态中文标签 */
-const STATUS_LABEL: Record<TaskStatus, string> = {
+/** 8 状态中文标签（TaskSidebarPanel 远端只读分区复用） */
+export const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: '草稿',
   pending: '待启动',
   assigned: '排队中',
@@ -17,8 +17,8 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: '已取消',
 };
 
-/** 状态对应前景色 */
-const STATUS_COLOR: Record<TaskStatus, string> = {
+/** 状态对应前景色（TaskSidebarPanel 远端只读分区复用） */
+export const STATUS_COLOR: Record<TaskStatus, string> = {
   draft: '#9ca3af',
   pending: '#fbbf24',
   assigned: '#3b82f6',

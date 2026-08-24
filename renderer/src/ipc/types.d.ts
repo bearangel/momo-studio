@@ -137,6 +137,29 @@ export interface TaskRow {
 }
 
 /**
+ * 远端任务快照行（P4 Task 3）——TaskRow 的 7 字段子集，
+ * 与 electron/src/main/p2p/protocols.ts 的 TaskSnapshot.tasks 对齐（传输瘦身）。
+ */
+export type TaskSnapshotItem = Pick<
+  TaskRow,
+  'id' | 'title' | 'status' | 'assigneeAgentId' | 'priority' | 'createdAt' | 'updatedAt'
+>;
+
+/**
+ * 远端节点任务镜像（P4 Task 3）——p2p:getRemoteTasks 返回结构。
+ * 只读：远端任务仅作看板展示，不进本地 tasks 表。
+ */
+export interface RemoteNodeTasks {
+  nodeId: string;
+  nodeName: string;
+  tasks: TaskSnapshotItem[];
+  /** 快照拍摄时间（毫秒） */
+  takenAt: number;
+  /** 超 3 分钟未更新——对端可能离线（仍展示，带「已离线?」标记） */
+  stale: boolean;
+}
+
+/**
  * 任务相关 IPC 接口（B 子系统）。
  *
  *   - create：新建任务（status 默认 'draft'）。creatorUserId 由 main process 从当前
@@ -916,6 +939,8 @@ export interface ApiSurface {
     listTrustedNodes(): Promise<
       Array<{ nodeId: string; displayName: string; trustedAt: number }>
     >;
+    /** P4 Task 3：远端节点任务只读镜像（内存缓存；轮询点顺带清理超时条目） */
+    getRemoteTasks(): Promise<RemoteNodeTasks[]>;
   };
   /**
    * P2 Task 1：窗口控制（自绘 titlebar 控件调用）。

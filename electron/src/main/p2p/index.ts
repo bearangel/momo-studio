@@ -5,12 +5,13 @@
 // 设计要点：
 //   - initP2p() 加载或生成 NodeIdentity，串起 LocalTransport + LanTransport + Router + P2pSync。
 //     模块级单例（router/lanTransport/sync）保证 IPC handlers 能拿到运行时引用。
-//   - registerP2pHandlers() 暴露 5 个 IPC：
+//   - registerP2pHandlers() 暴露 6 个 IPC：
 //       p2p:getIdentity         当前节点身份
 //       p2p:getDiscoveredNodes  发现的节点列表（带 trusted 标记）
 //       p2p:addTrustedNode      信任节点（按 nodeId 从 discoveredNodes 查公钥）
 //       p2p:removeTrustedNode   取消信任
 //       p2p:listTrustedNodes    信任节点完整列表
+//       p2p:getRemoteTasks      远端节点任务只读镜像（P4 Task 3；轮询点顺带 prune）
 //   - 本 task 不实际接入 main/index.ts 启动流程（C8 仅提供函数，C9+ 集成）。
 //
 // 与 C7 sync.ts 的关系：
@@ -39,17 +40,35 @@ import {
   getTrustedPublicKey,
 } from './trust-store';
 import { P2pSync, type SyncMessage } from './sync';
-import { setTaskBroadcastDeps, clearTaskBroadcastDeps } from './task-broadcast';
+import {
+  setTaskBroadcastDeps,
+  clearTaskBroadcastDeps,
+  broadcastLocalTaskSnapshot,
+} from './task-broadcast';
+import {
+  writeTaskSnapshot,
+  getRemoteTasks,
+  pruneStale,
+} from './remote-cache';
 import { insertMessage } from '../storage/messages/repo';
 import { logger } from '../logger';
 
 // 任务快照出站广播 facade（P4 Task 2）——实现与依赖装配在 ./task-broadcast
 export { broadcastLocalTaskSnapshot } from './task-broadcast';
 
+/**
+ * 快照周期重播兜底间隔（T2 移交项）——30-60s 取中值。
+ * 事件触发广播依赖本地写路径（task IPC / scheduler），但 agent 自主终态等
+ * 场景无本地写触发点，对端 staleness 会无界增长——周期重播保证有界。
+ */
+const SNAPSHOT_REBROADCAST_INTERVAL_MS = 45_000;
+
 /** 模块级单例（initP2p 创建，IPC handlers / stopP2p 引用） */
 let router: Router | null = null;
 let lanTransport: LanTransport | null = null;
 let sync: P2pSync | null = null;
+/** 周期重播定时器（initP2p 创建并 unref，stopP2p 清理） */
+let snapshotRebroadcastTimer: NodeJS.Timeout | null = null;
 /** 当前节点身份缓存（getIdentity handler 用） */
 let currentIdentity: { nodeId: string; displayName: string } | null = null;
 
@@ -91,17 +110,26 @@ export async function initP2p(): Promise<void> {
   });
   await router.start();
 
-  // 4. 应用层同步：把对端 message 写本地 SQLite + 推 renderer
+  // 4. 应用层同步：把对端 message 写本地 SQLite + 推 renderer；
+  //    任务快照入站 → remote-cache 只读镜像（不落 tasks 表——防本节点调度器误捡）
   sync = new P2pSync({
     router,
     localNodeId: id.nodeId,
     onRemoteMessage: handleRemoteMessage,
+    onRemoteTaskSnapshot: writeTaskSnapshot,
   });
   sync.start();
 
   // 5. 任务快照出站广播装配（P4 Task 2）：注入 sync + 当前身份——
   //    写路径触发点（task IPC handlers / scheduler）经 task-broadcast 模块取用
   setTaskBroadcastDeps({ sync, nodeId: id.nodeId, nodeName: id.displayName });
+
+  // 6. 周期重播兜底（T2 移交）：事件触发外的快照重播，保证对端 staleness 有界。
+  //    unref——纯兜底重播不值得阻止进程退出
+  snapshotRebroadcastTimer = setInterval(() => {
+    void broadcastLocalTaskSnapshot();
+  }, SNAPSHOT_REBROADCAST_INTERVAL_MS);
+  snapshotRebroadcastTimer.unref();
 }
 
 /**
@@ -157,6 +185,11 @@ export async function broadcastLocalMessage(msg: SyncMessage): Promise<void> {
  * 反向顺序：sync → router（router.stop 会停掉所有 transport）。
  */
 export async function stopP2p(): Promise<void> {
+  // 周期重播定时器先行清理（T2 移交项）——后续不再有出站快照
+  if (snapshotRebroadcastTimer) {
+    clearInterval(snapshotRebroadcastTimer);
+    snapshotRebroadcastTimer = null;
+  }
   sync?.stop();
   sync = null;
   // 任务快照广播依赖一并清空（P4 Task 2）——回到"P2P 未启用"静默 no-op
@@ -168,7 +201,7 @@ export async function stopP2p(): Promise<void> {
 }
 
 /**
- * 注册 P2P IPC handlers（5 个 p2p: 通道）。
+ * 注册 P2P IPC handlers（6 个 p2p: 通道）。
  * 必须在 initP2p() 之后调用（getIdentity / getDiscoveredNodes 依赖模块单例）。
  *
  * 幂等性：Electron ipcMain.handle 重复注册同通道会抛错；调用方需保证只调一次。
@@ -211,4 +244,11 @@ export function registerP2pHandlers(): void {
       trustedAt: n.trustedAt,
     })),
   );
+
+  // P4 Task 3：远端节点任务只读镜像。看板侧 5s 轮询入口——顺带 prune
+  //（计划原定 NodeDiscoveryPanel 轮询点顺带调，此处 handler 即实际轮询点）
+  ipcMain.handle('p2p:getRemoteTasks', () => {
+    pruneStale();
+    return getRemoteTasks();
+  });
 }
