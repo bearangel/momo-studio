@@ -17,6 +17,11 @@
 //   sync 通过 router.onIncoming(handler) 订阅，router opts.onIncoming 兼容回调保留空函数。
 //   onRemoteMessage → handleRemoteMessage：把对端 message 写入 SQLite（source='lan'）+ 推 renderer。
 //   broadcastLocalMessage：本地新消息出站触发，委托 sync.broadcastNewMessage 广播给信任节点。
+//
+// P4 Task 2 追加：
+//   initP2p 同时装配 task-broadcast 依赖（sync + 节点身份），并再导出
+//   broadcastLocalTaskSnapshot 作为任务快照出站广播的 facade——写路径触发点
+//   （task IPC handlers / scheduler）直接 import task-broadcast 叶子模块。
 import { BrowserWindow, ipcMain } from 'electron';
 import { Router } from './router';
 import { LocalTransport } from './local-transport';
@@ -34,8 +39,12 @@ import {
   getTrustedPublicKey,
 } from './trust-store';
 import { P2pSync, type SyncMessage } from './sync';
+import { setTaskBroadcastDeps, clearTaskBroadcastDeps } from './task-broadcast';
 import { insertMessage } from '../storage/messages/repo';
 import { logger } from '../logger';
+
+// 任务快照出站广播 facade（P4 Task 2）——实现与依赖装配在 ./task-broadcast
+export { broadcastLocalTaskSnapshot } from './task-broadcast';
 
 /** 模块级单例（initP2p 创建，IPC handlers / stopP2p 引用） */
 let router: Router | null = null;
@@ -89,6 +98,10 @@ export async function initP2p(): Promise<void> {
     onRemoteMessage: handleRemoteMessage,
   });
   sync.start();
+
+  // 5. 任务快照出站广播装配（P4 Task 2）：注入 sync + 当前身份——
+  //    写路径触发点（task IPC handlers / scheduler）经 task-broadcast 模块取用
+  setTaskBroadcastDeps({ sync, nodeId: id.nodeId, nodeName: id.displayName });
 }
 
 /**
@@ -146,6 +159,8 @@ export async function broadcastLocalMessage(msg: SyncMessage): Promise<void> {
 export async function stopP2p(): Promise<void> {
   sync?.stop();
   sync = null;
+  // 任务快照广播依赖一并清空（P4 Task 2）——回到"P2P 未启用"静默 no-op
+  clearTaskBroadcastDeps();
   await router?.stop();
   router = null;
   lanTransport = null;

@@ -15,6 +15,9 @@
 //   - v2（Task 11）：无登录概念——creatorUserId 由 main process 注入结构常量 'owner'
 //     （单用户本地应用；原从 Matrix 登录会话读取，不信任 renderer 传身份的原则不变）。
 //   - task:list 直接转发 listTasks 的 opts 结构（workspaceId / status / assigneeAgentId 等）。
+//   - P4 Task 2：四个写通道（create/transition/cancel/start）成功后 fire-and-forget
+//     广播任务快照（P2P 未启用时内部静默 no-op）。import 叶子模块 task-broadcast
+//     而非 p2p 门面——避免把 electron/传输层依赖拖进 scheduler 等纯逻辑模块的测试图。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
@@ -26,6 +29,7 @@ import {
   type TaskRow,
   type TaskStatus,
 } from '../storage/tasks/repo';
+import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { startTask, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
@@ -57,7 +61,7 @@ interface ListOpts {
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
     // v2（Task 11）：单用户本地应用——creatorUserId 固定 'owner'（NOT NULL 列）
-    return insertTask({
+    const created = insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
       creatorUserId: 'owner',
@@ -69,6 +73,8 @@ export function registerTaskHandlers(): void {
       scheduledAt: input.scheduledAt,
       deadlineAt: input.deadlineAt,
     });
+    void broadcastLocalTaskSnapshot();
+    return created;
   });
 
   ipcMain.handle('task:list', async (_evt, opts: ListOpts): Promise<TaskRow[]> => {
@@ -94,12 +100,15 @@ export function registerTaskHandlers(): void {
       to: TaskStatus,
       extraPatch?: Parameters<typeof transitionTaskStatus>[2],
     ): Promise<TaskRow> => {
-      return transitionTaskStatus(id, to, extraPatch);
+      const row = transitionTaskStatus(id, to, extraPatch);
+      void broadcastLocalTaskSnapshot();
+      return row;
     },
   );
 
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
     transitionTaskStatus(id, 'cancelled');
+    void broadcastLocalTaskSnapshot();
   });
 
   ipcMain.handle(
@@ -110,6 +119,7 @@ export function registerTaskHandlers(): void {
       opts?: StartTaskOpts,
     ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
       const result = await startTask(id, opts);
+      void broadcastLocalTaskSnapshot();
       return {
         executionSessionId: result.executionSessionId,
         createdNewRoom: result.createdNewRoom,
