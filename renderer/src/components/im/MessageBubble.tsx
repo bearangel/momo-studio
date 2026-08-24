@@ -40,11 +40,13 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
     return <TaskReplyCard message={message} isSelf={isSelf} senderName={senderName} />;
   }
 
-  // 流式中 OR 已完成但带富信息（thinking/工具调用/dispatches）：用 AgentStreamBubble 渲染。
-  // AgentStreamBubble 内部按 status 控制流式光标/停止按钮/状态栏，done 时仅显示静态富信息。
+  // 流式中 OR 已完成但带富信息 OR 失败带错误文本：用 AgentStreamBubble 渲染——
+  // 否则错误（含失败的具体原因）会被静态气泡吞掉不可见（2.0.0 主机验收 P0-3）。
   if (
     stream &&
     (stream.status === 'streaming' ||
+      stream.status === 'failed' ||
+      stream.error !== undefined ||
       stream.thinking.length > 0 ||
       stream.toolCalls.length > 0 ||
       stream.dispatches.length > 0)

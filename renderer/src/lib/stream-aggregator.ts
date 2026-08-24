@@ -34,6 +34,8 @@ export interface AggregatedStream {
   todos: TodoItem[];
   dispatches: AggregatedDispatch[];
   status: 'streaming' | 'done' | 'failed' | 'aborted';
+  /** final 事件携带的错误文本（status='failed' 时存在）；成功/中断流为 undefined */
+  error?: string;
   events: Array<{ seq: number; type: string; content?: string }>;
 }
 
@@ -51,6 +53,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
   let thinking = '';
   let text = '';
   let status: AggregatedStream['status'] = 'streaming';
+  let streamError: string | undefined;
   let todos: TodoItem[] = [];
 
   // tool_call / dispatch 按 callId 暂存 start payload，再被 result 配对
@@ -126,7 +129,18 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         }
         break;
       case 'final':
-        status = 'done';
+        if (
+          p.status === 'streaming' ||
+          p.status === 'done' ||
+          p.status === 'failed' ||
+          p.status === 'aborted'
+        ) {
+          status = p.status;
+        } else if (p.status === undefined) {
+          // 旧形状 final（segment_boundary 落的 final{body}）无 status 字段——保持 done 兜底
+          status = 'done';
+        }
+        if (typeof p.error === 'string') streamError = p.error;
         break;
     }
   }
@@ -163,6 +177,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
     todos,
     dispatches,
     status,
+    ...(streamError !== undefined ? { error: streamError } : {}),
     events: sortedTimeline,
   };
 }

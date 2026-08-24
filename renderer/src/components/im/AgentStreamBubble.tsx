@@ -149,36 +149,54 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
           paddingTop: 6,
           borderTop: '1px solid #333',
           display: 'flex',
-          alignItems: 'center',
-          gap: 8,
+          flexDirection: 'column',
+          gap: 4,
           fontSize: 11,
         }}
       >
-        <span style={{ color: statusColor }}>
-          {statusDot} {statusText}
-        </span>
-        {isStreaming && (
-          <button
-            type="button"
-            onClick={() => {
-              // Task 6：按 streamSessionId 精确中断（流式消息行必带；缺失时静默跳过）
-              if (message.streamSessionId) {
-                void ipc.agent.abortStream(message.streamSessionId);
-              }
-            }}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: statusColor }}>
+            {statusDot} {statusText}
+          </span>
+          {isStreaming && (
+            <button
+              type="button"
+              onClick={() => {
+                if (message.streamSessionId) {
+                  void ipc.agent.abortStream(message.streamSessionId);
+                }
+              }}
+              style={{
+                marginLeft: 'auto',
+                fontSize: 12,
+                padding: '2px 10px',
+                background: '#333',
+                border: '1px solid #444',
+                borderRadius: 4,
+                color: '#ccc',
+                cursor: 'pointer',
+              }}
+            >
+              ⏹ 停止
+            </button>
+          )}
+        </div>
+        {!isStreaming && stream.error && (
+          <div
             style={{
-              marginLeft: 'auto',
-              fontSize: 12,
-              padding: '2px 10px',
-              background: '#333',
-              border: '1px solid #444',
+              color: '#fca5a5',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              background: '#3b1d1d',
+              border: '1px solid #5b2929',
               borderRadius: 4,
-              color: '#ccc',
-              cursor: 'pointer',
+              padding: '6px 8px',
+              fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+              fontSize: 11,
             }}
           >
-            ⏹ 停止
-          </button>
+            {stream.error}
+          </div>
         )}
       </div>
 
