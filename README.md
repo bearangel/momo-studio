@@ -6,6 +6,20 @@
 
 ## 状态
 
+**v2.0.0-p4 — 局域网联网（开发中，未发布）**
+
+2.0.0 第四期：P2P 局域网协作——任务只读镜像 + 资源分享。详见 `docs/plans/2026-08-23-v2.0.0-p4-lan-sync.md`。
+
+- **P2P 协议扩展——payload 多类型分发**——`MessagePayload.type` 收敛为五个实义值（message / task-snapshot / resource-catalog / resource-request / resource-provide），P2pSync 按类型多路分发；原 'task'/'presence'/'ack' 预留位（无生产发送方）移除
+- **任务快照出站广播**——task 写通道（create / transition / cancel / start）与 scheduler 自动转换成功后 fire-and-forget 全量快照广播；45s 周期兜底重播保证对端 staleness 有界
+- **远端任务只读镜像**——入站快照只进内存缓存，绝不写 `tasks` 表、调度器不消费远端数据（spec D7 只读铁律）；看板 TaskSidebarPanel 新增「远端节点」只读分区（节点分组卡 + 5s 轮询，无操作按钮）
+- **资源分享（agent / MCP）**——custom 资源目录广播（资源/agent 写通道触发 + 5min 周期兜底）；资源库新增「P2P 共享」来源 tab；入站目录内存缓存 + 读路径顺带 prune（离线对端不滞留）
+- **资源一键导入（请求/供给协议）**——requestId 配对 + 30s 超时：agent 定义落地 custom（不落 assignment，导入后手动加入 workspace；slug 冲突加 `-from-<节点前4>` 后缀）；MCP 定义重名幂等覆盖
+- 范围裁定：skill 分享留 2.1（需文件块传输协议；agent/MCP 是 JSON 结构化定义可直接载）；任务广播用全量快照（不做增量 diff）；远端任务 UI 轮询刷新（5s，不加推送通道）
+- 2.1 遗留：skill 分享 / 双向看板（当前远端任务仅只读）/ hub 中继
+- 验收边界：容器单机——mDNS 发布经第二进程发现验证（nodeid + 公钥 TXT 记录）；双机真机联调（spec 验收 6「两台局域网设备互信」）留 macOS 主机
+- 待办：P5 升级体验
+
 **v2.0.0-p3 — 半成品处置与 IPC 收敛（开发中，未发布）**
 
 2.0.0 第三期：P1/P2 半成品收尾 + IPC 面收敛。详见 `docs/plans/2026-08-23-v2.0.0-p3-cleanup-ipc.md`。
