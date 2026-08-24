@@ -494,3 +494,15 @@ Base commit: 9add711
 - P0-2: stream-relay start/segment_boundary 不推 session:message（agent 气泡实时不可见）
 - 全链路 harness（真实 LLM glm-5.3 + dist 生产代码）：主进程 E2E PASS
 - 用户侧待复验；「owner 消息重启后不显示」未复现根因，待复验数据
+
+### 主机验收 P0 修复 ×3（ddf3970 + b30c6af + 8fbb744）
+- P0: sendTaskEndAndExit 裸调用 process.send 崩溃（错误路径全灭）+ LLM fetch 错误无 cause
+- P0-2: stream-relay start/segment_boundary 不推 session:message（agent 气泡实时不可见）
+- P0-3: aggregator 硬编码 final{status:'done'} + MessageBubble 不分发 failed/有 error（错误文本永远不可见）
+
+主进程 e2e harness（dist 生产代码 + 真实 LLM glm-5.3）：PASS
+- 用户消息 + agent 回复 + 66 events + final(done) 全部落库正确
+- listMessagesBySession 返回用户行+agent 行双行（无主进程过滤）
+
+症状 #2（重启后用户消息消失）：主进程数据层完全健康；DB 直查确认 user+agent 两行均在。
+renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
