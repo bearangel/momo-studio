@@ -8,7 +8,8 @@
 //   ② 入站缓存往返——writeResourceCatalog 按 fromNodeId（验签来源）键控（自报 nodeId
 //      不采信）；getSharedResources 返回 { nodeId, nodeName, items, takenAt }
 //   ③ 同节点二次写入整条覆写；不同节点互不影响
-//   ④ pruneStaleResources——超 5 分钟条目移除；5 分钟内保留
+//   ④ pruneStaleResources——超 5 分钟条目移除；5 分钟内保留；读口（getSharedResources）
+//      顺带清理（prune-on-read——fix round 1 生产触发点）
 //   ⑤ P2P 未启用（deps 未装配）→ 出站静默 no-op；广播失败吞错不抛
 //   ⑥ initP2p 接线——入站 resource-catalog（Router onIncoming 捕获注入）→ 缓存 →
 //      p2p:getSharedResources handler 可读；handler 顺带 prune
@@ -360,6 +361,16 @@ describe('resource-share 入站缓存', () => {
     pruneStaleResources();
 
     const list = getSharedResources();
+    expect(list.map((r) => r.nodeId)).toEqual(['node-fresh']);
+  });
+
+  it('④b prune-on-read：getSharedResources 读口顺带清理——6 分钟 stale 条目不返回', () => {
+    writeResourceCatalog(mkCatalog({ takenAt: Date.now() - 6 * 60_000 }), 'node-stale');
+    writeResourceCatalog(mkCatalog({ takenAt: Date.now() }), 'node-fresh');
+
+    // 不显式调 pruneStaleResources——读口自清理（fix round 1 生产触发点）
+    const list = getSharedResources();
+
     expect(list.map((r) => r.nodeId)).toEqual(['node-fresh']);
   });
 });

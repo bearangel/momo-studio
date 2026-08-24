@@ -11,7 +11,7 @@
 //     （目录变更频率远低于任务流转，无需 45s 级重播）
 //   - 入站缓存镜像 remote-cache.ts 模式：Map 按 fromNodeId 键控（传输层验签来源），
 //     cat.nodeId 自报字段不采信；同节点整条覆写；超 5 分钟无更新 prune
-//     （p2p:getSharedResources handler 轮询点顺带清理）
+//     （getSharedResources 读口顺带清理——覆盖 listResources / handler / T5 导入路径）
 //   - 依赖装配镜像 task-broadcast.ts：deps 由 initP2p 注入 / stopP2p 清空，
 //     未装配时出站静默 no-op——本地资源写路径完全不受 P2P 启停影响
 import { logger } from '../logger';
@@ -94,10 +94,13 @@ export function writeResourceCatalog(cat: ResourceCatalogEntry, fromNodeId: stri
 
 /** 读取全部远端共享目录——listResources p2p 源的数据入口 */
 export function getSharedResources(): SharedNodeResources[] {
+  // 读路径顺带清理——T3 模式的生产触发点是看板 5s 轮询（handler），
+  // 资源侧消费点是 listResources 读缓存，故在读口清理（离线对端目录不滞留）
+  pruneStaleResources();
   return Array.from(cache.values());
 }
 
-/** 清理超 5 分钟无更新的节点条目——p2p:getSharedResources handler 轮询点顺带调用 */
+/** 清理超 5 分钟无更新的节点条目——getSharedResources 读口顺带调用 */
 export function pruneStaleResources(): void {
   const now = Date.now();
   for (const [key, entry] of cache) {

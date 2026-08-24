@@ -12,7 +12,7 @@
 //       p2p:removeTrustedNode   取消信任
 //       p2p:listTrustedNodes    信任节点完整列表
 //       p2p:getRemoteTasks      远端节点任务只读镜像（P4 Task 3；轮询点顺带 prune）
-//       p2p:getSharedResources  远端节点共享资源目录（P4 Task 4；轮询点顺带 prune）
+//       p2p:getSharedResources  远端节点共享资源目录（P4 Task 4）
 //   - 本 task 不实际接入 main/index.ts 启动流程（C8 仅提供函数，C9+ 集成）。
 //
 // 与 C7 sync.ts 的关系：
@@ -57,7 +57,6 @@ import {
   broadcastLocalResourceCatalog,
   writeResourceCatalog,
   getSharedResources,
-  pruneStaleResources,
 } from './resource-share';
 import {
   writeTaskSnapshot,
@@ -296,9 +295,9 @@ export function registerP2pHandlers(): void {
     return getRemoteTasks();
   });
 
-  // P4 Task 4：远端节点共享资源目录（资源库 p2p 源数据）。handler 即轮询点，顺带 prune
+  // P4 Task 4：远端节点共享资源目录（资源库 p2p 源数据）。
+  // prune 由 getSharedResources 读口顺带完成（fix round 1——handler 无需显式调用）
   ipcMain.handle('p2p:getSharedResources', () => {
-    pruneStaleResources();
     return getSharedResources();
   });
 }
