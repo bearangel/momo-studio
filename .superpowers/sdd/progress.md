@@ -448,3 +448,40 @@ Base commit: 9add711
 - DEFER-OK（2.1 清单）：bonjour 双实例崩溃（~3 行 error 监听，置顶）；横幅文案两处化妆级
 
 ## P4 lan-sync 全部完成（8 commits, ecf835f..b546228）——已过终审可合并
+
+## 2.0.0 P5 release（feat/v2.0.0-p5-release）
+
+### P5 Task 1: complete (commits 4464fd6..f42ba86, review clean)
+- upgrade/ 三模块（检测/导出/编排）+ boot 接线（runMigrations 前钩 + 迁移后 kv）；复用 formatRoomToMarkdown；WAL 真场景测试
+- 1068/1068 + typecheck 双 clean；旧列名以 migration 源码核实
+- Minor（defer）：rename 三件套无回滚（单实例+boot 无句柄，近零概率）；旧 agent sender 导出标 👤（化妆）；「最近 N 条」措辞
+- T2 需容忍：导出失败仍返回空 exportDir
+
+### P5 Task 2: complete (commits f42ba86..fb8801d, review clean)
+- UpgradeNotice 非模态卡片（select-all 路径 + dismiss 清 kv 崩溃安全语义）+ App 单次 invoke 同屏 + system 双通道
+- 548/548 + 1074/1074 + typecheck 双 clean
+- Minor（defer）：dismiss promise 未接 catch；空目录文案轻微过度承诺；文案断言正则偏弱
+
+### P5 Task 3: complete (commits fb8801d..7b03333, review clean after fix round)
+- 三处版本 2.0.0 + README 发布块（修复轮：备份文件名对齐 legacy-upgrade.ts + 措辞机制中性化 + 报告勘误）
+- 1074/1074 + 548/548 + build exit 0（NODE_OPTIONS=4g 防 Vite Monaco OOM）+ frozen-lockfile 零变更
+- Follow-up（2.1）：NODE_OPTIONS 固化进 build 脚本或 vite chunk 拆分
+
+### P5 Task 4: complete (commit f53204a)
+- 残留扫描零命中；1074/1074 + 548/548 + build（asar 内嵌 2.0.0 验证）；xvfb 双启动冒烟（新库迁移 + 二次零重放 + 零 Matrix）
+- DoD 七条对照：3/5/7 容器闭环，1/2/4/6 单测在册归主机清单——达发布 DoD 无阻塞
+
+## P5 release 全部完成（5 commits, 4464fd6..f53204a）——待终审（2.0.0 五期收官）
+
+## Final review fixes
+- spec `2026-08-23-v2.0.0-platform-refactor-design.md` §8 追加 2026-08-24 裁定补记：agent 定义导入降范围为「导出 JSON + 手动导入」，2.0.x 恢复自动化
+- `electron/src/main/upgrade/legacy-upgrade.ts` rename 三件套改为 -shm → -wal → 主库（最后）：部分失败时主库仍在原位 → 下次启动重触发检测幂等重试；避免主库先改名而 wal/shm 残留导致下次启动在陈旧 wal 旁建新库
+- README 打包节新增 NODE_OPTIONS=--max-old-space-size=4096 build 一行（容器/低内存环境防 Vite Monaco OOM，2.1 拆 chunk 根治）
+- tests/upgrade/ 全绿（3 describe / 15 it）+ electron 1074/1074 + typecheck 双 clean
+
+### P5 Final review: APPROVED (Yes) + 收尾项 e60abe8 闭合
+- Important（记录性）：spec §8 agent 导入降范围裁定补记；加固：备份改名 wal/shm 先/主库后（部分失败自愈）；README 打包 NODE_OPTIONS 说明
+- 最终门禁独立复现：1074/1074 + 548/548 + build asar 2.0.0 + WAL 真场景实证
+- DEFER（2.1）：NODE_OPTIONS 固化/vite chunk 拆分；空目录 kv success 标志；agent 导入自动化（2.0.x）
+
+## P5 release 全部完成（6 commits, 4464fd6..e60abe8）——2.0.0 五期收官
