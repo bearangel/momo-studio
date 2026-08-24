@@ -332,3 +332,66 @@ Base commit: 9add711
 ### 合并前门禁观察（如实记录）
 - 首轮 root test 出现 1 次 renderer 失败（未捕获到用例名，grep 截断）；随后连续 5 轮全绿（515+954 ×2 root 级 + 3 次 renderer 单独）
 - 判定：一次性 flaky（与项目已知 vitest transform cache 偶发 stale 特征吻合）；P3 观察清单记录，若复现需定位捕获用例名
+
+## 2.0.0 P3 cleanup-ipc（feat/v2.0.0-p3-cleanup-ipc，基线 3676f8a）
+
+### P3 Task 1: complete (commits 3676f8a..2ecafd8, review clean after fix round)
+- provider.platform 运行时接线（buildSpawnOpts→RuntimeConfig.modelPlatform→createLLMProvider 显式 provider；undefined 回退启发式）
+- 960/960 + 515/515 + typecheck 双 clean；修复轮补注释清剿
+- Minor（defer）：undefined 用例 not.objectContaining 精度；parseConfig 字面量分支无专项测试
+
+### P3 Task 2: complete (commits 2ecafd8..19c4190, review clean after fix round)
+- defaultChatModel 写路径兜底（ghost warn 区分）+ testConnection 空 model 结构化错误 + Dialog 硬编码删除
+- 966/966 + 515/515 + typecheck 双 clean
+- Minor（defer）：README:516 技术债行过时（T9 收尾清）；DefinitionEditor 前置校验使 fallback 对标准 UI 潜伏（未来放宽表单才显性）；测试 EOF newline
+
+### P3 Task 3: complete (commits 19c4190..840b061, review clean + follow-up verified)
+- MentionInput 现役化（@/# 双菜单，diff ledger 9 项先行）+ MessageInput 退役 + 潜伏正则 bug 修复
+- Follow-up：insertTask 默认 id 改 T-序号（nextTaskId max-scan）——#T mention 端到端闭合（repo↔regex 双侧配对锁定）
+- 970/970 + 524/524 + typecheck 双 clean
+- Minor（defer）：菜单无方向键导航/Enter 选首项；零匹配时 Enter 被吞；insertMention 光标边界；TASK_MENTION_REGEX 未导出（测试复刻有漂移风险）
+
+### 观察记录（T4 期间）：实现者报告 renderer 37 失败「预存」——控制器复核单独跑 37/37 绿 + 全量 531/531 绿
+- 判定：环境性 flaky（vitest 并行 transform cache 族），非预存失败；基线真实干净。P3 收尾时若复现需定位（与 P2 合并前 flaky 同族）
+
+### P3 Task 4: complete (commits 840b061..415dce4, review clean)
+- assignee 筛选实数据（dumb TaskFilters + sidebar 派生 + workspace 过滤）+ 进入执行会话接线（顺序断言锁定）
+- 531/531 + typecheck 双 clean（控制器复核 37 失败为环境 flaky 非预存）
+- Minor（defer）：TaskSidebarPanel 派生逻辑零覆盖；.catch 兜底对现行 selectSession 是死代码；按钮隐藏测试未隔离变量；makeTask 无类型锚定
+
+### P3 Task 5: complete (commits 415dce4..4918b26, review clean)
+- L2 能力面板挂载（AgentsView workspace tab）+ 头注释纠偏 + 链路核实（preload/types 抽查吻合）
+- 536/536 + 970/970 + typecheck 双 clean
+- Minor（defer）：无折叠交互 + L2 区无高度上限；报告误引 brief 原文（可信度注意）；测试死代码桩
+
+### P3 Task 6: complete (commits 4918b26..0655eaa, review clean)
+- merger 单一 owner（readAllocationLayer/readAssignmentDeltas 门面 + 类型 re-export）；spawn-helpers 重指向；CRUD 导出按 plan 约束保留
+- 972/972 + typecheck 双 clean；relocation lock 真 DB 测试
+- Minor（defer）：测试文件 EOF newline
+
+### P3 Task 7: implemented (commit 78cfb52) ——⏸ 已暂停：实现完成、未审查
+- resource:registerMcp/uploadSkill 收敛 + mcp:register/skill:uploadZip 退役 + Dialog 切换（grep 零活代码残留）
+- 975/975 + 537/537 + typecheck 双 clean
+- **恢复点：T7 待 review（package base=0655eaa）→ 通过后 T8（杂项收尾）→ T9（验收+终审）**
+- 位置：P3 9 任务完成 7 个（T1-T6 已过审，T7 待审），剩 T8/T9
+
+### P3 Task 7: complete (commits 0655eaa..78cfb52, review clean)
+- resource:registerMcp/uploadSkill（listResources 复用取回，零手拼）+ mcp:register/skill:uploadZip 退役 + skill handlers 文件删除；grep 零活引用
+- 975/975 + 537/537 + typecheck 双 clean；version? 超集裁定可接受（''→'1.0.0' 展示改善）
+- Minor（defer）：ResourceLibraryView mock 桩返回 null；通道计数 arrayContaining 不精确；version 缺省变化记 CHANGELOG
+
+### P3 Task 8: complete (commits 78cfb52..735e5a3, review clean)
+- audit 分支 try/catch 对齐 MCP 风格（计数器语义核查为隐式正确取舍）+ abort 空日志 early return + dispatch-wait/v22 注释纠偏
+- 977/977 + 537/537 + typecheck 双 clean
+- Minor（defer）：空 runners info 抑制无直接断言（logger mock 惯例缺）
+
+### P3 Task 9: complete (commit 4feabb2)
+- 残留扫描三条全合规（13 命中全注释，分类在案）；typecheck/test/build 全绿零 flake；xvfb 冒烟通过（14 组 IPC 含 Resource；ABI 坑预案处置）
+- 观察：60s timeout SIGTERM 偶发 FATAL 为强杀噪音（30s 复测干净）；交互验收留 macOS 主机
+
+## P3 cleanup-ipc 全部完成（9 commits, 3676f8a..4feabb2）——待终审
+
+## Final review fixes
+- README p3 状态块 fallback 措辞纠偏：明确「新建时兜底；表单校验放宽与保存路径扩展留 P4」（消除「新建/保存」与「updateDefinition 无 fallback」描述偏差）
+- mention-parser 孤儿处置：删 renderer/src/lib/mention-parser.ts + tests/lib/mention-parser.test.ts；两处同源正则注释指 conflict-detector.ts 的 TASK_MENTION_REGEX 为唯一权威源
+- 正则权威源导出：conflict-detector.ts TASK_MENTION_REGEX 改为 export + JSDoc 标注唯一权威；tasks-repo.test.ts 改 import 该常量（消除漂移——终审 Minor 3）

@@ -11,8 +11,11 @@
 //   - 调用方（im/ipc.handlers.ts）串联两者：检测 → 推送 → renderer 弹窗 → 用户选策略 → resolveConflict
 import type { TaskRow } from '../storage/tasks/repo';
 
-/** #T-后接数字，前面须是行首或空白（与 renderer mention-parser 同源正则） */
-const TASK_MENTION_REGEX = /(?:^|\s)#(T-\d+)(?=\s|$)/g;
+/**
+ * #T mention 正则唯一权威源：repo / 测试引用此处，不要在别处再复刻一份。
+ * # 后接 T-数字（≥1 位），前面须是行首或空白；与 #T 任务 id 短序号族对齐。
+ */
+export const TASK_MENTION_REGEX = /(?:^|\s)#(T-\d+)(?=\s|$)/g;
 
 export interface ConflictDeps {
   /** 按执行会话查 in_progress 任务（Task 2 起 tasks.execution_session_id） */

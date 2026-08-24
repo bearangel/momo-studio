@@ -11,7 +11,7 @@
 2.0.0 第三期：P1/P2 半成品收尾 + IPC 面收敛。详见 `docs/plans/2026-08-23-v2.0.0-p3-cleanup-ipc.md`。
 
 - **provider.platform 运行时接线**——`spawn-helpers.ts` 显式透传 `provider.platform` 到 `createLLMProvider`，baseUrl 启发式检测退役为缺省回退；设置页 platform 下拉选择自此生效
-- **默认模型 fallback + testConnection 统一**——新建/保存会话消费默认模型配置；`gpt-3.5-turbo` 硬编码兜底删除，空 model 源头拦截返回结构化提示（两路径行为统一）
+- **默认模型 fallback + testConnection 统一**——会话默认模型配置接入后端写路径（新建时兜底；表单校验放宽与保存路径扩展留 P4）；`gpt-3.5-turbo` 硬编码兜底删除，空 model 源头拦截返回结构化提示（两路径行为统一）
 - **#T 双语法输入框 + T-序号任务 id**——MentionInput 现役化（@ agent / #T 任务双 mention）替换 MessageInput；任务 id 改 T-序号 约定，#T mention 端到端闭合
 - **任务看板补完**——assignee 筛选实数据 + 看板卡片进入执行会话接线
 - **L2 工作空间能力面板**——工作空间级能力（Layer 2）编辑 UI 挂载

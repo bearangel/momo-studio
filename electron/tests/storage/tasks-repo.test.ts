@@ -23,6 +23,7 @@ import {
   listTasks,
   findNextAssignedTask,
 } from '../../src/main/storage/tasks/repo';
+import { TASK_MENTION_REGEX } from '../../src/main/task/conflict-detector';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-task-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -49,7 +50,7 @@ describe('tasks repo', () => {
       title: 'T1',
       creatorUserId: '@owner:home',
     });
-    // T-后接 ≥3 位数字（零填充）—— 与 conflict-detector / mention-parser 的 #T-\d+ 假设对齐
+    // T-后接 ≥3 位数字（零填充）—— 与 conflict-detector.ts 的 TASK_MENTION_REGEX /#T-\d+/ 假设对齐
     expect(t.id).toMatch(/^T-\d{3,}$/);
     expect(t.status).toBe('draft');
     expect(t.priority).toBe(0);
@@ -127,10 +128,7 @@ describe('tasks repo', () => {
   });
 
   it('insertTask 生成的 id 在 #T mention 正则下可被解析（端到端配对）', () => {
-    // 与 renderer mention-parser TASK_REGEX = #T-\d+ 同源；
-    // 与 conflict-detector.ts:15 TASK_MENTION_REGEX = /(?:^|\s)#(T-\d+)(?=\s|$)/g 同源。
-    // 在测试里复刻该正则以锁定配对契约：repo 生成的 id 必须能被任一端解析。
-    const TASK_MENTION_REGEX = /(?:^|\s)#(T-\d+)(?=\s|$)/g;
+    // 权威正则从 conflict-detector.ts 导入；repo 生成的 id 必须能被该正则解析。
     const t = insertTask({
       workspaceId: 'ws1',
       title: 'mentionable',

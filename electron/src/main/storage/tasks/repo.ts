@@ -4,7 +4,7 @@
 // 设计要点：
 //   - 字段名 camelCase（SQLite 是 snake_case），rowToCamel 做映射
 //   - id 默认 `T-<seq>`（短序号）—— 与 #T mention 语法族对齐：
-//     renderer mention-parser TASK_REGEX = /#T-\d+/、conflict-detector TASK_MENTION_REGEX 同源。
+//     唯一权威正则见 conflict-detector.ts 的 `TASK_MENTION_REGEX`，不要在本文件再复刻。
 //     若调用方显式传入 id（A7 多段消息需要可预测 id，C 阶段做幂等去重）则透传。
 //     旧 randomUUID 时代（pre-P3）的 legacy 行保留原 UUID——unparsed by #T 提及正则但
 //     仍可被 getTask 查到，迁移期兼容。
