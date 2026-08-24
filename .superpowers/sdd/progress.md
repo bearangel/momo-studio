@@ -441,3 +441,10 @@ Base commit: 9add711
 - renderer 导入反馈闭环：resource.store.installResource 包 try/catch（失败写 error 不 rethrow，避免 p2p 离线/未找到/超时 unhandled rejection）；成功设置 installNotice 字段；View 渲染一次性绿色横幅；filter 切换/setQuery/失败路径清掉陈旧提示；新增 store 级契约测试 + ResourceLibraryView install 失败/成功两条端到端
 - 死 IPC 清理：移除 p2p:getSharedResources handler 注册（renderer 走 resource:list → listResources 间接消费 getSharedResources()）；index.ts 头注释通道数 7→6；resource-share.test.ts ⑥/⑥b 改直接调 getSharedResources()
 - agent 导入 slug 后缀循环：resource-transfer.findFreeAgentSlug 抽离，候选序 orig → -from-{nodeId前4} → ...-N（cap 20）；新增 ⑤c 三次连续导入测试断言三个 distinct slug
+
+### P4 Final review: APPROVED (fix round b546228 验证通过)
+- 5 项跨任务接缝全过（协议闭环/缓存对称/广播不变量/只读铁律/UI 降级）；107 新测试
+- 修复轮：导入反馈闭环 + 死 IPC 清理 + slug 后缀循环；独立复跑 1059/1059 + 537/537
+- DEFER-OK（2.1 清单）：bonjour 双实例崩溃（~3 行 error 监听，置顶）；横幅文案两处化妆级
+
+## P4 lan-sync 全部完成（8 commits, ecf835f..b546228）——已过终审可合并
