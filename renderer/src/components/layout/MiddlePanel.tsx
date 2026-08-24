@@ -8,7 +8,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { CodeEditor } from '../editor/CodeEditor';
 import { MessageList } from '../im/MessageList';
-import { MessageInput } from '../im/MessageInput';
+import { MentionInput } from '../im/MentionInput';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
@@ -78,7 +78,7 @@ export function MiddlePanel() {
             workspaceId={workspace.id}
             activeSessionId={activeSessionId ?? undefined}
           />
-          <MessageInput />
+          <MentionInput />
           {showMembers && activeSessionId && (
             <>
               {/* 透明 backdrop：点击关闭浮层（仅覆盖 chat 列，不影响 RoomList） */}
