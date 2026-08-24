@@ -18,11 +18,11 @@
   - **P5 升级体验**——主进程 boot 链 `runLegacyUpgradeIfNeeded()`（runMigrations **之前**）；旧库（schema_migrations 最大版本 < 23）只读连接全量导出 Markdown（按房间）+ JSON（agent 定义），落 `upgrade-export-<时间戳>/`；`state.db(+wal/shm)` 改名 `.legacy-v1.bak` 备份；renderer 首启右下角非模态卡片一次性提示导出目录
 
 - **升级说明**（v1.x 旧库用户）
-  - **完全重新开始（D5 决策）**——不做旧数据兼容，新库 schema 直接从 migration v23+ 起建；旧库在 runMigrations 前被备份而非删除
+  - **完全重新开始（D5 决策）**——不做旧数据兼容；检测通过后在原路径按 2.0 schema 全新建库，旧库在 runMigrations 前被备份而非删除
   - **首启自动导出**——检测到旧库即全量导出「房间消息 Markdown + agent 定义 JSON」，目录路径由首启提示告知（位于用户数据目录下 `upgrade-export-YYYYMMDD-HHmmss/`）
-  - **备份路径**——`state.db` / `state.db-wal` / `state.db-shm` 统一改名为 `state.db.legacy-v1.bak` / `state.db.legacy-v1.bak-wal` / `state.db.legacy-v1.bak-shm` 留在原位置，需要时手动还原
+  - **备份路径**——`state.db` / `state.db-wal` / `state.db-shm` 在末尾加后缀重命名为 `state.db.legacy-v1.bak` / `state.db-wal.legacy-v1.bak` / `state.db-shm.legacy-v1.bak` 留在原位置，需要时手动还原（实现见 `electron/src/main/upgrade/legacy-upgrade.ts:60-63`——suffix 追加在 `-wal`/`-shm` 之后）
   - **首启提示**——右下角非模态卡片（「已升级到 Momo Studio 2.0」+ 说明 + 等宽路径 + 「知道了」），点击「知道了」kv 标记清空，下次启动不再提示
-  - **导出异常不阻塞**——单条失败仅 warn 记录，旧数据仍在备份里由 runMigrations 自然接管；最坏情况是少一份 Markdown/JSON 导出，**不会丢数据**
+  - **导出异常不阻塞**——单条失败仅 warn 记录，旧数据完整保留在备份文件中；最坏情况是少一份 Markdown/JSON 导出，**不会丢数据**
 
 - **指引**
   - **macOS 主机验收清单**——P1/P2 半成品「真实拖拽 tab / 红绿灯 / frameless 标题栏」、P3「platform 下拉选择端到端生效」、P4「两台局域网设备互信 + 资源请求供给 + 任务远端镜像」、P5「1.x 库升级实测（旧库检测 + 导出 + 备份 + 首启提示 + 二次启动不重提示）」
