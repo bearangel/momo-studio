@@ -12,7 +12,8 @@
 //      顺带清理（prune-on-read——fix round 1 生产触发点）
 //   ⑤ P2P 未启用（deps 未装配）→ 出站静默 no-op；广播失败吞错不抛
 //   ⑥ initP2p 接线——入站 resource-catalog（Router onIncoming 捕获注入）→ 缓存 →
-//      p2p:getSharedResources handler 可读；handler 顺带 prune
+//      getSharedResources() 可读；读口顺带 prune（终审移除死 handler，renderer 走
+//      resource:list → listResources 调 getSharedResources 间接消费）
 //   ⑦ initP2p/stopP2p 装配——init 后 deps 可用（身份来自 identity 模块），
 //      stop 后回 no-op；facade（p2p/index.ts）再导出同一函数
 //   ⑧ 5min 周期重播兜底——事件触发外的目录重播；stopP2p 后 clearInterval
@@ -197,7 +198,6 @@ import {
 import {
   initP2p,
   stopP2p,
-  registerP2pHandlers,
   broadcastLocalResourceCatalog as facadeBroadcast,
 } from '../../src/main/p2p/index';
 import { P2pSync } from '../../src/main/p2p/sync';
@@ -410,10 +410,9 @@ describe('resource-share 出站广播', () => {
 });
 
 describe('initP2p 接线（index.ts）', () => {
-  it('⑥ 入站 resource-catalog → writeResourceCatalog → p2p:getSharedResources 可读', async () => {
+  it('⑥ 入站 resource-catalog → writeResourceCatalog → getSharedResources() 可读', async () => {
     try {
       await initP2p();
-      registerP2pHandlers();
 
       expect(incomingHandler.current).toBeTruthy();
       incomingHandler.current!({
@@ -426,7 +425,7 @@ describe('initP2p 接线（index.ts）', () => {
         receivedAt: Date.now(),
       });
 
-      const list = (await ipcHandlers.get('p2p:getSharedResources')!()) as SharedNodeResources[];
+      const list = getSharedResources() as SharedNodeResources[];
       expect(list).toHaveLength(1);
       expect(list[0]).toMatchObject({
         nodeId: 'node-peer',
@@ -438,12 +437,11 @@ describe('initP2p 接线（index.ts）', () => {
     }
   });
 
-  it('⑥b p2p:getSharedResources 顺带 prune——超 5 分钟条目在轮询点直接消失', async () => {
-    registerP2pHandlers();
+  it('⑥b getSharedResources 顺带 prune——超 5 分钟条目在读口直接消失', async () => {
     writeResourceCatalog(mkCatalog({ takenAt: Date.now() - 6 * 60_000 }), 'node-gone');
     writeResourceCatalog(mkCatalog({ takenAt: Date.now() }), 'node-fresh');
 
-    const list = (await ipcHandlers.get('p2p:getSharedResources')!()) as SharedNodeResources[];
+    const list = getSharedResources() as SharedNodeResources[];
 
     expect(list.map((r) => r.nodeId)).toEqual(['node-fresh']);
   });

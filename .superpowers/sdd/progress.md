@@ -402,3 +402,42 @@ Base commit: 9add711
 - 最终门禁：977/977 + 525/525 + typecheck 双 clean + build + xvfb 冒烟
 
 ## P3 cleanup-ipc 全部完成（13 commits, 3676f8a..c02731f）——已过终审可合并
+
+## 2.0.0 P4 lan-sync（feat/v2.0.0-p4-lan-sync，基线待记）
+
+### P4 Task 1: complete (commits ecf835f..f31fd71, review clean)
+- protocols.ts 四接口 + 导出 guard；枚举收敛五实义值（hub-transport presence 属独立 wire 联合经核实）；P2pSync switch 化多路分发 + 双广播/双单发
+- 986/986 + 525/525 + typecheck 双 clean
+- Minor（defer）：guard status 宽松（T3 remote-cache 可收严）；报告浅拷贝措辞
+
+### P4 Task 2: complete (commits f31fd71..e45f915, review clean)
+- task-broadcast.ts（7 字段裁剪 + 镜像 no-op）+ 四 handler + scheduler 触发接线（吞错链三层闭环）
+- 999/999 + 525/525 + typecheck 双 clean
+- **T3 必办移交**：agent 自主终态（task-tools complete/fail + dispatcher 捡单）不触发广播且无兜底——T3 加低频周期重播（30s-60s interval）作为陈旧窗口兜底
+- Minor（defer）：T1 回调占位未传（Task 3 接回时一并）；ipc.handlers 叶子 import vs 门面先例不一致
+
+### P4 Task 3: complete (commits e45f915..4b8f031, review clean)
+- remote-cache.ts 内存缓存（键控验签 fromNodeId）+ 45s 重播兜底（T2 移交清偿）+ p2p:getRemoteTasks + 看板远端只读分区
+- 1007/1007 + 529/529 + typecheck 双 clean
+- Minor（defer）：远端卡无 nodeId 悬停线索；相对时间断言时序敏感（毫秒级可忽略）
+
+### P4 Task 4: complete (commits 4b8f031..2f01661, review clean after fix round)
+- resource-share.ts（目录构建排除 skill 双层防线 + 缓存 + 读口 prune 修复轮）+ listResources 四源合并 + P2P tab + 六写通道触发 + 5min 兜底
+- 1032/1032 + 531/531 + typecheck 双 clean
+- Minor（defer）：短路测试未断言 listCustomResources 不调；resolveResourceById p2p 往返 T5 补测
+
+### P4 Task 5: complete (commits 2f01661..40c6d60, review clean)
+- resource-transfer.ts（requestId 配对三路清理 + 30s 超时 + not-found null 语义）+ 供给方组装保真 + install p2p 分支（item.slug+peerId 直消费优于 brief slice 方案）+ resolveResourceById 往返补测
+- 1058/1058 + typecheck 双 clean；agent 副本/mcp 幂等非对称语义按 brief
+- Minor（defer）：迟到 provide 无显式测试；agent 三次导入 def.slug 重复行；readToolRefs kind 未收窄字面量
+
+### P4 Task 6: complete (commit e76c500)
+- 残留扫描/只读铁律零命中；1058/1058 + 531/531 + build 全绿无 flake；xvfb 冒烟（ABI 预案处置 + 第二进程 mDNS browse 佐证发布）
+- 发现（2.1 清单）：同身份双实例触发 bonjour Service name already in use 未捕获崩溃——P1 传输层既有，真实双机不触发
+
+## P4 lan-sync 全部完成（7 commits, ecf835f..e76c500）——待终审
+
+## Final review fixes
+- renderer 导入反馈闭环：resource.store.installResource 包 try/catch（失败写 error 不 rethrow，避免 p2p 离线/未找到/超时 unhandled rejection）；成功设置 installNotice 字段；View 渲染一次性绿色横幅；filter 切换/setQuery/失败路径清掉陈旧提示；新增 store 级契约测试 + ResourceLibraryView install 失败/成功两条端到端
+- 死 IPC 清理：移除 p2p:getSharedResources handler 注册（renderer 走 resource:list → listResources 间接消费 getSharedResources()）；index.ts 头注释通道数 7→6；resource-share.test.ts ⑥/⑥b 改直接调 getSharedResources()
+- agent 导入 slug 后缀循环：resource-transfer.findFreeAgentSlug 抽离，候选序 orig → -from-{nodeId前4} → ...-N（cap 20）；新增 ⑤c 三次连续导入测试断言三个 distinct slug

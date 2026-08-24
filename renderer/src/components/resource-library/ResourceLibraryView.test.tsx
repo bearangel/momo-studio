@@ -119,6 +119,7 @@ beforeEach(() => {
     items: [],
     loading: false,
     error: null,
+    installNotice: null,
     typeFilter: 'all',
     sourceFilter: 'all',
     query: '',
@@ -328,5 +329,71 @@ describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗
     await waitFor(() => {
       expect(screen.getAllByText('可关闭项')).toHaveLength(1);
     });
+  });
+
+  it('install 成功 → 绿色 installNotice 横幅（一次性），filter 切换即清掉', async () => {
+    // 第一次 list 返回空（让卡片区有「+ 添加资源」之外的安装入口 = P2P 共享源）
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'p2p-agent-x1y2z3w4-research-helper',
+        source: 'p2p',
+        slug: 'research-helper',
+        name: '远端研究助手',
+        description: '远端共享',
+        installed: false,
+        installable: true,
+        removable: false,
+      }),
+    ]);
+    // install 走 resource.install(id) → 成功 → list 再调一次（refresh）
+    resourceInstall.mockResolvedValue(undefined);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('远端研究助手')).toBeInTheDocument());
+
+    // 点安装按钮（卡片按钮文案 = 安装）
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    // 成功横幅出现
+    await waitFor(() => {
+      expect(screen.getByTestId('install-notice')).toHaveTextContent('已导入至「我的上传」');
+    });
+
+    // 切换 source tab → installNotice 应被清掉
+    fireEvent.click(screen.getByText('系统预置'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('install-notice')).not.toBeInTheDocument();
+    });
+  });
+
+  it('install 失败（rejected IPC）→ 主网格区显示红色错误横幅（不被吞成 unhandled rejection）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'p2p-agent-x1y2z3w4-gone',
+        source: 'p2p',
+        slug: 'gone',
+        name: '离线资源',
+        description: '不可达',
+        installed: false,
+        installable: true,
+        removable: false,
+      }),
+    ]);
+    // 模拟 p2p 离线 / not-found / 超时：handler reject 抛错
+    resourceInstall.mockRejectedValueOnce(new Error('对端节点可能已离线'));
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('离线资源')).toBeInTheDocument());
+
+    // 点安装按钮——不应抛 unhandled rejection
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    // 错误横幅出现：主网格区显示「导入失败：...」
+    await waitFor(() => {
+      expect(screen.getByText(/导入失败/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/导入失败/)).toHaveTextContent('对端节点可能已离线');
+    // installNotice 不应同时出现（错误应清掉陈旧成功提示）
+    expect(screen.queryByTestId('install-notice')).not.toBeInTheDocument();
   });
 });

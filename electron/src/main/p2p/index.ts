@@ -5,14 +5,15 @@
 // 设计要点：
 //   - initP2p() 加载或生成 NodeIdentity，串起 LocalTransport + LanTransport + Router + P2pSync。
 //     模块级单例（router/lanTransport/sync）保证 IPC handlers 能拿到运行时引用。
-//   - registerP2pHandlers() 暴露 7 个 IPC：
+//   - registerP2pHandlers() 暴露 6 个 IPC：
 //       p2p:getIdentity         当前节点身份
 //       p2p:getDiscoveredNodes  发现的节点列表（带 trusted 标记）
 //       p2p:addTrustedNode      信任节点（按 nodeId 从 discoveredNodes 查公钥）
 //       p2p:removeTrustedNode   取消信任
 //       p2p:listTrustedNodes    信任节点完整列表
 //       p2p:getRemoteTasks      远端节点任务只读镜像（P4 Task 3；轮询点顺带 prune）
-//       p2p:getSharedResources  远端节点共享资源目录（P4 Task 4）
+//     远端共享资源目录无独立 IPC——renderer 走 resource:list（listResources 读 p2p 源
+//     缓存，getSharedResources 读口顺带 prune；P4 Task 4 + 终审移除死 handler）
 //   - 本 task 不实际接入 main/index.ts 启动流程（C8 仅提供函数，C9+ 集成）。
 //
 // 与 C7 sync.ts 的关系：
@@ -27,8 +28,8 @@
 //
 // P4 Task 4 追加：
 //   initP2p 同时装配 resource-share 依赖 + onRemoteResourceCatalog 入站接线；
-//   新增 p2p:getSharedResources IPC（远端共享资源目录，资源库 p2p 源数据）+
-//   5min 资源目录周期重播兜底（目录变更频率远低于任务流转）。
+//   5min 资源目录周期重播兜底（目录变更频率远低于任务流转；renderer 走 resource:list
+//   读 p2p 源，getSharedResources 读口顺带 prune）。
 import { BrowserWindow, ipcMain } from 'electron';
 import { Router } from './router';
 import { LocalTransport } from './local-transport';
@@ -56,7 +57,6 @@ import {
   clearResourceShareDeps,
   broadcastLocalResourceCatalog,
   writeResourceCatalog,
-  getSharedResources,
 } from './resource-share';
 import {
   setResourceTransferDeps,
@@ -257,7 +257,7 @@ export async function stopP2p(): Promise<void> {
 }
 
 /**
- * 注册 P2P IPC handlers（7 个 p2p: 通道）。
+ * 注册 P2P IPC handlers（6 个 p2p: 通道）。
  * 必须在 initP2p() 之后调用（getIdentity / getDiscoveredNodes 依赖模块单例）。
  *
  * 幂等性：Electron ipcMain.handle 重复注册同通道会抛错；调用方需保证只调一次。
@@ -308,9 +308,6 @@ export function registerP2pHandlers(): void {
     return getRemoteTasks();
   });
 
-  // P4 Task 4：远端节点共享资源目录（资源库 p2p 源数据）。
-  // prune 由 getSharedResources 读口顺带完成（fix round 1——handler 无需显式调用）
-  ipcMain.handle('p2p:getSharedResources', () => {
-    return getSharedResources();
-  });
+  // 远端共享资源目录无独立 IPC（终审清理）——renderer 走 resource:list →
+  // listResources 调 getSharedResources() 读 p2p 缓存（读口自带 prune）
 }

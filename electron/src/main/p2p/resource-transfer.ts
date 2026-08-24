@@ -12,8 +12,8 @@
 //   - 落地语义：agent 走 createCustomDef 等价路径（global + 不落 assignment——导入后
 //     用户手动加入 workspace，同资源库现有 agent 安装语义）；mcp 走 registerMcpDefinition
 //     （name 幂等覆盖——DB UNIQUE(name) + INSERT OR REPLACE 既有语义）
-//   - agent slug 冲突：本地已存在同 slug def 时后缀 `-from-{nodeId前4}`（单次；
-//     极小概率再冲突由 def.id 主键 UUID 兜底不碰撞）
+//   - agent slug 冲突：本地已存在同 slug def 时后缀 `-from-{nodeId前4}`，再冲突追加
+//     `-2`/`-3`...；最多尝试 20 次，超出抛错（按本地 def 数量几乎不可能触发——兜底）
 //   - 模型配置不跨节点传输（机器本地信息）：agent 定义不含 provider/model 字段，
 //     落地时空串走 createCustomDef 的 defaultChatModel 兜底
 //   - 依赖装配镜像 task-broadcast.ts：deps 由 initP2p 注入 / stopP2p 清空，
@@ -198,10 +198,7 @@ function landAgentDefinition(definition: Record<string, unknown>, fromNodeId: st
   const originalSlug = requireString(definition, 'agent', 'slug');
   const systemPrompt = requireString(definition, 'agent', 'systemPrompt');
 
-  let slug = originalSlug;
-  if (listAgentDefinitions().some((d) => d.slug === slug)) {
-    slug = `${originalSlug}-from-${fromNodeId.slice(0, 4)}`;
-  }
+  const slug = findFreeAgentSlug(originalSlug, fromNodeId);
 
   // modelProviderId 空串 → createCustomDef 内部走本机 defaultChatModel 兜底
   // （未配置时抛出可操作错误，经 install handler 透传给用户）
@@ -217,6 +214,28 @@ function landAgentDefinition(definition: Record<string, unknown>, fromNodeId: st
     defaultTools: readToolRefs(definition),
   });
   logger.info('P2P agent 定义已导入', { slug, from: fromNodeId });
+}
+
+/** agent slug 冲突后缀上限——超出几乎等于本地已被同节点 def 占满，视为异常 */
+const SLUG_COLLISION_MAX_ATTEMPTS = 20;
+
+/**
+ * 找一个未被本地 def 占用的 agent slug。
+ * 候选顺序：原始 → -from-{nodeId前4} → -from-{nodeId前4}-2 → ... → -from-...-N。
+ * 上限 20 次（防御性兜底——正常场景一次/两次即落定）。
+ */
+function findFreeAgentSlug(originalSlug: string, fromNodeId: string): string {
+  const existing = new Set(listAgentDefinitions().map((d) => d.slug));
+  if (!existing.has(originalSlug)) return originalSlug;
+  const base = `${originalSlug}-from-${fromNodeId.slice(0, 4)}`;
+  if (!existing.has(base)) return base;
+  for (let n = 2; n <= SLUG_COLLISION_MAX_ATTEMPTS; n++) {
+    const candidate = `${base}-${n}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error(
+    `agent slug 冲突后缀达到上限（${SLUG_COLLISION_MAX_ATTEMPTS}）：${originalSlug}`,
+  );
 }
 
 function landMcpDefinition(definition: Record<string, unknown>): void {

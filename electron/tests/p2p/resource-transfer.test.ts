@@ -406,6 +406,37 @@ describe('requestResourceImport 需求方', () => {
     );
   });
 
+  it('⑤c 同一 agent 连续导入三次 → 三个 distinct slug，无重复（collide 循环修复）', async () => {
+    useLoopbackDeps(WIRE_AGENT_DEF);
+    // listAgentDefinitions 状态随 createCustomDef 调用累计——mock 返回真实累积的 defs
+    const createdDefs: Array<{ slug: string }> = [];
+    agentCrudMocks.listAgentDefinitions.mockImplementation(() => [
+      LOCAL_AGENT_DEF,
+      ...createdDefs,
+    ]);
+    agentCrudMocks.createCustomDef.mockImplementation((_wsId, input) => {
+      createdDefs.push({ slug: input.slug as string });
+      return { ...LOCAL_AGENT_DEF, slug: input.slug };
+    });
+
+    await requestResourceImport(PEER, 'agent', 'uuid-1');
+    await requestResourceImport(PEER, 'agent', 'uuid-1');
+    await requestResourceImport(PEER, 'agent', 'uuid-1');
+
+    // 三次 createCustomDef 收到三个 distinct slug
+    expect(agentCrudMocks.createCustomDef).toHaveBeenCalledTimes(3);
+    const slugs = agentCrudMocks.createCustomDef.mock.calls.map(
+      (c) => (c[1] as { slug: string }).slug,
+    );
+    expect(new Set(slugs).size).toBe(3);
+    // 顺序：原 slug → -from-a1b2 → -from-a1b2-2（已有 LOCAL_AGENT_DEF 占原 slug）
+    expect(slugs).toEqual([
+      'research-helper-from-a1b2',
+      'research-helper-from-a1b2-2',
+      'research-helper-from-a1b2-3',
+    ]);
+  });
+
   it('⑤b 畸形 agent 定义（缺 systemPrompt）→ 上抛描述性错误', async () => {
     useLoopbackDeps({ name: 'x', slug: 'y' });
 
