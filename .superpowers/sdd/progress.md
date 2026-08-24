@@ -395,3 +395,10 @@ Base commit: 9add711
 - README p3 状态块 fallback 措辞纠偏：明确「新建时兜底；表单校验放宽与保存路径扩展留 P4」（消除「新建/保存」与「updateDefinition 无 fallback」描述偏差）
 - mention-parser 孤儿处置：删 renderer/src/lib/mention-parser.ts + tests/lib/mention-parser.test.ts；两处同源正则注释指 conflict-detector.ts 的 TASK_MENTION_REGEX 为唯一权威源
 - 正则权威源导出：conflict-detector.ts TASK_MENTION_REGEX 改为 export + JSDoc 标注唯一权威；tasks-repo.test.ts 改 import 该常量（消除漂移——终审 Minor 3）
+
+### P3 Final review: APPROVED (fix round c02731f 验证通过)
+- 5 项跨任务接缝全过（platform 链/T-id 约定/MentionInput 独占/IPC 面/L2 能力）；Deferred-Minor 无 MUST-FIX
+- 修复轮：README fallback 措辞 + mention-parser 孤儿删除 + TASK_MENTION_REGEX 权威源导出
+- 最终门禁：977/977 + 525/525 + typecheck 双 clean + build + xvfb 冒烟
+
+## P3 cleanup-ipc 全部完成（13 commits, 3676f8a..c02731f）——已过终审可合并
