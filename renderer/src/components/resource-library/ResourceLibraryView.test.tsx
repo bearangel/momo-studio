@@ -27,9 +27,10 @@ const resourceList = vi.fn();
 const resourceDelete = vi.fn();
 const resourceInstall = vi.fn();
 const resourceGetDetail = vi.fn();
-const mcpRegister = vi.fn();
+// P3 Task 7：注册面收敛——registerMcp / uploadSkill 走 resource 命名空间
+const resourceRegisterMcp = vi.fn();
+const resourceUploadSkill = vi.fn();
 const mcpStart = vi.fn();
-const skillUploadZip = vi.fn();
 // DefinitionEditor 在 create 模式挂载时会拉取 provider 列表 + agent 列表（仅 ref 不调）
 const providerList = vi.fn();
 const agentListDefinitions = vi.fn();
@@ -41,13 +42,11 @@ const mockApi = {
     delete: resourceDelete,
     install: resourceInstall,
     getDetail: resourceGetDetail,
+    registerMcp: resourceRegisterMcp,
+    uploadSkill: resourceUploadSkill,
   },
   mcp: {
-    register: mcpRegister,
     start: mcpStart,
-  },
-  skill: {
-    uploadZip: skillUploadZip,
   },
   provider: {
     list: providerList,
@@ -93,9 +92,9 @@ beforeEach(() => {
     resourceDelete,
     resourceInstall,
     resourceGetDetail,
-    mcpRegister,
+    resourceRegisterMcp,
+    resourceUploadSkill,
     mcpStart,
-    skillUploadZip,
     providerList,
     agentListDefinitions,
     agentCreateCustom,
@@ -105,11 +104,11 @@ beforeEach(() => {
   resourceDelete.mockResolvedValue(undefined);
   resourceInstall.mockResolvedValue(undefined);
   resourceGetDetail.mockResolvedValue(null);
-  mcpRegister.mockResolvedValue(undefined);
-  mcpStart.mockResolvedValue(undefined);
-  skillUploadZip.mockResolvedValue([
+  resourceRegisterMcp.mockResolvedValue(null);
+  resourceUploadSkill.mockResolvedValue([
     { slug: 'x', name: 'x', description: '' },
   ]);
+  mcpStart.mockResolvedValue(undefined);
   providerList.mockResolvedValue([]);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api =

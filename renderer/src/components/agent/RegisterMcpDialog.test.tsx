@@ -8,32 +8,40 @@
 //   - 提交：
 //       args = params.split(',').map(trim).filter(Boolean)
 //       env = Object.fromEntries(envRows 解析)
-//       await ipc.mcp.register({ id: randomUUID, name, version, command, args, env, source: 'custom' })
+//       await ipc.resource.registerMcp({ name, version, command, args, env })
+//       （P3 收敛：id / source 由主进程补全，payload 不含这两者）
 //       await ipc.mcp.start(activeWorkspaceId, name)
 //       成功 → onSuccess() 刷新父列表 + onClose() 关闭
-//   - source 必须显式 'custom'（否则被 T6 的 deleteRegistered 拒绝）
 //   - 提交期间按钮 disabled（防双击）；失败 → 红字错误，弹窗不关
 //
-// Mock 策略：window.api 桩（mcp.register/mcp.start）+ useWorkspaceStore.setState 注入 activeWorkspaceId。
+// Mock 策略：window.api 桩（resource.registerMcp / mcp.start）+ useWorkspaceStore.setState 注入 activeWorkspaceId。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RegisterMcpDialog } from './RegisterMcpDialog';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { Workspace } from '../../ipc/types';
+import type { ResourceItem, Workspace } from '../../ipc/types';
 
 // ---- mock IPC 桩 ----
-const mcpRegister = vi.fn();
+const resourceRegisterMcp = vi.fn();
 const mcpStart = vi.fn();
 
 const mockApi = {
-  mcp: { register: mcpRegister, start: mcpStart },
+  resource: { registerMcp: resourceRegisterMcp },
+  mcp: { start: mcpStart },
 };
 
-// 固定 randomUUID，便于断言传入的 id（需匹配 UUID 的模板字面量类型）
-const FIXED_UUID = 'fixed-uuid1-1234-5678-9abc';
-beforeEach(() => {
-  vi.spyOn(crypto, 'randomUUID').mockReturnValue(FIXED_UUID);
-});
+// registerMcp 成功时的返回值（主进程 custom 映射产出的 ResourceItem）
+const REGISTERED_ITEM: ResourceItem = {
+  id: 'custom-mcp-my-mcp',
+  type: 'mcp',
+  source: 'custom',
+  slug: 'my-mcp',
+  name: 'my-mcp',
+  description: '自定义 MCP（npx）',
+  installed: true,
+  installable: false,
+  removable: true,
+};
 
 const WS: Workspace = {
   id: 'ws-active',
@@ -49,9 +57,9 @@ const WS: Workspace = {
 };
 
 beforeEach(() => {
-  mcpRegister.mockReset();
+  resourceRegisterMcp.mockReset();
   mcpStart.mockReset();
-  mcpRegister.mockResolvedValue(undefined);
+  resourceRegisterMcp.mockResolvedValue(REGISTERED_ITEM);
   mcpStart.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -100,7 +108,7 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     expect(screen.getAllByPlaceholderText('KEY=VALUE').length).toBe(initialCount + 1);
   });
 
-  it('提交 → ipc.mcp.register 收到正确 payload（含 source=custom + randomUUID 作 id）', async () => {
+  it('提交 → ipc.resource.registerMcp 收到正确 payload（不含 id / source，由主进程补全）', async () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'my-mcp' } });
     fireEvent.change(screen.getByLabelText('版本'), { target: { value: '1.2.0' } });
@@ -113,20 +121,34 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
 
     await waitFor(() => {
-      expect(mcpRegister).toHaveBeenCalledTimes(1);
+      expect(resourceRegisterMcp).toHaveBeenCalledTimes(1);
     });
-    const [config] = mcpRegister.mock.calls[0]!;
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
     expect(config).toMatchObject({
-      id: FIXED_UUID,
       name: 'my-mcp',
       version: '1.2.0',
       command: 'npx',
-      source: 'custom',
     });
+    expect(config).not.toHaveProperty('id');
+    expect(config).not.toHaveProperty('source');
     // args 逗号分隔 → trim + 过滤空串
     expect(config.args).toEqual(['-y', 'server.js', '--port 3000']);
     // env 多行 → Record
     expect(config.env).toEqual({ API_KEY: 'secret123' });
+  });
+
+  it('版本留空 → payload version 为 undefined（主进程补默认值）', async () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+
+    await waitFor(() => {
+      expect(resourceRegisterMcp).toHaveBeenCalled();
+    });
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
+    expect(config.version).toBeUndefined();
   });
 
   it('args 解析：空串 / 多余逗号 / 前后空格 → 干净的 string[]', async () => {
@@ -138,9 +160,9 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
 
     await waitFor(() => {
-      expect(mcpRegister).toHaveBeenCalled();
+      expect(resourceRegisterMcp).toHaveBeenCalled();
     });
-    const [config] = mcpRegister.mock.calls[0]!;
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
     expect(config.args).toEqual(['a', 'b', 'c']);
   });
 
@@ -159,9 +181,9 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
 
     await waitFor(() => {
-      expect(mcpRegister).toHaveBeenCalled();
+      expect(resourceRegisterMcp).toHaveBeenCalled();
     });
-    const [config] = mcpRegister.mock.calls[0]!;
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
     expect(config.env).toEqual({ FOO: 'bar', BAZ: 'qux' });
   });
 
@@ -193,8 +215,8 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('register 失败 → 红字错误显示，弹窗不关，onSuccess 不触发', async () => {
-    mcpRegister.mockRejectedValueOnce(new Error('名称已存在'));
+  it('registerMcp 失败 → 红字错误显示，弹窗不关，onSuccess 不触发', async () => {
+    resourceRegisterMcp.mockRejectedValueOnce(new Error('名称已存在'));
     const onClose = vi.fn();
     const onSuccess = vi.fn();
     render(<RegisterMcpDialog onClose={onClose} onSuccess={onSuccess} />);
@@ -213,8 +235,8 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
   it('提交期间按钮 disabled（防双击）', async () => {
     // 用未解决的 promise 卡住提交过程
     let resolveRegister: () => void = () => {};
-    mcpRegister.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { resolveRegister = resolve; }),
+    resourceRegisterMcp.mockImplementationOnce(
+      () => new Promise<ResourceItem>((resolve) => { resolveRegister = () => resolve(REGISTERED_ITEM); }),
     );
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
@@ -225,8 +247,8 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '注册中…' })).toBeDisabled();
     });
-    // register 只被调一次（防双击）
-    expect(mcpRegister).toHaveBeenCalledTimes(1);
+    // registerMcp 只被调一次（防双击）
+    expect(resourceRegisterMcp).toHaveBeenCalledTimes(1);
 
     // 解除卡死，让组件清理
     resolveRegister();

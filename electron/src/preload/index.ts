@@ -5,6 +5,7 @@ import type {
   AssignmentDeltas,
   ImMessage,
   MessageEventBatch,
+  RegisterMcpInput,
   ResourceFilter,
   ResourceItem,
   TaskRow,
@@ -104,7 +105,7 @@ const api: ApiSurface = {
     },
   },
   mcp: {
-    register: (config) => invoke('mcp:register', config),
+    // P3 Task 7：register 收敛到 api.resource.registerMcp（mcp:register 通道已删除）
     start: (workspaceId, mcpName) => invoke('mcp:start', workspaceId, mcpName),
     listTools: (workspaceId, mcpName) => invoke('mcp:listTools', workspaceId, mcpName),
     callTool: (workspaceId, mcpName, toolName, args) =>
@@ -164,14 +165,6 @@ const api: ApiSurface = {
     getSession: (sessionId: string) => invoke('settings:getSession', sessionId),
     updateSession: (sessionId: string, patch) => invoke('settings:updateSession', sessionId, patch),
   },
-  skill: {
-    // v1.6：上传自定义 skill zip（File.arrayBuffer() → Buffer）。v1.6.2 起返回数组（支持批量安装）
-    uploadZip: (buffer: ArrayBuffer, filename: string) =>
-      // v1.6.3: 不能用 Buffer.from(buffer)——contextBridge 里 Node Buffer 跨 IPC
-      // structured clone 时底层 ArrayBuffer view 关联会断，main 收到的是损坏数据。
-      // 用标准 Uint8Array view 让 structured clone 正确拷贝，main process 自己转回 Buffer。
-      invoke<UploadedSkill[]>('skill:uploadZip', new Uint8Array(buffer), filename),
-  },
   resource: {
     // v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选
     list: (filter?: ResourceFilter) => invoke<ResourceItem[]>('resource:list', filter),
@@ -181,6 +174,15 @@ const api: ApiSurface = {
     install: (id: string) => invoke<void>('resource:install', id),
     // v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 三分支）
     delete: (id: string) => invoke<void>('resource:delete', id),
+    // P3 Task 7：注册自定义 MCP（收敛自 api.mcp.register），返回新资源的 ResourceItem
+    registerMcp: (config: RegisterMcpInput) =>
+      invoke<ResourceItem>('resource:registerMcp', config),
+    // P3 Task 7：上传自定义 skill zip（收敛自 api.skill.uploadZip），v1.6.2 起返回数组。
+    // v1.6.3: 不能用 Buffer.from(buffer)——contextBridge 里 Node Buffer 跨 IPC
+    // structured clone 时底层 ArrayBuffer view 关联会断，main 收到的是损坏数据。
+    // 用标准 Uint8Array view 让 structured clone 正确拷贝，main process 自己转回 Buffer。
+    uploadSkill: (buffer: ArrayBuffer, filename: string) =>
+      invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),

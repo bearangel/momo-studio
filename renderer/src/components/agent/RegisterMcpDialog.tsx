@@ -5,12 +5,12 @@
 // 提交流程：
 //   1. args = params.split(',').map(trim).filter(Boolean)
 //   2. env = Object.fromEntries(envRows 过滤空行后按首个 '=' 拆键值)
-//   3. await ipc.mcp.register({ id: crypto.randomUUID(), name, version, command, args, env, source: 'custom' })
+//   3. await ipc.resource.registerMcp({ name, version, command, args, env })
+//      （P3 收敛：id / source 由主进程补全，返回新资源的 ResourceItem）
 //   4. await ipc.mcp.start(activeWorkspaceId, name)
 //   5. onSuccess() 通知父组件刷新列表 → onClose() 关闭弹窗
 //
 // 约束：
-//   - source 显式 'custom'（被 T6 的 deleteRegistered 接受；marketplace 装的会 reject）
 //   - 提交期间按钮 disabled（防双击）
 //   - 失败 → 红字错误显示在表单底部，弹窗保持打开
 import { useState, type FormEvent } from 'react';
@@ -70,15 +70,13 @@ export function RegisterMcpDialog({ onClose, onSuccess }: Props) {
         .map((s) => s.trim())
         .filter(Boolean);
       const env = parseEnv(envRows);
-      // 注册定义（source 显式 'custom' 才能被 deleteRegistered 接受）
-      await ipc.mcp.register({
-        id: crypto.randomUUID(),
+      // 注册定义（P3 收敛：resource:registerMcp，id/source 由主进程补全并返回 ResourceItem）
+      await ipc.resource.registerMcp({
         name: name.trim(),
-        version: version.trim(),
+        version: version.trim() || undefined,
         command: command.trim(),
         args: parsedArgs,
         env,
-        source: 'custom',
       });
       // 在当前 workspace 启动该 MCP 进程（进程池复用）
       await ipc.mcp.start(activeWorkspaceId, name.trim());

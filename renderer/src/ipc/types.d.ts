@@ -262,20 +262,6 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>;
 }
 
-/** MCP server 定义（mcp:register 入参，与 electron 端 McpServerConfig 对齐） */
-export interface McpServerConfig {
-  id: string;
-  name: string;
-  version: string;
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-  /** v1.6：来源标识。'marketplace' 不可删（走卸载按钮），'custom' 可删 */
-  source?: 'marketplace' | 'custom';
-  /** v1.6：注册时间 ISO 字符串（缺省时 DB 列默认值填充） */
-  installedAt?: string;
-}
-
 /** 能力类型：tool（内置工具）/ mcp（MCP server）/ skill（技能），与 electron 端 CapabilityType 对齐 */
 export type CapabilityType = 'tool' | 'mcp' | 'skill';
 
@@ -452,7 +438,7 @@ export interface SessionSettings {
 }
 
 /**
- * v1.6.2：单次 zip 上传返回结构（skill:uploadZip 返回数组，即使只装一个 skill）。
+ * v1.6.2：单次 zip 上传返回结构（resource:uploadSkill 返回数组，即使只装一个 skill）。
  * 与 electron 端的 InstalledSkill 区别：不含 source / installedAt（这两个由 listResources 二次解析）。
  */
 export interface UploadedSkill {
@@ -460,6 +446,20 @@ export interface UploadedSkill {
   /** 展示名（来自 frontmatter.name，无则用 slug 兜底） */
   name: string;
   description: string;
+}
+
+/**
+ * P3 Task 7：resource:registerMcp 入参——注册自定义 MCP 的最小配置。
+ * id / version 由主进程补全（version 缺省存 '1.0.0'），source 固定 'custom'，
+ * 注册成功返回新条目的 ResourceItem。
+ */
+export interface RegisterMcpInput {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** 可选版本号；缺省由主进程存 '1.0.0' */
+  version?: string;
 }
 
 /**
@@ -824,8 +824,7 @@ export interface ApiSurface {
    */
   session: SessionApiSurface;
   mcp: {
-    /** 注册一条 MCP server 定义到 SQLite（不启动进程） */
-    register(config: McpServerConfig): Promise<void>;
+    // P3 Task 7：register 收敛到 resource.registerMcp（mcp:register 通道已删除）
     /** 启动某 workspace 内的 MCP 进程（进程池复用） */
     start(workspaceId: string, mcpName: string): Promise<void>;
     /** 列出某 workspace 内已启动 MCP 暴露的工具 */
@@ -878,13 +877,6 @@ export interface ApiSurface {
     /** 部分更新会话级配置，返回更新后的完整配置 */
     updateSession(sessionId: string, patch: Partial<SessionSettings>): Promise<SessionSettings>;
   };
-  skill: {
-    /**
-     * v1.6：上传自定义 skill zip（解压到 <userData>/skills/<slug>/）。
-     * v1.6.2 起返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量三种 zip 结构）。
-     */
-    uploadZip(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
-  };
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;
@@ -894,6 +886,10 @@ export interface ApiSurface {
     install(id: string): Promise<void>;
     /** v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 按 type 三分支） */
     delete(id: string): Promise<void>;
+    /** P3 Task 7：注册自定义 MCP（source 固定 'custom'），返回新条目的 ResourceItem */
+    registerMcp(config: RegisterMcpInput): Promise<ResourceItem>;
+    /** P3 Task 7：上传自定义 skill zip，返回 UploadedSkill[]（v1.6.2 起支持批量） */
+    uploadSkill(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
   };
   task: TaskApiSurface;
   /**

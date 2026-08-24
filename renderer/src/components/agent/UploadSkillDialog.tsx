@@ -3,9 +3,9 @@
 //
 // 流程：
 //   1. 用户点 [选择文件...] → <input type="file" accept=".zip"> 弹原生选择器
-//   2. 选中后：回显文件名；读 ArrayBuffer（await file.arrayBuffer()）
-//   3. 点 [上传] → ipc.skill.uploadZip(buffer, file.name)
-//      后端返回 { slug, description }，前端显示成功提示
+//   2. 选中后：回显文件名；读 ArrayBuffer（FileReader）
+//   3. 点 [上传] → ipc.resource.uploadSkill(buffer, file.name)
+//      后端返回 UploadedSkill[]，前端显示成功提示
 //   4. 成功 → onSuccess() 通知父组件刷新列表 → onClose() 关闭
 //   5. 失败（zip 缺 SKILL.md / 多根目录 / 解压失败）→ 红字错误，弹窗保持打开
 //
@@ -67,11 +67,11 @@ export function UploadSkillDialog({ onClose, onSuccess }: Props) {
     setError(null);
     setSuccessMsg(null);
     try {
-      // readFileAsArrayBuffer 拿到 ArrayBuffer；preload 层 Buffer.from(buffer) 转 Node Buffer，
-      // 再经 ipcRenderer.invoke 序列化传给主进程 skill:uploadZip handler。
+      // readFileAsArrayBuffer 拿到 ArrayBuffer；preload 层转 Uint8Array，
+      // 再经 ipcRenderer.invoke 序列化传给主进程 resource:uploadSkill handler。
       // v1.6.2 起后端返回 UploadedSkill[]（支持扁平 / 包裹 / 多 skill 批量三种 zip 结构）。
       const buffer = await readFileAsArrayBuffer(file);
-      const skills = await ipc.skill.uploadZip(buffer, file.name);
+      const skills = await ipc.resource.uploadSkill(buffer, file.name);
       // 成功提示：1 个显示 skill 名 + 描述；多个显示数量 + slug 列表
       const msg =
         skills.length === 1
