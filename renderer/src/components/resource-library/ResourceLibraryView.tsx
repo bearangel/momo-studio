@@ -3,8 +3,8 @@
 // v1.7 Task 9：资源库主视图。布局为「左主网格 + 右详情面板（条件渲染）+ 三类弹窗」。
 //
 // 关键设计：
-//   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 4 个 source tab
-//     （全部/系统预置/我的上传/网络资源）。两层 AND：filter = { type?, source? }
+//   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 5 个 source tab
+//     （全部/系统预置/我的上传/网络资源/P2P 共享）。两层 AND：filter = { type?, source? }
 //   - 搜索：前端 in-memory filter（name/description/slug 模糊匹配），无 IPC
 //   - 主网格：filteredItems 渲染为 ResourceCard 列表（grid auto-fill 220px）
 //   - 选中卡片 → 右侧 ResourceDetail 滑出（条件渲染，selectedId 找不到则收起）
@@ -32,13 +32,13 @@ const TYPE_TABS: Array<{ key: ResourceFilter['type'] | 'all'; label: string }> =
   { key: 'skill', label: 'Skill' },
 ];
 
-/** 第二行：source tab（全部 / 系统预置 / 我的上传 / 网络资源；v2 预留 P2P） */
+/** 第二行：source tab（全部 / 系统预置 / 我的上传 / 网络资源 / P2P 共享——P4 启用） */
 const SOURCE_TABS: Array<{ key: ResourceFilter['source'] | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'builtin', label: '系统预置' },
   { key: 'custom', label: '我的上传' },
   { key: 'marketplace', label: '网络资源' },
-  // v2: { key: 'p2p', label: 'P2P 共享' },
+  { key: 'p2p', label: 'P2P 共享' },
 ];
 
 export function ResourceLibraryView() {

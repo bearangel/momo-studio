@@ -134,7 +134,7 @@ beforeEach(() => {
 });
 
 describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗', () => {
-  it('渲染默认双层 tab（type + source），各 4 项', async () => {
+  it('渲染默认双层 tab：type 4 项 + source 5 项（含 P2P 共享）', async () => {
     render(<ResourceLibraryView />);
     await waitFor(() => expect(resourceList).toHaveBeenCalled());
 
@@ -147,13 +147,25 @@ describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗
     expect(screen.getByText('MCP')).toBeInTheDocument();
     expect(screen.getByText('Skill')).toBeInTheDocument();
 
-    // source tabs：系统预置 / 我的上传 / 网络资源
+    // source tabs：系统预置 / 我的上传 / 网络资源 / P2P 共享（P4 Task 4 启用）
     expect(screen.getByText('系统预置')).toBeInTheDocument();
     expect(screen.getByText('我的上传')).toBeInTheDocument();
     expect(screen.getByText('网络资源')).toBeInTheDocument();
+    expect(screen.getByText('P2P 共享')).toBeInTheDocument();
 
     // 「全部」在 type 和 source 两行都出现 → 2 个
     expect(screen.getAllByText('全部')).toHaveLength(2);
+  });
+
+  it('点击 P2P 共享 tab → filter={ source: "p2p" } 下发', async () => {
+    resourceList.mockResolvedValue([]);
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(resourceList).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('P2P 共享'));
+    await waitFor(() => {
+      expect(resourceList).toHaveBeenLastCalledWith({ source: 'p2p' });
+    });
   });
 
   it('点击 type tab 与 source tab 触发 ipc.resource.list，filter 为两者 AND', async () => {

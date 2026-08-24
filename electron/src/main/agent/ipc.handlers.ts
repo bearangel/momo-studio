@@ -45,6 +45,7 @@ import { isAgentRunning } from './runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
+import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import {
   getAssignmentDeltas,
   setAssignmentDeltas,
@@ -381,7 +382,10 @@ export function registerAgentHandlers(): void {
       const workspaceId = input.scope === 'workspace'
         ? input.workspaceId ?? null
         : null;
-      return createCustomDef(workspaceId, input);
+      const def = createCustomDef(workspaceId, input);
+      // P4 Task 4：自定义 agent 创建成功 → 广播资源目录（fire-and-forget）
+      void broadcastLocalResourceCatalog();
+      return def;
     },
   );
 
@@ -427,6 +431,8 @@ export function registerAgentHandlers(): void {
       if (stopped.length > 0) {
         logger.info('Agent 定义更新，已停止运行中实例', { id: input.id, stopped: stopped.length });
       }
+      // P4 Task 4：定义更新成功 → 广播资源目录（全量重扫；非 custom def 更新无害）
+      void broadcastLocalResourceCatalog();
       return { definition: updated, stoppedInstanceIds: stopped };
     },
   );
@@ -434,7 +440,12 @@ export function registerAgentHandlers(): void {
   // 删除自定义 agent 定义（builtin 不可删；级联清理 assignment）
   ipcMain.handle(
     'agent:deleteDefinition',
-    async (_evt, defId: string) => crudDeleteDefinition(defId),
+    async (_evt, defId: string) => {
+      const result = await crudDeleteDefinition(defId);
+      // P4 Task 4：自定义 agent 删除成功 → 广播资源目录（fire-and-forget）
+      void broadcastLocalResourceCatalog();
+      return result;
+    },
   );
 
   // 列出 agent 定义（v1.3：可选 workspaceId 过滤）

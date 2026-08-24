@@ -15,6 +15,9 @@
 //     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
 //   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
 //     落库 source='custom' 后复用 library 的 custom 映射取回 ResourceItem 返回。
+//
+// P4 Task 4 追加：三个 custom 写通道成功后 fire-and-forget 广播资源目录
+// （broadcastLocalResourceCatalog——P2P 未启用时静默 no-op，本地写路径不受影响）。
 
 import { randomUUID } from 'node:crypto';
 import { ipcMain } from 'electron';
@@ -26,6 +29,7 @@ import { fetchCatalog } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { deleteDefinition } from '../agent/crud';
+import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 
 /** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
 export interface RegisterMcpInput {
@@ -96,11 +100,17 @@ export function registerResourceHandlers(): void {
         }
         return uninstallPackage(catalogItem.id);
       }
-      case 'custom':
-        if (item.type === 'mcp') return deleteRegistered(item.slug);
-        if (item.type === 'skill') return deleteCustomSkill(item.slug);
-        if (item.type === 'agent') return deleteDefinition(item.slug);
-        throw new Error(`未知 custom type: ${item.type}`);
+      case 'custom': {
+        let deleted: unknown;
+        if (item.type === 'mcp') deleted = deleteRegistered(item.slug);
+        else if (item.type === 'skill') deleted = deleteCustomSkill(item.slug);
+        else if (item.type === 'agent') deleted = deleteDefinition(item.slug);
+        else throw new Error(`未知 custom type: ${item.type}`);
+        // 统一等待删除成功再广播（失败上抛时不广播旧目录）
+        await deleted;
+        void broadcastLocalResourceCatalog();
+        return deleted;
+      }
       default:
         throw new Error(`source=${item.source} 不支持 delete 操作`);
     }
@@ -125,6 +135,8 @@ export function registerResourceHandlers(): void {
     if (!item) {
       throw new Error(`注册后未在自定义资源中找到 MCP ${config.name}`);
     }
+    // custom 资源变更 → 广播资源目录（fire-and-forget）
+    void broadcastLocalResourceCatalog();
     return item;
   });
 
@@ -135,7 +147,10 @@ export function registerResourceHandlers(): void {
     'resource:uploadSkill',
     async (_evt, data: Uint8Array | Buffer, filename: string) => {
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      return uploadSkillZip(buffer, filename);
+      const uploaded = uploadSkillZip(buffer, filename);
+      // skill 虽不入 P2P 目录（2.1 排除），仍统一触发广播保持 custom 写通道行为一致
+      void broadcastLocalResourceCatalog();
+      return uploaded;
     },
   );
 
