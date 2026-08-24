@@ -15,9 +15,11 @@
 
 import path from 'node:path';
 import { getAgentDefinition, listSubAssignments } from './crud';
-import { getAllocation } from '../workspace/allocation';
-import { mergeCapabilities } from './capability-merger';
-import { getAssignmentDeltas } from './assignment-capabilities';
+import {
+  mergeCapabilities,
+  readAllocationLayer,
+  readAssignmentDeltas,
+} from './capability-merger';
 import { resolveSkillsDir } from '../paths';
 import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
@@ -147,8 +149,8 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   // v1.6 修复：merged.tools 必须注入 opts.allowedTools。v1.5 此处丢弃 merged.tools，
   // 导致 RuntimeConfig.allowedTools 永远 undefined、permission.ts 全放行——所有 agent
   // 实际能用全部 24 个工具，与 def.defaultTools 配置完全无关（严重安全 bug）。
-  const allocation = getAllocation(workspaceId);
-  const deltas = getAssignmentDeltas(instanceId);
+  const allocation = readAllocationLayer(workspaceId);
+  const deltas = readAssignmentDeltas(instanceId);
   const merged = mergeCapabilities(def, allocation, deltas);
 
   return {
