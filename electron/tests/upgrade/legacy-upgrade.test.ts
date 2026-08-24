@@ -37,7 +37,12 @@ vi.mock('../../src/main/upgrade/legacy-export', async (importOriginal) => {
   };
 });
 
-import { runLegacyUpgradeIfNeeded, writeLegacyUpgradeNotice } from '../../src/main/upgrade/legacy-upgrade';
+import {
+  runLegacyUpgradeIfNeeded,
+  writeLegacyUpgradeNotice,
+  readUpgradeNotice,
+  dismissUpgradeNotice,
+} from '../../src/main/upgrade/legacy-upgrade';
 import { detectLegacyDb } from '../../src/main/upgrade/legacy-detect';
 
 let tmpRoot: string;
@@ -282,5 +287,55 @@ describe('runLegacyUpgradeIfNeeded（旧库升级编排）', () => {
     expect(fs.existsSync(dbPath)).toBe(true);
     expect(fs.existsSync(dbPath + '.legacy-v1.bak')).toBe(false);
     expect(fs.readdirSync(tmpRoot).some((f) => f.startsWith('upgrade-export-'))).toBe(false);
+  });
+});
+
+describe('readUpgradeNotice / dismissUpgradeNotice（P5 Task 2）', () => {
+  it('无 kv 标记 → 返回 null', () => {
+    runMigrations();
+    expect(readUpgradeNotice()).toBeNull();
+  });
+
+  it('有 kv 标记 → 返回 { exportDir }', () => {
+    runMigrations();
+    writeLegacyUpgradeNotice('/tmp/upgrade-export-20260824-101530');
+    expect(readUpgradeNotice()).toEqual({
+      exportDir: '/tmp/upgrade-export-20260824-101530',
+    });
+  });
+
+  it('kv 值是畸形 JSON → 返回 null（不抛错，UI 容错）', () => {
+    runMigrations();
+    // 直接 INSERT 非法 JSON 模拟边缘场景
+    getDb()
+      .prepare(
+        `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))`,
+      )
+      .run('legacy_upgrade_notice', 'not-json');
+    expect(readUpgradeNotice()).toBeNull();
+  });
+
+  it('kv 值缺少 exportDir 字段 → 返回 null', () => {
+    runMigrations();
+    getDb()
+      .prepare(
+        `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))`,
+      )
+      .run('legacy_upgrade_notice', JSON.stringify({ foo: 'bar' }));
+    expect(readUpgradeNotice()).toBeNull();
+  });
+
+  it('dismissUpgradeNotice 删除 kv 标记 → 后续 read 返回 null', () => {
+    runMigrations();
+    writeLegacyUpgradeNotice('/tmp/upgrade-export-x');
+    expect(readUpgradeNotice()).not.toBeNull();
+    dismissUpgradeNotice();
+    expect(readUpgradeNotice()).toBeNull();
+  });
+
+  it('dismissUpgradeNotice 无标记时幂等（不抛错）', () => {
+    runMigrations();
+    expect(() => dismissUpgradeNotice()).not.toThrow();
+    expect(readUpgradeNotice()).toBeNull();
   });
 });

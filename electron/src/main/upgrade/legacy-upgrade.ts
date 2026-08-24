@@ -80,3 +80,35 @@ export function writeLegacyUpgradeNotice(exportDir: string): void {
     )
     .run(LEGACY_UPGRADE_NOTICE_KEY, JSON.stringify({ exportDir }));
 }
+
+export interface UpgradeNotice {
+  /** 旧库导出目录绝对路径；UI 据此向用户告知备份位置 */
+  exportDir: string;
+}
+
+/**
+ * 读取升级首启标记。无标记 / 值畸形 / 字段缺失 → null（容错，UI 不抛错）。
+ * 仅依赖 kv_store（kv 表在 runMigrations 后存在），调用方须先 runMigrations。
+ */
+export function readUpgradeNotice(): UpgradeNotice | null {
+  const row = getDb()
+    .prepare('SELECT value FROM kv_store WHERE key = ?')
+    .get(LEGACY_UPGRADE_NOTICE_KEY) as { value: string } | undefined;
+  if (!row) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    // 畸形 JSON：视为无标记，避免 UI 启动崩溃
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const exportDir = (parsed as { exportDir?: unknown }).exportDir;
+  if (typeof exportDir !== 'string' || exportDir.length === 0) return null;
+  return { exportDir };
+}
+
+/** 清除升级首启标记（用户点「知道了」后调）。无标记时幂等不抛错。 */
+export function dismissUpgradeNotice(): void {
+  getDb().prepare('DELETE FROM kv_store WHERE key = ?').run(LEGACY_UPGRADE_NOTICE_KEY);
+}

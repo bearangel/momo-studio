@@ -8,6 +8,11 @@ export interface SystemInfo {
   userDataDir: string;
 }
 
+/** P5 Task 2：v1.x → 2.0 旧库升级首启提示载荷——导出目录 */
+export interface UpgradeNotice {
+  exportDir: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -708,6 +713,10 @@ export interface ApiSurface {
     getInfo(): Promise<SystemInfo>;
     /** P2 Task 2：preload 同步注入的 process.platform 常量（titlebar 平台分支用，避免异步首帧闪变） */
     getPlatform(): string;
+    /** P5 Task 2：v1.x → 2.0 旧库升级首启标记；null = 无标记 */
+    getUpgradeNotice(): Promise<UpgradeNotice | null>;
+    /** P5 Task 2：清除升级首启标记（一次性） */
+    dismissUpgradeNotice(): Promise<void>;
   };
   workspace: {
     create(input: CreateWorkspaceInput): Promise<Workspace>;
