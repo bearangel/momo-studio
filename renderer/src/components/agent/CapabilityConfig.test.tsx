@@ -17,20 +17,26 @@ import { CapabilityConfig } from './CapabilityConfig';
 import { useCapabilityStore } from '../../stores/capability.store';
 import type { AgentAssignment, AgentDefinition, WorkspaceAllocation } from '../../ipc/types';
 
-// allocation.get 在 CapabilityConfig 挂载时被 useEffect 触发
+// allocation.get/add/remove 在 CapabilityConfig 挂载与 L2 增删时被触发
 const allocationGet = vi.fn();
+const allocationAdd = vi.fn();
+const allocationRemove = vi.fn();
 const mockApi = {
-  allocation: { get: allocationGet },
+  allocation: { get: allocationGet, add: allocationAdd, remove: allocationRemove },
 };
 
 beforeEach(() => {
   allocationGet.mockReset();
+  allocationAdd.mockReset();
+  allocationRemove.mockReset();
   allocationGet.mockResolvedValue({
     workspaceId: 'ws-1',
     tools: [],
     mcps: [],
     skills: [],
   } satisfies WorkspaceAllocation);
+  allocationAdd.mockResolvedValue(undefined);
+  allocationRemove.mockResolvedValue(undefined);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   // 重置 store 状态，避免上一个 case 的 allocation 残留
@@ -214,5 +220,52 @@ describe('CapabilityConfig — 「调整本实例能力」按钮', () => {
       expect(allocationGet).toHaveBeenCalledWith('ws-1');
     });
     expect(screen.queryByRole('button', { name: '调整本实例能力' })).not.toBeInTheDocument();
+  });
+});
+
+describe('CapabilityConfig — Layer 2 工作空间共享能力增删', () => {
+  it('无选中 agent 时仍渲染 Layer 2 增删输入框（保证 AgentsView 挂载场景可独立工作）', async () => {
+    render(<CapabilityConfig workspaceId="ws-1" />);
+    await waitFor(() => {
+      expect(allocationGet).toHaveBeenCalledWith('ws-1');
+    });
+    // 三个类型分组各一个 input
+    const inputs = screen.getAllByPlaceholderText(/添加 workspace 级/);
+    expect(inputs).toHaveLength(3);
+  });
+
+  it('输入 ref 并提交 → 调用 allocation.add(workspaceId, type, ref)', async () => {
+    render(<CapabilityConfig workspaceId="ws-1" />);
+    await waitFor(() => {
+      expect(allocationGet).toHaveBeenCalledWith('ws-1');
+    });
+
+    const toolInput = screen.getAllByPlaceholderText(/添加 workspace 级/)[0]!;
+    fireEvent.change(toolInput, { target: { value: 'shell' } });
+    fireEvent.submit(toolInput.closest('form')!);
+
+    await waitFor(() => {
+      expect(allocationAdd).toHaveBeenCalledWith('ws-1', 'tool', 'shell');
+    });
+  });
+
+  it('点击 Layer 2 chip ✕ → 调用 allocation.remove(workspaceId, type, ref)', async () => {
+    allocationGet.mockResolvedValue({
+      workspaceId: 'ws-1',
+      tools: ['shell'],
+      mcps: [],
+      skills: [],
+    } satisfies WorkspaceAllocation);
+
+    render(<CapabilityConfig workspaceId="ws-1" />);
+    await waitFor(() => {
+      expect(allocationGet).toHaveBeenCalledWith('ws-1');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'shell ✕' }));
+
+    await waitFor(() => {
+      expect(allocationRemove).toHaveBeenCalledWith('ws-1', 'tool', 'shell');
+    });
   });
 });
