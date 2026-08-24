@@ -327,6 +327,22 @@ class AnthropicProvider implements LLMProvider {
 // --- 流式实现（chatStream） ---
 
 /**
+ * 流式路径的 fetch 包装：网络层失败时把 undici 藏在 err.cause 里的真实原因
+ * （ECONNREFUSED / ENOTFOUND / 证书错误等）提升到错误消息——裸 TypeError 只有一句
+ * "fetch failed"，用户无法据此诊断供应商 baseUrl/网络问题（2.0.0 主机验收补充）。
+ * abort 触发的 AbortError 原样上抛（调用方按中断语义处理）。
+ */
+async function llmStreamFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    const cause = err instanceof Error && err.cause instanceof Error ? `：${err.cause.message}` : '';
+    throw new Error(`LLM 请求无法连接 ${url}${cause}`);
+  }
+}
+
+/**
  * OpenAI 兼容 SSE 流式解析。
  *
  * 直接使用 fetch（不经过 fetchWithRetry），原因：
@@ -357,7 +373,7 @@ async function* chatStreamOpenAI(
     }));
   }
 
-  const response = await fetch(url, {
+  const response = await llmStreamFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -508,7 +524,7 @@ async function* chatStreamAnthropic(
     }));
   }
 
-  const response = await fetch(url, {
+  const response = await llmStreamFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

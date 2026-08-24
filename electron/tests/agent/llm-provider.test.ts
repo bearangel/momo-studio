@@ -76,4 +76,53 @@ describe('llm-provider', () => {
     const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'bad-key');
     await expect(provider.chat([{ role: 'user', content: 'hi' }])).rejects.toThrow('401');
   });
+
+  it('chatStream 网络层失败时错误消息包含 URL 与 cause（2.0.0 主机验收：裸 "fetch failed" 不可诊断）', async () => {
+    // 仿真 undici 网络层 TypeError：消息只有 "fetch failed"，真实原因在 cause
+    const netErr = new TypeError('fetch failed');
+    netErr.cause = new Error('connect ECONNREFUSED 127.0.0.1:9');
+    mockFetch.mockRejectedValueOnce(netErr);
+
+    const provider = createLLMProvider(
+      { provider: 'openai', model: 'gpt-4o', baseUrl: 'http://127.0.0.1:9/v1' },
+      'test-key',
+    );
+    const stream = provider.chatStream(
+      [{ role: 'user', content: 'hi' }],
+      undefined,
+      new AbortController().signal,
+    );
+
+    let caught: Error | null = null;
+    try {
+      for await (const _delta of stream) { void _delta; }
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('http://127.0.0.1:9/v1/chat/completions');
+    expect(caught!.message).toContain('ECONNREFUSED 127.0.0.1:9');
+  });
+
+  it('chatStream abort 时 AbortError 原样上抛（不被连接错误包装吞掉中断语义）', async () => {
+    const abortErr = new DOMException('This operation was aborted', 'AbortError');
+    mockFetch.mockRejectedValueOnce(abortErr);
+
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'test-key');
+    const stream = provider.chatStream(
+      [{ role: 'user', content: 'hi' }],
+      undefined,
+      new AbortController().signal,
+    );
+
+    let caught: Error | null = null;
+    try {
+      for await (const _delta of stream) { void _delta; }
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBe(abortErr);
+  });
 });

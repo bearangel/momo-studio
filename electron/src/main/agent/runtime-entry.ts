@@ -677,13 +677,16 @@ export async function runChatLoop(
  *   3. process.send 不存在（非 fork 模式）时直接 exit
  */
 function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): void {
-  const send = process.send;
-  if (!send) {
+  // 必须以 process.send(...) 方法调用形式发送：Node 内部实现读取 this.connected，
+  // 解构后裸调用（const send = process.send; send(...)）在严格模式下 this=undefined，
+  // 抛 "Cannot read properties of undefined (reading 'connected')" 令错误路径整体崩溃
+  // （2.0.0 主机验收 P0：LLM 请求失败 → 错误处理崩溃 → agent 永不回复）。
+  if (!process.send) {
     process.exit(exitCode);
     return;
   }
   const forceTimer = setTimeout(() => process.exit(exitCode), 2000);
-  send(msg, () => {
+  process.send(msg, () => {
     clearTimeout(forceTimer);
     process.exit(exitCode);
   });

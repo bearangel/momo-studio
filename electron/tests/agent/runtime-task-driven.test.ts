@@ -421,6 +421,50 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(exitCode).toBe(1);
   });
 
+  it('regression：task-end IPC 必须以方法调用形式发送——裸调用 process.send 在真实 Node 下崩溃（2.0.0 主机验收 P0）', async () => {
+    mockProviderThrow(new Error('fetch failed'));
+
+    // 仿真真实 node:internal/child_process 的 process.send 语义：内部读取 this.connected。
+    // beforeEach 的默认 mock 是不读 this 的普通函数，无法暴露本缺陷。
+    // 解构裸调用（const send = process.send; send(...)）在严格模式下 this=undefined → 抛
+    // "Cannot read properties of undefined (reading 'connected')"，错误路径整个崩溃。
+    process.send = function (
+      this: unknown,
+      msg: unknown,
+      callback?: (err: Error | null) => void,
+    ): boolean {
+      if (this !== process) {
+        throw new TypeError("Cannot read properties of undefined (reading 'connected')");
+      }
+      const m = msg as { type?: string };
+      if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
+        sentChunks.push(msg);
+      } else {
+        sentIpc.push(msg);
+      }
+      if (callback) callback(null);
+      return true;
+    } as NonNullable<typeof process.send>;
+
+    // 修复前：sendTaskEndAndExit 内解构裸调用 → 上面的 TypeError 令 runTaskChatLoop reject；
+    // 修复后：方法调用 → end(error) chunk + task-end(error) IPC + exit(1) 全部正常到达。
+    await runTaskChatLoop(
+      makeTaskConfig({ taskId: 'task-regress', streamSessionId: 'sess-regress' }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    const endChunk = streamChunks().find((c) => c.type === 'end') as {
+      finishReason: string;
+      error?: string;
+    };
+    expect(endChunk).toBeDefined();
+    expect(endChunk.finishReason).toBe('error');
+    const taskEnd = sentIpc.find((m) => (m as { type?: string }).type === 'task-end');
+    expect(taskEnd).toBeDefined();
+    expect(exitCode).toBe(1);
+  });
+
   it('正常完成时发完整 chunk 序列：start → text → end', async () => {
     mockProvider([
       { type: 'text', content: 'Hello' },
