@@ -4,8 +4,8 @@
 //
 // 场景矩阵（4 个）：
 // ① no provider given + global defaultChatModel set + provider row exists → 落库 def.modelProviderId/modelName = 引用值
-// ② global default set but provider row missing → 抛「未配置 provider」类错误
-// ③ no global default + no provider given → 抛「未配置 provider」类错误
+// ② global default set but provider row missing → 抛「未配置 provider」类错误 + warn 日志
+// ③ no global default + no provider given → 抛「未配置 provider」类错误（无声 throw）
 // ④ provider explicitly given → 不消费 defaultChatModel，原值落库
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
@@ -22,6 +22,7 @@ import {
   createProvider,
 } from '../../src/main/agent/provider-crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
+import { logger } from '../../src/main/logger';
 
 // runtime-status / runtime-registry 在 crud-custom-def 测试里也 mock 掉，保持一致
 vi.mock('../../src/main/agent/runtime-status', () => ({
@@ -50,6 +51,7 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   memStore.clear();
   delete process.env.AP_USER_DATA_DIR;
+  vi.restoreAllMocks();
 });
 
 /** 通过 slug 从 listAgentDefinitions 找到刚创建的 def（id 是 randomUUID） */
@@ -82,7 +84,8 @@ describe('createCustomDef — defaultChatModel 兜底消费（P3 Task 2）', () 
     expect(reloaded.modelName).toBe('glm-5.3');
   });
 
-  it('② 全局设了 defaultChatModel 但供应商行已被删 → 抛「未配置 provider」类错误', async () => {
+  it('② 全局设了 defaultChatModel 但供应商行已被删 → 抛错 + warn 兜底缺失（ghost provider 可诊断信号）', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     // 关键差异：未在 DB 里建供应商，但 defaultChatModel 引用了一个不存在的 providerId
     updateGlobalSettings({
       defaultChatModel: { providerId: 'ghost-provider', modelId: 'glm-5.3' },
@@ -93,15 +96,29 @@ describe('createCustomDef — defaultChatModel 兜底消费（P3 Task 2）', () 
       modelProviderId: '', modelName: '',
     })).toThrow(/未配置 modelProviderId/);
 
+    // 兜底缺失的可诊断信号——reviewer mandate：ghost provider 走 warn
+    expect(warnSpy).toHaveBeenCalledWith(
+      'defaultChatModel 引用的 provider 不存在，跳过兜底',
+      expect.objectContaining({ providerId: 'ghost-provider' }),
+    );
+
     // 落库为空——确保 throw 路径不会写入脏数据
     expect(listAgentDefinitions().find((d) => d.slug === 'a2')).toBeUndefined();
   });
 
-  it('③ 未设 defaultChatModel 且未传 provider → 抛「未配置 provider」类错误', () => {
+  it('③ 未设 defaultChatModel 且未传 provider → 抛错（无声 throw，不应误报 ghost warn）', () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
     expect(() => createCustomDef(null, {
       name: 'A3', slug: 'a3', systemPrompt: 'p',
       modelProviderId: '', modelName: '',
     })).toThrow(/未配置 modelProviderId/);
+
+    // 无 default 路径是常规用户流，不应触发 ghost warn（避免误诊）
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      'defaultChatModel 引用的 provider 不存在，跳过兜底',
+      expect.anything(),
+    );
 
     expect(listAgentDefinitions().find((d) => d.slug === 'a3')).toBeUndefined();
   });

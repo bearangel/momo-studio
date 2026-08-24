@@ -83,6 +83,12 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
         modelId: effectiveModelName,
       });
     } else {
+      // ghost provider：defaultChatModel 已设但 provider 行已删——可诊断信号，需 warn 便于排查
+      if (defaultRef) {
+        logger.warn('defaultChatModel 引用的 provider 不存在，跳过兜底', {
+          providerId: defaultRef.providerId,
+        });
+      }
       throw new Error(
         '未配置 modelProviderId：请在表单选择供应商，或在「设置 → 默认模型」中设置 defaultChatModel',
       );
