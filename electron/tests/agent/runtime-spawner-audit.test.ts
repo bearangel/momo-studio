@@ -133,4 +133,25 @@ describe('runtime-spawner audit:toolCall 桥', () => {
     for (let i = 0; i < 400; i++) handler({ ...AUDIT_MSG });
     expect(enforceAuditQuota).toHaveBeenCalledTimes(2);
   });
+
+  it('insertToolCall 抛错时 handler 仍 resolve（不 reject）——落库失败不污染 chunk 通道', async () => {
+    // T9 终审 Minor：audit 写入失败（如 DB 锁/表满）不应让 child 'message' listener reject
+    // 触发 unhandledRejection；与 MCP 分支 try/catch 风格一致——失败记 warn 即可
+    vi.mocked(insertToolCall).mockImplementationOnce(() => {
+      throw new Error('audit table locked');
+    });
+    const handler = await spawnAndGetHandler();
+    await expect(handler({ ...AUDIT_MSG })).resolves.toBeUndefined();
+    expect(insertToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('enforceAuditQuota 抛错时 handler 仍 resolve（不 reject）——配额巡检失败不污染 chunk 通道', async () => {
+    vi.mocked(enforceAuditQuota).mockImplementationOnce(() => {
+      throw new Error('quota check failed');
+    });
+    const handler = await spawnAndGetHandler();
+    for (let i = 0; i < 199; i++) handler({ ...AUDIT_MSG });
+    await expect(handler({ ...AUDIT_MSG })).resolves.toBeUndefined();
+    expect(enforceAuditQuota).toHaveBeenCalledTimes(1);
+  });
 });

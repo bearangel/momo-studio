@@ -259,10 +259,14 @@ export class RouterService {
       return;
     }
     if (this.opts.runners.size === 0) {
+      // 无 runner 可广播——子 agent 未启动 / 已停止 / 进程重启中。abort 信号丢失，
+      // 兜底交给 PM 侧 abort 后 reject（dispatch-wait onAbort）+ 子 agent 自身的
+      // 渐进式超时——上游不需要「已广播」信息（实际并未广播）。
       logger.warn('routeAbortDispatch 无 runner 可广播（子 agent 未启动或已停止）', {
         taskId,
         subStreamSessionId,
       });
+      return;
     }
     for (const runner of this.opts.runners.values()) {
       runner.abortStream(subStreamSessionId);
