@@ -488,3 +488,9 @@ Base commit: 9add711
 
 ## macOS 主机验收陪跑（2.0.0 发布后）
 模式：用户在 macOS 主机实测全功能；容器侧待命——bug 报告 → 定位 → 修复 → 过审 → 合并推送。验收清单锚点：README DoD 表 1/2/4/6 + P4 双机联调 + 1.x 升级实测。
+
+### 主机验收 P0 修复 ×2（ddf3970 + 本 commit）
+- P0: sendTaskEndAndExit 裸调用 process.send 崩溃（错误路径全灭）+ LLM fetch 错误无 cause
+- P0-2: stream-relay start/segment_boundary 不推 session:message（agent 气泡实时不可见）
+- 全链路 harness（真实 LLM glm-5.3 + dist 生产代码）：主进程 E2E PASS
+- 用户侧待复验；「owner 消息重启后不显示」未复现根因，待复验数据
