@@ -30,6 +30,7 @@ import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { deleteDefinition } from '../agent/crud';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
+import { requestResourceImport } from '../p2p/resource-transfer';
 
 /** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
 export interface RegisterMcpInput {
@@ -56,13 +57,43 @@ export function registerResourceHandlers(): void {
     return resolveResourceById(id);
   });
 
-  // resource:install — 仅 marketplace 源支持安装
-  // installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
+  // resource:install — marketplace 安装 + p2p 导入（P4 Task 5）
+  // marketplace：installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
   // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
+  // p2p：目录条目 → request/provide 按需拉取完整定义 → 落地 custom（agent 走
+  // createCustomDef 等价路径 / mcp 走 registerMcpDefinition 幂等覆盖）。
   ipcMain.handle('resource:install', async (_evt, id: string) => {
     const item = await resolveResourceById(id);
-    if (!item) throw new Error(`资源 ${id} 不存在`);
+    if (!item) {
+      // p2p 项由内存目录缓存解析——来源节点离线 / 目录超 5min prune 后条目消失，
+      // 给针对性文案（区别于 marketplace 的 id 不存在）
+      if (id.startsWith('p2p-')) {
+        throw new Error('找不到该 P2P 资源：来源节点可能已离线，或共享目录已过期');
+      }
+      throw new Error(`资源 ${id} 不存在`);
+    }
     if (!item.installable) throw new Error(`「${item.name}」不可安装`);
+
+    if (item.source === 'p2p') {
+      // library p2p 映射：item.slug 是对端原始 slug（不掺节点前缀），
+      // p2p.peerId 是完整 nodeId——直接作为请求三元组，无需反解 id 前缀
+      if (item.type !== 'agent' && item.type !== 'mcp') {
+        throw new Error(`P2P 共享暂只支持 agent / mcp 类型（收到 ${item.type}）`);
+      }
+      const peerNodeId = item.p2p?.peerId;
+      if (!peerNodeId) throw new Error(`P2P 资源 ${id} 缺少来源节点信息`);
+      const result = await requestResourceImport(peerNodeId, item.type, item.slug);
+      if (result === 'ok') {
+        // 导入即 custom 写通道（与 registerMcp/uploadSkill 同语义）→ 广播目录
+        void broadcastLocalResourceCatalog();
+        return;
+      }
+      if (result === 'not-found') {
+        throw new Error(`对端节点未找到资源「${item.name}」（可能已被删除或取消共享）`);
+      }
+      throw new Error(`导入「${item.name}」超时：对端节点无响应（可能已离线）`);
+    }
+
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
     }

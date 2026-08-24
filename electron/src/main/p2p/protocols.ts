@@ -52,10 +52,14 @@ export interface ResourceRequest {
   slug: string;
 }
 
-/** 资源供给——资源请求的回执，definition 为完整资源定义（JSON 结构化数据） */
+/**
+ * 资源供给——资源请求的回执。
+ * definition 为完整资源定义（JSON 结构化数据）；null = 供给方未找到该资源
+ * （需求方据此 resolve 'not-found'——P4 Task 5 引入的显式未找到标记）。
+ */
 export interface ResourceProvide {
   requestId: string;
-  definition: Record<string, unknown>;
+  definition: Record<string, unknown> | null;
 }
 
 // ---- 手写形状 guard（sync.handleIncoming 入站分发前统一校验） ----
@@ -124,5 +128,5 @@ export function isResourceRequest(x: unknown): x is ResourceRequest {
 
 export function isResourceProvide(x: unknown): x is ResourceProvide {
   if (!isRecord(x)) return false;
-  return typeof x.requestId === 'string' && isRecord(x.definition);
+  return typeof x.requestId === 'string' && (x.definition === null || isRecord(x.definition));
 }

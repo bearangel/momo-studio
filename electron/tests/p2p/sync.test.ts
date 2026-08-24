@@ -287,6 +287,23 @@ describe('P2pSync', () => {
     expect(onProv).toHaveBeenCalledWith(prov, 'peer1');
   });
 
+  it('resource-provide definition: null（P4 Task 5 not-found 标记）合法通过 guard', () => {
+    const router = mkMockRouter();
+    const onProv = vi.fn();
+    const sync = mkSync(router, { onResourceProvide: onProv });
+    sync.start();
+
+    const prov: ResourceProvide = { requestId: 'req-1', definition: null };
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: { targetNodeId: 'me', type: 'resource-provide', body: { ...prov } },
+      receivedAt: Date.now(),
+    });
+
+    expect(onProv).toHaveBeenCalledTimes(1);
+    expect(onProv).toHaveBeenCalledWith(prov, 'peer1');
+  });
+
   it('畸形 body / 未知 type 静默丢弃（不抛、不触发任何回调）', () => {
     const router = mkMockRouter();
     const onMsg = vi.fn();

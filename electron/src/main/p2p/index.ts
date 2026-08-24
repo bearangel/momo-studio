@@ -59,6 +59,12 @@ import {
   getSharedResources,
 } from './resource-share';
 import {
+  setResourceTransferDeps,
+  clearResourceTransferDeps,
+  handleResourceRequest,
+  handleResourceProvide,
+} from './resource-transfer';
+import {
   writeTaskSnapshot,
   getRemoteTasks,
   pruneStale,
@@ -137,13 +143,16 @@ export async function initP2p(): Promise<void> {
 
   // 4. 应用层同步：把对端 message 写本地 SQLite + 推 renderer；
   //    任务快照入站 → remote-cache 只读镜像（不落 tasks 表——防本节点调度器误捡）；
-  //    资源目录入站 → resource-share 缓存（清单元数据，完整定义走 request/provide）
+  //    资源目录入站 → resource-share 缓存（清单元数据，完整定义走 request/provide）；
+  //    资源请求入站 → 供给方查本地 custom 回执；资源供给入站 → 需求方 resolve pending（T5）
   sync = new P2pSync({
     router,
     localNodeId: id.nodeId,
     onRemoteMessage: handleRemoteMessage,
     onRemoteTaskSnapshot: writeTaskSnapshot,
     onRemoteResourceCatalog: writeResourceCatalog,
+    onResourceRequest: handleResourceRequest,
+    onResourceProvide: handleResourceProvide,
   });
   sync.start();
 
@@ -154,6 +163,9 @@ export async function initP2p(): Promise<void> {
   // 6. 资源目录出站广播装配（P4 Task 4）：注入 sync + 当前身份——
   //    写路径触发点（resource IPC handlers / agent IPC handlers）经 resource-share 模块取用
   setResourceShareDeps({ sync, nodeId: id.nodeId, nodeName: id.displayName });
+
+  // 6b. 资源导入请求/供给装配（P4 Task 5）：requestResourceImport 的单发通道依赖
+  setResourceTransferDeps({ sync });
 
   // 7. 任务快照周期重播兜底（T2 移交）：事件触发外的快照重播，保证对端 staleness 有界。
   //    unref——纯兜底重播不值得阻止进程退出
@@ -234,9 +246,10 @@ export async function stopP2p(): Promise<void> {
   }
   sync?.stop();
   sync = null;
-  // 任务快照 / 资源目录广播依赖一并清空——回到"P2P 未启用"静默 no-op
+  // 任务快照 / 资源目录广播 / 资源导入传输依赖一并清空——回到"P2P 未启用"静默 no-op
   clearTaskBroadcastDeps();
   clearResourceShareDeps();
+  clearResourceTransferDeps();
   await router?.stop();
   router = null;
   lanTransport = null;
