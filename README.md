@@ -28,6 +28,18 @@
   - **macOS 主机验收清单**——P1/P2 半成品「真实拖拽 tab / 红绿灯 / frameless 标题栏」、P3「platform 下拉选择端到端生效」、P4「两台局域网设备互信 + 资源请求供给 + 任务远端镜像」、P5「1.x 库升级实测（旧库检测 + 导出 + 备份 + 首启提示 + 二次启动不重提示）」
   - **2.1 清单位置**——P4 遗留 skill 分享（需文件块传输协议）/ 双向看板（当前远端任务仅只读）/ hub 中继；P2/P3 遗留（重启自动恢复 agent runtime / e2e 测试 / Windows 沙箱）
 
+- **DoD 对照**（spec §10 验收标准 × 收官状态，P5 T4 实测）
+
+  | # | 验收标准 | 状态 | 依据 |
+  |---|---|---|---|
+  | 1 | 重启一致性：流式输出中途杀进程重启，UI 展示逐字节一致 | ✅ 单测验证 | restart-consistency 7 场景（实时聚合==重启聚合 / dispatch 嵌套 / 多段 / 千级并发）；真实 LLM 交互实测待 macOS 主机（P1 终审记录） |
+  | 2 | 大上下文：≥1MB 正文 + 500 工具调用事件无截断、顺序正确、重启还原 | ✅ 等价单测 / 主机待验 | 千级 text_delta + 50 tool_call 并发重启一致测试；字面规格（1MB/500）待 macOS 主机实测 |
+  | 3 | 无 Matrix 残留：无 Tuwunel 进程 / 无 matrix-js-sdk / 体积减小 | ✅ 已验证 | P1 删除 54 文件（−3226 行）+ matrix-js-sdk 出库；收官复扫依赖树与锁文件 0 命中；xvfb 冒烟零 Matrix 进程 |
+  | 4 | UI：titlebar tabs + 活动栏 + 设置独立界面；Ctrl/Cmd+B 折叠侧栏 | ✅ 已验证（单测+xvfb） | P2 终审 APPROVED；真实拖拽 tab / 红绿灯交互待 macOS 主机 |
+  | 5 | 设置：模型服务两列 CRUD + 检查连接 + 模型列表；默认模型四类；审计滚动删除 | ✅ 已验证（单测） | P2 终审交叉审计全过（provider 链 / 审计链）；配额滚动删除含滞回回归锁 |
+  | 6 | 联网：两台局域网设备互信后，看板只读镜像 + 资源分享导入可演示 | ✅ 单测 + 单机双进程 / 双机待主机 | P4 终审 APPROVED（107 新测试）；mDNS 发布经第二进程发现验证；双机实测待 macOS 主机 |
+  | 7 | 测试：typecheck 双 clean；健康测试全绿；restart-consistency 扩展大上下文 | ✅ 收官实测 | electron 1074 + renderer 548 全绿零 flake；typecheck 双 clean；build exit 0；electron-builder 产物内嵌版本 2.0.0；xvfb 冒烟双启动通过 |
+
 **v2.0.0-p4 — 局域网联网（开发中，未发布）**
 
 2.0.0 第四期：P2P 局域网协作——任务只读镜像 + 资源分享。详见 `docs/plans/2026-08-23-v2.0.0-p4-lan-sync.md`。
