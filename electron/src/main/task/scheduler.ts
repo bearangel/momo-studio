@@ -15,7 +15,11 @@
 //     v2 加 cron 解析 + 自动续期
 //   - scheduler 不直接做并发检查——这是 dispatcher 的职责，分层清晰
 //     （scheduler = 触发器；dispatcher = 决策器；runner = 执行器）
+//   - P4 Task 2：checkOnce 内有状态升级时 fire-and-forget 广播任务快照
+//     （整批合并为一次广播——快照本身是全量扫描）。import 叶子模块
+//     task-broadcast 而非 p2p 门面，避免引入 electron / 传输层依赖。
 import { getDb } from '../storage/db';
+import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 
 export interface SchedulerOpts {
   /** 触发一次 dispatcher pickup（外部注入，便于测试和模块解耦） */
@@ -84,6 +88,11 @@ export class TaskScheduler {
         t.id,
       );
       void this.opts.scanPickup(t.assignee_agent_id);
+    }
+
+    // 本 tick 有状态升级 → 广播一次任务快照（全量扫描天然覆盖整批，无升级不广播）
+    if (tasks.length > 0) {
+      void broadcastLocalTaskSnapshot();
     }
   }
 }

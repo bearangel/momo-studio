@@ -15,7 +15,7 @@
 //
 // 与 sync.ts（C7）的关系：
 //   sync.ts 通过 Router.onIncoming 接收所有 transport 收到的消息，
-//   按消息类型（message/task/presence/ack）路由到对应业务层。
+//   按消息类型（message/task-snapshot/resource-*）路由到对应业务层。
 import type { TransportLayer, MessagePayload, IncomingMessage } from './types';
 
 export interface RouterOpts {

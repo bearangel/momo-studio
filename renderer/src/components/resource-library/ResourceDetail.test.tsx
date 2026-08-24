@@ -143,6 +143,30 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     expect(screen.getByText('sha256:abcdef1234567890')).toBeInTheDocument();
   });
 
+  it('p2p: 显示来源节点 + 「导入」按钮（走 onInstall；P4 Task 4）', () => {
+    const onInstall = vi.fn();
+    const item = baseItem({
+      id: 'p2p-agent-a1b2c3d4-helper',
+      source: 'p2p',
+      type: 'agent',
+      name: '远端助手',
+      description: '来自对端节点的 agent',
+      installed: false,
+      installable: true,
+      removable: false,
+      p2p: { peerId: 'a1b2c3d4e5f6', peerName: '对端A' },
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onInstall={onInstall} />);
+    // 来源节点展示 peerName
+    expect(screen.getByText('对端A')).toBeInTheDocument();
+    // p2p 项按钮文案为「导入」（区别于 marketplace 的「安装」）
+    const importBtn = screen.getByRole('button', { name: /导入/ });
+    fireEvent.click(importBtn);
+    expect(onInstall).toHaveBeenCalledWith('p2p-agent-a1b2c3d4-helper');
+    // 不可删除（removable=false）→ 无删除按钮
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
+  });
+
   it('builtin (removable=false): 不显示删除按钮', () => {
     const onDelete = vi.fn();
     const item = baseItem({ removable: false });

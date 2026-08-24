@@ -3,13 +3,15 @@
 // v1.7 Task 9：资源库主视图。布局为「左主网格 + 右详情面板（条件渲染）+ 三类弹窗」。
 //
 // 关键设计：
-//   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 4 个 source tab
-//     （全部/系统预置/我的上传/网络资源）。两层 AND：filter = { type?, source? }
+//   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 5 个 source tab
+//     （全部/系统预置/我的上传/网络资源/P2P 共享）。两层 AND：filter = { type?, source? }
 //   - 搜索：前端 in-memory filter（name/description/slug 模糊匹配），无 IPC
 //   - 主网格：filteredItems 渲染为 ResourceCard 列表（grid auto-fill 220px）
 //   - 选中卡片 → 右侧 ResourceDetail 滑出（条件渲染，selectedId 找不到则收起）
 //   - 三类弹窗（RegisterMcpDialog / UploadSkillDialog / DefinitionEditor）由
 //     AddResourceMenu 触发；前两者 onSuccess → load() 刷新 + 关弹窗
+//   - 导入反馈：store installResource 成功后设置 installNotice（一次性绿色横幅），
+//     store installResource 失败后设置 error（红色横幅覆盖主网格区）。view 端只读渲染。
 //   - useEffect 依赖 [load, typeFilter, sourceFilter] —— filter 变化时自动 load；
 //     setTypeFilter/setSourceFilter 也会主动 load（双保险）
 import { useEffect, useState } from 'react';
@@ -32,13 +34,13 @@ const TYPE_TABS: Array<{ key: ResourceFilter['type'] | 'all'; label: string }> =
   { key: 'skill', label: 'Skill' },
 ];
 
-/** 第二行：source tab（全部 / 系统预置 / 我的上传 / 网络资源；v2 预留 P2P） */
+/** 第二行：source tab（全部 / 系统预置 / 我的上传 / 网络资源 / P2P 共享——P4 启用） */
 const SOURCE_TABS: Array<{ key: ResourceFilter['source'] | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'builtin', label: '系统预置' },
   { key: 'custom', label: '我的上传' },
   { key: 'marketplace', label: '网络资源' },
-  // v2: { key: 'p2p', label: 'P2P 共享' },
+  { key: 'p2p', label: 'P2P 共享' },
 ];
 
 export function ResourceLibraryView() {
@@ -46,6 +48,7 @@ export function ResourceLibraryView() {
     items,
     loading,
     error,
+    installNotice,
     typeFilter,
     sourceFilter,
     query,
@@ -153,6 +156,15 @@ export function ResourceLibraryView() {
 
         {/* 主网格区 */}
         <div className="flex-1 overflow-auto p-4">
+          {/* 导入成功一次性横幅——store filter 切换时清掉（保持简单：自然过期，不挂 setTimeout） */}
+          {installNotice && (
+            <div
+              data-testid="install-notice"
+              className="mb-3 px-3 py-2 rounded-md bg-green-500/15 text-green-300 text-sm border border-green-500/30"
+            >
+              ✓ {installNotice}
+            </div>
+          )}
           {error ? (
             <div className="text-center text-status-error text-sm py-8">
               加载失败：{error}

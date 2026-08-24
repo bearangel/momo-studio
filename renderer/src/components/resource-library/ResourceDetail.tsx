@@ -5,9 +5,10 @@
 //   - custom MCP: command + args + env（KEY=*** 隐藏值）+ 上传时间
 //   - custom Skill: frontmatter（name/version）+ 上传时间
 //   - custom Agent: systemPromptHash + 上传时间
+//   - p2p: 来源节点（peerName）——「导入」按钮走 onInstall（安装后端为 P4 Task 5）
 //
 // 底部按钮区按 installed / installable / removable 三态切换：
-//   - installable && !installed     → 显示「安装」按钮
+//   - installable && !installed     → 显示「安装/导入」按钮（p2p 源文案为「导入」）
 //   - installed && removable        → 显示「🗑 删除」按钮
 //   - installed && !removable       → 显示「✓ 已安装」静态标记（builtin）
 import type { ResourceItem } from '../../ipc/types';
@@ -131,6 +132,14 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall }: Props) {
           </div>
         )}
 
+        {/* p2p：来源节点（目录元数据不含完整定义，导入经 request/provide 拉取——T5） */}
+        {item.source === 'p2p' && item.p2p && (
+          <div>
+            <div className="text-xs text-neutral-500 mb-1">来源节点</div>
+            <div className="text-neutral-200">{item.p2p.peerName}</div>
+          </div>
+        )}
+
         {/* custom 共用：上传时间 */}
         {item.custom?.installedAt && (
           <div>
@@ -145,9 +154,11 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall }: Props) {
       </div>
 
       <div className="px-4 py-3 border-t border-border-subtle flex gap-2">
-        {/* 安装按钮：仅 installable 且未安装时显示 */}
+        {/* 安装按钮：仅 installable 且未安装时显示（p2p 源文案为「导入」） */}
         {item.installable && !item.installed && onInstall && (
-          <Button size="sm" onClick={() => onInstall(item.id)}>安装</Button>
+          <Button size="sm" onClick={() => onInstall(item.id)}>
+            {item.source === 'p2p' ? '导入' : '安装'}
+          </Button>
         )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}
         {item.installed && item.removable && onDelete && (
