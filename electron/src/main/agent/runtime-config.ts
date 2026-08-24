@@ -67,7 +67,7 @@ export interface RuntimeConfig {
   /** 团队会话 ID（sessions 表主键；dispatch/abort 的目标会话） */
   teamSessionId: string;
   systemPrompt: string;
-  // v1.3：移除 modelProvider，createLLMProvider 按 baseUrl 自动检测 platform
+  // v1.3 曾移除 modelProvider；P3 起 platform 经 modelPlatform 显式传入，缺省时才回退 baseUrl 启发式检测
   modelName: string;
   modelBaseUrl?: string;
   /**

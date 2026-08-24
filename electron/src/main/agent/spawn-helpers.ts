@@ -133,7 +133,7 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     );
   }
 
-  // 取 provider baseUrl（runtime 据此自动检测 platform + 调对应 REST API）
+  // 取 provider（baseUrl 供 REST 调用与启发式回退；platform 显式透传给 runtime）
   const provider = getProvider(def.modelProviderId);
   if (!provider) {
     throw new Error(`供应商不存在: ${def.modelProviderId}`);
