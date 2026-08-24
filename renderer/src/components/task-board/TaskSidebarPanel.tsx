@@ -8,21 +8,36 @@
 import { useMemo, useState } from 'react';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useAgentStore } from '../../stores/agent.store';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { TaskList } from './TaskList';
-import { TaskFilters, type FilterState } from './TaskFilters';
+import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
 
 export function TaskSidebarPanel() {
   const tasks = useTaskStore((s) => s.tasks);
   const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
   const setSelectedTaskId = useTaskStore((s) => s.setSelectedTaskId);
   const workspace = useWorkspaceStore((s) => s.getActive());
+  const assignments = useAgentStore((s) => s.assignments);
   const [filter, setFilter] = useState<FilterState>({
     status: 'all',
     assignee: 'all',
     sort: 'priority',
   });
   const [createOpen, setCreateOpen] = useState(false);
+
+  // assignee 下拉选项：从当前 workspace 的 assignment 派生
+  // （label=agentName 优先，回退 agentUserId，最后 instanceId——确保至少有可读名）
+  const assigneeOptions = useMemo<AssigneeOption[]>(
+    () =>
+      assignments
+        .filter((a) => (workspace ? a.workspaceId === workspace.id : true))
+        .map((a) => ({
+          value: a.instanceId,
+          label: a.agentName ?? a.agentUserId ?? a.instanceId,
+        })),
+    [assignments, workspace],
+  );
 
   // 筛选 + 排序（自 TaskBoardView 原样迁移）
   const filteredTasks = useMemo(() => {
@@ -65,7 +80,7 @@ export function TaskSidebarPanel() {
           ＋
         </button>
       </div>
-      <TaskFilters value={filter} onChange={setFilter} />
+      <TaskFilters value={filter} onChange={setFilter} assigneeOptions={assigneeOptions} />
       <TaskList
         tasks={filteredTasks}
         selectedId={selectedTaskId}
