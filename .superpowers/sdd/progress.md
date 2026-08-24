@@ -485,3 +485,6 @@ Base commit: 9add711
 - DEFER（2.1）：NODE_OPTIONS 固化/vite chunk 拆分；空目录 kv success 标志；agent 导入自动化（2.0.x）
 
 ## P5 release 全部完成（6 commits, 4464fd6..e60abe8）——2.0.0 五期收官
+
+## macOS 主机验收陪跑（2.0.0 发布后）
+模式：用户在 macOS 主机实测全功能；容器侧待命——bug 报告 → 定位 → 修复 → 过审 → 合并推送。验收清单锚点：README DoD 表 1/2/4/6 + P4 双机联调 + 1.x 升级实测。
