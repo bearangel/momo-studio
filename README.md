@@ -6,6 +6,20 @@
 
 ## 状态
 
+**v2.0.0-p3 — 半成品处置与 IPC 收敛（开发中，未发布）**
+
+2.0.0 第三期：P1/P2 半成品收尾 + IPC 面收敛。详见 `docs/plans/2026-08-23-v2.0.0-p3-cleanup-ipc.md`。
+
+- **provider.platform 运行时接线**——`spawn-helpers.ts` 显式透传 `provider.platform` 到 `createLLMProvider`，baseUrl 启发式检测退役为缺省回退；设置页 platform 下拉选择自此生效
+- **默认模型 fallback + testConnection 统一**——新建/保存会话消费默认模型配置；`gpt-3.5-turbo` 硬编码兜底删除，空 model 源头拦截返回结构化提示（两路径行为统一）
+- **#T 双语法输入框 + T-序号任务 id**——MentionInput 现役化（@ agent / #T 任务双 mention）替换 MessageInput；任务 id 改 T-序号 约定，#T mention 端到端闭合
+- **任务看板补完**——assignee 筛选实数据 + 看板卡片进入执行会话接线
+- **L2 工作空间能力面板**——工作空间级能力（Layer 2）编辑 UI 挂载
+- **能力配置归一**——mergeCapabilities 读写收拢单一 owner，消除双写路径
+- **资源注册面 IPC 收敛**——`mcp:register` / `skill:uploadZip` 通道退役，统一 `resource:registerMcp` / `resource:uploadSkill`
+- **杂项加固**——ghost provider 兜底缺失分支补 warn 日志；audit 分支防御 + 注释纠偏
+- 待办：P4 局域网联网、P5 升级体验
+
 **v2.0.0-p2 — UI 骨架与设置（开发中，未发布）**
 
 2.0.0 第二期：应用壳与设置重构。详见 `docs/plans/2026-08-23-v2.0.0-p2-ui-shell.md`。
@@ -18,7 +32,7 @@
 - **审计容量滚动删除**——audit 表配额上限 + 滚动删除；`audit:toolCall` 子进程桥恢复
 - **MCP 子进程桥恢复**——task-driven 执行路径重新可用 MCP 工具（死通道防御 + 进程池惰性填充）
 - **abort 级联传播**——`abort_dispatch` 中断子 agent；删除 `agent:stream` 死推送
-- 待办：mac 主机交互验收（真实拖拽 tab / 红绿灯）、P3 半成品处置 + IPC 收敛
+- 待办：mac 主机交互验收（真实拖拽 tab / 红绿灯）
 
 **v2.0.0-p1 — 会话内核（开发中，未发布）**
 
@@ -28,7 +42,7 @@
 - **sessions 数据模型（migration v23）**——`sessions` / `session_members` 表取代 Matrix room；workspace 隔离 = 外键；会话级配置（工具上限/冲突策略）存 `settings_json`
 - **传输层内迁**——SessionService + 进程内事件分发（RouterService 切输入源），消息/委派不再经过外部协议服务器
 - **task_reply 回传链接线**——删除 v1 长存进程双轨，dispatch/task_reply 走内部事件桥，子 agent 结果可靠回传
-- 待办：P3 半成品处置 + IPC 收敛、P4 局域网联网、P5 升级体验
+- 待办：P4 局域网联网、P5 升级体验
 
 **v1.7.0 — Released**
 
@@ -510,16 +524,15 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 | **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
-| ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；LLM 运行时接线（`spawn-helpers.ts` 把 `provider.platform` 传入 `createLLMProvider` 的 `model.provider`，替换 baseUrl 启发式）留 P3 | P3 |
+| ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；运行时接线 P3 已完成（`spawn-helpers.ts` 显式透传 `provider.platform`） | ~~P3~~ 已完成 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
-| **provider.platform 运行时接线** | `createLLMProvider` 已接受显式 `model.provider` 参数（`llm-provider.ts:168`），但 `spawn-helpers.ts` 仍未透传；接线后设置页下拉选择可生效，baseUrl 启发式检测随之退役 | P3 |
-| **provider testConnection 空 model 兜底不统一** | Dialog 硬编码 `gpt-3.5-turbo` 作 fallback，配置卡传 `''`，两路径对 `modelName` 校验/拼接行为不一致 | P3 |
+| ~~**provider.platform 运行时接线**~~ | **P3 已完成**——`spawn-helpers.ts` 显式透传 `provider.platform` 到 `createLLMProvider`，设置页下拉选择生效，baseUrl 启发式检测退役为缺省回退 | ~~P3~~ 已完成 |
+| ~~**provider testConnection 空 model 兜底不统一**~~ | **P3 已完成**——`gpt-3.5-turbo` 硬编码兜底删除，空 model 源头拦截返回结构化提示，两路径行为统一 | ~~P3~~ 已完成 |
 
 ## 已知限制
 
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
 - **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
-- **LLM platform 运行时接线未完成（P3 待办）**——设置层已可显式指定 platform（v24 migration + `model_providers.platform` 列 + 设置页显式下拉），但 `spawn-helpers.ts` 仍未把 `provider.platform` 传入 `createLLMProvider` 的 `model.provider`，运行时仍走 baseUrl 启发式检测。非 `anthropic.com` 域名的 Anthropic 兼容供应商可能被误判为 OpenAI；接线完成后此限制解除。
 - **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；旧库检测/导出/定义导入是 P5 任务。
 
 ## 许可
