@@ -5,6 +5,7 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { WorkspaceAgentsPanel } from './WorkspaceAgentsPanel';
 import { AgentLibrary } from './AgentLibrary';
+import { CapabilityConfig } from './CapabilityConfig';
 import { cn } from '../../lib/cn';
 
 type Tab = 'workspace' | 'library';
@@ -52,7 +53,26 @@ export function AgentsView() {
         </button>
       </div>
       <div className="flex-1 overflow-auto min-w-0">
-        {tab === 'workspace' ? <WorkspaceAgentsPanel /> : <AgentLibrary />}
+        {tab === 'workspace' ? (
+          <div className="flex flex-col h-full">
+            <div className="flex-1 min-h-0">
+              <WorkspaceAgentsPanel />
+            </div>
+            {activeWorkspaceId && (
+              <section
+                aria-label="工作空间共享能力（L2）"
+                className="border-t border-border-subtle p-4 shrink-0"
+              >
+                <h2 className="text-sm font-semibold text-neutral-200 mb-2">
+                  工作空间共享能力（L2）
+                </h2>
+                <CapabilityConfig workspaceId={activeWorkspaceId} />
+              </section>
+            )}
+          </div>
+        ) : (
+          <AgentLibrary />
+        )}
       </div>
     </div>
   );

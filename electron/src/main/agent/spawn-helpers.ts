@@ -15,9 +15,11 @@
 
 import path from 'node:path';
 import { getAgentDefinition, listSubAssignments } from './crud';
-import { getAllocation } from '../workspace/allocation';
-import { mergeCapabilities } from './capability-merger';
-import { getAssignmentDeltas } from './assignment-capabilities';
+import {
+  mergeCapabilities,
+  readAllocationLayer,
+  readAssignmentDeltas,
+} from './capability-merger';
 import { resolveSkillsDir } from '../paths';
 import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
@@ -107,8 +109,11 @@ export interface BuildSpawnOptsInput {
  * v1.3 改造：
  *   1. role 来自 assignment（外部传入）；subAgents 按 main 的 instanceId 查同 ws subs；
  *   2. modelBaseUrl 来自 provider.baseUrl（v1.3 删 def.model.baseUrl）；
- *   3. createLLMProvider 调用端按 baseUrl 自动检测 platform，AGENT_CONFIG 不再带 modelProvider；
+ *   3. AGENT_CONFIG 不再带 modelProvider；
  *   4. def.modelProviderId 必须非空（未配置时拒绝 spawn）。
+ *
+ * P3 Task 1：opts 同时透传 modelPlatform = provider.platform（v24 model_providers.platform 列），
+ *   运行时 runChatLoop 据此显式塞给 createLLMProvider，覆盖 baseUrl 启发式。
  */
 export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   const {
@@ -130,7 +135,7 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     );
   }
 
-  // 取 provider baseUrl（runtime 据此自动检测 platform + 调对应 REST API）
+  // 取 provider（baseUrl 供 REST 调用与启发式回退；platform 显式透传给 runtime）
   const provider = getProvider(def.modelProviderId);
   if (!provider) {
     throw new Error(`供应商不存在: ${def.modelProviderId}`);
@@ -144,8 +149,8 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   // v1.6 修复：merged.tools 必须注入 opts.allowedTools。v1.5 此处丢弃 merged.tools，
   // 导致 RuntimeConfig.allowedTools 永远 undefined、permission.ts 全放行——所有 agent
   // 实际能用全部 24 个工具，与 def.defaultTools 配置完全无关（严重安全 bug）。
-  const allocation = getAllocation(workspaceId);
-  const deltas = getAssignmentDeltas(instanceId);
+  const allocation = readAllocationLayer(workspaceId);
+  const deltas = readAssignmentDeltas(instanceId);
   const merged = mergeCapabilities(def, allocation, deltas);
 
   return {
@@ -156,10 +161,12 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     agentUserId,
     teamSessionId,
     systemPrompt: def.systemPrompt,
-    // v1.3：runtime 收到 modelName + modelBaseUrl + llmApiKey 即可，
-    // createLLMProvider 按 baseUrl 自动检测 platform
+    // P3 Task 1：modelPlatform 由 provider.platform 显式透传（v24 model_providers 列）。
+    // runtime-entry runChatLoop 把此字段原样塞给 createLLMProvider 的 model.provider；
+    // 非 anthropic.com 域名的 Anthropic 兼容供应商不再被 baseUrl 启发式误判为 openai。
     modelName: def.modelName,
     modelBaseUrl: provider.baseUrl,
+    modelPlatform: provider.platform,
     llmApiKey,
     role,
     subAgents,

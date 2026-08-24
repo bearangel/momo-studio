@@ -234,7 +234,9 @@ export async function runChatLoop(
   streamSessionIdOverride?: string,
 ): Promise<string> {
   const llm = createLLMProvider(
-    { model: config.modelName, baseUrl: config.modelBaseUrl },
+    // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
+    // undefined 时 createLLMProvider 退回到 baseUrl 启发式（v1.3 兼容路径）。
+    { model: config.modelName, baseUrl: config.modelBaseUrl, ...(config.modelPlatform ? { provider: config.modelPlatform } : {}) },
     config.llmApiKey,
   );
 

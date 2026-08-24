@@ -2,7 +2,8 @@
 //
 // 任务筛选条（D 子系统 D7）：status / assignee / sort 三个 select。
 // 受控组件——value + onChange 由 TaskBoardView 持有。
-// assignee 下拉目前只放"全部 agent"占位（TODO: 后续从 agent store 拉列表）。
+// assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.assignments 派生
+// 后传入——保持本组件 dumb，避免与 store 直接耦合。
 import type { TaskStatus } from '../../ipc/types';
 
 export interface FilterState {
@@ -11,12 +12,20 @@ export interface FilterState {
   sort: 'priority' | 'scheduled_at' | 'created_at';
 }
 
+/** assignee 下拉单个选项；label=agentName，value=instanceId（用于与 task.assigneeAgentId 匹配） */
+export interface AssigneeOption {
+  value: string;
+  label: string;
+}
+
 interface TaskFiltersProps {
   value: FilterState;
   onChange: (next: FilterState) => void;
+  /** assignee 下拉选项（不含「全部 agent」占位，由本组件固定渲染） */
+  assigneeOptions: AssigneeOption[];
 }
 
-export function TaskFilters({ value, onChange }: TaskFiltersProps) {
+export function TaskFilters({ value, onChange, assigneeOptions }: TaskFiltersProps) {
   return (
     <div className="flex items-center gap-2 p-2 border-b border-border-subtle text-xs">
       <select
@@ -40,7 +49,11 @@ export function TaskFilters({ value, onChange }: TaskFiltersProps) {
         onChange={(e) => onChange({ ...value, assignee: e.target.value })}
       >
         <option value="all">全部 agent</option>
-        {/* TODO: 从 agent store 拉指派列表动态填充 */}
+        {assigneeOptions.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
       </select>
       <select
         value={value.sort}

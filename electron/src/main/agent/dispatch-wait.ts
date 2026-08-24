@@ -112,7 +112,10 @@ export async function executeDispatch(
           pendingReplies.delete(dispatch.content.task_id);
         }
         // 发 abort_dispatch 内部事件兜底通知子 agent——子 agent 此刻可能尚未启动，
-        // 主进程 abortStream 找不到它，事件桥路由保证后续启动时也能收到并终止。
+        // 主进程 abortStream 找不到它。事件桥是 transient 进程内桥（路由表在
+        // RouterService.runners Map），未启动的子 agent 收不到此事件；兜底是
+        // PM 侧 onAbort 立即 reject + 子 agent 自身渐进式超时（3+6=9 分钟）
+        // 自然收敛——而非依赖事件桥把 abort 投递到后续启动的子 agent。
         const abortEvt = buildAbortDispatchMessage({
           taskId: dispatch.content.task_id,
           subStreamSessionId: toolStreamSessionId,

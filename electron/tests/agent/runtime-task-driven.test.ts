@@ -14,6 +14,9 @@
 // runChatLoop 内部行为（LLM 调用 / 工具执行 / abort）由 runtime-stream.test.ts 覆盖；
 // 本测试只验证 runTaskChatLoop 的包装层 + IPC 契约。
 //
+// P3 Task 1：cfg.modelPlatform 显式透传给 createLLMProvider 的 model.provider，
+// 替代 baseUrl 启发式（仅 modelPlatform 已配置时生效；undefined 走启发式兼容路径）。
+//
 // v2（P1 Task 5）：runTaskChatLoop 不再接收 Matrix client（task-driven 模式无 client，
 // dispatch 经内部事件桥、最终消息由 chunk 路径落盘），调用签名改为 (cfg, config, ctx)。
 
@@ -307,6 +310,60 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(startChunk.streamSessionId).toBe('sub-session-001');
     // parentStreamSessionId 是 PM 的（dispatchContext.tool_stream_session_id）
     expect(startChunk.parentStreamSessionId).toBe('pm-session-999');
+  });
+
+  it('P3 Task 1：cfg.modelPlatform=anthropic 时 createLLMProvider.model 携带 provider=anthropic', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig(),
+      makeConfig({ modelPlatform: 'anthropic' }),
+      makeContext(),
+    );
+
+    expect(createLLMProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'anthropic', model: 'test-model' }),
+      expect.anything(),
+    );
+  });
+
+  it('P3 Task 1：cfg.modelPlatform=openai 时 createLLMProvider.model 携带 provider=openai', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig(),
+      makeConfig({ modelPlatform: 'openai' }),
+      makeContext(),
+    );
+
+    expect(createLLMProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'openai', model: 'test-model' }),
+      expect.anything(),
+    );
+  });
+
+  it('P3 Task 1：cfg.modelPlatform 缺省时 createLLMProvider.model 不携带 provider（启发式回退）', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig(),
+      makeConfig(),  // modelPlatform 不传
+      makeContext(),
+    );
+
+    expect(createLLMProvider).toHaveBeenCalledWith(
+      expect.not.objectContaining({ provider: expect.anything() }),
+      expect.anything(),
+    );
   });
 
   it('成功路径：发 task-end IPC + process.exit(0)', async () => {

@@ -572,6 +572,7 @@ ALTER TABLE model_providers ADD COLUMN max_tpm INTEGER;
 -- 0 = v1 runtime-manager（fallback，留 v1 版本兼容老 agent）
 -- 存量数据（老 builtin / 自定义 agent）默认 1：新建 agent 一律走 task-driven，
 -- 老 agent 不主动改这个字段的行为，下一次手动启用 / 启动时由代码读该字段。
+-- P1 起恒 1，列保留为历史兼容，v25+ schema 清理时可移除。
 ALTER TABLE agent_definitions ADD COLUMN task_driven INTEGER NOT NULL DEFAULT 1;
 `.trim(),
   },

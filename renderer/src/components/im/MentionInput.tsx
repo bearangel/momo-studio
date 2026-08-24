@@ -1,57 +1,78 @@
 // renderer/src/components/im/MentionInput.tsx
 //
-// 消息输入框 + @ / # 双语法菜单。
-//   - 输入 @ 触发 agent 菜单（显示当前 workspace 的 assignments）
-//   - 输入 # 触发任务菜单（仅显示 status in ['draft','pending','assigned'] 的任务）
-//   - 选中后插入 mention 文本（@agentName 或 #T-XXX）
-//   - 发送时用 MentionParser 解析，回调携带 mentions 列表
-//   - 组件完全受控：value + onChange 由父组件持有
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAgentStore } from '../../stores/agent.store';
+// 现役消息输入框（P3 Task 3：@ + # 双语法输入框替换 MessageInput）。
+//   - 输入 @ 触发 agent 菜单：数据源 session.store.members（当前会话成员），
+//     仅列 lastRunning 在线成员；选择时记录 assignmentId，
+//     发送经 session.store.sendMessage(body, mentionedAssignmentIds) 透传
+//   - 输入 #T 触发任务菜单：数据源 task.store.tasks（仅 draft/pending/assigned），
+//     选择后向正文插入 #T-xxx 文本——后端 conflict-detector 从正文解析任务引用，
+//     不进 sendMessage 载荷（纯 renderer affordance）
+//   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
+//   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
-import { parseMentions, type Mention } from '../../lib/mention-parser';
-
-interface MentionInputProps {
-  value: string;
-  onChange: (next: string) => void;
-  onSend: (text: string, mentions: Mention[]) => void;
-  roomId: string;
-  workspaceId: string;
-  placeholder?: string;
-  disabled?: boolean;
-}
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import type { SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
 
 type MenuKind = 'agent' | 'task';
 
-const PENDING_TASK_STATUSES: ReadonlyArray<string> = ['draft', 'pending', 'assigned'];
+/** # 菜单只展示未完结任务（task.store.load 已按此过滤拉取，此处保留作防御） */
+const PENDING_TASK_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
+/** 菜单最多展示条目数（pending 任务可能较多） */
+const MENU_LIMIT = 10;
 
-export function MentionInput({
-  value,
-  onChange,
-  onSend,
-  // roomId / workspaceId 留作未来扩展（per-room mention 过滤、上传 context 等）
-  roomId: _roomId,
-  workspaceId: _workspaceId,
-  placeholder,
-  disabled,
-}: MentionInputProps) {
-  const { assignments = [] } = useAgentStore();
-  const { tasks = [] } = useTaskStore();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+export function MentionInput() {
+  const [text, setText] = useState('');
   const [menuType, setMenuType] = useState<MenuKind | null>(null);
   const [query, setQuery] = useState('');
+  // @ 目标 assignmentId 列表（菜单选择时记录，发送后清空；失败恢复）
+  const [pendingMentions, setPendingMentions] = useState<string[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 根据光标位置检测当前是否在 @xxx / #T-xxx 触发态
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const members = useSessionStore((s) => s.members);
+  const sendMessage = useSessionStore((s) => s.sendMessage);
+  const loadSessions = useSessionStore((s) => s.loadSessions);
+  const workspace = useWorkspaceStore((s) => s.getActive());
+  const { tasks, load: loadTasks } = useTaskStore();
+
+  // # 菜单数据接线：task.store 此前仅 TaskBoardView（tasks 视图）加载，
+  // IM 视图挂载时主动拉取当前 workspace 的待处理任务
   useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) {
-      setMenuType(null);
-      return;
-    }
-    const pos = ta.selectionStart;
-    const before = value.slice(0, pos);
+    if (workspace) void loadTasks(workspace.id);
+  }, [workspace, loadTasks]);
+
+  // 在线成员判定与 MembersPanel 同源：lastRunning = 用户最近运行意图
+  const filteredMembers =
+    menuType === 'agent'
+      ? members
+          .filter((m) => m.lastRunning)
+          .filter((m) => {
+            if (!query) return true;
+            return m.agentName.toLowerCase().includes(query.toLowerCase());
+          })
+          .slice(0, MENU_LIMIT)
+      : [];
+
+  const filteredTasks =
+    menuType === 'task'
+      ? tasks
+          .filter(
+            (t) =>
+              PENDING_TASK_STATUSES.includes(t.status) &&
+              (!query ||
+                t.id.toLowerCase().includes(query.toLowerCase()) ||
+                t.title.toLowerCase().includes(query.toLowerCase())),
+          )
+          .slice(0, MENU_LIMIT)
+      : [];
+
+  /** 光标前缀触发检测：@ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
+  const detectTrigger = (newValue: string, cursorPos: number): void => {
+    const before = newValue.slice(0, cursorPos);
     const atMatch = before.match(/(?:^|\s)@([A-Za-z0-9-]*)$/);
-    // 任务 trigger 允许任何 T-/数字 形式的局部输入；最终有效性在 filteredTasks 阶段按 id.includes(q) 过滤
+    // 任务 trigger 允许 T-/数字 的任意局部输入，有效性在 filteredTasks 按 id/title 过滤
     const taskMatch = before.match(/(?:^|\s)#([A-Za-z0-9-]*)$/);
     if (atMatch) {
       setMenuType('agent');
@@ -63,41 +84,31 @@ export function MentionInput({
       setMenuType(null);
       setQuery('');
     }
-  }, [value]);
+  };
 
-  const filteredAgents = useMemo(() => {
-    if (menuType !== 'agent') return [];
-    const q = query.toLowerCase();
-    return assignments.filter((a) => {
-      if (!a.lastRunning) return false;
-      const name = a.agentName ?? a.agentUserId;
-      return !q || name.toLowerCase().includes(q);
-    });
-  }, [assignments, menuType, query]);
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    setText(newValue);
+    detectTrigger(newValue, e.target.selectionStart ?? newValue.length);
+  };
 
-  const filteredTasks = useMemo(() => {
-    if (menuType !== 'task') return [];
-    const q = query.toLowerCase();
-    return tasks.filter((t) =>
-      PENDING_TASK_STATUSES.includes(t.status) &&
-      (!q || t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)),
-    );
-  }, [tasks, menuType, query]);
-
-  const insertMention = (mentionText: string) => {
+  /** 替换光标前最近的 @xxx / #T-xxx 局部输入为完整标记；尾随空格防继续输入粘连破坏 mention 边界 */
+  const insertMention = (marker: string): void => {
     const ta = textareaRef.current;
     if (!ta) return;
     const pos = ta.selectionStart;
-    const before = value.slice(0, pos);
-    const after = value.slice(pos);
-    // 替换光标前最近一段 @xxx / #T-xxx
-    const newValue = before.replace(/(?:^|\s)(@[A-Za-z0-9-]*$|#T-\d*$)/, (match, partial: string) => {
-      return match.replace(partial, mentionText);
-    }) + after;
-    onChange(newValue);
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    // 局部匹配字符集与 detectTrigger 一致（覆盖 '@'、'#T' 等未敲完的局部输入）
+    const newValue =
+      before.replace(
+        /(?:^|\s)(@[A-Za-z0-9-]*$|#[A-Za-z0-9-]*$)/,
+        (match, partial: string) => match.replace(partial, marker),
+      ) + ' ' + after;
+    setText(newValue);
     setMenuType(null);
     setQuery('');
-    // 焦点回到 textarea，光标停在 mention 末尾
+    // 焦点与光标回到标记末尾（菜单按钮点击会移走焦点）
     setTimeout(() => {
       ta.focus();
       const newPos = newValue.length - after.length;
@@ -105,81 +116,119 @@ export function MentionInput({
     }, 0);
   };
 
-  const handleSend = () => {
-    if (disabled) return;
-    if (!value.trim()) return;
-    const mentions = parseMentions(value);
-    onSend(value, mentions);
-    onChange('');
+  const selectMember = (m: SessionMemberInfo): void => {
+    insertMention(`@${m.agentName}`);
+    setPendingMentions((prev) =>
+      prev.includes(m.assignmentId) ? prev : [...prev, m.assignmentId],
+    );
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const selectTask = (t: TaskRow): void => {
+    insertMention(`#${t.id}`);
+  };
+
+  const handleSend = async (): Promise<void> => {
+    const trimmed = text.trim();
+    if (!trimmed || !activeSessionId) return;
+    const mentions = pendingMentions.length > 0 ? [...pendingMentions] : undefined;
+    setText('');
+    setPendingMentions([]);
+    setMenuType(null);
+    setQuery('');
+    try {
+      await sendMessage(trimmed, mentions);
+      await loadSessions();
+    } catch {
+      // 发送失败恢复正文与 mentions，用户可修改后重发
+      setText(trimmed);
+      if (mentions) setPendingMentions(mentions);
     }
-    if (e.key === 'Escape') {
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (menuType !== null && e.key === 'Escape') {
       setMenuType(null);
+      return;
     }
+    // 菜单激活时 Enter 不发送（避免选菜单途中误发），Shift+Enter 换行
+    if (e.key === 'Enter' && !e.shiftKey && menuType === null) {
+      e.preventDefault();
+      void handleSend();
+    }
+  };
+
+  /** assignmentId → 展示名（mention chip 用；不在成员列表时回退 id） */
+  const mentionDisplayName = (assignmentId: string): string => {
+    return members.find((m) => m.assignmentId === assignmentId)?.agentName ?? assignmentId;
   };
 
   return (
-    <div style={{ position: 'relative', display: 'flex', gap: 8, alignItems: 'flex-end', padding: 8 }}>
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder ?? '输入消息，@ 提到 agent，# 引用任务'}
-        disabled={disabled}
-        style={{ flex: 1, minHeight: 40, maxHeight: 200, resize: 'vertical' }}
-      />
-      <button type="button" onClick={handleSend} disabled={disabled || !value.trim()}>
-        发送
-      </button>
-
-      {menuType === 'agent' && filteredAgents.length > 0 && (
-        <div style={menuStyle}>
-          {filteredAgents.slice(0, 10).map((a) => {
-            const name = a.agentName ?? a.agentUserId;
-            return (
-              <button
-                key={a.instanceId}
-                type="button"
-                onClick={() => insertMention(`@${name}`)}
-                style={menuItemStyle}
-              >
-                👤 {name}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {menuType === 'task' && filteredTasks.length > 0 && (
-        <div style={menuStyle}>
-          {filteredTasks.slice(0, 10).map((t) => (
+    <div className="border-t border-border-subtle bg-bg-secondary p-3 relative">
+      {menuType === 'agent' && filteredMembers.length > 0 && (
+        <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
+          <div className="px-3 py-1 text-xs text-neutral-500">选择要 @ 的 agent</div>
+          {filteredMembers.map((m) => (
             <button
-              key={t.id}
+              key={m.assignmentId}
               type="button"
-              onClick={() => insertMention(`#${t.id}`)}
-              style={menuItemStyle}
+              onClick={() => selectMember(m)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-bg-primary flex items-center gap-2"
             >
-              📌 {t.id} · {t.title}
+              <span>{m.iconEmoji || '🤖'}</span>
+              <span className="truncate">{m.agentName}</span>
             </button>
           ))}
         </div>
       )}
+
+      {menuType === 'task' && filteredTasks.length > 0 && (
+        <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
+          <div className="px-3 py-1 text-xs text-neutral-500">选择要引用的任务</div>
+          {filteredTasks.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => selectTask(t)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-bg-primary flex items-center gap-2"
+            >
+              <span>📌</span>
+              <span className="truncate">
+                #{t.id} · {t.title}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {pendingMentions.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {pendingMentions.map((assignmentId) => (
+            <button
+              key={assignmentId}
+              type="button"
+              onClick={() =>
+                setPendingMentions((prev) => prev.filter((m) => m !== assignmentId))
+              }
+              className="text-xs px-2 py-0.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-red-500/20 hover:text-red-400"
+            >
+              @{mentionDisplayName(assignmentId)} ×
+            </button>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        disabled={!activeSessionId}
+        placeholder={
+          activeSessionId ? '输入消息，Enter 发送。输入 @ 提到 agent，# 引用任务' : '请先选择房间'
+        }
+        rows={2}
+        className="w-full resize-none rounded-md bg-bg-tertiary border border-border-subtle px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-accent-blue focus:outline-none disabled:opacity-50"
+      />
     </div>
   );
 }
-
-const menuStyle: React.CSSProperties = {
-  position: 'absolute', bottom: '100%', left: 8, right: 8,
-  backgroundColor: '#1f2937', border: '1px solid #374151',
-  borderRadius: 6, padding: 4, zIndex: 50, maxHeight: 240, overflowY: 'auto',
-};
-const menuItemStyle: React.CSSProperties = {
-  display: 'block', width: '100%', textAlign: 'left',
-  padding: '6px 8px', color: '#e5e7eb', cursor: 'pointer', background: 'transparent', border: 'none',
-};

@@ -23,6 +23,12 @@ function isLoopbackHost(hostname: string): boolean {
 
 /** 发最小 chat completion 请求验证连通性（不落库） */
 export async function testProviderConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+  // P3 Task 2：model 缺省（空/纯空白）→ 立即返回结构化错误，避免向远端发 model='' 的探测请求
+  // 拿到 400/422 也只能让对端报错文案穿透；此处直接在源头拦掉，与 Renderer 端 ProviderDialog
+  // 删「'gpt-3.5-turbo' 硬编码兜底」配套——配置卡 model='' 也能拿到友好提示。
+  if (!input.model?.trim()) {
+    return { ok: false, error: '请先填写模型名或在模型服务页拉取模型列表' };
+  }
   // scheme 校验：仅 http(s)；http 仅允许本机（本地 Ollama 等），非本机必须 https
   let parsed: URL;
   try {

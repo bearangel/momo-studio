@@ -3,7 +3,8 @@
 // 三层能力展示 + workspace 级（Layer 2）增删。
 //   Layer 1：agent 定义的默认能力（只读 chip，灰色）
 //   Layer 2：workspace 级共享能力（可删除 chip + 添加输入框，蓝色）
-//   Layer 3：assignment extra —— schema 未引入，暂以占位说明
+//   Layer 3：per-assignment 能力 delta——由 AssignmentCapabilitiesDialog 承担
+//           （本组件通过 onAdjustAssignment callback 跳转，不在此内联编辑）
 //
 // Layer 2 增删走 capability.store → allocation:* IPC。无选中 agent 时仅显示 Layer 2。
 //

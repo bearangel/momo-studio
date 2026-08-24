@@ -13,6 +13,8 @@ import { logger } from '../logger';
 import { isAgentRunning } from './runtime-status';
 import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
+import { getGlobalSettings } from '../settings/crud';
+import { getProvider } from './provider-crud';
 import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
 
 /** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
@@ -61,8 +63,38 @@ export interface CreateCustomDefInput {
  * v1.6 Task 9：创建自定义 agent 定义。
  * 不再 inline 在 ipc.handlers 里，便于单测 + 复用。
  * workspaceId 传 null=global，传字符串=该 workspace 私有。
+ *
+ * P3 Task 2：会话模型 fallback 消费——若 modelProviderId 缺省（空串），
+ * 尝试从 getGlobalSettings().defaultChatModel 兜底（前提：引用的 provider 行仍存在）；
+ * 兜底不可用 → 抛「未配置 modelProviderId」错误。仅影响新建路径，存量 def 不动。
  */
 export function createCustomDef(workspaceId: string | null, input: CreateCustomDefInput): AgentDefinition {
+  // P3 Task 2：会话模型 fallback——仅当 modelProviderId 缺省时消费全局默认；modelName 一并由 default 提供
+  let effectiveProviderId = input.modelProviderId?.trim() ?? '';
+  let effectiveModelName = input.modelName?.trim() ?? '';
+  if (!effectiveProviderId) {
+    const defaultRef = getGlobalSettings().defaultChatModel;
+    if (defaultRef && getProvider(defaultRef.providerId)) {
+      effectiveProviderId = defaultRef.providerId;
+      effectiveModelName = defaultRef.modelId;
+      logger.info('createCustomDef 消费 defaultChatModel 兜底', {
+        slug: input.slug,
+        providerId: effectiveProviderId,
+        modelId: effectiveModelName,
+      });
+    } else {
+      // ghost provider：defaultChatModel 已设但 provider 行已删——可诊断信号，需 warn 便于排查
+      if (defaultRef) {
+        logger.warn('defaultChatModel 引用的 provider 不存在，跳过兜底', {
+          providerId: defaultRef.providerId,
+        });
+      }
+      throw new Error(
+        '未配置 modelProviderId：请在表单选择供应商，或在「设置 → 默认模型」中设置 defaultChatModel',
+      );
+    }
+  }
+
   const def: AgentDefinition = {
     id: randomUUID(),
     name: input.name,
@@ -78,8 +110,8 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
     description: input.description ?? '',
     iconEmoji: input.iconEmoji ?? '🤖',
     workspaceId,
-    modelProviderId: input.modelProviderId,
-    modelName: input.modelName,
+    modelProviderId: effectiveProviderId,
+    modelName: effectiveModelName,
   };
   saveAgentDefinition(def);
   logger.info('自定义 Agent 定义已创建', { slug: def.slug, workspaceId });

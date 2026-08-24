@@ -18,8 +18,13 @@
 // 保证现有调用方零改动、行为零回归。
 
 import type { AgentDefinition, ToolRef, McpRef, SkillRef } from './types';
-import type { WorkspaceAllocation } from '../workspace/allocation';
-import type { AssignmentDeltas } from './assignment-capabilities';
+import { getAllocation, type WorkspaceAllocation } from '../workspace/allocation';
+import { getAssignmentDeltas, type AssignmentDeltas } from './assignment-capabilities';
+
+// 重新导出类型——能力读取消费方（spawn-helpers 等）只需从 capability-merger
+// 单一入口导入，避免在多个 CRUD 模块间跳读类型。
+export type { WorkspaceAllocation } from '../workspace/allocation';
+export type { AssignmentDeltas } from './assignment-capabilities';
 
 /** 合并后的最终可用能力清单（ref 字符串列表，已去重） */
 export interface MergedCapabilities {
@@ -74,4 +79,21 @@ export function mergeCapabilities(
   }
 
   return { tools, mcps, skills };
+}
+
+/**
+ * Layer 2 读取门面：能力消费方（spawn-helpers 等）的唯一入口。
+ * 内部委托给 workspace/allocation.getAllocation；spawn 路径不再直接
+ * import 原 CRUD 模块。
+ */
+export function readAllocationLayer(workspaceId: string): WorkspaceAllocation {
+  return getAllocation(workspaceId);
+}
+
+/**
+ * Layer 3 读取门面：能力消费方（spawn-helpers 等）的唯一入口。
+ * 内部委托给 agent/assignment-capabilities.getAssignmentDeltas。
+ */
+export function readAssignmentDeltas(instanceId: string): AssignmentDeltas {
+  return getAssignmentDeltas(instanceId);
 }

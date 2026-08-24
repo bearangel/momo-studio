@@ -1,5 +1,8 @@
 // 添加供应商对话框（P2 Task 6 起仅用于创建；编辑移入 ProviderSettings 右列配置卡）：
 // 名称/平台/BaseURL/APIKey/设为默认 + 测试连接。defaultModel 字段已移除——由模型列表取代。
+//
+// P3 Task 2：测试连接不再硬编码 model='gpt-3.5-turbo'。新建供应商时 model 列表尚未存在，
+// 直接传 model=''，由后端 testConnection 兜底返回「请先填写模型名或在模型服务页拉取模型列表」。
 import { useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import type { ModelProvider, ProviderPlatform } from '../../ipc/types';
@@ -26,7 +29,8 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await ipc.provider.testConnection({ baseUrl, apiKey, model: 'gpt-3.5-turbo' });
+      // P3 Task 2：model 留空——后端会返回「请先填写模型名或在模型服务页拉取模型列表」。
+      const r = await ipc.provider.testConnection({ baseUrl, apiKey, model: '' });
       setTestResult(r.ok ? '✅ 连接成功' : `❌ ${r.error}`);
     } catch (e) {
       setTestResult(`❌ ${e instanceof Error ? e.message : String(e)}`);

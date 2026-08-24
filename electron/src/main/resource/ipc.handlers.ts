@@ -1,29 +1,44 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。4 个通道：
-//   - resource:list      统一列表（filter 可选）
-//   - resource:getDetail 按 id 查详情
-//   - resource:install   marketplace 资源安装（封装现有 installPackage）
-//   - resource:delete    统一删除/卸载（按 source+type 路由到底层删除函数）
+// 资源库 IPC handler 注册。6 个通道：
+//   - resource:list         统一列表（filter 可选）
+//   - resource:getDetail    按 id 查详情
+//   - resource:install      marketplace 资源安装（封装现有 installPackage）
+//   - resource:delete       统一删除/卸载（按 source+type 路由到底层删除函数）
+//   - resource:registerMcp  注册自定义 MCP（P3 收敛自 mcp:register，返回 ResourceItem）
+//   - resource:uploadSkill  上传自定义 skill zip（P3 收敛自 skill:uploadZip）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
 //   - install 仅 marketplace 源支持（builtin 不可装、custom 已在本地）
 //   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
 //     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
+//   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
+//     落库 source='custom' 后复用 library 的 custom 映射取回 ResourceItem 返回。
 
+import { randomUUID } from 'node:crypto';
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
-import { sourceLabel, type ResourceFilter } from './types';
+import { sourceLabel, type ResourceFilter, type ResourceItem } from './types';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog } from '../marketplace/client';
-import { deleteRegistered } from '../mcp/host-manager';
-import { deleteCustomSkill } from '../skill/zip-uploader';
+import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
+import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { deleteDefinition } from '../agent/crud';
 
+/** resource:registerMcp 入参——注册自定义 MCP 的最小配置（id / version 由主进程补全） */
+export interface RegisterMcpInput {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** 可选版本号；缺省存 '1.0.0'（DB 列 version NOT NULL） */
+  version?: string;
+}
+
 /**
- * 注册 resource:* 命名空间的 4 个 IPC handler。
+ * 注册 resource:* 命名空间的 6 个 IPC handler。
  * 在 app ready 后由 registerIpcHandlers（ipc/index.ts）统一调用。
  */
 export function registerResourceHandlers(): void {
@@ -90,6 +105,39 @@ export function registerResourceHandlers(): void {
         throw new Error(`source=${item.source} 不支持 delete 操作`);
     }
   });
+
+  // resource:registerMcp — 注册自定义 MCP 并返回其 ResourceItem。
+  // id / version 由主进程补全（renderer 不再关心持久化细节），source 固定 'custom'
+  // （保证 resource:delete 的 custom 分支可删）。注册后走 library 的 custom 映射
+  // （listResources filter 短路，不触发 fetchCatalog）按 name 取回条目返回。
+  ipcMain.handle('resource:registerMcp', async (_evt, config: RegisterMcpInput) => {
+    registerMcpDefinition({
+      id: randomUUID(),
+      name: config.name,
+      version: config.version ?? '1.0.0',
+      command: config.command,
+      args: config.args ?? [],
+      env: config.env,
+      source: 'custom',
+    });
+    const items: ResourceItem[] = await listResources({ type: 'mcp', source: 'custom' });
+    const item = items.find((i) => i.slug === config.name);
+    if (!item) {
+      throw new Error(`注册后未在自定义资源中找到 MCP ${config.name}`);
+    }
+    return item;
+  });
+
+  // resource:uploadSkill — 上传自定义 skill zip，返回 UploadedSkill[]（v1.6.2 起支持批量）。
+  // renderer 经 preload 用 Uint8Array 传输（contextBridge 里 Node Buffer 跨 IPC
+  // structured clone 会损坏），main 收到后转回 Buffer。
+  ipcMain.handle(
+    'resource:uploadSkill',
+    async (_evt, data: Uint8Array | Buffer, filename: string) => {
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      return uploadSkillZip(buffer, filename);
+    },
+  );
 
   logger.info('Resource IPC handlers 已注册');
 }

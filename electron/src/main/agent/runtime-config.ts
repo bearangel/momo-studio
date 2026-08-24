@@ -21,9 +21,16 @@ export interface AgentRuntimeOpts {
   agentUserId: string;
   teamSessionId: string;
   systemPrompt: string;
-  /** v1.3：仅传 modelName + modelBaseUrl + llmApiKey；platform 由 createLLMProvider 按 baseUrl 自动检测 */
+  /** v1.3：传 modelName + modelBaseUrl + llmApiKey 给 runtime */
   modelName: string;
   modelBaseUrl?: string;
+  /**
+   * P3 Task 1：显式透传供应商 platform（'openai' | 'anthropic'），
+   * 由 spawn-helpers buildSpawnOpts 从 model_providers.platform 列读取并注入。
+   * undefined 时保持 v1.3 兼容——createLLMProvider 按 baseUrl 启发式检测
+   * （存量 RuntimeConfig / 老单元测试不入此字段）。
+   */
+  modelPlatform?: 'openai' | 'anthropic';
   llmApiKey: string;
   // === v1.3 重命名（原 agentType） ===
   /** agent 角色，决定是否注册 dispatch 工具与监听 dispatch 事件；缺省按 standalone 处理 */
@@ -60,9 +67,14 @@ export interface RuntimeConfig {
   /** 团队会话 ID（sessions 表主键；dispatch/abort 的目标会话） */
   teamSessionId: string;
   systemPrompt: string;
-  // v1.3：移除 modelProvider，createLLMProvider 按 baseUrl 自动检测 platform
+  // v1.3 曾移除 modelProvider；P3 起 platform 经 modelPlatform 显式传入，缺省时才回退 baseUrl 启发式检测
   modelName: string;
   modelBaseUrl?: string;
+  /**
+   * P3 Task 1：显式透传供应商 platform，由 spawn-helpers 从 model_providers.platform 注入。
+   * undefined 时回退到 v1.3 行为——createLLMProvider 按 baseUrl 启发式检测（兼容存量配置）。
+   */
+  modelPlatform?: 'openai' | 'anthropic';
   llmApiKey: string;
   workspaceDir: string;
   // === M2 集成 ===
@@ -155,6 +167,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     modelName,
     modelBaseUrl,
     llmApiKey,
+    modelPlatform,
     workspaceDir,
     workspaceId,
     role,
@@ -207,6 +220,11 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     systemPrompt,
     modelName,
     modelBaseUrl: typeof modelBaseUrl === 'string' ? modelBaseUrl : undefined,
+    // P3 Task 1：modelPlatform 仅在合法字面量时透传，否则保持 undefined 触发 baseUrl 启发式
+    modelPlatform:
+      modelPlatform === 'openai' || modelPlatform === 'anthropic'
+        ? modelPlatform
+        : undefined,
     llmApiKey,
     workspaceDir,
     workspaceId,

@@ -2,6 +2,10 @@
 //
 // Task 5 测试：resource IPC handlers 注册 + 4 通道路由。
 // 重点验证 resource:delete 按 source+type 分流到对应底层删除函数。
+//
+// P3 Task 7 追加：resource:registerMcp（注册 custom mcp + 返回 ResourceItem）与
+// resource:uploadSkill（转调 zip-uploader 返回 UploadedSkill[]）——注册面收敛到
+// resource:* 命名空间（mcp:register / skill:uploadZip 退役）。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -17,8 +21,14 @@ vi.mock('../../src/main/resource/library', () => ({
 }));
 
 // mock 底层 delete/install
-vi.mock('../../src/main/mcp/host-manager', () => ({ deleteRegistered: vi.fn() }));
-vi.mock('../../src/main/skill/zip-uploader', () => ({ deleteCustomSkill: vi.fn() }));
+vi.mock('../../src/main/mcp/host-manager', () => ({
+  deleteRegistered: vi.fn(),
+  registerMcpDefinition: vi.fn(),
+}));
+vi.mock('../../src/main/skill/zip-uploader', () => ({
+  deleteCustomSkill: vi.fn(),
+  uploadSkillZip: vi.fn(),
+}));
 vi.mock('../../src/main/agent/crud', () => ({ deleteDefinition: vi.fn() }));
 vi.mock('../../src/main/marketplace/installer', () => ({
   installPackage: vi.fn(),
@@ -57,8 +67,8 @@ vi.mock('../../src/main/marketplace/client', () => ({
 import { ipcMain } from 'electron';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
-import { deleteRegistered } from '../../src/main/mcp/host-manager';
-import { deleteCustomSkill } from '../../src/main/skill/zip-uploader';
+import { deleteRegistered, registerMcpDefinition } from '../../src/main/mcp/host-manager';
+import { deleteCustomSkill, uploadSkillZip } from '../../src/main/skill/zip-uploader';
 import { deleteDefinition } from '../../src/main/agent/crud';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
 
@@ -68,7 +78,7 @@ describe('registerResourceHandlers', () => {
     registerResourceHandlers();
   });
 
-  it('注册 4 个 IPC 通道', () => {
+  it('注册 6 个 IPC 通道', () => {
     const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
       (c: unknown[]) => c[0],
     );
@@ -78,6 +88,8 @@ describe('registerResourceHandlers', () => {
         'resource:getDetail',
         'resource:install',
         'resource:delete',
+        'resource:registerMcp',
+        'resource:uploadSkill',
       ]),
     );
   });
@@ -168,5 +180,84 @@ describe('registerResourceHandlers', () => {
     // 必须传 catalog 的 MarketplaceItem.id（'catalog-id-remote'），不是 ResourceItem.id
     // （'marketplace-skill-remote'）——后者会让 uninstallPackage 查无此行触发静默 no-op。
     expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote');
+  });
+
+  it('resource:registerMcp 转调 registerMcpDefinition（source=custom，id/version 主进程补全）', async () => {
+    const item = {
+      id: 'custom-mcp-github',
+      type: 'mcp',
+      source: 'custom',
+      slug: 'github',
+      name: 'github',
+      description: '自定义 MCP（npx）',
+      installed: true,
+      installable: false,
+      removable: true,
+    };
+    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce([item]);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const registerCall = calls.find((c: unknown[]) => c[0] === 'resource:registerMcp');
+    const handler = registerCall![1] as (
+      evt: unknown,
+      config: { name: string; command: string; args?: string[]; env?: Record<string, string> },
+    ) => Promise<unknown>;
+    const result = await handler({}, {
+      name: 'github',
+      command: 'npx',
+      args: ['-y', 'server.js'],
+      env: { API_KEY: 'secret' },
+    });
+    expect(registerMcpDefinition).toHaveBeenCalledTimes(1);
+    const config = (registerMcpDefinition as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(config).toMatchObject({
+      name: 'github',
+      command: 'npx',
+      args: ['-y', 'server.js'],
+      env: { API_KEY: 'secret' },
+      source: 'custom',
+    });
+    expect(typeof config.id).toBe('string');
+    expect((config.id as string).length).toBeGreaterThan(0);
+    expect(typeof config.version).toBe('string');
+    expect((config.version as string).length).toBeGreaterThan(0);
+    expect(result).toBe(item);
+  });
+
+  it('resource:registerMcp 用 filter={type:mcp, source:custom} 从 custom 映射取回条目', async () => {
+    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const registerCall = calls.find((c: unknown[]) => c[0] === 'resource:registerMcp');
+    const handler = registerCall![1] as (
+      evt: unknown,
+      config: { name: string; command: string },
+    ) => Promise<unknown>;
+    await expect(handler({}, { name: 'gone', command: 'c' })).rejects.toThrow(/gone/);
+    expect(listResources).toHaveBeenCalledWith({ type: 'mcp', source: 'custom' });
+  });
+
+  it('resource:uploadSkill 转调 uploadSkillZip（Uint8Array 转 Buffer）并返回 UploadedSkill[]', async () => {
+    const uploaded = [{ slug: 'demo', name: 'Demo', description: '示例 skill' }];
+    (uploadSkillZip as ReturnType<typeof vi.fn>).mockReturnValueOnce(uploaded);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const uploadCall = calls.find((c: unknown[]) => c[0] === 'resource:uploadSkill');
+    const handler = uploadCall![1] as (
+      evt: unknown,
+      data: Uint8Array,
+      filename: string,
+    ) => Promise<unknown>;
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+    const result = await handler({}, bytes, 'demo.zip');
+    expect(uploadSkillZip).toHaveBeenCalledTimes(1);
+    const [buf, filename] = (uploadSkillZip as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Buffer,
+      string,
+    ];
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.equals(Buffer.from(bytes))).toBe(true);
+    expect(filename).toBe('demo.zip');
+    expect(result).toBe(uploaded);
   });
 });

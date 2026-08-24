@@ -142,19 +142,29 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // 载荷无 workspace/agent 身份，用 spawn 闭包的 runtimeConfig 补全。
     // durationMs 可能是字符串/浮点/NaN（IPC 类型漂移），收敛为安全整数。
     if (m.type === 'audit:toolCall') {
-      const rawDuration = Number(m.durationMs ?? 0);
-      insertToolCall({
-        workspaceId: runtimeConfig.workspaceId,
-        agentBotUserId: runtimeConfig.agentUserId,
-        toolName: String(m.toolName ?? ''),
-        inputSummary: String(m.inputSummary ?? ''),
-        outputSummary: String(m.outputSummary ?? ''),
-        success: m.success === true,
-        durationMs: Number.isFinite(rawDuration) ? Math.trunc(rawDuration) : 0,
-      });
-      // 每 200 次写入触发一次配额巡检（模块级计数器）
-      if (++auditToolCallCounter % AUDIT_ENFORCE_INTERVAL === 0) {
-        enforceAuditQuota(runtimeConfig.workspaceId);
+      // 审计桥 + 配额巡检包 try/catch——DB 锁/表满/巡检失败不应让 message handler
+      // reject 触发 unhandledRejection（child 'message' 事件是 EventEmitter 路径，
+      // 抛错即进程级风险）。失败仅记 warn，与下方 MCP 分支防御风格一致。
+      try {
+        const rawDuration = Number(m.durationMs ?? 0);
+        insertToolCall({
+          workspaceId: runtimeConfig.workspaceId,
+          agentBotUserId: runtimeConfig.agentUserId,
+          toolName: String(m.toolName ?? ''),
+          inputSummary: String(m.inputSummary ?? ''),
+          outputSummary: String(m.outputSummary ?? ''),
+          success: m.success === true,
+          durationMs: Number.isFinite(rawDuration) ? Math.trunc(rawDuration) : 0,
+        });
+        // 每 200 次写入触发一次配额巡检（模块级计数器）
+        if (++auditToolCallCounter % AUDIT_ENFORCE_INTERVAL === 0) {
+          enforceAuditQuota(runtimeConfig.workspaceId);
+        }
+      } catch (err) {
+        logger.warn('audit:toolCall 写入或配额巡检失败（已吞错，不污染 chunk 通道）', {
+          assignmentId,
+          error: throwableText(err),
+        });
       }
       return;
     }

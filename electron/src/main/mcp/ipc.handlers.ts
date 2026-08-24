@@ -4,7 +4,6 @@
 // 通道，暴露给渲染进程（UI 与未来的 agent 调度）。
 //
 // 暴露通道：
-//   - mcp:register        注册一条 MCP server 定义到 SQLite（不启动进程）
 //   - mcp:start           从 SQLite 读取定义并启动该 workspace 内的 MCP 进程（进程池复用）
 //   - mcp:listTools       列出某 workspace 内已启动 MCP 暴露的工具
 //   - mcp:callTool        调用某 workspace 内已启动 MCP 的指定工具
@@ -12,27 +11,14 @@
 //
 // v1.7：mcp:listRegistered / mcp:deleteRegistered 已废弃删除，统一走 resource:list /
 // resource:delete。底层函数 listRegistered / deleteRegistered 保留（resource/ 内部复用）。
+// v2.0 P3：mcp:register 收敛到 resource:registerMcp（注册面归 resource 域），通道删除。
 
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
-import {
-  getOrStartMcp,
-  listMcpTools,
-  callMcpTool,
-  stopMcp,
-  registerMcpDefinition,
-  getMcpConfig,
-} from './host-manager';
-import type { McpServerConfig } from './types';
+import { getOrStartMcp, listMcpTools, callMcpTool, stopMcp, getMcpConfig } from './host-manager';
 
 /** 注册全部 mcp: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerMcpHandlers(): void {
-  // 注册一条 MCP server 定义（持久化，不启动进程）。name 唯一，重复注册会整体覆盖。
-  ipcMain.handle('mcp:register', async (_evt, config: McpServerConfig) => {
-    registerMcpDefinition(config);
-    return;
-  });
-
   // 启动某 workspace 内的 MCP 进程（先从 SQLite 读定义）。进程池复用：已启动则直接返回。
   ipcMain.handle(
     'mcp:start',

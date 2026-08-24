@@ -3,14 +3,17 @@
 // tasks 表 CRUD + 状态机集成。
 // 设计要点：
 //   - 字段名 camelCase（SQLite 是 snake_case），rowToCamel 做映射
-//   - id 默认 randomUUID()；调用方可显式传入（A7 多段消息需要可预测 id，C 阶段做幂等去重）
+//   - id 默认 `T-<seq>`（短序号）—— 与 #T mention 语法族对齐：
+//     唯一权威正则见 conflict-detector.ts 的 `TASK_MENTION_REGEX`，不要在本文件再复刻。
+//     若调用方显式传入 id（A7 多段消息需要可预测 id，C 阶段做幂等去重）则透传。
+//     旧 randomUUID 时代（pre-P3）的 legacy 行保留原 UUID——unparsed by #T 提及正则但
+//     仍可被 getTask 查到，迁移期兼容。
 //   - status 默认 'draft'；toolCallsUsed 默认 0
 //   - transitionTaskStatus 走 state-machine 校验，非法转换抛错；
 //     调度器 / agent runtime 调此方法时可在 extraPatch 里带 startedAt / completedAt /
 //     executionSessionId / assigneeAgentId 等副作用字段（updateTask 自动 merge + bump updated_at）
 //   - updateTask 实现为「读全行 → 合并 patch → 全字段 UPDATE」——任务字段数适中（25 个），
 //     全字段写一次 SQL 比动态拼 SET 子句可读性更高、也无 SQL 注入面。
-import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import {
   assertTransition,
@@ -108,23 +111,55 @@ function rowToCamel(r: SqlRow): TaskRow {
 }
 
 /**
+ * 生成下一个 `T-<seq>` 任务 id。
+ *
+ * seq = max(已有 T-<n> 的 n) + 1，零填充到 ≥3 位（T-001 … T-999，T-1000+ 自然增长）。
+ * 跳过非 `T-` 前缀的行（legacy UUID 等）——通过 `^T-(\d+)$` 严格匹配。
+ * 显式传入 id 时不走本函数（insertTask 短路）。
+ */
+function nextTaskId(db: ReturnType<typeof getDb>): string {
+  const rows = db
+    .prepare("SELECT id FROM tasks WHERE id LIKE 'T-%'")
+    .all() as Array<{ id: string }>;
+  let max = 0;
+  for (const r of rows) {
+    const m = /^T-(\d+)$/.exec(r.id);
+    if (m && m[1]) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  const next = max + 1;
+  // 至少 3 位零填充；超过 999 后自然增长（不再前导 0）
+  const padded = next < 1000 ? String(next).padStart(3, '0') : String(next);
+  return `T-${padded}`;
+}
+
+/**
  * 插入一条 task 行。
  *
  * 必填：workspaceId / title / creatorUserId。
- * 可选：description（默认 ''）、除 id（默认 randomUUID）/ status（默认 'draft'）外的所有字段。
+ * 可选：description（默认 ''）、除 id（默认 `T-<seq>`）/ status（默认 'draft'）外的所有字段。
  * toolCallsUsed 默认 0；其他可空字段默认 null。
  *
  * 注意：brief 给的签名 `Omit<TaskRow, 'id'|'createdAt'|'updatedAt'|'status'|'toolCallsUsed'>`
  * 要求 description 必填，但 v19 schema 是 `description TEXT NOT NULL DEFAULT ''`，
  * 实际调用方（包括本 task 的测试和未来 B/C 阶段调度器）通常只传标题不写描述。
  * 这里放宽 description 为可选，函数体用 `?? ''` 兜底，对齐 messages repo 模式。
+ *
+ * id 自动编号（默认路径）：
+ *   - 扫描已有 T-<seq> 行，取最大序号 +1
+ *   - 至少 3 位零填充（T-001 … T-999），超出后自然增长为 T-1000、T-1001…
+ *   - 跳过非 T- 前缀的 legacy 行（如老库的 randomUUID）——seq 计算只看 /^T-\d+$/
+ *   - better-sqlite3 同步单连接，无并发场景下不会 TOCTOU；如未来需高并发，
+ *     改用独立的 seq 表 + INSERT 触发器分配（届时再迁移）
  */
 export function insertTask(
   input: Pick<TaskRow, 'workspaceId' | 'title' | 'creatorUserId'> &
     Partial<Omit<TaskRow, 'workspaceId' | 'title' | 'creatorUserId' | 'toolCallsUsed'>>,
 ): TaskRow {
   const db = getDb();
-  const id = input.id ?? randomUUID();
+  const id = input.id ?? nextTaskId(db);
   const now = Date.now();
   const status = input.status ?? 'draft';
   const description = input.description ?? '';
