@@ -187,6 +187,7 @@ npx pnpm@9.0.0 --filter @momo-studio/renderer test
 ```bash
 nvm use 20
 npx pnpm@9.0.0 build                       # 先构建 renderer + electron
+NODE_OPTIONS=--max-old-space-size=4096 npx pnpm@9.0.0 build  # 容器/低内存环境防 Vite Monaco OOM（2.1 拆 chunk 根治）
 npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
 ```
 

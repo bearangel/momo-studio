@@ -56,8 +56,10 @@ export async function runLegacyUpgradeIfNeeded(): Promise<string | null> {
   }
 
   // 导出连接已在 exportLegacyData 内关闭；此处改名三件套（wal/shm 为崩溃残留时才存在）
+  // 主库最后改名：部分失败时主库仍在原位，下次启动重触发检测幂等重试；
+  // 若主库先改名而 wal/shm 残留，下次启动会在陈旧 wal 旁建新库，状态错乱。
   const backups: string[] = [];
-  for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+  for (const p of [`${dbPath}-shm`, `${dbPath}-wal`, dbPath]) {
     if (fs.existsSync(p)) {
       fs.renameSync(p, `${p}${BACKUP_SUFFIX}`);
       backups.push(`${path.basename(p)}${BACKUP_SUFFIX}`);
