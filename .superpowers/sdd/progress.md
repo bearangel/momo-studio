@@ -524,3 +524,8 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - segments 时间线聚合 + AgentStreamBubble 线性渲染（思考/工具/正文按实际发生顺序交错）
 - 回归锁 aggregator ×5 + 组件 ×2；566 + 1079 全绿
 - push 遇 GitHub TLS 间歇故障，待重试
+
+### 功能优化：子 agent 工作过程实时显示（532cf69）
+- 根因：AgentStreamBubble 从未传 subStream 给 DispatchChip（A9 遗留未接线）
+- DispatchSegment 反查链 + chip 活动提示（💭/🔧/✍️ + ⏱）+ SubAgentSection 时间线化
+- 回归锁 ×11；577 + 1079 全绿
