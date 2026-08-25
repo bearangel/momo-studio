@@ -565,3 +565,9 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 ### dev 编排器热修：vite 探测被代理劫持（fetch→TCP）
 - macOS 主机症状：vite+tsc 起来但 Electron 不启动——fetch 走 HTTP_PROXY 探不到 localhost
 - 修复：node:net 裸 TCP 双栈探测；死代理环境模拟复现→修复后 Window ready PASS
+
+## 主机验收陪跑会话收束（2.0.0 发布后）
+- dev 编排器代理兼容修复经主机确认 PASS——dev 体验终态（vite HMR + tsc watch + Electron）
+- 待主机遗留：git apply docs/dev/ci-2.0.0-align.patch（CI 文件需 workflow scope，容器凭据推不了）
+- 本会话累计：P0 ×8 + 时间线渲染 + 子 agent 工作过程显示 + __momoDebug 钩子 + devops 对齐（含 2 热修）
+- 测试基线：electron 1084 / renderer 582 / typecheck 双 clean
