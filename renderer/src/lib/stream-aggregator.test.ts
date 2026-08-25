@@ -53,6 +53,118 @@ describe('aggregateEvents：final 事件的 status/error 处理', () => {
   });
 });
 
+describe('aggregateEvents：终态收敛（停止/崩溃后 pending 段不再永久执行中）', () => {
+  // 回归锁（用户报障）：runtime 中断路径刻意不回填 tool_result（防「中断-重试」
+  // 死循环，runtime-entry v1.5.2 决策），事件序列里 tool_call_start / dispatch
+  // start 之后直接跟 final。聚合层若不收敛这些 pending 段，UI 会永久显示
+  // 「执行中」+ dispatch chip 计时器持续跳动（实时与重启两路径共用本函数）。
+
+  it('aborted 终态：pending 工具段收敛为 (已中断)+success=false（bug 1 回归锁）', () => {
+    const result = aggregateEvents([
+      ev(1, 'status_change', { status: 'streaming' }),
+      ev(2, 'thinking_delta', { delta: '先查一下' }),
+      ev(3, 'tool_call_start', { callId: 'c1', toolName: 'grep', args: { pattern: 'foo' } }),
+      ev(4, 'final', { status: 'aborted' }),
+    ]);
+    expect(result.status).toBe('aborted');
+    // 段（UI 时间线渲染依据）
+    const tool = result.segments.find((s) => s.kind === 'tool_call') as Extract<
+      typeof result.segments[number],
+      { kind: 'tool_call' }
+    >;
+    expect(tool.result).toBe('(已中断)');
+    expect(tool.success).toBe(false);
+    // 平铺 toolCalls 与段一致
+    expect(result.toolCalls[0]).toMatchObject({ callId: 'c1', result: '(已中断)', success: false });
+  });
+
+  it('aborted 终态：pending dispatch 段收敛为 aborted（bug 2 回归锁）', () => {
+    // 生产链路真实形状：dispatch 委派以 tool_call_start(isDispatch) 落库（P0-6），
+    // 中断后无 tool_call_result —— chip 不应停在 executing（计时器永久跳动）
+    const result = aggregateEvents([
+      ev(1, 'status_change', { status: 'streaming' }),
+      ev(2, 'tool_call_start', {
+        callId: 'd1',
+        toolName: 'dispatch:coder',
+        args: { task: '写代码' },
+        isDispatch: true,
+        subStreamSessionId: 'ss-sub-9',
+        subAgentName: '码农',
+      }),
+      ev(3, 'final', { status: 'aborted' }),
+    ]);
+    expect(result.status).toBe('aborted');
+    const dispatch = result.segments.find((s) => s.kind === 'dispatch') as Extract<
+      typeof result.segments[number],
+      { kind: 'dispatch' }
+    >;
+    expect(dispatch.status).toBe('aborted');
+    expect(result.dispatches[0]).toMatchObject({ callId: 'd1', status: 'aborted' });
+  });
+
+  it('failed 终态（崩溃收尾 final{failed}）：pending 工具收敛为 (未返回结果)', () => {
+    // finalizeStreamOnCrash 崩溃路径：tool 执行中子进程退出 → final{failed}，
+    // tool_call_start 无配对 result
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: { cmd: 'sleep 100' } }),
+      ev(2, 'final', { status: 'failed', error: 'agent 运行时异常退出（exit code=1）' }),
+    ]);
+    const tool = result.segments.find((s) => s.kind === 'tool_call') as Extract<
+      typeof result.segments[number],
+      { kind: 'tool_call' }
+    >;
+    expect(tool.result).toBe('(未返回结果)');
+    expect(tool.success).toBe(false);
+    expect(result.toolCalls[0]).toMatchObject({ result: '(未返回结果)', success: false });
+  });
+
+  it('终态收敛不覆盖已配对的真实结果（正常工具不受影响）', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c1', toolName: 'read_file', args: {} }),
+      ev(2, 'tool_call_result', { callId: 'c1', result: '真实结果', success: true }),
+      ev(3, 'final', { status: 'aborted' }),
+    ]);
+    expect(result.toolCalls[0]).toMatchObject({ result: '真实结果', success: true });
+  });
+
+  it('final 之后迟到的 tool_call_result（seq 更大）不丢失真实结果', () => {
+    // 事件按 seq 升序处理：迟到的 result 在循环内正常配对，终态收敛只处理
+    // 仍为 null 的段——两道防线叠加时真实结果优先
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c1', toolName: 'read_file', args: {} }),
+      ev(2, 'final', { status: 'aborted' }),
+      ev(3, 'tool_call_result', { callId: 'c1', result: '迟到结果', success: true }),
+    ]);
+    expect(result.toolCalls[0]).toMatchObject({ result: '迟到结果', success: true });
+  });
+
+  it('流式中（无终态事件）不收敛——执行中显示保持', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c1', toolName: 'grep', args: {} }),
+      ev(2, 'tool_call_start', {
+        callId: 'd1',
+        toolName: 'dispatch:coder',
+        args: {},
+        isDispatch: true,
+        subStreamSessionId: 'ss-sub-10',
+        subAgentName: '码农',
+      }),
+    ]);
+    expect(result.status).toBe('streaming');
+    expect(result.toolCalls[0]!.result).toBeNull();
+    expect(result.dispatches[0]!.status).toBe('executing');
+  });
+
+  it('aborted 终态：queued dispatch 同样收敛为 aborted', () => {
+    // dispatch_start 事件路径（历史形状）创建的 queued 段在终态后不再停留
+    const result = aggregateEvents([
+      ev(1, 'dispatch_start', { callId: 'd1', subStreamSessionId: 'ss-q', subAgentName: '码农', task: '排队中' }),
+      ev(2, 'final', { status: 'aborted' }),
+    ]);
+    expect(result.dispatches[0]!.status).toBe('aborted');
+  });
+});
+
 describe('aggregateEvents：基础聚合（无 final）', () => {
   it('text/thinking delta 拼接；无终态事件时保持 streaming', () => {
     const result = aggregateEvents([

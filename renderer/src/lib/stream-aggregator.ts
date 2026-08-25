@@ -24,7 +24,13 @@ export interface AggregatedDispatch {
   subAgentName: string;
   subAgentAvatar?: string;
   task: string;
-  status: 'queued' | 'executing' | 'completed' | 'failed' | 'timeout';
+  /**
+   * aborted = 流到达终态时仍未收到回执的委派（用户停止 / 流失败）。
+   * runtime 中断路径刻意不回填 dispatch result（防「中断-重试」死循环），
+   * 由 aggregateEvents 终态收敛把 executing/queued 改写为 aborted——
+   * 与 tool_call 段的 '(已中断)' 收敛同源。
+   */
+  status: 'queued' | 'executing' | 'completed' | 'failed' | 'timeout' | 'aborted';
 }
 
 export interface AggregatedStream {
@@ -252,6 +258,32 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         }
         if (typeof p.error === 'string') streamError = p.error;
         break;
+    }
+  }
+
+  // 终态收敛：流到达 done/failed/aborted 后，runtime 因「防中断-重试死循环」
+  // 刻意不回填的 tool_result / dispatch result 必须在此收敛为终态展示，
+  // 否则 UI 永久显示「执行中」、dispatch chip 计时器持续跳动
+  // （实时与重启两路径共用本函数，收敛在这里做一次即两路一致）。
+  if (status !== 'streaming') {
+    const pendingToolResult =
+      status === 'aborted' ? '(已中断)' : '(未返回结果)';
+    for (const seg of segments) {
+      if (seg.kind === 'tool_call' && seg.result === null) {
+        seg.result = pendingToolResult;
+        seg.success = false;
+      } else if (seg.kind === 'dispatch' && (seg.status === 'executing' || seg.status === 'queued')) {
+        seg.status = 'aborted';
+      }
+    }
+    // 平铺字段（toolCalls / dispatches）与 segments 保持一致
+    for (const callId of toolStarts.keys()) {
+      if (!toolResults.has(callId)) {
+        toolResults.set(callId, { result: pendingToolResult, success: false });
+      }
+    }
+    for (const [callId, s] of dispatchStatuses) {
+      if (s === 'executing' || s === 'queued') dispatchStatuses.set(callId, 'aborted');
     }
   }
 
