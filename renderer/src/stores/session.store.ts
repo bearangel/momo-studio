@@ -36,6 +36,10 @@ interface SessionState {
   loadingOlderBySession: Map<string, boolean>;
   /** 分页是否还有更早历史——sessionId → boolean；undefined 视为 true（初始） */
   hasMoreBySession: Map<string, boolean>;
+  /** loadOlder 最近一次失败的中文消息（success/retry 时清空，留给未来 UI 表面） */
+  loadOlderError: string | null;
+  /** loadMembers 最近一次失败的中文消息（success/retry 时清空） */
+  membersError: string | null;
 
   /**
    * 拉取会话列表，默认激活第一个会话并加载其消息。
@@ -75,6 +79,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   currentWorkspaceId: null,
   loadingOlderBySession: new Map(),
   hasMoreBySession: new Map(),
+  loadOlderError: null,
+  membersError: null,
 
   loadSessions: async (workspaceId) => {
     // 切换 workspace 时清空旧 workspace 的会话、消息、成员、激活会话
@@ -158,6 +164,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // A 子系统：用当前可见消息的最小 createdAt 作为 beforeTs
     const beforeTs = existing.reduce((min, m) => Math.min(min, m.createdAt), Number.MAX_SAFE_INTEGER);
 
+    // 触发重试前清空旧错误——避免前一次失败提示在成功后仍然残留
+    set({ loadOlderError: null });
     set((s) => ({ loadingOlderBySession: new Map(s.loadingOlderBySession).set(sessionId, true) }));
     try {
       const result = await ipc.session.loadOlder(sessionId, beforeTs, 30);
@@ -189,17 +197,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           hasMoreBySession: hasMore,
         };
       });
-    } catch {
-      set((s) => ({ loadingOlderBySession: new Map(s.loadingOlderBySession).set(sessionId, false) }));
+    } catch (err) {
+      set((s) => ({
+        loadingOlderBySession: new Map(s.loadingOlderBySession).set(sessionId, false),
+        // 中文错误文案：暴露给未来 UI 用于「加载失败，点击重试」类提示
+        loadOlderError: `加载更早消息失败：${(err as Error).message}`,
+      }));
     }
   },
 
   loadMembers: async (sessionId) => {
+    // 触发重试前清空旧错误——避免前一次失败提示在成功后仍然残留
+    set({ membersError: null });
     try {
       const { members } = await ipc.session.get(sessionId);
-      set({ members });
-    } catch {
-      set({ members: [] });
+      set({ members, membersError: null });
+    } catch (err) {
+      set({ members: [], membersError: `加载成员列表失败：${(err as Error).message}` });
     }
   },
 
@@ -252,6 +266,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       currentWorkspaceId: null,
       loadingOlderBySession: new Map(),
       hasMoreBySession: new Map(),
+      loadOlderError: null,
+      membersError: null,
     }),
 }));
 

@@ -36,7 +36,7 @@ export function FileTree({ onSelectFile }: Props) {
     if (activeView === 'files' && workspace) {
       void useFileStore.getState().refreshAllCached(workspace.id);
     }
-  }, [activeView, workspace?.id]);
+  }, [activeView, workspace]);
 
   // 刷新当前 workspace 根目录：失效缓存后重新拉取
   const handleRefresh = () => {

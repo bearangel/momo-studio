@@ -378,6 +378,79 @@ describe('session.store loadOlder', () => {
   });
 });
 
+describe('session.store — loadOlder/loadMembers 错误状态（暴露给未来 UI）', () => {
+  beforeEach(() => {
+    useSessionStore.setState({ loadOlderError: null, membersError: null });
+  });
+
+  it('loadOlder 拒绝时写入 loadOlderError 中文消息并复位 loadingOlder 标志', async () => {
+    // 先 selectSession 让 sess-r 注册到 messagesBySession——否则 loadOlder 因空列表早退
+    mockApi.session.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useSessionStore.getState().selectSession('sess-r');
+
+    mockApi.session.loadOlder.mockRejectedValueOnce(new Error('SQLite: database is locked'));
+    await useSessionStore.getState().loadOlder('sess-r');
+
+    expect(useSessionStore.getState().loadOlderError).toBe(
+      '加载更早消息失败：SQLite: database is locked',
+    );
+    expect(useSessionStore.getState().loadingOlderBySession.get('sess-r')).toBe(false);
+  });
+
+  it('loadOlder 成功路径会清零 loadOlderError（重试成功不残留旧错误）', async () => {
+    mockApi.session.getMessages.mockResolvedValueOnce({
+      messages: [mk('m1', 'a', 10)],
+      eventsByMessage: {},
+    });
+    await useSessionStore.getState().selectSession('sess-r');
+
+    mockApi.session.loadOlder.mockRejectedValueOnce(new Error('boom'));
+    await useSessionStore.getState().loadOlder('sess-r');
+    expect(useSessionStore.getState().loadOlderError).toContain('boom');
+
+    mockApi.session.loadOlder.mockResolvedValueOnce({
+      messages: [mk('m0', 'old', 5)],
+      eventsByMessage: {},
+      hasMore: false,
+    });
+    await useSessionStore.getState().loadOlder('sess-r');
+    expect(useSessionStore.getState().loadOlderError).toBeNull();
+  });
+
+  it('loadMembers 拒绝时写入 membersError 中文消息，成员列表被清空', async () => {
+    mockApi.session.get.mockRejectedValueOnce(new Error('network down'));
+    await useSessionStore.getState().loadMembers('sess-r');
+
+    expect(useSessionStore.getState().membersError).toBe('加载成员列表失败：network down');
+    // 旧实现：失败时把 members 重置为空数组——保持向后兼容
+    expect(useSessionStore.getState().members).toEqual([]);
+  });
+
+  it('loadMembers 成功路径清空 membersError（重试成功后旧错误不应残留）', async () => {
+    mockApi.session.get.mockRejectedValueOnce(new Error('oops'));
+    await useSessionStore.getState().loadMembers('sess-r');
+    expect(useSessionStore.getState().membersError).toContain('oops');
+
+    mockApi.session.get.mockResolvedValueOnce({ session: {}, members: MOCK_MEMBERS });
+    await useSessionStore.getState().loadMembers('sess-r');
+    expect(useSessionStore.getState().membersError).toBeNull();
+    expect(useSessionStore.getState().members).toEqual(MOCK_MEMBERS);
+  });
+
+  it('reset() 同时清空 loadOlderError 与 membersError', () => {
+    useSessionStore.setState({
+      loadOlderError: '加载更早消息失败：x',
+      membersError: '加载成员列表失败：y',
+    });
+    useSessionStore.getState().reset();
+    expect(useSessionStore.getState().loadOlderError).toBeNull();
+    expect(useSessionStore.getState().membersError).toBeNull();
+  });
+});
+
 describe('session.store — 重启场景：hydrateFromEvents 接线', () => {
   beforeEach(() => {
     useStreamStore.setState({ streams: new Map() });

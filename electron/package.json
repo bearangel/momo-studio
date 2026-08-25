@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node scripts/dev.mjs",
-    "test": "vitest run --config vitest.config.ts --passWithNoTests",
+    "test": "vitest run --config vitest.config.ts",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "dist": "pnpm build && pnpm --filter ../renderer build && electron-builder",
