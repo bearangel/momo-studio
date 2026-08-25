@@ -365,3 +365,65 @@ describe('AgentStreamBubble — segments 时间线渲染', () => {
     expect(screen.queryByLabelText('流式光标')).not.toBeInTheDocument();
   });
 });
+
+describe('AgentStreamBubble — dispatch subStream 接线（子 agent 工作过程嵌套显示）', () => {
+  it('子 agent 消息在 session store 时，DispatchChip 收到 subStream（展开后可见子 agent 正文）', async () => {
+    // 种入：父消息（本气泡）+ 子 agent 消息（streamSessionId=ss-sub，parentStreamSessionId=父流 id）
+    const { useSessionStore } = await import('../../stores/session.store');
+    const { useStreamStore } = await import('../../stores/stream.store');
+    const parentMsg = makeMessage({ id: 'm-parent', streamSessionId: 'ss-parent' });
+    const childMsg: ImMessage = {
+      ...makeMessage({ id: 'm-child', sender: '@sub:server' }),
+      streamSessionId: 'ss-sub',
+      parentStreamSessionId: 'ss-parent',
+    };
+    useSessionStore.setState({
+      messagesBySession: new Map([[parentMsg.sessionId, [parentMsg, childMsg]]]),
+    });
+    // 子流状态（streams keyed by 子消息 id）
+    useStreamStore.getState().reset();
+    useStreamStore.setState({
+      streams: new Map([
+        ['m-child', makeStream({ messageId: 'm-child', status: 'streaming', segments: [{ kind: 'text', text: '子 agent 正在工作' }] })],
+      ]),
+    });
+
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          messageId: 'm-parent',
+          status: 'streaming',
+          segments: [
+            { kind: 'text', text: '派出任务' },
+            { kind: 'dispatch', callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: '码农', task: '写代码', status: 'executing' },
+          ],
+        })}
+        message={parentMsg}
+      />,
+    );
+
+    // executing 自动展开 → SubAgentSection 渲染子 agent 正文
+    expect(await screen.findByText('子 agent 正在工作')).toBeInTheDocument();
+
+    useStreamStore.getState().reset();
+    useSessionStore.setState({ messagesBySession: new Map() });
+  });
+
+  it('子 agent 消息未到达（空窗）→ chip 显示等待启动提示且不崩溃', () => {
+    const { useSessionStore } = {} as Record<string, never>;
+    void useSessionStore;
+    const parentMsg = makeMessage({ id: 'm-p2', streamSessionId: 'ss-p2', sessionId: '!empty:server' });
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          messageId: 'm-p2',
+          segments: [
+            { kind: 'dispatch', callId: 'd2', subStreamSessionId: 'ss-none', subAgentName: '码农', task: '', status: 'executing' },
+          ],
+        })}
+        message={parentMsg}
+      />,
+    );
+    expect(screen.getByText(/等待启动/)).toBeInTheDocument();
+  });
+});

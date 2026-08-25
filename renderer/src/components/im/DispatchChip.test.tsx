@@ -23,21 +23,25 @@ function makeChild(overrides: Partial<DispatchChild> = {}): DispatchChild {
   };
 }
 
-/** 构造子 agent StreamState（A 子系统：extends AggregatedStream 字段集） */
+/** 构造子 agent StreamState（未显式给 segments 时从平铺 text 推导 text 段） */
 function makeStream(overrides: Partial<StreamState> = {}): StreamState {
-  return {
+  const base = {
     thinking: '',
     text: '子任务输出文本',
     toolCalls: [],
     todos: [],
     dispatches: [],
-    status: 'streaming',
+    status: 'streaming' as const,
     events: [],
     segments: [],
     messageId: 'sub-1',
     startedAt: Date.now(),
     ...overrides,
   };
+  const segments =
+    overrides.segments ??
+    (base.text ? [{ kind: 'text' as const, text: base.text }] : []);
+  return { ...base, segments };
 }
 
 describe('DispatchChip — 状态渲染', () => {
@@ -214,5 +218,66 @@ describe('DispatchChip — status 变化的自动行为', () => {
       <DispatchChip child={makeChild({ status: 'queued' })} subStream={makeStream()} />,
     );
     expect(screen.getByText('子任务输出文本')).toBeInTheDocument();
+  });
+});
+
+describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见性）', () => {
+  it('executing 且 subStream 末段为 thinking → 头行显示「💭 思考中…」+ 计时', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({
+          segments: [{ kind: 'thinking', text: '正在分析' }],
+        })}
+      />,
+    );
+    expect(screen.getByText(/思考中/)).toBeInTheDocument();
+    expect(screen.getByText(/⏱/)).toBeInTheDocument();
+  });
+
+  it('executing 且末段为执行中工具 → 头行显示「🔧 工具名」', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({
+          segments: [
+            { kind: 'thinking', text: '想' },
+            { kind: 'tool_call', callId: 'c1', toolName: 'write_file', args: {}, result: null, success: null },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-activity')).toHaveTextContent('write_file');
+  });
+
+  it('executing 且末段为 text → 头行显示「✍️ 输出中…」', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'executing' })}
+        subStream={makeStream({
+          segments: [{ kind: 'text', text: '正在写' }],
+        })}
+      />,
+    );
+    expect(screen.getByText(/输出中/)).toBeInTheDocument();
+  });
+
+  it('executing 但无 subStream → 头行显示「已派出，等待启动…」（无计时）', () => {
+    render(<DispatchChip child={makeChild({ status: 'executing' })} />);
+    expect(screen.getByText(/等待启动/)).toBeInTheDocument();
+    expect(screen.queryByText(/⏱/)).not.toBeInTheDocument();
+  });
+
+  it('completed → 不显示活动提示（状态徽标已足够）', () => {
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'completed' })}
+        subStream={makeStream({
+          status: 'done',
+          segments: [{ kind: 'text', text: '完成输出' }],
+        })}
+      />,
+    );
+    expect(screen.queryByText(/思考中|输出中|等待启动/)).not.toBeInTheDocument();
   });
 });

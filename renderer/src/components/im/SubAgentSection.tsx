@@ -1,13 +1,14 @@
 // renderer/src/components/im/SubAgentSection.tsx
 //
-// 子 agent 嵌套工作区（v1.4）：渲染在 DispatchChip 展开后的内部区域。
-// 复用 ThinkingSection / ToolCallChip / 流式正文，但与 AgentStreamBubble 的差异：
+// 子 agent 嵌套工作区：渲染在 DispatchChip 展开后的内部区域。
+// 与 AgentStreamBubble 的差异：
 //   - 左边框竖线（视觉关联到所属 dispatch chip，体现嵌套层级）
 //   - 不渲染 MessageFrame 外壳（DispatchChip 自带紧凑头行）
 //   - 不渲染底部状态栏 / 停止按钮（由顶层 AgentStreamBubble 统一管理）
 //   - 不递归渲染 dispatch chips（spec §12 限制最多 3 层，子 agent 不再嵌套委派）
 //
-// 本组件是「去壳的 AgentStreamBubble 内芯」：思考区 + 工具卡片 + 正文（含流式光标）。
+// 按 segments 时间线渲染（与主气泡同构）：思考段独立折叠、工具卡片嵌在
+// 触发位置、text 段就近输出、流式光标只跟随最后一个 text 段。
 import type { StreamState } from '../../stores/stream.store';
 import { ThinkingSection } from './ThinkingSection';
 import { TodoSection } from './TodoSection';
@@ -33,48 +34,64 @@ export function SubAgentSection({ stream }: Props) {
         marginBottom: 4,
       }}
     >
-      <ThinkingSection content={stream.thinking} isStreaming={isStreaming} />
-
-      {stream.todos && stream.todos.length > 0 && (
+      {stream.todos.length > 0 && (
         <TodoSection todos={stream.todos} isStreaming={isStreaming} />
       )}
 
-      {stream.toolCalls.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          {stream.toolCalls.map((tc, i) => (
-            <ToolCallChip
-              key={`${tc.toolName}-${i}`}
-              toolName={tc.toolName}
-              args={tc.args}
-              result={tc.result ?? undefined}
-              success={tc.success ?? true}
-              isExecuting={tc.result === null}
-              defaultExpanded={false}
-            />
-          ))}
-        </div>
-      )}
-
-      {stream.text && (
-        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
-          {isStreaming && (
-            <span
-              aria-label="子 agent 流式光标"
-              style={{
-                display: 'inline-block',
-                width: 2,
-                height: 14,
-                background: '#60a5fa',
-                marginLeft: 2,
-                verticalAlign: 'text-bottom',
-                // 复用顶层 AgentStreamBubble 定义的 keyframes（嵌套场景下父级一定存在）
-                animation: 'momo-stream-blink 1s infinite',
-              }}
-            />
-          )}
-        </div>
-      )}
+      {stream.segments.map((seg, i) => {
+        const isLastSegment = i === stream.segments.length - 1;
+        switch (seg.kind) {
+          case 'thinking':
+            return (
+              <ThinkingSection
+                key={`sub-think-${i}`}
+                content={seg.text}
+                isStreaming={isStreaming && isLastSegment}
+              />
+            );
+          case 'tool_call':
+            return (
+              <ToolCallChip
+                key={`sub-tool-${seg.callId}-${i}`}
+                toolName={seg.toolName}
+                args={seg.args}
+                result={seg.result ?? undefined}
+                success={seg.success ?? true}
+                isExecuting={seg.result === null}
+                defaultExpanded={false}
+              />
+            );
+          case 'text':
+            return (
+              <div
+                key={`sub-text-${i}`}
+                className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full"
+                style={{ marginBottom: 8 }}
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
+                {isStreaming && isLastSegment && (
+                  <span
+                    aria-label="子 agent 流式光标"
+                    style={{
+                      display: 'inline-block',
+                      width: 2,
+                      height: 14,
+                      background: '#60a5fa',
+                      marginLeft: 2,
+                      verticalAlign: 'text-bottom',
+                      // 复用顶层 AgentStreamBubble 定义的 keyframes（嵌套场景下父级一定存在）
+                      animation: 'momo-stream-blink 1s infinite',
+                    }}
+                  />
+                )}
+              </div>
+            );
+          case 'dispatch':
+            // spec §12：子 agent 不再嵌套委派，防御性忽略
+            return null;
+        }
+      })}
     </div>
   );
 }
+

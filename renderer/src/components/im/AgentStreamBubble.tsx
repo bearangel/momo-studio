@@ -10,7 +10,10 @@
 //   - stream.dispatches 替代旧 stream.dispatchChildren（AggregatedDispatch → DispatchChild 映射）
 //   - status 枚举改为 streaming/done/failed/aborted
 //   - subStream 查找留给 A9（streams Map 改 keyed by messageId，需 streamSessionId→messageId 反查）
+import { useMemo } from 'react';
 import type { StreamState } from '../../stores/stream.store';
+import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { ipc } from '../../ipc/client';
 import type { ImMessage } from '../../ipc/types';
 import { MessageFrame } from './MessageFrame';
@@ -19,6 +22,7 @@ import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
+import type { StreamSegment } from '../../stores/stream.store';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -57,11 +61,52 @@ function mapDispatchStatus(s: StreamState['dispatches'][number]['status']): Disp
   return s;
 }
 
+/**
+ * 单个 dispatch 段的渲染单元：独立订阅子 agent 的流式状态。
+ * 反查链：subStreamSessionId → 会话消息行（streamSessionId 字段）→ streams Map key。
+ * 子消息未到达（派单空窗）时 subStream 为 undefined——DispatchChip 显示等待启动提示。
+ */
+function DispatchSegment({
+  segment,
+  streamIdToMessageId,
+}: {
+  segment: Extract<StreamSegment, { kind: 'dispatch' }>;
+  streamIdToMessageId: Map<string, string>;
+}) {
+  const subMessageId = streamIdToMessageId.get(segment.subStreamSessionId);
+  const subStream = useStreamStore((s) =>
+    subMessageId !== undefined ? s.streams.get(subMessageId) : undefined,
+  );
+  const child: DispatchChild = {
+    subStreamSessionId: segment.subStreamSessionId,
+    subAgentName: segment.subAgentName,
+    ...(segment.subAgentAvatar !== undefined ? { subAgentAvatar: segment.subAgentAvatar } : {}),
+    status: mapDispatchStatus(segment.status),
+  };
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <DispatchChip child={child} subStream={subStream} />
+    </div>
+  );
+}
+
 export function AgentStreamBubble({ stream, message, senderName }: Props) {
   const isStreaming = stream.status === 'streaming';
   const statusText = STATUS_TEXT[stream.status];
   const statusColor = STATUS_COLOR[stream.status];
   const statusDot = STATUS_DOT[stream.status];
+
+  // 子 agent 流反查表：会话消息行的 streamSessionId → 消息 id（streams Map 的 key）。
+  // 子 agent 消息行带 parentStreamSessionId，被 MessageList 过滤出顶层列表，
+  // 但仍留在 messagesBySession——此处全量取用。
+  const sessionMessages = useSessionStore((s) => s.messagesBySession.get(message.sessionId));
+  const streamIdToMessageId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of sessionMessages ?? []) {
+      if (m.streamSessionId) map.set(m.streamSessionId, m.id);
+    }
+    return map;
+  }, [sessionMessages]);
 
   const dispatchTotal = stream.dispatches.length;
   const dispatchCompleted = stream.dispatches.filter(
@@ -107,16 +152,11 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             );
           case 'dispatch':
             return (
-              <div key={`seg-dispatch-${seg.callId}-${i}`} style={{ marginBottom: 8 }}>
-                <DispatchChip
-                  child={{
-                    subStreamSessionId: seg.subStreamSessionId,
-                    subAgentName: seg.subAgentName,
-                    ...(seg.subAgentAvatar !== undefined ? { subAgentAvatar: seg.subAgentAvatar } : {}),
-                    status: mapDispatchStatus(seg.status),
-                  }}
-                />
-              </div>
+              <DispatchSegment
+                key={`seg-dispatch-${seg.callId}-${i}`}
+                segment={seg}
+                streamIdToMessageId={streamIdToMessageId}
+              />
             );
           case 'text':
             return (

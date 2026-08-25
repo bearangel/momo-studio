@@ -36,7 +36,7 @@ export interface DispatchChild {
 interface DispatchChipProps {
   /** 子 agent 委派状态（来自父 stream 的 dispatches，由调用方映射为 DispatchChild） */
   child: DispatchChild;
-  /** 子 agent 的流式聚合状态（可能尚未到达；A9 完整实现 subStream 查找） */
+  /** 子 agent 的流式聚合状态（可能尚未到达；按 subStreamSessionId 反查子消息后聚合） */
   subStream?: StreamState;
 }
 
@@ -59,9 +59,44 @@ const AUTO_EXPANDED: Record<DispatchChild['status'], boolean> = {
   queued: false,
 };
 
+/**
+ * 从子 agent 流的最后一个内容段推导当前活动提示。
+ * 无 subStream（派单与子 agent 首个 start chunk 之间的空窗）→「已派出，等待启动…」。
+ */
+function deriveActivity(subStream: StreamState | undefined): string | null {
+  if (!subStream) return '已派出，等待启动…';
+  const last = subStream.segments[subStream.segments.length - 1];
+  if (!last) return '已启动…';
+  switch (last.kind) {
+    case 'thinking':
+      return '💭 思考中…';
+    case 'tool_call':
+      return last.result === null ? `🔧 ${last.toolName}` : `🔧 ${last.toolName} ✓`;
+    case 'text':
+      return '✍️ 输出中…';
+    case 'dispatch':
+      return null;
+  }
+}
+
+/** 每秒跳动的耗时显示（executing 期间；完成/失败后由调用方卸载） */
+function ElapsedTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  const text = seconds >= 60 ? `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s` : `${seconds}s`;
+  return <span style={{ color: '#666' }}>⏱ {text}</span>;
+}
+
 export function DispatchChip({ child, subStream }: DispatchChipProps) {
   const config = STATUS_CONFIG[child.status];
   const avatar = child.subAgentAvatar ?? '🤖';
+  const isBusy = child.status === 'executing' || child.status === 'queued';
+  const activity = isBusy ? deriveActivity(subStream) : null;
+  const timerSince = isBusy && subStream ? subStream.startedAt : null;
 
   // 初始展开状态由 status 决定（首次渲染即生效）
   const [expanded, setExpanded] = useState(() => AUTO_EXPANDED[child.status]);
@@ -105,6 +140,12 @@ export function DispatchChip({ child, subStream }: DispatchChipProps) {
         <span style={{ color: '#ccc' }}>{child.subAgentName}</span>
         {/* 状态图标 + 文案合并到一个带颜色的 span（便于测试断言颜色） */}
         <span style={{ color: config.color }}>{`${config.icon} ${config.text}`}</span>
+        {activity && (
+          <span style={{ color: '#999', fontSize: 11 }} data-testid="dispatch-activity">
+            {activity}
+          </span>
+        )}
+        {timerSince !== null && <ElapsedTimer since={timerSince} />}
         <span style={{ marginLeft: 'auto', color: '#666' }} aria-hidden>
           {expanded ? '▾' : '▸'}
         </span>
