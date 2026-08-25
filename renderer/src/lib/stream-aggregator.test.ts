@@ -133,4 +133,72 @@ describe('aggregateEvents：segments 时间线（思考/工具/正文按实际�
     expect(result.segments).toHaveLength(1);
     expect(result.segments[0]).toMatchObject({ kind: 'text', text: 'x' });
   });
+
+  it('regression（P0-6）：isDispatch 的 tool_call_start 产生 dispatch 段而非普通工具段', () => {
+    const result = aggregateEvents([
+      ev(1, 'text_delta', { delta: '派活' }),
+      ev(2, 'tool_call_start', {
+        callId: 'c1',
+        toolName: 'dispatch:ui-designer',
+        args: { task: '画个按钮' },
+        isDispatch: true,
+        subStreamSessionId: 'ss-sub-1',
+        subAgentName: 'UI设计师',
+        subAgentAvatar: '🎨',
+      }),
+      ev(3, 'tool_call_result', { callId: 'c1', result: '完成', success: true, subStatus: 'completed' }),
+      ev(4, 'text_delta', { delta: '收工' }),
+    ]);
+
+    // dispatch 段（非 tool_call 段）——chip + 子流嵌套渲染的依据
+    expect(result.segments.map((s) => s.kind)).toEqual(['text', 'dispatch', 'text']);
+    const dispatch = result.segments[1] as Extract<typeof result.segments[1], { kind: 'dispatch' }>;
+    expect(dispatch.subStreamSessionId).toBe('ss-sub-1');
+    expect(dispatch.subAgentName).toBe('UI设计师');
+    expect(dispatch.task).toBe('画个按钮');
+    expect(dispatch.status).toBe('completed');
+    // 平铺字段同步：dispatches 命中（MessageBubble 分发条件依赖）
+    expect(result.dispatches).toHaveLength(1);
+    // 普通 toolCalls 不含 dispatch 调用（避免双重渲染）
+    expect(result.toolCalls).toHaveLength(0);
+  });
+
+  it('regression（P0-6）：dispatch result 的 subStatus=failed 映射失败状态', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', {
+        callId: 'c1',
+        toolName: 'dispatch:coder',
+        args: {},
+        isDispatch: true,
+        subStreamSessionId: 'ss-sub-2',
+        subAgentName: '码农',
+      }),
+      ev(2, 'tool_call_result', { callId: 'c1', result: '', success: false, subStatus: 'failed' }),
+    ]);
+    const dispatch = result.segments[0] as Extract<typeof result.segments[0], { kind: 'dispatch' }>;
+    expect(dispatch.status).toBe('failed');
+  });
+
+  it('regression（P0-6）：dispatch 执行中（有 start 无 result）status=executing', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', {
+        callId: 'c1',
+        toolName: 'dispatch:coder',
+        args: {},
+        isDispatch: true,
+        subStreamSessionId: 'ss-sub-3',
+        subAgentName: '码农',
+      }),
+    ]);
+    const dispatch = result.segments[0] as Extract<typeof result.segments[0], { kind: 'dispatch' }>;
+    expect(dispatch.status).toBe('executing');
+  });
+
+  it('非 dispatch 的普通 tool_call 不受影响', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c2', toolName: 'read_file', args: { path: 'a' } }),
+    ]);
+    expect(result.segments[0]).toMatchObject({ kind: 'tool_call', toolName: 'read_file' });
+    expect(result.toolCalls).toHaveLength(1);
+  });
 });

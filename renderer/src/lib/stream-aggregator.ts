@@ -117,8 +117,25 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           appendTextSegment('text', p.delta);
         }
         break;
-      case 'tool_call_start':
+      case 'tool_call_start': {
         if (typeof p.callId === 'string' && typeof p.toolName === 'string') {
+          // P0-6：dispatch 委派在 v2 生产链路以 tool_call_start(isDispatch) 落库
+          //（dispatch_start 事件类型从不产生）——按 isDispatch 分流为 dispatch 段，
+          // 否则委派被渲染成普通工具卡片，chip/子流嵌套永远不出现。
+          if (p.isDispatch === true && typeof p.subStreamSessionId === 'string') {
+            const args = (p.args as Record<string, unknown>) ?? {};
+            const start = {
+              callId: p.callId,
+              subStreamSessionId: p.subStreamSessionId,
+              subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
+              ...(typeof p.subAgentAvatar === 'string' ? { subAgentAvatar: p.subAgentAvatar } : {}),
+              task: typeof args.task === 'string' ? args.task : '',
+            };
+            dispatchStarts.set(p.callId, start);
+            dispatchStatuses.set(p.callId, 'executing');
+            segments.push({ kind: 'dispatch', ...start, status: 'executing' });
+            break;
+          }
           toolStarts.set(p.callId, {
             toolName: p.toolName,
             args: (p.args as Record<string, unknown>) ?? {},
@@ -133,8 +150,22 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           });
         }
         break;
-      case 'tool_call_result':
+      }
+      case 'tool_call_result': {
         if (typeof p.callId === 'string') {
+          // dispatch 回执：subStatus 携带完成/失败/超时——更新 dispatch 段状态，
+          // 不进普通 toolResults（避免 dispatch 出现在平铺 toolCalls 造成双重渲染）
+          if (p.subStatus === 'completed' || p.subStatus === 'failed' || p.subStatus === 'timeout') {
+            dispatchStatuses.set(p.callId, p.subStatus);
+            for (let i = segments.length - 1; i >= 0; i--) {
+              const seg = segments[i]!;
+              if (seg.kind === 'dispatch' && seg.callId === p.callId) {
+                seg.status = p.subStatus;
+                break;
+              }
+            }
+            break;
+          }
           toolResults.set(p.callId, {
             result: typeof p.result === 'string' ? p.result : '',
             success: p.success === true,
@@ -152,6 +183,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           }
         }
         break;
+      }
       case 'todo_update':
         if (Array.isArray(p.todos)) {
           todos = p.todos as TodoItem[];
