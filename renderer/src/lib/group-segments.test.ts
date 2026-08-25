@@ -40,7 +40,8 @@ describe('groupBySegment 时间序归并（U3）', () => {
     const result = groupBySegment(items);
     expect(result).toHaveLength(3);
     expect((result[0] as ImMessage).id).toBe('a');
-    expect(result[1]!.kind).toBe('segment-group');
+    // 联合类型不直接访问 .kind（ImMessage 无该字段），用子集匹配断言 group 形态
+    expect(result[1]).toMatchObject({ kind: 'segment-group' });
     expect((result[1] as { segments: ImMessage[] }).segments.map((s) => s.id)).toEqual([
       'seg1',
       'seg2',
@@ -58,7 +59,7 @@ describe('groupBySegment 时间序归并（U3）', () => {
     const result = groupBySegment(items);
     expect(result).toHaveLength(3);
     expect((result[0] as ImMessage).id).toBe('early');
-    expect(result[1]!.kind).toBe('segment-group');
+    expect(result[1]).toMatchObject({ kind: 'segment-group' });
     expect((result[2] as ImMessage).id).toBe('late');
   });
 
