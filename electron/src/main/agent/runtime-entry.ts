@@ -591,7 +591,7 @@ export async function runChatLoop(
       let result: string;
       let success = true;
       try {
-        result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId, streamSessionId);
+        result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -795,13 +795,15 @@ async function executeTool(
   toolStreamSessionId?: string,
   /** PM 自身流 id（runChatLoop 作用域——子 agent 消息 parentStreamSessionId 的来源） */
   pmStreamSessionId?: string,
+  /** 当前执行会话（dispatch 内部事件的路由目标，P0-8） */
+  executionSessionId?: string,
 ): Promise<string> {
   const startTime = Date.now();
   let success = true;
   let output = '';
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId);
+    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId, executionSessionId);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -832,6 +834,7 @@ export async function doExecuteTool(
   dispatchInfo?: { toolCallsUsed: number },
   toolStreamSessionId?: string,
   pmStreamSessionId?: string,
+  executionSessionId?: string,
 ): Promise<string> {
   const name = call.name;
 
@@ -873,7 +876,7 @@ export async function doExecuteTool(
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
     // v1.5.1：传 abortSignal，PM 在 await dispatch 时也能响应停止按钮
-    const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, pmStreamSessionId, ctx.abortSignal);
+    const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, pmStreamSessionId, executionSessionId, ctx.abortSignal);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
   }

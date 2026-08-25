@@ -78,6 +78,13 @@ export async function executeDispatch(
   /** PM 自身流 id——子 agent 消息行 parentStreamSessionId 的来源 */
   pmStreamSessionId?: string,
   /**
+   * PM 当前执行的会话（用户发消息的会话）。dispatch/abort 内部事件发往它——
+   * 子 agent 的消息行因此落在用户所在会话，dispatch chip 才能反查到子流
+   * （P0-8：此前发 config.teamSessionId，普通会话中派发时子行落团队会话，
+   * 嵌套展开永远为空）。
+   */
+  executionSessionId?: string,
+  /**
    * v1.5.1：PM chat loop 的 abortSignal。被 abort 时立即 reject（清理 pendingReplies），
    * 否则 PM 会阻塞到渐进式超时（3+6=9 分钟）才退出，期间停止按钮无效。
    */
@@ -127,7 +134,7 @@ export async function executeDispatch(
           taskId: dispatch.content.task_id,
           subStreamSessionId: subStreamSessionId,
         });
-        sendAbortDispatchEvent(config.teamSessionId, config.agentUserId, abortEvt.content);
+        sendAbortDispatchEvent(executionSessionId ?? config.teamSessionId, config.agentUserId, abortEvt.content);
         const err = new Error('dispatch 被中断');
         err.name = 'AbortError';
         reject(err);
@@ -139,7 +146,7 @@ export async function executeDispatch(
 
   // sender 携带 agent 本地身份 agentUserId（Task 10）。展开 DispatchContent 为
   // 匿名对象类型以满足内部事件协议的 Record<string, unknown> 索引签名。
-  sendDispatchEvent(config.teamSessionId, config.agentUserId, { ...dispatch.content });
+  sendDispatchEvent(executionSessionId ?? config.teamSessionId, config.agentUserId, { ...dispatch.content });
 
   return resultPromise;
 }
