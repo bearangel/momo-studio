@@ -132,17 +132,27 @@ vi.mock('../../src/main/p2p/local-transport', () => ({
 vi.mock('../../src/main/p2p/lan-transport', () => ({
   LanTransport: class {},
 }));
-vi.mock('../../src/main/p2p/identity', () => ({
-  loadIdentity: vi.fn(() => ({ nodeId: 'node-me', displayName: '本机节点' })),
+vi.mock('../../src/main/p2p/identity', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/identity')>()),
+  // 真实身份必含签名公钥（initP2p 据此计算指纹）——mock 保持真实语义
+  loadIdentity: vi.fn(() => ({
+    nodeId: 'node-me',
+    displayName: '本机节点',
+    publicKey: new Uint8Array(32),
+    boxPublicKey: new Uint8Array(32),
+    boxPrivateKey: new Uint8Array(32),
+  })),
   generateIdentity: vi.fn(),
   saveIdentity: vi.fn(),
 }));
-vi.mock('../../src/main/p2p/trust-store', () => ({
+vi.mock('../../src/main/p2p/trust-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/trust-store')>()),
   listTrustedNodes: vi.fn(() => []),
   addTrustedNode: vi.fn(),
   removeTrustedNode: vi.fn(),
   isTrusted: vi.fn(() => false),
   getTrustedPublicKey: vi.fn(() => null),
+  getTrustedBoxPublicKey: vi.fn(() => null),
 }));
 vi.mock('../../src/main/storage/messages/repo', () => ({
   insertMessage: vi.fn(),
@@ -164,6 +174,7 @@ import {
 import { resolveResourceById } from '../../src/main/resource/library';
 import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { initP2p, stopP2p } from '../../src/main/p2p/index';
+import { logger } from '../../src/main/logger';
 import type { ResourceItem } from '../../src/main/resource/types';
 import type { ResourceRequest } from '../../src/main/p2p/protocols';
 
@@ -295,6 +306,10 @@ beforeEach(() => {
   Object.values(agentCrudMocks).forEach((m) => m.mockReset());
   agentCrudMocks.listAgentDefinitions.mockReturnValue([]);
   agentCrudMocks.getAgentDefinition.mockReturnValue(null);
+  // logger 是模块级 mock——跨用例累积的调用会污染告警断言，逐用例清空
+  vi.mocked(logger.info).mockClear();
+  vi.mocked(logger.warn).mockClear();
+  vi.mocked(logger.error).mockClear();
   clearSharedResourceCache();
   clearResourceShareDeps();
   clearResourceTransferDeps();
@@ -302,6 +317,7 @@ beforeEach(() => {
 
 describe('requestResourceImport 需求方', () => {
   it('① agent happy path：配对 resolve ok + 定义按原始 slug 落地（不落 assignment）', async () => {
+    seedRemoteCatalog();
     const { sendResourceRequest } = useLoopbackDeps(WIRE_AGENT_DEF);
 
     const result = await requestResourceImport(PEER, 'agent', 'uuid-1');
@@ -336,6 +352,7 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('② definition: null → not-found，不触发落地', async () => {
+    seedRemoteCatalog();
     useLoopbackDeps(null);
 
     const result = await requestResourceImport(PEER, 'agent', 'uuid-1');
@@ -346,6 +363,7 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('③ 30s 无回执 → timeout（29.999s 仍挂起）', async () => {
+    seedRemoteCatalog();
     vi.useFakeTimers();
     try {
       setResourceTransferDeps({
@@ -370,6 +388,7 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('④ mcp 落地幂等：同名两次导入均 ok，两次同形配置（DB UNIQUE(name) 保证单条）', async () => {
+    seedRemoteCatalog();
     useLoopbackDeps(WIRE_MCP_DEF);
 
     const first = await requestResourceImport(PEER, 'mcp', 'weather');
@@ -393,6 +412,7 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('⑤ agent slug 冲突 → 后缀 -from-{nodeId前4}', async () => {
+    seedRemoteCatalog();
     useLoopbackDeps(WIRE_AGENT_DEF);
     // 本地已存在同 slug def（无论 source）→ 冲突
     agentCrudMocks.listAgentDefinitions.mockReturnValue([LOCAL_AGENT_DEF]);
@@ -407,6 +427,7 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('⑤c 同一 agent 连续导入三次 → 三个 distinct slug，无重复（collide 循环修复）', async () => {
+    seedRemoteCatalog();
     useLoopbackDeps(WIRE_AGENT_DEF);
     // listAgentDefinitions 状态随 createCustomDef 调用累计——mock 返回真实累积的 defs
     const createdDefs: Array<{ slug: string }> = [];
@@ -438,13 +459,16 @@ describe('requestResourceImport 需求方', () => {
   });
 
   it('⑤b 畸形 agent 定义（缺 systemPrompt）→ 上抛描述性错误', async () => {
-    useLoopbackDeps({ name: 'x', slug: 'y' });
+    seedRemoteCatalog();
+    // name/version 与目录一致（过供给核对）但缺 systemPrompt——落地的形状校验兜底
+    useLoopbackDeps({ name: '研究助手', slug: 'y', version: '1.2.0' });
 
     await expect(requestResourceImport(PEER, 'agent', 'uuid-1')).rejects.toThrow(/systemPrompt/);
     expect(agentCrudMocks.createCustomDef).not.toHaveBeenCalled();
   });
 
   it('③b 发送失败（节点不可达）→ 清理 pending 并上抛', async () => {
+    seedRemoteCatalog();
     const sendResourceRequest = vi.fn(async () => {
       throw new Error('connection refused');
     });
@@ -455,6 +479,120 @@ describe('requestResourceImport 需求方', () => {
 
   it('⑪ deps 未装配（P2P 未启用）→ 抛错', async () => {
     await expect(requestResourceImport(PEER, 'agent', 'uuid-1')).rejects.toThrow(/P2P 未启用/);
+  });
+
+  // ---- P5 安全修复回归锁：catalog 供给核对 ----
+
+  it('P5-a 回归锁：provide name 与目录不符 → 拒绝导入 + 中文 warn 日志', async () => {
+    seedRemoteCatalog();
+    // 对端冒充——提供的定义名与目录展示的研究助手不一致
+    useLoopbackDeps({ ...WIRE_AGENT_DEF, name: '冒名顶替者', version: '1.2.0' });
+
+    await expect(requestResourceImport(PEER, 'agent', 'uuid-1')).rejects.toThrow(/名称与目录不符/);
+    expect(agentCrudMocks.createCustomDef).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'P2P 资源供给与目录条目不符（name），已拒绝导入',
+      expect.objectContaining({ expectedName: '研究助手', actualName: '冒名顶替者' }),
+    );
+  });
+
+  it('P5-a 回归锁：provide version 与目录不符 → 拒绝导入 + 中文 warn 日志', async () => {
+    seedRemoteCatalog();
+    // 名称过校验但版本被静默替换（bait-and-switch 升级攻击）
+    useLoopbackDeps({ ...WIRE_AGENT_DEF, name: '研究助手', version: '9.9.9' });
+
+    await expect(requestResourceImport(PEER, 'agent', 'uuid-1')).rejects.toThrow(/版本与目录不符/);
+    expect(agentCrudMocks.createCustomDef).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'P2P 资源供给与目录条目不符（version），已拒绝导入',
+      expect.objectContaining({ expectedVersion: '1.2.0', actualVersion: '9.9.9' }),
+    );
+  });
+
+  it('P5-a 回归锁：本地无目录条目（缓存已 prune / 非目录入口发起）→ 拒绝导入', async () => {
+    // 不 seed——getSharedResources 返回空
+    useLoopbackDeps(WIRE_AGENT_DEF);
+
+    await expect(requestResourceImport(PEER, 'agent', 'uuid-1')).rejects.toThrow(
+      /本地目录无节点.*条目/,
+    );
+    expect(agentCrudMocks.createCustomDef).not.toHaveBeenCalled();
+  });
+
+  it('P5-a 回归锁：mcp 提供 name 伪装 → 拒绝导入', async () => {
+    seedRemoteCatalog();
+    // mcp 目录条目：weather/2.0.0；提供声明自己叫别的（已含与 catalog 同 version）
+    useLoopbackDeps({ ...WIRE_MCP_DEF, name: 'malware' });
+
+    await expect(requestResourceImport(PEER, 'mcp', 'weather')).rejects.toThrow(/名称与目录不符/);
+    expect(hostManagerMocks.registerMcpDefinition).not.toHaveBeenCalled();
+  });
+
+  // ---- P5 安全修复回归锁：defaultTools 钳制 ----
+
+  it('P5-b 回归锁：导入 defaultTools 含 bash / 未知 ref / 非 builtin → 仅留 SAFE_MINIMUM 内的', async () => {
+    seedRemoteCatalog();
+    // 对端供给 defaultTools 含越权工具——读文件属于 SAFE 集保留，其余钳制
+    useLoopbackDeps({
+      ...WIRE_AGENT_DEF,
+      defaultTools: [
+        { kind: 'builtin', ref: 'read_file' },   // 保留
+        { kind: 'builtin', ref: 'bash' },        // 钳制（不在 SAFE_MINIMUM）
+        { kind: 'builtin', ref: 'unknown_tool' }, // 钳制（未知 ref）
+        { kind: 'mcp', ref: 'something' },       // 钳制（非 builtin kind）
+        { ref: 'no_kind' },                       // 钳制（缺 kind）
+        { kind: 'builtin', ref: 'grep' },        // 保留
+      ],
+    });
+
+    const result = await requestResourceImport(PEER, 'agent', 'uuid-1');
+
+    expect(result).toBe('ok');
+    const [, input] = agentCrudMocks.createCustomDef.mock.calls[0] as [
+      string | null,
+      { defaultTools?: unknown },
+    ];
+    expect(input.defaultTools).toEqual([
+      { kind: 'builtin', ref: 'read_file' },
+      { kind: 'builtin', ref: 'grep' },
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'P2P 导入 agent 的 defaultTools 含越权工具，已按安全最小集钳制',
+      expect.objectContaining({ dropped: 4 }),
+    );
+  });
+
+  it('P5-b 回归锁：defaultTools 全部被钳制 → 落地为空数组（最保守）', async () => {
+    seedRemoteCatalog();
+    useLoopbackDeps({ ...WIRE_AGENT_DEF, defaultTools: [{ kind: 'builtin', ref: 'bash' }] });
+
+    const result = await requestResourceImport(PEER, 'agent', 'uuid-1');
+
+    expect(result).toBe('ok');
+    const [, input] = agentCrudMocks.createCustomDef.mock.calls[0] as [
+      string | null,
+      { defaultTools?: unknown },
+    ];
+    // 全部钳制 → 空数组（用户后续手动编辑；不静默给 SAFE_MINIMUM 默认）
+    expect(input.defaultTools).toEqual([]);
+  });
+
+  it('P5-b 回归锁：defaultTools 字段缺失 → 返回 undefined（沿用 createCustomDef 缺省 SAFE_MINIMUM）', async () => {
+    seedRemoteCatalog();
+    useLoopbackDeps({ ...WIRE_AGENT_DEF }); // 默认 WIRE_AGENT_DEF 含 read_file
+
+    const result = await requestResourceImport(PEER, 'agent', 'uuid-1');
+
+    expect(result).toBe('ok');
+    const [, input] = agentCrudMocks.createCustomDef.mock.calls[0] as [
+      string | null,
+      { defaultTools?: unknown },
+    ];
+    expect(input.defaultTools).toEqual([{ kind: 'builtin', ref: 'read_file' }]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('defaultTools'),
+      expect.anything(),
+    );
   });
 });
 
@@ -714,6 +852,7 @@ describe('initP2p 接线（index.ts）', () => {
   });
 
   it('⑩b 入站 resource-provide → pending resolve：requestResourceImport 全链路 ok + 落地', async () => {
+    seedRemoteCatalog();
     try {
       await initP2p();
 

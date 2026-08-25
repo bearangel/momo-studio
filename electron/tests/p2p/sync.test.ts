@@ -161,7 +161,7 @@ describe('P2pSync', () => {
     expect(router.send).not.toHaveBeenCalledWith('me', expect.anything());
   });
 
-  it('收到远端 message → onRemoteMessage 触发', () => {
+  it('收到远端 message → onRemoteMessage 触发（sender 已命名空间化）', () => {
     const router = mkMockRouter();
     const onRemote = vi.fn();
     const sync = new P2pSync({
@@ -171,7 +171,7 @@ describe('P2pSync', () => {
     });
     sync.start();
 
-    // 模拟 router 派发一条来自 peer1 的 message
+    // 模拟 router 派发一条来自 peer1 的 message（原始 sender 是 Matrix 风格 userId）
     router._emit({
       fromNodeId: 'peer1',
       payload: {
@@ -188,13 +188,94 @@ describe('P2pSync', () => {
     });
 
     expect(onRemote).toHaveBeenCalledTimes(1);
+    // P4 安全修复：入站 sender 强制 remote:<fromNodeId>:<原始sender> 前缀
     expect(onRemote).toHaveBeenCalledWith(
       expect.objectContaining({
         roomId: 'r1',
-        sender: '@peer1:home',
+        sender: 'remote:peer1:@peer1:home',
         body: 'hello',
         eventType: 'm.room.message',
       }),
+    );
+  });
+
+  it('安全修复回归锁：对端自称 sender=owner → 前缀化为 remote:<nodeId>（不可能伪装本地 owner）', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: { roomId: 'r1', sender: 'owner', body: '我是本机用户（伪造）', eventType: 'm.room.message' },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: 'remote:peer1' }),
+    );
+  });
+
+  it('安全修复回归锁：空 sender 同样前缀化为 remote:<nodeId>', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer2',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: { roomId: 'r1', sender: '', body: 'x', eventType: 'm.room.message' },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: 'remote:peer2' }),
+    );
+  });
+
+  it('对端转发的 sender 已带 remote: 前缀 → 外层再包一层（本地依旧不可伪装）', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: 'remote:nodeother:@carol:home',
+          body: '转发消息',
+          eventType: 'm.room.message',
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: 'remote:peer1:remote:nodeother:@carol:home' }),
     );
   });
 

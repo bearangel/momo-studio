@@ -927,13 +927,17 @@ export interface ApiSurface {
   /**
    * P2P 子系统 IPC（C 子系统 C8）——节点发现 + 信任管理。
    *
-   *   - getIdentity：当前节点身份（未 initP2p 时返回 null）
-   *   - getDiscoveredNodes：mDNS 发现的节点列表（trusted 字段标当前是否已信任）
+   *   - getIdentity：当前节点身份（未 initP2p 时返回 null）。fingerprint = 签名公钥
+   *     指纹（sha512 前 16 字节 hex，32 字符）——本机指纹，信任前供对端带外核对
+   *   - getDiscoveredNodes：mDNS 发现的节点列表（trusted 字段标当前是否已信任；
+   *     fingerprint = 该节点签名公钥指纹，与本机指纹比对防局域网冒充）
    *   - addTrustedNode / removeTrustedNode：信任管理（信任后才能 E2E 通信）
    *   - listTrustedNodes：信任节点完整列表（settings 详情用）
    */
   p2p: {
-    getIdentity(): Promise<{ nodeId: string; displayName: string } | null>;
+    getIdentity(): Promise<
+      { nodeId: string; displayName: string; fingerprint: string } | null
+    >;
     getDiscoveredNodes(): Promise<
       Array<{
         nodeId: string;
@@ -941,6 +945,8 @@ export interface ApiSurface {
         transport: 'lan' | 'hub';
         trusted: boolean;
         lastSeen: number;
+        /** 节点签名公钥指纹——添加信任前与对端 UI 展示的本机指纹核对（防冒充） */
+        fingerprint: string;
       }>
     >;
     addTrustedNode(nodeId: string): Promise<void>;

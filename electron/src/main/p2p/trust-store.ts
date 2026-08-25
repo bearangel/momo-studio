@@ -23,7 +23,13 @@ import { resolveUserDataDir } from '../paths';
 export interface TrustedNode {
   nodeId: string;
   displayName: string;
+  /** Ed25519 签名公钥（验签用） */
   publicKey: Uint8Array;
+  /**
+   * X25519 box 公钥（LAN 帧 v2 加密用）。可选：旧版本信任条目没有——
+   * 此时无法加解密 v2 帧，需移除信任后重新添加以捕获。
+   */
+  boxPublicKey?: Uint8Array;
   trustedAt: number;
 }
 
@@ -38,6 +44,7 @@ interface SerializedTrustedNode {
   nodeId: string;
   displayName: string;
   publicKey: string;
+  boxPublicKey?: string;
   trustedAt: number;
 }
 
@@ -50,6 +57,9 @@ export function listTrustedNodes(): TrustedNode[] {
     nodeId: r.nodeId,
     displayName: r.displayName,
     publicKey: new Uint8Array(Buffer.from(r.publicKey, 'base64')),
+    ...(r.boxPublicKey !== undefined
+      ? { boxPublicKey: new Uint8Array(Buffer.from(r.boxPublicKey, 'base64')) }
+      : {}),
     trustedAt: r.trustedAt,
   }));
 }
@@ -77,6 +87,16 @@ export function getTrustedPublicKey(nodeId: string): Uint8Array | null {
 }
 
 /**
+ * 取信任节点的 box 公钥（LAN 帧 v2 加密用）。
+ * 未信任、或旧版本信任条目（信任时未捕获 box 公钥）返回 null——
+ * 调用方必须按"无法加密/解密"处理，禁止回退到 mDNS 广告数据。
+ */
+export function getTrustedBoxPublicKey(nodeId: string): Uint8Array | null {
+  const node = listTrustedNodes().find((n) => n.nodeId === nodeId);
+  return node?.boxPublicKey ?? null;
+}
+
+/**
  * 批量覆盖写信任列表。
  * 内部使用——addTrustedNode/removeTrustedNode 都通过它落盘；测试也用它预置数据。
  */
@@ -87,6 +107,9 @@ export function saveAll(list: TrustedNode[]): void {
     nodeId: n.nodeId,
     displayName: n.displayName,
     publicKey: Buffer.from(n.publicKey).toString('base64'),
+    ...(n.boxPublicKey !== undefined
+      ? { boxPublicKey: Buffer.from(n.boxPublicKey).toString('base64') }
+      : {}),
     trustedAt: n.trustedAt,
   }));
   fs.writeFileSync(trustPath(), JSON.stringify(serialized, null, 2), { mode: 0o600 });

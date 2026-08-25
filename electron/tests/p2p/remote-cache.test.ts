@@ -70,17 +70,24 @@ vi.mock('../../src/main/p2p/local-transport', () => ({
 vi.mock('../../src/main/p2p/lan-transport', () => ({
   LanTransport: class {},
 }));
-vi.mock('../../src/main/p2p/identity', () => ({
-  loadIdentity: vi.fn(() => ({ nodeId: 'node-me', displayName: '本机节点' })),
+vi.mock('../../src/main/p2p/identity', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/identity')>()),
+  loadIdentity: vi.fn(() => ({
+    nodeId: 'node-me',
+    displayName: '本机节点',
+    publicKey: new Uint8Array(32),
+  })),
   generateIdentity: vi.fn(),
   saveIdentity: vi.fn(),
 }));
-vi.mock('../../src/main/p2p/trust-store', () => ({
+vi.mock('../../src/main/p2p/trust-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/trust-store')>()),
   listTrustedNodes: vi.fn(() => []),
   addTrustedNode: vi.fn(),
   removeTrustedNode: vi.fn(),
   isTrusted: vi.fn(() => false),
   getTrustedPublicKey: vi.fn(() => null),
+  getTrustedBoxPublicKey: vi.fn(() => null),
 }));
 vi.mock('../../src/main/storage/messages/repo', () => ({
   insertMessage: vi.fn(),

@@ -46,11 +46,13 @@ describe('P2P 集成接线（I2）', () => {
   });
 
   describe('handleRemoteMessage', () => {
-    it('远端 message → insertMessage(source=lan) + push im:message 到 renderer', () => {
+    // P4 安全修复后契约：入站 sender 由 sync 层强制 remote:<fromNodeId>[:<原始sender>]
+    // 前缀——handleRemoteMessage 只消费已前缀化的 sender（此处直接构造同款格式）
+    it('远端 message → insertMessage(source=lan) + push session:message 到 renderer', () => {
       const inserted = {
         id: 'msg-1',
         sessionId: '!room1:home',
-        sender: '@peer:home',
+        sender: 'remote:node_peer1:@peer:home',
         body: 'hello',
         eventType: 'm.room.message',
       };
@@ -58,7 +60,7 @@ describe('P2P 集成接线（I2）', () => {
 
       const msg: SyncMessage = {
         roomId: '!room1:home',
-        sender: '@peer:home',
+        sender: 'remote:node_peer1:@peer:home',
         body: 'hello',
         eventType: 'm.room.message',
       };
@@ -69,7 +71,7 @@ describe('P2P 集成接线（I2）', () => {
       expect(mockInsertMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: '!room1:home',
-          sender: '@peer:home',
+          sender: 'remote:node_peer1:@peer:home',
           body: 'hello',
           eventType: 'm.room.message',
           source: 'lan',
@@ -81,12 +83,12 @@ describe('P2P 集成接线（I2）', () => {
       expect(mockWebContentsSend).toHaveBeenCalledWith('session:message', inserted);
     });
 
-    it('hub 来源的 message 也走同一路径（source=lan 是 P2P 统一标识）', () => {
+    it('owner 形态（remote:<nodeId> 无尾段）同样走同一路径（source=lan 是 P2P 统一标识）', () => {
       mockInsertMessage.mockReturnValue({ id: 'msg-2' });
 
       handleRemoteMessage({
         roomId: '!room2:home',
-        sender: '@remote-hub:home',
+        sender: 'remote:node_hub',
         body: 'via hub',
         eventType: 'm.room.message',
       });
@@ -105,7 +107,7 @@ describe('P2P 集成接线（I2）', () => {
       expect(() =>
         handleRemoteMessage({
           roomId: '!r:home',
-          sender: '@p:home',
+          sender: 'remote:node_p:@p:home',
           body: 'x',
           eventType: 'm.room.message',
         }),

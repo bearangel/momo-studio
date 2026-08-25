@@ -23,8 +23,10 @@ import { logger } from '../logger';
 import { listCustomResources } from '../resource/custom';
 import { createCustomDef, getAgentDefinition, listAgentDefinitions } from '../agent/crud';
 import type { ToolRef } from '../agent/types';
+import { SAFE_MINIMUM_TOOLS } from '../agent/tools/catalog';
 import { registerMcpDefinition } from '../mcp/host-manager';
 import type { P2pSync } from './sync';
+import { getSharedResources } from './resource-share';
 import type { ResourceProvide, ResourceRequest } from './protocols';
 
 /** 导入结果：ok=落地成功 / not-found=对端未找到 / timeout=30s 无回执 */
@@ -41,6 +43,9 @@ export interface ResourceTransferDeps {
 
 /** 供给回执等待超时——对端需查库 + 网络往返，30s 覆盖正常路径且不无限挂起 */
 const PROVIDE_TIMEOUT_MS = 30_000;
+
+/** defaultTools 钳制白名单（安全最小集）——P2P 导入不放大权限 */
+const SAFE_TOOL_REFS: ReadonlySet<string> = new Set<string>(SAFE_MINIMUM_TOOLS);
 
 /** 模块级单例（initP2p 装配，stopP2p 清空） */
 let deps: ResourceTransferDeps | null = null;
@@ -82,6 +87,16 @@ export async function requestResourceImport(
 ): Promise<ResourceImportResult> {
   if (!deps) throw new Error('P2P 未启用，无法导入资源');
 
+  // P5 安全修复：请求时快照本地目录条目，provide 抵达后核对（防 bait-and-switch——
+  // 目录展示 A、实际供给 B）。本地无该条目（目录已 prune / 非目录入口发起）直接拒绝，
+  // 不给"无预期可核对"的供给留落地通道。
+  const expected = findExpectedCatalogEntry(nodeId, type, slug);
+  if (!expected) {
+    throw new Error(
+      `本地目录无节点 ${nodeId} 的 ${type} 资源 ${slug} 条目（目录可能已过期，请刷新资源库后重试）`,
+    );
+  }
+
   const requestId = randomUUID();
   // 先注册 pending 再发送——若先发送后注册，对端极快回执时 provide 会在
   // pending.set 之前到达，handleResourceProvide 找不到 pending 导致回执丢失
@@ -110,8 +125,69 @@ export async function requestResourceImport(
   const outcome = await outcomePromise;
   if (outcome.kind === 'timeout') return 'timeout';
   if (outcome.definition === null) return 'not-found';
+  validateProvidedDefinition(outcome.definition, expected, type, slug, nodeId);
   landImportedDefinition(type, outcome.definition, nodeId);
   return 'ok';
+}
+
+/**
+ * 从 resource-share 目录缓存取请求目标条目（请求时刻快照——之后目录更新不影响本次核对）。
+ */
+function findExpectedCatalogEntry(
+  nodeId: string,
+  type: P2pResourceType,
+  slug: string,
+): { name: string; version?: string } | null {
+  const node = getSharedResources().find((n) => n.nodeId === nodeId);
+  if (!node) return null;
+  const entry = node.items.find((i) => i.type === type && i.slug === slug);
+  if (!entry) return null;
+  return entry.version !== undefined
+    ? { name: entry.name, version: entry.version }
+    : { name: entry.name };
+}
+
+/**
+ * P5 安全修复：provide 与请求时刻的目录快照核对（名称 + 版本，按请求 type 隐含核对）。
+ * 不匹配即拒绝落地并记中文告警——"目录展示与实际供给不一致"是 bait-and-switch 信号。
+ * 注：当前协议无 checksum 字段，指纹核对以 name/version 为界；2.1 可在目录/provide
+ * 中加内容哈希后在此扩展。
+ */
+function validateProvidedDefinition(
+  definition: Record<string, unknown>,
+  expected: { name: string; version?: string },
+  type: P2pResourceType,
+  slug: string,
+  fromNodeId: string,
+): void {
+  const actualName = typeof definition.name === 'string' ? definition.name : '';
+  if (actualName !== expected.name) {
+    logger.warn('P2P 资源供给与目录条目不符（name），已拒绝导入', {
+      from: fromNodeId,
+      type,
+      slug,
+      expectedName: expected.name,
+      actualName: actualName || '(缺失)',
+    });
+    throw new Error(
+      `对端供给的资源名称与目录不符（期望 ${expected.name}，实际 ${actualName || '(缺失)'}），已拒绝导入`,
+    );
+  }
+  if (expected.version !== undefined) {
+    const actualVersion = typeof definition.version === 'string' ? definition.version : '';
+    if (actualVersion !== expected.version) {
+      logger.warn('P2P 资源供给与目录条目不符（version），已拒绝导入', {
+        from: fromNodeId,
+        type,
+        slug,
+        expectedVersion: expected.version,
+        actualVersion: actualVersion || '(缺失)',
+      });
+      throw new Error(
+        `对端供给的资源版本与目录不符（期望 ${expected.version}，实际 ${actualVersion || '(缺失)'}），已拒绝导入`,
+      );
+    }
+  }
 }
 
 /**
@@ -210,8 +286,9 @@ function landAgentDefinition(definition: Record<string, unknown>, fromNodeId: st
     iconEmoji: optionalString(definition, 'iconEmoji'),
     modelProviderId: '',
     modelName: '',
-    // 缺省 → createCustomDef 填 SAFE_MINIMUM_TOOLS（不在未审查情况下放大权限）
-    defaultTools: readToolRefs(definition),
+    // P5 安全修复：显式钳制到安全最小集——字段缺省 → createCustomDef 填
+    // SAFE_MINIMUM_TOOLS；字段存在（对端可控）→ 只保留最小集内的 builtin 引用
+    defaultTools: readToolRefs(definition, fromNodeId),
   });
   logger.info('P2P agent 定义已导入', { slug, from: fromNodeId });
 }
@@ -284,15 +361,38 @@ function readEnv(def: Record<string, unknown>): Record<string, string> | undefin
   return env;
 }
 
-/** defaultTools 白名单收窄：仅保留 { kind: string, ref: string } 形状的条目（畸形项静默剔除） */
-function readToolRefs(definition: Record<string, unknown>): ToolRef[] | undefined {
+/**
+ * defaultTools 白名单收窄（P5 安全修复）：
+ * 仅保留形状合法且 ref ∈ 安全最小集的 builtin 引用——bash、未知 ref、非 builtin
+ * kind 一律剔除（对端供给的定义不可信，导入不得放大权限），剔除动作记中文告警日志。
+ * 字段缺失仍返回 undefined（沿用 createCustomDef 的 SAFE_MINIMUM_TOOLS 缺省语义）。
+ */
+function readToolRefs(
+  definition: Record<string, unknown>,
+  fromNodeId: string,
+): ToolRef[] | undefined {
   const v = definition.defaultTools;
   if (!Array.isArray(v)) return undefined;
-  return v.filter(
-    (t): t is ToolRef =>
+  const kept: ToolRef[] = [];
+  let dropped = 0;
+  for (const t of v) {
+    if (
       typeof t === 'object' &&
       t !== null &&
-      typeof (t as Record<string, unknown>).kind === 'string' &&
-      typeof (t as Record<string, unknown>).ref === 'string',
-  );
+      (t as Record<string, unknown>).kind === 'builtin' &&
+      typeof (t as Record<string, unknown>).ref === 'string' &&
+      SAFE_TOOL_REFS.has((t as Record<string, unknown>).ref as string)
+    ) {
+      kept.push({ kind: 'builtin', ref: (t as Record<string, unknown>).ref as string });
+    } else {
+      dropped++;
+    }
+  }
+  if (dropped > 0) {
+    logger.warn('P2P 导入 agent 的 defaultTools 含越权工具，已按安全最小集钳制', {
+      from: fromNodeId,
+      dropped,
+    });
+  }
+  return kept;
 }

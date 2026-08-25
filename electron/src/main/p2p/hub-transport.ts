@@ -13,8 +13,14 @@
 //
 // E2E 加密：发送方用接收方 box 公钥 + 自己 box 私钥派生共享密钥（X25519 ECDH），
 // 再 secretbox（XSalsa20-Poly1305）加密。hub 只看到密文 + 收发 nodeId。
-// secretbox 的 Poly1305 MAC 已提供认证（只有持有对端 box 私钥的人能产出有效密文），
-// 因此不需要额外的 Ed25519 签名层。
+//
+// 信任模型（安全修复后的准确表述）：
+//   Poly1305 MAC 只证明"密文出自持有某个 box 私钥的人"，并不绑定 nodeId 身份——
+//   hub 推送的 presence（含 boxPublicKey 映射）完全受 hub 控制，恶意 hub 可以
+//   把受害者的 nodeId 映射到攻击者的 box 公钥。因此收发两个方向的密钥决策
+//   一律以本地 trustStore 为准：出站 send 用 trustStore 的对端 box 公钥加密；
+//   入站 deliver 用 trustStore 的对端 box 公钥解密，未信任节点直接丢弃。
+//   presence 学到的数据只用于在线列表展示，不参与任何信任判断。
 import WebSocket from 'ws';
 import type { TransportLayer, MessagePayload, IncomingMessage, NodeInfo } from './types';
 import type { NodeIdentity } from './identity';
@@ -49,17 +55,21 @@ type HubToClient =
  *   - send() 用对端 box 公钥加密 → 发 send 包
  *   - stop() 关闭 WSS + 清空 handler
  *
- * 节点发现：hub 推 presence 时填充 onlineNodes + boxPublicKeys；
+ * 节点发现：hub 推 presence 时填充 onlineNodes + boxPublicKeys（仅展示用）；
  * discoverNodes() 返回 onlineNodes 快照。
  *
- * 解密 deliver：用 boxPublicKeys 查来源 box 公钥（presence 时学到）派生共享密钥。
+ * 解密 deliver：用 trustStore.getBoxPublicKey(msg.from) 查来源 box 公钥派生共享密钥
+ *（与出站 send 对称）——未信任节点直接丢弃；presence 学到的映射不参与解密决策。
  */
 export class HubTransport implements TransportLayer {
   readonly type = 'hub' as const;
   private ws?: WebSocket;
   /** hub 推送的在线节点（discoverNodes 返回它） */
   private onlineNodes = new Map<string, NodeInfo>();
-  /** 在线节点的 box 公钥（presence 推送时学到，deliver 解密时用） */
+  /**
+   * 在线节点的 box 公钥（presence 推送时学到）。
+   * 仅用于展示在线节点信息——受 hub 完全控制，禁止用于解密/信任决策（安全修复）。
+   */
   private boxPublicKeys = new Map<string, Uint8Array>();
   private handlers = new Set<(msg: IncomingMessage) => void>();
 
@@ -148,13 +158,16 @@ export class HubTransport implements TransportLayer {
       return;
     }
     if (msg.type === 'deliver') {
-      const peerBoxPub = this.boxPublicKeys.get(msg.from);
-      if (!peerBoxPub) return; // 未知来源节点，丢弃
+      // 安全修复：解密公钥只从本地 trustStore 取（与出站 send 对称）。
+      // presence 学到的映射受 hub 控制，用它会放大"hub 换 key 冒充受害者"攻击；
+      // 未信任节点一律丢弃。
+      const peerBoxPub = this.opts.trustStore.getBoxPublicKey(msg.from);
+      if (!peerBoxPub) return; // 未信任来源，丢弃
       const sharedKey = deriveSharedKey(this.opts.boxKeyPair.secretKey, peerBoxPub);
       const nonce = new Uint8Array(Buffer.from(msg.nonce, 'base64'));
       const ciphertext = new Uint8Array(Buffer.from(msg.ciphertext, 'base64'));
       const plaintext = decryptPayload(ciphertext, sharedKey, nonce);
-      if (!plaintext) return; // 解密失败（密文被篡改 / 密钥不匹配）
+      if (!plaintext) return; // 解密失败（密文被篡改 / 密钥不匹配——含 hub 换 key 场景）
       const payload = JSON.parse(new TextDecoder().decode(plaintext)) as MessagePayload;
       const incoming: IncomingMessage = {
         fromNodeId: msg.from,

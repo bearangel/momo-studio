@@ -15,16 +15,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { NodeDiscoveryPanel } from '../../../src/components/p2p/NodeDiscoveryPanel';
 
-const { mockGetDiscoveredNodes, mockAddTrustedNode, mockRemoveTrustedNode } = vi.hoisted(() => ({
-  mockGetDiscoveredNodes: vi.fn(),
-  mockAddTrustedNode: vi.fn(),
-  mockRemoveTrustedNode: vi.fn(),
-}));
+const { mockGetDiscoveredNodes, mockGetIdentity, mockAddTrustedNode, mockRemoveTrustedNode } =
+  vi.hoisted(() => ({
+    mockGetDiscoveredNodes: vi.fn(),
+    // v2.0.1 组件新增 getIdentity 调用（本机指纹展示）——旧用例不关心指纹，
+    // 默认 resolve null（组件隐藏指纹块，维持原有断言不变）
+    mockGetIdentity: vi.fn().mockResolvedValue(null),
+    mockAddTrustedNode: vi.fn(),
+    mockRemoveTrustedNode: vi.fn(),
+  }));
 
 vi.mock('../../../src/ipc/client', () => ({
   ipc: {
     p2p: {
       getDiscoveredNodes: mockGetDiscoveredNodes,
+      getIdentity: mockGetIdentity,
       addTrustedNode: mockAddTrustedNode,
       removeTrustedNode: mockRemoveTrustedNode,
     },
@@ -39,6 +44,7 @@ const TWO_NODES = [
     transport: 'lan' as const,
     trusted: true,
     lastSeen: Date.now(),
+    fingerprint: 'aaaa1111aaaa1111aaaa1111aaaa1111',
   },
   {
     nodeId: 'node_b',
@@ -46,6 +52,7 @@ const TWO_NODES = [
     transport: 'lan' as const,
     trusted: false,
     lastSeen: Date.now(),
+    fingerprint: 'bbbb2222bbbb2222bbbb2222bbbb2222',
   },
 ];
 

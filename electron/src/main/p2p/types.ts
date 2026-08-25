@@ -20,8 +20,13 @@ export interface NodeInfo {
   nodeId: string;
   /** 用户可见的展示名 */
   displayName: string;
-  /** 节点公钥（用于验签） */
+  /** 节点签名公钥（用于验签；信任前经指纹带外核对） */
   publicKey: Uint8Array;
+  /**
+   * X25519 box 公钥（LAN 帧 v2 加密）。可选：旧版本节点/旧信任条目缺失——
+   * 仅在添加信任时从发现数据捕获，已信任链路的密钥决策一律走信任库。
+   */
+  boxPublicKey?: Uint8Array;
   /**
    * 传输类型：'lan' / 'hub'
    * 注：LocalTransport 自身节点不归入此枚举（C2 用 `as never` 兜底，因为它只在路由层用）

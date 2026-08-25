@@ -38,6 +38,7 @@ import {
   loadIdentity,
   generateIdentity,
   saveIdentity,
+  publicKeyFingerprint,
 } from './identity';
 import {
   listTrustedNodes,
@@ -45,6 +46,7 @@ import {
   removeTrustedNode,
   isTrusted,
   getTrustedPublicKey,
+  getTrustedBoxPublicKey,
 } from './trust-store';
 import { P2pSync, type SyncMessage } from './sync';
 import {
@@ -100,8 +102,8 @@ let sync: P2pSync | null = null;
 let snapshotRebroadcastTimer: NodeJS.Timeout | null = null;
 /** 资源目录周期重播定时器（initP2p 创建并 unref，stopP2p 清理） */
 let resourceCatalogRebroadcastTimer: NodeJS.Timeout | null = null;
-/** 当前节点身份缓存（getIdentity handler 用） */
-let currentIdentity: { nodeId: string; displayName: string } | null = null;
+/** 当前节点身份缓存（getIdentity handler 用；fingerprint 供信任前带外核对） */
+let currentIdentity: { nodeId: string; displayName: string; fingerprint: string } | null = null;
 
 /**
  * 初始化 P2P 子系统。
@@ -114,19 +116,23 @@ export async function initP2p(): Promise<void> {
     await stopP2p();
   }
 
-  // 1. 节点身份：加载或生成
+  // 1. 节点身份：加载或生成（loadIdentity 自带旧文件 box 密钥迁移）
   let id = loadIdentity();
   if (!id) {
     id = generateIdentity('My Momo Node');
     saveIdentity(id);
   }
-  currentIdentity = { nodeId: id.nodeId, displayName: id.displayName };
+  currentIdentity = {
+    nodeId: id.nodeId,
+    displayName: id.displayName,
+    fingerprint: publicKeyFingerprint(id.publicKey),
+  };
 
   // 2. 传输层：本地（无 IO）+ 局域网（mDNS + TCP）
   const local = new LocalTransport(id);
   lanTransport = new LanTransport({
     identity: id,
-    trustStore: { isTrusted, getTrustedPublicKey },
+    trustStore: { isTrusted, getTrustedPublicKey, getTrustedBoxPublicKey },
   });
 
   // 3. 路由层：按 nodeId 选 transport
@@ -187,6 +193,10 @@ export async function initP2p(): Promise<void> {
  *
  * source 统一用 'lan' 标识所有 P2P 来源（LAN mDNS + hub 中转）——
  * 区分具体传输层由 router/transport 负责，应用层只需知道"非本地产生"。
+ * sender 契约（P4 安全修复）：入站 sender 已由 sync.handleIncoming 命名空间化为
+ * `remote:<fromNodeId>[:<原始sender>]`——本函数不做二次改写，但下游（renderer 显示）
+ * 依赖该前缀区分本地/远端身份；直接调用方（测试/未来接线）必须先构造同款前缀。
+ * roomId 由 messages 表外键约束兜底（不存在的会话写入失败，仅记 warn）。
  * 失败时记录日志但不抛出（入站消息丢失不影响 P2P 链路稳定性）。
  */
 export function handleRemoteMessage(msg: SyncMessage): void {
@@ -274,6 +284,8 @@ export function registerP2pHandlers(): void {
       transport: n.transport,
       trusted: trusted.has(n.nodeId),
       lastSeen: n.lastSeen,
+      // 签名公钥指纹（与 renderer types.d.ts 契约同步）：信任前与对端展示的本机指纹核对
+      fingerprint: publicKeyFingerprint(n.publicKey),
     }));
   });
 
@@ -281,10 +293,13 @@ export function registerP2pHandlers(): void {
     if (!lanTransport) throw new Error('P2P 子系统未初始化');
     const node = lanTransport.discoverNodes().find((n) => n.nodeId === nodeId);
     if (!node) throw new Error(`未发现节点 ${nodeId}`);
+    // 同时捕获签名公钥 + box 公钥（v2 帧加密用）；旧版本对端无 box 公钥时缺省——
+    // 此时该节点不可 v2 加密通信，需对端升级后重新信任
     addTrustedNode({
       nodeId: node.nodeId,
       displayName: node.displayName,
       publicKey: node.publicKey,
+      ...(node.boxPublicKey !== undefined ? { boxPublicKey: node.boxPublicKey } : {}),
       trustedAt: Date.now(),
     });
   });

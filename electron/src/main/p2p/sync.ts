@@ -148,9 +148,18 @@ export class P2pSync {
         ) {
           return;
         }
+        // P4 安全修复：入站 sender 强制命名空间化——远端消息永远不可能伪装成本地
+        // 身份（尤其对端自称 sender='owner' 渲染成本机用户）。
+        // 格式：remote:<来源节点ID>:<原始sender>；原始 sender 为 'owner'（对端本机
+        // 用户）或空串时省略尾段。若对端转发的 sender 已带 remote: 前缀，外层前缀
+        // 依旧保证本地不可伪装（renderer 逐层剥离显示）。
+        const sender =
+          m.sender === 'owner' || m.sender === ''
+            ? `remote:${msg.fromNodeId}`
+            : `remote:${msg.fromNodeId}:${m.sender}`;
         this.opts.onRemoteMessage({
           roomId: m.roomId,
-          sender: m.sender,
+          sender,
           body: m.body,
           eventType: m.eventType,
         });

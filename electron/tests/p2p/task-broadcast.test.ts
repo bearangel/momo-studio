@@ -80,17 +80,24 @@ vi.mock('../../src/main/p2p/local-transport', () => ({
 vi.mock('../../src/main/p2p/lan-transport', () => ({
   LanTransport: class {},
 }));
-vi.mock('../../src/main/p2p/identity', () => ({
-  loadIdentity: vi.fn(() => ({ nodeId: 'node-init', displayName: '初始化节点' })),
+vi.mock('../../src/main/p2p/identity', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/identity')>()),
+  loadIdentity: vi.fn(() => ({
+    nodeId: 'node-init',
+    displayName: '初始化节点',
+    publicKey: new Uint8Array(32),
+  })),
   generateIdentity: vi.fn(),
   saveIdentity: vi.fn(),
 }));
-vi.mock('../../src/main/p2p/trust-store', () => ({
+vi.mock('../../src/main/p2p/trust-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/main/p2p/trust-store')>()),
   listTrustedNodes: vi.fn(() => []),
   addTrustedNode: vi.fn(),
   removeTrustedNode: vi.fn(),
   isTrusted: vi.fn(() => false),
   getTrustedPublicKey: vi.fn(() => null),
+  getTrustedBoxPublicKey: vi.fn(() => null),
 }));
 vi.mock('../../src/main/storage/messages/repo', () => ({
   insertMessage: vi.fn(),
@@ -295,6 +302,38 @@ describe('task IPC 写路径触发接线', () => {
 
     expect(res).toEqual({ executionSessionId: 'sess-9', createdNewRoom: true });
     expect(sync.broadcastTaskSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  // minor-11 回归锁：task:update 携带 status 时静默剥离，强制走 task:transition / task:cancel。
+  // 旧实现直接调 updateTask(id, patch) 写入 status → 终端任务复活 / 非法状态机迁移
+  // （终态 → in_progress 等）。新实现 hasOwnProperty 检查 + 移除 status 字段，
+  // 其他字段照常落库；warn 日志帮助定位误用源头。
+  it('minor-11：task:update 携带 status 时剥离——其他字段照常落库；status 走 task:transition', async () => {
+    const sync = useFakeSync();
+
+    await ipcHandlers.get('task:update')!(
+      {} as never,
+      'T-1',
+      { title: '新标题', status: 'completed', priority: 5 },
+    );
+
+    // updateTask 调用收到的 patch 不含 status（剥离生效）
+    expect(taskRepoMocks.updateTask).toHaveBeenCalledTimes(1);
+    const call = taskRepoMocks.updateTask.mock.calls[0]!;
+    expect(call[0]).toBe('T-1');
+    expect(call[1]).not.toHaveProperty('status');
+    expect(call[1]).toMatchObject({ title: '新标题', priority: 5 });
+    // task:update 不是写通道（不触发快照广播）
+    expect(sync.broadcastTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('minor-11：task:update 不带 status 时按原样透传给 repo', async () => {
+    await ipcHandlers.get('task:update')!(
+      {} as never,
+      'T-1',
+      { title: '改个标题' },
+    );
+    expect(taskRepoMocks.updateTask).toHaveBeenCalledWith('T-1', { title: '改个标题' });
   });
 
   it('④ 读通道（task:list）不触发广播', async () => {
