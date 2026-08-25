@@ -1,153 +1,67 @@
-# Task 7 实施报告：skill zip 上传 + listInstalled + deleteCustom IPC
+# Task 7 报告 — SessionService：用户消息写入 + 目标解析 + 进程内路由
 
-## 实施摘要
+## Status
+**DONE**
 
-Phase 2 最后一个 task。实现自定义 Skill zip 上传、列出三类已安装 skill、删除自定义 skill 三个 IPC 通道，完成 v1.6 能力管理的 Skill 侧闭环。
+## Commits
+- `ee723bb` feat(im): SessionService——消息写入/目标解析/进程内路由
 
-### 新建文件
-
-| 文件 | 作用 |
-|---|---|
-| `electron/src/main/skill/zip-uploader.ts` | uploadSkillZip + listInstalled + deleteCustomSkill + InstalledSkill 类型 |
-| `electron/src/main/skill/ipc.handlers.ts` | 注册 skill:listInstalled / skill:uploadZip / skill:deleteCustom 三个 IPC |
-| `electron/tests/skill/upload-zip.test.ts` | 7 个测试用例（合法 zip / 幂等 / 覆盖 / 缺 SKILL.md / 多根目录 / listInstalled / delete） |
-
-### 修改文件
-
-| 文件 | 改动 |
-|---|---|
-| `electron/src/main/ipc/index.ts` | import + 调用 registerSkillHandlers() |
-| `electron/src/preload/index.ts` | 新增 skill 命名空间（3 个绑定）+ InstalledSkill import |
-| `renderer/src/ipc/types.d.ts` | 新增 InstalledSkill 接口 + ApiSurface.skill 命名空间 |
-| `electron/package.json` | adm-zip + @types/adm-zip 依赖 |
-| `pnpm-lock.yaml` | lockfile 更新 |
-
-## 依赖安装输出
-
+## Test Summary（focused，最后 8 行）
 ```
-npx pnpm@9.0.0 --filter momo-studio-electron add adm-zip
-→ +1 added (adm-zip)
+ ✓ tests/im/session-service.test.ts  (14 tests) 468ms
 
-npx pnpm@9.0.0 --filter momo-studio-electron add -D @types/adm-zip
-→ devDependencies @types/adm-zip added
+ Test Files  1 passed (1)
+      Tests  14 passed (14)
+   Start at  14:50:03
+   Duration  876ms
 ```
 
-## TDD 步骤输出
+全量门禁：
+- electron 全套：**141 files / 940 tests passed**（含 conduit，无 flaky）
+- typecheck 双 clean（electron + renderer，`pnpm -r typecheck` Done）
+- eslint（5 个改动文件）：exit 0
 
-### Step 1：安装依赖 ✓
+## 实现内容
 
-adm-zip（运行时）+ @types/adm-zip（开发时）均安装成功。
+### 新增 `electron/src/main/im/session-service.ts`
+- `setSessionRouter(svc | null)` / `setSessionMainWindow(win | null)` 模块级注入（与 sync-manager setMainWindow 同法）
+- `resolveTarget(sessionId, mentionedAssignmentIds)` 四分支：
+  1. 显式 mention → 第一个是本会话成员的被 @ assignment
+  2. 单成员会话 → 自动应答（原"单聊无需 @"）
+  3. 会话 IS workspace 团队会话（`ws.teamSessionId === sessionId`）且有协调 agent → 协调 agent 接待（普通群不越权；协调者不要求是成员，与原 decide-response 一致）
+  4. 其余 → null
+- `sendUserMessage({sessionId, body, mentionedAssignmentIds?})` 全链：INSERT（sender='owner', eventType='m.room.message', source='local'）→ touchSessionLastMessage → push `session:message` → P2P 广播（fire-and-forget）→ 冲突检测（try/catch 不阻塞，命中推 `im:conflict`）→ resolveTarget → `router.routeUserChat`
+- isOwnerMessage 守卫说明：新模型所有用户消息 sender='owner'（单用户应用），原守卫结构上已满足，已在 resolveTarget doc 注释记录
 
-### Step 2：写失败测试（RED）
+### 接线
+- `router-bootstrap.ts`：ensureRouterService 末尾 `setSessionRouter(currentRouterService)`（与 setBridgeRouter 并列）；destroyRouterService 加 `setSessionRouter(null)`
+- `main/index.ts`：`setSessionMainWindow(win)` 追加在 setMainWindow/setRuntimeMainWindow 之后（原有注入未动——Task 11/12 负责清理）
 
-测试文件 `electron/tests/skill/upload-zip.test.ts`，7 个测试用例。
+### conflict-detector 参数 session 化
+- `detectConflict(roomId→sessionId, ...)`、`ConflictDeps.findInProgressTaskByRoom` 参数名同步（brief 要求的 rename；当前实际名是 `roomId` 而非 brief 写的 `executionRoomId`）
+- `ConflictDetectionResult.currentRoomId` 字段名**保留**——renderer IPC 契约（types.d.ts / ConflictDialog.tsx / ConflictDialogMount 引用），仅值传 sessionId
+- 所有调用均为位置传参（ipc.handlers.ts / 本模块 / 既有测试），零行为变化，全量测试证实
 
-**测试隔离策略调整**：brief 原文用 `vi.spyOn(require(...), 'getSkillsDir').mockReturnValue(skillsDir)` 来 mock skills 目录。但 vitest 在 CJS 环境下对同模块导出函数的 spy 无法拦截内部直接调用（编译后内部引用是 local binding 而非 export binding）。
+### 测试 `electron/tests/im/session-service.test.ts`（14 用例）
+- resolveTarget 四分支 + 边界：mention 命中（含非成员跳过 / mention 顺序优先）、单成员、单成员+非成员 mention 回退、团队会话协调接待、非团队会话反例、无协调 agent 反例、多成员无 mention → null
+- sendUserMessage 全链：完整链路（真实 SQLite 断言 messages 行全字段 + last_message_at 刷新 + session:message 载荷 + P2P 广播参数 + routeUserChat 参数）、mention 路由、无目标不调 router、无 router 不抛且落库、会话不存在抛错、冲突命中推 im:conflict（seed T-1 in_progress + mention #T-2）、冲突检测失败（DROP TABLE tasks）不阻塞
+- 隔离：p2p 整模块 vi.mock；窗口用 duck-typed 假窗口经 setSessionMainWindow 注入；DB 沿用 session-ops.test.ts 模式
 
-改用仓库既定模式（与 mcp-list-registered.test.ts 等 T1-T6 全部测试一致）：
-- `process.env.AP_USER_DATA_DIR` 指向临时目录
-- `runMigrations()` 建 skill_definitions 表（listInstalled 读 marketplace 用）
-- `closeDb()` afterEach 复位单例
+## Self-review / Deviations
 
-这样 `resolveSkillsDir()` 自动返回 `<tmpRoot>/skills/`，无需 spy。测试断言用 `skillsDir = path.join(tmpRoot, 'skills')` 路径。
+1. **getWorkspace 取代 listWorkspaces().find**：brief 骨架用 `listWorkspaces().find(w => w.id === ...)`，实现改用 `getWorkspace(session.workspaceId)`（PK 单行查询，结果等价）；按 brief"多余 import 收敛"条款删掉了未用的 `getSessionMembersInfo`/`listWorkspaces` import。
+2. **conflict 推送用注入的 mainWindow 而非 `BrowserWindow.getAllWindows()[0]`**：与 pushMessageRow 统一单一窗口来源；使模块对 electron 仅 type-only import——测试进程无 Electron 运行时也能加载（无需 vi.mock('electron')）。生产行为等价（main/index.ts 建窗后立即注入）。
+3. **p2p SyncMessage 仍用 `roomId` 字段名**：按任务指示值映射 `sessionId → roomId`（调用点 + 实现处注释标记），p2p 模块未动（阶段三重构范围）。
+4. **SessionRouter 为本地结构接口**而非 import RouterService 类型——避免 agent ↔ im 循环引用风险；RouterService 结构满足该契约（router-bootstrap 直接注入，typecheck 证实）。
+5. **hook 注释说明**：ConflictDeps.findInProgressTaskByRoom 的新 doc 注释为必要接口文档（名字保留 Room、参数已 session 化的非显然错位），符合本文件既有全量中文 doc 惯例。
 
-### Step 3：确认 RED ✓
+## Files Touched
+- `electron/src/main/im/session-service.ts` — 新增（核心模块）
+- `electron/tests/im/session-service.test.ts` — 新增（14 用例）
+- `electron/src/main/agent/router-bootstrap.ts` — setSessionRouter 注入/清理两处
+- `electron/src/main/index.ts` — setSessionMainWindow 一处
+- `electron/src/main/task/conflict-detector.ts` — 参数名 roomId→sessionId + doc 同步
 
-```
-FAIL  tests/skill/upload-zip.test.ts
-Error: Failed to load url ../../src/main/skill/zip-uploader ... Does the file exist?
-Tests  0  (模块不存在)
-```
-
-### Step 4：实现 zip-uploader.ts ✓
-
-**uploadSkillZip 核心逻辑**：
-1. AdmZip 解析 buffer
-2. 找全部 SKILL.md entry（`endsWith('/SKILL.md')` 或 `=== 'SKILL.md'`）
-3. 0 个 → 抛 "未找到 SKILL.md"；>1 个 → 抛 "根目录包含多个子目录"
-4. 从 SKILL.md 路径提取 slug（`<slug>/SKILL.md` → slug；`SKILL.md` → 'unnamed'）
-5. 路径防御：slug 含 `..`、`/`、`\` 拒绝
-6. js-yaml 解析 frontmatter 取 description
-7. SHA256(buffer) 幂等检查：读 `<targetDir>/.sha256`，匹配则直接返回
-8. 覆盖：旧目录 rename 到 `.bak.<timestamp>` 后立即 rmSync 清理
-9. 解压：每个 entry 剥离 `<slug>/` 前缀，三层路径防御（entryName `..` + rel `..` + resolved path 沙箱检查）
-10. 写 `<targetDir>/.sha256` 标记
-
-**listInstalled 三源合并**：
-1. **builtin**：扫描 `resolveBuiltinSkillsDir()`（dev=`<repo>/electron/resources/skills/`，packaged=`process.resourcesPath/skills`）下有 SKILL.md 的子目录。当前无此目录 → 返回空。
-2. **marketplace**：从 `skill_definitions` 表读。try/catch 包裹——DB 未初始化或表不存在时返回空（不阻断 listInstalled）。
-3. **custom**：扫描 `<skillsDir>/` 下有 `.sha256` 标记文件的子目录。
-
-**deleteCustomSkill**：
-- slug 路径防御（`..`、`/`、`\`、空串拒绝）
-- 检查 `<targetDir>/.sha256` 存在——不存在说明不是 custom 上传，抛错
-- rmSync 删除整个 targetDir
-
-### Step 5：IPC handler 注册 ✓
-
-新建 `electron/src/main/skill/ipc.handlers.ts`，在 `ipc/index.ts` 注册。
-
-### Step 6：renderer 绑定 ✓
-
-- `renderer/src/ipc/types.d.ts`：InstalledSkill 接口 + ApiSurface.skill 命名空间
-- `electron/src/preload/index.ts`：skill 命名空间（listInstalled / uploadZip / deleteCustom）
-
-### Step 7：测试 + typecheck ✓
-
-```
-electron vitest: 80 files / 526 tests — ALL PASSED
-renderer vitest: 26 files / 244 tests — ALL PASSED
-typecheck (双 workspace): clean
-```
-
-## Self-Review
-
-### 1. listInstalled 三类来源如何区分？
-
-| 来源 | 数据源 | 判定方式 |
-|---|---|---|
-| **builtin** | `<resources>/skills/*/SKILL.md` | 扫描内置目录（应用打包自带） |
-| **marketplace** | `skill_definitions` 表 | DB 查询（市场安装时 installer.ts 写入此表） |
-| **custom** | `<userData>/skills/*/` | 子目录内存在 `.sha256` 标记文件 |
-
-**custom 靠 `.sha256` 标记区分**：uploadSkillZip 写此文件，marketplace installer 不写（installer 写 `skill_definitions` 表 + cache_path 在别处）。即使 marketplace 安装的 cache_path 恰好在 `<userData>/skills/` 下（当前不会），没有 `.sha256` 文件就不会被误判为 custom。
-
-### 2. SHA256 文件位置（`<targetDir>/.sha256`）是否合理？
-
-**合理**。理由：
-- 不污染 SKILL.md 目录结构：`.sha256` 是隐藏文件（dot 前缀），SkillRegistry 的 `register()` 只找 `SKILL.md`，不读 `.sha256`
-- 自包含：删除 custom skill 时 rmSync 整个 targetDir，.sha256 一并清理，无孤儿
-- 区分标记：listInstalled 和 deleteCustomSkill 都通过 `.sha256` 存在性判断 source=custom
-
-### 3. 路径防御（`..` 检测）是否覆盖所有 entry？
-
-**三层防御**：
-1. **entryName 层**：`entry.entryName.includes('..')` → 跳过
-2. **rel 层**（剥离 slug 前缀后）：`rel.includes('..')` → 跳过
-3. **resolved path 沙箱层**：`path.resolve(dest)` 必须等于或在 `path.resolve(targetDir) + path.sep` 之下 → 否则跳过
-
-slug 自身也检查：`slug.includes('..') || slug.includes('/') || slug.includes('\\')` → 抛错。
-
-deleteCustomSkill 的 slug 同样做 `..` + 分隔符 + 空串检查。
-
-### 4. preload 是否需要新绑定？
-
-**是**。新增 3 个：
-- `skill.listInstalled()` → `skill:listInstalled`
-- `skill.uploadZip(buffer, filename)` → `skill:uploadZip`（注意 ArrayBuffer → Buffer.from 转换）
-- `skill.deleteCustom(slug)` → `skill:deleteCustom`
-
-ApiSurface 类型同步扩展，typecheck 双 workspace clean。
-
-### 5. vi.spyOn 调整说明
-
-brief 原文用 `vi.spyOn` mock `getSkillsDir`。实测在 vitest CJS 环境下同模块导出函数的 spy 无法拦截内部直接调用。改用 `process.env.AP_USER_DATA_DIR` 环境变量隔离模式（仓库 T1-T6 全部测试的标准做法），`getSkillsDir()` 仍导出（内部调用 `resolveSkillsDir()` 读环境变量）。功能完全等价，测试隔离更干净。
-
-## 测试摘要
-
-| 测试 | 结果 |
-|---|---|
-| upload-zip.test.ts (7 cases) | ✓ ALL PASS |
-| electron 全套 (80 files / 526 tests) | ✓ ALL PASS |
-| renderer 全套 (26 files / 244 tests) | ✓ ALL PASS |
-| typecheck (electron + renderer) | ✓ clean |
+## Concerns / 移交后续
+- `im:conflict` / `session:message` 推送依赖注入窗口存活；窗口重建（macOS activate）时 mainWindow 引用可能过期——与 sync-manager/stream-relay 现状一致的已知限制，Task 11/12 统一治理窗口注入生命周期
+- eventType 字符串 'm.room.message' 保留（renderer 渲染分支依赖），P2 收敛命名时统一改

@@ -1,202 +1,100 @@
-# Task 5 Report：resource IPC handlers + preload + renderer types
+# Task 5 Report: 内部事件桥——runtime-entry 的 dispatch/task_reply 脱离 Matrix 传输
 
-**Commit:** 见文末
-**Base:** `36203b7`（T4 已合）
-**Status:** ✅ 完成
+## 1. Status
 
-## 实施摘要
+**DONE**
 
-5 个文件改动（+1 新建测试），共实现 v1.7 资源库 4 个 IPC 通道 + preload 命名空间 + renderer 类型。
-
-| 文件 | 改动 | 行号 |
-|---|---|---|
-| `electron/src/main/resource/ipc.handlers.ts` | **新建** | 1-77（77 行） |
-| `electron/src/main/ipc/index.ts` | +2 行（import + register 调用） | L17, L39 |
-| `electron/src/preload/index.ts` | +21 行（import 扩展 + resource 子对象） | L1-12, L164-177 |
-| `renderer/src/ipc/types.d.ts` | +83 行（4 类型 + ApiSurface.resource） | L344-420（类型）, L671-680（ApiSurface） |
-| `electron/tests/resource/ipc-handlers.test.ts` | **新建** | 1-155（7 用例） |
-
-## TDD 5 步输出
-
-### Step 1-2：RED（写测试 → 确认失败）
+## 2. Commit
 
 ```
-FAIL  tests/resource/ipc-handlers.test.ts
-Error: Failed to load url ../../src/main/resource/ipc.handlers
-```
-模块不存在 → 期望失败 ✓
-
-### Step 3-6：GREEN（实现 → 确认通过）
-
-```
-✓ tests/resource/ipc-handlers.test.ts  (7 tests) 6ms
-
-Test Files  1 passed (1)
-     Tests  7 passed (7)
+19f7903 feat(agent): 内部事件桥——dispatch/task_reply 脱离 Matrix 传输
 ```
 
-7 个用例（brief 给 6 个 + "注册 4 个 IPC 通道" 计数用例）全通过。
+10 files changed, +473 / −130（仅含本任务文件；仓库内预存的 `.superpowers/sdd/task-*-report.md` 修改与未跟踪 `docs/2026-08-14-system-feature-inventory.md` 未纳入提交）。
 
-### Step 7：全套验证
+## 3. 变更清单
 
-```
-# electron 全套
-Test Files  86 passed (86)
-     Tests  580 passed (580)
+### 新增
 
-# typecheck（electron + renderer 双 workspace）
-electron typecheck: Done
-renderer typecheck: Done
-```
+| 文件 | 内容 |
+|---|---|
+| `electron/src/main/agent/internal-event.ts` | 子进程侧协议：`INTERNAL_EVENT_MSG`（'momo-internal-event'）+ `InternalEventMsg` 信封 + `sendInternalEvent`（`process.send?.()`）+ 便捷构造器 `sendDispatchEvent` / `sendTaskReplyEvent` / `sendAbortDispatchEvent`（eventType 分别绑定 dispatch.ts 三个常量） |
+| `electron/src/main/agent/internal-event-bridge.ts` | 主进程侧桥：`setBridgeRouter(svc \| null)` 注入 RouterService；`handleChildMessage(msg)` 识别内部事件 → 构造 InternalEvent 形状（getType/getContent/getSender/getRoomId 四个闭包访问器）→ `routeEvent(event, 'owner', null)` fire-and-forget（带 `.catch` 兜底防 unhandled rejection）。RouterService 未注入时 warn + 返回 true（消费丢弃）；非内部事件返回 false |
 
-零 typecheck 错误，零 LSP diagnostics。
+### 修改
 
-### Step 8：commit
+| 文件 | 变更 |
+|---|---|
+| `runtime-entry.ts` | ① `main()` 重构：task-driven 分支**不再创建 Matrix client**（无 createClient/startClient/waitForPrepared/joinRoom/MyMembership 监听），只 build ctx + 注册 task-config/shutdown listener；v1 fallback 分支整段保留原 client 用法（标注 Task 13 删除边界）。② `runTaskChatLoop(cfg, config, ctx)` 去掉 client 参数，内部传 `null` 给 runChatLoop。③ `runChatLoop` / `executeTool` / `doExecuteTool` / `executeDispatch` 的 client 参数放宽为 `MatrixClient \| null`。④ `executeDispatch` 发送分流：client 非空 → 原 Matrix sendEvent（v1 行为不变）；null → `sendDispatchEvent(teamRoomId, config.botUserId, {...dispatch.content})`（展开满足 Record 索引签名）。abort 同理走 `sendAbortDispatchEvent`。⑤ `sendFinalMessage` client 为 null 时 early return（task-driven 最终消息不发 Matrix——SQLite 由 chunk 路径 routeChunkToBuffer 承载，spec §4.1 ③）；task_complete 分段 sendEvent 包进 `if (client)`。⑥ v1-only 的 `handleEvent` / `handleDispatch`（含其 task_reply Matrix 发送）完全未动 |
+| `runtime-spawner.ts` | messageHandler 首行前置 `if (handleChildMessage(msg)) return;`——内部事件优先转桥，已消费不进 chunk 通道 |
+| `router-bootstrap.ts` | `ensureRouterService` 末尾 `setRouterService(currentRouterService)` → `setBridgeRouter(currentRouterService)`；`destroyRouterService` → `setBridgeRouter(null)`；删除 sync-manager import。**sync-manager 侧 `setRouterService` 导出保留**（Task 12 删除），router-bootstrap 不再调用它 |
+| `init-runtime.ts` | 仅注释更新（注入目标说明 + 循环依赖描述修正） |
 
-见文末 commit hash。
+### 测试适配（场景覆盖全部保留）
 
-## Self-Review
+| 文件 | 变更 |
+|---|---|
+| `tests/agent/router-bootstrap.test.ts` | mock 目标 sync-manager → internal-event-bridge；5 个场景断言 `setBridgeRouter`（首次启动传 RouterService 实例 / 幂等 1 次 / 空 runners no-op / destroy 传 null / destroy no-op） |
+| `tests/integration/router-lazy-init.test.ts` | 同上——vi.hoisted mock 换到 internal-event-bridge 的 `setBridgeRouter`；3 个场景（initTaskDrivenRuntime 批量恢复 / startAgentRuntime 单启动 / 2 agents 幂等 1 次）断言不变 |
+| `tests/agent/runtime-task-driven.test.ts` | 适配新签名：8 处调用去掉 `mockClient()` 参数，删除 mockClient helper 与 MatrixClient import；场景全部保留 |
 
-### Q1：4 个 IPC 通道都注册？
+## 4. TDD 记录
 
-✅ 是。`ipc.handlers.ts` 注册 `resource:list` / `resource:getDetail` / `resource:install` / `resource:delete`。
-测试用例 "注册 4 个 IPC 通道" 用 `arrayContaining` 验证。
+- **RED**：先写 `tests/agent/internal-event-bridge.test.ts`（9 用例），运行失败——`Failed to load url ../../src/main/agent/internal-event-bridge`（模块不存在，预期失败原因）。
+- **GREEN**：实现两模块后单跑 9/9 通过。
 
-### Q2：resource:delete 按 source+type 路由正确？
+新增测试覆盖：
+1. dispatch 内部事件 → routeEvent 以正确 InternalEvent 形状调用（type/content/sender/roomId + 'owner' + null）
+2. task_reply / abort_dispatch eventType 透传
+3. StreamChunk / task-end / null / 字符串 / 数字 / 缺 eventType → false 不消费
+4. RouterService 未注入 → true + 不抛错
+5. routeEvent reject → 无 unhandled rejection
+6. sendDispatchEvent / sendTaskReplyEvent / sendAbortDispatchEvent → process.send 信封契约（type/eventType/sessionId/sender/content）
+7. process.send 缺失（非 fork）→ 不抛错
 
-✅ 正确。路由表：
+## 5. 验证输出
 
-| source | type | 底层函数 | 传参 | 测试断言 |
-|---|---|---|---|---|
-| builtin | * | 抛错 | — | `/系统预置不可移除/` ✓ |
-| marketplace | * | `uninstallPackage(item.id)` | ResourceItem.id | `'marketplace-skill-remote'` ✓ |
-| custom | mcp | `deleteRegistered(item.slug)` | slug | `'github'` ✓ |
-| custom | skill | `deleteCustomSkill(item.slug)` | slug | `'xlsx'` ✓ |
-| custom | agent | `deleteDefinition(item.slug)` | slug | `'uuid1'` ✓ |
-
-**注意**：`uninstallPackage` 传 `item.id`（不是 slug），与 brief 示例代码 `uninstallPackage(item.slug)` 不一致——**以测试为准**。测试明确断言 `expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote')`，其中 `'marketplace-skill-remote'` 是 ResourceItem.id 而非 slug `'remote'`。
-
-错误文案采用 `${sourceLabel(item.source)}不可移除：「${item.name}」` 格式，对 builtin 即 `系统预置不可移除：「PM」`，满足测试 regex `/系统预置不可移除/`（连续子串匹配）。
-
-### Q3：preload api.resource 与 types.d.ts ApiSurface.resource 对齐？
-
-✅ 完全对齐。
-
-| 方法 | preload 签名 | ApiSurface 签名 | 通道 |
-|---|---|---|---|
-| list | `(filter?) => invoke<ResourceItem[]>('resource:list', filter)` | `(filter?) => Promise<ResourceItem[]>` | resource:list |
-| getDetail | `(id) => invoke<ResourceItem \| null>('resource:getDetail', id)` | `(id) => Promise<ResourceItem \| null>` | resource:getDetail |
-| install | `(id) => invoke<void>('resource:install', id)` | `(id) => Promise<void>` | resource:install |
-| delete | `(id) => invoke<void>('resource:delete', id)` | `(id) => Promise<void>` | resource:delete |
-
-typecheck 双 clean 证实类型对齐。
-
-### Q4：installPackage 实际签名？handler 怎么调？
-
-**实际签名**：`installPackage(item: MarketplaceItem, _workspaceId?: string)` — 接受完整 `MarketplaceItem` 对象（不是 itemId 字符串）。
-
-**handler 调用方式**：
-```typescript
-// resource:install handler 内部
-const item = await resolveResourceById(id);        // 拿到 ResourceItem
-if (item.source !== 'marketplace') throw ...;       // 仅 marketplace 支持安装
-const catalog = await fetchCatalog();               // 拉 catalog
-const catalogItem = catalog.items.find(ci => ci.slug === item.slug);  // 按 slug 找原 item
-return installPackage(catalogItem);                 // 传完整 MarketplaceItem
-```
-
-**原因**：`ResourceItem` 不携带 `downloadUrl` / `checksum` 等 marketplace 字段（这些在 `marketplace` namespace 里但格式不同），而 `installPackage` 需要这些字段执行下载+校验。故 fetchCatalog 还原原 `MarketplaceItem` 再传入。
-
-**测试覆盖**：brief 测试未对 install 路由做断言（mock installPackage 但无 expect），实现按真实签名正确编写。
-
-## 文件清单
-
-- `electron/src/main/resource/ipc.handlers.ts`（新建，77 行）
-- `electron/src/main/ipc/index.ts`（+2 行：import + register）
-- `electron/src/preload/index.ts`（+21 行：import + resource 命名空间）
-- `renderer/src/ipc/types.d.ts`（+83 行：ResourceType/Source/Filter/Item + ApiSurface.resource）
-- `electron/tests/resource/ipc-handlers.test.ts`（新建，7 用例）
-
-## Commit
-
-见实际 commit hash。
-
-## Concerns
-
-1. **`uninstallPackage(item.id)` 的实际 DB 行为可能有问题**（非本 task 阻塞项）:
-   `uninstallPackage` 底层按 `installed_packages.item_id` 查删，而 `item_id` 在 `installPackage` 时存的是 `MarketplaceItem.id`（catalog.json 内的 id，例如 UUID 或数字）。但 `ResourceItem.id` 是 `${source}-${type}-${slug}` 格式。两者可能不一致，导致真实卸载失败。测试因 mock 而通过。**修复方向**：要么在 ResourceItem 中保留原 MarketplaceItem.id，要么改 uninstallPackage 按 slug 查删——属后续 task 范畴。
-
-2. **`resource:install` 无测试断言**：brief 未提供 install 路由的 expect，仅 mock。实现按 `installPackage(MarketplaceItem)` 真实签名编写（fetchCatalog + 按 slug 找原 item），逻辑正确但缺自动化回归保护。建议后续 Phase 2 补 install 集成测试。
-
-## Fix: uninstallPackage 参数 bug
-
-**Reviewer 发现（Important）**：`resource:delete` 的 marketplace 分支 `uninstallPackage(item.id)` 传错了参数——`item.id` 是 `ResourceItem.id`（buildResourceId 生成的 `'marketplace-skill-remote'`），但 `uninstallPackage` 按 `installed_packages.item_id` 查删，该列存的是 catalog 的 `MarketplaceItem.id`（opaque，如 `'skill-code-review'`）。两者不同 → DB 查无此行 → `if (!row) return;` 静默 no-op → 用户以为删成功但实际没删。
-
-**测试假绿原因**：原测试 `expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote')` 是自我指涉——既 mock 了 uninstallPackage 又断言它收到了 buggy 实现传入的同一个值，所以无论实现传什么都能通过。
-
-### 修复前后对比
-
-**`electron/src/main/resource/ipc.handlers.ts`** `resource:delete` marketplace 分支：
-
-```diff
--      case 'marketplace':
--        // uninstallPackage 按 installed_packages.item_id 查找；ResourceItem.id 即资源全局 id
--        return uninstallPackage(item.id);
-+      case 'marketplace': {
-+        // 警告：uninstallPackage 按 installed_packages.item_id 查删——该列存的是 catalog 的
-+        // MarketplaceItem.id（opaque），不是 ResourceItem.id。直接传 item.id 会查无此行 →
-+        // 静默 no-op（用户以为删成功但实际没删）。须 fetchCatalog 按 slug 反查 catalog 原 id。
-+        const catalog = await fetchCatalog();
-+        const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
-+        if (!catalogItem) {
-+          throw new Error(`marketplace catalog 中未找到 slug=${item.slug}（可能 catalog 已变更）`);
-+        }
-+        return uninstallPackage(catalogItem.id);
-+      }
-```
-
-模式与 `resource:install` handler 完全一致——都通过 `fetchCatalog` + slug 反查 catalog 原 item。
-
-### 测试断言改动
-
-**`electron/tests/resource/ipc-handlers.test.ts`**：
-
-1. 新增 `vi.mock('../../src/main/marketplace/client', ...)`，返回含 slug=`'remote'` 的 catalog item，**id 刻意设为 `'catalog-id-remote'`（不同于 ResourceItem.id `'marketplace-skill-remote'`）**——这样断言可区分两种 id，回归保护 buggy 实现重新出现。
-
-2. 测试名改：`marketplace-* 路由到 uninstallPackage` → `marketplace-* 路由到 uninstallPackage（传 catalog id，非 ResourceItem.id）`
-
-3. 断言改：
-```diff
--    expect(uninstallPackage).toHaveBeenCalledWith('marketplace-skill-remote');
-+    expect(uninstallPackage).toHaveBeenCalledWith('catalog-id-remote');
-```
-
-**关键**：若有人把 handler 改回 `uninstallPackage(item.id)`，断言 `catalog-id-remote` != 实参 `'marketplace-skill-remote'`，测试立刻失败 → 真正的回归保护（不再是自我指涉）。
-
-### 测试运行结果
+### 聚焦测试
 
 ```
-# 单文件（target test）
-✓ tests/resource/ipc-handlers.test.ts  (7 tests) 6ms
-Test Files  1 passed (1)
-     Tests  7 passed (7)
-
-# electron 全套
-Test Files  86 passed (86)
-     Tests  580 passed (580)
-
-# typecheck（electron + renderer 双 workspace）
-electron typecheck: Done
-renderer typecheck: Done
+tests/agent/internal-event-bridge.test.ts   9 passed
+tests/agent/router-bootstrap.test.ts        5 passed（适配后）
+tests/integration/router-lazy-init.test.ts  3 passed（适配后）
+tests/agent/runtime-spawner.test.ts         2 passed
+tests/agent/runtime-task-driven.test.ts     9 passed（签名适配后）
+tests/agent/dispatch-fresh-session.test.ts  4 passed（未改——仍以 client 调 runChatLoop，v1 路径）
+tests/agent/runtime-stream.test.ts         22 passed（未改——断言 Matrix sendEvent 的 dispatch 场景走 client 非 null 分支）
+tests/agent/runtime-segment.test.ts         5 passed
+tests/integration/task-driven-dispatch-chain.test.ts 5 passed（未改）
+tests/agent/abort-dispatch.test.ts + runtime-entry-routing.test.ts + dispatch.test.ts 14 passed
 ```
 
-零 typecheck 错误，零测试回归。
+### 全量门禁
 
-### Commit
+```
+typecheck（root，双 workspace）：electron Done / renderer Done
+electron 全套：Test Files 139 passed (139) / Tests 919 passed (919)
+renderer 全套：Test Files 50 passed (50) / Tests 407 passed (407)
+lsp_diagnostics（5 个改动源文件）：zero errors
+```
 
-见实际 commit hash（本节对应 fix commit）。
+## 6. 设计决策与理由
 
-### 修复后 Concerns 状态
+1. **共享函数按 client 是否为 null 分流，而不是无条件替换 sendEvent**：`runChatLoop → executeTool → doExecuteTool → executeDispatch` 链路被 v1（taskDriven=false）与 task-driven 两模式共享，而 v1 子进程由 runtime-manager 自己 fork + message handler 管理（不走 runtime-spawner，未接桥）。无条件替换会静默打断 v1 dispatch。因此 task-driven 传 null 走内部事件桥、v1 传真实 client 保持 Matrix 传输——精确满足"v1 分支不动、task-driven 脱离 Matrix"。v1 分支（main() else 段 + handleEvent + handleDispatch）零改动，Task 13 整体删除。
+2. **sender 字段用 `config.botUserId`**：Task 2 后 RuntimeConfig 仍为 `botUserId`（parseConfig 确认）；代码注释标注 Task 10 更名 agentUserId 后同步替换。RouterService 当前路由不消费 getSender()（dispatch 按 content.dispatch_to 反查、task_reply 按 content.reply_to），sender 为信息性字段。
+3. **bridge 的 routeEvent 加 `.catch` 兜底**：RouterService.routeEvent 内部已 try/catch，但 IPC handler 内 fire-and-forget 若遇极端 reject 会成 unhandled rejection——加 catch + logger.error 更稳（brief 代码按仓库实际微调）。
+4. **m.room.message 最终/分段发送在 task-driven 下直接跳过而非删除代码**：sendFinalMessage 顶部 `if (!client) return`、分段 send 包 `if (client)`——效果等同"删除 task-driven 完成路径的 Matrix 发送"，同时 v1 行为逐字节不变。
+5. **router-bootstrap 不再调 setRouterService 是有意为之**：sync-manager /sync → RouterService 的 m.room.message 路由在本任务后断开（用户聊天入口由后续任务重建为非 Matrix 入口）；sync-manager 导出与 InternalEvent(RoutedEvent) import 保留至 Task 12。与 brief 指令一致。
 
-- Concern #1（`uninstallPackage` 参数 bug）：✅ **已修复**。改为 fetchCatalog 按 slug 反查 catalog id，与 install handler 一致。
-- Concern #2（`resource:install` 无测试断言）：🔲 **仍未覆盖**。本 fix 未触及 install 分支测试，建议后续 task 补 install 路由的 expect 断言（mock fetchCatalog + installPackage，验证 `installPackage` 收到完整 MarketplaceItem 对象）。
+## 7. Concerns / 移交后续任务
+
+1. **sync-manager 路由断开（预期中间态）**：m.room.message → RouterService 的链路随 setRouterService 解绑而失效，task-driven agent 暂不响应 Matrix 用户消息——待后续任务以新输入源（IPC/直连）重建用户聊天入口。
+2. **task-driven 模式 task_reply 发送侧未接**：sub-agent 的 runTaskChatLoop 仍只发 task-end IPC（PM 等待侧 handleTaskReply 的 'task-reply' IPC 消费链也未在 task-driven 分支注册）。`sendTaskReplyEvent` 已就绪但暂无 runtime-entry 调用点（v1 的 handleDispatch 用 Matrix 发送且不动）——后续任务接通 sub 完成回执时使用。
+3. **abort_dispatch 经桥到达 RouterService.routeAbortDispatch 仍是 TODO(T8) stub**（仅日志）；与 Matrix 时代行为等价（v1 子监听 Matrix event；task-driven 中断走 AgentRunner.abortStream IPC）。
+4. **PM dispatch 等待侧**：pendingReplies 由 handleTaskReply 消费，task-driven 下需后续任务把 notifyTaskReply 的 'task-reply' IPC 接到该函数（本任务范围外）。
+
+## 8. 自审结论
+
+- runtime-entry 全部 `client.sendEvent` 逐一核验：v1-only（handleEvent 错误回复 683；handleDispatch task_reply 716/770/784）与 client 分支或早退守卫（1039 分段、1462/1472 最终消息、1742 abort、1761 dispatch）两类，task-driven 路径零 Matrix 传输。
+- runtime-manager.ts 的 `handleChildMessage`（L621）是 v1 路径的同名局部函数，与桥导出无冲突。
+- 提交范围干净：不含预存报告改动与无关文档。
