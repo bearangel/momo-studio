@@ -582,3 +582,32 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - #3 会话草稿：Map keyed by sessionId 切换保存恢复
 - #1 邀请列表冷启动空：MainLayout 挂载即载 assignments（CDP 复现排除主链路后定位）
 - 回归锁 +8；1088 + 586 全绿
+
+## v2 fix: dispatch-parallel（2026-08-25）
+
+Plan: docs/plans/2026-08-25-dispatch-parallel.md
+Spec: docs/specs/2026-08-25-dispatch-parallel-design.md
+Base commit: 35aa86d
+
+### Task 1: complete (commits 35aa86d..d95a9df 含 plan/report docs 提交, review clean)
+- dispatch-parallel.test.ts 478 行 8 用例：4 红（并发派发先后/chip 同时出现/sub-budget 均分/批次中断）/ 4 绿（回填顺序/预算截断/混排/重复检测）——精确命中 brief 预期
+- 审查员字节级比对 brief 代码一致 + 自跑 typecheck clean + 串行执行推演验证 4 红断言必红
+- Minor（defer→终审清单）：① test2 第三断言 10ms/50ms 时序敏感（brief 代码固有）② test6 残留 500ms 迟到回执（无害）③ 报告措辞两处（harness 未导出/mock 不读 this）④ 实现者跳过 typecheck（审查员已补验 clean）
+
+### Task 2: complete (commits d95a9df..d8b6c7e, review clean)
+- runtime-entry.ts 三段式重构（+167/−58）：execDispatchCall 闭包 / 游标 while / 段扫描截断 / allSettled 并发 / 保序回填 / 预算预扣均分
+- 回归锁 4 红→全绿 8/8；6 既有套件 53/53 零回归；typecheck 双 clean
+- 审查员独立推演 6 项并发风险全过（保序/中断/预算/游标完备/重复窗口/dispatchInfo 独立）+ 2 项 out-of-diff 核查（无未推进 continue / executeTool async 无同步抛）
+- Minor（defer→终审清单）：① ti++;continue 单行写法（brief 逐字）② 段边界 abort 检查比旧串行更严格（settle 后 race 窗口内也立即 interrupted，§6.1 设计如此）③ 报告 Concern 3 推理略过度（代码正确）
+
+### Task 3: complete (commits d8b6c7e..3a6750e, review clean)
+- pm-agent.yaml 文案替换 + formatDispatchHint 第 5 条教学 + 测试 2 用例（TDD 红 1/9 → 绿 10/10）
+- brief Step 2「其余 10 条」为计划笔误（8+2=10，红阶段应 1 红 9 绿）——实现者正确诊断未盲从
+- Minor（defer→终审清单）：① YAML 教学文案无回归锁（brief 未要求，3 文件约束内不可加）② 用例 2 只锁 OR 早退分支的非 main 侧（main+空 subAgents 侧未锁，brief 代码如此）
+
+### Task 4: complete (验收通过，无代码改动)
+- electron 全量 154 files / 1195 tests 全绿零 flake；typecheck 双 clean；契约面 diff（dispatch.ts/stream-chunk.ts/preload/renderer）空输出
+- 计数疑问已解：基线 dd2ad82 = 153 文件/1185 用例（计划中 1084 为 ledger 陈旧数字），+1 文件/+10 用例与本分支吻合
+- 控制者亲自复跑新测试 10/10 绿 + 分支改动面核对（恰为预期 7 文件）
+
+## dispatch-parallel 全部 4 Task 完成（35aa86d..3a6750e + 验收）——待终审
