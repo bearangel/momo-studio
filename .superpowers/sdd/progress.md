@@ -506,3 +506,8 @@ Base commit: 9add711
 
 症状 #2（重启后用户消息消失）：主进程数据层完全健康；DB 直查确认 user+agent 两行均在。
 renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
+
+### P0-4（8fbb744 后续）：重启后用户消息不可见
+- 根因：hydrateFromEvents 对零事件消息灌入 aggregateEvents([]) 默认 streaming 状态
+- 用户 DB 实证：owner 消息全部落库正常（3 session 全有配对行）——纯 renderer 显示层
+- 修复 + 回归锁 ×3；遗留：孤儿 streaming 行（崩溃时代数据）不改（与 P1 restart-consistency 语义冲突）
