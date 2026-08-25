@@ -16,6 +16,7 @@
 // 对 electron 仅做 type-only import——模块在测试进程（无 Electron 运行时）可安全加载。
 
 import { insertMessage, type MessageRow } from '../storage/messages/repo';
+import { getDb } from '../storage/db';
 import { getSession, listSessionMembers, touchSessionLastMessage } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
 import { broadcastLocalMessage } from '../p2p';
@@ -67,10 +68,24 @@ export function broadcastRuntimeChanged(): void {
  * 该守卫在结构上已满足，无需重复判断。
  */
 export function resolveTarget(sessionId: string, mentionedAssignmentIds: string[]): string | null {
-  const members = listSessionMembers(sessionId).map((m) => m.assignmentId);
-  const mentioned = mentionedAssignmentIds.find((id) => members.includes(id));
+  // JOIN 拿成员 role（PM 接待判定需要）；listSessionMembers 只返回 assignmentId
+  const memberRows = getDb()
+    .prepare(
+      `SELECT sm.assignment_id, aa.role
+       FROM session_members sm
+       JOIN agent_assignments aa ON sm.assignment_id = aa.instance_id
+       WHERE sm.session_id = ?
+       ORDER BY sm.added_at ASC`,
+    )
+    .all(sessionId) as Array<{ assignment_id: string; role: string }>;
+  const memberIds = memberRows.map((m) => m.assignment_id);
+  const mentioned = mentionedAssignmentIds.find((id) => memberIds.includes(id));
   if (mentioned) return mentioned;
-  if (members.length === 1) return members[0]!; // 单成员会话：发言即应答
+  if (memberIds.length === 1) return memberIds[0]!; // 单成员会话：发言即应答
+  // 2.0.0 要求：普通多成员会话含 PM（role=main）→ PM 自动接待（无需 @）；
+  // 多 PM 取加入序第一个。仅 @ 别人仍优先（上面 mention 分支）。
+  const pm = memberRows.find((m) => m.role === 'main');
+  if (pm) return pm.assignment_id;
   const session = getSession(sessionId);
   if (!session) return null;
   const ws = getWorkspace(session.workspaceId);

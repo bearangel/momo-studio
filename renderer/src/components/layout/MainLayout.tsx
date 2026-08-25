@@ -34,6 +34,14 @@ export function MainLayout() {
     };
   }, [loadSessions]);
 
+  // 冷启动主动加载 assignments：RoomList 新建房间的邀请候选消费它——
+  // 此前仅在 onRuntimeChanged 推送时加载，重启后直接新建房间会看到空邀请列表，
+  // 切到 Agent 视图（WorkspaceAgentsPanel 挂载加载）再切回才恢复
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  useEffect(() => {
+    if (activeWorkspaceId) void loadAssignments(activeWorkspaceId);
+  }, [activeWorkspaceId, loadAssignments]);
+
   // 主进程在 agent 运行态变化（自动恢复完成/启停）时通知，重新加载 assignments，
   // 让 assignment.lastRunning 反映最新状态
   useEffect(() => {

@@ -66,18 +66,19 @@ function seedAgentDef(
   ).run(id, name, name.toLowerCase(), '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖');
 }
 
-/** 写入一条 agent_assignments 行。 */
+/** 写入一条 agent_assignments 行。role 缺省 standalone。 */
 function seedAssignment(
   db: ReturnType<typeof getDb>,
   instanceId: string,
   workspaceId: string,
   defId: string,
+  role: 'standalone' | 'main' | 'sub' = 'standalone',
 ): void {
   db.prepare(
     `INSERT INTO agent_assignments
        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
-     VALUES (?, ?, ?, ?, 1, 'standalone', 0)`,
-  ).run(instanceId, workspaceId, defId, `@${instanceId}:s`);
+     VALUES (?, ?, ?, ?, 1, ?, 0)`,
+  ).run(instanceId, workspaceId, defId, `@${instanceId}:s`, role);
 }
 
 /** duck-typed 假窗口：收集 webContents.send 调用（session:message / im:conflict）。 */
@@ -366,5 +367,64 @@ describe('sendUserMessage 全链', () => {
     const rows = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(s.id) as unknown[];
     expect(rows).toHaveLength(1);
     expect(routeUserChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('resolveTarget 分支2.5（2.0.0 要求）：普通多成员会话含 PM → PM 自动接待', () => {
+  it('PM + sub 两个成员的普通会话，无 @ 消息 → 路由到 PM', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-pm', 'PM');
+    seedAgentDef(db, 'def-sub', 'Sub');
+    seedAssignment(db, 'inst-pm', 'ws1', 'def-pm', 'main');
+    seedAssignment(db, 'inst-sub', 'ws1', 'def-sub', 'sub');
+    const s = insertSession({ workspaceId: 'ws1', title: '普通群' });
+    addSessionMember(s.id, 'inst-pm');
+    addSessionMember(s.id, 'inst-sub');
+
+    expect(resolveTarget(s.id, [])).toBe('inst-pm');
+  });
+
+  it('无 PM 的多成员会话（两个 standalone）→ 不路由（保持原语义）', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedAgentDef(db, 'def-b', 'B');
+    seedAssignment(db, 'inst-a', 'ws1', 'def-a');
+    seedAssignment(db, 'inst-b', 'ws1', 'def-b');
+    const s = insertSession({ workspaceId: 'ws1', title: '普通群' });
+    addSessionMember(s.id, 'inst-a');
+    addSessionMember(s.id, 'inst-b');
+
+    expect(resolveTarget(s.id, [])).toBeNull();
+  });
+
+  it('多 PM 时取第一个 main 成员（加入序）', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedAgentDef(db, 'def-b', 'B');
+    seedAssignment(db, 'inst-a', 'ws1', 'def-a', 'main');
+    seedAssignment(db, 'inst-b', 'ws1', 'def-b', 'main');
+    const s = insertSession({ workspaceId: 'ws1', title: '双 PM' });
+    addSessionMember(s.id, 'inst-a');
+    addSessionMember(s.id, 'inst-b');
+
+    expect(resolveTarget(s.id, [])).toBe('inst-a');
+  });
+
+  it('@ 指定其他成员优先于 PM 自动接待', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-pm', 'PM');
+    seedAgentDef(db, 'def-sub', 'Sub');
+    seedAssignment(db, 'inst-pm', 'ws1', 'def-pm', 'main');
+    seedAssignment(db, 'inst-sub', 'ws1', 'def-sub', 'sub');
+    const s = insertSession({ workspaceId: 'ws1', title: '普通群' });
+    addSessionMember(s.id, 'inst-pm');
+    addSessionMember(s.id, 'inst-sub');
+
+    expect(resolveTarget(s.id, ['inst-sub'])).toBe('inst-sub');
   });
 });

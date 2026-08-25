@@ -262,3 +262,50 @@ describe('MentionInput 发送', () => {
     expect(screen.getByText('@PM-agent ×')).toBeInTheDocument();
   });
 });
+
+describe('MentionInput 输入法组合期 Enter（中文拼音选字不误发）', () => {
+  it('isComposing=true 的 Enter 不发送（拼音选字确认）', () => {
+    resetState();
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '你好' } });
+    fireEvent.keyDown(ta, { key: 'Enter', shiftKey: false, isComposing: true } as unknown as Parameters<typeof fireEvent.keyDown>[1]);
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('你好');
+  });
+
+  it('keyCode 229（IME 事件）的 Enter 不发送', () => {
+    resetState();
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'nihao' } });
+    fireEvent.keyDown(ta, { key: 'Enter', keyCode: 229 } as unknown as Parameters<typeof fireEvent.keyDown>[1]);
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('非组合期 Enter 正常发送（回归保护）', () => {
+    resetState();
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'hello' } });
+    fireEvent.keyDown(ta, { key: 'Enter', shiftKey: false, isComposing: false } as unknown as Parameters<typeof fireEvent.keyDown>[1]);
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('hello', undefined);
+  });
+});
+
+describe('MentionInput 会话草稿（切换会话内容隔离）', () => {
+  it('切换会话后输入框显示目标会话的草稿（无则空）', () => {
+    resetState();
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '会话A的草稿' } });
+
+    sessionState.activeSessionId = 'sess-2';
+    rerender(<MentionInput />);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
+
+    sessionState.activeSessionId = 'sess-1';
+    rerender(<MentionInput />);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('会话A的草稿');
+  });
+});

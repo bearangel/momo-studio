@@ -37,6 +37,22 @@ export function MentionInput() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { tasks, load: loadTasks } = useTaskStore();
 
+  // 会话级草稿：切换会话时保存当前草稿、恢复目标会话草稿（无则空）。
+  // 此前 text 是组件本地 state，切会话后内容残留串台。
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  const prevSessionRef = useRef<string | null>(activeSessionId);
+  useEffect(() => {
+    if (prevSessionRef.current === activeSessionId) return;
+    if (prevSessionRef.current !== null) draftsRef.current.set(prevSessionRef.current, text);
+    const next = activeSessionId !== null ? (draftsRef.current.get(activeSessionId) ?? '') : '';
+    setText(next);
+    setMenuType(null);
+    setQuery('');
+    prevSessionRef.current = activeSessionId;
+    // text 刻意不入依赖：仅在会话切换边界执行存取
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
+
   // # 菜单数据接线：task.store 此前仅 TaskBoardView（tasks 视图）加载，
   // IM 视图挂载时主动拉取当前 workspace 的待处理任务
   useEffect(() => {
@@ -150,6 +166,9 @@ export function MentionInput() {
       setMenuType(null);
       return;
     }
+    // 输入法组合期（中文拼音选字等）的 Enter 是选字确认不是发送——
+    // isComposing 或历史 keyCode 229（Safari 等 IME 事件）都跳过
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     // 菜单激活时 Enter 不发送（避免选菜单途中误发），Shift+Enter 换行
     if (e.key === 'Enter' && !e.shiftKey && menuType === null) {
       e.preventDefault();
