@@ -24,6 +24,8 @@ export interface GlobalSettings {
   defaultMultimodalModel?: DefaultModelRef;
   defaultEmbeddingModel?: DefaultModelRef;
   defaultRerankModel?: DefaultModelRef;
+  /** 全局并发任务上限（global_settings 表 v21 单行配置，默认 3）。 */
+  maxConcurrentTasks?: number;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -41,10 +43,16 @@ export function getGlobalSettings(): GlobalSettings {
   const row = db.prepare('SELECT value FROM kv_store WHERE key = ?').get(GLOBAL_KEY) as
     | { value: string }
     | undefined;
+  // 并发上限存独立单行表（migration v21，D 子系统设计），与 kv_store JSON 老字段分源
+  const concurrencyRow = db
+    .prepare('SELECT max_concurrent_tasks FROM global_settings WHERE id = 1')
+    .get() as { max_concurrent_tasks: number } | undefined;
+  const maxConcurrentTasks = concurrencyRow?.max_concurrent_tasks ?? 3;
   if (!row) {
     return {
       maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
       auditQuotaMb: DEFAULT_AUDIT_QUOTA_MB,
+      maxConcurrentTasks,
     };
   }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
@@ -55,6 +63,7 @@ export function getGlobalSettings(): GlobalSettings {
     defaultMultimodalModel: parsed.defaultMultimodalModel,
     defaultEmbeddingModel: parsed.defaultEmbeddingModel,
     defaultRerankModel: parsed.defaultRerankModel,
+    maxConcurrentTasks,
   };
 }
 
@@ -67,6 +76,12 @@ export function updateGlobalSettings(patch: Partial<GlobalSettings>): void {
     `INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(GLOBAL_KEY, JSON.stringify(merged));
+  // 并发上限写独立表（与读侧对称）；仅接受正整数，非法值忽略
+  if (typeof patch.maxConcurrentTasks === 'number' && patch.maxConcurrentTasks > 0) {
+    db.prepare(
+      `UPDATE global_settings SET max_concurrent_tasks = ?, updated_at = datetime('now') WHERE id = 1`,
+    ).run(Math.floor(patch.maxConcurrentTasks));
+  }
 }
 
 /**

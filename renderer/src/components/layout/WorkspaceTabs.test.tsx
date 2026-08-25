@@ -1,13 +1,14 @@
 // renderer/src/components/layout/WorkspaceTabs.test.tsx
 //
-// WorkspaceTabs 组件测试（P2 Task 2）：
+// WorkspaceTabs 组件测试（P2 Task 2 + 后续 UI 确认加固）：
 // - 每个 workspace 渲染一个 tab；点击切换激活
-// - 关闭 ×：confirm 确认后调 api.workspace.delete 并刷新列表；取消则不动
+// - 关闭 ×：弹 PromptDialog 二次确认（输入工作空间名称一致才真删）；取消则不动
 // - 右键菜单：重命名（inline input，Enter 提交 / Esc、blur 取消 / 空名不提交）
-//   / 删除（confirm）/ 打开目录（失败 alert）
+//   / 删除（同 × 入口的 PromptDialog 流程）/ 打开目录（失败 alert）
+// - 删除当前激活 workspace 时，store load() 自动切到剩下首个
 // - Esc / 点击菜单外部关闭菜单
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { WorkspaceTabs } from './WorkspaceTabs';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { Workspace } from '../../ipc/types';
@@ -41,7 +42,6 @@ const mockApi = {
   },
 };
 
-let confirmSpy: MockInstance<Parameters<typeof window.confirm>, ReturnType<typeof window.confirm>>;
 let alertSpy: MockInstance<Parameters<typeof window.alert>, ReturnType<typeof window.alert>>;
 
 describe('WorkspaceTabs', () => {
@@ -60,12 +60,10 @@ describe('WorkspaceTabs', () => {
     mockApi.workspace.rename.mockClear();
     mockApi.workspace.openDirectory.mockResolvedValue({ ok: true });
     mockApi.workspace.openDirectory.mockClear();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
   });
 
   afterEach(() => {
-    confirmSpy.mockRestore();
     alertSpy.mockRestore();
   });
 
@@ -81,23 +79,68 @@ describe('WorkspaceTabs', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(WS_B.id);
   });
 
-  it('点击 × confirm 确认后删除并刷新列表', async () => {
+  it('点击 × 弹出破坏性删除 PromptDialog（文案含 git 历史不可恢复）', () => {
+    render(<WorkspaceTabs />);
+    fireEvent.click(screen.getByLabelText('关闭 产品重构'));
+    expect(screen.getByText('确认删除工作空间')).toBeInTheDocument();
+    expect(screen.getByText(/git 历史/)).toBeInTheDocument();
+    expect(screen.getByText(/不可恢复/)).toBeInTheDocument();
+  });
+
+  it('PromptDialog 输入工作空间名称后提交 → 调 delete 并刷新列表', async () => {
     mockApi.workspace.list.mockResolvedValue([WS_B]);
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
 
-    expect(confirmSpy).toHaveBeenCalled();
+    const dialog = screen.getByText('确认删除工作空间').closest('form');
+    expect(dialog).not.toBeNull();
+    const input = within(dialog as HTMLElement).getByPlaceholderText('产品重构');
+    fireEvent.change(input, { target: { value: '产品重构' } });
+    fireEvent.submit(dialog as HTMLElement);
+
     await waitFor(() => expect(mockApi.workspace.delete).toHaveBeenCalledWith(WS_A.id));
     await waitFor(() =>
       expect(useWorkspaceStore.getState().workspaces).toEqual([WS_B]),
     );
   });
 
-  it('confirm 取消时不删除', () => {
-    confirmSpy.mockReturnValue(false);
+  it('PromptDialog 提交空字符串 → 不调 delete，alert 告知', () => {
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
+
+    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
+      target: { value: '' },
+    });
+    fireEvent.submit(dialog);
+
     expect(mockApi.workspace.delete).not.toHaveBeenCalled();
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('不一致'));
+  });
+
+  it('PromptDialog 输入错误名称 → 不调 delete，alert 告知错配', () => {
+    render(<WorkspaceTabs />);
+    fireEvent.click(screen.getByLabelText('关闭 产品重构'));
+
+    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
+      target: { value: '别的名字' },
+    });
+    fireEvent.submit(dialog);
+
+    expect(mockApi.workspace.delete).not.toHaveBeenCalled();
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('不一致'));
+  });
+
+  it('PromptDialog 点取消按钮 → 不调 delete，dialog 关闭', () => {
+    render(<WorkspaceTabs />);
+    fireEvent.click(screen.getByLabelText('关闭 产品重构'));
+    expect(screen.getByText('确认删除工作空间')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(mockApi.workspace.delete).not.toHaveBeenCalled();
+    expect(screen.queryByText('确认删除工作空间')).not.toBeInTheDocument();
   });
 
   it('右键 tab 弹出菜单（重命名/打开目录/删除）', () => {
@@ -198,13 +241,42 @@ describe('WorkspaceTabs', () => {
     expect(screen.queryByDisplayValue('产品重构')).not.toBeInTheDocument();
   });
 
-  it('菜单-删除：confirm 后调 delete', async () => {
+  it('菜单-删除：弹 PromptDialog（同 × 入口）', () => {
+    render(<WorkspaceTabs />);
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /产品重构/ }));
+    fireEvent.click(screen.getByText('删除'));
+    expect(screen.getByText('确认删除工作空间')).toBeInTheDocument();
+  });
+
+  it('菜单-删除：输入正确名称 → 调 delete', async () => {
     mockApi.workspace.list.mockResolvedValue([WS_B]);
     render(<WorkspaceTabs />);
     fireEvent.contextMenu(screen.getByRole('tab', { name: /产品重构/ }));
     fireEvent.click(screen.getByText('删除'));
 
+    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
+      target: { value: '产品重构' },
+    });
+    fireEvent.submit(dialog);
+
     await waitFor(() => expect(mockApi.workspace.delete).toHaveBeenCalledWith(WS_A.id));
+  });
+
+  it('删除当前激活 workspace → store 自动切到剩下首个（不残留已删 id）', async () => {
+    mockApi.workspace.list.mockResolvedValue([WS_B]);
+    render(<WorkspaceTabs />);
+    fireEvent.click(screen.getByLabelText('关闭 产品重构'));
+
+    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
+      target: { value: '产品重构' },
+    });
+    fireEvent.submit(dialog);
+
+    await waitFor(() =>
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(WS_B.id),
+    );
   });
 
   it('按 Esc 关闭菜单', () => {

@@ -455,6 +455,8 @@ export interface GlobalSettings {
   defaultMultimodalModel?: DefaultModelRef;
   defaultEmbeddingModel?: DefaultModelRef;
   defaultRerankModel?: DefaultModelRef;
+  /** 全局并发任务上限（electron 端读 global_settings 表 v21，默认 3）。 */
+  maxConcurrentTasks?: number;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */

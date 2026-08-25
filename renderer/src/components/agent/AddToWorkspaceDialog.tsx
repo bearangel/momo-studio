@@ -30,15 +30,13 @@ const EMPTY_CAPS: Capabilities = { tools: [], mcps: [], skills: [] };
 
 export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const {
-    definitions,
-    assignments,
-    builtinSuggestions,
-    addAgent,
-    setAssignmentDeltas,
-    stopAgent,
-    startAgent,
-  } = useAgentStore();
+  const definitions = useAgentStore((s) => s.definitions);
+  const assignments = useAgentStore((s) => s.assignments);
+  const builtinSuggestions = useAgentStore((s) => s.builtinSuggestions);
+  const addAgent = useAgentStore((s) => s.addAgent);
+  const setAssignmentDeltas = useAgentStore((s) => s.setAssignmentDeltas);
+  const stopAgent = useAgentStore((s) => s.stopAgent);
+  const startAgent = useAgentStore((s) => s.startAgent);
 
   const [defId, setDefId] = useState(preselectedDef?.id ?? '');
   const [role, setRole] = useState<AgentRole>('standalone');
@@ -91,7 +89,7 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [workspace?.id]);
+  }, [workspace]);
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();

@@ -2,16 +2,22 @@
 //
 // 看板主区拆分测试（P2 Task 3）：TaskFilters/TaskList 迁去侧边栏后，
 // 主区 = 顶部状态栏 + selectedTaskId ? TaskDetailPanel : 空态「从左侧选择任务」。
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+// 并发上限（P1）接 settings.getGlobal 返回的 maxConcurrentTasks，缺字段 fallback 3。
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { TaskBoardView } from './TaskBoardView';
 import { useTaskStore } from '../../stores/task.store';
 import type { TaskRow } from '../../ipc/types';
 
+const getGlobalMock = vi.fn();
+
 const mockApi = {
   task: {
     list: vi.fn().mockResolvedValue([]),
     get: vi.fn().mockResolvedValue(null),
+  },
+  settings: {
+    getGlobal: getGlobalMock,
   },
 };
 
@@ -45,7 +51,6 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
 describe('TaskBoardView 主区（拆分后）', () => {
   beforeEach(() => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     useTaskStore.setState({
       tasks: [],
       selectedTaskId: null,
@@ -54,10 +59,8 @@ describe('TaskBoardView 主区（拆分后）', () => {
     });
     mockApi.task.list.mockClear().mockResolvedValue([]);
     mockApi.task.get.mockClear().mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    // 默认 settings.getGlobal 模拟后端现状：缺 maxConcurrentTasks 字段（fallback 测试）
+    getGlobalMock.mockReset().mockResolvedValue({ maxToolCalls: 10, auditQuotaMb: 100 });
   });
 
   it('未选中任务时显示状态栏 + 空态提示，不渲染任务列表/筛选条', () => {
@@ -80,5 +83,33 @@ describe('TaskBoardView 主区（拆分后）', () => {
     // TaskDetailPanel 异步拉取 task.get 后渲染标题行
     expect(await screen.findByText(`#${task.id.slice(0, 8)}`)).toBeInTheDocument();
     expect(screen.queryByText('从左侧选择任务')).not.toBeInTheDocument();
+  });
+
+  it('settings.getGlobal 缺 maxConcurrentTasks 字段 → 状态栏显示 fallback 3', async () => {
+    mockApi.task.list.mockResolvedValue([
+      mkTask({ id: 'i1', title: '执行中', status: 'in_progress', priority: 5 }),
+      mkTask({ id: 'a1', title: '已分配', status: 'assigned', priority: 5 }),
+    ]);
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByText(/并发: 1\/3/)).toBeInTheDocument();
+  });
+
+  it('settings.getGlobal 返回 maxConcurrentTasks=5 → 状态栏显示 5（U2 接全局生效）', async () => {
+    getGlobalMock.mockResolvedValue({ maxConcurrentTasks: 5, maxToolCalls: 10, auditQuotaMb: 100 });
+    mockApi.task.list.mockResolvedValue([
+      mkTask({ id: 'i1', title: '执行中', status: 'in_progress', priority: 5 }),
+      mkTask({ id: 'i2', title: '执行中', status: 'in_progress', priority: 5 }),
+    ]);
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByText(/并发: 2\/5/)).toBeInTheDocument();
+  });
+
+  it('settings.getGlobal 抛错 → 状态栏仍显示 fallback 3，UI 不崩溃', async () => {
+    getGlobalMock.mockRejectedValue(new Error('IPC 异常'));
+    mockApi.task.list.mockResolvedValue([
+      mkTask({ id: 'i1', title: '执行中', status: 'in_progress', priority: 5 }),
+    ]);
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByText(/并发: 1\/3/)).toBeInTheDocument();
   });
 });

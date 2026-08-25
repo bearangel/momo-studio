@@ -30,6 +30,20 @@ describe('GlobalSettings 扩展', () => {
     expect(s.defaultRerankModel).toBeUndefined();
   });
 
+  it('maxConcurrentTasks 默认 3（global_settings 表 v21 单行默认），更新走独立表且不串 kv_store', () => {
+    expect(getGlobalSettings().maxConcurrentTasks).toBe(3);
+    updateGlobalSettings({ maxConcurrentTasks: 8 });
+    expect(getGlobalSettings().maxConcurrentTasks).toBe(8);
+    // 写独立表而非 kv_store JSON——kv_store 里的老字段不受影响
+    const row = getDb()
+      .prepare('SELECT max_concurrent_tasks FROM global_settings WHERE id = 1')
+      .get() as { max_concurrent_tasks: number };
+    expect(row.max_concurrent_tasks).toBe(8);
+    // 非法值（0/负数）忽略，保持原值
+    updateGlobalSettings({ maxConcurrentTasks: 0 });
+    expect(getGlobalSettings().maxConcurrentTasks).toBe(8);
+  });
+
   it('更新 auditQuotaMb 且不丢 maxToolCalls', () => {
     updateGlobalSettings({ auditQuotaMb: 500 });
     const s = getGlobalSettings();

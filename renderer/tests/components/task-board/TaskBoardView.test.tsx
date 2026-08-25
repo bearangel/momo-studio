@@ -57,6 +57,11 @@ vi.mock('../../../src/ipc/client', () => ({
       start: mockTaskStart,
       cancel: mockTaskCancel,
     },
+    // v2.0.1 组件 mount 拉取全局并发上限——空对象 = 字段缺失走 fallback 3，
+    // 与旧用例「并发: x/3」断言一致
+    settings: {
+      getGlobal: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 

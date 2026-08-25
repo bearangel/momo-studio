@@ -10,6 +10,7 @@ import { ipc } from '../../ipc/client';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
 import { cn } from '../../lib/cn';
 import { noDragStyle } from '../../lib/platform';
+import { PromptDialog } from '../common/PromptDialog';
 
 /** 右键菜单状态：目标 workspace + 弹出坐标（fixed 定位） */
 interface TabMenu {
@@ -31,6 +32,8 @@ export function WorkspaceTabs() {
   // 正在重命名的 workspace id（tab 内 inline input 替换名称显示）
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  // 等待二次确认删除的 workspace id（PromptDialog 打开 = 非 null）
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -48,11 +51,31 @@ export function WorkspaceTabs() {
     };
   }, [menu]);
 
-  /** 删除 workspace（tab × 与菜单共用）：confirm 确认后走 store.remove */
+  /**
+   * 删除 workspace（tab × 与菜单共用）：弹 PromptDialog 二次确认后走 store.remove。
+   *
+   * 为防止误删，破坏性确认采用「输入工作空间名称一致」二次确认模式：
+   * 用户必须一字不差输入工作空间名才会真正触发删除。后端 delete handler 会
+   * 删除工作空间目录及全部 git 历史，UI 文案显式说明不可恢复。
+   */
   const handleDelete = (id: string): void => {
     const ws = workspaces.find((w) => w.id === id);
     if (!ws) return;
-    if (!window.confirm(`确定删除工作空间「${ws.name}」？`)) return;
+    setPendingDeleteId(id);
+  };
+
+  /** PromptDialog 二次确认提交：仅当输入名称与 ws.name 一致才调 store.remove。
+   * 错配时 alert 提示并丢弃提交；store.remove 失败（IPC 异常）也走 alert。 */
+  const submitDeleteConfirm = (value: string): void => {
+    const id = pendingDeleteId;
+    setPendingDeleteId(null);
+    if (!id) return;
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return;
+    if (value.trim() !== ws.name) {
+      window.alert(`输入的工作空间名称与「${ws.name}」不一致，已取消删除。`);
+      return;
+    }
     remove(id).catch((err: Error) => window.alert(err.message));
   };
 
@@ -202,6 +225,20 @@ export function WorkspaceTabs() {
           </button>
         </div>
       )}
+
+      {pendingDeleteId !== null && (() => {
+        const ws = workspaces.find((w) => w.id === pendingDeleteId);
+        if (!ws) return null;
+        return (
+          <PromptDialog
+            title="确认删除工作空间"
+            label={`将删除工作空间目录及全部 git 历史，不可恢复。请输入工作空间名称「${ws.name}」以确认。`}
+            placeholder={ws.name}
+            onSubmit={submitDeleteConfirm}
+            onClose={() => setPendingDeleteId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

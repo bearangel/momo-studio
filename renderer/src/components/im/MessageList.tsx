@@ -9,55 +9,10 @@
 import { useEffect, useRef } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useBotNameMap } from '../../lib/useBotNames';
+import { groupBySegment } from '../../lib/group-segments';
 import type { ImMessage } from '../../ipc/types';
 import { MessageBubble } from './MessageBubble';
 import { SegmentStack } from './SegmentStack';
-import type { SegmentGroup } from './types';
-
-/**
- * v1.7.4 Bug 2：按 io.momo-studio.segment_of 字段归组多段 task_complete 消息。
- *
- * 重启还原场景：runtime 写了 segment_of + segment_index 字段，但 v1.7.3 之前
- * renderer 不识别——重启后 N 段消息显示为 N 个独立气泡，与重启前 UI 完全不同。
- * 现按 segment_of 聚合为 SegmentGroup，交给 SegmentStack 纵向堆叠渲染。
- *
- * 单段消息（无 segment_of，或归组后只有一段）保持原 MessageBubble 渲染。
- *
- * v2.0 A 子系统：segmentOf / segmentIndex / createdAt 直接来自 SQLite messages 表字段，
- * 不再从 Matrix event content 读取。
- */
-function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> {
-  const segmentMap = new Map<string, ImMessage[]>();
-  const standalone: ImMessage[] = [];
-
-  for (const msg of messages) {
-    if (typeof msg.segmentOf === 'string') {
-      if (!segmentMap.has(msg.segmentOf)) segmentMap.set(msg.segmentOf, []);
-      segmentMap.get(msg.segmentOf)!.push(msg);
-    } else {
-      standalone.push(msg);
-    }
-  }
-
-  const result: Array<ImMessage | SegmentGroup> = [...standalone];
-  for (const [streamSessionId, segments] of segmentMap) {
-    segments.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
-    if (segments.length === 1) {
-      const only = segments[0];
-      if (only) result.push(only);
-    } else if (segments.length > 1) {
-      const last = segments[segments.length - 1];
-      result.push({
-        kind: 'segment-group',
-        streamSessionId,
-        segments,
-        lastSegmentAt: last ? last.createdAt : Date.now(),
-      });
-    }
-  }
-  return result;
-}
-
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
