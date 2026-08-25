@@ -17,6 +17,7 @@ import type { LLMToolDef } from '../llm-provider';
 import type { StreamChunk } from '../stream-chunk';
 import type { ToolContext, ToolModule } from './types';
 import type { TodoItem } from './todo-types';
+import { parseStringArg } from './shared/arg-parse';
 
 /** subject 字段最大字符数——超过即拒绝（防 LLM 把整段需求塞进单条任务） */
 const MAX_SUBJECT_LEN = 200;
@@ -37,12 +38,6 @@ const todoStore = new Map<string, TodoItem[]>();
  */
 export function getTodosForSession(streamSessionId: string): TodoItem[] {
   return todoStore.get(streamSessionId) ?? [];
-}
-
-/** 把 unknown 归一化为非空 string；非 string 或缺失则抛错。各字段校验共用。 */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
 }
 
 /**

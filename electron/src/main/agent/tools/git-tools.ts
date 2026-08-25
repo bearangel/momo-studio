@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
+import { parseStringArg } from './shared/arg-parse';
 import { getGitPolicy } from '../../workspace/git-policy';
 import {
   validateCommitMessage,
@@ -270,12 +271,6 @@ async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Pro
   const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff);
   if (result.code !== 0) throw new Error(`git show 失败: ${result.stderr}`);
   return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
-}
-
-/** 把 unknown 归一化为 string，非 string 则抛错。各 execute* 入参校验共用。*/
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
 }
 
 /** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。*/

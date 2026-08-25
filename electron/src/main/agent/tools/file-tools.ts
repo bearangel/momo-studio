@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import type { WorkspaceFS } from '../../files/workspace-fs';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { parseStringArg } from './shared/arg-parse';
 
 /** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
 export function getFileToolDefs(): LLMToolDef[] {
@@ -114,17 +115,6 @@ export function getFileToolDefs(): LLMToolDef[] {
       },
     },
   ];
-}
-
-/**
- * 从 args 中取出一个 string 字段，缺失或类型不符时抛错（给 LLM 明确反馈）。
- * 模块内私有辅助函数——execute 路由需要更精确的报错而不只是「未知工具」。
- */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  }
-  return value;
 }
 
 /**

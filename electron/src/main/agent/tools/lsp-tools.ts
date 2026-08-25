@@ -17,6 +17,7 @@ import path from 'node:path';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS, truncateArray } from './shared/output-truncate';
+import { parseStringArg } from './shared/arg-parse';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 常量
@@ -618,11 +619,6 @@ export class LspTools implements ToolModule {
 // ────────────────────────────────────────────────────────────────────────────
 // 参数解析 + 工具执行
 // ────────────────────────────────────────────────────────────────────────────
-
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
-}
 
 function parseNumberArg(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {

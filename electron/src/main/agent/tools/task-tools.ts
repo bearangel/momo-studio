@@ -39,6 +39,7 @@ import {
 import { getDb } from '../../storage/db';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { parseStringArg } from './shared/arg-parse';
 
 /**
  * read_task 的返回结构（task 上下文摘要）。
@@ -185,17 +186,6 @@ export type ListTasksOptions = Parameters<typeof listTasksRepo>[0];
  */
 export async function listTasks(opts: ListTasksOptions): Promise<TaskRow[]> {
   return listTasksRepo(opts);
-}
-
-/**
- * 把 unknown 归一化为 string，缺失或非 string 时抛错。
- * 工具 execute 路由共用：给 LLM 明确的错误反馈而不是默默 undefined。
- */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  }
-  return value;
 }
 
 function parseStringArgOptional(value: unknown, name: string): string | undefined {
@@ -353,8 +343,7 @@ export class TaskTools implements ToolModule {
     name: string,
     args: Record<string, unknown>,
     // ctx 当前未使用——任务工具不走 workspace FS / skill registry；
-  // 保留参数是为了符合 ToolModule 接口统一签名。
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // 保留参数是为了符合 ToolModule 接口统一签名（下划线前缀满足 unused-vars 规则）。
     _ctx: ToolContext,
   ): Promise<string> {
     switch (name) {

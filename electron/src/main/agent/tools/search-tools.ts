@@ -10,6 +10,7 @@ import type { Ignore } from 'ignore';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS, truncateArray } from './shared/output-truncate';
+import { parseStringArg } from './shared/arg-parse';
 
 /** workspaceDir → { mtime, matcher } 的缓存。mtime 用作失效信号。
  *  Map key 是 workspaceDir（绝对路径），不同 workspace 之间不串数据。*/
@@ -37,11 +38,6 @@ function loadGitignore(workspaceDir: string): Ignore | null {
 /** 硬编码的默认忽略集：与 .gitignore 是叠加关系（任一命中即过滤）。
  *  这层不依赖用户配置，保证搜索结果永远不包含构建产物和版本库元数据。*/
 const DEFAULT_IGNORE: string[] = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'];
-
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
-}
 
 /**
  * 搜索工具模块（grep + glob）。v1.5 Task 7 引入。

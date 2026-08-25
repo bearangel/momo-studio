@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS } from './shared/output-truncate';
+import { parseStringArg } from './shared/arg-parse';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -85,12 +86,6 @@ export function buildSandboxEnv(ctx: ToolContext): NodeJS.ProcessEnv {
 /** 把 v 钳制到 [min, max] 区间。timeoutMs 越界时归一化到合法范围。 */
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
-}
-
-/** 从 args 取一个 string 字段；缺失或类型不符时抛错（给 LLM 明确反馈）。 */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
 }
 
 /**
