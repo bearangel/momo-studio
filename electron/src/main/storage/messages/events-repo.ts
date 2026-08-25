@@ -64,19 +64,32 @@ export function insertEvent(
   };
 }
 
-export function insertEventBatch(rows: Array<Omit<MessageEventRow, 'id' | 'createdAt'>>): void {
-  if (rows.length === 0) return;
+export function insertEventBatch(
+  rows: Array<Omit<MessageEventRow, 'id' | 'createdAt'> & Partial<Pick<MessageEventRow, 'id'>>>,
+): MessageEventRow[] {
+  if (rows.length === 0) return [];
   const db = getDb();
   const stmt = db.prepare(
     `INSERT INTO message_events (id, message_id, seq, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
   );
+  const inserted: MessageEventRow[] = [];
   const insertMany = db.transaction((rs: typeof rows) => {
     const now = Date.now();
     for (const r of rs) {
-      stmt.run(randomUUID(), r.messageId, r.seq, r.eventType, JSON.stringify(r.payload), now);
+      const id = r.id ?? randomUUID();
+      stmt.run(id, r.messageId, r.seq, r.eventType, JSON.stringify(r.payload), now);
+      inserted.push({
+        id,
+        messageId: r.messageId,
+        seq: r.seq,
+        eventType: r.eventType,
+        payload: r.payload,
+        createdAt: now,
+      });
     }
   });
   insertMany(rows);
+  return inserted;
 }
 
 export function listEventsByMessage(messageId: string): MessageEventRow[] {

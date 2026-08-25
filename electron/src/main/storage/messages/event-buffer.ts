@@ -75,19 +75,12 @@ export class MessageEventBuffer {
       return { messageId: item.messageId, seq, eventType: item.eventType, payload: item.payload };
     });
     this.pending = [];
-    insertEventBatch(rows);
-    // 回调接收"已落盘 + 有 seq"的 events；insertEventBatch 内部生成 id/createdAt，
-    // 我们用 rows + 反查构造（onFlush 调用方关心 seq/eventType/payload，id/createdAt 仅信息性）
+    // onFlush 必须收到带真实唯一 id 的行（与 DB 落盘行同源）——此前传 id:'buffered'
+    // 占位符，renderer 按 id 去重会把第一批之后的全部实时事件误杀（P0-5：
+    // 实时只剩"流式中"状态条，内容全部丢失，重启拉 DB 才完整）。
+    const inserted = insertEventBatch(rows);
     if (this.onFlush) {
-      const now = Date.now();
-      this.onFlush(rows.map((r) => ({
-        id: 'buffered',  // 占位——调用方不应该依赖 id
-        messageId: r.messageId,
-        seq: r.seq,
-        eventType: r.eventType,
-        payload: r.payload,
-        createdAt: now,
-      })));
+      this.onFlush(inserted);
     }
   }
 

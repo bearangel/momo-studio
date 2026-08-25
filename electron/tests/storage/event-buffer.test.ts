@@ -72,6 +72,28 @@ describe('MessageEventBuffer', () => {
     buf.destroy();
   });
 
+  it('regression：onFlush 事件携带真实唯一 id（与 DB 行一致）——占位 id 会令 renderer 去重误杀后续批次（P0-5）', () => {
+    const msgId = insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
+    const batches: Array<Array<{ id: string; seq: number; eventType: string }>> = [];
+    const buf = new MessageEventBuffer({ flushMs: 1000, onFlush: (evts) => batches.push(evts) });
+    buf.append({ messageId: msgId, eventType: 'status_change', payload: { status: 'streaming' } });
+    buf.flush();
+    buf.append({ messageId: msgId, eventType: 'thinking_delta', payload: { delta: '想' } });
+    buf.append({ messageId: msgId, eventType: 'text_delta', payload: { delta: '文' } });
+    buf.flush();
+    buf.destroy();
+
+    // 两次 flush 共 3 个事件，id 必须两两互异（占位 'buffered' 会让全部事件同 id）
+    const all = batches.flat();
+    expect(all.length).toBe(3);
+    expect(new Set(all.map((e) => e.id)).size).toBe(3);
+
+    // id 必须与 DB 行一致（renderer 去重键与重启 hydrate 的权威 id 同源）
+    const dbRows = listEventsByMessage(msgId);
+    const dbIds = new Set(dbRows.map((r) => r.id));
+    for (const e of all) expect(dbIds.has(e.id)).toBe(true);
+  });
+
   it('多 message 交错 append，seq 按 message 维度自增', () => {
     const msgId1 = insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: '' }).id;
     const msgId2 = insertMessage({ sessionId: 'r1', sender: '@b:home', eventType: 'm.room.message', body: '' }).id;

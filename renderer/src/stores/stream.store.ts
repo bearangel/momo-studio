@@ -70,11 +70,12 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
 
   applyEventBatch: (batch) => {
     if (batch.length === 0) return;
-    // 累积到 eventLog（按 messageId 分桶 + 按 id 去重 + 按 seq 升序）
+    // 累积到 eventLog（按 messageId 分桶 + 去重 + 按 seq 升序）
     for (const e of batch) {
       const list = eventLogByMessage.get(e.messageId) ?? [];
-      // 去重：启动时 hydrateFromEvents 与首批实时推送可能重叠
-      if (list.some((x) => x.id === e.id)) continue;
+      // 去重按 seq（桶内唯一、由 DB 计数器分配）而非 id——流式事件与重启 hydrate
+      // 的 id 生成时机不同，按 id 去重在 id 缺失/占位时会误杀后续批次（P0-5）
+      if (list.some((x) => x.seq === e.seq)) continue;
       list.push(e);
       list.sort((a, b) => a.seq - b.seq);
       eventLogByMessage.set(e.messageId, list);

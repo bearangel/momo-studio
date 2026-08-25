@@ -224,8 +224,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const evMap = new Map(state.eventsByMessage);
       for (const e of batch) {
         const list = evMap.get(e.messageId) ?? [];
-        // 同 event id 不重复（flush 边界回放保护）
-        if (list.some((x) => x.id === e.id)) continue;
+        // 同 event 不重复（flush 边界回放保护）。按 seq 判重（桶内唯一）——
+        // 按 id 判重在 id 占位/缺失时会误杀后续批次（P0-5，与 stream.store 同因）
+        if (list.some((x) => x.seq === e.seq)) continue;
         evMap.set(e.messageId, [...list, e]);
       }
       return { eventsByMessage: evMap };

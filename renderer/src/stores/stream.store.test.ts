@@ -43,3 +43,35 @@ describe('hydrateFromEvents 空 events 防御（P0-4）', () => {
     expect(s?.text).toBe('x');
   });
 });
+
+describe('applyEventBatch 去重键（P0-5：占位 id 不得误杀后续批次）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  it('不同批次、同占位 id、不同 seq → 两条都累积（修复前第二批被去重吞掉）', () => {
+    // 仿真修复前的主进程行为：两批事件 id 同为 'buffered' 占位
+    useStreamStore.getState().applyEventBatch([
+      { id: 'buffered', messageId: 'm9', seq: 1, eventType: 'status_change', payload: { status: 'streaming' }, createdAt: 1 },
+    ]);
+    useStreamStore.getState().applyEventBatch([
+      { id: 'buffered', messageId: 'm9', seq: 2, eventType: 'text_delta', payload: { delta: '第一' }, createdAt: 2 },
+      { id: 'buffered', messageId: 'm9', seq: 3, eventType: 'text_delta', payload: { delta: '批' }, createdAt: 3 },
+    ]);
+    const s = useStreamStore.getState().streams.get('m9');
+    expect(s).toBeDefined();
+    expect(s!.text).toBe('第一批');
+  });
+
+  it('真重复（同 messageId 同 seq 重放）→ 仍被去重', () => {
+    useStreamStore.getState().applyEventBatch([
+      { id: 'real-1', messageId: 'm10', seq: 1, eventType: 'text_delta', payload: { delta: 'a' }, createdAt: 1 },
+    ]);
+    useStreamStore.getState().applyEventBatch([
+      { id: 'real-1-dup', messageId: 'm10', seq: 1, eventType: 'text_delta', payload: { delta: 'a' }, createdAt: 1 },
+    ]);
+    const s = useStreamStore.getState().streams.get('m10');
+    expect(s!.text).toBe('a');
+    expect(s!.events.length).toBe(1);
+  });
+});
