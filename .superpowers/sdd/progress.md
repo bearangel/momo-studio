@@ -555,3 +555,9 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - CI 删 Tuwunel 全段 / Node 22→20 / renderer build NODE_OPTIONS ×3
 - setup/release 文档纠偏（错误包名、版本三处、conduit 段删除）；conduit-manual.md 删除
 - 容器实测 dev 编排器：vite→tsc→Electron Window ready 全链路 PASS
+
+### 运维面对齐 2.0.0（c9298bc + ci patch）
+- dev.mjs 编排器（vite HMR + tsc watch + Electron 依序拉起）——容器实测全链路 PASS
+- root build 固化 NODE_OPTIONS；setup/release 文档纠偏；conduit-manual.md 删除
+- CI 变更（删 Tuwunel / Node 20 / renderer 内存）因 PAT 无 workflow scope 无法直推，
+  以 docs/dev/ci-2.0.0-align.patch 入库，待主机 git apply + push
