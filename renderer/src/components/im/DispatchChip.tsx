@@ -8,6 +8,7 @@
 //   executing  ⏳ 执行中  #fbbf24（黄）
 //   completed  ✅ 完成    #4ade80（绿）
 //   failed     ❌ 失败    #f87171（红）
+//   aborted    ⏹ 已中断  #fbbf24（黄）——用户停止后由聚合层终态收敛产生
 //
 // 自动展开/折叠（useEffect 监听 child.status）：
 //   - executing / failed → 默认展开（让用户看到实时进度 / 错误细节）
@@ -30,7 +31,7 @@ export interface DispatchChild {
   subStreamSessionId: string;
   subAgentName: string;
   subAgentAvatar?: string;
-  status: 'queued' | 'executing' | 'completed' | 'failed';
+  status: 'queued' | 'executing' | 'completed' | 'failed' | 'aborted';
 }
 
 interface DispatchChipProps {
@@ -49,6 +50,7 @@ const STATUS_CONFIG: Record<
   executing: { icon: '⏳', text: '执行中', color: '#fbbf24' },
   completed: { icon: '✅', text: '完成', color: '#4ade80' },
   failed: { icon: '❌', text: '失败', color: '#f87171' },
+  aborted: { icon: '⏹', text: '已中断', color: '#fbbf24' },
 };
 
 /** 各状态的自动展开默认值（用户未手动 toggle 前） */
@@ -57,6 +59,7 @@ const AUTO_EXPANDED: Record<DispatchChild['status'], boolean> = {
   failed: true,
   completed: false,
   queued: false,
+  aborted: false,
 };
 
 /**

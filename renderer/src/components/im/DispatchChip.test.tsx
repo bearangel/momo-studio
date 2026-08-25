@@ -73,6 +73,22 @@ describe('DispatchChip — 状态渲染', () => {
     expect(status).toHaveStyle({ color: '#f87171' });
   });
 
+  it('aborted 渲染 ⏹ 已中断（黄色 #fbbf24），不显示计时器与活动提示', () => {
+    // 回归锁（用户报障）：PM 停止后 dispatch 不得停留在 executing——
+    // 否则 ElapsedTimer 每秒持续计时
+    render(
+      <DispatchChip
+        child={makeChild({ status: 'aborted' })}
+        subStream={makeStream({ segments: [{ kind: 'thinking', text: '做到一半' }] })}
+      />,
+    );
+    const status = screen.getByText(/已中断/);
+    expect(status).toBeInTheDocument();
+    expect(status).toHaveStyle({ color: '#fbbf24' });
+    expect(screen.queryByText(/⏱/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-activity')).not.toBeInTheDocument();
+  });
+
   it('头行渲染 📤 图标 + avatar + 子 agent 名字', () => {
     render(
       <DispatchChip
@@ -118,6 +134,14 @@ describe('DispatchChip — 自动展开/折叠默认值', () => {
   it('queued 默认折叠', () => {
     render(
       <DispatchChip child={makeChild({ status: 'queued' })} subStream={makeStream()} />,
+    );
+    expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
+    expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('aborted 默认折叠（中断非异常，减少视觉噪音）', () => {
+    render(
+      <DispatchChip child={makeChild({ status: 'aborted' })} subStream={makeStream()} />,
     );
     expect(screen.queryByText('子任务输出文本')).not.toBeInTheDocument();
     expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
