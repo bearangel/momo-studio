@@ -519,3 +519,8 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 真实 LLM 复验：48 events / 48 唯一 id / done
 
 ## 主机验收累计：P0 ×5（错误路径崩溃 / 气泡不推 / 错误文本吞 / 用户消息幽灵流式 / 实时内容去重误杀）
+
+### 功能优化：agent 回复时间线渲染（1b56b7b）
+- segments 时间线聚合 + AgentStreamBubble 线性渲染（思考/工具/正文按实际发生顺序交错）
+- 回归锁 aggregator ×5 + 组件 ×2；566 + 1079 全绿
+- push 遇 GitHub TLS 间歇故障，待重试
