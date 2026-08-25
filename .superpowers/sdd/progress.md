@@ -571,3 +571,7 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 待主机遗留：git apply docs/dev/ci-2.0.0-align.patch（CI 文件需 workflow scope，容器凭据推不了）
 - 本会话累计：P0 ×8 + 时间线渲染 + 子 agent 工作过程显示 + __momoDebug 钩子 + devops 对齐（含 2 热修）
 - 测试基线：electron 1084 / renderer 582 / typecheck 双 clean
+
+### 研发规则体系落地（628c57c）
+- AGENTS.md 红线 + skills ×3（debug/test/boundary，场景化自动加载）+ engineering.md 完整复盘
+- 自审通过：frontmatter 合规、name=目录名、触发词齐备
