@@ -22,10 +22,11 @@ export default defineConfig({
       },
     ],
   },
-  // monaco-editor 子模块数千个，dev 模式不预构建会导致首次加载极慢（浏览器上千请求）。
-  // pre-bundle 成单文件加速。build 阶段由 Rollup 处理，与此无关。
+  // monaco-editor 的 ?worker 子模块导入选 deps 优化时，与上面的 exports alias
+  // 冲突（optimized info 丢失 → vite 依赖更新崩溃）。改为 exclude：dev 首次加载慢
+  // （浏览器直拉 ESM），但不崩；build 阶段由 Rollup 处理，与此无关。
   optimizeDeps: {
-    include: ['monaco-editor'],
+    exclude: ['monaco-editor'],
   },
   server: {
     port: 5173,

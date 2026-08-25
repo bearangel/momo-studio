@@ -21,10 +21,9 @@
 //
 // Environment requirements:
 //   - A display (run under `xvfb-run` on headless Linux).
-//   - Conduit homeserver binary present in resources/conduit (architecture-
-//     matched) so the register step can talk to a real homeserver.
-//   - libsecret/DBus available for keytar (Linux); otherwise the register step
-//     fails when it tries to store the Matrix token.
+//   - libsecret/DBus available for keytar (Linux).
+//   - 2.0.0 起无外部 homeserver 依赖（Matrix/Conduit 已移除，P1）——
+//     注册步骤走本地 SQLite；此 e2e 尚未按 2.0 会话内核重写（README 技术债在案）。
 //
 // Run manually (NOT in CI by default):
 //   xvfb-run -a pnpm e2e tests/e2e/onboarding.spec.ts
@@ -66,7 +65,7 @@ test('full onboarding flow', async () => {
     args: [ELECTRON_APP_DIR],
     env: {
       ...process.env,
-      // Force the app to use our throwaway dir for state.db, conduit-data, etc.
+      // Force the app to use our throwaway dir for state.db etc.
       AP_USER_DATA_DIR: tmpUserData,
     },
     colorScheme: 'dark',

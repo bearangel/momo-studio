@@ -25,19 +25,23 @@ pnpm install
 The install will:
 1. Install root deps.
 2. Recursively install `electron/` and `renderer/` workspace deps.
-3. Run `resources/conduit/download.ts` to fetch the Conduit binary.
 
-If step 3 fails (no network), see `conduit-manual.md`.
-
-### Heads-up about `matrix-js-sdk`
-
-We pin `^31.0.0`, not `^34`. Version 34 is ESM-only, and our Electron main process is CommonJS, so `import` of `matrix-js-sdk` throws `ERR_REQUIRE_ESM`. If you see that error during `pnpm install` or app boot, your lockfile got out of sync: run `pnpm install --frozen-lockfile` to restore the pinned version.
+2.0.0 起无外部服务依赖——Matrix/Tuwunel 已整体移除（P1），会话内核为进程内
+SQLite + 事件分发，本地零后台进程。
 
 ## 3. First run
 
 ```bash
 pnpm dev
 ```
+
+`pnpm dev`（`electron/scripts/dev.mjs`）会依次拉起三个进程：
+1. **renderer vite dev server**（5173，HMR——renderer 源码改动即时生效，无需重建 `renderer/dist`）
+2. **electron 主进程 tsc watch**（首跑全量编译，改动增量重编）
+3. 两者就绪后启动 **Electron**，注入 `VITE_DEV_SERVER_URL` 走 dev server 加载页面
+
+注意：dev 模式页面来自 vite dev server（不是 `renderer/dist` 静态产物）——
+「改了 renderer 没生效」的 stale 构建问题自此根除。打包/发布仍走 `pnpm build`。
 
 The Electron app launches. You should see the welcome onboarding step. Walk through it:
 - Mode: Standalone

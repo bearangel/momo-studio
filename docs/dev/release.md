@@ -1,4 +1,4 @@
-# 发布流程（v1.0.0）
+# 发布流程（面向 2.x）
 
 本文档面向维护者：说明如何打包、校验、发布一个新版本。
 
@@ -20,7 +20,7 @@ npx pnpm@9.0.0 install
 ```bash
 npx pnpm@9.0.0 typecheck
 npx pnpm@9.0.0 test
-npx pnpm@9.0.0 build
+npx pnpm@9.0.0 build   # 已固化 NODE_OPTIONS=--max-old-space-size=4096（防 Vite Monaco OOM）
 ```
 
 预期结果：
@@ -43,23 +43,23 @@ cd electron && npx electron-rebuild -f -w better-sqlite3
 ### 3. 产出安装包
 
 ```bash
-npx pnpm@9.0.0 --filter @momo-studio/electron dist
+npx pnpm@9.0.0 --filter ./electron dist
 ```
 
 产物输出到 `electron/dist-installers/`：
-- macOS arm64：`Momo Studio-1.0.0-arm64.dmg`
-- macOS x64：`Momo Studio-1.0.0.dmg`
-- Linux x64：`Momo Studio-1.0.0.AppImage`、`Momo Studio-1.0.0.deb`
-- Windows：v1 不产出（计划 v2）。
+- macOS arm64：`Momo Studio-2.0.0-arm64.dmg`
+- macOS x64：`Momo Studio-2.0.0.dmg`
+- Linux x64：`Momo Studio-2.0.0.AppImage`、`Momo Studio-2.0.0.deb`
+- Windows：CI 产出 nsis exe（`build-windows` job）。
 
 ### 4. 校验产物
 
 ```bash
 # macOS
-hdiutil verify electron/dist-installers/Momo Studio-1.0.0-arm64.dmg
+hdiutil verify "electron/dist-installers/Momo Studio-2.0.0-arm64.dmg"
 
 # Linux
-sha256sum electron/dist-installers/Momo Studio-1.0.0.AppImage
+sha256sum "electron/dist-installers/Momo Studio-2.0.0.AppImage"
 ```
 
 把 SHA256 写入 GitHub Release 的 description。
@@ -89,11 +89,13 @@ sha256sum electron/dist-installers/Momo Studio-1.0.0.AppImage
 
 ### 版本号修改位置
 
-v1 只在一个地方维护版本号：
+2.0.0 起版本号在**三处**维护（P5 约定，发版时同步改）：
 
-- 仓库根 `package.json` 的 `version` 字段
+- 仓库根 `package.json`
+- `electron/package.json`
+- `renderer/package.json`
 
-`electron-builder` 在 dist 时自动读取这个字段写入产物 metadata。
+`electron-builder` 在 dist 时读取 electron 包的版本写入产物 metadata。
 
 ### 何时升 MAJOR
 
@@ -102,7 +104,7 @@ v1 只在一个地方维护版本号：
 1. 主进程模块系统变更（CJS → ESM，或反向）。
 2. IPC 协议破坏性变更（renderer 旧版本与新版本无法通信）。
 3. SQLite schema 不向后兼容（migration 无法自动修复旧库）。
-4. Conduwuit / matrix-js-sdk 主版本升级到不兼容 API。
+4. SQLite migration 不兼容（含升级路径行为变更，如 P5 的 D5 全新开始策略调整）。
 
 ### Pre-release 标签（v1.1 之后启用）
 

@@ -9,8 +9,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "pnpm --filter ./electron dev",
-    "build": "pnpm -r build",
+    "dev": "node electron/scripts/dev.mjs",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",

@@ -32,11 +32,11 @@ cd electron && npx pnpm@9.0.0 vitest run tests/conduit/manager.test.ts
 # 类型检查（先于测试执行）
 npx pnpm@9.0.0 typecheck
 
-# 构建（renderer 先于 electron dist）
-npx pnpm@9.0.0 build
-
-# 启动开发模式
+# 启动开发模式（vite HMR + electron；页面来自 dev server，无 stale renderer 问题）
 npx pnpm@9.0.0 dev
+
+# 构建（已固化 NODE_OPTIONS=4096 防 Vite Monaco OOM；Windows 本地构建不支持——打包走 CI）
+npx pnpm@9.0.0 build
 ```
 
 ## 必须遵守的约束

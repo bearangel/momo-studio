@@ -549,3 +549,9 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 根因：executeDispatch 用 config.teamSessionId 而非当前执行会话
 - 修复：executionSessionId 线程化传入；harness 普通会话复现→修复后 PASS
 - 1084 + 582 全绿
+
+### 运维面对齐 2.0.0（8ee6eb4）
+- dev.mjs 编排器（vite HMR + tsc watch + Electron 依序拉起）——根治 stale renderer 运维坑
+- CI 删 Tuwunel 全段 / Node 22→20 / renderer build NODE_OPTIONS ×3
+- setup/release 文档纠偏（错误包名、版本三处、conduit 段删除）；conduit-manual.md 删除
+- 容器实测 dev 编排器：vite→tsc→Electron Window ready 全链路 PASS
