@@ -529,3 +529,7 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 根因：AgentStreamBubble 从未传 subStream 给 DispatchChip（A9 遗留未接线）
 - DispatchSegment 反查链 + chip 活动提示（💭/🔧/✍️ + ⏱）+ SubAgentSection 时间线化
 - 回归锁 ×11；577 + 1079 全绿
+
+### P0-6（cf5bc36）：dispatch 渲染成普通工具卡片
+- 根因：上轮 DispatchSegment 依赖 dispatch_start 事件，但生产链路 dispatch 以 tool_call_start(isDispatch) 落库，该事件从不产生
+- 聚合器按 isDispatch 分流；回归锁 ×4；581 全绿
