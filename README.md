@@ -2,7 +2,7 @@
 
 个人桌面端多 agent 协作平台：把可声明的 agent、可扩展的 MCP/Skill 市场、IM 通道和受控的文件沙箱，全部装进一个本地 Electron 应用。
 
-完整设计见 `docs/specs/2026-07-28-agent-platform-design.md`。
+完整设计见 `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md`（v2.0.0 现行架构）。`docs/specs/2026-07-28-agent-platform-design.md` 为 v1.x 早期设计，仅作历史参考，v2.0.0 起已被取代（Matrix 层已移除）。
 
 ## 状态
 
@@ -26,7 +26,7 @@
 
 - **指引**
   - **macOS 主机验收清单**——P1/P2 半成品「真实拖拽 tab / 红绿灯 / frameless 标题栏」、P3「platform 下拉选择端到端生效」、P4「两台局域网设备互信 + 资源请求供给 + 任务远端镜像」、P5「1.x 库升级实测（旧库检测 + 导出 + 备份 + 首启提示 + 二次启动不重提示）」
-  - **2.1 清单位置**——P4 遗留 skill 分享（需文件块传输协议）/ 双向看板（当前远端任务仅只读）/ hub 中继；P2/P3 遗留（重启自动恢复 agent runtime / e2e 测试 / Windows 沙箱）
+  - **2.1 清单位置**——P4 遗留 skill 分享（需文件块传输协议）/ 双向看板（当前远端任务仅只读）/ hub 中继；P2/P3 遗留（重启自动恢复 agent runtime / e2e 套件重写 / Windows 沙箱）；安全债务（LAN 帧加密或对应设计稿 / OS 沙箱接线 / p2p 私钥入 keytar）
 
 - **DoD 对照**（spec §10 验收标准 × 收官状态，P5 T4 实测）
 
@@ -139,10 +139,12 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 - 取代 v1.6 Marketplace + 底部"自定义资源"折叠区
 
 ### 安全
-- `WorkspaceFS`：所有路径经过验证，禁止 `..` 越界与符号链接逃逸
+- `WorkspaceFS`：文件工具（read / write / edit / mkdir / rm / mv 等）的所有路径经过验证，禁止 `..` 越界与符号链接逃逸
+- bash 工具：v2.0.0 起从 builtin agent 默认工具集移除，需经工作空间能力面板显式开启；运行时是工作目录内自由 shell，**非文件系统隔离**（路径防御仅覆盖 file 工具）
 - 进程沙箱：renderer 进程禁用 Node.js 集成 + contextIsolation
 - 审计日志：每次工具调用写入 SQLite，UI 可查询
 - Git policy：agent 写文件走 `git commit`，可一键回滚
+- OS 级沙箱：`sandbox/` 目录未接线，OS 级隔离为 v2.1 债务（见技术债务表）
 
 ## 前置依赖
 
@@ -172,14 +174,14 @@ npx pnpm@9.0.0 dev
 nvm use 20
 npx pnpm@9.0.0 typecheck       # electron + renderer 双 workspace 严格类型检查
 npx pnpm@9.0.0 test            # 单元测试（electron + renderer 全部）
-npx pnpm@9.0.0 test:e2e        # 端到端集成测试（需要已构建应用，慢）
+npx pnpm@9.0.0 e2e              # 端到端集成测试（需要已构建应用，慢）
 ```
 
 ### 单独跑某个 workspace
 
 ```bash
-npx pnpm@9.0.0 --filter @momo-studio/electron test
-npx pnpm@9.0.0 --filter @momo-studio/renderer test
+npx pnpm@9.0.0 --filter momo-studio-electron test
+npx pnpm@9.0.0 --filter momo-studio-renderer test
 ```
 
 ## 打包
@@ -188,7 +190,7 @@ npx pnpm@9.0.0 --filter @momo-studio/renderer test
 nvm use 20
 npx pnpm@9.0.0 build                       # 先构建 renderer + electron
 NODE_OPTIONS=--max-old-space-size=4096 npx pnpm@9.0.0 build  # 容器/低内存环境防 Vite Monaco OOM（2.1 拆 chunk 根治）
-npx pnpm@9.0.0 --filter @momo-studio/electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
+npx pnpm@9.0.0 --filter momo-studio-electron dist  # electron-builder 产出 .dmg / .AppImage / .deb
 ```
 
 产物输出到 `electron/dist-installers/`。
@@ -205,10 +207,10 @@ tests/         Playwright 端到端测试
 docs/
   specs/       设计文档
   plans/       实施计划
-  dev/         开发者指南（setup / conduit-manual / release）
+  dev/         开发者指南（setup / release / rules）
 ```
 
-两个 workspace 包名：`@momo-studio/electron`、`@momo-studio/renderer`。
+两个 workspace 包名：`momo-studio-electron`、`momo-studio-renderer`（**无 `@` scope**）。根包名 `momo-studio`。
 
 ## 研发演进路线图
 
@@ -556,6 +558,10 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 - 🔲 Token 配额管理
 - 🔲 LSP 集成（Monaco 编辑器语言服务）
 - 🔲 协作实时编辑（CRDT）
+- 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例）
+- 🔲 OS 级沙箱接线（`sandbox/` 目录）
+- 🔲 p2p 私钥入 keytar（当前 Ed25519 私钥落盘位置待硬化）
+- 🔲 LAN 帧加密或对应设计稿
 
 ### v3.0+ — 生态扩展 🔲 远期愿景
 
@@ -586,4 +592,4 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 
 ## 许可
 
-待定。
+Apache-2.0。

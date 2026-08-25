@@ -8,9 +8,25 @@
 
 ## 项目概述
 
-Momo Studio — 个人桌面端多 agent 协作平台。Electron + React + Node.js + Matrix(Conduwuit)。
+Momo Studio — 个人桌面端多 agent 协作平台。Electron + React + Node.js，单进程架构，本地零外部依赖。
 
-当前进度：M0（项目骨架）已完成并合并到 main。M1-M4 待实施。
+v2.0.0 已发布（commit ac51236 起合并）。五期重构收官：
+
+- P1 传输层内迁：移除 Matrix/Tuwunel 全家，`sessions` / `session_members` 表取代 Matrix room
+- P2 UI 骨架与设置：自绘 TitleBar + 活动栏 + 统一侧边栏 + 设置独立界面
+- P3 半成品处置 + IPC 收敛：provider platform 运行时接线、#T 任务 id 端到端、资源注册统一 `resource:*`
+- P4 局域网 P2P：任务只读镜像 + agent/MCP 资源分享 + 一键导入
+- P5 升级体验：旧库只读导出 Markdown/JSON，备份重命名 `.legacy-v1.bak`，首启一次性提示
+
+## 架构关键点
+
+v2.0.0 设计取舍一句话：「单进程 Electron + 内置 SessionService + 进程内事件分发」。细节以 `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` 为准，列出五点供快速对齐：
+
+- **sessions 内核**：`sessions` / `session_members` / `message_events` 表是单一真相源；`message_events.seq` 自增主键 = 时间线性显示的天然全序
+- **task-driven runtime**：AgentRunner + WarmPool（K=2 预热）+ MessageEventBuffer（50ms/30 条批落盘）；废弃 v1 双轨 runtime-manager
+- **dispatch + stream 事件链**：RouterService 切输入源（Matrix event → SessionService 进程内事件）；dispatch / task_reply 走内部事件桥，子 agent 结果可靠回传
+- **LAN p2p**：Ed25519 身份 + mDNS 发现 + TCP 直连；payload 多类型分发（message / task-snapshot / resource-catalog / resource-request / resource-provide）；远端任务**只读镜像**（spec D7 铁律：入站快照只进内存缓存，绝不写 `tasks` 表）
+- **marketplace + skill**：资源库三类 source（builtin / marketplace / custom）+ v2 加 `source='p2p'`；内置 agent YAML 落 `electron/resources/agents/*.yaml`（coder / pm-agent / requirement-analyst）；marketplace 目录 `resources/marketplace/catalog.json`
 
 ## 关键命令
 
@@ -27,7 +43,10 @@ npx pnpm@9.0.0 --filter momo-studio-electron test
 npx pnpm@9.0.0 --filter momo-studio-renderer test
 
 # 跑单个测试文件
-cd electron && npx pnpm@9.0.0 vitest run tests/conduit/manager.test.ts
+cd electron && npx pnpm@9.0.0 vitest run tests/agent/stream-relay.test.ts
+
+# 端到端（Playwright，需要先构建）
+npx pnpm@9.0.0 e2e
 
 # 类型检查（先于测试执行）
 npx pnpm@9.0.0 typecheck
@@ -44,25 +63,24 @@ npx pnpm@9.0.0 build
 - **Node 20 LTS**：Node 26 会破坏 better-sqlite3 的 native binding（`ERR_DLOPEN_FAILED`）。容器默认 Node 26，必须先 `nvm use 20`。
 - **TypeScript strict**：禁止 `any`、`@ts-ignore`、`as any`。ESLint `no-explicit-any: error` 已启用。
 - **Conventional Commits**：`feat:`、`fix:`、`chore:`、`docs:`、`test:`、`refactor:`。
-- **禁止提交 `docs/` 的改动用 `git add -A`**：`.gitignore` 含裸 `docs` 条目（历史遗留），会静默忽略文档文件。用 `git add -f docs/your-file.md` 或先 `git add docs/`。
 
-## 架构关键点
+## 架构关键点（基础设施细节）
 
 ### Monorepo 结构
 
 ```
 electron/   — Electron 主进程（CommonJS, Node.js 运行时）
 renderer/   — React UI（ESM, Vite 构建）
-resources/  — Conduwuit 二进制 + 下载脚本
+resources/  — marketplace catalog（electron-builder extraResources）
 tests/      — Playwright e2e 测试
 docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 ```
 
-两个 workspace 包名：`momo-studio-electron`、`momo-studio-renderer`。
+两个 workspace 包名：`momo-studio-electron`、`momo-studio-renderer`（**无 `@` scope**）。根包名 `momo-studio`。
 
 ### Electron 主进程是 CommonJS
 
-`electron/package.json` 的 `"type": "commonjs"` 是刻意选择——better-sqlite3 / keytar 的 native binding 需要 CJS。**matrix-js-sdk 锁定 `^31.0.0`**：v32+ 是纯 ESM，与 CJS 主进程冲突（`ERR_REQUIRE_ESM`）。升级到 v34+ 需要先做主进程 ESM 转换（v2 任务）。
+`electron/package.json` 的 `"type": "commonjs"` 是刻意选择——better-sqlite3 / keytar 的 native binding 需要 CJS。matrix-js-sdk v31 锁定已随 v2.0.0 拆除（Matrix 全家移除），主进程可独立进行 ESM 化（如有需要）。
 
 ### IPC 类型共享
 
@@ -72,12 +90,6 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 `electron/src/main/storage/migrations/index.ts` 把 SQL 定义为 TS 字符串常量，**不是 `.sql` 文件**。原因：tsc 只输出 `.js`，外部 `.sql` 不会进 `dist/`，打包后 `__dirname` 查找会返回空数组导致建表失败。
 
-### Conduwuit 配置特殊要求
-
-- `allow_registration = true` 必须同时设 `yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true`，否则 Conduwuit 启动即退出。
-- 健康检查端点是 `/_matrix/client/versions`，**不是 `/health`**（Conduwuit 没有此端点）。
-- Conduwuit 只发布 Linux 二进制。macOS/Windows 需用 Docker 运行 Conduwuit。
-
 ## 常见陷阱
 
 | 陷阱 | 症状 | 解决 |
@@ -85,8 +97,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 | Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 20 && npx pnpm@9.0.0 rebuild better-sqlite3` |
 | Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 115 vs 123` | `cd electron && npx electron-rebuild -f -w better-sqlite3` |
 | 容器内启动 Electron | `chrome-sandbox SUID` 错误 | 加 `--no-sandbox` 参数 |
-| Conduwuit 不启动 | `missing field server_name` 或 `registration_token` 错误 | 检查 config.toml 格式（扁平 key 不是嵌套 table） |
-| 文档文件无法 `git add` | `git add docs/foo.md` 无输出 | `git add -f docs/foo.md`（`.gitignore` 有裸 `docs` 条目） |
+| `git add docs/foo.md` 无输出 | `.gitignore` 历史遗留条目 | 先 `git add docs/` 或 `git add -f docs/foo.md`（v2.0.0 后该裸 `docs` 条目已删，正常 `git add` 即可） |
 
 ## 研发红线（2.0.0 主机验收 8 个 P0 教训沉淀）
 
@@ -106,6 +117,8 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 ## 关键文档
 
-- `docs/specs/2026-07-28-agent-platform-design.md` — 完整架构设计（2730 行，14 节），所有实现决策的依据
-- `docs/plans/2026-07-28-m0-project-skeleton.md` — M0 实施计划（已执行完成）
-- `.superpowers/sdd/progress.md` — M0 执行 ledger（含每 task review 状态 + deferred minors，gitignored）
+- `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` — v2.0.0 现行架构设计（18 节），所有 2.x 实现的依据
+- `docs/specs/2026-07-28-agent-platform-design.md` — v1.x 早期设计（14 节），**已 superseded**；v2.0.0 起仅作历史参考
+- `docs/plans/2026-08-23-v2.0.0-p*.md` — 五期实施计划（p1 会话内核 / p2 UI / p3 收尾 / p4 局域网 / p5 升级）
+- `docs/2026-08-14-system-feature-inventory.md` — 系统功能全景清单（v2.0 spec 的上游输入底座）
+- `.superpowers/sdd/progress.md` — v2.0.0 主线 ledger，gitignored
