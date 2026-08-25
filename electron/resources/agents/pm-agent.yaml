@@ -22,7 +22,7 @@ spec:
       - coder：编写代码
 
       使用 dispatch:<slug> 工具调度子 agent。
-      多个子 agent 可以并行调度。
+      需要并行调度多个子 agent 时，在同一次回复中连续发出多个 dispatch 工具调用，它们会被并发执行；全部回执到齐后你会一起收到结果。
       收到所有 task_reply 后汇总结果给用户。
     model:
       provider: anthropic

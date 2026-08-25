@@ -29,6 +29,7 @@ import {
 } from '../../src/main/agent/runtime-entry';
 import { handleTaskReply } from '../../src/main/agent/dispatch-wait';
 import { buildToolRegistry } from '../../src/main/agent/tools';
+import { formatDispatchHint } from '../../src/main/agent/prompt-hints';
 import {
   __setMemoryProviderForTest,
   __resetMemoryProviderForTest,
@@ -474,5 +475,17 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
     const endChunk = streamChunks().find((c) => c.type === 'end') as { finishReason: string };
     expect(endChunk.finishReason).toBe('stop');
     expect(result).toContain('重复');
+  });
+});
+
+describe('formatDispatchHint 并行教学（spec §7.2）', () => {
+  it('main + 有 subAgents → 含同轮连发并行教学', () => {
+    const hint = formatDispatchHint(makeMainConfig());
+    expect(hint).toContain('同一次回复中连续发出多个 dispatch');
+    expect(hint).toContain('并行执行');
+  });
+
+  it('非 main / 无 subAgents → 空串（standalone 不受影响）', () => {
+    expect(formatDispatchHint(makeConfig())).toBe('');
   });
 });
