@@ -1,4 +1,4 @@
-// renderer/src/components/im/__tests__/TodoSection.test.tsx
+// renderer/src/components/im/TodoSection.test.tsx
 // TodoSection 行为：流式中默认展开 / 进度显示 / 完成项 line-through /
 // 点击 header 折叠 / 空数组不渲染。
 //
@@ -6,7 +6,7 @@
 // 因此用正则 /实现/ 做子串匹配，而非精确字符串。
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { TodoSection } from '../TodoSection';
+import { TodoSection } from './TodoSection';
 
 const todos = [
   { id: '1', subject: '设计', status: 'completed' as const },

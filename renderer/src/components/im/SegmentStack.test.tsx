@@ -1,15 +1,15 @@
-// renderer/src/components/im/__tests__/SegmentStack.test.tsx
+// renderer/src/components/im/SegmentStack.test.tsx
 //
 // v1.7.4 Bug 2 测试：SegmentStack 多段纵向堆叠渲染。
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { SegmentStack } from '../SegmentStack';
-import type { SegmentGroup } from '../types';
-import type { ImMessage } from '../../../ipc/types';
+import { SegmentStack } from './SegmentStack';
+import type { SegmentGroup } from './types';
+import type { ImMessage } from '../../ipc/types';
 
 // MessageBubble 内部依赖 useStreamStore，提供 mock（需正确应用 selector）
-vi.mock('../../../stores/stream.store', () => ({
+vi.mock('../../stores/stream.store', () => ({
   useStreamStore: (selector: (s: { streams: Map<string, unknown> }) => unknown) =>
     selector({ streams: new Map() }),
 }));

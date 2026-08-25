@@ -1,4 +1,4 @@
-// renderer/src/components/im/__tests__/MessageList.segment.test.ts
+// renderer/src/components/im/MessageList.segment.test.ts
 //
 // v1.7.4 Bug 2 测试：MessageList 的 groupBySegment 函数（纯逻辑测试）。
 // 不渲染整个 MessageList 组件（依赖 store 太多），直接测归组算法。
@@ -6,8 +6,8 @@
 // v2.0 A 子系统：算法改读 SQLite messages 表字段（segmentOf / segmentIndex / createdAt）。
 
 import { describe, it, expect } from 'vitest';
-import type { ImMessage } from '../../../ipc/types';
-import type { SegmentGroup } from '../types';
+import type { ImMessage } from '../../ipc/types';
+import type { SegmentGroup } from './types';
 
 // 复制 MessageList.tsx 内的 groupBySegment 函数（保持算法一致）
 function groupBySegment(messages: ImMessage[]): Array<ImMessage | SegmentGroup> {
