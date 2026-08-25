@@ -13,6 +13,7 @@
 // 退出语义：任一子进程退出 → 杀掉全部（concurrently -k 等价）；Ctrl+C 信号转发。
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -76,20 +77,34 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+/**
+ * 裸 TCP 连通探测（不走 HTTP 层）。
+ * 必须用 net.connect 而非 fetch：Node 的 fetch 遵循 HTTP_PROXY/http_proxy 环境变量，
+ * 开着代理的开发机上对 localhost 的 fetch 会被发往代理服务器——探测永远失败，
+ * Electron 永远不被拉起（macOS 主机实测复现）。raw TCP 不经过代理层。
+ */
+function tcpProbe(host, port, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (ok) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
 async function waitForVite(timeoutMs = 60_000) {
   // vite 监听 localhost——不同环境解析为 IPv4 或 IPv6（容器内实测 ::1），
-  // 两个候选地址轮询探测，任一连通即就绪。
-  const candidates = ['http://127.0.0.1:5173', 'http://[::1]:5173'];
+  // 两个栈分别做 TCP 探测，任一连通即就绪。
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url, { method: 'HEAD' });
-        if (res.ok || res.status === 200) return true;
-      } catch {
-        // 该地址未就绪——尝试下一个
-      }
-    }
+    if (await tcpProbe('127.0.0.1', VITE_PORT)) return true;
+    if (await tcpProbe('::1', VITE_PORT)) return true;
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
