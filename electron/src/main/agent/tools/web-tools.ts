@@ -14,9 +14,11 @@
 import { Buffer } from 'node:buffer';
 import TurndownService from 'turndown';
 import * as cheerio from 'cheerio';
+import { logger } from '../../logger';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
+import { parseStringArg } from './shared/arg-parse';
 
 /** turndown 实例配置：ATX 风格标题（#）/ 围栏代码块 / '-' 无序列表 / '_' 强调。
  *  remove 移除噪声元素，避免污染 Markdown 输出。模块级单例，避免重复构造。 */
@@ -71,7 +73,33 @@ function normalizeUrl(raw: string): string {
   if (parsed.protocol !== 'https:') {
     throw new Error(`不允许的协议: ${parsed.protocol}（仅 http/https）`);
   }
+  assertRoutableHost(parsed.hostname.toLowerCase());
   return parsed.toString();
+}
+
+/**
+ * SSRF 防线：回环 / 链路本地（含云元数据 169.254.169.254）/ 0.0.0.0 一律阻断；
+ * 其余私网段（10/8、172.16/12、192.168/16）放行但告警——家用 NAS 等 intranet
+ * 抓取是合法场景。域名解析后的 IP 不做二次校验（fetch 层重定向已限制协议），
+ * DNS rebinding 类绕过留待 2.1 评估，此处挡住直连字面量这一主要面。
+ */
+function assertRoutableHost(host: string): void {
+  if (host === 'localhost' || host === '0.0.0.0' || host === '[::1]' || host === '[::]') {
+    throw new Error(`webfetch 禁止访问回环地址: ${host}`);
+  }
+  if (host.startsWith('[fe80:')) {
+    throw new Error(`webfetch 禁止访问链路本地地址: ${host}`);
+  }
+  const v4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4Match) {
+    const a = Number(v4Match[1]);
+    const b = Number(v4Match[2]);
+    if (a === 127) throw new Error(`webfetch 禁止访问回环地址: ${host}`);
+    if (a === 169 && b === 254) throw new Error(`webfetch 禁止访问链路本地地址: ${host}`);
+    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) {
+      logger.warn(`webfetch 访问私网地址（放行并留痕）: ${host}`);
+    }
+  }
 }
 
 /** content-type 是否为 HTML（含 xhtml）。 */
@@ -114,12 +142,6 @@ async function readBodyWithCap(
 /** 数值钳制到 [min, max]。 */
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
-}
-
-/** 把 unknown 归一化为 string，非 string 则抛错。 */
-function parseStringArg(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new Error(`参数 "${name}" 缺失或不是字符串`);
-  return value;
 }
 
 export class WebTools implements ToolModule {

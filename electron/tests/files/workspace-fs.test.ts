@@ -43,6 +43,11 @@ describe('files/workspace-fs', () => {
     await expect(wsFs.writeFile('.git/config', 'evil')).rejects.toThrow();
   });
 
+  it('writeFile 拒绝大写 .GIT/ 变体（macOS 大小写不敏感 FS 绕过防护）', async () => {
+    await expect(wsFs.writeFile('.GIT/config', 'evil')).rejects.toThrow();
+    await expect(wsFs.writeFile('.Git/hooks/x', 'evil')).rejects.toThrow();
+  });
+
   it('listDir 返回文件和子目录', async () => {
     await wsFs.writeFile('a.txt', 'a');
     await wsFs.writeFile('b.txt', 'b');

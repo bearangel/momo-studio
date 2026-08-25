@@ -14,6 +14,41 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { logger } from '../logger';
 import type { McpServerConfig, McpToolInfo, McpToolResult } from './types';
 
+/**
+ * MCP 子进程环境变量白名单——与 agent 工具的 buildSandboxEnv（shell-tools.ts）
+ * 同一防线：MCP server 可能来自 marketplace/p2p 第三方，不能继承主进程全部
+ * 环境变量（LLM API key 等敏感值）。白名单成员 = 进程运行必需项（npx 类
+ * server 依赖 PATH/HOME）+ 本地化；config.env 显式配置在白名单之上再覆盖。
+ */
+const MCP_ALLOWED_ENV = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'USERPROFILE',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SHELL',
+  'TERM',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'SYSTEMROOT',
+  'WINDIR',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'XDG_DATA_HOME',
+  'XDG_CONFIG_HOME',
+]);
+
+function buildMcpEnv(configEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (MCP_ALLOWED_ENV.has(key)) env[key] = process.env[key];
+  }
+  return { ...env, ...configEnv };
+}
+
 /** JSON-RPC 2.0 请求（带 id，期望响应） */
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -59,7 +94,7 @@ export class McpClient {
   /** 启动子进程并完成 MCP initialize 握手 */
   async connect(): Promise<void> {
     this.proc = spawn(this.config.command, this.config.args, {
-      env: { ...process.env, ...this.config.env },
+      env: buildMcpEnv(this.config.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

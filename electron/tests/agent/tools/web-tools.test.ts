@@ -43,6 +43,30 @@ function makeBody(content: string): ReadableStream<Uint8Array> {
 }
 
 describe('webfetch', () => {
+  it('SSRF 防线：回环 / 链路本地（含云元数据）目标直接抛错，不发起 fetch', async () => {
+    const tools = new WebTools();
+    for (const url of [
+      'http://127.0.0.1:5173/',
+      'http://localhost:8080/',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://[::1]:9000/',
+    ]) {
+      await expect(tools.execute('webfetch', { url }, ctx)).rejects.toThrow(/回环|链路本地/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('SSRF 防线：私网段（10/8）放行但 fetch 正常执行', async () => {
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      headers: { get: () => 'text/plain' },
+      body: makeBody('intranet ok'),
+    });
+    const tools = new WebTools();
+    const result = await tools.execute('webfetch', { url: 'http://10.0.0.5:9090/health' }, ctx);
+    expect(result).toContain('intranet ok');
+  });
+
   it('HTML 转 Markdown', async () => {
     fetchMock.mockResolvedValueOnce({
       status: 200,

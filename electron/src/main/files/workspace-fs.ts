@@ -49,9 +49,10 @@ export class WorkspaceFS {
       }
     }
 
-    // 3) 不允许操作 .git/（.gitignore 除外），保护版本库元数据
+    // 3) 不允许操作 .git/（.gitignore 除外），保护版本库元数据。
+    //    前缀比较用小写——macOS 默认大小写不敏感文件系统上 `.GIT/` 可绕过字面匹配
     const rel = path.relative(this.rootDir, normalized);
-    if (rel.startsWith('.git') && rel !== '.gitignore') {
+    if (rel.toLowerCase().startsWith('.git') && rel !== '.gitignore') {
       throw new Error(`禁止操作 .git 目录: ${relativeOrAbsolutePath}`);
     }
 
@@ -77,7 +78,7 @@ export class WorkspaceFS {
     const abs = this.assertInWorkspace(relativePath);
     const entries = await fs.promises.readdir(abs, { withFileTypes: true });
     return entries
-      .filter((e) => !e.name.startsWith('.git'))
+      .filter((e) => !e.name.toLowerCase().startsWith('.git'))
       .map((e) => {
         const fullPath = path.join(abs, e.name);
         const stat = fs.statSync(fullPath);

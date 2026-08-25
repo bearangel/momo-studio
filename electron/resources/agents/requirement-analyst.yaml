@@ -58,8 +58,6 @@ spec:
     - kind: builtin
       ref: glob
     - kind: builtin
-      ref: bash
-    - kind: builtin
       ref: git_status
     - kind: builtin
       ref: git_diff

@@ -337,7 +337,12 @@ export function listTasks(opts: {
       : opts.orderBy === 'scheduled_at'
         ? 'ORDER BY scheduled_at ASC, created_at ASC'
         : 'ORDER BY created_at ASC';
-  const limitClause = opts.limit ? `LIMIT ${opts.limit}` : '';
+  // LIMIT 走占位符参数（opts.limit 来自 IPC 边界，不做字符串拼接防注入）
+  let limitClause = '';
+  if (typeof opts.limit === 'number' && opts.limit > 0) {
+    limitClause = 'LIMIT ?';
+    params.push(Math.floor(opts.limit));
+  }
   const rows = db
     .prepare(`SELECT * FROM tasks ${whereClause} ${orderClause} ${limitClause}`)
     .all(...params) as SqlRow[];
