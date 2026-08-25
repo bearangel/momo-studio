@@ -275,3 +275,23 @@ export function subscribeSessionChannels(): () => void {
     off2();
   };
 }
+
+/**
+ * DevTools 诊断钩子：Console 里运行 __momoDebug() 输出当前会话消息行与流聚合键。
+ * 用于排查嵌套展示断链（dispatch chip 查找键 ↔ 子消息行 streamSessionId ↔ streams key）。
+ */
+if (typeof window !== 'undefined') {
+  (globalThis as unknown as Record<string, unknown>).__momoDebug = (): unknown => {
+    const s = useSessionStore.getState();
+    const st = useStreamStore.getState();
+    const active = s.activeSessionId;
+    const msgs = (active ? s.messagesBySession.get(active) : [])?.map((m) => ({
+      id: m.id.slice(0, 8),
+      stream: m.streamSessionId?.slice(0, 8) ?? null,
+      parent: m.parentStreamSessionId?.slice(0, 8) ?? null,
+      sender: m.sender.slice(0, 16),
+      status: m.status,
+    }));
+    return { activeSession: active?.slice(0, 8) ?? null, messages: msgs, streamKeys: [...st.streams.keys()].map((k) => k.slice(0, 8)) };
+  };
+}

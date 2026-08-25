@@ -606,3 +606,14 @@ describe('session.store — subscribeSessionChannels 接线（Task 9 新增）',
     expect(true).toBe(true);
   });
 });
+
+describe('__momoDebug 诊断钩子（嵌套展示排查）', () => {
+  it('window.__momoDebug 存在且返回消息行/流键结构', () => {
+    const dbg = (globalThis as unknown as { __momoDebug?: () => unknown }).__momoDebug;
+    expect(typeof dbg).toBe('function');
+    const out = dbg!() as { activeSession: unknown; messages: unknown[]; streamKeys: string[] };
+    expect(out).toHaveProperty('activeSession');
+    expect(Array.isArray(out.messages)).toBe(true);
+    expect(Array.isArray(out.streamKeys)).toBe(true);
+  });
+});
