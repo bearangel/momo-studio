@@ -22,36 +22,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - uses: pnpm/action-setup@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Configure git auth for Cargo git deps
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Get Tuwunel commit hash
-        id: tuwunel-ver
-        run: echo "hash=$(git ls-remote https://github.com/matrix-construct/tuwunel.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
-
-      - name: Cache Tuwunel binary (macOS)
-        id: cache-tuwunel-mac
-        uses: actions/cache@v4
-        with:
-          path: resources/conduit/tuwunel-darwin-arm64
-          key: tuwunel-darwin-arm64-${{ steps.tuwunel-ver.outputs.hash }}
-
-      - name: Build Tuwunel (macOS)
-        if: steps.cache-tuwunel-mac.outputs.cache-hit != 'true'
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
-        run: |
-          git clone --depth 1 https://github.com/matrix-construct/tuwunel.git /tmp/tuwunel
-          cd /tmp/tuwunel
-          cargo build --release
-          cp target/release/tuwunel "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
-          chmod +x "${{ github.workspace }}/resources/conduit/tuwunel-darwin-arm64"
 
       - name: Install dependencies
         run: pnpm install
@@ -64,6 +37,8 @@ jobs:
 
       - name: Build renderer
         run: pnpm --filter ./renderer build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Build electron
         run: pnpm --filter ./electron build
@@ -93,7 +68,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - uses: pnpm/action-setup@v4
 
@@ -113,6 +88,8 @@ jobs:
 
       - name: Build renderer
         run: pnpm --filter ./renderer build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Build electron
         run: pnpm --filter ./electron build
@@ -142,14 +119,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - uses: pnpm/action-setup@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Configure git auth for Cargo git deps
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: pnpm install
@@ -162,6 +134,8 @@ jobs:
 
       - name: Build renderer
         run: pnpm --filter ./renderer build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Build electron
         run: pnpm --filter ./electron build
