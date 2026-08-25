@@ -38,6 +38,24 @@ describe('agent/dispatch', () => {
     expect(parseDispatchEvent({ body: 'test' })).toBeNull();
   });
 
+  it('regression（P0-7）：dispatch 消息携带 sub_stream_session_id（子 agent 自身流 id）与 tool_stream_session_id（PM 流 id）双字段', () => {
+    const msg = buildDispatchMessage({
+      body: '画个按钮',
+      fromAssignmentId: 'inst-pm',
+      toAssignmentId: 'inst-ui',
+      subStreamSessionId: 'ss-sub-abc',
+      toolStreamSessionId: 'ss-pm-xyz',
+    });
+    // sub_stream_session_id：子 agent 自身流 id——routeDispatch 用它作 task.streamSessionId
+    expect(msg.content.sub_stream_session_id).toBe('ss-sub-abc');
+    // tool_stream_session_id：PM 自身流 id——子消息 parentStreamSessionId 的来源
+    expect(msg.content.tool_stream_session_id).toBe('ss-pm-xyz');
+
+    const parsed = parseDispatchEvent({ ...msg.content });
+    expect(parsed?.sub_stream_session_id).toBe('ss-sub-abc');
+    expect(parsed?.tool_stream_session_id).toBe('ss-pm-xyz');
+  });
+
   it('buildTaskReply + parseTaskReply 往返', () => {
     const reply = buildTaskReply({
       body: '完成了',

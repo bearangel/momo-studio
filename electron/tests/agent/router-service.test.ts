@@ -133,6 +133,57 @@ describe('RouterService', () => {
       );
     });
 
+    it('regression（P0-7）：dispatch 带 sub_stream_session_id → task.streamSessionId 用它（chip 查找键一致）', async () => {
+      const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-sub' }) };
+      const runners = new Map([['inst-sub', mockRunner]]);
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await svc.routeEvent(
+        mkMockEvent('io.momo-studio.dispatch', {
+          body: '画图',
+          task_id: 'task-456',
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-sub',
+          sub_stream_session_id: 'ss-pre-gen',
+          tool_stream_session_id: 'ss-pm-cur',
+        }),
+        'inst-pm',
+        '!room:home',
+        'inst-sub',
+      );
+
+      const called = mockRunner.executeTask.mock.calls[0]![0] as {
+        streamSessionId: string;
+        dispatchContext: { tool_stream_session_id?: string };
+      };
+      // 子 agent 消息行的 streamSessionId === PM chunk 的 subStreamSessionId（嵌套查找键）
+      expect(called.streamSessionId).toBe('ss-pre-gen');
+      // parentStreamSessionId 来源 = PM 自身流 id
+      expect(called.dispatchContext.tool_stream_session_id).toBe('ss-pm-cur');
+    });
+
+    it('dispatch 无 sub_stream_session_id（旧消息兼容）→ 自动生成 UUID', async () => {
+      const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-x' }) };
+      const runners = new Map([['inst-sub', mockRunner]]);
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await svc.routeEvent(
+        mkMockEvent('io.momo-studio.dispatch', {
+          body: '旧消息',
+          task_id: 'task-789',
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-sub',
+        }),
+        'inst-pm',
+        '!room:home',
+        'inst-sub',
+      );
+
+      const called = mockRunner.executeTask.mock.calls[0]![0] as { streamSessionId: string };
+      expect(typeof called.streamSessionId).toBe('string');
+      expect(called.streamSessionId.length).toBeGreaterThan(0);
+    });
+
     it('task_reply → 通知正在执行的 PM task（IPC 推送）', async () => {
       const mockRunner = {
         executeTask: vi.fn(),

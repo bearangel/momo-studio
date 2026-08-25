@@ -17,8 +17,18 @@ export interface DispatchContent {
   deadline_ms?: number;
   /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
   tool_budget?: number;
-  /** v1.4 嵌套：子 agent 流式 session ID，用于关联 PM 气泡内的嵌套展示 */
+  /**
+   * PM 自身流 id——子 agent 消息行 parent_stream_session_id 的来源
+   * （renderer 据此把子 agent 消息过滤出顶层列表 + 表达嵌套归属）。
+   */
   tool_stream_session_id?: string;
+  /**
+   * 子 agent 自身流 id——PM 在 dispatch tool_call chunk 预生成并携带
+   * （isDispatch.subStreamSessionId）。routeDispatch 用它作 task.streamSessionId，
+   * 保证子 agent 消息行的 stream_session_id 与 renderer chip 的查找键一致
+   * （P0-7：此前 routeDispatch 自造新 UUID，嵌套展开区永远找不到子流）。
+   */
+  sub_stream_session_id?: string;
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -67,8 +77,10 @@ export function buildDispatchMessage(opts: {
   deadlineMs?: number;
   /** v1.4：传给子 agent 的工具调用预算（-1=无限，0=禁用，N=上限） */
   toolBudget?: number;
-  /** v1.4 嵌套：子 agent 流式 session ID（关联到 PM 气泡的 dispatch chip） */
+  /** PM 自身流 id（子消息 parentStreamSessionId 的来源） */
   toolStreamSessionId?: string;
+  /** 子 agent 自身流 id（PM 在 dispatch tool_call chunk 预生成；routeDispatch 用作 task.streamSessionId） */
+  subStreamSessionId?: string;
 }): { eventType: typeof DISPATCH_EVENT_TYPE; content: DispatchContent } {
   return {
     eventType: DISPATCH_EVENT_TYPE,
@@ -80,6 +92,7 @@ export function buildDispatchMessage(opts: {
       deadline_ms: opts.deadlineMs,
       tool_budget: opts.toolBudget,
       tool_stream_session_id: opts.toolStreamSessionId,
+      sub_stream_session_id: opts.subStreamSessionId,
     },
   };
 }
@@ -120,6 +133,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
     deadline_ms: content.deadline_ms as number | undefined,
     tool_budget: content.tool_budget as number | undefined,
     tool_stream_session_id: content.tool_stream_session_id as string | undefined,
+    sub_stream_session_id: content.sub_stream_session_id as string | undefined,
   };
 }
 

@@ -591,7 +591,7 @@ export async function runChatLoop(
       let result: string;
       let success = true;
       try {
-        result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId);
+        result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId, streamSessionId);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -791,15 +791,17 @@ async function executeTool(
   config: RuntimeConfig,
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
-  /** v1.4 嵌套：dispatch 工具的子 stream session ID，透传到 executeDispatch → buildDispatchMessage */
+  /** dispatch 工具的子 agent 流 id（PM 预生成） */
   toolStreamSessionId?: string,
+  /** PM 自身流 id（runChatLoop 作用域——子 agent 消息 parentStreamSessionId 的来源） */
+  pmStreamSessionId?: string,
 ): Promise<string> {
   const startTime = Date.now();
   let success = true;
   let output = '';
   trace(`→ 工具: ${call.name}`, { input: `${JSON.stringify(call.arguments).length}字` });
   try {
-    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId);
+    output = await doExecuteTool(call, ctx, config, toolBudget, dispatchInfo, toolStreamSessionId, pmStreamSessionId);
     trace(`← 工具: ${call.name}`, { ms: Date.now() - startTime, ok: '✓' });
     return output;
   } catch (err) {
@@ -829,6 +831,7 @@ export async function doExecuteTool(
   toolBudget?: number,
   dispatchInfo?: { toolCallsUsed: number },
   toolStreamSessionId?: string,
+  pmStreamSessionId?: string,
 ): Promise<string> {
   const name = call.name;
 
@@ -870,7 +873,7 @@ export async function doExecuteTool(
     const subSlug = name.slice('dispatch:'.length);
     const task = argToString(call.arguments.task, 'task');
     // v1.5.1：传 abortSignal，PM 在 await dispatch 时也能响应停止按钮
-    const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, ctx.abortSignal);
+    const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, pmStreamSessionId, ctx.abortSignal);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
   }

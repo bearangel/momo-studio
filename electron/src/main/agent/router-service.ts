@@ -173,7 +173,10 @@ export class RouterService {
     }
 
     const body = this.extractBody(content);
-    const streamSessionId = randomUUID();
+    // P0-7：优先用 PM 预生成的 sub_stream_session_id（与 renderer chip 的查找键
+    // 一致）；旧消息无此字段时回退 randomUUID（嵌套展示缺查找键，仅顶层可见）
+    const streamSessionId =
+      typeof content.sub_stream_session_id === 'string' ? content.sub_stream_session_id : randomUUID();
     const task: TaskConfig = {
       taskId,
       executionSessionId: event.getRoomId() ?? '',

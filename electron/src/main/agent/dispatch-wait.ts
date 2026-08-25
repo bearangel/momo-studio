@@ -69,8 +69,14 @@ export async function executeDispatch(
   task: string,
   config: RuntimeConfig,
   toolBudget?: number,
-  /** v1.4 嵌套：子 agent 流 session ID，写入 dispatch 消息供子 agent 关联 PM 气泡 */
-  toolStreamSessionId?: string,
+  /**
+   * 子 agent 自身流 id（PM 在 dispatch tool_call chunk 预生成的 subStreamSessionId）。
+   * 写入 dispatch 消息 sub_stream_session_id——routeDispatch 用它作子 task 的
+   * streamSessionId，保证子消息行与 renderer chip 的查找键一致（P0-7）。
+   */
+  subStreamSessionId?: string,
+  /** PM 自身流 id——子 agent 消息行 parentStreamSessionId 的来源 */
+  pmStreamSessionId?: string,
   /**
    * v1.5.1：PM chat loop 的 abortSignal。被 abort 时立即 reject（清理 pendingReplies），
    * 否则 PM 会阻塞到渐进式超时（3+6=9 分钟）才退出，期间停止按钮无效。
@@ -89,7 +95,8 @@ export async function executeDispatch(
     toAssignmentId: sub.assignmentId,
     deadlineMs: DISPATCH_TOTAL_TIMEOUT_MS,
     toolBudget,
-    toolStreamSessionId,
+    toolStreamSessionId: pmStreamSessionId,
+    subStreamSessionId,
   });
 
   // 先注册 pending，再发送——防竞态
@@ -118,7 +125,7 @@ export async function executeDispatch(
         // 自然收敛——而非依赖事件桥把 abort 投递到后续启动的子 agent。
         const abortEvt = buildAbortDispatchMessage({
           taskId: dispatch.content.task_id,
-          subStreamSessionId: toolStreamSessionId,
+          subStreamSessionId: subStreamSessionId,
         });
         sendAbortDispatchEvent(config.teamSessionId, config.agentUserId, abortEvt.content);
         const err = new Error('dispatch 被中断');
