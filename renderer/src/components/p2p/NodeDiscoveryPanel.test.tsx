@@ -95,6 +95,7 @@ describe('NodeDiscoveryPanel P2 指纹展示', () => {
     // 节点行渲染（需要 loading 结束）
     await waitFor(() => {
       expect(screen.getByText('Bob 的 Mac')).toBeInTheDocument();
+      expect(screen.getByText('Carol 的 Mac')).toBeInTheDocument();
     });
     // 每个节点 fingerprint 独立展示——用函数匹配器按 textContent 搜索（DOM 文本
     // 可能跨多个 element：可视 span + title 属性），确保两个节点的指纹都出现
@@ -127,6 +128,10 @@ describe('NodeDiscoveryPanel P2 指纹展示', () => {
     await waitFor(() => {
       expect(mockApi.p2p.addTrustedNode).toHaveBeenCalledWith('node_peer0000000001');
     });
+    // 信任操作后刷新列表：首次挂载 + 操作后重拉 ≥ 2 次（自 renderer/tests 迁入的断言）
+    await waitFor(() => {
+      expect(mockApi.p2p.getDiscoveredNodes.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   it('已信任节点显示「移除信任」', async () => {
@@ -147,5 +152,22 @@ describe('NodeDiscoveryPanel P2 指纹展示', () => {
       expect(screen.getByText(/核对/i)).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: '添加信任' })).toBeNull();
+  });
+
+  // —— 以下两用例自 renderer/tests/components/p2p/NodeDiscoveryPanel.test.tsx 迁入
+  // （2026-08 目录规范统一）：loading 态与移除信任回调为独有覆盖。
+  it('加载阶段显示"扫描中..."', async () => {
+    mockApi.p2p.getDiscoveredNodes.mockReturnValue(new Promise(() => {}));
+    render(<NodeDiscoveryPanel />);
+    expect(screen.getByText('扫描中...')).toBeInTheDocument();
+  });
+
+  it('点击「移除信任」调用 removeTrustedNode', async () => {
+    render(<NodeDiscoveryPanel />);
+    const removeBtn = await screen.findByRole('button', { name: '移除信任' });
+    fireEvent.click(removeBtn);
+    await waitFor(() => {
+      expect(mockApi.p2p.removeTrustedNode).toHaveBeenCalledWith('node_peer0000000002');
+    });
   });
 });
