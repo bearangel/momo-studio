@@ -97,6 +97,10 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
   },
 
   hydrateFromEvents: (messageId, events) => {
+    // 空 events 防御（P0-4）：零事件消息（用户消息）不创建 streams 条目——
+    // aggregateEvents([]) 的默认 status 是 'streaming'，写入会让 MessageBubble
+    // 把静态消息渲染成空的"流式中"气泡，消息文本不可见。
+    if (events.length === 0) return;
     // 用传入的 events 覆盖该 messageId 的 eventLog（重启场景：IPC 拉的是权威全量）
     eventLogByMessage.set(messageId, [...events].sort((a, b) => a.seq - b.seq));
     set((state) => {
