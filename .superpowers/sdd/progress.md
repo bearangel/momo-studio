@@ -533,3 +533,8 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 ### P0-6（cf5bc36）：dispatch 渲染成普通工具卡片
 - 根因：上轮 DispatchSegment 依赖 dispatch_start 事件，但生产链路 dispatch 以 tool_call_start(isDispatch) 落库，该事件从不产生
 - 聚合器按 isDispatch 分流；回归锁 ×4；581 全绿
+
+### P0-7（bebeb2f）：dispatch 嵌套展开区空（ID 断链）
+- 根因：PM chunk 查找键 UUID-A ≠ routeDispatch 自造子 task 流 id UUID-B；子消息 parentStreamSessionId 塞入幽灵 UUID-A
+- 修复：dispatch 消息双流 id 字段（sub_stream_session_id 同源化 + tool_stream_session_id 语义归正为 PM 流 id）
+- 回归锁 ×3；1082 + 581 全绿。注意：历史消息（修复前派发）嵌套展开仍为空——旧数据无同源 id，属预期
