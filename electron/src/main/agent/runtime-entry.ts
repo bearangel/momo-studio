@@ -337,6 +337,69 @@ export async function runChatLoop(
   const recentToolCallSignatures: string[] = [];
   const MAX_DUPLICATE_TOOLS = 3;
 
+  /**
+   * v2 dispatch 并行（docs/specs/2026-08-25-dispatch-parallel-design.md §4.1）：
+   * 单个 dispatch 工具调用的执行体——并发批次的成员。
+   * 同步段：预生成 subStreamSessionId + 发 tool_call chip（批次启动时 K 个 chip 即刻全部出现，
+   *   P0-7 查找键语义不变——renderer DispatchChip 据此关联子流）。
+   * 异步段：executeTool（内部 executeDispatch 发内部事件等 task_reply）→ settle 时发 tool_result chip。
+   * 非 abort 错误转 result 字符串返回（allSettled 不短路，LLM 下一轮可见自行纠正，与串行语义一致）；
+   * abort 错误原样 reject（批次边界统一走中断退出，不回填 tool result——防「中断-重试」死循环）。
+   */
+  const execDispatchCall = (
+    tc: LLMToolCall,
+    /** 段级均分 sub-budget（D3）：段前预算 - 段长；-1 = 无限 */
+    subBudget: number,
+    /** 本成员独立的回执计数（§6.3 禁止跨成员共享对象，预算追扣据此） */
+    dispatchInfo: { toolCallsUsed: number },
+  ): Promise<string> => {
+    const subStreamSessionId = randomUUID();
+    const subSlug = tc.name.slice('dispatch:'.length);
+    const subRef = config.subAgents.find((s) => s.slug === subSlug);
+    const subAgentName = subRef?.description ?? subRef?.slug ?? tc.name;
+    sendStreamChunk({
+      type: 'tool_call',
+      streamSessionId,
+      callId: tc.id,
+      toolName: tc.name,
+      args: tc.arguments,
+      isDispatch: true,
+      subStreamSessionId,
+      subAgentName,
+      subAgentAvatar: '🤖',
+    });
+    return executeTool(tc, ctx, config, subBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId)
+      .then((result) => {
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          callId: tc.id,
+          toolName: tc.name,
+          result,
+          success: true,
+          subStatus: 'completed' as const,
+        });
+        return result;
+      })
+      .catch((err: unknown) => {
+        if ((err as Error).name === 'AbortError' || abortController.signal.aborted) throw err;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const result = `工具执行失败: ${errMsg}`;
+        // dispatch 超时（executeDispatch 渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
+        const subStatus = errMsg.includes('超时') ? ('timeout' as const) : ('failed' as const);
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId,
+          callId: tc.id,
+          toolName: tc.name,
+          result,
+          success: false,
+          subStatus,
+        });
+        return result;
+      });
+  };
+
   for (let round = 0; ; round++) {
     // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
     if (messages.length > 30 && round > 0) {
@@ -406,7 +469,13 @@ export async function runChatLoop(
     // 根因不是上下文长度（1M tokens 17 轮用不到 2%），是文本累积导致 LLM 行为退化。
     accumulatedText = '';
 
-    for (const tc of toolCalls) {
+    // v2 dispatch 并行（spec §4）：游标推进三段式。
+    //   ① 预检逐位原顺序（重复检测 / 预算耗尽 / task_complete / compact 内联处理）
+    //   ② 非 dispatch 工具：原路径串行执行（零行为差异）
+    //   ③ 极大连续 dispatch 段：一次 Promise.allSettled 并发（段长 1 行为与原路径逐位一致）
+    let ti = 0;
+    while (ti < toolCalls.length) {
+      const tc = toolCalls[ti]!;
       // v1.5.6: 循环检测——同名 + 同参数连续重复 MAX_DUPLICATE_TOOLS 次强制终止。
       // 防 LLM 上下文爆炸后失忆，每轮重复相同操作（如反复 list_files 同一目录）。
       const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
@@ -495,7 +564,7 @@ export async function runChatLoop(
         });
         toolCallCount++;
         budgetRemaining--;
-        continue;
+        ti++; continue;
       }
 
       // v1.5.6 compact：LLM 主动压缩上下文。调此工具时把整个对话历史替换为
@@ -517,7 +586,7 @@ export async function runChatLoop(
           });
           toolCallCount++;
           budgetRemaining--;
-          continue;
+          ti++; continue;
         }
 
         const oldMsgCount = messages.length;
@@ -560,52 +629,104 @@ export async function runChatLoop(
         });
         toolCallCount++;
         budgetRemaining--;
+        ti++; continue;
+      }
+
+      if (tc.name.startsWith('dispatch:')) {
+        // === ③ dispatch 段：向后扫描极大连续 dispatch 段（spec §4.3 截断规则） ===
+        // 段内逐位预检（原顺序）：重复检测截断 / 预算截断——被截断的成员不发 tool_call chip
+        let segEnd = ti + 1;
+        let exitAfterSegment: { finishReason: 'stop' | 'budget_exhausted'; fallbackText: string } | null = null;
+        while (segEnd < toolCalls.length && toolCalls[segEnd]!.name.startsWith('dispatch:')) {
+          const next = toolCalls[segEnd]!;
+          const nextSig = `${next.name}:${JSON.stringify(next.arguments)}`;
+          recentToolCallSignatures.push(nextSig);
+          if (recentToolCallSignatures.length > MAX_DUPLICATE_TOOLS) {
+            recentToolCallSignatures.shift();
+          }
+          const nextDup = recentToolCallSignatures.filter((s) => s === nextSig).length;
+          if (nextDup >= MAX_DUPLICATE_TOOLS) {
+            exitAfterSegment = {
+              finishReason: 'stop',
+              fallbackText: `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${next.name}，已强制终止防循环)`,
+            };
+            break;
+          }
+          // 纳入本成员后段长 = segEnd - ti + 1，须 ≤ 剩余预算；否则截断（§4.3）
+          if (budgetRemaining !== Infinity && budgetRemaining < segEnd - ti + 1) {
+            exitAfterSegment = { finishReason: 'budget_exhausted', fallbackText: '(工具预算耗尽)' };
+            break;
+          }
+          segEnd++;
+        }
+
+        const seg = toolCalls.slice(ti, segEnd);
+        const budgetBeforeSegment = budgetRemaining;
+        // 段开始一次性预扣 K（spec §5.2）
+        if (budgetRemaining !== Infinity) {
+          budgetRemaining -= seg.length;
+        }
+        // D3 均分：并发无法预知各成员消耗，sub-budget 统一 = 段前预算 - 段长
+        // （串行为先到先得；段长 1 时与串行公式 budgetRemaining - 1 逐位一致）
+        const subBudget =
+          budgetBeforeSegment === Infinity ? -1 : Math.max(0, budgetBeforeSegment - seg.length);
+        const dispatchInfos = seg.map(() => ({ toolCallsUsed: 0 }));
+
+        // 并发执行（§4.1）：execDispatchCall 同步段先发全部 K 个 tool_call chip，再各自等回执
+        const settled = await Promise.allSettled(
+          seg.map((member, idx) => execDispatchCall(member, subBudget, dispatchInfos[idx]!)),
+        );
+
+        // 中断（§6.1）：任一成员 AbortError / 信号已触发 → 统一中断退出，不回填 tool result
+        // （与原串行 catch 分支语义一致，防「中断-重试」死循环）
+        if (abortController.signal.aborted || settled.some((r) => r.status === 'rejected')) {
+          process.off('message', abortListener);
+          const finalText = accumulatedText.trim() || '(中断)';
+          sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+          if (stats) {
+            stats.toolCallsUsed = toolCallCount;
+            stats.aborted = true;
+          }
+          return finalText;
+        }
+
+        // 消息回填（§4.2）：按原 toolCalls 顺序（协议要求与 assistant.toolCalls 的 id 一一对应，
+        // 不按完成顺序）；预算按各成员回执追扣（§5.2）
+        for (let idx = 0; idx < seg.length; idx++) {
+          const r = settled[idx] as PromiseFulfilledResult<string>;
+          messages.push({ role: 'tool', content: r.value, toolCallId: seg[idx]!.id });
+          toolCallCount++;
+          const info = dispatchInfos[idx]!;
+          if (info.toolCallsUsed > 0 && budgetRemaining !== Infinity) {
+            budgetRemaining -= info.toolCallsUsed;
+          }
+        }
+
+        // 段内截断（§4.3）：已执行成员的回执已发，按截断原因退出
+        if (exitAfterSegment) {
+          process.off('message', abortListener);
+          const finalText = accumulatedText.trim() || exitAfterSegment.fallbackText;
+          sendEndChunk({ type: 'end', streamSessionId, finishReason: exitAfterSegment.finishReason });
+          if (stats) stats.toolCallsUsed = toolCallCount;
+          return finalText;
+        }
+
+        ti = segEnd;
         continue;
       }
 
-      const isDispatch = tc.name.startsWith('dispatch:');
+      // === ② 非 dispatch 工具：原路径串行执行（v2 并行仅作用于连续 dispatch 段） ===
+      sendStreamChunk({
+        type: 'tool_call',
+        streamSessionId,
+        callId: tc.id,
+        toolName: tc.name,
+        args: tc.arguments,
+      });
 
-      // v1.4 嵌套：dispatch 工具预生成子 stream session ID，发增强 tool_call chunk
-      // 携带 isDispatch/subStreamSessionId/subAgentName/subAgentAvatar，renderer 据此
-      // 在 PM 气泡内渲染 dispatch chip 并等待子 agent 的 start chunk 关联
-      let subStreamSessionId: string | undefined;
-      if (isDispatch) {
-        subStreamSessionId = randomUUID();
-        const subSlug = tc.name.slice('dispatch:'.length);
-        const subRef = config.subAgents.find((s) => s.slug === subSlug);
-        const subAgentName = subRef?.description ?? subRef?.slug ?? tc.name;
-        sendStreamChunk({
-          type: 'tool_call',
-          streamSessionId,
-          callId: tc.id,
-          toolName: tc.name,
-          args: tc.arguments,
-          isDispatch: true,
-          subStreamSessionId,
-          subAgentName,
-          subAgentAvatar: '🤖',
-        });
-      } else {
-        sendStreamChunk({
-          type: 'tool_call',
-          streamSessionId,
-          callId: tc.id,
-          toolName: tc.name,
-          args: tc.arguments,
-        });
-      }
-
-      // dispatch 工具传剩余预算（减去本次 dispatch 本身占用的 1 次）
-      let dispatchToolBudget: number | undefined;
-      if (isDispatch) {
-        dispatchToolBudget =
-          budgetRemaining === Infinity ? -1 : Math.max(0, budgetRemaining - 1);
-      }
-
-      const dispatchInfo = isDispatch ? { toolCallsUsed: 0 } : undefined;
       let result: string;
       try {
-        result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId);
+        result = await executeTool(tc, ctx, config, undefined, undefined, undefined, streamSessionId, roomId);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -613,12 +734,10 @@ export async function runChatLoop(
           toolName: tc.name,
           result,
           success: true,
-          ...(isDispatch ? { subStatus: 'completed' as const } : {}),
         });
       } catch (err) {
-        // v1.5.2: 工具因 abort 失败（executeDispatch 监听 signal 立即 reject / bash 被 SIGKILL 等）
-        // 立即跳出整个 chat loop，不推 tool_result 给 LLM——否则 LLM 看到失败结果后重试，
-        // 形成"中断-重试-中断"死循环（用户症状：停止按钮按下后 agent 仍持续输出）。
+        // v1.5.2: 工具因 abort 失败立即跳出整个 chat loop，不推 tool_result 给 LLM
+        // （否则 LLM 看到失败结果后重试，形成「中断-重试-中断」死循环）
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
           process.off('message', abortListener);
           const finalText = accumulatedText.trim() || '(中断)';
@@ -632,12 +751,6 @@ export async function runChatLoop(
 
         const errMsg = err instanceof Error ? err.message : String(err);
         result = `工具执行失败: ${errMsg}`;
-        // dispatch 超时（executeDispatch 的渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
-        const subStatus = isDispatch
-          ? errMsg.includes('超时')
-            ? ('timeout' as const)
-            : ('failed' as const)
-          : undefined;
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -645,17 +758,13 @@ export async function runChatLoop(
           toolName: tc.name,
           result,
           success: false,
-          ...(subStatus ? { subStatus } : {}),
         });
       }
 
       toolCallCount++;
-      budgetRemaining--; // dispatch 本身计 1 次
-      if (dispatchInfo && dispatchInfo.toolCallsUsed > 0 && budgetRemaining !== Infinity) {
-        budgetRemaining -= dispatchInfo.toolCallsUsed;
-      }
-
+      budgetRemaining--;
       messages.push({ role: 'tool', content: result, toolCallId: tc.id });
+      ti++;
     }
   }
 }
