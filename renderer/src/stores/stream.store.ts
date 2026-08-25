@@ -16,7 +16,9 @@
 //   - StreamState extends AggregatedStream（共用聚合输出类型）
 import { create } from 'zustand';
 import type { MessageEventRow } from '../ipc/types';
-import { aggregateEvents, type AggregatedStream } from '../lib/stream-aggregator';
+import { aggregateEvents, type AggregatedStream, type StreamSegment } from '../lib/stream-aggregator';
+
+export type { StreamSegment };
 
 /**
  * A 子系统 StreamState。

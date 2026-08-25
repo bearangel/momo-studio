@@ -33,6 +33,7 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
     dispatches: [],
     status: 'streaming',
     events: [],
+    segments: [],
     messageId: 'sub-1',
     startedAt: Date.now(),
     ...overrides,
