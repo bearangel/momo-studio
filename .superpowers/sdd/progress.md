@@ -561,3 +561,7 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - root build 固化 NODE_OPTIONS；setup/release 文档纠偏；conduit-manual.md 删除
 - CI 变更（删 Tuwunel / Node 20 / renderer 内存）因 PAT 无 workflow scope 无法直推，
   以 docs/dev/ci-2.0.0-align.patch 入库，待主机 git apply + push
+
+### dev 编排器热修：vite 探测被代理劫持（fetch→TCP）
+- macOS 主机症状：vite+tsc 起来但 Electron 不启动——fetch 走 HTTP_PROXY 探不到 localhost
+- 修复：node:net 裸 TCP 双栈探测；死代理环境模拟复现→修复后 Window ready PASS
