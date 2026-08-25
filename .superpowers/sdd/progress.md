@@ -611,3 +611,17 @@ Base commit: 35aa86d
 - 控制者亲自复跑新测试 10/10 绿 + 分支改动面核对（恰为预期 7 文件）
 
 ## dispatch-parallel 全部 4 Task 完成（35aa86d..3a6750e + 验收）——待终审
+
+### Final review: APPROVED (Ready to merge = Yes, 2026-08-25)
+- 零 Critical/Important；并发正确性/预算算术/保序/中断路径/契约零改动/下游就绪（WarmPool/activeTasks/routeDispatch）逐项源码级核实
+- 修复轮（文档级）：spec §4 伪代码「段长 1 走原路径」改为「统一经批次路径（公式恒等）」+ plan Task 4 命令 dispatch.ts→dispatch-wait.ts 文件名勘误
+- Deferred（下一 PR 顺手清单，合计 <30 行测试 + 1 行注释）：
+  ① main+空 subAgents 早退分支锁 `expect(formatDispatchHint(makeConfig({role:'main'}))).toBe('')`
+  ② pm-agent.yaml 教学文案锁（读 YAML 断言关键短语）
+  ③ 单成员失败并发隔离用例（A 回 failed / B 正常，spec §12#3）
+  ④ 段扫描被截成员签名窗口约束注释（若截断改「继续」需回滚窗口）
+  ⑤ subStatus 按 errMsg.includes('超时') 判定 → dispatch 错误码结构化时一并处理
+  ⑥ test2 时序断言余量放大 10/200ms（可选）；ti++;continue 拆两行（下次触碰顺手）
+- 测试基线更正：electron 全量现值 154 文件 / 1195 用例（README 1074 为 P5 收官时点数，中间有增长）——后续验收以此为准
+
+## dispatch-parallel 全部完成（8 commits, 35aa86d..终审修复轮）——已过终审

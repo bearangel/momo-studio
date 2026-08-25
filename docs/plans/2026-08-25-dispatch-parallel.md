@@ -914,8 +914,8 @@ Expected: electron + renderer 双 clean（renderer 未改动，作契约零破�
 
 - [ ] **Step 3: 确认契约面零改动**
 
-Run: `git diff --stat dd2ad82..HEAD -- electron/src/main/agent/dispatch.ts electron/src/main/agent/stream-chunk.ts electron/src/preload renderer/`
-Expected: 空输出（`dispatch.ts` / `stream-chunk.ts` / preload / renderer 全程未动——spec §8 契约零改动）
+Run: `git diff --stat dd2ad82..HEAD -- electron/src/main/agent/dispatch-wait.ts electron/src/main/agent/stream-chunk.ts electron/src/preload renderer/`
+Expected: 空输出（`dispatch-wait.ts` / `stream-chunk.ts` / preload / renderer 全程未动——spec §8 契约零改动）
 
 - [ ] **Step 4: 无 commit（验证 Task）**
 
