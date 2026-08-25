@@ -88,6 +88,14 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 | Conduwuit 不启动 | `missing field server_name` 或 `registration_token` 错误 | 检查 config.toml 格式（扁平 key 不是嵌套 table） |
 | 文档文件无法 `git add` | `git add docs/foo.md` 无输出 | `git add -f docs/foo.md`（`.gitignore` 有裸 `docs` 条目） |
 
+## 研发红线（2.0.0 主机验收 8 个 P0 教训沉淀）
+
+- **修 bug 先复现后修复**；用户报「修复无效」先查构建新鲜度（git log ↔ electron/dist ↔ renderer/dist），再怀疑代码
+- **回归锁必须仿真真实运行时语义**（this 绑定 / ID 唯一性）；「方便测试」的 mock 简化 = 生产事故
+- **跨模块 ID 单点生成沿线透传**；「等待某事件」的代码必须先验证该事件有生产者；路由目标用当前上下文不用配置默认值
+- **错误路径与空输入必须有专项测试用例**；禁止错误处理里硬编码吞状态
+- 场景化规则由 skills 自动加载：修 bug → `momo-debug-rules`；写测试/mock → `momo-test-rules`；改 IPC/跨模块/协议 → `momo-boundary-rules`。完整案例复盘：`docs/dev/rules/engineering.md`
+
 ## 开发环境
 
 本项目运行在 OrbStack DevContainer（Linux arm64）中。代码同步映射到 macOS 主机 `/Users/stbearangel/dev/AiProject/moo-studio`。
