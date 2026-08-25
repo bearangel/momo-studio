@@ -18,6 +18,8 @@ import {
   listInstalled,
   uninstallPackage,
 } from '../../src/main/marketplace/installer';
+import { listAgentDefinitions } from '../../src/main/agent/crud';
+import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
 import type { MarketplaceItem } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mp-installer-test-${Date.now()}`);
@@ -96,6 +98,19 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(refs).toContain('read_file');
     expect(refs).toContain('git_commit');
     expect(refs).toContain('lsp_diagnostics');
+  });
+
+  it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/git_commit 被剔除', async () => {
+    await installPackage(makeItem());
+    const def = listAgentDefinitions().find((d) => d.slug === 'test-agent');
+    expect(def).toBeDefined();
+    const refs = def!.defaultTools.map((t) => t.ref);
+    expect(refs).not.toContain('bash');
+    expect(refs).not.toContain('git_commit');
+    // 全部落在安全最小集内（文件里仍是 24 工具全集，钳制只作用于注册结果）
+    const safe = new Set<string>(SAFE_MINIMUM_TOOLS);
+    expect(refs.every((r) => safe.has(r))).toBe(true);
+    expect(def!.source).toBe('marketplace');
   });
 
   it('skill 类型生成 SKILL.md', async () => {

