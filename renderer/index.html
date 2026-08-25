@@ -3,6 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP（S2 导航加固的纵深防御层）：
+      - script-src 'self'：脚本仅限应用自身来源，阻断注入脚本执行
+      - style-src 'unsafe-inline'：Vite dev 注入 <style> 与组件内联样式所需
+      - worker-src 'self' blob:：Monaco 编辑器以 blob: 创建 web worker
+      - connect-src：dev 模式 Vite HMR（ws/http localhost）+ 应用自身；renderer 无其他外呼需求
+      - img-src data:/blob:：markdown 图片与高亮的数据 URI
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:;"
+    />
     <title>Momo Studio</title>
   </head>
   <body>

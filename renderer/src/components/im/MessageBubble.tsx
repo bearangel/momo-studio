@@ -12,7 +12,9 @@
 //     也走 AgentStreamBubble——从 message_events 聚合重建，重启后一致
 //   - 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { AnchorHTMLAttributes, MouseEvent, ReactNode } from 'react';
 import type { ImMessage } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
@@ -20,6 +22,34 @@ import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
 import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
+
+/**
+ * S2 链接拦截：markdown <a> 若走浏览器默认行为，恶意内容可能劫持渲染进程
+ * （导航到外部页面后，preload 暴露的 window.api 暴露给不可信上下文）。
+ * 这里统一 preventDefault + window.open → 主进程 setWindowOpenHandler 拒绝
+ * 新窗口并转 shell.openExternal 走系统浏览器。
+ */
+function SafeAnchor(props: AnchorHTMLAttributes<HTMLAnchorElement>): JSX.Element {
+  const { href, children, target: _target, rel: _rel, onClick: _onClick, ...rest } = props;
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>): void => {
+    event.preventDefault();
+    if (typeof href === 'string' && href.length > 0) {
+      // noopener/noreferrer 双重保险；setWindowOpenHandler 仍会拒绝新窗口
+      window.open(href, '_blank', 'noopener,noreferrer');
+    }
+  };
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={handleClick}
+      {...rest}
+    >
+      {children as ReactNode}
+    </a>
+  );
+}
 
 interface Props {
   message: ImMessage;
@@ -64,7 +94,12 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
     >
       {/* react-markdown 渲染消息体；p 元素默认有 margin，用样式覆盖 */}
       <div className="[&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{ a: SafeAnchor } as Components}
+        >
+          {message.body}
+        </ReactMarkdown>
       </div>
     </MessageFrame>
   );

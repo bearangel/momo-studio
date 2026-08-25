@@ -7,7 +7,7 @@
 //   - 按 message.id 查 stream.store，streaming 时渲染 AgentStreamBubble
 //   - 删除旧版从 content 提取 io.momo-studio.* 富字段的测试（逻辑已移除）
 //   - 新增 streaming/静态分支测试
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ImMessage } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
@@ -182,5 +182,52 @@ describe('MessageBubble 已完成带富信息分支（A9：done 显示富信息�
     const msg = makeMsg('m1', { body: '已完成正文' });
     render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);
     expect(screen.getByTestId('agent-stream')).toBeInTheDocument();
+  });
+});
+
+describe('MessageBubble 链接拦截（S2 导航劫持防护）', () => {
+  let openSpy: MockInstance<Parameters<typeof window.open>, ReturnType<typeof window.open>>;
+  beforeEach(() => {
+    openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+  });
+  afterEach(() => {
+    openSpy.mockRestore();
+  });
+
+  it('markdown 链接渲染为 target=_blank rel=noopener noreferrer', () => {
+    mockStreams.clear();
+    const msg = makeMsg('m1', { body: '[evil](https://evil.example/x)' });
+    render(<MessageBubble message={msg} isSelf={false} />);
+    const link = screen.getByRole('link', { name: 'evil' });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(link.getAttribute('rel')).toContain('noreferrer');
+    expect(link).toHaveAttribute('href', 'https://evil.example/x');
+  });
+
+  it('点击链接：preventDefault + 委托 window.open（最终走主进程 setWindowOpenHandler）', () => {
+    mockStreams.clear();
+    const msg = makeMsg('m1', { body: '[evil](https://evil.example/x)' });
+    render(<MessageBubble message={msg} isSelf={false} />);
+    const link = screen.getByRole('link', { name: 'evil' });
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(openSpy).toHaveBeenCalledOnce();
+    expect(openSpy.mock.calls[0]![0]).toBe('https://evil.example/x');
+  });
+
+  it('javascript: 伪协议链接 → preventDefault 仍生效（但不调 window.open）', () => {
+    mockStreams.clear();
+    const msg = makeMsg('m1', { body: '[click](javascript:alert(1))' });
+    render(<MessageBubble message={msg} isSelf={false} />);
+    // react-markdown 解析 javascript: URL；某些版本会过滤。无论如何点击拦截器不执行。
+    const link = screen.queryByRole('link', { name: 'click' });
+    if (link) {
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+      link.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(openSpy).not.toHaveBeenCalled();
+    }
   });
 });

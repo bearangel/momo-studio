@@ -1,5 +1,5 @@
 // electron/src/main/window.ts
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, shell, screen } from 'electron';
 import path from 'node:path';
 import { logger } from './logger';
 import { loadWindowState, saveWindowState, clampToDisplays } from './window-state';
@@ -41,6 +41,35 @@ export function createMainWindow(): BrowserWindow {
   // 首启（无持久化状态）→ 最大化；有状态 → 恢复上次的 maximized
   if (!state) win.maximize();
   else if (state.maximized) win.maximize();
+
+  // 导航安全闸（S2）：preload 的 window.api 会注入本窗口加载的任何页面，
+  // 一旦 renderer 被诱导跳转到外部源（聊天里的 markdown 链接等），特权 IPC 面
+  // 就暴露给外部页面。因此：站外导航一律阻止并转系统浏览器；新窗口一律拒绝。
+  const appOrigins = new Set<string>(['file:']);
+  if (DEV_SERVER_URL) {
+    try {
+      appOrigins.add(new URL(DEV_SERVER_URL).origin);
+    } catch {
+      logger.warn(`DEV_SERVER_URL 无法解析为 origin: ${DEV_SERVER_URL}`);
+    }
+  }
+  const isAppUrl = (url: string): boolean => {
+    try {
+      return appOrigins.has(new URL(url).origin) || appOrigins.has(new URL(url).protocol);
+    } catch {
+      return false;
+    }
+  };
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAppUrl(url)) return;
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    // window.open（含 renderer SafeAnchor 拦截器）统一转系统浏览器，不开新 BrowserWindow
+    void shell.openExternal(url);
+    return { action: 'deny' };
+  });
 
   // 状态持久化：close 时保存当前 bounds。getNormalBounds 在最大化期间返回
   // 「还原后的」窗口坐标，避免把全屏尺寸写进状态导致下次启动窗口撑满。
