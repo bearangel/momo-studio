@@ -511,3 +511,11 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 根因：hydrateFromEvents 对零事件消息灌入 aggregateEvents([]) 默认 streaming 状态
 - 用户 DB 实证：owner 消息全部落库正常（3 session 全有配对行）——纯 renderer 显示层
 - 修复 + 回归锁 ×3；遗留：孤儿 streaming 行（崩溃时代数据）不改（与 P1 restart-consistency 语义冲突）
+
+### P0-5：实时流式内容全部丢失（去重键误杀）
+- 根因：event-buffer onFlush 传 id:'buffered' 占位（全部同 id）+ renderer 按 id 去重 → 首批后全部实时事件被丢弃
+- 表现：实时只见"流式中"状态条；重启拉 DB 完整（用户 DOM 对比实证）
+- 修复：insertEventBatch 返回真实 id 行 + renderer 去重改桶内 seq；回归锁 ×3
+- 真实 LLM 复验：48 events / 48 唯一 id / done
+
+## 主机验收累计：P0 ×5（错误路径崩溃 / 气泡不推 / 错误文本吞 / 用户消息幽灵流式 / 实时内容去重误杀）
