@@ -538,3 +538,8 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 根因：PM chunk 查找键 UUID-A ≠ routeDispatch 自造子 task 流 id UUID-B；子消息 parentStreamSessionId 塞入幽灵 UUID-A
 - 修复：dispatch 消息双流 id 字段（sub_stream_session_id 同源化 + tool_stream_session_id 语义归正为 PM 流 id）
 - 回归锁 ×3；1082 + 581 全绿。注意：历史消息（修复前派发）嵌套展开仍为空——旧数据无同源 id，属预期
+
+### 主机验收·嵌套展示攻坚收尾
+- 容器真机探针（xvfb + CDP + 真实 LLM 数据 + renderer 重建）：chip 展开 → SubAgentSection 完整渲染 PASS
+- __momoDebug 钩子 ship；容器基线输出（子行 messages+streamKeys 双命中）
+- 用户侧仍空 → 待 __momoDebug() 输出定位（唯一未验环节 = 用户 app 的 store 状态）
