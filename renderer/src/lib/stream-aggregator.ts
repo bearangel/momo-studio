@@ -37,7 +37,33 @@ export interface AggregatedStream {
   /** final 事件携带的错误文本（status='failed' 时存在）；成功/中断流为 undefined */
   error?: string;
   events: Array<{ seq: number; type: string; content?: string }>;
+  /**
+   * 时间线分段：thinking / text / tool_call / dispatch 按事件实际发生顺序交错。
+   * UI 据此线性渲染（先想 → 再调工具 → 后说话），而非按类型分块堆叠。
+   */
+  segments: StreamSegment[];
 }
+
+export type StreamSegment =
+  | { kind: 'thinking'; text: string }
+  | { kind: 'text'; text: string }
+  | {
+      kind: 'tool_call';
+      callId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      result: string | null;
+      success: boolean | null;
+    }
+  | {
+      kind: 'dispatch';
+      callId: string;
+      subStreamSessionId: string;
+      subAgentName: string;
+      subAgentAvatar?: string;
+      task: string;
+      status: AggregatedDispatch['status'];
+    };
 
 /**
  * 把一串按 seq 升序的 MessageEventRow 聚合成完整的 stream 状态。
@@ -62,6 +88,17 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
   const dispatchStarts = new Map<string, Omit<AggregatedDispatch, 'status'>>();
   const dispatchStatuses = new Map<string, AggregatedDispatch['status']>();
 
+  // 时间线分段（UI 线性渲染的数据源）
+  const segments: StreamSegment[] = [];
+  const appendTextSegment = (kind: 'thinking' | 'text', delta: string): void => {
+    const last = segments[segments.length - 1];
+    if (last !== undefined && last.kind === kind) {
+      last.text += delta;
+    } else {
+      segments.push({ kind, text: delta });
+    }
+  };
+
   const timeline: AggregatedStream['events'] = [];
 
   for (const e of events) {
@@ -69,16 +106,30 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
     const p = e.payload;
     switch (e.eventType) {
       case 'thinking_delta':
-        if (typeof p.delta === 'string') thinking += p.delta;
+        if (typeof p.delta === 'string') {
+          thinking += p.delta;
+          appendTextSegment('thinking', p.delta);
+        }
         break;
       case 'text_delta':
-        if (typeof p.delta === 'string') text += p.delta;
+        if (typeof p.delta === 'string') {
+          text += p.delta;
+          appendTextSegment('text', p.delta);
+        }
         break;
       case 'tool_call_start':
         if (typeof p.callId === 'string' && typeof p.toolName === 'string') {
           toolStarts.set(p.callId, {
             toolName: p.toolName,
             args: (p.args as Record<string, unknown>) ?? {},
+          });
+          segments.push({
+            kind: 'tool_call',
+            callId: p.callId,
+            toolName: p.toolName,
+            args: (p.args as Record<string, unknown>) ?? {},
+            result: null,
+            success: null,
           });
         }
         break;
@@ -88,6 +139,17 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
             result: typeof p.result === 'string' ? p.result : '',
             success: p.success === true,
           });
+          // 从尾部找最近的未配对同 callId tool 段（result 总在 start 之后）
+          for (let i = segments.length - 1; i >= 0; i--) {
+            const seg = segments[i]!;
+            if (seg.kind === 'tool_call' && seg.callId === p.callId) {
+              if (seg.result === null) {
+                seg.result = typeof p.result === 'string' ? p.result : '';
+                seg.success = p.success === true;
+              }
+              break;
+            }
+          }
         }
         break;
       case 'todo_update':
@@ -105,6 +167,15 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
             task: typeof p.task === 'string' ? p.task : '',
           });
           dispatchStatuses.set(p.callId, 'executing');
+          segments.push({
+            kind: 'dispatch',
+            callId: p.callId,
+            subStreamSessionId: p.subStreamSessionId,
+            subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
+            ...(typeof p.subAgentAvatar === 'string' ? { subAgentAvatar: p.subAgentAvatar } : {}),
+            task: typeof p.task === 'string' ? p.task : '',
+            status: 'executing',
+          });
         }
         break;
       case 'dispatch_result':
@@ -113,6 +184,13 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           (p.status === 'completed' || p.status === 'failed' || p.status === 'timeout')
         ) {
           dispatchStatuses.set(p.callId, p.status);
+          for (let i = segments.length - 1; i >= 0; i--) {
+            const seg = segments[i]!;
+            if (seg.kind === 'dispatch' && seg.callId === p.callId) {
+              seg.status = p.status;
+              break;
+            }
+          }
         }
         break;
       case 'segment_boundary':
@@ -179,5 +257,6 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
     status,
     ...(streamError !== undefined ? { error: streamError } : {}),
     events: sortedTimeline,
+    segments,
   };
 }

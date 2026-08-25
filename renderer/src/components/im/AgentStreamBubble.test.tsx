@@ -13,7 +13,7 @@
 //   - subStream 查找留给 A9（本 task 不测嵌套子 agent 正文）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import type { StreamState } from '../../stores/stream.store';
+import type { StreamState, StreamSegment } from '../../stores/stream.store';
 import type { ImMessage } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { AgentStreamBubble } from './AgentStreamBubble';
@@ -24,20 +24,33 @@ const abortStreamMock = vi.fn().mockResolvedValue(undefined);
 const mockApi = { agent: { abortStream: abortStreamMock } };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
-/** 构造新接口 StreamState（A 子系统：extends AggregatedStream 的字段集） */
+/**
+ * 构造新接口 StreamState。
+ * 未显式提供 segments 时按旧渲染顺序（thinking → tools → dispatches → text）从
+ * 平铺字段推导——多数用例只关心单一字段分支，显式提供 segments 的用例测时序。
+ */
 function makeStream(overrides: Partial<StreamState> = {}): StreamState {
-  return {
+  const base = {
     thinking: '',
     text: '',
     toolCalls: [],
     todos: [],
     dispatches: [],
-    status: 'streaming',
+    status: 'streaming' as const,
     events: [],
     messageId: 'm-stream',
     startedAt: Date.now(),
     ...overrides,
   };
+  const segments: StreamSegment[] =
+    overrides.segments ??
+    [
+      ...(base.thinking ? [{ kind: 'thinking' as const, text: base.thinking }] : []),
+      ...base.toolCalls.map((tc) => ({ kind: 'tool_call' as const, ...tc })),
+      ...base.dispatches.map((d) => ({ kind: 'dispatch' as const, ...d })),
+      ...(base.text ? [{ kind: 'text' as const, text: base.text }] : []),
+    ];
+  return { ...base, segments };
 }
 
 /** 构造 ImMessage（AgentStreamBubble 的 message props） */
@@ -302,5 +315,53 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
       />,
     );
     expect(screen.queryByText(/子任务完成/)).not.toBeInTheDocument();
+  });
+});
+
+describe('AgentStreamBubble — segments 时间线渲染', () => {
+  it('思考 → 工具 → 正文 → 再思考 → 再正文按 DOM 顺序交错（而非分块堆叠）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'done',
+          segments: [
+            { kind: 'thinking', text: '第一段思考' },
+            { kind: 'tool_call', callId: 'c1', toolName: 'list_files', args: {}, result: 'ok', success: true },
+            { kind: 'text', text: '第一段正文' },
+            { kind: 'thinking', text: '第二段思考' },
+            { kind: 'text', text: '第二段正文' },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+
+    // 两个思考折叠 toggle 按出现顺序索引（第一个思考在工具之前）
+    const toggles = screen.getAllByText('思考过程');
+    const tool = screen.getByText('list_files');
+    const text1 = screen.getByText('第一段正文');
+    const text2 = screen.getByText('第二段正文');
+
+    expect(toggles[0]!.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(text1) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(text1.compareDocumentPosition(toggles[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggles[1]!.compareDocumentPosition(text2) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('流式光标只出现在最后一个 text 段之后（中间 text 段无光标）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'streaming',
+          segments: [
+            { kind: 'text', text: '前段' },
+            { kind: 'thinking', text: '正在想' },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+    // 最后一段是 thinking：无 text 光标，thinking 区处于流式态
+    expect(screen.queryByLabelText('流式光标')).not.toBeInTheDocument();
   });
 });

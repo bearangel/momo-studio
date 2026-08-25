@@ -78,64 +78,72 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
       maxWidthPct={90}
       fillWidth
     >
-      {stream.thinking && (
-        <ThinkingSection content={stream.thinking} isStreaming={isStreaming} />
-      )}
-
       {stream.todos.length > 0 && (
         <TodoSection todos={stream.todos} isStreaming={isStreaming} />
       )}
 
-      {stream.toolCalls.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          {stream.toolCalls.map((tc, i) => (
-            <ToolCallChip
-              key={`${tc.toolName}-${i}`}
-              toolName={tc.toolName}
-              args={tc.args}
-              result={tc.result ?? undefined}
-              success={tc.success ?? true}
-              isExecuting={tc.result === null}
-              defaultExpanded={false}
-            />
-          ))}
-        </div>
-      )}
-
-      {stream.dispatches.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          {stream.dispatches.map((d) => {
-            const child: DispatchChild = {
-              subStreamSessionId: d.subStreamSessionId,
-              subAgentName: d.subAgentName,
-              ...(d.subAgentAvatar !== undefined ? { subAgentAvatar: d.subAgentAvatar } : {}),
-              status: mapDispatchStatus(d.status),
-            };
-            // A9 完整实现：按 subStreamSessionId 反查子 message.id 后从 streams Map 取 subStream
-            return <DispatchChip key={d.callId} child={child} />;
-          })}
-        </div>
-      )}
-
-      {stream.text && (
-        <div className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
-          {isStreaming && (
-            <span
-              aria-label="流式光标"
-              style={{
-                display: 'inline-block',
-                width: 2,
-                height: 14,
-                background: statusColor,
-                marginLeft: 2,
-                verticalAlign: 'text-bottom',
-                animation: 'momo-stream-blink 1s infinite',
-              }}
-            />
-          )}
-        </div>
-      )}
+      {stream.segments.map((seg, i) => {
+        const isLastSegment = i === stream.segments.length - 1;
+        switch (seg.kind) {
+          case 'thinking':
+            return (
+              <ThinkingSection
+                key={`seg-thinking-${i}`}
+                content={seg.text}
+                isStreaming={isStreaming && isLastSegment}
+              />
+            );
+          case 'tool_call':
+            return (
+              <ToolCallChip
+                key={`seg-tool-${seg.callId}-${i}`}
+                toolName={seg.toolName}
+                args={seg.args}
+                result={seg.result ?? undefined}
+                success={seg.success ?? true}
+                isExecuting={seg.result === null}
+                defaultExpanded={false}
+              />
+            );
+          case 'dispatch':
+            return (
+              <div key={`seg-dispatch-${seg.callId}-${i}`} style={{ marginBottom: 8 }}>
+                <DispatchChip
+                  child={{
+                    subStreamSessionId: seg.subStreamSessionId,
+                    subAgentName: seg.subAgentName,
+                    ...(seg.subAgentAvatar !== undefined ? { subAgentAvatar: seg.subAgentAvatar } : {}),
+                    status: mapDispatchStatus(seg.status),
+                  }}
+                />
+              </div>
+            );
+          case 'text':
+            return (
+              <div
+                key={`seg-text-${i}`}
+                className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30"
+                style={{ marginBottom: 8 }}
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
+                {isStreaming && isLastSegment && (
+                  <span
+                    aria-label="流式光标"
+                    style={{
+                      display: 'inline-block',
+                      width: 2,
+                      height: 14,
+                      background: statusColor,
+                      marginLeft: 2,
+                      verticalAlign: 'text-bottom',
+                      animation: 'momo-stream-blink 1s infinite',
+                    }}
+                  />
+                )}
+              </div>
+            );
+        }
+      })}
 
       {showProgress && (
         <div style={{ fontSize: 11, color: '#888', margin: '4px 0' }}>

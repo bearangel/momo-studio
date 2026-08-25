@@ -65,3 +65,72 @@ describe('aggregateEvents：基础聚合（无 final）', () => {
     expect(result.status).toBe('streaming');
   });
 });
+
+describe('aggregateEvents：segments 时间线（思考/工具/正文按实际发生顺序交错）', () => {
+  it('thinking → tool → text → thinking → tool → text 交错保序', () => {
+    const result = aggregateEvents([
+      ev(1, 'thinking_delta', { delta: '先想一想' }),
+      ev(2, 'tool_call_start', { callId: 'c1', toolName: 'list_files', args: { path: '.' } }),
+      ev(3, 'tool_call_result', { callId: 'c1', result: 'a.md', success: true }),
+      ev(4, 'text_delta', { delta: '看到文件了，' }),
+      ev(5, 'thinking_delta', { delta: '再确认一下' }),
+      ev(6, 'tool_call_start', { callId: 'c2', toolName: 'read_file', args: { path: 'a.md' } }),
+      ev(7, 'tool_call_result', { callId: 'c2', result: '内容', success: true }),
+      ev(8, 'text_delta', { delta: '内容如下' }),
+    ]);
+
+    expect(result.segments.map((s) => s.kind)).toEqual([
+      'thinking', 'tool_call', 'text', 'thinking', 'tool_call', 'text',
+    ]);
+    const texts = result.segments.filter((s): s is Extract<typeof s, { kind: 'text' }> => s.kind === 'text');
+    expect(texts[0]!.text).toBe('看到文件了，');
+    expect(texts[1]!.text).toBe('内容如下');
+    const tools = result.segments.filter((s): s is Extract<typeof s, { kind: 'tool_call' }> => s.kind === 'tool_call');
+    expect(tools[0]!.toolName).toBe('list_files');
+    expect(tools[0]!.result).toBe('a.md');
+    expect(tools[1]!.toolName).toBe('read_file');
+  });
+
+  it('连续同类 delta 归并到同段（不产生碎片）', () => {
+    const result = aggregateEvents([
+      ev(1, 'text_delta', { delta: 'a' }),
+      ev(2, 'text_delta', { delta: 'b' }),
+      ev(3, 'text_delta', { delta: 'c' }),
+    ]);
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({ kind: 'text', text: 'abc' });
+  });
+
+  it('tool_call 未收到 result 时段内 result/success 为 null（执行中）', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', { callId: 'c1', toolName: 'grep', args: {} }),
+    ]);
+    const tool = result.segments[0] as Extract<typeof result.segments[0], { kind: 'tool_call' }>;
+    expect(tool.result).toBeNull();
+    expect(tool.success).toBeNull();
+  });
+
+  it('dispatch 段按时间线穿插且状态更新', () => {
+    const result = aggregateEvents([
+      ev(1, 'text_delta', { delta: '派活' }),
+      ev(2, 'dispatch_start', { callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: '码农', task: '写代码' }),
+      ev(3, 'dispatch_result', { callId: 'd1', status: 'completed' }),
+      ev(4, 'text_delta', { delta: '完成了' }),
+    ]);
+    expect(result.segments.map((s) => s.kind)).toEqual(['text', 'dispatch', 'text']);
+    const dispatch = result.segments[1] as Extract<typeof result.segments[1], { kind: 'dispatch' }>;
+    expect(dispatch.status).toBe('completed');
+    expect(dispatch.subAgentName).toBe('码农');
+  });
+
+  it('status_change / final / segment_boundary 不产生 segments 条目', () => {
+    const result = aggregateEvents([
+      ev(1, 'status_change', { status: 'streaming' }),
+      ev(2, 'text_delta', { delta: 'x' }),
+      ev(3, 'segment_boundary', {}),
+      ev(4, 'final', { status: 'done' }),
+    ]);
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({ kind: 'text', text: 'x' });
+  });
+});
