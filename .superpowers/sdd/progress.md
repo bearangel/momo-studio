@@ -625,3 +625,10 @@ Base commit: 35aa86d
 - 测试基线更正：electron 全量现值 154 文件 / 1195 用例（README 1074 为 P5 收官时点数，中间有增长）——后续验收以此为准
 
 ## dispatch-parallel 全部完成（8 commits, 35aa86d..终审修复轮）——已过终审
+
+### 终审 Deferred 清单清偿（3/6，2026-08-25）
+- ① main+空 subAgents 早退分支锁（OR 条件另一半）✅
+- ② pm-agent.yaml 教学文案锁（readFileSync 断言双关键短语）✅
+- ③ 单成员失败并发隔离用例（A failed / B completed，chip 状态+保序回填+stop 收敛三重断言）✅
+- 13/13 全绿（新用例直接绿 = 锁当前正确行为）；typecheck 双 clean；相邻套件 23/23 零回归
+- 剩余 defer：④ 段扫描窗口约束注释 / ⑤ subStatus 超时判定结构化（v1.4 既有，下次动 dispatch 错误处理时一并）/ ⑥ 时序余量放大与单行拆分（化妆级）
