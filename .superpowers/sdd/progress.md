@@ -543,3 +543,9 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 - 容器真机探针（xvfb + CDP + 真实 LLM 数据 + renderer 重建）：chip 展开 → SubAgentSection 完整渲染 PASS
 - __momoDebug 钩子 ship；容器基线输出（子行 messages+streamKeys 双命中）
 - 用户侧仍空 → 待 __momoDebug() 输出定位（唯一未验环节 = 用户 app 的 store 状态）
+
+### P0-8（用户 __momoDebug 输出定位）：dispatch 事件路由到团队会话
+- 症状：用户会话 store 无子行（事件却进 streams）→ 子行落在 teamSessionId
+- 根因：executeDispatch 用 config.teamSessionId 而非当前执行会话
+- 修复：executionSessionId 线程化传入；harness 普通会话复现→修复后 PASS
+- 1084 + 582 全绿
