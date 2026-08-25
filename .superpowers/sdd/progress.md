@@ -575,3 +575,10 @@ renderer 渲染层需实地复现或用户提供 sqlite 查询输出。
 ### 研发规则体系落地（628c57c）
 - AGENTS.md 红线 + skills ×3（debug/test/boundary，场景化自动加载）+ engineering.md 完整复盘
 - 自审通过：frontmatter 合规、name=目录名、触发词齐备
+
+### 主机验收第二轮 4 问题（3545e97）
+- #2 PM 自动接待：resolveTarget 加 main 角色分支（JOIN 取 role）
+- #4 IME 选字误发：isComposing/keyCode 229 双判定
+- #3 会话草稿：Map keyed by sessionId 切换保存恢复
+- #1 邀请列表冷启动空：MainLayout 挂载即载 assignments（CDP 复现排除主链路后定位）
+- 回归锁 +8；1088 + 586 全绿
