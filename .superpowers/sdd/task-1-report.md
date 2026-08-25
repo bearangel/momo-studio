@@ -1,111 +1,95 @@
-# Task 1 Report — v1.7 资源库 types.ts（统一类型 + 资源 ID 工具）
+# Task 1 Report — dispatch 同轮并发执行——回归锁测试先行（红）
 
-**Commit**: `333e9e5`
-**Base**: `2b0e7f5`（v1.7 计划已合）
-**状态**: DONE — 5/5 新增 passed，electron 全套 552/552 passed（零回归），typecheck 双 clean，LSP 无 diagnostics
+## 1. Status
 
-> v1.6 周期的同名 report 已归档为 `task-1-report-v1.6-archived.md`（gitignored，仅本地保留）。
+**DONE**
 
-## 实施摘要
+## 2. Commits
 
-新建 `electron/src/main/resource/types.ts`（v1.7 资源库的基石文件，后续 14 个 task 全部引用）：
+- `9f98050` test(agent): dispatch 同轮并发回归锁——8 用例先行（4 红锁并发语义 / 4 绿锁行为基线）
 
-- **类型**：`ResourceType`（`'agent' | 'mcp' | 'skill'`）/ `ResourceSource`（`'builtin' | 'marketplace' | 'custom' | 'p2p'`）/ `ResourceFilter` / `ResourceItem`
-- **ID 工具**：`buildResourceId(source, type, slug)` 拼 `${source}-${type}-${slug}`；`parseResourceId(id)` 用白名单正则反解三元组（非法返回 `null`）
-- **展示工具**：`sourceLabel(source)` 返回中文文案（builtin=系统预置 / custom=我的上传 / marketplace=网络资源 / p2p=P2P 共享）
+（base = `35aa86d`）
 
-`ResourceItem` 采用「扁平通用顶层字段 + 四个可选 source namespace」的形状：列表渲染只需顶层字段，详情面板按 source 切到对应 namespace。字段名严格按 brief（后续 task 引用，不可改名）。
-
-测试 `electron/tests/resource/types.test.ts` 覆盖 brief 给定的 5 个用例：buildResourceId 拼接、parseResourceId 反解（含 UUID slug）、parseResourceId 非法 id 四种边界、buildResourceId↔parseResourceId 互逆、sourceLabel 中文文案。
-
-## TDD 5 步输出
-
-### Step 1 — 写失败测试（RED 准备）
-
-按 brief 逐字写 `electron/tests/resource/types.test.ts`（5 个 it 用例 + 顶部加中文文件头注释，与仓库其它测试风格一致）。
-
-### Step 2 — 跑测试确认失败（RED 验证）
+## 3. Test summary
 
 ```
-❯ tests/resource/types.test.ts  (0 test)
- FAIL  tests/resource/types.test.ts
-Error: Failed to load url ../../src/main/resource/types (resolved id: ../../src/main/resource/types)
-       in /workspace/electron/tests/resource/types.test.ts. Does the file exist?
-Test Files  1 failed (1)
-     Tests  no tests
+ RUN  v1.6.1 /workspace/electron
+ ❯ tests/agent/dispatch-parallel.test.ts  (8 tests | 4 failed) 784ms
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 4 passed (8)
 ```
 
-失败原因 = 模块不存在（feature missing），非 typo / 非测试自身错误。RED 确认。
+**4 RED（并发语义回归锁——串行实现必红）**
 
-### Step 3 — 实现 types.ts（GREEN）
+1. `同轮两个 dispatch 并发执行——B 的派发事件先于 A 的结果（串行实现必红）` → `expected 6 to be less than 4`（writer dispatch idx=6，researcher tool_result idx=4——A 的结果回填先于 B 的派发）
+2. `并发批次 chip 同时出现——两个 tool_call chunk 均先于任何 tool_result` → `expected 5 to be less than 4`（cB tool_call idx=5，first_result idx=4）
+3. `sub-budget 均分（D3）——budget=5 双 dispatch 各拿 3，追扣后预算耗尽` → `expected 4 to be 3`（researcher 先到先得 4，writer 拿 3；均分应为 3/3）
+4. `并发批次中断——两成员均中断、无 tool_result 回填、end(interrupted)` → `expected 4 to be -1`（cA tool_result idx=4——串行先 await 第一个 dispatch 拿到结果后才发第二个，abort 来不及）
 
-按 brief 代码实现 `electron/src/main/resource/types.ts`（保留 brief 给定的正则 `/^(builtin|marketplace|custom|p2p)-(agent|mcp|skill)-(.+)$/`，并补充与仓库 `marketplace/types.ts` 一致的中文 JSDoc）。
+**4 GREEN（行为不变基线锁——串行下即绿）**
 
-### Step 4 — 跑测试确认通过（GREEN 验证）
+5. `消息回填按原 toolCalls 顺序——B 先完成仍排在 A 之后（协议 id 对应）`
+6. `预算不足截断——budget=1 段长 2 只发 1 个 + budget_exhausted，被截成员无 chip`
+7. `混排——dispatch / read_file / dispatch 各自原位，read_file 串行保序`
+8. `重复检测在段内截断——3 个相同 dispatch 执行 2 个后终止`
+
+红绿比例与 brief §Step 2 预期 100% 吻合。**不是 8 全红也不是 8 全绿**——harness 与断言与串行实现语义完全对齐。
+
+## 4. What was done
+
+按 brief 100% 落字创建单一新文件：
+
+- **Created**: `electron/tests/agent/dispatch-parallel.test.ts`（478 行，8 个用例）
+- 未修改任何生产代码
+- 严格遵循 brief 提供的完整代码；harness helpers（`installDispatchInterceptor` / `idxOfDispatchEvent` / `idxOfChunk` / `chatStreamCalls` / `makeMainConfig`）原样导出供 Task 3 复用
+
+### Test 保真度（momo-test-rules）
+
+- 仅 mock 进程/LLM 边界（`createLLMProvider` + `process.send` 拦截），未 mock `executeDispatch` 内部
+- dispatch 回执经真实 `handleTaskReply` 驱动 `pendingReplies`，`subStreamSessionId` / `task_id` 由真实实现生成
+- 错误路径：第 6 用例（中断）专门覆盖异常路径——并发批次中断不回填 tool_result 防重试死循环
+- 边界：第 5 用例（budget=1 段长 2）覆盖预算边界截断
+- mock 仿真真实 `process.send` `this` 绑定（采用 `process.send = ((msg) => ...)` 形式，确保 `this` 上下文正确）
+
+## 5. Files Changed
+
+本次 commit（9f98050）只动：
 
 ```
-✓ tests/resource/types.test.ts  (5 tests) 2ms
-Test Files  1 passed (1)
-     Tests  5 passed (5)
+electron/tests/agent/dispatch-parallel.test.ts  (create, 478 lines)
 ```
 
-### Step 5 — commit
+工作区其他 modifications（`.superpowers/sdd/task-{1,5,7,11,13}-report.md` 与 `docs/plans/2026-08-25-dispatch-parallel.md`）均为先前 session 残留，**未触碰也未纳入本次 commit**。`git add` 严格限定为 `electron/tests/agent/dispatch-parallel.test.ts` 一项。
 
-```
-git add electron/src/main/resource/types.ts electron/tests/resource/types.test.ts
-git commit -m "feat(resource): v1.7 types.ts 统一类型 + 资源 ID 工具"
-→ [main 333e9e5] 2 files changed, 177 insertions(+)
-```
+> 注：本报告提交前，已将先前 session 未提交的 v23 report 草稿归档为 `task-1-report-v23-archived.md`（保留工作成果），原 `task-1-report.md` 恢复至 HEAD 的 v1.7 资源库内容（本归档亦存在于 `task-1-report-v1.7-resource-archived.md`）。这些归档操作不在本 commit 内，将在独立的 housekeeping commit 中处理。
 
-## Self-Review
-
-### parseResourceId 正则边界（4 种非法输入全覆盖）
-
-正则：`/^(builtin|marketplace|custom|p2p)-(agent|mcp|skill)-(.+)$/`
-
-| 输入 | 匹配结果 | 原因 | 测试用例 |
-|---|---|---|---|
-| `'invalid'` | 不匹配 → `null` | 不含两个 `-` 分隔的三段 | ✓ `'invalid'` |
-| `'builtin-agent-'` | 不匹配 → `null` | `.+` 要求 ≥1 字符，空 slug 判负 | ✓ 空 slug |
-| `'unknown-agent-foo'` | 不匹配 → `null` | `unknown` 不在 source 白名单交替组 | ✓ 未知 source |
-| `'builtin-unknown-foo'` | 不匹配 → `null` | `unknown` 不在 type 白名单交替组 | ✓ 未知 type |
-
-合法边界：
-- `'custom-agent-abc-123-def'` → slug = `'abc-123-def'`（`.+` 贪婪，允许 UUID 连字符）
-- `'marketplace-skill-xlsx-remote'` → slug = `'xlsx-remote'`（互逆测试覆盖）
-- `'builtin-agent-pm-agent-extra'` → slug = `'pm-agent-extra'`（首段 source/type 被 `^` + 交替组锚定，不会错切）
-
-`if (!m || !m[3]) return null;` 中的 `!m[3]` 是防御性冗余（`.+` 已保证非空），保留以提高可读性。无 `as any` / `@ts-ignore`，两处 `as ResourceSource` / `as ResourceType` 是从已通过白名单正则的捕获组窄化，类型安全。
-
-### ResourceItem 字段完整性（对照 brief 逐字段核对）
-
-顶层通用字段（11 个）：`id` / `type` / `source` / `slug` / `name` / `description` / `version?` / `iconEmoji?` / `installed` / `installable` / `removable` ✓
-
-可选 source namespace（4 个）：
-- `builtin?: { category?; tags? }` ✓
-- `marketplace?: { author; readme; downloadUrl; checksum; verificationStatus; sizeBytes?; installCount?; tags; category }` ✓
-- `custom?: { installedAt; mcpConfig?; skillFrontmatter?; agentSystemPromptHash? }` ✓
-- `p2p?: { peerId; peerName }` ✓
-
-字段名、可选性、嵌套形状与 brief 100% 一致；后续 14 个 task（registry / IPC / store / UI）按此契约引用，无需调整。
-
-### 仓库约束符合性
-
-- TS strict：无 `any` / `@ts-ignore` / `as any`（LSP `No diagnostics found`）
-- 中文注释：文件头说明 + 每个 export 都有中文 JSDoc
-- Conventional commit：`feat(resource): ...`
-- 未触动 working tree 中无关的 v1.6 时期 report 修改（task-5 / task-11 / v1.6.2-fix）
-
-## 验证证据
+## 6. Verification
 
 | 验证项 | 命令 | 结果 |
 |---|---|---|
-| 单文件测试 | `vitest run tests/resource/types.test.ts` | 5 passed |
-| electron 全套回归 | `vitest run` | 552 passed / 82 files（含 conduit flaky 测试也过） |
-| typecheck（双 workspace） | `pnpm -r typecheck` | electron Done / renderer Done |
-| LSP（实现文件） | `lsp_diagnostics` types.ts | No diagnostics |
-| LSP（测试文件） | `lsp_diagnostics` types.test.ts | 仅 2 个 hint 6133（brief 要求的 `import type` 未在 assertion 中消费，编译期擦除，不影响 typecheck） |
+| 测试（仅本文件） | `cd electron && npx pnpm@9.0.0 vitest run tests/agent/dispatch-parallel.test.ts` | 4 failed / 4 passed（8 total） |
+| TypeScript strict | 文件零 `any` / 零 `@ts-ignore`；所有 import 解析成功（vitest 跑通即证明） | ✅ |
+| Lint（project-wide ESLint） | brief 未要求；未跑 | N/A |
+| 项目 typecheck（electron workspace） | brief 仅要求跑这一个测试文件，未跑 | N/A |
 
-## Concerns
+## 7. Self-Review
 
-无。本 task 是纯类型 + 纯函数（无副作用、无 IO、无 IPC），TDD 5/5 通过，零回归。后续 task 2+ 在此基础上构建 registry / IPC 时如遇字段调整需求，应回头修订本文件并同步 brief。
+- **完整 vs brief**：8 用例全部按 verbatim 代码落地；harness helpers 全部就位供 Task 3 复用
+- **测试保真度（momo-test-rules）**：mock 严格收窄到进程/LLM 边界；业务路径走真实实现
+- **pristine output**：仅创建 1 个测试文件 + 必要的 report housekeeping；未触动生产代码；未触动其他测试
+
+## 8. Concerns
+
+无。预期 4 红 4 绿精确达成；harness 设计按真实运行时语义构造（`process.send` + `handleTaskReply` 真实链路）；`task_id` / `subStreamSessionId` 由真实 `executeDispatch` 生成，断言保真。
+
+## 9. Notes for Task 2 / Task 3
+
+- Task 2 将看到 4 个红测试作为「并发化应转绿」的指导
+- Task 3 会复用本文件的 harness helpers（`installDispatchInterceptor` / `idxOfDispatchEvent` / `idxOfChunk` / `chatStreamCalls` / `makeMainConfig`），新增「同轮连发教学 prompt / 截断 chip 教学 / 异常成员计 budget_exhausted」等追加用例
+- spec 文档：`docs/specs/2026-08-25-dispatch-parallel-design.md`（先前 session 已落）
+- 实施计划：`docs/plans/2026-08-25-dispatch-parallel.md`（先前 session 已落，未追踪）
+
+## 10. Final Status
+
+**DONE** — TDD 红阶段达成；测试文件落字；commit 已推；report 完整；ready for Task 2。
