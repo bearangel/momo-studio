@@ -44,6 +44,7 @@ npx pnpm@9.0.0 --filter momo-studio-renderer test
 
 # 跑单个测试文件
 cd electron && npx pnpm@9.0.0 vitest run tests/agent/stream-relay.test.ts
+cd renderer && npx pnpm@9.0.0 vitest run src/lib/stream-aggregator.test.ts
 
 # 端到端（Playwright，需要先构建）
 npx pnpm@9.0.0 e2e
@@ -57,6 +58,16 @@ npx pnpm@9.0.0 dev
 # 构建（已固化 NODE_OPTIONS=4096 防 Vite Monaco OOM；Windows 本地构建不支持——打包走 CI）
 npx pnpm@9.0.0 build
 ```
+
+## 单元测试文件存放规范
+
+| 位置 | 规则 | 强制机制 |
+|---|---|---|
+| 根 `tests/` | **仅 Playwright e2e**（`tests/e2e/*.spec.ts`），不放单元测试 | Playwright testDir |
+| `electron/tests/` | 主进程单测**集中存放**，子目录镜像 `src/` 结构（`tests/agent/`、`tests/storage/`…） | `electron/vitest.config.ts` 显式 `include: ['tests/**/*.test.ts']`——放别处不执行 |
+| `renderer/src/**` | renderer 单测**贴源 colocated**：`Foo.test.tsx` 与 `Foo.tsx` 同目录；**不要**建 `renderer/tests/` 或 `__tests__/` 子目录 | `renderer/vitest.config.ts` 显式 `include: ['src/**/*.test.{ts,tsx}']`——放别处不执行 |
+
+裁定依据（2026-08-25 业界调研）：vitest/jest 官方对位置无意见，著名项目两模式并存（Vue/React 库场景用 `__tests__/`；VS Code/Joplin 应用场景贴源；Electron/Hyper/GitHub Desktop 集中）。本项目原则=各 workspace 向自身既有多数派收敛 + 显式 include 机械强制，杜绝同一文件两份副本分叉漂移（曾发生于 renderer/tests 与 src 同名测试）。
 
 ## 必须遵守的约束
 
