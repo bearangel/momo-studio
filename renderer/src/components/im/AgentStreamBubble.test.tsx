@@ -316,6 +316,31 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
     );
     expect(screen.queryByText(/子任务完成/)).not.toBeInTheDocument();
   });
+
+  it('dispatch aborted（用户停止）计入终态：进度指示器消失 + chip 显示已中断', () => {
+    // 回归锁（用户报障）：PM 停止后 dispatch 收敛为 aborted——
+    // 「等待 N/M 子任务完成」进度行与 chip 执行中状态都必须终止
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'aborted',
+          dispatches: [
+            {
+              callId: 'd1',
+              subStreamSessionId: 'c1',
+              subAgentName: 'A',
+              task: '',
+              status: 'aborted',
+            },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.queryByText(/子任务完成/)).not.toBeInTheDocument();
+    // 两处「已中断」：流级状态栏（⏹ 已中断）+ DispatchChip 状态徽标
+    expect(screen.getAllByText(/已中断/).length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('AgentStreamBubble — segments 时间线渲染', () => {

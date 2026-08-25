@@ -55,7 +55,7 @@ const STATUS_DOT: Record<StreamState['status'], string> = {
   aborted: '⏹',
 };
 
-/** AggregatedDispatch.status('timeout') → DispatchChild.status 无 timeout，归并到 'failed' */
+/** AggregatedDispatch.status('timeout') → DispatchChild.status 无 timeout，归并到 'failed'；'aborted' 两端同名直通 */
 function mapDispatchStatus(s: StreamState['dispatches'][number]['status']): DispatchChild['status'] {
   if (s === 'timeout') return 'failed';
   return s;
@@ -109,8 +109,9 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
   }, [sessionMessages]);
 
   const dispatchTotal = stream.dispatches.length;
+  // aborted（用户停止收敛）与 completed/failed/timeout 同为终态——不再计入「等待完成」
   const dispatchCompleted = stream.dispatches.filter(
-    (d) => d.status === 'completed' || d.status === 'failed' || d.status === 'timeout',
+    (d) => d.status === 'completed' || d.status === 'failed' || d.status === 'timeout' || d.status === 'aborted',
   ).length;
   const showProgress = dispatchTotal > 0 && dispatchCompleted < dispatchTotal;
 
