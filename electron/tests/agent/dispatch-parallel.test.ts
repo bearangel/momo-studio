@@ -12,6 +12,8 @@
 //   （串行下 B 的 dispatch 事件根本不会在 A 回执前发出）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -78,6 +80,8 @@ interface ReplyPlan {
   delayMs: number;
   body: string;
   toolCallsUsed?: number;
+  /** failed 供「单成员失败不拖垮兄弟成员」用例（spec §12 #3） */
+  status?: 'completed' | 'failed';
 }
 
 /**
@@ -107,7 +111,7 @@ function installDispatchInterceptor(
           handleTaskReply({
             task_id: taskId,
             body: plan.body,
-            status: 'completed',
+            status: plan.status ?? 'completed',
             tool_calls_used: plan.toolCallsUsed ?? 0,
           });
         }, plan.delayMs);
@@ -414,6 +418,39 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
     expect(endChunk.finishReason).toBe('interrupted');
   });
 
+  it('单成员失败不拖垮兄弟成员——A 回 failed、B 正常完成（spec §12 #3）', async () => {
+    const cA = { id: 'cA', name: 'dispatch:researcher', arguments: { task: 'A 任务' } };
+    const cB = { id: 'cB', name: 'dispatch:writer', arguments: { task: 'B 任务' } };
+    mockProviderMultiRound([
+      [
+        { type: 'tool_use', toolCall: cA },
+        { type: 'tool_use', toolCall: cB },
+        { type: 'done', finishReason: 'tool_use' },
+      ],
+      [{ type: 'text', content: '完成' }, { type: 'done', finishReason: 'stop' }],
+    ]);
+    installDispatchInterceptor({
+      'inst-researcher': { delayMs: 10, body: 'A 失败原因', status: 'failed' },
+      'inst-writer': { delayMs: 50, body: 'B 结果' },
+    });
+
+    await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+
+    // A 失败：失败 chip + 失败文案回填；B 不受影响：成功 chip
+    const resultOf = (callId: string): { success: boolean; subStatus?: string } =>
+      sentChunks[idxOfChunk('tool_result', callId)] as { success: boolean; subStatus?: string };
+    expect(resultOf('cA')).toMatchObject({ success: false, subStatus: 'failed' });
+    expect(resultOf('cB')).toMatchObject({ success: true, subStatus: 'completed' });
+    // 失败属非 abort 错误——回填按原序保留两条 tool 消息，A 的内容含失败原因
+    const calls = chatStreamCalls();
+    const toolMsgs = calls[1]!.messages.filter((m) => m.role === 'tool');
+    expect(toolMsgs.map((m) => (m as { toolCallId?: string }).toolCallId)).toEqual(['cA', 'cB']);
+    expect((toolMsgs[0] as { content: string }).content).toContain('A 失败原因');
+    // chat loop 正常收敛到 stop（非 interrupted / budget_exhausted）
+    const endChunk = streamChunks().find((c) => c.type === 'end') as { finishReason: string };
+    expect(endChunk.finishReason).toBe('stop');
+  });
+
   it('混排——dispatch / read_file / dispatch 各自原位，read_file 串行保序', async () => {
     const cA = { id: 'cA', name: 'dispatch:researcher', arguments: { task: 'A 任务' } };
     const cR = { id: 'cR', name: 'read_file', arguments: { path: 'a.txt' } };
@@ -487,5 +524,18 @@ describe('formatDispatchHint 并行教学（spec §7.2）', () => {
 
   it('非 main / 无 subAgents → 空串（standalone 不受影响）', () => {
     expect(formatDispatchHint(makeConfig())).toBe('');
+  });
+
+  it('main 但 subAgents 为空 → 空串（OR 早退条件的另一半）', () => {
+    expect(formatDispatchHint(makeConfig({ role: 'main' }))).toBe('');
+  });
+});
+
+describe('pm-agent.yaml 并行教学文案（spec §7.1）', () => {
+  it('builtin PM systemPrompt 含同轮连发并发执行语义', () => {
+    const yamlPath = path.join(__dirname, '..', '..', 'resources', 'agents', 'pm-agent.yaml');
+    const yaml = readFileSync(yamlPath, 'utf-8');
+    expect(yaml).toContain('在同一次回复中连续发出多个 dispatch 工具调用');
+    expect(yaml).toContain('它们会被并发执行');
   });
 });
