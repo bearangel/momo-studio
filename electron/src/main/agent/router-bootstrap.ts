@@ -12,17 +12,19 @@
 //
 // 与 runtime-registry / init-runtime 的依赖：
 //   - 不直接 import runtime-registry（避免循环）
-//   - agentRunners + providerBuckets 通过参数传入
+//   - agentRunners 通过参数传入
 //   - 由调用方（ensureTaskDrivenRuntime / initTaskDrivenRuntime）动态 import 本模块
+//
+// v2.0.1（spec §9 范围裁定）：TaskDispatcher 的 pickup 链路已砍除（留 2.1）。
+// RouterService 的三条现役路由（routeUserChat / routeDispatch / routeTaskReply）
+// 均直接派发 runner，不经过 dispatcher——本模块不再构造 TaskDispatcher，
+// 也不再把 providerBuckets 传入（buckets 只为 dispatcher 的限流检查存在）。
 
 import { RouterService } from './router-service';
-import { TaskDispatcher, type AgentAssignmentInfo } from '../task/dispatcher';
 import { setBridgeRouter } from './internal-event-bridge';
 import { setSessionRouter } from '../im/session-service';
-import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import type { AgentRunner } from './agent-runner';
-import type { ProviderTokenBucket } from './llm/token-bucket';
 
 /** 模块级单例（lazy 启动后非空） */
 let currentRouterService: RouterService | null = null;
@@ -32,7 +34,7 @@ let currentRouterService: RouterService | null = null;
  *
  * - 已启动（currentRouterService 非 null）→ no-op
  * - runners.size === 0 → no-op（防御性，正常路径不触发）
- * - 首次调用 → 创建 TaskDispatcher + 创建 RouterService + setBridgeRouter
+ * - 首次调用 → 创建 RouterService + setBridgeRouter
  *
  * v2（P1 Task 5）：RouterService 注入方式改为内部事件桥（setBridgeRouter）——
  * runtime 子进程的 dispatch/task_reply 经 child IPC 直达 routeEvent，
@@ -40,23 +42,14 @@ let currentRouterService: RouterService | null = null;
  * （阶段三 Task 12 删除），router-bootstrap 不再调用它。
  *
  * @param runners agentRunners Map 引用（后续新增 runner 自动可见，因 RouterService 持有 Map 引用）
- * @param buckets providerBuckets Map 引用（dispatcher 用于 LLM 限流）
  */
 export async function ensureRouterService(
   runners: Map<string, AgentRunner>,
-  buckets: Map<string, ProviderTokenBucket>,
 ): Promise<void> {
   if (currentRouterService) return;  // 已启动
   if (runners.size === 0) return;    // 无 runner，不需要
 
-  const dispatcher = new TaskDispatcher({
-    runners,
-    buckets,
-    getAgentAssignment: (instanceId) => getAssignmentInfo(instanceId),
-    getGlobalMax: () => getGlobalMax(),
-  });
-
-  currentRouterService = new RouterService({ runners, dispatcher });
+  currentRouterService = new RouterService({ runners });
   currentRouterService.start();
   setBridgeRouter(currentRouterService);
   setSessionRouter(currentRouterService);
@@ -79,30 +72,4 @@ export function destroyRouterService(): void {
 /** 测试用：重置模块状态（清 currentRouterService，不调 bridge） */
 export function __resetRouterServiceForTest(): void {
   currentRouterService = null;
-}
-
-// ─── helpers（从 init-runtime.ts 迁移，供 dispatcher 使用） ────────────────
-
-function getAssignmentInfo(instanceId: string): AgentAssignmentInfo | null {
-  const row = getDb().prepare(
-    `SELECT a.agent_definition_id, d.model_provider_id, d.max_concurrent_tasks
-     FROM agent_assignments a
-     JOIN agent_definitions d ON a.agent_definition_id = d.id
-     WHERE a.instance_id = ?`,
-  ).get(instanceId) as
-    | { agent_definition_id: string; model_provider_id: string | null; max_concurrent_tasks: number }
-    | undefined;
-  if (!row?.model_provider_id) return null;
-  return {
-    agentDefinitionId: row.agent_definition_id,
-    modelProviderId: row.model_provider_id,
-    maxConcurrentTasks: row.max_concurrent_tasks,
-  };
-}
-
-function getGlobalMax(): number {
-  const row = getDb().prepare(
-    'SELECT max_concurrent_tasks FROM global_settings WHERE id = 1',
-  ).get() as { max_concurrent_tasks: number } | undefined;
-  return row?.max_concurrent_tasks ?? 3;
 }

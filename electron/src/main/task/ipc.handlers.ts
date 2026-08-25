@@ -88,6 +88,16 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:update',
     async (_evt, id: string, patch: Parameters<typeof updateTask>[1]): Promise<void> => {
+      // minor-11：剥离 status 字段——task:update 是部分字段补丁通道，绕开
+      // state-machine 直接写 status 会让终端任务复活 / 非法迁移。状态变更
+      // 强制走 task:transition / task:cancel（断言 + bump updated_at）。
+      // renderer 误传时记 warn 帮助定位，status 字段静默丢弃
+      if (patch && Object.prototype.hasOwnProperty.call(patch, 'status')) {
+        const { status: _stripped, ...rest } = patch;
+        logger.warn('task:update 携带 status 字段已剥离——请用 task:transition / task:cancel', { id });
+        updateTask(id, rest);
+        return;
+      }
       updateTask(id, patch);
     },
   );

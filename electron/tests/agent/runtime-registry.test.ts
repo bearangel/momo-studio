@@ -14,19 +14,10 @@ import os from 'node:os';
 import fs from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 
-// mock runtime-spawner（避免真实 fork 子进程）
+// mock runtime-spawner（避免真实 fork 子进程）——mock child 按真实语义
+// 构造（运行中 exitCode === null / connected === true，含 off 反注册）
 vi.mock('../../src/main/agent/runtime-spawner', () => ({
-  spawnForAgent: vi.fn().mockResolvedValue({
-    child: {
-      kill: vi.fn(),
-      pid: 12345,
-      on: vi.fn(),
-      send: vi.fn(),
-      connected: true,
-    } as unknown as ChildProcess,
-    assignmentId: '',
-    spawnedAt: Date.now(),
-  }),
+  spawnForAgent: vi.fn(),
 }));
 
 // mock router-bootstrap（Task R2：避免真实启动 RouterService；
@@ -37,7 +28,7 @@ vi.mock('../../src/main/agent/router-bootstrap', () => ({
   __resetRouterServiceForTest: vi.fn(),
 }));
 
-import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
+import { spawnForAgent, type SpawnOpts } from '../../src/main/agent/runtime-spawner';
 import { ensureRouterService } from '../../src/main/agent/router-bootstrap';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createWorkspace } from '../../src/main/workspace/crud';
@@ -58,6 +49,20 @@ import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-config';
 import type { AgentDefinition } from '../../src/main/agent/types';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import type { WarmPool } from '../../src/main/agent/warm-pool';
+import type { ChildProcess } from 'node:child_process';
+
+/** 构造仿真存活语义的 mock child（运行中：connected=true / exitCode=null） */
+function mkSpawnChild(): ChildProcess {
+  return {
+    kill: vi.fn(),
+    pid: 12345,
+    on: vi.fn(),
+    off: vi.fn(),
+    send: vi.fn(),
+    connected: true,
+    exitCode: null,
+  } as unknown as ChildProcess;
+}
 
 const tmpRoot = path.join(os.tmpdir(), `ap-runtime-registry-${Date.now()}`);
 
@@ -109,7 +114,13 @@ describe('runtime-registry', () => {
     process.env.AP_USER_DATA_DIR = tmpRoot;
     runMigrations();
     __clearRuntimeRegistryForTest();
-    vi.mocked(spawnForAgent).mockClear();
+    // 默认实现：每次 spawn 返回全新 mock child（避免跨用例共享可变 spy）
+    vi.mocked(spawnForAgent).mockReset();
+    vi.mocked(spawnForAgent).mockImplementation(async (opts: SpawnOpts) => ({
+      child: mkSpawnChild(),
+      assignmentId: opts.assignmentId,
+      spawnedAt: Date.now(),
+    }));
     vi.mocked(ensureRouterService).mockClear();
   });
   afterEach(() => {
@@ -163,15 +174,16 @@ describe('runtime-registry', () => {
   });
 
   describe('ensureTaskDrivenRuntime 触发 ensureRouterService (Task R2)', () => {
-    it('创建新 runner 后调用 ensureRouterService', async () => {
+    it('创建新 runner 后调用 ensureRouterService（单参数：仅 runners Map 引用）', async () => {
       const opts = mkMinimalOpts('inst-r2-1', '@bot-r2-1:home');
       await startAgentRuntime(opts);
 
       expect(ensureRouterService).toHaveBeenCalledOnce();
-      // 验证传入的是 Map 引用（应使用 runtime-registry 的全局 agentRunners + providerBuckets）
+      // 验证传入的是 Map 引用（应使用 runtime-registry 的全局 agentRunners；
+      // spec §9 后 providerBuckets 不再传入——它只服务于已砍除的 dispatcher）
       const call = vi.mocked(ensureRouterService).mock.calls[0];
+      expect(call).toHaveLength(1);
       expect(call[0]).toBe(agentRunners);
-      expect(call[1]).toBe(providerBuckets);
     });
 
     it('runner 已存在时（幂等调用）不再触发 ensureRouterService', async () => {
@@ -181,6 +193,57 @@ describe('runtime-registry', () => {
 
       await startAgentRuntime(opts);  // 二次：pool 已存在，跳过 ensure 块
       expect(ensureRouterService).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('C2：child exit 清理链（onExit → 池剔除 + runner 收尾）', () => {
+    it('子进程退出 → 从 WarmPool 剔除该 child（僵尸池条目不再可被 acquire）', async () => {
+      // 记录每次 spawn 的 opts（含 onExit 回调）与产出的 child 身份
+      const spawned: Array<{ opts: SpawnOpts; child: ChildProcess }> = [];
+      vi.mocked(spawnForAgent).mockImplementation(async (opts: SpawnOpts) => {
+        const child = mkSpawnChild();
+        child.pid = 5000 + spawned.length;
+        spawned.push({ opts, child });
+        return { child, assignmentId: opts.assignmentId, spawnedAt: Date.now() };
+      });
+
+      const opts = mkMinimalOpts('inst-exit-1', '@bot-exit-1:home');
+      await startAgentRuntime(opts);
+      const pool = agentWarmPools.get('inst-exit-1')!;
+      expect(pool.size('inst-exit-1')).toBe(2); // 预热 2 个
+
+      // 第一个子进程退出（模拟崩溃）→ onExit 清理链触发池剔除
+      const first = spawned[0]!;
+      first.opts.onExit(1);
+      expect(pool.size('inst-exit-1')).toBe(1);
+
+      // 池中剩的应是第二个 child（acquire 验证）
+      const rt = await pool.acquire('inst-exit-1');
+      expect(rt.child).toBe(spawned[1]!.child);
+    });
+
+    it('退出清理对重建后的 pool/runner 幂等（旧闭包不误伤新实例）', async () => {
+      const spawnCalls: Array<{ opts: SpawnOpts; child: ChildProcess }> = [];
+      vi.mocked(spawnForAgent).mockImplementation(async (opts: SpawnOpts) => {
+        const child = mkSpawnChild();
+        child.pid = 6000 + spawnCalls.length;
+        spawnCalls.push({ opts, child });
+        return { child, assignmentId: opts.assignmentId, spawnedAt: Date.now() };
+      });
+
+      const opts = mkMinimalOpts('inst-exit-2', '@bot-exit-2:home');
+      await startAgentRuntime(opts);
+      const stale = spawnCalls[0]!;
+
+      // stop → 重建（新 pool 替换旧 pool），旧 spawn 闭包的 onExit 此时触发
+      await stopAgentRuntime('inst-exit-2');
+      await startAgentRuntime(opts);
+      const newPool = agentWarmPools.get('inst-exit-2')!;
+      const sizeBefore = newPool.size('inst-exit-2');
+
+      expect(() => stale.opts.onExit(1)).not.toThrow();
+      // 新池的子进程与旧闭包的 child 身份不同 → 不应被误剔除
+      expect(newPool.size('inst-exit-2')).toBe(sizeBefore);
     });
   });
 

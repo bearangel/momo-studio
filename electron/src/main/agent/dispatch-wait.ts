@@ -42,8 +42,6 @@ function trace(event: string, fields?: Record<string, unknown>): void {
 
 // === Dispatch：主 agent 等待子 agent 回执 ===
 
-// === Dispatch：主 agent 等待子 agent 回执 ===
-
 interface PendingReply {
   /** v1.4：resolve 携带 body + toolCallsUsed，供主 agent 扣减共享预算 */
   resolve: (value: { body: string; toolCallsUsed: number }) => void;
@@ -51,6 +49,13 @@ interface PendingReply {
   timer: NodeJS.Timeout;
   stage: number;
   subSlug: string;
+  /**
+   * minor-10：移除 abort 监听器的清理函数（保存在 entry 上便于 settle
+   * 路径调用）——reply 到达 / 超时 reject / 自身 onAbort 时应移除
+   * 外部 abortSignal 的 listener，防止信号到来时调用已经 settle 的
+   * pending.onAbort 重复发 abort_dispatch 事件
+   */
+  abortCleanup?: () => void;
 }
 
 /** pending dispatch 回执：task_id → 等待中的 Promise（主 agent 发出 dispatch 后注册） */
@@ -139,6 +144,12 @@ export async function executeDispatch(
         err.name = 'AbortError';
         reject(err);
       };
+      const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+      // settle 路径（reply 到达 / 超时 reject）需调 cleanup 移除监听器——否则
+      // 后续 abort 会再次触发 onAbort（即便 entry 已删，仍会发 abort_dispatch
+      // 给本不存在的子 agent / 污染 send 计数）
+      const entry = pendingReplies.get(dispatch.content.task_id);
+      if (entry) entry.abortCleanup = cleanup;
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
     }
@@ -163,20 +174,21 @@ function armDispatchTimer(taskId: string): void {
   clearTimeout(pending.timer);
   const timeoutMs = DISPATCH_STAGE_TIMEOUTS_MS[pending.stage];
   if (timeoutMs === undefined) return;
-  pending.timer = setTimeout(() => {
-    if (pending.stage < DISPATCH_STAGE_TIMEOUTS_MS.length - 1) {
-      pending.stage++;
-      console.log(`[dispatch] 等待 ${pending.subSlug} 超时，进入第 ${pending.stage + 1} 阶段`, { taskId });
-      armDispatchTimer(taskId);
-    } else {
-      pendingReplies.delete(taskId);
-      const totalMin = Math.round(DISPATCH_TOTAL_TIMEOUT_MS / 60000);
-      pending.reject(new Error(
-        `等待子 agent ${pending.subSlug} 回复超时（已等待 ${totalMin} 分钟）。任务可能仍在后台执行，请直接查看该 agent 的回复。`,
-      ));
-    }
-  }, timeoutMs);
-}
+    pending.timer = setTimeout(() => {
+      if (pending.stage < DISPATCH_STAGE_TIMEOUTS_MS.length - 1) {
+        pending.stage++;
+        console.log(`[dispatch] 等待 ${pending.subSlug} 超时，进入第 ${pending.stage + 1} 阶段`, { taskId });
+        armDispatchTimer(taskId);
+      } else {
+        pending.abortCleanup?.();
+        pendingReplies.delete(taskId);
+        const totalMin = Math.round(DISPATCH_TOTAL_TIMEOUT_MS / 60000);
+        pending.reject(new Error(
+          `等待子 agent ${pending.subSlug} 回复超时（已等待 ${totalMin} 分钟）。任务可能仍在后台执行，请直接查看该 agent 的回复。`,
+        ));
+      }
+    }, timeoutMs);
+  }
 
 /**
  * 处理收到的 task_reply：若匹配某个 pending dispatch 则 resolve/reject 其 Promise。
@@ -197,6 +209,10 @@ export function handleTaskReply(content: Record<string, unknown>): void {
     return;
   }
   trace('← reply', { status: reply.status, body: `${reply.body.length}字` });
+  // minor-10：settle 路径统一调 abortCleanup 移除 abortSignal 监听器——
+  // 否则 reply 到达后若用户再触发 abort，onAbort 会再次执行（entry 已删，
+  // 仍会误发 abort_dispatch 给不存在的子 agent）
+  pending.abortCleanup?.();
   clearTimeout(pending.timer);
   pendingReplies.delete(reply.task_id);
   if (reply.status === 'completed') {

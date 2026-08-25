@@ -22,8 +22,12 @@ import type { TaskDispatcher } from '../task/dispatcher';
 export interface RouterServiceOpts {
   /** assignmentId（instance_id）→ runner */
   runners: Map<string, AgentRunner>;
-  /** 任务调度器（pickup 决策 + 三层并发控制；routeUserChat 不经过它——ephemeral chat 直接派发） */
-  dispatcher: TaskDispatcher;
+  /**
+   * 任务调度器——v2.0.1（spec §9）pickup 链路砍除后不再接线，字段仅作
+   * 2.1 预留（可选）；RouterService 现役三条路由均不经过 dispatcher。
+   * routeUserChat 是即时响应，不走 assigned 任务队列。
+   */
+  dispatcher?: TaskDispatcher;
 }
 
 /** notifyTaskReply 的入参（camelCase；由 task_reply event 的 snake_case content 转换而来） */

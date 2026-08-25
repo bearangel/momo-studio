@@ -11,6 +11,7 @@
 // 单例由 A8 在 im:message_event 通道注册时创建；stream-relay 消费。
 import type { MessageEventRow } from './events-repo';
 import { insertEventBatch, nextSeqForMessage } from './events-repo';
+import { logger } from '../../logger';
 
 export interface BufferedEvent {
   messageId: string;
@@ -74,11 +75,24 @@ export class MessageEventBuffer {
       seqCache.set(item.messageId, seq + 1);
       return { messageId: item.messageId, seq, eventType: item.eventType, payload: item.payload };
     });
-    this.pending = [];
     // onFlush 必须收到带真实唯一 id 的行（与 DB 落盘行同源）——此前传 id:'buffered'
     // 占位符，renderer 按 id 去重会把第一批之后的全部实时事件误杀（P0-5：
     // 实时只剩"流式中"状态条，内容全部丢失，重启拉 DB 才完整）。
-    const inserted = insertEventBatch(rows);
+    let inserted: MessageEventRow[];
+    try {
+      inserted = insertEventBatch(rows);
+    } catch (err) {
+      // minor-2：落库失败保留 pending（下个窗口 / 下次 append 触发重试）——
+      // 旧实现先清空再 insert，DB 锁定 / 磁盘满时整批事件直接丢失。
+      // seq 已按 nextSeqForMessage 预分配，重试时会按当时的表内最大 seq
+      // 重新计算（失败的 insert 未持久化，不会产生 seq 冲突）。
+      logger.error('MessageEventBuffer 批量落库失败（pending 保留待重试）', {
+        batchSize: rows.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    this.pending = [];
     if (this.onFlush) {
       this.onFlush(inserted);
     }

@@ -17,7 +17,7 @@
 
 import { insertMessage, type MessageRow } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
-import { getSession, listSessionMembers, touchSessionLastMessage } from '../storage/sessions/repo';
+import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
 import { broadcastLocalMessage } from '../p2p';
 import { detectConflict } from '../task/conflict-detector';

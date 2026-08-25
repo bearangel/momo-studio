@@ -121,32 +121,66 @@ export function buildTaskReply(opts: {
   };
 }
 
-/** 从 Matrix event content 解析 dispatch；缺关键字段时返回 null */
+/** 从 Matrix event content 解析 dispatch；缺关键字段或类型不符时返回 null。
+ *
+ * minor-9 修复：旧实现只校验 task_id / body 必填，其余字段直接 `as` 强转——
+ * 缺 dispatch_from / dispatch_to 时下游 routeDispatch 把 undefined 当成
+ * runners Map key 查找，错误路由静默丢弃。要求必填字段全部 typeof string；
+ * 可选字段类型不符时按 undefined 丢弃（不连带整条拒绝，避免对端写脏字段把
+ * 整条 dispatch 吞掉）。 */
 export function parseDispatchEvent(content: Record<string, unknown>): DispatchContent | null {
   if (typeof content.task_id !== 'string') return null;
   if (typeof content.body !== 'string') return null;
+  if (typeof content.dispatch_from !== 'string') return null;
+  if (typeof content.dispatch_to !== 'string') return null;
   return {
     body: content.body,
     task_id: content.task_id,
-    dispatch_from: content.dispatch_from as string,
-    dispatch_to: content.dispatch_to as string,
-    deadline_ms: content.deadline_ms as number | undefined,
-    tool_budget: content.tool_budget as number | undefined,
-    tool_stream_session_id: content.tool_stream_session_id as string | undefined,
-    sub_stream_session_id: content.sub_stream_session_id as string | undefined,
+    dispatch_from: content.dispatch_from,
+    dispatch_to: content.dispatch_to,
+    ...(typeof content.deadline_ms === 'number'
+      ? { deadline_ms: content.deadline_ms }
+      : {}),
+    ...(typeof content.tool_budget === 'number'
+      ? { tool_budget: content.tool_budget }
+      : {}),
+    ...(typeof content.tool_stream_session_id === 'string'
+      ? { tool_stream_session_id: content.tool_stream_session_id }
+      : {}),
+    ...(typeof content.sub_stream_session_id === 'string'
+      ? { sub_stream_session_id: content.sub_stream_session_id }
+      : {}),
   };
 }
 
-/** 从 Matrix event content 解析 task_reply；缺关键字段时返回 null */
+/** 合法 task_reply 状态枚举——与 TaskReplyContent['status'] 同步 */
+const VALID_REPLY_STATUSES: ReadonlySet<TaskReplyContent['status']> = new Set([
+  'in_progress',
+  'completed',
+  'failed',
+  'needs_input',
+]);
+
+/** 从 Matrix event content 解析 task_reply；缺关键字段或类型不符时返回 null。
+ *
+ * minor-9：status 必须命中合法枚举——否则下游 pendingReplies 在 handleTaskReply
+ * 里把所有非法 status 走 reject 分支（completed 之外都是 reject），构造者
+ * 若写了 'success'/'done'/'finished' 等非法值会被静默判失败。 */
 export function parseTaskReply(content: Record<string, unknown>): TaskReplyContent | null {
   if (typeof content.task_id !== 'string') return null;
   if (typeof content.body !== 'string') return null;
+  if (typeof content.status !== 'string') return null;
+  if (!VALID_REPLY_STATUSES.has(content.status as TaskReplyContent['status'])) return null;
   return {
     body: content.body,
     task_id: content.task_id,
     status: content.status as TaskReplyContent['status'],
-    progress_pct: content.progress_pct as number | undefined,
-    tool_calls_used: content.tool_calls_used as number | undefined,
-    reply_to: content.reply_to as string | undefined,
+    ...(typeof content.progress_pct === 'number'
+      ? { progress_pct: content.progress_pct }
+      : {}),
+    ...(typeof content.tool_calls_used === 'number'
+      ? { tool_calls_used: content.tool_calls_used }
+      : {}),
+    ...(typeof content.reply_to === 'string' ? { reply_to: content.reply_to } : {}),
   };
 }

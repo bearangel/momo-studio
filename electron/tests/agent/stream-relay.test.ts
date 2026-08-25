@@ -191,6 +191,29 @@ describe('routeChunkToBuffer: chunk → SQLite 映射', () => {
     });
     expect(getMessageByStreamSessionId('ss-map-4')!.status).toBe('aborted');
   });
+
+  it('minor-3 回归锁：end(budget_exhausted) → status=failed 且 final 事件携带中文错误文案', () => {
+    __routeChunkToBufferForTest({
+      type: 'start',
+      streamSessionId: 'ss-budget-1',
+      sessionId: '!room:localhost',
+      senderAgentId: '@bot:localhost',
+    });
+    const msg = getMessageByStreamSessionId('ss-budget-1')!;
+
+    // runtime-entry 发 budget_exhausted 时不带 error 字段——文案由 relay 补齐
+    __routeChunkToBufferForTest({
+      type: 'end',
+      streamSessionId: 'ss-budget-1',
+      finishReason: 'budget_exhausted',
+    });
+
+    expect(getMessageByStreamSessionId('ss-budget-1')!.status).toBe('failed');
+    const finalEvent = listEventsByMessage(msg.id).find((e) => e.eventType === 'final');
+    expect(finalEvent).toBeDefined();
+    expect(finalEvent!.payload.status).toBe('failed');
+    expect(finalEvent!.payload.error).toBe('工具调用预算已耗尽');
+  });
 });
 
 // === segment_boundary 分段场景（自 runtime-segment.test.ts 平移） ===

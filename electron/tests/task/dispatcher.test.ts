@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import * as tasksRepo from '../../src/main/storage/tasks/repo';
 import { insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
 import { TaskDispatcher } from '../../src/main/task/dispatcher';
 import { ProviderTokenBucket } from '../../src/main/agent/llm/token-bucket';
@@ -189,5 +190,57 @@ describe('TaskDispatcher', () => {
     const { mockRunner, dispatcher } = mkDispatcher({});
     await dispatcher.scanAll();
     expect(mockRunner.executeTask).toHaveBeenCalled();
+  });
+
+  // minor-12 回归锁：runtime_instance_id 列不应被写入 streamSessionId。
+  // 旧实现把 streamSessionId 当作 runtime_instance_id 落库——下游读该列时
+  // 会把流 id 误当成 runtime 子进程实例标识。dispatcher 当前 2.1 未接线，
+  // 但若 2.1 恢复前有人改回写入 streamSessionId，回归锁会立刻红。
+  it('minor-12：tryPickup 不写 runtime_instance_id（语义错位：streamSessionId ≠ runtime 子进程标识）', async () => {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst1',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    const { dispatcher } = mkDispatcher({});
+    await dispatcher.tryPickup('inst1');
+
+    // 直接查 DB 行确认该列未被错填 streamSessionId
+    const row = getDb()
+      .prepare('SELECT runtime_instance_id FROM tasks WHERE id = ?')
+      .get(t.id) as { runtime_instance_id: string | null };
+    expect(row.runtime_instance_id).toBeNull();
+  });
+
+  // minor-4 回归锁：scanAll 触发 tryPickup；单个 tryPickup 在并发竞态（行被
+  // 并发改态）抛错时只记日志 + 跳过，不外抛成 unhandled rejection。
+  // 旧实现 transitionTaskStatus 抛错会冒泡到 scanAll → caller 是 void 包装 →
+  // unhandled rejection 节点级风险。
+  it('minor-4：tryPickup 状态转换抛错 → 记日志返回 false，不外抛', async () => {
+    // seed 一个 assigned 任务让 tryPickup 走到 transitionTaskStatus
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst1',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+
+    // 让 transitionTaskStatus 抛错（模拟并发竞态：另一并发 pickup 已抢先改态）
+    const spy = vi
+      .spyOn(tasksRepo, 'transitionTaskStatus')
+      .mockImplementation(() => {
+        throw new Error('并发 pickup 竞态（行已被改态）');
+      });
+
+    try {
+      const { dispatcher } = mkDispatcher({});
+      // scanAll 必须不抛；单条 pickup 失败被吞，返回 false 但不向上抛
+      await expect(dispatcher.scanAll()).resolves.toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

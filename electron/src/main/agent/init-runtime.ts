@@ -20,7 +20,6 @@ import { listAssignments, getAgentDefinition } from './crud';
 import { listWorkspaces } from '../workspace/crud';
 import {
   agentRunners,
-  providerBuckets,
   createTaskDrivenRuntime,
   populateProviderBuckets,
 } from './runtime-registry';
@@ -102,6 +101,7 @@ export async function initTaskDrivenRuntime(): Promise<void> {
   // 目标为 internal-event-bridge 的 setBridgeRouter）。动态 import 避开
   // router-bootstrap → router-service → runtime-registry 顶层循环依赖。
   const { ensureRouterService } = await import('./router-bootstrap');
-  await ensureRouterService(agentRunners, providerBuckets);
+  // v2.0.1（spec §9）：dispatcher pickup 链路砍除后 ensureRouterService 只收 runners
+  await ensureRouterService(agentRunners);
   logger.info('initTaskDrivenRuntime 完成', { runnerCount: agentRunners.size });
 }

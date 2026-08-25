@@ -484,6 +484,64 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(types.filter((t) => t === 'text')).toHaveLength(2);
     expect(types[types.length - 1]).toBe('end');
   });
+
+  it('minor-7 回归锁：LLM 抛错时只发一条 end chunk（防重——旧实现发两条）', async () => {
+    mockProviderThrow(new Error('LLM 网络抖动'));
+
+    await runTaskChatLoop(
+      makeTaskConfig({ taskId: 'task-single-end' }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    const endCount = streamChunks().filter((c) => c.type === 'end').length;
+    expect(endCount).toBe(1); // 关键断言：runChatLoop 内部 catch 已发一次，
+                                // runTaskChatLoop catch 兜底感知 endChunkSent 不再发
+  });
+
+  it('minor-6 回归锁：abort 中断 → dispatch 回执 status=failed（不报 completed）', async () => {
+    // chatStream 检测到 abort 时抛 AbortError——仿真用户在停止按钮按下后子进程退出
+    mockProvider([]); // 占位：abort 应先于任何 LLM delta 触发
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (
+        _msgs: unknown,
+        _tools: unknown,
+        signal?: AbortSignal,
+      ): AsyncGenerator<StreamDelta> {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (signal?.aborted) {
+          const e = new Error('The operation was aborted');
+          e.name = 'AbortError';
+          throw e;
+        }
+        yield { type: 'text', content: 'never reaches' };
+        yield { type: 'done', finishReason: 'stop' } as StreamDelta;
+      }),
+    });
+
+    const cfg = makeTaskConfig({
+      streamSessionId: 'sub-sess-abort',
+      dispatchContext: { fromAssignmentId: 'inst-pm', task_id: 'task-abort-1' },
+    });
+    const runPromise = runTaskChatLoop(cfg, makeConfig(), makeContext());
+
+    // 同步注入 abort：runChatLoop 启动后会注册 process.on('message')，下一宏任务 emit
+    setTimeout(() => {
+      process.emit('message', { type: 'abort', streamSessionId: 'sub-sess-abort' });
+    }, 1);
+
+    await runPromise;
+
+    const replyEvt = sentIpc.find(
+      (m) =>
+        (m as { type?: string }).type === 'momo-internal-event' &&
+        (m as { eventType?: string }).eventType === 'io.momo-studio.task_reply',
+    ) as { content: { task_id: string; status: string; body: string } } | undefined;
+    expect(replyEvt).toBeDefined();
+    expect(replyEvt!.content.task_id).toBe('task-abort-1');
+    expect(replyEvt!.content.status).toBe('failed'); // 关键断言：不能是 completed
+  });
 });
 
 describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {

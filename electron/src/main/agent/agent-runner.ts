@@ -9,8 +9,23 @@
 // spawn 实现由 runtime-spawner 提供（fork runtime-entry）；配置类型 AgentRuntimeOpts
 // 定义在 runtime-config.ts（Task 13 起 v1 runtime-manager 双轨已删除，本模块是
 // 唯一的 runtime 执行入口）。
+//
+// 生命周期契约（C1/C3 修复后的完整链路）：
+//   1. executeTask → acquire warm runtime → 注册 message handler → 注入 task-config
+//   2. 子进程跑 chat loop，逐 chunk 上报（start/text/.../end）
+//   3. 子进程在 end 之后还要发 task_reply（dispatch 场景）与 task-end，再 self-exit
+//      ——因此 task-driven（taskId 非空）在收到 end 时【不 kill】，只记录 finish
+//      状态并武装 15s 安全兜底计时器；收到 task-end 或 child exit 才收尾
+//      （终态转换 → release）。旧实现收到 end 立即 SIGTERM，会掐断子进程
+//      尚未 flush 的 task_reply / task-end，PM 侧 dispatch 挂满 9 分钟超时（C3）。
+//   4. ephemeral chat（taskId=null）无后续 IPC 依赖，保持旧语义：end 即回收。
+import type { ChildProcess } from 'node:child_process';
 import type { WarmPool, WarmRuntime } from './warm-pool';
 import type { AgentRuntimeOpts } from './runtime-config';
+import { logger } from '../logger';
+import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
+import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
+import { finalizeStreamOnCrash } from './stream-relay';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -63,6 +78,11 @@ export interface AgentRunnerOpts {
   config?: AgentRuntimeOpts;
   /** 共享 warm pool（多个 AgentRunner 可共用同一 pool） */
   warmPool: WarmPool;
+  /**
+   * C3 安全兜底宽限期（毫秒）：end chunk 之后等待 task-end / child exit 的
+   * 上限，超时强制收尾（kill 子进程 + 终态转换）。缺省 15s；测试可注入小值。
+   */
+  taskEndGraceMs?: number;
 }
 
 /** 活跃 task 记录——keyed by streamSessionId */
@@ -72,15 +92,24 @@ interface ActiveTask {
   taskId: string | null;
   /** 注册到 child 的 message handler，destroy/end 时用于 off 反注册 */
   messageHandler: (msg: unknown) => void;
+  /** 最近一次 end chunk 的完成状态（task-end 终态映射依据；未见 end 时 undefined） */
+  lastFinish?: { finishReason: 'stop' | 'budget_exhausted' | 'interrupted' | 'error'; error?: string };
+  /** C3 安全兜底计时器（end 之后武装，task-end / exit / destroy 时清除） */
+  safetyTimer?: NodeJS.Timeout;
 }
+
+/** task-end 到达后仍未收尾的兜底宽限上限 */
+const DEFAULT_TASK_END_GRACE_MS = 15_000;
 
 export class AgentRunner {
   private readonly opts: AgentRunnerOpts;
   /** streamSessionId → 活跃 task */
   private readonly activeTasks = new Map<string, ActiveTask>();
+  private readonly taskEndGraceMs: number;
 
   constructor(opts: AgentRunnerOpts) {
     this.opts = opts;
+    this.taskEndGraceMs = opts.taskEndGraceMs ?? DEFAULT_TASK_END_GRACE_MS;
   }
 
   get assignmentId(): string { return this.opts.agentAssignmentId; }
@@ -90,28 +119,60 @@ export class AgentRunner {
   /**
    * 启动一个 task（含 ephemeral chat）。
    *
-   * 流程：acquire warm runtime → 注册 message handler（监听 end/error chunk）→
+   * 流程：acquire warm runtime → 注册 message handler（监听 end / task-end）→
    * 注入 task config 给子进程 → 返回 streamSessionId。
    *
-   * 注意：本方法不等候子进程跑完 chat loop——只负责"注入并启动"。
-   * chunk 转发 / 落盘由 runtime-spawner 统一注册的 handler 处理；
-   * 本 runner 只关注 end/error 以便 release runtime。
+   * 消息契约（child → main，本 handler 消费；对端生产者 runtime-entry.ts）：
+   *   - StreamChunk（start/thinking/text/tool_call/tool_result/end 等）：仅消费
+   *     'end'（记录 finish 状态；ephemeral 场景即时回收）
+   *   - { type: 'task-end', streamSessionId, taskId, toolCallsUsed?, error? }：
+   *     子进程 task 终结信号（end → task_reply → task-end → self-exit 链路的最后一环），
+   *     触发任务行终态转换 + runtime 回收
    */
   async executeTask(task: TaskConfig): Promise<{ streamSessionId: string }> {
     const runtime = await this.opts.warmPool.acquire(this.opts.agentAssignmentId);
 
-    // 注册 message handler：过滤本 task 的 streamSessionId，收到 end/error 时 release
+    // 注册 message handler：过滤本 task 的 streamSessionId，按消息类型收尾
     const child = runtime.child;
     const messageHandler = (msg: unknown): void => {
       if (typeof msg !== 'object' || msg === null) return;
-      const m = msg as { type?: string; streamSessionId?: string };
+      const m = msg as {
+        type?: string;
+        streamSessionId?: string;
+        finishReason?: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
+        error?: string;
+        toolCallsUsed?: number;
+      };
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
       if (m.streamSessionId !== task.streamSessionId) return;
-      if (m.type === 'end' || m.type === 'error') {
-        // 任务结束 → 反注册 handler + release runtime + 移出活跃表
-        child.off('message', messageHandler);
-        this.opts.warmPool.release(runtime);
-        this.activeTasks.delete(task.streamSessionId);
+      if (m.type === 'end') {
+        const active = this.activeTasks.get(task.streamSessionId);
+        if (active) {
+          active.lastFinish = {
+            finishReason: m.finishReason ?? 'stop',
+            ...(m.error !== undefined ? { error: m.error } : {}),
+          };
+        }
+        if (task.taskId === null) {
+          // ephemeral chat：无后续 IPC 依赖，保持旧语义——end 即回收
+          child.off('message', messageHandler);
+          this.opts.warmPool.release(runtime);
+          this.activeTasks.delete(task.streamSessionId);
+        } else if (active) {
+          // task-driven：不 kill（C3）——end 之后子进程还要发 task_reply / task-end；
+          // 武装安全兜底，task-end / exit 迟迟不达时强制收尾
+          this.armSafetyTimer(active);
+        }
+        return;
+      }
+      if (m.type === 'task-end') {
+        // C1：task 终结信号——先转换任务行终态，再回收 runtime（顺序见
+        // finalizeActiveTask；task_reply 在子进程侧先于 task-end 发送，此处
+        // 收到时链路必然已完整）
+        this.finalizeActiveTask(task.streamSessionId, {
+          ...(m.toolCallsUsed !== undefined ? { toolCallsUsed: m.toolCallsUsed } : {}),
+          ...(m.error !== undefined ? { error: m.error } : {}),
+        });
       }
     };
     child.on('message', messageHandler);
@@ -136,6 +197,152 @@ export class AgentRunner {
     });
 
     return { streamSessionId: task.streamSessionId };
+  }
+
+  /**
+   * 收尾一个活跃 task：反注册 handler → 清兜底计时器 → 任务行终态转换（C1）→
+   * 回收 runtime。幂等：活跃表无记录时 no-op（exit 路径可能已清理）。
+   *
+   * @param taskEndInfo task-end 消息携带的附加信息（error / toolCallsUsed）；
+   *        兜底计时器 / exit 路径触发时为 undefined
+   */
+  private finalizeActiveTask(
+    streamSessionId: string,
+    taskEndInfo: { toolCallsUsed?: number; error?: string } | undefined,
+  ): void {
+    const active = this.activeTasks.get(streamSessionId);
+    if (!active) return;
+    active.runtime.child.off('message', active.messageHandler);
+    if (active.safetyTimer) {
+      clearTimeout(active.safetyTimer);
+      active.safetyTimer = undefined;
+    }
+    this.activeTasks.delete(streamSessionId);
+    // 顺序契约：先转换任务终态（DB 可见），再 kill 子进程——确保看板 /
+    // 重启恢复读到的终态不依赖 runtime 存活
+    if (active.taskId !== null) {
+      this.transitionTaskTerminal(active, taskEndInfo);
+    }
+    this.opts.warmPool.release(active.runtime);
+  }
+
+  /**
+   * C1：task-end 终态映射。
+   *   - task-end 携带 error（子进程错误路径）→ failed
+   *   - 前置 end chunk finishReason=error → failed（防御：error 未透传到 task-end）
+   *   - 前置 end chunk finishReason=interrupted（abortStream / abort_dispatch）→ cancelled
+   *   - 其余（stop / budget_exhausted 正常返回）→ completed
+   * 幂等与合法性：任务行已是终态（如用户提前 task:cancel）或转换不合法时
+   * 记日志跳过，绝不抛错（本方法运行在 child message 事件回调里）。
+   */
+  private transitionTaskTerminal(
+    active: ActiveTask,
+    taskEndInfo: { toolCallsUsed?: number; error?: string } | undefined,
+  ): void {
+    const taskId = active.taskId;
+    if (taskId === null) return;
+    let row: TaskRow | null;
+    try {
+      row = getTask(taskId);
+    } catch (err) {
+      logger.warn('task-end 处理：读取任务行失败', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (!row) {
+      // dispatch 派生的 task_id（routeDispatch 注入）不对应 tasks 表行——跳过
+      logger.info('task-end 对应任务行不存在（dispatch 派生 task_id），跳过终态转换', { taskId });
+      return;
+    }
+    if (isTerminal(row.status)) return;
+    const failed = taskEndInfo?.error !== undefined || active.lastFinish?.finishReason === 'error';
+    const to: TaskStatus = failed ? 'failed'
+      : active.lastFinish?.finishReason === 'interrupted' ? 'cancelled'
+        : 'completed';
+    if (!canTransition(row.status, to)) {
+      logger.warn('task-end 终态转换不合法，跳过', { taskId, from: row.status, to });
+      return;
+    }
+    try {
+      transitionTaskStatus(taskId, to, {
+        completedAt: Date.now(),
+        ...(taskEndInfo?.toolCallsUsed !== undefined ? { toolCallsUsed: taskEndInfo.toolCallsUsed } : {}),
+        ...(failed
+          ? {
+              errorMessage:
+                taskEndInfo?.error ?? active.lastFinish?.error ?? 'agent 执行出错',
+            }
+          : {}),
+      });
+    } catch (err) {
+      logger.warn('task-end 终态转换失败', {
+        taskId,
+        to,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * C3 安全兜底：end 之后若 task-end / child exit 在宽限期内未到
+   * （子进程 hang / IPC 丢失），强制收尾（含 kill）。
+   */
+  private armSafetyTimer(active: ActiveTask): void {
+    if (active.safetyTimer) return;
+    active.safetyTimer = setTimeout(() => {
+      logger.warn('task-end/exit 未在宽限期内到达，强制回收 task-driven runtime', {
+        streamSessionId: active.streamSessionId,
+        taskId: active.taskId,
+      });
+      this.finalizeActiveTask(active.streamSessionId, undefined);
+    }, this.taskEndGraceMs);
+    active.safetyTimer.unref?.();
+  }
+
+  /**
+   * C2：child 'exit' 清理链的 runner 侧入口（由 runtime-registry 的 spawn
+   * onExit 回调接线）。对该子进程上仍未收尾的活跃 task：
+   *   - 反注册 message handler + 清兜底计时器 + 移出活跃表
+   *   - 仍处 'streaming' 的消息行 → 'failed' + 中文错误 final 事件
+   *     （finalizeStreamOnCrash，防止 renderer 永远显示"流式中"）
+   *   - 仍处 in_progress 的任务行 → 'failed'（state-machine 合法转换）
+   * 幂等：正常 end/task-end 路径已清理的 task 不在活跃表中，天然跳过。
+   */
+  handleChildExit(child: ChildProcess, code: number | null): void {
+    for (const active of [...this.activeTasks.values()]) {
+      if (active.runtime.child !== child) continue;
+      active.runtime.child.off('message', active.messageHandler);
+      if (active.safetyTimer) {
+        clearTimeout(active.safetyTimer);
+        active.safetyTimer = undefined;
+      }
+      this.activeTasks.delete(active.streamSessionId);
+      finalizeStreamOnCrash(active.streamSessionId, code);
+      if (active.taskId !== null) {
+        this.failTaskOnCrash(active.taskId, code);
+      }
+    }
+  }
+
+  /** C2：崩溃时把仍处 in_progress 的任务行转 failed（其余状态不动——保持状态机合法性） */
+  private failTaskOnCrash(taskId: string, code: number | null): void {
+    try {
+      const row = getTask(taskId);
+      if (!row || row.status !== 'in_progress') return;
+      const errorText =
+        code === null ? 'agent 运行时异常退出' : `agent 运行时异常退出（exit code=${code}）`;
+      transitionTaskStatus(taskId, 'failed', {
+        completedAt: Date.now(),
+        errorMessage: errorText,
+      });
+    } catch (err) {
+      logger.warn('崩溃任务收尾失败', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -173,12 +380,17 @@ export class AgentRunner {
 
   /**
    * 销毁 runner + 释放所有活跃 runtime。
-   * 反注册所有 message handler + release 每个 runtime（v1 = kill 子进程）+ 清空活跃表。
+   * 反注册所有 message handler + 清兜底计时器 + release 每个 runtime
+   * （v1 = kill 子进程）+ 清空活跃表。
    * 不销毁 warmPool 本身（warmPool 生命周期由外层管理，可能被其他 runner 共享）。
    */
   destroy(): void {
     for (const active of this.activeTasks.values()) {
       active.runtime.child.off('message', active.messageHandler);
+      if (active.safetyTimer) {
+        clearTimeout(active.safetyTimer);
+        active.safetyTimer = undefined;
+      }
       this.opts.warmPool.release(active.runtime);
     }
     this.activeTasks.clear();

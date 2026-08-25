@@ -198,9 +198,18 @@ ${skillIndex}`
   };
 }
 
-/** runChatLoop 的统计输出（handleDispatch 据此上报 task_reply.tool_calls_used） */
+/**
+ * runChatLoop 的统计输出（handleDispatch 据此上报 task_reply.tool_calls_used）。
+ * endChunkSent / aborted 是 runChatLoop → runTaskChatLoop 的单向出参：
+ *   - endChunkSent：本轮是否已发过 end chunk（runTaskChatLoop 错误兜底
+ *     据此防重——旧实现 LLM 错误路径连发两个 end chunk，renderer 聚合混乱）
+ *   - aborted：是否因 abort（AbortError / 外部 signal）提前返回
+ *     （runTaskChatLoop 据此把 dispatch 回执 status 从 completed 改为 failed）
+ */
 export interface RunChatLoopStats {
   toolCallsUsed: number;
+  endChunkSent?: boolean;
+  aborted?: boolean;
 }
 
 /**
@@ -279,7 +288,6 @@ export async function runChatLoop(
   let toolCallCount = 0;
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
-  let accumulatedThinking = '';
   let accumulatedText = '';
 
   const abortController = new AbortController();
@@ -298,6 +306,13 @@ export async function runChatLoop(
     }
   };
   process.on('message', abortListener);
+
+  // minor-7：end chunk 统一经此发送并标记 stats.endChunkSent——
+  // runTaskChatLoop 的错误兜底据此防重（否则 LLM 错误路径连发两个 end）
+  const sendEndChunk = (chunk: Extract<StreamChunk, { type: 'end' }>): void => {
+    sendStreamChunk(chunk);
+    if (stats) stats.endChunkSent = true;
+  };
 
   sendStreamChunk({
     type: 'start',
@@ -341,7 +356,6 @@ export async function runChatLoop(
       for await (const delta of llm.chatStream(messages, tools, abortController.signal)) {
         switch (delta.type) {
           case 'thinking':
-            accumulatedThinking += delta.content;
             sendStreamChunk({ type: 'thinking', streamSessionId, delta: delta.content });
             break;
           case 'text':
@@ -359,11 +373,14 @@ export async function runChatLoop(
     } catch (err) {
       process.off('message', abortListener);
       if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
-        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
-        if (stats) stats.toolCallsUsed = toolCallCount;
+        sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+        if (stats) {
+          stats.toolCallsUsed = toolCallCount;
+          stats.aborted = true;
+        }
         return accumulatedText;
       }
-      sendStreamChunk({
+      sendEndChunk({
         type: 'end',
         streamSessionId,
         finishReason: 'error',
@@ -376,7 +393,7 @@ export async function runChatLoop(
     if (finishReason === 'stop' || toolCalls.length === 0) {
       process.off('message', abortListener);
       const finalText = accumulatedText.trim() || '(空回复)';
-      sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+      sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
       if (stats) stats.toolCallsUsed = toolCallCount;
       return finalText;
     }
@@ -388,7 +405,6 @@ export async function runChatLoop(
     // LLM 看到大量重复的自己说过的话 → 模仿 → 无限重复输出。
     // 根因不是上下文长度（1M tokens 17 轮用不到 2%），是文本累积导致 LLM 行为退化。
     accumulatedText = '';
-    accumulatedThinking = '';
 
     for (const tc of toolCalls) {
       // v1.5.6: 循环检测——同名 + 同参数连续重复 MAX_DUPLICATE_TOOLS 次强制终止。
@@ -402,7 +418,7 @@ export async function runChatLoop(
       if (dupCount >= MAX_DUPLICATE_TOOLS) {
         process.off('message', abortListener);
         const finalText = accumulatedText.trim() || `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${tc.name}，已强制终止防循环)`;
-        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+        sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
       }
@@ -410,7 +426,7 @@ export async function runChatLoop(
       if (budgetRemaining <= 0) {
         process.off('message', abortListener);
         const finalText = accumulatedText.trim() || '(工具预算耗尽)';
-        sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
+        sendEndChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
       }
@@ -426,7 +442,7 @@ export async function runChatLoop(
           // 防无限分段：超过上限时强制结束 chat loop
           process.off('message', abortListener);
           const finalText = accumulatedText.trim() || summary || '(分段上限)';
-          sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
+          sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
           if (stats) stats.toolCallsUsed = toolCallCount;
           return finalText;
         }
@@ -448,7 +464,6 @@ export async function runChatLoop(
 
         // 重置累积，让 LLM 下一轮生成新段
         accumulatedText = '';
-        accumulatedThinking = '';
 
         // 推 stream chunk 让 renderer 知道分段了（可选 UI 提示）
         sendStreamChunk({
@@ -589,7 +604,6 @@ export async function runChatLoop(
 
       const dispatchInfo = isDispatch ? { toolCallsUsed: 0 } : undefined;
       let result: string;
-      let success = true;
       try {
         result = await executeTool(tc, ctx, config, dispatchToolBudget, dispatchInfo, subStreamSessionId, streamSessionId, roomId);
         sendStreamChunk({
@@ -608,12 +622,14 @@ export async function runChatLoop(
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
           process.off('message', abortListener);
           const finalText = accumulatedText.trim() || '(中断)';
-          sendStreamChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
-          if (stats) stats.toolCallsUsed = toolCallCount;
+          sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
+          if (stats) {
+            stats.toolCallsUsed = toolCallCount;
+            stats.aborted = true;
+          }
           return finalText;
         }
 
-        success = false;
         const errMsg = err instanceof Error ? err.message : String(err);
         result = `工具执行失败: ${errMsg}`;
         // dispatch 超时（executeDispatch 的渐进式计时器 reject）→ 'timeout'；其它 → 'failed'
@@ -733,25 +749,38 @@ export async function runTaskChatLoop(
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）
     if (dispatchContext) {
+      // minor-6：若 runChatLoop 因 abort 提前返回，回执不能报 completed（否则
+      // PM 的 dispatch promise 误判成功，子 agent 实际未完成工作）。显式 aborted
+      // → failed；非 aborted 时按 finalText 是否为空兜底判 success
+      const replyStatus: 'completed' | 'failed' = stats.aborted
+        ? 'failed'
+        : finalText
+          ? 'completed'
+          : 'failed';
       const reply = buildTaskReply({
         body: finalText,
         taskId: dispatchContext.task_id,
-        status: 'completed',
+        status: replyStatus,
         toolCallsUsed: stats.toolCallsUsed,
         replyTo: dispatchContext.fromAssignmentId,
       });
       sendTaskReplyEvent(roomId, config.agentUserId, { ...reply.content });
     }
   } catch (err) {
-    // runChatLoop 抛错：发 end(error) chunk 兜底（若 runChatLoop 内未发），再 task-end + exit(1)
+    // runChatLoop 抛错：仅当本轮未发过 end 时补一条 end(error)（minor-7 防重），
+    // 再 task-end + exit(1)。runChatLoop 的内部 try/catch 在大多数错误路径
+    // 已 sendEndChunk(error) 后才 throw（endChunkSent=true）；某些早期抛错
+    // （如 getConversationContext 失败）未经此处理则兜底发 end。
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`runTaskChatLoop 异常: ${msg}\n`);
-    sendStreamChunk({
-      type: 'end',
-      streamSessionId,
-      finishReason: 'error',
-      error: msg,
-    });
+    if (!stats.endChunkSent) {
+      sendStreamChunk({
+        type: 'end',
+        streamSessionId,
+        finishReason: 'error',
+        error: msg,
+      });
+    }
     // dispatch 任务失败也要回执（status=failed）——否则 PM 的 dispatch promise
     // 挂到渐进式超时才 reject，主子调度不可用
     if (dispatchContext) {

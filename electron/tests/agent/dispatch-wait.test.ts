@@ -75,4 +75,35 @@ describe('executeDispatch 会话路由（P0-8）', () => {
     expect(abortEvt).toBeDefined();
     expect(abortEvt!.sessionId).toBe('sess-chat');
   });
+
+  it('minor-10 回归锁：reply 到达 settle 后再触发 abort → 不再发 abort_dispatch / 无 unhandledRejection', async () => {
+    const controller = new AbortController();
+    const config = makeConfig({
+      role: 'main',
+      subAgents: [{ slug: 'worker', assignmentId: 'inst-worker', description: '执行者' }],
+    });
+
+    const p = executeDispatch('worker', '干活', config, 5, 'ss-sub', 'ss-pm', 'sess-chat', controller.signal);
+
+    // 从 sentEvents 取 dispatch 的 task_id
+    const dispatchEvt = sentEvents.find((e) => e.eventType === 'io.momo-studio.dispatch');
+    expect(dispatchEvt).toBeDefined();
+
+    // 模拟子 agent 完成 reply
+    const { handleTaskReplyIpc } = await import('../../src/main/agent/dispatch-wait');
+    handleTaskReplyIpc({
+      type: 'task-reply',
+      reply: { taskId: (dispatchEvt as { content: { task_id: string } }).content.task_id, status: 'completed', body: 'ok' },
+    });
+    await p; // promise 已 settle
+
+    // settle 后再触发 abort——旧实现因 listener 未清理会再次触发 onAbort 发出
+    // abort_dispatch 给不存在的子 agent
+    const abortCountBefore = sentEvents.filter((e) => e.eventType === 'io.momo-studio.abort_dispatch').length;
+    controller.abort();
+    // 给事件循环一帧时间让（不应触发的）handler 跑完
+    await new Promise((r) => setTimeout(r, 5));
+    const abortCountAfter = sentEvents.filter((e) => e.eventType === 'io.momo-studio.abort_dispatch').length;
+    expect(abortCountAfter).toBe(abortCountBefore); // 关键断言：settle 后不再发
+  });
 });
