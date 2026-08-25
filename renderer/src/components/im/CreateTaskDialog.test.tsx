@@ -1,4 +1,4 @@
-// renderer/tests/components/im/CreateTaskDialog.test.tsx
+// renderer/src/components/im/CreateTaskDialog.test.tsx
 //
 // CreateTaskDialog 行为测试（B 子系统 B7）：
 //   1. open=false 时不渲染任何 DOM
@@ -11,7 +11,7 @@
 // ipc.agent.listAssignments 返回空数组（指派 select 渲染空）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { CreateTaskDialog } from '../../../src/components/im/CreateTaskDialog';
+import { CreateTaskDialog } from './CreateTaskDialog';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
@@ -20,7 +20,7 @@ const { mockTaskCreate, mockListAssignments } = vi.hoisted(() => ({
   mockListAssignments: vi.fn(),
 }));
 
-vi.mock('../../../src/ipc/client', () => ({
+vi.mock('../../ipc/client', () => ({
   ipc: {
     task: { create: mockTaskCreate },
     agent: { listAssignments: mockListAssignments },

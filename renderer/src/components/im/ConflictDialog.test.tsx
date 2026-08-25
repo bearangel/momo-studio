@@ -1,4 +1,4 @@
-// renderer/tests/components/im/ConflictDialog.test.tsx
+// renderer/src/components/im/ConflictDialog.test.tsx
 //
 // ConflictDialog 行为测试（B 子系统 B9）：
 //   1. open=false 时不渲染
@@ -11,14 +11,14 @@
 // 都是 vi.fn() 以断言调用参数。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { ConflictDialog } from '../../../src/components/im/ConflictDialog';
+import { ConflictDialog } from './ConflictDialog';
 
 const { mockResolveConflict, mockUpdateRoom } = vi.hoisted(() => ({
   mockResolveConflict: vi.fn(),
   mockUpdateRoom: vi.fn(),
 }));
 
-vi.mock('../../../src/ipc/client', () => ({
+vi.mock('../../ipc/client', () => ({
   ipc: {
     task: { resolveConflict: mockResolveConflict },
     settings: { updateSession: mockUpdateRoom },
