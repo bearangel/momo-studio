@@ -4,7 +4,7 @@
 // 主区 = 顶部状态栏 + selectedTaskId ? TaskDetailPanel : 空态「从左侧选择任务」。
 // 并发上限（P1）接 settings.getGlobal 返回的 maxConcurrentTasks，缺字段 fallback 3。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TaskBoardView } from './TaskBoardView';
 import { useTaskStore } from '../../stores/task.store';
 import type { TaskRow } from '../../ipc/types';
@@ -111,5 +111,30 @@ describe('TaskBoardView 主区（拆分后）', () => {
     ]);
     render(<TaskBoardView workspaceId="ws-1" />);
     expect(await screen.findByText(/并发: 1\/3/)).toBeInTheDocument();
+  });
+
+  // —— 以下两用例自 renderer/tests/components/task-board/TaskBoardView.test.tsx 迁入
+  // （2026-08 目录规范统一），并按 momo-test-rules #5 从 vi.mock(store) 移植到真实 store：
+  // mock 越薄测试离生产越近；× 关闭回调断言 store 真实状态而非 mock 调用记录。
+  it('状态栏并发徽标含排队计数（store tasks 派生）', async () => {
+    useTaskStore.setState({
+      tasks: [
+        mkTask({ id: 'i1', title: '执行中任务', status: 'in_progress', priority: 5 }),
+        mkTask({ id: 'a1', title: '排队任务', status: 'assigned', priority: 5 }),
+      ],
+    });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByText(/并发.*1.*\/.*3.*排队.*1/)).toBeInTheDocument();
+    expect(screen.getByText('任务看板')).toBeInTheDocument();
+  });
+
+  it('× 关闭详情面板 → 真实 store 的 selectedTaskId 置空', async () => {
+    const task = mkTask({ id: 't1', title: '可点击任务', status: 'pending', priority: 5 });
+    mockApi.task.get.mockResolvedValue(task);
+    useTaskStore.setState({ tasks: [task], selectedTaskId: 't1' });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByText('#t1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '×' }));
+    expect(useTaskStore.getState().selectedTaskId).toBeNull();
   });
 });
