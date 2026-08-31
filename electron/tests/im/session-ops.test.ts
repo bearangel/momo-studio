@@ -1,18 +1,20 @@
 // electron/tests/im/session-ops.test.ts
 //
 // session-ops（v2.0.0 P1 会话生命周期）纯 SQLite 操作测试。
-// 覆盖 brief Step 1：
-//   - createSession 带成员
-//   - 团队会话禁删抛错（workspaces.team_session_id === id）
-//   - getSessionsForWorkspace 按 workspace 过滤
-//   - getSessionMembersInfo JOIN agent_assignments + agent_definitions
-//     字段：agentName / iconEmoji / role / lastRunning / isCoordinator
+// v25 Task 6 复核重写（spec 2026-08-31 §3.3/§4.4）：
+//   - createSession 带 memberInstanceIds（session_members.instance_id）
+//   - deleteSessionOp 级联清理（团队会话保护概念已退役，不再有禁删用例）
+//   - getSessionsForWorkspace 过滤 + titleAuto 映射
+//   - getSessionMembersInfo 三表 JOIN + is_leader 建会快照锁——
+//     含「快照独立性」断言：workspace 默认 agent 指向非 leader 成员时
+//     isLeader 仍按快照列，杜绝实现回退到「比 default_agent_instance_id」
 //
 // DB 隔离沿用 sessions-repo.test.ts 模式：
 //   - process.env.AP_USER_DATA_DIR 指向临时目录
-//   - runMigrations() 跑到 v23（sessions/session_members/workspaces.team_session_id 存在）
+//   - runMigrations() 跑到 v25（workspace_agent_members/session_members.is_leader 存在）
 //   - closeDb() 在 afterEach 复位单例；foreign_keys = ON
-//   - FK 依赖链：workspaces → agent_definitions → agent_assignments
+//   - FK 依赖链：workspaces → agent_definitions → workspace_agent_members
+//   - is_leader 经生产 repo.addSessionMember 写入（不绕过生产路径裸拼快照位）
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,19 +31,18 @@ import {
 
 const tmpRoot = path.join(os.tmpdir(), `ap-session-ops-${Date.now()}`);
 
-/** 用最小列写入 workspaces 行；返回写入的 id。仅本测试用。 */
+/** 用最小列写入 workspaces 行；defaultAgentInstanceId 缺省 null。仅本测试用。 */
 function seedWorkspace(
   db: ReturnType<typeof getDb>,
   id: string,
-  teamSessionId = '',
-  coordinatorInstanceId: string | null = null,
+  defaultAgentInstanceId: string | null = null,
 ): void {
   db.prepare(
     `INSERT INTO workspaces
        (id, name, description, directory_path, git_initialized, owner_id, icon_emoji,
-        team_session_id, coordinator_instance_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, 'WS', '', '/tmp', 0, '@owner:s', '📁', teamSessionId, coordinatorInstanceId);
+        default_agent_instance_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, 'WS', '', '/tmp', 0, '@owner:s', '📁', defaultAgentInstanceId);
 }
 
 /** 写入一条 agent_definitions 行。仅本测试用。 */
@@ -53,26 +54,25 @@ function seedAgentDef(
 ): void {
   db.prepare(
     `INSERT INTO agent_definitions
-       (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, name, name.toLowerCase(), '1', 'declarative', 'p', '[]', 'custom', 'm', iconEmoji);
+       (id, name, slug, version, system_prompt, model_name, icon_emoji)
+     VALUES (?, ?, ?, '1', 'p', 'm', ?)`,
+  ).run(id, name, name.toLowerCase(), iconEmoji);
 }
 
-/** 写入一条 agent_assignments 行（含 last_running）。 */
-function seedAssignment(
+/** 写入一条 workspace_agent_members 行（v25 成员制：无 role/parent/enabled）。 */
+function seedMember(
   db: ReturnType<typeof getDb>,
   instanceId: string,
   workspaceId: string,
   defId: string,
   agentUserId: string,
-  role: 'standalone' | 'main' | 'sub',
   lastRunning: 0 | 1,
 ): void {
   db.prepare(
-    `INSERT INTO agent_assignments
-       (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
-     VALUES (?, ?, ?, ?, 1, ?, ?)`,
-  ).run(instanceId, workspaceId, defId, agentUserId, role, lastRunning);
+    `INSERT INTO workspace_agent_members
+       (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(instanceId, workspaceId, defId, agentUserId, lastRunning);
 }
 
 beforeEach(() => {
@@ -88,37 +88,40 @@ afterEach(() => {
 });
 
 describe('session-ops', () => {
-  it('createSession 写入 sessions 行 + 全部 memberAssignmentIds 入会话', () => {
+  it('createSession 写入 sessions 行 + 全部 memberInstanceIds 入会话（titleAuto 默认 false）', () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
     seedAgentDef(db, 'def1', 'A', '🤖');
-    seedAssignment(db, 'inst1', 'ws1', 'def1', '@bot:s', 'standalone', 1);
-    seedAssignment(db, 'inst2', 'ws1', 'def1', '@bot2:s', 'main', 1);
+    seedAgentDef(db, 'def2', 'B', '🤖');
+    // v25 约束：同 ws 同 def 唯一（idx_wam_unique）→ 两成员各用不同 def
+    seedMember(db, 'inst1', 'ws1', 'def1', '@bot:s', 1);
+    seedMember(db, 'inst2', 'ws1', 'def2', '@bot2:s', 1);
 
     const row = createSession({
       workspaceId: 'ws1',
       title: '团队讨论',
-      memberAssignmentIds: ['inst1', 'inst2'],
+      memberInstanceIds: ['inst1', 'inst2'],
     });
 
     expect(row.workspaceId).toBe('ws1');
     expect(row.title).toBe('团队讨论');
     expect(row.kind).toBe('chat');
+    expect(row.titleAuto).toBe(false);
 
-    // session_members 已落库
+    // session_members 已落库（v25 列名 instance_id）
     const memberRows = db
-      .prepare('SELECT assignment_id FROM session_members WHERE session_id = ? ORDER BY added_at ASC')
-      .all(row.id) as Array<{ assignment_id: string }>;
-    expect(memberRows.map((m) => m.assignment_id)).toEqual(['inst1', 'inst2']);
+      .prepare('SELECT instance_id FROM session_members WHERE session_id = ? ORDER BY added_at ASC')
+      .all(row.id) as Array<{ instance_id: string }>;
+    expect(memberRows.map((m) => m.instance_id)).toEqual(['inst1', 'inst2']);
   });
 
-  it('createSession 不指定 memberAssignmentIds 视为空成员（不下异常）', () => {
+  it('createSession 不指定 memberInstanceIds 视为空成员（不下异常）', () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
     const row = createSession({ workspaceId: 'ws1', title: '空会话' });
     const memberRows = db
-      .prepare('SELECT assignment_id FROM session_members WHERE session_id = ?')
-      .all(row.id) as Array<{ assignment_id: string }>;
+      .prepare('SELECT instance_id FROM session_members WHERE session_id = ?')
+      .all(row.id) as Array<{ instance_id: string }>;
     expect(memberRows).toEqual([]);
   });
 
@@ -128,7 +131,7 @@ describe('session-ops', () => {
     const row = createSession({
       workspaceId: 'ws1',
       title: '执行任务',
-      memberAssignmentIds: [],
+      memberInstanceIds: [],
       kind: 'task_execution',
     });
     expect(row.kind).toBe('task_execution');
@@ -143,75 +146,60 @@ describe('session-ops', () => {
     expect(after.title).toBe('新');
   });
 
-  it('createSession 原子性：成员含不存在 assignment_id → 抛错且 sessions 表无残留', () => {
+  it('createSession 原子性：成员含不存在 instance_id → 抛错且 sessions 表无残留', () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
     seedAgentDef(db, 'def1', 'A', '🤖');
-    seedAssignment(db, 'inst1', 'ws1', 'def1', '@bot:s', 'standalone', 1);
-    // 'inst-nope' 不存在 → session_members.assignment_id FK 触发异常
+    seedMember(db, 'inst1', 'ws1', 'def1', '@bot:s', 1);
+    // 'inst-nope' 不存在 → session_members.instance_id FK 触发异常
     expect(() =>
       createSession({
         workspaceId: 'ws1',
         title: '将失败',
-        memberAssignmentIds: ['inst1', 'inst-nope'],
+        memberInstanceIds: ['inst1', 'inst-nope'],
       }),
     ).toThrow();
 
     // 整笔回滚：sessions 表无残留
     const sessionRows = db.prepare('SELECT id FROM sessions').all() as Array<{ id: string }>;
     expect(sessionRows).toEqual([]);
-    const memberRows = db.prepare('SELECT assignment_id FROM session_members').all() as unknown[];
+    const memberRows = db.prepare('SELECT instance_id FROM session_members').all() as unknown[];
     expect(memberRows).toEqual([]);
   });
 
-  it('deleteSessionOp 非团队会话正常删除；cascade 清空 session_members', () => {
+  it('deleteSessionOp 正常删除；cascade 清空 session_members', () => {
     const db = getDb();
-    seedWorkspace(db, 'ws1'); // team_session_id 空 → 非团队会话
+    seedWorkspace(db, 'ws1');
     seedAgentDef(db, 'def1', 'A', '🤖');
-    seedAssignment(db, 'inst1', 'ws1', 'def1', '@bot:s', 'standalone', 1);
+    seedMember(db, 'inst1', 'ws1', 'def1', '@bot:s', 1);
     const row = insertSession({ workspaceId: 'ws1', title: 'a' });
     addSessionMember(row.id, 'inst1');
 
     deleteSessionOp(row.id);
     expect(db.prepare('SELECT id FROM sessions WHERE id = ?').get(row.id)).toBeUndefined();
     expect(
-      (db.prepare('SELECT assignment_id FROM session_members WHERE session_id = ?').all(row.id) as unknown[])
+      (db.prepare('SELECT instance_id FROM session_members WHERE session_id = ?').all(row.id) as unknown[])
         .length,
     ).toBe(0);
   });
 
-  it('deleteSessionOp 团队会话（workspaces.team_session_id === id）抛错，不删除', () => {
-    const db = getDb();
-    // 先 seed workspace（FK：sessions.workspace_id REFERENCES workspaces(id)），
-    // workspaces.team_session_id 指向 session id。
-    seedWorkspace(db, 'ws1', 'team-sid');
-    db.prepare(
-      `INSERT INTO sessions
-         (id, workspace_id, title, kind, settings_json, created_at, updated_at)
-       VALUES (?, ?, ?, 'chat', NULL, ?, ?)`,
-    ).run('team-sid', 'ws1', '团队群', 1000, 1000);
-
-    expect(() => deleteSessionOp('team-sid')).toThrow(/团队会话/);
-    // 行仍在
-    expect(db.prepare('SELECT id FROM sessions WHERE id = ?').get('team-sid')).toBeTruthy();
-  });
-
-  it('getSessionsForWorkspace 按 workspace 过滤；无参返全部', () => {
+  it('getSessionsForWorkspace 按 workspace 过滤 + titleAuto 映射；无参返全部', () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
-    db.prepare(
-      `INSERT INTO workspaces
-         (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run('ws-other', 'Other', '', '/tmp/other', 0, '@owner:s', '📁');
+    seedWorkspace(db, 'ws-other');
 
     insertSession({ workspaceId: 'ws1', title: 'a' });
-    insertSession({ workspaceId: 'ws1', title: 'b' });
+    const autoRow = insertSession({ workspaceId: 'ws1', title: 'b' });
+    db.prepare('UPDATE sessions SET title_auto = 1 WHERE id = ?').run(autoRow.id);
     insertSession({ workspaceId: 'ws-other', title: 'c' });
 
     const list1 = getSessionsForWorkspace('ws1');
     expect(list1).toHaveLength(2);
     expect(list1.every((s) => s.workspaceId === 'ws1')).toBe(true);
+    // title_auto 快照列 → summary.titleAuto 布尔映射
+    const autoSummary = list1.find((s) => s.id === autoRow.id);
+    expect(autoSummary?.titleAuto).toBe(true);
+    expect(list1.find((s) => s.title === 'a')?.titleAuto).toBe(false);
 
     const list2 = getSessionsForWorkspace('ws-other');
     expect(list2).toHaveLength(1);
@@ -225,40 +213,52 @@ describe('session-ops', () => {
     expect(getSessionsForWorkspace('ws-nope')).toEqual([]);
   });
 
-  it('getSessionMembersInfo JOIN agent_assignments+agent_definitions，字段齐全且按 added_at 升序', () => {
+  it('getSessionMembersInfo 三表 JOIN：字段齐全、按 added_at 升序、isLeader 读建会快照', () => {
     const db = getDb();
-    seedWorkspace(db, 'ws1', '', 'inst-coord'); // coordinator_instance_id = inst-coord
+    // 先建 workspace（default 为 NULL——default_agent_instance_id 有 FK，须成员存在后回填）
+    seedWorkspace(db, 'ws1');
     seedAgentDef(db, 'def1', 'Alpha', '🦊');
     seedAgentDef(db, 'def2', 'Beta', '🐼');
-    seedAssignment(db, 'inst-coord', 'ws1', 'def1', '@coord:s', 'main', 1);     // 协调
-    seedAssignment(db, 'inst-sub', 'ws1', 'def2', '@sub:s', 'sub', 0);          // 已停止
+    seedMember(db, 'inst-leader', 'ws1', 'def1', '@leader:s', 1);   // leader，在线
+    seedMember(db, 'inst-member', 'ws1', 'def2', '@member:s', 0);   // 非 leader，已停止
+    // 快照独立性伏笔：workspace 默认 agent 指向「非 leader」成员 inst-member
+    db.prepare('UPDATE workspaces SET default_agent_instance_id = ? WHERE id = ?')
+      .run('inst-member', 'ws1');
 
     const row = insertSession({ workspaceId: 'ws1', title: 'a' });
-    addSessionMember(row.id, 'inst-sub');   // 先加 sub
-    addSessionMember(row.id, 'inst-coord'); // 后加 coord
-    // 注：added_at 同毫秒可能相同 → 显式拉开时间戳
-    const setAddedAt = db.prepare('UPDATE session_members SET added_at = ? WHERE session_id = ? AND assignment_id = ?');
-    setAddedAt.run(1000, row.id, 'inst-sub');
-    setAddedAt.run(2000, row.id, 'inst-coord');
+    // is_leader 经生产 repo 写入（1/0 两行各一）
+    addSessionMember(row.id, 'inst-member', false);  // 先加 member
+    addSessionMember(row.id, 'inst-leader', true);   // 后加 leader
+    // 注：added_at 同毫秒可能相同 → 显式拉开时间戳（v25 列名 instance_id）
+    const setAddedAt = db.prepare(
+      'UPDATE session_members SET added_at = ? WHERE session_id = ? AND instance_id = ?',
+    );
+    setAddedAt.run(1000, row.id, 'inst-member');
+    setAddedAt.run(2000, row.id, 'inst-leader');
 
     const info = getSessionMembersInfo(row.id);
     expect(info).toHaveLength(2);
 
-    // added_at ASC：sub 在前
-    expect(info[0]?.assignmentId).toBe('inst-sub');
-    expect(info[0]?.agentName).toBe('Beta');
-    expect(info[0]?.iconEmoji).toBe('🐼');
-    expect(info[0]?.role).toBe('sub');
-    expect(info[0]?.lastRunning).toBe(false);
-    expect(info[0]?.isCoordinator).toBe(false);
+    // added_at ASC：member 在前；契约五字段逐一断言
+    expect(info[0]).toEqual({
+      instanceId: 'inst-member',
+      agentName: 'Beta',
+      iconEmoji: '🐼',
+      lastRunning: false,
+      isLeader: false,
+    });
+    expect(info[1]).toEqual({
+      instanceId: 'inst-leader',
+      agentName: 'Alpha',
+      iconEmoji: '🦊',
+      lastRunning: true,
+      isLeader: true,
+    });
 
-    expect(info[1]?.assignmentId).toBe('inst-coord');
-    expect(info[1]?.agentName).toBe('Alpha');
-    expect(info[1]?.iconEmoji).toBe('🦊');
-    expect(info[1]?.role).toBe('main');
-    expect(info[1]?.lastRunning).toBe(true);
-    // coordinator_instance_id === inst-coord → true
-    expect(info[1]?.isCoordinator).toBe(true);
+    // 快照独立性锁：默认 agent 指向 inst-member，但其 isLeader 仍按快照 = false；
+    // 若实现回退到「比 default_agent_instance_id」，此处两断言同时翻红
+    expect(info[0]?.isLeader).toBe(false);
+    expect(info[1]?.isLeader).toBe(true);
   });
 
   it('getSessionMembersInfo 无成员返回空数组（不抛错）', () => {

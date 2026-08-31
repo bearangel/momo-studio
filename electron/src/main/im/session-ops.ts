@@ -6,8 +6,8 @@
 // 设计要点：
 //   - createSession 把 memberInstanceIds 一次性写入 session_members，
 //     复用 sessions repo 的 insertSession + addSessionMember。
-//   - getSessionMembersInfo 两表 JOIN（session_members/workspace_agent_members +
-//     agent_definitions）；isDefaultAgent 由 workspaces.default_agent_instance_id 判定。
+//   - getSessionMembersInfo 三表 JOIN（session_members/workspace_agent_members +
+//     agent_definitions）；isLeader 读 session_members.is_leader 建会快照（spec §3.3）。
 //
 // v25 过渡态：workspaces.team_session_id 已退役，deleteSessionOp 的团队会话保护
 // 待后续 task 按新会话模型（spec §4.4）重接。
