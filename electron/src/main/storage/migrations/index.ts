@@ -656,6 +656,11 @@ CREATE TABLE workspace_agent_members (
 DELETE FROM agent_assignments WHERE rowid NOT IN (
   SELECT MIN(rowid) FROM agent_assignments GROUP BY workspace_id, agent_definition_id
 );
+-- 防护：coordinator 指向被去重掉的行时先置 NULL（否则下方直拷 UPDATE 触发 FK 中止，
+-- 且迁移 runner 逐句自动提交会让库停在半迁移态无法自愈重试）
+UPDATE workspaces SET coordinator_instance_id = NULL
+WHERE coordinator_instance_id IS NOT NULL
+  AND coordinator_instance_id NOT IN (SELECT instance_id FROM agent_assignments);
 INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id, api_key_override, last_running, created_at)
 SELECT instance_id, workspace_id, agent_definition_id, agent_user_id, has_api_key_override, last_running, created_at
 FROM agent_assignments;

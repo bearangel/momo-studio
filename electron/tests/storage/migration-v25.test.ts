@@ -210,4 +210,53 @@ describe('migration v25：去编排 + 团队 schema', () => {
     expect(row['created_at']).toBe('2026-01-01 00:00:00');
     db.close();
   });
+
+  it('去重×级联×重建三联动：coordinator 指向被去重行时迁移不中止且各表收敛', () => {
+    const db = buildV24DbWithFixture((d) => {
+      seedWorkspaceAndDefinition(d);
+      d.exec(
+        `INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, agent_user_id, created_at)
+         VALUES ('inst-1', 'ws1', 'def-1', '@bot:1', '2026-01-01 00:00:00')`,
+      );
+      d.exec(
+        `INSERT INTO agent_assignments (instance_id, workspace_id, agent_definition_id, agent_user_id, created_at)
+         VALUES ('inst-2', 'ws1', 'def-1', '@bot:2', '2026-02-02 00:00:00')`,
+      );
+      d.exec(
+        `INSERT INTO sessions (id, workspace_id, title, created_at, updated_at)
+         VALUES ('sess-1', 'ws1', 'T', 1, 1)`,
+      );
+      // 会话同时挂两个成员：被去重行（inst-2）的成员关系应被 CASCADE 清掉，重建表不搬运
+      d.exec(`INSERT INTO session_members (session_id, assignment_id, added_at) VALUES ('sess-1', 'inst-1', 10)`);
+      d.exec(`INSERT INTO session_members (session_id, assignment_id, added_at) VALUES ('sess-1', 'inst-2', 20)`);
+      // 能力 delta 挂在被去重行上：应被级联清空
+      d.exec(
+        `INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref)
+         VALUES ('inst-2', 'tool', 'add', 'grep')`,
+      );
+      // coordinator 指向被去重行：防护须先置 NULL，否则直拷 UPDATE 触发 FK 中止
+      d.exec(`UPDATE workspaces SET coordinator_instance_id='inst-2' WHERE id='ws1'`);
+    });
+    // 1. session_members 只剩 (sess-1, inst-1)——级联清掉被去重行的成员关系
+    const members = db.prepare('SELECT session_id, instance_id FROM session_members ORDER BY instance_id').all() as Array<{
+      session_id: string;
+      instance_id: string;
+    }>;
+    expect(members).toEqual([{ session_id: 'sess-1', instance_id: 'inst-1' }]);
+    // 2. agent_assignment_capabilities 行被清空（DROP TABLE 隐式 DELETE 级联）
+    expect(
+      db.prepare('SELECT COUNT(*) c FROM agent_assignment_capabilities').get(),
+    ).toMatchObject({ c: 0 });
+    // 3. 防护生效：default_agent_instance_id 置 NULL，迁移未因 FK 中止
+    const ws = db.prepare('SELECT default_agent_instance_id FROM workspaces WHERE id=?').get('ws1') as {
+      default_agent_instance_id: string | null;
+    };
+    expect(ws.default_agent_instance_id).toBeNull();
+    // 4. workspace_agent_members 仅剩 inst-1
+    const wam = db
+      .prepare('SELECT instance_id FROM workspace_agent_members ORDER BY instance_id')
+      .all() as Array<{ instance_id: string }>;
+    expect(wam.map((r) => r.instance_id)).toEqual(['inst-1']);
+    db.close();
+  });
 });
