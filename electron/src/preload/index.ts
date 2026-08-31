@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   ApiSurface,
   AssignmentDeltas,
+  CollabTarget,
   ImMessage,
   MessageEventBatch,
   RegisterMcpInput,
@@ -35,7 +36,8 @@ const api: ApiSurface = {
     // P2 Task 2：重命名 / 在系统文件管理器打开目录
     rename: (id, name) => invoke('workspace:rename', id, name),
     openDirectory: (id) => invoke('workspace:openDirectory', id),
-    setCoordinator: (id, instanceId) => invoke('workspace:setCoordinator', id, instanceId),
+    // v25 Task 6：setCoordinator → setDefaultAgent（spec §5）
+    setDefaultAgent: (id, instanceId) => invoke('workspace:setDefaultAgent', id, instanceId),
     getCoordinator: (id) => invoke('workspace:getCoordinator', id),
   },
   file: {
@@ -46,30 +48,28 @@ const api: ApiSurface = {
     delete: (wsId, filePath) => invoke('file:delete', wsId, filePath),
     rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
   },
+  // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；assignMain /
+  // updateAssignmentRole 随 role 概念退役删除（preload 悬空绑定一并清理）。
   agent: {
-    addToWorkspace: (input) => invoke('agent:addToWorkspace', input),
-    assignMain: (input) => invoke('agent:assignMain', input),
+    addMember: (input) => invoke('agent:addMember', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),
     createCustom: (input) => invoke('agent:createCustom', input),
     list: (workspaceId?: string) => invoke('agent:list', workspaceId),
     assign: (workspaceId, defId, agentUserId) =>
       invoke('agent:assign', workspaceId, defId, agentUserId),
-    listAssignments: (workspaceId) => invoke('agent:listAssignments', workspaceId),
+    listMembers: (workspaceId) => invoke('agent:listMembers', workspaceId),
     start: (opts) => invoke('agent:start', opts),
     stop: (instanceId) => invoke('agent:stop', instanceId),
-    removeAssignment: (instanceId) => invoke('agent:removeAssignment', instanceId),
+    removeMember: (instanceId) => invoke('agent:removeMember', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
     updateDefinition: (input) => invoke('agent:updateDefinition', input),
-    updateAssignmentRole: (instanceId: string, role: 'standalone' | 'main' | 'sub', parentInstanceId?: string) =>
-      invoke('agent:updateAssignmentRole', instanceId, role, parentInstanceId),
-    updateAssignmentApiKey: (instanceId: string, apiKey: string | null) =>
-      invoke('agent:updateAssignmentApiKey', instanceId, apiKey),
+    setMemberApiKeyOverride: (instanceId: string, apiKey: string | null) =>
+      invoke('agent:setMemberApiKeyOverride', instanceId, apiKey),
     deleteDefinition: (defId: string) => invoke('agent:deleteDefinition', defId),
     getBuiltinSuggestions: () => invoke('agent:getBuiltinSuggestions'),
-    // v1.6：per-assignment 能力 delta（Layer 3）读写
-    getAssignmentDeltas: (instanceId: string) => invoke('agent:getAssignmentDeltas', instanceId),
-    setAssignmentDeltas: (instanceId: string, deltas: AssignmentDeltas) =>
-      invoke('agent:setAssignmentDeltas', instanceId, deltas),
+    getMemberDeltas: (instanceId: string) => invoke('agent:getMemberDeltas', instanceId),
+    setMemberDeltas: (instanceId: string, deltas: AssignmentDeltas) =>
+      invoke('agent:setMemberDeltas', instanceId, deltas),
     onRuntimeChanged: (callback) => {
       const handler = (): void => callback();
       ipcRenderer.on('agent:runtimeChanged', handler);
@@ -78,6 +78,16 @@ const api: ApiSurface = {
       };
     },
     abortStream: (streamSessionId: string) => invoke('agent:abortStream', streamSessionId),
+  },
+  // v25 Task 6：团队通道面（spec §4.2）
+  team: {
+    list: (workspaceId) => invoke('team:list', workspaceId),
+    create: (workspaceId, input) => invoke('team:create', workspaceId, input),
+    rename: (teamId, name, iconEmoji?) => invoke('team:rename', teamId, name, iconEmoji),
+    delete: (teamId) => invoke('team:delete', teamId),
+    setLeader: (teamId, leaderInstanceId) => invoke('team:setLeader', teamId, leaderInstanceId),
+    addMember: (teamId, instanceId) => invoke('team:addMember', teamId, instanceId),
+    removeMember: (teamId, instanceId) => invoke('team:removeMember', teamId, instanceId),
   },
   provider: {
     list: () => invoke('provider:list'),
@@ -119,15 +129,18 @@ const api: ApiSurface = {
   },
   session: {
     // v2.0 P1 Task 8：会话内核命名空间（纯 SQLite，无 Matrix）。
-    // invoke 通道 9 个（session.ipc.handlers.ts）+ 推送 2 个
+    // v25 Task 6：泛化 create 退役 → createQuick / createCollab 双通道（spec §4.4）。
+    // invoke 通道 10 个（session.ipc.handlers.ts）+ 推送 2 个
     // （session:message / session:message_event_batch）。
     list: (workspaceId?: string) => invoke('session:list', workspaceId),
     get: (sessionId: string) => invoke('session:get', sessionId),
-    create: (input) => invoke('session:create', input),
+    createQuick: (workspaceId: string) => invoke('session:createQuick', workspaceId),
+    createCollab: (workspaceId: string, title: string | undefined, target: CollabTarget) =>
+      invoke('session:createCollab', workspaceId, title, target),
     rename: (sessionId: string, title: string) => invoke('session:rename', sessionId, title),
     delete: (sessionId: string) => invoke('session:delete', sessionId),
-    send: (sessionId: string, body: string, mentionedAssignmentIds?: string[]) =>
-      invoke('session:send', sessionId, body, mentionedAssignmentIds),
+    send: (sessionId: string, body: string, mentionedInstanceIds?: string[]) =>
+      invoke('session:send', sessionId, body, mentionedInstanceIds),
     getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
     loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
       invoke('session:loadOlder', sessionId, beforeTs, count),

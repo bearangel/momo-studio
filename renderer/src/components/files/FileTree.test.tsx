@@ -30,12 +30,11 @@ const buildWorkspace = (id: string, name: string): Workspace => ({
   name,
   description: '',
   directoryPath: `/tmp/${name}`,
-  teamSessionId: `!team:${id}`,
   gitInitialized: true,
   createdAt: '2026-01-01T00:00:00.000Z',
   ownerId: '@user:localhost',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 });
 
 beforeEach(() => {

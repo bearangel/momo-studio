@@ -67,7 +67,7 @@ export function broadcastRuntimeChanged(): void {
  * 新模型下 sendUserMessage 只处理本地用户消息（单用户应用，所有消息 sender='owner'），
  * 该守卫在结构上已满足，无需重复判断。
  */
-export function resolveTarget(sessionId: string, mentionedAssignmentIds: string[]): string | null {
+export function resolveTarget(sessionId: string, mentionedInstanceIds: string[]): string | null {
   const memberRows = getDb()
     .prepare(
       `SELECT m.instance_id
@@ -78,7 +78,7 @@ export function resolveTarget(sessionId: string, mentionedAssignmentIds: string[
     )
     .all(sessionId) as Array<{ instance_id: string }>;
   const memberIds = memberRows.map((m) => m.instance_id);
-  const mentioned = mentionedAssignmentIds.find((id) => memberIds.includes(id));
+  const mentioned = mentionedInstanceIds.find((id) => memberIds.includes(id));
   if (mentioned) return mentioned;
   if (memberIds.length === 1) return memberIds[0]!; // 单成员会话：发言即应答
   return null;
@@ -94,7 +94,7 @@ export function resolveTarget(sessionId: string, mentionedAssignmentIds: string[
 export async function sendUserMessage(input: {
   sessionId: string;
   body: string;
-  mentionedAssignmentIds?: string[];
+  mentionedInstanceIds?: string[];
 }): Promise<void> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
@@ -135,8 +135,10 @@ export async function sendUserMessage(input: {
     });
   }
 
-  const target = resolveTarget(input.sessionId, input.mentionedAssignmentIds ?? []);
+  const target = resolveTarget(input.sessionId, input.mentionedInstanceIds ?? []);
   if (target && router) {
+    // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
+    // 随 Task 9 路由改造一并更名。
     await router.routeUserChat({ sessionId: input.sessionId, assignmentId: target, body: input.body });
   }
 }

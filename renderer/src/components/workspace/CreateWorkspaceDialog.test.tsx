@@ -29,7 +29,6 @@ beforeEach(() => {
     },
     select: vi.fn(),
     getActive: () => null,
-    setCoordinator: vi.fn(),
   });
   // 沿用 AddAgentDialog 测试约定：只设置 api，不替换整个 window
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;

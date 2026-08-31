@@ -19,12 +19,11 @@ const STUB_WORKSPACE: Workspace = {
   name: 'Test',
   description: '',
   directoryPath: '/tmp/test',
-  teamSessionId: 'sess-team',
   gitInitialized: false,
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 // 桩 ipc：渲染分支时各组件会触发挂载副作用；本测试不验证副作用内容
@@ -47,7 +46,7 @@ const mockApi = {
     removeTrustedNode: vi.fn().mockResolvedValue(undefined),
   },
   agent: {
-    listAssignments: vi.fn().mockResolvedValue([]),
+    listMembers: vi.fn().mockResolvedValue([]),
   },
 };
 

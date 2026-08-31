@@ -1,9 +1,9 @@
 // renderer/src/components/agent/AddToWorkspaceDialog.tsx
-// 选 def + role + parent + apiKeyOverride → 添加到当前 workspace
-// v1.6 Task 11：API key 步骤之后追加「能力调整（可选）」折叠区（Layer 3 per-assignment override）。
+// 选 def + apiKeyOverride → 添加到当前 workspace（v25：去编排，无 role/parent）
+// v1.6 Task 11：API key 步骤之后追加「能力调整（可选）」折叠区（Layer 3 per-member override）。
 //   - 默认收起：大多数添加场景不需要 override，保持原有简洁流程。
 //   - 展开后内嵌 CapabilityTabs mode="override"，defaultValue = def 默认能力 ∪ workspace allocation。
-//   - 提交时先 addAgent 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setAssignmentDeltas。
+//   - 提交时先 addAgent 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setMemberDeltas。
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useAgentStore } from '../../stores/agent.store';
@@ -19,7 +19,7 @@ import {
   type Capabilities,
 } from '../../lib/capability-helpers';
 import { CapabilityTabs } from './CapabilityTabs';
-import type { AgentDefinition, AgentRole, WorkspaceAllocation } from '../../ipc/types';
+import type { AgentDefinition, WorkspaceAllocation } from '../../ipc/types';
 
 interface Props {
   preselectedDef?: AgentDefinition;
@@ -31,16 +31,12 @@ const EMPTY_CAPS: Capabilities = { tools: [], mcps: [], skills: [] };
 export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const definitions = useAgentStore((s) => s.definitions);
-  const assignments = useAgentStore((s) => s.assignments);
-  const builtinSuggestions = useAgentStore((s) => s.builtinSuggestions);
   const addAgent = useAgentStore((s) => s.addAgent);
   const setAssignmentDeltas = useAgentStore((s) => s.setAssignmentDeltas);
   const stopAgent = useAgentStore((s) => s.stopAgent);
   const startAgent = useAgentStore((s) => s.startAgent);
 
   const [defId, setDefId] = useState(preselectedDef?.id ?? '');
-  const [role, setRole] = useState<AgentRole>('standalone');
-  const [parentInstanceId, setParentInstanceId] = useState('');
   const [apiKeyOverride, setApiKeyOverride] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -52,15 +48,7 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   // 用户在折叠区内的勾选值（最终生效集）；初始 = defaultCaps，def/allocation 变化时重置
   const [overrideValue, setOverrideValue] = useState<Capabilities>(EMPTY_CAPS);
 
-  // 选中 def 时预填建议 role
-  useEffect(() => {
-    if (defId && builtinSuggestions[defId]) {
-      setRole(builtinSuggestions[defId]!.role);
-    }
-  }, [defId, builtinSuggestions]);
-
   const selectedDef = definitions.find((d) => d.id === defId);
-  const mainAssignments = assignments.filter((a) => a.role === 'main');
   const unconfigured = selectedDef && !selectedDef.modelProviderId;
 
   // default = Layer1（def 默认能力）∪ Layer2（workspace allocation）
@@ -94,19 +82,13 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
     if (!workspace || !defId) return;
-    if (role === 'sub' && !parentInstanceId) {
-      setError('子 agent 必须选择父主 agent');
-      return;
-    }
     setSubmitting(true);
     setError(null);
     try {
-      // 1. 创建 assignment，捕获 IPC 返回的新 instanceId（Layer 3 deltas 必须绑到它）
+      // 1. 创建成员，捕获 IPC 返回的新 instanceId（Layer 3 deltas 必须绑到它）
       const newAssignment = await addAgent(
         workspace.id,
         defId,
-        role,
-        role === 'sub' ? parentInstanceId : undefined,
         apiKeyOverride.trim() || undefined,
       );
       // 2. 计算用户 override 相对 defaultCaps 的 deltas；全空则跳过（避免空写）
@@ -159,46 +141,6 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
             </div>
           )}
 
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">角色</label>
-            <div className="flex gap-3">
-              {(['standalone', 'main', 'sub'] as const).map((r) => (
-                <label key={r} className="flex items-center gap-1 text-sm text-neutral-300">
-                  <input
-                    type="radio"
-                    checked={role === r}
-                    onChange={() => setRole(r)}
-                  />
-                  {r === 'standalone' ? '独立' : r === 'main' ? '主 agent' : '子 agent'}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {role === 'sub' && (
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-neutral-300">父主 agent</label>
-              <select
-                value={parentInstanceId}
-                onChange={(e) => setParentInstanceId(e.target.value)}
-                className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100"
-              >
-                <option value="">请选择...</option>
-                {mainAssignments.map((a) => {
-                  const def = definitions.find((d) => d.id === a.agentDefinitionId);
-                  return (
-                    <option key={a.instanceId} value={a.instanceId}>
-                      {def?.iconEmoji ?? '🤖'} {def?.name ?? '未知'}
-                    </option>
-                  );
-                })}
-              </select>
-              {mainAssignments.length === 0 && (
-                <span className="text-xs text-neutral-500">当前工作空间暂无主 agent。请先添加一个主 agent。</span>
-              )}
-            </div>
-          )}
-
           <Input
             label="API Key（可选）"
             type="password"
@@ -236,7 +178,7 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
           {error && <div className="text-red-400 text-sm">{error}</div>}
           <div className="flex gap-2 justify-end mt-2">
             <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
-            <Button type="submit" disabled={submitting || !defId || !!unconfigured || (role === 'sub' && !parentInstanceId)}>
+            <Button type="submit" disabled={submitting || !defId || !!unconfigured}>
               {submitting ? '添加中…' : '添加并启动'}
             </Button>
           </div>

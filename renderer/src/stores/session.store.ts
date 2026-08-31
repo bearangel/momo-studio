@@ -14,7 +14,7 @@
 // 与 im.store 的差异：
 //   - IPC 全部走 ipc.session.*（list/get/send/getMessages/loadOlder）
 //   - 不再有 im:startSync 启动步骤（无 Matrix /sync）
-//   - sendMessage 增加 mentionedAssignmentIds（@ 目标从 Matrix userId 换成 assignmentId）
+//   - sendMessage 增加 mentionedInstanceIds（@ 目标为会话成员 instanceId）
 //   - 成员来自 session:get 的 SessionMemberInfo（三表 JOIN，仅 agent 成员）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
@@ -60,8 +60,8 @@ interface SessionState {
    * 按 eventsByMessage 累积，同 event id 不重复。
    */
   onIncomingEventBatch: (batch: MessageEventRow[]) => void;
-  /** 向当前激活会话发送消息（mentionedAssignmentIds 为 @ 的 assignment 实例） */
-  sendMessage: (body: string, mentionedAssignmentIds?: string[]) => Promise<void>;
+  /** 向当前激活会话发送消息（mentionedInstanceIds 为 @ 的成员 instanceId） */
+  sendMessage: (body: string, mentionedInstanceIds?: string[]) => Promise<void>;
   /** 向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
   loadOlder: (sessionId: string) => Promise<void>;
   /** 重置全部状态（登出时调用） */
@@ -247,11 +247,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  sendMessage: async (body, mentionedAssignmentIds) => {
+  sendMessage: async (body, mentionedInstanceIds) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return;
     // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage。
-    await ipc.session.send(activeSessionId, body, mentionedAssignmentIds);
+    await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
   },
 
   reset: () =>

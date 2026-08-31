@@ -48,12 +48,11 @@ const WS: Workspace = {
   name: '当前工作空间',
   description: '',
   directoryPath: '/tmp/ws',
-  teamSessionId: '!team:server',
   gitInitialized: true,
   createdAt: '',
   ownerId: 'u',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 beforeEach(() => {

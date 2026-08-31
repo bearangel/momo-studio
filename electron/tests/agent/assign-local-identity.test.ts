@@ -2,7 +2,7 @@
 //
 // v2（Task 10）：agent 分配流程去 Matrix。
 //   1. generateAgentUserId 生成本地身份 'agent-<slug>-<6位随机后缀>'
-//   2. agent:addToWorkspace 流程：不再调 registerAgentBot / inviteBotToRoom，
+//   2. agent:addMember 流程：不再调 registerAgentBot / inviteBotToRoom，
 //      assignment.agent_user_id 为本地身份，且自动写入团队会话成员表
 //      （session_members）——取代原"注册 bot + 邀请进团队群"
 //
@@ -129,7 +129,7 @@ describe('generateAgentUserId — 本地身份生成', () => {
   });
 });
 
-describe('agent:addToWorkspace — 分配即入团队会话（去 Matrix）', () => {
+describe('agent:addMember — 分配即入团队会话（去 Matrix）', () => {
   it('生成本地 agent_user_id 并写入 session_members（不注册 bot / 不邀请房间）', async () => {
     const ws = await createWorkspace(
       { name: 'W', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
@@ -137,7 +137,7 @@ describe('agent:addToWorkspace — 分配即入团队会话（去 Matrix）', ()
     );
     makeDef('def-1', 'coder-bot');
 
-    const handler = ipcHandlers.get('agent:addToWorkspace');
+    const handler = ipcHandlers.get('agent:addMember');
     expect(handler).toBeDefined();
 
     const assignment = (await handler!(null, {

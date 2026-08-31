@@ -1,5 +1,7 @@
 // renderer/src/stores/agent.store.test.ts
-// v1.3 schema：AgentDefinition 无 type/parent/model；AgentAssignment 含 role/parent/hasApiKeyOverride
+// v25 schema：WorkspaceAgentMember 无 role/parent/enabled；通道面 member 命名
+// （listMembers/addMember/setMemberApiKeyOverride）；assignMain/updateAssignmentRole
+// 随 role 概念退役删除（用例同步移除）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAgentStore } from './agent.store';
 import type { AgentAssignment, AgentDefinition } from '../ipc/types';
@@ -29,53 +31,22 @@ const MOCK_ASSIGNMENT: AgentAssignment = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@bot.x.alice:localhost',
-  enabled: true,
   createdAt: '2026-01-01T00:00:00Z',
-  role: 'standalone',
-  parentInstanceId: null,
   hasApiKeyOverride: false,
   lastRunning: true,
-};
-
-const MOCK_MAIN_ASSIGNMENT: AgentAssignment = {
-  instanceId: 'main-i',
-  workspaceId: 'ws-1',
-  agentDefinitionId: 'main-d',
-  agentUserId: '@main:localhost',
-  enabled: true,
-  createdAt: '2026-01-01T00:00:00Z',
-  role: 'main',
-  parentInstanceId: null,
-  hasApiKeyOverride: false,
-  lastRunning: true,
-};
-
-const MOCK_SUB_ASSIGNMENT: AgentAssignment = {
-  instanceId: 'sub-i',
-  workspaceId: 'ws-1',
-  agentDefinitionId: 'sub-d',
-  agentUserId: '@sub:localhost',
-  enabled: true,
-  createdAt: '2026-01-01T00:00:00Z',
-  role: 'sub',
-  parentInstanceId: 'main-i',
-  hasApiKeyOverride: false,
-  lastRunning: false,
 };
 
 const mockApi = {
   agent: {
     list: vi.fn().mockResolvedValue(MOCK_DEFS),
-    listAssignments: vi.fn().mockResolvedValue([MOCK_ASSIGNMENT]),
-    addToWorkspace: vi.fn().mockResolvedValue(MOCK_ASSIGNMENT),
+    listMembers: vi.fn().mockResolvedValue([MOCK_ASSIGNMENT]),
+    addMember: vi.fn().mockResolvedValue(MOCK_ASSIGNMENT),
     stop: vi.fn().mockResolvedValue({ ok: true }),
     isRunning: vi.fn().mockResolvedValue(true),
-    assignMain: vi.fn().mockResolvedValue([MOCK_MAIN_ASSIGNMENT, MOCK_SUB_ASSIGNMENT]),
     deleteDefinition: vi.fn().mockResolvedValue({ stoppedInstanceIds: [] }),
-    updateAssignmentRole: vi.fn().mockResolvedValue({ stoppedInstanceIds: [] }),
-    updateAssignmentApiKey: vi.fn().mockResolvedValue({ ok: true }),
+    setMemberApiKeyOverride: vi.fn().mockResolvedValue({ ok: true }),
     getBuiltinSuggestions: vi.fn().mockResolvedValue({
-      'def-1': { role: 'standalone', suggestedPlatform: 'anthropic' },
+      'def-1': { suggestedPlatform: 'anthropic' },
     }),
   },
 };
@@ -84,18 +55,15 @@ beforeEach(() => {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window = { api: mockApi };
   useAgentStore.getState().reset();
   mockApi.agent.list.mockResolvedValue(MOCK_DEFS);
-  mockApi.agent.listAssignments.mockResolvedValue([MOCK_ASSIGNMENT]);
-  mockApi.agent.addToWorkspace.mockResolvedValue(MOCK_ASSIGNMENT);
+  mockApi.agent.listMembers.mockResolvedValue([MOCK_ASSIGNMENT]);
+  mockApi.agent.addMember.mockResolvedValue(MOCK_ASSIGNMENT);
   mockApi.agent.isRunning.mockResolvedValue(true);
-  mockApi.agent.assignMain.mockResolvedValue([MOCK_MAIN_ASSIGNMENT, MOCK_SUB_ASSIGNMENT]);
   mockApi.agent.stop.mockClear();
-  mockApi.agent.assignMain.mockClear();
   mockApi.agent.deleteDefinition.mockClear();
-  mockApi.agent.updateAssignmentRole.mockClear();
-  mockApi.agent.updateAssignmentApiKey.mockClear();
+  mockApi.agent.setMemberApiKeyOverride.mockClear();
 });
 
-describe('agent.store — v1.3', () => {
+describe('agent.store — v25', () => {
   it('loadDefinitions(wsId) 透传 workspaceId 到 IPC', async () => {
     await useAgentStore.getState().loadDefinitions('ws-1');
     expect(mockApi.agent.list).toHaveBeenCalledWith('ws-1');
@@ -104,44 +72,42 @@ describe('agent.store — v1.3', () => {
 
   it('loadAssignments 填充 assignments', async () => {
     await useAgentStore.getState().loadAssignments('ws-1');
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith('ws-1');
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith('ws-1');
     expect(useAgentStore.getState().assignments).toHaveLength(1);
     expect(useAgentStore.getState().assignments[0]?.lastRunning).toBe(true);
   });
 
-  it('addAgent 透传 role + parentInstanceId + apiKeyOverride', async () => {
-    await useAgentStore.getState().addAgent('ws-1', 'def-1', 'main');
-    expect(mockApi.agent.addToWorkspace).toHaveBeenCalledWith({
+  it('addAgent 透传 workspaceId + defId + apiKeyOverride', async () => {
+    await useAgentStore.getState().addAgent('ws-1', 'def-1', 'sk-x');
+    expect(mockApi.agent.addMember).toHaveBeenCalledWith({
       workspaceId: 'ws-1',
       agentDefinitionId: 'def-1',
-      role: 'main',
-      parentInstanceId: undefined,
-      apiKeyOverride: undefined,
+      apiKeyOverride: 'sk-x',
     });
     expect(useAgentStore.getState().assignments).toContainEqual(MOCK_ASSIGNMENT);
   });
 
   it('addAgent 失败时抛错并写入 error', async () => {
-    mockApi.agent.addToWorkspace.mockRejectedValue(new Error('bot 注册失败'));
+    mockApi.agent.addMember.mockRejectedValue(new Error('加入失败'));
     await expect(
-      useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone'),
-    ).rejects.toThrow('bot 注册失败');
-    expect(useAgentStore.getState().error).toBe('bot 注册失败');
+      useAgentStore.getState().addAgent('ws-1', 'def-1'),
+    ).rejects.toThrow('加入失败');
+    expect(useAgentStore.getState().error).toBe('加入失败');
   });
 
-  it('addAgent 返回新创建的 AgentAssignment（供调用方捕获 instanceId 写 Layer 3 deltas）', async () => {
-    const result = await useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone');
+  it('addAgent 返回新创建的成员（供调用方捕获 instanceId 写 Layer 3 deltas）', async () => {
+    const result = await useAgentStore.getState().addAgent('ws-1', 'def-1');
     expect(result).toEqual(MOCK_ASSIGNMENT);
     expect(result.instanceId).toBe('inst-1');
   });
 
   it('stopAgent 调用 stop 并重新加载 assignments（反映 lastRunning）', async () => {
-    await useAgentStore.getState().addAgent('ws-1', 'def-1', 'standalone');
+    await useAgentStore.getState().addAgent('ws-1', 'def-1');
     expect(useAgentStore.getState().assignments).toContainEqual(MOCK_ASSIGNMENT);
 
-    // stop 后 listAssignments 返回 lastRunning=false 的 assignment
+    // stop 后 listMembers 返回 lastRunning=false 的成员
     const stoppedAssignment = { ...MOCK_ASSIGNMENT, lastRunning: false };
-    mockApi.agent.listAssignments.mockResolvedValueOnce([stoppedAssignment]);
+    mockApi.agent.listMembers.mockResolvedValueOnce([stoppedAssignment]);
 
     await useAgentStore.getState().stopAgent('inst-1');
     expect(mockApi.agent.stop).toHaveBeenCalledWith('inst-1');
@@ -157,18 +123,11 @@ describe('agent.store — v1.3', () => {
     expect(useAgentStore.getState().definitions).toHaveLength(0);
   });
 
-  it('updateAssignmentRole 调用 IPC + 刷新 assignments', async () => {
-    await useAgentStore.getState().loadAssignments('ws-1');
-
-    await useAgentStore.getState().updateAssignmentRole('inst-1', 'main');
-    expect(mockApi.agent.updateAssignmentRole).toHaveBeenCalledWith('inst-1', 'main', undefined);
-  });
-
-  it('updateAssignmentApiKey(null) 调用 IPC 清除 override', async () => {
+  it('updateAssignmentApiKey(null) 调用 setMemberApiKeyOverride 清除 override', async () => {
     await useAgentStore.getState().loadAssignments('ws-1');
 
     await useAgentStore.getState().updateAssignmentApiKey('inst-1', null);
-    expect(mockApi.agent.updateAssignmentApiKey).toHaveBeenCalledWith('inst-1', null);
+    expect(mockApi.agent.setMemberApiKeyOverride).toHaveBeenCalledWith('inst-1', null);
   });
 
   it('loadBuiltinSuggestions 填充 state', async () => {
@@ -176,25 +135,5 @@ describe('agent.store — v1.3', () => {
     expect(mockApi.agent.getBuiltinSuggestions).toHaveBeenCalled();
     expect(useAgentStore.getState().builtinSuggestions['def-1']).toBeDefined();
     expect(useAgentStore.getState().builtinSuggestions['def-1']!.suggestedPlatform).toBe('anthropic');
-  });
-});
-
-describe('assignMainAgent — v1.3', () => {
-  it('调 IPC 后追加 assignments', async () => {
-    await useAgentStore.getState().assignMainAgent('ws-1', 'main-d');
-    const { assignments } = useAgentStore.getState();
-    expect(assignments).toHaveLength(2);
-    expect(assignments.find((a) => a.instanceId === 'main-i')?.lastRunning).toBe(true);
-    expect(assignments.find((a) => a.instanceId === 'sub-i')?.lastRunning).toBe(false);
-  });
-
-  it('apiKeyOverride + selectedSubDefIds 透传', async () => {
-    await useAgentStore.getState().assignMainAgent('ws-1', 'main-d', 'sk-override', ['sub-d']);
-    expect(mockApi.agent.assignMain).toHaveBeenCalledWith({
-      workspaceId: 'ws-1',
-      mainDefId: 'main-d',
-      apiKeyOverride: 'sk-override',
-      selectedSubDefIds: ['sub-d'],
-    });
   });
 });

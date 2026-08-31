@@ -18,14 +18,13 @@ const WS_A: Workspace = {
   name: '产品重构',
   description: '',
   directoryPath: '/tmp/a',
-  teamSessionId: 'sess-a',
   gitInitialized: true,
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
-const WS_B: Workspace = { ...WS_A, id: 'ws-b', name: '日常助手', teamSessionId: 'sess-b' };
+const WS_B: Workspace = { ...WS_A, id: 'ws-b', name: '日常助手', defaultAgentInstanceId: null };
 
 const mockApi = {
   system: {

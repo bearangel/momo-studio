@@ -18,8 +18,8 @@ interface WorkspaceState {
   select: (id: string) => void;
   // 获取当前激活的 workspace（无则 null）
   getActive: () => Workspace | null;
-  // 设为/取消协调 agent（instanceId=null 表示取消），完成后刷新 workspaces
-  setCoordinator: (workspaceId: string, instanceId: string | null) => Promise<void>;
+  // 设为/取消默认会话 agent（instanceId=null 表示取消），完成后刷新 workspaces
+  setDefaultAgent: (workspaceId: string, instanceId: string | null) => Promise<void>;
   // 删除 workspace 并刷新列表（删除激活项时由 load 回退到首个）；失败抛错给调用方提示
   remove: (id: string) => Promise<void>;
   // 重命名 workspace，成功后本地同步名称；失败抛错且本地名称不变
@@ -60,11 +60,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   },
 
-  setCoordinator: async (workspaceId, instanceId) => {
+  setDefaultAgent: async (workspaceId, instanceId) => {
     set({ error: null });
     try {
-      await ipc.workspace.setCoordinator(workspaceId, instanceId);
-      // 刷新 workspace 列表以拿到新的 coordinatorInstanceId
+      await ipc.workspace.setDefaultAgent(workspaceId, instanceId);
+      // 刷新 workspace 列表以拿到新的 defaultAgentInstanceId
       const list = await ipc.workspace.list();
       set({ workspaces: list });
     } catch (err) {

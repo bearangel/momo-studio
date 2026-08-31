@@ -16,21 +16,18 @@ export function RoomList() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
   const refreshSessionList = useSessionStore((s) => s.refreshSessionList);
   const loading = useSessionStore((s) => s.loading);
-  const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
-  // 新建会话对话框状态 + 邀请候选（当前 workspace 内启用的 agent assignment）
+  // 新建会话对话框状态 + 目标候选（当前 workspace 的 agent 成员；v25 成员制无 enabled）
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
   const { assignments } = useAgentStore();
   const botNameMap = useBotNameMap();
 
-  const inviteCandidates = assignments
-    .filter((a) => a.enabled)
-    .map((a) => ({
-      assignmentId: a.instanceId,
-      displayName: resolveBotName(a.agentUserId, botNameMap),
-    }));
+  const inviteCandidates = assignments.map((a) => ({
+    instanceId: a.instanceId,
+    displayName: resolveBotName(a.agentUserId, botNameMap),
+  }));
 
   const handleRename = (sessionId: string, oldTitle: string) => {
     setRenaming({ sessionId, oldTitle });
@@ -73,9 +70,9 @@ export function RoomList() {
       <div className="w-full h-full bg-bg-secondary flex flex-col items-center justify-center gap-2">
         <div className="text-3xl">💬</div>
         <p className="text-sm text-neutral-500 px-4 text-center">
-          暂无房间
+          暂无会话
           <br />
-          创建 workspace 后会自动生成团队群
+          点击下方按钮新建
         </p>
         <button
           type="button"
@@ -88,13 +85,8 @@ export function RoomList() {
     );
   }
 
-  // 团队会话顶置，其余按原序（stable sort 保持相对顺序）。
-  // v2.0 P1 Task 9：SessionSummary 无 isSystem 标记，系统房间概念随 Matrix 通道退役。
-  const sortedSessions = [...sessions].sort((a, b) => {
-    const priority = (s: (typeof sessions)[number]) =>
-      workspaces.some((w) => w.teamSessionId === s.id) ? 1 : 2;
-    return priority(a) - priority(b);
-  });
+  // v25：团队会话（workspace.teamSessionId）概念退役，会话一律按原序展示、可重命名/解散。
+  const sortedSessions = [...sessions];
 
   return (
     <div className="w-full h-full bg-bg-secondary overflow-auto">
@@ -104,10 +96,10 @@ export function RoomList() {
         onClick={() => setCreateOpen(true)}
         className="m-2 text-xs px-2 py-1 rounded bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30"
       >
-        + 新建房间
+        + 新建会话
       </button>
       {sortedSessions.map((session) => (
-        // 外层 group 让 group-hover 生效；非团队会话悬停时叠加操作按钮
+        // 外层 group 让 group-hover 生效；悬停时叠加操作按钮
         <div key={session.id} className="group relative">
           <button
             type="button"
@@ -121,43 +113,30 @@ export function RoomList() {
           >
             <span className="truncate flex-1">{session.title}</span>
           </button>
-          {/* 团队会话（任一 workspace 的 teamSessionId）受保护，显示锁标记、无解散/重命名 */}
-          {(() => {
-            const isTeamSession = workspaces.some((w) => w.teamSessionId === session.id);
-            if (isTeamSession) {
-              return (
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-500"       title="团队群随工作空间删除">
-                  🔒
-                </span>
-              );
-            }
-            return (
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
-                <button
-                  type="button"
-                  title="重命名"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleRename(session.id, session.title);
-                  }}
-                  className="text-neutral-500 hover:text-neutral-200 text-xs"
-                >
-                  ✏️
-                </button>
-                <button
-                  type="button"
-                  title="解散"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleDissolve(session.id, session.title);
-                  }}
-                  className="text-neutral-500 hover:text-red-400 text-xs"
-                >
-                  🗑
-                </button>
-              </span>
-            );
-          })()}
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <button
+              type="button"
+              title="重命名"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleRename(session.id, session.title);
+              }}
+              className="text-neutral-500 hover:text-neutral-200 text-xs"
+            >
+              ✏️
+            </button>
+            <button
+              type="button"
+              title="解散"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleDissolve(session.id, session.title);
+              }}
+              className="text-neutral-500 hover:text-red-400 text-xs"
+            >
+              🗑
+            </button>
+          </span>
         </div>
       ))}
       <CreateRoomDialog

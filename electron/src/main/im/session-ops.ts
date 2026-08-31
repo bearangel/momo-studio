@@ -14,7 +14,6 @@
 // 留待后续 task：群消息写入（messages.session_id 落库）、@ 解析、Runtime 链接。
 
 import { getDb } from '../storage/db';
-import { getWorkspace } from '../workspace/crud';
 import {
   insertSession,
   renameSession as repoRenameSession,
@@ -29,14 +28,16 @@ export interface SessionMemberInfo {
   agentName: string;
   iconEmoji: string;
   lastRunning: boolean;
-  /** 该成员是否为该会话所属 workspace 的默认会话 agent（v25：原协调 agent） */
-  isDefaultAgent: boolean;
+  /** 会话创建时的 leader 快照（session_members.is_leader；接待判定依据，spec §3.3） */
+  isLeader: boolean;
 }
 
 export interface SessionSummary {
   id: string;
   workspaceId: string;
   title: string;
+  /** 1=自动命名（可被 LLM 替换）；0=用户命名/已手动改名（spec D4） */
+  titleAuto: boolean;
   kind: SessionRow['kind'];
   lastMessageAt: number | null;
   members: SessionMemberInfo[];
@@ -110,6 +111,7 @@ export function getSessionsForWorkspace(workspaceId?: string): SessionSummary[] 
     id: s.id,
     workspaceId: s.workspaceId,
     title: s.title,
+    titleAuto: s.titleAuto,
     kind: s.kind,
     lastMessageAt: s.lastMessageAt,
     members: getSessionMembersInfo(s.id),
@@ -138,30 +140,17 @@ function listAllSessions(): SessionRow[] {
 }
 
 /**
- * 读会话成员信息：JOIN session_members → workspace_agent_members → agent_definitions，
- * isDefaultAgent 需二次比对 workspace.default_agent_instance_id。
- *
- * 步骤：
- *   1) 取 sessionId 所属 workspaceId；
- *   2) JOIN 三表，按 added_at ASC 拉成员；
- *   3) 读 workspace.default_agent_instance_id（可能为 null），命中成员打 isDefaultAgent=true。
+ * 读会话成员信息：JOIN session_members → workspace_agent_members → agent_definitions；
+ * isLeader 读 session_members.is_leader 快照列（建会时写入，spec §3.3）。
  *
  * 空成员返回 []（不抛错）。
  */
 export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
   const db = getDb();
 
-  const sessionRow = db
-    .prepare('SELECT workspace_id FROM sessions WHERE id = ?')
-    .get(sessionId) as { workspace_id: string } | undefined;
-  if (!sessionRow) return [];
-
-  const ws = getWorkspace(sessionRow.workspace_id);
-  const defaultAgentInstanceId = ws?.defaultAgentInstanceId ?? null;
-
   const rows = db
     .prepare(
-      `SELECT m.instance_id, a.last_running, d.name, d.icon_emoji
+      `SELECT m.instance_id, m.is_leader, a.last_running, d.name, d.icon_emoji
        FROM session_members m
        JOIN workspace_agent_members a ON m.instance_id = a.instance_id
        JOIN agent_definitions d ON a.agent_definition_id = d.id
@@ -170,6 +159,7 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
     )
     .all(sessionId) as Array<{
     instance_id: string;
+    is_leader: number;
     last_running: number;
     name: string;
     icon_emoji: string;
@@ -180,6 +170,6 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
     agentName: r.name,
     iconEmoji: r.icon_emoji,
     lastRunning: r.last_running === 1,
-    isDefaultAgent: defaultAgentInstanceId !== null && defaultAgentInstanceId === r.instance_id,
+    isLeader: r.is_leader === 1,
   }));
 }

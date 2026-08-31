@@ -14,15 +14,15 @@ import { useStreamStore } from './stream.store';
 import type { ImMessage, MessageEventRow, SessionMemberInfo, SessionSummary } from '../ipc/types';
 
 const MOCK_SESSIONS_A: SessionSummary[] = [
-  { id: 'sess-a1', workspaceId: 'ws-a', title: 'A 会话 1', kind: 'chat', lastMessageAt: null, members: [] },
-  { id: 'sess-a2', workspaceId: 'ws-a', title: 'A 会话 2', kind: 'chat', lastMessageAt: null, members: [] },
+  { id: 'sess-a1', workspaceId: 'ws-a', title: 'A 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [] },
+  { id: 'sess-a2', workspaceId: 'ws-a', title: 'A 会话 2', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [] },
 ];
 const MOCK_SESSIONS_B: SessionSummary[] = [
-  { id: 'sess-b1', workspaceId: 'ws-b', title: 'B 会话 1', kind: 'chat', lastMessageAt: null, members: [] },
+  { id: 'sess-b1', workspaceId: 'ws-b', title: 'B 会话 1', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [] },
 ];
 
 const MOCK_MEMBERS: SessionMemberInfo[] = [
-  { assignmentId: 'inst-1', agentName: 'Agent甲', iconEmoji: '🤖', role: 'main', lastRunning: true, isCoordinator: true },
+  { instanceId: 'inst-1', agentName: 'Agent甲', iconEmoji: '🤖', lastRunning: true, isLeader: true },
 ];
 
 const mockApi = {

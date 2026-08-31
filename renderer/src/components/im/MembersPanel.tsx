@@ -1,6 +1,6 @@
 // 会话成员侧栏：显示当前选中会话的成员（agent 成员，SessionMemberInfo 三表 JOIN 产物）。
 // v2.0 P1 Task 9：成员语义从 Matrix RoomMember 切换到 session_members——仅 agent 成员，
-// 在线态直接读 lastRunning，协调标识读 isCoordinator（不再查 assignments 反查）。
+// 在线态直接读 lastRunning，leader 标识读 isLeader（建会快照）（不再查 assignments 反查）。
 import { useSessionStore } from '../../stores/session.store';
 import { cn } from '../../lib/cn';
 
@@ -13,10 +13,10 @@ export function MembersPanel() {
         成员（{members.length}）
       </div>
       {members.map((m) => (
-        <div key={m.assignmentId} className="px-3 py-2 flex items-center gap-2 text-sm text-neutral-300">
+        <div key={m.instanceId} className="px-3 py-2 flex items-center gap-2 text-sm text-neutral-300">
           <span>{m.iconEmoji || '🤖'}</span>
           <span className="truncate flex-1">{m.agentName}</span>
-          {m.isCoordinator && <span className="text-[10px] text-accent-blue">协调</span>}
+          {m.isLeader && <span className="text-[10px] text-accent-blue">👑 Leader</span>}
           <span
             className={cn(
               'text-[10px] px-1.5 py-0.5 rounded shrink-0',

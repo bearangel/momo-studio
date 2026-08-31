@@ -1,18 +1,21 @@
 // renderer/src/stores/agent.store.ts
 //
-// Agent 状态管理（v1.3）：
+// Agent 状态管理（v1.3；v25 Task 6 通道面对齐）：
 //   - definitions：当前可见的 agent 定义（global + 当前 ws scoped + builtin）
-//   - assignments：当前 workspace 内已分配的 agent 实例（含 role + parent + lastRunning）
-//   - builtinSuggestions：builtin YAML 的角色/platform 建议（UI 预填用）
+//   - assignments：当前 workspace 内的 agent 成员实例（v25 成员制，无 role/parent；
+//     字段更名 members 归 Task 11）
+//   - builtinSuggestions：builtin YAML 的 platform 建议（UI 预填用）
 //
 // v2 修复：删除 running state（Record<string,boolean>），单一数据源 =
 // assignment.lastRunning（从 DB 同步）。stopAgent/startAgent 改为 reload assignments。
+//
+// v25：assignMainAgent / updateAssignmentRole 随 role 概念退役删除；
+// assignment 系列通道调用平移到 member 命名。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type {
   AgentDefinition,
   AgentAssignment,
-  AgentRole,
   AssignmentDeltas,
   BuiltinSuggestionMap,
 } from '../ipc/types';
@@ -30,26 +33,13 @@ interface AgentState {
   addAgent: (
     workspaceId: string,
     defId: string,
-    role: AgentRole,
-    parentInstanceId?: string,
     apiKeyOverride?: string,
   ) => Promise<AgentAssignment>;
-  assignMainAgent: (
-    workspaceId: string,
-    mainDefId: string,
-    apiKeyOverride?: string,
-    selectedSubDefIds?: string[],
-  ) => Promise<void>;
   deleteDefinition: (defId: string) => Promise<void>;
-  updateAssignmentRole: (
-    instanceId: string,
-    role: AgentRole,
-    parentInstanceId?: string,
-  ) => Promise<void>;
   updateAssignmentApiKey: (instanceId: string, apiKey: string | null) => Promise<void>;
-  /** v1.6：读取某 assignment 的能力 delta（Layer 3） */
+  /** v1.6：读取某成员的能力 delta（Layer 3） */
   getAssignmentDeltas: (instanceId: string) => Promise<AssignmentDeltas>;
-  /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
+  /** v1.6：全量替换某成员的能力 delta（幂等） */
   setAssignmentDeltas: (instanceId: string, deltas: AssignmentDeltas) => Promise<void>;
   stopAgent: (instanceId: string) => Promise<void>;
   startAgent: (assignment: AgentAssignment, workspaceId: string) => Promise<void>;
@@ -76,7 +66,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   loadAssignments: async (workspaceId) => {
     set({ loading: true, error: null });
     try {
-      const list = await ipc.agent.listAssignments(workspaceId);
+      const list = await ipc.agent.listMembers(workspaceId);
       set({ assignments: list, loading: false });
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
@@ -92,38 +82,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  addAgent: async (workspaceId, defId, role, parentInstanceId, apiKeyOverride) => {
+  addAgent: async (workspaceId, defId, apiKeyOverride) => {
     set({ error: null });
     try {
-      const assignment = await ipc.agent.addToWorkspace({
+      const member = await ipc.agent.addMember({
         workspaceId,
         agentDefinitionId: defId,
-        role,
-        parentInstanceId,
         apiKeyOverride,
       });
       set((state) => ({
-        assignments: [...state.assignments, assignment],
+        assignments: [...state.assignments, member],
       }));
-      return assignment;
-    } catch (err) {
-      set({ error: (err as Error).message });
-      throw err;
-    }
-  },
-
-  assignMainAgent: async (workspaceId, mainDefId, apiKeyOverride, selectedSubDefIds) => {
-    set({ error: null });
-    try {
-      const newAssignments = await ipc.agent.assignMain({
-        workspaceId,
-        mainDefId,
-        apiKeyOverride,
-        selectedSubDefIds,
-      });
-      set((state) => ({
-        assignments: [...state.assignments, ...newAssignments],
-      }));
+      return member;
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -143,22 +113,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  updateAssignmentRole: async (instanceId, role, parentInstanceId) => {
-    set({ error: null });
-    try {
-      await ipc.agent.updateAssignmentRole(instanceId, role, parentInstanceId);
-      const wsId = get().assignments.find((a) => a.instanceId === instanceId)?.workspaceId;
-      if (wsId) await get().loadAssignments(wsId);
-    } catch (err) {
-      set({ error: (err as Error).message });
-      throw err;
-    }
-  },
-
   updateAssignmentApiKey: async (instanceId, apiKey) => {
     set({ error: null });
     try {
-      await ipc.agent.updateAssignmentApiKey(instanceId, apiKey);
+      await ipc.agent.setMemberApiKeyOverride(instanceId, apiKey);
       const wsId = get().assignments.find((a) => a.instanceId === instanceId)?.workspaceId;
       if (wsId) await get().loadAssignments(wsId);
     } catch (err) {
@@ -170,7 +128,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   getAssignmentDeltas: async (instanceId) => {
     set({ error: null });
     try {
-      return await ipc.agent.getAssignmentDeltas(instanceId);
+      return await ipc.agent.getMemberDeltas(instanceId);
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -180,7 +138,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   setAssignmentDeltas: async (instanceId, deltas) => {
     set({ error: null });
     try {
-      await ipc.agent.setAssignmentDeltas(instanceId, deltas);
+      await ipc.agent.setMemberDeltas(instanceId, deltas);
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -205,7 +163,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   startAgent: async (assignment, workspaceId) => {
     set({ error: null });
     try {
-      await ipc.agent.start({ assignment, workspaceId });
+      await ipc.agent.start({ member: assignment, workspaceId });
       // v2 修复：reload assignments 反映新 lastRunning 状态
       await get().loadAssignments(workspaceId);
     } catch (err) {

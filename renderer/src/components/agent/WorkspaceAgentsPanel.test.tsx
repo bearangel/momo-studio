@@ -37,12 +37,11 @@ const WS: Workspace = {
   name: '测试工作空间',
   description: '',
   directoryPath: '/tmp/ws',
-  teamSessionId: '!team:server',
   gitInitialized: true,
   createdAt: '',
   ownerId: 'u',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 const DEF: AgentDefinition = {
@@ -68,10 +67,7 @@ const ASSIGNMENT: AgentAssignment = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@bot:server',
-  enabled: true,
   createdAt: '',
-  role: 'standalone',
-  parentInstanceId: null,
   hasApiKeyOverride: false,
   lastRunning: true,
 };
@@ -102,9 +98,7 @@ beforeEach(() => {
     loadAssignments: loadAssignmentsMock,
     loadBuiltinSuggestions: vi.fn(),
     addAgent: vi.fn(),
-    assignMainAgent: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateAssignmentRole: vi.fn(),
     updateAssignmentApiKey: vi.fn(),
     getAssignmentDeltas: vi.fn(),
     setAssignmentDeltas: vi.fn(),

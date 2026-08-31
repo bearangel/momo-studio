@@ -1,7 +1,7 @@
 // renderer/src/components/im/MembersPanel.test.tsx
 // MembersPanel 成员列表测试（v2.0 P1 Task 9：成员语义 SessionMemberInfo）：
 //   - 在线/离线 badge 直接读 lastRunning（不再反查 assignments）
-//   - 协调 agent 显示「协调」徽标（isCoordinator）
+//   - leader 成员显示「👑 Leader」徽标（isLeader）
 //   - 成员图标与名称来自三表 JOIN（iconEmoji / agentName）
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -17,9 +17,9 @@ vi.mock('../../stores/session.store', () => ({
 import { MembersPanel } from './MembersPanel';
 
 const mockMembers: SessionMemberInfo[] = [
-  { assignmentId: 'inst-online', agentName: '在线Agent', iconEmoji: '🤖', role: 'standalone', lastRunning: true, isCoordinator: false },
-  { assignmentId: 'inst-offline', agentName: '离线Agent', iconEmoji: '🧑‍💻', role: 'sub', lastRunning: false, isCoordinator: false },
-  { assignmentId: 'inst-coord', agentName: '协调Agent', iconEmoji: '🦸', role: 'main', lastRunning: true, isCoordinator: true },
+  { instanceId: 'inst-online', agentName: '在线Agent', iconEmoji: '🤖', lastRunning: true, isLeader: false },
+  { instanceId: 'inst-offline', agentName: '离线Agent', iconEmoji: '🧑‍💻', lastRunning: false, isLeader: false },
+  { instanceId: 'inst-coord', agentName: '协调Agent', iconEmoji: '🦸', lastRunning: true, isLeader: true },
 ];
 
 describe('MembersPanel 在线/离线标签', () => {
@@ -36,10 +36,10 @@ describe('MembersPanel 在线/离线标签', () => {
     expect(screen.getAllByText('离线')).toHaveLength(1);
   });
 
-  it('协调 agent（isCoordinator）显示"协调"徽标', () => {
+  it('leader 成员（isLeader）显示"👑 Leader"徽标', () => {
     render(<MembersPanel />);
     expect(screen.getByText('协调Agent')).toBeInTheDocument();
-    expect(screen.getByText('协调')).toBeInTheDocument();
+    expect(screen.getByText('👑 Leader')).toBeInTheDocument();
   });
 
   it('成员图标使用 iconEmoji（空值回退 🤖）', () => {

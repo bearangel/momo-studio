@@ -62,11 +62,10 @@ export function registerWorkspaceHandlers(): void {
     return { ok: true };
   });
 
-  // 设置/清空默认会话 agent；若目标实例正在运行，自动停止并重启以应用新的 isCoordinator 标志。
-  // v25：内部实现为 default_agent_instance_id；通道名保留 coordinator（renderer 契约，
-  // preload/renderer 侧更名由后续 task 一并处理）
+  // 设置/清空默认会话 agent；若目标实例正在运行，自动停止并重启以应用新标志。
+  // v25 Task 6：通道 workspace:setCoordinator → workspace:setDefaultAgent（spec §5）
   ipcMain.handle(
-    'workspace:setCoordinator',
+    'workspace:setDefaultAgent',
     async (_evt, workspaceId: string, instanceId: string | null) => {
       setDefaultAgent(workspaceId, instanceId);
 

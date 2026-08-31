@@ -1,7 +1,8 @@
-// 新建房间对话框：名称 + 邀请对象 + 工具调用上限
+// 新建协作会话对话框：名称（留空动态命名）+ 单 agent 目标 + 工具调用上限
 //
-// v2.0 P1 Task 9：底层走 session:create（纯 SQLite，memberAssignmentIds 为
-// assignment 实例）。v1.4 的 isDirect（Matrix 私聊标记）无 session 等价概念，随通道退役。
+// v25 Task 6：底层走 session:createCollab（泛化 session:create 已退役；spec §4.4）。
+// 目标模型为「单个 agent 或团队」——多选 agent 的临时组会话概念已退役，本弹窗
+// 机械对齐为单 agent 选择（团队页签等完整 UI 由 Task 12 落地）。
 // 创建会话后，若选择非"继承全局"，调用 ipc.settings.updateSession 写入会话级配置。
 import { useState, useEffect, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
@@ -12,15 +13,15 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
-  /** 可邀请对象（当前 workspace 的 agent assignment 列表） */
-  inviteCandidates: { assignmentId: string; displayName: string }[];
+  /** 可选目标（当前 workspace 的 agent 成员列表） */
+  inviteCandidates: { instanceId: string; displayName: string }[];
 }
 
 type ToolLimitChoice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
 export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }: Props) {
   const [name, setName] = useState('');
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string>('');
   const [toolChoice, setToolChoice] = useState<ToolLimitChoice>('inherit');
   const [customValue, setCustomValue] = useState('10');
   const [globalDefault, setGlobalDefault] = useState(10);
@@ -37,9 +38,6 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
 
   if (!open) return null;
 
-  const toggle = (id: string) =>
-    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-
   /** 把选择映射成要写入的 maxToolCalls（null=继承全局，不写入） */
   const resolveMaxToolCalls = (): number | null => {
     switch (toolChoice) {
@@ -54,18 +52,16 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
     }
   };
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
-    if (!name.trim()) return;
-    if (!activeWorkspaceId) return;
+    if (!activeWorkspaceId || !selected) return;
     const maxToolCalls = resolveMaxToolCalls();
     try {
-      const session = await ipc.session.create({
-        workspaceId: activeWorkspaceId,
-        title: name.trim(),
-        memberAssignmentIds: selected,
-        kind: 'chat',
-      });
+      const session = await ipc.session.createCollab(
+        activeWorkspaceId,
+        name.trim() || undefined,
+        { type: 'agent', instanceId: selected },
+      );
       // 非继承全局时，写入会话级配置。
       // 会话已创建成功，settings 写入失败不应阻断流程（会话客观存在）。
       if (maxToolCalls !== null) {
@@ -77,7 +73,7 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
       }
       onCreated();
       onClose();
-      setName(''); setSelected([]);
+      setName(''); setSelected('');
       setToolChoice('inherit');
     } catch (err) {
       alert(`创建失败：${err instanceof Error ? err.message : String(err)}`);
@@ -88,17 +84,17 @@ export function CreateRoomDialog({ open, onClose, onCreated, inviteCandidates }:
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <form onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}
         className="bg-bg-secondary border border-border-subtle rounded-lg p-6 w-[380px] flex flex-col gap-3">
-        <h3 className="text-neutral-100 text-base">新建房间</h3>
-        <label className="text-xs text-neutral-400">房间名
-          <input value={name} onChange={(e) => setName(e.target.value)} required
+        <h3 className="text-neutral-100 text-base">新建协作会话</h3>
+        <label className="text-xs text-neutral-400">名称（留空自动命名）
+          <input value={name} onChange={(e) => setName(e.target.value)}
             className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100" />
         </label>
-        <div className="text-xs text-neutral-400">邀请对象（当前 workspace 的 agent）
+        <div className="text-xs text-neutral-400">协作对象（当前 workspace 的 agent）
           <div className="mt-1 flex flex-col gap-1 max-h-40 overflow-auto">
-            {inviteCandidates.length === 0 && <span className="text-neutral-500">暂无可邀请 agent</span>}
+            {inviteCandidates.length === 0 && <span className="text-neutral-500">暂无可选 agent</span>}
             {inviteCandidates.map((c) => (
-              <label key={c.assignmentId} className="flex items-center gap-2 text-sm text-neutral-300">
-                <input type="checkbox" checked={selected.includes(c.assignmentId)} onChange={() => toggle(c.assignmentId)} />
+              <label key={c.instanceId} className="flex items-center gap-2 text-sm text-neutral-300">
+                <input type="radio" name="collab-target" checked={selected === c.instanceId} onChange={() => setSelected(c.instanceId)} />
                 {c.displayName}
               </label>
             ))}

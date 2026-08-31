@@ -2,8 +2,8 @@
 //
 // 现役消息输入框（P3 Task 3：@ + # 双语法输入框替换 MessageInput）。
 //   - 输入 @ 触发 agent 菜单：数据源 session.store.members（当前会话成员），
-//     仅列 lastRunning 在线成员；选择时记录 assignmentId，
-//     发送经 session.store.sendMessage(body, mentionedAssignmentIds) 透传
+//     仅列 lastRunning 在线成员；选择时记录 instanceId，
+//     发送经 session.store.sendMessage(body, mentionedInstanceIds) 透传
 //   - 输入 #T 触发任务菜单：数据源 task.store.tasks（仅 draft/pending/assigned），
 //     选择后向正文插入 #T-xxx 文本——后端 conflict-detector 从正文解析任务引用，
 //     不进 sendMessage 载荷（纯 renderer affordance）
@@ -26,7 +26,7 @@ export function MentionInput() {
   const [text, setText] = useState('');
   const [menuType, setMenuType] = useState<MenuKind | null>(null);
   const [query, setQuery] = useState('');
-  // @ 目标 assignmentId 列表（菜单选择时记录，发送后清空；失败恢复）
+  // @ 目标 instanceId 列表（菜单选择时记录，发送后清空；失败恢复）
   const [pendingMentions, setPendingMentions] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -135,7 +135,7 @@ export function MentionInput() {
   const selectMember = (m: SessionMemberInfo): void => {
     insertMention(`@${m.agentName}`);
     setPendingMentions((prev) =>
-      prev.includes(m.assignmentId) ? prev : [...prev, m.assignmentId],
+      prev.includes(m.instanceId) ? prev : [...prev, m.instanceId],
     );
   };
 
@@ -176,9 +176,9 @@ export function MentionInput() {
     }
   };
 
-  /** assignmentId → 展示名（mention chip 用；不在成员列表时回退 id） */
-  const mentionDisplayName = (assignmentId: string): string => {
-    return members.find((m) => m.assignmentId === assignmentId)?.agentName ?? assignmentId;
+  /** instanceId → 展示名（mention chip 用；不在成员列表时回退 id） */
+  const mentionDisplayName = (instanceId: string): string => {
+    return members.find((m) => m.instanceId === instanceId)?.agentName ?? instanceId;
   };
 
   return (
@@ -188,7 +188,7 @@ export function MentionInput() {
           <div className="px-3 py-1 text-xs text-neutral-500">选择要 @ 的 agent</div>
           {filteredMembers.map((m) => (
             <button
-              key={m.assignmentId}
+              key={m.instanceId}
               type="button"
               onClick={() => selectMember(m)}
               className="w-full text-left px-3 py-2 text-sm hover:bg-bg-primary flex items-center gap-2"
@@ -221,16 +221,16 @@ export function MentionInput() {
 
       {pendingMentions.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
-          {pendingMentions.map((assignmentId) => (
+          {pendingMentions.map((instanceId) => (
             <button
-              key={assignmentId}
+              key={instanceId}
               type="button"
               onClick={() =>
-                setPendingMentions((prev) => prev.filter((m) => m !== assignmentId))
+                setPendingMentions((prev) => prev.filter((m) => m !== instanceId))
               }
               className="text-xs px-2 py-0.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-red-500/20 hover:text-red-400"
             >
-              @{mentionDisplayName(assignmentId)} ×
+              @{mentionDisplayName(instanceId)} ×
             </button>
           ))}
         </div>

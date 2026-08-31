@@ -63,12 +63,11 @@ const WS: Workspace = {
   name: '当前工作空间',
   description: '',
   directoryPath: '/tmp/ws',
-  teamSessionId: '!team:server',
   gitInitialized: true,
   createdAt: '',
   ownerId: 'u',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 /** 构造一个填好所有必填字段的 ResourceItem，允许部分覆盖 */

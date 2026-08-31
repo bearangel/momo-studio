@@ -4,7 +4,7 @@
 // 三个全局 Map，供 main/index.ts、IPC handlers、RouterService 共享访问。
 //
 // 从 main/index.ts 提取到独立模块的原因：
-//   - IPC handler（agent:addToWorkspace / agent:start 等）需要读写 agentRunners/agentWarmPools
+//   - IPC handler（agent:addMember / agent:start 等）需要读写 agentRunners/agentWarmPools
 //   - RouterService 需要只读访问 runners Map（构造时传入引用，后续动态添加可见）
 //   - 避免循环依赖（main/index.ts ↔ ipc.handlers.ts）
 //

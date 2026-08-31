@@ -18,14 +18,12 @@ export interface Workspace {
   name: string;
   description: string;
   directoryPath: string;
-  /** workspace 内"团队会话" ID（用户 + agent bot 交流会话），004 迁移引入；v23 更名 */
-  teamSessionId: string;
   gitInitialized: boolean;
   createdAt: string;
   ownerId: string;
   iconEmoji: string;
-  /** 该 workspace 的"协调 agent"实例 ID；null=未指定 */
-  coordinatorInstanceId: string | null;
+  /** 该 workspace 的「默认会话 agent」实例 ID（v25：原协调 agent）；null=未指定 */
+  defaultAgentInstanceId: string | null;
 }
 
 export interface CreateWorkspaceInput {
@@ -34,8 +32,6 @@ export interface CreateWorkspaceInput {
   directoryPath: string;
   iconEmoji?: string;
 }
-
-export type AgentRole = 'standalone' | 'main' | 'sub';
 
 export interface AgentDefinition {
   id: string;
@@ -60,32 +56,47 @@ export interface AgentDefinition {
   modelName: string;
 }
 
-export interface AgentAssignment {
+/**
+ * Agent 在 workspace 中的成员关系（v25：取代 v1.3 的 AgentAssignment——
+ * 去编排，无 role/parentInstanceId/enabled；同 ws 同 def 唯一）。
+ * 与 electron 端 agent/types.ts 的 WorkspaceAgentMember 对齐。
+ */
+export interface WorkspaceAgentMember {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
   agentUserId: string;
-  enabled: boolean;
-  createdAt: string;
-  /** 角色（在 assignment 级而非 definition 级） */
-  role: AgentRole;
-  /** 父 assignment 的 instanceId（仅 role='sub' 时有值） */
-  parentInstanceId: string | null;
   /** 有无 API key override（实际 key 在 keychain） */
   hasApiKeyOverride: boolean;
+  /** 用户最近运行意图（true=在线/false=离线）——「agent 在线」的唯一权威源 */
+  lastRunning: boolean;
+  createdAt: string;
   /**
-   * UI 展示用的 agent 名称（可选，由 main process 在 listAssignments 时 join 注入）。
-   * 缺失时回退到 agentUserId。Mention 菜单 / TaskChip 优先用此字段。
+   * UI 展示用的 agent 名称（可选，由 renderer 按 definitions join 注入；
+   * 缺失时回退到 agentUserId。Mention 菜单 / 指派下拉优先用此字段）。
    */
   agentName?: string;
-  /** v2 修复：用户最近运行意图（true=在线/false=离线）。
-   *  来源：DB agent_assignments.last_running；与 electron 端 AgentAssignment 对齐。 */
-  lastRunning: boolean;
 }
 
-/** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */
+/** 过渡别名（与 electron 端同策略：Task 11-14 逐步消除引用，Task 15 删除） */
+export type AgentAssignment = WorkspaceAgentMember;
+
+/**
+ * 团队（ws 级，spec §3.2；leader 必须同时在 members 内）。
+ * 与 electron 端 agent/types.ts 的 Team 对齐。
+ */
+export interface Team {
+  id: string;
+  workspaceId: string;
+  name: string;
+  iconEmoji: string;
+  leaderInstanceId: string;
+  members: WorkspaceAgentMember[];
+  createdAt: string;
+}
+
+/** Builtin YAML 的 platform 建议（不进 DB，仅 UI 默认值；v25 起无角色建议） */
 export interface BuiltinSuggestion {
-  role: AgentRole;
   suggestedParentDefId?: string;
   suggestedPlatform?: 'openai' | 'anthropic';
 }
@@ -228,29 +239,16 @@ export interface TaskApiSurface {
 }
 
 export interface StartAgentInput {
-  assignment: AgentAssignment;
+  member: WorkspaceAgentMember;
   workspaceId: string;
 }
 
-/** agent:addToWorkspace 入参 — UI "添加 agent" 一键编排入口 */
-export interface AddToWorkspaceInput {
+/** agent:addMember 入参（v25 spec §5：无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
+export interface AddMemberInput {
   workspaceId: string;
   agentDefinitionId: string;
-  role: AgentRole;
-  parentInstanceId?: string;
+  /** 可选；非空 = 写 keychain override；空 = 用供应商 key */
   apiKeyOverride?: string;
-}
-
-/**
- * agent:assignMain 入参 — 安装 main agent 时自动跟随注册其全部 sub agent。
- * 内部行为：写 assignment.role='main'（首条）+ role='sub'（其余）+ parent_instance_id 链。
- */
-export interface AssignMainInput {
-  workspaceId: string;
-  mainDefId: string;
-  apiKeyOverride?: string;
-  /** 要安装的子 agent 定义 ID 列表；undefined = 全部安装 */
-  selectedSubDefIds?: string[];
 }
 
 /**
@@ -613,11 +611,14 @@ export type SessionKind = 'chat' | 'task_execution';
 /**
  * v2.0 P1 会话内核：sessions 表行（renderer 镜像）。
  * 与 electron 端 storage/sessions/repo.ts 的 SessionRow 对齐（跨进程独立定义，仅结构对齐）。
+ * v25：加 titleAuto（自动命名标记，spec D4）。
  */
 export interface SessionRow {
   id: string;
   workspaceId: string;
   title: string;
+  /** 1=自动命名（可被 LLM 替换）；0=用户命名/已手动改名（spec D4） */
+  titleAuto: boolean;
   kind: SessionKind;
   /** 会话级设置（maxToolCalls / conflictStrategy）的 JSON 序列化；null=未配置 */
   settingsJson: string | null;
@@ -630,16 +631,16 @@ export interface SessionRow {
 /**
  * v2.0 P1 会话内核：会话成员信息（三表 JOIN 产物）。
  * 与 electron 端 im/session-ops.ts 的 SessionMemberInfo 对齐。
+ * v25：role/isCoordinator 退役 → isLeader（建会时快照，接待判定依据，spec §3.3）。
  */
 export interface SessionMemberInfo {
-  assignmentId: string;
+  instanceId: string;
   agentName: string;
   iconEmoji: string;
-  role: AgentRole;
   /** 用户最近运行意图（true=在线） */
   lastRunning: boolean;
-  /** 该成员是否为会话所属 workspace 的协调 agent */
-  isCoordinator: boolean;
+  /** 会话创建时的 leader 快照（session_members.is_leader） */
+  isLeader: boolean;
 }
 
 /**
@@ -650,16 +651,24 @@ export interface SessionSummary {
   id: string;
   workspaceId: string;
   title: string;
+  titleAuto: boolean;
   kind: SessionKind;
   lastMessageAt: number | null;
   members: SessionMemberInfo[];
 }
 
 /**
+ * v25 spec §4.4：协作会话目标——单个 agent 或团队（快照展开）。
+ */
+export type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team'; teamId: string };
+
+/**
  * v2.0 P1 Task 8：session: 命名空间 IPC 契约（会话内核，纯 SQLite 无 Matrix）。
  *
- * invoke 通道 9 个（session.ipc.handlers.ts）：
- *   list / get / create / rename / delete / send / getMessages / loadOlder / exportMessages
+ * v25 Task 6（spec §5）：泛化 create 退役 → createQuick / createCollab。
+ * invoke 通道 10 个（session.ipc.handlers.ts）：
+ *   list / get / createQuick / createCollab / rename / delete / send /
+ *   getMessages / loadOlder / exportMessages
  * 推送通道 2 个：
  *   session:message             消息行实时推送（载荷 ImMessage）
  *   session:message_event_batch 流式 events 批量推送（MessageEventBuffer flush）
@@ -669,19 +678,27 @@ export interface SessionApiSurface {
   list(workspaceId?: string): Promise<SessionSummary[]>;
   /** 单会话详情。会话不存在时 invoke 抛错 */
   get(sessionId: string): Promise<{ session: SessionRow; members: SessionMemberInfo[] }>;
-  /** 创建会话（事务写入成员；FK 不合法整笔回滚） */
-  create(input: {
-    workspaceId: string;
-    title: string;
-    memberAssignmentIds?: string[];
-    kind?: SessionKind;
-  }): Promise<SessionRow>;
+  /**
+   * 快速会话（spec §4.4）：免弹窗直达 workspace 默认 agent。
+   * 未设置默认 agent 时 reject——error message 含 'NO_DEFAULT_AGENT'
+   * （Electron IPC 错误只保 message，renderer 以子串识别转引导弹窗）。
+   */
+  createQuick(workspaceId: string): Promise<SessionSummary>;
+  /**
+   * 协作会话（spec §4.4）：指定单 agent 或团队（成员快照展开）。
+   * title 留空（undefined）→ 动态命名（占位标题起步）。
+   */
+  createCollab(
+    workspaceId: string,
+    title: string | undefined,
+    target: CollabTarget,
+  ): Promise<SessionSummary>;
   /** 重命名会话 */
   rename(sessionId: string, title: string): Promise<{ ok: true }>;
-  /** 解散会话。团队会话（随 workspace 生命周期）时 invoke 抛错 */
+  /** 解散会话 */
   delete(sessionId: string): Promise<{ ok: true }>;
-  /** 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent */
-  send(sessionId: string, body: string, mentionedAssignmentIds?: string[]): Promise<void>;
+  /** 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent（@ 的 instanceId 列表） */
+  send(sessionId: string, body: string, mentionedInstanceIds?: string[]): Promise<void>;
   /**
    * 历史读取：messages + 每条 message 的 events，
    * renderer 用 stream-aggregator 重建 StreamState。
@@ -725,7 +742,8 @@ export interface ApiSurface {
     list(): Promise<Workspace[]>;
     get(id: string): Promise<Workspace | null>;
     delete(id: string): Promise<void>;
-    setCoordinator(workspaceId: string, instanceId: string | null): Promise<{ ok: boolean }>;
+    /** v25 Task 6：setCoordinator → setDefaultAgent（spec §5）；instanceId=null 清除 */
+    setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
     getCoordinator(workspaceId: string): Promise<{ instanceId: string | null }>;
     /** P2 Task 2：重命名 workspace（UPDATE name 列） */
     rename(id: string, name: string): Promise<{ ok: boolean }>;
@@ -741,10 +759,8 @@ export interface ApiSurface {
     rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
   };
   agent: {
-    /** v1.3：一键编排（带 role + parentInstanceId + apiKeyOverride） */
-    addToWorkspace(input: AddToWorkspaceInput): Promise<AgentAssignment>;
-    /** v1.3：安装 main + 自动跟随 sub */
-    assignMain(input: AssignMainInput): Promise<AgentAssignment[]>;
+    /** v25：成员加入（无 role/parent；同 ws 同 def 重复加入报错） */
+    addMember(input: AddMemberInput): Promise<WorkspaceAgentMember>;
     createFromYaml(yaml: string): Promise<AgentDefinition>;
     /** v1.3：scope + modelProviderId + modelName；不含 type/parent/modelProvider/modelBaseUrl */
     createCustom(input: {
@@ -767,11 +783,16 @@ export interface ApiSurface {
     }): Promise<AgentDefinition>;
     /** v1.3：可选 workspaceId 过滤 */
     list(workspaceId?: string): Promise<AgentDefinition[]>;
-    assign(workspaceId: string, defId: string, botUserId: string): Promise<AgentAssignment>;
-    listAssignments(workspaceId: string): Promise<AgentAssignment[]>;
+    assign(workspaceId: string, defId: string, botUserId: string): Promise<WorkspaceAgentMember>;
+    /** v25：原 listAssignments 平移更名 */
+    listMembers(workspaceId: string): Promise<WorkspaceAgentMember[]>;
     start(opts: StartAgentInput): Promise<{ instanceId: string }>;
     stop(instanceId: string): Promise<{ ok: boolean }>;
-    removeAssignment(instanceId: string): Promise<{ ok: boolean }>;
+    /**
+     * v25：移除成员。返回结构化结果——leader 守卫命中时 `{ ok: false, blockedTeams }`
+     * （该成员担任 leader 的团队名列表，UI 提示先转移/解散）。
+     */
+    removeMember(instanceId: string): Promise<{ ok: true } | { ok: false; blockedTeams: string[] }>;
     isRunning(instanceId: string): Promise<boolean>;
     /** v1.3：scope + modelProviderId + modelName；不含 type/parent */
     updateDefinition(input: {
@@ -790,28 +811,46 @@ export interface ApiSurface {
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
-    /** v1.3 新增：修改 assignment 的 role + parentInstanceId */
-    updateAssignmentRole(
-      instanceId: string,
-      role: AgentRole,
-      parentInstanceId?: string,
-    ): Promise<{ stoppedInstanceIds: string[] }>;
-    /** v1.3 新增：设置/清除 API key override（apiKey=null 清除） */
-    updateAssignmentApiKey(
-      instanceId: string,
-      apiKey: string | null,
-    ): Promise<{ ok: boolean }>;
-    /** v1.3 新增：删除自定义 def（builtin 不可删；级联清理 assignment） */
+    /** v25：原 updateAssignmentApiKey 平移更名（apiKey=null 清除 override） */
+    setMemberApiKeyOverride(instanceId: string, apiKey: string | null): Promise<{ ok: boolean }>;
+    /** v1.3 新增：删除自定义 def（builtin 不可删；级联清理成员） */
     deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }>;
-    /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填） */
+    /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填 platform） */
     getBuiltinSuggestions(): Promise<BuiltinSuggestionMap>;
-    /** v1.6：读取某 assignment 的能力 delta（Layer 3，全空对象 = 无 delta） */
-    getAssignmentDeltas(instanceId: string): Promise<AssignmentDeltas>;
-    /** v1.6：全量替换某 assignment 的能力 delta（幂等） */
-    setAssignmentDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
+    /** v25：原 getAssignmentDeltas 平移更名（全空对象 = 无 delta） */
+    getMemberDeltas(instanceId: string): Promise<AssignmentDeltas>;
+    /** v25：原 setAssignmentDeltas 平移更名（幂等全量替换） */
+    setMemberDeltas(instanceId: string, deltas: AssignmentDeltas): Promise<void>;
     onRuntimeChanged(callback: () => void): () => void;
     /** Task 6：中断指定 streamSessionId 的活跃流式会话（原按 roomId 中断，修同房覆盖问题） */
     abortStream(streamSessionId: string): Promise<void>;
+  };
+  /**
+   * v25 Task 6：团队通道面（spec §4.2）。全部委托 team.ts 服务层。
+   */
+  team: {
+    /** 某 workspace 全部团队（含成员展开与 leader 标记） */
+    list(workspaceId: string): Promise<Team[]>;
+    /** 建团（单事务；成员 ≥2 且 leader 必须在成员集内，违规 reject） */
+    create(
+      workspaceId: string,
+      input: {
+        name: string;
+        iconEmoji?: string;
+        memberInstanceIds: string[];
+        leaderInstanceId: string;
+      },
+    ): Promise<Team>;
+    /** 改名/换图标；iconEmoji 省略保留原值 */
+    rename(teamId: string, name: string, iconEmoji?: string): Promise<{ ok: true }>;
+    /** 解散团队（仅删定义；成员与已建会话快照不受影响） */
+    delete(teamId: string): Promise<{ ok: true }>;
+    /** 换 leader（新 leader 必须是团队成员，否则 reject） */
+    setLeader(teamId: string, leaderInstanceId: string): Promise<{ ok: true }>;
+    /** 加成员（须属于团队所在 workspace；重复添加 reject） */
+    addMember(teamId: string, instanceId: string): Promise<{ ok: true }>;
+    /** 移除成员（leader 走守卫 reject；不存在的成员/团队幂等 no-op） */
+    removeMember(teamId: string, instanceId: string): Promise<{ ok: true }>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

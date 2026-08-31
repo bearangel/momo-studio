@@ -1,9 +1,13 @@
 // electron/src/main/im/session.ipc.handlers.ts
 //
-// session: 命名空间 IPC handler（2.0.0 P1 Task 8）。
-// 会话内核的 renderer 入口：生命周期（list/get/create/rename/delete）、
+// session: 命名空间 IPC handler（2.0.0 P1 Task 8；v25 Task 6 双会话通道面）。
+// 会话内核的 renderer 入口：生命周期（list/get/createQuick/createCollab/rename/delete）、
 // 消息写入（send）、历史读取（getMessages/loadOlder）与导出（exportMessages）。
-// 全部转调 Task 3 的 session-ops 与 Task 7 的 session-service——本层不含业务逻辑。
+// 全部转调 session-ops / session-service / team 服务——本层不含业务逻辑。
+//
+// v25 过渡态（spec §4.4）：createQuick / createCollab 本 Task 接线到 createSession
+// 泛化形态作占位（Task 7 落真正双流程：title_auto / is_leader 快照标记），
+// 通道契约（名称/入参/错误码）自此锁定不变。
 //
 // 推送通道（Task 12 起 im:message 反向桥已移除，全部发送方统一新通道）：
 //   - session:message             ← 用户/agent 消息行推送（session-service / p2p handleRemoteMessage）
@@ -17,6 +21,7 @@ import {
   renameSession,
   deleteSessionOp,
   getSessionMembersInfo,
+  type SessionSummary,
 } from './session-ops';
 import { sendUserMessage } from './session-service';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
@@ -31,7 +36,27 @@ import {
 } from '../storage/messages/events-repo';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
-import { listWorkspaces } from '../workspace/crud';
+import { listTeams } from '../agent/team';
+import { getWorkspace, listWorkspaces } from '../workspace/crud';
+
+/** 协作会话目标（spec §4.4）：单个 agent 或团队（快照展开） */
+type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team'; teamId: string };
+
+/** 快速会话占位标题（Task 7 命名服务接管后仍用同一占位，spec D4） */
+const PLACEHOLDER_TITLE = '新会话';
+
+/** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
+function toSummary(row: SessionRow): SessionSummary {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    title: row.title,
+    titleAuto: row.titleAuto,
+    kind: row.kind,
+    lastMessageAt: row.lastMessageAt,
+    members: getSessionMembersInfo(row.id),
+  };
+}
 
 /** 注册全部 session: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerSessionIpcHandlers(): void {
@@ -47,25 +72,56 @@ export function registerSessionIpcHandlers(): void {
     return { session, members: getSessionMembersInfo(sessionId) };
   });
 
-  // 创建会话（事务写入成员；FK 不合法整笔回滚——见 session-ops.createSession）。
-  // handler 内显式映射，杜绝字段改名后结构化类型检查放过多余属性的漂移。
+  // 快速会话（spec §4.4）：读 workspace 默认 agent → 无则 reject（message 含
+  // NO_DEFAULT_AGENT，renderer 识别后弹一次性选择/引导）→ 有则单成员建会。
+  // v25 过渡态：占位实现走 createSession 泛化形态，Task 7 换 createQuickSession。
+  ipcMain.handle('session:createQuick', async (_evt, workspaceId: string) => {
+    const ws = getWorkspace(workspaceId);
+    if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
+    if (!ws.defaultAgentInstanceId) {
+      throw new Error('NO_DEFAULT_AGENT');
+    }
+    const row = createSession({
+      workspaceId,
+      title: PLACEHOLDER_TITLE,
+      memberInstanceIds: [ws.defaultAgentInstanceId],
+      kind: 'chat',
+    });
+    logger.info('快速会话已创建', { sessionId: row.id, workspaceId });
+    return toSummary(row);
+  });
+
+  // 协作会话（spec §4.4）：单 agent 直建；团队目标展开当前成员快照。
+  // title 留空 → 占位标题（title_auto 标记由 Task 7 落地）。
+  // v25 过渡态：占位实现走 createSession 泛化形态，Task 7 换 createCollabSession。
   ipcMain.handle(
-    'session:create',
-    async (
-      _evt,
-      input: {
-        workspaceId: string;
-        title: string;
-        memberInstanceIds?: string[];
-        kind?: SessionRow['kind'];
-      },
-    ) => {
-      return createSession({
-        workspaceId: input.workspaceId,
-        title: input.title,
-        memberInstanceIds: input.memberInstanceIds,
-        kind: input.kind,
+    'session:createCollab',
+    async (_evt, workspaceId: string, title: string | undefined, target: CollabTarget) => {
+      const ws = getWorkspace(workspaceId);
+      if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
+
+      const effectiveTitle = title?.trim() ? title.trim() : PLACEHOLDER_TITLE;
+
+      if (target.type === 'agent') {
+        const row = createSession({
+          workspaceId,
+          title: effectiveTitle,
+          memberInstanceIds: [target.instanceId],
+          kind: 'chat',
+        });
+        return toSummary(row);
+      }
+
+      const team = listTeams(workspaceId).find((t) => t.id === target.teamId);
+      if (!team) throw new Error(`团队不存在: ${target.teamId}`);
+      if (team.members.length === 0) throw new Error(`团队 ${team.name} 无成员，无法创建会话`);
+      const row = createSession({
+        workspaceId,
+        title: effectiveTitle,
+        memberInstanceIds: team.members.map((m) => m.instanceId),
+        kind: 'chat',
       });
+      return toSummary(row);
     },
   );
 
@@ -76,7 +132,7 @@ export function registerSessionIpcHandlers(): void {
   });
 
   // 解散会话。非保护会话级联清理成员；错误原样传播给 renderer
-  //（v25 过渡态：团队会话保护待 Task 6 按新会话模型重接，见 session-ops）。
+  //（v25 过渡态：团队会话保护待 Task 7 按新会话模型重接，见 session-ops）。
   ipcMain.handle('session:delete', async (_evt, sessionId: string) => {
     deleteSessionOp(sessionId);
     return { ok: true } as const;
@@ -85,8 +141,8 @@ export function registerSessionIpcHandlers(): void {
   // 用户消息写入：INSERT → touch → 推 session:message → P2P 广播 → 冲突检测 → 路由。
   ipcMain.handle(
     'session:send',
-    async (_evt, sessionId: string, body: string, mentionedAssignmentIds?: string[]) => {
-      return sendUserMessage({ sessionId, body, mentionedAssignmentIds });
+    async (_evt, sessionId: string, body: string, mentionedInstanceIds?: string[]) => {
+      return sendUserMessage({ sessionId, body, mentionedInstanceIds });
     },
   );
 

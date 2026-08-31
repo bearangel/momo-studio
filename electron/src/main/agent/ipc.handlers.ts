@@ -1,17 +1,18 @@
 // electron/src/main/agent/ipc.handlers.ts
 //
-// Agent 相关的 IPC handler 注册入口。
+// Agent / 团队相关的 IPC handler 注册入口（v25 Task 6 通道面，spec §5）。
 //
 // 暴露给渲染进程的能力：
-//   - agent:addToWorkspace —— 成员加入 + 启动（v25：无 role/parent）
-//   - agent:createFromYaml / list / listAssignments —— 低层
+//   - agent:addMember —— 成员加入 + 启动（v25：无 role/parent）
+//   - agent:createFromYaml / list / assign —— 低层
 //   - agent:createCustom / updateDefinition / deleteDefinition —— def 管理
-//   - agent:updateAssignmentApiKey —— 成员编辑
-//   - agent:start / stop / removeAssignment / isRunning / getBuiltinSuggestions
+//   - agent:listMembers / removeMember / setMemberApiKeyOverride —— 成员制（原 assignment 系列平移）
+//   - agent:getMemberDeltas / setMemberDeltas —— Layer 3 能力 delta
+//   - agent:start / stop / isRunning / getBuiltinSuggestions
+//   - team:list/create/rename/delete/setLeader/addMember/removeMember —— 团队（spec §4.2）
 //
-// v25 过渡态（spec 2026-08-31）：去编排——agent:assignMain（main+sub 自动跟注）与
-// agent:updateAssignmentRole（改角色）随 role/parent 概念退役删除，preload/renderer
-// 侧绑定与 UI 由后续 task 一并清理；团队能力（teams）由 Task 4 增补。
+// v25（spec 2026-08-31）：去编排——agent:assignMain / agent:updateAssignmentRole
+// 随 role/parent 概念退役删除；assignment 字样通道统一更名 member。
 //
 // v2（Task 10）：分配流程去 Matrix——本地身份生成（generateAgentUserId），
 // agent:start 无 token。
@@ -33,6 +34,15 @@ import {
   createCustomDef,
   stopRunningInstancesByDefinition,
 } from './crud';
+import {
+  createTeam,
+  renameTeam,
+  setLeader,
+  addTeamMember,
+  removeTeamMember,
+  deleteTeam,
+  listTeams,
+} from './team';
 import { getWorkspace } from '../workspace/crud';
 import { deleteSecret } from '../storage/keychain';
 import { isAgentRunning } from './runtime-status';
@@ -47,8 +57,8 @@ import {
 } from './assignment-capabilities';
 import type { AgentAssignment, AgentDefinition } from './types';
 
-/** agent:addToWorkspace 入参（v25：无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
-export interface AddToWorkspaceInput {
+/** agent:addMember 入参（v25 spec §5：AddMemberInput；无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
+export interface AddMemberInput {
   workspaceId: string;
   agentDefinitionId: string;
   /** 可选；非空 = 写 keychain override；空 = 用供应商 key */
@@ -60,7 +70,7 @@ export interface AddToWorkspaceInput {
  *  1. removeMember 内 leader 守卫 + 事务删除——blocked 时直接返回，零副作用
  *  2. 已删行后收尾：销毁 runtime（内存态；DB last_running 写已无行，天然 no-op）+
  *     清 keychain override（session_members/team_members 由 FK CASCADE 清理）
- * 返回结构化结果供 renderer 提示 blocked 原因（过渡期通道名不变，Task 11 更名）。
+ * 返回结构化结果供 renderer 提示 blocked 原因。
  */
 export async function removeAgentAssignment(instanceId: string): Promise<RemoveMemberResult> {
   const result = removeMember(instanceId);
@@ -73,12 +83,12 @@ export async function removeAgentAssignment(instanceId: string): Promise<RemoveM
   return result;
 }
 
-/** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
+/** 注册全部 agent: / team: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
 export function registerAgentHandlers(): void {
   // 成员加入 workspace：本地身份生成 + 启动 runtime（v25：无 role/parent/自动入团）
   ipcMain.handle(
-    'agent:addToWorkspace',
-    async (_evt, input: AddToWorkspaceInput) => {
+    'agent:addMember',
+    async (_evt, input: AddMemberInput) => {
       const { workspaceId, agentDefinitionId, apiKeyOverride } = input;
 
       const def = getAgentDefinition(agentDefinitionId);
@@ -228,7 +238,7 @@ export function registerAgentHandlers(): void {
     },
   );
 
-  ipcMain.handle('agent:listAssignments', async (_evt, workspaceId: string) => {
+  ipcMain.handle('agent:listMembers', async (_evt, workspaceId: string) => {
     return listMembers(workspaceId);
   });
 
@@ -237,7 +247,7 @@ export function registerAgentHandlers(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('agent:removeAssignment', async (_evt, instanceId: string) => {
+  ipcMain.handle('agent:removeMember', async (_evt, instanceId: string) => {
     return removeAgentAssignment(instanceId);
   });
 
@@ -245,28 +255,28 @@ export function registerAgentHandlers(): void {
     return isAgentRunning(instanceId);
   });
 
-  // 设置/清除成员的 API key override
+  // 设置/清除成员的 API key override（原 agent:updateAssignmentApiKey 平移更名）
   ipcMain.handle(
-    'agent:updateAssignmentApiKey',
+    'agent:setMemberApiKeyOverride',
     async (_evt, instanceId: string, apiKey: string | null) => {
       await crudUpdateAssignmentApiKey(instanceId, apiKey);
       return { ok: true };
     },
   );
 
-  // 返回 builtin 建议 Map（UI 添加 builtin 时预填 role/platform）
+  // 返回 builtin 建议 Map（UI 添加 builtin 时预填 platform）
   ipcMain.handle('agent:getBuiltinSuggestions', async () => {
     return getBuiltinSuggestionsMap();
   });
 
-  // v1.6：读取某 assignment 的能力 delta（Layer 3）。无 delta 时返回全空对象。
-  ipcMain.handle('agent:getAssignmentDeltas', async (_evt, instanceId: string) => {
+  // 读取某成员的能力 delta（Layer 3）。无 delta 时返回全空对象。
+  ipcMain.handle('agent:getMemberDeltas', async (_evt, instanceId: string) => {
     return getAssignmentDeltas(instanceId);
   });
 
-  // v1.6：全量替换某 assignment 的能力 delta（幂等；事务内 DELETE + INSERT）。
+  // 全量替换某成员的能力 delta（幂等；事务内 DELETE + INSERT）。
   ipcMain.handle(
-    'agent:setAssignmentDeltas',
+    'agent:setMemberDeltas',
     async (_evt, instanceId: string, deltas: AssignmentDeltas) => {
       setAssignmentDeltas(instanceId, deltas);
     },
@@ -278,15 +288,15 @@ export function registerAgentHandlers(): void {
     async (
       _evt,
       opts: {
-        assignment: AgentAssignment;
+        member: AgentAssignment;
         workspaceId: string;
       },
     ) => {
-      const { assignment, workspaceId } = opts;
+      const { member, workspaceId } = opts;
 
-      const def = getAgentDefinition(assignment.agentDefinitionId);
+      const def = getAgentDefinition(member.agentDefinitionId);
       if (!def) {
-        throw new Error(`未找到 agent 定义: ${assignment.agentDefinitionId}`);
+        throw new Error(`未找到 agent 定义: ${member.agentDefinitionId}`);
       }
       if (!def.modelProviderId) {
         throw new Error(`agent 定义「${def.name}」未配置 modelProviderId，请到 Agent 库配置`);
@@ -297,25 +307,85 @@ export function registerAgentHandlers(): void {
         throw new Error(`未找到 workspace: ${workspaceId}`);
       }
 
-      const llmApiKey = await resolveApiKey(assignment.instanceId, def.modelProviderId);
+      const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
 
       await startAgentRuntime(
         buildSpawnOpts({
-          instanceId: assignment.instanceId,
-          agentUserId: assignment.agentUserId,
+          instanceId: member.instanceId,
+          agentUserId: member.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
           // v25 过渡态：团队会话列已退役，传空串保持线协议形状
           teamSessionId: '',
           def,
           llmApiKey,
-          isCoordinator: (workspace.defaultAgentInstanceId ?? null) === assignment.instanceId,
+          isCoordinator: (workspace.defaultAgentInstanceId ?? null) === member.instanceId,
         }),
       );
 
-      return { instanceId: assignment.instanceId };
+      return { instanceId: member.instanceId };
     },
   );
 
-  logger.info('Agent IPC handlers 已注册');
+  // ─── team: 命名空间（spec §4.2，委托 team.ts 服务层） ──────────────────────
+
+  ipcMain.handle('team:list', async (_evt, workspaceId: string) => {
+    return listTeams(workspaceId);
+  });
+
+  ipcMain.handle(
+    'team:create',
+    async (
+      _evt,
+      workspaceId: string,
+      input: {
+        name: string;
+        iconEmoji?: string;
+        memberInstanceIds: string[];
+        leaderInstanceId: string;
+      },
+    ) => {
+      // 显式映射，杜绝多余属性混入（契约漂移防线）
+      return createTeam(
+        workspaceId,
+        input.name,
+        input.iconEmoji ?? '👥',
+        input.memberInstanceIds,
+        input.leaderInstanceId,
+      );
+    },
+  );
+
+  ipcMain.handle(
+    'team:rename',
+    async (_evt, teamId: string, name: string, iconEmoji?: string) => {
+      renameTeam(teamId, name, iconEmoji);
+      return { ok: true } as const;
+    },
+  );
+
+  ipcMain.handle('team:delete', async (_evt, teamId: string) => {
+    deleteTeam(teamId);
+    return { ok: true } as const;
+  });
+
+  ipcMain.handle(
+    'team:setLeader',
+    async (_evt, teamId: string, leaderInstanceId: string) => {
+      setLeader(teamId, leaderInstanceId);
+      return { ok: true } as const;
+    },
+  );
+
+  ipcMain.handle('team:addMember', async (_evt, teamId: string, instanceId: string) => {
+    addTeamMember(teamId, instanceId);
+    return { ok: true } as const;
+  });
+
+  ipcMain.handle('team:removeMember', async (_evt, teamId: string, instanceId: string) => {
+    removeTeamMember(teamId, instanceId);
+    return { ok: true } as const;
+  });
+
+  logger.info('Agent/Team IPC handlers 已注册');
 }

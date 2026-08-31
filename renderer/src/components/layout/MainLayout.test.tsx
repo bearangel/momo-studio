@@ -15,12 +15,11 @@ const STUB_WORKSPACE: Workspace = {
   name: 'Test',
   description: '',
   directoryPath: '/tmp/test',
-  teamSessionId: 'sess-team',
   gitInitialized: false,
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 const STUB_WORKSPACE_2: Workspace = {
@@ -40,7 +39,7 @@ const mockApi = {
   agent: {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),
     isRunning: vi.fn().mockResolvedValue(false),
-    listAssignments: vi.fn().mockResolvedValue([]),
+    listMembers: vi.fn().mockResolvedValue([]),
   },
   task: {
     list: vi.fn().mockResolvedValue([]),
@@ -64,8 +63,8 @@ describe('MainLayout', () => {
     useAgentStore.getState().reset();
     mockApi.session.list.mockReset();
     mockApi.session.list.mockResolvedValue([]);
-    mockApi.agent.listAssignments.mockReset();
-    mockApi.agent.listAssignments.mockResolvedValue([]);
+    mockApi.agent.listMembers.mockReset();
+    mockApi.agent.listMembers.mockResolvedValue([]);
     mockApi.agent.onRuntimeChanged.mockReset();
     mockApi.agent.onRuntimeChanged.mockReturnValue(() => {});
   });
@@ -138,19 +137,19 @@ describe('MainLayout', () => {
     });
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
   it('activeWorkspaceId 为 null 时不触发 loadAssignments（IPC 保持未调）', async () => {
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).not.toHaveBeenCalled();
+    expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
   });
 
   it('activeWorkspaceId 从 null 切到 ws 时触发 loadAssignments（邀请列表补齐）', async () => {
     const { rerender } = render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).not.toHaveBeenCalled();
+    expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
 
     useWorkspaceStore.setState({
       workspaces: [STUB_WORKSPACE],
@@ -158,7 +157,7 @@ describe('MainLayout', () => {
     });
     rerender(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
   it('activeWorkspaceId 从 ws-a 切到 ws-b 时重新 loadAssignments（保证新 ws 邀请列表正确）', async () => {
@@ -168,24 +167,24 @@ describe('MainLayout', () => {
     });
     const { rerender } = render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledTimes(1);
-    expect(mockApi.agent.listAssignments).toHaveBeenLastCalledWith(STUB_WORKSPACE.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledTimes(1);
+    expect(mockApi.agent.listMembers).toHaveBeenLastCalledWith(STUB_WORKSPACE.id);
 
     useWorkspaceStore.setState({ activeWorkspaceId: STUB_WORKSPACE_2.id });
     rerender(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledTimes(2);
-    expect(mockApi.agent.listAssignments).toHaveBeenLastCalledWith(STUB_WORKSPACE_2.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledTimes(2);
+    expect(mockApi.agent.listMembers).toHaveBeenLastCalledWith(STUB_WORKSPACE_2.id);
   });
 });
 
 describe('MainLayout — loadAssignments 冷启动（邀请列表回归锁）', () => {
   beforeEach(() => {
-    // 显式清零：避免前序测试残留的 listAssignments 调用记录污染断言
-    mockApi.agent.listAssignments.mockClear();
+    // 显式清零：避免前序测试残留的 listMembers 调用记录污染断言
+    mockApi.agent.listMembers.mockClear();
   });
 
-  it('挂载时若 activeWorkspaceId 存在则调用 listAssignments(activeWorkspaceId)（邀请列表冷启动）', async () => {
+  it('挂载时若 activeWorkspaceId 存在则调用 listMembers(activeWorkspaceId)（邀请列表冷启动）', async () => {
     useWorkspaceStore.setState({
       workspaces: [STUB_WORKSPACE],
       activeWorkspaceId: STUB_WORKSPACE.id,
@@ -193,39 +192,39 @@ describe('MainLayout — loadAssignments 冷启动（邀请列表回归锁）', 
     render(<MainLayout />);
     // useEffect 在 render 后异步触发，flush 微任务等待 ipc 调用落定
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
-  it('activeWorkspaceId 从无到有时补调一次 listAssignments（切到第一个 workspace）', async () => {
+  it('activeWorkspaceId 从无到有时补调一次 listMembers（切到第一个 workspace）', async () => {
     useWorkspaceStore.setState({ activeWorkspaceId: null });
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
     // 没 workspace 时 effect 体里 `if (activeWorkspaceId)` 短路，不发 IPC
-    expect(mockApi.agent.listAssignments).not.toHaveBeenCalled();
+    expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
 
     // 切到工作空间：zustand 订阅触发 re-render，useEffect 重新评估并调用 IPC
     useWorkspaceStore.setState({ activeWorkspaceId: STUB_WORKSPACE.id });
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
-  it('activeWorkspaceId 变化时重新调用 listAssignments（切工作空间刷新邀请列表）', async () => {
+  it('activeWorkspaceId 变化时重新调用 listMembers（切工作空间刷新邀请列表）', async () => {
     useWorkspaceStore.setState({ activeWorkspaceId: 'ws-a' });
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledTimes(1);
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledWith('ws-a');
+    expect(mockApi.agent.listMembers).toHaveBeenCalledTimes(1);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith('ws-a');
 
     useWorkspaceStore.setState({ activeWorkspaceId: 'ws-b' });
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).toHaveBeenCalledTimes(2);
-    expect(mockApi.agent.listAssignments).toHaveBeenLastCalledWith('ws-b');
+    expect(mockApi.agent.listMembers).toHaveBeenCalledTimes(2);
+    expect(mockApi.agent.listMembers).toHaveBeenLastCalledWith('ws-b');
   });
 
-  it('activeWorkspaceId 为 null 时不调用 listAssignments（无工作空间不触发）', async () => {
+  it('activeWorkspaceId 为 null 时不调用 listMembers（无工作空间不触发）', async () => {
     useWorkspaceStore.setState({ activeWorkspaceId: null });
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockApi.agent.listAssignments).not.toHaveBeenCalled();
+    expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
   });
 });

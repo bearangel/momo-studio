@@ -21,7 +21,7 @@ import type { TaskRow, Workspace, RemoteNodeTasks } from '../../ipc/types';
 
 const mockApi = {
   agent: {
-    listAssignments: vi.fn().mockResolvedValue([]),
+    listMembers: vi.fn().mockResolvedValue([]),
   },
   task: {
     create: vi.fn(),
@@ -63,12 +63,11 @@ const WS: Workspace = {
   name: 'ws',
   description: '',
   directoryPath: '/tmp/ws',
-  teamSessionId: 'sess-1',
   gitInitialized: false,
   createdAt: '2026-01-01T00:00:00Z',
   ownerId: 'owner',
   iconEmoji: '📁',
-  coordinatorInstanceId: null,
+  defaultAgentInstanceId: null,
 };
 
 const TASK_A = mkTask({ id: 'task-a', title: '任务A', status: 'in_progress', priority: 5, createdAt: 3000 });
@@ -124,7 +123,7 @@ describe('TaskSidebarPanel', () => {
       loading: false,
       error: null,
     });
-    mockApi.agent.listAssignments.mockClear().mockResolvedValue([]);
+    mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
     mockApi.task.create.mockReset();
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });
@@ -199,7 +198,7 @@ describe('TaskSidebarPanel 远端节点分区（P4 Task 3 只读镜像）', () =
       loading: false,
       error: null,
     });
-    mockApi.agent.listAssignments.mockClear().mockResolvedValue([]);
+    mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
     mockApi.task.create.mockReset();
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });

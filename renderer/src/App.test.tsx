@@ -26,12 +26,11 @@ function mkWs(id: string): Workspace {
     name: `ws-${id}`,
     description: '',
     directoryPath: '/tmp/ws',
-    teamSessionId: 'sess-team',
     gitInitialized: true,
     createdAt: '2026-01-01',
     ownerId: 'owner',
     iconEmoji: '📁',
-    coordinatorInstanceId: null,
+    defaultAgentInstanceId: null,
   };
 }
 

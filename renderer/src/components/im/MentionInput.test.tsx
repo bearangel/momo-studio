@@ -47,12 +47,11 @@ import { MentionInput } from './MentionInput';
 /** 构造会话成员（默认在线） */
 function makeMember(overrides: Partial<SessionMemberInfo>): SessionMemberInfo {
   return {
-    assignmentId: 'inst-1',
+    instanceId: 'inst-1',
     agentName: 'PM-agent',
     iconEmoji: '🤖',
-    role: 'standalone',
     lastRunning: true,
-    isCoordinator: false,
+    isLeader: false,
     ...overrides,
   };
 }
@@ -123,8 +122,8 @@ describe('MentionInput 空态与挂载接线', () => {
 describe('MentionInput @ 菜单（在线成员）', () => {
   it('输入 @ 弹出在线成员菜单，离线成员不显示', () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
-      makeMember({ assignmentId: 'inst-qa', agentName: 'QA-agent', lastRunning: false }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-qa', agentName: 'QA-agent', lastRunning: false }),
     ];
     render(<MentionInput />);
     fireEvent.change(screen.getByPlaceholderText(/输入消息/), { target: { value: '@' } });
@@ -135,7 +134,7 @@ describe('MentionInput @ 菜单（在线成员）', () => {
 
   it('输入 @qa 时离线成员被过滤，菜单不渲染', () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-qa', agentName: 'QA-agent', lastRunning: false }),
+      makeMember({ instanceId: 'inst-qa', agentName: 'QA-agent', lastRunning: false }),
     ];
     render(<MentionInput />);
     fireEvent.change(screen.getByPlaceholderText(/输入消息/), { target: { value: '@qa' } });
@@ -144,7 +143,7 @@ describe('MentionInput @ 菜单（在线成员）', () => {
 
   it('点击成员菜单项插入 @标记（尾随空格）并显示可删除 chip', () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     render(<MentionInput />);
     const input = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
@@ -158,7 +157,7 @@ describe('MentionInput @ 菜单（在线成员）', () => {
 
   it('点击 chip 移除对应 mention', () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     render(<MentionInput />);
     const input = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
@@ -195,7 +194,7 @@ describe('MentionInput #T 菜单（待处理任务）', () => {
 describe('MentionInput 发送', () => {
   it('Enter 发送：载荷 = (正文, [assignmentId])，#T 标记只进正文', async () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     taskState.tasks = [makeTask({ id: 'T-001', title: '修复登录' })];
     render(<MentionInput />);
@@ -233,7 +232,7 @@ describe('MentionInput 发送', () => {
 
   it('菜单激活时 Enter 不发送，Escape 关菜单后可发送', () => {
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     render(<MentionInput />);
     const input = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
@@ -250,7 +249,7 @@ describe('MentionInput 发送', () => {
   it('发送失败恢复正文与 mentions', async () => {
     sessionState.sendMessage = vi.fn().mockRejectedValue(new Error('send failed'));
     sessionState.members = [
-      makeMember({ assignmentId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
     ];
     render(<MentionInput />);
     const input = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;

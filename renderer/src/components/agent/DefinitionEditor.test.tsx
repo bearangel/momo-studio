@@ -45,7 +45,6 @@ beforeEach(() => {
     create: vi.fn(),
     select: vi.fn(),
     getActive: () => null,
-    setCoordinator: vi.fn(),
   });
 
   useProviderStore.setState({
@@ -71,9 +70,7 @@ beforeEach(() => {
     loadAssignments: vi.fn(),
     loadBuiltinSuggestions: vi.fn(),
     addAgent: vi.fn(),
-    assignMainAgent: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateAssignmentRole: vi.fn(),
     updateAssignmentApiKey: vi.fn(),
     getAssignmentDeltas: vi.fn(),
     setAssignmentDeltas: vi.fn(),

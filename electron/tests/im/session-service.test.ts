@@ -279,7 +279,7 @@ describe('sendUserMessage 全链', () => {
     const { router, routeUserChat } = makeSpyRouter();
     setSessionRouter(router);
 
-    await sendUserMessage({ sessionId: s.id, body: '交给 b 做', mentionedAssignmentIds: ['inst-b'] });
+    await sendUserMessage({ sessionId: s.id, body: '交给 b 做', mentionedInstanceIds: ['inst-b'] });
 
     expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-b', body: '交给 b 做' });
   });

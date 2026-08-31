@@ -8,7 +8,7 @@
 //   5. 提交成功后调 onCreated(taskId) + onClose
 //
 // Mock 策略：mock ../../ipc/client，让 ipc.task.create 返回 { id: 'T-100' }，
-// ipc.agent.listAssignments 返回空数组（指派 select 渲染空）。
+// ipc.agent.listMembers 返回空数组（指派 select 渲染空）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog } from './CreateTaskDialog';
@@ -23,7 +23,7 @@ const { mockTaskCreate, mockListAssignments } = vi.hoisted(() => ({
 vi.mock('../../ipc/client', () => ({
   ipc: {
     task: { create: mockTaskCreate },
-    agent: { listAssignments: mockListAssignments },
+    agent: { listMembers: mockListAssignments },
   },
 }));
 

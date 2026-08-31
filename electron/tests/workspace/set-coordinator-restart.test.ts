@@ -1,9 +1,9 @@
-// workspace:setCoordinator 自动重启单测
+// workspace:setDefaultAgent 自动重启单测
 //
 // 验证：设定协调 agent 后，若该实例正在运行，主进程自动停止并以 isCoordinator=true
 // 重启——取代旧版"提示用户手动停止+启动"的交互。
 //
-// 捕获方式：mock electron.ipcMain.handle，把 workspace:setCoordinator 回调存入 Map，
+// 捕获方式：mock electron.ipcMain.handle，把 workspace:setDefaultAgent 回调存入 Map，
 // 测试直接调用捕获的回调 —— 验证的是真实生产 handler（而非逻辑副本），与
 // agent/ipc-validation.test.ts 同一约定。
 //
@@ -177,7 +177,7 @@ describe('setCoordinator 自动重启', () => {
     // 模拟实例正在运行
     isAgentRunningMock.mockImplementation(() => true);
 
-    const handler = handlers.get('workspace:setCoordinator')!;
+    const handler = handlers.get('workspace:setDefaultAgent')!;
     await handler({}, ws.id, assignment.instanceId);
 
     // 先停止旧实例
@@ -211,7 +211,7 @@ describe('setCoordinator 自动重启', () => {
     memStore.set('bot.@bot2:localhost.matrix_token', 'mx-token');
 
     // 实例未运行（isAgentRunningMock 默认返回 false）
-    const handler = handlers.get('workspace:setCoordinator')!;
+    const handler = handlers.get('workspace:setDefaultAgent')!;
     await handler({}, ws.id, assignment.instanceId);
 
     expect(stopAgentMock).not.toHaveBeenCalled();
@@ -234,7 +234,7 @@ describe('setCoordinator 自动重启', () => {
     assignAgentToWorkspace(ws.id, def.id, '@bot3:localhost', 'standalone');
     isAgentRunningMock.mockImplementation(() => true);
 
-    const handler = handlers.get('workspace:setCoordinator')!;
+    const handler = handlers.get('workspace:setDefaultAgent')!;
     // 传 null = 取消协调，不应重启
     await handler({}, ws.id, null);
 
@@ -267,7 +267,7 @@ describe('setCoordinator 自动重启', () => {
 
     isAgentRunningMock.mockImplementation(() => true);
 
-    const handler = handlers.get('workspace:setCoordinator')!;
+    const handler = handlers.get('workspace:setDefaultAgent')!;
     await handler({}, ws.id, mainAssignment.instanceId);
 
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
