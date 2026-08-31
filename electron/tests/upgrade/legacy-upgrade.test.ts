@@ -211,7 +211,9 @@ describe('runLegacyUpgradeIfNeeded（旧库升级编排）', () => {
     // kv 延迟语义：编排未建新库（原路径无文件），runMigrations 后写 kv 标记
     runMigrations();
     const maxV = (getDb().prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as { v: number }).v;
-    expect(maxV).toBe(24);
+    // 旧库升级后新库必须迁到「当前最新」版本——动态取值，避免每次加迁移都要改本断言
+    const latest = Math.max(...loadMigrations().map((m) => m.version));
+    expect(maxV).toBe(latest);
     writeLegacyUpgradeNotice(exportDir!);
     const kv = getDb().prepare("SELECT value FROM kv_store WHERE key='legacy_upgrade_notice'").get() as { value: string };
     expect(JSON.parse(kv.value)).toEqual({ exportDir });

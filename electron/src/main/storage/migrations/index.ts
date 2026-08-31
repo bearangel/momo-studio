@@ -638,6 +638,77 @@ CREATE TABLE IF NOT EXISTS provider_models (
 ALTER TABLE workspaces ADD COLUMN audit_quota_mb INTEGER;
 `.trim(),
   },
+  {
+    version: 25,
+    sql: `
+-- ─── v25：agent 概念模型更换（spec 2026-08-31 §3）─────────────────────────
+-- 去编排：agent_assignments → workspace_agent_members（无 role/parent）
+CREATE TABLE workspace_agent_members (
+  instance_id         TEXT PRIMARY KEY NOT NULL,
+  workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_definition_id TEXT NOT NULL REFERENCES agent_definitions(id) ON DELETE CASCADE,
+  agent_user_id       TEXT NOT NULL,
+  api_key_override    INTEGER NOT NULL DEFAULT 0,
+  last_running        INTEGER NOT NULL DEFAULT 1,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- 去重：同 ws 同 def 保留 created_at 最早一条（被删行的 session_members 级联清理）
+DELETE FROM agent_assignments WHERE rowid NOT IN (
+  SELECT MIN(rowid) FROM agent_assignments GROUP BY workspace_id, agent_definition_id
+);
+INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id, api_key_override, last_running, created_at)
+SELECT instance_id, workspace_id, agent_definition_id, agent_user_id, has_api_key_override, last_running, created_at
+FROM agent_assignments;
+CREATE UNIQUE INDEX idx_wam_unique ON workspace_agent_members(workspace_id, agent_definition_id);
+CREATE INDEX idx_wam_agent ON workspace_agent_members(agent_definition_id);
+
+-- 团队（§3.2）
+CREATE TABLE teams (
+  id                 TEXT PRIMARY KEY NOT NULL,
+  workspace_id       TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name               TEXT NOT NULL,
+  icon_emoji         TEXT NOT NULL DEFAULT '👥',
+  leader_instance_id TEXT NOT NULL REFERENCES workspace_agent_members(instance_id) ON DELETE CASCADE,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE team_members (
+  team_id     TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  instance_id TEXT NOT NULL REFERENCES workspace_agent_members(instance_id) ON DELETE CASCADE,
+  added_at    INTEGER NOT NULL,
+  PRIMARY KEY (team_id, instance_id)
+);
+
+-- sessions / session_members（§3.3；FK 改指需重建表）
+ALTER TABLE sessions ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE session_members_v25 (
+  session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  instance_id    TEXT NOT NULL REFERENCES workspace_agent_members(instance_id) ON DELETE CASCADE,
+  is_leader      INTEGER NOT NULL DEFAULT 0,
+  added_at       INTEGER NOT NULL,
+  PRIMARY KEY (session_id, instance_id)
+);
+INSERT INTO session_members_v25 (session_id, instance_id, is_leader, added_at)
+SELECT session_id, assignment_id, 0, added_at FROM session_members;
+DROP TABLE session_members;
+ALTER TABLE session_members_v25 RENAME TO session_members;
+
+-- workspaces：默认会话 agent（coordinator 语义就近迁移）；协调/团队会话列退役。
+-- 注意：coordinator_instance_id 与 workspaces 同表，不能写成 UPDATE ... SELECT 自表
+-- 子查询（SQLite 不支持），同表列直拷用 SET 新列 = 旧列 形式。
+ALTER TABLE workspaces ADD COLUMN default_agent_instance_id TEXT REFERENCES workspace_agent_members(instance_id);
+UPDATE workspaces SET default_agent_instance_id = coordinator_instance_id;
+ALTER TABLE workspaces DROP COLUMN coordinator_instance_id;
+ALTER TABLE workspaces DROP COLUMN team_session_id;
+
+-- agent_definitions 全局化（§3.4）。
+-- SQLite DROP COLUMN 拒绝删除带索引的列，v12 建的 idx_agent_definitions_workspace
+-- 必须先删（实验验证：不删则报 "error in index ... no such column"）。
+DROP INDEX IF EXISTS idx_agent_definitions_workspace;
+ALTER TABLE agent_definitions DROP COLUMN workspace_id;
+
+DROP TABLE agent_assignments;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

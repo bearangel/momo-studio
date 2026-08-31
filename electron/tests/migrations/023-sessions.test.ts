@@ -20,6 +20,9 @@ beforeAll(() => {
   db.pragma('foreign_keys = ON');
   // schema_migrations 表由 v1 建好；按 loadMigrations() 的顺序逐条 exec SQL
   // （与 012 测试的 applyUpToVersion 同法）。
+  // 上界固定 23：本文件断言的是 v23 时点的 schema（team_session_id /
+  // agent_assignments 等），v25 起这些列/表被后续迁移合法退役，无上界会让
+  // 本测试随最新版本漂移而误报（024 起已统一用 applyUpTo 上界模式）。
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY NOT NULL,
@@ -30,6 +33,7 @@ beforeAll(() => {
     'INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)',
   );
   for (const m of loadMigrations()) {
+    if (m.version > 23) break;
     db.exec(m.sql);
     markApplied.run(m.version);
   }
