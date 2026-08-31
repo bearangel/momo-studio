@@ -4,13 +4,13 @@
 // 取代原 room-ops 的创建/重命名/解散语义，纯 SQLite——无 Matrix。
 //
 // 设计要点：
-//   - 团队会话由 workspaces.team_session_id 指向一个 sessions.id，随 workspace 生命周期，
-//     deleteSessionOp 命中即抛错；调用方应改为 setWorkspaceTeamSession(null) 再删。
-//   - createSession 把 memberAssignmentIds 一次性写入 session_members，
-//     复用 Task 2 sessions repo 的 insertSession + addSessionMember。
-//   - getSessionMembersInfo 三表 JOIN（session_members/agent_assignments/agent_definitions），
-//     isCoordinator 由 workspaces.coordinator_instance_id 判定（同一 workspace 内逐行比对）。
+//   - createSession 把 memberInstanceIds 一次性写入 session_members，
+//     复用 sessions repo 的 insertSession + addSessionMember。
+//   - getSessionMembersInfo 两表 JOIN（session_members/workspace_agent_members +
+//     agent_definitions）；isDefaultAgent 由 workspaces.default_agent_instance_id 判定。
 //
+// v25 过渡态：workspaces.team_session_id 已退役，deleteSessionOp 的团队会话保护
+// 待后续 task 按新会话模型（spec §4.4）重接。
 // 留待后续 task：群消息写入（messages.session_id 落库）、@ 解析、Runtime 链接。
 
 import { getDb } from '../storage/db';
@@ -25,13 +25,12 @@ import {
 } from '../storage/sessions/repo';
 
 export interface SessionMemberInfo {
-  assignmentId: string;
+  instanceId: string;
   agentName: string;
   iconEmoji: string;
-  role: 'standalone' | 'main' | 'sub';
   lastRunning: boolean;
-  /** 该成员是否为该会话所属 workspace 的协调 agent */
-  isCoordinator: boolean;
+  /** 该成员是否为该会话所属 workspace 的默认会话 agent（v25：原协调 agent） */
+  isDefaultAgent: boolean;
 }
 
 export interface SessionSummary {
@@ -46,22 +45,22 @@ export interface SessionSummary {
 /**
  * 创建会话并以事务方式一次性写入成员。
  * - workspaceId 必须存在（FK 由 sessions.workspace_id 约束）
- * - memberAssignmentIds 元素必须在该 workspace 下合法存在
- *   （FK 由 session_members.assignment_id 约束，依赖 agent_assignments.instance_id）
+ * - memberInstanceIds 元素必须在该 workspace 下合法存在
+ *   （FK 由 session_members.instance_id 约束，依赖 workspace_agent_members.instance_id）
  *
  * 事务原子性：sessions 行与全部 session_members 行在同一事务中提交——任一成员
- * 写入抛错（典型：FK 命中不存在的 assignment_id），整笔回滚，避免半状态。
+ * 写入抛错（典型：FK 命中不存在的 instance_id），整笔回滚，避免半状态。
  * 因此函数返回前不会留下 orphan 的空 session。
  */
 export function createSession(input: {
   workspaceId: string;
   title: string;
-  /** 成员 assignment instance_id 列表；缺省/空数组 → 创建后无成员 */
-  memberAssignmentIds?: string[];
+  /** 成员 instance_id 列表；缺省/空数组 → 创建后无成员 */
+  memberInstanceIds?: string[];
   kind?: SessionRow['kind'];
 }): SessionRow {
   const db = getDb();
-  const ids = input.memberAssignmentIds ?? [];
+  const ids = input.memberInstanceIds ?? [];
   const tx = db.transaction((args: {
     workspaceId: string;
     title: string;
@@ -73,8 +72,8 @@ export function createSession(input: {
       title: args.title,
       kind: args.kind,
     });
-    for (const aid of args.memberIds) {
-      addSessionMember(row.id, aid);
+    for (const iid of args.memberIds) {
+      addSessionMember(row.id, iid);
     }
     return row;
   });
@@ -94,18 +93,9 @@ export function renameSession(id: string, title: string): void {
 }
 
 /**
- * 解散会话。团队会话（workspaces.team_session_id === id）禁止单独解散，抛错。
- * 非团队会话级联清理 session_members（DB ON DELETE CASCADE）。
+ * 解散会话。非保护会话级联清理 session_members（DB ON DELETE CASCADE）。
  */
 export function deleteSessionOp(id: string): void {
-  const db = getDb();
-  // 团队会话保护：读 workspaces.team_session_id，命中即抛错
-  const protectedRow = db
-    .prepare('SELECT id FROM workspaces WHERE team_session_id = ?')
-    .get(id) as { id: string } | undefined;
-  if (protectedRow) {
-    throw new Error('团队会话随 workspace 删除，禁止单独解散');
-  }
   deleteSession(id);
 }
 
@@ -131,13 +121,14 @@ function listAllSessions(): SessionRow[] {
   const rows = getDb()
     .prepare('SELECT * FROM sessions ORDER BY last_message_at DESC, created_at DESC')
     .all() as Array<{
-    id: string; workspace_id: string; title: string; kind: string;
+    id: string; workspace_id: string; title: string; title_auto: number; kind: string;
     settings_json: string | null; created_at: number; updated_at: number; last_message_at: number | null;
   }>;
   return rows.map((r) => ({
     id: r.id,
     workspaceId: r.workspace_id,
     title: r.title,
+    titleAuto: r.title_auto === 1,
     kind: r.kind as SessionRow['kind'],
     settingsJson: r.settings_json,
     createdAt: r.created_at,
@@ -147,13 +138,13 @@ function listAllSessions(): SessionRow[] {
 }
 
 /**
- * 读会话成员信息：JOIN session_members → agent_assignments → agent_definitions，
- * isCoordinator 需二次比对 workspace.coordinator_instance_id。
+ * 读会话成员信息：JOIN session_members → workspace_agent_members → agent_definitions，
+ * isDefaultAgent 需二次比对 workspace.default_agent_instance_id。
  *
  * 步骤：
  *   1) 取 sessionId 所属 workspaceId；
  *   2) JOIN 三表，按 added_at ASC 拉成员；
- *   3) 读 workspace.coordinator_instance_id（可能为 null），命中成员打 isCoordinator=true。
+ *   3) 读 workspace.default_agent_instance_id（可能为 null），命中成员打 isDefaultAgent=true。
  *
  * 空成员返回 []（不抛错）。
  */
@@ -166,31 +157,29 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
   if (!sessionRow) return [];
 
   const ws = getWorkspace(sessionRow.workspace_id);
-  const coordinatorInstanceId = ws?.coordinatorInstanceId ?? null;
+  const defaultAgentInstanceId = ws?.defaultAgentInstanceId ?? null;
 
   const rows = db
     .prepare(
-      `SELECT a.instance_id, a.role, a.last_running, d.name, d.icon_emoji
+      `SELECT m.instance_id, a.last_running, d.name, d.icon_emoji
        FROM session_members m
-       JOIN agent_assignments a ON m.assignment_id = a.instance_id
+       JOIN workspace_agent_members a ON m.instance_id = a.instance_id
        JOIN agent_definitions d ON a.agent_definition_id = d.id
        WHERE m.session_id = ?
        ORDER BY m.added_at ASC`,
     )
     .all(sessionId) as Array<{
     instance_id: string;
-    role: string;
     last_running: number;
     name: string;
     icon_emoji: string;
   }>;
 
   return rows.map((r) => ({
-    assignmentId: r.instance_id,
+    instanceId: r.instance_id,
     agentName: r.name,
     iconEmoji: r.icon_emoji,
-    role: r.role as SessionMemberInfo['role'],
     lastRunning: r.last_running === 1,
-    isCoordinator: coordinatorInstanceId !== null && coordinatorInstanceId === r.instance_id,
+    isDefaultAgent: defaultAgentInstanceId !== null && defaultAgentInstanceId === r.instance_id,
   }));
 }

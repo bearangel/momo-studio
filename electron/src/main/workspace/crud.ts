@@ -1,16 +1,16 @@
 // electron/src/main/workspace/crud.ts
 //
 // Workspace CRUD — 在 SQLite + 文件系统中创建、查询、删除一个 workspace。
-// v23：Matrix space 关联列已删除；团队房间列更名 team_session_id。
-// v2（Task 10）：createWorkspace 内部创建默认团队会话（sessions 表）并回填
-// team_session_id——不再由调用方先建 Matrix room 后传入。
+// v25（spec 2026-08-31 §3.3）：team_session_id / coordinator_instance_id 退役 →
+// default_agent_instance_id（默认会话 agent，语义就近迁移自 coordinator）。
+// 创建即自动建「团队会话」的行为随 team_session_id 一并退役（会话创建方式
+// 由 spec §4.4 快速/协作会话接管，后续 task 接线）。
 // git 初始化失败不应阻断 workspace 创建，因此单独 try/catch。
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../storage/db';
-import { insertSession } from '../storage/sessions/repo';
 import { logger } from '../logger';
 import type { Workspace, CreateWorkspaceInput } from './types';
 import { initGitRepo } from './git';
@@ -20,12 +20,11 @@ interface WorkspaceRow {
   name: string;
   description: string;
   directory_path: string;
-  team_session_id: string;
   git_initialized: number;
   created_at: string;
   owner_id: string;
   icon_emoji: string;
-  coordinator_instance_id: string | null;
+  default_agent_instance_id: string | null;
 }
 
 /** SQLite 行 → 领域对象（snake_case → camelCase） */
@@ -35,22 +34,17 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     name: row.name,
     description: row.description,
     directoryPath: row.directory_path,
-    teamSessionId: row.team_session_id,
     gitInitialized: row.git_initialized === 1,
     createdAt: row.created_at,
     ownerId: row.owner_id,
     iconEmoji: row.icon_emoji,
-    coordinatorInstanceId: row.coordinator_instance_id,
+    defaultAgentInstanceId: row.default_agent_instance_id,
   };
 }
 
 /**
- * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite →
- * 创建默认团队会话并回填 team_session_id。
+ * 创建一个新 workspace：分配 UUID → 创建目录 → git init → 写入 SQLite。
  * git init 失败仅记录警告，不抛出（git 是 nice-to-have，DB 记录才是核心）。
- *
- * v2（Task 10）：团队会话是本地 sessions 表行（title='团队会话'，kind='chat'），
- * 不再创建 Matrix room——用户与 agent 的团队交流全部落 SQLite。
  */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
@@ -75,8 +69,8 @@ export async function createWorkspace(
 
   const db = getDb();
   db.prepare(
-    `INSERT INTO workspaces (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
-     VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+    `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.name,
@@ -87,18 +81,13 @@ export async function createWorkspace(
     input.iconEmoji ?? '📁',
   );
 
-  // 默认团队会话：本地 sessions 行 + 回填外键（两步写而非事务——workspace 行
-  // 先落地，会话创建失败时 workspace 仍可用，team_session_id 留空可后补）
-  const teamSession = insertSession({ workspaceId: id, title: '团队会话', kind: 'chat' });
-  db.prepare('UPDATE workspaces SET team_session_id = ? WHERE id = ?').run(teamSession.id, id);
-
   // 添加 owner 为成员（保证授权模型从一开始就有 owner 角色）
   db.prepare(
     `INSERT INTO workspace_members (workspace_id, matrix_user_id, role) VALUES (?, ?, 'owner')`,
   ).run(id, ownerUserId);
 
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow;
-  logger.info('Workspace 已创建', { id, name: input.name, dir, teamSessionId: teamSession.id });
+  logger.info('Workspace 已创建', { id, name: input.name, dir });
   return rowToWorkspace(row);
 }
 
@@ -134,10 +123,10 @@ export function renameWorkspace(id: string, name: string): void {
   logger.info('Workspace 已重命名', { id, name: trimmed });
 }
 
-/** 设置/清空 workspace 的协调 agent。null 表示清空。 */
-export function setWorkspaceCoordinator(workspaceId: string, instanceId: string | null): void {
+/** 设置/清空 workspace 的默认会话 agent。null 表示清空。（v25：原协调 agent，语义就近迁移） */
+export function setWorkspaceDefaultAgent(workspaceId: string, instanceId: string | null): void {
   const db = getDb();
-  const result = db.prepare('UPDATE workspaces SET coordinator_instance_id = ? WHERE id = ?').run(
+  const result = db.prepare('UPDATE workspaces SET default_agent_instance_id = ? WHERE id = ?').run(
     instanceId,
     workspaceId,
   );

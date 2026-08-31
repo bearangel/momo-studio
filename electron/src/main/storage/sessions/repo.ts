@@ -1,7 +1,9 @@
 // electron/src/main/storage/sessions/repo.ts
 //
-// sessions / session_members 表 CRUD（2.0.0 P1 会话内核）。
+// sessions / session_members 表 CRUD（2.0.0 P1 会话内核；v25 概念模型更换）。
 // 取代 Matrix room：workspace 隔离 = 外键；会话设置存 settings_json（取代 v1 的房间级设置表）。
+// v25：sessions.title_auto（自动命名标记，spec D4）；session_members.instance_id
+// （FK → workspace_agent_members）+ is_leader（快照记 leader，接待判定依据，spec §3.3）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 
@@ -9,6 +11,8 @@ export interface SessionRow {
   id: string;
   workspaceId: string;
   title: string;
+  /** 1=自动命名（可被 LLM 替换）；0=用户命名/已手动改名（spec D4） */
+  titleAuto: boolean;
   kind: 'chat' | 'task_execution';
   settingsJson: string | null;
   createdAt: number;
@@ -23,13 +27,14 @@ export interface SessionSettings {
 }
 
 type SqlRow = {
-  id: string; workspace_id: string; title: string; kind: string;
+  id: string; workspace_id: string; title: string; title_auto: number; kind: string;
   settings_json: string | null; created_at: number; updated_at: number; last_message_at: number | null;
 };
 
 function rowToCamel(r: SqlRow): SessionRow {
   return {
     id: r.id, workspaceId: r.workspace_id, title: r.title,
+    titleAuto: r.title_auto === 1,
     kind: r.kind as SessionRow['kind'], settingsJson: r.settings_json,
     createdAt: r.created_at, updatedAt: r.updated_at, lastMessageAt: r.last_message_at,
   };
@@ -90,20 +95,20 @@ export function getSessionSettings(id: string): SessionSettings {
 
 // ─── 成员 ──────────────────────────────────────────────────────────────────
 
-export function addSessionMember(sessionId: string, assignmentId: string): void {
+export function addSessionMember(sessionId: string, instanceId: string, isLeader = false): void {
   getDb().prepare(
-    'INSERT OR IGNORE INTO session_members (session_id, assignment_id, added_at) VALUES (?, ?, ?)',
-  ).run(sessionId, assignmentId, Date.now());
+    'INSERT OR IGNORE INTO session_members (session_id, instance_id, is_leader, added_at) VALUES (?, ?, ?, ?)',
+  ).run(sessionId, instanceId, isLeader ? 1 : 0, Date.now());
 }
 
-export function removeSessionMember(sessionId: string, assignmentId: string): void {
-  getDb().prepare('DELETE FROM session_members WHERE session_id = ? AND assignment_id = ?')
-    .run(sessionId, assignmentId);
+export function removeSessionMember(sessionId: string, instanceId: string): void {
+  getDb().prepare('DELETE FROM session_members WHERE session_id = ? AND instance_id = ?')
+    .run(sessionId, instanceId);
 }
 
-export function listSessionMembers(sessionId: string): Array<{ assignmentId: string; addedAt: number }> {
+export function listSessionMembers(sessionId: string): Array<{ instanceId: string; isLeader: boolean; addedAt: number }> {
   const rows = getDb().prepare(
-    'SELECT assignment_id, added_at FROM session_members WHERE session_id = ? ORDER BY added_at ASC',
-  ).all(sessionId) as Array<{ assignment_id: string; added_at: number }>;
-  return rows.map((r) => ({ assignmentId: r.assignment_id, addedAt: r.added_at }));
+    'SELECT instance_id, is_leader, added_at FROM session_members WHERE session_id = ? ORDER BY added_at ASC',
+  ).all(sessionId) as Array<{ instance_id: string; is_leader: number; added_at: number }>;
+  return rows.map((r) => ({ instanceId: r.instance_id, isLeader: r.is_leader === 1, addedAt: r.added_at }));
 }

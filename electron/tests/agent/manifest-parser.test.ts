@@ -51,10 +51,10 @@ describe('agent/manifest-parser — v1.3 schema', () => {
     expect(unknown.model).toBeUndefined();
   });
 
-  it('parseAgentManifestWithSuggestion 返回 type/parent/platform 建议字段', () => {
+  it('parseAgentManifestWithSuggestion 返回 parent/platform 建议字段（v25：无角色建议）', () => {
     const { def, suggestion } = parseAgentManifestWithSuggestion(VALID_YAML);
     expect(def.slug).toBe('requirement-analyst');
-    expect(suggestion.role).toBe('standalone');
+    expect(suggestion.role).toBeUndefined();
     expect(suggestion.suggestedPlatform).toBe('anthropic');
   });
 
@@ -119,7 +119,7 @@ spec:
     const { def, suggestion } = parseAgentManifestWithSuggestion(subYaml);
     expect(def.slug).toBe('sub');
     expect(def.modelName).toBe('gpt-4o');
-    expect(suggestion.role).toBe('sub');
+    expect(suggestion.role).toBeUndefined();
     expect(suggestion.suggestedParentDefId).toBe('pm');
     expect(suggestion.suggestedPlatform).toBe('openai');
   });

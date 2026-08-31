@@ -14,7 +14,6 @@
 //   原 HOMESERVER_URL 常量随 bot token 流程一并移除。
 
 import path from 'node:path';
-import { getAgentDefinition, listSubAssignments } from './crud';
 import {
   mergeCapabilities,
   readAllocationLayer,
@@ -23,38 +22,25 @@ import {
 import { resolveSkillsDir } from '../paths';
 import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
-import type { AgentDefinition, AgentRole } from './types';
+import type { AgentDefinition } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-config';
 
 /**
  * 为指定 workspace 内的 main assignment 重建 subAgents 引用。
- * v1.3：按 assignment.parent_instance_id 查询同 ws 的 role='sub' assignments，
- * 不再读 def.parentAgentId（已删除）。
  *
- * @param workspaceId 目标 workspace
- * @param mainInstanceId main assignment 的 instanceId
- * v2（Task 10）：引用携带 assignmentId（dispatch 路由键），不再携带 Matrix userId。
+ * v25 过渡态：parent_instance_id 已从 schema 退役，main/sub 编排不复存在；
+ * 返回空列表。团队化 dispatch 条件（spec §4/D5）由后续 task 接线时重写本函数。
+ * 保留导出签名供调用方与测试稳定。
  *
- * @returns sub agent 引用列表（slug + assignmentId + description）
+ * @param _workspaceId 目标 workspace（过渡期未用）
+ * @param _mainInstanceId main assignment 的 instanceId（过渡期未用）
  */
 export function rebuildSubAgents(
-  workspaceId: string,
-  mainInstanceId: string,
+  _workspaceId: string,
+  _mainInstanceId: string,
 ): SubAgentRef[] {
-  const subAssignments = listSubAssignments(workspaceId, mainInstanceId);
-  const subs: SubAgentRef[] = [];
-  for (const sub of subAssignments) {
-    if (!sub.lastRunning) continue;  // v2 修复：仅启动的 sub 才在 dispatch 工具列表
-    const subDef = getAgentDefinition(sub.agentDefinitionId);
-    if (!subDef) continue;
-    subs.push({
-      slug: subDef.slug,
-      assignmentId: sub.instanceId,
-      description: subDef.description,
-    });
-  }
-  return subs;
+  return [];
 }
 
 /**
@@ -89,15 +75,22 @@ export function resolveSkillSlugs(slugs: string[]): RuntimeSkillRef[] {
 /** buildSpawnOpts 的入参（v2 Task 10：本地身份形状，无 Matrix 凭据） */
 export interface BuildSpawnOptsInput {
   instanceId: string;
-  /** agent 本地身份（agent_assignments.agent_user_id） */
+  /** agent 本地身份（workspace_agent_members.agent_user_id） */
   agentUserId: string;
   workspaceId: string;
   workspaceDir: string;
-  /** 团队会话 ID（workspaces.team_session_id，sessions 表主键） */
+  /**
+   * 团队会话 ID（sessions 表主键）。
+   * v25 过渡态：workspaces.team_session_id 已退役，无团队会话可传时为空串；
+   * AGENT_CONFIG 线协议字段保留（runtime 侧消费），团队化会话由后续 task 重接。
+   */
   teamSessionId: string;
   def: AgentDefinition;
-  /** 来自 assignment.role（v1.3：不再从 def.type 推断） */
-  role: AgentRole;
+  /**
+   * v25 过渡态：assignment.role 已随去编排退役；缺省 'standalone'（不带 dispatch 工具）。
+   * 团队化 dispatch 条件由后续 task 按 spec §4 重写后恢复赋值。
+   */
+  role?: AgentRuntimeOpts['role'];
   /** spawn 前主进程已解析的 LLM API key（override ?? provider key） */
   llmApiKey: string;
   isCoordinator: boolean;
@@ -123,9 +116,9 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     workspaceDir,
     teamSessionId,
     def,
-    role,
     llmApiKey,
     isCoordinator,
+    role = 'standalone',
   } = input;
 
   // 校验 def 已配置 provider

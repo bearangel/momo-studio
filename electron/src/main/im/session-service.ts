@@ -18,7 +18,6 @@
 import { insertMessage, type MessageRow } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
-import { getWorkspace } from '../workspace/crud';
 import { broadcastLocalMessage } from '../p2p';
 import { detectConflict } from '../task/conflict-detector';
 import { listTasks, getTask } from '../storage/tasks/repo';
@@ -56,40 +55,32 @@ export function broadcastRuntimeChanged(): void {
 
 /**
  * 目标解析（原 decide-response 三场景的 session 语义）：
- *   1. 显式 mention → 第一个被 @ 且是本会话成员的 assignment
+ *   1. 显式 mention → 第一个被 @ 且是本会话成员的 agent
  *   2. 会话仅 1 个成员 agent → 自动响应（原"单聊无需 @"）
- *   3. 本会话是 workspace 团队会话（team_session_id）且有协调 agent → 协调 agent 自动接待
- *      （仅当会话 IS 团队会话时才接待——普通群不越权；协调者不要求是会话成员，
- *       与原 decide-response 的主 agent 默认接待语义一致）
- *   4. 其余 → null（不路由）
+ *   3. 其余 → null（不路由）
+ *
+ * v25 过渡态：v1.x 的「团队会话 + 协调 agent 自动接待」与「多成员含 PM 自动接待」
+ * 随 team_session_id / role 概念退役移除；leader/is_leader 接待判定（spec D5）
+ * 由后续 task 接线。
  *
  * 注：原 decide-response 有 isOwnerMessage 守卫（仅用户本人消息触发自动接待）。
  * 新模型下 sendUserMessage 只处理本地用户消息（单用户应用，所有消息 sender='owner'），
  * 该守卫在结构上已满足，无需重复判断。
  */
 export function resolveTarget(sessionId: string, mentionedAssignmentIds: string[]): string | null {
-  // JOIN 拿成员 role（PM 接待判定需要）；listSessionMembers 只返回 assignmentId
   const memberRows = getDb()
     .prepare(
-      `SELECT sm.assignment_id, aa.role
-       FROM session_members sm
-       JOIN agent_assignments aa ON sm.assignment_id = aa.instance_id
-       WHERE sm.session_id = ?
-       ORDER BY sm.added_at ASC`,
+      `SELECT m.instance_id
+       FROM session_members m
+       JOIN workspace_agent_members a ON m.instance_id = a.instance_id
+       WHERE m.session_id = ?
+       ORDER BY m.added_at ASC`,
     )
-    .all(sessionId) as Array<{ assignment_id: string; role: string }>;
-  const memberIds = memberRows.map((m) => m.assignment_id);
+    .all(sessionId) as Array<{ instance_id: string }>;
+  const memberIds = memberRows.map((m) => m.instance_id);
   const mentioned = mentionedAssignmentIds.find((id) => memberIds.includes(id));
   if (mentioned) return mentioned;
   if (memberIds.length === 1) return memberIds[0]!; // 单成员会话：发言即应答
-  // 2.0.0 要求：普通多成员会话含 PM（role=main）→ PM 自动接待（无需 @）；
-  // 多 PM 取加入序第一个。仅 @ 别人仍优先（上面 mention 分支）。
-  const pm = memberRows.find((m) => m.role === 'main');
-  if (pm) return pm.assignment_id;
-  const session = getSession(sessionId);
-  if (!session) return null;
-  const ws = getWorkspace(session.workspaceId);
-  if (ws && ws.teamSessionId === sessionId && ws.coordinatorInstanceId) return ws.coordinatorInstanceId;
   return null;
 }
 

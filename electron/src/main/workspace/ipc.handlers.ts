@@ -11,7 +11,7 @@ import {
   listWorkspaces,
   getWorkspace,
   deleteWorkspace,
-  setWorkspaceCoordinator,
+  setWorkspaceDefaultAgent,
   renameWorkspace,
 } from './crud';
 import {
@@ -62,77 +62,75 @@ export function registerWorkspaceHandlers(): void {
     return { ok: true };
   });
 
-  // 设置/清空协调 agent；若目标实例正在运行，自动停止并重启以应用新的 isCoordinator 标志
+  // 设置/清空默认会话 agent；若目标实例正在运行，自动停止并重启以应用新的 isCoordinator 标志。
+  // v25：内部实现为 default_agent_instance_id；通道名保留 coordinator（renderer 契约，
+  // preload/renderer 侧更名由后续 task 一并处理）
   ipcMain.handle(
     'workspace:setCoordinator',
     async (_evt, workspaceId: string, instanceId: string | null) => {
-      setWorkspaceCoordinator(workspaceId, instanceId);
+      setWorkspaceDefaultAgent(workspaceId, instanceId);
 
-      // 设定协调后自动重启运行中的实例；清空（null）或未运行则跳过
+      // 设定后自动重启运行中的实例；清空（null）或未运行则跳过
       if (instanceId !== null) {
-        await restartCoordinatorInstance(workspaceId, instanceId);
+        await restartDefaultAgentInstance(workspaceId, instanceId);
       }
 
       return { ok: true };
     },
   );
 
-  // 查询当前协调 agent
+  // 查询当前默认会话 agent
   ipcMain.handle('workspace:getCoordinator', async (_evt, workspaceId: string) => {
     const ws = getWorkspace(workspaceId);
-    return { instanceId: ws?.coordinatorInstanceId ?? null };
+    return { instanceId: ws?.defaultAgentInstanceId ?? null };
   });
 
   logger.info('Workspace IPC handlers 已注册');
 }
 
 /**
- * 设定协调 agent 后，若目标实例正在运行，自动停止并以 isCoordinator=true 重启，
- * 使新的协调标志立即对 runtime 子进程生效（取代旧版"提示用户手动停止+启动"）。
+ * 设定默认会话 agent 后，若目标实例正在运行，自动停止并以 isCoordinator=true 重启，
+ * 使新的标志立即对 runtime 子进程生效（取代旧版"提示用户手动停止+启动"）。
  *
- * 实例未运行 / assignment 不存在 / 定义已删除 / keychain 缺 apiKey 时，
- * 静默跳过重启（仅 coordinatorInstanceId 已写入 DB，下次启动时自然带上标志）。
+ * 实例未运行 / 成员不存在 / 定义已删除 / keychain 缺 apiKey 时，
+ * 静默跳过重启（仅 defaultAgentInstanceId 已写入 DB，下次启动时自然带上标志）。
  *
  * I1 修复：先检查 keychain 是否有 apiKey，确认后才 stopAgent，
  * 避免「先停后查、查不到就 return」导致 agent 被停死无法恢复。
  */
-async function restartCoordinatorInstance(
+async function restartDefaultAgentInstance(
   workspaceId: string,
   instanceId: string,
 ): Promise<void> {
   const ws = getWorkspace(workspaceId);
   if (!ws || !isAgentRunning(instanceId)) return;
 
-  const assignment = listAssignments(workspaceId).find((a) => a.instanceId === instanceId);
-  if (!assignment) return;
+  const member = listAssignments(workspaceId).find((a) => a.instanceId === instanceId);
+  if (!member) return;
 
-  const def = getAgentDefinition(assignment.agentDefinitionId);
+  const def = getAgentDefinition(member.agentDefinitionId);
   if (!def) return;
 
   // v1.3：apiKey 走 resolveApiKey（override ?? provider key）；def.modelProviderId 必须已配置
   if (!def.modelProviderId) return;
   const apiKey = await resolveApiKey(instanceId, def.modelProviderId);
 
-  // v2 修复（final review I1）：改用 stopAgentRuntime（双轨销毁）替代 v1 stopAgent。
-  // 旧实现对 task-driven agent 无效——stopAgent 早返（runtimes 无 entry），
-  // ensureTaskDrivenRuntime 见 pool 仍在跳过 runner 重建 → isCoordinator 标志不生效。
   await stopAgentRuntime(instanceId);
 
   await startAgentRuntime(
     buildSpawnOpts({
-      instanceId: assignment.instanceId,
-      agentUserId: assignment.agentUserId,
+      instanceId: member.instanceId,
+      agentUserId: member.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      teamSessionId: ws.teamSessionId,
+      // v25 过渡态：团队会话列已退役，传空串保持线协议形状
+      teamSessionId: '',
       def,
-      // v1.3：role 来自 assignment；协调重启保留原 role
-      role: assignment.role,
       llmApiKey: apiKey,
       isCoordinator: true,
     }),
   );
-  logger.info('协调 agent 已自动重启', { instanceId });
+  logger.info('默认会话 agent 已自动重启', { instanceId });
 }
 
 /**

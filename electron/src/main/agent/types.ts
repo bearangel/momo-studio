@@ -2,11 +2,10 @@
 //
 // Agent 定义相关类型 — Declarative agent 的 YAML manifest 解析产物。
 //
-// v1.3 重构（migration v12）：把角色和父子关系从 definition 剥离到 assignment，
-// definition 改为 workspace-scoped，模型配置改为引用 model_providers 表。
-
-/** Agent 角色（在 assignment 级而非 definition 级） */
-export type AgentRole = 'standalone' | 'main' | 'sub';
+// v25 重构（spec 2026-08-31 §3）：去编排——角色/父子关系从 schema 消失，
+// `agent_assignments` → `workspace_agent_members`（成员制，无 role/parent/enabled）。
+// AgentAssignment 保留为 WorkspaceAgentMember 的过渡别名，供 Task 3-5 逐步消除，
+// Task 15 删别名。
 
 /** Agent 工具引用 */
 export interface ToolRef {
@@ -77,37 +76,43 @@ export interface AgentDefinition {
   taskDriven?: boolean;
 }
 
-/** Agent 在 workspace 中的实例化（角色与父子关系存这里，不存 definition） */
-export interface AgentAssignment {
+/**
+ * Agent 在 workspace 中的成员关系（v25：取代 v1.3 的 AgentAssignment——
+ * 去编排，无 role/parentInstanceId/enabled；同 ws 同 def 唯一）。
+ */
+export interface WorkspaceAgentMember {
   instanceId: string;
   workspaceId: string;
   agentDefinitionId: string;
   agentUserId: string;
-  enabled: boolean;
-  createdAt: string;
-
-  // === v1.3 新增（migration v12） ===
-  /** 角色：standalone（独立）/ main（可调度子）/ sub（挂在某 main 下） */
-  role: AgentRole;
-  /** 父 assignment 的 instanceId（仅 role='sub' 时有值；同 workspace 内） */
-  parentInstanceId: string | null;
   /** 有无 API key override（实际 key 在 keychain agent.<instanceId>.api_key_override） */
   hasApiKeyOverride: boolean;
-
-  // === v2 修复（Task 1）：用户最近运行意图 ===
   /**
-   * 用户最近运行意图——"agent 在线"的唯一权威源（v2 修复）。
+   * 用户最近运行意图——"agent 在线"的唯一权威源。
    *  - true  = 用户启动过（在线）
    *  - false = 用户主动停止或从未启动（离线）
-   * DB 列 last_running（INTEGER NOT NULL DEFAULT 1），rowToAssignment 映射为 boolean。
    */
   lastRunning: boolean;
+  createdAt: string;
 }
 
-/** Builtin YAML 的角色/platform 建议（不进 DB，仅 UI 默认值） */
+/** 过渡别名（Task 3-5 逐步消除引用，Task 15 删除） */
+export type AgentAssignment = WorkspaceAgentMember;
+
+/** 团队（ws 级，spec §3.2；leader 必须同时在 members 内，建团/换 leader 同事务保证） */
+export interface Team {
+  id: string;
+  workspaceId: string;
+  name: string;
+  iconEmoji: string;
+  leaderInstanceId: string;
+  members: WorkspaceAgentMember[];
+  createdAt: string;
+}
+
+/** Builtin YAML 的 platform 建议（不进 DB，仅 UI 默认值；v25 起无角色建议） */
 export interface BuiltinSuggestion {
-  role: AgentRole;
-  /** 建议的父 def ID（仅 role='sub' 时有意义；UI 据此预填 parent 下拉） */
+  /** 建议的父 def ID（仅历史编排用；v25 去编排后仅作 UI 过渡展示） */
   suggestedParentDefId?: string;
   /** builtin YAML 的 platform 信息；UI 据此在 provider 下拉预选匹配项 */
   suggestedPlatform?: 'openai' | 'anthropic';

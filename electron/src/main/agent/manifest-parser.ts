@@ -12,7 +12,6 @@ import { load } from 'js-yaml';
 import { randomUUID } from 'node:crypto';
 import type {
   AgentDefinition,
-  AgentRole,
   BuiltinSuggestion,
   McpRef,
   SkillRef,
@@ -77,9 +76,6 @@ export function parseAgentManifestWithSuggestion(yamlContent: string): ParsedMan
   const decl = spec.declarative!;
   const model = decl.model!;
 
-  // v1.3：type/parent 仅作为建议字段（不进 DB）
-  const type = (spec.type as AgentRole) ?? 'standalone';
-
   const def: AgentDefinition = {
     id: randomUUID(),
     name: raw.metadata!.name!,
@@ -102,8 +98,8 @@ export function parseAgentManifestWithSuggestion(yamlContent: string): ParsedMan
     modelName: model.model!,
   };
 
+  // v25：去编排——suggestion 不再携带角色建议（type 仅向后兼容可写，不消费）
   const suggestion: BuiltinSuggestion = {
-    role: type,
     suggestedParentDefId: spec.parentAgentId,
     suggestedPlatform: model.provider as 'openai' | 'anthropic',
   };

@@ -15,7 +15,7 @@ import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import { getGlobalSettings } from '../settings/crud';
 import { getProvider } from './provider-crud';
-import type { AgentDefinition, AgentAssignment, AgentRole, ToolRef, McpRef, SkillRef } from './types';
+import type { AgentDefinition, AgentAssignment, ToolRef, McpRef, SkillRef } from './types';
 
 /** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
 function slugify(input: string): string {
@@ -139,19 +139,15 @@ interface AgentDefRow {
   task_driven: number;
 }
 
-/** agent_assignments 行的弱类型映射（v1.3 schema） */
-interface AgentAssignmentRow {
+/** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled） */
+interface WorkspaceMemberRow {
   instance_id: string;
   workspace_id: string;
   agent_definition_id: string;
   agent_user_id: string;
-  enabled: number;
-  created_at: string;
-  role: string;
-  parent_instance_id: string | null;
-  has_api_key_override: number;
-  /** v1.5.8 DB 列；v2 修复补映射 */
+  api_key_override: number;
   last_running: number;
+  created_at: string;
 }
 
 /** 将 DB 行（snake_case + JSON 字符串）转换为强类型 AgentDefinition */
@@ -177,19 +173,16 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
   };
 }
 
-/** 将 DB 行转换为强类型 AgentAssignment */
-function rowToAssignment(row: AgentAssignmentRow): AgentAssignment {
+/** 将 DB 行转换为强类型 WorkspaceAgentMember */
+function rowToMember(row: WorkspaceMemberRow): AgentAssignment {
   return {
     instanceId: row.instance_id,
     workspaceId: row.workspace_id,
     agentDefinitionId: row.agent_definition_id,
     agentUserId: row.agent_user_id,
-    enabled: row.enabled === 1,
-    createdAt: row.created_at,
-    role: row.role as AgentRole,
-    parentInstanceId: row.parent_instance_id,
-    hasApiKeyOverride: row.has_api_key_override === 1,
+    hasApiKeyOverride: row.api_key_override === 1,
     lastRunning: row.last_running === 1,
+    createdAt: row.created_at,
   };
 }
 
@@ -253,83 +246,33 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
 }
 
 /**
- * 把某个 agent 定义分配到指定 workspace，绑定 bot 账号，写 role + parent_instance_id。
- *
- * v1.3：角色和父子关系在 assignment 级。校验：
- *  - role='sub' 必须传 parentInstanceId（同 ws 的 main assignment）
- *  - role!='sub' 不能传 parentInstanceId（强制 NULL）
+ * 把某个 agent 定义加入指定 workspace（v25：成员制——无 role/parent 概念，
+ * 同 ws 同 def 唯一，重复添加由 UNIQUE 索引约束报错）。
  */
 export function assignAgentToWorkspace(
   workspaceId: string,
   agentDefinitionId: string,
   agentUserId: string,
-  role: AgentRole,
-  parentInstanceId: string | null = null,
 ): AgentAssignment {
-  // 校验：role='sub' 必须有 parent
-  if (role === 'sub' && !parentInstanceId) {
-    throw new Error("role='sub' 必须指定 parentInstanceId");
-  }
-  // 校验：role!='sub' 时 parent 必须为 null
-  if (role !== 'sub' && parentInstanceId !== null) {
-    throw new Error(`role='${role}' 不可有 parentInstanceId`);
-  }
-
   const instanceId = randomUUID();
   const db = getDb();
   db.prepare(
-    `INSERT INTO agent_assignments
-      (instance_id, workspace_id, agent_definition_id, agent_user_id, role, parent_instance_id)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(instanceId, workspaceId, agentDefinitionId, agentUserId, role, parentInstanceId);
+    `INSERT INTO workspace_agent_members
+      (instance_id, workspace_id, agent_definition_id, agent_user_id)
+     VALUES (?, ?, ?, ?)`,
+  ).run(instanceId, workspaceId, agentDefinitionId, agentUserId);
 
   const row = db
-    .prepare('SELECT * FROM agent_assignments WHERE instance_id = ?')
-    .get(instanceId) as AgentAssignmentRow;
-  logger.info('Agent 已分配到 workspace', {
-    workspaceId, agentDefinitionId, agentUserId, role,
+    .prepare('SELECT * FROM workspace_agent_members WHERE instance_id = ?')
+    .get(instanceId) as WorkspaceMemberRow;
+  logger.info('Agent 已加入 workspace', {
+    workspaceId, agentDefinitionId, agentUserId,
   });
-  return rowToAssignment(row);
-}
-
-/** 修改现有 assignment 的角色/父。校验循环引用；UPDATE 不停止 runtime（IPC 层负责）。
- *  role!='sub' 时强制 parentInstanceId=NULL（即使传值也清空）。
- */
-export function updateAssignmentRole(
-  instanceId: string,
-  role: AgentRole,
-  parentInstanceId: string | null = null,
-): void {
-  if (role === 'sub' && !parentInstanceId) {
-    throw new Error("role='sub' 必须指定 parentInstanceId");
-  }
-  // role!='sub' 时强制 parent=NULL（无视传入值）
-  const effectiveParent = role === 'sub' ? parentInstanceId : null;
-
-  // 校验循环引用：parent 链中不能包含自己
-  if (effectiveParent) {
-    const visited = new Set<string>();
-    let cur: string | null = effectiveParent;
-    while (cur) {
-      if (cur === instanceId) {
-        throw new Error('循环引用：parent 链中包含自己');
-      }
-      if (visited.has(cur)) break; // 防御性，避免极端情况下死循环
-      visited.add(cur);
-      const row = getDb()
-        .prepare('SELECT parent_instance_id FROM agent_assignments WHERE instance_id = ?')
-        .get(cur) as { parent_instance_id: string | null } | undefined;
-      cur = row?.parent_instance_id ?? null;
-    }
-  }
-
-  getDb()
-    .prepare('UPDATE agent_assignments SET role = ?, parent_instance_id = ? WHERE instance_id = ?')
-    .run(role, effectiveParent, instanceId);
+  return rowToMember(row);
 }
 
 /**
- * 设置/清除 assignment 的 API key override。
+ * 设置/清除成员的 API key override。
  *  - 非空 apiKey：写入 keychain 'agent.<instanceId>.api_key_override' + DB 标志=1
  *  - null：删除 keychain + DB 标志=0（回退到供应商默认 key）
  */
@@ -341,35 +284,19 @@ export async function updateAssignmentApiKey(
   const db = getDb();
   if (apiKey === null) {
     await deleteSecret(key);
-    db.prepare('UPDATE agent_assignments SET has_api_key_override = 0 WHERE instance_id = ?')
+    db.prepare('UPDATE workspace_agent_members SET api_key_override = 0 WHERE instance_id = ?')
       .run(instanceId);
   } else {
     await setSecret(key, apiKey);
-    db.prepare('UPDATE agent_assignments SET has_api_key_override = 1 WHERE instance_id = ?')
+    db.prepare('UPDATE workspace_agent_members SET api_key_override = 1 WHERE instance_id = ?')
       .run(instanceId);
   }
 }
 
-/** 列出某 workspace 内、parent_instance_id 等于指定值的所有 assignment（查 subs） */
-export function listSubAssignments(
-  workspaceId: string,
-  parentInstanceId: string,
-): AgentAssignment[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT * FROM agent_assignments
-       WHERE workspace_id = ? AND parent_instance_id = ?
-       ORDER BY created_at ASC`,
-    )
-    .all(workspaceId, parentInstanceId) as AgentAssignmentRow[];
-  return rows.map(rowToAssignment);
-}
-
 /**
  * 删除自定义 agent 定义。builtin 不可删。
- * 级联：停止全部引用此 def 的运行中实例 → 让 bot 离开房间（IPC 层负责）→
- * 清除 API key override（keychain）→ 删 assignment → 删 def 行。
+ * 级联：停止全部引用此 def 的运行中实例 →
+ * 清除 API key override（keychain）→ 删成员行（FK 级联清 session_members/team_members）→ 删 def 行。
  */
 export async function deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
   const def = getAgentDefinition(defId);
@@ -378,8 +305,8 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
 
   const db = getDb();
   const rows = db
-    .prepare('SELECT * FROM agent_assignments WHERE agent_definition_id = ?')
-    .all(defId) as AgentAssignmentRow[];
+    .prepare('SELECT * FROM workspace_agent_members WHERE agent_definition_id = ?')
+    .all(defId) as WorkspaceMemberRow[];
 
   const stopped: string[] = [];
   for (const row of rows) {
@@ -388,10 +315,10 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
       stopped.push(row.instance_id);
     }
     // 清除 API key override
-    if (row.has_api_key_override === 1) {
+    if (row.api_key_override === 1) {
       await deleteSecret(`agent.${row.instance_id}.api_key_override`);
     }
-    db.prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run(row.instance_id);
+    db.prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run(row.instance_id);
   }
 
   db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
@@ -399,13 +326,13 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
   return { stoppedInstanceIds: stopped };
 }
 
-/** 列出某 workspace 下所有 agent 分配记录 */
+/** 列出某 workspace 下所有 agent 成员 */
 export function listAssignments(workspaceId: string): AgentAssignment[] {
   const db = getDb();
   const rows = db
-    .prepare('SELECT * FROM agent_assignments WHERE workspace_id = ?')
-    .all(workspaceId) as AgentAssignmentRow[];
-  return rows.map(rowToAssignment);
+    .prepare('SELECT * FROM workspace_agent_members WHERE workspace_id = ?')
+    .all(workspaceId) as WorkspaceMemberRow[];
+  return rows.map(rowToMember);
 }
 
 /** keychain 引用 key：agent.<instanceId>.llm_api_key（旧版兼容；v1.3 起优先用 api_key_override） */
@@ -461,11 +388,11 @@ export function updateAgentDefinition(input: {
   return getAgentDefinition(input.id)!;
 }
 
-/** 列出某定义的全部 assignment instanceId（调用方再按 isAgentRunning 过滤） */
+/** 列出某定义的全部成员 instanceId（调用方再按 isAgentRunning 过滤） */
 export function listRunningInstanceIdsByDefinition(definitionId: string): string[] {
   const db = getDb();
   const rows = db
-    .prepare('SELECT instance_id FROM agent_assignments WHERE agent_definition_id = ?')
+    .prepare('SELECT instance_id FROM workspace_agent_members WHERE agent_definition_id = ?')
     .all(definitionId) as { instance_id: string }[];
   return rows.map((r) => r.instance_id);
 }
