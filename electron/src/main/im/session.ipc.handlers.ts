@@ -48,6 +48,7 @@ export function registerSessionIpcHandlers(): void {
   });
 
   // 创建会话（事务写入成员；FK 不合法整笔回滚——见 session-ops.createSession）。
+  // handler 内显式映射，杜绝字段改名后结构化类型检查放过多余属性的漂移。
   ipcMain.handle(
     'session:create',
     async (
@@ -55,11 +56,16 @@ export function registerSessionIpcHandlers(): void {
       input: {
         workspaceId: string;
         title: string;
-        memberAssignmentIds?: string[];
+        memberInstanceIds?: string[];
         kind?: SessionRow['kind'];
       },
     ) => {
-      return createSession(input);
+      return createSession({
+        workspaceId: input.workspaceId,
+        title: input.title,
+        memberInstanceIds: input.memberInstanceIds,
+        kind: input.kind,
+      });
     },
   );
 
@@ -69,7 +75,8 @@ export function registerSessionIpcHandlers(): void {
     return { ok: true } as const;
   });
 
-  // 解散会话。团队会话（workspaces.team_session_id 命中）抛错，原样传播给 renderer。
+  // 解散会话。非保护会话级联清理成员；错误原样传播给 renderer
+  //（v25 过渡态：团队会话保护待 Task 6 按新会话模型重接，见 session-ops）。
   ipcMain.handle('session:delete', async (_evt, sessionId: string) => {
     deleteSessionOp(sessionId);
     return { ok: true } as const;

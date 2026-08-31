@@ -182,10 +182,16 @@ describe('session:get handler', () => {
 });
 
 describe('session:create handler', () => {
-  it('委托 session-ops.createSession(input) 并原样回传 SessionRow', async () => {
-    const input = { workspaceId: 'ws-1', title: '新会话', memberAssignmentIds: ['inst-1'] };
+  it('委托 session-ops.createSession（显式字段映射）并原样回传 SessionRow', async () => {
+    const input = { workspaceId: 'ws-1', title: '新会话', memberInstanceIds: ['inst-1'] };
     const res = await ipcHandlers.get('session:create')!({} as never, input);
-    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith(input);
+    // 契约锁：改名后多余属性（如旧 memberAssignmentIds）不得经结构化类型混入
+    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      title: '新会话',
+      memberInstanceIds: ['inst-1'],
+      kind: undefined,
+    });
     expect(res).toEqual(sessionOpsMocks.createSession.mock.results[0]!.value);
   });
 });
