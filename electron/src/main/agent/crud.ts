@@ -139,8 +139,9 @@ interface AgentDefRow {
   task_driven: number;
 }
 
-/** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled） */
-interface WorkspaceMemberRow {
+/** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled）。
+ *  导出供 team.ts 复用——WorkspaceAgentMember 行映射单点维护，防双映射漂移。 */
+export interface WorkspaceMemberRow {
   instance_id: string;
   workspace_id: string;
   agent_definition_id: string;
@@ -173,8 +174,8 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
   };
 }
 
-/** 将 DB 行转换为强类型 WorkspaceAgentMember */
-function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
+/** 将 DB 行转换为强类型 WorkspaceAgentMember（team.ts 复用，见 WorkspaceMemberRow 导出说明） */
+export function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
   return {
     instanceId: row.instance_id,
     workspaceId: row.workspace_id,
