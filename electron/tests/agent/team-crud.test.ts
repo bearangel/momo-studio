@@ -169,6 +169,12 @@ describe('createTeam — 建团事务与校验', () => {
     expect(teamRowCount()).toBe(0);
   });
 
+  it('团队名称空串/纯空格：throw 且零写入', () => {
+    expect(() => createTeam('ws1', '', '👥', [aliceId, bobId], aliceId)).toThrow(/名称/);
+    expect(() => createTeam('ws1', '   ', '👥', [aliceId, bobId], aliceId)).toThrow(/名称/);
+    expect(teamRowCount()).toBe(0);
+  });
+
   it('重复成员 id 先去重：[a, a, b] 建团成功且 team_members 恰 2 行', () => {
     const team = createTeam('ws1', '去重团', '🎯', [aliceId, aliceId, bobId], bobId);
     expect(team.members).toHaveLength(2);
@@ -193,6 +199,13 @@ describe('renameTeam — 改名与图标', () => {
 
   it('团队不存在：throw', () => {
     expect(() => renameTeam('nonexistent-team', 'x')).toThrow(/不存在/);
+  });
+
+  it('名称空串/纯空格：throw 且原名不变', () => {
+    rawInsertTeam('team-r2', 'ws1', '原名', aliceId, [aliceId, bobId]);
+    expect(() => renameTeam('team-r2', '')).toThrow(/名称/);
+    expect(() => renameTeam('team-r2', '  ')).toThrow(/名称/);
+    expect(getTeamRow('team-r2')!.name).toBe('原名');
   });
 });
 
