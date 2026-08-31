@@ -145,12 +145,22 @@ describe('createTeam — 建团事务与校验', () => {
     expect(memberIdsOf(team.id).sort()).toEqual([aliceId, bobId].sort());
   });
 
-  it('成员 FK 不存在：整笔回滚——teams / team_members 零残留', () => {
+  it('成员含不存在的 instanceId：整笔回滚——teams / team_members 零残留', () => {
     expect(() =>
       createTeam('ws1', '幽灵团', '👻', [aliceId, 'nonexistent-inst'], aliceId),
     ).toThrow(/不存在/);
 
-    // 事务原子性：不允许留下半笔（teams 行先插、team_members FK 失败也必须整体回滚）
+    // 原子性契约：常规路径是前置校验先 throw（零写入）；事务内 FK 约束兜底
+    // 「校验后、插入前成员被并发删除」的跨进程窗口——任何路径都不允许留下半笔
+    expect(teamRowCount()).toBe(0);
+    expect(teamMemberRowCount()).toBe(0);
+  });
+
+  it('成员跨 workspace（ws2 成员入 ws1 团队）：throw 且零写入', () => {
+    // daveId 真实存在（ws2）——锁「不属于该工作空间」分支，区别于「不存在」分支
+    expect(() =>
+      createTeam('ws1', '串门团', '🚪', [aliceId, daveId], aliceId),
+    ).toThrow(/不属于/);
     expect(teamRowCount()).toBe(0);
     expect(teamMemberRowCount()).toBe(0);
   });
@@ -254,6 +264,13 @@ describe('addTeamMember — 加团队成员', () => {
     rawInsertTeam('team-m3', 'ws1', '小组', aliceId, [aliceId, bobId]);
     expect(() => addTeamMember('team-m3', 'ghost-inst')).toThrow(/不存在/);
     expect(memberIdsOf('team-m3')).toHaveLength(2);
+  });
+
+  it('跨 workspace 成员（ws2 成员加进 ws1 团队）：throw 且零写入', () => {
+    rawInsertTeam('team-m4', 'ws1', '小组', aliceId, [aliceId, bobId]);
+    // daveId 存在但属于 ws2——ws 归属校验必须拒绝，防团队与成员 workspace 不一致的脏数据
+    expect(() => addTeamMember('team-m4', daveId)).toThrow(/不属于/);
+    expect(memberIdsOf('team-m4')).toHaveLength(2);
   });
 
   it('团队不存在：throw', () => {

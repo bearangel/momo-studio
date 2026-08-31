@@ -9,6 +9,9 @@
 //
 // instanceId / teamId 均单点生成沿线透传：instanceId 由 addMember（crud.ts）
 // 生成，本模块只消费；teamId 在 createTeam 生成后由调用方传递。
+//
+// 失败语义分野：目标不存在——removeTeamMember / deleteTeam 幂等 no-op
+// （对齐 removeMember 先例）；renameTeam / setLeader / addTeamMember 显式 throw。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
@@ -156,18 +159,20 @@ export function setLeader(teamId: string, leaderInstanceId: string): void {
   logger.info('团队 leader 已切换', { teamId, leaderInstanceId });
 }
 
-/** 加团队成员。重复添加先检友好报错（PK 约束兜底并发窗口）。 */
+/** 加团队成员。成员须存在且属于团队所在 workspace（与 createTeam 同一 ws 一致性不变量）；
+ *  重复添加先检友好报错（PK 约束兜底并发窗口）。 */
 export function addTeamMember(teamId: string, instanceId: string): void {
   const db = getDb();
-  if (!getTeamRow(teamId)) throw new Error(`团队不存在: ${teamId}`);
+  const team = getTeamRow(teamId);
+  if (!team) throw new Error(`团队不存在: ${teamId}`);
   const dup = db
     .prepare('SELECT 1 FROM team_members WHERE team_id = ? AND instance_id = ?')
     .get(teamId, instanceId);
   if (dup) throw new Error('该成员已在团队中');
   const member = db
-    .prepare('SELECT 1 FROM workspace_agent_members WHERE instance_id = ?')
-    .get(instanceId);
-  if (!member) throw new Error(`成员不存在: ${instanceId}`);
+    .prepare('SELECT 1 FROM workspace_agent_members WHERE instance_id = ? AND workspace_id = ?')
+    .get(instanceId, team.workspace_id);
+  if (!member) throw new Error(`成员不存在或不属于该工作空间: ${instanceId}`);
   db.prepare('INSERT INTO team_members (team_id, instance_id, added_at) VALUES (?, ?, ?)').run(
     teamId,
     instanceId,
