@@ -22,7 +22,7 @@ import {
 } from './allocation';
 import { isAgentRunning } from '../agent/runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from '../agent/runtime-registry';
-import { getAgentDefinition, listAssignments } from '../agent/crud';
+import { getAgentDefinition, listMembers } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
 import type { CreateWorkspaceInput } from './types';
 
@@ -105,7 +105,7 @@ async function restartDefaultAgentInstance(
   const ws = getWorkspace(workspaceId);
   if (!ws || !isAgentRunning(instanceId)) return;
 
-  const member = listAssignments(workspaceId).find((a) => a.instanceId === instanceId);
+  const member = listMembers(workspaceId).find((a) => a.instanceId === instanceId);
   if (!member) return;
 
   const def = getAgentDefinition(member.agentDefinitionId);

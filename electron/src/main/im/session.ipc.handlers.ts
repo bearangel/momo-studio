@@ -30,7 +30,7 @@ import {
   type MessageEventRow,
 } from '../storage/messages/events-repo';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
-import { listAssignments, getAgentDefinition } from '../agent/crud';
+import { listMembers, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
 
 /** 注册全部 session: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
@@ -117,7 +117,7 @@ export function registerSessionIpcHandlers(): void {
       //    两套 sender 标识都能命中。
       const botNameMap = new Map<string, string>();
       for (const ws of listWorkspaces()) {
-        for (const a of listAssignments(ws.id)) {
+        for (const a of listMembers(ws.id)) {
           const def = getAgentDefinition(a.agentDefinitionId);
           if (def) {
             botNameMap.set(a.instanceId, def.name);

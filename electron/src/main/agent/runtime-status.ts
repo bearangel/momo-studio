@@ -1,7 +1,7 @@
 // electron/src/main/agent/runtime-status.ts
 //
 // agent 运行状态查询（Task 13 从 runtime-manager.ts 迁出——v1 双轨删除后
-// 仅剩 DB 语义）。查询 agent_assignments.last_running 字段：用户启动/停止意图
+// 仅剩 DB 语义）。查询 workspace_agent_members.last_running 字段：用户启动/停止意图
 // （startAgentRuntime 写 1，stopAgentRuntime 写 0），UI 据此显示在线/离线。
 
 import { getDb } from '../storage/db';
@@ -13,7 +13,7 @@ import { getDb } from '../storage/db';
  */
 export function isAgentRunning(instanceId: string): boolean {
   const row = getDb()
-    .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+    .prepare('SELECT last_running FROM workspace_agent_members WHERE instance_id = ?')
     .get(instanceId) as { last_running: number } | undefined;
   return row?.last_running === 1;
 }

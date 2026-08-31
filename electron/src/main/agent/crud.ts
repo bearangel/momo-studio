@@ -15,7 +15,7 @@ import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import { getGlobalSettings } from '../settings/crud';
 import { getProvider } from './provider-crud';
-import type { AgentDefinition, AgentAssignment, ToolRef, McpRef, SkillRef } from './types';
+import type { AgentDefinition, WorkspaceAgentMember, ToolRef, McpRef, SkillRef } from './types';
 
 /** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
 function slugify(input: string): string {
@@ -174,7 +174,7 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
 }
 
 /** 将 DB 行转换为强类型 WorkspaceAgentMember */
-function rowToMember(row: WorkspaceMemberRow): AgentAssignment {
+function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
   return {
     instanceId: row.instance_id,
     workspaceId: row.workspace_id,
@@ -246,21 +246,48 @@ export function getAgentDefinition(id: string): AgentDefinition | null {
 }
 
 /**
- * 把某个 agent 定义加入指定 workspace（v25：成员制——无 role/parent 概念，
- * 同 ws 同 def 唯一，重复添加由 UNIQUE 索引约束报错）。
+ * removeMember 结果（spec §4.1）：
+ *  - `{ ok: true }`：已删除（或本就不存在——幂等）
+ *  - `{ ok: false, blockedTeams }`：命中 leader 守卫，blockedTeams 为该成员担任
+ *    leader 的团队名列表（供 UI 提示「先换 leader 或解散团队」）
  */
-export function assignAgentToWorkspace(
+export type RemoveMemberResult = { ok: true } | { ok: false; blockedTeams: string[] };
+
+/**
+ * 把某个 agent 定义加入指定 workspace（v25 成员制，spec §4.1）。
+ * 同 ws 同 def 唯一（idx_wam_unique）——重复添加 throw（先检友好报错，
+ * UNIQUE 索引兜底并发窗口）。
+ * apiKeyOverride 非空时同步写 keychain + DB 标志（复用 updateAssignmentApiKey）。
+ *
+ * 注：brief 接口原文为同步签名，但 keychain setSecret 仅异步实现（keytar），
+ * 故为 async——见 task-3-report 偏离记录。
+ */
+export async function addMember(
   workspaceId: string,
   agentDefinitionId: string,
   agentUserId: string,
-): AgentAssignment {
-  const instanceId = randomUUID();
+  apiKeyOverride?: string,
+): Promise<WorkspaceAgentMember> {
   const db = getDb();
+  const dup = db
+    .prepare(
+      'SELECT instance_id FROM workspace_agent_members WHERE workspace_id = ? AND agent_definition_id = ?',
+    )
+    .get(workspaceId, agentDefinitionId);
+  if (dup) {
+    throw new Error(`该 agent 定义已加入 workspace ${workspaceId}，不可重复添加`);
+  }
+
+  const instanceId = randomUUID();
   db.prepare(
     `INSERT INTO workspace_agent_members
       (instance_id, workspace_id, agent_definition_id, agent_user_id)
      VALUES (?, ?, ?, ?)`,
   ).run(instanceId, workspaceId, agentDefinitionId, agentUserId);
+
+  if (apiKeyOverride) {
+    await updateAssignmentApiKey(instanceId, apiKeyOverride);
+  }
 
   const row = db
     .prepare('SELECT * FROM workspace_agent_members WHERE instance_id = ?')
@@ -269,6 +296,40 @@ export function assignAgentToWorkspace(
     workspaceId, agentDefinitionId, agentUserId,
   });
   return rowToMember(row);
+}
+
+/**
+ * 移除 workspace 成员（spec §4.1 leader 守卫）：
+ *  1. 是任一团队的 leader → 拒绝，返回 blockedTeams（团队名列表），零破坏
+ *  2. 非 leader → 单事务：置空引用它的 default_agent_instance_id
+ *     （该 FK 无 ON DELETE 动作，不先置空则 DELETE 直接 FK 中止）
+ *     + 删成员行（session_members / team_members 由 FK ON DELETE CASCADE 级联清理，
+ *     已建会话快照的消息不受影响）
+ * 幂等：不存在的 instanceId 返回 ok。
+ */
+export function removeMember(instanceId: string): RemoveMemberResult {
+  const db = getDb();
+
+  // leader 守卫（brief 指定 SQL）：teams.leader_instance_id 有 ON DELETE CASCADE，
+  // 不拦截的话删成员会连带解散整个团队——必须显式拒绝
+  const blockedTeams = db
+    .prepare('SELECT t.name FROM teams t WHERE t.leader_instance_id = ?')
+    .all(instanceId) as { name: string }[];
+  if (blockedTeams.length > 0) {
+    logger.warn('移除成员被拒：该 agent 是团队 leader', {
+      instanceId,
+      blockedTeams: blockedTeams.map((t) => t.name),
+    });
+    return { ok: false, blockedTeams: blockedTeams.map((t) => t.name) };
+  }
+
+  db.transaction(() => {
+    db.prepare(
+      'UPDATE workspaces SET default_agent_instance_id = NULL WHERE default_agent_instance_id = ?',
+    ).run(instanceId);
+    db.prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run(instanceId);
+  })();
+  return { ok: true };
 }
 
 /**
@@ -327,7 +388,7 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
 }
 
 /** 列出某 workspace 下所有 agent 成员 */
-export function listAssignments(workspaceId: string): AgentAssignment[] {
+export function listMembers(workspaceId: string): WorkspaceAgentMember[] {
   const db = getDb();
   const rows = db
     .prepare('SELECT * FROM workspace_agent_members WHERE workspace_id = ?')

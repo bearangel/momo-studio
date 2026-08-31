@@ -54,7 +54,7 @@ const {
       formatRoomToMarkdown: vi.fn(() => '# 导出内容'),
     },
     agentCrudMocks: {
-      listAssignments: vi.fn(() => []),
+      listMembers: vi.fn(() => []),
       getAgentDefinition: vi.fn(() => null),
     },
     workspaceCrudMocks: {
@@ -286,7 +286,7 @@ describe('session:exportMessages handler', () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
     messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
     workspaceCrudMocks.listWorkspaces.mockReturnValueOnce([{ id: 'ws-1' }]);
-    agentCrudMocks.listAssignments.mockReturnValueOnce([
+    agentCrudMocks.listMembers.mockReturnValueOnce([
       { instanceId: 'inst-1', agentDefinitionId: 'def-1', agentUserId: '@bot.helper:home' },
     ]);
     agentCrudMocks.getAgentDefinition.mockReturnValueOnce({ name: '小助手' });

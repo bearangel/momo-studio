@@ -22,18 +22,19 @@ import {
   saveAgentDefinition,
   listAgentDefinitions,
   getAgentDefinition,
-  assignAgentToWorkspace,
+  addMember,
   generateAgentUserId,
-  listAssignments,
+  listMembers,
+  removeMember,
+  type RemoveMemberResult,
   updateAssignmentApiKey as crudUpdateAssignmentApiKey,
   deleteDefinition as crudDeleteDefinition,
   updateAgentDefinition,
   createCustomDef,
   stopRunningInstancesByDefinition,
 } from './crud';
-import { getWorkspace, setWorkspaceDefaultAgent } from '../workspace/crud';
+import { getWorkspace } from '../workspace/crud';
 import { deleteSecret } from '../storage/keychain';
-import { getDb } from '../storage/db';
 import { isAgentRunning } from './runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
@@ -55,33 +56,21 @@ export interface AddToWorkspaceInput {
 }
 
 /**
- * 移除 agent 成员：停止运行 → 清理 keychain override →
- * 清空悬空 default agent 引用 → 删成员行（session_members/team_members 由 FK CASCADE 清理）。
- * v25：无 role/parent 概念，main/sub 级联与父重启逻辑随去编排退役。
+ * 移除 agent 成员（v25 spec §4.1）：
+ *  1. removeMember 内 leader 守卫 + 事务删除——blocked 时直接返回，零副作用
+ *  2. 已删行后收尾：销毁 runtime（内存态；DB last_running 写已无行，天然 no-op）+
+ *     清 keychain override（session_members/team_members 由 FK CASCADE 清理）
+ * 返回结构化结果供 renderer 提示 blocked 原因（过渡期通道名不变，Task 11 更名）。
  */
-export async function removeAgentAssignment(instanceId: string): Promise<void> {
-  await stopAgentRuntime(instanceId);
-  const row = getDb()
-    .prepare('SELECT agent_user_id, workspace_id FROM workspace_agent_members WHERE instance_id = ?')
-    .get(instanceId) as
-      | { agent_user_id?: string; workspace_id?: string }
-      | undefined;
-  if (!row) return;
-  const workspaceId = row.workspace_id;
-
-  // 清除 API key override（如有）
-  await deleteSecret(`agent.${instanceId}.api_key_override`).catch(() => {});
-
-  // 被删实例若是默认会话 agent，清空引用
-  if (workspaceId) {
-    const ws = getWorkspace(workspaceId);
-    if (ws?.defaultAgentInstanceId === instanceId) {
-      setWorkspaceDefaultAgent(workspaceId, null);
-    }
+export async function removeAgentAssignment(instanceId: string): Promise<RemoveMemberResult> {
+  const result = removeMember(instanceId);
+  if (!result.ok) {
+    return result;
   }
-
-  getDb().prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run(instanceId);
-  logger.info('Agent 成员已移除', { instanceId, workspaceId });
+  await stopAgentRuntime(instanceId);
+  await deleteSecret(`agent.${instanceId}.api_key_override`).catch(() => {});
+  logger.info('Agent 成员已移除', { instanceId });
+  return result;
 }
 
 /** 注册全部 agent: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
@@ -101,14 +90,11 @@ export function registerAgentHandlers(): void {
       const workspace = getWorkspace(workspaceId);
       if (!workspace) throw new Error(`未找到 workspace: ${workspaceId}`);
 
-      // v2（Task 10）：本地身份生成，取代 bot 注册 + 房间邀请
-      const member = assignAgentToWorkspace(
-        workspaceId, agentDefinitionId, generateAgentUserId(def.slug),
+      // v2（Task 10）：本地身份生成，取代 bot 注册 + 房间邀请；
+      // apiKeyOverride 一并由 addMember 落 keychain + DB 标志
+      const member = await addMember(
+        workspaceId, agentDefinitionId, generateAgentUserId(def.slug), apiKeyOverride,
       );
-
-      if (apiKeyOverride) {
-        await crudUpdateAssignmentApiKey(member.instanceId, apiKeyOverride);
-      }
 
       const apiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
       await startAgentRuntime(
@@ -238,12 +224,12 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'agent:assign',
     async (_evt, workspaceId: string, agentDefinitionId: string, agentUserId: string) => {
-      return assignAgentToWorkspace(workspaceId, agentDefinitionId, agentUserId);
+      return addMember(workspaceId, agentDefinitionId, agentUserId);
     },
   );
 
   ipcMain.handle('agent:listAssignments', async (_evt, workspaceId: string) => {
-    return listAssignments(workspaceId);
+    return listMembers(workspaceId);
   });
 
   ipcMain.handle('agent:stop', async (_evt, instanceId: string) => {
@@ -252,8 +238,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle('agent:removeAssignment', async (_evt, instanceId: string) => {
-    await removeAgentAssignment(instanceId);
-    return { ok: true };
+    return removeAgentAssignment(instanceId);
   });
 
   ipcMain.handle('agent:isRunning', async (_evt, instanceId: string) => {

@@ -16,7 +16,7 @@
 // 本函数返回 void，调用方无需拿到 RouterService 实例。
 
 import { logger } from '../logger';
-import { listAssignments, getAgentDefinition } from './crud';
+import { listMembers, getAgentDefinition } from './crud';
 import { listWorkspaces } from '../workspace/crud';
 import {
   agentRunners,
@@ -38,7 +38,7 @@ import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
  */
 export async function initTaskDrivenRuntime(): Promise<void> {
   for (const ws of listWorkspaces()) {
-    for (const member of listAssignments(ws.id)) {
+    for (const member of listMembers(ws.id)) {
       if (agentRunners.has(member.instanceId)) continue;
       if (!member.lastRunning) continue; // ← 仅恢复用户意图为「在线」的 agent
       const def = getAgentDefinition(member.agentDefinitionId);

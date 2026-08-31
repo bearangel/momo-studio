@@ -147,9 +147,9 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
 
   // 与 stopAgentRuntime 对称——写 last_running=1。否则 stop（写 0）→ start
   // 循环后 DB 仍为 0，renderer reload 看到 lastRunning=false，UI 显示离线
-  // 而 runner 实际在运行。
+  // 而 runner 实际在运行。（v25：agent_assignments → workspace_agent_members）
   getDb()
-    .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
+    .prepare('UPDATE workspace_agent_members SET last_running = 1 WHERE instance_id = ?')
     .run(instanceId);
 
   // v2 修复（final review M1）：补齐 init/lazy 路径不对称——init 路径也要
@@ -236,7 +236,7 @@ export function destroyTaskDrivenRuntime(instanceId: string): void {
 export async function stopAgentRuntime(instanceId: string): Promise<void> {
   destroyTaskDrivenRuntime(instanceId);
   getDb()
-    .prepare('UPDATE agent_assignments SET last_running = 0 WHERE instance_id = ?')
+    .prepare('UPDATE workspace_agent_members SET last_running = 0 WHERE instance_id = ?')
     .run(instanceId);
   logger.info('stopAgentRuntime 完成（销毁 runtime + DB 同步）', { instanceId });
 }
