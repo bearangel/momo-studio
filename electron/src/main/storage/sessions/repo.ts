@@ -40,14 +40,23 @@ function rowToCamel(r: SqlRow): SessionRow {
   };
 }
 
-export function insertSession(input: { workspaceId: string; title: string; kind?: SessionRow['kind'] }): SessionRow {
+/**
+ * 写入 sessions 行。titleAuto 缺省 false（用户/系统命名）；快速/协作会话的
+ * 占位标题路径传 true（spec D4：title_auto=1 才允许命名服务改名）。
+ */
+export function insertSession(input: {
+  workspaceId: string;
+  title: string;
+  kind?: SessionRow['kind'];
+  titleAuto?: boolean;
+}): SessionRow {
   const db = getDb();
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO sessions (id, workspace_id, title, kind, settings_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-  ).run(id, input.workspaceId, input.title, input.kind ?? 'chat', now, now);
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+  ).run(id, input.workspaceId, input.title, input.titleAuto ? 1 : 0, input.kind ?? 'chat', now, now);
   return getSession(id)!;
 }
 

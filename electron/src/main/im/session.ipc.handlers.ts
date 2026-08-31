@@ -5,9 +5,9 @@
 // 消息写入（send）、历史读取（getMessages/loadOlder）与导出（exportMessages）。
 // 全部转调 session-ops / session-service / team 服务——本层不含业务逻辑。
 //
-// v25 过渡态（spec §4.4）：createQuick / createCollab 本 Task 接线到 createSession
-// 泛化形态作占位（Task 7 落真正双流程：title_auto / is_leader 快照标记），
-// 通道契约（名称/入参/错误码）自此锁定不变。
+// v25 Task 7：createQuick / createCollab 接入 session-ops 真双流程
+// （默认 agent 直达 / 团队快照 + is_leader + title_auto，spec §4.4）；
+// 通道契约（名称/入参/错误码）与 Task 6 锁定版保持不变。
 //
 // 推送通道（Task 12 起 im:message 反向桥已移除，全部发送方统一新通道）：
 //   - session:message             ← 用户/agent 消息行推送（session-service / p2p handleRemoteMessage）
@@ -17,11 +17,13 @@ import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
   getSessionsForWorkspace,
-  createSession,
+  createQuickSession,
+  createCollabSession,
   renameSession,
   deleteSessionOp,
   getSessionMembersInfo,
   type SessionSummary,
+  type CollabTarget,
 } from './session-ops';
 import { sendUserMessage } from './session-service';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
@@ -36,14 +38,7 @@ import {
 } from '../storage/messages/events-repo';
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
-import { listTeams } from '../agent/team';
-import { getWorkspace, listWorkspaces } from '../workspace/crud';
-
-/** 协作会话目标（spec §4.4）：单个 agent 或团队（快照展开） */
-type CollabTarget = { type: 'agent'; instanceId: string } | { type: 'team'; teamId: string };
-
-/** 快速会话占位标题（Task 7 命名服务接管后仍用同一占位，spec D4） */
-const PLACEHOLDER_TITLE = '新会话';
+import { listWorkspaces } from '../workspace/crud';
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
 function toSummary(row: SessionRow): SessionSummary {
@@ -72,55 +67,23 @@ export function registerSessionIpcHandlers(): void {
     return { session, members: getSessionMembersInfo(sessionId) };
   });
 
-  // 快速会话（spec §4.4）：读 workspace 默认 agent → 无则 reject（message 含
-  // NO_DEFAULT_AGENT，renderer 识别后弹一次性选择/引导）→ 有则单成员建会。
-  // v25 过渡态：占位实现走 createSession 泛化形态，Task 7 换 createQuickSession。
+  // 快速会话（spec §4.4）：session-ops 读 workspace 默认 agent 直达；
+  // 无默认 reject NoDefaultAgentError（message 含 NO_DEFAULT_AGENT，
+  // renderer 识别后弹一次性选择/引导）。
   ipcMain.handle('session:createQuick', async (_evt, workspaceId: string) => {
-    const ws = getWorkspace(workspaceId);
-    if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
-    if (!ws.defaultAgentInstanceId) {
-      throw new Error('NO_DEFAULT_AGENT');
-    }
-    const row = createSession({
-      workspaceId,
-      title: PLACEHOLDER_TITLE,
-      memberInstanceIds: [ws.defaultAgentInstanceId],
-      kind: 'chat',
-    });
+    const row = createQuickSession(workspaceId);
     logger.info('快速会话已创建', { sessionId: row.id, workspaceId });
     return toSummary(row);
   });
 
-  // 协作会话（spec §4.4）：单 agent 直建；团队目标展开当前成员快照。
-  // title 留空 → 占位标题（title_auto 标记由 Task 7 落地）。
-  // v25 过渡态：占位实现走 createSession 泛化形态，Task 7 换 createCollabSession。
+  // 协作会话（spec §4.4）：单 agent 直建；团队目标在 session-ops 展开当前成员
+  // 快照（leader 成员 is_leader=1）。title 留空 → 占位标题 + title_auto=1
+  // （Task 8 命名服务接管，spec D4）；用户命名 → title_auto=0。
   ipcMain.handle(
     'session:createCollab',
     async (_evt, workspaceId: string, title: string | undefined, target: CollabTarget) => {
-      const ws = getWorkspace(workspaceId);
-      if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
-
-      const effectiveTitle = title?.trim() ? title.trim() : PLACEHOLDER_TITLE;
-
-      if (target.type === 'agent') {
-        const row = createSession({
-          workspaceId,
-          title: effectiveTitle,
-          memberInstanceIds: [target.instanceId],
-          kind: 'chat',
-        });
-        return toSummary(row);
-      }
-
-      const team = listTeams(workspaceId).find((t) => t.id === target.teamId);
-      if (!team) throw new Error(`团队不存在: ${target.teamId}`);
-      if (team.members.length === 0) throw new Error(`团队 ${team.name} 无成员，无法创建会话`);
-      const row = createSession({
-        workspaceId,
-        title: effectiveTitle,
-        memberInstanceIds: team.members.map((m) => m.instanceId),
-        kind: 'chat',
-      });
+      const row = createCollabSession(workspaceId, title ?? null, target);
+      logger.info('协作会话已创建', { sessionId: row.id, workspaceId, targetType: target.type });
       return toSummary(row);
     },
   );

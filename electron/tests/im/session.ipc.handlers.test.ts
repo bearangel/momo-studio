@@ -1,9 +1,11 @@
 // electron/tests/im/session.ipc.handlers.test.ts
 //
 // 验证 session: 命名空间 IPC handler 的注册与委托（2.0.0 P1 Task 8；
-// v25 Task 6 通道面更换：泛化 session:create 退役 → createQuick / createCollab）。
+// v25 Task 6 通道面更换：泛化 session:create 退役 → createQuick / createCollab；
+// v25 Task 7：双流程逻辑下沉 session-ops，handler 收敛为纯委托）。
 // 模式：vi.mock('electron') 捕获 ipcMain.handle 注册表，断言通道注册 +
-// 转调 session-ops / session-service / team 服务，参数透传正确。
+// 转调 session-ops / session-service，参数透传正确。双流程行为（默认 agent /
+// 团队快照 / title_auto / is_leader）由 session-ops.test.ts 对真实 DB 锁定。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // 可变桩需 vi.hoisted 提前声明（vi.mock 工厂提升到 import 之前）
@@ -17,24 +19,25 @@ const {
   exporterMocks,
   agentCrudMocks,
   workspaceCrudMocks,
-  teamMocks,
 } = vi.hoisted(() => {
   const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
+  const newSessionRow = {
+    id: 'sess-new',
+    workspaceId: 'ws-1',
+    title: '新会话',
+    titleAuto: true,
+    kind: 'chat',
+    settingsJson: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastMessageAt: null,
+  };
   return {
     ipcHandlers,
     sessionOpsMocks: {
       getSessionsForWorkspace: vi.fn(() => []),
-      createSession: vi.fn(() => ({
-        id: 'sess-new',
-        workspaceId: 'ws-1',
-        title: '新会话',
-        titleAuto: true,
-        kind: 'chat',
-        settingsJson: null,
-        createdAt: 1,
-        updatedAt: 1,
-        lastMessageAt: null,
-      })),
+      createQuickSession: vi.fn(() => ({ ...newSessionRow })),
+      createCollabSession: vi.fn(() => ({ ...newSessionRow })),
       renameSession: vi.fn(() => undefined),
       deleteSessionOp: vi.fn(() => undefined),
       getSessionMembersInfo: vi.fn(() => []),
@@ -61,10 +64,6 @@ const {
     },
     workspaceCrudMocks: {
       listWorkspaces: vi.fn(() => []),
-      getWorkspace: vi.fn((): null => null),
-    },
-    teamMocks: {
-      listTeams: vi.fn(() => []),
     },
   };
 });
@@ -81,7 +80,15 @@ vi.mock('../../src/main/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock('../../src/main/im/session-ops', () => sessionOpsMocks);
+// session-ops 整体打桩，但 NoDefaultAgentError 用真实类（错误形状保真——
+// handler 错误传播测试抛真类，同时锁「op 模块导出该类」契约）
+vi.mock('../../src/main/im/session-ops', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/im/session-ops')>();
+  return {
+    ...sessionOpsMocks,
+    NoDefaultAgentError: actual.NoDefaultAgentError,
+  };
+});
 vi.mock('../../src/main/im/session-service', () => sessionServiceMocks);
 vi.mock('../../src/main/storage/sessions/repo', () => sessionsRepoMocks);
 vi.mock('../../src/main/storage/messages/repo', () => messagesRepoMocks);
@@ -89,9 +96,9 @@ vi.mock('../../src/main/storage/messages/events-repo', () => eventsRepoMocks);
 vi.mock('../../src/main/im/markdown-exporter', () => exporterMocks);
 vi.mock('../../src/main/agent/crud', () => agentCrudMocks);
 vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
-vi.mock('../../src/main/agent/team', () => teamMocks);
 
 import { registerSessionIpcHandlers } from '../../src/main/im/session.ipc.handlers';
+import { NoDefaultAgentError } from '../../src/main/im/session-ops';
 
 /** 复用的 SessionRow fixture */
 const sessionRow = {
@@ -135,7 +142,6 @@ beforeEach(() => {
   Object.values(exporterMocks).forEach((m) => m.mockClear());
   Object.values(agentCrudMocks).forEach((m) => m.mockClear());
   Object.values(workspaceCrudMocks).forEach((m) => m.mockClear());
-  Object.values(teamMocks).forEach((m) => m.mockClear());
   registerSessionIpcHandlers();
 });
 
@@ -197,28 +203,17 @@ describe('session:get handler', () => {
 });
 
 describe('session:createQuick handler', () => {
-  it('有默认 agent：单成员建会（占位标题）并返回 SessionSummary', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({
-      id: 'ws-1',
-      defaultAgentInstanceId: 'inst-default',
-    });
-    sessionOpsMocks.createSession.mockReturnValueOnce({
+  it('委托 session-ops.createQuickSession(workspaceId) 并返回 SessionSummary', async () => {
+    sessionOpsMocks.createQuickSession.mockReturnValueOnce({
       ...sessionRow, id: 'sess-quick', title: '新会话', titleAuto: true, lastMessageAt: null,
     });
     sessionOpsMocks.getSessionMembersInfo.mockReturnValueOnce([
-      { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: false, lastRunning: true },
+      { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true },
     ]);
 
     const res = await ipcHandlers.get('session:createQuick')!({} as never, 'ws-1');
 
-    // 委托 createSession：占位标题 + 单成员（默认 agent）+ kind=chat
-    expect(workspaceCrudMocks.getWorkspace).toHaveBeenCalledWith('ws-1');
-    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith({
-      workspaceId: 'ws-1',
-      title: '新会话',
-      memberInstanceIds: ['inst-default'],
-      kind: 'chat',
-    });
+    expect(sessionOpsMocks.createQuickSession).toHaveBeenCalledWith('ws-1');
     // 返回 SessionSummary（id/titleAuto/members 齐全——renderer 直接消费）
     expect(res).toEqual({
       id: 'sess-quick',
@@ -228,106 +223,53 @@ describe('session:createQuick handler', () => {
       kind: 'chat',
       lastMessageAt: null,
       members: [
-        { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: false, lastRunning: true },
+        { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true },
       ],
     });
   });
 
-  it('无默认 agent：reject NO_DEFAULT_AGENT 且零建会副作用', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({
-      id: 'ws-1',
-      defaultAgentInstanceId: null,
+  it('无默认 agent：NoDefaultAgentError 原样传播（message 含 NO_DEFAULT_AGENT）', async () => {
+    sessionOpsMocks.createQuickSession.mockImplementationOnce(() => {
+      throw new NoDefaultAgentError('ws-1');
     });
     await expect(
       ipcHandlers.get('session:createQuick')!({} as never, 'ws-1'),
     ).rejects.toThrow('NO_DEFAULT_AGENT');
-    expect(sessionOpsMocks.createSession).not.toHaveBeenCalled();
-  });
-
-  it('workspace 不存在：抛明确错误', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce(null);
-    await expect(
-      ipcHandlers.get('session:createQuick')!({} as never, 'ws-404'),
-    ).rejects.toThrow('workspace');
   });
 });
 
 describe('session:createCollab handler', () => {
-  it('单 agent 目标：指定标题 + 单成员建会', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({
-      id: 'ws-1',
-      defaultAgentInstanceId: null,
-    });
-    sessionOpsMocks.createSession.mockReturnValueOnce({
+  it('委托 createCollabSession(workspaceId, title, target) 并返回 SessionSummary', async () => {
+    sessionOpsMocks.createCollabSession.mockReturnValueOnce({
       ...sessionRow, id: 'sess-collab', title: '规划评审', titleAuto: false, lastMessageAt: null,
     });
 
-    const res = await ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', '规划评审', {
-      type: 'agent',
-      instanceId: 'inst-7',
-    });
+    const target = { type: 'agent' as const, instanceId: 'inst-7' };
+    const res = await ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', '规划评审', target);
 
-    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith({
-      workspaceId: 'ws-1',
-      title: '规划评审',
-      memberInstanceIds: ['inst-7'],
-      kind: 'chat',
-    });
-    expect(res).toMatchObject({ id: 'sess-collab', title: '规划评审' });
+    expect(sessionOpsMocks.createCollabSession).toHaveBeenCalledWith('ws-1', '规划评审', target);
+    expect(res).toMatchObject({ id: 'sess-collab', title: '规划评审', titleAuto: false });
   });
 
-  it('标题留空：动态命名占位（新会话）', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({ id: 'ws-1' });
-    await ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', undefined, {
-      type: 'agent',
-      instanceId: 'inst-7',
-    });
-    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ title: '新会话' }),
-    );
+  it('title undefined 归一为 null 透传（留空/占位判定收敛在 session-ops）', async () => {
+    sessionOpsMocks.createCollabSession.mockReturnValueOnce({ ...sessionRow, lastMessageAt: null });
+    const target = { type: 'team' as const, teamId: 'team-1' };
+
+    await ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', undefined, target);
+
+    expect(sessionOpsMocks.createCollabSession).toHaveBeenCalledWith('ws-1', null, target);
   });
 
-  it('团队目标：展开团队当前成员快照写入', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({ id: 'ws-1' });
-    teamMocks.listTeams.mockReturnValueOnce([
-      {
-        id: 'team-1',
-        workspaceId: 'ws-1',
-        name: '攻坚组',
-        iconEmoji: '👥',
-        leaderInstanceId: 'inst-leader',
-        members: [
-          { instanceId: 'inst-leader' },
-          { instanceId: 'inst-a' },
-        ],
-        createdAt: '2026-09-01T00:00:00Z',
-      },
-    ]);
-
-    await ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', '协作', {
-      type: 'team',
-      teamId: 'team-1',
+  it('session-ops 错误（如团队不存在）原样传播，零兜底吞错', async () => {
+    sessionOpsMocks.createCollabSession.mockImplementationOnce(() => {
+      throw new Error('团队不存在: team-404');
     });
-
-    expect(teamMocks.listTeams).toHaveBeenCalledWith('ws-1');
-    expect(sessionOpsMocks.createSession).toHaveBeenCalledWith({
-      workspaceId: 'ws-1',
-      title: '协作',
-      memberInstanceIds: ['inst-leader', 'inst-a'],
-      kind: 'chat',
-    });
-  });
-
-  it('团队不存在：抛明确错误，零建会副作用', async () => {
-    workspaceCrudMocks.getWorkspace.mockReturnValueOnce({ id: 'ws-1' });
-    teamMocks.listTeams.mockReturnValueOnce([]);
     await expect(
-      ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', '协作', {
+      ipcHandlers.get('session:createCollab')!({} as never, 'ws-1', null, {
         type: 'team',
         teamId: 'team-404',
       }),
     ).rejects.toThrow('团队不存在');
-    expect(sessionOpsMocks.createSession).not.toHaveBeenCalled();
   });
 });
 

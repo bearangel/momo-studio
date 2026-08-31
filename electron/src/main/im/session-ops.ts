@@ -4,8 +4,13 @@
 // 取代原 room-ops 的创建/重命名/解散语义，纯 SQLite——无 Matrix。
 //
 // 设计要点：
-//   - createSession 把 memberInstanceIds 一次性写入 session_members，
-//     复用 sessions repo 的 insertSession + addSessionMember。
+//   - 创建路径统一走 insertSessionWithMembers 事务核心：sessions 行与全部
+//     session_members 行（含 is_leader 快照）同事务提交，任一失败整笔回滚。
+//   - 双流程（spec §4.4）：createQuickSession 默认 agent 直达；
+//     createCollabSession 按 target（单 agent / 团队快照展开）写成员，
+//     leader 成员 is_leader=1。
+//   - title 语义（spec D4）：占位标题（'新会话'）配 title_auto=1（命名服务
+//     可接管）；用户实名配 title_auto=0（永不自动改名）。
 //   - getSessionMembersInfo 三表 JOIN（session_members/workspace_agent_members +
 //     agent_definitions）；isLeader 读 session_members.is_leader 建会快照（spec §3.3）。
 //
@@ -22,6 +27,30 @@ import {
   listSessionsByWorkspace,
   type SessionRow,
 } from '../storage/sessions/repo';
+import { getWorkspace } from '../workspace/crud';
+import { listTeams } from '../agent/team';
+
+/** 协作会话目标（spec §4.4）：单个 agent 或团队（建会时快照展开） */
+export type CollabTarget =
+  | { type: 'agent'; instanceId: string }
+  | { type: 'team'; teamId: string };
+
+/** 快速/协作会话留空时的占位标题（Task 8 命名服务接管前的默认，spec D4） */
+export const PLACEHOLDER_TITLE = '新会话';
+
+/**
+ * workspace 未设置默认会话 agent（spec §4.4）。
+ * message 以 'NO_DEFAULT_AGENT' 开头：Electron IPC 序列化只保留 message，
+ * renderer 靠 message 子串识别后弹一次性选择/引导（types.d.ts 契约）。
+ */
+export class NoDefaultAgentError extends Error {
+  readonly code = 'NO_DEFAULT_AGENT' as const;
+
+  constructor(workspaceId: string) {
+    super(`NO_DEFAULT_AGENT: workspace ${workspaceId} 未设置默认会话 agent`);
+    this.name = 'NoDefaultAgentError';
+  }
+}
 
 export interface SessionMemberInfo {
   instanceId: string;
@@ -43,15 +72,50 @@ export interface SessionSummary {
   members: SessionMemberInfo[];
 }
 
+/** 事务核心的成员写入项：instance_id + is_leader 快照位 */
+interface MemberWrite {
+  instanceId: string;
+  isLeader: boolean;
+}
+
 /**
- * 创建会话并以事务方式一次性写入成员。
- * - workspaceId 必须存在（FK 由 sessions.workspace_id 约束）
- * - memberInstanceIds 元素必须在该 workspace 下合法存在
- *   （FK 由 session_members.instance_id 约束，依赖 workspace_agent_members.instance_id）
- *
- * 事务原子性：sessions 行与全部 session_members 行在同一事务中提交——任一成员
- * 写入抛错（典型：FK 命中不存在的 instance_id），整笔回滚，避免半状态。
- * 因此函数返回前不会留下 orphan 的空 session。
+ * 事务核心：insertSession + 按 members 写 session_members（含 is_leader）。
+ * 原子性：任一成员写入抛错（典型：FK 命中不存在的 instance_id），整笔回滚，
+ * 不留 orphan 空会话。
+ */
+function insertSessionWithMembers(args: {
+  workspaceId: string;
+  title: string;
+  titleAuto: boolean;
+  kind: SessionRow['kind'];
+  members: MemberWrite[];
+}): SessionRow {
+  const db = getDb();
+  const tx = db.transaction((a: {
+    workspaceId: string;
+    title: string;
+    titleAuto: boolean;
+    kind: SessionRow['kind'];
+    members: MemberWrite[];
+  }): SessionRow => {
+    const row = insertSession({
+      workspaceId: a.workspaceId,
+      title: a.title,
+      kind: a.kind,
+      titleAuto: a.titleAuto,
+    });
+    for (const m of a.members) {
+      addSessionMember(row.id, m.instanceId, m.isLeader);
+    }
+    return row;
+  });
+  return tx(args);
+}
+
+/**
+ * 泛化创建：memberInstanceIds 全部以非 leader 入会（title_auto=0）。
+ * 双流程（createQuick/createCollab）之外的通用入口——测试夹具与
+ * task_execution 等系统命名路径使用。
  */
 export function createSession(input: {
   workspaceId: string;
@@ -60,29 +124,73 @@ export function createSession(input: {
   memberInstanceIds?: string[];
   kind?: SessionRow['kind'];
 }): SessionRow {
-  const db = getDb();
-  const ids = input.memberInstanceIds ?? [];
-  const tx = db.transaction((args: {
-    workspaceId: string;
-    title: string;
-    kind: SessionRow['kind'] | undefined;
-    memberIds: string[];
-  }): SessionRow => {
-    const row = insertSession({
-      workspaceId: args.workspaceId,
-      title: args.title,
-      kind: args.kind,
-    });
-    for (const iid of args.memberIds) {
-      addSessionMember(row.id, iid);
-    }
-    return row;
-  });
-  return tx({
+  return insertSessionWithMembers({
     workspaceId: input.workspaceId,
     title: input.title,
-    kind: input.kind,
-    memberIds: ids,
+    titleAuto: false,
+    kind: input.kind ?? 'chat',
+    members: (input.memberInstanceIds ?? []).map((iid) => ({ instanceId: iid, isLeader: false })),
+  });
+}
+
+/**
+ * 快速会话（spec §4.4）：workspace 默认 agent 单成员直达。
+ * - 无默认 agent → NoDefaultAgentError（renderer 弹一次性选择/引导）
+ * - title='新会话' + title_auto=1；唯一成员 is_leader=1（接待判定）
+ */
+export function createQuickSession(workspaceId: string): SessionRow {
+  const ws = getWorkspace(workspaceId);
+  if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
+  if (!ws.defaultAgentInstanceId) throw new NoDefaultAgentError(workspaceId);
+
+  return insertSessionWithMembers({
+    workspaceId,
+    title: PLACEHOLDER_TITLE,
+    titleAuto: true,
+    kind: 'chat',
+    members: [{ instanceId: ws.defaultAgentInstanceId, isLeader: true }],
+  });
+}
+
+/**
+ * 协作会话（spec §4.4）：
+ * - target 单 agent → 单成员 is_leader=1
+ * - target 团队 → listTeams 取当前成员快照展开写入；leader 成员 is_leader=1
+ *   （建会后团队变更不影响本会话，spec §7「团队编辑」行）
+ * - title 留空（null/空白）→ 占位标题 + title_auto=1；用户命名 → title_auto=0
+ */
+export function createCollabSession(
+  workspaceId: string,
+  title: string | null,
+  target: CollabTarget,
+): SessionRow {
+  const ws = getWorkspace(workspaceId);
+  if (!ws) throw new Error(`未找到 workspace: ${workspaceId}`);
+
+  // 留空语义（null/undefined/空串/全空白）统一归一为 null → 占位标题 + title_auto=1
+  const userTitle = title?.trim() || null;
+
+  let members: MemberWrite[];
+  if (target.type === 'agent') {
+    members = [{ instanceId: target.instanceId, isLeader: true }];
+  } else {
+    const team = listTeams(workspaceId).find((t) => t.id === target.teamId);
+    if (!team) throw new Error(`团队不存在: ${target.teamId}`);
+    if (team.members.length === 0) {
+      throw new Error(`团队 ${team.name} 无成员，无法创建会话`);
+    }
+    members = team.members.map((m) => ({
+      instanceId: m.instanceId,
+      isLeader: m.instanceId === team.leaderInstanceId,
+    }));
+  }
+
+  return insertSessionWithMembers({
+    workspaceId,
+    title: userTitle ?? PLACEHOLDER_TITLE,
+    titleAuto: userTitle === null,
+    kind: 'chat',
+    members,
   });
 }
 
