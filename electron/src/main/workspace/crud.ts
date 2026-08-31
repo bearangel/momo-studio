@@ -5,6 +5,8 @@
 // default_agent_instance_id（默认会话 agent，语义就近迁移自 coordinator）。
 // 创建即自动建「团队会话」的行为随 team_session_id 一并退役（会话创建方式
 // 由 spec §4.4 快速/协作会话接管，后续 task 接线）。
+// §4.3：setDefaultAgent 校验 instanceId 必须是该 ws 成员（防跨 ws 脏化）；
+// 移除联动归 T3 removeMember 删除事务（本文件不重复实现），逻辑见 agent/crud.ts。
 // git 初始化失败不应阻断 workspace 创建，因此单独 try/catch。
 
 import { randomUUID } from 'node:crypto';
@@ -123,9 +125,21 @@ export function renameWorkspace(id: string, name: string): void {
   logger.info('Workspace 已重命名', { id, name: trimmed });
 }
 
-/** 设置/清空 workspace 的默认会话 agent。null 表示清空。（v25：原协调 agent，语义就近迁移） */
-export function setWorkspaceDefaultAgent(workspaceId: string, instanceId: string | null): void {
+/**
+ * 设置/清空 workspace 的默认会话 agent（spec §4.3）。
+ * instanceId 非 null 时，必须是该 ws 的成员（防跨 ws 脏化）；null 清空。
+ * 移除联动归 T3 removeMember 删除事务，本函数不重复实现。
+ */
+export function setDefaultAgent(workspaceId: string, instanceId: string | null): void {
   const db = getDb();
+  if (instanceId !== null) {
+    const member = db
+      .prepare('SELECT 1 FROM workspace_agent_members WHERE instance_id = ? AND workspace_id = ?')
+      .get(instanceId, workspaceId);
+    if (!member) {
+      throw new Error(`Instance ${instanceId} 不是 workspace ${workspaceId} 的成员`);
+    }
+  }
   const result = db.prepare('UPDATE workspaces SET default_agent_instance_id = ? WHERE id = ?').run(
     instanceId,
     workspaceId,

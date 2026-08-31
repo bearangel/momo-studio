@@ -11,7 +11,7 @@ import {
   listWorkspaces,
   getWorkspace,
   deleteWorkspace,
-  setWorkspaceDefaultAgent,
+  setDefaultAgent,
   renameWorkspace,
 } from './crud';
 import {
@@ -68,7 +68,7 @@ export function registerWorkspaceHandlers(): void {
   ipcMain.handle(
     'workspace:setCoordinator',
     async (_evt, workspaceId: string, instanceId: string | null) => {
-      setWorkspaceDefaultAgent(workspaceId, instanceId);
+      setDefaultAgent(workspaceId, instanceId);
 
       // 设定后自动重启运行中的实例；清空（null）或未运行则跳过
       if (instanceId !== null) {
