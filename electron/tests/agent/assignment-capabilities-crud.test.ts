@@ -26,22 +26,23 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
 
-  // 外键依赖：workspaces → agent_definitions → agent_assignments
+  // 外键依赖：workspaces → agent_definitions → workspace_agent_members
+  // （v25 schema：成员制表取代 agent_assignments；v26 起 capabilities FK 指向成员表）
   const db = getDb();
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run('ws1', 'WS', '', '/tmp', '!s:r', 0, '@owner:s', '📁');
+       (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('ws1', 'WS', '', '/tmp', 0, '@owner:s', '📁');
   db.prepare(
     `INSERT INTO agent_definitions
        (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run('def1', 'A', 'a', '1', 'declarative', 'p', '[]', 'custom', 'm');
   db.prepare(
-    `INSERT INTO agent_assignments
-       (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
-     VALUES (?, ?, ?, ?, 1, 'standalone')`,
+    `INSERT INTO workspace_agent_members
+       (instance_id, workspace_id, agent_definition_id, agent_user_id)
+     VALUES (?, ?, ?, ?)`,
   ).run('inst1', 'ws1', 'def1', '@bot:s');
 });
 
@@ -128,7 +129,7 @@ describe('assignment-capabilities CRUD', () => {
       removedSkills: [],
     });
     // ON DELETE CASCADE（依赖 getDb() 的 foreign_keys = ON）自动清理 delta 行
-    getDb().prepare('DELETE FROM agent_assignments WHERE instance_id = ?').run('inst1');
+    getDb().prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run('inst1');
     const d = getAssignmentDeltas('inst1');
     expect(d.addedTools).toEqual([]);
   });

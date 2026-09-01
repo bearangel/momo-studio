@@ -38,22 +38,23 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
 
-  // 满足外键链：workspaces → agent_definitions → agent_assignments
+  // 满足外键链：workspaces → agent_definitions → workspace_agent_members
+  // （v25 schema：成员制表取代 agent_assignments；v26 起 capabilities FK 指向成员表）
   const db = getDb();
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run('ws-1', 'WS', '', '/tmp', '!s:r', 0, '@owner:s', '📁');
+       (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('ws-1', 'WS', '', '/tmp', 0, '@owner:s', '📁');
   db.prepare(
     `INSERT INTO agent_definitions
        (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run('def-1', 'A', 'a', '1', 'declarative', 'p', '[]', 'custom', 'm');
   db.prepare(
-    `INSERT INTO agent_assignments
-       (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
-     VALUES (?, ?, ?, ?, 1, 'standalone')`,
+    `INSERT INTO workspace_agent_members
+       (instance_id, workspace_id, agent_definition_id, agent_user_id)
+     VALUES (?, ?, ?, ?)`,
   ).run('inst-1', 'ws-1', 'def-1', '@bot:s');
 });
 

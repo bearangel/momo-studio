@@ -178,19 +178,14 @@ export function registerAgentHandlers(): void {
       scope?: 'global' | 'workspace';
       modelProviderId?: string;
       modelName?: string;
-      /** v1.6：可选 workspaceId（scope='workspace' 时必传） */
+      /** v1.6：可选 workspaceId（v25 定义全局化后语义退役，仅向后兼容接收） */
       workspaceId?: string;
       /** v1.6：undefined=不改；传值（含 []）= 覆盖 */
       defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
     }) => {
-      const workspaceId = input.scope === 'global'
-        ? null
-        : input.scope === 'workspace'
-          ? input.workspaceId
-          : undefined;
-
+      // v25 定义全局化：scope/workspaceId 不再持久化（列已 DROP），仅接收不消费
       const updated = updateAgentDefinition({
         id: input.id,
         name: input.name,
@@ -199,7 +194,6 @@ export function registerAgentHandlers(): void {
         iconEmoji: input.iconEmoji,
         modelProviderId: input.modelProviderId,
         modelName: input.modelName,
-        workspaceId,
         defaultTools: input.defaultTools,
         defaultMcps: input.defaultMcps,
         defaultSkills: input.defaultSkills,

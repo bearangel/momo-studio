@@ -133,7 +133,6 @@ interface AgentDefRow {
   description: string;
   icon_emoji: string;
   created_at: string;
-  workspace_id: string | null;
   model_provider_id: string | null;
   model_name: string;
   task_driven: number;
@@ -166,7 +165,9 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     iconEmoji: row.icon_emoji,
     defaultMcps: JSON.parse(row.default_mcps) as AgentDefinition['defaultMcps'],
     defaultSkills: JSON.parse(row.default_skills) as AgentDefinition['defaultSkills'],
-    workspaceId: row.workspace_id,
+    // v25 定义全局化：workspace_id 列已 DROP（migration v25），映射恒 null。
+    // 字段保留是为 renderer 契约（types.d.ts），T12 起 UI 侧清理后可移除。
+    workspaceId: null,
     modelProviderId: row.model_provider_id,
     modelName: row.model_name,
     createdAt: row.created_at,
@@ -187,16 +188,17 @@ export function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
   };
 }
 
-/** 新增或覆盖写入一条 agent 定义（以 id 为唯一键） */
+/** 新增或覆盖写入一条 agent 定义（以 id 为唯一键）。
+ *  v25 定义全局化：workspace_id 列已退役，不再写入（修复前写死列必炸）。 */
 export function saveAgentDefinition(def: AgentDefinition): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
       (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
-       source, description, icon_emoji, workspace_id, model_provider_id, model_name, task_driven)
+       source, description, icon_emoji, model_provider_id, model_name, task_driven)
      VALUES
       (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
-       @source, @description, @icon_emoji, @workspace_id, @model_provider_id, @model_name, @task_driven)`,
+       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven)`,
   ).run({
     id: def.id,
     name: def.name,
@@ -210,7 +212,6 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     source: def.source,
     description: def.description,
     icon_emoji: def.iconEmoji,
-    workspace_id: def.workspaceId,
     model_provider_id: def.modelProviderId,
     model_name: def.modelName,
     task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
@@ -218,22 +219,16 @@ export function saveAgentDefinition(def: AgentDefinition): void {
 }
 
 /**
- * 列出 agent 定义。workspaceId 提供时只返回 global + 该 workspace scoped + 全部 builtin。
- * workspaceId 缺省时返回全部。
+ * 列出 agent 定义。v25 定义全局化后 workspace 过滤退役（列已 DROP）——
+ * 无论 workspaceId 是否提供均返回全部定义；参数保留仅为调用方签名兼容
+ * （renderer T12 清理后可移除）。
  */
 export function listAgentDefinitions(workspaceId?: string): AgentDefinition[] {
+  void workspaceId; // 兼容参数，语义退役
   const db = getDb();
-  const rows = workspaceId
-    ? db
-        .prepare(
-          `SELECT * FROM agent_definitions
-           WHERE workspace_id IS NULL OR workspace_id = ?
-           ORDER BY source ASC, created_at DESC`,
-        )
-        .all(workspaceId) as AgentDefRow[]
-    : db
-        .prepare('SELECT * FROM agent_definitions ORDER BY source ASC, created_at DESC')
-        .all() as AgentDefRow[];
+  const rows = db
+    .prepare('SELECT * FROM agent_definitions ORDER BY source ASC, created_at DESC')
+    .all() as AgentDefRow[];
   return rows.map(rowToDef);
 }
 
@@ -404,7 +399,7 @@ export function llmApiKeyRef(instanceId: string): string {
 
 /**
  * 更新 agent 定义字段（v1.3 schema：不含 type/parent/model_provider/model_base_url）。
- * workspaceId 显式传 null 表示转 global；传字符串表示绑定该 workspace；undefined 不改。
+ * v25 定义全局化：workspaceId 入参已退役（列已 DROP，不再持久化）。
  *
  * v1.6：新增可选 defaultTools/defaultMcps/defaultSkills 入参，含则更新，不含保留原值（向后兼容）。
  */
@@ -414,8 +409,6 @@ export function updateAgentDefinition(input: {
   description?: string;
   systemPrompt?: string;
   iconEmoji?: string;
-  /** NULL=global，string=该 workspace 私有；undefined=不改 */
-  workspaceId?: string | null;
   modelProviderId?: string;
   modelName?: string;
   /** v1.6：默认工具；undefined=不改，传值（含空数组）= 覆盖 */
@@ -431,7 +424,7 @@ export function updateAgentDefinition(input: {
   db.prepare(
     `UPDATE agent_definitions SET
        name = ?, description = ?, system_prompt = ?, icon_emoji = ?,
-       workspace_id = ?, model_provider_id = ?, model_name = ?,
+       model_provider_id = ?, model_name = ?,
        default_tools = ?, default_mcps = ?, default_skills = ?
      WHERE id = ?`,
   ).run(
@@ -439,7 +432,6 @@ export function updateAgentDefinition(input: {
     input.description ?? existing.description,
     input.systemPrompt ?? existing.systemPrompt,
     input.iconEmoji ?? existing.iconEmoji,
-    input.workspaceId !== undefined ? input.workspaceId : existing.workspaceId,
     input.modelProviderId !== undefined ? input.modelProviderId : existing.modelProviderId,
     input.modelName ?? existing.modelName,
     input.defaultTools !== undefined ? JSON.stringify(input.defaultTools) : JSON.stringify(existing.defaultTools),

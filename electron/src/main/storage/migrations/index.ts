@@ -714,6 +714,31 @@ ALTER TABLE agent_definitions DROP COLUMN workspace_id;
 DROP TABLE agent_assignments;
 `.trim(),
   },
+  {
+    version: 26,
+    sql: `
+-- ─── v26：修复 v25 遗留债务——重建 agent_assignment_capabilities FK ──────────
+-- v25 DROP agent_assignments 时未重建本表外键，assignment_id 悬挂引用已删表：
+-- foreign_keys=ON 下任何 INSERT 即报 no such table: agent_assignments，
+-- 生产写路径 agent:setMemberDeltas 必炸（T10 审查移交债务①）。
+-- 修法与 v25 session_members 同款：新建表（FK 改指 workspace_agent_members）
+-- + 搬运 + 换名。列清单/PK 与 v16 完全一致，生产读写代码零改动；
+-- JOIN 搬运 = instance_id 引用失效的行按级联语义清理（不搬运）。
+CREATE TABLE agent_assignment_capabilities_v26 (
+  assignment_id   TEXT NOT NULL REFERENCES workspace_agent_members(instance_id) ON DELETE CASCADE,
+  capability_type TEXT NOT NULL CHECK (capability_type IN ('tool','mcp','skill')),
+  mode            TEXT NOT NULL CHECK (mode IN ('add','remove')),
+  ref             TEXT NOT NULL,
+  PRIMARY KEY (assignment_id, capability_type, mode, ref)
+);
+INSERT INTO agent_assignment_capabilities_v26 (assignment_id, capability_type, mode, ref)
+SELECT c.assignment_id, c.capability_type, c.mode, c.ref
+FROM agent_assignment_capabilities c
+JOIN workspace_agent_members m ON m.instance_id = c.assignment_id;
+DROP TABLE agent_assignment_capabilities;
+ALTER TABLE agent_assignment_capabilities_v26 RENAME TO agent_assignment_capabilities;
+`.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

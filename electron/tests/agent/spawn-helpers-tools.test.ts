@@ -186,19 +186,11 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
          (instance_id, workspace_id, agent_definition_id, agent_user_id)
        VALUES (?, ?, ?, ?)`,
     ).run('inst1', 'ws1', 'def1', 'agent-t-ab12cd');
-    // ⚠️ v25 已知断裂：agent_assignment_capabilities 的 FK 仍引用已 DROP 的
-    // agent_assignments 表（foreign_keys=ON 时 INSERT 报 no such table）——
-    // 生产写路径 agent:setMemberDeltas 同样受影响，属能力域清理任务范围。
-    // 本用例锁的是 read 侧（readAssignmentDeltas → mergeCapabilities）Layer 3
-    // 合并语义，故 seed 临时关 FK 绕过断裂的写路径；断裂本身已在任务报告记录。
-    db.pragma('foreign_keys = OFF');
-    try {
-      db.prepare(
-        'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
-      ).run('inst1', 'tool', 'remove', 'bash');
-    } finally {
-      db.pragma('foreign_keys = ON');
-    }
+    // 成员行就位后直接写 delta——v26 重建 FK 后生产写路径已恢复
+    // （v25 时代此处需临时关 FK 绕过悬挂外键，债务已由 migration v26 清偿）
+    db.prepare(
+      'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
+    ).run('inst1', 'tool', 'remove', 'bash');
 
     const opts = buildSpawnOpts({
       instanceId: 'inst1',
