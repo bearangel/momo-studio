@@ -4,7 +4,7 @@
 // - 全屏化：左 SettingsNav 190px + 右内容区，顶部标题栏「← 返回」+「设置」
 // - Esc 键全局返回会话视图（仅当 SettingsView 挂载时生效——MiddlePanel
 //   的 settings 分支是唯一挂载点，视图切换自动卸载监听）
-// - 7 个分类：模型服务 / 默认模型 / 会话设置 / Git 策略 / 审计日志 / 节点互联 / 关于
+// - 8 个分类：模型服务 / 默认模型 / 会话设置 / 外观 / Git 策略 / 审计日志 / 节点互联 / 关于
 // - workspace 级配置（Git 策略 / 审计日志）仍要求当前激活 workspace；
 //   全局配置（模型服务 / 默认模型 / 关于 / 会话设置）的 workspace 守卫留待 P3
 import { useEffect } from 'react';
@@ -19,6 +19,7 @@ import { ConversationSettings } from './ConversationSettings';
 import { DefaultModelSettings } from './DefaultModelSettings';
 import { About } from './About';
 import { NodeDiscoveryPanel } from '../p2p/NodeDiscoveryPanel';
+import { AppearanceSettings } from './AppearanceSettings';
 
 export function SettingsView() {
   const workspace = useWorkspaceStore((s) => s.getActive());
@@ -66,6 +67,7 @@ export function SettingsView() {
           {active === 'model_provider' && <ProviderSettings />}
           {active === 'default_model' && <DefaultModelSettings />}
           {active === 'conversation' && <ConversationSettings />}
+          {active === 'appearance' && <AppearanceSettings />}
           {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
           {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
           {active === 'p2p' && <NodeDiscoveryPanel />}

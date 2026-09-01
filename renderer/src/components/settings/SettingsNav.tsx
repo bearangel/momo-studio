@@ -1,20 +1,22 @@
-// renderer/src/components/settings/SettingsNav.tsx
-//
+// renderer/src/components/settings/SettingsNav.tsx 全文替换：
 // 设置左侧分类导航：宽度 190px（inline style 规避 Tailwind 任意值 class 失效问题）。
-// 菜单顺序与图标以 settings.html 原型为准：模型服务 / 默认模型 / 会话设置 /
-// Git 策略 / 审计日志 / 节点互联 / 关于。CATEGORIES 键值必须与 settings.store
-// 的 SettingsCategory 严格同步。
+// v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。
+import type { LucideIcon } from 'lucide-react';
+import { Building2, Target, MessageSquare, SunMoon, GitBranch, ScrollText, Globe, Info } from 'lucide-react';
 import { useSettingsStore, type SettingsCategory } from '../../stores/settings.store';
 import { cn } from '../../lib/cn';
 
-const CATEGORIES: { key: SettingsCategory; label: string; icon: string }[] = [
-  { key: 'model_provider', label: '模型服务', icon: '🏢' },
-  { key: 'default_model', label: '默认模型', icon: '🎯' },
-  { key: 'conversation', label: '会话设置', icon: '💬' },
-  { key: 'git_policy', label: 'Git 策略', icon: '🌿' },
-  { key: 'audit_log', label: '审计日志', icon: '📜' },
-  { key: 'p2p', label: '节点互联', icon: '🌐' },
-  { key: 'about', label: '关于', icon: 'ℹ️' },
+// 注：icon 用 lucide 官方导出的 LucideIcon 类型——图标组件是 ForwardRefExoticComponent，
+// 手写 ComponentType<...> 结构注解在 strict 下因 propTypes 协变不兼容无法通过 tsc。
+const CATEGORIES: { key: SettingsCategory; label: string; icon: LucideIcon }[] = [
+  { key: 'model_provider', label: '模型服务', icon: Building2 },
+  { key: 'default_model', label: '默认模型', icon: Target },
+  { key: 'conversation', label: '会话设置', icon: MessageSquare },
+  { key: 'appearance', label: '外观', icon: SunMoon },
+  { key: 'git_policy', label: 'Git 策略', icon: GitBranch },
+  { key: 'audit_log', label: '审计日志', icon: ScrollText },
+  { key: 'p2p', label: '节点互联', icon: Globe },
+  { key: 'about', label: '关于', icon: Info },
 ];
 
 export function SettingsNav() {
@@ -39,7 +41,7 @@ export function SettingsNav() {
               : 'text-neutral-300 hover:bg-bg-tertiary/60',
           )}
         >
-          <span>{c.icon}</span>
+          <c.icon size={16} strokeWidth={1.75} aria-hidden />
           <span>{c.label}</span>
         </button>
       ))}

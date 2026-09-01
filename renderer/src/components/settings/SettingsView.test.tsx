@@ -1,7 +1,7 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
 // SettingsView 行为测试（P2 Task 4）：
-// - 渲染 7 个分类菜单项（顺序：模型服务/默认模型/会话设置/Git 策略/审计日志/节点互联/关于）
+// - 渲染 8 个分类菜单项（顺序：模型服务/默认模型/会话设置/外观/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -64,22 +64,31 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 7 个分类菜单项且顺序符合原型', () => {
+  it('渲染 8 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
     render(<SettingsView />);
-    // 限定在 <nav aria-label="设置分类"> 内查找分类按钮，避免右侧内容区按钮干扰
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(7);
+    expect(navButtons.length).toBe(8);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
-      '🏢模型服务',
-      '🎯默认模型',
-      '💬会话设置',
-      '🌿Git 策略',
-      '📜审计日志',
-      '🌐节点互联',
-      'ℹ️关于',
+      '模型服务',
+      '默认模型',
+      '会话设置',
+      '外观',
+      'Git 策略',
+      '审计日志',
+      '节点互联',
+      '关于',
     ]);
+    // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
+    expect(nav.querySelectorAll('svg').length).toBe(8);
+  });
+
+  it('点击「外观」分类切换 activeCategory 并渲染面板', () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '外观' }));
+    expect(useSettingsStore.getState().activeCategory).toBe('appearance');
+    expect(screen.getByRole('heading', { name: '外观' })).toBeInTheDocument();
   });
 
   it('account 分类不存在', () => {
