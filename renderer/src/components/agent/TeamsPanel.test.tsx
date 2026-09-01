@@ -154,12 +154,25 @@ describe('TeamsPanel — 团队卡片渲染', () => {
     expect(screen.queryByText('👑评审员')).not.toBeInTheDocument();
   });
 
-  it('头部提供「+ 新建团队」入口（Task 13 弹窗接线占位）', async () => {
+  it('头部提供「+ 新建团队」入口，点击打开 TeamDialog（创建模式）', async () => {
     render(<TeamsPanel />);
     await waitFor(() => {
       expect(loadTeamsMock).toHaveBeenCalledWith('ws-1');
     });
-    expect(screen.getByRole('button', { name: '+ 新建团队' })).toBeInTheDocument();
+    const btn = screen.getByRole('button', { name: '+ 新建团队' });
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    expect(await screen.findByText('新建团队')).toBeInTheDocument();
+  });
+
+  it('团队卡「编辑」点击打开 TeamDialog（编辑模式，回填团队名）', async () => {
+    render(<TeamsPanel />);
+    await waitFor(() => {
+      expect(loadTeamsMock).toHaveBeenCalledWith('ws-1');
+    });
+    fireEvent.click(screen.getByText('编辑'));
+    expect(await screen.findByText('编辑团队')).toBeInTheDocument();
+    expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('攻坚组');
   });
 
   it('空态：无团队时显示空态提示', async () => {

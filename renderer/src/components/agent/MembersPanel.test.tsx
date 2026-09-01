@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
+import { useProviderStore } from '../../stores/provider.store';
 
 // ---- 子弹窗桩：占位渲染 + 暴露 onClose 触发点 ----
 const keyEditorMock = vi.fn();
@@ -215,8 +216,28 @@ describe('MembersPanel — 成员行渲染', () => {
       expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
     expect(screen.getByText('本工作空间暂无 agent 成员')).toBeInTheDocument();
-    // Task 13 接线的创建弹窗入口（占位）
     expect(screen.getByRole('button', { name: '+ 创建 Agent' })).toBeInTheDocument();
+  });
+});
+
+describe('MembersPanel — 创建 Agent 入口接线（Task 13）', () => {
+  it('点「+ 创建 Agent」→ 渲染 CreateAgentDialog（agentView：含设默认勾选）', async () => {
+    // 弹窗挂载即拉取 provider 列表——桩化 store action，不触达 ipc
+    useProviderStore.setState({
+      providers: [],
+      loading: false,
+      loadProviders: vi.fn(),
+      createProvider: vi.fn(),
+      updateProvider: vi.fn(),
+      deleteProvider: vi.fn(),
+      setDefault: vi.fn(),
+      clear: vi.fn(),
+    });
+    await renderLoaded();
+    fireEvent.click(screen.getByRole('button', { name: '+ 创建 Agent' }));
+    expect(await screen.findByText('创建 Agent')).toBeInTheDocument();
+    // source='agentView' 的可观察差异：设为默认勾选可见（library 入口无此勾选）
+    expect(screen.getByLabelText('设为默认会话 agent')).toBeInTheDocument();
   });
 });
 

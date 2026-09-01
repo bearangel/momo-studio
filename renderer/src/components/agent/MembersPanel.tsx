@@ -3,13 +3,14 @@
 // 拆自 WorkspaceAgentsPanel（v25 去编排退役）。成员行 = icon emoji + 名称 + 模型 +
 // ⭐默认会话标记 + 在线状态 + 行内操作（启动/停止、设为默认会话、更新密钥、
 // 调整能力、移出工作空间）。移出被 leader 守卫拦截时 alert blockedTeams 团队名。
-// 「+ 创建 Agent」弹窗归 Task 13（CreateAgentDialog），此处先留占位入口。
+// 「+ 创建 Agent」→ CreateAgentDialog（source='agentView'，创建成功自动加入当前 ws）。
 import { useEffect, useMemo, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { AssignmentApiKeyEditor } from './AssignmentApiKeyEditor';
 import { AssignmentCapabilitiesDialog } from './AssignmentCapabilitiesDialog';
+import { CreateAgentDialog } from './CreateAgentDialog';
 import { Button } from '../ui/Button';
 import type { AgentDefinition, WorkspaceAgentMember } from '../../ipc/types';
 
@@ -22,6 +23,7 @@ export function MembersPanel() {
   const [keyEditing, setKeyEditing] = useState<WorkspaceAgentMember | null>(null);
   // 当前正在调整能力（Layer 3 override）的成员；非 null 时渲染弹窗
   const [adjustingMember, setAdjustingMember] = useState<WorkspaceAgentMember | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
     if (workspace) void loadMembers(workspace.id);
@@ -58,8 +60,7 @@ export function MembersPanel() {
       <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle shrink-0">
         <span className="text-lg font-semibold">🤖 Agent 成员</span>
         <div className="ml-auto flex gap-2">
-          {/* Task 13 接线：CreateAgentDialog（defaultAgentSource='agentView'，创建即加入当前 ws） */}
-          <Button type="button" disabled title="创建 Agent 弹窗即将上线">
+          <Button type="button" onClick={() => setCreateOpen(true)}>
             + 创建 Agent
           </Button>
         </div>
@@ -90,6 +91,7 @@ export function MembersPanel() {
         )}
       </div>
 
+      {createOpen && <CreateAgentDialog source="agentView" onClose={() => setCreateOpen(false)} />}
       {keyEditing && (
         <AssignmentApiKeyEditor assignment={keyEditing} onClose={() => setKeyEditing(null)} />
       )}

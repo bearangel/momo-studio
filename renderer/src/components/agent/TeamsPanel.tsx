@@ -1,19 +1,21 @@
 // renderer/src/components/agent/TeamsPanel.tsx
 // AgentsView Tab 2「团队」（spec §6.1）：当前 workspace 的团队卡片列表。
 // 团队卡片 = icon + 名称 + 👑leader 标记 + 成员 chips + 编辑/删除。
-// 创建/编辑团队弹窗（TeamDialog）归 Task 13，此处「+ 新建团队」与「编辑」
-// 先留占位入口；「删除」接线 agent.store.deleteTeam（spec §7：仅删定义，
-// 已建会话快照无感）。
-import { useEffect, useMemo } from 'react';
+// 「+ 新建团队」/「编辑」→ TeamDialog（Task 13 接线）；「删除」接线
+// agent.store.deleteTeam（spec §7：仅删定义，已建会话快照无感）。
+import { useEffect, useMemo, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/cn';
+import { TeamDialog } from './TeamDialog';
 import type { Team, WorkspaceAgentMember } from '../../ipc/types';
 
 export function TeamsPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { teams, definitions, loadTeams, deleteTeam } = useAgentStore();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
   useEffect(() => {
     if (workspace) void loadTeams(workspace.id);
@@ -34,8 +36,7 @@ export function TeamsPanel() {
       <div className="px-4 py-3 flex items-center gap-2 border-b border-border-subtle shrink-0">
         <span className="text-lg font-semibold">👥 团队</span>
         <div className="ml-auto flex gap-2">
-          {/* Task 13 接线：TeamDialog（创建模式；成员勾选≥2，leader 从已勾选中单选） */}
-          <Button type="button" disabled title="团队弹窗即将上线">
+          <Button type="button" onClick={() => setCreateOpen(true)}>
             + 新建团队
           </Button>
         </div>
@@ -52,11 +53,10 @@ export function TeamsPanel() {
               <span className="text-lg">{team.iconEmoji}</span>
               <span className="font-medium truncate">{team.name}</span>
               <div className="ml-auto flex gap-1">
-                {/* Task 13 接线：TeamDialog（编辑模式，回填现有成员与 leader） */}
                 <button
                   type="button"
-                  disabled
-                  className="text-xs text-neutral-400 hover:text-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => setEditingTeam(team)}
+                  className="text-xs text-neutral-400 hover:text-neutral-200"
                 >
                   编辑
                 </button>
@@ -100,6 +100,9 @@ export function TeamsPanel() {
           </div>
         )}
       </div>
+
+      {createOpen && <TeamDialog onClose={() => setCreateOpen(false)} />}
+      {editingTeam && <TeamDialog editing={editingTeam} onClose={() => setEditingTeam(null)} />}
     </div>
   );
 }

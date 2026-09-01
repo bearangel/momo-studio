@@ -8,7 +8,7 @@
 //   - 搜索：前端 in-memory filter（name/description/slug 模糊匹配），无 IPC
 //   - 主网格：filteredItems 渲染为 ResourceCard 列表（grid auto-fill 220px）
 //   - 选中卡片 → 右侧 ResourceDetail 滑出（条件渲染，selectedId 找不到则收起）
-//   - 三类弹窗（RegisterMcpDialog / UploadSkillDialog / DefinitionEditor）由
+//   - 三类弹窗（RegisterMcpDialog / UploadSkillDialog / CreateAgentDialog）由
 //     AddResourceMenu 触发；前两者 onSuccess → load() 刷新 + 关弹窗
 //   - 导入反馈：store installResource 成功后设置 installNotice（一次性绿色横幅），
 //     store installResource 失败后设置 error（红色横幅覆盖主网格区）。view 端只读渲染。
@@ -23,7 +23,7 @@ import { ResourceDetail } from './ResourceDetail';
 import { AddResourceMenu } from './AddResourceMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
-import { DefinitionEditor } from '../agent/DefinitionEditor';
+import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import type { ResourceItem, ResourceFilter } from '../../ipc/types';
 
 /** 第一行：type tab（全部 / Agent / MCP / Skill） */
@@ -226,7 +226,13 @@ export function ResourceLibraryView() {
         />
       )}
       {createAgentOpen && (
-        <DefinitionEditor mode="create" onClose={() => setCreateAgentOpen(false)} />
+        <CreateAgentDialog
+          source="library"
+          onClose={() => {
+            setCreateAgentOpen(false);
+            void load();
+          }}
+        />
       )}
     </div>
   );
