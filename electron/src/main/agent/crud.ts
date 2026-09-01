@@ -353,7 +353,10 @@ export async function updateAssignmentApiKey(
 /**
  * 删除自定义 agent 定义。builtin 不可删。
  * 级联：停止全部引用此 def 的运行中实例 →
- * 清除 API key override（keychain）→ 删成员行（FK 级联清 session_members/team_members）→ 删 def 行。
+ * 清除 API key override（keychain）→ 置空 default 引用 → 删成员行（FK 级联清
+ * session_members/team_members）→ 删 def 行。
+ * spec §7：默认 agent 被删除 → default 置 NULL；成员是团队 leader 时 FK CASCADE
+ * 连带解散团队（绕过 removeMember 的 leader 守卫），logger.warn 留痕不阻断。
  */
 export async function deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
   const def = getAgentDefinition(defId);
@@ -374,6 +377,20 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
     // 清除 API key override
     if (row.api_key_override === 1) {
       await deleteSecret(`agent.${row.instance_id}.api_key_override`);
+    }
+    // 置空 default 引用（与 removeMember 事务内同款语句）。default FK 无 ON DELETE
+    // 动作，不先置空则 DELETE 命中即 FOREIGN KEY constraint failed；且本函数非事务，
+    // 半状态（前序成员已删/keychain 已清/def 行残留）后重试永远失败
+    db.prepare(
+      'UPDATE workspaces SET default_agent_instance_id = NULL WHERE default_agent_instance_id = ?',
+    ).run(row.instance_id);
+    // teams.leader FK CASCADE：删成员会连带解散其 leader 团队（removeMember 的
+    // leader 守卫在此路径不可用）——留痕不阻断
+    const ledTeams = db
+      .prepare('SELECT name FROM teams WHERE leader_instance_id = ?')
+      .all(row.instance_id) as { name: string }[];
+    for (const t of ledTeams) {
+      logger.warn('定义删除将解散团队（成员为 leader，FK 级联）', { team: t.name, defId });
     }
     db.prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run(row.instance_id);
   }

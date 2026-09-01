@@ -18,7 +18,8 @@ import {
   listMembers,
   deleteDefinition,
 } from '../../src/main/agent/crud';
-import { createWorkspace } from '../../src/main/workspace/crud';
+import { createWorkspace, setDefaultAgent, getWorkspace } from '../../src/main/workspace/crud';
+import { createTeam } from '../../src/main/agent/team';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
 vi.mock('../../src/main/agent/runtime-status', () => ({
@@ -125,6 +126,39 @@ describe('deleteDefinition — 级联清理', () => {
 
     await deleteDefinition('c-1');
     expect(memStore.has(`agent.${a.instanceId}.api_key_override`)).toBe(false);
+  });
+
+  it('删除命中默认会话 agent 的 def：default 引用置空，无 FK 中止，def/成员行全清', async () => {
+    saveAgentDefinition(makeDef('c-default'));
+    const a = await addMember(wsId, 'c-default', '@bd:localhost');
+    setDefaultAgent(wsId, a.instanceId);
+    expect(getWorkspace(wsId)?.defaultAgentInstanceId).toBe(a.instanceId);
+
+    // 修复前：成员行 DELETE 命中 workspaces.default_agent_instance_id FK（无
+    // ON DELETE 动作）→ FOREIGN KEY constraint failed，且非事务半状态后重试永败
+    await expect(deleteDefinition('c-default')).resolves.toEqual({ stoppedInstanceIds: [] });
+
+    expect(getWorkspace(wsId)?.defaultAgentInstanceId).toBeNull();
+    expect(listMembers(wsId)).toHaveLength(0);
+    const { getAgentDefinition } = await import('../../src/main/agent/crud');
+    expect(getAgentDefinition('c-default')).toBeNull();
+  });
+
+  it('删除 leader 成员的 def：其团队经 FK 级联解散（不阻断，logger 留痕）', async () => {
+    saveAgentDefinition(makeDef('c-lead'));
+    saveAgentDefinition(makeDef('c-mate'));
+    const leader = await addMember(wsId, 'c-lead', '@lead:localhost');
+    const mate = await addMember(wsId, 'c-mate', '@mate:localhost');
+    createTeam(wsId, '释放团', '👥', [leader.instanceId, mate.instanceId], leader.instanceId);
+
+    await expect(deleteDefinition('c-lead')).resolves.toBeDefined();
+
+    // leader 成员行删除 → teams.leader FK CASCADE → 团队解散；非 leader 成员不受影响
+    const teams = getDb()
+      .prepare('SELECT * FROM teams WHERE workspace_id = ?')
+      .all(wsId) as unknown[];
+    expect(teams).toHaveLength(0);
+    expect(listMembers(wsId).map((m) => m.instanceId)).toEqual([mate.instanceId]);
   });
 });
 
