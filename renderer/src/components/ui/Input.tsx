@@ -1,4 +1,5 @@
 // renderer/src/components/ui/Input.tsx
+// v2.1 设计系统原子件：样式全 token 化。
 import { forwardRef, useId, type InputHTMLAttributes } from 'react';
 import { cn } from '../../lib/cn';
 
@@ -13,7 +14,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(
     return (
       <div className="flex flex-col gap-1">
         {label && (
-          <label htmlFor={inputId} className="text-sm text-neutral-300">
+          <label htmlFor={inputId} className="text-sm text-secondary">
             {label}
           </label>
         )}
@@ -21,8 +22,9 @@ export const Input = forwardRef<HTMLInputElement, Props>(
           ref={ref}
           id={inputId}
           className={cn(
-            'px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100',
-            'focus:border-accent-blue focus:outline-none',
+            'rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary',
+            'placeholder:text-disabled',
+            'focus:border-focus focus:outline-none',
             className,
           )}
           {...rest}
