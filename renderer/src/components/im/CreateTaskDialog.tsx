@@ -7,7 +7,7 @@
 //   - open=false 时 return null（hooks 仍在调用顺序中，符合 React 规则）
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import type { AgentAssignment } from '../../ipc/types';
+import type { WorkspaceAgentMember } from '../../ipc/types';
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -44,7 +44,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setPriority('medium');
     setScheduledAt('');
     setDeadlineAt('');
-    ipc.agent.listMembers(workspaceId).then((list: AgentAssignment[]) => {
+    ipc.agent.listMembers(workspaceId).then((list: WorkspaceAgentMember[]) => {
       setAssignments(
         list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName ?? a.agentUserId })),
       );

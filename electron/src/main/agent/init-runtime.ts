@@ -59,8 +59,6 @@ export async function initTaskDrivenRuntime(): Promise<void> {
           agentUserId: member.agentUserId,
           workspaceId: ws.id,
           workspaceDir: ws.directoryPath,
-          // v25 过渡态：workspaces.team_session_id 已退役，传空串保持线协议形状
-          teamSessionId: '',
           def,
           llmApiKey,
         });

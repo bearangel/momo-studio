@@ -82,9 +82,6 @@ export interface WorkspaceAgentMember {
   agentName?: string;
 }
 
-/** 过渡别名（与 electron 端同策略：Task 11-14 逐步消除引用，Task 15 删除） */
-export type AgentAssignment = WorkspaceAgentMember;
-
 /**
  * 团队（ws 级，spec §3.2；leader 必须同时在 members 内）。
  * 与 electron 端 agent/types.ts 的 Team 对齐。
@@ -753,9 +750,8 @@ export interface ApiSurface {
     list(): Promise<Workspace[]>;
     get(id: string): Promise<Workspace | null>;
     delete(id: string): Promise<void>;
-    /** v25 Task 6：setCoordinator → setDefaultAgent（spec §5）；instanceId=null 清除 */
+    /** v25 Task 6（spec §5）：设置/清空默认会话 agent；instanceId=null 清除（查询随 workspace:get/list 返回） */
     setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
-    getCoordinator(workspaceId: string): Promise<{ instanceId: string | null }>;
     /** P2 Task 2：重命名 workspace（UPDATE name 列） */
     rename(id: string, name: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */

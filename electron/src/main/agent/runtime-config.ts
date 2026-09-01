@@ -12,14 +12,15 @@ export interface AgentRuntimeOpts {
   workspaceId: string;
   workspaceDir: string;
   /**
-   * v2（Task 10）：本地身份三件套取代 Matrix 凭据五件套
+   * v2（Task 10）：本地身份取代 Matrix 凭据
    * （botUserId/botAccessToken/homeserverUrl/ownerUserId/teamRoomId 已删除）。
    * agentAssignmentId 与 instanceId 同值（显式命名，供子进程侧区分语义）；
-   * agentUserId 为展示名映射键；teamSessionId 为团队会话（sessions 表）ID。
+   * agentUserId 为展示名映射键。
+   * v25（Task 15）：workspace 级团队会话 id 字段随团队会话概念退役删除——
+   * dispatch/abort 目标会话一律用当前 executionSessionId（P0-8 语义定型）。
    */
   agentAssignmentId: string;
   agentUserId: string;
-  teamSessionId: string;
   systemPrompt: string;
   /** v1.3：传 modelName + modelBaseUrl + llmApiKey 给 runtime */
   modelName: string;
@@ -69,8 +70,6 @@ export interface RuntimeConfig {
   agentAssignmentId: string;
   /** agent 本地身份（agent_user_id；展示名映射 + 内部事件 sender） */
   agentUserId: string;
-  /** 团队会话 ID（sessions 表主键；dispatch/abort 的目标会话） */
-  teamSessionId: string;
   systemPrompt: string;
   // v1.3 曾移除 modelProvider；P3 起 platform 经 modelPlatform 显式传入，缺省时才回退 baseUrl 启发式检测
   modelName: string;
@@ -168,7 +167,6 @@ export function parseConfig(raw: unknown): RuntimeConfig {
   const {
     agentAssignmentId,
     agentUserId,
-    teamSessionId,
     systemPrompt,
     modelName,
     modelBaseUrl,
@@ -188,7 +186,6 @@ export function parseConfig(raw: unknown): RuntimeConfig {
   if (
     typeof agentAssignmentId !== 'string' ||
     typeof agentUserId !== 'string' ||
-    typeof teamSessionId !== 'string' ||
     typeof systemPrompt !== 'string' ||
     typeof modelName !== 'string' ||
     typeof llmApiKey !== 'string' ||
@@ -196,7 +193,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     typeof workspaceId !== 'string'
   ) {
     throw new Error(
-      'AGENT_CONFIG 缺少必要字段（agentAssignmentId/agentUserId/teamSessionId/' +
+      'AGENT_CONFIG 缺少必要字段（agentAssignmentId/agentUserId/' +
         'systemPrompt/modelName/llmApiKey/workspaceDir/workspaceId）',
     );
   }
@@ -222,7 +219,6 @@ export function parseConfig(raw: unknown): RuntimeConfig {
   return {
     agentAssignmentId,
     agentUserId,
-    teamSessionId,
     systemPrompt,
     modelName,
     modelBaseUrl: typeof modelBaseUrl === 'string' ? modelBaseUrl : undefined,

@@ -15,17 +15,17 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useCapabilityStore } from '../../stores/capability.store';
 import { Button } from '../ui/Button';
-import type { AgentAssignment, AgentDefinition, CapabilityType } from '../../ipc/types';
+import type { WorkspaceAgentMember, AgentDefinition, CapabilityType } from '../../ipc/types';
 
 interface Props {
   workspaceId: string;
   agentDef?: AgentDefinition;
-  /** 当前 assignment（提供且 onAdjustAssignment 也提供时显示「调整本实例能力」按钮） */
-  activeAssignment?: AgentAssignment;
+  /** 当前成员（提供且 onAdjustAssignment 也提供时显示「调整本实例能力」按钮） */
+  activeAssignment?: WorkspaceAgentMember;
   /** custom agent 时显示「编辑 def 默认能力」按钮，点击跳到 DefinitionEditor edit 模式 */
   onEditDefinition?: (defId: string) => void;
   /** 点击「调整本实例能力」打开 AssignmentCapabilitiesDialog（Layer 3 override） */
-  onAdjustAssignment?: (assignment: AgentAssignment) => void;
+  onAdjustAssignment?: (assignment: WorkspaceAgentMember) => void;
 }
 
 type Group = { type: CapabilityType; label: string; layer1: string[]; layer2: string[] };

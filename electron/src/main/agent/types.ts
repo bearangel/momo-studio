@@ -4,8 +4,6 @@
 //
 // v25 重构（spec 2026-08-31 §3）：去编排——角色/父子关系从 schema 消失，
 // `agent_assignments` → `workspace_agent_members`（成员制，无 role/parent/enabled）。
-// AgentAssignment 保留为 WorkspaceAgentMember 的过渡别名，供 Task 3-5 逐步消除，
-// Task 15 删别名。
 
 /** Agent 工具引用 */
 export interface ToolRef {
@@ -95,9 +93,6 @@ export interface WorkspaceAgentMember {
   lastRunning: boolean;
   createdAt: string;
 }
-
-/** 过渡别名（Task 3-5 逐步消除引用，Task 15 删除） */
-export type AgentAssignment = WorkspaceAgentMember;
 
 /** 团队（ws 级，spec §3.2；leader 必须同时在 members 内，建团/换 leader 同事务保证） */
 export interface Team {

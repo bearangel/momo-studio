@@ -13,7 +13,7 @@ function makeDispatch(overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id: 'd1',
     sessionId: '!team:local',
-    sender: '@coordinator:local',
+    sender: '@pm:local',
     body: '请实现登录页',
     eventType: 'io.momo-studio.dispatch',
     streamSessionId: null,

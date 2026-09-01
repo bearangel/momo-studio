@@ -31,20 +31,20 @@ import { logger } from '../logger';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { ProviderTokenBucket } from '../agent/llm/token-bucket';
 
-/** agent 实例的并发配置（由上层从 agent_definitions + assignment 解析后注入） */
-export interface AgentAssignmentInfo {
+/** agent 成员的并发配置（由上层从 agent_definitions + workspace_agent_members 解析后注入） */
+export interface AgentMemberInfo {
   agentDefinitionId: string;
   modelProviderId: string;
   maxConcurrentTasks: number;
 }
 
 export interface DispatcherOpts {
-  /** assignmentId（instance_id）→ runner */
+  /** instanceId → runner */
   runners: Map<string, AgentRunner>;
   /** providerId → token bucket */
   buckets: Map<string, ProviderTokenBucket>;
   /** 查询某 agent 实例的并发配置（含 modelProviderId 用于查 bucket） */
-  getAgentAssignment: (instanceId: string) => AgentAssignmentInfo | null;
+  getAgentMember: (instanceId: string) => AgentMemberInfo | null;
   /** 全局并发上限（来自 global_settings.max_concurrent_tasks） */
   getGlobalMax: () => number;
   /** 测试用时间注入；默认 Date.now() */
@@ -68,11 +68,11 @@ export class TaskDispatcher {
     const runner = this.opts.runners.get(assigneeAssignmentId);
     if (!runner) return false;
 
-    const assignment = this.opts.getAgentAssignment(assigneeAssignmentId);
-    if (!assignment) return false;
+    const member = this.opts.getAgentMember(assigneeAssignmentId);
+    if (!member) return false;
 
     // 1. per-agent 并发：当前 runner 活跃 task 数 < max
-    if (runner.activeTaskCount() >= assignment.maxConcurrentTasks) return false;
+    if (runner.activeTaskCount() >= member.maxConcurrentTasks) return false;
 
     // 2. 全局并发：所有 runner 活跃 task 之和 < globalMax
     const globalActive = Array.from(this.opts.runners.values()).reduce(
@@ -82,7 +82,7 @@ export class TaskDispatcher {
     if (globalActive >= this.opts.getGlobalMax()) return false;
 
     // 3. provider 限流：bucket 不存在 = 该 provider 未配置限流 = 放行
-    const bucket = this.opts.buckets.get(assignment.modelProviderId);
+    const bucket = this.opts.buckets.get(member.modelProviderId);
     if (bucket && !bucket.canConsume()) return false;
 
     // 4. 找下一个 assigned 任务（按 priority DESC + scheduled_at ASC + created_at ASC）

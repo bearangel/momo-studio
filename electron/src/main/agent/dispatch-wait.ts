@@ -85,8 +85,8 @@ export async function executeDispatch(
   /**
    * PM 当前执行的会话（用户发消息的会话）。dispatch/abort 内部事件发往它——
    * 子 agent 的消息行因此落在用户所在会话，dispatch chip 才能反查到子流
-   * （P0-8：此前发 config.teamSessionId，普通会话中派发时子行落团队会话，
-   * 嵌套展开永远为空）。
+   * （P0-8：此前发 workspace 级团队会话 id，普通会话中派发时子行落团队会话，
+   * 嵌套展开永远为空。v25 Task 15：团队会话字段删除，本参数成为唯一目标）。
    */
   executionSessionId?: string,
   /**
@@ -139,7 +139,7 @@ export async function executeDispatch(
           taskId: dispatch.content.task_id,
           subStreamSessionId: subStreamSessionId,
         });
-        sendAbortDispatchEvent(executionSessionId ?? config.teamSessionId, config.agentUserId, abortEvt.content);
+        sendAbortDispatchEvent(executionSessionId ?? '', config.agentUserId, abortEvt.content);
         const err = new Error('dispatch 被中断');
         err.name = 'AbortError';
         reject(err);
@@ -157,7 +157,7 @@ export async function executeDispatch(
 
   // sender 携带 agent 本地身份 agentUserId（Task 10）。展开 DispatchContent 为
   // 匿名对象类型以满足内部事件协议的 Record<string, unknown> 索引签名。
-  sendDispatchEvent(executionSessionId ?? config.teamSessionId, config.agentUserId, { ...dispatch.content });
+  sendDispatchEvent(executionSessionId ?? '', config.agentUserId, { ...dispatch.content });
 
   return resultPromise;
 }

@@ -4,10 +4,10 @@ import { useState, type FormEvent } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import type { AgentAssignment } from '../../ipc/types';
+import type { WorkspaceAgentMember } from '../../ipc/types';
 
 interface Props {
-  assignment: AgentAssignment;
+  assignment: WorkspaceAgentMember;
   onClose: () => void;
 }
 

@@ -11,8 +11,8 @@
 //   - agent:start / stop / isRunning / getBuiltinSuggestions
 //   - team:list/create/rename/delete/setLeader/addMember/removeMember —— 团队（spec §4.2）
 //
-// v25（spec 2026-08-31）：去编排——agent:assignMain / agent:updateAssignmentRole
-// 随 role/parent 概念退役删除；assignment 字样通道统一更名 member。
+// v25（spec 2026-08-31）：去编排——角色指派/改角色通道随 role/parent 概念
+// 退役删除；assignment 字样通道统一更名 member。
 //
 // v2（Task 10）：分配流程去 Matrix——本地身份生成（generateAgentUserId），
 // agent:start 无 token。
@@ -55,7 +55,7 @@ import {
   setAssignmentDeltas,
   type AssignmentDeltas,
 } from './assignment-capabilities';
-import type { AgentAssignment, AgentDefinition } from './types';
+import type { WorkspaceAgentMember, AgentDefinition } from './types';
 
 /** agent:addMember 入参（v25 spec §5：AddMemberInput；无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
 export interface AddMemberInput {
@@ -72,7 +72,7 @@ export interface AddMemberInput {
  *     清 keychain override（session_members/team_members 由 FK CASCADE 清理）
  * 返回结构化结果供 renderer 提示 blocked 原因。
  */
-export async function removeAgentAssignment(instanceId: string): Promise<RemoveMemberResult> {
+export async function removeAgentMember(instanceId: string): Promise<RemoveMemberResult> {
   const result = removeMember(instanceId);
   if (!result.ok) {
     return result;
@@ -113,8 +113,6 @@ export function registerAgentHandlers(): void {
           agentUserId: member.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
-          // v25 过渡态：团队会话列已退役，传空串保持线协议形状
-          teamSessionId: '',
           def,
           llmApiKey: apiKey,
         }),
@@ -241,7 +239,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle('agent:removeMember', async (_evt, instanceId: string) => {
-    return removeAgentAssignment(instanceId);
+    return removeAgentMember(instanceId);
   });
 
   ipcMain.handle('agent:isRunning', async (_evt, instanceId: string) => {
@@ -281,7 +279,7 @@ export function registerAgentHandlers(): void {
     async (
       _evt,
       opts: {
-        member: AgentAssignment;
+        member: WorkspaceAgentMember;
         workspaceId: string;
       },
     ) => {
@@ -308,8 +306,6 @@ export function registerAgentHandlers(): void {
           agentUserId: member.agentUserId,
           workspaceId,
           workspaceDir: workspace.directoryPath,
-          // v25 过渡态：团队会话列已退役，传空串保持线协议形状
-          teamSessionId: '',
           def,
           llmApiKey,
         }),

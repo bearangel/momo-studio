@@ -5,7 +5,7 @@
 // 和 per-assignment 能力覆盖（Layer 3）：
 //   - onEditDefinition?: (defId: string) => void
 //     仅当 agentDef 非空 + source !== 'builtin' + callback 提供 → 显示「编辑 def 默认能力」
-//   - onAdjustAssignment?: (assignment: AgentAssignment) => void
+//   - onAdjustAssignment?: (assignment: WorkspaceAgentMember) => void
 //     仅当 activeAssignment 提供 + callback 提供 → 显示「调整本实例能力」
 //
 // 不破坏现有调用站点：未提供 callback 时两个按钮均不渲染。
@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CapabilityConfig } from './CapabilityConfig';
 import { useCapabilityStore } from '../../stores/capability.store';
-import type { AgentAssignment, AgentDefinition, WorkspaceAllocation } from '../../ipc/types';
+import type { WorkspaceAgentMember, AgentDefinition, WorkspaceAllocation } from '../../ipc/types';
 
 // allocation.get/add/remove 在 CapabilityConfig 挂载与 L2 增删时被触发
 const allocationGet = vi.fn();
@@ -68,7 +68,7 @@ function buildDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   };
 }
 
-function buildAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
+function buildAssignment(overrides: Partial<WorkspaceAgentMember> = {}): WorkspaceAgentMember {
   return {
     instanceId: 'inst-1',
     workspaceId: 'ws-1',

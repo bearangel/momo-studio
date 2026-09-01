@@ -5,7 +5,7 @@
 // 这是三层能力叠加模型中的第二层（WorkspaceAllocation）：
 //   Layer 1: AgentDefinition.default*   —— agent 定义自带的默认能力
 //   Layer 2: WorkspaceAllocation        —— 本文件，workspace 内所有 agent 共享的能力
-//   Layer 3: AgentAssignment.extra      —— （后续 task 引入）单次分配的额外能力
+//   Layer 3: 成员级能力 delta（per-member add/remove，见 agent/assignment-capabilities.ts）
 //
 // 持久化在 workspace_allocations 表（migration v5 创建），主键三列组合
 // (workspace_id, capability_type, capability_ref) 保证同一能力不会被重复加入。

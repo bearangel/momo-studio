@@ -55,8 +55,6 @@ export async function ensureMemberRuntime(instanceId: string): Promise<void> {
       agentUserId: row.agent_user_id,
       workspaceId: row.workspace_id,
       workspaceDir: workspace.directoryPath,
-      // v25 过渡态：团队会话列已退役，传空串保持线协议形状（与 agent:start 一致）
-      teamSessionId: '',
       def,
       llmApiKey,
     }),

@@ -35,13 +35,13 @@ import {
   type Capabilities,
 } from '../../lib/capability-helpers';
 import type {
-  AgentAssignment,
+  WorkspaceAgentMember,
   AgentDefinition,
   AssignmentDeltas,
 } from '../../ipc/types';
 
 interface Props {
-  assignment: AgentAssignment;
+  assignment: WorkspaceAgentMember;
   def: AgentDefinition;
   onClose: () => void;
 }

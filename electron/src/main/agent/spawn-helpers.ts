@@ -11,7 +11,8 @@
 //   - modelBaseUrl 来自 provider.baseUrl（spawn 前查 model_providers 表）
 // v25（Task 10）：subAgents/isLeader 改按 session_members 会话快照计算
 //   （取代 v1 parent_instance_id 链查询，spec §4.7）；opts 携带本地身份
-//   （agentUserId/teamSessionId），不再传 Matrix 凭据。
+//   agentUserId，不再传 Matrix 凭据。Task 15：团队会话 id 字段随团队会话
+//   概念退役删除（dispatch 目标会话一律用 executionSessionId）。
 
 import path from 'node:path';
 import {
@@ -152,12 +153,6 @@ export interface BuildSpawnOptsInput {
   agentUserId: string;
   workspaceId: string;
   workspaceDir: string;
-  /**
-   * 团队会话 ID（sessions 表主键）。
-   * v25 过渡态：workspaces.team_session_id 已退役，无团队会话可传时为空串；
-   * AGENT_CONFIG 线协议字段保留（runtime 侧作 dispatch 目标会话兜底）。
-   */
-  teamSessionId: string;
   def: AgentDefinition;
   /**
    * v25 过渡态：assignment.role 已随去编排退役；缺省 'standalone'。
@@ -188,7 +183,6 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     agentUserId,
     workspaceId,
     workspaceDir,
-    teamSessionId,
     def,
     llmApiKey,
     role = 'standalone',
@@ -224,7 +218,6 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     workspaceDir,
     agentAssignmentId: instanceId,
     agentUserId,
-    teamSessionId,
     systemPrompt: def.systemPrompt,
     // P3 Task 1：modelPlatform 由 provider.platform 显式透传（v24 model_providers 列）。
     // runtime-entry runChatLoop 把此字段原样塞给 createLLMProvider 的 model.provider；

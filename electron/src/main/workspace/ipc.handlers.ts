@@ -63,7 +63,7 @@ export function registerWorkspaceHandlers(): void {
   });
 
   // 设置/清空默认会话 agent；若目标实例正在运行，自动停止并重启以应用新标志。
-  // v25 Task 6：通道 workspace:setCoordinator → workspace:setDefaultAgent（spec §5）
+  // v25 Task 6（spec §5）：默认 agent 设置通道由协调 agent 通道更名而来。
   ipcMain.handle(
     'workspace:setDefaultAgent',
     async (_evt, workspaceId: string, instanceId: string | null) => {
@@ -78,11 +78,8 @@ export function registerWorkspaceHandlers(): void {
     },
   );
 
-  // 查询当前默认会话 agent
-  ipcMain.handle('workspace:getCoordinator', async (_evt, workspaceId: string) => {
-    const ws = getWorkspace(workspaceId);
-    return { instanceId: ws?.defaultAgentInstanceId ?? null };
-  });
+  // v25（spec §4.3）：默认会话 agent 随 workspace:get/list 的
+  // defaultAgentInstanceId 字段返回，独立查询通道已删除。
 
   logger.info('Workspace IPC handlers 已注册');
 }
@@ -124,8 +121,6 @@ async function restartDefaultAgentInstance(
       agentUserId: member.agentUserId,
       workspaceId,
       workspaceDir: ws.directoryPath,
-      // v25 过渡态：团队会话列已退役，传空串保持线协议形状
-      teamSessionId: '',
       def,
       llmApiKey: apiKey,
     }),

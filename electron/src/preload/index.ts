@@ -36,9 +36,8 @@ const api: ApiSurface = {
     // P2 Task 2：重命名 / 在系统文件管理器打开目录
     rename: (id, name) => invoke('workspace:rename', id, name),
     openDirectory: (id) => invoke('workspace:openDirectory', id),
-    // v25 Task 6：setCoordinator → setDefaultAgent（spec §5）
+    // v25 Task 6（spec §5）：默认 agent 设置通道（原协调 agent 通道更名）
     setDefaultAgent: (id, instanceId) => invoke('workspace:setDefaultAgent', id, instanceId),
-    getCoordinator: (id) => invoke('workspace:getCoordinator', id),
   },
   file: {
     read: (wsId, path) => invoke('file:read', wsId, path),
@@ -48,8 +47,8 @@ const api: ApiSurface = {
     delete: (wsId, filePath) => invoke('file:delete', wsId, filePath),
     rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
   },
-  // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；assignMain /
-  // updateAssignmentRole 随 role 概念退役删除（preload 悬空绑定一并清理）。
+  // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；角色指派/
+  // 改角色通道随 role 概念退役删除（preload 悬空绑定一并清理）。
   agent: {
     addMember: (input) => invoke('agent:addMember', input),
     createFromYaml: (yaml) => invoke('agent:createFromYaml', yaml),

@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AssignmentCapabilitiesDialog } from './AssignmentCapabilitiesDialog';
 import { useAgentStore } from '../../stores/agent.store';
-import type { AgentAssignment, AgentDefinition, AssignmentDeltas, WorkspaceAllocation, Workspace } from '../../ipc/types';
+import type { WorkspaceAgentMember, AgentDefinition, AssignmentDeltas, WorkspaceAllocation, Workspace } from '../../ipc/types';
 
 // ---- mock IPC 桩（capability tabs / allocation / workspace.get 直接走 ipc） ----
 const allocationGet = vi.fn();
@@ -81,7 +81,7 @@ beforeEach(() => {
   });
 });
 
-function buildAssignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
+function buildAssignment(overrides: Partial<WorkspaceAgentMember> = {}): WorkspaceAgentMember {
   return {
     instanceId: 'inst-1',
     workspaceId: 'ws-1',
