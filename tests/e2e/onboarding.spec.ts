@@ -56,7 +56,9 @@ test.afterAll(() => {
   fs.rmSync(tmpUserData, { recursive: true, force: true });
 });
 
-test('full onboarding flow', async () => {
+// v2.0/v25 待重写（Task 15 记录）：onboarding 向导与 Matrix IM 流程已退役，
+// 本 spec 走的是 v1.x 界面；最小冒烟见 smoke.spec.ts。
+test.skip('full onboarding flow', async () => {
   // `require('electron')` from a Node (non-Electron) context returns the path
   // to the Electron binary as a string.
   const electronPath = electronRequire('electron') as string;

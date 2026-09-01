@@ -9,7 +9,9 @@ const TMP_DIR = path.join(os.tmpdir(), `momo-e2e-${Date.now()}`);
 test.beforeAll(() => { fs.mkdirSync(TMP_DIR, { recursive: true }); });
 test.afterAll(() => { fs.rmSync(TMP_DIR, { recursive: true, force: true }); });
 
-test('E2E: onboarding + workspace + agent + IM', async () => {
+// v2.0/v25 待重写（Task 15 记录）：onboarding 向导与 Matrix IM 流程已退役，
+// 本 spec 走的是 v1.x 界面；最小冒烟见 smoke.spec.ts。
+test.skip('E2E: onboarding + workspace + agent + IM', async () => {
   const app = await electron.launch({
     args: [ELECTRON_APP_DIR, '--no-sandbox'],
     env: { ...process.env, AP_USER_DATA_DIR: TMP_DIR },
