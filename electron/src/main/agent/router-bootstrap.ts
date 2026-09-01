@@ -36,8 +36,10 @@ let currentRouterService: RouterService | null = null;
  * 幂等 lazy 启动 RouterService。
  *
  * - 已启动（currentRouterService 非 null）→ no-op
- * - runners.size === 0 → no-op（防御性，正常路径不触发）
  * - 首次调用 → 创建 RouterService + setBridgeRouter
+ *
+ * Task 9 修复：零 runner（runners.size === 0）也创建——router 携带 ensureRunner
+ * 自动拉起能力，「用户停掉全部 agent 后重启」的 boot 状态恰恰最需要它在位。
  *
  * v2（P1 Task 5）：RouterService 注入方式改为内部事件桥（setBridgeRouter）——
  * runtime 子进程的 dispatch/task_reply 经 child IPC 直达 routeEvent，
@@ -50,7 +52,6 @@ export async function ensureRouterService(
   runners: Map<string, AgentRunner>,
 ): Promise<void> {
   if (currentRouterService) return;  // 已启动
-  if (runners.size === 0) return;    // 无 runner，不需要
 
   // Task 9 接线：ensureRunner = start 链（runner 缺失时自动拉起后派发，spec §4.6）；
   // final 监听 = 接待 agent 首次 final → LLM 异步命名（spec §4.5）

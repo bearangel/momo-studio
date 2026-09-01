@@ -28,9 +28,15 @@ vi.mock('../../src/main/p2p', () => ({
   broadcastLocalMessage: mockBroadcast,
 }));
 
+// logger mock：断言「router 缺席导致派发跳过」的 warn 留痕（防静默死路回归）
+vi.mock('../../src/main/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember, getSession } from '../../src/main/storage/sessions/repo';
 import { insertTask } from '../../src/main/storage/tasks/repo';
+import { logger } from '../../src/main/logger';
 import {
   resolveTarget,
   sendUserMessage,
@@ -341,7 +347,7 @@ describe('sendUserMessage 全链', () => {
     expect(getSession(s.id)!.title).toBe('我的会话');
   });
 
-  it('无 router（未注入）→ 不抛错且消息仍落库', async () => {
+  it('无 router（未注入）→ 不抛错且消息仍落库，router 缺席留 warn 痕', async () => {
     const db = getDb();
     seedWorkspace(db, 'ws1');
     seedAgentDef(db, 'def-a', 'A');
@@ -353,6 +359,11 @@ describe('sendUserMessage 全链', () => {
 
     const rows = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(s.id) as unknown[];
     expect(rows).toHaveLength(1);
+    // 目标已解析但 router 缺席 → warn 留痕（不再静默死路）
+    expect(logger.warn).toHaveBeenCalledWith(
+      '路由目标已解析但 RouterService 未就绪，消息跳过派发',
+      expect.objectContaining({ sessionId: s.id, target: 'inst-a' }),
+    );
   });
 
   it('会话不存在 → 抛错（含 sessionId）', async () => {

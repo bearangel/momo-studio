@@ -155,7 +155,8 @@ export function onLeaderFinal(messageId: string): void {
   }
 }
 
-/** 接待成员 = session_members.is_leader 建会快照（spec §3.3），JOIN 出 def 引用 */function findReceptionAgent(
+/** 接待成员 = session_members.is_leader 建会快照（spec §3.3），JOIN 出 def 引用 */
+function findReceptionAgent(
   sessionId: string,
 ): { instanceId: string; agentDefinitionId: string } | null {
   const row = getDb()

@@ -5,7 +5,8 @@
 // 覆盖 5 个用例：
 //   1. 首次调用：启动 RouterService + setBridgeRouter（内部事件桥注入）
 //   2. 二次调用：no-op（currentRouterService 已存在）
-//   3. runners.size === 0 时 no-op
+//   3. runners.size === 0 也创建（Task 9 修复：router 携带 ensureRunner 自动拉起，
+//      零 runner——用户停掉全部 agent 后重启——时 router 必须在位）
 //   4. destroyRouterService：清理 + setBridgeRouter(null)
 //   5. destroyRouterService 在 currentRouterService=null 时 no-op
 //
@@ -85,12 +86,12 @@ describe('router-bootstrap (Task 1)', () => {
     expect(setBridgeRouter).toHaveBeenCalledOnce();
   });
 
-  it('runners.size === 0 时 no-op', async () => {
+  it('runners.size === 0 也创建 RouterService（Task 9 修复：零 runner 状态恰是自动拉起最需要的）', async () => {
     const runners = new Map<string, AgentRunner>();
 
     await ensureRouterService(runners);
 
-    expect(setBridgeRouter).not.toHaveBeenCalled();
+    expect(setBridgeRouter).toHaveBeenCalledOnce();
   });
 
   it('destroyRouterService：清理 + setBridgeRouter(null)', async () => {

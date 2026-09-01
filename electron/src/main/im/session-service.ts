@@ -149,10 +149,19 @@ export async function sendUserMessage(input: {
   // 有效成员（JOIN 过滤失效）→ 选目标派发；全失效时 members 为空（readOnly）
   const members = getSessionMembersInfo(input.sessionId);
   const target = pickRoutingTarget(members, input.mentionedInstanceIds ?? []);
-  if (target && router) {
-    // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
-    // 随 Task 9 路由改造一并更名。
-    await router.routeUserChat({ sessionId: input.sessionId, assignmentId: target, body: input.body });
+  if (target) {
+    if (router) {
+      // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
+      // 随 Task 9 路由改造一并更名。
+      await router.routeUserChat({ sessionId: input.sessionId, assignmentId: target, body: input.body });
+    } else {
+      // router 缺席（RouterService 未启动/销毁）必须留痕——防静默死路
+      // （Task 9 评审：零 runner 启动也已保证 router 在位，此分支仅剩极端时序）
+      logger.warn('路由目标已解析但 RouterService 未就绪，消息跳过派发', {
+        sessionId: input.sessionId,
+        target,
+      });
+    }
   }
   return { readOnly: members.length === 0 };
 }

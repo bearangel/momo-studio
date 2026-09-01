@@ -86,17 +86,14 @@ export async function initTaskDrivenRuntime(): Promise<void> {
     }
   }
 
-  if (agentRunners.size === 0) {
-    logger.info('无 task-driven agent，跳过 RouterService 初始化');
-    return;
-  }
-
   populateProviderBuckets();
 
   // v2 修复：使用 router-bootstrap 统一 lazy 启动入口（替代手动创建 RouterService + 注入）。
   // ensureRouterService 内部已做 null 检查 + 幂等，重复调用 no-op（Task 5 起注入
   // 目标为 internal-event-bridge 的 setBridgeRouter）。动态 import 避开
   // router-bootstrap → router-service → runtime-registry 顶层循环依赖。
+  // Task 9 修复：零 runner 也启动——router 携带 ensureRunner 自动拉起能力，
+  // 用户停掉全部 agent 后重启的会话消息仍可经接待路由拉起派发。
   const { ensureRouterService } = await import('./router-bootstrap');
   // v2.0.1（spec §9）：dispatcher pickup 链路砍除后 ensureRouterService 只收 runners
   await ensureRouterService(agentRunners);

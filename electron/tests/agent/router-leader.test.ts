@@ -23,10 +23,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const { mockBroadcast, createLLMProviderMock, chatMock } = vi.hoisted(() => ({
+const { mockBroadcast, createLLMProviderMock, chatMock, ensureMemberRuntimeMock } = vi.hoisted(() => ({
   mockBroadcast: vi.fn(),
   createLLMProviderMock: vi.fn(),
   chatMock: vi.fn(),
+  ensureMemberRuntimeMock: vi.fn(),
 }));
 
 vi.mock('../../src/main/p2p', () => ({
@@ -35,6 +36,13 @@ vi.mock('../../src/main/p2p', () => ({
 
 vi.mock('../../src/main/agent/llm-provider', () => ({
   createLLMProvider: createLLMProviderMock,
+}));
+
+// start 链 mock（spawn 子进程属进程边界）：ensureMemberRuntime 替换为
+// 「向真实 agentRunners 注册 fake runner」的 spy——零 runner bootstrap 接线用例专用，
+// 其余用例不触碰 ensureRouterService，不受影响
+vi.mock('../../src/main/agent/start-chain', () => ({
+  ensureMemberRuntime: ensureMemberRuntimeMock,
 }));
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
@@ -148,10 +156,16 @@ beforeEach(() => {
   createLLMProviderMock.mockReset().mockImplementation(() => ({ chat: chatMock }));
 });
 
-afterEach(() => {
+afterEach(async () => {
   setSessionRouter(null);
   setFinalListener(null);
   __resetEventBufferForTest();
+  // 零 runner bootstrap 用例可能经真实 router-bootstrap 注入过 router/runner——
+  // 统一反向清理，防跨用例泄漏
+  const { destroyRouterService } = await import('../../src/main/agent/router-bootstrap');
+  destroyRouterService();
+  const { agentRunners } = await import('../../src/main/agent/runtime-registry');
+  agentRunners.clear();
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
@@ -452,5 +466,41 @@ describe('sender 契约锁：生产写入的 sender 字面量 === session-naming
     // 锁生产现状：落库行 sender 就是 'owner' 字面量（消费方过滤条件的另一面）
     const rows = listMessagesBySession(s.id);
     expect(rows[0]!.sender).toBe('owner');
+  });
+});
+
+// ─── 零 runner bootstrap 接线（评审修复：自动拉起契约跨重启闭环） ───────────
+
+describe('零 runner bootstrap：RouterService 在零 runner 状态也被创建（自动拉起闭环）', () => {
+  it('用户停掉全部 agent 后重启（boot 零 runner）→ ensureRouterService 仍创建 router，sendUserMessage 触发自动拉起派发', async () => {
+    const db = getDb();
+    seedMember(db, 'inst-lead', 'def-lead', { lastRunning: 0 });
+    const s = insertSession({ workspaceId: 'ws1', title: '快速会话' });
+    addSessionMember(s.id, 'inst-lead', true);
+
+    // 真生产接线：真实 router-bootstrap + 真实 agentRunners 注册表（非 setSessionRouter 注入）
+    const { agentRunners } = await import('../../src/main/agent/runtime-registry');
+    const { ensureRouterService, __resetRouterServiceForTest } = await import('../../src/main/agent/router-bootstrap');
+    __resetRouterServiceForTest();
+    agentRunners.clear();
+
+    // start 链效果仿真（进程边界 mock）：拉起 = 向真实注册表写入 fake runner
+    const { runner: fakeRunner, executeTask } = makeFakeRunner('inst-lead');
+    ensureMemberRuntimeMock.mockReset();
+    ensureMemberRuntimeMock.mockImplementation(async (instanceId: string) => {
+      agentRunners.set(instanceId, fakeRunner);
+    });
+
+    // 零 runner 启动——旧实现在此早退（router 永不创建 → 派发链静默死路）
+    await ensureRouterService(agentRunners);
+
+    await sendUserMessage({ sessionId: s.id, body: '重启后第一条消息' });
+
+    expect(ensureMemberRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(ensureMemberRuntimeMock).toHaveBeenCalledWith('inst-lead');
+    expect(executeTask).toHaveBeenCalledTimes(1);
+    const task = executeTask.mock.calls[0]![0] as { executionSessionId: string; body: string };
+    expect(task.executionSessionId).toBe(s.id);
+    expect(task.body).toBe('重启后第一条消息');
   });
 });
