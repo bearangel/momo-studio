@@ -1,18 +1,21 @@
 // renderer/src/components/agent/AgentsView.test.tsx
 //
-// v2.0 P3 Task 5：L2 工作空间能力编辑面板挂载测试。
-// AgentsView workspace tab 内除 WorkspaceAgentsPanel 外，应新增一个可折叠的
-// 「工作空间共享能力（L2）」区，挂载 <CapabilityConfig />（无选中 agent，
-// 只渲染 Layer 2）。section 默认展开。
-//
-// 约束：
-//   - 仅 activeWorkspaceId 非空时挂载 CapabilityConfig（避免无 ws 时注入 load）；
-//   - Agent 库 tab 不渲染 L2 区（仅 workspace tab）；
-//   - CapabilityConfig 的 IPC 链路（allocation:get）被触发一次。
+// v25 Task 12：AgentsView 双 Tab 测试（spec §6.1）。
+// Tab 容器 =「Agent 成员」/「团队」：默认成员 Tab（MembersPanel + L2 工作空间
+// 共享能力区），切「团队」渲染 TeamsPanel 且 L2 区不渲染。
+// 旧「本工作空间 / Agent 库」双 Tab 随 WorkspaceAgentsPanel/AgentLibrary 退役。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-// CapabilityConfig 子组件桩：渲染稳定的根元素并暴露 capability-config-root
+// 子面板桩：隔离 AgentsView 的 tab 切换逻辑与面板内部 store/IPC 依赖
+vi.mock('./MembersPanel', () => ({
+  MembersPanel: () => <div data-testid="members-panel" />,
+}));
+vi.mock('./TeamsPanel', () => ({
+  TeamsPanel: () => <div data-testid="teams-panel" />,
+}));
+
+// CapabilityConfig 桩：暴露 workspaceId 透传
 const capabilityConfigMock = vi.fn();
 vi.mock('./CapabilityConfig', () => ({
   CapabilityConfig: (props: { workspaceId: string }) => {
@@ -25,30 +28,12 @@ vi.mock('./CapabilityConfig', () => ({
   },
 }));
 
-// WorkspaceAgentsPanel 子组件桩：避免其内部 store/IPC 依赖影响测试
-vi.mock('./WorkspaceAgentsPanel', () => ({
-  WorkspaceAgentsPanel: () => <div data-testid="workspace-agents-panel" />,
-}));
-
 const { AgentsView } = await import('./AgentsView');
 const { useAgentStore } = await import('../../stores/agent.store');
 const { useWorkspaceStore } = await import('../../stores/workspace.store');
-const { useCapabilityStore } = await import('../../stores/capability.store');
 
-// IPC 桩：AgentsView 本身不直接调 allocation，但 CapabilityConfig 会通过 store 触发
-const allocationGet = vi.fn();
 beforeEach(() => {
   capabilityConfigMock.mockClear();
-  allocationGet.mockReset();
-  allocationGet.mockResolvedValue({
-    workspaceId: 'ws-1',
-    tools: [],
-    mcps: [],
-    skills: [],
-  });
-  (globalThis as unknown as { window: { api: { allocation: { get: typeof allocationGet } } } }).window.api = {
-    allocation: { get: allocationGet },
-  };
 
   useWorkspaceStore.setState({
     workspaces: [{
@@ -70,58 +55,61 @@ beforeEach(() => {
   useAgentStore.setState({
     definitions: [],
     members: [],
+    teams: [],
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn().mockResolvedValue(undefined),
-    loadMembers: vi.fn().mockResolvedValue(undefined),
-    loadBuiltinSuggestions: vi.fn().mockResolvedValue(undefined),
-    addMember: vi.fn(),
-    deleteDefinition: vi.fn(),
-    updateMemberApiKey: vi.fn(),
-    getMemberDeltas: vi.fn(),
-    setMemberDeltas: vi.fn(),
-    stopMember: vi.fn(),
-    startMember: vi.fn(),
-    reset: vi.fn(),
-  });
-
-  useCapabilityStore.setState({
-    allocation: null,
-    loading: false,
-    error: null,
   });
 });
 
-describe('AgentsView — L2 工作空间共享能力区挂载', () => {
-  it('workspace tab 内渲染「工作空间共享能力（L2）」区，含 CapabilityConfig', async () => {
+describe('AgentsView — 双 Tab 切换（spec §6.1）', () => {
+  it('默认激活「Agent 成员」Tab：渲染 MembersPanel + L2 工作空间共享能力区', async () => {
     render(<AgentsView />);
 
-    // 等 useEffect 触发 CapabilityConfig mount（其内部会 load allocation）
     await waitFor(() => {
-      expect(capabilityConfigMock).toHaveBeenCalled();
+      expect(screen.getByTestId('members-panel')).toBeInTheDocument();
     });
-
-    expect(screen.getByText(/工作空间共享能力.*L2/)).toBeInTheDocument();
-    expect(screen.getByTestId('workspace-agents-panel')).toBeInTheDocument();
     expect(screen.getByTestId('capability-config-root')).toBeInTheDocument();
+    expect(screen.getByText(/工作空间共享能力.*L2/)).toBeInTheDocument();
+    expect(screen.queryByTestId('teams-panel')).not.toBeInTheDocument();
     // CapabilityConfig 收到的 workspaceId 是当前 active workspace
     const props = capabilityConfigMock.mock.calls.at(-1)![0];
     expect(props.workspaceId).toBe('ws-1');
   });
 
-  it('切换到 Agent 库 tab → 不渲染 L2 区', async () => {
+  it('切到「团队」Tab → 渲染 TeamsPanel，成员面板与 L2 区不渲染', async () => {
     render(<AgentsView />);
 
     await waitFor(() => {
-      expect(capabilityConfigMock).toHaveBeenCalled();
+      expect(screen.getByTestId('members-panel')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agent 库' }));
+    fireEvent.click(screen.getByRole('button', { name: '团队' }));
 
     await waitFor(() => {
-      expect(screen.queryByTestId('capability-config-root')).not.toBeInTheDocument();
+      expect(screen.getByTestId('teams-panel')).toBeInTheDocument();
     });
-    expect(screen.queryByText(/工作空间共享能力.*L2/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('members-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('capability-config-root')).not.toBeInTheDocument();
+  });
+
+  it('「团队」Tab 切回「Agent 成员」→ MembersPanel 恢复渲染', async () => {
+    render(<AgentsView />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('members-panel')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '团队' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('teams-panel')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent 成员' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('members-panel')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('teams-panel')).not.toBeInTheDocument();
   });
 });

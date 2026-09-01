@@ -1,62 +1,61 @@
 // renderer/src/components/agent/AgentsView.tsx
-// Agent 管理容器：双 Tab（本工作空间 / Agent 库）
+// Agent 管理容器：双 Tab「Agent 成员」/「团队」（spec §6.1，v25 去编排）。
+// 旧「本工作空间 / Agent 库」双 Tab 退役——Agent 定义管理由资源库承接，
+// 成员/团队以 workspace 为维度在此管理。成员 Tab 底部保留 L2 工作空间
+// 共享能力区（P3 挂载，CapabilityConfig）。
 import { useState, useEffect } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { WorkspaceAgentsPanel } from './WorkspaceAgentsPanel';
-import { AgentLibrary } from './AgentLibrary';
+import { MembersPanel } from './MembersPanel';
+import { TeamsPanel } from './TeamsPanel';
 import { CapabilityConfig } from './CapabilityConfig';
 import { cn } from '../../lib/cn';
 
-type Tab = 'workspace' | 'library';
+type Tab = 'members' | 'teams';
 
 export function AgentsView() {
-  const [tab, setTab] = useState<Tab>('workspace');
+  const [tab, setTab] = useState<Tab>('members');
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  // 成员名称/图标/模型与团队 chips 都依赖 definitions join，在此统一加载
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
-  const loadBuiltinSuggestions = useAgentStore((s) => s.loadBuiltinSuggestions);
 
   useEffect(() => {
     void loadDefinitions(activeWorkspaceId ?? undefined);
   }, [loadDefinitions, activeWorkspaceId]);
-
-  useEffect(() => {
-    void loadBuiltinSuggestions();
-  }, [loadBuiltinSuggestions]);
 
   return (
     <div className="flex flex-col flex-1 min-w-0 h-full">
       <div className="flex border-b border-border-subtle shrink-0">
         <button
           type="button"
-          onClick={() => setTab('workspace')}
+          onClick={() => setTab('members')}
           className={cn(
             'px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
-            tab === 'workspace'
+            tab === 'members'
               ? 'border-accent-blue text-neutral-100'
               : 'border-transparent text-neutral-400 hover:text-neutral-200',
           )}
         >
-          本工作空间
+          Agent 成员
         </button>
         <button
           type="button"
-          onClick={() => setTab('library')}
+          onClick={() => setTab('teams')}
           className={cn(
             'px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
-            tab === 'library'
+            tab === 'teams'
               ? 'border-accent-blue text-neutral-100'
               : 'border-transparent text-neutral-400 hover:text-neutral-200',
           )}
         >
-          Agent 库
+          团队
         </button>
       </div>
       <div className="flex-1 overflow-auto min-w-0">
-        {tab === 'workspace' ? (
+        {tab === 'members' ? (
           <div className="flex flex-col h-full">
             <div className="flex-1 min-h-0">
-              <WorkspaceAgentsPanel />
+              <MembersPanel />
             </div>
             {activeWorkspaceId && (
               <section
@@ -71,7 +70,7 @@ export function AgentsView() {
             )}
           </div>
         ) : (
-          <AgentLibrary />
+          <TeamsPanel />
         )}
       </div>
     </div>
