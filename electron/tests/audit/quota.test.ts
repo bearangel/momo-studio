@@ -44,8 +44,8 @@ afterEach(() => {
 function createWorkspace(id: string): void {
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, description, directory_path, team_session_id, git_initialized, owner_id, icon_emoji)
-       VALUES (?, 'n', '', '/tmp/w', '', 0, 'owner', '📁')`,
+      `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+       VALUES (?, 'n', '', '/tmp/w', 0, 'owner', '📁')`,
     )
     .run(id);
 }

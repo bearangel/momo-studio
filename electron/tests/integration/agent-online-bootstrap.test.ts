@@ -89,8 +89,8 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
 
     // 1. workspace
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
-    ).run('ws-task5', 'test-ws', '@owner:localhost', '/tmp', '!space-task5:localhost');
+      'INSERT INTO workspaces (id, name, owner_id, directory_path) VALUES (?, ?, ?, ?)',
+    ).run('ws-task5', 'test-ws', '@owner:localhost', '/tmp');
 
     // 2. model provider（def.model_provider_id 不可为 NULL，否则被 guard 跳过）
     db.prepare(
@@ -108,17 +108,17 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
       ).run(defId, defId, defId, '1.0.0', 'prov-task5');
     }
 
-    // 4. 两个 assignment：last_running=1（在线） vs last_running=0（用户主动下线）
+    // 4. 两个成员：last_running=1（在线） vs last_running=0（用户主动下线）
     db.prepare(
-      `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
-       VALUES (?, ?, ?, ?, 1, 1, 'standalone', NULL, 0)`,
+      `INSERT INTO workspace_agent_members
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+       VALUES (?, ?, ?, ?, 1)`,
     ).run('inst-online', 'ws-task5', 'def-online', '@bot-online:localhost');
 
     db.prepare(
-      `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
-       VALUES (?, ?, ?, ?, 1, 0, 'standalone', NULL, 0)`,
+      `INSERT INTO workspace_agent_members
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+       VALUES (?, ?, ?, ?, 0)`,
     ).run('inst-offline', 'ws-task5', 'def-offline', '@bot-offline:localhost');
 
     // 5. 调用被测函数
@@ -149,8 +149,8 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     const db = getDb();
 
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
-    ).run('ws-task5b', 'test-ws', '@owner:localhost', '/tmp', '!space-task5b:localhost');
+      'INSERT INTO workspaces (id, name, owner_id, directory_path) VALUES (?, ?, ?, ?)',
+    ).run('ws-task5b', 'test-ws', '@owner:localhost', '/tmp');
 
     db.prepare(
       `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default)
@@ -164,11 +164,11 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
        VALUES (?, ?, ?, ?, 'declarative', '', '[]', '[]', '[]', 'builtin', '', '🤖', ?, '', 1)`,
     ).run('def-only-off', 'def-only-off', 'def-only-off', '1.0.0', 'prov-task5b');
 
-    // 唯一一个 assignment 为 last_running=0
+    // 唯一一个成员为 last_running=0
     db.prepare(
-      `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
-       VALUES (?, ?, ?, ?, 1, 0, 'standalone', NULL, 0)`,
+      `INSERT INTO workspace_agent_members
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+       VALUES (?, ?, ?, ?, 0)`,
     ).run('inst-only-off', 'ws-task5b', 'def-only-off', '@bot-only:localhost');
 
     const { initTaskDrivenRuntime } = await import('../../src/main/agent/init-runtime');
@@ -177,13 +177,13 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
     // 无 runner 注册 → 跳过 RouterService / ensureRouterService（init-runtime 内部 early return）
   });
 
-  it('enabled=0 但 last_running=1 的 assignment 也被跳过（双重过滤）', async () => {
+  it('enabled 列已退役：last_running=1 即注册（v25 单过滤语义）', async () => {
     await clearRegistry();
     const db = getDb();
 
     db.prepare(
-      'INSERT INTO workspaces (id, name, owner_id, directory_path, team_session_id) VALUES (?, ?, ?, ?, ?)',
-    ).run('ws-task5c', 'test-ws', '@owner:localhost', '/tmp', '!space-task5c:localhost');
+      'INSERT INTO workspaces (id, name, owner_id, directory_path) VALUES (?, ?, ?, ?)',
+    ).run('ws-task5c', 'test-ws', '@owner:localhost', '/tmp');
 
     db.prepare(
       `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default)
@@ -197,18 +197,18 @@ describe('Task 5: initTaskDrivenRuntime lastRunning 过滤', () => {
        VALUES (?, ?, ?, ?, 'declarative', '', '[]', '[]', '[]', 'builtin', '', '🤖', ?, '', 1)`,
     ).run('def-disabled', 'def-disabled', 'def-disabled', '1.0.0', 'prov-task5c');
 
-    // enabled=0 AND last_running=1 —— 应被 enabled 过滤拦截
+    // v25：enabled 列已随去编排退役——last_running 是「在线」唯一权威源
     db.prepare(
-      `INSERT INTO agent_assignments
-        (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, last_running, role, parent_instance_id, has_api_key_override)
-       VALUES (?, ?, ?, ?, 0, 1, 'standalone', NULL, 0)`,
+      `INSERT INTO workspace_agent_members
+        (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+       VALUES (?, ?, ?, ?, 1)`,
     ).run('inst-disabled', 'ws-task5c', 'def-disabled', '@bot-disabled:localhost');
 
     const { initTaskDrivenRuntime } = await import('../../src/main/agent/init-runtime');
     await initTaskDrivenRuntime();
 
     const { agentRunners, createTaskDrivenRuntime } = await import('../../src/main/agent/runtime-registry');
-    expect(vi.mocked(createTaskDrivenRuntime)).not.toHaveBeenCalled();
-    expect(agentRunners.has('inst-disabled')).toBe(false);
+    expect(vi.mocked(createTaskDrivenRuntime)).toHaveBeenCalledTimes(1);
+    expect(agentRunners.has('inst-disabled')).toBe(true);
   });
 });

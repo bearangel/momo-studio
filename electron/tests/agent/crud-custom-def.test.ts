@@ -85,7 +85,8 @@ describe('createCustomDef — v1.6 default* 入参', () => {
     expect(created.defaultTools).toEqual(customTools);
     expect(created.defaultMcps).toEqual(customMcps);
     expect(created.defaultSkills).toEqual(customSkills);
-    expect(created.workspaceId).toBe('ws-1');
+    // v25 定义全局化：workspace_id 列已 DROP，入参不再持久化（恒 null）
+    expect(created.workspaceId).toBeNull();
   });
 
   it('source = "custom"，runtime = "declarative"，version = "1.0.0"', () => {

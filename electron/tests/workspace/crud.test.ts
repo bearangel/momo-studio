@@ -2,8 +2,8 @@
 //
 // 验证 workspace CRUD 的核心行为：
 // - createWorkspace 同时落盘到文件系统 + git 仓库 + SQLite
-// - v2（Task 10）：createWorkspace 内部创建默认团队会话（sessions 表）并回填
-//   workspaces.team_session_id——不再创建 Matrix room
+// - v25（spec §4.4）：创建即建「团队会话」的行为退役——会话只由快速/协作
+//   入口创建，createWorkspace 后 sessions 表为空
 // - list/get/delete 各自能查到 / 找不到 / 删除记录
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -42,27 +42,14 @@ describe('workspace/crud', () => {
     expect(ws.gitInitialized).toBe(true);
   });
 
-  it('createWorkspace 自动创建默认团队会话并回填 team_session_id', async () => {
+  it('createWorkspace 不自动创建任何会话（v25：团队会话概念退役，回归锁）', async () => {
     const ws = await createWorkspace(
       { name: '团队项目', directoryPath: path.join(tmpRoot, 'team-ws') },
       '@alice:localhost',
     );
 
-    // 返回值携带团队会话 ID（非空——由本地 sessions 表生成，非 Matrix room ID）
-    expect(ws.teamSessionId).not.toBe('');
-
-    // sessions 表存在该会话行：title='团队会话'、kind='chat'、归属本 workspace
-    const sessions = listSessionsByWorkspace(ws.id);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]!.id).toBe(ws.teamSessionId);
-    expect(sessions[0]!.title).toBe('团队会话');
-    expect(sessions[0]!.kind).toBe('chat');
-
-    // DB 行的 team_session_id 与返回值一致（回填 UPDATE 生效）
-    const row = getDb()
-      .prepare('SELECT team_session_id FROM workspaces WHERE id = ?')
-      .get(ws.id) as { team_session_id: string };
-    expect(row.team_session_id).toBe(ws.teamSessionId);
+    // 会话只能由快速/协作入口创建（spec §4.4）——建 ws 零会话残留
+    expect(listSessionsByWorkspace(ws.id)).toHaveLength(0);
   });
 
   it('listWorkspaces 返回所有 workspace', async () => {

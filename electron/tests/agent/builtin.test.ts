@@ -5,7 +5,7 @@
 //   2. 幂等：重复注册不生成新 id（builtin-${slug} 确定性命名）
 //   3. 目录不存在时静默跳过（不抛错）
 //   4. 单个 YAML 解析失败不阻断其余文件注册
-//   5. type/parent/platform 入内存 suggestions Map，不进 DB
+//   5. parent/platform 入内存 suggestions Map，不进 DB（v25：角色建议随去编排退役）
 //   6. builtin def modelProviderId=NULL，modelName 来自 YAML
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -122,7 +122,7 @@ describe('agent/builtin — v1.3 schema', () => {
 });
 
 describe('agent/builtin — suggestions Map', () => {
-  it('YAML 的 type/parent/platform 进 suggestions Map，不进 DB', () => {
+  it('YAML 的 parent/platform 进 suggestions Map，不进 DB', () => {
     const agentDir = path.join(tmpRoot, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
     // 文件顺序故意把 sub 放在 main 前面，验证不依赖文件顺序
@@ -178,15 +178,13 @@ spec:
       expect(unknown.parentAgentId).toBeUndefined();
     }
 
-    // suggestions Map 含 type/parent/platform
+    // suggestions Map 含 parent/platform（v25：无 role 建议）
     const map = getBuiltinSuggestionsMap();
     const mainEntry = map['builtin-main-x'];
     const subEntry = map['builtin-sub-x'];
     expect(mainEntry).toBeDefined();
-    expect(mainEntry.role).toBe('main');
     expect(mainEntry.suggestedPlatform).toBe('anthropic');
     expect(subEntry).toBeDefined();
-    expect(subEntry.role).toBe('sub');
     expect(subEntry.suggestedParentDefId).toBe('builtin-main-x');
     expect(subEntry.suggestedPlatform).toBe('openai');
   });
@@ -224,7 +222,6 @@ spec:
 
     const map = getBuiltinSuggestionsMap();
     expect(map['builtin-orphan']).toBeDefined();
-    expect(map['builtin-orphan'].role).toBe('sub');
     // 父 slug 解析为 `builtin-missing-parent`（即使该 def 不存在，仍保留作建议）
     expect(map['builtin-orphan'].suggestedParentDefId).toBe('builtin-missing-parent');
   });

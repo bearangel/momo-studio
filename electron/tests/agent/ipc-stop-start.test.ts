@@ -38,9 +38,7 @@ vi.mock('../../src/main/agent/runtime-status', () => ({
 }));
 
 // mock runtime-registry：保留 real Maps + stopAgentRuntime 等；只把 startAgentRuntime 替成 spy
-// —— Task 7 需验证 maybeRestartMainForSubChange 经 restartMainForSubChange 调用 startAgentRuntime；
-// startAgentRuntime 是 free function（不是对象方法），不能用 vi.spyOn(startAgentRuntime, 'call')，
-// 改用 vi.mock 替换命名导出。
+// （v25：sub 启停触发 parent main 重启的链路已随编排退役，mock 仅为阻断真实 spawn）。
 vi.mock('../../src/main/agent/runtime-registry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/runtime-registry')>();
   return {
@@ -59,10 +57,7 @@ vi.mock('../../src/main/agent/crud', async (importOriginal) => {
     ...actual,
     listAgentDefinitions: vi.fn(() => []),
     getAgentDefinition: vi.fn(() => null),
-    listAssignments: vi.fn(() => []),
-    updateAssignmentRole: vi.fn(),
     updateAssignmentApiKey: vi.fn(),
-    listSubAssignments: vi.fn(() => []),
     deleteDefinition: vi.fn(),
     updateAgentDefinition: vi.fn(),
     createCustomDef: vi.fn(),
@@ -74,7 +69,6 @@ vi.mock('../../src/main/workspace/crud', async (importOriginal) => {
   return {
     ...actual,
     getWorkspace: vi.fn(() => null),
-    setWorkspaceCoordinator: vi.fn(),
   };
 });
 vi.mock('../../src/main/storage/keychain', () => ({
@@ -104,18 +98,16 @@ import {
   __clearRuntimeRegistryForTest,
   startAgentRuntime,
 } from '../../src/main/agent/runtime-registry';
-import { createWorkspace, getWorkspace } from '../../src/main/workspace/crud';
+import { createWorkspace } from '../../src/main/workspace/crud';
 import {
   saveAgentDefinition,
-  assignAgentToWorkspace,
-  getAgentDefinition,
-  listAssignments,
+  addMember,
 } from '../../src/main/agent/crud';
-import { setKeychainImpl, getSecret, type KeychainImpl } from '../../src/main/storage/keychain';
+import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { resolveApiKey } from '../../src/main/agent/spawn-helpers';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import type { WarmPool } from '../../src/main/agent/warm-pool';
-import type { AgentDefinition, AgentAssignment } from '../../src/main/agent/types';
+import type { AgentDefinition } from '../../src/main/agent/types';
 
 // 注册一次即可；后续测试用例从 ipcHandlers Map 取回调
 let registerAgentHandlers: () => void;
@@ -188,8 +180,8 @@ describe('agent:stop IPC handler（Task 4 销毁）', () => {
       { name: 'WS', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost', '!s:localhost', '!t:localhost',
     );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot-stop:localhost', 'standalone');
-    const instId = assignment.instanceId;
+    const member = await addMember(ws.id, def.id, '@bot-stop:localhost');
+    const instId = member.instanceId;
 
     // 准备 fake runner + pool（模拟 task-driven runtime 已运行）
     const fakeRunner = {
@@ -226,7 +218,7 @@ describe('agent:stop IPC handler（Task 4 销毁）', () => {
 
     // 验证：DB last_running 写为 0
     const row = getDb()
-      .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+      .prepare('SELECT last_running FROM workspace_agent_members WHERE instance_id = ?')
       .get(instId) as { last_running: number };
     expect(row.last_running).toBe(0);
   });
@@ -239,90 +231,5 @@ describe('agent:stop IPC handler（Task 4 销毁）', () => {
     // destroyTaskDrivenRuntime 对不存在的 id 是 no-op
     expect(agentRunners.has('inst-nonexistent')).toBe(false);
     expect(agentWarmPools.has('inst-nonexistent')).toBe(false);
-  });
-});
-
-/**
- * Task 7：maybeRestartMainForSubChange 在 agent:stop / agent:start 末尾触发。
- * 设计动机：sub 启停后需让 parent main 的 dispatch:<slug> 工具列表刷新（该列表只在 spawn 时重建）。
- *
- * 测试策略：
- *  - vi.mock runtime-registry（文件顶部），只把 startAgentRuntime 替成 vi.fn 供断言
- *  - stopAgentRuntime 等保留 real（Task 4 测试依赖）
- *  - 用真实 DB state（createWorkspace + saveAgentDefinition + assignAgentToWorkspace）
- *  - 一次性 mockReturnValueOnce 覆盖 isAgentRunning / getWorkspace / listAssignments /
- *    getAgentDefinition / getSecret，让 restartMainForSubChange 走到 startAgentRuntime
- */
-describe('maybeRestartMainForSubChange (Task 7)', () => {
-  beforeEach(() => {
-    vi.mocked(startAgentRuntime).mockClear();
-  });
-
-  it('停止 sub → 触发 parent main 重启（startAgentRuntime 被调用）', async () => {
-    // 真实 DB state：workspace + main + sub
-    const ws = await createWorkspace(
-      { name: 'WS-R', description: '', directoryPath: path.join(tmpRoot, 'ws-r'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
-    );
-    const mainDef = makeStandaloneDef('def-main-r');
-    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@main-r:localhost', 'main');
-    const subDef = makeStandaloneDef('def-sub-r');
-    const subAssignment = assignAgentToWorkspace(ws.id, subDef.id, '@sub-r:localhost', 'sub', mainAssignment.instanceId);
-
-    // 让 restartMainForSubChange 内部所有早返检查都通过
-    vi.mocked(isAgentRunning).mockReturnValueOnce(true);
-    vi.mocked(getWorkspace).mockReturnValueOnce(ws);
-    vi.mocked(listAssignments).mockReturnValueOnce([mainAssignment, subAssignment]);
-    vi.mocked(getAgentDefinition).mockReturnValueOnce(mainDef);
-    vi.mocked(getSecret).mockResolvedValueOnce('fake-bot-token');
-    // buildSpawnOpts 默认返回 {}，无法验证 instanceId 透传；override 让它带上 main instanceId
-    const { buildSpawnOpts } = await import('../../src/main/agent/spawn-helpers');
-    vi.mocked(buildSpawnOpts).mockReturnValueOnce({ instanceId: mainAssignment.instanceId } as unknown as ReturnType<typeof buildSpawnOpts>);
-
-    const handler = ipcHandlers.get('agent:stop');
-    expect(handler).toBeDefined();
-    await handler!(null, subAssignment.instanceId);
-
-    // 关键断言：startAgentRuntime 被调，且传入了 main 的 spawnOpts
-    expect(startAgentRuntime).toHaveBeenCalledTimes(1);
-    const callArgs = vi.mocked(startAgentRuntime).mock.calls[0];
-    const spawnOpts = callArgs[0] as { instanceId: string };
-    expect(spawnOpts.instanceId).toBe(mainAssignment.instanceId);
-  });
-
-  it('停止 standalone → 不触发 main 重启', async () => {
-    const ws = await createWorkspace(
-      { name: 'WS-NS', description: '', directoryPath: path.join(tmpRoot, 'ws-ns'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
-    );
-    const def = makeStandaloneDef('def-std-r');
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@std-r:localhost', 'standalone');
-
-    const handler = ipcHandlers.get('agent:stop');
-    expect(handler).toBeDefined();
-    await handler!(null, assignment.instanceId);
-
-    // standalone role !== 'sub'，maybeRestartMainForSubChange 早返，startAgentRuntime 不被调
-    expect(startAgentRuntime).not.toHaveBeenCalled();
-  });
-
-  it('停止 sub 但 main 已停 → 不重启（restartMainForSubChange 早返）', async () => {
-    const ws = await createWorkspace(
-      { name: 'WS-NR', description: '', directoryPath: path.join(tmpRoot, 'ws-nr'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
-    );
-    const mainDef = makeStandaloneDef('def-main-nr');
-    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@main-nr:localhost', 'main');
-    const subDef = makeStandaloneDef('def-sub-nr');
-    const subAssignment = assignAgentToWorkspace(ws.id, subDef.id, '@sub-nr:localhost', 'sub', mainAssignment.instanceId);
-
-    // isAgentRunning 返回 false → restartMainForSubChange 第一行就早返
-    vi.mocked(isAgentRunning).mockReturnValueOnce(false);
-
-    const handler = ipcHandlers.get('agent:stop');
-    expect(handler).toBeDefined();
-    await handler!(null, subAssignment.instanceId);
-
-    expect(startAgentRuntime).not.toHaveBeenCalled();
   });
 });

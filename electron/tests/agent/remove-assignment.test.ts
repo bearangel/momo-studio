@@ -1,4 +1,4 @@
-// removeAgentAssignment（IPC 编排层）：removeMember 守卫/删除 + 收尾副作用
+// removeAgentMember（IPC 编排层）：removeMember 守卫/删除 + 收尾副作用
 //
 // v25 Task 3：编排顺序——removeMember（leader 守卫 + 事务删除）先行，
 // blocked 时零副作用直接返回；成功后销毁 runtime + 清 keychain override。
@@ -26,7 +26,7 @@ vi.mock('../../src/main/logger', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
-import { removeAgentAssignment } from '../../src/main/agent/ipc.handlers';
+import { removeAgentMember } from '../../src/main/agent/ipc.handlers';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-remove-assignment-${Date.now()}`);
 const fakeKeychain = new Map<string, string>();
@@ -82,7 +82,7 @@ function insertMember(instanceId: string, defId: string, withOverride = false): 
   }
 }
 
-describe('removeAgentAssignment（v25 编排契约）', () => {
+describe('removeAgentMember（v25 编排契约）', () => {
   it('leader 守卫命中：返回 blockedTeams，零副作用（行保留 / 不停 runtime / 不清 keychain）', async () => {
     insertMember('leader-1', 'def1', true);
     insertMember('member-1', 'def2');
@@ -96,7 +96,7 @@ describe('removeAgentAssignment（v25 编排契约）', () => {
       .prepare('INSERT INTO team_members (team_id, instance_id, added_at) VALUES (?, ?, 1)')
       .run('team-1', 'leader-1');
 
-    const result = await removeAgentAssignment('leader-1');
+    const result = await removeAgentMember('leader-1');
 
     expect(result).toEqual({ ok: false, blockedTeams: ['攻坚组'] });
     // 零破坏：成员行与 override secret 原样保留，runtime 未被停止
@@ -110,7 +110,7 @@ describe('removeAgentAssignment（v25 编排契约）', () => {
   it('非 leader 成功：行删除 + runtime 停止 + override keychain 清理', async () => {
     insertMember('member-2', 'def2', true);
 
-    const result = await removeAgentAssignment('member-2');
+    const result = await removeAgentMember('member-2');
 
     expect(result).toEqual({ ok: true });
     expect(
@@ -121,7 +121,7 @@ describe('removeAgentAssignment（v25 编排契约）', () => {
   });
 
   it('不存在的 instanceId：幂等返回 ok（沿用旧语义）', async () => {
-    const result = await removeAgentAssignment('nonexistent-inst');
+    const result = await removeAgentMember('nonexistent-inst');
     expect(result).toEqual({ ok: true });
   });
 
@@ -131,7 +131,7 @@ describe('removeAgentAssignment（v25 编排契约）', () => {
       .prepare('UPDATE workspaces SET default_agent_instance_id = ? WHERE id = ?')
       .run('default-1', 'ws1');
 
-    const result = await removeAgentAssignment('default-1');
+    const result = await removeAgentMember('default-1');
 
     expect(result).toEqual({ ok: true });
     const ws = getDb()

@@ -117,10 +117,10 @@ import {
 import { createWorkspace } from '../../src/main/workspace/crud';
 import {
   saveAgentDefinition,
-  assignAgentToWorkspace,
+  addMember,
 } from '../../src/main/agent/crud';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import type { AgentDefinition, AgentAssignment } from '../../src/main/agent/types';
+import type { AgentDefinition, WorkspaceAgentMember } from '../../src/main/agent/types';
 
 // 注册一次即可；后续测试用例从 ipcHandlers Map 取回调
 let registerAgentHandlers: () => void;
@@ -188,16 +188,16 @@ function makeTaskDrivenDef(id: string): AgentDefinition {
 /** 查询 assignment 的 last_running 值 */
 function getLastRunning(instanceId: string): number {
   const row = getDb()
-    .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+    .prepare('SELECT last_running FROM workspace_agent_members WHERE instance_id = ?')
     .get(instanceId) as { last_running: number } | undefined;
   return row?.last_running ?? -1;
 }
 
-/** seed 一个 workspace + def + assignment（last_running 预置为指定值） */
+/** seed 一个 workspace + def + 成员（last_running 预置为指定值） */
 async function seedFixture(
   defId: string,
   lastRunning: 0 | 1,
-): Promise<{ assignment: AgentAssignment; workspaceId: string }> {
+): Promise<{ member: WorkspaceAgentMember; workspaceId: string }> {
   const def = makeTaskDrivenDef(defId);
   const ws = await createWorkspace(
     {
@@ -208,28 +208,28 @@ async function seedFixture(
     },
     '@o:localhost', '!s:localhost', '!t:localhost',
   );
-  const assignment = assignAgentToWorkspace(
-    ws.id, def.id, `@bot-${defId}:localhost`, 'standalone',
+  const member = await addMember(
+    ws.id, def.id, `@bot-${defId}:localhost`,
   );
-  // assignment 默认 last_running=1（migration default）；测试需精确控制初值
+  // 成员默认 last_running=1（migration default）；测试需精确控制初值
   getDb()
-    .prepare('UPDATE agent_assignments SET last_running = ? WHERE instance_id = ?')
-    .run(lastRunning, assignment.instanceId);
+    .prepare('UPDATE workspace_agent_members SET last_running = ? WHERE instance_id = ?')
+    .run(lastRunning, member.instanceId);
   // keychain 预置 bot token（agent:start handler 会读）
   memStore.set(`bot.@bot-${defId}:localhost.matrix_token`, 'fake-bot-token');
-  return { assignment, workspaceId: ws.id };
+  return { member, workspaceId: ws.id };
 }
 
 describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review I2）', () => {
   it('task-driven agent: start → DB last_running=1 + runner/pool 注册', async () => {
     // 初值 last_running=0（模拟从未启动或已停止状态）
-    const { assignment, workspaceId } = await seedFixture('def-start-1', 0);
-    const instId = assignment.instanceId;
+    const { member, workspaceId } = await seedFixture('def-start-1', 0);
+    const instId = member.instanceId;
     expect(getLastRunning(instId)).toBe(0);
 
     const handler = ipcHandlers.get('agent:start');
     expect(handler).toBeDefined();
-    const res = await handler!(null, { assignment, workspaceId });
+    const res = await handler!(null, { member, workspaceId });
     expect(res).toEqual({ instanceId: instId });
 
     // C1 关键断言：start 后 DB last_running 必须为 1
@@ -241,12 +241,12 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
 
   it('task-driven agent: stop → DB last_running=0 + runner/pool 销毁', async () => {
     // 先 seed 一个 last_running=1 + runner 已注册的状态（模拟运行中）
-    const { assignment, workspaceId } = await seedFixture('def-stop-1', 1);
-    const instId = assignment.instanceId;
+    const { member, workspaceId } = await seedFixture('def-stop-1', 1);
+    const instId = member.instanceId;
 
     // 先 start 让 runner 真实注册（确保 stop 有东西可销毁）
     const startHandler = ipcHandlers.get('agent:start');
-    await startHandler!(null, { assignment, workspaceId });
+    await startHandler!(null, { member, workspaceId });
     expect(agentRunners.has(instId)).toBe(true);
 
     const stopHandler = ipcHandlers.get('agent:stop');
@@ -262,14 +262,14 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
 
   it('task-driven agent: start → stop → start 循环 DB 状态正确（C1 regression）', async () => {
     // C1 核心场景：stop 写 0 后，第二次 start 必须把 DB 写回 1
-    const { assignment, workspaceId } = await seedFixture('def-cycle-1', 0);
-    const instId = assignment.instanceId;
+    const { member, workspaceId } = await seedFixture('def-cycle-1', 0);
+    const instId = member.instanceId;
 
     const startHandler = ipcHandlers.get('agent:start');
     const stopHandler = ipcHandlers.get('agent:stop');
 
     // 第一次 start
-    await startHandler!(null, { assignment, workspaceId });
+    await startHandler!(null, { member, workspaceId });
     expect(getLastRunning(instId)).toBe(1);
     expect(agentRunners.has(instId)).toBe(true);
 
@@ -279,7 +279,7 @@ describe('agent:start + agent:stop 生命周期（Spec § 5.2 #8 / final review 
     expect(agentRunners.has(instId)).toBe(false);
 
     // 第二次 start（C1 关键：必须重新写 last_running=1 + 重建 runner）
-    await startHandler!(null, { assignment, workspaceId });
+    await startHandler!(null, { member, workspaceId });
     expect(getLastRunning(instId)).toBe(1);
     expect(agentRunners.has(instId)).toBe(true);
     expect(agentWarmPools.has(instId)).toBe(true);

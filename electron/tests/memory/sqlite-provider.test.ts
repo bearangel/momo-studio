@@ -28,8 +28,8 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
   getDb().prepare(
-    `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
-  ).run('ws1', 'Test', '/tmp/ws1', '!space:home', '@owner:home');
+    `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
+  ).run('ws1', 'Test', '/tmp/ws1', '@owner:home');
 });
 
 afterEach(() => {

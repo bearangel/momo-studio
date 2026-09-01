@@ -14,7 +14,7 @@
 //   3. Layer 3 deltas 生效：removed 工具不在 allowedTools（Layer 1 ∪ Layer 2 - removed）
 //
 // v2（Task 10）：buildSpawnOpts 入参/出参改为本地身份形状
-//   （agentUserId / teamSessionId，删除 botUserId / botAccessToken / homeserverUrl /
+//   （agentUserId，删除 botUserId / botAccessToken / homeserverUrl /
 //   ownerUserId / teamRoomId），首个用例附加形状断言。
 //
 // DB 隔离沿用仓库既定模式（参考 assignment-capabilities-crud.test.ts / T2）：
@@ -121,7 +121,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file', 'bash']),
       role: 'standalone',
       llmApiKey: 'k',
@@ -133,7 +132,8 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     // v2（Task 10）：opts 携带本地身份 + 团队会话 ID，不再有 Matrix 凭据字段
     expect(opts.agentAssignmentId).toBe('inst1');
     expect(opts.agentUserId).toBe('agent-t-ab12cd');
-    expect(opts.teamSessionId).toBe('sess-1');
+    // v25 Task 15：团队会话字段已从线协议删除
+    expect(opts).not.toHaveProperty('teamSessionId');
     expect(opts).not.toHaveProperty('botUserId');
     expect(opts).not.toHaveProperty('botAccessToken');
     expect(opts).not.toHaveProperty('homeserverUrl');
@@ -159,7 +159,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file']),
       role: 'standalone',
       llmApiKey: 'k',
@@ -197,7 +196,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
       workspaceDir: '/tmp',
-      teamSessionId: 'sess-1',
       def: makeDef('def1', ['read_file', 'bash']),
       role: 'standalone',
       llmApiKey: 'k',

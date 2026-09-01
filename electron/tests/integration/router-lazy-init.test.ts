@@ -79,7 +79,7 @@ import {
 import { __resetRouterServiceForTest } from '../../src/main/agent/router-bootstrap';
 import { initTaskDrivenRuntime } from '../../src/main/agent/init-runtime';
 import { createWorkspace } from '../../src/main/workspace/crud';
-import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
+import { saveAgentDefinition, addMember } from '../../src/main/agent/crud';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
 // ─── DB fixture（per-test 临时目录 + 迁移） ─────────────────────────────────
@@ -149,29 +149,23 @@ function seedTaskDrivenDef(defId: string, providerId: string): AgentDefinition {
 }
 
 /**
- * 完整 seed 一条「task_driven=1 + enabled=1 + last_running=1」的 assignment 链路。
+ * 完整 seed 一条「task_driven=1 + last_running=1」的成员链路。
  * 返回 instanceId（startAgentRuntime 场景需要外部传 opts.instanceId 与此一致）。
  *
- * assignAgentToWorkspace 助手不暴露 last_running 入参（该字段由 runtime 层维护），
+ * addMember 助手不暴露 last_running 入参（该字段由 runtime 层维护），
  * 故 INSERT 后补一条 UPDATE。
  */
-function seedOnlineAssignment(
+async function seedOnlineAssignment(
   workspaceId: string,
   defId: string,
   agentUserId: string,
-): string {
-  const assignment = assignAgentToWorkspace(
-    workspaceId,
-    defId,
-    agentUserId,
-    'standalone',
-    null,
-  );
+): Promise<string> {
+  const member = await addMember(workspaceId, defId, agentUserId);
   // 助手默认 last_running=1（schema DEFAULT 1），显式 UPDATE 仅做防御性确认
   getDb()
-    .prepare('UPDATE agent_assignments SET last_running = 1 WHERE instance_id = ?')
-    .run(assignment.instanceId);
-  return assignment.instanceId;
+    .prepare('UPDATE workspace_agent_members SET last_running = 1 WHERE instance_id = ?')
+    .run(member.instanceId);
+  return member.instanceId;
 }
 
 // ─── 测试用例 ───────────────────────────────────────────────────────────────
@@ -191,7 +185,7 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     );
     seedProvider('prov-lazy-1');
     seedTaskDrivenDef('def-lazy-1', 'prov-lazy-1');
-    const instanceId = seedOnlineAssignment(ws.id, 'def-lazy-1', '@bot-lazy-1:localhost');
+    const instanceId = await seedOnlineAssignment(ws.id, 'def-lazy-1', '@bot-lazy-1:localhost');
 
     // 调用被测函数（模拟 app 启动批量恢复路径）
     await initTaskDrivenRuntime();
@@ -224,10 +218,10 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
       '!space-lazy-2:localhost',
       '!team-lazy-2:localhost',
     );
-    // instanceId 由 assignAgentToWorkspace 生成，opts.instanceId 必须用同一个值
+    // instanceId 由 addMember 生成，opts.instanceId 必须用同一个值
     seedProvider('prov-lazy-2');
     seedTaskDrivenDef('def-lazy-2', 'prov-lazy-2');
-    const instanceId = seedOnlineAssignment(ws.id, 'def-lazy-2', '@bot-lazy-2:localhost');
+    const instanceId = await seedOnlineAssignment(ws.id, 'def-lazy-2', '@bot-lazy-2:localhost');
 
     // 构造 AgentRuntimeOpts（spawnForAgent 已 mock，opts 字段值无需真实可达）
     const opts = {
@@ -272,8 +266,8 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     seedProvider('prov-lazy-3');
     seedTaskDrivenDef('def-lazy-3a', 'prov-lazy-3');
     seedTaskDrivenDef('def-lazy-3b', 'prov-lazy-3');
-    const idA = seedOnlineAssignment(ws.id, 'def-lazy-3a', '@bot-lazy-3a:localhost');
-    const idB = seedOnlineAssignment(ws.id, 'def-lazy-3b', '@bot-lazy-3b:localhost');
+    const idA = await seedOnlineAssignment(ws.id, 'def-lazy-3a', '@bot-lazy-3a:localhost');
+    const idB = await seedOnlineAssignment(ws.id, 'def-lazy-3b', '@bot-lazy-3b:localhost');
 
     // 调用被测函数
     await initTaskDrivenRuntime();

@@ -3,8 +3,8 @@
 // v2（Task 10）：agent 分配流程去 Matrix。
 //   1. generateAgentUserId 生成本地身份 'agent-<slug>-<6位随机后缀>'
 //   2. agent:addMember 流程：不再调 registerAgentBot / inviteBotToRoom，
-//      assignment.agent_user_id 为本地身份，且自动写入团队会话成员表
-//      （session_members）——取代原"注册 bot + 邀请进团队群"
+//      成员 agent_user_id 为本地身份，落 workspace_agent_members 表
+//      （v25：分配不再自动加入任何会话——团队会话概念退役）
 //
 // 通过 mock electron.ipcMain.handle 捕获真实注册的 handler 直接调用
 // （与 ipc-stop-start.test.ts 同一约定）。
@@ -56,7 +56,6 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
 import { createWorkspace } from '../../src/main/workspace/crud';
 import { saveAgentDefinition, generateAgentUserId } from '../../src/main/agent/crud';
-import { listSessionMembers } from '../../src/main/storage/sessions/repo';
 import { startAgentRuntime } from '../../src/main/agent/runtime-registry';
 import type { AgentDefinition } from '../../src/main/agent/types';
 
@@ -129,8 +128,8 @@ describe('generateAgentUserId — 本地身份生成', () => {
   });
 });
 
-describe('agent:addMember — 分配即入团队会话（去 Matrix）', () => {
-  it('生成本地 agent_user_id 并写入 session_members（不注册 bot / 不邀请房间）', async () => {
+describe('agent:addMember — 本地身份 + 成员落库（去 Matrix，v25 无自动入会）', () => {
+  it('生成本地 agent_user_id 写入 workspace_agent_members，不写任何 session_members', async () => {
     const ws = await createWorkspace(
       { name: 'W', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
       '@o:localhost',
@@ -140,24 +139,31 @@ describe('agent:addMember — 分配即入团队会话（去 Matrix）', () => {
     const handler = ipcHandlers.get('agent:addMember');
     expect(handler).toBeDefined();
 
-    const assignment = (await handler!(null, {
+    const member = (await handler!(null, {
       workspaceId: ws.id,
       agentDefinitionId: 'def-1',
-      role: 'standalone',
     })) as { instanceId: string; agentUserId: string };
 
     // 本地身份格式
-    expect(assignment.agentUserId).toMatch(/^agent-coder-bot-[A-Za-z0-9_-]{6}$/);
+    expect(member.agentUserId).toMatch(/^agent-coder-bot-[A-Za-z0-9_-]{6}$/);
 
-    // 团队会话成员表：assignment 自动加入 workspace 团队会话
-    const members = listSessionMembers(ws.teamSessionId);
-    expect(members.map((m) => m.assignmentId)).toContain(assignment.instanceId);
+    // v25 成员制：落 workspace_agent_members（取代 v1.3 agent_assignments）
+    const rows = getDb()
+      .prepare('SELECT instance_id FROM workspace_agent_members WHERE workspace_id = ?')
+      .all(ws.id) as Array<{ instance_id: string }>;
+    expect(rows.map((r) => r.instance_id)).toContain(member.instanceId);
 
-    // runtime 启动收到新形状 opts：携带本地身份 + 团队会话 ID，无 Matrix 凭据
+    // v25：分配不自动加入任何会话（团队会话概念退役）
+    const cnt = getDb()
+      .prepare('SELECT COUNT(*) AS c FROM session_members')
+      .get() as { c: number };
+    expect(cnt.c).toBe(0);
+
+    // runtime 启动收到新形状 opts：携带本地身份，无团队会话 ID / Matrix 凭据
     expect(startAgentRuntime).toHaveBeenCalledTimes(1);
     const opts = vi.mocked(startAgentRuntime).mock.calls[0]![0] as Record<string, unknown>;
-    expect(opts.agentUserId).toBe(assignment.agentUserId);
-    expect(opts.teamSessionId).toBe(ws.teamSessionId);
+    expect(opts.agentUserId).toBe(member.agentUserId);
+    expect(opts).not.toHaveProperty('teamSessionId');
     expect(opts).not.toHaveProperty('botUserId');
     expect(opts).not.toHaveProperty('botAccessToken');
     expect(opts).not.toHaveProperty('homeserverUrl');

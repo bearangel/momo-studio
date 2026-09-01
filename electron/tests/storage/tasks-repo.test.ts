@@ -33,8 +33,8 @@ beforeEach(() => {
   runMigrations();
   // seed workspace（tasks 表有 FK 到 workspaces）
   getDb().prepare(
-    `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
-  ).run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
+    `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
+  ).run('ws1', 'Test', '/tmp', '@owner:home');
 });
 
 afterEach(() => {

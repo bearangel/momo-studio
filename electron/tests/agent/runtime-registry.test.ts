@@ -32,7 +32,7 @@ import { spawnForAgent, type SpawnOpts } from '../../src/main/agent/runtime-spaw
 import { ensureRouterService } from '../../src/main/agent/router-bootstrap';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createWorkspace } from '../../src/main/workspace/crud';
-import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
+import { saveAgentDefinition, addMember } from '../../src/main/agent/crud';
 import {
   agentRunners,
   agentWarmPools,
@@ -330,7 +330,7 @@ describe('runtime-registry', () => {
         '@u:localhost', '!s:localhost', '!t:localhost',
       );
       saveAgentDefinition(mkDef({ id: 'def-stop' }));
-      const assignment = assignAgentToWorkspace(ws.id, 'def-stop', '@bot-stop:localhost', 'standalone');
+      const assignment = await addMember(ws.id, 'def-stop', '@bot-stop:localhost');
       const instId = assignment.instanceId;
 
       const fakeRunner = {
@@ -361,7 +361,7 @@ describe('runtime-registry', () => {
       expect(agentWarmPools.has(instId)).toBe(false);
 
       const row = getDb()
-        .prepare('SELECT last_running FROM agent_assignments WHERE instance_id = ?')
+        .prepare('SELECT last_running FROM workspace_agent_members WHERE instance_id = ?')
         .get(instId) as { last_running: number };
       expect(row.last_running).toBe(0);
     });

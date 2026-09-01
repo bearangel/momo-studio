@@ -34,10 +34,10 @@ afterEach(() => {
 function seedWorkspace(id: string): void {
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, owner_id)
+       VALUES (?, ?, ?, ?)`,
     )
-    .run(id, '测试', '/tmp/test', '!space:localhost', '@alice:localhost');
+    .run(id, '测试', '/tmp/test', '@alice:localhost');
 }
 
 describe('workspace/git-policy', () => {

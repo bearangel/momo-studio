@@ -33,9 +33,9 @@ beforeEach(() => {
   // seed workspace（tasks 表 FK 要求）
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
     )
-    .run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
+    .run('ws1', 'Test', '/tmp', '@owner:home');
 });
 
 afterEach(() => {

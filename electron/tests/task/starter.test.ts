@@ -39,9 +39,9 @@ beforeEach(() => {
   // seed workspace（tasks 表有 FK 到 workspaces）
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
     )
-    .run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
+    .run('ws1', 'Test', '/tmp', '@owner:home');
 });
 
 afterEach(() => {
@@ -111,7 +111,7 @@ describe('startTask execution_room 决策树', () => {
   });
 
   it('新建会话且有 assignee → assignee 写入 session_members', async () => {
-    // session_members 有 FK 到 agent_assignments，先 seed 定义 + assignment
+    // session_members 有 FK 到 workspace_agent_members，先 seed 定义 + 成员
     getDb()
       .prepare(
         `INSERT INTO agent_definitions
@@ -121,9 +121,9 @@ describe('startTask execution_room 决策树', () => {
       .run();
     getDb()
       .prepare(
-        `INSERT INTO agent_assignments
-           (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
-         VALUES ('inst-agent-1', 'ws1', 'def-1', '@inst-agent-1:s', 1, 'standalone', 0)`,
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-agent-1', 'ws1', 'def-1', '@inst-agent-1:s', 0)`,
       )
       .run();
     const t = insertTask({
@@ -135,7 +135,7 @@ describe('startTask execution_room 决策树', () => {
     transitionTaskStatus(t.id, 'assigned');
     const result = await startTask(t.id, { createNewRoom: true });
     const members = listSessionMembers(result.executionSessionId);
-    expect(members.map((m) => m.assignmentId)).toEqual(['inst-agent-1']);
+    expect(members.map((m) => m.instanceId)).toEqual(['inst-agent-1']);
   });
 
   it('status 不是 assigned/pending → 抛错', async () => {
@@ -185,24 +185,24 @@ describe('startTask execution_room 决策树', () => {
       .get(t.id) as { status: string };
     expect(after.status).toBe('assigned');
 
-    // 回滚断言 3：补齐 assignee 的 assignment 后重试可成功（半状态未污染后续启动）
+    // 回滚断言 3：补齐 assignee 的成员行后重试可成功（半状态未污染后续启动）
     getDb()
       .prepare(
         `INSERT INTO agent_definitions
            (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
-        VALUES ('def-2', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+         VALUES ('def-2', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
       )
       .run();
     getDb()
       .prepare(
-        `INSERT INTO agent_assignments
-           (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role, last_running)
-        VALUES ('inst-not-exist', 'ws1', 'def-2', '@inst-not-exist:s', 1, 'standalone', 0)`,
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-not-exist', 'ws1', 'def-2', '@inst-not-exist:s', 0)`,
       )
       .run();
     const retry = await startTask(t.id, { createNewRoom: true });
     expect(retry.task.status).toBe('in_progress');
-    expect(listSessionMembers(retry.executionSessionId).map((m) => m.assignmentId)).toEqual([
+    expect(listSessionMembers(retry.executionSessionId).map((m) => m.instanceId)).toEqual([
       'inst-not-exist',
     ]);
   });

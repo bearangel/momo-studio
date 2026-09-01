@@ -80,10 +80,14 @@ describe('storage/db', () => {
     expect(cols.map((c) => c.name)).toContain('is_default');
   });
 
-  it('runMigrations 给 workspaces 加 coordinator_instance_id 列（migration v11）', () => {
+  it('迁移链终态：workspaces 无 coordinator/team_session 列，有 default_agent_instance_id（v25）', () => {
     runMigrations();
     const db = getDb();
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[];
-    expect(cols.map((c) => c.name)).toContain('coordinator_instance_id');
+    const names = cols.map((c) => c.name);
+    // v11 曾引入 coordinator_instance_id，v25 已 DROP（语义就近迁移到 default_agent_instance_id）
+    expect(names).not.toContain('coordinator_instance_id');
+    expect(names).not.toContain('team_session_id');
+    expect(names).toContain('default_agent_instance_id');
   });
 });

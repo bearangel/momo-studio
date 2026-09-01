@@ -142,8 +142,8 @@ describe('setDefaultAgent 自动重启（v25）', () => {
     expect(opts.instanceId).toBe(instanceId);
     expect(opts.agentUserId).toBe(agentUserId);
     expect(opts.workspaceId).toBe(wsId);
-    // v25 过渡态：团队会话列已退役，线协议保持空串
-    expect(opts.teamSessionId).toBe('');
+    // v25 Task 15：团队会话字段已从线协议删除
+    expect(opts).not.toHaveProperty('teamSessionId');
     // 无会话快照 → 非 leader，不带 dispatch 工具
     expect(opts.isLeader).toBe(false);
     expect(opts.subAgents).toEqual([]);

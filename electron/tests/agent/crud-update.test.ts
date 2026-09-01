@@ -1,6 +1,6 @@
 // electron/tests/agent/crud-update.test.ts
 // updateAgentDefinition + updateAgentApiKey + listRunningInstanceIdsByDefinition 单测
-// v1.3 schema：AgentDefinition 无 type/parent/model；新增 workspaceId/modelProviderId/modelName
+// v25：agent_definitions.workspace_id 列已 DROP（定义恒全局），scope 绑定断言随语义退役。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,7 +10,7 @@ import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keych
 import {
   saveAgentDefinition,
   getAgentDefinition,
-  assignAgentToWorkspace,
+  addMember,
   updateAgentDefinition,
   listRunningInstanceIdsByDefinition,
   updateAgentApiKey,
@@ -57,7 +57,7 @@ const sampleDef = () => {
   return getAgentDefinition('def-1')!;
 };
 
-describe('updateAgentDefinition — v1.3 schema', () => {
+describe('updateAgentDefinition — v25 定义全局化', () => {
   it('更新指定字段，未传字段保留原值', () => {
     sampleDef();
     const updated = updateAgentDefinition({ id: 'def-1', name: '新名', systemPrompt: '新 prompt' });
@@ -77,35 +77,10 @@ describe('updateAgentDefinition — v1.3 schema', () => {
     expect(updated.modelName).toBe('claude-3');
   });
 
-  it('workspaceId 显式传 null 转 global', () => {
-    // 先建一个 workspace-scoped def
-    saveAgentDefinition({
-      id: 'def-ws', name: 'WS', slug: 'ws', version: '1.0',
-      runtime: 'declarative', systemPrompt: 'p',
-      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
-      defaultMcps: [], defaultSkills: [],
-      workspaceId: 'ws-1', modelProviderId: 'prov-1', modelName: 'gpt-4o',
-    });
-    const updated = updateAgentDefinition({ id: 'def-ws', workspaceId: null });
+  it('workspaceId 不再持久化：v25 定义恒全局（列已 DROP），更新后恒为 null', () => {
+    sampleDef();
+    const updated = updateAgentDefinition({ id: 'def-1', name: '改名' });
     expect(updated.workspaceId).toBeNull();
-  });
-
-  it('workspaceId 传字符串绑定该 workspace', () => {
-    sampleDef(); // def-1 默认 global
-    const updated = updateAgentDefinition({ id: 'def-1', workspaceId: 'ws-new' });
-    expect(updated.workspaceId).toBe('ws-new');
-  });
-
-  it('workspaceId 不传时保留原值', () => {
-    saveAgentDefinition({
-      id: 'def-ws', name: 'WS', slug: 'ws', version: '1.0',
-      runtime: 'declarative', systemPrompt: 'p',
-      defaultTools: [], source: 'custom', description: 'd', iconEmoji: '🤖',
-      defaultMcps: [], defaultSkills: [],
-      workspaceId: 'ws-1', modelProviderId: 'prov-1', modelName: 'gpt-4o',
-    });
-    const updated = updateAgentDefinition({ id: 'def-ws', name: '改名' });
-    expect(updated.workspaceId).toBe('ws-1');
   });
 
   it('不存在的 id 抛错', () => {
@@ -114,19 +89,24 @@ describe('updateAgentDefinition — v1.3 schema', () => {
 });
 
 describe('listRunningInstanceIdsByDefinition', () => {
-  it('返回该 def 的全部 assignment instanceId', async () => {
+  it('返回该 def 的全部成员 instanceId（跨 ws 多成员）', async () => {
     const def = sampleDef();
-    const ws = await createWorkspace(
-      { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+    // v25：同 ws 同 def 唯一——双成员需分布在两个 ws
+    const ws1 = await createWorkspace(
+      { name: 'w1', description: '', directoryPath: path.join(tmpRoot, 'ws1'), iconEmoji: '📁' },
+      '@o:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost', 'standalone');
-    assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost', 'standalone');
+    const ws2 = await createWorkspace(
+      { name: 'w2', description: '', directoryPath: path.join(tmpRoot, 'ws2'), iconEmoji: '📁' },
+      '@o:localhost',
+    );
+    await addMember(ws1.id, def.id, '@bot1:localhost');
+    await addMember(ws2.id, def.id, '@bot2:localhost');
     const ids = listRunningInstanceIdsByDefinition(def.id);
     expect(ids).toHaveLength(2);
   });
 
-  it('其它 def 的 assignment 不计入', async () => {
+  it('其它 def 的成员不计入', async () => {
     const def1 = sampleDef();
     saveAgentDefinition({
       id: 'def-2', name: 'B', slug: 'b', version: '1.0',
@@ -138,10 +118,10 @@ describe('listRunningInstanceIdsByDefinition', () => {
     const def2 = getAgentDefinition('def-2')!;
     const ws = await createWorkspace(
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+      '@o:localhost',
     );
-    assignAgentToWorkspace(ws.id, def1.id, '@bot1:localhost', 'standalone');
-    assignAgentToWorkspace(ws.id, def2.id, '@bot2:localhost', 'standalone');
+    await addMember(ws.id, def1.id, '@bot1:localhost');
+    await addMember(ws.id, def2.id, '@bot2:localhost');
     expect(listRunningInstanceIdsByDefinition(def1.id)).toHaveLength(1);
   });
 });
@@ -151,11 +131,11 @@ describe('updateAgentApiKey (legacy)', () => {
     const def = sampleDef();
     const ws = await createWorkspace(
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+      '@o:localhost',
     );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot1:localhost', 'standalone');
-    await updateAgentApiKey(assignment.instanceId, 'new-secret');
-    expect(memStore.get(`agent.${assignment.instanceId}.llm_api_key`)).toBe('new-secret');
+    const member = await addMember(ws.id, def.id, '@bot1:localhost');
+    await updateAgentApiKey(member.instanceId, 'new-secret');
+    expect(memStore.get(`agent.${member.instanceId}.llm_api_key`)).toBe('new-secret');
   });
 });
 
@@ -169,9 +149,9 @@ describe('stopRunningInstancesByDefinition', () => {
     const def = sampleDef();
     const ws = await createWorkspace(
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+      '@o:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
+    await addMember(ws.id, def.id, '@bot:localhost');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
     const stopped = await stopRunningInstancesByDefinition(def.id);
@@ -188,9 +168,9 @@ describe('stopRunningInstancesByDefinition', () => {
     const def = sampleDef();
     const ws = await createWorkspace(
       { name: 'w', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+      '@o:localhost',
     );
-    assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
+    await addMember(ws.id, def.id, '@bot:localhost');
 
     const { stopRunningInstancesByDefinition } = await import('../../src/main/agent/crud');
     const stopped = await stopRunningInstancesByDefinition(def.id);

@@ -35,9 +35,9 @@ beforeEach(() => {
   // tasks 表对 workspace_id 有外键约束（ON DELETE CASCADE），需先建 workspace 行
   getDb()
     .prepare(
-      `INSERT INTO workspaces (id, name, directory_path, team_session_id, owner_id) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`,
     )
-    .run('ws1', 'Test', '/tmp', '!space:home', '@owner:home');
+    .run('ws1', 'Test', '/tmp', '@owner:home');
 });
 
 afterEach(() => {

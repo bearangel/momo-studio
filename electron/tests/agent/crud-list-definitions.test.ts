@@ -1,5 +1,6 @@
 // electron/tests/agent/crud-list-definitions.test.ts
-// listAgentDefinitions(workspaceId?) 过滤：global + 当前 ws scoped + builtin
+// listAgentDefinitions：v25 定义全局化——workspace 过滤语义退役，任何 ws 入参
+// 均返回全部定义（agent_definitions.workspace_id 列已 DROP）。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
@@ -43,38 +44,32 @@ function makeDef(overrides: Partial<AgentDefinition>): AgentDefinition {
   };
 }
 
-describe('listAgentDefinitions — workspace 过滤', () => {
+describe('listAgentDefinitions — v25 定义全局化', () => {
   it('workspaceId=undefined 返回全部', () => {
-    saveAgentDefinition(makeDef({ id: 'd1', source: 'builtin', workspaceId: null }));
-    saveAgentDefinition(makeDef({ id: 'd2', source: 'custom', workspaceId: null }));
-    saveAgentDefinition(makeDef({ id: 'd3', source: 'custom', workspaceId: 'ws-a' }));
-    saveAgentDefinition(makeDef({ id: 'd4', source: 'custom', workspaceId: 'ws-b' }));
+    saveAgentDefinition(makeDef({ id: 'd1', source: 'builtin' }));
+    saveAgentDefinition(makeDef({ id: 'd2', source: 'custom' }));
 
     const result = listAgentDefinitions();
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(2);
   });
 
-  it('workspaceId=ws-a 返回 global + ws-a scoped + 全部 builtin，不返回 ws-b', () => {
-    saveAgentDefinition(makeDef({ id: 'd1', source: 'builtin', workspaceId: null }));
-    saveAgentDefinition(makeDef({ id: 'd2', source: 'custom', workspaceId: null }));
-    saveAgentDefinition(makeDef({ id: 'd3', source: 'custom', workspaceId: 'ws-a' }));
-    saveAgentDefinition(makeDef({ id: 'd4', source: 'custom', workspaceId: 'ws-b' }));
+  it('带 workspaceId 入参不再过滤：任何 ws 都能看到全部定义（过滤语义退役）', () => {
+    saveAgentDefinition(makeDef({ id: 'd1', source: 'builtin' }));
+    saveAgentDefinition(makeDef({ id: 'd2', source: 'custom' }));
 
     const result = listAgentDefinitions('ws-a');
     const ids = result.map((d) => d.id);
-    expect(ids).toContain('d1'); // builtin
-    expect(ids).toContain('d2'); // global custom
-    expect(ids).toContain('d3'); // ws-a scoped
-    expect(ids).not.toContain('d4'); // ws-b scoped 不可见
+    expect(ids).toContain('d1');
+    expect(ids).toContain('d2');
   });
 
-  it('rowToDef 正确映射 workspaceId / modelProviderId / modelName 字段', () => {
+  it('rowToDef 正确映射 workspaceId（恒 null）/ modelProviderId / modelName 字段', () => {
     saveAgentDefinition(makeDef({
-      id: 'd5', workspaceId: 'ws-x', modelProviderId: 'prov-1', modelName: 'gpt-4',
+      id: 'd5', modelProviderId: 'prov-1', modelName: 'gpt-4',
     }));
-    const result = listAgentDefinitions('ws-x');
+    const result = listAgentDefinitions();
     const def = result.find((d) => d.id === 'd5');
-    expect(def?.workspaceId).toBe('ws-x');
+    expect(def?.workspaceId).toBeNull();
     expect(def?.modelProviderId).toBe('prov-1');
     expect(def?.modelName).toBe('gpt-4');
     // 旧字段不存在
