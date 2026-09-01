@@ -43,6 +43,14 @@ interface SessionState {
    * UI 据此弹一次性选择弹窗；下次 createQuickSession 尝试开始时复位。
    */
   needsDefaultAgent: boolean;
+  /**
+   * 当前激活会话是否只读（有效成员全失效，spec §7「会话只读」）。
+   * 三层判定：selectSession 按列表 summary members 乐观置位（同源三表 JOIN，
+   * 防切会话闪烁）→ loadMembers 权威重算 → sendMessage 按 session:send 返回值校正。
+   */
+  activeSessionReadOnly: boolean;
+  /** 输入框聚焦请求信号：新建会话成功后 +1，MentionInput 订阅后聚焦（spec §6.2 ⚡ 直达） */
+  inputFocusTick: number;
   /** 分页加载状态——sessionId → 是否正在加载更早消息（防抖） */
   loadingOlderBySession: Map<string, boolean>;
   /** 分页是否还有更早历史——sessionId → boolean；undefined 视为 true（初始） */
@@ -71,8 +79,11 @@ interface SessionState {
    * 按 eventsByMessage 累积，同 event id 不重复。
    */
   onIncomingEventBatch: (batch: MessageEventRow[]) => void;
-  /** 向当前激活会话发送消息（mentionedInstanceIds 为 @ 的成员 instanceId） */
-  sendMessage: (body: string, mentionedInstanceIds?: string[]) => Promise<void>;
+  /** 向当前激活会话发送消息（mentionedInstanceIds 为 @ 的成员 instanceId）；无激活会话返回 undefined */
+  sendMessage: (
+    body: string,
+    mentionedInstanceIds?: string[],
+  ) => Promise<{ readOnly: boolean } | undefined>;
   /**
    * 快速会话（spec §4.4）：免弹窗直达 workspace 默认 agent。
    * 成功 → 新会话置顶并激活，返回 true；无默认 agent → needsDefaultAgent=true，
@@ -104,6 +115,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   error: null,
   currentWorkspaceId: null,
   needsDefaultAgent: false,
+  activeSessionReadOnly: false,
+  inputFocusTick: 0,
   loadingOlderBySession: new Map(),
   hasMoreBySession: new Map(),
   loadOlderError: null,
@@ -144,7 +157,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   selectSession: async (sessionId) => {
-    set({ activeSessionId: sessionId, loading: true });
+    // 乐观只读判定：列表 summary 的 members 与详情同源（三表 JOIN 有效成员），
+    // 先按它置位避免切会话闪烁；随后 loadMembers 权威重算
+    const summary = get().sessions.find((s) => s.id === sessionId);
+    set({
+      activeSessionId: sessionId,
+      loading: true,
+      activeSessionReadOnly: (summary?.members.length ?? 0) === 0,
+    });
     // 仅当 store 内没有该会话消息时才拉取（首次进入）。
     // 切回已访问过的会话时保留之前分页加载的全部消息，避免被 getMessages 的 limit 截断覆盖。
     // 实时新消息由 receiveMessage 主动追加，无需重新拉取。
@@ -238,7 +258,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ membersError: null });
     try {
       const { members } = await ipc.session.get(sessionId);
-      set({ members, membersError: null });
+      // 有效成员（JOIN 过滤失效）为空 → 会话只读（spec §7）
+      set({ members, membersError: null, activeSessionReadOnly: members.length === 0 });
     } catch (err) {
       set({ members: [], membersError: `加载成员列表失败：${(err as Error).message}` });
     }
@@ -276,9 +297,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   sendMessage: async (body, mentionedInstanceIds) => {
     const { activeSessionId } = get();
-    if (!activeSessionId) return;
+    if (!activeSessionId) return undefined;
     // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage。
-    await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
+    const result = await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
+    // T9 契约：readOnly=true 表示会话全部成员失效——UI 据此禁用输入（spec §7）
+    set({ activeSessionReadOnly: result.readOnly });
+    return result;
   },
 
   createQuickSession: async (workspaceId) => {
@@ -286,6 +310,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const session = await ipc.session.createQuick(workspaceId);
       activateNewSession(set, session);
+      set((s) => ({ inputFocusTick: s.inputFocusTick + 1 }));
       await get().selectSession(session.id);
       return true;
     } catch (err) {
@@ -304,6 +329,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const session = await ipc.session.createCollab(workspaceId, title, target);
       activateNewSession(set, session);
+      set((s) => ({ inputFocusTick: s.inputFocusTick + 1 }));
       await get().selectSession(session.id);
       return true;
     } catch (err) {
@@ -323,6 +349,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       error: null,
       currentWorkspaceId: null,
       needsDefaultAgent: false,
+      activeSessionReadOnly: false,
+      inputFocusTick: 0,
       loadingOlderBySession: new Map(),
       hasMoreBySession: new Map(),
       loadOlderError: null,

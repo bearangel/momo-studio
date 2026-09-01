@@ -1,13 +1,50 @@
 // renderer/src/components/im/RoomList.tsx
+//
+// v25 Task 14：会话列表项图标语义派生（spec §6.2）——图标从 members（有效成员）
+// 派生、不持久化创建方式：单成员 → 该 agent emoji；多成员 → icon 组（leader 👑
+// 前缀置首，最多 3 个 + 溢出计数）；成员全失效 → 💬 兜底。
+// 会话创建入口已迁 SessionSidebarHeader（侧边栏头部 ⚡/👥 双常驻按钮）。
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../stores/session.store';
-import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
-import { CreateRoomDialog } from './CreateRoomDialog';
+import type { SessionMemberInfo } from '../../ipc/types';
 import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
-import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
+
+/** 多成员会话 icon 组最多展示的成员数（超出折叠为 +N 计数，侧边栏 260px 宽约束） */
+const MAX_MEMBER_ICONS = 3;
+
+/** 单个成员的展示 emoji（缺省回退通用机器人图标） */
+function memberEmoji(m: SessionMemberInfo): string {
+  return m.iconEmoji || '🤖';
+}
+
+/** 会话列表项图标（语义派生，spec §6.2） */
+function SessionListItemIcon({ members }: { members: SessionMemberInfo[] }) {
+  if (members.length === 0) {
+    // 有效成员全失效（被移出 ws）→ 只读会话，通用气泡图标兜底
+    return <span aria-label="会话图标">💬</span>;
+  }
+  if (members.length === 1) {
+    return <span aria-label="会话图标">{memberEmoji(members[0]!)}</span>;
+  }
+  // 多成员：leader 置首（👑 前缀），超出部分折叠为 +N
+  const leader = members.find((m) => m.isLeader);
+  const ordered = leader ? [leader, ...members.filter((m) => m !== leader)] : members;
+  const shown = ordered.slice(0, MAX_MEMBER_ICONS);
+  const overflow = members.length - shown.length;
+  return (
+    <span aria-label="会话图标" className="flex items-center gap-0.5 whitespace-nowrap shrink-0">
+      {shown.map((m) => (
+        <span key={m.instanceId} title={`${m.agentName}${m.isLeader ? '（leader）' : ''}`}>
+          {m.isLeader ? `👑${memberEmoji(m)}` : memberEmoji(m)}
+        </span>
+      ))}
+      {overflow > 0 && <span className="text-[10px] text-neutral-500">+{overflow}</span>}
+    </span>
+  );
+}
 
 export function RoomList() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -18,20 +55,7 @@ export function RoomList() {
   const loading = useSessionStore((s) => s.loading);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
-  // 新建会话对话框状态 + 目标候选（当前 workspace 的 agent 成员；v25 成员制无 enabled）
-  const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
-  const { members } = useAgentStore();
-  const botNameMap = useBotNameMap();
-
-  const inviteCandidates = members.map((a) => ({
-    instanceId: a.instanceId,
-    displayName: resolveBotName(a.agentUserId, botNameMap),
-  }));
-
-  const handleRename = (sessionId: string, oldTitle: string) => {
-    setRenaming({ sessionId, oldTitle });
-  };
 
   const submitRename = async (name: string) => {
     const target = renaming;
@@ -59,7 +83,7 @@ export function RoomList() {
 
   if (loading && sessions.length === 0) {
     return (
-      <div className="w-full h-full bg-bg-secondary flex items-center justify-center">
+      <div className="w-full flex-1 min-h-0 bg-bg-secondary flex items-center justify-center">
         <p className="text-sm text-neutral-500">加载中…</p>
       </div>
     );
@@ -67,12 +91,12 @@ export function RoomList() {
 
   if (sessions.length === 0) {
     return (
-      <div className="w-full h-full bg-bg-secondary flex flex-col items-center justify-center gap-2">
+      <div className="w-full flex-1 min-h-0 bg-bg-secondary flex flex-col items-center justify-center gap-2">
         <div className="text-3xl">💬</div>
         <p className="text-sm text-neutral-500 px-4 text-center">
           暂无会话
           <br />
-          点击下方按钮新建
+          用上方 ⚡ 快速会话 / 👥 协作会话 开始对话
         </p>
         <button
           type="button"
@@ -85,20 +109,9 @@ export function RoomList() {
     );
   }
 
-  // v25：团队会话（workspace.teamSessionId）概念退役，会话一律按原序展示、可重命名/解散。
-  const sortedSessions = [...sessions];
-
   return (
-    <div className="w-full h-full bg-bg-secondary overflow-auto">
-      {/* 顶部新建按钮 */}
-      <button
-        type="button"
-        onClick={() => setCreateOpen(true)}
-        className="m-2 text-xs px-2 py-1 rounded bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30"
-      >
-        + 新建会话
-      </button>
-      {sortedSessions.map((session) => (
+    <div className="w-full flex-1 min-h-0 bg-bg-secondary overflow-auto">
+      {sessions.map((session) => (
         // 外层 group 让 group-hover 生效；悬停时叠加操作按钮
         <div key={session.id} className="group relative">
           <button
@@ -111,6 +124,7 @@ export function RoomList() {
                 : 'border-transparent text-neutral-300 hover:bg-bg-tertiary/60',
             )}
           >
+            <SessionListItemIcon members={session.members} />
             <span className="truncate flex-1">{session.title}</span>
           </button>
           <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-bg-secondary/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -119,7 +133,7 @@ export function RoomList() {
               title="重命名"
               onClick={(e) => {
                 e.stopPropagation();
-                void handleRename(session.id, session.title);
+                setRenaming({ sessionId: session.id, oldTitle: session.title });
               }}
               className="text-neutral-500 hover:text-neutral-200 text-xs"
             >
@@ -139,15 +153,9 @@ export function RoomList() {
           </span>
         </div>
       ))}
-      <CreateRoomDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={() => refreshSessionList()}
-        inviteCandidates={inviteCandidates}
-      />
       {renaming && (
         <PromptDialog
-          title="重命名房间"
+          title="重命名会话"
           defaultValue={renaming.oldTitle}
           onSubmit={submitRename}
           onClose={() => setRenaming(null)}

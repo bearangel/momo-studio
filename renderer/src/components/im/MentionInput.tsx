@@ -34,8 +34,16 @@ export function MentionInput() {
   const members = useSessionStore((s) => s.members);
   const sendMessage = useSessionStore((s) => s.sendMessage);
   const loadSessions = useSessionStore((s) => s.loadSessions);
+  // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
+  const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
+  const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { tasks, load: loadTasks } = useTaskStore();
+
+  // 新建会话成功（inputFocusTick 递增）→ 聚焦输入框，⚡ 免弹窗直达后立即可输入
+  useEffect(() => {
+    if (inputFocusTick > 0) textareaRef.current?.focus();
+  }, [inputFocusTick]);
 
   // 会话级草稿：切换会话时保存当前草稿、恢复目标会话草稿（无则空）。
   // 此前 text 是组件本地 state，切会话后内容残留串台。
@@ -236,14 +244,22 @@ export function MentionInput() {
         </div>
       )}
 
+      {readOnly && (
+        <div className="mb-2 text-xs text-neutral-500">🔒 会话成员已全部移出，会话只读（历史可查看）</div>
+      )}
+
       <textarea
         ref={textareaRef}
         value={text}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        disabled={!activeSessionId}
+        disabled={!activeSessionId || readOnly}
         placeholder={
-          activeSessionId ? '输入消息，Enter 发送。输入 @ 提到 agent，# 引用任务' : '请先选择房间'
+          readOnly
+            ? '会话只读'
+            : activeSessionId
+              ? '输入消息，Enter 发送。输入 @ 提到 agent，# 引用任务'
+              : '请先选择房间'
         }
         rows={2}
         className="w-full resize-none rounded-md bg-bg-tertiary border border-border-subtle px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-accent-blue focus:outline-none disabled:opacity-50"

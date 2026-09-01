@@ -21,6 +21,8 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     members: [] as SessionMemberInfo[],
     sendMessage: vi.fn(),
     loadSessions: vi.fn(),
+    activeSessionReadOnly: false,
+    inputFocusTick: 0,
   },
   taskState: {
     tasks: [] as TaskRow[],
@@ -92,6 +94,8 @@ function resetState(): void {
   sessionState.members = [];
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
+  sessionState.activeSessionReadOnly = false;
+  sessionState.inputFocusTick = 0;
   taskState.tasks = [];
   taskState.load = vi.fn().mockResolvedValue(undefined);
 }
@@ -116,6 +120,40 @@ describe('MentionInput 空态与挂载接线', () => {
   it('挂载时拉取当前 workspace 的任务列表（# 菜单数据源）', () => {
     render(<MentionInput />);
     expect(taskState.load).toHaveBeenCalledWith('ws-1');
+  });
+});
+
+describe('MentionInput 只读态（v25 spec §7「会话只读」）', () => {
+  it('activeSessionReadOnly=true → 输入框禁用 + 只读提示可见', () => {
+    sessionState.activeSessionReadOnly = true;
+    render(<MentionInput />);
+    const textarea = screen.getByPlaceholderText(/输入消息|只读/) as HTMLTextAreaElement;
+    expect(textarea).toBeDisabled();
+    expect(screen.getByText(/会话只读/)).toBeInTheDocument();
+  });
+
+  it('activeSessionReadOnly=false → 输入框启用、无只读提示', () => {
+    render(<MentionInput />);
+    expect(screen.getByPlaceholderText(/输入消息/)).toBeEnabled();
+    expect(screen.queryByText(/会话只读/)).not.toBeInTheDocument();
+  });
+});
+
+describe('MentionInput 聚焦信号（新建会话后聚焦输入框，spec §6.2 ⚡ 免弹窗直达）', () => {
+  it('inputFocusTick 递增 → textarea 获得焦点', () => {
+    const { rerender } = render(<MentionInput />);
+    const textarea = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
+    expect(document.activeElement).not.toBe(textarea);
+
+    sessionState.inputFocusTick = 1;
+    rerender(<MentionInput />);
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it('tick 为 0（初始）不抢焦点', () => {
+    render(<MentionInput />);
+    const textarea = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
+    expect(document.activeElement).not.toBe(textarea);
   });
 });
 

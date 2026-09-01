@@ -53,7 +53,9 @@ const mockApi = {
     createCollab: vi.fn(),
     rename: vi.fn(),
     delete: vi.fn(),
-    send: vi.fn().mockResolvedValue(undefined),
+    // 真实 preload 返回 { readOnly }（types.d.ts SessionApiSurface 契约）——
+    // mock 保真度：返回形状必须与生产一致（momo-test-rules 铁律 1）
+    send: vi.fn().mockResolvedValue({ readOnly: false }),
     getMessages: vi.fn(),
     loadOlder: vi.fn(),
     exportMessages: vi.fn(),
@@ -196,6 +198,85 @@ describe('session.store', () => {
   it('sendMessage is a no-op when no session is active', async () => {
     await useSessionStore.getState().sendMessage('hello');
     expect(mockApi.session.send).not.toHaveBeenCalled();
+  });
+
+  it('sendMessage 返回 session:send 的 readOnly 并置只读态（T9 契约，UI 禁用输入依据）', async () => {
+    await useSessionStore.getState().loadSessions();
+    mockApi.session.send.mockResolvedValueOnce({ readOnly: true });
+
+    const result = await useSessionStore.getState().sendMessage('hello');
+    expect(result).toEqual({ readOnly: true });
+    expect(useSessionStore.getState().activeSessionReadOnly).toBe(true);
+  });
+
+  it('sendMessage readOnly=false 时清除只读态（前次误置可恢复）', async () => {
+    await useSessionStore.getState().loadSessions();
+    useSessionStore.setState({ activeSessionReadOnly: true });
+
+    const result = await useSessionStore.getState().sendMessage('hello');
+    expect(result).toEqual({ readOnly: false });
+    expect(useSessionStore.getState().activeSessionReadOnly).toBe(false);
+  });
+});
+
+describe('session.store — 只读态与聚焦信号（v25 spec §7「会话只读」/§6.2 入口）', () => {
+  it('selectSession 乐观只读判定：summary members 空（全失效）→ 同步置 true', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    // 前置归位：防前一用例残留态造成假绿（reset 未覆盖新字段前的过渡防御）
+    useSessionStore.setState({ activeSessionReadOnly: false });
+    // 构造一个有效成员为空的会话（被移出 ws 后 JOIN 过滤殆尽）
+    useSessionStore.setState({
+      sessions: [
+        ...useSessionStore.getState().sessions,
+        { id: 'sess-empty', workspaceId: 'ws-a', title: '只读会话', titleAuto: false, kind: 'chat', lastMessageAt: null, members: [] },
+      ],
+    });
+
+    // selectSession 首个同步分片内完成乐观置位（loadMembers 异步权威重算之前）
+    const p = useSessionStore.getState().selectSession('sess-empty');
+    expect(useSessionStore.getState().activeSessionReadOnly).toBe(true);
+    await p;
+  });
+
+  it('loadMembers 权威重算只读态：有效成员空 → true；非空 → false', async () => {
+    useSessionStore.setState({ activeSessionId: 'sess-a1' });
+
+    mockApi.session.get.mockResolvedValue({ session: {}, members: [] });
+    await useSessionStore.getState().loadMembers('sess-a1');
+    expect(useSessionStore.getState().activeSessionReadOnly).toBe(true);
+
+    mockApi.session.get.mockResolvedValue({ session: {}, members: MOCK_MEMBERS });
+    await useSessionStore.getState().loadMembers('sess-a1');
+    expect(useSessionStore.getState().activeSessionReadOnly).toBe(false);
+  });
+
+  it('createQuickSession 成功 → inputFocusTick +1（新建会话聚焦输入框信号）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    expect(useSessionStore.getState().inputFocusTick).toBe(0);
+
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(useSessionStore.getState().inputFocusTick).toBe(1);
+  });
+
+  it('createQuickSession NO_DEFAULT_AGENT → needsDefaultAgent=true 且聚焦信号不变', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.createQuick.mockRejectedValueOnce(
+      new Error('NO_DEFAULT_AGENT: workspace 未设置默认 agent'),
+    );
+
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(true);
+    expect(useSessionStore.getState().inputFocusTick).toBe(0);
+  });
+
+  it('createCollabSession 成功 → inputFocusTick +1', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+
+    await useSessionStore.getState().createCollabSession('ws-a', undefined, {
+      type: 'agent',
+      instanceId: 'inst-1',
+    });
+    expect(useSessionStore.getState().inputFocusTick).toBe(1);
   });
 });
 

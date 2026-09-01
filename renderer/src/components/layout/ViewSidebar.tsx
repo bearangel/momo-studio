@@ -10,6 +10,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { ipc } from '../../ipc/client';
 import { RoomList } from '../im/RoomList';
+import { SessionSidebarHeader } from '../im/SessionSidebarHeader';
 import { FileTree } from '../files/FileTree';
 import { TaskSidebarPanel } from '../task-board/TaskSidebarPanel';
 import { Sidebar } from './Sidebar';
@@ -48,7 +49,13 @@ export function ViewSidebar() {
 
   return (
     <Sidebar collapsed={collapsed} icon={meta.icon} label={meta.label} onToggle={toggleSidebar}>
-      {activeView === 'im' && <RoomList />}
+      {activeView === 'im' && (
+        // 会话区：头部双常驻入口（⚡/👥，spec §6.2）+ 列表（图标语义派生）
+        <>
+          <SessionSidebarHeader />
+          <RoomList />
+        </>
+      )}
       {activeView === 'files' && <FileTree onSelectFile={handleSelectFile} />}
       {activeView === 'tasks' && <TaskSidebarPanel />}
     </Sidebar>

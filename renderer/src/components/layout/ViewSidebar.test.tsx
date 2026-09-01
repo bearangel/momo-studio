@@ -15,6 +15,9 @@ import { useUiStore } from '../../stores/ui.store';
 vi.mock('../im/RoomList', () => ({
   RoomList: () => <div data-testid="room-list-stub" />,
 }));
+vi.mock('../im/SessionSidebarHeader', () => ({
+  SessionSidebarHeader: () => <div data-testid="session-entry-stub" />,
+}));
 vi.mock('../files/FileTree', () => ({
   FileTree: ({ onSelectFile }: { onSelectFile: (p: string) => void }) => (
     <div data-testid="file-tree-stub" onClick={() => onSelectFile('a.ts')} />
@@ -34,6 +37,11 @@ describe('ViewSidebar', () => {
     expect(screen.getByTestId('room-list-stub')).toBeInTheDocument();
     const sidebar = screen.getByTestId('view-sidebar');
     expect(sidebar.style.width).toBe('260px');
+  });
+
+  it('im 视图会话区头部渲染双按钮入口（SessionSidebarHeader，T14 spec §6.2）', () => {
+    render(<ViewSidebar />);
+    expect(screen.getByTestId('session-entry-stub')).toBeInTheDocument();
   });
 
   it('files 视图渲染 FileTree；onSelectFile 由内部接 editor.store + ipc', () => {
