@@ -4,13 +4,13 @@
 // 三种模式：
 //   - mode='edit'：value 是绝对勾选集合（DefinitionEditor 自定义 agent 编辑用）。
 //                  底部显示 [全选] [清空] [安全最小集] 三个快捷按钮。
-//   - mode='override'：value 是最终值。调用方（Layer 3 弹窗 AssignmentCapabilitiesDialog）
+//   - mode='override'：value 是最终值。调用方（Layer 3 弹窗 MemberEditDialog）
 //                      在保存时对照 defaultValue 计算 added/removed delta。
 //                      本组件只管最终值，不计算 delta，仅在 UI 上提示默认集合。
 //   - mode='readonly'：checkbox disabled（builtin agent configure 模式用）。
 //
 // 设计依据：docs/plans/2026-08-11-v1.6-capability-config.md「CapabilityTabs」块。
-// 被 DefinitionEditor（edit / readonly 模式）和 AssignmentCapabilitiesDialog（override 模式）复用。
+// 被 DefinitionEditor（edit / readonly 模式）和 MemberEditDialog（override 模式）复用。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';

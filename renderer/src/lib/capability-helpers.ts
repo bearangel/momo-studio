@@ -1,7 +1,7 @@
 // renderer/src/lib/capability-helpers.ts
 //
-// 三层能力模型的共享纯函数库（v1.6 Task 11 抽取自 AssignmentCapabilitiesDialog）。
-// 供 AssignmentCapabilitiesDialog（T10）、DefinitionEditor 等组件复用，
+// 三层能力模型的共享纯函数库（v1.6 Task 11 自成员能力弹窗抽取）。
+// 供 MemberEditDialog、DefinitionEditor 等组件复用，
 // 避免在多个组件里重复 def→caps 扁平化、default 合并、delta 计算/比较逻辑。
 //
 // 三层能力模型：

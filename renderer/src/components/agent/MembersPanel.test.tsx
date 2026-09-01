@@ -2,12 +2,12 @@
 //
 // v25 Task 12：AgentsView Tab 1「Agent 成员」面板测试（spec §6.1）。
 // 成员行 = icon emoji + 名称 + 模型 + ⭐默认会话标记 + 在线状态 + 行内操作
-// （启动/停止、设为默认会话、更新密钥、调整能力、移出工作空间）。
+// （启动/停止、设为默认会话、编辑、移出工作空间）。
 // 移出被 leader 守卫拦截时 alert blockedTeams 团队名（spec §7）。
 //
 // Mock 策略（momo-test-rules）：
-//   - 子弹窗（AssignmentApiKeyEditor / AssignmentCapabilitiesDialog）桩化，
-//     隔离 panel ↔ dialog 耦合，聚焦按钮渲染与回调传递；
+//   - 子弹窗（MemberEditDialog）桩化，隔离 panel ↔ dialog 耦合，
+//     聚焦按钮渲染与回调传递；
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩（不 mock store 模块）；
 //   - 成员操作全部走 store action（startMember/stopMember/removeMember/setDefaultAgent），
 //     断言生产消费的字段（instanceId / workspaceId）。
@@ -17,30 +17,18 @@ import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../
 import { useProviderStore } from '../../stores/provider.store';
 
 // ---- 子弹窗桩：占位渲染 + 暴露 onClose 触发点 ----
-const keyEditorMock = vi.fn();
-vi.mock('./AssignmentApiKeyEditor', () => ({
-  AssignmentApiKeyEditor: (props: { assignment: WorkspaceAgentMember; onClose: () => void }) => {
-    keyEditorMock(props);
-    return (
-      <div data-testid="key-editor">
-        <button type="button" onClick={props.onClose}>close-key-editor</button>
-      </div>
-    );
-  },
-}));
-
-const capsDialogMock = vi.fn();
-vi.mock('./AssignmentCapabilitiesDialog', () => ({
-  AssignmentCapabilitiesDialog: (props: {
-    assignment: WorkspaceAgentMember;
+const editDialogMock = vi.fn();
+vi.mock('./MemberEditDialog', () => ({
+  MemberEditDialog: (props: {
+    member: WorkspaceAgentMember;
     def: AgentDefinition;
     onClose: () => void;
   }) => {
-    capsDialogMock(props);
+    editDialogMock(props);
     return (
-      <div data-testid="caps-dialog">
-        <span>能力覆盖：{props.def.name}</span>
-        <button type="button" onClick={props.onClose}>close-caps-dialog</button>
+      <div data-testid="member-edit-dialog">
+        <span>编辑成员：{props.def.name}</span>
+        <button type="button" onClick={props.onClose}>close-edit-dialog</button>
       </div>
     );
   },
@@ -122,8 +110,7 @@ let confirmSpy: MockInstance<Parameters<typeof window.confirm>, ReturnType<typeo
 let alertSpy: MockInstance<Parameters<typeof window.alert>, ReturnType<typeof window.alert>>;
 
 beforeEach(() => {
-  keyEditorMock.mockReset();
-  capsDialogMock.mockReset();
+  editDialogMock.mockReset();
   loadMembersMock.mockReset().mockResolvedValue(undefined);
   startMemberMock.mockReset().mockResolvedValue(undefined);
   stopMemberMock.mockReset().mockResolvedValue(undefined);
@@ -263,27 +250,36 @@ describe('MembersPanel — 行内操作触发 store action', () => {
     expect(setDefaultAgentMock).toHaveBeenCalledWith('ws-1', 'inst-2');
   });
 
-  it('点「更新密钥」→ 渲染 AssignmentApiKeyEditor（数据源为 member）', async () => {
+  it('点「编辑」→ 渲染 MemberEditDialog（member + def 数据源为该行成员）', async () => {
     await renderLoaded();
-    fireEvent.click(within(rowOf('编码助手')).getByText('更新密钥'));
+    fireEvent.click(within(rowOf('编码助手')).getByText('编辑'));
     await waitFor(() => {
-      expect(screen.getByTestId('key-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('member-edit-dialog')).toBeInTheDocument();
     });
-    const props = keyEditorMock.mock.calls[0]![0];
-    expect(props.assignment.instanceId).toBe('inst-1');
-    expect(props.assignment.agentDefinitionId).toBe('def-1');
+    const props = editDialogMock.mock.calls[0]![0];
+    expect(props.member.instanceId).toBe('inst-1');
+    expect(props.member.agentDefinitionId).toBe('def-1');
+    expect(props.def.id).toBe('def-1');
   });
 
-  it('点「⚙ 调整能力」→ 渲染 AssignmentCapabilitiesDialog（assignment + def）', async () => {
+  it('旧「更新密钥」「⚙ 调整能力」按钮已随弹窗合并移除', async () => {
     await renderLoaded();
-    fireEvent.click(within(rowOf('编码助手')).getByText('⚙ 调整能力'));
+    expect(screen.queryByText('更新密钥')).not.toBeInTheDocument();
+    expect(screen.queryByText('⚙ 调整能力')).not.toBeInTheDocument();
+  });
+
+  it('关闭编辑弹窗 → loadMembers 刷新（setMemberDeltas 不内部刷新）', async () => {
+    await renderLoaded();
+    fireEvent.click(within(rowOf('编码助手')).getByText('编辑'));
     await waitFor(() => {
-      expect(screen.getByTestId('caps-dialog')).toBeInTheDocument();
+      expect(screen.getByTestId('member-edit-dialog')).toBeInTheDocument();
     });
-    const props = capsDialogMock.mock.calls[0]![0];
-    expect(props.assignment.instanceId).toBe('inst-1');
-    expect(props.def.id).toBe('def-1');
-    expect(screen.getByText('能力覆盖：编码助手')).toBeInTheDocument();
+    loadMembersMock.mockClear();
+    fireEvent.click(screen.getByText('close-edit-dialog'));
+    await waitFor(() => {
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
+    });
+    expect(screen.queryByTestId('member-edit-dialog')).not.toBeInTheDocument();
   });
 });
 

@@ -303,7 +303,7 @@ export interface WorkspaceAllocation {
 /**
  * Per-assignment 能力 delta（Layer 3），与 electron 端 assignment-capabilities.ts 的
  * AssignmentDeltas 对齐。renderer 端独立定义（跨 workspace 不共享类型，仅结构对齐）。
- * 由 DefinitionEditor / AssignmentCapabilitiesDialog 消费。
+ * 由 DefinitionEditor / MemberEditDialog 消费。
  */
 export interface AssignmentDeltas {
   addedTools: string[];
