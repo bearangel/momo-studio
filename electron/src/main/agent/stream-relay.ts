@@ -106,6 +106,35 @@ function clearStreamSessionCache(streamSessionId: string): void {
   streamMessageIdCache.delete(streamSessionId);
 }
 
+// === T9 命名接线：final 事件落库监听（注册反转，同 setAbortResolver 模式） ===
+
+/**
+ * final 事件监听器：'end' chunk 的 final 事件落库后回调（参数为所属 message id）。
+ * 生产注册方：router-bootstrap（lazy 启动时注入 session-naming 的 onLeaderFinal，
+ * 接待 agent 首次 final → LLM 异步命名）。stream-relay 不 import session-naming，
+ * 避免 stream-relay → session-naming → crud → runtime-registry → stream-relay 循环。
+ */
+type StreamFinalListener = (messageId: string) => void;
+
+let finalListener: StreamFinalListener | null = null;
+
+export function setFinalListener(listener: StreamFinalListener | null): void {
+  finalListener = listener;
+}
+
+/** 通知 final 监听器；监听器自身异常不中断流式收尾主链 */
+function notifyFinalListener(messageId: string): void {
+  if (!finalListener) return;
+  try {
+    finalListener(messageId);
+  } catch (err) {
+    logger.warn('final 事件监听器执行失败（不影响流式收尾）', {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * task-driven runtime 的 chunk 入口——落盘 SQLite（MessageEventBuffer 聚批）。
  * WarmPool spawn 的子进程 chunk 经此函数进入唯一通道
@@ -317,6 +346,8 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           payload: { status, ...(errorText !== undefined ? { error: errorText } : {}) },
         });
         buf.flush();
+        // T9：final 事件落库点 → 命名服务等下游监听（非 owner 流即 agent 回复完成）
+        notifyFinalListener(messageId);
         return;
       }
     }

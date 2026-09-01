@@ -73,7 +73,12 @@ export function listSessionsByWorkspace(workspaceId: string): SessionRow[] {
 }
 
 export function renameSession(id: string, title: string): void {
-  getDb().prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(title, Date.now(), id);
+  // 手动改名在同一语句内清 title_auto（spec D4 竞态锁的另一半）：
+  // 若分两条语句，title 已改但 title_auto=1 的窗口内，飞行中的 LLM 命名
+  // （WHERE title_auto=1）仍可覆盖用户手动命名
+  getDb()
+    .prepare('UPDATE sessions SET title = ?, title_auto = 0, updated_at = ? WHERE id = ?')
+    .run(title, Date.now(), id);
 }
 
 export function deleteSession(id: string): void {

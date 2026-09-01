@@ -16,11 +16,12 @@
 // 对 electron 仅做 type-only import——模块在测试进程（无 Electron 运行时）可安全加载。
 
 import { insertMessage, type MessageRow } from '../storage/messages/repo';
-import { getDb } from '../storage/db';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
 import { broadcastLocalMessage } from '../p2p';
 import { detectConflict } from '../task/conflict-detector';
 import { listTasks, getTask } from '../storage/tasks/repo';
+import { applyFirstMessageTitle } from './session-naming';
+import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
 import type { BrowserWindow } from 'electron';
 import { logger } from '../logger';
 
@@ -54,34 +55,37 @@ export function broadcastRuntimeChanged(): void {
 }
 
 /**
- * 目标解析（原 decide-response 三场景的 session 语义）：
- *   1. 显式 mention → 第一个被 @ 且是本会话成员的 agent
- *   2. 会话仅 1 个成员 agent → 自动响应（原"单聊无需 @"）
- *   3. 其余 → null（不路由）
+ * 目标解析（v25 Task 9，spec §4.6 / D5——leader 接待语义）：
+ *   1. 显式 mention → 第一个被 @ 且有效（仍在 ws）的成员直答，leader 不插嘴
+ *   2. 非 @ 消息 → 会话内 is_leader=1 且有效成员接待（建会时快照，spec §3.3）
+ *   3. 无 leader（历史会话 / leader 已失效）→ null（不派发任何 agent）
  *
- * v25 过渡态：v1.x 的「团队会话 + 协调 agent 自动接待」与「多成员含 PM 自动接待」
- * 随 team_session_id / role 概念退役移除；leader/is_leader 接待判定（spec D5）
- * 由后续 task 接线。
+ * 失效过滤：getSessionMembersInfo 的 JOIN（session_members × workspace_agent_members）
+ * 天然剔除已被移出 workspace 的成员——快照行残留但成员表无行的「失效成员」不参与
+ * 接待判定，也不算作会话的有效成员（readOnly 判定同源）。
  *
- * 注：原 decide-response 有 isOwnerMessage 守卫（仅用户本人消息触发自动接待）。
- * 新模型下 sendUserMessage 只处理本地用户消息（单用户应用，所有消息 sender='owner'），
- * 该守卫在结构上已满足，无需重复判断。
+ * 注：sendUserMessage 只处理本地用户消息（单用户应用，所有消息 sender='owner'），
+ * v1.x decide-response 的 isOwnerMessage 守卫在结构上已满足。
  */
 export function resolveTarget(sessionId: string, mentionedInstanceIds: string[]): string | null {
-  const memberRows = getDb()
-    .prepare(
-      `SELECT m.instance_id
-       FROM session_members m
-       JOIN workspace_agent_members a ON m.instance_id = a.instance_id
-       WHERE m.session_id = ?
-       ORDER BY m.added_at ASC`,
-    )
-    .all(sessionId) as Array<{ instance_id: string }>;
-  const memberIds = memberRows.map((m) => m.instance_id);
-  const mentioned = mentionedInstanceIds.find((id) => memberIds.includes(id));
+  return pickRoutingTarget(getSessionMembersInfo(sessionId), mentionedInstanceIds);
+}
+
+/** 路由选目标纯函数：mention 优先 → leader 接待；无 leader → null */
+function pickRoutingTarget(
+  members: SessionMemberInfo[],
+  mentionedInstanceIds: string[],
+): string | null {
+  const mentioned = mentionedInstanceIds.find((id) =>
+    members.some((m) => m.instanceId === id),
+  );
   if (mentioned) return mentioned;
-  if (memberIds.length === 1) return memberIds[0]!; // 单成员会话：发言即应答
-  return null;
+  return members.find((m) => m.isLeader)?.instanceId ?? null;
+}
+
+/** sendUserMessage 返回：readOnly=true 表示会话全部成员失效（renderer 据此禁用输入） */
+export interface SendUserMessageResult {
+  readOnly: boolean;
 }
 
 /**
@@ -89,25 +93,32 @@ export function resolveTarget(sessionId: string, mentionedInstanceIds: string[])
  *
  * - 会话不存在直接抛错（调用方 IPC 层转 renderer 错误提示）
  * - P2P 广播与冲突检测均为非阻塞路径：失败不影响消息落库与路由
- * - 无 router（RouterService 未启动）或无目标（resolveTarget null）时静默跳过路由
+ * - 无 router（RouterService 未启动）或无目标（无 leader / 全失效）时跳过路由，消息仍落库
+ * - 首条用户消息落库后接线 applyFirstMessageTitle 截断占位（T8 命名服务，内部守卫
+ *   仅占位态生效，重复调用不覆盖）
+ * - 返回 readOnly：会话内有效成员数为 0（全部被移出 ws）时为 true（spec §7「会话只读」）
  */
 export async function sendUserMessage(input: {
   sessionId: string;
   body: string;
   mentionedInstanceIds?: string[];
-}): Promise<void> {
+}): Promise<SendUserMessageResult> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
 
   const msg = insertMessage({
     sessionId: input.sessionId,
-    sender: 'owner', // 单用户应用：本地用户消息统一 sender='owner'（取代 Matrix user id）
+    sender: 'owner', // 单用户应用：本地用户消息统一 sender='owner'（取代 Matrix user id；
+    // 该字面量与 session-naming 的 firstUser 过滤条件构成契约，测试锁死）
     eventType: 'm.room.message', // 事件类型字符串保留（renderer 渲染分支依赖；P2 收敛命名）
     body: input.body,
     workspaceId: session.workspaceId,
   });
   touchSessionLastMessage(input.sessionId);
   pushMessageRow(msg);
+
+  // 首条用户消息截断占位（T8 接线；守卫：title=「新会话」占位 且 title_auto=1）
+  applyFirstMessageTitle(input.sessionId, input.body);
 
   // P2P 广播（fire-and-forget；sync 未初始化时静默返回）。
   // 注意：p2p SyncMessage 字段名仍为 roomId（p2p 模块属阶段三重构范围，本 task 不动），
@@ -135,12 +146,15 @@ export async function sendUserMessage(input: {
     });
   }
 
-  const target = resolveTarget(input.sessionId, input.mentionedInstanceIds ?? []);
+  // 有效成员（JOIN 过滤失效）→ 选目标派发；全失效时 members 为空（readOnly）
+  const members = getSessionMembersInfo(input.sessionId);
+  const target = pickRoutingTarget(members, input.mentionedInstanceIds ?? []);
   if (target && router) {
     // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
     // 随 Task 9 路由改造一并更名。
     await router.routeUserChat({ sessionId: input.sessionId, assignmentId: target, body: input.body });
   }
+  return { readOnly: members.length === 0 };
 }
 
 /** 推送 SQLite MessageRow 到 renderer（与 im:message 载荷形状对齐，跨 IPC 一致） */

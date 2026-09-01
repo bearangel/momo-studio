@@ -28,6 +28,13 @@ export interface RouterServiceOpts {
    * routeUserChat 是即时响应，不走 assigned 任务队列。
    */
   dispatcher?: TaskDispatcher;
+  /**
+   * 自动拉起（v25 Task 9，spec §4.6「目标成员离线时自动拉起」）：runner 缺失时
+   * 先经此回调走 agent start 链（构建 spawn opts + 注册 runner），完成后再派发。
+   * 未注入（测试/旧构造）时保持旧语义：runner 缺失 → warn 跳过。
+   * 生产接线：router-bootstrap 注入 start-chain 的 ensureMemberRuntime。
+   */
+  ensureRunner?: (assignmentId: string) => Promise<void>;
 }
 
 /** notifyTaskReply 的入参（camelCase；由 task_reply event 的 snake_case content 转换而来） */
@@ -75,7 +82,21 @@ export class RouterService {
    *          runner 不存在时静默跳过并 warn 日志，不抛错。
    */
   async routeUserChat(input: RouteUserChatInput): Promise<void> {
-    const runner = this.opts.runners.get(input.assignmentId);
+    let runner = this.opts.runners.get(input.assignmentId);
+    if (!runner && this.opts.ensureRunner) {
+      // Task 9 自动拉起：接待者 lastRunning=false（无 runner）→ start 后派发。
+      // 拉起失败不向调用方抛错——消息已落库，发送链路不因 agent 启动失败而失败。
+      try {
+        await this.opts.ensureRunner(input.assignmentId);
+      } catch (err) {
+        logger.warn('routeUserChat 自动拉起失败，放弃派发', {
+          assignmentId: input.assignmentId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      runner = this.opts.runners.get(input.assignmentId);
+    }
     if (!runner) {
       logger.warn('routeUserChat 未找到 runner', { assignmentId: input.assignmentId });
       return;

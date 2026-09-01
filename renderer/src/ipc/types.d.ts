@@ -697,8 +697,15 @@ export interface SessionApiSurface {
   rename(sessionId: string, title: string): Promise<{ ok: true }>;
   /** 解散会话 */
   delete(sessionId: string): Promise<{ ok: true }>;
-  /** 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent（@ 的 instanceId 列表） */
-  send(sessionId: string, body: string, mentionedInstanceIds?: string[]): Promise<void>;
+  /**
+   * 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent（@ 的 instanceId 列表）。
+   * v25 Task 9：返回 readOnly——true 表示会话全部成员已失效（spec §7「会话只读」，UI 据此禁用输入）。
+   */
+  send(
+    sessionId: string,
+    body: string,
+    mentionedInstanceIds?: string[],
+  ): Promise<{ readOnly: boolean }>;
   /**
    * 历史读取：messages + 每条 message 的 events，
    * renderer 用 stream-aggregator 重建 StreamState。

@@ -13,7 +13,7 @@
 // 本模块只负责命名语义本身。
 import { getDb } from '../storage/db';
 import { getSession } from '../storage/sessions/repo';
-import { listMessagesBySession } from '../storage/messages/repo';
+import { getMessage, listMessagesBySession } from '../storage/messages/repo';
 import { getAgentDefinition } from '../agent/crud';
 import { getProvider } from '../agent/provider-crud';
 import { resolveApiKey } from '../agent/spawn-helpers';
@@ -123,8 +123,39 @@ async function generateLlmTitle(sessionId: string): Promise<void> {
     .run(title, Date.now(), sessionId);
 }
 
-/** 接待成员 = session_members.is_leader 建会快照（spec §3.3），JOIN 出 def 引用 */
-function findReceptionAgent(
+/**
+ * 接待成员 final 钩子（Task 9 接线入口，spec §4.5「接待 agent 首次回复 final 后」）：
+ * stream-relay 在 eventType='final' 事件落库后回调（router-bootstrap 注册）。
+ * 仅当该 final 所属消息的 sender 是会话 leader 成员的 agent_user_id 时触发
+ * scheduleLlmTitle——@ 直答成员 / dispatch 子 agent 的 final 不触发。
+ * scheduleLlmTitle 内部守卫（title_auto=1 等）保证重复触发幂等、成功后不再覆盖。
+ * 本函数永不抛错（DB 异常仅 warn）——命名失败不影响会话主流程。
+ */
+export function onLeaderFinal(messageId: string): void {
+  try {
+    const msg = getMessage(messageId);
+    if (!msg) return;
+    const leader = getDb()
+      .prepare(
+        `SELECT a.agent_user_id AS agentUserId
+         FROM session_members m
+         JOIN workspace_agent_members a ON m.instance_id = a.instance_id
+         WHERE m.session_id = ? AND m.is_leader = 1
+         ORDER BY m.added_at ASC
+         LIMIT 1`,
+      )
+      .get(msg.sessionId) as { agentUserId: string } | undefined;
+    if (!leader || msg.sender !== leader.agentUserId) return;
+    scheduleLlmTitle(msg.sessionId);
+  } catch (err) {
+    logger.warn('接待 final 命名钩子失败（不影响会话）', {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** 接待成员 = session_members.is_leader 建会快照（spec §3.3），JOIN 出 def 引用 */function findReceptionAgent(
   sessionId: string,
 ): { instanceId: string; agentDefinitionId: string } | null {
   const row = getDb()

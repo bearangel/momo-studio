@@ -141,6 +141,26 @@ describe('sessions repo', () => {
     expect(got?.updatedAt).toBeGreaterThanOrEqual(s.updatedAt);
   });
 
+  it('renameSession（Task 9 竞态闭环）：title_auto=1 的会话手动改名 → 单语句同时清 title_auto，飞行中 LLM 守卫 UPDATE 命中 0 行', () => {
+    const s = insertSession({ workspaceId: 'ws1', title: '帮我做登录页…', titleAuto: true });
+    renameSession(s.id, '手动命名');
+
+    const after = getSession(s.id);
+    expect(after?.title).toBe('手动命名');
+    expect(after?.titleAuto).toBe(false);
+
+    // 模拟飞行中的 LLM 命名随后到达：session-naming 的竞态锁 UPDATE
+    //（WHERE title_auto=1）必须因 title_auto 已被 rename 清零而命中 0 行
+    const res = getDb()
+      .prepare(
+        `UPDATE sessions SET title = ?, title_auto = 0, updated_at = ?
+         WHERE id = ? AND title_auto = 1`,
+      )
+      .run('LLM 迟到标题', Date.now(), s.id);
+    expect(res.changes).toBe(0);
+    expect(getSession(s.id)?.title).toBe('手动命名');
+  });
+
   it('getSessionSettings 缺省 { maxToolCalls: null, conflictStrategy: "ask" }', () => {
     const s = insertSession({ workspaceId: 'ws1', title: 'a' });
     expect(getSessionSettings(s.id)).toEqual({ maxToolCalls: null, conflictStrategy: 'ask' });

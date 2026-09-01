@@ -23,6 +23,9 @@
 import { RouterService } from './router-service';
 import { setBridgeRouter } from './internal-event-bridge';
 import { setSessionRouter } from '../im/session-service';
+import { setFinalListener } from './stream-relay';
+import { onLeaderFinal } from '../im/session-naming';
+import { ensureMemberRuntime } from './start-chain';
 import { logger } from '../logger';
 import type { AgentRunner } from './agent-runner';
 
@@ -49,10 +52,13 @@ export async function ensureRouterService(
   if (currentRouterService) return;  // 已启动
   if (runners.size === 0) return;    // 无 runner，不需要
 
-  currentRouterService = new RouterService({ runners });
+  // Task 9 接线：ensureRunner = start 链（runner 缺失时自动拉起后派发，spec §4.6）；
+  // final 监听 = 接待 agent 首次 final → LLM 异步命名（spec §4.5）
+  currentRouterService = new RouterService({ runners, ensureRunner: ensureMemberRuntime });
   currentRouterService.start();
   setBridgeRouter(currentRouterService);
   setSessionRouter(currentRouterService);
+  setFinalListener(onLeaderFinal);
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }
 
@@ -65,6 +71,7 @@ export function destroyRouterService(): void {
   if (!currentRouterService) return;
   setBridgeRouter(null);
   setSessionRouter(null);
+  setFinalListener(null);
   currentRouterService = null;
   logger.info('RouterService 已销毁');
 }
