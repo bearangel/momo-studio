@@ -632,3 +632,113 @@ Base commit: 35aa86d
 - ③ 单成员失败并发隔离用例（A failed / B completed，chip 状态+保序回填+stop 收敛三重断言）✅
 - 13/13 全绿（新用例直接绿 = 锁当前正确行为）；typecheck 双 clean；相邻套件 23/23 零回归
 - 剩余 defer：④ 段扫描窗口约束注释 / ⑤ subStatus 超时判定结构化（v1.4 既有，下次动 dispatch 错误处理时一并）/ ⑥ 时序余量放大与单行拆分（化妆级）
+
+## agent-team-session-redesign（feat/agent-team-session-redesign，基线 3cde80f）
+
+Plan: docs/plans/2026-08-31-agent-team-session-redesign.md
+Spec: docs/specs/2026-08-31-agent-team-session-redesign.md
+
+### Task 1: complete (commits 3cde80f..5f35c2d + 报告回填 523a007, review clean after fix round)
+- migration v25 全量落地（members/teams/session_members 重建+is_leader/title_auto/default_agent/drop assignments+definitions.workspace_id）+ 必要偏差：同表直拷 + DROP INDEX idx_agent_definitions_workspace
+- 修复轮：coordinator 悬空引用防护 UPDATE（去重后/直拷前）+ 去重×级联×重建三联动回归锁（RED=FK 中止取证）
+- 6/6 + 023/024 + legacy-upgrade 15/15 全绿；typecheck 双 clean
+- ⚠️ 全量 electron 245 失败/41 文件 = 预期破坏（stash 基线验证 1198/1198），留 T2-T15 重写；错误形态：96 team_session_id / 37 workspace_id / 10 agent_assignments
+- Minor（defer→终审清单）：idx_wam_unique 未直接断言；last_running 搬迁未断言；test6 注释把去重级联归因为 DROP TABLE 隐式删除（断言不受影响）；agent_assignment_capabilities 空表残留（后续 task DROP）；MIN(rowid) vs created_at 语义（plan-mandated）
+
+### Task 2: complete (commits 523a007..ccde99a + fix e51c053, review clean after fix round)
+- 类型层切换：WorkspaceAgentMember/Team/titleAuto/isLeader + 15 文件机械调整（+323/−760）；结构性死亡代码删除（updateAssignmentRole/assignMain/sub-重启链，裁定授权）
+- 修复轮：session:create 入参显式映射（字面量传参恢复编译期多余属性检查）+ 陈旧注释清理 + 报告第 5 处过渡态
+- sessions-repo 12/12 + session.ipc.handlers 16/16；typecheck 双 clean；全量 226 失败/39 文件=基线严格子集零新增
+- 过渡态披露 5 处（resolveTarget 收缩 / addToWorkspace 不入会话 / role 恒 standalone / deleteSession 无守卫 / session:create 字段改名）
+- Minor（defer→终审）：基线对比需文件级清单；addSessionMember INSERT OR IGNORE 不支持 leader 升级（Task 7 换 upsert）；session-ops 注释「两表」实为三表
+- Task 6 brief 必带：renderer session:create 字段对齐（memberInstanceIds）；Task 11：preload 悬空绑定（assignMain/updateAssignmentRole）
+
+### Task 3: complete (commits e51c053..a26a354, review clean 一轮过)
+- membership CRUD：addMember（async 偏离=keychain 语义）/removeMember（leader 守卫前置一切破坏性动作 + 事务内置空 default）/listMembers
+- 范围扩展正当：runtime-registry/status 死 SQL 平移（T2 concern 4 指派 + 新流程硬依赖），9 例转绿
+- membership-crud 9/9 + remove-assignment 重写 4/4（mock-db 反模式 → 真实迁移链 + keychain 注入）；全量 217/39 零新增（用例级 comm 验证）
+- Minor（defer→终审）：addMember 行插入与 keychain 写非原子（注释建议）；「不存在 id 幂等」报告措辞；删除后 stop 抛错孤儿窗口（重启自愈）
+
+### Task 4: complete (commits a26a354..ba31e2b+af07454, fix fbb997f, review clean after fix round)
+- 团队服务七函数 + 事务原子性 + leader∈成员集 + ≥2 约束；3 项偏离（空名守卫/ws 收紧/幂等对齐）均评估接受
+- 修复轮：addTeamMember 补 ws 归属校验（RED 实证漏洞）+ createTeam/addTeamMember 跨 ws 专项锁；Minor 顺手 2/3
+- team-crud 25/25；typecheck 双 clean；全量 217/39 零新增（JSON 用例级集合对比——方法论升级）
+- 遗留 Minor：getTeamRow `!` 非空断言（防御式）；全量对比统一 JSON reporter 建议（间歇 flake ±1~5 观测一次）
+
+### Task 5: complete (commits fbb997f..853a98c, review clean 一轮过)
+- setDefaultAgent（null 直清 / 非 null 校验 ws 归属 / 不存在 throw）+ getWorkspace 返回 defaultAgentInstanceId（T3 已备列映射）
+- default-agent 5/5（含越 brief 的不存在 instanceId 错误路径专项）；typecheck 双 clean；全量 1026/217/39 零新增；renderer 624/624
+- Minor（defer）：ws+instance 双不存在时错误文案先报成员（校验顺序）；IPC 通道 workspace:setCoordinator 旧名待 T6 改
+
+### Task 6: complete (commits 853a98c..e1da545 + fix 7eff349, review clean after fix round)
+- IPC 面全量切换：47 文件 +1172/−1106；退役通道四层零残留 + 负向注册锁；新通道 handler↔preload↔types 三方对齐；显式映射纪律全过
+- 自裁①正当：SessionMemberInfo 生产者 isDefaultAgent→isLeader 快照（T2 契约偏差修正）；自裁②正当：AgentOrchestrator/AssignmentRoleEditor 类型强制提前删除（T12 缺额声明）
+- 修复轮：session-ops.test.ts 整体重写 v25 契约锁（isLeader 快照独立性断言，生产路径写入）；头注释纠偏
+- 本任务 43/43 + session-ops 31/31；typecheck 双 clean；renderer 621/621（−3 退役用例）；electron 全量 217→207/39→38（新基线）
+- Minor（defer→终审）：isCoordinator 命名残留 runtime spawn-opts 域（RuntimeConfig 线协议面）；assign-local-identity fixture 死 role 字段；MentionInput.test describe 标题；session.store mockApi 死键 create；setDefaultAgent types Promise<void> vs {ok:true}
+
+### Task 7: complete (commits 7eff349..837bee9, review clean 一轮过；网络中断后续接补完报告)
+- 双流程真实现：insertSessionWithMembers 单事务核心（三路径收敛）；NoDefaultAgentError（message 子串契约与 T6 锁兼容）；CollabType 迁 session-ops 单一事实源
+- title_auto 四象限 + 快照铁律测试（前提锁防 tautology）；session-ops 18/18 + handlers 20/20；全量 207/38 零新增
+- Minor（defer→终审）：报告 createSession「系统命名路径仍在用」措辞失实（实为仅测试夹具）；collab 单 agent 跨 ws 仅 FK 校验（加固清单）；LSP never[] 全文件惯用法（单独 task 根治）
+
+### Task 8: complete (commits 837bee9..e18fd8f, review clean 一轮过)
+- session-naming.ts：截断占位（去换行 20 字）+ LLM 异步替换（leader 成员→def→provider→createLLMProvider 真实解析链）+ title_auto 竞态锁（SQL 守卫，并发双 final 确定性 Deferred 编排锁死）
+- AND 裁定正确（OR 两处翻车各有专项锁）；mock 收窄仅 LLM 网络边界；19/19；全量 207/38 零新增
+- **T9 必办移交（Important）**：① sender==='owner' 跨模块契约测试（生产写入路径落地时锁死字面量）；② repo.renameSession 单语句置 title_auto=0（飞行前手动改名防 LLM 覆盖）+ 回归测试
+- Minor（defer→终审）：emoji 代理对切半；trim 在 slice 后前导空白耗预算；U+2028 未折叠；双 schedule 无 in-flight 去重
+
+### Task 9: complete (commits e18fd8f..4ae5706 + fix d9aeadf, review clean after fix round)
+- 路由五契约落地：pickRoutingTarget（mention 优先→is_leader 快照）/@ 直答/自动拉起（await ensureRunner 后派发不丢消息）/失效过滤（JOIN 过滤+readOnly）/命名接线（首条+首次 final）
+- T8 双移交闭环：sender 'owner' 生产↔消费契约测试 + renameSession 单语句清 title_auto
+- 修复轮 Critical：零 runner 启动 RouterService 不创建（两处早退删除+无条件 ensure+真实 bootstrap 接线测试+warn 留痕断言）
+- session-service 重写转绿（基线 −18）；全量 189 红/1120 绿（新基线）零新增
+- Minor（defer→终审）：失败流 final 也触发命名（白花 LLM）；自动拉起无 broadcastRuntimeChanged；首次拉起 spawn 时长计入 send 返回；rename 回归手抄守卫 SQL；resolveTarget 导出面；session-service.ts:10 头注释
+
+### Task 10: complete (commits d9aeadf..c3764cd, review clean 一轮过)
+- buildDispatchSnapshot（快照 JOIN+leader 子查询+跨会话并集去重）+ 注入条件 isLeader&&subAgents>0 + 线协议 isCoordinator→isLeader 两端改名（契约测试锁形状）
+- 契约测试 10/10（真链路 JSON round-trip + buildRuntimeContext 导出消费）；删除 5 过时测试无覆盖丢失；全量 199→174 FAIL 净修复 25 零新增
+- **插入 Task 10B（清理专项，最高优先）**：①agent_assignment_capabilities FK 悬空（v25 漏重建，agent:setMemberDeltas 生产炸）→ migration v26 重建 FK 指向 workspace_agent_members；②saveAgentDefinition 写已删 workspace_id 列（crud.ts:712 对应）；均预存 v25 债务，T12 UI 前必须清
+- Minor（defer→终审）：离线成员入快照缺直接回归锁；slug 去重文档过强；runtime-entry:311 旧术语注释
+
+### Task 10B: complete (inserted, commits c3764cd..7af6299, review clean 一轮过)
+- v26 重建 agent_assignment_capabilities FK→workspace_agent_members + crud definitions 死列 4 处清理；setMemberDeltas 全链路回归锁（生产序列逐字对齐）
+- 174→148 红净转绿 26 零新增；spawn-helpers FK 绕行 workaround 删除
+- Minor（defer）：报告漏点 agent:list 传参消费方（行为净修复）；ipc.handlers:222 注释漂移；v25 级联用例断言平凡；runMigrations 无事务+CREATE 无 IF NOT EXISTS（基础设施债务）
+
+### Task 11: complete (commits 7af6299..9135c40, review clean 一轮过)
+- agent.store members 彻底更名 + teams 状态/7 action（teamsWorkspaceId reload 守卫）+ blockedTeams 透传；session.store 双会话 action + NO_DEFAULT_AGENT→needsDefaultAgent（重试复位时序锁）；workspaceId 消费清理（AgentLibrary source-only/DefinitionEditor 删 scope radio）
+- renderer 643/643（+22 零新增）；typecheck 双 clean；preload 悬空绑定零残留
+- Minor（defer）：WorkspaceAgentsPanel 直调 IPC 双路径（待删代码）；CreateTeamInput 本地重复声明；mock 文案微差；refreshTeams 未载时 no-op
+
+### Task 12: complete (commits 9135c40..424ff25, review clean 一轮过, visual-engineering)
+- AgentsView 双 Tab + MembersPanel（行内操作全走 store，⭐标记，blockedTeams alert）+ TeamsPanel（👑leader chip/成员chips/删除接真实）+ 退役组件删除（含计划外 AgentLibrary：AddToWorkspaceDialog 唯一消费方+定义管理归资源库）
+- 接线深挖验证：移出语义由后端 stopAgentRuntime 承接无孤儿 runtime；T13 三占位 disabled+注释
+- renderer 652/652（−12旧+21新 零新增）；typecheck 双 clean
+- Minor（defer）：⭐断言偏弱；移出后 loadMembers 无回归锁；空成员分支无用例；MainLayout 注释漂移
+
+### Task 13: complete (commits 424ff25..6569e42, TDD 红→绿一次转)
+- 四弹窗：CreateAgentDialog（source agentView 自动入 ws+设默认勾选/library 仅定义；工具三档 safe/all/custom）、TeamDialog（editing 回填；≥2 校验；leader 已勾选单选禁用+取消自动清空；编辑 diff 序列 改名→adds→setLeader→removes 顺序锁）、CollabSessionDialog（名称可空=undefined 动态命名；agent/团队页签单选；失败读 store error）、DefaultAgentPickerDialog（成员单选→setDefaultAgent→onContinue；无成员引导；接线归 T14）
+- 接线：MembersPanel/TeamsPanel 三占位启用 + 资源库创建入口 DefinitionEditor(create)→CreateAgentDialog(library)；DefinitionEditor 编辑能力共存未动
+- renderer 691/691（652+39 零新增）；typecheck 双 clean；eslint 零输出
+- Review 修复（Important #1 根因）：编辑 diff 基准改提交时 store 现状重读（editing prop 快照过期 → 部分失败重试命中 addTeamMember dup throw 死循环；后端显式 throw 非幂等）；找不到降级 editing+提示刷新；+2 重试用例 693/693
+- defer：onContinue 签名 (instanceId) 供 T14；CreateAgentDialog 中文名 slug=中文（与 DefinitionEditor 一致）
+
+### Task 13: complete (commits 424ff25..6569e42 + fix 72db42d, review clean after fix round, visual-engineering)
+- 四弹窗（CreateAgentDialog source 语义/TeamDialog 编辑 diff/CooldownSessionDialog CollabTarget 对齐/DefaultAgentPicker）+ T12 占位接线 + 资源库入口切换；DefinitionEditor 编辑路径共存保留
+- 修复轮（Important）：TeamDialog diff 基准改提交时 store 现状（三基准统一迁移），部分失败重试不死锁；+2 调用计数实锁用例；报告「幂等兜底」措辞勘误
+- renderer 693/693 零新增；typecheck 双 clean
+- Minor（defer→终审）：CreateAgentDialog addMember 失败后 def 已建 slug 冲突重试；ResourceLibraryView.test 注释漂移；Picker onContinue 在 try 内（T14 消费方注意）；切档不重置/切页签清目标无断言
+
+### Task 14: complete (commits 72db42d..5b2f86e, review clean 一轮过, visual-engineering)
+- 双常驻按钮 ⚡+👥 三分支流程（免弹窗直达+inputFocusTick 聚焦 / Picker 续链 / 无成员引导）；readOnly 三层判定（乐观/权威/校正，selectSession 无条件 loadMembers 保证无死层）；列表图标语义派生（👑前置+溢出+回退）；CreateRoomDialog 删除（工具上限能力由 Badge 保留）
+- T13 移交落实：onContinue 消费方自 catch + 专项锁；测试基建修复 3 处
+- renderer 719/719（+26 零新增）；typecheck 双 clean
+- Minor（defer→终审）：报告用例数笔误（9→7）；乐观只读理论闪烁；text-[10px] 任意值；MentionInput mock undefined
+
+### Task 15: complete (commits bce7c95..文档commit, 收官任务：退役清理+全量回归)
+- 概念清零：grep 74→17 处（合法残留=migrations 历史 SQL+类型对齐注释）；AgentAssignment 别名双端删除；AGENT_CONFIG 线协议删 teamSessionId（5 spawn 站点+parseConfig+dispatch-wait 兜底）；workspace:getCoordinator 通道三处删除；dispatcher AgentMemberInfo 更名
+- 148 红清账（基线实测 28 文件）：A 夹具修复 16 文件 / B 语义重写 8 文件 / C 退役删除 4 项（remove-cascade+coordinator 整文件、crud-assignment 10 条、ipc-stop-start Task7 describe）+ 保留迁移 7 条有效覆盖 / D 改名涟漪 3 文件即时修复——裁定对照表见 task-15-report.md
+- 门禁：typecheck 双 clean；electron 160文件/1306 全绿；renderer 75/719 全绿；build exit 0；e2e 冒烟 smoke.spec 新增 1 passed + 旧 onboarding/e2e-full 标 skip（2.x 重写债在案）
+- 文档：README Agent/会话章节 v25 化；AGENTS.md 架构关键点+关键文档；CHANGELOG [未发布] 段
+- 遗留：AGENT_CONFIG role 死字段（grep 契约外，独立清理项）；e2e 2.x 重写；better-sqlite3 ABI 换算步骤（e2e↔单测互斥，见 smoke.spec 头注释）

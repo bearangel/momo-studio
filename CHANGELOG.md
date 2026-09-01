@@ -2,6 +2,28 @@
 
 本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布] — v25 agent/会话域重构（去编排 + 团队 + 双会话）
+
+设计依据：`docs/specs/2026-08-31-agent-team-session-redesign.md`。无旧数据兼容负担（migration v25 丢弃 role/parent 数据）。
+
+### 重构（Breaking Change）
+- **去编排**：`agent_assignments`（role=standalone/main/sub + parentInstanceId 父子链）退役 → `workspace_agent_members` 成员制（无角色，同 ws 同 def 唯一）；agent 定义全局化（`agent_definitions.workspace_id` 列 DROP）
+- **团队取代主子编排**：`teams` / `team_members`（leader + 成员，建团事务保证 leader 必在成员集）；leader 在多成员会话中自动获得 dispatch 权（`buildDispatchSnapshot` 会话快照在 spawn 时定型，取代 role='main' + parent 链）
+- **会话双类型**：「快速会话」（免弹窗直达 workspace 默认 agent；首条消息截断命名 + 接待 agent 首次回复后 LLM 异步生成标题）与「协作会话」（指定单 agent 或团队，建会快照展开 `session_members`）；workspace 级「团队会话」概念退役（`workspaces.team_session_id` / `coordinator_instance_id` → `default_agent_instance_id`）
+- **接待路由**：非 @ 消息由会话内 `is_leader` 成员接待；@ 成员直答；目标成员离线自动拉起
+- **IPC 通道面**：`agent:addToWorkspace`→`agent:addMember`、`agent:removeAssignment`→`agent:removeMember`、`agent:listAssignments`→`agent:listMembers`、`workspace:setCoordinator`→`workspace:setDefaultAgent`；`agent:assignMain` / `agent:updateAssignmentRole` / `workspace:getCoordinator` 退役；新增 `team:*` 七通道
+- **AGENT_CONFIG 线协议**：`teamSessionId` 字段删除（dispatch/abort 目标会话一律用当前 `executionSessionId`）
+
+### 新增
+- AgentsView 双 Tab（Agent 成员 + 团队）；创建 Agent / 创建团队 / 创建协作会话三弹窗；会话入口 ⚡快速 + 👥协作 双常驻按钮；无默认 agent 时一次性选择引导
+- 成员 leader 守卫（是任一团队 leader 拒绝移除，返回 blockedTeams）；删除命中默认 agent 联动置空
+- 会话列表图标语义派生（单成员显示该 agent emoji；多成员显示成员 icon 组，leader 带 👑）
+
+### 清理（Task 15 收官）
+- 退役概念源码零残留：`AgentRole` / `parentInstanceId` / `coordinator` / `teamSessionId` / `assignMain` / `addToWorkspace` / `AgentAssignment` 过渡别名全部清除（合法残留仅 migrations 历史 SQL 与类型对齐注释）
+- 148 个依赖 v25 前语义的红测试逐文件清账：夹具修复 / 断言重写 / 退役覆盖删除（裁定记录 `.superpowers/sdd/task-15-report.md`）；electron 全量 1306 + renderer 719 全绿
+- e2e：新增 v25 最小冒烟（smoke.spec.ts）；旧 onboarding/Matrix 场景 spec 标记待重写（2.x 技术债在案）
+
 ## [1.7.4] — 2026-08-12
 
 ### 修复

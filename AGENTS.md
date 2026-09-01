@@ -24,6 +24,7 @@ v2.0.0 设计取舍一句话：「单进程 Electron + 内置 SessionService + �
 
 - **sessions 内核**：`sessions` / `session_members` / `message_events` 表是单一真相源；`message_events.seq` 自增主键 = 时间线性显示的天然全序
 - **task-driven runtime**：AgentRunner + WarmPool（K=2 预热）+ MessageEventBuffer（50ms/30 条批落盘）；废弃 v1 双轨 runtime-manager
+- **v25 agent 域（去编排）**：`workspace_agent_members` 成员制（无 role/parent，同 ws 同 def 唯一）取代 `agent_assignments`；agent 定义全局化（`workspace_id` 列已 DROP）；多 agent 协作走「团队」（`teams`/`team_members`，leader+成员），dispatch 注入按会话快照判定（成员>1 且 is_leader，`buildDispatchSnapshot` 在 spawn 时定型）；会话双类型（快速/协作），`workspaces.default_agent_instance_id` 支撑快速会话；依据 `docs/specs/2026-08-31-agent-team-session-redesign.md`
 - **dispatch + stream 事件链**：RouterService 切输入源（Matrix event → SessionService 进程内事件）；dispatch / task_reply 走内部事件桥，子 agent 结果可靠回传
 - **LAN p2p**：Ed25519 身份 + mDNS 发现 + TCP 直连；payload 多类型分发（message / task-snapshot / resource-catalog / resource-request / resource-provide）；远端任务**只读镜像**（spec D7 铁律：入站快照只进内存缓存，绝不写 `tasks` 表）
 - **marketplace + skill**：资源库三类 source（builtin / marketplace / custom）+ v2 加 `source='p2p'`；内置 agent YAML 落 `electron/resources/agents/*.yaml`（coder / pm-agent / requirement-analyst）；marketplace 目录 `resources/marketplace/catalog.json`
@@ -128,6 +129,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 ## 关键文档
 
+- `docs/specs/2026-08-31-agent-team-session-redesign.md` — v25 agent/会话域现行设计（去编排 + 团队 + 双会话），agent 域实现以此为准
 - `docs/specs/2026-08-23-v2.0.0-platform-refactor-design.md` — v2.0.0 现行架构设计（18 节），所有 2.x 实现的依据
 - `docs/specs/2026-07-28-agent-platform-design.md` — v1.x 早期设计（14 节），**已 superseded**；v2.0.0 起仅作历史参考
 - `docs/plans/2026-08-23-v2.0.0-p*.md` — 五期实施计划（p1 会话内核 / p2 UI / p3 收尾 / p4 局域网 / p5 升级）

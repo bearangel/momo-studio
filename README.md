@@ -108,17 +108,18 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 
 ### Agent
 - YAML 声明式定义（frontmatter + prompt body）
-- v1.3：定义与分配解耦——身份/能力/模型在 def；角色/父子在 assignment
-- v1.3：自定义 agent 可 workspace 隔离（默认私有，可选全局共享）
-- v1.3：UI 双 Tab（本工作空间 + Agent 库管理）
-- 内置 Anthropic / OpenAI 两个 LLM provider；v1.3 改为 provider 引用模式（baseUrl + keychain）
-- 工具系统：v1.5 内置 7 类 24 个工具（文件/搜索/Shell/Git/Web/Todo/LSP）+ MCP 工具；v1.6 三层能力配置（Definition 默认集 + Assignment override + per-assignment delta）
-- 主子调度：父 agent 通过 `dispatch` 派发子任务，子任务通过 `task_reply` 回传结果
+- v25：去编排——agent 定义全局化（无 workspace 隔离），加入工作空间即成员（无 role/父子链，同 ws 同 def 唯一）；多 agent 协作由「团队」（leader + 成员）承担，leader 在多成员会话中自动获得 `dispatch` 派发权
+- v25：每个 workspace 可指定唯一「默认会话 agent」（⭐ 标记），支撑快速会话一键直达
+- 内置 Anthropic / OpenAI 两个 LLM provider；provider 引用模式（baseUrl + keychain）
+- 工具系统：v1.5 内置 7 类 24 个工具（文件/搜索/Shell/Git/Web/Todo/LSP）+ MCP 工具；v1.6 三层能力配置（Definition 默认集 + workspace 分配 + 成员级 add/remove delta）
+- 多 agent 协作：团队 leader 通过 `dispatch` 派发子任务，子任务通过 `task_reply` 回传结果
 - 完整运行历史与工具调用审计
 
 ### 会话（2.0.0-p1 前为 IM）
 - 2.0.0-p1 起传输层内迁：SQLite sessions 表 + 进程内事件分发，本地零外部依赖（Matrix/Tuwunel 已移除）
-- 支持私聊和团队会话；Agent 在会话内可被 `@` 唤起，v1.4 流式回复（thinking 折叠 + 工具调用卡片 + Markdown 逐字输出）
+- v25：会话双类型——「快速会话」（免弹窗直达默认 agent；首条消息截断命名 + LLM 异步生成标题）与「协作会话」（指定单 agent 或团队，团队建会时快照展开成员）；workspace 级「团队会话」概念退役
+- v25：接待路由按会话成员快照——非 @ 消息由 is_leader 成员接待，@ 成员直答；目标成员离线自动拉起
+- Agent 在会话内可被 `@` 唤起，v1.4 流式回复（thinking 折叠 + 工具调用卡片 + Markdown 逐字输出）
 - v1.4 多 agent 委派嵌套展示：dispatch/task_reply 不再作为独立消息，嵌套在 PM 气泡的 DispatchChip 内
 - v1.4 可配置工具调用上限：全局默认 + 会话级覆盖 + per-task 重置（0-无限）
 - 客户端渲染支持代码块、表格、链接、引用块
