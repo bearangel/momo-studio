@@ -7,7 +7,7 @@
 //   2. 关注点分离——index.ts 只负责 app 生命周期编排，不承载 runtime 遍历细节。
 //
 // 核心逻辑：
-//   遍历所有 workspace 的 assignment，为每个 enabled=1 且 last_running=1 的
+//   遍历所有 workspace 的成员，为每个 last_running=1 的
 //   agent 创建 WarmPool + AgentRunner → 预热 → 经 router-bootstrap 统一入口
 //   ensureRouterService 启动 RouterService。
 //   last_running=0：跳过（用户主动下线意图，不自动恢复）。
