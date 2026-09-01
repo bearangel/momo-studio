@@ -282,3 +282,46 @@ describe('TeamDialog — 编辑模式', () => {
     expect(removeTeamMember).not.toHaveBeenCalled();
   });
 });
+
+describe('TeamDialog — 编辑 diff 基准 = 提交时 store 现状（部分失败重试）', () => {
+  it('首次 setLeader 失败 → store 已含新增成员 → 重试不重复 add，增量正确', async () => {
+    setLeader.mockRejectedValueOnce(new Error('换 leader 失败'));
+    const onClose = vi.fn();
+    render(<TeamDialog editing={EXISTING_TEAM} onClose={onClose} />);
+    // 加成员 inst-3 + leader 换成 inst-2
+    clickMember('测试员');
+    fireEvent.click(leaderRadio('评审员'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    // 首次：addTeamMember 成功、setLeader 失败 → 错误展示、弹窗不关
+    expect(await screen.findByText('换 leader 失败')).toBeInTheDocument();
+    expect(addTeamMember).toHaveBeenCalledTimes(1);
+    expect(addTeamMember).toHaveBeenCalledWith('team-1', 'inst-3');
+    expect(onClose).not.toHaveBeenCalled();
+
+    // 模拟 store 刷新：teams 已含 inst-3（leader 仍 inst-1，setLeader 未成功）
+    useAgentStore.setState({
+      teams: [{ ...EXISTING_TEAM, members: [MEMBER_1, MEMBER_2, MEMBER_3] }],
+    });
+
+    // 重试：基准已是现状 → 不再 addTeamMember（否则命中后端 dup throw 死循环），仅补 setLeader
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(addTeamMember).toHaveBeenCalledTimes(1);
+    expect(setLeader).toHaveBeenCalledTimes(2);
+    expect(setLeader).toHaveBeenLastCalledWith('team-1', 'inst-2');
+    expect(removeTeamMember).not.toHaveBeenCalled();
+  });
+
+  it('store 中找不到该团队 → 降级 editing 快照为基准并提示刷新', async () => {
+    useAgentStore.setState({ teams: [] });
+    const onClose = vi.fn();
+    render(<TeamDialog editing={EXISTING_TEAM} onClose={onClose} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '铁三角' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    // 提示在提交过程中即显示（成功后弹窗关闭卸载，晚查会落空）
+    expect(await screen.findByText(/团队状态已过期/)).toBeInTheDocument();
+    // 降级路径仍按 editing 基准提交（后端守卫团队不存在时抛错兜底）
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(renameTeam).toHaveBeenCalledWith('team-1', '铁三角', '🛠️');
+  });
+});

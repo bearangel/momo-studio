@@ -82,17 +82,25 @@ export function TeamDialog({ editing, onClose }: Props) {
           leaderInstanceId: leaderId,
         });
       } else {
-        const currentIds = new Set(editing.members.map((m) => m.instanceId));
-        if (name.trim() !== editing.name || iconEmoji !== editing.iconEmoji) {
+        // diff 基准 = 提交时 store 现状。editing prop 是打开弹窗时的快照——
+        // 部分失败后 store action 已自动刷新 teams，同弹窗重试若仍按快照 diff，
+        // 会重放已成功的 addTeamMember（后端 dup 显式 throw，非幂等）导致死循环。
+        const base =
+          useAgentStore.getState().teams.find((t) => t.id === editing.id) ?? editing;
+        if (base === editing) {
+          setError('团队状态已过期（可能已被删除），建议刷新团队列表后重试');
+        }
+        const currentIds = new Set(base.members.map((m) => m.instanceId));
+        if (name.trim() !== base.name || iconEmoji !== base.iconEmoji) {
           await renameTeam(editing.id, name.trim(), iconEmoji);
         }
         for (const id of selected) {
           if (!currentIds.has(id)) await addTeamMember(editing.id, id);
         }
-        if (leaderId !== editing.leaderInstanceId) {
+        if (leaderId !== base.leaderInstanceId) {
           await setLeader(editing.id, leaderId);
         }
-        for (const m of editing.members) {
+        for (const m of base.members) {
           if (!selected.has(m.instanceId)) await removeTeamMember(editing.id, m.instanceId);
         }
       }
