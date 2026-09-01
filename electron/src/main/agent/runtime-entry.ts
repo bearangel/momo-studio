@@ -119,8 +119,11 @@ async function main(): Promise<void> {
  * 构建运行时上下文：初始化 SkillRegistry、发现 MCP 工具定义、合并全部工具列表、
  * 把 skill 索引注入 system prompt、构建工具模块注册表（v1.5）。单个 skill 注册失败或
  * MCP 发现失败均不致命——记录日志后跳过，保证 agent 仍能以剩余能力上线。
+ *
+ * v25 Task 10 导出：dispatch 快照契约测试以本函数为真实消费者
+ * （生产者 buildSpawnOpts 产出 → AGENT_CONFIG 线协议 → 此处注册 dispatch 工具）。
  */
-async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContext> {
+export async function buildRuntimeContext(config: RuntimeConfig): Promise<RuntimeContext> {
   const wsFs = new WorkspaceFS(config.workspaceDir);
 
   const skillRegistry = new SkillRegistry();
@@ -167,7 +170,11 @@ ${skillIndex}`
     ...getAllToolDefs(toolModules),
     ...getVirtualToolDefs(skillRegistry),
     ...(await discoverMcpTools(config)),
-    ...(config.role === 'main' ? getDispatchToolDefs(config.subAgents) : []),
+    // v25 Task 10（spec §4.7）：dispatch 注入条件 = 会话快照判定
+    // （isLeader && subAgents 非空，取代 v1 role==='main'）
+    ...(config.isLeader && config.subAgents.length > 0
+      ? getDispatchToolDefs(config.subAgents)
+      : []),
     ...getBuiltinLoopToolDefs(),
   ];
 

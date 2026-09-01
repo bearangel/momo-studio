@@ -1,14 +1,18 @@
-// workspace:setDefaultAgent 自动重启单测
+// workspace:setDefaultAgent 自动重启单测（v25 重写）
 //
-// 验证：设定协调 agent 后，若该实例正在运行，主进程自动停止并以 isCoordinator=true
-// 重启——取代旧版"提示用户手动停止+启动"的交互。
+// 验证：设定默认会话 agent 后，若该实例正在运行，主进程自动停止并重启——
+// 重启产出的 AGENT_CONFIG 按会话快照重新计算（spec §4.7）。
+// v1 语义（重启注入 isCoordinator=true）已随 v25 退役：默认 agent 标志不再进
+// 线协议，isLeader/subAgents 改由 buildDispatchSnapshot 会话快照计算。
 //
 // 捕获方式：mock electron.ipcMain.handle，把 workspace:setDefaultAgent 回调存入 Map，
 // 测试直接调用捕获的回调 —— 验证的是真实生产 handler（而非逻辑副本），与
 // agent/ipc-validation.test.ts 同一约定。
 //
-// runtime-status / runtime-registry 被 mock（避免真实子进程与 DB 读写）；allocation 被 mock 返回空分配；
-// 其余（storage/db + keychain + workspace/crud + agent/crud + capability-merger）走真实实现。
+// runtime-status / runtime-registry 被 mock（避免真实子进程）；allocation 被 mock 返回空分配；
+// 其余（storage/db + keychain + workspace/crud + agent/crud.addMember + sessions/repo）走真实实现。
+// agent_definitions 用 raw SQL seed（v25 已删 workspace_id 列；saveAgentDefinition 尚未对齐，
+// 属独立清理项，不在此处牵入）。
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
@@ -16,9 +20,9 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl, type KeychainImpl } from '../../src/main/storage/keychain';
-import { saveAgentDefinition, assignAgentToWorkspace } from '../../src/main/agent/crud';
+import { addMember } from '../../src/main/agent/crud';
 import { createWorkspace } from '../../src/main/workspace/crud';
-import type { AgentDefinition } from '../../src/main/agent/types';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 
 // 捕获 ipcMain.handle 注册的回调（vi.hoisted 保证在 vi.mock 工厂提升前就绪）
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
@@ -35,7 +39,6 @@ vi.mock('../../src/main/agent/runtime-status', () => ({
 }));
 vi.mock('../../src/main/agent/runtime-registry', () => ({
   startAgentRuntime: (opts: unknown) => spawnAgentMock(opts),
-  // I1 修复后 restartCoordinatorInstance 改用 stopAgentRuntime；委托 stopAgentMock 保持断言语义
   stopAgentRuntime: async (id: string) => stopAgentMock(id),
 }));
 
@@ -70,7 +73,6 @@ const memKeychain: KeychainImpl = {
 };
 
 beforeAll(async () => {
-  // 一次性导入模块并取出 registerWorkspaceHandlers，注册后 channel→handler 落入 Map
   const mod = await import('../../src/main/workspace/ipc.handlers');
   registerWorkspaceHandlers = mod.registerWorkspaceHandlers;
 });
@@ -80,10 +82,10 @@ beforeEach(() => {
   process.env.AP_USER_DATA_DIR = tmpRoot;
   setKeychainImpl(memKeychain);
   runMigrations();
-  // v1.3：buildSpawnOpts 读 model_providers 表，需预建 provider 记录
-  getDb().prepare(
-    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default)
-     VALUES ('prov-1', 'Test Provider', 'https://api.openai.com', 'provider.prov-1.api_key', 'gpt-4o', 1)`,
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, platform)
+     VALUES ('prov-1', 'Test Provider', 'https://api.openai.com', 'provider.prov-1.api_key', 'gpt-4o', 1, 'openai')`,
   ).run();
   handlers.clear();
   registerWorkspaceHandlers();
@@ -99,188 +101,103 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-/** 构造一个最小可用的 standalone agent 定义并落库 */
-function makeStandaloneDef(): AgentDefinition {
-  const def: AgentDefinition = {
-    id: 'def-1',
-    name: 'A',
-    slug: 'a',
-    version: '1.0',
-    runtime: 'declarative',
-    systemPrompt: 'p',
-    defaultTools: [],
-    source: 'custom',
-    description: 'd',
-    iconEmoji: '🤖',
-    defaultMcps: [],
-    defaultSkills: [],
-    workspaceId: null,
-    modelProviderId: 'prov-1',
-    modelName: 'gpt-4o',
-  };
-  saveAgentDefinition(def);
-  return def;
+/** raw SQL 落一个最小 agent 定义（v25 列；saveAgentDefinition 尚带已删列不可用） */
+function seedDef(defId: string, slug: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO agent_definitions
+         (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+          default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', 'd', '🤖', 'prov-1', 'gpt-4o', 1)`,
+    )
+    .run(defId, slug, slug);
 }
 
-/**
- * 构造 main + 2 个 sub 定义并落库，返回 main def。
- * 用于测试协调重启路径下 main agent 的 subAgents 重建（C1）。
- * v1.3：def 不含 type/parent；subs 通过 assignment.parent_instance_id 关联。
- */
-function makeMainWithSubs(): AgentDefinition {
-  const main: AgentDefinition = {
-    id: 'main-coord', name: 'PM', slug: 'pm-coord', version: '1.0',
-    runtime: 'declarative', systemPrompt: '你是 PM',
-    defaultTools: [], source: 'custom', description: 'PM', iconEmoji: '📋',
-    defaultMcps: [], defaultSkills: [],
-    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
-  };
-  const sub1: AgentDefinition = {
-    id: 'sub-coord-1', name: 'Coder', slug: 'coder-coord', version: '1.0',
-    runtime: 'declarative', systemPrompt: '写代码',
-    defaultTools: [], source: 'custom', description: 'coder', iconEmoji: '🔗',
-    defaultMcps: [], defaultSkills: [],
-    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
-  };
-  const sub2: AgentDefinition = {
-    id: 'sub-coord-2', name: 'QA', slug: 'qa-coord', version: '1.0',
-    runtime: 'declarative', systemPrompt: '测试',
-    defaultTools: [], source: 'custom', description: 'qa', iconEmoji: '🔗',
-    defaultMcps: [], defaultSkills: [],
-    workspaceId: null, modelProviderId: 'prov-1', modelName: 'gpt-4o',
-  };
-  saveAgentDefinition(main);
-  saveAgentDefinition(sub1);
-  saveAgentDefinition(sub2);
-  return main;
+/** 建 workspace + 成员实例，预填 keychain；返回 { wsId, instanceId, agentUserId } */
+async function seedRunningMember(
+  wsName: string, defId: string, slug: string,
+): Promise<{ wsId: string; instanceId: string; agentUserId: string }> {
+  const ws = await createWorkspace(
+    { name: wsName, description: '', directoryPath: path.join(tmpRoot, wsName), iconEmoji: '📁' },
+    '@o:localhost',
+  );
+  const member = await addMember(ws.id, defId, `agent-${slug}-ab12`);
+  memStore.set('provider.prov-1.api_key', 'llm-key');
+  return { wsId: ws.id, instanceId: member.instanceId, agentUserId: member.agentUserId };
 }
 
-describe('setCoordinator 自动重启', () => {
-  it('实例运行中：设定协调后自动停止并以 isCoordinator=true 重启', async () => {
-    const def = makeStandaloneDef();
-    const ws = await createWorkspace(
-      {
-        name: 'w',
-        description: '',
-        directoryPath: path.join(tmpRoot, 'ws'),
-        iconEmoji: '📁',
-      },
-      '@o:localhost',
-      '!s:localhost',
-      '!t:localhost',
-    );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot:localhost', 'standalone');
-    // 预填 keychain：runtime 重启需要 LLM apiKey 与 bot matrix token
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot:localhost.matrix_token', 'mx-token');
-
-    // 模拟实例正在运行
+describe('setDefaultAgent 自动重启（v25）', () => {
+  it('实例运行中：设定默认 agent 后自动停止并以会话快照配置重启', async () => {
+    seedDef('def-1', 'a');
+    const { wsId, instanceId, agentUserId } = await seedRunningMember('w', 'def-1', 'a');
     isAgentRunningMock.mockImplementation(() => true);
 
     const handler = handlers.get('workspace:setDefaultAgent')!;
-    await handler({}, ws.id, assignment.instanceId);
+    await handler({}, wsId, instanceId);
 
-    // 先停止旧实例
     expect(stopAgentMock).toHaveBeenCalledTimes(1);
-    expect(stopAgentMock).toHaveBeenCalledWith(assignment.instanceId);
-    // 再以 isCoordinator=true 重新启动
+    expect(stopAgentMock).toHaveBeenCalledWith(instanceId);
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
     const opts = spawnAgentMock.mock.calls[0]![0] as Record<string, unknown>;
-    expect(opts.instanceId).toBe(assignment.instanceId);
-    expect(opts.isCoordinator).toBe(true);
-    expect(opts.agentUserId).toBe(assignment.agentUserId);
-    expect(opts.teamSessionId).toBe(ws.teamSessionId);
-    expect(opts.workspaceId).toBe(ws.id);
+    expect(opts.instanceId).toBe(instanceId);
+    expect(opts.agentUserId).toBe(agentUserId);
+    expect(opts.workspaceId).toBe(wsId);
+    // v25 过渡态：团队会话列已退役，线协议保持空串
+    expect(opts.teamSessionId).toBe('');
+    // 无会话快照 → 非 leader，不带 dispatch 工具
+    expect(opts.isLeader).toBe(false);
+    expect(opts.subAgents).toEqual([]);
   });
 
-  it('实例未运行：只写 coordinatorInstanceId，不 stop/spawn', async () => {
-    const def = makeStandaloneDef();
-    const ws = await createWorkspace(
-      {
-        name: 'w2',
-        description: '',
-        directoryPath: path.join(tmpRoot, 'ws2'),
-        iconEmoji: '📁',
-      },
-      '@o:localhost',
-      '!s2:localhost',
-      '!t2:localhost',
-    );
-    const assignment = assignAgentToWorkspace(ws.id, def.id, '@bot2:localhost', 'standalone');
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@bot2:localhost.matrix_token', 'mx-token');
+  it('实例未运行：只写 defaultAgentInstanceId，不 stop/spawn', async () => {
+    seedDef('def-2', 'b');
+    const { wsId, instanceId } = await seedRunningMember('w2', 'def-2', 'b');
 
-    // 实例未运行（isAgentRunningMock 默认返回 false）
     const handler = handlers.get('workspace:setDefaultAgent')!;
-    await handler({}, ws.id, assignment.instanceId);
+    await handler({}, wsId, instanceId);
 
     expect(stopAgentMock).not.toHaveBeenCalled();
     expect(spawnAgentMock).not.toHaveBeenCalled();
   });
 
-  it('清空协调（instanceId=null）：不触发重启', async () => {
-    const def = makeStandaloneDef();
-    const ws = await createWorkspace(
-      {
-        name: 'w3',
-        description: '',
-        directoryPath: path.join(tmpRoot, 'ws3'),
-        iconEmoji: '📁',
-      },
-      '@o:localhost',
-      '!s3:localhost',
-      '!t3:localhost',
-    );
-    assignAgentToWorkspace(ws.id, def.id, '@bot3:localhost', 'standalone');
+  it('清空默认 agent（instanceId=null）：不触发重启', async () => {
+    seedDef('def-3', 'c');
+    const { wsId } = await seedRunningMember('w3', 'def-3', 'c');
     isAgentRunningMock.mockImplementation(() => true);
 
     const handler = handlers.get('workspace:setDefaultAgent')!;
-    // 传 null = 取消协调，不应重启
-    await handler({}, ws.id, null);
+    await handler({}, wsId, null);
 
     expect(stopAgentMock).not.toHaveBeenCalled();
     expect(spawnAgentMock).not.toHaveBeenCalled();
   });
 
-  it('main agent 协调重启 → spawnAgent 收到正确的 subAgents（C1）', async () => {
-    const mainDef = makeMainWithSubs();
-    const ws = await createWorkspace(
-      {
-        name: 'w-main-coord',
-        description: '',
-        directoryPath: path.join(tmpRoot, 'ws-main-coord'),
-        iconEmoji: '📁',
-      },
-      '@o:localhost',
-      '!s-mc:localhost',
-      '!t-mc:localhost',
-    );
-
-    // v1.3：显式传 role + parentInstanceId 建立主子关系
-    const mainAssignment = assignAgentToWorkspace(ws.id, mainDef.id, '@pm-coord:localhost', 'main');
-    assignAgentToWorkspace(ws.id, 'sub-coord-1', '@coder-coord:localhost', 'sub', mainAssignment.instanceId);
-    assignAgentToWorkspace(ws.id, 'sub-coord-2', '@qa-coord:localhost', 'sub', mainAssignment.instanceId);
-
-    // v1.3：apiKey 走 provider key（resolveApiKey 读 provider.prov-1.api_key）
-    memStore.set('provider.prov-1.api_key', 'llm-key');
-    memStore.set('bot.@pm-coord:localhost.matrix_token', 'mx-token');
+  it('多成员会话 leader 重启 → spawn 收到快照 subAgents（C1 精神 v25 版）', async () => {
+    seedDef('def-pm', 'pm');
+    seedDef('def-coder', 'coder');
+    const { wsId, instanceId } = await seedRunningMember('w-main', 'def-pm', 'pm');
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES ('inst-coder-main', ?, 'def-coder', 'agent-coder-ab12')`,
+    ).run(wsId);
+    const session = insertSession({ workspaceId: wsId, title: 'T' });
+    addSessionMember(session.id, instanceId, true);
+    addSessionMember(session.id, 'inst-coder-main', false);
 
     isAgentRunningMock.mockImplementation(() => true);
-
     const handler = handlers.get('workspace:setDefaultAgent')!;
-    await handler({}, ws.id, mainAssignment.instanceId);
+    await handler({}, wsId, instanceId);
 
     expect(spawnAgentMock).toHaveBeenCalledTimes(1);
     const opts = spawnAgentMock.mock.calls[0]![0] as {
-      role?: string;
-      isCoordinator?: boolean;
+      isLeader?: boolean;
       subAgents?: Array<{ slug: string; assignmentId: string }>;
     };
-    expect(opts.role).toBe('main');
-    expect(opts.isCoordinator).toBe(true);
-    // ★ C1 核心断言：协调重启后 main 仍携带全部 subAgents
-    expect(opts.subAgents).toBeDefined();
-    expect(opts.subAgents).toHaveLength(2);
-    expect(opts.subAgents!.map((s) => s.slug).sort()).toEqual(['coder-coord', 'qa-coord']);
+    // 重启路径保 dispatch 快照：leader + 除自己外的成员名单
+    expect(opts.isLeader).toBe(true);
+    expect(opts.subAgents).toHaveLength(1);
+    expect(opts.subAgents![0]!.slug).toBe('coder');
+    expect(opts.subAgents![0]!.assignmentId).toBe('inst-coder-main');
   });
 });

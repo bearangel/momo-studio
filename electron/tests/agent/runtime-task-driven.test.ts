@@ -104,7 +104,7 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     mcpNames: [],
     allowedTools: [],
     deniedTools: [],
-    isCoordinator: false,
+    isLeader: false,
     devMode: false,
     maxToolCalls: 10,
     ...overrides,
@@ -733,7 +733,7 @@ describe('parseConfig taskDriven 字段', () => {
       mcpNames: [],
       allowedTools: [],
       deniedTools: [],
-      isCoordinator: false,
+      isLeader: false,
       devMode: false,
       maxToolCalls: 10,
     };

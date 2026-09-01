@@ -46,9 +46,14 @@ export interface AgentRuntimeOpts {
   allowedTools?: string[];
   /** 禁止的工具名列表（优先级高于 allowedTools） */
   deniedTools?: string[];
-  // === v1.1 M2 协调 agent ===
-  /** 本实例是否为所属 workspace 的协调 agent（团队群非@消息由其接待） */
-  isCoordinator?: boolean;
+  // === v25 会话快照（原 v1.1 M2 isCoordinator 改名，语义更换） ===
+  /**
+   * 会话快照判定：本实例是至少一个「有效成员数 > 1」会话的 is_leader
+   * （spec §4.7 dispatch 注入条件；由 buildDispatchSnapshot 在 spawn 时
+   * 计算并随 AGENT_CONFIG 定型）。旧「workspace 默认 agent」语义
+   * 已随 v25 接待路由切会话 leader 而退役。
+   */
+  isLeader?: boolean;
   /** dev 模式标志（由 spawn 侧根据 !app.isPackaged 自动注入） */
   devMode?: boolean;
   // === v1.4 嵌套流式 ===
@@ -89,8 +94,9 @@ export interface RuntimeConfig {
   allowedTools: string[];
   /** 禁止的工具名列表（优先级高于 allowedTools，命中即拒绝） */
   deniedTools: string[];
-  // === v1.1 M2 协调 agent ===
-  isCoordinator: boolean;
+  // === v25 会话快照（原 v1.1 M2 isCoordinator 改名） ===
+  /** dispatch 注入条件：多成员会话 leader（spawn 时会话快照，spec §4.7） */
+  isLeader: boolean;
   devMode: boolean;
   // === v1.4 流式 + 工具预算 ===
   /** 工具调用上限。-1=无限, 0=禁用, N=上限。runTaskChatLoop 按 dispatchContext.tool_budget 覆盖 */
@@ -176,7 +182,7 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames,
     allowedTools,
     deniedTools,
-    isCoordinator,
+    isLeader,
     devMode,
   } = r;
   if (
@@ -234,8 +240,8 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     mcpNames: resolvedMcpNames,
     allowedTools: resolvedAllowedTools,
     deniedTools: resolvedDeniedTools,
-    // v1.1 M2：缺省/类型不符时按"非协调"处理（旧配置向后兼容）
-    isCoordinator: typeof isCoordinator === 'boolean' ? isCoordinator : false,
+    // v25：isLeader 缺省/类型不符时按「非 leader」处理（旧配置无旧兼容负担）
+    isLeader: typeof isLeader === 'boolean' ? isLeader : false,
     devMode: typeof devMode === 'boolean' ? devMode : false,
     // v1.4：默认 10；dispatch 任务由 dispatchContext.tool_budget 覆盖
     maxToolCalls: typeof r.maxToolCalls === 'number' ? r.maxToolCalls : 10,

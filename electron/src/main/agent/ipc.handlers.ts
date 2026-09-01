@@ -117,7 +117,6 @@ export function registerAgentHandlers(): void {
           teamSessionId: '',
           def,
           llmApiKey: apiKey,
-          isCoordinator: (workspace.defaultAgentInstanceId ?? null) === member.instanceId,
         }),
       );
 
@@ -319,7 +318,6 @@ export function registerAgentHandlers(): void {
           teamSessionId: '',
           def,
           llmApiKey,
-          isCoordinator: (workspace.defaultAgentInstanceId ?? null) === member.instanceId,
         }),
       );
 

@@ -62,7 +62,7 @@ function seedProvider(
   ).run(id, 'Test', baseUrl, `provider.${id}.api_key`, null, 0, platform);
 }
 
-/** workspace + agent_definition seed（v24 schema 列对齐） */
+/** workspace + agent_definition seed（v25 schema 列对齐） */
 function seedWorkspaceAndDef(
   db: ReturnType<typeof getDb>,
   wsId: string,
@@ -71,21 +71,21 @@ function seedWorkspaceAndDef(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, directory_path, team_session_id, git_initialized, owner_id)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(wsId, 'WS', '/tmp', 'sess-team', 0, '@owner:s');
+       (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(wsId, 'WS', '', '/tmp', 0, '@owner:s', '📁');
   db.prepare(
     `INSERT INTO agent_definitions
        (id, name, slug, version, runtime, system_prompt,
         default_tools, default_mcps, default_skills,
         source, description, icon_emoji,
-        workspace_id, model_provider_id, model_name)
+        model_provider_id, model_name, task_driven)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     defId, 'T', 't', '1', 'declarative', 'p',
     '[]', '[]', '[]',
     'custom', 'd', '🤖',
-    null, providerId, 'm',
+    providerId, 'm', 1,
   );
 }
 
@@ -124,7 +124,6 @@ describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
       def: makeDef('def1', 'pid-ant'),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     expect(opts.modelPlatform).toBe('anthropic');
@@ -144,7 +143,6 @@ describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
       def: makeDef('def1', 'pid-oai'),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     expect(opts.modelPlatform).toBe('openai');
@@ -164,7 +162,6 @@ describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
       def: makeDef('def1', 'pid-ant'),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     expect(opts.modelBaseUrl).toBe('https://api.custom-ant.com/v1');

@@ -59,7 +59,6 @@ export async function ensureMemberRuntime(instanceId: string): Promise<void> {
       teamSessionId: '',
       def,
       llmApiKey,
-      isCoordinator: (workspace.defaultAgentInstanceId ?? null) === instanceId,
     }),
   );
   logger.info('接待路由自动拉起 agent runtime 完成', { instanceId });

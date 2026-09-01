@@ -87,7 +87,7 @@ vi.mock('../../src/main/agent/spawn-helpers', () => ({
     skills: [],
     allowedTools: [],
     maxToolCalls: 10,
-    isCoordinator: false,
+    isLeader: false,
     taskDriven: true,
   })),
   resolveApiKey: vi.fn(async () => 'fake-llm-key'),

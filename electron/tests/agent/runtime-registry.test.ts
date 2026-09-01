@@ -84,7 +84,7 @@ function mkMinimalOpts(instanceId: string, agentUserId: string): AgentRuntimeOpt
     skills: [],
     allowedTools: [],
     maxToolCalls: 10,
-    isCoordinator: false,
+    isLeader: false,
     taskDriven: true,
   } as unknown as AgentRuntimeOpts;
 }

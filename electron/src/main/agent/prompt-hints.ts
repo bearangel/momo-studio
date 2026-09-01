@@ -17,17 +17,18 @@ export function formatBudgetHint(maxToolCalls: number): string {
 }
 
 /**
- * v1.5.6 C3：为主 agent（main role + 有 subAgents）注入任务拆分教学 prompt。
+ * 为多成员会话 leader（会话快照判定 + 有 subAgents）注入任务拆分教学 prompt。
  * 教 LLM 在以下场景主动 dispatch 给 sub agent：
  *   - 任务涉及多文件 / 多模块（>3 文件）
  *   - 任务可并行（多个独立子任务）
  *   - 任务超出单一 agent 上下文承受（大 review / 大型实现）
  *
  * 子 agent 列表注入让 LLM 知道可用资源和擅长领域。
- * 非 main 角色 / 无 subAgents → 返回空字符串（不影响 standalone agent）。
+ * 非 leader / 无 subAgents → 返回空字符串（不影响普通 agent）。
+ * v25 Task 10：判定条件自 role==='main' 切会话快照（config.isLeader，spec §4.7）。
  */
 export function formatDispatchHint(config: RuntimeConfig): string {
-  if (config.role !== 'main' || config.subAgents.length === 0) return '';
+  if (!config.isLeader || config.subAgents.length === 0) return '';
   const subList = config.subAgents
     .map((s) => `- dispatch:${s.slug} — ${s.description}`)
     .join('\n');

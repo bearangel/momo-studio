@@ -63,7 +63,6 @@ export async function initTaskDrivenRuntime(): Promise<void> {
           teamSessionId: '',
           def,
           llmApiKey,
-          isCoordinator: (ws.defaultAgentInstanceId ?? null) === member.instanceId,
         });
 
         const pool = createTaskDrivenRuntime(runtimeConfig);

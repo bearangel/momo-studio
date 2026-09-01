@@ -169,17 +169,17 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     mcpNames: [],
     allowedTools: [],
     deniedTools: [],
-    isCoordinator: false,
+    isLeader: false,
     devMode: false,
     maxToolCalls: 10,
     ...overrides,
   };
 }
 
-/** main 角色 + 两个子 agent（researcher / writer）——dispatch 工具注册的前提 */
+/** 多成员会话 leader + 两个子 agent（researcher / writer）——dispatch 工具注册的前提（v25 会话快照判定） */
 function makeMainConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return makeConfig({
-    role: 'main',
+    isLeader: true,
     subAgents: [
       { slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' },
       { slug: 'writer', assignmentId: 'inst-writer', description: '撰稿人' },
@@ -516,18 +516,18 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
 });
 
 describe('formatDispatchHint 并行教学（spec §7.2）', () => {
-  it('main + 有 subAgents → 含同轮连发并行教学', () => {
+  it('多成员会话 leader + 有 subAgents → 含同轮连发并行教学', () => {
     const hint = formatDispatchHint(makeMainConfig());
     expect(hint).toContain('同一次回复中连续发出多个 dispatch');
     expect(hint).toContain('并行执行');
   });
 
-  it('非 main / 无 subAgents → 空串（standalone 不受影响）', () => {
+  it('非 leader / 无 subAgents → 空串（普通 agent 不受影响）', () => {
     expect(formatDispatchHint(makeConfig())).toBe('');
   });
 
-  it('main 但 subAgents 为空 → 空串（OR 早退条件的另一半）', () => {
-    expect(formatDispatchHint(makeConfig({ role: 'main' }))).toBe('');
+  it('isLeader 但 subAgents 为空 → 空串（OR 早退条件的另一半）', () => {
+    expect(formatDispatchHint(makeConfig({ isLeader: true }))).toBe('');
   });
 });
 

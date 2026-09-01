@@ -55,7 +55,7 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-/** 三表共用的 workspace + agent_definition seed（INSERT 列对齐 v1.6 schema） */
+/** 三表共用的 workspace + agent_definition seed（INSERT 列对齐 v25 schema） */
 function seedWorkspaceAndDef(
   db: ReturnType<typeof getDb>,
   wsId: string,
@@ -64,21 +64,21 @@ function seedWorkspaceAndDef(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, directory_path, team_session_id, git_initialized, owner_id)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(wsId, 'WS', '/tmp', 'sess-team', 0, '@owner:s');
+       (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(wsId, 'WS', '', '/tmp', 0, '@owner:s', '📁');
   db.prepare(
     `INSERT INTO agent_definitions
        (id, name, slug, version, runtime, system_prompt,
         default_tools, default_mcps, default_skills,
         source, description, icon_emoji,
-        workspace_id, model_provider_id, model_name)
+        model_provider_id, model_name, task_driven)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     defId, 'T', 't', '1', 'declarative', 'p',
     defaultToolsJson, '[]', '[]',
     'custom', 'd', '🤖',
-    null, 'pid', 'm',
+    'pid', 'm', 1,
   );
 }
 
@@ -125,7 +125,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       def: makeDef('def1', ['read_file', 'bash']),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     // 回归断言：v1.5 此处为 undefined（bug），修复后必须等于 def 默认工具列表
@@ -164,7 +163,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       def: makeDef('def1', ['read_file']),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     // 回归断言：Layer 1 ∪ Layer 2 后的工具全集（顺序：def 先，alloc 后）
@@ -182,16 +180,25 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
         { kind: 'builtin', ref: 'bash' },
       ]),
     );
-    // 必须先建 assignment 行（agent_assignment_capabilities 的 FK 依赖）
+    // 必须先建成员行（agent_assignment_capabilities.assignment_id 与成员实例对齐）
     db.prepare(
-      `INSERT INTO agent_assignments
-         (instance_id, workspace_id, agent_definition_id, agent_user_id, enabled, role)
-       VALUES (?, ?, ?, ?, 1, 'standalone')`,
+      `INSERT INTO workspace_agent_members
+         (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES (?, ?, ?, ?)`,
     ).run('inst1', 'ws1', 'def1', 'agent-t-ab12cd');
-    // Layer 3 delta：移除 bash
-    db.prepare(
-      'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
-    ).run('inst1', 'tool', 'remove', 'bash');
+    // ⚠️ v25 已知断裂：agent_assignment_capabilities 的 FK 仍引用已 DROP 的
+    // agent_assignments 表（foreign_keys=ON 时 INSERT 报 no such table）——
+    // 生产写路径 agent:setMemberDeltas 同样受影响，属能力域清理任务范围。
+    // 本用例锁的是 read 侧（readAssignmentDeltas → mergeCapabilities）Layer 3
+    // 合并语义，故 seed 临时关 FK 绕过断裂的写路径；断裂本身已在任务报告记录。
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.prepare(
+        'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
+      ).run('inst1', 'tool', 'remove', 'bash');
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
 
     const opts = buildSpawnOpts({
       instanceId: 'inst1',
@@ -202,7 +209,6 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       def: makeDef('def1', ['read_file', 'bash']),
       role: 'standalone',
       llmApiKey: 'k',
-      isCoordinator: false,
     });
 
     // 回归断言：bash 被 Layer 3 delta remove，最终 allowedTools 只剩 read_file

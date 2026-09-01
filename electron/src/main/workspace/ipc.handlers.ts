@@ -88,11 +88,13 @@ export function registerWorkspaceHandlers(): void {
 }
 
 /**
- * 设定默认会话 agent 后，若目标实例正在运行，自动停止并以 isCoordinator=true 重启，
- * 使新的标志立即对 runtime 子进程生效（取代旧版"提示用户手动停止+启动"）。
+ * 设定默认会话 agent 后，若目标实例正在运行，自动停止并重启。
+ * v1 语义（让 isCoordinator=true 标志立即对子进程生效）已随 v25 退役——
+ * 默认 agent 标志不再进 AGENT_CONFIG（快会话接待由主进程建会路径消费）。
+ * 保留重启以刷新 runtime 配置（dispatch 会话快照在 spawn 时重算，spec §4.7）。
  *
  * 实例未运行 / 成员不存在 / 定义已删除 / keychain 缺 apiKey 时，
- * 静默跳过重启（仅 defaultAgentInstanceId 已写入 DB，下次启动时自然带上标志）。
+ * 静默跳过重启（仅 defaultAgentInstanceId 已写入 DB，下次启动时自然刷新配置）。
  *
  * I1 修复：先检查 keychain 是否有 apiKey，确认后才 stopAgent，
  * 避免「先停后查、查不到就 return」导致 agent 被停死无法恢复。
@@ -126,7 +128,6 @@ async function restartDefaultAgentInstance(
       teamSessionId: '',
       def,
       llmApiKey: apiKey,
-      isCoordinator: true,
     }),
   );
   logger.info('默认会话 agent 已自动重启', { instanceId });
