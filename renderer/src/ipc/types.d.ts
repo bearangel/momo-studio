@@ -48,7 +48,11 @@ export interface AgentDefinition {
   defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
   /** 默认 Skill 引用（Layer 1 能力），与 electron 端 SkillRef 对齐 */
   defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
-  /** NULL=全局共享；非 NULL=该 workspace 私有 */
+  /**
+   * v25 恒 null——定义全局化（migration v25 已 DROP workspace_id 列，
+   * electron rowToDef 恒映射 null）。字段保留与 electron 端结构对齐；
+   * 显示逻辑不得依赖它做分组/徽标（Task 11 清理）。
+   */
   workspaceId: string | null;
   /** NULL=builtin 未配置；custom 必填 */
   modelProviderId: string | null;

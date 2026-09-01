@@ -69,20 +69,20 @@ beforeEach(() => {
 
   useAgentStore.setState({
     definitions: [],
-    assignments: [],
+    members: [],
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn().mockResolvedValue(undefined),
-    loadAssignments: vi.fn().mockResolvedValue(undefined),
+    loadMembers: vi.fn().mockResolvedValue(undefined),
     loadBuiltinSuggestions: vi.fn().mockResolvedValue(undefined),
-    addAgent: vi.fn(),
+    addMember: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateAssignmentApiKey: vi.fn(),
-    getAssignmentDeltas: vi.fn(),
-    setAssignmentDeltas: vi.fn(),
-    stopAgent: vi.fn(),
-    startAgent: vi.fn(),
+    updateMemberApiKey: vi.fn(),
+    getMemberDeltas: vi.fn(),
+    setMemberDeltas: vi.fn(),
+    stopMember: vi.fn(),
+    startMember: vi.fn(),
     reset: vi.fn(),
   });
 

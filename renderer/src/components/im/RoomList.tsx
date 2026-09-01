@@ -21,10 +21,10 @@ export function RoomList() {
   // 新建会话对话框状态 + 目标候选（当前 workspace 的 agent 成员；v25 成员制无 enabled）
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
-  const { assignments } = useAgentStore();
+  const { members } = useAgentStore();
   const botNameMap = useBotNameMap();
 
-  const inviteCandidates = assignments.map((a) => ({
+  const inviteCandidates = members.map((a) => ({
     instanceId: a.instanceId,
     displayName: resolveBotName(a.agentUserId, botNameMap),
   }));

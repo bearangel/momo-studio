@@ -12,7 +12,7 @@ interface Props {
 }
 
 export function AssignmentApiKeyEditor({ assignment, onClose }: Props) {
-  const { definitions, updateAssignmentApiKey } = useAgentStore();
+  const { definitions, updateMemberApiKey } = useAgentStore();
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -24,7 +24,7 @@ export function AssignmentApiKeyEditor({ assignment, onClose }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      await updateAssignmentApiKey(assignment.instanceId, apiKey.trim() || null);
+      await updateMemberApiKey(assignment.instanceId, apiKey.trim() || null);
       onClose();
     } catch (err) {
       setError((err as Error).message);

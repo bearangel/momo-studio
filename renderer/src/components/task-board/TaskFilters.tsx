@@ -2,7 +2,7 @@
 //
 // 任务筛选条（D 子系统 D7）：status / assignee / sort 三个 select。
 // 受控组件——value + onChange 由 TaskBoardView 持有。
-// assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.assignments 派生
+// assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.members 派生
 // 后传入——保持本组件 dumb，避免与 store 直接耦合。
 import type { TaskStatus } from '../../ipc/types';
 

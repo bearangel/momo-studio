@@ -91,7 +91,7 @@ export function TaskSidebarPanel() {
   const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
   const setSelectedTaskId = useTaskStore((s) => s.setSelectedTaskId);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const assignments = useAgentStore((s) => s.assignments);
+  const members = useAgentStore((s) => s.members);
   const [filter, setFilter] = useState<FilterState>({
     status: 'all',
     assignee: 'all',
@@ -99,17 +99,17 @@ export function TaskSidebarPanel() {
   });
   const [createOpen, setCreateOpen] = useState(false);
 
-  // assignee 下拉选项：从当前 workspace 的 assignment 派生
+  // assignee 下拉选项：从当前 workspace 的 members 派生
   // （label=agentName 优先，回退 agentUserId，最后 instanceId——确保至少有可读名）
   const assigneeOptions = useMemo<AssigneeOption[]>(
     () =>
-      assignments
+      members
         .filter((a) => (workspace ? a.workspaceId === workspace.id : true))
         .map((a) => ({
           value: a.instanceId,
           label: a.agentName ?? a.agentUserId ?? a.instanceId,
         })),
-    [assignments, workspace],
+    [members, workspace],
   );
 
   // 筛选 + 排序（自 TaskBoardView 原样迁移）

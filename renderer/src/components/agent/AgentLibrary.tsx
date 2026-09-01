@@ -2,7 +2,6 @@
 // Tab 2：Agent 库——管理 agent 定义（builtin / 全局 custom / 本工作空间 custom）
 import { useMemo, useState } from 'react';
 import { useAgentStore } from '../../stores/agent.store';
-import { useWorkspaceStore } from '../../stores/workspace.store';
 import { DefinitionEditor } from './DefinitionEditor';
 import { AddToWorkspaceDialog } from './AddToWorkspaceDialog';
 import { Button } from '../ui/Button';
@@ -17,11 +16,11 @@ type EditorState =
 
 export function AgentLibrary() {
   const { definitions, deleteDefinition } = useAgentStore();
-  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const [editor, setEditor] = useState<EditorState>(null);
   const [addToWsDef, setAddToWsDef] = useState<AgentDefinition | null>(null);
   const [search, setSearch] = useState('');
 
+  // v25 定义全局化：workspaceId 恒 null，分组只按 source（无「本工作空间私有」组）
   const groups = useMemo(() => {
     const lower = search.toLowerCase();
     const filtered = definitions.filter((d) =>
@@ -32,10 +31,9 @@ export function AgentLibrary() {
     );
     return {
       builtin: filtered.filter((d) => d.source === 'builtin'),
-      globalCustom: filtered.filter((d) => d.source !== 'builtin' && d.workspaceId === null),
-      workspaceScoped: filtered.filter((d) => d.workspaceId === activeWorkspaceId),
+      custom: filtered.filter((d) => d.source !== 'builtin'),
     };
-  }, [definitions, activeWorkspaceId, search]);
+  }, [definitions, search]);
 
   const handleDelete = async (def: AgentDefinition): Promise<void> => {
     if (!confirm(`确定删除 agent 定义「${def.name}」？\n此操作会停止全部引用此定义的 assignment。\n不可撤销。`)) return;
@@ -63,7 +61,7 @@ export function AgentLibrary() {
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <DefGroup title="内置 agent" defs={groups.builtin} renderItem={(d) => (
           <>
-            <ScopeBadge source={d.source} workspaceId={d.workspaceId} />
+            <ScopeBadge source={d.source} />
             <ModelInfo def={d} />
             <button
               type="button"
@@ -82,19 +80,9 @@ export function AgentLibrary() {
           </>
         )} />
 
-        <DefGroup title="全局自定义" defs={groups.globalCustom} renderItem={(d) => (
+        <DefGroup title="自定义 agent" defs={groups.custom} emptyHint="暂无自定义 agent（点击右上角新建）" renderItem={(d) => (
           <>
-            <ScopeBadge source={d.source} workspaceId={d.workspaceId} />
-            <ModelInfo def={d} />
-            <button type="button" onClick={() => setEditor({ mode: 'edit', def: d })} className="text-xs hover:text-neutral-200">编辑</button>
-            <button type="button" onClick={() => void handleDelete(d)} className="text-xs hover:text-red-400">删除</button>
-            <button type="button" onClick={() => setAddToWsDef(d)} className="text-xs hover:text-neutral-200">+ 加入到当前工作空间</button>
-          </>
-        )} />
-
-        <DefGroup title="本工作空间私有" defs={groups.workspaceScoped} emptyHint="暂无私有 agent（新建时选「仅本工作空间」即可创建）" renderItem={(d) => (
-          <>
-            <ScopeBadge source={d.source} workspaceId={d.workspaceId} />
+            <ScopeBadge source={d.source} />
             <ModelInfo def={d} />
             <button type="button" onClick={() => setEditor({ mode: 'edit', def: d })} className="text-xs hover:text-neutral-200">编辑</button>
             <button type="button" onClick={() => void handleDelete(d)} className="text-xs hover:text-red-400">删除</button>
@@ -147,14 +135,11 @@ function DefGroup({ title, defs, emptyHint, renderItem }: {
   );
 }
 
-function ScopeBadge({ source, workspaceId }: { source: string; workspaceId: string | null }) {
+function ScopeBadge({ source }: { source: string }) {
   if (source === 'builtin') {
     return <span className="text-xs px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400">内置</span>;
   }
-  if (workspaceId === null) {
-    return <span className="text-xs px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400">全局</span>;
-  }
-  return <span className="text-xs px-1.5 py-0.5 rounded bg-accent-blue/20 text-accent-blue">工作空间</span>;
+  return <span className="text-xs px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400">全局</span>;
 }
 
 function ModelInfo({ def }: { def: AgentDefinition }) {

@@ -25,11 +25,32 @@ const MOCK_MEMBERS: SessionMemberInfo[] = [
   { instanceId: 'inst-1', agentName: 'Agent甲', iconEmoji: '🤖', lastRunning: true, isLeader: true },
 ];
 
+const MOCK_QUICK_SESSION: SessionSummary = {
+  id: 'sess-quick',
+  workspaceId: 'ws-a',
+  title: '与 需求讨论师 的会话',
+  titleAuto: false,
+  kind: 'chat',
+  lastMessageAt: null,
+  members: [],
+};
+
+const MOCK_COLLAB_SESSION: SessionSummary = {
+  id: 'sess-collab',
+  workspaceId: 'ws-a',
+  title: '新协作会话',
+  titleAuto: true,
+  kind: 'chat',
+  lastMessageAt: null,
+  members: [],
+};
+
 const mockApi = {
   session: {
     list: vi.fn(),
     get: vi.fn(),
-    create: vi.fn(),
+    createQuick: vi.fn(),
+    createCollab: vi.fn(),
     rename: vi.fn(),
     delete: vi.fn(),
     send: vi.fn().mockResolvedValue(undefined),
@@ -85,6 +106,10 @@ beforeEach(() => {
   mockApi.session.getMessages.mockResolvedValue({ messages: [], eventsByMessage: {} });
   mockApi.session.send.mockClear();
   mockApi.session.loadOlder.mockReset();
+  mockApi.session.createQuick.mockReset();
+  mockApi.session.createQuick.mockResolvedValue(MOCK_QUICK_SESSION);
+  mockApi.session.createCollab.mockReset();
+  mockApi.session.createCollab.mockResolvedValue(MOCK_COLLAB_SESSION);
   // 订阅 mock 只清调用记录（保留返回值实现），保证 toHaveBeenCalledTimes 按用例计数
   mockApi.session.onMessage.mockClear();
   mockApi.session.onMessageEventBatch.mockClear();
@@ -155,7 +180,7 @@ describe('session.store', () => {
     expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hello', undefined);
   });
 
-  it('sendMessage 透传 mentionedAssignmentIds（@ 目标从 Matrix userId 换成 assignmentId）', async () => {
+  it('sendMessage 透传 mentionedInstanceIds（@ 目标 = 会话成员 instanceId，spec §5）', async () => {
     await useSessionStore.getState().loadSessions();
     await useSessionStore.getState().sendMessage('hi @agent', ['inst-1', 'inst-2']);
     expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hi @agent', ['inst-1', 'inst-2']);
@@ -171,6 +196,108 @@ describe('session.store', () => {
   it('sendMessage is a no-op when no session is active', async () => {
     await useSessionStore.getState().sendMessage('hello');
     expect(mockApi.session.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('session.store — createQuickSession / createCollabSession（v25 spec §4.4/§5）', () => {
+  it('createQuickSession 成功后新会话进入列表并激活（免弹窗直达）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-a1');
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(mockApi.session.createQuick).toHaveBeenCalledWith('ws-a');
+    expect(ok).toBe(true);
+    const st = useSessionStore.getState();
+    expect(st.sessions.some((s) => s.id === 'sess-quick')).toBe(true);
+    expect(st.activeSessionId).toBe('sess-quick');
+    // 激活 = selectSession（拉空历史 + 成员）
+    expect(mockApi.session.getMessages).toHaveBeenCalledWith('sess-quick');
+    expect(mockApi.session.get).toHaveBeenCalledWith('sess-quick');
+  });
+
+  it('createQuickSession 无默认 agent（NO_DEFAULT_AGENT）→ needsDefaultAgent=true 不抛错', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    // Electron IPC 错误只保 message——renderer 以子串识别（types.d.ts 契约）
+    mockApi.session.createQuick.mockRejectedValueOnce(
+      new Error('NO_DEFAULT_AGENT: workspace 未设置默认 agent'),
+    );
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(ok).toBe(false);
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(true);
+    expect(useSessionStore.getState().sessions).toHaveLength(2);
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-a1');
+  });
+
+  it('needsDefaultAgent 在下一次 createQuickSession 尝试开始时复位（引导弹窗选择后重试）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.createQuick.mockRejectedValueOnce(new Error('NO_DEFAULT_AGENT: 未设置'));
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(true);
+
+    // 用户在引导弹窗选好默认 agent 后重试 → 成功 → 标志复位
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(ok).toBe(true);
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(false);
+  });
+
+  it('createQuickSession 其他 IPC 错误 → error 写入且 needsDefaultAgent 不误置', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.createQuick.mockRejectedValueOnce(new Error('数据库锁定'));
+
+    const ok = await useSessionStore.getState().createQuickSession('ws-a');
+    expect(ok).toBe(false);
+    expect(useSessionStore.getState().error).toBe('数据库锁定');
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(false);
+  });
+
+  it('createCollabSession 成功激活会话并透传 title/target', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+
+    const ok = await useSessionStore.getState().createCollabSession('ws-a', '定制标题', {
+      type: 'agent',
+      instanceId: 'inst-1',
+    });
+    expect(mockApi.session.createCollab).toHaveBeenCalledWith('ws-a', '定制标题', {
+      type: 'agent',
+      instanceId: 'inst-1',
+    });
+    expect(ok).toBe(true);
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-collab');
+    expect(useSessionStore.getState().sessions.some((s) => s.id === 'sess-collab')).toBe(true);
+  });
+
+  it('createCollabSession title=undefined 透传（动态命名占位起步）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    await useSessionStore.getState().createCollabSession('ws-a', undefined, {
+      type: 'team',
+      teamId: 'team-1',
+    });
+    expect(mockApi.session.createCollab).toHaveBeenCalledWith('ws-a', undefined, {
+      type: 'team',
+      teamId: 'team-1',
+    });
+  });
+
+  it('createCollabSession IPC 失败 → error 写入且不激活', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.createCollab.mockRejectedValueOnce(new Error('目标团队不存在'));
+
+    const ok = await useSessionStore.getState().createCollabSession('ws-a', undefined, {
+      type: 'team',
+      teamId: 'team-x',
+    });
+    expect(ok).toBe(false);
+    expect(useSessionStore.getState().error).toBe('目标团队不存在');
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-a1');
+  });
+
+  it('reset() 清空 needsDefaultAgent', async () => {
+    mockApi.session.createQuick.mockRejectedValueOnce(new Error('NO_DEFAULT_AGENT'));
+    await useSessionStore.getState().createQuickSession('ws-a');
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(true);
+    useSessionStore.getState().reset();
+    expect(useSessionStore.getState().needsDefaultAgent).toBe(false);
   });
 });
 

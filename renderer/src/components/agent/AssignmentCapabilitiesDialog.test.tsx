@@ -24,8 +24,8 @@ const resourceList = vi.fn();
 // store action 桩（组件经 useAgentStore 调用）
 const getAssignmentDeltasMock = vi.fn();
 const setAssignmentDeltasMock = vi.fn();
-const stopAgentMock = vi.fn();
-const startAgentMock = vi.fn();
+const stopMemberMock = vi.fn();
+const startMemberMock = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
@@ -48,35 +48,35 @@ beforeEach(() => {
   resourceList.mockReset();
   getAssignmentDeltasMock.mockReset();
   setAssignmentDeltasMock.mockReset();
-  stopAgentMock.mockReset();
-  startAgentMock.mockReset();
+  stopMemberMock.mockReset();
+  startMemberMock.mockReset();
 
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
   resourceList.mockResolvedValue([]);
   getAssignmentDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
   setAssignmentDeltasMock.mockResolvedValue(undefined);
-  stopAgentMock.mockResolvedValue(undefined);
-  startAgentMock.mockResolvedValue(undefined);
+  stopMemberMock.mockResolvedValue(undefined);
+  startMemberMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   useAgentStore.setState({
     definitions: [],
-    assignments: [],
+    members: [],
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn(),
-    loadAssignments: vi.fn(),
+    loadMembers: vi.fn(),
     loadBuiltinSuggestions: vi.fn(),
-    addAgent: vi.fn(),
+    addMember: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateAssignmentApiKey: vi.fn(),
-    getAssignmentDeltas: getAssignmentDeltasMock,
-    setAssignmentDeltas: setAssignmentDeltasMock,
-    stopAgent: stopAgentMock,
-    startAgent: startAgentMock,
+    updateMemberApiKey: vi.fn(),
+    getMemberDeltas: getAssignmentDeltasMock,
+    setMemberDeltas: setAssignmentDeltasMock,
+    stopMember: stopMemberMock,
+    startMember: startMemberMock,
     reset: vi.fn(),
   });
 });
@@ -184,7 +184,7 @@ describe('AssignmentCapabilitiesDialog — 加载', () => {
 });
 
 describe('AssignmentCapabilitiesDialog — 改 added', () => {
-  it('勾选非默认工具 → 保存 → setAssignmentDeltas 收到 addedTools 含该工具', async () => {
+  it('勾选非默认工具 → 保存 → setMemberDeltas 收到 addedTools 含该工具', async () => {
     // default=[read_file], 勾 bash → value=[read_file, bash]
     // addedTools=[bash], removedTools=[]
     render(
@@ -211,7 +211,7 @@ describe('AssignmentCapabilitiesDialog — 改 added', () => {
 });
 
 describe('AssignmentCapabilitiesDialog — 改 removed', () => {
-  it('取消默认工具 → 保存 → setAssignmentDeltas 收到 removedTools 含该工具', async () => {
+  it('取消默认工具 → 保存 → setMemberDeltas 收到 removedTools 含该工具', async () => {
     // default=[read_file], 取消 read_file → value=[]
     // addedTools=[], removedTools=[read_file]
     render(
@@ -261,7 +261,7 @@ describe('AssignmentCapabilitiesDialog — 保存全量', () => {
     expect(deltas.removedTools).toEqual(['read_file']);
   });
 
-  it('取消按钮不触发 setAssignmentDeltas，调用 onClose', async () => {
+  it('取消按钮不触发 setMemberDeltas，调用 onClose', async () => {
     const onClose = vi.fn();
     render(
       <AssignmentCapabilitiesDialog
@@ -303,7 +303,7 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
     expect(screen.getByRole('button', { name: '稍后' })).toBeInTheDocument();
   });
 
-  it('点击 [立即重启] → stopAgent + startAgent + onClose', async () => {
+  it('点击 [立即重启] → stopMember + startMember + onClose', async () => {
     workspaceGet.mockResolvedValueOnce({
       id: 'ws-1',
       name: 'WS',
@@ -334,13 +334,13 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
     fireEvent.click(screen.getByRole('button', { name: '立即重启' }));
 
     await waitFor(() => {
-      expect(stopAgentMock).toHaveBeenCalledWith('inst-1');
+      expect(stopMemberMock).toHaveBeenCalledWith('inst-1');
     });
     await waitFor(() => {
-      expect(startAgentMock).toHaveBeenCalledTimes(1);
+      expect(startMemberMock).toHaveBeenCalledTimes(1);
     });
-    // startAgent 收到 assignment + wsId（v2 Task 10：teamRoomId 已从 IPC 入参移除）
-    const startArgs = startAgentMock.mock.calls[0]!;
+    // startMember 收到 assignment + wsId（v2 Task 10：teamRoomId 已从 IPC 入参移除）
+    const startArgs = startMemberMock.mock.calls[0]!;
     expect(startArgs[0]?.instanceId).toBe('inst-1');
     expect(startArgs[1]).toBe('ws-1');
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -366,7 +366,7 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
     });
     // 无重启提示
     expect(screen.queryByText(/需重启/)).not.toBeInTheDocument();
-    expect(stopAgentMock).not.toHaveBeenCalled();
+    expect(stopMemberMock).not.toHaveBeenCalled();
   });
 
   it('点击 [稍后] → 关闭弹窗（不重启）', async () => {
@@ -389,6 +389,6 @@ describe('AssignmentCapabilitiesDialog — 重启提示', () => {
     fireEvent.click(screen.getByRole('button', { name: '稍后' }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(stopAgentMock).not.toHaveBeenCalled();
+    expect(stopMemberMock).not.toHaveBeenCalled();
   });
 });

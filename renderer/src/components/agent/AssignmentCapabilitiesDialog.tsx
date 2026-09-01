@@ -47,10 +47,10 @@ interface Props {
 }
 
 export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props) {
-  const getAssignmentDeltas = useAgentStore((s) => s.getAssignmentDeltas);
-  const setAssignmentDeltasAction = useAgentStore((s) => s.setAssignmentDeltas);
-  const stopAgent = useAgentStore((s) => s.stopAgent);
-  const startAgent = useAgentStore((s) => s.startAgent);
+  const getMemberDeltas = useAgentStore((s) => s.getMemberDeltas);
+  const setMemberDeltasAction = useAgentStore((s) => s.setMemberDeltas);
+  const stopMember = useAgentStore((s) => s.stopMember);
+  const startMember = useAgentStore((s) => s.startMember);
 
   // def 默认能力（Layer 1，不含 workspace allocation）
   const defCaps = useMemo(() => defToCapabilities(def), [def]);
@@ -77,7 +77,7 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
       try {
         const [alloc, deltas] = await Promise.all([
           ipc.allocation.get(assignment.workspaceId),
-          getAssignmentDeltas(assignment.instanceId),
+          getMemberDeltas(assignment.instanceId),
         ]);
         if (cancelled) return;
         const merged = mergeDefault(defCaps, alloc);
@@ -93,14 +93,14 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
     return () => {
       cancelled = true;
     };
-  }, [assignment.workspaceId, assignment.instanceId, defCaps, getAssignmentDeltas]);
+  }, [assignment.workspaceId, assignment.instanceId, defCaps, getMemberDeltas]);
 
   async function handleSave(): Promise<void> {
     setSaving(true);
     setError(null);
     try {
       const newDeltas = computeDeltas(value, defaultCaps);
-      await setAssignmentDeltasAction(assignment.instanceId, newDeltas);
+      await setMemberDeltasAction(assignment.instanceId, newDeltas);
       const changed = !deltasEqual(newDeltas, initialDeltas);
       setInitialDeltas(newDeltas);
       // v2 修复：用 assignment.lastRunning 判断 agent 是否运行中
@@ -121,9 +121,9 @@ export function AssignmentCapabilitiesDialog({ assignment, def, onClose }: Props
     setError(null);
     try {
       const ws = await ipc.workspace.get(assignment.workspaceId);
-      await stopAgent(assignment.instanceId);
+      await stopMember(assignment.instanceId);
       if (ws) {
-        await startAgent(assignment, ws.id);
+        await startMember(assignment, ws.id);
       }
       onClose();
     } catch (err) {

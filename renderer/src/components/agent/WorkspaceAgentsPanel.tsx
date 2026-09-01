@@ -15,7 +15,7 @@ import type { AgentAssignment } from '../../ipc/types';
 export function WorkspaceAgentsPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const setDefaultAgent = useWorkspaceStore((s) => s.setDefaultAgent);
-  const { assignments, definitions, loadAssignments, stopAgent, startAgent } = useAgentStore();
+  const { members, definitions, loadMembers, stopMember, startMember } = useAgentStore();
 
   const [addOpen, setAddOpen] = useState(false);
   const [keyEditing, setKeyEditing] = useState<AgentAssignment | null>(null);
@@ -23,33 +23,33 @@ export function WorkspaceAgentsPanel() {
   const [adjustingAssignment, setAdjustingAssignment] = useState<AgentAssignment | null>(null);
 
   useEffect(() => {
-    if (workspace) void loadAssignments(workspace.id);
-  }, [workspace, loadAssignments]);
+    if (workspace) void loadMembers(workspace.id);
+  }, [workspace, loadMembers]);
 
   const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
 
   const handleRemove = async (a: AgentAssignment): Promise<void> => {
     const defName = defMap.get(a.agentDefinitionId)?.name ?? '未知';
     if (!confirm(`确定移除「${defName}」？`)) return;
-    void stopAgent(a.instanceId);
+    void stopMember(a.instanceId);
     const result = await ipc.agent.removeMember(a.instanceId);
     if (!result.ok) {
       alert(`「${defName}」是以下团队的 leader，请先转移 leader 或解散团队：\n${result.blockedTeams.join('、')}`);
       return;
     }
-    if (workspace) await loadAssignments(workspace.id);
+    if (workspace) await loadMembers(workspace.id);
     // v1.5.8：成员被移出后成员列表需重新读取（成员面板不会自动跟随更新）
-    const { activeSessionId, loadMembers } = useSessionStore.getState();
-    if (activeSessionId) await loadMembers(activeSessionId);
+    const { activeSessionId, loadMembers: loadSessionMembers } = useSessionStore.getState();
+    if (activeSessionId) await loadSessionMembers(activeSessionId);
   };
 
   const handleStart = (a: AgentAssignment): void => {
     if (!workspace) return;
-    void startAgent(a, workspace.id);
+    void startMember(a, workspace.id);
   };
 
   const handleStop = (a: AgentAssignment): void => {
-    void stopAgent(a.instanceId);
+    void stopMember(a.instanceId);
   };
 
   return (
@@ -62,7 +62,7 @@ export function WorkspaceAgentsPanel() {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-2">
-        {assignments.map((a) => (
+        {members.map((a) => (
           <AssignmentRow
             key={a.instanceId} a={a} defMap={defMap}
             workspace={workspace} setDefaultAgent={setDefaultAgent}
@@ -72,7 +72,7 @@ export function WorkspaceAgentsPanel() {
           />
         ))}
 
-        {assignments.length === 0 && (
+        {members.length === 0 && (
           <div className="text-center py-12 text-neutral-500">
             <div className="text-4xl mb-2">🤖</div>
             <p>本工作空间暂无 agent</p>
@@ -92,7 +92,7 @@ export function WorkspaceAgentsPanel() {
           onClose={() => {
             setAdjustingAssignment(null);
             // setMemberDeltas 不像 setMemberApiKeyOverride 那样内部刷新列表，需显式刷新
-            if (workspace) void loadAssignments(workspace.id);
+            if (workspace) void loadMembers(workspace.id);
           }}
         />
       )}

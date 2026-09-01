@@ -3,7 +3,7 @@
 // v1.6 Task 12：WorkspaceAgentsPanel「⚙ 调整能力」按钮测试。
 // 每个 assignment 行右侧按钮组新增「⚙ 调整能力」按钮，点击打开
 // AssignmentCapabilitiesDialog（T10 已实现）。Dialog onClose 清空 state
-// 并刷新 assignments 列表。
+// 并刷新 members 列表。
 //
 // Mock 策略：
 //   - vi.mock AssignmentCapabilitiesDialog 为简单占位组件，隔离 panel ↔ dialog 的耦合，
@@ -73,13 +73,13 @@ const ASSIGNMENT: AgentAssignment = {
 };
 
 // store action 桩
-const loadAssignmentsMock = vi.fn();
+const loadMembersMock = vi.fn();
 
 beforeEach(() => {
   dialogMock.mockReset();
-  loadAssignmentsMock.mockReset();
+  loadMembersMock.mockReset();
 
-  loadAssignmentsMock.mockResolvedValue(undefined);
+  loadMembersMock.mockResolvedValue(undefined);
 
   useWorkspaceStore.setState({
     workspaces: [WS],
@@ -90,20 +90,20 @@ beforeEach(() => {
 
   useAgentStore.setState({
     definitions: [DEF],
-    assignments: [ASSIGNMENT],
+    members: [ASSIGNMENT],
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn(),
-    loadAssignments: loadAssignmentsMock,
+    loadMembers: loadMembersMock,
     loadBuiltinSuggestions: vi.fn(),
-    addAgent: vi.fn(),
+    addMember: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateAssignmentApiKey: vi.fn(),
-    getAssignmentDeltas: vi.fn(),
-    setAssignmentDeltas: vi.fn(),
-    stopAgent: vi.fn(),
-    startAgent: vi.fn(),
+    updateMemberApiKey: vi.fn(),
+    getMemberDeltas: vi.fn(),
+    setMemberDeltas: vi.fn(),
+    stopMember: vi.fn(),
+    startMember: vi.fn(),
     reset: vi.fn(),
   });
 });
@@ -111,9 +111,9 @@ beforeEach(() => {
 describe('WorkspaceAgentsPanel — 「⚙ 调整能力」按钮', () => {
   it('每个 assignment 行渲染「⚙ 调整能力」按钮', async () => {
     render(<WorkspaceAgentsPanel />);
-    // 等待 useEffect 触发的 loadAssignments 完成
+    // 等待 useEffect 触发的 loadMembers 完成
     await waitFor(() => {
-      expect(loadAssignmentsMock).toHaveBeenCalledWith('ws-1');
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
     expect(screen.getByText('⚙ 调整能力')).toBeInTheDocument();
   });
@@ -121,7 +121,7 @@ describe('WorkspaceAgentsPanel — 「⚙ 调整能力」按钮', () => {
   it('点击「⚙ 调整能力」→ 渲染 AssignmentCapabilitiesDialog，传入 assignment + def', async () => {
     render(<WorkspaceAgentsPanel />);
     await waitFor(() => {
-      expect(loadAssignmentsMock).toHaveBeenCalledWith('ws-1');
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
     fireEvent.click(screen.getByText('⚙ 调整能力'));
 
@@ -137,13 +137,13 @@ describe('WorkspaceAgentsPanel — 「⚙ 调整能力」按钮', () => {
     expect(screen.getByText('能力覆盖：测试 agent')).toBeInTheDocument();
   });
 
-  it('Dialog onClose → 清空 state（弹窗消失）+ 刷新 assignments 列表', async () => {
+  it('Dialog onClose → 清空 state（弹窗消失）+ 刷新 members 列表', async () => {
     render(<WorkspaceAgentsPanel />);
     await waitFor(() => {
-      expect(loadAssignmentsMock).toHaveBeenCalledWith('ws-1');
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
-    // 初始 mount 已调用一次 loadAssignments（useEffect 触发）
-    loadAssignmentsMock.mockClear();
+    // 初始 mount 已调用一次 loadMembers（useEffect 触发）
+    loadMembersMock.mockClear();
 
     fireEvent.click(screen.getByText('⚙ 调整能力'));
     await waitFor(() => {
@@ -157,9 +157,9 @@ describe('WorkspaceAgentsPanel — 「⚙ 调整能力」按钮', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('caps-dialog')).not.toBeInTheDocument();
     });
-    // assignments 列表刷新
+    // members 列表刷新
     await waitFor(() => {
-      expect(loadAssignmentsMock).toHaveBeenCalledWith('ws-1');
+      expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
   });
 });

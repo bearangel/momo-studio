@@ -18,7 +18,13 @@
 //   - 成员来自 session:get 的 SessionMemberInfo（三表 JOIN，仅 agent 成员）
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ImMessage, MessageEventRow, SessionMemberInfo, SessionSummary } from '../ipc/types';
+import type {
+  CollabTarget,
+  ImMessage,
+  MessageEventRow,
+  SessionMemberInfo,
+  SessionSummary,
+} from '../ipc/types';
 import { useStreamStore } from './stream.store';
 
 interface SessionState {
@@ -32,6 +38,11 @@ interface SessionState {
   error: string | null;
   /** 当前 sessions 所属的 workspace ID；切换 workspace 时重置全部状态 */
   currentWorkspaceId: string | null;
+  /**
+   * createQuickSession 无默认 agent（NO_DEFAULT_AGENT）时置 true——
+   * UI 据此弹一次性选择弹窗；下次 createQuickSession 尝试开始时复位。
+   */
+  needsDefaultAgent: boolean;
   /** 分页加载状态——sessionId → 是否正在加载更早消息（防抖） */
   loadingOlderBySession: Map<string, boolean>;
   /** 分页是否还有更早历史——sessionId → boolean；undefined 视为 true（初始） */
@@ -62,6 +73,21 @@ interface SessionState {
   onIncomingEventBatch: (batch: MessageEventRow[]) => void;
   /** 向当前激活会话发送消息（mentionedInstanceIds 为 @ 的成员 instanceId） */
   sendMessage: (body: string, mentionedInstanceIds?: string[]) => Promise<void>;
+  /**
+   * 快速会话（spec §4.4）：免弹窗直达 workspace 默认 agent。
+   * 成功 → 新会话置顶并激活，返回 true；无默认 agent → needsDefaultAgent=true，
+   * 返回 false；其他错误 → error 写入，返回 false。
+   */
+  createQuickSession: (workspaceId: string) => Promise<boolean>;
+  /**
+   * 协作会话（spec §4.4）：指定单 agent 或团队（成员快照展开）。
+   * title 传 undefined = 动态命名（占位标题起步）。
+   */
+  createCollabSession: (
+    workspaceId: string,
+    title: string | undefined,
+    target: CollabTarget,
+  ) => Promise<boolean>;
   /** 向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
   loadOlder: (sessionId: string) => Promise<void>;
   /** 重置全部状态（登出时调用） */
@@ -77,6 +103,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loading: false,
   error: null,
   currentWorkspaceId: null,
+  needsDefaultAgent: false,
   loadingOlderBySession: new Map(),
   hasMoreBySession: new Map(),
   loadOlderError: null,
@@ -254,6 +281,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
   },
 
+  createQuickSession: async (workspaceId) => {
+    set({ error: null, needsDefaultAgent: false });
+    try {
+      const session = await ipc.session.createQuick(workspaceId);
+      activateNewSession(set, session);
+      await get().selectSession(session.id);
+      return true;
+    } catch (err) {
+      // Electron IPC 错误只保 message——以子串识别结构化错误（types.d.ts 契约）
+      if ((err as Error).message.includes('NO_DEFAULT_AGENT')) {
+        set({ needsDefaultAgent: true });
+      } else {
+        set({ error: (err as Error).message });
+      }
+      return false;
+    }
+  },
+
+  createCollabSession: async (workspaceId, title, target) => {
+    set({ error: null });
+    try {
+      const session = await ipc.session.createCollab(workspaceId, title, target);
+      activateNewSession(set, session);
+      await get().selectSession(session.id);
+      return true;
+    } catch (err) {
+      set({ error: (err as Error).message });
+      return false;
+    }
+  },
+
   reset: () =>
     set({
       sessions: [],
@@ -264,12 +322,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       loading: false,
       error: null,
       currentWorkspaceId: null,
+      needsDefaultAgent: false,
       loadingOlderBySession: new Map(),
       hasMoreBySession: new Map(),
       loadOlderError: null,
       membersError: null,
     }),
 }));
+
+/** 新建会话置顶加入列表并设为激活（消息/成员由随后 selectSession 拉取） */
+function activateNewSession(
+  set: (updater: (state: SessionState) => Partial<SessionState>) => void,
+  session: SessionSummary,
+): void {
+  set((state) => ({
+    sessions: [session, ...state.sessions.filter((s) => s.id !== session.id)],
+    activeSessionId: session.id,
+  }));
+}
 
 /**
  * 全局会话通道订阅（在 App.tsx 顶层调用一次）。

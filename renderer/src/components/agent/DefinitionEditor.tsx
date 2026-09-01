@@ -37,7 +37,6 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const [iconEmoji, setIconEmoji] = useState('🤖');
   const [providerId, setProviderId] = useState('');
   const [modelName, setModelName] = useState('');
-  const [scope, setScope] = useState<'global' | 'workspace'>('workspace');
   // create 模式默认 = SAFE_MINIMUM_TOOLS；edit/configure 模式从 def.defaultTools/Mcps/Skills 加载
   const [capabilities, setCapabilities] = useState<Capabilities>(
     mode === 'create'
@@ -59,7 +58,6 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setIconEmoji(def.iconEmoji);
       setProviderId(def.modelProviderId ?? '');
       setModelName(def.modelName);
-      setScope(def.workspaceId === null ? 'global' : 'workspace');
       setCapabilities(defToCapabilities(def));
     }
   }, [def, mode]);
@@ -97,10 +95,10 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           description: `自定义 agent: ${name.trim()}`,
           systemPrompt: prompt.trim(),
           iconEmoji,
-          scope,
+          // v25 定义全局化：scope 恒 'global'（workspace_id 列已退役，electron 忽略）
+          scope: 'global',
           modelProviderId: providerId,
           modelName: modelName.trim(),
-          workspaceId: scope === 'workspace' ? (activeWorkspaceId ?? undefined) : undefined,
           defaultTools,
           defaultMcps,
           defaultSkills,
@@ -117,10 +115,6 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           defaultMcps,
           defaultSkills,
         };
-        if (!isBuiltin) {
-          input.scope = scope;
-          input.workspaceId = scope === 'workspace' ? (activeWorkspaceId ?? undefined) : undefined;
-        }
         await ipc.agent.updateDefinition(input);
       }
       await loadDefinitions(activeWorkspaceId ?? undefined);
@@ -201,18 +195,8 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           />
 
           {mode === 'create' && (
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-neutral-300">范围</label>
-              <div className="flex gap-3">
-                <label className="flex items-center gap-1 text-sm text-neutral-300">
-                  <input type="radio" checked={scope === 'workspace'} onChange={() => setScope('workspace')} />
-                  仅本工作空间
-                </label>
-                <label className="flex items-center gap-1 text-sm text-neutral-300">
-                  <input type="radio" checked={scope === 'global'} onChange={() => setScope('global')} />
-                  全局共享
-                </label>
-              </div>
+            <div className="text-xs text-neutral-500">
+              定义全局共享（v25 起无工作空间私有 agent）；加入哪个工作空间由「加入到当前工作空间」决定
             </div>
           )}
 

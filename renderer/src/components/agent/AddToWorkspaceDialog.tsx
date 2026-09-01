@@ -3,7 +3,7 @@
 // v1.6 Task 11：API key 步骤之后追加「能力调整（可选）」折叠区（Layer 3 per-member override）。
 //   - 默认收起：大多数添加场景不需要 override，保持原有简洁流程。
 //   - 展开后内嵌 CapabilityTabs mode="override"，defaultValue = def 默认能力 ∪ workspace allocation。
-//   - 提交时先 addAgent 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setMemberDeltas。
+//   - 提交时先 addMember 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setMemberDeltas。
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useAgentStore } from '../../stores/agent.store';
@@ -31,10 +31,10 @@ const EMPTY_CAPS: Capabilities = { tools: [], mcps: [], skills: [] };
 export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const definitions = useAgentStore((s) => s.definitions);
-  const addAgent = useAgentStore((s) => s.addAgent);
-  const setAssignmentDeltas = useAgentStore((s) => s.setAssignmentDeltas);
-  const stopAgent = useAgentStore((s) => s.stopAgent);
-  const startAgent = useAgentStore((s) => s.startAgent);
+  const addMember = useAgentStore((s) => s.addMember);
+  const setMemberDeltas = useAgentStore((s) => s.setMemberDeltas);
+  const stopMember = useAgentStore((s) => s.stopMember);
+  const startMember = useAgentStore((s) => s.startMember);
 
   const [defId, setDefId] = useState(preselectedDef?.id ?? '');
   const [apiKeyOverride, setApiKeyOverride] = useState('');
@@ -86,7 +86,7 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
     setError(null);
     try {
       // 1. 创建成员，捕获 IPC 返回的新 instanceId（Layer 3 deltas 必须绑到它）
-      const newAssignment = await addAgent(
+      const newAssignment = await addMember(
         workspace.id,
         defId,
         apiKeyOverride.trim() || undefined,
@@ -94,12 +94,12 @@ export function AddToWorkspaceDialog({ preselectedDef, onClose }: Props) {
       // 2. 计算用户 override 相对 defaultCaps 的 deltas；全空则跳过（避免空写）
       const deltas = computeDeltas(overrideValue, defaultCaps);
       if (!isEmptyDeltas(deltas)) {
-        await setAssignmentDeltas(newAssignment.instanceId, deltas);
-        // addAgent 已内部 spawn（用的还是 deltas 落库前的能力），必须重启让新 deltas 生效
+        await setMemberDeltas(newAssignment.instanceId, deltas);
+        // addMember 已内部 spawn（用的还是 deltas 落库前的能力），必须重启让新 deltas 生效
         const ws = await ipc.workspace.get(workspace.id);
-        await stopAgent(newAssignment.instanceId);
+        await stopMember(newAssignment.instanceId);
         if (ws) {
-          await startAgent(newAssignment, ws.id);
+          await startMember(newAssignment, ws.id);
         }
       }
       onClose();

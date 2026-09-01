@@ -7,7 +7,7 @@
 // 行为约定：
 //   - 折叠区默认收起（大多数情况不需要 override）。
 //   - 展开后显示 CapabilityTabs mode="override"，defaultValue = def + ws allocation 合集。
-//   - 提交时：先 addAgent 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setAssignmentDeltas。
+//   - 提交时：先 addMember 拿到新 instanceId，再 computeDeltas；deltas 全空则跳过 setMemberDeltas。
 //
 // Mock 策略：window.api 桩（allocation/mcp/skill）+ useAgentStore/useWorkspaceStore.setState 注入。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -33,10 +33,10 @@ const mockApi = {
   workspace: { get: workspaceGet },
 };
 
-const addAgentMock = vi.fn();
+const addMemberMock = vi.fn();
 const setAssignmentDeltasMock = vi.fn();
-const stopAgentMock = vi.fn();
-const startAgentMock = vi.fn();
+const stopMemberMock = vi.fn();
+const startMemberMock = vi.fn();
 
 const WS: Workspace = {
   id: 'ws-1',
@@ -90,19 +90,19 @@ function mockEmptyAllocation(): WorkspaceAllocation {
 beforeEach(() => {
   allocationGet.mockReset();
   resourceList.mockReset();
-  addAgentMock.mockReset();
+  addMemberMock.mockReset();
   setAssignmentDeltasMock.mockReset();
   workspaceGet.mockReset();
-  stopAgentMock.mockReset();
-  startAgentMock.mockReset();
+  stopMemberMock.mockReset();
+  startMemberMock.mockReset();
 
   allocationGet.mockResolvedValue(mockEmptyAllocation());
   resourceList.mockResolvedValue([]);
-  addAgentMock.mockResolvedValue(NEW_ASSIGNMENT);
+  addMemberMock.mockResolvedValue(NEW_ASSIGNMENT);
   setAssignmentDeltasMock.mockResolvedValue(undefined);
   workspaceGet.mockResolvedValue(WS);
-  stopAgentMock.mockResolvedValue(undefined);
-  startAgentMock.mockResolvedValue(undefined);
+  stopMemberMock.mockResolvedValue(undefined);
+  startMemberMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -115,20 +115,20 @@ beforeEach(() => {
 
   useAgentStore.setState({
     definitions: [DEF],
-    assignments: [],
+    members: [],
     builtinSuggestions: {},
     loading: false,
     error: null,
     loadDefinitions: vi.fn(),
-    loadAssignments: vi.fn(),
+    loadMembers: vi.fn(),
     loadBuiltinSuggestions: vi.fn(),
-    addAgent: addAgentMock,
+    addMember: addMemberMock,
     deleteDefinition: vi.fn(),
-    updateAssignmentApiKey: vi.fn(),
-    getAssignmentDeltas: vi.fn(),
-    setAssignmentDeltas: setAssignmentDeltasMock,
-    stopAgent: stopAgentMock,
-    startAgent: startAgentMock,
+    updateMemberApiKey: vi.fn(),
+    getMemberDeltas: vi.fn(),
+    setMemberDeltas: setAssignmentDeltasMock,
+    stopMember: stopMemberMock,
+    startMember: startMemberMock,
     reset: vi.fn(),
   });
 });
@@ -168,7 +168,7 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
     expect(screen.getByText(/默认（def \+ workspace）/)).toBeInTheDocument();
   });
 
-  it('改工具后保存 → setAssignmentDeltas 收到正确 instanceId + addedTools', async () => {
+  it('改工具后保存 → setMemberDeltas 收到正确 instanceId + addedTools', async () => {
     render(<AddToWorkspaceDialog preselectedDef={DEF} onClose={() => {}} />);
     // 展开折叠区
     fireEvent.click(screen.getByText(/能力调整（可选）/));
@@ -181,26 +181,26 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
 
     await waitFor(() => {
-      expect(addAgentMock).toHaveBeenCalledTimes(1);
+      expect(addMemberMock).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(setAssignmentDeltasMock).toHaveBeenCalledTimes(1);
     });
-    // setAssignmentDeltas 必须用新 instanceId
+    // setMemberDeltas 必须用新 instanceId
     const [instanceId, deltas] = setAssignmentDeltasMock.mock.calls[0]!;
     expect(instanceId).toBe('inst-new');
     expect(deltas.addedTools).toEqual(['bash']);
     expect(deltas.removedTools).toEqual([]);
   });
 
-  it('不展开直接保存 → deltas 全空，setAssignmentDeltas 不被调用', async () => {
+  it('不展开直接保存 → deltas 全空，setMemberDeltas 不被调用', async () => {
     const onClose = vi.fn();
     render(<AddToWorkspaceDialog preselectedDef={DEF} onClose={onClose} />);
     // 直接提交（折叠区没展开，value=defaultCaps → deltas 全空）
     fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
 
     await waitFor(() => {
-      expect(addAgentMock).toHaveBeenCalledTimes(1);
+      expect(addMemberMock).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
@@ -208,7 +208,7 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
     expect(setAssignmentDeltasMock).not.toHaveBeenCalled();
   });
 
-  it('填了 deltas 后提交 → setAssignmentDeltas 后自动 stop+start 重启（顺序正确）', async () => {
+  it('填了 deltas 后提交 → setMemberDeltas 后自动 stop+start 重启（顺序正确）', async () => {
     render(<AddToWorkspaceDialog preselectedDef={DEF} onClose={() => {}} />);
     fireEvent.click(screen.getByText(/能力调整（可选）/));
     await waitFor(() => {
@@ -218,31 +218,31 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
 
     await waitFor(() => {
-      expect(addAgentMock).toHaveBeenCalledTimes(1);
+      expect(addMemberMock).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(setAssignmentDeltasMock).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
-      expect(stopAgentMock).toHaveBeenCalledTimes(1);
+      expect(stopMemberMock).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
-      expect(startAgentMock).toHaveBeenCalledTimes(1);
+      expect(startMemberMock).toHaveBeenCalledTimes(1);
     });
 
-    expect(stopAgentMock).toHaveBeenCalledWith('inst-new');
+    expect(stopMemberMock).toHaveBeenCalledWith('inst-new');
 
-    const [assignmentArg, wsIdArg] = startAgentMock.mock.calls[0]!;
+    const [assignmentArg, wsIdArg] = startMemberMock.mock.calls[0]!;
     expect(assignmentArg).toBe(NEW_ASSIGNMENT);
     expect(wsIdArg).toBe('ws-1');
 
     expect(workspaceGet).toHaveBeenCalledWith('ws-1');
 
-    const addAgentOrder = addAgentMock.mock.invocationCallOrder[0]!;
+    const addMemberOrder = addMemberMock.mock.invocationCallOrder[0]!;
     const setDeltasOrder = setAssignmentDeltasMock.mock.invocationCallOrder[0]!;
-    const stopOrder = stopAgentMock.mock.invocationCallOrder[0]!;
-    const startOrder = startAgentMock.mock.invocationCallOrder[0]!;
-    expect(addAgentOrder).toBeLessThan(setDeltasOrder);
+    const stopOrder = stopMemberMock.mock.invocationCallOrder[0]!;
+    const startOrder = startMemberMock.mock.invocationCallOrder[0]!;
+    expect(addMemberOrder).toBeLessThan(setDeltasOrder);
     expect(setDeltasOrder).toBeLessThan(stopOrder);
     expect(stopOrder).toBeLessThan(startOrder);
   });
@@ -258,8 +258,8 @@ describe('AddToWorkspaceDialog — Layer 3 折叠区', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加并启动' }));
 
     await waitFor(() => {
-      expect(stopAgentMock).toHaveBeenCalledTimes(1);
+      expect(stopMemberMock).toHaveBeenCalledTimes(1);
     });
-    expect(startAgentMock).not.toHaveBeenCalled();
+    expect(startMemberMock).not.toHaveBeenCalled();
   });
 });

@@ -17,7 +17,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 
 export function MainLayout() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
-  const loadAssignments = useAgentStore((s) => s.loadAssignments);
+  const loadMembers = useAgentStore((s) => s.loadMembers);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,18 +39,18 @@ export function MainLayout() {
   // 切到 Agent 视图（WorkspaceAgentsPanel 挂载加载）再切回才恢复
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   useEffect(() => {
-    if (activeWorkspaceId) void loadAssignments(activeWorkspaceId);
-  }, [activeWorkspaceId, loadAssignments]);
+    if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
+  }, [activeWorkspaceId, loadMembers]);
 
   // 主进程在 agent 运行态变化（自动恢复完成/启停）时通知，重新加载 assignments，
   // 让 assignment.lastRunning 反映最新状态
   useEffect(() => {
     const cleanup = ipc.agent.onRuntimeChanged(() => {
       const ws = useWorkspaceStore.getState().getActive();
-      if (ws) void loadAssignments(ws.id);
+      if (ws) void loadMembers(ws.id);
     });
     return cleanup;
-  }, [loadAssignments]);
+  }, [loadMembers]);
 
   // 全局 Ctrl/Cmd+B 折叠/展开侧边栏（preventDefault 阻止浏览器默认行为）
   useEffect(() => {

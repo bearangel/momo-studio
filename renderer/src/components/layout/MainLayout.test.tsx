@@ -130,7 +130,7 @@ describe('MainLayout', () => {
   });
 
   // 邀请列表冷启动回归锁（fix #4，commit 3545e97）
-  it('挂载时主动 loadAssignments(activeWorkspaceId)（邀请列表冷启动）', async () => {
+  it('挂载时主动 loadMembers(activeWorkspaceId)（邀请列表冷启动）', async () => {
     useWorkspaceStore.setState({
       workspaces: [STUB_WORKSPACE],
       activeWorkspaceId: STUB_WORKSPACE.id,
@@ -140,13 +140,13 @@ describe('MainLayout', () => {
     expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
-  it('activeWorkspaceId 为 null 时不触发 loadAssignments（IPC 保持未调）', async () => {
+  it('activeWorkspaceId 为 null 时不触发 loadMembers（IPC 保持未调）', async () => {
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
     expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
   });
 
-  it('activeWorkspaceId 从 null 切到 ws 时触发 loadAssignments（邀请列表补齐）', async () => {
+  it('activeWorkspaceId 从 null 切到 ws 时触发 loadMembers（邀请列表补齐）', async () => {
     const { rerender } = render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
     expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
@@ -160,7 +160,7 @@ describe('MainLayout', () => {
     expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
-  it('activeWorkspaceId 从 ws-a 切到 ws-b 时重新 loadAssignments（保证新 ws 邀请列表正确）', async () => {
+  it('activeWorkspaceId 从 ws-a 切到 ws-b 时重新 loadMembers（保证新 ws 邀请列表正确）', async () => {
     useWorkspaceStore.setState({
       workspaces: [STUB_WORKSPACE, STUB_WORKSPACE_2],
       activeWorkspaceId: STUB_WORKSPACE.id,
@@ -178,7 +178,7 @@ describe('MainLayout', () => {
   });
 });
 
-describe('MainLayout — loadAssignments 冷启动（邀请列表回归锁）', () => {
+describe('MainLayout — loadMembers 冷启动（邀请列表回归锁）', () => {
   beforeEach(() => {
     // 显式清零：避免前序测试残留的 listMembers 调用记录污染断言
     mockApi.agent.listMembers.mockClear();
