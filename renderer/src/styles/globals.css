@@ -2,12 +2,152 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   设计 token（v2.1 设计系统）—— 颜色单一事实源
+   - 形式一：RGB 通道三元组（实心色，支持 Tailwind /alpha 修饰符）
+   - 形式二：完整颜色值（alpha 随模式变化，禁止 /nn 修饰符）
+   值定义依据：docs/specs/2026-09-01-v2.1-ui-design-system-refactor-design.md §3
+   ============================================================ */
+:root {
+  color-scheme: light;
+  /* 形式一 */
+  --bg-canvas: 255 255 255;
+  --surface-1: 249 249 250;
+  --surface-2: 241 241 243;
+  --surface-3: 233 233 236;
+  --text-primary: 24 25 26;
+  --text-secondary: 86 89 99;
+  --text-tertiary: 130 133 143;
+  --text-disabled: 194 196 202;
+  --border-subtle: 232 232 236;
+  --border-strong: 212 213 218;
+  --border-focus: 94 106 210;
+  --accent-300: 138 147 224;
+  --accent-500: 94 106 210;
+  --accent-600: 78 89 184;
+  --status-success: 35 131 92;
+  --status-warning: 183 121 31;
+  --status-error: 211 63 73;
+  --status-violet: 110 86 207;
+  /* 形式二 */
+  --surface-active: rgba(94, 106, 210, 0.12);
+  --bg-backdrop: rgba(24, 25, 26, 0.45);
+  --status-success-tint: rgba(35, 131, 92, 0.12);
+  --status-warning-tint: rgba(183, 121, 31, 0.12);
+  --status-error-tint: rgba(211, 63, 73, 0.12);
+  --status-violet-tint: rgba(110, 86, 207, 0.12);
+}
+
+.dark {
+  color-scheme: dark;
+  /* 形式一 */
+  --bg-canvas: 8 9 10;
+  --surface-1: 16 17 19;
+  --surface-2: 24 26 31;
+  --surface-3: 32 34 39;
+  --text-primary: 247 248 248;
+  --text-secondary: 180 184 191;
+  --text-tertiary: 127 130 139;
+  --text-disabled: 95 98 112;
+  --border-subtle: 31 32 35;
+  --border-strong: 46 48 54;
+  --border-focus: 94 106 210;
+  --accent-300: 138 147 224;
+  --accent-500: 94 106 210;
+  --accent-600: 78 89 184;
+  --status-success: 76 183 130;
+  --status-warning: 242 201 76;
+  --status-error: 235 87 87;
+  --status-violet: 158 140 245;
+  /* 形式二 */
+  --surface-active: rgba(94, 106, 210, 0.22);
+  --bg-backdrop: rgba(0, 0, 0, 0.6);
+  --status-success-tint: rgba(76, 183, 130, 0.16);
+  --status-warning-tint: rgba(242, 201, 76, 0.16);
+  --status-error-tint: rgba(235, 87, 87, 0.16);
+  --status-violet-tint: rgba(158, 140, 245, 0.16);
+}
+
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
-  background: theme('colors.bg.primary');
-  color: #e5e5e5;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: rgb(var(--bg-canvas));
+  color: rgb(var(--text-primary));
+  font-family:
+    'Inter Variable',
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Noto Sans CJK SC',
+    sans-serif;
+}
+
+/* 文本选中态：强调色浅底 */
+::selection {
+  background: var(--surface-active);
+}
+
+/* 键盘导航焦点环（仅 focus-visible，鼠标点击不显示） */
+:focus-visible {
+  outline: 2px solid rgb(var(--border-focus));
+  outline-offset: 2px;
+}
+
+/* 细滚动条（Electron Chromium） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-strong));
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Markdown 渲染（消息正文；P2 会话域迁移时接线到 .md-body） */
+.md-body pre {
+  background: rgb(var(--surface-2));
+  border: 1px solid rgb(var(--border-subtle));
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.md-body :not(pre) > code {
+  background: rgb(var(--surface-2));
+  border: 1px solid rgb(var(--border-subtle));
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.md-body table {
+  border-collapse: collapse;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid rgb(var(--border-subtle));
+  padding: 4px 10px;
+}
+.md-body th {
+  background: rgb(var(--surface-2));
+}
+.md-body blockquote {
+  border-left: 3px solid rgb(var(--border-strong));
+  color: rgb(var(--text-secondary));
+  margin: 0;
+  padding-left: 10px;
+}
+.md-body a {
+  color: rgb(var(--accent-600));
+}
+.dark .md-body a {
+  color: rgb(var(--accent-300));
 }
