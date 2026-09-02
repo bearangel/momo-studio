@@ -11,6 +11,8 @@
 //   - status 枚举改为 streaming/done/failed/aborted
 //   - subStream 查找留给 A9（streams Map 改 keyed by messageId，需 streamSessionId→messageId 反查）
 import { useMemo } from 'react';
+import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2, Square } from 'lucide-react';
+import { cn } from '../../lib/cn';
 import type { StreamState } from '../../stores/stream.store';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore } from '../../stores/stream.store';
@@ -22,6 +24,7 @@ import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
+import { Button } from '../ui/Button';
 import type { StreamSegment } from '../../stores/stream.store';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,18 +44,19 @@ const STATUS_TEXT: Record<StreamState['status'], string> = {
   aborted: '已中断',
 };
 
-const STATUS_COLOR: Record<StreamState['status'], string> = {
-  streaming: '#60a5fa',
-  done: '#4ade80',
-  failed: '#f87171',
-  aborted: '#fbbf24',
+/** 状态展示：tone class + lucide 图标（streaming 用旋转 Loader） */
+const STATUS_TONE: Record<StreamState['status'], string> = {
+  streaming: 'bg-status-warning-tint text-status-warning',
+  done: 'bg-status-success-tint text-status-success',
+  failed: 'bg-status-error-tint text-status-error',
+  aborted: 'bg-status-warning-tint text-status-warning',
 };
 
-const STATUS_DOT: Record<StreamState['status'], string> = {
-  streaming: '●',
-  done: '✓',
-  failed: '⚠',
-  aborted: '⏹',
+const STATUS_ICON: Record<StreamState['status'], typeof Loader2> = {
+  streaming: Loader2,
+  done: CircleCheck,
+  failed: CircleX,
+  aborted: CircleSlash,
 };
 
 /** AggregatedDispatch.status('timeout') → DispatchChild.status 无 timeout，归并到 'failed'；'aborted' 两端同名直通 */
@@ -93,8 +97,7 @@ function DispatchSegment({
 export function AgentStreamBubble({ stream, message, senderName }: Props) {
   const isStreaming = stream.status === 'streaming';
   const statusText = STATUS_TEXT[stream.status];
-  const statusColor = STATUS_COLOR[stream.status];
-  const statusDot = STATUS_DOT[stream.status];
+  const StatusIcon = STATUS_ICON[stream.status];
 
   // 子 agent 流反查表：会话消息行的 streamSessionId → 消息 id（streams Map 的 key）。
   // 子 agent 消息行带 parentStreamSessionId，被 MessageList 过滤出顶层列表，
@@ -120,7 +123,7 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
       sender={message.sender}
       isSelf={false}
       senderName={senderName}
-      bubbleClassName="bg-bg-tertiary text-neutral-100 border border-border-subtle"
+      bubbleClassName="bg-surface-2 text-primary border border-subtle"
       maxWidthPct={90}
       fillWidth
     >
@@ -163,18 +166,18 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             return (
               <div
                 key={`seg-text-${i}`}
-                className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30"
+                className="md-body overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
                 style={{ marginBottom: 8 }}
               >
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
                 {isStreaming && isLastSegment && (
                   <span
                     aria-label="流式光标"
+                    className="bg-accent-500"
                     style={{
                       display: 'inline-block',
                       width: 2,
                       height: 14,
-                      background: statusColor,
                       marginLeft: 2,
                       verticalAlign: 'text-bottom',
                       animation: 'momo-stream-blink 1s infinite',
@@ -187,63 +190,44 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
       })}
 
       {showProgress && (
-        <div style={{ fontSize: 11, color: '#888', margin: '4px 0' }}>
-          ⏳ 等待 {dispatchCompleted}/{dispatchTotal} 子任务完成
+        <div className="my-1 flex items-center gap-1 text-[11px] text-tertiary">
+          <Hourglass size={11} strokeWidth={1.75} aria-hidden /> 等待 {dispatchCompleted}/{dispatchTotal} 子任务完成
         </div>
       )}
 
-      <div
-        style={{
-          marginTop: 8,
-          paddingTop: 6,
-          borderTop: '1px solid #333',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          fontSize: 11,
-        }}
-      >
+      <div className="mt-2 flex flex-col gap-1 border-t border-subtle pt-1.5 text-[11px]">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: statusColor }}>
-            {statusDot} {statusText}
+          <span
+            className={cn(
+              'inline-flex h-5 items-center gap-1 rounded px-2 font-medium',
+              STATUS_TONE[stream.status],
+            )}
+          >
+            <StatusIcon
+              size={11}
+              strokeWidth={1.75}
+              aria-hidden
+              className={isStreaming ? 'animate-spin' : undefined}
+            />
+            {statusText}
           </span>
           {isStreaming && (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ml-auto"
               onClick={() => {
                 if (message.streamSessionId) {
                   void ipc.agent.abortStream(message.streamSessionId);
                 }
               }}
-              style={{
-                marginLeft: 'auto',
-                fontSize: 12,
-                padding: '2px 10px',
-                background: '#333',
-                border: '1px solid #444',
-                borderRadius: 4,
-                color: '#ccc',
-                cursor: 'pointer',
-              }}
             >
-              ⏹ 停止
-            </button>
+              <Square size={11} strokeWidth={1.75} aria-hidden /> 停止
+            </Button>
           )}
         </div>
         {!isStreaming && stream.error && (
-          <div
-            style={{
-              color: '#fca5a5',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              background: '#3b1d1d',
-              border: '1px solid #5b2929',
-              borderRadius: 4,
-              padding: '6px 8px',
-              fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-              fontSize: 11,
-            }}
-          >
+          <div className="whitespace-pre-wrap break-words rounded border border-status-error/40 bg-status-error-tint px-2 py-1.5 font-mono text-[11px] text-status-error">
             {stream.error}
           </div>
         )}
