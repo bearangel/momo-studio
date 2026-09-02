@@ -10,11 +10,14 @@
 //   点击"移除信任" → ipc.p2p.removeTrustedNode(nodeId) → 立即刷新
 //
 // 字段约定（与 electron/src/main/p2p/index.ts 的 getDiscoveredNodes handler 对齐）：
-//   - transport: 'lan' 局域网（🏠）/ 'hub' 互联网中继（🌐）
+//   - transport: 'lan' 局域网（Wifi 图标）/ 'hub' 互联网中继（Globe 图标）
 //   - trusted: true 已在信任列表（显示"移除信任"）/ false 未信任（显示"添加信任"）
 //   - fingerprint: 节点签名公钥指纹——mDNS 数据可被局域网内攻击者伪造（冒充 nodeId），
 //     添加信任前须与对端设备展示的本机指纹当面/带外核对一致
+//
+// v2.1 P3：样式 token 化 + 图标 lucide 化（⚠️→CircleAlert、🏠→Wifi、🌐→Globe），业务逻辑不变。
 import { useEffect, useState } from 'react';
+import { CircleAlert, Wifi, Globe } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 
 /** 发现的节点行（IPC 返回结构，与 ApiSurface.p2p.getDiscoveredNodes 对齐） */
@@ -74,31 +77,34 @@ export function NodeDiscoveryPanel() {
   };
 
   if (loading) {
-    return <div className="p-4 text-sm text-neutral-500">扫描中...</div>;
+    return <div className="p-4 text-sm text-tertiary">扫描中...</div>;
   }
 
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <h2 className="text-neutral-100 text-base">节点发现</h2>
-        <p className="text-xs text-neutral-500 mt-1 leading-relaxed">
+        <h2 className="text-primary text-base">节点发现</h2>
+        <p className="text-xs text-tertiary mt-1 leading-relaxed">
           自动发现同 WiFi 下的其他 Momo Studio 设备。首次连接需手动添加信任，
           信任后消息可端到端同步。
         </p>
         {ownIdentity && (
-          <div className="text-xs text-neutral-400 mt-2 leading-relaxed">
-            <span className="text-neutral-500">本机指纹：</span>
+          <div className="text-xs text-secondary mt-2 leading-relaxed">
+            <span className="text-tertiary">本机指纹：</span>
             <span className="font-mono break-all">{ownIdentity.fingerprint}</span>
           </div>
         )}
-        <p className="text-xs text-amber-500/90 mt-1 leading-relaxed">
-          ⚠️ 局域网内可能存在身份冒充。添加信任前，请通过当面或其他可靠渠道核对：
-          下方节点指纹与对方设备「本机指纹」完全一致后再信任。
+        <p className="mt-1 flex items-start gap-1.5 text-xs leading-relaxed text-status-warning">
+          <CircleAlert size={12} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+          <span>
+            局域网内可能存在身份冒充。添加信任前，请通过当面或其他可靠渠道核对：
+            下方节点指纹与对方设备「本机指纹」完全一致后再信任。
+          </span>
         </p>
       </div>
 
       {nodes.length === 0 && (
-        <div className="text-sm text-neutral-500">
+        <div className="text-sm text-tertiary">
           暂未发现其他节点（确保同 WiFi 下其他设备已启动 Momo Studio）
         </div>
       )}
@@ -106,17 +112,23 @@ export function NodeDiscoveryPanel() {
       {nodes.map((n) => (
         <div
           key={n.nodeId}
-          className="flex items-center justify-between p-2 border border-border-subtle rounded"
+          className="flex items-center justify-between p-2 border border-subtle rounded"
         >
           <div className="flex items-center gap-3 min-w-0">
-            <span aria-hidden>{n.transport === 'lan' ? '🏠' : '🌐'}</span>
+            <span aria-hidden className="shrink-0 text-tertiary">
+              {n.transport === 'lan' ? (
+                <Wifi size={14} strokeWidth={1.75} />
+              ) : (
+                <Globe size={14} strokeWidth={1.75} />
+              )}
+            </span>
             <div className="min-w-0">
-              <div className="text-sm font-medium text-neutral-100 truncate">
+              <div className="text-sm font-medium text-primary truncate">
                 {n.displayName}
               </div>
-              <div className="text-xs text-neutral-500 truncate">{n.nodeId}</div>
+              <div className="text-xs text-tertiary truncate">{n.nodeId}</div>
               <div
-                className="text-[10px] font-mono text-neutral-500 truncate"
+                className="text-[10px] font-mono text-tertiary truncate"
                 title={n.fingerprint}
               >
                 指纹 {n.fingerprint}
@@ -128,7 +140,7 @@ export function NodeDiscoveryPanel() {
               <button
                 type="button"
                 onClick={() => void handleRemove(n.nodeId)}
-                className="text-xs text-red-400 hover:text-red-300"
+                className="text-xs text-status-error hover:text-status-error"
               >
                 移除信任
               </button>
@@ -136,7 +148,7 @@ export function NodeDiscoveryPanel() {
               <button
                 type="button"
                 onClick={() => void handleTrust(n.nodeId)}
-                className="text-xs px-3 py-1 bg-accent-blue text-white rounded hover:bg-accent-blue/90"
+                className="text-xs px-3 py-1 rounded bg-accent-500 text-inverse hover:bg-accent-500/90"
               >
                 添加信任
               </button>
