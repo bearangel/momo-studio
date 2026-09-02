@@ -2,7 +2,8 @@
 //
 // v25 Task 13：创建协作会话弹窗测试（spec §6.5）。
 // 名称输入（可空=动态命名提示文案）+「单个 agent / 团队」页签 + 目标单选列表
-// （成员行显示在线态 / 团队行显示 👑+成员数）；提交走 session.store createCollabSession。
+// （成员行显示在线态 / 团队行显示 Crown leader + 成员数）；提交走 session.store createCollabSession。
+// v2.1 P2 Task 15：👑 → lucide-react Crown；断言改 getByTitle('leader：…') + 内含 svg。
 //
 // Mock 策略（momo-test-rules）：
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
@@ -187,11 +188,14 @@ describe('CollabSessionDialog — 单个 agent 提交', () => {
 });
 
 describe('CollabSessionDialog — 团队页签', () => {
-  it('团队行显示 👑 标记与成员数；选择团队提交 → team 目标', async () => {
+  it('团队行显示 Crown leader 标记与成员数；选择团队提交 → team 目标', async () => {
     const onClose = vi.fn();
     render(<CollabSessionDialog onClose={onClose} />);
     fireEvent.click(screen.getByRole('button', { name: '团队' }));
-    expect(screen.getByText('👑')).toBeInTheDocument();
+    // v2.1 P2 Task 15：👑 emoji → lucide-react Crown；断言改 getByTitle + 内含 svg
+    const leader = screen.getByTitle('leader：编码助手');
+    expect(leader).toBeInTheDocument();
+    expect(leader.querySelector('svg')).not.toBeNull();
     expect(screen.getByText('2 成员')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('攻坚组'));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
