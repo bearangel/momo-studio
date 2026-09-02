@@ -178,7 +178,7 @@ export function CollabSessionDialog({ onClose }: Props) {
                 <span>{t.iconEmoji}</span>
                 <span>{t.name}</span>
                 <span
-                  className="inline-flex items-center text-xs text-accent-600 dark:text-accent-300"
+                  className="inline-flex items-center text-xs"
                   title={`leader：${teamLeaderLabel(t)}`}
                 >
                   <Crown size={11} strokeWidth={1.75} aria-hidden className="text-accent-500" />

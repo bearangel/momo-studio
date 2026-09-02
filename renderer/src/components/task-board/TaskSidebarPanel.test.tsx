@@ -162,7 +162,7 @@ describe('TaskSidebarPanel', () => {
     expect(useTaskStore.getState().selectedTaskId).toBe('task-b');
   });
 
-  it('点击 ＋ 打开创建任务对话框', () => {
+  it('点击新建任务按钮（Plus 图标，可及名「新建任务」）打开创建任务对话框', () => {
     render(<TaskSidebarPanel />);
     fireEvent.click(screen.getByLabelText('新建任务'));
     expect(screen.getByRole('heading', { name: '创建任务' })).toBeInTheDocument();

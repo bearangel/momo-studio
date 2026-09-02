@@ -10,6 +10,7 @@
 // 每节点一张分组卡（节点名 + 相对时间 + 已离线? 标记 + 只读任务行），
 // 无任何操作按钮（远端任务不进本地 tasks 表，仅镜像展示）。
 import { useEffect, useMemo, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -149,9 +150,9 @@ export function TaskSidebarPanel() {
           title="新建任务"
           onClick={() => setCreateOpen(true)}
           disabled={!workspace}
-          className="text-tertiary hover:text-primary disabled:opacity-40 text-sm px-1 rounded"
+          className="text-tertiary hover:text-primary disabled:opacity-40 px-1 rounded"
         >
-          ＋
+          <Plus size={12} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
       <TaskFilters value={filter} onChange={setFilter} assigneeOptions={assigneeOptions} />

@@ -1,11 +1,11 @@
 // renderer/src/components/im/SessionSidebarHeader.tsx
 //
 // v25 Task 14：会话区头部双常驻按钮（spec §6.2）。
-//   ⚡ 快速会话：ws 已设默认 agent → 免弹窗直达 createQuickSession；
+//   Bolt 快速会话：ws 已设默认 agent → 免弹窗直达 createQuickSession；
 //     未设默认 → 弹 DefaultAgentPickerDialog（选成员→设默认→onContinue 继续建会，
 //     Picker 自带 ws 无成员引导文案）；store needsDefaultAgent（NO_DEFAULT_AGENT
 //     错误态，如默认 agent 已被移出）同样触发 Picker。
-//   👥 协作会话：挂载 CollabSessionDialog（T13 就绪）。
+//   Users 协作会话：挂载 CollabSessionDialog（T13 就绪）。
 //
 // T13 移交约定：Picker 在其 try 块内调用 onContinue 且不 await——消费方（本组件）
 // 必须自行 catch 自己的错误，否则会成为未处理 rejection / 被 Picker 误显示。
