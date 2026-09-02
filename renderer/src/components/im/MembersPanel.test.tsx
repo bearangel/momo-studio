@@ -44,7 +44,7 @@ describe('MembersPanel 在线/离线标签', () => {
     expect(screen.getByText('Leader')).toBeInTheDocument();
   });
 
-  it('成员图标使用 iconEmoji（空值回退 🤖）', () => {
+  it('成员图标使用 iconEmoji（空值回退 Bot 图标）', () => {
     render(<MembersPanel />);
     expect(screen.getByText('🧑‍💻')).toBeInTheDocument();
     expect(screen.getByText('🦸')).toBeInTheDocument();

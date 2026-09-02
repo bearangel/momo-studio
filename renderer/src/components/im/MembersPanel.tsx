@@ -4,14 +4,9 @@
 //
 // v2.1 P2 Task 13：token 化——border-l/border-subtle + bg-surface-1 + shadow-lg；
 // leader 徽标 👑 → lucide-react Crown（accent token 配色）。
-import { Crown } from 'lucide-react';
+import { Bot, Crown } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { cn } from '../../lib/cn';
-
-/** 成员展示 emoji（缺省回退通用机器人图标） */
-function memberEmoji(iconEmoji: string | undefined): string {
-  return iconEmoji || '🤖';
-}
 
 export function MembersPanel() {
   const members = useSessionStore((s) => s.members);
@@ -23,7 +18,7 @@ export function MembersPanel() {
       </div>
       {members.map((m) => (
         <div key={m.instanceId} className="px-3 py-2 flex items-center gap-2 text-sm text-secondary">
-          <span>{memberEmoji(m.iconEmoji)}</span>
+          <span>{m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}</span>
           <span className="truncate flex-1">{m.agentName}</span>
           {m.isLeader && (
             <span
