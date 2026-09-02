@@ -1,19 +1,23 @@
 // renderer/src/components/settings/DefaultModelSettings.tsx
 //
 // 默认模型面板（P2 Task 7，照 settings.html「默认模型」原型）：
-// 四张卡（💬 会话模型 / 👁 多模态模型 / 🧬 向量模型 / 🔀 重排模型），后两张标注
-// 「2.1 知识库启用」表示 P2 只存不消费；每卡两个联动下拉：provider（provider.store
-// 列表）→ model（该 provider 的 enabled ProviderModel 列表）。选 provider 时拉
+// 四张卡（lucide 图标：会话 / 多模态 / 向量 / 重排），后两张标注「2.1 知识库启用」
+// 表示 P2 只存不消费；每卡两个联动下拉：provider（provider.store 列表）→ model
+// （该 provider 的 enabled ProviderModel 列表）。选 provider 时拉
 // ipc.provider.listModels；选中后保存走 ipc.settings.updateGlobal 写 DefaultModelRef。
 // 清除按钮：把对应字段设为 undefined（updateGlobalSettings 的 spread 合并后 JSON.stringify
 // 会丢弃该键，从而清空 kv_store 中的条目）。
 import { useCallback, useEffect, useState } from 'react';
+import { Library, MessageSquare, Eye, Dna, ArrowLeftRight, type LucideIcon } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useProviderStore } from '../../stores/provider.store';
 import type { DefaultModelRef, GlobalSettings, ProviderModel } from '../../ipc/types';
+import { EmptyState } from '../ui/EmptyState';
+import { Select } from '../ui/Select';
+import { Button } from '../ui/Button';
 
 interface CardSpec {
-  icon: string;
+  icon: LucideIcon;
   title: string;
   desc: string;
   field: keyof Pick<
@@ -24,10 +28,10 @@ interface CardSpec {
 }
 
 const CARDS: CardSpec[] = [
-  { icon: '💬', title: '会话模型', desc: 'agent 未配置时使用；任务标题生成等系统用途', field: 'defaultChatModel', futureBadge: false },
-  { icon: '👁', title: '多模态模型', desc: '图片 / 文件理解（会话内附件）', field: 'defaultMultimodalModel', futureBadge: false },
-  { icon: '🧬', title: '向量模型', desc: '', field: 'defaultEmbeddingModel', futureBadge: true },
-  { icon: '🔀', title: '重排模型', desc: '', field: 'defaultRerankModel', futureBadge: true },
+  { icon: MessageSquare, title: '会话模型', desc: 'agent 未配置时使用；任务标题生成等系统用途', field: 'defaultChatModel', futureBadge: false },
+  { icon: Eye, title: '多模态模型', desc: '图片 / 文件理解（会话内附件）', field: 'defaultMultimodalModel', futureBadge: false },
+  { icon: Dna, title: '向量模型', desc: '', field: 'defaultEmbeddingModel', futureBadge: true },
+  { icon: ArrowLeftRight, title: '重排模型', desc: '', field: 'defaultRerankModel', futureBadge: true },
 ];
 
 type PicksMap = Record<string, DefaultModelRef | undefined>;
@@ -146,15 +150,16 @@ export function DefaultModelSettings() {
 
   return (
     <div className="space-y-4 max-w-[560px]">
-      <h2 className="text-neutral-100 text-base">默认模型</h2>
-      <p className="text-sm text-neutral-400">Agent 未显式配置模型时的 fallback 与系统内部用途。四类各选「供应商 + 模型」。</p>
+      <h2 className="text-base text-primary">默认模型</h2>
+      <p className="text-sm text-secondary">Agent 未显式配置模型时的 fallback 与系统内部用途。四类各选「供应商 + 模型」。</p>
 
-      {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
+      {error && <p className="text-xs text-status-error" role="alert">{error}</p>}
 
       {noProviders && (
-        <div className="border border-dashed border-border-subtle rounded-lg p-6 text-sm text-neutral-500" role="status">
-          暂无供应商，先在模型服务添加供应商。
-        </div>
+        <EmptyState
+          icon={Library}
+          title="暂无供应商，先在模型服务添加供应商。"
+        />
       )}
 
       <div className="flex flex-col gap-3">
@@ -164,66 +169,71 @@ export function DefaultModelSettings() {
             ? (modelsByProvider[pick.providerId] ?? []).filter((m) => m.enabled)
             : [];
           const noModels = !!pick && enabledModels.length === 0;
+          const Icon = card.icon;
           return (
-            <div key={card.field} className="border border-border-subtle rounded-lg bg-bg-secondary p-4"
+            <div key={card.field} className="rounded-lg border border-subtle bg-surface-1 p-4"
               data-testid={`dm-card-${card.field}`}>
               <div className="flex items-center gap-2 mb-3">
-                <span className="text-base">{card.icon}</span>
-                <span className="text-sm font-medium text-neutral-100">{card.title}</span>
+                <Icon size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                <span className="text-sm font-medium text-primary">{card.title}</span>
                 {card.futureBadge && (
-                  <span className="text-[10.5px] px-2 py-0.5 rounded bg-yellow-500/10 text-yellow-300">2.1 知识库启用</span>
+                  <span className="text-[10.5px] px-2 py-0.5 rounded bg-status-warning-tint text-status-warning">2.1 知识库启用</span>
                 )}
-                {card.desc && <span className="text-[11px] text-neutral-500 ml-auto text-right">{card.desc}</span>}
+                {card.desc && <span className="text-[11px] text-tertiary ml-auto text-right">{card.desc}</span>}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.4fr] gap-2">
-                <label className="text-[11px] text-neutral-400">
+                <label className="text-[11px] text-secondary">
                   供应商
-                  <select
+                  <Select
                     aria-label="供应商"
                     value={pick?.providerId ?? ''}
                     onChange={(e) => void handleProviderChange(card.field, e.target.value)}
                     disabled={providers.length === 0}
-                    className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100 disabled:opacity-50"
+                    className="mt-1"
                   >
                     {providers.length === 0 && <option value="" disabled>请先添加供应商</option>}
                     {providers.map((p) => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
-                <label className="text-[11px] text-neutral-400">
+                <label className="text-[11px] text-secondary">
                   模型
-                  <select
+                  <Select
                     aria-label="模型"
                     value={pick?.modelId ?? ''}
                     onChange={(e) => handleModelChange(card.field, e.target.value)}
                     disabled={!pick || noModels}
-                    className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100 disabled:opacity-50"
+                    className="mt-1"
                   >
                     {!pick && <option value="" disabled>先选择供应商</option>}
                     {pick && noModels && <option value="" disabled>先在模型服务添加模型</option>}
                     {pick && !noModels && enabledModels.map((m) => (
                       <option key={m.modelId} value={m.modelId}>{m.modelId}</option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               </div>
 
               {noModels && (
-                <p className="text-[11px] text-neutral-500 mt-2">该供应商暂无已启用模型，请先在模型服务添加模型。</p>
+                <p className="text-[11px] text-tertiary mt-2">该供应商暂无已启用模型，请先在模型服务添加模型。</p>
               )}
 
               <div className="flex items-center gap-2 mt-3">
                 <span className="flex-1" />
-                <button type="button" onClick={() => handleClear(card.field)} disabled={!pick}
-                  className="text-xs px-2 py-1 text-neutral-400 hover:text-neutral-200 disabled:opacity-40">清除</button>
-                <button type="button" onClick={() => void handleSave(card.field, pick)}
+                <Button type="button" variant="ghost" size="sm" disabled={!pick} onClick={() => handleClear(card.field)}>
+                  清除
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
                   disabled={!pick || !pick.modelId || savingField === card.field}
-                  className="text-xs px-3 py-1 rounded bg-accent-blue text-white disabled:opacity-50">
+                  onClick={() => void handleSave(card.field, pick)}
+                >
                   {savingField === card.field ? '保存中…' : '保存'}
-                </button>
-                {savedField === card.field && <span className="text-xs text-green-400">已保存</span>}
+                </Button>
+                {savedField === card.field && <span className="text-xs text-status-success">已保存</span>}
               </div>
             </div>
           );
