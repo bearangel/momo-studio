@@ -140,7 +140,7 @@ export function NodeDiscoveryPanel() {
               <button
                 type="button"
                 onClick={() => void handleRemove(n.nodeId)}
-                className="text-xs text-status-error hover:text-status-error"
+                className="text-xs text-status-error hover:opacity-80"
               >
                 移除信任
               </button>

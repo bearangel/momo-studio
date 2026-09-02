@@ -5,6 +5,7 @@
 // assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.members 派生
 // 后传入——保持本组件 dumb，避免与 store 直接耦合。
 // v2.1 P3：样式 token 化（border-border-subtle 退役）。
+// 选项文案与 task-status.ts STATUS_LABEL 同步：pending=待分配 / assigned=已分配 / in_progress=进行中。
 import type { TaskStatus } from '../../ipc/types';
 
 export interface FilterState {
@@ -37,9 +38,9 @@ export function TaskFilters({ value, onChange, assigneeOptions }: TaskFiltersPro
       >
         <option value="all">全部状态</option>
         <option value="draft">草稿</option>
-        <option value="pending">待启动</option>
-        <option value="assigned">排队中</option>
-        <option value="in_progress">执行中</option>
+        <option value="pending">待分配</option>
+        <option value="assigned">已分配</option>
+        <option value="in_progress">进行中</option>
         <option value="paused">已暂停</option>
         <option value="completed">已完成</option>
         <option value="failed">失败</option>

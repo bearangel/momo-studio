@@ -3,7 +3,12 @@
 // + dispatch 五态映射 + TaskStatusKey 与 ipc TaskStatus 的类型层派生锁。
 import { describe, expect, it } from 'vitest';
 import type { TaskStatus } from '../ipc/types';
-import { dispatchStatusStyle, taskStatusStyle, type TaskStatusKey } from './task-status';
+import {
+  dispatchStatusStyle,
+  remoteStatusStyle,
+  taskStatusStyle,
+  type TaskStatusKey,
+} from './task-status';
 
 // 类型层派生锁：TaskStatusKey 与 ipc TaskStatus 是同一类型
 const _typeLock: TaskStatusKey = 'draft' as TaskStatus;
@@ -53,5 +58,15 @@ describe('dispatchStatusStyle', () => {
   it('className 与 Badge tone 同源', () => {
     expect(dispatchStatusStyle('failed').className).toContain('bg-status-error-tint');
     expect(dispatchStatusStyle('executing').className).toContain('bg-status-warning-tint');
+  });
+});
+
+describe('remoteStatusStyle（远端未知状态防御）', () => {
+  it('已知状态走 taskStatusStyle；未知枚举回退 neutral + 原样文案', () => {
+    expect(remoteStatusStyle('failed').className).toContain('bg-status-error-tint');
+    expect(remoteStatusStyle('failed').label).toBe('失败');
+    const unknown = remoteStatusStyle('archived');
+    expect(unknown.label).toBe('archived');
+    expect(unknown.className).toContain('bg-surface-3');
   });
 });
