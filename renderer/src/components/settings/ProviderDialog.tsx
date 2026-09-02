@@ -22,7 +22,7 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
   const handleTest = async (): Promise<void> => {
@@ -31,9 +31,11 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
     try {
       // model 留空——后端返回「请先填写模型名或在模型服务页拉取模型列表」
       const r = await ipc.provider.testConnection({ baseUrl, apiKey, model: '' });
-      setTestResult(r.ok ? '连接成功' : r.error ?? '连接失败');
+      setTestResult(
+        r.ok ? { ok: true, message: '连接成功' } : { ok: false, message: r.error ?? '连接失败' },
+      );
     } catch (e) {
-      setTestResult(e instanceof Error ? e.message : String(e));
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
     } finally {
       setTesting(false);
     }
@@ -101,7 +103,11 @@ export function ProviderDialog({ open, onClose, onSaved }: Props) {
           >
             {testing ? '测试中…' : '测试连接'}
           </Button>
-          {testResult && <span className="text-xs text-secondary">{testResult}</span>}
+          {testResult && (
+            <span className={testResult.ok ? 'text-xs text-secondary' : 'text-xs text-status-error'}>
+              {testResult.message}
+            </span>
+          )}
         </div>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

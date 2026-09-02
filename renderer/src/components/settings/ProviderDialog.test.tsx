@@ -74,6 +74,16 @@ describe('ProviderDialog', () => {
     expect(await screen.findByText(/连接成功/)).toBeInTheDocument();
   });
 
+  it('测试连接失败：显示后端错误文案与状态色', async () => {
+    testConnection.mockResolvedValue({ ok: false, error: '连接超时' });
+    renderDialog();
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://x' } });
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: 'k' } });
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }));
+
+    expect(await screen.findByText('连接超时')).toHaveClass('text-status-error');
+  });
+
   it('创建成功后触发 onSaved 回调', async () => {
     const onSaved = vi.fn();
     renderDialog(onSaved);

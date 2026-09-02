@@ -37,6 +37,15 @@ describe('Segmented', () => {
     render(<Segmented options={OPTIONS} value="light" onChange={onChange} aria-label="主题模式" />);
     fireEvent.keyDown(screen.getByRole('radiogroup', { name: '主题模式' }), { key: 'ArrowRight' });
     expect(onChange).toHaveBeenCalledWith('dark');
+    expect(screen.getByRole('radio', { name: '深色' })).toHaveFocus();
+  });
+
+  it('单选项边界：Arrow 循环回自身且不崩溃', () => {
+    const single = [{ value: 'only', label: '唯一' }] as const;
+    const onChange = vi.fn();
+    render(<Segmented options={single} value="only" onChange={onChange} aria-label="单选" />);
+    fireEvent.keyDown(screen.getByRole('radiogroup', { name: '单选' }), { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledWith('only');
   });
 
   it('roving tabindex：仅激活项可 Tab', () => {

@@ -26,5 +26,10 @@ describe('EmptyState', () => {
     render(<EmptyState icon={Inbox} title="空" />);
     expect(screen.queryByText(/。/)).not.toBeInTheDocument();
   });
+
+  it('role 透传：role=status 时可被 role 查询命中', () => {
+    render(<EmptyState icon={Inbox} title="空" role="status" />);
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
 });
 

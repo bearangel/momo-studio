@@ -159,6 +159,7 @@ export function DefaultModelSettings() {
         <EmptyState
           icon={Library}
           title="暂无供应商，先在模型服务添加供应商。"
+          role="status"
         />
       )}
 
