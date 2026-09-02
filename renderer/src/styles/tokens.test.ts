@@ -64,6 +64,13 @@ describe('设计 token 定义', () => {
     }
   });
 
+  it('md-body 代码块/行内代码显式设色（强调底气泡可读性）', () => {
+    // isSelf 气泡 bg-accent-500 + text-inverse 下，code/pre 若不显式设色
+    // 会继承白色文字 → 亮色模式 surface-2 近白底不可见（P2 Task9 终审 Important）
+    expect(css).toMatch(/\.md-body pre\s*\{[^}]*color:\s*rgb\(var\(--text-primary\)\)/);
+    expect(css).toMatch(/\.md-body :not\(pre\) > code\s*\{[^}]*color:\s*rgb\(var\(--text-primary\)\)/);
+  });
+
   it('暗黑模式声明 color-scheme（原生控件随主题）', () => {
     expect(css).toMatch(/\.dark\s*\{[^}]*color-scheme:\s*dark/);
     expect(css).toMatch(/:root\s*\{[^}]*color-scheme:\s*light/);

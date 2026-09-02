@@ -113,6 +113,7 @@ body,
 /* Markdown 渲染（消息正文；P2 会话域迁移时接线到 .md-body） */
 .md-body pre {
   background: rgb(var(--surface-2));
+  color: rgb(var(--text-primary));
   border: 1px solid rgb(var(--border-subtle));
   border-radius: 6px;
   padding: 10px 12px;
@@ -122,6 +123,7 @@ body,
 }
 .md-body :not(pre) > code {
   background: rgb(var(--surface-2));
+  color: rgb(var(--text-primary));
   border: 1px solid rgb(var(--border-subtle));
   border-radius: 4px;
   padding: 1px 5px;
@@ -150,4 +152,11 @@ body,
 }
 .dark .md-body a {
   color: rgb(var(--accent-300));
+}
+/* accent 底气泡（如自己发送的消息）内链接：反白 + 下划线，避免 accent-600 与底色融合。
+   反白用 inherit——唯一匹配上下文（MessageBubble isSelf）的气泡元素带 text-inverse（#ffffff），
+   链接随周围反白文字取色；不写 rgb(var(--text-inverse))，该变量不存在（Tailwind inverse 直接映射 #ffffff） */
+.bg-accent-500 .md-body a {
+  color: inherit;
+  text-decoration: underline;
 }
