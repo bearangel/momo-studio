@@ -91,7 +91,9 @@ describe('WorkspaceTabs', () => {
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
 
-    const dialog = screen.getByText('确认删除工作空间').closest('form');
+    // v2.1：标题已迁到 Dialog 原子件的 <header>，不再位于 <form> 内；
+    // 改用输入框 placeholder 反查所在 form——语义稳定，不与 DOM 层级耦合。
+    const dialog = screen.getByPlaceholderText('产品重构').closest('form');
     expect(dialog).not.toBeNull();
     const input = within(dialog as HTMLElement).getByPlaceholderText('产品重构');
     fireEvent.change(input, { target: { value: '产品重构' } });
@@ -107,7 +109,8 @@ describe('WorkspaceTabs', () => {
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
 
-    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    const dialog = screen.getByPlaceholderText('产品重构').closest('form') as HTMLElement;
+    expect(dialog).not.toBeNull();
     fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
       target: { value: '' },
     });
@@ -121,7 +124,8 @@ describe('WorkspaceTabs', () => {
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
 
-    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    const dialog = screen.getByPlaceholderText('产品重构').closest('form') as HTMLElement;
+    expect(dialog).not.toBeNull();
     fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
       target: { value: '别的名字' },
     });
@@ -253,7 +257,8 @@ describe('WorkspaceTabs', () => {
     fireEvent.contextMenu(screen.getByRole('tab', { name: /产品重构/ }));
     fireEvent.click(screen.getByText('删除'));
 
-    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    const dialog = screen.getByPlaceholderText('产品重构').closest('form') as HTMLElement;
+    expect(dialog).not.toBeNull();
     fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
       target: { value: '产品重构' },
     });
@@ -267,7 +272,8 @@ describe('WorkspaceTabs', () => {
     render(<WorkspaceTabs />);
     fireEvent.click(screen.getByLabelText('关闭 产品重构'));
 
-    const dialog = screen.getByText('确认删除工作空间').closest('form') as HTMLElement;
+    const dialog = screen.getByPlaceholderText('产品重构').closest('form') as HTMLElement;
+    expect(dialog).not.toBeNull();
     fireEvent.change(within(dialog).getByPlaceholderText('产品重构'), {
       target: { value: '产品重构' },
     });
