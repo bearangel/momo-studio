@@ -36,10 +36,10 @@ describe('AddResourceMenu', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /添加资源/ }));
-    // 通过 role=menuitem 风格的按钮文本校验三项存在
-    expect(screen.getByText(/🤖/)).toBeInTheDocument();
-    expect(screen.getByText(/🔌/)).toBeInTheDocument();
-    expect(screen.getByText(/📦/)).toBeInTheDocument();
+    // 三项均为可点按钮（Bot/Puzzle/Package lucide 图标 + 文案——语义查询替代旧 emoji 断言）
+    expect(screen.getByRole('button', { name: /创建自定义 Agent/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /添加 MCP Server/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /上传 Skill 包/ })).toBeInTheDocument();
   });
 
   it('点击「创建自定义 Agent」触发 onCreateAgent + 关闭菜单', () => {

@@ -9,7 +9,7 @@
 //   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 4 个 source tab
 //     （全部/系统预置/我的上传/网络资源）。两层 AND：filter = { type?, source? }
 //   - 主网格：filteredItems 渲染为 ResourceCard 列表（grid auto-fill）
-//   - 选中卡片 → 右侧 ResourceDetail 面板滑出，含 item.name 与「×」关闭按钮
+//   - 选中卡片 → 右侧 ResourceDetail 面板滑出，含 item.name 与「关闭详情」按钮
 //   - 卡片删除按钮（aria-label `删除 ${name}`）→ ipc.resource.delete(id) + load() 刷新
 //   - 三类弹窗由 AddResourceMenu 触发；RegisterMcp/UploadSkill 的 onSuccess → load() 刷新
 //
@@ -321,8 +321,8 @@ describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗
       expect(screen.getAllByText('可关闭项')).toHaveLength(2);
     });
 
-    // 点 × 关闭详情
-    fireEvent.click(screen.getByRole('button', { name: '×' }));
+    // 点「关闭详情」按钮收起详情面板
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }));
 
     // 仅卡片一处
     await waitFor(() => {

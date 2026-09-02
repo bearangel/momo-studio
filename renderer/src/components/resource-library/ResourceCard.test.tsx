@@ -1,6 +1,7 @@
 // renderer/src/components/resource-library/ResourceCard.test.tsx
 // ResourceCard 行为：展示 name/description/SourceBadge；按 installed/installable/removable
-// 三态切换安装/删除/已安装；点击卡片触发 onSelect；按钮点击 stopPropagation。
+// 三态切换安装/删除/已安装（Trash2/Check lucide 图标 + 文案）；点击卡片触发 onSelect；
+// 按钮点击 stopPropagation。
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ResourceCard } from './ResourceCard';
@@ -69,6 +70,6 @@ describe('ResourceCard', () => {
 
   it('selected=true 时卡片边框高亮', () => {
     const { container } = render(<ResourceCard item={baseItem()} selected={true} onSelect={() => {}} />);
-    expect(container.firstChild).toHaveClass('border-accent-blue');
+    expect(container.firstChild).toHaveClass('border-accent-500');
   });
 });

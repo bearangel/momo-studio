@@ -14,9 +14,14 @@
 //     store installResource 失败后设置 error（红色横幅覆盖主网格区）。view 端只读渲染。
 //   - useEffect 依赖 [load, typeFilter, sourceFilter] —— filter 变化时自动 load；
 //     setTypeFilter/setSourceFilter 也会主动 load（双保险）
+//
+// v2.1 P3：token 化（tab 选中态 accent 形态 / 横幅 status tint）；📚 → Library lucide；
+// 空态接 EmptyState 原子件。
 import { useEffect, useState } from 'react';
+import { Library } from 'lucide-react';
 import { useResourceStore } from '../../stores/resource.store';
 import { Input } from '../ui/Input';
+import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
 import { ResourceCard } from './ResourceCard';
 import { ResourceDetail } from './ResourceDetail';
@@ -92,9 +97,12 @@ export function ResourceLibraryView() {
     <div className="flex-1 flex overflow-hidden">
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header：标题 + 添加按钮 + 搜索框 */}
-        <div className="px-4 py-3 border-b border-border-subtle flex flex-col gap-2">
+        <div className="px-4 py-3 border-b border-subtle flex flex-col gap-2">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold text-neutral-200">📚 资源库</h2>
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+              <Library size={14} strokeWidth={1.75} aria-hidden />
+              资源库
+            </h2>
             <div className="flex items-center gap-2">
               <AddResourceMenu
                 onCreateAgent={() => setCreateAgentOpen(true)}
@@ -115,7 +123,7 @@ export function ResourceLibraryView() {
           <div className="flex flex-col gap-1">
             {/* type 行 */}
             <div className="flex gap-1">
-              <span className="text-xs text-neutral-500 mr-2 self-center">类型</span>
+              <span className="text-xs text-tertiary mr-2 self-center">类型</span>
               {TYPE_TABS.map((tab) => (
                 <button
                   key={tab.key}
@@ -123,8 +131,8 @@ export function ResourceLibraryView() {
                   className={cn(
                     'text-xs px-2.5 py-1 rounded-md transition-colors',
                     typeFilter === tab.key
-                      ? 'bg-accent-blue text-white'
-                      : 'text-neutral-400 hover:bg-bg-tertiary',
+                      ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+                      : 'text-secondary hover:bg-surface-3',
                   )}
                   onClick={() => setTypeFilter(tab.key)}
                 >
@@ -134,7 +142,7 @@ export function ResourceLibraryView() {
             </div>
             {/* source 行 */}
             <div className="flex gap-1">
-              <span className="text-xs text-neutral-500 mr-2 self-center">来源</span>
+              <span className="text-xs text-tertiary mr-2 self-center">来源</span>
               {SOURCE_TABS.map((tab) => (
                 <button
                   key={tab.key}
@@ -142,8 +150,8 @@ export function ResourceLibraryView() {
                   className={cn(
                     'text-xs px-2.5 py-1 rounded-md transition-colors',
                     sourceFilter === tab.key
-                      ? 'bg-purple-500 text-white'
-                      : 'text-neutral-400 hover:bg-bg-tertiary',
+                      ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+                      : 'text-secondary hover:bg-surface-3',
                   )}
                   onClick={() => setSourceFilter(tab.key)}
                 >
@@ -160,7 +168,7 @@ export function ResourceLibraryView() {
           {installNotice && (
             <div
               data-testid="install-notice"
-              className="mb-3 px-3 py-2 rounded-md bg-green-500/15 text-green-300 text-sm border border-green-500/30"
+              className="mb-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm"
             >
               ✓ {installNotice}
             </div>
@@ -170,15 +178,15 @@ export function ResourceLibraryView() {
               加载失败：{error}
             </div>
           ) : loading && items.length === 0 ? (
-            <div className="text-center text-neutral-500 text-sm py-8">加载中…</div>
+            <div className="text-center text-tertiary text-sm py-8">加载中…</div>
           ) : filteredItems.length === 0 ? (
-            <div className="text-center text-neutral-500 text-sm py-8">
-              <div className="text-3xl mb-2">📚</div>
-              <p>
-                没有匹配的资源。
-                {sourceFilter === 'custom' && '点击右上角「+ 添加资源」上传'}
-              </p>
-            </div>
+            <EmptyState
+              icon={Library}
+              title="没有匹配的资源"
+              description={
+                sourceFilter === 'custom' ? '点击右上角「添加资源」上传' : undefined
+              }
+            />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
               {filteredItems.map((item) => (

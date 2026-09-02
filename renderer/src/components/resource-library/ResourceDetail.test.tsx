@@ -192,8 +192,8 @@ describe('ResourceDetail - 按 source 分支显示', () => {
   it('onClose 触发回调', () => {
     const onClose = vi.fn();
     render(<ResourceDetail item={baseItem()} onClose={onClose} />);
-    // 头部关闭按钮（× 文本）点击触发 onClose
-    const closeBtn = screen.getByRole('button', { name: /×/ });
+    // 头部关闭按钮（X 图标，aria-label 兜底）点击触发 onClose
+    const closeBtn = screen.getByRole('button', { name: '关闭详情' });
     fireEvent.click(closeBtn);
     expect(onClose).toHaveBeenCalled();
   });

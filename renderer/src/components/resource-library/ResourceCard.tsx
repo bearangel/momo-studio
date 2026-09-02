@@ -1,7 +1,11 @@
 // renderer/src/components/resource-library/ResourceCard.tsx
 // 资源库统一卡片——展示 name/description/source 徽章，并按资源状态条件渲染
-// 「安装」/「🗑 删除」/「✓ 已安装」三态操作区。点击卡片触发 onSelect；按钮内部点击
+// 「安装」/「删除」/「已安装」三态操作区。点击卡片触发 onSelect；按钮内部点击
 // 调用 e.stopPropagation() 防止冒泡到卡片 onSelect。
+// v2.1 P3：token 化；类型兜底 emoji → lucide（Bot/Puzzle/Package，iconEmoji 用户数据照渲染）；
+// 🗑 → Trash2、「✓ 已安装」→ Check lucide。
+import type { LucideIcon } from 'lucide-react';
+import { Bot, Check, Package, Puzzle, Trash2 } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
 import { cn } from '../../lib/cn';
 import { SourceBadge } from './SourceBadge';
@@ -17,27 +21,32 @@ interface Props {
   onDelete?: (id: string) => void;
 }
 
-/** 资源类型默认 emoji 兜底（item.iconEmoji 优先） */
-const TYPE_EMOJI: Record<ResourceItem['type'], string> = {
-  agent: '🤖',
-  mcp: '🔌',
-  skill: '📦',
+/** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
+const TYPE_ICON: Record<ResourceItem['type'], LucideIcon> = {
+  agent: Bot,
+  mcp: Puzzle,
+  skill: Package,
 };
 
 export function ResourceCard({ item, selected, onSelect, onInstall, onDelete }: Props) {
+  const TypeIcon = TYPE_ICON[item.type];
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 p-3 rounded-lg bg-bg-tertiary border cursor-pointer transition-colors',
-        selected ? 'border-accent-blue' : 'border-border-subtle hover:border-border-strong',
+        'flex flex-col gap-2 p-3 rounded-lg bg-surface-2 border cursor-pointer transition-colors',
+        selected ? 'border-accent-500' : 'border-subtle hover:border-strong',
       )}
       onClick={() => onSelect(item.id)}
     >
       <div className="flex items-start gap-2">
-        <span className="text-2xl leading-none">{item.iconEmoji || TYPE_EMOJI[item.type]}</span>
+        {item.iconEmoji ? (
+          <span className="text-2xl leading-none">{item.iconEmoji}</span>
+        ) : (
+          <TypeIcon size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+        )}
         <div className="flex-1 min-w-0">
-          <div className="font-semibold truncate">{item.name}</div>
-          <div className="text-xs text-neutral-400 truncate">{item.description}</div>
+          <div className="font-semibold truncate text-primary">{item.name}</div>
+          <div className="text-xs text-tertiary truncate">{item.description}</div>
         </div>
       </div>
 
@@ -50,7 +59,7 @@ export function ResourceCard({ item, selected, onSelect, onInstall, onDelete }: 
         {item.installable && !item.installed && onInstall && (
           <button
             type="button"
-            className="text-xs px-2 py-0.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30"
+            className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"
             onClick={(e) => { e.stopPropagation(); onInstall(item.id); }}
           >
             安装
@@ -61,15 +70,19 @@ export function ResourceCard({ item, selected, onSelect, onInstall, onDelete }: 
           <button
             type="button"
             aria-label={`删除 ${item.name}`}
-            className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
+            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-status-error-tint text-status-error hover:opacity-80"
             onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
           >
-            🗑 删除
+            <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+            删除
           </button>
         )}
         {/* 已安装静态标记：仅 installed 且不可删除（如 builtin）时显示 */}
         {item.installed && !item.removable && (
-          <span className="text-xs text-neutral-500">✓ 已安装</span>
+          <span className="inline-flex items-center gap-1 text-xs text-status-success">
+            <Check size={12} strokeWidth={1.75} aria-hidden />
+            已安装
+          </span>
         )}
       </div>
     </div>
