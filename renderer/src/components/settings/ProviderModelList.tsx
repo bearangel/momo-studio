@@ -6,8 +6,11 @@
 // - 「＋ 手动添加」：内联输入 model_id → addModel
 // - 增删后通过 onChanged 通知父组件刷新左列模型数徽标
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { RefreshCw, Plus } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { ProviderModel } from '../../ipc/types';
+import { Checkbox } from '../ui/Checkbox';
+import { Button } from '../ui/Button';
 
 interface Props {
   providerId: string;
@@ -86,17 +89,17 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
   };
 
   return (
-    <div className="border border-border-subtle rounded-lg bg-bg-secondary p-4 flex flex-col gap-2" data-testid="provider-model-list">
+    <div className="rounded-lg border border-subtle bg-surface-1 p-4 flex flex-col gap-2" data-testid="provider-model-list">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm text-neutral-100">模型列表</h3>
+        <h3 className="text-sm text-primary">模型列表</h3>
         <div className="flex items-center gap-2">
           <button type="button" onClick={handleFetchAll} disabled={fetching}
-            className="text-xs px-2 py-1 rounded border border-border-subtle text-neutral-300 hover:bg-bg-tertiary disabled:opacity-50">
-            {fetching ? '拉取中…' : '↻ 获取模型列表'}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-subtle text-secondary hover:bg-surface-3 disabled:opacity-50">
+            {fetching ? '拉取中…' : <><RefreshCw size={12} strokeWidth={1.75} aria-hidden /> 获取模型列表</>}
           </button>
           <button type="button" onClick={() => setAdding((v) => !v)}
-            className="text-xs px-2 py-1 rounded border border-border-subtle text-neutral-300 hover:bg-bg-tertiary">
-            ＋ 手动添加
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-subtle text-secondary hover:bg-surface-3">
+            <Plus size={12} strokeWidth={1.75} aria-hidden /> 手动添加
           </button>
         </div>
       </div>
@@ -108,36 +111,33 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
             onChange={(e) => setNewModelId(e.target.value)}
             placeholder="模型 ID，如 glm-5.3"
             autoFocus
-            className="flex-1 bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100 font-mono"
+            className="flex-1 rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary font-mono"
           />
-          <button type="submit" className="text-xs px-2 py-1 rounded bg-accent-blue text-white hover:opacity-90">添加</button>
-          <button type="button" onClick={() => { setAdding(false); setNewModelId(''); }}
-            className="text-xs px-2 py-1 text-neutral-400 hover:text-neutral-200">取消</button>
+          <Button type="submit" size="sm">添加</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => { setAdding(false); setNewModelId(''); }}>取消</Button>
         </form>
       )}
 
-      {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
-      {loading && <p className="text-xs text-neutral-500">加载中…</p>}
+      {error && <p className="text-xs text-status-error" role="alert">{error}</p>}
+      {loading && <p className="text-xs text-tertiary">加载中…</p>}
       {!loading && models.length === 0 && (
-        <p className="text-xs text-neutral-500">暂无模型。点击「↻ 获取模型列表」从 API 拉取，或「＋ 手动添加」。</p>
+        <p className="text-xs text-tertiary">暂无模型。点击「获取模型列表」从 API 拉取，或「手动添加」。</p>
       )}
 
       <div className="flex flex-col">
         {models.map((m) => (
           <div key={m.modelId}
-            className="flex items-center gap-2 py-1.5 border-b border-border-subtle last:border-b-0">
-            <input
-              type="checkbox"
+            className="flex items-center gap-2 py-1.5 border-b border-subtle last:border-b-0">
+            <Checkbox
               checked={m.enabled}
               onChange={() => void handleToggle(m)}
               aria-label={`启用 ${m.modelId}`}
-              className="accent-blue-500"
             />
-            <code className={`flex-1 text-xs font-mono truncate ${m.enabled ? 'text-neutral-200' : 'text-neutral-500 line-through'}`}>
+            <code className={`flex-1 text-xs font-mono truncate ${m.enabled ? 'text-primary' : 'text-disabled line-through'}`}>
               {m.modelId}
             </code>
             <button type="button" onClick={() => void handleRemove(m)} aria-label={`删除 ${m.modelId}`}
-              className="text-xs text-neutral-400 hover:text-red-400">删除</button>
+              className="text-xs text-tertiary hover:text-status-error">删除</button>
           </div>
         ))}
       </div>
