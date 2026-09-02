@@ -14,6 +14,7 @@
 //   - selectedTaskId 持有在 task.store——侧边栏（TaskSidebarPanel）写入，本组件读。
 //
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
+// v2.1 P3：样式 token 化（旧色阶 / border-border-subtle 退役）。
 import { useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings } from '../../ipc/types';
@@ -24,10 +25,6 @@ import { TaskDetailPanel } from './TaskDetailPanel';
 const MAX_CONCURRENCY_FALLBACK = 3;
 /** 列表轮询间隔（毫秒） */
 const REFRESH_INTERVAL_MS = 5000;
-
-interface TaskBoardViewProps {
-  workspaceId: string;
-}
 
 interface TaskBoardViewProps {
   workspaceId: string;
@@ -80,16 +77,16 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 顶部状态栏：标题 + 并发/排队 */}
-      <div className="flex items-center justify-between p-3 border-b border-border-subtle shrink-0">
+      <div className="flex items-center justify-between p-3 border-b border-subtle shrink-0">
         <h2 className="text-lg font-medium">任务看板</h2>
-        <div className="text-xs text-neutral-400">
+        <div className="text-xs text-tertiary">
           并发: {concurrency.active}/{concurrency.max}　排队: {concurrency.queued}
         </div>
       </div>
       {selectedTaskId ? (
         <TaskDetailPanel taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
       ) : (
-        <div className="flex-1 flex items-center justify-center text-neutral-500 text-sm">
+        <div className="flex-1 flex items-center justify-center text-tertiary text-sm">
           从左侧选择任务
         </div>
       )}

@@ -2,6 +2,7 @@
 //
 // 任务列表容器（D 子系统 D7）：渲染 TaskCard 列表 + 空态。
 // 滚动容器 flex-1，空态居中提示。
+// v2.1 P3：样式 token 化（旧色阶退役）。
 import type { TaskRow } from '../../ipc/types';
 import { TaskCard } from './TaskCard';
 
@@ -14,7 +15,7 @@ interface TaskListProps {
 export function TaskList({ tasks, selectedId, onSelect }: TaskListProps) {
   if (tasks.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500 text-sm">
+      <div className="flex-1 flex items-center justify-center text-tertiary text-sm">
         暂无任务
       </div>
     );

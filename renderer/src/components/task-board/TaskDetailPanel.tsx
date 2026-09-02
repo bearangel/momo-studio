@@ -7,7 +7,9 @@
 //   - "进入执行会话"按钮：selectSession(executionSessionId) + setActiveView('im')
 //
 // 并未做轮询——启动/取消后手动 refresh 一次（ipc.task.get）。看板列表的 5s 轮询会兜底同步。
+// v2.1 P3：样式 token 化；📅⏰× → Calendar/Clock/X lucide。
 import { useEffect, useState } from 'react';
+import { Calendar, Clock, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useUiStore } from '../../stores/ui.store';
@@ -33,7 +35,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   if (!task) {
     return (
-      <div className="flex-1 p-4 text-sm text-neutral-500">
+      <div className="flex-1 p-4 text-sm text-tertiary">
         加载中...
       </div>
     );
@@ -68,20 +70,25 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   // P2 Task 3：原 w-96 侧滑面板——拆分后成为看板主区内容，flex-1 占满剩余空间
   return (
     <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
-      <div className="flex items-center justify-between p-3 border-b border-border-subtle">
+      <div className="flex items-center justify-between p-3 border-b border-subtle">
         <span className="font-medium">#{task.id.slice(0, 8)}</span>
-        <button type="button" onClick={onClose} className="text-neutral-400 hover:text-neutral-100">
-          ×
+        <button
+          type="button"
+          aria-label="关闭"
+          onClick={onClose}
+          className="text-tertiary hover:text-primary leading-none"
+        >
+          <X size={14} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
       <div className="flex-1 p-4 text-sm space-y-3">
         <div>
-          <div className="text-xs text-neutral-500 mb-1">标题</div>
+          <div className="text-xs text-tertiary mb-1">标题</div>
           <div>{task.title}</div>
         </div>
         {task.description && (
           <div>
-            <div className="text-xs text-neutral-500 mb-1">描述</div>
+            <div className="text-xs text-tertiary mb-1">描述</div>
             <div className="whitespace-pre-wrap">{task.description}</div>
           </div>
         )}
@@ -90,27 +97,35 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           <div>优先级: {task.priority}</div>
           {task.assigneeAgentId && <div>指派: {task.assigneeAgentId.slice(0, 16)}</div>}
           {task.scheduledAt && (
-            <div>📅 {new Date(task.scheduledAt).toLocaleString()}</div>
+            <div className="inline-flex items-center gap-1">
+              <Calendar size={11} strokeWidth={1.75} aria-hidden />
+              {new Date(task.scheduledAt).toLocaleString()}
+            </div>
           )}
-          {task.deadlineAt && <div>⏰ {new Date(task.deadlineAt).toLocaleString()}</div>}
+          {task.deadlineAt && (
+            <div className="inline-flex items-center gap-1">
+              <Clock size={11} strokeWidth={1.75} aria-hidden />
+              {new Date(task.deadlineAt).toLocaleString()}
+            </div>
+          )}
           {task.executionSessionId && <div>执行房间: {task.executionSessionId.slice(0, 16)}</div>}
         </div>
         {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (
           <button
             type="button"
             onClick={handleEnterSession}
-            className="text-accent-blue hover:underline"
+            className="text-accent-600 hover:underline dark:text-accent-300"
           >
             进入执行会话 →
           </button>
         )}
       </div>
-      <div className="p-3 border-t border-border-subtle flex gap-2">
+      <div className="p-3 border-t border-subtle flex gap-2">
         {(task.status === 'pending' || task.status === 'assigned') && (
           <button
             type="button"
             onClick={handleStart}
-            className="flex-1 px-3 py-1 bg-accent-blue text-white rounded"
+            className="flex-1 px-3 py-1 bg-accent-500 text-inverse rounded"
           >
             启动
           </button>
@@ -119,7 +134,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           <button
             type="button"
             onClick={handleCancel}
-            className="flex-1 px-3 py-1 border border-border-subtle rounded"
+            className="flex-1 px-3 py-1 border border-subtle rounded"
           >
             取消
           </button>

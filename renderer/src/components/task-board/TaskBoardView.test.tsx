@@ -115,7 +115,7 @@ describe('TaskBoardView 主区（拆分后）', () => {
 
   // —— 以下两用例自 renderer/tests/components/task-board/TaskBoardView.test.tsx 迁入
   // （2026-08 目录规范统一），并按 momo-test-rules #5 从 vi.mock(store) 移植到真实 store：
-  // mock 越薄测试离生产越近；× 关闭回调断言 store 真实状态而非 mock 调用记录。
+  // mock 越薄测试离生产越近；关闭回调断言 store 真实状态而非 mock 调用记录。
   it('状态栏并发徽标含排队计数（store tasks 派生）', async () => {
     useTaskStore.setState({
       tasks: [
@@ -128,13 +128,14 @@ describe('TaskBoardView 主区（拆分后）', () => {
     expect(screen.getByText('任务看板')).toBeInTheDocument();
   });
 
-  it('× 关闭详情面板 → 真实 store 的 selectedTaskId 置空', async () => {
+  it('关闭按钮关闭详情面板 → 真实 store 的 selectedTaskId 置空', async () => {
     const task = mkTask({ id: 't1', title: '可点击任务', status: 'pending', priority: 5 });
     mockApi.task.get.mockResolvedValue(task);
     useTaskStore.setState({ tasks: [task], selectedTaskId: 't1' });
     render(<TaskBoardView workspaceId="ws-1" />);
     expect(await screen.findByText('#t1')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '×' }));
+    // × 字形已 lucide 化（X + aria-label），语义查询按可访问名走
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(useTaskStore.getState().selectedTaskId).toBeNull();
   });
 });

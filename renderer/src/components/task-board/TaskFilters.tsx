@@ -4,6 +4,7 @@
 // 受控组件——value + onChange 由 TaskBoardView 持有。
 // assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.members 派生
 // 后传入——保持本组件 dumb，避免与 store 直接耦合。
+// v2.1 P3：样式 token 化（border-border-subtle 退役）。
 import type { TaskStatus } from '../../ipc/types';
 
 export interface FilterState {
@@ -27,7 +28,7 @@ interface TaskFiltersProps {
 
 export function TaskFilters({ value, onChange, assigneeOptions }: TaskFiltersProps) {
   return (
-    <div className="flex items-center gap-2 p-2 border-b border-border-subtle text-xs">
+    <div className="flex items-center gap-2 p-2 border-b border-subtle text-xs">
       <select
         value={value.status}
         onChange={(e) =>
