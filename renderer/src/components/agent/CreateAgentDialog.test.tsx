@@ -10,6 +10,9 @@
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
 //   - ipc.agent.createCustom 经 window.api 桩注入（进程边界）；
 //   - 断言生产消费的字段（defId / instanceId / defaultTools）。
+// v2.1 P3：弹窗收敛 Dialog 后供应商选择走 Select 原子件——必填标记并入 label
+// 文案（CreateTaskDialog「标题*」同款），accessible name 由「模型供应商」变为
+// 「模型供应商*」，断言同步；其余语义不变。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { AgentDefinition, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -138,13 +141,13 @@ beforeEach(() => {
 /** 填写必填字段：名称 + provider（模型名随 provider 默认值自动填充） */
 function fillRequired(name = '新助手'): void {
   fireEvent.change(screen.getByLabelText('名称'), { target: { value: name } });
-  fireEvent.change(screen.getByLabelText('模型供应商'), { target: { value: 'prov-1' } });
+  fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
 }
 
 describe('CreateAgentDialog — 校验', () => {
   it('名称为空提交 → 显示错误且不调 createCustom', async () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('模型供应商'), { target: { value: 'prov-1' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     expect(await screen.findByText('名称不能为空')).toBeInTheDocument();
     expect(createCustom).not.toHaveBeenCalled();
@@ -160,7 +163,7 @@ describe('CreateAgentDialog — 校验', () => {
 
   it('选择供应商后自动填充其默认模型名', () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('模型供应商'), { target: { value: 'prov-1' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
     expect((screen.getByLabelText('模型名') as HTMLInputElement).value).toBe('gpt-4o');
   });
 });

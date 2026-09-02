@@ -10,6 +10,11 @@
 //
 // 默认工具集三档（spec §6.3）：安全最小集 / 全部 / 自选——沿用 renderer 端
 // tool-catalog 常量副本（与 electron 端 catalog.ts 手工同步，见该文件头注释）。
+//
+// v2.1 P3：手写 modal 外壳 → Dialog 原子件；供应商 select → Select、
+// 「设为默认会话 agent」→ Checkbox；工具三档 radio 与自选网格 checkbox 保留原生
+// input（P3 Task 4 TeamDialog 先例：行内单/多选原生 + aria-label），仅 token 化；
+// 系统提示词 textarea 无原子件走 token 类；⚡ 说明文案去 emoji（语义不变）。
 import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -17,7 +22,10 @@ import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { ALL_BUILTIN_TOOLS, SAFE_MINIMUM_TOOLS, TOOL_CATEGORIES } from '../../lib/tool-catalog';
 import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
 
 interface Props {
   /** 入口来源：agentView=Agent 管理 Tab（创建即加入当前 ws）；library=资源库（仅建全局定义） */
@@ -122,144 +130,130 @@ export function CreateAgentDialog({ source, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <h2 className="text-xl font-bold mb-4">创建 Agent</h2>
-        <div className="flex flex-col gap-3">
-          <Input
-            label="名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="如：代码审查员"
-            autoFocus
+    <Dialog open onClose={onClose} title="创建 Agent" width={448}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <Input
+          label="名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="如：代码审查员"
+          autoFocus
+        />
+        <Input
+          label="图标"
+          value={iconEmoji}
+          onChange={(e) => setIconEmoji(e.target.value)}
+        />
+        <Select
+          label="模型供应商*"
+          value={providerId}
+          onChange={(e) => handleProviderChange(e.target.value)}
+        >
+          <option value="">请选择...</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.isDefault ? '（默认）' : ''}
+            </option>
+          ))}
+        </Select>
+        <Input
+          label="模型名"
+          value={modelName}
+          onChange={(e) => setModelName(e.target.value)}
+          placeholder="如 gpt-4o, claude-sonnet-4"
+        />
+        <div className="flex flex-col gap-1">
+          <label htmlFor="create-agent-prompt" className="text-sm text-secondary">
+            系统提示词
+          </label>
+          <textarea
+            id="create-agent-prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="你是一名资深审查员..."
+            rows={4}
+            className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary focus:border-focus focus:outline-none resize-y"
           />
-          <Input
-            label="图标"
-            value={iconEmoji}
-            onChange={(e) => setIconEmoji(e.target.value)}
-          />
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">
-              模型供应商 <span className="text-red-400">*</span>
+        </div>
+
+        {/* 默认工具集三档（spec §6.3） */}
+        <fieldset className="flex flex-col gap-1.5 border-t border-subtle pt-3">
+          <legend className="text-sm text-secondary">默认工具集</legend>
+          {PRESETS.map((p) => (
+            <label key={p.key} className="flex items-start gap-2 text-sm text-secondary">
+              <input
+                type="radio"
+                name="tool-preset"
+                aria-label={p.label}
+                checked={preset === p.key}
+                onChange={() => setPreset(p.key)}
+                className="mt-0.5"
+              />
+              <span>
+                {p.label}
+                <span className="block text-xs text-tertiary">{p.hint}</span>
+              </span>
             </label>
-            <select
-              aria-label="模型供应商"
-              value={providerId}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100"
-            >
-              <option value="">请选择...</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.isDefault ? '（默认）' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <Input
-            label="模型名"
-            value={modelName}
-            onChange={(e) => setModelName(e.target.value)}
-            placeholder="如 gpt-4o, claude-sonnet-4"
-          />
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">系统提示词</label>
-            <textarea
-              aria-label="系统提示词"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="你是一名资深审查员..."
-              rows={4}
-              className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none resize-y"
-            />
-          </div>
-
-          {/* 默认工具集三档（spec §6.3） */}
-          <fieldset className="flex flex-col gap-1.5 border-t border-border-subtle pt-3">
-            <legend className="text-sm text-neutral-300">默认工具集</legend>
-            {PRESETS.map((p) => (
-              <label key={p.key} className="flex items-start gap-2 text-sm text-neutral-300">
-                <input
-                  type="radio"
-                  name="tool-preset"
-                  aria-label={p.label}
-                  checked={preset === p.key}
-                  onChange={() => setPreset(p.key)}
-                  className="mt-0.5"
-                />
-                <span>
-                  {p.label}
-                  <span className="block text-xs text-neutral-500">{p.hint}</span>
-                </span>
-              </label>
-            ))}
-            {preset === 'custom' && (
-              <div className="flex flex-col gap-2 pl-5 pt-1">
-                {TOOL_CATEGORIES.map((cat) => (
-                  <div key={cat.label}>
-                    <div className="text-xs text-neutral-500 mb-1">
-                      {cat.emoji} {cat.label}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {cat.tools.map((tool) => (
-                        <label key={tool} className="flex items-center gap-1 text-xs text-neutral-300">
-                          <input
-                            type="checkbox"
-                            aria-label={tool}
-                            checked={customTools.includes(tool)}
-                            onChange={(e) => toggleCustomTool(tool, e.target.checked)}
-                          />
-                          {tool}
-                        </label>
-                      ))}
-                    </div>
+          ))}
+          {preset === 'custom' && (
+            <div className="flex flex-col gap-2 pl-5 pt-1">
+              {TOOL_CATEGORIES.map((cat) => (
+                <div key={cat.label}>
+                  {/* cat.emoji 为 tool-catalog 数据字段（豁免，非 UI 硬编码图标） */}
+                  <div className="text-xs text-tertiary mb-1">
+                    {cat.emoji} {cat.label}
                   </div>
-                ))}
-              </div>
-            )}
-          </fieldset>
-
-          {source === 'agentView' ? (
-            <div className="border-t border-border-subtle pt-3">
-              <label className="flex items-center gap-2 text-sm text-neutral-300">
-                <input
-                  type="checkbox"
-                  aria-label="设为默认会话 agent"
-                  checked={setAsDefault}
-                  onChange={(e) => setSetAsDefault(e.target.checked)}
-                />
-                设为默认会话 agent
-              </label>
-              {workspace?.defaultAgentInstanceId ? (
-                <div className="text-xs text-amber-400/80 mt-1 ml-6">将替换现有默认</div>
-              ) : (
-                <div className="text-xs text-neutral-500 mt-1 ml-6">
-                  默认 agent 是快速会话（⚡）的直达目标
+                  <div className="flex flex-wrap gap-2">
+                    {cat.tools.map((tool) => (
+                      <label key={tool} className="flex items-center gap-1 text-xs text-secondary">
+                        <input
+                          type="checkbox"
+                          aria-label={tool}
+                          checked={customTools.includes(tool)}
+                          onChange={(e) => toggleCustomTool(tool, e.target.checked)}
+                        />
+                        {tool}
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-xs text-neutral-500 border-t border-border-subtle pt-3">
-              仅创建全局 Agent 定义；加入具体工作空间请从「Agent 管理 → 成员」添加
+              ))}
             </div>
           )}
+        </fieldset>
 
-          {error && <div className="text-red-400 text-sm">{error}</div>}
-          <div className="flex gap-2 justify-end mt-2">
-            <Button variant="ghost" type="button" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? '创建中…' : '创建'}
-            </Button>
+        {source === 'agentView' ? (
+          <div className="border-t border-subtle pt-3 flex flex-col gap-1">
+            <Checkbox
+              label="设为默认会话 agent"
+              checked={setAsDefault}
+              onChange={(e) => setSetAsDefault(e.target.checked)}
+            />
+            {workspace?.defaultAgentInstanceId ? (
+              <div className="text-xs text-status-warning mt-1 ml-6">将替换现有默认</div>
+            ) : (
+              <div className="text-xs text-tertiary mt-1 ml-6">
+                默认 agent 是快速会话的直达目标
+              </div>
+            )}
           </div>
+        ) : (
+          <div className="text-xs text-tertiary border-t border-subtle pt-3">
+            仅创建全局 Agent 定义；加入具体工作空间请从「Agent 管理 → 成员」添加
+          </div>
+        )}
+
+        {error && <div className="text-status-error text-sm">{error}</div>}
+        <div className="flex gap-2 justify-end mt-2">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? '创建中…' : '创建'}
+          </Button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }
