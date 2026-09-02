@@ -3,6 +3,7 @@
 // P2 Task 3：im/files 的内嵌 ResizableSidebar 移除——RoomList/FileTree 由
 // ViewSidebar 统一承载，本组件只负责各视图的主区。
 import { useEffect, useState } from 'react';
+import { Folder } from 'lucide-react';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -17,6 +18,7 @@ import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
+import { EmptyState } from '../ui/EmptyState';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -38,11 +40,12 @@ export function MiddlePanel() {
   // 无 workspace 时显示引导
   if (!workspace) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500">
-        <div className="text-center">
-          <div className="text-4xl mb-2">📁</div>
-          <p className="text-sm">创建或选择一个工作空间开始</p>
-        </div>
+      <div className="flex flex-1 items-center justify-center bg-canvas">
+        <EmptyState
+          icon={Folder}
+          title="创建或选择一个工作空间开始"
+          description="工作空间是 agent 协作与文件沙箱的根目录"
+        />
       </div>
     );
   }
@@ -63,8 +66,8 @@ export function MiddlePanel() {
       <div className="flex-1 flex min-w-0">
         <div className="flex-1 flex flex-col min-w-0 relative">
           {/* 会话头部：会话名 + 工具上限徽标 */}
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
-            <span className="text-sm text-neutral-100 truncate flex-1">
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-subtle bg-surface-1">
+            <span className="text-sm text-primary truncate flex-1">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
@@ -116,8 +119,8 @@ export function MiddlePanel() {
 
   // 兜底（所有 ViewKey 已在上方分支处理，理论上不可达）
   return (
-    <div className="flex-1 flex items-center justify-center text-neutral-500">
-      <p className="text-sm">未知视图</p>
+    <div className="flex flex-1 items-center justify-center bg-canvas">
+      <p className="text-sm text-tertiary">未知视图</p>
     </div>
   );
 }
