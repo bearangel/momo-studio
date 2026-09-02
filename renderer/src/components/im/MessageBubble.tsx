@@ -90,10 +90,10 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
       sender={message.sender}
       isSelf={isSelf}
       senderName={senderName}
-      bubbleClassName={cn(isSelf ? 'bg-accent-blue text-white' : 'bg-bg-tertiary text-neutral-100')}
+      bubbleClassName={cn(isSelf ? 'bg-accent-500 text-inverse' : 'bg-surface-2 text-primary')}
     >
-      {/* react-markdown 渲染消息体；p 元素默认有 margin，用样式覆盖 */}
-      <div className="[&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
+      {/* react-markdown 渲染消息体；p 元素默认有 margin，用样式覆盖；code/pre 交给 md-body */}
+      <div className="md-body overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{ a: SafeAnchor } as Components}

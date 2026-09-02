@@ -25,19 +25,19 @@ export function DispatchCard({ message, isSelf, senderName }: Props) {
       sender={message.sender}
       isSelf={isSelf}
       senderName={senderName}
-      bubbleClassName="border border-accent-purple/40 bg-accent-purple/10"
+      bubbleClassName="border border-status-violet/40 bg-status-violet-tint"
     >
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="inline-flex items-center rounded bg-accent-purple/20 px-1.5 py-0.5 font-medium text-accent-purple">
+        <span className="inline-flex items-center rounded bg-status-violet/20 px-1.5 py-0.5 font-medium text-status-violet">
           调度
         </span>
         {message.taskId && (
-          <span className="text-neutral-500">#{message.taskId.slice(0, 8)}</span>
+          <span className="text-tertiary">#{message.taskId.slice(0, 8)}</span>
         )}
       </div>
 
       {message.body && (
-        <div className="mt-1.5 text-sm text-neutral-100 overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-black/30">
+        <div className="md-body mt-1.5 text-sm text-primary overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
         </div>
       )}

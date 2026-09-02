@@ -50,7 +50,7 @@ export function MessageFrame({
       className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}
       style={{ minWidth: 0, overflow: 'hidden' }}
     >
-      <div className="w-8 h-8 shrink-0 rounded-full bg-bg-tertiary flex items-center justify-center text-base select-none">
+      <div className="w-8 h-8 shrink-0 rounded-full bg-surface-2 flex items-center justify-center text-base select-none">
         {avatarEmoji(sender)}
       </div>
       <div
@@ -63,7 +63,7 @@ export function MessageFrame({
         }}
       >
         {!isSelf && (
-          <span className="text-xs text-neutral-400 px-1">{senderName ?? shortName(sender)}</span>
+          <span className="text-xs text-secondary px-1">{senderName ?? shortName(sender)}</span>
         )}
         <div
           className={cn('rounded-lg px-3 py-2 text-sm break-words', bubbleClassName)}

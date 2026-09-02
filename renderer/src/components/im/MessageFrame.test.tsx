@@ -38,12 +38,12 @@ describe('MessageFrame', () => {
 
   it('bubbleClassName 应用到内层气泡 div', () => {
     render(
-      <MessageFrame sender={SENDER} isSelf={false} bubbleClassName="border-accent-purple/40 bg-accent-purple/10">
+      <MessageFrame sender={SENDER} isSelf={false} bubbleClassName="border-status-violet/40 bg-status-violet-tint">
         <span data-testid="child">x</span>
       </MessageFrame>,
     );
     const bubble = screen.getByTestId('child').parentElement;
-    expect(bubble?.className).toContain('border-accent-purple/40');
+    expect(bubble?.className).toContain('border-status-violet/40');
     expect(bubble?.className).toContain('rounded-lg');
   });
 
