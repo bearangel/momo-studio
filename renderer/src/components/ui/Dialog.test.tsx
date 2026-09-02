@@ -28,6 +28,17 @@ describe('Dialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('Esc 只关弹窗：阻断同窗口其他 Esc 监听（capture 阶段）', () => {
+    const sibling = vi.fn();
+    window.addEventListener('keydown', sibling);
+    const onClose = vi.fn();
+    render(<Dialog open onClose={onClose} title="T" />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(sibling).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', sibling);
+  });
+
   it('点击遮罩触发 onClose；点击内容区不触发', () => {
     const onClose = vi.fn();
     render(

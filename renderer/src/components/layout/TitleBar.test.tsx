@@ -2,7 +2,7 @@
 //
 // TitleBar 组件测试（P2 Task 2）：
 // - 渲染 workspace tabs（store 直连）＋激活高亮＋点击切换
-// - ＋ 按钮打开 CreateWorkspaceDialog
+// - 新建按钮打开 CreateWorkspaceDialog
 // - 窗口控件三按钮分别调 api.window.minimize/toggleMaximize/close
 // - isMaximized 初始化 + onMaximizedChanged 推送切换最大化/还原图标
 // - mac 平台不渲染自绘控件与 Logo（原生红绿灯）
@@ -83,7 +83,7 @@ describe('TitleBar', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(WS_B.id);
   });
 
-  it('点击 ＋ 打开 CreateWorkspaceDialog', () => {
+  it('点击新建按钮打开 CreateWorkspaceDialog', () => {
     render(<TitleBar />);
     fireEvent.click(screen.getByLabelText('新建工作空间'));
     expect(screen.getByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();

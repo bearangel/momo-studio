@@ -34,7 +34,7 @@ export const Checkbox = forwardRef<HTMLInputElement, Props>(
     );
     if (!label) return box;
     return (
-      <label htmlFor={inputId} className="inline-flex cursor-pointer select-none items-center gap-2 text-[13px] text-primary">
+      <label htmlFor={inputId} className="inline-flex cursor-pointer select-none items-center gap-2 text-sm text-secondary">
         {box}
         {label}
       </label>

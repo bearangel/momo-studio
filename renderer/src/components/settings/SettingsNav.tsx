@@ -37,7 +37,7 @@ export function SettingsNav() {
           className={cn(
             'w-full text-left px-3 py-2 text-sm rounded transition-colors flex items-center gap-2',
             active === c.key
-              ? 'bg-surface-active text-primary'
+              ? 'bg-surface-active text-accent-600 dark:text-accent-300'
               : 'text-secondary hover:bg-surface-3',
           )}
         >

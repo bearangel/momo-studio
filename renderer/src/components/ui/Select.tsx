@@ -26,7 +26,7 @@ export const Select = forwardRef<HTMLSelectElement, Props>(
             id={inputId}
             className={cn(
               'w-full appearance-none rounded-md border border-subtle bg-surface-2 py-2 pl-3 pr-8 text-[13px] text-primary',
-              'focus:border-focus focus:outline-none',
+              'focus:border-focus focus:outline-none disabled:opacity-50',
               className,
             )}
             {...rest}

@@ -26,4 +26,15 @@ describe('Select', () => {
     expect(sel.className).toContain('bg-surface-2');
     expect(sel.className).toContain('appearance-none');
   });
+
+  it('disabled 视觉：禁用态半透明', () => {
+    render(
+      <Select disabled aria-label="禁用选择">
+        <option value="a">A</option>
+      </Select>,
+    );
+    const sel = screen.getByLabelText('禁用选择');
+    expect(sel).toBeDisabled();
+    expect(sel.className).toContain('disabled:opacity-50');
+  });
 });

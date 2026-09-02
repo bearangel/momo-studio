@@ -1,7 +1,7 @@
 // renderer/src/components/settings/DefaultModelSettings.test.tsx
 //
 // 默认模型面板行为测试（P2 Task 7，照 settings.html「默认模型」原型）：
-// - 四张卡（💬 会话模型 / 👁 多模态模型 / 🧬 向量模型 / 🔀 重排模型）
+// - 四张卡（会话模型 / 多模态模型 / 向量模型 / 重排模型）
 // - 每卡：provider 下拉（来自 provider.store）+ model 下拉（该 provider 的 enabled 模型列表）
 // - 级联：选 provider → 拉 listModels → 填充 model 下拉
 // - 保存：updateGlobal({ defaultXxxModel: { providerId, modelId } })

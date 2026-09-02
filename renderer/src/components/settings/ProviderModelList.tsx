@@ -2,8 +2,8 @@
 //
 // 供应商模型列表管理（P2 Task 6）：
 // - 每行：model_id（等宽字体）+ 启用开关 + 删除
-// - 「↻ 获取模型列表」：fetchModels 拉取远端列表 → 逐个 addModel 幂等入库 → 刷新
-// - 「＋ 手动添加」：内联输入 model_id → addModel
+// - 「获取模型列表」：fetchModels 拉取远端列表 → 逐个 addModel 幂等入库 → 刷新
+// - 「手动添加」：内联输入 model_id → addModel
 // - 增删后通过 onChanged 通知父组件刷新左列模型数徽标
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { RefreshCw, Plus } from 'lucide-react';

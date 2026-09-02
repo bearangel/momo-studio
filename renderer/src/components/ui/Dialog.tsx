@@ -1,7 +1,7 @@
 // renderer/src/components/ui/Dialog.tsx
 // 模态弹窗原子件：portal 到 body + 遮罩 + Esc/点遮罩关闭。
-// 已知边界：SettingsView 的全局 Esc 返回与本组件 Esc 关闭会同时触发——
-// P1 迁移设置页弹窗时由消费方处理（stopPropagation / 状态优先），此处保持简单语义。
+// Esc 在 capture 阶段拦截并阻断同窗口其余 Esc 监听——弹窗内 Esc 只关弹窗，
+// 不再同时触发宿主视图（如 SettingsView 全局返回）的双触发问题。
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
@@ -22,14 +22,18 @@ export function Dialog({ open, onClose, title, children, footer, width = 480 }: 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        // capture 阶段最先执行，阻断同窗口其余 Esc 监听（如 SettingsView 全局返回）——弹窗内 Esc 只关弹窗
+        e.stopImmediatePropagation();
+        onClose();
+      }
     };
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, { capture: true });
     // 仅当内部无元素持焦时聚焦容器（autoFocus 输入框优先）；tabIndex=-1 使容器可编程聚焦
     if (dialogRef.current && !dialogRef.current.contains(document.activeElement)) {
       dialogRef.current.focus();
     }
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
   }, [open, onClose]);
 
   if (!open) return null;

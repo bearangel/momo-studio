@@ -17,6 +17,7 @@ Tailwind class 经 `renderer/tailwind.config.js` 映射生成。**组件代码�
 | 卡片 | `bg-surface-2` | 卡片 / 输入框 / 二级容器 |
 | 浮层 | `bg-surface-3` | hover / 浮层 / popover |
 | 选中 | `bg-surface-active` | 列表选中 / 当前导航（形式二，禁 `/nn`） |
+| 选中态文字 | `text-accent-600 dark:text-accent-300` | 选中态统一为 `bg-surface-active` + 本文字色（spec §3.4）；TitleBar 内 tab 激活态（`bg-surface-2 text-primary`，WorkspaceTabs）是独立的「控件激活」类，不属于导航选中态 |
 | 文字 | `text-primary / secondary / tertiary / disabled` | 四级文字 |
 | 反白 | `text-inverse` | accent 底上的文字 |
 | 边框 | `border-subtle / strong / focus` | 分割线 / 强调边 / 焦点边 |

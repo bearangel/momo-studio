@@ -76,7 +76,7 @@ export function ProviderSettings() {
           {providers.map((p) => (
             <button key={p.id} type="button" onClick={() => setSelectedId(p.id)}
               className={cn('text-left text-sm px-2 py-1.5 rounded flex items-center gap-1.5 min-w-0',
-                selectedId === p.id ? 'bg-surface-active text-primary' : 'text-secondary hover:bg-surface-3')}>
+                selectedId === p.id ? 'bg-surface-active text-accent-600 dark:text-accent-300' : 'text-secondary hover:bg-surface-3')}>
               {p.isDefault && (
                 <span title="默认供应商" className="shrink-0 text-accent-500">
                   <Star size={12} strokeWidth={1.75} aria-hidden fill="currentColor" />
