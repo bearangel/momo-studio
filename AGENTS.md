@@ -107,8 +107,8 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 
 | 陷阱 | 症状 | 解决 |
 |---|---|---|
-| Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 20 && npx pnpm@9.0.0 rebuild better-sqlite3` |
-| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 115 vs 123` | `cd electron && npx electron-rebuild -f -w better-sqlite3` |
+| Node 版本不对 | `better-sqlite3 ERR_DLOPEN_FAILED` 或 `NODE_MODULE_VERSION mismatch` | `nvm use 20 && npx pnpm@9.0.0 rebuild better-sqlite3`。⚠️ P1 实测：workspace 根的 `pnpm rebuild better-sqlite3` 可能静默 no-op（exit 0 但二进制未变）；此时改在包目录跑 `cd node_modules/better-sqlite3 && npx prebuild-install`。验证 ABI 勿用裸 `require('better-sqlite3')`（不触发 dlopen，首构造才加载，假阴性）——用 `new Database(':memory:')` 或直接跑测试 |
+| Electron native binding 不匹配 | 启动 Electron 时 `NODE_MODULE_VERSION 115 vs 123` | `cd electron && npx electron-rebuild -f -w better-sqlite3`。冒烟后如需回 Node ABI 跑测试，同上行注意事项 |
 | 容器内启动 Electron | `chrome-sandbox SUID` 错误 | 加 `--no-sandbox` 参数 |
 | `git add docs/foo.md` 无输出 | `.gitignore` 历史遗留条目 | 先 `git add docs/` 或 `git add -f docs/foo.md`（v2.0.0 后该裸 `docs` 条目已删，正常 `git add` 即可） |
 
