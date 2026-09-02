@@ -5,9 +5,14 @@
 //   - preset 预填：从 agent inline 建议或会话内按钮触发时传入已知的 title/desc/source/assignee
 //   - 提交走 ipc.task.create，成功后回调 onCreated(taskId) + onClose
 //   - open=false 时 return null（hooks 仍在调用顺序中，符合 React 规则）
-import { useEffect, useState } from 'react';
+// v2.1：外壳收敛 Dialog 原子件；表单控件换 Input/Select；textarea 无原子件走 token 类。
+import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import type { WorkspaceAgentMember } from '../../ipc/types';
+import { Dialog } from '../ui/Dialog';
+import { Button } from '../ui/Button';
+import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -53,7 +58,8 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
 
   if (!open) return null;
 
-  const handleSubmit = async (): Promise<void> => {
+  const handleSubmit = async (e: FormEvent): Promise<void> => {
+    e.preventDefault();
     if (!title.trim() || submitting) return;
     setSubmitting(true);
     try {
@@ -77,129 +83,67 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
   };
 
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>创建任务</h3>
-        <label style={labelStyle}>
-          标题*
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            style={inputStyle}
-            autoFocus
-          />
-        </label>
-        <label style={labelStyle}>
-          描述
+    <Dialog open onClose={onClose} title="创建任务" width={480}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <Input
+          label="标题*"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          autoFocus
+        />
+        <div className="flex flex-col gap-1">
+          <label htmlFor="create-task-desc" className="text-sm text-secondary">
+            描述
+          </label>
           <textarea
+            id="create-task-desc"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            style={{ ...inputStyle, minHeight: 80 }}
+            className="mt-1 min-h-[80px] w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary focus:border-focus focus:outline-none"
           />
-        </label>
-        <label style={labelStyle}>
-          指派 agent
-          <select
-            value={assigneeAgentId ?? ''}
-            onChange={(e) => setAssigneeAgentId(e.target.value || null)}
-            style={inputStyle}
-          >
-            <option value="">未指派</option>
-            {assignments.map((a) => (
-              <option key={a.instanceId} value={a.instanceId}>
-                {a.agentName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={labelStyle}>
-          优先级
-          <select
-            value={priority}
-            onChange={(e) => setPriority(e.target.value as Priority)}
-            style={inputStyle}
-          >
-            <option value="low">低</option>
-            <option value="medium">中</option>
-            <option value="high">高</option>
-          </select>
-        </label>
-        <label style={labelStyle}>
-          计划开始
-          <input
-            type="datetime-local"
-            value={scheduledAt}
-            onChange={(e) => setScheduledAt(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
-        <label style={labelStyle}>
-          截止时间
-          <input
-            type="datetime-local"
-            value={deadlineAt}
-            onChange={(e) => setDeadlineAt(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-          <button type="button" onClick={onClose} disabled={submitting}>
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSubmit()}
-            disabled={!title.trim() || submitting}
-            style={primaryButtonStyle}
-          >
-            {submitting ? '创建中...' : '创建'}
-          </button>
         </div>
-      </div>
-    </div>
+        <Select
+          label="指派 agent"
+          value={assigneeAgentId ?? ''}
+          onChange={(e) => setAssigneeAgentId(e.target.value || null)}
+        >
+          <option value="">未指派</option>
+          {assignments.map((a) => (
+            <option key={a.instanceId} value={a.instanceId}>
+              {a.agentName}
+            </option>
+          ))}
+        </Select>
+        <Select
+          label="优先级"
+          value={priority}
+          onChange={(e) => setPriority(e.target.value as Priority)}
+        >
+          <option value="low">低</option>
+          <option value="medium">中</option>
+          <option value="high">高</option>
+        </Select>
+        <Input
+          label="计划开始"
+          type="datetime-local"
+          value={scheduledAt}
+          onChange={(e) => setScheduledAt(e.target.value)}
+        />
+        <Input
+          label="截止时间"
+          type="datetime-local"
+          value={deadlineAt}
+          onChange={(e) => setDeadlineAt(e.target.value)}
+        />
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
+            取消
+          </Button>
+          <Button type="submit" disabled={!title.trim() || submitting}>
+            {submitting ? '创建中...' : '创建'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
-
-const overlayStyle: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  backgroundColor: 'rgba(0,0,0,0.5)',
-  zIndex: 100,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-const dialogStyle: React.CSSProperties = {
-  backgroundColor: '#1f2937',
-  border: '1px solid #374151',
-  borderRadius: 8,
-  padding: 20,
-  minWidth: 480,
-  maxWidth: '90vw',
-  maxHeight: '90vh',
-  overflowY: 'auto',
-};
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  marginBottom: 12,
-  fontSize: 13,
-  color: '#9ca3af',
-};
-const inputStyle: React.CSSProperties = {
-  display: 'block',
-  width: '100%',
-  marginTop: 4,
-  padding: '6px 8px',
-  backgroundColor: '#111827',
-  color: '#e5e7eb',
-  border: '1px solid #374151',
-  borderRadius: 4,
-};
-const primaryButtonStyle: React.CSSProperties = {
-  padding: '6px 16px',
-  backgroundColor: '#3b82f6',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 4,
-  cursor: 'pointer',
-};

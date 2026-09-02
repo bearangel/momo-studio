@@ -7,12 +7,16 @@
 //
 // 用户从 4 个选项中选一个（与 conflict-resolver.ts 的 5 策略对应，去掉 'ask'——
 // 'ask' 就是触发本弹窗本身）。选完后调 ipc.task.resolveConflict 让主进程执行副作用。
-// 可选勾选"本会话记住"——勾选后调 ipc.settings.updateRoom 把 strategy 写入
+// 可选勾选"本会话记住"——勾选后调 ipc.settings.updateSession 把 strategy 写入
 // sessions.settings_json 的 conflictStrategy，以后本会话再冲突时自动按此策略处理（不再弹窗）。
+// v2.1：⚠️ → CircleAlert 图标；外壳收敛 Dialog 原子件；checkbox 走 Checkbox；样式全 token 类。
 
 import { useState } from 'react';
-import type { CSSProperties } from 'react';
+import { CircleAlert } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { Dialog } from '../ui/Dialog';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
 
 type ResolvableStrategy = 'queue' | 'preempt' | 'fork' | 'reject';
 
@@ -50,84 +54,63 @@ export function ConflictDialog({
   };
 
   return (
-    <div
-      style={overlayStyle}
-      data-testid="conflict-overlay"
-      onClick={onClose}
+    <Dialog
+      open
+      onClose={onClose}
+      title="任务冲突"
+      width={480}
+      footer={
+        <Button type="button" variant="ghost" onClick={onClose}>
+          关闭
+        </Button>
+      }
     >
-      <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>⚠️ 任务冲突</h3>
-        <p style={{ fontSize: 14, color: '#9ca3af', margin: '8px 0 0' }}>
+      <div className="flex items-center gap-2 text-status-warning">
+        <CircleAlert size={16} strokeWidth={1.75} aria-hidden />
+        <p className="text-sm text-secondary">
           当前会话正在执行任务 <strong>#{currentTaskId}</strong>，
           你想启动任务 <strong>#{newTaskId}</strong>。怎么处理？
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
-          <button type="button" onClick={() => void handleChoose('queue')} style={optionButtonStyle}>
-            ① 排队——等 #{currentTaskId} 完成后自动开始 #{newTaskId}
-          </button>
-          <button type="button" onClick={() => void handleChoose('preempt')} style={optionButtonStyle}>
-            ② 抢占——暂停 #{currentTaskId}，立即开始 #{newTaskId}
-          </button>
-          <button type="button" onClick={() => void handleChoose('fork')} style={optionButtonStyle}>
-            ③ 分流——#{newTaskId} 在新会话执行，#{currentTaskId} 继续在这里
-          </button>
-          <button type="button" onClick={() => void handleChoose('reject')} style={optionButtonStyle}>
-            ④ 取消——不开 #{newTaskId}
-          </button>
-        </div>
-        {rememberChoice && (
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              marginTop: 16,
-              fontSize: 12,
-              color: '#9ca3af',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            本会话记住选择（以后本会话自动按所选策略处理，不再弹窗）
-          </label>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-          <button type="button" onClick={onClose}>
-            关闭
-          </button>
-        </div>
       </div>
-    </div>
+      <div className="mt-4 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => void handleChoose('queue')}
+          className="w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-left text-[13px] text-primary hover:bg-surface-3"
+        >
+          ① 排队——等 #{currentTaskId} 完成后自动开始 #{newTaskId}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleChoose('preempt')}
+          className="w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-left text-[13px] text-primary hover:bg-surface-3"
+        >
+          ② 抢占——暂停 #{currentTaskId}，立即开始 #{newTaskId}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleChoose('fork')}
+          className="w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-left text-[13px] text-primary hover:bg-surface-3"
+        >
+          ③ 分流——#{newTaskId} 在新会话执行，#{currentTaskId} 继续在这里
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleChoose('reject')}
+          className="w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-left text-[13px] text-primary hover:bg-surface-3"
+        >
+          ④ 取消——不开 #{newTaskId}
+        </button>
+      </div>
+      {rememberChoice && (
+        <div className="mt-4">
+          <Checkbox
+            label="本会话记住选择（以后本会话自动按所选策略处理，不再弹窗）"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+        </div>
+      )}
+    </Dialog>
   );
 }
-
-const overlayStyle: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  backgroundColor: 'rgba(0,0,0,0.5)',
-  zIndex: 100,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-const dialogStyle: CSSProperties = {
-  backgroundColor: '#1f2937',
-  border: '1px solid #374151',
-  borderRadius: 8,
-  padding: 20,
-  minWidth: 480,
-  maxWidth: '90vw',
-  color: '#e5e7eb',
-};
-const optionButtonStyle: CSSProperties = {
-  padding: '8px 12px',
-  textAlign: 'left',
-  cursor: 'pointer',
-  backgroundColor: '#111827',
-  color: '#e5e7eb',
-  border: '1px solid #374151',
-  borderRadius: 4,
-};

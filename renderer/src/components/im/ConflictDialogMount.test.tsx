@@ -48,7 +48,7 @@ describe('ConflictDialogMount', () => {
       });
     });
 
-    expect(screen.getByText('⚠️ 任务冲突')).toBeTruthy();
+    expect(screen.getByText('任务冲突')).toBeTruthy();
     // #T-001 出现在描述 + 多个按钮中，用 getAllByText
     expect(screen.getAllByText(/#T-001/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/#T-002/).length).toBeGreaterThan(0);
@@ -65,12 +65,12 @@ describe('ConflictDialogMount', () => {
       });
     });
 
-    expect(screen.getByTestId('conflict-overlay')).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
 
     act(() => {
       screen.getByText('关闭').click();
     });
 
-    expect(screen.queryByTestId('conflict-overlay')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

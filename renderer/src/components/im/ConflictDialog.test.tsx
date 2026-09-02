@@ -5,7 +5,7 @@
 //   2. open=true 时渲染 4 个选项按钮（排队/抢占/分流/取消）+ 任务 id 文案
 //   3. 点击"排队"按钮 → 调 ipc.task.resolveConflict({strategy:'queue'}) + onResolved('queue') + onClose
 //   4. 勾选"本会话记住" → 提交时额外调 ipc.settings.updateSession 写 conflictStrategy
-//   5. 点击 overlay（蒙层）关闭弹窗
+//   5. 点击 backdrop（遮罩）关闭弹窗
 //
 // Mock 策略：mock ../../ipc/client，让 ipc.task.resolveConflict / ipc.settings.updateSession
 // 都是 vi.fn() 以断言调用参数。
@@ -116,7 +116,7 @@ describe('ConflictDialog', () => {
     });
   });
 
-  it('点击 overlay（蒙层）→ 触发 onClose', () => {
+  it('点击 backdrop（蒙层）→ 触发 onClose', () => {
     const onClose = vi.fn();
     render(
       <ConflictDialog
@@ -128,7 +128,11 @@ describe('ConflictDialog', () => {
         onResolved={() => {}}
       />,
     );
-    fireEvent.click(screen.getByTestId('conflict-overlay'));
+    // Dialog 用 portal 渲染，遮罩是 role=dialog 元素的前一个兄弟节点
+    const dialog = screen.getByRole('dialog');
+    const backdrop = dialog.previousElementSibling;
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
     expect(onClose).toHaveBeenCalled();
   });
 });

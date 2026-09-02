@@ -2,7 +2,10 @@
 //
 // 输入框旁的"创建任务"按钮（B 子系统 B7）。
 // 点击打开 CreateTaskDialog，preset 携带 sourceSessionId（任务来源房间）。
+// v2.1：📌 → ListPlus 图标；外壳换 IconButton。
 import { useState } from 'react';
+import { ListPlus } from 'lucide-react';
+import { IconButton } from '../ui/IconButton';
 import { CreateTaskDialog } from './CreateTaskDialog';
 
 interface CreateTaskButtonProps {
@@ -14,15 +17,13 @@ export function CreateTaskButton({ workspaceId, sourceSessionId }: CreateTaskBut
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button
-        type="button"
+      <IconButton
+        aria-label="创建任务"
         onClick={() => setOpen(true)}
-        title="创建任务"
-        style={buttonStyle}
         disabled={!workspaceId || !sourceSessionId}
       >
-        📌
-      </button>
+        <ListPlus size={14} strokeWidth={1.75} />
+      </IconButton>
       <CreateTaskDialog
         open={open}
         onClose={() => setOpen(false)}
@@ -35,13 +36,3 @@ export function CreateTaskButton({ workspaceId, sourceSessionId }: CreateTaskBut
     </>
   );
 }
-
-const buttonStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  background: 'transparent',
-  border: '1px solid #374151',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontSize: 16,
-  lineHeight: 1,
-};
