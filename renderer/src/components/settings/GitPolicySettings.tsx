@@ -10,11 +10,14 @@
 // 编辑的是本地 draft，"保存"才写回主进程。预览校验复用与 electron 端
 // commit-validator 等价的纯逻辑（命中任一 pattern 即合规），避免每次按键都走 IPC。
 import { useEffect, useState, type FormEvent } from 'react';
+import { X, CircleCheck, CircleX } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { type GitPolicy, type CommitPattern, type CommitValidation } from '../../ipc/types';
 import { defaultGitPolicy } from '../../lib/git-policy';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
+import { Checkbox } from '../ui/Checkbox';
 import { cn } from '../../lib/cn';
 
 interface Props {
@@ -111,7 +114,7 @@ export function GitPolicySettings({ workspaceId }: Props) {
   }
 
   if (!draft) {
-    return <div className="text-sm text-neutral-500 py-4">加载 Git Policy…</div>;
+    return <div className="text-sm text-tertiary py-4">加载 Git Policy…</div>;
   }
 
   const previewResult = previewValidate(preview, draft);
@@ -120,8 +123,8 @@ export function GitPolicySettings({ workspaceId }: Props) {
     <section className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-neutral-200">Git Policy</h3>
-          <p className="text-xs text-neutral-500">约束 agent 在本工作空间的 commit 行为</p>
+          <h3 className="text-sm font-semibold text-primary">Git Policy</h3>
+          <p className="text-xs text-tertiary">约束 agent 在本工作空间的 commit 行为</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={() => void handleReset()} disabled={saving}>
@@ -133,18 +136,14 @@ export function GitPolicySettings({ workspaceId }: Props) {
         </div>
       </div>
 
-      {error && <div className="text-red-400 text-sm">{error}</div>}
+      {error && <div className="text-sm text-status-error">{error}</div>}
 
       {/* 基础开关 */}
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={draft.allowAgentCommits}
-          onChange={(e) => update((p) => (p.allowAgentCommits = e.target.checked))}
-          className="w-4 h-4 accent-accent-blue"
-        />
-        <span className="text-sm text-neutral-200">允许 agent 自动 commit</span>
-      </label>
+      <Checkbox
+        label="允许 agent 自动 commit"
+        checked={draft.allowAgentCommits}
+        onChange={(e) => update((p) => (p.allowAgentCommits = e.target.checked))}
+      />
 
       {/* 分支配置 */}
       <div className="grid grid-cols-2 gap-3">
@@ -161,22 +160,19 @@ export function GitPolicySettings({ workspaceId }: Props) {
       </div>
 
       {/* 校验级别 */}
-      <div className="flex flex-col gap-1">
-        <label className="text-sm text-neutral-300">Commit 校验级别</label>
-        <select
-          value={draft.commitMessage.validation}
-          onChange={(e) =>
-            update((p) => (p.commitMessage.validation = e.target.value as CommitValidation))
-          }
-          className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none"
-        >
-          {VALIDATION_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label} — {o.desc}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Select
+        aria-label="Commit 校验级别"
+        value={draft.commitMessage.validation}
+        onChange={(e) =>
+          update((p) => (p.commitMessage.validation = e.target.value as CommitValidation))
+        }
+      >
+        {VALIDATION_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label} — {o.desc}
+          </option>
+        ))}
+      </Select>
 
       {/* Pattern 列表 */}
       <PatternEditor
@@ -185,25 +181,35 @@ export function GitPolicySettings({ workspaceId }: Props) {
       />
 
       {/* 实时预览 */}
-      <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-3">
-        <label className="text-sm text-neutral-300">实时预览</label>
+      <div className="flex flex-col gap-1.5 border-t border-subtle pt-3">
+        <label className="text-sm text-secondary">实时预览</label>
         <textarea
           value={preview}
           onChange={(e) => setPreview(e.target.value)}
           rows={2}
           placeholder="输入 commit message 测试是否合规…"
-          className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none text-sm"
+          className="px-3 py-2 rounded-md border border-subtle bg-surface-2 text-primary focus:border-focus focus:outline-none text-sm"
         />
         {preview.trim() !== '' && (
           <div
             className={cn(
               'text-xs px-2 py-1 rounded inline-flex items-center gap-1 w-fit',
               previewResult.valid
-                ? 'bg-green-500/15 text-green-400'
-                : 'bg-red-500/15 text-red-400',
+                ? 'bg-status-success-tint text-status-success'
+                : 'bg-status-error-tint text-status-error',
             )}
           >
-            {previewResult.valid ? '✓ 合规' : `✗ ${previewResult.error ?? '不合规'}`}
+            {previewResult.valid ? (
+              <>
+                <CircleCheck size={12} strokeWidth={1.75} aria-hidden />
+                合规
+              </>
+            ) : (
+              <>
+                <CircleX size={12} strokeWidth={1.75} aria-hidden />
+                {previewResult.error ?? '不合规'}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -231,41 +237,42 @@ function PatternEditor({ patterns, onChange }: PatternEditorProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <label className="text-sm text-neutral-300">Commit Patterns（命中任一即合规）</label>
+        <label className="text-sm text-secondary">Commit Patterns（命中任一即合规）</label>
         <Button size="sm" variant="ghost" onClick={() => setAdding((v) => !v)}>
           {adding ? '取消' : '+ 添加'}
         </Button>
       </div>
 
       {patterns.length === 0 && !adding && (
-        <div className="text-xs text-neutral-600">（无 pattern，strict 模式下任何 commit 都会被拒）</div>
+        <div className="text-xs text-disabled">（无 pattern，strict 模式下任何 commit 都会被拒）</div>
       )}
 
       <ul className="flex flex-col gap-1.5">
         {patterns.map((p, idx) => (
           <li
             key={`${p.code}-${idx}`}
-            className="flex items-start gap-2 px-2 py-1.5 rounded bg-bg-tertiary border border-border-subtle"
+            className="flex items-start gap-2 px-2 py-1.5 rounded border border-subtle bg-surface-2"
           >
-            <code className="text-xs text-accent-blue mt-0.5 shrink-0">{p.code}</code>
+            <code className="text-xs text-accent-600 dark:text-accent-300 mt-0.5 shrink-0">{p.code}</code>
             <div className="flex-1 min-w-0 text-xs">
-              <div className="text-neutral-200">{p.name}</div>
-              <div className="text-neutral-500 font-mono truncate">{p.regex}</div>
-              <div className="text-neutral-500">例：{p.example}</div>
+              <div className="text-primary">{p.name}</div>
+              <div className="text-tertiary font-mono truncate">{p.regex}</div>
+              <div className="text-tertiary">例：{p.example}</div>
             </div>
             <button
               type="button"
-              className="text-xs text-neutral-500 hover:text-red-400 shrink-0"
+              className="text-xs text-tertiary hover:text-status-error shrink-0 inline-flex items-center"
               onClick={() => onChange(patterns.filter((_, i) => i !== idx))}
+              aria-label="删除 pattern"
             >
-              ✕
+              <X size={12} strokeWidth={1.75} aria-hidden />
             </button>
           </li>
         ))}
       </ul>
 
       {adding && (
-        <form onSubmit={commitAdd} className="grid grid-cols-2 gap-2 p-2 rounded bg-bg-tertiary border border-border-subtle">
+        <form onSubmit={commitAdd} className="grid grid-cols-2 gap-2 p-2 rounded border border-subtle bg-surface-2">
           <Input
             label="代号 code"
             value={form.code}

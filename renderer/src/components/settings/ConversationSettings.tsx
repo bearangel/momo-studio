@@ -6,6 +6,8 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings } from '../../ipc/types';
+import { Button } from '../ui/Button';
+import { Input } from '../ui/Input';
 
 export function ConversationSettings() {
   const [maxToolCalls, setMaxToolCalls] = useState(10);
@@ -34,25 +36,22 @@ export function ConversationSettings() {
   };
 
   if (loading) {
-    return <div className="p-4 text-neutral-400 text-sm">加载中...</div>;
+    return <div className="p-4 text-secondary text-sm">加载中...</div>;
   }
 
   return (
     <form onSubmit={handleSave} className="flex flex-col gap-4">
-      <h2 className="text-neutral-100 text-base">会话设置</h2>
+      <h2 className="text-base text-primary">会话设置</h2>
 
-      <label className="text-sm text-neutral-300 flex flex-col gap-1">
-        工具调用上限（全局默认）
-        <input
-          type="number"
-          value={maxToolCalls}
-          onChange={(e) => setMaxToolCalls(Number(e.target.value))}
-          min={-1}
-          style={{ width: 128 }}
-          className="bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-neutral-100"
-        />
-      </label>
-      <p className="text-xs text-neutral-500 leading-relaxed">
+      <Input
+        label="工具调用上限（全局默认）"
+        type="number"
+        value={maxToolCalls}
+        onChange={(e) => setMaxToolCalls(Number(e.target.value))}
+        min={-1}
+        style={{ width: 128 }}
+      />
+      <p className="text-xs text-tertiary leading-relaxed">
         0 = 禁用工具调用（纯对话模式）<br />
         -1 = 无限制<br />
         正整数 = 最多调用 N 次<br />
@@ -60,14 +59,10 @@ export function ConversationSettings() {
       </p>
 
       <div className="flex items-center gap-3">
-        <button
-          type="submit"
-          disabled={saving}
-          className="text-sm px-4 py-1.5 rounded bg-accent-blue text-white disabled:opacity-50"
-        >
+        <Button type="submit" disabled={saving}>
           {saving ? '保存中...' : '保存'}
-        </button>
-        {savedAt && <span className="text-xs text-green-400">已保存</span>}
+        </Button>
+        {savedAt && <span className="text-xs text-status-success">已保存</span>}
       </div>
     </form>
   );
