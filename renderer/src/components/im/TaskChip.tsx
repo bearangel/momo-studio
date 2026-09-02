@@ -1,7 +1,10 @@
 // renderer/src/components/im/TaskChip.tsx
 //
-// #T-XXX 任务 chip 渲染。展示任务编号 + 短标题，可点击触发跳转。
-// 颜色按 status 区分；超过 12 字标题截断（hover title 显示完整文本）。
+// #T-XXX 任务 chip：任务编号 + 短标题，点击跳转。颜色走 task-status 统一映射
+// （v2.1：原 inline hex STATUS_COLOR 调色板退役，与 TaskCard/DispatchChip 同源）。
+import { Hash } from 'lucide-react';
+import { cn } from '../../lib/cn';
+import { taskStatusStyle } from '../../lib/task-status';
 import type { TaskRow } from '../../ipc/types';
 
 interface TaskChipProps {
@@ -9,35 +12,19 @@ interface TaskChipProps {
   onClick?: (taskId: string) => void;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  draft: '#888',
-  pending: '#fbbf24',
-  assigned: '#3b82f6',
-  in_progress: '#10b981',
-  paused: '#a78bfa',
-  completed: '#6b7280',
-  failed: '#ef4444',
-  cancelled: '#6b7280',
-};
-
 export function TaskChip({ task, onClick }: TaskChipProps) {
-  const color = STATUS_COLOR[task.status] ?? '#888';
+  const status = taskStatusStyle(task.status);
   const truncated = task.title.length > 12 ? task.title.slice(0, 12) + '...' : task.title;
   return (
     <button
       type="button"
       onClick={() => onClick?.(task.id)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '2px 6px', borderRadius: 4,
-        backgroundColor: 'rgba(0,0,0,0.2)', border: `1px solid ${color}`,
-        fontSize: 12, cursor: 'pointer',
-      }}
       title={task.title}
+      className={cn('inline-flex items-center gap-1 text-xs', status.className)}
     >
-      <span style={{ color }}>📌</span>
-      <span style={{ color: '#ccc' }}>{task.id}</span>
-      <span style={{ color: '#999', fontSize: 11 }}>{truncated}</span>
+      <Hash size={11} strokeWidth={2} aria-hidden />
+      <span className="font-mono">{task.id}</span>
+      <span className="max-w-[140px] truncate">{truncated}</span>
     </button>
   );
 }
