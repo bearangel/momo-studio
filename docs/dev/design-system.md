@@ -73,3 +73,9 @@ class 字面量；运行时拼接的字符串不在扫描结果里，对应 CSS 
 债务的根因。任意值 class（如 `max-w-[70%]`、`text-[13px]`）静态书写时可用。
 
 > README 已知限制中的旧表述将由本规范口径取代（P1 期间勘正 README）。
+
+## 6. Dialog 消费方指引（P1 起生效）
+
+- `onClose` 请传**稳定引用**（useCallback 或模块级函数）——内联箭头函数会因 Dialog 的 effect 依赖在父组件每次渲染时重挂监听并重新抢焦
+- Dialog 的 Esc 关闭与 SettingsView 的全局 Esc 返回会**同时触发**：设置页内的弹窗消费方应在自身的 keydown 处理中 `stopPropagation` 或先关弹窗再由状态判定是否返回
+- Dialog 不内置焦点陷阱（focus trap）与滚动锁定；多层弹窗叠加时一个 Esc 会关闭所有层（各层独立监听）——需要单层关闭语义时由消费方管理层级

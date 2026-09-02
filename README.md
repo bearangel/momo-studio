@@ -577,7 +577,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 
 | 问题 | 影响 | 计划解决版本 |
 |---|---|---|
-| **Tailwind 任意值 class 不生成 CSS** | `max-w-[70%]` 等无效，宽度约束必须用 inline style | 待排查 Tailwind 版本/PostCSS 配置 |
+| **Tailwind 任意值 class 不生成 CSS** | 已定位根因：动态拼接 class 不可见（静态书写正常）；规范已禁动态拼接 | 已于 v2.1 P0 勘正 |
 | OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
 | ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；运行时接线 P3 已完成（`spawn-helpers.ts` 显式透传 `provider.platform`） | ~~P3~~ 已完成 |
@@ -588,7 +588,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 ## 已知限制
 
 - Marketplace 当前只支持 zip 包 + checksum 校验，未做签名验证（v2）。
-- **Tailwind 任意值 class（如 `max-w-[70%]`）不生成 CSS**——宽度约束需用 inline style（`style={{ maxWidth: '70%' }}`）。待排查 Tailwind/PostCSS 配置。
+- **Tailwind 任意值 class 仅静态书写时保证生成**——运行时动态拼接的 class（模板字符串插值）JIT 扫描器不可见、对应 CSS 不生成（v2.1 P0 探针实测结论）。静态任意值（`max-w-[70%]`、`text-[13px]`）可正常使用；规范见 `docs/dev/design-system.md` §5。
 - **2.0.0 升级为完全重新开始**——旧 v1 库不做数据迁移（D5 决策）；P5 已实现自动导出（Markdown/JSON 落 `upgrade-export-<时间戳>/`）+ 备份重命名（`state.db.legacy-v1.bak`）+ 首启一次性提示。历史 session/agent 定义需手动导入新库（参考 P5 实施计划）
 
 ## 许可
