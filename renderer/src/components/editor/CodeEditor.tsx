@@ -1,12 +1,15 @@
 // renderer/src/components/editor/CodeEditor.tsx
 // Monaco 编辑器组件：多 tab 栏 + 编辑区 + Ctrl+S 保存（IPC file:write）
+// v2.1 P3：tab 栏/空态 token 化（EmptyState + File/X lucide）；主题接线（P2 Task 10）不动
 import { useCallback, useState } from 'react';
 import Editor, { type Monaco } from '@monaco-editor/react';
+import { File, X } from 'lucide-react';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useThemeStore } from '../../stores/theme.store';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
+import { EmptyState } from '../ui/EmptyState';
 
 export function CodeEditor() {
   const { tabs, activeTab, updateContent, markSaved, setActive, closeTab } =
@@ -41,11 +44,8 @@ export function CodeEditor() {
   // 无 tab 时显示空状态
   if (tabs.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500">
-        <div className="text-center">
-          <div className="text-4xl mb-2">📄</div>
-          <p className="text-sm">双击文件打开编辑器</p>
-        </div>
+      <div className="flex flex-1 items-center justify-center">
+        <EmptyState icon={File} title="双击文件打开编辑器" />
       </div>
     );
   }
@@ -53,29 +53,30 @@ export function CodeEditor() {
   return (
     <div className="flex-1 flex flex-col" onKeyDown={handleKeyDown}>
       {/* Tab 栏 */}
-      <div className="flex bg-bg-secondary border-b border-border-subtle overflow-x-auto">
+      <div className="flex bg-surface-1 border-b border-subtle overflow-x-auto">
         {tabs.map((tab) => (
           <button
             key={tab.filePath}
             onClick={() => setActive(tab.filePath)}
             className={cn(
-              'px-3 py-1.5 text-sm border-r border-border-subtle flex items-center gap-2 whitespace-nowrap',
-              tab.filePath === activeTab ? 'bg-bg-primary' : 'hover:bg-bg-tertiary',
+              'px-3 py-1.5 text-sm border-r border-subtle flex items-center gap-2 whitespace-nowrap',
+              tab.filePath === activeTab ? 'bg-surface-2 text-primary' : 'hover:bg-surface-3',
             )}
           >
-            {/* dirty 标记 */}
+            {/* dirty 标记（● 文本，非 emoji） */}
             <span>{tab.dirty ? '●' : ''}</span>
             <span className="truncate max-w-[150px]">
               {tab.filePath.split('/').pop()}
             </span>
             <span
+              aria-label="关闭"
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(tab.filePath);
               }}
-              className="text-neutral-500 hover:text-white ml-1"
+              className="text-tertiary hover:text-primary ml-1"
             >
-              ×
+              <X size={12} strokeWidth={1.75} aria-hidden />
             </span>
           </button>
         ))}
