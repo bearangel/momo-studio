@@ -2,6 +2,7 @@
 //
 // 输入框上方工具条：成员切换按钮 + 创建任务按钮（B7），预留更多扩展位。
 // 纯展示组件（CreateTaskButton 自管 dialog 状态），showMembers 状态由 MiddlePanel 管理。
+import { Users } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { CreateTaskButton } from './CreateTaskButton';
 
@@ -26,7 +27,7 @@ export function InputToolbar({
   activeSessionId,
 }: Props) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1 border-t border-border-subtle bg-bg-secondary">
+    <div className="flex items-center gap-2 px-3 py-1 border-t border-subtle bg-surface-1">
       <button
         type="button"
         onClick={onToggleMembers}
@@ -36,13 +37,13 @@ export function InputToolbar({
         aria-pressed={showMembers}
         className={cn(
           'inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors',
-          'disabled:opacity-40 disabled:cursor-not-allowed',
+          'disabled:cursor-not-allowed disabled:opacity-40',
           showMembers
-            ? 'bg-accent-blue/20 text-accent-blue'
-            : 'text-neutral-400 hover:bg-bg-tertiary hover:text-neutral-200',
+            ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+            : 'text-secondary hover:bg-surface-3 hover:text-primary',
         )}
       >
-        <span>👥</span>
+        <Users size={12} strokeWidth={1.75} aria-hidden />
         <span>成员</span>
       </button>
       {workspaceId && activeSessionId && (

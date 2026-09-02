@@ -21,13 +21,13 @@ describe('InputToolbar', () => {
   it('showMembers=true 时按钮高亮', () => {
     render(<InputToolbar showMembers={true} onToggleMembers={() => {}} disabled={false} />);
     const btn = screen.getByRole('button', { name: /成员/ });
-    expect(btn.className).toContain('accent-blue');
+    expect(btn.className).toContain('surface-active');
   });
 
   it('showMembers=false 时按钮不高亮', () => {
     render(<InputToolbar showMembers={false} onToggleMembers={() => {}} disabled={false} />);
     const btn = screen.getByRole('button', { name: /成员/ });
-    expect(btn.className).not.toContain('accent-blue');
+    expect(btn.className).not.toContain('surface-active');
   });
 
   it('disabled=true 时按钮禁用', () => {

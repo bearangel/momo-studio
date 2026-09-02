@@ -7,6 +7,8 @@
 // 有效值优先级：sessions.settings_json 的 maxToolCalls（非 null）→ global_settings.maxToolCalls。
 // 徽标文案：-1 → "∞"，0 → "禁用"，N → "N次"。
 import { useState, useEffect } from 'react';
+import { Wrench } from 'lucide-react';
+import { Button } from '../ui/Button';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings, SessionSettings } from '../../ipc/types';
 
@@ -80,9 +82,9 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
         type="button"
         onClick={openPopup}
         title="工具调用上限"
-        className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-neutral-400 hover:bg-bg-tertiary hover:text-neutral-200"
+        className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-secondary hover:bg-surface-3 hover:text-primary"
       >
-        <span>🔧</span>
+        <Wrench size={12} strokeWidth={1.75} aria-hidden />
         <span>{badgeLabel}</span>
       </button>
 
@@ -90,26 +92,26 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
         <>
           {/* 透明 backdrop：点击关闭 popup */}
           <div className="fixed inset-0 z-40" onClick={() => setEditing(false)} data-testid="badge-backdrop" />
-          <div className="absolute top-full right-0 mt-1 z-50 bg-bg-tertiary border border-border-subtle rounded-lg p-3 shadow-xl"
+          <div className="absolute top-full right-0 mt-1 z-50 border border-subtle bg-surface-1 rounded-lg p-3 shadow-lg"
             style={{ minWidth: 200 }}>
-            <div className="text-xs text-neutral-500 mb-2">工具调用上限</div>
+            <div className="text-xs text-tertiary mb-2">工具调用上限</div>
             <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                 <input type="radio" checked={draftChoice === 'inherit'}
                   onChange={() => setDraftChoice('inherit')} />
                 继承全局 ({globalDefault}次)
               </label>
-              <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                 <input type="radio" checked={draftChoice === 'disabled'}
                   onChange={() => setDraftChoice('disabled')} />
                 禁用工具 (0)
               </label>
-              <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                 <input type="radio" checked={draftChoice === 'unlimited'}
                   onChange={() => setDraftChoice('unlimited')} />
                 无限制 (∞)
               </label>
-              <label className="flex items-center gap-2 text-xs text-neutral-300">
+              <label className="flex items-center gap-2 text-xs text-secondary">
                 <input type="radio" checked={draftChoice === 'custom'}
                   onChange={() => {
                     setDraftChoice('custom');
@@ -120,16 +122,15 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
                   disabled={draftChoice !== 'custom'}
                   onChange={(e) => setDraftCustom(e.target.value)}
                   style={{ width: 60 }}
-                  className="bg-bg-secondary border border-border-subtle rounded px-1.5 py-0.5 text-neutral-100 disabled:opacity-40" />
+                  className="rounded border border-subtle bg-surface-2 px-1.5 py-0.5 text-primary focus:border-focus focus:outline-none disabled:opacity-40" />
               </label>
             </div>
             <div className="flex justify-end gap-2 mt-3">
               <button type="button" onClick={() => setEditing(false)}
-                className="text-xs px-2 py-1 text-neutral-400 hover:text-neutral-200">取消</button>
-              <button type="button" onClick={handleSave} disabled={saving}
-                className="text-xs px-3 py-1 rounded bg-accent-blue text-white disabled:opacity-50">
+                className="text-xs px-2 py-1 text-secondary hover:text-primary">取消</button>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
                 {saving ? '保存中...' : '保存'}
-              </button>
+              </Button>
             </div>
           </div>
         </>

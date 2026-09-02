@@ -10,6 +10,7 @@
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Bot, Lock, Pin } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -190,18 +191,20 @@ export function MentionInput() {
   };
 
   return (
-    <div className="border-t border-border-subtle bg-bg-secondary p-3 relative">
+    <div className="border-t border-subtle bg-surface-1 p-3 relative">
       {menuType === 'agent' && filteredMembers.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
-          <div className="px-3 py-1 text-xs text-neutral-500">选择要 @ 的 agent</div>
+        <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
+          <div className="px-3 py-1 text-xs text-tertiary">选择要 @ 的 agent</div>
           {filteredMembers.map((m) => (
             <button
               key={m.instanceId}
               type="button"
               onClick={() => selectMember(m)}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-bg-primary flex items-center gap-2"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
             >
-              <span>{m.iconEmoji || '🤖'}</span>
+              <span>
+                {m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}
+              </span>
               <span className="truncate">{m.agentName}</span>
             </button>
           ))}
@@ -209,16 +212,16 @@ export function MentionInput() {
       )}
 
       {menuType === 'task' && filteredTasks.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 bg-bg-tertiary border border-border-subtle rounded-lg shadow-xl py-1 max-h-48 overflow-auto z-50">
-          <div className="px-3 py-1 text-xs text-neutral-500">选择要引用的任务</div>
+        <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
+          <div className="px-3 py-1 text-xs text-tertiary">选择要引用的任务</div>
           {filteredTasks.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => selectTask(t)}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-bg-primary flex items-center gap-2"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
             >
-              <span>📌</span>
+              <Pin size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
               <span className="truncate">
                 #{t.id} · {t.title}
               </span>
@@ -236,7 +239,7 @@ export function MentionInput() {
               onClick={() =>
                 setPendingMentions((prev) => prev.filter((m) => m !== instanceId))
               }
-              className="text-xs px-2 py-0.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-red-500/20 hover:text-red-400"
+              className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
             >
               @{mentionDisplayName(instanceId)} ×
             </button>
@@ -245,7 +248,10 @@ export function MentionInput() {
       )}
 
       {readOnly && (
-        <div className="mb-2 text-xs text-neutral-500">🔒 会话成员已全部移出，会话只读（历史可查看）</div>
+        <div className="mb-2 text-xs text-tertiary inline-flex items-center gap-1">
+          <Lock size={12} strokeWidth={1.75} aria-hidden className="inline-block align-[-1px]" />
+          <span>会话成员已全部移出，会话只读（历史可查看）</span>
+        </div>
       )}
 
       <textarea
@@ -262,7 +268,7 @@ export function MentionInput() {
               : '请先选择房间'
         }
         rows={2}
-        className="w-full resize-none rounded-md bg-bg-tertiary border border-border-subtle px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-accent-blue focus:outline-none disabled:opacity-50"
+        className="w-full resize-none rounded-md border border-subtle bg-surface-2 px-3 py-2 text-sm text-primary placeholder:text-disabled focus:border-focus focus:outline-none disabled:opacity-50"
       />
     </div>
   );
