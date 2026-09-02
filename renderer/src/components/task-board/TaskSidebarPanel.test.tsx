@@ -214,7 +214,7 @@ describe('TaskSidebarPanel 远端节点分区（P4 Task 3 只读镜像）', () =
     expect(screen.getByText('30 秒前')).toBeInTheDocument();
     // 状态徽标挂在远端任务行内（TaskFilters 下拉也有同名 option，须按行 scope）
     const row = screen.getByText('#T-901 · 远端任务甲').parentElement as HTMLElement;
-    expect(within(row).getByText('待启动')).toBeInTheDocument();
+    expect(within(row).getByText('待分配')).toBeInTheDocument();
   });
 
   it('只读分区无任何操作按钮：节点名/任务行都不是按钮', async () => {

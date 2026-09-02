@@ -18,7 +18,7 @@ import type { RemoteNodeTasks } from '../../ipc/types';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { TaskList } from './TaskList';
 import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
-import { STATUS_LABEL, STATUS_COLOR } from './TaskCard';
+import { remoteStatusStyle } from '../../lib/task-status';
 
 /** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
 const REMOTE_REFRESH_INTERVAL_MS = 5000;
@@ -54,29 +54,30 @@ function RemoteTaskSection() {
   if (remoteTasks.length === 0) return null;
 
   return (
-    <div className="shrink-0 border-t border-border-subtle px-3 py-2">
-      <div className="text-xs font-medium text-neutral-400 mb-1">远端节点</div>
+    <div className="shrink-0 border-t border-subtle px-3 py-2">
+      <div className="text-xs font-medium text-tertiary mb-1">远端节点</div>
       <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
         {remoteTasks.map((node) => (
-          <div key={node.nodeId} className="border border-border-subtle rounded p-2">
+          <div key={node.nodeId} className="border border-subtle rounded p-2">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-neutral-200 truncate">
+              <span className="text-xs font-medium text-primary truncate">
                 {node.nodeName}
               </span>
-              <span className="text-xs text-neutral-500 shrink-0">
+              <span className="text-xs text-tertiary shrink-0">
                 <span>{formatRelativeTime(node.takenAt)}</span>
-                {node.stale && <span className="text-amber-500 ml-1">已离线?</span>}
+                {node.stale && <span className="text-status-warning ml-1">已离线?</span>}
               </span>
             </div>
             {node.tasks.map((t) => (
               <div key={t.id} className="flex items-center justify-between gap-2 mt-1">
-                <span className="text-xs text-neutral-300 truncate">
+                <span className="text-xs text-secondary truncate">
                   #{t.id} · {t.title}
                 </span>
-                {/* 跨版本对端可能送来未知状态枚举——回退原样展示 */}
-                <span className="text-xs shrink-0" style={{ color: STATUS_COLOR[t.status] }}>
-                  {STATUS_LABEL[t.status] ?? t.status}
-                </span>
+                {/* 跨版本对端可能送来未知状态枚举——remoteStatusStyle 回退原样展示 */}
+                {(() => {
+                  const s = remoteStatusStyle(t.status);
+                  return <span className={s.className}>{s.label}</span>;
+                })()}
               </div>
             ))}
           </div>
@@ -140,7 +141,7 @@ export function TaskSidebarPanel() {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-3 pt-3 pb-1 shrink-0">
-        <span className="text-sm font-medium text-neutral-200">任务</span>
+        <span className="text-sm font-medium text-primary">任务</span>
         {/* 无 workspace 时 CreateWorkspaceDialog 无宿主，禁用入口避免死按钮 */}
         <button
           type="button"
@@ -148,7 +149,7 @@ export function TaskSidebarPanel() {
           title="新建任务"
           onClick={() => setCreateOpen(true)}
           disabled={!workspace}
-          className="text-neutral-400 hover:text-neutral-100 disabled:opacity-40 disabled:hover:text-neutral-400 text-sm px-1 rounded"
+          className="text-tertiary hover:text-primary disabled:opacity-40 text-sm px-1 rounded"
         >
           ＋
         </button>

@@ -72,3 +72,18 @@ export function dispatchStatusStyle(status: DispatchStatus): TaskStatusStyle {
     className: `inline-flex h-5 items-center gap-1 rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES[tone]}`,
   };
 }
+/**
+ * 远端任务状态的安全展示（跨版本对端可能送来 TaskStatus 之外的枚举）：
+ * 已知状态走 taskStatusStyle；未知回退 neutral tone + 原样文案。
+ * TaskSidebarPanel 远端只读分区专用（spec D7 只读镜像）。
+ */
+export function remoteStatusStyle(status: string): { label: string; className: string } {
+  if (STATUS_LABEL[status as TaskStatusKey] !== undefined) {
+    const s = taskStatusStyle(status as TaskStatusKey);
+    return { label: s.label, className: s.className };
+  }
+  return {
+    label: status,
+    className: `inline-flex h-5 items-center rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES.neutral}`,
+  };
+}
