@@ -7,6 +7,8 @@
 // Mock 策略（momo-test-rules）：
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
 //   - 断言生产消费的字段（memberInstanceIds / leaderInstanceId / 调用顺序）。
+// v2.1 P3 语义锁：emoji 退役后视觉要素改语义查询——Avatar bot 兜底（title=成员名）、
+// 当前 leader 行 Crown 标记（title=团队 leader，TeamsPanel 同款）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -71,6 +73,15 @@ const MEMBER_3: WorkspaceAgentMember = {
   instanceId: 'inst-3',
   agentDefinitionId: 'def-3',
   agentUserId: '@tester:local',
+};
+
+/** def 不在 definitions 内（def 未加载场景）→ 成员行 iconEmoji 走 Avatar bot 兜底 */
+const MEMBER_4: WorkspaceAgentMember = {
+  ...MEMBER_1,
+  instanceId: 'inst-4',
+  agentDefinitionId: 'def-404',
+  agentUserId: '@ghost:local',
+  agentName: '幽灵成员',
 };
 
 const EXISTING_TEAM: Team = {
@@ -323,5 +334,33 @@ describe('TeamDialog — 编辑 diff 基准 = 提交时 store 现状（部分失
     // 降级路径仍按 editing 基准提交（后端守卫团队不存在时抛错兜底）
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(renameTeam).toHaveBeenCalledWith('team-1', '铁三角', '🛠️');
+  });
+});
+
+describe('TeamDialog — v2.1 视觉收敛语义锁', () => {
+  it('成员 def 未加载 → 成员行渲染 Avatar bot 兜底（title=成员名）', async () => {
+    useAgentStore.setState({ members: [MEMBER_1, MEMBER_2, MEMBER_3, MEMBER_4] });
+    render(<TeamDialog onClose={() => {}} />);
+    await waitFor(() => expect(loadMembers).toHaveBeenCalledWith('ws-1'));
+    // def-404 不在 definitions → iconEmoji 查不到 → Avatar bot（title=memberLabel 回退 agentName）
+    expect(screen.getByTitle('幽灵成员')).toBeInTheDocument();
+  });
+
+  it('当前 leader 行显示 Crown 标记；取消勾选 leader → 标记随复位消失', async () => {
+    render(<TeamDialog editing={EXISTING_TEAM} onClose={() => {}} />);
+    // 回填：inst-1 是 leader → Crown 存在且唯一
+    expect(screen.getAllByTitle('团队 leader')).toHaveLength(1);
+    // 取消勾选编码助手（当前 leader）→ leaderId 复位 → Crown 消失
+    clickMember('编码助手');
+    expect(screen.queryByTitle('团队 leader')).not.toBeInTheDocument();
+  });
+
+  it('创建模式选定 leader 后 Crown 出现且唯一', async () => {
+    render(<TeamDialog onClose={() => {}} />);
+    expect(screen.queryByTitle('团队 leader')).not.toBeInTheDocument();
+    clickMember('编码助手');
+    clickMember('评审员');
+    fireEvent.click(leaderRadio('评审员'));
+    expect(screen.getAllByTitle('团队 leader')).toHaveLength(1);
   });
 });
