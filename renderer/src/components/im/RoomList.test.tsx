@@ -128,10 +128,10 @@ describe('RoomList — 列表项图标语义派生', () => {
     expect(screen.queryByText('🐲')).not.toBeInTheDocument();
   });
 
-  it('成员全失效（空数组）→ 💬 兜底图标', () => {
+  it('成员全失效（空数组）→ 兜底图标（aria-label="会话图标"）', () => {
     sessionState.sessions = [makeSession({ id: 's1', title: '只读会话', members: [] })];
     render(<RoomList />);
-    expect(screen.getAllByText('💬').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('会话图标').length).toBeGreaterThan(0);
   });
 
   it('点击列表项 → selectSession(会话 id)', () => {
@@ -157,9 +157,9 @@ describe('RoomList — 入口迁移与空态', () => {
 
   it('空会话列表引导使用上方入口按钮', () => {
     render(<RoomList />);
-    // 空态文案被 <br/> 拆分——用部分匹配
+    // 空态接 EmptyState 后用按钮名称（非 emoji）描述引导路径
     expect(screen.getByText(/暂无会话/)).toBeInTheDocument();
-    expect(screen.getByText(/⚡/)).toBeInTheDocument();
-    expect(screen.getByText(/👥/)).toBeInTheDocument();
+    expect(screen.getByText(/快速会话/)).toBeInTheDocument();
+    expect(screen.getByText(/协作会话/)).toBeInTheDocument();
   });
 });

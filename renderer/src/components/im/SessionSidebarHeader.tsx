@@ -10,6 +10,7 @@
 // T13 移交约定：Picker 在其 try 块内调用 onContinue 且不 await——消费方（本组件）
 // 必须自行 catch 自己的错误，否则会成为未处理 rejection / 被 Picker 误显示。
 import { useEffect, useState } from 'react';
+import { Bolt, Users } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { DefaultAgentPickerDialog } from './DefaultAgentPickerDialog';
@@ -58,18 +59,20 @@ export function SessionSidebarHeader() {
         aria-label="快速会话"
         title="快速会话：直达工作空间默认 agent（未设置时先选择）"
         onClick={() => void handleQuick()}
-        className="flex-1 text-xs px-2 py-1.5 rounded bg-accent-blue/20 text-accent-blue hover:bg-accent-blue/30 transition-colors"
+        className="flex-1 text-xs px-2 py-1.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-90 transition-colors flex items-center justify-center gap-1"
       >
-        ⚡ 快速会话
+        <Bolt size={12} strokeWidth={1.75} aria-hidden />
+        快速会话
       </button>
       <button
         type="button"
         aria-label="协作会话"
         title="协作会话：选择单个 agent 或团队"
         onClick={() => setCollabOpen(true)}
-        className="flex-1 text-xs px-2 py-1.5 rounded bg-bg-tertiary text-neutral-300 hover:text-neutral-100 transition-colors"
+        className="flex-1 text-xs px-2 py-1.5 rounded bg-surface-2 text-secondary hover:text-primary transition-colors flex items-center justify-center gap-1"
       >
-        👥 协作会话
+        <Users size={12} strokeWidth={1.75} aria-hidden />
+        协作会话
       </button>
 
       {pickerOpen && workspace && (
