@@ -67,14 +67,14 @@ describe('ViewSidebar', () => {
 
   it('折叠态 48px 仅显示当前视图图标，内容隐藏；点击展开', () => {
     useUiStore.setState({ sidebarCollapsed: true });
-    render(<ViewSidebar />);
+    const { container } = render(<ViewSidebar />);
     // 内容隐藏
     expect(screen.queryByTestId('room-list-stub')).not.toBeInTheDocument();
     // 折叠轨：48px + 会话图标
     const rail = screen.getByTestId('view-sidebar');
     expect(rail.style.width).toBe('48px');
     expect(screen.getByLabelText('展开侧边栏')).toBeInTheDocument();
-    expect(screen.getByText('💬')).toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-message-square')).not.toBeNull();
 
     // 点击折叠轨 → 展开，内容恢复
     fireEvent.click(screen.getByLabelText('展开侧边栏'));
@@ -83,13 +83,13 @@ describe('ViewSidebar', () => {
     expect(screen.getByTestId('view-sidebar').style.width).toBe('260px');
   });
 
-  it('折叠态图标跟随视图：files → 📁 / tasks → 📋', () => {
+  it('折叠态图标跟随视图：files → Folder / tasks → SquareKanban', () => {
     useUiStore.setState({ activeView: 'files', sidebarCollapsed: true });
-    const { rerender } = render(<ViewSidebar />);
-    expect(screen.getByText('📁')).toBeInTheDocument();
+    const { container, rerender } = render(<ViewSidebar />);
+    expect(container.querySelector('svg.lucide-folder')).not.toBeNull();
 
     useUiStore.setState({ activeView: 'tasks' });
     rerender(<ViewSidebar />);
-    expect(screen.getByText('📋')).toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-square-kanban')).not.toBeNull();
   });
 });

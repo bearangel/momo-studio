@@ -4,7 +4,8 @@
 //   im → RoomList；files → FileTree（onSelectFile 内部直连 editor.store + ipc）；
 //   tasks → TaskSidebarPanel；agents/marketplace/settings → null（主区全宽）。
 // 折叠态 48px 仅图标（Sidebar 承载），展开 260px。Ctrl/Cmd+B 监听在 MainLayout。
-import { useCallback } from 'react';
+import { useCallback, type ReactNode } from 'react';
+import { MessageSquare, Folder, SquareKanban } from 'lucide-react';
 import { useUiStore, type ViewKey } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -16,15 +17,15 @@ import { TaskSidebarPanel } from '../task-board/TaskSidebarPanel';
 import { Sidebar } from './Sidebar';
 
 interface ViewMeta {
-  icon: string;
+  icon: ReactNode;
   label: string;
 }
 
 /** 有侧边栏的三个视图的图标/文案（其余视图返回 null） */
 const VIEW_META: Partial<Record<ViewKey, ViewMeta>> = {
-  im: { icon: '💬', label: '会话' },
-  files: { icon: '📁', label: '文件' },
-  tasks: { icon: '📋', label: '看板' },
+  im: { icon: <MessageSquare size={17} strokeWidth={1.75} aria-hidden />, label: '会话' },
+  files: { icon: <Folder size={17} strokeWidth={1.75} aria-hidden />, label: '文件' },
+  tasks: { icon: <SquareKanban size={17} strokeWidth={1.75} aria-hidden />, label: '看板' },
 };
 
 export function ViewSidebar() {
