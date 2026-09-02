@@ -1,9 +1,12 @@
 // 供应商注册表 UI（P2 Task 6 两列重构，照 settings.html「模型服务」原型）：
-// 左列 218px 供应商列表（名称 + 模型数徽标 + 默认⭐ + 「＋」创建入口）；
+// 左列 218px 供应商列表（名称 + 模型数徽标 + 默认 Star 标记 + Plus 创建入口）；
 // 右列配置卡（名称/平台下拉/BaseURL/APIKey 留空不改/检查连接/保存）+ ProviderModelList 模型管理。
 // defaultModel 字段已从 UI 移除（类型保留 deprecated，agent 定义快捷填充仍读旧列）。
+// v2.1 P1：token 化 + emoji 清零 + 测试结果结构化状态（cn 驱动状态色）。
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Star, Plus } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { cn } from '../../lib/cn';
 import { useProviderStore } from '../../stores/provider.store';
 import { ProviderDialog } from './ProviderDialog';
 import { ProviderModelList } from './ProviderModelList';
@@ -58,24 +61,29 @@ export function ProviderSettings() {
 
   return (
     <div className="flex gap-4 items-stretch">
-      <aside style={{ width: '218px' }} className="shrink-0 flex flex-col border border-border-subtle rounded-lg bg-bg-secondary overflow-hidden self-start">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
-          <span className="text-xs text-neutral-400">{loading ? '加载中…' : `供应商（${providers.length}）`}</span>
+      <aside style={{ width: '218px' }} className="shrink-0 flex flex-col rounded-lg border border-subtle bg-surface-1 overflow-hidden self-start">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-subtle">
+          <span className="text-xs text-secondary">{loading ? '加载中…' : `供应商（${providers.length}）`}</span>
           <button type="button" onClick={() => setDialogOpen(true)} aria-label="添加供应商" title="添加供应商"
-            className="text-xs px-1.5 rounded border border-border-subtle text-neutral-300 hover:bg-bg-tertiary">＋</button>
+            className="flex items-center justify-center text-xs px-1.5 rounded border border-subtle text-secondary hover:bg-surface-3">
+            <Plus size={12} strokeWidth={1.75} aria-hidden />
+          </button>
         </div>
         <div className="flex-1 overflow-auto p-1.5 flex flex-col gap-1">
           {!loading && providers.length === 0 && (
-            <p className="text-xs text-neutral-500 px-1.5 py-1">暂无供应商。点击右上角「＋」创建（如 GLM / DeepSeek / OpenAI）。</p>
+            <p className="text-xs text-tertiary px-1.5 py-1">暂无供应商。点击右上角「＋」创建（如 GLM / DeepSeek / OpenAI）。</p>
           )}
           {providers.map((p) => (
             <button key={p.id} type="button" onClick={() => setSelectedId(p.id)}
-              className={`text-left text-sm px-2 py-1.5 rounded flex items-center gap-1.5 min-w-0 ${
-                selectedId === p.id ? 'bg-accent-blue/15 text-neutral-100' : 'text-neutral-300 hover:bg-bg-tertiary'
-              }`}>
-              {p.isDefault && <span title="默认供应商" className="shrink-0">⭐</span>}
+              className={cn('text-left text-sm px-2 py-1.5 rounded flex items-center gap-1.5 min-w-0',
+                selectedId === p.id ? 'bg-surface-active text-primary' : 'text-secondary hover:bg-surface-3')}>
+              {p.isDefault && (
+                <span title="默认供应商" className="shrink-0 text-accent-500">
+                  <Star size={12} strokeWidth={1.75} aria-hidden fill="currentColor" />
+                </span>
+              )}
               <span className="truncate flex-1">{p.name}</span>
-              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-neutral-400" title="模型数">
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-secondary" title="模型数">
                 {modelCounts[p.id] ?? 0}
               </span>
             </button>
@@ -96,7 +104,7 @@ export function ProviderSettings() {
             <ProviderModelList providerId={selected.id} onChanged={() => void refreshCounts()} />
           </>
         ) : (
-          <div className="border border-dashed border-border-subtle rounded-lg p-8 text-sm text-neutral-500 flex items-center justify-center">
+          <div className="border border-dashed border-subtle rounded-lg p-8 text-sm text-tertiary flex items-center justify-center">
             从左侧选择一个供应商查看配置，或点击「＋」添加。
           </div>
         )}
@@ -124,7 +132,7 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [apiKey, setApiKey] = useState('');
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
   const handleTest = async (): Promise<void> => {
@@ -136,9 +144,9 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
       const models = await ipc.provider.listModels(provider.id);
       const model = models.find((m) => m.enabled)?.modelId ?? '';
       const r = await ipc.provider.testConnection({ baseUrl, apiKey: key, model });
-      setTestResult(r.ok ? '✅ 连接成功' : `❌ ${r.error}`);
+      setTestResult(r.ok ? { ok: true, text: '连接成功' } : { ok: false, text: r.error ?? '连接失败' });
     } catch (e) {
-      setTestResult(`❌ ${e instanceof Error ? e.message : String(e)}`);
+      setTestResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {
       setTesting(false);
     }
@@ -166,45 +174,51 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
   };
 
   return (
-    <div className="border border-border-subtle rounded-lg bg-bg-secondary p-4 flex flex-col gap-3">
+    <div className="rounded-lg border border-subtle bg-surface-1 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm text-neutral-100">供应商配置</h3>
+        <h3 className="text-sm text-primary">供应商配置</h3>
         <div className="flex items-center gap-2">
           <button type="button" onClick={onSetDefault} disabled={provider.isDefault}
-            className="text-xs text-neutral-400 hover:text-neutral-200 disabled:opacity-40">⭐ 设为默认</button>
+            className="inline-flex items-center gap-1 text-xs text-secondary hover:text-primary disabled:opacity-40">
+            <Star size={12} strokeWidth={1.75} aria-hidden /> 设为默认
+          </button>
           <button type="button" onClick={handleDelete}
-            className="text-xs text-red-400 hover:text-red-300">删除</button>
+            className="text-xs text-status-error hover:text-status-error">删除</button>
         </div>
       </div>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <label className="text-xs text-neutral-400">名称
+        <label className="text-xs text-secondary">名称
           <input value={name} onChange={(e) => setName(e.target.value)} required
-            className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100" />
+            className="mt-1 w-full rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary" />
         </label>
-        <label className="text-xs text-neutral-400">平台
+        <label className="text-xs text-secondary">平台
           <select value={platform} onChange={(e) => setPlatform(e.target.value as ProviderPlatform)}
-            className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100">
+            className="mt-1 w-full rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary">
             <option value="openai">OpenAI 兼容</option>
             <option value="anthropic">Anthropic</option>
           </select>
         </label>
-        <label className="text-xs text-neutral-400">Base URL
+        <label className="text-xs text-secondary">Base URL
           <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required placeholder="https://open.bigmodel.cn/api/coding/paas/v4"
-            className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100" />
+            className="mt-1 w-full rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary" />
         </label>
-        <label className="text-xs text-neutral-400">API Key（留空不修改）
+        <label className="text-xs text-secondary">API Key（留空不修改）
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="••••••••"
-            className="mt-1 w-full bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100" />
+            className="mt-1 w-full rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary" />
         </label>
         <div className="flex items-center gap-3">
           <button type="button" onClick={handleTest} disabled={testing}
-            className="text-xs px-2 py-1 rounded border border-border-subtle text-neutral-300 hover:bg-bg-tertiary disabled:opacity-50">
+            className="text-xs px-2 py-1 rounded border border-subtle text-secondary hover:bg-surface-3 disabled:opacity-50">
             {testing ? '检查中…' : '检查连接'}
           </button>
-          {testResult && <span className="text-xs">{testResult}</span>}
+          {testResult && (
+            <span className={cn('text-xs', testResult.ok ? 'text-status-success' : 'text-status-error')}>
+              {testResult.text}
+            </span>
+          )}
           <span className="flex-1" />
           <button type="submit" disabled={saving}
-            className="text-xs px-3 py-1 rounded bg-accent-blue text-white disabled:opacity-50">
+            className="text-xs px-3 py-1 rounded bg-accent-500 text-inverse disabled:opacity-50">
             {saving ? '保存中…' : '保存'}
           </button>
         </div>

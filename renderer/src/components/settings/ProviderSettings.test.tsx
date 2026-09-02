@@ -1,10 +1,11 @@
 // renderer/src/components/settings/ProviderSettings.test.tsx
 //
 // ProviderSettings 两列重构行为测试（P2 Task 6，照 settings.html「模型服务」原型）：
-// - 左列 218px 供应商列表：名称 + 模型数徽标 + 默认⭐ + 「＋」入口
+// - 左列 218px 供应商列表：名称 + 模型数徽标 + 默认 Star 标记 + Plus 入口
 // - 挂载自动选中默认供应商 → 右列配置卡（名称/平台下拉/BaseURL/APIKey 留空不改）
 // - 保存 → update 携带 platform；APIKey 留空时不传
 // - 删除供应商（confirm 确认）
+// v2.1 P1：默认标记 emoji ⭐ → lucide Star；断言改语义查询（getByTitle('默认供应商')）
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ProviderSettings } from './ProviderSettings';
@@ -57,14 +58,15 @@ describe('ProviderSettings 两列布局', () => {
     expect(aside?.style.width).toBe('218px');
   });
 
-  it('供应商行显示名称 + 模型数徽标 + 默认⭐', async () => {
+  it('供应商行显示名称 + 模型数徽标 + 默认 Star 标记', async () => {
     render(<ProviderSettings />);
     const row1 = await screen.findByRole('button', { name: /P1/ });
     // 模型数徽标在 refreshCounts 完成后才出现，需等待
     await waitFor(() => expect(row1.textContent).toContain('2'));
-    expect(row1.textContent).toContain('⭐');
+    // 默认标记 emoji → lucide Star，外层 span title='默认供应商' 保留以语义查询
+    expect(within(row1).getByTitle('默认供应商')).toBeInTheDocument();
     const row2 = screen.getByRole('button', { name: /P2/ });
-    expect(row2.textContent).not.toContain('⭐');
+    expect(within(row2).queryByTitle('默认供应商')).not.toBeInTheDocument();
     expect(row2.textContent).toContain('0');
   });
 
