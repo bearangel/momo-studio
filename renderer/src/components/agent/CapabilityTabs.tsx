@@ -11,6 +11,8 @@
 //
 // 设计依据：docs/plans/2026-08-11-v1.6-capability-config.md「CapabilityTabs」块。
 // 被 DefinitionEditor（edit / readonly 模式）和 MemberEditDialog（override 模式）复用。
+// v2.1 P3：token 全量语义化（tab / 分组标签 / 快捷按钮 / 空态提示）；
+// 类别 emoji 来自 tool-catalog 静态目录数据，按数据豁免保留。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
@@ -78,7 +80,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
   return (
     <div className="flex flex-col gap-2">
       {/* Tab 头 */}
-      <div className="flex gap-1 border-b border-border-subtle">
+      <div className="flex gap-1 border-b border-subtle">
         {(['tools', 'mcp', 'skill'] as const).map((t) => (
           <button
             key={t}
@@ -86,8 +88,8 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
             className={cn(
               'text-xs px-2.5 py-1 -mb-px border-b-2 transition-colors',
               tab === t
-                ? 'border-accent-blue text-accent-blue'
-                : 'border-transparent text-neutral-400 hover:text-neutral-200',
+                ? 'border-accent-500 text-accent-600 dark:text-accent-300'
+                : 'border-transparent text-secondary hover:text-primary',
             )}
             onClick={() => setTab(t)}
           >
@@ -101,7 +103,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
         <div className="flex flex-col gap-2">
           {TOOL_CATEGORIES.map((cat) => (
             <div key={cat.label}>
-              <div className="text-xs text-neutral-500 mb-1">
+              <div className="text-xs text-tertiary mb-1">
                 {cat.emoji} {cat.label}
               </div>
               <div className="flex flex-wrap gap-2">
@@ -110,7 +112,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
                   return (
                     <label
                       key={tool}
-                      className="flex items-center gap-1 text-xs text-neutral-300"
+                      className="flex items-center gap-1 text-xs text-secondary"
                     >
                       <input
                         type="checkbox"
@@ -132,21 +134,21 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
             <div className="flex gap-1 mt-1">
               <button
                 type="button"
-                className="text-xs px-2 py-0.5 rounded bg-bg-tertiary hover:bg-border-subtle"
+                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
                 onClick={() => onChange({ ...value, tools: [...ALL_BUILTIN_TOOLS] })}
               >
                 全选
               </button>
               <button
                 type="button"
-                className="text-xs px-2 py-0.5 rounded bg-bg-tertiary hover:bg-border-subtle"
+                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
                 onClick={() => onChange({ ...value, tools: [] })}
               >
                 清空
               </button>
               <button
                 type="button"
-                className="text-xs px-2 py-0.5 rounded bg-bg-tertiary hover:bg-border-subtle"
+                className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
                 onClick={() => onChange({ ...value, tools: [...SAFE_MINIMUM_TOOLS] })}
               >
                 安全最小集
@@ -156,7 +158,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
 
           {/* override 模式：提示默认值（delta 由调用方在保存时计算） */}
           {mode === 'override' && defaultValue && (
-            <div className="text-xs text-neutral-500 mt-1">
+            <div className="text-xs text-tertiary mt-1">
               默认（def + workspace）：{defaultValue.tools.join(', ') || '无'}
               <br />
               勾选 = 保留/添加；取消 = 移除
@@ -169,7 +171,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
       {tab === 'mcp' && (
         <div className="flex flex-col gap-1">
           {mcps.length === 0 ? (
-            <div className="text-xs text-neutral-500">
+            <div className="text-xs text-tertiary">
               尚未注册任何 MCP（去 Marketplace → + 添加 MCP）
             </div>
           ) : (
@@ -178,7 +180,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
               return (
                 <label
                   key={m.slug}
-                  className="flex items-center gap-1 text-xs text-neutral-300"
+                  className="flex items-center gap-1 text-xs text-secondary"
                 >
                   <input
                     type="checkbox"
@@ -188,7 +190,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
                     onChange={(e) => toggleItem('mcps', m.slug, e.target.checked)}
                   />
                   {m.name}
-                  <span className="text-neutral-500">[{m.source}]</span>
+                  <span className="text-tertiary">[{m.source}]</span>
                 </label>
               );
             })
@@ -200,14 +202,14 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
       {tab === 'skill' && (
         <div className="flex flex-col gap-1">
           {skills.length === 0 ? (
-            <div className="text-xs text-neutral-500">尚未安装任何 Skill</div>
+            <div className="text-xs text-tertiary">尚未安装任何 Skill</div>
           ) : (
             skills.map((s) => {
               const checked = value.skills.includes(s.slug);
               return (
                 <label
                   key={s.slug}
-                  className="flex items-center gap-1 text-xs text-neutral-300"
+                  className="flex items-center gap-1 text-xs text-secondary"
                 >
                   <input
                     type="checkbox"
@@ -217,7 +219,7 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
                     onChange={(e) => toggleItem('skills', s.slug, e.target.checked)}
                   />
                   {s.name} ({s.slug})
-                  <span className="text-neutral-500">[{s.source}]</span>
+                  <span className="text-tertiary">[{s.source}]</span>
                 </label>
               );
             })

@@ -25,15 +25,15 @@ export function AgentsView() {
 
   return (
     <div className="flex flex-col flex-1 min-w-0 h-full">
-      <div className="flex border-b border-border-subtle shrink-0">
+      <div className="flex border-b border-subtle shrink-0">
         <button
           type="button"
           onClick={() => setTab('members')}
           className={cn(
             'px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
             tab === 'members'
-              ? 'border-accent-blue text-neutral-100'
-              : 'border-transparent text-neutral-400 hover:text-neutral-200',
+              ? 'border-accent-500 text-primary'
+              : 'border-transparent text-secondary hover:text-primary',
           )}
         >
           Agent 成员
@@ -44,8 +44,8 @@ export function AgentsView() {
           className={cn(
             'px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
             tab === 'teams'
-              ? 'border-accent-blue text-neutral-100'
-              : 'border-transparent text-neutral-400 hover:text-neutral-200',
+              ? 'border-accent-500 text-primary'
+              : 'border-transparent text-secondary hover:text-primary',
           )}
         >
           团队

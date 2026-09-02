@@ -183,14 +183,14 @@ describe('MembersPanel — 成员行渲染', () => {
     // 模型（次级文本）
     expect(screen.getByText('gpt-4o')).toBeInTheDocument();
     expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
-    // 在线状态：inst-1 运行中 / inst-2 已停止
-    expect(screen.getByText('▶ 运行中')).toBeInTheDocument();
-    expect(screen.getByText('⏸ 已停止')).toBeInTheDocument();
+    // 在线状态：inst-1 运行中（Play）/ inst-2 已停止（Pause）——v2.1 P3 图标 lucide 化
+    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByText('已停止')).toBeInTheDocument();
   });
 
-  it('仅默认会话 agent 显示 ⭐ 标记；非默认成员提供「设为默认」按钮', async () => {
+  it('仅默认会话 agent 显示 Star 标记；非默认成员提供「设为默认」按钮', async () => {
     await renderLoaded();
-    // ⭐ 唯一（inst-1 是 defaultAgentInstanceId）
+    // Star 标记唯一（inst-1 是 defaultAgentInstanceId，title 语义不变）
     expect(screen.getAllByTitle('默认会话 agent')).toHaveLength(1);
     // 非默认成员才有「设为默认」
     expect(screen.getByText('设为默认')).toBeInTheDocument();

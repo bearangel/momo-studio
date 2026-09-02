@@ -140,18 +140,21 @@ describe('TeamsPanel — 团队卡片渲染', () => {
     });
   });
 
-  it('团队卡片渲染 icon、名称、👑leader 标记与成员 chips', async () => {
+  it('团队卡片渲染 icon、名称、Crown leader 标记与成员 chips', async () => {
     render(<TeamsPanel />);
     await waitFor(() => {
       expect(loadTeamsMock).toHaveBeenCalledWith('ws-1');
     });
     expect(screen.getByText('攻坚组')).toBeInTheDocument();
+    // team.iconEmoji 是用户数据（DB 存储），照常渲染
     expect(screen.getByText('🛠️')).toBeInTheDocument();
-    // leader chip（inst-1=编码助手）带 👑 前缀
-    expect(screen.getByText('👑编码助手')).toBeInTheDocument();
-    // 普通成员 chip 无 👑
-    expect(screen.getByText('评审员')).toBeInTheDocument();
-    expect(screen.queryByText('👑评审员')).not.toBeInTheDocument();
+    // leader chip（inst-1=编码助手）：title + Crown svg + 成员名（v2.1 P3 👑 → Crown）
+    const leaderChip = screen.getByTitle('团队 leader');
+    expect(leaderChip).toHaveTextContent('编码助手');
+    expect(leaderChip.querySelector('svg')).toBeInTheDocument();
+    // 普通成员 chip 无 Crown svg
+    const normalChip = screen.getByText('评审员');
+    expect(normalChip.querySelector('svg')).not.toBeInTheDocument();
   });
 
   it('头部提供「+ 新建团队」入口，点击打开 TeamDialog（创建模式）', async () => {
