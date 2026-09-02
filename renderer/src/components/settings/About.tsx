@@ -23,9 +23,9 @@ export function About() {
   if (!info) {
     return (
       <div className="space-y-4">
-        <h2 className="text-neutral-100 text-base">关于</h2>
-        {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
-        {!error && <p className="text-sm text-neutral-400">加载中...</p>}
+        <h2 className="text-primary text-base">关于</h2>
+        {error && <p className="text-xs text-status-error" role="alert">{error}</p>}
+        {!error && <p className="text-sm text-secondary">加载中...</p>}
       </div>
     );
   }
@@ -40,20 +40,20 @@ export function About() {
 
   return (
     <div className="space-y-4 max-w-[560px]">
-      <h2 className="text-neutral-100 text-base">关于</h2>
-      <p className="text-sm text-neutral-400">Momo Studio 是本地桌面端多 agent 协作平台。</p>
+      <h2 className="text-primary text-base">关于</h2>
+      <p className="text-sm text-secondary">Momo Studio 是本地桌面端多 agent 协作平台。</p>
 
-      <div className="border border-border-subtle rounded-lg bg-bg-secondary p-4 flex flex-col gap-2"
+      <div className="rounded-lg border border-subtle bg-surface-1 p-4 flex flex-col gap-2"
         data-testid="about-info-card">
         {rows.map((r) => (
           <div key={r.label} className="flex items-center gap-3 text-sm">
-            <span className="text-neutral-500 w-24">{r.label}</span>
-            <span className="text-neutral-100 font-mono">{r.value}</span>
+            <span className="text-tertiary w-24">{r.label}</span>
+            <span className="text-primary font-mono">{r.value}</span>
           </div>
         ))}
       </div>
 
-      <p className="text-[11px] text-neutral-500">
+      <p className="text-[11px] text-tertiary">
         数据目录：<code className="font-mono">{info.userDataDir}</code>
       </p>
     </div>

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { type AuditQuotaInfo, type ToolCallRecord } from '../../ipc/types';
 import { Button } from '../ui/Button';
+import { cn } from '../../lib/cn';
 
 interface Props {
   workspaceId: string;
@@ -134,15 +135,15 @@ export function AuditLog({ workspaceId }: Props) {
   return (
     <section className="flex flex-col gap-3">
       <div>
-        <h3 className="text-sm font-semibold text-neutral-200">审计日志</h3>
-        <p className="text-xs text-neutral-500">agent 工具调用记录（每页 {PAGE_SIZE} 条）</p>
+        <h3 className="text-sm font-semibold text-primary">审计日志</h3>
+        <p className="text-xs text-tertiary">agent 工具调用记录（每页 {PAGE_SIZE} 条）</p>
       </div>
 
       {/* 配额卡：上限 + 占用 + 立即清理 */}
-      <div className="border border-border-subtle rounded-md p-3 flex flex-col gap-2">
+      <div className="border border-subtle rounded-md p-3 flex flex-col gap-2">
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-400">容量上限（MB）</span>
+            <span className="text-xs text-secondary">容量上限（MB）</span>
             <input
               value={quotaInput}
               onChange={(e) => setQuotaInput(e.target.value)}
@@ -150,7 +151,7 @@ export function AuditLog({ workspaceId }: Props) {
                 if (e.key === 'Enter') void saveQuota();
               }}
               placeholder="100=继承全局"
-              className="px-2 py-1 text-xs rounded bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none w-36"
+              className="px-2 py-1 text-xs rounded border border-subtle bg-surface-2 text-primary focus:border-focus focus:outline-none w-36"
             />
           </label>
           <Button size="sm" variant="ghost" disabled={quotaSaving} onClick={() => void saveQuota()}>
@@ -160,22 +161,21 @@ export function AuditLog({ workspaceId }: Props) {
             立即清理
           </Button>
         </div>
-        {quotaError && <div className="text-red-400 text-xs">{quotaError}</div>}
-        {cleanupMsg && <div className="text-green-400 text-xs">{cleanupMsg}</div>}
+        {quotaError && <div className="text-status-error text-xs">{quotaError}</div>}
+        {cleanupMsg && <div className="text-status-success text-xs">{cleanupMsg}</div>}
         {quotaInfo && (
           <div className="flex flex-col gap-1">
-            <div className="h-2 rounded bg-bg-tertiary overflow-hidden">
-              {/* Tailwind 任意值 class 在本仓库不生成 CSS，宽度/颜色用 inline style */}
+            <div className="h-2 rounded bg-surface-2 overflow-hidden">
               <div
                 data-testid="audit-quota-bar"
-                className="h-2 rounded transition-width"
-                style={{
-                  width: `${usedPct}%`,
-                  backgroundColor: usedPct >= 95 ? '#f87171' : '#3b82f6',
-                }}
+                className={cn(
+                  'h-2 rounded transition-width',
+                  usedPct >= 95 ? 'bg-status-error' : 'bg-accent-500',
+                )}
+                style={{ width: `${usedPct}%` }}
               />
             </div>
-            <span className="text-xs text-neutral-500">
+            <span className="text-xs text-tertiary">
               {formatBytes(quotaInfo.usedBytes)} / {quotaInfo.quotaMb} MB · {quotaInfo.rowCount} 条记录
             </span>
           </div>
@@ -185,7 +185,7 @@ export function AuditLog({ workspaceId }: Props) {
       {/* 筛选栏 */}
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-400">agent</span>
+          <span className="text-xs text-secondary">agent</span>
           <input
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
@@ -193,11 +193,11 @@ export function AuditLog({ workspaceId }: Props) {
               if (e.key === 'Enter') applyFilter();
             }}
             placeholder="@bot:localhost"
-            className="px-2 py-1 text-xs rounded bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none w-44"
+            className="px-2 py-1 text-xs rounded border border-subtle bg-surface-2 text-primary focus:border-focus focus:outline-none w-44"
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-400">工具名</span>
+          <span className="text-xs text-secondary">工具名</span>
           <input
             value={toolFilter}
             onChange={(e) => setToolFilter(e.target.value)}
@@ -205,7 +205,7 @@ export function AuditLog({ workspaceId }: Props) {
               if (e.key === 'Enter') applyFilter();
             }}
             placeholder="read_file"
-            className="px-2 py-1 text-xs rounded bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none w-44"
+            className="px-2 py-1 text-xs rounded border border-subtle bg-surface-2 text-primary focus:border-focus focus:outline-none w-44"
           />
         </label>
         <Button size="sm" variant="ghost" onClick={applyFilter}>
@@ -213,12 +213,12 @@ export function AuditLog({ workspaceId }: Props) {
         </Button>
       </div>
 
-      {error && <div className="text-red-400 text-sm">{error}</div>}
+      {error && <div className="text-status-error text-sm">{error}</div>}
 
       {/* 表格 */}
-      <div className="overflow-auto border border-border-subtle rounded-md max-h-[420px]">
+      <div className="overflow-auto border border-subtle rounded-md max-h-[420px]">
         <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-bg-secondary text-neutral-400">
+          <thead className="sticky top-0 bg-surface-1 text-secondary">
             <tr>
               <th className="text-left font-medium px-2 py-1.5">时间</th>
               <th className="text-left font-medium px-2 py-1.5">Agent</th>
@@ -230,37 +230,37 @@ export function AuditLog({ workspaceId }: Props) {
           <tbody>
             {loading && records.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center text-neutral-500 py-6">
+                <td colSpan={5} className="text-center text-tertiary py-6">
                   加载中…
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center text-neutral-500 py-6">
+                <td colSpan={5} className="text-center text-tertiary py-6">
                   暂无审计记录
                 </td>
               </tr>
             ) : (
               records.map((r) => (
-                <tr key={r.id} className="border-t border-border-subtle hover:bg-bg-tertiary">
-                  <td className="px-2 py-1.5 text-neutral-300 whitespace-nowrap">{r.timestamp}</td>
-                  <td className="px-2 py-1.5 text-neutral-300 font-mono truncate max-w-[180px]">
+                <tr key={r.id} className="border-t border-subtle hover:bg-surface-3">
+                  <td className="px-2 py-1.5 text-secondary whitespace-nowrap">{r.timestamp}</td>
+                  <td className="px-2 py-1.5 text-secondary font-mono truncate max-w-[180px]">
                     {r.agentBotUserId}
                   </td>
-                  <td className="px-2 py-1.5 text-neutral-200 font-mono">{r.toolName}</td>
+                  <td className="px-2 py-1.5 text-primary font-mono">{r.toolName}</td>
                   <td className="px-2 py-1.5">
                     <span
-                      className={
-                        'px-1.5 py-0.5 rounded ' +
-                        (r.success
-                          ? 'bg-green-500/15 text-green-400'
-                          : 'bg-red-500/15 text-red-400')
-                      }
+                      className={cn(
+                        'px-1.5 py-0.5 rounded',
+                        r.success
+                          ? 'bg-status-success-tint text-status-success'
+                          : 'bg-status-error-tint text-status-error',
+                      )}
                     >
                       {r.success ? '成功' : '失败'}
                     </span>
                   </td>
-                  <td className="px-2 py-1.5 text-right text-neutral-400 tabular-nums">
+                  <td className="px-2 py-1.5 text-right text-secondary tabular-nums">
                     {r.durationMs}ms
                   </td>
                 </tr>
@@ -271,7 +271,7 @@ export function AuditLog({ workspaceId }: Props) {
       </div>
 
       {/* 分页 */}
-      <div className="flex items-center justify-between text-xs text-neutral-500">
+      <div className="flex items-center justify-between text-xs text-tertiary">
         <span>
           第 {offset + 1}–{offset + records.length} 条
         </span>

@@ -54,12 +54,25 @@ describe('AuditLog', () => {
     expect(screen.getByText('25.0 MB / 50 MB · 123 条记录')).toBeInTheDocument();
   });
 
-  it('占用进度条宽度按 usedBytes/quotaMb 计算（50%）', async () => {
+  it('占用进度条宽度按 usedBytes/quotaMb 计算（50%）且低于 95% 用 accent class', async () => {
     const { container } = render(<AuditLog workspaceId="ws-1" />);
     await screen.findByText('25.0 MB / 50 MB · 123 条记录');
     const bar = container.querySelector<HTMLDivElement>('[data-testid="audit-quota-bar"]');
     expect(bar).toBeTruthy();
     expect(bar!.style.width).toBe('50%');
+    expect(bar).toHaveClass('bg-accent-500');
+    expect(bar).not.toHaveClass('bg-status-error');
+  });
+
+  it('占用 ≥95% 时进度条切到 status-error class（阈值分支锁死）', async () => {
+    getQuotaMock.mockResolvedValue({ quotaMb: 100, usedBytes: 100 * 1024 * 1024 * 0.97, rowCount: 1 });
+    const { container } = render(<AuditLog workspaceId="ws-1" />);
+    await screen.findByText(/97\.0 MB \/ 100 MB/);
+    const bar = container.querySelector<HTMLDivElement>('[data-testid="audit-quota-bar"]');
+    expect(bar).toBeTruthy();
+    expect(bar!.style.width).toBe('97%');
+    expect(bar).toHaveClass('bg-status-error');
+    expect(bar).not.toHaveClass('bg-accent-500');
   });
 
   it('输入数字保存 → setQuota(ws, n)', async () => {
