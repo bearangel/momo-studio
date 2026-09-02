@@ -16,10 +16,16 @@
 // 重启提示：保存成功后若（key 或 deltas 有变化）且成员运行中（lastRunning）
 // → 弹内提示「需重启才能生效」，用户可选 [立即重启]（stop + start）或
 // [稍后]（仅关闭）。
+//
+// v2.1 P3：手写 modal 外壳 → Dialog 原子件（P2 Task 14/15 先例）；旧色阶
+// token → 语义 token；ℹ️ → lucide Info（12px 密集行内）；待重启态吞掉
+// Dialog 的 Esc/遮罩关闭（保持原「重启提示期间点遮罩不关闭」语义）。
 import { useEffect, useMemo, useState } from 'react';
+import { Info } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { CapabilityTabs } from './CapabilityTabs';
 import {
@@ -141,31 +147,31 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     }
   }
 
+  // 待重启提示态吞掉 Dialog 的 Esc/遮罩关闭（原手写弹窗此态点遮罩不关闭，防误关重启提示）
+  const handleDialogClose = pendingRestart ? () => undefined : onClose;
+
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={pendingRestart ? undefined : onClose}
+    <Dialog
+      open
+      onClose={handleDialogClose}
+      title={`编辑成员：${def.iconEmoji} ${def.name}`}
+      width={448}
     >
-      <div
-        className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md max-h-[85vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-xl font-bold mb-1">
-          编辑成员：{def.iconEmoji} {def.name}
-        </h2>
-        <div className="text-xs text-neutral-500 mb-3">
+      <div className="flex flex-col gap-3">
+        <div className="text-xs text-tertiary">
           更新 API Key 与能力覆盖（不影响 agent 定义和其他工作空间成员）。
         </div>
 
-        {loading && <div className="text-sm text-neutral-400">加载中…</div>}
+        {loading && <div className="text-sm text-tertiary">加载中…</div>}
 
         {!loading && !pendingRestart && (
           <>
             {/* API Key 区 */}
-            <section className="flex flex-col gap-2 mb-4">
+            <section className="flex flex-col gap-2">
               {member.hasApiKeyOverride && (
-                <div className="text-xs text-accent-blue bg-accent-blue/10 rounded p-2">
-                  ℹ️ 当前使用独立 API key override
+                <div className="inline-flex items-center gap-1.5 rounded bg-surface-active p-2 text-xs text-accent-600 dark:text-accent-300">
+                  <Info size={12} strokeWidth={1.75} aria-hidden />
+                  当前使用独立 API key override
                 </div>
               )}
               <Input
@@ -178,13 +184,13 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
                 }}
                 placeholder="留空使用供应商默认 key"
               />
-              <div className="text-xs text-neutral-500">
+              <div className="text-xs text-tertiary">
                 留空清除 override，回退到供应商 key。未修改时保存不会动现有 key。
               </div>
             </section>
 
             {/* 能力覆盖区 */}
-            <section className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+            <section className="flex flex-col gap-2 border-t border-subtle pt-3">
               <CapabilityTabs
                 mode="override"
                 defaultValue={defaultCaps}
@@ -193,8 +199,8 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
               />
             </section>
 
-            {error && <div className="text-red-400 text-sm mt-2">{error}</div>}
-            <div className="flex gap-2 justify-end mt-3">
+            {error && <div className="text-status-error text-sm">{error}</div>}
+            <div className="flex gap-2 justify-end">
               <Button variant="ghost" type="button" onClick={onClose} disabled={saving}>
                 取消
               </Button>
@@ -207,10 +213,10 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
 
         {!loading && pendingRestart && (
           <>
-            <div className="text-sm text-neutral-300 mb-2">
-              已保存。该 agent 正在运行，<span className="text-accent-blue">需重启</span>才能生效。
+            <div className="text-sm text-secondary">
+              已保存。该 agent 正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
             </div>
-            {error && <div className="text-red-400 text-sm mb-2">{error}</div>}
+            {error && <div className="text-status-error text-sm">{error}</div>}
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" type="button" onClick={onClose} disabled={saving}>
                 稍后
@@ -222,6 +228,6 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
           </>
         )}
       </div>
-    </div>
+    </Dialog>
   );
 }
