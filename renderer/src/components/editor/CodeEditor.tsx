@@ -1,9 +1,10 @@
 // renderer/src/components/editor/CodeEditor.tsx
 // Monaco 编辑器组件：多 tab 栏 + 编辑区 + Ctrl+S 保存（IPC file:write）
-import { useCallback } from 'react';
-import Editor from '@monaco-editor/react';
+import { useCallback, useState } from 'react';
+import Editor, { type Monaco } from '@monaco-editor/react';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useThemeStore } from '../../stores/theme.store';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
 
@@ -11,6 +12,8 @@ export function CodeEditor() {
   const { tabs, activeTab, updateContent, markSaved, setActive, closeTab } =
     useEditorStore();
   const workspace = useWorkspaceStore((s) => s.getActive());
+  const resolved = useThemeStore((s) => s.resolved);
+  const [themeFallback, setThemeFallback] = useState(false);
   const activeTabData = tabs.find((t) => t.filePath === activeTab);
 
   // Ctrl/Cmd+S 保存当前 tab 内容到磁盘
@@ -82,7 +85,46 @@ export function CodeEditor() {
       {activeTabData && (
         <Editor
           height="100%"
-          theme="vs-dark"
+          theme={
+            themeFallback
+              ? resolved === 'dark'
+                ? 'vs-dark'
+                : 'vs'
+              : resolved === 'dark'
+                ? 'momo-dark'
+                : 'momo-light'
+          }
+          beforeMount={(monaco: Monaco) => {
+            // v2.1 双主题：编辑器底色对齐 canvas token（bg-canvas 的 hex 值），
+            // 注册失败回退内置 vs/vs-dark（catch 防御——spec §12 错误处理）
+            try {
+              monaco.editor.defineTheme('momo-dark', {
+                base: 'vs-dark',
+                inherit: true,
+                rules: [],
+                colors: {
+                  'editor.background': '#08090A',
+                  'editor.lineHighlightBackground': '#181A1F',
+                  'editorLineNumber.foreground': '#7F828B',
+                  'editor.selectionBackground': '#5E6AD255',
+                },
+              });
+              monaco.editor.defineTheme('momo-light', {
+                base: 'vs',
+                inherit: true,
+                rules: [],
+                colors: {
+                  'editor.background': '#FFFFFF',
+                  'editor.lineHighlightBackground': '#F1F1F3',
+                  'editorLineNumber.foreground': '#82858F',
+                  'editor.selectionBackground': '#5E6AD230',
+                },
+              });
+            } catch {
+              // 注册失败回退：theme prop 兜底用内置主题
+              setThemeFallback(true);
+            }
+          }}
           language={detectLanguage(activeTabData.filePath)}
           value={activeTabData.content}
           onChange={(value) => {
