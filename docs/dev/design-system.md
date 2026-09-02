@@ -3,6 +3,7 @@
 > 本文档是 renderer UI 开发的**唯一规范入口**。颜色一律用语义 token，图标一律用 lucide-react。
 > 完整设计依据：`docs/specs/2026-09-01-v2.1-ui-design-system-refactor-design.md`。
 > 机械强制：ESLint `no-restricted-syntax`（裸色号 / inline hex / emoji）+ P4 起 Tailwind `theme.colors` 独占。
+> 当前分档：全局 warn（存量 446 处 P1-P3 清零）+ `components/ui/` 与 `lib/task-status.ts` 已 error；P4 起全局 error 并移除 Tailwind 默认色阶。
 
 ## 1. 颜色：只用语义 token
 
@@ -34,7 +35,7 @@ Tailwind class 经 `renderer/tailwind.config.js` 映射生成。**组件代码�
 - 字号：20 页面标题 / 16 区块 / 14 组件标题 / **13 正文** / 12 辅助 / 11 大写标签 / 12.5 等宽
 - 间距 4px 网格：4/8/12/16/20/24；行高：会话列表 28、设置项 32
 - 圆角：4 chip / 6 按钮输入 / 8 卡片弹窗 / full 头像
-- 过渡 `transition-colors`（约 140ms）；主题切换**无动画**；focus-visible 全局 2px 焦点环（globals.css 已内置）
+- 过渡 `transition-colors`（Tailwind 默认 150ms；如需 140ms 精确值用 duration-[140ms]）；主题切换**无动画**；focus-visible 全局 2px 焦点环（globals.css 已内置）
 
 ## 3. 图标（lucide-react）
 

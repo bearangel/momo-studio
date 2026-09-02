@@ -9,7 +9,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 // v2.1 设计系统机械约束（docs/dev/design-system.md）：
 // 1) 禁 className 中标准 Tailwind 色阶类 → 用语义 token
 // 2) 禁 inline style 硬编码 hex/rgb 颜色 → 用语义 token class
-// 3) 禁 JSX 文本 emoji → 用 lucide-react 图标
+// 3) 禁 JSX 文本/属性字符串 emoji → 用 lucide-react 图标
 // P0 全局 warn（存量可见）；ui/ 与 task-status 新代码 error 零容忍；P4 全局升 error。
 const UI_RESTRICTED_SYNTAX = [
   {
@@ -25,6 +25,16 @@ const UI_RESTRICTED_SYNTAX = [
   {
     selector: 'JSXText[value=/\\p{Extended_Pictographic}/u]',
     message: '禁止 JSX 文本中的 emoji 图标：使用 lucide-react 线条图标',
+  },
+  {
+    // 字符串属性形态：aria-label="⚙️ 设置"、title={'🤖'} 等
+    selector: 'JSXAttribute[value.value=/\\p{Extended_Pictographic}/u]',
+    message: '禁止 JSX 属性字符串中的 emoji：使用 lucide-react 线条图标（属性值请用文字）',
+  },
+  {
+    // 表达式容器内的字符串字面量：attr={'⚙️'}
+    selector: 'JSXExpressionContainer Literal[value=/\\p{Extended_Pictographic}/u]',
+    message: '禁止 JSX 属性表达式中的 emoji 字符串：使用 lucide-react 线条图标（属性值请用文字）',
   },
 ];
 
