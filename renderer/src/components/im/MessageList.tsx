@@ -82,7 +82,7 @@ export function MessageList() {
 
   if (!activeSessionId) {
     return (
-      <div className="flex-1">
+      <div className="flex flex-1 items-center justify-center">
         <EmptyState icon={MessageSquare} title="未选择会话" description="在会话列表中选择一个房间开始对话" />
       </div>
     );
@@ -90,7 +90,7 @@ export function MessageList() {
 
   if (loading) {
     return (
-      <div className="flex-1">
+      <div className="flex flex-1 items-center justify-center">
         <EmptyState icon={MessageSquare} title="加载中…" />
       </div>
     );
@@ -98,7 +98,7 @@ export function MessageList() {
 
   if (!messages || messages.length === 0) {
     return (
-      <div className="flex-1">
+      <div className="flex flex-1 items-center justify-center">
         <EmptyState icon={MessageSquare} title="暂无消息" description="发送第一条消息开始对话" />
       </div>
     );

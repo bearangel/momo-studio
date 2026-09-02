@@ -102,7 +102,7 @@ export function DispatchChip({ child, subStream }: DispatchChipProps) {
         type="button"
         aria-expanded={expanded}
         onClick={handleToggle}
-        className="flex w-full items-center gap-1.5 rounded border border-subtle bg-surface-2 px-2 py-1 text-left text-xs transition-colors hover:bg-surface-3"
+        className="flex w-full items-center gap-1.5 rounded border border-subtle bg-surface-2 px-2 py-1 text-left text-xs cursor-pointer transition-colors hover:bg-surface-3"
       >
         <Send size={12} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-500" />
         {child.subAgentAvatar ? (

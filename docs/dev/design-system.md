@@ -79,4 +79,4 @@ class 字面量；运行时拼接的字符串不在扫描结果里，对应 CSS 
 
 - P1 起 Dialog 已**原子件级防抢焦**（内部已持焦时不抢）+ Esc capture 阻断双触发；`onClose` 传**稳定引用**（useCallback）仍是推荐写法，但不再是硬性要求
 - Dialog 的 Esc 关闭与 SettingsView 的全局 Esc 返回会**同时触发**：设置页内的弹窗消费方应在自身的 keydown 处理中 `stopPropagation` 或先关弹窗再由状态判定是否返回
-- Dialog 不内置焦点陷阱（focus trap）与滚动锁定；多层弹窗叠加时一个 Esc 会关闭所有层（各层独立监听）——需要单层关闭语义时由消费方管理层级
+- Dialog 不内置焦点陷阱（focus trap）与滚动锁定；多层弹窗叠加时，Esc 由**最外层（最先注册 capture 监听）**的弹窗响应并阻断其余层——逐层关闭自外向内；消费方无需自行管理 Esc 层级

@@ -24,7 +24,7 @@ export function ThinkingSection({ content, isStreaming }: Props) {
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-1.5 rounded bg-status-violet-tint px-2 py-1 text-xs text-status-violet"
+        className="flex w-full items-center gap-1.5 rounded bg-status-violet-tint px-2 py-1 text-xs text-status-violet cursor-pointer"
       >
         <Brain size={12} strokeWidth={1.75} aria-hidden />
         <span>思考过程</span>

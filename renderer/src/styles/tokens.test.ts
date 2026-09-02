@@ -69,6 +69,10 @@ describe('设计 token 定义', () => {
     // 会继承白色文字 → 亮色模式 surface-2 近白底不可见（P2 Task9 终审 Important）
     expect(css).toMatch(/\.md-body pre\s*\{[^}]*color:\s*rgb\(var\(--text-primary\)\)/);
     expect(css).toMatch(/\.md-body :not\(pre\) > code\s*\{[^}]*color:\s*rgb\(var\(--text-primary\)\)/);
+    // 同理：accent 底气泡内 a/blockquote 必须 color:inherit 反白——accent-600 链接
+    // 与 secondary 引用文字在 accent 底上均不可读（P2 终审 sweep 回归锁）
+    expect(css).toMatch(/\.bg-accent-500 \.md-body a\s*\{[^}]*color:\s*inherit/);
+    expect(css).toMatch(/\.bg-accent-500 \.md-body blockquote\s*\{[^}]*color:\s*inherit/);
   });
 
   it('暗黑模式声明 color-scheme（原生控件随主题）', () => {

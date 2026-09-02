@@ -50,7 +50,7 @@ export function ToolCallChip({
         aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors',
+          'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs cursor-pointer transition-colors',
           toneCls,
         )}
       >

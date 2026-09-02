@@ -30,7 +30,7 @@ export function TodoSection({ todos, isStreaming }: Props) {
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center justify-between bg-surface-2 px-3 py-1.5"
+        className="flex w-full items-center justify-between bg-surface-2 px-3 py-1.5 cursor-pointer"
       >
         <span className="inline-flex items-center gap-1.5 font-medium text-primary">
           <ListTodo size={13} strokeWidth={1.75} aria-hidden />
