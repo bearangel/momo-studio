@@ -6,18 +6,22 @@
 //   2. 选中后：回显文件名；读 ArrayBuffer（FileReader）
 //   3. 点 [上传] → ipc.resource.uploadSkill(buffer, file.name)
 //      后端返回 UploadedSkill[]，前端显示成功提示
-//   4. 成功 → onSuccess() 通知父组件刷新列表 → onClose() 关闭
+//   4. 成功 → onSuccess() 通知父组件刷新列表（弹窗保留显示成功消息，手动关闭）
 //   5. 失败（zip 缺 SKILL.md / 多根目录 / 解压失败）→ 红字错误，弹窗保持打开
 //
 // 简化版：无预检（previewZip），失败时由后端一次性抛错，前端展示。
 //
 // 约束：
 //   - 未选文件 → 上传按钮 disabled
-//   - 上传中 → 选择文件 / 取消 / 上传 全部 disabled（防双击）
+//   - 上传中 → 选择文件 / 取消 / 上传 全部 disabled（防双击），Esc / 遮罩关闭同样锁死
 //   - 中文界面 + 中文注释
+//
+// v2.1 P3：手写 modal 外壳 → Dialog 原子件；文件选择 input 保留原生
+// （原生选择器语义 + aria-label 测试钩子），周边仅 token 化。
 import { useRef, useState, type ChangeEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
 
 /**
  * 用 FileReader 把 File 读成 ArrayBuffer。
@@ -32,6 +36,9 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
     reader.readAsArrayBuffer(file);
   });
 }
+
+/** 上传锁定期传给 Dialog 的关闭回调（Esc / 遮罩点击 no-op，对齐原手写外壳的 backdrop 守卫） */
+const noop = (): void => undefined;
 
 interface Props {
   onClose: () => void;
@@ -90,69 +97,60 @@ export function UploadSkillDialog({ onClose, onSuccess }: Props) {
     }
   };
 
-  // 操作锁：上传中时所有可交互元素 disabled
+  // 操作锁：上传中时所有可交互元素 disabled，Dialog 的 Esc / 遮罩关闭同样锁死
   const lockAll = uploading;
   const canUpload = file !== null && !uploading;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={lockAll ? undefined : onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md"
-      >
-        <h2 className="text-xl font-bold mb-4">上传自定义 Skill</h2>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">Skill 压缩包（.zip）</label>
-            <div className="flex gap-2 items-center">
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={handlePick}
-                disabled={lockAll}
-              >
-                选择文件...
-              </Button>
-              <span className="text-sm text-neutral-400 truncate flex-1">
-                {file ? file.name : '未选择文件'}
-              </span>
-            </div>
-            {/* 隐藏的文件选择 input。aria-label 让测试可定位 */}
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".zip,application/zip"
-              onChange={handleFileChange}
-              className="hidden"
-              aria-label="选择文件"
+    <Dialog open onClose={lockAll ? noop : onClose} title="上传自定义 Skill" width={448}>
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-secondary">Skill 压缩包（.zip）</label>
+          <div className="flex gap-2 items-center">
+            <Button
+              variant="ghost"
+              type="button"
+              onClick={handlePick}
               disabled={lockAll}
-            />
-            <p className="text-xs text-neutral-500 mt-1">
-              支持三种 zip 结构：扁平（<code>SKILL.md</code> 在根目录）、
-              单子目录包裹（<code>{'<slug>/SKILL.md'}</code>）、多子目录批量（多个
-              <code>{'<slug>/'}</code>）。SKILL.md 顶部要有 YAML frontmatter（含
-              name / description）。macOS 的 <code>__MACOSX</code> 元数据会自动忽略。
-            </p>
-          </div>
-
-          {successMsg && (
-            <div className="text-green-400 text-sm break-all">{successMsg}</div>
-          )}
-          {error && <div className="text-red-400 text-sm break-all">{error}</div>}
-
-          <div className="flex gap-2 justify-end mt-2">
-            <Button variant="ghost" type="button" onClick={onClose} disabled={lockAll}>
-              取消
+            >
+              选择文件...
             </Button>
-            <Button type="button" onClick={handleUpload} disabled={!canUpload}>
-              {uploading ? '上传中…' : '上传'}
-            </Button>
+            <span className="text-sm text-tertiary truncate flex-1">
+              {file ? file.name : '未选择文件'}
+            </span>
           </div>
+          {/* 隐藏的文件选择 input。aria-label 让测试可定位 */}
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".zip,application/zip"
+            onChange={handleFileChange}
+            className="hidden"
+            aria-label="选择文件"
+            disabled={lockAll}
+          />
+          <p className="text-xs text-tertiary mt-1">
+            支持三种 zip 结构：扁平（<code>SKILL.md</code> 在根目录）、
+            单子目录包裹（<code>{'<slug>/SKILL.md'}</code>）、多子目录批量（多个
+            <code>{'<slug>/'}</code>）。SKILL.md 顶部要有 YAML frontmatter（含
+            name / description）。macOS 的 <code>__MACOSX</code> 元数据会自动忽略。
+          </p>
+        </div>
+
+        {successMsg && (
+          <div className="text-status-success text-sm break-all">{successMsg}</div>
+        )}
+        {error && <div className="text-status-error text-sm break-all">{error}</div>}
+
+        <div className="flex gap-2 justify-end mt-2">
+          <Button variant="ghost" type="button" onClick={onClose} disabled={lockAll}>
+            取消
+          </Button>
+          <Button type="button" onClick={handleUpload} disabled={!canUpload}>
+            {uploading ? '上传中…' : '上传'}
+          </Button>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }

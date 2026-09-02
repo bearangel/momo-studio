@@ -13,10 +13,15 @@
 // 约束：
 //   - 提交期间按钮 disabled（防双击）
 //   - 失败 → 红字错误显示在表单底部，弹窗保持打开
+//
+// v2.1 P3：手写 modal 外壳 → Dialog 原子件；名称/版本/命令/参数原本就是 Input 原子件；
+// 环境变量行动态增删保留原生 input（TeamDialog 先例：行内原生控件仅 token 化，
+// placeholder 同时是测试定位钩子）。
 import { useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 
 interface Props {
@@ -90,79 +95,70 @@ export function RegisterMcpDialog({ onClose, onSuccess }: Props) {
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={onClose}
-    >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-md"
-      >
-        <h2 className="text-xl font-bold mb-4">注册自定义 MCP server</h2>
-        <div className="flex flex-col gap-3">
-          <Input
-            label="名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="如：github"
-          />
-          <Input
-            label="版本"
-            value={version}
-            onChange={(e) => setVersion(e.target.value)}
-            placeholder="如：1.0.0（可选）"
-          />
-          <Input
-            label="命令"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder="如：npx"
-          />
-          <Input
-            label="参数"
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            placeholder="逗号分隔，如：-y, server.js, --port 3000"
-          />
+    <Dialog open onClose={onClose} title="注册自定义 MCP server" width={448}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <Input
+          label="名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="如：github"
+          autoFocus
+        />
+        <Input
+          label="版本"
+          value={version}
+          onChange={(e) => setVersion(e.target.value)}
+          placeholder="如：1.0.0（可选）"
+        />
+        <Input
+          label="命令"
+          value={command}
+          onChange={(e) => setCommand(e.target.value)}
+          placeholder="如：npx"
+        />
+        <Input
+          label="参数"
+          value={args}
+          onChange={(e) => setArgs(e.target.value)}
+          placeholder="逗号分隔，如：-y, server.js, --port 3000"
+        />
 
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-neutral-300">环境变量</label>
-            {envRows.map((row, idx) => (
-              <input
-                key={idx}
-                type="text"
-                value={row}
-                onChange={(e) => {
-                  const next = [...envRows];
-                  next[idx] = e.target.value;
-                  setEnvRows(next);
-                }}
-                placeholder="KEY=VALUE"
-                className="px-3 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-neutral-100 focus:border-accent-blue focus:outline-none"
-              />
-            ))}
-            <button
-              type="button"
-              onClick={() => setEnvRows((rows) => [...rows, ''])}
-              className="self-start text-xs px-2 py-1 rounded-md text-accent-blue hover:bg-bg-tertiary"
-              aria-label="+"
-            >
-              + 添加环境变量
-            </button>
-          </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-secondary">环境变量</label>
+          {envRows.map((row, idx) => (
+            <input
+              key={idx}
+              type="text"
+              value={row}
+              onChange={(e) => {
+                const next = [...envRows];
+                next[idx] = e.target.value;
+                setEnvRows(next);
+              }}
+              placeholder="KEY=VALUE"
+              className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary placeholder:text-disabled focus:border-focus focus:outline-none"
+            />
+          ))}
+          <button
+            type="button"
+            onClick={() => setEnvRows((rows) => [...rows, ''])}
+            className="self-start rounded-md px-2 py-1 text-xs text-accent-600 hover:bg-surface-3 dark:text-accent-300"
+            aria-label="+"
+          >
+            + 添加环境变量
+          </button>
+        </div>
 
-          {error && <div className="text-red-400 text-sm">{error}</div>}
-          <div className="flex gap-2 justify-end mt-2">
-            <Button variant="ghost" type="button" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit" disabled={submitting || !name.trim() || !command.trim()}>
-              {submitting ? '注册中…' : '注册并启动'}
-            </Button>
-          </div>
+        {error && <div className="text-status-error text-sm">{error}</div>}
+        <div className="flex gap-2 justify-end mt-2">
+          <Button variant="ghost" type="button" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={submitting || !name.trim() || !command.trim()}>
+            {submitting ? '注册中…' : '注册并启动'}
+          </Button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }
