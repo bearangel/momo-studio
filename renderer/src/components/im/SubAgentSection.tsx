@@ -25,15 +25,8 @@ export function SubAgentSection({ stream }: Props) {
   const isStreaming = stream.status === 'streaming';
 
   return (
-    <div
-      style={{
-        // 左边框竖线：视觉上把子 agent 工作区锚定到 dispatch chip 下方
-        borderLeft: '2px solid #444',
-        paddingLeft: 8,
-        marginTop: 4,
-        marginBottom: 4,
-      }}
-    >
+    // 左边框竖线：视觉上把子 agent 工作区锚定到 dispatch chip 下方
+    <div className="my-1 border-l-2 border-strong pl-2">
       {stream.todos.length > 0 && (
         <TodoSection todos={stream.todos} isStreaming={isStreaming} />
       )}
@@ -65,20 +58,16 @@ export function SubAgentSection({ stream }: Props) {
             return (
               <div
                 key={`sub-text-${i}`}
-                className="overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:max-w-full"
+                className="md-body overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
                 style={{ marginBottom: 8 }}
               >
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
                 {isStreaming && isLastSegment && (
                   <span
                     aria-label="子 agent 流式光标"
+                    className="inline-block h-3.5 w-0.5 bg-accent-500 align-text-bottom"
                     style={{
-                      display: 'inline-block',
-                      width: 2,
-                      height: 14,
-                      background: '#60a5fa',
                       marginLeft: 2,
-                      verticalAlign: 'text-bottom',
                       // 复用顶层 AgentStreamBubble 定义的 keyframes（嵌套场景下父级一定存在）
                       animation: 'momo-stream-blink 1s infinite',
                     }}

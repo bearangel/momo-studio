@@ -9,6 +9,7 @@
 
 import type { SegmentGroup } from './types';
 import { MessageBubble } from './MessageBubble';
+import { Layers } from 'lucide-react';
 
 interface SegmentStackProps {
   /** 多段归组数据 */
@@ -30,8 +31,9 @@ export function SegmentStack({
   return (
     <div className="flex flex-col gap-2" data-testid="segment-stack">
       {totalSegments > 1 && (
-        <div className="text-xs text-neutral-500 font-mono px-2 self-start">
-          📑 多段消息（共 {totalSegments} 段）
+        <div className="inline-flex items-center gap-1 self-start px-2 font-mono text-xs text-tertiary">
+          <Layers size={12} strokeWidth={1.75} aria-hidden className="inline-block align-[-1px]" />
+          多段消息（共 {totalSegments} 段）
         </div>
       )}
       {segments.map((seg, idx) => {
@@ -41,7 +43,7 @@ export function SegmentStack({
         return (
           <div key={seg.id} className="flex flex-col gap-1">
             {showSegmentLabel && (
-              <div className="text-[10px] text-neutral-600 font-mono px-2 self-start">
+              <div className="text-[10px] text-disabled font-mono px-2 self-start">
                 — 第 {segIndex} 段 —
               </div>
             )}
