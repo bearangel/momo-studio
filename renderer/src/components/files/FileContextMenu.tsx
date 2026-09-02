@@ -42,7 +42,7 @@ export function FileContextMenu({
         }}
       />
       <ul
-        className="fixed z-50 bg-bg-secondary border border-border-subtle rounded shadow-lg py-1 text-sm text-neutral-200 min-w-[120px]"
+        className="fixed z-50 border border-subtle bg-surface-1 rounded shadow-lg py-1 text-sm text-secondary min-w-[120px]"
         style={{ left: x, top: y }}
       >
         {hasNewItems && (
@@ -55,7 +55,7 @@ export function FileContextMenu({
                     onNewFile();
                     onClose();
                   }}
-                  className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+                  className="w-full text-left px-3 py-1 hover:bg-surface-3"
                 >
                   新建文件
                 </button>
@@ -69,14 +69,14 @@ export function FileContextMenu({
                     onNewDir();
                     onClose();
                   }}
-                  className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+                  className="w-full text-left px-3 py-1 hover:bg-surface-3"
                 >
                   新建文件夹
                 </button>
               </li>
             )}
             {hasFileOps !== undefined && (hasFileOps || onDelete) && (
-              <li className="border-t border-border-subtle my-1" />
+              <li className="border-t border-subtle my-1" />
             )}
           </>
         )}
@@ -88,7 +88,7 @@ export function FileContextMenu({
                 onRename();
                 onClose();
               }}
-              className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+              className="w-full text-left px-3 py-1 hover:bg-surface-3"
             >
               重命名
             </button>
@@ -102,7 +102,7 @@ export function FileContextMenu({
                 onMove();
                 onClose();
               }}
-              className="w-full text-left px-3 py-1 hover:bg-bg-tertiary"
+              className="w-full text-left px-3 py-1 hover:bg-surface-3"
             >
               移动到…
             </button>
@@ -110,7 +110,7 @@ export function FileContextMenu({
         )}
         {onDelete && (
           <>
-            {hasFileOps && <li className="border-t border-border-subtle my-1" />}
+            {hasFileOps && <li className="border-t border-subtle my-1" />}
             <li>
               <button
                 type="button"
@@ -118,7 +118,7 @@ export function FileContextMenu({
                   onDelete();
                   onClose();
                 }}
-                className="w-full text-left px-3 py-1 hover:bg-bg-tertiary text-red-400"
+                className="w-full text-left px-3 py-1 hover:bg-surface-3 text-status-error"
               >
                 删除{isDirectory ? '（含子项）' : ''}
               </button>

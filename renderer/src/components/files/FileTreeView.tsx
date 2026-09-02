@@ -1,6 +1,7 @@
 // renderer/src/components/files/FileTreeView.tsx
 // 递归文件树视图：按目录路径加载条目，渲染子目录（可展开/折叠）与文件（可选中）
 import { useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from 'lucide-react';
 import { useFileStore } from '../../stores/file.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -46,7 +47,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
   // 加载中占位
   if (!entries) {
     return (
-      <div style={{ paddingLeft: depth * 16 }} className="text-neutral-500 text-sm">
+      <div style={{ paddingLeft: depth * 16 }} className="text-tertiary text-sm">
         加载中…
       </div>
     );
@@ -62,8 +63,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           type="button"
           onClick={() => selectDir('.')}
           className={cn(
-            'w-full text-left py-1 text-xs uppercase tracking-wide text-neutral-500 hover:bg-bg-tertiary flex items-center gap-1 rounded',
-            selectedDir === '.' && 'bg-accent-blue/20 text-neutral-300',
+            'w-full text-left py-1 text-xs uppercase tracking-wide text-tertiary hover:bg-surface-3 flex items-center gap-1 rounded',
+            selectedDir === '.' && 'bg-surface-active text-secondary',
           )}
         >
           <span>工作区文件</span>
@@ -90,13 +91,21 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
                   setMenu({ x: e.clientX, y: e.clientY, path: fullPath, isDirectory: true });
                 }}
                 className={cn(
-                  'w-full text-left py-1 text-sm hover:bg-bg-tertiary flex items-center gap-1 rounded',
-                  selectedDir === fullPath && 'bg-accent-blue/20',
+                  'w-full text-left py-1 text-sm hover:bg-surface-3 flex items-center gap-1 rounded',
+                  selectedDir === fullPath && 'bg-surface-active',
                 )}
                 style={{ paddingLeft: depth * 16 }}
               >
-                <span className="text-xs">{entryExpanded ? '▼' : '▶'}</span>
-                <span>{entryExpanded ? '📂' : '📁'}</span>
+                {entryExpanded ? (
+                  <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                ) : (
+                  <ChevronRight size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                )}
+                {entryExpanded ? (
+                  <FolderOpen size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                ) : (
+                  <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                )}
                 <span className="truncate">{entry.name}</span>
               </button>
               {entryExpanded && (
@@ -123,12 +132,12 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
               setMenu({ x: e.clientX, y: e.clientY, path: fullPath, isDirectory: false });
             }}
             className={cn(
-              'w-full text-left py-1 text-sm hover:bg-bg-tertiary flex items-center gap-1 rounded',
-              isSelected && 'bg-accent-blue/20',
+              'w-full text-left py-1 text-sm hover:bg-surface-3 flex items-center gap-1 rounded',
+              isSelected && 'bg-surface-active',
             )}
             style={{ paddingLeft: depth * 16 + 20 }}
           >
-            <span>📄</span>
+            <File size={14} strokeWidth={1.75} aria-hidden />
             <span className="truncate">{entry.name}</span>
           </button>
         );
@@ -199,7 +208,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
       )}
       {renaming && workspace && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          className="fixed inset-0 bg-backdrop flex items-center justify-center z-50"
           onClick={() => setRenaming(null)}
         >
           <form
@@ -219,26 +228,26 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
               renameTab(renaming.path, dst);
               setRenaming(null);
             }}
-            className="bg-bg-secondary border border-border-subtle rounded p-4 flex flex-col gap-2"
+            className="border border-subtle bg-surface-1 rounded p-4 flex flex-col gap-2"
           >
-            <label className="text-xs text-neutral-400">
+            <label className="text-xs text-secondary">
               新名称
               <input
                 value={renaming.value}
                 onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
                 autoFocus
-                className="mt-1 w-64 bg-bg-tertiary border border-border-subtle rounded px-2 py-1 text-sm text-neutral-100"
+                className="mt-1 w-64 rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary"
               />
             </label>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setRenaming(null)}
-                className="text-xs text-neutral-400 px-2 py-1"
+                className="text-xs text-secondary px-2 py-1"
               >
                 取消
               </button>
-              <button type="submit" className="text-xs px-2 py-1 rounded bg-accent-blue text-white">
+              <button type="submit" className="text-xs px-2 py-1 rounded bg-accent-500 text-inverse">
                 确定
               </button>
             </div>

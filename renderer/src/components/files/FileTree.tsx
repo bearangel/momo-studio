@@ -3,6 +3,7 @@
 // 工具栏新建按钮的落点跟随 selectedDir；切回 files 视图时刷新已缓存目录。
 // 点击空白区选中根目录；右键空白区弹出根级操作菜单（VS Code 风格）。
 import { useState, useEffect } from 'react';
+import { RefreshCw, FilePlus, FolderPlus } from 'lucide-react';
 import { FileTreeView } from './FileTreeView';
 import { FileContextMenu } from './FileContextMenu';
 import { PromptDialog } from '../common/PromptDialog';
@@ -80,20 +81,20 @@ export function FileTree({ onSelectFile }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-border-subtle bg-bg-secondary z-10">
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-subtle bg-surface-1 z-10">
         <button
           type="button"
           onClick={handleRefresh}
           title="刷新"
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+          className="text-xs text-secondary hover:text-primary px-1"
         >
-          🔄
+          <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
         </button>
         <button
           type="button"
           onClick={collapseAll}
           title="全部折叠"
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1"
+          className="text-xs text-secondary hover:text-primary px-1"
         >
           折叠
         </button>
@@ -102,18 +103,18 @@ export function FileTree({ onSelectFile }: Props) {
           onClick={() => workspace && setCreating('file')}
           disabled={!workspace}
           title={`新建文件${targetLabel}`}
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1 disabled:opacity-40"
+          className="text-xs text-secondary hover:text-primary px-1 disabled:opacity-40"
         >
-          📄＋
+          <FilePlus size={14} strokeWidth={1.75} aria-hidden />
         </button>
         <button
           type="button"
           onClick={() => workspace && setCreating('dir')}
           disabled={!workspace}
           title={`新建文件夹${targetLabel}`}
-          className="text-xs text-neutral-400 hover:text-neutral-200 px-1 disabled:opacity-40"
+          className="text-xs text-secondary hover:text-primary px-1 disabled:opacity-40"
         >
-          📁＋
+          <FolderPlus size={14} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
       <div
