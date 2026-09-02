@@ -52,4 +52,13 @@ describe('Dialog', () => {
     );
     expect(screen.getByRole('button', { name: '确定' })).toBeInTheDocument();
   });
+
+  it('内部 autoFocus 元素已持焦时不抢焦', () => {
+    render(
+      <Dialog open onClose={() => {}} title="T">
+        <input data-testid="inner" autoFocus />
+      </Dialog>,
+    );
+    expect(document.activeElement).toBe(screen.getByTestId('inner'));
+  });
 });

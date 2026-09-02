@@ -25,8 +25,10 @@ export function Dialog({ open, onClose, title, children, footer, width = 480 }: 
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKeyDown);
-    // 初始聚焦到弹窗容器（焦点落入对话框内，Esc/Tab 行为可预期）
-    dialogRef.current?.focus();
+    // 仅当内部无元素持焦时聚焦容器（autoFocus 输入框优先）；tabIndex=-1 使容器可编程聚焦
+    if (dialogRef.current && !dialogRef.current.contains(document.activeElement)) {
+      dialogRef.current.focus();
+    }
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose]);
 
@@ -42,7 +44,7 @@ export function Dialog({ open, onClose, title, children, footer, width = 480 }: 
         aria-label={title}
         tabIndex={-1}
         className={cn(
-          'fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-strong bg-surface-1 p-0 shadow-2xl outline-none',
+          'fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-strong bg-surface-1 shadow-2xl outline-none',
         )}
         style={{ width }}
       >
