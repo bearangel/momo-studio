@@ -1,10 +1,12 @@
 // renderer/src/components/layout/WorkspaceTabs.tsx
 //
 // TitleBar 内的 workspace tab 条（P2 Task 2）：每个 workspace 一个 tab
-// （图标 + 名称 + hover 关闭 ×），激活 tab 高亮 + 底部蓝条；＋ 打开新建对话框；
-// tab 右键弹自绘轻量浮层菜单（重命名 inline input / 删除 confirm / 打开目录），
-// Esc / 点击菜单外部关闭。整个 tab 条是交互区，整体标 no-drag。
+// （图标 + 名称 + hover 关闭 lucide X），激活 tab 高亮 + 底部 accent 条；
+// lucide Plus 打开新建对话框；tab 右键弹自绘轻量浮层菜单（重命名 inline input
+// / 删除 confirm / 打开目录），Esc / 点击菜单外部关闭。整个 tab 条是交互区，
+// 整体标 no-drag。
 import { useEffect, useRef, useState } from 'react';
+import { X, Plus } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
@@ -52,7 +54,8 @@ export function WorkspaceTabs() {
   }, [menu]);
 
   /**
-   * 删除 workspace（tab × 与菜单共用）：弹 PromptDialog 二次确认后走 store.remove。
+   * 删除 workspace（tab 上的 lucide X 按钮与右键菜单共用）：弹 PromptDialog
+   * 二次确认后走 store.remove。
    *
    * 为防止误删，破坏性确认采用「输入工作空间名称一致」二次确认模式：
    * 用户必须一字不差输入工作空间名才会真正触发删除。后端 delete handler 会
@@ -118,8 +121,8 @@ export function WorkspaceTabs() {
               className={cn(
                 'group relative flex items-center gap-1.5 px-3 py-1 rounded-md text-xs cursor-pointer whitespace-nowrap',
                 active
-                  ? 'bg-bg-tertiary text-neutral-100'
-                  : 'text-neutral-400 hover:text-neutral-200',
+                  ? 'bg-surface-2 text-primary'
+                  : 'text-secondary hover:text-primary',
               )}
               onClick={() => {
                 if (!renaming) select(ws.id);
@@ -145,7 +148,7 @@ export function WorkspaceTabs() {
                   }}
                   onBlur={() => setRenamingId(null)}
                   onClick={(e) => e.stopPropagation()}
-                  className="bg-bg-primary border border-accent-blue rounded px-1 text-xs text-neutral-100 outline-none"
+                  className="rounded border border-accent-500 bg-surface-2 px-1 text-xs text-primary outline-none"
                   style={{ width: 100 }}
                 />
               ) : (
@@ -157,16 +160,16 @@ export function WorkspaceTabs() {
                   <button
                     type="button"
                     aria-label={`关闭 ${ws.name}`}
-                    className="opacity-0 group-hover:opacity-100 px-0.5 text-neutral-400 hover:text-neutral-200"
+                    className="opacity-0 group-hover:opacity-100 px-0.5 text-tertiary hover:text-primary"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDelete(ws.id);
                     }}
                   >
-                    ×
+                    <X size={12} strokeWidth={1.75} aria-hidden />
                   </button>
                   {active && (
-                    <span className="absolute left-2.5 right-2.5 -bottom-px h-0.5 bg-accent-blue rounded-sm" />
+                    <span className="absolute left-2.5 right-2.5 -bottom-px h-0.5 bg-accent-500 rounded-sm" />
                   )}
                 </>
               )}
@@ -179,10 +182,10 @@ export function WorkspaceTabs() {
         type="button"
         aria-label="新建工作空间"
         title="新建工作空间"
-        className="w-7 h-7 flex items-center justify-center rounded-md text-sm text-neutral-400 hover:bg-bg-tertiary hover:text-white"
+        className="w-7 h-7 flex items-center justify-center rounded-md text-sm text-secondary hover:bg-surface-3 hover:text-primary"
         onClick={() => setShowCreate(true)}
       >
-        ＋
+        <Plus size={14} strokeWidth={1.75} aria-hidden />
       </button>
 
       {showCreate && <CreateWorkspaceDialog onClose={() => setShowCreate(false)} />}
@@ -190,12 +193,12 @@ export function WorkspaceTabs() {
       {menu && (
         <div
           ref={menuRef}
-          className="fixed z-50 py-1 rounded-lg bg-bg-secondary border border-border-subtle shadow-xl"
+          className="fixed z-50 py-1 rounded-lg border border-subtle bg-surface-1 shadow-xl"
           style={{ ...noDragStyle, left: menu.x, top: menu.y, minWidth: 140 }}
         >
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-bg-tertiary"
+            className="block w-full text-left px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
             onClick={() => {
               startRename(menu.id);
               setMenu(null);
@@ -205,7 +208,7 @@ export function WorkspaceTabs() {
           </button>
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-bg-tertiary"
+            className="block w-full text-left px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
             onClick={() => {
               handleOpenDirectory(menu.id);
               setMenu(null);
@@ -215,7 +218,7 @@ export function WorkspaceTabs() {
           </button>
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-status-error hover:bg-bg-tertiary"
+            className="block w-full text-left px-3 py-1.5 text-xs text-status-error hover:bg-surface-3"
             onClick={() => {
               handleDelete(menu.id);
               setMenu(null);
