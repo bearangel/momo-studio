@@ -205,7 +205,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
   });
 
   it('有 dispatches 时渲染对应的 DispatchChip（显示子 agent 名字）', () => {
-    render(
+    const { container } = render(
       <AgentStreamBubble
         stream={makeStream({
           dispatches: [
@@ -222,7 +222,8 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
       />,
     );
     expect(screen.getByText('研究员')).toBeInTheDocument();
-    expect(screen.getByText('📤')).toBeInTheDocument();
+    // v2.1：📤 字形退役，派单存在性按 lucide Send 图标断言
+    expect(container.querySelector('svg.lucide-send')).not.toBeNull();
   });
 
   it('多个 dispatches 时全部渲染', () => {
@@ -254,13 +255,14 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
   });
 
   it('无 dispatches 时不渲染 dispatch chip', () => {
-    render(
+    const { container } = render(
       <AgentStreamBubble
         stream={makeStream({ dispatches: [] })}
         message={makeMessage()}
       />,
     );
-    expect(screen.queryByText('📤')).not.toBeInTheDocument();
+    // v2.1：📤 字形退役，派单缺席按 lucide Send 图标断言
+    expect(container.querySelector('svg.lucide-send')).toBeNull();
   });
 
   it('进度指示器显示已完成/总数计数（等待 1/2 子任务完成）', () => {

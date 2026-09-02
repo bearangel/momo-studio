@@ -1,12 +1,15 @@
 // renderer/src/components/im/DispatchChip.test.tsx
 //
 // DispatchChip 渲染与交互行为测试：
-//   - 4 种状态（queued/executing/completed/failed）渲染正确的图标/文案/颜色
-//   - 自动展开/折叠默认值（executing/failed 展开；queued/completed 折叠）
+//   - 5 种状态（queued/executing/completed/failed/aborted）渲染正确的文案 + tone 类
+//   - 头行 Send 图标 + avatar（emoji 数据 / Avatar bot 兜底）+ 子 agent 名字
+//   - 自动展开/折叠默认值（executing/failed 展开；queued/completed/aborted 折叠）
 //   - 点击头行切换展开/折叠
 //   - 展开且传入 subStream 时渲染 SubAgentSection（子 agent 正文可见）
 //   - status 变化触发的自动展开/折叠行为
 //   - 用户手动 toggle 后抑制后续自动行为（userToggled 标志）
+//
+// v2.1：emoji 字形 / inline hex 断言退役，按 tone class + lucide svg 语义断言。
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { StreamState } from '../../stores/stream.store';
@@ -44,36 +47,42 @@ function makeStream(overrides: Partial<StreamState> = {}): StreamState {
   return { ...base, segments };
 }
 
+/** ElapsedTimer 耗时文本形态：「0s」/「1m05s」（v2.1 计时器无字形，按文本断言） */
+const ELAPSED_TEXT = /^\d+(m\d{2})?s$/;
+
+/** 头像 emoji 夹具数据（subAgentAvatar 数据流豁免——非 UI 字形，lint 规则只查 JSX 字面量） */
+const EMOJI_AVATAR = '🔬';
+
 describe('DispatchChip — 状态渲染', () => {
-  it('queued 渲染 ⏳ 排队（灰色 #888）', () => {
+  it('queued 渲染 排队（neutral tone：bg-surface-3）', () => {
     render(<DispatchChip child={makeChild({ status: 'queued' })} />);
     const status = screen.getByText(/排队/);
     expect(status).toBeInTheDocument();
-    expect(status).toHaveStyle({ color: '#888' });
+    expect(status).toHaveClass('bg-surface-3');
   });
 
-  it('executing 渲染 ⏳ 执行中（黄色 #fbbf24）', () => {
+  it('executing 渲染 执行中（warning tint：bg-status-warning-tint）', () => {
     render(<DispatchChip child={makeChild({ status: 'executing' })} />);
     const status = screen.getByText(/执行中/);
     expect(status).toBeInTheDocument();
-    expect(status).toHaveStyle({ color: '#fbbf24' });
+    expect(status).toHaveClass('bg-status-warning-tint');
   });
 
-  it('completed 渲染 ✅ 完成（绿色 #4ade80）', () => {
+  it('completed 渲染 完成（success tint：bg-status-success-tint）', () => {
     render(<DispatchChip child={makeChild({ status: 'completed' })} />);
     const status = screen.getByText(/完成/);
     expect(status).toBeInTheDocument();
-    expect(status).toHaveStyle({ color: '#4ade80' });
+    expect(status).toHaveClass('bg-status-success-tint');
   });
 
-  it('failed 渲染 ❌ 失败（红色 #f87171）', () => {
+  it('failed 渲染 失败（error tint：bg-status-error-tint）', () => {
     render(<DispatchChip child={makeChild({ status: 'failed' })} />);
     const status = screen.getByText(/失败/);
     expect(status).toBeInTheDocument();
-    expect(status).toHaveStyle({ color: '#f87171' });
+    expect(status).toHaveClass('bg-status-error-tint');
   });
 
-  it('aborted 渲染 ⏹ 已中断（黄色 #fbbf24），不显示计时器与活动提示', () => {
+  it('aborted 渲染 已中断（warning tint），不显示计时器与活动提示', () => {
     // 回归锁（用户报障）：PM 停止后 dispatch 不得停留在 executing——
     // 否则 ElapsedTimer 每秒持续计时
     render(
@@ -84,25 +93,29 @@ describe('DispatchChip — 状态渲染', () => {
     );
     const status = screen.getByText(/已中断/);
     expect(status).toBeInTheDocument();
-    expect(status).toHaveStyle({ color: '#fbbf24' });
-    expect(screen.queryByText(/⏱/)).not.toBeInTheDocument();
+    expect(status).toHaveClass('bg-status-warning-tint');
+    expect(screen.queryByText(ELAPSED_TEXT)).not.toBeInTheDocument();
     expect(screen.queryByTestId('dispatch-activity')).not.toBeInTheDocument();
   });
 
-  it('头行渲染 📤 图标 + avatar + 子 agent 名字', () => {
-    render(
+  it('头行渲染 Send 图标 + avatar + 子 agent 名字', () => {
+    const { container } = render(
       <DispatchChip
-        child={makeChild({ subAgentName: '研究员', subAgentAvatar: '🔬' })}
+        child={makeChild({ subAgentName: '研究员', subAgentAvatar: EMOJI_AVATAR })}
       />,
     );
-    // 头像 emoji 和名字都在头行内
+    // 派单图标（lucide Send）+ 头像 emoji（数据流豁免）和名字都在头行内
+    expect(container.querySelector('svg.lucide-send')).not.toBeNull();
     expect(screen.getByText('研究员')).toBeInTheDocument();
-    expect(screen.getByText('🔬')).toBeInTheDocument();
+    expect(screen.getByText(EMOJI_AVATAR)).toBeInTheDocument();
   });
 
-  it('subAgentAvatar 缺省时回退 🤖', () => {
-    render(<DispatchChip child={makeChild({ subAgentAvatar: undefined })} />);
-    expect(screen.getByText('🤖')).toBeInTheDocument();
+  it('subAgentAvatar 缺省时回退 Avatar bot 图标', () => {
+    const { container } = render(<DispatchChip child={makeChild({ subAgentAvatar: undefined })} />);
+    // Avatar bot 变体：title 挂 agent 名 + Bot 图标（v2.1 取代 🤖 字形兜底）
+    expect(screen.getByTitle('码农')).not.toBeNull();
+    expect(container.querySelector('svg.lucide-bot')).not.toBeNull();
+    expect(screen.queryByText('🤖')).not.toBeInTheDocument();
   });
 });
 
@@ -246,7 +259,7 @@ describe('DispatchChip — status 变化的自动行为', () => {
 });
 
 describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见性）', () => {
-  it('executing 且 subStream 末段为 thinking → 头行显示「💭 思考中…」+ 计时', () => {
+  it('executing 且 subStream 末段为 thinking → 头行显示「思考中…」+ 计时', () => {
     render(
       <DispatchChip
         child={makeChild({ status: 'executing' })}
@@ -256,10 +269,10 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
       />,
     );
     expect(screen.getByText(/思考中/)).toBeInTheDocument();
-    expect(screen.getByText(/⏱/)).toBeInTheDocument();
+    expect(screen.getByText(ELAPSED_TEXT)).toBeInTheDocument();
   });
 
-  it('executing 且末段为执行中工具 → 头行显示「🔧 工具名」', () => {
+  it('executing 且末段为执行中工具 → 头行显示工具名', () => {
     render(
       <DispatchChip
         child={makeChild({ status: 'executing' })}
@@ -274,7 +287,7 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
     expect(screen.getByTestId('dispatch-activity')).toHaveTextContent('write_file');
   });
 
-  it('executing 且末段为 text → 头行显示「✍️ 输出中…」', () => {
+  it('executing 且末段为 text → 头行显示「输出中…」', () => {
     render(
       <DispatchChip
         child={makeChild({ status: 'executing' })}
@@ -289,7 +302,7 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
   it('executing 但无 subStream → 头行显示「已派出，等待启动…」（无计时）', () => {
     render(<DispatchChip child={makeChild({ status: 'executing' })} />);
     expect(screen.getByText(/等待启动/)).toBeInTheDocument();
-    expect(screen.queryByText(/⏱/)).not.toBeInTheDocument();
+    expect(screen.queryByText(ELAPSED_TEXT)).not.toBeInTheDocument();
   });
 
   it('completed → 不显示活动提示（状态徽标已足够）', () => {
