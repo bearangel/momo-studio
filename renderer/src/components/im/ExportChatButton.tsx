@@ -1,12 +1,13 @@
 // renderer/src/components/im/ExportChatButton.tsx
 //
-// 会话导出按钮：弹窗（数量输入默认 100）+ 调 ipc.session.exportMessages +
-// 用 Blob + <a download> 触发浏览器原生下载（macOS Finder save sheet）。
-//
-// 失败时红字展示错误，弹窗保持打开；导出中所有按钮 disabled 防双击。
+// 会话导出：数量输入弹窗 + ipc.session.exportMessages + Blob 下载。
+// v2.1：⤓→Download；手写 modal 收敛 Dialog 原子件。失败红字保留、导出中禁双击。
 import { useState } from 'react';
+import { Download } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
+import { Dialog } from '../ui/Dialog';
+import { Input } from '../ui/Input';
 
 interface Props {
   sessionId: string;
@@ -24,7 +25,6 @@ export function ExportChatButton({ sessionId }: Props) {
     setError(null);
     try {
       const { filename, content } = await ipc.session.exportMessages(sessionId, limit);
-      // Blob + a.download 触发浏览器下载
       const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -46,58 +46,41 @@ export function ExportChatButton({ sessionId }: Props) {
     <>
       <button
         type="button"
-        className="text-xs px-2 py-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-bg-tertiary"
+        className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-secondary hover:bg-surface-3 hover:text-primary"
         onClick={() => setOpen(true)}
         title="导出会话为 Markdown"
       >
-        ⤓ 导出
+        <Download size={12} strokeWidth={1.75} aria-hidden />
+        导出
       </button>
 
-      {open && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={exporting ? undefined : () => setOpen(false)}
-        >
-          <div
-            className="bg-bg-secondary rounded-xl border border-border-subtle p-6 w-full max-w-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-lg font-bold mb-4">导出会话</h2>
-            <div className="flex flex-col gap-3">
-              <label className="text-sm text-neutral-300">
-                消息数量（最近 N 条）
-                <input
-                  type="number"
-                  min={1}
-                  max={1000}
-                  value={limit}
-                  onChange={(e) =>
-                    setLimit(
-                      Math.max(1, Math.min(1000, Number(e.target.value) || 100)),
-                    )
-                  }
-                  className="ml-2 w-24 px-2 py-1 rounded bg-bg-tertiary border border-border-subtle text-neutral-100"
-                  disabled={exporting}
-                />
-              </label>
-              {error && <div className="text-red-400 text-sm">{error}</div>}
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  disabled={exporting}
-                >
-                  取消
-                </Button>
-                <Button type="button" onClick={handleConfirm} disabled={exporting}>
-                  {exporting ? '导出中…' : '确定'}
-                </Button>
-              </div>
-            </div>
+      <Dialog
+        open={open}
+        onClose={exporting ? () => undefined : () => setOpen(false)}
+        title="导出会话"
+        width={384}
+      >
+        <div className="flex flex-col gap-3">
+          <Input
+            label="消息数量（最近 N 条）"
+            type="number"
+            min={1}
+            max={1000}
+            value={limit}
+            onChange={(e) => setLimit(Math.max(1, Math.min(1000, Number(e.target.value) || 100)))}
+            disabled={exporting}
+          />
+          {error && <div className="text-sm text-status-error">{error}</div>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" type="button" onClick={() => setOpen(false)} disabled={exporting}>
+              取消
+            </Button>
+            <Button type="button" onClick={handleConfirm} disabled={exporting}>
+              {exporting ? '导出中…' : '确定'}
+            </Button>
           </div>
         </div>
-      )}
+      </Dialog>
     </>
   );
 }

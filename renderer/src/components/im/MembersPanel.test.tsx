@@ -1,7 +1,7 @@
 // renderer/src/components/im/MembersPanel.test.tsx
 // MembersPanel 成员列表测试（v2.0 P1 Task 9：成员语义 SessionMemberInfo）：
 //   - 在线/离线 badge 直接读 lastRunning（不再反查 assignments）
-//   - leader 成员显示「👑 Leader」徽标（isLeader）
+//   - leader 成员显示 Leader 徽标（isLeader；v2.1 P2 Task 13 👑 emoji 改 lucide-react Crown）
 //   - 成员图标与名称来自三表 JOIN（iconEmoji / agentName）
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -36,10 +36,12 @@ describe('MembersPanel 在线/离线标签', () => {
     expect(screen.getAllByText('离线')).toHaveLength(1);
   });
 
-  it('leader 成员（isLeader）显示"👑 Leader"徽标', () => {
+  it('leader 成员（isLeader）显示 Leader 徽标（v2.1：lucide-react Crown 替代 👑 emoji）', () => {
     render(<MembersPanel />);
     expect(screen.getByText('协调Agent')).toBeInTheDocument();
-    expect(screen.getByText('👑 Leader')).toBeInTheDocument();
+    // v2.1 P2 Task 13：👑 emoji → lucide-react Crown SVG；徽标文案仅 "Leader"
+    expect(screen.getByTestId('leader-badge')).toBeInTheDocument();
+    expect(screen.getByText('Leader')).toBeInTheDocument();
   });
 
   it('成员图标使用 iconEmoji（空值回退 🤖）', () => {

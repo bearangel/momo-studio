@@ -1,18 +1,21 @@
 // renderer/src/components/im/MessageList.tsx
 //
 // 消息流：读取当前激活 room 的消息列表，自动滚动到底部。
-// 空态分三种：未选 room / 加载中 / 无消息。
+// 空态分三种：未选 room / 加载中 / 无消息——v2.1 P2 Task 13 接 EmptyState 原子件
+// （MessageSquare 图标，token 化语义色）。
 //
 // v2.0 A 子系统：不再在列表底部追加 activeRoomStreams（旧 v1.4 逻辑）。
 // 每条 message 是否流式由 MessageBubble 内部按 message.id 查 stream.store 判断——
 // streaming 时 MessageBubble 渲染 AgentStreamBubble，否则渲染静态消息。
 import { useEffect, useRef } from 'react';
+import { MessageSquare } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useBotNameMap } from '../../lib/useBotNames';
 import { groupBySegment } from '../../lib/group-segments';
 import type { ImMessage } from '../../ipc/types';
 import { MessageBubble } from './MessageBubble';
 import { SegmentStack } from './SegmentStack';
+import { EmptyState } from '../ui/EmptyState';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -79,24 +82,24 @@ export function MessageList() {
 
   if (!activeSessionId) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500">
-        <p className="text-sm">选择一个房间开始对话</p>
+      <div className="flex-1">
+        <EmptyState icon={MessageSquare} title="未选择会话" description="在会话列表中选择一个房间开始对话" />
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500">
-        <p className="text-sm">加载中…</p>
+      <div className="flex-1">
+        <EmptyState icon={MessageSquare} title="加载中…" />
       </div>
     );
   }
 
   if (!messages || messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500">
-        <p className="text-sm">暂无消息，发送第一条吧</p>
+      <div className="flex-1">
+        <EmptyState icon={MessageSquare} title="暂无消息" description="发送第一条消息开始对话" />
       </div>
     );
   }
@@ -115,10 +118,10 @@ export function MessageList() {
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
       {activeSessionId && loadingOlder && (
-        <div className="text-center text-xs text-neutral-500 py-2">加载历史中…</div>
+        <div className="text-center text-xs text-tertiary py-2">加载历史中…</div>
       )}
       {activeSessionId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
-        <div className="text-center text-xs text-neutral-500 py-2">— 已到顶部 —</div>
+        <div className="text-center text-xs text-tertiary py-2">— 已到顶部 —</div>
       )}
       {groupedItems.map((item) => {
         if ('kind' in item && item.kind === 'segment-group') {
