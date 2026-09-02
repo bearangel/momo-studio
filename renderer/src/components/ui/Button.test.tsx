@@ -35,6 +35,11 @@ describe('Button', () => {
     expect(screen.getByRole('button', { name: '不可用' }).className).toContain('disabled:opacity-50');
   });
 
+  it('type 默认 button（表单内不触发隐式 submit）', () => {
+    render(<Button>保存</Button>);
+    expect(screen.getByRole('button', { name: '保存' }).getAttribute('type')).toBe('button');
+  });
+
   it('点击回调正常触发', () => {
     const onClick = vi.fn();
     render(<Button onClick={onClick}>点我</Button>);

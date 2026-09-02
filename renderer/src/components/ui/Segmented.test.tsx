@@ -31,4 +31,18 @@ describe('Segmented', () => {
     render(<Segmented options={OPTIONS} value="light" onChange={() => {}} aria-label="主题模式" />);
     expect(screen.getByRole('radio', { name: '浅色' }).className).toContain('bg-surface-active');
   });
+
+  it('方向键右移：焦点与选中同步移动', () => {
+    const onChange = vi.fn();
+    render(<Segmented options={OPTIONS} value="light" onChange={onChange} aria-label="主题模式" />);
+    fireEvent.keyDown(screen.getByRole('radiogroup', { name: '主题模式' }), { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledWith('dark');
+  });
+
+  it('roving tabindex：仅激活项可 Tab', () => {
+    render(<Segmented options={OPTIONS} value="dark" onChange={() => {}} aria-label="主题模式" />);
+    expect(screen.getByRole('radio', { name: '深色' }).tabIndex).toBe(0);
+    expect(screen.getByRole('radio', { name: '浅色' }).tabIndex).toBe(-1);
+    expect(screen.getByRole('radio', { name: '跟随系统' }).tabIndex).toBe(-1);
+  });
 });
