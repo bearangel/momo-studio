@@ -161,7 +161,7 @@ export function GitPolicySettings({ workspaceId }: Props) {
 
       {/* 校验级别 */}
       <Select
-        aria-label="Commit 校验级别"
+        label="Commit 校验级别"
         value={draft.commitMessage.validation}
         onChange={(e) =>
           update((p) => (p.commitMessage.validation = e.target.value as CommitValidation))
