@@ -2,6 +2,7 @@
 // 复选框原子件：appearance-none 自绘（peer 机制），选中打勾用 lucide Check。
 import { forwardRef, useId, type InputHTMLAttributes } from 'react';
 import { Check } from 'lucide-react';
+import { cn } from '../../lib/cn';
 
 interface Props extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
   label?: string;
@@ -17,7 +18,10 @@ export const Checkbox = forwardRef<HTMLInputElement, Props>(
           ref={ref}
           id={inputId}
           type="checkbox"
-          className="peer h-4 w-4 appearance-none rounded border border-strong bg-surface-2 transition-colors checked:border-accent-500 checked:bg-accent-500"
+          className={cn(
+            'peer h-4 w-4 appearance-none rounded border border-strong bg-surface-2 transition-colors checked:border-accent-500 checked:bg-accent-500',
+            className,
+          )}
           {...rest}
         />
         <Check
