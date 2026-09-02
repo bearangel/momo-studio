@@ -39,7 +39,7 @@ export function SettingsView() {
 
   if (!workspace) {
     return (
-      <div className="flex-1 flex items-center justify-center text-neutral-500 text-sm">
+      <div className="flex-1 flex items-center justify-center bg-canvas text-tertiary text-sm">
         请先选择一个 workspace
       </div>
     );
@@ -48,16 +48,16 @@ export function SettingsView() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 顶部标题栏：「← 返回」+「设置」标题 */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border-subtle bg-bg-secondary">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-subtle bg-surface-1">
         <button
           type="button"
           onClick={() => setActiveView('im')}
-          className="text-sm text-neutral-300 hover:text-neutral-100 px-2 py-1 rounded hover:bg-bg-tertiary/60"
+          className="text-sm text-secondary hover:bg-surface-3 hover:text-primary px-2 py-1 rounded"
           aria-label="返回"
         >
           ← 返回
         </button>
-        <h1 className="text-sm text-neutral-100 font-medium">设置</h1>
+        <h1 className="text-sm text-primary font-medium">设置</h1>
       </div>
 
       {/* 主体：左导航 + 右内容 */}

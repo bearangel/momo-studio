@@ -1,4 +1,4 @@
-// renderer/src/components/settings/SettingsNav.tsx 全文替换：
+// renderer/src/components/settings/SettingsNav.tsx
 // 设置左侧分类导航：宽度 190px（inline style 规避 Tailwind 任意值 class 失效问题）。
 // v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。
 import type { LucideIcon } from 'lucide-react';
@@ -25,10 +25,10 @@ export function SettingsNav() {
   return (
     <nav
       aria-label="设置分类"
-      className="shrink-0 border-r border-border-subtle bg-bg-secondary p-2 flex flex-col gap-1"
+      className="shrink-0 border-r border-subtle bg-surface-1 p-2 flex flex-col gap-1"
       style={{ width: 190 }}
     >
-      <div className="px-2 py-1 text-xs text-neutral-500">设置</div>
+      <div className="px-2 py-1 text-xs text-tertiary">设置</div>
       {CATEGORIES.map((c) => (
         <button
           key={c.key}
@@ -37,8 +37,8 @@ export function SettingsNav() {
           className={cn(
             'w-full text-left px-3 py-2 text-sm rounded transition-colors flex items-center gap-2',
             active === c.key
-              ? 'bg-bg-tertiary text-neutral-100'
-              : 'text-neutral-300 hover:bg-bg-tertiary/60',
+              ? 'bg-surface-active text-primary'
+              : 'text-secondary hover:bg-surface-3',
           )}
         >
           <c.icon size={16} strokeWidth={1.75} aria-hidden />
