@@ -75,6 +75,7 @@ npx pnpm@9.0.0 build
 - **Node 20 LTS**：Node 26 会破坏 better-sqlite3 的 native binding（`ERR_DLOPEN_FAILED`）。容器默认 Node 26，必须先 `nvm use 20`。
 - **TypeScript strict**：禁止 `any`、`@ts-ignore`、`as any`。ESLint `no-explicit-any: error` 已启用。
 - **Conventional Commits**：`feat:`、`fix:`、`chore:`、`docs:`、`test:`、`refactor:`。
+- **UI 设计系统（v2.1）**：renderer 新代码只用语义 token（`bg-surface-*` / `text-secondary` 等），禁标准 Tailwind 色阶类、禁 inline 硬编码颜色、禁 emoji 图标（用 lucide-react，16px / stroke 1.75）；原子组件优先（`components/ui/`）；状态色一律 `lib/task-status.ts`。ESLint 已机械强制（P4 起全局 error + Tailwind 默认色阶移除）。规范全文：`docs/dev/design-system.md`
 
 ## 架构关键点（基础设施细节）
 
@@ -135,3 +136,4 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 - `docs/plans/2026-08-23-v2.0.0-p*.md` — 五期实施计划（p1 会话内核 / p2 UI / p3 收尾 / p4 局域网 / p5 升级）
 - `docs/2026-08-14-system-feature-inventory.md` — 系统功能全景清单（v2.0 spec 的上游输入底座）
 - `.superpowers/sdd/progress.md` — v2.0.0 主线 ledger，gitignored
+- `docs/dev/design-system.md` — v2.1 UI 设计系统规范（token / 组件 / 图标 / do-don't），renderer UI 开发唯一入口
