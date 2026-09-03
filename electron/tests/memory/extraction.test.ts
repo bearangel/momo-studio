@@ -38,6 +38,9 @@ import {
   TRIGGER_TURN_INTERVAL,
   __resetExtractionStateForTest,
 } from '../../src/main/memory/extraction';
+// WINDOW_LIMIT 内部常量未导出，评审回归锁直接硬码 50 与之对齐；
+// 若 WINDOW_LIMIT 变更，此断言需同步调整（唯一真相源在 extraction.ts）。
+const WINDOW_LIMIT = 50;
 import type { LLMMessage, LLMResponse } from '../../src/main/agent/llm-provider';
 
 // ─── LLM 边界 mock（仅网络边界；其余全真实）────────────────────────────────
@@ -429,15 +432,52 @@ describe('runExtraction —— 会话压缩（spec §6.4 >40 阈值）', () => {
       session_summary: '已完成登录重构；下一步接入 oauth',
     })));
 
-    await runExtraction(sid);
+await runExtraction(sid);
 
     const row = listSessionSummary(sid);
     expect(row).not.toBeNull();
     expect(row!.summary).toBe('已完成登录重构；下一步接入 oauth');
 
-    // covered_until = 窗口最新消息 createdAt（最后插入消息的时间戳）
+    // covered_until = 窗口最新消息 createdAt（最后插入消息时间戳）
     const maxCreatedAt = (getDb().prepare('SELECT MAX(created_at) AS t FROM messages WHERE session_id = ?').get(sid) as { t: number }).t;
     expect(row!.covered_until).toBe(maxCreatedAt);
+  });
+
+  it('>50 消息（评审修复回归锁）：窗口取最近 50 条，LLM prompt 含第 51+ 条消息，covered_until=全会话 MAX', async () => {
+    // 60 条消息：30 用户 + 30 助手（seedSession 交替插入，去重后 60 条）。
+    // 第 51 条起的内容必须出现在 prompt 转录中，证明 beforeTs 锚点生效；
+    // 若窗口冻结为 ASC LIMIT 50（评审发现的旧实现），第 51+ 条被吞，回归锁立即红。
+    const sid = seedSession({ userMsgs: 30, agentMsgs: 30 });
+    const totalMessages = (getDb().prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id = ?').get(sid) as { n: number }).n;
+    expect(totalMessages).toBeGreaterThan(WINDOW_LIMIT);
+    const maxCreatedAt = (getDb().prepare('SELECT MAX(created_at) AS t FROM messages WHERE session_id = ?').get(sid) as { t: number }).t;
+
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({
+      memories: [{ kind: 'knowledge', content: '从最新窗口中拿到', tags: [] }],
+      session_summary: '覆盖到第 60 条的摘要',
+    })));
+    await runExtraction(sid);
+
+    // covered_until = 全会话最新消息 createdAt（非窗口内最早）
+    const row = listSessionSummary(sid);
+    expect(row?.covered_until).toBe(maxCreatedAt);
+
+    // LLM prompt 转录必须包含「用户消息 30」「助手回复 30」（第 51+ 条消息的尾部内容）
+    const promptMessages = chatMock.mock.calls[0]?.[0] as LLMMessage[] | undefined;
+    const userPrompt = promptMessages?.find((m) => m.role === 'user')?.content ?? '';
+    expect(userPrompt).toContain('用户消息 30');
+    expect(userPrompt).toContain('助手回复 30');
+    // 窗口恰好 50 条（prompt header 「共 N 条」+ 行计数）
+    expect(userPrompt).toContain('共 50 条');
+    const userLines = (userPrompt.match(/^用户：/gm) ?? []).length;
+    const assistantLines = (userPrompt.match(/^助手：/gm) ?? []).length;
+    expect(userLines + assistantLines).toBe(50);
+    // 最旧的 10 条（第 1..10 行）必须被排除（冻结旧实现下会全量包含共 60 条）
+    expect(userLines + assistantLines).toBeLessThan(60);
+    // 精确断言最早 5 条用户消息不存在（用换行边界避免「用户消息 1」撞「用户消息 11..19」前缀）
+    for (let i = 1; i <= 5; i++) {
+      expect(userPrompt).not.toMatch(new RegExp(`用户：用户消息 ${i}(?!\\d)`));
+    }
   });
 
   it('>40 消息：再次运行以新摘要覆盖（upsert 行为）', async () => {

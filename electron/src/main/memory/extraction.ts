@@ -25,6 +25,7 @@ import { createLLMProvider, type LLMMessage, type LLMProvider } from '../agent/l
 import { getGlobalSettings, type GlobalSettings } from '../settings/crud';
 import { insertMemory } from '../storage/memories/repo';
 import { getMemoryProvider } from './index';
+import type { ConversationContext, ContextMessage } from './types';
 import { logger } from '../logger';
 
 /** 同会话两次提取间最短间隔（毫秒；spec §6.4 去抖） */
@@ -46,7 +47,7 @@ const OVERLAP_LEN = 20;
 const AUTO_CONFIDITY = 0.7;
 /** 单条消息正文在 prompt 中的截断上限：防止 50×大消息打爆 LLM 上下文 */
 const TRANSCRIPT_LINE_MAX = 1000;
-/** session_summary 文本上限（spec §6.4「200 字以内」） */
+/** session_summary 文本上限：spec §6.4 要求「200 字以内」；此处 500 为防 LLM 异常超长输出的安全硬帽 */
 const SUMMARY_MAX_LEN = 500;
 
 /** 模块级去抖表：sessionId → 上次成功启动提取的时间戳（毫秒） */
@@ -123,7 +124,12 @@ async function runExtractionInner(sessionId: string, opts?: { taskId?: string | 
     logger.warn('记忆提取：会话不存在，跳过', { sessionId });
     return;
   }
-  const ctx = await getMemoryProvider().getConversationContext(sessionId, { limit: WINDOW_LIMIT });
+  // 取最近 WINDOW_LIMIT 条窗口（spec §6.4「最近 50 条」语义）。
+  // 直接 DESC LIMIT 取最新 50 条，再反转保 ASC 时间序（与 provider getConversationContext
+  // 返回形态对齐）；reviewer 初版建议的 `beforeTs: MAX+1` 实测 ASC LIMIT 仍返回最早 50
+  // （ASC + 上界 = 过滤后取最小），无法实现「最近 50」意图。本实现走 SQL 直读，复用
+  // messageToContext 做 sender→role 映射（与 sqlite-provider 同款语义）。
+  const ctx = await fetchLatestWindow(sessionId);
   const userMsgCount = ctx.messages.filter((m) => m.role === 'user').length;
   if (userMsgCount < MIN_USER_MESSAGES) return;
 
@@ -137,7 +143,8 @@ async function runExtractionInner(sessionId: string, opts?: { taskId?: string | 
 
   // 4. LLM：解析链复刻 session-naming（leader → def → provider → key → chat）
   const llm = await resolveSessionLlm(sessionId);
-  if (!llm) return; // resolveSessionLlm 已 warn
+  if (!llm) return; // resolveSessionLlm 已 warn；不解 mark——10 分钟内的重复触发同样会因同一 leader
+  // / provider 配置缺失而失败，连续打满错误日志与无谓 DB 查询；防锤击有意保留去抖 mark。
   const res = await llm.chat(buildExtractionMessages(ctx.messages, compressing, priorSummary));
 
   // 5. 解析容错
@@ -490,4 +497,31 @@ function readPriorSummary(sessionId: string): string | null {
     .prepare('SELECT summary FROM session_summaries WHERE session_id = ?')
     .get(sessionId) as { summary: string } | undefined;
   return row?.summary ?? null;
+}
+
+/**
+ * 取最近 WINDOW_LIMIT 条会话消息（spec §6.4「最近 50 条」窗口），保持 ASC 时间序。
+ * 实现：直接 SQL `ORDER BY created_at DESC LIMIT WINDOW_LIMIT` 取最新 N 条，
+ * 再反转保 ASC 与 provider getConversationContext 同款形态。sender → role 映射
+ * 复用 sqlite-provider.messageToContext 同款启发式（owner=user / 其他=assistant）。
+ */
+async function fetchLatestWindow(sessionId: string): Promise<ConversationContext> {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM messages WHERE session_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+    )
+    .all(sessionId, WINDOW_LIMIT) as Array<{
+      id: string; session_id: string; sender: string; event_type: string; body: string;
+      created_at: number; updated_at: number;
+    }>;
+  const messages: ContextMessage[] = rows
+    .reverse()
+    .map((r) => ({
+      role: r.sender === 'owner' ? ('user' as const) : ('assistant' as const),
+      content: r.body,
+      timestamp: r.created_at,
+      sender: r.sender,
+    }));
+  return { messages };
 }
