@@ -21,8 +21,8 @@ const ALL_VARS = [
 
 describe('设计 token 定义', () => {
   it('Tailwind 语义 token 映射到 CSS 变量', () => {
-    // 类型收窄：config 无 theme.extend 时跳过断言会漏检，这里断言结构本身
-    const colors = tailwindConfig.theme.extend.colors;
+    // 断言结构本身：P4 起 colors 独占挂载于 theme（无 extend），结构漂移在此即红
+    const colors = tailwindConfig.theme.colors;
     expect(colors.canvas).toBe('rgb(var(--bg-canvas) / <alpha-value>)');
     expect(colors.surface[1]).toBe('rgb(var(--surface-1) / <alpha-value>)');
     expect(colors.surface[2]).toBe('rgb(var(--surface-2) / <alpha-value>)');
@@ -44,12 +44,21 @@ describe('设计 token 定义', () => {
     expect(colors.backdrop).toBe('var(--bg-backdrop)');
   });
 
-  it('旧 token 迁移期共存（P4 才移除）', () => {
-    const colors = tailwindConfig.theme.extend.colors;
-    expect(colors.bg.primary).toBe('#1a1a1a');
-    expect(colors.border.subtle).toBe('#3a3a3a');
-    expect(colors.accent.blue).toBe('#3b82f6');
-    expect(colors.accent.purple).toBe('#8b5cf6');
+  it('theme.colors 独占锁——无 extend、无 deprecated 旧 token（防回潮）', () => {
+    // P4：colors 直接定义 = 完全替换默认色阶（裸色号类编译期不生成 CSS）；
+    // extend 复活 = 默认色阶合并回潮；bg/border/accent.blue 等旧键复活 =
+    // 已迁移类名获得旧色静默回潮。两者都必须在结构层锁死。
+    const theme = tailwindConfig.theme;
+    expect('extend' in theme).toBe(false);
+    const colors = theme.colors;
+    expect('bg' in colors).toBe(false);
+    expect('border' in colors).toBe(false);
+    expect('blue' in colors.accent).toBe(false);
+    expect('purple' in colors.accent).toBe(false);
+    // transparent / current 是默认色阶成员，独占替换后靠显式声明存活
+    //（src 消费 border-transparent）；误删即样式静默失效，锁死
+    expect(colors.transparent).toBe('transparent');
+    expect(colors.current).toBe('currentColor');
   });
 
   it('globals.css 定义明暗两套完整变量', () => {
