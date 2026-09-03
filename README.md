@@ -15,7 +15,8 @@
 - **注入链路**——`MemoryProvider` 扩展四方法（既有五签名冻结）：常驻/检索双类型注入视图（预算合计 7000 字符，≈3000 token，分段 2000/3000/1000/1000）+ 每轮现拉（UI 修改下一条消息即生效）+ 子 agent 不带会话记忆（fresh-session 对齐）+ `memoryEnabled` 总开关（只 gate 注入）
 - **手动管理**——设置页「记忆」分类：全局/工作空间双层 tab、置顶/编辑/删除（确认）/新增/总开关；`memory:*` 五通道 IPC 双端类型对齐
 - **P2 已落地（agent 工具 + 自动提取）**——MemoryTools 三工具（memory_save/search/forget，用户主权保护 + 审计）；自动提取管线（任务完成/会话每 20 轮触发、10 分钟去抖、ADD-only 提示、BM25 去重、最近 50 条窗口 DESC 取数）；会话滚动压缩（>40 消息融合既有摘要 upsert + covered_until 游标）；设置页「自动提取」开关（总开关联动禁用）；boot jieba 冒烟；注入补强（会话记忆段/provider 兜底空视图/catalog SQL LIMIT）
-- 待办：macOS 主机冒烟（P1 四项 + P2 两项：会话 20 轮后 auto 条目出现 / 长会话重开带摘要接续）；P3 = 导出 md/遗忘建议/统计
+- **P3 已落地（收官）**——记忆导出/导入 Markdown（同 scope 去重 + source 固定 user）；命中统计（use_count/最近命中）+ auto 条目 90 天「建议清理」黄标（仅标记，删除仍走确认）；content 长度上限双端 enforcement（2000/rule 4000）；数据信号净化（提取去重不污染计数/top3 比对）；审计层级标识、messageToContext 单点化、UI 错误条/竞态守卫/回滚/a11y 打磨
+- 待办：macOS 主机冒烟八项（P1 四 + P2 两 + P3 两：导出→清库→导入复原 / auto 条目 90 天黄标）——v2.2 功能全量完成
 
 **v2.0.0 — Released**
 
