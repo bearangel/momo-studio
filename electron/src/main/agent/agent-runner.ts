@@ -26,6 +26,7 @@ import { logger } from '../logger';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
 import { finalizeStreamOnCrash } from './stream-relay';
+import { scheduleExtraction } from '../memory/extraction';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -88,6 +89,8 @@ export interface AgentRunnerOpts {
 /** 活跃 task 记录——keyed by streamSessionId */
 interface ActiveTask {
   streamSessionId: string;
+  /** 执行会话 ID（任务完成触发记忆提取用；与 TaskConfig.executionSessionId 同源） */
+  executionSessionId: string;
   runtime: WarmRuntime;
   taskId: string | null;
   /** 注册到 child 的 message handler，destroy/end 时用于 off 反注册 */
@@ -179,6 +182,7 @@ export class AgentRunner {
 
     const active: ActiveTask = {
       streamSessionId: task.streamSessionId,
+      executionSessionId: task.executionSessionId,
       runtime,
       taskId: task.taskId,
       messageHandler,
@@ -224,6 +228,16 @@ export class AgentRunner {
       this.transitionTaskTerminal(active, taskEndInfo);
     }
     this.opts.warmPool.release(active.runtime);
+    // v2.2 记忆 P2（spec §6.4 触发点）：任务正常收尾（非 error/abort）→
+    // fire-and-forget 触发记忆提取。gate 口径与 transitionTaskTerminal 的
+    // failed/cancelled 判定对齐：task-end 携带 error、或前置 end chunk
+    // finishReason 为 error/interrupted 时不触发；绝不 await（铁律：不阻塞收尾链路）。
+    const finishReason = active.lastFinish?.finishReason;
+    const completedNormally =
+      taskEndInfo?.error === undefined && finishReason !== 'error' && finishReason !== 'interrupted';
+    if (completedNormally) {
+      scheduleExtraction(active.executionSessionId, { taskId: active.taskId });
+    }
   }
 
   /**

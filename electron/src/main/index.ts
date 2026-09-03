@@ -19,6 +19,7 @@ import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
 import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
+import { tokenizeForIndex } from './storage/memories/tokenize';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -40,6 +41,17 @@ app.whenReady().then(async () => {
 
     runMigrations();
     logger.info('Migrations complete');
+
+    // v2.2 记忆 P2：jieba native binding 冒烟——在首次写库前暴露打包/ABI 问题
+    // （better-sqlite3 之外唯一的 native 依赖）。不 exit：冒烟失败只代表记忆检索
+    // 不可用，不应拖垮应用启动；运行期记忆读写会再次抛错并留痕（降级运行）。
+    try {
+      tokenizeForIndex('启动冒烟');
+    } catch (err) {
+      logger.error('jieba 分词冒烟失败（记忆检索可能不可用，应用继续运行）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     if (legacyExportDir) {
       try {

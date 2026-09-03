@@ -146,3 +146,11 @@ export function listOlderMessages(sessionId: string, beforeTs: number, limit: nu
   const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? AND created_at < ? ORDER BY created_at ASC LIMIT ?').all(sessionId, beforeTs, limit) as SqlRow[];
   return rows.map(rowToCamel);
 }
+
+/** 统计会话内用户（owner）消息数——v2.2 记忆提取轮次触发用（agent 回复不计轮次） */
+export function countOwnerMessages(sessionId: string): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND sender = 'owner'`)
+    .get(sessionId) as { n: number };
+  return row.n;
+}

@@ -30,6 +30,7 @@ import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
   listMessagesBySession,
   listOlderMessages,
+  countOwnerMessages,
   type MessageRow,
 } from '../storage/messages/repo';
 import {
@@ -39,6 +40,7 @@ import {
 import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
+import { scheduleExtraction, TRIGGER_TURN_INTERVAL } from '../memory/extraction';
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
 function toSummary(row: SessionRow): SessionSummary {
@@ -105,7 +107,22 @@ export function registerSessionIpcHandlers(): void {
   ipcMain.handle(
     'session:send',
     async (_evt, sessionId: string, body: string, mentionedInstanceIds?: string[]) => {
-      return sendUserMessage({ sessionId, body, mentionedInstanceIds });
+      const result = await sendUserMessage({ sessionId, body, mentionedInstanceIds });
+      // v2.2 记忆 P2（spec §6.4 触发点）：用户消息落库成功后按轮次间隔触发自动提取。
+      // owner 消息数（含本条）% TRIGGER_TURN_INTERVAL === 0 时触发；fire-and-forget。
+      // 计数失败仅告警——消息已落库并路由，绝不能因提取触发拖垮 send 返回（spec §8）。
+      try {
+        const ownerCount = countOwnerMessages(sessionId);
+        if (ownerCount > 0 && ownerCount % TRIGGER_TURN_INTERVAL === 0) {
+          scheduleExtraction(sessionId);
+        }
+      } catch (err) {
+        logger.warn('记忆提取轮次计数失败（不影响消息发送）', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return result;
     },
   );
 

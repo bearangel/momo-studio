@@ -37,6 +37,13 @@ import {
 } from '../../src/main/storage/messages/repo';
 import type { ChildProcess } from 'node:child_process';
 
+// v2.2 记忆 P2 Task 4：runner 收尾接线 scheduleExtraction（fire-and-forget）。
+// 本文件聚焦 runner 生命周期语义——extraction 模块最小 mock，防真实提取链
+// 在收尾用例里跨模块读写测试库（触发断言在 tests/memory/extraction-triggers.test.ts）。
+vi.mock('../../src/main/memory/extraction', () => ({
+  scheduleExtraction: vi.fn(),
+}));
+
 /**
  * 构造 mock 子进程——记录 message handler 以便测试模拟子进程发 chunk。
  * send() 收到 task-config 后异步回 task-ack（模拟真实子进程握手）。
