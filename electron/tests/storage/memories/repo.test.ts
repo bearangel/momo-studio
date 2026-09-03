@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../../src/main/storage/db';
 import {
-  insertMemory, updateMemory, deleteMemory, getMemory, listMemories,
+  insertMemory, updateMemory, deleteMemory, getMemory, listMemories, touchMemoryUsed,
 } from '../../../src/main/storage/memories/repo';
 import { buildMatchExpr } from '../../../src/main/storage/memories/tokenize';
 
@@ -88,5 +88,25 @@ describe('memories repo', () => {
     const hitPhrase = getDb().prepare('SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?').all(expr);
     expect(hitWord.some((r) => (r as { rowid: number }).rowid === m.rowid)).toBe(true);
     expect(hitPhrase.some((r) => (r as { rowid: number }).rowid === m.rowid)).toBe(true);
+  });
+
+  // Fix round 2 评审补全：错误路径——update/delete 不存在 id 必须抛错（契约：记忆不存在）
+  it('错误路径：update/delete 不存在的 id 抛错（契约：记忆不存在）', () => {
+    expect(() => updateMemory('no-such-id', { content: 'x' })).toThrow(/记忆不存在/);
+    expect(() => deleteMemory('no-such-id')).toThrow(/记忆不存在/);
+  });
+
+  // Fix round 2 评审补全：touchMemoryUsed 计数与时间戳维护（spec §5.1）
+  it('touchMemoryUsed：批量递增 use_count + last_used_at；空数组为 no-op', () => {
+    const a = insertMemory({ scope: 'global', kind: 'knowledge', content: '计数甲 alpha', source: 'user' });
+    const b = insertMemory({ scope: 'global', kind: 'knowledge', content: '计数乙 beta', source: 'user' });
+    touchMemoryUsed([]);  // 空数组不抛错
+    touchMemoryUsed([a.id, b.id, a.id]); // 同一 id 两次 → use_count=2
+    const rows = getDb().prepare('SELECT id, use_count, last_used_at FROM memories').all() as Array<{ id: string; use_count: number; last_used_at: number }>;
+    const ra = rows.find((r) => r.id === a.id)!;
+    const rb = rows.find((r) => r.id === b.id)!;
+    expect(ra.use_count).toBe(2);
+    expect(rb.use_count).toBe(1);
+    expect(ra.last_used_at).toBeGreaterThan(0);
   });
 });
