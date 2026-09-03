@@ -10,7 +10,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 // 1) 禁 className 中标准 Tailwind 色阶类 → 用语义 token
 // 2) 禁 inline style 硬编码 hex/rgb 颜色 → 用语义 token class
 // 3) 禁 JSX 文本/属性字符串 emoji → 用 lucide-react 图标
-// P0 全局 warn（存量可见）；ui/ 与 task-status 新代码 error 零容忍；P4 全局升 error。
+// v2.1 P4 全局 error 化（renderer/src 全覆盖；ui/ 与 task-status 冗余子块随之删除）。
 const UI_RESTRICTED_SYNTAX = [
   {
     selector:
@@ -60,16 +60,9 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
     },
   },
-  // 全局 warn：存量渐进收紧
+  // 全局 error：v2.1 P4 收官——存量与新代码同等约束
   {
     files: ['renderer/src/**/*.{ts,tsx}'],
-    rules: {
-      'no-restricted-syntax': ['warn', ...UI_RESTRICTED_SYNTAX],
-    },
-  },
-  // 新代码零容忍：原子件与状态模块
-  {
-    files: ['renderer/src/components/ui/**/*.tsx', 'renderer/src/lib/task-status.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...UI_RESTRICTED_SYNTAX],
     },
