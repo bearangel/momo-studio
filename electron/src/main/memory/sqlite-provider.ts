@@ -22,6 +22,16 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
+import { getGlobalSettings } from '../settings/crud';
+import {
+  insertMemory,
+  deleteMemory as repoDelete,
+  listMemories,
+  touchMemoryUsed,
+} from '../storage/memories/repo';
+import { searchMemories } from '../storage/memories/search';
+import { buildPinnedView, type PinnedParts, type PinnedMemoryView } from './injection';
+import type { MemoryEntry, SaveMemoryInput } from '../storage/memories/repo';
 import type {
   MemoryProvider,
   TaskContext,
@@ -137,8 +147,11 @@ export class SQLiteMemoryProvider implements MemoryProvider {
     return { preferences: [], learnedPatterns: [] };
   }
 
+  /** v2.2 真实化：全局 preference 条目（团队共享语义，无 agent 私有维度） */
   async getUserContext(_userId: string): Promise<UserContext> {
-    return { preferences: [] };
+    return {
+      preferences: listMemories({ kind: 'global' }, { kind: 'preference' }).map((m) => m.content),
+    };
   }
 
   async getWorkspaceContext(
@@ -156,6 +169,44 @@ export class SQLiteMemoryProvider implements MemoryProvider {
       workspaceName: row.name,
       directoryPath: row.directory_path,
     };
+  }
+
+  /** v2.2：常驻注入视图（每轮现拉；总开关关闭返回空视图，spec §9） */
+  async getPinnedContext(opts: { workspaceId: string; sessionId: string | null }): Promise<PinnedMemoryView> {
+    if (!getGlobalSettings().memoryEnabled) return { hint: '', truncatedCount: 0, pinnedIds: [] };
+    const globalPinned = listMemories({ kind: 'global' }, { pinned: true });
+    const workspacePinned = opts.workspaceId
+      ? listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: true })
+      : [];
+    let sessionSummary: PinnedParts['sessionSummary'] = null;
+    if (opts.sessionId) {
+      const row = getDb().prepare(
+        'SELECT summary, covered_until, updated_at FROM session_summaries WHERE session_id = ?',
+      ).get(opts.sessionId) as { summary: string; covered_until: number; updated_at: number } | undefined;
+      if (row) sessionSummary = { summary: row.summary, coveredUntil: row.covered_until, updatedAt: row.updated_at };
+    }
+    // 检索型目录：global + 本 ws（+ 本会话）各取最新合并限量 30 条
+    const catalogSources = [
+      ...listMemories({ kind: 'global' }, { pinned: false }),
+      ...listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: false }),
+      ...(opts.sessionId ? listMemories({ kind: 'session', sessionId: opts.sessionId }, { pinned: false }) : []),
+    ];
+    const catalog = catalogSources.slice(0, 30);
+    return buildPinnedView({ globalPinned, workspacePinned, sessionSummary, catalog });
+  }
+
+  async searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit = 10): Promise<MemoryEntry[]> {
+    const hits = searchMemories(query, scope, limit);
+    if (hits.length > 0) touchMemoryUsed(hits.map((h) => h.id));
+    return hits;
+  }
+
+  async saveMemory(input: SaveMemoryInput): Promise<MemoryEntry> {
+    return insertMemory(input);
+  }
+
+  async deleteMemory(id: string): Promise<void> {
+    repoDelete(id);
   }
 }
 

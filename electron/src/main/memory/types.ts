@@ -12,6 +12,11 @@
 // v2+ 实现：可注入 FullMemoryProvider（加 LLM 总结 + 向量检索 + agent 偏好学习）。
 // 接口不变，调用方无感切换。
 import type { TaskRow } from '../storage/tasks/repo';
+import type { MemoryEntry, SaveMemoryInput } from '../storage/memories/repo';
+import type { PinnedMemoryView } from './injection';
+
+export type { MemoryEntry, SaveMemoryInput } from '../storage/memories/repo';
+export type { PinnedMemoryView } from './injection';
 
 /**
  * task 关键事件摘要（一行人类可读）。
@@ -126,4 +131,13 @@ export interface MemoryProvider {
   getUserContext(userId: string): Promise<UserContext>;
   /** 取 workspace 静态信息（不存在返回 null） */
   getWorkspaceContext(workspaceId: string): Promise<WorkspaceContext | null>;
+  // —— v2.2 新增 ——
+  /** 常驻注入视图（总开关关闭时返回空视图，spec §9） */
+  getPinnedContext(opts: { workspaceId: string; sessionId: string | null }): Promise<PinnedMemoryView>;
+  /** BM25 检索（命中条目递增 use_count） */
+  searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit?: number): Promise<MemoryEntry[]>;
+  /** 写入记忆（pinned 缺省按 kind 推导：rule/preference=常驻） */
+  saveMemory(input: SaveMemoryInput): Promise<MemoryEntry>;
+  /** 删除记忆（不存在抛错） */
+  deleteMemory(id: string): Promise<void>;
 }

@@ -26,6 +26,8 @@ export interface GlobalSettings {
   defaultRerankModel?: DefaultModelRef;
   /** 全局并发任务上限（global_settings 表 v21 单行配置，默认 3）。 */
   maxConcurrentTasks?: number;
+  /** v2.2：记忆系统总开关（false=停止注入与提取；DB 保留） */
+  memoryEnabled?: boolean;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -53,6 +55,7 @@ export function getGlobalSettings(): GlobalSettings {
       maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
       auditQuotaMb: DEFAULT_AUDIT_QUOTA_MB,
       maxConcurrentTasks,
+      memoryEnabled: true,
     };
   }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
@@ -64,6 +67,7 @@ export function getGlobalSettings(): GlobalSettings {
     defaultEmbeddingModel: parsed.defaultEmbeddingModel,
     defaultRerankModel: parsed.defaultRerankModel,
     maxConcurrentTasks,
+    memoryEnabled: parsed.memoryEnabled ?? true,
   };
 }
 
