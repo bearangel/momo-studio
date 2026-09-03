@@ -189,6 +189,9 @@ const api: ApiSurface = {
     update: (id, patch) => invoke('memory:update', id, patch),
     delete: (id) => invoke('memory:delete', id),
     search: (q, scope, limit) => invoke('memory:search', q, scope, limit),
+    // v2.2 P3：导出/导入 Markdown（通道名与 ipc.handlers.ts / renderer types.d.ts 三方逐字对齐）
+    exportMarkdown: (scope) => invoke('memory:exportMarkdown', scope),
+    importMarkdown: (scope, content) => invoke('memory:importMarkdown', scope, content),
   },
   resource: {
     // v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选

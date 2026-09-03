@@ -2,8 +2,8 @@
 // v2.2 记忆管理页（spec §7.3）：全局/工作空间双层 tab + 列表（置顶/编辑/删除）+ 总开关。
 // 会话层记忆从会话详情入口进入（P2）；本页新增固定 user 视角（source='user'）。
 // 总开关经 settings.updateGlobal 的 memoryEnabled（false = 注入与提取暂停）。
-import { useCallback, useEffect, useState } from 'react';
-import { Brain, Pin, PinOff, Pencil, Trash2, Plus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Brain, Pin, PinOff, Pencil, Trash2, Plus, Download, Upload } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { MemoryEntry, MemoryListScope } from '../../ipc/types';
 import { Button } from '../ui/Button';
@@ -41,6 +41,10 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const [creating, setCreating] = useState(false);
   const [newText, setNewText] = useState('');
   const [newKind, setNewKind] = useState<MemoryEntry['kind']>('rule');
+  // v2.2 P3：导入结果反馈（成功结果行 / 失败红字）
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // 按 tab 构造 scope 拉列表（filter 位本页未消费，省略）
   const reload = useCallback(() => {
@@ -108,6 +112,50 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
     reload();
   };
 
+  // 导出：当前 tab 层 → main 生成 Markdown → Blob 下载（同 session.exportMessages 消费端）
+  const doExport = async () => {
+    const scope: MemoryListScope = tab === 'global'
+      ? { kind: 'global' }
+      : { kind: 'workspace', workspaceId };
+    const { filename, content } = await ipc.memory.exportMarkdown(scope);
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // 导入：File API 读文本后 invoke；目标 = 当前 tab 层（本页仅 global/workspace 两层——
+  // session 层拒绝在 main 侧 markdown.ts 兜底，故此处无需再设 tab 分支守卫）。
+  // 用 FileReader 而非 file.text()：两者在 Chromium 等价，但 jsdom 未实现后者
+  const readFileText = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'));
+      reader.readAsText(file);
+    });
+
+  const doImport = async (file: File) => {
+    try {
+      const content = await readFileText(file);
+      const scope: MemoryListScope = tab === 'global'
+        ? { kind: 'global' }
+        : { kind: 'workspace', workspaceId };
+      const { imported, skipped } = await ipc.memory.importMarkdown(scope, content);
+      setImportResult(`已导入 ${imported} 条，跳过 ${skipped} 条`);
+      setImportError(null);
+      reload();
+    } catch (err) {
+      setImportError((err as Error).message);
+      setImportResult(null);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -165,11 +213,33 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
         ))}
       </div>
 
-      <div>
+      <div className="flex items-center gap-2">
+        <Button variant="secondary" size="sm" aria-label="导出记忆" onClick={doExport}>
+          <Download size={16} strokeWidth={1.75} aria-hidden /> 导出
+        </Button>
+        <Button variant="secondary" size="sm" aria-label="导入记忆" onClick={() => fileInputRef.current?.click()}>
+          <Upload size={16} strokeWidth={1.75} aria-hidden /> 导入
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,text/markdown"
+          className="hidden"
+          aria-label="导入记忆文件"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // 置空 value 使同文件可重复选择（每次 change 都触发导入）
+            e.target.value = '';
+            if (file) void doImport(file);
+          }}
+        />
         <Button variant="secondary" size="sm" onClick={() => { setCreating(true); setNewText(''); setNewKind('rule'); }}>
           <Plus size={16} strokeWidth={1.75} aria-hidden /> 新增记忆
         </Button>
       </div>
+
+      {importResult && <p className="text-xs text-secondary">{importResult}</p>}
+      {importError && <p className="text-xs text-status-error">{importError}</p>}
 
       <ul className="flex flex-col gap-2" aria-label="记忆列表">
         {entries.map((e) => (

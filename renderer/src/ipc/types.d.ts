@@ -796,6 +796,19 @@ export interface MemoryApiSurface {
    * 管理页固定本机视角：workspaceId 必填（缺失返回空数组），sessionId 可选；limit 默认 20。
    */
   search(q: string, scope: { workspaceId: string; sessionId?: string }, limit?: number): Promise<MemoryEntry[]>;
+  /**
+   * v2.2 P3：导出一层记忆为 Markdown（人类可读 + 可再导入）。
+   * 格式：`# 记忆导出（层名）` + 日期行 + 逐条 `## [kind|source|pinned] content` + `- tag` 行。
+   * 与 electron 端 storage/memories/markdown.ts 的 exportMemoriesMarkdown 对齐。
+   */
+  exportMarkdown(scope: MemoryListScope): Promise<{ filename: string; content: string }>;
+  /**
+   * v2.2 P3：导入 Markdown 到传入 scope 同层（global→global；workspace→该 workspaceId；
+   * session 拒绝——invoke 抛错，UI 仅 global/workspace 层提供入口）。
+   * 逐 `## ` 段解析，source 固定 'user'；坏段/去重命中计入 skipped。
+   * 与 electron 端 storage/memories/markdown.ts 的 importMemoriesMarkdown 对齐。
+   */
+  importMarkdown(scope: MemoryListScope, content: string): Promise<{ imported: number; skipped: number }>;
 }
 
 export interface ApiSurface {
