@@ -8,6 +8,7 @@ import { runMigrations, closeDb, getDb } from '../../../src/main/storage/db';
 import {
   insertMemory, updateMemory, deleteMemory, getMemory, listMemories,
 } from '../../../src/main/storage/memories/repo';
+import { buildMatchExpr } from '../../../src/main/storage/memories/tokenize';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-memrepo-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -80,9 +81,11 @@ describe('memories repo', () => {
   // Task 1 评审遗留覆盖：punct-merge 形态经插入 + FTS MATCH 端到端可检索
   it('标点合并形态经 FTS 端到端可检索（Task1 评审遗留覆盖）', () => {
     const m = insertMemory({ scope: 'global', kind: 'knowledge', content: '用户，偏好简洁', source: 'user' });
-    // unicode61 在标点处重切：单词「用户」与全串短语都应命中
+    // unicode61 在标点处重切：单词「用户」单独命中；全角标点短语走 buildMatchExpr 真实消费路径
+    // （raw 短语是 unicode61 固有不可达路径；spec §5.3 查询侧与索引侧共用同一 jieba 分词）
     const hitWord = getDb().prepare("SELECT rowid FROM memories_fts WHERE memories_fts MATCH '\"用户\"'").all();
-    const hitPhrase = getDb().prepare("SELECT rowid FROM memories_fts WHERE memories_fts MATCH '\"用户，偏好简洁\"'").all();
+    const expr = buildMatchExpr('用户，偏好简洁');
+    const hitPhrase = getDb().prepare('SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?').all(expr);
     expect(hitWord.some((r) => (r as { rowid: number }).rowid === m.rowid)).toBe(true);
     expect(hitPhrase.some((r) => (r as { rowid: number }).rowid === m.rowid)).toBe(true);
   });
