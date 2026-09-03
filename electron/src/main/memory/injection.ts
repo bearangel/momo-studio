@@ -1,5 +1,5 @@
 // electron/src/main/memory/injection.ts
-// 常驻注入视图组装（spec §6.3）：预算合计 7000 字符（≈3000 token，分段 2000/3000/1000/1000；
+// 常驻注入视图组装（spec §6.3）：预算合计 7500 字符（≈3000 token，分段 2000/3000/1000/500/1000；
 // 中英混合近似——业界生产共识 2000-3000 token 常驻）。超预算按 updated_at 新者保留。
 import type { MemoryEntry } from '../storage/memories/repo';
 
@@ -12,8 +12,9 @@ export interface SessionSummaryRow {
 export interface PinnedParts {
   globalPinned: MemoryEntry[];
   workspacePinned: MemoryEntry[];
+  sessionPinned: MemoryEntry[];  // 会话层常驻条目（子 agent sessionId=null 时为空数组）
   sessionSummary: SessionSummaryRow | null;
-  catalog: MemoryEntry[];       // 非 pinned 检索型目录行（已限量）
+  catalog: MemoryEntry[];       // 非 pinned 检索型目录行（各路已 SQL 限量；合并后超 CATALOG_MAX_ROWS 计入截断）
 }
 
 export interface PinnedMemoryView {
@@ -25,9 +26,12 @@ export interface PinnedMemoryView {
 const BUDGET_GLOBAL = 2000;
 const BUDGET_WORKSPACE = 3000;
 const BUDGET_SESSION = 1000;
+const BUDGET_SESSION_PINNED = 500;
 const BUDGET_CATALOG = 1000;
 /** 目录行单条预览长度 */
 const CATALOG_PREVIEW = 30;
+/** 目录行数上限（合并三路后限量；超出部分计入 truncatedCount，不静默丢弃） */
+export const CATALOG_MAX_ROWS = 30;
 
 function takeWithinBudget(entries: MemoryEntry[], budget: number): { kept: MemoryEntry[]; truncated: number } {
   let used = 0;
@@ -48,6 +52,7 @@ function section(title: string, lines: string[]): string | null {
 export function buildPinnedView(parts: PinnedParts): PinnedMemoryView {
   const g = takeWithinBudget(parts.globalPinned, BUDGET_GLOBAL);
   const w = takeWithinBudget(parts.workspacePinned, BUDGET_WORKSPACE);
+  const sp = takeWithinBudget(parts.sessionPinned, BUDGET_SESSION_PINNED);
   const sections: string[] = [];
 
   const gSec = section('全局（用户偏好与通用规范）', g.kept.map((e) => `- ${e.content}`));
@@ -60,12 +65,19 @@ export function buildPinnedView(parts: PinnedParts): PinnedMemoryView {
     sections.push(`### 本会话背景摘要\n${s}`);
   }
 
-  let truncated = g.truncated + w.truncated;
+  // 会话层常驻条目：置于摘要段之后（spec §6.3 分段顺序）
+  const spSec = section('会话记忆', sp.kept.map((e) => `- ${e.content}`));
+  if (spSec) sections.push(spSec);
+
+  // 目录先按行数限量（溢出计入截断），再按字符预算截断
+  let truncated = g.truncated + w.truncated + sp.truncated;
+  const catRows = parts.catalog.slice(0, CATALOG_MAX_ROWS);
+  truncated += parts.catalog.length - catRows.length;
   const catLines: string[] = [];
   let catUsed = 0;
-  for (const e of parts.catalog) {
+  for (const e of catRows) {
     const line = `- (${e.kind}) ${e.content.slice(0, CATALOG_PREVIEW)}`;
-    if (catUsed + line.length > BUDGET_CATALOG) { truncated += parts.catalog.length - catLines.length; break; }
+    if (catUsed + line.length > BUDGET_CATALOG) { truncated += catRows.length - catLines.length; break; }
     catLines.push(line);
     catUsed += line.length;
   }
@@ -78,6 +90,6 @@ export function buildPinnedView(parts: PinnedParts): PinnedMemoryView {
   return {
     hint: `\n\n## 记忆\n${sections.join('\n\n')}${tail}`,
     truncatedCount: truncated,
-    pinnedIds: [...g.kept, ...w.kept].map((e) => e.id),
+    pinnedIds: [...g.kept, ...w.kept, ...sp.kept].map((e) => e.id),
   };
 }

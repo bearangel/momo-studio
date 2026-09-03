@@ -1,10 +1,12 @@
 // electron/tests/memory/injection.test.ts
 // buildPinnedView 注入预算专项用例（spec §11.1 明文缺口——终审修复 F1）：
-// 纯函数直测（对象字面量构造 MemoryEntry，不经 DB），锁定四类口径：
+// 纯函数直测（对象字面量构造 MemoryEntry，不经 DB），锁定口径：
 //   1. 全局超预算截断：kept 按序保留 + truncatedCount + 尾注条数
 //   2. 全空 parts → 空视图（不注入空段）
 //   3. sessionSummary 注入「### 本会话背景摘要」段；超 1000 字符被 slice
 //   4. catalog 目录行 30 字预览 + pinnedIds 只含常驻条目
+//   5. sessionPinned 注入「### 会话记忆」段（摘要段之后，预算 500）
+//   6. catalog 超 30 条：溢出计入 truncatedCount（不再静默丢弃）
 import { describe, it, expect } from 'vitest';
 import { buildPinnedView } from '../../src/main/memory/injection';
 import type { MemoryEntry } from '../../src/main/storage/memories/repo';
@@ -40,7 +42,7 @@ describe('buildPinnedView 注入预算', () => {
     const e2 = entry({ content: 'B'.repeat(900) });
     const e3 = entry({ content: 'C'.repeat(900) });
     const view = buildPinnedView({
-      globalPinned: [e1, e2, e3], workspacePinned: [], sessionSummary: null, catalog: [],
+      globalPinned: [e1, e2, e3], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [],
     });
     expect(view.pinnedIds).toEqual([e1.id, e2.id]);
     expect(view.truncatedCount).toBe(1);
@@ -51,13 +53,13 @@ describe('buildPinnedView 注入预算', () => {
   });
 
   it('全空 parts：返回空视图（不注入空段）', () => {
-    const view = buildPinnedView({ globalPinned: [], workspacePinned: [], sessionSummary: null, catalog: [] });
+    const view = buildPinnedView({ globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [] });
     expect(view).toEqual({ hint: '', truncatedCount: 0, pinnedIds: [] });
   });
 
   it('会话摘要：注入「### 本会话背景摘要」段；超 1000 字符被 slice', () => {
     const short = buildPinnedView({
-      globalPinned: [], workspacePinned: [],
+      globalPinned: [], workspacePinned: [], sessionPinned: [],
       sessionSummary: { summary: '短摘要应全部注入', coveredUntil: 1, updatedAt: 1 },
       catalog: [],
     });
@@ -67,7 +69,7 @@ describe('buildPinnedView 注入预算', () => {
     // 1000 字符之后的标记不应出现（BUDGET_SESSION 截断）
     const marker = 'TAIL_MARKER_BEYOND_1000';
     const long = buildPinnedView({
-      globalPinned: [], workspacePinned: [],
+      globalPinned: [], workspacePinned: [], sessionPinned: [],
       sessionSummary: { summary: 'x'.repeat(1000) + marker, coveredUntil: 1, updatedAt: 1 },
       catalog: [],
     });
@@ -78,11 +80,39 @@ describe('buildPinnedView 注入预算', () => {
     const pinned = entry({ content: '常驻规范条目' });
     const cat = entry({ kind: 'knowledge', pinned: false, content: 'X'.repeat(30) + '超出预览长度的尾部内容' });
     const view = buildPinnedView({
-      globalPinned: [pinned], workspacePinned: [], sessionSummary: null, catalog: [cat],
+      globalPinned: [pinned], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [cat],
     });
     expect(view.hint).toContain('### 可检索记忆目录');
     expect(view.hint).toContain(`- (knowledge) ${'X'.repeat(30)}`);
     expect(view.hint).not.toContain('超出预览长度的尾部内容');
     expect(view.pinnedIds).toEqual([pinned.id]);
+  });
+
+  it('会话记忆段：session pinned 注入「### 会话记忆」且置于摘要段之后；超 500 字符截断计入 truncatedCount', () => {
+    const sp1 = entry({ scope: 'session', workspaceId: 'ws1', sessionId: 's1', content: '会话常驻：优先用 vitest' });
+    const sp2 = entry({ scope: 'session', workspaceId: 'ws1', sessionId: 's1', content: 'B'.repeat(600) });
+    const view = buildPinnedView({
+      globalPinned: [], workspacePinned: [], sessionPinned: [sp1, sp2],
+      sessionSummary: { summary: '本会话摘要正文', coveredUntil: 1, updatedAt: 1 },
+      catalog: [],
+    });
+    expect(view.hint).toContain('### 会话记忆');
+    expect(view.hint).toContain('会话常驻：优先用 vitest');
+    // 第二条 600 字超 500 预算被截断（第一条已占用部分预算）
+    expect(view.hint).not.toContain(sp2.content.slice(0, 100));
+    expect(view.truncatedCount).toBe(1);
+    expect(view.pinnedIds).toEqual([sp1.id]);
+    // 段顺序：「### 会话记忆」置于「### 本会话背景摘要」之后
+    expect(view.hint.indexOf('### 本会话背景摘要')).toBeLessThan(view.hint.indexOf('### 会话记忆'));
+  });
+
+  it('目录超 30 条：溢出计入 truncatedCount（不再静默丢弃）', () => {
+    const catalog = Array.from({ length: 35 }, (_, i) =>
+      entry({ kind: 'knowledge', pinned: false, content: `目录条目 ${String(i).padStart(2, '0')}` }));
+    const view = buildPinnedView({
+      globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog,
+    });
+    // 35 条合并限量 30，溢出 5 条计入；行短不触发 1000 字符预算
+    expect(view.truncatedCount).toBe(5);
   });
 });

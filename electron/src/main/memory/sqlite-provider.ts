@@ -30,7 +30,8 @@ import {
   touchMemoryUsed,
 } from '../storage/memories/repo';
 import { searchMemories } from '../storage/memories/search';
-import { buildPinnedView, type PinnedParts, type PinnedMemoryView } from './injection';
+import { buildPinnedView, CATALOG_MAX_ROWS, type PinnedParts, type PinnedMemoryView } from './injection';
+import { logger } from '../logger';
 import type { MemoryEntry, SaveMemoryInput } from '../storage/memories/repo';
 import type {
   MemoryProvider,
@@ -171,28 +172,47 @@ export class SQLiteMemoryProvider implements MemoryProvider {
     };
   }
 
-  /** v2.2：常驻注入视图（每轮现拉；总开关关闭返回空视图，spec §9） */
+  /**
+   * v2.2：常驻注入视图（每轮现拉；总开关关闭返回空视图，spec §9）。
+   * 整体 try/catch：底层 SQLite 异常（如 FTS CORRUPT_VTAB 形态，P1 实证）降级为空视图，
+   * 绝不让注入阻塞消息处理主链路。
+   */
   async getPinnedContext(opts: { workspaceId: string; sessionId: string | null }): Promise<PinnedMemoryView> {
-    if (!getGlobalSettings().memoryEnabled) return { hint: '', truncatedCount: 0, pinnedIds: [] };
-    const globalPinned = listMemories({ kind: 'global' }, { pinned: true });
-    const workspacePinned = opts.workspaceId
-      ? listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: true })
-      : [];
-    let sessionSummary: PinnedParts['sessionSummary'] = null;
-    if (opts.sessionId) {
-      const row = getDb().prepare(
-        'SELECT summary, covered_until, updated_at FROM session_summaries WHERE session_id = ?',
-      ).get(opts.sessionId) as { summary: string; covered_until: number; updated_at: number } | undefined;
-      if (row) sessionSummary = { summary: row.summary, coveredUntil: row.covered_until, updatedAt: row.updated_at };
+    try {
+      if (!getGlobalSettings().memoryEnabled) return { hint: '', truncatedCount: 0, pinnedIds: [] };
+      const globalPinned = listMemories({ kind: 'global' }, { pinned: true });
+      const workspacePinned = opts.workspaceId
+        ? listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: true })
+        : [];
+      // 会话层常驻条目：子 agent（sessionId=null）不带会话记忆（fresh-session 对齐）
+      const sessionPinned = opts.sessionId
+        ? listMemories({ kind: 'session', sessionId: opts.sessionId }, { pinned: true })
+        : [];
+      let sessionSummary: PinnedParts['sessionSummary'] = null;
+      if (opts.sessionId) {
+        const row = getDb().prepare(
+          'SELECT summary, covered_until, updated_at FROM session_summaries WHERE session_id = ?',
+        ).get(opts.sessionId) as { summary: string; covered_until: number; updated_at: number } | undefined;
+        if (row) sessionSummary = { summary: row.summary, coveredUntil: row.covered_until, updatedAt: row.updated_at };
+      }
+      // 检索型目录：global + 本 ws（+ 本会话）各路 SQL LIMIT 封顶拉取（免全量拉取后内存 slice），
+      // 合并限量与溢出计数由 buildPinnedView 统一执行
+      const catalog = [
+        ...listMemories({ kind: 'global' }, { pinned: false }, CATALOG_MAX_ROWS),
+        ...listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: false }, CATALOG_MAX_ROWS),
+        ...(opts.sessionId
+          ? listMemories({ kind: 'session', sessionId: opts.sessionId }, { pinned: false }, CATALOG_MAX_ROWS)
+          : []),
+      ];
+      return buildPinnedView({ globalPinned, workspacePinned, sessionPinned, sessionSummary, catalog });
+    } catch (err) {
+      logger.error('getPinnedContext 失败，降级为空视图（不阻塞消息处理）', {
+        workspaceId: opts.workspaceId,
+        sessionId: opts.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { hint: '', truncatedCount: 0, pinnedIds: [] };
     }
-    // 检索型目录：global + 本 ws（+ 本会话）各取最新合并限量 30 条
-    const catalogSources = [
-      ...listMemories({ kind: 'global' }, { pinned: false }),
-      ...listMemories({ kind: 'workspace', workspaceId: opts.workspaceId }, { pinned: false }),
-      ...(opts.sessionId ? listMemories({ kind: 'session', sessionId: opts.sessionId }, { pinned: false }) : []),
-    ];
-    const catalog = catalogSources.slice(0, 30);
-    return buildPinnedView({ globalPinned, workspacePinned, sessionSummary, catalog });
   }
 
   async searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit = 10): Promise<MemoryEntry[]> {

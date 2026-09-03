@@ -1,7 +1,7 @@
 // electron/tests/memory/provider-memory.test.ts
-// MemoryProvider 扩展：getPinnedContext（开关 gate/分层组装/摘要注入/目录行）、
-// saveMemory/deleteMemory/searchMemories（含 use_count 递增）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// MemoryProvider 扩展：getPinnedContext（开关 gate/分层组装/摘要注入/目录行/会话记忆段/
+// 目录溢出计数/底层异常兜底）、saveMemory/deleteMemory/searchMemories（含 use_count 递增）。
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -9,6 +9,7 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { __resetMemoryProviderForTest, getMemoryProvider } from '../../src/main/memory';
 import { updateGlobalSettings, getGlobalSettings } from '../../src/main/settings/crud';
 import { insertMemory } from '../../src/main/storage/memories/repo';
+import { logger } from '../../src/main/logger';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-provmem-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -79,6 +80,55 @@ describe('MemoryProvider v2.2 扩展', () => {
     ).run();
     const view = await provider.getPinnedContext({ workspaceId: 'ws1', sessionId: null });
     expect(view.hint).not.toContain('摘要内容');
+  });
+
+  it('getPinnedContext：session 层 pinned 条目注入「### 会话记忆」段', async () => {
+    const m = insertMemory({
+      scope: 'session', workspaceId: 'ws1', sessionId: 's1', kind: 'rule',
+      content: '会话常驻：回复必须带单元测试', source: 'user',
+    });
+    const view = await provider.getPinnedContext({ workspaceId: 'ws1', sessionId: 's1' });
+    expect(view.hint).toContain('### 会话记忆');
+    expect(view.hint).toContain('会话常驻：回复必须带单元测试');
+    expect(view.pinnedIds).toContain(m.id);
+  });
+
+  it('getPinnedContext：sessionId=null（子 agent）无「### 会话记忆」段', async () => {
+    insertMemory({
+      scope: 'session', workspaceId: 'ws1', sessionId: 's1', kind: 'rule',
+      content: '会话常驻条目内容', source: 'user',
+    });
+    const view = await provider.getPinnedContext({ workspaceId: 'ws1', sessionId: null });
+    expect(view.hint).not.toContain('### 会话记忆');
+    expect(view.hint).not.toContain('会话常驻条目内容');
+  });
+
+  it('getPinnedContext：目录超 30 条，溢出计入 truncatedCount', async () => {
+    for (let i = 0; i < 12; i++) {
+      insertMemory({ scope: 'global', kind: 'knowledge', content: `全局知识 ${String(i).padStart(2, '0')}`, source: 'auto', confidence: 0.7 });
+    }
+    for (let i = 0; i < 12; i++) {
+      insertMemory({ scope: 'workspace', workspaceId: 'ws1', kind: 'knowledge', content: `项目知识 ${String(i).padStart(2, '0')}`, source: 'auto', confidence: 0.7 });
+    }
+    for (let i = 0; i < 12; i++) {
+      insertMemory({ scope: 'session', workspaceId: 'ws1', sessionId: 's1', kind: 'knowledge', content: `会话知识 ${String(i).padStart(2, '0')}`, source: 'auto', confidence: 0.7 });
+    }
+    const view = await provider.getPinnedContext({ workspaceId: 'ws1', sessionId: 's1' });
+    // 36 条非 pinned 合并限量 30 → 溢出 6 条计入（无常驻条目、无摘要，不受其他截断干扰）
+    expect(view.truncatedCount).toBe(6);
+  });
+
+  it('getPinnedContext：底层异常（memories 表缺失）→ 空视图且不 rethrow', async () => {
+    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    try {
+      // 真实错误路径（momo-test-rules：不用 mock 复制错误形状）——DROP 主表使 listMemories 抛 SqliteError
+      getDb().exec('DROP TABLE memories');
+      const view = await provider.getPinnedContext({ workspaceId: 'ws1', sessionId: 's1' });
+      expect(view).toEqual({ hint: '', truncatedCount: 0, pinnedIds: [] });
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('searchMemories：命中并递增 use_count', async () => {

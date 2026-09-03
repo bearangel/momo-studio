@@ -154,7 +154,8 @@ export function getMemory(id: string): MemoryEntry | null {
   return row ? rowToEntry(row) : null;
 }
 
-export function listMemories(scope: MemoryListScope, filter?: MemoryListFilter): MemoryEntry[] {
+/** 列出记忆（updated_at DESC）；limit=SQL LIMIT，供 catalog 等调用方封顶拉取量、免全量拉取后内存截断 */
+export function listMemories(scope: MemoryListScope, filter?: MemoryListFilter, limit?: number): MemoryEntry[] {
   const db = getDb();
   const where: string[] = [];
   const params: unknown[] = [];
@@ -164,9 +165,10 @@ export function listMemories(scope: MemoryListScope, filter?: MemoryListFilter):
   if (filter?.kind) { where.push('kind = ?'); params.push(filter.kind); }
   if (filter?.source) { where.push('source = ?'); params.push(filter.source); }
   if (filter?.pinned !== undefined) { where.push('pinned = ?'); params.push(filter.pinned ? 1 : 0); }
+  if (limit !== undefined) params.push(limit);
   const rows = db.prepare(
     `SELECT memories.rowid AS rowid, memories.* FROM memories
-     WHERE ${where.join(' AND ')} ORDER BY updated_at DESC`,
+     WHERE ${where.join(' AND ')} ORDER BY updated_at DESC${limit !== undefined ? ' LIMIT ?' : ''}`,
   ).all(...params) as SqlRow[];
   return rows.map(rowToEntry);
 }
