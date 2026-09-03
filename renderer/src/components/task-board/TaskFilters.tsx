@@ -4,7 +4,7 @@
 // 受控组件——value + onChange 由 TaskBoardView 持有。
 // assignee 下拉选项由父层（TaskSidebarPanel）从 agent.store.members 派生
 // 后传入——保持本组件 dumb，避免与 store 直接耦合。
-// v2.1 P3：样式 token 化（border-border-subtle 退役）。
+// v2.1 P3：样式 token 化；状态词表统一 task-status.ts 单源。
 // 选项文案与 task-status.ts STATUS_LABEL 同步：pending=待分配 / assigned=已分配 / in_progress=进行中。
 import type { TaskStatus } from '../../ipc/types';
 

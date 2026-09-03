@@ -14,7 +14,7 @@
 //   - selectedTaskId 持有在 task.store——侧边栏（TaskSidebarPanel）写入，本组件读。
 //
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
-// v2.1 P3：样式 token 化（旧色阶 / border-border-subtle 退役）。
+// v2.1 P3：样式 token 化（旧色阶全面退役）。
 import { useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings } from '../../ipc/types';

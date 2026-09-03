@@ -64,7 +64,7 @@ export function CodeEditor() {
   return (
     <div className="flex-1 flex flex-col" onKeyDown={handleKeyDown}>
       {/* Tab 栏 */}
-      <div className="flex bg-surface-1 border-b border-subtle overflow-x-auto">
+      <div role="tablist" className="flex bg-surface-1 border-b border-subtle overflow-x-auto">
         {tabs.map((tab) => {
           const tabName = tab.filePath.split('/').pop() ?? '';
           const isActive = tab.filePath === activeTab;
