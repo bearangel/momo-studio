@@ -4,7 +4,8 @@
 //   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）+
 //   TaskTools（v2 B10 任务工具：read_task / read_task_history / read_task_progress /
 //     create_task / complete_task / fail_task / list_tasks）+ LspTools
-//   （lsp_diagnostics + lsp_find_references，条件注册——仅 TS/JS workspace）。
+//   （lsp_diagnostics + lsp_find_references，条件注册——仅 TS/JS workspace）
+//   + MemoryTools（v2.2 记忆三工具：memory_save / memory_search / memory_forget）。
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -18,6 +19,7 @@ import { WebTools } from './web-tools';
 import { TodoTools } from './todo-tools';
 import { TaskTools } from './task-tools';
 import { LspTools } from './lsp-tools';
+import { MemoryTools } from './memory-tools';
 
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
   const modules: ToolModule[] = [
@@ -28,6 +30,7 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new WebTools(),
     new TodoTools(),
     new TaskTools(),
+    new MemoryTools(),
   ];
   const lsp = LspTools.create(ctx);
   if (lsp) modules.push(lsp);
