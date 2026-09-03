@@ -272,7 +272,13 @@ export async function runChatLoop(
   ]);
 
   const taskHint = taskCtx ? formatTaskHint(taskCtx) : '';
-  const finalSystemContent = ctx.systemPrompt + budgetHint + dispatchHint + taskHint;
+  // v2.2：三层记忆常驻注入（spec §6.3）——每轮现拉，UI 修改下一条消息即生效；
+  // 子 agent（parentStreamSessionId 非空）不带会话记忆（fresh-session 语义对齐）
+  const pinnedMem = await memory.getPinnedContext({
+    workspaceId: config.workspaceId,
+    sessionId: parentStreamSessionId ? null : roomId,
+  });
+  const finalSystemContent = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
 
   const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
     role: m.role,
