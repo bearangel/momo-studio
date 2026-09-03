@@ -6,6 +6,7 @@ export type SettingsCategory =
   | 'model_provider'
   | 'default_model'
   | 'conversation'
+  | 'memory'
   | 'appearance'
   | 'git_policy'
   | 'audit_log'

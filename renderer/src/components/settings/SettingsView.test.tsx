@@ -1,13 +1,13 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
-// SettingsView 行为测试（P2 Task 4）：
-// - 渲染 8 个分类菜单项（顺序：模型服务/默认模型/会话设置/外观/Git 策略/审计日志/节点互联/关于）
+// SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类）：
+// - 渲染 9 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
 // - 切换菜单项渲染对应面板
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { SettingsView } from './SettingsView';
 import { useSettingsStore } from '../../stores/settings.store';
 import { useUiStore } from '../../stores/ui.store';
@@ -48,6 +48,13 @@ const mockApi = {
   agent: {
     listMembers: vi.fn().mockResolvedValue([]),
   },
+  memory: {
+    list: vi.fn().mockResolvedValue([]),
+    save: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    search: vi.fn(),
+  },
 };
 
 describe('SettingsView', () => {
@@ -64,16 +71,17 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 8 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
+  it('渲染 9 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(8);
+    expect(navButtons.length).toBe(9);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
       '默认模型',
       '会话设置',
+      '记忆',
       '外观',
       'Git 策略',
       '审计日志',
@@ -81,7 +89,16 @@ describe('SettingsView', () => {
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(8);
+    expect(nav.querySelectorAll('svg').length).toBe(9);
+  });
+
+  it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '记忆' }));
+    expect(useSettingsStore.getState().activeCategory).toBe('memory');
+    expect(screen.getByRole('heading', { name: '记忆' })).toBeInTheDocument();
+    // 面板挂载后按 workspace 层拉列表（STUB_WORKSPACE.id）
+    await waitFor(() => expect(mockApi.memory.list).toHaveBeenCalledWith({ kind: 'workspace', workspaceId: 'ws-test' }));
   });
 
   it('点击「外观」分类切换 activeCategory 并渲染面板', () => {

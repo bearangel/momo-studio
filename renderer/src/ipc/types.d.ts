@@ -456,6 +456,8 @@ export interface GlobalSettings {
   defaultRerankModel?: DefaultModelRef;
   /** 全局并发任务上限（electron 端读 global_settings 表 v21，默认 3）。 */
   maxConcurrentTasks?: number;
+  /** v2.2 P1：记忆系统总开关（默认 true；false = 注入与提取暂停，数据保留） */
+  memoryEnabled?: boolean;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
@@ -770,7 +772,7 @@ export type MemoryListScope =
  * 总开关经 settings:updateGlobal 的 memoryEnabled（默认 true）。
  */
 export interface MemoryApiSurface {
-  /** 按 scope 列记忆（updated_at 倒序）；filter 可选筛选 */
+  /** 按 scope 列记忆（updated_at 倒序）；filter 可选筛选。注：electron 端 filter 另支持 source 筛选（本镜像未暴露） */
   list(scope: MemoryListScope, filter?: { kind?: MemoryEntry['kind']; pinned?: boolean }): Promise<MemoryEntry[]>;
   /** 新建记忆，返回完整条目（pinned 缺省按 kind 推导：rule/preference=常驻） */
   save(input: {
