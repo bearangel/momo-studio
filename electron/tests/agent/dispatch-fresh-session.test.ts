@@ -136,6 +136,10 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
+      getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+      searchMemories: async () => [],
+      saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+      deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
     __setMemoryProviderForTest(stubProvider);
 
@@ -166,6 +170,10 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
+      getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+      searchMemories: async () => [],
+      saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+      deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
     __setMemoryProviderForTest(stubProvider);
 
@@ -192,6 +200,10 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
+      getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+      searchMemories: async () => [],
+      saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+      deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
     __setMemoryProviderForTest(stubProvider);
 
@@ -250,6 +262,10 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
+      getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+      searchMemories: async () => [],
+      saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+      deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
     __setMemoryProviderForTest(stubProvider);
 

@@ -68,6 +68,10 @@ const stubMemoryProvider: MemoryProvider = {
   getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
   getUserContext: async () => ({ preferences: [] }),
   getWorkspaceContext: async () => null,
+  getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+  searchMemories: async () => [],
+  saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+  deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
 };
 
 // === 测试态 ===
