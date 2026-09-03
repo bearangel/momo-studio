@@ -41,6 +41,17 @@ export function CodeEditor() {
     [activeTab, handleSave],
   );
 
+  // tab 自身键盘激活：Enter/Space 与 onClick 等价（外层已 div role=tab，不可自然得 button 的 Enter 语义）
+  const handleTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, filePath: string) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setActive(filePath);
+      }
+    },
+    [setActive],
+  );
+
   // 无 tab 时显示空状态
   if (tabs.length === 0) {
     return (
@@ -54,32 +65,40 @@ export function CodeEditor() {
     <div className="flex-1 flex flex-col" onKeyDown={handleKeyDown}>
       {/* Tab 栏 */}
       <div className="flex bg-surface-1 border-b border-subtle overflow-x-auto">
-        {tabs.map((tab) => (
-          <button
-            key={tab.filePath}
-            onClick={() => setActive(tab.filePath)}
-            className={cn(
-              'px-3 py-1.5 text-sm border-r border-subtle flex items-center gap-2 whitespace-nowrap',
-              tab.filePath === activeTab ? 'bg-surface-2 text-primary' : 'hover:bg-surface-3',
-            )}
-          >
-            {/* dirty 标记（● 文本，非 emoji） */}
-            <span>{tab.dirty ? '●' : ''}</span>
-            <span className="truncate max-w-[150px]">
-              {tab.filePath.split('/').pop()}
-            </span>
-            <span
-              aria-label="关闭"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(tab.filePath);
-              }}
-              className="text-tertiary hover:text-primary ml-1"
+        {tabs.map((tab) => {
+          const tabName = tab.filePath.split('/').pop() ?? '';
+          const isActive = tab.filePath === activeTab;
+          return (
+            // 外层 div + role=tab：避免嵌套 button（HTML 非法）；tabIndex 0 + onKeyDown Enter/Space 保持键盘可激活
+            <div
+              key={tab.filePath}
+              role="tab"
+              tabIndex={0}
+              aria-selected={isActive}
+              onClick={() => setActive(tab.filePath)}
+              onKeyDown={(e) => handleTabKeyDown(e, tab.filePath)}
+              className={cn(
+                'px-3 py-1.5 text-sm border-r border-subtle flex items-center gap-2 whitespace-nowrap cursor-pointer',
+                isActive ? 'bg-surface-2 text-primary' : 'hover:bg-surface-3',
+              )}
             >
-              <X size={12} strokeWidth={1.75} aria-hidden />
-            </span>
-          </button>
-        ))}
+              {/* dirty 标记（● 文本，非 emoji） */}
+              <span>{tab.dirty ? '●' : ''}</span>
+              <span className="truncate max-w-[150px]">{tabName}</span>
+              <button
+                type="button"
+                aria-label={`关闭 ${tabName}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(tab.filePath);
+                }}
+                className="text-tertiary hover:text-primary ml-1"
+              >
+                <X size={12} strokeWidth={1.75} aria-hidden />
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {/* Monaco 编辑器 */}

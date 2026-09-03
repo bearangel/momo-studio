@@ -27,8 +27,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
 
   // 右键菜单状态：记录触发位置、目标路径、是否目录
   const [menu, setMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
-  // 行内重命名状态：目标路径与当前输入值
-  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
+  // 行内重命名状态：仅记目标路径；初始输入值 = path 最后一段
+  const [renaming, setRenaming] = useState<{ path: string } | null>(null);
   // 移动目标目录输入状态
   const [moving, setMoving] = useState<{ path: string } | null>(null);
   // 目录内新建状态：目标目录 + 类型（file/dir）
@@ -157,9 +157,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
               ? () => setCreatingInDir({ dir: menu.path, type: 'dir' })
               : undefined
           }
-          onRename={() =>
-            setRenaming({ path: menu.path, value: menu.path.split('/').pop() ?? '' })
-          }
+          onRename={() => setRenaming({ path: menu.path })}
           onDelete={async () => {
             const scope = menu.isDirectory ? '目录及其全部内容' : '该文件';
             if (!confirm(`确定删除${scope}？\n${menu.path}`)) return;
@@ -207,52 +205,23 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
         />
       )}
       {renaming && workspace && (
-        <div
-          className="fixed inset-0 bg-backdrop flex items-center justify-center z-50"
-          onClick={() => setRenaming(null)}
-        >
-          <form
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!renaming.value.trim()) {
-                setRenaming(null);
-                return;
-              }
-              // 保留原父目录，仅替换最后一段文件名
-              const parent = renaming.path.includes('/')
-                ? renaming.path.slice(0, renaming.path.lastIndexOf('/'))
-                : '';
-              const dst = parent ? `${parent}/${renaming.value.trim()}` : renaming.value.trim();
-              await renamePath(workspace.id, renaming.path, dst);
-              renameTab(renaming.path, dst);
-              setRenaming(null);
-            }}
-            className="border border-subtle bg-surface-1 rounded p-4 flex flex-col gap-2"
-          >
-            <label className="text-xs text-secondary">
-              新名称
-              <input
-                value={renaming.value}
-                onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
-                autoFocus
-                className="mt-1 w-64 rounded border border-subtle bg-surface-2 px-2 py-1 text-sm text-primary"
-              />
-            </label>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setRenaming(null)}
-                className="text-xs text-secondary px-2 py-1"
-              >
-                取消
-              </button>
-              <button type="submit" className="text-xs px-2 py-1 rounded bg-accent-500 text-inverse">
-                确定
-              </button>
-            </div>
-          </form>
-        </div>
+        <PromptDialog
+          title={`重命名「${renaming.path}」`}
+          label="新名称（不含路径）"
+          defaultValue={renaming.path.split('/').pop() ?? ''}
+          placeholder="新文件名"
+          onSubmit={async (value) => {
+            const path = renaming.path;
+            setRenaming(null);
+            if (!value.trim()) return;
+            // 保留原父目录，仅替换最后一段文件名
+            const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+            const dst = parent ? `${parent}/${value.trim()}` : value.trim();
+            await renamePath(workspace.id, path, dst);
+            renameTab(path, dst);
+          }}
+          onClose={() => setRenaming(null)}
+        />
       )}
     </div>
   );

@@ -65,7 +65,7 @@ export function App() {
     // workspace → 分支翻转进 MainShell。onClose 重新拉取列表兜底（仍为空则表单保持）。
     // 注：升级提示不在首启空态渲染——新装用户无标记；纯 2.0 新装命中此分支无需告知。
     return (
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-bg-primary">
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
         <TitleBar />
         <div className="flex-1 min-h-0 flex items-center justify-center p-6">
           <CreateWorkspaceDialog onClose={() => void load()} embedded />

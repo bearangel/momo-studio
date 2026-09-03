@@ -188,7 +188,7 @@ describe('MentionInput @ 菜单（在线成员）', () => {
     fireEvent.change(input, { target: { value: '@' } });
     fireEvent.click(screen.getByText('PM-agent'));
     expect(input.value).toContain('@PM-agent ');
-    expect(screen.getByText('@PM-agent ×')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '移除 @PM-agent' })).toBeInTheDocument();
     // 菜单关闭
     expect(screen.queryByText('选择要 @ 的 agent')).not.toBeInTheDocument();
   });
@@ -201,8 +201,8 @@ describe('MentionInput @ 菜单（在线成员）', () => {
     const input = screen.getByPlaceholderText(/输入消息/) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: '@' } });
     fireEvent.click(screen.getByText('PM-agent'));
-    fireEvent.click(screen.getByText('@PM-agent ×'));
-    expect(screen.queryByText('@PM-agent ×')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '移除 @PM-agent' }));
+    expect(screen.queryByRole('button', { name: '移除 @PM-agent' })).not.toBeInTheDocument();
   });
 });
 
@@ -296,7 +296,7 @@ describe('MentionInput 发送', () => {
     fireEvent.change(input, { target: { value: '@PM-agent 请处理' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input.value).toBe('@PM-agent 请处理'));
-    expect(screen.getByText('@PM-agent ×')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '移除 @PM-agent' })).toBeInTheDocument();
   });
 });
 

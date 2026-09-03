@@ -71,7 +71,7 @@ export function ProviderSettings() {
         </div>
         <div className="flex-1 overflow-auto p-1.5 flex flex-col gap-1">
           {!loading && providers.length === 0 && (
-            <p className="text-xs text-tertiary px-1.5 py-1">暂无供应商。点击右上角「＋」创建（如 GLM / DeepSeek / OpenAI）。</p>
+            <p className="text-xs text-tertiary px-1.5 py-1">暂无供应商。点击右上角「添加」创建（如 GLM / DeepSeek / OpenAI）。</p>
           )}
           {providers.map((p) => (
             <button key={p.id} type="button" onClick={() => setSelectedId(p.id)}
@@ -105,7 +105,7 @@ export function ProviderSettings() {
           </>
         ) : (
           <div className="border border-dashed border-subtle rounded-lg p-8 text-sm text-tertiary flex items-center justify-center">
-            从左侧选择一个供应商查看配置，或点击「＋」添加。
+            从左侧选择一个供应商查看配置，或点击「添加」创建供应商。
           </div>
         )}
       </div>

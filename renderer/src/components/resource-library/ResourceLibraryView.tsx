@@ -18,7 +18,7 @@
 // v2.1 P3：token 化（tab 选中态 accent 形态 / 横幅 status tint）；📚 → Library lucide；
 // 空态接 EmptyState 原子件。
 import { useEffect, useState } from 'react';
-import { Library } from 'lucide-react';
+import { Check, Library } from 'lucide-react';
 import { useResourceStore } from '../../stores/resource.store';
 import { Input } from '../ui/Input';
 import { EmptyState } from '../ui/EmptyState';
@@ -168,9 +168,10 @@ export function ResourceLibraryView() {
           {installNotice && (
             <div
               data-testid="install-notice"
-              className="mb-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm"
+              className="mb-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm inline-flex items-center gap-1.5"
             >
-              ✓ {installNotice}
+              <Check size={12} strokeWidth={1.75} aria-hidden />
+              {installNotice}
             </div>
           )}
           {error ? (

@@ -110,7 +110,7 @@ describe('ProviderSettings 两列布局', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'sk-new' }));
   });
 
-  it('点击「＋」打开添加供应商对话框（含平台选择，无默认模型字段）', async () => {
+  it('点击「添加」打开添加供应商对话框（含平台选择，无默认模型字段）', async () => {
     render(<ProviderSettings />);
     await screen.findByRole('button', { name: /P1/ });
     fireEvent.click(screen.getByRole('button', { name: '添加供应商' }));

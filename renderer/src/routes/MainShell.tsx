@@ -9,7 +9,7 @@ import { ConflictDialogMount } from '../components/im/ConflictDialogMount';
 
 export function MainShell() {
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-bg-primary">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
       <TitleBar />
       <MainLayout />
       <ConflictDialogMount />

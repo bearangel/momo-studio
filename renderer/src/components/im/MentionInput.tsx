@@ -10,7 +10,7 @@
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, Lock, Pin } from 'lucide-react';
+import { Bot, Lock, Pin, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -236,12 +236,14 @@ export function MentionInput() {
             <button
               key={instanceId}
               type="button"
+              aria-label={`移除 @${mentionDisplayName(instanceId)}`}
               onClick={() =>
                 setPendingMentions((prev) => prev.filter((m) => m !== instanceId))
               }
-              className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
             >
-              @{mentionDisplayName(instanceId)} ×
+              @{mentionDisplayName(instanceId)}
+              <X size={11} strokeWidth={1.75} aria-hidden />
             </button>
           ))}
         </div>
