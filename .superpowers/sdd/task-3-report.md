@@ -1,75 +1,88 @@
-# Task 3 Report: Prompt 同轮连发教学（dispatch 并行化的 LLM 教学层）
+# Task 3 Report — 建议清理 + 命中统计 + 长度 enforcement（v2.2 记忆 P3）
 
-**Status: COMPLETE** · Commit `3a6750e` · Branch `main`
+> **Slot note:** 此 `task-3-report.md` 槽位此前由 P2 批次 Task 3 使用（commit `33235b7` 自动提取管线报告）。本 P3 Task 3 按本次任务指令 overwrite 该文件——P2 报告原文保留在 git 历史中，可通过 `git show 33235b7:.superpowers/sdd/task-3-report.md` 查阅。
 
-## 1. TDD 证据
+**Status:** ✅ 完成
+**Commit:** `feat(memory): 命中统计+建议清理标记+长度上限（v2.2 记忆 P3）`
+**Date:** 2026-09-03
 
-| 步骤 | 证据 |
-|---|---|
-| RED | `tests/agent/dispatch-parallel.test.ts` 首跑（10 用例）：`Tests 1 failed \| 9 passed (10)`——新加的 `formatDispatchHint 并行教学（spec §7.2） > main + 有 subAgents → 含同轮连发并行教学` 失败，断言 `expected '...' to contain '同一次回复中连续发出多个 dispatch'`；其余 9 用例（含「非 main → 空串」——已天然通过；8 个 dispatch 并发回归锁）全绿 |
-| GREEN | 改 `prompt-hints.ts`（主动拆分原则加第 5 条）+ `pm-agent.yaml:25` 后：`Tests 10 passed (10)`，231ms |
+---
 
-新加的 2 用例（brief Step 1）：
+## 实施范围
 
-- `formatDispatchHint 并行教学（spec §7.2） > main + 有 subAgents → 含同轮连发并行教学`——断言 hint 同时包含「同一次回复中连续发出多个 dispatch」和「并行执行」
-- `formatDispatchHint 并行教学（spec §7.2） > 非 main / 无 subAgents → 空串（standalone 不受影响）`——断言 `formatDispatchHint(makeConfig()) === ''`（makeConfig 默认 `role: 'standalone'` + `subAgents: []`，与原实现早退分支命中）
+### 1. content 长度 enforcement（repo 层）
+`electron/src/main/storage/memories/repo.ts`：
+- 新增导出常量 `CONTENT_LIMIT = 2000` / `RULE_CONTENT_LIMIT = 4000`
+- 新增内部 `validateContentLength(kind, content)`——超限抛错，错误信息含上限数字（UI 直接呈现）
+- `insertMemory` / `updateMemory` 在事务前先校验：update 沿用既有 `existing.kind`（kind 不可 patch）
+- 错误信息示例：`记忆内容长度不能超过 4000 字（规则类），当前 4001 字`
 
-### RED 阶段 vitest 输出（节选）
+### 2. 命中统计 + 建议清理黄标 + textarea maxLength（renderer）
+`renderer/src/components/settings/MemorySettings.tsx`：
+- 列表行元信息增「命中 N 次 · 最近 YYYY-MM-DD」（lastUsedAt 为 null 显示「未使用」）
+- `STALE_DAYS = 90` 常量；`isStaleAuto(e)` 判定：仅 `source === 'auto'`，`lastUsedAt ?? createdAt` 距今 > 90 天
+- 命中建议清理的行渲染 `<Badge tone="warning">建议清理</Badge>`（语义 token `bg-status-warning-tint text-status-warning`，复用 ui/Badge 原子件）
+- 删除仍走现有「二次确认」对话框（spec §6.6 可逆原则——仅展示，删除由用户操作）
+- 编辑/新增对话框从 `<Input>` 切 `<textarea>`（原生，token 样式对齐 ui/Input），`maxLength` 按 kind 动态（rule=4000/其他=2000）
+- 剩余字数提示「还可输入 N 字」（N = max(0, limit - len)）
+
+### 3. Rider 回归锁
+`electron/tests/memory/markdown.test.ts` 追加 1 用例：global 层含段 → 导出 global → 再导入 global → `imported=0 / skipped=2`（`scopeKind='global' + workspaceId 空串占位` 路径锁）——一次绿=既有实现已覆盖该路径，验证不漂移
+
+---
+
+## TDD 路径
+
+1. **repo 边界**（红→绿）：`repo.test.ts` 增 `describe('content 长度上限 enforcement')` 4 用例（`1999/2000/2001` 普通 + `4000/4001` rule + update 路径 + insert 超限主表不留半行）
+2. **rider**（一次绿=回归锁）：`markdown.test.ts` 增 global 自往返去重 1 用例
+3. **UI**（红→绿）：`MemorySettings.test.tsx` 增 6 用例（命中统计 1 + 黄标 2：含 user 不黄标 + createdAt 兜底 / 长度上限 3：编辑 rule=4000 / 编辑 knowledge=2000 / 新增默认 rule=4000 → 切 knowledge 动态 2000 + 剩余字数提示）
+
+---
+
+## 验证结果
+
+| 验证项 | 命令 | 结果 |
+|---|---|---|
+| electron 受影响测试 | `cd electron && npx pnpm@9.0.0 vitest run tests/memory/ tests/storage/memories/` | 104 passed (9 files) |
+| electron 全套回归 | `cd electron && npx pnpm@9.0.0 vitest run` | **1426 passed (171 files)** |
+| renderer settings | `cd renderer && npx pnpm@9.0.0 vitest run src/components/settings/` | 83 passed (10 files) |
+| renderer 全套回归 | `cd renderer && npx pnpm@9.0.0 vitest run` | **814 passed (91 files)** |
+| typecheck 双端 | 根 `npx pnpm@9.0.0 typecheck` | electron Done / renderer Done |
+| renderer lint | `cd renderer && npx pnpm@9.0.0 lint` | 0 errors / 0 warnings |
+| lsp_diagnostics（4 改动文件） | MemorySettings.tsx / .test.tsx / repo.ts / repo.test.ts / markdown.test.ts | 0 diagnostics |
+
+零回归。
+
+---
+
+## 关键决策与保真度
+
+- **跨进程常量各自持有**：renderer 侧 `CONTENT_LIMIT/RULE_CONTENT_LIMIT` 与 electron 侧对齐——非共享源（renderer 不能 import electron 代码），值变化需双侧同步（注释明确标注）。这是 v2.2 P3 设计约定，与 v1.x P0 lessons「跨模块 ID 单点生成沿线透传」一致（接受常数镜像而非共享，跨进程边界无法直接共享）
+- **UI textarea 而非复用 Input**：spec/plan 要求 textarea，token 样式对齐 Input；多行内容（已有 markdown 导出多行 content 测试用例）合理需要
+- **createdAt 兜底**：plan 显式要求；null lastUsedAt 表示「从未被检索」，此时以创建时间作为新鲜度评估基准
+- **删除仍走确认**：spec §6.6 可逆原则——建议清理仅作展示标识，不自动删
+- **错误信息含上限数字**：错误信息「记忆内容长度不能超过 2000 字」含中文+数字——UI 拒绝后用户能直接看到阈值
+- **wsEntry fixture 标注 MemoryEntry**：测试 fixture 显式用契约类型，避免 `lastUsedAt: null` 推导为 `null` 字面量类型导致 override number 报错（提升保真度，tsc strict 下真实拦截）
+
+---
+
+## 风险与遗留
+
+- **长度 enforcement 可能影响 LLM 自动提取路径**（extraction.ts 调用 `insertMemory`）。本次未跑 LLM 端到端验证——若真实提取产出 >2000 字将抛错拒绝。这是预期行为（spec §6.6），但实际提取管线的窗口/分块策略需关注。P3 Task 5「打磨批」/未来验收时确认
+- **`isStaleAuto` 用 `Date.now()` 而非数据库 NOW**——单机单进程场景，无影响
+- **textarea 自带 maxLength 只在输入时截断**：典型边界是 kind 从 rule 切 knowledge 后历史超长文本保留——repo 校验为最终防线
+
+---
+
+## Commit 变更
 
 ```
-❯ tests/agent/dispatch-parallel.test.ts  (10 tests | 1 failed) 231ms
-  ❯ formatDispatchHint 并行教学（spec §7.2） > main + 有 subAgents → 含同轮连发并行教学
-     → expected '...' to contain '同一次回复中连续发出多个 dispatch'
-
-FAIL  tests/agent/dispatch-parallel.test.ts > ... > main + 有 subAgents → 含同轮连发并行教学
-AssertionError: expected '\n\n## 任务拆分指南（PM 角色）\n你是主 agent（PM），有…' to contain '同一次回复中连续发出多个 dispatch'
-
-Test Files  1 failed (1)
-     Tests  1 failed | 9 passed (10)
+feat(memory): 命中统计+建议清理标记+长度上限（v2.2 记忆 P3）
 ```
 
-### GREEN 阶段 vitest 输出（节选）
-
-```
-✓ tests/agent/dispatch-parallel.test.ts  (10 tests) 228ms
-
-Test Files  1 passed (1)
-     Tests  10 passed (10)
-```
-
-## 2. 交付内容
-
-### 修改文件
-
-- `electron/src/main/agent/prompt-hints.ts` — `formatDispatchHint` 的「主动拆分原则」列表在原第 4 条之后追加第 5 条（spec §7.2 文案）
-- `electron/resources/agents/pm-agent.yaml` — 第 25 行「多个子 agent 可以并行调度。」改写为同轮连发教学文案（保留前后两条原文不动）
-- `electron/tests/agent/dispatch-parallel.test.ts` — 顶部 import 加 `formatDispatchHint`；末尾追加第 2 个 describe 块（2 用例）
-
-### 关键实现决策
-
-- **YAML 改写保持 1 行换 1 行**：brief 要求 pm-agent.yaml:25 一处替换，其余逐字不动——避免误伤 builtin 加载链（builtin.ts 两阶段注册依赖原行上下文连贯性）
-- **prompt-hints.ts 第 5 条插在第 4 条与 `**长任务自身管理**` 之间**：brief 明确指定位置；不调整注释「任务可并行」——因为该注释在「**主动拆分原则**」第 1 条已存在且与新加第 5 条自洽（注释泛指第 1 条「可并行子任务时优先 dispatch」，新加第 5 条进一步教「如何并行」）
-- **测试 import 复用模块级 `makeConfig` / `makeMainConfig`**：与 brief「重要上下文」对齐，未在 describe 块内重新定义；直接利用 Task 1 已有的 harness，零冗余
-- **第 2 个新用例天然 GREEN**：原 `formatDispatchHint` 已有 `config.role !== 'main' || config.subAgents.length === 0` 早退分支——非 main 即返空串；RED 阶段即通过，加这用例是「锁行为」防止后续重构退化
-
-## 3. 验证
-
-- `lsp_diagnostics` on `prompt-hints.ts`：`No diagnostics found`
-- `lsp_diagnostics` on `dispatch-parallel.test.ts`：`No diagnostics found`
-- `cd electron && npx pnpm@9.0.0 vitest run tests/agent/dispatch-parallel.test.ts`：`Tests 10 passed (10)`，228ms
-- 改动量：3 files changed, 15 insertions(+), 1 deletion(-)
-
-## 4. Concerns / 边界
-
-- **YAML 第 25 行替换 ≠ 列表加一条**：prompt-hints.ts 是「主动拆分原则」列表第 5 条（与已有 4 条平级），pm-agent.yaml 是「使用 dispatch 工具调度子 agent」段后的独立一句。两处文案都指向同一种行为，但读者不同——pm-agent.yaml 是 builtin PM 直读、formatDispatchHint 对所有自定义 main agent 生效，符合 brief「对全部自定义 main agent 生效」的诉求
-- **未触及 builtin.ts / runtime-entry.ts**：本任务纯教学层（prompt 字符串），不动 dispatch 执行路径——runtime 已在 Task 2 实现同轮并发执行
-- **未跑 typecheck 双 workspace**：brief Step 5 只要求 `dispatch-parallel.test.ts` 全绿；本任务改动仅 prompt-hints.ts（一行字符串）+ test（一行 import + 13 行 describe），lsp_diagnostics 已确认无错误。完整 typecheck 留给后续集成任务（与 Task 1/2 一致）
-- **未触及 `coder.yaml` / `requirement-analyst.yaml`**：两个 sub agent 不需要并行教学（它们是 sub 角色，无 dispatch 能力）；只有 main agent 教学有意义
-
-## 5. Commit
-
-```
-3a6750e feat(agent): PM prompt 同轮连发教学——pm-agent.yaml 与 formatDispatchHint 教 LLM 并行派发
-```
-
-3 files changed, 15 insertions(+), 1 deletion(-)
+5 files / +230 / -9
+- `electron/src/main/storage/memories/repo.ts`：校验函数 + 两常量导出（+16）
+- `electron/tests/storage/memories/repo.test.ts`：4 边界用例（+40）
+- `electron/tests/memory/markdown.test.ts`：1 global 去重回归锁用例（+18）
+- `renderer/src/components/settings/MemorySettings.tsx`：STALE_DAYS / 长度常量 / 辅助函数 / MemoryContentTextarea / 列表元信息增行（+75 / -9）
+- `renderer/src/components/settings/MemorySettings.test.tsx`：6 用例 + wsEntry 类型标注 MemoryEntry（+90）

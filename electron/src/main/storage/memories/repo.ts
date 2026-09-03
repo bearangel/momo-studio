@@ -84,7 +84,21 @@ function ftsTags(tags: string[]): string {
   return tags.join(' ');
 }
 
+// content 长度上限（spec §6.6）：普通 kind 2000 字、rule 4000 字（规则是常驻注入源，放宽一档）。
+// 校验在 repo 层（而非仅 UI）——LLM 提取 / 导入等所有写入方统一受限。
+export const CONTENT_LIMIT = 2000;
+export const RULE_CONTENT_LIMIT = 4000;
+
+/** 校验 content 长度：超限抛错（错误信息含上限，UI 直接呈现） */
+function validateContentLength(kind: SaveMemoryInput['kind'], content: string): void {
+  const limit = kind === 'rule' ? RULE_CONTENT_LIMIT : CONTENT_LIMIT;
+  if (content.length > limit) {
+    throw new Error(`记忆内容长度不能超过 ${limit} 字${kind === 'rule' ? '（规则类）' : ''}，当前 ${content.length} 字`);
+  }
+}
+
 export function insertMemory(input: SaveMemoryInput): MemoryEntry {
+  validateContentLength(input.kind, input.content);
   const db = getDb();
   const id = randomUUID();
   const now = Date.now();
@@ -111,6 +125,8 @@ export function updateMemory(id: string, patch: MemoryPatch): MemoryEntry {
   const db = getDb();
   const existing = getMemory(id);
   if (!existing) throw new Error(`记忆不存在: ${id}`);
+  // kind 不可 patch——上限沿用既有条目的 kind（rule 4000 / 其他 2000）
+  validateContentLength(existing.kind, patch.content ?? existing.content);
   const tx = db.transaction(() => {
     // external content 表：DELETE 必须先于 content 表 UPDATE——
     // FTS5 在 DELETE 时按 rowid 重新读 content 表计算要移除的 token；

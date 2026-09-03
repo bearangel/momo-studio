@@ -7,8 +7,8 @@ import { Brain, Pin, PinOff, Pencil, Trash2, Plus, Download, Upload } from 'luci
 import { ipc } from '../../ipc/client';
 import type { MemoryEntry, MemoryListScope } from '../../ipc/types';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { Dialog } from '../ui/Dialog';
-import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 
 type ScopeTab = 'workspace' | 'global';
@@ -28,6 +28,53 @@ const KIND_OPTIONS: Array<{ value: MemoryEntry['kind']; label: string }> = [
   { value: 'knowledge', label: '知识' },
   { value: 'summary', label: '摘要' },
 ];
+
+// v2.2 P3：建议清理阈值——auto 条目超 90 天未命中建议清理（仅展示，删除仍走确认，spec §6.6 可逆原则）
+const STALE_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// 长度上限与 electron repo 层 CONTENT_LIMIT/RULE_CONTENT_LIMIT 对齐（跨进程各自持有，值变化双侧同步）
+const CONTENT_LIMIT = 2000;
+const RULE_CONTENT_LIMIT = 4000;
+
+const contentLimit = (kind: MemoryEntry['kind']): number =>
+  kind === 'rule' ? RULE_CONTENT_LIMIT : CONTENT_LIMIT;
+
+const formatDate = (ts: number): string => {
+  const d = new Date(ts);
+  const pad = (n: number): string => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// 建议清理判定：仅 auto 条目；lastUsedAt 为 null（从未被检索）以 createdAt 兜底
+const isStaleAuto = (e: MemoryEntry): boolean => {
+  if (e.source !== 'auto') return false;
+  return Date.now() - (e.lastUsedAt ?? e.createdAt) > STALE_DAYS * DAY_MS;
+};
+
+// 内容输入 textarea（样式 token 对齐 ui/Input；maxLength 按 kind 动态 + 剩余字数提示）
+function MemoryContentTextarea(props: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  limit: number;
+  placeholder?: string;
+}) {
+  const { value, onChange, ariaLabel, limit, placeholder } = props;
+  return (
+    <div className="flex flex-col gap-1">
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={ariaLabel}
+        maxLength={limit}
+        rows={4}
+        placeholder={placeholder}
+        className="w-full resize-y rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary placeholder:text-disabled focus:border-focus focus:outline-none"
+      />
+      <p className="text-xs text-tertiary">还可输入 {Math.max(0, limit - value.length)} 字</p>
+    </div>
+  );
+}
 
 export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const [tab, setTab] = useState<ScopeTab>('workspace');
@@ -261,9 +308,14 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
                 </button>
               </div>
             </div>
-            <div className="text-xs text-tertiary">
-              {KIND_LABEL[e.kind]} · 来源 {e.source === 'user' ? '用户' : e.source === 'agent' ? 'agent' : '自动提取'}
-              {e.pinned ? ' · 常驻注入' : ' · 检索型'}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-tertiary">
+                {KIND_LABEL[e.kind]} · 来源 {e.source === 'user' ? '用户' : e.source === 'agent' ? 'agent' : '自动提取'}
+                {e.pinned ? ' · 常驻注入' : ' · 检索型'}
+                {` · 命中 ${e.useCount} 次`}
+                {e.lastUsedAt ? ` · 最近 ${formatDate(e.lastUsedAt)}` : ' · 未使用'}
+              </span>
+              {isStaleAuto(e) && <Badge tone="warning">建议清理</Badge>}
             </div>
           </li>
         ))}
@@ -279,7 +331,12 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
             </>
           }
         >
-          <Input value={editText} onChange={(e) => setEditText(e.target.value)} aria-label="记忆内容" />
+          <MemoryContentTextarea
+            value={editText}
+            onChange={setEditText}
+            ariaLabel="记忆内容"
+            limit={contentLimit(editing.kind)}
+          />
         </Dialog>
       )}
 
@@ -293,7 +350,13 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
           }
         >
           <div className="flex flex-col gap-3">
-            <Input value={newText} onChange={(e) => setNewText(e.target.value)} aria-label="新记忆内容" placeholder="例如：本工作空间研发规范……" />
+            <MemoryContentTextarea
+              value={newText}
+              onChange={setNewText}
+              ariaLabel="新记忆内容"
+              limit={contentLimit(newKind)}
+              placeholder="例如：本工作空间研发规范……"
+            />
             <Select
               aria-label="记忆类型"
               value={newKind}

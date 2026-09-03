@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemorySettings } from './MemorySettings';
+import type { MemoryEntry } from '../../ipc/types';
 
 const listMock = vi.fn();
 const saveMock = vi.fn();
@@ -40,9 +41,9 @@ const mockApi = {
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
-const wsEntry = {
-  id: 'w1', scope: 'workspace' as const, workspaceId: 'ws1', sessionId: null,
-  kind: 'rule' as const, pinned: true, content: 'pnpm 研发规范', tags: [], source: 'user' as const,
+const wsEntry: MemoryEntry = {
+  id: 'w1', scope: 'workspace', workspaceId: 'ws1', sessionId: null,
+  kind: 'rule', pinned: true, content: 'pnpm 研发规范', tags: [], source: 'user',
   sourceDetail: null, confidence: 1, useCount: 0, lastUsedAt: null, createdAt: 1, updatedAt: 1,
 };
 
@@ -241,5 +242,88 @@ describe('MemorySettings 导出/导入', () => {
       expect(screen.getByText(/会话层不支持导入记忆/)).toBeInTheDocument();
     });
     expect(screen.queryByText(/已导入/)).not.toBeInTheDocument();
+  });
+});
+
+// v2.2 P3 Task 3：命中统计渲染 + 建议清理黄标（auto 条目 >90 天未用）+ 长度上限 UI
+describe('MemorySettings 命中统计与建议清理', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const pad = (n: number): string => n.toString().padStart(2, '0');
+  const fmtDate = (ts: number): string => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  /** 构造 auto 条目 fixture（黄标判定对象） */
+  const autoEntry = (over: Partial<typeof wsEntry> = {}) => ({
+    ...wsEntry, id: 'a1', source: 'auto' as const, useCount: 0, lastUsedAt: null, ...over,
+  });
+
+  it('命中统计：useCount/lastUsedAt 渲染「命中 N 次 · 最近 YYYY-MM-DD」', async () => {
+    const lastUsedAt = Date.now() - 30 * DAY_MS;
+    listMock.mockResolvedValue([
+      { ...wsEntry, id: 'm1', content: '命中统计条目甲', useCount: 3, lastUsedAt },
+      { ...wsEntry, id: 'm2', content: '命中统计条目乙', useCount: 0, lastUsedAt: null },
+    ]);
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('命中统计条目甲')).toBeInTheDocument());
+    expect(screen.getByText(new RegExp(`命中 3 次 · 最近 ${fmtDate(lastUsedAt)}`))).toBeInTheDocument();
+    // lastUsedAt 为 null（从未被检索）→ 不渲染日期，显示未使用
+    expect(screen.getByText(/命中 0 次 · 未使用/)).toBeInTheDocument();
+  });
+
+  it('建议清理黄标：auto + lastUsedAt 91 天前显示；89 天前 / user 来源不显示', async () => {
+    listMock.mockResolvedValue([
+      autoEntry({ id: 'stale', content: '陈旧 auto 条目', lastUsedAt: Date.now() - 91 * DAY_MS }),
+      autoEntry({ id: 'fresh', content: '新鲜 auto 条目', lastUsedAt: Date.now() - 89 * DAY_MS }),
+      { ...wsEntry, id: 'user-old', content: '陈旧 user 条目', lastUsedAt: Date.now() - 91 * DAY_MS },
+    ]);
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('陈旧 auto 条目')).toBeInTheDocument());
+    // 恰好一个「建议清理」（stale auto），fresh auto 与 user 来源条目不带
+    expect(screen.getAllByText('建议清理')).toHaveLength(1);
+  });
+
+  it('建议清理黄标：lastUsedAt 为 null 的 auto 条目以 createdAt 兜底判定', async () => {
+    listMock.mockResolvedValue([
+      autoEntry({ id: 'old-created', content: '老创建 auto 条目', lastUsedAt: null, createdAt: Date.now() - 91 * DAY_MS }),
+      autoEntry({ id: 'new-created', content: '新创建 auto 条目', lastUsedAt: null, createdAt: Date.now() - 89 * DAY_MS }),
+    ]);
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('老创建 auto 条目')).toBeInTheDocument());
+    expect(screen.getAllByText('建议清理')).toHaveLength(1);
+  });
+});
+
+// v2.2 P3 Task 3：编辑/新增 textarea maxLength 按 kind 动态 + 剩余字数提示
+describe('MemorySettings 长度上限 UI', () => {
+  it('编辑 rule 条目：textarea maxLength=4000 + 剩余字数提示', async () => {
+    listMock.mockResolvedValue([{ ...wsEntry, kind: 'rule' }]);
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    const ta = (await screen.findByLabelText('记忆内容')) as HTMLTextAreaElement;
+    expect(ta.getAttribute('maxlength')).toBe('4000');
+    expect(screen.getByText(/还可输入 \d+ 字/)).toBeInTheDocument();
+  });
+
+  it('编辑非 rule 条目：maxLength=2000', async () => {
+    listMock.mockResolvedValue([{ ...wsEntry, kind: 'knowledge' }]);
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    const ta = (await screen.findByLabelText('记忆内容')) as HTMLTextAreaElement;
+    expect(ta.getAttribute('maxlength')).toBe('2000');
+  });
+
+  it('新增对话框：默认 rule=4000，切 knowledge 后动态降为 2000', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '新增记忆' }));
+    const ta = (await screen.findByLabelText('新记忆内容')) as HTMLTextAreaElement;
+    expect(ta.getAttribute('maxlength')).toBe('4000');
+    expect(screen.getByText(/还可输入 \d+ 字/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('记忆类型'), { target: { value: 'knowledge' } });
+    expect(ta.getAttribute('maxlength')).toBe('2000');
   });
 });

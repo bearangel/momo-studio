@@ -110,6 +110,46 @@ describe('memories repo', () => {
     expect(ra.last_used_at).toBeGreaterThan(0);
   });
 
+  // v2.2 P3 Task 3：content 长度 enforcement——普通 kind 上限 2000、rule 上限 4000（spec §6.6）
+  // 边界语义：上限值本身合法（<=），超限抛错且错误信息含上限数字（UI 直接呈现给用户）
+  describe('content 长度上限 enforcement', () => {
+    const make = (len: number): string => 'x'.repeat(len);
+
+    it('普通 kind：1999 / 2000 字合法入库，2001 字抛错含上限', () => {
+      expect(insertMemory({ scope: 'global', kind: 'knowledge', content: make(1999), source: 'user' }).content).toHaveLength(1999);
+      expect(insertMemory({ scope: 'global', kind: 'knowledge', content: make(2000), source: 'user' }).content).toHaveLength(2000);
+      expect(() =>
+        insertMemory({ scope: 'global', kind: 'knowledge', content: make(2001), source: 'user' }),
+      ).toThrow(/2000/);
+    });
+
+    it('rule kind：4000 字合法、4001 字抛错含上限 4000', () => {
+      expect(insertMemory({ scope: 'global', kind: 'rule', content: make(4000), source: 'user' }).content).toHaveLength(4000);
+      expect(() =>
+        insertMemory({ scope: 'global', kind: 'rule', content: make(4001), source: 'user' }),
+      ).toThrow(/4000/);
+    });
+
+    it('update：超限 patch 抛错；上限值本身合法；上限内 patch 正常更新', () => {
+      const m = insertMemory({ scope: 'global', kind: 'knowledge', content: '短内容', source: 'user' });
+      expect(() => updateMemory(m.id, { content: make(2001) })).toThrow(/2000/);
+      expect(() => updateMemory(m.id, { content: make(2000) })).not.toThrow();
+      // rule 条目 update 沿用既有 kind 的 4000 上限（kind 不可 patch）
+      const r = insertMemory({ scope: 'global', kind: 'rule', content: '短规则', source: 'user' });
+      expect(() => updateMemory(r.id, { content: make(4001) })).toThrow(/4000/);
+      expect(() => updateMemory(r.id, { content: make(4000) })).not.toThrow();
+      expect(getMemory(m.id)!.content).toHaveLength(2000);
+    });
+
+    it('insert 超限时主表不留半行（校验先于事务）', () => {
+      expect(() =>
+        insertMemory({ scope: 'global', kind: 'knowledge', content: make(2001), source: 'user' }),
+      ).toThrow();
+      const count = getDb().prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number };
+      expect(count.c).toBe(0);
+    });
+  });
+
   // 终审修复（F2，spec §11.1 缺口）：FTS 失败回滚——insertMemory 主表与 FTS 同事务，
   // FTS 侧失败时主表不得留半行（同事务回滚）。beforeEach 每用例新库，DROP 后无需恢复。
   it('FTS 失败时同事务回滚：insertMemory 抛错且主表不留半行', () => {

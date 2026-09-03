@@ -183,6 +183,24 @@ describe('importMemoriesMarkdown 导入', () => {
     expect(after.lastUsedAt).toBeNull();
   });
 
+  it('global 层自往返：导出 global 含段 → 再导入 global → imported=0 全 skipped（global 去重路径回归锁）', () => {
+    // 锁 scopeKind='global' 分支（检索时 workspaceId 空串占位不得误伤命中收窄）——
+    // T2 评审 Important：既有用例只覆盖 global→workspace 跨层导入，global 自身去重路径无锁
+    insertMemory({
+      scope: 'global', kind: 'rule', content: '全局去重锁条目甲', source: 'user',
+    });
+    insertMemory({
+      scope: 'global', kind: 'knowledge', content: '全局去重锁条目乙', source: 'auto',
+    });
+
+    const { content } = exportMemoriesMarkdown({ kind: 'global' });
+    expect(content).toContain('## [rule|user|pinned] 全局去重锁条目甲');
+
+    const res = importMemoriesMarkdown({ kind: 'global' }, content);
+    expect(res).toEqual({ imported: 0, skipped: 2 });
+    expect(listMemories({ kind: 'global' })).toHaveLength(2);
+  });
+
   it('session scope 拒绝导入（抛错，不落库）', () => {
     expect(() =>
       importMemoriesMarkdown({ kind: 'session', sessionId: 's1' }, '## [rule|user|pinned] 内容'),
