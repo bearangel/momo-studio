@@ -290,6 +290,75 @@ describe('memory_forget', () => {
   });
 });
 
+// ─── P3 Task 4：参数校验负路径回归锁 ────────────────────────────────────────
+
+describe('P3 打磨：参数校验负路径', () => {
+  it('拒绝：tags 非数组（传字符串）', async () => {
+    await expect(
+      tools.execute('memory_save', { kind: 'rule', content: 'x', tags: '规范' }, ctx),
+    ).rejects.toThrow(/tags/);
+  });
+
+  it('拒绝：tags 数组含非字符串元素', async () => {
+    await expect(
+      tools.execute('memory_save', { kind: 'rule', content: 'x', tags: ['工程', 3] }, ctx),
+    ).rejects.toThrow(/tags/);
+  });
+
+  it('拒绝：limit=0 / 非整数 / 字符串形态（错误路径专项）', async () => {
+    await expect(
+      tools.execute('memory_search', { query: '部署', limit: 0 }, ctx),
+    ).rejects.toThrow(/limit/);
+    await expect(
+      tools.execute('memory_search', { query: '部署', limit: 1.5 }, ctx),
+    ).rejects.toThrow(/limit/);
+    await expect(
+      tools.execute('memory_search', { query: '部署', limit: '3' }, ctx),
+    ).rejects.toThrow(/limit/);
+  });
+
+  it('拒绝：未知工具名（错误路径专项）', async () => {
+    await expect(
+      tools.execute('memory_nonsense', {}, ctx),
+    ).rejects.toThrow(/未知记忆工具/);
+  });
+
+  it('search 缺省 limit=10：12 条同主题命中只返回前 10 条', async () => {
+    for (let i = 0; i < 12; i++) {
+      insertMemory({
+        scope: 'global', kind: 'knowledge', content: `全局部署规范条目第${i}号`, source: 'auto',
+      });
+    }
+    const result = await tools.execute('memory_search', { query: '部署' }, ctx);
+    expect(result.split('\n')).toHaveLength(10);
+  });
+});
+
+// ─── P3 Task 4（M-2）：审计层级标识——模块层落点冠 [memory-module] 前缀 ───────
+
+describe('P3 打磨：审计层级标识（M-2）', () => {
+  it('模块层审计 inputSummary 冠 [memory-module] 前缀，前缀后仍是参数 JSON', async () => {
+    await tools.execute('memory_save', { kind: 'rule', content: '审计前缀用例' }, ctx);
+    expect(auditLogs).toHaveLength(1);
+    const summary = auditLogs[0]!.inputSummary;
+    expect(summary.startsWith('[memory-module] ')).toBe(true);
+    // 前缀后载荷 = 参数 JSON（与 runtime-entry 统一审计同款形态，可机器解析比对）
+    expect(JSON.parse(summary.slice('[memory-module] '.length))).toEqual({
+      kind: 'rule',
+      content: '审计前缀用例',
+    });
+  });
+
+  it('失败路径的模块层审计同样带前缀（成功与失败可辨识同源）', async () => {
+    await expect(
+      tools.execute('memory_forget', { id: '00000000-0000-4000-8000-000000000000' }, ctx),
+    ).rejects.toThrow(/不存在/);
+    expect(auditLogs).toHaveLength(1);
+    expect(auditLogs[0]!.inputSummary.startsWith('[memory-module] ')).toBe(true);
+    expect(auditLogs[0]!.success).toBe(false);
+  });
+});
+
 describe('注册中心', () => {
   it('buildToolRegistry 包含 memory_* 三工具 defs（中文 description）', () => {
     const defs = getAllToolDefs(buildToolRegistry(ctx));

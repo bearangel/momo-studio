@@ -160,4 +160,22 @@ describe('memories repo', () => {
     const count = getDb().prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number };
     expect(count.c).toBe(0);
   });
+
+  // P3 Task 4：kind/source CHECK 负路径——repo 层无枚举运行时校验（TS 类型仅编译期），
+  // schema CHECK 是最后防线；非法枚举经类型断言透传到 SQL 层验证约束拒绝
+  describe('CHECK 约束负路径（kind/source 合法集之外）', () => {
+    const asInput = (v: unknown) => v as Parameters<typeof insertMemory>[0];
+
+    it('insert：非法 kind 被表 CHECK 拒绝', () => {
+      expect(() =>
+        insertMemory(asInput({ scope: 'global', kind: 'bogus', content: 'x', source: 'user' })),
+      ).toThrow(/CHECK constraint failed/);
+    });
+
+    it('insert：非法 source 被表 CHECK 拒绝', () => {
+      expect(() =>
+        insertMemory(asInput({ scope: 'global', kind: 'rule', content: 'x', source: 'alien' })),
+      ).toThrow(/CHECK constraint failed/);
+    });
+  });
 });

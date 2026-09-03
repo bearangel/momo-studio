@@ -137,7 +137,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
       getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
-      searchMemories: async () => [],
+      searchMemories: async () => { throw new Error('测试 stub 不落库'); },
       saveMemory: async () => { throw new Error('测试 stub 不落库'); },
       deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
@@ -171,7 +171,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
       getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
-      searchMemories: async () => [],
+      searchMemories: async () => { throw new Error('测试 stub 不落库'); },
       saveMemory: async () => { throw new Error('测试 stub 不落库'); },
       deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
@@ -201,7 +201,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
       getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
-      searchMemories: async () => [],
+      searchMemories: async () => { throw new Error('测试 stub 不落库'); },
       saveMemory: async () => { throw new Error('测试 stub 不落库'); },
       deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };
@@ -263,7 +263,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       getUserContext: async () => ({ preferences: [] }),
       getWorkspaceContext: async () => null,
       getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
-      searchMemories: async () => [],
+      searchMemories: async () => { throw new Error('测试 stub 不落库'); },
       saveMemory: async () => { throw new Error('测试 stub 不落库'); },
       deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
     };

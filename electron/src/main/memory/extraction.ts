@@ -23,7 +23,8 @@ import { createLLMProvider, type LLMMessage, type LLMProvider } from '../agent/l
 import { getGlobalSettings } from '../settings/crud';
 import { insertMemory } from '../storage/memories/repo';
 import { getMemoryProvider } from './index';
-import type { ConversationContext, ContextMessage } from './types';
+import { messageToContext } from './context-map';
+import type { ConversationContext } from './types';
 import { logger } from '../logger';
 
 /** 同会话两次提取间最短间隔（毫秒；spec §6.4 去抖） */
@@ -521,25 +522,15 @@ function readPriorSummary(sessionId: string): string | null {
  * 取最近 WINDOW_LIMIT 条会话消息（spec §6.4「最近 50 条」窗口），保持 ASC 时间序。
  * 实现：直接 SQL `ORDER BY created_at DESC LIMIT WINDOW_LIMIT` 取最新 N 条，
  * 再反转保 ASC 与 provider getConversationContext 同款形态。sender → role 映射
- * 复用 sqlite-provider.messageToContext 同款启发式（owner=user / 其他=assistant）。
+ * 复用 context-map.messageToContext 共享启发式（P3 M-7：与 sqlite-provider 单点同源）。
  */
 async function fetchLatestWindow(sessionId: string): Promise<ConversationContext> {
   const rows = getDb()
     .prepare(
-      `SELECT * FROM messages WHERE session_id = ?
+      `SELECT sender, body, created_at AS createdAt FROM messages WHERE session_id = ?
        ORDER BY created_at DESC, id DESC LIMIT ?`,
     )
-    .all(sessionId, WINDOW_LIMIT) as Array<{
-      id: string; session_id: string; sender: string; event_type: string; body: string;
-      created_at: number; updated_at: number;
-    }>;
-  const messages: ContextMessage[] = rows
-    .reverse()
-    .map((r) => ({
-      role: r.sender === 'owner' ? ('user' as const) : ('assistant' as const),
-      content: r.body,
-      timestamp: r.created_at,
-      sender: r.sender,
-    }));
+    .all(sessionId, WINDOW_LIMIT) as Array<{ sender: string; body: string; createdAt: number }>;
+  const messages = rows.reverse().map(messageToContext);
   return { messages };
 }

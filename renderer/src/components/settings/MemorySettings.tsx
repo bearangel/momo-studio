@@ -2,6 +2,9 @@
 // v2.2 记忆管理页（spec §7.3）：全局/工作空间双层 tab + 列表（置顶/编辑/删除）+ 总开关。
 // 会话层记忆从会话详情入口进入（P2）；本页新增固定 user 视角（source='user'）。
 // 总开关经 settings.updateGlobal 的 memoryEnabled（false = 注入与提取暂停）。
+// v2.2 P3 打磨：全部 window.api 调用 catch 呈现行内错误条（role=alert + text-status-error）；
+// tab 切换带请求序号守卫（旧 scope 晚归响应不覆盖当前层）；toggle 失败回滚本地乐观态；
+// 开关类按钮补 aria-pressed、scope tabs 补 role=tablist/tab/aria-selected。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Brain, Pin, PinOff, Pencil, Trash2, Plus, Download, Upload } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -51,6 +54,9 @@ const isStaleAuto = (e: MemoryEntry): boolean => {
   return Date.now() - (e.lastUsedAt ?? e.createdAt) > STALE_DAYS * DAY_MS;
 };
 
+// IPC 失败的统一文案提取（Error → message，其余 → String）
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
 // 内容输入 textarea（样式 token 对齐 ui/Input；maxLength 按 kind 动态 + 剩余字数提示）
 function MemoryContentTextarea(props: {
   value: string;
@@ -92,13 +98,25 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importResult, setImportResult] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // v2.2 P3：行内错误条（window.api 调用失败的统一呈现；导入沿用专属 importError）
+  const [actionError, setActionError] = useState<string | null>(null);
+  // v2.2 P3：tab 切换请求序号守卫——旧 scope 晚归响应（含失败）不得覆盖当前层
+  const reloadSeq = useRef(0);
 
-  // 按 tab 构造 scope 拉列表（filter 位本页未消费，省略）
+  // 按 tab 构造 scope 拉列表（filter 位本页未消费，省略）。
+  // 序号守卫：切 tab 后旧请求晚归时 seq 已过期，丢弃其结果与错误。
   const reload = useCallback(() => {
     const scope: MemoryListScope = tab === 'global'
       ? { kind: 'global' }
       : { kind: 'workspace', workspaceId };
-    ipc.memory.list(scope).then(setEntries);
+    const seq = ++reloadSeq.current;
+    ipc.memory.list(scope)
+      .then((rows) => {
+        if (seq === reloadSeq.current) setEntries(rows);
+      })
+      .catch((e: unknown) => {
+        if (seq === reloadSeq.current) setActionError(errText(e));
+      });
   }, [tab, workspaceId]);
 
   useEffect(() => { reload(); }, [reload]);
@@ -107,17 +125,30 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
     ipc.settings.getGlobal().then((s) => {
       setMemoryEnabled(s.memoryEnabled !== false);
       setMemoryExtractionEnabled(s.memoryExtractionEnabled !== false);
-    });
+    }).catch((e: unknown) => setActionError(errText(e)));
   }, []);
 
   const togglePin = async (e: MemoryEntry) => {
-    await ipc.memory.update(e.id, { pinned: !e.pinned });
+    setActionError(null);
+    try {
+      await ipc.memory.update(e.id, { pinned: !e.pinned });
+    } catch (err) {
+      setActionError(errText(err));
+      return;
+    }
     reload();
   };
 
   const saveEdit = async () => {
     if (editing && editText.trim()) {
-      await ipc.memory.update(editing.id, { content: editText.trim() });
+      setActionError(null);
+      try {
+        await ipc.memory.update(editing.id, { content: editText.trim() });
+      } catch (err) {
+        // 失败保留弹窗：用户可重试或取消，输入不丢
+        setActionError(errText(err));
+        return;
+      }
     }
     setEditing(null);
     reload();
@@ -125,35 +156,57 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
 
   const doDelete = async () => {
     if (confirming) {
-      await ipc.memory.delete(confirming.id);
+      setActionError(null);
+      try {
+        await ipc.memory.delete(confirming.id);
+      } catch (err) {
+        setActionError(errText(err));
+        return;
+      }
     }
     setConfirming(null);
     reload();
   };
 
   const toggleEnabled = async () => {
-    const next = !memoryEnabled;
-    setMemoryEnabled(next);
-    await ipc.settings.updateGlobal({ memoryEnabled: next });
+    const prev = memoryEnabled;
+    setMemoryEnabled(!prev); // 乐观更新
+    try {
+      await ipc.settings.updateGlobal({ memoryEnabled: !prev });
+    } catch (err) {
+      setMemoryEnabled(prev); // 失败回滚本地态
+      setActionError(errText(err));
+    }
   };
 
   // v2.2 P2：自动提取子开关——独立 IPC 通道（settings.updateGlobal），与总开关解耦。
   // 总开关停用时按钮禁用（hide 无意义，disable + 提示让用户看见关联原因）
   const toggleExtraction = async () => {
-    const next = !memoryExtractionEnabled;
-    setMemoryExtractionEnabled(next);
-    await ipc.settings.updateGlobal({ memoryExtractionEnabled: next });
+    const prev = memoryExtractionEnabled;
+    setMemoryExtractionEnabled(!prev); // 乐观更新
+    try {
+      await ipc.settings.updateGlobal({ memoryExtractionEnabled: !prev });
+    } catch (err) {
+      setMemoryExtractionEnabled(prev); // 失败回滚本地态
+      setActionError(errText(err));
+    }
   };
 
   // 新增跟随当前 tab 落 scope；kind 用户可选（默认 rule，常驻注入由此生效）；
   // pinned 由 repo 按 kind 推导（rule/preference=常驻），不显式传
   const doCreate = async () => {
     if (!newText.trim()) return;
-    await ipc.memory.save(
-      tab === 'global'
-        ? { scope: 'global', kind: newKind, content: newText.trim(), source: 'user' }
-        : { scope: 'workspace', workspaceId, kind: newKind, content: newText.trim(), source: 'user' },
-    );
+    setActionError(null);
+    try {
+      await ipc.memory.save(
+        tab === 'global'
+          ? { scope: 'global', kind: newKind, content: newText.trim(), source: 'user' }
+          : { scope: 'workspace', workspaceId, kind: newKind, content: newText.trim(), source: 'user' },
+      );
+    } catch (err) {
+      setActionError(errText(err));
+      return;
+    }
     setCreating(false);
     setNewText('');
     reload();
@@ -161,15 +214,22 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
 
   // 导出：当前 tab 层 → main 生成 Markdown → Blob 下载（同 session.exportMessages 消费端）
   const doExport = async () => {
-    const scope: MemoryListScope = tab === 'global'
-      ? { kind: 'global' }
-      : { kind: 'workspace', workspaceId };
-    const { filename, content } = await ipc.memory.exportMarkdown(scope);
-    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    setActionError(null);
+    let payload: { filename: string; content: string };
+    try {
+      const scope: MemoryListScope = tab === 'global'
+        ? { kind: 'global' }
+        : { kind: 'workspace', workspaceId };
+      payload = await ipc.memory.exportMarkdown(scope);
+    } catch (err) {
+      setActionError(errText(err));
+      return;
+    }
+    const blob = new Blob([payload.content], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = payload.filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -214,6 +274,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
           <button
             type="button"
             aria-label="自动提取开关"
+            aria-pressed={memoryExtractionEnabled}
             onClick={toggleExtraction}
             disabled={!memoryEnabled}
             className={`text-sm px-3 py-1.5 rounded border transition-colors ${
@@ -227,6 +288,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
           <button
             type="button"
             aria-label="记忆总开关"
+            aria-pressed={memoryEnabled}
             onClick={toggleEnabled}
             className={`text-sm px-3 py-1.5 rounded border transition-colors ${
               memoryEnabled
@@ -244,13 +306,15 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
       {/* v2.2 P2：提取前置条件静态说明——会话级 agent 必须配置模型供应商 */}
       <p className="text-xs text-tertiary">提取需要会话 agent 已配置模型供应商</p>
 
-      <div className="flex items-center gap-1 border-b border-subtle">
+      <div role="tablist" aria-label="记忆层级" className="flex items-center gap-1 border-b border-subtle">
         {(['workspace', 'global'] as ScopeTab[]).map((t) => (
           <button
             key={t}
             type="button"
-            onClick={() => setTab(t)}
+            role="tab"
+            aria-selected={tab === t}
             aria-label={t === 'workspace' ? '工作空间' : '全局'}
+            onClick={() => setTab(t)}
             className={`px-3 py-1.5 text-sm rounded-t border-b-2 transition-colors ${
               tab === t ? 'border-accent-600 dark:border-accent-300 text-primary' : 'border-transparent text-secondary hover:text-primary'
             }`}
@@ -287,6 +351,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
 
       {importResult && <p className="text-xs text-secondary">{importResult}</p>}
       {importError && <p className="text-xs text-status-error">{importError}</p>}
+      {actionError && <p role="alert" className="text-xs text-status-error">{actionError}</p>}
 
       <ul className="flex flex-col gap-2" aria-label="记忆列表">
         {entries.map((e) => (
@@ -294,7 +359,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
             <div className="flex items-start justify-between gap-2">
               <div className="text-sm text-primary whitespace-pre-wrap flex-1">{e.content}</div>
               <div className="flex items-center gap-1 shrink-0">
-                <button type="button" aria-label={e.pinned ? '取消置顶' : '置顶'} onClick={() => togglePin(e)}
+                <button type="button" aria-label={e.pinned ? '取消置顶' : '置顶'} aria-pressed={e.pinned} onClick={() => togglePin(e)}
                   className="p-1.5 rounded text-secondary hover:bg-surface-3 hover:text-primary">
                   {e.pinned ? <Pin size={16} strokeWidth={1.75} aria-hidden /> : <PinOff size={16} strokeWidth={1.75} aria-hidden />}
                 </button>

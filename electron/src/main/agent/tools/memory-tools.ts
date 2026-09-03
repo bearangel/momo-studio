@@ -7,11 +7,12 @@
 //     （fresh-session 对齐，spec §6.3：parentStreamSessionId 非空 → sessionId=null）
 //   - memory_forget：仅 source='agent'|'auto' 可删；user 条目拒绝删除（用户主权）
 //
-// 审计裁定：写操作（save / forget）在模块层走 logToolCall（参数形态与
-// runtime-entry 统一路由一致：inputSummary=参数 JSON / outputSummary=输出文本 /
-// success / durationMs）；读操作（search）不在模块层重复审计——生产链路所有
-// 注册中心工具调用已由 runtime-entry executeTool 的 try/finally 统一记录，
-// 模块层只对敏感的记忆写操作追加一条落点审计。
+// 审计双层语义（P3 M-2 收敛）：生产链路每条工具调用已由 runtime-entry
+// executeTool 的 try/finally 统一落一条审计（inputSummary=参数 JSON）；模块层
+// audited() 对敏感的记忆写操作（save / forget）追加第二条落点审计，与统一
+// 审计形状一致但 inputSummary 冠 `[memory-module] ` 前缀标识来源层级——审计表
+// 中两条记录可辨识（无前缀=runtime 统一路由，带前缀=模块层落点）。
+// 读操作（search）不在模块层重复审计。
 //
 // sourceDetail 裁定：ToolContext 现有字段不携带 agent 名（见 types.ts），故用
 // streamSessionId（本次 agent 运行的唯一流 id）作溯源标识——`agent:<streamSessionId>`，
@@ -50,7 +51,7 @@ function assertOneOf<T extends string>(value: string, allowed: readonly T[], nam
   return value as T;
 }
 
-/** 写操作审计包装：计时 + 成功/失败均记一条（形态同 runtime-entry 统一路由） */
+/** 写操作审计包装：计时 + 成功/失败均记一条（inputSummary 冠层级前缀，见文件头双层语义说明） */
 async function audited(
   toolName: string,
   args: Record<string, unknown>,
@@ -69,7 +70,7 @@ async function audited(
   } finally {
     logToolCall({
       toolName,
-      inputSummary: JSON.stringify(args),
+      inputSummary: `[memory-module] ${JSON.stringify(args)}`,
       outputSummary: output,
       success,
       durationMs: Date.now() - startTime,

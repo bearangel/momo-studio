@@ -10,7 +10,7 @@
 // Mock 策略（momo-test-rules）：只桩 window.api IPC 边界（memory + settings 命名空间），
 // 组件经 ipc client 代理消费；断言生产真实入参（filter 位省略即单参调用）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemorySettings } from './MemorySettings';
 import type { MemoryEntry } from '../../ipc/types';
 
@@ -63,7 +63,7 @@ describe('MemorySettings', () => {
   it('切到全局层：list 参数切换', async () => {
     render(<MemorySettings workspaceId="ws1" />);
     await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: '全局' }));
+    fireEvent.click(screen.getByRole('tab', { name: '全局' }));
     await waitFor(() => expect(listMock).toHaveBeenCalledWith({ kind: 'global' }));
   });
 
@@ -202,7 +202,7 @@ describe('MemorySettings 导出/导入', () => {
     exportMarkdownMock.mockResolvedValueOnce({ filename: 'momo-memory-global-1.md', content: '# 记忆导出（全局）' });
     render(<MemorySettings workspaceId="ws1" />);
     await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: '全局' }));
+    fireEvent.click(screen.getByRole('tab', { name: '全局' }));
     await waitFor(() => expect(listMock).toHaveBeenCalledWith({ kind: 'global' }));
     fireEvent.click(screen.getByRole('button', { name: '导出记忆' }));
     await waitFor(() => {
@@ -325,5 +325,91 @@ describe('MemorySettings 长度上限 UI', () => {
     expect(screen.getByText(/还可输入 \d+ 字/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('记忆类型'), { target: { value: 'knowledge' } });
     expect(ta.getAttribute('maxlength')).toBe('2000');
+  });
+});
+
+// v2.2 P3 Task 4：UI 健壮性与 a11y——IPC 失败行内错误条 / tab 切换请求序号守卫 /
+// toggle 失败回滚本地态 / aria-pressed + role=tablist
+describe('MemorySettings 健壮性与 a11y（P3 打磨）', () => {
+  it('a11y：scope tabs 带 tablist/tab 语义，aria-selected 随切换更新', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    expect(screen.getByRole('tablist')).toBeInTheDocument();
+    const wsTab = screen.getByRole('tab', { name: '工作空间' });
+    const globalTab = screen.getByRole('tab', { name: '全局' });
+    expect(wsTab).toHaveAttribute('aria-selected', 'true');
+    expect(globalTab).toHaveAttribute('aria-selected', 'false');
+    fireEvent.click(globalTab);
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith({ kind: 'global' }));
+    expect(globalTab).toHaveAttribute('aria-selected', 'true');
+    expect(wsTab).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('a11y：总开关/自动提取/pin 按钮带 aria-pressed 反映状态', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '记忆总开关' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '自动提取开关' })).toHaveAttribute('aria-pressed', 'true');
+    // wsEntry.pinned=true → 「取消置顶」按钮处于 pressed
+    expect(screen.getByRole('button', { name: '取消置顶' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('列表加载失败：行内错误条呈现错误信息', async () => {
+    listMock.mockRejectedValueOnce(new Error('数据库暂时不可用'));
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('数据库暂时不可用'));
+  });
+
+  it('总开关切换失败：回滚本地态 + 错误条', async () => {
+    updateGlobalMock.mockRejectedValueOnce(new Error('写设置失败'));
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    const btn = screen.getByRole('button', { name: '记忆总开关' });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('写设置失败'));
+    // 回滚：按钮文本与 aria-pressed 均回到启用态
+    expect(btn).toHaveTextContent('已启用');
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('自动提取切换失败：回滚本地态 + 错误条', async () => {
+    updateGlobalMock.mockRejectedValueOnce(new Error('写提取设置失败'));
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    const btn = screen.getByRole('button', { name: '自动提取开关' });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('写提取设置失败'));
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('置顶失败：错误条呈现（本地列表不变形）', async () => {
+    updateMock.mockRejectedValueOnce(new Error('置顶写失败'));
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '取消置顶' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('置顶写失败'));
+  });
+
+  it('导出失败：错误条呈现，不触发下载', async () => {
+    exportMarkdownMock.mockRejectedValueOnce(new Error('导出生成失败'));
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '导出记忆' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('导出生成失败'));
+  });
+
+  it('tab 切换请求序号守卫：旧 scope 晚归响应不得覆盖当前层列表', async () => {
+    let resolveWorkspaceList!: (v: MemoryEntry[]) => void;
+    listMock.mockImplementationOnce(() => new Promise((res) => { resolveWorkspaceList = res; }));
+    listMock.mockResolvedValueOnce([{ ...wsEntry, id: 'g1', content: '全局层唯一条目' }]);
+    render(<MemorySettings workspaceId="ws1" />);
+    fireEvent.click(screen.getByRole('tab', { name: '全局' }));
+    await waitFor(() => expect(screen.getByText('全局层唯一条目')).toBeInTheDocument());
+    // 旧 workspace 请求此刻才返回——守卫应丢弃，当前全局列表不被覆盖
+    await act(async () => {
+      resolveWorkspaceList([{ ...wsEntry, id: 'late-w1', content: '晚归的工作空间条目' }]);
+    });
+    expect(screen.queryByText('晚归的工作空间条目')).not.toBeInTheDocument();
+    expect(screen.getByText('全局层唯一条目')).toBeInTheDocument();
   });
 });
