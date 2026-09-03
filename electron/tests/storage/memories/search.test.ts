@@ -77,3 +77,23 @@ describe('searchMemories BM25 中文检索', () => {
     expect(hits).toHaveLength(1);
   });
 });
+
+describe('searchMemories scopeKind 单层收窄（P3 M-3 追加参数）', () => {
+  // 「研发规范」只存在于 workspace 层夹具（本 ws + 其他 ws 各一条）——
+  // 收窄到 global 后应 0 命中；若未收窄会命中 2 条，断言立即红
+  it('scopeKind=global：三层并集收窄到全局层', () => {
+    const hits = searchMemories('研发规范', { workspaceId: WS, sessionId: 's1' }, 10, { scopeKind: 'global' });
+    expect(hits).toHaveLength(0);
+  });
+
+  it('scopeKind=workspace：只返回本 workspace 层条目', () => {
+    const hits = searchMemories('研发规范', { workspaceId: WS, sessionId: 's1' }, 10, { scopeKind: 'workspace' });
+    expect(hits.map((m) => m.content)).toEqual(['本工作空间研发规范：提交信息用中文']);
+  });
+
+  it('scopeKind=session：只返回会话层条目', () => {
+    const hits = searchMemories('登录', { workspaceId: WS, sessionId: 's1' }, 10, { scopeKind: 'session' });
+    expect(hits.some((m) => m.content.includes('重构登录模块'))).toBe(true);
+    expect(hits.every((m) => m.scope === 'session')).toBe(true);
+  });
+});

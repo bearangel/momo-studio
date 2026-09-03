@@ -28,7 +28,8 @@ import {
 } from '../../src/main/storage/sessions/repo';
 import { insertMessage } from '../../src/main/storage/messages/repo';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
-import { insertMemory } from '../../src/main/storage/memories/repo';
+import { getMemory, insertMemory } from '../../src/main/storage/memories/repo';
+import { searchMemories as storageSearchMemories } from '../../src/main/storage/memories/search';
 import { updateGlobalSettings } from '../../src/main/settings/crud';
 import {
   runExtraction,
@@ -599,5 +600,119 @@ describe('scheduleExtraction —— fire-and-forget 静默失败', () => {
 
     scheduleExtraction(sid);
     await vi.waitFor(() => expect(countMemoriesBySource('auto')).toBe(1));
+  });
+});
+
+// ─── P3 Task 1：数据信号净化（I-1 / M-5 / M-1）───────────────────────────────
+
+describe('runExtraction —— 去重探测不污染热度信号（I-1）', () => {
+  it('候选被判重复跳过：既有条目 use_count / last_used_at 保持不变', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
+    const existing = insertMemory({
+      scope: 'workspace', workspaceId: WORKSPACE_ID,
+      kind: 'knowledge', content: '用户偏好深色主题界面与等宽字体', source: 'agent',
+    });
+    // 候选是既有条目的子串 → BM25 必命中且双向包含 → 判定重复跳过。
+    // 旧实现去重走 provider.searchMemories（命中即 touch）→ use_count 被去重探测污染。
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({
+      memories: [{ kind: 'preference', content: '用户偏好深色主题界面', tags: [] }],
+    })));
+
+    await runExtraction(sid);
+
+    expect(countMemoriesBySource('auto')).toBe(0); // 判定重复，未新增
+    const after = getMemory(existing.id)!;
+    expect(after.useCount).toBe(0);
+    expect(after.lastUsedAt).toBeNull();
+  });
+
+  it('候选无重叠正常落库：去重探测命中的既有条目同样不被 touch', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
+    // 既有条目是候选 tokens 的交错重排（同 token 集 → BM25 AND 语义必命中），
+    // 但任意 20 字窗口无连续重叠 → 非重复 → 候选正常落库。
+    // 旧实现去重探测经 provider 检索（命中即 touch）→ use_count 被污染。
+    const existing = insertMemory({
+      scope: 'workspace', workspaceId: WORKSPACE_ID,
+      kind: 'knowledge', content: '用户宽偏好字体深色进行主题夜间界面编码与作业等', source: 'agent',
+    });
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({
+      memories: [{ kind: 'preference', content: '用户偏好深色主题界面与等宽字体进行夜间编码作业', tags: [] }],
+    })));
+
+    await runExtraction(sid);
+
+    expect(countMemoriesBySource('auto')).toBe(1); // 非重复 → 正常落库
+    const after = getMemory(existing.id)!;
+    expect(after.useCount).toBe(0); // 但探测命中的既有条目不递增（旧实现 +1）
+    expect(after.lastUsedAt).toBeNull();
+  });
+});
+
+describe('runExtraction —— top3 去重（M-5）', () => {
+  it('重复条目排在第 2 位（首位为高相关无重叠干扰项）时仍被识别跳过', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
+    // 候选 = HEAD(20字) + TAIL(20字)，恰 40 字 = DEDUP_PREFIX_LEN（去重 query 为完整候选）
+    const HEAD = '夜间构建流水线需要在合并前完成全部检查项';
+    const TAIL = '发布前必须确认版本号与变更清单及目录指引';
+    const cand = HEAD + TAIL;
+    // 干扰项：候选 tokens 的交错重排（同 token 集 → AND 语义命中；doc 更短 → rank 1），
+    // 但任意 20 字窗口无连续重叠 → 非重复
+    const decoy = insertMemory({
+      scope: 'workspace', workspaceId: WORKSPACE_ID, kind: 'knowledge',
+      content: '夜间发布构建前流水线必须需要确认在版本号合并与前变更完成清单全部及检查目录项指引', source: 'agent',
+    });
+    // 重复项：候选全文 + 长后缀（token 超集 → 命中；显著更长 → BM25 长度归一后排 rank 2；
+    // content 含候选首 20 字 → 双向包含命中）
+    const dup = insertMemory({
+      scope: 'workspace', workspaceId: WORKSPACE_ID, kind: 'knowledge',
+      content: cand + '（很早以前的旧版本归档记录，与当前候选重复但归档说明文字更长一些）', source: 'agent',
+    });
+
+    // 夹具自检：BM25 排序必须 decoy 第 1、dup 第 2（若排序不成立先修夹具内容，而非实现）
+    const ranking = storageSearchMemories(cand, { workspaceId: WORKSPACE_ID, sessionId: null }, 10);
+    expect(ranking[0]!.id).toBe(decoy.id);
+    expect(ranking[1]!.id).toBe(dup.id);
+
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({
+      memories: [{ kind: 'knowledge', content: cand, tags: [] }],
+    })));
+
+    await runExtraction(sid);
+
+    // 旧实现只比对 hits[0]（decoy 非重复）→ 候选被误当新知识插入（红点）
+    expect(countMemoriesBySource('auto')).toBe(0);
+    expect(getMemory(decoy.id)!.useCount).toBe(0);
+    expect(getMemory(dup.id)!.useCount).toBe(0);
+  });
+});
+
+describe('runExtraction —— 解析容错续扫（M-1）', () => {
+  it('首个平衡块合法 JSON 但 memories 非数组：候选继续 fallback 扫描提取', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
+    // LLM 把 memories 写成对象（形态错误）：外层 JSON 合法 → 旧实现直接返回空候选（红点）；
+    // 期望：不放弃，fallback 逐对象扫描 salvage 出内层 {kind, content}
+    chatMock.mockResolvedValueOnce(llmResp(
+      '{"memories": {"kind":"knowledge","content":"嵌在错误结构里的记忆条目","tags":[]}}',
+    ));
+
+    await runExtraction(sid);
+
+    const rows = getDb().prepare('SELECT content FROM memories').all() as Array<{ content: string }>;
+    expect(rows.map((r) => r.content)).toEqual(['嵌在错误结构里的记忆条目']);
+  });
+
+  it('memories 非数组但 session_summary 合法：候选走扫描 + 外层摘要仍保留（回归锁）', async () => {
+    // >40 消息触发压缩路径：外层 JSON 合法时 session_summary 可信，
+    // 修复不得因 memories 形态错误而丢失摘要（旧实现本行为已正确，此处锁定）
+    const sid = seedSession({ userMsgs: 23, agentMsgs: 22 });
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({
+      memories: '格式错误的记忆字段',
+      session_summary: '会话摘要不因 memories 形态错误而丢失',
+    })));
+
+    await runExtraction(sid);
+
+    expect(listSessionSummary(sid)?.summary).toBe('会话摘要不因 memories 形态错误而丢失');
+    expect(countMemoriesBySource('auto')).toBe(0); // 扫描无可提取候选（外层对象无 kind）
   });
 });

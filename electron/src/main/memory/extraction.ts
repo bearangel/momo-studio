@@ -39,7 +39,9 @@ const WINDOW_LIMIT = 50;
 const MIN_USER_MESSAGES = 2;
 /** 去重前缀长度：取候选 content 前 N 字作为 BM25 检索的 query */
 const DEDUP_PREFIX_LEN = 40;
-/** 去重重叠判定长度：首条命中与候选的前 N 字包含关系 */
+/** 去重比对命中条数：top-N 逐条双向包含判定（P3 M-5：非仅首位） */
+const DEDUP_HITS = 3;
+/** 去重重叠判定长度：命中条目与候选的前 N 字双向包含关系 */
 const OVERLAP_LEN = 20;
 /** 自动提取产出的固定 confidence（spec §5.3：自动 0.7） */
 const AUTO_CONFIDITY = 0.7;
@@ -79,8 +81,8 @@ export function scheduleExtraction(sessionId: string, opts?: { taskId?: string |
  *  3. 窗口：getConversationContext(sessionId, {limit:50})；用户消息 <2 → 跳过
  *  4. LLM：一次 chat() 调用，system prompt 要求 JSON-only（ADD-only）
  *  5. 解析容错：平衡块 → 失败 → 逐对象扫描 salvage；非白名单 kind 丢弃
- *  6. 去重：searchMemories(contentPrefix40, {workspaceId, sessionId:null})；
- *           首条命中与候选前 20 字包含关系 → 跳过
+ *  6. 去重：无 touch 检索 top3（{touch:false}——探测不污染 use_count；P3 I-1/M-5）；
+ *           任一命中与候选前 20 字双向包含 → 跳过
  *  7. 落库：insertMemory({source:'auto', pinned:0, confidence:0.7, tags})
  *  8. 会话压缩：总消息数 >40 且 session_summary 非空 → upsert session_summaries
  *  9. logger.info 计数（提取 N / 跳过 M / 压缩 yes|no）
@@ -349,26 +351,37 @@ function parseExtractionOutput(raw: string): ParsedExtraction {
     try {
       const obj = JSON.parse(block) as unknown;
       if (isRecord(obj)) {
-        const memories = Array.isArray(obj.memories) ? obj.memories : [];
-        const sessionSummary =
-          typeof obj.session_summary === 'string' && obj.session_summary.trim()
-            ? obj.session_summary
-            : null;
-        return {
-          candidates: memories.flatMap(coerceCandidate).filter((c): c is ExtractedCandidate => c !== null),
-          sessionSummary,
-        };
+        // memories 必须是数组才按外层结构收货（P3 M-1）：合法 JSON 但 memories 非数组
+        // （LLM 写错形态）时不能直接返回空——候选继续走 fallback 扫描 salvage
+        if (Array.isArray(obj.memories)) {
+          const sessionSummary =
+            typeof obj.session_summary === 'string' && obj.session_summary.trim()
+              ? obj.session_summary
+              : null;
+          return {
+            candidates: obj.memories.flatMap(coerceCandidate).filter((c): c is ExtractedCandidate => c !== null),
+            sessionSummary,
+          };
+        }
+        // 外层 JSON 合法 → session_summary 仍可信（>40 压缩路径不因 memories 形态错误丢摘要）；
+        // 候选交给 fallback 扫描
+        if (typeof obj.session_summary === 'string' && obj.session_summary.trim()) {
+          return { candidates: scanCandidates(raw), sessionSummary: obj.session_summary };
+        }
       }
     } catch {
       // 平衡块 parse 失败 → 落 fallback 逐对象扫描（spec §6.4 解析容错）
     }
   }
-  // fallback：扫描所有平衡对象，挑选含 kind 的（内层 memory 对象）
-  const scanned = scanBalancedObjects(raw).flatMap((obj) => {
+  return { candidates: scanCandidates(raw), sessionSummary: null };
+}
+
+/** fallback：扫描全部平衡对象，挑选含 kind 的（内层 memory 对象） */
+function scanCandidates(raw: string): ExtractedCandidate[] {
+  return scanBalancedObjects(raw).flatMap((obj) => {
     const cand = isRecord(obj) ? coerceCandidate(obj) : null;
     return cand ? [cand] : [];
   });
-  return { candidates: scanned, sessionSummary: null };
 }
 
 /** 抽取首个顶层平衡 {...} 块（含 JSON 字符串转义处理） */
@@ -473,12 +486,19 @@ function coerceCandidate(raw: unknown): ExtractedCandidate | null {
 async function isDuplicate(cand: ExtractedCandidate, workspaceId: string): Promise<boolean> {
   const prefix = cand.content.slice(0, DEDUP_PREFIX_LEN);
   if (!prefix) return false;
-  const hits = await getMemoryProvider().searchMemories(prefix, { workspaceId, sessionId: null });
-  if (hits.length === 0) return false;
-  const first = hits[0]!;
+  // 无 touch 检索（P3 I-1）：去重探测不得递增 use_count/last_used_at（污染陈旧度信号）
+  const hits = await getMemoryProvider().searchMemories(
+    prefix,
+    { workspaceId, sessionId: null },
+    DEDUP_HITS,
+    { touch: false },
+  );
   const candHead = cand.content.slice(0, OVERLAP_LEN);
-  const firstHead = first.content.slice(0, OVERLAP_LEN);
-  return first.content.includes(candHead) || cand.content.includes(firstHead);
+  // top3 逐条双向包含判定（P3 M-5）：任一命中即重复（重复条目未必排首位）
+  return hits.some((hit) => {
+    const hitHead = hit.content.slice(0, OVERLAP_LEN);
+    return hit.content.includes(candHead) || cand.content.includes(hitHead);
+  });
 }
 
 // ─── 直接 SQL 辅助（spec §6.4 需要的 totalMessages / priorSummary） ───────────

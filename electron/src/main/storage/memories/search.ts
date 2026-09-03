@@ -15,14 +15,26 @@ export interface MemorySearchScope {
   sessionId: string | null;
 }
 
+/** searchMemories 追加选项（P3 M-3，缺省行为不变） */
+export interface MemorySearchOptions {
+  /** 三层并集收窄到单层（memory_search scope 先滤后截下推 SQL，保证目标层完整 top-N） */
+  scopeKind?: MemoryEntry['scope'];
+}
+
 export function searchMemories(
   query: string,
   scope: MemorySearchScope,
   limit = 10,
+  opts?: MemorySearchOptions,
 ): MemoryEntry[] {
   const matchExpr = buildMatchExpr(query);
   if (matchExpr === '') return [];
   const db = getDb();
+  // scopeKind 下推：SQL 层先收窄再 LIMIT（客户端过滤会把名额浪费在非目标层上）
+  const scopeKindClause = opts?.scopeKind !== undefined ? ' AND memories.scope = ?' : '';
+  const params: unknown[] = [matchExpr, scope.workspaceId, scope.sessionId ?? ''];
+  if (opts?.scopeKind !== undefined) params.push(opts.scopeKind);
+  params.push(limit);
   const rows = db.prepare(
     `SELECT memories.rowid AS rowid, memories.*
      FROM memories_fts
@@ -30,9 +42,9 @@ export function searchMemories(
      WHERE memories_fts MATCH ?
        AND (memories.scope = 'global'
          OR (memories.scope = 'workspace' AND memories.workspace_id = ?)
-         OR (memories.scope = 'session' AND memories.session_id = ?))
+         OR (memories.scope = 'session' AND memories.session_id = ?))${scopeKindClause}
      ORDER BY bm25(memories_fts)
      LIMIT ?`,
-  ).all(matchExpr, scope.workspaceId, scope.sessionId ?? '', limit) as SqlRow[];
+  ).all(...params) as SqlRow[];
   return rows.map(rowToEntry);
 }

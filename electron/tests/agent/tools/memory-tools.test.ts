@@ -209,6 +209,35 @@ describe('memory_search', () => {
     expect(result).toContain('无命中');
   });
 
+  it('scope 先滤后截（P3 M-3）：目标层返回完整 top-N，非目标层条目不被 touch', async () => {
+    // workspace 层是短文档（BM25 长度归一占优）→ 并集 top-2 全被 workspace 层挤占。
+    // 旧行为（先截 top-2 再客户端过滤）返回 0 条 global；新行为（scopeKind 下推 SQL）返回 global 完整 top-2
+    const wsA = insertMemory({
+      scope: 'workspace', workspaceId: 'ws1', kind: 'knowledge', content: '部署流程规范', source: 'auto',
+    });
+    const wsB = insertMemory({
+      scope: 'workspace', workspaceId: 'ws1', kind: 'knowledge', content: '部署检查清单', source: 'auto',
+    });
+    const globalIds = new Set([
+      insertMemory({ scope: 'global', kind: 'knowledge', content: '全局部署规范要求所有变更必须提前通知团队成员并完整记录变更日志', source: 'auto' }).id,
+      insertMemory({ scope: 'global', kind: 'knowledge', content: '跨项目部署约定统一使用蓝绿发布策略以显著降低停机时间与风险', source: 'auto' }).id,
+      insertMemory({ scope: 'global', kind: 'knowledge', content: '部署失败时应当先执行回滚脚本然后再开展问题排查与根因分析', source: 'auto' }).id,
+    ]);
+
+    const result = await tools.execute('memory_search', { query: '部署', scope: 'global', limit: 2 }, ctx);
+
+    const ids = result.split('\n').map((line) => line.split(' | ')[0]!);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(globalIds.has(id)).toBe(true);
+    // 非目标层条目不被 touch（旧行为：并集 top-2 的 workspace 条目已被递增 use_count）
+    expect(getMemory(wsA.id)!.useCount).toBe(0);
+    expect(getMemory(wsB.id)!.useCount).toBe(0);
+    // 目标层：返回条目计 1 次真实使用，未返回条目保持 0
+    for (const id of globalIds) {
+      expect(getMemory(id)!.useCount).toBe(ids.includes(id) ? 1 : 0);
+    }
+  });
+
   it('拒绝：空 query（错误路径专项）', async () => {
     await expect(
       tools.execute('memory_search', { query: '' }, ctx),

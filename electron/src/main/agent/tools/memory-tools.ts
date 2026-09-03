@@ -186,8 +186,8 @@ export class MemoryTools implements ToolModule {
     const query = parseStringArg(args.query, 'query');
     if (query.trim() === '') throw new Error('参数 "query" 不能为空');
 
-    // 可选 scope 过滤：provider 检索是三层并集，限定层在结果侧收窄
-    // （use_count 已对全部真实命中递增，过滤只影响展示）
+    // 可选 scope 过滤（P3 M-3）：scopeKind 下推 provider 查询——SQL 层先收窄到目标层
+    // 再取 top-N（返回目标层完整 top-N；非目标层条目不出现在结果中，use_count 不被无关命中污染）
     let scopeFilter: MemoryEntry['scope'] | undefined;
     if (args.scope !== undefined) {
       scopeFilter = assertOneOf(parseStringArg(args.scope, 'scope'), SCOPES, 'scope');
@@ -203,12 +203,12 @@ export class MemoryTools implements ToolModule {
 
     // 子 agent fresh-session 对齐（spec §6.3）：parentStreamSessionId 非空不带会话记忆
     const sessionId = ctx.parentStreamSessionId ? null : ctx.roomId || null;
-    let hits = await getMemoryProvider().searchMemories(
+    const hits = await getMemoryProvider().searchMemories(
       query,
       { workspaceId: ctx.workspaceId, sessionId },
       limit,
+      scopeFilter !== undefined ? { scopeKind: scopeFilter } : undefined,
     );
-    if (scopeFilter) hits = hits.filter((h) => h.scope === scopeFilter);
 
     if (hits.length === 0) return '（无命中记忆。可换个关键词重试，或用 memory_save 保存新记忆）';
     return hits

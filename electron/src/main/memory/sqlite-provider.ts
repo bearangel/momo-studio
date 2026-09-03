@@ -35,6 +35,7 @@ import { logger } from '../logger';
 import type { MemoryEntry, SaveMemoryInput } from '../storage/memories/repo';
 import type {
   MemoryProvider,
+  MemorySearchOpts,
   TaskContext,
   TaskEventSummary,
   FileChange,
@@ -215,9 +216,22 @@ export class SQLiteMemoryProvider implements MemoryProvider {
     }
   }
 
-  async searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit = 10): Promise<MemoryEntry[]> {
-    const hits = searchMemories(query, scope, limit);
-    if (hits.length > 0) touchMemoryUsed(hits.map((h) => h.id));
+  async searchMemories(
+    query: string,
+    scope: { workspaceId: string; sessionId: string | null },
+    limit = 10,
+    opts?: MemorySearchOpts,
+  ): Promise<MemoryEntry[]> {
+    // touch 分支只存在于本 provider 包装层——storage 层检索永不 touch。
+    // opts.touch=false（P3 I-1）：去重探测等内部用途不递增 use_count/last_used_at；
+    // opts.scopeKind（P3 M-3）透传 storage 层单层收窄
+    const hits = searchMemories(
+      query,
+      scope,
+      limit,
+      opts?.scopeKind !== undefined ? { scopeKind: opts.scopeKind } : undefined,
+    );
+    if (hits.length > 0 && opts?.touch !== false) touchMemoryUsed(hits.map((h) => h.id));
     return hits;
   }
 

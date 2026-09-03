@@ -109,6 +109,16 @@ export interface WorkspaceContext {
 }
 
 /**
+ * searchMemories 追加选项（P3 追加式，缺省行为不变）：
+ *  - touch=false：无 touch 检索——去重探测等内部用途不得递增 use_count/last_used_at（污染陈旧度信号）
+ *  - scopeKind：三层并集收窄到单层（scope 先滤后截下推 SQL，返回目标层完整 top-N）
+ */
+export interface MemorySearchOpts {
+  touch?: boolean;
+  scopeKind?: MemoryEntry['scope'];
+}
+
+/**
  * 统一记忆访问抽象。
  *
  * 实现：
@@ -134,8 +144,8 @@ export interface MemoryProvider {
   // —— v2.2 新增 ——
   /** 常驻注入视图（总开关关闭时返回空视图，spec §9） */
   getPinnedContext(opts: { workspaceId: string; sessionId: string | null }): Promise<PinnedMemoryView>;
-  /** BM25 检索（命中条目递增 use_count） */
-  searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit?: number): Promise<MemoryEntry[]>;
+  /** BM25 检索（缺省命中条目递增 use_count；opts.touch=false 关闭、opts.scopeKind 单层收窄） */
+  searchMemories(query: string, scope: { workspaceId: string; sessionId: string | null }, limit?: number, opts?: MemorySearchOpts): Promise<MemoryEntry[]>;
   /** 写入记忆（pinned 缺省按 kind 推导：rule/preference=常驻） */
   saveMemory(input: SaveMemoryInput): Promise<MemoryEntry>;
   /** 删除记忆（不存在抛错） */
