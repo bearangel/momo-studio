@@ -6,6 +6,16 @@
 
 ## 状态
 
+**v2.2.0-p1 — Agent 记忆系统·数据与手动层（开发中，未发布）**
+
+三层记忆（会话/工作空间/全局）第一期：数据层 + 手动管理。spec 见 `docs/specs/2026-09-03-v2.2-agent-memory-design.md`，实施计划见 `docs/plans/2026-09-03-v2.2-agent-memory-p1-data-manual.md`。
+
+- **数据模型（migration 027）**——`memories` 表（scope 列三层 + kind/pinned/source 三维，session 级联删除）+ `session_summaries` 滚动摘要表 + `memories_fts` FTS5 external content 派生索引；向量伴生表仅预留 schema 升级位（BM25 召回不足时再上）
+- **检索层**——jieba（@node-rs/jieba）预分词与 FTS5 写入/查询两侧同源（契约测试锁死），BM25 中文检索 + 三层并集 scope 过滤；repo CRUD 与 FTS 双写同事务（主表与索引永不漂移，UPDATE 顺序修正规避外部内容表 CORRUPT_VTAB/静默漂移双失败形态）
+- **注入链路**——`MemoryProvider` 扩展四方法（既有五签名冻结）：常驻/检索双类型注入视图（预算 6000 字符近似 3000 token）+ 每轮现拉（UI 修改下一条消息即生效）+ 子 agent 不带会话记忆（fresh-session 对齐）+ `memoryEnabled` 总开关（只 gate 注入）
+- **手动管理**——设置页「记忆」分类：全局/工作空间双层 tab、置顶/编辑/删除（确认）/新增/总开关；`memory:*` 五通道 IPC 双端类型对齐
+- 待办：macOS 主机冒烟（注入生效/即时生效/总开关/中文检索四项）；P2 = agent 三工具 + 自动提取管线 + 会话压缩；P3 = 导出 md/遗忘建议/统计
+
 **v2.0.0 — Released**
 
 2.0.0 正式发布——五期重构一气呵成：传输层内迁（终结 Matrix/Tuwunel 双轨）、UI 骨架与设置重构、半成品处置与 IPC 收敛、P2P 局域网协作、升级体验收尾。架构上从 v1.x 的「Electron + Matrix/Conduit 子进程 + 双轨 IM」收缩为「单进程 Electron + 内置 SessionService + 进程内事件分发」，本地零外部依赖、消息/委派不再经过外部协议服务器。详见 `docs/specs/2026-07-28-agent-platform-design.md` 与各期实施计划（p1-p5）。
