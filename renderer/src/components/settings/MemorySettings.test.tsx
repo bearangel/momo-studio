@@ -14,6 +14,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemorySettings } from './MemorySettings';
 
 const listMock = vi.fn();
+const saveMock = vi.fn();
 const updateMock = vi.fn();
 const deleteMock = vi.fn();
 const getGlobalMock = vi.fn();
@@ -23,7 +24,7 @@ const updateGlobalMock = vi.fn();
 const mockApi = {
   memory: {
     list: listMock,
-    save: vi.fn(),
+    save: saveMock,
     update: updateMock,
     delete: deleteMock,
     search: vi.fn(),
@@ -92,5 +93,35 @@ describe('MemorySettings', () => {
     await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '记忆总开关' }));
     await waitFor(() => expect(updateGlobalMock).toHaveBeenCalledWith({ memoryEnabled: false }));
+  });
+
+  // 终审修复（F3）：新增默认 kind=rule——常驻注入生效（pinned 由 repo 按 kind 推导，不显式传）
+  it('新增记忆：默认 kind=rule 保存', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '新增记忆' }));
+    const input = await screen.findByLabelText('新记忆内容');
+    fireEvent.change(input, { target: { value: '默认类型为规范的记忆' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(saveMock).toHaveBeenCalledWith({
+        scope: 'workspace', workspaceId: 'ws1', kind: 'rule', content: '默认类型为规范的记忆', source: 'user',
+      }),
+    );
+  });
+
+  it('新增记忆：经类型选择器选择知识后保存传所选 kind', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '新增记忆' }));
+    const input = await screen.findByLabelText('新记忆内容');
+    fireEvent.change(input, { target: { value: '选了知识类型的记忆' } });
+    fireEvent.change(screen.getByLabelText('记忆类型'), { target: { value: 'knowledge' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(saveMock).toHaveBeenCalledWith({
+        scope: 'workspace', workspaceId: 'ws1', kind: 'knowledge', content: '选了知识类型的记忆', source: 'user',
+      }),
+    );
   });
 });

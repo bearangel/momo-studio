@@ -9,6 +9,7 @@ import type { MemoryEntry, MemoryListScope } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
 
 type ScopeTab = 'workspace' | 'global';
 
@@ -20,6 +21,14 @@ const KIND_LABEL: Record<MemoryEntry['kind'], string> = {
   summary: '摘要',
 };
 
+// 新增对话框 kind 可选值（默认 rule——常驻注入由此生效）
+const KIND_OPTIONS: Array<{ value: MemoryEntry['kind']; label: string }> = [
+  { value: 'rule', label: '规范' },
+  { value: 'preference', label: '偏好' },
+  { value: 'knowledge', label: '知识' },
+  { value: 'summary', label: '摘要' },
+];
+
 export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const [tab, setTab] = useState<ScopeTab>('workspace');
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
@@ -29,6 +38,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const [confirming, setConfirming] = useState<MemoryEntry | null>(null);
   const [creating, setCreating] = useState(false);
   const [newText, setNewText] = useState('');
+  const [newKind, setNewKind] = useState<MemoryEntry['kind']>('rule');
 
   // 按 tab 构造 scope 拉列表（filter 位本页未消费，省略）
   const reload = useCallback(() => {
@@ -71,13 +81,14 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
     await ipc.settings.updateGlobal({ memoryEnabled: next });
   };
 
-  // 新增跟随当前 tab 落 scope；kind 固定 knowledge（规则/偏好由 agent 提取或后续入口）
+  // 新增跟随当前 tab 落 scope；kind 用户可选（默认 rule，常驻注入由此生效）；
+  // pinned 由 repo 按 kind 推导（rule/preference=常驻），不显式传
   const doCreate = async () => {
     if (!newText.trim()) return;
     await ipc.memory.save(
       tab === 'global'
-        ? { scope: 'global', kind: 'knowledge', content: newText.trim(), source: 'user' }
-        : { scope: 'workspace', workspaceId, kind: 'knowledge', content: newText.trim(), source: 'user' },
+        ? { scope: 'global', kind: newKind, content: newText.trim(), source: 'user' }
+        : { scope: 'workspace', workspaceId, kind: newKind, content: newText.trim(), source: 'user' },
     );
     setCreating(false);
     setNewText('');
@@ -121,7 +132,7 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
       </div>
 
       <div>
-        <Button variant="secondary" size="sm" onClick={() => { setCreating(true); setNewText(''); }}>
+        <Button variant="secondary" size="sm" onClick={() => { setCreating(true); setNewText(''); setNewKind('rule'); }}>
           <Plus size={16} strokeWidth={1.75} aria-hidden /> 新增记忆
         </Button>
       </div>
@@ -177,7 +188,18 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
             </>
           }
         >
-          <Input value={newText} onChange={(e) => setNewText(e.target.value)} aria-label="新记忆内容" placeholder="例如：本工作空间研发规范……" />
+          <div className="flex flex-col gap-3">
+            <Input value={newText} onChange={(e) => setNewText(e.target.value)} aria-label="新记忆内容" placeholder="例如：本工作空间研发规范……" />
+            <Select
+              aria-label="记忆类型"
+              value={newKind}
+              onChange={(e) => setNewKind(e.target.value as MemoryEntry['kind'])}
+            >
+              {KIND_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </Select>
+          </div>
         </Dialog>
       )}
 
