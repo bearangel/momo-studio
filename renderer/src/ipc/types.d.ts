@@ -458,6 +458,8 @@ export interface GlobalSettings {
   maxConcurrentTasks?: number;
   /** v2.2 P1：记忆系统总开关（默认 true；false = 注入与提取暂停，数据保留） */
   memoryEnabled?: boolean;
+  /** v2.2 P2：自动提取子开关（默认 true；与 memoryEnabled 联动——总开关停用时强制不工作） */
+  memoryExtractionEnabled?: boolean;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */

@@ -28,6 +28,8 @@ export interface GlobalSettings {
   maxConcurrentTasks?: number;
   /** v2.2：记忆系统总开关（false=停止注入与提取；DB 保留） */
   memoryEnabled?: boolean;
+  /** v2.2 P2：自动提取子开关（false=跳过提取管线，注入不受影响）；默认 true */
+  memoryExtractionEnabled?: boolean;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -56,6 +58,7 @@ export function getGlobalSettings(): GlobalSettings {
       auditQuotaMb: DEFAULT_AUDIT_QUOTA_MB,
       maxConcurrentTasks,
       memoryEnabled: true,
+      memoryExtractionEnabled: true,
     };
   }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
@@ -68,6 +71,7 @@ export function getGlobalSettings(): GlobalSettings {
     defaultRerankModel: parsed.defaultRerankModel,
     maxConcurrentTasks,
     memoryEnabled: parsed.memoryEnabled ?? true,
+    memoryExtractionEnabled: parsed.memoryExtractionEnabled ?? true,
   };
 }
 

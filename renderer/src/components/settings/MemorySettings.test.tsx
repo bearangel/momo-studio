@@ -95,6 +95,36 @@ describe('MemorySettings', () => {
     await waitFor(() => expect(updateGlobalMock).toHaveBeenCalledWith({ memoryEnabled: false }));
   });
 
+  // v2.2 P2 Task 5：自动提取开关（子开关）——独立于总开关
+  it('自动提取开关：切换调用 updateGlobal memoryExtractionEnabled', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    const btn = screen.getByRole('button', { name: '自动提取开关' });
+    // 初始 enabled（缺省 true）→ 点击切到 false
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(updateGlobalMock).toHaveBeenCalledWith({ memoryExtractionEnabled: false }),
+    );
+  });
+
+  it('总开关停用时：自动提取开关禁用 + 显示「记忆总开关已停用」提示', async () => {
+    getGlobalMock.mockResolvedValue({
+      memoryEnabled: false,
+      memoryExtractionEnabled: true,
+    });
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '自动提取开关' })).toBeDisabled();
+    expect(screen.getByText('记忆总开关已停用')).toBeInTheDocument();
+  });
+
+  it('静态说明「提取需要会话 agent 已配置模型供应商」始终渲染', async () => {
+    render(<MemorySettings workspaceId="ws1" />);
+    await waitFor(() => expect(screen.getByText('pnpm 研发规范')).toBeInTheDocument());
+    expect(screen.getByText(/提取需要会话 agent 已配置模型供应商/)).toBeInTheDocument();
+  });
+
   // 终审修复（F3）：新增默认 kind=rule——常驻注入生效（pinned 由 repo 按 kind 推导，不显式传）
   it('新增记忆：默认 kind=rule 保存', async () => {
     render(<MemorySettings workspaceId="ws1" />);

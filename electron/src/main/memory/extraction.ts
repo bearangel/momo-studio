@@ -12,17 +12,15 @@
 //   - 铁律（spec §8）：绝不阻塞会话/任务主链路。runExtraction 自身有 try/catch 兜底，
 //     scheduleExtraction 再包一层 catch（双保险，logger 降级）。
 //   - 失败不占去抖窗口：失败路径 delete debounce mark，下个触发点自然重试（spec §8）。
-//   - memoryExtractionEnabled 字段由 Task 5 正式接入 GlobalSettings；本模块按
-//     `(getGlobalSettings() as GlobalSettings & { memoryExtractionEnabled?: boolean })`
-//     防御性读取 + 缺省 true。getGlobalSettings 当前会丢弃未知字段——Task 5 落地后
-//     crud.ts 返回该字段，此处零改动即工作。
+//   - memoryExtractionEnabled 由 Task 5 正式接入 GlobalSettings（crud.ts 返回该字段）；
+//     本模块按 `getGlobalSettings()` 直接读取 + 缺省 ?? true 兜底，未写入时视为启用。
 import { getDb } from '../storage/db';
 import { getSession } from '../storage/sessions/repo';
 import { getAgentDefinition } from '../agent/crud';
 import { getProvider } from '../agent/provider-crud';
 import { resolveApiKey } from '../agent/spawn-helpers';
 import { createLLMProvider, type LLMMessage, type LLMProvider } from '../agent/llm-provider';
-import { getGlobalSettings, type GlobalSettings } from '../settings/crud';
+import { getGlobalSettings } from '../settings/crud';
 import { insertMemory } from '../storage/memories/repo';
 import { getMemoryProvider } from './index';
 import type { ConversationContext, ContextMessage } from './types';
@@ -108,8 +106,8 @@ export async function runExtraction(sessionId: string, opts?: { taskId?: string 
 // ─── 内部实现 ────────────────────────────────────────────────────────────────
 
 async function runExtractionInner(sessionId: string, opts?: { taskId?: string | null }): Promise<void> {
-  // 1. gate：总开关 + 提取开关（后者 Task 5 落地；当前缺省视为启用）
-  const settings = getGlobalSettings() as GlobalSettings & { memoryExtractionEnabled?: boolean };
+  // 1. gate：总开关 + 提取开关（memoryExtractionEnabled 未写入时按 ?? true 视为启用）
+  const settings = getGlobalSettings();
   if (!settings.memoryEnabled) return;
   if (!(settings.memoryExtractionEnabled ?? true)) return;
 

@@ -33,6 +33,8 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
   const [tab, setTab] = useState<ScopeTab>('workspace');
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
+  // v2.2 P2：自动提取子开关（独立于总开关；总开关停用时强制禁用）
+  const [memoryExtractionEnabled, setMemoryExtractionEnabled] = useState(true);
   const [editing, setEditing] = useState<MemoryEntry | null>(null);
   const [editText, setEditText] = useState('');
   const [confirming, setConfirming] = useState<MemoryEntry | null>(null);
@@ -50,8 +52,11 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
-    // memoryEnabled 缺省 true（老库未写入该键时维持启用）
-    ipc.settings.getGlobal().then((s) => setMemoryEnabled(s.memoryEnabled !== false));
+    // memoryEnabled/memoryExtractionEnabled 缺省 true（老库未写入时维持启用）
+    ipc.settings.getGlobal().then((s) => {
+      setMemoryEnabled(s.memoryEnabled !== false);
+      setMemoryExtractionEnabled(s.memoryExtractionEnabled !== false);
+    });
   }, []);
 
   const togglePin = async (e: MemoryEntry) => {
@@ -81,6 +86,14 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
     await ipc.settings.updateGlobal({ memoryEnabled: next });
   };
 
+  // v2.2 P2：自动提取子开关——独立 IPC 通道（settings.updateGlobal），与总开关解耦。
+  // 总开关停用时按钮禁用（hide 无意义，disable + 提示让用户看见关联原因）
+  const toggleExtraction = async () => {
+    const next = !memoryExtractionEnabled;
+    setMemoryExtractionEnabled(next);
+    await ipc.settings.updateGlobal({ memoryExtractionEnabled: next });
+  };
+
   // 新增跟随当前 tab 落 scope；kind 用户可选（默认 rule，常驻注入由此生效）；
   // pinned 由 repo 按 kind 推导（rule/preference=常驻），不显式传
   const doCreate = async () => {
@@ -101,19 +114,40 @@ export function MemorySettings({ workspaceId }: { workspaceId: string }) {
         <h2 className="text-base text-primary font-medium flex items-center gap-2">
           <Brain size={16} strokeWidth={1.75} aria-hidden /> 记忆
         </h2>
-        <button
-          type="button"
-          aria-label="记忆总开关"
-          onClick={toggleEnabled}
-          className={`text-sm px-3 py-1.5 rounded border transition-colors ${
-            memoryEnabled
-              ? 'border-subtle text-secondary hover:bg-surface-3'
-              : 'border-status-error text-status-error'
-          }`}
-        >
-          {memoryEnabled ? '已启用' : '已停用（注入与提取暂停）'}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* v2.2 P2：自动提取子开关——独立于总开关；总开关停用时禁用 + 下方红字提示 */}
+          <button
+            type="button"
+            aria-label="自动提取开关"
+            onClick={toggleExtraction}
+            disabled={!memoryEnabled}
+            className={`text-sm px-3 py-1.5 rounded border transition-colors ${
+              memoryExtractionEnabled
+                ? 'border-subtle text-secondary hover:bg-surface-3'
+                : 'border-status-error text-status-error'
+            } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+          >
+            自动提取{memoryExtractionEnabled ? '已启用' : '已停用'}
+          </button>
+          <button
+            type="button"
+            aria-label="记忆总开关"
+            onClick={toggleEnabled}
+            className={`text-sm px-3 py-1.5 rounded border transition-colors ${
+              memoryEnabled
+                ? 'border-subtle text-secondary hover:bg-surface-3'
+                : 'border-status-error text-status-error'
+            }`}
+          >
+            {memoryEnabled ? '已启用' : '已停用（注入与提取暂停）'}
+          </button>
+        </div>
       </div>
+      {!memoryEnabled && (
+        <p className="text-xs text-status-error">记忆总开关已停用</p>
+      )}
+      {/* v2.2 P2：提取前置条件静态说明——会话级 agent 必须配置模型供应商 */}
+      <p className="text-xs text-tertiary">提取需要会话 agent 已配置模型供应商</p>
 
       <div className="flex items-center gap-1 border-b border-subtle">
         {(['workspace', 'global'] as ScopeTab[]).map((t) => (

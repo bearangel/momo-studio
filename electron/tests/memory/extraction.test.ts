@@ -367,13 +367,24 @@ describe('runExtraction —— 双开关 gate', () => {
     expect(countMemoriesBySource('auto')).toBe(0);
   });
 
-  it('memoryExtractionEnabled 字段尚未正式接入（Task 5 落地）：缺省视为启用 → 正常运行', async () => {
-    // 不写任何字段；getGlobalSettings() 返回的字段集不含 memoryExtractionEnabled；
-    // 提取读取应视为 enabled（缺省 true），不应误把 falsy 视为关闭。
+  it('memoryExtractionEnabled 缺省视为启用：未写入字段时正常调用 LLM', async () => {
+    // 写入字段已正式接入 crud.getGlobalSettings（Task 5 落地）——未写入时
+    // extraction 读取按 `?? true` 视为启用，不应误把 undefined 当关闭而跳过。
     const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
     chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({ memories: [] })));
     await runExtraction(sid);
     expect(chatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('memoryExtractionEnabled=false → 直接跳过，不调 LLM，不写库（Task 5 crud 已正式接入字段）', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 2 });
+    updateGlobalSettings({ memoryExtractionEnabled: false });
+
+    await runExtraction(sid);
+
+    expect(chatMock).not.toHaveBeenCalled();
+    expect(createLLMProviderMock).not.toHaveBeenCalled();
+    expect(countMemoriesBySource('auto')).toBe(0);
   });
 });
 
