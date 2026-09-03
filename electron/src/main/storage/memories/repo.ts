@@ -56,14 +56,14 @@ export interface MemoryPatch {
   pinned?: boolean;
 }
 
-type SqlRow = {
+export type SqlRow = {
   id: string; rowid: number; scope: string; workspace_id: string | null; session_id: string | null;
   kind: string; pinned: number; content: string; tags: string; source: string;
   source_detail: string | null; confidence: number; use_count: number;
   last_used_at: number | null; created_at: number; updated_at: number;
 };
 
-function rowToEntry(r: SqlRow): MemoryEntry {
+export function rowToEntry(r: SqlRow): MemoryEntry {
   return {
     id: r.id, rowid: r.rowid,
     scope: r.scope as MemoryEntry['scope'],
