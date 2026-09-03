@@ -12,7 +12,7 @@
 
 - **数据模型（migration 027）**——`memories` 表（scope 列三层 + kind/pinned/source 三维，session 级联删除）+ `session_summaries` 滚动摘要表 + `memories_fts` FTS5 external content 派生索引；向量伴生表仅预留 schema 升级位（BM25 召回不足时再上）
 - **检索层**——jieba（@node-rs/jieba）预分词与 FTS5 写入/查询两侧同源（契约测试锁死），BM25 中文检索 + 三层并集 scope 过滤；repo CRUD 与 FTS 双写同事务（主表与索引永不漂移，UPDATE 顺序修正规避外部内容表 CORRUPT_VTAB/静默漂移双失败形态）
-- **注入链路**——`MemoryProvider` 扩展四方法（既有五签名冻结）：常驻/检索双类型注入视图（预算 6000 字符近似 3000 token）+ 每轮现拉（UI 修改下一条消息即生效）+ 子 agent 不带会话记忆（fresh-session 对齐）+ `memoryEnabled` 总开关（只 gate 注入）
+- **注入链路**——`MemoryProvider` 扩展四方法（既有五签名冻结）：常驻/检索双类型注入视图（预算合计 7000 字符，≈3000 token，分段 2000/3000/1000/1000）+ 每轮现拉（UI 修改下一条消息即生效）+ 子 agent 不带会话记忆（fresh-session 对齐）+ `memoryEnabled` 总开关（只 gate 注入）
 - **手动管理**——设置页「记忆」分类：全局/工作空间双层 tab、置顶/编辑/删除（确认）/新增/总开关；`memory:*` 五通道 IPC 双端类型对齐
 - 待办：macOS 主机冒烟（注入生效/即时生效/总开关/中文检索四项）；P2 = agent 三工具 + 自动提取管线 + 会话压缩；P3 = 导出 md/遗忘建议/统计
 

@@ -1,5 +1,5 @@
 // electron/src/main/memory/injection.ts
-// 常驻注入视图组装（spec §6.3）：硬预算按字符近似（总量 6000 字符 ≈ 3000 token
+// 常驻注入视图组装（spec §6.3）：预算合计 7000 字符（≈3000 token，分段 2000/3000/1000/1000；
 // 中英混合近似——业界生产共识 2000-3000 token 常驻）。超预算按 updated_at 新者保留。
 import type { MemoryEntry } from '../storage/memories/repo';
 
