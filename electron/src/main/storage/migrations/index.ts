@@ -739,6 +739,57 @@ DROP TABLE agent_assignment_capabilities;
 ALTER TABLE agent_assignment_capabilities_v26 RENAME TO agent_assignment_capabilities;
 `.trim(),
   },
+  {
+    version: 27,
+    sql: `
+      -- v2.2 三层记忆（spec 2026-09-03-v2.2-agent-memory-design §5）：
+      -- scope 列分层（global/workspace/session）；session 级联删除；
+      -- pinned=常驻注入；source 决定主权（user 条目 agent 工具只读）。
+      CREATE TABLE memories (
+        id            TEXT PRIMARY KEY,
+        scope         TEXT NOT NULL,
+        workspace_id  TEXT,
+        session_id    TEXT,
+        kind          TEXT NOT NULL,
+        pinned        INTEGER NOT NULL DEFAULT 0,
+        content       TEXT NOT NULL,
+        tags          TEXT NOT NULL DEFAULT '[]',
+        source        TEXT NOT NULL,
+        source_detail TEXT,
+        confidence    REAL NOT NULL DEFAULT 1.0,
+        use_count     INTEGER NOT NULL DEFAULT 0,
+        last_used_at  INTEGER,
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
+        CHECK (scope IN ('global','workspace','session')),
+        CHECK (kind IN ('rule','preference','knowledge','summary')),
+        CHECK (source IN ('user','agent','auto')),
+        CHECK ((scope='global'     AND workspace_id IS NULL     AND session_id IS NULL)
+            OR (scope='workspace'  AND workspace_id IS NOT NULL AND session_id IS NULL)
+            OR (scope='session'    AND workspace_id IS NOT NULL AND session_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_memories_ws      ON memories(workspace_id) WHERE scope IN ('workspace','session');
+      CREATE INDEX idx_memories_session ON memories(session_id)   WHERE scope='session';
+      CREATE INDEX idx_memories_pinned  ON memories(scope, workspace_id) WHERE pinned=1;
+
+      -- 长会话压缩滚动摘要（覆盖式更新，covered_until 为增量压缩游标）
+      CREATE TABLE session_summaries (
+        session_id    TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        summary       TEXT NOT NULL,
+        covered_until INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL
+      );
+
+      -- FTS5 派生索引（external content 表；应用层双写，见 storage/memories/repo.ts）
+      CREATE VIRTUAL TABLE memories_fts USING fts5(
+        content, tags,
+        content='memories', content_rowid='rowid',
+        tokenize='unicode61'
+      );
+    `.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {
