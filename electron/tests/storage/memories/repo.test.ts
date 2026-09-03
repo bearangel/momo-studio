@@ -109,4 +109,15 @@ describe('memories repo', () => {
     expect(rb.use_count).toBe(1);
     expect(ra.last_used_at).toBeGreaterThan(0);
   });
+
+  // 终审修复（F2，spec §11.1 缺口）：FTS 失败回滚——insertMemory 主表与 FTS 同事务，
+  // FTS 侧失败时主表不得留半行（同事务回滚）。beforeEach 每用例新库，DROP 后无需恢复。
+  it('FTS 失败时同事务回滚：insertMemory 抛错且主表不留半行', () => {
+    getDb().exec('DROP TABLE memories_fts');
+    expect(() =>
+      insertMemory({ scope: 'global', kind: 'rule', content: '回滚验证内容', source: 'user' }),
+    ).toThrow();
+    const count = getDb().prepare('SELECT COUNT(*) AS c FROM memories').get() as { c: number };
+    expect(count.c).toBe(0);
+  });
 });
