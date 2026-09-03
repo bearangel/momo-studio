@@ -735,6 +735,65 @@ export interface SessionApiSurface {
   onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
 }
 
+/**
+ * v2.2 记忆条目（renderer 镜像）。
+ * 与 electron 端 storage/memories/repo.ts 的 MemoryEntry 对齐（跨进程独立定义，仅结构对齐）。
+ * 注意：electron 端另有 rowid（FTS external content 关联键）——主进程内部实现细节，
+ * 不属于 renderer 契约，故镜像不含该字段。
+ */
+export interface MemoryEntry {
+  id: string;
+  scope: 'global' | 'workspace' | 'session';
+  workspaceId: string | null;
+  sessionId: string | null;
+  kind: 'rule' | 'preference' | 'knowledge' | 'summary';
+  pinned: boolean;
+  content: string;
+  tags: string[];
+  source: 'user' | 'agent' | 'auto';
+  sourceDetail: string | null;
+  confidence: number;
+  useCount: number;
+  lastUsedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 记忆列表 scope（memory:list 入参）。与 electron 端 storage/memories/repo.ts 的 MemoryListScope 对齐。 */
+export type MemoryListScope =
+  | { kind: 'global' }
+  | { kind: 'workspace'; workspaceId: string }
+  | { kind: 'session'; sessionId: string };
+
+/**
+ * v2.2 P1 记忆通道（IPC 命名空间 memory:*，memory/ipc.handlers.ts）。
+ * 总开关经 settings:updateGlobal 的 memoryEnabled（默认 true）。
+ */
+export interface MemoryApiSurface {
+  /** 按 scope 列记忆（updated_at 倒序）；filter 可选筛选 */
+  list(scope: MemoryListScope, filter?: { kind?: MemoryEntry['kind']; pinned?: boolean }): Promise<MemoryEntry[]>;
+  /** 新建记忆，返回完整条目（pinned 缺省按 kind 推导：rule/preference=常驻） */
+  save(input: {
+    scope: 'global' | 'workspace' | 'session';
+    workspaceId?: string | null;
+    sessionId?: string | null;
+    kind: MemoryEntry['kind'];
+    content: string;
+    tags?: string[];
+    pinned?: boolean;
+    source: MemoryEntry['source'];
+  }): Promise<MemoryEntry>;
+  /** 部分更新（content/tags/pinned），返回更新后条目；id 不存在时 invoke 抛错 */
+  update(id: string, patch: { content?: string; tags?: string[]; pinned?: boolean }): Promise<MemoryEntry>;
+  /** 删除记忆；id 不存在时 invoke 抛错 */
+  delete(id: string): Promise<{ ok: true }>;
+  /**
+   * BM25 检索（全局 + 本 workspace + 本会话三层并集）。
+   * 管理页固定本机视角：workspaceId 必填（缺失返回空数组），sessionId 可选；limit 默认 20。
+   */
+  search(q: string, scope: { workspaceId: string; sessionId?: string }, limit?: number): Promise<MemoryEntry[]>;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -957,6 +1016,8 @@ export interface ApiSurface {
     /** 部分更新会话级配置，返回更新后的完整配置 */
     updateSession(sessionId: string, patch: Partial<SessionSettings>): Promise<SessionSettings>;
   };
+  /** v2.2 P1：记忆管理通道（memory/ipc.handlers.ts；总开关经 settings 的 memoryEnabled） */
+  memory: MemoryApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;

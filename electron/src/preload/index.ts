@@ -182,6 +182,14 @@ const api: ApiSurface = {
     getSession: (sessionId: string) => invoke('settings:getSession', sessionId),
     updateSession: (sessionId: string, patch) => invoke('settings:updateSession', sessionId, patch),
   },
+  // v2.2 P1：记忆管理通道（memory/ipc.handlers.ts；总开关经 settings:updateGlobal 的 memoryEnabled）
+  memory: {
+    list: (scope, filter) => invoke('memory:list', scope, filter),
+    save: (input) => invoke('memory:save', input),
+    update: (id, patch) => invoke('memory:update', id, patch),
+    delete: (id) => invoke('memory:delete', id),
+    search: (q, scope, limit) => invoke('memory:search', q, scope, limit),
+  },
   resource: {
     // v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选
     list: (filter?: ResourceFilter) => invoke<ResourceItem[]>('resource:list', filter),
