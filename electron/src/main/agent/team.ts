@@ -40,16 +40,18 @@ function rowToTeam(row: TeamRow, members: WorkspaceAgentMember[]): Team {
   };
 }
 
-/** 批量 JOIN 展开 team_members → WorkspaceAgentMember（单查询按 team_id 分组） */
+/** 批量 JOIN 展开 team_members → WorkspaceAgentMember（单查询按 team_id 分组；
+ *  v2.2：JOIN agent_definitions 带出 agentName/iconEmoji，团队列表不再显示 ID） */
 function loadMembersByTeam(teamIds: string[]): Map<string, WorkspaceAgentMember[]> {
   if (teamIds.length === 0) return new Map();
   const placeholders = teamIds.map(() => '?').join(', ');
   const rows = getDb()
     .prepare(
-      `SELECT tm.team_id, wam.* FROM team_members tm
+      `SELECT tm.team_id, wam.*, d.name, d.icon_emoji FROM team_members tm
        JOIN workspace_agent_members wam ON wam.instance_id = tm.instance_id
+       JOIN agent_definitions d ON d.id = wam.agent_definition_id
        WHERE tm.team_id IN (${placeholders})
-       ORDER BY tm.added_at ASC, tm.instance_id ASC`,
+       ORDER BY tm.added_at ASC, wam.instance_id ASC`,
     )
     .all(...teamIds) as (WorkspaceMemberRow & { team_id: string })[];
   const map = new Map<string, WorkspaceAgentMember[]>();

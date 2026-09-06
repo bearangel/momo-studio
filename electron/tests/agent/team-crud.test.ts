@@ -346,6 +346,9 @@ describe('listTeams — JOIN 展开', () => {
     expect(leaderMember.agentDefinitionId).toBe('def2');
     expect(leaderMember.workspaceId).toBe('ws1');
     expect(leaderMember.lastRunning).toBe(true);
+    // v2.2 回归锁：成员 JOIN definitions 带 agentName/iconEmoji（团队 chip 不显示 ID）
+    expect(leaderMember.agentName).toBe('DEF2');
+    expect(leaderMember.iconEmoji).toBe('🤖'); // icon_emoji 列 DEFAULT '🤖'（migration v1）
 
     // 跨 ws 隔离：ws2 只见乙组
     const ws2Teams = listTeams('ws2');
