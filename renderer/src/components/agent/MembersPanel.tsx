@@ -6,6 +6,7 @@
 // 「编辑」→ MemberEditDialog（API key + 能力覆盖统一弹窗；关闭时刷新成员列表，
 // 因 setMemberDeltas 不像 updateMemberApiKey 那样内部刷新）。
 // 「+ 创建 Agent」→ CreateAgentDialog（source='agentView'，创建成功自动加入当前 ws）。
+// 「+ 添加 Agent」→ AddAgentDialog（Bug 3：移出后可重新加入）。
 // v2.1 P3：token 全量语义化；🤖/⭐/▶/⏸ → Bot/Star/Play/Pause lucide（iconEmoji 用户数据豁免）。
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, Pause, Play, Star } from 'lucide-react';
@@ -14,6 +15,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { MemberEditDialog } from './MemberEditDialog';
 import { CreateAgentDialog } from './CreateAgentDialog';
+import { AddAgentDialog } from './AddAgentDialog';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
@@ -28,6 +30,7 @@ export function MembersPanel() {
   // 当前正在编辑（API key + 能力覆盖）的成员；非 null 时渲染弹窗
   const [editingMember, setEditingMember] = useState<WorkspaceAgentMember | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
     if (workspace) void loadMembers(workspace.id);
@@ -67,6 +70,9 @@ export function MembersPanel() {
           Agent 成员
         </span>
         <div className="ml-auto flex gap-2">
+          <Button type="button" variant="secondary" onClick={() => setAddOpen(true)}>
+            + 添加 Agent
+          </Button>
           <Button type="button" onClick={() => setCreateOpen(true)}>
             + 创建 Agent
           </Button>
@@ -98,6 +104,7 @@ export function MembersPanel() {
       </div>
 
       {createOpen && <CreateAgentDialog source="agentView" onClose={() => setCreateOpen(false)} />}
+      {addOpen && <AddAgentDialog onClose={() => setAddOpen(false)} />}
       {editingMember && (
         <MemberEditDialog
           member={editingMember}
