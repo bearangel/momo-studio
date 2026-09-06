@@ -880,7 +880,6 @@ describe('groupToolSegments', () => {
     expect(groupToolSegments([tool('c1', 'todowrite'), tool('c2', 'todowrite')])).toEqual([]);
   });
 });
-});
 ```
 
 （第三个用例的断言写复杂了——实现时简化为直接断言每段 kind 与数量即可，测试意图不变：`['tool_call:read_file 单独', 'tool_call:bash', 'context-group 2 项']`。）
