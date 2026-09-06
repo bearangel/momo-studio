@@ -48,6 +48,8 @@ export function ProviderModelPicker({
   }, [loadProviders]);
 
   useEffect(() => {
+    // 切换供应商时无条件清掉上一供应商的残留 error（缓存命中/未选中路径也走这里）
+    setError(null);
     if (!providerId) {
       setModels([]);
       return;
@@ -59,7 +61,6 @@ export function ProviderModelPicker({
     }
     let cancelled = false;
     setLoadingModels(true);
-    setError(null);
     ipc.provider
       .listModels(providerId)
       .then((list) => {

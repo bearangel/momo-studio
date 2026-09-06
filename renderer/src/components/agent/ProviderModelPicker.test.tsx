@@ -103,6 +103,43 @@ describe('ProviderModelPicker — 模型联动', () => {
     renderPicker({ providerId: 'p1' });
     expect(await screen.findByText('网络不可达')).toBeInTheDocument();
   });
+
+  it('切换到已缓存的供应商时清除上一个供应商的残留 error', async () => {
+    // p1 先加载成功（进缓存），p2 加载失败 → 切回 p1 → p2 的 error 必须被清掉
+    listModels.mockImplementation(async (id: string) =>
+      id === 'p1' ? [pm('p1', 'm-on', true)] : Promise.reject(new Error('HTTP 401')),
+    );
+    const { rerender } = render(
+      <ProviderModelPicker
+        providerId="p1"
+        modelId=""
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+      />,
+    );
+    await screen.findByRole('option', { name: 'm-on' });
+    rerender(
+      <ProviderModelPicker
+        providerId="p2"
+        modelId=""
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+      />,
+    );
+    expect(await screen.findByText('HTTP 401')).toBeInTheDocument();
+    rerender(
+      <ProviderModelPicker
+        providerId="p1"
+        modelId=""
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByText('HTTP 401')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('option', { name: 'm-on' })).toBeInTheDocument();
+  });
 });
 
 describe('ProviderModelPicker — 空态拉取', () => {
