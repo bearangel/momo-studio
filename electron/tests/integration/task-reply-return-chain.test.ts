@@ -30,6 +30,9 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import type { ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -224,6 +227,17 @@ function mkSubChild(subConfig: RuntimeConfig, subCtx: RuntimeContext): TestChild
   } as unknown as ChildProcess;
   return { child, sent };
 }
+
+// v2.2 起 executeTask 内 resolveMaxToolCalls 会触达 DB——测试环境指向临时目录，
+// 避免在默认用户目录（~/.momo-studio）创建空 state.db。未迁移空库上
+// getSessionSettings 抛 no-such-table，由 executeTask 的 try/catch 回退，
+// 不影响本文件的链路断言。
+const tmpRoot = path.join(
+  os.tmpdir(),
+  `ap-reply-chain-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+fs.mkdirSync(tmpRoot, { recursive: true });
+process.env.AP_USER_DATA_DIR = tmpRoot;
 
 describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 → PM resolve）', () => {
   let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;

@@ -218,6 +218,14 @@ describe('AgentRunner', () => {
 
 const tmpRoot = path.join(os.tmpdir(), `ap-runner-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+// v2.2 起 executeTask 内 resolveMaxToolCalls 会触达 DB——基础场景（无 setupDb 的
+// describe）也必须指到临时目录，否则 getDb 落到默认用户目录（~/.momo-studio），
+// 既污染开发环境又让后续 setupDb 复用同一单例造成 ws1 UNIQUE 冲突。
+// 未迁移的空库上 getSessionSettings 抛 no-such-table，由 executeTask 的
+// try/catch 回退（不携带 maxToolCalls），基础场景断言不受影响。
+fs.mkdirSync(tmpRoot, { recursive: true });
+process.env.AP_USER_DATA_DIR = tmpRoot;
+
 function setupDb(): string {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
