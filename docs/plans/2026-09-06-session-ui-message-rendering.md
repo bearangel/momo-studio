@@ -1463,6 +1463,28 @@ describe('CopyButton', () => {
     const down = fireEvent.mouseDown(screen.getByRole('button', { name: '复制' }));
     expect(down).toBe(true); // jsdom 下 preventDefault 不阻断派发，断言不抛错即可
   });
+
+  // 回退路径真实行为锁：writeText 拒绝时必须走 execCommand 选中复制 + finally 清理临时节点。
+  // jsdom 默认无 document.execCommand（lib.dom 类型存在 / 运行时 undefined），需挂 mock 并恢复。
+  it('writeText 失败时回退 execCommand（离屏 textarea 选中）且清理临时节点', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.assign(navigator, { clipboard: { writeText } });
+    const origExec = document.execCommand;
+    document.execCommand = vi.fn(() => true);
+    try {
+      render(<CopyButton text="回退内容" />);
+      fireEvent.click(screen.getByRole('button', { name: '复制' }));
+      await waitFor(() => {
+        expect(document.execCommand).toHaveBeenCalledWith('copy');
+      });
+      // 临时 textarea 已在 finally 中清理（防止 DOM 泄漏）
+      expect(document.querySelector('textarea')).toBeNull();
+      // 点击即反馈（setCopied 先于剪贴板调用）—— 即便走回退路径，用户感知也是「已复制」
+      expect(screen.getByText('已复制')).toBeInTheDocument();
+    } finally {
+      document.execCommand = origExec;
+    }
+  });
 });
 ```
 
@@ -1528,18 +1550,26 @@ export function CopyButton({ text, className, label = '复制' }: Props) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (): Promise<void> => {
+    // 同步翻状态——用户点击立即看到「已复制」反馈
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // 受限上下文回退：临时 textarea + execCommand
+      // 受限上下文回退：临时 textarea 离屏隐藏 + 选中后 execCommand('copy')
       const ta = document.createElement('textarea');
       ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
       document.body.appendChild(ta);
-      document.execCommand('copy');
-      ta.remove();
+      try {
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+      } finally {
+        ta.remove();
+      }
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   return (

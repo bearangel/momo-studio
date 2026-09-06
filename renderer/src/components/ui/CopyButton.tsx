@@ -22,12 +22,19 @@ export function CopyButton({ text, className, label = '复制' }: Props) {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // 受限上下文回退：临时 textarea + execCommand
+      // 受限上下文回退：临时 textarea 离屏隐藏 + 选中后 execCommand('copy')
       const ta = document.createElement('textarea');
       ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
       document.body.appendChild(ta);
-      document.execCommand('copy');
-      ta.remove();
+      try {
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+      } finally {
+        ta.remove();
+      }
     }
   };
 
