@@ -184,3 +184,74 @@ describe('MessageList v1.4 过滤', () => {
     expect(screen.queryAllByTestId('bubble')).toHaveLength(0);
   });
 });
+
+// === 发送即贴底（2026-09-06 UI 修复） ===
+// 契约：用户在上方浏览历史（isNearBottom=false）时，自己发送的消息追加
+// （末尾 sender='owner' 且 id 新增）→ 无条件贴底并恢复跟随；追加的是
+// agent 消息则维持原策略（不打断浏览）。
+import { fireEvent } from '@testing-library/react';
+import type { RenderResult } from '@testing-library/react';
+
+/** 渲染并返回 rerender（供消息追加场景） */
+function renderForRerender(messages: ImMessage[]): RenderResult {
+  sessionState.messagesBySession = new Map([['sess-room', messages]]);
+  return render(<MessageList />);
+}
+
+/** 重渲染注入新消息列表 */
+function rerenderWith(rerender: RenderResult['rerender'], messages: ImMessage[]): void {
+  sessionState.messagesBySession = new Map([['sess-room', messages]]);
+  rerender(<MessageList />);
+}
+
+/** 拿到滚动容器（列表根元素） */
+function getScrollEl(): HTMLElement {
+  const el = document.querySelector('.overflow-y-auto');
+  if (!(el instanceof HTMLElement)) throw new Error('scroll container not found');
+  return el;
+}
+
+/** jsdom 滚动属性可控化：scrollHeight/clientHeight 只读 → defineProperty */
+function controlScroll(el: HTMLElement, props: { scrollHeight: number; clientHeight: number; scrollTop: number }): void {
+  Object.defineProperty(el, 'scrollHeight', { value: props.scrollHeight, configurable: true });
+  Object.defineProperty(el, 'clientHeight', { value: props.clientHeight, configurable: true });
+  el.scrollTop = props.scrollTop;
+}
+
+async function flushEffects(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+describe('MessageList 发送即贴底', () => {
+  it('浏览历史时发送自己的消息 → 强制贴底（无视 isNearBottom）', async () => {
+    const { rerender } = renderForRerender([makeMsg({ id: 'a1', body: '旧消息' })]);
+    const el = getScrollEl();
+    controlScroll(el, { scrollHeight: 1000, clientHeight: 600, scrollTop: 200 });
+    fireEvent.scroll(el); // 距底 200px > 120 → isNearBottom=false
+    const scrollTo = vi.spyOn(el, 'scrollTo');
+    scrollTo.mockClear();
+
+    rerenderWith(rerender, [
+      makeMsg({ id: 'a1', body: '旧消息' }),
+      makeMsg({ id: 'own-1', sender: 'owner', body: '我刚发送的' }),
+    ]);
+    await flushEffects();
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'auto' });
+  });
+
+  it('浏览历史时追加 agent 消息 → 不贴底（不打断浏览）', async () => {
+    const { rerender } = renderForRerender([makeMsg({ id: 'a1', body: '旧消息' })]);
+    const el = getScrollEl();
+    controlScroll(el, { scrollHeight: 1000, clientHeight: 600, scrollTop: 200 });
+    fireEvent.scroll(el);
+    const scrollTo = vi.spyOn(el, 'scrollTo');
+    scrollTo.mockClear();
+
+    rerenderWith(rerender, [
+      makeMsg({ id: 'a1', body: '旧消息' }),
+      makeMsg({ id: 'a2', body: 'agent 新回复' }),
+    ]);
+    await flushEffects();
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});

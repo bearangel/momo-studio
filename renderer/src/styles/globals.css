@@ -91,6 +91,15 @@ body,
   background: var(--surface-active);
 }
 
+/* 2026-09-06 UI 修复：强调色气泡（用户消息 bg-accent-500）内的选区。
+   全局选区色是强调色低透明度（surface-active），叠在强调色本体气泡上
+   同色近乎不可见——气泡内改深色蒙层 + 白字，白字保持可读 */
+.bg-accent-500::selection,
+.bg-accent-500 ::selection {
+  background: rgba(0, 0, 0, 0.38);
+  color: #ffffff;
+}
+
 /* 键盘导航焦点环（仅 focus-visible，鼠标点击不显示） */
 :focus-visible {
   outline: 2px solid rgb(var(--border-focus));

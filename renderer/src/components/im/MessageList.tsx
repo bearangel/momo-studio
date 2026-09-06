@@ -40,6 +40,8 @@ export function MessageList() {
   const prevRoomIdRef = useRef<string | null>(activeSessionId);
   const isNearBottomRef = useRef(true);
   const pendingScrollRestore = useRef<number | null>(null);
+  // 上一次渲染时列表末条消息 id——用于识别「自己发送的消息刚追加」
+  const prevLastMsgIdRef = useRef<string | null>(null);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -73,10 +75,17 @@ export function MessageList() {
       return;
     }
 
-    if (isFirstRender.current || isRoomChange) {
+    // 2026-09-06 UI 修复：自己发送的消息追加时无条件贴底。原实现仅
+    // isNearBottom 时贴底——用户在上方浏览历史时发送，新消息落在视野外，
+    // 需手动滚动。agent 消息追加仍维持原策略（不打断浏览历史）。
+    const lastMsg = messages?.[messages.length - 1];
+    const isNewOwnMessage =
+      lastMsg !== undefined && lastMsg.sender === 'owner' && lastMsg.id !== prevLastMsgIdRef.current;
+    prevLastMsgIdRef.current = lastMsg?.id ?? null;
+
+    if (isFirstRender.current || isRoomChange || isNewOwnMessage || isNearBottomRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
-    } else if (isNearBottomRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+      isNearBottomRef.current = true;
     }
     isFirstRender.current = false;
   }, [messages, activeSessionId]);

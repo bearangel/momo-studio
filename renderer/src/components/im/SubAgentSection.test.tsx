@@ -82,3 +82,15 @@ describe('SubAgentSection — segments 时间线', () => {
     expect(screen.queryByLabelText('子 agent 流式光标')).not.toBeInTheDocument();
   });
 });
+
+// === 委派区紫色竖线（2026-09-06 UI 修复） ===
+// 契约：子 agent 工作区左边框用 border-status-violet（与 DispatchChip 头行
+// 紫色 tint 同源），与中性容器拉开语义。
+describe('SubAgentSection — 紫色左边框', () => {
+  it('容器使用 border-status-violet', () => {
+    const { container } = render(<SubAgentSection stream={makeStream()} />);
+    const el = container.firstElementChild as HTMLElement;
+    expect(el).toHaveClass('border-status-violet');
+    expect(el).not.toHaveClass('border-strong');
+  });
+});

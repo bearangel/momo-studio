@@ -320,3 +320,16 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
     expect(screen.queryByText(/思考中|输出中|等待启动/)).not.toBeInTheDocument();
   });
 });
+
+// === 委派区背景区分（2026-09-06 UI 修复） ===
+// 根因：头行底色 surface-2 与所在 agent 气泡（surface-2）相同，同色叠同色
+// 只剩边框可辨。契约：头行改紫色语义 tint（dispatch=紫，与 DispatchCard 同源）。
+describe('DispatchChip — 委派区紫色语义底', () => {
+  it('头行使用 bg-status-violet-tint + border-strong（与气泡底色区分）', () => {
+    render(<DispatchChip child={makeChild({ status: 'completed' })} />);
+    const header = screen.getByRole('button');
+    expect(header).toHaveClass('bg-status-violet-tint');
+    expect(header).toHaveClass('border-strong');
+    expect(header).not.toHaveClass('bg-surface-2');
+  });
+});

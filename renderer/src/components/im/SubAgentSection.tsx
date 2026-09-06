@@ -29,8 +29,9 @@ export function SubAgentSection({ stream }: Props) {
   const isStreaming = stream.status === 'streaming';
 
   return (
-    // 左边框竖线 + 低对比度底色：视觉上把子 agent 工作区锚定到 dispatch chip 下方
-    <div className="my-1 rounded-r-lg border-l-2 border-strong bg-surface-1 py-1 pl-2 pr-2">
+    // 左边框竖线（紫色=委派语义，与 DispatchChip 头行 tint 同源）+ 低对比度底色：
+    // 视觉上把子 agent 工作区锚定到 dispatch chip 下方
+    <div className="my-1 rounded-r-lg border-l-2 border-status-violet bg-surface-1 py-1 pl-2 pr-2">
       {stream.todos.length > 0 && (
         <TodoSection todos={stream.todos} isStreaming={isStreaming} />
       )}
