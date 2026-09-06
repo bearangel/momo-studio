@@ -29,6 +29,7 @@ import { sendUserMessage } from './session-service';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
   listMessagesBySession,
+  listRecentMessagesBySession,
   listOlderMessages,
   countOwnerMessages,
   type MessageRow,
@@ -142,13 +143,55 @@ export function registerSessionIpcHandlers(): void {
 
   // 导出会话最近 limit 条消息为 Markdown（从 im:exportRoomMessages 迁移核心逻辑）。
   // 返回 { filename, content }，renderer 用 Blob + 触发下载，无需主进程访问磁盘。
+  // 2026-09-06 导出/显示对齐：取数改「最近 N 条」（原 ASC+LIMIT 实为最早 N 条）；
+  // 过滤与分段归组对齐 renderer MessageList.tsx / group-segments.ts 显示语义。
   ipcMain.handle(
     'session:exportMessages',
     async (_evt, sessionId: string, limit: number): Promise<{ filename: string; content: string }> => {
-      // 1. 从 SQLite 拉 limit 条消息
-      const rows = listMessagesBySession(sessionId, { limit });
+      // 1. 从 SQLite 拉最近 limit 条（升序输出）
+      const rows = listRecentMessagesBySession(sessionId, limit);
 
-      // 2. 反查 agent 名字：botNameMap 同时按 assignmentId（session 语义）与
+      // 2. 显示侧对齐（MessageList.tsx 同款过滤 + group-segments.ts 同款分段归组）：
+      //    dispatch/task_reply/子 agent 顶层条目在显示侧不独立渲染，导出同样剔除；
+      //    分段消息（segmentOf）替换父消息位置——父消息全文与分段快照二选一，防重复。
+      const visible = rows.filter((m) => {
+        if (m.eventType === 'io.momo.studio.dispatch') return false;
+        if (m.eventType === 'io.momo.studio.task_reply') return false;
+        if (m.parentStreamSessionId) return false;
+        return true;
+      });
+      const segmentsByParent = new Map<string, typeof rows>();
+      for (const m of rows) {
+        if (m.segmentOf === null) continue;
+        const list = segmentsByParent.get(m.segmentOf);
+        if (list) {
+          list.push(m);
+        } else {
+          segmentsByParent.set(m.segmentOf, [m]);
+        }
+      }
+      for (const list of segmentsByParent.values()) {
+        list.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
+      }
+      const replacedParents = new Set<string>();
+      const entries: typeof rows = [];
+      for (const m of visible) {
+        if (m.segmentOf !== null) continue; // 分段由父消息位置承载（或走孤儿兜底）
+        const segments = m.streamSessionId ? segmentsByParent.get(m.streamSessionId) : undefined;
+        if (segments && segments.length > 0 && m.streamSessionId) {
+          replacedParents.add(m.streamSessionId);
+          entries.push(...segments);
+        } else {
+          entries.push(m);
+        }
+      }
+      for (const [parentStreamId, segments] of segmentsByParent) {
+        if (replacedParents.has(parentStreamId)) continue;
+        entries.push(...segments); // 孤儿分段：父消息不在取数窗口，兜底导出防丢失
+      }
+      entries.sort((a, b) => a.createdAt - b.createdAt);
+
+      // 3. 反查 agent 名字：botNameMap 同时按 assignmentId（session 语义）与
       //    agentUserId（当前 agent 消息 sender 仍为 bot 的 Matrix userId）建立索引，
       //    两套 sender 标识都能命中。
       const botNameMap = new Map<string, string>();
@@ -162,8 +205,8 @@ export function registerSessionIpcHandlers(): void {
         }
       }
 
-      // 3. MessageRow → ExportMessage 适配（content 富字段留 message_events 重建，此处空对象）
-      const exportMessages: ExportMessage[] = rows.map((m) => ({
+      // 4. MessageRow → ExportMessage 适配（content 富字段留 message_events 重建，此处空对象）
+      const exportMessages: ExportMessage[] = entries.map((m) => ({
         eventId: m.id,
         roomId: m.sessionId,
         sender: m.sender,

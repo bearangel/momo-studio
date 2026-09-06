@@ -790,6 +790,30 @@ ALTER TABLE agent_assignment_capabilities_v26 RENAME TO agent_assignment_capabil
       );
     `.trim(),
   },
+  {
+    version: 28,
+    sql: `
+-- ─── v28：回填 agent 消息最终正文（复制/导出契约修复） ──────────────────────
+-- 根因：stream-relay 生命周期里 agent 消息 body 恒 ''（start 插空、text 只进
+-- message_events、end 不回写）。显示侧靠 events 聚合正常，复制按钮与会话导出
+-- 读 messages.body 双双踩空（粘贴空串 / 导出正文为空）。本迁移把历史空 body 行
+-- 的最终正文从 text_delta 序列聚合回填；此后新流由 stream-relay 终态直接回写。
+-- 仅覆盖 body='' 的行（幂等：修复后的新数据 body 非空，不受影响）。
+-- 子查询 LIMIT -1 OFFSET 0 阻止 SQLite 查询扁平化，保证 group_concat 按 seq
+-- 顺序拼接；json_valid 防御损坏行（按空增量跳过，不让迁移炸库）。
+UPDATE messages SET body = COALESCE((
+  SELECT group_concat(
+    CASE WHEN json_valid(e.payload_json)
+         THEN COALESCE(json_extract(e.payload_json, '$.delta'), '')
+         ELSE '' END,
+    '')
+  FROM (SELECT payload_json FROM message_events
+        WHERE message_id = messages.id AND event_type = 'text_delta'
+        ORDER BY seq ASC LIMIT -1 OFFSET 0) e
+), body)
+WHERE body = '';
+    `.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

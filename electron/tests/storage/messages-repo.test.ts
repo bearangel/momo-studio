@@ -10,6 +10,7 @@ import {
   getMessage,
   getMessageByStreamSessionId,
   listMessagesBySession,
+  listRecentMessagesBySession,
   listOlderMessages,
   type MessageRow,
 } from '../../src/main/storage/messages/repo';
@@ -113,5 +114,35 @@ describe('messages repo', () => {
     const older = listOlderMessages('r1', midTs, 10);
     expect(older.length).toBeLessThanOrEqual(10);
     expect(older.every((m) => m.createdAt < midTs)).toBe(true);
+  });
+});
+// === listRecentMessagesBySession：导出「最近 N 条」语义 ===
+// 根因：listMessagesBySession({limit}) 是 ASC+LIMIT = 最早 N 条，导出 UI 却宣称
+// 「最近 N 条」。导出 handler 改用本函数取最新 N 条并按时间升序返回。
+describe('listRecentMessagesBySession', () => {
+  it('取最新 N 条且输出按时间升序（与显示侧时序一致）', () => {
+    const ids = ['m-old1', 'm-old2', 'm-mid', 'm-new1', 'm-new2'];
+    for (const id of ids) {
+      insertMessage({ id, sessionId: 'r-recent', sender: '@u:home', eventType: 'm.room.message', body: id });
+    }
+    // insertMessage 的 created_at 全取 Date.now()——显式改写以获得确定性时序
+    const db = getDb();
+    ids.forEach((id, i) => {
+      db.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(1000 + i * 10, id);
+    });
+
+    const rows = listRecentMessagesBySession('r-recent', 3);
+    // 最新 3 条 = m-mid/m-new1/m-new2，按时间升序输出
+    expect(rows.map((r) => r.id)).toEqual(['m-mid', 'm-new1', 'm-new2']);
+  });
+
+  it('总数不足 N 时全量返回（升序）', () => {
+    insertMessage({ id: 'only-1', sessionId: 'r-recent2', sender: '@u:home', eventType: 'm.room.message', body: 'x' });
+    const rows = listRecentMessagesBySession('r-recent2', 50);
+    expect(rows.map((r) => r.id)).toEqual(['only-1']);
+  });
+
+  it('空会话返回空数组', () => {
+    expect(listRecentMessagesBySession('r-empty', 10)).toEqual([]);
   });
 });

@@ -28,6 +28,7 @@ import {
   __flushEventBufferForTest,
   setAbortResolver,
   abortStreamBySessionId,
+  finalizeStreamOnCrash,
 } from '../../src/main/agent/stream-relay';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
@@ -412,5 +413,97 @@ describe('abortStreamBySessionId', () => {
     expect(abortStreamBySessionId('ss-x')).toBe(false);
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledWith('ss-x');
+  });
+});
+
+// === end 终态回写 body（复制/导出契约修复） ===
+//
+// 根因（2026-09-06 bug 双案）：routeChunkToBuffer 生命周期里 agent 消息 body
+// 恒为 ''（start 插空、text 只进 events、end 不回写）。显示侧靠 events 聚合
+// 正常，复制按钮 / 会话导出读 messages.body 双双踩空（粘贴空串 / 导出正文为空）。
+// 契约：end / 崩溃收尾时聚合 text_delta 回写 body + 推送更新行给 renderer。
+
+describe('end 终态回写 body + 推送更新行', () => {
+  beforeEach(() => {
+    setupDb();
+    __resetEventBufferForTest();
+    mockSend.mockClear();
+  });
+
+  afterEach(() => {
+    __resetEventBufferForTest();
+    teardownDb();
+  });
+
+  it('end(stop) 聚合全部 text_delta 回写 messages.body 并置 done', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-body-1', sessionId: 'r-body', senderAgentId: '@bot.x:home',
+    });
+    __routeChunkToBufferForTest({ type: 'thinking', streamSessionId: 'ss-body-1', delta: '内心独白' });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-body-1', delta: '你好' });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-body-1', delta: '，世界' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-body-1', finishReason: 'stop' });
+
+    const row = getMessageByStreamSessionId('ss-body-1')!;
+    expect(row.status).toBe('done');
+    // thinking 不得混入正文；text_delta 按 seq 顺序拼接
+    expect(row.body).toBe('你好，世界');
+  });
+
+  it('end 后推送 session:message 更新行（body 非空、同 id）——否则 renderer 停留旧行', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-body-2', sessionId: 'r-body', senderAgentId: '@bot.x:home',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-body-2', delta: '最终回复' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-body-2', finishReason: 'stop' });
+
+    const pushed = mockSend.mock.calls
+      .filter((c) => c[0] === 'session:message')
+      .map((c) => c[1] as { id: string; streamSessionId: string; body: string; status: string });
+    const forThisStream = pushed.filter((p) => p.streamSessionId === 'ss-body-2');
+    // start 落库推一次（body 空）+ end 更新推一次（body 已回写）
+    expect(forThisStream.length).toBeGreaterThanOrEqual(2);
+    const last = forThisStream[forThisStream.length - 1]!;
+    expect(last.body).toBe('最终回复');
+    expect(last.status).toBe('done');
+  });
+
+  it('end(interrupted) 中止流：已生成的部分文本回写 body、status=aborted', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-body-3', sessionId: 'r-body', senderAgentId: '@bot.x:home',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-body-3', delta: '写到一半' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-body-3', finishReason: 'interrupted' });
+
+    const row = getMessageByStreamSessionId('ss-body-3')!;
+    expect(row.status).toBe('aborted');
+    expect(row.body).toBe('写到一半');
+  });
+
+  it('纯 thinking 流（无 text_delta）：body 保持空串，不报错', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-body-4', sessionId: 'r-body', senderAgentId: '@bot.x:home',
+    });
+    __routeChunkToBufferForTest({ type: 'thinking', streamSessionId: 'ss-body-4', delta: '只思考' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-body-4', finishReason: 'stop' });
+
+    const row = getMessageByStreamSessionId('ss-body-4')!;
+    expect(row.status).toBe('done');
+    expect(row.body).toBe('');
+  });
+
+  it('finalizeStreamOnCrash：已落盘 text_delta 回写 body 并置 failed', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-body-5', sessionId: 'r-body', senderAgentId: '@bot.x:home',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-body-5', delta: '崩溃前文本' });
+    // 崩溃前 pending 已落盘（真实链路里 flush 窗口先于 child exit）
+    __flushEventBufferForTest();
+
+    finalizeStreamOnCrash('ss-body-5', 1);
+
+    const row = getMessageByStreamSessionId('ss-body-5')!;
+    expect(row.status).toBe('failed');
+    expect(row.body).toBe('崩溃前文本');
   });
 });

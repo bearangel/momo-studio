@@ -103,3 +103,34 @@ export function nextSeqForMessage(messageId: string): number {
   const row = db.prepare('SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM message_events WHERE message_id = ?').get(messageId) as { next: number } | undefined;
   return row?.next ?? 0;
 }
+
+/**
+ * 聚合指定消息的全部 text_delta 为最终正文（按 seq 顺序拼接）。
+ *
+ * 用途（2026-09-06 复制/导出契约修复）：stream-relay 在流终态（end / 崩溃收尾）
+ * 调用本函数把正文回写 messages.body——messages.body 从此是 agent 回复正文的
+ * 单一真相源，复制按钮与会话导出不再各自踩空。thinking 等其他事件类型不参与。
+ *
+ * payload 损坏防御：payload_json 由本模块 JSON.stringify 写入，正常恒合法；
+ * 极端损坏行按空增量跳过（不中断整条消息的回填）。
+ */
+export function aggregateTextDeltas(messageId: string): string {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT payload_json FROM message_events
+       WHERE message_id = ? AND event_type = 'text_delta'
+       ORDER BY seq ASC`,
+    )
+    .all(messageId) as Array<{ payload_json: string }>;
+  let out = '';
+  for (const r of rows) {
+    try {
+      const payload = JSON.parse(r.payload_json) as { delta?: unknown };
+      if (typeof payload.delta === 'string') out += payload.delta;
+    } catch {
+      // 损坏行跳过：见函数头注释
+    }
+  }
+  return out;
+}

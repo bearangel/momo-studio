@@ -898,3 +898,40 @@ describe('__momoDebug 诊断钩子（嵌套展示排查）', () => {
     expect(Array.isArray(out.streamKeys)).toBe(true);
   });
 });
+
+// === receiveMessage 同 id 原位替换（终态 body 回传契约） ===
+// 背景：stream-relay 的 end 分支现在会回写 messages.body 并把更新行经
+// session:message 再推一次。若 store 对同 id 一律丢弃，renderer 会永远停留在
+// body='' 的旧行上——复制按钮/导出读到的仍是空串（2026-09-06 bug）。
+// 契约：同 id → 原位替换（数据更新、位置不变、不产生重复）。
+describe('receiveMessage 同 id 原位替换', () => {
+  it('同 id 推送：body/status 更新为最新值，列表位置不变', () => {
+    const first = mk('m-repl-1', '', 20);
+    first.status = 'streaming';
+    useSessionStore.getState().receiveMessage(first);
+
+    const updated = mk('m-repl-1', '最终正文', 20);
+    updated.status = 'done';
+    useSessionStore.getState().receiveMessage(updated);
+
+    const msgs = useSessionStore.getState().messagesBySession.get('sess-r') ?? [];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.body).toBe('最终正文');
+    expect(msgs[0]!.status).toBe('done');
+  });
+
+  it('替换不打乱时间序：夹在两条消息中间的原位更新', () => {
+    const m1 = mk('m-repl-a', '前', 30);
+    const m2 = mk('m-repl-b', '', 31);
+    const m3 = mk('m-repl-c', '后', 32);
+    for (const m of [m1, m2, m3]) useSessionStore.getState().receiveMessage(m);
+
+    const m2Done = mk('m-repl-b', '中间消息终态', 31);
+    m2Done.status = 'done';
+    useSessionStore.getState().receiveMessage(m2Done);
+
+    const msgs = useSessionStore.getState().messagesBySession.get('sess-r') ?? [];
+    expect(msgs.map((m) => m.id)).toEqual(['m-repl-a', 'm-repl-b', 'm-repl-c']);
+    expect(msgs[1]!.body).toBe('中间消息终态');
+  });
+});

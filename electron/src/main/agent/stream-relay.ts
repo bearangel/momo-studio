@@ -25,8 +25,10 @@ import { MessageEventBuffer } from '../storage/messages/event-buffer';
 import {
   insertMessage,
   updateMessageStatus,
+  getMessage,
   getMessageByStreamSessionId,
 } from '../storage/messages/repo';
+import { aggregateTextDeltas } from '../storage/messages/events-repo';
 
 // === A7：stream chunk → MessageEventBuffer 落盘 ===
 
@@ -165,9 +167,12 @@ export function finalizeStreamOnCrash(streamSessionId: string, exitCode: number 
     const msg = getMessageByStreamSessionId(streamSessionId);
     if (!msg || msg.status !== 'streaming') return;
     const errorText = exitCode === null ? 'agent 运行时异常退出' : `agent 运行时异常退出（exit code=${exitCode}）`;
-    updateMessageStatus(msg.id, 'failed');
     const buf = getEventBuffer();
+    // 与 end 分支同契约：pending 先落盘再聚合回写 body + 推送更新行
     buf.flush();
+    updateMessageStatus(msg.id, 'failed', aggregateTextDeltas(msg.id));
+    const updated = getMessage(msg.id);
+    if (updated) pushSessionMessage(updated);
     buf.append({
       messageId: msg.id,
       eventType: 'final',
@@ -337,9 +342,15 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         const errorText =
           chunk.error ??
           (chunk.finishReason === 'budget_exhausted' ? '工具调用预算已耗尽' : undefined);
-        updateMessageStatus(messageId, status);
         const buf = getEventBuffer();
+        // 终态回写 body（2026-09-06 复制/导出契约修复）：先冲刷 pending 让全部
+        // text_delta 落盘，再聚合回写——messages.body 成为 agent 正文单一真相源
         buf.flush();
+        updateMessageStatus(messageId, status, aggregateTextDeltas(messageId));
+        // 推送更新行：renderer receiveMessage 按 id 原位替换——否则复制按钮
+        // 读到的仍是 start 时落库的空 body（终态后需重启才能拿到正文）
+        const updated = getMessage(messageId);
+        if (updated) pushSessionMessage(updated);
         buf.append({
           messageId,
           eventType: 'final',

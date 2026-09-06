@@ -147,6 +147,21 @@ export function listOlderMessages(sessionId: string, beforeTs: number, limit: nu
   return rows.map(rowToCamel);
 }
 
+/**
+ * 取会话「最近 limit 条」消息，输出仍按时间升序（与显示侧时序一致）。
+ *
+ * 与 listMessagesBySession({ limit }) 的区别：后者是 ASC+LIMIT = 最早 N 条，
+ * 用于初始加载+loadOlder 分页；本函数 DESC 取数后反转，供导出等「最近 N 条」
+ * 语义消费（2026-09-06 导出方向修复——此前 UI 宣称最近 N 条实际导出最早 N 条）。
+ */
+export function listRecentMessagesBySession(sessionId: string, limit: number): MessageRow[] {
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(sessionId, limit) as SqlRow[];
+  return rows.reverse().map(rowToCamel);
+}
+
 /** 统计会话内用户（owner）消息数——v2.2 记忆提取轮次触发用（agent 回复不计轮次） */
 export function countOwnerMessages(sessionId: string): number {
   const row = getDb()

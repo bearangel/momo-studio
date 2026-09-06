@@ -7,6 +7,8 @@
 //
 // mock 边界（momo-test-rules：只 mock DB / 日志边界，被测单元真实运行）：
 //   - messages/repo：可控抛错
+//   - messages/events-repo：aggregateTextDeltas 可控抛错（end 分支终态回写的
+//     第一跳 DB 读——locked 场景在此先行抛错，C5 契约不变）
 //   - event-buffer：空实现（本测试不触达批量落盘路径的 DB）
 //   - logger：spy 断言分级
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -27,6 +29,14 @@ vi.mock('../../src/main/storage/messages/repo', () => ({
   getMessageByStreamSessionId: vi.fn(() => relayState.msgById),
   updateMessageStatus: vi.fn(() => {
     if (relayState.mode === 'locked') throw new Error('database is locked');
+  }),
+}));
+
+vi.mock('../../src/main/storage/messages/events-repo', () => ({
+  aggregateTextDeltas: vi.fn((): string => {
+    if (relayState.mode === 'notable') throw new Error('no such table: message_events');
+    if (relayState.mode === 'locked') throw new Error('database is locked');
+    return '';
   }),
 }));
 

@@ -50,6 +50,7 @@ const {
     },
     messagesRepoMocks: {
       listMessagesBySession: vi.fn(() => []),
+      listRecentMessagesBySession: vi.fn(() => []),
       listOlderMessages: vi.fn(() => []),
     },
     eventsRepoMocks: {
@@ -361,7 +362,7 @@ describe('session:loadOlder handler', () => {
 describe('session:exportMessages handler', () => {
   it('按 instanceId 反查 botName 后走 markdown-exporter，返回 { filename, content }', async () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
-    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([msgRow]);
     workspaceCrudMocks.listWorkspaces.mockReturnValueOnce([{ id: 'ws-1' }]);
     agentCrudMocks.listMembers.mockReturnValueOnce([
       { instanceId: 'inst-1', agentDefinitionId: 'def-1', agentUserId: '@bot.helper:home' },
@@ -370,8 +371,8 @@ describe('session:exportMessages handler', () => {
 
     const res = await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
-    // 1. 拉 limit 条消息
-    expect(messagesRepoMocks.listMessagesBySession).toHaveBeenCalledWith('sess-1', { limit: 50 });
+    // 1. 「最近 N 条」语义：走 listRecentMessagesBySession（非 ASC+LIMIT 的最早 N 条）
+    expect(messagesRepoMocks.listRecentMessagesBySession).toHaveBeenCalledWith('sess-1', 50);
     // 2. 导出器收到 botName 已注入的消息 + 会话标题作为 roomName
     expect(exporterMocks.formatRoomToMarkdown).toHaveBeenCalledWith(
       [expect.objectContaining({ botName: '小助手', roomId: 'sess-1' })],
@@ -392,5 +393,62 @@ describe('session:exportMessages handler', () => {
       expect.objectContaining({ roomName: 'sess-404', roomId: 'sess-404' }),
     );
     expect(res.filename.startsWith('momo-session-')).toBe(true);
+  });
+});
+
+// === 导出与显示侧对齐（2026-09-06 bug：导出消息与显示不一致） ===
+// 对齐语义与 renderer MessageList.tsx 一致：
+//   1. 过滤 io.momo.studio.dispatch / task_reply / parentStreamSessionId 非空的顶层条目
+//   2. 分段消息（segmentOf）替换其父消息位置（group-segments.ts 语义），父消息不重复导出
+describe('session:exportMessages 导出/显示对齐', () => {
+  /** 构造 MessageRow fixture 的简写 */
+  function row(over: Partial<typeof msgRow> & { id: string }): typeof msgRow {
+    return { ...msgRow, ...over };
+  }
+
+  it('过滤 dispatch / task_reply / 子 agent 顶层条目（与 MessageList 显示一致）', async () => {
+    sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([
+      row({ id: 'u1', sender: 'owner', body: '用户消息', createdAt: 100 }),
+      row({ id: 'd1', eventType: 'io.momo.studio.dispatch', body: '派发', createdAt: 110 }),
+      row({ id: 't1', eventType: 'io.momo.studio.task_reply', body: '回执', createdAt: 120 }),
+      row({ id: 's1', parentStreamSessionId: 'ss-parent', body: '子 agent 回复', createdAt: 130 }),
+      row({ id: 'a1', body: 'agent 回复正文', createdAt: 140 }),
+    ]);
+
+    await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
+
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    expect(exported.map((m) => m.eventId)).toEqual(['u1', 'a1']);
+  });
+
+  it('分段消息：segments 按序替换父消息位置，父消息（全文快照）不重复导出', async () => {
+    sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([
+      row({ id: 'u0', sender: 'owner', body: '问', createdAt: 100 }),
+      row({ id: 'parent', streamSessionId: 'ss-p', body: '第一段第二段全文', createdAt: 200 }),
+      row({ id: 'seg1', segmentOf: 'ss-p', segmentIndex: 1, streamSessionId: 'ss-p#seg1', body: '第一段', createdAt: 210 }),
+      row({ id: 'seg2', segmentOf: 'ss-p', segmentIndex: 2, streamSessionId: 'ss-p#seg2', body: '第二段', createdAt: 220 }),
+      row({ id: 'u9', sender: 'owner', body: '答', createdAt: 300 }),
+    ]);
+
+    await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
+
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    // 父消息被 segments 替换（显示侧 SegmentStack 语义）；时间序保持
+    expect(exported.map((m) => m.eventId)).toEqual(['u0', 'seg1', 'seg2', 'u9']);
+  });
+
+  it('孤儿分段（父消息不在取数窗口内）兜底导出，不静默丢失', async () => {
+    sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
+    messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([
+      row({ id: 'u0', sender: 'owner', body: '问', createdAt: 100 }),
+      row({ id: 'oseg', segmentOf: 'ss-gone', segmentIndex: 1, streamSessionId: 'ss-gone#seg1', body: '孤儿段产出', createdAt: 150 }),
+    ]);
+
+    await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
+
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    expect(exported.map((m) => m.eventId)).toEqual(['u0', 'oseg']);
   });
 });

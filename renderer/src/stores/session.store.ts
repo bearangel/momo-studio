@@ -269,9 +269,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => {
       const map = new Map(state.messagesBySession);
       const existing = map.get(msg.sessionId) ?? [];
-      // 按 SQLite messages.id 去重，避免初始同步回放与推送重复
-      if (existing.some((m) => m.id === msg.id)) {
-        return state;
+      // 按 SQLite messages.id 去重，避免初始同步回放与推送重复；同 id 的
+      // 更新行（stream-relay 终态回写 body 后重推）原位替换——数据取最新、
+      // 位置保持时间序不变（2026-09-06 复制/导出契约：不替换则 renderer
+      // 永远停留 body='' 旧行，复制按钮粘贴空串）
+      const idx = existing.findIndex((m) => m.id === msg.id);
+      if (idx >= 0) {
+        const next = [...existing];
+        next[idx] = msg;
+        map.set(msg.sessionId, next);
+        return { messagesBySession: map };
       }
       map.set(msg.sessionId, [...existing, msg]);
       return { messagesBySession: map };
