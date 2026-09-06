@@ -6,7 +6,7 @@
 import type { LucideIcon } from 'lucide-react';
 import { MessageSquare, Folder, SquareKanban, Bot, Library, Settings } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { useUiStore, type ViewKey } from '../../stores/ui.store';
+import { useUiStore, SIDEBAR_VIEWS, type ViewKey } from '../../stores/ui.store';
 
 interface ActivityItem {
   key: ViewKey;
@@ -27,6 +27,21 @@ const SETTINGS_ITEM: ActivityItem = { key: 'settings', icon: Settings, label: '�
 export function ActivityBar() {
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+
+  // 收起状态下点击「当前侧边栏视图」图标 → 恢复侧边栏（v2.2 恢复入口之三）；
+  // 其余情况正常切换视图
+  const handleSelect = (view: ViewKey): void => {
+    if (
+      view === activeView &&
+      useUiStore.getState().sidebarCollapsed &&
+      (SIDEBAR_VIEWS as readonly string[]).includes(view)
+    ) {
+      toggleSidebar();
+      return;
+    }
+    setActiveView(view);
+  };
 
   return (
     <nav
@@ -39,14 +54,14 @@ export function ActivityBar() {
           key={item.key}
           item={item}
           active={activeView === item.key}
-          onSelect={setActiveView}
+          onSelect={handleSelect}
         />
       ))}
       <div className="flex-1" />
       <ActivityButton
         item={SETTINGS_ITEM}
         active={activeView === SETTINGS_ITEM.key}
-        onSelect={setActiveView}
+        onSelect={handleSelect}
       />
     </nav>
   );

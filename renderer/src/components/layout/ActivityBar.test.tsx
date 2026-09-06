@@ -58,4 +58,28 @@ describe('ActivityBar', () => {
       screen.getByLabelText('会话').querySelector('[data-testid="activity-indicator"]'),
     ).toBeNull();
   });
+
+  it('收起时点击当前侧边栏视图图标 → 恢复侧边栏（视图不变）', () => {
+    useUiStore.setState({ activeView: 'im', sidebarCollapsed: true });
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('会话'));
+    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+    expect(useUiStore.getState().activeView).toBe('im');
+  });
+
+  it('收起时点击其它侧边栏视图 → 正常切换视图，保持收起', () => {
+    useUiStore.setState({ activeView: 'im', sidebarCollapsed: true });
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('文件'));
+    expect(useUiStore.getState().activeView).toBe('files');
+    expect(useUiStore.getState().sidebarCollapsed).toBe(true);
+  });
+
+  it('未收起时点击当前视图 → no-op（不切换不恢复）', () => {
+    useUiStore.setState({ activeView: 'im', sidebarCollapsed: false });
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('会话'));
+    expect(useUiStore.getState().activeView).toBe('im');
+    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+  });
 });
