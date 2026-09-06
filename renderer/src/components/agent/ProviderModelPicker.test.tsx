@@ -183,6 +183,49 @@ describe('ProviderModelPicker — 空态拉取', () => {
     expect(await screen.findByText('HTTP 401')).toBeInTheDocument();
     expect(addModel).not.toHaveBeenCalled();
   });
+
+  it('拉取进行中切换供应商 → 过期结果不落到新供应商下拉', async () => {
+    // p1 首次 listModels 空（出空态拉取按钮），拉取后返回新模型；p2 返回自己的模型
+    let p1ListCalls = 0;
+    let releaseFetch: () => void = () => {};
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    listModels.mockImplementation(async (id: string) => {
+      if (id !== 'p1') return [pm('p2', 'p2m', true)];
+      p1ListCalls += 1;
+      return p1ListCalls === 1 ? [] : [pm('p1', 'p1-new', true)];
+    });
+    fetchModels.mockImplementation(async () => {
+      await fetchGate;
+      return ['p1-new'];
+    });
+    addModel.mockResolvedValue(undefined);
+
+    function Harness() {
+      const [providerId, setProviderId] = useState('p1');
+      return (
+        <ProviderModelPicker
+          providerId={providerId}
+          modelId=""
+          onProviderChange={setProviderId}
+          onModelChange={() => {}}
+        />
+      );
+    }
+    render(<Harness />);
+    // p1 空态 → 点击拉取（fetch 挂起）
+    fireEvent.click(await screen.findByRole('button', { name: /拉取模型列表/ }));
+    // 切到 p2，其模型列表加载完成
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p2' } });
+    await screen.findByRole('option', { name: 'p2m' });
+    // 放行 p1 的 fetch：结果必须被丢弃——p1-new 不得出现在 p2 的下拉
+    releaseFetch();
+    await waitFor(() => {
+      expect(addModel).toHaveBeenCalledWith('p1', 'p1-new');
+    });
+    expect(screen.queryByRole('option', { name: 'p1-new' })).not.toBeInTheDocument();
+  });
 });
 
 describe('ProviderModelPicker — 缓存', () => {

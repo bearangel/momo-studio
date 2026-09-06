@@ -42,6 +42,9 @@ export function ProviderModelPicker({
   const [error, setError] = useState<string | null>(null);
   // providerId → 模型列表缓存（避免弹窗内重复拉取）
   const cacheRef = useRef(new Map<string, ProviderModel[]>());
+  // 当前 providerId 的 ref 镜像——handleFetch 异步完成后比对，供应商已切换则丢弃过期结果
+  const providerIdRef = useRef(providerId);
+  providerIdRef.current = providerId;
 
   useEffect(() => {
     void loadProviders();
@@ -88,18 +91,24 @@ export function ProviderModelPicker({
 
   const handleFetch = async (): Promise<void> => {
     if (!providerId) return;
+    const fetchProviderId = providerId;
     setFetching(true);
     setError(null);
     try {
-      const ids = await ipc.provider.fetchModels(providerId);
+      const ids = await ipc.provider.fetchModels(fetchProviderId);
       for (const id of ids) {
-        await ipc.provider.addModel(providerId, id);
+        await ipc.provider.addModel(fetchProviderId, id);
       }
-      const list = await ipc.provider.listModels(providerId);
-      cacheRef.current.set(providerId, list);
-      setModels(list);
+      const list = await ipc.provider.listModels(fetchProviderId);
+      cacheRef.current.set(fetchProviderId, list);
+      // 供应商已切换：过期结果不落到新供应商的下拉（终审 Important 竞态守卫）
+      if (providerIdRef.current === fetchProviderId) {
+        setModels(list);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (providerIdRef.current === fetchProviderId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setFetching(false);
     }
