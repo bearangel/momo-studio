@@ -50,6 +50,25 @@ describe('groupToolSegments', () => {
     expect(out).toEqual([{ kind: 'text', text: 'hi' }]);
   });
 
+  it('todowrite 不打断连续只读段（透明过滤，HIDDEN 判定先于分组且不 flush）', () => {
+    const out = groupToolSegments([
+      tool('c1', 'read_file'),
+      tool('c2', 'todowrite'),
+      tool('c3', 'read_file'),
+    ]);
+    expect(out).toHaveLength(1);
+    const first = out[0];
+    if (first?.kind === 'context-group') {
+      expect(first.items.map((i) => i.callId)).toEqual(['c1', 'c3']);
+    } else {
+      throw new Error('期望 context-group，实际 ' + String(first?.kind));
+    }
+  });
+
+  it('全 todowrite 输入返回空数组', () => {
+    expect(groupToolSegments([tool('c1', 'todowrite'), tool('c2', 'todowrite')])).toEqual([]);
+  });
+
   it('与 thinking/text 交错保序', () => {
     const out = groupToolSegments([
       { kind: 'thinking', text: '想' },
