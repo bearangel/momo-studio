@@ -977,17 +977,28 @@ describe('ToolCallChip — 摘要行', () => {
     const c2 = render(<ToolCallChip toolName="bash" args={{}} success={false} result="boom" />).container;
     expect(c2.querySelector('svg.lucide-circle-x')).not.toBeNull();
     expect(c2.querySelector('button')?.classList.contains('bg-status-error-tint')).toBe(true);
+
+    // 执行中态（评审补齐）：warning tint + Loader2 旋转 + 文案
+    const c3 = render(
+      <ToolCallChip toolName="bash" args={{}} success={true} isExecuting={true} />,
+    ).container;
+    const spinner = c3.querySelector('svg.lucide-loader-circle');
+    expect(spinner).not.toBeNull();
+    expect(spinner?.classList.contains('animate-spin')).toBe(true);
+    expect(c3.querySelector('button')?.classList.contains('bg-status-warning-tint')).toBe(true);
+    expect(screen.getByText(/执行中/)).toBeInTheDocument();
   });
 });
 
 describe('ToolCallChip — 展开面板（结果优先）', () => {
   it('展开只显示结果，参数默认不渲染', () => {
+    // brief 原断言 /git status/ 与 bash 智能摘要（=命令本身）互斥恒红——改断言 args JSON 的 key，意图不变
     render(
       <ToolCallChip toolName="bash" args={{ command: 'git status' }} result="On branch main" success={true} />,
     );
     fireEvent.click(screen.getByText('bash'));
     expect(screen.getByText(/On branch main/)).toBeInTheDocument();
-    expect(screen.queryByText(/git status/)).not.toBeInTheDocument(); // 参数不在面板
+    expect(screen.queryByText(/"command"/)).not.toBeInTheDocument(); // args JSON 默认不在面板
   });
 
   it('次级「参数」开关展开后可见参数 JSON', () => {

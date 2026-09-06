@@ -28,6 +28,16 @@ describe('ToolCallChip — 摘要行', () => {
     const c2 = render(<ToolCallChip toolName="bash" args={{}} success={false} result="boom" />).container;
     expect(c2.querySelector('svg.lucide-circle-x')).not.toBeNull();
     expect(c2.querySelector('button')?.classList.contains('bg-status-error-tint')).toBe(true);
+
+    // 执行中态（评审补齐）：warning tint + Loader2 旋转 + 文案
+    const c3 = render(
+      <ToolCallChip toolName="bash" args={{}} success={true} isExecuting={true} />,
+    ).container;
+    const spinner = c3.querySelector('svg.lucide-loader-circle');
+    expect(spinner).not.toBeNull();
+    expect(spinner?.classList.contains('animate-spin')).toBe(true);
+    expect(c3.querySelector('button')?.classList.contains('bg-status-warning-tint')).toBe(true);
+    expect(screen.getByText(/执行中/)).toBeInTheDocument();
   });
 });
 
