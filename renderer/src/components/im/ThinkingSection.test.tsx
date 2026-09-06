@@ -41,11 +41,14 @@ describe('ThinkingSection', () => {
     expect(screen.getByText('说明')).toBeInTheDocument();
   });
 
-  it('isStreaming prop 不影响渲染（仅占位）', () => {
-    const { rerender } = render(<ThinkingSection content="思考" isStreaming={true} />);
-    expect(screen.getByText(/思考过程/)).toBeInTheDocument();
-    // 切到非 streaming，UI 仍正常
+  it('isStreaming=true → 标签「思考中…」+ Brain 图标呼吸微光；false 回落「思考过程」', () => {
+    // v2.1：isStreaming 不再是占位 prop——流式态标签与图标动画均切换
+    const { container, rerender } = render(<ThinkingSection content="思考" isStreaming={true} />);
+    expect(screen.getByText('思考中…')).toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-brain')?.classList.contains('animate-pulse')).toBe(true);
+    // 切到非 streaming：标签回落为「思考过程」，图标动画消失
     rerender(<ThinkingSection content="思考" isStreaming={false} />);
-    expect(screen.getByText(/思考过程/)).toBeInTheDocument();
+    expect(screen.getByText('思考过程')).toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-brain')?.classList.contains('animate-pulse')).toBe(false);
   });
 });

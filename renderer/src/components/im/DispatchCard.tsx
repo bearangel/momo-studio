@@ -26,6 +26,7 @@ export function DispatchCard({ message, isSelf, senderName }: Props) {
       isSelf={isSelf}
       senderName={senderName}
       bubbleClassName="border border-status-violet/40 bg-status-violet-tint"
+      timestamp={message.createdAt}
     >
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="inline-flex items-center rounded bg-status-violet/20 px-1.5 py-0.5 font-medium text-status-violet">

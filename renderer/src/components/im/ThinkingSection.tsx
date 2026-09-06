@@ -1,11 +1,11 @@
 // renderer/src/components/im/ThinkingSection.tsx
 //
-// AI 思考过程折叠区：默认折叠，展开渲染 Markdown。思考区用 violet tint
-// （v2.1：原 indigo inline hex 退役）。空内容不渲染。
+// AI 思考过程折叠区：默认折叠，展开渲染 Markdown（经 MarkdownBody 统一入口）。
+// 思考区用 violet tint（v2.1：原 indigo inline hex 退役）。空内容不渲染。
+// v2.1：流式态标签显示「思考中…」+ Brain 图标呼吸微光；展开高度收紧到约 10 行。
 import { useState } from 'react';
 import { Brain, ChevronDown, ChevronRight } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MarkdownBody } from './MarkdownBody';
 
 interface Props {
   content: string;
@@ -14,7 +14,6 @@ interface Props {
 
 export function ThinkingSection({ content, isStreaming }: Props) {
   const [expanded, setExpanded] = useState(false);
-  void isStreaming; // 占位，后续流式动画预留
 
   if (!content) return null;
 
@@ -26,15 +25,15 @@ export function ThinkingSection({ content, isStreaming }: Props) {
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-1.5 rounded bg-status-violet-tint px-2 py-1 text-xs text-status-violet cursor-pointer"
       >
-        <Brain size={12} strokeWidth={1.75} aria-hidden />
-        <span>思考过程</span>
+        <Brain size={12} strokeWidth={1.75} aria-hidden className={isStreaming ? 'animate-pulse' : undefined} />
+        <span>{isStreaming ? '思考中…' : '思考过程'}</span>
         <span className="ml-auto" aria-hidden>
           {expanded ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
         </span>
       </button>
       {expanded && (
-        <div className="md-body mt-1 max-h-[400px] overflow-auto rounded bg-surface-2 p-2 text-xs text-secondary">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <div className="mt-1 max-h-[220px] overflow-auto rounded bg-surface-2 p-2 text-xs text-secondary">
+          <MarkdownBody deferHighlight={isStreaming}>{content}</MarkdownBody>
         </div>
       )}
     </div>

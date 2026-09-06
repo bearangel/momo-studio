@@ -10,6 +10,10 @@
 //   - stream.dispatches 替代旧 stream.dispatchChildren（AggregatedDispatch → DispatchChild 映射）
 //   - status 枚举改为 streaming/done/failed/aborted
 //   - subStream 查找留给 A9（streams Map 改 keyed by messageId，需 streamSessionId→messageId 反查）
+// v2.1 会话渲染优化：
+//   - 正文经 MarkdownBody 统一入口（SafeAnchor/CodeBlock/表格滚动容器一致）
+//   - segments 先经 groupToolSegments 分组（连续只读工具合并 context-group）
+//   - MessageFrame 补时间戳；终态显示消息级复制按钮（hover 气泡显形）
 import { useMemo } from 'react';
 import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2, Square } from 'lucide-react';
 import { cn } from '../../lib/cn';
@@ -22,12 +26,14 @@ import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
 import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
+import { ContextGroupChip } from './ContextGroupChip';
+import { MarkdownBody } from './MarkdownBody';
+import { CopyButton } from '../ui/CopyButton';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
 import { Button } from '../ui/Button';
 import type { StreamSegment } from '../../stores/stream.store';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { groupToolSegments } from '../../lib/group-tool-segments';
 
 interface Props {
   stream: StreamState;
@@ -118,21 +124,25 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
   ).length;
   const showProgress = dispatchTotal > 0 && dispatchCompleted < dispatchTotal;
 
+  // v2.1：渲染前分段分组（连续只读工具合并为 context-group / todowrite 去冗余）
+  const renderSegments = useMemo(() => groupToolSegments(stream.segments), [stream.segments]);
+
   return (
     <MessageFrame
       sender={message.sender}
       isSelf={false}
       senderName={senderName}
-      bubbleClassName="bg-surface-2 text-primary border border-subtle"
+      bubbleClassName="group bg-surface-2 text-primary border border-subtle"
       maxWidthPct={90}
       fillWidth
+      timestamp={message.createdAt}
     >
       {stream.todos.length > 0 && (
         <TodoSection todos={stream.todos} isStreaming={isStreaming} />
       )}
 
-      {stream.segments.map((seg, i) => {
-        const isLastSegment = i === stream.segments.length - 1;
+      {renderSegments.map((seg, i) => {
+        const isLastSegment = i === renderSegments.length - 1;
         switch (seg.kind) {
           case 'thinking':
             return (
@@ -162,14 +172,12 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
                 streamIdToMessageId={streamIdToMessageId}
               />
             );
+          case 'context-group':
+            return <ContextGroupChip key={`seg-ctx-${i}`} group={seg} />;
           case 'text':
             return (
-              <div
-                key={`seg-text-${i}`}
-                className="md-body overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
-                style={{ marginBottom: 8 }}
-              >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.text}</ReactMarkdown>
+              <div key={`seg-text-${i}`} style={{ marginBottom: 8 }}>
+                <MarkdownBody deferHighlight={isStreaming && isLastSegment}>{seg.text}</MarkdownBody>
                 {isStreaming && isLastSegment && (
                   <span
                     aria-label="流式光标"
@@ -211,6 +219,12 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             />
             {statusText}
           </span>
+          {!isStreaming && (
+            <CopyButton
+              text={message.body}
+              className="ml-auto opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            />
+          )}
           {isStreaming && (
             <Button
               variant="secondary"

@@ -268,7 +268,9 @@ describe('DispatchChip — 执行中活动提示（子 agent 工作过程可见�
         })}
       />,
     );
-    expect(screen.getByText(/思考中/)).toBeInTheDocument();
+    // v2.1：展开的 SubAgentSection 内 ThinkingSection 流式态标签也是「思考中…」，
+    // 与头行提示重名——按 dispatch-activity testid 锁头行提示本身
+    expect(screen.getByTestId('dispatch-activity')).toHaveTextContent('思考中');
     expect(screen.getByText(ELAPSED_TEXT)).toBeInTheDocument();
   });
 

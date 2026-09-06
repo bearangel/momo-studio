@@ -26,6 +26,7 @@ export function TaskReplyCard({ message, isSelf, senderName }: Props) {
       isSelf={isSelf}
       senderName={senderName}
       bubbleClassName="bg-surface-2 text-primary border border-subtle"
+      timestamp={message.createdAt}
     >
       <div className="flex items-center gap-2 text-xs">
         <span className="inline-flex items-center rounded bg-status-violet/20 px-1.5 py-0.5 font-medium text-status-violet">

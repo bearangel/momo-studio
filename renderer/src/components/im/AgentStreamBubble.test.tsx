@@ -124,14 +124,15 @@ describe('AgentStreamBubble', () => {
     expect(screen.getByText(/出错/)).toBeInTheDocument();
   });
 
-  it('有 thinking 内容时渲染思考过程折叠区（默认折叠，仅显示 toggle）', () => {
+  it('有 thinking 内容时渲染思考折叠区（streaming 默认标签「思考中…」，默认折叠仅显 toggle）', () => {
     render(
       <AgentStreamBubble
         stream={makeStream({ thinking: '深度推理' })}
         message={makeMessage()}
       />,
     );
-    expect(screen.getByText('思考过程')).toBeInTheDocument();
+    // v2.1：streaming + 末段为 thinking → 折叠区标签为流式态「思考中…」
+    expect(screen.getByText('思考中…')).toBeInTheDocument();
     expect(screen.queryByText('深度推理')).not.toBeInTheDocument();
   });
 
@@ -452,5 +453,65 @@ describe('AgentStreamBubble — dispatch subStream 接线（子 agent 工作过�
       />,
     );
     expect(screen.getByText(/等待启动/)).toBeInTheDocument();
+  });
+});
+
+describe('AgentStreamBubble — 只读工具分组（v2.1）', () => {
+  beforeEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+  });
+
+  it('连续 read_file×2 + grep 渲染单个「收集上下文」chip', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'done',
+          segments: [
+            { kind: 'tool_call', callId: 'c1', toolName: 'read_file', args: { path: 'a.ts' }, result: 'r1', success: true },
+            { kind: 'tool_call', callId: 'c2', toolName: 'read_file', args: { path: 'b.ts' }, result: 'r2', success: true },
+            { kind: 'tool_call', callId: 'c3', toolName: 'grep', args: { pattern: 'x' }, result: 'r3', success: true },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.getByText('收集上下文')).toBeInTheDocument();
+    expect(screen.getByText(/2 次读取 · 1 次搜索/)).toBeInTheDocument();
+  });
+
+  it('单个 read_file 不合并为分组', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'done',
+          segments: [
+            { kind: 'tool_call', callId: 'c1', toolName: 'read_file', args: { path: 'a.ts' }, result: 'r1', success: true },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.queryByText('收集上下文')).not.toBeInTheDocument();
+    expect(screen.getByText('read_file')).toBeInTheDocument();
+  });
+
+  it('done 状态渲染消息级复制按钮（复制 message.body）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'done', text: '完成' })}
+        message={makeMessage({ body: '最终回复' })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '复制' }));
+    expect(writeText).toHaveBeenCalledWith('最终回复');
+  });
+
+  it('streaming 状态不渲染复制按钮', () => {
+    render(
+      <AgentStreamBubble stream={makeStream({ text: '生成中' })} message={makeMessage()} />,
+    );
+    expect(screen.queryByRole('button', { name: '复制' })).not.toBeInTheDocument();
   });
 });

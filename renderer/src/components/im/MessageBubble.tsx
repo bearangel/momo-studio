@@ -11,10 +11,10 @@
 //   - 已完成（done/failed/aborted）但带富信息（thinking/工具调用/dispatches）时
 //     也走 AgentStreamBubble——从 message_events 聚合重建，重启后一致
 //   - 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）
-import ReactMarkdown from 'react-markdown';
-import type { Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { AnchorHTMLAttributes, MouseEvent, ReactNode } from 'react';
+//
+// v2.1 会话渲染优化：
+//   - 删除本地 SafeAnchor 副本，正文经 MarkdownBody 统一入口（S2 链接拦截一致）
+//   - 静态气泡补时间戳；agent 回复（非自己）hover 气泡显示复制按钮
 import type { ImMessage } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { cn } from '../../lib/cn';
@@ -22,34 +22,8 @@ import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
 import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
-
-/**
- * S2 链接拦截：markdown <a> 若走浏览器默认行为，恶意内容可能劫持渲染进程
- * （导航到外部页面后，preload 暴露的 window.api 暴露给不可信上下文）。
- * 这里统一 preventDefault + window.open → 主进程 setWindowOpenHandler 拒绝
- * 新窗口并转 shell.openExternal 走系统浏览器。
- */
-function SafeAnchor(props: AnchorHTMLAttributes<HTMLAnchorElement>): JSX.Element {
-  const { href, children, target: _target, rel: _rel, onClick: _onClick, ...rest } = props;
-  const handleClick = (event: MouseEvent<HTMLAnchorElement>): void => {
-    event.preventDefault();
-    if (typeof href === 'string' && href.length > 0) {
-      // noopener/noreferrer 双重保险；setWindowOpenHandler 仍会拒绝新窗口
-      window.open(href, '_blank', 'noopener,noreferrer');
-    }
-  };
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={handleClick}
-      {...rest}
-    >
-      {children as ReactNode}
-    </a>
-  );
-}
+import { MarkdownBody } from './MarkdownBody';
+import { CopyButton } from '../ui/CopyButton';
 
 interface Props {
   message: ImMessage;
@@ -90,17 +64,19 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
       sender={message.sender}
       isSelf={isSelf}
       senderName={senderName}
-      bubbleClassName={cn(isSelf ? 'bg-accent-500 text-inverse' : 'bg-surface-2 text-primary')}
+      bubbleClassName={cn(
+        'relative group',
+        isSelf ? 'bg-accent-500 text-inverse' : 'bg-surface-2 text-primary',
+      )}
+      timestamp={message.createdAt}
     >
-      {/* react-markdown 渲染消息体；p 元素默认有 margin，用样式覆盖；code/pre 交给 md-body */}
-      <div className="md-body overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{ a: SafeAnchor } as Components}
-        >
-          {message.body}
-        </ReactMarkdown>
-      </div>
+      <MarkdownBody>{message.body}</MarkdownBody>
+      {!isSelf && (
+        <CopyButton
+          text={message.body}
+          className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        />
+      )}
     </MessageFrame>
   );
 }
