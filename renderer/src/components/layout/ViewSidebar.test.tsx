@@ -1,14 +1,15 @@
 // renderer/src/components/layout/ViewSidebar.test.tsx
 //
-// 统一侧边栏测试（P2 Task 3）：
+// 统一侧边栏测试（P2 Task 3 / v2.2 Task 3）：
 // - 按 activeView 分发内容：im→RoomList / files→FileTree / tasks→TaskSidebarPanel
 // - agents / marketplace / settings → 渲染 null（主区全宽，无侧边栏）
-// - 折叠态 48px 只显对应图标，内容隐藏；点击展开恢复 260px
+// - 收起态 = 完全消失（return null，不再渲染 48px 图标轨）
+// - 宽度按视图独立从 ui.store.sidebarWidths 透传到 Sidebar
 //
 // RoomList / FileTree / TaskSidebarPanel 用轻量桩替代——本文件聚焦分发与折叠逻辑，
 // 子组件自身行为由各自测试覆盖。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { ViewSidebar } from './ViewSidebar';
 import { useUiStore } from '../../stores/ui.store';
 
@@ -29,7 +30,11 @@ vi.mock('../task-board/TaskSidebarPanel', () => ({
 
 describe('ViewSidebar', () => {
   beforeEach(() => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: false });
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: false,
+      sidebarWidths: { im: 260, files: 260, tasks: 260 },
+    });
   });
 
   it('im 视图渲染 RoomList 内容（展开 260px）', () => {
@@ -65,31 +70,22 @@ describe('ViewSidebar', () => {
     },
   );
 
-  it('折叠态 48px 仅显示当前视图图标，内容隐藏；点击展开', () => {
+  it('收起时完全消失（不再渲染 48px 图标轨），内容不渲染', () => {
     useUiStore.setState({ sidebarCollapsed: true });
     const { container } = render(<ViewSidebar />);
-    // 内容隐藏
+    expect(container.firstChild).toBeNull();
     expect(screen.queryByTestId('room-list-stub')).not.toBeInTheDocument();
-    // 折叠轨：48px + 会话图标
-    const rail = screen.getByTestId('view-sidebar');
-    expect(rail.style.width).toBe('48px');
-    expect(screen.getByLabelText('展开侧边栏')).toBeInTheDocument();
-    expect(container.querySelector('svg.lucide-message-square')).not.toBeNull();
-
-    // 点击折叠轨 → 展开，内容恢复
-    fireEvent.click(screen.getByLabelText('展开侧边栏'));
-    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
-    expect(screen.getByTestId('room-list-stub')).toBeInTheDocument();
-    expect(screen.getByTestId('view-sidebar').style.width).toBe('260px');
   });
 
-  it('折叠态图标跟随视图：files → Folder / tasks → SquareKanban', () => {
-    useUiStore.setState({ activeView: 'files', sidebarCollapsed: true });
-    const { container, rerender } = render(<ViewSidebar />);
-    expect(container.querySelector('svg.lucide-folder')).not.toBeNull();
+  it('宽度从 store 透传到 Sidebar（视图独立宽度）', () => {
+    useUiStore.setState({ sidebarWidths: { im: 320, files: 260, tasks: 260 } });
+    render(<ViewSidebar />);
+    expect(screen.getByTestId('view-sidebar').style.width).toBe('320px');
 
-    useUiStore.setState({ activeView: 'tasks' });
-    rerender(<ViewSidebar />);
-    expect(container.querySelector('svg.lucide-square-kanban')).not.toBeNull();
+    // 切到 files 视图：宽度独立（先卸载前一次 render，screen 单匹配）
+    cleanup();
+    useUiStore.setState({ activeView: 'files' });
+    render(<ViewSidebar />);
+    expect(screen.getByTestId('view-sidebar').style.width).toBe('260px');
   });
 });
