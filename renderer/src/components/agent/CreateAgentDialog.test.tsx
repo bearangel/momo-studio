@@ -1,18 +1,23 @@
 // renderer/src/components/agent/CreateAgentDialog.test.tsx
 //
 // v25 Task 13：创建 Agent 弹窗测试（spec §6.3）。
-// 表单：名称*/图标/模型服务(provider+model 两级，沿用 DefinitionEditor 数据模式)/提示词/
-// 默认工具集三档（安全最小集/全部/自选）/「设为默认会话 agent」勾选（已有默认提示替换）。
+// 表单：名称*/图标/模型服务(provider→model 二级联动 ProviderModelPicker)/
+// 提示词/默认工具集三档（安全最小集/全部/自选）/
+// 「设为默认会话 agent」勾选（已有默认提示替换）。
 // source='agentView' 创建成功自动 addMember 入当前 ws（+勾选默认则 setDefaultAgent）；
 // source='library' 仅建定义。
 //
 // Mock 策略（momo-test-rules）：
 //   - store 为真实 zustand 实例，setState 注入状态与 action 桩；
 //   - ipc.agent.createCustom 经 window.api 桩注入（进程边界）；
-//   - 断言生产消费的字段（defId / instanceId / defaultTools）。
+//   - ipc.provider.listModels 经 window.api.provider 桩注入（picker 拉模型列表用）；
+//   - 断言生产消费的字段（defId / instanceId / defaultTools / modelName）。
 // v2.1 P3：弹窗收敛 Dialog 后供应商选择走 Select 原子件——必填标记并入 label
 // 文案（CreateTaskDialog「标题*」同款），accessible name 由「模型供应商」变为
 // 「模型供应商*」，断言同步；其余语义不变。
+// v2.2 fix：模型名由手填 Input 改为 ProviderModelPicker 联动下拉（Bug 1）——
+// defaultModel 快填退役，picker 自身管模型列表；测试 fillRequired 需等模型
+// options 异步加载。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { AgentDefinition, Workspace, WorkspaceAgentMember } from '../../ipc/types';
@@ -68,18 +73,23 @@ const CREATED_MEMBER: WorkspaceAgentMember = {
 };
 
 const createCustom = vi.fn();
+const providerListModels = vi.fn();
 const addMember = vi.fn();
 const loadDefinitions = vi.fn();
 const setDefaultAgent = vi.fn();
 
 beforeEach(() => {
   createCustom.mockReset().mockResolvedValue(CREATED_DEF);
+  providerListModels.mockReset().mockResolvedValue([
+    { providerId: 'prov-1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
+  ]);
   addMember.mockReset().mockResolvedValue(CREATED_MEMBER);
   loadDefinitions.mockReset().mockResolvedValue(undefined);
   setDefaultAgent.mockReset().mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: unknown } }).window.api = {
     agent: { createCustom },
+    provider: { listModels: providerListModels },
   };
 
   useWorkspaceStore.setState({
@@ -140,10 +150,12 @@ beforeEach(() => {
   });
 });
 
-/** 填写必填字段：名称 + provider（模型名随 provider 默认值自动填充） */
-function fillRequired(name = '新助手'): void {
+/** 填写必填字段：名称 + 供应商 + 模型（模型 options 异步加载，需 await） */
+async function fillRequired(name = '新助手'): Promise<void> {
   fireEvent.change(screen.getByLabelText('名称'), { target: { value: name } });
   fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+  await screen.findByRole('option', { name: 'gpt-4o' });
+  fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
 }
 
 describe('CreateAgentDialog — 校验', () => {
@@ -159,21 +171,23 @@ describe('CreateAgentDialog — 校验', () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '新助手' } });
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
-    expect(await screen.findByText('请选择模型服务并填写模型名')).toBeInTheDocument();
+    expect(await screen.findByText('请选择模型供应商与模型')).toBeInTheDocument();
     expect(createCustom).not.toHaveBeenCalled();
   });
 
-  it('选择供应商后自动填充其默认模型名', () => {
+  it('选择供应商后模型下拉列出其已启用模型；模型名不再是手填输入框', async () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
-    expect((screen.getByLabelText('模型名') as HTMLInputElement).value).toBe('gpt-4o');
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    // 模型名是 select（下拉）而非 input（手填）
+    expect(screen.getByLabelText('模型名').tagName).toBe('SELECT');
   });
 });
 
 describe('CreateAgentDialog — 默认工具集三档', () => {
   it('默认档=安全最小集，提交 defaultTools=SAFE_MINIMUM_TOOLS', async () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(createCustom).toHaveBeenCalled());
     expect(createCustom).toHaveBeenCalledWith(
@@ -185,7 +199,7 @@ describe('CreateAgentDialog — 默认工具集三档', () => {
 
   it('切「全部」档 → defaultTools=ALL_BUILTIN_TOOLS', async () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByLabelText('全部工具'));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(createCustom).toHaveBeenCalled());
@@ -198,7 +212,7 @@ describe('CreateAgentDialog — 默认工具集三档', () => {
 
   it('「自选」档展开工具勾选，勾选 bash 后提交含 bash', async () => {
     render(<CreateAgentDialog source="agentView" onClose={() => {}} />);
-    fillRequired();
+    await fillRequired();
     // 自选档初始勾选 = 安全最小集
     fireEvent.click(screen.getByLabelText('自选'));
     expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(false);
@@ -214,7 +228,7 @@ describe('CreateAgentDialog — source=agentView 提交路径', () => {
   it('创建成功 → createCustom + addMember 入当前 ws + onClose', async () => {
     const onClose = vi.fn();
     render(<CreateAgentDialog source="agentView" onClose={onClose} />);
-    fillRequired();
+    await fillRequired();
     fireEvent.change(screen.getByLabelText('系统提示词'), { target: { value: '你是助手' } });
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
@@ -228,7 +242,7 @@ describe('CreateAgentDialog — source=agentView 提交路径', () => {
   it('勾选「设为默认会话 agent」→ setDefaultAgent(ws, 新成员 instanceId)', async () => {
     const onClose = vi.fn();
     render(<CreateAgentDialog source="agentView" onClose={onClose} />);
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByLabelText('设为默认会话 agent'));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -245,7 +259,7 @@ describe('CreateAgentDialog — source=agentView 提交路径', () => {
     createCustom.mockRejectedValue(new Error('slug 已存在'));
     const onClose = vi.fn();
     render(<CreateAgentDialog source="agentView" onClose={onClose} />);
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     expect(await screen.findByText('slug 已存在')).toBeInTheDocument();
     expect(addMember).not.toHaveBeenCalled();
@@ -258,7 +272,7 @@ describe('CreateAgentDialog — source=library 提交路径', () => {
     const onClose = vi.fn();
     render(<CreateAgentDialog source="library" onClose={onClose} />);
     expect(screen.queryByLabelText('设为默认会话 agent')).not.toBeInTheDocument();
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(createCustom).toHaveBeenCalledWith(

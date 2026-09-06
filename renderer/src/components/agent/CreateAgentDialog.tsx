@@ -15,17 +15,19 @@
 // 「设为默认会话 agent」→ Checkbox；工具三档 radio 与自选网格 checkbox 保留原生
 // input（P3 Task 4 TeamDialog 先例：行内单/多选原生 + aria-label），仅 token 化；
 // 系统提示词 textarea 无原子件走 token 类；⚡ 说明文案去 emoji（语义不变）。
-import { useEffect, useState, type FormEvent } from 'react';
+// v2.2 fix：模型名由手填 Input 改为 ProviderModelPicker 联动下拉（Bug 1）——
+// picker 内部管供应商列表与模型 options（经 ipc.provider.listModels），换供应商
+// 联动清空模型；deprecated 的 provider.defaultModel 快填随之退役。
+import { useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { ALL_BUILTIN_TOOLS, SAFE_MINIMUM_TOOLS, TOOL_CATEGORIES } from '../../lib/tool-catalog';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
-import { Select } from '../ui/Select';
+import { ProviderModelPicker } from './ProviderModelPicker';
 
 interface Props {
   /** 入口来源：agentView=Agent 管理 Tab（创建即加入当前 ws）；library=资源库（仅建全局定义） */
@@ -44,7 +46,6 @@ const PRESETS: Array<{ key: ToolPreset; label: string; hint: string }> = [
 export function CreateAgentDialog({ source, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const setDefaultAgent = useWorkspaceStore((s) => s.setDefaultAgent);
-  const { providers, loadProviders } = useProviderStore();
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const addMember = useAgentStore((s) => s.addMember);
 
@@ -60,19 +61,6 @@ export function CreateAgentDialog({ source, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    void loadProviders();
-  }, [loadProviders]);
-
-  // 沿用 DefinitionEditor 的供应商数据模式：选定供应商时自动填其默认模型
-  const handleProviderChange = (id: string): void => {
-    setProviderId(id);
-    const p = providers.find((x) => x.id === id);
-    if (p?.defaultModel && !modelName) {
-      setModelName(p.defaultModel);
-    }
-  };
-
   const toggleCustomTool = (tool: string, checked: boolean): void => {
     setCustomTools((cur) =>
       checked ? [...cur, tool] : cur.filter((t) => t !== tool),
@@ -86,7 +74,7 @@ export function CreateAgentDialog({ source, onClose }: Props) {
       return;
     }
     if (!providerId || !modelName.trim()) {
-      setError('请选择模型服务并填写模型名');
+      setError('请选择模型供应商与模型');
       return;
     }
     if (source === 'agentView' && !workspace) {
@@ -144,24 +132,11 @@ export function CreateAgentDialog({ source, onClose }: Props) {
           value={iconEmoji}
           onChange={(e) => setIconEmoji(e.target.value)}
         />
-        <Select
-          label="模型供应商*"
-          value={providerId}
-          onChange={(e) => handleProviderChange(e.target.value)}
-        >
-          <option value="">请选择...</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.isDefault ? '（默认）' : ''}
-            </option>
-          ))}
-        </Select>
-        <Input
-          label="模型名"
-          value={modelName}
-          onChange={(e) => setModelName(e.target.value)}
-          placeholder="如 gpt-4o, claude-sonnet-4"
+        <ProviderModelPicker
+          providerId={providerId}
+          modelId={modelName}
+          onProviderChange={setProviderId}
+          onModelChange={setModelName}
         />
         <div className="flex flex-col gap-1">
           <label htmlFor="create-agent-prompt" className="text-sm text-secondary">
