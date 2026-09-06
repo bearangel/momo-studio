@@ -9,7 +9,7 @@
 // v2.1 P2 Task 15：手写 modal 外壳 → Dialog 原子件；tab strip / 行 hover / 颜色 token 化；
 // iconEmoji 缺省 → Avatar bot（对齐 MentionInput / MembersPanel 先例）；
 // 👑 → lucide-react Crown（外层 span title="leader：…" 保留）。
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Crown } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -29,7 +29,7 @@ type TargetTab = 'agent' | 'team';
 
 export function CollabSessionDialog({ onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { members, teams, definitions, loadMembers, loadTeams } = useAgentStore();
+  const { members, teams, loadMembers, loadTeams } = useAgentStore();
   const createCollabSession = useSessionStore((s) => s.createCollabSession);
 
   const [title, setTitle] = useState('');
@@ -45,9 +45,9 @@ export function CollabSessionDialog({ onClose }: Props) {
     }
   }, [workspace, loadMembers, loadTeams]);
 
-  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
-  const memberLabel = (m: WorkspaceAgentMember): string =>
-    defMap.get(m.agentDefinitionId)?.name ?? m.agentName ?? m.agentUserId;
+  // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出（members 数据面），
+  // 不再依赖 definitions 的加载时序——此前 defMap 恒空时落到 agentUserId 显示 ID。
+  const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
   const teamLeaderLabel = (t: Team): string => {
     const leader = t.members.find((m) => m.instanceId === t.leaderInstanceId);
     return leader ? memberLabel(leader) : '';
@@ -137,9 +137,7 @@ export function CollabSessionDialog({ onClose }: Props) {
                   onChange={() => setTarget({ type: 'agent', instanceId: m.instanceId })}
                 />
                 <span>
-                  {defMap.get(m.agentDefinitionId)?.iconEmoji ?? (
-                    <Avatar name={memberLabel(m)} bot size="sm" />
-                  )}
+                  {m.iconEmoji || <Avatar name={memberLabel(m)} bot size="sm" />}
                 </span>
                 <span>{memberLabel(m)}</span>
                 <span

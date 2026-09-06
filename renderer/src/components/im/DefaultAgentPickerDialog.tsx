@@ -7,7 +7,7 @@
 //
 // v2.1 P2 Task 15：手写 modal 外壳 → Dialog 原子件；空态 → EmptyState（icon=Bot）；
 // iconEmoji 缺省 → Avatar bot（对齐 MentionInput / MembersPanel 先例）。
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Bot } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -25,7 +25,7 @@ interface Props {
 }
 
 export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: Props) {
-  const { members, definitions, loadMembers } = useAgentStore();
+  const { members, loadMembers } = useAgentStore();
   const setDefaultAgent = useWorkspaceStore((s) => s.setDefaultAgent);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -36,9 +36,8 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
     void loadMembers(workspaceId);
   }, [workspaceId, loadMembers]);
 
-  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
-  const memberLabel = (m: WorkspaceAgentMember): string =>
-    defMap.get(m.agentDefinitionId)?.name ?? m.agentName ?? m.agentUserId;
+  // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出，不依赖 definitions 加载时序
+  const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -91,7 +90,7 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
                     onChange={() => setSelectedId(m.instanceId)}
                   />
                   <span>
-                    {defMap.get(m.agentDefinitionId)?.iconEmoji ?? (
+                    {m.iconEmoji || (
                       <Avatar name={memberLabel(m)} bot size="sm" />
                     )}
                   </span>

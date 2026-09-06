@@ -51,7 +51,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setDeadlineAt('');
     ipc.agent.listMembers(workspaceId).then((list: WorkspaceAgentMember[]) => {
       setAssignments(
-        list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName ?? a.agentUserId })),
+        list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName })),
       );
     });
   }, [open, preset, workspaceId]);
