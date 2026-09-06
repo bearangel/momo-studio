@@ -130,16 +130,26 @@ body,
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px;
 }
+/* ── v2.1 会话渲染：表格（方案 A 全边框网格——用户决策）────────────── */
+.md-table-wrap {
+  overflow-x: auto;
+}
 .md-body table {
   border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12.5px;
 }
 .md-body th,
 .md-body td {
-  border: 1px solid rgb(var(--border-subtle));
-  padding: 4px 10px;
+  border: 1px solid rgb(var(--border-strong));
+  padding: 6px 12px;
+  text-align: start;
+  vertical-align: top;
 }
 .md-body th {
-  background: rgb(var(--surface-2));
+  background: rgb(var(--surface-3));
+  color: rgb(var(--text-primary));
+  font-weight: 600;
 }
 .md-body blockquote {
   border-left: 3px solid rgb(var(--border-strong));
@@ -164,4 +174,40 @@ body,
 /* accent 底气泡内引用块：继承气泡前景，避免 secondary 色在 accent 底上不可读 */
 .bg-accent-500 .md-body blockquote {
   color: inherit;
+}
+
+/* ── v2.1 会话渲染：标题/列表/图片/hr（气泡内排版约束，消灭浏览器默认 2em） ── */
+.md-body h1 { font-size: 15px; font-weight: 600; margin: 10px 0 4px; color: rgb(var(--text-primary)); }
+.md-body h2 { font-size: 14.5px; font-weight: 600; margin: 10px 0 4px; color: rgb(var(--text-primary)); }
+.md-body h3 { font-size: 14px; font-weight: 600; margin: 8px 0 4px; color: rgb(var(--text-primary)); }
+.md-body h4 { font-size: 13.5px; font-weight: 600; margin: 8px 0 4px; color: rgb(var(--text-primary)); }
+.md-body h5, .md-body h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px; color: rgb(var(--text-primary)); }
+.md-body ul, .md-body ol { margin: 4px 0 8px; padding-left: 20px; line-height: 1.7; }
+.md-body img { max-width: 100%; border-radius: 6px; }
+.md-body hr { border: none; border-top: 1px solid rgb(var(--border-subtle)); margin: 8px 0; }
+
+/* ── v2.1 会话渲染：CodeBlock 代码块体（含 shiki 双主题切换）───────── */
+/* 规则置于旧 .md-body pre 之后：同为 (0,1,1) 特异性，后者胜出，
+   保证 Task 9 全接线前旧调用点的裸 pre 不受影响 */
+.md-codeblock pre,
+.md-codeblock .shiki {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: transparent !important; /* shiki 内联亮色背景退役，底色由容器 bg-surface-1 承担 */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: rgb(var(--text-secondary));
+}
+.md-codeblock .shiki code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* shiki 双主题：默认亮色 token；html.dark 切到 --shiki-dark 变量（零重算） */
+html.dark .md-codeblock .shiki,
+html.dark .md-codeblock .shiki span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
 }
