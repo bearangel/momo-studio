@@ -150,10 +150,6 @@ describe('ProviderModelPicker — 模型联动', () => {
   });
 
   it('换供应商 → onProviderChange(id) + 补发 onModelChange(\'\')（联动重置）', () => {
-    renderPicker();
-    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p1' } });
-    expect(screen.getByLabelText('模型供应商*')).toHaveValue('p1');
-    expect(screen.getByLabelText('模型名')).not.toBeDisabled();
     const { onProviderChange, onModelChange } = renderPicker();
     fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p2' } });
     expect(onProviderChange).toHaveBeenCalledWith('p2');
