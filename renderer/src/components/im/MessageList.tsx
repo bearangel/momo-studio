@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { useBotNameMap } from '../../lib/useBotNames';
 import { groupBySegment } from '../../lib/group-segments';
 import type { ImMessage } from '../../ipc/types';
@@ -79,6 +80,26 @@ export function MessageList() {
     }
     isFirstRender.current = false;
   }, [messages, activeSessionId]);
+
+  // v2.2 bug 修复：agent 生成过程中内容增长发生在 stream.store（applyEventBatch
+  // 聚合后由各 AgentStreamBubble 自行渲染），messages 引用不变——上方 effect 只依赖
+  // [messages, activeSessionId]，流式期间永不触发，滚动条停在上一次的位置。
+  // 经 useStreamStore.subscribe 订阅聚合更新（不触发本组件重渲染，长会话不为流式
+  // 付整列表 re-render 成本）；rAF 等 React 把新内容提交进 DOM 后再贴底。
+  useEffect(() => {
+    const unsubscribe = useStreamStore.subscribe(() => {
+      const el = scrollRef.current;
+      if (!el || !isNearBottomRef.current || pendingScrollRestore.current !== null) return;
+      requestAnimationFrame(() => {
+        const current = scrollRef.current;
+        if (!current || !isNearBottomRef.current || pendingScrollRestore.current !== null) {
+          return;
+        }
+        current.scrollTo({ top: current.scrollHeight, behavior: 'auto' });
+      });
+    });
+    return unsubscribe;
+  }, []);
 
   if (!activeSessionId) {
     return (

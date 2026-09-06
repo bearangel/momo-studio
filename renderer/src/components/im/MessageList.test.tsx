@@ -24,8 +24,13 @@ vi.mock('../../stores/session.store', () => ({
   useSessionStore: (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
 }));
 vi.mock('../../stores/stream.store', () => ({
-  useStreamStore: (selector: (s: { streams: Map<string, unknown> }) => unknown) =>
-    selector({ streams: new Map() }),
+  // mock 形状对齐真实 zustand store 接口：selector 访问 + subscribe（v2.2 起
+  // MessageList 经 subscribe 做流式贴底，缺该方法会让本组件直接崩溃）
+  useStreamStore: Object.assign(
+    (selector: (s: { streams: Map<string, unknown> }) => unknown) =>
+      selector({ streams: new Map() }),
+    { subscribe: () => () => {} },
+  ),
 }));
 vi.mock('../../lib/useBotNames', () => ({
   useBotNameMap: () => new Map(),
