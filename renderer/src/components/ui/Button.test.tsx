@@ -46,4 +46,12 @@ describe('Button', () => {
     fireEvent.click(screen.getByRole('button', { name: '点我' }));
     expect(onClick).toHaveBeenCalledOnce();
   });
+
+  it('v2.2 混排对齐契约：基础类含 inline-flex items-center gap-1——图标+文本子元素由原子件保证对齐与间距，调用方无需自带', () => {
+    render(<Button variant="secondary" size="sm">停止</Button>);
+    const cls = screen.getByRole('button', { name: '停止' }).className;
+    expect(cls).toContain('inline-flex');
+    expect(cls).toContain('items-center');
+    expect(cls).toContain('gap-1');
+  });
 });
