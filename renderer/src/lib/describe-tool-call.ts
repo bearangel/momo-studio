@@ -17,8 +17,8 @@ export interface ToolCallSummary {
 }
 
 function basename(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts[parts.length - 1] !== '' ? parts[parts.length - 1]! : p;
+  const parts = p.split(/[\\/]/).filter((s) => s !== '');
+  return parts[parts.length - 1] ?? p;
 }
 
 function firstString(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
@@ -35,6 +35,7 @@ function truncate(s: string, max = 60): string {
 
 const FILE_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'mkdir', 'rm', 'mv', 'exists', 'lsp_diagnostics',
+  'list_files',
 ]);
 
 export function describeToolCall(toolName: string, args: Record<string, unknown>): ToolCallSummary {
