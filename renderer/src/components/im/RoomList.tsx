@@ -1,60 +1,21 @@
 // renderer/src/components/im/RoomList.tsx
 //
-// v25 Task 14：会话列表项图标语义派生（spec §6.2）——图标从 members（有效成员）
-// 派生、不持久化创建方式：单成员 → 该 agent emoji；多成员 → icon 组（leader Crown
-// 前缀置首，最多 3 个 + 溢出计数）；成员全失效 → MessageSquare 兜底（aria-label="会话图标"）。
+// v2.2 bug 修复：会话列表项不再渲染任何图标（用户要求移除「各种图标」——
+// 成员 emoji / Crown / Bot 兜底 / MessageSquare / +N 溢出计数全部下线；
+// 成员身份信息在会话面板成员区查看）。悬停操作按钮（重命名/解散）保留。
 // 会话创建入口已迁 SessionSidebarHeader（侧边栏头部 Bolt/Users 双常驻按钮）。
 //
-// v2.1 P2 Task 11：选中态改用 design-system §1 文档 accent form
+// v2.1 P2 Task 11：选中态用 design-system §1 文档 accent form
 //（bg-surface-active + text-accent-600/300），空态接 EmptyState，
 // hover 工具条 Pencil/Trash2 lucide 化（去 emoji）。
-// v2.1 P2 终审：memberEmoji 字符串兜底退役——缺省 Bot 图标（MembersPanel 同型）、
-// leader 前缀 👑 → Crown（accent-500）。
 import { useEffect, useState } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
-import type { SessionMemberInfo } from '../../ipc/types';
 import { PromptDialog } from '../common/PromptDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
-import { Bot, Crown, MessageSquare, Pencil, Trash2 } from 'lucide-react';
-
-/** 多成员会话 icon 组最多展示的成员数（超出折叠为 +N 计数，侧边栏 260px 宽约束） */
-const MAX_MEMBER_ICONS = 3;
-
-/** 会话列表项图标（语义派生，spec §6.2） */
-function SessionListItemIcon({ members }: { members: SessionMemberInfo[] }) {
-  if (members.length === 0) {
-    // 有效成员全失效（被移出 ws）→ 只读会话，通用气泡图标兜底
-    return <MessageSquare size={14} strokeWidth={1.75} aria-label="会话图标" />;
-  }
-  if (members.length === 1) {
-    return (
-      <span aria-label="会话图标">{members[0]!.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}</span>
-    );
-  }
-  // 多成员：leader 置首（Crown 前缀），超出部分折叠为 +N
-  const leader = members.find((m) => m.isLeader);
-  const ordered = leader ? [leader, ...members.filter((m) => m !== leader)] : members;
-  const shown = ordered.slice(0, MAX_MEMBER_ICONS);
-  const overflow = members.length - shown.length;
-  return (
-    <span aria-label="会话图标" className="flex items-center gap-0.5 whitespace-nowrap shrink-0">
-      {shown.map((m) => (
-        <span
-          key={m.instanceId}
-          title={`${m.agentName}${m.isLeader ? '（leader）' : ''}`}
-          className="inline-flex items-center gap-0.5"
-        >
-          {m.isLeader && <Crown size={11} strokeWidth={1.75} aria-hidden className="text-accent-500" />}
-          {m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}
-        </span>
-      ))}
-      {overflow > 0 && <span className="text-[10px] text-tertiary">+{overflow}</span>}
-    </span>
-  );
-}
+import { MessageSquare, Pencil, Trash2 } from 'lucide-react';
 
 export function RoomList() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -129,13 +90,12 @@ export function RoomList() {
             type="button"
             onClick={() => void selectSession(session.id)}
             className={cn(
-              'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center gap-2',
+              'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center',
               session.id === activeSessionId
                 ? 'bg-surface-active border-transparent text-accent-600 dark:text-accent-300'
                 : 'border-transparent text-secondary hover:bg-surface-3',
             )}
           >
-            <SessionListItemIcon members={session.members} />
             <span className="truncate flex-1">{session.title}</span>
           </button>
           <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-surface-1/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
