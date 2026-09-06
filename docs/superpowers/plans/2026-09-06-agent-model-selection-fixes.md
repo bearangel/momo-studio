@@ -839,15 +839,8 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
         modelName: 'm2',
       });
     });
-    // 顺序：updateDefinition 先于 setMemberDeltas
-    const order: string[] = [];
-    updateDefinition.mockImplementation(async () => {
-      order.push('def');
-    });
-    setMemberDeltasMock.mockImplementation(async () => {
-      order.push('deltas');
-    });
-    expect(order).toEqual([]); // 上述注册晚于首次保存，仅占位确保两 mock 均被调用
+    // 保存链同时落能力 deltas（顺序保证由实现中 await updateDefinition 先于
+    // setMemberDeltasAction 承担——momo-test-rules：断言调用与字段，不做时序细节断言）
     expect(setMemberDeltasMock).toHaveBeenCalled();
   });
 
@@ -871,7 +864,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 });
 ```
 
-注：「换模型保存」用例中先切 p2 再切回 p1 是为了显式覆盖联动重置路径（p1 模型列表已缓存，无需再等 listModels）；order 断言段简化为确认两个 mock 均被调用——真正的顺序保证由实现中 `await updateDefinition` 先于 `await setMemberDeltasAction` 承担，此处不做过重的 invocation-order 断言（momo-test-rules：断言生产消费的字段与调用，不测实现细节时序）。
+注：「换模型保存」用例中先切 p2 再切回 p1 是为了显式覆盖联动重置路径（p1 模型列表已缓存，无需再等 listModels）。顺序保证由实现中 `await updateDefinition` 先于 `await setMemberDeltasAction` 承担（momo-test-rules：断言生产消费的字段与调用，不测实现细节时序）。
 
 - [ ] **Step 2: 运行测试确认失败**
 
