@@ -82,12 +82,20 @@ export function ResourceLibraryView() {
   const handleEditAgent = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
-    const defs = await ipc.agent.list();
-    const def = defs.find((d) => d.source === 'custom' && d.slug === item.slug);
-    if (def) {
-      setEditingDef(def);
-    } else {
-      console.warn('未找到资源对应的 agent 定义', { itemId, slug: item.slug });
+    try {
+      const defs = await ipc.agent.list();
+      const def = defs.find((d) => d.source === 'custom' && d.slug === item.slug);
+      if (def) {
+        setEditingDef(def);
+      } else {
+        console.warn('未找到资源对应的 agent 定义', { itemId, slug: item.slug });
+      }
+    } catch (err) {
+      // IPC 失败（如 handler 抛错）：记录并以无操作收场——不挂 unhandled rejection
+      console.error('打开 agent 编辑失败', {
+        itemId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 

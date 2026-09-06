@@ -460,4 +460,22 @@ describe('ResourceLibraryView — custom agent 编辑入口', () => {
       expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('Researcher');
     });
   });
+
+  it('agent.list 失败 → 不挂 unhandled rejection、不弹编辑窗', async () => {
+    resourceList.mockResolvedValue([CUSTOM_AGENT_ITEM]);
+    agentListDefinitions.mockRejectedValue(new Error('DB busy'));
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('Researcher')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Researcher'));
+    await waitFor(() => {
+      expect(screen.getAllByText('Researcher').length).toBeGreaterThanOrEqual(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+
+    // 等微任务排空后仍无编辑弹窗（catch 吞下 rejection，无 unhandled rejection 外抛）
+    await waitFor(() => {
+      expect(screen.queryByText('编辑 agent 定义')).not.toBeInTheDocument();
+    });
+  });
 });
