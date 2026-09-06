@@ -626,6 +626,18 @@ describe('describeToolCall — 已知工具映射', () => {
   it('write_file 经 filePath 键也取文件名', () => {
     expect(describeToolCall('write_file', { filePath: 'a/b/c.ts' }).summary).toBe('c.ts');
   });
+  it('list_files 走 FILE_TOOLS：显示目录名且无 extraArgs', () => {
+    const r = describeToolCall('list_files', { path: 'src/components' });
+    expect(r.summary).toBe('components');
+    expect(r.extraArgs).toEqual([]);
+  });
+  it('basename 尾部分隔符取最后非空段', () => {
+    expect(describeToolCall('read_file', { path: 'src/components/' }).summary).toBe('components');
+    expect(describeToolCall('mkdir', { path: 'a/b/' }).summary).toBe('b');
+  });
+  it('混合分隔符路径取文件名', () => {
+    expect(describeToolCall('read_file', { path: 'a/b\\c.ts' }).summary).toBe('c.ts');
+  });
   it('bash 取命令首行并截断到 60 字符', () => {
     const long = 'x'.repeat(80);
     const r = describeToolCall('bash', { command: `${long}\nsecond line` });
@@ -704,8 +716,8 @@ export interface ToolCallSummary {
 }
 
 function basename(p: string): string {
-  const parts = p.split(/[\\/]/);
-  return parts[parts.length - 1] !== '' ? parts[parts.length - 1]! : p;
+  const parts = p.split(/[\\/]/).filter((s) => s !== '');
+  return parts[parts.length - 1] ?? p;
 }
 
 function firstString(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
@@ -722,6 +734,7 @@ function truncate(s: string, max = 60): string {
 
 const FILE_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'mkdir', 'rm', 'mv', 'exists', 'lsp_diagnostics',
+  'list_files',
 ]);
 
 export function describeToolCall(toolName: string, args: Record<string, unknown>): ToolCallSummary {
