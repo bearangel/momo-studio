@@ -10,6 +10,7 @@ import { useThemeStore } from '../../stores/theme.store';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
 import { EmptyState } from '../ui/EmptyState';
+import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 
 export function CodeEditor() {
   const { tabs, activeTab, updateContent, markSaved, setActive, closeTab } =
@@ -52,11 +53,16 @@ export function CodeEditor() {
     [setActive],
   );
 
-  // 无 tab 时显示空状态
+  // 无 tab 时显示空状态（v2.2：顶部补恢复按钮行，收起时侧边栏入口不丢失）
   if (tabs.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState icon={File} title="双击文件打开编辑器" />
+      <div className="flex flex-1 flex-col">
+        <div className="flex h-[30px] shrink-0 items-center border-b border-subtle bg-surface-1 px-1.5">
+          <SidebarRestoreButton />
+        </div>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState icon={File} title="双击文件打开编辑器" />
+        </div>
       </div>
     );
   }
@@ -65,6 +71,8 @@ export function CodeEditor() {
     <div className="flex-1 flex flex-col" onKeyDown={handleKeyDown}>
       {/* Tab 栏 */}
       <div role="tablist" className="flex bg-surface-1 border-b border-subtle overflow-x-auto">
+        {/* 收起时恢复按钮停靠 tab 行首位（参与 flex 布局，tab 右移不遮挡，spec D3） */}
+        <SidebarRestoreButton />
         {tabs.map((tab) => {
           const tabName = tab.filePath.split('/').pop() ?? '';
           const isActive = tab.filePath === activeTab;

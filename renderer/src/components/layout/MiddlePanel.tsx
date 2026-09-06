@@ -19,6 +19,7 @@ import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
 import { EmptyState } from '../ui/EmptyState';
+import { SidebarRestoreButton } from './SidebarRestoreButton';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -65,8 +66,9 @@ export function MiddlePanel() {
     return (
       <div className="flex-1 flex min-w-0">
         <div className="flex-1 flex flex-col min-w-0 relative">
-          {/* 会话头部：会话名 + 工具上限徽标 */}
+          {/* 会话头部：会话名 + 工具上限徽标（收起时首位停靠恢复按钮） */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-subtle bg-surface-1">
+            <SidebarRestoreButton />
             <span className="text-sm text-primary truncate flex-1">
               {activeSession ? activeSession.title : '未选择房间'}
             </span>

@@ -20,6 +20,7 @@ import { ipc } from '../../ipc/client';
 import type { GlobalSettings } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { TaskDetailPanel } from './TaskDetailPanel';
+import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 
 /** 并发上限缺省值（后端 GlobalSettings 缺 maxConcurrentTasks 字段时的 UI 兜底） */
 const MAX_CONCURRENCY_FALLBACK = 3;
@@ -76,9 +77,12 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 顶部状态栏：标题 + 并发/排队 */}
+      {/* 顶部状态栏：标题 + 并发/排队（收起时首位停靠恢复按钮） */}
       <div className="flex items-center justify-between p-3 border-b border-subtle shrink-0">
-        <h2 className="text-lg font-medium">任务看板</h2>
+        <div className="flex items-center gap-1.5">
+          <SidebarRestoreButton />
+          <h2 className="text-lg font-medium">任务看板</h2>
+        </div>
         <div className="text-xs text-tertiary">
           并发: {concurrency.active}/{concurrency.max}　排队: {concurrency.queued}
         </div>
