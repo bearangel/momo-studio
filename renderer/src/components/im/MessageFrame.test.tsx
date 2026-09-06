@@ -56,3 +56,34 @@ describe('MessageFrame', () => {
     expect(screen.getByTestId('child')).toBeInTheDocument();
   });
 });
+
+describe('MessageFrame — 时间戳（v2.1）', () => {
+  const TS = new Date('2026-09-06T14:32:00').getTime(); // 本地时区构造，断言同源
+
+  it('非自己消息：名字行旁显示 HH:mm', () => {
+    render(
+      <MessageFrame sender="@bot:server" isSelf={false} senderName="coder" timestamp={TS}>
+        <span>body</span>
+      </MessageFrame>,
+    );
+    expect(screen.getByText('14:32')).toBeInTheDocument();
+  });
+
+  it('自己消息：气泡下方右对齐显示时间', () => {
+    render(
+      <MessageFrame sender="@owner:server" isSelf={true} timestamp={TS}>
+        <span>body</span>
+      </MessageFrame>,
+    );
+    expect(screen.getByText('14:32')).toBeInTheDocument();
+  });
+
+  it('不传 timestamp 不渲染时间', () => {
+    render(
+      <MessageFrame sender="@bot:server" isSelf={false}>
+        <span>body</span>
+      </MessageFrame>,
+    );
+    expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
+  });
+});

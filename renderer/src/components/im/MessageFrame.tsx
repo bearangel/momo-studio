@@ -7,12 +7,20 @@ import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import { avatarEmoji, shortName } from './avatars';
 
+/** epoch ms → HH:mm（本地时区） */
+function formatHHmm(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 interface Props {
   /** 发送者 Matrix userId（@xxx:server）；用于头像 emoji 与回退短名 */
   sender: string;
   isSelf: boolean;
   /** bot 配置名（优先于 shortName）；自己消息不显示名字 */
   senderName?: string;
+  /** 消息时间戳（epoch ms）——agent 消息显示在名字行旁，自己消息显示在气泡下方 */
+  timestamp?: number;
   /** 内层气泡 className（边框/背景/文字色由调用方按消息类型决定） */
   bubbleClassName?: string;
   /**
@@ -40,6 +48,7 @@ export function MessageFrame({
   sender,
   isSelf,
   senderName,
+  timestamp,
   bubbleClassName,
   maxWidthPct = 70,
   fillWidth = false,
@@ -63,7 +72,12 @@ export function MessageFrame({
         }}
       >
         {!isSelf && (
-          <span className="text-xs text-secondary px-1">{senderName ?? shortName(sender)}</span>
+          <span className="px-1 text-xs text-secondary">
+            {senderName ?? shortName(sender)}
+            {timestamp !== undefined && (
+              <span className="ml-1 text-[11px] text-tertiary">{formatHHmm(timestamp)}</span>
+            )}
+          </span>
         )}
         <div
           className={cn('rounded-lg px-3 py-2 text-sm break-words', bubbleClassName)}
@@ -71,6 +85,9 @@ export function MessageFrame({
         >
           {children}
         </div>
+        {isSelf && timestamp !== undefined && (
+          <span className="self-end px-1 text-[11px] text-tertiary">{formatHHmm(timestamp)}</span>
+        )}
       </div>
     </div>
   );
