@@ -103,7 +103,7 @@ interface UiState {
 |---|---|
 | localStorage 值缺失 / JSON 解析失败 / 单项 NaN 或超范围 | 该视图宽度回默认 260；`sidebarCollapsed` 回 false |
 | `pointercancel`（指针捕获丢失） | 与 `pointerup` 同路径：提交当前预览宽度 |
-| 拖拽中视图切换 / Ctrl+B 收起 | Sidebar 卸载 → pointer capture 自动释放、预览丢弃不提交（宽度保持拖拽前值），可接受 |
+| 拖拽中视图切换 / Ctrl+B 收起 | Sidebar 卸载，但 window 监听存活至手势结束：释放时仍按最后指针位置提交一次（已钳制，`viewKey` 为手势发起视图，无错写）。终审裁定：行为安全且体验更合理，以实现为准 |
 | 文件视图无打开 tab（空态） | 恢复按钮渲染于空态上方顶行（§5.2 CodeEditor 行） |
 | agents / marketplace / settings 视图 | ViewSidebar 本就 return null；恢复按钮也 return null（`SIDEBAR_VIEWS` 判定），互不影响 |
 | 主区重排 | 侧边栏 `shrink-0` + 主区 `flex-1` 现有结构天然支持，tab 行不错位 |
