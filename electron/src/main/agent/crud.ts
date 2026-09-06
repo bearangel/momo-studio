@@ -139,7 +139,8 @@ interface AgentDefRow {
 }
 
 /** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled）。
- *  导出供 team.ts 复用——WorkspaceAgentMember 行映射单点维护，防双映射漂移。 */
+ *  导出供 team.ts 复用——WorkspaceAgentMember 行映射单点维护，防双映射漂移。
+ *  v2.2：name/icon_emoji 为 JOIN agent_definitions 的可选展示列（单表 SELECT 路径无此二列）。 */
 export interface WorkspaceMemberRow {
   instance_id: string;
   workspace_id: string;
@@ -148,6 +149,8 @@ export interface WorkspaceMemberRow {
   api_key_override: number;
   last_running: number;
   created_at: string;
+  name?: string;
+  icon_emoji?: string;
 }
 
 /** 将 DB 行（snake_case + JSON 字符串）转换为强类型 AgentDefinition */
@@ -182,6 +185,8 @@ export function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
     workspaceId: row.workspace_id,
     agentDefinitionId: row.agent_definition_id,
     agentUserId: row.agent_user_id,
+    agentName: row.name ?? row.agent_user_id,
+    iconEmoji: row.icon_emoji ?? '',
     hasApiKeyOverride: row.api_key_override === 1,
     lastRunning: row.last_running === 1,
     createdAt: row.created_at,
@@ -286,7 +291,11 @@ export async function addMember(
   }
 
   const row = db
-    .prepare('SELECT * FROM workspace_agent_members WHERE instance_id = ?')
+    .prepare(
+      `SELECT wam.*, d.name, d.icon_emoji FROM workspace_agent_members wam
+       JOIN agent_definitions d ON d.id = wam.agent_definition_id
+       WHERE wam.instance_id = ?`,
+    )
     .get(instanceId) as WorkspaceMemberRow;
   logger.info('Agent 已加入 workspace', {
     workspaceId, agentDefinitionId, agentUserId,
@@ -400,11 +409,15 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
   return { stoppedInstanceIds: stopped };
 }
 
-/** 列出某 workspace 下所有 agent 成员 */
+/** 列出某 workspace 下所有 agent 成员（v2.2：JOIN definitions 带出 agentName/iconEmoji） */
 export function listMembers(workspaceId: string): WorkspaceAgentMember[] {
   const db = getDb();
   const rows = db
-    .prepare('SELECT * FROM workspace_agent_members WHERE workspace_id = ?')
+    .prepare(
+      `SELECT wam.*, d.name, d.icon_emoji FROM workspace_agent_members wam
+       JOIN agent_definitions d ON d.id = wam.agent_definition_id
+       WHERE wam.workspace_id = ?`,
+    )
     .all(workspaceId) as WorkspaceMemberRow[];
   return rows.map(rowToMember);
 }

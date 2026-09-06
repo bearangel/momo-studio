@@ -97,6 +97,19 @@ function rawInsertTeam(
 }
 
 describe('addMember — 加入 workspace', () => {
+  it('v2.2 回归锁：addMember 返回值即带 agentName（JOIN definitions；新成员进 store 不显示 ID）', async () => {
+    const member = await addMember('ws1', 'def1', 'agent-a-x9');
+    expect(member.agentName).toBe('DEF1');
+    expect(member.iconEmoji).toBe('🤖'); // icon_emoji 列 DEFAULT '🤖'（migration v1）
+  });
+
+  it('v2.2 回归锁：listMembers 对裸插入行同样 JOIN 出 agentName/iconEmoji', () => {
+    rawInsertMember('inst-join-1', 'ws1', 'def1');
+    const m = listMembers('ws1').find((x) => x.instanceId === 'inst-join-1')!;
+    expect(m.agentName).toBe('DEF1');
+    expect(m.iconEmoji).toBe('🤖');
+  });
+
   it('加成员后 listMembers 可见；跨 workspace 隔离；断言生产消费字段', async () => {
     const member = await addMember('ws1', 'def1', 'agent-a-x1');
 
