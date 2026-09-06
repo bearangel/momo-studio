@@ -152,6 +152,14 @@ export interface TaskConfig {
     /** PM 的 streamSessionId（用于 renderer 把子 agent 流嵌套渲染到 PM 气泡内对应 chip 下方） */
     tool_stream_session_id?: string;
   };
+  /**
+   * v2.2 修复（会话工具预算接线）：主进程按 executionSessionId 现解析的有效
+   * 工具预算（sessions.settings_json.maxToolCalls → global_settings.maxToolCalls），
+   * 每条消息派发时随 task-config 下发——修改会话/全局设置后下一条消息即生效，
+   * 不受 warm runtime AGENT_CONFIG 定型影响。优先级低于 dispatchContext.tool_budget；
+   * 缺省时回退 AGENT_CONFIG 的 maxToolCalls（parseConfig 默认 10）。
+   */
+  maxToolCalls?: number;
 }
 
 /**

@@ -839,13 +839,17 @@ export async function runTaskChatLoop(
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
-  //    - maxToolCalls：dispatchContext.tool_budget 优先（PM 分配的子任务预算），否则沿用 config（房间级 / 全局默认）
+  //    - maxToolCalls：dispatchContext.tool_budget 优先（PM 分配的子任务预算），
+  //      其次 cfg.maxToolCalls（主进程按 executionSessionId 解析的会话/全局预算，
+  //      v2.2 接线），均缺省时沿用 config（AGENT_CONFIG 默认）
   const taskConfig: RuntimeConfig = {
     ...config,
     ...(taskId ? { currentTaskId: taskId } : {}),
     ...(dispatchContext?.tool_budget !== undefined
       ? { maxToolCalls: dispatchContext.tool_budget }
-      : {}),
+      : cfg.maxToolCalls !== undefined
+        ? { maxToolCalls: cfg.maxToolCalls }
+        : {}),
   };
 
   // 2. parentStreamSessionId：dispatchContext 设置时为 PM 的 streamSessionId，

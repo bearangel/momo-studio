@@ -716,6 +716,124 @@ describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）',
   });
 });
 
+describe('runTaskChatLoop 工具预算优先级（v2.2 会话预算接线）', () => {
+  const originalSend = process.send;
+  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    sentIpc.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
+    process.send = ((
+      msg: unknown,
+      callback?: (err: Error | null) => void,
+    ): boolean => {
+      const m = msg as { type?: string };
+      if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
+        sentChunks.push(msg);
+      } else {
+        sentIpc.push(msg);
+      }
+      if (callback) callback(null);
+      return true;
+    }) as NonNullable<typeof process.send>;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+    exitSpy.mockRestore();
+  });
+
+  /** 从 createLLMProvider 返回的 chatStream mock 里取首参（LLMMessage[]），断言 system prompt 预算提示 */
+  function systemPromptOfFirstCall(): string {
+    const chatStream = (vi.mocked(createLLMProvider).mock.results[0]?.value as {
+      chatStream: ReturnType<typeof vi.fn>;
+    } | undefined)?.chatStream;
+    if (!chatStream) throw new Error('chatStream 未被调用');
+    const messages = chatStream.mock.calls[0]?.[0] as
+      | Array<{ role: string; content: string }>
+      | undefined;
+    const system = messages?.find((m) => m.role === 'system');
+    if (!system) throw new Error('system 消息未找到');
+    return system.content;
+  }
+
+  it('cfg.maxToolCalls（主进程按会话解析的预算）注入 system prompt 预算提示，覆盖 AGENT_CONFIG 默认', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig({ maxToolCalls: 25 }),
+      makeConfig({ maxToolCalls: 10 }),
+      makeContext(),
+    );
+
+    const prompt = systemPromptOfFirstCall();
+    expect(prompt).toContain('本任务工具调用上限：25 次');
+    expect(prompt).not.toContain('本任务工具调用上限：10 次');
+  });
+
+  it('dispatchContext.tool_budget 优先于 cfg.maxToolCalls', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig({
+        maxToolCalls: 25,
+        dispatchContext: {
+          fromAssignmentId: 'inst-pm',
+          task_id: 'dispatch-budget',
+          tool_budget: 5,
+        },
+      }),
+      makeConfig({ maxToolCalls: 10 }),
+      makeContext(),
+    );
+
+    const prompt = systemPromptOfFirstCall();
+    expect(prompt).toContain('本任务工具调用上限：5 次');
+    expect(prompt).not.toContain('本任务工具调用上限：25 次');
+  });
+
+  it('cfg.maxToolCalls 缺省 → 沿用 AGENT_CONFIG maxToolCalls（兼容老线协议）', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig(),
+      makeConfig({ maxToolCalls: 10 }),
+      makeContext(),
+    );
+
+    expect(systemPromptOfFirstCall()).toContain('本任务工具调用上限：10 次');
+  });
+
+  it('maxToolCalls=-1（无限）→ 不注入预算提示', async () => {
+    mockProvider([
+      { type: 'text', content: 'done' },
+      { type: 'done', finishReason: 'stop' },
+    ]);
+
+    await runTaskChatLoop(
+      makeTaskConfig({ maxToolCalls: -1 }),
+      makeConfig({ maxToolCalls: 10 }),
+      makeContext(),
+    );
+
+    expect(systemPromptOfFirstCall()).not.toContain('工具调用上限');
+  });
+});
+
 describe('parseConfig taskDriven 字段', () => {
   // 通过环境变量间接测试 parseConfig（parseConfig 不是 export 的，但 main() 用它）
   // 这里直接 import parseConfig 不行（未 export），改为验证 RuntimeConfig 类型 + 行为

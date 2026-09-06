@@ -27,6 +27,7 @@ import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/re
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
 import { finalizeStreamOnCrash } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
+import { resolveMaxToolCalls } from '../settings/crud';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -189,6 +190,21 @@ export class AgentRunner {
     };
     this.activeTasks.set(task.streamSessionId, active);
 
+    // v2.2 修复（会话工具预算接线）：按 executionSessionId 现解析有效预算
+    // （sessions.settings_json.maxToolCalls → global_settings.maxToolCalls），
+    // 每条消息派发时随 task-config 下发——修改会话/全局设置后下一条消息即生效，
+    // 不受 warm runtime AGENT_CONFIG 定型影响。解析失败（settings_json 损坏等）
+    // 不阻塞消息派发：回退子进程 AGENT_CONFIG 默认。
+    let resolvedMaxToolCalls: number | undefined;
+    try {
+      resolvedMaxToolCalls = resolveMaxToolCalls(task.executionSessionId);
+    } catch (err) {
+      logger.warn('工具预算解析失败，回退运行时默认', {
+        executionSessionId: task.executionSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     // 注入 task config 给子进程（子进程据此启动 chat loop）
     child.send({
       type: 'task-config',
@@ -197,6 +213,7 @@ export class AgentRunner {
       body: task.body,
       streamSessionId: task.streamSessionId,
       mentions: task.mentions ?? [],
+      ...(resolvedMaxToolCalls !== undefined ? { maxToolCalls: resolvedMaxToolCalls } : {}),
       ...(task.dispatchContext ? { dispatchContext: task.dispatchContext } : {}),
     });
 
