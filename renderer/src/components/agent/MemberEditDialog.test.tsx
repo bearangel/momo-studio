@@ -421,7 +421,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
     await screen.findByRole('option', { name: 'm2' });
     fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p2' } });
-    // p2 无已启用模型 → 供应商切换后模型清空，此处改为同供应商换 m2
+    // 切 p2 触发 picker 联动重置（模型清空）；再切回 p1 走缓存路径，覆盖重置→重选链
     fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p1' } });
     await screen.findByRole('option', { name: 'm2' });
     fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
@@ -454,6 +454,23 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
     fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(await screen.findByText('Agent 定义不存在: def-1')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('换供应商后模型被清空即保存 → 拦截报错且不调 updateDefinition / 不关窗', async () => {
+    const onClose = vi.fn();
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />);
+    // 等初始模型加载完成
+    await waitFor(() => {
+      expect(screen.getByLabelText('模型名')).toHaveValue('m');
+    });
+    // 切供应商 → picker 联动清空模型（onModelChange('')）
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText('请选择模型供应商与模型')).toBeInTheDocument();
+    expect(updateDefinition).not.toHaveBeenCalled();
+    expect(setMemberDeltasMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 });
