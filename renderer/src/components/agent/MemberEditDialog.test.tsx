@@ -94,6 +94,8 @@ function buildMember(overrides: Partial<WorkspaceAgentMember> = {}): WorkspaceAg
     workspaceId: 'ws-1',
     agentDefinitionId: 'def-1',
     agentUserId: '@bot:server',
+    agentName: '测试 agent',
+    iconEmoji: '',
     createdAt: '',
     hasApiKeyOverride: false,
     lastRunning: true,

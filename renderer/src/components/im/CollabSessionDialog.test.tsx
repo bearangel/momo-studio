@@ -55,6 +55,9 @@ const MEMBER_1: WorkspaceAgentMember = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@coder:local',
+  // v2.2：后端 JOIN definitions 产出的展示字段（不再依赖 renderer defMap）
+  agentName: '编码助手',
+  iconEmoji: '🤖',
   hasApiKeyOverride: false,
   lastRunning: true,
   createdAt: '',
@@ -65,6 +68,8 @@ const MEMBER_2: WorkspaceAgentMember = {
   instanceId: 'inst-2',
   agentDefinitionId: 'def-2',
   agentUserId: '@reviewer:local',
+  agentName: '评审员',
+  iconEmoji: '',
   lastRunning: false,
 };
 
@@ -132,6 +137,18 @@ describe('CollabSessionDialog — 渲染与数据加载', () => {
       expect(loadMembers).toHaveBeenCalledWith('ws-1');
       expect(loadTeams).toHaveBeenCalledWith('ws-1');
     });
+  });
+
+  it('v2.2 回归锁：definitions 未加载（空数组）也显示 agentName——成员行不出现 agentUserId', () => {
+    // 事故场景：用户启动后直达会话区开协作弹窗，agent.store 的 definitions 为空。
+    // 修复前 memberLabel 落到 agentUserId（@coder:local 形式的 ID）；修复后
+    // agentName 由 members 数据面（后端 JOIN）自带，与 definitions 加载时序解耦。
+    useAgentStore.setState({ definitions: [] });
+    render(<CollabSessionDialog onClose={() => {}} />);
+    expect(screen.getByText('编码助手')).toBeInTheDocument();
+    expect(screen.getByText('评审员')).toBeInTheDocument();
+    expect(screen.queryByText('@coder:local')).not.toBeInTheDocument();
+    expect(screen.queryByText('@reviewer:local')).not.toBeInTheDocument();
   });
 
   it('默认「单个 agent」页签，成员行显示名称与在线/离线态', async () => {

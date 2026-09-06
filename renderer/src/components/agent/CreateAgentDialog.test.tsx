@@ -60,6 +60,8 @@ const CREATED_MEMBER: WorkspaceAgentMember = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-9',
   agentUserId: '@new:local',
+  agentName: '新助手',
+  iconEmoji: '',
   hasApiKeyOverride: false,
   lastRunning: false,
   createdAt: '',

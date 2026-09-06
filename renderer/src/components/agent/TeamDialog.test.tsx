@@ -55,6 +55,8 @@ const MEMBER_1: WorkspaceAgentMember = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@coder:local',
+  agentName: '编码助手',
+  iconEmoji: '🤖',
   hasApiKeyOverride: false,
   lastRunning: true,
   createdAt: '',
@@ -65,6 +67,7 @@ const MEMBER_2: WorkspaceAgentMember = {
   instanceId: 'inst-2',
   agentDefinitionId: 'def-2',
   agentUserId: '@reviewer:local',
+  agentName: '评审员',
   lastRunning: false,
 };
 
@@ -73,15 +76,17 @@ const MEMBER_3: WorkspaceAgentMember = {
   instanceId: 'inst-3',
   agentDefinitionId: 'def-3',
   agentUserId: '@tester:local',
+  agentName: '测试员',
 };
 
-/** def 不在 definitions 内（def 未加载场景）→ 成员行 iconEmoji 走 Avatar bot 兜底 */
+/** iconEmoji 为空串（def 未配 emoji）→ 成员行走 Avatar bot 兜底 */
 const MEMBER_4: WorkspaceAgentMember = {
   ...MEMBER_1,
   instanceId: 'inst-4',
   agentDefinitionId: 'def-404',
   agentUserId: '@ghost:local',
   agentName: '幽灵成员',
+  iconEmoji: '',
 };
 
 const EXISTING_TEAM: Team = {
@@ -338,11 +343,11 @@ describe('TeamDialog — 编辑 diff 基准 = 提交时 store 现状（部分失
 });
 
 describe('TeamDialog — v2.1 视觉收敛语义锁', () => {
-  it('成员 def 未加载 → 成员行渲染 Avatar bot 兜底（title=成员名）', async () => {
+  it('成员 iconEmoji 为空串 → 成员行渲染 Avatar bot 兜底（title=成员名）', async () => {
     useAgentStore.setState({ members: [MEMBER_1, MEMBER_2, MEMBER_3, MEMBER_4] });
     render(<TeamDialog onClose={() => {}} />);
     await waitFor(() => expect(loadMembers).toHaveBeenCalledWith('ws-1'));
-    // def-404 不在 definitions → iconEmoji 查不到 → Avatar bot（title=memberLabel 回退 agentName）
+    // iconEmoji 空串（v2.2 后端 JOIN 产出的 def emoji 缺失）→ Avatar bot
     expect(screen.getByTitle('幽灵成员')).toBeInTheDocument();
   });
 

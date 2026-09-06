@@ -33,6 +33,8 @@ const MOCK_MEMBER: WorkspaceAgentMember = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@bot.x.alice:localhost',
+  agentName: '编码助手',
+  iconEmoji: '🤖',
   createdAt: '2026-01-01T00:00:00Z',
   hasApiKeyOverride: false,
   lastRunning: true,

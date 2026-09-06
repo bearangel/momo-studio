@@ -63,6 +63,8 @@ const MEMBER_1: WorkspaceAgentMember = {
   workspaceId: 'ws-1',
   agentDefinitionId: 'def-1',
   agentUserId: '@coder:local',
+  agentName: '编码助手',
+  iconEmoji: '🤖',
   hasApiKeyOverride: false,
   lastRunning: true,
   createdAt: '',
@@ -75,6 +77,7 @@ const MEMBER_2: WorkspaceAgentMember = {
   instanceId: 'inst-2',
   agentDefinitionId: 'def-2',
   agentUserId: '@reviewer:local',
+  agentName: '评审员',
   lastRunning: false,
 };
 

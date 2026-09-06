@@ -70,16 +70,19 @@ export interface WorkspaceAgentMember {
   workspaceId: string;
   agentDefinitionId: string;
   agentUserId: string;
+  /**
+   * 展示名（electron 端 JOIN agent_definitions.name 产出，缺失兜底 agentUserId）。
+   * v2.2 bug 修复：后端数据面产出——此前「renderer 按 definitions 注入」的设计
+   * 从未接线，协作会话/团队/Picker/任务指派等列表在 definitions 未加载时显示 ID。
+   */
+  agentName: string;
+  /** 展示 emoji（JOIN agent_definitions.icon_emoji；无 emoji 时空串） */
+  iconEmoji: string;
   /** 有无 API key override（实际 key 在 keychain） */
   hasApiKeyOverride: boolean;
   /** 用户最近运行意图（true=在线/false=离线）——「agent 在线」的唯一权威源 */
   lastRunning: boolean;
   createdAt: string;
-  /**
-   * UI 展示用的 agent 名称（可选，由 renderer 按 definitions join 注入；
-   * 缺失时回退到 agentUserId。Mention 菜单 / 指派下拉优先用此字段）。
-   */
-  agentName?: string;
 }
 
 /**
