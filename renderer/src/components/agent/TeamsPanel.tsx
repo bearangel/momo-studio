@@ -5,7 +5,7 @@
 // agent.store.deleteTeam（spec §7：仅删定义，已建会话快照无感）。
 // v2.1 P3：token 全量语义化；👥 → Users lucide、👑 → Crown lucide（P2 先例）；
 // leader chip 选中态 accent 形态（surface-active + accent-600/300）。
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Crown, Users } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -17,7 +17,7 @@ import type { Team, WorkspaceAgentMember } from '../../ipc/types';
 
 export function TeamsPanel() {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { teams, definitions, loadTeams, deleteTeam } = useAgentStore();
+  const { teams, loadTeams, deleteTeam } = useAgentStore();
   const [createOpen, setCreateOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
@@ -25,10 +25,8 @@ export function TeamsPanel() {
     if (workspace) void loadTeams(workspace.id);
   }, [workspace, loadTeams]);
 
-  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
-
-  const memberLabel = (member: WorkspaceAgentMember): string =>
-    defMap.get(member.agentDefinitionId)?.name ?? member.agentName ?? member.agentUserId;
+  // v2.2：agentName 由后端 JOIN definitions 产出（loadMembersByTeam 数据面），不依赖 defMap
+  const memberLabel = (member: WorkspaceAgentMember): string => member.agentName;
 
   const handleDelete = async (team: Team): Promise<void> => {
     if (!confirm(`确定删除团队「${team.name}」？已建会话不受影响。`)) return;

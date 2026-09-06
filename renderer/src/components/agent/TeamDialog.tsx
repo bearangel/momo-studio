@@ -11,7 +11,7 @@
 // 成员图标缺省 → Avatar bot（对齐 CollabSessionDialog / MembersPanel 先例）；
 // 当前 leader 行 Crown 标记（TeamsPanel 同款 title="团队 leader"）。
 // 成员 checkbox / leader radio 保留原生 input（P2 Task 15 先例：行内单/多选原生 + aria-label）。
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Crown } from 'lucide-react';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -30,7 +30,7 @@ interface Props {
 
 export function TeamDialog({ editing, onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { members, definitions, loadMembers, createTeam, renameTeam, setLeader, addTeamMember, removeTeamMember } =
+  const { members, loadMembers, createTeam, renameTeam, setLeader, addTeamMember, removeTeamMember } =
     useAgentStore();
 
   const [name, setName] = useState(editing?.name ?? '');
@@ -46,9 +46,8 @@ export function TeamDialog({ editing, onClose }: Props) {
     if (workspace) void loadMembers(workspace.id);
   }, [workspace, loadMembers]);
 
-  const defMap = useMemo(() => new Map(definitions.map((d) => [d.id, d])), [definitions]);
-  const memberLabel = (m: WorkspaceAgentMember): string =>
-    defMap.get(m.agentDefinitionId)?.name ?? m.agentName ?? m.agentUserId;
+  // v2.2：agentName 由后端 JOIN definitions 产出（members 数据面），不依赖 defMap
+  const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
 
   const toggleMember = (instanceId: string, checked: boolean): void => {
     setSelected((cur) => {
@@ -157,7 +156,7 @@ export function TeamDialog({ editing, onClose }: Props) {
                 onChange={(e) => toggleMember(m.instanceId, e.target.checked)}
               />
               <span>
-                {defMap.get(m.agentDefinitionId)?.iconEmoji ?? (
+                {m.iconEmoji || (
                   <Avatar name={memberLabel(m)} bot size="sm" />
                 )}
               </span>

@@ -102,14 +102,14 @@ export function TaskSidebarPanel() {
   const [createOpen, setCreateOpen] = useState(false);
 
   // assignee 下拉选项：从当前 workspace 的 members 派生
-  // （label=agentName 优先，回退 agentUserId，最后 instanceId——确保至少有可读名）
+  // （agentName 由后端 JOIN definitions 产出，v2.2 起恒有值）
   const assigneeOptions = useMemo<AssigneeOption[]>(
     () =>
       members
         .filter((a) => (workspace ? a.workspaceId === workspace.id : true))
         .map((a) => ({
           value: a.instanceId,
-          label: a.agentName ?? a.agentUserId ?? a.instanceId,
+          label: a.agentName,
         })),
     [members, workspace],
   );

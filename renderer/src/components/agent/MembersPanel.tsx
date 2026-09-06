@@ -45,7 +45,7 @@ export function MembersPanel() {
   };
 
   const handleRemove = async (member: WorkspaceAgentMember): Promise<void> => {
-    const name = defMap.get(member.agentDefinitionId)?.name ?? '未知';
+    const name = member.agentName;
     if (!confirm(`确定将「${name}」移出本工作空间？`)) return;
     const result = await removeMember(member.instanceId);
     if (!result.ok) {
