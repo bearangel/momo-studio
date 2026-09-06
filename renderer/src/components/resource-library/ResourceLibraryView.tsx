@@ -12,6 +12,8 @@
 //     AddResourceMenu 触发；前两者 onSuccess → load() 刷新 + 关弹窗
 //   - 导入反馈：store installResource 成功后设置 installNotice（一次性绿色横幅），
 //     store installResource 失败后设置 error（红色横幅覆盖主网格区）。view 端只读渲染。
+//   - 编辑入口：custom agent 资源 → 详情面板「编辑」按钮 → 查 ipc.agent.list
+//     找对应 def → 挂载 DefinitionEditor mode='edit'，onClose 重新 load 刷新
 //   - useEffect 依赖 [load, typeFilter, sourceFilter] —— filter 变化时自动 load；
 //     setTypeFilter/setSourceFilter 也会主动 load（双保险）
 //
@@ -20,6 +22,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Library } from 'lucide-react';
 import { useResourceStore } from '../../stores/resource.store';
+import { ipc } from '../../ipc/client';
 import { Input } from '../ui/Input';
 import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
@@ -29,7 +32,8 @@ import { AddResourceMenu } from './AddResourceMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
-import type { ResourceItem, ResourceFilter } from '../../ipc/types';
+import { DefinitionEditor } from '../agent/DefinitionEditor';
+import type { AgentDefinition, ResourceItem, ResourceFilter } from '../../ipc/types';
 
 /** 第一行：type tab（全部 / Agent / MCP / Skill） */
 const TYPE_TABS: Array<{ key: ResourceFilter['type'] | 'all'; label: string }> = [
@@ -71,6 +75,21 @@ export function ResourceLibraryView() {
   const [registerMcpOpen, setRegisterMcpOpen] = useState(false);
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  // 编辑中的 custom agent 定义（非 null 时挂载 DefinitionEditor）
+  const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
+
+  // 资源 id（custom-agent-<slug>）→ 全局定义查找 → 打开编辑弹窗
+  const handleEditAgent = async (itemId: string): Promise<void> => {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+    const defs = await ipc.agent.list();
+    const def = defs.find((d) => d.source === 'custom' && d.slug === item.slug);
+    if (def) {
+      setEditingDef(def);
+    } else {
+      console.warn('未找到资源对应的 agent 定义', { itemId, slug: item.slug });
+    }
+  };
 
   // filter 变化时自动 load（mount 时 typeFilter/sourceFilter 均为 'all'，触发首次拉取）
   useEffect(() => {
@@ -212,6 +231,7 @@ export function ResourceLibraryView() {
           onClose={() => setSelectedId(null)}
           onInstall={installResource}
           onDelete={deleteResource}
+          onEdit={handleEditAgent}
         />
       )}
 
@@ -239,6 +259,16 @@ export function ResourceLibraryView() {
           source="library"
           onClose={() => {
             setCreateAgentOpen(false);
+            void load();
+          }}
+        />
+      )}
+      {editingDef && (
+        <DefinitionEditor
+          mode="edit"
+          def={editingDef}
+          onClose={() => {
+            setEditingDef(null);
             void load();
           }}
         />

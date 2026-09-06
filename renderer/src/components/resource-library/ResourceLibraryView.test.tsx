@@ -33,8 +33,10 @@ const resourceUploadSkill = vi.fn();
 const mcpStart = vi.fn();
 // DefinitionEditor 在 create 模式挂载时会拉取 provider 列表 + agent 列表（仅 ref 不调）
 const providerList = vi.fn();
+const providerListModels = vi.fn();
 const agentListDefinitions = vi.fn();
 const agentCreateCustom = vi.fn();
+const agentUpdateDefinition = vi.fn();
 
 const mockApi = {
   resource: {
@@ -50,10 +52,12 @@ const mockApi = {
   },
   provider: {
     list: providerList,
+    listModels: providerListModels,
   },
   agent: {
     list: agentListDefinitions,
     createCustom: agentCreateCustom,
+    updateDefinition: agentUpdateDefinition,
   },
 };
 
@@ -95,8 +99,10 @@ beforeEach(() => {
     resourceUploadSkill,
     mcpStart,
     providerList,
+    providerListModels,
     agentListDefinitions,
     agentCreateCustom,
+    agentUpdateDefinition,
   ].forEach((fn) => fn.mockReset());
 
   resourceList.mockResolvedValue([] as ResourceItem[]);
@@ -109,6 +115,10 @@ beforeEach(() => {
   ]);
   mcpStart.mockResolvedValue(undefined);
   providerList.mockResolvedValue([]);
+  providerListModels.mockResolvedValue([
+    { providerId: 'p1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
+  ]);
+  agentUpdateDefinition.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api =
     mockApi;
@@ -394,5 +404,60 @@ describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗
     expect(screen.getByText(/导入失败/)).toHaveTextContent('对端节点可能已离线');
     // installNotice 不应同时出现（错误应清掉陈旧成功提示）
     expect(screen.queryByTestId('install-notice')).not.toBeInTheDocument();
+  });
+});
+
+const CUSTOM_AGENT_ITEM = baseItem({
+  id: 'custom-agent-researcher',
+  source: 'custom',
+  type: 'agent',
+  slug: 'researcher',
+  name: 'Researcher',
+  description: '自定义 agent',
+  installed: true,
+  removable: true,
+  custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'sha256:abc' },
+});
+
+describe('ResourceLibraryView — custom agent 编辑入口', () => {
+  it('custom agent 详情点「编辑」→ 挂载 DefinitionEditor（编辑 agent 定义）', async () => {
+    resourceList.mockResolvedValue([CUSTOM_AGENT_ITEM]);
+    agentListDefinitions.mockResolvedValue([
+      {
+        id: 'def-1',
+        name: 'Researcher',
+        slug: 'researcher',
+        version: '1.0.0',
+        runtime: 'declarative',
+        systemPrompt: 'p',
+        defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
+        source: 'custom',
+        description: '',
+        iconEmoji: '🤖',
+        defaultMcps: [],
+        defaultSkills: [],
+        workspaceId: null,
+        modelProviderId: 'p1',
+        modelName: 'gpt-4o',
+      },
+    ]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('Researcher')).toBeInTheDocument());
+
+    // 打开详情 → 点编辑
+    fireEvent.click(screen.getByText('Researcher'));
+    await waitFor(() => {
+      expect(screen.getAllByText('Researcher').length).toBeGreaterThanOrEqual(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+
+    // DefinitionEditor 弹窗出现（标题「编辑 agent 定义」+ def 名称回填）
+    await waitFor(() => {
+      expect(screen.getByText('编辑 agent 定义')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('Researcher');
+    });
   });
 });

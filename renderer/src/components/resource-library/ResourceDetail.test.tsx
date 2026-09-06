@@ -198,3 +198,38 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe('ResourceDetail - custom agent 编辑按钮', () => {
+  it('custom agent（installed）: 显示「编辑」按钮并触发 onEdit 回调', () => {
+    const onEdit = vi.fn();
+    const item = baseItem({
+      id: 'custom-agent-researcher',
+      source: 'custom',
+      type: 'agent',
+      name: 'Researcher',
+      installed: true,
+      removable: true,
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'sha256:abc' },
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onEdit={onEdit} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(onEdit).toHaveBeenCalledWith('custom-agent-researcher');
+  });
+
+  it('builtin agent: 不显示「编辑」按钮（定义不可改）', () => {
+    render(<ResourceDetail item={baseItem()} onClose={() => {}} onEdit={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+
+  it('custom mcp/skill: 不显示「编辑」按钮', () => {
+    const item = baseItem({
+      id: 'custom-mcp-github',
+      source: 'custom',
+      type: 'mcp',
+      installed: true,
+      removable: true,
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onEdit={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+});

@@ -11,11 +11,13 @@
 //   - installable && !installed     → 显示「安装/导入」按钮（p2p 源文案为「导入」）
 //   - installed && removable        → 显示「删除」按钮（Trash2 图标）
 //   - installed && !removable       → 显示「已安装」静态标记（Check 图标，builtin）
+//   - type=agent && source=custom   → 显示「编辑」按钮（Pencil 图标，调用 onEdit 挂载
+//                                       DefinitionEditor 编辑定义；仅 installed 渲染）
 //
 // v2.1 P3：token 化；类型兜底 emoji → lucide（Bot/Puzzle/Package，iconEmoji 用户数据照渲染）；
-// × 关闭 / 🗑 删除 / ✓ 已安装 → X / Trash2 / Check lucide。
+// × 关闭 / 🗑 删除 / ✓ 已安装 / ✏️ 编辑 → X / Trash2 / Check / Pencil lucide。
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Package, Puzzle, Trash2, X } from 'lucide-react';
+import { Bot, Check, Package, Pencil, Puzzle, Trash2, X } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { SourceBadge } from './SourceBadge';
@@ -26,6 +28,8 @@ interface Props {
   onClose: () => void;
   onDelete?: (id: string) => void;
   onInstall?: (id: string) => void;
+  /** 编辑 custom agent 定义（仅 type=agent && source=custom 显示按钮） */
+  onEdit?: (id: string) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -41,7 +45,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -181,6 +185,17 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall }: Props) {
         {item.installable && !item.installed && onInstall && (
           <Button size="sm" onClick={() => onInstall(item.id)}>
             {item.source === 'p2p' ? '导入' : '安装'}
+          </Button>
+        )}
+        {/* 编辑按钮：仅 custom agent（installed）显示——挂载 DefinitionEditor 编辑定义 */}
+        {item.type === 'agent' && item.source === 'custom' && item.installed && onEdit && (
+          <Button
+            size="sm"
+            onClick={() => onEdit(item.id)}
+            className="inline-flex items-center gap-1"
+          >
+            <Pencil size={12} strokeWidth={1.75} aria-hidden />
+            编辑
           </Button>
         )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}
