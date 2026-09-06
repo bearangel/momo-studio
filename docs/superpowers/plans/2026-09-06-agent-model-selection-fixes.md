@@ -298,6 +298,9 @@ export function ProviderModelPicker({
   }, [loadProviders]);
 
   useEffect(() => {
+    // 清残留 error 必须先于任何 early-return——缓存命中/清空选择路径同样要清掉
+    // 上一个供应商的错误（审查轮修复：否则切回已缓存供应商时旧 error 挂在下方）
+    setError(null);
     if (!providerId) {
       setModels([]);
       return;
@@ -309,7 +312,6 @@ export function ProviderModelPicker({
     }
     let cancelled = false;
     setLoadingModels(true);
-    setError(null);
     ipc.provider
       .listModels(providerId)
       .then((list) => {
