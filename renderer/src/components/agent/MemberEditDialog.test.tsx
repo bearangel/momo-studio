@@ -1,7 +1,7 @@
 // renderer/src/components/agent/MemberEditDialog.test.tsx
 //
 // 成员统一编辑弹窗测试（移植原能力覆盖弹窗的加载/added/removed/保存全量/
-// 重启提示覆盖 + key-dirty 新语义）。三态 checkbox 语义（保存时计算 deltas）：
+// 重启提示覆盖 + 模型区新语义）。三态 checkbox 语义（保存时计算 deltas）：
 //   - 工具 T 在 default 中：value 含 T = 无 delta；value 不含 T = removed delta
 //   - 工具 T 不在 default 中：value 不含 T = 无 delta；value 含 T = added delta
 //
@@ -9,8 +9,9 @@
 // value = (default + deltas.addedX) - deltas.removedX（从已存 deltas 反推）。
 // 保存：addedX = value - default；removedX = default - value（真实 capability-helpers）。
 //
-// key-dirty 语义：key 输入框仅在用户改过（dirty）时才调 updateMemberApiKey——
-// 未编辑 = 不调用（防只改能力时误清 override）；输入后清空 = 调 (instanceId, null)。
+// 模型区（v2.2 P4 fix）：key 区已移除；模型为全局定义属性（写入 agent_definitions），
+// ProviderModelPicker 受控 + 数据自理，保存链 updateDefinition 先于 setMemberDeltas。
+// pendingRestart 条件 = (modelChanged || deltasChanged) && member.lastRunning。
 //
 // Mock 策略（momo-test-rules）：mock 收窄到 IPC 边界（window.api 桩）+
 // store.setState 注入 mock action；deltas 计算/比较走真实 capability-helpers。
@@ -18,17 +19,19 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemberEditDialog } from './MemberEditDialog';
 import { useAgentStore } from '../../stores/agent.store';
+import { useProviderStore } from '../../stores/provider.store';
 import type { WorkspaceAgentMember, AgentDefinition, AssignmentDeltas, WorkspaceAllocation, Workspace } from '../../ipc/types';
 
-// ---- mock IPC 桩（capability tabs / allocation / workspace.get 直接走 ipc） ----
+// ---- mock IPC 桩（capability tabs / allocation / workspace.get / provider / agent 直接走 ipc） ----
 const allocationGet = vi.fn();
 const workspaceGet = vi.fn();
 const resourceList = vi.fn();
+const providerListModels = vi.fn();
+const updateDefinition = vi.fn();
 
-// store action 桩（组件经 useAgentStore 调用）
+// store action 桩（组件经 useAgentStore / useProviderStore 调用）
 const getMemberDeltasMock = vi.fn();
 const setMemberDeltasMock = vi.fn();
-const updateMemberApiKeyMock = vi.fn();
 const stopMemberMock = vi.fn();
 const startMemberMock = vi.fn();
 
@@ -36,6 +39,8 @@ const mockApi = {
   allocation: { get: allocationGet },
   workspace: { get: workspaceGet },
   resource: { list: resourceList },
+  provider: { listModels: providerListModels },
+  agent: { updateDefinition },
 };
 
 const EMPTY_DELTAS: AssignmentDeltas = {
@@ -51,22 +56,42 @@ beforeEach(() => {
   allocationGet.mockReset();
   workspaceGet.mockReset();
   resourceList.mockReset();
+  providerListModels.mockReset();
+  updateDefinition.mockReset();
   getMemberDeltasMock.mockReset();
   setMemberDeltasMock.mockReset();
-  updateMemberApiKeyMock.mockReset();
   stopMemberMock.mockReset();
   startMemberMock.mockReset();
 
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
   resourceList.mockResolvedValue([]);
+  // 默认返回 p1 的两个已启用模型（与 buildDef.modelProviderId='p1' / modelName='m' 对齐）
+  providerListModels.mockResolvedValue([
+    { providerId: 'p1', modelId: 'm', enabled: true, addedAt: 0 },
+    { providerId: 'p1', modelId: 'm2', enabled: true, addedAt: 1 },
+  ]);
+  updateDefinition.mockResolvedValue(undefined);
   getMemberDeltasMock.mockResolvedValue({ ...EMPTY_DELTAS });
   setMemberDeltasMock.mockResolvedValue(undefined);
-  updateMemberApiKeyMock.mockResolvedValue(undefined);
   stopMemberMock.mockResolvedValue(undefined);
   startMemberMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+
+  useProviderStore.setState({
+    providers: [
+      { id: 'p1', name: 'P1', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const },
+      { id: 'p2', name: 'P2', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'openai' as const },
+    ],
+    loading: false,
+    loadProviders: vi.fn().mockResolvedValue(undefined),
+    createProvider: vi.fn(),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    setDefault: vi.fn(),
+    clear: vi.fn(),
+  });
 
   useAgentStore.setState({
     definitions: [],
@@ -79,7 +104,6 @@ beforeEach(() => {
     loadBuiltinSuggestions: vi.fn(),
     addMember: vi.fn(),
     deleteDefinition: vi.fn(),
-    updateMemberApiKey: updateMemberApiKeyMock,
     getMemberDeltas: getMemberDeltasMock,
     setMemberDeltas: setMemberDeltasMock,
     stopMember: stopMemberMock,
@@ -246,7 +270,7 @@ describe('MemberEditDialog — 保存全量', () => {
     expect(deltas.removedTools).toEqual(['read_file']);
   });
 
-  it('取消按钮不触发 setMemberDeltas / updateMemberApiKey，调用 onClose', async () => {
+  it('取消按钮不触发 updateDefinition / setMemberDeltas，调用 onClose', async () => {
     const onClose = vi.fn();
     render(
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
@@ -256,94 +280,8 @@ describe('MemberEditDialog — 保存全量', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(setMemberDeltasMock).not.toHaveBeenCalled();
-    expect(updateMemberApiKeyMock).not.toHaveBeenCalled();
+    expect(updateDefinition).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('MemberEditDialog — key-dirty 语义', () => {
-  it('未动 key 只存能力 → updateMemberApiKey 不被调（防误清 override）', async () => {
-    render(
-      <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByLabelText('bash'));
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
-    });
-    expect(updateMemberApiKeyMock).not.toHaveBeenCalled();
-  });
-
-  it('输入 key 后保存 → updateMemberApiKey(instanceId, key)', async () => {
-    render(
-      <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-new' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(updateMemberApiKeyMock).toHaveBeenCalledTimes(1);
-    });
-    expect(updateMemberApiKeyMock).toHaveBeenCalledWith('inst-1', 'sk-new');
-  });
-
-  it('输入后清空保存 → updateMemberApiKey(instanceId, null)（清除 override）', async () => {
-    render(
-      <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    });
-    // 输入再清空：dirty 仍为 true，提交 trim 后为空 → null
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-x' } });
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(updateMemberApiKeyMock).toHaveBeenCalledTimes(1);
-    });
-    expect(updateMemberApiKeyMock).toHaveBeenCalledWith('inst-1', null);
-  });
-
-  it('key 输入含首尾空白 → trim 后提交', async () => {
-    render(
-      <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: '  sk-trim  ' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(updateMemberApiKeyMock).toHaveBeenCalledTimes(1);
-    });
-    expect(updateMemberApiKeyMock).toHaveBeenCalledWith('inst-1', 'sk-trim');
-  });
-
-  it('hasApiKeyOverride 成员显示 override 提示条；普通成员不显示', async () => {
-    const { unmount } = render(
-      <MemberEditDialog member={buildMember({ hasApiKeyOverride: true })} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByText(/当前使用独立 API key override/)).toBeInTheDocument();
-    });
-    unmount();
-
-    render(
-      <MemberEditDialog member={buildMember({ hasApiKeyOverride: false })} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    });
-    expect(screen.queryByText(/当前使用独立 API key override/)).not.toBeInTheDocument();
   });
 });
 
@@ -367,18 +305,15 @@ describe('MemberEditDialog — 重启提示', () => {
     expect(screen.getByRole('button', { name: '稍后' })).toBeInTheDocument();
   });
 
-  it('agent 运行中 + 仅 key 变化（deltas 无变化）→ 同样显示重启提示', async () => {
-    render(
-      <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
-    );
-    await waitFor(() => {
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-only' } });
+  it('agent 运行中 + 仅模型变化（deltas 无变化）→ 同样显示重启提示', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    // 等模型下拉加载完成
+    await screen.findByRole('option', { name: 'm2' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      expect(updateMemberApiKeyMock).toHaveBeenCalledTimes(1);
+      expect(updateDefinition).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByText(/需重启/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '立即重启' })).toBeInTheDocument();
@@ -459,5 +394,66 @@ describe('MemberEditDialog — 重启提示', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(stopMemberMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('MemberEditDialog — 模型区（全局定义）', () => {
+  it('显示全局影响提示文案与初始模型（def 的 provider/model）', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    expect(screen.getByText(/定义全局共享，模型修改对所有工作空间的同名 agent 生效/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText('模型名')).toHaveValue('m');
+    });
+  });
+
+  it('模型未变化保存 → updateDefinition 不被调用', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByLabelText('bash');
+    fireEvent.click(screen.getByLabelText('bash')); // 只改能力
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
+    });
+    expect(updateDefinition).not.toHaveBeenCalled();
+  });
+
+  it('换模型保存 → updateDefinition(def.id, 新 provider/model) 先于 setMemberDeltas', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByRole('option', { name: 'm2' });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p2' } });
+    // p2 无已启用模型 → 供应商切换后模型清空，此处改为同供应商换 m2
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'p1' } });
+    await screen.findByRole('option', { name: 'm2' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(updateDefinition).toHaveBeenCalledWith({
+        id: 'def-1',
+        modelProviderId: 'p1',
+        modelName: 'm2',
+      });
+    });
+    // 保存链同时落能力 deltas（顺序保证由实现中 await updateDefinition 先于
+    // setMemberDeltasAction 承担——momo-test-rules：断言调用与字段，不做时序细节断言）
+    expect(setMemberDeltasMock).toHaveBeenCalled();
+  });
+
+  it('API Key 区已移除（无 key 输入框）', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByLabelText('bash');
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前使用独立 API key override/)).not.toBeInTheDocument();
+  });
+
+  it('updateDefinition 失败 → error 展示且弹窗不关闭', async () => {
+    updateDefinition.mockRejectedValue(new Error('Agent 定义不存在: def-1'));
+    const onClose = vi.fn();
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />);
+    await screen.findByRole('option', { name: 'm2' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(await screen.findByText('Agent 定义不存在: def-1')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

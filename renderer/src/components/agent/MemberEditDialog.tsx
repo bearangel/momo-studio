@@ -1,33 +1,35 @@
 // renderer/src/components/agent/MemberEditDialog.tsx
 //
-// 成员统一编辑弹窗：将原「更新密钥」与「能力覆盖」两个独立弹窗合并为
-// 单一「编辑」入口。
+// 成员统一编辑弹窗：原「更新密钥」与「能力覆盖」两个独立弹窗合并为单一
+// 「编辑」入口。v2.2 P4 起 API Key 区移除（key 统一在「设置 → 模型服务」
+// 供应商处管理；后端 setMemberApiKeyOverride / keychain 机制保留），改为
+// 模型区（全局定义属性）+ 能力覆盖区。
 //
 // 两个区域：
-//   - API Key 区：password Input + hasApiKeyOverride 提示条 +「留空清除
-//     override 回退供应商 key」说明（沿用原密钥弹窗文案与语义）
+//   - 模型区：ProviderModelPicker 受控，写入 agent_definitions（全局影响，
+//     spec §3.3b）—— def.modelProviderId / def.modelName 修改对所有
+//     工作空间的同名 agent 生效
 //   - 能力覆盖区：CapabilityTabs mode='override'（default = L1∪allocation、
 //     value = applyDeltas 反推，沿用原能力弹窗的加载/合并/保存逻辑）
 //
-// key-dirty 语义（防误清 override）：API key 仅在用户改过输入框（dirty）时
-// 才调用 updateMemberApiKey——初始空输入 + 未编辑 = 不调用，防止只改能力
-// 时把已有 override 误清成 null。
+// 保存链顺序：模型有变化 → ipc.agent.updateDefinition 先于 setMemberDeltas
+// （spec §3.3b：定义修改是先行条件，能力 deltas 是成员级追加）。pendingRestart
+// 条件 = (modelChanged || deltasChanged) && member.lastRunning。
 //
-// 重启提示：保存成功后若（key 或 deltas 有变化）且成员运行中（lastRunning）
+// 重启提示：保存成功后若（模型 或 deltas 有变化）且成员运行中（lastRunning）
 // → 弹内提示「需重启才能生效」，用户可选 [立即重启]（stop + start）或
 // [稍后]（仅关闭）。
 //
 // v2.1 P3：手写 modal 外壳 → Dialog 原子件（P2 Task 14/15 先例）；旧色阶
-// token → 语义 token；ℹ️ → lucide Info（12px 密集行内）；待重启态吞掉
-// Dialog 的 Esc/遮罩关闭（保持原「重启提示期间点遮罩不关闭」语义）。
+// token → 语义 token；待重启态吞掉 Dialog 的 Esc/遮罩关闭（保持原
+// 「重启提示期间点遮罩不关闭」语义）。
 import { useEffect, useMemo, useState } from 'react';
-import { Info } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
-import { Input } from '../ui/Input';
 import { CapabilityTabs } from './CapabilityTabs';
+import { ProviderModelPicker } from './ProviderModelPicker';
 import {
   EMPTY_DELTAS,
   applyDeltas,
@@ -52,14 +54,18 @@ interface Props {
 export function MemberEditDialog({ member, def, onClose }: Props) {
   const getMemberDeltas = useAgentStore((s) => s.getMemberDeltas);
   const setMemberDeltasAction = useAgentStore((s) => s.setMemberDeltas);
-  const updateMemberApiKeyAction = useAgentStore((s) => s.updateMemberApiKey);
   const stopMember = useAgentStore((s) => s.stopMember);
   const startMember = useAgentStore((s) => s.startMember);
 
-  // ---- API Key 区 ----
-  const [apiKey, setApiKey] = useState('');
-  // 用户是否编辑过 key 输入框（dirty 判定：未编辑 = 保存时不调 updateMemberApiKey）
-  const [keyDirty, setKeyDirty] = useState(false);
+  // ---- 模型区（全局定义属性，写入 agent_definitions）----
+  const [modelProviderId, setModelProviderId] = useState(def.modelProviderId ?? '');
+  const [modelName, setModelName] = useState(def.modelName);
+
+  // def 变化时同步模型选择（与 DefinitionEditor 同模式）
+  useEffect(() => {
+    setModelProviderId(def.modelProviderId ?? '');
+    setModelName(def.modelName);
+  }, [def]);
 
   // ---- 能力覆盖区 ----
   // def 默认能力（Layer 1，不含 workspace allocation）
@@ -75,7 +81,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 保存成功 + 成员运行中 + key/deltas 有变化 → 进入「待重启」提示态
+  // 保存成功 + 成员运行中 + 模型/deltas 有变化 → 进入「待重启」提示态
   const [pendingRestart, setPendingRestart] = useState(false);
 
   // 初次挂载：并行拉 allocation + deltas，合并 default 后反推 value
@@ -109,16 +115,21 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     setSaving(true);
     setError(null);
     try {
-      // key 仅在用户改过输入框时提交（trim 后为空 = 清除 override 回退供应商 key）
-      if (keyDirty) {
-        await updateMemberApiKeyAction(member.instanceId, apiKey.trim() || null);
+      // 模型变更走全局定义更新（先于能力 deltas，spec §3.3b）
+      const modelChanged =
+        modelProviderId !== (def.modelProviderId ?? '') || modelName !== def.modelName;
+      if (modelChanged) {
+        if (!modelProviderId || !modelName) {
+          setError('请选择模型供应商与模型');
+          return;
+        }
+        await ipc.agent.updateDefinition({ id: def.id, modelProviderId, modelName });
       }
       const newDeltas = computeDeltas(value, defaultCaps);
       await setMemberDeltasAction(member.instanceId, newDeltas);
       const deltasChanged = !deltasEqual(newDeltas, initialDeltas);
       setInitialDeltas(newDeltas);
-      const changed = keyDirty || deltasChanged;
-      if (changed && member.lastRunning) {
+      if ((modelChanged || deltasChanged) && member.lastRunning) {
         setPendingRestart(true);
       } else {
         onClose();
@@ -159,36 +170,30 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     >
       <div className="flex flex-col gap-3">
         <div className="text-xs text-tertiary">
-          更新 API Key 与能力覆盖（不影响 agent 定义和其他工作空间成员）。
+          更新模型与能力覆盖。模型为全局定义属性，修改对所有工作空间的同名 agent 生效。
         </div>
 
-        {loading && <div className="text-sm text-tertiary">加载中…</div>}
+        {/* 模型区（全局定义属性——写入 agent_definitions）；与能力区解耦，
+            不依赖 allocation，可在加载中即时渲染（picker 自理 listModels）。 */}
+        {!pendingRestart && (
+          <section className="flex flex-col gap-2">
+            <div className="text-sm text-secondary">模型</div>
+            <div className="text-xs text-tertiary">
+              定义全局共享，模型修改对所有工作空间的同名 agent 生效
+            </div>
+            <ProviderModelPicker
+              providerId={modelProviderId}
+              modelId={modelName}
+              onProviderChange={setModelProviderId}
+              onModelChange={setModelName}
+            />
+          </section>
+        )}
+
+        {loading && !pendingRestart && <div className="text-sm text-tertiary">加载中…</div>}
 
         {!loading && !pendingRestart && (
           <>
-            {/* API Key 区 */}
-            <section className="flex flex-col gap-2">
-              {member.hasApiKeyOverride && (
-                <div className="inline-flex items-center gap-1.5 rounded bg-surface-active p-2 text-xs text-accent-600 dark:text-accent-300">
-                  <Info size={12} strokeWidth={1.75} aria-hidden />
-                  当前使用独立 API key override
-                </div>
-              )}
-              <Input
-                label="API Key"
-                type="password"
-                value={apiKey}
-                onChange={(e) => {
-                  setApiKey(e.target.value);
-                  setKeyDirty(true);
-                }}
-                placeholder="留空使用供应商默认 key"
-              />
-              <div className="text-xs text-tertiary">
-                留空清除 override，回退到供应商 key。未修改时保存不会动现有 key。
-              </div>
-            </section>
-
             {/* 能力覆盖区 */}
             <section className="flex flex-col gap-2 border-t border-subtle pt-3">
               <CapabilityTabs
