@@ -10,7 +10,9 @@
 //   - 按 message.id 查 stream.store.get()，streaming 时渲染 AgentStreamBubble
 //   - 已完成（done/failed/aborted）但带富信息（thinking/工具调用/dispatches）时
 //     也走 AgentStreamBubble——从 message_events 聚合重建，重启后一致
-//   - 消息体统一用 react-markdown 渲染（支持 GFM 表格、删除线等）
+//
+// v2.1 渲染收敛：
+//   - 消息体经 MarkdownBody 统一渲染（v2.1 收敛），SafeAnchor/CodeBlock/表格滚动容器全调用点一致
 //
 // v2.1 会话渲染优化：
 //   - 删除本地 SafeAnchor 副本，正文经 MarkdownBody 统一入口（S2 链接拦截一致）

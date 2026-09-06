@@ -38,7 +38,7 @@
 nvm use 20 && npx pnpm@9.0.0 --filter momo-studio-renderer add shiki && npx pnpm@9.0.0 --filter momo-studio-renderer add -D @types/hast
 ```
 
-Expected: 安装成功，`renderer/package.json` 出现 `"shiki": "^3.x"` 与 `"@types/hast"`。若 `@types/hast` 与 react-markdown 传递类型冲突（重复声明），删除 `@types/hast` 并改用 `import type { Element } from 'hast'` 的等价结构本地类型（见 Task 3 备选）。
+Expected: 安装成功，`renderer/package.json` 出现 `"shiki": "^4"` 与 `"@types/hast"`（实际落地为 shiki 4.x，见 `renderer/src/lib/code-highlighter.ts` 的语言 import 表与 shiki 4.x `LanguageRegistration[]` 数组形态对齐）。若 `@types/hast` 与 react-markdown 传递类型冲突（重复声明），删除 `@types/hast` 并改用 `import type { Element } from 'hast'` 的等价结构本地类型（见 Task 3 备选）。
 
 - [ ] **Step 2: 写失败测试**
 
@@ -130,7 +130,7 @@ export function resolveLang(fence: string): ResolvedLang {
 }
 
 /** 语言动态 import 表（LangInput 接受模块 Promise，shiki 内部 await） */
-const langImports: Record<string, () => Promise<{ default: LanguageRegistration }>> = {
+const langImports: Record<string, () => Promise<{ default: LanguageRegistration[] }>> = {
   typescript: () => import('shiki/langs/typescript.mjs'),
   tsx: () => import('shiki/langs/tsx.mjs'),
   javascript: () => import('shiki/langs/javascript.mjs'),
@@ -858,8 +858,28 @@ describe('groupToolSegments', () => {
   it('末尾连续只读工具也合并（flush 兜底）', () => {
     const out = groupToolSegments([{ kind: 'text', text: 'a' }, tool('c1', 'grep'), tool('c2', 'glob')]);
     expect(out).toHaveLength(2);
-    expect(out[1]).toMatchObject({ kind: 'context-group' });
+    expect(out[1]?.kind).toBe('context-group');
   });
+
+  it('todowrite 不打断连续只读段（透明过滤，HIDDEN 判定先于分组且不 flush）', () => {
+    const out = groupToolSegments([
+      tool('c1', 'read_file'),
+      tool('c2', 'todowrite'),
+      tool('c3', 'read_file'),
+    ]);
+    expect(out).toHaveLength(1);
+    const first = out[0];
+    if (first?.kind === 'context-group') {
+      expect(first.items.map((i) => i.callId)).toEqual(['c1', 'c3']);
+    } else {
+      throw new Error('期望 context-group，实际 ' + String(first?.kind));
+    }
+  });
+
+  it('全 todowrite 输入返回空数组', () => {
+    expect(groupToolSegments([tool('c1', 'todowrite'), tool('c2', 'todowrite')])).toEqual([]);
+  });
+});
 });
 ```
 

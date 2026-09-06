@@ -8,10 +8,9 @@
 // task_reply 的完整富信息（状态徽标 / 进度条）改由 message_events 表 +
 // aggregateEvents 在父 agent 气泡的 DispatchChip 内渲染（见 AgentStreamBubble）。
 // 本卡片仅作为防御性兜底：正常流程下 task_reply 消息被 MessageList 过滤、不独立渲染。
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { ImMessage } from '../../ipc/types';
 import { MessageFrame } from './MessageFrame';
+import { MarkdownBody } from './MarkdownBody';
 
 interface Props {
   message: ImMessage;
@@ -38,8 +37,8 @@ export function TaskReplyCard({ message, isSelf, senderName }: Props) {
       </div>
 
       {message.body && (
-        <div className="md-body mt-1.5 text-sm text-primary overflow-hidden min-w-0 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
+        <div className="mt-1.5 text-sm text-primary overflow-hidden min-w-0">
+          <MarkdownBody>{message.body}</MarkdownBody>
         </div>
       )}
     </MessageFrame>
