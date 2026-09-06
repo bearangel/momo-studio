@@ -78,13 +78,15 @@ export function ResourceLibraryView() {
   // 编辑中的 custom agent 定义（非 null 时挂载 DefinitionEditor）
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
 
-  // 资源 id（custom-agent-<slug>）→ 全局定义查找 → 打开编辑弹窗
+  // 资源 id → 全局定义查找 → 打开编辑弹窗。custom agent 的资源 slug 口径 = def.id
+  // （UUID，非 def.slug——见 electron/src/main/resource/custom.ts「agent 用 def.id 作为
+  // slug 部分，def.slug 可能重名」；p2p/resource-transfer.ts 同口径反查）
   const handleEditAgent = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
     try {
       const defs = await ipc.agent.list();
-      const def = defs.find((d) => d.source === 'custom' && d.slug === item.slug);
+      const def = defs.find((d) => d.source === 'custom' && d.id === item.slug);
       if (def) {
         setEditingDef(def);
       } else {

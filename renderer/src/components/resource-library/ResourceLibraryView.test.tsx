@@ -407,11 +407,17 @@ describe('ResourceLibraryView — 双层 tab + 主网格 + 详情面板 + 弹窗
   });
 });
 
+// 真实契约保真（momo-test-rules）：custom agent 的 ResourceItem.slug = def.id（UUID），
+// 不是 def.slug——见 electron/src/main/resource/custom.ts:86（「agent 用 def.id 作为 slug
+// 部分，def.slug 可能重名」）。Task 5 曾用 def.slug 口径造 fixture 导致测试全绿但生产
+// 命中 warn 分支（编辑按钮无反应），此处对齐生产口径。
+const CUSTOM_AGENT_DEF_ID = '367891a8-449c-4675-8d87-1801d51880a8';
+
 const CUSTOM_AGENT_ITEM = baseItem({
-  id: 'custom-agent-researcher',
+  id: `custom-agent-${CUSTOM_AGENT_DEF_ID}`,
   source: 'custom',
   type: 'agent',
-  slug: 'researcher',
+  slug: CUSTOM_AGENT_DEF_ID,
   name: 'Researcher',
   description: '自定义 agent',
   installed: true,
@@ -424,7 +430,7 @@ describe('ResourceLibraryView — custom agent 编辑入口', () => {
     resourceList.mockResolvedValue([CUSTOM_AGENT_ITEM]);
     agentListDefinitions.mockResolvedValue([
       {
-        id: 'def-1',
+        id: CUSTOM_AGENT_DEF_ID,
         name: 'Researcher',
         slug: 'researcher',
         version: '1.0.0',

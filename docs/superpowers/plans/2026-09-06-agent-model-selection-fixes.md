@@ -1210,7 +1210,9 @@ const handleEditAgent = async (itemId: string): Promise<void> => {
   if (!item) return;
   try {
     const defs = await ipc.agent.list();
-    const def = defs.find((d) => d.source === 'custom' && d.slug === item.slug);
+    // custom agent 的资源 slug 口径 = def.id（UUID，非 def.slug——custom.ts:86；
+    // 主机验收修复：slug 口径漂移导致编辑按钮命中 warn 分支无反应）
+    const def = defs.find((d) => d.source === 'custom' && d.id === item.slug);
     if (def) {
       setEditingDef(def);
     } else {
