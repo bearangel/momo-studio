@@ -56,6 +56,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
   const setMemberDeltasAction = useAgentStore((s) => s.setMemberDeltas);
   const stopMember = useAgentStore((s) => s.stopMember);
   const startMember = useAgentStore((s) => s.startMember);
+  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
 
   // ---- 模型区（全局定义属性，写入 agent_definitions）----
   const [modelProviderId, setModelProviderId] = useState(def.modelProviderId ?? '');
@@ -124,6 +125,8 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
           return;
         }
         await ipc.agent.updateDefinition({ id: def.id, modelProviderId, modelName });
+        // 全局定义已变——刷新共享 definitions store，成员行/重开弹窗才能看到新模型（终审 Critical）
+        await loadDefinitions(member.workspaceId);
       }
       const newDeltas = computeDeltas(value, defaultCaps);
       await setMemberDeltasAction(member.instanceId, newDeltas);

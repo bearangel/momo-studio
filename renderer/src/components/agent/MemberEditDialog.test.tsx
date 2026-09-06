@@ -34,6 +34,7 @@ const getMemberDeltasMock = vi.fn();
 const setMemberDeltasMock = vi.fn();
 const stopMemberMock = vi.fn();
 const startMemberMock = vi.fn();
+const loadDefinitionsMock = vi.fn();
 
 const mockApi = {
   allocation: { get: allocationGet },
@@ -62,6 +63,7 @@ beforeEach(() => {
   setMemberDeltasMock.mockReset();
   stopMemberMock.mockReset();
   startMemberMock.mockReset();
+  loadDefinitionsMock.mockReset();
 
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
@@ -76,6 +78,7 @@ beforeEach(() => {
   setMemberDeltasMock.mockResolvedValue(undefined);
   stopMemberMock.mockResolvedValue(undefined);
   startMemberMock.mockResolvedValue(undefined);
+  loadDefinitionsMock.mockResolvedValue(undefined);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -99,7 +102,7 @@ beforeEach(() => {
     builtinSuggestions: {},
     loading: false,
     error: null,
-    loadDefinitions: vi.fn(),
+    loadDefinitions: loadDefinitionsMock,
     loadMembers: vi.fn(),
     loadBuiltinSuggestions: vi.fn(),
     addMember: vi.fn(),
@@ -415,6 +418,29 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
       expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
     });
     expect(updateDefinition).not.toHaveBeenCalled();
+  });
+
+  it('换模型保存成功 → 刷新共享 definitions store（成员行/重开弹窗可见新模型）', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByRole('option', { name: 'm2' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(updateDefinition).toHaveBeenCalledTimes(1);
+    });
+    expect(loadDefinitionsMock).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('模型未变保存 → 不刷新 definitions（避免无谓 IPC）', async () => {
+    render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
+    await screen.findByLabelText('bash');
+    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
+    });
+    expect(loadDefinitionsMock).not.toHaveBeenCalled();
   });
 
   it('换模型保存 → updateDefinition(def.id, 新 provider/model) 先于 setMemberDeltas', async () => {
