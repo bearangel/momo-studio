@@ -18,6 +18,7 @@ import type { AgentDefinition } from '../../ipc/types';
 const createCustom = vi.fn();
 const updateDefinition = vi.fn();
 const resourceList = vi.fn();
+const listModels = vi.fn();
 
 const mockApi = {
   agent: {
@@ -26,6 +27,7 @@ const mockApi = {
     list: vi.fn().mockResolvedValue([]),
   },
   resource: { list: resourceList },
+  provider: { listModels },
 };
 
 beforeEach(() => {
@@ -34,6 +36,9 @@ beforeEach(() => {
   createCustom.mockResolvedValue({});
   updateDefinition.mockResolvedValue({ definition: {}, stoppedInstanceIds: [] });
   resourceList.mockResolvedValue([]);
+  listModels.mockReset().mockResolvedValue([
+    { providerId: 'prov-1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
+  ]);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   useWorkspaceStore.setState({
@@ -119,6 +124,11 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     expect(screen.getByLabelText('bash')).not.toBeDisabled();
   });
 
+  it('模型字段为 ProviderModelPicker 下拉（非手填 Input）', async () => {
+    render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    expect(screen.getByLabelText('模型名').tagName).toBe('SELECT');
+  });
+
   it('提交时 IPC.createCustom 收到 defaultTools = 安全最小集', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     // 填必填字段
@@ -127,9 +137,10 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), {
       target: { value: '系统提示词' },
     });
-    // 选模型供应商（handleProviderChange 会自动填 defaultModel='gpt-4o'）
-    const providerSelect = screen.getByDisplayValue('请选择...') as HTMLSelectElement;
-    fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
+    // 选模型供应商 + 等模型加载 + 选模型
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
 
     fireEvent.click(screen.getByText('创建'));
 
@@ -151,8 +162,9 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), {
       target: { value: 'p' },
     });
-    const providerSelect = screen.getByDisplayValue('请选择...') as HTMLSelectElement;
-    fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
     // 勾 bash
     fireEvent.click(screen.getByLabelText('bash'));
 

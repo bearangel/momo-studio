@@ -10,16 +10,17 @@
 // 面板），非全屏编辑器浮层 → 收敛 Dialog 原子件（P3 Task 5 CreateAgentDialog
 // 同款）：供应商 select → Select 原子件、系统提示词 textarea token 化；
 // 表单点击 stopPropagation 随手写遮罩退役（Dialog 面板与遮罩为兄弟节点）。
+//
+// v2.2 fix：模型字段接入 ProviderModelPicker（与创建侧同构）
 import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
-import { Select } from '../ui/Select';
 import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
+import { ProviderModelPicker } from './ProviderModelPicker';
 import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
 import { defToCapabilities } from '../../lib/capability-helpers';
 import type { AgentDefinition } from '../../ipc/types';
@@ -32,7 +33,6 @@ interface Props {
 
 export function DefinitionEditor({ mode, def, onClose }: Props) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const { providers, loadProviders } = useProviderStore();
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
 
   const isBuiltin = mode === 'configure';
@@ -55,8 +55,6 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { void loadProviders(); }, [loadProviders]);
-
   useEffect(() => {
     if (def && (mode === 'edit' || mode === 'configure')) {
       setName(def.name);
@@ -68,14 +66,6 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setCapabilities(defToCapabilities(def));
     }
   }, [def, mode]);
-
-  const handleProviderChange = (id: string): void => {
-    setProviderId(id);
-    const p = providers.find((x) => x.id === id);
-    if (p?.defaultModel && !modelName) {
-      setModelName(p.defaultModel);
-    }
-  };
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -177,23 +167,12 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           readOnly={readOnly}
         />
 
-        <Select
-          label="模型供应商*"
-          value={providerId}
-          onChange={(e) => handleProviderChange(e.target.value)}
-        >
-          <option value="">请选择...</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}{p.isDefault ? '（默认）' : ''}
-            </option>
-          ))}
-        </Select>
-        <Input
-          label="模型名"
-          value={modelName}
-          onChange={(e) => setModelName(e.target.value)}
-          placeholder="如 gpt-4o, claude-3-opus"
+        <ProviderModelPicker
+          providerId={providerId}
+          modelId={modelName}
+          onProviderChange={setProviderId}
+          onModelChange={setModelName}
+          disabled={readOnly}
         />
 
         {mode === 'create' && (
