@@ -3,6 +3,11 @@
 // 测试 runChatLoop 的流式 chunk 发送、预算管理、abort 逻辑。
 // 不测完整 Matrix 集成——mock createLLMProvider 的 chatStream + MatrixClient + process.send。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -443,9 +448,33 @@ describe('formatBudgetHint', () => {
 
 describe('dispatch 共享预算扣减', () => {
   const originalSend = process.send;
+  /** 会话边界校验（2026-09-07 修复）要求真实 session_members 行——seed 的会话 id */
+  let boundarySessId = '';
 
   beforeEach(() => {
     sentChunks.length = 0;
+    // executeDispatch 会话边界校验需真实 DB：seed ws + agent 链 + 多成员会话
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-stream-boundary-'));
+    process.env.AP_USER_DATA_DIR = tmp;
+    runMigrations();
+    const db = getDb();
+    db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+    for (const inst of ['inst-bot', 'inst-researcher']) {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+            default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+         VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+      ).run(inst, inst, inst);
+      db.prepare(
+        `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+         VALUES (?, 'ws', ?, ?)`,
+      ).run(inst, inst, `agent-${inst}`);
+    }
+    const sess = insertSession({ workspaceId: 'ws', title: 'boundary' });
+    addSessionMember(sess.id, 'inst-bot', true);
+    addSessionMember(sess.id, 'inst-researcher', false);
+    boundarySessId = sess.id;
     process.send = ((msg: unknown): boolean => {
       sentChunks.push(msg);
       return true;
@@ -454,6 +483,9 @@ describe('dispatch 共享预算扣减', () => {
 
   afterEach(() => {
     process.send = originalSend;
+    closeDb();
+    fs.rmSync(process.env.AP_USER_DATA_DIR ?? '', { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('executeDispatch + handleTaskReply 正确传递 toolCallsUsed', async () => {
@@ -462,7 +494,9 @@ describe('dispatch 共享预算扣减', () => {
       subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
-    const dispatchPromise = executeDispatch('researcher', '帮我查资料', config, 9);
+    const dispatchPromise = executeDispatch(
+      'researcher', '帮我查资料', config, 9, undefined, undefined, boundarySessId,
+    );
 
     const dispatchContent = findInternalEventContent('io.momo-studio.dispatch') as {
       task_id: string;
@@ -484,7 +518,9 @@ describe('dispatch 共享预算扣减', () => {
       subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'Research' }],
     });
 
-    const dispatchPromise = executeDispatch('researcher', '任务', config);
+    const dispatchPromise = executeDispatch(
+      'researcher', '任务', config, undefined, undefined, undefined, boundarySessId,
+    );
 
     const dispatchContent = findInternalEventContent('io.momo-studio.dispatch') as {
       task_id: string;
@@ -502,12 +538,37 @@ describe('dispatch 共享预算扣减', () => {
 
 describe('v1.4 嵌套：dispatch 流式 chip', () => {
   const originalSend = process.send;
+  /** seed 会话的真实 id（runChatLoop 以它为 roomId = executionSessionId） */
+  let nestedSessId = '';
 
   beforeEach(() => {
     sentChunks.length = 0;
     vi.mocked(createLLMProvider).mockReset();
     mockProviderOverride = null;
     __setMemoryProviderForTest(stubMemoryProvider);
+    // executeDispatch 会话边界校验需真实 DB：seed ws + agent 链 + 多成员会话
+    // （会话 id = runChatLoop 的 roomId '!room:localhost'——runtime 用它作 executionSessionId）
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-nested-boundary-'));
+    process.env.AP_USER_DATA_DIR = tmp;
+    runMigrations();
+    const db = getDb();
+    db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+    for (const inst of ['inst-bot', 'inst-researcher']) {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+            default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+         VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+      ).run(inst, inst, inst);
+      db.prepare(
+        `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+         VALUES (?, 'ws', ?, ?)`,
+      ).run(inst, inst, `agent-${inst}`);
+    }
+    const sess = insertSession({ workspaceId: 'ws', title: 'nested' });
+    addSessionMember(sess.id, 'inst-bot', true);
+    addSessionMember(sess.id, 'inst-researcher', false);
+    nestedSessId = sess.id;
     process.send = ((msg: unknown): boolean => {
       sentChunks.push(msg);
       return true;
@@ -517,6 +578,9 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    closeDb();
+    fs.rmSync(process.env.AP_USER_DATA_DIR ?? '', { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('dispatch tool_call chunk 携带 isDispatch + subStreamSessionId + subAgent 信息', async () => {
@@ -558,7 +622,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: '研究员' }],
     });
 
-    await runChatLoop('!room:localhost', '帮我查资料', config, makeContext());
+    await runChatLoop(nestedSessId, '帮我查资料', config, makeContext());
 
     const chunks = streamChunks();
     const toolCallChunk = chunks.find(
@@ -609,7 +673,7 @@ describe('v1.4 嵌套：dispatch 流式 chip', () => {
       subAgents: [{ slug: 'researcher', assignmentId: 'inst-researcher', description: 'R' }],
     });
 
-    await runChatLoop('!room:localhost', 'hi', config, makeContext());
+    await runChatLoop(nestedSessId, 'hi', config, makeContext());
 
     const chunks = streamChunks();
     const toolResultChunk = chunks.find(

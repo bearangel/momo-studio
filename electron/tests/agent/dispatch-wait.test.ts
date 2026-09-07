@@ -6,12 +6,24 @@
 // 用户所在会话的 dispatch chip 反查不到子流，展开区永远为空
 // （用户在普通会话中测试时复现；容器 harness sess-chat 复现实证）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 import { executeDispatch } from '../../src/main/agent/dispatch-wait';
 import { INTERNAL_EVENT_MSG, type InternalEventMsg } from '../../src/main/agent/internal-event';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 
+const tmpRoot = path.join(
+  os.tmpdir(),
+  `ap-dispatch-wait-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+
 const sentEvents: InternalEventMsg[] = [];
 const originalSend = process.send;
+/** beforeEach seed 的会话 id（insertSession 自生成 uuid，测试体经此引用） */
+let sessChatId = '';
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
@@ -38,6 +50,31 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
 
 describe('executeDispatch 会话路由（P0-8）', () => {
   beforeEach(() => {
+    // 会话边界校验（2026-09-07 修复）要求真实 session_members 行：
+    // seed ws + agent 链 + 会话 sess-chat（inst-pm leader + 两成员）
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    const db = getDb();
+    db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+    for (const inst of ['inst-pm', 'inst-sub', 'inst-worker']) {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+            default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+         VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+      ).run(inst, inst, inst);
+      db.prepare(
+        `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+         VALUES (?, 'ws', ?, ?)`,
+      ).run(inst, inst, `agent-${inst}`);
+    }
+    const sess = insertSession({ workspaceId: 'ws', title: 'chat' });
+    addSessionMember(sess.id, 'inst-pm', true);
+    addSessionMember(sess.id, 'inst-sub', false);
+    addSessionMember(sess.id, 'inst-worker', false);
+    sessChatId = sess.id;
+
     sentEvents.length = 0;
     process.send = ((msg: unknown): boolean => {
       const m = msg as InternalEventMsg;
@@ -48,17 +85,20 @@ describe('executeDispatch 会话路由（P0-8）', () => {
 
   afterEach(() => {
     process.send = originalSend;
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('dispatch 事件发往当前执行会话（executionSessionId），而非 config.teamSessionId', async () => {
     const controller = new AbortController();
-    const p = executeDispatch('ui', '任务', makeConfig(), undefined, 'ss-sub', 'ss-pm', 'sess-chat', controller.signal).catch(() => null);
+    const p = executeDispatch('ui', '任务', makeConfig(), undefined, 'ss-sub', 'ss-pm', sessChatId, controller.signal).catch(() => null);
     controller.abort();
     await p;
 
     const dispatchEvt = sentEvents.find((e) => e.eventType === 'io.momo-studio.dispatch');
     expect(dispatchEvt).toBeDefined();
-    expect(dispatchEvt!.sessionId).toBe('sess-chat');
+    expect(dispatchEvt!.sessionId).toBe(sessChatId);
     expect(dispatchEvt!.sessionId).not.toBe('sess-team');
     // P0-7 字段同步携带
     expect(dispatchEvt!.content.sub_stream_session_id).toBe('ss-sub');
@@ -67,13 +107,13 @@ describe('executeDispatch 会话路由（P0-8）', () => {
 
   it('abort_dispatch 事件同样发往当前执行会话', async () => {
     const controller = new AbortController();
-    const p = executeDispatch('ui', '任务', makeConfig(), undefined, 'ss-sub', 'ss-pm', 'sess-chat', controller.signal).catch(() => null);
+    const p = executeDispatch('ui', '任务', makeConfig(), undefined, 'ss-sub', 'ss-pm', sessChatId, controller.signal).catch(() => null);
     controller.abort();
     await p;
 
     const abortEvt = sentEvents.find((e) => e.eventType === 'io.momo-studio.abort_dispatch');
     expect(abortEvt).toBeDefined();
-    expect(abortEvt!.sessionId).toBe('sess-chat');
+    expect(abortEvt!.sessionId).toBe(sessChatId);
   });
 
   it('minor-10 回归锁：reply 到达 settle 后再触发 abort → 不再发 abort_dispatch / 无 unhandledRejection', async () => {
@@ -83,7 +123,7 @@ describe('executeDispatch 会话路由（P0-8）', () => {
       subAgents: [{ slug: 'worker', assignmentId: 'inst-worker', description: '执行者' }],
     });
 
-    const p = executeDispatch('worker', '干活', config, 5, 'ss-sub', 'ss-pm', 'sess-chat', controller.signal);
+    const p = executeDispatch('worker', '干活', config, 5, 'ss-sub', 'ss-pm', sessChatId, controller.signal);
 
     // 从 sentEvents 取 dispatch 的 task_id
     const dispatchEvt = sentEvents.find((e) => e.eventType === 'io.momo-studio.dispatch');

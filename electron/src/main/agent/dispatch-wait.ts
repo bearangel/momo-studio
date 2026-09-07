@@ -19,6 +19,7 @@ import {
 } from './dispatch';
 import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
 import type { RuntimeConfig } from './runtime-config';
+import { getDb } from '../storage/db';
 
 /** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
 const DISPATCH_STAGE_TIMEOUTS_MS = [180_000, 360_000];
@@ -62,6 +63,34 @@ interface PendingReply {
 const pendingReplies = new Map<string, PendingReply>();
 
 /**
+ * 会话边界校验（spec §4.7 会话语义的执行时修正，2026-09-07 主机报告）：
+ * dispatch 快照是实例级（跨该实例所有 leader 会话的并集，spawn 时定型），
+ * 但 dispatch 只在「当前会话」内合法——单成员快速会话中即使带着工具也不得委派。
+ * 三个条件：会话有效成员数 > 1；自己是该会话 leader；目标在该会话成员中。
+ */
+function assertSessionDispatchAllowed(
+  executionSessionId: string | undefined,
+  config: RuntimeConfig,
+  targetAssignmentId: string,
+): void {
+  if (!executionSessionId) {
+    throw new Error('dispatch 缺少当前会话上下文（executionSessionId 为空），已拒绝');
+  }
+  const rows = getDb()
+    .prepare('SELECT instance_id, is_leader FROM session_members WHERE session_id = ?')
+    .all(executionSessionId) as Array<{ instance_id: string; is_leader: number }>;
+  const me = rows.find((r) => r.instance_id === config.agentAssignmentId);
+  if (!me) throw new Error(`你不是会话 ${executionSessionId} 的成员，无委派能力`);
+  if (rows.length <= 1) {
+    throw new Error('当前会话是单成员会话（如快速会话），无委派能力——请直接自行完成任务');
+  }
+  if (me.is_leader !== 1) throw new Error('你在当前会话中不是 leader，无委派能力');
+  if (!rows.some((r) => r.instance_id === targetAssignmentId)) {
+    throw new Error('目标 agent 不是当前会话成员，不能跨会话委派');
+  }
+}
+
+/**
  * 主 agent 执行 dispatch：<slug> 工具——经内部事件桥发送 dispatch 消息
  * （child IPC → internal-event-bridge → RouterService.routeDispatch），
  * 然后等待对应 task_id 的 task_reply（渐进式超时）。
@@ -97,6 +126,9 @@ export async function executeDispatch(
 ): Promise<{ body: string; toolCallsUsed: number }> {
   const sub = config.subAgents.find((s) => s.slug === subSlug);
   if (!sub) throw new Error(`未知子 agent: ${subSlug}`);
+
+  // 会话边界（拒绝时 throw → 工具错误返回 LLM，不发事件不注册 pending）
+  assertSessionDispatchAllowed(executionSessionId, config, sub.assignmentId);
 
   trace('→ dispatch', { target: subSlug, task: `${task.length}字`, budget: toolBudget });
 

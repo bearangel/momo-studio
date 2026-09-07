@@ -12,8 +12,12 @@
 //   （串行下 B 的 dispatch 事件根本不会在 A 回执前发出）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
@@ -230,16 +234,45 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
 
 describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
   const originalSend = process.send;
+  /** seed 会话的真实 id（runChatLoop 以它为 roomId = executionSessionId，会话边界校验用） */
+  let parallelSessId = '';
 
   beforeEach(() => {
     sentChunks.length = 0;
     vi.mocked(createLLMProvider).mockReset();
     __setMemoryProviderForTest(stubMemoryProvider);
+    // executeDispatch 会话边界校验（2026-09-07 修复）需真实 session_members 行：
+    // seed ws + agent 链 + 多成员会话（inst-bot leader + researcher / writer）
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-parallel-boundary-'));
+    process.env.AP_USER_DATA_DIR = tmp;
+    runMigrations();
+    const db = getDb();
+    db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+    for (const inst of ['inst-bot', 'inst-researcher', 'inst-writer']) {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+            default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+         VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+      ).run(inst, inst, inst);
+      db.prepare(
+        `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+         VALUES (?, 'ws', ?, ?)`,
+      ).run(inst, inst, `agent-${inst}`);
+    }
+    const sess = insertSession({ workspaceId: 'ws', title: 'parallel' });
+    addSessionMember(sess.id, 'inst-bot', true);
+    addSessionMember(sess.id, 'inst-researcher', false);
+    addSessionMember(sess.id, 'inst-writer', false);
+    parallelSessId = sess.id;
   });
 
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    closeDb();
+    fs.rmSync(process.env.AP_USER_DATA_DIR ?? '', { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('同轮两个 dispatch 并发执行——B 的派发事件先于 A 的结果（串行实现必红）', async () => {
@@ -259,7 +292,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-writer': { delayMs: 10, body: 'B 结果' },
     });
 
-    await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+    await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     expect(idxOfDispatchEvent('inst-writer')).toBeGreaterThanOrEqual(0);
     expect(idxOfDispatchEvent('inst-writer')).toBeLessThan(idxOfChunk('tool_result', 'cA'));
@@ -281,7 +314,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-writer': { delayMs: 10, body: 'B 结果' },
     });
 
-    await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+    await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     const firstResultIdx = Math.min(
       idxOfChunk('tool_result', 'cA'),
@@ -309,7 +342,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-writer': { delayMs: 10, body: 'B 结果' },
     });
 
-    await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+    await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     const calls = chatStreamCalls();
     const toolMsgs = calls[1]!.messages.filter((m) => m.role === 'tool');
@@ -333,7 +366,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
     });
 
     await runChatLoop(
-      '!room:localhost',
+      parallelSessId,
       '并行查',
       makeMainConfig({ maxToolCalls: 5 }),
       makeContext(),
@@ -371,7 +404,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
     });
 
     const result = await runChatLoop(
-      '!room:localhost',
+      parallelSessId,
       '并行查',
       makeMainConfig({ maxToolCalls: 1 }),
       makeContext(),
@@ -412,7 +445,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       },
     );
 
-    const result = await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+    const result = await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     expect(result).toBe('(中断)');
     // 中断不回填任何 tool result（防「中断-重试」死循环，spec §6.1）
@@ -438,7 +471,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-writer': { delayMs: 50, body: 'B 结果' },
     });
 
-    await runChatLoop('!room:localhost', '并行查', makeMainConfig(), makeContext());
+    await runChatLoop(parallelSessId, '并行查', makeMainConfig(), makeContext());
 
     // A 失败：失败 chip + 失败文案回填；B 不受影响：成功 chip
     const resultOf = (callId: string): { success: boolean; subStatus?: string } =>
@@ -473,7 +506,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-writer': { delayMs: 10, body: 'B 结果' },
     });
 
-    await runChatLoop('!room:localhost', '混合任务', makeMainConfig(), makeContext());
+    await runChatLoop(parallelSessId, '混合任务', makeMainConfig(), makeContext());
 
     // 两段各长 1（A 单独一段、B 单独一段），read_file 原位串行——回填顺序不变
     const calls = chatStreamCalls();
@@ -509,7 +542,7 @@ describe('dispatch 同轮并发执行（spec 2026-08-25）', () => {
       'inst-researcher': { delayMs: 10, body: 'ok' },
     });
 
-    const result = await runChatLoop('!room:localhost', '重复任务', makeMainConfig(), makeContext());
+    const result = await runChatLoop(parallelSessId, '重复任务', makeMainConfig(), makeContext());
 
     // 第 3 个成员在段扫描时命中重复检测（窗口内同签名计数 = 3）→ 段截断为前 2 个
     expect(dispatched).toEqual(['inst-researcher', 'inst-researcher']);

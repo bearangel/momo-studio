@@ -21,9 +21,14 @@
 // dispatch 经内部事件桥、最终消息由 chunk 路径落盘），调用签名改为 (cfg, config, ctx)。
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -658,6 +663,8 @@ describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
 
 describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）', () => {
   const originalSend = process.send;
+  /** 会话边界校验（2026-09-07 修复）要求真实 session_members 行——seed 的会话 id */
+  let boundarySessId = '';
 
   beforeEach(() => {
     sentChunks.length = 0;
@@ -665,6 +672,28 @@ describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）',
     vi.mocked(createLLMProvider).mockReset();
     mockProviderOverride = null;
     __setMemoryProviderForTest(stubMemoryProvider);
+    // executeDispatch 会话边界校验需真实 DB：seed ws + agent 链 + 多成员会话
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-rtd-boundary-'));
+    process.env.AP_USER_DATA_DIR = tmp;
+    runMigrations();
+    const db = getDb();
+    db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+    for (const inst of ['inst-bot', 'inst-worker']) {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+            default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+         VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+      ).run(inst, inst, inst);
+      db.prepare(
+        `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+         VALUES (?, 'ws', ?, ?)`,
+      ).run(inst, inst, `agent-${inst}`);
+    }
+    const sess = insertSession({ workspaceId: 'ws', title: 'boundary' });
+    addSessionMember(sess.id, 'inst-bot', true);
+    addSessionMember(sess.id, 'inst-worker', false);
+    boundarySessId = sess.id;
     // executeDispatch 经 process.send 发 dispatch 内部事件——mock 捕获即可（不路由）
     process.send = ((msg: unknown): boolean => {
       const m = msg as { type?: string };
@@ -680,6 +709,9 @@ describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）',
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    closeDb();
+    fs.rmSync(process.env.AP_USER_DATA_DIR ?? '', { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('把 camelCase 通知转成 task_reply content 并 resolve 对应的 pending dispatch', async () => {
@@ -688,7 +720,11 @@ describe('handleTaskReplyIpc（PM 侧 task-reply IPC 消费，Task 13 A 线）',
       subAgents: [{ slug: 'worker', assignmentId: 'inst-worker', description: '执行者' }],
     });
 
-    const dispatchPromise = executeDispatch('worker', '干活', config, 5);
+    const dispatchPromise = executeDispatch(
+      'worker', '干活', config, 5, undefined, undefined, boundarySessId,
+    ).catch((err: Error) => {
+      throw err;
+    });
 
     // 从捕获的内部事件里取 dispatch 的 task_id（子进程侧不可预知）
     const dispatchEvt = sentIpc.find(

@@ -47,6 +47,8 @@ import {
   type TaskConfig,
 } from '../../src/main/agent/runtime-entry';
 import { executeDispatch, handleTaskReply, handleTaskReplyIpc } from '../../src/main/agent/dispatch-wait';
+import { runMigrations, getDb } from '../../src/main/storage/db';
+import { addSessionMember } from '../../src/main/storage/sessions/repo';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { RouterService } from '../../src/main/agent/router-service';
@@ -174,7 +176,8 @@ function mkPmChild(pmConfig: RuntimeConfig): TestChild {
       const m = msg as { type?: string };
       if (m.type === 'task-config') {
         // 模拟 PM runtime：LLM 选中 dispatch:worker 工具 → 真实 executeDispatch
-        void executeDispatch('worker', '写报告', pmConfig, 5, 'pm-stream-1')
+        // （executionSessionId = TEAM_SESSION——会话边界校验按它查成员快照）
+        void executeDispatch('worker', '写报告', pmConfig, 5, 'pm-stream-1', undefined, TEAM_SESSION)
           .then((r) => {
             dispatchResult = r;
           })
@@ -238,6 +241,33 @@ const tmpRoot = path.join(
 );
 fs.mkdirSync(tmpRoot, { recursive: true });
 process.env.AP_USER_DATA_DIR = tmpRoot;
+
+// executeDispatch 会话边界校验（2026-09-07 修复）需真实 session_members 行：
+// 跑 migrations + seed ws-1 / agent 链 / 会话 TEAM_SESSION（PM leader + SUB 成员）。
+// TEAM_SESSION 是固定 id（裸 INSERT；insertSession 自生成 uuid 无法指定）。
+runMigrations();
+{
+  const db = getDb();
+  db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-1', 'T', '/tmp', '@o')`).run();
+  for (const inst of ['inst-pm', 'inst-sub']) {
+    db.prepare(
+      `INSERT INTO agent_definitions
+         (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+          default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+    ).run(inst, inst, inst);
+    db.prepare(
+      `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES (?, 'ws-1', ?, ?)`,
+    ).run(inst, inst, `agent-${inst}`);
+  }
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
+     VALUES (?, 'ws-1', '链路', 0, 'chat', NULL, ?, ?)`,
+  ).run(TEAM_SESSION, Date.now(), Date.now());
+  addSessionMember(TEAM_SESSION, 'inst-pm', true);
+  addSessionMember(TEAM_SESSION, 'inst-sub', false);
+}
 
 describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 → PM resolve）', () => {
   let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
