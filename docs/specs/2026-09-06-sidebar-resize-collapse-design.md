@@ -1,7 +1,7 @@
 # 统一侧边栏宽度调整与完全收起 — 设计文档
 
-- **日期**：2026-09-06
-- **状态**：设计已批准（交互预览会话确认），待实施
+- **日期**：2026-09-06（2026-09-07 反馈修订：收起状态按视图独立、移除拖拽宽度角标）
+- **状态**：已实施并通过终审 + 反馈修订
 - **范围**：renderer 工作区（UI 交互增强，无主进程 / IPC 改动）
 
 ## 1. 背景与目标
@@ -22,10 +22,10 @@ v2.0 P2 引入的统一侧边栏（`Sidebar.tsx`）展开宽度硬编码 260px�
 
 | # | 决策 | 备注 |
 |---|---|---|
-| D1 | 拖拽调宽，clamp **200–480px**，默认 260px | 到边界显示「最小/最大」提示 |
+| D1 | 拖拽调宽，clamp **200–480px**，默认 260px | 到边界钳制（修订：移除宽度角标提示） |
 | D2 | 收起 = **完全消失**（组件 return null） | 废弃现有 48px 图标轨形态 |
 | D3 | 恢复按钮 = **顶行内联停靠**（预览方案 A） | 作为各视图主区顶行第一个元素参与布局，零遮挡 |
-| D4 | 三视图**独立宽度** + localStorage 持久化；`sidebarCollapsed` 一并持久化 | key `ui.sidebar.v1` |
+| D4 | 三视图**独立宽度** + localStorage 持久化；`sidebarCollapsed` 亦**按视图独立**并持久化（修订） | key `ui.sidebar.v1` |
 | D5 | 保留 `Ctrl/Cmd+B`；双击分隔条重置该视图默认 260px；活动栏点击当前视图图标恢复 | demo 中验证过的交互全集 |
 
 ## 4. 现状（改动基线）
@@ -50,7 +50,10 @@ export const SIDEBAR_WIDTH_MAX = 480;
 export const SIDEBAR_WIDTH_DEFAULT = 260;
 
 interface UiState {
-  // …现有 activeView / sidebarCollapsed / toggleSidebar 不变…
+  // …现有 activeView / setActiveView 不变…
+  /** 各视图独立收起状态（修订：三视图互不影响） */
+  sidebarCollapsed: Record<SidebarViewKey, boolean>;
+  toggleSidebar: (view: SidebarViewKey) => void;
   /** 各视图独立宽度（px），越界值在 setSidebarWidth 内钳制 */
   sidebarWidths: Record<SidebarViewKey, number>;
   setSidebarWidth: (view: SidebarViewKey, width: number) => void;
@@ -59,22 +62,23 @@ interface UiState {
 
 **持久化**（手写，跟随 `file.store` 惯例）：
 
-- key：`ui.sidebar.v1`，值 `{ sidebarWidths: Record<SidebarViewKey, number>, sidebarCollapsed: boolean }`
-- 读：store 创建时读一次；解析失败 / 字段缺失 / 单项 NaN 或超 `[MIN, MAX]` 范围 → 该项回默认 260；`sidebarCollapsed` 缺失回 `false`
-- 写：`toggleSidebar` 与 `setSidebarWidth` 内写（try/catch 静默，写失败不影响内存状态）
+- key：`ui.sidebar.v1`，值 `{ sidebarWidths: Record<SidebarViewKey, number>, sidebarCollapsed: Record<SidebarViewKey, boolean> }`
+- 读：store 创建时读一次；解析失败 / 字段缺失 / 宽度单项 NaN 或超 `[MIN, MAX]` 范围 → 该项回默认 260；收起单项非 `true` → 该视图回 `false`
+- **旧数据迁移**：修订前 `sidebarCollapsed` 为共享 boolean——读取时按同值迁移到三视图（true → 三视图均收起）
+- 写：`toggleSidebar(view)` 与 `setSidebarWidth` 内写（try/catch 静默，写失败不影响内存状态）
 
 ### 5.2 组件改动（逐文件）
 
 | 文件 | 改动 |
 |---|---|
 | `layout/Sidebar.tsx` | 只负责**展开态**：宽度改 props 驱动；顶部新增头部行（§5.5）；右缘新增 4px 拖拽分隔条；收起判定上移到 ViewSidebar。props 调整：移除 `icon` / `onToggle` / `collapsed`，保留 `label`，新增 `width: number`、`onWidthCommit: (width: number) => void`、`onCollapse: () => void` |
-| `layout/ViewSidebar.tsx` | `sidebarCollapsed` 为 true 时 `return null`（完全消失）；否则从 store 取 `sidebarWidths[activeView]` 传给 `Sidebar`，`onWidthCommit` 绑定 `setSidebarWidth(activeView, …)` |
-| `layout/SidebarRestoreButton.tsx`（新，~30 行） | 收起恢复按钮：`!collapsed \|\| activeView ∉ SIDEBAR_VIEWS` 时 return null；否则渲染 28×28 icon-btn（lucide `PanelLeftOpen`，size 16 / strokeWidth 1.75），`aria-label="展开侧边栏"`，`title="展开侧边栏（Ctrl/Cmd+B）"`，点击 `toggleSidebar()`。自读 store，无 props |
+| `layout/ViewSidebar.tsx` | 当前视图自己的 `sidebarCollapsed[activeView]` 为 true 时 `return null`（完全消失，按视图独立）；否则从 store 取 `sidebarWidths[activeView]` 传给 `Sidebar`，`onWidthCommit` 绑定 `setSidebarWidth(activeView, …)`，`onCollapse` 绑定 `toggleSidebar(activeView)` |
+| `layout/SidebarRestoreButton.tsx`（新，~30 行） | 收起恢复按钮：当前视图非收起或 `activeView ∉ SIDEBAR_VIEWS` 时 return null；否则渲染 28×28 icon-btn（lucide `PanelLeftOpen`，size 16 / strokeWidth 1.75），`aria-label="展开侧边栏"`，`title="展开侧边栏（Ctrl/Cmd+B）"`，点击 `toggleSidebar(activeView)`。自读 store，无 props |
 | `editor/CodeEditor.tsx` | `<SidebarRestoreButton />` 插入 tab 栏（`role="tablist"` flex 容器）**第一个子元素**位；`tabs.length === 0` 空态分支补一个顶行（同 tab 行高度、`border-b border-subtle`）容纳按钮 |
 | `layout/MiddlePanel.tsx` | im 分支会话头部行（「会话名 + 工具上限徽标 + 导出」那行）**首位**插入 `<SidebarRestoreButton />` |
 | `task-board/TaskBoardView.tsx` | 顶部状态栏行（「任务看板 + 并发」）**首位**插入 `<SidebarRestoreButton />` |
-| `layout/ActivityBar.tsx` | `onSelect` 包一层：点击**当前视图**且 `sidebarCollapsed` 且该视图 ∈ `SIDEBAR_VIEWS` → `toggleSidebar()`（恢复）；否则 `setActiveView(view)` |
-| `layout/MainLayout.tsx` | 无改动 |
+| `layout/ActivityBar.tsx` | `onSelect` 包一层：点击**当前视图**且该视图 ∈ `SIDEBAR_VIEWS` 且 `sidebarCollapsed[view]` → `toggleSidebar(view)`（仅恢复该视图）；否则 `setActiveView(view)` |
+| `layout/MainLayout.tsx` | Ctrl/Cmd+B 改为切换**当前侧边栏视图**的收起态（`toggleSidebar(activeView)`）；当前视图无侧边栏时 no-op（修订：随收起独立化） |
 
 ### 5.3 拖拽交互（`Sidebar.tsx` 内实现）
 
@@ -83,7 +87,7 @@ interface UiState {
   - `pointerdown`：记录起点，capture，进入拖拽（外层 `user-select: none` 防误选文本；capture 已保证后续事件全部路由到分隔条，无需屏蔽主区）
   - `pointermove`：**本地 state** 驱动预览宽度（clamp 到 `[200, 480]`）——拖拽过程不写 store / localStorage
   - `pointerup` / `pointercancel`：一次性 `onWidthCommit(预览宽度)` 提交 store 并持久化，退出拖拽
-- **宽度角标**：拖拽中于分隔条上方显示当前宽度（如 `312 px`；触界时 `200 px · 最小` / `480 px · 最大`），`bg-surface-3` + `border-accent-500`，松手淡出
+- **无宽度角标**（修订）：拖拽中不显示任何数值提示，仅分隔条高亮 + 宽度实时变化；触界静默钳制
 - **双击分隔条**：`onWidthCommit(260)` 重置当前视图
 - 收起状态下分隔条随 Sidebar 一并卸载（无拖拽入口）
 
@@ -101,7 +105,7 @@ interface UiState {
 
 | 场景 | 行为 |
 |---|---|
-| localStorage 值缺失 / JSON 解析失败 / 单项 NaN 或超范围 | 该视图宽度回默认 260；`sidebarCollapsed` 回 false |
+| localStorage 值缺失 / JSON 解析失败 / 单项非法 | 该视图宽度回默认 260；收起单项回 false（旧共享 boolean 按同值迁移三视图） |
 | `pointercancel`（指针捕获丢失） | 与 `pointerup` 同路径：提交当前预览宽度 |
 | 拖拽中视图切换 / Ctrl+B 收起 | Sidebar 卸载，但 window 监听存活至手势结束：释放时仍按最后指针位置提交一次（已钳制，`viewKey` 为手势发起视图，无错写）。终审裁定：行为安全且体验更合理，以实现为准 |
 | 文件视图无打开 tab（空态） | 恢复按钮渲染于空态上方顶行（§5.2 CodeEditor 行） |
@@ -122,10 +126,10 @@ Mock 规范遵循 `momo-test-rules`：store 用真实 zustand store 或完整 st
 
 ## 8. 验收标准
 
-1. 会话 / 文件 / 看板侧边栏均可拖拽调宽，范围 200–480px，越界钳制并提示；双击重置 260px
-2. `Ctrl/Cmd+B` 或 Sidebar 头部按钮收起后，侧边栏**完全消失**，主区占满全宽
+1. 会话 / 文件 / 看板侧边栏均可拖拽调宽，范围 200–480px，越界钳制（无角标提示）；双击重置 260px
+2. `Ctrl/Cmd+B` 或 Sidebar 头部按钮收起后，侧边栏**完全消失**，主区占满全宽（仅影响当前视图）
 3. 收起后当前视图主区顶行首位出现恢复按钮（文件视图含空态），点击恢复且宽度回到收起前
-4. 收起时点击活动栏当前视图图标可恢复
-5. 各视图宽度独立、重启后保持；收起状态重启后保持
+4. 收起时点击活动栏当前视图图标可恢复（仅恢复该视图）
+5. 各视图宽度独立、重启后保持；**各视图收起状态独立**、重启后保持（修订）
 6. 文件视图下 tab 不被恢复按钮遮挡（按钮参与顶行 flex 布局）
 7. `npx pnpm@9.0.0 typecheck` 双 clean；`--filter momo-studio-renderer test` 全绿
