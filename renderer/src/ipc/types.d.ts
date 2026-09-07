@@ -138,6 +138,10 @@ export interface TaskRow {
   creatorUserId: string;
   executionSessionId: string | null;
   assigneeAgentId: string | null;
+  /** v29：委派目标三列（互斥）+ 循环实例链 */
+  targetTeamId: string | null;
+  targetSessionId: string | null;
+  recurrenceParentId: string | null;
   priority: number;
   scheduledAt: number | null;
   recurrenceRule: string | null;
@@ -202,6 +206,12 @@ export interface TaskApiSurface {
     sourceSessionId?: string | null;
     sourceMessageId?: string | null;
     assigneeAgentId?: string | null;
+    /** v29：委派目标三列（互斥） */
+    targetTeamId?: string | null;
+    /** v29：委派目标三列（互斥） */
+    targetSessionId?: string | null;
+    /** v29：循环规则 */
+    recurrenceRule?: string | null;
     scheduledAt?: number | null;
     deadlineAt?: number | null;
   }): Promise<TaskRow>;

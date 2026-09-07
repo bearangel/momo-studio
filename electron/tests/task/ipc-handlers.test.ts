@@ -86,3 +86,54 @@ describe('task:update（minor-11）', () => {
     expect(row.title).toBe('tried-to-revive'); // title 仍可改（这是 task:update 允许的）
   });
 });
+
+describe('task:create（v29 委派目标三列 + 循环规则）', () => {
+  it('task:create 支持 targetTeamId + 循环规则透传', async () => {
+    const handler = handlers.get('task:create');
+    expect(handler).toBeDefined();
+
+    const created = await handler!(null, {
+      workspaceId: 'ws1',
+      title: '循环任务',
+      creatorUserId: 'owner',
+      targetTeamId: 'team1',
+      recurrenceRule: 'daily@09:00',
+      scheduledAt: 123,
+    });
+
+    // 入参三列 + 循环规则落到返回 row（T1/T4/T6 消费者以此为权威源）
+    expect(created.targetTeamId).toBe('team1');
+    expect(created.recurrenceRule).toBe('daily@09:00');
+    expect(created.scheduledAt).toBe(123);
+    // 三列互斥（DB trigger 强制）：未传的两列保持 null
+    expect(created.targetSessionId).toBeNull();
+    expect(created.assigneeAgentId).toBeNull();
+    // 循环实例链由续期写入，新建时恒 null
+    expect(created.recurrenceParentId).toBeNull();
+  });
+
+  it('task:create 支持 targetSessionId 委派', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: 'session 委派任务',
+      creatorUserId: 'owner',
+      targetSessionId: 'sess-1',
+    });
+    expect(created.targetSessionId).toBe('sess-1');
+    expect(created.targetTeamId).toBeNull();
+    expect(created.assigneeAgentId).toBeNull();
+  });
+
+  it('task:create 不传三列/规则时仍可用（基线行为保持）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '普通任务',
+      creatorUserId: 'owner',
+    });
+    expect(created.targetTeamId).toBeNull();
+    expect(created.targetSessionId).toBeNull();
+    expect(created.recurrenceRule).toBeNull();
+  });
+});

@@ -46,6 +46,12 @@ interface CreateInput {
   sourceSessionId?: string | null;
   sourceMessageId?: string | null;
   assigneeAgentId?: string | null;
+  /** v29：委派目标三列（互斥） */
+  targetTeamId?: string | null;
+  /** v29：委派目标三列（互斥） */
+  targetSessionId?: string | null;
+  /** v29：循环规则 */
+  recurrenceRule?: string | null;
   scheduledAt?: number | null;
   deadlineAt?: number | null;
 }
@@ -73,6 +79,9 @@ export function registerTaskHandlers(): void {
       sourceSessionId: input.sourceSessionId,
       sourceMessageId: input.sourceMessageId,
       assigneeAgentId: input.assigneeAgentId,
+      targetTeamId: input.targetTeamId,
+      targetSessionId: input.targetSessionId,
+      recurrenceRule: input.recurrenceRule,
       scheduledAt: input.scheduledAt,
       deadlineAt: input.deadlineAt,
     });

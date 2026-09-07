@@ -134,6 +134,12 @@ export interface CreateTaskInput {
   description?: string;
   priority?: number;
   assigneeAgentId?: string;
+  /** v29：委派目标三列（互斥） */
+  targetTeamId?: string | null;
+  /** v29：委派目标三列（互斥） */
+  targetSessionId?: string | null;
+  /** v29：循环规则 */
+  recurrenceRule?: string | null;
 }
 
 /**
@@ -150,6 +156,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
     creatorUserId: input.creatorUserId,
     priority: input.priority ?? 0,
     assigneeAgentId: input.assigneeAgentId,
+    targetTeamId: input.targetTeamId,
+    targetSessionId: input.targetSessionId,
+    recurrenceRule: input.recurrenceRule,
   });
 }
 
@@ -270,6 +279,18 @@ export class TaskTools implements ToolModule {
               type: 'string',
               description: '指派 agent ID（可选；不指定则由调度器决定）',
             },
+            targetTeamId: {
+              type: 'string',
+              description: '委派目标 team ID（v29：与 assigneeAgentId/targetSessionId 互斥）',
+            },
+            targetSessionId: {
+              type: 'string',
+              description: '委派目标 session ID（v29：与 assigneeAgentId/targetTeamId 互斥）',
+            },
+            recurrenceRule: {
+              type: 'string',
+              description: '循环规则（如 "daily@09:00"）；设置后由 recurrence 续期生成下一实例',
+            },
           },
           required: ['workspaceId', 'title', 'creatorUserId'],
         },
@@ -380,6 +401,15 @@ export class TaskTools implements ToolModule {
           assigneeAgentId: parseStringArgOptional(
             args.assigneeAgentId,
             'assigneeAgentId',
+          ),
+          targetTeamId: parseStringArgOptional(args.targetTeamId, 'targetTeamId'),
+          targetSessionId: parseStringArgOptional(
+            args.targetSessionId,
+            'targetSessionId',
+          ),
+          recurrenceRule: parseStringArgOptional(
+            args.recurrenceRule,
+            'recurrenceRule',
           ),
         };
         const result = await createTask(input);
