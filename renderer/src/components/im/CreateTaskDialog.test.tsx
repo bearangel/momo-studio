@@ -157,6 +157,39 @@ describe('CreateTaskDialog', () => {
     );
   });
 
+  // M-e 回归锁：间隔下限 1——负数/零不能穿透序列化（every:-5m 会打穿 electron
+  // 侧 nextRun 的 \d+ 解析，循环任务静默失效）。min 属性是第一道防线（浏览器
+  // 约束校验拦截提交），handleSubmit 的 Math.max 钳制是第二道（程序化提交路径）
+  it('固定间隔输入负数 → 序列化前钳到下限 1（recurrenceRule=every:1m）', async () => {
+    const onCreated = vi.fn();
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '轮询' } });
+    fireEvent.change(screen.getByLabelText('循环规则'), { target: { value: 'every' } });
+    // 第一道防线：Input 带 min=1（jsdom 据此拦截按钮点击提交，故下文直发 submit）
+    expect(screen.getByLabelText('间隔数值')).toHaveAttribute('min', '1');
+    fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '-5' } });
+    // 第二道防线：绕过按钮（约束校验拦截层）直发 submit 事件，锁 handleSubmit 钳制
+    // （Dialog 经 portal 渲染到 body，container 内无 form，从 document 取）
+    fireEvent.submit(document.querySelector('form')!);
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(mockTaskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ recurrenceRule: 'every:1m' }),
+    );
+  });
+
+  it('固定间隔输入合法值 → 原样透传（every:30m 不受下限影响）', async () => {
+    const onCreated = vi.fn();
+    render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+    fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '轮询' } });
+    fireEvent.change(screen.getByLabelText('循环规则'), { target: { value: 'every' } });
+    fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(mockTaskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ recurrenceRule: 'every:30m' }),
+    );
+  });
+
   it('团队目标未选时禁用创建按钮，选中后恢复', async () => {
     render(<CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
     fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '等团队' } });

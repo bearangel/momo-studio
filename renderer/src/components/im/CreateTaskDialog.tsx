@@ -98,7 +98,9 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
       const priorityNum = priority === 'high' ? 10 : priority === 'medium' ? 5 : 1;
       const rulePreset: RecurrencePreset =
         recurrenceKind === 'every'
-          ? { kind: 'every', everyN: Number(everyN) || 1, everyUnit }
+          ? // 间隔下限 1：负数/零在序列化前钳制（every:-5m 不匹配 electron 侧
+            // nextRun 的 \d+ 解析，循环任务会静默失效）
+            { kind: 'every', everyN: Math.max(1, Number(everyN) || 1), everyUnit }
           : recurrenceKind === 'daily'
             ? { kind: 'daily', time: recTime }
             : recurrenceKind === 'weekly'
@@ -218,6 +220,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
             <Input
               label="间隔数值"
               type="number"
+              min={1}
               value={everyN}
               onChange={(e) => setEveryN(e.target.value)}
             />
