@@ -19,6 +19,7 @@ import { insertMessage, type MessageRow } from '../storage/messages/repo';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
 import { broadcastLocalMessage } from '../p2p';
 import { detectConflict } from '../task/conflict-detector';
+import { activateMentionedTasks } from '../task/activation';
 import { listTasks, getTask } from '../storage/tasks/repo';
 import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
@@ -142,6 +143,16 @@ export async function sendUserMessage(input: {
     }
   } catch (err) {
     logger.warn('冲突检测失败（不阻塞消息发送）', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // #T mention 激活（v2.3）：可激活任务拉到本会话执行（spec §6）。
+  // activateMentionedTasks 内部逐任务 try/catch——此处再包一层防御。
+  try {
+    activateMentionedTasks(input.sessionId, input.body);
+  } catch (err) {
+    logger.warn('#T 激活钩子异常（不阻塞消息发送）', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
