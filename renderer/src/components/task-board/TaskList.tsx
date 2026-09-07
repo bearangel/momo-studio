@@ -10,9 +10,11 @@ interface TaskListProps {
   tasks: TaskRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** 排队名次表（taskId → rank，TaskSidebarPanel 按放行序计算） */
+  queueRanks?: Map<string, number>;
 }
 
-export function TaskList({ tasks, selectedId, onSelect }: TaskListProps) {
+export function TaskList({ tasks, selectedId, onSelect, queueRanks }: TaskListProps) {
   if (tasks.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-tertiary text-sm">
@@ -28,6 +30,7 @@ export function TaskList({ tasks, selectedId, onSelect }: TaskListProps) {
           task={t}
           selected={selectedId === t.id}
           onSelect={() => onSelect(t.id)}
+          queueRank={queueRanks?.get(t.id)}
         />
       ))}
     </div>

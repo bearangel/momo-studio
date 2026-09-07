@@ -8,12 +8,15 @@
 //
 // 并未做轮询——启动/取消后手动 refresh 一次（ipc.task.get）。看板列表的 5s 轮询会兜底同步。
 // v2.1 P3：样式 token 化；📅⏰× → Calendar/Clock/X lucide。
+// Task 9：循环规则人性化展示 + 母任务 #T 跳转链接 + 团队/会话委派目标。
 import { useEffect, useState } from 'react';
 import { Calendar, Clock, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
+import { useTaskStore } from '../../stores/task.store';
 import { useUiStore } from '../../stores/ui.store';
 import type { TaskRow } from '../../ipc/types';
+import { humanizeRecurrence } from '../../lib/recurrence';
 
 interface TaskDetailPanelProps {
   taskId: string;
@@ -109,6 +112,21 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             </div>
           )}
           {task.executionSessionId && <div>执行房间: {task.executionSessionId.slice(0, 16)}</div>}
+          {task.recurrenceRule && <div>循环: {humanizeRecurrence(task.recurrenceRule)}</div>}
+          {task.recurrenceParentId && (
+            <div>
+              母任务:{' '}
+              <button
+                type="button"
+                onClick={() => useTaskStore.getState().setSelectedTaskId(task.recurrenceParentId)}
+                className="text-accent-600 hover:underline dark:text-accent-300"
+              >
+                #{task.recurrenceParentId}
+              </button>
+            </div>
+          )}
+          {task.targetTeamId && <div>目标团队: {task.targetTeamId.slice(0, 12)}</div>}
+          {task.targetSessionId && <div>目标会话: {task.targetSessionId.slice(0, 12)}</div>}
         </div>
         {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (
           <button

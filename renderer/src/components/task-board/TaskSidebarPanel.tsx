@@ -145,6 +145,21 @@ export function TaskSidebarPanel() {
     return list;
   }, [tasks, filter]);
 
+  /** 排队排名：assigned 按放行序（spec §4.4 同款排序）计算「排队 #N」 */
+  const queueRanks = useMemo(() => {
+    const assigned = [...tasks]
+      .filter((t) => t.status === 'assigned')
+      .sort(
+        (a, b) =>
+          b.priority - a.priority ||
+          (a.scheduledAt ?? a.createdAt) - (b.scheduledAt ?? b.createdAt) ||
+          a.createdAt - b.createdAt,
+      );
+    const map = new Map<string, number>();
+    assigned.forEach((t, i) => map.set(t.id, i + 1));
+    return map;
+  }, [tasks]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-3 pt-3 pb-1 shrink-0">
@@ -166,6 +181,7 @@ export function TaskSidebarPanel() {
         tasks={filteredTasks}
         selectedId={selectedTaskId}
         onSelect={(id) => setSelectedTaskId(id)}
+        queueRanks={queueRanks}
       />
       <RemoteTaskSection />
       {workspace && (
