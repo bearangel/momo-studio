@@ -46,7 +46,7 @@ v2.0 重构砍除 dispatcher 链路后，任务执行管线只剩两端：
 |---|---|---|
 | D1 | executor 触发 = 写触发 + 30s 兜底扫描（方案 B） | 启动即时（<100ms）；与 P2P task-broadcast「写通道触发 + 周期兜底」成熟模式同构；兜底扫描即方案 A 逻辑，丢失通知可自愈 |
 | D2 | 委派目标 = 三互斥列（`assignee_agent_id` / `target_team_id` / `target_session_id`），不做通用 kind+id | TaskCard 展示、assignee 筛选、P2P 快照、conflict-detector 等现有消费者零改动 |
-| D3 | 不新增 `queued` 状态，`assigned` 即队列；排名读取时计算，`queue_position` 列继续闲置 | 状态机零改动；避免第二份排序真相与 DB 漂移 |
+| D3 | 不新增 `queued` 状态，`assigned` 即队列；排名读取时计算，`queue_position` 列继续闲置 | 不加新状态、不引入第二份排序真相与 DB 漂移。**实施修订（2026-09-07）**：状态机新增一条边 `assigned → failed`（T4 落地，commit f1405a2）——§5.1/§9 要求目标校验失败/kickoff 失败的任务转 failed，原状态机无此边会导致放行循环热循环（候选滞留 assigned 被无限 re-peek）。D3 原文「状态机零改动」指不加 queued 状态，与算法节冲突时以算法节为准 |
 | D4 | 循环任务 = 自复制实例（completed 生成下一实例新行，`recurrence_parent_id` 链接） | 每次运行历史独立可审计；复用既有调度/执行全链路 |
 | D5 | 规则格式 = 三预设（`every:Nm/Nh/Nd` / `daily@HH:mm` / `weekly@D,HH:mm`），不做 cron | 覆盖主场景；格式留扩展位 |
 | D6 | 并发 gate 全局：`count(in_progress) < maxConcurrentTasks` | 用户裁定：限制只跟任务绑定，不与 agent 绑定 |
