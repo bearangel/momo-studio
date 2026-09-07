@@ -170,6 +170,20 @@ describe('create_task', () => {
     expect(t.status).toBe('draft');
     expect(t.description).toBe('desc');
   });
+
+  // C1 修复 1：agent 建任务同样接通定时管线——带 scheduledAt 落 pending，
+  // 不带时保持 repo 单点默认 draft（不硬编码 'draft' 字面量）
+  it('带 scheduledAt → 落 pending（定时任务由 scheduler 接管）', async () => {
+    const t = await createTask({
+      workspaceId: 'ws1',
+      title: 'Scheduled',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst1',
+      scheduledAt: Date.now() + 60_000,
+    });
+    expect(t.status).toBe('pending');
+    expect(t.scheduledAt).toBe(Date.now() + 60_000);
+  });
 });
 
 describe('complete_task', () => {

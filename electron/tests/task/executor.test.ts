@@ -157,6 +157,19 @@ describe('TaskExecutor.admitOnce', () => {
     expect(listTasks({ workspaceId: 'ws1', status: 'in_progress' })).toHaveLength(0);
   });
 
+  it('三目标列全空的 assigned → 转 failed（任务无委派目标，无法自动执行）', async () => {
+    // 手动 transition 产出的无目标 assigned 边角：不能静默新建会话放行，
+    // 必须明示失败让用户看到（spec §9 边界表）
+    insertTask({ workspaceId: 'ws1', title: 'orphan', creatorUserId: 'o', status: 'assigned' });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    await mkExecutor(3, kickoff).admitOnce();
+
+    const t = getTask('T-001')!;
+    expect(t.status).toBe('failed');
+    expect(t.errorMessage).toContain('无委派目标');
+    expect(kickoff).not.toHaveBeenCalled();
+  });
+
   it('startTask 抛错 → 该候选本轮跳过保持 assigned，后续候选继续放行，无死循环', async () => {
     // 守护点：executor.admitOnce 第 102 行 skipped.add(candidate.id)。
     // 若丢了这行，while 内同一候选会被反复选中，startTask 持续抛错，

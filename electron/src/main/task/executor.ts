@@ -187,6 +187,11 @@ function validateTarget(task: TaskRow): string | null {
   if (task.targetSessionId && !getSession(task.targetSessionId)) {
     return `目标会话不存在: ${task.targetSessionId.slice(0, 12)}`;
   }
+  // 三目标列全空（手动 transition 产出的无目标 assigned 边角）：自动放行只会
+  // 静默新建会话无人接待——明示失败，用户可在 UI 看到原因
+  if (!task.targetTeamId && !task.targetSessionId) {
+    return '任务无委派目标，无法自动执行';
+  }
   return null;
 }
 

@@ -69,11 +69,15 @@ interface ListOpts {
 
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
-    // v2（Task 11）：单用户本地应用——creatorUserId 固定 'owner'（NOT NULL 列）
+    // v2（Task 11）：单用户本地应用——creatorUserId 固定 'owner'（NOT NULL 列）。
+    // C1：带 scheduledAt 的任务直接落 pending（spec §4.4「pending = 定时未到」），
+    // 让 scheduler 可接管；否则恒落 draft 定时管线断链。不带时传 undefined
+    // 走 repo 单点默认，不在入口硬编码 'draft'
     const created = insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
       creatorUserId: 'owner',
+      status: input.scheduledAt != null ? 'pending' : undefined,
       description: input.description,
       priority: input.priority,
       sourceSessionId: input.sourceSessionId,

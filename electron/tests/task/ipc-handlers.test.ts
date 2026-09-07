@@ -136,4 +136,29 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
     expect(created.targetSessionId).toBeNull();
     expect(created.recurrenceRule).toBeNull();
   });
+
+  // C1 修复 1：create 入口是定时管线起点——带 scheduledAt 必须落 pending
+  // （spec §4.4「pending = 定时未到」），否则 scheduler 永远扫不到（旧实现恒落 draft）
+  it('task:create 带 scheduledAt → 落 pending（定时管线入口）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '定时任务',
+      creatorUserId: 'owner',
+      assigneeAgentId: 'inst1',
+      scheduledAt: Date.now() + 60_000,
+    });
+    expect(created.status).toBe('pending');
+  });
+
+  it('task:create 不带 scheduledAt → 落 draft（repo 单点默认，create 不硬编码）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '手动任务',
+      creatorUserId: 'owner',
+      assigneeAgentId: 'inst1',
+    });
+    expect(created.status).toBe('draft');
+  });
 });

@@ -140,18 +140,22 @@ export interface CreateTaskInput {
   targetSessionId?: string | null;
   /** v29：循环规则 */
   recurrenceRule?: string | null;
+  /** 计划开始时间（ms epoch）；设置时任务落 pending 交 scheduler 接管 */
+  scheduledAt?: number | null;
 }
 
 /**
  * create_task：新建任务。
  *
- * 走 insertTask（status 默认 draft / description 默认 '' / priority 默认 0）。
- * 返回插入后的 TaskRow（含自动生成的 id）。
+ * 走 insertTask（不带 scheduledAt 时 status 走 repo 默认 draft / description
+ * 默认 '' / priority 默认 0；带 scheduledAt 时落 pending——C1 定时管线入口，
+ * 与 task:create IPC 入口同语义）。返回插入后的 TaskRow（含自动生成的 id）。
  */
 export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
   return insertTask({
     workspaceId: input.workspaceId,
     title: input.title,
+    status: input.scheduledAt != null ? 'pending' : undefined,
     description: input.description ?? '',
     creatorUserId: input.creatorUserId,
     priority: input.priority ?? 0,
@@ -159,6 +163,7 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
     targetTeamId: input.targetTeamId,
     targetSessionId: input.targetSessionId,
     recurrenceRule: input.recurrenceRule,
+    scheduledAt: input.scheduledAt,
   });
 }
 
@@ -291,6 +296,10 @@ export class TaskTools implements ToolModule {
               type: 'string',
               description: '循环规则（如 "daily@09:00"）；设置后由 recurrence 续期生成下一实例',
             },
+            scheduledAt: {
+              type: 'number',
+              description: '计划开始时间（毫秒 epoch；设置后任务直接落 pending 由调度器接管）',
+            },
           },
           required: ['workspaceId', 'title', 'creatorUserId'],
         },
@@ -411,6 +420,7 @@ export class TaskTools implements ToolModule {
             args.recurrenceRule,
             'recurrenceRule',
           ),
+          scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
         };
         const result = await createTask(input);
         return JSON.stringify(result);
