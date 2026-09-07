@@ -2,7 +2,7 @@
 //
 // 任务执行启动 + execution_room 决策树（B 子系统 B8）。
 //
-// 4 种启动机制的统一入口，决策 execution_room 后把任务推进 in_progress。
+// 5 种启动机制的统一入口，决策 execution_room 后把任务推进 in_progress。
 //
 // 决策优先级（按 brief 关键设计点）：
 //   1. 调用方显式传 executionSessionId → 用预设
