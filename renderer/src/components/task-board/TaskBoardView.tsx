@@ -6,7 +6,8 @@
 //   - TaskFilters/TaskList/新建任务入口迁至侧边栏 TaskSidebarPanel
 //
 // 数据流：
-//   - mount 时调 task.store.load(workspaceId) 拉取任务（仅 draft/pending/assigned）
+//   - mount 时调 task.store.load(workspaceId) 拉取任务（v2.3 起全生命周期，
+//     不按状态过滤；并发徽标的 in_progress/assigned 计数由此才可能非零）
 //   - 每 5s 轮询刷新一次（捕获状态变化 / 新任务）
 //   - 并发状态从本地 tasks 派生：active=in_progress 数 / queued=assigned 数；
 //     max 接 settings:getGlobal 返回的 maxConcurrentTasks（global_settings 表，默认 3），

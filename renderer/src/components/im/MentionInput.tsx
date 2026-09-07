@@ -4,7 +4,8 @@
 //   - 输入 @ 触发 agent 菜单：数据源 session.store.members（当前会话成员），
 //     仅列 lastRunning 在线成员；选择时记录 instanceId，
 //     发送经 session.store.sendMessage(body, mentionedInstanceIds) 透传
-//   - 输入 #T 触发任务菜单：数据源 task.store.tasks（仅 draft/pending/assigned），
+//   - 输入 #T 触发任务菜单：数据源 task.store.tasks（v2.3 起全生命周期任务），
+//     本地 MENU_STATUSES 过滤（draft/pending/assigned）是唯一过滤点，
 //     选择后向正文插入 #T-xxx 文本——后端 conflict-detector 从正文解析任务引用，
 //     不进 sendMessage 载荷（纯 renderer affordance）
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
@@ -18,8 +19,8 @@ import type { SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
 
 type MenuKind = 'agent' | 'task';
 
-/** # 菜单只展示未完结任务（task.store.load 已按此过滤拉取，此处保留作防御） */
-const PENDING_TASK_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
+/** # 菜单仅展示可激活态（v2.3：store 全量拉取后此过滤成为唯一防线） */
+const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
 /** 菜单最多展示条目数（pending 任务可能较多） */
 const MENU_LIMIT = 10;
 
@@ -63,7 +64,8 @@ export function MentionInput() {
   }, [activeSessionId]);
 
   // # 菜单数据接线：task.store 此前仅 TaskBoardView（tasks 视图）加载，
-  // IM 视图挂载时主动拉取当前 workspace 的待处理任务
+  // IM 视图挂载时主动拉取当前 workspace 的任务（v2.3 起为全生命周期，
+  // 可激活态过滤由上方 MENU_STATUSES 本地承载）
   useEffect(() => {
     if (workspace) void loadTasks(workspace.id);
   }, [workspace, loadTasks]);
@@ -85,7 +87,7 @@ export function MentionInput() {
       ? tasks
           .filter(
             (t) =>
-              PENDING_TASK_STATUSES.includes(t.status) &&
+              MENU_STATUSES.includes(t.status) &&
               (!query ||
                 t.id.toLowerCase().includes(query.toLowerCase()) ||
                 t.title.toLowerCase().includes(query.toLowerCase())),

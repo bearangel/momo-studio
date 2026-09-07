@@ -209,17 +209,25 @@ describe('MentionInput @ 菜单（在线成员）', () => {
   });
 });
 
-describe('MentionInput #T 菜单（待处理任务）', () => {
-  it('输入 #T 弹出待处理任务菜单，完结任务不显示', () => {
+describe('MentionInput #T 菜单（可激活任务）', () => {
+  it('输入 #T 弹出可激活任务菜单（仅 draft/pending/assigned）——store 全量拉取后此为唯一过滤点', () => {
+    // v2.3：task.store 现拉全生命周期任务，菜单只放行可激活三态；
+    // in_progress/paused（活跃但已启动/暂停）与 completed 等终态一律不进菜单
     taskState.tasks = [
       makeTask({ id: 'T-001', title: '修复登录', status: 'pending' }),
       makeTask({ id: 'T-002', title: '已完成任务', status: 'completed' }),
+      makeTask({ id: 'T-003', title: '执行中任务', status: 'in_progress' }),
+      makeTask({ id: 'T-004', title: '已暂停任务', status: 'paused' }),
+      makeTask({ id: 'T-005', title: '草稿任务', status: 'draft' }),
     ];
     render(<MentionInput />);
     fireEvent.change(screen.getByPlaceholderText(/输入消息/), { target: { value: '#T' } });
     expect(screen.getByText('选择要引用的任务')).toBeInTheDocument();
     expect(screen.getByText('#T-001 · 修复登录')).toBeInTheDocument();
+    expect(screen.getByText('#T-005 · 草稿任务')).toBeInTheDocument();
     expect(screen.queryByText(/已完成任务/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/执行中任务/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/已暂停任务/)).not.toBeInTheDocument();
   });
 
   it('点击任务菜单项插入 #T 标记（尾随空格）', () => {

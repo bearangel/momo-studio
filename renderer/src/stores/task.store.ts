@@ -2,16 +2,16 @@
 //
 // 任务状态管理（B 子系统）:
 //   - tasks：当前 workspace 内的任务列表（# 菜单 / 看板消费）
-//   - load：拉取 workspace 任务列表（仅 pending 态：draft/pending/assigned，用于 # 菜单）
+//   - load：全生命周期拉取（v2.3 P0 修复，spec §8.1）——不按状态过滤，
+//     orderBy created_at + limit 500 截断终态历史；看板 'all' 筛选
+//     （TaskSidebarPanel ACTIVE_STATUSES）与 # 菜单（MentionInput 本地
+//     MENU_STATUSES）各自过滤，职责分层
 //   - create / update / transition：包装 ipc.task.*，成功后同步更新本地 tasks
 //
 // zustand 单例 store；workspace 切换时由布局层调 reset() 清空再 load(nextWorkspaceId)。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { TaskRow, TaskStatus } from '../ipc/types';
-
-/** # 菜单只展示未完结任务（draft/pending/assigned） */
-const PENDING_STATUSES: TaskStatus[] = ['draft', 'pending', 'assigned'];
 
 interface TaskState {
   tasks: TaskRow[];
@@ -42,7 +42,9 @@ export const useTaskStore = create<TaskState>((set) => ({
   load: async (workspaceId) => {
     set({ loading: true, error: null });
     try {
-      const tasks = await ipc.task.list({ workspaceId, status: PENDING_STATUSES });
+      // v2.3：全生命周期拉取（spec §8.1）——单用户桌面端任务量级下
+      // 全量 + 本地过滤足够；终态历史靠 limit 500 截断
+      const tasks = await ipc.task.list({ workspaceId, orderBy: 'created_at', limit: 500 });
       set({ tasks, loading: false });
     } catch (err) {
       set({ loading: false, error: (err as Error).message });

@@ -15,11 +15,15 @@ import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { ipc } from '../../ipc/client';
-import type { RemoteNodeTasks } from '../../ipc/types';
+import type { RemoteNodeTasks, TaskStatus } from '../../ipc/types';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { TaskList } from './TaskList';
 import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
 import { remoteStatusStyle } from '../../lib/task-status';
+
+/** 活跃态集合：'all' 的语义 = 全部活跃（终态需显式选择，防历史淹没列表）。
+ *  v2.3：store 改全生命周期拉取后，此过滤成为看板默认视图的语义承载。 */
+const ACTIVE_STATUSES: TaskStatus[] = ['draft', 'pending', 'assigned', 'in_progress', 'paused'];
 
 /** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
 const REMOTE_REFRESH_INTERVAL_MS = 5000;
@@ -114,10 +118,12 @@ export function TaskSidebarPanel() {
     [members, workspace],
   );
 
-  // 筛选 + 排序（自 TaskBoardView 原样迁移）
+  // 筛选 + 排序（自 TaskBoardView 原样迁移；v2.3 'all' 语义改为活跃态集合）
   const filteredTasks = useMemo(() => {
     let list = [...tasks];
-    if (filter.status !== 'all') {
+    if (filter.status === 'all') {
+      list = list.filter((t) => ACTIVE_STATUSES.includes(t.status));
+    } else {
       list = list.filter((t) => t.status === filter.status);
     }
     if (filter.assignee !== 'all') {
