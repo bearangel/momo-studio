@@ -20,7 +20,7 @@
 // v2（P1 Task 5）：runTaskChatLoop 不再接收 Matrix client（task-driven 模式无 client，
 // dispatch 经内部事件桥、最终消息由 chunk 路径落盘），调用签名改为 (cfg, config, ctx)。
 
-import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -54,6 +54,26 @@ import {
 // === Mock 状态 ===
 
 const sentChunks: unknown[] = [];
+
+// runChatLoop 会话边界过滤（2026-09-07 二段修复）每轮触 DB——文件级兜底：
+// 未显式设 AP_USER_DATA_DIR 的 describe 也指向临时目录（防惰性 getDb 落到
+// 默认用户目录缓存句柄，污染后续 describe 的 seed）；每用例后 closeDb 防句柄泄漏
+const fallbackTmp = path.join(
+  os.tmpdir(),
+  `ap-rtd-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+beforeEach(() => {
+  if (!process.env.AP_USER_DATA_DIR) {
+    fs.mkdirSync(fallbackTmp, { recursive: true });
+    process.env.AP_USER_DATA_DIR = fallbackTmp;
+  }
+});
+afterEach(() => {
+  closeDb();
+});
+afterAll(() => {
+  fs.rmSync(fallbackTmp, { recursive: true, force: true });
+});
 const sentIpc: unknown[] = [];
 let exitCode: number | null = null;
 

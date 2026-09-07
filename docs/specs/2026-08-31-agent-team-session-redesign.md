@@ -169,7 +169,7 @@ leader 必须同时在 team_members 中（建团/换 leader 同事务保证）�
 - 服务层：membership（unique/leader 守卫/默认置空）、team（建团事务/leader 必在集/换 leader）、会话创建（quick 无默认结构化错误、团队快照展开+is_leader+title_auto）
 - 命名服务：截断规则、LLM 失败静默、title_auto=0 不覆盖（竞态专项）
 - 路由：非 @ → leader；@ 直答；失效成员过滤；全失效只读
-- runtime：dispatch 注入条件（成员>1 且 leader）、subAgents 来自快照（契约测试）；**执行时会话边界校验（2026-09-07 严重 bug 修正）**——快照是实例级（跨该实例所有 leader 会话的并集），注入的工具会出现在任何会话（含单成员快速会话），故 `executeDispatch` 入口按「当前会话」三条件校验：有效成员>1 / 自己是 leader / 目标在当前会话成员中；违者拒绝（工具错误返回 LLM，不发事件）。回归锁：`dispatch-session-boundary.test.ts`（快速会话/非 leader/跨会话/无效会话四拒绝 + 多成员 leader 放行）
+- runtime：dispatch 注入条件（成员>1 且 leader）、subAgents 来自快照（契约测试）；**执行时会话边界校验（2026-09-07 严重 bug 修正）**——快照是实例级（跨该实例所有 leader 会话的并集），注入的工具会出现在任何会话（含单成员快速会话），故 `executeDispatch` 入口按「当前会话」三条件校验：有效成员>1 / 自己是 leader / 目标在当前会话成员中；违者拒绝（工具错误返回 LLM，不发事件）。**二段修复（同日）：暴露面过滤**——`runChatLoop` 每轮按当前会话（roomId）调 `getSessionDispatchScope` 动态过滤：不满足会话边界时 dispatch:* 工具与「任务拆分指南」prompt 根本不注入（LLM 不知道自己有这能力，不再先自称可委派再被拒）；满足时只暴露「当前会话成员 ∩ subAgents 快照」（跨会话成员不暴露）。回归锁：`dispatch-session-boundary.test.ts`（四拒绝 + 放行）+ `dispatch-visibility.test.ts`（快速会话零暴露 / 多成员会话只暴露会话内成员 / 非 leader 零暴露）
 - IPC：退役通道零残留（grep 锁）、双端 typecheck
 - UI：双 Tab、三弹窗校验提交、快速会话免弹窗直达、无默认引导弹窗
 

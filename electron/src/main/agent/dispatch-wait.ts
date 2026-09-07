@@ -19,6 +19,7 @@ import {
 } from './dispatch';
 import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
 import type { RuntimeConfig } from './runtime-config';
+import type { SubAgentRef } from './builtin-tools';
 import { getDb } from '../storage/db';
 
 /** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
@@ -63,29 +64,49 @@ interface PendingReply {
 const pendingReplies = new Map<string, PendingReply>();
 
 /**
- * 会话边界校验（spec §4.7 会话语义的执行时修正，2026-09-07 主机报告）：
+ * 会话边界判定（spec §4.7 会话语义的执行时修正，2026-09-07 主机报告）：
  * dispatch 快照是实例级（跨该实例所有 leader 会话的并集，spawn 时定型），
  * 但 dispatch 只在「当前会话」内合法——单成员快速会话中即使带着工具也不得委派。
- * 三个条件：会话有效成员数 > 1；自己是该会话 leader；目标在该会话成员中。
+ *
+ * 返回「当前会话成员 ∩ config.subAgents」；任一条件不满足（会话不存在 /
+ * 有效成员 ≤ 1 / 自己非成员或非 leader）返回 null。
+ * 消费方：executeDispatch 执行校验（assertSessionDispatchAllowed）+
+ * runChatLoop 工具暴露面过滤（二段修复：不满足时工具与教学 prompt 根本不注入）。
+ */
+export function getSessionDispatchScope(
+  executionSessionId: string | undefined,
+  config: RuntimeConfig,
+): SubAgentRef[] | null {
+  if (!executionSessionId) return null;
+  let rows: Array<{ instance_id: string; is_leader: number }>;
+  try {
+    rows = getDb()
+      .prepare('SELECT instance_id, is_leader FROM session_members WHERE session_id = ?')
+      .all(executionSessionId) as Array<{ instance_id: string; is_leader: number }>;
+  } catch {
+    // DB 不可用 / 表缺失（如测试空库）——保守视为无委派能力，不阻塞 chat loop
+    return null;
+  }
+  if (rows.length <= 1) return null;
+  const me = rows.find((r) => r.instance_id === config.agentAssignmentId);
+  if (!me || me.is_leader !== 1) return null;
+  const memberIds = new Set(rows.map((r) => r.instance_id));
+  return config.subAgents.filter((s) => memberIds.has(s.assignmentId));
+}
+
+/**
+ * executeDispatch 入口的会话边界校验（深度防御——暴露面过滤之外的最终防线）。
  */
 function assertSessionDispatchAllowed(
   executionSessionId: string | undefined,
   config: RuntimeConfig,
   targetAssignmentId: string,
 ): void {
-  if (!executionSessionId) {
-    throw new Error('dispatch 缺少当前会话上下文（executionSessionId 为空），已拒绝');
+  const scoped = getSessionDispatchScope(executionSessionId, config);
+  if (!scoped) {
+    throw new Error('当前会话不支持委派（单成员会话或你不是该会话 leader）——请直接自行完成任务');
   }
-  const rows = getDb()
-    .prepare('SELECT instance_id, is_leader FROM session_members WHERE session_id = ?')
-    .all(executionSessionId) as Array<{ instance_id: string; is_leader: number }>;
-  const me = rows.find((r) => r.instance_id === config.agentAssignmentId);
-  if (!me) throw new Error(`你不是会话 ${executionSessionId} 的成员，无委派能力`);
-  if (rows.length <= 1) {
-    throw new Error('当前会话是单成员会话（如快速会话），无委派能力——请直接自行完成任务');
-  }
-  if (me.is_leader !== 1) throw new Error('你在当前会话中不是 leader，无委派能力');
-  if (!rows.some((r) => r.instance_id === targetAssignmentId)) {
+  if (!scoped.some((s) => s.assignmentId === targetAssignmentId)) {
     throw new Error('目标 agent 不是当前会话成员，不能跨会话委派');
   }
 }

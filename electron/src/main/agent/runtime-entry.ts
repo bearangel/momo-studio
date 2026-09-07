@@ -34,7 +34,7 @@ import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
 import { sendTaskReplyEvent } from './internal-event';
-import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled } from './dispatch-wait';
+import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled, getSessionDispatchScope } from './dispatch-wait';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
 
 /**
@@ -263,8 +263,16 @@ export async function runChatLoop(
   );
 
   const budgetHint = formatBudgetHint(config.maxToolCalls);
-  // v1.5.6 C3：PM 自动 dispatch 教学——主 agent 角色 + 有 subAgents 时注入任务拆分指南
-  const dispatchHint = formatDispatchHint(config);
+  // 会话边界二段修复（2026-09-07）：dispatch 工具集与教学 prompt 按「当前会话」
+  // （roomId）动态过滤——spawn 快照是实例级（跨会话并集），单成员快速会话若只靠
+  // 执行时拒绝，agent 仍会以为自己能委派（先 brag 再被拒，浪费一轮 + 误导用户）。
+  // 不满足会话边界时工具与指南根本不注入，LLM 不知道自己有这能力。
+  const sessionSubs = getSessionDispatchScope(roomId, config);
+  const dispatchHint = formatDispatchHint({
+    ...config,
+    isLeader: sessionSubs !== null && sessionSubs.length > 0,
+    subAgents: sessionSubs ?? [],
+  });
 
   // v2（B 子系统 Task B11）：MemoryProvider 取代 loadRecentHistory。
   // 子 agent（parentStreamSessionId 非空）走 fresh session 不拉房间历史，
@@ -428,7 +436,14 @@ export async function runChatLoop(
       });
     }
 
-    const tools = budgetRemaining <= 0 ? undefined : ctx.tools;
+    // 会话边界二段修复：静态快照注入的 dispatch:* 剔除，换成当前会话命中成员
+    const chatTools: LLMToolDef[] = sessionSubs
+      ? [
+          ...ctx.tools.filter((t) => !t.name.startsWith('dispatch:')),
+          ...getDispatchToolDefs(sessionSubs),
+        ]
+      : ctx.tools.filter((t) => !t.name.startsWith('dispatch:'));
+    const tools = budgetRemaining <= 0 ? undefined : chatTools;
     trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: tools?.length ?? 0 });
 
     const toolCalls: LLMToolCall[] = [];

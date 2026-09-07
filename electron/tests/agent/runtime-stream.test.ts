@@ -2,7 +2,7 @@
 //
 // 测试 runChatLoop 的流式 chunk 发送、预算管理、abort 逻辑。
 // 不测完整 Matrix 集成——mock createLLMProvider 的 chatStream + MatrixClient + process.send。
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -56,6 +56,26 @@ const stubMemoryProvider: MemoryProvider = {
 // === Mock 状态 ===
 
 const sentChunks: unknown[] = [];
+
+// runChatLoop 会话边界过滤（2026-09-07 二段修复）每轮触 DB——文件级兜底：
+// 未显式设 AP_USER_DATA_DIR 的 describe 也指向临时目录（防惰性 getDb 落到
+// 默认用户目录缓存句柄，污染后续 describe 的 seed）；每用例后 closeDb 防句柄泄漏
+const fallbackTmp = path.join(
+  os.tmpdir(),
+  `ap-stream-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+beforeEach(() => {
+  if (!process.env.AP_USER_DATA_DIR) {
+    fs.mkdirSync(fallbackTmp, { recursive: true });
+    process.env.AP_USER_DATA_DIR = fallbackTmp;
+  }
+});
+afterEach(() => {
+  closeDb();
+});
+afterAll(() => {
+  fs.rmSync(fallbackTmp, { recursive: true, force: true });
+});
 
 /** 从 sentChunks 中过滤出流式 chunk（排除 audit:toolCall 等 IPC 消息） */
 function streamChunks(): StreamChunk[] {
