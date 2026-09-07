@@ -77,6 +77,32 @@ describe('CreateTaskDialog', () => {
     expect((screen.getByLabelText(/描述/) as HTMLTextAreaElement).value).toBe('desc');
   });
 
+  it('preset.assigneeAgentId 预填 → 目标类型初值 agent 且提交透传', async () => {
+    mockListAssignments.mockResolvedValueOnce([{ instanceId: 'inst-1', agentName: 'Coder' }]);
+    const onCreated = vi.fn();
+    render(
+      <CreateTaskDialog
+        open
+        onClose={() => {}}
+        onCreated={onCreated}
+        workspaceId="ws1"
+        preset={{ assigneeAgentId: 'inst-1' }}
+      />,
+    );
+    // 目标类型自动进 agent 分支（v29 预填语义，不回归旧指派体验）
+    expect((screen.getByLabelText('委派目标类型') as HTMLSelectElement).value).toBe('agent');
+    // 成员列表异步加载后委派目标预选 inst-1
+    const targetSelect = (await screen.findByLabelText('委派目标')) as HTMLSelectElement;
+    await waitFor(() => expect(targetSelect.value).toBe('inst-1'));
+    fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '预填活' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    // 互斥三列：agent 目标透传 assigneeAgentId，team/session 保持 null
+    expect(mockTaskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ assigneeAgentId: 'inst-1', targetTeamId: null, targetSessionId: null }),
+    );
+  });
+
   it('标题为空时禁用创建按钮', () => {
     render(<CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
     expect(screen.getByRole('button', { name: /创建/ })).toBeDisabled();
