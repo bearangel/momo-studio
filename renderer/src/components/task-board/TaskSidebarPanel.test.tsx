@@ -26,6 +26,13 @@ const mockApi = {
   task: {
     create: vi.fn(),
   },
+  // v29 CreateTaskDialog 打开时并列加载团队/会话目标列表（形状与 Team/SessionSummary 契约对齐）
+  team: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+  session: {
+    list: vi.fn().mockResolvedValue([]),
+  },
   p2p: {
     getRemoteTasks: vi.fn().mockResolvedValue([]),
   },
@@ -128,6 +135,8 @@ describe('TaskSidebarPanel', () => {
     });
     mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
     mockApi.task.create.mockReset();
+    mockApi.team.list.mockClear().mockResolvedValue([]);
+    mockApi.session.list.mockClear().mockResolvedValue([]);
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });
 
@@ -226,6 +235,8 @@ describe('TaskSidebarPanel 远端节点分区（P4 Task 3 只读镜像）', () =
     });
     mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
     mockApi.task.create.mockReset();
+    mockApi.team.list.mockClear().mockResolvedValue([]);
+    mockApi.session.list.mockClear().mockResolvedValue([]);
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });
 
