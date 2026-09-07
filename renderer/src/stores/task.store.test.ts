@@ -91,9 +91,9 @@ describe('task.store load（v2.3 全生命周期拉取）', () => {
     mockApi.task.list.mockClear().mockResolvedValue([]);
   });
 
-  it('load 拉全生命周期任务（不按状态过滤，limit 500）', async () => {
+  it('load 拉全生命周期任务（不按状态过滤，created_at_desc + limit 500 保留最新 500 条）', async () => {
     await useTaskStore.getState().load('ws1');
-    expect(mockApi.task.list).toHaveBeenCalledWith({ workspaceId: 'ws1', orderBy: 'created_at', limit: 500 });
+    expect(mockApi.task.list).toHaveBeenCalledWith({ workspaceId: 'ws1', orderBy: 'created_at_desc', limit: 500 });
   });
 
   it('load 成功后任务写入 store 且 loading 复位（含 in_progress/paused/终态）', async () => {

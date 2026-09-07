@@ -221,7 +221,7 @@ export interface TaskApiSurface {
     assigneeAgentId?: string;
     executionSessionId?: string;
     sourceSessionId?: string;
-    orderBy?: 'priority' | 'scheduled_at' | 'created_at';
+    orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
     limit?: number;
   }): Promise<TaskRow[]>;
   get(id: string): Promise<TaskRow | null>;

@@ -308,7 +308,8 @@ export function getTask(id: string): TaskRow | null {
  *
  * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionSessionId / sourceSessionId。
  * 排序：priority（高优先 + created_at 升序兜底）/ scheduled_at（升序，NULLS LAST + created_at 兜底）/
- *       created_at（默认升序）。
+ *       created_at（默认升序）/ created_at_desc（降序，配合 limit 截断保留最新 N 条——任务看板
+ *       「终态历史靠 limit 500 截断」语义要求最新优先，spec §8.1）。
  * limit：限制返回行数（无 LIMIT 时全返回）。
  */
 export function listTasks(opts: {
@@ -317,7 +318,7 @@ export function listTasks(opts: {
   assigneeAgentId?: string;
   executionSessionId?: string;
   sourceSessionId?: string;
-  orderBy?: 'priority' | 'scheduled_at' | 'created_at';
+  orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }): TaskRow[] {
   const db = getDb();
@@ -355,7 +356,9 @@ export function listTasks(opts: {
       ? 'ORDER BY priority DESC, created_at ASC'
       : opts.orderBy === 'scheduled_at'
         ? 'ORDER BY scheduled_at ASC, created_at ASC'
-        : 'ORDER BY created_at ASC';
+        : opts.orderBy === 'created_at_desc'
+          ? 'ORDER BY created_at DESC'
+          : 'ORDER BY created_at ASC';
   // LIMIT 走占位符参数（opts.limit 来自 IPC 边界，不做字符串拼接防注入）
   let limitClause = '';
   if (typeof opts.limit === 'number' && opts.limit > 0) {

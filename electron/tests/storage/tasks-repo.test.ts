@@ -208,6 +208,31 @@ describe('tasks repo', () => {
     expect(listTasks({ workspaceId: 'ws1', status: ['pending', 'draft'] }).length).toBe(2);
   });
 
+  it('listTasks orderBy=created_at_desc 按 created_at DESC 返回（最新优先，配合 limit 截断保留最新 N 条）', async () => {
+    // 3 条任务显式指定 createdAt，确保 created_at DESC 排序方向可断言
+    const t1 = insertTask({ workspaceId: 'ws1', title: 'oldest', creatorUserId: '@owner:home' });
+    // 时序保证：t1.createdAt < t2.createdAt < t3.createdAt
+    // SQLite 的 created_at 是 INTEGER ms 时间戳，间隔 5ms 足以稳态区分
+    await new Promise((r) => setTimeout(r, 5));
+    const t2 = insertTask({ workspaceId: 'ws1', title: 'middle', creatorUserId: '@owner:home' });
+    await new Promise((r) => setTimeout(r, 5));
+    const t3 = insertTask({ workspaceId: 'ws1', title: 'newest', creatorUserId: '@owner:home' });
+    expect(t1.createdAt).toBeLessThan(t2.createdAt);
+    expect(t2.createdAt).toBeLessThan(t3.createdAt);
+
+    const list = listTasks({ workspaceId: 'ws1', orderBy: 'created_at_desc' });
+    expect(list.map((t) => t.id)).toEqual([t3.id, t2.id, t1.id]);
+  });
+
+  it('listTasks orderBy=created_at（保留旧语义：ASC）不被新分支误改', () => {
+    // 防止「orderBy 新值引入后顺手 flip 默认分支 ASC→DESC」回归——
+    // 旧 'created_at' 路径仍为 ASC（其他消费方依赖）
+    const t1 = insertTask({ workspaceId: 'ws1', title: 'oldest', creatorUserId: '@owner:home' });
+    const t2 = insertTask({ workspaceId: 'ws1', title: 'newest', creatorUserId: '@owner:home' });
+    const list = listTasks({ workspaceId: 'ws1', orderBy: 'created_at' });
+    expect(list.map((t) => t.id)).toEqual([t1.id, t2.id]);
+  });
+
   it('findNextAssignedTask 按 priority DESC + created_at ASC（priority 相同）', () => {
     const t1 = insertTask({
       workspaceId: 'ws1',
