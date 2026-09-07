@@ -2,8 +2,9 @@
 //
 // Sidebar 展开态外壳测试（v2.2）：
 // - 宽度 props 驱动；头部行（标题 + 收起按钮）
-// - 拖拽：pointerdown → window pointermove 实时预览（角标）→ pointerup 一次提交
-// - 钳制 200–480；触界角标「最小/最大」；pointercancel 同 up 提交；双击重置 260
+// - 拖拽：pointerdown → window pointermove 实时预览宽度 → pointerup 一次提交
+// - 钳制 200–480；pointercancel 同 up 提交；双击重置 260
+// - v2.2 优化：移除拖拽宽度角标（用户反馈）
 // - 拖拽期间不调用 onWidthCommit（预览不写 store，spec §5.3）
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -33,15 +34,14 @@ describe('Sidebar', () => {
     expect(baseProps.onCollapse).toHaveBeenCalledTimes(1);
   });
 
-  it('拖拽：down→move 实时预览（角标 350），up 一次提交 350', () => {
+  it('拖拽：down→move 实时预览宽度，up 一次提交', () => {
     const onWidthCommit = vi.fn();
     renderSidebar({ onWidthCommit });
 
     fireEvent.pointerDown(screen.getByTestId('sidebar-resizer'), { clientX: 100 });
     fireEvent.pointerMove(window, { clientX: 150 });
-    // 预览阶段：宽度已变 + 角标显示，但未提交
+    // 预览阶段：宽度已变，但未提交
     expect(screen.getByTestId('view-sidebar').style.width).toBe('310px');
-    expect(screen.getByTestId('sidebar-width-badge').textContent).toBe('310 px');
     expect(onWidthCommit).not.toHaveBeenCalled();
 
     fireEvent.pointerUp(window, { clientX: 150 });
@@ -49,13 +49,12 @@ describe('Sidebar', () => {
     expect(onWidthCommit).toHaveBeenCalledWith(310);
   });
 
-  it('拖拽钳制：超出上限角标提示「最大」，提交 480', () => {
+  it('拖拽钳制：超出上限提交 480', () => {
     const onWidthCommit = vi.fn();
     renderSidebar({ width: 400, onWidthCommit });
 
     fireEvent.pointerDown(screen.getByTestId('sidebar-resizer'), { clientX: 100 });
     fireEvent.pointerMove(window, { clientX: 2000 });
-    expect(screen.getByTestId('sidebar-width-badge').textContent).toBe('480 px · 最大');
     expect(screen.getByTestId('view-sidebar').style.width).toBe('480px');
 
     fireEvent.pointerUp(window, { clientX: 2000 });

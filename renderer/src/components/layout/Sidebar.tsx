@@ -3,7 +3,7 @@
 // 侧边栏容器（v2.2 宽度拖拽 + 完全收起改造）：ViewSidebar 的展开态外壳。
 // - 顶部 36px 头部行：视图标题 + 收起按钮（PanelLeftClose）
 // - 右缘 4px 分隔条：拖拽调宽（本地预览，pointerup/pointercancel 一次提交 onWidthCommit）；
-//   双击重置默认 260
+//   双击重置默认 260（v2.2 优化：不做宽度角标展示）
 // - 收起态（完全消失）由 ViewSidebar 判定 return null，本组件不再渲染 48px 图标轨
 //
 // 拖拽 move/up 监听挂 window：真实 DOM 中 setPointerCapture 后事件仍冒泡到 window，
@@ -104,21 +104,6 @@ export function Sidebar({ label, width, onWidthCommit, onCollapse, children }: S
           previewWidth !== null ? 'bg-accent-500' : 'bg-subtle hover:bg-accent-500'
         }`}
       />
-      {/* 拖拽宽度角标：跟随分隔条位置，触界提示最小/最大 */}
-      {previewWidth !== null && (
-        <div
-          data-testid="sidebar-width-badge"
-          className="absolute top-2 z-10 -translate-x-1/2 rounded-md border border-accent-500 bg-surface-3 px-2 py-0.5 font-mono text-xs text-primary"
-          style={{ left: effectiveWidth - 2 }}
-        >
-          {previewWidth}
-          {previewWidth === SIDEBAR_WIDTH_MIN
-            ? ' px · 最小'
-            : previewWidth === SIDEBAR_WIDTH_MAX
-              ? ' px · 最大'
-              : ' px'}
-        </div>
-      )}
     </div>
   );
 }
