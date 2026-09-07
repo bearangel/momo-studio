@@ -96,6 +96,7 @@ END;
 ### 4.4 队列语义
 
 - `assigned` = 就绪等待放行（队列成员）；`pending` = 定时未到；`draft` = 待配置
+- **实施修订（2026-09-07 终审）**：create 入口（IPC / agent 工具）带 `scheduledAt` 的任务直接落 `pending`（原稿恒落 draft，定时链无生产者）；scheduler 到点升级的目标过滤扩为三类目标任一（原 `assignee_agent_id IS NOT NULL` 为 v1 残留，team/session 目标永不到 assigned）；executor 对三目标全空的 assigned 明示转 failed
 - 放行序：`priority DESC → COALESCE(scheduled_at, created_at) ASC → created_at ASC`
 - 排名「排队 #N」读取时计算，不持久化
 - scheduler 职责不变（`pending → assigned` 到点升级），executor 接管 `assigned → in_progress`
@@ -129,7 +130,7 @@ launch(task):
 
 ### 5.3 starter 决策树扩展
 
-优先级插入一档：`显式 executionSessionId > target_team_id（事务内新建团队协作会话，快照展开成员）> createNewRoom > source_session > 新建任务会话`。团队分支复用 v25 团队快照展开逻辑，三步写（insertSession + addSessionMember×N + transitionTaskStatus）包同一事务（Task 12 原子化模式）。
+优先级（**实施修订**：与实现/计划一致，`createNewRoom` 前置；原稿把 team 排在 createNewRoom 前为笔误）：`显式 executionSessionId > createNewRoom > target_team_id（事务内新建团队协作会话，快照展开成员）> source_session > 新建任务会话`。团队分支复用 v25 团队快照展开逻辑，三步写（insertSession + addSessionMember×N + transitionTaskStatus）包同一事务（Task 12 原子化模式）。**复用既有会话（显式 sessionId / source_session）且任务有 assignee 时，事务内幂等补 `addSessionMember`（终审 I2）**——否则 kickoff mention 的 agent 非成员会被接待路由错配。
 
 ### 5.4 kickoff 注入
 
@@ -143,7 +144,7 @@ launch(task):
 
 - agent 目标：`mentionedInstanceIds=[assignee]`
 - 团队 / 会话目标：不 mention，走接待路由
-- 冲突检测免疫：kickoff mention 自己的任务 id，`detectConflict` 条件 3（mentioned ≠ 当前任务）不满足
+- 冲突检测与 #T 激活免疫：**实施修订（终审 I1）**——kickoff 以 `systemKickoff: true` 调 `sendUserMessage`，显式跳过冲突检测与激活两钩子（原稿「自 mention 不触发冲突」的机制论断不成立：`】#T-xxx` 的 `#` 前非空白，正则本就不解析——免疫是空真；且 description 内嵌的 `#T-` 引用可解析，会误触冲突弹窗并劫持激活）。落库 / 推送 / P2P 广播 / 路由保留
 
 ## 6. #T 激活链路
 
