@@ -103,6 +103,13 @@ export async function sendUserMessage(input: {
   sessionId: string;
   body: string;
   mentionedInstanceIds?: string[];
+  /**
+   * 系统 kickoff 消息（executor 放行时经 runtime-init 注入）：跳过冲突检测
+   * 与 #T 激活两个用户语义钩子。kickoff 正文天然含 #T 任务 id（【任务启动】
+   * #T-xxx），不跳过会误触发「切换任务」冲突弹窗，并把描述里提及的其他任务
+   * 激活到执行会话。消息落库 / P2P 广播 / 路由派发不受影响。
+   */
+  systemKickoff?: boolean;
 }): Promise<SendUserMessageResult> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
@@ -131,30 +138,37 @@ export async function sendUserMessage(input: {
     eventType: 'm.room.message',
   });
 
-  // 冲突检测（沿用 im:send 的保护语义：失败不阻塞消息发送）
-  try {
-    const conflict = detectConflict(input.sessionId, input.body, {
-      findInProgressTaskByRoom: (sessionId) =>
-        listTasks({ executionSessionId: sessionId, status: 'in_progress', limit: 1 })[0] ?? null,
-      getTask,
-    });
-    if (conflict && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('im:conflict', conflict);
+  // 冲突检测（沿用 im:send 的保护语义：失败不阻塞消息发送）。
+  // systemKickoff：executor 注入的系统消息不做冲突检测——kickoff 正文自带
+  // #T 任务 id，检测必然命中「会话内 in_progress + mention 其他任务」误报
+  if (!input.systemKickoff) {
+    try {
+      const conflict = detectConflict(input.sessionId, input.body, {
+        findInProgressTaskByRoom: (sessionId) =>
+          listTasks({ executionSessionId: sessionId, status: 'in_progress', limit: 1 })[0] ?? null,
+        getTask,
+      });
+      if (conflict && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('im:conflict', conflict);
+      }
+    } catch (err) {
+      logger.warn('冲突检测失败（不阻塞消息发送）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-  } catch (err) {
-    logger.warn('冲突检测失败（不阻塞消息发送）', {
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 
   // #T mention 激活（v2.3）：可激活任务拉到本会话执行（spec §6）。
+  // systemKickoff：同上跳过——kickoff 描述里的 #T 引用是上下文不是用户意图。
   // activateMentionedTasks 内部逐任务 try/catch——此处再包一层防御。
-  try {
-    activateMentionedTasks(input.sessionId, input.body);
-  } catch (err) {
-    logger.warn('#T 激活钩子异常（不阻塞消息发送）', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (!input.systemKickoff) {
+    try {
+      activateMentionedTasks(input.sessionId, input.body);
+    } catch (err) {
+      logger.warn('#T 激活钩子异常（不阻塞消息发送）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // 有效成员（JOIN 过滤失效）→ 选目标派发；全失效时 members 为空（readOnly）

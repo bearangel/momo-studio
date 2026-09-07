@@ -37,6 +37,9 @@ export function initTaskRuntime(opts?: InitTaskRuntimeOpts): void {
         sessionId: input.sessionId,
         body: input.body,
         mentionedInstanceIds: input.mentionedInstanceIds,
+        // kickoff 是系统消息：跳过冲突检测与 #T 激活（正文天然含 #T id，
+        // 不跳过会误报冲突弹窗 + 误激活描述里提及的任务）
+        systemKickoff: true,
       });
     }),
     getGlobalMax: opts?.getGlobalMax,

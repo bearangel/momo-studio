@@ -35,7 +35,7 @@ vi.mock('../../src/main/logger', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember, getSession } from '../../src/main/storage/sessions/repo';
-import { insertTask } from '../../src/main/storage/tasks/repo';
+import { insertTask, getTask } from '../../src/main/storage/tasks/repo';
 import { logger } from '../../src/main/logger';
 import {
   resolveTarget,
@@ -414,5 +414,81 @@ describe('sendUserMessage 全链', () => {
     const rows = db.prepare('SELECT id FROM messages WHERE session_id = ?').all(s.id) as unknown[];
     expect(rows).toHaveLength(1);
     expect(routeUserChat).toHaveBeenCalledTimes(1);
+  });
+
+  // I1 契约：executor 注入的 kickoff 系统消息跳过冲突检测与 #T 激活。
+  // kickoff 正文天然含 #T 任务 id（【任务启动】#T-xxx）——不跳过时必然误触发
+  // 「会话内 in_progress + mention 其他任务」冲突弹窗与把被提及任务拉到本会话。
+  it('systemKickoff：跳过冲突检测与 #T 激活，消息仍落库且路由保留', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '执行会话' });
+    addSessionMember(s.id, 'inst-a', true);
+
+    // T-900：本会话正在执行的任务（execution room = s）
+    insertTask({ id: 'T-900', workspaceId: 'ws1', title: '运行中', description: '背景见 #T-005', creatorUserId: '@owner:s', status: 'in_progress', executionSessionId: s.id });
+    // T-999 / T-005：正文与描述里被提及的可激活 pending 任务
+    insertTask({ id: 'T-999', workspaceId: 'ws1', title: '被正文提及', creatorUserId: '@owner:s', status: 'pending' });
+    insertTask({ id: 'T-005', workspaceId: 'ws1', title: '被描述提及', creatorUserId: '@owner:s', status: 'pending' });
+
+    const { win, send } = makeFakeWindow();
+    setSessionMainWindow(win);
+    const { router, routeUserChat } = makeSpyRouter();
+    setSessionRouter(router);
+
+    // kickoff 消息体（buildKickoffBody 产物形状：正文含 #T-999，描述含 #T-005；
+    // #T mention 正则要求前后空白——用空格分隔，不用中文逗号）
+    const body = '【任务启动】#T-900 · 运行中\n\n背景任务见 #T-999 详细描述含 #T-005';
+    const result = await sendUserMessage({ sessionId: s.id, body, systemKickoff: true });
+
+    // 消息正常落库 + 会话不因系统消息判只读
+    expect(result).toEqual({ readOnly: false });
+    const rows = db.prepare('SELECT body FROM messages WHERE session_id = ?').all(s.id) as Array<{ body: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.body).toBe(body);
+
+    // 无冲突推送（若无 systemKickoff，此消息必触发 im:conflict）
+    expect(send).not.toHaveBeenCalledWith('im:conflict', expect.anything());
+
+    // 两个被提及任务均未被激活：status 不变 + 目标列未被改写到本会话
+    expect(getTask('T-999')!.status).toBe('pending');
+    expect(getTask('T-999')!.targetSessionId).toBeNull();
+    expect(getTask('T-005')!.status).toBe('pending');
+    expect(getTask('T-005')!.targetSessionId).toBeNull();
+
+    // 路由保留：kickoff 仍需 leader 接待派发（P2P 广播 mockBroadcast 同样保留）
+    expect(routeUserChat).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+  });
+
+  // 对照组（同一 seed 不带 systemKickoff）：冲突推送与激活钩子正常生效——
+  // 锁死 systemKickoff 只关掉两个钩子，而非全局副作用
+  it('对照组：同消息不带 systemKickoff → 冲突推送 + 两任务被激活到本会话', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '执行会话' });
+    addSessionMember(s.id, 'inst-a', true);
+
+    insertTask({ id: 'T-900', workspaceId: 'ws1', title: '运行中', creatorUserId: '@owner:s', status: 'in_progress', executionSessionId: s.id });
+    insertTask({ id: 'T-999', workspaceId: 'ws1', title: '被正文提及', creatorUserId: '@owner:s', status: 'pending' });
+    insertTask({ id: 'T-005', workspaceId: 'ws1', title: '被描述提及', creatorUserId: '@owner:s', status: 'pending' });
+
+    const { win, send } = makeFakeWindow();
+    setSessionMainWindow(win);
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    const body = '【任务启动】#T-900 · 运行中\n\n背景任务见 #T-999 详细描述含 #T-005';
+    await sendUserMessage({ sessionId: s.id, body });
+
+    expect(send).toHaveBeenCalledWith('im:conflict', expect.objectContaining({ newTaskId: 'T-999' }));
+    expect(getTask('T-999')!.status).toBe('assigned');
+    expect(getTask('T-999')!.targetSessionId).toBe(s.id);
+    expect(getTask('T-005')!.status).toBe('assigned');
+    expect(getTask('T-005')!.targetSessionId).toBe(s.id);
   });
 });
