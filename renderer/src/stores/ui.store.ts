@@ -12,20 +12,20 @@ export const SIDEBAR_WIDTH_MIN = 200;
 export const SIDEBAR_WIDTH_MAX = 480;
 export const SIDEBAR_WIDTH_DEFAULT = 260;
 
-/** localStorage 持久化 key（spec D4）：各视图宽度 + 收起状态 */
+/** localStorage 持久化 key（spec D4）：各视图宽度 + 各视图独立收起状态 */
 const SIDEBAR_STORAGE_KEY = 'ui.sidebar.v1';
 
 interface PersistedSidebarState {
   sidebarWidths: Record<SidebarViewKey, number>;
-  sidebarCollapsed: boolean;
+  sidebarCollapsed: Record<SidebarViewKey, boolean>;
 }
 
 interface UiState {
   activeView: ViewKey;
   setActiveView: (view: ViewKey) => void;
-  /** 侧边栏收起状态（v2.2 起收起=完全消失，随 ui.sidebar.v1 持久化） */
-  sidebarCollapsed: boolean;
-  toggleSidebar: () => void;
+  /** 各视图独立收起状态（v2.2 优化：三视图互不影响，随 ui.sidebar.v1 持久化） */
+  sidebarCollapsed: Record<SidebarViewKey, boolean>;
+  toggleSidebar: (view: SidebarViewKey) => void;
   /** 各视图独立宽度（px）；提交时钳制到 [MIN, MAX] */
   sidebarWidths: Record<SidebarViewKey, number>;
   setSidebarWidth: (view: SidebarViewKey, width: number) => void;
@@ -40,17 +40,41 @@ const defaultWidths = (): Record<SidebarViewKey, number> => ({
   tasks: SIDEBAR_WIDTH_DEFAULT,
 });
 
-// 启动时读一次持久化（spec §5.1）：JSON 坏 → 全默认；单项非有限数值或超
+const defaultCollapsed = (): Record<SidebarViewKey, boolean> => ({
+  im: false,
+  files: false,
+  tasks: false,
+});
+
+// 收起状态解析：v2.2 优化前为共享 boolean（按同值迁移到三视图，旧数据兼容）；
+// 现为 per-view 对象，单项非 true（缺失/类型错）一律回 false
+const parseCollapsed = (raw: unknown): Record<SidebarViewKey, boolean> => {
+  const collapsed = defaultCollapsed();
+  if (typeof raw === 'boolean') {
+    for (const key of SIDEBAR_VIEWS) collapsed[key] = raw;
+    return collapsed;
+  }
+  if (raw && typeof raw === 'object') {
+    const rec = raw as Partial<Record<SidebarViewKey, unknown>>;
+    for (const key of SIDEBAR_VIEWS) {
+      collapsed[key] = rec[key] === true;
+    }
+  }
+  return collapsed;
+};
+
+// 启动时读一次持久化（spec §5.1）：JSON 坏 → 全默认；宽度单项非有限数值或超
 // [MIN, MAX] → 该项回默认 260（非法值不信任、不钳制补救）
 const loadPersisted = (): PersistedSidebarState => {
   try {
     const raw = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    if (!raw) return { sidebarWidths: defaultWidths(), sidebarCollapsed: false };
-    const parsed = JSON.parse(raw) as Partial<PersistedSidebarState>;
+    if (!raw) return { sidebarWidths: defaultWidths(), sidebarCollapsed: defaultCollapsed() };
+    const parsed = JSON.parse(raw) as { sidebarWidths?: unknown; sidebarCollapsed?: unknown };
     const widths = defaultWidths();
-    if (parsed.sidebarWidths) {
+    if (parsed.sidebarWidths && typeof parsed.sidebarWidths === 'object') {
+      const widthRec = parsed.sidebarWidths as Partial<Record<SidebarViewKey, unknown>>;
       for (const key of SIDEBAR_VIEWS) {
-        const v = parsed.sidebarWidths[key];
+        const v = widthRec[key];
         if (
           typeof v === 'number' &&
           Number.isFinite(v) &&
@@ -61,9 +85,9 @@ const loadPersisted = (): PersistedSidebarState => {
         }
       }
     }
-    return { sidebarWidths: widths, sidebarCollapsed: parsed.sidebarCollapsed === true };
+    return { sidebarWidths: widths, sidebarCollapsed: parseCollapsed(parsed.sidebarCollapsed) };
   } catch {
-    return { sidebarWidths: defaultWidths(), sidebarCollapsed: false };
+    return { sidebarWidths: defaultWidths(), sidebarCollapsed: defaultCollapsed() };
   }
 };
 
@@ -86,9 +110,11 @@ export const useUiStore = create<UiState>((set) => ({
   activeView: 'im',
   setActiveView: (view) => set({ activeView: view }),
   sidebarCollapsed: initial.sidebarCollapsed,
-  toggleSidebar: () =>
+  toggleSidebar: (view) =>
     set((s) => {
-      const next = { sidebarCollapsed: !s.sidebarCollapsed };
+      const next = {
+        sidebarCollapsed: { ...s.sidebarCollapsed, [view]: !s.sidebarCollapsed[view] },
+      };
       persistSidebar({ ...s, ...next });
       return next;
     }),

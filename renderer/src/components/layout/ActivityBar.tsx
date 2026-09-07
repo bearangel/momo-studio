@@ -6,7 +6,7 @@
 import type { LucideIcon } from 'lucide-react';
 import { MessageSquare, Folder, SquareKanban, Bot, Library, Settings } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { useUiStore, SIDEBAR_VIEWS, type ViewKey } from '../../stores/ui.store';
+import { useUiStore, SIDEBAR_VIEWS, type SidebarViewKey, type ViewKey } from '../../stores/ui.store';
 
 interface ActivityItem {
   key: ViewKey;
@@ -29,15 +29,15 @@ export function ActivityBar() {
   const setActiveView = useUiStore((s) => s.setActiveView);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
 
-  // 收起状态下点击「当前侧边栏视图」图标 → 恢复侧边栏（v2.2 恢复入口之三）；
-  // 其余情况正常切换视图
+  // 收起状态下点击「当前侧边栏视图」图标 → 恢复该视图侧边栏（v2.2 恢复入口之三；
+  // 收起状态按视图独立，v2.2 优化）；其余情况正常切换视图
   const handleSelect = (view: ViewKey): void => {
     if (
       view === activeView &&
-      useUiStore.getState().sidebarCollapsed &&
-      (SIDEBAR_VIEWS as readonly string[]).includes(view)
+      (SIDEBAR_VIEWS as readonly string[]).includes(view) &&
+      useUiStore.getState().sidebarCollapsed[view as SidebarViewKey]
     ) {
-      toggleSidebar();
+      toggleSidebar(view as SidebarViewKey);
       return;
     }
     setActiveView(view);

@@ -10,7 +10,10 @@ import { useUiStore } from '../../stores/ui.store';
 
 describe('ActivityBar', () => {
   beforeEach(() => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: false });
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: false, files: false, tasks: false },
+    });
   });
 
   it('渲染 5 个主项 + 底部设置项', () => {
@@ -59,27 +62,63 @@ describe('ActivityBar', () => {
     ).toBeNull();
   });
 
-  it('收起时点击当前侧边栏视图图标 → 恢复侧边栏（视图不变）', () => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: true });
+  it('收起时点击当前侧边栏视图图标 → 仅恢复该视图侧边栏（视图不变）', () => {
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: true, files: true, tasks: false },
+    });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('会话'));
-    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: false,
+      files: true,
+      tasks: false,
+    });
     expect(useUiStore.getState().activeView).toBe('im');
   });
 
-  it('收起时点击其它侧边栏视图 → 正常切换视图，保持收起', () => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: true });
+  it('收起时点击其它侧边栏视图 → 正常切换视图，收起状态互不影响', () => {
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: true, files: false, tasks: false },
+    });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('文件'));
     expect(useUiStore.getState().activeView).toBe('files');
-    expect(useUiStore.getState().sidebarCollapsed).toBe(true);
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: true,
+      files: false,
+      tasks: false,
+    });
   });
 
   it('未收起时点击当前视图 → no-op（不切换不恢复）', () => {
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: false });
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: false, files: false, tasks: false },
+    });
     render(<ActivityBar />);
     fireEvent.click(screen.getByLabelText('会话'));
     expect(useUiStore.getState().activeView).toBe('im');
-    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: false,
+      files: false,
+      tasks: false,
+    });
+  });
+
+  it('收起时点击无侧边栏视图（设置）→ 正常切换，不触碰任何视图收起状态', () => {
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: true, files: false, tasks: false },
+    });
+    render(<ActivityBar />);
+    fireEvent.click(screen.getByLabelText('设置'));
+    expect(useUiStore.getState().activeView).toBe('settings');
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: true,
+      files: false,
+      tasks: false,
+    });
   });
 });

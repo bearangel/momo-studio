@@ -51,7 +51,10 @@ describe('MainLayout', () => {
     // 只设置 api，不替换整个 window（保留 jsdom Window 的其它属性与方法）
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     // 重置 store，保证测试间状态确定
-    useUiStore.setState({ activeView: 'im', sidebarCollapsed: false });
+    useUiStore.setState({
+      activeView: 'im',
+      sidebarCollapsed: { im: false, files: false, tasks: false },
+    });
     useWorkspaceStore.setState({
       workspaces: [],
       activeWorkspaceId: null,
@@ -85,14 +88,29 @@ describe('MainLayout', () => {
     expect(useUiStore.getState().activeView).toBe('settings');
   });
 
-  it('Ctrl/Cmd+B 全局快捷键切换侧边栏折叠', () => {
+  it('Ctrl/Cmd+B 全局快捷键切换当前视图侧边栏收起', () => {
     render(<MainLayout />);
-    // Ctrl+B（linux/win）
+    // Ctrl+B（linux/win）——当前视图 im 翻转，其余视图不受影响
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
-    expect(useUiStore.getState().sidebarCollapsed).toBe(true);
-    // Cmd+B（mac）
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: true,
+      files: false,
+      tasks: false,
+    });
+    // Cmd+B（mac）——切回
     fireEvent.keyDown(window, { key: 'b', metaKey: true });
-    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+    expect(useUiStore.getState().sidebarCollapsed.im).toBe(false);
+  });
+
+  it('Ctrl+B 在无侧边栏视图（设置）no-op，不触碰任何视图收起状态', () => {
+    useUiStore.setState({ activeView: 'settings' });
+    render(<MainLayout />);
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    expect(useUiStore.getState().sidebarCollapsed).toEqual({
+      im: false,
+      files: false,
+      tasks: false,
+    });
   });
 
   it('Ctrl+B 事件被 preventDefault（不触发浏览器默认行为）', () => {
@@ -105,7 +123,7 @@ describe('MainLayout', () => {
   it('无修饰键的 b 键不切换侧边栏', () => {
     render(<MainLayout />);
     fireEvent.keyDown(window, { key: 'b' });
-    expect(useUiStore.getState().sidebarCollapsed).toBe(false);
+    expect(useUiStore.getState().sidebarCollapsed.im).toBe(false);
   });
 
   it('shows workspace prompt when no workspace is active', () => {

@@ -3,7 +3,7 @@
 // 统一侧边栏测试（P2 Task 3 / v2.2 Task 3）：
 // - 按 activeView 分发内容：im→RoomList / files→FileTree / tasks→TaskSidebarPanel
 // - agents / marketplace / settings → 渲染 null（主区全宽，无侧边栏）
-// - 收起态 = 完全消失（return null，不再渲染 48px 图标轨）
+// - 收起态 = 完全消失（return null，不再渲染 48px 图标轨）且按视图独立（v2.2 优化）
 // - 宽度按视图独立从 ui.store.sidebarWidths 透传到 Sidebar
 //
 // RoomList / FileTree / TaskSidebarPanel 用轻量桩替代——本文件聚焦分发与折叠逻辑，
@@ -32,7 +32,7 @@ describe('ViewSidebar', () => {
   beforeEach(() => {
     useUiStore.setState({
       activeView: 'im',
-      sidebarCollapsed: false,
+      sidebarCollapsed: { im: false, files: false, tasks: false },
       sidebarWidths: { im: 260, files: 260, tasks: 260 },
     });
   });
@@ -71,10 +71,21 @@ describe('ViewSidebar', () => {
   );
 
   it('收起时完全消失（不再渲染 48px 图标轨），内容不渲染', () => {
-    useUiStore.setState({ sidebarCollapsed: true });
+    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false } });
     const { container } = render(<ViewSidebar />);
     expect(container.firstChild).toBeNull();
     expect(screen.queryByTestId('room-list-stub')).not.toBeInTheDocument();
+  });
+
+  it('收起状态按视图独立：im 收起时 files 视图仍展开', () => {
+    useUiStore.setState({ sidebarCollapsed: { im: true, files: false, tasks: false } });
+    const im = render(<ViewSidebar />);
+    expect(im.container.firstChild).toBeNull();
+
+    cleanup();
+    useUiStore.setState({ activeView: 'files' });
+    const files = render(<ViewSidebar />);
+    expect(files.getByTestId('file-tree-stub')).toBeInTheDocument();
   });
 
   it('宽度从 store 透传到 Sidebar（视图独立宽度）', () => {

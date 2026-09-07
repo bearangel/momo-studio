@@ -10,7 +10,7 @@ import { ActivityBar } from './ActivityBar';
 import { ViewSidebar } from './ViewSidebar';
 import { MiddlePanel } from './MiddlePanel';
 import { ipc } from '../../ipc/client';
-import { useUiStore } from '../../stores/ui.store';
+import { useUiStore, SIDEBAR_VIEWS, type SidebarViewKey } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -52,12 +52,16 @@ export function MainLayout() {
     return cleanup;
   }, [loadMembers]);
 
-  // 全局 Ctrl/Cmd+B 折叠/展开侧边栏（preventDefault 阻止浏览器默认行为）
+  // 全局 Ctrl/Cmd+B 折叠/展开当前视图侧边栏（preventDefault 阻止浏览器默认行为）。
+  // v2.2 优化：收起状态按视图独立——仅当前为侧边栏视图时切换该视图，其余视图无侧边栏 no-op
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
         e.preventDefault();
-        useUiStore.getState().toggleSidebar();
+        const { activeView, toggleSidebar } = useUiStore.getState();
+        if ((SIDEBAR_VIEWS as readonly string[]).includes(activeView)) {
+          toggleSidebar(activeView as SidebarViewKey);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);

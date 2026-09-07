@@ -3,8 +3,8 @@
 // 统一侧边栏：按 activeView 分发侧边栏内容。
 //   im → RoomList；files → FileTree（onSelectFile 内部直连 editor.store + ipc）；
 //   tasks → TaskSidebarPanel；agents/marketplace/settings → null（主区全宽）。
-// v2.2：收起 = 完全消失（return null，废弃 48px 图标轨）；宽度从 ui.store.sidebarWidths
-// 按视图独立透传；拖拽提交绑 setSidebarWidth。Ctrl/Cmd+B 监听仍在 MainLayout。
+// v2.2：收起 = 完全消失（return null，废弃 48px 图标轨）且按视图独立；宽度从
+// ui.store.sidebarWidths 按视图独立透传；拖拽提交绑 setSidebarWidth。Ctrl/Cmd+B 在 MainLayout。
 import { useCallback } from 'react';
 import { useUiStore, SIDEBAR_VIEWS, SIDEBAR_WIDTH_DEFAULT, type SidebarViewKey } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -25,9 +25,14 @@ const VIEW_LABELS: Partial<Record<string, string>> = {
 
 export function ViewSidebar() {
   const activeView = useUiStore((s) => s.activeView);
-  const collapsed = useUiStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
+  // 收起状态按视图独立（v2.2 优化）：非侧边栏视图恒 false（下方 label 判定后不会用到）
+  const collapsed = useUiStore((s) =>
+    (SIDEBAR_VIEWS as readonly string[]).includes(s.activeView)
+      ? s.sidebarCollapsed[s.activeView as SidebarViewKey]
+      : false,
+  );
   // 非侧边栏视图取默认值兜底（下方 label 判定后不会用到）
   const width = useUiStore((s) =>
     (SIDEBAR_VIEWS as readonly string[]).includes(s.activeView)
@@ -57,7 +62,7 @@ export function ViewSidebar() {
       label={label}
       width={width}
       onWidthCommit={(w) => setSidebarWidth(viewKey, w)}
-      onCollapse={toggleSidebar}
+      onCollapse={() => toggleSidebar(viewKey)}
     >
       {activeView === 'im' && (
         // 会话区：头部双常驻入口（⚡/👥，spec §6.2）+ 列表（图标语义派生）
