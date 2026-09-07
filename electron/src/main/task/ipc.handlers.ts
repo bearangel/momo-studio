@@ -18,6 +18,8 @@
 //   - P4 Task 2：四个写通道（create/transition/cancel/start）成功后 fire-and-forget
 //     广播任务快照（P2P 未启用时内部静默 no-op）。import 叶子模块 task-broadcast
 //     而非 p2p 门面——避免把 electron/传输层依赖拖进 scheduler 等纯逻辑模块的测试图。
+//   - Task 5：同一批写通道成功后 notifyExecutor()——队列状态变化立即触发放行评估
+//     （executor 内部 100ms 去抖合并；通知丢了有 30s 兜底扫描自愈）。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
@@ -30,6 +32,7 @@ import {
   type TaskStatus,
 } from '../storage/tasks/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
+import { notifyExecutor } from './executor';
 import { startTask, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
@@ -74,6 +77,7 @@ export function registerTaskHandlers(): void {
       deadlineAt: input.deadlineAt,
     });
     void broadcastLocalTaskSnapshot();
+    notifyExecutor();
     return created;
   });
 
@@ -112,6 +116,7 @@ export function registerTaskHandlers(): void {
     ): Promise<TaskRow> => {
       const row = transitionTaskStatus(id, to, extraPatch);
       void broadcastLocalTaskSnapshot();
+      notifyExecutor();
       return row;
     },
   );
@@ -119,6 +124,7 @@ export function registerTaskHandlers(): void {
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
     transitionTaskStatus(id, 'cancelled');
     void broadcastLocalTaskSnapshot();
+    notifyExecutor();
   });
 
   ipcMain.handle(
@@ -130,6 +136,7 @@ export function registerTaskHandlers(): void {
     ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
       const result = await startTask(id, opts);
       void broadcastLocalTaskSnapshot();
+      notifyExecutor();
       return {
         executionSessionId: result.executionSessionId,
         createdNewRoom: result.createdNewRoom,

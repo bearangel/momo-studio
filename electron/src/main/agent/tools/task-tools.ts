@@ -37,6 +37,8 @@ import {
   type MessageEventRow,
 } from '../../storage/messages/events-repo';
 import { getDb } from '../../storage/db';
+import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
+import { notifyExecutor } from '../../task/executor';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
@@ -160,6 +162,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
  */
 export async function completeTask(taskId: string): Promise<void> {
   transitionTaskStatus(taskId, 'completed', { completedAt: Date.now() });
+  // 终态钩子（Task 5）：循环任务续期（仅 completed；spec §7.2）+ 释放槽位立即评估放行
+  spawnNextInstanceIfRecurring(taskId);
+  notifyExecutor();
 }
 
 /**
@@ -173,6 +178,8 @@ export async function failTask(taskId: string, reason: string): Promise<void> {
     errorMessage: reason,
     completedAt: Date.now(),
   });
+  // 终态钩子（Task 5）：失败同样释放槽位——立即触发放行评估
+  notifyExecutor();
 }
 
 /** list_tasks：透传 tasks repo.listTasks 参数（多维过滤 + 排序 + limit）。 */

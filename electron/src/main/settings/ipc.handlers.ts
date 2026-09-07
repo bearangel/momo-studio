@@ -11,6 +11,7 @@ import {
   getSessionSettings,
   updateSessionSettings,
 } from './crud';
+import { notifyExecutor } from '../task/executor';
 
 /** 注册 settings 命名空间 IPC handlers */
 export function registerSettingsIpc(): void {
@@ -20,6 +21,10 @@ export function registerSettingsIpc(): void {
 
   ipcMain.handle('settings:updateGlobal', (_event, patch) => {
     updateGlobalSettings(patch);
+    // 并发上限变更 → 立即评估补充放行（spec §9 边界表）
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'maxConcurrentTasks')) {
+      notifyExecutor();
+    }
     return getGlobalSettings();
   });
 

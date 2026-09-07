@@ -28,6 +28,8 @@ import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/sta
 import { finalizeStreamOnCrash } from './stream-relay';
 import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
+import { spawnNextInstanceIfRecurring } from '../task/recurrence';
+import { notifyExecutor } from '../task/executor';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -307,6 +309,9 @@ export class AgentRunner {
             }
           : {}),
       });
+      // 循环任务续期（仅 completed；spec §7.2）+ 释放槽位立即评估放行
+      if (to === 'completed') spawnNextInstanceIfRecurring(taskId);
+      notifyExecutor();
     } catch (err) {
       logger.warn('task-end 终态转换失败', {
         taskId,
@@ -368,6 +373,8 @@ export class AgentRunner {
         completedAt: Date.now(),
         errorMessage: errorText,
       });
+      // 崩溃收尾同样释放槽位——立即触发放行评估
+      notifyExecutor();
     } catch (err) {
       logger.warn('崩溃任务收尾失败', {
         taskId,
