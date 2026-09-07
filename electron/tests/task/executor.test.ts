@@ -1,8 +1,11 @@
 // electron/tests/task/executor.test.ts
 //
 // TaskExecutor 放行测试（spec §5.1）：全局并发 gate / 放行排序 /
-// 目标校验失败→failed / kickoff 失败→failed / 会话目标走显式 executionSessionId。
+// 目标校验失败→failed / kickoff 失败→failed / 会话目标走显式 executionSessionId /
+// startTask 抛错→本轮跳过（无死循环）。
 // kickoff 走注入的 fake（不依赖 session-service / router 真链路）。
+// startTask 通过 module-level vi.mock 收窄劫持，仅当新 case 的
+// `rejectStartTaskForId` 标志命中时才抛错；其他 6 个 case 走真实实现。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,9 +16,32 @@ import { insertSession } from '../../src/main/storage/sessions/repo';
 import { TaskExecutor } from '../../src/main/task/executor';
 import type { ExecutorDeps } from '../../src/main/task/executor';
 
+/**
+ * startTask 抛错路径回归锁专用：模块级 mock + 闭包开关。
+ * vi.mock 是 module 级且 hoisted——同一份 mock 实现贯穿全文件；
+ * 仅当本变量被设为某个 taskId 时，该 id 走抛错分支，其他场景一律透传
+ * 真实实现，避免污染既有的 6 个用例（其中两个会调 startTask('T-001')，
+ * 若固定拦截 T-001 会让它们也挂掉）。
+ */
+let rejectStartTaskForId: string | null = null;
+
+vi.mock('../../src/main/task/starter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/task/starter')>();
+  return {
+    ...actual,
+    startTask: vi.fn(async (taskId: string, opts?: Parameters<typeof actual.startTask>[1]) => {
+      if (rejectStartTaskForId !== null && taskId === rejectStartTaskForId) {
+        throw new Error('状态竞态：行已被并发改态');
+      }
+      return actual.startTask(taskId, opts);
+    }),
+  };
+});
+
 const tmpRoot = path.join(os.tmpdir(), `ap-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 beforeEach(() => {
+  rejectStartTaskForId = null; // 新 case 在 it() 内覆写，其他 6 个 case 保持透传
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
@@ -129,5 +155,35 @@ describe('TaskExecutor.admitOnce', () => {
     await mkExecutor(3, kickoff).admitOnce();
     expect(kickoff).not.toHaveBeenCalled();
     expect(listTasks({ workspaceId: 'ws1', status: 'in_progress' })).toHaveLength(0);
+  });
+
+  it('startTask 抛错 → 该候选本轮跳过保持 assigned，后续候选继续放行，无死循环', async () => {
+    // 守护点：executor.admitOnce 第 102 行 skipped.add(candidate.id)。
+    // 若丢了这行，while 内同一候选会被反复选中，startTask 持续抛错，
+    // admitOnce 永不返回——admitOnce() 能 resolve 本身就是「无死循环」的回归证据。
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: 'high', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 10 });
+    insertTask({ workspaceId: 'ws1', title: 'low', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 1 });
+    // 启用收窄抛错：仅 T-001 走抛错分支，T-002 走真实 startTask
+    rejectStartTaskForId = 'T-001';
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    const ex = mkExecutor(3, kickoff);
+
+    // 无死循环证明：以下 await 能 resolve
+    await ex.admitOnce();
+
+    // T-001（高优先级，startTask 抛错）：本轮跳过，保持 assigned；
+    // launch 的 catch 静默吞掉（logger.warn），不写 errorMessage 列——
+    // 不同于 failQuietly 路径（目标无效 / kickoff 失败会写）。
+    const high = getTask('T-001')!;
+    expect(high.status).toBe('assigned');
+    expect(high.errorMessage).toBeNull();
+
+    // T-002（低优先级，正常 startTask + kickoff）：放行进 in_progress，
+    // kickoff 仅被调用一次（即 T-002 的会话），T-001 的失败未污染下游
+    const low = getTask('T-002')!;
+    expect(low.status).toBe('in_progress');
+    expect(kickoff).toHaveBeenCalledTimes(1);
+    expect(kickoff.mock.calls[0][0].sessionId).toBe(low.executionSessionId);
   });
 });
