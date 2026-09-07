@@ -814,6 +814,39 @@ UPDATE messages SET body = COALESCE((
 WHERE body = '';
     `.trim(),
   },
+  {
+    version: 29,
+    sql: `
+-- ─── v29：任务执行运行时（委派目标三列 + 循环实例链）─────────────────────────
+-- spec: docs/specs/2026-09-07-task-execution-runtime-design.md §4.1
+-- 三目标互斥用 trigger 模拟 CHECK（SQLite 不支持 ALTER ADD CONSTRAINT，
+-- 与 v17 messages.task_id trigger 先例同法）。
+ALTER TABLE tasks ADD COLUMN target_team_id      TEXT;
+ALTER TABLE tasks ADD COLUMN target_session_id   TEXT;
+ALTER TABLE tasks ADD COLUMN recurrence_parent_id TEXT;
+
+-- executor 放行查询：status + 优先级 + 计划时间（spec §5.1）
+CREATE INDEX IF NOT EXISTS idx_tasks_admission ON tasks(status, priority DESC, scheduled_at);
+
+CREATE TRIGGER trg_tasks_target_exclusive_insert
+BEFORE INSERT ON tasks
+BEGIN
+  SELECT CASE WHEN
+    ((NEW.assignee_agent_id IS NOT NULL) + (NEW.target_team_id IS NOT NULL)
+     + (NEW.target_session_id IS NOT NULL)) > 1
+  THEN RAISE(ABORT, '任务委派目标三列（agent/team/session）最多一个非空') END;
+END;
+
+CREATE TRIGGER trg_tasks_target_exclusive_update
+BEFORE UPDATE ON tasks
+BEGIN
+  SELECT CASE WHEN
+    ((NEW.assignee_agent_id IS NOT NULL) + (NEW.target_team_id IS NOT NULL)
+     + (NEW.target_session_id IS NOT NULL)) > 1
+  THEN RAISE(ABORT, '任务委派目标三列（agent/team/session）最多一个非空') END;
+END;
+    `.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

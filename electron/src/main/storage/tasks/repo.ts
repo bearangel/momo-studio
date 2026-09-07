@@ -33,6 +33,11 @@ export interface TaskRow {
   creatorUserId: string;
   executionSessionId: string | null;
   assigneeAgentId: string | null;
+  /** 委派目标三列（v29，互斥：最多一个非空；trigger 强制） */
+  targetTeamId: string | null;
+  targetSessionId: string | null;
+  /** 循环实例链：本行由哪次运行完成后续期生成（自复制实例模型，spec §7） */
+  recurrenceParentId: string | null;
   priority: number;
   scheduledAt: number | null;
   recurrenceRule: string | null;
@@ -63,6 +68,9 @@ type SqlRow = {
   creator_user_id: string;
   execution_session_id: string | null;
   assignee_agent_id: string | null;
+  target_team_id: string | null;
+  target_session_id: string | null;
+  recurrence_parent_id: string | null;
   priority: number;
   scheduled_at: number | null;
   recurrence_rule: string | null;
@@ -92,6 +100,9 @@ function rowToCamel(r: SqlRow): TaskRow {
     creatorUserId: r.creator_user_id,
     executionSessionId: r.execution_session_id,
     assigneeAgentId: r.assignee_agent_id,
+    targetTeamId: r.target_team_id,
+    targetSessionId: r.target_session_id,
+    recurrenceParentId: r.recurrence_parent_id,
     priority: r.priority,
     scheduledAt: r.scheduled_at,
     recurrenceRule: r.recurrence_rule,
@@ -169,10 +180,11 @@ export function insertTask(
       id, workspace_id, title, description, status,
       source_session_id, source_message_id, creator_user_id,
       execution_session_id, assignee_agent_id,
+      target_team_id, target_session_id, recurrence_parent_id,
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message, source_node_id,
       created_at, updated_at, started_at, completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -184,6 +196,9 @@ export function insertTask(
     input.creatorUserId,
     input.executionSessionId,
     input.assigneeAgentId,
+    input.targetTeamId,
+    input.targetSessionId,
+    input.recurrenceParentId,
     priority,
     input.scheduledAt,
     input.recurrenceRule,
@@ -223,6 +238,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       workspace_id=?, title=?, description=?, status=?,
       source_session_id=?, source_message_id=?, creator_user_id=?,
       execution_session_id=?, assignee_agent_id=?,
+      target_team_id=?, target_session_id=?, recurrence_parent_id=?,
       priority=?, scheduled_at=?, recurrence_rule=?, deadline_at=?,
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?, source_node_id=?,
       updated_at=?, started_at=?, completed_at=?
@@ -237,6 +253,9 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.creatorUserId,
     next.executionSessionId,
     next.assigneeAgentId,
+    next.targetTeamId,
+    next.targetSessionId,
+    next.recurrenceParentId,
     next.priority,
     next.scheduledAt,
     next.recurrenceRule,
