@@ -7,8 +7,9 @@
 // 决策优先级（按 brief 关键设计点）：
 //   1. 调用方显式传 executionSessionId → 用预设
 //   2. createNewRoom=true → 强制创建新任务会话
-//   3. task.sourceSessionId 存在 → 锁定 source_session（任务诞生的会话）
-//   4. 都没 → 创建新会话（命名：任务 #T-XXX: 标题前 20 字）
+//   3. task.targetTeamId 存在 → 团队执行会话（spec §5.3：成员=团队快照 + leader 标记）
+//   4. task.sourceSessionId 存在 → 锁定 source_session（任务诞生的会话）
+//   5. 都没 → 创建新会话（命名：任务 #T-XXX: 标题前 20 字）
 //
 // 锁定规则：任务一旦进入 in_progress，execution_session_id 不可改。
 // 重新启动已 in_progress 的任务时：
@@ -24,6 +25,7 @@
 import { getDb } from '../storage/db';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { insertSession, addSessionMember } from '../storage/sessions/repo';
+import { teamExists, expandTeamMembers, getTeamLeaderInstanceId } from '../agent/team';
 import { logger } from '../logger';
 
 export interface StartTaskResult {
@@ -78,7 +80,7 @@ export async function startTask(
   }
 
   // 决策 execution_room + 三步写入，包在同一事务（Task 12 原子化）：
-  // 预设 → createNewRoom → source_session → 新建会话
+  // 预设 → createNewRoom → targetTeamId → source_session → 新建会话
   const result = getDb().transaction((o: StartTaskOpts): StartTaskResult => {
     let executionSessionId: string;
     let createdNewRoom = false;
@@ -86,6 +88,14 @@ export async function startTask(
       executionSessionId = o.executionSessionId;
     } else if (o.createNewRoom) {
       executionSessionId = createNewTaskRoom(task);
+      createdNewRoom = true;
+    } else if (task.targetTeamId) {
+      // v29 团队分支（spec §5.3）：事务内建执行会话 + 团队快照成员 +
+      // leader is_leader 标记（kickoff 无 mention → 接待路由给 leader）
+      if (!teamExists(task.targetTeamId)) {
+        throw new Error(`目标团队不存在: ${task.targetTeamId}`);
+      }
+      executionSessionId = createTeamTaskRoom(task);
       createdNewRoom = true;
     } else if (task.sourceSessionId) {
       executionSessionId = task.sourceSessionId;
@@ -127,5 +137,20 @@ function createNewTaskRoom(task: TaskRow): string {
     title: roomName,
     kind: 'task_execution',
   });
+  return row.id;
+}
+
+/** 建团队执行会话：成员=团队快照展开，leader 加 is_leader=1（接待路由依据） */
+function createTeamTaskRoom(task: TaskRow): string {
+  const titlePrefix = task.title.slice(0, 20);
+  const row = insertSession({
+    workspaceId: task.workspaceId,
+    title: `任务 #${task.id}: ${titlePrefix}`,
+    kind: 'task_execution',
+  });
+  const leaderId = getTeamLeaderInstanceId(task.targetTeamId!);
+  for (const m of expandTeamMembers(task.targetTeamId!)) {
+    addSessionMember(row.id, m.instanceId, m.instanceId === leaderId);
+  }
   return row.id;
 }

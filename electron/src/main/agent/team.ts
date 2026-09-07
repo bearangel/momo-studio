@@ -224,3 +224,18 @@ export function listTeams(workspaceId: string): Team[] {
   const membersByTeam = loadMembersByTeam(teamRows.map((r) => r.id));
   return teamRows.map((r) => rowToTeam(r, membersByTeam.get(r.id) ?? []));
 }
+
+/** 团队是否存在（executor 目标校验 / starter 团队分支用） */
+export function teamExists(teamId: string): boolean {
+  return getTeamRow(teamId) !== undefined;
+}
+
+/** 展开团队成员（starter 建团队执行会话时的成员快照） */
+export function expandTeamMembers(teamId: string): WorkspaceAgentMember[] {
+  return loadMembersByTeam([teamId]).get(teamId) ?? [];
+}
+
+/** 团队 leader 的 instanceId（执行会话 is_leader 标记来源）；团队不存在返回 null */
+export function getTeamLeaderInstanceId(teamId: string): string | null {
+  return getTeamRow(teamId)?.leader_instance_id ?? null;
+}
