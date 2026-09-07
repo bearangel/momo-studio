@@ -36,6 +36,11 @@ describe('task state machine', () => {
     it('assigned → cancelled', () => {
       expect(canTransition('assigned', 'cancelled')).toBe(true);
     });
+    it('assigned → failed（executor 目标校验失败路径，spec §5.1/§9）', () => {
+      // 放行前目标校验失败（agent 已移除/团队解散/会话不存在）→ 直接转 failed
+      // 带明示 errorMessage；不开放此转换则队列候选永远卡在 assigned 反复重试
+      expect(canTransition('assigned', 'failed')).toBe(true);
+    });
     it('in_progress → paused（preempt）', () => {
       expect(canTransition('in_progress', 'paused')).toBe(true);
     });

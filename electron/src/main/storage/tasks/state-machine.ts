@@ -8,7 +8,9 @@
 //   - 转换语义：
 //       draft      → 用户刚创建 / 暂存任务，可直接指派（assigned）或丢弃（cancelled）
 //       pending    → 调度器已接管但 scheduled_at 未到；到时由调度器推到 assigned
-//       assigned   → 已分配到 agent 等待 pickup；agent 取走进入 in_progress
+//       assigned   → 已分配到 agent 等待 pickup；agent 取走进入 in_progress；
+//                    放行前目标校验失败（agent 已移除/团队解散/会话不存在）直接转
+//                    failed 带明示 errorMessage（任务执行运行时 spec §5.1/§9）
 //       in_progress→ agent 正在跑；可暂停（paused）/ 完成（completed）/ 失败（failed）/ 取消（cancelled）
 //       paused     → 被中断或主动暂停；恢复（in_progress）/ 取消（cancelled）
 //   - 非法跳跃（如 draft → in_progress、paused → completed）由 canTransition 拒绝，
@@ -39,7 +41,7 @@ const TERMINAL: ReadonlySet<TaskStatus> = new Set(['completed', 'failed', 'cance
 const LEGAL_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   draft: new Set(['pending', 'assigned', 'cancelled']),
   pending: new Set(['assigned', 'cancelled']),
-  assigned: new Set(['in_progress', 'cancelled']),
+  assigned: new Set(['in_progress', 'failed', 'cancelled']),
   in_progress: new Set(['paused', 'completed', 'failed', 'cancelled']),
   paused: new Set(['in_progress', 'cancelled']),
   completed: new Set(),
