@@ -21,9 +21,19 @@ import { TaskList } from './TaskList';
 import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
 import { remoteStatusStyle } from '../../lib/task-status';
 
-/** 活跃态集合：'all' 的语义 = 全部活跃（终态需显式选择，防历史淹没列表）。
- *  v2.3：store 改全生命周期拉取后，此过滤成为看板默认视图的语义承载。 */
-const ACTIVE_STATUSES: TaskStatus[] = ['draft', 'pending', 'assigned', 'in_progress', 'paused'];
+/** 'all' 的语义 = 不过滤（全部 8 态）。终态历史由 task.store.load 的
+ *  orderBy created_at_desc + limit 500 截断保障（保留最新 500 条避免无限累积）；
+ *  若用户想聚焦活跃任务，显式选具体状态或筛掉终态选项即可——「全部」= 「全部」。 */
+const ALL_STATUSES: TaskStatus[] = [
+  'draft',
+  'pending',
+  'assigned',
+  'in_progress',
+  'paused',
+  'completed',
+  'failed',
+  'cancelled',
+];
 
 /** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
 const REMOTE_REFRESH_INTERVAL_MS = 5000;
@@ -118,11 +128,11 @@ export function TaskSidebarPanel() {
     [members, workspace],
   );
 
-  // 筛选 + 排序（自 TaskBoardView 原样迁移；v2.3 'all' 语义改为活跃态集合）
+  // 筛选 + 排序（自 TaskBoardView 原样迁移；v2.3 'all' 语义改回「全部 8 态」不过滤）
   const filteredTasks = useMemo(() => {
     let list = [...tasks];
     if (filter.status === 'all') {
-      list = list.filter((t) => ACTIVE_STATUSES.includes(t.status));
+      list = list.filter((t) => ALL_STATUSES.includes(t.status));
     } else {
       list = list.filter((t) => t.status === filter.status);
     }

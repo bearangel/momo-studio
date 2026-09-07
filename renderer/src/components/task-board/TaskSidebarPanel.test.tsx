@@ -160,22 +160,25 @@ describe('TaskSidebarPanel', () => {
     expect(screen.queryByRole('button', { name: /任务B/ })).not.toBeInTheDocument();
   });
 
-  it("「全部状态」语义 = 活跃态（v2.3）：'all' 只显示活跃任务；终态需显式选择（选 completed 显示已完成）", () => {
-    // store 现拉全生命周期（含终态）——'all' 若不过滤，终态历史会淹没列表
+  it("「全部状态」语义 = 不过滤（v2.3 改回）：'all' 显示 store 全量任务含已完成/已失败/已取消；终态历史由 store.load orderBy created_at_desc + limit 500 截断保障", () => {
     useTaskStore.setState({
       tasks: [
         mkTask({ id: 'task-run', title: '任务R', status: 'in_progress', priority: 5, createdAt: 3000 }),
         mkTask({ id: 'task-done', title: '任务D', status: 'completed', priority: 9, createdAt: 1000 }),
+        mkTask({ id: 'task-fail', title: '任务F', status: 'failed', priority: 1, createdAt: 500 }),
+        mkTask({ id: 'task-cancel', title: '任务C', status: 'cancelled', priority: 1, createdAt: 200 }),
       ],
       selectedTaskId: null,
       loading: false,
       error: null,
     });
     render(<TaskSidebarPanel />);
-    // 'all' = 全部活跃（draft/pending/assigned/in_progress/paused）：任务R 在，终态任务D 不在
+    // 'all' 不过滤：4 任务全显示（含 3 个终态）
     expect(taskButton('任务R')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /任务D/ })).not.toBeInTheDocument();
-    // 终态显式选择才可见：切 completed 后任务D 出现、任务R 消失
+    expect(taskButton('任务D')).toBeInTheDocument();
+    expect(taskButton('任务F')).toBeInTheDocument();
+    expect(taskButton('任务C')).toBeInTheDocument();
+    // 切 completed：只剩任务D
     fireEvent.change(screen.getByDisplayValue('全部状态'), {
       target: { value: 'completed' },
     });

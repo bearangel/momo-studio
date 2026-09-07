@@ -20,6 +20,11 @@ export interface ToolContext {
   sendStreamChunk: (chunk: StreamChunk) => void;
   permissionConfig: ToolPermissionConfig;
   /**
+   * v2.3 任务工具：创建者 user ID（从 workspaces.owner_id 注入）。
+   * LLM 不必填、也禁止覆盖 args 中的同名键——避免 FK 违约 + 跨用户冒名。
+   */
+  creatorUserId: string;
+  /**
    * v1.5.1：当前 chat loop 的 abortSignal。
    * 长任务工具（bash/webfetch）应监听此 signal，被中断时立即清理（SIGKILL 子进程 / abort fetch）
    * 并 resolve "已中断"，否则会等到自身 timeout 才返回，期间用户停止按钮无效。

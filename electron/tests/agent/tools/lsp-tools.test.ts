@@ -50,6 +50,7 @@ beforeEach(() => {
     roomId: 'test-room',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: ['lsp_diagnostics', 'lsp_find_references'], deniedTools: [] },
+    creatorUserId: '',
   };
 });
 

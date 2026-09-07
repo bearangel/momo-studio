@@ -60,6 +60,7 @@ beforeEach(() => {
     roomId: 's1',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: [], deniedTools: [] },
+    creatorUserId: '',
   };
   tools = new MemoryTools();
 });

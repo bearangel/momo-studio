@@ -31,6 +31,7 @@ const ctx: ToolContext = {
   roomId: '!r',
   sendStreamChunk: () => {},
   permissionConfig: { allowedTools: [], deniedTools: [] },
+  creatorUserId: '',
 };
 
 const fetchMock = vi.fn();

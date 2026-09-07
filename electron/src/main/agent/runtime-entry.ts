@@ -19,6 +19,7 @@ import { parseConfig, type RuntimeConfig, type TaskConfig } from './runtime-conf
 import { formatBudgetHint, formatDispatchHint, formatTaskHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
+import { getWorkspace } from '../workspace/crud';
 import {
   getVirtualToolDefs,
   getDispatchToolDefs,
@@ -62,6 +63,8 @@ export interface RuntimeContext {
   sendStreamChunk: (chunk: StreamChunk) => void;
   /** 工具模块注册表（启动时构建一次，doExecuteTool 复用） */
   toolModules: ToolModule[];
+  /** v2.3 任务工具注入：creatorUserId 从 workspaces.owner_id 派生，LLM 不可覆盖 */
+  creatorUserId: string;
   /**
    * v1.5.1：当前 chat loop 的 abortSignal。
    * executeDispatch 监听此 signal，被中断时立即 reject（否则 PM 在 await dispatch
@@ -164,6 +167,8 @@ ${skillIndex}`
     roomId: config.roomId ?? '',
     sendStreamChunk,
     permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+    // v2.3 任务工具注入：creatorUserId 从 workspaces.owner_id 派生，LLM 不可覆盖
+    creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
   });
 
   const tools: LLMToolDef[] = [
@@ -202,6 +207,7 @@ ${skillIndex}`
     parentStreamSessionId: config.parentStreamSessionId,
     sendStreamChunk,
     toolModules,
+    creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
   };
 }
 
@@ -1014,6 +1020,8 @@ export async function doExecuteTool(
       roomId: ctx.roomId,
       sendStreamChunk: ctx.sendStreamChunk,
       permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
+      // v2.3 任务工具注入：creatorUserId 透传 ctx（同一 workspace 内所有工具调用共享）
+      creatorUserId: ctx.creatorUserId,
       // v1.5.1：长任务工具（bash/webfetch）监听此 signal，停止按钮立即生效
       abortSignal: ctx.abortSignal,
     };

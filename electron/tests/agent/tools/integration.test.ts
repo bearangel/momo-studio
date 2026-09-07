@@ -44,6 +44,7 @@ beforeEach(() => {
     roomId: '!r',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: [], deniedTools: [] },
+    creatorUserId: '',
   };
   // buildToolRegistry 内部按 workspaceDir 条件注册 LspTools；
   // tmpDir 此时无 tsconfig/.ts/.js → shouldRegister=false → LSP 不注册（符合预期）

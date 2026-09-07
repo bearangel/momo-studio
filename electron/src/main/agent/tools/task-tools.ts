@@ -268,13 +268,19 @@ export class TaskTools implements ToolModule {
       {
         name: 'create_task',
         description:
-          '创建新任务。返回刚创建的 TaskRow（含 id / status=draft）。workspaceId/title/creatorUserId 必填。',
+          '创建新任务。返回刚创建的 TaskRow（含 id / status=draft）。workspaceId 与 creatorUserId 由工具上下文自动注入（LLM 无需填、也不应填——args 中的同名键会被忽略以防 FK 违约与跨用户冒名）。',
         inputSchema: {
           type: 'object',
           properties: {
-            workspaceId: { type: 'string', description: '所属 workspace ID' },
+            workspaceId: {
+              type: 'string',
+              description: '所属 workspace ID（自动从上下文注入；勿手动填）',
+            },
             title: { type: 'string', description: '任务标题' },
-            creatorUserId: { type: 'string', description: '创建者 user ID' },
+            creatorUserId: {
+              type: 'string',
+              description: '创建者 user ID（自动从上下文注入；勿手动填）',
+            },
             description: { type: 'string', description: '任务描述（可选）' },
             priority: {
               type: 'number',
@@ -301,7 +307,7 @@ export class TaskTools implements ToolModule {
               description: '计划开始时间（毫秒 epoch；设置后任务直接落 pending 由调度器接管）',
             },
           },
-          required: ['workspaceId', 'title', 'creatorUserId'],
+          required: ['title'],
         },
       },
       {
@@ -332,11 +338,14 @@ export class TaskTools implements ToolModule {
       {
         name: 'list_tasks',
         description:
-          '按过滤条件列任务。常用过滤：workspaceId / status / assigneeAgentId。可选 orderBy ("priority" / "scheduled_at" / "created_at") + limit。',
+          '按过滤条件列任务（默认收窄到当前工作空间——workspaceId 由上下文自动注入；args 中的 workspaceId 会被忽略以防跨 ws 信息泄漏）。可选过滤：status / assigneeAgentId / orderBy / limit。',
         inputSchema: {
           type: 'object',
           properties: {
-            workspaceId: { type: 'string', description: 'workspace ID' },
+            workspaceId: {
+              type: 'string',
+              description: 'workspace ID（自动从上下文注入；勿手动填）',
+            },
             status: {
               type: 'string',
               enum: [
@@ -379,9 +388,9 @@ export class TaskTools implements ToolModule {
   async execute(
     name: string,
     args: Record<string, unknown>,
-    // ctx 当前未使用——任务工具不走 workspace FS / skill registry；
-    // 保留参数是为了符合 ToolModule 接口统一签名（下划线前缀满足 unused-vars 规则）。
-    _ctx: ToolContext,
+    // 任务工具的 workspaceId / creatorUserId 来自 ToolContext；args 同名键一律忽略
+    // ——LLM 不可自由填，否则会 FK 违约或跨用户冒名（Bug 1 修复）。
+    ctx: ToolContext,
   ): Promise<string> {
     switch (name) {
       case 'read_task': {
@@ -401,9 +410,10 @@ export class TaskTools implements ToolModule {
       }
       case 'create_task': {
         const input: CreateTaskInput = {
-          workspaceId: parseStringArg(args.workspaceId, 'workspaceId'),
+          // 上下文字段强制走 ctx——忽略 args 同名键，拒 LLM 幻觉填值
+          workspaceId: ctx.workspaceId,
           title: parseStringArg(args.title, 'title'),
-          creatorUserId: parseStringArg(args.creatorUserId, 'creatorUserId'),
+          creatorUserId: ctx.creatorUserId,
           description: parseStringArgOptional(args.description, 'description'),
           priority:
             typeof args.priority === 'number' ? args.priority : undefined,
@@ -442,10 +452,10 @@ export class TaskTools implements ToolModule {
         });
       }
       case 'list_tasks': {
-        const opts: ListTasksOptions = {};
-        if (typeof args.workspaceId === 'string') {
-          opts.workspaceId = args.workspaceId;
-        }
+        const opts: ListTasksOptions = {
+          // 默认收窄到当前工作空间（防 LLM 漏填/跨 ws 信息泄漏）
+          workspaceId: ctx.workspaceId,
+        };
         if (typeof args.status === 'string') {
           opts.status = args.status as TaskRow['status'];
         }

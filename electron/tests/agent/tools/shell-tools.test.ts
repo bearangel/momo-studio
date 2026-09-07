@@ -38,6 +38,7 @@ beforeEach(() => {
     roomId: 'test-room',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: ['bash'], deniedTools: [] },
+    creatorUserId: '',
   };
 });
 

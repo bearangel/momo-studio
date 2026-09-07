@@ -20,6 +20,7 @@ describe('ShellTools abortSignal 响应', () => {
       roomId: '!r',
       sendStreamChunk: () => {},
       permissionConfig: { allowedTools: [], deniedTools: [] },
+      creatorUserId: '',
       abortSignal: controller.signal,
     };
 
@@ -55,6 +56,7 @@ describe('ShellTools abortSignal 响应', () => {
       roomId: '!r',
       sendStreamChunk: () => {},
       permissionConfig: { allowedTools: [], deniedTools: [] },
+      creatorUserId: '',
       // 不传 abortSignal
     };
 

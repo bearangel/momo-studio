@@ -40,6 +40,7 @@ beforeEach(() => {
     roomId: 'test-room',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: ['git_status'], deniedTools: [] },
+    creatorUserId: '',
   };
   // 在 tmp workspace 内初始化 git 仓库（默认分支 main + 提交者身份配置）。
   execSync('git init -b main', { cwd: tmpDir });

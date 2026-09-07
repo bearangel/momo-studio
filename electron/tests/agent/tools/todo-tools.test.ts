@@ -23,6 +23,7 @@ beforeEach(() => {
     roomId: '!r',
     sendStreamChunk: (chunk) => sendChunkCalls.push(chunk as never),
     permissionConfig: { allowedTools: [], deniedTools: [] },
+    creatorUserId: '',
   };
 });
 

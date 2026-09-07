@@ -39,6 +39,7 @@ beforeEach(() => {
     roomId: 'test-room',
     sendStreamChunk: () => {},
     permissionConfig: { allowedTools: ['grep', 'glob'], deniedTools: [] },
+    creatorUserId: '',
   };
 });
 
