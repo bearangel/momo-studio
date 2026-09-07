@@ -22,7 +22,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
-import { listSessionMembers } from '../../src/main/storage/sessions/repo';
+import { insertSession, listSessionMembers } from '../../src/main/storage/sessions/repo';
 
 // starter.ts 必须延迟 import（保持在顶层 await 语义），与实现模块解耦。
 const { startTask } = await import('../../src/main/task/starter');
@@ -136,6 +136,69 @@ describe('startTask execution_room 决策树', () => {
     const result = await startTask(t.id, { createNewRoom: true });
     const members = listSessionMembers(result.executionSessionId);
     expect(members.map((m) => m.instanceId)).toEqual(['inst-agent-1']);
+  });
+
+  // I2：复用会话路径（显式 executionSessionId / sourceSessionId）也要补 assignee
+  // 成员——否则 kickoff 的 mention 路由在复用会话里永远找不到目标 agent
+  it('agent 目标 + sourceSessionId 复用 → assignee 补进 source 会话成员表', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-s', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-src', 'ws1', 'def-s', '@inst-src:s', 0)`,
+      )
+      .run();
+    // source 会话必须是真实 sessions 行（session_members FK 要求）
+    const src = insertSession({ workspaceId: 'ws1', title: '源会话' });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      sourceSessionId: src.id,
+      assigneeAgentId: 'inst-src',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    const result = await startTask(t.id);
+    expect(result.createdNewRoom).toBe(false);
+    expect(result.executionSessionId).toBe(src.id);
+    expect(listSessionMembers(src.id).map((m) => m.instanceId)).toContain('inst-src');
+  });
+
+  it('agent 目标 + 显式 executionSessionId 复用 → assignee 补进预设会话成员表（幂等）', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-p', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-preset', 'ws1', 'def-p', '@inst-preset:s', 0)`,
+      )
+      .run();
+    const preset = insertSession({ workspaceId: 'ws1', title: '预设会话' });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-preset',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    const result = await startTask(t.id, { executionSessionId: preset.id });
+    expect(result.createdNewRoom).toBe(false);
+    // 重复启动（幂等返回路径）不重复插成员
+    await startTask(t.id, { executionSessionId: preset.id });
+    expect(listSessionMembers(preset.id).map((m) => m.instanceId)).toEqual(['inst-preset']);
   });
 
   it('status 不是 assigned/pending → 抛错', async () => {

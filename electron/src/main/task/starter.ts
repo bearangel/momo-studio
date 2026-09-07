@@ -104,8 +104,11 @@ export async function startTask(
       createdNewRoom = true;
     }
 
-    // 新建会话时把 assignee 加为成员（如果是新建的会话且有指定 assignee）
-    if (createdNewRoom && task.assigneeAgentId) {
+    // assignee 补进执行会话成员表（新建与复用路径统一）：kickoff 的 mention
+    // 路由 / 接待判定都依赖 session_members——复用会话（显式 executionSessionId /
+    // sourceSessionId）漏补会让 assignee 在执行会话里永远不可达。
+    // addSessionMember 是 INSERT OR IGNORE：已在新房路径插过 / 会话已有该成员时幂等
+    if (task.assigneeAgentId) {
       addSessionMember(executionSessionId, task.assigneeAgentId);
     }
 
