@@ -152,7 +152,7 @@ launch(task):
 
 | 任务当前态 | 动作 |
 |---|---|
-| draft / pending / assigned | 激活：`target_session_id ← 当前会话`（用户显式意图，覆盖原目标）→ 转 assigned → `notifyExecutor()`；slot 有余时 kickoff 立即出现在当前会话 |
+| draft / pending / assigned | 激活：`target_session_id ← 当前会话`（用户显式意图，覆盖原目标）→ 转 assigned → **双驱动修复（2026-09-07 主机报告）**：并发有余时就地 `startTask`（in_progress + 执行房间=当前会话），**不注入 kickoff**——用户消息正文已被路由给接待 agent，executor 再注入【任务启动】会驱动 agent 执行两轮并竞速 complete_task；并发已满时入队（notifyExecutor），executor 放行时注入 kickoff（彼时用户消息语境已过，kickoff 是必要驱动） |
 | in_progress / 终态 | 仅引用语义（现状），不动作 |
 
 - 幂等：已在队列只更新 `target_session_id`，不重复入队

@@ -1,7 +1,8 @@
 // electron/tests/task/activation.test.ts
 //
-// #T 激活语义（spec §6）：draft/pending/assigned → 激活到当前会话；
-// in_progress/终态 → 仅引用不动。幂等：已在队列只改目标。
+// #T 激活语义（spec §6 + 双驱动修复）：draft/pending/assigned → 激活到当前会话，
+// 并发有余时就地 startTask（in_progress + 执行房间=当前会话，不注入 kickoff——
+// 用户消息已是驱动指令）；in_progress/终态 → 仅引用不动。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,22 +29,25 @@ afterEach(() => {
 });
 
 describe('activateMentionedTasks', () => {
-  it('draft 任务 → 目标覆盖为当前会话（清空 agent 目标）+ 转 assigned', () => {
+  it('draft 任务 → 目标覆盖为当前会话（清空 agent 目标）+ 就地 in_progress', () => {
     insertTask({ workspaceId: 'ws1', title: '草稿', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'draft' });
     activateMentionedTasks('sess-9', '请处理 #T-001 谢谢');
     const t = getTask('T-001')!;
-    expect(t.status).toBe('assigned');
+    expect(t.status).toBe('in_progress');
     expect(t.targetSessionId).toBe('sess-9');
     expect(t.assigneeAgentId).toBeNull(); // 用户显式意图覆盖原目标（spec §6）
+    expect(t.executionSessionId).toBe('sess-9'); // 即时路径锁定执行房间=当前会话
   });
 
-  it('pending → assigned；assigned → 幂等只更新目标', () => {
+  it('pending / assigned → 同样就地 in_progress + 目标覆盖', () => {
     insertTask({ workspaceId: 'ws1', title: '定时', creatorUserId: 'o', status: 'pending', scheduledAt: Date.now() + 999_999 });
     insertTask({ workspaceId: 'ws1', title: '排队', creatorUserId: 'o', targetTeamId: 'team1', status: 'assigned' });
     activateMentionedTasks('sess-9', '#T-001 和 #T-002');
-    expect(getTask('T-001')!.status).toBe('assigned');
+    const t1 = getTask('T-001')!;
+    expect(t1.status).toBe('in_progress');
+    expect(t1.executionSessionId).toBe('sess-9');
     const t2 = getTask('T-002')!;
-    expect(t2.status).toBe('assigned');
+    expect(t2.status).toBe('in_progress');
     expect(t2.targetSessionId).toBe('sess-9');
     expect(t2.targetTeamId).toBeNull();
   });

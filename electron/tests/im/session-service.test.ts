@@ -486,9 +486,10 @@ describe('sendUserMessage 全链', () => {
     await sendUserMessage({ sessionId: s.id, body });
 
     expect(send).toHaveBeenCalledWith('im:conflict', expect.objectContaining({ newTaskId: 'T-999' }));
-    expect(getTask('T-999')!.status).toBe('assigned');
+    // 双驱动修复后激活语义：并发有余 → 就地 in_progress（执行房间=本会话）
+    expect(getTask('T-999')!.status).toBe('in_progress');
     expect(getTask('T-999')!.targetSessionId).toBe(s.id);
-    expect(getTask('T-005')!.status).toBe('assigned');
+    expect(getTask('T-005')!.status).toBe('in_progress');
     expect(getTask('T-005')!.targetSessionId).toBe(s.id);
   });
 });
