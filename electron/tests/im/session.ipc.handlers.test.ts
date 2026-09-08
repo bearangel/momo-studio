@@ -401,7 +401,9 @@ describe('session:exportMessages handler', () => {
 // === 导出与显示侧对齐（2026-09-06 bug：导出消息与显示不一致） ===
 // 对齐语义与 renderer MessageList.tsx 一致：
 //   1. 过滤 io.momo.studio.dispatch / task_reply / parentStreamSessionId 非空的顶层条目
-//   2. 分段消息（segmentOf）替换其父消息位置（group-segments.ts 语义），父消息不重复导出
+//   2. 分段快照行（segmentOf 非空）一律剔除，父消息是唯一导出主体
+//      （2026-09-08 显示侧修复后语义：events 全挂父 messageId，旧「分段替换父」
+//      会让长流压缩后的导出只剩摘要快照、全文与富信息全部丢失）
 describe('session:exportMessages 导出/显示对齐', () => {
   /** 构造 MessageRow fixture 的简写 */
   function row(over: Partial<typeof msgRow> & { id: string }): typeof msgRow {
@@ -424,7 +426,7 @@ describe('session:exportMessages 导出/显示对齐', () => {
     expect(exported.map((m) => m.eventId)).toEqual(['u1', 'a1']);
   });
 
-  it('分段消息：segments 按序替换父消息位置，父消息（全文快照）不重复导出', async () => {
+  it('分段快照行剔除，父消息是唯一导出主体（富信息从父行 events 重建）', async () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
     messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([
       row({ id: 'u0', sender: 'owner', body: '问', createdAt: 100 }),
@@ -437,11 +439,11 @@ describe('session:exportMessages 导出/显示对齐', () => {
     await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
     const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
-    // 父消息被 segments 替换（显示侧 SegmentStack 语义）；时间序保持
-    expect(exported.map((m) => m.eventId)).toEqual(['u0', 'seg1', 'seg2', 'u9']);
+    // 父消息直出（2026-09-08 显示语义），分段快照行不导出
+    expect(exported.map((m) => m.eventId)).toEqual(['u0', 'parent', 'u9']);
   });
 
-  it('孤儿分段（父消息不在取数窗口内）兜底导出，不静默丢失', async () => {
+  it('孤儿分段（父消息不在取数窗口内）同样剔除——快照无独立价值，对齐显示', async () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
     messagesRepoMocks.listRecentMessagesBySession.mockReturnValueOnce([
       row({ id: 'u0', sender: 'owner', body: '问', createdAt: 100 }),
@@ -451,6 +453,6 @@ describe('session:exportMessages 导出/显示对齐', () => {
     await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
     const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
-    expect(exported.map((m) => m.eventId)).toEqual(['u0', 'oseg']);
+    expect(exported.map((m) => m.eventId)).toEqual(['u0']);
   });
 });

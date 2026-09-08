@@ -59,43 +59,23 @@ function toSummary(row: SessionRow): SessionSummary {
 }
 
 /**
- * 显示对齐（MessageList.tsx / group-segments.ts 语义）。
- * topLevel=true（主循环）：剔除 dispatch/task_reply 回执与子流顶层条目（子内容由 dispatch 段嵌套承载）。
- * topLevel=false（子展开）：保留 parentStreamSessionId 行（它们就是子内容），仅剔回执。
+ * 显示对齐（MessageList.tsx 2026-09-08 现行语义）：
+ *   - dispatch/task_reply 回执剔除（子内容由 dispatch 段嵌套承载）
+ *   - topLevel=true（主循环）：子流顶层条目（parentStreamSessionId 非空）剔除；
+ *     topLevel=false（子展开）：保留（它们就是子内容）
+ *   - 分段快照行（segmentOf 非空）一律剔除——v2.0 契约下 events 全挂父
+ *     messageId，父行是唯一主体（end 时 body=全部 text_delta 聚合）。
+ *     旧「分段替换父」语义（2026-09-06）会让长流压缩后的导出只剩摘要快照、
+ *     全文与富信息全部丢失（2026-09-08 主机实测 P0）。
  */
 function alignVisibleEntries(rows: MessageRow[], topLevel: boolean): MessageRow[] {
-  const visible = rows.filter((m) => {
+  const entries = rows.filter((m) => {
     if (m.eventType === 'io.momo.studio.dispatch') return false;
     if (m.eventType === 'io.momo.studio.task_reply') return false;
     if (topLevel && m.parentStreamSessionId) return false;
+    if (m.segmentOf !== null) return false;
     return true;
   });
-  const segmentsByParent = new Map<string, MessageRow[]>();
-  for (const m of rows) {
-    if (m.segmentOf === null) continue;
-    const list = segmentsByParent.get(m.segmentOf);
-    if (list) list.push(m);
-    else segmentsByParent.set(m.segmentOf, [m]);
-  }
-  for (const list of segmentsByParent.values()) {
-    list.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
-  }
-  const replacedParents = new Set<string>();
-  const entries: MessageRow[] = [];
-  for (const m of visible) {
-    if (m.segmentOf !== null) continue;
-    const segments = m.streamSessionId ? segmentsByParent.get(m.streamSessionId) : undefined;
-    if (segments && segments.length > 0 && m.streamSessionId) {
-      replacedParents.add(m.streamSessionId);
-      entries.push(...segments);
-    } else {
-      entries.push(m);
-    }
-  }
-  for (const [parentStreamId, segments] of segmentsByParent) {
-    if (replacedParents.has(parentStreamId)) continue;
-    entries.push(...segments); // 孤儿分段兜底
-  }
   entries.sort((a, b) => a.createdAt - b.createdAt);
   return entries;
 }

@@ -109,4 +109,35 @@ describe('session:exportMessages 富信息', () => {
     // 用户消息 id 也参与断言（编译期验证 mu 已被使用——避免 unused 警告）
     expect(mu.id).toMatch(/^[0-9a-f-]{36}$/);
   });
+
+  it('长流压缩产生分段快照行后，父消息仍是唯一导出主体（2026-09-08 主机实测 P0 回归锁）', async () => {
+    // 复现用户真机场景：agent 长任务中途 compact 压缩 → segment_boundary →
+    // stream-relay 落一条分段快照行（body=压缩摘要、无 events、createdAt=压缩时刻）。
+    // 旧「分段替换父」对齐语义会让导出只剩摘要、丢全文丢工具块（copy 按钮都比它全）。
+    insertMessage({ sessionId: SESSION, sender: 'owner', eventType: 'm.room.message', body: '执行任务' });
+
+    // 父消息（流主体）：全部 events 挂父 messageId，含压缩边界
+    const mp = insertMessage({ sessionId: SESSION, sender: '@coder.x', eventType: 'm.room.message', body: '先做A再做B最后总结。', streamSessionId: 'ss-long', status: 'done' });
+    pushEvent(mp.id, 'text_delta', { delta: '先做A' });
+    pushEvent(mp.id, 'tool_call_start', { callId: 'c9', toolName: 'bash', args: { command: 'ls' } });
+    pushEvent(mp.id, 'tool_call_result', { callId: 'c9', result: 'file1', success: true });
+    pushEvent(mp.id, 'text_delta', { delta: '再做B' });
+    pushEvent(mp.id, 'segment_boundary', {}); // 压缩边界（compact 触发）
+    pushEvent(mp.id, 'final', { status: 'done' });
+
+    // 分段快照行（生产链路形态：segmentOf=父流、自身无 events、更晚的 createdAt）
+    insertMessage({ sessionId: SESSION, sender: '@coder.x', eventType: 'm.room.message', body: '压缩摘要快照', streamSessionId: 'ss-long#seg1', segmentOf: 'ss-long', segmentIndex: 1, status: 'done' });
+
+    const handler = ipcHandlers.get('session:exportMessages') as (evt: unknown, sid: string, limit: number) => Promise<{ filename: string; content: string }>;
+    const { content } = await handler(null, SESSION, 100);
+
+    // 父行全文与工具块在（富信息从父行 events 重建）
+    expect(content).toContain('先做A');
+    expect(content).toContain('再做B');
+    expect(content).toContain('🔧 **工具** `bash`');
+    // 压缩摘要快照不出现（分段行剔除）
+    expect(content).not.toContain('压缩摘要快照');
+    // 消息头只有两条（用户 + 父行直出；分段行不再拆成第三条）
+    expect(content.match(/## /g)?.length).toBe(2);
+  });
 });
