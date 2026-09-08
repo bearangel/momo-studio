@@ -71,9 +71,10 @@ session_queued  → failed           （放行时 validateTarget 失败，带 er
 
 ### 3.3 renderer 适配
 
-- `task-status.ts`：新 `TaskStatusKey`，文案「排队中·等待会话」，Badge 中性色（与 assigned 视觉区分）
-- `TaskFilters` 状态筛选选项、看板分组、`TaskDetailPanel` 的 `MENU_STATUSES` 同步新增
-- 排队中的任务详情/卡片可显示等待原因（「会话 {title} 有任务执行中」——由 renderer 从会话列表推导，不加 IPC）
+- `task-status.ts`：新 `TaskStatusKey`，文案「排队中」，Badge 中性色（与 assigned 视觉区分）
+- `TaskFilters` 状态筛选选项、看板分组（`task-filter.ts` 的 `ALL_STATUSES`）同步新增
+- `MentionInput` 的 #T 激活菜单（`MENU_STATUSES = ['draft','pending','assigned']`）**有意不收录** `session_queued`——排队任务已在等车道，#T 激活到其他会话会绕过排队语义
+- 排队卡片不额外显示等待原因（YAGNI：「排队中」label 已达意；如需增强由后续版本从 task store 推导「同会话存在 in_progress 任务」即可，不加 IPC）
 
 ## 4. 会话执行车道（session lane）
 
@@ -228,8 +229,8 @@ steer 已入 `pendingSteers` 但 chat loop 在最后一轮（无后续 LLM 请�
 **renderer**：
 
 - task-status：新 key 的文案/色调
-- TaskFilters / TaskDetailPanel：新状态出现在筛选与菜单
-- 看板排队卡片显示等待原因
+- TaskFilters / task-filter（all 过滤保留新状态）：新状态出现在筛选
+- 看板排队卡片正常显示（等待原因增强第一版不做，见 §3.3）
 
 ## 9. 验收标准
 
