@@ -39,6 +39,9 @@ export function MentionInput() {
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
   const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
+  // 斜杠命令提示（spec §5.4）：成功 message 或失败 Error.message；下一次正常
+  // 发消息时 store 自动置 null
+  const commandHint = useSessionStore((s) => s.commandHint);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { tasks, load: loadTasks } = useTaskStore();
 
@@ -256,6 +259,10 @@ export function MentionInput() {
           <Lock size={12} strokeWidth={1.75} aria-hidden className="inline-block align-[-1px]" />
           <span>会话成员已全部移出，会话只读（历史可查看）</span>
         </div>
+      )}
+
+      {commandHint && (
+        <div className="px-3 py-1 text-xs text-secondary border-t border-subtle">{commandHint}</div>
       )}
 
       <textarea

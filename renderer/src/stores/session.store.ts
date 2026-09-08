@@ -59,6 +59,11 @@ interface SessionState {
   loadOlderError: string | null;
   /** loadMembers 最近一次失败的中文消息（success/retry 时清空） */
   membersError: string | null;
+  /**
+   * 斜杠命令提示文本（spec §5.4）：成功 message 或失败 Error.message；下一次
+   * 正常发消息时置 null 自动消失。
+   */
+  commandHint: string | null;
 
   /**
    * 拉取会话列表，默认激活第一个会话并加载其消息。
@@ -128,6 +133,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hasMoreBySession: new Map(),
   loadOlderError: null,
   membersError: null,
+  commandHint: null,
 
   loadSessions: async (workspaceId) => {
     // 切换 workspace 时清空旧 workspace 的会话、消息、成员、激活会话
@@ -336,6 +342,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (body, mentionedInstanceIds) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return undefined;
+    // / 命令拦截（spec §5.4）：整条以 / 开头才识别；白名单本地判定避免无意义 IPC；
+    // '//' 转义为原样 '/' 发送。成功/失败中文 message 写入 commandHint 给用户看。
+    if (body.startsWith('//')) {
+      body = body.slice(1);
+    } else if (body.startsWith('/')) {
+      const command = body.slice(1).trim();
+      if (command === 'compact') {
+        try {
+          const r = await ipc.session.command(activeSessionId, command);
+          set({ commandHint: r.message });
+        } catch (err) {
+          set({ commandHint: err instanceof Error ? err.message : String(err) });
+        }
+        return undefined;
+      }
+      set({ commandHint: `未知命令: /${command}（当前支持 /compact）` });
+      return undefined;
+    }
+    set({ commandHint: null });
     // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage。
     const result = await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
     // T9 契约：readOnly=true 表示会话全部成员失效——UI 据此禁用输入（spec §7）
@@ -393,6 +418,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hasMoreBySession: new Map(),
       loadOlderError: null,
       membersError: null,
+      commandHint: null,
     }),
 }));
 

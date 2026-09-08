@@ -56,6 +56,8 @@ const mockApi = {
     // 真实 preload 返回 { readOnly }（types.d.ts SessionApiSurface 契约）——
     // mock 保真度：返回形状必须与生产一致（momo-test-rules 铁律 1）
     send: vi.fn().mockResolvedValue({ readOnly: false }),
+    // 斜杠命令通道（spec §5.4）：返回 { ok: true, message }——与主进程 handleSessionCommand 一致
+    command: vi.fn().mockResolvedValue({ ok: true as const, message: '已压缩' }),
     getMessages: vi.fn(),
     loadOlder: vi.fn(),
     exportMessages: vi.fn(),
@@ -108,6 +110,8 @@ beforeEach(() => {
   mockApi.session.getMessages.mockReset();
   mockApi.session.getMessages.mockResolvedValue({ messages: [], eventsByMessage: {} });
   mockApi.session.send.mockClear();
+  mockApi.session.command.mockClear();
+  mockApi.session.command.mockResolvedValue({ ok: true as const, message: '已压缩' });
   mockApi.session.loadOlder.mockReset();
   mockApi.session.createQuick.mockReset();
   mockApi.session.createQuick.mockResolvedValue(MOCK_QUICK_SESSION);
@@ -277,6 +281,34 @@ describe('session.store', () => {
     const result = await useSessionStore.getState().sendMessage('hello');
     expect(result).toEqual({ readOnly: false });
     expect(useSessionStore.getState().activeSessionReadOnly).toBe(false);
+  });
+});
+
+// === / 命令拦截（spec §5.4）— renderer 端拦截 + 白名单本地判定 + // 转义 ===
+// 背景：主进程 session:command 通道已由 58f8d3e 落地；renderer 端在 sendMessage
+// 前置拦截——整条以 / 开头才识别为命令，// 转义为原样发送。白名单本地判定避免无意义
+// IPC 往返；未知命令 / 运行中 / 无模型配置由主进程 reject，renderer 接收中文 Error
+// 写入 commandHint 给用户看。
+describe('session.store — / 命令拦截（spec §5.4）', () => {
+  it('整条以 / 开头且白名单命中 → 走 session.command，不走 send', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('/compact');
+    expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'compact');
+    expect(mockApi.session.send).not.toHaveBeenCalled();
+  });
+
+  it('未知命令 → 不发送，置 commandHint 提示', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('/wat');
+    expect(mockApi.session.send).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().commandHint).toContain('未知命令');
+  });
+
+  it('// 前缀转义为原样发送', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('//not-a-command');
+    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/not-a-command', undefined);
+    expect(useSessionStore.getState().commandHint).toBeNull();
   });
 });
 
