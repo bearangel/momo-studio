@@ -11,6 +11,12 @@
 //   (b) 有 user 挂靠 → 工具正常（续跑模式），mandate 段跨压缩存活
 //   (c) 收尾模式下 drain 出 steer → 清除收尾、恢复工具（spec §5.1 交互）
 //   (d) task 域（currentTaskId 非空）compact 行为不变：工具正常、不进收尾
+//   (e) dispatch 子路径（parentStreamSessionId 非空）compact 不进收尾（contract 1 第三态）
+//   (f) summary 过短 → 拒绝反馈回填 LLM 且不置收尾
+//
+// chunk 捕获说明：runChatLoop 的 tool_result 等 chunk 走模块级 sendStreamChunk
+// （= process.send?.(chunk)），故经 process.send stub 收集到 sentChunks——
+// 三态 tool_result 文案与「第二份指令消息已删」均在此断言（审查 Important 1）。
 //
 // brief 适配点 ②：真实 StreamDelta 的 text 增量字段是 content（llm-provider.ts），
 // fake 剧本按 content 产出（brief 草稿的 delta 字段名以实际类型为准修正）。
@@ -40,6 +46,22 @@ const SUMMARY = 'x'.repeat(80); // ≥50 字符过 compact 校验
 // —— 捕获每轮 LLM 请求的 messages/tools，按剧本回放（brief harness 语义） ——
 type Captured = { messages: LLMMessage[]; tools: LLMToolDef[] | undefined };
 const captured: Captured[] = [];
+
+// —— 捕获 runChatLoop 发出的 stream chunk（经 process.send stub 收集） ——
+const sentChunks: unknown[] = [];
+
+/** 从 sentChunks 过滤 compact 的 tool_result 文案（三态文案断言用） */
+function compactToolResults(): string[] {
+  return sentChunks
+    .filter(
+      (c): c is { type: 'tool_result'; toolName: string; result: string } =>
+        typeof c === 'object' &&
+        c !== null &&
+        (c as { type?: string }).type === 'tool_result' &&
+        (c as { toolName?: string }).toolName === 'compact',
+    )
+    .map((c) => c.result);
+}
 
 /**
  * 剧本步骤：
@@ -153,12 +175,16 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
 
   beforeEach(() => {
     captured.length = 0;
+    sentChunks.length = 0;
     script = [];
     __setTodosForTest(SID, []);
     vi.mocked(createLLMProvider).mockReset();
     installScriptedProvider();
     __setMemoryProviderForTest(stubProvider);
-    process.send = (() => true) as NonNullable<typeof process.send>;
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
   });
 
   afterEach(() => {
@@ -180,6 +206,14 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
     const round2 = JSON.stringify(captured[1]!.messages);
     expect(round2).toContain('请输出简短总结后结束本轮');
     expect(JSON.stringify(captured)).not.toContain('继续工作');
+    // 第二份前进指令消息已删（spec §5.6 #4）：round-2 恰 1 条 role=tool 消息，
+    // 且不含旧实现回填的「请继续基于总结工作」
+    expect(captured[1]!.messages.filter((m) => m.role === 'tool')).toHaveLength(1);
+    expect(round2).not.toContain('请继续基于总结工作');
+    // 收尾态 tool_result 文案（spec §5.6 #3）
+    const results = compactToolResults();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('无用户待办，请输出总结收尾');
   });
 
   it('(b) 有 user 挂靠 → 压缩后工具正常（续跑模式），mandate 段跨压缩存活', async () => {
@@ -200,6 +234,10 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
     const round2 = JSON.stringify(captured[1]!.messages);
     expect(round2).toContain('本轮仍有用户请求的未完成工作');
     expect(JSON.stringify(captured)).not.toContain('继续工作');
+    // 续跑态 tool_result 文案：K=1（仍有 1 项用户待办，spec §5.6 #3）
+    const results = compactToolResults();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('仍有 1 项用户待办');
   });
 
   it('(c) 收尾模式下 drain 出 steer → 清除收尾、恢复工具（spec §5.1 交互）', async () => {
@@ -232,5 +270,37 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
     const round2 = JSON.stringify(captured[1]!.messages);
     expect(round2).toContain('请基于总结继续当前任务');
     expect(JSON.stringify(captured)).not.toContain('继续工作');
+  });
+
+  it('(e) dispatch 子路径（parentStreamSessionId 非空）compact 不进收尾：工具正常 + task 域中性文案', async () => {
+    script = [
+      { toolCall: { name: 'compact', arguments: { summary: SUMMARY } } },
+      { text: '子任务继续。' },
+    ];
+    // 8 参调用形态：第 6 参 parentStreamSessionId 非空 = dispatch 子 agent；
+    // streamSessionIdOverride 仍传 SID（override 优先级高于 parent，todo 键控不变）
+    await runChatLoop('room-t', '子任务正文', mkConfig(), mkCtx(), undefined, 'pm-sid-1', undefined, SID);
+    expect(captured.length).toBe(2);
+    expect(Array.isArray(captured[1]!.tools)).toBe(true);
+    // 尾部指令与 tool_result 均走 task 域中性文案（contract 第三态）
+    const round2 = JSON.stringify(captured[1]!.messages);
+    expect(round2).toContain('请基于总结继续当前任务');
+    const results = compactToolResults();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('请基于总结继续当前任务');
+  });
+
+  it('(f) summary 过短 → 拒绝反馈回填 LLM 且不置收尾（下一轮工具正常）', async () => {
+    script = [
+      { toolCall: { name: 'compact', arguments: { summary: '太短' } } },
+      { text: '好的，重写完整总结。' },
+    ];
+    await runChatLoop('room-t', '压缩上下文', mkConfig(), mkCtx(), undefined, undefined, undefined, SID);
+    expect(captured.length).toBe(2);
+    // 拒绝反馈：回填 LLM 的 tool 消息含「过短」（< 50 字符校验）
+    const round2 = JSON.stringify(captured[1]!.messages);
+    expect(round2).toContain('过短');
+    // 失败的 compact 不得置收尾——下一轮工具照常（wrapUpMode 仍为 false）
+    expect(Array.isArray(captured[1]!.tools)).toBe(true);
   });
 });
