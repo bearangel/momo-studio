@@ -261,3 +261,105 @@ describe('chatStream — Anthropic SSE', () => {
     expect((done as { finishReason: string }).finishReason).toBe('tool_use');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 2026-09-08 主机 bug 回归锁：chatStream 建立阶段 429 直停（无指数退避重试）
+//
+// 根因：流式路径刻意绕过 fetchWithRetry（其 AbortSignal.timeout 会覆盖调用方
+// signal），429 在「响应头阶段」失败——零 delta 已发出，重试完全安全——却直接
+// 抛错终止 agent。新契约：重试只覆盖「建连 + 响应头」（fetchWithRetry 内部
+// 超时在响应头到达即清除，流式 body 读取只受调用方 signal 控制）；进入流
+// 消费阶段后不再重试（重复 delta 语义无意义）。
+describe('chatStream — 建立阶段指数退避重试', () => {
+  it('首个 429 → 第二次 SSE 200：重试后正常收到 delta（主机场景：模型访问量过大）', async () => {
+    vi.useFakeTimers();
+    try {
+      const chunks = [
+        { choices: [{ delta: { content: '恢复' }, index: 0 }] },
+        { choices: [{ finish_reason: 'stop', delta: {}, index: 0 }] },
+      ];
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => '{"error":{"code":"1305","message":"该模型当前访问量过大"}}' } as unknown as Response)
+        .mockResolvedValueOnce(mockOpenAISSE(chunks));
+
+      const provider = createLLMProvider({ model: 'glm-4', baseUrl: 'https://open.bigmodel.cn/v1' }, 'key');
+      const deltas: StreamDelta[] = [];
+      const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const p = (async () => { for await (const d of iter) deltas.push(d); })();
+      await vi.advanceTimersByTimeAsync(1100);
+      await p;
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(deltas.filter((d) => d.type === 'text')).toHaveLength(1);
+      expect(deltas.find((d) => d.type === 'done')).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('429 带 Retry-After: 3 → 退避尊重服务端指示（3s 后才发起第二次请求）', async () => {
+    vi.useFakeTimers();
+    try {
+      const chunks = [{ choices: [{ finish_reason: 'stop', delta: {}, index: 0 }] }];
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => '3' }, text: async () => '' } as unknown as Response)
+        .mockResolvedValueOnce(mockOpenAISSE(chunks));
+
+      const provider = createLLMProvider({ model: 'glm-4' }, 'key');
+      const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const p = (async () => { for await (const _ of iter) void _; })();
+
+      await vi.advanceTimersByTimeAsync(1000); // 指数退避第 1 档只到 1s——Retry-After=3 未到
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2100);
+      await p;
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重试退避期间调用方 abort → AbortError 立即上抛，不再发起第二次请求', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({ ok: false, status: 429, text: async () => '' } as unknown as Response);
+
+      const provider = createLLMProvider({ model: 'glm-4' }, 'key');
+      const ctrl = new AbortController();
+      const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, ctrl.signal);
+      const p = (async () => { for await (const _ of iter) void _; })();
+      p.catch(() => {});
+      // 显式 flush 微任务链：确保已走到退避睡眠挂起点（advanceTimersByTimeAsync
+      // 在无 timer 到期时不 flush 微任务，链条可能仍停在 fetch resolve 后）
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      ctrl.abort(); // 仍在第 1 次退避等待中
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(p).rejects.toThrow();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('建立阶段网络异常 → 重试恢复（cause 语义保留在最终错误里）', async () => {
+    vi.useFakeTimers();
+    try {
+      const chunks = [{ choices: [{ finish_reason: 'stop', delta: {}, index: 0 }] }];
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('fetch failed'))
+        .mockResolvedValueOnce(mockOpenAISSE(chunks));
+
+      const provider = createLLMProvider({ model: 'glm-4', baseUrl: 'https://x.example/v1' }, 'key');
+      const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const p = (async () => { for await (const _ of iter) void _; })();
+      await vi.advanceTimersByTimeAsync(1100);
+      await p;
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

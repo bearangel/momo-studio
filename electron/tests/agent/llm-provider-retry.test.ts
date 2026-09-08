@@ -45,16 +45,16 @@ describe('llm-provider 重试逻辑', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('全部 500：重试 3 次后抛错（共 4 次请求）', async () => {
+  it('全部 500：重试 5 次耗尽后返回最后 response（共 6 次请求，chat 抛带响应体的业务错）', async () => {
     vi.useFakeTimers();
     mockFetch.mockResolvedValue(errorResponse(500));
 
     const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'key');
     const p = provider.chat([{ role: 'user', content: 'hi' }]);
     p.catch(() => {});
-    await vi.advanceTimersByTimeAsync(10_000);
-    await expect(p).rejects.toThrow('HTTP 500');
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(35_000);
+    await expect(p).rejects.toThrow('500');
+    expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 
   it('400 客户端错误：不重试，直接返回（provider 抛业务异常）', async () => {
@@ -112,15 +112,15 @@ describe('llm-provider 重试逻辑', () => {
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
-  it('网络异常持续 → 重试 3 次后抛错', async () => {
+  it('网络异常持续 → 重试 5 次后抛带 URL 与原始 message 的错误（共 6 次请求）', async () => {
     vi.useFakeTimers();
     mockFetch.mockRejectedValue(new Error('connection refused'));
 
     const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'key');
     const p = provider.chat([{ role: 'user', content: 'hi' }]);
     p.catch(() => {});
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(35_000);
     await expect(p).rejects.toThrow('connection refused');
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 });
