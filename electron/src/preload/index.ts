@@ -46,6 +46,7 @@ const api: ApiSurface = {
     create: (wsId, filePath, type) => invoke('file:create', wsId, filePath, type),
     delete: (wsId, filePath) => invoke('file:delete', wsId, filePath),
     rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
+    searchNames: (wsId, query) => invoke('file:searchNames', wsId, query),
   },
   // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；角色指派/
   // 改角色通道随 role 概念退役删除（preload 悬空绑定一并清理）。

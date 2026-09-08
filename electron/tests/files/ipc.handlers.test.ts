@@ -9,18 +9,18 @@ import os from 'node:os';
 
 // vi.mock 会被提升到所有 import 之前；所有被工厂引用的 mock helper 必须用
 // vi.hoisted 提前声明，否则会触发 TDZ 错误。
-const { ipcHandlers, mockReadFile, mockWriteFile, mockListDir, getWorkspaceMock } = vi.hoisted(
-  () => {
+const { ipcHandlers, mockReadFile, mockWriteFile, mockListDir, mockSearchNames, getWorkspaceMock } =
+  vi.hoisted(() => {
     const ipcHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
     return {
       ipcHandlers,
       mockReadFile: vi.fn(),
       mockWriteFile: vi.fn(),
       mockListDir: vi.fn(),
+      mockSearchNames: vi.fn(),
       getWorkspaceMock: vi.fn(),
     };
-  },
-);
+  });
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -39,6 +39,7 @@ vi.mock('../../src/main/files/workspace-fs', () => ({
     readFile: mockReadFile,
     writeFile: mockWriteFile,
     listDir: mockListDir,
+    searchNames: mockSearchNames,
   })),
 }));
 
@@ -56,6 +57,7 @@ beforeEach(() => {
   mockReadFile.mockReset();
   mockWriteFile.mockReset();
   mockListDir.mockReset();
+  mockSearchNames.mockReset();
   getWorkspaceMock.mockReset();
   __resetFsCacheForTest();
   registerFileHandlers();
@@ -135,5 +137,29 @@ describe('files/ipc.handlers', () => {
     await handler({}, 'ws-1', 'b.md', 'B');
 
     expect(getWorkspaceMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('files/ipc.handlers file:searchNames', () => {
+  it('注册 file:searchNames 通道', () => {
+    expect(ipcHandlers.has('file:searchNames')).toBe(true);
+  });
+
+  it('透传 workspaceId 定位 workspace，query 原样交给 searchNames，结果直返', async () => {
+    const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
+    getWorkspaceMock.mockReturnValue(ws);
+    mockSearchNames.mockResolvedValue([{ path: 'src/foo.ts', isDirectory: false }]);
+    const handler = ipcHandlers.get('file:searchNames')!;
+    const result = (await handler(undefined, 'ws-1', 'foo')) as unknown;
+    expect(mockSearchNames).toHaveBeenCalledWith('foo');
+    expect(result).toEqual([{ path: 'src/foo.ts', isDirectory: false }]);
+  });
+
+  it('searchNames 抛错时错误沿 IPC 传播（reject）', async () => {
+    const ws = fakeWorkspace('ws-1', path.join(tmpRoot, 'ws-1'));
+    getWorkspaceMock.mockReturnValue(ws);
+    mockSearchNames.mockRejectedValue(new Error('boom'));
+    const handler = ipcHandlers.get('file:searchNames')!;
+    await expect(handler(undefined, 'ws-1', 'x')).rejects.toThrow('boom');
   });
 });

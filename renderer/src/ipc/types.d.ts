@@ -857,6 +857,8 @@ export interface ApiSurface {
     create(workspaceId: string, filePath: string, type: 'file' | 'dir'): Promise<void>;
     delete(workspaceId: string, filePath: string): Promise<void>;
     rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
+    /** 文件名搜索（侧边栏搜索，spec §5.1）：主进程递归扫描，返回相对路径命中项 */
+    searchNames(workspaceId: string, query: string): Promise<SearchHit[]>;
   };
   agent: {
     /** v25：成员加入（无 role/parent；同 ws 同 def 重复加入报错） */
@@ -1118,4 +1120,14 @@ export interface DirEntry {
   name: string;
   isDirectory: boolean;
   size: number;
+}
+
+/**
+ * 文件名搜索命中项（侧边栏搜索）。
+ * 与 electron 端 workspace-fs.ts 的 SearchHit 对齐（跨进程独立定义，仅结构对齐）。
+ */
+export interface SearchHit {
+  /** 相对 workspace 根的全路径（含目录前缀，'/' 分隔） */
+  path: string;
+  isDirectory: boolean;
 }

@@ -81,5 +81,15 @@ export function registerFileHandlers(): void {
     },
   );
 
+  // 文件名搜索（侧边栏搜索，spec §5.1）：query 由 renderer 保证 trim 非空才调用；
+  // 主进程仍对空串返回 [] 短路（纵深防御）
+  ipcMain.handle(
+    'file:searchNames',
+    async (_evt, workspaceId: string, query: string) => {
+      const wsFs = getWorkspaceFs(workspaceId);
+      return wsFs.searchNames(query);
+    },
+  );
+
   logger.info('File IPC handlers 已注册');
 }
