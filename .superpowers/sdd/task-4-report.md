@@ -1,144 +1,133 @@
-# Task 4 报告：RoomList 会话标题过滤（renderer 会话搜索）
+# Task 4 报告：steer 注入链路
 
-## 状态
+**状态**：✅ 已交付
+**BASE**：a413436
+**HEAD**：e423e6e
+**任务计划位置**：6 任务计划第 4 个（T4 steer 链路，依赖 T2 车道注册表）
 
-DONE。TDD 全流程（RED → GREEN → 验证 → 提交），brief 各 Step 按原文转录执行。
+---
 
-（注：本文件原内容为上一轮计划「TaskExecutor 队列放行模块」的 Task 4 报告，其提交 f1405a2 / 2875a27 已在 git 历史；按本任务指示覆盖为本 sidebar-search Task 4 报告。）
+## 交付内容
 
-## 做了什么
+按 brief 10 步执行，TDD 严格红绿——先写 router-steer.test.ts 确认 2/5 失败，再写 runtime-entry-steer.test.ts 确认 3/4 失败，最后实现代码全部转绿。
 
-- **测试**（`renderer/src/components/im/RoomList.test.tsx`）：文件末尾追加 `describe('RoomList — 标题搜索过滤')` 共 5 用例（brief Step 1 逐字转录）：关键词命中过滤 / 大小写不敏感 / 无命中「无匹配会话」空态 / 清除按钮恢复全量 / 过滤态点击与悬停操作不受影响。既有 store-mock 模式（`vi.hoisted` + `sessionState` 直改）与 `makeSession` / `makeMember` 工厂复用，未改动既有用例。
-- **实现**（`renderer/src/components/im/RoomList.tsx`）：
-  - lucide import 追加 `Search, X`（brief Step 3a）。
-  - `renaming` state 旁新增 `filter` state + `q = filter.trim().toLowerCase()` + `visibleSessions`（空输入 = 不过滤，两端 toLowerCase 子串包含；brief Step 3b 逐字转录）。
-  - 主 return 重构为「搜索框行 + 列表 / 无匹配空态」结构（brief Step 3c 逐字转录）：map 源改 `visibleSessions`，列表挪入 `flex-1 overflow-auto` 滚动容器；搜索框行含 Search 图标（14 / 1.75 / aria-hidden）、aria-label 输入框、非空时显示的清除按钮（X 图标，14 / 1.75 / aria-hidden）。
-  - 会话行 JSX 与原实现逐字节一致（仅随容器层级重排缩进）；`loading && sessions.length === 0` 与 `sessions.length === 0` 两个早退分支按裁定完全不动（无搜索框）。
+### 修改文件（5）
 
-## RED / GREEN 证据
+1. **`electron/src/main/agent/router-service.ts`** — `routeUserChat` 内新增 steer 分流（在「`const task: TaskConfig = ...`」之前）
+2. **`electron/src/main/agent/agent-runner.ts`** — `abortStream` 之后新增 `steer(streamSessionId, body): boolean` 方法
+3. **`electron/src/main/agent/runtime-entry.ts`** — `abortListener` 扩展为 abort/steer 双分支（共享闭包队列 `pendingSteers`），for round 顶部 drain 循环
+4. **`electron/tests/agent/router-steer.test.ts`** — 新建（5 用例，brief 逐字）
+5. **`electron/tests/agent/runtime-entry-steer.test.ts`** — 新建（4 用例，夹具逐字复制 runtime-segment.test.ts）
 
-**RED**（实现前，`cd renderer && npx pnpm@9.0.0 vitest run src/components/im/RoomList.test.tsx`）：
+### 关键设计点
 
-```
- FAIL  src/components/im/RoomList.test.tsx > RoomList — 标题搜索过滤 > 输入关键词 → 仅渲染标题命中的会话
-TestingLibraryElementError: Unable to find a label with the text of: 搜索会话
- ...（5 个新用例同因失败）
- Test Files  1 failed (1)
-      Tests  5 failed | 7 passed (12)
-```
+- **线协议**：与 abort 同模式——`child.send({ type: 'steer', streamSessionId, body })`，子进程 push 进 `pendingSteers` FIFO 队列
+- **注入格式**：`{ role: 'user', content: '[用户中途补充] ' + body }`，每条独立 user message
+- **drain 时机**：每轮构建 LLM 请求前（即每个工具执行后的下一次迭代自然携带），spec §5.2
+- **与 abort 正交**：steer 不触发 AbortController；停止按钮语义不变
+- **死通道回退**（spec §5.4）：AgentRunner.steer catch IPC 关闭 → router 捕获 false → 继续走正常 `executeTask` 派发，消息不丢
 
-失败原因与 brief Step 2 预期完全一致（`getByLabelText('搜索会话')` 找不到元素），既有 7 用例不受测试追加影响。
+---
 
-**GREEN**（实现后，同命令）：
+## 测试摘要
 
-```
- ✓ src/components/im/RoomList.test.tsx  (12 tests) 96ms
+### 新测试（9 用例全 PASS）
 
- Test Files  1 passed (1)
-      Tests  12 passed (12)
-```
+- **router-steer.test.ts**（5 用例）
+  1. 车道占用且目标 runner 匹配 → steer 注入，不派发新流
+  2. 车道空闲 → 正常派发（现有行为不变）
+  3. 车道被占但目标是另一 runner（@ 其他成员）→ 正常派发
+  4. systemKickoff 消息不做 steer
+  5. steer 发送失败（死通道）→ 回退正常派发
+- **runtime-entry-steer.test.ts**（4 用例）
+  1. 流式期间 steer 消息在下一轮 LLM 请求以 `[用户中途补充]` user message 注入
+  2. 多条 steer FIFO 依次注入为独立 user messages
+  3. streamSessionId 不匹配的 steer 消息被忽略
+  4. abort 语义与 steer 正交：abort 消息仍触发 interrupted 收尾
 
-## 验证清单
+### 全 suite 验证
 
-| 项 | 结果 |
-|---|---|
-| RoomList.test.tsx | 12/12 通过（新 5 + 既有 7） |
-| ViewSidebar.test.tsx（也渲染 RoomList，回归防护） | 10/10 通过 |
-| lsp_diagnostics（两修改文件） | 零诊断 |
-| renderer typecheck（`tsc --noEmit`） | 通过，无错误 |
-| ESLint（两修改文件，含设计系统 token 机械规则） | exit 0 |
-| 修改范围 | 仅 brief 点名的两个文件（`git show --stat`：2 files changed, 130 insertions(+), 40 deletions(-)） |
+- **总测试**：1590 PASS / 1595（5 pre-existing failures）
+- **我的新测试**：9/9 PASS
+- **typecheck**：双 workspace clean
+- **无新增回归**：5 个失败 = base a413436 上既有的 5 个失败（router-leader 3 + session-service 2，T3 era 预存问题）
 
-## 自审发现
+---
 
-1. **brief 计数笔误（非阻塞）**：brief Step 4 写「新 5 用例 + 既有 8 用例全绿」，实际既有用例为 7 个（第一个 describe 5 + 第二个 describe 2），合计 12。全绿事实不受影响。
-2. **`MessageSquare` 导入保留**：仍被 `sessions.length === 0` 早退分支的 EmptyState 使用，无未使用导入告警。
-3. **空态区分达成**：「暂无会话」（EmptyState 组件，sessions 本身为空，早退分支）与「无匹配会话」（纯文本 div，过滤后为空）走不同代码路径，测试第 3 例锁定该区分。
-4. **既有图标断言不受影响**：既有用例断言行按钮内无 svg（`rowButton.querySelector('svg')`）——新搜索图标在行按钮之外，12/12 + 10/10 实测确认。
-5. **title 空值安全**：`SessionSummary.title` 契约保证非空 string（brief Interfaces 节），`s.title.toLowerCase()` 无需空值防御。
-
-## 提交
-
-- `9cefff7` — `feat: session list title filter in RoomList`（仅 `RoomList.tsx` + `RoomList.test.tsx`；brief Step 5 精确 message）
-
-## Fix round: workspace-switch reset
-
-**Spec 漏洞**：`docs/specs/2026-09-08-sidebar-search-design.md §6` 承诺「切视图 / 切 workspace → 搜索状态随组件卸载自然丢失，无残留」。但 RoomList / FileTree 在视图切换时**不卸载**（仅 view 切换 unmount 内容区，侧栏常驻），过滤 / 搜索瞬态随组件常驻 → 切换 workspace 后旧关键字残留在新 workspace 的列表 / 搜索结果里。
-
-**修复方案**：两个组件均显式监听 workspace 变化，触发时 setState('') 清空本地瞬态搜索态（不引入新 store / 不改架构，纯现有 useState 复位）。
-
-### 做了什么
-
-- **`renderer/src/components/im/RoomList.tsx`**：`filter` state 声明后追加 `useEffect(() => setFilter(''), [activeWorkspaceId])`（comment 锚定 spec §6 契约 + 解释为何需要显式复位——组件常驻不卸载）。
-- **`renderer/src/components/files/FileTree.tsx`**：`query` state 声明后追加 `useEffect(() => setQuery(''), [workspace?.id])`（同源 comment）。FileTree 的 search 防抖 effect 已依赖 `workspace`，新增 effect 不引入额外订阅。
-- **测试**：两文件 describe 末尾各追加 1 个回归用例（brief verbatim）。
-  - RoomList：mock-store 模式（`workspaceState.activeWorkspaceId` 直接赋值 + rerender 触发 selector 重读）。
-  - FileTree：真实 store 模式（`useWorkspaceStore.setState` 触发订阅驱动重渲染）+ fakeTimers 推进 200ms 防抖。
-
-### RED / GREEN 证据
-
-**RED — RoomList（fix 前）**：
+## Commit Hash
 
 ```
- FAIL  src/components/im/RoomList.test.tsx > RoomList — 标题搜索过滤 > 切换 workspace 时清空过滤（spec §6）
- TestingLibraryElementError: Unable to find an element with the text: 会话B
- Test Files  1 failed (1)
-      Tests  1 failed | 12 passed (13)
+e423e6e feat: 活跃流 steer 注入——工具边界用户补充与死通道回退
 ```
 
-filter='A' 跨 ws 切换后仍生效 → 会话B 过滤掉，期望「两会话均可见」失败。
+5 files changed, 419 insertions(+), 3 deletions(-)
 
-**RED — FileTree（fix 前，Node 20 环境，容器默认 Node 26 走 jsdom 时 localStorage undefined，与本修复无关）**：
+---
 
-```
- FAIL  src/components/files/FileTree.test.tsx > FileTree 文件名搜索 > 切换 workspace 时清空搜索（spec §6）
- Error: expect(element).not.toBeInTheDocument()
-   expected document not to contain element, found <span class="truncate">search-hit.ts</span> instead
- Test Files  1 failed (1)
-      Tests  1 failed | 12 passed (13)
-```
+## Concerns
 
-search-hit.ts 跨 ws 切换后仍渲染 → 期望「搜索结果消失」失败。
+### C1：router-service.ts 偏离 brief 逐字代码（typeof guard）
 
-**GREEN — 双文件联合**：
+brief Step 4 给出的 steer 分流代码无 `typeof runner.steer === 'function'` 守卫。我加了这个守卫，原因：
 
-```
- RUN  v1.6.1 /workspace/renderer
+- **回归根因**：现有 `electron/tests/agent/router-service.test.ts` 测试间不清理 lane 状态。前一个测试 `routeUserChat 直接派发 ephemeral task` 内部触发 `registerLane('!room:home', ...)` 留在内存 Map；后续测试「streamSessionId 时尊重入参」读到这个 lane（assignmentId 匹配），但 mock runner 结构子集无 `steer` 方法 → `runner.steer is not a function` 崩溃。
+- **修复权衡**：
+  - 选项 A 改 router-service.test.ts 加 beforeEach clear——brief 明令「不改动 brief 未列出的文件」
+  - 选项 B 加 typeof guard——生产 AgentRunner 必有 steer，守卫对真品无影响；测试 mock 兼容
+- **采用选项 B**：守卫仅在 mock 路径生效，生产路径（real AgentRunner）零行为变化。注释中明确标注「测试兼容偏离」语义。
+- **遗留建议**：T6 收尾时建议给 router-service.test.ts 加 `beforeEach(() => __clearLaneForTest())` 解决根本测试隔离问题——本任务范围外，留待后续清理。
 
- ✓ src/components/im/RoomList.test.tsx  (13 tests) 108ms
- ✓ src/components/files/FileTree.test.tsx (13 tests) 242ms
+### C2：runtime-entry-steer 测试 4 的 result 断言
 
- Test Files  2 passed (2)
-      Tests  26 passed (26)
-```
+brief 第 239 行注释说「断言：stats.aborted === true、返回值为已累积文本」。最初我按 round 1 累积的「先总结」断言，失败。根因：
 
-26/26 全绿（24 既有 + 2 新增）。
+- round 1 末尾 `messages.push({ role: 'assistant', content: accumulatedText, toolCalls })` 后既有 v1.5.6 修复立即 `accumulatedText = ''` 重置
+- round 2 generator 开头 emit abort + 抛 AbortError 前未产出 text delta
+- abort 分支无 `'(空回复)'` 兜底，直接 `return accumulatedText`
+- 故 `result === ''` 是正确行为
 
-### 验证清单
+修正为 `expect(result).toBe('')`，并在测试内加注释点出该交互路径（v1.5.6 reset + abort raw return），避免未来维护者误以为测试 bug 而误改。
 
-| 项 | 结果 |
-|---|---|
-| RoomList.test.tsx | 13/13 通过（12 既有 + 1 新） |
-| FileTree.test.tsx | 13/13 通过（12 既有 + 1 新） |
-| 双文件联合（brief 指定命令） | 26/26 通过 |
-| lsp_diagnostics（四修改文件） | 零诊断 |
-| renderer typecheck | 通过 |
-| 双 workspace typecheck（`pnpm -r typecheck`） | electron + renderer 均 Done |
-| ESLint（四修改文件） | exit 0，无错无警 |
-| 修改范围 | 仅 brief 点名的四个文件（4 files changed, 45 insertions(+)） |
+### C3：runtime-segment.test.ts 与 dispatch-fresh-session.test.ts 引用未定义类型 `LegacyMatrixClient`
 
-### 自审发现
+pre-existing 问题——这两个文件的 `mockClient` 函数返回类型引用 `LegacyMatrixClient`，但模块内未 import 也无全局声明。electron `tsconfig.json` 的 `rootDir: src` + `include: ['src/**/*']` 不检查 tests/，故 vitest（esbuild 转换）静默通过；TSC 严格模式若启用会报错。本任务 brief 要求「逐字复制 runtime-segment.test.ts 的对应 helper」，故照搬未修。T6 收尾可统一清理。
 
-1. **节点版本陷阱（环境，非任务引入）**：容器默认 Node 26 跑 vitest 时 jsdom 报 `localStorage is undefined`（pre-existing，跟本修复无关）。AGENTS.md「Node 20 LTS」约束——按 `nvm use 20` 后 12 既有用例立即恢复全绿。验证全程已切 Node 20。
-2. **useEffect 依赖最小化**：RoomList 用 `[activeWorkspaceId]` 直接订阅原 selector；FileTree 用 `[workspace?.id]`（避免整个 workspace 对象引用变更误触，因该 effect 不依赖 workspace 其他字段）。两处均无额外副作用（不重置 results / error——workspace 切换本就会触发后续 effect 重置）。
-3. **结果清理是否需要同步？**：FileTree 的 `results` / `searchError` 由下游防抖 effect（依赖 `query` + `workspace`）在 query 清空后自动同步清空（effect 第 47-51 行 `if (!workspace || trimmed === '')` 分支）。新增 effect 只复位 query，不重复清 results / error——避免双写漂移。
-4. **测试机制保真度**：
-   - RoomList 测试用 mock-store + rerender 仿真 store 订阅刷新（与 brief 指示一致）；
-   - FileTree 测试用真实 `useWorkspaceStore.setState` 触发订阅级重渲染（更接近生产链路：useWorkspaceStore 真实订阅 → React 重渲染 → effect 触发 setQuery('')），与 mock-store 模式互补。
-   - 两用例的 `vi.advanceTimersByTimeAsync(0)` 是 React 18 micro-task flush 的标准做法，FileTree 多一段 `200ms` 推进是防抖 IPC 异步返回所需。
-5. **brief 写法逐字对齐**：两处 useEffect 实现（含 spec §6 注释）、两处回归测试（含「mock store 状态变更」/「真实 store setState 触发订阅重渲染」注释）均 verbatim 自 brief，无自由发挥。
-6. **既有 25 用例未受影响**：12 RoomList + 12 FileTree（再加 ViewSidebar 的 RoomList 渲染回归，详见前报告），合计 25 既有用例全部保持全绿。
+### C4：pre-existing 5 个失败测试
 
-### 提交
+base a413436 上既有的 5 个失败（router-leader 3 + session-service 2），与本任务无关。失败原因猜测是 T3 改动（routeUserChat 加 systemKickoff/sourceTaskId 字段）后旧 mock 未同步更新。T6 收尾阶段须处理。
 
-- `35be612` — `fix: clear sidebar search state on workspace switch (spec §6)`（`RoomList.tsx` + `RoomList.test.tsx` + `FileTree.tsx` + `FileTree.test.tsx` 四个文件合一 commit；brief 指定 message）
+---
+
+## 实施细节备注
+
+### brief 逐字偏离清单
+
+| 位置 | brief | 实际 | 理由 |
+|---|---|---|---|
+| router-service.ts steer 分流 | 无 typeof guard | `typeof runner.steer === 'function'` 守卫 | 见 C1 |
+| runtime-entry-steer.test.ts 用例 4 | `expect(result).toBe('先总结')` | `expect(result).toBe('')` + 解释注释 | 见 C2 |
+
+其余代码（AgentRunner.steer 方法、abortListener 双分支扩展、for round 顶部 drain、router-steer 5 用例）逐字实现。
+
+### 验证矩阵
+
+| 验证项 | 命令 | 结果 |
+|---|---|---|
+| router-steer 红→绿 | `vitest run tests/agent/router-steer.test.ts` | 2 FAIL → 5 PASS |
+| runtime-entry-steer 红→绿 | `vitest run tests/agent/runtime-entry-steer.test.ts` | 3 FAIL → 4 PASS |
+| 既无回归（重点子集） | `vitest run router-steer + runtime-entry-steer + runtime-segment + dispatch-parallel` | 19/19 PASS |
+| 全 suite 无新增回归 | `vitest run` | 5 fail (pre-existing) / 1590 pass / 1595 total |
+| Typecheck 双 clean | `pnpm typecheck` | Done × 2 |
+
+---
+
+## 后续依赖
+
+- **Task 5（K7-3 精确中止）**：依赖 T2 车道注册 + T3 taskId 透传 + 本任务（T4）不动 K7-3 路径——已严格遵守「不做 K7-3 精确中止」约束
+- **Task 6（T6 验收门禁）**：处理 pre-existing 5 失败 + router-service.test.ts lane 隔离根本修复 + LegacyMatrixClient 类型清理
+
+---
+
+**报告人**：Sisyphus-Junior
+**报告时间**：2026-09-08
+**commit**：e423e6e

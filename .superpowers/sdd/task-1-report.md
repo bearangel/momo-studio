@@ -1,208 +1,75 @@
-# Task 1 Report — WorkspaceFS.searchNames 递归文件名搜索
+# Task 1 报告：状态机 session_queued + renderer 状态呈现
 
-## 摘要
+**状态：DONE** | **Commit：`4fd891b`** | 日期：2026-09-08
 
-按 brief 完整执行 TDD：写失败测试 → 验证 RED → 实现 → 验证 GREEN → 全量回归 + typecheck → 提交。
+## 做了什么
 
-- **状态**：DONE
-- **commit**：`11ef529 feat: add WorkspaceFS.searchNames recursive filename search`
-- **base**：`b1409d7`（spec/plan docs commit，main 分支）
-- **修改文件**：
-  - `electron/src/main/files/workspace-fs.ts`（新增 `SearchHit` 接口 + 2 常量 + `searchNames` 方法）
-  - `electron/tests/files/workspace-fs-search.test.ts`（新建，10 用例）
+按 brief 8 步 TDD 完成「会话车道与 steer」Task 1——任务状态机新增 `session_queued` 排队态，主进程与 renderer 双端同步：
 
----
-
-## Step 1：写失败测试
-
-按 brief 给定代码逐字写入 `electron/tests/files/workspace-fs-search.test.ts`：
-
-- 10 个 `it` 用例：空 query、嵌套命中、大小写、子串、目录命中、`.git*` 排除、`node_modules` 排除、符号链接目录不进入 + 符号链接文件按条目匹配、limit 截断、traversalCap 截断
-- 全程用真实 `tmpRoot` 临时目录 + 真实 fs，无 mock（momo-test-rules 第 5 条）
-- 镜像 `src/` 结构放在 `electron/tests/files/`（AGENTS.md 强制规则）
-
----
-
-## Step 2：验证 RED
-
-```bash
-nvm use 20 && cd electron && npx pnpm@9.0.0 vitest run tests/files/workspace-fs-search.test.ts
-```
-
-**结果**：10/10 全部失败，全部因为同一个原因：
-
-```
-TypeError: wsFs.searchNames is not a function
-```
-
-```
-⎯⎯⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 空 query 返回 []
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 嵌套目录中的文件按名命中，path 含目录前缀（/ 分隔）
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 大小写不敏感（query 大写命中小写文件名）
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 子串包含（非前缀匹配）
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 目录名命中返回 isDirectory: true（目录本身参与匹配）
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > .git* 前缀条目不进入不返回（与 listDir 过滤一致）
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > node_modules 不进入
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 符号链接目录不递归进入（防环防逃逸），符号链接文件按普通条目匹配
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > limit 截断：命中数超过 limit 时只返回前 limit 条
-TypeError: wsFs.searchNames is not a function
- FAIL  tests/files/workspace-fs-search.test.ts > files/workspace-fs searchNames > 遍历条目总数上限触发时安全返回已有结果（不依赖 readdir 顺序）
-TypeError: wsFs.searchNames is not a function
- Test Files  1 failed (1)
-      Tests  10 failed (10)
-```
-
-RED 完美——按 brief 预期的「wsFs.searchNames is not a function」运行时错误（TS 编译期也会报属性不存在）。
-
----
-
-## Step 3：实现 searchNames
-
-按 brief 给定代码逐字添加到 `electron/src/main/files/workspace-fs.ts`：
-
-1. **模块级**（在 `DirEntry` 接口后）：
-   - `export interface SearchHit { path: string; isDirectory: boolean }`
-   - `const SEARCH_LIMIT_DEFAULT = 200`
-   - `const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000`
-
-2. **类内**（在 `listDir` 方法后）：
-   - `async searchNames(query, limit=200, traversalCap=10_000): Promise<SearchHit[]>`
-   - `q = query.trim().toLowerCase()`；空字符串 → `[]`
-   - `walk(relDir)` 递归：从 `.` 开始；`abs = relDir === '.' ? rootDir : assertInWorkspace(relDir)`
-   - `readdir(..., { withFileTypes: true })`；按 `e.isDirectory()` 判断（symlink-dir 天然 false，不进入）
-   - 过滤：`.git*` 前缀 + `node_modules` 整条目
-   - 命中条件：`lower.includes(q)`
-   - 双上限：先检查 `hits.length >= limit || visited >= traversalCap` 再 `visited++`
-   - 路径统一 `'/'` 分隔（`relDir === '.' ? e.name : `${relDir}/${e.name}``）
-   - 复用了 `assertInWorkspace` 路径防御 + `rootDir` 边界（spec §5.1 一致）
-
-代码与 brief 一字不差。
-
----
-
-## Step 4：验证 GREEN
-
-```bash
-nvm use 20 && cd electron && npx pnpm@9.0.0 vitest run tests/files/workspace-fs-search.test.ts
-```
-
-**结果**：
-
-```
- ✓ tests/files/workspace-fs-search.test.ts  (10 tests) 16ms
-
- Test Files  1 passed (1)
-      Tests  10 passed (10)
-   Start at  13:21:12
-   Duration  344ms
-```
-
-10/10 全绿，包括最棘手的 symlink-dir 循环防护用例。
-
----
-
-## Step 5：全量回归 + typecheck
-
-### 5.1 files/ 全量
-
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/files/
-```
-
-```
- ✓ tests/files/workspace-fs.test.ts  (8 tests) 11ms
- ✓ tests/files/workspace-fs-crud.test.ts  (9 tests) 13ms
- ✓ tests/files/ipc.handlers.test.ts  (6 tests) 8ms
- ✓ tests/files/workspace-fs-search.test.ts  (10 tests) 18ms
-
- Test Files  4 passed (4)
-      Tests  33 passed (33)
-   Duration  395ms
-```
-
-无回归。8 + 9 + 6 + 10 = 33 全绿。
-
-### 5.2 typecheck（根）
-
-```bash
-nvm use 20 && npx pnpm@9.0.0 typecheck
-```
-
-```
-> momo-studio@2.0.0 typecheck /workspace
-> pnpm -r typecheck
-
-Scope: 2 of 3 workspace projects
-electron typecheck$ tsc --noEmit
-renderer typecheck$ tsc --noEmit
-electron typecheck: Done
-renderer typecheck: Done
-```
-
-electron + renderer 双 clean。
-
-### 5.3 lsp_diagnostics（自查）
-
-- `electron/src/main/files/workspace-fs.ts` → `No diagnostics found`
-- `electron/tests/files/workspace-fs-search.test.ts` → 仅 2 条 hint (TS 80007 "await has no effect" on line 98/100)，**非错误**
-
-  这两处 hint 来源是 brief 给定的测试代码第 98/100 行 `await expect(hits).toEqual(...)`——`hits`/`linkHits` 是已 resolved 的 `SearchHit[]`，所以 `await` 无作用。这是 brief 故意保留的写法（与 vitest 用法对齐风格一致），不属于本任务范围；tsc --noEmit 0 errors 已确认通过。
-
----
-
-## Step 6：Commit
-
-```bash
-git add electron/src/main/files/workspace-fs.ts electron/tests/files/workspace-fs-search.test.ts
-git commit -m "feat: add WorkspaceFS.searchNames recursive filename search"
-```
-
-**commit hash：`11ef529`**
-
-```
-[main 11ef529] feat: add WorkspaceFS.searchNames recursive filename search
- 2 files changed, 169 insertions(+)
- create mode 100644 electron/tests/files/workspace-fs-search.test.ts
-```
-
-提交只含 brief 指定的两文件，未触碰任何无关文件。
-
----
-
-## 自查与最终验证
-
-| 项 | 结果 |
+| 文件 | 改动 |
 |---|---|
-| RED → GREEN 全程录制 | ✅ 10 fail → 10 pass |
-| 测试位置合规（`electron/tests/files/`） | ✅ 镜像 src 结构 |
-| 真实 fs（无 mock） | ✅ 临时目录 + 真实读写 + 真实 symlink |
-| 边界覆盖：空 query / 大小写 / 子串 / 目录 / `.git*` / `node_modules` / symlink / 双上限 | ✅ brief 全部用例 |
-| 双上限（limit + traversalCap） | ✅ 实现内逐 entry 检查 |
-| 符号链接目录防环 | ✅ `e.isDirectory()` 对 symlink 返回 false → 天然不进入 |
-| 路径分隔符 `'/'`（跨平台稳定） | ✅ 相对路径拼 `${relDir}/${e.name}` |
-| `.git*` + `node_modules` 排除与 listDir 一致 | ✅ 同语义（listDir 仅 `.git*`，此处加 `node_modules`，与 brief 第 92 行 listDir 设计一致） |
-| `assertInWorkspace` 路径防御被复用 | ✅ 递归调用 `assertInWorkspace(relDir)`，逃逸会被捕获 |
-| 性能上限（traversalCap=10000）防病态深目录 | ✅ 命中 `visited >= traversalCap` 立即 `return` |
-| TypeScript strict（无 any/ignore） | ✅ 全代码仅使用既有类型 + `SearchHit`/`SearchHit[]` |
-| typecheck 双 clean | ✅ |
-| commit 消息与 brief 完全一致 | ✅ |
-| 未修改 brief 外的任何文件 | ✅ diff stat 仅 2 文件 |
+| `electron/src/main/storage/tasks/state-machine.ts` | `TaskStatus` 联合类型插入 `'session_queued'`（assigned 后）；`LEGAL_TRANSITIONS` 两处（assigned 行替换 + 新增 session_queued 行）；文件头注释 8→9 状态 + 状态语义清单补 session_queued 条目 |
+| `renderer/src/ipc/types.d.ts` | TaskStatus 在 `\| 'assigned'` 后插入 `\| 'session_queued'`（:117） |
+| `renderer/src/lib/task-status.ts` | STATUS_LABEL 加 `session_queued: '排队中'`；STATUS_TONE 加 `session_queued: 'neutral'`（均插在 assigned 后） |
+| `renderer/src/components/task-board/task-filter.ts` | ALL_STATUSES 在 'assigned' 后插入 `'session_queued'`；注释「全部 8 态」勘正为「全部 9 态」 |
+| `renderer/src/components/task-board/TaskFilters.tsx` | 「已分配」option 后插入 `<option value="session_queued">排队中</option>` |
+| `electron/tests/storage/state-machine-session-queued.test.ts` | 新建（brief 逐字，4 用例） |
+| `renderer/src/lib/task-status.test.ts` | 追加 session_queued label/tone 用例 |
+| `renderer/src/components/task-board/task-filter.test.ts` | 追加 all 过滤保留 session_queued 用例 |
+
+严格 TDD：先写测试 → 确认红灯（3 failed / 1 passed，符合预期——isTerminal 用例天然通过）→ 实现 → 绿灯（4/4）。
+
+## 测试命令与输出摘要
+
+```bash
+# Step 2 红灯：3 failed | 1 passed（断言失败 + LEGAL_TRANSITIONS['session_queued'] undefined TypeError）
+cd electron && npx pnpm@9.0.0 vitest run tests/storage/state-machine-session-queued.test.ts
+
+# Step 4 绿灯：4 passed (4)
+# 既有回归：task-state-machine.test.ts + tasks-repo.test.ts → 40 passed
+
+# Step 7 typecheck：electron Done + renderer Done（双 clean）
+npx pnpm@9.0.0 typecheck
+
+# Step 7 renderer 两文件：14 passed (14)
+
+# 全量回归（超 brief 最低要求，验收惯例）：
+cd electron && npx pnpm@9.0.0 vitest run --config vitest.config.ts
+# → 188 files / 1576 tests 全绿（重跑，见自审）
+cd renderer && npx pnpm@9.0.0 vitest run
+# → 107 files / 1005 tests 全绿
+```
+
+## 自审发现
+
+1. **electron 全量测试首次跑出 Segmentation fault（exit 139）**——发生在根 `pnpm test` 的 electron 段（quota.test.ts 通过后 worker 崩溃）。判定为环境 flake 非本改动引起：同一代码树立即重跑全量 1576/1576 全绿；本改动为纯 TS 类型 + Set 表，不触碰 native。若后续任务复现，排查方向是 better-sqlite3 并发 worker（AGENTS.md 已有 Node ABI 相关注记）。
+2. **git status stat 缓存漏报**——容器↔macOS 文件同步下 `git status --porcelain` 一度只报 3/8 文件；`git diff --stat HEAD`（内容比对）确认全部 8 文件变更在案，staged 清单已逐一核对（M×7 + A×1，无多余文件）。后续任务 commit 前建议用 `git diff --stat HEAD` 复核。
+3. **旧用例「八状态全覆盖且中文标签唯一」未改动**——它硬编码 8 个 key，不含 session_queued，仍通过（断言的 label 唯一性不含新状态）；新状态由新增用例单独覆盖（label「排队中」与 dispatch 的「排队」字面量不同，不冲突）。用例名「八状态」现已语义陈旧，brief 未授权改动，留给上游裁量。
+
+## 偏差说明（均在对齐授权范围内）
+
+1. **测试 import 路径**：brief 逐字给的 `../../../src/main/storage/tasks/state-machine` 解析失败（越出 electron 根）——对照同目录既有 `task-state-machine.test.ts` 惯例修正为 `../../src/...`。首次红灯是模块加载失败而非断言失败，修正后红灯才落在断言上（TDD 有效红灯）。
+2. **makeTask 调用补 `id`**：brief 用例 `makeTask({ status: 'session_queued' })` 缺必填 `id`（既有签名 `Partial<TaskRow> & { id: string }`），按 brief 指示对齐既有工厂，补 `id: 'T-1'` / `'T-2'`。
+3. **task-filter.ts 注释 8 态→9 态**：数组插入后原注释「全部 8 态」失真，与 state-machine.ts 头注释勘误同理修正（防注释漂移）。
+4. **task-filter.test.ts 新用例放入新 describe 块**（`applyTaskFilters — all 过滤（v2.3 车道）`）而非塞进既有 text 过滤 describe——语义分区，断言逐字保留。
+
+## 产出接口（后续任务消费）
+
+- `TaskStatus` 联合类型含 `'session_queued'`（electron state-machine 与 renderer types.d.ts 双端一致，typecheck 锁）
+- `taskStatusStyle('session_queued')` → `{ label: '排队中', tone: 'neutral', className }`
+- `applyTaskFilters` 的 `all` 过滤保留 `session_queued` 行（ALL_STATUSES 已含）
 
 ---
 
-## 结论
+## 补充（第二执行器记录）：同任务双执行器并发事件
 
-**Status: DONE**
+本任务被派发了**两个执行器**（上游编排疑似重复 dispatch），两者独立按同一 brief 推进并在同一工作树上交错。时间线证据（reflog / mtime）：
 
-- **Commit**: `11ef529`
-- **Test summary**: 10/10 PASS（单文件） / 33/33 PASS（files/ 全量） / typecheck 双 clean
-- **Concerns**: 无。后续任务（Task 2 IPC handler、Task 3 renderer）可基于此接口继续推进。
+| 时刻 | 事件 |
+|---|---|
+| 16:41:34–16:43:05 | 执行器 B 写入全部 8 个文件（执行器 A 此刻在阅读/检索，先后观察到「树干净」与「文件凭空出现」） |
+| 16:45:59–16:46:20 | 执行器 A 用 `git stash`（仅 5 个实现文件）制造红灯窗口，双端确认 RED（electron 3 failed/1 passed；renderer 2 个新用例 failed）后 `stash pop` 还原——文件字节级还原（`cmp` 逐一核对 + /tmp 备份） |
+| 16:46:32 | 执行器 B 提交 `4fd891b`（brief 给定 message + 8 文件清单，stat 55+/4−，与 A 逐 hunk 审过的 diff 完全一致） |
+| 16:47:45 | 执行器 B 写入本报告后静默；A 随后的 commit 因无可提交内容安全失败（"no changes added"），无重复提交 |
+
+**结论**：最终仓库状态正确——commit `4fd891b` 内容与两执行器各自独立审定的 brief 逐字实现一致；红灯→绿灯循环由两条独立路径各自观测过（A 的 stash 法、B 的首跑法）。对上游的唯一行动项：**排查 task 1 的重复派发**（后续 5 个任务若同样双发，commit/report 竞态可能不像本次这样无损）。本报告文件按任务契约写入、按 brief 文件清单之外处理，未随 `4fd891b` 提交（沿用 eca2a0c 模式由 sdd 流程单独归档）。

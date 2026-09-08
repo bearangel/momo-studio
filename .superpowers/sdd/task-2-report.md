@@ -1,76 +1,86 @@
-# Task 2 报告：file:searchNames IPC 契约（handler + preload + types）
+# Task 2 报告 — 会话执行车道注册表（session-lane 模块）
 
-**Status: DONE** | **Commit: `0bca3f1`** | 基线：Task 1（`11ef529`）之上
+## 状态
 
-## 做了什么
+✅ **完成**。红灯确认 → 实现 → 绿灯 7/7 → 类型与依赖回归通过 → commit `721d6b4`。
 
-按 brief 三步 TDD 完成 `file:searchNames` IPC 通道三端接线（一处 commit）：
+## Commit Hash
 
-1. **测试先行（RED）**——`electron/tests/files/ipc.handlers.test.ts` 四处扩展：
-   - `vi.hoisted` 解构加 `mockSearchNames`（保持既有 hoisted 风格，只是格式微调为一行解构）
-   - `vi.mock('../../src/main/files/workspace-fs')` 工厂实例加 `searchNames: mockSearchNames`
-   - `beforeEach` 加 `mockSearchNames.mockReset()`
-   - 文件末尾追加 `files/ipc.handlers file:searchNames` describe（3 用例：通道注册 / 透传 query + 结果直返 / 错误沿 IPC reject）
-2. **实现三端（GREEN）**：
-   - `electron/src/main/files/ipc.handlers.ts`——`file:rename` 之后注册 `file:searchNames`，handler 只透传：`getWorkspaceFs(workspaceId)` → `wsFs.searchNames(query)`（含 brief 指定的契约注释：renderer 保证 trim 非空，主进程空串短路纵深防御——注意空串短路实际在 Task 1 的 `WorkspaceFS.searchNames` 内部，注释描述的是跨进程分工）
-   - `renderer/src/ipc/types.d.ts`——`file` 块加 `searchNames(workspaceId, query): Promise<SearchHit[]>`；`DirEntry` 旁加 renderer 镜像 `SearchHit` 接口（跨进程独立定义，仅结构对齐，注释逐字按 brief）
-   - `electron/src/preload/index.ts`——`file` 段加 `searchNames: (wsId, query) => invoke('file:searchNames', wsId, query)`（泛型 `invoke<T>` 从 `ApiSurface` 上下文推断 `SearchHit[]`，与既有绑定同机制）
+- `721d6b4` — feat: 会话执行车道注册表（session-lane 模块）
 
-## RED 证据（Step 2）
+## 测试摘要
 
-```
- ❯ tests/files/ipc.handlers.test.ts  (9 tests | 3 failed) 9ms
-   ❯ ... > 注册 file:searchNames 通道
-     → expected false to be true        ← ipcHandlers.has('file:searchNames') === false，通道未注册（正确失败原因）
-   ❯ ... > 透传 workspaceId 定位 workspace，query 原样交给 searchNames，结果直返
-     → handler is not a function
-   ❯ ... > searchNames 抛错时错误沿 IPC 传播（reject）
-     → handler is not a function
- Tests  3 failed | 6 passed (9)          ← 6 个既有用例不受影响
-```
+- `electron/tests/agent/session-lane.test.ts` — **7 用例全过**（4ms）
+  - 注册与清除：registerLane/clearLaneIfMatch 匹配语义 + kickoff 竞态覆盖
+  - 占道判定（spec §4.2）：内存命中 / DB 兜底命中 / 两者皆空
+  - K7-3 精确中止（spec §6）：按 taskId 反查命中 + dispatch 子流未注册不被误杀
+- 回归：`stream-relay.test.ts` **19/19 通过**，未影响依赖模块
 
-## GREEN 证据（Step 4）
+## 修改文件
 
-```
- ✓ tests/files/ipc.handlers.test.ts  (9 tests) 6ms
- Test Files  1 passed (1)
-      Tests  9 passed (9)
-```
+| 文件 | 操作 | 行数 |
+|---|---|---|
+| `electron/src/main/agent/session-lane.ts` | 新建 | +106 |
+| `electron/tests/agent/session-lane.test.ts` | 新建 | +63 |
 
-## 双 workspace typecheck（Step 5）
+未改动 brief 之外任何文件。
+
+## 关键决策与偏差
+
+### Import 路径修正（brief 自带警告触发）
+
+brief 文本使用 `../../../src/main/...`，从 `electron/tests/agent/` 出发算术上越过 electron 根（指向 `/workspace/src/...`），会导致 `Failed to load url`。按 brief 自身的「上一任务教训」与既有惯例（`tests/agent/capability-merger.test.ts`、`dispatch.test.ts` 等均使用 `../../src/...`），两处 import 与两处 vi.mock 路径统一改为 `../../src/...`。该修正是 brief 自带规则的执行，不属于范围扩张。
+
+### 路径算术验证
 
 ```
-> pnpm -r typecheck
-electron typecheck$ tsc --noEmit
-renderer typecheck$ tsc --noEmit
-electron typecheck: Done
-renderer typecheck: Done
+electron/tests/agent/session-lane.test.ts
+  ↑..     = electron/tests/
+  ↑..     = electron/                   ← 终点
+  ../..   = ../../                       ← 上溯到 electron 根
+  ../../src/main/agent/session-lane      ← 命中
 ```
 
-lsp_diagnostics（error 级）三个改动源文件 + 测试文件均零报错。
+`../../../` 会落到 `/workspace/`（electron 之上的 monorepo 根），不存在 `src/` 目录。
 
-## Commit（Step 6）
+## 设计要点（spec §4 / §6 / §7 对齐）
 
-```
-0bca3f1 feat: add file:searchNames IPC channel (handler + preload + types)
- electron/src/main/files/ipc.handlers.ts   | 10 +++++++++
- electron/src/preload/index.ts             |  1 +
- electron/tests/files/ipc.handlers.test.ts | 34 +++++++++++++++++++++++++++----
- renderer/src/ipc/types.d.ts               | 12 +++++++++++
- 4 files changed, 53 insertions(+), 4 deletions(-)
-```
+- **内存 Map 单源**：车道条目以 `sessionId → LaneEntry` 存进程内 Map，`routeUserChat` 派发顶层流时注册、`AgentRunner` 流收尾时清除
+- **占道双层判定**：`isLaneOccupied` 先看内存；空则查 DB `tasks` 表 `executionSessionId = sessionId AND status = 'in_progress' LIMIT 1`——重启后内存空但孤儿 in_progress 行继续占道防插队
+- **K7-3 精确中止**：`abortTaskStreamByLane(taskId)` 遍历 lane Map 找匹配条目，反查 `streamSessionId` 调 `abortStreamBySessionId`，返回是否命中。dispatch 子流不经 `routeDispatch` 注册车道（spec §6 铁律：避免按 `executionSessionId` 广播误杀同会话 dispatch 子流）
+- **clearLaneIfMatch 匹配语义**：仅当当前车道条目的 `streamSessionId` 与传入 id 相同才清除——防 AgentRunner 迟到收尾清掉新注册（abort 回退重派发场景，spec §4.1）
+- **kickoff 竞态**：executor 已保证放行前车道空闲；覆盖仅发生在「手输流恰好先注册」极窄窗口，warn + 退化并行（spec §7）
+- **模块独立无环**：session-lane 不 import runtime-registry / agent-runner；反过来 registry 与 runner 都 import 本模块（保持反向依赖）
 
-仅含 brief 指定的 4 个文件（`.superpowers/` 下无关改动未纳入）。
+## 验证
 
-## 自审发现（含一项超出 brief 的排查）
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 红灯（模块不存在） | `vitest run tests/agent/session-lane.test.ts` | ✅ FAIL — `Failed to load url ../../src/main/agent/session-lane` |
+| 绿灯 | 同上 | ✅ PASS — 7 tests passed (4ms) |
+| 类型检查 | `tsc --noEmit`（electron workspace） | ✅ exit 0，无错 |
+| LSP 诊断 session-lane.ts | lsp_diagnostics | ✅ No diagnostics found |
+| 依赖模块回归 | `vitest run tests/agent/stream-relay.test.ts` | ✅ 19/19 passed |
 
-- **代码逐字对齐 brief**：describe 块、handler、types、preload 行均 verbatim；仅 `vi.hoisted` 解构因加名后换行格式略有重排（语义不变）。
-- **契约三端同 commit**（momo-boundary-rules 第 4 条）：handler / types.d.ts / preload 单 commit `0bca3f1`；双 typecheck clean（预加载三层 `../../../` 引用已验证对齐）。
-- **既有测试风格保持**：`vi.hoisted` + 全 mock WorkspaceFS 结构未动，只加成员。
-- **⚠️ 全量套件 SIGSEGV（预存环境问题，非本任务引入）**：跑全量 electron 套件时 vitest 在 53 个测试文件全绿后被 SIGSEGV 杀死（崩溃点在 migration/storage 类测试运行中）。按 momo-debug-rules 复现排查：在 Task 1 基线 commit `11ef529` 的干净 worktree 里同命令**同样复现 segfault**（EXIT=1，同位置）——确认是容器内 better-sqlite3 native binding 在 vitest 并行 worker 下的预存环境问题（AGENTS.md 已记载此类 native binding 脆弱性），与本任务改动无关（本任务不触 sqlite）。worktree 已清理。目标测试文件 + 双 typecheck（brief 的全部验证要求）均绿。
-- **Task 3 依赖就绪**：`window.api.file.searchNames(workspaceId, query): Promise<SearchHit[]>` 已可用，`SearchHit` 从 `renderer/src/ipc/types.d.ts` 可导入。
+### LSP 对测试文件的 3 处提示（已确认非阻塞）
 
-## 遗留 / 关注项
+`lsp_diagnostics` 对 `session-lane.test.ts` 报 3 处 `Expected 0 arguments, but got 1`（lines 7/12/57），源是 `vi.fn(() => [])` 默认推导为 `Mock<[], never[]>`。这是 vitest 类型推导的已知 quirk（仓库内 `ipc-stop-start.test.ts` / `ipc-handlers.test.ts` / `provider-ipc-handlers.test.ts` 等均采用同一模式），运行时 mock 透传不强制 arity。`tsconfig.json` 的 `include: ["src/**/*"]` 排除 tests 目录，故 `tsc --noEmit` 实际不受影响（exit 0）。brief 明文「vi.mock 保持真实签名形状（brief 已按此写好）」——该模式是 brief 显式要求保留。
 
-- 全量套件在本容器无法完整跑完（预存 segfault，基线同样复现）；如需全量回归建议在 macOS 主机跑。不影响本任务验收标准（单测文件 9/9 + 双 typecheck clean）。
-- 本文件原有内容为上一特性周期（create_task 描述纠偏）的旧报告，按本次任务指令覆盖。
+## Concerns / 后续任务对接
+
+1. **Task 3（executor gate）** 应在派发前调 `isLaneOccupied(sessionId)` 判定占道；放行后调 `registerLane(sessionId, { taskId, streamSessionId, assignmentId })`。
+2. **Task 4（steer 分流）** 读 `getLane(sessionId)` 取目标 `streamSessionId` 与 `assignmentId`，新 steer 流注册车道会替换旧条目（streamSessionId 不同）。
+3. **Task 5（精确中止）** 调 `abortTaskStreamByLane(taskId)`；返回 `false` 时按既有逻辑回退 `executionSessionId` 广播（spec §6 约定）。
+4. **dispatch 子流注册**：dispatch 子流不在本模块注册车道（spec §6 铁律）。如后续任务需要，需明确登记入口，否则 `abortTaskStreamByLane` 对 dispatch 子任务返回 false 触发回退广播——这是预期路径，不是漏配。
+5. **logger.warn 输出**：kickoff 竞态测试产生一次预期 warn 日志（被 stderr 捕获），生产环境监控可观测此 warn 数量作为「手输流竞态窗口」频率指标。
+
+## 测试覆盖矩阵
+
+| 接口 | 用例 |
+|---|---|
+| `registerLane` | 内存写入 + kickoff 覆盖不抛 |
+| `clearLaneIfMatch` | 匹配清除 + 不匹配保留 |
+| `getLane` | 有则返回条目 / 无则返回 null（隐含） |
+| `isLaneOccupied` | 内存命中 / DB 兜底命中 / 两者皆空 |
+| `abortTaskStreamByLane` | 按 taskId 命中 + 未注册返回 false |
+| `__clearLaneForTest` | beforeEach 复位（隐含） |
