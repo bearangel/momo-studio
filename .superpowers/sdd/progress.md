@@ -968,3 +968,14 @@ Task 1: complete (commits 29581ca..c452c22, review clean — Spec ✅ / Approved
 Task 2: complete (commits c452c22..4a2e2bf, review clean — Spec ✅ / Approved, 2 Minor: createTask外层JSDoc陈旧未同步K1三分支 / hasTarget两处判定语义分叉——空串''时assigned+warning自相矛盾，spec自身瑕疵)
 Final review: NEEDS FIXES → fix cfddcca（hasDelegationTarget 四处收敛+空串归一+JSDoc 同步+repo 枚举+空串回归锁；第 5 文件 task-broadcast.test.ts 为 vi.mock 枚举契约变更的必要下游）。复验 34/34 + 全量 1554/987 + typecheck 双 clean。READY。
 Follow-up（终审 N2，非阻塞）：task-tools 写家族（create/complete/fail）缺 broadcastLocalTaskSnapshot 调用——既有缺口非本分支引入，45s 周期重播兜底 staleness 有界；建议下批在 notifyExecutor() 旁各补一行。
+
+=== 侧边栏搜索（2026-09-08，计划 docs/plans/2026-09-08-sidebar-search.md，spec docs/specs/2026-09-08-sidebar-search-design.md，main，BASE=b1409d7[docs commit]）===
+Task 1: complete (commits b1409d7..11ef529, review clean——Approved; Minor deferred ×3: ①单目录EACCES整体reject[brief继承,候选加固] ②test:98/100 await非promise TS80007[brief原文] ③symlink目录命中标isDirectory:false[lstat语义,spec一致])
+Task 2: complete (commits 11ef529..0bca3f1, review clean——Approved, 契约三端[通道名/参数序/SearchHit形状]逐字对齐实证; Minor deferred ×2: ①handler注释「空串短路」易误读为handler层[brief原文] ②ipc.handlers.test头注释handler枚举陈旧[预存]; 环境注: 全量electron套件容器SIGSEGV经基线worktree复现=预存native binding问题,全量回归留T6/macOS主机)
+Task 3: complete (commits 0bca3f1..5f5cada, review clean——Approved, 防抖/竞态/视图切换/设计系统逐项过; Minor deferred ×3: ①stale响应落在下一个防抖窗内短暂渲染[brief设计固有,≤200ms自愈] ②恰好200条时截断提示误报[limit启发式固有] ③目录行不可点仅负向断言[brief原文,div结构保证]; 报告sidecar路径=task-3-report-sidebar-search.md)
+Task 4: complete (commits 5f5cada..9cefff7 + fix 35be612, review clean after fix round——审查者Minor①升格为spec§6真实缺口[filter跨workspace切换持久],修复含T3同款问题[RoomList+FileTree切ws复位+2回归锁],复审Approved 36/36独立复跑; Minor deferred ×1: 纯空白输入时清除按钮仍显示[brief原文,无害]; 附注: brief既有用例计数8实为7[笔误])
+Task 5: complete (commits 35be612..61cdc05, review clean——Approved, 纯函数等价迁移逐行比对+独立复跑63/63+typecheck+lint; 控制器追加spec§6复位effect已落[组件级测试按裁定豁免,RoomList/FileTree同款已锁]; Minor deferred ×4: ①title/desc非空契约直toLowerCase[类型保证] ②mount首跑冗余setFilter[模式一致] ③input text-xs重复[brief原文] ④复位effect无组件级测试[裁定豁免]; 合理偏差: TaskList.test删brief模板未用TaskRow import[ESLint error,等价])
+Task 6: complete (无commit; 控制器亲验三门禁 PASS——typecheck 双 clean / electron 187文件1572 + renderer 107文件1003 全绿[SIGSEGV未复现=负载偶发] / 树净[仅.sdd报告]; 手动冒烟三项留 macOS 主机)
+全部 6 Task 完成——进入终审（whole-branch, f3028b3..HEAD, 7 commits 含 docs）
+终审（whole-branch, oracle）: APPROVED——Ready to merge Yes。7 commits（f3028b3..61cdc05: 1 docs + 5 feat + 1 fix）。跨任务接缝全闭环（SearchHit 三端逐字/limit 200 双端对齐/reset 三组件语义统一）；spec §3-§8 逐节覆盖；13 条 Minor 全部 DEFER-OK（含 5 条终审新发现：FileTree effect deps workspace 对象身份冗余重触发[EACCES/symlink-dir/头注释等]）。门禁终态: typecheck 双 clean + electron 187文件1572 + renderer 107文件1003 全绿。macOS 主机冒烟三项待办（三视图过滤/恢复/200 截断）。
+SDD 执行完毕：6 任务×（实现+审查）双循环 + T4 修复轮（spec§6 workspace 复位，T3/T4 双组件+2 回归锁）+ T5 控制器追加要求 + 终审单轮。Critical 0 / Important 0 / Minor 延期 13 条归档。

@@ -1,76 +1,144 @@
-# Task 4 报告：TaskExecutor 队列放行模块
+# Task 4 报告：RoomList 会话标题过滤（renderer 会话搜索）
 
-## 实施摘要
+## 状态
 
-按 brief TDD 五步执行（失败测试 → RED → 实现 → GREEN → 提交）。6 个用例全绿，全仓 1485 测试零回归。executor 主体逐字采用 brief 代码，另有 **6 处必要偏差**（2 处任务指示预先批准的 DDL 修正、1 处 brief 笔误、1 处 strict 类型必要兜底、1 处 brief 自身注释声明但未实现的防热循环补全、1 处 spec 与现状冲突的调停），全部在下文逐条列出依据。
+DONE。TDD 全流程（RED → GREEN → 验证 → 提交），brief 各 Step 按原文转录执行。
 
-## TDD 证据
+（注：本文件原内容为上一轮计划「TaskExecutor 队列放行模块」的 Task 4 报告，其提交 f1405a2 / 2875a27 已在 git 历史；按本任务指示覆盖为本 sidebar-search Task 4 报告。）
 
-### RED（两轮）
+## 做了什么
 
-1. **executor 模块不存在**（brief Step 2 预期失败形态）：
-   ```
-   FAIL tests/task/executor.test.ts
-   Error: Failed to load url ../../src/main/task/executor ... Does the file exist?
-   ```
-2. **状态机 assigned→failed 先红**（独立 TDD 回归锁，见「偏差 6」）：
-   ```
-   FAIL task-state-machine.test.ts > assigned → failed（executor 目标校验失败路径，spec §5.1/§9）
-   AssertionError: expected false to be true
-   ```
+- **测试**（`renderer/src/components/im/RoomList.test.tsx`）：文件末尾追加 `describe('RoomList — 标题搜索过滤')` 共 5 用例（brief Step 1 逐字转录）：关键词命中过滤 / 大小写不敏感 / 无命中「无匹配会话」空态 / 清除按钮恢复全量 / 过滤态点击与悬停操作不受影响。既有 store-mock 模式（`vi.hoisted` + `sessionState` 直改）与 `makeSession` / `makeMember` 工厂复用，未改动既有用例。
+- **实现**（`renderer/src/components/im/RoomList.tsx`）：
+  - lucide import 追加 `Search, X`（brief Step 3a）。
+  - `renaming` state 旁新增 `filter` state + `q = filter.trim().toLowerCase()` + `visibleSessions`（空输入 = 不过滤，两端 toLowerCase 子串包含；brief Step 3b 逐字转录）。
+  - 主 return 重构为「搜索框行 + 列表 / 无匹配空态」结构（brief Step 3c 逐字转录）：map 源改 `visibleSessions`，列表挪入 `flex-1 overflow-auto` 滚动容器；搜索框行含 Search 图标（14 / 1.75 / aria-hidden）、aria-label 输入框、非空时显示的清除按钮（X 图标，14 / 1.75 / aria-hidden）。
+  - 会话行 JSX 与原实现逐字节一致（仅随容器层级重排缩进）；`loading && sessions.length === 0` 与 `sessions.length === 0` 两个早退分支按裁定完全不动（无搜索框）。
 
-### GREEN
+## RED / GREEN 证据
+
+**RED**（实现前，`cd renderer && npx pnpm@9.0.0 vitest run src/components/im/RoomList.test.tsx`）：
 
 ```
-Test Files  2 passed (2)
-     Tests  31 passed (31)      # executor 6 用例 + 状态机 25 用例
+ FAIL  src/components/im/RoomList.test.tsx > RoomList — 标题搜索过滤 > 输入关键词 → 仅渲染标题命中的会话
+TestingLibraryElementError: Unable to find a label with the text of: 搜索会话
+ ...（5 个新用例同因失败）
+ Test Files  1 failed (1)
+      Tests  5 failed | 7 passed (12)
 ```
 
-### 全量验证
+失败原因与 brief Step 2 预期完全一致（`getByLabelText('搜索会话')` 找不到元素），既有 7 用例不受测试追加影响。
 
-- `npx pnpm@9.0.0 test`（electron 全仓）：**178 文件 / 1485 测试全绿**，状态机扩展零回归
-- `npx pnpm@9.0.0 typecheck`：clean（strict + noUncheckedIndexedAccess）
-- `npx eslint src/main/task/executor.ts src/main/storage/tasks/state-machine.ts`：clean
-- lsp_diagnostics：两文件零诊断
+**GREEN**（实现后，同命令）：
 
-## 文件变更（4 个）
+```
+ ✓ src/components/im/RoomList.test.tsx  (12 tests) 96ms
 
-| 文件 | 变更 | 关键内容 |
-|---|---|---|
-| `electron/src/main/task/executor.ts` | 新建 262 行 | TaskExecutor：admitOnce 并发 gate + 放行排序 + validateTarget + startTask + kickoff 注入；notify 100ms 去抖（timer unref）；start/stop 30s 兜底扫描；模块级单例 `taskExecutor` + `notifyExecutor()` |
-| `electron/tests/task/executor.test.ts` | 新建 141 行 | brief 逐字 6 用例 + DDL 修正后的 seedAgentMember + kind 修正 |
-| `electron/src/main/storage/tasks/state-machine.ts` | +3/-1 行 | `assigned` 合法转换集加 `'failed'` + 头注释同步（偏差 6） |
-| `electron/tests/storage/task-state-machine.test.ts` | +5 行 | `assigned → failed` 正向用例（RED→GREEN 回归锁） |
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+```
 
-## 与 brief 的偏差（6 处，均有依据）
+## 验证清单
 
-1. **seedAgentMember 按当前 DDL 修正**（任务指示预先批准，Task 3 同款）：brief 原始 INSERT 缺 NOT NULL 列且列名过期——`agent_definitions` 实际 NOT NULL 为 id/name/slug/version/system_prompt/model_name（`model_provider` 已于 v13 DROP，表无 `updated_at` 列）；`workspace_agent_members` 实际 NOT NULL 含 `agent_user_id`，时间列是 `created_at`（带 DEFAULT）而非 `added_at`。
-2. **insertSession kind 'quick' → 'chat'**（任务指示预先批准）：sessions DDL `CHECK (kind IN ('chat','task_execution'))` + repo TS 联合类型均不容 'quick'（v25 会话双类型是概念层用语，未落 DDL）。
-3. **`export class TaskExecutor`**：brief 源码漏写 `export`，但其自身测试 `import { TaskExecutor }`——笔误，必须导出。
-4. **`getGlobalSettings().maxConcurrentTasks ?? 3`**：`GlobalSettings` 类型上该字段可选（`number | undefined`），裸相减在 strict 下编译错误；末位 `?? 3` 与 `settings/crud.ts` 读侧默认值对齐。
-5. **admitOnce 增加 round 级 `skipped` 集合**（补全 brief 自己声明的语义）：brief 的 `peekNextAssigned` 注释写明「排除本轮已处理过的失败候选」、startTask 抛错分支注释写明「本轮跳过」，但其实现 `continue` 后会再次 peek 到**同一个仍处于 assigned 的候选**——validate 失败/kickoff 失败者已转 failed 自然出队，但 **startTask 持续抛错者（如磁盘满导致事务恒败）会无限热循环**（admitting 标志使 notify/sweep 全部失效，事件循环空转 + 日志洪水）。skipped 集合以占位符参数绑定拼入 `NOT IN`，候选本轮跳过、留给兜底扫描重试——正是注释声明的行为。
-6. **状态机 `assigned` 转换集加 `'failed'`**（spec 调停，最重要的一处）：spec §5.1 算法第 1 步「无效 → transition failed + errorMessage 明示」、§9 边界表「目标已删 → 转 failed 带明示 errorMessage」、§10 测试清单「目标校验失败→failed」三处规范性要求 assigned→failed；但现行状态机 `assigned: {in_progress, cancelled}` 不含 failed，且 plan 头部写「状态机零改动」——二者直接冲突。不做调停的后果不是测试失败而是**测试挂死**（failQuietly 抛错被吞 → 任务滞留 assigned → peek 反复选中同一候选 → 死循环）。裁定依据：spec 算法节是规范性的，而「状态机零改动」两处出处各自语境是「不新增 queued 状态」（D3 决策）与「paused 恢复队列化留待后续」（§228 范围外清单），均不针对 assigned→failed；且已确认既有状态机测试无 assigned→failed 非法断言、全仓 1485 测试无回归。独立提交（f1405a2）先行，含自己的 RED→GREEN 用例。
+| 项 | 结果 |
+|---|---|
+| RoomList.test.tsx | 12/12 通过（新 5 + 既有 7） |
+| ViewSidebar.test.tsx（也渲染 RoomList，回归防护） | 10/10 通过 |
+| lsp_diagnostics（两修改文件） | 零诊断 |
+| renderer typecheck（`tsc --noEmit`） | 通过，无错误 |
+| ESLint（两修改文件，含设计系统 token 机械规则） | exit 0 |
+| 修改范围 | 仅 brief 点名的两个文件（`git show --stat`：2 files changed, 130 insertions(+), 40 deletions(-)） |
 
-## 自审（任务指示的三个重点）
+## 自审发现
 
-- **while 循环 + slots 重查（防超放）**：每次成功放行后 `slots = max - countInProgress()` 以 DB 为准重查（不信任内存计数）；`!launched` 路径不消耗槽位（validate 失败者已出队、startTask 抛错者跳过）；`admitting` 互斥使并发的 notify/sweep 调用直接 no-op。放行前 count、放行后 re-count，单轮内不可能超放。
-- **peekNextAssigned 竞态防御**：SELECT 与 getTask 读取之间逐条复查 `status === 'assigned'`；排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍全程参数绑定，无注入面）。
-- **notify 去抖 timer unref**：已带 `this.notifyTimer.unref?.()`，不会挂住事件循环。注：`start()` 的兜底扫描 interval 按 brief 原样**未** unref——主进程常驻语义下无害，但 Task 5 接线时若在非常驻上下文调用 `taskExecutor.start()` 需配对 `stop()`。
-
-## 测试保真度自查（momo-test-rules）
-
-- kickoff fake 挂在生产注入缝（`deps.sendKickoff`）而非 mock 内部模块——mock 收窄铁律 ✓
-- 全程真实 better-sqlite3（tmp 目录 + runMigrations），无 DB mock ✓
-- 断言生产消费字段（status / errorMessage / executionSessionId / sessionId / mentionedInstanceIds / body）✓
-- 错误路径专项：并发满 / 目标无效 / kickoff 抛错 / pending+draft 不参与 ✓
-
-## 顾虑 / 后续提示
-
-1. **lint 存量债务（非本任务）**：`src/main/agent/ipc.handlers.ts:58` 有一个预先存在的 `no-unused-vars` error（`'AgentDefinition' is defined but never used`），非本任务文件、brief 未授权，未处置——全量 `pnpm lint` 会红，建议后续任务顺手清或单独 chore。
-2. **偏差 6 请 plan owner 知悉**：若后续任务发现「状态机零改动」的其它依赖（目前全仓测试无冲突），spec/plan 文档宜补一句勘误说明 assigned→failed 的开放。
-3. Task 5（runtime-init 接线）将注入真实 sendKickoff 并调用 `taskExecutor.start()`——注意上面自审第 3 点的 stop() 配对。
+1. **brief 计数笔误（非阻塞）**：brief Step 4 写「新 5 用例 + 既有 8 用例全绿」，实际既有用例为 7 个（第一个 describe 5 + 第二个 describe 2），合计 12。全绿事实不受影响。
+2. **`MessageSquare` 导入保留**：仍被 `sessions.length === 0` 早退分支的 EmptyState 使用，无未使用导入告警。
+3. **空态区分达成**：「暂无会话」（EmptyState 组件，sessions 本身为空，早退分支）与「无匹配会话」（纯文本 div，过滤后为空）走不同代码路径，测试第 3 例锁定该区分。
+4. **既有图标断言不受影响**：既有用例断言行按钮内无 svg（`rowButton.querySelector('svg')`）——新搜索图标在行按钮之外，12/12 + 10/10 实测确认。
+5. **title 空值安全**：`SessionSummary.title` 契约保证非空 string（brief Interfaces 节），`s.title.toLowerCase()` 无需空值防御。
 
 ## 提交
 
-- `f1405a2` feat: 状态机新增 assigned→failed 转换——executor 目标校验失败路径前置（spec §5.1/§9）
-- `2875a27` feat: TaskExecutor 队列放行模块——全局并发 gate + kickoff 注入 + 写触发去抖（brief 指定的精确 message 与文件清单）
+- `9cefff7` — `feat: session list title filter in RoomList`（仅 `RoomList.tsx` + `RoomList.test.tsx`；brief Step 5 精确 message）
+
+## Fix round: workspace-switch reset
+
+**Spec 漏洞**：`docs/specs/2026-09-08-sidebar-search-design.md §6` 承诺「切视图 / 切 workspace → 搜索状态随组件卸载自然丢失，无残留」。但 RoomList / FileTree 在视图切换时**不卸载**（仅 view 切换 unmount 内容区，侧栏常驻），过滤 / 搜索瞬态随组件常驻 → 切换 workspace 后旧关键字残留在新 workspace 的列表 / 搜索结果里。
+
+**修复方案**：两个组件均显式监听 workspace 变化，触发时 setState('') 清空本地瞬态搜索态（不引入新 store / 不改架构，纯现有 useState 复位）。
+
+### 做了什么
+
+- **`renderer/src/components/im/RoomList.tsx`**：`filter` state 声明后追加 `useEffect(() => setFilter(''), [activeWorkspaceId])`（comment 锚定 spec §6 契约 + 解释为何需要显式复位——组件常驻不卸载）。
+- **`renderer/src/components/files/FileTree.tsx`**：`query` state 声明后追加 `useEffect(() => setQuery(''), [workspace?.id])`（同源 comment）。FileTree 的 search 防抖 effect 已依赖 `workspace`，新增 effect 不引入额外订阅。
+- **测试**：两文件 describe 末尾各追加 1 个回归用例（brief verbatim）。
+  - RoomList：mock-store 模式（`workspaceState.activeWorkspaceId` 直接赋值 + rerender 触发 selector 重读）。
+  - FileTree：真实 store 模式（`useWorkspaceStore.setState` 触发订阅驱动重渲染）+ fakeTimers 推进 200ms 防抖。
+
+### RED / GREEN 证据
+
+**RED — RoomList（fix 前）**：
+
+```
+ FAIL  src/components/im/RoomList.test.tsx > RoomList — 标题搜索过滤 > 切换 workspace 时清空过滤（spec §6）
+ TestingLibraryElementError: Unable to find an element with the text: 会话B
+ Test Files  1 failed (1)
+      Tests  1 failed | 12 passed (13)
+```
+
+filter='A' 跨 ws 切换后仍生效 → 会话B 过滤掉，期望「两会话均可见」失败。
+
+**RED — FileTree（fix 前，Node 20 环境，容器默认 Node 26 走 jsdom 时 localStorage undefined，与本修复无关）**：
+
+```
+ FAIL  src/components/files/FileTree.test.tsx > FileTree 文件名搜索 > 切换 workspace 时清空搜索（spec §6）
+ Error: expect(element).not.toBeInTheDocument()
+   expected document not to contain element, found <span class="truncate">search-hit.ts</span> instead
+ Test Files  1 failed (1)
+      Tests  1 failed | 12 passed (13)
+```
+
+search-hit.ts 跨 ws 切换后仍渲染 → 期望「搜索结果消失」失败。
+
+**GREEN — 双文件联合**：
+
+```
+ RUN  v1.6.1 /workspace/renderer
+
+ ✓ src/components/im/RoomList.test.tsx  (13 tests) 108ms
+ ✓ src/components/files/FileTree.test.tsx (13 tests) 242ms
+
+ Test Files  2 passed (2)
+      Tests  26 passed (26)
+```
+
+26/26 全绿（24 既有 + 2 新增）。
+
+### 验证清单
+
+| 项 | 结果 |
+|---|---|
+| RoomList.test.tsx | 13/13 通过（12 既有 + 1 新） |
+| FileTree.test.tsx | 13/13 通过（12 既有 + 1 新） |
+| 双文件联合（brief 指定命令） | 26/26 通过 |
+| lsp_diagnostics（四修改文件） | 零诊断 |
+| renderer typecheck | 通过 |
+| 双 workspace typecheck（`pnpm -r typecheck`） | electron + renderer 均 Done |
+| ESLint（四修改文件） | exit 0，无错无警 |
+| 修改范围 | 仅 brief 点名的四个文件（4 files changed, 45 insertions(+)） |
+
+### 自审发现
+
+1. **节点版本陷阱（环境，非任务引入）**：容器默认 Node 26 跑 vitest 时 jsdom 报 `localStorage is undefined`（pre-existing，跟本修复无关）。AGENTS.md「Node 20 LTS」约束——按 `nvm use 20` 后 12 既有用例立即恢复全绿。验证全程已切 Node 20。
+2. **useEffect 依赖最小化**：RoomList 用 `[activeWorkspaceId]` 直接订阅原 selector；FileTree 用 `[workspace?.id]`（避免整个 workspace 对象引用变更误触，因该 effect 不依赖 workspace 其他字段）。两处均无额外副作用（不重置 results / error——workspace 切换本就会触发后续 effect 重置）。
+3. **结果清理是否需要同步？**：FileTree 的 `results` / `searchError` 由下游防抖 effect（依赖 `query` + `workspace`）在 query 清空后自动同步清空（effect 第 47-51 行 `if (!workspace || trimmed === '')` 分支）。新增 effect 只复位 query，不重复清 results / error——避免双写漂移。
+4. **测试机制保真度**：
+   - RoomList 测试用 mock-store + rerender 仿真 store 订阅刷新（与 brief 指示一致）；
+   - FileTree 测试用真实 `useWorkspaceStore.setState` 触发订阅级重渲染（更接近生产链路：useWorkspaceStore 真实订阅 → React 重渲染 → effect 触发 setQuery('')），与 mock-store 模式互补。
+   - 两用例的 `vi.advanceTimersByTimeAsync(0)` 是 React 18 micro-task flush 的标准做法，FileTree 多一段 `200ms` 推进是防抖 IPC 异步返回所需。
+5. **brief 写法逐字对齐**：两处 useEffect 实现（含 spec §6 注释）、两处回归测试（含「mock store 状态变更」/「真实 store setState 触发订阅重渲染」注释）均 verbatim 自 brief，无自由发挥。
+6. **既有 25 用例未受影响**：12 RoomList + 12 FileTree（再加 ViewSidebar 的 RoomList 渲染回归，详见前报告），合计 25 既有用例全部保持全绿。
+
+### 提交
+
+- `35be612` — `fix: clear sidebar search state on workspace switch (spec §6)`（`RoomList.tsx` + `RoomList.test.tsx` + `FileTree.tsx` + `FileTree.test.tsx` 四个文件合一 commit；brief 指定 message）
