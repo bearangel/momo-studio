@@ -131,6 +131,23 @@ export function getMessageByStreamSessionId(streamSessionId: string): MessageRow
   return row ? rowToCamel(row) : null;
 }
 
+/**
+ * 取指定流会话的全部消息行（含 `#seg`/`#roll` 后缀子行），按时间升序。
+ * 用途：导出富信息 dispatch 段嵌套展开子 agent 回复（v2.3.2 spec §5）。
+ * ssi 由系统内部生成（s- 前缀 + UUID/后缀），无 LIKE 元字符，前缀匹配安全。
+ */
+export function listMessagesByStreamSessionId(streamSessionId: string): MessageRow[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%'
+       ORDER BY created_at ASC, rowid ASC`,
+    )
+    .all(streamSessionId, streamSessionId) as SqlRow[];
+  return rows.map(rowToCamel);
+}
+
 export function listMessagesBySession(sessionId: string, opts?: { limit?: number; beforeTs?: number }): MessageRow[] {
   const db = getDb();
   const limit = opts?.limit ?? 1000;

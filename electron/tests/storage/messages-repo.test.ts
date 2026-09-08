@@ -12,6 +12,7 @@ import {
   listMessagesBySession,
   listRecentMessagesBySession,
   listOlderMessages,
+  listMessagesByStreamSessionId,
   type MessageRow,
 } from '../../src/main/storage/messages/repo';
 
@@ -114,6 +115,15 @@ describe('messages repo', () => {
     const older = listOlderMessages('r1', midTs, 10);
     expect(older.length).toBeLessThanOrEqual(10);
     expect(older.every((m) => m.createdAt < midTs)).toBe(true);
+  });
+
+  it('listMessagesByStreamSessionId 命中本体与 #roll/#seg 后缀行，不含他流', () => {
+    insertMessage({ id: 'm-base', sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: 'b', streamSessionId: 'ss-1' });
+    insertMessage({ id: 'm-roll', sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: 'r', streamSessionId: 'ss-1#roll1' });
+    insertMessage({ id: 'm-other', sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: 'o', streamSessionId: 'ss-2' });
+    const rows = listMessagesByStreamSessionId('ss-1');
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(['m-base', 'm-roll']);
   });
 });
 // === listRecentMessagesBySession：导出「最近 N 条」语义 ===

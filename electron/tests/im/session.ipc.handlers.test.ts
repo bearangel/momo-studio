@@ -52,12 +52,14 @@ const {
       listMessagesBySession: vi.fn(() => []),
       listRecentMessagesBySession: vi.fn(() => []),
       listOlderMessages: vi.fn(() => []),
+      listMessagesByStreamSessionId: vi.fn(() => []),
     },
     eventsRepoMocks: {
       listEventsByMessage: vi.fn(() => []),
     },
     exporterMocks: {
       formatRoomToMarkdown: vi.fn(() => '# 导出内容'),
+      renderSubMessage: vi.fn(() => '**子消息**'),
     },
     agentCrudMocks: {
       listMembers: vi.fn(() => []),

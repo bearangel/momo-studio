@@ -32,13 +32,15 @@ import {
   listRecentMessagesBySession,
   listOlderMessages,
   countOwnerMessages,
+  listMessagesByStreamSessionId,
   type MessageRow,
 } from '../storage/messages/repo';
 import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
-import { formatRoomToMarkdown, type ExportMessage } from './markdown-exporter';
+import { exportAggregateEvents } from './export-aggregator';
+import { formatRoomToMarkdown, renderSubMessage, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
 import { scheduleExtraction, TRIGGER_TURN_INTERVAL } from '../memory/extraction';
@@ -54,6 +56,48 @@ function toSummary(row: SessionRow): SessionSummary {
     lastMessageAt: row.lastMessageAt,
     members: getSessionMembersInfo(row.id),
   };
+}
+
+/**
+ * 显示对齐（MessageList.tsx / group-segments.ts 语义）。
+ * topLevel=true（主循环）：剔除 dispatch/task_reply 回执与子流顶层条目（子内容由 dispatch 段嵌套承载）。
+ * topLevel=false（子展开）：保留 parentStreamSessionId 行（它们就是子内容），仅剔回执。
+ */
+function alignVisibleEntries(rows: MessageRow[], topLevel: boolean): MessageRow[] {
+  const visible = rows.filter((m) => {
+    if (m.eventType === 'io.momo.studio.dispatch') return false;
+    if (m.eventType === 'io.momo.studio.task_reply') return false;
+    if (topLevel && m.parentStreamSessionId) return false;
+    return true;
+  });
+  const segmentsByParent = new Map<string, MessageRow[]>();
+  for (const m of rows) {
+    if (m.segmentOf === null) continue;
+    const list = segmentsByParent.get(m.segmentOf);
+    if (list) list.push(m);
+    else segmentsByParent.set(m.segmentOf, [m]);
+  }
+  for (const list of segmentsByParent.values()) {
+    list.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
+  }
+  const replacedParents = new Set<string>();
+  const entries: MessageRow[] = [];
+  for (const m of visible) {
+    if (m.segmentOf !== null) continue;
+    const segments = m.streamSessionId ? segmentsByParent.get(m.streamSessionId) : undefined;
+    if (segments && segments.length > 0 && m.streamSessionId) {
+      replacedParents.add(m.streamSessionId);
+      entries.push(...segments);
+    } else {
+      entries.push(m);
+    }
+  }
+  for (const [parentStreamId, segments] of segmentsByParent) {
+    if (replacedParents.has(parentStreamId)) continue;
+    entries.push(...segments); // 孤儿分段兜底
+  }
+  entries.sort((a, b) => a.createdAt - b.createdAt);
+  return entries;
 }
 
 /** 注册全部 session: 命名空间的 IPC handler。在 app ready 后由 registerIpcHandlers 统一调用。 */
@@ -151,45 +195,8 @@ export function registerSessionIpcHandlers(): void {
       // 1. 从 SQLite 拉最近 limit 条（升序输出）
       const rows = listRecentMessagesBySession(sessionId, limit);
 
-      // 2. 显示侧对齐（MessageList.tsx 同款过滤 + group-segments.ts 同款分段归组）：
-      //    dispatch/task_reply/子 agent 顶层条目在显示侧不独立渲染，导出同样剔除；
-      //    分段消息（segmentOf）替换父消息位置——父消息全文与分段快照二选一，防重复。
-      const visible = rows.filter((m) => {
-        if (m.eventType === 'io.momo.studio.dispatch') return false;
-        if (m.eventType === 'io.momo.studio.task_reply') return false;
-        if (m.parentStreamSessionId) return false;
-        return true;
-      });
-      const segmentsByParent = new Map<string, typeof rows>();
-      for (const m of rows) {
-        if (m.segmentOf === null) continue;
-        const list = segmentsByParent.get(m.segmentOf);
-        if (list) {
-          list.push(m);
-        } else {
-          segmentsByParent.set(m.segmentOf, [m]);
-        }
-      }
-      for (const list of segmentsByParent.values()) {
-        list.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
-      }
-      const replacedParents = new Set<string>();
-      const entries: typeof rows = [];
-      for (const m of visible) {
-        if (m.segmentOf !== null) continue; // 分段由父消息位置承载（或走孤儿兜底）
-        const segments = m.streamSessionId ? segmentsByParent.get(m.streamSessionId) : undefined;
-        if (segments && segments.length > 0 && m.streamSessionId) {
-          replacedParents.add(m.streamSessionId);
-          entries.push(...segments);
-        } else {
-          entries.push(m);
-        }
-      }
-      for (const [parentStreamId, segments] of segmentsByParent) {
-        if (replacedParents.has(parentStreamId)) continue;
-        entries.push(...segments); // 孤儿分段：父消息不在取数窗口，兜底导出防丢失
-      }
-      entries.sort((a, b) => a.createdAt - b.createdAt);
+      // 2. 显示对齐（提取为 alignVisibleEntries，语义与原内联代码一致）
+      const entries = alignVisibleEntries(rows, true);
 
       // 3. 反查 agent 名字：botNameMap 同时按 assignmentId（session 语义）与
       //    agentUserId（当前 agent 消息 sender 仍为 bot 的 Matrix userId）建立索引，
@@ -205,8 +212,11 @@ export function registerSessionIpcHandlers(): void {
         }
       }
 
-      // 4. MessageRow → ExportMessage 适配（content 富字段留 message_events 重建，此处空对象）
-      const exportMessages: ExportMessage[] = entries.map((m) => ({
+      // 3.5 富信息（v2.3.2）：events → 段序列；dispatch 段递归嵌套子回复（深度上限 3）
+      const MAX_DISPATCH_DEPTH = 3;
+      // botNameOverride：dispatch 段展开子回复时传 seg.subAgentName——子 agent 的
+      // userId 不在 botNameMap 反查索引里也能正确落名（子 agent 名在 start payload 已知）
+      const toExport = (m: MessageRow, depth: number, botNameOverride?: string): ExportMessage => ({
         eventId: m.id,
         roomId: m.sessionId,
         sender: m.sender,
@@ -214,8 +224,27 @@ export function registerSessionIpcHandlers(): void {
         eventType: m.eventType,
         content: {},
         timestamp: m.createdAt,
-        botName: botNameMap.get(m.sender) ?? null,
-      }));
+        botName: botNameOverride ?? botNameMap.get(m.sender) ?? null,
+        rich: buildRich(m, depth),
+      });
+      const buildRich = (m: MessageRow, depth: number): ExportMessage['rich'] => {
+        const events = listEventsByMessage(m.id);
+        if (events.length === 0) return undefined; // 无事件（user/legacy）→ 纯 body 路径
+        const agg = exportAggregateEvents(events);
+        if (agg.segments.length === 0) return undefined;
+        for (const seg of agg.segments) {
+          if (seg.kind !== 'dispatch') continue;
+          if (depth >= MAX_DISPATCH_DEPTH) {
+            seg.subOmitted = true;
+            continue;
+          }
+          const subRows = alignVisibleEntries(listMessagesByStreamSessionId(seg.subStreamSessionId), false);
+          const subRendered = subRows.map((s) => renderSubMessage(toExport(s, depth + 1, seg.subAgentName || undefined)));
+          if (subRendered.length > 0) seg.subMarkdown = subRendered.join('\n');
+        }
+        return { segments: agg.segments, status: agg.status, ...(agg.error !== undefined ? { error: agg.error } : {}) };
+      };
+      const exportMessages = entries.map((m) => toExport(m, 0));
 
       // 4. 取会话标题（找不到用 sessionId 兜底，因导出头需要非空 roomName）
       const roomName = getSession(sessionId)?.title ?? sessionId;
