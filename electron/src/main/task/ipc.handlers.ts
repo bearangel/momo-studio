@@ -37,6 +37,7 @@ import { startTask, hasDelegationTarget, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
+import { abortTaskStreamByLane } from '../agent/session-lane';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
@@ -70,11 +71,13 @@ interface ListOpts {
 }
 
 /**
- * K7-4：任务转 paused / cancelled 时联动中断 agent 执行——只改 DB 是半套
- * 语义（agent 继续跑白烧 token）。先转状态后 abort：中断后的 task-end
- * 到达时行已终态/paused，幂等跳过（agent-runner K7-2 防覆盖），无竞态。
+ * K7-4 + v2.3 精确中止（spec §6）：任务转 paused / cancelled 时联动中断 agent 执行。
+ * 优先按 taskId 反查车道流精确 abort——同会话 dispatch 子流（未注册车道）
+ * 与其他任务的流不受影响；车道无记录（流未注册的窗口 / 旧数据）回退按
+ * executionSessionId 广播（原 K7-4 语义兜底）。
  */
 function abortTaskExecutionIfAny(taskId: string): void {
+  if (abortTaskStreamByLane(taskId)) return;
   const row = getTask(taskId);
   if (!row?.executionSessionId) return;
   abortTasksBySessionEverywhere(row.executionSessionId);

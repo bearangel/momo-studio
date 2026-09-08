@@ -82,4 +82,12 @@ describe('K7-3 精确中止（spec §6）', () => {
     expect(abortTaskStreamByLane('T-dispatch-derived')).toBe(false);
     expect(abortMock).not.toHaveBeenCalled();
   });
+
+  it('同会话另一任务的车道流不被误中止（双车道场景）', () => {
+    registerLane('room-1', { taskId: 'T-1', streamSessionId: 's-a', assignmentId: 'asg-1' });
+    registerLane('room-2', { taskId: 'T-2', streamSessionId: 's-b', assignmentId: 'asg-2' });
+    abortTaskStreamByLane('T-2');
+    expect(abortMock).toHaveBeenCalledTimes(1);
+    expect(abortMock).toHaveBeenCalledWith('s-b'); // 只命中 T-2 的流，s-a 不动
+  });
 });
