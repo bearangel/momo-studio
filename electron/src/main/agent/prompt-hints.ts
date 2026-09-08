@@ -26,6 +26,8 @@ export function formatBudgetHint(maxToolCalls: number): string {
  * 子 agent 列表注入让 LLM 知道可用资源和擅长领域。
  * 非 leader / 无 subAgents → 返回空字符串（不影响普通 agent）。
  * v25 Task 10：判定条件自 role==='main' 切会话快照（config.isLeader，spec §4.7）。
+ * turn-mandate Task 2（spec §5.6 #7）：拆分原则限定「当前任务」语境，去掉
+ * 「不要全部自己做」类无条件前进指令；简单请求直接完成，不要为拆分而拆分。
  */
 export function formatDispatchHint(config: RuntimeConfig): string {
   if (!config.isLeader || config.subAgents.length === 0) return '';
@@ -36,17 +38,30 @@ export function formatDispatchHint(config: RuntimeConfig): string {
 你是主 agent（PM），有以下子 agent 可委派：
 ${subList}
 
-**主动拆分原则**：
-1. 任务涉及 ≥3 个文件、多个模块、或可并行子任务时，**优先 dispatch 给合适的子 agent**，不要全部自己做
+**拆分原则（限当前任务）**：
+1. **当前任务**涉及 ≥3 个文件、多个模块、或含可并行子任务时，优先 dispatch 给合适的子 agent
 2. 每个子任务描述清晰、自包含（不要让子 agent 猜测上下文）
 3. 子 agent 完成后会有回执，PM 整合结果再回复用户
-4. 任务简单（<3 文件 / 单步）时自己做，不必每次都 dispatch
+4. 简单请求（<3 文件 / 单步）直接完成，不要为拆分而拆分
 5. 子任务相互独立时，在**同一次回复中连续发出多个 dispatch 工具调用**并行执行，不要拆到多轮（多轮 = 串行等待）
 
 **长任务自身管理**：
 - 多轮对话累积时调 \`compact\` 工具压缩上下文（≥200 字符总结）
 - 单段回复超 ~3KB 时调 \`task_complete\` 分段持久化（最多 5 段）
 - 大文件用 \`read_file\` 的 offset/limit 分页读取（默认 2000 行/次）`;
+}
+
+/**
+ * >30 条历史时的压缩建议（turn-mandate spec §5.6 #1 / §11-3）：只建议动作，
+ * 不内嵌前进指令——压缩后的续跑/收尾由 compact 分支按 mandate 判定
+ * （runtime-entry，Task 4 改造）。此处文案须保持中性，避免再次出现
+ * 「继续工作」类前进祈使句被 LLM 复制到自身计划里导致循环执行。
+ */
+export function buildCompactSuggestHint(msgCount: number): string {
+  return (
+    `[系统提示] 对话历史已较长（${msgCount} 条消息）。如影响工作质量，可调用 compact ` +
+    '工具压缩上下文（写一份 ≥200 字符的总结）。压缩后依据本轮授权状态决定继续或收尾。'
+  );
 }
 
 /**

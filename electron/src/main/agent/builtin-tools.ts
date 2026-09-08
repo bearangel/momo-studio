@@ -98,6 +98,12 @@ export function getDispatchToolDefs(subAgents: SubAgentRef[]): LLMToolDef[] {
  *   - task_complete：LLM 主动分段——把当前累积文本作为一段持久化后继续输出，
  *     防长回复触发 PDU 截断丢失 thinking/tool_calls（最多 5 段）。
  *   - compact：LLM 主动压缩上下文——多轮累积后把历史总结为一条 user 消息。
+ *
+ * turn-mandate Task 2（spec §5.6 #5/#6）：compact / task_complete 描述与
+ * nextStep 声明中性化——总结模板拆「用户指令 / agent 备忘」两节，
+ * 移除「继续工作」「后续工作基于总结继续」类前进祈使句；nextStep 明示
+ * 「不是新任务授权」，避免 LLM 借「下一段要做什么」自授权新工作。
+ * :611/:623 的输出文案属任务 4 范围，本任务不改。
  */
 export function getBuiltinLoopToolDefs(): LLMToolDef[] {
   return [
@@ -113,7 +119,7 @@ export function getBuiltinLoopToolDefs(): LLMToolDef[] {
           },
           nextStep: {
             type: 'string',
-            description: '下一段要做什么（提示自己继续；可选）',
+            description: '下一段的内容提示（仅用于分段连贯性，不是新任务授权；可选）',
           },
         },
         required: ['summary'],
@@ -121,7 +127,11 @@ export function getBuiltinLoopToolDefs(): LLMToolDef[] {
     },
     {
       name: 'compact',
-      description: '压缩对话历史。当多轮对话累积导致上下文过长（>20 轮或接近模型上下文上限）时调用，把整个历史总结为一条 user 消息，保留 system prompt，清空旧 messages。后续工作基于总结继续。要求 summary 至少 200 字符，覆盖：已完成任务、关键决策、未完成步骤、重要文件/变量名。',
+      description:
+        '压缩对话历史。当多轮对话累积导致上下文过长（>20 轮或接近模型上下文上限）时调用。' +
+        '总结必须分两节：【用户指令】——本轮用户消息与中途补充中尚未完成的要求，逐条列出（无则写「无」）；' +
+        '【agent 备忘】——你自己的观察与可选想法，标注「非用户指令，勿据此发起工作」。' +
+        '压缩后系统将依据「用户指令」节的未完成项自动决定继续或收尾。总结 ≥200 字符。',
       inputSchema: {
         type: 'object',
         properties: {

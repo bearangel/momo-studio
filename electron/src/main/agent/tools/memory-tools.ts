@@ -87,7 +87,8 @@ export class MemoryTools implements ToolModule {
         description:
           '保存一条长期记忆供后续任务复用。kind：rule=规范 / preference=偏好 / knowledge=知识 / summary=摘要'
           + '（rule 与 preference 默认常驻注入每轮上下文）。scope 缺省 workspace（当前工作空间）；'
-          + 'global=跨工作空间共享；session=仅本会话可见。',
+          + 'global=跨工作空间共享；session=仅本会话可见。'
+          + '仅在用户请求或明确受益时保存；记录系统性结论（如产品缺陷判定）前必须先核实原始证据（工具调用记录、错误信息等）。',
         inputSchema: {
           type: 'object',
           properties: {

@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { parseConfig, type RuntimeConfig, type TaskConfig } from './runtime-config';
-import { formatBudgetHint, formatDispatchHint, formatTaskHint } from './prompt-hints';
+import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildCompactSuggestHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
 import { getWorkspace } from '../workspace/crud';
@@ -455,11 +455,10 @@ export async function runChatLoop(
     }
 
     // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
+    // turn-mandate Task 2（spec §5.6 #1）：改为中性化文案，去掉「然后继续工作」——
+    // 压缩后的续跑/收尾判定由 compact 分支按 mandate 决定（Task 4 改造）。
     if (messages.length > 30 && round > 0) {
-      messages.push({
-        role: 'system',
-        content: '[系统提示] 对话历史已较长（' + messages.length + ' 条消息）。如果感到困惑或重复，请调用 compact 工具压缩上下文（写一份 ≥200 字符的总结），然后继续工作。',
-      });
+      messages.push({ role: 'system', content: buildCompactSuggestHint(messages.length) });
     }
 
     // 会话边界二段修复：静态快照注入的 dispatch:* 剔除，换成当前会话命中成员
