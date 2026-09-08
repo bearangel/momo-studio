@@ -159,6 +159,14 @@ const api: ApiSurface = {
         ipcRenderer.off('session:message_event_batch', handler);
       };
     },
+    // K10：主进程主动新建执行会话（定时任务自动放行/手动启动）→ 轻量刷新列表
+    onListChanged: (callback) => {
+      const handler = (): void => callback();
+      ipcRenderer.on('session:listChanged', handler);
+      return () => {
+        ipcRenderer.off('session:listChanged', handler);
+      };
+    },
   },
   allocation: {
     get: (workspaceId) => invoke('allocation:get', workspaceId),

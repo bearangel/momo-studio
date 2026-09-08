@@ -752,6 +752,8 @@ export interface SessionApiSurface {
   onMessage(callback: (msg: ImMessage) => void): () => void;
   /** 订阅流式 events 批量推送（session:message_event_batch，MessageEventBuffer flush 时触发） */
   onMessageEventBatch(callback: (batch: MessageEventBatch) => void): () => void;
+  /** K10：订阅会话列表变化推送（session:listChanged——主进程主动新建执行会话时触发） */
+  onListChanged(callback: () => void): () => void;
 }
 
 /**
