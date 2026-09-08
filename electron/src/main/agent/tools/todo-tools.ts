@@ -40,6 +40,18 @@ export function getTodosForSession(streamSessionId: string): TodoItem[] {
   return todoStore.get(streamSessionId) ?? [];
 }
 
+/** 测试用：直接播种指定流式会话的 todo 表（绕过 execute 全量替换协议） */
+export function __setTodosForTest(streamSessionId: string, items: TodoItem[]): void {
+  todoStore.set(streamSessionId, items);
+}
+
+/** mandate 判定（spec §5.2）：是否存在未完成的 user 挂靠项 */
+export function hasPendingUserTodos(streamSessionId: string): boolean {
+  return (todoStore.get(streamSessionId) ?? []).some(
+    (t) => t.status !== 'completed' && t.source === 'user',
+  );
+}
+
 /**
  * todowrite 工具模块（v1.5）。仅 1 个工具：`todowrite`。
  *
@@ -58,7 +70,9 @@ export class TodoTools implements ToolModule {
       {
         name: 'todowrite',
         description:
-          '管理任务列表。每次调用传完整 todos 数组（全量替换）。复杂任务（≥3 步骤）建议先创建列表跟踪进度。建议同时仅一项 in_progress。',
+          '管理任务列表（全量替换）。为「本轮用户请求直接要求」的步骤标 source=user——这是' +
+          '系统判定你本轮授权范围的依据；你自己扩展的可选工作标 source=agent。收到改变方向或' +
+          '要求停止的用户补充时，必须先更新本表使其反映用户当前意图。复杂任务（≥3 步骤）建议先建表。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -75,6 +89,11 @@ export class TodoTools implements ToolModule {
                   status: {
                     type: 'string',
                     enum: ['pending', 'in_progress', 'completed'],
+                  },
+                  source: {
+                    type: 'string',
+                    enum: ['user', 'agent'],
+                    description: '挂靠来源（缺省 agent）',
                   },
                 },
                 required: ['subject', 'status'],
@@ -106,7 +125,7 @@ export class TodoTools implements ToolModule {
 
     // 先逐项校验并生成 id（任一失败立即抛错，store 不变）
     const newTodos: TodoItem[] = args.todos.map((t, i) => {
-      const item = t as { subject?: unknown; status?: unknown };
+      const item = t as { subject?: unknown; status?: unknown; source?: unknown };
       const subject = parseStringArg(item?.subject, `todos[${i}].subject`);
       const status = item?.status;
       if (
@@ -118,12 +137,23 @@ export class TodoTools implements ToolModule {
           `todos[${i}].status 必须是 pending/in_progress/completed，实际: ${String(status)}`,
         );
       }
+      const rawSource = item?.source;
+      let source: TodoItem['source'];
+      if (rawSource === undefined) {
+        source = 'agent'; // 缺省保守取向（spec §5.3）
+      } else if (rawSource === 'user' || rawSource === 'agent') {
+        source = rawSource;
+      } else {
+        throw new Error(
+          `todos[${i}].source 必须是 user/agent，实际: ${String(rawSource)}`,
+        );
+      }
       if (subject.length > MAX_SUBJECT_LEN) {
         throw new Error(
           `todos[${i}].subject 过长（${subject.length} > ${MAX_SUBJECT_LEN}），请拆分`,
         );
       }
-      return { id: randomUUID(), subject, status };
+      return { id: randomUUID(), subject, status, source };
     });
 
     // 数量上限放在逐项校验之后，避免对已被截断的输入做错位计数。
@@ -160,7 +190,8 @@ export class TodoTools implements ToolModule {
     const body = todos
       .map((t, i) => {
         const mark = t.status === 'completed' ? 'x' : t.status === 'in_progress' ? '>' : ' ';
-        return `${i + 1}. [${mark}] ${t.subject}`;
+        const src = t.source === 'user' ? 'u' : 'a';
+        return `${i + 1}. [${mark}] [${src}] ${t.subject}`;
       })
       .join('\n');
     return `当前任务列表（${doneCount}/${todos.length} 完成）:\n${body}`;

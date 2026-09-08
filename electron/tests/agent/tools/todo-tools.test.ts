@@ -4,9 +4,14 @@
 //   - 输入校验（subject 缺失 / status 非法 / subject 过长 / 数量超限）
 //   - 会话隔离（不同 streamSessionId 不串数据）
 //   - StreamChunk 推送（todo_update chunk 携带完整 todos）
+// v2.3 turn-mandate 扩展：todo source 挂靠字段 + hasPendingUserTodos 判定。
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TodoTools } from '../../../src/main/agent/tools/todo-tools';
+import {
+  TodoTools,
+  hasPendingUserTodos,
+  __setTodosForTest,
+} from '../../../src/main/agent/tools/todo-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
 let sendChunkCalls: Array<{ type: string; todos: unknown[] }>;
@@ -141,5 +146,85 @@ describe('todowrite', () => {
     expect(tools.getTodos('ssn-1')).toHaveLength(1);
     expect(tools.getTodos('ssn-1')[0]!.subject).toBe('A');
     expect(tools.getTodos('ssn-2')[0]!.subject).toBe('B');
+  });
+});
+
+describe('todo source 挂靠', () => {
+  const tools = new TodoTools();
+  const sid = 'stream-source-test';
+  // 最小 ToolContext 桩——todo 工具只消费 streamSessionId / roomId / sendStreamChunk
+  const mkCtx = (streamSessionId: string): ToolContext => ({
+    wsFs: {} as never,
+    workspaceId: 'ws-test',
+    workspaceDir: '/tmp',
+    skillRegistry: {} as never,
+    streamSessionId,
+    parentStreamSessionId: undefined,
+    roomId: 'room-test',
+    sendStreamChunk: () => {},
+    permissionConfig: { allowedTools: [], deniedTools: [] },
+    creatorUserId: 'owner',
+  });
+
+  beforeEach(() => __setTodosForTest(sid, []));
+
+  it('source 缺省落 agent（保守取向：未标注不算 user 挂靠）', async () => {
+    const out = await tools.execute(
+      'todowrite',
+      { todos: [{ subject: '步骤A', status: 'pending' }] },
+      mkCtx(sid),
+    );
+    expect(out).toContain('[a] 步骤A');
+    expect(hasPendingUserTodos(sid)).toBe(false);
+  });
+
+  it('source=user 的 pending/in_progress 项计入挂靠；completed 不计', async () => {
+    await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          { subject: '用户要求的主任务', status: 'in_progress', source: 'user' },
+          { subject: '已完成的用户步骤', status: 'completed', source: 'user' },
+          { subject: 'agent 自发项', status: 'pending', source: 'agent' },
+        ],
+      },
+      mkCtx(sid),
+    );
+    expect(hasPendingUserTodos(sid)).toBe(true);
+    await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          { subject: '已完成的用户步骤', status: 'completed', source: 'user' },
+        ],
+      },
+      mkCtx(sid),
+    );
+    expect(hasPendingUserTodos(sid)).toBe(false);
+  });
+
+  it('source 非法值抛错（沿 status 校验同款错误风格）', async () => {
+    await expect(
+      tools.execute(
+        'todowrite',
+        { todos: [{ subject: 'x', status: 'pending', source: 'wild' }] },
+        mkCtx(sid),
+      ),
+    ).rejects.toThrow(/source/);
+  });
+
+  it('回显标注 [u]/[a]', async () => {
+    const out = await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          { subject: 'U项', status: 'pending', source: 'user' },
+          { subject: 'A项', status: 'pending' },
+        ],
+      },
+      mkCtx(sid),
+    );
+    expect(out).toContain('[ ] [u] U项');
+    expect(out).toContain('[ ] [a] A项');
   });
 });

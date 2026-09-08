@@ -8,4 +8,10 @@ export interface TodoItem {
   id: string;
   subject: string;
   status: 'pending' | 'in_progress' | 'completed';
+  /**
+   * 挂靠来源（turn mandate 契约）：'user'=本轮用户请求直接要求的步骤；
+   * 'agent'=agent 自发扩展。缺省按 'agent' 解析（保守取向：未标注不算授权挂靠，
+   * spec §5.3）。renderer 端为兼容旧 chunk 载荷可按可选字段消费。
+   */
+  source: 'user' | 'agent';
 }
