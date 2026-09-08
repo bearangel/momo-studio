@@ -1,131 +1,132 @@
-# Task 14 报告：P1 验收（残留扫描 + 全量验证 + 冒烟 + README 更新）
+# Task 14 报告：CreateTaskDialog + ConflictDialog → Dialog + CreateTaskButton + InlineTaskSuggestion
 
-日期：2026-08-23 · 分支：`feat/v2.0.0-p1-session-core` · 执行环境：OrbStack DevContainer（Linux arm64, Node 20.20.2）
+日期：2026-09-02 · 分支：`main` · 执行环境：OrbStack DevContainer（Linux arm64, Node 20.20.2）
 
-> 注：本文件原为 v1.6 时代同编号任务的报告（UploadSkillDialog，commit b76b7b4），本轮 SDD 任务编号复用，覆盖为 P1 验收报告。
+> 本文件原属 v2.0.0 P1 同编号报告，被本次 Task14 覆盖。
 
-## Step 1: 残留扫描
+## 实现内容
 
-### 扫描 1（主扫描，排除 `.test.`）
+四件 im/ 区 inline-hex 弹窗收敛为 v2.1 设计系统：
 
-```bash
-grep -rn "matrix-js-sdk\|startConduit\|bot-registrar\|botMatrixUserId\|matrix_space_id\|matrixSpaceId\|matrixEventId\|team_room_id\|room_settings\|execution_room_id" electron/src renderer/src --include="*.ts" --include="*.tsx" | grep -v "\.test\."
-```
+### 1. CreateTaskDialog.tsx（205 → 149 行）
+- 外壳换 Dialog 原子件（width=480, title="创建任务"）
+- form onSubmit + handleSubmit（FormEvent 版）：preventDefault + void
+- 字段全原子件化：Input（标题/计划开始/截止时间 type=datetime-local）/ Select（指派/优先级）
+- 描述 textarea 无原子件 → `class="mt-1 min-h-[80px] w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary focus:border-focus focus:outline-none"`（brief 指定）
+- footer 取消(ghost)+创建(Button type=submit disabled=!title.trim()||submitting)
+- 6 个 style 常量（overlayStyle/dialogStyle/labelStyle/inputStyle/primaryButtonStyle）全删
+- `if (!open) return null` 保留在 hooks 后（与 ProviderDialog 一致的双保险模式）
 
-**初跑结果**：25 命中，分布两类：
+### 2. ConflictDialog.tsx（133 → 124 行）
+- 外壳换 Dialog 原子件（width=480, footer 关闭 ghost）
+- ⚠️ → CircleAlert lucide 图标（size=16, strokeWidth=1.75, aria-hidden, text-status-warning）
+- 4 选项按钮 → `className="w-full rounded border border-subtle bg-surface-2 px-3 py-2 text-left text-[13px] text-primary hover:bg-surface-3"`，① ② ③ ④ 序号文本保留
+- 记住勾选 → Checkbox（label 透传）
+- `data-testid="conflict-overlay"` 删除（Dialog 用 portal + role=dialog 语义定位）
+- 3 个 style 常量（overlayStyle/dialogStyle/optionButtonStyle）全删
 
-1. `electron/src/main/storage/migrations/index.ts`（14 处）——**合法历史，保留**。
-2. 活跃源码注释（11 处，8 个文件）——其中 5 处把**当前**读取路径错写为旧表名（`room_settings.conflict_strategy` / `room_settings.max_tool_calls`，实际已存 `sessions.settings_json`），其余 6 处为迁移历史说明但含扫描 token。
+### 3. CreateTaskButton.tsx（47 → 33 行）
+- 纯展示 IconButton + ListPlus 图标（size=14, strokeWidth=1.75）
+- aria-label="创建任务"；title prop 删除（IconButton 无 title prop）
+- buttonStyle 常量删
 
-**处置**：修正/改写 8 个文件的过时注释（仅注释，零逻辑改动）：
-`task/conflict-resolver.ts`、`settings/crud.ts`、`settings/ipc.handlers.ts`、`workspace/crud.ts`、`workspace/types.ts`、`storage/sessions/repo.ts`、`renderer .../ConflictDialog.tsx`、`renderer .../RoomToolBudgetBadge.tsx`。当前读取路径统一表述为 `sessions.settings_json` 的 `conflictStrategy` / `maxToolCalls`（经 `getSessionSettings` 实现核实为真）。
+### 4. InlineTaskSuggestion.tsx（61 → 53 行）
+- 💡 → Lightbulb lucide 图标（size=12, strokeWidth=1.75, aria-hidden）
+- 📌 创建任务 → Button secondary sm + ListPlus 图标
+- wrapperStyle/ctaStyle 常量全删 → `className="my-2 flex items-center gap-2 rounded border border-accent-500/40 bg-surface-active px-2 py-1.5"`
+- 提示 span 改 inline-flex items-center gap-1 text-xs text-accent-600 dark:text-accent-300
 
-**终跑结果**（verbatim）：
+### 测试适配
+- CreateTaskDialog.test.tsx：未改（label for/id 绑定 + form submit 模式天然兼容 Input/Select 原子件；所有 5 用例过）
+- ConflictDialog.test.tsx：'点击 overlay' → '点击 backdrop'，`getByTestId('conflict-overlay')` → `screen.getByRole('dialog').previousElementSibling`（与 Dialog.test.tsx 第 51-55 行同模式）
+- ConflictDialogMount.test.tsx：⚠️ 任务冲突 → 任务冲突；`conflict-overlay` testid → `role=dialog`
 
-```
-electron/src/main/storage/migrations/index.ts:74:  matrix_space_id TEXT NOT NULL,
-electron/src/main/storage/migrations/index.ts:126:-- team_room_id：workspace 内的"团队群" room ID。workspace 创建时同时创建一个
-electron/src/main/storage/migrations/index.ts:130:ALTER TABLE workspaces ADD COLUMN team_room_id TEXT NOT NULL DEFAULT '';
-electron/src/main/storage/migrations/index.ts:137:-- default_skills（运行时能力引用）。原 v4 已被 team_room_id 占用，故本迁移用
-electron/src/main/storage/migrations/index.ts:327:CREATE TABLE IF NOT EXISTS room_settings (
-electron/src/main/storage/migrations/index.ts:473:  execution_room_id     TEXT,
-electron/src/main/storage/migrations/index.ts:503:CREATE INDEX IF NOT EXISTS idx_tasks_exec_room ON tasks(execution_room_id);
-electron/src/main/storage/migrations/index.ts:517:-- room_settings.conflict_strategy：当 agent 在已运行任务的房间里被 @ 时如何处理。
-electron/src/main/storage/migrations/index.ts:522:ALTER TABLE room_settings ADD COLUMN conflict_strategy TEXT NOT NULL DEFAULT 'ask';
-electron/src/main/storage/migrations/index.ts:529:-- agent_definitions.default_conflict_strategy：与 room_settings.conflict_strategy 同语义，
-electron/src/main/storage/migrations/index.ts:606:ALTER TABLE tasks RENAME COLUMN execution_room_id TO execution_session_id;
-electron/src/main/storage/migrations/index.ts:611:ALTER TABLE workspaces RENAME COLUMN team_room_id TO team_session_id;
-electron/src/main/storage/migrations/index.ts:612:ALTER TABLE workspaces DROP COLUMN matrix_space_id;
-electron/src/main/storage/migrations/index.ts:614:DROP TABLE IF EXISTS room_settings;
-```
-
-### 残留分类（全部命中 = migrations/index.ts 独占）
-
-| 类别 | 行 | 判定 |
-|---|---|---|
-| v1 时代历史迁移 SQL（建列/建表） | 74, 126-137, 327, 473-529 | **合法**——迁移链 append-only，改动会破坏旧库升级路径 |
-| v23 迁移自身（改名/删列/删表） | 606, 611, 612, 614 | **合法**——正是执行删除的迁移本体 |
-
-**测试文件命中**：`grep "\.test\."` 过滤后复查 = **CLEAN**（0 个测试文件含任何扫描 token，无需历史豁免）。
-
-### 扫描 2 / 扫描 3
-
-```bash
-grep -rn "momo-studio\/matrix\|from '\.\./matrix" electron/src --include="*.ts"   → CLEAN
-grep -c "matrix-js-sdk" electron/package.json                                      → 0（CLEAN）
-```
-
-## Step 2: 全量验证
-
-| 门禁 | 命令 | 结果 |
-|---|---|---|
-| 类型检查 | `npx pnpm@9.0.0 typecheck` | ✅ 双 clean（`electron typecheck: Done` / `renderer typecheck: Done`） |
-| Electron 测试 | `npx pnpm@9.0.0 test` | ✅ **Test Files 128 passed (128)，Tests 858 passed (858)**，25.98s |
-| Renderer 测试 | `--filter momo-studio-renderer test` | ✅ **Test Files 49 passed (49)，Tests 409 passed (409)**，19.58s |
-| 构建 | `npx pnpm@9.0.0 build` | ✅ EXIT=0（renderer `✓ built in 2m 40s`；仅 >500kB chunk 警告，非错误） |
-
-注释清理后复验：typecheck 双 clean + 相关测试复跑（conflict-resolver 5/5、RoomToolBudgetBadge 8/8）通过。
-
-## Step 3: xvfb 冒烟（容器安全子集）
-
-**边界声明（诚实）**：本冒烟只覆盖"启动链无 Matrix 残留、无崩溃"。brief 中的完整交互验收（建 workspace → 建会话拉 agent → 真实 LLM 流式回复 → 杀进程重启会话一致）**需要真实 LLM API key 与 GUI 交互，留待 macOS 主机执行**，本容器未验证。
-
-过程中处置的两个环境问题（均为 AGENTS.md 已知坑，非代码问题）：
-1. `better-sqlite3` NODE_MODULE_VERSION 115 vs 123（electron ABI）→ `npx electron-rebuild -f -w better-sqlite3` 修复。
-2. `electron/dist/main/conduit/` 为 7 月旧构建的孤儿产物（tsc 不清理已删源码的输出，且会被 electron-builder 打包捡走）→ 已手动删除。**建议 P3 收敛时在 build 脚本加 dist 清理步骤**。
-
-**冒烟命令与输出（verbatim，60s timeout，入口为 `dist/main/index.js`——task 指令中的 `dist/main.js` 是笔误）**：
-
-```bash
-timeout 60 xvfb-run -a --server-args="-screen 0 1280x800x24" ./node_modules/.bin/electron dist/main/index.js --no-sandbox
-```
+## 验证链
 
 ```
-18:32:11.717 (main) › App starting { version: '30.5.1' }
-18:32:11.738 (main) › SQLite opened { path: '/home/ai-agent/.momo-studio/state.db' }
-18:32:11.739 (main) › Applying migration { version: 17 }
-...（17/18/19/21/22/23 依次应用）
-18:32:11.765 (main) › Migrations complete
-18:32:11.766 (main) › TaskScheduler 已启动（调度层；task-driven 执行链路为 v2 增量）
-18:32:11.766 (main) › Registering IPC handlers
-...（System/Workspace/File/Agent/Session/MCP/Allocation/Git Policy/Audit/Provider/Skill/Resource/Task/Dialog 全部注册——无任何 conduit/matrix handler）
-18:32:11.971 (main) › 无 task-driven agent，跳过 RouterService 初始化
-18:32:11.972 (main) › Task-driven runtime initialized
-18:32:12.752 (main) › Window ready
-/workspace/.../electron exited with signal SIGTERM    ← timeout 正常终止，60s 内无崩溃
+pnpm test (renderer)               # im/ 25 files / 199 tests PASS
+pnpm typecheck                      # electron + renderer 双 clean
+eslint <7 files>                    # 0 errors, 0 warnings on my files
+pnpm lint (renderer)                # 0 errors, 216 warnings (all pre-existing)
+lsp_diagnostics <4 files>           # No diagnostics found
 ```
 
-（GPU/viz_main_impl 报错为 xvfb 无显卡环境的正常现象，不影响验收。）
+### 完整 renderer 套件（实际数字）
+- Test Files：4 failed | 86 passed (90)
+- Tests：47 failed | 740 passed (787)
+- 47 个失败全部是 4 个测试文件的 `localStorage.clear()` 报错（pre-existing，与本次改动无关——`git stash` 验证过：HEAD 上同样 47 失败）
 
-**加分证据**：容器里的 `state.db` 是带 v1 旧数据的真实旧库，本次启动把 17→23 迁移链**在真实数据上增量跑通**，顺带验证了 v23 对旧 schema 的变形能力（注：2.0.0 D5 决策为完全重新开始，正式升级路径仍以新库为准）。
+### im/ 子目录
+- Test Files：25 passed (25)
+- Tests：199 passed (199)
 
-**进程检查**：`ps aux | grep -i "tuwunel\|conduit"` → `无 Tuwunel/Conduit 进程`。
+## 文件变更
 
-### 验收点对照
+```
+ renderer/src/components/im/ConflictDialog.test.tsx       |  10 +-
+ renderer/src/components/im/ConflictDialog.tsx            | 137 +++++++--------
+ renderer/src/components/im/ConflictDialogMount.test.tsx   |   6 +-
+ renderer/src/components/im/CreateTaskButton.tsx          |  25 +--
+ renderer/src/components/im/CreateTaskDialog.tsx          | 184 +++++++--------------
+ renderer/src/components/im/InlineTaskSuggestion.tsx       |  40 ++---
+ 6 files changed, 156 insertions(+), 246 deletions(-)
+```
 
-| brief 验收点 | 容器内 | 结论 |
-|---|---|---|
-| 首启建 workspace | 未交互验证（无 GUI 操作） | 留待主机 |
-| 建会话拉 agent + 流式回复 | 未验证（需真实 LLM key） | 留待主机 |
-| 杀进程重启会话一致 | 未验证 | 留待主机 |
-| 无 Tuwunel 进程 | ✅ ps 为空 + 日志零引用 | 通过 |
-| 启动链健康（DB/迁移/runtime/窗口/无崩溃） | ✅ 见上 verbatim | 通过 |
+净减 90 行——主要是 inline style 对象（overlayStyle/dialogStyle/labelStyle/inputStyle/primaryButtonStyle/optionButtonStyle/wrapperStyle/ctaStyle/buttonStyle）移除。
 
-## Step 4: README 更新
+## 自我审查
 
-- 状态段新增 **v2.0.0-p1 条目**（BREAKING 移除 Matrix/Tuwunel、sessions 模型、传输层内迁、task_reply 链线、P2-P5 待办）。
-- 修剪陈述"当前事实"的过时段落：前置依赖 Tuwunel 行、安装段 postinstall/Tuwunel 下载说明、matrix-js-sdk 锁版本 blockquote、开发段"首次注册向导（本地 Matrix 账号）"、项目结构 resources/ 描述（实测仅剩 marketplace catalog）。
-- 特性段"即时通讯（IM）"→"会话"；工具上限"房间级覆盖"→"会话级覆盖"。
-- 技术债表删 3 行已解决项（matrix-js-sdk 锁定 / conduit 测试 flaky——测试已删 / 同房中断——`activeStreams` 已随双轨删除，grep 核实）。
-- 已知限制删 4 项失效项（Tuwunel 二进制、matrix-js-sdk 锁定、同房中断、Matrix event 不可变旧消息），新增"2.0.0 完全重新开始"条目。
-- **历史 roadmap（v1.0-v1.7 已发布记录及 v2.0+ 远景条目）原样保留**——其中 Matrix 相关表述属历史记录，不改。
+### ✅ 零 inline hex / inline rgba
+所有 style 常量已删除。grep `backgroundColor\|color:\|#[0-9a-fA-F]\|rgba` 在 4 文件零命中。
+
+### ✅ 零渲染 emoji
+- CreateTaskDialog：clean
+- ConflictDialog：clean（仅注释 `⚠️ → CircleAlert` 文档迁移说明，无渲染）
+- CreateTaskButton：clean（仅注释 `📌 → ListPlus` 文档迁移说明，无渲染）
+- InlineTaskSuggestion：clean（仅注释 `💡 → Lightbulb` / `📌 创建任务 → Button secondary sm` 文档迁移说明，无渲染）
+
+### ✅ IPC payload byte-identical
+
+**ipc.task.create（CreateTaskDialog.tsx:67-77）**：
+```ts
+{
+  workspaceId,
+  title: title.trim(),
+  description,
+  priority: priorityNum,
+  sourceSessionId: preset?.sourceSessionId ?? null,
+  sourceMessageId: preset?.sourceMessageId ?? null,
+  assigneeAgentId,
+  scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
+  deadlineAt: deadlineAt ? new Date(deadlineAt).getTime() : null,
+}
+```
+字段名/值/null 处理完全保留。
+
+**ipc.task.resolveConflict（ConflictDialog.tsx）**：
+```ts
+{ newTaskId, currentTaskId, currentRoomId, strategy }
+```
+完全保留。
+
+**ipc.settings.updateSession**：
+```ts
+await ipc.settings.updateSession(currentRoomId, { conflictStrategy: strategy });
+```
+完全保留。
+
+### ✅ 业务逻辑保留
+
+- CreateTaskDialog：useEffect 初始化 preset 序列、`if (!open) return null` 顺序、handleSubmit 守卫、ipc.task.create 调用全部 byte-identical
+- ConflictDialog：4 选项 onClick → handleChoose → (remember 时 updateSession) → resolveConflict → onResolved + onClose 顺序完全保留
+
+## 关注点
+
+1. **textarea 用裸 className 而非 Textarea 原子件**——按 brief 明确指示（Textarea 无原子件）；后续如多文件复用 Textarea 可提升为 ui/Textarea.tsx
+2. **CreateTaskDialog 提交按钮 type=submit**——把 onClick={() => void handleSubmit()} 改为 form onSubmit 后，按钮 type 同步改为 submit 才能触发 submit 事件
+3. **测试中 ConflictDialog '点击 overlay' → '点击 backdrop'**——语义适配，但保留「点击外部触发 onClose」的断言意图
+4. **47 个 renderer pre-existing 测试失败**——4 文件（file.store / AppearanceSettings 等）调用 `localStorage.clear()` 报 undefined，与本任务无关，stash 验证 HEAD 上同样失败，留待 2.x 债清理
 
 ## Commits
 
-1. `chore: 清理 v23 迁移后残留的旧 schema 注释引用`（8 文件，仅注释）
-2. `docs: P1 会话内核完成——README 2.0 重构状态更新`（README.md）
-3. `docs(sdd): task-14-report P1 验收报告`（本文件）
-
-## 结论
-
-P1 残留扫描、类型检查、测试（858+409 全绿）、构建、容器级冒烟**全部通过**；唯一未闭环项为需真实 LLM key 的交互式验收，按边界声明留待 macOS 主机执行。
+- `81ef840` refactor(renderer): 任务弹窗两件收敛 Dialog——inline-style 表单全原子件化

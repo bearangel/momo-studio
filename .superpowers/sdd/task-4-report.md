@@ -1,122 +1,76 @@
-# Task 4 全量回归验收报告
+# Task 4 报告：TaskExecutor 队列放行模块
 
-**Task**: dispatch 并行化收尾验证（spec §12 验收）
-**Status**: ✅ **DONE** — 全部三条验证命令符合预期
-**执行时间**: 2026-08-25
-**环境**: OrbStack DevContainer (Linux arm64), Node v20.20.2 (via `nvm use 20`), pnpm 9.0.0
+## 实施摘要
 
----
+按 brief TDD 五步执行（失败测试 → RED → 实现 → GREEN → 提交）。6 个用例全绿，全仓 1485 测试零回归。executor 主体逐字采用 brief 代码，另有 **6 处必要偏差**（2 处任务指示预先批准的 DDL 修正、1 处 brief 笔误、1 处 strict 类型必要兜底、1 处 brief 自身注释声明但未实现的防热循环补全、1 处 spec 与现状冲突的调停），全部在下文逐条列出依据。
 
-## Step 1 — electron 全量测试
+## TDD 证据
 
-**命令**:
-```bash
-nvm use 20 && npx pnpm@9.0.0 --filter momo-studio-electron test
+### RED（两轮）
+
+1. **executor 模块不存在**（brief Step 2 预期失败形态）：
+   ```
+   FAIL tests/task/executor.test.ts
+   Error: Failed to load url ../../src/main/task/executor ... Does the file exist?
+   ```
+2. **状态机 assigned→failed 先红**（独立 TDD 回归锁，见「偏差 6」）：
+   ```
+   FAIL task-state-machine.test.ts > assigned → failed（executor 目标校验失败路径，spec §5.1/§9）
+   AssertionError: expected false to be true
+   ```
+
+### GREEN
+
+```
+Test Files  2 passed (2)
+     Tests  31 passed (31)      # executor 6 用例 + 状态机 25 用例
 ```
 
-**实际结果**:
-```
-Test Files  154 passed (154)
-     Tests  1195 passed (1195)
-  Start at  21:38:16
-  Duration  17.10s (transform 3.56s, setup 5ms, collect 16.23s, tests 57.60s, environment 35ms, prepare 19.09s)
-```
+### 全量验证
 
-**符合预期**: ✅ 全部 passed，零 flake，零失败
+- `npx pnpm@9.0.0 test`（electron 全仓）：**178 文件 / 1485 测试全绿**，状态机扩展零回归
+- `npx pnpm@9.0.0 typecheck`：clean（strict + noUncheckedIndexedAccess）
+- `npx eslint src/main/task/executor.ts src/main/storage/tasks/state-machine.ts`：clean
+- lsp_diagnostics：两文件零诊断
 
-**注意事项**（信息性，不阻断）:
-- 任务简报预期 "基线 1074+10 新增 = 1084"，实测 **1195**（多出 111）
-- 查 git log 可知 baseline 之后的 6 个提交中，只有 `9f98050 test(agent): dispatch 同轮并发回归锁——8 用例先行` 是新增 dispatch 测试（8 个用例）
-- 实际新增 121 而非 10——差额可能源于 P3 收尾期间并入但未列入本次 brief 的其他测试；或简报基准数 1074 本身偏低（README 写的是 P5 收官时的 1074）
-- 这不影响验收：所有测试通过、零 flake、零失败
+## 文件变更（4 个）
 
----
+| 文件 | 变更 | 关键内容 |
+|---|---|---|
+| `electron/src/main/task/executor.ts` | 新建 262 行 | TaskExecutor：admitOnce 并发 gate + 放行排序 + validateTarget + startTask + kickoff 注入；notify 100ms 去抖（timer unref）；start/stop 30s 兜底扫描；模块级单例 `taskExecutor` + `notifyExecutor()` |
+| `electron/tests/task/executor.test.ts` | 新建 141 行 | brief 逐字 6 用例 + DDL 修正后的 seedAgentMember + kind 修正 |
+| `electron/src/main/storage/tasks/state-machine.ts` | +3/-1 行 | `assigned` 合法转换集加 `'failed'` + 头注释同步（偏差 6） |
+| `electron/tests/storage/task-state-machine.test.ts` | +5 行 | `assigned → failed` 正向用例（RED→GREEN 回归锁） |
 
-## Step 2 — 双 workspace typecheck
+## 与 brief 的偏差（6 处，均有依据）
 
-**命令**:
-```bash
-nvm use 20 && npx pnpm@9.0.0 typecheck
-```
+1. **seedAgentMember 按当前 DDL 修正**（任务指示预先批准，Task 3 同款）：brief 原始 INSERT 缺 NOT NULL 列且列名过期——`agent_definitions` 实际 NOT NULL 为 id/name/slug/version/system_prompt/model_name（`model_provider` 已于 v13 DROP，表无 `updated_at` 列）；`workspace_agent_members` 实际 NOT NULL 含 `agent_user_id`，时间列是 `created_at`（带 DEFAULT）而非 `added_at`。
+2. **insertSession kind 'quick' → 'chat'**（任务指示预先批准）：sessions DDL `CHECK (kind IN ('chat','task_execution'))` + repo TS 联合类型均不容 'quick'（v25 会话双类型是概念层用语，未落 DDL）。
+3. **`export class TaskExecutor`**：brief 源码漏写 `export`，但其自身测试 `import { TaskExecutor }`——笔误，必须导出。
+4. **`getGlobalSettings().maxConcurrentTasks ?? 3`**：`GlobalSettings` 类型上该字段可选（`number | undefined`），裸相减在 strict 下编译错误；末位 `?? 3` 与 `settings/crud.ts` 读侧默认值对齐。
+5. **admitOnce 增加 round 级 `skipped` 集合**（补全 brief 自己声明的语义）：brief 的 `peekNextAssigned` 注释写明「排除本轮已处理过的失败候选」、startTask 抛错分支注释写明「本轮跳过」，但其实现 `continue` 后会再次 peek 到**同一个仍处于 assigned 的候选**——validate 失败/kickoff 失败者已转 failed 自然出队，但 **startTask 持续抛错者（如磁盘满导致事务恒败）会无限热循环**（admitting 标志使 notify/sweep 全部失效，事件循环空转 + 日志洪水）。skipped 集合以占位符参数绑定拼入 `NOT IN`，候选本轮跳过、留给兜底扫描重试——正是注释声明的行为。
+6. **状态机 `assigned` 转换集加 `'failed'`**（spec 调停，最重要的一处）：spec §5.1 算法第 1 步「无效 → transition failed + errorMessage 明示」、§9 边界表「目标已删 → 转 failed 带明示 errorMessage」、§10 测试清单「目标校验失败→failed」三处规范性要求 assigned→failed；但现行状态机 `assigned: {in_progress, cancelled}` 不含 failed，且 plan 头部写「状态机零改动」——二者直接冲突。不做调停的后果不是测试失败而是**测试挂死**（failQuietly 抛错被吞 → 任务滞留 assigned → peek 反复选中同一候选 → 死循环）。裁定依据：spec 算法节是规范性的，而「状态机零改动」两处出处各自语境是「不新增 queued 状态」（D3 决策）与「paused 恢复队列化留待后续」（§228 范围外清单），均不针对 assigned→failed；且已确认既有状态机测试无 assigned→failed 非法断言、全仓 1485 测试无回归。独立提交（f1405a2）先行，含自己的 RED→GREEN 用例。
 
-**实际结果**:
-```
-> momo-studio@2.0.0 typecheck /workspace
-> pnpm -r typecheck
+## 自审（任务指示的三个重点）
 
-Scope: 2 of 3 workspace projects
-electron typecheck$ tsc --noEmit
-renderer typecheck$ tsc --noEmit
-electron typecheck: Done
-renderer typecheck: Done
-```
+- **while 循环 + slots 重查（防超放）**：每次成功放行后 `slots = max - countInProgress()` 以 DB 为准重查（不信任内存计数）；`!launched` 路径不消耗槽位（validate 失败者已出队、startTask 抛错者跳过）；`admitting` 互斥使并发的 notify/sweep 调用直接 no-op。放行前 count、放行后 re-count，单轮内不可能超放。
+- **peekNextAssigned 竞态防御**：SELECT 与 getTask 读取之间逐条复查 `status === 'assigned'`；排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍全程参数绑定，无注入面）。
+- **notify 去抖 timer unref**：已带 `this.notifyTimer.unref?.()`，不会挂住事件循环。注：`start()` 的兜底扫描 interval 按 brief 原样**未** unref——主进程常驻语义下无害，但 Task 5 接线时若在非常驻上下文调用 `taskExecutor.start()` 需配对 `stop()`。
 
-**符合预期**: ✅ electron + renderer 双 workspace 严格 typecheck 均 Done（无任何 tsc 报错）
+## 测试保真度自查（momo-test-rules）
 
----
+- kickoff fake 挂在生产注入缝（`deps.sendKickoff`）而非 mock 内部模块——mock 收窄铁律 ✓
+- 全程真实 better-sqlite3（tmp 目录 + runMigrations），无 DB mock ✓
+- 断言生产消费字段（status / errorMessage / executionSessionId / sessionId / mentionedInstanceIds / body）✓
+- 错误路径专项：并发满 / 目标无效 / kickoff 抛错 / pending+draft 不参与 ✓
 
-## Step 3 — 确认契约面零改动
+## 顾虑 / 后续提示
 
-**命令**:
-```bash
-git diff --stat dd2ad82..HEAD -- electron/src/main/agent/dispatch.ts electron/src/main/agent/stream-chunk.ts electron/src/preload renderer/
-```
+1. **lint 存量债务（非本任务）**：`src/main/agent/ipc.handlers.ts:58` 有一个预先存在的 `no-unused-vars` error（`'AgentDefinition' is defined but never used`），非本任务文件、brief 未授权，未处置——全量 `pnpm lint` 会红，建议后续任务顺手清或单独 chore。
+2. **偏差 6 请 plan owner 知悉**：若后续任务发现「状态机零改动」的其它依赖（目前全仓测试无冲突），spec/plan 文档宜补一句勘误说明 assigned→failed 的开放。
+3. Task 5（runtime-init 接线）将注入真实 sendKickoff 并调用 `taskExecutor.start()`——注意上面自审第 3 点的 stop() 配对。
 
-**实际结果**:
-```
-(empty output, exit 0)
-```
+## 提交
 
-**符合预期**: ✅ 空输出——契约面零改动（spec §8 满足）
-
-**变更面审计**（dd2ad82..HEAD 全部 7 文件改动，作为旁证）:
-```
- .superpowers/sdd/task-1-report.md                 | 140 ++--
- docs/plans/2026-08-25-dispatch-parallel.md        | 928 ++++++++++++++++++++++
- docs/specs/2026-08-25-dispatch-parallel-design.md | 211 +++++
- electron/resources/agents/pm-agent.yaml           |   2 +-
- electron/src/main/agent/prompt-hints.ts           |   1 +
- electron/src/main/agent/runtime-entry.ts          | 225 ++++--
- electron/tests/agent/dispatch-parallel.test.ts    | 491 ++++++++++++
- 7 files changed, 1861 insertions(+), 137 deletions(-)
-```
-
-**契约面外延说明**（确认无副作用）:
-- `electron/src/main/agent/runtime-entry.ts`：本次重构目标文件，三段式切分（chat loop / dispatch / reply）
-- `electron/src/main/agent/prompt-hints.ts`：+1 行（formatDispatchHint 新增）
-- `electron/resources/agents/pm-agent.yaml`：±2 行（prompt 教学加进 system prompt）
-- `electron/tests/agent/dispatch-parallel.test.ts`：新文件，回归锁 8 用例
-- 其他 3 个文件均为 docs/plans/specs 文档与 task-1 报告
-- **未触及**: `dispatch.ts` / `stream-chunk.ts` / `electron/src/preload/` / `renderer/` —— 全部 spec §8 契约面纹丝不动
-
----
-
-## 总体结论
-
-| 验收项 | 简报预期 | 实测结果 | 判定 |
-|---|---|---|---|
-| electron 全量测试 | 全部 passed，零 flake（1074+10） | 154 文件 / 1195 测试全绿，零 flake | ✅ PASS（数量高于预期） |
-| 双 workspace typecheck | electron + renderer 双 clean | 两 workspace 均 Done，无报错 | ✅ PASS |
-| 契约面零改动 | dispatch.ts / stream-chunk.ts / preload / renderer 空输出 | 空输出，exit 0 | ✅ PASS |
-
-**Status**: ✅ **DONE**
-
-三道关全绿，dispatch 并行化收尾验证通过。可发布 / 可合并 / 可进入下一阶段。
-
----
-
-## Concerns（信息性，不阻断）
-
-1. **测试数量超预期** — 实测 1195 vs 预期 1084（+111）。原因排查建议：
-   - 查 P3 收尾到本 Task 之间的提交，看是否还有其他非 dispatch 测试并入
-   - 或确认 P5 README 中的 1074 是否已经包含后续补丁
-   - 对 spec §12 验收（"健康测试全绿"）无影响——核心是全绿零 flake，不是数字精确
-2. **dispatch-parallel.test.ts 用例数** — git log 写 "8 用例先行（4 红 + 4 绿）"，是 Task 1 引入；本 Task 简报预期 "10 新增" 估计包含了 Task 1+2+3 之和。Task 2 和 Task 3 的实际新增用例数未在 brief 中列明——controller 可在合并前核对。
-3. **GUI 层验收** — 按简报说明，真实拖拽 tab / 红绿灯 / 双机 LAN 联调等 GUI 验收留 macOS 主机，已知惯例，不在容器内执行。
-4. **renderer 单测未单独跑** — 简报 Step 1 只指定 electron 测试；renderer 单测在 `pnpm test` 全量时一并跑，但本 Task 未单独执行。typecheck 双 clean 已作为 renderer 健康的旁证。
-
----
-
-**报告生成时间**: 2026-08-25 21:38 UTC
-**报告位置**: `/workspace/.superpowers/sdd/task-4-report.md`
-**Task 提交**: 本 Task 无代码改动，无 commit（报告文件由 controller 统一处置）
+- `f1405a2` feat: 状态机新增 assigned→failed 转换——executor 目标校验失败路径前置（spec §5.1/§9）
+- `2875a27` feat: TaskExecutor 队列放行模块——全局并发 gate + kickoff 注入 + 写触发去抖（brief 指定的精确 message 与文件清单）

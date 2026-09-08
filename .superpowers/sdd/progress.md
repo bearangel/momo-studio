@@ -742,3 +742,223 @@ Spec: docs/specs/2026-08-31-agent-team-session-redesign.md
 - 门禁：typecheck 双 clean；electron 160文件/1306 全绿；renderer 75/719 全绿；build exit 0；e2e 冒烟 smoke.spec 新增 1 passed + 旧 onboarding/e2e-full 标 skip（2.x 重写债在案）
 - 文档：README Agent/会话章节 v25 化；AGENTS.md 架构关键点+关键文档；CHANGELOG [未发布] 段
 - 遗留：AGENT_CONFIG role 死字段（grep 契约外，独立清理项）；e2e 2.x 重写；better-sqlite3 ABI 换算步骤（e2e↔单测互斥，见 smoke.spec 头注释）
+
+### Task 15: complete (commits 5b2f86e..e7a3518 ×4 + fix e927adf, review clean after fix round)
+- 概念清零：grep 终态 21 处全合法（migrations 历史 SQL+对齐注释），AgentAssignment 别名双端删除；148 红清账（A16/B8/C4/D3，净删 21 条退役断言，新覆盖溯源 Task3-10）
+- electron 160 文件/1306 全绿 + renderer 719 全绿 + typecheck 双 clean + build exit 0 + e2e 冒烟 1 passed（旧 spec skip 待 2.x 重写）
+- 修复轮：router-lazy-init mock 删 teamSessionId 虚构字段 + init-runtime 头注释纠偏
+- Minor（defer→终审）：createWorkspace 死位置参数残渣；AGENT_CONFIG role 死字段（37 文件混布，2.x 债）；progress 数字笔误
+- **全部 15 Task + 10B 完成，进入终审**
+
+### 终审（whole-branch, ultrabrain）: Yes-with-fixes → 修复后闭账
+- 覆盖：spec §3-§8 全落地（§7 八行边界 7/8→修复后 8/8）；跨任务七接缝全闭环实证（v1→v26 迁移链/sender owner/renameSession 竞态/isLeader 全链/NO_DEFAULT_AGENT 全链/readOnly 全链/悬空引用零残留）
+- MUST-FIX 已修（1f3e218）：deleteDefinition 置空 default 引用 + leader 团队级联 warn + 回归锁 ×2；crud-assignment 9/9（控制器亲验）
+- 门禁（终审实跑）：typecheck 双 clean / electron 1308 + renderer 719 全绿 / grep 21 处全合法
+- 2.x 清单归档：e2e 重写（skip 旧 spec）＞ AGENT_CONFIG role 死字段+死位置参数 ＞ 加固包（addMember 原子性/dispatch-wait 空目标/collab 跨 ws 校验/broadcastRuntimeChanged）＞ macOS 主机验收（⚡直达/团队 dispatch/LLM 命名实测）
+- 全程：16 任务（15+10B）×实现+审查双循环，Critical×1（T9 bootstrap）+ Important×5 全部修复闭环，Deferred Minor 59 条 triage 完毕（1 MUST-FIX 已修，58 DEFER-OK 归四组）
+
+## v2.1 UI 设计系统 P0 地基期（2026-09-01，计划 docs/plans/2026-09-01-v2.1-ui-refactor-p0-foundation.md，main 分支经用户明示）
+Task 1: complete (commits aed93dc plan-fix + 938d99f deps, review clean; Minor deferred: ①探针&&短路 ②task-1-brief陈旧grep行 ③报告头BLOCKED陈旧 ④计划"minified转义"措辞 ⑤README已知限制待Task20勘正)
+Task 2: complete (commits 6318b62 plan修正 + 64f8db1 tokens + 2e5ae6c TS7016修复 + f730ab3 计划补遗; review clean after fix round; Minor deferred: ①计数锁不能区分2×:root错位 ②ColorGroup松签名靠运行时锁兜底; 教训=代收尾必须跑typecheck不能只跑vitest)
+Task 3: complete (commits 0230a11 store + 3df3118 计划同步; review clean; Minor deferred: ①报告行数元数据 ②mock matches快照不可达缺口 ③mock dispatchEvent弱化不可达)
+Task 4: complete (commit 35a4105 boot脚本+接线; review clean——审查者实测 build 验证 ./theme-boot.js 生产路径; Minor deferred: ①报告哈希关切无意义 ②index.html无尾换行预存)
+Task 5: complete (commit d6fb85a Segmented; review clean; Minor deferred: ①radio键盘roving-tabindex/方向键缺失——brief层面范围决策,记为后续打磨项 ②两文件无尾换行)
+Task 6: complete (commits a9c8ed9 六文件 + f27da1c 计划同步LucideIcon; review clean; Minor deferred: ①SettingsNav头注释残留"全文替换"指令措辞 ②nav侧同步注释单边化 ③svg断言注释措辞)
+Task 7: complete (commit 31c214d Button; review clean——type翻转风险消费方普查8处显式submit零隐式依赖; Minor deferred: ①type默认值无回归锁 ②text-[13px]任意值注——Task1探针已证静态可用,README勘正留Task20 ③无尺寸断言)
+Task 8: complete (commit 4f45862 Input; review clean; Minor deferred: ①报告行数统计不准 ②测试文件无尾换行 ③测试未断言旧token缺席)
+Task 9: complete (commit 1f5a8cc IconButton; review clean; Minor deferred: ①无@ts-expect-error编译级回归锁 ②size/type默认未测 ③报告行数不准)
+Task 10: complete (commit f2b7c40 Badge; review clean; Minor deferred: ①报告行数不准——连续多个任务报告元数据失真,终审提醒)
+Task 11: complete (commit 3dceca5 Spinner; review clean; Minor deferred: ①EOF换行缺失 ②报告行数对调 ③测试2名与断言错位——brief继承)
+Task 12: complete (commit eb1d410 Avatar; review clean; Minor deferred: ①EOF换行 ②报告行数不准 ③测试2标题过度承诺——brief继承 ④白字对亮色调对比度~3:1——设计层备注,终审triage)
+Task 13: complete (commit cfb7356 Tooltip; review clean; Minor deferred: ①aria-describedby关联缺——设计迭代项 ②tooltip常驻DOM仅视觉隐藏——brief既定取舍 ③报告行数不准)
+Task 14: complete (commits 58561f8 EmptyState + e587ff1 计划同步h3; review clean——preflight证实h3零视觉差; Minor deferred: ①测试文件路径注释重复两行 ②测试2句号断言弱——brief继承)
+Task 15: complete (commit 3f49e48 Checkbox; review clean; Minor deferred: ①className死解构吞消费方类——简报既定,后续可改cn合并 ②无label分支未测 ③EOF换行 ④text-[13px]任意值视觉QA关注)
+Task 16: complete (commit 5e89794 Select——首派超时零产出后重派成功; review clean; Minor deferred: ①报告行号引用失真 ②测试标题与断言强度不匹配——brief继承)
+Task 17: complete (commits c5c6554 Dialog + 2eec171 计划同步; review clean——双fixed层Fragment结构契约成立; Minor deferred: ①不稳定onClose致focus steal——P1消费方stabilize ②监听清理/宽度/焦点/teardown无测试 ③p-0死类 ④EOF换行+报告行数)
+Task 18: complete (commit 859c694 task-status; review clean; Minor deferred: ①报告串入无关打包内容需清理 ②EOF换行 ③P2边界status类型收窄提醒)
+Task 19: complete (commits 09f3c85 Checkbox className修复[存量lint error暴露] + 82a879b eslint三规则 + c3af7b5 计划同步; review clean——审查者实测descendant Literal捕获; Minor deferred: TemplateLiteral检测缺口——规范既定,P4再议; 附注:Task15的className Minor①就此闭环)
+Task 20: complete (commit eb02d0e design-system.md+AGENTS红线; review clean——文档全token/原子/ESLint声明经代码核实; Minor deferred: ①140ms实为150ms措辞 ②现状warn/error分档未写明 ③README勘正承诺需P1兑现[记入P1]; 流程注:实现者误报47预存失败——控制器复现774/774全绿,系其环境伪影)
+Task 21: complete (无commit; 五门禁PASS——typecheck双clean/renderer774+electron1308/build exit0/xvfb冒烟Window ready零CSP违规/树净[仅.sdd遗留]; smoke处置:清僵尸进程+electron-rebuild ABI[已rebuild回Node侧]; 人工项:macOS主机三态换肤验收待办)
+
+P0 全 21 任务完成——进入终审（whole-branch review）。Minor 遗留清单见上方各任务行，终审需 triage。
+终审: With fixes → 修复 2d8fa8c（emoji字符串属性选择器+文档两处）→ 复核 Clear。P0 完结，31 commits（6a4a3a0..2d8fa8c）。待办移交: P1清单（layout/settings域迁移+Segmented键盘roving+Dialog焦点语义+README勘正+Button type锁+463警告背包+浅色默认走查+macOS三态人工验收）; P2（task-status与TaskStatus联合/类同源+Avatar对比度）; P4（white/black+hsl/TemplateLiteral规则扩展）。
+
+## v2.1 UI P1 骨架+设置域（2026-09-02，计划 docs/plans/2026-09-02-v2.1-ui-refactor-p1-shell-settings.md，main）
+P1 Task 1: complete (commits d9fe087 加固 + 218b4fe 计划noUncheckedIndexedAccess收窄; review clean; Minor deferred: ①焦点移动半边无回归锁——后续补toHaveFocus ②报告自审-1回退事实错误 ③单选项边界未测)
+P1 Task 2: complete (commits 148365b PromptDialog→Dialog+焦点修正 + 842a906 WorkspaceTabs测试语义适配[预授权第四文件]; review clean——断言强度保持; Minor deferred: ①EOF换行预存 ②报告"第8项"引用失真 ③Dialog重聚焦语义变化记入终审审计——报告已披露)
+P1 Task 3: complete (commit 5b3557e ActivityBar/Sidebar/ViewSidebar lucide化+token化[SquareKanban主名] + ViewSidebar.test语义适配; review clean; Minor deferred: ①querySelector断言基数弱化——理论性)
+P1 Task 4: complete (commit f60caf2 TitleBar lucide化; review clean 零issue——测试本就语义查询零适配; 备注字形仅存变更注释行=brief原文)
+P1 Task 5: complete (commit a3f819f WorkspaceTabs 9项替换+X/Plus lucide化; review clean 零issue——测试20/20零适配,iconEmoji用户数据未动)
+P1 Task 6: complete (commit 3669201 MainLayout/MiddlePanel+EmptyState; review clean 零issue; 环境注:实现者47失败伪影再现——控制器778/778复现全绿; 范围外观察:EmptyState max-w-[280px]任意值留阶段末)
+P1 Task 7: complete (commit 6e6acf1 SettingsNav/View 外壳; review clean; Minor deferred: ①选中态文本双方案[ActivityBar accent vs SettingsNav primary]——phase-end对照design-system确认 ②报告行号±1)
+P1 Task 8: complete (commits 5a0ae7e ProviderDialog→Dialog + 9e3b596 计划??兜底同步; review clean; Minor deferred: ①EOF换行 ②??兜底分支无失败路径断言——后续补)
+P1 Task 9: complete (commits 3b311b2 ProviderSettings 17项 + e7c5357 计划??同步; review clean——17/17 verbatim,⭐断言升级为title语义查询; Minor deferred: ①item13 hover无操作——spec层nit ②item7 span基线1-2px)
+P1 Task 10: complete (commit e7fcf02 ProviderModelList 12项+Checkbox/Button原子件; review clean——测试零改动Checkbox语义契约保持; Minor deferred: ①头注释↻＋残留 ②拉取中文本无图标关联——观察)
+P1 Task 11: complete (commit c3f976d DefaultModelSettings 四卡lucide+Select/Button/EmptyState; review clean——14/14,业务逻辑零改动; Minor deferred: ①EmptyState丢role=status——原子件层 ②Select无disabled变暗——原子件层小任务 ③import形式微偏)
+P1 Task 12: complete (commits c905839 Conv/GitPolicy + 0ba41c8 计划测试命令修正 + 17ffae4 Select可见label修复[Important闭环]; review clean after fix; Minor deferred: ①Checkbox label 13px/primary与面板不一致——原子件层 ②Button md尺寸备忘; 教训:计划aria-label snippet误导)
+P1 Task 13: complete (commit 670c64f AuditLog/About 配额条class化+双分支阈值锁新测试[779]; review clean——19/19 verbatim; Minor deferred: ①新测试mock隔离diff不可见——无害 ②arbitrary-value类残留——预存范围外)
+P1 Task 14: complete (commit 7aa716f UpgradeNotice; review clean 7/7; Minor: EOF预存+Button md密度微变——brief既定)
+P1 Task 15: complete (commit 5e56926 README勘正+Dialog指引——writing会话中断,控制器代执行计划逐字内容; 控制器直验:锚点/内容/其余行未动)
+P1 Task 16: complete (无commit; 六门禁PASS——四域lint零/routes零/typecheck双clean/779+1308全绿/build0/冒烟Window ready[ABI往返处置]; P2预算:321警告=im125/agent88/res48/task22/files19/p2p14/editor3/ws2)
+
+P1 全 16 任务完成——进入终审。Minor 遗留见各任务行。
+P1 终审: Yes-with-fixes → 修复 d991ee5（Dialog Esc capture阻断+选中态统一accent+Checkbox/Select对齐+清扫15文件）→ 复核 Clear（审查者独立复跑781/781+tsc0+lint0/0）。P1 完结，24 commits（2d8fa8c..d991ee5）。移交P2: ①原子件加固任务吸收EmptyState role/Segmented toHaveFocus+单选项锁/??失败路径断言/Loader2 Spinner采用/Dialog onClose韧性 ②321警告预算=im125/agent88/res48/task22/files19/p2p14/editor3/ws2 ③机械完成证明=逐文件零警告+census复点 ④杂项: transition-width死类/Checkbox EOF/PML.test↻＋标题
+
+## v2.1 UI P2 会话域（2026-09-02，计划 docs/plans/2026-09-02-v2.1-ui-refactor-p2-im-domain.md，main）
+P2 Task 1: complete (commits 491926f 原子件吸收7文件 + df9595e 计划注记; review clean——三setTestResult路径全收口; 偏差:ProviderDialog状态色= P1内在分歧由实现者RED证据修正; Minor: 成功路径class未对称锁定)
+P2 Task 2: complete (commit 53ee3bb task-status派生+dispatch五态; review clean verbatim; Minor: ①_typeLock弱于名义——真强制在Record完整性 ②无尾换行预存; 备忘:DispatchChip旧4态union是DispatchStatus子集,Task5接线无摩擦)
+P2 Task 3: complete (commit e1bed9e TaskChip重写; review clean verbatim; 发现:TaskChip是孤儿组件零消费者; Minor: ①双重截断belt-suspenders ②padding/radius委派status.className——接线任务视觉确认)
+P2 Task 4: complete (commit 093ee86 ToolCallChip三态tint+测试增强; review clean; 备忘: Loader2=lucide-loader-circle别名——查询点注释+tsc双保险; Minor: ①summarizeArgs三连调——brief原文如此 ②cursor-pointer缺失——brief继承)
+P2 Task 5: complete (commit 25d10d5 DispatchChip重写3文件; review clean verbatim——三Chip家族收官; 偏差已裁定: 第4文件ASB.test重指向=必要适配, EMOJI_AVATAR提升=意图保持; Minor: ①not.toBeNull风格 ②(完成)分支无直接断言——预存平价)
+P2 Task 6: complete (commit 12f3427 Thinking/Todo重写2文件; review clean verbatim——零测试适配需求实为预存断言未涉字形; 观察: completed项secondary化=设计三分法)
+P2 Task 7: complete (commit 02213ea SubAgentSection/SegmentStack; review clean; Minor: ①父子markdown瞬态不一致——T8闭合 ②[&_pre]:max-w-full弃——md-body无对应,祖先链兜底 ③#60a5fa→accent-500有意色变)
+P2 Task 8: complete (commit c6fb63e AgentStreamBubble 10项; review clean verbatim——judgment calls均正确[ml-auto恢复右对齐/纯布局inline保留]; Minor: 报告inline计数2实为3——账面瑕疵)
+P2 Task 9: complete (commits cc1ee7a 消息四件5文件 + 490817c md-body强调底可读性修复[Important闭环: code/pre显式text-primary + accent底链接inherit下划线] + tokens回归锁; 复核Clear——审查者独立验证bg-accent-500作用域仅isSelf; 教训:处方引用不存在CSS变量——inherit偏差正确; 基线787)
+P2 Task 10: complete (commit 573d01d Monaco双主题; review clean——8色值逐字/回退状态机/P3范围零触碰; Minor: ①hex与globals双源——Monaco结构性限制 ②themeFallback永久化——合理)
+P2 Task 11: complete (commits 21a332b RoomList/SSH 3文件 + eed3477 计划三处校正; review clean; 偏差: ①选中态按design-system accent形态——brief笔误 ②hover:opacity-90——surface-active/70违反形式二禁令[计划bug] ③5处额外emoji随lint门禁lucide化; Minor: ①SSH头注释⚡👥陈旧 ②role=status未传 ③空态顶对齐 ④死transition-colors ⑤12/14px视觉QA)
+P2 Task 12: complete (commit 7a74dd5 输入区三件; review clean——23替换点全逐字; 偏差: 4额外emoji[Pin/Users/Wrench/Bot]随门禁lucide化已披露; Minor: ①||→??空串边界 ②Lock align-[-1px]在flex内惰性——brief原文)
+P2 Task 13: complete (commits 036f99e 成员/导出/列表 + 6754039 🤖→Bot兜底修复[Important闭环——lint规避helper删除,对齐T12先例]; 复核Clear; phase末批量项: RoomList 🤖/👑前缀同类+ExportChat/MessageList EOF; Minor: report自审失实)
+P2 Task 14: complete (commit 81ef840 任务弹窗收敛4文件+2测试; review clean——payload逐字由diff语义证明; 47失败申报第三次伪影——控制器787/787复现; Minor: ①4文件EOF ②硬编码open ③footer位置=submit功能必然 ④previousElementSibling结构耦合——既有惯例)
+P2 Task 15: complete (commit 2440233 会话弹窗收敛3文件; review clean——handlers逐字/Crown断言增强; Minor: ①Avatar兜底分支无测试——先例承袭 ②Crown外层dark类死代码——brief原文)
+P2 Task 16: complete (无commit; 五门禁PASS——im lint 125→0精确/typecheck双clean/2095全绿/build0/冒烟Window ready零CSP; census 321-125=196精确命中P3预算; ABI陷阱按表处置并回退实测验证)
+
+P2 全 16 任务完成——进入终审。Minor 遗留见各任务行。
+P2 终审: Yes-with-fixes → sweep f6c4848（cursor×4+RoomList Bot/Crown化+空态居中×4+blockquote accent覆写+锁×2+§6修正,10文件——修复者中断由控制器完成测试适配与验证链788/788）→ 复核会话超时,控制器对五项逐一落盘验证通过。P2 完结,45 commits（2d8fa8c..f6c4848）。移交P3: ①196警告=agent88/res48/task22/files19/p2p14/editor3/ws2 ②TaskSidebarPanel.tsx:77也消费STATUS_COLOR——P3接线时连同TaskCard一起 ③EOF×7+杂项cosmetic批量清扫 ④macOS人工验收（浅色默认+三态换肤+图标尺寸走查）
+
+## v2.1 UI P3 其余域（2026-09-02，计划 docs/plans/2026-09-02-v2.1-ui-refactor-p3-remaining-domains.md，main）
+状态: 计划已提交, 执行待 MiniMax 配额重置（~2.5h）
+P3 Task 1: complete (commit cb00da2 TaskCard/SidebarPanel接线+remoteStatusStyle+SidebarPanel 7处sweep顺带——触碰文件0/0纪律; 控制器内联执行[MiniMax限流], 全量788绿+tsc0; 状态文案统一task-status版[待启动→待分配等])
+P3 Task 2: complete (commit 7a34f01 看板四件sweep 5文件; 控制器直审——diff新增行零旧token/零渲染emoji/lucide参数同TaskCard; task-board全域0/0; 788绿; 待办: TaskSidebarPanel L154全角＋归T13)
+P3 Task 3: complete (commit c7b86c6 agent视图四件sweep+emoji[Bot/Users/Crown/Star/Play/Pause]+EmptyState×2; 控制器抽验——四文件0/0/全量788/新增行零旧token; cat.emoji=tool-catalog目录数据豁免)
+P3 Task 4: complete (commit 25a8604 TeamDialog收敛+3新语义锁; 基线791; 控制器抽验零旧token)
+P3 Task 5: complete (commit 512e9ac CreateAgentDialog收敛; 791绿; 控制器抽验)
+P3 Task 6: complete (commit f7aad2d MemberEditDialog/DefinitionEditor收敛[裁定:居中表单弹窗→Dialog]; pendingRestart吞Esc语义保留; 791绿)
+P3 Task 7: complete (commit e138af6 RegisterMcp/UploadSkill收敛——agent域弹窗四连收官[T4-7]; 上传锁Esc守卫保留; 791绿; 注: lsp-tools并行过载假失败已排除)
+P3 Task 8: complete (commit 5c3a544 resource-library五件10文件sweep+emoji+SourceBadge tone; 48警告清零; 791绿)
+P3 Task 9: complete (commit a9883ba files三件sweep+emoji[Folder/File/Chevron/RefreshCw等]; FileContextMenu按弹出层裁定不收敛; 19警告→0; 791绿)
+P3 Task 10: complete (commit 782cefe CodeEditor tab栏/空态sweep; Monaco接线零改动; 791绿)
+P3 Task 11: complete (commit 7d6c643 NodeDiscoveryPanel sweep+emoji[CircleAlert/Wifi/Globe]; 14警告→0; 791绿)
+P3 Task 12: complete (commit 8edeb35 CreateWorkspaceDialog收敛; 计划iconEmoji豁免条件不成立——实际无emoji grid,已记录; 791绿)
+P3 Task 13: complete (commit 9c4887f 清扫37文件——EOF×32批量+SSH注释+Crown死类+TaskChip双重截断+SidebarPanel全角＋; 791绿; 留档: MentionInput:244×/settings两处＋为域外文本字形——P4处置)
+P3 Task 14: complete (无commit; 七门禁PASS——七域0/0/全域census 0[196→0双确认]/typecheck双clean/1308+791全绿/build0/冒烟Window ready零CSP; ABI按表处置还原复验)
+
+P3 全 14 任务完成——进入终审。
+P3 终审: With-fixes → 修复 e71b120（remoteStatusStyle回归锁+TaskFilters词表统一+死hover,792=791+1）→ 复核Clear。P3 完结,15 commits（f6c4848..e71b120）,renderer全域eslint 0/0。P4输入: ①App.tsx:68/MainShell.tsx:12 bg-bg-primary→bg-canvas必须在删token块之前 ②FileTreeView内联重命名modal收敛或豁免 ③ProviderSettings文案「＋」与实际Plus图标对齐 ④MentionInput:244×/ResourceLibraryView:173✓/CodeEditor tab-close span a11y ⑤P4主体: Tailwind theme.colors独占+ESLint全局error+e2e双主题基线+design-system终稿
+
+## v2.1 UI P4 收官期（2026-09-03，计划 docs/plans/2026-09-03-v2.1-ui-refactor-p4-final.md，main）
+P4 Task 1: complete (commit f3207ae 前置迁移9文件——token末两处+字形杂项+FileTreeView双PromptDialog+CodeEditor div[role=tab]结构化; 792绿/全域0/0; 顺序红线达成: bg-bg-primary src零命中)
+P4 Task 2: complete (commit 1d1f065 token灭绝3文件——deprecated三块删/colors独占/独占锁; 陷阱发现: transparent/current是默认色阶成员已显式保留+存活锁; 产物CSS验证token在/默认色阶全谱零命中; globals theme()引用为过期信息无需迁移)
+P4 Task 3: complete (commit b2ee41f lint全局error化——ui/冗余块删+stdin探针exit1验证)
+P4 Task 4: complete (commits d55b32d e2e双主题基线[3passed:浅色765ms+深色2.0s] + c2ffb74 design-system终稿§7; 陷阱根治: --user-data-dir隔离localStorage泄漏; ABI往返×2确认; (c)运行时切换裁定单测锁)
+P4 Task 5: complete (无commit; 五门禁PASS——①灭绝证明: eslint 210文件0/0[error级,L67确认]+grep代码零命中[仅2注释型备注] ②typecheck双clean+electron 1308/160files+renderer 792/90files ③build 0+e2e 3passed/2skipped[theme-a 824ms+theme-b 1.9s]+prebuild恢复+storage 96/96 ④dev冒烟Window ready零CSP[boot链完整,ABI二次往返复验] ⑤树净[仅.superpowers/]; P2 ledger计数笔误勘正: 实为21非45[区间起点复用P1]; 报告=.superpowers/sdd/p4-task-5-report.md[覆盖v2.0.0同名旧报告,原文在git历史])。**v2.1 UI 重构全链路交付完成——P0-P4共97 commits/56+任务,终态: token物理灭绝+lint全局error+210文件0/0+2100测试全绿+e2e双主题锁定**
+P4 Task 5: complete (无commit; 五门禁PASS——灭绝证明[eslint 0/0 error级+grep零命中]/typecheck双clean/1308+792逐位一致/build0/e2e 3passed含双主题/smoke零CSP/树净; P2 ledger计数笔误勘正: 实为21 commits非45)
+
+P4 全 5 任务完成——进入终审。
+P4 终审: Yes——v2.1全链路完成。收尾 commit（tablist+注释清扫,灭绝grep严格零命中/全域0/0/tsc0/24测试绿）。v2.1 总计: P0 31+P1 24+P2 21+P3 15+P4 7=98 commits, 61任务。
+遗留(显式记录): macOS人工验收/CodeEditor方向键roving/smoke.spec隔离对齐/P0移交的ESLint规则扩展(white/black+hsl+TemplateLiteral)无排期——建议accept为P2.1或waive
+
+## v2.2 记忆 P1（2026-09-03，计划 docs/plans/2026-09-03-v2.2-agent-memory-p1-data-manual.md，main，BASE=99fa7ee）
+P1 Task 1: complete (commit 150a6f1 jieba tokenize 模块; review Approved; Minors 待处置: ①merge分支测试不足→Task3 搜救补「用户，偏好」/「"quoted"」/「quoted"」三形态 ②tokenize.ts+测试EOF换行×2→终审triage ③emoji并入邻token信息性无需行动)
+P1 Task 2: complete (commit eed568a migration 027; review Approved——SQL与测试零漂移; Minors均为plan-mandated中性: kind/source CHECK无负路径测试/repo层可补、用例间共享状态耦合024模式、.trim()文件约定)
+P1 Task 3: complete (commits 67a599d+34e75b5+2e839c9 repo CRUD/FTS同事务双写; 评审实证: brief原UPDATE→DELETE顺序有tags路径CORRUPT_VTAB+content路径静默索引漂移双失败形态,实现者的DELETE→UPDATE→INSERT修复正确必要; 首轮Needs fixes→补missing-id错误路径+touchMemoryUsed用例→复核Approved; 22/22绿; 残留Minor: §5.3/§6.1 spec引用不一致plan-inherited[终审triage])
+P1 Task 4: complete (commit 36c9b5a BM25检索+中文专项7用例; review Approved; Minors: limit测试无法证明截断[plan-mandated,后续多候选fixture可补强]/报告「CHECK禁空串」措辞过强[实际依赖FK+app生成ID]/默认limit=10无专项——均终审triage)
+P1 Task 5: complete (commit 7779e9d provider扩展+injection+memoryEnabled; review Approved; Important(plan-mandated): 6个stub-provider测试文件缺新4方法→Task6必须补stub否则runChatLoop接线后TypeError[typecheck盲区]; Minors: slice(0,30)溢出不计入truncatedCount[Task8核对]/截断路径无专项测试/budget策略continue-vs-break不一致+近似[均plan-mandated])
+P1 Task 6: complete (commits 97db659+0c9954a runChatLoop接线+6文件9处stub清偿; review Approved——接线逐字唯一插入点/真实messages流断言强于原稿/1341全绿; Minors: 报告行数笔误/stub search返回[]不对称[终审triage]; 遗留观察: provider抛错中断消息处理与getTaskContext语义一致,P2提取管线兜底)
+P1 Task 7: complete (commit b144916 memory:* IPC+preload+双端类型; review Approved——5通道三方逐字对齐/4处窄化均安全向; Minor: list.filter缺source未在代码内声明[1行JSDoc,Task8或终审顺手补])
+P1 Task 8: complete (commit 5d5d8ac MemorySettings+三接线+JSDoc polish+GlobalSettings镜像补齐[计划盲点,实现者发现]; review Approved——token/icon/原子组件全合规,测试强于brief; Minors均plan-mandated: IPC promise无catch×6/saveEdit空文本静默/tab切换竞态/toggleEnabled无回滚/a11y缺aria-pressed与tablist——P2或终审triage)
+P1 Task 9: complete (无代码commit; controller 亲验: typecheck 双 clean / electron 166文件1341用例 + renderer 91文件799用例全绿 / lint 0 error; 冒烟四项留 macOS 主机; README 状态区 3709415)
+P1 全 9 任务完成——进入终审（范围 150a6f1..3709415，含修复 12 commits）。
+Minor 池（终审 triage）: T1 EOF换行2文件+emoji并入token信息性 / T3 §5.3/§6.1引用不一致 / T4 limit测试弱+报告措辞 / T5 slice(0,30)溢出不计truncatedCount[Task8 UI不受影响] / T6 报告行数笔误+stub search返回[] / T7 已由T8补JSDoc[已闭环] / T8 IPC promise无catch×6+saveEdit静默+tab竞态+toggle无回滚+a11y缺状态属性[均plan-mandated]
+P1 终审: NEEDS FIXES(F1-F5)→单fixer三commits(08dc3d9+2f09ef7+f07afcd)→复核 P1 DONE WITH BACKLOG。全链 99fa7ee..f07afcd = 15 commits。验收态: typecheck双clean / electron 1341+5=1346 / renderer 799+2=801(focused亲验41/41+70/70) / lint 0。
+P1 backlog(随P2计划继承,优先级序): ①session层pinned条目注入无归宿[P2会话层落地前必须先解决spec级缝隙] ②provider注入兜底try/catch[CORRUPT_VTAB事故证明FTS错误形态真实] ③content长度上限enforcement ④catalog SQL LIMIT+串行await优化 ⑤boot jieba冒烟fail-fast ⑥UI打磨四件(错误呈现/tab竞态守卫/toggle回滚/a11y状态属性) ⑦stub search统一抛错 ⑧测试补强(limit多候选/默认limit/kind与source CHECK负路径) ⑨kind标签规范/规则统一[WAIVE级]
+未决待办: macOS主机四项冒烟(注入生效/即时生效/总开关/中文检索)——不阻塞P1闭账。
+
+## v2.2 记忆 P2（2026-09-03，计划 docs/plans/2026-09-03-v2.2-agent-memory-p2-extraction.md，main，BASE=f07afcd）
+P2 Task 1: complete (commit 29e059a 注入补强; review Approved 6/6; Minor×3 待终审triage[含实现者取舍:单路>30不计truncatedCount]; 47/47绿+typecheck双clean)
+P2 Task 2: complete (commit 2f8291e MemoryTools三工具; review Approved; Minor×4: 已实现校验无测试锁[tags/limit/未知工具]/search先limit后scope过滤/子agent写session读不到/审计双记录无层级标识——P3收敛)
+P2 Task 3: complete (commits 6b641fa+33235b7 提取管线+会话压缩; 首轮Needs fixes: 窗口ASC冻结→修复者实证评审方案B数学不可达改DESC+反转+冻结区回归锁→复核Approved; 57/57绿; Minor残留: commit措辞陈旧beforeTs/test缩进/messageToContext复刻措辞)
+P2 Task 4+5: complete (commits 1eeb341+b026c15 合并派发一次评审; review Approved 8契约全过/聚焦检查证实destroy与crash路径不经gate; Minor×3: boot冒烟error非fatal措辞/test as never/乐观无回滚沿袭)
+P2 T6: complete (controller亲验 typecheck双clean / electron 170文件1402 + renderer 91文件804=2206全绿; README 4d91564)
+P2 终审: DONE WITH BACKLOG——四契约链零断点/spec§6.4逐条兑现/无Critical-Important阻塞。全链 6d04986..4d91564=8 commits。
+P3 backlog(优先级序): ①I-1 提取去重污染use_count[P3开工首任务MUST-FIX:改repo直调无touch] ②M-1 首块空记录吞载荷 ③M-2 审计双记录收敛+层级标识 ④M-3 search先limit后scope+误touch ⑤M-5 去重top1→top3 ⑥M-7 messageToContext双实现抽shared ⑦P1遗留: UI打磨四件/测试补强三件/content长度enforcement/stub统一; WAIVE: M-4去抖Map/M-6/M-8杂件/M-9并发。
+未决: macOS主机冒烟六项(P1四+P2两:20轮auto条目/长会话摘要接续)。
+
+## v2.2 记忆 P3（2026-09-03，计划 docs/plans/2026-09-03-v2.2-agent-memory-p3-polish.md，main，BASE=4d91564）
+P3 Task 1: complete (commit dbd9032 数据信号净化I-1/M-1/M-3/M-5; review Approved 6/6; Minor→T4: MemorySearchOpts近义命名/M-5窗口top3备注)
+P3 Task 2: complete (commit 3f4ecee 导出/导入Markdown; review Approved 7/7; Important rider→T3: global层导入去重补1用例[行为已源码验证]; Minor: 报告用例数12实为10/##续行损失未注释/常量双持有已声明/doExport无catch属T4)
+P3 Task 3: complete (commit f50073d 统计+黄标+长度上限+rider; review Approved 7/7; Minor×4: rider新段对照组/存量超限update边界/ui-Textarea上提/90天恰界——均加固级)
+P3 Task 4: complete (commit 889d982 打磨批五子项; review Approved 7/7; Minor×4: a11y部分模式/catch覆盖不对称/extraction EOF/双审计保留——均增量级)
+P3 T5: complete (controller亲验 typecheck双clean/electron 172文件1438+renderer 91文件822=2260全绿/lint 0; README 8e5de57)
+P3 终审: v2.2 P3 DONE 可关账——P3 五commit销账全部backlog(I-1/M-1/M-2/M-3/M-5/M-7/UI四件/测试补强/长度enforcement/stub统一),无Critical-Important。v2.2全三期28 commits(99fa7ee计划后..8e5de57)。
+v2.2 发布前 gate: macOS主机冒烟八项(P1四+P2两+P3两:导出清库导入复原/90天黄标)。v2.3遗留: 终审Minor1-5(<10行)/a11y roving/spec引用清整/Markdown段界转义。WAIVE池见终审记录。
+
+## 会话消息渲染优化（2026-09-06，计划 docs/plans/2026-09-06-session-ui-message-rendering.md，spec docs/specs/2026-09-06-session-ui-message-rendering-design.md，main，BASE=497dfa8）
+Task 1: complete (commit 417fbd1, review clean——Approved; 偏差裁定: shiki 4.4.3 替代 brief 3.x, langImports 适配 LanguageRegistration[] 经审查者三轴验证[运行时探针/官方 d.mts/MaybeModule 链]; Minor deferred ×3: ①单例 rejection 永久缓存,一行 catch 重置加固[Task2/3 顺手] ②报告空 fence 覆盖措辞过强 ③冒烟仅 typescript 单语言,yml 别名路径未跑)
+Task 2: complete (commit 03a3844, review clean——Approved; Minor deferred ×3[均plan-mandated]: ①shell 列表与 SHELL_LANGS 重复维护 ②deferHighlight true→false 恢复高亮路径无测试 ③test2 断言略弱)
+Task 3: complete (commit 3d082d3, review clean——Approved; Minor deferred ×3: ①hast 类型依赖声明待核[与T1安装声明矛盾,控制器复核中] ②pre 兜底死分支渲染外层 children ③md-table-wrap 中部放置偏离字面追加) 
+  [控制器复核: @types/hast ^3.0.5 实际在 renderer/package.json:31 devDependencies——审查员 Minor① 事实错误作废; 有效 Minor 余 ②③]
+Task 4: complete (commits cc3fee9 + fix b746430 + plan-sync da03c0a, review clean after fix round; Important×2[plan缺陷]: list_files 漏入 FILE_TOOLS + basename 尾分隔符全路径——已修复并加 3 判别性回归锁 13/13; Minor deferred: grep 仅 path 前导空格/bash CRLF 残留/usedKey 值相等重复/UTF-16 截断代理对/报告行数笔误)
+Task 5: complete (commits 67c50e9 + lock 57493fa, review clean——Approved; 8/8; Minor deferred: dispatch 段透传无用例/报告行数互换; 评审点名语义锁已当场补齐: todowrite 透明不打断 + 全过滤空数组)
+Task 6: complete (commits a3095ba + lock/计划同步 57fe897, review clean——Approved; 33/33 含消费方; brief 自相矛盾断言[bash 摘要=命令 与 参数不渲染互斥]实现者正确诊断并保意图适配 /"command"/; Minor deferred: 次级开关无 aria-expanded / result undefined 且非执行中显示等待文案措辞 / denied 双色调) 
+Task 7: complete (commit 5676e5f, review clean——Approved 逐字保真; Minor deferred ×4: tone 矩阵负向分支无测试/countLabel 零省略未测/展开行 11px vs 全局 12px 计划内部不一致[记录]/报告行数口径) 
+Task 8: complete (commits 0436ffa + fix da28148, review clean after fix round; 12/12; 3 处 brief 测试代码缺陷偏差均裁定正当[setCopied 时序/act 包裹/toBe(false)]; 修复轮: 回退路径 focus/select+try/finally+离屏; Minor deferred ×3: 计划文档残留 toBe(true)+act 未同步[Task 9 顺带]/回退用例未锁 select 可 spy 补/回退不恢复焦点)
+Task 9: complete (commit 0e844eb, review clean——Approved; 集成 7+ 文件 + 4 新用例 + 3 行为适配[思考中标签/testid 元素断言更精准/双态断言] + 计划 Task8 勘误授权项; named risk dispatch-activity testid 判定属生产代码非后门; 880/880 全绿; Minor deferred ×3: SubAgentSection 分组无 memo/MessageBubble v2.0 头注释过时/复制用例 async 无 await) 
+Task 10: complete (无 commit; 控制器亲验五门禁 PASS——typecheck 双 clean / electron 173文件1448 + renderer 99文件880 全绿 / 回归锁六文件 diff 空 / renderer+electron build exit 0 + shiki typescript 语言块 181kB 独立分包旁证; 手动 DoD 八项留 macOS 主机)
+
+全部 10 Task 完成——进入终审（whole-branch, 497dfa8..HEAD, 12 commits）
+
+终审: APPROVED-WITH-FIXES → 修复 b8e0c58（DispatchCard/TaskReplyCard 收敛 MarkdownBody 补齐 SafeAnchor[终审 Important I-1] + 计划 Task1/5 同步 + MessageBubble 注释）→ 复核 APPROVED（全 renderer 生产代码 react-markdown 仅剩 MarkdownBody 一处；N-1 多余 }); 控制器内联勘正）。终态 497dfa8..HEAD 16 commits 可合并。7 项 DEFER-OK 维持触发式归属（单例 rejection 加固/SHELL_LANGS 重复/describeToolCall 四边角/ToolCallChip aria/ContextGroupChip tone 测试/CopyButton select spy/SubAgentSection memo）。
+SDD 执行完毕：10 任务 ×（实现+审查）双循环 + 终审双轮；Critical 0 / Important 4（全部修复闭环）/ Minor 延期 7 组归档。测试终态：electron 1448 + renderer 880 全绿、typecheck 双 clean、build exit 0 + shiki 分包旁证。手动 DoD 八项留 macOS 主机验收。
+
+## Agent 模型选择与成员管理修复（2026-09-06，计划 docs/superpowers/plans/2026-09-06-agent-model-selection-fixes.md，spec docs/superpowers/specs/2026-09-06-agent-model-selection-fixes-design.md，main，BASE=23684fc，run-dir=.superpowers/sdd/agent-fixes/）
+Task 1: complete (commits 269c882+1877b50, review clean after fix round——Important[plan-mandated 残留error不清除]已修+回归锁10/10; Minor deferred ×5: disabled未gated拉取按钮+无disabled用例/RefreshCw 12px vs 16px/handleFetch跨provider竞态/未匹配modelId占位显示/暂无模型+error文案并存)
+Task 2: complete (commit 22fd874, review clean——Approved; Minor deferred ×3: 报告统计口径笔误/校验分支仅测provider空侧未测model清空侧/测试头注释重写超brief字面[良性])
+Task 3: complete (commit 2952354, review clean——Approved; Minor deferred ×2: 新用例async无await[plan-mandated形态]/configure模式disabled下仍发listModels IPC[picker内部,Task1域]; 附: configure供应商下拉旧本可交互新统一上锁=收紧非放松)
+Task 4: complete (commits 557175b+fix bd34782, review clean after fix round——Important[plan-mandated 空输入拦截零用例]已修+三重失败信号行为锁18/18; Minor deferred ×4: 误导注释[已顺手修]/非运行成员直接关窗无测试/[def]身份变化静默重置未保存编辑[plan-mandated模式]/agent.store字段名updateMemberApiKey遗留[后端域])
+Task 5: complete (commits 9a747c3+fix a403316, review clean after fix round——Important[plan-mandated agent.list未处理rejection]已修+运行级回归锁25/25; Minor deferred ×4: def-not-found warn分支无测试/console.error无UI反馈[同warn模式]/waitFor负断言弱锁定[真锁=vitest运行级检测]/报告统计笔误)
+Task 6: complete (commit e71fd92, review clean——Approved; Minor deferred ×2: window.api死桩[plan-mandated模板]/入口按钮接线无用例[3文件边界裁定])
+Task 7: complete (无 commit; 控制器亲验三门禁 PASS——typecheck 双 clean / renderer 101文件909测试全绿 / electron 174文件1464测试全绿)
+全部 7 Task 完成——进入终审（whole-branch, 23684fc..HEAD, 12 commits）
+终审: APPROVED-WITH-FIXES → 修复 9542306（definitions 刷新，终审 Critical）+ 29a9795（拉取竞态守卫，终审 Important）+ plan-sync 4b8fb3a → 复核 APPROVED（Ready to merge: Yes）。终态 23684fc..HEAD 15 commits。SDD 执行完毕：7 任务×（实现+审查）双循环 + 3 轮任务内修复 + 终审双轮；Critical 1 / Important 5 全部修复闭环；Minor 延期 16 组归档（终审裁定全部 ship-as-is，next-touch 清单见终审记录）。测试终态：renderer 912 + electron 1464 全绿、typecheck 双 clean。
+主机验收修复: 资源库 agent 编辑无反应——custom agent ResourceItem.slug=def.id（custom.ts:86 口径）而 handleEditAgent 按 def.slug 匹配（Task5 fixture 未仿真真实契约,测试全绿生产 miss）。修复 commit 见 git log（d.id 匹配+fixture UUID 口径对齐+红绿回归锁 912/912）。
+
+## 2026-09-06 侧边栏宽度调整与完全收起（docs/plans/2026-09-06-sidebar-resize-collapse.md，BASE c22e162）
+Task 1: complete (c22e162..df6bcb3, review clean——Approved; Minor ×5 归档: 报告行数95vs102 / GREEN输出疑似截断Node警告 / clampWidth NaN透传[brief原文,拖拽调用方有限值,NaN经JSON变null重启自愈] / 测试3命名「合法项保留」无合法seed / 加载时小数取整无直测)
+Task 2: complete (df6bcb3..f693d28 含 7e67c93 PointerEvent polyfill 前置 commit, review clean——Approved; Minor ×6 归档: 拖拽中卸载 window 监听保留[brief原文,手势有界+React18 noop]/二次pointerdown覆盖手势未测/测试标题350vs310[brief笔误,verbatim保留]/polyfill as unknown as 双窄化[测试基建]/报告jsdom≥22移除条件笔误/全套件运行留Task 6终验[全局setup变更])
+Task 3: complete (f693d28..cb3857b, review clean——Approved; 偏差批准: RTL15 双render需显式cleanup[brief笔误,断言原样]; Minor ×3 归档: ViewSidebar.tsx:19 注释引用已删 VIEW_META[plan原文]/写路径接线(onCollapse+viewKey commit)无 ViewSidebar 级测试[plan遗漏,补两用例成本极低]/Partial<Record<string,string>> key 放宽[plan原文])
+Task 4: complete (cb3857b..fa1607b, review clean——Approved; Minor ×3 归档: 两新文件缺 EOF 换行[无 eol lint 规则,纯格式]/空态顶行 h-[30px] vs 实际 tab 行 ~32px[plan-mandated 值]/tablist overflow-x-auto 下按钮可被横向滚走[brief 指定插入位,设计固有])
+Task 5: complete (fa1607b..da5238f, review clean——Approved; Minor ×1 归档: ActivityBar guard 负分支[当前视图∉SIDEBAR_VIEWS+收起]无直测[plan覆盖缺口])
+Task 6: complete (无 commit; 控制器亲验三门禁 PASS——renderer 104文件937测试全绿 / electron+renderer typecheck 双 clean / 无遗留未提交文件; spec §8 七条: 1-5由Task1-5测试锁定, 6-7由门禁证实)
+全部 6 Task 完成——进入终审（whole-branch, c22e162..da5238f, 7 commits）
+终审: APPROVED（Ready to merge: Yes; 0 Critical / 0 Important / 新增 Minor ×7 + 遗留 ×14 全部 ship-as-is 裁定归档）。spec §6 第 3 行已按裁定同步（拖拽中收起→释放仍提交，commit 见 git log）。SDD 执行完毕：5 任务×（实现+审查）双循环 + Task 6 控制器三门禁 + 终审单轮；测试终态 renderer 937 全绿、typecheck 双 clean。后续可选 chore 清单（终审建议 #2）: clampWidth 单点导出 / VIEW_LABELS 收窄移居 ui.store / ViewSidebar.tsx:19 注释 VIEW_META→VIEW_LABELS / 两新文件 EOF 换行 / Sidebar 测试标题 350→310。
+
+反馈修订（2026-09-07）: 收起状态按视图独立（toggleSidebar(view) 签名 + 旧 boolean 同值迁移 + MainLayout Ctrl+B guard）+ 移除拖拽角标。TDD：RED 7 fail → GREEN 6文件59用例 → 全套 104文件942全绿 + typecheck clean。3 commits（feat/refactor/docs）。顺手闭环两项终审遗留：测试标题 350→310 笔误、ActivityBar guard 负分支直测。
+=== 新计划启动: docs/plans/2026-09-07-task-execution-runtime.md（分支 feat/task-execution-runtime, base 2a8fd62）===
+Task 1: complete (commits 2a8fd62..e15032e, review clean; Minor×4 归档: 报告SET计数笔误/insertTask hunk截断/swap-clear路径未测/admission索引未行使[后续任务消费])
+Task 2: complete (commits e15032e..41ceece, review clean; Minor×4 归档: weekly分支DST毫秒运算[brief继承]/every:N无上界/cancelled与spawn级非法规则未直测/测试未用import)
+Task 3: complete (commits 41ceece..883562b 含审查修复, review clean after re-review; brief seed 按DDL修正[def1+def2 拆分为 v25 唯一索引强制]/listSessionMembers 替换已验证; Minor×3 归档: 报告断言强于实况/EOF换行/targetTeamId! 断言)
+Task 4: complete (commits 883562b..9b3b9fa 含审查修复, review clean after re-review; 裁定记录: spec §4.4「状态机零改动」与 §5.1/§9「转 failed」内部冲突——按算法节裁定新增 assigned→failed 边[f1405a2 独立提交+RED→GREEN 锁], T11 需同步 spec §4.4 措辞; Minor×3 归档: kickoff失败留孤儿会话[brief继承]/notify合并窗口/兜底timer未unref)
+Task 5: complete (commits 9b3b9fa..e7a33a6, review clean; require 环逐跳验证 call-time 安全; brief 方法名漂移 finalizeActiveTask→transitionTaskTerminal 已按结构描述落位; Minor×4 归档: spawn/notify 共 try 块/生产 kickoff wrapper 未被测试调[留主机冒烟]/scanPickup 恒 true/notify 吸收窗口)
+Task 6: complete (commits e7a33a6..8415328, review clean; kickoff 自引用回路验证 inert; Minor×4 归档: session-service.test:392 fixture 突变[建议加注释或双锁]/冲突弹窗vs放行竞态[spec 属地,建议 conflict-resolver 容忍度测试]/activation 绕过即时 p2p 广播[45s 兜底有界]/无 workspace 域校验[spec owner 裁定])
+Task 7: complete (commits 8415328..1f6d93f, review clean; 超范围两处均正当[execute()解析第四触点+3 fixture 纯 null 补齐]; Minor×3 归档: CreateTaskInput 风格不一[|null]/互斥 trigger 未被 IPC 测试锁[T1 已锁]/测试传 creatorUserId 冗余)
+Task 8: complete (commits 1f6d93f..835be2c 含审查修复, review clean after re-review; 裁定: 计划 verbatim 的 ASC+LIMIT 截断方向缺陷按意图修复[新增 created_at_desc, 旧语义回归锁]; Minor×1 归档: TaskBoardView 头注释 assigned 计数表述过度)
+Task 9: complete (commits 835be2c..7f0e085, review clean; 双端 recurrence 契约逐字节验证对齐; Minor×2 归档: 排队徽标无负向用例/humanize 不校验时间范围[展示透传])
+Task 10: complete (commits 7f0e085..a81ee2f, review clean; Minor×4 归档: 新 promise 无 catch×3 处/teams·sessions 重开不清空/间隔 Input 缺 min=1[负数可过,序列化 every:-5m→electron 侧拒→链静默停]/mock shape 子集无编译期约束)
+Task 11: complete (控制器亲验: typecheck 双 clean + electron 179文件/1496 + renderer 106文件/954 全绿; spec §12 七条验收对照通过; spec D3 修订已提交 docs commit)
+全部 11 Task 完成——进入终审（whole-branch, 2a8fd62..HEAD）
+终审: APPROVED（Ready to merge: Yes）。终审发现 C1 定时管线断链/I1 kickoff 副作用链/I2 mention 错路由已由单修复批收口（37eb698..24bf003, 4 commits）并复审全部 RESOLVED；spec §4.4/§5.3/§5.4 修订已回写。最终验证: typecheck 双 clean + electron 180文件/1507 + renderer 106文件/956 全绿。归档 Minor 32 条全部 SHIP-AS-IS 裁定（1 条升格并入 I1 已修）。macOS 主机冒烟清单: plan Task 11 三条 + 「定时循环任务到点自动 kickoff」为 C1 端到端验收。SDD 执行完毕: 11 任务×（实现+审查）双循环 + T4/T8 终审修复批 + 终审单轮。
+bugfix（2026-09-07 主机报告）: #T 激活双驱动——用户正文路由 + executor kickoff 各驱动一轮 agent（导出证据：两轮执行竞速 complete_task，一轮报 completed→completed）。RED 复现（activation-duplicate.test 用例1: kickoff 被调1次）→ 修复：并发有余就地 startTask 无 kickoff / 满槽入队照旧 → 全绿 electron 181文件1509 + renderer 956 + typecheck 双 clean。顺修 C1 批引入的 Date.now flaky 断言。spec §6 已回写。遗留问询：「两个会话」中第二个的确切名称待用户确认（activation 路径已由回归锁保证零新建会话）。
+
+bugfix (2026-09-07 主机报告): 双 bug 一并修复（commit f33a252）。
+Bug 1: create_task FK 违约——LLM 把环境上下文 workspaceId/creatorUserId 当作工具必填参数自由填（实际填 "ws_default"/"user_pm"），而 task-tools 的 execute 丢弃了 ctx 字段。修复：ToolContext + RuntimeContext 加 creatorUserId（buildRuntimeContext 从 workspaces.owner_id 注入）；create_task/list_tasks schema 移除 workspaceId/creatorUserId required，execute 强制用 ctx 忽略 args 同名键。RED 测试 task-tools-context.test.ts（5 用例：FK 错复现 + schema not required + LLM 胡填被忽略 + 跨 ws 信息泄漏防护）→ GREEN。
+Bug 2: TaskSidebarPanel 「全部状态」只显示 5 活跃态（v2.3 「防历史淹没」设计意图，与用户期望冲突）——改为全 8 态不过滤，历史由 task.store.load 的 orderBy created_at_desc + limit 500 截断保障。修改测试锁定新语义。
+全绿：typecheck 双 clean · electron 182 文件 1514（净增 5 个回归锁）+ renderer 106 文件 956。
+
+bugfix (2026-09-07 主机报告严重 bug, commit e9d456f): 快速会话中主 agent dispatch 非会话成员子 agent。
+根因：buildDispatchSnapshot 实例级快照（该实例所有 leader 会话并集，spawn 定型）→ agent 曾是任何多成员会话 leader 即带着 dispatch 工具；executeDispatch 无当前会话校验。
+修复：executeDispatch 入口三条件校验（当前会话有效成员>1 / 自己 leader / 目标在当前会话成员中），违者 throw → LLM 工具错误，不发事件。5 个既有 dispatch 测试文件补真实 DB seed（agent_definitions→workspace_agent_members→session_members FK 链）。回归锁 dispatch-session-boundary.test.ts 5 用例 RED→GREEN。spec §8 测试策略回写执行时边界语义。
+全绿：typecheck 双 clean · electron 183 文件 1519 · renderer 106 文件 956。
+
+bugfix 二段 (2026-09-07 主机报告, commit 284a6d9): dispatch 暴露面——执行时拒绝已生效但快速会话工具/教学 prompt 仍暴露（agent 先 brag 再被拒）。
+修复：runChatLoop 每轮按 roomId 调 getSessionDispatchScope（dispatch-wait 抽出，assertSessionDispatchAllowed 复用同源）：不满足会话边界 → dispatch:* 工具与「任务拆分指南」不注入；满足 → 只暴露会话内成员。查询失败保守 null。回归锁 dispatch-visibility.test.ts 3 用例 RED→GREEN。runtime-stream/runtime-task-driven 补文件级 DB 兜底 hook。
+全绿：typecheck 双 clean · electron 184 文件 1522 · renderer 956。spec §8 已回写二段语义。

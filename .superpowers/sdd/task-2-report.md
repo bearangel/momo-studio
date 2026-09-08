@@ -1,84 +1,114 @@
-# Task 2 Report: runChatLoop 工具循环三段式重构（绿阶段）
+# Task 2 Report: recurrence 规则模块
 
-**Status: DONE**
-**Commit: d8b6c7e `feat(agent): dispatch 同轮并发执行——chat loop 连续段并发 / 预算预扣均分 / 回填保序`**
-**改动文件：仅 `electron/src/main/agent/runtime-entry.ts`（+167 / −58）**
+**Status: DONE_WITH_CONCERNS** | Commit: `41ceece` `feat: 循环任务规则模块——nextRun 纯函数 + 完成后自复制续期`
 
-## GREEN Evidence
+## 交付物
 
-### Step 5 — 新测试（brief 验收标准）
+| 文件 | 变更 |
+|---|---|
+| `electron/src/main/task/recurrence.ts` | 新增 89 行：`nextRun(from, rule): number \| null` 纯函数 + `spawnNextInstanceIfRecurring(taskId): void`。三种规则编码（every:Nm\|Nh\|Nd / daily@HH:mm / weekly@D,HH:mm），非法规则 null（spec D5），spawn 端静默跳过不抛错 |
+| `electron/tests/task/recurrence.test.ts` | 新增 9 用例：6 个 nextRun 正常值（every / daily 当天+次日 / weekly 同周+跨周）/ 1 个非法规则 4 子项 / 2 个 spawn（completed→pending 续期、failed/无规则 不生成） |
 
-```
-$ cd electron && npx pnpm@9.0.0 vitest run tests/agent/dispatch-parallel.test.ts
- ✓ tests/agent/dispatch-parallel.test.ts  (8 tests) 218ms
- Test Files  1 passed (1)
-      Tests  8 passed (8)
-```
+## 与 brief 的偏离
 
-Task 1 的 4 红（B 派发先于 A 回执 / 双 chip 同现 / D3 均分 3-3 / 预算截断）全部转绿，4 绿基线用例保持绿 → 8/8。
+**唯一偏离：brief 第 21/28/38 行 6 处 `parseInt(ev[1], 10)` → `parseInt(ev[1] ?? '', 10)`**
 
-### Step 6 — 6 套件零回归
+- 原因：项目根 `tsconfig.base.json` 启用 `noUncheckedIndexedAccess`，正则捕获 `ev[1]` 类型为 `string | undefined`，verbatim 代码 `tsc --noEmit` 报 6 处 TS2345
+- 等价性：正则匹配后捕获组必存在（`?? ''` 永不触发），运行行为与 brief 完全一致；与现有 `lsp-tools.ts:433` `parseInt(m[1] ?? '0', 10)` 模式对齐
+- 注释：保留 1 行中文注释解释该 workaround，对齐 `loader.ts:25` / `web-tools.ts:114` 既有的 `noUncheckedIndexedAccess` 注释惯例
+- 验证：`tsc --noEmit -p .` 整个 electron workspace 通过（exit 0）
 
-```
-$ cd electron && npx pnpm@9.0.0 vitest run tests/agent/runtime-stream.test.ts tests/agent/runtime-segment.test.ts \
-    tests/agent/runtime-entry-routing.test.ts tests/agent/dispatch-fresh-session.test.ts \
-    tests/agent/dispatch-wait.test.ts tests/agent/runtime-task-driven.test.ts
- ✓ dispatch-wait.test.ts            (3 tests)
- ✓ runtime-segment.test.ts          (2 tests)
- ✓ dispatch-fresh-session.test.ts   (4 tests)
- ✓ runtime-entry-routing.test.ts    (5 tests)   [stderr「runTaskChatLoop 异常」为错误路径用例预期输出]
- ✓ runtime-task-driven.test.ts     (20 tests)
- ✓ runtime-stream.test.ts          (19 tests)
- Test Files  6 passed (6) / Tests 53 passed (53)
-```
+## TDD 闭环
 
-runtime-stream（含单 dispatch 路径 = 段长 1 回归 / abort / 预算 / 分段）全部通过。
-
-### Step 7 — typecheck 双 clean
-
-```
-$ npx pnpm@9.0.0 typecheck
-electron typecheck: Done
-renderer typecheck: Done
-```
-
-lsp_diagnostics（runtime-entry.ts，error 级）：0 错误。
-
-## 实施摘要（对照 brief 四步）
-
-1. **Step 1**：`execDispatchCall` 闭包插入 `runChatLoop` 内、`MAX_DUPLICATE_TOOLS` 声明之后 / `for (let round…)` 之前（在 brief 指定的「sendEndChunk 定义之后、for 之前」窗口内，紧邻使用点）。逐字采用 brief 代码。
-2. **Step 2**：`for (const tc of toolCalls)` → 游标 `while (ti < toolCalls.length)` + `const tc = toolCalls[ti]!`；重复检测块与预算耗尽块逐字未动（两者内部 `return` 语义在 while 中不变）。
-3. **Step 3**：task_complete 1 处 + compact 2 处 `continue;` → `ti++; continue;`（brief 逐字写法，单行）；其余逻辑（分段持久化 / 消息 push / `toolCallCount++` / `budgetRemaining--`）逐字保留。
-4. **Step 4**：原 `isDispatch` 分支 + 串行路径整段删除，替换为「段扫描（重复/预算截断）→ 段预扣 K → D3 均分 subBudget → Promise.allSettled 并发 → 中断统一退出 → 保序回填 + 回执追扣 → 段内截断退出 → `ti = segEnd`」+ 非 dispatch 串行路径（`ti++` 收尾）。逐字采用 brief 代码。
-
-行号锚点核验：brief 行号（:315/:409/:437-499/:504-564/:566-659/:660）与文件实际内容全部按内容匹配命中，无锚点漂移。
-
-## 不变量自查（①-④）
-
-| # | 不变量 | 自查结论 |
+| Step | 命令 | 结果 |
 |---|---|---|
-| ① | 消息回填按原 toolCalls 顺序 | ✅ 段回填 `for (idx = 0; idx < seg.length; idx++)` 按 `seg = toolCalls.slice(ti, segEnd)` 原序 push，`toolCallId: seg[idx]!.id`，不按完成顺序；串行路径单件原位。测试「回填按原 toolCalls 顺序（B 先完成仍排 A 后）」+「混排 cA/cR/cB」双绿锁定 |
-| ② | 中断统一退出、不回填 tool result | ✅ `execDispatchCall` catch 中 AbortError/已 abort → 原样 rethrow（不发 tool_result chip）；段边界 `signal.aborted \|\| settled.some(rejected)` → `process.off` + end(interrupted) + `stats.aborted=true` + return，位于回填循环**之前**。测试「并发批次中断」绿：cA/cB 均无 tool_result、end(interrupted)、返回 '(中断)' |
-| ③ | 段长 1 时 sub-budget 与串行逐位一致 | ✅ 串行公式 `budgetRemaining === Infinity ? -1 : max(0, budgetRemaining - 1)`；新公式段长 1 时 = `budgetBeforeSegment === Infinity ? -1 : max(0, budgetBeforeSegment - 1)`，`budgetBeforeSegment` 即预检后预算（预检已保证 ≥ 1），逐位一致；段预扣 `-= seg.length`（=1）对应串行 `--`。runtime-stream 19 用例（含单 dispatch 预算链）零回归 |
-| ④ | 被截断成员不发 tool_call chip | ✅ chip 只在 `execDispatchCall` 同步段发送，调用范围 = `seg`（slice 到 segEnd）；扫描循环只做签名/预算预检不执行。测试「预算不足截断」绿：`idxOfChunk('tool_call','cB') === -1`、仅 1 个派发事件、end(budget_exhausted) |
+| 1 | 写 `recurrence.test.ts`（9 用例，逐字 brief） | 文件落盘 |
+| 2 | `cd electron && ./node_modules/.bin/vitest run tests/task/recurrence.test.ts` | **RED** — `Failed to load url ../../src/main/task/recurrence ... Does the file exist?`，模块未创建，0/9 收集即失败 |
+| 3 | 写 `recurrence.ts`（verbatim + `?? ''` strict 兜底） | 文件落盘 |
+| 4 | 同上 vitest 命令 | **GREEN** — `Test Files 1 passed (1) / Tests 9 passed (9)`，迁移 v29 自动应用 |
+| 4b | `./node_modules/.bin/vitest run tests/task/target-columns.test.ts` | **GREEN** — 3/3 passed（Task 1 无回归） |
+| 4c | `./node_modules/.bin/tsc --noEmit -p .` | **GREEN** — exit 0，整个 workspace 无 TS 错误 |
+| 5 | `git add ... && git commit -m "feat: ..."` | `41ceece` |
 
-## 边界自查
+## TDD Evidence
 
-- **空 toolCalls**：`finishReason === 'stop' || toolCalls.length === 0` 提前 return，不进 while。
-- **budget Infinity（-1）**：段预扣跳过（`!== Infinity` 守卫）；subBudget = -1（无限），与串行一致。
-- **budget 0**：顶部逐位预检 `budgetRemaining <= 0` → budget_exhausted return（原样保留），不进段逻辑。
-- **重复窗口语义**：成员 1 签名由顶部预检 push，成员 2..K 由段扫描按原顺序 push——窗口内容与串行逐位等价；差异仅在「段内预检先于任何执行」（spec §4.3 设计如此，测试「3 相同 dispatch 执行 2 个后终止」绿）。
-- **非 abort 错误**：execDispatchCall 内转 `工具执行失败: …` 字符串 → allSettled fulfilled → 回填为 tool 消息（LLM 可见自行纠正），与串行语义一致；subStatus 按「超时」关键词分 timeout/failed。
-- **`settled[idx] as PromiseFulfilledResult<string>`**：上方 rejected 守卫保证安全；非 `any`、无 `@ts-ignore`，strict + ESLint no-explicit-any 合规。
+### RED（Step 2，模块未创建）
 
-## 契约与范围自查
+```
+ RUN  v1.6.1 /workspace/electron
 
-- 契约零改动：未触碰 StreamChunk / DispatchContent / dispatch-wait.ts / router-service / preload / renderer（commit 仅 1 文件）。
-- `subStreamSessionId` 仍由 PM 侧 randomUUID 预生成后经 executeTool 透传（P0-7 查找键语义不变），dispatch 路由目标仍用当前 `roomId`（P0-8 语义不变）。
-- 测试保真（momo-test-rules）：未改测试文件；其驱动方式（真实 handleTaskReply / 真实 executeDispatch / 真实 randomUUID subStreamSessionId）不受本次重构影响。
+ ❯ tests/task/recurrence.test.ts  (0 test)
 
-## Concerns（非阻塞）
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
 
-1. `ti++; continue;` 为 brief 逐字单行写法（两条语句一行）；tsc/vitest 均无异议，本任务验证步骤不含 ESLint，如后续 lint 有 single-statement-per-line 偏好可格式化为两行（纯格式，零语义）。
-2. 段边界中断判定含 `abortController.signal.aborted`（即使全部成员 fulfilled）：abort 落在最后一个 settle 之后、检查之前时，新实现立即 interrupted 退出，而旧串行会等下一轮 LLM 调用才 AbortError——更严格的中断观察，属 brief 逐字设计（§6.1），非回归。
-3. 段内截断退出时 `recentToolCallSignatures` 已含被截成员签名（预检 push）——若未来支持「截断后继续而非退出」需回滚窗口；当前两条截断路径均直接 return 退出 chat loop，无影响。
+ FAIL  tests/task/recurrence.test.ts [ tests/task/recurrence.test.ts ]
+Error: Failed to load url ../../src/main/task/recurrence (resolved id: ../../src/main/task/recurrence) in /workspace/electron/tests/task/recurrence.test.ts. Does the file exist?
+ ❯ loadAndTransform ...
+
+ Test Files  1 failed (1)
+      Tests  no tests
+```
+
+理由符合 brief 预期：模块不存在 → 测试无法加载（vitest 把整个 file 标 fail，0 个 test 收集）。
+
+### RED（verbatim 模块，strict 兜底前）
+
+```
+src/main/task/recurrence.ts(21,24): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+src/main/task/recurrence.ts(28,24): error TS2345: ...
+src/main/task/recurrence.ts(29,25): error TS2345: ...
+src/main/task/recurrence.ts(38,25): error TS2345: ...
+src/main/task/recurrence.ts(39,24): error TS2345: ...
+src/main/task/recurrence.ts(40,25): error TS2345: ...
+```
+
+6 处全部是 `noUncheckedIndexedAccess` 下 RegExpMatchArray 索引的 `string | undefined`。
+
+### GREEN（Step 4）
+
+```
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Duration  597ms
+```
+
+9 个用例：every:30m / every:2h+1d / daily 当天 / daily 次日 / weekly 同周 + 跨周 / weekly 跳日 / 非法 4 子项 / completed+rule spawn / failed+无规则 不 spawn。
+
+## 自评
+
+**完整性：** brief 列出 2 个文件 + 2 个函数 + 3 种规则编码 + 9 个测试用例，全部交付；无遗漏字段（recurrenceParentId / targetTeamId / targetSessionId / recurrenceRule 全部透传）；deadline 不复制（spec §7.2）。
+
+**质量：**
+- `nextRun` 是真正纯函数（无副作用、无 DB 访问、无 logger 调用），可在 scheduler / IPC handler / 测试中任意调用
+- `spawnNextInstanceIfRecurring` 防御链清晰：null task / 无规则 / 非 completed → 静默 return；nextRun null → warn 日志 + return；合法 → insertTask + info 日志 + fire-and-forget 广播
+- `void broadcastLocalTaskSnapshot()` 严格 fire-and-forget（return Promise<void>，调用方不 await）；deps 未装配（P2P 未启用）时静默 no-op（task-broadcast.ts:64 `if (!deps) return`）
+
+**纪律：**
+- 注释全部中文（brief 要求 + AGENTS.md 要求）
+- 无 any / @ts-ignore / 魔术数字
+- TS strict + noUncheckedIndexedAccess 全绿
+- 单测 colocated 到 `electron/tests/task/`（vitest include 规则对齐 AGENTS.md）
+
+**测试保真度（momo-test-rules 5 铁律核查）：**
+1. Mock 仿真真实运行时语义：✅ 无 mock（业务逻辑全部真实实现：DB 真实 + insertTask 真实 + nextRun 真实），只走真 sqlite + 真 repo
+2. 断言生产消费的字段：✅ id (T-001) / recurrenceParentId / recurrenceRule / assigneeAgentId / scheduledAt / title / deadlineAt 全部断言真实值
+3. 错误路径与空输入专项用例：✅ 非法规则 4 子项（cron / every:0m / daily@25:00 / 空串）；failed / 无规则 双路径；非法不 spawn
+4. 跨模块契约：✅ spawn 直接消费 listTasks 真实产出（不经手写构造的中间数据）；nextRun 用 `new Date(...).getTime()` 固定输入
+5. Mock 收窄：✅ 不 mock IPC / DB / fetch；broadcastLocalTaskSnapshot 真实函数调用，deps 为 null → 静默 return
+
+**时间注入防 flaky：** 所有 nextRun 测试用 `new Date(2026, 8, 7, 8, 30).getTime()` 固定输入（spec §7 时间逻辑纯函数，不依赖真实时钟）；spawn 测试中 `now = Date.now()` 一次性快照，`scheduledAt = now + 30*60_000` 同步断言，无 sleep / 无 setTimeout，无跨时钟边界。
+
+## Concerns
+
+1. **brief verbatim 与 strict TS 的张力**：brief 的 6 处 `parseInt(ev[1], 10)` 是「为测试用例写」的简洁形态，但 `noUncheckedIndexedAccess` 下必加兜底。我选择最小改动 `?? ''`（等价 + 与 `lsp-tools.ts` 既成模式对齐）+ 1 行注释（对齐 `loader.ts:25` 既成注释惯例），保留 brief 的全部语义不变。若任务评审坚持 verbatim，可改用 `const [, n, unit] = ev` 解构 + `if (!n || !unit) return null` 显式判空（更繁琐但更「显式」）。
+2. **brief 测试文件未使用 `getTask` 导入**：保留 verbatim 导入以匹配 brief（lsp 报 hint TS6133，非 error），调用方仍可通过 `getTask` 在后续任务中复用。
+3. **`every:Nm|Nh|Nd` 未限制 N 的上界**：brief 正则 `(\d+)` 不限位数，parseInt 后 `n * unitMs` 在 `every:999999999d` 等极端值下会溢出 JS number 上界（≈9e15 ms ≈ 285000 年）。当前业务场景（spec §7 短间隔续期）下不会触发；后续若要硬化，加 `if (n > 100_000) return null` 一行即可。
+4. **vitest 同时跑两个 test 文件偶发 segfault**：连跑 `recurrence.test.ts + target-columns.test.ts` 在本次环境出现 native binding segfault（exit 139），分单跑均 GREEN；属 better-sqlite3 多进程 fd 关闭的预存问题（与本任务无关，AGENTS.md 常见陷阱节已有同类警告）。未作为本任务回归项处理。
+
+## 后续任务前置条件（已就位）
+
+- Task 3-11 调 `spawnNextInstanceIfRecurring` 的单点路径：
+  - `electron/src/main/agent/agent-runner.ts` 的 task-end handler
+  - `electron/src/main/task/ipc.handlers.ts` 的 completeTask
+  - 调度器自动升级 pending→assigned 时不会触发（仅 completed 终态续期，符合 spec §7.2）
+- broadcastLocalTaskSnapshot 已接好（deps 未装配 → 静默 no-op，P2P 模块 init 后自动装配）

@@ -1,100 +1,69 @@
-# Task 5 Report: 内部事件桥——runtime-entry 的 dispatch/task_reply 脱离 Matrix 传输
+# Task 5 Report — 运行时接线（runtime-init 装配 + 写通道埋点 + 终态钩子）
 
-## 1. Status
+**Status**: DONE
+**Branch**: feat/task-execution-runtime
+**Commit**: `e7a33a6` — `feat: 执行运行时接线——boot 装配 + task/settings 写通道埋点 + 终态续期钩子`
 
-**DONE**
+## 1. 实现概览
 
-## 2. Commit
+按 brief 五步严格执行 TDD。Task 4 交付的 `taskExecutor`（队列放行）与 Task 2 的 `spawnNextInstanceIfRecurring`（循环续期）在本任务完成全线接线：boot 装配（runtime-init）、task/settings 全部写通道埋点（notifyExecutor）、agent 终态转换钩子（续期 + 释放槽位）。
 
-```
-19f7903 feat(agent): 内部事件桥——dispatch/task_reply 脱离 Matrix 传输
-```
-
-10 files changed, +473 / −130（仅含本任务文件；仓库内预存的 `.superpowers/sdd/task-*-report.md` 修改与未跟踪 `docs/2026-08-14-system-feature-inventory.md` 未纳入提交）。
-
-## 3. 变更清单
-
-### 新增
-
-| 文件 | 内容 |
-|---|---|
-| `electron/src/main/agent/internal-event.ts` | 子进程侧协议：`INTERNAL_EVENT_MSG`（'momo-internal-event'）+ `InternalEventMsg` 信封 + `sendInternalEvent`（`process.send?.()`）+ 便捷构造器 `sendDispatchEvent` / `sendTaskReplyEvent` / `sendAbortDispatchEvent`（eventType 分别绑定 dispatch.ts 三个常量） |
-| `electron/src/main/agent/internal-event-bridge.ts` | 主进程侧桥：`setBridgeRouter(svc \| null)` 注入 RouterService；`handleChildMessage(msg)` 识别内部事件 → 构造 InternalEvent 形状（getType/getContent/getSender/getRoomId 四个闭包访问器）→ `routeEvent(event, 'owner', null)` fire-and-forget（带 `.catch` 兜底防 unhandled rejection）。RouterService 未注入时 warn + 返回 true（消费丢弃）；非内部事件返回 false |
-
-### 修改
+**逐文件变更**：
 
 | 文件 | 变更 |
 |---|---|
-| `runtime-entry.ts` | ① `main()` 重构：task-driven 分支**不再创建 Matrix client**（无 createClient/startClient/waitForPrepared/joinRoom/MyMembership 监听），只 build ctx + 注册 task-config/shutdown listener；v1 fallback 分支整段保留原 client 用法（标注 Task 13 删除边界）。② `runTaskChatLoop(cfg, config, ctx)` 去掉 client 参数，内部传 `null` 给 runChatLoop。③ `runChatLoop` / `executeTool` / `doExecuteTool` / `executeDispatch` 的 client 参数放宽为 `MatrixClient \| null`。④ `executeDispatch` 发送分流：client 非空 → 原 Matrix sendEvent（v1 行为不变）；null → `sendDispatchEvent(teamRoomId, config.botUserId, {...dispatch.content})`（展开满足 Record 索引签名）。abort 同理走 `sendAbortDispatchEvent`。⑤ `sendFinalMessage` client 为 null 时 early return（task-driven 最终消息不发 Matrix——SQLite 由 chunk 路径 routeChunkToBuffer 承载，spec §4.1 ③）；task_complete 分段 sendEvent 包进 `if (client)`。⑥ v1-only 的 `handleEvent` / `handleDispatch`（含其 task_reply Matrix 发送）完全未动 |
-| `runtime-spawner.ts` | messageHandler 首行前置 `if (handleChildMessage(msg)) return;`——内部事件优先转桥，已消费不进 chunk 通道 |
-| `router-bootstrap.ts` | `ensureRouterService` 末尾 `setRouterService(currentRouterService)` → `setBridgeRouter(currentRouterService)`；`destroyRouterService` → `setBridgeRouter(null)`；删除 sync-manager import。**sync-manager 侧 `setRouterService` 导出保留**（Task 12 删除），router-bootstrap 不再调用它 |
-| `init-runtime.ts` | 仅注释更新（注入目标说明 + 循环依赖描述修正） |
+| `electron/src/main/task/runtime-init.ts` | 按 brief verbatim 重写：`InitTaskRuntimeOpts` 增 `kickoff?` / `getGlobalMax?`；`initTaskRuntime` 同时装配 TaskScheduler（scanPickup 从 no-op 改为 `taskExecutor.notify(); return true`）+ TaskExecutor（kickoff 缺省包装 `sendUserMessage`，依赖注入点在本文件——唯一允许同时 import executor 与 session-service 的 wiring 层）；boot 时 `taskExecutor.notify()` 立即评估 assigned 池。导出名 `initTaskRuntime` / `stopTaskRuntime` 与幂等语义保持 |
+| `electron/src/main/task/ipc.handlers.ts` | import `notifyExecutor`；4 处 `void broadcastLocalTaskSnapshot();` 后各加一行 `notifyExecutor();`（create L80 / transition L119 / cancel L127 / start L139）；头注释补 Task 5 埋点说明 |
+| `electron/src/main/settings/ipc.handlers.ts` | import `notifyExecutor`（`../task/executor`）；`settings:updateGlobal` 中 `updateGlobalSettings(patch)` 后加 `hasOwnProperty(patch, 'maxConcurrentTasks')` 门控的 `notifyExecutor()` |
+| `electron/src/main/agent/agent-runner.ts` | import recurrence + executor；`transitionTaskTerminal`（即 brief 所指 finalize 链的 transition try 块，L309-314）在 `transitionTaskStatus` 成功后加 `if (to === 'completed') spawnNextInstanceIfRecurring(taskId); notifyExecutor();`；`failTaskOnCrash`（L377）在 transition 后 try 内加 `notifyExecutor()` |
+| `electron/src/main/agent/tools/task-tools.ts` | import 同上；`completeTask` 加 `spawnNextInstanceIfRecurring(taskId); notifyExecutor();`；`failTask` 加 `notifyExecutor()` |
+| `electron/tests/task/runtime-init.test.ts` | 重写（见 §2） |
 
-### 测试适配（场景覆盖全部保留）
+## 2. TDD 证据
 
-| 文件 | 变更 |
-|---|---|
-| `tests/agent/router-bootstrap.test.ts` | mock 目标 sync-manager → internal-event-bridge；5 个场景断言 `setBridgeRouter`（首次启动传 RouterService 实例 / 幂等 1 次 / 空 runners no-op / destroy 传 null / destroy no-op） |
-| `tests/integration/router-lazy-init.test.ts` | 同上——vi.hoisted mock 换到 internal-event-bridge 的 `setBridgeRouter`；3 个场景（initTaskDrivenRuntime 批量恢复 / startAgentRuntime 单启动 / 2 agents 幂等 1 次）断言不变 |
-| `tests/agent/runtime-task-driven.test.ts` | 适配新签名：8 处调用去掉 `mockClient()` 参数，删除 mockClient helper 与 MatrixClient import；场景全部保留 |
+**Step 1 — 测试先行**：既有 runtime-init.test.ts 是模块级 mock `storage/db` 的骨架测试（无 DB seed）。按 brief 指引「若无 DB seed 则按 Task 4 测试的 beforeEach 模式补」，整体切换为 executor.test.ts 的真实 DB 模式（tmpdir + `AP_USER_DATA_DIR` + `runMigrations` + ws1 seed），保留全部 4 个既有用例原语义。新增 brief 用例「initTaskRuntime 后 executor 在位：assigned 任务在 boot 即被放行」，两处必要适配：
 
-## 4. TDD 记录
+- **seed DDL 修正**（task 指示明确要求）：brief 片段的 `created_at/updated_at` / `added_at` 列不存在——按现行 DDL 补 NOT NULL 列（`agent_definitions` 要 version/system_prompt/model_name；`workspace_agent_members` 要 agent_user_id），与 executor.test.ts 的 `seedAgentMember` 同款
+- **kickoff 注入函数加 `async`**：brief 片段 `(input) => { kickoffs.push(input); }` 返回 void，不满足 `ExecutorDeps['sendKickoff']: (...) => Promise<void>` 的 strict 类型；`async (input) => {...}` 语义等价且 typecheck clean
+- 新用例开头 `vi.useRealTimers()`：describe 的 beforeEach 开了 fake timers，而 `vi.waitFor` 轮询与 executor 100ms notify 去抖需要真实时钟
 
-- **RED**：先写 `tests/agent/internal-event-bridge.test.ts`（9 用例），运行失败——`Failed to load url ../../src/main/agent/internal-event-bridge`（模块不存在，预期失败原因）。
-- **GREEN**：实现两模块后单跑 9/9 通过。
+**mock 收窄**（momo-test-rules）：只 mock 进程/网络边界——`vi.mock('electron')`（import 图经 executor → starter → agent 域触达 stream-relay 的运行时 electron import，形状沿用 stream-relay.test.ts 惯例）+ `vi.mock('../../src/main/p2p')`（session-service → p2p 网络栈，沿用 session-service.test.ts 惯例）。scheduler 走的 `p2p/task-broadcast` 叶子模块不受影响。
 
-新增测试覆盖：
-1. dispatch 内部事件 → routeEvent 以正确 InternalEvent 形状调用（type/content/sender/roomId + 'owner' + null）
-2. task_reply / abort_dispatch eventType 透传
-3. StreamChunk / task-end / null / 字符串 / 数字 / 缺 eventType → false 不消费
-4. RouterService 未注入 → true + 不抛错
-5. routeEvent reject → 无 unhandled rejection
-6. sendDispatchEvent / sendTaskReplyEvent / sendAbortDispatchEvent → process.send 信封契约（type/eventType/sessionId/sender/content）
-7. process.send 缺失（非 fork）→ 不抛错
-
-## 5. 验证输出
-
-### 聚焦测试
-
+**Step 2 — RED**：
 ```
-tests/agent/internal-event-bridge.test.ts   9 passed
-tests/agent/router-bootstrap.test.ts        5 passed（适配后）
-tests/integration/router-lazy-init.test.ts  3 passed（适配后）
-tests/agent/runtime-spawner.test.ts         2 passed
-tests/agent/runtime-task-driven.test.ts     9 passed（签名适配后）
-tests/agent/dispatch-fresh-session.test.ts  4 passed（未改——仍以 client 调 runChatLoop，v1 路径）
-tests/agent/runtime-stream.test.ts         22 passed（未改——断言 Matrix sendEvent 的 dispatch 场景走 client 非 null 分支）
-tests/agent/runtime-segment.test.ts         5 passed
-tests/integration/task-driven-dispatch-chain.test.ts 5 passed（未改）
-tests/agent/abort-dispatch.test.ts + runtime-entry-routing.test.ts + dispatch.test.ts 14 passed
+❯ tests/task/runtime-init.test.ts (5 tests | 1 failed)
+   → expected 'assigned' to be 'in_progress'
+   ❯ await vi.waitFor(() => expect(getTask('T-001')!.status).toBe('in_progress'))
+Tests  1 failed | 4 passed (5)
 ```
+失败原因正确：`initTaskRuntime` 尚无 kickoff 入参、executor 未装配——boot 无放行。既有 4 用例在新 DB 模式下仍绿（重构未破坏）。
 
-### 全量门禁
-
+**Step 3 — 实现后 GREEN**：
 ```
-typecheck（root，双 workspace）：electron Done / renderer Done
-electron 全套：Test Files 139 passed (139) / Tests 919 passed (919)
-renderer 全套：Test Files 50 passed (50) / Tests 407 passed (407)
-lsp_diagnostics（5 个改动源文件）：zero errors
+✓ tests/task/runtime-init.test.ts (5 tests) 290ms
+stdout: executor 已放行任务 { taskId: 'T-001', executionSessionId: '631d907a-...' }
 ```
+日志证明放行走了真实 executor → startTask → 注入 kickoff 全链。
 
-## 6. 设计决策与理由
+## 3. 验证结果
 
-1. **共享函数按 client 是否为 null 分流，而不是无条件替换 sendEvent**：`runChatLoop → executeTool → doExecuteTool → executeDispatch` 链路被 v1（taskDriven=false）与 task-driven 两模式共享，而 v1 子进程由 runtime-manager 自己 fork + message handler 管理（不走 runtime-spawner，未接桥）。无条件替换会静默打断 v1 dispatch。因此 task-driven 传 null 走内部事件桥、v1 传真实 client 保持 Matrix 传输——精确满足"v1 分支不动、task-driven 脱离 Matrix"。v1 分支（main() else 段 + handleEvent + handleDispatch）零改动，Task 13 整体删除。
-2. **sender 字段用 `config.botUserId`**：Task 2 后 RuntimeConfig 仍为 `botUserId`（parseConfig 确认）；代码注释标注 Task 10 更名 agentUserId 后同步替换。RouterService 当前路由不消费 getSender()（dispatch 按 content.dispatch_to 反查、task_reply 按 content.reply_to），sender 为信息性字段。
-3. **bridge 的 routeEvent 加 `.catch` 兜底**：RouterService.routeEvent 内部已 try/catch，但 IPC handler 内 fire-and-forget 若遇极端 reject 会成 unhandled rejection——加 catch + logger.error 更稳（brief 代码按仓库实际微调）。
-4. **m.room.message 最终/分段发送在 task-driven 下直接跳过而非删除代码**：sendFinalMessage 顶部 `if (!client) return`、分段 send 包 `if (client)`——效果等同"删除 task-driven 完成路径的 Matrix 发送"，同时 v1 行为逐字节不变。
-5. **router-bootstrap 不再调 setRouterService 是有意为之**：sync-manager /sync → RouterService 的 m.room.message 路由在本任务后断开（用户聊天入口由后续任务重建为非 Matrix 入口）；sync-manager 导出与 InternalEvent(RoutedEvent) import 保留至 Task 12。与 brief 指令一致。
+| 验证 | 命令 | 结果 |
+|---|---|---|
+| 目标测试 | `cd electron && npx pnpm@9.0.0 vitest run tests/task/runtime-init.test.ts` | 5/5 passed |
+| task 域全套 | `npx pnpm@9.0.0 vitest run tests/task/` | 12 files / 65 tests 全绿 |
+| electron 全量回归 | `npx pnpm@9.0.0 vitest run` | **178 files / 1487 tests 全绿零 flake**（含 agent-runner / task-tools / session 敏感链路） |
+| 双 workspace typecheck | `npx pnpm@9.0.0 typecheck`（根） | electron + renderer 双 clean |
+| ESLint | `npx eslint <6 个变更文件>` | exit 0 |
 
-## 7. Concerns / 移交后续任务
+## 4. 自审（brief 指定三项）
 
-1. **sync-manager 路由断开（预期中间态）**：m.room.message → RouterService 的链路随 setRouterService 解绑而失效，task-driven agent 暂不响应 Matrix 用户消息——待后续任务以新输入源（IPC/直连）重建用户聊天入口。
-2. **task-driven 模式 task_reply 发送侧未接**：sub-agent 的 runTaskChatLoop 仍只发 task-end IPC（PM 等待侧 handleTaskReply 的 'task-reply' IPC 消费链也未在 task-driven 分支注册）。`sendTaskReplyEvent` 已就绪但暂无 runtime-entry 调用点（v1 的 handleDispatch 用 Matrix 发送且不动）——后续任务接通 sub 完成回执时使用。
-3. **abort_dispatch 经桥到达 RouterService.routeAbortDispatch 仍是 TODO(T8) stub**（仅日志）；与 Matrix 时代行为等价（v1 子监听 Matrix event；task-driven 中断走 AgentRunner.abortStream IPC）。
-4. **PM dispatch 等待侧**：pendingReplies 由 handleTaskReply 消费，task-driven 下需后续任务把 notifyTaskReply 的 'task-reply' IPC 接到该函数（本任务范围外）。
+1. **import 环红线**：`grep session-service electron/src/main/task/executor.ts` 仅命中头注释（说明避环设计），无实际 import——executor 的 kickoff 依赖只在 runtime-init.ts（wiring 层）注入 ✅
+2. **notify 恰好在指定位置**：全仓 `notifyExecutor()` 调用点共 9 处——task/ipc.handlers 4（create/transition/cancel/start）+ settings 1（maxConcurrentTasks 门控）+ agent-runner 2（transitionTaskTerminal try 内 / failTaskOnCrash try 内）+ task-tools 2（completeTask / failTask）✅
+3. **spawn 仅 completed**：agent-runner 有 `if (to === 'completed')` 外门 + recurrence 内部 status==='completed' 守卫双保险；task-tools 只在 completeTask 调用 ✅
 
-## 8. 自审结论
+**已知环（非新增风险，说明留档）**：agent-runner → task/executor → starter → agent/team → crud → runtime-registry → agent-runner 是 CJS require 环。全链均为调用时取值（无模块顶层执行），且既有代码已存在同构环（agent-runner → memory/extraction → crud → runtime-registry → agent-runner）——1487 测试全绿为实证。方向性符合计划约束：task 域（activation，Task 6）→ executor 单向。
 
-- runtime-entry 全部 `client.sendEvent` 逐一核验：v1-only（handleEvent 错误回复 683；handleDispatch task_reply 716/770/784）与 client 分支或早退守卫（1039 分段、1462/1472 最终消息、1742 abort、1761 dispatch）两类，task-driven 路径零 Matrix 传输。
-- runtime-manager.ts 的 `handleChildMessage`（L621）是 v1 路径的同名局部函数，与桥导出无冲突。
-- 提交范围干净：不含预存报告改动与无关文档。
+## 5. 遗留 / 风险
+
+- 无阻塞遗留。macOS 主机冒烟（真实 GUI 里 boot 后 assigned 任务自动放行 + kickoff 消息出现在执行会话）属计划统一验收项，不在本 task 范围
+- `main/index.ts` 的 `initTaskRuntime()` 调用无需改动——新签名 opts 全可选，默认即生产装配（sendUserMessage 包装），已由 typecheck + 现有调用证明兼容
