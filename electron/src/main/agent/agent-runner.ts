@@ -290,6 +290,9 @@ export class AgentRunner {
       return;
     }
     if (isTerminal(row.status)) return;
+    // K7-2：用户已主动暂停（先转 paused 再 abort 流）——中断信号到达时
+    // 不覆盖为 cancelled，paused 语义保留给「恢复」入口
+    if (row.status === 'paused') return;
     const failed = taskEndInfo?.error !== undefined || active.lastFinish?.finishReason === 'error';
     const to: TaskStatus = failed ? 'failed'
       : active.lastFinish?.finishReason === 'interrupted' ? 'cancelled'
@@ -392,6 +395,23 @@ export class AgentRunner {
     const active = this.activeTasks.get(streamSessionId);
     if (!active) return;
     active.runtime.child.send({ type: 'abort', streamSessionId });
+  }
+
+  /**
+   * K7-3：按执行会话中断本 runner 的活跃流（任务暂停/取消联动入口）。
+   * 匹配键用 executionSessionId 而非 taskId——kickoff 驱动的执行流是
+   * ephemeral（routeUserChat taskId=null），taskId 匹配不到；同一执行会话
+   * 内的活跃流都属该任务的执行语境。不清理活跃表：abort 后由
+   * end/task-end 正常收尾（与 abortStream 同语义）。返回是否命中。
+   */
+  abortTasksBySession(executionSessionId: string): boolean {
+    let hit = false;
+    for (const active of this.activeTasks.values()) {
+      if (active.executionSessionId !== executionSessionId) continue;
+      active.runtime.child.send({ type: 'abort', streamSessionId: active.streamSessionId });
+      hit = true;
+    }
+    return hit;
   }
 
   /** 当前活跃 task 数（per-agent 并发检查用） */

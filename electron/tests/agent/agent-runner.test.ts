@@ -554,4 +554,71 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     runner.handleChildExit(child, 1);
     expect(getTask(taskId)!.status).toBe('paused'); // paused → failed 非法，不动
   });
+
+  // K7-2 回归锁：任务被用户暂停（先转 paused 再 abort 流）后，agent 侧
+  // task-end 携带 interrupted 到达时不得把 paused 覆盖成 cancelled——
+  // 暂停语义必须保留（恢复按钮依赖 paused 状态）
+  it('K7-2: 任务行已 paused 时 task-end(interrupted) 不覆盖状态', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool, 10_000);
+    const taskId = seedInProgressTask('T-k7-2');
+    transitionTaskStatus(taskId, 'paused'); // 用户暂停在先
+
+    await runner.executeTask({
+      taskId,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-k7-2',
+    });
+
+    // abort 后子进程时序：end(interrupted) → task-end
+    getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-k7-2', finishReason: 'interrupted' });
+    getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-k7-2', taskId });
+
+    expect(getTask(taskId)!.status).toBe('paused');
+  });
+
+  // K7-3 回归锁：任务暂停/取消联动中断——按 executionSessionId 匹配活跃流
+  // 发 abort（kickoff 驱动的流是 ephemeral，taskId=null，不能按 taskId 匹配）
+  it('K7-3: abortTasksBySession 匹配会话 → 发 abort 到对应 streamSessionId', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+
+    await runner.executeTask({
+      taskId: null, // kickoff 驱动的 ephemeral 流——taskId 为 null 是常态
+      executionSessionId: 'sess-exec-1',
+      body: 'kickoff',
+      streamSessionId: 'ss-eph-1',
+    });
+
+    expect(runner.abortTasksBySession('sess-exec-1')).toBe(true);
+    expect(child.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'abort', streamSessionId: 'ss-eph-1' }),
+    );
+    // 活跃表不清理——abort 后由 end/task-end 正常收尾（与 abortStream 同语义）
+    expect(runner.activeTaskCount()).toBe(1);
+  });
+
+  it('K7-3: abortTasksBySession 无匹配会话 → false 且不发 abort', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool);
+
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: 'sess-exec-1',
+      body: 'kickoff',
+      streamSessionId: 'ss-eph-2',
+    });
+
+    const sendCallsBefore = (child.send as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(runner.abortTasksBySession('sess-other')).toBe(false);
+    const sendCallsAfter = (child.send as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(sendCallsAfter).toBe(sendCallsBefore);
+  });
 });
