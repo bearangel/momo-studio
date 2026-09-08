@@ -155,3 +155,56 @@ describe('RoomList — 入口迁移与空态', () => {
     expect(screen.getByText(/协作会话/)).toBeInTheDocument();
   });
 });
+
+describe('RoomList — 标题搜索过滤', () => {
+  it('输入关键词 → 仅渲染标题命中的会话', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '需求分析' }),
+      makeSession({ id: 's2', title: '日常闲聊' }),
+    ];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '需求' } });
+    expect(screen.getByText('需求分析')).toBeInTheDocument();
+    expect(screen.queryByText('日常闲聊')).not.toBeInTheDocument();
+  });
+
+  it('大小写不敏感', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: 'Release Notes' })];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: 'release' } });
+    expect(screen.getByText('Release Notes')).toBeInTheDocument();
+  });
+
+  it('无命中 → 「无匹配会话」空态（区别于「暂无会话」）', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: 'zzz' } });
+    expect(screen.getByText('无匹配会话')).toBeInTheDocument();
+    expect(screen.queryByText('会话A')).not.toBeInTheDocument();
+  });
+
+  it('点击清除按钮 → 恢复全量列表', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '会话A' }),
+      makeSession({ id: 's2', title: '会话B' }),
+    ];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: 'A' } });
+    expect(screen.queryByText('会话B')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('清除搜索'));
+    expect(screen.getByText('会话A')).toBeInTheDocument();
+    expect(screen.getByText('会话B')).toBeInTheDocument();
+  });
+
+  it('过滤态下列表项点击 / 悬停操作不受影响', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '目标会话', members: [makeMember({ instanceId: 'i1' })] }),
+    ];
+    render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '目标' } });
+    fireEvent.click(screen.getByText('目标会话'));
+    expect(sessionState.selectSession).toHaveBeenCalledWith('s1');
+    expect(screen.getByLabelText('重命名')).toBeInTheDocument();
+    expect(screen.getByLabelText('解散')).toBeInTheDocument();
+  });
+});

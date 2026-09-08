@@ -15,7 +15,7 @@ import { ipc } from '../../ipc/client';
 import { PromptDialog } from '../common/PromptDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
-import { MessageSquare, Pencil, Trash2 } from 'lucide-react';
+import { MessageSquare, Pencil, Trash2, Search, X } from 'lucide-react';
 
 export function RoomList() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -27,6 +27,14 @@ export function RoomList() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
+
+  // 标题搜索过滤（spec §3）：瞬态本地态；空输入 = 不过滤
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const visibleSessions =
+    q === ''
+      ? sessions
+      : sessions.filter((s) => s.title.toLowerCase().includes(q));
 
   const submitRename = async (name: string) => {
     const target = renaming;
@@ -82,50 +90,79 @@ export function RoomList() {
   }
 
   return (
-    <div className="w-full flex-1 min-h-0 bg-surface-1 overflow-auto">
-      {sessions.map((session) => (
-        // 外层 group 让 group-hover 生效；悬停时叠加操作按钮
-        <div key={session.id} className="group relative">
+    <div className="w-full flex-1 min-h-0 bg-surface-1 flex flex-col">
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-subtle shrink-0">
+        <Search size={14} strokeWidth={1.75} className="text-tertiary shrink-0" aria-hidden />
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="搜索会话"
+          aria-label="搜索会话"
+          className="flex-1 min-w-0 bg-transparent text-sm text-primary placeholder:text-tertiary outline-none"
+        />
+        {filter !== '' && (
           <button
             type="button"
-            onClick={() => void selectSession(session.id)}
-            className={cn(
-              'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center',
-              session.id === activeSessionId
-                ? 'bg-surface-active border-transparent text-accent-600 dark:text-accent-300'
-                : 'border-transparent text-secondary hover:bg-surface-3',
-            )}
+            aria-label="清除搜索"
+            title="清除搜索"
+            onClick={() => setFilter('')}
+            className="text-tertiary hover:text-primary shrink-0"
           >
-            <span className="truncate flex-1">{session.title}</span>
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-surface-1/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
-            <button
-              type="button"
-              title="重命名"
-              onClick={(e) => {
-                e.stopPropagation();
-                setRenaming({ sessionId: session.id, oldTitle: session.title });
-              }}
-              className="text-tertiary hover:text-primary"
-              aria-label="重命名"
-            >
-              <Pencil size={12} strokeWidth={1.75} aria-hidden />
-            </button>
-            <button
-              type="button"
-              title="解散"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleDissolve(session.id, session.title);
-              }}
-              className="text-tertiary hover:text-status-error"
-              aria-label="解散"
-            >
-              <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-            </button>
-          </span>
+        )}
+      </div>
+      {visibleSessions.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-sm text-tertiary">
+          无匹配会话
         </div>
-      ))}
+      ) : (
+        <div className="flex-1 overflow-auto">
+          {visibleSessions.map((session) => (
+            // 外层 group 让 group-hover 生效；悬停时叠加操作按钮
+            <div key={session.id} className="group relative">
+              <button
+                type="button"
+                onClick={() => void selectSession(session.id)}
+                className={cn(
+                  'w-full text-left px-3 py-2.5 text-sm transition-colors border-l-2 flex items-center',
+                  session.id === activeSessionId
+                    ? 'bg-surface-active border-transparent text-accent-600 dark:text-accent-300'
+                    : 'border-transparent text-secondary hover:bg-surface-3',
+                )}
+              >
+                <span className="truncate flex-1">{session.title}</span>
+              </button>
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 rounded bg-surface-1/90 px-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <button
+                  type="button"
+                  title="重命名"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRenaming({ sessionId: session.id, oldTitle: session.title });
+                  }}
+                  className="text-tertiary hover:text-primary"
+                  aria-label="重命名"
+                >
+                  <Pencil size={12} strokeWidth={1.75} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  title="解散"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDissolve(session.id, session.title);
+                  }}
+                  className="text-tertiary hover:text-status-error"
+                  aria-label="解散"
+                >
+                  <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       {renaming && (
         <PromptDialog
           title="重命名会话"
