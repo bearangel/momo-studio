@@ -70,6 +70,10 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 预填是「打开瞬间的快照」——依赖收窄到 open：父组件（TaskDetailPanel）
+  // 5s 轮询会用新对象引用刷新 task prop，若 task 留在依赖里，用户填写中的
+  // 表单会被外部快照静默重置（K8：委派目标选型被打回「不指派」）。
+  // task/workspaceId 读闭包捕获的打开瞬间值；重新打开（open false→true）自然重取最新
   useEffect(() => {
     if (!open) return;
     setTitle(task.title);
@@ -95,7 +99,8 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
     });
     ipc.team.list(workspaceId).then((list) => setTeams(list.map((t) => ({ id: t.id, name: t.name }))));
     ipc.session.list(workspaceId).then((list) => setSessions(list.map((s) => ({ id: s.id, title: s.title }))));
-  }, [open, task, workspaceId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   if (!open) return null;
 

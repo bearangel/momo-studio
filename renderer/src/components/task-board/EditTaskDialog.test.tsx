@@ -113,8 +113,72 @@ describe('EditTaskDialog 预填', () => {
   });
 });
 
-describe('EditTaskDialog 提交', () => {
-  it('修改标题+优先级 → task.update 收到对应 patch（三互斥列按类型清空）', async () => {
+// K8 回归锁：预填是打开瞬间的快照语义——父组件（TaskDetailPanel）5s 轮询
+// 会用新对象引用刷新 task prop，若预填 effect 依赖 task 引用，用户填写中的
+// 表单会被外部快照静默重置（委派目标选型被打回「不指派」——用户主机报告）
+describe('EditTaskDialog 快照语义（K8）', () => {
+  it('K8: 打开后 task prop 引用变化（详情轮询刷新）不重置表单选择', async () => {
+    const base = makeTask({ status: 'draft', assigneeAgentId: null, targetTeamId: null, targetSessionId: null });
+    const { rerender } = render(
+      <EditTaskDialog
+        open
+        onClose={() => {}}
+        onSaved={() => {}}
+        task={base}
+        workspaceId="ws-1"
+      />,
+    );
+
+    const kindSelect = (await screen.findByLabelText(
+      '委派目标类型',
+    )) as HTMLSelectElement;
+    fireEvent.change(kindSelect, { target: { value: 'agent' } });
+    expect(kindSelect.value).toBe('agent');
+
+    // 模拟详情面板 5s 轮询：同一任务数据、新对象引用
+    rerender(
+      <EditTaskDialog
+        open
+        onClose={() => {}}
+        onSaved={() => {}}
+        task={makeTask({ ...base })}
+        workspaceId="ws-1"
+      />,
+    );
+
+    expect((screen.getByLabelText('委派目标类型') as HTMLSelectElement).value).toBe('agent');
+  });
+
+  it('K8: 重新打开（open false→true）时按最新 task 快照重新预填', async () => {
+    const base = makeTask({ status: 'draft', assigneeAgentId: null, targetTeamId: null, targetSessionId: null });
+    const { rerender } = render(
+      <EditTaskDialog
+        open={false}
+        onClose={() => {}}
+        onSaved={() => {}}
+        task={base}
+        workspaceId="ws-1"
+      />,
+    );
+
+    // 保存后任务已指派 agent（新数据）→ 重新打开应预填 agent
+    rerender(
+      <EditTaskDialog
+        open
+        onClose={() => {}}
+        onSaved={() => {}}
+        task={makeTask({ ...base, assigneeAgentId: 'inst-2' })}
+        workspaceId="ws-1"
+      />,
+    );
+    const kindSelect = (await screen.findByLabelText(
+      '委派目标类型',
+    )) as HTMLSelectElement;
+    expect(kindSelect.value).toBe('agent');
+  });
+});
+
+describe('EditTaskDialog 提交', () => {  it('修改标题+优先级 → task.update 收到对应 patch（三互斥列按类型清空）', async () => {
     const onSaved = vi.fn();
     renderDialog(makeTask({}), onSaved);
 
