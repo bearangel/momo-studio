@@ -408,6 +408,25 @@ export class AgentRunner {
   }
 
   /**
+   * v2.3 steer（spec §5.2）：向活跃流的子进程注入用户中途补充。
+   * 与 abort 同线协议模式——child.send({ type:'steer', streamSessionId, body })，
+   * runtime-entry 的消息监听器 push 进 pendingSteers，chat loop 下一轮构建
+   * LLM 请求前消费。不触发 AbortController（与停止按钮语义正交）。
+   * 返回 false = 无活跃流或通道已关（调用方回退正常派发）。
+   */
+  steer(streamSessionId: string, body: string): boolean {
+    const active = this.activeTasks.get(streamSessionId);
+    if (!active) return false;
+    try {
+      active.runtime.child.send({ type: 'steer', streamSessionId, body });
+      return true;
+    } catch {
+      // 通道已关闭（流恰好结束）——回退由调用方处理
+      return false;
+    }
+  }
+
+  /**
    * K7-3：按执行会话中断本 runner 的活跃流（任务暂停/取消联动入口）。
    * 匹配键用 executionSessionId 而非 taskId——kickoff 驱动的执行流是
    * ephemeral（routeUserChat taskId=null），taskId 匹配不到；同一执行会话

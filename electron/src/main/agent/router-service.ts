@@ -17,7 +17,7 @@ import { logger } from '../logger';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
-import { registerLane } from './session-lane';
+import { registerLane, getLane } from './session-lane';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -105,6 +105,23 @@ export class RouterService {
     if (!runner) {
       logger.warn('routeUserChat 未找到 runner', { assignmentId: input.assignmentId });
       return;
+    }
+
+    // v2.3 steer 分流（spec §5.1）：活跃流期间用户手输 → 注入当前流而非新流。
+    // 分流键 = (sessionId, assignmentId)：@ 其他成员不 steer（目标 runner 不同）
+    // typeof guard：真实 AgentRunner 必有 steer；测试中 mock 是结构子集（仅 executeTask/notifyTaskReply），
+    //   兼容旧测试避免 steer undefined 崩溃（生产路径不变）
+    if (!input.systemKickoff && typeof runner.steer === 'function') {
+      const laneEntry = getLane(input.sessionId);
+      if (laneEntry && laneEntry.assignmentId === input.assignmentId) {
+        const steered = runner.steer(laneEntry.streamSessionId, input.body);
+        if (steered) return;
+        // 死通道回退（spec §5.4）：流恰好结束——继续走正常派发，消息不丢
+        logger.info('steer 通道已关，回退正常派发', {
+          sessionId: input.sessionId,
+          streamSessionId: laneEntry.streamSessionId,
+        });
+      }
     }
 
     const task: TaskConfig = {

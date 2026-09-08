@@ -326,10 +326,18 @@ export async function runChatLoop(
     if (externalAbortSignal.aborted) abortController.abort();
     else externalAbortSignal.addEventListener('abort', () => abortController.abort(), { once: true });
   }
+  // v2.3 steer：与 abort 同监听器（共享全部 process.off 清理点）——
+  // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）
+  const pendingSteers: string[] = [];
   const abortListener = (msg: unknown): void => {
-    const m = msg as { type?: string; streamSessionId?: string };
-    if (m.type === 'abort' && m.streamSessionId === streamSessionId) {
+    const m = msg as { type?: string; streamSessionId?: string; body?: unknown };
+    if (m.streamSessionId !== streamSessionId) return;
+    if (m.type === 'abort') {
       abortController.abort();
+      return;
+    }
+    if (m.type === 'steer' && typeof m.body === 'string') {
+      pendingSteers.push(m.body);
     }
   };
   process.on('message', abortListener);
@@ -428,6 +436,13 @@ export async function runChatLoop(
   };
 
   for (let round = 0; ; round++) {
+    // v2.3 steer 注入（spec §5.2）：每轮构建 LLM 请求前 drain——上一轮工具
+    // 执行期间到达的用户补充在此进入上下文；最后一轮自然结束后未消费的
+    // 补充保留在会话历史（消息已落库），下轮对话可见，不重派发
+    while (pendingSteers.length > 0) {
+      messages.push({ role: 'user', content: `[用户中途补充] ${pendingSteers.shift()!}` });
+    }
+
     // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
     if (messages.length > 30 && round > 0) {
       messages.push({
