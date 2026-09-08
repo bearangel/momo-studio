@@ -153,7 +153,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
           value={targetKind}
           onChange={(e) => setTargetKind(e.target.value as TargetKind)}
         >
-          <option value="none">未指定（手动启动）</option>
+          <option value="none">不指派（存为草稿）</option>
           <option value="agent">agent</option>
           <option value="team">团队</option>
           <option value="session">会话</option>

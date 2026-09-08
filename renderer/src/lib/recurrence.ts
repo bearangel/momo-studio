@@ -22,6 +22,21 @@ export function serializeRecurrence(p: RecurrencePreset): string | null {
   return null;
 }
 
+/**
+ * serializeRecurrence 的对偶反解析（编辑对话框预填用）。
+ * null / 未知格式回退 { kind: 'once' }——旧数据或手写规则的容错路径。
+ */
+export function parseRecurrence(rule: string | null): RecurrencePreset {
+  if (!rule) return { kind: 'once' };
+  const ev = /^every:(\d+)([mhd])$/.exec(rule);
+  if (ev) return { kind: 'every', everyN: Number(ev[1]), everyUnit: ev[2] as 'm' | 'h' | 'd' };
+  const dv = /^daily@(\d{1,2}:\d{2})$/.exec(rule);
+  if (dv) return { kind: 'daily', time: dv[1] ?? '09:00' };
+  const wv = /^weekly@(\d),(\d{1,2}:\d{2})$/.exec(rule);
+  if (wv) return { kind: 'weekly', weekday: Number(wv[1]), time: wv[2] ?? '09:00' };
+  return { kind: 'once' };
+}
+
 export function humanizeRecurrence(rule: string): string {
   // 捕获组索引访问（noUncheckedIndexedAccess 下为 string | undefined）；
   // 正则匹配后必存在，?? '' 仅作 TS 兜底，运行时不触发（regex 命中）——同 electron 侧先例。
