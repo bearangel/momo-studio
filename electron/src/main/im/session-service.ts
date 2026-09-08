@@ -15,7 +15,11 @@
 //
 // 对 electron 仅做 type-only import——模块在测试进程（无 Electron 运行时）可安全加载。
 
-import { insertMessage, listMessagesBySession, type MessageRow } from '../storage/messages/repo';
+import {
+  insertMessage,
+  listRecentMessagesBySession,
+  type MessageRow,
+} from '../storage/messages/repo';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
 import { broadcastLocalMessage } from '../p2p';
 // /compact 运行中拒绝判定（spec §5.4）：只读 runner 注册表。与文件头 SessionRouter
@@ -236,7 +240,7 @@ function pushMessageRow(msg: MessageRow): void {
 
 // ─── 会话命令（/compact，spec §5.4） ─────────────────────────────────────────
 
-/** /compact 命令的消息拉取上限 */
+/** /compact 命令的消息拉取上限（listRecentMessagesBySession DESC 直取最近 N 条——ASC+LIMIT 是最早 N 条，勿换） */
 const COMPACT_WINDOW = 200;
 
 /**
@@ -255,7 +259,7 @@ export async function handleSessionCommand(input: {
   if (isSessionRunning(input.sessionId)) {
     throw new Error('会话正在执行中，请先停止或等待完成后再压缩');
   }
-  const history = listMessagesBySession(input.sessionId).slice(-COMPACT_WINDOW);
+  const history = listRecentMessagesBySession(input.sessionId, COMPACT_WINDOW);
   if (history.length === 0) throw new Error('会话暂无消息，无内容可压缩');
 
   const llm = await resolveSessionLlm(input.sessionId);

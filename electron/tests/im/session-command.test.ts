@@ -39,7 +39,10 @@ vi.mock('../../src/main/storage/sessions/repo', () => ({
   touchSessionLastMessage: vi.fn(),
 }));
 vi.mock('../../src/main/storage/messages/repo', () => ({
-  listMessagesBySession: vi.fn(() => historyFixture),
+  // 窗口方向回归锁（审查 Important）：/compact 必须走 listRecentMessagesBySession
+  // （DESC 取最近 N 条后反转）——listMessagesBySession 是 ASC+LIMIT=最早 1000 条，
+  // >1000 消息会话 slice(-200) 会取到第 801-1000 条（repo.ts 文档明示的同型陷阱）
+  listRecentMessagesBySession: vi.fn(() => historyFixture),
   insertMessage: vi.fn((m: { body: string }) => ({ ...m, id: 'm-new' })),
 }));
 vi.mock('../../src/main/im/session-ops', () => ({ getSessionMembersInfo: () => [] }));
@@ -69,7 +72,7 @@ vi.mock('../../src/main/logger', () => ({
 
 import { handleSessionCommand } from '../../src/main/im/session-service';
 import { upsertSessionSummary, resolveSessionLlm } from '../../src/main/memory/extraction';
-import { insertMessage, listMessagesBySession } from '../../src/main/storage/messages/repo';
+import { insertMessage, listRecentMessagesBySession } from '../../src/main/storage/messages/repo';
 
 describe('handleSessionCommand(compact)', () => {
   beforeEach(() => {
@@ -79,9 +82,16 @@ describe('handleSessionCommand(compact)', () => {
   it('happy path：摘要 upsert + 确认消息落库（不路由）', async () => {
     const r = await handleSessionCommand({ sessionId: 's1', command: 'compact' });
     expect(r.ok).toBe(true);
+    // 取数契约：最近 COMPACT_WINDOW=200 条（DESC 取数语义，非最早 N 条切片）
+    expect(listRecentMessagesBySession).toHaveBeenCalledWith('s1', 200);
     expect(upsertSessionSummary).toHaveBeenCalledWith('s1', expect.stringContaining('测试摘要'), expect.any(Number));
+    // ack 字段回归锁（审查 Minor）：eventType / workspaceId 是 renderer 渲染与
+    // workspace 归属的依赖字段，防漂移
     expect(insertMessage).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 's1', body: expect.stringContaining('[系统] 会话已压缩'),
+      sessionId: 's1',
+      body: expect.stringContaining('[系统] 会话已压缩'),
+      eventType: 'm.room.message',
+      workspaceId: 'w1',
     }));
   });
 
@@ -109,7 +119,7 @@ describe('handleSessionCommand 错误路径', () => {
   });
 
   it('空历史（无消息）→ throw「无内容可压缩」', async () => {
-    vi.mocked(listMessagesBySession).mockReturnValueOnce([]);
+    vi.mocked(listRecentMessagesBySession).mockReturnValueOnce([]);
     await expect(handleSessionCommand({ sessionId: 's1', command: 'compact' }))
       .rejects.toThrow('无内容可压缩');
   });
