@@ -142,3 +142,45 @@ describe('list_delegation_targets（委派信息闭环）', () => {
     expect(result.notes).toContain('本工作空间暂无团队');
   });
 });
+
+describe('create_task 无指派 warning（委派信息闭环）', () => {
+  const tools = new TaskTools();
+
+  it('无指派创建 → 返回 TaskRow 字段仍在顶层 + warning 字段说明死局与出路', async () => {
+    const { createWorkspace } = await import('../../../src/main/workspace/crud');
+    const ws = await createWorkspace(
+      { name: 'W', directoryPath: '/tmp/ws-warn', description: '', iconEmoji: '📁' },
+      '@real-owner:home',
+    );
+    const result = JSON.parse(
+      await tools.execute('create_task', { title: '无目标任务' }, seedCtx(ws.id, 'room-x')),
+    );
+    // 形状向后兼容：TaskRow 字段仍在顶层
+    expect(result.id).toMatch(/^T-/);
+    expect(result.status).toBe('draft');
+    // warning 存在且包含关键事实
+    expect(result.warning).toContain('没有自动指派机制');
+    expect(result.warning).toContain('list_delegation_targets');
+    expect(result.warning).toContain('draft');
+  });
+
+  it('有指派创建 → 无 warning 字段 + 落 assigned（K1 决策表对齐——否则 executor 不消费，死局换形态）', async () => {
+    const { createWorkspace } = await import('../../../src/main/workspace/crud');
+    const ws = await createWorkspace(
+      { name: 'W2', directoryPath: '/tmp/ws-warn2', description: '', iconEmoji: '📁' },
+      '@real-owner:home',
+    );
+    saveAgentDefinition(makeDef('def-warn', '执行者', ''));
+    const member = await addMember(ws.id, 'def-warn', generateAgentUserId('warn-executor'));
+    const result = JSON.parse(
+      await tools.execute(
+        'create_task',
+        { title: '有目标任务', assigneeAgentId: member.instanceId },
+        seedCtx(ws.id, 'room-y'),
+      ),
+    );
+    expect(result.id).toMatch(/^T-/);
+    expect(result.status).toBe('assigned');
+    expect(result.warning).toBeUndefined();
+  });
+});

@@ -7,7 +7,7 @@
 //   - read_task_history(taskId)     → execution_room 内的 messages
 //   - read_task_progress(taskId)    → task 关联的所有 message_events
 //   - list_delegation_targets()     → 三类委派目标清单（agent 成员 / 团队 / 会话）
-//   - create_task(input)            → 新建任务（draft 状态）
+//   - create_task(input)            → 新建任务（K1 落态：有目标 assigned / 有计划 pending / 否则 draft）
 //   - complete_task(taskId)         → 标记 completed
 //   - fail_task(taskId, reason)     → 标记 failed + errorMessage
 //   - list_tasks(filter?)           → 多维过滤列表
@@ -156,10 +156,17 @@ export interface CreateTaskInput {
  * 与 task:create IPC 入口同语义）。返回插入后的 TaskRow（含自动生成的 id）。
  */
 export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
-  return insertTask({
+  // 委派信息闭环 ④：与 IPC task:create 的 K1 落态决策对齐（决策表注释见
+  // task/ipc.handlers.ts）——scheduler 只消费 pending、executor 只消费
+  // assigned；agent 建的带目标任务此前落 draft 两个调度器都不认（死局换形态）
+  const hasTarget =
+    input.assigneeAgentId != null ||
+    input.targetTeamId != null ||
+    input.targetSessionId != null;
+  const row = insertTask({
     workspaceId: input.workspaceId,
     title: input.title,
-    status: input.scheduledAt != null ? 'pending' : undefined,
+    status: input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined,
     description: input.description ?? '',
     creatorUserId: input.creatorUserId,
     priority: input.priority ?? 0,
@@ -169,6 +176,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
     recurrenceRule: input.recurrenceRule,
     scheduledAt: input.scheduledAt,
   });
+  // assigned 落态即时触发放行评估（100ms 去抖合并；丢了有 30s 兜底扫描自愈）
+  if (row.status === 'assigned') notifyExecutor();
+  return row;
 }
 
 /**
@@ -297,6 +307,14 @@ function parseStringArgOptional(value: unknown, name: string): string | undefine
   return value;
 }
 
+/** 无指派创建的 warning 文案（委派信息闭环 ③：让 agent 立即知道死局与出路） */
+const NO_ASSIGNMENT_WARNING =
+  '任务未指派委派目标（assigneeAgentId / targetTeamId / targetSessionId 均为空）。' +
+  '系统没有自动指派机制——此任务将停留在 draft，永远不会被调度执行。' +
+  'draft 任务无法用工具取消（状态机不允许），请：' +
+  '1) 调用 list_delegation_targets 查看可指派目标，重新创建携带指派的新任务；' +
+  '2) 告知用户在看板手动处理本条死任务（取消或编辑指派）。';
+
 /**
  * 任务工具模块（v2 B10）：注册 7 个工具 read_task / read_task_history /
  *   read_task_progress / create_task / complete_task / fail_task / list_tasks。
@@ -354,7 +372,7 @@ export class TaskTools implements ToolModule {
       {
         name: 'create_task',
         description:
-          '创建新任务。返回刚创建的 TaskRow（含 id / status=draft）。workspaceId 与 creatorUserId 由工具上下文自动注入（LLM 无需填、也不应填——args 中的同名键会被忽略以防 FK 违约与跨用户冒名）。',
+          '创建新任务。返回刚创建的 TaskRow（含 id / status=draft；未指派委派目标时返回对象额外含 warning 字段——任务不会被调度执行）。workspaceId 与 creatorUserId 由工具上下文自动注入（LLM 无需填、也不应填——args 中的同名键会被忽略以防 FK 违约与跨用户冒名）。assigneeAgentId / targetTeamId / targetSessionId 三者必须提供其一，创建前先调用 list_delegation_targets 获取真实 ID。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -374,15 +392,15 @@ export class TaskTools implements ToolModule {
             },
             assigneeAgentId: {
               type: 'string',
-              description: '指派 agent ID（可选；不指定则由调度器决定）',
+              description: '指派目标 agent 的 instance ID（从 list_delegation_targets 查询）。三者必须提供其一——系统没有自动指派机制，无指派任务将永远停留在 draft 不会被调度执行',
             },
             targetTeamId: {
               type: 'string',
-              description: '委派目标 team ID（v29：与 assigneeAgentId/targetSessionId 互斥）',
+              description: '委派目标 team ID（v29：与 assigneeAgentId/targetSessionId 互斥）（从 list_delegation_targets 查询）',
             },
             targetSessionId: {
               type: 'string',
-              description: '委派目标 session ID（v29：与 assigneeAgentId/targetTeamId 互斥）',
+              description: '委派目标 session ID（v29：与 assigneeAgentId/targetTeamId 互斥）（从 list_delegation_targets 查询）',
             },
             recurrenceRule: {
               type: 'string',
@@ -523,6 +541,12 @@ export class TaskTools implements ToolModule {
           scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
         };
         const result = await createTask(input);
+        // 委派信息闭环 ③：无指派 → TaskRow 顶层附加 warning（形状向后兼容，
+        // 有指派时返回纯 TaskRow——现有消费方直接 parse 顶层字段不破坏）
+        const hasTarget = Boolean(input.assigneeAgentId || input.targetTeamId || input.targetSessionId);
+        if (!hasTarget) {
+          return JSON.stringify({ ...result, warning: NO_ASSIGNMENT_WARNING });
+        }
         return JSON.stringify(result);
       }
       case 'complete_task': {
