@@ -283,6 +283,14 @@ export function abortTasksBySessionEverywhere(executionSessionId: string): boole
   return hit;
 }
 
+/** 任一 runner 在该会话上有活跃回合（chat / task 执行统一判定） */
+export function isSessionRunning(sessionId: string): boolean {
+  for (const runner of agentRunners.values()) {
+    if (runner.hasActiveForSession(sessionId)) return true;
+  }
+  return false;
+}
+
 // ─── 测试辅助 ─────────────────────────────────────────────────────────────
 
 /** 测试用：清空全部全局 Map（避免跨用例污染） */

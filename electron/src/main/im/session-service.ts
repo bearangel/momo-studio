@@ -15,9 +15,15 @@
 //
 // 对 electron 仅做 type-only import——模块在测试进程（无 Electron 运行时）可安全加载。
 
-import { insertMessage, type MessageRow } from '../storage/messages/repo';
+import { insertMessage, listMessagesBySession, type MessageRow } from '../storage/messages/repo';
 import { getSession, touchSessionLastMessage } from '../storage/sessions/repo';
 import { broadcastLocalMessage } from '../p2p';
+// /compact 运行中拒绝判定（spec §5.4）：只读 runner 注册表。与文件头 SessionRouter
+// 「避免直接依赖 agent 模块」不冲突——runtime-registry 对本模块的反向引用仅经
+// router-bootstrap 动态 import，无静态回边。
+import { isSessionRunning } from '../agent/runtime-registry';
+// /compact 摘要生成与落库（spec §5.4）：复用 extraction 的 LLM 解析链与摘要 upsert
+import { resolveSessionLlm, upsertSessionSummary } from '../memory/extraction';
 import { detectConflict } from '../task/conflict-detector';
 import { activateMentionedTasks } from '../task/activation';
 import { listTasks, getTask } from '../storage/tasks/repo';
@@ -226,4 +232,67 @@ export async function sendUserMessage(input: {
 function pushMessageRow(msg: MessageRow): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('session:message', msg);
+}
+
+// ─── 会话命令（/compact，spec §5.4） ─────────────────────────────────────────
+
+/** /compact 命令的消息拉取上限 */
+const COMPACT_WINDOW = 200;
+
+/**
+ * 会话命令入口（spec §5.4）。v1 仅支持 compact。
+ * 与 extraction 的差异：显式命令显式反馈——失败 throw，不静默。
+ */
+export async function handleSessionCommand(input: {
+  sessionId: string;
+  command: string;
+}): Promise<{ ok: true; message: string }> {
+  if (input.command !== 'compact') {
+    throw new Error(`未知命令: /${input.command}（当前支持 /compact）`);
+  }
+  const session = getSession(input.sessionId);
+  if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
+  if (isSessionRunning(input.sessionId)) {
+    throw new Error('会话正在执行中，请先停止或等待完成后再压缩');
+  }
+  const history = listMessagesBySession(input.sessionId).slice(-COMPACT_WINDOW);
+  if (history.length === 0) throw new Error('会话暂无消息，无内容可压缩');
+
+  const llm = await resolveSessionLlm(input.sessionId);
+  if (!llm) throw new Error('未配置可用模型服务（设置 → 模型服务），无法生成压缩摘要');
+
+  const transcript = history
+    .map((m) => `${m.sender === 'owner' ? '用户' : m.sender}: ${m.body}`)
+    .join('\n');
+  const res = await llm.chat([
+    {
+      role: 'user',
+      content:
+        '请把以下会话历史压缩为总结，严格分两节输出：\n' +
+        '【用户指令】用户明确提出、尚未完成的要求（无则写「无」）\n' +
+        '【agent 备忘】其他值得保留的上下文（标注：非用户指令）\n\n' +
+        `会话历史：\n${transcript}`,
+    },
+  ]);
+  const summary = res.content.trim();
+  if (!summary) throw new Error('压缩摘要生成为空，请重试');
+
+  upsertSessionSummary(input.sessionId, summary, Date.now());
+
+  const ack = insertMessage({
+    sessionId: input.sessionId,
+    sender: 'owner',
+    eventType: 'm.room.message',
+    body: `[系统] 会话已压缩：${history.length} 条消息 → 摘要（下轮生效）`,
+    workspaceId: session.workspaceId,
+  });
+  touchSessionLastMessage(input.sessionId);
+  pushMessageRow(ack);
+  void broadcastLocalMessage({
+    roomId: input.sessionId,
+    sender: 'owner',
+    body: ack.body,
+    eventType: 'm.room.message',
+  });
+  return { ok: true, message: ack.body };
 }

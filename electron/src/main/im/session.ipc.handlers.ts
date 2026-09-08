@@ -25,7 +25,7 @@ import {
   type SessionSummary,
   type CollabTarget,
 } from './session-ops';
-import { sendUserMessage } from './session-service';
+import { sendUserMessage, handleSessionCommand } from './session-service';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
   listMessagesBySession,
@@ -251,6 +251,14 @@ export function registerSessionIpcHandlers(): void {
       const filename = `momo-session-${sanitized}-${dateStr}.md`;
 
       return { filename, content };
+    },
+  );
+
+  // 斜杠命令通道（spec §5.4）：/compact 等确定性命令，不经 agent 回合。
+  ipcMain.handle(
+    'session:command',
+    async (_evt, sessionId: string, command: string) => {
+      return handleSessionCommand({ sessionId, command });
     },
   );
 

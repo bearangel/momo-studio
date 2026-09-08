@@ -192,17 +192,7 @@ async function runExtractionInner(sessionId: string, opts?: { taskId?: string | 
   let compressed = false;
   if (compressing && parsed.sessionSummary && parsed.sessionSummary.trim()) {
     const coveredUntil = ctx.messages[ctx.messages.length - 1]?.timestamp ?? now;
-    const summary = parsed.sessionSummary.trim().slice(0, SUMMARY_MAX_LEN);
-    getDb()
-      .prepare(
-        `INSERT INTO session_summaries (session_id, summary, covered_until, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET
-           summary = excluded.summary,
-           covered_until = excluded.covered_until,
-           updated_at = excluded.updated_at`,
-      )
-      .run(sessionId, summary, coveredUntil, Date.now());
+    upsertSessionSummary(sessionId, parsed.sessionSummary.trim(), coveredUntil);
     compressed = true;
   }
 
@@ -241,10 +231,11 @@ function findReceptionAgent(sessionId: string): ReceptionAgent | null {
 
 /**
  * 复刻 session-naming.generateLlmTitle 的解析链（findReceptionAgent → getAgentDefinition →
- * getProvider → resolveApiKey → createLLMProvider）。任一环节缺失/抛错返回 null 并 warn，
- * 调用方据此静默跳过本轮提取。
+ * getProvider → resolveApiKey → createLLMProvider）。任一环节缺失/抛错返回 null 并 warn；
+ * extraction 调用方据此静默跳过本轮提取；/compact 命令（session-service）则转显式报错
+ * 「未配置可用模型服务」。导出供两处共用（spec §5.4）。
  */
-async function resolveSessionLlm(sessionId: string): Promise<LLMProvider | null> {
+export async function resolveSessionLlm(sessionId: string): Promise<LLMProvider | null> {
   const reception = findReceptionAgent(sessionId);
   if (!reception) {
     logger.warn('记忆提取：会话无接待成员（is_leader），跳过', { sessionId });
@@ -516,6 +507,20 @@ function readPriorSummary(sessionId: string): string | null {
     .prepare('SELECT summary FROM session_summaries WHERE session_id = ?')
     .get(sessionId) as { summary: string } | undefined;
   return row?.summary ?? null;
+}
+
+/** 会话滚动摘要 upsert（extraction 与 /compact 命令共用；SQL 语义与 v2.2 一致） */
+export function upsertSessionSummary(sessionId: string, summary: string, coveredUntil: number): void {
+  getDb()
+    .prepare(
+      `INSERT INTO session_summaries (session_id, summary, covered_until, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         summary = excluded.summary,
+         covered_until = excluded.covered_until,
+         updated_at = excluded.updated_at`,
+    )
+    .run(sessionId, summary.slice(0, SUMMARY_MAX_LEN), coveredUntil, Date.now());
 }
 
 /**

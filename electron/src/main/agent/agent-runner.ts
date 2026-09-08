@@ -443,6 +443,14 @@ export class AgentRunner {
     return hit;
   }
 
+  /** 该会话是否有进行中的活跃回合（/compact 运行中拒绝判定用，spec §5.4-0） */
+  hasActiveForSession(sessionId: string): boolean {
+    for (const active of this.activeTasks.values()) {
+      if (active.executionSessionId === sessionId) return true;
+    }
+    return false;
+  }
+
   /** 当前活跃 task 数（per-agent 并发检查用） */
   activeTaskCount(): number {
     return this.activeTasks.size;
