@@ -28,7 +28,16 @@ import { logger } from '../logger';
 
 /** 进程内路由器最小契约（RouterService 的结构子集；避免直接依赖 agent 模块防循环引用） */
 interface SessionRouter {
-  routeUserChat(input: { sessionId: string; assignmentId: string; body: string; streamSessionId?: string }): Promise<void>;
+  routeUserChat(input: {
+    sessionId: string;
+    assignmentId: string;
+    body: string;
+    streamSessionId?: string;
+    /** v2.3：系统 kickoff 消息（车道无条件派发 + 注册覆盖语义） */
+    systemKickoff?: boolean;
+    /** v2.3：kickoff 来源任务 id（车道注册；手输消息为 null） */
+    sourceTaskId?: string | null;
+  }): Promise<void>;
 }
 
 /** 模块级注入：router-bootstrap ensureRouterService 注入 / destroyRouterService 置空 */
@@ -121,6 +130,11 @@ export async function sendUserMessage(input: {
    * 激活到执行会话。消息落库 / P2P 广播 / 路由派发不受影响。
    */
   systemKickoff?: boolean;
+  /**
+   * v2.3 会话车道：系统 kickoff 消息携带来源任务 id，经路由层注册车道；
+   * 用户手输消息不传（注册时 taskId 记 null）。
+   */
+  sourceTaskId?: string | null;
 }): Promise<SendUserMessageResult> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
@@ -189,7 +203,13 @@ export async function sendUserMessage(input: {
     if (router) {
       // routeUserChat.assignmentId：RouterService 现行契约字段（值即 instance_id），
       // 随 Task 9 路由改造一并更名。
-      await router.routeUserChat({ sessionId: input.sessionId, assignmentId: target, body: input.body });
+      await router.routeUserChat({
+        sessionId: input.sessionId,
+        assignmentId: target,
+        body: input.body,
+        systemKickoff: input.systemKickoff === true,
+        sourceTaskId: input.sourceTaskId ?? null,
+      });
     } else {
       // router 缺席（RouterService 未启动/销毁）必须留痕——防静默死路
       // （Task 9 评审：零 runner 启动也已保证 router 在位，此分支仅剩极端时序）

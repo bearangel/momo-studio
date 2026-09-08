@@ -17,6 +17,7 @@ import { logger } from '../logger';
 import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
+import { registerLane } from './session-lane';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -56,6 +57,10 @@ export interface RouteUserChatInput {
   body: string;
   /** 可选：外部已生成的流 id；缺省自动 randomUUID() */
   streamSessionId?: string;
+  /** v2.3：系统 kickoff 消息（车道无条件派发；steer 分流跳过） */
+  systemKickoff?: boolean;
+  /** v2.3：kickoff 来源任务 id（车道注册；手输为 null） */
+  sourceTaskId?: string | null;
 }
 
 /**
@@ -109,6 +114,17 @@ export class RouterService {
       streamSessionId: input.streamSessionId ?? randomUUID(),
     };
     await runner.executeTask(task);
+    // v2.3 会话车道注册（spec §4.1）：顶层流派发即占道；dispatch 子流走
+    // routeDispatch 不经此路径，天然不注册（并行委派能力保留）
+    registerLane(
+      input.sessionId,
+      {
+        taskId: input.sourceTaskId ?? null,
+        streamSessionId: task.streamSessionId,
+        assignmentId: input.assignmentId,
+      },
+      { kickoff: input.systemKickoff === true },
+    );
   }
 
   /**

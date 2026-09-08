@@ -30,6 +30,7 @@ import { scheduleExtraction } from '../memory/extraction';
 import { resolveMaxToolCalls } from '../settings/crud';
 import { spawnNextInstanceIfRecurring } from '../task/recurrence';
 import { notifyExecutor } from '../task/executor';
+import { clearLaneIfMatch } from './session-lane';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -164,6 +165,9 @@ export class AgentRunner {
           child.off('message', messageHandler);
           this.opts.warmPool.release(runtime);
           this.activeTasks.delete(task.streamSessionId);
+          // v2.3 车道：顶层流收尾让道 + 触发排队放行
+          clearLaneIfMatch(task.executionSessionId, task.streamSessionId);
+          notifyExecutor();
         } else if (active) {
           // task-driven：不 kill（C3）——end 之后子进程还要发 task_reply / task-end；
           // 武装安全兜底，task-end / exit 迟迟不达时强制收尾
@@ -247,6 +251,9 @@ export class AgentRunner {
       this.transitionTaskTerminal(active, taskEndInfo);
     }
     this.opts.warmPool.release(active.runtime);
+    // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
+    clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
+    notifyExecutor();
     // v2.2 记忆 P2（spec §6.4 触发点）：任务正常收尾（非 error/abort）→
     // fire-and-forget 触发记忆提取。gate 口径与 transitionTaskTerminal 的
     // failed/cancelled 判定对齐：task-end 携带 error、或前置 end chunk
@@ -358,11 +365,14 @@ export class AgentRunner {
         active.safetyTimer = undefined;
       }
       this.activeTasks.delete(active.streamSessionId);
+      clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
         this.failTaskOnCrash(active.taskId, code);
       }
     }
+    // v2.3 车道：流崩溃收尾后让道 + 触发排队放行（与 finalizeActiveTask 同语义）
+    notifyExecutor();
   }
 
   /** C2：崩溃时把仍处 in_progress 的任务行转 failed（其余状态不动——保持状态机合法性） */
@@ -450,6 +460,8 @@ export class AgentRunner {
         active.safetyTimer = undefined;
       }
       this.opts.warmPool.release(active.runtime);
+      // v2.3 车道：runner 销毁时让道（按 streamSessionId 匹配天然 no-op）
+      clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
     }
     this.activeTasks.clear();
   }

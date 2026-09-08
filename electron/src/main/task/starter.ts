@@ -73,16 +73,23 @@ export async function startTask(
     };
   }
 
-  // 新启动：允许 assigned / pending；draft 仅在有委派目标时放行
+  // 新启动：允许 assigned / pending / session_queued；draft 仅在有委派目标时放行
   // （K2：有目标的 draft 走 draft→assigned→in_progress 快捷路径——UI 手动
   // 启动草稿任务的唯一通道；无目标 draft 拒绝：手动放行只会建出无 agent
-  // 的空会话，kickoff 无人接待，与 executor validateTarget 同语义）
+  // 的空会话，kickoff 无人接待，与 executor validateTarget 同语义。
+  // v2.3：session_queued 与 assigned/pending 同为可启动起点——车道放行时
+  // 从排队态直接进 in_progress（spec §3.1））
   const draftEligible = task.status === 'draft' && hasDelegationTarget(task);
-  if (task.status !== 'assigned' && task.status !== 'pending' && !draftEligible) {
+  if (
+    task.status !== 'assigned' &&
+    task.status !== 'pending' &&
+    task.status !== 'session_queued' &&
+    !draftEligible
+  ) {
     throw new Error(
       task.status === 'draft'
         ? `task ${taskId} 未指派委派目标，不能启动（请先编辑指派 agent / 团队 / 会话）`
-        : `task ${taskId} status=${task.status}，不能启动（必须为 assigned 或 pending）`,
+        : `task ${taskId} status=${task.status}，不能启动（必须为 assigned / pending / session_queued）`,
     );
   }
 

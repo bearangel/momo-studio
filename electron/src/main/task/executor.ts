@@ -24,11 +24,18 @@ import { startTask } from './starter';
 import { teamExists } from '../agent/team';
 import { getSession } from '../storage/sessions/repo';
 import { getGlobalSettings } from '../settings/crud';
+import { isLaneOccupied } from '../agent/session-lane';
 import { logger } from '../logger';
 
 /** kickoff 注入依赖（runtime-init 装配时注入 sendUserMessage 包装） */
 export interface ExecutorDeps {
-  sendKickoff(input: { sessionId: string; body: string; mentionedInstanceIds?: string[] }): Promise<void>;
+  sendKickoff(input: {
+    sessionId: string;
+    /** kickoff 来源任务 id——车道注册依据（v2.3 spec §4.4 透传链） */
+    taskId: string;
+    body: string;
+    mentionedInstanceIds?: string[];
+  }): Promise<void>;
   /** 测试注入全局并发上限；缺省读 global_settings */
   getGlobalMax?(): number;
   /** 兜底扫描间隔（毫秒），默认 30s */
@@ -112,11 +119,26 @@ export class TaskExecutor {
     }
   }
 
-  /** 单候选放行：目标校验 → startTask → kickoff。返回是否占槽 */
+  /** 单候选放行：目标校验 → 车道 gate → startTask → kickoff。返回是否占槽 */
   private async launch(task: TaskRow): Promise<boolean> {
     const invalid = validateTarget(task);
     if (invalid) {
       failQuietly(task.id, invalid);
+      return false;
+    }
+    // v2.3 会话车道（spec §4.3）：目标会话已有顶层活跃流（内存 ∪ DB 兜底）→
+    // 任务转 session_queued 排队，return false 不占全局槽。无目标会话的任务
+    // startTask 新建会话，车道必空不检查
+    if (task.targetSessionId && isLaneOccupied(task.targetSessionId)) {
+      try {
+        transitionTaskStatus(task.id, 'session_queued');
+      } catch (err) {
+        // 并发改态（用户同时取消等）——留给兜底扫描重评估
+        logger.warn('车道排队转换失败（并发改态）', {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       return false;
     }
     let executionSessionId: string;
@@ -136,6 +158,7 @@ export class TaskExecutor {
     try {
       await this.deps!.sendKickoff({
         sessionId: executionSessionId,
+        taskId: task.id,
         body: buildKickoffBody(task),
         mentionedInstanceIds: task.assigneeAgentId ? [task.assigneeAgentId] : undefined,
       });
@@ -155,7 +178,7 @@ function countInProgress(): number {
   return row.n;
 }
 
-/** 队首候选：assigned 按放行序（spec §4.4），排除本轮已处理过的失败候选 */
+/** 队首候选：assigned / session_queued 按放行序（v2.3 车道队列并入），排除本轮已处理过的失败候选 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
@@ -163,14 +186,14 @@ function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | n
     skipIds.length > 0 ? `AND id NOT IN (${skipIds.map(() => '?').join(',')})` : '';
   const rows = getDb()
     .prepare(
-      `SELECT id FROM tasks WHERE status='assigned' ${excludeClause}
+      `SELECT id FROM tasks WHERE status IN ('assigned', 'session_queued') ${excludeClause}
        ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC, created_at ASC
        LIMIT ?`,
     )
     .all(...skipIds, Math.max(slots, 1)) as Array<{ id: string }>;
   for (const r of rows) {
     const t = getTask(r.id);
-    if (t && t.status === 'assigned') return t; // SELECT 与读取间竞态防御
+    if (t && (t.status === 'assigned' || t.status === 'session_queued')) return t; // SELECT 与读取间竞态防御
   }
   return null;
 }
