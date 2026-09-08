@@ -1,106 +1,66 @@
-# Task 5 报告：K7-3 精确中止接线
+# Task 5 报告：持久副作用软门禁
 
-**状态**：✅ 已交付
-**BASE**：0a289f3（T3 回归修复后）
-**HEAD**：109ef46
-**任务计划位置**：6 任务计划第 5 个（T5 精确中止接线，依赖 T2 abortTaskStreamByLane + T4 steer）
+- **状态**：DONE
+- **Commit**：`6b9bada` — `feat: create_task/memory_save 软门禁——无 user 挂靠附 warning 不阻断（spec §5.3）`
+- **分支**：`feat/turn-mandate`（未 push，未 rebase）
+- **BASE**：f52eab7（T4 之后）
 
----
+## 一、改动内容
 
-## 交付内容
+### `electron/src/main/agent/tools/shared/mandate-warning.ts`（新建，11 行）
 
-按 brief 4 步执行——两处改动均逐字采用 brief 内文，仅 `abortTaskExecutionIfAny` 函数体追加 `if (abortTaskStreamByLane(taskId)) return;` 短路守卫 + 函数注释更新为 K7-4 + v2.3 双标。
+持久副作用软门禁文案常量 `SIDEEFFECT_UNLINKED_WARNING`——task-tools 与 memory-tools 共享避免双份漂移。文案包含三要素：未挂靠事实 + 修复路径（先建 user todo 或先获用户同意）+ 不阻断明示。
 
-### 修改文件（2）
+### `electron/src/main/agent/tools/task-tools.ts`（+13/−1）
 
-1. **`electron/src/main/task/ipc.handlers.ts`**
-   - import 区补 `import { abortTaskStreamByLane } from '../agent/session-lane';`（紧邻 `runtime-registry` 同源）
-   - `abortTaskExecutionIfAny`（原 :77-81）函数体重写——先按 taskId 精确反查车道命中即返回；车道无记录（流未注册的窗口 / 旧数据 / dispatch 子流）回退原 K7-4 行为按 `executionSessionId` 广播
-   - 注释更新为「K7-4 + v2.3 精确中止（spec §6）」，明确双语义并标注 fallback 触发场景
+1. **顶部 imports**：`hasPendingUserTodos` from `./todo-tools`、`SIDEEFFECT_UNLINKED_WARNING` from `./shared/mandate-warning`。
+2. **create_task 分支尾部**（原有 `if (!hasDelegationTarget(input))` 之后追加）：`if (!hasPendingUserTodos(ctx.streamSessionId)) return JSON.stringify({ ...result, warning: SIDEEFFECT_UNLINKED_WARNING })`。两条 warning 互斥——无指派走 NO_ASSIGNMENT_WARNING 优先，此处只覆盖「有指派但失挂靠」。
 
-2. **`electron/tests/agent/session-lane.test.ts`**
-   - 「K7-3 精确中止」describe 追加第 3 用例——同会话另一任务的车道流不被误中止（双车道场景）：注册 T-1/s-a 到 room-1 + T-2/s-b 到 room-2 → `abortTaskStreamByLane('T-2')` → 断言只命中 `s-b`、调用 1 次
+### `electron/src/main/agent/tools/memory-tools.ts`（+9/−1）
 
-### 关键设计点
+1. **顶部 imports**：新增 `hasPendingUserTodos` + `SIDEEFFECT_UNLINKED_WARNING`。
+2. **executeSave 返回处**：拆 `base = 已保存记忆...` 文本，软门禁触发时返回 `${base}\n${SIDEEFFECT_UNLINKED_WARNING}`——主路径文本保持「已保存记忆」开头，便于消费方按前缀判定成功路径。
 
-- **优先级反转**：从「DB 优先 + 全会话广播」改为「车道优先 + DB 兜底广播」。T2 已交付的 `abortTaskStreamByLane(taskId) → boolean` 是单一入口——true 短路返回；false 走原 K7-4 兜底（spec §6 双语义设计）
-- **误杀根因消除**：v2.3 前 `abortTasksBySessionEverywhere(executionSessionId)` 按会话全量广播，同会话的 PM 主流 + dispatch 派生的多个子流被一并 abort。dispatch 子流未注册车道（spec §4.1），现在不会被精确分支误伤；旧数据（执行中但 lane 未注册的窗口）兜底广播兜住
-- **T2 审查裁决（M-5）语义对齐**：abortTaskStreamByLane 的 false = 「车道无记录」∪「resolver 未注入」，回退广播是安全方向——注释「车道无记录（流未注册的窗口 / 旧数据）」措辞沿用此裁决
+### `electron/tests/agent/tools/scope-gate.test.ts`（新建，107 行）
 
-### 非改动文件
+**两组测试共 6 用例**：
+- **副作用软门禁（2）**：create_task 无挂靠 → TaskRow 顶层附 warning（id 仍 'T-900' 验证未阻断）；memory_save 无挂靠 → 返回串追加警告行（断言 `已保存记忆` 前缀与 `⚠` 标记）。
+- **谓词一致性（4，T4 审查遗留项）**：四项种子 [pending user, in_progress user, completed user, pending agent] → true；改种子为 [completed user, pending agent] → false；空种子 → false；[completed agent, pending agent] → false（边界）。同时把 T1 导出的谓词 `hasPendingUserTodos` 锁定为生产行为——与 runtime-entry `pendingUserItems()` 闭包共用同谓词（`status !== 'completed' && source === 'user'`），防谓词分叉漂移。
 
-- `electron/src/main/agent/session-lane.ts` — 仅消费 T2 已交付的 `abortTaskStreamByLane`，本任务不触碰
-- `electron/src/main/agent/runtime-registry.ts` — `abortTasksBySessionEverywhere` 仍保留作为兜底调用方
-- `electron/src/main/agent/stream-relay.ts` — 真实签名经 `tests/agent/session-lane.test.ts` 的 vi.mock 保持形状
+**Mock 设计**（遵循 momo-test-rules）：
+- `storage/tasks/repo`：insertTask 返回 `{id:'T-900', status:'assigned', recurrenceRule:null, ...input}`；transitionTaskStatus 用 vi.fn()
+- `task/executor`：notifyExecutor 用 vi.fn()
+- `memory`：getMemoryProvider 返回仅含 saveMemory 的桩
 
----
+未实际接触 DB（无 runMigrations），保证速度与隔离。
 
-## 验证结果
+### `electron/tests/agent/tools/task-tools-delegation.test.ts`（+6/−2）
 
-### 1. 单元测试（electron 任务域 + agent 域）
+T5 引入的新行为对原「有指派创建 → 无 warning 字段」测试产生影响——soft gate 触发条件是有指派 + 无 user 挂靠，与原测试的「无挂靠」假设冲突。修复方案：
+1. **测试用例改造**：标题改为「有指派创建 + 有 user 挂靠 → 无 warning 字段」（声明式表达前置条件）；调用 create_task 前 `__setTodosForTest('ss-1', [{...source:'user'}])` 模拟用户挂靠，验证无 soft gate 路径。
+2. **跨测试隔离**：`beforeEach` 与 `afterEach` 都 `__setTodosForTest('ss-1', [])`——todoStore 是模块级单例，前序测试残留会污染后续断言。
 
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/session-lane.test.ts tests/task
-```
+## 二、验证结果
 
-| 项 | 数值 |
+| 测试范围 | 结果 |
 |---|---|
-| Test Files | **17 passed (17)** |
-| Tests | **113 passed (113)** |
-| Duration | 2.41s |
+| `tests/agent/tools/scope-gate.test.ts`（6 用例） | ✓ 6 passed |
+| `tests/agent/tools/task-tools-delegation.test.ts`（6 用例） | ✓ 6 passed（回归绿） |
+| `tests/agent/tools/` 全量（167 用例） | ✓ 167 passed |
+| `--filter momo-studio-electron test` 全量（1644 用例） | ✓ 1644 passed |
+| `npx pnpm@9.0.0 typecheck`（electron + renderer） | ✓ 双 clean |
 
-- session-lane.test.ts 5 用例全绿（含新增双车道用例）
-- task 域 108 用例零回归（含 `task:create / task:transition` 等既有覆盖）
+## 三、关键设计取舍
 
-### 2. 类型检查（electron + renderer 双 workspace）
+1. **warning 不阻断操作**——brief 明示契约：create_task 返回体仍含真实 TaskRow 字段；memory_save 返回串仍以「已保存记忆」开头。两处实现都遵循此点：create_task 用 `{...result, warning}` 字段合并（TaskRow 字段全在顶层），memory_save 用 `\n` 拼接警告行（主文本前缀不变）。
 
-```bash
-npx pnpm@9.0.0 typecheck
-```
+2. **两条 warning 互斥而非叠加**——无指派走 NO_ASSIGNMENT_WARNING 优先（spec 已定义），有指派但失挂靠走 SIDEEFFECT_UNLINKED_WARNING。代码层面用 `if/if` 顺序实现（前者已 return，后者在 hasDelegationTarget=true 时才进入）。
 
-```
-electron typecheck: Done
-renderer typecheck: Done
-```
+3. **mock 收窄**——只 mock 进程/数据/异步边界（insertTask / getMemoryProvider / notifyExecutor），业务逻辑用真实实现（createTask 函数本体、hasPendingUserTodos 公共 API、JSON 序列化路径均未被 mock）。
 
-零错误，strict mode 通过（无 `any`、无 `@ts-ignore`、无 `as any`）。
+4. **共享文案 vs 单点定义**——把警告文案提到 `shared/mandate-warning.ts` 是为了避免 task-tools 与 memory-tools 双份定义漂移（task-tools 已有 NO_ASSIGNMENT_WARNING 私人定义是历史债，本次不动）。
 
----
+## 四、风险与遗留
 
-## Commit
-
-```
-109ef46 fix: 任务暂停/取消按 taskId 精确中止执行流（K7-3 不再误杀 dispatch 子流）
-```
-
-- 修改文件：2（ipc.handlers.ts、session-lane.test.ts）
-- Diff：+14 / -3
-
----
-
-## 风险与边界
-
-- **execution_session_id 为 NULL 的旧任务**：原代码直接 return，新代码走 abortTaskStreamByLane → false → 再判 row.executionSessionId 为 NULL → return。行为不变（保守兼容）
-- **lane 注册后又被 runtime-registry 清理的窗口**：abortTaskStreamByLane 返回 false（resolver 不可见），触发兜底广播——T2 M-5 裁决认定这是安全方向，不回归
-- **dispatch 子流场景**（PM 主流 + 多个并行子流）：主流注册车道，子流未注册；中止 PM 任务 → abortTaskStreamByLane 命中主流短路；中止某个子任务 → 子任务本身无 taskId 关联的车道，回退广播把同会话全部流 abort——这是已知 trade-off，子流本身有自己的 taskId 后才能精细化，本任务不触及（spec D7 + §6 双语义兜底）
-- **运行时未注入 resolver**（startup 早期窗口）：abortTaskStreamByLane 返回 false，回退广播兜住
-- **T4 steer 链路无影响**：steer 走 child.send 不经 abort 路径，正交设计（已在 T4 报告 §关键设计点明示）
-
----
-
-## Next / Open
-
-- **T6**（计划第 6 个任务，依赖 T5）：建议作用域 = 主路径端到端验证 + renderer 暂停/取消按钮接线联调 + macOS 主机验收清单对齐
-- **遗留观察项**（非本任务）：dispatch 子流的 taskId 透传 + 独立车道注册若 PM 编排需要，可作为 v2.4+ 增强——本任务明确不实现（brief MUST NOT DO 第 2 条）
-
----
-
-## 与上四任务的关系
-
-| 任务 | 状态 | 关联 |
-|---|---|---|
-| T1 TaskStatus 'session_queued' | ✅ 已交付 | 状态机扩展，K1 调度链路前置 |
-| T2 session-lane 模块 | ✅ 已交付 | `abortTaskStreamByLane` 本任务的消费依赖 |
-| T3 车道接线 | ✅ 已交付 | executor 放行 gate，本任务的同主线支撑 |
-| T4 steer 链路 | ✅ 已交付 | 与本任务正交（abort vs steer） |
-| **T5 精确中止接线（本任务）** | **✅ 已交付** | **K7-3 误杀修复，按 taskId 精确中止 + 兜底广播** |
+- **未触碰 NO_ASSIGNMENT_WARNING**——既有 draft 死局警告文案仍独占于 task-tools.ts，未统一到 shared 层。范围控制决定不重构；后续可一并收敛。
+- **谓词一致性已锁**——T4 闭包 `pendingUserItems`（runtime-entry.ts:317-320）与 T1 导出 `hasPendingUserTodos`（todo-tools.ts:49-53）共用同谓词表达式 `status !== 'completed' && source === 'user'`。scope-gate.test.ts 的 4 个用例覆盖了真值表关键拐点，但未来若引入新 status（如 `cancelled`）或新 source（如 `system`），需同步更新两处谓词+4 测试。

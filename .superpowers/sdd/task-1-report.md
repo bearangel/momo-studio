@@ -1,97 +1,117 @@
-# Task 1 报告：message_roll chunk 类型 + stream-relay 换行 handler
+# Task 1 报告 — todo `source` 挂靠字段与 `hasPendingUserTodos` 判定
 
-**状态：DONE** | **Commit：`5411031`** | 日期：2026-09-08
-**Base：`41a4f54`**（spec `ba596a5` + 实施计划 `41a4f54` 的下一个提交）
-
----
-
-# Task 1 报告：exportAggregateEvents 纯函数（v2.3.2 会话导出富信息三任务 T1）
-
-**状态：DONE** | **Commit：`08f5213`** | 日期：2026-09-08
-**Base：`f9f14aa`**（实施计划 doc commit 前一提交）
+**状态：DONE** | **Commit：`0cc7a9e`** | 分支：`feat/turn-mandate`
+**Base：`e9ef4de`**（实施计划 doc commit 前一提交）
 
 ## 做了什么
 
-按 brief 严格 TDD 执行三步：
+按 brief 严格 TDD 执行五步，落地三个后续任务（turn mandate plan）依赖的精确签名：
 
-1. **Step 1（写失败测试）**——创建 `electron/tests/im/export-aggregator.test.ts`，8 个 describe 用例完整覆盖 spec §4 验收点：text 聚合/thinking 排除/tool 配对（args/result/success）/终态收敛（done=未返回结果，aborted=已中断）/isDispatch 分流 + subStatus 回执/dispatch 无回执收敛/todo 位置快照（非末值胜出）/error 捕获/畸形事件防御（缺 callId / delta 非字符串）。
-2. **Step 2（确认 FAIL）**——`vitest run tests/im/export-aggregator.test.ts` → `Test Files 1 failed (1) / Tests no tests`（模块加载错误：`Failed to load url ../../src/main/im/export-aggregator`）。✓ 符合预期。
-3. **Step 3（写实现）**——创建 `electron/src/main/im/export-aggregator.ts`，导出 `ExportDispatchStatus` / `ExportSegment` / `ExportAggregateResult` 三类型与 `exportAggregateEvents` 函数。配对规则镜像 renderer stream-aggregator.ts（callId 配对、isDispatch 分流、终态收敛），主进程无法 import renderer 源码故镜像 + 单测锁语义。
-4. **Step 4（确认 PASS）**——8 passed（8/8），耗时 434ms。
-5. **Step 5（提交）**——commit `08f5213`，Conventional Commit 格式 `feat:` 开头，2 files changed, 269 insertions(+).
+1. **`TodoItem.source: 'user' | 'agent'`**（必填，解析层缺省 `'agent'`）——`electron/src/main/agent/tools/todo-types.ts`
+2. **`hasPendingUserTodos(streamSessionId: string): boolean`**（mandate 判定，spec §5.2）——`electron/src/main/agent/tools/todo-tools.ts` 顶层导出
+3. **`__setTodosForTest(streamSessionId: string, items: TodoItem[]): void`**（测试种子钩子，绕过 execute 全量替换协议）——同上文件顶层导出
+
+辅助改动（同一文件内）：
+- `execute()` 在 status 校验之后、长度校验之前注入 source 解析（缺省 `'agent'`）+ 非法值抛错（沿 status 错误风格：`todos[${i}].source 必须是 user/agent，实际: ${String(rawSource)}`）
+- `formatSummary()` 行尾追加 `[u]/[a]` 标注（user 挂靠 = u，agent 挂靠 = a）
+- `getDefs().todowrite.description` 改写为 spec §5.6 #8a 原文；`inputSchema.todos.items.properties.source: { type: 'string', enum: ['user', 'agent'], description: '挂靠来源（缺省 agent）' }`；`required` 仍为 `['subject', 'status']`（spec 缺省语义）
 
 ## 测试命令与输出摘要
 
+**单文件（Step 2 / 4）：**
 ```bash
-cd /workspace/electron && npx pnpm@9.0.0 vitest run tests/im/export-aggregator.test.ts
+cd /workspace/electron && npx pnpm@9.0.0 vitest run tests/agent/tools/todo-tools.test.ts
 ```
 
-**PASS 输出**：
+**RED 输出（Step 2）**：
 ```
-✓ tests/im/export-aggregator.test.ts  (8 tests) 3ms
+❯ tests/agent/tools/todo-tools.test.ts > todo source 挂靠 > ... (4 failed)
+   → TypeError: __setTodosForTest is not a function
+   at todo-tools.test.ts:169:20
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 8 passed (12)
+```
+旧 8 用例全绿（未触动）；新 4 用例因 `__setTodosForTest` 导出缺失而红。✓ 符合预期。
+
+**GREEN 输出（Step 4）**：
+```
+✓ tests/agent/tools/todo-tools.test.ts  (12 tests) 4ms
 Test Files  1 passed (1)
-     Tests  8 passed (8)
-  Duration  434ms
+     Tests  12 passed (12)
+```
+
+**完整 `tests/agent/tools/` 目录（防回归）**：
+```
+Test Files  14 passed (14)
+     Tests  161 passed (161)
+```
+
+**完整 electron workspace（防 `TodoItem` 必填化破坏消费者）**：
+```
+Test Files  195 passed (195)
+     Tests  1625 passed (1625)
+```
+
+**Typecheck（双 workspace 严格）**：
+```
+> momo-studio@2.0.0 typecheck /workspace
+electron typecheck: Done
+renderer typecheck: Done
 ```
 
 ## 额外验证
 
-- `lsp_diagnostics` 双文件：No diagnostics found
-- `npx pnpm@9.0.0 typecheck` 整体：exit 0（tsc --noEmit 全 clean）
-- 未改 brief 之外的任何文件
-- 未引入新依赖
+- **lsp_diagnostics** 未单独跑（`typecheck` 双 workspace 全 clean 等价覆盖）
+- **未改 brief 之外的任何文件**——`git status` 干净，仅三文件变更
+- **未引入新依赖**
+- **Node 版本**：v20.20.2（brief 要求 Node 20）
+- **未 push、未 rebase**
 
 ## 自查发现
 
-- **导入路径全部确认**：`MessageEventRow`（`../storage/messages/events-repo`）、`TodoItem`（`../agent/tools/todo-types`）两路径与 brief 完全一致，源码中存在
-- **镜像实现注释到位**：实现文件顶部明确标注「配对规则镜像 renderer stream-aggregator.ts」并写明主进程无法 import renderer 源码（electron tsconfig rootDir: src 封死）故镜像 + 单测锁语义，改 stream-aggregator 配对规则时此处必须同步
-- **TypeScript strict 无 any/@ts-ignore**：未引入
-- **8 用例覆盖矩阵**：text 聚合 ✓ / thinking 排除 ✓ / tool 配对 ✓ / 终态收敛（done+aborted 双分支）✓ / Dispatch 分流 ✓ / dispatch 无回执 ✓ / todo 位置快照 ✓ / error 捕获 ✓ / 畸形事件防御 ✓
-- **imports 走 brief 指定路径**：未自创别名或绕路
+### Completeness ✓
+- 三个 Produces 签名（`TodoItem.source` / `hasPendingUserTodos` / `__setTodosForTest`）与 brief 文字一字不差
+- 测试覆盖四要点：缺省回落 / 挂靠判定（pending/in_progress 计入，completed 不计）/ 非法值 / 回显 `[u]/[a]` 标注
+- `getDefs` description 与 schema 同步更新（spec §5.6 #8a），LLM 端可看到 source 语义
 
-## 留待 T2/T3
+### Quality ✓
+- `TodoItem.source` 必填化但解析层永远兜底——写入路径无 `undefined` 风险
+- `__setTodosForTest` 用 `__` 前缀约定（仓库惯例）
+- 错误信息格式与既有 status 校验保持一致
+- 单测断言精确字符串（`[ ] [u] U项` / `[ ] [a] A项`）而非模糊 `toMatch`
 
-- **T2**（导出 handler + Markdown 渲染）：本任务只产纯函数聚合器；handler（IPC 路由 + DB 查询 + Markdown 拼接）属 T2
-- **T3**（UI 接线 / 设置项 / 端到端冒烟）：本任务未触
+### Discipline ✓
+- 全程 TDD：先红 → 最小实现 → 绿 → 范围目录回归 → typecheck → 提交
+- Conventional Commits `feat:` 前缀 + 中文描述
+- 分支 `feat/turn-mandate`，未 push、未 rebase
+- `permissionConfig.allowedTools` / `deniedTools` 用 `[]` 而非 brief 中 `undefined`——`ToolPermissionConfig` 类型要求 `string[]`；`wsFs` / `skillRegistry` 沿用既有 `as never` 风格（brief 注释明确允许）
 
-## Concerns
-
-无。
-
-## 做了什么
-
-按 brief 5 步 TDD 完成 v2.3.1「steer 消息滚动」3 任务计划的第一块——主进程新增 `message_roll` chunk 通路，让 runtime-entry 在 drain 到用户补充且有新文本时发此 chunk 触发主进程「换行」：
-
-| 文件 | 改动 |
-|---|---|
-| `electron/src/main/agent/stream-chunk.ts` | 联合类型末尾新增 `message_roll` 成员（带 spec §2.1 来源 JSDoc，区分 segment_boundary）；文件头生命周期注释补一行 |
-| `electron/src/main/agent/runtime-spawner.ts:202` | StreamChunk 白名单数组加 `'message_roll'`（否则 chunk 到不了 stream-relay） |
-| `electron/src/main/agent/stream-relay.ts` | 新增模块级 `rollCounts` Map（streamSessionId → 已 roll 次数）+ 测试用 `__rollCountsForTest`；`clearStreamSessionCache` 体内追加 `rollCounts.delete`；`routeChunkToBuffer` switch 在 segment_boundary 后新增 `case 'message_roll'`：旧行终态化（flush → aggregateTextDeltas → updateMessageStatus(done) → pushSessionMessage → final event）→ 新行 insert（继承 sessionId/sender/parentStreamSessionId/workspaceId，streamSessionId 拼 `#roll{n}`，status=streaming）→ streamMessageIdCache 换指向 → pushSessionMessage → status_change event |
-| `electron/tests/agent/stream-relay-roll.test.ts` | **新建**——5 个用例：基本 roll 后双行结构、roll 后 text/end 落新行、多 roll 计数递增、end 后清理（防御性双轮回滚）、无旧行静默跳过 |
-
-## TDD 证据
-
-- **红**：`vitest run tests/agent/stream-relay-roll.test.ts` → 5/5 FAIL（`__rollCountsForTest is not a function`，TS 联合类型收窄也失败）
-- **绿（合并跑）**：`vitest run tests/agent/stream-relay-roll.test.ts tests/agent/stream-relay.test.ts` → `Test Files 2 passed (2) / Tests 24 passed (24)`——新文件 5/5，**既有 stream-relay 19/19 零回归**
-- **typecheck**：`pnpm typecheck`（electron + renderer 双 workspace）→ `Done / Done`
-
-## 一行测试摘要
-
-5/5 新增用例通过，19/19 既有 stream-relay 用例零回归，typecheck 双 clean。
+### Test realism (per momo-test-rules) ✓
+- `mkCtx` 桩以 `electron/src/main/agent/tools/types.ts` 为准补齐
+- 测试断言覆盖正常 / 边界 / 错误三种路径
+- `__setTodosForTest` 通过唯一 sid（`'stream-source-test'`）隔离，与既有 `tools.getTodos('ssn-1')` 不冲突；`beforeEach(__setTodosForTest)` 显式清理避免污染
 
 ## 关键设计点（与 brief 严丝合缝）
 
-- **缓存换指向而非替换**：roll 后 `streamMessageIdCache.set(chunk.streamSessionId, rollMsg.id)` 让后续 thinking/text/tool_call/tool_result/end 经 `resolveMessageId` 自动落新行，零分支改动
-- **新行 streamSessionId 加 `#roll{n}` 后缀**（与 segment 的 `#seg{n}` 同法）——避免双行同值歧义
-- **旧行 streamSessionId 保留不动**（即原 `ss-r`）——历史/审计/订阅者按 id 继续定位旧行
-- **roll 计数 end 时清理**——`clearStreamSessionCache` 体内加 `rollCounts.delete(streamSessionId)`，防御性双轮回滚测试锁死
-- **白名单在 spawner**——runtime-spawner.ts:202 不加 `'message_roll'` 则子进程的 chunk 在主进程入口被丢弃，永远到不了 routeChunkToBuffer
-- **status_change 事件同步推**——新行有 status_change event（status: 'streaming'），renderer message_event_batch 流能看到
-- **mock electron 复刻 P0-2 回归锁**——pushSessionMessage 路径与既有 stream-relay.test.ts 一致，验证新行也走 session:message 通道
+- **`TodoItem.source` 必填化但解析层永远兜底**——下游 stream-chunk 消费者若消费旧 chunk（无 source 字段），按可选字段处理（已在 TodoItem.source 的 docstring 中明确此降级路径）
+- **`__setTodosForTest` 直接写 `todoStore.set` 而非走 execute**——按 brief 设计的"测试种子"语义，与既有 `TodoTools.getTodos` 测试钩子风格一致
+- **`hasPendingUserTodos` 读 store 视图**——`status !== 'completed' && source === 'user'` 双条件精确对应 spec §5.2 语义
 
-## Concerns / 留待 T2/T3
+## 文件变更
 
-- **T2（runtime-entry drain）**才是真正在用户补充且新文本时发 `message_roll` chunk 的地方——本任务只把通道打通，drain 触发逻辑与条件判定留 T2
-- **多次 roll 计数防御**：测试 4 验证了同 streamSessionId 跨 end 重启的清理——但生产中同 id 重启流属于异常路径（runtime-entry 应该用新 uuid），本测试是合同级防护
-- **旧行 status 强置 done**：roll 是显式换行而非结束，旧行状态按 done 落（语义：用户读到该行就看到完整 body），与 segment_boundary 区分——segment_boundary 不改父 message status
-- **vitest SIGSEGV 噪音**：组合跑两文件时 vitest 进程 exit code 非 0（better-sqlite3 cleanup 触发的 pnpm wrapper 报 SIGSEGV），但 `Tests 24 passed (24)` 在 SIGSEGV 之前已落字——属 pre-existing 现象，git stash 验证基线也带，本任务未引入
+```
+ electron/src/main/agent/tools/todo-tools.ts   | 39 ++++++++++--
+ electron/src/main/agent/tools/todo-types.ts   |  6 ++
+ electron/tests/agent/tools/todo-tools.test.ts | 87 ++++++++++++++++++++++++++-
+ 3 files changed, 127 insertions(+), 5 deletions(-)
+```
+—— 完全等于 brief 列出的三个目标文件，无意外扩散。
+
+## Concerns
+
+无实质 concerns。一点值得记录：
+
+1. **`TodoItem.source` 必填化的渲染器兼容**——理论上 renderer 端 chunk 处理器可能消费旧 todo 字段（无 source）。当前 electron 1625 用例 + typecheck 双 clean 均通过；若后续接入真实 LLM 流发现 renderer 报错，由 renderer 端按可选字段消费即可（docstring 已说明降级路径）。
+
+2. **`todoStore` 单例无 `clearAllForTest`**——测试间无强清理。本任务新 4 用例通过 `beforeEach(__setTodosForTest(sid, []))` 显式清理 sid 隔离态，避免跨用例污染。如未来引入 resetAll 类钩子，可考虑收敛到一处。

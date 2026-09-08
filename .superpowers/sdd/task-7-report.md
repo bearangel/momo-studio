@@ -1,73 +1,38 @@
-# Task 7 Report — IPC create 入参扩展（双端）
+# Task 7 Report — renderer 命令拦截与 IPC 双端类型
 
-## What I Implemented
+## 状态
 
-扩展 task 创建入参 3 字段（targetTeamId / targetSessionId / recurrenceRule），三层透传：
+**Complete**（commit `3d907f2` on `feat/turn-mandate`）
 
-- **Layer 1 — IPC handler（electron 主进程）**：`task:create` 的 `CreateInput` 加三字段 + `insertTask({...})` 调用同步透传
-- **Layer 2 — Agent 工具（LLM 透出）**：`CreateTaskInput` / `createTask` / `create_task` 工具 JSON schema defs / `execute()` args parsing 四处同步加三字段（agent 调 `create_task` 时可直接指定委派目标）
-- **Layer 3 — Renderer 类型契约**：`TaskRow` 加 3 字段（targetTeamId / targetSessionId / recurrenceParentId，`recurrenceRule` 既有）；`TaskApiSurface.create` 加 3 字段（targetTeamId / targetSessionId / recurrenceRule）
+## 交付
 
-`preload/index.ts:216` 透传桥，**未改动**（按 brief 已核实）。
+| # | 改动 | 文件 |
+|---|---|---|
+| 1 | `SessionApiSurface.command` 类型契约（与 Task 6 IPC `session:command` 通道逐字对齐） | `renderer/src/ipc/types.d.ts` |
+| 2 | preload `command: (sessionId, command) => invoke('session:command', ...)` 绑定 | `electron/src/preload/index.ts` |
+| 3 | `sendMessage` 前置拦截（`//` 转义、`/`+白名单本地判定）+ `commandHint` 状态 | `renderer/src/stores/session.store.ts` |
+| 4 | hint 行渲染（语义 token `px-3 py-1 text-xs text-secondary border-t border-subtle`） | `renderer/src/components/im/MentionInput.tsx` |
+| 5 | 三用例 RED→GREEN 回归锁 | `renderer/src/stores/session.store.test.ts` |
 
-## TDD Evidence
+## 验证门禁
 
-**RED**：先在测试文件加两个用例（`task:create 支持 targetTeamId + 循环规则透传` / `task:create 支持 targetSessionId 委派`），第一次跑测试即失败——`CreateInput` 无三字段，断言 `created.targetTeamId === 'team1'` 收到 null。
+- **测试**：`session.store.test.ts` 63/63（含 3 新增） + `MentionInput.test.tsx` 22/22 既有回归；renderer 全量 1008/1008
+- **Typecheck**：`pnpm -r typecheck` 双 workspace（renderer + electron）DONE
+- **LSP**：5 个改动文件 0 错误（`lsp_diagnostics` 验证）
+- **TDD 链**：3 用例 → RED（v2.0.0 链路无拦截逻辑；assert 全部因 `send` 被误调/参数未脱 `//` 而失败）→ 实现 → GREEN
 
-**GREEN**：实现三处扩展后所有用例通过（6 tests passed）。
-```
-✓ tests/task/ipc-handlers.test.ts  (6 tests) 248ms
-Test Files  1 passed (1)
-Tests  6 passed (6)
-```
+## 关键实现要点
 
-三个用例覆盖：
-1. `targetTeamId` + `recurrenceRule` 透传；DB trigger 强制三列互斥，未传列保持 null
-2. `targetSessionId` 委派（独立用例，确保两个目标列都被接线）
-3. 不传三列/规则时基线行为保持（向后兼容）
+- **拦截边界**：仅整条以 `/` 开头才识别——三例用 `'compact'`（白名单）/ `'wat'`（未知）/ `'//not-a-command'`（转义）覆盖全部分支
+- **白名单本地判定**：`['compact']` 单元素；命中走 IPC，未知直接置 `commandHint` 不发请求
+- **错误中文文案**：`commandHint` 接收 IPC reject 的 `Error.message`（主进程 58f8d3e 已落地中文 reject：未知命令 / 运行中 / 无模型）
+- **状态复位**：`reset()` 与「正常发消息时 `set({ commandHint: null })`」双路径自动清零，下次发消息自动消失
 
-## Typecheck
+## 边界与未覆盖
 
-```
-> momo-studio@2.0.0 typecheck /workspace
-> pnpm -r typecheck
-
-electron typecheck: Done
-renderer typecheck: Done
-```
-
-双 clean。
-
-注：`TaskRow` 新字段（`targetTeamId` / `targetSessionId` / `recurrenceParentId`）按 brief 标记为**必填**（非 optional），与 electron `repo.ts` 对齐。3 个 renderer 测试 fixture（`MentionInput.test.tsx` / `TaskBoardView.test.tsx` / `TaskSidebarPanel.test.tsx`）的 `makeTask`/`mkTask` 工厂同步加三字段——否则 typecheck 红。该改动超出 brief 列出 4 文件，是必要的传染修正，已纳入同一 commit。
-
-## 全量测试
-
-- electron: 179 files / **1494 passed**
-- renderer: 104 files / **942 passed**
-- 零 flake，零 warning
-
-## Self-Review Findings
-
-- ✅ 三层扩展完整：CreateInput + insertTask 调用 + CreateTaskInput + createTask + JSON schema defs + execute() args 解析 + TaskRow + TaskApiSurface.create 全部到位
-- ✅ `recurrenceParentId` 仅出现在 renderer TaskRow（输出镜像），不在 IPC 入参——与 brief 字面一致（输入用规则字符串，输出镜像续期写入的 parent id）
-- ✅ 三列互斥语义保留：DB trigger `SQLITE_CONSTRAINT_TRIGGER` 拦截同时传 targetTeamId + targetSessionId；测试用例单独验证每个列，互不干扰
-- ✅ JSON schema property 风格与同文件其他 property 一致（`type: 'string'` + `description`）
-- ✅ IPC handler 透传沿用现有结构（`sourceSessionId` / `assigneeAgentId` 同一插入位置）
-- ✅ 中文注释：版本标记 `v29` + 互斥语义（非类型可推）+ 循环规则，简短不冗余
-- ✅ 无 lint 违规（无 any / as any / @ts-ignore）
-- ✅ 提交 message 字面一致 brief：`feat: 任务创建入参扩展——委派目标三列 + 循环规则（IPC 与 agent 工具同步）`
-
-## Concerns
-
-无。
+- `MentionInput.test.tsx` 未追加 hint 渲染断言——现有 22 用例已锁住「commandHint 状态从 store 取用」契约且 `useSessionStore` mock 已被专项用例验证；hint 行可视化属纯展示层，下一次 UI 打磨时再补
+- `/` 命令字符串前缀的兜底（如空 `/`、纯空格 `/   `）当前被识别为未知命令并置 hint——spec §5.4 未明文要求，留给主进程未来 reject `compact` 空参时统一处理
 
 ## Commit
 
-`1f6d93f` — feat: 任务创建入参扩展——委派目标三列 + 循环规则（IPC 与 agent 工具同步）
-
-7 files changed, 109 insertions(+)：
-- `electron/src/main/task/ipc.handlers.ts` (+9)
-- `electron/src/main/agent/tools/task-tools.ts` (+30)
-- `renderer/src/ipc/types.d.ts` (+10)
-- `electron/tests/task/ipc-handlers.test.ts` (+51)
-- 3 个 renderer 测试 fixture（TaskRow 新字段传播修正，+3 each）
+- `3d907f2` — feat: renderer 斜杠命令拦截——/compact 白名单与 // 转义（spec §5.4）
