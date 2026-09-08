@@ -8,6 +8,18 @@ export interface DirEntry {
   size: number;
 }
 
+/** 文件名搜索命中项（file:searchNames 返回行） */
+export interface SearchHit {
+  /** 相对 workspace 根的全路径（含目录前缀，'/' 分隔） */
+  path: string;
+  isDirectory: boolean;
+}
+
+/** searchNames 默认结果上限（spec §5.1） */
+const SEARCH_LIMIT_DEFAULT = 200;
+/** searchNames 遍历条目总数上限（防病态深目录拖死主进程，spec §5.1） */
+const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000;
+
 /**
  * 应用层文件系统沙箱。强制所有路径在 workspace 目录内。
  * 这是 OS 级沙箱（namespace / sandbox-exec）之外的应用层防线（M3 会加 OS 级）。
@@ -88,6 +100,43 @@ export class WorkspaceFS {
           size: stat.size,
         };
       });
+  }
+
+  /**
+   * 递归文件名搜索（spec §5.1）：从 workspace 根遍历，条目名（basename）
+   * 大小写不敏感子串匹配；.git* 前缀与 node_modules 条目排除（与 listDir
+   * 一致）；符号链接目录不进入（Dirent.isDirectory 对 symlink 为 false，
+   * 天然防环）。双上限：结果 limit + 遍历总数 traversalCap。
+   */
+  async searchNames(
+    query: string,
+    limit: number = SEARCH_LIMIT_DEFAULT,
+    traversalCap: number = SEARCH_TRAVERSAL_CAP_DEFAULT,
+  ): Promise<SearchHit[]> {
+    const q = query.trim().toLowerCase();
+    if (q === '') return [];
+    const hits: SearchHit[] = [];
+    let visited = 0;
+    const walk = async (relDir: string): Promise<void> => {
+      const abs = relDir === '.' ? this.rootDir : this.assertInWorkspace(relDir);
+      const entries = await fs.promises.readdir(abs, { withFileTypes: true });
+      for (const e of entries) {
+        if (hits.length >= limit || visited >= traversalCap) return;
+        const lower = e.name.toLowerCase();
+        if (lower.startsWith('.git') || lower === 'node_modules') continue;
+        // 相对路径统一 '/' 分隔（与 file.store 路径拼接约定一致，跨平台稳定）
+        const rel = relDir === '.' ? e.name : `${relDir}/${e.name}`;
+        visited++;
+        if (lower.includes(q)) {
+          hits.push({ path: rel, isDirectory: e.isDirectory() });
+        }
+        if (e.isDirectory()) {
+          await walk(rel);
+        }
+      }
+    };
+    await walk('.');
+    return hits;
   }
 
   async exists(relativePath: string): Promise<boolean> {
