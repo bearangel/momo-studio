@@ -29,6 +29,18 @@ vi.mock('electron', () => ({
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
+import * as executorMod from '../../src/main/task/executor';
+import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
+import * as runtimeRegistryMod from '../../src/main/agent/runtime-registry';
+import * as sessionServiceMod from '../../src/main/im/session-service';
+
+// K3：task:update 成功后需触发调度重评估 + P2P 快照广播——spy 模块导出
+// （tsc→CJS 编译为属性访问，spy 生效），不断言内部实现
+const notifyExecutorSpy = vi.spyOn(executorMod, 'notifyExecutor');
+const broadcastSpy = vi.spyOn(taskBroadcastMod, 'broadcastLocalTaskSnapshot');
+// K7-4/K7-5：暂停/取消联动中断 + resume kickoff 重注入——同样 spy 模块边界
+const abortSpy = vi.spyOn(runtimeRegistryMod, 'abortTasksBySessionEverywhere');
+const sendUserMessageSpy = vi.spyOn(sessionServiceMod, 'sendUserMessage');
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -52,6 +64,10 @@ afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
+  notifyExecutorSpy.mockClear();
+  broadcastSpy.mockClear();
+  abortSpy.mockClear();
+  sendUserMessageSpy.mockClear();
 });
 
 describe('task:update（minor-11）', () => {
@@ -84,6 +100,129 @@ describe('task:update（minor-11）', () => {
     const row = getTask(t.id)!;
     expect(row.status).toBe('cancelled'); // 终态保持
     expect(row.title).toBe('tried-to-revive'); // title 仍可改（这是 task:update 允许的）
+  });
+
+  // K3 回归锁（P0 修复）：旧实现 task:update 成功后不触发 notifyExecutor /
+  // 快照广播（其余四个写通道都有）——编辑改了 assignee 的排队任务，
+  // executor 不会为新指派重评估，看板远端镜像也不同步。
+  it('K3: task:update 成功 → 触发调度重评估 + P2P 快照广播', async () => {
+    const t = insertTask({ workspaceId: 'ws1', title: 'orig', creatorUserId: '@owner:home' });
+    const handler = handlers.get('task:update')!;
+    await handler(null, t.id, { assigneeAgentId: 'inst-new' });
+
+    expect(notifyExecutorSpy).toHaveBeenCalledTimes(1);
+    expect(broadcastSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('K3: task:update 前置校验失败（任务不存在）→ 不触发通知', async () => {
+    const handler = handlers.get('task:update')!;
+    await expect(handler(null, 'T-9999', { title: 'nope' })).rejects.toThrow();
+    expect(notifyExecutorSpy).not.toHaveBeenCalled();
+    expect(broadcastSpy).not.toHaveBeenCalled();
+  });
+});
+
+// K7-4/K7-5：任务暂停/取消 ↔ agent 执行的双向联动。
+// 暂停/取消只改 DB 是半套语义——agent 还在跑（token 白烧 + 状态漂移）；
+// 联动 abort 按 executionSessionId 匹配（kickoff 驱动的流是 ephemeral，
+// taskId=null）。resume 反向：paused → in_progress + kickoff 重注入。
+describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
+  /** seed 一个 paused 任务（带执行会话 + assignee），走过完整合法链 */
+  function seedPausedTask(execSessionId: string): string {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '联动任务',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-x',
+      status: 'assigned',
+    });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: execSessionId });
+    transitionTaskStatus(t.id, 'paused');
+    return t.id;
+  }
+
+  it('K7-4: transition → paused → 联动中断该任务执行会话的活跃流', async () => {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '暂停联动',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-x',
+      status: 'assigned',
+    });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: 'sess-lex' });
+
+    const handler = handlers.get('task:transition')!;
+    await handler(null, t.id, 'paused');
+
+    expect(getTask(t.id)!.status).toBe('paused');
+    expect(abortSpy).toHaveBeenCalledWith('sess-lex');
+  });
+
+  it('K7-4: task:cancel → 联动中断', async () => {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '取消联动',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-x',
+      status: 'assigned',
+    });
+    transitionTaskStatus(t.id, 'in_progress', { executionSessionId: 'sess-cex' });
+
+    const handler = handlers.get('task:cancel')!;
+    await handler(null, t.id);
+
+    expect(getTask(t.id)!.status).toBe('cancelled');
+    expect(abortSpy).toHaveBeenCalledWith('sess-cex');
+  });
+
+  it('K7-4: transition 到无关状态（如 assigned）不触发中断', async () => {
+    const t = insertTask({ workspaceId: 'ws1', title: '无关联', creatorUserId: '@owner:home' });
+    const handler = handlers.get('task:transition')!;
+    await handler(null, t.id, 'assigned');
+    expect(abortSpy).not.toHaveBeenCalled();
+  });
+
+  it('K7-4: 无执行会话的任务取消（未启动的 assigned）→ 不触发中断', async () => {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '未启动',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-x',
+      status: 'assigned',
+    });
+    const handler = handlers.get('task:cancel')!;
+    await handler(null, t.id);
+    expect(abortSpy).not.toHaveBeenCalled();
+  });
+
+  it('K7-5: task:resume → paused 转 in_progress + kickoff 重注入执行会话', async () => {
+    const taskId = seedPausedTask('sess-res');
+    // 局部拦截 sendUserMessage 真身（内部是 insertMessage + 接待路由重链路，
+    // 本用例只断言 kickoff 注入参数）；其余用例保持 spy 直通
+    sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
+
+    const handler = handlers.get('task:resume')!;
+    const row = await handler(null, taskId);
+
+    expect(row.status).toBe('in_progress');
+    expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
+    const kickoff = sendUserMessageSpy.mock.calls[0]![0] as {
+      sessionId: string;
+      body: string;
+      mentionedInstanceIds?: string[];
+      systemKickoff?: boolean;
+    };
+    expect(kickoff.sessionId).toBe('sess-res');
+    expect(kickoff.body).toContain(taskId);
+    expect(kickoff.mentionedInstanceIds).toEqual(['inst-x']);
+    expect(kickoff.systemKickoff).toBe(true);
+  });
+
+  it('K7-5: 非 paused 任务 resume → 状态机拦截抛错', async () => {
+    const t = insertTask({ workspaceId: 'ws1', title: 'draft 任务', creatorUserId: '@owner:home' });
+    const handler = handlers.get('task:resume')!;
+    await expect(handler(null, t.id)).rejects.toThrow();
+    expect(sendUserMessageSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -151,14 +290,64 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
     expect(created.status).toBe('pending');
   });
 
-  it('task:create 不带 scheduledAt → 落 draft（repo 单点默认，create 不硬编码）', async () => {
+  // K1 回归锁（P0 修复）：带委派目标但无 scheduledAt 的任务旧实现落 draft，
+  // 而 scheduler 只消费 pending、executor 只消费 assigned——draft 任务被两个
+  // 调度器同时无视，指派了 agent 也永远不会自动执行（用户主机验收报告）。
+  // 新行为：有目标 + 无计划时间 → 直接入队 assigned，executor 立即评估放行。
+  it('K1: task:create 带 assigneeAgentId 不带 scheduledAt → 落 assigned（立即入队）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '指派任务',
+      creatorUserId: 'owner',
+      assigneeAgentId: 'inst1',
+    });
+    expect(created.status).toBe('assigned');
+  });
+
+  it('K1: task:create 带 targetTeamId 不带 scheduledAt → 落 assigned', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '团队任务',
+      creatorUserId: 'owner',
+      targetTeamId: 'team1',
+    });
+    expect(created.status).toBe('assigned');
+  });
+
+  it('K1: task:create 带 targetSessionId 不带 scheduledAt → 落 assigned', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '会话任务',
+      creatorUserId: 'owner',
+      targetSessionId: 'sess-1',
+    });
+    expect(created.status).toBe('assigned');
+  });
+
+  // 无目标 = 用户暂存草稿（「不指派」语义），保持 draft 等待手动编辑指派
+  it('K1: task:create 无委派目标不带 scheduledAt → 落 draft（草稿暂存）', async () => {
     const handler = handlers.get('task:create')!;
     const created = await handler(null, {
       workspaceId: 'ws1',
       title: '手动任务',
       creatorUserId: 'owner',
-      assigneeAgentId: 'inst1',
     });
     expect(created.status).toBe('draft');
+  });
+
+  // 无目标 + 带 scheduledAt：维持 C1 语义落 pending（到点 scheduler 因无目标
+  // 不升级，用户可手动启动——pending 允许 startTask）
+  it('K1: task:create 无委派目标但带 scheduledAt → 落 pending（C1 语义保持）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = await handler(null, {
+      workspaceId: 'ws1',
+      title: '定时手动任务',
+      creatorUserId: 'owner',
+      scheduledAt: Date.now() + 60_000,
+    });
+    expect(created.status).toBe('pending');
   });
 });

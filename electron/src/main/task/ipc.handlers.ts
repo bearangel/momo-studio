@@ -32,10 +32,12 @@ import {
   type TaskStatus,
 } from '../storage/tasks/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
-import { notifyExecutor } from './executor';
+import { notifyExecutor, buildKickoffBody } from './executor';
 import { startTask, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
+import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
+import { sendUserMessage } from '../im/session-service';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -67,17 +69,38 @@ interface ListOpts {
   limit?: number;
 }
 
+/**
+ * K7-4：任务转 paused / cancelled 时联动中断 agent 执行——只改 DB 是半套
+ * 语义（agent 继续跑白烧 token）。先转状态后 abort：中断后的 task-end
+ * 到达时行已终态/paused，幂等跳过（agent-runner K7-2 防覆盖），无竞态。
+ */
+function abortTaskExecutionIfAny(taskId: string): void {
+  const row = getTask(taskId);
+  if (!row?.executionSessionId) return;
+  abortTasksBySessionEverywhere(row.executionSessionId);
+}
+
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
-    // v2（Task 11）：单用户本地应用——creatorUserId 固定 'owner'（NOT NULL 列）。
-    // C1：带 scheduledAt 的任务直接落 pending（spec §4.4「pending = 定时未到」），
-    // 让 scheduler 可接管；否则恒落 draft 定时管线断链。不带时传 undefined
-    // 走 repo 单点默认，不在入口硬编码 'draft'
+    // K1（P0 修复）：状态决策必须保证「已指派的任务会被自动调度」——
+    // scheduler 只消费 pending、executor 只消费 assigned，落 draft 的指派
+    // 任务两个调度器都不认（主机验收 P0）。决策表：
+    //   有委派目标 + 无 scheduledAt → assigned（executor 立即评估放行）
+    //   有委派目标 + 有 scheduledAt → pending（到点 scheduler 升 assigned，C1）
+    //   无目标 + 有 scheduledAt    → pending（C1 定时管线语义保持；scheduler
+    //                                因无目标不升级，用户可手动启动）
+    //   无目标 + 无 scheduledAt    → draft（repo 单点默认，草稿暂存）
+    const hasTarget =
+      input.assigneeAgentId != null ||
+      input.targetTeamId != null ||
+      input.targetSessionId != null;
+    const status =
+      input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined;
     const created = insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
       creatorUserId: 'owner',
-      status: input.scheduledAt != null ? 'pending' : undefined,
+      status,
       description: input.description,
       priority: input.priority,
       sourceSessionId: input.sourceSessionId,
@@ -109,13 +132,20 @@ export function registerTaskHandlers(): void {
       // state-machine 直接写 status 会让终端任务复活 / 非法迁移。状态变更
       // 强制走 task:transition / task:cancel（断言 + bump updated_at）。
       // renderer 误传时记 warn 帮助定位，status 字段静默丢弃
+      let applied: Partial<TaskRow>;
       if (patch && Object.prototype.hasOwnProperty.call(patch, 'status')) {
         const { status: _stripped, ...rest } = patch;
         logger.warn('task:update 携带 status 字段已剥离——请用 task:transition / task:cancel', { id });
-        updateTask(id, rest);
-        return;
+        applied = rest;
+      } else {
+        applied = patch;
       }
-      updateTask(id, patch);
+      updateTask(id, applied);
+      // K3（P0 修复）：与 create/transition/cancel/start 四写通道对齐——
+      // 编辑可能改 assignee/目标（排队任务的执行对象变化），
+      // 成功后必须触发调度重评估 + P2P 快照广播
+      void broadcastLocalTaskSnapshot();
+      notifyExecutor();
     },
   );
 
@@ -128,6 +158,9 @@ export function registerTaskHandlers(): void {
       extraPatch?: Parameters<typeof transitionTaskStatus>[2],
     ): Promise<TaskRow> => {
       const row = transitionTaskStatus(id, to, extraPatch);
+      if (to === 'paused' || to === 'cancelled') {
+        abortTaskExecutionIfAny(id);
+      }
       void broadcastLocalTaskSnapshot();
       notifyExecutor();
       return row;
@@ -136,8 +169,28 @@ export function registerTaskHandlers(): void {
 
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
     transitionTaskStatus(id, 'cancelled');
+    abortTaskExecutionIfAny(id);
     void broadcastLocalTaskSnapshot();
     notifyExecutor();
+  });
+
+  // K7-5：恢复暂停的任务——paused → in_progress + kickoff 重注入执行会话。
+  // agent 接收 kickoff 后接续会话历史继续工作（执行上下文未丢）；agent 已
+  // 停止时接待路由的 ensureRunner 自动拉起。无执行会话的边角（不应出现，
+  // paused 行必经 in_progress 锁定）只转状态，不注入。
+  ipcMain.handle('task:resume', async (_evt, id: string): Promise<TaskRow> => {
+    const row = transitionTaskStatus(id, 'in_progress');
+    if (row.executionSessionId) {
+      await sendUserMessage({
+        sessionId: row.executionSessionId,
+        body: buildKickoffBody(row),
+        mentionedInstanceIds: row.assigneeAgentId ? [row.assigneeAgentId] : undefined,
+        systemKickoff: true,
+      });
+    }
+    void broadcastLocalTaskSnapshot();
+    notifyExecutor();
+    return row;
   });
 
   ipcMain.handle(

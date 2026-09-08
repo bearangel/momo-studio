@@ -222,6 +222,8 @@ const api: ApiSurface = {
     start: (id, opts) =>
       invoke<{ executionSessionId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
+    // K7-5：恢复暂停的任务（paused → in_progress + kickoff 重注入执行会话）
+    resume: (id) => invoke<TaskRow>('task:resume', id),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),
   },

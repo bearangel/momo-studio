@@ -323,8 +323,9 @@ describe('task IPC 写路径触发接线', () => {
     expect(call[0]).toBe('T-1');
     expect(call[1]).not.toHaveProperty('status');
     expect(call[1]).toMatchObject({ title: '新标题', priority: 5 });
-    // task:update 不是写通道（不触发快照广播）
-    expect(sync.broadcastTaskSnapshot).not.toHaveBeenCalled();
+    // K3：task:update 升格为写通道——成功后触发快照广播（编辑可能改指派/
+    // 目标，远端镜像需同步；旧断言「不广播」随 K3 行为变更废止）
+    expect(sync.broadcastTaskSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('minor-11：task:update 不带 status 时按原样透传给 repo', async () => {
