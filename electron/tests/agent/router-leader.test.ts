@@ -189,7 +189,14 @@ describe('契约①：非 @ 消息 → is_leader=1 且有效成员接待', () =>
     await sendUserMessage({ sessionId: s.id, body: '大家好' });
 
     expect(routeUserChat).toHaveBeenCalledTimes(1);
-    expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-lead', body: '大家好' });
+    expect(routeUserChat).toHaveBeenCalledWith({
+      sessionId: s.id,
+      assignmentId: 'inst-lead',
+      body: '大家好',
+      // v2.3 车道透传链（spec §4.4）：手输消息两字段取默认值
+      systemKickoff: false,
+      sourceTaskId: null,
+    });
   });
 
   it('无 leader 的历史会话（成员均在但 is_leader=0）→ 不派发任何 agent，readOnly=false', async () => {
@@ -230,7 +237,14 @@ describe('契约②：@ 成员直答，leader 不插嘴', () => {
     setSessionRouter({ routeUserChat });
     await sendUserMessage({ sessionId: s.id, body: '@Beta 你来', mentionedInstanceIds: ['inst-b'] });
 
-    expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-b', body: '@Beta 你来' });
+    expect(routeUserChat).toHaveBeenCalledWith({
+      sessionId: s.id,
+      assignmentId: 'inst-b',
+      body: '@Beta 你来',
+      // v2.3 车道透传链（spec §4.4）：手输消息两字段取默认值
+      systemKickoff: false,
+      sourceTaskId: null,
+    });
   });
 
   it('@ 非会话成员 → mention 未命中，回退 leader 接待', async () => {
@@ -332,7 +346,14 @@ describe('契约④：失效成员（已移出 ws）跳过；全部失效 → �
     setSessionRouter({ routeUserChat });
     const result = await sendUserMessage({ sessionId: s.id, body: '有人吗', mentionedInstanceIds: ['inst-gone'] });
 
-    expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-lead', body: '有人吗' });
+    expect(routeUserChat).toHaveBeenCalledWith({
+      sessionId: s.id,
+      assignmentId: 'inst-lead',
+      body: '有人吗',
+      // v2.3 车道透传链（spec §4.4）：手输消息两字段取默认值
+      systemKickoff: false,
+      sourceTaskId: null,
+    });
     expect(result).toEqual({ readOnly: false });
   });
 

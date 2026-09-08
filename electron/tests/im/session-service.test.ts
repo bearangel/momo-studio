@@ -249,7 +249,14 @@ describe('sendUserMessage 全链', () => {
     });
 
     expect(routeUserChat).toHaveBeenCalledTimes(1);
-    expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-a', body: '你好' });
+    expect(routeUserChat).toHaveBeenCalledWith({
+      sessionId: s.id,
+      assignmentId: 'inst-a',
+      body: '你好',
+      // v2.3 车道透传链（spec §4.4）：手输消息两字段取默认值
+      systemKickoff: false,
+      sourceTaskId: null,
+    });
   });
 
   it('mention 命中时按 mention 路由（多成员会话，leader 不插嘴）', async () => {
@@ -268,7 +275,14 @@ describe('sendUserMessage 全链', () => {
 
     await sendUserMessage({ sessionId: s.id, body: '交给 b 做', mentionedInstanceIds: ['inst-b'] });
 
-    expect(routeUserChat).toHaveBeenCalledWith({ sessionId: s.id, assignmentId: 'inst-b', body: '交给 b 做' });
+    expect(routeUserChat).toHaveBeenCalledWith({
+      sessionId: s.id,
+      assignmentId: 'inst-b',
+      body: '交给 b 做',
+      // v2.3 车道透传链（spec §4.4）：手输消息两字段取默认值
+      systemKickoff: false,
+      sourceTaskId: null,
+    });
   });
 
   it('无 leader 多成员（无目标）→ 不调 router，消息仍落库，readOnly=false', async () => {
