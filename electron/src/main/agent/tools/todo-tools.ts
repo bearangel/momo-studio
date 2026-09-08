@@ -58,11 +58,11 @@ export function hasPendingUserTodos(streamSessionId: string): boolean {
  * 返回给 LLM 的结构化摘要格式（便于 LLM 自我感知进度）：
  *   ```
  *   当前任务列表（N/M 完成）:
- *   1. [x] 已完成项
- *   2. [>] 进行中项
+ *   1. [x] [u] 已完成项
+ *   2. [>] [a] 进行中项
  *   3. [ ] 待办项
  *   ```
- * 其中 status 图标：completed='x' / in_progress='>' / pending=' '。
+ * 其中 status 图标：completed='x' / in_progress='>' / pending=' '；source 标注（spec §5.3）：'user'=[u] / 'agent'=[a]，未标注按 'agent' 解析。
  */
 export class TodoTools implements ToolModule {
   getDefs(): LLMToolDef[] {

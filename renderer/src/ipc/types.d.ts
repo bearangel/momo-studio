@@ -592,6 +592,12 @@ export interface TodoItem {
   id: string;
   subject: string;
   status: 'pending' | 'in_progress' | 'completed';
+  /**
+   * 挂靠来源（turn mandate 契约，spec §5.3）：'user'=本轮用户请求直接要求的步骤；
+   * 'agent'=agent 自发扩展。electron 端 todo-tools 解析层缺省 'agent'（保守取向：
+   * 未标注不算授权挂靠）。renderer 端为兼容旧 chunk 载荷按可选字段消费。
+   */
+  source?: 'user' | 'agent';
 }
 
 /**
@@ -665,18 +671,18 @@ export interface SessionMemberInfo {
 }
 
 /**
-   * v2.0 P1 会话内核：会话列表项（含成员）。
-   * 与 electron 端 im/session-ops.ts 的 SessionSummary 对齐。
-   */
-  export interface SessionSummary {
-    id: string;
-    workspaceId: string;
-    title: string;
-    titleAuto: boolean;
-    kind: SessionKind;
-    lastMessageAt: number | null;
-    members: SessionMemberInfo[];
-  }
+ * v2.0 P1 会话内核：会话列表项（含成员）。
+ * 与 electron 端 im/session-ops.ts 的 SessionSummary 对齐。
+ */
+export interface SessionSummary {
+  id: string;
+  workspaceId: string;
+  title: string;
+  titleAuto: boolean;
+  kind: SessionKind;
+  lastMessageAt: number | null;
+  members: SessionMemberInfo[];
+}
 
 /**
  * v25 spec §4.4：协作会话目标——单个 agent 或团队（快照展开）。
