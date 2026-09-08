@@ -12,10 +12,7 @@ import { MessageSquare } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { useBotNameMap } from '../../lib/useBotNames';
-import { groupBySegment } from '../../lib/group-segments';
-import type { ImMessage } from '../../ipc/types';
 import { MessageBubble } from './MessageBubble';
-import { SegmentStack } from './SegmentStack';
 import { EmptyState } from '../ui/EmptyState';
 
 export function MessageList() {
@@ -136,14 +133,18 @@ export function MessageList() {
 
   // v1.4 嵌套：dispatch/task_reply/子 agent 回复（含 parent_stream_session_id）
   // 不作为顶层独立消息渲染——它们已嵌套在 PM 气泡的 dispatch chip 内。
+  // 2026-09-08 修复：task_complete 分段行（segmentOf 非空）同样不渲染——
+  // v2.0 契约下分段行只是 body 文本快照，thinking/tool_call/dispatch events
+  // 全挂父 messageId；旧 groupBySegment 用分段行替换父消息会让富信息在
+  // 实时/切回/重启三路全部丢失。父消息是唯一显示主体（end 时 body 已是
+  // 全部 text_delta 聚合，内容无损）。
   const visibleMessages = (messages ?? []).filter((msg) => {
     if (msg.eventType === 'io.momo-studio.dispatch') return false;
     if (msg.eventType === 'io.momo-studio.task_reply') return false;
     if (msg.parentStreamSessionId) return false;
+    if (msg.segmentOf !== null) return false;
     return true;
   });
-
-  const groupedItems = groupBySegment(visibleMessages);
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
@@ -153,27 +154,14 @@ export function MessageList() {
       {activeSessionId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
         <div className="text-center text-xs text-tertiary py-2">— 已到顶部 —</div>
       )}
-      {groupedItems.map((item) => {
-        if ('kind' in item && item.kind === 'segment-group') {
-          return (
-            <SegmentStack
-              key={`seg-${item.streamSessionId}`}
-              group={item}
-              isSelf={item.segments[0]?.sender === currentUserId}
-              senderName={botNameByUserId.get(item.segments[0]?.sender ?? '')}
-            />
-          );
-        }
-        const msg = item as ImMessage;
-        return (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isSelf={msg.sender === currentUserId}
-            senderName={botNameByUserId.get(msg.sender)}
-          />
-        );
-      })}
+      {visibleMessages.map((msg) => (
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          isSelf={msg.sender === currentUserId}
+          senderName={botNameByUserId.get(msg.sender)}
+        />
+      ))}
     </div>
   );
 }

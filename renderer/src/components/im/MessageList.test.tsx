@@ -255,3 +255,63 @@ describe('MessageList 发送即贴底', () => {
     expect(scrollTo).not.toHaveBeenCalled();
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 2026-09-08 主机 bug 回归锁：task_complete 分段行到达后 thinking/工具调用丢失
+//
+// 根因（v1.7.4 → v2.0 契约漂移）：groupBySegment 把父消息替换出渲染列表，
+// 而 v2.0 的 thinking/tool_call/dispatch events 全挂父 messageId——分段行只是
+// body 文本快照（仅一个 final{body} 事件），渲染为静态纯文本气泡。首个分段
+// 到达瞬间 UI「刷新」塌缩，父消息富信息在实时/切回/重启三路全部不可见。
+//
+// 新契约：分段行（segmentOf 非空）不独立渲染（与 dispatch/task_reply 同列
+// 过滤）——父消息是唯一显示主体（end 时 body=全部 text_delta 聚合，
+// AgentStreamBubble 渲染完整 events 时间线，内容无损）。
+describe('MessageList v2.0 分段行渲染契约（富信息不丢）', () => {
+  it('分段行（segmentOf 非空）不独立渲染，父消息保持渲染', () => {
+    renderWith([
+      makeMsg({ id: 'u1', body: '帮我委派任务', sender: 'owner' }),
+      makeMsg({
+        id: 'parent-1',
+        body: '完整正文（end 时 aggregateTextDeltas 全量回写）',
+        streamSessionId: 'stream-S',
+      }),
+      makeMsg({
+        id: 'seg-1',
+        body: '第一段快照',
+        streamSessionId: 'stream-S#seg1',
+        segmentOf: 'stream-S',
+        segmentIndex: 1,
+      }),
+      makeMsg({
+        id: 'seg-2',
+        body: '第二段快照',
+        streamSessionId: 'stream-S#seg2',
+        segmentOf: 'stream-S',
+        segmentIndex: 2,
+      }),
+    ]);
+    // 父消息必须渲染（它承载全部 events 富信息——thinking/工具调用/dispatch）
+    expect(screen.getByText('完整正文（end 时 aggregateTextDeltas 全量回写）')).toBeInTheDocument();
+    // 分段行是 body 快照冗余，不独立渲染
+    expect(screen.queryByText('第一段快照')).not.toBeInTheDocument();
+    expect(screen.queryByText('第二段快照')).not.toBeInTheDocument();
+    // 恰 2 条顶层气泡：用户消息 + 父消息
+    expect(screen.getAllByTestId('bubble')).toHaveLength(2);
+  });
+
+  it('孤儿分段行（父消息不在当前列表）同样不渲染（数据异常走数据修复，UI 不兜底）', () => {
+    renderWith([
+      makeMsg({ id: 'm1', body: '普通消息' }),
+      makeMsg({
+        id: 'seg-orphan',
+        body: '孤儿分段',
+        segmentOf: 'stream-gone',
+        segmentIndex: 1,
+      }),
+    ]);
+    expect(screen.getByText('普通消息')).toBeInTheDocument();
+    expect(screen.queryByText('孤儿分段')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('bubble')).toHaveLength(1);
+  });
+});
