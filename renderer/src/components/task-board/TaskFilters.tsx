@@ -12,6 +12,8 @@ export interface FilterState {
   status: 'all' | TaskStatus;
   assignee: 'all' | string;
   sort: 'priority' | 'scheduled_at' | 'created_at';
+  /** 文本过滤（spec §4）：匹配 title + description，空 = 不过滤 */
+  text: string;
 }
 
 /** assignee 下拉单个选项；label=agentName，value=instanceId（用于与 task.assigneeAgentId 匹配） */
@@ -30,6 +32,13 @@ interface TaskFiltersProps {
 export function TaskFilters({ value, onChange, assigneeOptions }: TaskFiltersProps) {
   return (
     <div className="flex items-center gap-2 p-2 border-b border-subtle text-xs">
+      <input
+        value={value.text}
+        onChange={(e) => onChange({ ...value, text: e.target.value })}
+        placeholder="搜索任务"
+        aria-label="搜索任务"
+        className="flex-1 min-w-0 bg-transparent text-xs text-primary placeholder:text-tertiary outline-none"
+      />
       <select
         value={value.status}
         onChange={(e) =>

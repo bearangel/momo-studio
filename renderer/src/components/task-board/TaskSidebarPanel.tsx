@@ -9,31 +9,21 @@
 // P4 Task 3 追加：底部「远端节点」只读分区——p2p:getRemoteTasks 5s 轮询，
 // 每节点一张分组卡（节点名 + 相对时间 + 已离线? 标记 + 只读任务行），
 // 无任何操作按钮（远端任务不进本地 tasks 表，仅镜像展示）。
+//
+// sidebar-search Task 5：过滤+排序逻辑外迁至 task-filter.ts（applyTaskFilters 纯函数）；
+// 文本过滤态与 status/assignee AND 叠加；切 workspace 时清空文本（spec §6）。
 import { useEffect, useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { ipc } from '../../ipc/client';
-import type { RemoteNodeTasks, TaskStatus } from '../../ipc/types';
+import type { RemoteNodeTasks } from '../../ipc/types';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { TaskList } from './TaskList';
 import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
+import { applyTaskFilters } from './task-filter';
 import { remoteStatusStyle } from '../../lib/task-status';
-
-/** 'all' 的语义 = 不过滤（全部 8 态）。终态历史由 task.store.load 的
- *  orderBy created_at_desc + limit 500 截断保障（保留最新 500 条避免无限累积）；
- *  若用户想聚焦活跃任务，显式选具体状态或筛掉终态选项即可——「全部」= 「全部」。 */
-const ALL_STATUSES: TaskStatus[] = [
-  'draft',
-  'pending',
-  'assigned',
-  'in_progress',
-  'paused',
-  'completed',
-  'failed',
-  'cancelled',
-];
 
 /** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
 const REMOTE_REFRESH_INTERVAL_MS = 5000;
@@ -112,8 +102,14 @@ export function TaskSidebarPanel() {
     status: 'all',
     assignee: 'all',
     sort: 'priority',
+    text: '',
   });
   const [createOpen, setCreateOpen] = useState(false);
+
+  // spec §6：切 workspace 时清空文本过滤（组件常驻不卸载，需显式复位；与 RoomList/FileTree 同款）
+  useEffect(() => {
+    setFilter((f) => ({ ...f, text: '' }));
+  }, [workspace?.id]);
 
   // assignee 下拉选项：从当前 workspace 的 members 派生
   // （agentName 由后端 JOIN definitions 产出，v2.2 起恒有值）
@@ -128,32 +124,8 @@ export function TaskSidebarPanel() {
     [members, workspace],
   );
 
-  // 筛选 + 排序（自 TaskBoardView 原样迁移；v2.3 'all' 语义改回「全部 8 态」不过滤）
-  const filteredTasks = useMemo(() => {
-    let list = [...tasks];
-    if (filter.status === 'all') {
-      list = list.filter((t) => ALL_STATUSES.includes(t.status));
-    } else {
-      list = list.filter((t) => t.status === filter.status);
-    }
-    if (filter.assignee !== 'all') {
-      list = list.filter((t) => t.assigneeAgentId === filter.assignee);
-    }
-    list.sort((a, b) => {
-      if (filter.sort === 'priority') {
-        return b.priority - a.priority || a.createdAt - b.createdAt;
-      }
-      if (filter.sort === 'scheduled_at') {
-        return (
-          (a.scheduledAt ?? Number.MAX_SAFE_INTEGER) -
-          (b.scheduledAt ?? Number.MAX_SAFE_INTEGER)
-        );
-      }
-      // created_at
-      return a.createdAt - b.createdAt;
-    });
-    return list;
-  }, [tasks, filter]);
+  // 过滤 + 排序（纯函数抽至 task-filter.ts，spec §4）
+  const filteredTasks = useMemo(() => applyTaskFilters(tasks, filter), [tasks, filter]);
 
   /** 排队排名：assigned 按放行序（spec §4.4 同款排序）计算「排队 #N」 */
   const queueRanks = useMemo(() => {
@@ -192,6 +164,7 @@ export function TaskSidebarPanel() {
         selectedId={selectedTaskId}
         onSelect={(id) => setSelectedTaskId(id)}
         queueRanks={queueRanks}
+        emptyText={filter.text.trim() !== '' ? '无匹配任务' : undefined}
       />
       <RemoteTaskSection />
       {workspace && (

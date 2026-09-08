@@ -4,11 +4,15 @@
 //   - 渲染外部传入的 assigneeOptions（label=valueAgentName, value=instanceId）
 //   - 保留 "全部 agent" 占位（value='all'）
 //   - 选择后 onChange 携带新 assignee（其余字段保持）
+//
+// sidebar-search Task 5：FilterState.text 字段 + 文本输入框接线
+//   - INITIAL 与既有 onChange 期望对象补 text: ''
+//   - 文本输入触发 onChange 携带 text 更新，其余字段不变
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TaskFilters, type FilterState } from './TaskFilters';
 
-const INITIAL: FilterState = { status: 'all', assignee: 'all', sort: 'priority' };
+const INITIAL: FilterState = { status: 'all', assignee: 'all', sort: 'priority', text: '' };
 
 describe('TaskFilters', () => {
   it('默认 assignee 下拉只有「全部 agent」', () => {
@@ -56,6 +60,21 @@ describe('TaskFilters', () => {
       status: 'all',
       assignee: 'inst-pm',
       sort: 'priority',
+      text: '',
+    });
+  });
+
+  it('文本输入 onChange 携带 text 更新，其余字段不变', () => {
+    const onChange = vi.fn();
+    render(
+      <TaskFilters value={INITIAL} onChange={onChange} assigneeOptions={[]} />,
+    );
+    fireEvent.change(screen.getByLabelText('搜索任务'), { target: { value: '登录' } });
+    expect(onChange).toHaveBeenCalledWith({
+      status: 'all',
+      assignee: 'all',
+      sort: 'priority',
+      text: '登录',
     });
   });
 });

@@ -12,13 +12,15 @@ interface TaskListProps {
   onSelect: (id: string) => void;
   /** 排队名次表（taskId → rank，TaskSidebarPanel 按放行序计算） */
   queueRanks?: Map<string, number>;
+  /** 空态文案覆盖（过滤无结果时传「无匹配任务」） */
+  emptyText?: string;
 }
 
-export function TaskList({ tasks, selectedId, onSelect, queueRanks }: TaskListProps) {
+export function TaskList({ tasks, selectedId, onSelect, queueRanks, emptyText }: TaskListProps) {
   if (tasks.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-tertiary text-sm">
-        暂无任务
+        {emptyText ?? '暂无任务'}
       </div>
     );
   }
