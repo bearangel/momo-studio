@@ -26,6 +26,9 @@
 
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
+import { transitionTaskStatus } from '../storage/tasks/repo';
+import { notifyExecutor } from '../task/executor';
+import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import type { AgentRuntimeOpts } from './runtime-config';
 // Task 6：chunk 中继（handleStreamChunk）由 stream-relay 承载
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
@@ -231,14 +234,53 @@ export function destroyTaskDrivenRuntime(instanceId: string): void {
  * 统一的 agent 停止入口。
  * 销毁 task-driven runtime（runner + WarmPool）+ 写 DB last_running=0。
  *
+ * K7-1：销毁前先把该 agent 名下 in_progress 的任务转 paused——destroy()
+ * 清空活跃表 + runner 出 Map 后，exit 事件的 failTaskOnCrash 双重不可达，
+ * 不主动转状态任务将永远卡 in_progress。转 paused（非 failed/cancelled）
+ * 保留任务价值，用户可经「恢复」重启执行链。
+ *
  * @param instanceId agent_assignment 主键
  */
 export async function stopAgentRuntime(instanceId: string): Promise<void> {
+  pauseRunningTasksForAgent(instanceId);
   destroyTaskDrivenRuntime(instanceId);
   getDb()
     .prepare('UPDATE workspace_agent_members SET last_running = 0 WHERE instance_id = ?')
     .run(instanceId);
   logger.info('stopAgentRuntime 完成（销毁 runtime + DB 同步）', { instanceId });
+}
+
+/** K7-1：该 agent 的 in_progress 任务逐个转 paused（非法转换吞错记日志——行可能被并发改态） */
+function pauseRunningTasksForAgent(instanceId: string): void {
+  const rows = getDb()
+    .prepare(`SELECT id FROM tasks WHERE assignee_agent_id = ? AND status = 'in_progress'`)
+    .all(instanceId) as Array<{ id: string }>;
+  for (const r of rows) {
+    try {
+      transitionTaskStatus(r.id, 'paused', { errorMessage: 'agent 运行已被用户停止' });
+    } catch (err) {
+      logger.warn('停止 agent 时任务转 paused 失败（并发改态）', {
+        taskId: r.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (rows.length > 0) {
+    void broadcastLocalTaskSnapshot();
+    notifyExecutor();
+  }
+}
+
+/**
+ * K7-4：任务暂停/取消联动中断入口——遍历全部 runner，按执行会话匹配活跃流
+ * 发 abort。fire-and-forget 语义：无匹配（agent 未在跑该任务）返回 false。
+ */
+export function abortTasksBySessionEverywhere(executionSessionId: string): boolean {
+  let hit = false;
+  for (const runner of agentRunners.values()) {
+    if (runner.abortTasksBySession(executionSessionId)) hit = true;
+  }
+  return hit;
 }
 
 // ─── 测试辅助 ─────────────────────────────────────────────────────────────
