@@ -36,6 +36,8 @@ import { buildTaskReply } from './dispatch';
 import { sendTaskReplyEvent } from './internal-event';
 import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled, getSessionDispatchScope } from './dispatch-wait';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
+import { getTodosForSession } from './tools/todo-tools';
+import type { TodoItem } from './tools/todo-types';
 
 /**
  * chat loop 运行时上下文：在启动时构建一次，后续每轮对话复用。
@@ -309,6 +311,13 @@ export async function runChatLoop(
       content: staticSystem + buildMandateHint({ ...mandate, streamSessionId }),
     };
   };
+  // turn mandate（spec §5.1/§5.2）：与 todo-tools.hasPendingUserTodos 同谓词的本地取数
+  // 闭包——compact 双态的布尔判定与文案里的条数 K 共用同一份过滤（单一来源，
+  // 防两份过滤条件漂移导致「判定说有、文案说无」）。谓词：source=user 且未完成。
+  const pendingUserItems = (): TodoItem[] =>
+    getTodosForSession(streamSessionId).filter(
+      (t) => t.status !== 'completed' && t.source === 'user',
+    );
 
   const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
     role: m.role,
@@ -327,6 +336,11 @@ export async function runChatLoop(
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
   let accumulatedText = '';
+  // turn mandate（spec §5.1）：收尾模式标记——置位后下一轮 LLM 请求不传 tools，
+  // 模型无工具可调只能输出终文，回合机械终止。仅顶层 chat 路径的 compact 分支
+  // 置位；steer drain 出新指令时清除（新指令优先于收尾）。回合级内存状态，
+  // 随回合结束消亡。
+  let wrapUpMode = false;
 
   const abortController = new AbortController();
   // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
@@ -476,7 +490,7 @@ export async function runChatLoop(
       drained = true;
     }
     if (drained) {
-      // 新指令优先于收尾（wrapUpMode = false 行由 Task 4 接入）。
+      wrapUpMode = false; // 新指令优先于收尾（spec §5.1）——清除后下一轮恢复工具
       refreshSystem();
     }
 
@@ -494,7 +508,9 @@ export async function runChatLoop(
           ...getDispatchToolDefs(sessionSubs),
         ]
       : ctx.tools.filter((t) => !t.name.startsWith('dispatch:'));
-    const tools = budgetRemaining <= 0 ? undefined : chatTools;
+    // turn mandate（spec §5.1）：收尾模式不传工具——模型无工具可调只能输出终文，
+    // finishReason=stop 机械退出（先例：预算耗尽同样传 undefined）
+    const tools = wrapUpMode || budgetRemaining <= 0 ? undefined : chatTools;
     trace(`→ LLM #${round + 1}`, { model: config.modelName, msg: messages.length, tools: tools?.length ?? 0 });
 
     const toolCalls: LLMToolCall[] = [];
@@ -633,7 +649,7 @@ export async function runChatLoop(
           streamSessionId,
           callId: tc.id,
           toolName: 'task_complete',
-          result: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已持久化。${nextStep ? `继续：${nextStep}` : '继续工作'}`,
+          result: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已持久化。${nextStep ? `继续：${nextStep}` : '请继续输出当前回复的下一段'}`,
           success: true,
         });
 
@@ -645,7 +661,7 @@ export async function runChatLoop(
         });
         messages.push({
           role: 'tool',
-          content: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已发送。${nextStep ? `下一步：${nextStep}` : '请继续工作，输出到合适段落时再次调用 task_complete'}`,
+          content: `第 ${segmentCount}/${MAX_TASK_SEGMENTS} 段已发送。${nextStep ? `下一步：${nextStep}` : '请继续输出当前回复的下一段，输出到合适段落时再次调用 task_complete'}`,
           toolCallId: tc.id,
         });
         toolCallCount++;
@@ -654,8 +670,11 @@ export async function runChatLoop(
       }
 
       // v1.5.6 compact：LLM 主动压缩上下文。调此工具时把整个对话历史替换为
-      // [system, {role: user, content: 历史总结}]，chat loop 继续。
+      // [system, user(总结+尾部指令)]，chat loop 继续。
       // 解决长任务多轮对话累积导致 LLM 上下文爆炸 / 失忆问题。
+      // turn mandate（spec §5.1）：仅顶层 chat 路径做双态判定；task 域
+      // （currentTaskId 非空）与 dispatch 子路径（parentStreamSessionId 非空）
+      // 维持「压缩后基于总结处理当前任务」语义，不进收尾。
       if (tc.name === 'compact') {
         const summary = typeof tc.arguments.summary === 'string' ? tc.arguments.summary : '';
         if (!summary || summary.length < 50) {
@@ -676,14 +695,24 @@ export async function runChatLoop(
         }
 
         const oldMsgCount = messages.length;
-        // 重置对话历史：保留 system prompt（messages[0]），其余替换为压缩后的总结
+        // 双态判定（spec §5.1）：mandateGated = 顶层 chat 路径；有用户挂靠的
+        // 未完成 todo → 续跑；无 → 收尾（wrapUpMode 置位，下一轮无工具）。
+        const mandateGated = parentStreamSessionId == null && !config.currentTaskId;
+        const pendingItems = pendingUserItems();
+        const pendingUser = mandateGated && pendingItems.length > 0;
+        wrapUpMode = mandateGated && !pendingUser;
+
+        // 压缩替换消息尾部指令按双态/作用域三选一（spec §5.6 #2）
+        const tailDirective = pendingUser
+          ? '[历史已压缩。本轮仍有用户请求的未完成工作，请继续完成]'
+          : mandateGated
+            ? '[本轮用户请求已无未完成项，请输出简短总结后结束本轮，不要开始新工作]'
+            : '[历史已压缩。请基于总结继续当前任务]';
+        // 重置对话历史：保留 system（messages[0]，mandate 跨压缩存活），其余替换为总结
         const systemMsg = messages[0]!;
         messages.length = 0;
         messages.push(systemMsg);
-        messages.push({
-          role: 'user',
-          content: `[历史对话总结]\n${summary}\n\n[请基于此总结继续工作]`,
-        });
+        messages.push({ role: 'user', content: `[历史对话总结]\n${summary}\n\n${tailDirective}` });
 
         // 推 stream chunk 让 renderer 知道发生了 compact（可选 UI 提示）
         sendStreamChunk({
@@ -698,21 +727,27 @@ export async function runChatLoop(
           streamSessionId,
           callId: tc.id,
           toolName: 'compact',
-          result: `上下文已压缩：${oldMsgCount} 条消息 → 1 条总结（${summary.length} 字符）。继续工作`,
+          result:
+            `上下文已压缩：${oldMsgCount} 条消息 → 1 条总结（${summary.length} 字符）。` +
+            (pendingUser
+              ? `仍有 ${pendingItems.length} 项用户待办，请继续完成。`
+              : mandateGated
+                ? '无用户待办，请输出总结收尾。'
+                : '请基于总结继续当前任务。'),
           success: true,
         });
 
-        // tool_result 推回 LLM（基于新 messages 数组）
-        messages.push({
-          role: 'assistant',
-          content: '',
-          toolCalls: [tc],
-        });
+        // 回填 LLM：保留一条 tool result 即可——旧实现在此处追加的第二份前进
+        // 指令消息已删除（spec §5.6 #4：三份指令合并为尾部指令 + 本条回执）
+        messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
         messages.push({
           role: 'tool',
-          content: `上下文已压缩（${oldMsgCount} → 2 条消息）。请继续基于总结工作。`,
+          content: `上下文已压缩（${oldMsgCount} → 2 条消息）。`,
           toolCallId: tc.id,
         });
+        // system prompt 重建（含 mandate，spec §2）：压缩清空了 messages[0] 之外的
+        // 全部历史，此处基于当前 todo 状态重写，保证 mandate 段实时
+        refreshSystem();
         toolCallCount++;
         budgetRemaining--;
         ti++; continue;
