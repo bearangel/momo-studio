@@ -251,4 +251,24 @@ describe('FileTree 文件名搜索', () => {
     });
     expect(screen.getByText('已显示前 200 条匹配')).toBeInTheDocument();
   });
+
+  it('切换 workspace 时清空搜索（spec §6）', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'search-hit.ts', isDirectory: false }]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'hit' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText('search-hit.ts')).toBeInTheDocument();
+    // 切 workspace：真实 store setState 触发订阅重渲染
+    useWorkspaceStore.setState({
+      workspaces: [buildWorkspace('ws-2', 'ws-2')],
+      activeWorkspaceId: 'ws-2',
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByText('search-hit.ts')).not.toBeInTheDocument();
+  });
 });

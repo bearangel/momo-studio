@@ -207,4 +207,19 @@ describe('RoomList — 标题搜索过滤', () => {
     expect(screen.getByLabelText('重命名')).toBeInTheDocument();
     expect(screen.getByLabelText('解散')).toBeInTheDocument();
   });
+
+  it('切换 workspace 时清空过滤（spec §6）', () => {
+    sessionState.sessions = [
+      makeSession({ id: 's1', title: '会话A' }),
+      makeSession({ id: 's2', title: '会话B' }),
+    ];
+    const { rerender } = render(<RoomList />);
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: 'A' } });
+    expect(screen.queryByText('会话B')).not.toBeInTheDocument();
+    // 模拟切 workspace：mock store 状态变更 + rerender 触发 selector 重读
+    workspaceState.activeWorkspaceId = 'ws-2';
+    rerender(<RoomList />);
+    expect(screen.getByText('会话A')).toBeInTheDocument();
+    expect(screen.getByText('会话B')).toBeInTheDocument();
+  });
 });

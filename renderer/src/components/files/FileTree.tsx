@@ -41,6 +41,11 @@ export function FileTree({ onSelectFile }: Props) {
   // 竞态守卫：响应返回时序号不匹配则丢弃（旧响应不覆盖新结果）
   const seqRef = useRef(0);
 
+  // spec §6：切 workspace 时清空搜索（组件常驻不卸载，需显式复位）
+  useEffect(() => {
+    setQuery('');
+  }, [workspace?.id]);
+
   // 防抖 200ms 调 IPC；trim 后为空直接清空恢复树（不发 IPC）
   useEffect(() => {
     const trimmed = query.trim();

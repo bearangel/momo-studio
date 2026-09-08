@@ -36,6 +36,11 @@ export function RoomList() {
       ? sessions
       : sessions.filter((s) => s.title.toLowerCase().includes(q));
 
+  // spec §6：切 workspace 时清空过滤（组件常驻不卸载，需显式复位）
+  useEffect(() => {
+    setFilter('');
+  }, [activeWorkspaceId]);
+
   const submitRename = async (name: string) => {
     const target = renaming;
     setRenaming(null);
