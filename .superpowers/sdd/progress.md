@@ -962,3 +962,9 @@ bugfix (2026-09-07 主机报告严重 bug, commit e9d456f): 快速会话中主 a
 bugfix 二段 (2026-09-07 主机报告, commit 284a6d9): dispatch 暴露面——执行时拒绝已生效但快速会话工具/教学 prompt 仍暴露（agent 先 brag 再被拒）。
 修复：runChatLoop 每轮按 roomId 调 getSessionDispatchScope（dispatch-wait 抽出，assertSessionDispatchAllowed 复用同源）：不满足会话边界 → dispatch:* 工具与「任务拆分指南」不注入；满足 → 只暴露会话内成员。查询失败保守 null。回归锁 dispatch-visibility.test.ts 3 用例 RED→GREEN。runtime-stream/runtime-task-driven 补文件级 DB 兜底 hook。
 全绿：typecheck 双 clean · electron 184 文件 1522 · renderer 956。spec §8 已回写二段语义。
+
+task-delegation-info-loop (2026-09-08, plan docs/plans/2026-09-08-task-delegation-info-loop.md):
+Task 1: complete (commits 29581ca..c452c22, review clean — Spec ✅ / Approved, 4 Minor: 断言1→2未申报有removeMember替代/def-z-aux字典序防御/文件头repo枚举过时/getDefs序cosmetic)
+Task 2: complete (commits c452c22..4a2e2bf, review clean — Spec ✅ / Approved, 2 Minor: createTask外层JSDoc陈旧未同步K1三分支 / hasTarget两处判定语义分叉——空串''时assigned+warning自相矛盾，spec自身瑕疵)
+Final review: NEEDS FIXES → fix cfddcca（hasDelegationTarget 四处收敛+空串归一+JSDoc 同步+repo 枚举+空串回归锁；第 5 文件 task-broadcast.test.ts 为 vi.mock 枚举契约变更的必要下游）。复验 34/34 + 全量 1554/987 + typecheck 双 clean。READY。
+Follow-up（终审 N2，非阻塞）：task-tools 写家族（create/complete/fail）缺 broadcastLocalTaskSnapshot 调用——既有缺口非本分支引入，45s 周期重播兜底 staleness 有界；建议下批在 notifyExecutor() 旁各补一行。

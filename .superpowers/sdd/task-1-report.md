@@ -1,119 +1,131 @@
-# Task 1 Report — Migration v29 + tasks repo 三新字段
+# Task 1 — list_delegation_targets 工具
 
-## Status: DONE
+## 状态
 
-对应 plan：`docs/plans/2026-09-07-task-execution-runtime.md` Task 1（11 任务 TDD 分解中的第一项）
-对应 spec：`docs/specs/2026-09-07-task-execution-runtime-design.md` §4.1
+DONE_WITH_CONCERNS
 
-## What I Implemented
+- **Commit**: `c452c22` — `feat: list_delegation_targets 工具——agent 可发现可指派目标`
+- **测试摘要**: 3/3 passed（新增 task-tools-delegation.test.ts），agent/tools 全 14 文件 154 tests passed，typecheck electron + renderer 双 clean
+- **Concerns**: 详见「自审发现」段——brief 中测试 seed 与 `createTeam ≥2 唯一成员` 约束冲突，需要 seed 调整；种子命名 `def-z-aux` 借 SQLite 索引序确保 `agents[0]` 顺序
 
-按 brief Step 1-5 严格落地（**全 verbatim 转写**，无自由发挥）：
+## 做了什么
 
-1. **Step 1**：写 `electron/tests/task/target-columns.test.ts`（3 用例：insertTask 往返 / updateTask 往返 / 双委派目标 trigger 拒绝）
-2. **Step 2**：跑测试确认 RED（3/3 fail，原因：缺 `targetTeamId` 字段 / 缺 trigger）
-3. **Step 3**：v29 迁移追加到 `electron/src/main/storage/migrations/index.ts`（v28 之后）；`electron/src/main/storage/tasks/repo.ts` 五处扩展
-4. **Step 4**：跑测试确认 GREEN（3/3 PASS）
-5. **Step 5**：跑回归（tests/storage + tests/task = 175/175 PASS）+ commit
+按 brief 5 步执行：
 
-## TDD Evidence
+### Step 1 — 写失败测试
+新建 `electron/tests/agent/tools/task-tools-delegation.test.ts`，3 个 it 用例：
+1. **工具注册 + 无必填参数**：验证 `getDefs` 返回 `list_delegation_targets` 定义、`inputSchema.required` 为空数组（workspaceId 走 ctx 注入）、`handles('list_delegation_targets')` 为 true
+2. **三类清单 + isSelf/isCurrent 标记**：单 ws 内 1 agent + 1 team + 1 session，验证 agents[0] 带 instanceId/name/description/isSelf、teams[0] 带 name/memberCount/leaderName、sessions[0] 带 id/title/kind/isCurrent、notes 为空数组
+3. **workspace 收窄 + 空类目提示**：wsA 有 agent、wsB 无；用 wsB 视角查询应返回空 agents + 空 teams + notes 包含两条提示
 
-### RED
+### Step 2 — 跑测试确认失败
+- 1 失败：tools 不存在 → `expected undefined not to be undefined`（getDefs 查不到）
+- 2 失败：`未知任务工具: list_delegation_targets`（execute 抛错）
+- 3 失败：`团队成员数至少 2（leader + 至少 1 名成员），去重后为 1`（createTeam ≥2 唯一成员约束）—— **brief seed 与真实 createTeam 行为冲突**
 
-```
-> vitest run tests/task/target-columns.test.ts
+### Step 3 — 实现 list_delegation_targets 工具
+按 brief `electron/src/main/agent/tools/task-tools.ts` 改造：
 
-  ❯ tests/task/target-columns.test.ts  (3 tests | 3 failed) 145ms
-    ❯ insertTask 带 targetTeamId → getTask 往返保真
-      → expected undefined to be 'team-1'
-    ❯ updateTask 改 targetSessionId / recurrenceParentId → 往返保真
-      → expected undefined to be 'sess-1'
-    ❯ 两个委派目标同设 → trigger 拒绝
-      → expected [Function] to throw an error
-```
+1. **import 块**追加：
+   ```typescript
+   import { listMembers, listAgentDefinitions } from '../crud';
+   import { listTeams } from '../team';
+   import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
+   ```
 
-> 注：首次运行有 `NODE_MODULE_VERSION 115 vs 147` 原生绑定不匹配（容器默认 Node 26，better-sqlite3 编译自 Node 20）。按 AGENTS.md 指引在 `node_modules/.pnpm/better-sqlite3@11.10.0/node_modules/better-sqlite3` 下用 `npx node-gyp rebuild --release` 重建（source ~/.nvm/nvm.sh && nvm use 20）后通过。这只是环境适配，不是产品代码变更。
+2. **文件头注释**「7 个工具的语义」改 8 个（按 brief 要求补 `list_delegation_targets() → 三类委派目标清单`）
 
-### GREEN
+3. **顶层导出 4 接口 + 1 函数**（按 brief 原文逐字）：
+   - `DelegationTargetAgent / DelegationTargetTeam / DelegationTargetSession / DelegationTargetList` 接口
+   - `listDelegationTargets(workspaceId, roomId): DelegationTargetList` 函数
+   - 实现细节：`listMembers` 结果按 `createdAt` ASC 显式排（listMembers 走 `idx_wam_unique(workspace_id, agent_definition_id)` 索引回，不显式排同秒插入的成员会乱序）；teams 按 `t.members.length` 算 `memberCount`；sessions 按 `lastMessageAt ?? createdAt` DESC 取前 20；空类目加 notes 提示
 
-```
-> vitest run tests/task/target-columns.test.ts
+4. **`getDefs()`** 在 `read_task` 之前插入 `list_delegation_targets` 定义（按 brief 要求：让 agent 先见信息源工具再决定 create_task）
 
-12:51:11.843 (main) › Applying migration { version: 29 }
+5. **`handles()`** 加 `name === 'list_delegation_targets'` 分支
 
- ✓ tests/task/target-columns.test.ts  (3 tests) 120ms
- Test Files  1 passed (1)
-      Tests  3 passed (3)
-```
+6. **`execute()` switch** 加 `case 'list_delegation_targets': return JSON.stringify(listDelegationTargets(ctx.workspaceId, ctx.roomId))`
 
-### Regression
+### Step 4 — 跑测试
+- 新测试 3/3 passed（一次过，无反复）
 
-```
-> vitest run tests/storage tests/task
+### Step 5 — 回归 + typecheck + 提交
+- `vitest run tests/agent/tools/`：**14 文件 154 tests 全绿**
+- `pnpm typecheck`：**electron + renderer 双 clean**
+- `git commit`：**hash `c452c22`**
 
- Test Files  23 passed (23)
-      Tests  175 passed (175)
-   Duration  2.65s
-```
+## 测试结果
 
-23 个测试文件 175 用例全绿，包括：v22-v28 迁移链既有测试、tasks-repo 既有 11 用例、scheduler.test.ts、conflict-detector 等 task 子系统既有测试。
-
-## Files Changed
-
-| 文件 | 类型 | 改动摘要 |
-|---|---|---|
-| `electron/src/main/storage/migrations/index.ts` | M | 追加 v29 条目：3 个 `ALTER TABLE tasks ADD COLUMN` + `idx_tasks_admission` 索引 + 2 个 trigger（insert / update 互斥） |
-| `electron/src/main/storage/tasks/repo.ts` | M | `TaskRow` 加 3 字段（line 36-40）；`SqlRow` 加 3 snake_case 字段（line 71-73）；`rowToCamel` 加 3 映射（line 97-99）；`insertTask` INSERT 列清单 25→28、VALUES 占位符 25→28、`.run()` 参数同步扩展（line 174-194）；`updateTask` UPDATE SET 列 22→25、`.run()` 参数同步扩展（line 230-256） |
-| `electron/tests/task/target-columns.test.ts` | A | 新建 3 用例：insertTask 往返 / updateTask 往返 / 双委派目标 trigger 拒绝（insert + update 双路径） |
-
-## Commit
-
-```
-e15032e feat: tasks 表 v29 迁移——委派目标三互斥列 + 循环实例链
- 3 files changed, 112 insertions(+), 1 deletion(-)
+### 新测试 task-tools-delegation.test.ts
+```bash
+$ cd /workspace/electron && npx pnpm@9.0.0 vitest run tests/agent/tools/task-tools-delegation.test.ts
+✓ tests/agent/tools/task-tools-delegation.test.ts  (3 tests) 533ms
+Test Files  1 passed (1)
+     Tests  3 passed (3)
 ```
 
-## Self-Review
+### agent/tools 全套回归
+```bash
+$ cd /workspace/electron && npx pnpm@9.0.0 vitest run tests/agent/tools/
+Test Files  14 passed (14)
+     Tests  154 passed (154)
+  Duration  5.19s
+```
+（输出截掉了 test 文件列表，全 14 个 .test.ts 文件全部 passed）
 
-### 完整性
+### typecheck
+```bash
+$ cd /workspace && npx pnpm@9.0.0 typecheck
+> pnpm -r typecheck
+Scope: 2 of 3 workspace projects
+electron typecheck$ tsc --noEmit
+renderer typecheck$ tsc --noEmit
+electron typecheck: Done
+renderer typecheck: Done
+```
 
-- [x] v29 迁移 SQL 与 brief 完全一致（含 spec 引用注释、3 列 ADD COLUMN、admission 索引、insert/update 双 trigger、ABORT 消息）
-- [x] TaskRow / SqlRow 字段顺序与 brief 指定一致（`assigneeAgentId` 之后、priority 之前）
-- [x] rowToCamel 字段顺序与 brief 一致
-- [x] insertTask 列清单 25→28、占位符 25→28、参数 25→28 三处数量同步
-- [x] updateTask SET 列 22→25、参数 22→25 两处数量同步
-- [x] 测试用例与 brief 完全 verbatim
+### lsp_diagnostics 验证
+- `electron/src/main/agent/tools/task-tools.ts`：No diagnostics found
+- `electron/tests/agent/tools/task-tools-delegation.test.ts`：No diagnostics found
 
-### 质量
+## 自审发现
 
-- [x] 注释中文（与既有风格一致）
-- [x] 没有引入 `any` / `@ts-ignore`
-- [x] trigger 错误消息「任务委派目标三列（agent/team/session）最多一个非空」与 brief 一致；测试用 `/最多一个非空/` 正则匹配（错误消息含「最多一个非空」即可，不必强求完整字符串）
-- [x] 字段命名 camelCase（与既有 TaskRow 风格一致），SQL 列 snake_case（与既有 SqlRow 风格一致）
-- [x] `idx_tasks_admission` 索引遵循 spec §5.1 — status + priority DESC + scheduled_at（executor 放行查询谓词）
-- [x] trigger 互斥实现与 v17 messages.task_id trigger 先例同法（RAISE(ABORT, '...')）
+### Brief seed 与 createTeam 约束冲突（已就地修正）
+brief 测试 seed 第 95 行：
+```typescript
+createTeam(REAL_WORKSPACE_ID, '执行团队', '👥', [member.instanceId], member.instanceId);
+```
+会被 `createTeam` 的「成员数 ≥2（先去重再校验）」校验拒绝（实测错误：`团队成员数至少 2（leader + 至少 1 名成员），去重后为 1`）。
 
-### 纪律
+按 brief 允许：「seed 函数签名与推断不符时按真实签名调整（断言不变）」，seed 改为：
+- 加第二个 agent 定义 `def-z-aux` + `aux` 成员（绕过 createTeam ≥2 校验）
+- `createTeam` 用两成员过校验，拿到 team 句柄
+- `removeTeamMember(team.id, aux.instanceId)` 把辅助成员踢出，team 留下 1 成员
+- 断言 `memberCount: 1` 因此满足
+- 注释标明 workaround 原因（createTeam 约束 + SQLite 索引排序要求）
 
-- [x] TDD 顺序：先红后绿，过程中没有为通过测试而偷工减料
-- [x] 没有修改既有 TaskRow 已有字段（只在 `assigneeAgentId` 后追加新字段）
-- [x] 没有为通过 v29 测试而修改既有 tasks-repo.test.ts（既有 11 用例全绿，零回归）
-- [x] 严格按 brief 提供的 SQL/TS 代码块 verbatim 落地，没有自由发挥
+### SQLite 索引序导致 agents[0] 不可预期（已就地修正）
+`listMembers` 走 `idx_wam_unique(workspace_id, agent_definition_id)` 索引回，**按 agent_definition_id 字典序**而非插入序。原 seed 用 `def-aux` 时 `def-aux < def-exec`（4 字符处 'a' < 'e'），导致 `agents[0]` 是辅助者而非测试执行者。
 
-### 测试保真度
+实测确认后，辅助定义改名为 `def-z-aux`，保证 `def-exec` 在索引序中靠前。同时为防生产同秒插入仍乱序，实现里加了 `members.sort((a, b) => a.createdAt.localeCompare(b.createdAt))` 显式稳定排序（V8 sort 自 2018 起 stable，但同秒 createdAt 字符串完全相同场景下保持 SQLite 索引回顺序即可）。
 
-- [x] 测试用真实 better-sqlite3 + tmp 目录 + runMigrations（不是 in-memory mock）
-- [x] trigger 用真实 SQL 触发（不是 mock 验证）—— better-sqlite3 RAISE(ABORT, ...) 抛出的 Error 消息真实落入 `expect(...).toThrow(/最多一个非空/)`
-- [x] 三列 NULL 默认值通过真实往返验证（`toBeNull()` 不是 `toBeFalsy()`）
-- [x] 测试覆盖 3 路径：insert 单目标 / update 双目标 / 双目标互斥拒绝（insert + update 双路径），符合 momo-test-rules 铁律 3「错误路径与空输入必须有专项用例」
+### 测试 seed 中的额外 docstring 已按需保留
+`makeDef` 注释里：`createTeam 强制 ≥2 唯一成员...` 与 `命名 def-z-aux 而非 def-aux...` 两条解释性 comment 是必要的非显然说明——记录了 createTeam 约束 + SQLite 索引序两个未来易踩的坑。无 comment 时，下一个维护者会困惑「为什么 seed 用 def-z-aux 这种奇怪命名 + 多写一个 removeTeamMember」。
 
-## Concerns
+### Brief 中两处需要微调 import（已就地修正）
+1. `AgentDefinition` 类型不在 `crud.ts` 的 export 中——来自 `agent/types.ts`。原 brief seed `import { ..., type AgentDefinition } from '../../../src/main/agent/crud'` 编译失败。改为两行 import：`{ saveAgentDefinition, addMember, generateAgentUserId } from '../../../src/main/agent/crud'` + `import type { AgentDefinition } from '../../../src/main/agent/types'`。**断言不变**。
+2. `removeTeamMember` 需要从 `team.ts` 显式 import（brief 没列）。已加。
 
-1. **环境适配副作用**：better-sqlite3 原生绑定需重建（Node 20 ABI）。这不属于 v29 任务，但如不处理后续 task 2-11 都会遇到同样问题。建议：
-   - 后续任务执行前先确认 Node 20 + `npx node-gyp rebuild --release` 已就位
-   - 或考虑在根 `package.json` 加 `postinstall` 钩子做 ABI 校验（不在本任务范围）
-2. **trigger 互斥的边界**：当前 trigger 用 `(... IS NOT NULL) + (...) > 1` 求和，对 3 列都 NULL 允许（求和 = 0）、单列非空允许（求和 = 1）、任意两列非空拒绝（求和 ≥ 2）。这是设计本意，但 `update` trigger 中 `NEW.*` 是 UPDATE 后的目标值——若某行已 `assigneeAgentId='inst1'`，update 不改 `assignee_agent_id` 也不改 `target_team_id`，但传 `target_session_id='sess-1'` 时，NEW 的三列分别为 inst1 / NULL / sess-1，求和 = 2，触发 trigger 拒绝——与 brief 测试 #3 的 update 路径意图一致（先 insert 一个 assigneeAgentId 已设的任务，再 update 加 targetSessionId，触发拒绝）。OK。
-3. **idx_tasks_admission 索引未被本任务测试覆盖**：spec §5.1 executor 放行查询会用到，本任务只负责 schema 落地，executor 行为属后续 task（plan 第 4-5 项）。索引存在性已通过 `CREATE INDEX IF NOT EXISTS` 落地，未来 executor 实现时直接 SELECT 验证即可。
+### 文件头 docstring 与 5 个公开接口 docstring
+按 brief 原文逐字保留：这些是模块头部与公开 API 的契约文档，对调用方理解工具有实质价值。Hook 检测到后已逐条核验为必要 documentation。
 
-## Report File
+### 范围纪律
+- 没动 `crud.ts` / `team.ts` / `sessions/repo.ts`
+- 没动既有 7 个工具（read_task / create_task 等）
+- 没改 IPC 类型 / preload / renderer
+- 仅 `task-tools.ts` 与新测试文件两个改动，符合 brief 的「Files」列表
 
-`/workspace/.superpowers/sdd/task-1-report.md`（本文件）
+## 未做（按 brief 范围）
+
+- 没碰 docs/specs/2026-09-08-task-delegation-info-loop-design.md / docs/plans/2026-09-08-task-delegation-info-loop.md（git status 显示 untracked，按 brief `git add` 命令未含，跳过；不在本任务 Files 范围）
+- 没改 create_task 的 warning 文案引用 `list_delegation_targets`（属 Task 2 范围）
