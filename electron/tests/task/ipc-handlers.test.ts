@@ -226,6 +226,103 @@ describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
   });
 });
 
+// K9：手动启动（task:start）与 executor 自动放行必须等价——startTask 只建
+// 会话/转状态，kickoff 消息注入才是驱动 agent 开始执行的指令。旧实现
+// task:start 漏了这半步：用户点「启动」→ 新会话创建 + in_progress，
+// 但会话里没有任何消息 → agent 无事可做（用户主机报告：指派 agent/团队/
+// 会话后点启动，只建会话不执行）。
+describe('task:start 手动启动 kickoff 注入（K9）', () => {
+  function seedAgentMember(instanceId: string): void {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES (?, 'Worker', ?, '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run(`def-${instanceId}`, `slug-${instanceId}`);
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES (?, 'ws1', ?, ?, 0)`,
+      )
+      .run(instanceId, `def-${instanceId}`, `@${instanceId}:s`);
+  }
+
+  it('K9: 手动启动 assigned 任务 → 真实转 in_progress + kickoff 注入执行会话', async () => {
+    seedAgentMember('inst-k9');
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '手动启动任务',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-k9',
+      status: 'assigned',
+    });
+    sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
+
+    const handler = handlers.get('task:start')!;
+    const result = await handler(null, t.id, {});
+
+    expect(getTask(t.id)!.status).toBe('in_progress');
+    expect(result.executionSessionId).toBeTruthy();
+    expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
+    const kickoff = sendUserMessageSpy.mock.calls[0]![0] as {
+      sessionId: string;
+      body: string;
+      mentionedInstanceIds?: string[];
+      systemKickoff?: boolean;
+    };
+    expect(kickoff.sessionId).toBe(result.executionSessionId);
+    expect(kickoff.body).toContain(t.id);
+    expect(kickoff.mentionedInstanceIds).toEqual(['inst-k9']);
+    expect(kickoff.systemKickoff).toBe(true);
+  });
+
+  it('K9: 团队目标任务 → kickoff 无 mention（leader 接待路由）', async () => {
+    seedAgentMember('inst-k9-leader');
+    getDb()
+      .prepare(
+        `INSERT INTO teams (id, workspace_id, name, leader_instance_id) VALUES ('team-k9', 'ws1', '研发组', 'inst-k9-leader')`,
+      )
+      .run();
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '团队启动任务',
+      creatorUserId: '@owner:home',
+      targetTeamId: 'team-k9',
+      status: 'assigned',
+    });
+    sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
+
+    const handler = handlers.get('task:start')!;
+    await handler(null, t.id, {});
+
+    expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
+    const kickoff = sendUserMessageSpy.mock.calls[0]![0] as {
+      mentionedInstanceIds?: string[];
+    };
+    expect(kickoff.mentionedInstanceIds).toBeUndefined();
+  });
+
+  it('K9: 已 in_progress 幂等返回 → 不重复注入 kickoff', async () => {
+    seedAgentMember('inst-k9-idem');
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: '幂等启动',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-k9-idem',
+      status: 'assigned',
+    });
+    sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
+
+    const handler = handlers.get('task:start')!;
+    await handler(null, t.id, {}); // 首次启动：注入一次
+    await handler(null, t.id, {}); // 幂等返回：不再注入
+
+    expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('task:create（v29 委派目标三列 + 循环规则）', () => {
   it('task:create 支持 targetTeamId + 循环规则透传', async () => {
     const handler = handlers.get('task:create');

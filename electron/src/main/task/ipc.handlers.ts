@@ -200,7 +200,36 @@ export function registerTaskHandlers(): void {
       id: string,
       opts?: StartTaskOpts,
     ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
+      // K9：手动启动与 executor 自动放行等价——startTask 只建会话/转状态，
+      // kickoff 消息注入才是驱动 agent 开始执行的指令（旧实现漏了这半步，
+      // 手动启动后新会话空转无任何执行）。启动前快照区分「新启动」与
+      // 「幂等返回」：仅新启动注入，重复点击不重复驱动
+      const before = getTask(id);
       const result = await startTask(id, opts);
+      const newlyStarted =
+        before != null && before.status !== 'in_progress' && result.task.executionSessionId != null;
+      if (newlyStarted) {
+        try {
+          await sendUserMessage({
+            sessionId: result.executionSessionId,
+            body: buildKickoffBody(result.task),
+            mentionedInstanceIds: result.task.assigneeAgentId
+              ? [result.task.assigneeAgentId]
+              : undefined,
+            systemKickoff: true,
+          });
+        } catch (err) {
+          // kickoff 失败 = 无执行驱动（半启动状态不可恢复）——与 executor
+          // failQuietly 同语义转 failed，错误信息透出给 UI
+          const reason = err instanceof Error ? err.message : String(err);
+          try {
+            transitionTaskStatus(id, 'failed', { completedAt: Date.now(), errorMessage: `kickoff 注入失败: ${reason}` });
+          } catch {
+            // 并发改态——终态以先到者为准
+          }
+          throw err;
+        }
+      }
       void broadcastLocalTaskSnapshot();
       notifyExecutor();
       return {
