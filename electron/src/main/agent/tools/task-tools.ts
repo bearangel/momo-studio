@@ -13,7 +13,7 @@
 //   - list_tasks(filter?)           → 多维过滤列表
 //
 // 全部是 SQLite 薄包装，所有数据库读写都走已有的 tasks repo / messages repo /
-//   events repo / SQLiteMemoryProvider；本文件不含 SQL。
+//   events repo / agent crud / team / sessions repo / SQLiteMemoryProvider；本文件不含 SQL。
 //
 // 设计要点：
 //   - read 路径走 MemoryProvider.getTaskContext（统一 agent 上下文入口，未来切到
@@ -40,6 +40,7 @@ import {
 import { getDb } from '../../storage/db';
 import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
+import { hasDelegationTarget } from '../../task/starter';
 import { listMembers, listAgentDefinitions } from '../crud';
 import { listTeams } from '../team';
 import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
@@ -151,18 +152,21 @@ export interface CreateTaskInput {
 /**
  * create_task：新建任务。
  *
- * 走 insertTask（不带 scheduledAt 时 status 走 repo 默认 draft / description
- * 默认 '' / priority 默认 0；带 scheduledAt 时落 pending——C1 定时管线入口，
- * 与 task:create IPC 入口同语义）。返回插入后的 TaskRow（含自动生成的 id）。
+ * K1 落态决策（有目标 / 有计划 / 否则 draft，三选一）：
+ *   - 有委派目标（assigneeAgentId / targetTeamId / targetSessionId 任一非空）→ assigned
+ *     即时评估放行——executor 只消费 assigned，否则带目标草稿死局
+ *   - 有计划时间（scheduledAt 非空）→ pending 到点由 scheduler 接管转 assigned
+ *     ——C1 定时管线入口，与 task:create IPC 入口同语义
+ *   - 两者皆无 → draft（repo 默认值；草稿暂存不会被调度，execute() 返回 warning）
+ *
+ * description / priority 缺省取 '' / 0；返回插入后的 TaskRow（含自动生成的 id）。
  */
 export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
   // 委派信息闭环 ④：与 IPC task:create 的 K1 落态决策对齐（决策表注释见
   // task/ipc.handlers.ts）——scheduler 只消费 pending、executor 只消费
-  // assigned；agent 建的带目标任务此前落 draft 两个调度器都不认（死局换形态）
-  const hasTarget =
-    input.assigneeAgentId != null ||
-    input.targetTeamId != null ||
-    input.targetSessionId != null;
+  // assigned；agent 建的带目标任务此前落 draft 两个调度器都不认（死局换形态）。
+  // 谓词统一走 starter.hasDelegationTarget——四处同义判定收敛单点（终审 N1/M6）
+  const hasTarget = hasDelegationTarget(input);
   const row = insertTask({
     workspaceId: input.workspaceId,
     title: input.title,
@@ -517,6 +521,11 @@ export class TaskTools implements ToolModule {
         return JSON.stringify(result);
       }
       case 'create_task': {
+        // 入参边界空串归一：LLM 偶发传 assigneeAgentId=''（应为「无目标」）；
+        // 若不归一，hasDelegationTarget 旧实现（!= null）会判有目标 → 落 assigned
+        // 即时评估放行 → executor validateTarget 校验空 assignee → 转 failed，
+        // 而 execute() 返回体仍带 warning 谎称「停留 draft」——双重新话。
+        // '' → undefined 后两侧谓词天然一致。
         const input: CreateTaskInput = {
           // 上下文字段强制走 ctx——忽略 args 同名键，拒 LLM 幻觉填值
           workspaceId: ctx.workspaceId,
@@ -525,15 +534,12 @@ export class TaskTools implements ToolModule {
           description: parseStringArgOptional(args.description, 'description'),
           priority:
             typeof args.priority === 'number' ? args.priority : undefined,
-          assigneeAgentId: parseStringArgOptional(
-            args.assigneeAgentId,
-            'assigneeAgentId',
-          ),
-          targetTeamId: parseStringArgOptional(args.targetTeamId, 'targetTeamId'),
-          targetSessionId: parseStringArgOptional(
-            args.targetSessionId,
-            'targetSessionId',
-          ),
+          assigneeAgentId:
+            parseStringArgOptional(args.assigneeAgentId, 'assigneeAgentId') || undefined,
+          targetTeamId:
+            parseStringArgOptional(args.targetTeamId, 'targetTeamId') || undefined,
+          targetSessionId:
+            parseStringArgOptional(args.targetSessionId, 'targetSessionId') || undefined,
           recurrenceRule: parseStringArgOptional(
             args.recurrenceRule,
             'recurrenceRule',
@@ -542,9 +548,10 @@ export class TaskTools implements ToolModule {
         };
         const result = await createTask(input);
         // 委派信息闭环 ③：无指派 → TaskRow 顶层附加 warning（形状向后兼容，
-        // 有指派时返回纯 TaskRow——现有消费方直接 parse 顶层字段不破坏）
-        const hasTarget = Boolean(input.assigneeAgentId || input.targetTeamId || input.targetSessionId);
-        if (!hasTarget) {
+        // 有指派时返回纯 TaskRow——现有消费方直接 parse 顶层字段不破坏）。
+        // 谓词统一走 starter.hasDelegationTarget——与 createTask 内部落态决策
+        // 同义（终审 N1/M6：谓词分叉导致双重新话回归锁）
+        if (!hasDelegationTarget(input)) {
           return JSON.stringify({ ...result, warning: NO_ASSIGNMENT_WARNING });
         }
         return JSON.stringify(result);

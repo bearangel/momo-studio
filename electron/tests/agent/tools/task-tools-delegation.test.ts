@@ -183,4 +183,17 @@ describe('create_task 无指派 warning（委派信息闭环）', () => {
     expect(result.status).toBe('assigned');
     expect(result.warning).toBeUndefined();
   });
+
+  it('空串 assigneeAgentId="" 归一为无目标 → draft + warning（终审 N1：谓词分叉双重新话回归锁）', async () => {
+    const { createWorkspace } = await import('../../../src/main/workspace/crud');
+    const ws = await createWorkspace(
+      { name: 'W3', directoryPath: '/tmp/ws-empty', description: '', iconEmoji: '📁' },
+      '@real-owner:home',
+    );
+    const result = JSON.parse(
+      await tools.execute('create_task', { title: '空串目标任务', assigneeAgentId: '' }, seedCtx(ws.id, 'room-z')),
+    );
+    expect(result.status).toBe('draft');
+    expect(result.warning).toContain('没有自动指派机制');
+  });
 });

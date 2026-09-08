@@ -33,7 +33,7 @@ import {
 } from '../storage/tasks/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor, buildKickoffBody } from './executor';
-import { startTask, type StartTaskOpts } from './starter';
+import { startTask, hasDelegationTarget, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
@@ -90,10 +90,7 @@ export function registerTaskHandlers(): void {
     //   无目标 + 有 scheduledAt    → pending（C1 定时管线语义保持；scheduler
     //                                因无目标不升级，用户可手动启动）
     //   无目标 + 无 scheduledAt    → draft（repo 单点默认，草稿暂存）
-    const hasTarget =
-      input.assigneeAgentId != null ||
-      input.targetTeamId != null ||
-      input.targetSessionId != null;
+    const hasTarget = hasDelegationTarget(input);
     const status =
       input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined;
     const created = insertTask({

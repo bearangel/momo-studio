@@ -151,9 +151,14 @@ export async function startTask(
   return result;
 }
 
-/** 委派目标三列任一非空（K2：draft 启动资格判定，与 executor validateTarget 口径一致） */
-function hasDelegationTarget(task: TaskRow): boolean {
-  return task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
+/** 委派目标三列任一非空——K1 落态决策 / K2 draft 启动资格 / 委派信息闭环 warning 判定的统一谓词
+ *  （四处同义判定收敛为单点，语义漂移即 bug——终审 N1/M6） */
+export function hasDelegationTarget(target: {
+  assigneeAgentId?: string | null;
+  targetTeamId?: string | null;
+  targetSessionId?: string | null;
+}): boolean {
+  return target.assigneeAgentId != null || target.targetTeamId != null || target.targetSessionId != null;
 }
 
 /** 创建任务专属 execution 会话（本地 sessions 表行）。命名约定：任务 #T-XXX: 标题前 20 字。 */

@@ -55,7 +55,13 @@ vi.mock('../../src/main/logger', () => ({
 }));
 
 vi.mock('../../src/main/storage/tasks/repo', () => taskRepoMocks);
-vi.mock('../../src/main/task/starter', () => starterMocks);
+// task/starter mock：startTask 桩 + 透传 hasDelegationTarget（测试不关心谓词语义，
+// 但 task:create handler 会调用——必须返回真实实现，否则 vi.mock 因「missing export」
+// 在模块加载时就抛，连测试都进不去；终审 N1 fix 导出新增函数后必须同步）
+vi.mock('../../src/main/task/starter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/task/starter')>();
+  return { ...actual, ...starterMocks };
+});
 vi.mock('../../src/main/task/conflict-resolver', () => conflictMocks);
 vi.mock('../../src/main/task/conflict-executor', () => conflictMocks);
 
