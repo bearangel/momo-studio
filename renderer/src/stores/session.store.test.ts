@@ -66,10 +66,10 @@ const mockApi = {
 };
 
 /** 构造一条 ImMessage（默认 m.room.message，createdAt 单调递增由调用方指定） */
-function mk(id: string, body: string, createdAt = 0): ImMessage {
+function mk(id: string, body: string, createdAt = 0, sessionId = 'sess-r'): ImMessage {
   return {
     id,
-    sessionId: 'sess-r',
+    sessionId,
     sender: '@u:localhost',
     body,
     eventType: 'm.room.message',
@@ -171,6 +171,36 @@ describe('session.store', () => {
     mockApi.session.list.mockClear();
     useSessionStore.getState().pullSessionList();
     expect(mockApi.session.list).not.toHaveBeenCalled();
+  });
+
+  // 2026-09-08 主机 bug 回归锁：任务在非当前会话执行时，会话列表毫无动静
+  // （预览时间戳不变、不置顶），切走切回触发 loadSessions 重拉才更新。
+  // receiveMessage 只更新 messagesBySession，不同步 sessions 的 lastMessageAt——
+  // 修复：顺带更新 + 按主进程排序契约（lastMessageAt DESC, createdAt DESC，
+  // NULL 最后）重排，新消息所在会话实时置顶。
+  it('receiveMessage 同步会话列表：目标会话 lastMessageAt 更新并置顶', () => {
+    const sA = { ...MOCK_SESSIONS_A[0]!, lastMessageAt: 1000 };
+    const sB = { ...MOCK_SESSIONS_A[1]!, lastMessageAt: 2000 };
+    useSessionStore.setState({ sessions: [sB, sA], currentWorkspaceId: 'ws-a' });
+
+    // 会话 A 来新消息（createdAt 晚于两者）→ A 置顶 + lastMessageAt 同步
+    useSessionStore.getState().receiveMessage(mk('m-new', '任务输出', 9000, 'sess-a1'));
+
+    const sessions = useSessionStore.getState().sessions;
+    expect(sessions[0]!.id).toBe('sess-a1');
+    expect(sessions[0]!.lastMessageAt).toBe(9000);
+    expect(sessions[1]!.id).toBe('sess-a2');
+    // 消息本体照常进 messagesBySession
+    expect(useSessionStore.getState().messagesBySession.get('sess-a1')?.map((m) => m.id)).toContain('m-new');
+  });
+
+  it('receiveMessage 的 sessionId 不在列表（未加载会话）→ 列表不动', () => {
+    const sA = { ...MOCK_SESSIONS_A[0]!, lastMessageAt: 1000 };
+    useSessionStore.setState({ sessions: [sA], currentWorkspaceId: 'ws-a' });
+    useSessionStore.getState().receiveMessage(mk('m-x', '别处', 9000, 'sess-unknown'));
+    const sessions = useSessionStore.getState().sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.lastMessageAt).toBe(1000);
   });
 
   it('selectSession loads messages + events for the session', async () => {

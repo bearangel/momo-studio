@@ -300,7 +300,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { messagesBySession: map };
       }
       map.set(msg.sessionId, [...existing, msg]);
-      return { messagesBySession: map };
+      // 列表实时性（2026-09-08 主机 bug）：非当前打开会话来消息（如任务在
+      // 其他会话执行）时列表毫无动静——切走切回重拉才更新。顺带同步目标
+      // 会话的 lastMessageAt 并按主进程排序契约（lastMessageAt DESC,
+      // createdAt DESC，NULL 最后）重排。sessionId 不在列表（未加载会话）
+      // 时跳过——新会话列表同步由 K10 的 pullSessionList 承担
+      const sIdx = state.sessions.findIndex((s) => s.id === msg.sessionId);
+      if (sIdx === -1) return { messagesBySession: map };
+      const sessions = [...state.sessions];
+      sessions[sIdx] = { ...sessions[sIdx]!, lastMessageAt: msg.createdAt };
+      // tie-break：SessionSummary 无 createdAt（renderer 契约字段），同值时
+      // 依赖 sort 稳定性保持原相对序，下次 loadSessions 权威重排
+      sessions.sort((a, b) => (b.lastMessageAt ?? -Infinity) - (a.lastMessageAt ?? -Infinity));
+      return { messagesBySession: map, sessions };
     });
     // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，
     // 不在此处读 Matrix content 字段（content 已废弃）。
