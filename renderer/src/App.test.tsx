@@ -43,9 +43,10 @@ const mockApi = {
     pickDirectory: vi.fn().mockResolvedValue('/tmp/picked'),
   },
   session: {
-    // App 顶层 subscribeSessionChannels 需要两条订阅通道
+    // App 顶层 subscribeSessionChannels 需要三条订阅通道（K10 加 onListChanged）
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
+    onListChanged: vi.fn().mockReturnValue(() => {}),
   },
   // TitleBar（P2 Task 3 空态接入）：平台 + 窗口控件通道
   system: {

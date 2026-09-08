@@ -68,6 +68,13 @@ interface SessionState {
   loadSessions: (workspaceId?: string) => Promise<void>;
   /** 会话列表刷新：立即拉一次（纯 SQLite 首拉即权威，无推送延迟需要兜底） */
   refreshSessionList: (workspaceId?: string) => void;
+  /**
+   * K10：轻量拉取会话列表（session:listChanged 推送消费）——只更新 sessions
+   * 数组，不动 activeSessionId / 不加载消息。loadSessions 在无激活会话时会
+   * 自动 selectSession 首条并拉消息，对「停留 IM 视图等新执行会话出现」的
+   * 场景是意外的视图跳转。
+   */
+  pullSessionList: () => void;
   /** 切换激活会话并加载该会话历史消息与成员 */
   selectSession: (sessionId: string) => Promise<void>;
   /** 拉取指定会话成员列表（agent 成员，含运行态与协调标识） */
@@ -154,6 +161,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // 纯 SQLite 读路径：首拉即权威，无 Matrix /sync 推送延迟需要二次兜底
   refreshSessionList: (workspaceId) => {
     void get().loadSessions(workspaceId);
+  },
+
+  // K10：只换列表不动激活——失败静默（推送丢失场景下次进视图全量兜底）
+  pullSessionList: () => {
+    const wsId = get().currentWorkspaceId;
+    if (!wsId) return;
+    void ipc.session
+      .list(wsId)
+      .then((sessionList) => {
+        set({ sessions: sessionList, loading: false });
+      })
+      .catch(() => {});
   },
 
   selectSession: async (sessionId) => {
@@ -391,9 +410,12 @@ export function subscribeSessionChannels(): () => void {
     useSessionStore.getState().onIncomingEventBatch(batch);
     useStreamStore.getState().applyEventBatch(batch);
   });
+  // K10：主进程新建执行会话 → 轻量刷新列表（不动激活会话）
+  const off3 = ipc.session.onListChanged(() => useSessionStore.getState().pullSessionList());
   return () => {
     off1();
     off2();
+    off3();
   };
 }
 

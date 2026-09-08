@@ -61,6 +61,7 @@ const mockApi = {
     exportMessages: vi.fn(),
     onMessage: vi.fn().mockReturnValue(() => {}),
     onMessageEventBatch: vi.fn().mockReturnValue(() => {}),
+    onListChanged: vi.fn().mockReturnValue(() => {}),
   },
 };
 
@@ -140,6 +141,36 @@ describe('session.store', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // K10：session:listChanged 推送消费——只更新 sessions 数组，不动
+  // activeSessionId（loadSessions 无激活时会自动 selectSession 首条拉消息，
+  // 对「停留 IM 视图等新执行会话出现」是意外视图跳转）
+  it('pullSessionList 更新列表但不动激活会话/不加载消息', async () => {
+    const active = { ...MOCK_SESSIONS_A[0]! };
+    useSessionStore.setState({
+      sessions: [active],
+      activeSessionId: active.id,
+      currentWorkspaceId: 'ws-a',
+      messagesBySession: new Map(),
+    });
+    const grown = [active, { ...MOCK_SESSIONS_A[1]! }];
+    mockApi.session.list.mockResolvedValue(grown);
+
+    useSessionStore.getState().pullSessionList();
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().sessions).toHaveLength(2);
+    });
+
+    expect(useSessionStore.getState().activeSessionId).toBe(active.id);
+    expect(mockApi.session.getMessages).not.toHaveBeenCalled();
+  });
+
+  it('pullSessionList 无 workspace（未加载过）→ 安全 no-op', () => {
+    useSessionStore.setState({ currentWorkspaceId: null });
+    mockApi.session.list.mockClear();
+    useSessionStore.getState().pullSessionList();
+    expect(mockApi.session.list).not.toHaveBeenCalled();
   });
 
   it('selectSession loads messages + events for the session', async () => {
