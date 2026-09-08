@@ -201,14 +201,91 @@ describe('startTask execution_room 决策树', () => {
     expect(listSessionMembers(preset.id).map((m) => m.instanceId)).toEqual(['inst-preset']);
   });
 
-  it('status 不是 assigned/pending → 抛错', async () => {
+  it('status 不是 assigned/pending/draft → 抛错', async () => {
     const t = insertTask({
       workspaceId: 'ws1',
       title: 'T1',
       creatorUserId: '@owner:home',
     });
-    // draft 状态启动应失败
+    // completed 终态启动应失败
+    transitionTaskStatus(t.id, 'assigned');
+    transitionTaskStatus(t.id, 'in_progress');
+    transitionTaskStatus(t.id, 'completed');
     await expect(startTask(t.id)).rejects.toThrow(/status/);
+  });
+
+  // K2：draft 无委派目标 → 拒绝启动。手动放行无目标任务只会建出
+  // 无 agent 的空会话，kickoff 无人接待（executor 侧 validateTarget 同语义）。
+  it('K2: draft 无委派目标 → 抛错（防无人会话）', async () => {
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+    });
+    await expect(startTask(t.id)).rejects.toThrow(/目标|status/);
+  });
+
+  // K2 回归锁（P0 修复）：旧实现 draft 一律拒绝启动，而 task:create 落 draft
+  // 的指派任务（K1 修复前）或手动转草稿的已指派任务在 UI 上无任何推进手段。
+  // 新行为：有委派目标的 draft 视为 draft→assigned→in_progress 快捷路径。
+  it('K2: draft + assignee → 启动成功（draft→assigned→in_progress 快捷路径）', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-d1', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-draft', 'ws1', 'def-d1', '@inst-draft:s', 0)`,
+      )
+      .run();
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-draft',
+      status: 'draft',
+    });
+
+    const result = await startTask(t.id, { createNewRoom: true });
+    expect(result.task.status).toBe('in_progress');
+    expect(result.task.executionSessionId).toBe(result.executionSessionId);
+    expect(listSessionMembers(result.executionSessionId).map((m) => m.instanceId)).toEqual([
+      'inst-draft',
+    ]);
+  });
+
+  it('K2: draft + targetSessionId → 启动成功并锁定目标会话', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-d2', 'Worker', 'worker', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-d2', 'ws1', 'def-d2', '@inst-d2:s', 0)`,
+      )
+      .run();
+    const target = insertSession({ workspaceId: 'ws1', title: '目标会话' });
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T1',
+      creatorUserId: '@owner:home',
+      targetSessionId: target.id,
+      status: 'draft',
+    });
+
+    const result = await startTask(t.id);
+    expect(result.task.status).toBe('in_progress');
+    expect(result.executionSessionId).toBe(target.id);
   });
 
   it('已 in_progress 再次启动抛错（execution_room 锁定）', async () => {

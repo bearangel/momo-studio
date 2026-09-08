@@ -8,8 +8,9 @@
 //   1. 调用方显式传 executionSessionId → 用预设
 //   2. createNewRoom=true → 强制创建新任务会话
 //   3. task.targetTeamId 存在 → 团队执行会话（spec §5.3：成员=团队快照 + leader 标记）
-//   4. task.sourceSessionId 存在 → 锁定 source_session（任务诞生的会话）
-//   5. 都没 → 创建新会话（命名：任务 #T-XXX: 标题前 20 字）
+//   4. task.targetSessionId 存在 → 锁定委派会话
+//   5. task.sourceSessionId 存在 → 锁定 source_session（任务诞生的会话）
+//   6. 都没 → 创建新会话（命名：任务 #T-XXX: 标题前 20 字）
 //
 // 锁定规则：任务一旦进入 in_progress，execution_session_id 不可改。
 // 重新启动已 in_progress 的任务时：
@@ -24,7 +25,7 @@
 // 不合法）整笔回滚，不留 orphan session / 半启动任务。
 import { getDb } from '../storage/db';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
-import { insertSession, addSessionMember } from '../storage/sessions/repo';
+import { insertSession, addSessionMember, getSession } from '../storage/sessions/repo';
 import { teamExists, expandTeamMembers, getTeamLeaderInstanceId } from '../agent/team';
 import { logger } from '../logger';
 
@@ -72,10 +73,16 @@ export async function startTask(
     };
   }
 
-  // 新启动：只允许 assigned / pending（draft 等需先调度器提升）
-  if (task.status !== 'assigned' && task.status !== 'pending') {
+  // 新启动：允许 assigned / pending；draft 仅在有委派目标时放行
+  // （K2：有目标的 draft 走 draft→assigned→in_progress 快捷路径——UI 手动
+  // 启动草稿任务的唯一通道；无目标 draft 拒绝：手动放行只会建出无 agent
+  // 的空会话，kickoff 无人接待，与 executor validateTarget 同语义）
+  const draftEligible = task.status === 'draft' && hasDelegationTarget(task);
+  if (task.status !== 'assigned' && task.status !== 'pending' && !draftEligible) {
     throw new Error(
-      `task ${taskId} status=${task.status}，不能启动（必须为 assigned 或 pending）`,
+      task.status === 'draft'
+        ? `task ${taskId} 未指派委派目标，不能启动（请先编辑指派 agent / 团队 / 会话）`
+        : `task ${taskId} status=${task.status}，不能启动（必须为 assigned 或 pending）`,
     );
   }
 
@@ -97,6 +104,13 @@ export async function startTask(
       }
       executionSessionId = createTeamTaskRoom(task);
       createdNewRoom = true;
+    } else if (task.targetSessionId) {
+      // v29 会话目标：锁定委派会话（与 executor 显式传参路径同结果；
+      // 缺此分支时手动启动会错误地新建会话，kickoff 落不到委派会话）
+      if (!getSession(task.targetSessionId)) {
+        throw new Error(`目标会话不存在: ${task.targetSessionId}`);
+      }
+      executionSessionId = task.targetSessionId;
     } else if (task.sourceSessionId) {
       executionSessionId = task.sourceSessionId;
     } else {
@@ -110,6 +124,12 @@ export async function startTask(
     // addSessionMember 是 INSERT OR IGNORE：已在新房路径插过 / 会话已有该成员时幂等
     if (task.assigneeAgentId) {
       addSessionMember(executionSessionId, task.assigneeAgentId);
+    }
+
+    // K2：draft 快捷路径——先提升 assigned（状态机合法）再统一走
+    // in_progress 转换；两步同事务，中途失败不留半启动状态
+    if (task.status === 'draft') {
+      transitionTaskStatus(taskId, 'assigned');
     }
 
     // 状态机转换 + 锁定 execution_room（assigned/pending → in_progress）
@@ -129,6 +149,11 @@ export async function startTask(
   });
 
   return result;
+}
+
+/** 委派目标三列任一非空（K2：draft 启动资格判定，与 executor validateTarget 口径一致） */
+function hasDelegationTarget(task: TaskRow): boolean {
+  return task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
 }
 
 /** 创建任务专属 execution 会话（本地 sessions 表行）。命名约定：任务 #T-XXX: 标题前 20 字。 */
