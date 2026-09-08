@@ -1,86 +1,58 @@
-# Task 2 报告 — 会话执行车道注册表（session-lane 模块）
+# Task 2 报告 — runtime-entry drain 扩展（roll emit 触发）
 
-## 状态
+**状态：DONE** | **Commit：`c153749`** | 日期：2026-09-08
+**Base：`5411031`**（T1：`message_roll` chunk 类型 + stream-relay 换行 handler）
 
-✅ **完成**。红灯确认 → 实现 → 绿灯 7/7 → 类型与依赖回归通过 → commit `721d6b4`。
+## 做了什么
 
-## Commit Hash
+按 brief 5 步 TDD 完成 v2.3.1「steer 消息滚动」3 任务计划的第二块——runtime-entry 接入 drain 触发 `message_roll` chunk emit，让子进程告诉主进程「换行」：
 
-- `721d6b4` — feat: 会话执行车道注册表（session-lane 模块）
-
-## 测试摘要
-
-- `electron/tests/agent/session-lane.test.ts` — **7 用例全过**（4ms）
-  - 注册与清除：registerLane/clearLaneIfMatch 匹配语义 + kickoff 竞态覆盖
-  - 占道判定（spec §4.2）：内存命中 / DB 兜底命中 / 两者皆空
-  - K7-3 精确中止（spec §6）：按 taskId 反查命中 + dispatch 子流未注册不被误杀
-- 回归：`stream-relay.test.ts` **19/19 通过**，未影响依赖模块
-
-## 修改文件
-
-| 文件 | 操作 | 行数 |
-|---|---|---|
-| `electron/src/main/agent/session-lane.ts` | 新建 | +106 |
-| `electron/tests/agent/session-lane.test.ts` | 新建 | +63 |
-
-未改动 brief 之外任何文件。
-
-## 关键决策与偏差
-
-### Import 路径修正（brief 自带警告触发）
-
-brief 文本使用 `../../../src/main/...`，从 `electron/tests/agent/` 出发算术上越过 electron 根（指向 `/workspace/src/...`），会导致 `Failed to load url`。按 brief 自身的「上一任务教训」与既有惯例（`tests/agent/capability-merger.test.ts`、`dispatch.test.ts` 等均使用 `../../src/...`），两处 import 与两处 vi.mock 路径统一改为 `../../src/...`。该修正是 brief 自带规则的执行，不属于范围扩张。
-
-### 路径算术验证
-
-```
-electron/tests/agent/session-lane.test.ts
-  ↑..     = electron/tests/
-  ↑..     = electron/                   ← 终点
-  ../..   = ../../                       ← 上溯到 electron 根
-  ../../src/main/agent/session-lane      ← 命中
-```
-
-`../../../` 会落到 `/workspace/`（electron 之上的 monorepo 根），不存在 `src/` 目录。
-
-## 设计要点（spec §4 / §6 / §7 对齐）
-
-- **内存 Map 单源**：车道条目以 `sessionId → LaneEntry` 存进程内 Map，`routeUserChat` 派发顶层流时注册、`AgentRunner` 流收尾时清除
-- **占道双层判定**：`isLaneOccupied` 先看内存；空则查 DB `tasks` 表 `executionSessionId = sessionId AND status = 'in_progress' LIMIT 1`——重启后内存空但孤儿 in_progress 行继续占道防插队
-- **K7-3 精确中止**：`abortTaskStreamByLane(taskId)` 遍历 lane Map 找匹配条目，反查 `streamSessionId` 调 `abortStreamBySessionId`，返回是否命中。dispatch 子流不经 `routeDispatch` 注册车道（spec §6 铁律：避免按 `executionSessionId` 广播误杀同会话 dispatch 子流）
-- **clearLaneIfMatch 匹配语义**：仅当当前车道条目的 `streamSessionId` 与传入 id 相同才清除——防 AgentRunner 迟到收尾清掉新注册（abort 回退重派发场景，spec §4.1）
-- **kickoff 竞态**：executor 已保证放行前车道空闲；覆盖仅发生在「手输流恰好先注册」极窄窗口，warn + 退化并行（spec §7）
-- **模块独立无环**：session-lane 不 import runtime-registry / agent-runner；反过来 registry 与 runner 都 import 本模块（保持反向依赖）
-
-## 验证
-
-| 检查 | 命令 | 结果 |
-|---|---|---|
-| 红灯（模块不存在） | `vitest run tests/agent/session-lane.test.ts` | ✅ FAIL — `Failed to load url ../../src/main/agent/session-lane` |
-| 绿灯 | 同上 | ✅ PASS — 7 tests passed (4ms) |
-| 类型检查 | `tsc --noEmit`（electron workspace） | ✅ exit 0，无错 |
-| LSP 诊断 session-lane.ts | lsp_diagnostics | ✅ No diagnostics found |
-| 依赖模块回归 | `vitest run tests/agent/stream-relay.test.ts` | ✅ 19/19 passed |
-
-### LSP 对测试文件的 3 处提示（已确认非阻塞）
-
-`lsp_diagnostics` 对 `session-lane.test.ts` 报 3 处 `Expected 0 arguments, but got 1`（lines 7/12/57），源是 `vi.fn(() => [])` 默认推导为 `Mock<[], never[]>`。这是 vitest 类型推导的已知 quirk（仓库内 `ipc-stop-start.test.ts` / `ipc-handlers.test.ts` / `provider-ipc-handlers.test.ts` 等均采用同一模式），运行时 mock 透传不强制 arity。`tsconfig.json` 的 `include: ["src/**/*"]` 排除 tests 目录，故 `tsc --noEmit` 实际不受影响（exit 0）。brief 明文「vi.mock 保持真实签名形状（brief 已按此写好）」——该模式是 brief 显式要求保留。
-
-## Concerns / 后续任务对接
-
-1. **Task 3（executor gate）** 应在派发前调 `isLaneOccupied(sessionId)` 判定占道；放行后调 `registerLane(sessionId, { taskId, streamSessionId, assignmentId })`。
-2. **Task 4（steer 分流）** 读 `getLane(sessionId)` 取目标 `streamSessionId` 与 `assignmentId`，新 steer 流注册车道会替换旧条目（streamSessionId 不同）。
-3. **Task 5（精确中止）** 调 `abortTaskStreamByLane(taskId)`；返回 `false` 时按既有逻辑回退 `executionSessionId` 广播（spec §6 约定）。
-4. **dispatch 子流注册**：dispatch 子流不在本模块注册车道（spec §6 铁律）。如后续任务需要，需明确登记入口，否则 `abortTaskStreamByLane` 对 dispatch 子任务返回 false 触发回退广播——这是预期路径，不是漏配。
-5. **logger.warn 输出**：kickoff 竞态测试产生一次预期 warn 日志（被 stderr 捕获），生产环境监控可观测此 warn 数量作为「手输流竞态窗口」频率指标。
-
-## 测试覆盖矩阵
-
-| 接口 | 用例 |
+| 文件 | 改动 |
 |---|---|
-| `registerLane` | 内存写入 + kickoff 覆盖不抛 |
-| `clearLaneIfMatch` | 匹配清除 + 不匹配保留 |
-| `getLane` | 有则返回条目 / 无则返回 null（隐含） |
-| `isLaneOccupied` | 内存命中 / DB 兜底命中 / 两者皆空 |
-| `abortTaskStreamByLane` | 按 taskId 命中 + 未注册返回 false |
-| `__clearLaneForTest` | beforeEach 复位（隐含） |
+| `electron/src/main/agent/runtime-entry.ts` | (a) `pendingSteers` 声明后新增 `hasNewTextSinceLastRoll` 标志（`let` 闭包变量，初始 `false`）；(b) `case 'text'` 分支在 `accumulatedText +=` 后追加 `hasNewTextSinceLastRoll = true`；(c) drain 块扩展为「先 if (pendingSteers.length > 0) { if (hasNewTextSinceLastRoll) { 发 message_roll chunk; 复位标志 } } 再 while push messages」三段式 |
+| `electron/tests/agent/runtime-entry-steer.test.ts` | 追加第二个 `describe('runChatLoop steer 消息滚动（message_roll）')`（独立 stubProvider/beforeEach/afterEach 夹具），含 3 个新用例：drain 时有新文本发 roll、无新文本不发 roll、两次 drain 各发一次 roll；既有 4 用例移至第三个 `describe('runChatLoop abort 语义回归')`（行为不变，单纯分块避免 message_roll 夹具干扰） |
+
+## TDD 证据
+
+- **红**：`vitest run tests/agent/runtime-entry-steer.test.ts` → `2 failed | 5 passed (7)`——Test 1「drain 时有新文本」`expect(rollChunks).toHaveLength(1) but got +0`；Test 3「两次 drain」`expect(rollChunks).toHaveLength(2) but got +0`。Test 2（无新文本 → 不发 roll）通过是 vacuous（实现 0 emit 即满足「expect 0」），T1 已先一步把 steer 注入实现落地（drain + push messages）
+- **绿（合并跑）**：`vitest run tests/agent/runtime-entry-steer.test.ts tests/agent/runtime-segment.test.ts tests/agent/dispatch-parallel.test.ts` → `Test Files 3 passed (3) / Tests 22 passed (22)`——新 3/3 + steer 既有 4/4 + segment 2/2 + dispatch-parallel 13/13 零回归
+- **typecheck**：`pnpm typecheck`（electron + renderer 双 workspace）→ `electron typecheck: Done / renderer typecheck: Done`
+
+## 一行测试摘要
+
+7/7 steer 用例通过（3 新 + 4 既有），22/22 跨 3 文件零回归，typecheck 双 clean。
+
+## 关键设计点（与 brief 严丝合缝）
+
+- **标志位置**：放在 `pendingSteers` 之后、`abortListener` 之前——同属「drain 状态族」变量，与原 spec §5.2 steer drain 上下文一致；不污染 chat loop 主逻辑（chatStream/工具执行/segment）
+- **置位时机**：`case 'text'` 同步置位（每次 text delta 都触发，roll 后被复位前累计）；`thinking` 不置位（spec §2.2 规定以「text delta」为准——纯 thinking 流不出可读文本，不应换行）
+- **drain 守卫**：`if (pendingSteers.length > 0)` 守外层（无 steers 不发 roll，防「无输入也换行」边界）；`if (hasNewTextSinceLastRoll)` 守内层（无新文本不换行，防空新行——spec §4 表格第 1 行 + spec §2.2 防「连续 steer 在同一等待期」）；两条件 AND——只有「有 steer 且有内容可换行」时才发 roll chunk
+- **复位时机**：roll chunk emit 同步后立即复位 `hasNewTextSinceLastRoll = false`（不是 push messages 后复位）——保证「同一 drain 块内」多次发 roll 不会双发（虽然 brief 没要求多层 roll，但行为一致更稳）
+- **切点时序安全**（spec §2.2）：drain 在「工具循环结束 → 下一轮 LLM 请求前」执行，此刻不存在悬空 tool_call/tool_result 事件对——`message_roll` chunk 发到主进程后 `streamMessageIdCache` 换指向（流到 `#roll{n}` 新行），后续 thinking/text/tool/end 自动落新行
+- **不动 stream-relay / stream-chunk / runtime-spawner**（T1 已交付，本任务只负责 emit 触发）：runtime-spawner.ts:202 白名单无需再加（已含 `message_roll`）；stream-relay roll handler 是「收 chunk 后换行」，本任务是「发 chunk」，两端解耦各管一段
+
+## 留位与边界（spec §4）
+
+| 场景 | 当前行为 | 验证用例 |
+|---|---|---|
+| steer 到达但自上次 roll 后无新文本 | 跳过 roll 只注入 | Test 2（round1 无 text → rollChunks=0，supplements=1） |
+| 多条 steer 同轮 drain | 一次 roll + 全量 FIFO 注入（不逐条 roll） | 既有「多条 steer FIFO」用例 + drain 块设计（if 在 while 外） |
+| roll 后流被 abort | end(interrupted) 落新行——逻辑与 roll 前的 abort 路径相同，roll 不引入新分支 | 既有 abort 语义用例（移到第三个 describe 保持 zero-change） |
+| 最后一轮自然结束后 steer 未消费 | 旧逻辑不变（drain 不在循环外做） | 既有测试覆盖 |
+| 旧行聚合为空文本 | `hasNewTextSinceLastRoll` 守卫已防 | Test 2 间接验证（compact 后无 text → 不 roll） |
+
+## Concerns / 留待 T3
+
+- **T3 门禁**：`pnpm test` 全量测试（task-2 范围只跑了 steer + segment + dispatch-parallel——其他 1074 electron + 548 renderer 应在 T3 整体跑一次），typecheck 双 clean，macOS 主机冒烟清单：实测会话场景复现双气泡（spec §6 验收 1+2+3）
+- **vacuous pass 现象**：Test 2 在红阶段就通过（实现 0 emit → 满足「expect 0」）——这是 TDD 中典型的「断言倒挂」，但因为 T1 已先实现 steer drain（push messages 部分），测试断言「supplements=1」仍守住核心契约。T3 全量测试时建议确认该用例在完整路径下行为不变
+- **vitest SIGSEGV 噪音**：与 T1 报告同——pnpm wrapper 偶发 SIGSEGV 在 better-sqlite3 cleanup 阶段，`Tests 22 passed (22)` 在 SIGSEGV 前已落字；属 pre-existing 现象，本任务 git stash 验证基线也带
+- **`message_roll` 不影响 abort**：第三个 describe 拆出来仅因 beforeEach/afterEach 作用域隔离，行为与 T1 时期完全一致——`stats.aborted === true` + 返回 `''` + round2Messages 含补充三个断言全保留
+
+## 文件清单（与 base 5411031 diff）
+
+```
+electron/src/main/agent/runtime-entry.ts         | 12 ++ (a/b/c 三处插入)
+electron/tests/agent/runtime-entry-steer.test.ts | 192 +++++++++++++ (新 describe + 既有用例迁移)
+```
+
+注：`.superpowers/sdd/progress.md` / `task-1-report.md` 存在未提交的同期修订（T1 状态补录），未纳入本任务 commit——保留由后续 ledger 维护者处置。

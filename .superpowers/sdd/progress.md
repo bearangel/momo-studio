@@ -989,3 +989,9 @@ Task 6: complete (无commit; 控制器亲验三门禁 PASS——typecheck 双 cl
 全特性 6 任务完成——进入 whole-branch 终审（MERGE_BASE 3bba4b8..HEAD, 6 commits: 5 feat + 1 fix回归对齐）
 SDD 执行完毕：6 任务×（实现+独立审查）双循环 + T3 回归修复轮（0a289f3 控制器worktree实证T3遗漏回归面，5处严格断言对齐）+ T4 子流程根因（typeof guard生产零影响，T6根修延后DEFER-OK[spec已含处置路径]）。
 终审（whole-branch, oracle级）: APPROVED——Ready to merge Yes。7 commits（3bba4b8..109ef46: 1 docs + 5 feat + 1 fix回归对齐）跨26文件 +2285/−212。跨任务接缝六维全闭环（StateStatus双端/session-lane六签名消费/RouteUserChatInput五层透传/registerLane+clearLaneIfMatch配套/notifyExecutor无环/T4-guard生产零影响）。spec §9 五项验收逐项锁闭有代码级证据。25 条 Minor 全部 DEFER-OK，0 Critical/Important。macOS 主机冒烟三项留待真机。
+roll-T1: complete (commit 5411031, review clean——Spec ✅ 4处逐字 + Approved; 24/24 独立复跑+typecheck 双 clean; 专项: end done路径镜像一致/字段继承同segment_boundary模式/getMessage!断言有仓内先例[repo.ts:109]; Minor ×3: M1 oldMsg用!而同handler用if守卫不一致 M2新行status_change未配flush[与start模式一致] M3测试4同streamSessionId双行[防御性合同测试,注释自洽])
+roll-T2: complete (commit c153749, 控制器亲审通过[配额耗尽双会话阵亡后接管]——Spec ✅ 三处逐字+3用例断言一致 + Approved; 27/27 独立复跑+typecheck双clean; 专项: describe重组零断言变化[已申报] 切点时序结构确认无悬空事件对; Minor ×2: describe3无独立hooks[it4自包含] roll filter三处重复; 实现者会话撞Token Plan限额于收尾阶段[commit+报告均完整落地])
+roll-T3: complete (无commit; 控制器亲验——typecheck 双 clean[T2时点] / electron 193文件1604全量全绿[并行SIGSEGV×3=环境内存压力,--singleThread串行全绿] / renderer 107文件1005全绿; spec §6 代码级验收全部由 8 新用例+上游特性套件锁闭; GUI冒烟[ls任务中途改pwd→双气泡+导出4条顺序]留macOS主机)
+全部 3 Task 完成——待额度重置后派 whole-branch 终审（MERGE_BASE ba596a5..c153749, 4 commits: 2 docs + 2 feat）
+终审（whole-branch, oracle）: APPROVED——Ready to merge Yes。四环闭合（类型/白名单/handler/emit）无断点; rollCounts 三清理路径无泄漏; 上游§5契约零侵入（分流/wire format/回退/沉淀全部未动）; spec§6四项代码级证据齐备。Minor ×8 全部 SHIP-AS-IS/DEFER-OK（T1×3+T2×2+终审新3: N1 roll×segment交互无用例 N2 多steer单drain单roll无直接断言 N3 合并范围应含spec commit ba596a5^..c153749）。macOS主机双气泡冒烟留真机。门禁终态: typecheck双clean + electron 193/1604串行全绿 + renderer 107/1005。
+SDD 执行完毕：3任务（T1独立审查 + T2配额耗尽控制器亲审 + T3控制器亲验）+ 终审单轮。
