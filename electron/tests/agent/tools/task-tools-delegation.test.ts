@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb } from '../../../src/main/storage/db';
 import { TaskTools } from '../../../src/main/agent/tools/task-tools';
+import { __setTodosForTest } from '../../../src/main/agent/tools/todo-tools';
 import { saveAgentDefinition, addMember, generateAgentUserId } from '../../../src/main/agent/crud';
 import { createTeam, removeTeamMember } from '../../../src/main/agent/team';
 import type { AgentDefinition } from '../../../src/main/agent/types';
@@ -61,12 +62,15 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
+  // 清空 todoStore——todoStore 是模块级单例，前序测试残留 user 挂靠会污染后续断言（spec §5.3 软门禁）
+  __setTodosForTest('ss-1', []);
 });
 
 afterEach(() => {
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
+  __setTodosForTest('ss-1', []);
 });
 
 describe('list_delegation_targets（委派信息闭环）', () => {
@@ -164,7 +168,7 @@ describe('create_task 无指派 warning（委派信息闭环）', () => {
     expect(result.warning).toContain('draft');
   });
 
-  it('有指派创建 → 无 warning 字段 + 落 assigned（K1 决策表对齐——否则 executor 不消费，死局换形态）', async () => {
+  it('有指派创建 + 有 user 挂靠 → 无 warning 字段 + 落 assigned（K1 决策表对齐——否则 executor 不消费，死局换形态）', async () => {
     const { createWorkspace } = await import('../../../src/main/workspace/crud');
     const ws = await createWorkspace(
       { name: 'W2', directoryPath: '/tmp/ws-warn2', description: '', iconEmoji: '📁' },
@@ -172,6 +176,10 @@ describe('create_task 无指派 warning（委派信息闭环）', () => {
     );
     saveAgentDefinition(makeDef('def-warn', '执行者', ''));
     const member = await addMember(ws.id, 'def-warn', generateAgentUserId('warn-executor'));
+    // 种 user 挂靠 todo——避免触发软门禁（spec §5.3），单独验证 K1 路径无 warning
+    __setTodosForTest('ss-1', [
+      { id: 'todo-u1', subject: '用户要求的主任务', status: 'in_progress', source: 'user' },
+    ]);
     const result = JSON.parse(
       await tools.execute(
         'create_task',

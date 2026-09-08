@@ -27,6 +27,8 @@ import type { MemoryEntry, SaveMemoryInput } from '../../storage/memories/repo';
 import type { LLMToolDef } from '../llm-provider';
 import { logToolCall } from './shared/audit';
 import { parseStringArg } from './shared/arg-parse';
+import { hasPendingUserTodos } from './todo-tools';
+import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
 import type { ToolContext, ToolModule } from './types';
 
 /** 合法 kind 白名单（与 memories 表 CHECK 约束同集） */
@@ -180,7 +182,13 @@ export class MemoryTools implements ToolModule {
       sourceDetail: `agent:${ctx.streamSessionId}`,
     };
     const entry = await getMemoryProvider().saveMemory(input);
-    return `已保存记忆（id=${entry.id}，kind=${entry.kind}，常驻=${entry.pinned ? '是' : '否'}）`;
+    const base = `已保存记忆（id=${entry.id}，kind=${entry.kind}，常驻=${entry.pinned ? '是' : '否'}）`;
+    // 软门禁（spec §5.3）：无 user 挂靠追加警告行，不阻断——主路径文本保持
+    // 「已保存记忆」开头，便于消费方按前缀判定成功路径
+    if (!hasPendingUserTodos(ctx.streamSessionId)) {
+      return `${base}\n${SIDEEFFECT_UNLINKED_WARNING}`;
+    }
+    return base;
   }
 
   /** memory_search：读操作（走 provider，命中自动递增 use_count） */

@@ -47,6 +47,8 @@ import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessi
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
+import { hasPendingUserTodos } from './todo-tools';
+import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
 
 /**
  * read_task 的返回结构（task 上下文摘要）。
@@ -553,6 +555,12 @@ export class TaskTools implements ToolModule {
         // 同义（终审 N1/M6：谓词分叉导致双重新话回归锁）
         if (!hasDelegationTarget(input)) {
           return JSON.stringify({ ...result, warning: NO_ASSIGNMENT_WARNING });
+        }
+        // 持久副作用软门禁（spec §5.3）：有指派但本轮无 user 挂靠 → 附 warning，
+        // 不阻断（TaskRow 仍顶层返回）。两条 warning 互斥——无指派走上一分支
+        // 已带 NO_ASSIGNMENT_WARNING，此处只覆盖「有指派但失挂靠」一种情况。
+        if (!hasPendingUserTodos(ctx.streamSessionId)) {
+          return JSON.stringify({ ...result, warning: SIDEEFFECT_UNLINKED_WARNING });
         }
         return JSON.stringify(result);
       }
