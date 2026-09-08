@@ -5,6 +5,7 @@
 
 import type { RuntimeConfig } from './runtime-config';
 import type { TaskContext } from '../memory';
+import { getTodosForSession } from './tools/todo-tools';
 
 /**
  * 格式化预算提示，注入 system prompt 末尾。
@@ -81,4 +82,36 @@ export function formatTaskHint(ctx: TaskContext): string {
       : '';
   return `\n\n[任务上下文] 你正在执行任务 #${ctx.task.id}: ${ctx.task.title}
 描述: ${ctx.task.description}${eventsBlock}${artifactsBlock}`;
+}
+
+/**
+ * Turn mandate 尾段（spec §2）：本轮用户授权的结构化呈现。
+ * 每轮重写 messages[0] 时调用——「中途补充」与「未完成项」保持实时。
+ * 未完成项只列 source=user 且非 completed 的条目（agent 自发项不进授权节）。
+ */
+export function buildMandateHint(opts: {
+  userBody: string;
+  steers: string[];
+  streamSessionId: string;
+}): string {
+  const pending = getTodosForSession(opts.streamSessionId).filter(
+    (t) => t.status !== 'completed' && t.source === 'user',
+  );
+  const lines: string[] = ['## 本轮用户授权（mandate）'];
+  lines.push(`- 用户消息：「${opts.userBody}」`);
+  if (opts.steers.length > 0) {
+    lines.push(`- 中途补充：${opts.steers.map((s) => `「${s}」`).join(' ')}`);
+  }
+  lines.push(
+    pending.length > 0
+      ? `- 用户请求的未完成项：\n${pending.map((t) => `  - [${t.status === 'in_progress' ? '>' : ' '}] ${t.subject}`).join('\n')}`
+      : '- 用户请求的未完成项：无',
+  );
+  lines.push(
+    '约束：以上是你本轮被授权完成的工作范围。「agent 备忘」类信息（你自己想到的可选方向）' +
+    '不属于授权——除非用户在本轮明确要求，否则勿据此发起新工作；需要时先向用户提出。' +
+    '中途补充与原始消息同等授权效力，可扩大、修改、撤销原授权；收到改变方向或要求停止的' +
+    '补充时，必须先用 todowrite 同步更新 user-source 待办项，然后再继续。',
+  );
+  return `\n\n${lines.join('\n')}`;
 }

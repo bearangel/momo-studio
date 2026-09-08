@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { parseConfig, type RuntimeConfig, type TaskConfig } from './runtime-config';
-import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildCompactSuggestHint } from './prompt-hints';
+import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildCompactSuggestHint, buildMandateHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
 import { getWorkspace } from '../workspace/crud';
@@ -292,7 +292,23 @@ export async function runChatLoop(
     workspaceId: config.workspaceId,
     sessionId: parentStreamSessionId ? null : roomId,
   });
-  const finalSystemContent = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
+  // 子 agent（dispatch 模式）复用 PM 分配的 subStreamSessionId 作为自身 session ID，
+  // 使 renderer 的 DispatchChip 能通过 streams.get(subStreamSessionId) 找到子 agent 的 StreamState。
+  // 顶层 agent（普通消息）生成新 UUID。
+  // v2 task-driven：AgentRunner 通过 streamSessionIdOverride 传入预分配的 session ID（替代 randomUUID）。
+  // turn-mandate Task 3：提前到此处声明，让 assembly 区 buildMandateHint 闭包可引用。
+  const streamSessionId = streamSessionIdOverride ?? parentStreamSessionId ?? randomUUID();
+  // turn-mandate Task 3（spec §2「每轮重写」）：static 段一次组装；
+  // mandate 尾段每轮基于 mandate 状态对象重写——
+  // 「中途补充」与「未完成项」保持实时跨压缩存活
+  const staticSystem = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
+  const mandate = { userBody: currentBody, steers: [] as string[] };
+  const refreshSystem = (): void => {
+    messages[0] = {
+      role: 'system',
+      content: staticSystem + buildMandateHint({ ...mandate, streamSessionId }),
+    };
+  };
 
   const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
     role: m.role,
@@ -300,16 +316,11 @@ export async function runChatLoop(
   }));
 
   const messages: LLMMessage[] = [
-    { role: 'system', content: finalSystemContent },
+    { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
     ...convMessages,
     { role: 'user', content: currentBody },
   ];
-
-  // 子 agent（dispatch 模式）复用 PM 分配的 subStreamSessionId 作为自身 session ID，
-  // 使 renderer 的 DispatchChip 能通过 streams.get(subStreamSessionId) 找到子 agent 的 StreamState。
-  // 顶层 agent（普通消息）生成新 UUID。
-  // v2 task-driven：AgentRunner 通过 streamSessionIdOverride 传入预分配的 session ID（替代 randomUUID）。
-  const streamSessionId = streamSessionIdOverride ?? parentStreamSessionId ?? randomUUID();
+  refreshSystem();
   const maxToolCalls = config.maxToolCalls;
   let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
   let toolCallCount = 0;
@@ -439,6 +450,10 @@ export async function runChatLoop(
   };
 
   for (let round = 0; ; round++) {
+    // turn-mandate Task 3（spec §2「每轮重写」）：每轮构建 LLM 请求前先把
+    // system 消息重写到最新 mandate 状态——未完成项可能已被 todowrite 工具
+    // 推进/完成，跨压缩存活也走此路径保证 mandate 视图一致。
+    refreshSystem();
     // v2.3 steer 注入（spec §5.2）：每轮构建 LLM 请求前 drain——上一轮工具
     // 执行期间到达的用户补充在此进入上下文；最后一轮自然结束后未消费的
     // 补充保留在会话历史（消息已落库），下轮对话可见，不重派发
@@ -450,8 +465,19 @@ export async function runChatLoop(
         hasNewTextSinceLastRoll = false;
       }
     }
+    let drained = false;
     while (pendingSteers.length > 0) {
-      messages.push({ role: 'user', content: `[用户中途补充] ${pendingSteers.shift()!}` });
+      // turn-mandate Task 3：把 steer 同步进 mandate 状态对象——
+      // 下一次 refreshSystem 即把补充纳入 mandate 尾段，
+      // 跨压缩存活路径同步生效。
+      const steer = pendingSteers.shift()!;
+      mandate.steers.push(steer);
+      messages.push({ role: 'user', content: `[用户中途补充] ${steer}` });
+      drained = true;
+    }
+    if (drained) {
+      // 新指令优先于收尾（wrapUpMode = false 行由 Task 4 接入）。
+      refreshSystem();
     }
 
     // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
