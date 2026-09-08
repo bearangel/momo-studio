@@ -6,11 +6,17 @@
 // v2.0 A 子系统简化：
 //   - Matrix event content 富字段（thinking/tool_calls/dispatch 元数据）已废弃，
 //     富信息统一在 message_events 表（renderer 端用 aggregateEvents 重建）。
-//   - 导出器简化为仅输出 body + 时间戳 + sender（富信息导出留 v2 后续增强）。
-//   - 所有消息统一渲染为顶层条目（不再分组 dispatch/task_reply 嵌套）。
+//   - v2.3.2 已升级：rich 字段为可选，缺省（legacy-export 路径 / 无事件消息）仍
+//     仅输出 body；存在 rich 时按段序列交错渲染工具调用 / 委派 / todo 与状态标注。
+//   - 所有消息统一渲染为顶层条目（不再分组 dispatch/task_reply 嵌套）；
+//     子 agent 嵌套由 dispatch.subMarkdown 以引块形式呈现（handler 递归填充）。
 //
 // v2.0 P1 Task 12：原 extends MatrixMessagePayload（matrix/sync-manager 已删），
 // 字段就地展开——形状与 SQLite MessageRow 导出视图一致。
+
+import type { ExportDispatchStatus, ExportSegment } from './export-aggregator';
+
+export const TOOL_RESULT_MAX_CHARS = 2000;
 
 export interface ExportMessage {
   /** 消息唯一标识（SQLite messages.id） */
@@ -24,6 +30,12 @@ export interface ExportMessage {
   content: Record<string, unknown>;
   timestamp: number;
   botName: string | null;
+  /** 富信息（v2.3.2）：事件聚合段序列；缺省（legacy / 无事件消息）走纯 body 渲染 */
+  rich?: {
+    segments: ExportSegment[];
+    status: 'streaming' | 'done' | 'failed' | 'aborted';
+    error?: string;
+  };
 }
 
 export interface ExportMeta {
@@ -46,6 +58,71 @@ function formatTime(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/** 工具结果截断：超限截到 2000 字符并标注原文长度 */
+function truncateResult(result: string): string {
+  if (result.length <= TOOL_RESULT_MAX_CHARS) return result;
+  return `${result.slice(0, TOOL_RESULT_MAX_CHARS)}…（已截断，原文 ${result.length} 字符）`;
+}
+
+const DISPATCH_STATUS_ICON: Record<ExportDispatchStatus, string> = {
+  queued: '🕒 排队',
+  executing: '⏳ 执行中',
+  completed: '✅ completed',
+  failed: '❌ failed',
+  timeout: '⏱ timeout',
+  aborted: '🛑 aborted',
+};
+
+/** 逐行加 `> ` 前缀（工具结果 / 子 agent 嵌套内容用引块呈现） */
+function quoteBlock(markdown: string): string {
+  return markdown
+    .split('\n')
+    .map((line) => `> ${line}`.trimEnd())
+    .join('\n');
+}
+
+function renderSegments(segments: ExportSegment[]): string {
+  let out = '';
+  for (const seg of segments) {
+    switch (seg.kind) {
+      case 'text':
+        if (seg.text) out += `${seg.text}\n\n`;
+        break;
+      case 'tool': {
+        out += `🔧 **工具** \`${seg.toolName}\` → \`${JSON.stringify(seg.args)}\`\n\n`;
+        const result = seg.result === null ? '（执行中）' : truncateResult(seg.result);
+        out += `${quoteBlock(result)}\n\n`;
+        break;
+      }
+      case 'dispatch': {
+        out += `📤 **委派** ${seg.subAgentName || '子 agent'}：${seg.task || '（无任务描述）'} —— ${DISPATCH_STATUS_ICON[seg.status]}\n\n`;
+        if (seg.subMarkdown !== undefined && seg.subMarkdown.length > 0) {
+          out += `${quoteBlock(seg.subMarkdown)}\n\n`;
+        } else if (seg.subOmitted === true) {
+          out += '> （深层委派已省略）\n\n';
+        }
+        break;
+      }
+      case 'todo': {
+        for (const item of seg.items) {
+          const mark = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '◐' : '○';
+          out += `- ${mark} ${item.subject}\n`;
+        }
+        out += '\n';
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** 消息头状态标注（failed / aborted 时追加） */
+function statusSuffix(rich: ExportMessage['rich']): string {
+  if (!rich || (rich.status !== 'failed' && rich.status !== 'aborted')) return '';
+  const label = rich.status === 'failed' ? '失败' : '已中断';
+  return rich.error ? `（${label}：${rich.error}）` : `（${label}）`;
+}
+
 function renderMessage(msg: ExportMessage): string {
   // v1.7.3 修复：不能只靠 sender.startsWith('@bot.') 判断 bot——实际 agent userId
   // 格式是 @<slug>.<workspaceSlug>.<ownerLocalpart>.<suffix>:localhost（如
@@ -56,12 +133,30 @@ function renderMessage(msg: ExportMessage): string {
   const icon = isBot ? '🤖' : '👤';
   const role = isBot ? (msg.botName ?? shortName(msg.sender)) : '用户';
   // Matrix sender 已是 @user:host 形式，无需额外 @ 前缀
-  let out = `## ${icon} ${role} ${msg.sender} — ${formatTime(msg.timestamp)}\n\n`;
+  let out = `## ${icon} ${role} ${msg.sender} — ${formatTime(msg.timestamp)}${statusSuffix(msg.rich)}\n\n`;
 
-  if (msg.body) {
+  if (msg.rich && msg.rich.segments.length > 0) {
+    out += renderSegments(msg.rich.segments);
+  } else if (msg.body) {
     out += msg.body + '\n\n';
   }
 
+  return out;
+}
+
+/**
+ * 子 agent 消息嵌套渲染（v2.3.2 spec §5）：无 `##` 头（避免污染文档大纲），
+ * 角色行 + 段内容，产出被 dispatch 段以引块包裹。
+ */
+export function renderSubMessage(msg: ExportMessage): string {
+  const isBot = msg.botName !== null || msg.sender.startsWith('@bot.');
+  const role = isBot ? (msg.botName ?? shortName(msg.sender)) : '用户';
+  let out = `**${role}** — ${formatTime(msg.timestamp)}${statusSuffix(msg.rich)}\n\n`;
+  if (msg.rich && msg.rich.segments.length > 0) {
+    out += renderSegments(msg.rich.segments);
+  } else if (msg.body) {
+    out += `${msg.body}\n\n`;
+  }
   return out;
 }
 
