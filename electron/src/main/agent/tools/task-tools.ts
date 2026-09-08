@@ -2,10 +2,11 @@
 //
 // 任务工具（v2 B10）——暴露给 agent 用，让 agent 能读任务上下文、创建 / 完成任务。
 //
-// 7 个工具的语义：
+// 8 个工具的语义：
 //   - read_task(taskId)             → TaskContext 摘要（go through MemoryProvider）
 //   - read_task_history(taskId)     → execution_room 内的 messages
 //   - read_task_progress(taskId)    → task 关联的所有 message_events
+//   - list_delegation_targets()     → 三类委派目标清单（agent 成员 / 团队 / 会话）
 //   - create_task(input)            → 新建任务（draft 状态）
 //   - complete_task(taskId)         → 标记 completed
 //   - fail_task(taskId, reason)     → 标记 failed + errorMessage
@@ -39,6 +40,9 @@ import {
 import { getDb } from '../../storage/db';
 import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
+import { listMembers, listAgentDefinitions } from '../crud';
+import { listTeams } from '../team';
+import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
@@ -209,6 +213,82 @@ export async function listTasks(opts: ListTasksOptions): Promise<TaskRow[]> {
   return listTasksRepo(opts);
 }
 
+/** list_delegation_targets 的 agents 条目 */
+export interface DelegationTargetAgent {
+  instanceId: string;
+  name: string;
+  description: string;
+  /** 当前会话（ctx.roomId 的 session_members）内的成员 = agent 视角的「自己」 */
+  isSelf: boolean;
+}
+
+/** list_delegation_targets 的 teams 条目 */
+export interface DelegationTargetTeam {
+  id: string;
+  name: string;
+  memberCount: number;
+  leaderName: string;
+}
+
+/** list_delegation_targets 的 sessions 条目 */
+export interface DelegationTargetSession {
+  id: string;
+  title: string;
+  kind: 'chat' | 'task_execution';
+  isCurrent: boolean;
+}
+
+/** list_delegation_targets 返回结构（紧凑，直接 JSON.stringify 给 LLM） */
+export interface DelegationTargetList {
+  agents: DelegationTargetAgent[];
+  teams: DelegationTargetTeam[];
+  sessions: DelegationTargetSession[];
+  /** 空类目提示（agent 区分「没有」与「查询失败」）；全非空为空数组 */
+  notes: string[];
+}
+
+/**
+ * list_delegation_targets：一次返回三类可指派委派目标（agent 成员 / 团队 / 会话）。
+ *
+ * 委派信息闭环（spec 2026-09-08）：agent 此前无工具发现指派目标 ID，
+ * create_task 留空指派 → draft 死局。查询全部走 repo 函数（本文件不含 SQL）。
+ * sessions 按 COALESCE(last_message_at, created_at) DESC 取最近 20 条。
+ * members 按 createdAt ASC 排（listMembers 走 idx_wam_unique 可能按 agent_definition_id 序回，
+ * 显式排序保证 LLM 看到的清单稳定、按加入先后）。
+ */
+export function listDelegationTargets(workspaceId: string, roomId: string): DelegationTargetList {
+  const members = listMembers(workspaceId)
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const descByDefId = new Map(listAgentDefinitions().map((d) => [d.id, d.description]));
+  const selfIds = new Set(roomId ? listSessionMembers(roomId).map((m) => m.instanceId) : []);
+  const agents: DelegationTargetAgent[] = members.map((m) => ({
+    instanceId: m.instanceId,
+    name: m.agentName,
+    description: descByDefId.get(m.agentDefinitionId) ?? '',
+    isSelf: selfIds.has(m.instanceId),
+  }));
+
+  const teams: DelegationTargetTeam[] = listTeams(workspaceId).map((t) => ({
+    id: t.id,
+    name: t.name,
+    memberCount: t.members.length,
+    leaderName:
+      t.members.find((m) => m.instanceId === t.leaderInstanceId)?.agentName ?? '（无 leader）',
+  }));
+
+  const sessions: DelegationTargetSession[] = listSessionsByWorkspace(workspaceId)
+    .map((s) => ({ row: s, sortKey: s.lastMessageAt ?? s.createdAt }))
+    .sort((a, b) => b.sortKey - a.sortKey)
+    .slice(0, 20)
+    .map(({ row }) => ({ id: row.id, title: row.title, kind: row.kind, isCurrent: row.id === roomId }));
+
+  const notes: string[] = [];
+  if (agents.length === 0) notes.push('本工作空间暂无 agent 成员，无法指派 assigneeAgentId');
+  if (teams.length === 0) notes.push('本工作空间暂无团队');
+  return { agents, teams, sessions, notes };
+}
+
 function parseStringArgOptional(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string') {
@@ -226,6 +306,12 @@ function parseStringArgOptional(value: unknown, name: string): string | undefine
 export class TaskTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
+      {
+        name: 'list_delegation_targets',
+        description:
+          '列出当前工作空间全部可指派的委派目标（agent 成员 / 团队 / 会话，含各自 ID 与名称）。create_task 前先调用本工具获取真实 ID——系统没有自动指派机制，无指派目标任务不会被调度执行。',
+        inputSchema: { type: 'object', properties: {} },
+      },
       {
         name: 'read_task',
         description:
@@ -378,6 +464,7 @@ export class TaskTools implements ToolModule {
       name === 'read_task' ||
       name === 'read_task_history' ||
       name === 'read_task_progress' ||
+      name === 'list_delegation_targets' ||
       name === 'create_task' ||
       name === 'complete_task' ||
       name === 'fail_task' ||
@@ -393,6 +480,9 @@ export class TaskTools implements ToolModule {
     ctx: ToolContext,
   ): Promise<string> {
     switch (name) {
+      case 'list_delegation_targets': {
+        return JSON.stringify(listDelegationTargets(ctx.workspaceId, ctx.roomId));
+      }
       case 'read_task': {
         const taskId = parseStringArg(args.taskId, 'taskId');
         const result = await readTask(taskId);
