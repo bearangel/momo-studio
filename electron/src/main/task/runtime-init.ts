@@ -5,7 +5,7 @@
 // → im/session-service → task/activation → executor 的 import 环。
 import { TaskScheduler } from './scheduler';
 import { taskExecutor, type ExecutorDeps } from './executor';
-import { sendUserMessage } from '../im/session-service';
+import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 import { logger } from '../logger';
 
 let scheduler: TaskScheduler | null = null;
@@ -43,6 +43,8 @@ export function initTaskRuntime(opts?: InitTaskRuntimeOpts): void {
       });
     }),
     getGlobalMax: opts?.getGlobalMax,
+    // K10：自动放行新建执行会话 → 通知 renderer 刷新会话列表
+    onSessionListChanged: broadcastSessionListChanged,
   });
 
   scheduler.start();

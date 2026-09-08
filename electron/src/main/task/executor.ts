@@ -33,6 +33,9 @@ export interface ExecutorDeps {
   getGlobalMax?(): number;
   /** 兜底扫描间隔（毫秒），默认 30s */
   sweepIntervalMs?: number;
+  /** K10：新建执行会话后通知 renderer 刷新会话列表（经注入避 executor →
+   * session-service → activation → executor 的 import 环） */
+  onSessionListChanged?(): void;
 }
 
 const DEFAULT_SWEEP_MS = 30_000;
@@ -120,6 +123,8 @@ export class TaskExecutor {
     try {
       const result = await startTask(task.id, task.targetSessionId ? { executionSessionId: task.targetSessionId } : undefined);
       executionSessionId = result.executionSessionId;
+      // K10：新建执行会话 → 通知 renderer 刷新列表（复用会话路径无需通知）
+      if (result.createdNewRoom) this.deps?.onSessionListChanged?.();
     } catch (err) {
       // startTask 抛错（状态竞态 / 锁定冲突等）：留给兜底扫描重试，本轮跳过
       logger.warn('executor startTask 失败（跳过该候选）', {

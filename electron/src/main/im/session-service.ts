@@ -56,6 +56,17 @@ export function broadcastRuntimeChanged(): void {
 }
 
 /**
+ * K10：通知 renderer 会话列表已变化（主进程主动新建执行会话——定时任务到点
+ * 自动放行/手动启动走 createdNewRoom 路径）。sessions 列表原本只在进 IM 视图
+ * 时拉取，停留 IM 视图的用户看不到新执行会话（切走再切回才出现）。
+ * renderer 收到后轻量重拉列表（不动激活会话）。
+ */
+export function broadcastSessionListChanged(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('session:listChanged');
+}
+
+/**
  * 目标解析（v25 Task 9，spec §4.6 / D5——leader 接待语义）：
  *   1. 显式 mention → 第一个被 @ 且有效（仍在 ws）的成员直答，leader 不插嘴
  *   2. 非 @ 消息 → 会话内 is_leader=1 且有效成员接待（建会时快照，spec §3.3）
