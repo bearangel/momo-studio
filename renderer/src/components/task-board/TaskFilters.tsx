@@ -49,6 +49,7 @@ export function TaskFilters({ value, onChange, assigneeOptions }: TaskFiltersPro
         <option value="draft">草稿</option>
         <option value="pending">待分配</option>
         <option value="assigned">已分配</option>
+        <option value="session_queued">排队中</option>
         <option value="in_progress">进行中</option>
         <option value="paused">已暂停</option>
         <option value="completed">已完成</option>

@@ -1,9 +1,9 @@
 // electron/src/main/storage/tasks/state-machine.ts
 //
-// Task 状态机——8 个状态 + 合法转换表。
+// Task 状态机——9 个状态 + 合法转换表。
 //
 // 设计要点：
-//   - 8 状态：draft / pending / assigned / in_progress / paused / completed / failed / cancelled
+//   - 9 状态：draft / pending / assigned / session_queued / in_progress / paused / completed / failed / cancelled
 //   - 三终态：completed / failed / cancelled——isTerminal 返回 true，不可转出
 //   - 转换语义：
 //       draft      → 用户刚创建 / 暂存任务，可直接指派（assigned）或丢弃（cancelled）
@@ -11,6 +11,8 @@
 //       assigned   → 已分配到 agent 等待 pickup；agent 取走进入 in_progress；
 //                    放行前目标校验失败（agent 已移除/团队解散/会话不存在）直接转
 //                    failed 带明示 errorMessage（任务执行运行时 spec §5.1/§9）
+//       session_queued → executor 放行时目标会话车道被占（v2.3 spec §3）；
+//                        车道空闲后放行进 in_progress，也可取消/失败
 //       in_progress→ agent 正在跑；可暂停（paused）/ 完成（completed）/ 失败（failed）/ 取消（cancelled）
 //       paused     → 被中断或主动暂停；恢复（in_progress）/ 取消（cancelled）
 //   - 非法跳跃（如 draft → in_progress、paused → completed）由 canTransition 拒绝，
@@ -22,6 +24,7 @@ export type TaskStatus =
   | 'draft'
   | 'pending'
   | 'assigned'
+  | 'session_queued'
   | 'in_progress'
   | 'paused'
   | 'completed'
@@ -41,7 +44,8 @@ const TERMINAL: ReadonlySet<TaskStatus> = new Set(['completed', 'failed', 'cance
 const LEGAL_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   draft: new Set(['pending', 'assigned', 'cancelled']),
   pending: new Set(['assigned', 'cancelled']),
-  assigned: new Set(['in_progress', 'failed', 'cancelled']),
+  assigned: new Set(['in_progress', 'session_queued', 'failed', 'cancelled']),
+  session_queued: new Set(['in_progress', 'failed', 'cancelled']),
   in_progress: new Set(['paused', 'completed', 'failed', 'cancelled']),
   paused: new Set(['in_progress', 'cancelled']),
   completed: new Set(),

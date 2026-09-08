@@ -6,12 +6,13 @@
 import type { TaskStatus, TaskRow } from '../../ipc/types';
 import type { FilterState } from './TaskFilters';
 
-/** 'all' 的语义 = 不过滤（全部 8 态）。终态历史由 task.store.load 的
+/** 'all' 的语义 = 不过滤（全部 9 态）。终态历史由 task.store.load 的
  *  orderBy created_at_desc + limit 500 截断保障。 */
 const ALL_STATUSES: TaskStatus[] = [
   'draft',
   'pending',
   'assigned',
+  'session_queued',
   'in_progress',
   'paused',
   'completed',

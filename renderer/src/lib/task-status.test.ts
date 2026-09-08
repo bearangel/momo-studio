@@ -45,6 +45,12 @@ describe('task-status 统一状态映射', () => {
     expect(taskStatusStyle('failed').className).toContain('bg-status-error-tint');
     expect(taskStatusStyle('in_progress').className).toContain('bg-status-success-tint');
   });
+
+  it('session_queued：文案「排队中」+ neutral tone（spec §3.3）', () => {
+    const s = taskStatusStyle('session_queued');
+    expect(s.label).toBe('排队中');
+    expect(s.tone).toBe('neutral');
+  });
 });
 
 describe('dispatchStatusStyle', () => {

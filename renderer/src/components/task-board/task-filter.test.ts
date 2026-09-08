@@ -86,3 +86,14 @@ describe('applyTaskFilters — text 过滤', () => {
     expect(out).toEqual([]);
   });
 });
+
+describe('applyTaskFilters — all 过滤（v2.3 车道）', () => {
+  it('all 过滤保留 session_queued 排队任务（v2.3 车道）', () => {
+    const tasks = [
+      makeTask({ id: 'T-1', status: 'session_queued' }),
+      makeTask({ id: 'T-2', status: 'in_progress' }),
+    ];
+    const out = applyTaskFilters(tasks, { status: 'all', assignee: 'all', sort: 'created_at', text: '' });
+    expect(out).toHaveLength(2);
+  });
+});

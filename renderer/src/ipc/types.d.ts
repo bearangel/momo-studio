@@ -114,6 +114,7 @@ export type TaskStatus =
   | 'draft'
   | 'pending'
   | 'assigned'
+  | 'session_queued'
   | 'in_progress'
   | 'paused'
   | 'completed'
