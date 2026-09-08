@@ -455,7 +455,7 @@ export async function runChatLoop(
     }
 
     // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
-    // turn-mandate Task 2（spec §5.6 #1）：改为中性化文案，去掉「然后继续工作」——
+    // turn-mandate Task 2（spec §5.6 #1）：改为中性化文案，去掉旧版前进祈使句——
     // 压缩后的续跑/收尾判定由 compact 分支按 mandate 决定（Task 4 改造）。
     if (messages.length > 30 && round > 0) {
       messages.push({ role: 'system', content: buildCompactSuggestHint(messages.length) });

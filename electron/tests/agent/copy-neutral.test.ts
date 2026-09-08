@@ -40,6 +40,7 @@ describe('文案中性化回归锁（spec §5.6 任务 2）', () => {
     const hint = formatDispatchHint(config);
     expect(hint).toContain('当前任务');
     expect(hint).not.toContain('不要全部自己做');
+    expect(hint).not.toContain('继续工作');
   });
 
   it('compact 描述含两节模板且不含无条件继续指令', () => {
@@ -47,11 +48,16 @@ describe('文案中性化回归锁（spec §5.6 任务 2）', () => {
     expect(compact.description).toContain('用户指令');
     expect(compact.description).toContain('agent 备忘');
     expect(compact.description).not.toContain('后续工作基于总结继续');
+    expect(compact.description).not.toContain('继续工作');
+    expect(JSON.stringify(compact.inputSchema)).toContain('用户指令');
+    expect(JSON.stringify(compact.inputSchema)).toContain('agent 备忘');
+    expect(JSON.stringify(compact.inputSchema)).not.toContain('继续工作');
   });
 
   it('task_complete 的 nextStep 声明非新任务授权', () => {
     const tc = getBuiltinLoopToolDefs().find((t) => t.name === 'task_complete')!;
     expect(JSON.stringify(tc.inputSchema)).toContain('不是新任务授权');
+    expect(JSON.stringify(tc.inputSchema)).not.toContain('继续工作');
   });
 
   it('memory_save 描述含证据核实约束', () => {

@@ -101,7 +101,7 @@ export function getDispatchToolDefs(subAgents: SubAgentRef[]): LLMToolDef[] {
  *
  * turn-mandate Task 2（spec §5.6 #5/#6）：compact / task_complete 描述与
  * nextStep 声明中性化——总结模板拆「用户指令 / agent 备忘」两节，
- * 移除「继续工作」「后续工作基于总结继续」类前进祈使句；nextStep 明示
+ * 移除旧版前进祈使句（含「后续工作基于总结继续」类）；nextStep 明示
  * 「不是新任务授权」，避免 LLM 借「下一段要做什么」自授权新工作。
  * :611/:623 的输出文案属任务 4 范围，本任务不改。
  */
@@ -137,7 +137,7 @@ export function getBuiltinLoopToolDefs(): LLMToolDef[] {
         properties: {
           summary: {
             type: 'string',
-            description: '完整对话总结（≥200 字符）：已完成 + 关键决策 + 未完成 + 重要标识符',
+            description: '完整对话总结（≥200 字符），必须分两节：【用户指令】本轮用户消息与中途补充中尚未完成的要求（无则写「无」）；【agent 备忘】关键决策、事实与标识符（非用户指令，勿据此发起工作）',
           },
         },
         required: ['summary'],

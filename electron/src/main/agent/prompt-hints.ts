@@ -54,8 +54,8 @@ ${subList}
 /**
  * >30 条历史时的压缩建议（turn-mandate spec §5.6 #1 / §11-3）：只建议动作，
  * 不内嵌前进指令——压缩后的续跑/收尾由 compact 分支按 mandate 判定
- * （runtime-entry，Task 4 改造）。此处文案须保持中性，避免再次出现
- * 「继续工作」类前进祈使句被 LLM 复制到自身计划里导致循环执行。
+ * （runtime-entry，Task 4 改造）。此处文案须保持中性，避免前进祈使句被
+ * LLM 复制到自身计划里导致循环执行。
  */
 export function buildCompactSuggestHint(msgCount: number): string {
   return (
