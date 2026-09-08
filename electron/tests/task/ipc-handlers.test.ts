@@ -41,6 +41,8 @@ const broadcastSpy = vi.spyOn(taskBroadcastMod, 'broadcastLocalTaskSnapshot');
 // K7-4/K7-5：暂停/取消联动中断 + resume kickoff 重注入——同样 spy 模块边界
 const abortSpy = vi.spyOn(runtimeRegistryMod, 'abortTasksBySessionEverywhere');
 const sendUserMessageSpy = vi.spyOn(sessionServiceMod, 'sendUserMessage');
+// K10：新建执行会话 → 通知 renderer 刷新会话列表（停留 IM 视图时新会话实时出现）
+const sessionListChangedSpy = vi.spyOn(sessionServiceMod, 'broadcastSessionListChanged');
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -68,6 +70,7 @@ afterEach(() => {
   broadcastSpy.mockClear();
   abortSpy.mockClear();
   sendUserMessageSpy.mockClear();
+  sessionListChangedSpy.mockClear();
 });
 
 describe('task:update（minor-11）', () => {
@@ -320,6 +323,28 @@ describe('task:start 手动启动 kickoff 注入（K9）', () => {
     await handler(null, t.id, {}); // 幂等返回：不再注入
 
     expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // K10 回归锁：主进程新建执行会话（createdNewRoom）必须通知 renderer 刷新
+  // 会话列表——sessions 列表只在进 IM 视图时拉取，定时任务到点自动放行建的
+  // 新会话对停留在 IM 视图的用户不可见（切走再切回才出现——用户主机报告）
+  it('K10: task:start 新建会话 → 通知会话列表刷新；复用/幂等路径不通知', async () => {
+    seedAgentMember('inst-k10');
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'K10 任务',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-k10',
+      status: 'assigned',
+    });
+    sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
+
+    const handler = handlers.get('task:start')!;
+    await handler(null, t.id, {}); // 新建执行会话路径
+    expect(sessionListChangedSpy).toHaveBeenCalledTimes(1);
+
+    await handler(null, t.id, {}); // 幂等（复用已锁定会话）
+    expect(sessionListChangedSpy).toHaveBeenCalledTimes(1); // 不重复通知
   });
 });
 

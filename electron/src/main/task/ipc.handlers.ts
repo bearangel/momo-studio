@@ -37,7 +37,7 @@ import { startTask, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
-import { sendUserMessage } from '../im/session-service';
+import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -206,6 +206,8 @@ export function registerTaskHandlers(): void {
       // 「幂等返回」：仅新启动注入，重复点击不重复驱动
       const before = getTask(id);
       const result = await startTask(id, opts);
+      // K10：新建执行会话 → 通知 renderer 刷新会话列表（停留 IM 视图可见）
+      if (result.createdNewRoom) broadcastSessionListChanged();
       const newlyStarted =
         before != null && before.status !== 'in_progress' && result.task.executionSessionId != null;
       if (newlyStarted) {
