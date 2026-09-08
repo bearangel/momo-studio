@@ -1,13 +1,14 @@
 // renderer/src/components/task-board/TaskCard.tsx
 //
 // 任务卡片（D 子系统 D7）：优先级徽标 + #短ID · 标题 + 状态徽标 + 调度信息 + 进度。
-// v2.1 P3：状态色/标签退役本地双 map，接线 taskStatusStyle（与 TaskChip 同源）；
-// 📅⏰🤖 → Calendar/Clock/Bot lucide。
+// v2.1 P3：状态色/标签退役本地双 map，接线 taskStatusStyle（与 TaskChip 同源）。
 // Task 9：排队徽标（assigned 未放行）+ 循环标记/下次运行 + 团队/会话委派目标。
+// K4：指派/团队/会话目标显示名称而非 ID 片段（useTaskEntityNames）。
 import { Bot, Calendar, Clock, MessagesSquare, Repeat, Users } from 'lucide-react';
 import type { TaskRow } from '../../ipc/types';
 import { taskStatusStyle } from '../../lib/task-status';
 import { humanizeRecurrence } from '../../lib/recurrence';
+import { useTaskEntityNames } from './useTaskEntityNames';
 
 /** 优先级标签（0=无 / 1=低 / 5=中 / 10=高） */
 const PRIORITY_LABEL: Record<number, string> = { 0: '', 1: '低', 5: '中', 10: '高' };
@@ -23,6 +24,7 @@ interface TaskCardProps {
 export function TaskCard({ task, selected, onSelect, queueRank }: TaskCardProps) {
   const status = taskStatusStyle(task.status);
   const priorityLabel = PRIORITY_LABEL[task.priority];
+  const names = useTaskEntityNames(task.workspaceId);
   return (
     <button
       type="button"
@@ -60,7 +62,7 @@ export function TaskCard({ task, selected, onSelect, queueRank }: TaskCardProps)
         {task.assigneeAgentId && (
           <span className="inline-flex items-center gap-1">
             <Bot size={11} strokeWidth={1.75} aria-hidden />
-            {task.assigneeAgentId.slice(0, 12)}
+            {names.agentName(task.assigneeAgentId)}
           </span>
         )}
         {/* 循环标记 + 下次运行（pending） */}
@@ -77,13 +79,13 @@ export function TaskCard({ task, selected, onSelect, queueRank }: TaskCardProps)
         {task.targetTeamId && (
           <span className="inline-flex items-center gap-1">
             <Users size={11} strokeWidth={1.75} aria-hidden />
-            {task.targetTeamId.slice(0, 8)}
+            {names.teamName(task.targetTeamId)}
           </span>
         )}
         {task.targetSessionId && (
           <span className="inline-flex items-center gap-1">
             <MessagesSquare size={11} strokeWidth={1.75} aria-hidden />
-            {task.targetSessionId.slice(0, 8)}
+            {names.sessionTitle(task.targetSessionId)}
           </span>
         )}
       </div>
