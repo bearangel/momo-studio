@@ -60,42 +60,100 @@ export interface LLMProvider {
 const LLM_REQUEST_TIMEOUT_MS = 300_000;
 
 /** 最大重试次数（初次请求 + 重试 = maxRetries+1 次总尝试） */
-const MAX_LLM_RETRIES = 3;
-/** 指数退避延迟：第 1 次重试等 1s，第 2 次等 2s，第 3 次等 4s */
-const RETRY_DELAYS_MS = [1000, 2000, 4000];
+const MAX_LLM_RETRIES = 5;
+/** 指数退避延迟：1s → 2s → 4s → 8s → 16s（429 场景服务端过载，1s 档偏激进但保证响应性） */
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
 /** 可重试的 HTTP 状态码（服务端错误 + 限流） */
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
+/** Retry-After 封顶：服务端给超大值时不无限等（60s） */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/** 可中断退避睡眠：调用方 abort 时立即以 AbortError 拒绝（不睡完剩余时间） */
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }
+    if (signal) {
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
 
 /**
- * 带指数退避重试的 fetch 包装。对可重试错误（429/500/502/503 + 网络异常）
- * 按 RETRY_DELAYS_MS 退避后重试；对客户端错误（400/401/403 等）直接返回
- * 响应（由调用方判断 !response.ok 后抛出业务异常，不浪费重试配额）。
+ * 带指数退避重试的 fetch 包装（请求建立阶段）。
+ *
+ * 可重试错误（429/500/502/503 + 网络异常）按指数退避重试；429 尊重
+ * Retry-After 头（退避取 max(指数档位, Retry-After)，封顶 60s）。
+ *
+ * signal 语义（2026-09-08 修复——此前 AbortSignal.timeout 覆盖调用方 signal，
+ * 导致流式路径被迫绕过本函数、429 直停）：
+ *   - 调用方 signal（可选）全程有效：建连 / 退避等待 / body 读取均可中断
+ *   - 请求超时只覆盖「建连 + 响应头」：响应头到达即 clearTimeout，流式 body
+ *     读取不受超时掐断（只受调用方 signal 控制）——组合经 AbortSignal.any
+ *   - 调用方 abort 触发的 AbortError 原样上抛；cause 里的网络层真实原因
+ *     （ECONNREFUSED 等）提升到错误消息
+ *
+ * 重试耗尽语义：可重试状态码耗尽 → 返回最后的 response（调用方统一按
+ * !response.ok 抛带响应体文案的业务错，用户能看到「访问量过大」类原因）；
+ * 网络异常耗尽 → 抛最后一个错误。
  */
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  maxRetries: number = MAX_LLM_RETRIES,
-  timeoutMs: number = LLM_REQUEST_TIMEOUT_MS,
+  opts?: { maxRetries?: number; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<Response> {
+  const maxRetries = opts?.maxRetries ?? MAX_LLM_RETRIES;
+  const timeoutMs = opts?.timeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+  const callerSignal = opts?.signal;
   let lastError: Error | null = null;
+  let lastResponse: Response | null = null;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // 超时 controller 在响应头到达后 clear（见下）——只保护建连阶段
+    const timeoutCtrl = new AbortController();
+    const timer = setTimeout(() => timeoutCtrl.abort(), timeoutMs);
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, timeoutCtrl.signal])
+      : timeoutCtrl.signal;
     try {
-      // 每次重试创建新的超时 signal（避免复用已 aborted 的 signal 导致重试瞬间失败）
-      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+      const response = await fetch(url, { ...options, signal });
+      clearTimeout(timer);
       if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
         return response;
       }
+      // 可重试状态：记下 response 供耗尽后返回（保留响应体给调用方抛业务错）
+      lastResponse = response;
       lastError = new Error(`HTTP ${response.status}`);
     } catch (err) {
-      lastError = err as Error;
+      clearTimeout(timer);
+      const e = err as Error;
+      // 调用方主动中断：立即上抛（不消耗重试配额）
+      if (callerSignal?.aborted && e.name === 'AbortError') throw e;
+      if (e.name === 'AbortError' && !timeoutCtrl.signal.aborted) throw e;
+      // 网络层失败：把 undici 藏在 cause 里的真实原因提升到消息（保留原始 message）
+      const cause = e.cause instanceof Error ? `：${e.cause.message}` : '';
+      lastError = new Error(`LLM 请求无法连接 ${url}：${e.message}${cause}`);
+      lastResponse = null;
     }
     if (attempt < maxRetries) {
-      const delay = RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]!;
-      const statusCode = lastError.message.match(/HTTP (\d+)/)?.[1] ?? 'timeout';
+      let delay = RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]!;
+      const retryAfter = lastResponse?.headers?.get('retry-after');
+      if (retryAfter !== null && Number.isFinite(Number(retryAfter))) {
+        delay = Math.max(delay, Math.min(Number(retryAfter) * 1000, MAX_RETRY_AFTER_MS));
+      }
+      const statusCode = lastError.message.match(/HTTP (\d+)/)?.[1] ?? '网络异常';
       process.stdout.write(`→ LLM 重试 #${attempt + 1} (status=${statusCode}, 退避=${delay}ms)\n`);
-      await new Promise((r) => setTimeout(r, delay));
+      await sleepAbortable(delay, callerSignal);
     }
   }
+  if (lastResponse) return lastResponse;
   throw lastError ?? new Error('LLM 请求失败（重试耗尽）');
 }
 
@@ -327,27 +385,12 @@ class AnthropicProvider implements LLMProvider {
 // --- 流式实现（chatStream） ---
 
 /**
- * 流式路径的 fetch 包装：网络层失败时把 undici 藏在 err.cause 里的真实原因
- * （ECONNREFUSED / ENOTFOUND / 证书错误等）提升到错误消息——裸 TypeError 只有一句
- * "fetch failed"，用户无法据此诊断供应商 baseUrl/网络问题（2.0.0 主机验收补充）。
- * abort 触发的 AbortError 原样上抛（调用方按中断语义处理）。
- */
-async function llmStreamFetch(url: string, init: RequestInit): Promise<Response> {
-  try {
-    return await fetch(url, init);
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') throw err;
-    const cause = err instanceof Error && err.cause instanceof Error ? `：${err.cause.message}` : '';
-    throw new Error(`LLM 请求无法连接 ${url}${cause}`);
-  }
-}
-
-/**
  * OpenAI 兼容 SSE 流式解析。
  *
- * 直接使用 fetch（不经过 fetchWithRetry），原因：
- *  1. fetchWithRetry 会用 AbortSignal.timeout 覆盖调用方 signal，使 abort 无法传播到 response.body
- *  2. 流式响应已部分消费后重试会产生重复 delta，语义上无意义
+ * 建立阶段（建连 + 响应头）走 fetchWithRetry 指数退避——429/5xx 在此阶段
+ * 失败时零 delta 已发出，重试安全（2026-09-08 修复：此前刻意绕过重试导致
+ * 429 直停，绕过原因是旧的 signal 覆盖缺陷，已修）。进入流消费阶段后不再
+ * 重试（部分 delta 已发，重试会产生重复内容）。
  *
  * abort 支持通过 Promise.race 实现：将 reader.read() 与一个在 signal abort 时 reject 的 promise 竞速。
  * （fetch 被 mock 时不连接 signal 到 response.body，必须显式竞速才能中断读取。）
@@ -373,15 +416,18 @@ async function* chatStreamOpenAI(
     }));
   }
 
-  const response = await llmStreamFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal,
-  });
+    { signal },
+  );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
@@ -524,16 +570,20 @@ async function* chatStreamAnthropic(
     }));
   }
 
-  const response = await llmStreamFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+  // 建立阶段重试语义与 OpenAI 路径一致（见 chatStreamOpenAI 注释）
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal,
-  });
+    { signal },
+  );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
