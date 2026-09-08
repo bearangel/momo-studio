@@ -995,3 +995,8 @@ roll-T3: complete (无commit; 控制器亲验——typecheck 双 clean[T2时点]
 全部 3 Task 完成——待额度重置后派 whole-branch 终审（MERGE_BASE ba596a5..c153749, 4 commits: 2 docs + 2 feat）
 终审（whole-branch, oracle）: APPROVED——Ready to merge Yes。四环闭合（类型/白名单/handler/emit）无断点; rollCounts 三清理路径无泄漏; 上游§5契约零侵入（分流/wire format/回退/沉淀全部未动）; spec§6四项代码级证据齐备。Minor ×8 全部 SHIP-AS-IS/DEFER-OK（T1×3+T2×2+终审新3: N1 roll×segment交互无用例 N2 多steer单drain单roll无直接断言 N3 合并范围应含spec commit ba596a5^..c153749）。macOS主机双气泡冒烟留真机。门禁终态: typecheck双clean + electron 193/1604串行全绿 + renderer 107/1005。
 SDD 执行完毕：3任务（T1独立审查 + T2配额耗尽控制器亲审 + T3控制器亲验）+ 终审单轮。
+export-rich T1: complete (commit 08f5213, 审查 Spec ✅ + Approved; Minor ×3: 报告文件残留旧特性内容[非阻塞] status_change/final合并case[行为等价] subAgentAvatar有意省略; ⚠️项均属T2/T3预期交接)
+export-rich T2: complete (commit f174858, 审查 Spec ✅ 11/11 + Approved; legacy-export 兼容三方验证[未触+类型+body分支]; Minor: TOOL_RESULT_MAX_CHARS 常量行 JSDoc 未加[truncateResult JSDoc 等价覆盖]; ⚠️4项均T3/主机预期)
+export-rich T3: complete (commit d9bd455, 审查 Spec ✅ + Approved; 提取保真逐行确认零语义漂移; 2处偏离独立验证通过[?1→匿名? SQLite每次出现独立计数故传双参 / 删未用type import避ESLint error]; 控制器亲验 5文件58/58 + typecheck双clean; 全量195文件1620由实现者报告; ⚠️: 深度≥3与空子流未集成测试[守卫在,渲染标记T2已锁])
+终审（whole-branch, oracle）: APPROVED——Ready to merge Yes。三环闭合（类型/渲染/组装）; depth语义=最多嵌套3层第4层截断与spec §5一致; §7六项代码级证据齐; 非对称专项无矛盾残留（对齐表述均限定筛选/顺序层面, thinking排除+args全量为§1用户裁定+§8范围外）。Minor ×8 全 DEFER-OK[0必修]: M1-M4 账面项 / M5 深度≥3生产者路径测试列next-touch首位(渲染标记T2已锁,cap=0变异有集成兜底) / M6 穷尽守卫+EOF换行+凑用断言化妆级 / spec §4草图resultTruncated勘正建议随下批docs。门禁: 控制器亲验58/58+typecheck双clean; 全量195/1620(T3报告)。GUI导出冒烟留macOS主机。
+export-rich SDD 执行完毕：3任务全独立审查通过 + 终审单轮。
