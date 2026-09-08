@@ -170,6 +170,12 @@ function createNewTaskRoom(task: TaskRow): string {
     title: roomName,
     kind: 'task_execution',
   });
+  // assignee 是新建执行会话的唯一成员 → 标 leader（接待路由目标）：非 @ 消息
+  // 只由 is_leader 成员接待，漏标会让用户在执行会话发言无人回应（静默落库）。
+  // 后置统一补成员是 INSERT OR IGNORE，不会覆盖此处的 leader 标记。
+  if (task.assigneeAgentId) {
+    addSessionMember(row.id, task.assigneeAgentId, true);
+  }
   return row.id;
 }
 

@@ -138,6 +138,38 @@ describe('startTask execution_room 决策树', () => {
     expect(members.map((m) => m.instanceId)).toEqual(['inst-agent-1']);
   });
 
+  // 2026-09-08 主机 bug 回归锁：assignee 执行会话无 leader → 接待路由静默。
+  // 非 @ 消息只由 is_leader=1 成员接待（session-service pickRoutingTarget），
+  // 建会漏标 leader 时目标解析为 null——用户在任务执行会话发言无人回应。
+  // assignee 是新建执行会话的唯一成员，语义上即接待者。
+  it('新建执行会话的 assignee 标记 is_leader=1（接待路由目标）', async () => {
+    getDb()
+      .prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, runtime, system_prompt, default_tools, source, model_name, icon_emoji)
+         VALUES ('def-2', 'Worker2', 'worker2', '1', 'declarative', 'p', '[]', 'custom', 'm', '🤖')`,
+      )
+      .run();
+    getDb()
+      .prepare(
+        `INSERT INTO workspace_agent_members
+           (instance_id, workspace_id, agent_definition_id, agent_user_id, last_running)
+         VALUES ('inst-agent-2', 'ws1', 'def-2', '@inst-agent-2:s', 0)`,
+      )
+      .run();
+    const t = insertTask({
+      workspaceId: 'ws1',
+      title: 'T2',
+      creatorUserId: '@owner:home',
+      assigneeAgentId: 'inst-agent-2',
+    });
+    transitionTaskStatus(t.id, 'assigned');
+    const result = await startTask(t.id, { createNewRoom: true });
+    const members = listSessionMembers(result.executionSessionId);
+    expect(members).toHaveLength(1);
+    expect(members[0]!.isLeader).toBe(true);
+  });
+
   // I2：复用会话路径（显式 executionSessionId / sourceSessionId）也要补 assignee
   // 成员——否则 kickoff 的 mention 路由在复用会话里永远找不到目标 agent
   it('agent 目标 + sourceSessionId 复用 → assignee 补进 source 会话成员表', async () => {
