@@ -329,6 +329,9 @@ export async function runChatLoop(
   // v2.3 steer：与 abort 同监听器（共享全部 process.off 清理点）——
   // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）
   const pendingSteers: string[] = [];
+  // v2.3.1 消息滚动：自上次 roll 后是否产过新文本——drain 时据此决定是否换行
+  //（防「连续 steer 在同一等待期」产生空新行，spec §2.2）
+  let hasNewTextSinceLastRoll = false;
   const abortListener = (msg: unknown): void => {
     const m = msg as { type?: string; streamSessionId?: string; body?: unknown };
     if (m.streamSessionId !== streamSessionId) return;
@@ -439,6 +442,14 @@ export async function runChatLoop(
     // v2.3 steer 注入（spec §5.2）：每轮构建 LLM 请求前 drain——上一轮工具
     // 执行期间到达的用户补充在此进入上下文；最后一轮自然结束后未消费的
     // 补充保留在会话历史（消息已落库），下轮对话可见，不重派发
+    if (pendingSteers.length > 0) {
+      // v2.3.1 消息滚动（spec §2.2）：有新文本先换行——旧行定格，新行承接本轮
+      //（切点安全：drain 在工具循环结束后，无悬空 tool_call 事件对）
+      if (hasNewTextSinceLastRoll) {
+        sendStreamChunk({ type: 'message_roll', streamSessionId });
+        hasNewTextSinceLastRoll = false;
+      }
+    }
     while (pendingSteers.length > 0) {
       messages.push({ role: 'user', content: `[用户中途补充] ${pendingSteers.shift()!}` });
     }
@@ -472,6 +483,7 @@ export async function runChatLoop(
             break;
           case 'text':
             accumulatedText += delta.content;
+            hasNewTextSinceLastRoll = true;
             sendStreamChunk({ type: 'text', streamSessionId, delta: delta.content });
             break;
           case 'tool_use':
