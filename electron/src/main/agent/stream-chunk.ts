@@ -16,6 +16,7 @@ import type { TodoItem } from './tools/todo-types';
  * - tool_call: 工具调用发起（卡片）
  * - tool_result: 工具调用完成（卡片更新结果）
  * - todo_update: v1.5 todowrite 全量替换任务列表（携带完整 todos 数组）
+ * - message_roll: v2.3.1 steer 注入换行（旧行定格，新行承接）
  * - end: 流式会话结束（finishReason 区分正常/预算耗尽/中断/错误）
  *
  * v1.4 嵌套字段（仅在嵌套场景出现）：
@@ -122,6 +123,16 @@ export type StreamChunk =
       segmentBody: string;
       /** 本段独立的 stream session id（如 "ss-1#seg1"，与 Matrix event 内一致） */
       segmentStreamSessionId: string;
+    }
+  | {
+      /**
+       * v2.3.1 steer 消息滚动（spec §2.1）：drain 到用户补充且自上次 roll 后有新文本时，
+       * runtime-entry 发此 chunk 让主进程「换行」——当前消息行终态化（done + 聚合回写），
+       * 新消息行承接后续输出。与 segment_boundary 的区别：真换行（后续 chunk 路由到新行），
+       * 非 body 快照。
+       */
+      type: 'message_roll';
+      streamSessionId: string;
     };
 
 /**

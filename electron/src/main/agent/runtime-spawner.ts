@@ -199,7 +199,7 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       return;
     }
     // StreamChunk 类型的消息转发给 onChunk
-    if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'todo_update', 'end', 'segment_boundary'].includes(m.type)) {
+    if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'todo_update', 'end', 'segment_boundary', 'message_roll'].includes(m.type)) {
       onChunk(msg as StreamChunk);
     }
     // 其他类型的消息（task-end 等）由调用方在 child.on('message') 内处理

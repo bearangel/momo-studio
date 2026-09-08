@@ -106,6 +106,16 @@ function resolveMessageId(streamSessionId: string): string | null {
 /** 清空指定流会话的缓存（end / 子进程崩溃时调用，防 Map 无界增长） */
 function clearStreamSessionCache(streamSessionId: string): void {
   streamMessageIdCache.delete(streamSessionId);
+  rollCounts.delete(streamSessionId);
+}
+
+/** v2.3.1 roll 计数：streamSessionId → 已 roll 次数（新行后缀 #roll{n}）。
+ * end 的 clearStreamSessionCache 一并清理，防泄漏。 */
+const rollCounts = new Map<string, number>();
+
+/** 测试用：清空 roll 计数 */
+export function __rollCountsForTest(): void {
+  rollCounts.clear();
 }
 
 // === T9 命名接线：final 事件落库监听（注册反转，同 setAbortResolver 模式） ===
@@ -325,6 +335,43 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           payload: { body: chunk.segmentBody },
         });
         segBuf.flush();
+        return;
+      }
+      case 'message_roll': {
+        // v2.3.1 消息滚动（spec §2.3）：旧行终态化（聚合回写语义同 end 的 done 路径），
+        // 新行承接后续输出；cache 换指向后 thinking/text/tool/end 零改动落新行
+        const oldId = resolveMessageId(chunk.streamSessionId);
+        if (!oldId) return; // 无行则静默跳过（与 start 前置同防御）
+        const buf = getEventBuffer();
+        // ① 旧行终态化：先冲刷 pending 让全部 text_delta 落盘，再聚合回写
+        buf.flush();
+        const oldBody = aggregateTextDeltas(oldId);
+        updateMessageStatus(oldId, 'done', oldBody);
+        const oldUpdated = getMessage(oldId);
+        if (oldUpdated) pushSessionMessage(oldUpdated);
+        buf.append({ messageId: oldId, eventType: 'final', payload: { body: oldBody } });
+        buf.flush();
+        // ② 新行：继承旧行会话身份，streamSessionId 加 roll 后缀（避免双行同值歧义）
+        const oldMsg = getMessage(oldId)!;
+        const n = (rollCounts.get(chunk.streamSessionId) ?? 0) + 1;
+        rollCounts.set(chunk.streamSessionId, n);
+        const rollMsg = insertMessage({
+          sessionId: oldMsg.sessionId,
+          sender: oldMsg.sender,
+          eventType: 'm.room.message',
+          body: '',
+          streamSessionId: `${chunk.streamSessionId}#roll${n}`,
+          parentStreamSessionId: oldMsg.parentStreamSessionId,
+          workspaceId: oldMsg.workspaceId,
+          status: 'streaming',
+        });
+        streamMessageIdCache.set(chunk.streamSessionId, rollMsg.id);
+        pushSessionMessage(rollMsg);
+        buf.append({
+          messageId: rollMsg.id,
+          eventType: 'status_change',
+          payload: { status: 'streaming' },
+        });
         return;
       }
       case 'end': {
