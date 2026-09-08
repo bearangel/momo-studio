@@ -237,6 +237,8 @@ export interface TaskApiSurface {
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
+  /** K7-5：恢复暂停的任务——paused → in_progress + kickoff 重注入执行会话 */
+  resume(id: string): Promise<TaskRow>;
   /** B9：任务冲突处理——ConflictDialog 选完策略后调此通道，main process 执行副作用 */
   resolveConflict(input: {
     newTaskId: string;
