@@ -28,7 +28,8 @@ const setDefault = vi.fn();
 const listModels = vi.fn();
 
 const mockApi = {
-  provider: { list, update, delete: del, setDefault, listModels },
+  // v31：ProviderDialog 打开即拉预设列表（两段式第一步）
+  provider: { list, update, delete: del, setDefault, listModels, listPresets: vi.fn(async () => []) },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -115,6 +116,8 @@ describe('ProviderSettings 两列布局', () => {
     await screen.findByRole('button', { name: /P1/ });
     fireEvent.click(screen.getByRole('button', { name: '添加供应商' }));
     const dialog = await screen.findByRole('dialog', { name: '添加供应商' });
+    // v31 两段式：先进「自定义供应商」手填路径，表单（含平台选择）在第二步
+    fireEvent.click(within(dialog).getByText('自定义供应商'));
     expect(within(dialog).getByLabelText('平台')).toBeInTheDocument();
     expect(screen.queryByText(/默认模型/)).not.toBeInTheDocument();
   });

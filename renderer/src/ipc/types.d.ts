@@ -1017,6 +1017,8 @@ export interface ApiSurface {
     create(input: {
       name: string; baseUrl: string; apiKey: string;
       defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+      /** 来源预设 key（v31 起）；传入则后端种子预设模型，未知 key 前置校验拒绝 */
+      presetKey?: string;
     }): Promise<ModelProvider>;
     update(input: {
       id: string; name?: string; baseUrl?: string; apiKey?: string;
