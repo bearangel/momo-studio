@@ -14,8 +14,17 @@
 //     提取/会话命名同源，spec §1 非目标「不引入 compaction 专用模型」）
 
 import { getDb } from '../storage/db';
-import { resolveSessionLlm, SUMMARY_MAX_LEN } from '../memory/extraction';
+import { resolveSessionLlm } from '../memory/extraction';
 import { buildCompactionPrompt } from './prompt';
+
+/**
+ * 结构化压缩摘要长度帽（spec §4.3 — 五节结构化摘要）。
+ *
+ * 解耦于 extraction 背景摘要的 SUMMARY_MAX_LEN = 500——结构化模板要求保留精确
+ * 路径/符号/命令/错误串（spec §4.1），需要更大预算；extraction 的「背景摘要」
+ * 是用户偏好摘要，不约束上述字段。两个常量并存，按用途各取。
+ */
+export const COMPACTION_SUMMARY_MAX_LEN = 4_000;
 
 /** 会话压缩摘要行（session_compactions 单行 upsert 的读形状） */
 export interface SessionCompaction {
@@ -46,7 +55,7 @@ export function getSessionCompaction(sessionId: string): SessionCompaction | nul
 
 /**
  * 会话压缩摘要 upsert（每会话单行；ON CONFLICT 整行替换）。
- * summary 落库前截断到 SUMMARY_MAX_LEN 硬帽（防 LLM 异常超长输出）。
+ * summary 落库前截断到 COMPACTION_SUMMARY_MAX_LEN 硬帽（防 LLM 异常超长输出）。
  */
 export function upsertSessionCompaction(sessionId: string, summary: string, coveredUntil: number): void {
   getDb()
@@ -58,7 +67,7 @@ export function upsertSessionCompaction(sessionId: string, summary: string, cove
          covered_until = excluded.covered_until,
          updated_at = excluded.updated_at`,
     )
-    .run(sessionId, summary.slice(0, SUMMARY_MAX_LEN), coveredUntil, Date.now());
+    .run(sessionId, summary.slice(0, COMPACTION_SUMMARY_MAX_LEN), coveredUntil, Date.now());
 }
 
 /**
@@ -66,7 +75,7 @@ export function upsertSessionCompaction(sessionId: string, summary: string, cove
  *
  * 流程：读 prior（getSessionCompaction）→ resolveSessionLlm（null → throw 指向
  * 模型服务配置）→ buildCompactionPrompt（prior 滚动合并指令）→ llm.chat →
- * 空/失败 throw → slice(0, SUMMARY_MAX_LEN) 硬帽。
+ * 空/失败 throw → slice(0, COMPACTION_SUMMARY_MAX_LEN) 硬帽。
  *
  * 注意：本函数只生成不落库——covered_until 由调用方决定后自行 upsert。
  */
@@ -98,5 +107,5 @@ export async function generateCompaction(input: {
     throw new Error('压缩摘要生成为空，请重试');
   }
 
-  return { summary: summary.slice(0, SUMMARY_MAX_LEN) };
+  return { summary: summary.slice(0, COMPACTION_SUMMARY_MAX_LEN) };
 }

@@ -111,15 +111,14 @@ export function buildCompactionPrompt(input: { conversation: string; previousSum
 export async function generateCompaction(input: {
   sessionId: string;
   conversation: string;        // 子进程已 select 的 head 序列化
-  previousSummary: string | null;
 }): Promise<{ summary: string }>   // 失败 throw（显式路径显式反馈）
 ```
 
-流程：读 `session_compactions` 取 prior → `resolveSessionLlm(sessionId)`（复用 extraction 链，null → throw 指向模型服务配置）→ `buildCompactionPrompt` → `llm.chat` → 摘要空/失败 throw → `slice(0, SUMMARY_MAX_LEN)` 硬帽 → upsert `session_compactions`（covered_until 由调用方传入——子进程路径传「尾部起始消息的 createdAt 或回合内当前时间」，`/compact` 命令路径传 `Date.now()`）。
+流程：服务**自读** `session_compactions` 取 prior（不依赖调用方传入）→ `resolveSessionLlm(sessionId)`（复用 extraction 链，null → throw 指向模型服务配置）→ `buildCompactionPrompt` → `llm.chat` → 摘要空/失败 throw → `slice(0, COMPACTION_SUMMARY_MAX_LEN)` 硬帽（4000 字符，§4.1 保留路径/符号/命令/错误串需要更大预算；与 extraction 背景摘要的 500 解耦）→ upsert `session_compactions`（covered_until 由调用方传入——子进程路径传「尾部起始消息的 createdAt 或回合内当前时间」，`/compact` 命令路径传 `Date.now()`）。
 
 ### 4.4 IPC 契约（子进程 ↔ 主进程）
 
-- 子进程 → 主进程：`{ type: 'compaction:request', streamSessionId, sessionId, conversation, previousSummary, coveredUntil }`
+- 子进程 → 主进程：`{ type: 'compaction:request', streamSessionId, sessionId, conversation, coveredUntil }`（prior 不在线上传递——由主进程按 sessionId 自读 session_compactions 合并，§6.1 同步）
 - 主进程 → 子进程：`{ type: 'compaction:result', streamSessionId, ok: true, summary }` 或 `{ ok: false, error }`
 - 接线点：`runtime-spawner.ts` messageHandler 新分支（沿 `audit:toolCall` 桥模式）；子进程侧 runtime-entry 注册 pending promise（沿 task-reply 模式）。
 
@@ -187,6 +186,8 @@ chatStream catch 路径中，错误信息匹配 `/context|token.*(limit|exceed)|
 ## 8. prune 微压缩（P5）
 
 `getConversationContext` 的消息映射层：非最近一轮（created_at 距最新一条超过一轮间隔，简化为「除最后一条 user 消息所在回合外」）的 tool result 文本 > 2000 字符 → 截断加 `[truncated]`。纯拉取时变换，零持久化。
+
+> **已知 caveat（终审 2026-09-09）**：prune 的判别列（messages.eventType='tool_call_result'）在生产链路当前不可达——工具结果实际驻留 message_events（stream-relay 落库），messages 表生产写入者只用 m.room.message。本节的拉取层截断以测试层达成（契约与实现就位）；生产启用需先把工具结果持久化为 messages 行或改判别源（二选一，后续跟进）。
 
 ## 9. 错误处理汇总
 

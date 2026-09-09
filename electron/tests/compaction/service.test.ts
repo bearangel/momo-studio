@@ -2,7 +2,7 @@
 //
 // 主进程 CompactionService 单测（spec §4.3，brief Task 3 Step 1）：
 //   ① 成功生成：generateCompaction 返回摘要 + upsertSessionCompaction/getSessionCompaction
-//      真实 SQL 往返（含截断到 SUMMARY_MAX_LEN 的硬帽）
+//      真实 SQL 往返（含截断到 COMPACTION_SUMMARY_MAX_LEN 的硬帽）
 //   ② llm 返回空摘要 → throw（显式反馈）
 //   ③ 无 LLM 配置（resolveSessionLlm → null）→ throw 指向「模型服务」
 //   ④ 有 prior 行 → buildCompactionPrompt 收到 previousSummary（服务自读 session_compactions）
@@ -13,7 +13,8 @@
 //     （buildCompactionPrompt——T2 已有独立单测，此处 mock 以断言参数传递）
 //   - DB 全真实：AP_USER_DATA_DIR + runMigrations + closeDb（沿用 extraction.test.ts 模式），
 //     session_compactions 的 upsert/get 用真表断言 SQL 效果
-//   - extraction mock 用 importOriginal 保留 SUMMARY_MAX_LEN 真值——截断上限不因 mock 漂移
+//   - 截断上限引用本服务导出的 COMPACTION_SUMMARY_MAX_LEN（4000），与 extraction 的
+//     SUMMARY_MAX_LEN（500）解耦——构造超 4000 字摘要的 LLM 返回以锁结构化模板上限
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,7 +33,7 @@ const { resolveSessionLlmMock, chatMock, buildPromptMock } = vi.hoisted(() => ({
   ),
 }));
 
-// importOriginal 保留 SUMMARY_MAX_LEN 等真值常量，仅替换 resolveSessionLlm
+// 只替换 resolveSessionLlm，其他 extraction 导出（包括 SUMMARY_MAX_LEN）保留真实值
 vi.mock('../../src/main/memory/extraction', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/main/memory/extraction')>()),
   resolveSessionLlm: resolveSessionLlmMock,
@@ -46,8 +47,8 @@ import {
   generateCompaction,
   upsertSessionCompaction,
   getSessionCompaction,
+  COMPACTION_SUMMARY_MAX_LEN,
 } from '../../src/main/compaction/service';
-import { SUMMARY_MAX_LEN } from '../../src/main/memory/extraction';
 
 // ─── 测试基建 ────────────────────────────────────────────────────────────────
 
@@ -105,12 +106,12 @@ describe('upsertSessionCompaction / getSessionCompaction', () => {
     expect(getSessionCompaction(SESSION_ID)).toEqual({ summary: '第二版摘要', coveredUntil: 2000 });
   });
 
-  it('超长摘要落库时截断到 SUMMARY_MAX_LEN（硬帽）', () => {
-    const long = '长'.repeat(SUMMARY_MAX_LEN + 200);
+  it('超长摘要落库时截断到 COMPACTION_SUMMARY_MAX_LEN（硬帽）', () => {
+    const long = '长'.repeat(COMPACTION_SUMMARY_MAX_LEN + 200);
     upsertSessionCompaction(SESSION_ID, long, 1000);
     const row = getSessionCompaction(SESSION_ID);
-    expect(row?.summary.length).toBe(SUMMARY_MAX_LEN);
-    expect(row?.summary).toBe('长'.repeat(SUMMARY_MAX_LEN));
+    expect(row?.summary.length).toBe(COMPACTION_SUMMARY_MAX_LEN);
+    expect(row?.summary).toBe('长'.repeat(COMPACTION_SUMMARY_MAX_LEN));
   });
 });
 
@@ -163,10 +164,10 @@ describe('generateCompaction', () => {
     ).rejects.toThrow('压缩摘要生成失败');
   });
 
-  it('成功产物截断到 SUMMARY_MAX_LEN（LLM 超长输出硬帽）', async () => {
-    resolveSessionLlmMock.mockResolvedValue(makeLlm('摘'.repeat(SUMMARY_MAX_LEN + 50)));
+  it('成功产物截断到 COMPACTION_SUMMARY_MAX_LEN（LLM 超长输出硬帽）', async () => {
+    resolveSessionLlmMock.mockResolvedValue(makeLlm('摘'.repeat(COMPACTION_SUMMARY_MAX_LEN + 50)));
     const r = await generateCompaction({ sessionId: SESSION_ID, conversation: 'x' });
-    expect(r.summary.length).toBe(SUMMARY_MAX_LEN);
+    expect(r.summary.length).toBe(COMPACTION_SUMMARY_MAX_LEN);
   });
 
   it('generateCompaction 本身不落库（covered_until 由调用方决定）', async () => {
