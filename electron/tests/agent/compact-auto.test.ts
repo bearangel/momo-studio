@@ -40,6 +40,7 @@ import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import { __setTodosForTest } from '../../src/main/agent/tools/todo-tools';
 import type { TodoItem } from '../../src/main/agent/tools/todo-types';
+import type { ToolModule } from '../../src/main/agent/tools/types';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { SkillRegistry } from '../../src/main/skill/registry';
 import {
@@ -52,12 +53,22 @@ const SID = 'sid-auto';
 const ROOM = 'room-auto';
 /** CJK 大消息：20000 字 ÷1.6 ≈ 12500 token > KEEP(8000)——保证 head 非空 */
 const BIG = '史'.repeat(20_000);
+/** 工具结果：1600 字 ÷1.6 = 1000 token（入尾部） */
+const BIG_TOOL_RESULT = '果'.repeat(1_600);
+/** 工具调用参数：12000 字 ÷1.6 = 7500 token——挂在 assistant 消息上（预算累计后
+ * 恰好使切点落在 assistant 与其 tool 结果之间：1000+6 ≤ 8000 < 1006+7502） */
+const BIG_TOOL_ARGS = '参'.repeat(12_000);
 const MOCK_SUMMARY = '结构化摘要MOCK-目标与工作状态';
 
 type Captured = { messages: LLMMessage[]; tools: LLMToolDef[] | undefined };
 const captured: Captured[] = [];
 
-type Scripted = { text?: string; toolCall?: { name: string; arguments: Record<string, unknown> } };
+type Scripted = {
+  text?: string;
+  toolCall?: { name: string; arguments: Record<string, unknown> };
+  /** done 产出后（工具循环处理前）emit steer——下一轮 loop 顶部 drain 消费 */
+  emitSteer?: string;
+};
 let script: Scripted[] = [];
 
 /** 可配置会话历史（stub provider 返回——构造超阈值上下文的入口） */
@@ -82,6 +93,9 @@ function installScriptedProvider(): void {
           },
         };
         yield { type: 'done', finishReason: 'tool_use' };
+        if (step.emitSteer !== undefined) {
+          process.emit('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
+        }
       } else {
         yield { type: 'thinking', content: '' };
         yield { type: 'text', content: step.text ?? '' };
@@ -116,7 +130,7 @@ function mkConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   };
 }
 
-function mkCtx(): RuntimeContext {
+function mkCtx(overrides: { toolModules?: ToolModule[] } = {}): RuntimeContext {
   return {
     wsFs: {} as RuntimeContext['wsFs'],
     skillRegistry: new SkillRegistry(),
@@ -127,13 +141,39 @@ function mkCtx(): RuntimeContext {
     roomId: ROOM,
     streamSessionId: SID,
     sendStreamChunk: () => {},
-    toolModules: [],
+    toolModules: overrides.toolModules ?? [],
     creatorUserId: 'owner',
   };
 }
 
 function userTodo(subject: string): TodoItem {
   return { id: `u-${subject}`, subject, status: 'in_progress', source: 'user' };
+}
+
+/** 测试专用工具模块：返回固定大结果（构造 tool/assistant 预算边界用） */
+const bigToolModule: ToolModule = {
+  getDefs: () => [
+    { name: 'big_tool', description: '测试专用：返回大结果', inputSchema: { type: 'object', properties: {} } },
+  ],
+  handles: (name) => name === 'big_tool',
+  execute: async () => BIG_TOOL_RESULT,
+};
+
+/**
+ * 孤儿 tool 消息扫描（审查 Critical 回归锁）：遍历 messages，每条 role='tool'
+ * 的 toolCallId 必须能在其前方某条 assistant.toolCalls 中找到——否则该 tool
+ * 消息孤立出现，OpenAI/Anthropic 请求体均硬性 400。
+ */
+function assertNoOrphanToolMessages(messages: LLMMessage[]): void {
+  const seen = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'assistant' && m.toolCalls) {
+      for (const tc of m.toolCalls) seen.add(tc.id);
+    }
+    if (m.role === 'tool') {
+      expect(seen.has(m.toolCallId ?? '__orphan__')).toBe(true);
+    }
+  }
 }
 
 /** 超阈值历史：prior 摘要注入条（T4 前缀）+ 一条 >KEEP 预算的 CJK 大消息 */
@@ -271,5 +311,62 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
     expect(Array.isArray(captured[0]!.tools)).toBe(true);
     expect(JSON.stringify(captured[0]!.messages)).toContain(BIG);
     expect(out).toContain('降级继续回复');
+  });
+
+  it('(f) 尾部选择工具对原子性：预算切点不得制造孤儿 tool 消息（审查 Critical）', async () => {
+    // 构造（孤儿形态要求 pair 位于锚点之前——锚点后的消息受锚点保护必入尾部）：
+    // 第 1 轮 LLM 调 big_tool（大参数挂在 assistant 消息上 ≈7500 tok）→ tool 结果
+    // 1000 tok 入尾部；done 后注入 steer → 第 2 轮顶部 drain push 为末尾真实
+    // user 消息（锚点）。auto 压缩时预算累计恰好在 assistant 与其 tool 结果之间
+    // 夹住——无修复则 assistant 进 head、其 tool 结果成为尾部第一条
+    // （孤儿 tool 消息 → OpenAI/Anthropic 请求体硬性 400）。
+    script = [
+      { toolCall: { name: 'big_tool', arguments: { payload: BIG_TOOL_ARGS } }, emitSteer: '继续推进数据分析' },
+      { text: '收到，继续。' },
+    ];
+    await runChatLoop(
+      ROOM, '请处理大数据任务', mkConfig({ contextWindow: 1000 }),
+      mkCtx({ toolModules: [bigToolModule] }),
+      undefined, undefined, undefined, SID,
+    );
+    expect(requestCompactionMock).toHaveBeenCalledTimes(1);
+    // 核心断言：压缩后发给 LLM 的 messages 无孤儿 tool（toolCallId 必须在其前方
+    // assistant.toolCalls 中出现）
+    assertNoOrphanToolMessages(captured[1]!.messages);
+    // 工具对整体保留在尾部（assistant 与其结果 verbatim），头部进摘要
+    const round2 = JSON.stringify(captured[1]!.messages);
+    expect(round2).toContain(BIG_TOOL_RESULT);
+    expect(round2).toContain('[历史压缩摘要]');
+    // head 序列化收到锚点之前的当前轮首条 user 消息
+    const conversation = requestCompactionMock.mock.calls[0] as unknown as [string, string, number];
+    expect(conversation[1]).toContain('请处理大数据任务');
+  });
+
+  it('(g) 锚点跳过末尾合成条：落在真实 user 消息（审查 Minor-3 专项锁）', async () => {
+    // 二次压缩形态：当前轮 user 消息本身是合成摘要条（上一轮压缩产物），其前
+    // 才是真实 user 消息——锚点必须跳过合成条落在真实消息上，否则真实消息被
+    // 划入可压缩区（切断 mandate 所在轮）。history 前置一条 >KEEP 大消息使
+    // head 非空（真实消息与大消息之间的边界即压缩切点）。
+    convHistory = [
+      { role: 'assistant', content: BIG },
+      { role: 'user', content: '真实请求-分析报告' },
+      { role: 'assistant', content: BIG },
+    ];
+    script = [{ text: '已总结。' }];
+    await runChatLoop(
+      ROOM, '[历史压缩摘要]\n上一轮的摘要文本', mkConfig({ contextWindow: 1000 }), mkCtx(),
+      undefined, undefined, undefined, SID,
+    );
+    expect(requestCompactionMock).toHaveBeenCalledTimes(1);
+    // 锚点跳过证明：真实 user 消息与其后大消息 verbatim 保留在尾部
+    const round1 = JSON.stringify(captured[0]!.messages);
+    expect(round1).toContain('真实请求-分析报告');
+    expect(round1).toContain(BIG);
+    expect(round1).toContain('[历史压缩摘要]');
+    // 若锚点误落在合成条上：真实消息会进 head 被摘要——此处 head 只有序列化
+    // 的首轮大消息（锚点正确时的预期），不含真实消息
+    const conversation = requestCompactionMock.mock.calls[0] as unknown as [string, string, number];
+    expect(conversation[1]).not.toContain('真实请求-分析报告');
+    expect(conversation[1]).toContain(BIG);
   });
 });

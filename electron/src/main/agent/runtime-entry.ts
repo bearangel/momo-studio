@@ -388,7 +388,9 @@ export async function runChatLoop(
    * 执行一次完整压缩流程（spec §6.1 五步）：
    *   ① 尾部选择：从 messages 末尾向前按 KEEP 预算累计——锚点（最后一条真实
    *      user 消息，跳过合成条）未覆盖前预算不截断（不得切断当前 user 消息与
-   *      mandate 所在轮），覆盖后超预算即停（保护最近若干轮完整回合 verbatim）
+   *      mandate 所在轮），覆盖后超预算即停（保护最近若干轮完整回合 verbatim）；
+   *      切点不得落在 role:'tool' 消息上（工具对原子性——孤儿 tool 消息会被
+   *      provider 400 拒绝）
    *   ② head 序列化（跳过合成摘要条——主进程已读 DB prior，防双重计入）
    *   ③ requestCompaction IPC 等主进程生成结构化摘要
    *   ④ 成功：messages = [system, user(摘要+双态尾部指令), ...尾部 verbatim]，
@@ -415,8 +417,14 @@ export async function runChatLoop(
     for (let i = body.length - 1; i >= 0; i--) {
       const cost = messageTokens(body[i]!);
       const anchorCovered = anchorIdx < 0 || tailStart <= anchorIdx;
-      // 锚点已覆盖（或本无锚点）且再纳入即超预算 → 停；锚点未覆盖时无条件纳入
-      if (anchorCovered && acc + cost > COMPACTION_KEEP_TOKENS) break;
+      if (anchorCovered && acc + cost > COMPACTION_KEEP_TOKENS) {
+        // 工具对原子性（审查 Critical）：切点（tailStart = i+1）落在 role:'tool'
+        // 消息上 = 制造孤儿——协议中 tool 结果紧随所属 assistant，其 assistant
+        // 必在 head 侧，OpenAI/Anthropic 请求体均硬性 400。此情形不 break，
+        // 继续纳入直到切点移出 tool 边界（不计预算，同锚点保护语义——
+        // 正确性优先于预算上限）。
+        if (body[i + 1]?.role !== 'tool') break;
+      }
       acc += cost;
       tailStart = i;
     }
