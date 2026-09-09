@@ -1,14 +1,14 @@
 // renderer/src/components/settings/ProviderModelList.tsx
 //
 // 供应商模型列表管理（P2 Task 6）：
-// - 每行：model_id（等宽字体）+ 启用开关 + 上下文窗口（可选，压缩重构 Task 1）+ 删除
+// - 每行：model_id（等宽字体）+ 启用开关 + 上下文窗口（可选，压缩重构 Task 1）+ 思维模式三态控件（Task 9）+ 删除
 // - 「获取模型列表」：fetchModels 拉取远端列表 → 逐个 addModel 幂等入库 → 刷新
 // - 「手动添加」：内联输入 model_id → addModel
 // - 增删后通过 onChanged 通知父组件刷新左列模型数徽标
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { RefreshCw, Plus } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import type { ProviderModel } from '../../ipc/types';
+import type { ProviderModel, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 import { Checkbox } from '../ui/Checkbox';
 import { Button } from '../ui/Button';
 
@@ -18,16 +18,27 @@ interface Props {
   onChanged?: () => void;
 }
 
+/** 窗口数字的人类可读缩写（placeholder 用） */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = (n / 1_000_000).toFixed(1).replace(/\.0$/, '');
+    return `${m}M`;
+  }
+  return `${Math.round(n / 1000)}K`;
+}
+
 /** 行内上下文窗口编辑（可选）。空=未知（走内置目录）；正整数=手动覆盖；非法输入回退不提交 */
 function ModelWindowInput({
   providerId,
   modelId,
   contextWindow,
+  effectiveWindow,
   onError,
 }: {
   providerId: string;
   modelId: string;
   contextWindow: number | null;
+  effectiveWindow: number | null;
   onError: (msg: string) => void;
 }): JSX.Element {
   const [value, setValue] = useState(contextWindow === null ? '' : String(contextWindow));
@@ -69,9 +80,85 @@ function ModelWindowInput({
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
       }}
-      placeholder="自动"
+      placeholder={
+        contextWindow !== null
+          ? formatTokens(contextWindow)
+          : effectiveWindow !== null
+            ? formatTokens(effectiveWindow)
+            : '自动'
+      }
       className="w-24 rounded border border-subtle bg-surface-2 px-1.5 py-0.5 text-xs text-secondary font-mono"
     />
+  );
+}
+
+/** 行内思维模式控件（spec §7.2）：三态 + 档位下拉；提交模型级默认；kind=none 不渲染 */
+function ModelThinkingControl({
+  providerId,
+  modelId,
+  capability,
+  config,
+  onError,
+}: {
+  providerId: string;
+  modelId: string;
+  capability: ReasoningCapability;
+  config: ThinkingConfig | null;
+  onError: (msg: string) => void;
+}): JSX.Element | null {
+  // 乐观本地态：提交即切换 UI（IPC 成功前档位下拉就须出现）；失败回滚；
+  // config 引用变化（父级刷新拉回服务端值）时回归服务端真相
+  const [override, setOverride] = useState<ThinkingConfig | null>(null);
+  const [prevConfig, setPrevConfig] = useState(config);
+  if (config !== prevConfig) {
+    setPrevConfig(config);
+    setOverride(null);
+  }
+  const current = override ?? config;
+  if (capability.kind === 'none') return null;
+  const mode = current?.mode ?? 'auto';
+  const effort = current?.effort ?? (capability.kind === 'effort' ? capability.default : null);
+
+  const commit = async (next: ThinkingConfig | null): Promise<void> => {
+    setOverride(next);
+    try {
+      await ipc.provider.setModelThinking(providerId, modelId, next);
+    } catch (err) {
+      setOverride(null);
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <span className="flex items-center gap-1">
+      <select
+        aria-label={`思维模式 ${modelId}`}
+        value={mode}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === 'auto') void commit(null);
+          else if (v === 'off') void commit({ mode: 'off', effort: null });
+          else void commit({ mode: 'on', effort });
+        }}
+        className="rounded border border-subtle bg-surface-2 px-1 py-0.5 text-xs text-secondary"
+      >
+        <option value="auto">思维:默认</option>
+        <option value="off">思维:关</option>
+        <option value="on">思维:开</option>
+      </select>
+      {capability.kind === 'effort' && mode === 'on' && (
+        <select
+          aria-label={`思维档位 ${modelId}`}
+          value={effort ?? capability.default}
+          onChange={(e) => void commit({ mode: 'on', effort: e.target.value })}
+          className="rounded border border-subtle bg-surface-2 px-1 py-0.5 text-xs text-secondary"
+        >
+          {capability.values.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      )}
+    </span>
   );
 }
 
@@ -198,6 +285,14 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
               providerId={providerId}
               modelId={m.modelId}
               contextWindow={m.contextWindow}
+              effectiveWindow={m.effectiveWindow}
+              onError={setError}
+            />
+            <ModelThinkingControl
+              providerId={providerId}
+              modelId={m.modelId}
+              capability={m.reasoning}
+              config={m.thinkingJson}
               onError={setError}
             />
             <button type="button" onClick={() => void handleRemove(m)} aria-label={`删除 ${m.modelId}`}

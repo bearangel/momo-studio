@@ -17,8 +17,15 @@ const PROVIDERS: ModelProvider[] = [
   { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic', presetKey: null },
 ];
 const P1_MODELS = [
-  { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1 },
-  { providerId: 'p1', modelId: 'glm-5.2', enabled: true, addedAt: 2 },
+  // thinking 三字段为 v31 数据形状升级（Task 9）；断言语义不变
+  {
+    providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1,
+    contextWindow: null, reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
+  {
+    providerId: 'p1', modelId: 'glm-5.2', enabled: true, addedAt: 2,
+    contextWindow: null, reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
 ];
 
 const list = vi.fn();
