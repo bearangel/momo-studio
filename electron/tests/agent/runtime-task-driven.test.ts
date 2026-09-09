@@ -356,6 +356,8 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(createLLMProvider).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'anthropic', model: 'test-model' }),
       expect.anything(),
+      // 供应商预设：未配置 thinking → 第三参 undefined（不发参数）
+      undefined,
     );
   });
 
@@ -374,6 +376,8 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(createLLMProvider).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'openai', model: 'test-model' }),
       expect.anything(),
+      // 供应商预设：未配置 thinking → 第三参 undefined（不发参数）
+      undefined,
     );
   });
 
@@ -392,6 +396,8 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(createLLMProvider).toHaveBeenCalledWith(
       expect.not.objectContaining({ provider: expect.anything() }),
       expect.anything(),
+      // 供应商预设：未配置 thinking → 第三参 undefined（不发参数）
+      undefined,
     );
   });
 

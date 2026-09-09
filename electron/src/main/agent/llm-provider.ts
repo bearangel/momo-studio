@@ -7,6 +7,8 @@
 //   1. system 是请求体顶层字段，不在 messages 数组里
 //   2. tool_use 返回在 content 数组中（type: 'tool_use'），需扁平化为 LLMToolCall
 
+import type { ThinkingRequest } from '../llm/provider-presets';
+
 /** 对话消息（system / user / assistant / tool_result 四种角色的统一表示） */
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -157,6 +159,44 @@ async function fetchWithRetry(
   throw lastError ?? new Error('LLM 请求失败（重试耗尽）');
 }
 
+/**
+ * OpenAI 方言 thinking 注入（spec §5.2 映射表唯一实现）。
+ * auto / kind=none / undefined → 不发任何参数（厂商默认）。
+ */
+export function applyOpenAIThinking(
+  body: Record<string, unknown>,
+  t: ThinkingRequest | undefined,
+): void {
+  if (!t || t.kind === 'none' || t.mode === 'auto') return;
+  const sendToggle = t.wire === 'toggle' || t.wire === 'toggle-effort';
+  if (t.mode === 'off') {
+    // 仅开关型方言有显式关闭；effort 方言关闭 = 不发参数
+    if (sendToggle) body.thinking = { type: 'disabled' };
+    return;
+  }
+  if (sendToggle) body.thinking = { type: 'enabled' };
+  if (t.kind === 'effort' && t.effort) body.reasoning_effort = t.effort;
+}
+
+/** Anthropic budget 阶梯（medium=10000 沿用旧硬编码成本档，升级前后行为连续） */
+const ANTHROPIC_BUDGET_TOKENS: Record<string, number> = { low: 4096, medium: 10000, high: 32768 };
+
+/**
+ * Anthropic 方言 thinking 注入：档位 → budget_tokens。
+ * max_tokens 必须严格大于 budget_tokens 否则 400——按 budget+4096 抬升。
+ * auto / off → 不发 thinking（Anthropic 缺省即关闭，无显式 disabled）。
+ */
+export function applyAnthropicThinking(
+  body: Record<string, unknown>,
+  t: ThinkingRequest | undefined,
+): void {
+  if (!t || t.kind === 'none' || t.mode !== 'on') return;
+  const budget = ANTHROPIC_BUDGET_TOKENS[t.effort ?? 'medium'] ?? 10000;
+  body.thinking = { type: 'enabled', budget_tokens: budget };
+  const base = typeof body.max_tokens === 'number' ? body.max_tokens : 4096;
+  body.max_tokens = Math.max(base, budget + 4096);
+}
+
 /** 按 baseUrl 启发式检测 platform：anthropic.com 域名 → anthropic，其余 → openai（OpenAI 兼容） */
 function detectPlatform(baseUrl?: string): 'openai' | 'anthropic' {
   if (baseUrl && baseUrl.includes('anthropic.com')) return 'anthropic';
@@ -225,13 +265,14 @@ function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
 export function createLLMProvider(
   model: { provider?: 'openai' | 'anthropic'; model: string; baseUrl?: string },
   apiKey: string,
+  opts?: { thinking?: ThinkingRequest },
 ): LLMProvider {
   const provider = model.provider ?? detectPlatform(model.baseUrl);
   if (provider === 'openai') {
-    return new OpenAIProvider(model.model, apiKey, model.baseUrl);
+    return new OpenAIProvider(model.model, apiKey, model.baseUrl, opts?.thinking);
   }
   if (provider === 'anthropic') {
-    return new AnthropicProvider(model.model, apiKey, model.baseUrl);
+    return new AnthropicProvider(model.model, apiKey, model.baseUrl, opts?.thinking);
   }
   throw new Error(`不支持的 LLM provider: ${provider}`);
 }
@@ -239,7 +280,12 @@ export function createLLMProvider(
 // --- OpenAI 实现 ---
 
 class OpenAIProvider implements LLMProvider {
-  constructor(private model: string, private apiKey: string, private baseUrl?: string) {}
+  constructor(
+    private model: string,
+    private apiKey: string,
+    private baseUrl?: string,
+    private thinking?: ThinkingRequest,
+  ) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
     const apiUrl = this.baseUrl
@@ -259,6 +305,7 @@ class OpenAIProvider implements LLMProvider {
         },
       }));
     }
+    applyOpenAIThinking(body, this.thinking);
 
     const response = await fetchWithRetry(apiUrl, {
       method: 'POST',
@@ -306,14 +353,19 @@ class OpenAIProvider implements LLMProvider {
     tools: LLMToolDef[] | undefined,
     signal: AbortSignal,
   ): AsyncIterable<StreamDelta> {
-    yield* chatStreamOpenAI(this.model, this.baseUrl, this.apiKey, messages, tools, signal);
+    yield* chatStreamOpenAI(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking);
   }
 }
 
 // --- Anthropic 实现 ---
 
 class AnthropicProvider implements LLMProvider {
-  constructor(private model: string, private apiKey: string, private baseUrl?: string) {}
+  constructor(
+    private model: string,
+    private apiKey: string,
+    private baseUrl?: string,
+    private thinking?: ThinkingRequest,
+  ) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
     // Anthropic 把 system 单独传，messages 只含 user/assistant
@@ -335,6 +387,7 @@ class AnthropicProvider implements LLMProvider {
         input_schema: t.inputSchema,
       }));
     }
+    applyAnthropicThinking(body, this.thinking);
 
     const apiUrl = `${this.baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
     const response = await fetchWithRetry(apiUrl, {
@@ -378,7 +431,7 @@ class AnthropicProvider implements LLMProvider {
     tools: LLMToolDef[] | undefined,
     signal: AbortSignal,
   ): AsyncIterable<StreamDelta> {
-    yield* chatStreamAnthropic(this.model, this.baseUrl, this.apiKey, messages, tools, signal);
+    yield* chatStreamAnthropic(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking);
   }
 }
 
@@ -402,6 +455,7 @@ async function* chatStreamOpenAI(
   messages: LLMMessage[],
   tools: LLMToolDef[] | undefined,
   signal: AbortSignal,
+  thinking: ThinkingRequest | undefined,
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -415,6 +469,7 @@ async function* chatStreamOpenAI(
       function: { name: t.name, description: t.description, parameters: t.inputSchema },
     }));
   }
+  applyOpenAIThinking(body, thinking);
 
   const response = await fetchWithRetry(
     url,
@@ -476,8 +531,9 @@ async function* chatStreamOpenAI(
         const choice = parsed.choices?.[0];
         if (!choice) continue;
 
-        // thinking（reasoning_content — DeepSeek / OpenAI o1 系列的思维链）
-        const reasoning = (choice.delta as { reasoning_content?: string })?.reasoning_content;
+        // thinking（reasoning_content —— GLM/DeepSeek/Kimi；reasoning —— 部分网关别名）
+        const delta = choice.delta as { reasoning_content?: string; reasoning?: string } | undefined;
+        const reasoning = delta?.reasoning_content ?? delta?.reasoning;
         if (typeof reasoning === 'string' && reasoning.length > 0) {
           yield { type: 'thinking', content: reasoning };
         }
@@ -545,11 +601,12 @@ async function* chatStreamAnthropic(
   messages: LLMMessage[],
   tools: LLMToolDef[] | undefined,
   signal: AbortSignal,
+  thinking: ThinkingRequest | undefined,
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
   const body: Record<string, unknown> = {
     model,
-    // max_tokens 必须大于 thinking.budget_tokens（10000），否则 Anthropic 报 400
+    // 开启 thinking 时 max_tokens 由 applyAnthropicThinking 按 budget+4096 抬升（严格大于 budget_tokens，否则 400）
     max_tokens: 16384,
     stream: true,
     messages: messages
@@ -559,8 +616,8 @@ async function* chatStreamAnthropic(
   const systemMsg = messages.find((m) => m.role === 'system');
   if (systemMsg) body.system = systemMsg.content;
 
-  // 开启 thinking（Claude extended thinking）
-  body.thinking = { type: 'enabled', budget_tokens: 10000 };
+  // 思维模式按方言配置注入（取代旧硬编码 always-on 10000；spec §5.2）
+  applyAnthropicThinking(body, thinking);
 
   if (tools && tools.length > 0) {
     body.tools = tools.map((t) => ({
