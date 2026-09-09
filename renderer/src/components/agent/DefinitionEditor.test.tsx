@@ -233,3 +233,49 @@ describe('DefinitionEditor — configure（builtin）模式只读', () => {
     expect(screen.getByLabelText('bash')).toBeDisabled();
   });
 });
+
+describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson 经列表加载后必须存活', () => {
+  // 任务上下文 Important：实现者在 brief 真缺陷修复后（onModelInfo 依赖陷阱 →
+  // onModelChange 事件挂点）没补保留性测试。brief 原写法会把 setThinkingJson(null)
+  // 放在 onModelInfo 内联箭头里，而 ProviderModelPicker 走 useEffect 异步回传
+  // （models / modelId 依赖），列表加载完即触发 → 编辑模式 def.thinkingJson
+  // 初值被首次 onModelInfo(null) 抹掉 → 用户不动 picker 直接保存 = 覆盖被清零。
+  // 本测试断言：(1) 列表加载后控件回显原值；(2) 不动 picker 直接保存，
+  // updateDefinition 入参 thinkingJson 与 def.thinkingJson 逐字相等。
+  // 若有人把 setThinkingJson(null) 重新挂回 onModelInfo，本测试必红。
+  it('edit 模式：def 带非空 thinkingJson，列表加载后控件值与提交对象保持原样', async () => {
+    const persistedThinking = { mode: 'on' as const, effort: 'high' as const };
+    // listModels 异步返回——首次 effect 期间 models=[] 触发 onModelInfo(null)，
+    // 列表解析后 onModelInfo(model) 二次触发；brief 原写法把 setThinkingJson(null)
+    // 挂在 onModelInfo 内联箭头里，即此路径抹回 null
+    listModels.mockReset().mockResolvedValue([
+      {
+        providerId: 'prov-1',
+        modelId: 'glm-5.3',
+        enabled: true,
+        addedAt: 1,
+        contextWindow: 1000000,
+        thinkingJson: null,
+        reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' },
+        effectiveWindow: 1000000,
+      },
+    ]);
+    const def = buildDef({
+      modelProviderId: 'prov-1',
+      modelName: 'glm-5.3',
+      thinkingJson: persistedThinking,
+    });
+    render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
+    await screen.findByRole('option', { name: 'glm-5.3' });
+
+    expect((screen.getByLabelText('思维模式') as HTMLSelectElement).value).toBe('on');
+    expect((screen.getByLabelText('思维档位') as HTMLSelectElement).value).toBe('high');
+
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => {
+      expect(updateDefinition).toHaveBeenCalledTimes(1);
+    });
+    const arg = updateDefinition.mock.calls[0][0];
+    expect(arg.thinkingJson).toEqual(persistedThinking);
+  });
+});
