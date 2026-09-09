@@ -50,7 +50,7 @@ export async function ensureMemberRuntime(instanceId: string): Promise<void> {
 
   const llmApiKey = await resolveApiKey(instanceId, def.modelProviderId);
   await startAgentRuntime(
-    buildSpawnOpts({
+    await buildSpawnOpts({
       instanceId,
       agentUserId: row.agent_user_id,
       workspaceId: row.workspace_id,

@@ -847,6 +847,22 @@ BEGIN
 END;
     `.trim(),
   },
+  {
+    version: 30,
+    sql: `
+-- ─── v30：压缩改造（spec 2026-09-09）──────────────────────────────────────
+-- 1. provider_models.context_window：用户手动覆盖的上下文窗口（token；NULL=未知，走内置目录）。
+ALTER TABLE provider_models ADD COLUMN context_window INTEGER;
+-- 2. session_compactions：会话压缩摘要（每会话单行 upsert；与 session_summaries 的
+--    背景摘要语义分离——本表 covered_until 驱动历史收缩，extraction 语义不动）。
+CREATE TABLE IF NOT EXISTS session_compactions (
+  session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,
+  covered_until INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+    `.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

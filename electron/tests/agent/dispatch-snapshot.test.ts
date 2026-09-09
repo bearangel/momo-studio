@@ -108,7 +108,7 @@ function makeDef(defId: string, slug: string, description: string): AgentDefinit
 }
 
 /** 生产者：真实 buildSpawnOpts（被测 agent = inst-pm） */
-function buildPmOpts(): AgentRuntimeOpts {
+async function buildPmOpts(): Promise<AgentRuntimeOpts> {
   return buildSpawnOpts({
     instanceId: 'inst-pm',
     agentUserId: 'agent-def-pm-ab12',
@@ -151,7 +151,7 @@ describe('dispatch 快照契约（spec §4.7）', () => {
       { instanceId: 'inst-reviewer', isLeader: false },
     ]);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.isLeader).toBe(true);
     // 契约 2：快照除自己——不含 inst-pm，且携带消费者真实使用的三个字段
     // （dispatch-wait 按 slug 路由、dispatch_to 用 assignmentId、工具描述用 description）
@@ -168,7 +168,7 @@ describe('dispatch 快照契约（spec §4.7）', () => {
   it('单成员会话（仅自己 leader）：不注入 dispatch 工具', async () => {
     createSession([{ instanceId: 'inst-pm', isLeader: true }]);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.isLeader).toBe(false);
     expect(opts.subAgents).toEqual([]);
     expect(await dispatchToolNames(opts)).toEqual([]);
@@ -181,14 +181,14 @@ describe('dispatch 快照契约（spec §4.7）', () => {
       { instanceId: 'inst-reviewer', isLeader: false },
     ]);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.isLeader).toBe(false);
     expect(opts.subAgents).toEqual([]);
     expect(await dispatchToolNames(opts)).toEqual([]);
   });
 
   it('不在任何会话：不注入（空输入专项）', async () => {
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.isLeader).toBe(false);
     expect(opts.subAgents).toEqual([]);
     expect(await dispatchToolNames(opts)).toEqual([]);
@@ -196,12 +196,12 @@ describe('dispatch 快照契约（spec §4.7）', () => {
 
   // ─── 契约 3：快照时点语义 ────────────────────────────────────────────────
 
-  it('快照后成员入会不影响已 spawn 配置；下一次 spawn 才看到新成员', () => {
+  it('快照后成员入会不影响已 spawn 配置；下一次 spawn 才看到新成员', async () => {
     createSession([
       { instanceId: 'inst-pm', isLeader: true },
       { instanceId: 'inst-coder', isLeader: false },
     ]);
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     const frozen = JSON.parse(JSON.stringify(opts.subAgents));
 
     // 快照后新成员入会（同会话）
@@ -224,11 +224,11 @@ describe('dispatch 快照契约（spec §4.7）', () => {
     // 已 spawn 配置不受影响（AGENT_CONFIG 已在子进程环境里定型）
     expect(opts.subAgents).toEqual(frozen);
     // 新一次 spawn 看到新成员（快照按 spawn 时点重算）
-    const opts2 = buildPmOpts();
+    const opts2 = await buildPmOpts();
     expect(opts2.subAgents!.map((s) => s.slug).sort()).toEqual(['coder', 'late']);
   });
 
-  it('成员被移出 workspace（FK 级联清 session_members）：下一次 spawn 快照剔除该成员', () => {
+  it('成员被移出 workspace（FK 级联清 session_members）：下一次 spawn 快照剔除该成员', async () => {
     createSession([
       { instanceId: 'inst-pm', isLeader: true },
       { instanceId: 'inst-coder', isLeader: false },
@@ -237,19 +237,19 @@ describe('dispatch 快照契约（spec §4.7）', () => {
     const db = getDb();
     db.prepare(`DELETE FROM workspace_agent_members WHERE instance_id = 'inst-reviewer'`).run();
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.subAgents!.map((s) => s.slug)).toEqual(['coder']);
 
     // 全部其他成员被移出 → 有效成员数回到 1 → 不再注入
     db.prepare(`DELETE FROM workspace_agent_members WHERE instance_id = 'inst-coder'`).run();
-    const opts2 = buildPmOpts();
+    const opts2 = await buildPmOpts();
     expect(opts2.isLeader).toBe(false);
     expect(opts2.subAgents).toEqual([]);
   });
 
   // ─── 多会话 union 与去重 ─────────────────────────────────────────────────
 
-  it('leader 的多个会话：subAgents 取并集且按实例去重', () => {
+  it('leader 的多个会话：subAgents 取并集且按实例去重', async () => {
     // S1：pm(leader) + coder；S2：pm(leader) + coder + reviewer
     createSession([
       { instanceId: 'inst-pm', isLeader: true },
@@ -261,11 +261,11 @@ describe('dispatch 快照契约（spec §4.7）', () => {
       { instanceId: 'inst-reviewer', isLeader: false },
     ]);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.subAgents!.map((s) => s.slug).sort()).toEqual(['coder', 'reviewer']);
   });
 
-  it('跨 workspace 会话不串位：其他 ws 的会话（即便自己是 leader）不进入快照', () => {
+  it('跨 workspace 会话不串位：其他 ws 的会话（即便自己是 leader）不进入快照', async () => {
     const db = getDb();
     db.prepare(
       `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
@@ -286,20 +286,20 @@ describe('dispatch 快照契约（spec §4.7）', () => {
     addSessionMember(s2.id, 'inst-pm', true);
     addSessionMember(s2.id, 'inst-other', false);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     expect(opts.isLeader).toBe(false);
     expect(opts.subAgents).toEqual([]);
   });
 
   // ─── 线协议：isLeader 字段（isCoordinator 改名）+ 解析防御 ───────────────
 
-  it('线协议字段为 isLeader（非 isCoordinator）；parseConfig 布尔特判缺失/非法回退 false', () => {
+  it('线协议字段为 isLeader（非 isCoordinator）；parseConfig 布尔特判缺失/非法回退 false', async () => {
     createSession([
       { instanceId: 'inst-pm', isLeader: true },
       { instanceId: 'inst-coder', isLeader: false },
     ]);
 
-    const opts = buildPmOpts();
+    const opts = await buildPmOpts();
     const wire = JSON.parse(JSON.stringify(opts)) as Record<string, unknown>;
     expect(wire.isLeader).toBe(true);
     expect('isCoordinator' in wire).toBe(false);
@@ -312,12 +312,12 @@ describe('dispatch 快照契约（spec §4.7）', () => {
     expect(parseConfig(badField).isLeader).toBe(false);
   });
 
-  it('subAgents 非法形状经线协议被 parseConfig 类型守卫剔除', () => {
+  it('subAgents 非法形状经线协议被 parseConfig 类型守卫剔除', async () => {
     createSession([
       { instanceId: 'inst-pm', isLeader: true },
       { instanceId: 'inst-coder', isLeader: false },
     ]);
-    const wire = JSON.parse(JSON.stringify(buildPmOpts())) as Record<string, unknown>;
+    const wire = JSON.parse(JSON.stringify(await buildPmOpts())) as Record<string, unknown>;
     wire.subAgents = [
       { slug: 'x' }, // 缺 assignmentId/description → 守卫剔除
       { slug: 1, assignmentId: 'a', description: 'd' }, // slug 非字符串 → 剔除

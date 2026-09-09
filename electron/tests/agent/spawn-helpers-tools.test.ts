@@ -104,7 +104,7 @@ function makeDef(defId: string, toolRefs: string[]): AgentDefinition {
 }
 
 describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
-  it('buildSpawnOpts 把 def 默认工具注入 opts.allowedTools', () => {
+  it('buildSpawnOpts 把 def 默认工具注入 opts.allowedTools', async () => {
     const db = getDb();
     seedWorkspaceAndDef(
       db,
@@ -116,7 +116,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       ]),
     );
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
@@ -141,7 +141,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     expect(opts).not.toHaveProperty('teamRoomId');
   });
 
-  it('def 默认 + workspace allocation 合并后注入 allowedTools', () => {
+  it('def 默认 + workspace allocation 合并后注入 allowedTools', async () => {
     const db = getDb();
     seedWorkspaceAndDef(
       db,
@@ -154,7 +154,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       'INSERT INTO workspace_allocations (workspace_id, capability_type, capability_ref) VALUES (?, ?, ?)',
     ).run('ws1', 'tool', 'bash');
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
@@ -168,7 +168,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
     expect(opts.allowedTools).toEqual(['read_file', 'bash']);
   });
 
-  it('Layer 3 deltas 生效：removed bash 不在 allowedTools 中', () => {
+  it('Layer 3 deltas 生效：removed bash 不在 allowedTools 中', async () => {
     const db = getDb();
     seedWorkspaceAndDef(
       db,
@@ -191,7 +191,7 @@ describe('spawn-helpers bug 修复：merged.tools → allowedTools', () => {
       'INSERT INTO agent_assignment_capabilities (assignment_id, capability_type, mode, ref) VALUES (?, ?, ?, ?)',
     ).run('inst1', 'tool', 'remove', 'bash');
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',

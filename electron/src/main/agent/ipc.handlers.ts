@@ -108,7 +108,7 @@ export function registerAgentHandlers(): void {
 
       const apiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
       await startAgentRuntime(
-        buildSpawnOpts({
+        await buildSpawnOpts({
           instanceId: member.instanceId,
           agentUserId: member.agentUserId,
           workspaceId,
@@ -301,7 +301,7 @@ export function registerAgentHandlers(): void {
       const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
 
       await startAgentRuntime(
-        buildSpawnOpts({
+        await buildSpawnOpts({
           instanceId: member.instanceId,
           agentUserId: member.agentUserId,
           workspaceId,

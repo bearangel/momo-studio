@@ -40,6 +40,7 @@ export interface ProviderModelRow {
   model_id: string;
   enabled: number;
   added_at: number;
+  context_window: number | null;
 }
 
 /** 供应商的模型列表条目（provider_models 表，v24 起） */
@@ -48,6 +49,8 @@ export interface ProviderModel {
   modelId: string;
   enabled: boolean;
   addedAt: number;
+  /** 用户手动覆盖的上下文窗口（token）；null=未知（走内置目录，migration v30 起） */
+  contextWindow: number | null;
 }
 
 /** keychain 引用 key：provider.<id>.api_key */
@@ -73,6 +76,7 @@ function rowToProviderModel(row: ProviderModelRow): ProviderModel {
     modelId: row.model_id,
     enabled: row.enabled === 1,
     addedAt: row.added_at,
+    contextWindow: row.context_window,
   };
 }
 
@@ -188,6 +192,25 @@ export function setProviderModelEnabled(providerId: string, modelId: string, ena
   db.prepare(
     'UPDATE provider_models SET enabled = ? WHERE provider_id = ? AND model_id = ?',
   ).run(enabled ? 1 : 0, providerId, modelId);
+}
+
+/**
+ * 设置模型的手动上下文窗口覆盖（token，压缩重构 spec 2026-09-09 §2.1）。
+ * null=清除覆盖（回退内置目录）；数值必须是正整数——非法值在写通道源头拒绝，
+ * 不让坏值落库。行不存在时 no-op（与 setProviderModelEnabled 行为一致）。
+ */
+export function setProviderModelWindow(
+  providerId: string,
+  modelId: string,
+  contextWindow: number | null,
+): void {
+  if (contextWindow !== null && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
+    throw new Error(`上下文窗口必须是正整数或 null：${contextWindow}`);
+  }
+  const db = getDb();
+  db.prepare(
+    'UPDATE provider_models SET context_window = ? WHERE provider_id = ? AND model_id = ?',
+  ).run(contextWindow, providerId, modelId);
 }
 
 export function removeProviderModel(providerId: string, modelId: string): void {

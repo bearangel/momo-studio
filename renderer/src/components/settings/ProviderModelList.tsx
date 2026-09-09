@@ -1,7 +1,7 @@
 // renderer/src/components/settings/ProviderModelList.tsx
 //
 // 供应商模型列表管理（P2 Task 6）：
-// - 每行：model_id（等宽字体）+ 启用开关 + 删除
+// - 每行：model_id（等宽字体）+ 启用开关 + 上下文窗口（可选，压缩重构 Task 1）+ 删除
 // - 「获取模型列表」：fetchModels 拉取远端列表 → 逐个 addModel 幂等入库 → 刷新
 // - 「手动添加」：内联输入 model_id → addModel
 // - 增删后通过 onChanged 通知父组件刷新左列模型数徽标
@@ -16,6 +16,63 @@ interface Props {
   providerId: string;
   /** 行数变化（添加/删除/拉取）后的回调——父组件用于刷新模型数徽标 */
   onChanged?: () => void;
+}
+
+/** 行内上下文窗口编辑（可选）。空=未知（走内置目录）；正整数=手动覆盖；非法输入回退不提交 */
+function ModelWindowInput({
+  providerId,
+  modelId,
+  contextWindow,
+  onError,
+}: {
+  providerId: string;
+  modelId: string;
+  contextWindow: number | null;
+  onError: (msg: string) => void;
+}): JSX.Element {
+  const [value, setValue] = useState(contextWindow === null ? '' : String(contextWindow));
+
+  const commit = async (raw: string): Promise<void> => {
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      if (contextWindow !== null) {
+        try {
+          await ipc.provider.setModelWindow(providerId, modelId, null);
+        } catch (err) {
+          onError(err instanceof Error ? err.message : String(err));
+        }
+      }
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isInteger(n) || n <= 0 || String(n) !== trimmed) {
+      setValue(contextWindow === null ? '' : String(contextWindow));
+      return;
+    }
+    if (n === contextWindow) return;
+    try {
+      await ipc.provider.setModelWindow(providerId, modelId, n);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      aria-label={`上下文窗口 ${modelId}`}
+      title="上下文窗口（token，可选）——留空走内置目录"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={(e) => void commit(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+      placeholder="自动"
+      className="w-24 rounded border border-subtle bg-surface-2 px-1.5 py-0.5 text-xs text-secondary font-mono"
+    />
+  );
 }
 
 export function ProviderModelList({ providerId, onChanged }: Props) {
@@ -136,6 +193,13 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
             <code className={`flex-1 text-xs font-mono truncate ${m.enabled ? 'text-primary' : 'text-disabled line-through'}`}>
               {m.modelId}
             </code>
+            <ModelWindowInput
+              key={`${m.modelId}::${m.contextWindow ?? ''}`}
+              providerId={providerId}
+              modelId={m.modelId}
+              contextWindow={m.contextWindow}
+              onError={setError}
+            />
             <button type="button" onClick={() => void handleRemove(m)} aria-label={`删除 ${m.modelId}`}
               className="text-xs text-tertiary hover:text-status-error">删除</button>
           </div>

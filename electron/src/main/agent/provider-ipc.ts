@@ -9,7 +9,7 @@ import {
   listProviders, getProvider, createProvider, updateProvider,
   deleteProvider, setDefaultProvider, getProviderApiKey,
   fetchRemoteModels, listProviderModels, upsertProviderModel,
-  setProviderModelEnabled, removeProviderModel,
+  setProviderModelEnabled, removeProviderModel, setProviderModelWindow,
 } from './provider-crud';
 
 interface TestConnectionInput { baseUrl: string; apiKey: string; model: string; }
@@ -104,6 +104,11 @@ export function registerProviderHandlers(): void {
 
   ipcMain.handle('provider:setModelEnabled', (_e, id: string, modelId: string, enabled: boolean) => {
     setProviderModelEnabled(id, modelId, enabled);
+  });
+
+  // 上下文窗口手动覆盖（压缩重构 Task 1）：非法值由 setProviderModelWindow 源头拒绝 → IPC error
+  ipcMain.handle('provider:setModelWindow', (_e, id: string, modelId: string, contextWindow: number | null) => {
+    setProviderModelWindow(id, modelId, contextWindow);
   });
 
   ipcMain.handle('provider:removeModel', (_e, id: string, modelId: string) => {

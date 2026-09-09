@@ -16,15 +16,16 @@ const fetchModels = vi.fn();
 const addModel = vi.fn();
 const setModelEnabled = vi.fn();
 const removeModel = vi.fn();
+const setModelWindow = vi.fn();
 
 const mockApi = {
-  provider: { listModels, fetchModels, addModel, setModelEnabled, removeModel },
+  provider: { listModels, fetchModels, addModel, setModelEnabled, removeModel, setModelWindow },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
 const MODELS = [
-  { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1 },
-  { providerId: 'p1', modelId: 'glm-5.2', enabled: false, addedAt: 2 },
+  { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1, contextWindow: 131072 },
+  { providerId: 'p1', modelId: 'glm-5.2', enabled: false, addedAt: 2, contextWindow: null },
 ];
 
 describe('ProviderModelList', () => {
@@ -34,6 +35,7 @@ describe('ProviderModelList', () => {
     addModel.mockReset().mockResolvedValue(undefined);
     setModelEnabled.mockReset().mockResolvedValue(undefined);
     removeModel.mockReset().mockResolvedValue(undefined);
+    setModelWindow.mockReset().mockResolvedValue(undefined);
   });
 
   it('挂载时渲染模型行（model_id + 启用状态）', async () => {
@@ -110,5 +112,51 @@ describe('ProviderModelList', () => {
     await screen.findByText('glm-5.3');
     rerender(<ProviderModelList providerId="p2" />);
     await waitFor(() => expect(listModels).toHaveBeenCalledWith('p2'));
+  });
+
+  it('行内窗口编辑：输入正整数并失焦 → setModelWindow(providerId, modelId, 数值)', async () => {
+    render(<ProviderModelList providerId="p1" />);
+    const input = await screen.findByLabelText('上下文窗口 glm-5.3');
+    expect(input).toHaveValue('131072');
+
+    fireEvent.change(input, { target: { value: '200000' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(setModelWindow).toHaveBeenCalledWith('p1', 'glm-5.3', 200000));
+  });
+
+  it('清空窗口输入并失焦 → setModelWindow(providerId, modelId, null)（回退目录）', async () => {
+    render(<ProviderModelList providerId="p1" />);
+    const input = await screen.findByLabelText('上下文窗口 glm-5.3');
+
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(setModelWindow).toHaveBeenCalledWith('p1', 'glm-5.3', null));
+  });
+
+  it('非法输入（非正整数）失焦不调 IPC，回退显示原值', async () => {
+    render(<ProviderModelList providerId="p1" />);
+    const input = await screen.findByLabelText('上下文窗口 glm-5.3');
+
+    fireEvent.change(input, { target: { value: '-5' } });
+    fireEvent.blur(input);
+    expect(setModelWindow).not.toHaveBeenCalled();
+    expect(input).toHaveValue('131072');
+
+    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.blur(input);
+    expect(setModelWindow).not.toHaveBeenCalled();
+  });
+
+  it('窗口写入失败 → 内联错误展示', async () => {
+    setModelWindow.mockRejectedValueOnce(new Error('DB locked'));
+    render(<ProviderModelList providerId="p1" />);
+    const input = await screen.findByLabelText('上下文窗口 glm-5.3');
+
+    fireEvent.change(input, { target: { value: '999999' } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByText(/DB locked/)).toBeInTheDocument();
   });
 });

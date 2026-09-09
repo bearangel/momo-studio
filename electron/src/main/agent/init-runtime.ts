@@ -54,7 +54,7 @@ export async function initTaskDrivenRuntime(): Promise<void> {
         // v2（Task 10）：agent 无 Matrix 凭据，仅需解析 LLM API key
         const llmApiKey = await resolveApiKey(member.instanceId, def.modelProviderId);
 
-        const runtimeConfig = buildSpawnOpts({
+        const runtimeConfig = await buildSpawnOpts({
           instanceId: member.instanceId,
           agentUserId: member.agentUserId,
           workspaceId: ws.id,

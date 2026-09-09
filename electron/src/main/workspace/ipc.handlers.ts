@@ -116,7 +116,7 @@ async function restartDefaultAgentInstance(
   await stopAgentRuntime(instanceId);
 
   await startAgentRuntime(
-    buildSpawnOpts({
+    await buildSpawnOpts({
       instanceId: member.instanceId,
       agentUserId: member.agentUserId,
       workspaceId,

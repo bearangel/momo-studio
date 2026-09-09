@@ -22,7 +22,7 @@ const addModel = vi.fn();
 
 /** 构造全量字段 ProviderModel（契约对齐，不写占位符） */
 function pm(providerId: string, modelId: string, enabled: boolean): ProviderModel {
-  return { providerId, modelId, enabled, addedAt: 0 };
+  return { providerId, modelId, enabled, addedAt: 0, contextWindow: null };
 }
 
 beforeEach(() => {

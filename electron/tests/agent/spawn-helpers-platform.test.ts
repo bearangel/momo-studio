@@ -110,12 +110,12 @@ function makeDef(defId: string, providerId: string): AgentDefinition {
 }
 
 describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
-  it('provider.platform=anthropic 时 opts.modelPlatform === "anthropic"', () => {
+  it('provider.platform=anthropic 时 opts.modelPlatform === "anthropic"', async () => {
     const db = getDb();
     seedProvider(db, 'pid-ant', 'https://api.custom-ant.com/v1', 'anthropic');
     seedWorkspaceAndDef(db, 'ws1', 'def1', 'pid-ant');
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
@@ -129,12 +129,12 @@ describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
     expect(opts.modelPlatform).toBe('anthropic');
   });
 
-  it('provider.platform=openai 时 opts.modelPlatform === "openai"', () => {
+  it('provider.platform=openai 时 opts.modelPlatform === "openai"', async () => {
     const db = getDb();
     seedProvider(db, 'pid-oai', 'https://api.openai.com/v1', 'openai');
     seedWorkspaceAndDef(db, 'ws1', 'def1', 'pid-oai');
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',
@@ -148,12 +148,12 @@ describe('buildSpawnOpts platform 透传 (P3 Task 1)', () => {
     expect(opts.modelPlatform).toBe('openai');
   });
 
-  it('opts.modelBaseUrl 仍同步透传（接线不影响 baseUrl 行为）', () => {
+  it('opts.modelBaseUrl 仍同步透传（接线不影响 baseUrl 行为）', async () => {
     const db = getDb();
     seedProvider(db, 'pid-ant', 'https://api.custom-ant.com/v1', 'anthropic');
     seedWorkspaceAndDef(db, 'ws1', 'def1', 'pid-ant');
 
-    const opts = buildSpawnOpts({
+    const opts = await buildSpawnOpts({
       instanceId: 'inst1',
       agentUserId: 'agent-t-ab12cd',
       workspaceId: 'ws1',

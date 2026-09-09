@@ -24,6 +24,7 @@ import { resolveSkillsDir } from '../paths';
 import { getProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
+import { lookupModelLimits, type ModelLimits } from '../llm/model-catalog';
 import type { AgentDefinition } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-config';
@@ -164,6 +165,31 @@ export interface BuildSpawnOptsInput {
 }
 
 /**
+ * 窗口元数据 resolve 链（spec 2026-09-09 §2.3，单一真相源）：
+ * provider_models.context_window（用户覆盖，非 NULL 且 >0）→ 内置目录 → null（未知）。
+ * 用户列只覆盖上下文窗口；输出上限目录无条目时为 0（未知）。
+ * 下游消费：buildSpawnOpts 把结果写入 AGENT_CONFIG；RuntimeConfig 0=未知 fail-safe。
+ */
+export async function resolveModelLimits(
+  providerId: string,
+  modelId: string,
+): Promise<ModelLimits | null> {
+  const provider = getProvider(providerId);
+  if (!provider) return null;
+  const row = getDb()
+    .prepare(
+      'SELECT context_window FROM provider_models WHERE provider_id = ? AND model_id = ?',
+    )
+    .get(providerId, modelId) as { context_window: number | null } | undefined;
+  const userWindow = row?.context_window;
+  const catalog = lookupModelLimits(provider.platform, modelId);
+  if (typeof userWindow === 'number' && userWindow > 0) {
+    return { contextWindow: userWindow, outputTokens: catalog?.outputTokens ?? 0 };
+  }
+  return catalog;
+}
+
+/**
  * 构建完整的 AgentRuntimeOpts，供 spawnAgent 使用。
  *
  * v1.3 改造：
@@ -177,7 +203,7 @@ export interface BuildSpawnOptsInput {
  * v25 Task 10：subAgents/isLeader 改由 buildDispatchSnapshot 会话快照计算
  *   （取代 v1 role==='main' + parent 链查询，spec §4.7）。
  */
-export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
+export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentRuntimeOpts> {
   const {
     instanceId,
     agentUserId,
@@ -200,6 +226,9 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
   if (!provider) {
     throw new Error(`供应商不存在: ${def.modelProviderId}`);
   }
+
+  // 窗口元数据（spec 2026-09-09 §2.3）：resolve 链单点解析，随 AGENT_CONFIG 定型
+  const limits = await resolveModelLimits(def.modelProviderId, def.modelName);
 
   // 会话快照：dispatch 注入条件 + subAgents（spec §4.7；spawn 时点定型）
   const { isLeader, subAgents } = buildDispatchSnapshot(workspaceId, instanceId);
@@ -236,5 +265,8 @@ export function buildSpawnOpts(input: BuildSpawnOptsInput): AgentRuntimeOpts {
     // v1.4 嵌套：传 bot 展示信息，子 agent start chunk 据此填充 chip 头部
     botName: def.name,
     botAvatar: def.iconEmoji,
+    // 窗口元数据（null→0=未知）：子进程 auto 阈值压缩的依据，未知则 fail-safe 跳过
+    contextWindow: limits?.contextWindow ?? 0,
+    outputTokens: limits?.outputTokens ?? 0,
   };
 }

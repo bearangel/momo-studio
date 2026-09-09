@@ -437,6 +437,8 @@ export interface ProviderModel {
   modelId: string;
   enabled: boolean;
   addedAt: number;
+  /** 用户手动覆盖的上下文窗口（token）；null=未知（走内置目录，migration v30 起） */
+  contextWindow: number | null;
 }
 
 /** 全局模型供应商（注册表项，不含 apiKey） */
@@ -986,6 +988,8 @@ export interface ApiSurface {
     addModel(id: string, modelId: string): Promise<void>;
     /** Task 6：切换模型启用状态 */
     setModelEnabled(id: string, modelId: string, enabled: boolean): Promise<void>;
+    /** 上下文窗口手动覆盖（token；null=清除回退内置目录；非正整数 reject） */
+    setModelWindow(id: string, modelId: string, contextWindow: number | null): Promise<void>;
     /** Task 6：删除模型条目 */
     removeModel(id: string, modelId: string): Promise<void>;
   };

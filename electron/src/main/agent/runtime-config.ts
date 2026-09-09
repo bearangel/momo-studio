@@ -62,6 +62,11 @@ export interface AgentRuntimeOpts {
   botName?: string;
   /** bot emoji 头像（来自 agent_definitions.icon_emoji） */
   botAvatar?: string;
+  // === 压缩重构（spec 2026-09-09 §2.3）===
+  /** 模型上下文窗口（token）；0=未知（fail-safe：不做自动阈值压缩）。由 buildSpawnOpts 经 resolveModelLimits 解析后注入 */
+  contextWindow?: number;
+  /** 模型最大输出 token；0=未知 */
+  outputTokens?: number;
 }
 
 /** runtime-spawner 通过 AGENT_CONFIG 传入的完整配置 */
@@ -114,6 +119,11 @@ export interface RuntimeConfig {
   parentStreamSessionId?: string;
   /** v2（B 子系统 Task B11）：当前关联的任务 ID（来自 task-driven runtime 派发），用于向 MemoryProvider 拉 task 上下文注入 system prompt */
   currentTaskId?: string;
+  // === 压缩重构（spec 2026-09-09 §2.3）===
+  /** 模型上下文窗口（token）；0=未知（auto 阈值压缩 fail-safe 跳过） */
+  contextWindow: number;
+  /** 模型最大输出 token；0=未知 */
+  outputTokens: number;
 }
 
 /**
@@ -261,6 +271,9 @@ export function parseConfig(raw: unknown): RuntimeConfig {
       typeof r.currentTaskId === 'string' && r.currentTaskId.length > 0
         ? r.currentTaskId
         : undefined,
+    // 压缩重构：窗口元数据缺省/非法按 0（未知）处理——旧 AGENT_CONFIG 兼容 + fail-safe
+    contextWindow: typeof r.contextWindow === 'number' && r.contextWindow > 0 ? r.contextWindow : 0,
+    outputTokens: typeof r.outputTokens === 'number' && r.outputTokens > 0 ? r.outputTokens : 0,
   };
 }
 

@@ -103,6 +103,7 @@ const api: ApiSurface = {
     listModels: (id) => invoke('provider:listModels', id),
     addModel: (id, modelId) => invoke('provider:addModel', id, modelId),
     setModelEnabled: (id, modelId, enabled) => invoke('provider:setModelEnabled', id, modelId, enabled),
+    setModelWindow: (id, modelId, contextWindow) => invoke('provider:setModelWindow', id, modelId, contextWindow),
     removeModel: (id, modelId) => invoke('provider:removeModel', id, modelId),
   },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
