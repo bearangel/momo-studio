@@ -110,6 +110,14 @@ function isSyntheticUserMessage(m: LLMMessage): boolean {
 const AUTO_COMPACT_NOTICE =
   '[系统] 上下文已自动压缩。若仍有未完成的用户请求步骤请继续；否则输出总结并停下。';
 
+/**
+ * provider 上下文溢出错误特征（spec §7，T6）：错误信息命中即视为「上下文超限」，
+ * 可尝试压缩恢复。措辞覆盖 OpenAI（maximum context length / too many tokens）与
+ * Anthropic（prompt is too long / token limit exceeded）的典型 4xx 报错。
+ * `.{0,20}` 有界距离：避免 'token ... 一大段无关文本 ... limit' 的过拟合误吞。
+ */
+const OVERFLOW_ERROR_RE = /context|token.{0,20}(limit|exceed)|maximum.{0,20}length|too (long|many)/i;
+
 /** runCompaction 的结果：成功携带计数与双态判定（tool result 文案消费） */
 type CompactionRunResult =
   | { ok: true; beforeCount: number; tailCount: number; mandateGated: boolean; pendingUser: boolean }
@@ -392,15 +400,25 @@ export async function runChatLoop(
    *      切点不得落在 role:'tool' 消息上（工具对原子性——孤儿 tool 消息会被
    *      provider 400 拒绝）
    *   ② head 序列化（跳过合成摘要条——主进程已读 DB prior，防双重计入）
-   *   ③ requestCompaction IPC 等主进程生成结构化摘要
+   *   ③ coveredUntil = head 末条真实消息的已知 createdAt（见下），随
+   *      requestCompaction IPC 上报主进程 upsert
    *   ④ 成功：messages = [system, user(摘要+双态尾部指令), ...尾部 verbatim]，
    *      按 mandate 双态置 wrapUpMode，refreshSystem 重建 mandate 段
    *   ⑤ 失败：messages 原样不动，返回 ok:false（调用方决定报错/降级）
    *
    * head 为空（全部消息落尾部保留预算内）时无物可压，返回 ok:false——
    * auto 路径自然跳过，工具路径向 LLM 报「无需压缩」。
+   *
+   * coveredUntil 语义（T5 遗留 Important-1 修复）：created_at ≤ coveredUntil 的
+   * 历史已被摘要覆盖，下轮收缩（getConversationContext 的 afterTs 过滤）不再
+   * 拉取。取「尾部起始前一条（head 末条）的已知时刻」而非压缩时刻 Date.now()——
+   * 压缩时刻必然晚于本轮已落库的尾部消息，用当下时刻会把未摘要的尾部消息一并
+   * 过滤（未摘要却消失）。head 末条：convCtx 来源 → 精确 timestamp（convTimes
+   * 命中）；回合内消息 → turnStart - 1（回合内消息 createdAt ≥ turnStart，
+   * -1 保证严格小于恒安全；锚点保护下当前 user 消息若入 head 则已被摘要，
+   * 覆盖它语义正确）。合成条无 DB 行，跳过。
    */
-  const runCompaction = async (coveredUntil: number): Promise<CompactionRunResult> => {
+  const runCompaction = async (): Promise<CompactionRunResult> => {
     const body = messages.slice(1); // system（messages[0]）不参与尾部选择，永不压缩
 
     // mandate 锚点：最后一条真实 user 消息（跳过三类合成条，防锚到摘要条上）
@@ -432,6 +450,16 @@ export async function runChatLoop(
     const head = body.slice(0, tailStart).filter((m) => !isSyntheticUserMessage(m));
     if (head.length === 0) {
       return { ok: false, error: '无可压缩的更早历史（当前轮已全部位于尾部保留预算内）' };
+    }
+
+    // coveredUntil：从切点向前找 head 末条真实消息（跳过合成条）的已知时刻。
+    // head 非空保证循环必然命中；防御性兜底取 turnStart - 1。
+    let coveredUntil = turnStart - 1;
+    for (let i = tailStart - 1; i >= 0; i--) {
+      const m = body[i]!;
+      if (isSyntheticUserMessage(m)) continue;
+      coveredUntil = convTimes.get(m) ?? turnStart - 1;
+      break;
     }
 
     let summary: string;
@@ -474,6 +502,16 @@ export async function runChatLoop(
     content: m.content,
   }));
 
+  // ─── coveredUntil 精确化支撑（T5 遗留 Important-1，T6 修复） ────────────────
+  // 回合开始时刻：回合内生成消息（assistant/tool/steer）的 DB 落库时刻下界——
+  // LLM 首轮请求发生在 turnStart 之后，chunk 路径落库只会更晚。
+  const turnStart = Date.now();
+  // convCtx 来源消息的精确 DB createdAt（ContextMessage.timestamp）。WeakMap 按
+  // 引用跟随：runCompaction 重建 messages 数组后，尾部的 convCtx 条目仍携带
+  // 精确时刻；查不到 = 回合内消息 → 保守取 turnStart - 1（见 runCompaction）。
+  const convTimes = new WeakMap<LLMMessage, number>();
+  convCtx.messages.forEach((m, i) => convTimes.set(convMessages[i]!, m.timestamp));
+
   const messages: LLMMessage[] = [
     { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
     ...convMessages,
@@ -491,6 +529,9 @@ export async function runChatLoop(
   // 置位；steer drain 出新指令时清除（新指令优先于收尾）。回合级内存状态，
   // 随回合结束消亡。
   let wrapUpMode = false;
+  // 溢出恢复标记（spec §7，T6）：回合级——本回合内只允许一次「溢出 → 压缩 →
+  // 重放」恢复，二次溢出按原错误路径终止（防「压缩-重放-再溢出」死循环）。
+  let overflowRecovered = false;
 
   const abortController = new AbortController();
   // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
@@ -668,7 +709,8 @@ export async function runChatLoop(
         est > config.contextWindow - Math.max(config.outputTokens, COMPACTION_BUFFER_TOKENS) &&
         est > COMPACTION_MIN_TRIGGER
       ) {
-        const autoResult = await runCompaction(Date.now());
+        // coveredUntil 由 runCompaction 内部按 head 末条已知时刻计算（T5 Important-1）
+        const autoResult = await runCompaction();
         if (autoResult.ok) {
           if (autoResult.pendingUser) {
             // 有 user 挂靠 → 注入续行合成条后继续（工具照常，spec §6.2）
@@ -710,8 +752,8 @@ export async function runChatLoop(
         }
       }
     } catch (err) {
-      process.off('message', abortListener);
       if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
+        process.off('message', abortListener);
         sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
         if (stats) {
           stats.toolCallsUsed = toolCallCount;
@@ -719,11 +761,44 @@ export async function runChatLoop(
         }
         return accumulatedText;
       }
+      // ─── 溢出恢复（spec §7，T6）：abort 分支之后、原错误终止之前 ────────────
+      // provider 上下文溢出（错误信息特征匹配）且本回合未恢复过、仍有可压内容
+      // （est > MIN_TRIGGER）→ 压缩一次后重放本轮授权继续本轮。压缩失败或二次
+      // 溢出 → 落入下方原错误路径终止（end error + throw，错误不吞不改）。
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (
+        !overflowRecovered &&
+        OVERFLOW_ERROR_RE.test(errMsg) &&
+        estimateConversation({
+          system: messages[0]!.content,
+          messages,
+          tools: chatTools,
+        }) > COMPACTION_MIN_TRIGGER
+      ) {
+        const recovered = await runCompaction();
+        if (recovered.ok) {
+          overflowRecovered = true;
+          // 重放本轮授权（mandate 双要素 verbatim 逐条 push 为 user 消息）：
+          // 压缩可能已把本轮首条 user 消息 / 早前 steer 摘要走，模型需要以
+          // user 回合形态重新拿到授权才能继续。只 push 消息、绝不回写 mandate
+          // 状态对象——steers 再进 mandate.steers 会令 system 授权提示段翻倍
+          // （重放≠再授权）。
+          messages.push({ role: 'user', content: mandate.userBody });
+          for (const steer of mandate.steers) {
+            messages.push({ role: 'user', content: `[用户中途补充] ${steer}` });
+          }
+          // 重放 = 用户指令重新到达：清除收尾模式（沿 steer drain「新指令优先
+          // 于收尾」先例）——恢复的语义是重试本轮，而非机械收口后浪费这次压缩
+          wrapUpMode = false;
+          continue;
+        }
+      }
+      process.off('message', abortListener);
       sendEndChunk({
         type: 'end',
         streamSessionId,
         finishReason: 'error',
-        error: (err as Error).message,
+        error: errMsg,
       });
       if (stats) stats.toolCallsUsed = toolCallCount;
       throw err;
@@ -850,7 +925,8 @@ export async function runChatLoop(
       if (tc.name === 'compact') {
         const before = messages.length;
         const note = typeof tc.arguments.note === 'string' ? tc.arguments.note : '';
-        const result = await runCompaction(Date.now());
+        // coveredUntil 由 runCompaction 内部按 head 末条已知时刻计算（T5 Important-1）
+        const result = await runCompaction();
 
         sendStreamChunk({
           type: 'tool_call',
