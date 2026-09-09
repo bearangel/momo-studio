@@ -236,4 +236,32 @@ describe('窗口元数据 spawn 透传（buildSpawnOpts → AGENT_CONFIG → par
     // 输出上限未被用户列覆盖，沿用目录
     expect(opts.outputTokens).toBe(96000);
   });
+
+  it('AGENT_CONFIG 旧载荷缺窗口字段 / 非法值 → parseConfig 回退 0（兼容 + fail-safe 专项）', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-j', 'openai');
+    seedWorkspaceAndDef(db, 'ws-1', 'def-4', 'pid-j', 'gpt-4o');
+
+    const opts = await buildSpawnOpts({
+      instanceId: 'inst1',
+      agentUserId: 'agent-t-ab12cd',
+      workspaceId: 'ws-1',
+      workspaceDir: '/tmp',
+      def: makeDef('def-4', 'pid-j', 'gpt-4o'),
+      llmApiKey: 'k',
+    });
+    expect(opts.contextWindow).toBe(128000);
+
+    // 旧版子进程载荷没有窗口字段（升级窗口内新旧混合）→ 0=未知
+    const wire = JSON.parse(JSON.stringify(opts)) as Record<string, unknown>;
+    delete wire.contextWindow;
+    delete wire.outputTokens;
+    expect(parseConfig(wire).contextWindow).toBe(0);
+    expect(parseConfig(wire).outputTokens).toBe(0);
+
+    // 非法类型 / 非正值同样回退 0，不透传给 RuntimeConfig
+    const bad = { ...wire, contextWindow: -5, outputTokens: 'many' };
+    expect(parseConfig(bad).contextWindow).toBe(0);
+    expect(parseConfig(bad).outputTokens).toBe(0);
+  });
 });
