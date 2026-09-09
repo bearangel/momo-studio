@@ -1,251 +1,83 @@
-# Task 2 报告 — 文案中性化第一批 + 文案回归锁
-
-**任务**：turn-mandate 实施计划 8 任务中的第 2 任务
-**spec**：`docs/specs/2026-09-08-turn-mandate-compact-boundary-design.md` §5.6
-**brief**：`/workspace/.superpowers/sdd/task-2-brief.md`
-**commit**：`18c871e`
-**分支**：`feat/turn-mandate`（未 push / 未 rebase）
-
----
-
-## 1. Implemented（实现要点）
-
-| # | 改动点 | 文件 | 内容 |
-|---|---|---|---|
-| 1 | 新增函数 `buildCompactSuggestHint(msgCount)` | `electron/src/main/agent/prompt-hints.ts` | 导出函数；中性化文案「对话历史已较长（N 条），如影响质量可调用 compact。压缩后依据本轮授权状态决定继续或收尾」 |
-| 2 | 拆分教学限定当前任务语境 | `electron/src/main/agent/prompt-hints.ts` `formatDispatchHint` | 改「主动拆分原则」为「拆分原则（限当前任务）」；去掉「不要全部自己做」无条件前进指令；「任务简单…不必每次都 dispatch」改「简单请求…直接完成，不要为拆分而拆分」 |
-| 3 | >30 条提示接入新函数 | `electron/src/main/agent/runtime-entry.ts:457-463` | 替换原硬编码字符串为 `buildCompactSuggestHint(messages.length)` 调用；import 区追加 `buildCompactSuggestHint` |
-| 4 | compact 描述重写（spec §5.6 #5） | `electron/src/main/agent/builtin-tools.ts` `getBuiltinLoopToolDefs().compact.description` | 总结模板拆两节「【用户指令】+【agent 备忘】」；去「后续工作基于总结继续」；明示「压缩后系统依据用户指令节决定继续或收尾」；保留 ≥200 字符约束 |
-| 5 | task_complete nextStep 声明去授权化（spec §5.6 #6） | `electron/src/main/agent/builtin-tools.ts` `task_complete.inputSchema.nextStep.description` | 「下一段要做什么（提示自己继续；可选）」→「下一段的内容提示（仅用于分段连贯性，不是新任务授权；可选）」 |
-| 6 | memory_save 描述加证据核实约束（spec §5.6 #8） | `electron/src/main/agent/tools/memory-tools.ts` `MemoryTools.getDefs().memory_save.description` | 追加「仅在用户请求或明确受益时保存；记录系统性结论（如产品缺陷判定）前必须先核实原始证据（工具调用记录、错误信息等）」 |
-
-**留待 Task 4 的 3 处**（按 brief 红线，未动）：
-- `runtime-entry.ts:610`（task_complete 输出）、`:622`（task_complete tool message）—— Task 4
-- `runtime-entry.ts:659/675`（compact 分支尾 + tool result）—— Task 4
-- spec §5.6 表格第 2/3/4 行均属 Task 4 范围
-
----
-
-## 2. Test Results（TDD 证据）
-
-### 2.1 新建测试文件
-
-`electron/tests/agent/copy-neutral.test.ts` —— 5 个 `it` 用例锁死 spec §5.6 关键串。
-
-### 2.2 RED 阶段
-
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/copy-neutral.test.ts
-# → Test Files  1 failed (1)
-#   Tests       5 failed (5)
-#   Duration    451ms
-```
-
-5 个失败原因（与预期一致）：
-1. `buildCompactSuggestHint is not a function`（函数不存在）
-2. `formatDispatchHint` 返回内容含「不要全部自己做」
-3. `compact.description` 不含「用户指令」/「agent 备忘」
-4. `task_complete` `nextStep.description` 不含「不是新任务授权」
-5. `memory_save.description` 不含「核实原始证据」
-
-### 2.3 GREEN 阶段（首轮 4/5）
-
-```bash
-# 实现后第一轮
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/copy-neutral.test.ts
-# → Tests       1 failed | 4 passed (5)
-```
-
-唯一失败：memory_save。**根因**：brief Step 3 给的实现字符串是「核实原始工具调用证据」，但 brief Step 1 给的回归锁测试断言 `toContain('核实原始证据')`—— spec §5.6 原文（表格 #8 行）即「先核实原始证据」。**裁定**：回归锁断言应锁住 spec 原文（锁住 spec 关键串）——修改实现贴近 spec 原文，保留「工具调用记录、错误信息等」作为括号补充（不破坏 toContain 关键串）。
-
-```diff
--+ '记录系统性结论（如产品缺陷判定）前必须先核实原始工具调用证据。'
-++ '记录系统性结论（如产品缺陷判定）前必须先核实原始证据（工具调用记录、错误信息等）。'
-```
-
-### 2.4 GREEN 阶段（终态）
-
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/copy-neutral.test.ts
-# → Test Files  1 passed (1)
-#   Tests       5 passed (5)
-#   Duration    420ms
-```
-
-5/5 全绿。
-
-### 2.5 全量回归
-
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/
-# → Test Files  80 passed (80)
-#   Tests       695 passed (695)
-#   Duration    11.09s
-```
-
-80 个测试文件，695 个测试全绿零 flake。
-
-### 2.6 Typecheck
-
-```bash
-npx pnpm@9.0.0 typecheck
-# → Scope: 2 of 3 workspace projects
-#   electron typecheck: Done
-#   renderer typecheck: Done
-```
-
-双 workspace 严格类型检查 clean。
-
----
-
-## 3. Files Changed
-
-```
-electron/src/main/agent/builtin-tools.ts      |  14 ++-
-electron/src/main/agent/prompt-hints.ts       |  21 +++-
-electron/src/main/agent/runtime-entry.ts      |   9 +-
-electron/src/main/agent/tools/memory-tools.ts |   3 +-
-electron/tests/agent/copy-neutral.test.ts     |  61 +++++++++++ (new)
-5 files changed, 97 insertions(+), 11 deletions(-)
-```
-
----
-
-## 4. Self-Review（自检）
-
-### 4.1 规范符合性
-
-- [x] Node 20 LTS（`nvm use 20` → `v20.20.2`）
-- [x] TypeScript strict —— 无 `any` / `as any` / `@ts-ignore`；新测试构造完整 `RuntimeConfig` 最小实例而非 `as Parameters<...>[0]` 断言
-- [x] 全部注释中文（含新增的 spec 引用注释）
-- [x] Conventional Commits：`feat: 文案中性化第一批……`
-- [x] **TDD**：先写失败测试 → 确认红 → 最小实现 → 确认绿
-- [x] 注释最小化原则：仅在改动处加 spec 引用 + 跨任务依赖提示，未做无意义改写
-- [x] 验收红线 awareness：8 处文案中 5 处已在任务 2 范围处理；`:610/622/659/675` 4 处残留属 Task 4 范围，未在本任务动
-
-### 4.2 momo-test-rules 五条铁律
-
-1. **Mock 仿真真实运行时语义**——本任务无 mock；测试直接调用真实导出函数（`getBuiltinLoopToolDefs()` / `new MemoryTools().getDefs()` / `formatDispatchHint(config)`）
-2. **断言生产消费的字段**——所有 5 个断言均锁住 spec §5.6 关键串或 LLM 实际读取的 description 字段
-3. **错误路径与空输入**——N/A（本任务为纯文案回归锁；不涉及运行时错误路径）
-4. **跨模块对接契约**——`buildCompactSuggestHint` 的消费点（`runtime-entry.ts:457-463`）已切换为新函数；契约测试通过 → 生产/消费两边都按新串行为
-5. **Mock 收窄**——无 mock
-
-### 4.3 momo-boundary-rules 五条铁律
-
-1. **跨模块 ID 单点生成、沿线透传**——N/A（无 ID 改动）
-2. **「等待某事件」必须验证生产者**——N/A（无事件类型改动）
-3. **一义一名**——`buildCompactSuggestHint` 为新函数，命名与「build + Suggest + Hint」三层语义对齐；与既有 `formatBudgetHint` / `formatDispatchHint` 风格区分（返回静态系统提示文本 vs 注入 system prompt 段），命名一致
-4. **生产者/消费者成对修改**——`runtime-entry.ts:457-463` 切到新函数；`prompt-hints.ts` 新增并 export；两端在同一 commit
-5. **路由/关联目标用当前上下文**——N/A
-
-### 4.4 AGENTS.md 项目约束
-
-- [x] 不动 v2.0.0 已 stable 链路：`session_members` / `message_events` / `workspaces.default_agent_instance_id` 等未触及
-- [x] 不动 UI 资源注册面（IPC 通道）
-- [x] 不动 `workspaces.default_agent_instance_id` 字段
-- [x] 不动 IPC types.d.ts（双端类型无变化）
-- [x] 注释中文 / 标识符英文
-- [x] UI 设计系统约束——本任务不涉及 renderer
-
----
-
-## 5. Concerns（关切点 / 留给后续任务）
-
-### 5.1 spec 与 brief Step 3 一处不一致
-
-**事实**：brief Step 3 给的 `memory_save` 描述追加字符串为「核实原始工具调用证据」；brief Step 1 给的回归锁断言为 `toContain('核实原始证据')`；spec §5.6 表格 #8 原文为「先核实原始证据」。
-
-**裁定**：回归锁断言应锁住 spec 原文（关键串直接来自 spec §5.6 #8）——按 spec 原文写实现，关键串前不增加任何修饰。括号内「（工具调用记录、错误信息等）」是补充说明，不破坏 toContain 关键串匹配。
-
-**风险**：极低。Task 8 统一验收扫描时，关键串「核实原始证据」将命中本实现。
-
-### 5.2 `dispatchHint` 测试断言的最小性
-
-测试只断言 `not.toContain('不要全部自己做')` ——但 `formatDispatchHint` 输出可能含其他「请优先/必须」类措辞。**当前断言的覆盖率**：spec §5.6 #7 表格原文「不要全部自己做」是被点名要去的字面串，断言已锁住。其他措辞改动风险由 spec 评审与本任务视觉对比承担（已附 PR/commit 可追溯）。**建议**：Task 8 验收扫描时增加「主动拆分原则 → 拆分原则（限当前任务）」标题层面的整段比对待办。
-
-### 5.3 dispatchHint 标题未改
-
-原标题「**主动拆分原则**」按 brief 改为「**拆分原则（限当前任务）**」——任务 2 范围内一致改动。但 spec §5.6 #7 表格原文没有明示标题修改（只说「限定『当前任务』语境 +『简单请求直接完成，不要为拆分而拆分』」），属于合理外推。
-
-### 5.4 任务 2 → 任务 4 接口契约定型
-
-`buildCompactSuggestHint(msgCount: number): string` 已在 `prompt-hints.ts` 导出并被 `runtime-entry.ts:457-463` 消费——**Task 4 接手时无需新增 import**，直接修改 `buildCompactSuggestHint` 内部实现或新增 `buildCompactResultHint(success, ...)` 即可。
-
----
-
-## 6. 报告
+# Task 2 报告：纯函数包——token 估算 + 压缩模板 + 序列化
 
 - **状态**：DONE
-- **commit**：`18c871e` —— `feat: 文案中性化第一批——压缩建议/拆分教学/工具描述去前进祈使句（spec §5.6）`
-- **测试**：copy-neutral.test.ts 5/5 全绿；tests/agent/ 全量 80 文件 695 测试全绿
-- **typecheck**：electron + renderer 双 clean
-- **改动文件数**：5（4 修改 + 1 新建）
-- **新增导出**：`buildCompactSuggestHint(msgCount: number): string` 来自 `electron/src/main/agent/prompt-hints.ts`
-- **验收红线 awareness**：8 处文案中 5 处已完成；4 处 runtime-entry 残留（`:610/622/659/675`）属 Task 4 范围，Task 8 统一扫描
+- **分支**：`feat/compaction-overhaul`（不 push 不 rebase）
+- **Base**：`36b8989`（T1 末尾，含 parseConfig fail-safe 专项用例）
+- **Commit**：`ded3816` feat: 压缩纯函数包——中文 token 估算/结构化摘要模板/对话序列化（spec §3-4.2）（6 文件 / +697）
 
-报告文件：`/workspace/.superpowers/sdd/task-2-report.md`
+## TDD 证据
 
----
+1. **红**（09:07，三文件首跑）：`Failed Suites 3` ——全部源于目标模块/迁移不存在（`Failed to load url ... Does the file exist?`）。三文件 0 测试启动。
+2. **绿**（09:09–09:10）：
+   - token-estimate.test.ts 12 用例首跑 11 通过 / 1 失败（自我断言写错数学：把 16 CJK 错算成 26 CJK → 断言 `≥15` 但实现给 11）
+   - 修正断言范围（`[10, 12]`）后 12/12 通过
+   - 修正点同步加上 CJK 计数的内联注释（数学公式必须明示）
+   - prompt.test.ts 15 用例 / serialize.test.ts 10 用例一次绿
+3. **最终**：三文件 37/37 全绿。
+4. **回归**：`pnpm test` 双 workspace 全量跑通——electron **1718/1718**（+37 本任务新增）、renderer **1012/1012** 零回归。
 
-## 7. 审查修复记录（commit `ad61560`）
+## 验证结果
 
-Task 2 review 反馈 2 Important + 1 Minor，本节追加修复证据。
+| 项 | 结果 |
+|---|---|
+| `pnpm typecheck`（electron + renderer） | 双 clean |
+| electron 新增测试（token-estimate + prompt + serialize） | 37 / 37 passed |
+| electron 全量测试 | 206 files / **1718 passed**（含本任务 37 新增） |
+| renderer 全量测试 | 107 files / **1012 passed**（零改动） |
+| 三个新文件 ESLint | clean |
 
-### 7.1 修复项
+## 改动清单
 
-| # | 级别 | 文件 | 改动 |
-|---|---|---|---|
-| 1 | Important | `electron/src/main/agent/runtime-entry.ts:458` | 注释「去掉『然后继续工作』」→「去掉旧版前进祈使句」 |
-| 2 | Important | `electron/src/main/agent/builtin-tools.ts:104` | 注释「移除『继续工作』『后续工作基于总结继续』类前进祈使句」→「移除旧版前进祈使句（含『后续工作基于总结继续』类）」 |
-| 3 | Important | `electron/src/main/agent/prompt-hints.ts:58` | 注释「避免再次出现『继续工作』类前进祈使句」→「避免前进祈使句」 |
-| 4 | Important | `electron/src/main/agent/builtin-tools.ts:140` | `compact.inputSchema.summary.description` 从旧四段式「已完成 + 关键决策 + 未完成 + 重要标识符」改为 review 给定的精确字符串：完整对话总结（≥200 字符），必须分两节：【用户指令】…【agent 备忘】… |
-| 5 | Minor | `electron/tests/agent/copy-neutral.test.ts` | dispatchHint / compact / task_complete 三个用例各补 `not.toContain('继续工作')` 反断言；compact 用例额外补 3 条 `JSON.stringify(compact.inputSchema)` 参数级断言锁住 #4 修复（用户指令 / agent 备忘 / 继续工作） |
+**3 个生产模块（纯函数，零 DB/IPC 副作用）**
 
-### 7.2 验证命令与输出
+- `electron/src/main/agent/tools/shared/token-estimate.ts`
+  - `estimateTokens(text)`：CJK 字符 ÷1.6 其余 ÷4 向上取整——按 codepoint 单次扫描，范围函数替代 `/g` regex 规避 `lastIndex` 副作用雷
+  - `estimateConversation({ system, messages, tools })`：串行累加 system + 每条 message content + assistant 角色 toolCalls.arguments 的 JSON 序列化 + tools 定义的 name/description/inputSchema JSON 序列化
+  - 三个 COMPACTION_* 常量：`COMPACTION_BUFFER_TOKENS = 20_000` / `COMPACTION_KEEP_TOKENS = 8_000` / `COMPACTION_MIN_TRIGGER = 4_000`（spec §3 字面值）
 
-**覆盖测试**：
+- `electron/src/main/compaction/prompt.ts`
+  - `buildCompactionPrompt({ conversation, previousSummary })`：五节骨架（目标 / 重要细节 / 工作状态[已完成·进行中·阻塞] / 下一步 / 相关文件）+ 三条规则（terse 要点 / 保留精确标识符 / **勿提及摘要过程本身**）
+  - prior 模式额外 `<prior-summary>` 包裹 + 三句合并指令（**冲突以对话为准** / **完成项搬家** / **用户指令与决策必须携带**）——逐字来自 spec §4.1
+  - 空节填 `(无)` 避免 LLM 凭空补内容
 
-```bash
-cd electron && npx pnpm@9.0.0 vitest run tests/agent/copy-neutral.test.ts
-# → Test Files  1 passed (1)
-#   Tests       5 passed (5)
-#   Duration    468ms
-```
+- `electron/src/main/compaction/serialize.ts`
+  - `serializeMessages(messages)`：四条角色映射（`[用户]: / [助手]: / [系统]: / [工具结果]:`），assistant 同时含文本 + toolCalls 时文本在前工具调用在后
+  - 工具结果 >2000 字符按**字符数**截断 + `[truncated]` 标记（spec §4.2 + §8 同源）
+  - toolCallId 不进入序列化（spec §4.2 未要求）
 
-5/5 全绿——含新补的反断言 + compact 参数级 schema 断言。
+**3 个测试文件（贴 `electron/tests/` 镜像 `src/` 结构）**
 
-**Typecheck**：
+- `tests/agent/tools/token-estimate.test.ts`（12 用例）：四类断言全覆盖 + 空串/空标点边界 + assistant.toolCalls.arguments 计入
+- `tests/compaction/prompt.test.ts`（15 用例）：无 prior 5 节 + 子节顺序 + 五节顺序固定 + 规则三条 + 有 prior 5 断言 + 边界（空 conversation / 空 previousSummary / undefined previousSummary）
+- `tests/compaction/serialize.test.ts`（10 用例）：四角色映射 + toolCalls 与 tool 结果串联 + 截断边界（>2000 截 / ≤2000 不截）
 
-```bash
-npx pnpm@9.0.0 typecheck
-# → Scope: 2 of 3 workspace projects
-#   electron typecheck: Done
-#   renderer typecheck: Done
-```
+## 裁定记录
 
-双 workspace 严格类型检查 clean。
+1. **CJK 字符集范围**：采用 `[\u3000-303F \u3040-309F \u30A0-30FF \u3400-4DBF \u4E00-9FFF \uAC00-D7AF \uF900-FAFF \uFF00-FFEF]`——主块 + 扩展 A + 全/半角符号 + 日韩假名。不区分汉字与日韩字符（spec §3 统称「CJK」），按字符总数加权即可。
+2. **估计算法用 codepoint 单次扫描，不用 `/g` regex**：`regex.test()` 在循环里会推进 `lastIndex`——曾因未重置导致后续字符漏判。改 codepoint 范围检查后零副作用。
+3. **estimateConversation 串行加法**：不引入「消息结构开销」修正项——spec §3 未规定，引入额外项反而偏离审计性。
+4. **prior 模式 strict 空字符串判定**：`typeof previousSummary === 'string' && previousSummary.length > 0`——空串与 undefined 一律走无 prior 模式（防御上游误传）。
+5. **空节填 `(无)`**：避免 LLM 在空 section 自由发挥；spec §4.1 未明确，但 opencode 原模板同样做法。
+6. **prior 模式下 `<conversation>` 也写入**：prior 模式必须把对话一并放入（合并指令「冲突以对话为准」），所以双包裹而非二选一。
+7. **toolCallId 不进序列化**：spec §4.2 字面只要求 `[工具结果]:`，调用-结果关联由调用方维护。测试断言 `expect(out).not.toContain('call_abc')` 锁死此约定。
+8. **token-estimate 不去 import cycle**：从 `shared/token-estimate.ts` 到 `../../llm-provider.ts` 是单向依赖（import cycle 风险为零）。T3 CompactionService 反向消费这三个纯函数亦无环。
 
-### 7.3 红线复扫（任务 2 涉及范围）
+## 契约自查（momo-boundary-rules）
 
-```bash
-grep -rn "继续工作" \
-  electron/src/main/agent/runtime-entry.ts \
-  electron/src/main/agent/builtin-tools.ts \
-  electron/src/main/agent/prompt-hints.ts \
-  electron/src/main/agent/tools/memory-tools.ts \
-  electron/tests/agent/copy-neutral.test.ts
-```
+- **T3 / T5 消费面（签名稳定）**：`estimateTokens: (text: string) => number`、`estimateConversation: (input) => number`、`buildCompactionPrompt: (input) => string`、`serializeMessages: (messages: LLMMessage[]) => string`——四个签名无 any/unknown 暴露在公共 API。LLMMessage / LLMToolDef 类型从 `../llm-provider` 单点导入，T3/T5 改 LLMMessage 字段时本任务会编译报错（防止契约漂移）。
+- **CONST 透出**：`COMPACTION_*` 三个常量走 named export——T3 / T5 子进程侧可直引同一份常量（避免双份硬编码）。
 
-| 文件 | 命中数 | 类型 |
-|---|---|---|
-| `runtime-entry.ts` | 4 | `:610/622/659/675` 运行时输出，Task 4 范围 |
-| `copy-neutral.test.ts` | 7 | `not.toContain` 反断言 + 用例名 + 文件头注释（解释回归锁意图） |
-| 其他三文件 | 0 | 全部清零 |
+## Concerns（移交 T3/T4/T5）
 
-**结论**：本任务 2 范围内的源文件（不含运行时输出文本）已 0 命中；测试文件内的「继续工作」全部以「`not.toContain`」形式出现——Task 8 关键串扫描时需区分「反断言字面串」与「目标字面串」（可用 `\b继续工作\b` + 上下文语义判定，或用 AST 扫描 `CallExpression` 的 `not.toContain` 调用）。
+- **T3 调用方**：estimateTokens 返回类型为 `number`（运行时为整数，Math.ceil 保证）；如需 TS 类型层面 `integer` 表达，可加 `as number` 断言在调用处收紧——但当前未做以保留纯函数无副作用语义。
+- **T3 调用方**：serializeMessages 不输出 system 角色（spec §4.3 走顶层单独提取）；若 T3 想在 prompt 中纳入 system，请单独传入 `buildCompactionPrompt` 的 `conversation`（拼接在前面）或扩展签名。
+- **T3 调用方**：buildCompactionPrompt 含五节骨架 `(无)` 占位——LLM 可能不替换占位直接产出含 `(无)` 的「摘要」。如需结构性解析（按节切分），建议 T3 单独加 `parseSummarySections()`（不在本任务范围）。
+- **T5 调用方**：prior 模式 strict——空字符串 `previousSummary: ''` 与 `undefined` 等价（都不输出 `<prior-summary>` 块）。子进程路径必须主动传入非空字符串才走 prior 合并。
+- **T6 调用方**：estimateConversation 当前串行累加；千级 messages 数组理论有性能压力，但 spec §3 未提性能，纯函数 OK。若实测瓶颈出现可改为单次扫描。
+- **macOS 主机验证**：建议抽查 estimator 对真实中文长对话的偏差（spec 给的 ÷1.6 系数源自 opencode 调研；本机差异若 >30% 可微调）。
 
-### 7.4 修复 commit
+## 后续任务依赖就绪
 
-- **commit**：`ad61560` —— `fix: 文案任务审查修复——注释去字面串+compact 参数描述对齐两节模板`
-- **diff 范围**：4 files changed, 11 insertions(+), 5 deletions(-)
+- ✅ T3 主进程 CompactionService 可直接消费三个纯函数（签名稳定）
+- ✅ T4 getConversationContext 收缩 + 摘要注入 + prune 可消费 `serializeMessages` 拉取映射层
+- ✅ T5 子进程 compact 工具 + auto 阈值可直接消费 `estimateConversation` + `COMPACTION_*` 常量
