@@ -10,6 +10,13 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { setSecret, getSecret, deleteSecret } from '../storage/keychain';
+import {
+  getProviderPreset,
+  parseThinkingConfig,
+  type ReasoningCapability,
+  type ThinkingConfig,
+} from '../llm/provider-presets';
+import { lookupModelLimits, lookupReasoningCapability } from '../llm/model-catalog';
 export interface ModelProviderRow {
   id: string;
   name: string;
@@ -19,6 +26,7 @@ export interface ModelProviderRow {
   is_default: number;
   created_at: string;
   platform: string;
+  preset_key: string | null;
 }
 
 export interface ModelProvider {
@@ -30,6 +38,8 @@ export interface ModelProvider {
   createdAt: string;
   /** LLM 协议平台（v24 起显式存储，取代 baseUrl 启发式检测） */
   platform: ProviderPlatform;
+  /** 来源预设 key（provider-presets）；NULL=自定义供应商 */
+  presetKey: string | null;
 }
 
 /** 供应商协议平台：决定请求体/鉴权头/流式解析格式 */
@@ -41,6 +51,7 @@ export interface ProviderModelRow {
   enabled: number;
   added_at: number;
   context_window: number | null;
+  thinking_json: string | null;
 }
 
 /** 供应商的模型列表条目（provider_models 表，v24 起） */
@@ -51,6 +62,12 @@ export interface ProviderModel {
   addedAt: number;
   /** 用户手动覆盖的上下文窗口（token）；null=未知（走内置目录，migration v30 起） */
   contextWindow: number | null;
+  /** 模型级思维配置（用户设置）；null=未配置（auto） */
+  thinkingJson: ThinkingConfig | null;
+  /** 思维模式能力（服务端 resolve：预设表→正则目录；只读，spec §6 单一真相源） */
+  reasoning: ReasoningCapability;
+  /** resolve 链生效窗口（用户列→预设→目录）；null=未知（UI placeholder 用） */
+  effectiveWindow: number | null;
 }
 
 /** keychain 引用 key：provider.<id>.api_key */
@@ -67,16 +84,32 @@ function rowToProvider(row: ModelProviderRow): ModelProvider {
     isDefault: row.is_default === 1,
     createdAt: row.created_at,
     platform: row.platform === 'anthropic' ? 'anthropic' : 'openai',
+    presetKey: row.preset_key ?? null,
   };
 }
 
-function rowToProviderModel(row: ProviderModelRow): ProviderModel {
+/** thinking_json 列安全解析：坏 JSON 返回 null（单行坏数据不炸列表） */
+function safeParseJson(raw: string | null): unknown {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * row → 行级 DTO。reasoning / effectiveWindow 是 resolve 字段（需 platform 与
+ * 预设上下文），仅在 listProviderModels 单点计算（spec §6），故此处返回类型不含它们。
+ */
+function rowToProviderModel(row: ProviderModelRow): Omit<ProviderModel, 'reasoning' | 'effectiveWindow'> {
   return {
     providerId: row.provider_id,
     modelId: row.model_id,
     enabled: row.enabled === 1,
     addedAt: row.added_at,
     contextWindow: row.context_window,
+    thinkingJson: parseThinkingConfig(safeParseJson(row.thinking_json)),
   };
 }
 
@@ -100,17 +133,19 @@ export async function getProviderApiKey(id: string): Promise<string | null> {
 export async function createProvider(input: {
   name: string; baseUrl: string; apiKey: string;
   defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+  presetKey?: string;
 }): Promise<ModelProvider> {
   const id = randomUUID();
   const apiKeyRef = providerApiKeyRef(id);
   const db = getDb();
   db.prepare(
-    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, platform)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, platform, preset_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, input.name, input.baseUrl, apiKeyRef,
     input.defaultModel ?? null, input.isDefault ? 1 : 0,
     input.platform ?? 'openai',
+    input.presetKey ?? null,
   );
   // keychain 写入与 DB 无法跨存储原子化：失败时回滚 DB 行，避免留下无密钥的孤儿供应商
   try {
@@ -118,6 +153,10 @@ export async function createProvider(input: {
   } catch (err) {
     db.prepare('DELETE FROM model_providers WHERE id = ?').run(id);
     throw err;
+  }
+  // 预设种子：模型清单幂等写入（INSERT OR IGNORE，不覆盖既有行，spec §2.2）
+  if (input.presetKey) {
+    seedPresetModels(id, input.presetKey);
   }
   if (input.isDefault) setDefaultProvider(id);
   logger.info('供应商已创建', { id, name: input.name });
@@ -166,13 +205,29 @@ export function setDefaultProvider(id: string): void {
 
 // ─── provider_models CRUD（v24 起）──────────────────────────────────────────
 
-/** 列出某供应商的模型列表（按加入时间升序） */
+/**
+ * 列出某供应商的模型列表（按加入时间升序）。
+ * v31 富化：reasoning 能力与 effectiveWindow 在服务端单点 resolve
+ * （用户列→预设表→正则目录），客户端不重复实现 resolve 链（spec §6）。
+ */
 export function listProviderModels(providerId: string): ProviderModel[] {
   const db = getDb();
   const rows = db
     .prepare('SELECT * FROM provider_models WHERE provider_id = ? ORDER BY added_at ASC')
     .all(providerId) as ProviderModelRow[];
-  return rows.map(rowToProviderModel);
+  const provider = getProvider(providerId);
+  const platform = provider?.platform ?? 'openai';
+  const preset = provider?.presetKey ? getProviderPreset(provider.presetKey) : null;
+  return rows.map((row) => {
+    const presetModel = preset?.models.find((m) => m.id === row.model_id) ?? null;
+    const catalog = lookupModelLimits(platform, row.model_id);
+    return {
+      ...rowToProviderModel(row),
+      reasoning: presetModel?.reasoning ?? lookupReasoningCapability(platform, row.model_id),
+      effectiveWindow:
+        row.context_window ?? presetModel?.contextWindow ?? catalog?.contextWindow ?? null,
+    };
+  });
 }
 
 /**
@@ -211,6 +266,42 @@ export function setProviderModelWindow(
   db.prepare(
     'UPDATE provider_models SET context_window = ? WHERE provider_id = ? AND model_id = ?',
   ).run(contextWindow, providerId, modelId);
+}
+
+/** 预设模型种子写入（幂等；种子行 enabled=true、context_window=NULL 走预设表 resolve） */
+export function seedPresetModels(providerId: string, presetKey: string): void {
+  const preset = getProviderPreset(presetKey);
+  if (!preset) throw new Error(`未知供应商预设: ${presetKey}`);
+  for (const m of preset.models) {
+    upsertProviderModel(providerId, m.id, true);
+  }
+}
+
+/**
+ * 设置模型的思维模式配置（模型级默认，spec §3）。
+ * null=清除（回退 auto）；形状非法在写通道源头拒绝（不让坏值落库）。
+ * effort ∈ 模型 values 的越界钳制在 resolve 层（resolveThinkingConfig）。
+ */
+export function setProviderModelThinking(
+  providerId: string,
+  modelId: string,
+  config: ThinkingConfig | null,
+): void {
+  if (config !== null && !['auto', 'off', 'on'].includes(config.mode)) {
+    throw new Error(`thinking mode 非法: ${String(config.mode)}`);
+  }
+  if (
+    config !== null &&
+    config.mode === 'on' &&
+    typeof config.effort !== 'string' &&
+    config.effort !== null
+  ) {
+    throw new Error('thinking effort 必须是字符串或 null');
+  }
+  const db = getDb();
+  db.prepare(
+    'UPDATE provider_models SET thinking_json = ? WHERE provider_id = ? AND model_id = ?',
+  ).run(config === null ? null : JSON.stringify(config), providerId, modelId);
 }
 
 export function removeProviderModel(providerId: string, modelId: string): void {
