@@ -21,10 +21,21 @@ import {
   readAssignmentDeltas,
 } from './capability-merger';
 import { resolveSkillsDir } from '../paths';
-import { getProvider } from './provider-crud';
+import { getProvider, type ModelProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
-import { lookupModelLimits, type ModelLimits } from '../llm/model-catalog';
+import { logger } from '../logger';
+import {
+  lookupModelLimits,
+  lookupReasoningCapability,
+  type ModelLimits,
+} from '../llm/model-catalog';
+import {
+  getProviderPreset,
+  parseThinkingConfig,
+  type ThinkingRequest,
+  type ThinkingWire,
+} from '../llm/provider-presets';
 import type { AgentDefinition } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-config';
@@ -190,6 +201,61 @@ export async function resolveModelLimits(
 }
 
 /**
+ * 思维配置 resolve（spec 2026-09-09-provider-presets §4，单点定型）：
+ *   生效配置 = agent_definitions.thinking_json → provider_models.thinking_json → auto
+ *   能力词汇表 = 预设模型表 → 正则目录 → none
+ *   方言 = 模型级覆写 → 预设级 → platform 兜底（anthropic→anthropic-budget，openai→effort）
+ * effort 越界在此处钳制回模型 default（warn 单点，请求层不再校验）。
+ */
+export function resolveThinkingConfig(
+  def: AgentDefinition,
+  provider: ModelProvider,
+): ThinkingRequest {
+  const preset = provider.presetKey ? getProviderPreset(provider.presetKey) : null;
+  const presetModel = preset?.models.find((m) => m.id === def.modelName) ?? null;
+  const wire: ThinkingWire =
+    presetModel?.thinkingWire ?? preset?.thinkingWire ??
+    (provider.platform === 'anthropic' ? 'anthropic-budget' : 'effort');
+  const capability =
+    presetModel?.reasoning ?? lookupReasoningCapability(provider.platform, def.modelName);
+
+  const row = getDb()
+    .prepare(
+      'SELECT thinking_json FROM provider_models WHERE provider_id = ? AND model_id = ?',
+    )
+    .get(provider.id, def.modelName) as { thinking_json: string | null } | undefined;
+  // DB 列是 JSON 文本：先安全解析再形状守卫（坏 JSON → null → 回退 auto；
+  // 同 provider-crud safeParseJson 模式，parseThinkingConfig 只吃已解析对象）
+  let modelThinking: unknown = null;
+  if (typeof row?.thinking_json === 'string') {
+    try {
+      modelThinking = JSON.parse(row.thinking_json);
+    } catch {
+      modelThinking = null;
+    }
+  }
+  const cfg =
+    def.thinkingJson ?? parseThinkingConfig(modelThinking) ?? { mode: 'auto' as const, effort: null };
+
+  let effort: string | null = null;
+  if (capability.kind === 'effort' && cfg.mode === 'on') {
+    effort =
+      cfg.effort !== null && capability.values.includes(cfg.effort)
+        ? cfg.effort
+        : capability.default;
+    if (effort !== cfg.effort) {
+      logger.warn('thinking effort 越界，回退模型默认档', {
+        providerId: provider.id,
+        model: def.modelName,
+        effort: cfg.effort,
+        fallback: effort,
+      });
+    }
+  }
+  return { wire, kind: capability.kind, mode: cfg.mode, effort };
+}
+
+/**
  * 构建完整的 AgentRuntimeOpts，供 spawnAgent 使用。
  *
  * v1.3 改造：
@@ -230,6 +296,9 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
   // 窗口元数据（spec 2026-09-09 §2.3）：resolve 链单点解析，随 AGENT_CONFIG 定型
   const limits = await resolveModelLimits(def.modelProviderId, def.modelName);
 
+  // 思维配置（spec §4）：同 resolve 链单点解析，随 AGENT_CONFIG 定型
+  const thinking = resolveThinkingConfig(def, provider);
+
   // 会话快照：dispatch 注入条件 + subAgents（spec §4.7；spawn 时点定型）
   const { isLeader, subAgents } = buildDispatchSnapshot(workspaceId, instanceId);
 
@@ -268,5 +337,7 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // 窗口元数据（null→0=未知）：子进程 auto 阈值压缩的依据，未知则 fail-safe 跳过
     contextWindow: limits?.contextWindow ?? 0,
     outputTokens: limits?.outputTokens ?? 0,
+    // 思维配置（spawn 时快照；mode=auto 请求层不发参数）
+    thinking,
   };
 }
