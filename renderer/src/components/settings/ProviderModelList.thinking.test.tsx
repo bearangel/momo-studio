@@ -84,3 +84,46 @@ describe('模型行思维控件', () => {
     expect((screen.getByLabelText('上下文窗口 glm-4.5-air') as HTMLInputElement).placeholder).toBe('自动');
   });
 });
+
+// 回归：fix 哨兵三态化——已配置模型选「默认」必须真正回显为 auto，不能被 config 覆盖回 on
+describe('默认清除（fix 哨兵冲突）', () => {
+  const configuredModels: ProviderModel[] = [
+    {
+      providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1,
+      contextWindow: 1000000, thinkingJson: { mode: 'on', effort: 'low' },
+      reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' },
+      effectiveWindow: 1000000,
+    },
+  ];
+  let setModelThinking: ReturnType<typeof vi.fn<[], Promise<undefined>>>;
+  beforeEach(() => {
+    setModelThinking = vi.fn(async () => undefined);
+    // 与本文件其余测试一致：替换 window.api 属性而非整个 window（保留 jsdom document）
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      provider: {
+        listModels: async () => configuredModels,
+        setModelEnabled: async () => undefined,
+        removeModel: async () => undefined,
+        addModel: async () => undefined,
+        fetchModels: async () => [],
+        setModelWindow: async () => undefined,
+        setModelThinking,
+      },
+    };
+  });
+  it('已配置模型选「默认」→ select 回 auto + 档位下拉消失 + IPC 收 null', async () => {
+    render(<ProviderModelList providerId="p1" />);
+    const modeSel = await screen.findByLabelText('思维模式 glm-5.3');
+    // 初始：服务端 config 是 {mode:'on', effort:'low'}，UI 应显示「开」+ 档位下拉
+    expect((modeSel as HTMLSelectElement).value).toBe('on');
+    expect(screen.queryByLabelText('思维档位 glm-5.3')).not.toBeNull();
+    // 用户选「默认」(auto) → 提交 null
+    fireEvent.change(modeSel, { target: { value: 'auto' } });
+    await waitFor(() =>
+      expect(setModelThinking).toHaveBeenCalledWith('p1', 'glm-5.3', null),
+    );
+    // 关键断言：UI 真正反映清除（不应被 config 覆盖回 'on'，档位下拉须消失）
+    expect((screen.getByLabelText('思维模式 glm-5.3') as HTMLSelectElement).value).toBe('auto');
+    expect(screen.queryByLabelText('思维档位 glm-5.3')).toBeNull();
+  });
+});

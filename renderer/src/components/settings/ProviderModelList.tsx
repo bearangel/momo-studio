@@ -108,13 +108,15 @@ function ModelThinkingControl({
 }): JSX.Element | null {
   // 乐观本地态：提交即切换 UI（IPC 成功前档位下拉就须出现）；失败回滚；
   // config 引用变化（父级刷新拉回服务端值）时回归服务端真相
-  const [override, setOverride] = useState<ThinkingConfig | null>(null);
+  // 三态哨兵：undefined = 无本地覆盖（显示 config）；null = 已提交「默认」（显示 auto）；
+  // ThinkingConfig = 已提交具体配置。把「无覆盖」与「已提交 null」分开，避免选「默认」被 config 覆盖。
+  const [override, setOverride] = useState<ThinkingConfig | null | undefined>(undefined);
   const [prevConfig, setPrevConfig] = useState(config);
   if (config !== prevConfig) {
     setPrevConfig(config);
-    setOverride(null);
+    setOverride(undefined);
   }
-  const current = override ?? config;
+  const current = override === undefined ? config : override;
   if (capability.kind === 'none') return null;
   const mode = current?.mode ?? 'auto';
   const effort = current?.effort ?? (capability.kind === 'effort' ? capability.default : null);
@@ -124,7 +126,8 @@ function ModelThinkingControl({
     try {
       await ipc.provider.setModelThinking(providerId, modelId, next);
     } catch (err) {
-      setOverride(null);
+      // 回滚到「无覆盖」态——让 UI 跟随服务端 config 而非冻结在用户刚提交的乐观值
+      setOverride(undefined);
       onError(err instanceof Error ? err.message : String(err));
     }
   };
