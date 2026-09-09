@@ -4,9 +4,9 @@
 // 手写静态目录，随版本发布；用户覆盖列（provider_models.context_window /
 // thinking_json）是目录错误时的修正通道。
 //
-// 数字查证：zhipu/deepseek/moonshot/openai/anthropic 五家按 2026-09-09 官方
-// 文档查证（见 spec 附录 A）；dashscope/volcano-ark/gemini/xai/mistral/groq
-// 为保守初值（不带思维能力声明），实施时按 Task 1 Step 4 文档清单复核。
+// 数字查证：全部 15 家已于 2026-09-09 按官方文档复核（zhipu/deepseek/moonshot/
+// openai/anthropic 见 spec 附录 A；xai/gemini/dashscope/volcano-ark/mistral/groq
+// 六家来源与分歧见各条目行内注释）。
 
 /** 思维模式 wire 方言：决定请求体注入格式（spec §5.2 映射表） */
 export type ThinkingWire = 'toggle' | 'toggle-effort' | 'effort' | 'anthropic-budget';
@@ -104,8 +104,10 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://bailian.console.aliyun.com/',
     models: [
-      { id: 'qwen-max', contextWindow: 32_768, outputTokens: 8_192, reasoning: NONE },
-      { id: 'qwen-plus', contextWindow: 131_072, outputTokens: 8_192, reasoning: NONE },
+      // 来源 help.aliyun.com qwen3-max / qwen-plus 模型页。qwen3-max 思考模式输出上限
+      // 32_768，目录按通用档 65_536 记录（用户覆盖列可下修）
+      { id: 'qwen3-max', contextWindow: 262_144, outputTokens: 65_536, reasoning: NONE },
+      { id: 'qwen-plus', contextWindow: 1_000_000, outputTokens: 32_768, reasoning: NONE },
     ],
   },
   {
@@ -113,8 +115,10 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://console.volcengine.com/ark',
     models: [
-      { id: 'doubao-seed-1-6-pro-250815', contextWindow: 256_000, outputTokens: 12_288, reasoning: NONE },
-      { id: 'doubao-seed-1-6-flash-250815', contextWindow: 256_000, outputTokens: 12_288, reasoning: NONE },
+      // 来源 developer.volcengine.com Seed1.6 技术介绍 + 发布文章。两个条目 id
+      // 改为可查证形态：默认输出上限 4K，按最大档 16_384 记录（用户覆盖列可下修）
+      { id: 'doubao-seed-1-6-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE },
+      { id: 'doubao-seed-1-6-flash-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE },
     ],
   },
   // ── 国际直连 ──────────────────────────────────────────────────────────────
@@ -145,8 +149,11 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://aistudio.google.com/apikey',
     models: [
-      { id: 'gemini-3-pro-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: NONE },
-      { id: 'gemini-2.5-flash', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: NONE },
+      // 来源 ai.google.dev/gemini-api/docs/openai + /gemini-3：OpenAI 兼容端点接受
+      // reasoning_effort 并映射 thinking_level。Pro 仅支持 low/high（medium 会被 Pro
+      // 拒绝，Google 论坛官方回复确认）。
+      { id: 'gemini-3.1-pro-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'high'], default: 'high' } },
+      { id: 'gemini-3-flash-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'medium', 'high'], default: 'high' } },
     ],
   },
   {
@@ -154,8 +161,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://console.x.ai',
     models: [
-      { id: 'grok-4', contextWindow: 256_000, outputTokens: 32_768, reasoning: { kind: 'effort', values: ['low', 'high'], default: 'high' } },
-      { id: 'grok-4-fast', contextWindow: 2_000_000, outputTokens: 100_000, reasoning: NONE },
+      // grok-4.6 来源 docs.x.ai/developers/grok-4-6 + release notes：contextWindow 500K；
+      // 官方标注「无文本输出上限」，按上下文窗口档记录 outputTokens=500K
+      { id: 'grok-4.6', contextWindow: 500_000, outputTokens: 500_000, reasoning: { kind: 'effort', values: ['low', 'medium', 'high', 'xhigh'], default: 'high' } },
     ],
   },
   {
@@ -163,8 +171,11 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://console.mistral.ai/api-keys',
     models: [
-      { id: 'mistral-large-latest', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE },
-      { id: 'magistral-medium-latest', contextWindow: 40_000, outputTokens: 8_192, reasoning: NONE },
+      // 来源 Gate.AI Large 3 model card + Sim/FutureAGI 收录，存在分歧取保守值。
+      // Large 3 model card 256K；输出上限各来源不一致，按保守 8K 记录。
+      { id: 'mistral-large-latest', contextWindow: 262_144, outputTokens: 8_192, reasoning: NONE },
+      // magistral-medium 收录 128K；旧版 1.2 为 40K，按最新收录档记录
+      { id: 'magistral-medium-latest', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE },
     ],
   },
   {
@@ -172,8 +183,10 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://console.groq.com/keys',
     models: [
+      // 来源 console.groq.com/docs/models 官方表。llama-3.3-70b 窗口/输出吻合；
+      // openai/gpt-oss-120b MAX COMPLETION 65_536（原 32_768 修正）
       { id: 'llama-3.3-70b-versatile', contextWindow: 131_072, outputTokens: 32_768, reasoning: NONE },
-      { id: 'openai/gpt-oss-120b', contextWindow: 131_072, outputTokens: 32_768, reasoning: NONE },
+      { id: 'openai/gpt-oss-120b', contextWindow: 131_072, outputTokens: 65_536, reasoning: NONE },
     ],
   },
   // ── 聚合 / 本地 ────────────────────────────────────────────────────────────
@@ -203,7 +216,7 @@ export function parseThinkingConfig(raw: unknown): ThinkingConfig | null {
   if (o.mode === 'auto' || o.mode === 'off') return { mode: o.mode, effort: null };
   if (o.mode === 'on') {
     return typeof o.effort === 'string' || o.effort === null
-      ? { mode: 'on', effort: o.effort as string | null }
+      ? { mode: 'on', effort: o.effort }
       : null;
   }
   return null;
