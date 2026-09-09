@@ -110,6 +110,7 @@ beforeEach(() => {
         isDefault: true,
         createdAt: '',
         platform: 'openai' as const,
+        presetKey: null,
       },
     ],
     loading: false,

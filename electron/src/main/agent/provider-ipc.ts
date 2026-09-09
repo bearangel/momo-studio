@@ -10,7 +10,9 @@ import {
   deleteProvider, setDefaultProvider, getProviderApiKey,
   fetchRemoteModels, listProviderModels, upsertProviderModel,
   setProviderModelEnabled, removeProviderModel, setProviderModelWindow,
+  setProviderModelThinking,
 } from './provider-crud';
+import { listProviderPresets } from '../llm/provider-presets';
 
 interface TestConnectionInput { baseUrl: string; apiKey: string; model: string; }
 interface TestConnectionResult { ok: boolean; error?: string; }
@@ -114,6 +116,19 @@ export function registerProviderHandlers(): void {
   ipcMain.handle('provider:removeModel', (_e, id: string, modelId: string) => {
     removeProviderModel(id, modelId);
   });
+
+  // ─── 供应商预设（spec 2026-09-09-provider-presets §6）───────────────────────
+
+  // 预设目录（只读静态数据，无密钥）
+  ipcMain.handle('provider:listPresets', () => listProviderPresets());
+
+  // 模型级思维配置默认；非法形状由 setProviderModelThinking 源头拒绝 → IPC error
+  ipcMain.handle(
+    'provider:setModelThinking',
+    (_e, id: string, modelId: string, config: Parameters<typeof setProviderModelThinking>[2]) => {
+      setProviderModelThinking(id, modelId, config);
+    },
+  );
 
   logger.info('Provider IPC handlers 已注册');
 }

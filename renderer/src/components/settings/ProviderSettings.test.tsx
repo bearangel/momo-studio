@@ -13,8 +13,8 @@ import { useProviderStore } from '../../stores/provider.store';
 import type { ModelProvider } from '../../ipc/types';
 
 const PROVIDERS: ModelProvider[] = [
-  { id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' },
-  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' },
+  { id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai', presetKey: null },
+  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic', presetKey: null },
 ];
 const P1_MODELS = [
   { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1 },

@@ -20,9 +20,12 @@ const listModels = vi.fn();
 const fetchModels = vi.fn();
 const addModel = vi.fn();
 
-/** 构造全量字段 ProviderModel（契约对齐，不写占位符） */
+/** 构造全量字段 ProviderModel（契约对齐，不写占位符）；新三字段取「未配置」真实值 */
 function pm(providerId: string, modelId: string, enabled: boolean): ProviderModel {
-  return { providerId, modelId, enabled, addedAt: 0, contextWindow: null };
+  return {
+    providerId, modelId, enabled, addedAt: 0, contextWindow: null,
+    thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null,
+  };
 }
 
 beforeEach(() => {
@@ -36,8 +39,8 @@ beforeEach(() => {
 
   useProviderStore.setState({
     providers: [
-      { id: 'p1', name: '供应商A', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const },
-      { id: 'p2', name: '供应商B', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' as const },
+      { id: 'p1', name: '供应商A', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const, presetKey: null },
+      { id: 'p2', name: '供应商B', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' as const, presetKey: null },
     ],
     loading: false,
     loadProviders: vi.fn().mockResolvedValue(undefined),

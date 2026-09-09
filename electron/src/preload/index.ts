@@ -105,6 +105,8 @@ const api: ApiSurface = {
     setModelEnabled: (id, modelId, enabled) => invoke('provider:setModelEnabled', id, modelId, enabled),
     setModelWindow: (id, modelId, contextWindow) => invoke('provider:setModelWindow', id, modelId, contextWindow),
     removeModel: (id, modelId) => invoke('provider:removeModel', id, modelId),
+    listPresets: () => invoke('provider:listPresets'),
+    setModelThinking: (id, modelId, config) => invoke('provider:setModelThinking', id, modelId, config),
   },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
