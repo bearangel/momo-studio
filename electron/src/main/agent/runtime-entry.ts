@@ -16,9 +16,17 @@ import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { parseConfig, type RuntimeConfig, type TaskConfig } from './runtime-config';
-import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildCompactSuggestHint, buildMandateHint } from './prompt-hints';
+import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
+import {
+  estimateTokens,
+  estimateConversation,
+  COMPACTION_BUFFER_TOKENS,
+  COMPACTION_KEEP_TOKENS,
+  COMPACTION_MIN_TRIGGER,
+} from './tools/shared/token-estimate';
+import { serializeMessages } from '../compaction/serialize';
 import { getWorkspace } from '../workspace/crud';
 import {
   getVirtualToolDefs,
@@ -77,6 +85,36 @@ export interface RuntimeContext {
 
 let traceEnabled = false;
 
+// ─── 压缩合成条前缀（spec §6.1/§6.2 + Task 4 审查交接） ─────────────────────
+//
+// 三类「role=user 但非真实用户发言」的合成条。两个跳过点共用本清单（防漂移）：
+//   1. head 序列化跳过：主进程已从 DB 读 prior 摘要合并进新摘要——再序列化
+//      这些条目 = prior 双重计入；
+//   2. 尾部选择锚定跳过： mandate 锚点必须是真实用户消息，锚到合成条会把
+//      当前 user 消息误判进可压缩区（切断 mandate 所在轮）。
+const COMPACTION_SYNTHETIC_USER_PREFIXES = [
+  '[此前对话压缩摘要]',   // 主进程 getConversationContext 注入的 prior 摘要（T4）
+  '[历史压缩摘要]',       // 本回合内压缩产出的摘要条
+  '[系统] 上下文已自动压缩', // auto 压缩后的续行合成条（spec §6.2）
+] as const;
+
+/** mandate 锚点/序列化共用的合成条判定：role=user 且 content 命中任一前缀 */
+function isSyntheticUserMessage(m: LLMMessage): boolean {
+  return (
+    m.role === 'user' &&
+    COMPACTION_SYNTHETIC_USER_PREFIXES.some((p) => m.content.startsWith(p))
+  );
+}
+
+/** auto 压缩后的续行合成条全文（spec §6.2 逐字） */
+const AUTO_COMPACT_NOTICE =
+  '[系统] 上下文已自动压缩。若仍有未完成的用户请求步骤请继续；否则输出总结并停下。';
+
+/** runCompaction 的结果：成功携带计数与双态判定（tool result 文案消费） */
+type CompactionRunResult =
+  | { ok: true; beforeCount: number; tailCount: number; mandateGated: boolean; pendingUser: boolean }
+  | { ok: false; error: string };
+
 function trace(event: string, fields?: Record<string, unknown>): void {
   if (!traceEnabled) return;
   const parts = fields
@@ -85,70 +123,18 @@ function trace(event: string, fields?: Record<string, unknown>): void {
   process.stdout.write(`${event}${parts}\n`);
 }
 
-// ─── 压缩 IPC 桥子进程侧（spec §4.4，沿 task-reply pending 模式） ─────────────
+// ─── 压缩 IPC 桥（spec §4.4） ────────────────────────────────────────────────
 //
-// requestCompaction：把头部序列化对话发给主进程 CompactionService，等待按
-// streamSessionId 配对的 compaction:result（10s 超时）。配对键在请求侧单点
-// 生成（randomUUID）并由主进程原样回传——禁止任一跳回收再生成。
-
-/** 单次压缩请求的等待超时（spec §9：IPC 超时 10s 视为失败） */
-export const COMPACTION_REQUEST_TIMEOUT_MS = 10_000;
-
-interface PendingCompaction {
-  resolve: (summary: string) => void;
-  reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-/** 等待中的压缩请求：streamSessionId → pending promise（T5 compact 工具/auto 阈值消费） */
-const pendingCompactions = new Map<string, PendingCompaction>();
-
-/**
- * 请求主进程执行上下文压缩（T5 消费：compact 工具触发器与 auto 阈值路径）。
- * 防竞态：先注册 pending 再发送（dispatch-wait 同款——极快回执不得先于注册到达）。
- */
-export function requestCompaction(
-  sessionId: string,
-  conversation: string,
-  coveredUntil: number,
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    if (!process.send) {
-      reject(new Error('压缩请求不可用：子进程未建立 IPC 通道'));
-      return;
-    }
-    const streamSessionId = randomUUID();
-    const timer = setTimeout(() => {
-      pendingCompactions.delete(streamSessionId);
-      reject(new Error(`压缩请求超时（${COMPACTION_REQUEST_TIMEOUT_MS / 1000}s），请重试`));
-    }, COMPACTION_REQUEST_TIMEOUT_MS);
-    pendingCompactions.set(streamSessionId, { resolve, reject, timer });
-    process.send({ type: 'compaction:request', streamSessionId, sessionId, conversation, coveredUntil });
-  });
-}
-
-/**
- * 消费主进程下发的 compaction:result（runtime-spawner.handleCompactionRequestMsg
- * 回写）：按 streamSessionId 配对 resolve/reject 对应 pending。迟到/未知 id 静默
- * 忽略（超时已 reject 过或并非本进程请求）。
- */
-export function handleCompactionResultIpc(msg: unknown): void {
-  if (typeof msg !== 'object' || msg === null) return;
-  const m = msg as { type?: string; streamSessionId?: unknown; ok?: unknown; summary?: unknown; error?: unknown };
-  if (m.type !== 'compaction:result' || typeof m.streamSessionId !== 'string') return;
-  const pending = pendingCompactions.get(m.streamSessionId);
-  if (!pending) return;
-  clearTimeout(pending.timer);
-  pendingCompactions.delete(m.streamSessionId);
-  if (m.ok === true && typeof m.summary === 'string') {
-    pending.resolve(m.summary);
-  } else {
-    // ok:false 或 ok:true 却缺 summary（线协议破坏）——统一显式报错，绝不静默成功
-    pending.reject(new Error(
-      typeof m.error === 'string' && m.error ? m.error : '压缩失败（主进程未返回错误信息）',
-    ));
-  }
-}
+// 桥实现已迁出至 compaction-ipc.ts（压缩改造 Task 5：requestCompaction 是
+// compact 工具/auto 阈值共用的 IPC 副作用边界，独立模块便于测试在边界 mock）。
+// 此处 re-export 维持既有导入路径（tests/compaction/ipc-bridge.test.ts 经
+// runtime-entry 导入三符号）——不改变任何行为。
+export {
+  requestCompaction,
+  handleCompactionResultIpc,
+  COMPACTION_REQUEST_TIMEOUT_MS,
+} from './compaction-ipc';
+import { requestCompaction, handleCompactionResultIpc } from './compaction-ipc';
 
 async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
@@ -386,6 +372,95 @@ export async function runChatLoop(
       (t) => t.status !== 'completed' && t.source === 'user',
     );
 
+  // ─── 压缩统一执行体（spec §6.1，compact 工具触发与 auto 阈值共用） ──────────
+  /** 单条消息估算成本：content + assistant 工具调用 JSON（与 estimateConversation 同口径） */
+  const messageTokens = (m: LLMMessage): number => {
+    let t = estimateTokens(m.content ?? '');
+    if (m.role === 'assistant' && m.toolCalls) {
+      for (const tc of m.toolCalls) {
+        t += estimateTokens(tc.name) + estimateTokens(JSON.stringify(tc.arguments));
+      }
+    }
+    return t;
+  };
+
+  /**
+   * 执行一次完整压缩流程（spec §6.1 五步）：
+   *   ① 尾部选择：从 messages 末尾向前按 KEEP 预算累计——锚点（最后一条真实
+   *      user 消息，跳过合成条）未覆盖前预算不截断（不得切断当前 user 消息与
+   *      mandate 所在轮），覆盖后超预算即停（保护最近若干轮完整回合 verbatim）
+   *   ② head 序列化（跳过合成摘要条——主进程已读 DB prior，防双重计入）
+   *   ③ requestCompaction IPC 等主进程生成结构化摘要
+   *   ④ 成功：messages = [system, user(摘要+双态尾部指令), ...尾部 verbatim]，
+   *      按 mandate 双态置 wrapUpMode，refreshSystem 重建 mandate 段
+   *   ⑤ 失败：messages 原样不动，返回 ok:false（调用方决定报错/降级）
+   *
+   * head 为空（全部消息落尾部保留预算内）时无物可压，返回 ok:false——
+   * auto 路径自然跳过，工具路径向 LLM 报「无需压缩」。
+   */
+  const runCompaction = async (coveredUntil: number): Promise<CompactionRunResult> => {
+    const body = messages.slice(1); // system（messages[0]）不参与尾部选择，永不压缩
+
+    // mandate 锚点：最后一条真实 user 消息（跳过三类合成条，防锚到摘要条上）
+    let anchorIdx = -1;
+    for (let i = body.length - 1; i >= 0; i--) {
+      if (body[i]!.role === 'user' && !isSyntheticUserMessage(body[i]!)) {
+        anchorIdx = i;
+        break;
+      }
+    }
+
+    let acc = 0;
+    let tailStart = body.length;
+    for (let i = body.length - 1; i >= 0; i--) {
+      const cost = messageTokens(body[i]!);
+      const anchorCovered = anchorIdx < 0 || tailStart <= anchorIdx;
+      // 锚点已覆盖（或本无锚点）且再纳入即超预算 → 停；锚点未覆盖时无条件纳入
+      if (anchorCovered && acc + cost > COMPACTION_KEEP_TOKENS) break;
+      acc += cost;
+      tailStart = i;
+    }
+
+    const head = body.slice(0, tailStart).filter((m) => !isSyntheticUserMessage(m));
+    if (head.length === 0) {
+      return { ok: false, error: '无可压缩的更早历史（当前轮已全部位于尾部保留预算内）' };
+    }
+
+    let summary: string;
+    try {
+      summary = await requestCompaction(roomId, serializeMessages(head), coveredUntil);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 双态判定（沿 turn-mandate spec §5.1）：仅顶层 chat 路径 mandate 门控；
+    // task 域 / dispatch 子路径维持「基于总结继续当前任务」中性语义
+    const mandateGated = parentStreamSessionId == null && !config.currentTaskId;
+    const pendingItems = pendingUserItems();
+    const pendingUser = mandateGated && pendingItems.length > 0;
+    wrapUpMode = mandateGated && !pendingUser;
+
+    const tailDirective = pendingUser
+      ? '[历史已压缩。本轮仍有用户请求的未完成工作，请继续完成]'
+      : mandateGated
+        ? '[本轮用户请求已无未完成项，请输出简短总结后结束本轮，不要开始新工作]'
+        : '[历史已压缩。请基于总结继续当前任务]';
+
+    const beforeCount = messages.length;
+    const tail = body.slice(tailStart);
+    const systemMsg = messages[0]!;
+    messages.length = 0;
+    messages.push(systemMsg);
+    messages.push({
+      role: 'user',
+      content: `[历史压缩摘要]\n${summary}\n\n${tailDirective}`,
+    });
+    messages.push(...tail);
+    // 压缩清空了历史，基于当前 todo 状态重写 system（mandate 段实时，spec §2）
+    refreshSystem();
+    return { ok: true, beforeCount, tailCount: tail.length, mandateGated, pendingUser };
+  };
+
   const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
     role: m.role,
     content: m.content,
@@ -561,13 +636,6 @@ export async function runChatLoop(
       refreshSystem();
     }
 
-    // v1.5.6: 上下文过长时注入 compact 提示（不强制，只提醒 LLM 主动调）
-    // turn-mandate Task 2（spec §5.6 #1）：改为中性化文案，去掉旧版前进祈使句——
-    // 压缩后的续跑/收尾判定由 compact 分支按 mandate 决定（Task 4 改造）。
-    if (messages.length > 30 && round > 0) {
-      messages.push({ role: 'system', content: buildCompactSuggestHint(messages.length) });
-    }
-
     // 会话边界二段修复：静态快照注入的 dispatch:* 剔除，换成当前会话命中成员
     const chatTools: LLMToolDef[] = sessionSubs
       ? [
@@ -575,6 +643,37 @@ export async function runChatLoop(
           ...getDispatchToolDefs(sessionSubs),
         ]
       : ctx.tools.filter((t) => !t.name.startsWith('dispatch:'));
+
+    // ─── auto 阈值自动压缩（spec §6.2，置于每轮 refreshSystem 后） ─────────────
+    //
+    // 窗口未知（0）整体跳过（fail-safe）；收尾模式不重复压缩；task 域
+    // （currentTaskId 非空）跳过（非目标——mandate=task + complete_task 终态
+    // 已足够，仅保留 NL compact 工具路径）。估算对象 = system + 全部 messages
+    // + 工具定义；超阈值即机械执行与 compact 工具相同的压缩流程（不经 LLM 决策）。
+    if (config.contextWindow > 0 && !wrapUpMode && !config.currentTaskId) {
+      const est = estimateConversation({
+        system: messages[0]!.content,
+        messages,
+        tools: chatTools,
+      });
+      if (
+        est > config.contextWindow - Math.max(config.outputTokens, COMPACTION_BUFFER_TOKENS) &&
+        est > COMPACTION_MIN_TRIGGER
+      ) {
+        const autoResult = await runCompaction(Date.now());
+        if (autoResult.ok) {
+          if (autoResult.pendingUser) {
+            // 有 user 挂靠 → 注入续行合成条后继续（工具照常，spec §6.2）
+            messages.push({ role: 'user', content: AUTO_COMPACT_NOTICE });
+          }
+          // 无挂靠 → runCompaction 内已置 wrapUpMode（下一轮无工具，机械收口）
+        } else {
+          // auto 失败不阻塞回合（spec §9）：warn 后按原 messages 继续，下轮再试
+          process.stderr.write(`auto 压缩失败（已跳过，下轮再试）: ${autoResult.error}\n`);
+        }
+      }
+    }
+
     // turn mandate（spec §5.1）：收尾模式不传工具——模型无工具可调只能输出终文，
     // finishReason=stop 机械退出（先例：预算耗尽同样传 undefined）
     const tools = wrapUpMode || budgetRemaining <= 0 ? undefined : chatTools;
@@ -736,52 +835,15 @@ export async function runChatLoop(
         ti++; continue;
       }
 
-      // v1.5.6 compact：LLM 主动压缩上下文。调此工具时把整个对话历史替换为
-      // [system, user(总结+尾部指令)]，chat loop 继续。
-      // 解决长任务多轮对话累积导致 LLM 上下文爆炸 / 失忆问题。
-      // turn mandate（spec §5.1）：仅顶层 chat 路径做双态判定；task 域
-      // （currentTaskId 非空）与 dispatch 子路径（parentStreamSessionId 非空）
-      // 维持「压缩后基于总结处理当前任务」语义，不进收尾。
+      // 压缩改造（spec §6.1）：compact 工具 harness 化——LLM 只声明动机（可选
+      // note），摘要由主进程 CompactionService 结构化链路生成。执行 = 尾部选择
+      // （verbatim 保留近几轮 + mandate 锚点保护）→ head 序列化 → IPC 摘要 →
+      // messages 替换 + 双态续行。失败 tool result 报错可重试、messages 原样。
       if (tc.name === 'compact') {
-        const summary = typeof tc.arguments.summary === 'string' ? tc.arguments.summary : '';
-        if (!summary || summary.length < 50) {
-          // summary 过短拒绝（防 LLM 滥用清空上下文）：要求至少 50 字符覆盖关键信息
-          messages.push({
-            role: 'assistant',
-            content: '',
-            toolCalls: [tc],
-          });
-          messages.push({
-            role: 'tool',
-            content: 'compact 失败：summary 过短（< 50 字符）。请写一份完整的对话总结，覆盖已完成的任务、关键决策、未完成的步骤、重要文件/变量名。最小 200 字符。',
-            toolCallId: tc.id,
-          });
-          toolCallCount++;
-          budgetRemaining--;
-          ti++; continue;
-        }
+        const before = messages.length;
+        const note = typeof tc.arguments.note === 'string' ? tc.arguments.note : '';
+        const result = await runCompaction(Date.now());
 
-        const oldMsgCount = messages.length;
-        // 双态判定（spec §5.1）：mandateGated = 顶层 chat 路径；有用户挂靠的
-        // 未完成 todo → 续跑；无 → 收尾（wrapUpMode 置位，下一轮无工具）。
-        const mandateGated = parentStreamSessionId == null && !config.currentTaskId;
-        const pendingItems = pendingUserItems();
-        const pendingUser = mandateGated && pendingItems.length > 0;
-        wrapUpMode = mandateGated && !pendingUser;
-
-        // 压缩替换消息尾部指令按双态/作用域三选一（spec §5.6 #2）
-        const tailDirective = pendingUser
-          ? '[历史已压缩。本轮仍有用户请求的未完成工作，请继续完成]'
-          : mandateGated
-            ? '[本轮用户请求已无未完成项，请输出简短总结后结束本轮，不要开始新工作]'
-            : '[历史已压缩。请基于总结继续当前任务]';
-        // 重置对话历史：保留 system（messages[0]，mandate 跨压缩存活），其余替换为总结
-        const systemMsg = messages[0]!;
-        messages.length = 0;
-        messages.push(systemMsg);
-        messages.push({ role: 'user', content: `[历史对话总结]\n${summary}\n\n${tailDirective}` });
-
-        // 推 stream chunk 让 renderer 知道发生了 compact（可选 UI 提示）
         sendStreamChunk({
           type: 'tool_call',
           streamSessionId,
@@ -789,32 +851,50 @@ export async function runChatLoop(
           toolName: 'compact',
           args: tc.arguments,
         });
-        sendStreamChunk({
-          type: 'tool_result',
-          streamSessionId,
-          callId: tc.id,
-          toolName: 'compact',
-          result:
-            `上下文已压缩：${oldMsgCount} 条消息 → 1 条总结（${summary.length} 字符）。` +
-            (pendingUser
-              ? `仍有 ${pendingItems.length} 项用户待办，请继续完成。`
-              : mandateGated
-                ? '无用户待办，请输出总结收尾。'
-                : '请基于总结继续当前任务。'),
-          success: true,
-        });
 
-        // 回填 LLM：保留一条 tool result 即可——旧实现在此处追加的第二份前进
-        // 指令消息已删除（spec §5.6 #4：三份指令合并为尾部指令 + 本条回执）
-        messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
-        messages.push({
-          role: 'tool',
-          content: `上下文已压缩（${oldMsgCount} → 2 条消息）。`,
-          toolCallId: tc.id,
-        });
-        // system prompt 重建（含 mandate，spec §2）：压缩清空了 messages[0] 之外的
-        // 全部历史，此处基于当前 todo 状态重写，保证 mandate 段实时
-        refreshSystem();
+        // 双态/作用域三态回执文案（沿 turn-mandate spec §5.6 #3）
+        const stateMsg = result.ok
+          ? result.pendingUser
+            ? `仍有 ${pendingUserItems().length} 项用户待办，请继续完成。`
+            : result.mandateGated
+              ? '无用户待办，请输出总结收尾。'
+              : '请基于总结继续当前任务。'
+          : '';
+
+        if (result.ok) {
+          sendStreamChunk({
+            type: 'tool_result',
+            streamSessionId,
+            callId: tc.id,
+            toolName: 'compact',
+            result: `上下文已压缩：${before} → 1+尾部 ${result.tailCount} 条。${stateMsg}`,
+            success: true,
+          });
+          // 回填 LLM：恰一条 tool result（旧实现的第二份前进指令消息已删，
+          // spec §5.6 #4——指令合并进压缩条尾部指令 + 本条回执）
+          messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
+          messages.push({
+            role: 'tool',
+            content: `上下文已压缩：${before} → 1+尾部 ${result.tailCount} 条消息。${stateMsg}`,
+            toolCallId: tc.id,
+          });
+        } else {
+          // 失败路径（spec §6.1 #5 / §9）：报错可重试，messages 原样不动
+          sendStreamChunk({
+            type: 'tool_result',
+            streamSessionId,
+            callId: tc.id,
+            toolName: 'compact',
+            result: `压缩失败：${result.error}，可重试`,
+            success: false,
+          });
+          messages.push({ role: 'assistant', content: '', toolCalls: [tc] });
+          messages.push({
+            role: 'tool',
+            content: `压缩失败：${result.error}，可重试。消息历史未改动${note ? `（备注：${note}）` : ''}。`,
+            toolCallId: tc.id,
+          });
+        }
         toolCallCount++;
         budgetRemaining--;
         ti++; continue;

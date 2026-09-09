@@ -47,22 +47,9 @@ ${subList}
 5. 子任务相互独立时，在**同一次回复中连续发出多个 dispatch 工具调用**并行执行，不要拆到多轮（多轮 = 串行等待）
 
 **长任务自身管理**：
-- 多轮对话累积时调 \`compact\` 工具压缩上下文（≥200 字符总结）
+- 多轮对话累积时调 \`compact\` 工具压缩上下文（结构化摘要由系统生成，无需你撰写总结）
 - 单段回复超 ~3KB 时调 \`task_complete\` 分段持久化（最多 5 段）
 - 大文件用 \`read_file\` 的 offset/limit 分页读取（默认 2000 行/次）`;
-}
-
-/**
- * >30 条历史时的压缩建议（turn-mandate spec §5.6 #1 / §11-3）：只建议动作，
- * 不内嵌前进指令——压缩后的续跑/收尾由 compact 分支按 mandate 判定
- * （runtime-entry，Task 4 改造）。此处文案须保持中性，避免前进祈使句被
- * LLM 复制到自身计划里导致循环执行。
- */
-export function buildCompactSuggestHint(msgCount: number): string {
-  return (
-    `[系统提示] 对话历史已较长（${msgCount} 条消息）。如影响工作质量，可调用 compact ` +
-    '工具压缩上下文（写一份 ≥200 字符的总结）。压缩后依据本轮授权状态决定继续或收尾。'
-  );
 }
 
 /**

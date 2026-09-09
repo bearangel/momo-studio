@@ -1,21 +1,30 @@
 // electron/tests/agent/copy-neutral.test.ts
 //
-// 文案回归锁（spec §5.6 / §11-3）：锁死中性化关键串，防止回退到「继续工作」类前进祈使句。
+// 文案回归锁（spec §5.6 / §11-3 + 压缩改造 spec §6.3）：锁死中性化关键串，防止
+// 回退到「继续工作」类前进祈使句。
 // 实现侧：prompt-hints.ts / builtin-tools.ts / memory-tools.ts / runtime-entry.ts。
-// 任务 2 范围：仅 8 处文案中的 5 处（#1/#5/#6/#7/#8），#2/#3/#4 属任务 4。
+// 压缩改造 Task 5：>30 压缩建议提示已退役（buildCompactSuggestHint 删除，auto
+// 阈值取代自觉提示）——本锁改为锁定 compact 新工具描述「无需你撰写总结」类
+// 关键串（意图不弱化：LLM 无总结书写义务 + 无前进指令）。
 
 import { describe, it, expect } from 'vitest';
-import { buildCompactSuggestHint, formatDispatchHint } from '../../src/main/agent/prompt-hints';
+import { formatDispatchHint } from '../../src/main/agent/prompt-hints';
 import { getBuiltinLoopToolDefs } from '../../src/main/agent/builtin-tools';
 import { MemoryTools } from '../../src/main/agent/tools/memory-tools';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 
-describe('文案中性化回归锁（spec §5.6 任务 2）', () => {
-  it('>30 条压缩建议不含「继续工作」，含授权状态判定引导', () => {
-    const hint = buildCompactSuggestHint(36);
-    expect(hint).toContain('36');
-    expect(hint).not.toContain('继续工作');
-    expect(hint).toContain('决定继续或收尾');
+describe('文案中性化回归锁（spec §5.6 任务 2 + 压缩改造 §6.3）', () => {
+  it('compact 新描述锁「无需你撰写总结」，schema 无 summary 义务参数', () => {
+    const compact = getBuiltinLoopToolDefs().find((t) => t.name === 'compact')!;
+    // 摘要由专用链路生成——LLM 无总结书写义务（意图不弱化的新锁点）
+    expect(compact.description).toContain('无需你撰写总结');
+    expect(compact.description).toContain('保留最近若干轮原文');
+    expect(compact.description).not.toContain('继续工作');
+    // schema：summary 参数已删，仅剩可选 note（压缩动机备注）
+    const schema = JSON.stringify(compact.inputSchema);
+    expect(compact.inputSchema.properties).toHaveProperty('note');
+    expect(schema).not.toContain('summary');
+    expect(compact.inputSchema.required).toBeUndefined();
   });
 
   it('dispatch 教学限定当前任务语境，不含无条件「不要全部自己做」', () => {
@@ -36,22 +45,13 @@ describe('文案中性化回归锁（spec §5.6 任务 2）', () => {
       isLeader: true,
       devMode: false,
       maxToolCalls: 10,
+      contextWindow: 0,
+      outputTokens: 0,
     };
     const hint = formatDispatchHint(config);
     expect(hint).toContain('当前任务');
     expect(hint).not.toContain('不要全部自己做');
     expect(hint).not.toContain('继续工作');
-  });
-
-  it('compact 描述含两节模板且不含无条件继续指令', () => {
-    const compact = getBuiltinLoopToolDefs().find((t) => t.name === 'compact')!;
-    expect(compact.description).toContain('用户指令');
-    expect(compact.description).toContain('agent 备忘');
-    expect(compact.description).not.toContain('后续工作基于总结继续');
-    expect(compact.description).not.toContain('继续工作');
-    expect(JSON.stringify(compact.inputSchema)).toContain('用户指令');
-    expect(JSON.stringify(compact.inputSchema)).toContain('agent 备忘');
-    expect(JSON.stringify(compact.inputSchema)).not.toContain('继续工作');
   });
 
   it('task_complete 的 nextStep 声明非新任务授权', () => {
