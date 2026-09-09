@@ -26,6 +26,8 @@ interface Props {
   onProviderChange: (id: string) => void;
   onModelChange: (id: string) => void;
   disabled?: boolean;
+  /** 选中模型变化时回传完整模型行（含 reasoning 能力；父组件驱动 ThinkingOverrideControl） */
+  onModelInfo?: (m: ProviderModel | null) => void;
 }
 
 export function ProviderModelPicker({
@@ -34,6 +36,7 @@ export function ProviderModelPicker({
   onProviderChange,
   onModelChange,
   disabled,
+  onModelInfo,
 }: Props) {
   const { providers, loadProviders } = useProviderStore();
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -82,6 +85,11 @@ export function ProviderModelPicker({
   }, [providerId]);
 
   const enabledModels = models.filter((m) => m.enabled);
+
+  // 选中模型信息回调：列表或选择变化时回传（含 reasoning 能力）
+  useEffect(() => {
+    onModelInfo?.(models.find((m) => m.modelId === modelId && m.enabled) ?? null);
+  }, [models, modelId, onModelInfo]);
 
   const handleProviderChange = (id: string): void => {
     onProviderChange(id);

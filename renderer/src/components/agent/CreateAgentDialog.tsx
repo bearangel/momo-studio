@@ -28,6 +28,8 @@ import { Checkbox } from '../ui/Checkbox';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { ProviderModelPicker } from './ProviderModelPicker';
+import { ThinkingOverrideControl } from './ThinkingOverrideControl';
+import type { ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
 interface Props {
   /** 入口来源：agentView=Agent 管理 Tab（创建即加入当前 ws）；library=资源库（仅建全局定义） */
@@ -54,6 +56,8 @@ export function CreateAgentDialog({ source, onClose }: Props) {
   const [prompt, setPrompt] = useState('');
   const [providerId, setProviderId] = useState('');
   const [modelName, setModelName] = useState('');
+  const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
+  const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
   const [preset, setPreset] = useState<ToolPreset>('safe');
   // 「自选」档的勾选集合；初始 = 安全最小集，切档不重置（保留用户微调）
   const [customTools, setCustomTools] = useState<string[]>([...SAFE_MINIMUM_TOOLS]);
@@ -100,6 +104,7 @@ export function CreateAgentDialog({ source, onClose }: Props) {
         scope: 'global',
         modelProviderId: providerId,
         modelName: modelName.trim(),
+        thinkingJson,
         defaultTools: tools.map((ref) => ({ kind: 'builtin' as const, ref })),
       });
       await loadDefinitions(workspace?.id ?? undefined);
@@ -136,7 +141,17 @@ export function CreateAgentDialog({ source, onClose }: Props) {
           providerId={providerId}
           modelId={modelName}
           onProviderChange={setProviderId}
-          onModelChange={setModelName}
+          onModelChange={(id) => {
+            setModelName(id);
+            // 换模型即重置覆盖，防旧模型档位残留（含换供应商联动清空）
+            setThinkingJson(null);
+          }}
+          onModelInfo={(m) => setModelCapability(m?.reasoning ?? null)}
+        />
+        <ThinkingOverrideControl
+          capability={modelCapability}
+          value={thinkingJson}
+          onChange={setThinkingJson}
         />
         <div className="flex flex-col gap-1">
           <label htmlFor="create-agent-prompt" className="text-sm text-secondary">

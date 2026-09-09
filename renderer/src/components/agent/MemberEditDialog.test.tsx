@@ -458,6 +458,8 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
         id: 'def-1',
         modelProviderId: 'p1',
         modelName: 'm2',
+        // 换模型触发覆盖重置（v31：提交对象含 thinkingJson；null=回退模型级）
+        thinkingJson: null,
       });
     });
     // 保存链同时落能力 deltas（顺序保证由实现中 await updateDefinition 先于
