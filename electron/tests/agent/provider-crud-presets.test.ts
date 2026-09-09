@@ -71,6 +71,13 @@ describe('createProvider(presetKey)：种子模型幂等写入', () => {
   it('未知 presetKey 抛错', () => {
     expect(() => seedPresetModels('p-x', 'nope')).toThrow(/未知供应商预设/);
   });
+
+  it('未知 presetKey 在写库前拒绝——不留孤儿行', async () => {
+    await expect(
+      createProvider({ name: 'T', baseUrl: 'https://api.test.com', apiKey: 'k', platform: 'openai', presetKey: 'nope' }),
+    ).rejects.toThrow(/未知供应商预设/);
+    expect((await import('../../src/main/agent/provider-crud')).listProviders()).toHaveLength(0);
+  });
 });
 
 describe('setProviderModelThinking：形状校验与读写往返', () => {

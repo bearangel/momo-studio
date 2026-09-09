@@ -135,6 +135,10 @@ export async function createProvider(input: {
   defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
   presetKey?: string;
 }): Promise<ModelProvider> {
+  // 未知预设 key 在写库前拒绝（否则种子阶段抛错会留下孤儿 provider 行 + keychain 密钥）
+  if (input.presetKey && !getProviderPreset(input.presetKey)) {
+    throw new Error(`未知供应商预设: ${input.presetKey}`);
+  }
   const id = randomUUID();
   const apiKeyRef = providerApiKeyRef(id);
   const db = getDb();
