@@ -148,13 +148,33 @@ export function listMessagesByStreamSessionId(streamSessionId: string): MessageR
   return rows.map(rowToCamel);
 }
 
-export function listMessagesBySession(sessionId: string, opts?: { limit?: number; beforeTs?: number }): MessageRow[] {
+/**
+ * 按会话拉取消息（时间升序）。
+ * opts.afterTs（压缩改造 Task 4，spec §5）：仅拉 created_at 严格大于该值的消息——
+ * 历史收缩游标（covered_until 对应消息算已覆盖不重拉）。与 beforeTs 可组合（区间拉取）。
+ */
+export function listMessagesBySession(
+  sessionId: string,
+  opts?: { limit?: number; beforeTs?: number; afterTs?: number },
+): MessageRow[] {
   const db = getDb();
   const limit = opts?.limit ?? 1000;
-  const beforeTs = opts?.beforeTs;
-  const rows = beforeTs !== undefined
-    ? db.prepare('SELECT * FROM messages WHERE session_id = ? AND created_at < ? ORDER BY created_at ASC LIMIT ?').all(sessionId, beforeTs, limit) as SqlRow[]
-    : db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?').all(sessionId, limit) as SqlRow[];
+  // 动态拼 WHERE：条件与参数同步追加，避免 afterTs × beforeTs 四分支 SQL 重复
+  const conds = ['session_id = ?'];
+  const params: Array<string | number> = [sessionId];
+  if (opts?.afterTs !== undefined) {
+    conds.push('created_at > ?');
+    params.push(opts.afterTs);
+  }
+  if (opts?.beforeTs !== undefined) {
+    conds.push('created_at < ?');
+    params.push(opts.beforeTs);
+  }
+  const rows = db
+    .prepare(
+      `SELECT * FROM messages WHERE ${conds.join(' AND ')} ORDER BY created_at ASC LIMIT ?`,
+    )
+    .all(...params, limit) as SqlRow[];
   return rows.map(rowToCamel);
 }
 

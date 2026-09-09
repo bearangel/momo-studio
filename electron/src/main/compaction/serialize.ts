@@ -12,10 +12,10 @@
 import type { LLMMessage } from '../agent/llm-provider';
 
 /** 单工具结果硬上限（字符数，非字节数）。spec §4.2 + §8 同源。 */
-const TOOL_RESULT_MAX_LEN = 2000;
+export const TOOL_RESULT_MAX_LEN = 2000;
 
 /** 截断后追加的固定标记 */
-const TRUNCATED_MARKER = '[truncated]';
+export const TRUNCATED_MARKER = '[truncated]';
 
 /**
  * 把 LLMMessage 数组序列化为单一字符串，供摘要 prompt 作为 <conversation> 内容。

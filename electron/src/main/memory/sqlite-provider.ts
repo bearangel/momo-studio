@@ -16,7 +16,9 @@ import { getDb } from '../storage/db';
 import { getTask } from '../storage/tasks/repo';
 import {
   listMessagesBySession,
+  type MessageRow,
 } from '../storage/messages/repo';
+import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../compaction/serialize';
 import {
   listEventsByMessage,
   type MessageEventRow,
@@ -133,16 +135,51 @@ export class SQLiteMemoryProvider implements MemoryProvider {
     return { task, events: summaries, artifacts };
   }
 
+  /**
+   * 历史收缩 + 摘要注入 + prune（压缩改造 Task 4，spec §5/§8）：
+   *   - 收缩：存在 session_compactions 行时，covered_until 及更早消息不再拉取
+   *     （created_at 严格大于 covered_until；covered_until 对应消息算已覆盖）
+   *   - 注入：返回 messages 头部插一条 role=user 的压缩摘要（opencode
+   *     summary-as-context 形态——不并入 system，不动 pinnedMem 链）
+   *   - prune：旧轮次超长工具结果截断（见 pruneOldToolResults）
+   * 无 compaction 行 → 现行为完全不变。
+   *
+   * session_compactions 直读表而不 import compaction/service：后者依赖
+   * memory/extraction → memory/index → 本模块，构成静态循环依赖；直读单查询
+   * 与本文件 getPinnedContext 直读 session_summaries 的既有模式一致。
+   */
   async getConversationContext(
     sessionId: string,
     opts?: { limit?: number; beforeTs?: number },
   ): Promise<ConversationContext> {
-    const messages = listMessagesBySession(sessionId, {
+    const compaction = getDb()
+      .prepare(
+        'SELECT summary, covered_until AS coveredUntil FROM session_compactions WHERE session_id = ?',
+      )
+      .get(sessionId) as { summary: string; coveredUntil: number } | undefined;
+
+    const rows = listMessagesBySession(sessionId, {
       limit: opts?.limit,
       beforeTs: opts?.beforeTs,
+      ...(compaction ? { afterTs: compaction.coveredUntil } : {}),
     });
-    const ctx: ContextMessage[] = messages.map((m) => messageToContext(m));
-    return { messages: ctx };
+    const ctx: ContextMessage[] = rows.map((m) => messageToContext(m));
+    // prune 在注入前执行：注入条不参与「最后 user 回合」判定，也永不截断
+    pruneOldToolResults(ctx, rows);
+    if (!compaction) return { messages: ctx };
+    return {
+      messages: [
+        {
+          role: 'user',
+          content: `[此前对话压缩摘要]\n${compaction.summary}`,
+          // 注入条元数据：timestamp 取覆盖游标（摘要覆盖到此为止），sender 沿用
+          // 'owner'（messageToContext 启发式中 user 角色的唯一身份串）
+          timestamp: compaction.coveredUntil,
+          sender: 'owner',
+        },
+        ...ctx,
+      ],
+    };
   }
 
   async getAgentContext(_agentBotId: string): Promise<AgentContext> {
@@ -249,6 +286,38 @@ export class SQLiteMemoryProvider implements MemoryProvider {
  * 本文件与 extraction.ts 共享同一启发式（owner=user / 其余=assistant）。
  * 语义与历史教训见 context-map.ts 注释。
  */
+
+/**
+ * prune 微压缩（spec §8）：旧轮次超长工具结果拉取时截断。
+ *
+ * 落点裁定：provider 拉取层而非 messageToContext——后者被 extraction
+ * fetchLatestWindow 与 /compact 序列化共用，改它会外溢影响两条非目标链路。
+ * 识别裁定：messages 行的工具结果判别列是 eventType（生产写入方与
+ * message_events 同名 'tool_call_result'；ContextMessage 无 tool 角色可依）。
+ *
+ * 「旧轮次」= 除最后一条 user 消息所在回合（含其后全部）外的全部消息；
+ * 无 user 消息时全部视为旧轮次（与 /compact 头部切分语义一致）。
+ * 纯拉取时变换：只改写 ctx 副本的 content，零持久化。
+ * 阈值与标记从 compaction/serialize.ts 共享导入（spec §4.2/§8 同源，防双份漂移）。
+ */
+function pruneOldToolResults(ctx: ContextMessage[], rows: MessageRow[]): void {
+  let lastUserIdx = -1;
+  for (let i = ctx.length - 1; i >= 0; i--) {
+    if (ctx[i]!.role === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const cutoff = lastUserIdx === -1 ? rows.length : lastUserIdx;
+  for (let i = 0; i < cutoff; i++) {
+    if (
+      rows[i]!.eventType === 'tool_call_result' &&
+      ctx[i]!.content.length > TOOL_RESULT_MAX_LEN
+    ) {
+      ctx[i]!.content = `${ctx[i]!.content.slice(0, TOOL_RESULT_MAX_LEN)}\n${TRUNCATED_MARKER}`;
+    }
+  }
+}
 
 /**
  * 把事件 payload 压成一行人类可读摘要。

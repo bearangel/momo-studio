@@ -96,20 +96,24 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
 
 // === runChatLoop steer 注入测试 ===
 
+// 模块级共享 stub：两个 describe 都必须注入（abort 回归 describe 原先漏注，
+// 走默认 SQLiteMemoryProvider 读到宿主真实 ~/.momo-studio/state.db——
+// 库表随迁移版本漂移即炸（压缩改造 Task 4 实证：session_compactions 缺表），
+// 且存在污染真实用户数据的隐患）
+const stubProvider: MemoryProvider = {
+  getTaskContext: async () => null,
+  getConversationContext: async () => ({ messages: [] }),
+  getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
+  getUserContext: async () => ({ preferences: [] }),
+  getWorkspaceContext: async () => null,
+  getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
+  searchMemories: async () => { throw new Error('测试 stub 不落库'); },
+  saveMemory: async () => { throw new Error('测试 stub 不落库'); },
+  deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
+};
+
 describe('runChatLoop steer 注入', () => {
   const originalSend = process.send;
-
-  const stubProvider: MemoryProvider = {
-    getTaskContext: async () => null,
-    getConversationContext: async () => ({ messages: [] }),
-    getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
-    getUserContext: async () => ({ preferences: [] }),
-    getWorkspaceContext: async () => null,
-    getPinnedContext: async () => ({ hint: '', truncatedCount: 0, pinnedIds: [] }),
-    searchMemories: async () => { throw new Error('测试 stub 不落库'); },
-    saveMemory: async () => { throw new Error('测试 stub 不落库'); },
-    deleteMemory: async () => { throw new Error('测试 stub 不落库'); },
-  };
 
   beforeEach(() => {
     sentChunks.length = 0;
@@ -420,6 +424,15 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
 describe('runChatLoop abort 语义回归（v2.3.1 留位，abort 仍正交）', () => {
   // 简单回归：v2.3.1 改动不应改变 abort 路径——
   // 拆到独立 describe 仅为避免上方 message_roll 测试的 beforeEach/afterEach 影响
+
+  beforeEach(() => {
+    vi.mocked(createLLMProvider).mockReset();
+    __setMemoryProviderForTest(stubProvider);
+  });
+
+  afterEach(() => {
+    __resetMemoryProviderForTest();
+  });
 
   it('abort 语义与 steer 正交：abort 消息仍触发 interrupted 收尾', async () => {
     // 第一轮 emit steer + 第二轮 generator 开头 emit abort 后抛
