@@ -26,8 +26,13 @@ import { broadcastLocalMessage } from '../p2p';
 // 「避免直接依赖 agent 模块」不冲突——runtime-registry 对本模块的反向引用仅经
 // router-bootstrap 动态 import，无静态回边。
 import { isSessionRunning } from '../agent/runtime-registry';
-// /compact 摘要生成与落库（spec §5.4）：复用 extraction 的 LLM 解析链与摘要 upsert
-import { resolveSessionLlm, upsertSessionSummary } from '../memory/extraction';
+// /compact 压缩（spec §4.5）：主进程 CompactionService 生成结构化摘要并写
+// session_compactions（covered_until 驱动历史收缩）；序列化复用 T2 纯函数
+import { generateCompaction, upsertSessionCompaction } from '../compaction/service';
+import { serializeMessages } from '../compaction/serialize';
+// messages 行 → LLMMessage 形状的映射单点（sender→role 启发式唯一 owner）
+import { messageToContext } from '../memory/context-map';
+import type { LLMMessage } from '../agent/llm-provider';
 import { detectConflict } from '../task/conflict-detector';
 import { activateMentionedTasks } from '../task/activation';
 import { listTasks, getTask } from '../storage/tasks/repo';
@@ -244,7 +249,8 @@ function pushMessageRow(msg: MessageRow): void {
 const COMPACT_WINDOW = 200;
 
 /**
- * 会话命令入口（spec §5.4）。v1 仅支持 compact。
+ * 会话命令入口（v2.0 spec §5.4；compact 分支按压缩改造 spec §4.5 迁移至
+ * CompactionService）。v1 仅支持 compact。
  * 与 extraction 的差异：显式命令显式反馈——失败 throw，不静默。
  */
 export async function handleSessionCommand(input: {
@@ -262,26 +268,33 @@ export async function handleSessionCommand(input: {
   const history = listRecentMessagesBySession(input.sessionId, COMPACT_WINDOW);
   if (history.length === 0) throw new Error('会话暂无消息，无内容可压缩');
 
-  const llm = await resolveSessionLlm(input.sessionId);
-  if (!llm) throw new Error('未配置可用模型服务（设置 → 模型服务），无法生成压缩摘要');
+  // 尾部保留（spec §4.5）：最近一轮（最后一条 user 消息起）verbatim 排除在序列化
+  // 外——压缩只覆盖头部；无 user 消息的历史全部视为头部
+  let lastUserIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m && m.sender === 'owner') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const head = lastUserIdx === -1 ? history : history.slice(0, lastUserIdx);
+  if (head.length === 0) throw new Error('会话只有最近一轮对话，无更早历史可压缩');
 
-  const transcript = history
-    .map((m) => `${m.sender === 'owner' ? '用户' : m.sender}: ${m.body}`)
-    .join('\n');
-  const res = await llm.chat([
-    {
-      role: 'user',
-      content:
-        '请把以下会话历史压缩为总结，严格分两节输出：\n' +
-        '【用户指令】用户明确提出、尚未完成的要求（无则写「无」）\n' +
-        '【agent 备忘】其他值得保留的上下文（标注：非用户指令）\n\n' +
-        `会话历史：\n${transcript}`,
-    },
-  ]);
-  const summary = res.content.trim();
-  if (!summary) throw new Error('压缩摘要生成为空，请重试');
+  // 映射只产 user/assistant 形态（messageToContext 启发式；T2 审查注记：serialize
+  // 对 system 会输出 [系统]: 行——DB 历史映射不引入 system 角色）
+  const conversation = serializeMessages(
+    head.map((m): LLMMessage => {
+      const cm = messageToContext(m);
+      return { role: cm.role, content: cm.content };
+    }),
+  );
 
-  upsertSessionSummary(input.sessionId, summary, Date.now());
+  const { summary } = await generateCompaction({ sessionId: input.sessionId, conversation });
+
+  // covered_until = 最后一条被覆盖消息（头部末条）的 createdAt（spec §4.5；
+  // head 非空已由上方 throw 保证）
+  upsertSessionCompaction(input.sessionId, summary, head[head.length - 1]!.createdAt);
 
   const ack = insertMessage({
     sessionId: input.sessionId,

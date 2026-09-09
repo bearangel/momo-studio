@@ -22,6 +22,7 @@ import { insertToolCall } from '../audit/insert';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
 import type { McpToolInfo } from '../mcp/types';
+import { generateCompaction, upsertSessionCompaction, type CompactionResultMsg } from '../compaction/service';
 
 import type { AgentRuntimeOpts } from './runtime-config';
 
@@ -94,6 +95,59 @@ function throwableText(err: unknown): string {
 }
 
 /**
+ * 子进程 compaction:request 消息的宽松形状（runtime-entry.requestCompaction 定型
+ * 的线协议，spec §4.4）。coveredUntil 可能经 IPC 类型漂移为字符串，消费侧收敛。
+ */
+interface CompactionRequestChildMsg {
+  type?: string;
+  streamSessionId?: unknown;
+  sessionId?: unknown;
+  conversation?: unknown;
+  coveredUntil?: unknown;
+}
+
+/**
+ * 消费子进程 compaction:request（spec §4.4 主进程侧分支）：
+ *   generateCompaction 成功 → upsertSessionCompaction（covered_until 用请求自带值）
+ *   → 回写 { type:'compaction:result', ok:true, summary }；异常回写 ok:false + error。
+ *
+ * 独立导出（respond 注入）而非内联在 messageHandler——契约测试不经真实 fork
+ * 直接锁线协议两端形状。返回 false 表示消息不属于本分支（messageHandler 继续
+ * 走后续 chunk 转发路径）。
+ */
+export async function handleCompactionRequestMsg(
+  msg: unknown,
+  respond: (payload: CompactionResultMsg) => void,
+): Promise<boolean> {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as CompactionRequestChildMsg;
+  if (m.type !== 'compaction:request') return false;
+  const streamSessionId = m.streamSessionId;
+  const sessionId = m.sessionId;
+  // 配对键/落库键缺失即线协议破坏——无法回写结果（无 streamSessionId 可寻址），
+  // 与 mcp 分支「id 非字符串无法配对即忽略」同款处置；子进程 10s 超时兜底
+  if (typeof streamSessionId !== 'string' || typeof sessionId !== 'string') return false;
+
+  const rawCovered = Number(m.coveredUntil);
+  const coveredUntil = Number.isFinite(rawCovered) ? Math.trunc(rawCovered) : Date.now();
+  const conversation = typeof m.conversation === 'string' ? m.conversation : String(m.conversation ?? '');
+
+  try {
+    const { summary } = await generateCompaction({ sessionId, conversation });
+    upsertSessionCompaction(sessionId, summary, coveredUntil);
+    respond({ type: 'compaction:result', streamSessionId, ok: true, summary });
+  } catch (err) {
+    respond({
+      type: 'compaction:result',
+      streamSessionId,
+      ok: false,
+      error: throwableText(err),
+    });
+  }
+  return true;
+}
+
+/**
  * 惰性启动（或复用）workspace 进程池内的指定 MCP server。task-driven 路径没有
  * v1 的 eager 预启动环节（池为空时 listMcpTools/callMcpTool 直接抛「未启动」），
  * 响应 mcp 请求前先按 mcp_definitions 定义拉起；已在池中且连接存活时
@@ -128,6 +182,15 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       child.send(payload);
     } catch {
       // 通道已关闭，无法回写
+    }
+  };
+
+  // 压缩结果回写（同款通道关闭防御；spec §4.4）
+  const sendCompactionResult = (payload: CompactionResultMsg): void => {
+    try {
+      child.send(payload);
+    } catch {
+      // 通道已关闭，无法回写——子进程 10s 超时兜底
     }
   };
 
@@ -166,6 +229,12 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
           error: throwableText(err),
         });
       }
+      return;
+    }
+    // 压缩桥（spec §4.4）：子进程 requestCompaction 的 compaction:request——
+    // 主进程 CompactionService 生成结构化摘要并落库后回写配对结果
+    if (m.type === 'compaction:request') {
+      await handleCompactionRequestMsg(m, sendCompactionResult);
       return;
     }
     // MCP 桥（P2 Task 9）：子进程 mcp-bridge.ts 的工具发现/调用请求，复用

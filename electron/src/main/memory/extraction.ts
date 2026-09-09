@@ -48,8 +48,9 @@ const OVERLAP_LEN = 20;
 const AUTO_CONFIDITY = 0.7;
 /** 单条消息正文在 prompt 中的截断上限：防止 50×大消息打爆 LLM 上下文 */
 const TRANSCRIPT_LINE_MAX = 1000;
-/** session_summary 文本上限：spec §6.4 要求「200 字以内」；此处 500 为防 LLM 异常超长输出的安全硬帽 */
-const SUMMARY_MAX_LEN = 500;
+/** session_summary 文本上限：spec §6.4 要求「200 字以内」；此处 500 为防 LLM 异常超长输出的安全硬帽。
+ *  压缩改造（spec §4.3）起与 compaction/service 共用——结构化摘要同样以此值为落库硬帽 */
+export const SUMMARY_MAX_LEN = 500;
 
 /** 模块级去抖表：sessionId → 上次成功启动提取的时间戳（毫秒） */
 const lastRunAtBySession = new Map<string, number>();
