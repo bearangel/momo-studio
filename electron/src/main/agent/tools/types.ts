@@ -33,8 +33,8 @@ export interface ToolContext {
   abortSignal?: AbortSignal;
   /**
    * v2.3 Read-before-Edit：维护 streamSession 维度已读取文件集合。
-   * 文件写工具（edit_file / apply_patch）写盘前必须 assertRead；可选（向后兼容，
-   * 未注入时 file-tools 自行构造一个本地 ReadTracker）。
+   * 文件写工具（edit_file / write_file 覆盖场景）写盘前必须 assertRead；
+   * 可选——未注入时跳过守门（向后兼容旧调用方）。
    */
   readTracker?: ReadTracker;
 }

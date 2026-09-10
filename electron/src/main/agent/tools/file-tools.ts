@@ -13,10 +13,10 @@
 //     对此模块的直接调用。
 
 import fs from 'node:fs';
-import type { WorkspaceFS } from '../../files/workspace-fs';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
+import { formatEditError } from './shared/edit-recovery';
 
 /** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
 export function getFileToolDefs(): LLMToolDef[] {
@@ -122,15 +122,17 @@ export function getFileToolDefs(): LLMToolDef[] {
  *
  * @param toolName 工具名（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists）
  * @param args LLM 返回的已解析参数对象
- * @param wsFs workspace 文件系统实例（提供路径沙箱）
+ * @param ctx 工具执行上下文（v2.3 起接 ctx 而非 wsFs：Read-before-Edit 守门需要
+ *   ctx.readTracker 与 ctx.streamSessionId / ctx.parentStreamSessionId）
  * @returns 工具执行结果，序列化为字符串（回传给 LLM 作为 tool result）
- * @throws 路径越界 / IO 失败 / 未知工具时抛错，由调用方转成 tool result 文本
+ * @throws 路径越界 / IO 失败 / 未知工具 / Read-before-Edit 守门未读时抛错，由调用方转成 tool result 文本
  */
 export async function executeFileTool(
   toolName: string,
   args: Record<string, unknown>,
-  wsFs: WorkspaceFS,
+  ctx: ToolContext,
 ): Promise<string> {
+  const wsFs = ctx.wsFs;
   switch (toolName) {
     case 'read_file': {
       const filePath = parseStringArg(args.path, 'path');
@@ -145,6 +147,8 @@ export async function executeFileTool(
       const effectiveLimit = Math.min(limit, 5000);
 
       const content = await wsFs.readFile(filePath);
+      // v2.3 Read-before-Edit：read 成功即标记已读（后续 edit_file / write_file 守门依据）
+      ctx.readTracker?.add(ctx.streamSessionId, filePath);
       const text = content.toString('utf-8');
       const allLines = text.split('\n');
       const totalLines = allLines.length;
@@ -172,7 +176,14 @@ export async function executeFileTool(
     case 'write_file': {
       const filePath = parseStringArg(args.path, 'path');
       const content = parseStringArg(args.content, 'content');
+      const abs = wsFs.assertInWorkspace(filePath);
+      // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免
+      if (fs.existsSync(abs)) {
+        ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, filePath);
+      }
       await wsFs.writeFile(filePath, content);
+      // 写入成功后标记已读（让后续 edit_file 通过守门）
+      ctx.readTracker?.add(ctx.streamSessionId, filePath);
       return `文件已写入: ${filePath}`;
     }
     case 'list_files': {
@@ -192,18 +203,22 @@ export async function executeFileTool(
       const abs = wsFs.assertInWorkspace(filePath);
       if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
 
+      // v2.3 Read-before-Edit：强阻塞守门
+      ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, filePath);
+
       const original = await fs.promises.readFile(abs, 'utf-8');
       const firstIdx = original.indexOf(oldStr);
       if (firstIdx === -1) {
-        const preview = original.slice(0, 500);
-        throw new Error(`oldString 未在文件中找到。文件开头 500 字符:\n${preview}`);
+        // v2.3 失败信息增强：formatEditError 含原文 5KB 快照 + 首次不一致行号 + read_file 建议
+        throw formatEditError('not_found', filePath, oldStr, original);
       }
       const lastIdx = original.lastIndexOf(oldStr);
       if (firstIdx !== lastIdx) {
-        throw new Error(`oldString 在文件中出现多次（${original.split(oldStr).length - 1} 处），请提供更长上下文以唯一定位`);
+        const count = original.split(oldStr).length - 1;
+        throw formatEditError('not_unique', filePath, oldStr, original, count);
       }
 
-      const updated = original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length);
+      const updated = original.slice(0, firstIdx) + newStr + original.slice(lastIdx + oldStr.length);
       await fs.promises.writeFile(abs, updated, 'utf-8');
 
       const beforeLines = original.slice(0, firstIdx).split('\n');
@@ -238,7 +253,7 @@ export async function executeFileTool(
 /**
  * 文件工具模块——v1.5 ToolModule 接口实现。
  * Task 5 会通过 tools/index.ts 的 buildToolRegistry() 注册到注册中心；
- * 注册中心路由 execute 时把 ToolContext 注入，此处只需取 wsFs。
+ * v2.3 起直接透传 ctx（Read-before-Edit 守门依赖 ctx.readTracker）。
  */
 export class FileTools implements ToolModule {
   getDefs(): LLMToolDef[] {
@@ -250,6 +265,6 @@ export class FileTools implements ToolModule {
   }
 
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
-    return executeFileTool(name, args, ctx.wsFs);
+    return executeFileTool(name, args, ctx);
   }
 }
