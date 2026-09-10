@@ -147,8 +147,9 @@ export async function executeFileTool(
       const effectiveLimit = Math.min(limit, 5000);
 
       const content = await wsFs.readFile(filePath);
-      // v2.3 Read-before-Edit：read 成功即标记已读（后续 edit_file / write_file 守门依据）
-      ctx.readTracker?.add(ctx.streamSessionId, filePath);
+      // v2.3 Read-before-Edit：read 成功即标记已读（后续 edit_file / write_file 守门依据）。
+      // 键用 assertInWorkspace 归一化的绝对路径——'./a.ts' 与 'a.ts' 等价（review M4）
+      ctx.readTracker?.add(ctx.streamSessionId, wsFs.assertInWorkspace(filePath));
       const text = content.toString('utf-8');
       const allLines = text.split('\n');
       const totalLines = allLines.length;
@@ -177,13 +178,14 @@ export async function executeFileTool(
       const filePath = parseStringArg(args.path, 'path');
       const content = parseStringArg(args.content, 'content');
       const abs = wsFs.assertInWorkspace(filePath);
-      // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免
+      // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
+      // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
       if (fs.existsSync(abs)) {
-        ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, filePath);
+        ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
       }
       await wsFs.writeFile(filePath, content);
       // 写入成功后标记已读（让后续 edit_file 通过守门）
-      ctx.readTracker?.add(ctx.streamSessionId, filePath);
+      ctx.readTracker?.add(ctx.streamSessionId, abs);
       return `文件已写入: ${filePath}`;
     }
     case 'list_files': {
@@ -203,8 +205,8 @@ export async function executeFileTool(
       const abs = wsFs.assertInWorkspace(filePath);
       if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
 
-      // v2.3 Read-before-Edit：强阻塞守门
-      ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, filePath);
+      // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）
+      ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
 
       const original = await fs.promises.readFile(abs, 'utf-8');
       const firstIdx = original.indexOf(oldStr);

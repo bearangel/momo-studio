@@ -35,6 +35,7 @@ import {
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
 import type { ToolModule, ToolContext } from './tools/types';
+import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
@@ -84,6 +85,13 @@ export interface RuntimeContext {
 }
 
 let traceEnabled = false;
+
+// v2.3 Read-before-Edit：进程级 ReadTracker 单例。
+// task-driven runtime = 一任务一进程（WarmPool.release 也是销毁不复用），进程退出即
+// 生命周期终点，故无需 clear()。buildRuntimeContext 与 doExecuteTool 两处 ctx 组装点
+// 共用此实例，保证 read 标记（read_file）与守门判定（edit_file / write_file）落在
+// 同一存储上——此前两处均未注入，可选链静默失效导致守门在生产 no-op（终审 C1）。
+const readTracker = new ReadTracker();
 
 // ─── 压缩合成条前缀（spec §6.1/§6.2 + Task 4 审查交接） ─────────────────────
 //
@@ -232,6 +240,8 @@ ${skillIndex}`
     permissionConfig: { allowedTools: config.allowedTools, deniedTools: config.deniedTools },
     // v2.3 任务工具注入：creatorUserId 从 workspaces.owner_id 派生，LLM 不可覆盖
     creatorUserId: getWorkspace(config.workspaceId)?.ownerId ?? 'unknown',
+    // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
+    readTracker,
   });
 
   const tools: LLMToolDef[] = [
@@ -1359,6 +1369,8 @@ export async function doExecuteTool(
       creatorUserId: ctx.creatorUserId,
       // v1.5.1：长任务工具（bash/webfetch）监听此 signal，停止按钮立即生效
       abortSignal: ctx.abortSignal,
+      // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
+      readTracker,
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }

@@ -162,6 +162,38 @@ describe('execute — 沙箱协同', () => {
   });
 });
 
+describe('execute — Add File 目标已存在守卫（回滚洞修复，终审 I1）', () => {
+  it('Add 目标已存在：拒绝并报"已存在"，原文件内容不变', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'exists.ts'), 'original content');
+    const patch = `*** Add File: exists.ts
++overwritten
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/已存在.*Update File/);
+    // 关键断言：原文件未被覆盖
+    expect(fs.readFileSync(path.join(tmpDir, 'exists.ts'), 'utf-8')).toBe('original content');
+  });
+
+  it('多 op patch 中任一 Add 目标已存在：验证阶段整体拒绝，先前的 add 未执行（无部分状态）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'dup.ts'), 'original');
+    fs.writeFileSync(path.join(tmpDir, 'other.ts'), 'keep\n');
+    const patch = `*** Add File: brand-new.ts
++x
+*** Add File: dup.ts
++y
+*** Update File: other.ts
+@@ keep
+-keep
++changed
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/已存在/);
+    // 验证阶段拦截 → 排在 dup.ts 之前的 brand-new.ts 也未被创建（无部分状态）
+    expect(fs.existsSync(path.join(tmpDir, 'brand-new.ts'))).toBe(false);
+    // other.ts 未被 update 触碰
+    expect(fs.readFileSync(path.join(tmpDir, 'other.ts'), 'utf-8')).toBe('keep\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'dup.ts'), 'utf-8')).toBe('original');
+  });
+});
+
 describe('execute — 错误信息', () => {
   it('parser 错误透传给 LLM', async () => {
     const badPatch = '*** Unknown Op: foo\n';

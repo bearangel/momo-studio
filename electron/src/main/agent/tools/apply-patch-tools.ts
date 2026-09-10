@@ -44,9 +44,15 @@ export class ApplyPatchTools implements ToolModule {
 async function executePatch(patchText: string, ctx: ToolContext): Promise<string> {
   const ast = parsePatch(patchText);
 
-  // 1. 路径校验：所有 op 路径走 assertInWorkspace
+  // 1. 路径校验：所有 op 路径走 assertInWorkspace；
+  //    Add File 目标已存在 → 整个 patch 拒绝（V4A 语义，对齐 Codex：Add 只创建新文件）。
+  //    必须在执行阶段之前拦截——否则 add-overwrite 成功后若后续 op 失败，回滚的
+  //    addedFiles 清理会删掉被覆盖的原文件且无备份（终审 I1 回滚洞）
   for (const op of ast.ops) {
-    ctx.wsFs.assertInWorkspace(op.path);
+    const abs = ctx.wsFs.assertInWorkspace(op.path);
+    if (op.kind === 'add' && fs.existsSync(abs)) {
+      throw new Error(`apply_patch 失败: Add File 目标已存在: ${op.path}（如需修改请用 Update File）`);
+    }
   }
 
   // 2. 快照受影响文件到 Electron userData/apply-patch-tmp/<uuid>/
