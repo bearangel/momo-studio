@@ -234,6 +234,20 @@ describe('installBwrapViaPkexec', () => {
     expect(fail.ok).toBe(false);
     expect(fail.output).toBe('安装失败');
   });
+
+  it('回归锁：装包缺省 runner 用 120s 超时，不复用探测的 2s defaultRunner（防 review Finding P0）', () => {
+    // 不真跑 120s——读源码 ipc.handlers.ts 锁定 120_000 超时常量，且断言 defaultRunner（2s）未被引用。
+    // 这是 review Finding 的根因防护：probe.ts defaultRunner 是 2s（bwrap --version 毫秒级探测），
+    // 装包（polkit 密码弹窗 + 包下载）秒~分钟级，复用必然 SIGKILL。
+    const fs = require('node:fs') as typeof import('node:fs');
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../src/main/sandbox/ipc.handlers.ts'),
+      'utf-8',
+    );
+    expect(src).toMatch(/120_000/);
+    // 防止某天有人把 defaultRunner 重新塞回缺省——确保两个语义不再合并。
+    expect(src).not.toMatch(/runner:\s*CmdRunner\s*=\s*defaultRunner/);
+  });
 });
 
 describe('sandbox:reprobe', () => {
