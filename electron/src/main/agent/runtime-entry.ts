@@ -323,6 +323,8 @@ export async function runChatLoop(
     // undefined 时 createLLMProvider 退回到 baseUrl 启发式（v1.3 兼容路径）。
     { model: config.modelName, baseUrl: config.modelBaseUrl, ...(config.modelPlatform ? { provider: config.modelPlatform } : {}) },
     config.llmApiKey,
+    // 供应商预设：思维配置随 AGENT_CONFIG 定型（缺省 = 不发参数）
+    config.thinking ? { thinking: config.thinking } : undefined,
   );
 
   const budgetHint = formatBudgetHint(config.maxToolCalls);

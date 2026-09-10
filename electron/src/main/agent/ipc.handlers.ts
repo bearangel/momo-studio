@@ -56,6 +56,7 @@ import {
   type AssignmentDeltas,
 } from './assignment-capabilities';
 import type { WorkspaceAgentMember, AgentDefinition } from './types';
+import type { ThinkingConfig } from '../llm/provider-presets';
 
 /** agent:addMember 入参（v25 spec §5：AddMemberInput；无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */
 export interface AddMemberInput {
@@ -153,6 +154,8 @@ export function registerAgentHandlers(): void {
       defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
+      /** v31：agent 级思维模式覆盖；缺省/null=继承模型级 */
+      thinkingJson?: ThinkingConfig | null;
     }) => {
       const workspaceId = input.scope === 'workspace'
         ? input.workspaceId ?? null
@@ -182,6 +185,8 @@ export function registerAgentHandlers(): void {
       defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
+      /** v31：undefined=不改；null=清除（继承模型级）；传值=覆盖 */
+      thinkingJson?: ThinkingConfig | null;
     }) => {
       // v25 定义全局化：scope/workspaceId 不再持久化（列已 DROP），仅接收不消费
       const updated = updateAgentDefinition({
@@ -195,6 +200,7 @@ export function registerAgentHandlers(): void {
         defaultTools: input.defaultTools,
         defaultMcps: input.defaultMcps,
         defaultSkills: input.defaultSkills,
+        thinkingJson: input.thinkingJson,
       });
       const stopped = await stopRunningInstancesByDefinition(input.id);
       if (stopped.length > 0) {

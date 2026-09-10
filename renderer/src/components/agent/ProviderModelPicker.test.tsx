@@ -20,9 +20,12 @@ const listModels = vi.fn();
 const fetchModels = vi.fn();
 const addModel = vi.fn();
 
-/** 构造全量字段 ProviderModel（契约对齐，不写占位符） */
+/** 构造全量字段 ProviderModel（契约对齐，不写占位符）；新三字段取「未配置」真实值 */
 function pm(providerId: string, modelId: string, enabled: boolean): ProviderModel {
-  return { providerId, modelId, enabled, addedAt: 0, contextWindow: null };
+  return {
+    providerId, modelId, enabled, addedAt: 0, contextWindow: null,
+    thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null,
+  };
 }
 
 beforeEach(() => {
@@ -36,8 +39,8 @@ beforeEach(() => {
 
   useProviderStore.setState({
     providers: [
-      { id: 'p1', name: '供应商A', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const },
-      { id: 'p2', name: '供应商B', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' as const },
+      { id: 'p1', name: '供应商A', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const, presetKey: null },
+      { id: 'p2', name: '供应商B', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' as const, presetKey: null },
     ],
     loading: false,
     loadProviders: vi.fn().mockResolvedValue(undefined),
@@ -255,5 +258,53 @@ describe('ProviderModelPicker — 缓存', () => {
     });
     // p1 只在首次挂载调过一次
     expect(listModels.mock.calls.filter((c) => c[0] === 'p1')).toHaveLength(1);
+  });
+});
+
+describe('ProviderModelPicker — onModelInfo（v31 契约：驱动 ThinkingOverrideControl）', () => {
+  it('列表加载/选模型时回传选中模型行（含 reasoning）；未选回传 null', async () => {
+    const onModelInfo = vi.fn();
+    const effort = { kind: 'effort' as const, values: ['low', 'high'], default: 'high' };
+    listModels.mockResolvedValue([{ ...pm('p1', 'm-on', true), reasoning: effort }]);
+    function Harness() {
+      const [modelId, setModelId] = useState('');
+      return (
+        <ProviderModelPicker
+          providerId="p1"
+          modelId={modelId}
+          onProviderChange={() => {}}
+          onModelChange={setModelId}
+          onModelInfo={onModelInfo}
+        />
+      );
+    }
+    render(<Harness />);
+    // 列表到达但未选模型 → null
+    await screen.findByRole('option', { name: 'm-on' });
+    expect(onModelInfo).toHaveBeenLastCalledWith(null);
+    // 选中模型 → 回传完整模型行（含 reasoning 能力）
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'm-on' } });
+    expect(onModelInfo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ modelId: 'm-on', enabled: true, reasoning: effort }),
+    );
+  });
+
+  it('选中模型 disabled → 回传 null（enabled 才回传，非仅显示过滤）', async () => {
+    const onModelInfo = vi.fn();
+    listModels.mockResolvedValue([pm('p1', 'm-disabled', false)]);
+    function Harness() {
+      return (
+        <ProviderModelPicker
+          providerId="p1"
+          modelId="m-disabled"
+          onProviderChange={() => {}}
+          onModelChange={() => {}}
+          onModelInfo={onModelInfo}
+        />
+      );
+    }
+    render(<Harness />);
+    await screen.findByText('该供应商暂无模型');
+    expect(onModelInfo).toHaveBeenLastCalledWith(null);
   });
 });

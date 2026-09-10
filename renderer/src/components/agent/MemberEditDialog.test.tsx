@@ -84,8 +84,8 @@ beforeEach(() => {
 
   useProviderStore.setState({
     providers: [
-      { id: 'p1', name: 'P1', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const },
-      { id: 'p2', name: 'P2', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'openai' as const },
+      { id: 'p1', name: 'P1', baseUrl: 'https://a', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' as const, presetKey: null },
+      { id: 'p2', name: 'P2', baseUrl: 'https://b', defaultModel: null, isDefault: false, createdAt: '', platform: 'openai' as const, presetKey: null },
     ],
     loading: false,
     loadProviders: vi.fn().mockResolvedValue(undefined),
@@ -458,6 +458,8 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
         id: 'def-1',
         modelProviderId: 'p1',
         modelName: 'm2',
+        // 换模型触发覆盖重置（v31：提交对象含 thinkingJson；null=回退模型级）
+        thinkingJson: null,
       });
     });
     // 保存链同时落能力 deltas（顺序保证由实现中 await updateDefinition 先于

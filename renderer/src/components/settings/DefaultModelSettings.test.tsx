@@ -17,19 +17,19 @@ import type { GlobalSettings, ModelProvider, ProviderModel } from '../../ipc/typ
 
 const P1: ModelProvider = {
   id: 'p1', name: '智谱 AI', baseUrl: 'https://a.example.com/v1',
-  defaultModel: null, isDefault: true, createdAt: '', platform: 'openai',
+  defaultModel: null, isDefault: true, createdAt: '', platform: 'openai', presetKey: null,
 };
 const P2: ModelProvider = {
   id: 'p2', name: 'DeepSeek', baseUrl: 'https://b.example.com',
-  defaultModel: null, isDefault: false, createdAt: '', platform: 'openai',
+  defaultModel: null, isDefault: false, createdAt: '', platform: 'openai', presetKey: null,
 };
 const P1_MODELS: ProviderModel[] = [
-  { providerId: 'p1', modelId: 'glm-4.7', enabled: true, addedAt: 1, contextWindow: null },
-  { providerId: 'p1', modelId: 'glm-4.7-flash', enabled: true, addedAt: 2, contextWindow: null },
-  { providerId: 'p1', modelId: 'glm-4.7-disabled', enabled: false, addedAt: 3, contextWindow: null },
+  { providerId: 'p1', modelId: 'glm-4.7', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
+  { providerId: 'p1', modelId: 'glm-4.7-flash', enabled: true, addedAt: 2, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
+  { providerId: 'p1', modelId: 'glm-4.7-disabled', enabled: false, addedAt: 3, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
 ];
 const P2_MODELS: ProviderModel[] = [
-  { providerId: 'p2', modelId: 'deepseek-chat', enabled: true, addedAt: 1, contextWindow: null },
+  { providerId: 'p2', modelId: 'deepseek-chat', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
 ];
 
 const listMock = vi.fn();

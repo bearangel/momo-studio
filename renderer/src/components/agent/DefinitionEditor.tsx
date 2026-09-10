@@ -21,9 +21,10 @@ import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import { ProviderModelPicker } from './ProviderModelPicker';
+import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
 import { defToCapabilities } from '../../lib/capability-helpers';
-import type { AgentDefinition } from '../../ipc/types';
+import type { AgentDefinition, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
 interface Props {
   mode: 'create' | 'edit' | 'configure';
@@ -44,6 +45,8 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const [iconEmoji, setIconEmoji] = useState('🤖');
   const [providerId, setProviderId] = useState('');
   const [modelName, setModelName] = useState('');
+  const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
+  const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
   // create 模式默认 = SAFE_MINIMUM_TOOLS；edit/configure 模式从 def.defaultTools/Mcps/Skills 加载
   const [capabilities, setCapabilities] = useState<Capabilities>(
     mode === 'create'
@@ -63,6 +66,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setIconEmoji(def.iconEmoji);
       setProviderId(def.modelProviderId ?? '');
       setModelName(def.modelName);
+      setThinkingJson(def.thinkingJson ?? null);
       setCapabilities(defToCapabilities(def));
     }
   }, [def, mode]);
@@ -96,6 +100,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           scope: 'global',
           modelProviderId: providerId,
           modelName: modelName.trim(),
+          thinkingJson,
           defaultTools,
           defaultMcps,
           defaultSkills,
@@ -108,6 +113,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           iconEmoji,
           modelProviderId: providerId,
           modelName: modelName.trim(),
+          thinkingJson,
           defaultTools,
           defaultMcps,
           defaultSkills,
@@ -171,9 +177,21 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
           providerId={providerId}
           modelId={modelName}
           onProviderChange={setProviderId}
-          onModelChange={setModelName}
+          onModelChange={(id) => {
+            setModelName(id);
+            // 换模型即重置覆盖，防旧模型档位残留（含换供应商联动清空）
+            setThinkingJson(null);
+          }}
+          onModelInfo={(m) => setModelCapability(m?.reasoning ?? null)}
           disabled={readOnly}
         />
+        {!readOnly && (
+          <ThinkingOverrideControl
+            capability={modelCapability}
+            value={thinkingJson}
+            onChange={setThinkingJson}
+          />
+        )}
 
         {mode === 'create' && (
           <div className="text-xs text-tertiary">

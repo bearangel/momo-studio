@@ -5,6 +5,8 @@
 // v25 重构（spec 2026-08-31 §3）：去编排——角色/父子关系从 schema 消失，
 // `agent_assignments` → `workspace_agent_members`（成员制，无 role/parent/enabled）。
 
+import type { ThinkingConfig } from '../llm/provider-presets';
+
 /** Agent 工具引用 */
 export interface ToolRef {
   kind: 'builtin';
@@ -72,6 +74,10 @@ export interface AgentDefinition {
    * undefined 表示 builtin YAML 未写 DB 的场景（按 task-driven 处理）。
    */
   taskDriven?: boolean;
+
+  // === 供应商预设（migration v31） ===
+  /** agent 级思维模式覆盖；NULL/undefined=继承模型级（provider_models.thinking_json） */
+  thinkingJson?: ThinkingConfig | null;
 }
 
 /**

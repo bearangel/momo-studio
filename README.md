@@ -6,6 +6,16 @@
 
 ## 状态
 
+**v2.2.1 — 供应商预设与模型思维模式（开发中，未发布）**
+
+供应商新建预设化 + 思维模式两级配置。spec 见 `docs/specs/2026-09-09-provider-presets-design.md`，实施计划见 `docs/plans/2026-09-09-provider-presets.md`。
+
+- **供应商预设目录**——15 家手写预设（国内直连 5 + 国际直连 6 + 聚合/本地 4）：ProviderDialog 两段式（预设卡片 → 预填表单 + API Key），预设模型种子幂等写入（INSERT OR IGNORE，不覆盖用户改动），聚合/本地商引导「获取模型列表」；`model_providers.preset_key` 标记来源（「已添加」徽标）
+- **内置目录升级**——`model-catalog.ts` 条目增加思维模式能力（`ReasoningCapability`：none/toggle/effort{values,default}）+ 补旗舰缺位（GLM-5.x 1M / DeepSeek V4 1M+384K / Kimi K3 1M / gemini-3）
+- **思维模式两级配置（migration v31）**——`provider_models.thinking_json`（模型级默认）+ `agent_definitions.thinking_json`（agent 级覆盖，NULL=继承）；`resolveThinkingConfig` 单点 resolve（配置四级 fallback + 能力词汇表预设→目录 + 方言模型级覆写→预设级→platform 兜底 + effort 越界钳制回默认）
+- **请求注入（wire 方言）**——`createLLMProvider` 第三参实例级持有；四种方言映射表：`toggle` / `toggle-effort`（GLM-5.x、DeepSeek V4：thinking.type + reasoning_effort）/ `effort`（OpenAI、K3：顶层 reasoning_effort）/ `anthropic-budget`（档位→budget_tokens 阶梯 + max_tokens 抬升）；`chatStreamAnthropic` 旧硬编码 always-on 10000 退役为方言驱动（medium 档=10000 保持成本连续）；thinking 解析加 `reasoning` 别名容差
+- **UI 三处**——ProviderDialog 预设两段式；模型列表行内思维三态控件 + 档位下拉 + 窗口 placeholder 显示 resolve 有效值（1M/200K/自动）；三个 agent 编辑器（Create/Definition/MemberEdit）「思维模式：跟随/关闭/开启(+档位)」覆盖控件
+
 **v2.2.0-p1 — Agent 记忆系统·数据与手动层（开发中，未发布）**
 
 三层记忆（会话/工作空间/全局）第一期：数据层 + 手动管理。spec 见 `docs/specs/2026-09-03-v2.2-agent-memory-design.md`，实施计划见 `docs/plans/2026-09-03-v2.2-agent-memory-p1-data-manual.md`。

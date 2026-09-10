@@ -15,6 +15,7 @@ import { stopAgentRuntime } from './runtime-registry';
 import { SAFE_MINIMUM_TOOLS } from './tools/catalog';
 import { getGlobalSettings } from '../settings/crud';
 import { getProvider } from './provider-crud';
+import { parseThinkingConfig, type ThinkingConfig } from '../llm/provider-presets';
 import type { AgentDefinition, WorkspaceAgentMember, ToolRef, McpRef, SkillRef } from './types';
 
 /** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
@@ -25,6 +26,19 @@ function slugify(input: string): string {
 /** 6 字符随机后缀（base64url 字母表），保证同名 agent 重复分配不撞身份 */
 function randomSuffix(): string {
   return randomBytes(4).toString('base64url').slice(0, 6);
+}
+
+/**
+ * thinkingJson 写通道源头校验（终审 I-2）：形状非法即抛错，不让坏值落库。
+ * 读侧 parseThinkingConfig 只会静默治愈为 null（UI 显示「跟随」，坏值被无声
+ * 吃掉），与 setProviderModelThinking 的源头拒绝语义对齐。
+ */
+function assertThinkingConfigShape(config: ThinkingConfig): void {
+  if (parseThinkingConfig(config) === null) {
+    throw new Error(
+      `thinkingJson 形状非法（须为 { mode: 'auto' | 'off' | 'on', effort: string | null }）: ${JSON.stringify(config)}`,
+    );
+  }
 }
 
 /**
@@ -57,6 +71,8 @@ export interface CreateCustomDefInput {
   defaultMcps?: McpRef[];
   /** v1.6：默认 Skill，缺省 = [] */
   defaultSkills?: SkillRef[];
+  /** v31：agent 级思维模式覆盖；缺省/null=继承模型级 */
+  thinkingJson?: ThinkingConfig | null;
 }
 
 /**
@@ -95,6 +111,9 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
     }
   }
 
+  // 终审 I-2：坏形状源头拒绝（null=缺省合法，走 ?? null 落库）
+  if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
+
   const def: AgentDefinition = {
     id: randomUUID(),
     name: input.name,
@@ -112,6 +131,7 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
     workspaceId,
     modelProviderId: effectiveProviderId,
     modelName: effectiveModelName,
+    thinkingJson: input.thinkingJson ?? null,
   };
   saveAgentDefinition(def);
   logger.info('自定义 Agent 定义已创建', { slug: def.slug, workspaceId });
@@ -136,6 +156,7 @@ interface AgentDefRow {
   model_provider_id: string | null;
   model_name: string;
   task_driven: number;
+  thinking_json: string | null;
 }
 
 /** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled）。
@@ -175,6 +196,15 @@ function rowToDef(row: AgentDefRow): AgentDefinition {
     modelName: row.model_name,
     createdAt: row.created_at,
     taskDriven: row.task_driven === 1,
+    // v31：坏值容错读回 null（继承模型级），单行坏数据不炸列表
+    thinkingJson: (() => {
+      if (row.thinking_json === null) return null;
+      try {
+        return parseThinkingConfig(JSON.parse(row.thinking_json) as unknown);
+      } catch {
+        return null;
+      }
+    })(),
   };
 }
 
@@ -200,10 +230,10 @@ export function saveAgentDefinition(def: AgentDefinition): void {
   db.prepare(
     `INSERT OR REPLACE INTO agent_definitions
       (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps, default_skills,
-       source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       source, description, icon_emoji, model_provider_id, model_name, task_driven, thinking_json)
      VALUES
       (@id, @name, @slug, @version, @runtime, @system_prompt, @default_tools, @default_mcps, @default_skills,
-       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven)`,
+       @source, @description, @icon_emoji, @model_provider_id, @model_name, @task_driven, @thinking_json)`,
   ).run({
     id: def.id,
     name: def.name,
@@ -220,6 +250,7 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     model_provider_id: def.modelProviderId,
     model_name: def.modelName,
     task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
+    thinking_json: def.thinkingJson != null ? JSON.stringify(def.thinkingJson) : null,
   });
 }
 
@@ -447,15 +478,19 @@ export function updateAgentDefinition(input: {
   defaultMcps?: McpRef[];
   /** v1.6：默认 Skill；undefined=不改，传值（含空数组）= 覆盖 */
   defaultSkills?: SkillRef[];
+  /** v31：思维模式覆盖；undefined=不改，null=清除（继承模型级），传值=覆盖 */
+  thinkingJson?: ThinkingConfig | null;
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
+  // 终审 I-2：坏形状源头拒绝（null=清除合法；undefined=不改不校验）
+  if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
   const db = getDb();
   db.prepare(
     `UPDATE agent_definitions SET
        name = ?, description = ?, system_prompt = ?, icon_emoji = ?,
        model_provider_id = ?, model_name = ?,
-       default_tools = ?, default_mcps = ?, default_skills = ?
+       default_tools = ?, default_mcps = ?, default_skills = ?, thinking_json = ?
      WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
@@ -467,6 +502,13 @@ export function updateAgentDefinition(input: {
     input.defaultTools !== undefined ? JSON.stringify(input.defaultTools) : JSON.stringify(existing.defaultTools),
     input.defaultMcps !== undefined ? JSON.stringify(input.defaultMcps) : JSON.stringify(existing.defaultMcps),
     input.defaultSkills !== undefined ? JSON.stringify(input.defaultSkills) : JSON.stringify(existing.defaultSkills),
+    input.thinkingJson !== undefined
+      ? input.thinkingJson === null
+        ? null
+        : JSON.stringify(input.thinkingJson)
+      : existing.thinkingJson != null
+        ? JSON.stringify(existing.thinkingJson)
+        : null,
     input.id,
   );
   return getAgentDefinition(input.id)!;

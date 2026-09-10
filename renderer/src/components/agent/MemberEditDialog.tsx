@@ -30,6 +30,7 @@ import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { CapabilityTabs } from './CapabilityTabs';
 import { ProviderModelPicker } from './ProviderModelPicker';
+import { ThinkingOverrideControl } from './ThinkingOverrideControl';
 import {
   EMPTY_DELTAS,
   applyDeltas,
@@ -43,6 +44,8 @@ import type {
   WorkspaceAgentMember,
   AgentDefinition,
   AssignmentDeltas,
+  ReasoningCapability,
+  ThinkingConfig,
 } from '../../ipc/types';
 
 interface Props {
@@ -61,11 +64,14 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
   // ---- 模型区（全局定义属性，写入 agent_definitions）----
   const [modelProviderId, setModelProviderId] = useState(def.modelProviderId ?? '');
   const [modelName, setModelName] = useState(def.modelName);
+  const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
+  const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(def.thinkingJson ?? null);
 
   // def 变化时同步模型选择（与 DefinitionEditor 同模式）
   useEffect(() => {
     setModelProviderId(def.modelProviderId ?? '');
     setModelName(def.modelName);
+    setThinkingJson(def.thinkingJson ?? null);
   }, [def]);
 
   // ---- 能力覆盖区 ----
@@ -118,13 +124,15 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     try {
       // 模型变更走全局定义更新（先于能力 deltas，spec §3.3b）
       const modelChanged =
-        modelProviderId !== (def.modelProviderId ?? '') || modelName !== def.modelName;
+        modelProviderId !== (def.modelProviderId ?? '') ||
+        modelName !== def.modelName ||
+        thinkingJson !== (def.thinkingJson ?? null);
       if (modelChanged) {
         if (!modelProviderId || !modelName) {
           setError('请选择模型供应商与模型');
           return;
         }
-        await ipc.agent.updateDefinition({ id: def.id, modelProviderId, modelName });
+        await ipc.agent.updateDefinition({ id: def.id, modelProviderId, modelName, thinkingJson });
         // 全局定义已变——刷新共享 definitions store，成员行/重开弹窗才能看到新模型（终审 Critical）
         await loadDefinitions(member.workspaceId);
       }
@@ -188,7 +196,17 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
               providerId={modelProviderId}
               modelId={modelName}
               onProviderChange={setModelProviderId}
-              onModelChange={setModelName}
+              onModelChange={(id) => {
+                setModelName(id);
+                // 换模型即重置覆盖，防旧模型档位残留（含换供应商联动清空）
+                setThinkingJson(null);
+              }}
+              onModelInfo={(m) => setModelCapability(m?.reasoning ?? null)}
+            />
+            <ThinkingOverrideControl
+              capability={modelCapability}
+              value={thinkingJson}
+              onChange={setThinkingJson}
             />
           </section>
         )}

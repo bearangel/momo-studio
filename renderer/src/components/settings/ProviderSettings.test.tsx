@@ -13,12 +13,19 @@ import { useProviderStore } from '../../stores/provider.store';
 import type { ModelProvider } from '../../ipc/types';
 
 const PROVIDERS: ModelProvider[] = [
-  { id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai' },
-  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic' },
+  { id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai', presetKey: null },
+  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic', presetKey: null },
 ];
 const P1_MODELS = [
-  { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1 },
-  { providerId: 'p1', modelId: 'glm-5.2', enabled: true, addedAt: 2 },
+  // thinking 三字段为 v31 数据形状升级（Task 9）；断言语义不变
+  {
+    providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1,
+    contextWindow: null, reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
+  {
+    providerId: 'p1', modelId: 'glm-5.2', enabled: true, addedAt: 2,
+    contextWindow: null, reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
 ];
 
 const list = vi.fn();
@@ -28,7 +35,8 @@ const setDefault = vi.fn();
 const listModels = vi.fn();
 
 const mockApi = {
-  provider: { list, update, delete: del, setDefault, listModels },
+  // v31：ProviderDialog 打开即拉预设列表（两段式第一步）
+  provider: { list, update, delete: del, setDefault, listModels, listPresets: vi.fn(async () => []) },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
@@ -115,6 +123,8 @@ describe('ProviderSettings 两列布局', () => {
     await screen.findByRole('button', { name: /P1/ });
     fireEvent.click(screen.getByRole('button', { name: '添加供应商' }));
     const dialog = await screen.findByRole('dialog', { name: '添加供应商' });
+    // v31 两段式：先进「自定义供应商」手填路径，表单（含平台选择）在第二步
+    fireEvent.click(within(dialog).getByText('自定义供应商'));
     expect(within(dialog).getByLabelText('平台')).toBeInTheDocument();
     expect(screen.queryByText(/默认模型/)).not.toBeInTheDocument();
   });

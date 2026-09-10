@@ -24,8 +24,15 @@ const mockApi = {
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
 const MODELS = [
-  { providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1, contextWindow: 131072 },
-  { providerId: 'p1', modelId: 'glm-5.2', enabled: false, addedAt: 2, contextWindow: null },
+  // thinking 三字段为 v31 数据形状升级（Task 9）；断言语义不变
+  {
+    providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1, contextWindow: 131072,
+    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
+  {
+    providerId: 'p1', modelId: 'glm-5.2', enabled: false, addedAt: 2, contextWindow: null,
+    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+  },
 ];
 
 describe('ProviderModelList', () => {

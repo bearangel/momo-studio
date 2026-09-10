@@ -863,6 +863,18 @@ CREATE TABLE IF NOT EXISTS session_compactions (
 );
     `.trim(),
   },
+  {
+    version: 31,
+    sql: `
+-- ─── v31：供应商预设与思维模式（spec 2026-09-09-provider-presets）─────────────
+-- 1. model_providers.preset_key：来源预设标识（选择器「已添加」徽标）；NULL=自定义
+ALTER TABLE model_providers ADD COLUMN preset_key TEXT;
+-- 2. provider_models.thinking_json：模型级思维配置默认；NULL=auto（不发参数）
+ALTER TABLE provider_models ADD COLUMN thinking_json TEXT;
+-- 3. agent_definitions.thinking_json：agent 级覆盖；NULL=继承模型级
+ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
+    `.trim(),
+  },
 ];
 
 export function loadMigrations(): Migration[] {

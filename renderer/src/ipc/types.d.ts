@@ -58,6 +58,8 @@ export interface AgentDefinition {
   modelProviderId: string | null;
   /** 模型名 */
   modelName: string;
+  /** agent 级思维模式覆盖；NULL=继承模型级（v31 起） */
+  thinkingJson?: ThinkingConfig | null;
 }
 
 /**
@@ -431,6 +433,38 @@ export interface InstalledPackage {
 /** LLM 协议平台（与 electron 端 provider-crud.ts 的 ProviderPlatform 对齐） */
 export type ProviderPlatform = 'openai' | 'anthropic';
 
+/** ─── 供应商预设（与 electron 端 llm/provider-presets 对齐，v31 起） ─── */
+export type ThinkingWire = 'toggle' | 'toggle-effort' | 'effort' | 'anthropic-budget';
+
+export type ReasoningCapability =
+  | { kind: 'none' }
+  | { kind: 'toggle' }
+  | { kind: 'effort'; values: readonly string[]; default: string };
+
+export interface ThinkingConfig {
+  mode: 'auto' | 'off' | 'on';
+  effort: string | null;
+}
+
+export interface PresetModel {
+  id: string;
+  contextWindow: number;
+  outputTokens: number;
+  reasoning: ReasoningCapability;
+  thinkingWire?: ThinkingWire;
+}
+
+export interface ProviderPreset {
+  key: string;
+  name: string;
+  baseUrl: string;
+  platform: ProviderPlatform;
+  thinkingWire: ThinkingWire;
+  docsUrl?: string;
+  fetchListHint?: boolean;
+  models: PresetModel[];
+}
+
 /** 供应商的模型列表条目（与 electron 端 ProviderModel 对齐，v24 起） */
 export interface ProviderModel {
   providerId: string;
@@ -439,6 +473,12 @@ export interface ProviderModel {
   addedAt: number;
   /** 用户手动覆盖的上下文窗口（token）；null=未知（走内置目录，migration v30 起） */
   contextWindow: number | null;
+  /** 模型级思维配置（用户设置）；null=未配置（auto） */
+  thinkingJson: ThinkingConfig | null;
+  /** 思维模式能力（服务端 resolve：预设表→正则目录；只读） */
+  reasoning: ReasoningCapability;
+  /** resolve 链生效窗口（用户列→预设→目录）；null=未知 */
+  effectiveWindow: number | null;
 }
 
 /** 全局模型供应商（注册表项，不含 apiKey） */
@@ -452,6 +492,8 @@ export interface ModelProvider {
   createdAt: string;
   /** LLM 协议平台（v24 起显式存储，取代 baseUrl 启发式检测） */
   platform: ProviderPlatform;
+  /** 来源预设 key；null=自定义供应商（v31 起） */
+  presetKey: string | null;
 }
 
 /** 默认模型引用：指向某供应商模型列表中的一个模型（v2.0 P2 起） */
@@ -893,6 +935,8 @@ export interface ApiSurface {
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       /** v1.6：默认 Skill；缺省 = [] */
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
+      /** v31：agent 级思维模式覆盖；缺省 = null（继承模型级） */
+      thinkingJson?: ThinkingConfig | null;
     }): Promise<AgentDefinition>;
     /** v1.3：可选 workspaceId 过滤 */
     list(workspaceId?: string): Promise<AgentDefinition[]>;
@@ -923,6 +967,8 @@ export interface ApiSurface {
       defaultTools?: Array<{ kind: 'builtin'; ref: string }>;
       defaultMcps?: Array<{ kind: 'mcp'; ref: string; versionRange?: string }>;
       defaultSkills?: Array<{ kind: 'skill'; ref: string; versionRange?: string }>;
+      /** v31：agent 级思维模式覆盖；undefined=不改；null=清除（回退模型级） */
+      thinkingJson?: ThinkingConfig | null;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
     /** v25：原 updateAssignmentApiKey 平移更名（apiKey=null 清除 override） */
     setMemberApiKeyOverride(instanceId: string, apiKey: string | null): Promise<{ ok: boolean }>;
@@ -971,6 +1017,8 @@ export interface ApiSurface {
     create(input: {
       name: string; baseUrl: string; apiKey: string;
       defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+      /** 来源预设 key（v31 起）；传入则后端种子预设模型，未知 key 前置校验拒绝 */
+      presetKey?: string;
     }): Promise<ModelProvider>;
     update(input: {
       id: string; name?: string; baseUrl?: string; apiKey?: string;
@@ -992,6 +1040,12 @@ export interface ApiSurface {
     setModelWindow(id: string, modelId: string, contextWindow: number | null): Promise<void>;
     /** Task 6：删除模型条目 */
     removeModel(id: string, modelId: string): Promise<void>;
+    listPresets: () => Promise<ProviderPreset[]>;
+    setModelThinking: (
+      providerId: string,
+      modelId: string,
+      config: ThinkingConfig | null,
+    ) => Promise<void>;
   };
   /**
    * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
