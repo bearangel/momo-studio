@@ -20,6 +20,7 @@ import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
 import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
 import { tokenizeForIndex } from './storage/memories/tokenize';
+import { reprobeSandbox } from './sandbox/probe';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -67,6 +68,13 @@ app.whenReady().then(async () => {
     initTaskRuntime();
 
     registerIpcHandlers();
+
+    // v2.4：OS 沙箱 boot 探测（fire-and-forget，不阻塞启动；失败只影响 bash 可用性）
+    void reprobeSandbox().catch((err) => {
+      logger.warn('沙箱探测失败（不影响应用启动）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     const win = createMainWindow();
     setSessionMainWindow(win);

@@ -30,6 +30,10 @@ export interface GlobalSettings {
   memoryEnabled?: boolean;
   /** v2.2 P2：自动提取子开关（false=跳过提取管线，注入不受影响）；默认 true */
   memoryExtractionEnabled?: boolean;
+  /** v2.4：OS 沙箱模式（strict=不可用则 bash 拒绝执行；permissive=降级运行+标记）；默认 strict */
+  sandboxMode?: 'strict' | 'permissive';
+  /** v2.4：沙箱内网络出站开关（仅影响沙箱内 bash，LLM API 调用不受影响）；默认 false */
+  sandboxNetwork?: boolean;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -59,6 +63,8 @@ export function getGlobalSettings(): GlobalSettings {
       maxConcurrentTasks,
       memoryEnabled: true,
       memoryExtractionEnabled: true,
+      sandboxMode: 'strict',
+      sandboxNetwork: false,
     };
   }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
@@ -72,6 +78,8 @@ export function getGlobalSettings(): GlobalSettings {
     maxConcurrentTasks,
     memoryEnabled: parsed.memoryEnabled ?? true,
     memoryExtractionEnabled: parsed.memoryExtractionEnabled ?? true,
+    sandboxMode: parsed.sandboxMode ?? 'strict',
+    sandboxNetwork: parsed.sandboxNetwork ?? false,
   };
 }
 

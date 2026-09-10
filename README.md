@@ -6,6 +6,19 @@
 
 ## 状态
 
+**v2.4.0 — ShellTools OS 沙箱（开发中，未发布）**
+
+bash 工具接入 OS 级隔离——工具防御第二期，清偿 v2.1 安全债务「OS 级沙箱接线」。spec 见 `docs/specs/2026-09-10-shell-tools-os-sandbox-design.md`。
+
+- **三平台沙箱路径（新增）** — macOS Seatbelt（`sandbox-exec` + SBPL profile：全盘只读 + 敏感目录 deny + workspace/tmp 写白名单 + 网络开关）/ Linux bubblewrap（`bwrap`：`--ro-bind` 全盘只读 + 敏感目录 tmpfs 遮盖 + workspace 与 /tmp 可写 bind + `--new-session` 防 TIOCSTI）/ Windows 无 OS 沙箱（PowerShell plain 路径 + `taskkill /T` 杀进程树 + remove-item 黑名单双向语序拦截）
+- **resolveShellSpawn 三态决策** — wrapped（沙箱包裹）/ plain（permissive 降级直跑，审计标记 `unsandboxed:*`）/ blocked（strict 且不可用时 spawn 前拒绝，错误含安装指引）；shell-tools 唯一接入点；npm/pip 缓存 env 重定向沙箱内 tmp（写剖面自洽）
+- **strict 默认 + permissive 逃生门** — 沙箱不可用时默认拒绝 bash 执行（推荐安全位）；设置可切 permissive 降级运行（无 OS 隔离，结果 sandbox 行明示）
+- **网络默认禁 + 设置开关** — 沙箱内 bash 默认无网络（bwrap `--unshare-net` / Seatbelt deny network*）；开关放开仅影响 bash，LLM API 调用不受影响
+- **bash 结果 sandbox 行** — `exit_code:` 行后紧跟 `sandbox: <tag>`，LLM 与用户可感知单次执行是否落在 OS 沙箱内
+- **boot 探测 + IPC 4 通道** — 启动 fire-and-forget 探测（bwrap `--version` / sandbox-exec 最小 profile 冒烟 / pwsh + ExecutionPolicy），失败不影响启动；`sandbox:getState` / `reprobe` / `installBwrap` / `dismissPrompt`
+- **设置「安全沙箱」分类 + 首启提示卡** — 模式单选 / 网络开关 / 探测状态只读区 + 重新探测；Linux 缺 bwrap 右下角非模态引导卡（复制命令 / pkexec 一键安装 / 装后自动重探测），Windows ExecutionPolicy=Restricted 授权指引卡
+- 真实 bwrap 条件集成测试（容器拦 user namespace 时整组自动 skip，不造假绿）
+
 **v2.3.0 — FileTools 防御硬化（开发中，未发布）**
 
 工具防御契约系统性补齐——结构化 patch + Read-before-Edit + 失败信息增强。
@@ -174,11 +187,11 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 
 ### 安全
 - `WorkspaceFS`：文件工具（read / write / edit / mkdir / rm / mv 等）的所有路径经过验证，禁止 `..` 越界与符号链接逃逸
-- bash 工具：v2.0.0 起从 builtin agent 默认工具集移除，需经工作空间能力面板显式开启；运行时是工作目录内自由 shell，**非文件系统隔离**（路径防御仅覆盖 file 工具）
+- bash 工具：v2.0.0 起从 builtin agent 默认工具集移除，需经工作空间能力面板显式开启；v2.4.0 起接入 OS 级沙箱（macOS Seatbelt / Linux bwrap；strict 默认不可用即拒绝，permissive 可降级）
 - 进程沙箱：renderer 进程禁用 Node.js 集成 + contextIsolation
 - 审计日志：每次工具调用写入 SQLite，UI 可查询
 - Git policy：agent 写文件走 `git commit`，可一键回滚
-- OS 级沙箱：`sandbox/` 目录未接线，OS 级隔离为 v2.1 债务（见技术债务表）
+- OS 级沙箱：v2.4.0 已接线（`sandbox/` 模块，bash 工具经 `resolveShellSpawn` 三态决策包裹；Windows 无 OS 沙箱走 PowerShell plain 路径）
 
 ## 前置依赖
 
@@ -593,7 +606,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 - 🔲 LSP 集成（Monaco 编辑器语言服务）
 - 🔲 协作实时编辑（CRDT）
 - 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例）
-- 🔲 OS 级沙箱接线（`sandbox/` 目录）
+- ✅ OS 级沙箱接线（v2.4.0 完成——bash 工具经 `resolveShellSpawn` 接入 Seatbelt/bwrap）
 - 🔲 p2p 私钥入 keytar（当前 Ed25519 私钥落盘位置待硬化）
 - 🔲 LAN 帧加密或对应设计稿
 
@@ -611,7 +624,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 | 问题 | 影响 | 计划解决版本 |
 |---|---|---|
 | **Tailwind 任意值 class 不生成 CSS** | 已定位根因：动态拼接 class 不可见（静态书写正常）；规范已禁动态拼接 | 已于 v2.1 P0 勘正 |
-| OS 级沙箱简化实现 | 仅应用层防御 | v2.1 |
+| ~~**OS 级沙箱简化实现**~~ | **v2.4.0 已接线**——bash 工具经 `resolveShellSpawn` 三态决策接入 Seatbelt/bwrap；Windows 无 OS 沙箱走 PowerShell plain 路径 | ~~v2.1~~ 已完成 |
 | Marketplace 无签名验证 | 不可信包风险 | v2.0 |
 | ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；运行时接线 P3 已完成（`spawn-helpers.ts` 显式透传 `provider.platform`） | ~~P3~~ 已完成 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |

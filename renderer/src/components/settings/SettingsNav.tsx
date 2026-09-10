@@ -1,8 +1,8 @@
 // renderer/src/components/settings/SettingsNav.tsx
 // 设置左侧分类导航：宽度 190px（inline style 规避 Tailwind 任意值 class 失效问题）。
-// v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。v2.2：新增「记忆」分类。
+// v2.1：图标 lucide 化（emoji 禁用），新增「外观」分类。v2.2：新增「记忆」分类。v2.4：新增「安全沙箱」分类。
 import type { LucideIcon } from 'lucide-react';
-import { Building2, Target, MessageSquare, Brain, SunMoon, GitBranch, ScrollText, Globe, Info } from 'lucide-react';
+import { Building2, Target, MessageSquare, Brain, SunMoon, ShieldCheck, GitBranch, ScrollText, Globe, Info } from 'lucide-react';
 import { useSettingsStore, type SettingsCategory } from '../../stores/settings.store';
 import { cn } from '../../lib/cn';
 
@@ -14,6 +14,7 @@ const CATEGORIES: { key: SettingsCategory; label: string; icon: LucideIcon }[] =
   { key: 'conversation', label: '会话设置', icon: MessageSquare },
   { key: 'memory', label: '记忆', icon: Brain },
   { key: 'appearance', label: '外观', icon: SunMoon },
+  { key: 'sandbox', label: '安全沙箱', icon: ShieldCheck },
   { key: 'git_policy', label: 'Git 策略', icon: GitBranch },
   { key: 'audit_log', label: '审计日志', icon: ScrollText },
   { key: 'p2p', label: '节点互联', icon: Globe },

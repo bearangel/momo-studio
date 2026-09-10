@@ -13,6 +13,7 @@ import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
+import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
@@ -34,6 +35,7 @@ export function registerIpcHandlers(): void {
   registerAuditHandlers();
   registerProviderHandlers();
   registerSettingsIpc();
+  registerSandboxIpc();
   registerMemoryIpc();
   registerResourceHandlers();
   registerTaskHandlers();

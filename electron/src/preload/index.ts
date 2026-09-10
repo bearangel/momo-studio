@@ -108,6 +108,13 @@ const api: ApiSurface = {
     listPresets: () => invoke('provider:listPresets'),
     setModelThinking: (id, modelId, config) => invoke('provider:setModelThinking', id, modelId, config),
   },
+  // v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts）——状态/重探测/装 bwrap/关提示卡
+  sandbox: {
+    getState: () => invoke('sandbox:getState'),
+    reprobe: () => invoke('sandbox:reprobe'),
+    installBwrap: () => invoke('sandbox:installBwrap'),
+    dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
+  },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
   im: {

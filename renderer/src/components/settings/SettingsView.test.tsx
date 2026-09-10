@@ -1,7 +1,7 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
-// SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类）：
-// - 渲染 9 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/Git 策略/审计日志/节点互联/关于）
+// SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类）：
+// - 渲染 10 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -48,6 +48,28 @@ const mockApi = {
   agent: {
     listMembers: vi.fn().mockResolvedValue([]),
   },
+  sandbox: {
+    // 完整 SandboxInfo 形状（Task 7 契约）——面板拿到 info 后才渲染标题
+    getState: vi.fn().mockResolvedValue({
+      state: {
+        platform: 'linux',
+        sandboxTool: 'bwrap',
+        toolVersion: '0.8.0',
+        available: true,
+        unavailableReason: null,
+        windowsShell: null,
+        executionPolicy: null,
+        probedAt: 1757500000000,
+      },
+      settings: { mode: 'strict', networkEnabled: false },
+      installCommand: null,
+      bwrapPromptDismissed: false,
+      winPolicyPromptDismissed: false,
+    }),
+    reprobe: vi.fn(),
+    installBwrap: vi.fn(),
+    dismissPrompt: vi.fn(),
+  },
   memory: {
     list: vi.fn().mockResolvedValue([]),
     save: vi.fn(),
@@ -71,11 +93,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 9 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
+  it('渲染 10 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(9);
+    expect(navButtons.length).toBe(10);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -83,13 +105,14 @@ describe('SettingsView', () => {
       '会话设置',
       '记忆',
       '外观',
+      '安全沙箱',
       'Git 策略',
       '审计日志',
       '节点互联',
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(9);
+    expect(nav.querySelectorAll('svg').length).toBe(10);
   });
 
   it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {
@@ -106,6 +129,17 @@ describe('SettingsView', () => {
     fireEvent.click(screen.getByRole('button', { name: '外观' }));
     expect(useSettingsStore.getState().activeCategory).toBe('appearance');
     expect(screen.getByRole('heading', { name: '外观' })).toBeInTheDocument();
+  });
+
+  it('点击「安全沙箱」分类切换 activeCategory 并渲染面板（拉 sandbox.getState）', async () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '安全沙箱' }));
+    expect(useSettingsStore.getState().activeCategory).toBe('sandbox');
+    // 「安全沙箱」同时出现在菜单按钮与面板标题；面板挂载后异步拉 getState，标题需等待
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: '安全沙箱' })).toBeInTheDocument();
+    });
+    expect(mockApi.sandbox.getState).toHaveBeenCalled();
   });
 
   it('account 分类不存在', () => {

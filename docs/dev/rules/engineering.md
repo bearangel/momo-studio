@@ -80,6 +80,17 @@ v2.3 FileTools 防御硬化（spec：`docs/specs/2026-09-10-file-tools-defense-h
 
 ---
 
+## v2.4 OS 沙箱规则
+
+v2.4 ShellTools OS 沙箱（spec：`docs/specs/2026-09-10-shell-tools-os-sandbox-design.md`）引入的 bash 工具 OS 级隔离约束：
+
+- bash 工具结果必含 `sandbox:` 行（紧跟 `exit_code:` 行）——LLM 与调用方据此感知本次执行是否落在 OS 沙箱内；`unsandboxed:*` 标记 = permissive 降级直跑，不得静默吞掉
+- 改动沙箱剖面（`buildBwrapArgs` / `renderSeatbeltProfile` / `buildPolicy`）必须先跑 `electron/tests/sandbox/` 快照测试——剖面参数顺序（ro-bind 全盘在前、workspace bind 在后）是安全语义，不是实现细节
+- 容器内 bwrap 受限：Docker seccomp 拦 user namespace（`Operation not permitted`），真实 bwrap 集成测试自动整组 skip（`tests/sandbox/bwrap-integration.test.ts` 顶层同步冒烟 + `describe.skipIf`）——skip 是诚实行为，不造假绿；真实验证留 macOS 主机 / 允许 userns 的 Linux
+- 新增任何 bash 相关防线（黑名单 / 环境变量过滤 / 超时 / 杀进程树等）不得绕过 `resolveShellSpawn`——它是 shell-tools 的唯一沙箱接入点，绕过即 plain 直跑失去 OS 隔离
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |

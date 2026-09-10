@@ -2,6 +2,9 @@
 // Bash 执行工具：workspace 内自由 shell + 黑名单 + 环境变量白名单 + 截断 + 超时。
 //
 // 设计要点：
+//   - v2.4：OS 沙箱接入（spec §5.2）——spawn 参数经 resolveShellSpawn 三态决策：
+//     wrapped（bwrap/sandbox-exec 包裹）/ plain（permissive 降级直跑，结果带
+//     unsandboxed 标记）/ blocked（strict 且不可用，spawn 前抛错含安装指引）。
 //   - cwd 锁定 ctx.workspaceDir：spawn 直接传 cwd，LLM 无法靠 `cd` 越界；
 //     每条命令独立 shell（`bash -c '<cmd>'`），cd 不持久。
 //   - 命令黑名单在 spawn 前拦截：rm -rf 根/家目录、mkfs、dd 写设备、fork bomb、
@@ -13,11 +16,14 @@
 //   - 超时：默认 30s，最大 120s，超时 SIGKILL 子进程并返回超时标记；
 //     退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
 
+import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { OUTPUT_LIMITS } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
+import { resolveShellSpawn } from '../../sandbox';
+import { buildKillTreeArgs } from '../../sandbox/windows';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -45,6 +51,14 @@ const BLACKLIST_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\b(shutdown|reboot|halt|poweroff)\b/, reason: '禁止关机重启' },
   // git commit 必须走专用 git_commit 工具（走 GitPolicy 校验 + 审计）
   { pattern: /\bgit\s+commit\b/, reason: '禁止 bash 直接 git commit，请用 git_commit 工具（走 GitPolicy 校验）' },
+  // ── Windows 危险命令（v2.4，spec §5.5；regex 大小写不敏感场景用 i flag）──
+  { pattern: /\bformat(\.com)?\s+[a-z]:/i, reason: '禁止格式化磁盘卷' },
+  // 双向语序：flag 在路径前（-Recurse C:\）或路径后（-Path C:\ -Recurse）均拦截；
+  // [^|;&]* 限定单条命令内匹配，避免跨命令拼接误伤
+  { pattern: /\b(remove-item|rm)\s+(?:[^|;&]*-recurse[^|;&]*[a-z]:\\|[^|;&]*[a-z]:\\[^|;&]*-recurse)/i, reason: '禁止递归删除盘根' },
+  { pattern: /\bbcdedit\b/i, reason: '禁止修改启动配置' },
+  { pattern: /\bvssadmin\s+delete\s+shadows/i, reason: '禁止删除卷影副本' },
+  { pattern: /\breg\s+add\b.*\\run\b/i, reason: '禁止写自启动注册表项' },
 ];
 
 /**
@@ -98,7 +112,7 @@ export class ShellTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [{
       name: 'bash',
-      description: '在 workspace 根目录执行 shell 命令。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
+      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp、默认禁网）。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -124,21 +138,23 @@ export class ShellTools implements ToolModule {
     // 黑名单拦截先于 spawn，命中即抛错（调用方转成 tool result 反馈给 LLM）。
     assertCommandAllowed(command);
 
-    const env = buildSandboxEnv(ctx);
-    // Linux/macOS 用 /bin/bash；Windows 暂用 cmd.exe（v2 任务，沙箱实测另跟踪）。
-    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
-    const shellArgs = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+    // v2.4：OS 沙箱接入（spec §5.2）——三态决策替换平台硬编码。
+    // blocked（strict 且沙箱不可用）必须在 spawn 之前抛错：
+    // 错误信息含安装指引，由调用方转成 tool result 反馈给 LLM 自行处理。
+    const plan = resolveShellSpawn(ctx.workspaceDir, command);
+    if (plan.kind === 'blocked') throw new Error(plan.reason);
+    // wrapped 模式叠加沙箱 env 增量（npm/pip 缓存重定向到 tmp，写剖面自洽）
+    const env = { ...buildSandboxEnv(ctx), ...(plan.kind === 'wrapped' ? plan.envAdditions : {}) };
+    const isWin = process.platform === 'win32';
 
     return await new Promise((resolve, reject) => {
-      const child = spawn(shell, shellArgs, {
+      const child = spawn(plan.shell, plan.args, {
         cwd: ctx.workspaceDir,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // v1.5.6: detached 让 bash 成为新进程组的 leader（child.pid === pgid）。
-        // 这使 process.kill(-pid) 能 SIGKILL 整个进程组（bash + curl/python/node 等子进程）。
-        // 不加 detached 时 child.kill 只杀 bash 自身，子进程继续运行持有 stdio pipe，
-        // 导致 close 事件不触发，Promise 卡住——用户报"timeoutMs 15s 实际远大于"的根因。
-        detached: true,
+        // POSIX：detached 使 bash 成为进程组长，kill(-pid) 杀全组（v1.5.6 语义保留）。
+        // win32 无进程组语义：detached=false + 杀树走 taskkill /T /F（spec §5.5）。
+        detached: !isWin,
         windowsHide: true,
       });
 
@@ -183,11 +199,15 @@ export class ShellTools implements ToolModule {
         }
       });
 
-      // v1.5.6: 杀整个进程组（bash + 所有子进程）。
-      // detached 模式下 child.pid 就是 pgid；process.kill(-pid) 给全组发 SIGKILL。
-      // SIGKILL 不可被捕获/忽略，即使 nohup'd 的进程也会被杀。
+      // v1.5.6: 杀整个进程组（bash + 所有子进程）。SIGKILL 不可被捕获/忽略。
       const killProcessGroup = (): void => {
         if (!child.pid) return;
+        if (isWin) {
+          // Windows：taskkill 树杀（process.kill(-pid) 在 win32 会抛 EINVAL）
+          spawn('taskkill', buildKillTreeArgs(child.pid), { stdio: 'ignore' });
+          return;
+        }
+        // detached 模式下 child.pid 就是 pgid；process.kill(-pid) 给全组发 SIGKILL。
         try {
           process.kill(-child.pid, 'SIGKILL');
         } catch {
@@ -247,7 +267,13 @@ export class ShellTools implements ToolModule {
             reject(e);
             return;
           }
-          const parts: string[] = [`exit_code: ${code ?? 'null'}`];
+          // v2.4：sandbox 行紧跟 exit_code 行——LLM 与调用方据此感知本次执行
+          // 是否落在 OS 沙箱内（unsandboxed:* = permissive 降级直跑）。
+          const parts: string[] = [`exit_code: ${code ?? 'null'}`, `sandbox: ${plan.tag}`];
+          // wrapped 模式清理临时 profile 文件（darwin seatbelt .sb 等）——best-effort
+          for (const f of plan.kind === 'wrapped' ? plan.cleanupFiles : []) {
+            try { fs.unlinkSync(f); } catch { /* best-effort */ }
+          }
           if (killed) parts.push(`(超时 ${timeoutMs}ms，已强杀)`);
           if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
           if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);

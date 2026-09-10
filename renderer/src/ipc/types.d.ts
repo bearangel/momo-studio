@@ -520,6 +520,10 @@ export interface GlobalSettings {
   memoryEnabled?: boolean;
   /** v2.2 P2：自动提取子开关（默认 true；与 memoryEnabled 联动——总开关停用时强制不工作） */
   memoryExtractionEnabled?: boolean;
+  /** v2.4：OS 沙箱模式（strict=沙箱不可用时 bash 拒绝执行 / permissive=降级运行并审计标记）。默认 strict */
+  sandboxMode?: 'strict' | 'permissive';
+  /** v2.4：沙箱内 bash 网络出站（仅影响 bash 工具，LLM API 调用不受影响）。默认 false */
+  sandboxNetwork?: boolean;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
@@ -881,6 +885,54 @@ export interface MemoryApiSurface {
   importMarkdown(scope: MemoryListScope, content: string): Promise<{ imported: number; skipped: number }>;
 }
 
+/**
+ * v2.4 沙箱探测状态（renderer 镜像）。
+ * 与 electron 端 sandbox/probe.ts 的 SandboxProbeState 对齐（跨进程独立定义，仅结构对齐；
+ * platform 在主进程是 NodeJS.Platform，renderer 镜像放宽为 string）。
+ */
+export interface SandboxProbeState {
+  platform: string;
+  sandboxTool: 'seatbelt' | 'bwrap' | null;
+  toolVersion: string | null;
+  available: boolean;
+  unavailableReason: string | null;
+  windowsShell: string | null;
+  executionPolicy: string | null;
+  probedAt: number;
+}
+
+/** 沙箱模式，与 electron 端 sandbox/types.ts 的 SandboxMode 对齐 */
+export type SandboxMode = 'strict' | 'permissive';
+
+/**
+ * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
+ * 与 electron 端 sandbox/ipc.handlers.ts 的 SandboxInfo 对齐。
+ */
+export interface SandboxInfo {
+  /** boot/上次 reprobe 的探测结果；应用启动早期可能为 null（探测未完成） */
+  state: SandboxProbeState | null;
+  settings: { mode: SandboxMode; networkEnabled: boolean };
+  /** 手动安装指引命令（包管理器探测失败为 null） */
+  installCommand: string | null;
+  bwrapPromptDismissed: boolean;
+  winPolicyPromptDismissed: boolean;
+}
+
+/**
+ * v2.4 沙箱通道（IPC 命名空间 sandbox:*，sandbox/ipc.handlers.ts）。
+ * 设置读写走 settings:updateGlobal（不在此命名空间重复）。
+ */
+export interface SandboxApiSurface {
+  /** 聚合信息（探测单例 + settings + 提示卡 flag + 安装指引） */
+  getState(): Promise<SandboxInfo>;
+  /** 重新探测（bwrap / sandbox-exec / pwsh），探测完成后返回最新聚合信息 */
+  reprobe(): Promise<SandboxInfo>;
+  /** pkexec 安装 bubblewrap（Linux）；pkexec 缺失/安装失败返回 ok:false + 输出摘要 */
+  installBwrap(): Promise<{ ok: boolean; output: string }>;
+  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导与 win32 策略提示） */
+  dismissPrompt(kind: 'bwrap' | 'winPolicy'): Promise<void>;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -1121,6 +1173,8 @@ export interface ApiSurface {
   };
   /** v2.2 P1：记忆管理通道（memory/ipc.handlers.ts；总开关经 settings 的 memoryEnabled） */
   memory: MemoryApiSurface;
+  /** v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts） */
+  sandbox: SandboxApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;
