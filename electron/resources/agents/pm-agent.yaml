@@ -37,6 +37,8 @@ spec:
     - kind: builtin
       ref: edit_file
     - kind: builtin
+      ref: apply_patch
+    - kind: builtin
       ref: mkdir
     - kind: builtin
       ref: rm
