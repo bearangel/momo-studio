@@ -7,6 +7,7 @@ import type { SkillRegistry } from '../../skill/registry';
 import type { LLMToolDef } from '../llm-provider';
 import type { StreamChunk } from '../stream-chunk';
 import type { ToolPermissionConfig } from './shared/permission';
+import type { ReadTracker } from './shared/read-tracker';
 
 /** 工具执行时的共享上下文。runtime-entry 在每次工具调用前组装并传入。 */
 export interface ToolContext {
@@ -30,6 +31,12 @@ export interface ToolContext {
    * 并 resolve "已中断"，否则会等到自身 timeout 才返回，期间用户停止按钮无效。
    */
   abortSignal?: AbortSignal;
+  /**
+   * v2.3 Read-before-Edit：维护 streamSession 维度已读取文件集合。
+   * 文件写工具（edit_file / apply_patch）写盘前必须 assertRead；可选（向后兼容，
+   * 未注入时 file-tools 自行构造一个本地 ReadTracker）。
+   */
+  readTracker?: ReadTracker;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */
