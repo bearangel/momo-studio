@@ -1,5 +1,6 @@
 // electron/src/main/agent/tools/index.ts
-// 工具注册中心。已接入 FileTools（8 个文件工具）+ SearchTools（grep / glob）+
+// 工具注册中心。已接入 FileTools（8 个文件工具）+ ApplyPatchTools（v2.3
+//   apply_patch V4A 多文件原子 patch） + SearchTools（grep / glob）+
 //   ShellTools（bash，workspace 内自由 shell）+ GitTools（git 9 工具）+
 //   WebTools（webfetch URL 抓取）+ TodoTools（v1.5 todowrite 任务列表）+
 //   TaskTools（v2 B10 任务工具：read_task / read_task_history / read_task_progress /
@@ -12,6 +13,7 @@ import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { UnknownToolError } from './types';
 import { FileTools } from './file-tools';
+import { ApplyPatchTools } from './apply-patch-tools';
 import { SearchTools } from './search-tools';
 import { ShellTools } from './shell-tools';
 import { GitTools } from './git-tools';
@@ -24,6 +26,7 @@ import { MemoryTools } from './memory-tools';
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
   const modules: ToolModule[] = [
     new FileTools(),
+    new ApplyPatchTools(),
     new SearchTools(),
     new ShellTools(),
     new GitTools(),
