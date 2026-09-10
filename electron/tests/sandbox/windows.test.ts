@@ -19,6 +19,14 @@ describe('getExecutionPolicy', () => {
     const r: CmdRunner = async () => ({ code: 0, stdout: 'Restricted\n', stderr: '' });
     expect(await getExecutionPolicy('powershell.exe', r)).toBe('Restricted');
   });
+  it('非零退出码 → Unknown', async () => {
+    const r: CmdRunner = async () => ({ code: 1, stdout: '', stderr: 'boom' });
+    expect(await getExecutionPolicy('powershell.exe', r)).toBe('Unknown');
+  });
+  it('空输出 → Unknown', async () => {
+    const r: CmdRunner = async () => ({ code: 0, stdout: '\n', stderr: '' });
+    expect(await getExecutionPolicy('powershell.exe', r)).toBe('Unknown');
+  });
 });
 
 describe('buildKillTreeArgs', () => {

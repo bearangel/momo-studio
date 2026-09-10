@@ -58,7 +58,9 @@ export async function reprobeSandbox(runner: CmdRunner = defaultRunner): Promise
     }
   } else if (process.platform === 'darwin') {
     // sandbox-exec 冒烟：跑一个最小 profile 的 true。无 --version 参数。
-    const r = await runner('sandbox-exec', ['-p', '(version 1)(allow file-read*)', '/usr/bin/true']);
+    // 必须显式 allow process-exec / process-fork：SBPL v1 未指定操作的默认语义有歧义，
+    // 若 default-deny 则 exec /usr/bin/true 会被拒 → 探测恒 unavailable → macOS strict 模式 bash 全 block。
+    const r = await runner('sandbox-exec', ['-p', '(version 1)(allow file-read*)(allow process-exec process-fork)', '/usr/bin/true']);
     if (r.code === 0) {
       state.sandboxTool = 'seatbelt';
       state.available = true;
