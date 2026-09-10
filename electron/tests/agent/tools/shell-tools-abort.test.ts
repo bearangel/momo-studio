@@ -1,13 +1,29 @@
 // 验证 v1.5.1 修复：bash 工具监听外部 abortSignal，被中断时立即 SIGKILL + resolve
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
+import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
+import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
 
 describe('ShellTools abortSignal 响应', () => {
+  // v2.4：bash 走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证真实 spawn 可达
+  beforeEach(() => {
+    __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+    __setSandboxStateForTest({
+      platform: 'linux', sandboxTool: null, toolVersion: null,
+      available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
+      executionPolicy: null, probedAt: 0,
+    });
+  });
+  afterEach(() => {
+    __setSandboxSettingsForTest(null);
+    __setSandboxStateForTest(null);
+  });
+
   it('外部 abortSignal 触发时立即 SIGKILL bash 子进程', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-shell-abort-'));
     const controller = new AbortController();
@@ -64,6 +80,8 @@ describe('ShellTools abortSignal 响应', () => {
     const result = await tools.execute('bash', { command: 'echo hello' }, ctx);
     expect(result).toContain('hello');
     expect(result).not.toContain('用户中断');
+    // v2.4：正常执行结果带 sandbox 标记（permissive 降级直跑）
+    expect(result).toContain('sandbox: unsandboxed:');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

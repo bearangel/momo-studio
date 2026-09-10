@@ -16,18 +16,28 @@ import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
+import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
+import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
 
 let tmpRoot: string;
 let tmpDir: string;
 let wsFs: WorkspaceFS;
 let ctx: ToolContext;
 
-beforeEach(() => {
+  beforeEach(() => {
   // 每用例唯一 tmpDir，避免模块级缓存串数据。
   tmpRoot = path.join(os.tmpdir(), `ap-shell-tools-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   tmpDir = path.join(tmpRoot, 'workspace');
   fs.mkdirSync(tmpDir, { recursive: true });
   wsFs = new WorkspaceFS(tmpDir);
+  // v2.4：bash 走 resolveShellSpawn（默认 strict + 未探测 → blocked 抛错）。
+  // 注入 permissive + linux 沙箱不可用状态 → plain 直跑 + unsandboxed 标记。
+  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxStateForTest({
+    platform: 'linux', sandboxTool: null, toolVersion: null,
+    available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
+    executionPolicy: null, probedAt: 0,
+  });
   // ShellTools 只用 wsFs / workspaceDir；其他字段给空 stub（实现不会触碰）。
   ctx = {
     wsFs,
@@ -43,6 +53,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // 沙箱钩子复位（模块级单例，防泄漏到其他测试文件外的用例）
+  __setSandboxSettingsForTest(null);
+  __setSandboxStateForTest(null);
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   // 兜底：防止 OPENAI_API_KEY 用例失败时泄漏到后续用例。
   delete process.env.OPENAI_API_KEY;
@@ -53,6 +66,8 @@ describe('bash 正常执行', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: 'echo hello' }, ctx);
     expect(result).toContain('exit_code: 0');
+    // v2.4：结果第二行固定为 sandbox 标记（permissive 降级 = unsandboxed:原因）
+    expect(result).toContain('sandbox: unsandboxed:bwrap 未安装');
     expect(result).toContain('hello');
   });
 
@@ -60,6 +75,7 @@ describe('bash 正常执行', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: 'exit 42' }, ctx);
     expect(result).toContain('exit_code: 42');
+    expect(result).toContain('sandbox: unsandboxed:bwrap 未安装');
   });
 
   it('工作目录锁定 workspace 根', async () => {
@@ -84,6 +100,8 @@ describe('bash 超时', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: 'sleep 5', timeoutMs: 1000 }, ctx);
     expect(result).toContain('超时');
+    // 超时路径（close 事件触发）同样带 sandbox 标记
+    expect(result).toContain('sandbox: unsandboxed:');
   }, 10000);
 });
 

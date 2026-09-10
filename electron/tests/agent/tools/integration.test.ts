@@ -24,6 +24,8 @@ import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import { buildToolRegistry, getAllToolDefs, executeTool } from '../../../src/main/agent/tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { assertToolAllowed } from '../../../src/main/agent/tools/shared/permission';
+import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
+import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
 
 let tmpDir: string;
 let ctx: ToolContext;
@@ -31,6 +33,13 @@ let modules: ReturnType<typeof buildToolRegistry>;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-integration-'));
+  // v2.4：bash 走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证 bash 用例可真实执行
+  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxStateForTest({
+    platform: 'linux', sandboxTool: null, toolVersion: null,
+    available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
+    executionPolicy: null, probedAt: 0,
+  });
   // git init 让 git_add 等工具可用；-b main 显式指定默认分支名（避免 git 版本差异）
   execSync('git init -b main', { cwd: tmpDir });
   execSync('git config user.email t@t.com && git config user.name T', { cwd: tmpDir });
@@ -51,7 +60,11 @@ beforeEach(() => {
   modules = buildToolRegistry(ctx);
 });
 
-afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+afterEach(() => {
+  __setSandboxSettingsForTest(null);
+  __setSandboxStateForTest(null);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 describe('agent 完整工作流', () => {
   it('list → write → edit → grep → mkdir+write test → git_add，全部工具暴露给 LLM', async () => {
@@ -141,5 +154,7 @@ describe('agent 完整工作流', () => {
     const result = await executeTool('bash', { command: 'echo hello' }, ctx, modules);
     expect(result).toContain('exit_code: 0');
     expect(result).toContain('hello');
+    // v2.4：结果带 sandbox 标记（permissive 降级直跑）
+    expect(result).toContain('sandbox: unsandboxed:');
   }, 30000);
 });

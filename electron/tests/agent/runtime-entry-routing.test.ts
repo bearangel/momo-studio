@@ -30,6 +30,8 @@ import {
   type RuntimeConfig,
   type RuntimeContext,
 } from '../../src/main/agent/runtime-entry';
+import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
+import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 
 let tmpDir: string;
 let ctx: RuntimeContext;
@@ -93,9 +95,20 @@ beforeEach(() => {
     sendStreamChunk,
     toolModules: buildToolRegistry(sharedToolCtxFields),
   };
+  // v2.4：bash 路由用例走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证真实 spawn 可达
+  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxStateForTest({
+    platform: 'linux', sandboxTool: null, toolVersion: null,
+    available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
+    executionPolicy: null, probedAt: 0,
+  });
 });
 
-afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+afterEach(() => {
+  __setSandboxSettingsForTest(null);
+  __setSandboxStateForTest(null);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 describe('doExecuteTool 工具路由（v1.5 注册中心修复回归）', () => {
   it('v1.5 文件工具 exists 命中注册中心，返回"存在"', async () => {
@@ -110,6 +123,8 @@ describe('doExecuteTool 工具路由（v1.5 注册中心修复回归）', () => 
       makeConfig(),
     );
     expect(out).toContain('routing_ok');
+    // v2.4：结果带 sandbox 标记（permissive 降级直跑）
+    expect(out).toContain('sandbox: unsandboxed:');
   });
 
   it('原 v1.4 工具 list_files 迁移到注册中心后仍正常（向后兼容）', async () => {
