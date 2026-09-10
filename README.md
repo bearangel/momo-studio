@@ -6,6 +6,17 @@
 
 ## 状态
 
+**v2.3.0 — FileTools 防御硬化（开发中，未发布）**
+
+工具防御契约系统性补齐——结构化 patch + Read-before-Edit + 失败信息增强。
+
+- **结构化 apply_patch 工具（新增）** — V4A 语法（add / update / delete 三头）+ 自写 PEG parser + 多文件原子执行 + 失败自动回滚（备份到 Electron userData/apply-patch-tmp/）
+- **Read-before-Edit 强阻塞守门** — edit_file / write_file（覆盖场景）前必须先 read_file 读取同文件；write_file 创建新文件豁免；子 agent 永远 fresh-session（与 Memory 子 agent 规则一致）
+- **edit_file 失败信息增强** — 错误信息含原文前 5KB 快照 + 首次不一致行号 + read_file 重试建议；LLM 一次 round-trip 即可定位错误
+- **builtin agent 同步** — 3 个 builtin YAML（coder / pm-agent / requirement-analyst）defaultTools 加 apply_patch；Migration v32 幂等同步
+- **ToolContext 扩展** — 新增可选 `readTracker?: ReadTracker`（向后兼容；未注入时不阻塞既有流程）
+- 详见 `docs/specs/2026-09-10-file-tools-defense-hardening-design.md`
+
 **v2.2.1 — 供应商预设与模型思维模式（开发中，未发布）**
 
 供应商新建预设化 + 思维模式两级配置。spec 见 `docs/specs/2026-09-09-provider-presets-design.md`，实施计划见 `docs/plans/2026-09-09-provider-presets.md`。

@@ -23,14 +23,30 @@ import {
   getDispatchToolDefs,
 } from '../../../src/main/agent/builtin-tools';
 import { SkillRegistry } from '../../../src/main/skill/registry';
+import type { ToolContext } from '../../../src/main/agent/tools/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-file-tools-test-${Date.now()}`);
 const tmpDir = path.join(tmpRoot, 'workspace');
 let wsFs: WorkspaceFS;
+// v2.3：executeFileTool 第三参从 wsFs 改为 ToolContext。
+// 此处刻意不注入 readTracker——保持「未注入即不守门」的向后兼容语义，
+// Read-before-Edit 守门行为由 file-tools-read-gate.test.ts 专门覆盖。
+let ctx: ToolContext;
 
 beforeEach(() => {
   fs.mkdirSync(tmpDir, { recursive: true });
   wsFs = new WorkspaceFS(tmpDir);
+  ctx = {
+    wsFs,
+    workspaceId: 'test-ws',
+    workspaceDir: tmpDir,
+    skillRegistry: new SkillRegistry(),
+    streamSessionId: 'test-ssn',
+    roomId: '!test:room',
+    sendStreamChunk: () => {},
+    permissionConfig: { allowedTools: [], deniedTools: [] },
+    creatorUserId: 'test-user',
+  };
 });
 
 afterEach(() => {
@@ -69,12 +85,12 @@ describe('agent/tools/file-tools getFileToolDefs', () => {
 describe('agent/tools/file-tools read_file', () => {
   it('读取已存在的文件内容', async () => {
     await wsFs.writeFile('hello.txt', '你好世界');
-    const result = await executeFileTool('read_file', { path: 'hello.txt' }, wsFs);
+    const result = await executeFileTool('read_file', { path: 'hello.txt' }, ctx);
     expect(result).toBe('你好世界');
   });
 
   it('缺失 path 参数抛错', async () => {
-    await expect(executeFileTool('read_file', {}, wsFs)).rejects.toThrow('path');
+    await expect(executeFileTool('read_file', {}, ctx)).rejects.toThrow('path');
   });
 
   // v1.5.6 分页测试
@@ -84,7 +100,7 @@ describe('agent/tools/file-tools read_file', () => {
     const result = await executeFileTool(
       'read_file',
       { path: 'big.txt', offset: 10, limit: 5 },
-      wsFs,
+      ctx,
     );
     expect(result).toContain('line 10');
     expect(result).toContain('line 14');
@@ -95,7 +111,7 @@ describe('agent/tools/file-tools read_file', () => {
   it('默认 limit=2000，大文件分页提示', async () => {
     const lines = Array.from({ length: 3000 }, (_, i) => `l${i + 1}`);
     await wsFs.writeFile('huge.txt', lines.join('\n'));
-    const result = await executeFileTool('read_file', { path: 'huge.txt' }, wsFs);
+    const result = await executeFileTool('read_file', { path: 'huge.txt' }, ctx);
     expect(result).toContain('l1\n');
     expect(result).toContain('l2000');
     expect(result).not.toContain('l2001');
@@ -107,7 +123,7 @@ describe('agent/tools/file-tools read_file', () => {
     const result = await executeFileTool(
       'read_file',
       { path: 'small.txt', offset: 100 },
-      wsFs,
+      ctx,
     );
     expect(result).toMatch(/共 1 行.*offset=100 超出范围/);
   });
@@ -118,7 +134,7 @@ describe('agent/tools/file-tools read_file', () => {
     const result = await executeFileTool(
       'read_file',
       { path: 'med.txt', offset: 40, limit: 20 },
-      wsFs,
+      ctx,
     );
     expect(result).toContain('x40');
     expect(result).toContain('x50');
@@ -132,7 +148,7 @@ describe('agent/tools/file-tools read_file', () => {
     const result = await executeFileTool(
       'read_file',
       { path: 'cap.txt', limit: 99999 },
-      wsFs,
+      ctx,
     );
     expect(result).toContain('y1');
     expect(result).toContain('y100');
@@ -140,7 +156,7 @@ describe('agent/tools/file-tools read_file', () => {
 
   it('完整读小文件无分页提示（向后兼容）', async () => {
     await wsFs.writeFile('tiny.txt', 'short\nfile');
-    const result = await executeFileTool('read_file', { path: 'tiny.txt' }, wsFs);
+    const result = await executeFileTool('read_file', { path: 'tiny.txt' }, ctx);
     expect(result).toBe('short\nfile');
   });
 });
@@ -150,10 +166,10 @@ describe('agent/tools/file-tools write_file', () => {
     const result = await executeFileTool(
       'write_file',
       { path: 'out.txt', content: '写入测试' },
-      wsFs,
+      ctx,
     );
     expect(result).toBe('文件已写入: out.txt');
-    const readBack = await executeFileTool('read_file', { path: 'out.txt' }, wsFs);
+    const readBack = await executeFileTool('read_file', { path: 'out.txt' }, ctx);
     expect(readBack).toBe('写入测试');
   });
 
@@ -161,15 +177,15 @@ describe('agent/tools/file-tools write_file', () => {
     await executeFileTool(
       'write_file',
       { path: 'sub/deep/file.txt', content: '嵌套' },
-      wsFs,
+      ctx,
     );
-    const readBack = await executeFileTool('read_file', { path: 'sub/deep/file.txt' }, wsFs);
+    const readBack = await executeFileTool('read_file', { path: 'sub/deep/file.txt' }, ctx);
     expect(readBack).toBe('嵌套');
   });
 
   it('缺失 content 参数抛错', async () => {
     await expect(
-      executeFileTool('write_file', { path: 'x.txt' }, wsFs),
+      executeFileTool('write_file', { path: 'x.txt' }, ctx),
     ).rejects.toThrow('content');
   });
 });
@@ -180,7 +196,7 @@ describe('agent/tools/file-tools list_files', () => {
     await wsFs.writeFile('b.md', 'b');
     fs.mkdirSync(path.join(wsFs['rootDir'], 'subdir'), { recursive: true });
 
-    const result = await executeFileTool('list_files', { path: '.' }, wsFs);
+    const result = await executeFileTool('list_files', { path: '.' }, ctx);
     const lines = result.split('\n');
     expect(lines).toContain('📄 a.txt');
     expect(lines).toContain('📄 b.md');
@@ -189,12 +205,12 @@ describe('agent/tools/file-tools list_files', () => {
 
   it('未传 path 时默认列 workspace 根目录', async () => {
     await wsFs.writeFile('root.txt', 'x');
-    const result = await executeFileTool('list_files', {}, wsFs);
+    const result = await executeFileTool('list_files', {}, ctx);
     expect(result).toContain('root.txt');
   });
 
   it('空目录返回提示文本', async () => {
-    const result = await executeFileTool('list_files', { path: '.' }, wsFs);
+    const result = await executeFileTool('list_files', { path: '.' }, ctx);
     expect(result).toBe('(空目录)');
   });
 });
@@ -202,25 +218,25 @@ describe('agent/tools/file-tools list_files', () => {
 describe('agent/tools/file-tools 安全与错误', () => {
   it('path traversal 被 WorkspaceFS 拒绝（read_file）', async () => {
     await expect(
-      executeFileTool('read_file', { path: '../../../etc/passwd' }, wsFs),
+      executeFileTool('read_file', { path: '../../../etc/passwd' }, ctx),
     ).rejects.toThrow();
   });
 
   it('path traversal 被 WorkspaceFS 拒绝（write_file）', async () => {
     await expect(
-      executeFileTool('write_file', { path: '../../evil.txt', content: 'x' }, wsFs),
+      executeFileTool('write_file', { path: '../../evil.txt', content: 'x' }, ctx),
     ).rejects.toThrow();
   });
 
   it('.git 目录操作被拒绝', async () => {
     await expect(
-      executeFileTool('write_file', { path: '.git/config', content: 'evil' }, wsFs),
+      executeFileTool('write_file', { path: '.git/config', content: 'evil' }, ctx),
     ).rejects.toThrow();
   });
 
   it('未知工具抛错', async () => {
     await expect(
-      executeFileTool('not_a_tool', { path: 'x' }, wsFs),
+      executeFileTool('not_a_tool', { path: 'x' }, ctx),
     ).rejects.toThrow('未知工具');
   });
 });
@@ -229,7 +245,7 @@ describe('edit_file', () => {
   it('唯一匹配成功', async () => {
     await wsFs.writeFile('foo.txt', 'line1\nTARGET\nline3');
     const result = await executeFileTool('edit_file',
-      { path: 'foo.txt', oldString: 'TARGET', newString: 'REPLACED' }, wsFs);
+      { path: 'foo.txt', oldString: 'TARGET', newString: 'REPLACED' }, ctx);
     expect(result).toContain('已编辑');
     expect((await wsFs.readFile('foo.txt')).toString('utf-8')).toBe('line1\nREPLACED\nline3');
   });
@@ -237,42 +253,42 @@ describe('edit_file', () => {
   it('多重匹配抛错', async () => {
     await wsFs.writeFile('foo.txt', 'DUP\nDUP\nDUP');
     await expect(executeFileTool('edit_file',
-      { path: 'foo.txt', oldString: 'DUP', newString: 'X' }, wsFs)).rejects.toThrow(/出现多次/);
+      { path: 'foo.txt', oldString: 'DUP', newString: 'X' }, ctx)).rejects.toThrow(/not_unique|出现 3 次/);
   });
 
   it('未找到时回写文件头', async () => {
     await wsFs.writeFile('foo.txt', 'hello world'.repeat(100));
     await expect(executeFileTool('edit_file',
-      { path: 'foo.txt', oldString: 'NOT_FOUND', newString: 'X' }, wsFs))
+      { path: 'foo.txt', oldString: 'NOT_FOUND', newString: 'X' }, ctx))
       .rejects.toThrow(/未在文件中找到/);
   });
 
   it('oldString=newString 拒绝', async () => {
     await wsFs.writeFile('foo.txt', 'hello');
     await expect(executeFileTool('edit_file',
-      { path: 'foo.txt', oldString: 'hello', newString: 'hello' }, wsFs)).rejects.toThrow(/相同/);
+      { path: 'foo.txt', oldString: 'hello', newString: 'hello' }, ctx)).rejects.toThrow(/相同/);
   });
 
   it('文件不存在抛错', async () => {
     await expect(executeFileTool('edit_file',
-      { path: 'no.txt', oldString: 'a', newString: 'b' }, wsFs)).rejects.toThrow(/文件不存在/);
+      { path: 'no.txt', oldString: 'a', newString: 'b' }, ctx)).rejects.toThrow(/文件不存在/);
   });
 
   it('路径越界抛错', async () => {
     await expect(executeFileTool('edit_file',
-      { path: '../../etc/passwd', oldString: 'a', newString: 'b' }, wsFs)).rejects.toThrow(/路径越界/);
+      { path: '../../etc/passwd', oldString: 'a', newString: 'b' }, ctx)).rejects.toThrow(/路径越界/);
   });
 });
 
 describe('mkdir', () => {
   it('创建目录', async () => {
-    const result = await executeFileTool('mkdir', { path: 'newdir' }, wsFs);
+    const result = await executeFileTool('mkdir', { path: 'newdir' }, ctx);
     expect(result).toContain('已创建');
     expect(fs.existsSync(path.join(tmpDir, 'newdir'))).toBe(true);
   });
 
   it('递归创建嵌套', async () => {
-    await executeFileTool('mkdir', { path: 'a/b/c' }, wsFs);
+    await executeFileTool('mkdir', { path: 'a/b/c' }, ctx);
     expect(fs.existsSync(path.join(tmpDir, 'a/b/c'))).toBe(true);
   });
 });
@@ -280,19 +296,19 @@ describe('mkdir', () => {
 describe('rm', () => {
   it('删除文件', async () => {
     await wsFs.writeFile('trash.txt', 'x');
-    await executeFileTool('rm', { path: 'trash.txt' }, wsFs);
+    await executeFileTool('rm', { path: 'trash.txt' }, ctx);
     expect(fs.existsSync(path.join(tmpDir, 'trash.txt'))).toBe(false);
   });
 
   it('不存在的路径抛错', async () => {
-    await expect(executeFileTool('rm', { path: 'no.txt' }, wsFs)).rejects.toThrow();
+    await expect(executeFileTool('rm', { path: 'no.txt' }, ctx)).rejects.toThrow();
   });
 });
 
 describe('mv', () => {
   it('移动文件', async () => {
     await wsFs.writeFile('a.txt', 'content');
-    await executeFileTool('mv', { src: 'a.txt', dst: 'b.txt' }, wsFs);
+    await executeFileTool('mv', { src: 'a.txt', dst: 'b.txt' }, ctx);
     expect(fs.existsSync(path.join(tmpDir, 'a.txt'))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, 'b.txt'))).toBe(true);
   });
@@ -301,11 +317,11 @@ describe('mv', () => {
 describe('exists', () => {
   it('存在返回 "存在"', async () => {
     await wsFs.writeFile('here.txt', 'x');
-    expect(await executeFileTool('exists', { path: 'here.txt' }, wsFs)).toBe('存在');
+    expect(await executeFileTool('exists', { path: 'here.txt' }, ctx)).toBe('存在');
   });
 
   it('不存在返回 "不存在"', async () => {
-    expect(await executeFileTool('exists', { path: 'no.txt' }, wsFs)).toBe('不存在');
+    expect(await executeFileTool('exists', { path: 'no.txt' }, ctx)).toBe('不存在');
   });
 });
 

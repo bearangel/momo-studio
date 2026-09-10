@@ -6,6 +6,8 @@
 // silently return `[]` in the packaged app, leaving the DB with no tables. By
 // keeping the SQL in-source, the compiled module is fully-contained.
 
+import { migration032 } from './032_v2.3_builtin_apply_patch';
+
 export interface Migration {
   version: number;
   sql: string;
@@ -874,6 +876,13 @@ ALTER TABLE provider_models ADD COLUMN thinking_json TEXT;
 -- 3. agent_definitions.thinking_json：agent 级覆盖；NULL=继承模型级
 ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     `.trim(),
+  },
+  {
+    // v2.3：builtin agent defaultTools 追加 apply_patch。SQL 住在独立模块
+    // 032_v2.3_builtin_apply_patch.ts（仍是 TS 内联字符串常量，与本文件头部
+    // 约定一致——不用 .sql 文件的原因见顶注），此处仅做 {version, sql} 注册。
+    version: migration032.version,
+    sql: migration032.up,
   },
 ];
 

@@ -148,6 +148,9 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     readFile: vi.fn().mockResolvedValue(Buffer.from('mock file content')),
     writeFile: vi.fn().mockResolvedValue(undefined),
     listDir: vi.fn().mockResolvedValue([]),
+    // v2.3 read_file 标记已读走 assertInWorkspace 归一化键——仿真真实 WorkspaceFS
+    // 的被消费语义：相对路径 join workspace 根后 normalize 返回绝对路径
+    assertInWorkspace: (p: string) => path.resolve('/tmp/test', p),
   } as unknown as WorkspaceFS;
   const mockSkillRegistry = {
     list: () => [],

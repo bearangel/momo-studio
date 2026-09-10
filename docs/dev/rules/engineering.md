@@ -69,6 +69,17 @@
 
 ---
 
+## v2.3 Read-before-Edit 规则
+
+v2.3 FileTools 防御硬化（spec：`docs/specs/2026-09-10-file-tools-defense-hardening-design.md`）引入的工具层强阻塞守门：
+
+- 所有 edit_file / write_file 调用前必须先 read_file 读取同文件
+- write_file 创建新文件豁免（文件不存在时无需 Read）
+- 子 agent（parentStreamSessionId 非空）永远 fresh-session，不继承父 agent 已读状态
+- 测试覆盖：electron/tests/agent/tools/file-tools-read-gate.test.ts
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |
