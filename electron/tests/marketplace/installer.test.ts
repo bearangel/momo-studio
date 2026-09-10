@@ -86,18 +86,19 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(installed[0]!.cachePath).toBe(cachePath);
   });
 
-  it('agent 类型 manifest.yaml 含全部 24 个 builtin defaultTools', async () => {
+  it('agent 类型 manifest.yaml 含全部 25 个 builtin defaultTools（v2.3 +apply_patch）', async () => {
     const { cachePath } = await installPackage(makeItem());
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    expect(manifest.spec.defaultTools).toHaveLength(24);
+    expect(manifest.spec.defaultTools).toHaveLength(25);
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
     expect(refs).toContain('bash');
     expect(refs).toContain('read_file');
     expect(refs).toContain('git_commit');
     expect(refs).toContain('lsp_diagnostics');
+    expect(refs).toContain('apply_patch');
   });
 
   it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/git_commit 被剔除', async () => {
@@ -107,7 +108,7 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     const refs = def!.defaultTools.map((t) => t.ref);
     expect(refs).not.toContain('bash');
     expect(refs).not.toContain('git_commit');
-    // 全部落在安全最小集内（文件里仍是 24 工具全集，钳制只作用于注册结果）
+    // 全部落在安全最小集内（文件里仍是 25 工具全集，钳制只作用于注册结果）
     const safe = new Set<string>(SAFE_MINIMUM_TOOLS);
     expect(refs.every((r) => safe.has(r))).toBe(true);
     expect(def!.source).toBe('marketplace');
