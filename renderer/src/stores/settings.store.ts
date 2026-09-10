@@ -8,6 +8,7 @@ export type SettingsCategory =
   | 'conversation'
   | 'memory'
   | 'appearance'
+  | 'sandbox'
   | 'git_policy'
   | 'audit_log'
   | 'p2p'

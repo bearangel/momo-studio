@@ -520,6 +520,10 @@ export interface GlobalSettings {
   memoryEnabled?: boolean;
   /** v2.2 P2：自动提取子开关（默认 true；与 memoryEnabled 联动——总开关停用时强制不工作） */
   memoryExtractionEnabled?: boolean;
+  /** v2.4：OS 沙箱模式（strict=沙箱不可用时 bash 拒绝执行 / permissive=降级运行并审计标记）。默认 strict */
+  sandboxMode?: 'strict' | 'permissive';
+  /** v2.4：沙箱内 bash 网络出站（仅影响 bash 工具，LLM API 调用不受影响）。默认 false */
+  sandboxNetwork?: boolean;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
