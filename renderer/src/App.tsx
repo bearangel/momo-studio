@@ -16,6 +16,7 @@ import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDia
 import { MainShell } from './routes/MainShell';
 import { TitleBar } from './components/layout/TitleBar';
 import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
+import { SandboxNotice } from './components/settings/SandboxNotice';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -80,6 +81,8 @@ export function App() {
       {upgradeExportDir && (
         <UpgradeNotice exportDir={upgradeExportDir} onDismiss={dismissUpgrade} />
       )}
+      {/* v2.4 Task 9：沙箱首启提示（自管显隐——不满足条件时组件内部返回 null） */}
+      <SandboxNotice />
     </>
   );
 }

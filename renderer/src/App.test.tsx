@@ -62,7 +62,35 @@ const mockApi = {
     isMaximized: vi.fn().mockResolvedValue(false),
     onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
   },
+  // v2.4 Task 9：SandboxNotice 挂载拉取聚合信息——默认「已可用」使提示卡不渲染，
+  // 既有分支断言不受影响
+  sandbox: {
+    getState: vi.fn(),
+    reprobe: vi.fn(),
+    installBwrap: vi.fn(),
+    dismissPrompt: vi.fn(),
+  },
 };
+
+// 默认 sandbox 聚合信息（linux 已可用 → SandboxNotice 返回 null）
+function mkSandboxInfo() {
+  return {
+    state: {
+      platform: 'linux',
+      sandboxTool: 'bwrap' as const,
+      toolVersion: '0.8.0',
+      available: true,
+      unavailableReason: null,
+      windowsShell: null,
+      executionPolicy: null,
+      probedAt: 1757500000000,
+    },
+    settings: { mode: 'strict' as const, networkEnabled: false },
+    installCommand: null,
+    bwrapPromptDismissed: false,
+    winPolicyPromptDismissed: false,
+  };
+}
 
 beforeEach(() => {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -73,6 +101,9 @@ beforeEach(() => {
   // 默认无升级标记——既有分支断言不受影响
   mockApi.system.getUpgradeNotice.mockResolvedValue(null);
   mockApi.system.dismissUpgradeNotice.mockResolvedValue(undefined);
+  // 默认沙箱已可用——SandboxNotice 不渲染，既有断言不受影响
+  mockApi.sandbox.getState.mockReset();
+  mockApi.sandbox.getState.mockResolvedValue(mkSandboxInfo());
 });
 
 describe('App 启动分支（v2.0 P1 Task 11）', () => {
