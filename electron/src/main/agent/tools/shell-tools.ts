@@ -53,7 +53,9 @@ const BLACKLIST_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bgit\s+commit\b/, reason: '禁止 bash 直接 git commit，请用 git_commit 工具（走 GitPolicy 校验）' },
   // ── Windows 危险命令（v2.4，spec §5.5；regex 大小写不敏感场景用 i flag）──
   { pattern: /\bformat(\.com)?\s+[a-z]:/i, reason: '禁止格式化磁盘卷' },
-  { pattern: /\b(remove-item|rm)\s+.*-recurse\s+.*[a-z]:\\/i, reason: '禁止递归删除盘根' },
+  // 双向语序：flag 在路径前（-Recurse C:\）或路径后（-Path C:\ -Recurse）均拦截；
+  // [^|;&]* 限定单条命令内匹配，避免跨命令拼接误伤
+  { pattern: /\b(remove-item|rm)\s+(?:[^|;&]*-recurse[^|;&]*[a-z]:\\|[^|;&]*[a-z]:\\[^|;&]*-recurse)/i, reason: '禁止递归删除盘根' },
   { pattern: /\bbcdedit\b/i, reason: '禁止修改启动配置' },
   { pattern: /\bvssadmin\s+delete\s+shadows/i, reason: '禁止删除卷影副本' },
   { pattern: /\breg\s+add\b.*\\run\b/i, reason: '禁止写自启动注册表项' },

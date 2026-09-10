@@ -134,6 +134,31 @@ describe('bash 黑名单', () => {
     const tools = new ShellTools();
     await expect(tools.execute('bash', { command: 'git commit -m test' }, ctx)).rejects.toThrow(/git_commit/);
   });
+
+  // v2.4.0 review 修补：Remove-Item 黑名单必须覆盖双向语序。
+  // win32 无 OS 沙箱，黑名单是唯一防线——只拦一种语序会被 PowerShell 习惯写法绕过。
+  it('拦截 Remove-Item 路径在前语序（-Path C:\\ -Recurse）', async () => {
+    const tools = new ShellTools();
+    await expect(tools.execute('bash', { command: 'Remove-Item -Path C:\\ -Recurse' }, ctx))
+      .rejects.toThrow(/递归删除盘根/);
+  });
+
+  it('拦截 Remove-Item flag 在前语序（-Recurse -Path C:\\）', async () => {
+    const tools = new ShellTools();
+    await expect(tools.execute('bash', { command: 'Remove-Item -Recurse -Path C:\\' }, ctx))
+      .rejects.toThrow(/递归删除盘根/);
+  });
+
+  it('不误伤 workspace 相对路径（Remove-Item ./dist -Recurse）', async () => {
+    // 控制用例：双向放宽不能引入误伤；只校验「未被黑名单拦下」。
+    // 注：linux 下 Remove-Item 不是合法 sh 命令，spawn 后会失败——错误必须不含「黑名单」。
+    const tools = new ShellTools();
+    try {
+      await tools.execute('bash', { command: 'Remove-Item ./dist -Recurse' }, ctx);
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/黑名单/);
+    }
+  });
 });
 
 describe('bash 输出截断', () => {
