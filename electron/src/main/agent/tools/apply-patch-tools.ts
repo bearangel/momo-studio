@@ -60,14 +60,21 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
 
   // 3. 逐 op 执行
   let applied = 0;
+  // 跟踪 add 成功的新文件路径——回滚时需删除（spec §6.1 严格 all-or-nothing）
+  const addedFiles: string[] = [];
   try {
     for (const op of ast.ops) {
-      await applyOp(op, ctx);
+      await applyOp(op, ctx, addedFiles);
       applied++;
     }
   } catch (err) {
     // 4. 失败回滚
     await restoreFromBackup(backupDir, ctx);
+    // 删除 add 成功但后续 op 失败产生的新文件——恢复备份不覆盖这部分
+    for (const relPath of addedFiles) {
+      const abs = ctx.wsFs.assertInWorkspace(relPath);
+      if (fs.existsSync(abs)) fs.rmSync(abs);
+    }
     fs.rmSync(backupDir, { recursive: true, force: true });
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`apply_patch 失败，已回滚（已应用 ${applied}/${ast.ops.length} ops）: ${msg}`);
@@ -104,10 +111,11 @@ function* walkDir(dir: string): Generator<string> {
   }
 }
 
-async function applyOp(op: PatchOp, ctx: ToolContext): Promise<void> {
+async function applyOp(op: PatchOp, ctx: ToolContext, addedFiles: string[]): Promise<void> {
   switch (op.kind) {
     case 'add':
       await ctx.wsFs.writeFile(op.path, op.content);
+      addedFiles.push(op.path);
       break;
     case 'update':
       {

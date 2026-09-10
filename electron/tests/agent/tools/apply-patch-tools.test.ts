@@ -130,6 +130,27 @@ describe('execute — 多文件原子性', () => {
     // 关键断言：keep.ts 未被破坏（回滚成功）
     expect(fs.readFileSync(path.join(tmpDir, 'keep.ts'), 'utf-8')).toBe('original');
   });
+
+  it('add-then-fail：add 成功后 update 失败时，新增文件被回滚删除（严格 all-or-nothing）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'existing.ts'), 'original\n');
+    // 构造 add → update(anchor 找不到) → add 的序列；update 失败触发回滚
+    const patch = `*** Add File: new.ts
++content
+*** Update File: existing.ts
+@@ nonexistent anchor
+-x
++y
+*** Add File: another.ts
++another content
+`;
+    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/回滚/);
+    // 关键断言：第一个 add 成功产生的 new.ts 必须被回滚删除（spec §6.1）
+    expect(fs.existsSync(path.join(tmpDir, 'new.ts'))).toBe(false);
+    // 第三个 add 在 update 失败后未执行，another.ts 本就不该存在
+    expect(fs.existsSync(path.join(tmpDir, 'another.ts'))).toBe(false);
+    // update 目标 existing.ts 走备份恢复，原始内容完整保留
+    expect(fs.readFileSync(path.join(tmpDir, 'existing.ts'), 'utf-8')).toBe('original\n');
+  });
 });
 
 describe('execute — 沙箱协同', () => {
