@@ -2,8 +2,9 @@
 //
 // 压缩重构 Task 1（spec 2026-09-09 §2.3）：窗口元数据 resolve 链契约测试。
 //
-// 锁死的优先级（单一真相源）：
+// 锁死的优先级（单一真相源，spec 2026-09-09-provider-presets §4）：
 //   provider_models.context_window（用户覆盖，非 NULL 且 >0）
+//     → 预设模型表（presetKey + modelId 命中）
 //     → 内置目录（model-catalog 按 platform+名称匹配）
 //     → null（未知；下游 RuntimeConfig 用 0 表示）
 //
@@ -47,12 +48,13 @@ function seedProvider(
   db: ReturnType<typeof getDb>,
   id: string,
   platform: 'openai' | 'anthropic',
+  presetKey?: string,
 ): void {
   db.prepare(
     `INSERT INTO model_providers
-       (id, name, base_url, api_key_ref, default_model, is_default, platform)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, 'T', 'https://api.test.com', `provider.${id}.api_key`, null, 0, platform);
+       (id, name, base_url, api_key_ref, default_model, is_default, platform, preset_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, 'T', 'https://api.test.com', `provider.${id}.api_key`, null, 0, platform, presetKey ?? null);
 }
 
 /** 种 provider_models 行（context_window 为用户覆盖列，可空） */
@@ -168,6 +170,67 @@ describe('resolveModelLimits：优先级链（用户列 > 目录 > null）', () 
     void db;
 
     expect(await resolveModelLimits('ghost-provider', 'gpt-4o')).toBeNull();
+  });
+});
+
+describe('预设供应商窗口链（终审 I-1：用户列 > 预设表 > 目录 > null）', () => {
+  it('预设供应商命中预设模型：moonshot 查 kimi-k3 取预设表 1M/32K', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-m', 'openai', 'moonshot');
+
+    expect(await resolveModelLimits('pid-m', 'kimi-k3')).toEqual({
+      contextWindow: 1_000_000,
+      outputTokens: 32_768,
+    });
+  });
+
+  it('自定义供应商（presetKey=null）：glm-4.6 取目录 200K/96K', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-n', 'openai');
+
+    expect(await resolveModelLimits('pid-n', 'glm-4.6')).toEqual({
+      contextWindow: 200_000,
+      outputTokens: 96_000,
+    });
+  });
+
+  it('预设供应商 + 预设/目录都未收录的模型：null（未知 fail-safe）', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-o', 'openai', 'moonshot');
+
+    expect(await resolveModelLimits('pid-o', 'my-private-model')).toBeNull();
+  });
+
+  it('用户列覆盖 > 预设 > 目录：100K 压过预设 1M 与目录 1M', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-p', 'openai', 'dashscope');
+    seedModelRow(db, 'pid-p', 'qwen-plus', 100_000);
+
+    expect(await resolveModelLimits('pid-p', 'qwen-plus')).toEqual({
+      contextWindow: 100_000,
+      // 用户列只覆盖窗口；输出上限沿用目录（qwen-plus 目录 8K）
+      outputTokens: 8_192,
+    });
+  });
+
+  it('预设数字优先于目录（qwen-plus：预设 1M/32K 压过目录 1M/8K）', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-q', 'openai', 'dashscope');
+
+    expect(await resolveModelLimits('pid-q', 'qwen-plus')).toEqual({
+      contextWindow: 1_000_000,
+      outputTokens: 32_768,
+    });
+  });
+
+  it('预设命中 + 目录 miss（终审 I-1 主场景：grok-4.6 不再 0=未知）', async () => {
+    const db = getDb();
+    seedProvider(db, 'pid-r', 'openai', 'xai');
+
+    expect(await resolveModelLimits('pid-r', 'grok-4.6')).toEqual({
+      contextWindow: 500_000,
+      outputTokens: 500_000,
+    });
   });
 });
 

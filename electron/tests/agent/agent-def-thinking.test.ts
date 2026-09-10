@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createCustomDef, getAgentDefinition, updateAgentDefinition } from '../../src/main/agent/crud';
+import type { ThinkingConfig } from '../../src/main/llm/provider-presets';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-def-thinking-${Date.now()}-${process.pid}`);
 
@@ -63,6 +64,43 @@ describe('thinking_json 数据链', () => {
     getDb().prepare(
       `UPDATE agent_definitions SET thinking_json = '{bad' WHERE id = ?`,
     ).run(def.id);
+    expect(getAgentDefinition(def.id)!.thinkingJson).toBeNull();
+  });
+});
+
+describe('写通道源头形状校验（终审 I-2）', () => {
+  it('坏 shape 写入抛错且不落库（createCustomDef + updateAgentDefinition）', () => {
+    // IPC 客户端可传任意形状：mode 非法 / effort 非字符串都必须在源头拒绝，
+    // 否则读侧 parseThinkingConfig 静默治愈为 null，坏值被无声吃掉
+    const bogusMode = { mode: 'bogus', effort: null } as unknown as ThinkingConfig;
+    const bogusEffort = { mode: 'on', effort: 42 } as unknown as ThinkingConfig;
+
+    expect(() =>
+      createCustomDef(null, {
+        name: 'T5', slug: 't5', systemPrompt: 'p',
+        modelProviderId: 'p1', modelName: 'glm-4.6',
+        thinkingJson: bogusMode,
+      }),
+    ).toThrow(/thinkingJson 形状非法/);
+
+    const def = createCustomDef(null, {
+      name: 'T6', slug: 't6', systemPrompt: 'p',
+      modelProviderId: 'p1', modelName: 'glm-4.6',
+    });
+    expect(() => updateAgentDefinition({ id: def.id, thinkingJson: bogusEffort })).toThrow(
+      /thinkingJson 形状非法/,
+    );
+    // 抛错发生在 UPDATE 之前：原值不动（未落库）
+    expect(getAgentDefinition(def.id)!.thinkingJson).toBeNull();
+  });
+
+  it('null 写入合法（清除覆盖 = 继承模型级）', () => {
+    const def = createCustomDef(null, {
+      name: 'T7', slug: 't7', systemPrompt: 'p',
+      modelProviderId: 'p1', modelName: 'glm-4.6',
+      thinkingJson: { mode: 'on', effort: 'low' },
+    });
+    expect(() => updateAgentDefinition({ id: def.id, thinkingJson: null })).not.toThrow();
     expect(getAgentDefinition(def.id)!.thinkingJson).toBeNull();
   });
 });

@@ -29,6 +29,19 @@ function randomSuffix(): string {
 }
 
 /**
+ * thinkingJson 写通道源头校验（终审 I-2）：形状非法即抛错，不让坏值落库。
+ * 读侧 parseThinkingConfig 只会静默治愈为 null（UI 显示「跟随」，坏值被无声
+ * 吃掉），与 setProviderModelThinking 的源头拒绝语义对齐。
+ */
+function assertThinkingConfigShape(config: ThinkingConfig): void {
+  if (parseThinkingConfig(config) === null) {
+    throw new Error(
+      `thinkingJson 形状非法（须为 { mode: 'auto' | 'off' | 'on', effort: string | null }）: ${JSON.stringify(config)}`,
+    );
+  }
+}
+
+/**
  * v2（Task 10）：生成本地 agent 身份 `agent-<slug>-<6位随机后缀>`。
  * 取代在 Matrix homeserver 上注册 bot 账号——agent_user_id 仅是本地展示/引用键，
  * 不再对应任何远端账号，也因此无需 keychain 凭据。
@@ -97,6 +110,9 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
       );
     }
   }
+
+  // 终审 I-2：坏形状源头拒绝（null=缺省合法，走 ?? null 落库）
+  if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
 
   const def: AgentDefinition = {
     id: randomUUID(),
@@ -467,6 +483,8 @@ export function updateAgentDefinition(input: {
 }): AgentDefinition {
   const existing = getAgentDefinition(input.id);
   if (!existing) throw new Error(`Agent 定义不存在: ${input.id}`);
+  // 终审 I-2：坏形状源头拒绝（null=清除合法；undefined=不改不校验）
+  if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
   const db = getDb();
   db.prepare(
     `UPDATE agent_definitions SET

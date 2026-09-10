@@ -126,8 +126,8 @@ const CATALOG: CatalogEntry[] = [
 
   // ── OpenAI 兼容协议的第三方模型（platform 记 'openai'）───────────────────
   // 智谱 GLM（bigmodel.cn 模型文档，2026-09 查证）：glm-5 系 1M 上下文，128K 输出；
-  // effort 档位 low/high/max；glm-4.6 起 200K 上下文，96K 最大输出；glm-4.5 及更早
-  // 4.x 为 128K。4.7 等未收录新版本落到通配条目。
+  // effort 档位 low/high/max；glm-4.6/4.7 200K 上下文，96K 最大输出（4.7 与预设表
+  // 同值，终审 M-1 对齐）；glm-4.5 及更早 4.x 为 128K。
   {
     platform: 'openai',
     pattern: /^glm-5(\.\d)?/,
@@ -136,7 +136,7 @@ const CATALOG: CatalogEntry[] = [
   },
   {
     platform: 'openai',
-    pattern: /^glm-4\.6/,
+    pattern: /^glm-4\.[67]/,
     limits: { contextWindow: 200000, outputTokens: 96000 },
     reasoning: { kind: 'toggle' },
   },
@@ -168,7 +168,8 @@ const CATALOG: CatalogEntry[] = [
     reasoning: { kind: 'none' },
   },
   // 通义千问（阿里云百炼模型列表，2026-09 查证）：qwen3-max 256K 上下文 / 65536 输出；
-  // qwen-plus 131,072 上下文；qwen-max 历史档 32K。输出未注明则 8K。
+  // qwen-plus 1M 上下文（终审 M-1 对齐：预设表查证 1M，旧快照 131072 已过时）；
+  // qwen-max 历史档 32K。输出未注明则 8K。
   {
     platform: 'openai',
     pattern: /^qwen3-max/,
@@ -178,7 +179,7 @@ const CATALOG: CatalogEntry[] = [
   {
     platform: 'openai',
     pattern: /^qwen-plus/,
-    limits: { contextWindow: 131072, outputTokens: 8192 },
+    limits: { contextWindow: 1000000, outputTokens: 8192 },
     reasoning: { kind: 'none' },
   },
   {
@@ -210,12 +211,14 @@ const CATALOG: CatalogEntry[] = [
   },
   // Google Gemini（ai.google.dev 模型页，2026-09 查证；经 OpenAI 兼容端点接入）：
   // 3 系 1M 上下文 / 65,536 输出；2.5 系 1M 上下文 / 65,536 输出；
-  // 2.0-flash 1M 上下文 / 8,192 输出。Gemini 暂归 none（按官方 API 文档无 effort 档位）。
+  // 2.0-flash 1M 上下文 / 8,192 输出。gemini-3 OpenAI 兼容端点接受 reasoning_effort
+  // 并映射 thinking_level（终审 M-1 对齐预设表）；Pro 仅 low/high（medium 被拒），
+  // 通用正则条目取保守档位集。
   {
     platform: 'openai',
     pattern: /^gemini-3/,
     limits: { contextWindow: 1048576, outputTokens: 65536 },
-    reasoning: { kind: 'none' },
+    reasoning: { kind: 'effort', values: ['low', 'high'], default: 'high' },
   },
   {
     platform: 'openai',

@@ -128,3 +128,50 @@ describe('chatStream 流式注入（SSE mock）', () => {
     expect(bodies[0]).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'high' });
   });
 });
+
+describe('chatStream anthropic 注入（行为变更锁：旧 always-on thinking:10000 硬编码退役）', () => {
+  it('anthropic 流式 + thinking on+low：请求体含 budget_tokens=4096 且 max_tokens 抬升', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }));
+    const llm = createLLMProvider(
+      { model: 'claude-sonnet-4-5', provider: 'anthropic' },
+      'k',
+      { thinking: tr({ wire: 'anthropic-budget', effort: 'low' }) },
+    );
+    for await (const d of llm.chatStream(
+      [{ role: 'user', content: 'hi' }],
+      undefined,
+      new AbortController().signal,
+    )) {
+      void d;
+    }
+    expect(bodies[0]).toMatchObject({ thinking: { type: 'enabled', budget_tokens: 4096 } });
+    expect(bodies[0]!.max_tokens as number).toBeGreaterThan(4096);
+  });
+
+  it('anthropic 流式 + 未配置 thinking：请求体无 thinking 字段（Anthropic 用户默认不再发 thinking）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }));
+    const llm = createLLMProvider({ model: 'claude-sonnet-4-5', provider: 'anthropic' }, 'k');
+    for await (const d of llm.chatStream(
+      [{ role: 'user', content: 'hi' }],
+      undefined,
+      new AbortController().signal,
+    )) {
+      void d;
+    }
+    expect(bodies[0]!.thinking).toBeUndefined();
+    // 不注入时 max_tokens 保持 chatStreamAnthropic 基础档 16384（未被 budget 逻辑抬升）
+    expect(bodies[0]!.max_tokens).toBe(16384);
+  });
+});

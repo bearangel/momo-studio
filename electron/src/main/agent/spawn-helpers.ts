@@ -176,9 +176,13 @@ export interface BuildSpawnOptsInput {
 }
 
 /**
- * 窗口元数据 resolve 链（spec 2026-09-09 §2.3，单一真相源）：
- * provider_models.context_window（用户覆盖，非 NULL 且 >0）→ 内置目录 → null（未知）。
- * 用户列只覆盖上下文窗口；输出上限目录无条目时为 0（未知）。
+ * 窗口元数据 resolve 链（spec 2026-09-09-provider-presets §4，单一真相源）：
+ * provider_models.context_window（用户覆盖，非 NULL 且 >0）→ 预设模型表
+ * （presetKey + modelId 命中）→ 正则目录（platform + 名称匹配）→ null（未知）。
+ * 预设表与目录数字不一致时预设优先（spec §4；目录只服务自定义供应商与
+ * 拉取的未知模型），与 UI 路径 listProviderModels 的 effectiveWindow 同链，
+ * spawn 与 UI placeholder 行为不分叉（终审 I-1）。用户列只覆盖上下文窗口，
+ * 输出上限沿用目录（无条目时 0=未知）。
  * 下游消费：buildSpawnOpts 把结果写入 AGENT_CONFIG；RuntimeConfig 0=未知 fail-safe。
  */
 export async function resolveModelLimits(
@@ -193,9 +197,16 @@ export async function resolveModelLimits(
     )
     .get(providerId, modelId) as { context_window: number | null } | undefined;
   const userWindow = row?.context_window;
+  const preset = provider.presetKey ? getProviderPreset(provider.presetKey) : null;
+  const presetModel = preset?.models.find((m) => m.id === modelId) ?? null;
   const catalog = lookupModelLimits(provider.platform, modelId);
   if (typeof userWindow === 'number' && userWindow > 0) {
     return { contextWindow: userWindow, outputTokens: catalog?.outputTokens ?? 0 };
+  }
+  // 预设层兜底（终审 I-1）：catalog 缺位/数字过时时供给窗口，否则 miss →
+  // 0=未知 → 自动压缩静默失效。预设两数字齐备且经查证，命中即整体采用（spec §4 预设优先）
+  if (presetModel) {
+    return { contextWindow: presetModel.contextWindow, outputTokens: presetModel.outputTokens };
   }
   return catalog;
 }
