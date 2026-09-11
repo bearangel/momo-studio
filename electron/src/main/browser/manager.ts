@@ -14,9 +14,10 @@
 //   - sidebar bounds 透传 / 折叠销毁（折叠期间活动先恢复旧清单再作用——不丢 tab）
 //
 // 动作原语（click/type/pressKey/hover/scroll）自 T3 起委托 actions.ts（selector 四语法
-// 解析 + Electron trusted 事件序列）；本文件负责门控（信任/takeover/视图定位）与
+// 解析 + Electron trusted 事件序列）；snapshot 自 T4 起委托 snapshot.ts（a11y 懒附加
+// 采集 + selector 提示行格式化）；本文件负责门控（信任/takeover/视图定位）与
 // 输入自锁（withAgentInput——sendInputEvent 回流 before-input-event 不计接管）。
-// snapshot（T4 formatAxTree 升级）与 screenshot 在本文件内实现。
+// screenshot 在本文件内实现。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,7 @@ import {
   BrowserTakenOverError,
 } from './errors';
 import { BrowserPolicy } from './policy';
+import { takeSnapshot } from './snapshot';
 import type { BrowserState, TabInfo } from './types';
 
 // =================================================================================
@@ -71,9 +73,7 @@ const MODIFIER_KEYS = new Set([
 ]);
 
 /** scroll 缺省 amount 常量已移至 actions.ts（SCROLL_DEFAULT_AMOUNT——动作语义单一归属） */
-
-/** snapshot CDP 协议版本（懒附加时 attach 用） */
-const CDP_PROTOCOL_VERSION = '1.3';
+/** snapshot CDP 协议版本与格式化器已移至 snapshot.ts（T4——懒附加 + 提示行单一归属） */
 
 // =================================================================================
 // 结构性子类型（Electron 边界的契约面——单测用普通对象满足）
@@ -388,17 +388,10 @@ export class BrowserManager {
     scrollWheel(wc, direction, amount, this.inputGuard());
   }
 
-  /** T2 最小 snapshot：a11y 树基础行；T4 升级 formatAxTree（selector 提示行）+ 空树引导 */
+  /** snapshot：a11y 树懒附加采集 + selector 提示行（T4 起委托 snapshot.ts 模块） */
   async snapshot(wsId: string): Promise<string> {
     const wc = this.requireCurrentWebContents(wsId);
-    const dbg = wc.debugger;
-    dbg.attach(CDP_PROTOCOL_VERSION); // 懒附加：用完即还（与用户 DevTools 互斥面最小化——spec §3.4）
-    try {
-      const tree = await dbg.sendCommand('Accessibility.getFullAXTree');
-      return formatAxTreeMinimal(tree);
-    } finally {
-      dbg.detach();
-    }
+    return takeSnapshot(wc);
   }
 
   /** screenshot：capturePage → PNG → 落 `<tmpdir>/momo-browser-shots/<wsId>/`；filename basename 清洗 */
@@ -731,35 +724,4 @@ export class BrowserManager {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * T2 最小 AX 树格式化：role + name 基础行。T4 升级 formatAxTree——补充 placeholder / value
- * 等 selector 提示（I3：给 LLM 可直接复制进 click 的提示）。CDP Accessibility.AXNode 形状：
- *   { role: { type: 'role', value: 'button' }, name: { type: 'string', value: '登录' } }
- */
-function formatAxTreeMinimal(tree: unknown): string {
-  const root = typeof tree === 'object' && tree !== null ? (tree as Record<string, unknown>) : null;
-  const nodes = root && Array.isArray(root['nodes']) ? (root['nodes'] as unknown[]) : null;
-  if (!nodes || nodes.length === 0) {
-    return '页面无可访问元素，建议 browser_screenshot';
-  }
-  const lines: string[] = [];
-  for (const node of nodes) {
-    if (typeof node !== 'object' || node === null) continue;
-    const n = node as Record<string, unknown>;
-    const role = axField(n, 'role', 'value');
-    const name = axField(n, 'name', 'value');
-    if (role && name) lines.push(`- ${role} "${name}"`);
-    else if (role) lines.push(`- ${role}`);
-  }
-  return lines.length > 0 ? lines.join('\n') : '页面无可访问元素，建议 browser_screenshot';
-}
-
-/** 读取 AX 节点字段：n.role.value / n.name.value 等（嵌套 property wrapper.value） */
-function axField(node: Record<string, unknown>, field: string, valueKey: string): string {
-  const inner = node[field];
-  if (typeof inner !== 'object' || inner === null) return '';
-  const v = (inner as Record<string, unknown>)[valueKey];
-  return typeof v === 'string' ? v : '';
 }

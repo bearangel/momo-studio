@@ -4,6 +4,7 @@
 // name + 中文 message（面向 LLM，含可行动指引）+ code（供 UI/日志分类）。
 // 恢复原则：全部可重试（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。
 // T3 增补 invalid_key（pressKey 白名单外按键，spec §4 工具 6）。
+// T4 增补 snapshot（a11y 快照 CDP 采集失败，spec §3.4——attach 互斥 / getFullAXTree 失败）。
 
 /** 错误分类码（UI 徽标 / 日志聚类的稳定标识） */
 export type BrowserErrorCode =
@@ -17,7 +18,8 @@ export type BrowserErrorCode =
   | 'protocol'
   | 'navigation'
   | 'no_view'
-  | 'invalid_key';
+  | 'invalid_key'
+  | 'snapshot';
 
 /** 浏览器工具错误基类：code 供 UI/日志分类，message 面向 LLM（含指引） */
 export class BrowserError extends Error {
@@ -105,5 +107,12 @@ export class BrowserNavigationError extends BrowserError {
 export class BrowserNoViewError extends BrowserError {
   constructor() {
     super('no_view', '浏览器未打开（先 browser_navigate）');
+  }
+}
+
+/** a11y 快照采集失败（T4 snapshot.ts 抛出）：attach 互斥（用户已开 DevTools）或 CDP 命令失败 */
+export class BrowserSnapshotError extends BrowserError {
+  constructor(detail: string) {
+    super('snapshot', `快照获取失败: ${detail}（若页面正在使用 DevTools 请关闭后重试）`);
   }
 }

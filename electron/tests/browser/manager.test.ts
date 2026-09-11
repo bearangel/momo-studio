@@ -16,6 +16,7 @@ import {
   BrowserNoViewError,
   BrowserProtocolError,
   BrowserSelectorError,
+  BrowserSnapshotError,
   BrowserTakenOverError,
   EvaluateDisabledError,
 } from '../../src/main/browser/errors';
@@ -796,7 +797,7 @@ describe('动作原语（委托 actions.ts——T3 四语法接线）', () => {
     await expect(noView.manager.evaluate('ws1', '1+1')).rejects.toThrow(BrowserNoViewError);
   });
 
-  it('snapshot：debugger 懒附加（1.3）→ getFullAXTree → 基础行；finally detach；异常路径也 detach', async () => {
+  it('snapshot：委托 snapshot.ts——attach("1.3") + getFullAXTree + finally detach；格式化产出提示行；CDP 失败包装 BrowserSnapshotError', async () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
@@ -809,15 +810,15 @@ describe('动作原语（委托 actions.ts——T3 四语法接线）', () => {
       ],
     });
     const out = await manager.snapshot('ws1');
-    expect(out).toContain('button');
-    expect(out).toContain('登录');
-    expect(out).toContain('textbox');
+    // 编排契约：懒附加协议版本 + CDP 方法名 + 用完即还；输出含真实格式化器的提示行（委托接线证明）
     expect(dbg.attach).toHaveBeenCalledWith('1.3');
+    expect(dbg.sendCommand).toHaveBeenCalledWith('Accessibility.getFullAXTree');
+    expect(out).toContain('- button "登录"  → text=登录');
     expect(dbg.detach).toHaveBeenCalledTimes(1);
 
-    // 异常路径：sendCommand reject → 仍 detach + 抛错
+    // 异常路径：sendCommand reject → BrowserSnapshotError（detail 覆盖见 snapshot.test.ts）+ 仍 detach
     (dbg.sendCommand as Mock).mockRejectedValueOnce(new Error('cdp-fail'));
-    await expect(manager.snapshot('ws1')).rejects.toThrow(/cdp-fail/);
+    await expect(manager.snapshot('ws1')).rejects.toThrow(BrowserSnapshotError);
     expect(dbg.detach).toHaveBeenCalledTimes(2);
   });
 
