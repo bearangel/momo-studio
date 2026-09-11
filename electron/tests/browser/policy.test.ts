@@ -122,6 +122,14 @@ describe('URL 策略 assertUrl', () => {
       expect(p.assertUrl('ws1', pathToFileURL(tricky).href)).toBe(pathToFileURL(tricky).href);
     });
 
+    it('file:// 带远程 host → BrowserProtocolError（非法 file:// URL，无法映射本地路径）', () => {
+      // fileURLToPath 对非 localhost host 抛错——file://example.com/share/x 是远程文件语义
+      // （SMB / WebDAV / UNC 残影），一律拒绝；信息区分于「协议不支持」
+      const p = mkFilePolicy();
+      expect(() => p.assertUrl('ws1', 'file://example.com/share/x')).toThrow(BrowserProtocolError);
+      expect(() => p.assertUrl('ws1', 'file://example.com/share/x')).toThrow(/非法 file:\/\/ URL/);
+    });
+
     it('symlink 逃逸（realpath 在 workspace 外）→ BrowserFileAccessError', () => {
       // 用 os.tmpdir 真建 symlink：ws 内 link → ws 外 target
       const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-outside-'));
