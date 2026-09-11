@@ -121,8 +121,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
         return last ? ipc.browser.switchTab(workspaceId, last.index) : undefined;
       })
       .catch((e: unknown) => {
-        // user 态 tabs 操作被 manager 拒（BrowserTakenOverError）——chrome 不崩；
-        // 接管徽标在位提示先释放。console 留痕可观察（不吞状态：UI 由推送驱动）
+        // IPC 故障兜底（user 态 tabs 操作已放行——G4 调用方甄别，manager 传 'user' 源）
         console.warn('[BrowserSidebar] openTab 失败', e);
       });
   };
@@ -154,7 +153,9 @@ export function BrowserSidebar({ workspaceId }: Props) {
   }
 
   const tabs = state?.tabs ?? [];
-  const showOverlay = state?.takeover === 'agent' && !overlayDismissed;
+  // 空态（无 tab）不挂 overlay：占位区是引导而非页面——误触发接管会让用户
+  // 「接管」一个空浏览器并锁死 agent 工具（review fix）。tab 出现后照常挂。
+  const showOverlay = state?.takeover === 'agent' && !overlayDismissed && tabs.length > 0;
 
   return (
     <div

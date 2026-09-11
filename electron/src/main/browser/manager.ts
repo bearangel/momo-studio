@@ -140,6 +140,15 @@ export interface BrowserManagerHooks {
   pushNotice(kind: string, text: string): void;
 }
 
+/**
+ * tabs / 关浏览器操作的调用方甄别（G4：tabs 为 agent/user 双方共用）。
+ *   'agent'（缺省）——T5 browser_tabs / browser_close 工具路径，过接管门
+ *   （user 态抛 BrowserTakenOverError，spec §3.2「任一 browser_* 工具」语义）；
+ *   'user' ——T7 IPC 用户路径（用户点 tab / 开 / 关），放行——§3.2 的 TakenOver
+ *   只约束工具，不约束人（review fix：此前单门拒绝导致用户接管后无法操作 tab）。
+ */
+export type BrowserActionSource = 'agent' | 'user';
+
 // =================================================================================
 // 内部状态
 // =================================================================================
@@ -263,15 +272,16 @@ export class BrowserManager {
     };
   }
 
-  /** browser_tabs：list/open/close/switch 四动作——open 收编与 setWindowOpenHandler 共用 openTabInternal */
+  /** browser_tabs：list/open/close/switch 四动作——open 收编与 setWindowOpenHandler 共用 openTabInternal；source 甄别见 BrowserActionSource */
   async tabsAction(
     wsId: string,
     action: 'list' | 'open' | 'close' | 'switch',
     index?: number,
     url?: string,
+    source: BrowserActionSource = 'agent',
   ): Promise<TabInfo[]> {
     const ws = this.requireWorkspace(wsId);
-    this.assertAgentSide(ws);
+    if (source === 'agent') this.assertAgentSide(ws);
     switch (action) {
       case 'list':
         return this.tabInfos(ws);
@@ -289,8 +299,8 @@ export class BrowserManager {
           throw new RangeError(`tab 下标 ${idx} 越界（现有 ${ws.tabs.length} 个 tab）`);
         }
         if (ws.tabs.length === 1) {
-          // 唯一 tab 关闭 = 关闭浏览器（spec §4 工具 11）
-          await this.closeBrowser(wsId);
+          // 唯一 tab 关闭 = 关闭浏览器（spec §4 工具 11）——source 透传（user 关自己最后一个 tab 不被拦）
+          await this.closeBrowser(wsId, source);
           return [];
         }
         this.factory.destroy(tab.view);
@@ -315,10 +325,10 @@ export class BrowserManager {
     }
   }
 
-  /** browser_close：销毁当前 workspace 视图 + 清 stash + takeover 复位（spec §7） */
-  async closeBrowser(wsId: string): Promise<void> {
+  /** browser_close：销毁当前 workspace 视图 + 清 stash + takeover 复位（spec §7）；source 甄别见 BrowserActionSource */
+  async closeBrowser(wsId: string, source: BrowserActionSource = 'agent'): Promise<void> {
     const ws = this.requireWorkspace(wsId);
-    this.assertAgentSide(ws);
+    if (source === 'agent') this.assertAgentSide(ws);
     this.destroyTabs(ws);
     ws.current = 0;
     ws.takeover = 'agent'; // 全新仲裁起点

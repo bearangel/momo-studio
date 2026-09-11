@@ -365,6 +365,39 @@ describe('browser:openTab / closeTab / switchTab', () => {
     const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
     expect(st.current).toBe(0);
   });
+
+  // ---- G4 调用方甄别（review fix）：IPC tabs 三通道是用户操作，user 态放行 ----
+
+  it('user 态（已接管）下 tabs 三通道照常成功——关唯一 tab 后 takeover 复位 agent', async () => {
+    activateWs();
+    // 地址栏导航 → 隐式接管（§3.2 入口 2），进入 user 态
+    await callIpc('browser:userNavigate', 'ws-1', 'http://localhost:5173/');
+    expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).takeover).toBe('user');
+
+    // open：user 态新开 tab 成功
+    let tabs = await callIpc<Array<{ index: number; url: string }>>(
+      'browser:openTab',
+      'ws-1',
+      'http://localhost:3000/',
+    );
+    expect(tabs).toHaveLength(2);
+
+    // switch：切回 idx 0
+    tabs = await callIpc('browser:switchTab', 'ws-1', 0);
+    expect(tabs).toHaveLength(2);
+    expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).current).toBe(0);
+
+    // close：关掉 idx 1（非唯一）
+    tabs = await callIpc('browser:closeTab', 'ws-1', 1);
+    expect(tabs).toHaveLength(1);
+
+    // close：关唯一 tab → 等同关浏览器，user 态放行；takeover 复位 agent（spec §7）
+    tabs = await callIpc('browser:closeTab', 'ws-1', 0);
+    expect(tabs).toHaveLength(0);
+    const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
+    expect(st.tabs).toEqual([]);
+    expect(st.takeover).toBe('agent');
+  });
 });
 
 // =================================================================================

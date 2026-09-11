@@ -343,6 +343,24 @@ describe('BrowserSidebar·鼠标接管 overlay（HARD——DoD 17）', () => {
     expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
   });
 
+  it('空态（无 tab）→ 无 overlay：占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器）', async () => {
+    const { push } = armOnBrowserState(); // 订阅须在 render 前接线（组件挂载即订阅）
+    takeoverMock.mockResolvedValue(undefined);
+    getStateMock.mockResolvedValue(mkState({ tabs: [], url: '', title: '' }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    expect(await screen.findByText('浏览器待命')).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
+
+    // 占位区 mousedown 不调 takeover（agent 工具不被空态误锁）
+    fireEvent.mouseDown(screen.getByTestId('browser-placeholder'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(takeoverMock).not.toHaveBeenCalled();
+
+    // 反向锁：tab 出现（agent 打开页面）→ overlay 照常挂载
+    push(mkState());
+    expect(await screen.findByTestId('browser-takeover-overlay')).toBeInTheDocument();
+  });
+
   it('释放（user → agent 推送）→ overlay 重挂', async () => {
     const { push } = armOnBrowserState();
     getStateMock.mockResolvedValue(mkState({ takeover: 'user' }));

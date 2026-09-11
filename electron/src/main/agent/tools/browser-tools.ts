@@ -58,8 +58,11 @@ export interface BrowserManagerPort {
     action: 'list' | 'open' | 'close' | 'switch',
     index?: number,
     url?: string,
+    /** 调用方甄别（G4）：工具路径恒用缺省 'agent'（user 态抛 BrowserTakenOverError）；'user' 仅 IPC 用户路径使用 */
+    source?: 'agent' | 'user',
   ): Promise<TabInfo[]>;
-  closeBrowser(wsId: string): Promise<void>;
+  /** source 同 tabsAction——browser_close 工具恒用缺省 'agent' */
+  closeBrowser(wsId: string, source?: 'agent' | 'user'): Promise<void>;
 }
 
 // =================================================================================

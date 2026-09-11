@@ -349,6 +349,42 @@ describe('takeover', () => {
     await expect(manager.navigate('ws1', 'http://localhost:3000/')).resolves.toBeTruthy();
   });
 
+  // ---- G4 调用方甄别（review fix）：tabs 双方共用，user 源放行 / agent 源（缺省）拦截 ----
+
+  it('user 态下 user 源 tabs 全动作放行（open/switch/close，含关唯一 tab）；同态缺省源 list 仍抛', async () => {
+    const { manager, pushState } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // 1 tab, current=0
+    manager.userTakeover('ws1');
+    // 缺省（agent）源——工具语义：user 态任一 browser_* 动作（含 list）抛 TakenOver
+    await expect(manager.tabsAction('ws1', 'list')).rejects.toThrow(BrowserTakenOverError);
+
+    // user 源：open 新 tab
+    let tabs = await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user');
+    expect(tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:3000/']);
+    // user 源：switch 回 idx 0
+    tabs = await manager.tabsAction('ws1', 'switch', 0, undefined, 'user');
+    expect(lastState(pushState)?.current).toBe(0);
+    // user 源：close 非 current（idx 1）
+    tabs = await manager.tabsAction('ws1', 'close', 1, undefined, 'user');
+    expect(tabs).toHaveLength(1);
+    // user 源：close 唯一 tab → 等同 closeBrowser（takeover 复位 agent，spec §7 全新仲裁）
+    tabs = await manager.tabsAction('ws1', 'close', undefined, undefined, 'user');
+    expect(tabs).toEqual([]);
+    expect(manager.getState('ws1').takeover).toBe('agent');
+    expect(manager.getState('ws1').tabs).toEqual([]);
+  });
+
+  it('user 态下 closeBrowser(user 源) 放行（tabs close 唯一 tab 的委托路径）', async () => {
+    const { manager } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    manager.userTakeover('ws1');
+    await manager.closeBrowser('ws1', 'user');
+    expect(manager.getState('ws1').tabs).toEqual([]);
+    expect(manager.getState('ws1').takeover).toBe('agent');
+  });
+
   it('before-input-event 修饰键不触发接管（误触发防线）', async () => {
     const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');

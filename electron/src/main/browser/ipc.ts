@@ -202,12 +202,15 @@ export function registerBrowserIpc(
     manager.releaseTakeover(asString(wsId, 'workspaceId')),
   );
 
+  // tabs 三通道是用户操作（G4：tabs 双方共用）——source='user'：user 态下照常放行，
+  // 不经接管门（§3.2 TakenOver 只约束 agent 的 browser_* 工具）。
   ipcMainLike.handle('browser:openTab', (_e, wsId, url) =>
     manager.tabsAction(
       asString(wsId, 'workspaceId'),
       'open',
       undefined,
       url === undefined ? undefined : asString(url, 'url'),
+      'user',
     ),
   );
 
@@ -216,11 +219,13 @@ export function registerBrowserIpc(
       asString(wsId, 'workspaceId'),
       'close',
       index === undefined ? undefined : asNumber(index, 'index'),
+      undefined,
+      'user',
     ),
   );
 
   ipcMainLike.handle('browser:switchTab', (_e, wsId, index) =>
-    manager.tabsAction(asString(wsId, 'workspaceId'), 'switch', asNumber(index, 'index')),
+    manager.tabsAction(asString(wsId, 'workspaceId'), 'switch', asNumber(index, 'index'), undefined, 'user'),
   );
 
   ipcMainLike.handle('browser:setSidebarBounds', (_e, rect) => {
