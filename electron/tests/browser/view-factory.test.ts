@@ -1,14 +1,16 @@
 // electron/tests/browser/view-factory.test.ts
 //
-// view-factory 真实现的单测（v2.7 McpBrowser Task 10）。
+// view-factory 真实现的单测（v2.7 McpBrowser Task 10 + DoD 17 修正）。
 //
 // 本文件 import 的 SUT 依赖 'electron'（session / WebContentsView）——按仓库既有
 // 模式（agent-start-stop.test.ts）vi.mock('electron') 提供结构性假件：
-//   - WebContentsView：可实例化类，实例带 webContents（各方法 vi.fn）
+//   - WebContentsView：可实例化类，实例带 webContents（各方法 vi.fn）+ setBounds/
+//     setBackgroundColor 记录
 //   - session.fromPartition：返回带 on / clearStorageData 的假 session
 //
-// 覆盖：DoD 17 真实现侧 setIgnoreMouseEvents（CDP Input.setIgnoreInputEvents +
-// SmartDebugger 引用计数——穿透持有与 snapshot 懒附加共享会话）+ 视图挂载
+// 覆盖：DoD 17 原生 overlay 方案（三态挂载锁 / 命中 IPC 链 / bounds 跟随 / 栈顶
+// 纪律 / 随 tab 全灭销毁 / 页面注入契约 / webPreferences 硬化）+ CDP
+// Input.setIgnoreInputEvents 移除回归锁（键盘接管复活前提）+ 视图挂载
 // （setMountTarget → create addChildView / destroy removeChildView）+ partition 去重。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -19,22 +21,47 @@ interface DbgMock {
   sendCommand: ReturnType<typeof vi.fn>;
 }
 type WcMock = {
+  loadURL: ReturnType<typeof vi.fn>;
+  executeJavaScript: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   debugger: DbgMock;
+  insertCSS: ReturnType<typeof vi.fn>;
+  /** 仿真 Electron webContents.ipc（IpcMain 面——overlay 命中通道注册） */
+  ipc: { on: ReturnType<typeof vi.fn> };
 };
 
-const createdViews: Array<{ partition: string; wc: WcMock; view: unknown }> = [];
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** createdViews 条目——断言所需的全部假件面 */
+interface CreatedView {
+  partition: string;
+  wc: WcMock;
+  view: unknown;
+  webPreferences: Record<string, unknown>;
+  getBounds: () => Rect | undefined;
+  getBackgroundColor: () => string | undefined;
+}
+
+const createdViews: CreatedView[] = [];
 const hookedPartitions: string[] = [];
 
 vi.mock('electron', () => {
   class FakeWebContentsView {
     readonly webContents: WcMock;
+    private bounds: Rect | undefined;
+    private bgColor: string | undefined;
     constructor(opts: { webPreferences: { session: { partitionTag: string } } }) {
       this.webContents = {
         partitionTag: opts.webPreferences.session.partitionTag,
         loadURL: vi.fn(async () => undefined),
         on: vi.fn(),
         executeJavaScript: vi.fn(async () => null),
+        insertCSS: vi.fn(async () => 'css-key'),
         sendInputEvent: vi.fn(),
         capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('') })),
         setWindowOpenHandler: vi.fn(),
@@ -43,14 +70,23 @@ vi.mock('electron', () => {
         getTitle: vi.fn(() => ''),
         close: vi.fn(),
         debugger: { attach: vi.fn(), detach: vi.fn(), sendCommand: vi.fn(async () => ({})) },
+        ipc: { on: vi.fn() },
       } as unknown as WcMock;
       createdViews.push({
         partition: opts.webPreferences.session.partitionTag,
         wc: this.webContents,
         view: this,
+        webPreferences: opts.webPreferences as Record<string, unknown>,
+        getBounds: () => this.bounds,
+        getBackgroundColor: () => this.bgColor,
       });
     }
-    setBounds(): void {}
+    setBounds(b: Rect): void {
+      this.bounds = b;
+    }
+    setBackgroundColor(color: string): void {
+      this.bgColor = color;
+    }
   }
   return {
     WebContentsView: FakeWebContentsView,
@@ -72,15 +108,33 @@ vi.mock('../../src/main/logger', () => ({
 
 import { initRealViewFactory } from '../../src/main/browser/view-factory';
 import type { RealFactoryHooks } from '../../src/main/browser/view-factory';
+import type { Mock } from 'vitest';
 
-const hooks: RealFactoryHooks = { pushNotice: vi.fn() };
+const hooks: RealFactoryHooks = { pushNotice: vi.fn(), onOverlayHit: vi.fn() };
+
+/** 从 createdViews 里取指定 partition 的第一个视图（overlay 用 'browser-overlay'） */
+function findView(partition: string): CreatedView {
+  const v = createdViews.find((c) => c.partition === partition);
+  if (!v) throw new Error(`未找到 partition=${partition} 的视图`);
+  return v;
+}
+
+function mkMount(): { addChildView: Mock; removeChildView: Mock } {
+  return { addChildView: vi.fn(), removeChildView: vi.fn() };
+}
+
+/** 冲刷 overlay 页面注入链（loadURL → insertCSS → executeJavaScript 均为立即 resolve 的 mock） */
+async function flushInjections(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
 
 beforeEach(() => {
   createdViews.length = 0;
   hookedPartitions.length = 0;
+  vi.mocked(hooks.onOverlayHit).mockClear();
 });
 
-describe('initRealViewFactory', () => {
+describe('initRealViewFactory（tab 视图基础面）', () => {
   it('create 使用 persist:browser-<wsId> partition + will-download 每 ws 仅挂一次', () => {
     const factory = initRealViewFactory(hooks);
     factory.create('ws-1');
@@ -98,7 +152,7 @@ describe('initRealViewFactory', () => {
 
   it('setMountTarget：create → addChildView；destroy → removeChildView + close', () => {
     const factory = initRealViewFactory(hooks);
-    const mount = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    const mount = mkMount();
     factory.setMountTarget(mount);
     const v = factory.create('ws-1');
     expect(mount.addChildView).toHaveBeenCalledTimes(1);
@@ -115,56 +169,201 @@ describe('initRealViewFactory', () => {
   });
 });
 
-describe('setIgnoreMouseEvents（DoD 17 真实现侧——CDP Input.setIgnoreInputEvents）', () => {
-  it('agent 态（true）：attach 一次 + setIgnoreInputEvents {ignore:true}，会话保持', () => {
+describe('showOverlay（DoD 17 原生 overlay——三态锁）', () => {
+  it('agent 态 → overlay 挂载且在浏览器视图之上；user 态 → 摘除；再 agent → 重挂', () => {
     const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    // addChildView 附加序即 z 序：browser 先挂、overlay 后挂 = overlay 在上
+    const browserView = createdViews[0]!.view;
+    const overlay = findView('browser-overlay');
+    expect(mount.addChildView).toHaveBeenNthCalledWith(1, browserView);
+    expect(mount.addChildView).toHaveBeenNthCalledWith(2, overlay.view);
+    factory.showOverlay('ws-1', 'user');
+    expect(mount.removeChildView).toHaveBeenCalledWith(overlay.view);
+    expect(mount.removeChildView).not.toHaveBeenCalledWith(browserView);
+    factory.showOverlay('ws-1', 'agent');
+    expect(mount.addChildView).toHaveBeenLastCalledWith(overlay.view);
+  });
+
+  it('重复 agent 态调用幂等（pushState 每次推送都会调）——不重复挂载', () => {
+    const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    expect(mount.addChildView.mock.calls.filter((c) => c[0] === overlay.view)).toHaveLength(1);
+  });
+
+  it('agent 态但 ws 无 tab 视图（空 ws / 折叠 / 切走）→ 不建 overlay', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    factory.showOverlay('ws-1', 'agent');
+    expect(createdViews).toHaveLength(0);
+  });
+
+  it('无 overlay 时 user 态 no-op 不抛错', () => {
+    const factory = initRealViewFactory(hooks);
+    expect(() => factory.showOverlay('ws-404', 'user')).not.toThrow();
+  });
+
+  it('agent 态新 tab 挂载 → overlay 重挂栈顶（z 序恒在浏览器视图之上）', () => {
+    const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    factory.create('ws-1'); // agent 期间 browser_tabs open 新视图——挂到了 overlay 之上
+    const newTab = createdViews.at(-1)!;
+    expect(mount.addChildView).toHaveBeenNthCalledWith(3, newTab.view);
+    // overlay 摘下重挂——恢复末位（栈顶）
+    expect(mount.removeChildView).toHaveBeenCalledWith(overlay.view);
+    expect(mount.addChildView).toHaveBeenLastCalledWith(overlay.view);
+  });
+});
+
+describe('overlay 命中链（页内点击 → userTakeover）', () => {
+  it('overlay 页面注入：about:blank + 透明 CSS + mousedown 监听（preload 桥契约）', async () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    await flushInjections();
+    expect(overlay.wc.loadURL).toHaveBeenCalledWith('about:blank');
+    expect(overlay.wc.insertCSS).toHaveBeenCalledWith(
+      expect.stringContaining('background: transparent'),
+    );
+    expect(overlay.wc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("window.momoOverlay?.hit()"),
+    );
+  });
+
+  it('overlay webPreferences 硬化：in-memory session + sandbox + contextIsolation + preload + 透明底', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    expect(overlay.webPreferences.nodeIntegration).toBe(false);
+    expect(overlay.webPreferences.contextIsolation).toBe(true);
+    expect(overlay.webPreferences.sandbox).toBe(true);
+    expect(String(overlay.webPreferences.preload)).toContain('overlay-preload.js');
+    expect(overlay.getBackgroundColor()).toBe('#00000000');
+  });
+
+  it('momo-overlay-hit IPC → onOverlayHit(wsId)（boot 侧接 manager.userTakeover）', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    // 捕获 webContents.ipc.on 注册（模拟真实 IPC 命中到达）
+    const ipcOn = overlay.wc.ipc.on;
+    expect(ipcOn).toHaveBeenCalledWith('momo-overlay-hit', expect.any(Function));
+    const handler = (ipcOn.mock.calls[0]![1] as () => void);
+    handler();
+    expect(hooks.onOverlayHit).toHaveBeenCalledWith('ws-1');
+  });
+});
+
+describe('CDP Input.setIgnoreInputEvents 移除（键盘接管回归锁）', () => {
+  it('overlay 三态循环 + tab 视图操作全程——任何视图零 debugger 调用', () => {
+    const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
+    factory.create('ws-1');
+    factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    factory.showOverlay('ws-1', 'user');
+    factory.showOverlay('ws-1', 'agent');
+    const v = factory.create('ws-1');
+    factory.destroy(v);
+    for (const cv of createdViews) {
+      expect(cv.wc.debugger.attach).not.toHaveBeenCalled();
+      expect(cv.wc.debugger.detach).not.toHaveBeenCalled();
+      expect(cv.wc.debugger.sendCommand).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('overlay bounds 跟随（与浏览器视图同 rect）', () => {
+  it('tab 视图 setBounds → overlay 同 rect；新建 overlay 补套最近 rect', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    const v = factory.create('ws-1');
+    v.bounds.setBounds({ x: 10, y: 20, width: 300, height: 200 });
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    expect(overlay.getBounds()).toEqual({ x: 10, y: 20, width: 300, height: 200 });
+    // overlay 已存在：后续 rect 变更直接同步
+    v.bounds.setBounds({ x: 0, y: 0, width: 800, height: 600 });
+    expect(overlay.getBounds()).toEqual({ x: 0, y: 0, width: 800, height: 600 });
+    // 零 rect 卸载路径（BrowserSidebar 卸载上报 {0,0,0,0}）同样跟随
+    v.bounds.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    expect(overlay.getBounds()).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it('user 态摘除期间 rect 变更仍缓存——重挂即最新 rect', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    const v = factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    factory.showOverlay('ws-1', 'user');
+    v.bounds.setBounds({ x: 5, y: 6, width: 100, height: 50 });
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    expect(overlay.getBounds()).toEqual({ x: 5, y: 6, width: 100, height: 50 });
+  });
+});
+
+describe('overlay 生命周期（随 tab 视图全灭销毁）', () => {
+  it('关最后一个 tab → overlay 摘除 + close（deactivate/collapse/closeBrowser/disposeAll 共用路径）', () => {
+    const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
+    const v1 = factory.create('ws-1');
+    const v2 = factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const overlay = findView('browser-overlay');
+    factory.destroy(v1); // 还剩一个 tab——overlay 存活
+    expect(overlay.wc.close).not.toHaveBeenCalled();
+    factory.destroy(v2); // tab 全灭——overlay 随之销毁
+    expect(mount.removeChildView).toHaveBeenCalledWith(overlay.view);
+    expect(overlay.wc.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('销毁后 agent 态再推送 → overlay 懒重建（重新激活/展开场景）', () => {
+    const factory = initRealViewFactory(hooks);
+    factory.setMountTarget(mkMount());
+    const v = factory.create('ws-1');
+    factory.showOverlay('ws-1', 'agent');
+    const first = findView('browser-overlay');
+    factory.destroy(v); // tab 全灭 + overlay 销毁
+    factory.create('ws-1'); // tab 重建（restoreTabs）
+    factory.showOverlay('ws-1', 'agent'); // pushState 再到达
+    const second = createdViews.filter((c) => c.partition === 'browser-overlay').at(-1)!;
+    expect(second.view).not.toBe(first.view); // 新实例——懒重建
+    expect(second.wc.close).not.toHaveBeenCalled();
+  });
+
+  it('不同 ws overlay 互不干扰（只操作目标 ws）', () => {
+    const factory = initRealViewFactory(hooks);
+    const mount = mkMount();
+    factory.setMountTarget(mount);
     factory.create('ws-1');
     factory.create('ws-2');
-    factory.setIgnoreMouseEvents('ws-1', true);
-    const dbg1 = createdViews[0]!.wc.debugger;
-    const dbg2 = createdViews[1]!.wc.debugger;
-    expect(dbg1.attach).toHaveBeenCalledTimes(1);
-    expect(dbg1.sendCommand).toHaveBeenCalledWith('Input.setIgnoreInputEvents', { ignore: true });
-    expect(dbg2.attach).not.toHaveBeenCalled(); // 其他 ws 视图不动
-    expect(dbg1.detach).not.toHaveBeenCalled(); // 持有期间不 detach（flag 随会话存活）
-  });
-
-  it('重复 agent 态调用幂等：不重复 attach（pushState 每次推送都会调）', () => {
-    const factory = initRealViewFactory(hooks);
-    factory.create('ws-1');
-    factory.setIgnoreMouseEvents('ws-1', true);
-    factory.setIgnoreMouseEvents('ws-1', true);
-    expect(createdViews[0]!.wc.debugger.attach).toHaveBeenCalledTimes(1);
-    expect(createdViews[0]!.wc.debugger.sendCommand).toHaveBeenCalledTimes(2);
-  });
-
-  it('user 态（false）：发 {ignore:false} 后解除持有（真 detach）', async () => {
-    const factory = initRealViewFactory(hooks);
-    factory.create('ws-1');
-    factory.setIgnoreMouseEvents('ws-1', true);
-    const dbg = createdViews[0]!.wc.debugger;
-    factory.setIgnoreMouseEvents('ws-1', false);
-    // releaseHold 在 sendCommand promise 之后——微任务冲刷后真 detach
-    await new Promise((r) => setTimeout(r, 0));
-    expect(dbg.sendCommand).toHaveBeenLastCalledWith('Input.setIgnoreInputEvents', { ignore: false });
-    expect(dbg.detach).toHaveBeenCalledTimes(1);
-  });
-
-  it('穿透持有期间 snapshot 懒附加（公共 attach/detach）不真 detach（共享会话）', () => {
-    const factory = initRealViewFactory(hooks);
-    const v = factory.create('ws-1');
-    factory.setIgnoreMouseEvents('ws-1', true);
-    const dbg = createdViews[0]!.wc.debugger;
-    const attachCallsBefore = dbg.attach.mock.calls.length;
-    // 模拟 manager.snapshot 的懒附加序列（经 managed.webContents.debugger 公共面）
-    v.webContents.debugger.attach('1.3');
-    v.webContents.debugger.detach();
-    expect(dbg.attach.mock.calls.length).toBe(attachCallsBefore); // 已附加——不重复真 attach
-    expect(dbg.detach).not.toHaveBeenCalled(); // 持有期间公共 detach 不拆会话
-  });
-
-  it('无视图 ws no-op 不抛错', () => {
-    const factory = initRealViewFactory(hooks);
-    expect(() => factory.setIgnoreMouseEvents('ws-404', true)).not.toThrow();
+    factory.showOverlay('ws-1', 'agent');
+    factory.showOverlay('ws-2', 'agent');
+    const ov1 = createdViews.find((c) => c.partition === 'browser-overlay')!;
+    factory.showOverlay('ws-1', 'user');
+    expect(mount.removeChildView).toHaveBeenCalledWith(ov1.view);
+    // ws-2 overlay 不受影响（未摘除）
+    expect(mount.removeChildView).toHaveBeenCalledTimes(1);
   });
 });

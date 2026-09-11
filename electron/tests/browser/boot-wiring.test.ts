@@ -4,7 +4,9 @@
 //
 // SUT = browser/boot.ts（纯依赖注入，零 electron import）：
 //   - 组装序（T7 契约）：createBrowserPushHooks 先于 new BrowserManager；
-//     pushState 包装层在每次推送后按 takeover 施加鼠标穿透（DoD 17 映射锁）
+//     pushState 包装层在每次推送后按 takeover 挂/摘 overlay（DoD 17 映射锁）
+//   - overlay 命中链端到端：注入 factory 的 onOverlayHit → manager.userTakeover
+//     → pushState → showOverlay(wsId,'user')（页内点击接管）
 //   - initBrowserTools 以同一 policy/manager 实例接线（vi.mock 捕获）
 //   - screenshotDir = <userData>/browser-screenshots（构造注入 manager + protocol 共享）
 //   - attachToWindow：推送面定标到窗口 webContents + 14 通道注册 + 二次 attach 重定标不重注册
@@ -34,6 +36,7 @@ import type { BrowserBootDeps, BrowserBootHandle } from '../../src/main/browser/
 import { initBrowserTools } from '../../src/main/agent/tools/browser-tools';
 import { BrowserManager } from '../../src/main/browser/manager';
 import type { ManagedView, ManagedWebContents, ViewFactory } from '../../src/main/browser/manager';
+import type { RealFactoryHooks } from '../../src/main/browser/view-factory';
 import type { IpcMainLike, WebContentsLike } from '../../src/main/browser/ipc';
 import type { ProtocolLike } from '../../src/main/browser/protocol';
 import type { Mock } from 'vitest';
@@ -72,12 +75,12 @@ function mkCreateFactory() {
     }),
     destroy: vi.fn(),
     clearData: vi.fn(async () => undefined),
-    setIgnoreMouseEvents: vi.fn(),
+    showOverlay: vi.fn(),
     setMountTarget: vi.fn(),
   };
   return factory;
 }
-type MockFactory = ReturnType<typeof mkCreateFactory> & ViewFactory & { setIgnoreMouseEvents: Mock };
+type MockFactory = ReturnType<typeof mkCreateFactory> & ViewFactory & { showOverlay: Mock };
 
 // =================================================================================
 // 捕获桩：ipcMain / webContents / protocol / app
@@ -115,6 +118,8 @@ const lifecycleListeners = new Map<string, () => void>();
 
 const tmpRoot = path.join(os.tmpdir(), `ap-browser-boot-${process.pid}-${Date.now()}`);
 let factory: MockFactory;
+/** boot 注入给 createFactory 的 hooks（overlay 命中链测试捕获用） */
+let factoryHooks: RealFactoryHooks | undefined;
 let handle: BrowserBootHandle;
 
 beforeEach(() => {
@@ -132,7 +137,10 @@ beforeEach(() => {
 
   const deps: BrowserBootDeps = {
     userDataDir: tmpRoot,
-    createFactory: () => factory,
+    createFactory: (h) => {
+      factoryHooks = h;
+      return factory;
+    },
     protocol: protocolLike,
   };
   handle = assembleBrowserSubsystem(deps);
@@ -174,20 +182,42 @@ describe('assembleBrowserSubsystem 组装', () => {
   });
 });
 
-describe('DoD 17：pushState 包装层鼠标穿透映射', () => {
-  it('agent 态推送 → setIgnoreMouseEvents(wsId, true)；接管 user → false', async () => {
+describe('DoD 17：pushState 包装层 overlay 挂载映射', () => {
+  it('agent 态推送 → showOverlay(wsId, agent)；接管 user → user；释放回 agent', async () => {
     handle.switchWorkspace('ws-1', '/tmp/ws-1');
     await handle.manager.navigate('ws-1', 'http://localhost:5173/');
-    expect(factory.setIgnoreMouseEvents).toHaveBeenLastCalledWith('ws-1', true);
+    expect(factory.showOverlay).toHaveBeenLastCalledWith('ws-1', 'agent');
     handle.manager.userTakeover('ws-1');
-    expect(factory.setIgnoreMouseEvents).toHaveBeenLastCalledWith('ws-1', false);
+    expect(factory.showOverlay).toHaveBeenLastCalledWith('ws-1', 'user');
     handle.manager.releaseTakeover('ws-1');
-    expect(factory.setIgnoreMouseEvents).toHaveBeenLastCalledWith('ws-1', true);
+    expect(factory.showOverlay).toHaveBeenLastCalledWith('ws-1', 'agent');
   });
 
-  it('窗口 attach 前推送不炸（lazy sender 静默）且穿透仍生效', () => {
+  it('窗口 attach 前推送不炸（lazy sender 静默）且 overlay 挂载仍生效', () => {
     handle.switchWorkspace('ws-1', '/tmp/ws-1');
-    expect(factory.setIgnoreMouseEvents).toHaveBeenCalledWith('ws-1', true);
+    expect(factory.showOverlay).toHaveBeenCalledWith('ws-1', 'agent');
+  });
+});
+
+describe('DoD 17：overlay 命中链（页内点击接管端到端）', () => {
+  it('factory hooks onOverlayHit(wsId) → manager.userTakeover → showOverlay(wsId, user)', async () => {
+    handle.switchWorkspace('ws-1', '/tmp/ws-1');
+    await handle.manager.navigate('ws-1', 'http://localhost:5173/');
+    expect(factoryHooks).toBeDefined();
+    factory.showOverlay.mockClear();
+    // 模拟真实 IPC 命中到达（view-factory 侧注册的 webContents.ipc 处理器转发）
+    factoryHooks!.onOverlayHit('ws-1');
+    expect(handle.manager.getState('ws-1').takeover).toBe('user');
+    expect(factory.showOverlay).toHaveBeenLastCalledWith('ws-1', 'user');
+  });
+
+  it('命中非活跃 ws 不产生接管（userTakeover 静默忽略语义透传）', async () => {
+    handle.switchWorkspace('ws-1', '/tmp/ws-1');
+    await handle.manager.navigate('ws-1', 'http://localhost:5173/');
+    factory.showOverlay.mockClear();
+    factoryHooks!.onOverlayHit('ws-404');
+    expect(handle.manager.getState('ws-1').takeover).toBe('agent');
+    expect(factory.showOverlay).not.toHaveBeenCalled();
   });
 });
 
