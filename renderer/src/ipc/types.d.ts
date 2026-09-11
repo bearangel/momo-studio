@@ -1167,6 +1167,8 @@ export interface ApiSurface {
     delete(id: string): Promise<void>;
     /** v25 Task 6（spec §5）：设置/清空默认会话 agent；instanceId=null 清除（查询随 workspace:get/list 返回） */
     setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
+    /** v2.7 T10：切换激活 workspace 通知（main 收口浏览器子系统切换钩子；fire-and-forget） */
+    switch(id: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：重命名 workspace（UPDATE name 列） */
     rename(id: string, name: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */

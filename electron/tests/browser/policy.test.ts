@@ -141,6 +141,21 @@ describe('URL 策略 assertUrl', () => {
       // 字符串边界在 workspace 内，但 realpath 解析到外部 → 拦截
       expect(() => mkFilePolicy().assertUrl('ws1', pathToFileURL(link).href)).toThrow(BrowserFileAccessError);
     });
+
+    it('setWorkspaceRoot：切换后 file:// 边界跟随新根（T10 动态根接线）', () => {
+      const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-browser-policy2-'));
+      cleanup.push(otherRoot);
+      const p = mkFilePolicy();
+      // 新根内的文件在旧根语义下越界
+      const otherFile = path.join(otherRoot, 'a.html');
+      fs.writeFileSync(otherFile, '<html></html>');
+      expect(() => p.assertUrl('ws1', pathToFileURL(otherFile).href)).toThrow(BrowserFileAccessError);
+      // 切根后放行；旧根内文件反而越界（file:// 永远限定当前活跃 workspace）
+      p.setWorkspaceRoot(otherRoot);
+      expect(p.assertUrl('ws1', pathToFileURL(otherFile).href)).toBe(pathToFileURL(otherFile).href);
+      const oldFile = path.join(tmpRoot, 'index.html');
+      expect(() => p.assertUrl('ws1', pathToFileURL(oldFile).href)).toThrow(BrowserFileAccessError);
+    });
   });
 
   it('ftp/javascript/data 等协议 → BrowserProtocolError', () => {

@@ -23,9 +23,11 @@ const MOCK_WS_2: Workspace = { ...MOCK_WS, id: 'ws-2', name: '第二个工作区
 const mockApi = {
   workspace: {
     list: vi.fn().mockResolvedValue([MOCK_WS]),
+    create: vi.fn().mockResolvedValue(MOCK_WS_2),
     setDefaultAgent: vi.fn().mockResolvedValue({ ok: true }),
     delete: vi.fn().mockResolvedValue(undefined),
     rename: vi.fn().mockResolvedValue({ ok: true }),
+    switch: vi.fn().mockResolvedValue({ ok: true }),
   },
 };
 
@@ -34,13 +36,16 @@ beforeEach(() => {
   // 重置 store 状态，保证测试间隔离
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, error: null });
   mockApi.workspace.list.mockResolvedValue([MOCK_WS]);
+  mockApi.workspace.create.mockResolvedValue(MOCK_WS_2);
   mockApi.workspace.setDefaultAgent.mockResolvedValue({ ok: true });
-  mockApi.workspace.setDefaultAgent.mockClear();
   mockApi.workspace.list.mockClear();
+  mockApi.workspace.setDefaultAgent.mockClear();
   mockApi.workspace.delete.mockResolvedValue(undefined);
   mockApi.workspace.delete.mockClear();
   mockApi.workspace.rename.mockResolvedValue({ ok: true });
   mockApi.workspace.rename.mockClear();
+  mockApi.workspace.switch.mockResolvedValue({ ok: true });
+  mockApi.workspace.switch.mockClear();
 });
 
 describe('workspace.store', () => {
@@ -129,5 +134,48 @@ describe('workspace.store remove/rename（P2 Task 2）', () => {
 
     expect(useWorkspaceStore.getState().error).toBe('重命名失败');
     expect(useWorkspaceStore.getState().workspaces[0]!.name).toBe('测试工作区');
+  });
+});
+
+describe('workspace.store 激活切换通知（v2.7 T10 workspace:switch）', () => {
+  it('load 默认激活首项后通知 main（初始激活的 renderer 侧来源）', async () => {
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('load 空列表不通知（无激活项）', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    await useWorkspaceStore.getState().load();
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull();
+    expect(mockApi.workspace.switch).not.toHaveBeenCalled();
+  });
+
+  it('select 切换激活后通知 main', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().select('ws-2');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-2');
+  });
+
+  it('create 新建即激活并通知 main', async () => {
+    await useWorkspaceStore.getState().create({
+      name: '第二个工作区',
+      directoryPath: '/tmp/ws-2',
+    });
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-2');
+  });
+
+  it('switch 通知失败不阻塞本地激活（fire-and-forget 旁路）', () => {
+    mockApi.workspace.switch.mockRejectedValue(new Error('IPC 故障'));
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().select('ws-2');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
   });
 });

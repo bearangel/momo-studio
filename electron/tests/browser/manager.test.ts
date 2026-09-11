@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ABOUT_BLANK, BrowserManager } from '../../src/main/browser/manager';
 import type { ManagedView, ManagedWebContents, ViewFactory } from '../../src/main/browser/manager';
@@ -451,6 +452,28 @@ describe('takeover', () => {
 // =================================================================================
 
 describe('workspace 切换', () => {
+  it('activate 同步 policy file:// 根到激活 ws 目录（T10 动态根接线）', async () => {
+    const { manager } = mkManager();
+    const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-wsroot-a-'));
+    const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-wsroot-b-'));
+    try {
+      const fileA = path.join(rootA, 'a.html');
+      fs.writeFileSync(fileA, 'a');
+      manager.onWorkspaceActivated('ws1', rootA);
+      // file:// 边界跟随 ws1 的目录：rootA 内放行
+      await expect(manager.navigate('ws1', pathToFileURL(fileA).href)).resolves.toBeTruthy();
+      // 切到 ws2（目录 rootB）后：rootA 内文件对当前活跃 ws 越界
+      manager.onWorkspaceActivated('ws2', rootB);
+      const { BrowserFileAccessError } = await import('../../src/main/browser/errors');
+      await expect(manager.navigate('ws2', pathToFileURL(fileA).href)).rejects.toBeInstanceOf(
+        BrowserFileAccessError,
+      );
+    } finally {
+      fs.rmSync(rootA, { recursive: true, force: true });
+      fs.rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+
   it('deactivate 销毁全部 view 并 stash {urls,current}；activate 按 stash 重建并恢复 current（重建不经策略）', async () => {
     const { manager, factory, policy, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
@@ -877,6 +900,22 @@ describe('动作原语（委托 actions.ts——T3 四语法接线）', () => {
     expect(res.path).not.toContain('..');
     expect(fs.readFileSync(res.path).toString()).toBe('fake-png');
     fs.rmSync(path.dirname(res.path), { recursive: true, force: true });
+  });
+
+  it('screenshot：构造注入 screenshotDir → 落盘改到注入目录（spec §4 工具 3 字面）', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-shot-dir-'));
+    const factory = mkFactory();
+    const policy = new BrowserPolicy(() => ({ ...baseSettings }), '/ws/root');
+    const manager = new BrowserManager(factory, policy, { pushState: vi.fn(), pushNotice: vi.fn() }, {
+      screenshotDir: dir,
+    });
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    const res = await manager.screenshot('ws1', 'shot.png');
+    // 落盘必须命中注入目录的 <dir>/<wsId>/ 子路径（而非 tmpdir 缺省）
+    expect(res.path.startsWith(path.join(dir, 'ws1') + path.sep)).toBe(true);
+    expect(fs.readFileSync(res.path).toString()).toBe('fake-png');
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

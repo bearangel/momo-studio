@@ -140,6 +140,15 @@ export interface BrowserManagerHooks {
   pushNotice(kind: string, text: string): void;
 }
 
+/** 构造可选项（T10 boot 注入） */
+export interface BrowserManagerOpts {
+  /**
+   * screenshot 落盘根目录（spec §4 工具 3 字面：`<userData>/browser-screenshots`）。
+   * 缺省回退 `<tmpdir>/momo-browser-shots`（T2 行为，boot 未注入时的兜底）。
+   */
+  screenshotDir?: string;
+}
+
 /**
  * tabs / 关浏览器操作的调用方甄别（G4：tabs 为 agent/user 双方共用）。
  *   'agent'（缺省）——T5 browser_tabs / browser_close 工具路径，过接管门
@@ -195,7 +204,13 @@ export class BrowserManager {
     private readonly factory: ViewFactory,
     private readonly policy: BrowserPolicy,
     private readonly hooks: BrowserManagerHooks,
-  ) {}
+    opts?: BrowserManagerOpts,
+  ) {
+    this.screenshotDir = opts?.screenshotDir;
+  }
+
+  /** screenshot 落盘根（null = 缺省 tmpdir 兜底） */
+  private readonly screenshotDir?: string;
 
   // ---------- 门控与状态 ----------
 
@@ -404,14 +419,15 @@ export class BrowserManager {
     return takeSnapshot(wc);
   }
 
-  /** screenshot：capturePage → PNG → 落 `<tmpdir>/momo-browser-shots/<wsId>/`；filename basename 清洗 */
+  /** screenshot：capturePage → PNG → 落 `<screenshotDir>/<wsId>/`（boot 注入 userData 目录；缺省 tmpdir 兜底）；filename basename 清洗 */
   async screenshot(wsId: string, filename?: string): Promise<{ path: string }> {
     const wc = this.requireCurrentWebContents(wsId);
     const image = await wc.capturePage();
     const safeName = path.basename(
       filename && filename.trim() !== '' ? filename : `shot-${Date.now()}.png`,
     );
-    const dir = path.join(os.tmpdir(), 'momo-browser-shots', wsId);
+    const base = this.screenshotDir ?? path.join(os.tmpdir(), 'momo-browser-shots');
+    const dir = path.join(base, wsId);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, safeName);
     fs.writeFileSync(file, image.toPNG());
@@ -463,8 +479,9 @@ export class BrowserManager {
 
   // ---------- workspace 生命周期 ----------
 
-  /** workspace 激活（main 切 workspace 时调）：自动 deactivate 前一活跃 ws；按 stash 重建 */
+  /** workspace 激活（main 切 workspace 时调）：自动 deactivate 前一活跃 ws；按 stash 重建；file:// 边界根同步到该 ws 目录 */
   onWorkspaceActivated(wsId: string, workspaceDir: string): void {
+    this.policy.setWorkspaceRoot(workspaceDir);
     const cur = this.active;
     if (cur?.workspaceId === wsId) {
       cur.workspaceDir = workspaceDir;

@@ -365,6 +365,27 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
   });
 
+  it('卸载（im→files/agents 活动切换）→ 上报零尺寸 rect（view 隐藏但 tabs/状态保留）', async () => {
+    const { unmount } = render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    setSidebarBoundsMock.mockClear();
+
+    unmount();
+
+    expect(setSidebarBoundsMock).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it('workspaceId 变化（侧栏仍在位）不触发零尺寸上报——main 按 lastRect 缓存恢复新 ws 视图', async () => {
+    const { rerender } = render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    setSidebarBoundsMock.mockClear();
+
+    rerender(<BrowserSidebar workspaceId="w2" />);
+    await screen.findByText('Example');
+
+    expect(setSidebarBoundsMock).not.toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
   it('折叠 → 占位区卸载后 window resize 不再上报（折叠态不上报——manager 折叠即销毁视图，零尺寸上报无意义）', async () => {
     setSidebarCollapsedMock.mockResolvedValue(undefined);
     render(<BrowserSidebar workspaceId="w1" />);

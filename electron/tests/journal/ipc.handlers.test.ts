@@ -137,11 +137,12 @@ describe('journal/ipc.handlers 通道注册 + boot 冒烟', () => {
     expect(getJournalStore()).not.toBeNull();
   });
 
-  it('boot 接线源码锁（T6 移交）：main/index.ts 在 registerIpcHandlers() 之后逐 workspace enforceQuota', () => {
+  it('boot 接线源码锁（T6 移交）：main/index.ts 在 registerIpcHandlers( 后逐 workspace enforceQuota', () => {
     // main/index.ts 无测试入口（Electron 入口），照 sandbox 120s 回归锁先例做源码扫描——
     // 锁「store 注入（registerIpcHandlers 内）先于配额清理执行」的接线次序。
+    // v2.7 T10 起 registerIpcHandlers 带 workspace:switch 回调实参（浏览器切换钩子）。
     const src = fsSync.readFileSync(path.join(__dirname, '../../src/main/index.ts'), 'utf-8');
-    const ipcCallIdx = src.indexOf('registerIpcHandlers();');
+    const ipcCallIdx = src.indexOf('registerIpcHandlers({');
     const quotaCallIdx = src.indexOf('enforceQuota(');
     expect(ipcCallIdx).toBeGreaterThan(-1);
     expect(quotaCallIdx).toBeGreaterThan(ipcCallIdx);

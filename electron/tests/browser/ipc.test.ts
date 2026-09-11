@@ -58,7 +58,7 @@ interface MockView {
 function mkMockView(): MockView {
   const handlers = new Map<string, Handler>();
   let currentUrl = '';
-  let currentTitle = '';
+  const currentTitle = '';
   const webContents: ManagedWebContents = {
     loadURL: vi.fn(async (url: string) => {
       currentUrl = url;

@@ -21,11 +21,16 @@ import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerP2pHandlers } from '../p2p';
 import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
+import type { WorkspaceIpcOpts } from '../workspace/ipc.handlers';
 
-export function registerIpcHandlers(): void {
+/**
+ * 注册全部 IPC handlers（app ready 后调用一次）。
+ * opts 目前仅透传 workspace:* 的跨子系统回调（v2.7 T10 workspace:switch → 浏览器子系统）。
+ */
+export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   logger.info('Registering IPC handlers');
   registerSystemHandlers();
-  registerWorkspaceHandlers();
+  registerWorkspaceHandlers(opts);
   registerFileHandlers();
   registerAgentHandlers();
   registerStreamIpc();

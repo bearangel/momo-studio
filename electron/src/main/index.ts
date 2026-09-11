@@ -7,7 +7,7 @@
 //
 // v2.0 P1 Task 12：Matrix/Conduit 全家已删——启动链无外部服务进程，无 /sync，
 // 无登录/会话恢复（单用户本地应用 sender='owner'），SQLite 是唯一状态源。
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import { createMainWindow } from './window';
 import { registerIpcHandlers } from './ipc';
 import { runMigrations } from './storage/db';
@@ -24,10 +24,20 @@ import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
 import { listWorkspaces } from './workspace/crud';
 import { sweepStaleStreaming } from './task/resume';
+import { assembleBrowserSubsystem } from './browser/boot';
+import { initRealViewFactory } from './browser/view-factory';
+import { BROWSER_SHOT_SCHEME } from './browser/protocol';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
+
+// v2.7 McpBrowser：browser-shot:// 截图协议注册为 privileged scheme——
+// Electron 硬约束：registerSchemesAsPrivileged 必须在 app ready 之前调用
+// （模块顶层即本进程最早时机；handler 注册在 whenReady 内 boot 组装时进行）。
+protocol.registerSchemesAsPrivileged([
+  { scheme: BROWSER_SHOT_SCHEME, privileges: { standard: true, stream: true } },
+]);
 
 app.whenReady().then(async () => {
   try {
@@ -79,7 +89,28 @@ app.whenReady().then(async () => {
     // D 子系统：启动 TaskScheduler（调度层）——提升 pending→assigned，执行层走 v1 runtime。
     initTaskRuntime();
 
-    registerIpcHandlers();
+    // v2.7 McpBrowser：浏览器子系统组装（runMigrations 后——settings store 依赖
+    // workspace_settings 表；窗口创建前——browser 工具与初始激活先行可用）。
+    // 组装内部：hooks 先行 → 真视图工厂（互认共享 hooks）→ manager（截图目录注入
+    // userData/browser-screenshots）→ initBrowserTools → browser-shot 协议 handler。
+    const browserBoot = assembleBrowserSubsystem({
+      userDataDir: app.getPath('userData'),
+      createFactory: (hooks) => initRealViewFactory(hooks),
+      protocol,
+    });
+
+    // boot 初始激活：与 renderer load() 的默认激活同序（created_at DESC 首项）；
+    // renderer 随后的 workspace:switch 通知到达时 onWorkspaceActivated 幂等收敛
+    const firstWorkspace = listWorkspaces()[0];
+    if (firstWorkspace) {
+      browserBoot.switchWorkspace(firstWorkspace.id, firstWorkspace.directoryPath);
+    }
+
+    registerIpcHandlers({
+      // workspace:switch 收口（TitleBar tab → store → IPC → main）：浏览器视图
+      // 生命周期在此切换（manager 内部自动切走旧 ws + file:// 根同步）
+      onWorkspaceSwitched: (wsId, dir) => browserBoot.switchWorkspace(wsId, dir),
+    });
 
     // v2.5：boot 逐 workspace journal 配额清理（T6 移交）——registerIpcHandlers 内
     // registerJournalIpc 已注入 store；清理失败只 warn 不阻塞启动（安全网自身
@@ -110,6 +141,14 @@ app.whenReady().then(async () => {
 
     const win = createMainWindow();
     setSessionMainWindow(win);
+
+    // v2.7：视图叠加接线——create/destroy 时 addChildView/removeChildView 到主窗口
+    // contentView（占位区 rect 由 renderer 上报 → manager.setBounds）；
+    // 推送面/IPC invoke 面定标到主窗口 webContents（14 通道注册）；
+    // before-quit → disposeAll 销毁活跃视图（partition 数据落盘）
+    browserBoot.factory.setMountTarget(win.contentView);
+    browserBoot.attachToWindow(ipcMain, win.webContents);
+    browserBoot.bindLifecycle(app);
 
     // 启动即初始化 task-driven runtime：无登录概念，SQLite assignments.last_running
     // 是唯一状态源（Task 5：仅恢复用户意图为「在线」的 agent）

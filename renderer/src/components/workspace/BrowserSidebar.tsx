@@ -108,6 +108,19 @@ export function BrowserSidebar({ workspaceId }: Props) {
     };
   }, [collapsed]);
 
+  // 卸载（im→files/agents 活动视图切换）上报零尺寸 rect：main 对当前视图立即
+  // setBounds(0) 隐藏（tabs/接管/状态保留——manager 状态不动），重挂载时占位区
+  // effect 首帧上报自然恢复。空依赖 = 仅真卸载触发；workspaceId 变化（侧栏仍在
+  // 位、布局不变）不零报——main 侧 ws 切换按 lastRect 缓存恢复新 ws 视图。
+  useEffect(
+    () => () => {
+      void ipc.browser.setSidebarBounds({ x: 0, y: 0, width: 0, height: 0 }).catch(() => {
+        // 卸载竞态（app 关闭中 IPC 已断）——静默即可
+      });
+    },
+    [],
+  );
+
   const toggleCollapsed = (): void => {
     collapsedUserTouchedRef.current = true;
     const next = !collapsed;

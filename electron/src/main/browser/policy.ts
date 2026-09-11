@@ -39,6 +39,15 @@ export class BrowserPolicy {
     private workspaceRoot: string,
   ) {}
 
+  /**
+   * 切换 file:// 边界根（T10 boot / workspace 切换钩子调用）：
+   * 单 policy 实例服务全部 workspace，根必须跟随当前活跃 ws 的目录
+   * （manager.onWorkspaceActivated 同步）。http(s) 域名策略不受影响。
+   */
+  setWorkspaceRoot(dir: string): void {
+    this.workspaceRoot = dir;
+  }
+
   /** 信任卡「本次会话允许」应答入口；幂等 */
   grantSession(wsId: string): void {
     this.sessionGranted.add(wsId);

@@ -40,6 +40,8 @@ const api: ApiSurface = {
     openDirectory: (id) => invoke('workspace:openDirectory', id),
     // v25 Task 6（spec §5）：默认 agent 设置通道（原协调 agent 通道更名）
     setDefaultAgent: (id, instanceId) => invoke('workspace:setDefaultAgent', id, instanceId),
+    // v2.7 T10：切换激活 workspace 通知（main 侧收口浏览器子系统 workspace 钩子）
+    switch: (id) => invoke('workspace:switch', id),
   },
   file: {
     read: (wsId, path) => invoke('file:read', wsId, path),
