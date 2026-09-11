@@ -82,9 +82,11 @@ function makeFakeWindow(): { win: BrowserWindow; send: ReturnType<typeof vi.fn> 
   return { win, send };
 }
 
-function makeSpyRouter(): { router: { routeUserChat: ReturnType<typeof vi.fn> }; routeUserChat: ReturnType<typeof vi.fn> } {
+function makeSpyRouter() {
   const routeUserChat = vi.fn().mockResolvedValue(undefined);
-  return { router: { routeUserChat }, routeUserChat };
+  // spy 只实现 SessionRouter 的 routeUserChat 面——注入点按结构性子集 cast（对齐
+  // router-service.test.ts 的 dispatcher 注入先例）
+  return { router: { routeUserChat } as unknown as Parameters<typeof setSessionRouter>[0], routeUserChat };
 }
 
 beforeEach(() => {

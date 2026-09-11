@@ -29,7 +29,6 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-pm',
     agentUserId: 'agent-pm-01',
-    teamSessionId: 'sess-team',
     systemPrompt: 'x',
     modelName: 'm',
     llmApiKey: 'k',
@@ -44,6 +43,8 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     isLeader: false,
     devMode: false,
     maxToolCalls: -1,
+    contextWindow: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }
@@ -133,7 +134,7 @@ describe('executeDispatch 会话路由（P0-8）', () => {
     const { handleTaskReplyIpc } = await import('../../src/main/agent/dispatch-wait');
     handleTaskReplyIpc({
       type: 'task-reply',
-      reply: { taskId: (dispatchEvt as { content: { task_id: string } }).content.task_id, status: 'completed', body: 'ok' },
+      reply: { taskId: (dispatchEvt as unknown as { content: { task_id: string } }).content.task_id, status: 'completed', body: 'ok' },
     });
     await p; // promise 已 settle
 

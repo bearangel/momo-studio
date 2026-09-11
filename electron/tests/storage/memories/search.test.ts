@@ -43,7 +43,7 @@ describe('searchMemories BM25 中文检索', () => {
   it('中文词命中：偏好', () => {
     const hits = searchMemories('偏好', { workspaceId: WS, sessionId: 's1' });
     expect(hits.length).toBeGreaterThan(0);
-    expect(hits[0].content).toContain('偏好');
+    expect(hits[0]!.content).toContain('偏好');
   });
 
   it('中文词命中：研发规范（跨 ws 隔离——只命中本 ws）', () => {

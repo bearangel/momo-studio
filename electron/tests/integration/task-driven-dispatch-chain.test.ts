@@ -14,6 +14,7 @@
 //   4. task_reply + reply_to → 精确路由 → notifyTaskReply
 //   5. task_reply 无 reply_to → 广播 → 所有 runner 收到 notifyTaskReply
 import { describe, it, expect, vi } from 'vitest';
+import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import { RouterService } from '../../src/main/agent/router-service';
 
 function mkMockEvent(
@@ -39,7 +40,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-1' }),
       notifyTaskReply: vi.fn(),
     };
-    const runners = new Map([['inst-pm', mockRunner]]);
+    const runners = new Map<string, AgentRunner>([['inst-pm', mockRunner as unknown as AgentRunner]]);
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
@@ -67,7 +68,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       executeTask: vi.fn(),
       notifyTaskReply: vi.fn(),
     };
-    const runners = new Map([['inst-pm', mockRunner]]);
+    const runners = new Map<string, AgentRunner>([['inst-pm', mockRunner as unknown as AgentRunner]]);
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
@@ -87,7 +88,7 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-dispatch' }),
       notifyTaskReply: vi.fn(),
     };
-    const runners = new Map([['inst-sub', mockRunner]]);
+    const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
@@ -126,10 +127,10 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
       executeTask: vi.fn(),
       notifyTaskReply: vi.fn(),
     };
-    const runners = new Map([
-      ['inst-pm', pmRunner],
-      ['inst-other', otherRunner],
-    ]);
+    const runners = new Map<string, AgentRunner>([
+      ['inst-pm', pmRunner as unknown as AgentRunner],
+      ['inst-other', otherRunner as unknown as AgentRunner],
+]);
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,
@@ -157,10 +158,10 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
   it('task_reply 无 reply_to → 广播所有 runner（向后兼容）', async () => {
     const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
     const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
-    const runners = new Map([
-      ['inst-1', r1],
-      ['inst-2', r2],
-    ]);
+    const runners = new Map<string, AgentRunner>([
+      ['inst-1', r1 as unknown as AgentRunner],
+      ['inst-2', r2 as unknown as AgentRunner],
+]);
     const svc = new RouterService({
       runners,
       dispatcher: { tryPickup: vi.fn() } as never,

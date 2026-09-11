@@ -23,7 +23,7 @@ vi.mock('../../src/main/logger', () => ({
 import { logger } from '../../src/main/logger';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createBrowserSettingsStore } from '../../src/main/browser/settings-store';
-import type { DB } from 'better-sqlite3';
+import type { Database as DB } from 'better-sqlite3';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-browser-settings-${Date.now()}`);
 

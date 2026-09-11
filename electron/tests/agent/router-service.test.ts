@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { RouterService } from '../../src/main/agent/router-service';
+import type { AgentRunner } from '../../src/main/agent/agent-runner';
 
 /**
  * 构造 mock Matrix event——只暴露 RouterService.routeEvent 用到的方法。
@@ -38,7 +39,7 @@ describe('RouterService', () => {
   describe('routeUserChat（plain 参数入口）', () => {
     it('routeUserChat 直接派发 ephemeral task 到目标 runner（不经过 event 形状）', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-plain' }) };
-      const runners = new Map([['inst-pm', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-pm', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeUserChat({
@@ -59,7 +60,7 @@ describe('RouterService', () => {
 
     it('routeUserChat 传入 streamSessionId 时尊重入参（不重写）', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-x' }) };
-      const runners = new Map([['inst-pm', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-pm', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeUserChat({
@@ -76,7 +77,7 @@ describe('RouterService', () => {
 
     it('routeUserChat runner 不存在时静默跳过（不抛错）', async () => {
       const mockRunner = { executeTask: vi.fn() };
-      const runners = new Map<string, typeof mockRunner>();
+      const runners = new Map<string, AgentRunner>();
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await expect(
@@ -89,7 +90,7 @@ describe('RouterService', () => {
   describe('routeEvent（按 Matrix event 类型分流）', () => {
     it('m.room.message → 路由到目标 agent → executeTask', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-1' }) };
-      const runners = new Map([['inst1', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst1', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -109,7 +110,7 @@ describe('RouterService', () => {
 
     it('dispatch event → 路由到子 agent → executeTask（dispatchContext）', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-2' }) };
-      const runners = new Map([['inst-sub', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -135,7 +136,7 @@ describe('RouterService', () => {
 
     it('regression（P0-7）：dispatch 带 sub_stream_session_id → task.streamSessionId 用它（chip 查找键一致）', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-sub' }) };
-      const runners = new Map([['inst-sub', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -164,7 +165,7 @@ describe('RouterService', () => {
 
     it('dispatch 无 sub_stream_session_id（旧消息兼容）→ 自动生成 UUID', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-x' }) };
-      const runners = new Map([['inst-sub', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -189,7 +190,7 @@ describe('RouterService', () => {
         executeTask: vi.fn(),
         notifyTaskReply: vi.fn(),
       };
-      const runners = new Map([['inst-pm', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-pm', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -210,7 +211,7 @@ describe('RouterService', () => {
 
     it('dispatch 未传 directTargetAssignmentId 时 dispatch_to（assignmentId）直接定位 runner', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-3' }) };
-      const runners = new Map([['inst-sub', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -235,7 +236,7 @@ describe('RouterService', () => {
 
     it('dispatch 自解析失败（dispatch_to 不是已知 assignmentId）时不派发', async () => {
       const mockRunner = { executeTask: vi.fn() };
-      const runners = new Map([['inst-sub', mockRunner]]);
+      const runners = new Map<string, AgentRunner>([['inst-sub', mockRunner as unknown as AgentRunner]]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -255,9 +256,9 @@ describe('RouterService', () => {
     it('task_reply 带 reply_to（assignmentId）时精确路由到目标 PM（不广播）', async () => {
       const pmRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
       const otherRunner = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
-      const runners = new Map([
-        ['inst-pm', pmRunner],
-        ['inst-other', otherRunner],
+      const runners = new Map<string, AgentRunner>([
+        ['inst-pm', pmRunner as unknown as AgentRunner],
+        ['inst-other', otherRunner as unknown as AgentRunner],
       ]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
@@ -279,10 +280,10 @@ describe('RouterService', () => {
     it('task_reply 无 reply_to 且无 assignmentId 时广播（向后兼容）', async () => {
       const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
       const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn() };
-      const runners = new Map([
-        ['inst-1', r1],
-        ['inst-2', r2],
-      ]);
+      const runners = new Map<string, AgentRunner>([
+        ['inst-1', r1 as unknown as AgentRunner],
+        ['inst-2', r2 as unknown as AgentRunner],
+]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -306,10 +307,10 @@ describe('RouterService', () => {
       // 只有持有该子流的 runner 真正下发 abort IPC——此处验证"全部收到广播"。
       const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
       const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
-      const runners = new Map([
-        ['inst-pm', r1],
-        ['inst-sub', r2],
-      ]);
+      const runners = new Map<string, AgentRunner>([
+        ['inst-pm', r1 as unknown as AgentRunner],
+        ['inst-sub', r2 as unknown as AgentRunner],
+]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -333,10 +334,10 @@ describe('RouterService', () => {
     it('abort_dispatch 缺 sub_stream_session_id → 不调任何 runner 的 abortStream', async () => {
       const r1 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
       const r2 = { executeTask: vi.fn(), notifyTaskReply: vi.fn(), abortStream: vi.fn() };
-      const runners = new Map([
-        ['inst-1', r1],
-        ['inst-2', r2],
-      ]);
+      const runners = new Map<string, AgentRunner>([
+        ['inst-1', r1 as unknown as AgentRunner],
+        ['inst-2', r2 as unknown as AgentRunner],
+]);
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await svc.routeEvent(
@@ -352,7 +353,7 @@ describe('RouterService', () => {
     });
 
     it('abort_dispatch 无 runner 时 no-op 不抛错（目标不存在仅 warn）', async () => {
-      const runners = new Map<string, { abortStream: () => void }>();
+      const runners = new Map<string, AgentRunner>();
       const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
 
       await expect(

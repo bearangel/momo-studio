@@ -100,7 +100,7 @@ function mkWebContents() {
   return { wc, sends };
 }
 
-const protocolHandlers = new Map<string, (req: { url: string }) => Promise<Response>>();
+const protocolHandlers = new Map<string, (req: { url: string }) => Response | Promise<Response>>();
 const protocolLike: ProtocolLike = {
   handle: (scheme, fn) => {
     protocolHandlers.set(scheme, fn);

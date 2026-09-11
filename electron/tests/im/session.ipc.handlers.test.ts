@@ -32,41 +32,43 @@ const {
     updatedAt: 1,
     lastMessageAt: null,
   };
+  // mock 返回面统一放宽到 unknown/unknown[]（momo-test-rules：mock 是边界，
+  // 返回形态由各用例的 toEqual 全量锁负责；此处不需生产类型的窄化重复）
   return {
     ipcHandlers,
     sessionOpsMocks: {
-      getSessionsForWorkspace: vi.fn(() => []),
-      createQuickSession: vi.fn(() => ({ ...newSessionRow })),
-      createCollabSession: vi.fn(() => ({ ...newSessionRow })),
-      renameSession: vi.fn(() => undefined),
-      deleteSessionOp: vi.fn(() => undefined),
-      getSessionMembersInfo: vi.fn(() => []),
+      getSessionsForWorkspace: vi.fn<[], unknown[]>(() => []),
+      createQuickSession: vi.fn<[], unknown>(() => ({ ...newSessionRow })),
+      createCollabSession: vi.fn<[], unknown>(() => ({ ...newSessionRow })),
+      renameSession: vi.fn<[], void>(() => undefined),
+      deleteSessionOp: vi.fn<[], void>(() => undefined),
+      getSessionMembersInfo: vi.fn<[], unknown[]>(() => []),
     },
     sessionServiceMocks: {
       sendUserMessage: vi.fn(async () => undefined),
     },
     sessionsRepoMocks: {
-      getSession: vi.fn(() => null),
+      getSession: vi.fn<[], unknown>(() => null),
     },
     messagesRepoMocks: {
-      listMessagesBySession: vi.fn(() => []),
-      listRecentMessagesBySession: vi.fn(() => []),
-      listOlderMessages: vi.fn(() => []),
-      listMessagesByStreamSessionId: vi.fn(() => []),
+      listMessagesBySession: vi.fn<[], unknown[]>(() => []),
+      listRecentMessagesBySession: vi.fn<[], unknown[]>(() => []),
+      listOlderMessages: vi.fn<[], unknown[]>(() => []),
+      listMessagesByStreamSessionId: vi.fn<[], unknown[]>(() => []),
     },
     eventsRepoMocks: {
-      listEventsByMessage: vi.fn(() => []),
+      listEventsByMessage: vi.fn<[], unknown[]>(() => []),
     },
     exporterMocks: {
-      formatRoomToMarkdown: vi.fn(() => '# 导出内容'),
-      renderSubMessage: vi.fn(() => '**子消息**'),
+      formatRoomToMarkdown: vi.fn<unknown[], string>(() => '# 导出内容'),
+      renderSubMessage: vi.fn<unknown[], string>(() => '**子消息**'),
     },
     agentCrudMocks: {
-      listMembers: vi.fn(() => []),
-      getAgentDefinition: vi.fn(() => null),
+      listMembers: vi.fn<[], unknown[]>(() => []),
+      getAgentDefinition: vi.fn<[], unknown>(() => null),
     },
     workspaceCrudMocks: {
-      listWorkspaces: vi.fn(() => []),
+      listWorkspaces: vi.fn<[], unknown[]>(() => []),
     },
   };
 });
@@ -102,9 +104,11 @@ vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
 
 import { registerSessionIpcHandlers } from '../../src/main/im/session.ipc.handlers';
 import { NoDefaultAgentError } from '../../src/main/im/session-ops';
+import type { SessionRow } from '../../src/main/storage/sessions/repo';
+import type { MessageRow } from '../../src/main/storage/messages/repo';
 
 /** 复用的 SessionRow fixture */
-const sessionRow = {
+const sessionRow: SessionRow = {
   id: 'sess-1',
   workspaceId: 'ws-1',
   title: '调试会话',
@@ -114,10 +118,10 @@ const sessionRow = {
   createdAt: 1,
   updatedAt: 1,
   lastMessageAt: 123,
-} as const;
+};
 
 /** 复用的 MessageRow fixture（agent 消息，sender 为 bot userId） */
-const msgRow = {
+const msgRow: MessageRow = {
   id: 'msg-1',
   sessionId: 'sess-1',
   sender: '@bot.helper:home',
@@ -133,7 +137,7 @@ const msgRow = {
   taskId: null,
   createdAt: 100,
   updatedAt: 100,
-} as const;
+};
 
 beforeEach(() => {
   ipcHandlers.clear();
@@ -371,7 +375,10 @@ describe('session:exportMessages handler', () => {
     ]);
     agentCrudMocks.getAgentDefinition.mockReturnValueOnce({ name: '小助手' });
 
-    const res = await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
+    const res = (await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50)) as {
+      filename: string;
+      content: string;
+    };
 
     // 1. 「最近 N 条」语义：走 listRecentMessagesBySession（非 ASC+LIMIT 的最早 N 条）
     expect(messagesRepoMocks.listRecentMessagesBySession).toHaveBeenCalledWith('sess-1', 50);
@@ -389,7 +396,9 @@ describe('session:exportMessages handler', () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(null);
     messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([]);
 
-    const res = await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-404', 50);
+    const res = (await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-404', 50)) as {
+      filename: string;
+    };
     expect(exporterMocks.formatRoomToMarkdown).toHaveBeenCalledWith(
       [],
       expect.objectContaining({ roomName: 'sess-404', roomId: 'sess-404' }),
@@ -422,7 +431,7 @@ describe('session:exportMessages 导出/显示对齐', () => {
 
     await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
-    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string; eventId: string }>;
     expect(exported.map((m) => m.eventId)).toEqual(['u1', 'a1']);
   });
 
@@ -438,7 +447,7 @@ describe('session:exportMessages 导出/显示对齐', () => {
 
     await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
-    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string; eventId: string }>;
     // 父消息直出（2026-09-08 显示语义），分段快照行不导出
     expect(exported.map((m) => m.eventId)).toEqual(['u0', 'parent', 'u9']);
   });
@@ -452,7 +461,7 @@ describe('session:exportMessages 导出/显示对齐', () => {
 
     await ipcHandlers.get('session:exportMessages')!({} as never, 'sess-1', 50);
 
-    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string }>;
+    const exported = exporterMocks.formatRoomToMarkdown.mock.calls[0]![0] as Array<{ id: string; eventId: string }>;
     expect(exported.map((m) => m.eventId)).toEqual(['u0']);
   });
 });

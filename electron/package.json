@@ -16,7 +16,7 @@
     "dev": "node scripts/dev.mjs",
     "test": "vitest run --config vitest.config.ts",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "dist": "pnpm build && pnpm --filter ../renderer build && electron-builder",
     "pack": "pnpm build && pnpm --filter ../renderer build && electron-builder --dir"
   },

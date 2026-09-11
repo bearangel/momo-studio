@@ -11,7 +11,7 @@
 // 模式对齐 tests/agent/dispatch-fresh-session.test.ts：__setMemoryProviderForTest 注入
 // stub + chatStream mock.calls 捕获 LLM messages 断言 system prompt。
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import {
   __setMemoryProviderForTest,
@@ -26,11 +26,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 
@@ -49,7 +46,7 @@ function makePinnedView(hint: string): PinnedMemoryView {
  * 若未来 runChatLoop 意外调用会响亮失败（mock 保真度铁律）。
  */
 function makeStubProvider(pinnedView: PinnedMemoryView): MemoryProvider & {
-  getPinnedContext: ReturnType<typeof vi.fn>;
+  getPinnedContext: Mock;
 } {
   const getPinnedContext = vi.fn(
     async (): Promise<PinnedMemoryView> => pinnedView,
@@ -101,13 +98,14 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a helpful assistant.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
     workspaceDir: '/tmp/test',
     workspaceId: 'ws-1',
     role: 'standalone',
+    contextWindow: 0,
+    outputTokens: 0,
     subAgents: [],
     skills: [],
     mcpNames: [],
@@ -137,6 +135,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     systemPrompt: 'You are a helpful assistant.',
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -144,6 +143,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: '!room:localhost',

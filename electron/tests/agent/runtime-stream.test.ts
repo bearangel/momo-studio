@@ -18,12 +18,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-  type RunChatLoopStats,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext, type RunChatLoopStats } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { executeDispatch, handleTaskReply } from '../../src/main/agent/dispatch-wait';
 import { formatBudgetHint } from '../../src/main/agent/prompt-hints';
 import { buildToolRegistry } from '../../src/main/agent/tools';
@@ -122,7 +118,6 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -137,6 +132,8 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     isLeader: false,
     devMode: false,
     maxToolCalls: 10,
+    contextWindow: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }
@@ -164,6 +161,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     // v1.5：FileTools 经 ctx.toolModules 路由；其他新增字段留占位
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -171,6 +169,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: '!room:localhost',

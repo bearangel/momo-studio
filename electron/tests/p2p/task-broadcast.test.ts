@@ -137,6 +137,9 @@ function makeFullTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     creatorUserId: 'owner',
     executionSessionId: null,
     assigneeAgentId: 'agent-1',
+    targetTeamId: null,
+    targetSessionId: null,
+    recurrenceParentId: null,
     priority: 3,
     scheduledAt: 111,
     recurrenceRule: null,
@@ -390,7 +393,7 @@ describe('initP2p / stopP2p 装配（index.ts）', () => {
       taskRepoMocks.listTasks.mockReturnValueOnce([]);
       await broadcastLocalTaskSnapshot();
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).toMatchObject({
+      expect(spy.mock.calls[0]![0]).toMatchObject({
         nodeId: 'node-init',
         nodeName: '初始化节点',
         tasks: [],

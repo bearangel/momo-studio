@@ -93,7 +93,7 @@ describe('HubTransport', () => {
 
     const instances = mockInstances();
     expect(instances.length).toBe(1);
-    expect(instances[0].sent[0]).toMatch(/hello/);
+    expect(instances[0]!.sent[0]).toMatch(/hello/);
 
     await t.stop();
   });
@@ -114,7 +114,7 @@ describe('HubTransport', () => {
 
     const instances = mockInstances();
     // sent[0] = hello；sent[1] = 加密 send 包
-    const envelope = JSON.parse(instances[0].sent[1] as string) as {
+    const envelope = JSON.parse(instances[0]!.sent[1] as string) as {
       to: string;
       ciphertext: string;
       nonce: string;
@@ -146,7 +146,7 @@ describe('HubTransport', () => {
     await t.start();
 
     // 模拟 hub 推送 presence——告知 Alice 节点 Bob 在线及其 box 公钥（仅展示用）
-    const conn = mockInstances()[0];
+    const conn = mockInstances()[0]!;
     conn.emit('message', Buffer.from(JSON.stringify({
       type: 'presence',
       nodes: [{ nodeId: 'node_bob', displayName: 'Bob', boxPublicKey: Buffer.from(bobBox.publicKey).toString('base64') }],
@@ -174,8 +174,8 @@ describe('HubTransport', () => {
     })));
 
     expect(received.length).toBe(1);
-    expect(received[0].from).toBe('node_bob');
-    expect(received[0].text).toBe('hi from bob');
+    expect(received[0]!.from).toBe('node_bob');
+    expect(received[0]!.text).toBe('hi from bob');
 
     await t.stop();
   });
@@ -193,7 +193,7 @@ describe('HubTransport', () => {
     });
     await t.start();
 
-    const conn = mockInstances()[0];
+    const conn = mockInstances()[0]!;
     // presence 学到 Bob 的 box 公钥（修复后仅展示用，不参与解密决策）
     conn.emit('message', Buffer.from(JSON.stringify({
       type: 'presence',
@@ -243,7 +243,7 @@ describe('HubTransport', () => {
     });
     await t.start();
 
-    const conn = mockInstances()[0];
+    const conn = mockInstances()[0]!;
     // 恶意 hub：presence 声称 node_bob 的 box 公钥是攻击者的
     conn.emit('message', Buffer.from(JSON.stringify({
       type: 'presence',

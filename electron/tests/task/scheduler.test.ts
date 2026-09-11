@@ -62,7 +62,7 @@ describe('TaskScheduler', () => {
     const sched = new TaskScheduler({ scanPickup, intervalMs: 1000 });
     sched.checkOnce();
 
-    const updated = listTasks({ workspaceId: 'ws1' })[0];
+    const updated = listTasks({ workspaceId: 'ws1' })[0]!;
     expect(updated.status).toBe('assigned');
     expect(scanPickup).toHaveBeenCalledWith('inst1');
   });
@@ -83,7 +83,7 @@ describe('TaskScheduler', () => {
     const sched = new TaskScheduler({ scanPickup, intervalMs: 1000 });
     sched.checkOnce();
 
-    const updated = listTasks({ workspaceId: 'ws1' })[0];
+    const updated = listTasks({ workspaceId: 'ws1' })[0]!;
     expect(updated.status).toBe('pending');
     expect(scanPickup).not.toHaveBeenCalled();
   });

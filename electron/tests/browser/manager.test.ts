@@ -59,8 +59,8 @@ function mkMockView(): MockView {
       if (typeof e === 'object' && e !== null) inputEvents.push(e as Record<string, unknown>);
     }),
     capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('fake-png') })),
-    setWindowOpenHandler: vi.fn((fn: Handler) => {
-      handlers.set('--window-open', fn);
+    setWindowOpenHandler: vi.fn((fn: (details: { url: string }) => { action: 'deny' }) => {
+      handlers.set('--window-open', fn as unknown as Handler);
     }),
     reload: vi.fn(),
     getURL: () => currentUrl,
@@ -103,6 +103,9 @@ interface MockFactory extends ViewFactory {
   views: MockView[];
   /** 已被 destroy 的 view 集合（set 中以 view 对象为键） */
   destroyed: WeakSet<ManagedView>;
+  /** create/destroy 以 Mock 面暴露（断言 .mock.calls / toHaveBeenCalled）——Mock 可调用，兼容 ViewFactory 签名 */
+  create: Mock;
+  destroy: Mock;
   clearData: Mock;
 }
 
@@ -116,10 +119,10 @@ function mkFactory(createView: () => MockView = () => mkMockView()): MockFactory
       const h = createView();
       views.push(h);
       return h.view;
-    }) as unknown as ViewFactory['create'],
+    }),
     destroy: vi.fn((v: ManagedView) => {
       destroyed.add(v);
-    }) as unknown as ViewFactory['destroy'],
+    }),
     clearData: vi.fn(async (_wsId: string) => undefined),
   };
 }

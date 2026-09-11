@@ -179,8 +179,6 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     const ws = await createWorkspace(
       { name: 'lazy-ws-1', directoryPath: '/tmp' },
       '@owner:localhost',
-      '!space-lazy-1:localhost',
-      '!team-lazy-1:localhost',
     );
     seedProvider('prov-lazy-1');
     seedTaskDrivenDef('def-lazy-1', 'prov-lazy-1');
@@ -214,8 +212,6 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     const ws = await createWorkspace(
       { name: 'lazy-ws-2', directoryPath: '/tmp' },
       '@owner:localhost',
-      '!space-lazy-2:localhost',
-      '!team-lazy-2:localhost',
     );
     // instanceId 由 addMember 生成，opts.instanceId 必须用同一个值
     seedProvider('prov-lazy-2');
@@ -258,8 +254,6 @@ describe('RouterService lazy init 集成测试 (Task 5)', () => {
     const ws = await createWorkspace(
       { name: 'lazy-ws-3', directoryPath: '/tmp' },
       '@owner:localhost',
-      '!space-lazy-3:localhost',
-      '!team-lazy-3:localhost',
     );
     seedProvider('prov-lazy-3');
     seedTaskDrivenDef('def-lazy-3a', 'prov-lazy-3');

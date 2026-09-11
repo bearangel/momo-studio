@@ -74,8 +74,8 @@ describe('LanTransport', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     expect(received.length).toBe(1);
-    expect(received[0].from).toBe(alice.nodeId);
-    expect(received[0].body).toEqual({ text: 'hi from alice' });
+    expect(received[0]!.from).toBe(alice.nodeId);
+    expect(received[0]!.body).toEqual({ text: 'hi from alice' });
 
     await aliceT.stop();
     await bobT.stop();

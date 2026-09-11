@@ -51,7 +51,7 @@ describe('provider-crud 边界', () => {
     const list = listProviders();
     const defaults = list.filter((p) => p.isDefault);
     expect(defaults).toHaveLength(1);
-    expect(defaults[0].id).toBe(b.id);
+    expect(defaults[0]!.id).toBe(b.id);
   });
 
   it('updateProvider isDefault:true 排他取消其它默认', async () => {
@@ -87,7 +87,7 @@ describe('migration v10 幂等与约束', () => {
     const p = await createProvider({ name: 'Keep', baseUrl: 'u', apiKey: 'k' });
     runMigrations(); // 二次执行：已 applied 的 migration 被跳过
     expect(listProviders()).toHaveLength(1);
-    expect(listProviders()[0].id).toBe(p.id);
+    expect(listProviders()[0]!.id).toBe(p.id);
   });
 
   it('model_providers.name 唯一约束在 DB 层生效（直接 INSERT 冲突）', () => {

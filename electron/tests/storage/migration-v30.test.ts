@@ -131,8 +131,8 @@ describe('migration v30：压缩改造数据层', () => {
       updated_at: number;
     }>;
     expect(rows).toHaveLength(1);
-    expect(rows[0].summary).toBe('摘要 v2（滚动合并）');
-    expect(rows[0].covered_until).toBe(2000);
+    expect(rows[0]!.summary).toBe('摘要 v2（滚动合并）');
+    expect(rows[0]!.covered_until).toBe(2000);
     db.close();
   });
 

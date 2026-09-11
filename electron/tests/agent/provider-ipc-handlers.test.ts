@@ -63,7 +63,7 @@ describe('provider-ipc handler 注册', () => {
 
 describe('provider-ipc CRUD 委托', () => {
   it('provider:list → listProviders()', () => {
-    crudMocks.listProviders.mockReturnValueOnce([{ id: 'p1' }]);
+    crudMocks.listProviders.mockReturnValueOnce([{ id: 'p1' }] as never);
     const res = ipcHandlers.get('provider:list')!();
     expect(crudMocks.listProviders).toHaveBeenCalled();
     expect(res).toEqual([{ id: 'p1' }]);
@@ -116,7 +116,7 @@ describe('provider-ipc 模型列表通道（Task 6）', () => {
   });
 
   it('provider:listModels → listProviderModels(id)', () => {
-    crudMocks.listProviderModels.mockReturnValueOnce([{ modelId: 'm1' }]);
+    crudMocks.listProviderModels.mockReturnValueOnce([{ modelId: 'm1' }] as never);
     const res = ipcHandlers.get('provider:listModels')!({} as never, 'p1');
     expect(crudMocks.listProviderModels).toHaveBeenCalledWith('p1');
     expect(res).toEqual([{ modelId: 'm1' }]);

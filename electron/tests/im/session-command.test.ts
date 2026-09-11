@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // vi.hoisted：vi.mock 工厂先于 import 执行，夹具须经 hoisted 提升后才对工厂可见。
-const { historyFixture } = vi.hoisted(() => ({
+const { historyFixture } = vi.hoisted((): { historyFixture: import('../../src/main/storage/messages/repo').MessageRow[] } => ({
   // 默认 3 条历史：[agent, owner, agent]——最后一条 user 在 index 1，
   // 头部 = [m0]（agent），覆盖游标 = m0.createdAt = 1000
   historyFixture: Array.from({ length: 3 }, (_, i) => ({
@@ -27,8 +27,17 @@ const { historyFixture } = vi.hoisted(() => ({
     sessionId: 's1',
     sender: i % 2 ? 'owner' : 'agent-x',
     body: `消息${i}`,
-    eventType: 'm.room.message',
+    eventType: 'm.room.message' as const,
+    streamSessionId: null,
+    parentStreamSessionId: null,
+    segmentOf: null,
+    segmentIndex: null,
+    status: 'done' as const,
+    source: 'local' as const,
+    workspaceId: 'w1',
+    taskId: null,
     createdAt: 1000 + i,
+    updatedAt: 1000 + i,
   })),
 }));
 
@@ -96,7 +105,7 @@ describe('handleSessionCommand(compact)', () => {
     expect(insertMessage).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's1',
       body: expect.stringContaining('[系统] 会话已压缩'),
-      eventType: 'm.room.message',
+      eventType: 'm.room.message' as const,
       workspaceId: 'w1',
     }));
   });
@@ -134,8 +143,8 @@ describe('handleSessionCommand 错误路径', () => {
 
   it('仅有最近一轮（首条即 user 消息，头部为空）→ throw「无更早历史」', async () => {
     vi.mocked(listRecentMessagesBySession).mockReturnValueOnce([
-      { ...historyFixture[1], createdAt: 1000 },
-      { ...historyFixture[2], createdAt: 2000 },
+      { ...historyFixture[1]!, createdAt: 1000 },
+      { ...historyFixture[2]!, createdAt: 2000 },
     ]);
     await expect(handleSessionCommand({ sessionId: 's1', command: 'compact' }))
       .rejects.toThrow('无更早历史可压缩');

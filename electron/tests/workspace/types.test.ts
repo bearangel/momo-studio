@@ -3,22 +3,21 @@ import { describe, it, expect } from 'vitest';
 import type { Workspace, CreateWorkspaceInput } from '../../src/main/workspace/types';
 
 describe('workspace/types', () => {
-  it('Workspace 接口包含所有必需字段', () => {
+  it('Workspace 接口包含所有必需字段（v25：teamSessionId/coordinatorInstanceId 已退役）', () => {
     const ws: Workspace = {
       id: 'test-id',
       name: '测试工作空间',
       description: '',
       directoryPath: '/tmp/test',
-      teamSessionId: '!team:localhost',
       gitInitialized: false,
       createdAt: '2026-01-01T00:00:00Z',
       ownerId: '@alice:localhost',
       iconEmoji: '📁',
-      coordinatorInstanceId: null,
+      defaultAgentInstanceId: null,
     };
     expect(ws.id).toBe('test-id');
     expect(ws.name).toBe('测试工作空间');
-    expect(ws.teamSessionId).toBe('!team:localhost');
+    expect(ws.defaultAgentInstanceId).toBeNull();
   });
 
   it('CreateWorkspaceInput 只需 name + directoryPath', () => {

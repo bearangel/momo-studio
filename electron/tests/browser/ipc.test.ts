@@ -69,8 +69,8 @@ function mkMockView(): MockView {
     executeJavaScript: vi.fn(async () => null),
     sendInputEvent: vi.fn(),
     capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('fake-png') })),
-    setWindowOpenHandler: vi.fn((fn: Handler) => {
-      handlers.set('--window-open', fn);
+    setWindowOpenHandler: vi.fn((fn: (details: { url: string }) => { action: 'deny' }) => {
+      handlers.set('--window-open', fn as unknown as Handler);
     }),
     reload: vi.fn(),
     getURL: () => currentUrl,

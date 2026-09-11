@@ -206,7 +206,7 @@ async function seedFixture(
       directoryPath: path.join(tmpRoot, `ws-${defId}`),
       iconEmoji: '📁',
     },
-    '@o:localhost', '!s:localhost', '!t:localhost',
+    '@o:localhost',
   );
   const member = await addMember(
     ws.id, def.id, `@bot-${defId}:localhost`,

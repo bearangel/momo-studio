@@ -161,7 +161,7 @@ describe('agent:addMember — 本地身份 + 成员落库（去 Matrix，v25 无
 
     // runtime 启动收到新形状 opts：携带本地身份，无团队会话 ID / Matrix 凭据
     expect(startAgentRuntime).toHaveBeenCalledTimes(1);
-    const opts = vi.mocked(startAgentRuntime).mock.calls[0]![0] as Record<string, unknown>;
+    const opts = vi.mocked(startAgentRuntime).mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect(opts.agentUserId).toBe(member.agentUserId);
     expect(opts).not.toHaveProperty('teamSessionId');
     expect(opts).not.toHaveProperty('botUserId');

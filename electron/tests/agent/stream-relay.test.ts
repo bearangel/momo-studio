@@ -119,7 +119,7 @@ describe('routeChunkToBuffer: chunk → SQLite 映射', () => {
       type: 'todo_update',
       streamSessionId: 'ss-map-2',
       sessionId: '!room:localhost',
-      todos: [{ id: 't1', subject: '任务A', status: 'in_progress' }],
+      todos: [{ id: 't1', subject: '任务A', status: 'in_progress', source: 'agent' }],
     });
     __flushEventBufferForTest();
 
@@ -129,7 +129,7 @@ describe('routeChunkToBuffer: chunk → SQLite 映射', () => {
     const todoEvent = events.find((e) => e.eventType === 'todo_update');
     expect(todoEvent).toBeDefined();
     expect(todoEvent!.payload.todos).toEqual([
-      { id: 't1', subject: '任务A', status: 'in_progress' },
+      { id: 't1', subject: '任务A', status: 'in_progress', source: 'agent' },
     ]);
   });
 

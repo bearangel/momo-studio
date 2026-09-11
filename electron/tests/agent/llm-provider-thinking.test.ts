@@ -60,12 +60,13 @@ describe('applyAnthropicThinking：budget 阶梯 + max_tokens 抬升', () => {
     }
   });
   it('auto / off / kind none / undefined → 不发 thinking 且 max_tokens 不动', () => {
-    for (const t of [
+    const cases: Array<ThinkingRequest | undefined> = [
       undefined,
       tr({ wire: 'anthropic-budget', mode: 'auto', effort: null }),
       tr({ wire: 'anthropic-budget', mode: 'off', effort: null }),
       { wire: 'anthropic-budget', kind: 'none', mode: 'on', effort: null },
-    ]) {
+    ];
+    for (const t of cases) {
       const body: Record<string, unknown> = { model: 'm', max_tokens: 4096, messages: [] };
       applyAnthropicThinking(body, t);
       expect(body.thinking).toBeUndefined();

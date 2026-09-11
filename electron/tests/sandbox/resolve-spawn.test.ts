@@ -89,9 +89,10 @@ describe('resolveShellSpawn', () => {
       if (plan.kind !== 'wrapped') return;
       expect(plan.shell).toBe('sandbox-exec');
       expect(plan.args[0]).toBe('-p');
-      expect(fs.existsSync(plan.args[1])).toBe(true);
-      expect(plan.cleanupFiles).toEqual([plan.args[1]]);
-      fs.rmSync(plan.args[1], { force: true });
+      const profile = plan.args[1]!;
+      expect(fs.existsSync(profile)).toBe(true);
+      expect(plan.cleanupFiles).toEqual([profile]);
+      fs.rmSync(profile, { force: true });
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });

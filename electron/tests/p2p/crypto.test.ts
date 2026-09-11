@@ -25,7 +25,7 @@ describe('p2p crypto', () => {
     const plaintext = new TextEncoder().encode('hello secret');
     const ciphertext = encryptPayload(plaintext, sharedKey, nonce);
     const decrypted = decryptPayload(ciphertext, sharedKey, nonce);
-    expect(Array.from(decrypted)).toEqual(Array.from(plaintext));
+    expect(Array.from(decrypted ?? [])).toEqual(Array.from(plaintext));
   });
 
   it('decryptPayload 用错误密钥返回 null', () => {
@@ -44,7 +44,7 @@ describe('p2p crypto', () => {
     const key = deriveSharedKey(alice.secretKey, bob.publicKey);
     const nonce = randomNonce();
     const ct = encryptPayload(new TextEncoder().encode('hi'), key, nonce);
-    ct[0] ^= 0xff;
+    ct[0]! ^= 0xff;
     expect(decryptPayload(ct, key, nonce)).toBeNull();
   });
 });

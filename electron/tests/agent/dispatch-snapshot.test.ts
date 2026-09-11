@@ -114,7 +114,6 @@ async function buildPmOpts(): Promise<AgentRuntimeOpts> {
     agentUserId: 'agent-def-pm-ab12',
     workspaceId: 'ws-1',
     workspaceDir: wsDir,
-    teamSessionId: '',
     def: makeDef('def-pm', 'pm', 'PM 描述'),
     llmApiKey: 'k',
   });

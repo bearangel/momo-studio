@@ -6,7 +6,7 @@
 //   2. sendInputEvent 事件类型名对齐 electron.d.ts MouseInputEvent/KeyInputEvent 联合：
 //      brief 中 mousePressed/mouseReleased/mouseMoved 为 CDP 名称，经 sendInputEvent
 //      对应 Electron 的 mouseDown/mouseUp/mouseMove（写错类型名真实运行时不被接受）
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { ManagedWebContents } from '../../src/main/browser/manager';
 import {
   clickElement,
@@ -33,7 +33,7 @@ function hitJson(): string {
 function mkWc(execResult: unknown = hitJson()): {
   wc: ManagedWebContents;
   events: Array<Record<string, unknown>>;
-  exec: ReturnType<typeof vi.fn>;
+  exec: Mock;
 } {
   const events: Array<Record<string, unknown>> = [];
   const exec = vi.fn(async () => execResult);

@@ -2,12 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // listTasks 打桩：isLaneOccupied 的 DB 兜底分支可控（保持真实签名形状）
-const listTasksMock = vi.fn(() => []);
+const listTasksMock = vi.fn<[unknown], unknown>((_opts: unknown) => []);
 vi.mock('../../src/main/storage/tasks/repo', () => ({
   listTasks: (opts: unknown) => listTasksMock(opts),
 }));
 // abortStreamBySessionId 打桩：精确中止断言载体（保持真实签名形状）
-const abortMock = vi.fn(() => true);
+const abortMock = vi.fn<[string], boolean>((_id: string) => true);
 vi.mock('../../src/main/agent/stream-relay', () => ({
   abortStreamBySessionId: (id: string) => abortMock(id),
 }));
@@ -54,7 +54,8 @@ describe('session-lane 占道判定（内存 ∪ DB 兜底，spec §4.2）', () 
   });
 
   it('内存为空但 DB 有 in_progress 任务行仍占道（重启恢复兜底）', () => {
-    listTasksMock.mockImplementation((opts: { executionSessionId?: string; status?: string }) => {
+    listTasksMock.mockImplementation((rawOpts: unknown) => {
+      const opts = rawOpts as { executionSessionId?: string; status?: string };
       expect(opts.executionSessionId).toBe('room-1');
       expect(opts.status).toBe('in_progress');
       return [{ id: 'T-old' }];

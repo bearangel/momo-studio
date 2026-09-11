@@ -5,7 +5,7 @@
 //   - onIncoming 接口——各 transport 的 onMessage 透传给统一 handler
 //
 // 不依赖真实网络，全部用 vi.fn 模拟 TransportLayer。
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 import { Router } from '../../src/main/p2p/router';
 import type { TransportLayer, IncomingMessage, NodeInfo } from '../../src/main/p2p/types';
 
@@ -18,8 +18,8 @@ function mkMockTransport(
   type: 'local' | 'lan' | 'hub',
   nodes: NodeInfo[] = [],
 ): TransportLayer & {
-  sendMock: ReturnType<typeof vi>;
-  startMock: ReturnType<typeof vi>;
+  sendMock: Mock;
+  startMock: Mock;
 } {
   return {
     type,
@@ -29,8 +29,8 @@ function mkMockTransport(
     discoverNodes: vi.fn().mockReturnValue(nodes),
     onMessage: vi.fn().mockReturnValue(() => {}),
   } as unknown as TransportLayer & {
-    sendMock: ReturnType<typeof vi>;
-    startMock: ReturnType<typeof vi>;
+    sendMock: Mock;
+    startMock: Mock;
   };
 }
 
@@ -122,21 +122,21 @@ describe('Router', () => {
     const localHandlers: Array<(m: IncomingMessage) => void> = [];
     const lanHandlers: Array<(m: IncomingMessage) => void> = [];
     const hubHandlers: Array<(m: IncomingMessage) => void> = [];
-    (local.onMessage as ReturnType<typeof vi>).mockImplementation((h: (m: IncomingMessage) => void) => {
+    (local.onMessage as Mock).mockImplementation((h: (m: IncomingMessage) => void) => {
       localHandlers.push(h);
       return () => {
         const i = localHandlers.indexOf(h);
         if (i >= 0) localHandlers.splice(i, 1);
       };
     });
-    (lan.onMessage as ReturnType<typeof vi>).mockImplementation((h: (m: IncomingMessage) => void) => {
+    (lan.onMessage as Mock).mockImplementation((h: (m: IncomingMessage) => void) => {
       lanHandlers.push(h);
       return () => {
         const i = lanHandlers.indexOf(h);
         if (i >= 0) lanHandlers.splice(i, 1);
       };
     });
-    (hub.onMessage as ReturnType<typeof vi>).mockImplementation((h: (m: IncomingMessage) => void) => {
+    (hub.onMessage as Mock).mockImplementation((h: (m: IncomingMessage) => void) => {
       hubHandlers.push(h);
       return () => {
         const i = hubHandlers.indexOf(h);
@@ -172,9 +172,9 @@ describe('Router', () => {
     expect(localHandlers.length).toBe(1);
     expect(lanHandlers.length).toBe(1);
     expect(hubHandlers.length).toBe(1);
-    localHandlers[0](msg1);
-    lanHandlers[0](msg2);
-    hubHandlers[0](msg3);
+    localHandlers[0]!(msg1);
+    lanHandlers[0]!(msg2);
+    hubHandlers[0]!(msg3);
 
     expect(incoming).toHaveBeenCalledTimes(3);
     expect(incoming).toHaveBeenNthCalledWith(1, msg1);

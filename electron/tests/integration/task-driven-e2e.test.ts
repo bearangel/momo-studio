@@ -156,9 +156,9 @@ describe('task-driven runtime e2e', () => {
 
     const stream = aggregateEvents(listEventsByMessage(agentMsg.id));
     expect(stream.toolCalls.length).toBe(1);
-    expect(stream.toolCalls[0].toolName).toBe('write_file');
-    expect(stream.toolCalls[0].result).toBe('ok');
-    expect(stream.toolCalls[0].success).toBe(true);
+    expect(stream.toolCalls[0]!.toolName).toBe('write_file');
+    expect(stream.toolCalls[0]!.result).toBe('ok');
+    expect(stream.toolCalls[0]!.success).toBe(true);
   });
 
   it('场景 3：PM dispatch → 子 agent ephemeral task → task_reply', () => {

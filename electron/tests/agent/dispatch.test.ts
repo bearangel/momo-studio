@@ -97,7 +97,7 @@ describe('agent/dispatch', () => {
       status: 'completed',
     });
     expect(reply.eventType).toBe(TASK_REPLY_EVENT_TYPE);
-    const parsed = parseTaskReply(reply.content);
+    const parsed = parseTaskReply(reply.content as unknown as Record<string, unknown>);
     expect(parsed?.status).toBe('completed');
     expect(parsed?.task_id).toBe('task-xyz');
   });

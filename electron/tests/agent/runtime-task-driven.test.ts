@@ -37,12 +37,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runTaskChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-  type TaskConfig,
-} from '../../src/main/agent/runtime-entry';
+import { runTaskChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig, TaskConfig } from '../../src/main/agent/runtime-config';
 import { executeDispatch, handleTaskReplyIpc } from '../../src/main/agent/dispatch-wait';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
@@ -122,13 +118,14 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
     workspaceDir: '/tmp/test',
     workspaceId: 'ws-1',
     role: 'standalone',
+    contextWindow: 0,
+    outputTokens: 0,
     subAgents: [],
     skills: [],
     mcpNames: [],
@@ -158,6 +155,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     systemPrompt: 'You are a helpful assistant.',
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -165,6 +163,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: '!room:localhost',
@@ -621,7 +620,11 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     // 同步注入 abort：runChatLoop 启动后会注册 process.on('message')，下一宏任务 emit
     setTimeout(() => {
-      process.emit('message', { type: 'abort', streamSessionId: 'sub-sess-abort' });
+      // @types/node 对 emit('message') 是双参专用重载——经通用签名强转（运行时等价）
+      (process.emit as (event: string, ...args: unknown[]) => boolean)('message', {
+        type: 'abort',
+        streamSessionId: 'sub-sess-abort',
+      });
     }, 1);
 
     await runPromise;
@@ -959,17 +962,18 @@ describe('parseConfig taskDriven 字段', () => {
   // 这里直接 import parseConfig 不行（未 export），改为验证 RuntimeConfig 类型 + 行为
   // 用 runTaskChatLoop 间接验证 taskDriven 不影响 task-driven 路径的行为
 
-  it('taskDriven 字段在 RuntimeConfig 类型上可选', () => {
+  it('RuntimeConfig 必填字段可用最小字面量构造（v25 起 teamSessionId/taskDriven 已退役）', () => {
     const config: RuntimeConfig = {
       agentAssignmentId: 'inst-bot',
       agentUserId: 'agent-bot-x1',
-      teamSessionId: '!team:localhost',
       systemPrompt: '',
       modelName: 'm',
       llmApiKey: 'k',
       workspaceDir: '/tmp',
       workspaceId: 'ws',
       role: 'standalone',
+      contextWindow: 0,
+      outputTokens: 0,
       subAgents: [],
       skills: [],
       mcpNames: [],
@@ -979,11 +983,8 @@ describe('parseConfig taskDriven 字段', () => {
       devMode: false,
       maxToolCalls: 10,
     };
-    // 不设置 taskDriven → undefined（parseConfig 会默认 true）
-    expect(config.taskDriven).toBeUndefined();
-
-    // 可设置
-    const withFlag: RuntimeConfig = { ...config, taskDriven: false };
-    expect(withFlag.taskDriven).toBe(false);
+    // 退役字段不再是 RuntimeConfig 一部分（运行时对象上自然不存在）
+    expect('taskDriven' in config).toBe(false);
+    expect('teamSessionId' in config).toBe(false);
   });
 });

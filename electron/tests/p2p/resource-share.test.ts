@@ -348,7 +348,7 @@ describe('resource-share 入站缓存', () => {
   });
 
   it('③ 同节点二次写入整条覆写（旧条目不残留），不同节点互不影响', () => {
-    writeResourceCatalog(mkCatalog({ items: [mkCatalog().items[0]] }), 'node-a');
+    writeResourceCatalog(mkCatalog({ items: [mkCatalog().items[0]!] }), 'node-a');
     writeResourceCatalog(
       mkCatalog({ items: [{ type: 'mcp', slug: 'new-mcp', name: '新', description: 'd' }] }),
       'node-a',
@@ -463,7 +463,7 @@ describe('initP2p 接线（index.ts）', () => {
       resourceCustomMocks.listCustomResources.mockReturnValue([]);
       await broadcastLocalResourceCatalog();
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).toMatchObject({
+      expect(spy.mock.calls[0]![0]).toMatchObject({
         nodeId: 'node-me',
         nodeName: '本机节点',
         items: [],

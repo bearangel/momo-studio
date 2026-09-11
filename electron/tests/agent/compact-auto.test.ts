@@ -72,7 +72,7 @@ type Scripted = {
 let script: Scripted[] = [];
 
 /** 可配置会话历史（stub provider 返回——构造超阈值上下文的入口） */
-let convHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+let convHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> = [];
 
 function installScriptedProvider(): void {
   vi.mocked(createLLMProvider).mockImplementation(() => ({
@@ -94,7 +94,7 @@ function installScriptedProvider(): void {
         };
         yield { type: 'done', finishReason: 'tool_use' };
         if (step.emitSteer !== undefined) {
-          process.emit('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
+          (process.emit as (event: string, ...args: unknown[]) => boolean)('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
         }
       } else {
         yield { type: 'thinking', content: '' };
@@ -177,10 +177,10 @@ function assertNoOrphanToolMessages(messages: LLMMessage[]): void {
 }
 
 /** 超阈值历史：prior 摘要注入条（T4 前缀）+ 一条 >KEEP 预算的 CJK 大消息 */
-function bigHistory(): Array<{ role: 'user' | 'assistant'; content: string }> {
+function bigHistory(): Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> {
   return [
-    { role: 'user', content: '[此前对话压缩摘要]\n旧摘要正文-PRIOR' },
-    { role: 'assistant', content: BIG },
+    { role: 'user', content: '[此前对话压缩摘要]\n旧摘要正文-PRIOR', timestamp: 1, sender: 'owner' },
+    { role: 'assistant', content: BIG, timestamp: 2, sender: 'bot' },
   ];
 }
 
@@ -348,9 +348,9 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
     // 划入可压缩区（切断 mandate 所在轮）。history 前置一条 >KEEP 大消息使
     // head 非空（真实消息与大消息之间的边界即压缩切点）。
     convHistory = [
-      { role: 'assistant', content: BIG },
-      { role: 'user', content: '真实请求-分析报告' },
-      { role: 'assistant', content: BIG },
+      { role: 'assistant', content: BIG, timestamp: 1, sender: 'bot' },
+      { role: 'user', content: '真实请求-分析报告', timestamp: 2, sender: 'owner' },
+      { role: 'assistant', content: BIG, timestamp: 3, sender: 'bot' },
     ];
     script = [{ text: '已总结。' }];
     await runChatLoop(
