@@ -524,6 +524,8 @@ export interface GlobalSettings {
   sandboxMode?: 'strict' | 'permissive';
   /** v2.4：沙箱内 bash 网络出站（仅影响 bash 工具，LLM API 调用不受影响）。默认 false */
   sandboxNetwork?: boolean;
+  /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
+  journalQuotaMb?: number;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
@@ -933,6 +935,86 @@ export interface SandboxApiSurface {
   dismissPrompt(kind: 'bwrap' | 'winPolicy'): Promise<void>;
 }
 
+/** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */
+export type JournalOp = 'create' | 'modify' | 'delete' | 'rename';
+
+/**
+ * v2.5 变更账本条目（renderer 镜像）。与 electron 端 journal/types.ts 的 JournalEntry 对齐。
+ * 跨进程独立定义，仅结构对齐；message_id 列已删除（归组键 = streamSessionId，参见 migration v33）。
+ */
+export interface JournalEntry {
+  id: string;
+  workspaceId: string;
+  taskId: string | null;
+  sessionId: string | null;
+  streamSessionId: string;
+  toolName: string;
+  path: string;
+  op: JournalOp;
+  beforeHash: string | null;
+  afterHash: string | null;
+  oldPath: string | null;
+  createdAt: number;
+}
+
+/**
+ * list 通道视图：条目 + blob 文本内容（截断 100KB；hash 为 null 或 blob 缺失时
+ * 对应文本为 null）。与 electron 端 journal/types.ts 的 JournalEntryView 对齐。
+ */
+export interface JournalEntryView extends JournalEntry {
+  beforeText: string | null;
+  afterText: string | null;
+}
+
+/** 单条撤销结果。与 electron 端 journal/revert.ts 的 RevertOutcome 对齐。 */
+export interface RevertOutcome {
+  id: string;
+  path: string;
+  result: 'reverted' | 'skipped-diverged' | 'restored-missing' | 'no-op' | 'failed';
+  detail?: string;
+}
+
+/** 未入账扫描结果。与 electron 端 journal/detector.ts 的 ScanResult 对齐。 */
+export interface JournalScanResult {
+  journaled: string[];
+  unjournaled: string[];
+  repos: string[];
+  degraded: boolean;
+}
+
+/**
+ * v2.5 变更账本通道（IPC 命名空间 journal:*，journal/ipc.handlers.ts）。
+ * 与 preload 的 invoke 通道名逐一对应；revert / rollbackFileBefore 由
+ * 主进程构造合成 recorderCtx（streamSessionId='journal-revert-ui' +
+ * toolName='undo'）落账，UI 无须传入 streamSessionId 语义。
+ */
+export interface JournalApiSurface {
+  /**
+   * 列条目视图。两 scope：taskId（任务组）/ streamSessionId（消息行流）；
+   * 两键皆空返回空数组。
+   */
+  list(scope: {
+    workspaceId: string;
+    taskId?: string;
+    streamSessionId?: string;
+  }): Promise<JournalEntryView[]>;
+  /**
+   * 撤销指定条目（按 id 批量）；执行序 = 全局 created_at 逆序。
+   * force=true 在 hash 漂移时强制写回（会丢失其后变更，UI 需明确警告）。
+   */
+  revert(workspaceId: string, ids: string[], opts?: { force?: boolean }): Promise<RevertOutcome[]>;
+  /**
+   * 账外变更扫描：与 journaled 取差集（taskId=null 取全 workspace 路径并集，
+   * 否则取该任务组路径子集）；degraded=true 时三列恒空。
+   */
+  scan(workspaceId: string, taskId: string | null): Promise<JournalScanResult>;
+  /**
+   * 组合回滚到 beforeEntryId 之前状态：服务端取该 path 上 created_at > 锚点的全部
+   * 条目 + 锚点自身，逆序 revert。锚点缺失或 path 不一致 → no-op outcome。
+   */
+  rollbackFileBefore(workspaceId: string, path: string, beforeEntryId: string): Promise<RevertOutcome[]>;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -1175,6 +1257,8 @@ export interface ApiSurface {
   memory: MemoryApiSurface;
   /** v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts） */
   sandbox: SandboxApiSurface;
+  /** v2.5：变更账本通道（journal/ipc.handlers.ts） */
+  journal: JournalApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;

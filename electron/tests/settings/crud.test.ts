@@ -35,3 +35,19 @@ describe('GlobalSettings 沙箱字段（v2.4）', () => {
     expect(g.sandboxNetwork).toBe(true);
   });
 });
+
+describe('GlobalSettings 变更账本字段（v2.5 Task 6）', () => {
+  it('缺省 journalQuotaMb=200（两 return 分支内置默认）', () => {
+    expect(getGlobalSettings().journalQuotaMb).toBe(200);
+  });
+  it('updateGlobalSettings 部分更新 + 往返保真（含小数——quota 测试经 1/1024 注入 1KB）', () => {
+    updateGlobalSettings({ journalQuotaMb: 500 });
+    expect(getGlobalSettings().journalQuotaMb).toBe(500);
+    updateGlobalSettings({ journalQuotaMb: 0.5 });
+    expect(getGlobalSettings().journalQuotaMb).toBe(0.5);
+    updateGlobalSettings({ journalQuotaMb: 1 / 1024 });
+    expect(getGlobalSettings().journalQuotaMb).toBe(1 / 1024);
+    // 部分更新不殃及其他字段
+    expect(getGlobalSettings().maxToolCalls).toBe(10);
+  });
+});

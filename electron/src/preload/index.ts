@@ -115,6 +115,14 @@ const api: ApiSurface = {
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
   },
+  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚
+  journal: {
+    list: (scope) => invoke('journal:list', scope),
+    revert: (workspaceId, ids, opts) => invoke('journal:revert', workspaceId, ids, opts),
+    scan: (workspaceId, taskId) => invoke('journal:scan', workspaceId, taskId),
+    rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
+      invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
+  },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。
   im: {

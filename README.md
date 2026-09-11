@@ -6,6 +6,17 @@
 
 ## 状态
 
+**v2.5.0 — 变更账本与撤销（开发中，未发布）**
+
+agent 文件变更全量记账 + 可靠撤销——工具防御第三期：git 安全网在无 git 机器上失效（D1），改用零依赖零假设的本地账本。spec 见 `docs/specs/2026-09-10-change-journal-undo-design.md`。
+
+- **五 op 记账（新增）** — write_file / edit_file / apply_patch / rm / mv 五个写类工具在落盘前单点收口调 recordChange（D2，对齐 v2.3 Read-before-Edit / v2.4 resolveShellSpawn 的「单一接入点」纪律）；before/after 内容入 userData 内容寻址 blob，条目入 state.db；rm 递归逐文件记账（内存有界）；store 未注入降级跳过不阻断工具主路径
+- **hash 守卫 + 逆序撤销** — revertEntries 逐文件按 created_at 逆序执行，写回前校验 hash(当前文件) == after_hash：漂移（其后被任务 B / 手动 / shell 改过）默认拦截 + 黄标，force 可强制但警告「将丢失其后全部变更」；交叉场景（任务 A/B 同改一文件）默认拦 A、「回滚到此文件此条之前」组合操作自动逆序逐步守卫；撤销动作本身记对称条目（撤销可再撤销）
+- **多仓 git 探测器（机会主义增强）** — bash 不经过账本，事后核对补洞：discoverRepos 限定深度找 workspace 内全部 git 仓（根仓 + 内层仓，结果缓存），scanUnjournaled 对每仓跑 porcelain 与账本路径集做差产出「未入账」清单；只读不写绝不 commit；git 不可用 / 执行失败 / 截断一律 degraded 空结果（无法核对绝不半真半假）
+- **200MB + 30 天配额滚动清理** — 对齐审计配额先例（D7）：workspace 级 200MB（设置页可调）+ 30 天硬上限双条件独立触发；超限按最旧任务组 / 快速会话段整组删，共享 blob 由引用计数守护（仍有引用不物理删）；记账每 50 次节流触发 + boot 强制执行
+- **两入口 UI** — 消息流「N 处变更」chip（行级 diff + 单条撤回 + 漂移黄标，快速会话无任务也可用）+ 任务卡变更审查面板（按消息分组聚合 diff + 未入账区（degraded 提示）+「撤回全部」/ 逐文件组合回滚）；IPC 四通道 `journal:list / revert / scan / rollbackFileBefore`
+- 已知边界（spec §10）：账本按 utf-8 存取，二进制文件撤回有损；bash 账外变更只有事后核对，未入账区无法区分 shell 与用户手动
+
 **v2.4.0 — ShellTools OS 沙箱（开发中，未发布）**
 
 bash 工具接入 OS 级隔离——工具防御第二期，清偿 v2.1 安全债务「OS 级沙箱接线」。spec 见 `docs/specs/2026-09-10-shell-tools-os-sandbox-design.md`。

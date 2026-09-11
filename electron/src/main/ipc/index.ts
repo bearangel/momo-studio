@@ -15,6 +15,7 @@ import { registerProviderHandlers } from '../agent/provider-ipc';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
 import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
+import { registerJournalIpc } from '../journal/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
 import { registerP2pHandlers } from '../p2p';
@@ -37,6 +38,8 @@ export function registerIpcHandlers(): void {
   registerSettingsIpc();
   registerSandboxIpc();
   registerMemoryIpc();
+  // v2.5：变更账本通道（journal/ipc.handlers.ts）——list / revert / scan / 组合回滚
+  registerJournalIpc();
   registerResourceHandlers();
   registerTaskHandlers();
   registerP2pHandlers();

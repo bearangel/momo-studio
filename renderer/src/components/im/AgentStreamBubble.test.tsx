@@ -12,16 +12,25 @@
 //   - dispatches 替代旧 dispatchChildren（AggregatedDispatch 结构）
 //   - subStream 查找留给 A9（本 task 不测嵌套子 agent 正文）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { StreamState, StreamSegment } from '../../stores/stream.store';
-import type { ImMessage } from '../../ipc/types';
+import type { ImMessage, JournalEntryView } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { AgentStreamBubble } from './AgentStreamBubble';
 
 const abortStreamMock = vi.fn().mockResolvedValue(undefined);
+const journalListMock = vi.fn().mockResolvedValue([]);
 
-// 桩 window.api（保留 jsdom window，仅注入 api.agent.abortStream）
-const mockApi = { agent: { abortStream: abortStreamMock } };
+// 桩 window.api（保留 jsdom window；journal.list 供 v2.5 ChangesChip 懒查，默认空）
+const mockApi = {
+  agent: { abortStream: abortStreamMock },
+  journal: {
+    list: journalListMock,
+    revert: vi.fn(),
+    scan: vi.fn(),
+    rollbackFileBefore: vi.fn(),
+  },
+};
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
 /**
@@ -513,5 +522,93 @@ describe('AgentStreamBubble — 只读工具分组（v2.1）', () => {
       <AgentStreamBubble stream={makeStream({ text: '生成中' })} message={makeMessage()} />,
     );
     expect(screen.queryByRole('button', { name: '复制' })).not.toBeInTheDocument();
+  });
+});
+
+describe('AgentStreamBubble — 变更 chip 挂载门控（v2.5）', () => {
+  beforeEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+    journalListMock.mockReset().mockResolvedValue([]);
+  });
+
+  /** 完整 JournalEntryView 形状（与 ChangesChip.test 同构，仅保最少字段差异） */
+  function makeJournalEntry(): JournalEntryView {
+    return {
+      id: 'je-1',
+      workspaceId: 'ws-1',
+      taskId: null,
+      sessionId: 'ses-1',
+      streamSessionId: 'ss-journal',
+      toolName: 'write_file',
+      path: 'src/app.ts',
+      op: 'modify',
+      beforeHash: 'h-before',
+      afterHash: 'h-after',
+      oldPath: null,
+      createdAt: 1757000001000,
+      beforeText: 'old',
+      afterText: 'new',
+    };
+  }
+
+  it('done + 有变更 → 挂载 ChangesChip（懒查 list 后显示「1 处变更」）', async () => {
+    journalListMock.mockResolvedValue([makeJournalEntry()]);
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'done', text: '完成' })}
+        message={makeMessage({ streamSessionId: 'ss-journal', workspaceId: 'ws-1' })}
+      />,
+    );
+    expect(await screen.findByRole('button', { name: /1 处变更/ })).toBeInTheDocument();
+    expect(journalListMock).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      streamSessionId: 'ss-journal',
+    });
+  });
+
+  it('streaming → 不挂载（list 不被调用）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ text: '生成中' })}
+        message={makeMessage({ streamSessionId: 'ss-journal', workspaceId: 'ws-1' })}
+      />,
+    );
+    expect(journalListMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
+  });
+
+  it('aborted → 不挂载（list 不被调用）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'aborted' })}
+        message={makeMessage({ streamSessionId: 'ss-journal', workspaceId: 'ws-1' })}
+      />,
+    );
+    expect(journalListMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
+  });
+
+  it('done 但 message.streamSessionId=null → 挂载组件但不查询（无身份不查）', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'done', text: '完成' })}
+        message={makeMessage({ workspaceId: 'ws-1' })}
+      />,
+    );
+    expect(journalListMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
+  });
+
+  it('done + list 返回空 → chip 不渲染（气泡本体正常）', async () => {
+    journalListMock.mockResolvedValue([]);
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'done', text: '完成' })}
+        message={makeMessage({ streamSessionId: 'ss-journal', workspaceId: 'ws-1' })}
+      />,
+    );
+    await waitFor(() => expect(journalListMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
+    expect(screen.getByText(/已完成/)).toBeInTheDocument();
   });
 });

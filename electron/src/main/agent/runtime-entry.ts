@@ -47,6 +47,9 @@ import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled, getSessio
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
 import { getTodosForSession } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
+import { getDb } from '../storage/db';
+import { setJournalStore } from '../journal/recorder';
+import { createJournalStore } from '../journal/store';
 
 /**
  * chat loop 运行时上下文：在启动时构建一次，后续每轮对话复用。
@@ -156,6 +159,17 @@ async function main(): Promise<void> {
   const config = parseConfig(JSON.parse(process.env.AGENT_CONFIG ?? '{}'));
   traceEnabled = config.devMode;
   setDispatchTraceEnabled(config.devMode);
+
+  // v2.5 变更账本：子进程内直接开 SQLite WAL 连接记账（MemoryTools getDb()
+  // 同款生产形态——audit 桥注释的「无法访问主进程连接」指内存单例不可跨进程，
+  // 文件级 WAL 多进程访问是 memory 工具既有先例）。注入失败仅降级跳过记账
+  // （change-journal 的 warn-once 路径），不阻塞 agent 启动——安全网自身
+  // 不能变成故障点。
+  try {
+    setJournalStore(createJournalStore(getDb()));
+  } catch (err) {
+    process.stderr.write(`变更账本 store 初始化失败（记账降级）: ${(err as Error).message}\n`);
+  }
 
   const ctx = await buildRuntimeContext(config);
   process.stdout.write('Agent runtime 已启动（task-driven 模式）\n');
@@ -1208,7 +1222,14 @@ export async function runTaskChatLoop(
   //    sub-agent 自身用 cfg.streamSessionId（两者解耦）。
   const parentStreamSessionId = dispatchContext?.tool_stream_session_id;
 
-  // 3. 跑 chat loop——runChatLoop 内部完成 system prompt 构造 / MemoryProvider 拉 / 工具循环 / abort 处理。
+  // 3. per-run ctx 变体（v2.5 终审 C1）：boot ctx 的 streamSessionId/roomId 是
+  //    WarmPool 预 spawn 期占位空串（真实值经 task-config IPC 后置注入）——不回写
+  //    则 doExecuteTool 组装的 toolCtx 恒空串，账本 streamSessionId/session_id 记
+  //    空值，chip 查询永不命中。只织入变体不改 boot ctx；runChatLoop 对
+  //    ctx.abortSignal 的赋值落在本变体上，与工具链共享同对象，中断语义不变。
+  const runCtx: RuntimeContext = { ...ctx, streamSessionId, roomId };
+
+  // 4. 跑 chat loop——runChatLoop 内部完成 system prompt 构造 / MemoryProvider 拉 / 工具循环 / abort 处理。
   //    stats 用于在 task-end IPC 里上报工具调用次数。
   const stats: RunChatLoopStats = { toolCallsUsed: 0 };
 
@@ -1217,7 +1238,7 @@ export async function runTaskChatLoop(
       roomId,
       body,
       taskConfig,
-      ctx,
+      runCtx,
       stats,
       parentStreamSessionId,
       undefined, // 暂无外部 abort_dispatch event 监听（PM 通过 IPC 直接 abort）
@@ -1371,6 +1392,9 @@ export async function doExecuteTool(
       abortSignal: ctx.abortSignal,
       // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
       readTracker,
+      // v2.5 变更账本：task-driven 派发的任务 id（快速会话无任务 → undefined，
+      // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红
+      taskId: config.currentTaskId,
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }

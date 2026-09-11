@@ -21,6 +21,8 @@ import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
 import { tokenizeForIndex } from './storage/memories/tokenize';
 import { reprobeSandbox } from './sandbox/probe';
+import { enforceQuota } from './journal/quota';
+import { listWorkspaces } from './workspace/crud';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -68,6 +70,26 @@ app.whenReady().then(async () => {
     initTaskRuntime();
 
     registerIpcHandlers();
+
+    // v2.5：boot 逐 workspace journal 配额清理（T6 移交）——registerIpcHandlers 内
+    // registerJournalIpc 已注入 store；清理失败只 warn 不阻塞启动（安全网自身
+    // 不能变成故障点，与 maybeEnforceQuota 节流触发器同处理）。
+    try {
+      for (const ws of listWorkspaces()) {
+        try {
+          enforceQuota(ws.id);
+        } catch (err) {
+          logger.warn('journal 配额 boot 清理失败（不影响启动）', {
+            workspaceId: ws.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn('journal 配额 boot 清理遍历失败（不影响启动）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // v2.4：OS 沙箱 boot 探测（fire-and-forget，不阻塞启动；失败只影响 bash 可用性）
     void reprobeSandbox().catch((err) => {

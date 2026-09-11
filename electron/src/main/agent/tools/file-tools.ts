@@ -17,6 +17,13 @@ import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
 import { formatEditError } from './shared/edit-recovery';
+import {
+  buildRecordCtx,
+  toJournalRelPath,
+  recordChangeSafe,
+  recordDeleteTreeSafe,
+  recordRenameTreeSafe,
+} from './shared/change-journal';
 
 /** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
 export function getFileToolDefs(): LLMToolDef[] {
@@ -178,11 +185,22 @@ export async function executeFileTool(
       const filePath = parseStringArg(args.path, 'path');
       const content = parseStringArg(args.content, 'content');
       const abs = wsFs.assertInWorkspace(filePath);
+      const existed = fs.existsSync(abs);
       // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
       // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
-      if (fs.existsSync(abs)) {
+      if (existed) {
         ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
       }
+      // v2.5 变更账本：写前记账（write-ahead）——覆盖场景取旧内容为 before；
+      // 记账失败不阻塞工具执行（Safe 包装内部降级）
+      const before = existed ? await fs.promises.readFile(abs, 'utf-8') : null;
+      recordChangeSafe(
+        buildRecordCtx('write_file', ctx),
+        toJournalRelPath(ctx, filePath),
+        existed ? 'modify' : 'create',
+        before,
+        content,
+      );
       await wsFs.writeFile(filePath, content);
       // 写入成功后标记已读（让后续 edit_file 通过守门）
       ctx.readTracker?.add(ctx.streamSessionId, abs);
@@ -221,6 +239,15 @@ export async function executeFileTool(
       }
 
       const updated = original.slice(0, firstIdx) + newStr + original.slice(lastIdx + oldStr.length);
+      // v2.5 变更账本：全部校验通过后、写盘前记账（校验失败不产生孤儿条目；
+      // 写盘失败的孤儿由 revert 的 no-op 守卫兜底）
+      recordChangeSafe(
+        buildRecordCtx('edit_file', ctx),
+        toJournalRelPath(ctx, filePath),
+        'modify',
+        original,
+        updated,
+      );
       await fs.promises.writeFile(abs, updated, 'utf-8');
 
       const beforeLines = original.slice(0, firstIdx).split('\n');
@@ -234,12 +261,41 @@ export async function executeFileTool(
     }
     case 'rm': {
       const targetPath = parseStringArg(args.path, 'path');
+      // v2.5 变更账本：删除前记账（删后内容不可再读，写前记账是唯一时机）。
+      // recordDeleteTree 自辨单文件/目录（单文件 1 条、目录逐文件 delete）；
+      // 目标不存在时 walker 短路返回空——实际删除仍由 deletePath 原样抛错
+      recordDeleteTreeSafe(
+        buildRecordCtx('rm', ctx),
+        ctx.workspaceDir,
+        toJournalRelPath(ctx, targetPath),
+      );
       await wsFs.deletePath(targetPath);
       return `已删除: ${targetPath}`;
     }
     case 'mv': {
       const src = parseStringArg(args.src, 'src');
       const dst = parseStringArg(args.dst, 'dst');
+      // v2.5 变更账本：移动前记账。rename(2) 语义：目标文件已存在时被静默覆盖
+      // ——先为被覆盖目标叠一条 modify（before=目标旧内容, after=源内容）再记
+      // rename 本体；撤销逆序（created_at DESC）先逆 rename（目标移回源）再逆
+      // modify（重建目标旧内容），端态双文件均正确。目录移动逐文件记 rename
+      const rc = buildRecordCtx('mv', ctx);
+      const srcAbs = wsFs.assertInWorkspace(src);
+      const dstAbs = wsFs.assertInWorkspace(dst);
+      const srcRel = toJournalRelPath(ctx, src);
+      const dstRel = toJournalRelPath(ctx, dst);
+      if (!fs.existsSync(srcAbs)) {
+        // 源不存在：不记账，由 wsFs.rename 原样抛 ENOENT（既有行为不变）
+      } else if (fs.statSync(srcAbs).isDirectory()) {
+        recordRenameTreeSafe(rc, ctx.workspaceDir, srcRel, dstRel);
+      } else {
+        const srcContent = await fs.promises.readFile(srcAbs, 'utf-8');
+        if (fs.existsSync(dstAbs) && !fs.statSync(dstAbs).isDirectory()) {
+          const dstOld = await fs.promises.readFile(dstAbs, 'utf-8');
+          recordChangeSafe(rc, dstRel, 'modify', dstOld, srcContent);
+        }
+        recordChangeSafe(rc, dstRel, 'rename', srcContent, null, srcRel);
+      }
       await wsFs.rename(src, dst);
       return `已移动: ${src} → ${dst}`;
     }

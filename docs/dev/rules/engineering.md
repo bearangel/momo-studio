@@ -91,6 +91,17 @@ v2.4 ShellTools OS 沙箱（spec：`docs/specs/2026-09-10-shell-tools-os-sandbox
 
 ---
 
+## v2.5 变更账本规则
+
+v2.5 变更账本与撤销（spec：`docs/specs/2026-09-10-change-journal-undo-design.md`）引入的 agent 写操作记账与撤回约束：
+
+- **写类工具不得绕过 recordChange**——write_file / edit_file / rm / mv（file-tools.ts）与 apply_patch（apply-patch-tools.ts）五个写 op 是仅有的记账点，落盘前经 `recordChangeSafe` 单点收口（spec D2，与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn 同款「单一接入点」纪律）。新增任何能写 workspace 文件的工具（含未来多仓 git 工具）必须先接入 recordChange 再上线——绕过即该工具变更游离于撤销链之外。用户侧 file:* CRUD 不入账是用户主权豁免，不在禁令内
+- **撤回一律走 revertEntries**——hash 守卫（hash(当前文件) != after_hash 即漂移：其后被任务 B / 手动 / shell 改过，默认跳过 + 黄标，force 强制须 UI 明确警告）+ 逐文件逆序（created_at DESC）。禁止裸写文件撤回、禁止乱序批量写回；交叉场景（任务 A/B 同改一文件撤 A）默认拦截，正确姿势是 rollbackFileBefore 组合操作（自动逆序该文件全部后续 + 本条，逐步守卫逐步汇报，任一步拦截即停）。撤销动作本身记对称条目（撤销可再撤销）
+- **探测器多仓语义**——discoverRepos 限定深度找 workspace 内全部 git 仓（根仓 + 内层仓，目录 mtime 缓存），scanUnjournaled 对每仓 `git status --porcelain=v1` 与账本路径集做差；只读不写、绝不产生 commit。degraded 两成因：本机无 git（spawn ENOENT）与任意仓执行非零退出 / 输出截断（porcelain 不完整）——degraded=true 时三列表恒空，无法核对绝不半真半假
+- **spec §10 已知边界**——账本内容按 utf-8 存取（`fs.readFileSync(abs, 'utf8')` + blob 文本），二进制文件撤回有损；bash 账外变更只有事后核对（无实时记账），未入账区文案诚实标注「经 shell 命令或用户手动修改——无法区分」
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |
