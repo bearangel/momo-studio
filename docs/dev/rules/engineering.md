@@ -102,6 +102,18 @@ v2.5 变更账本与撤销（spec：`docs/specs/2026-09-10-change-journal-undo-d
 
 ---
 
+## v2.7 浏览器规则
+
+v2.7 McpBrowser（spec：`docs/specs/2026-09-11-mcp-browser-design.md`）引入的浏览器工具与内嵌视图约束：
+
+- **file:// workspace 限定不可绕过**——`policy.assertUrl` 是唯一导航门：agent 的 browser_navigate、用户的地址栏 userNavigate、popup 收编 incorporatePopup 三条导航路全部先过（file:// 走 resolve 字符串边界 + realpath 最近祖先双防线）。新增任何导航入口必须走 assertUrl，直接 `loadURL` = 越界漏洞（`..` 穿越 / 符号链接逃逸 / 域外协议全部由此拦）。已知边界：重定向不复检（初航过名单后 302 目标不二次校验）——新增「跳转后校验」若立项，收口点同样在 policy
+- **popup 一律收编 tab**——`setWindowOpenHandler` 恒 deny + incorporatePopup 开新 tab，禁止产生游离 OS 窗口；popup URL 同样过 assertUrl（页面发起的 window.open 也是可见导航面——防御纵深）。新增会开新视图的路径（含 window.open 变体、外链协议）必须沿用收编，不得 `action: 'allow'`
+- **浏览器网络与 bash sandbox 无关**——浏览器视图的网络请求不经 resolveShellSpawn 三态决策（Seatbelt/bwrap 只约束 bash 工具子进程），域名策略（黑白名单 + localhost 恒放行）是浏览器唯一网络层约束。两套体系不混谈、不互相兜底：给 bash 沙箱开网络 ≠ 浏览器放开域名，反之亦然
+- **新增浏览器工具必须过信任门**——`assertAllowed` 先于一切：门序 = 信任门（deny 拒 / ask 未授 NotTrusted）→ 接管门（user 态 TakenOver）→ evaluate 门（仅 browser_evaluate）→ 动作。绕过信任门直连 manager 方法 = 未授权浏览器访问；工具路由（browser-tools.ts）是唯一工具侧入口，新工具在此注册并声明门序
+- **takeover 语义按 source 甄别**——agent 工具在 user 态一律 BrowserTakenOverError（等待释放，可重试）；用户的 tabs IPC（open/close/switch，`browser:*` 通道）显式传 `source='user'` 放行——§3.2 只约束工具不约束人。新增浏览器 IPC 通道必须显式声明调用方（user / agent / 双方），无 source 字段的通道 = 甄别缺口（G4 教训：单门拒绝曾导致用户接管后无法操作自己的 tab）
+
+---
+
 ## v2.6 断点续跑规则
 
 v2.6 任务断点续跑（spec：`docs/specs/2026-09-10-task-resume-design.md`）引入的事件重建式恢复约束：

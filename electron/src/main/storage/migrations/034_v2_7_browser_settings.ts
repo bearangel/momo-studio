@@ -37,5 +37,8 @@ export const migration034: Migration034 = {
       browser_sidebar_width INTEGER NOT NULL DEFAULT 380
     );
   `.trim(),
-  down: 'DROP TABLE IF EXISTS workspace_settings;',
+  down: `
+    -- forward-only：不提供回滚（与 v32/v33 同约定）
+    SELECT 1;
+  `.trim(),
 };

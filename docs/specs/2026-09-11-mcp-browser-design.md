@@ -367,14 +367,16 @@ view.webContents 'render-process-gone' → reload() + browser:notice('页面崩�
 | 信任拒绝 | `BrowserDeniedError` | `浏览器已被设置禁用（设置→浏览器）` | — |
 | evaluate 关 | `EvaluateDisabledError` | `browser_evaluate 已被设置禁用` | — |
 | 用户接管中 | `BrowserTakenOverError` | `浏览器被用户接管，等待释放后重试` | 🟡 徽标 |
-| selector 未命中 | `BrowserSelectorError` | `选择器 "x" 未匹配元素；可交互元素前 5：…` | — |
+| selector 未命中 | `BrowserSelectorError` | `选择器 "x" 已匹配 0 个元素；可交互元素前 5：…` | — |
 | file:// 越界 | `BrowserFileAccessError` | `file:// 仅限 workspace 目录内` | — |
 | 域名策略命中 | `BrowserDomainBlockedError` | `域名 "x" 被浏览器策略拦截` | — |
 | 协议不支持 | `BrowserProtocolError` | `仅支持 http(s) 与 workspace 内 file://` | — |
 | 导航失败 | `BrowserNavigationError` | `导航失败: <did-fail-load description>` | — |
 | 无活跃视图 | `BrowserNoViewError` | `浏览器未打开（先 browser_navigate）` | — |
+| 按键不支持 | `BrowserInvalidKeyError` | `按键 "x" 不受支持（白名单：Enter/Tab/Escape/PageDown/PageUp/ArrowUp/ArrowDown/Home/End）` | — |
+| 快照失败 | `BrowserSnapshotError` | `快照获取失败: <detail>（若页面正在使用 DevTools 请关闭后重试）` | — |
 
-错误恢复原则：全部可重试类错误（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。
+错误恢复原则：全部可重试类错误（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。（T11 校对：表行已与 `electron/src/main/browser/errors.ts` 的 12 个 code 类集对齐——`invalid_key` 系 T3 增补、`snapshot` 系 T4 增补，此前表漏收。）
 
 ## 9. 数据存储
 
