@@ -79,13 +79,17 @@ function rowToEntry(row: JournalEntryRow): JournalEntry {
   };
 }
 
-function walkSum(dir: string): number {
+/**
+ * 递归目录字节求和（导出供 quota 等模块复用，避免重复实现；目录不存在 = 0）。
+ * 与 sumBlobBytes 的语义差异：限定单目录根，不下钻到全局 userData 路径。
+ */
+export function walkDirBytes(dir: string): number {
   if (!fs.existsSync(dir)) return 0;
   let total = 0;
   for (const name of fs.readdirSync(dir)) {
     const full = path.join(dir, name);
     const st = fs.statSync(full);
-    total += st.isDirectory() ? walkSum(full) : st.size;
+    total += st.isDirectory() ? walkDirBytes(full) : st.size;
   }
   return total;
 }
@@ -204,7 +208,7 @@ export function createJournalStore(db: DB): JournalStore {
       return (stmtCountAll.get() as { c: number }).c;
     },
     sumBlobBytes(): number {
-      return walkSum(path.join(resolveUserDataDir(), 'journal'));
+      return walkDirBytes(path.join(resolveUserDataDir(), 'journal'));
     },
     writeBlob(workspaceId: string, hash: string, content: string): void {
       const file = resolveJournalDir(workspaceId, hash);

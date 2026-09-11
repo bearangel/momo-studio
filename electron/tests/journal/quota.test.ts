@@ -322,3 +322,162 @@ describe('错误路径（momo-test-rules 铁律 3）', () => {
     expect(store.countAll()).toBe(1);
   });
 });
+
+describe('非法配额防御（T6 review Finding 1）：0/负/非 number → 回退默认 200MB，零删除', () => {
+  // 该防御是「手改库导致 quotaBytes=0 → 全量清库」的唯一防线——resolveQuotaMb
+  // 拒绝非正数/非有限数。本 describe 锁回归：两路注入都验证
+  //   - 0（quotaBytes=0 若漏防会清全库）
+  //   - -1（quotaBytes=-1048576 若漏防会清全库）
+  //   - 直写脏值 {"journalQuotaMb":"x"}（字符串绕过 parse 层 ??，resolveQuotaMb
+  //     必须挡；typeof !== 'number'）
+  //   - 直写脏值 {"journalQuotaMb":null}（null 绕过 ?? 但同样 typeof !== 'number'）
+  // 两路断言：purgedGroups=0 / freedBytes=0；条目与 blob 全保留
+  const tOld = NOW - 2 * 3600_000;
+  const tNew = NOW - 1 * 3600_000;
+  const now = (): number => NOW;
+
+  /** 注入走 updateGlobalSettings（合法 API 路径），断言 enforce 不删任何条目 */
+  it('注入 journalQuotaMb=0（合法 API 路径）→ 回退默认 200MB，零删除', () => {
+    const seeded = seedGroup('ws-A', 'T-1', tNew, [300, 300]);
+    updateGlobalSettings({ journalQuotaMb: 0 });
+    const r = enforceQuota('ws-A', { now });
+    expect(r).toEqual({ purgedGroups: 0, freedBytes: 0 });
+    expect(store.countAll()).toBe(2);
+    for (const { hash } of seeded) {
+      expect(fs.existsSync(resolveJournalDir('ws-A', hash))).toBe(true);
+    }
+  });
+
+  it('注入 journalQuotaMb=-1（合法 API 路径）→ 回退默认 200MB，零删除', () => {
+    const seeded = seedGroup('ws-A', 'T-1', tNew, [300, 300]);
+    updateGlobalSettings({ journalQuotaMb: -1 });
+    const r = enforceQuota('ws-A', { now });
+    expect(r).toEqual({ purgedGroups: 0, freedBytes: 0 });
+    expect(store.countAll()).toBe(2);
+    for (const { hash } of seeded) {
+      expect(fs.existsSync(resolveJournalDir('ws-A', hash))).toBe(true);
+    }
+  });
+
+  /** 注入走直写 kv 脏值（手改库攻击面）：resolveQuotaMb typeof 守卫拦截 */
+  it('直写 kv 脏值 {"journalQuotaMb":"x"} 字符串 → typeof 拦截回退默认，零删除', () => {
+    const seeded = seedGroup('ws-A', 'T-1', tNew, [300, 300]);
+    getDb()
+      .prepare(
+        `UPDATE kv_store SET value = ? WHERE key = 'global_settings'`,
+      )
+      .run(JSON.stringify({ journalQuotaMb: 'x' }));
+    const r = enforceQuota('ws-A', { now });
+    expect(r).toEqual({ purgedGroups: 0, freedBytes: 0 });
+    expect(store.countAll()).toBe(2);
+    for (const { hash } of seeded) {
+      expect(fs.existsSync(resolveJournalDir('ws-A', hash))).toBe(true);
+    }
+  });
+
+  it('直写 kv 脏值 {"journalQuotaMb":null} → typeof 拦截回退默认，零删除', () => {
+    const seeded = seedGroup('ws-A', 'T-1', tNew, [300, 300]);
+    getDb()
+      .prepare(
+        `UPDATE kv_store SET value = ? WHERE key = 'global_settings'`,
+      )
+      .run(JSON.stringify({ journalQuotaMb: null }));
+    const r = enforceQuota('ws-A', { now });
+    expect(r).toEqual({ purgedGroups: 0, freedBytes: 0 });
+    expect(store.countAll()).toBe(2);
+    for (const { hash } of seeded) {
+      expect(fs.existsSync(resolveJournalDir('ws-A', hash))).toBe(true);
+    }
+  });
+});
+
+describe('段间交错连带删除（T6 review Finding 3）：同 stream 内多段交错，删老段时连带集按 store 谓词从快照推导', () => {
+  // 快速会话段按 streamSessionId 分段，删最旧段时边界 = maxCreatedAt+1。
+  // 若老段 max 之后还有新段条目（因交错落入同 stream），store 谓词 created_at < boundary
+  // 会连带把新段早于边界的那批也删——本用例锁定「连带集正确 + 引用计数对」语义。
+  it('stream-old 后接 stream-new 交错：删老段后新段保留，连带删除集正确', () => {
+    // 老段 stream-old 2 条
+    seedGroup('ws-A', null, d31, [300, 300], { streamSessionId: 'stream-old' });
+    // 新段 stream-new 2 条（createdAt 全在老段 max 之后 → 不会被连带删）
+    seedGroup('ws-A', null, d1, [300, 300], { streamSessionId: 'stream-new' });
+    // 时间戳 d31 << d1：老段 max 在 d31+1，新段全在 d1+ —— 不交错
+
+    const r = enforceQuota('ws-A', { now: () => NOW });
+    expect(r).toEqual({ purgedGroups: 1, freedBytes: 600 });
+    expect(store.listByStream('ws-A', 'stream-old')).toEqual([]);
+    expect(store.listByStream('ws-A', 'stream-new').length).toBe(2);
+  });
+
+  it('段间时间交错（taskId=null 多 streamSessionId）：删最老段连带更老同 taskId 条目，连带集按 store 谓词从快照推导', () => {
+    // quota.ts 头注释：「段间交错时窗口删可能连带更旧条目——实际删除集按
+    // 同款谓词从快照推导」。本用例锁定该语义：两条快速会话段 stream-A
+    // （minCreatedAt 远早于 d31）与 stream-B（minCreatedAt 早于 d31 但晚于 stream-A）。
+    // 走 30 天硬上限路径：仅 stream-A max 过窗 → 触发条件一独立删 stream-A。
+    // boundary = max_A+1 = d31+1 → store SQL `task_id IS NULL AND created_at < boundary`
+    // 连带删 stream-B 早条目（createdAt < d31+1）；stream-B 晚条目 d1 保留。
+    const oldContent = 'old-content';
+    const newContent = 'new-content';
+    const oldHash = sha(oldContent);
+    const newHash = sha(newContent);
+    // stream-A（最老段，全在 30 天窗口外）：createdAt d31, d31+5, d31+10（max=d31+10）
+    for (const ca of [d31, d31 + 5, d31 + 10]) {
+      store.insert(
+        entry({
+          id: `je_${randomUUID()}`,
+          taskId: null,
+          sessionId: null,
+          streamSessionId: 'stream-A',
+          path: `a-${ca}.ts`,
+          op: 'create',
+          afterHash: oldHash,
+          createdAt: ca,
+        }),
+      );
+    }
+    store.writeBlob('ws-A', oldHash, oldContent);
+    // stream-B 早条目 d31+2（< boundary=d31+11，连带删）
+    store.insert(
+      entry({
+        id: `je_${randomUUID()}`,
+        taskId: null,
+        sessionId: null,
+        streamSessionId: 'stream-B',
+        path: 'b-early.ts',
+        op: 'create',
+        afterHash: newHash,
+        createdAt: d31 + 2,
+      }),
+    );
+    // stream-B 晚条目 d1（> d31+11 之外，保留——活跃组语义）
+    store.insert(
+      entry({
+        id: `je_${randomUUID()}`,
+        taskId: null,
+        sessionId: null,
+        streamSessionId: 'stream-B',
+        path: 'b-late.ts',
+        op: 'create',
+        afterHash: newHash,
+        createdAt: d1,
+      }),
+    );
+    store.writeBlob('ws-A', newHash, newContent);
+
+    // 30 天硬上限条件一独立触发：stream-A max = d31+10 < cutoff = NOW-30d
+    // → stream-A 是「终态老组」；stream-B max = d1 > cutoff → 活跃组不删
+    const r = enforceQuota('ws-A', { now: () => NOW });
+    expect(r.purgedGroups).toBe(1); // 仅 stream-A 一组
+    expect(r.freedBytes).toBeGreaterThan(0);
+    // stream-A 全删
+    expect(store.listByStream('ws-A', 'stream-A')).toEqual([]);
+    // stream-B 早条目连带删；晚条目 d1 保留
+    const bRemaining = store.listByStream('ws-A', 'stream-B');
+    expect(bRemaining.length).toBe(1);
+    expect(bRemaining[0]?.path).toBe('b-late.ts');
+    expect(bRemaining[0]?.createdAt).toBe(d1);
+    // 引用计数正确：oldHash 三条引用全删后归零 → 物理删
+    expect(fs.existsSync(resolveJournalDir('ws-A', oldHash))).toBe(false);
+    // newHash 仍被 b-late 引用 → 物理保留
+    expect(fs.existsSync(resolveJournalDir('ws-A', newHash))).toBe(true);
+  });
+});

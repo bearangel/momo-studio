@@ -10,7 +10,7 @@
 //      仍超限时按最旧组逐组删到满足为止（或无组可删）。
 //
 // 计量语义（T1 review 裁定）：per-workspace——只 walk 本 workspace 的
-// objects 目录（store.walkSum 同款形态但限定单目录），不用全局 sumBlobBytes
+// objects 目录（store.walkDirBytes 限定单目录），不用全局 sumBlobBytes
 // （全局和会误伤非占用方 workspace）。
 //
 // 删除单元：
@@ -32,12 +32,10 @@
 // 本模块经 getJournalStore 取同一注入实例）——双方均为函数声明 + 调用时访问，
 // CJS/ESM 环境下循环加载均安全。
 
-import fs from 'node:fs';
-import path from 'node:path';
 import { logger } from '../logger';
 import { DEFAULT_JOURNAL_QUOTA_MB, getGlobalSettings } from '../settings/crud';
 import { getJournalStore } from './recorder';
-import { resolveJournalRoot } from './store';
+import { resolveJournalRoot, walkDirBytes } from './store';
 import type { JournalStore } from './store';
 import type { JournalEntry } from './types';
 
@@ -67,21 +65,9 @@ function unitKey(u: PurgeUnit): string {
   return u.taskId !== null ? `task:${u.taskId}` : `stream:${u.streamKey ?? ''}`;
 }
 
-/** 目录树字节求和（store.walkSum 同款形态；目录不存在 = 0） */
-function walkBytes(dir: string): number {
-  if (!fs.existsSync(dir)) return 0;
-  let total = 0;
-  for (const name of fs.readdirSync(dir)) {
-    const full = path.join(dir, name);
-    const st = fs.statSync(full);
-    total += st.isDirectory() ? walkBytes(full) : st.size;
-  }
-  return total;
-}
-
 /** per-workspace blob 字节计量：只 walk 本 workspace 的 objects 目录 */
 function measureWorkspaceBlobBytes(workspaceId: string): number {
-  return walkBytes(resolveJournalRoot(workspaceId));
+  return walkDirBytes(resolveJournalRoot(workspaceId));
 }
 
 /** 解析生效配额（MB）。非法值（非正数/非有限数，如手改库）回退默认，

@@ -184,6 +184,11 @@ function walkFiles(
  * 多条目经 insertMany 单事务原子落库（T4 review 移交）：整树 delete 记账
  * all-or-nothing，避免中途失败留下半棵树的撤销链。节流计数按条数累计。
  *
+ * 内存有界（T6 review 修复）：assembleEntry + writeBlob 移入 walkFiles 回调
+ * 内逐文件完成，content 字符串每次迭代出作用域即释放；循环外只收集已组装的
+ * entry 元数据，避免把整树 content 同时驻留内存（rm 大目录打爆主进程）。
+ * 事务原子性保留：insertMany 仍一次性提交，保 all-or-nothing 语义。
+ *
  * 边界：
  *   - relDir 不存在 → 返回空数组（不抛错）
  *   - relDir 是空目录 → 返回空数组（无文件可 hash）
@@ -195,24 +200,25 @@ export function recordDeleteTree(
   relDir: string,
 ): JournalEntry[] {
   // fail-fast：未注入立即抛错（即便 relDir 不存在也短路在 fs 之前）
-  requireStore();
+  const s = requireStore();
   const absDir = nodePath.join(workspaceDir, relDir);
   if (!fs.existsSync(absDir)) return [];
 
+  const entries: JournalEntry[] = [];
   const stat = fs.statSync(absDir);
-  const files: Array<{ rel: string; content: string }> = [];
+  const handle = (rel: string, abs: string): void => {
+    const content = fs.readFileSync(abs, 'utf8');
+    entries.push(assembleEntry(rc, rel, 'delete', content, null));
+    // content 引用随迭代结束释放；assembleEntry 内部已 hash + writeBlob 落盘
+  };
   if (stat.isDirectory()) {
-    walkFiles(absDir, relDir, (abs, rel) => {
-      files.push({ rel, content: fs.readFileSync(abs, 'utf8') });
-    });
+    walkFiles(absDir, relDir, (abs, rel) => handle(rel, abs));
   } else {
     // 单文件边界：直接 1 条 delete
-    files.push({ rel: relDir, content: fs.readFileSync(absDir, 'utf8') });
+    handle(relDir, absDir);
   }
 
-  const entries = files.map((f) => assembleEntry(rc, f.rel, 'delete', f.content, null));
   if (entries.length > 0) {
-    const s = requireStore();
     s.insertMany(entries);
     maybeEnforceQuota(rc.workspaceId, entries.length);
   }
