@@ -7,6 +7,7 @@
 // keeping the SQL in-source, the compiled module is fully-contained.
 
 import { migration032 } from './032_v2.3_builtin_apply_patch';
+import { migration033 } from './033_v2_5_change_journal';
 
 export interface Migration {
   version: number;
@@ -883,6 +884,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 约定一致——不用 .sql 文件的原因见顶注），此处仅做 {version, sql} 注册。
     version: migration032.version,
     sql: migration032.up,
+  },
+  {
+    // v2.5：变更账本 journal_entries 表。SQL 同样住在独立模块
+    // 033_v2_5_change_journal.ts（TS 内联字符串常量，约定同上）。
+    version: migration033.version,
+    sql: migration033.up,
   },
 ];
 
