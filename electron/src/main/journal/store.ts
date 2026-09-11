@@ -17,6 +17,8 @@ export interface JournalStore {
   listByTask(workspaceId: string, taskId: string): JournalEntry[];
   listByStream(workspaceId: string, streamSessionId: string): JournalEntry[];
   listByPath(workspaceId: string, path: string): JournalEntry[];
+  /** 按 id 批量取条目（撤销核心按 id 定位）；不在该 workspace 或不存在的 id 自然落空 */
+  listByIds(workspaceId: string, ids: string[]): JournalEntry[];
   /** 删除目标任务组（taskId 匹配；null = 快速会话组）中 created_at < olderThan 的条目，返回删除行数 */
   deleteByTaskGroup(workspaceId: string, taskId: string | null, olderThan: number): number;
   countAll(): number;
@@ -147,6 +149,18 @@ export function createJournalStore(db: DB): JournalStore {
     },
     listByPath(workspaceId: string, filePath: string): JournalEntry[] {
       return (stmtListByPath.all(workspaceId, filePath) as JournalEntryRow[]).map(rowToEntry);
+    },
+    listByIds(workspaceId: string, ids: string[]): JournalEntry[] {
+      if (ids.length === 0) return [];
+      const placeholders = ids.map(() => '?').join(', ');
+      const rows = db
+        .prepare(
+          `SELECT * FROM journal_entries
+           WHERE workspace_id = ? AND id IN (${placeholders})
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all(workspaceId, ...ids) as JournalEntryRow[];
+      return rows.map(rowToEntry);
     },
     deleteByTaskGroup(workspaceId: string, taskId: string | null, olderThan: number): number {
       return stmtDeleteGroup.run(workspaceId, taskId, taskId, olderThan).changes;

@@ -58,6 +58,14 @@ export function __setJournalStoreForTest(s: JournalStore | null): void {
   store = s;
 }
 
+/**
+ * 读取已注入的 store（revert 层消费同一注入源，保证记账与撤销看同一实例）；
+ * 未注入返回 null，由调用方决定 fail-fast 语义。
+ */
+export function getJournalStore(): JournalStore | null {
+  return store;
+}
+
 function requireStore(): JournalStore {
   if (!store) {
     throw new Error('journal store 未注入（生产：boot 链调用 setJournalStore；测试：__setJournalStoreForTest）');
