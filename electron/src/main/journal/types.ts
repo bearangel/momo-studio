@@ -29,3 +29,13 @@ export interface JournalEntry {
   oldPath: string | null;
   createdAt: number;
 }
+
+/**
+ * list 通道视图（v2.5 Task 7 IPC）：条目 + blob 文本内容。
+ * beforeText / afterText 由 readBlob 取内容并截断 100KB（防巨文件撑爆 IPC 通道）；
+ * hash 为 null（create 前 / delete 后）或 blob 缺失时对应文本为 null。
+ */
+export interface JournalEntryView extends JournalEntry {
+  beforeText: string | null;
+  afterText: string | null;
+}

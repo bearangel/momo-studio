@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createJournalStore } from '../../src/main/journal/store';
 import { __setJournalStoreForTest } from '../../src/main/journal/recorder';
-import { discoverRepos, scanUnjournaled } from '../../src/main/journal/detector';
+import { discoverRepos, scanUnjournaled, defaultGitRunner } from '../../src/main/journal/detector';
 import type { GitRunner } from '../../src/main/journal/detector';
 import type { JournalEntry } from '../../src/main/journal/types';
 
@@ -298,5 +298,15 @@ describe('scanUnjournaled：账外变更对账', () => {
       repos: [ws, path.join(ws, 'inner')],
       degraded: false,
     });
+  });
+});
+
+describe('defaultGitRunner 真实冒烟（T5 移交：锁 runner 边界本体）', () => {
+  it('真实跑 git --version：code 0 + stdout 含版本号（spawn/超时/截断壳层之外的真实执行面）', async () => {
+    const r = await defaultGitRunner(['--version']);
+    expect(r.code).toBe(0);
+    expect(r.errCode).toBeNull();
+    expect(r.truncated).toBe(false);
+    expect(r.stdout).toMatch(/git version \d+\.\d+/);
   });
 });
