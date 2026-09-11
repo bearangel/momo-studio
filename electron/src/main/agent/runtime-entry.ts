@@ -38,6 +38,9 @@ import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
+// v2.6.0 断点续跑：仅取类型（import type 编译期擦除）——turn-reconstructor
+// 传递依赖 logger / storage（主进程模块），本子进程入口不引入运行时耦合
+import type { RebuiltTurn } from './turn-reconstructor';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
@@ -341,6 +344,13 @@ export async function runChatLoop(
    * 优先级：streamSessionIdOverride > parentStreamSessionId > randomUUID()。
    */
   streamSessionIdOverride?: string,
+  /**
+   * v2.6.0 断点续跑（plan Task 4）：断点回合重建段（T1 rebuildTurn 产物，由
+   * T5 resumeTask 经 TaskConfig.resume 载荷透传到这里）。存在且重建段非空时：
+   * messages 直接拼重建段（不追加 currentBody）、预算续扣 toolCallsUsed、
+   * 未消费 steer 重放；缺省或重建段为空时行为与历史版本一致。
+   */
+  resumeTurn?: RebuiltTurn,
 ): Promise<string> {
   const llm = createLLMProvider(
     // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
@@ -391,7 +401,14 @@ export async function runChatLoop(
   // mandate 尾段每轮基于 mandate 状态对象重写——
   // 「中途补充」与「未完成项」保持实时跨压缩存活
   const staticSystem = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
-  const mandate = { userBody: currentBody, steers: [] as string[] };
+  // v2.6.0 断点续跑：mandate.userBody 取重建段首条 user 消息正文（原回合指令）；
+  // 首条非 user（dispatch 子流重建段可能 assistant 开头，T1 兜底语义）或重建段
+  // 为空时回退 currentBody（恢复载荷的 body 兜底）
+  const resumeFirst = resumeTurn?.messages[0];
+  const mandate = {
+    userBody: resumeFirst && resumeFirst.role === 'user' ? resumeFirst.content : currentBody,
+    steers: [] as string[],
+  };
   const refreshSystem = (): void => {
     messages[0] = {
       role: 'system',
@@ -538,14 +555,29 @@ export async function runChatLoop(
   const convTimes = new WeakMap<LLMMessage, number>();
   convCtx.messages.forEach((m, i) => convTimes.set(convMessages[i]!, m.timestamp));
 
+  // v2.6.0 断点续跑：resumeTurn 存在且重建段非空 → 重建段 verbatim 拼接
+  // （首条即原 user 消息，T1 保证），不追加 currentBody（防指令重复）；
+  // 重建段为空（degenerate 兜底，等价全新回合）或无 resumeTurn → currentBody
+  // 作为本轮 user 消息（与历史行为逐字节一致）
+  const turnMessages: LLMMessage[] =
+    resumeTurn && resumeTurn.messages.length > 0
+      ? resumeTurn.messages
+      : [{ role: 'user', content: currentBody }];
   const messages: LLMMessage[] = [
     { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
     ...convMessages,
-    { role: 'user', content: currentBody },
+    ...turnMessages,
   ];
   refreshSystem();
   const maxToolCalls = config.maxToolCalls;
-  let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
+  // v2.6.0 断点续跑：预算续扣——断点前已消耗的 toolCallsUsed 预先扣除
+  // （Math.max 钳制 ≥0，防 toolCallsUsed 越过上限时出现负预算）；-1 无限保持
+  let budgetRemaining =
+    maxToolCalls === -1
+      ? Infinity
+      : resumeTurn
+        ? Math.max(0, maxToolCalls - resumeTurn.toolCallsUsed)
+        : maxToolCalls;
   let toolCallCount = 0;
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
@@ -571,6 +603,13 @@ export async function runChatLoop(
   // v2.3 steer：与 abort 同监听器（共享全部 process.off 清理点）——
   // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）
   const pendingSteers: string[] = [];
+  // v2.6.0 断点续跑：未消费 steer 重放——断点前到达但从未进入 LLM 上下文的
+  // 中途补充重放进 pendingSteers，经既有 drain 路径注入（user 消息 / mandate
+  // 同步 / steer 事件落库三件事由 drain 统一完成）。不在此预写 mandate.steers：
+  // drain 循环自身会 push，预写 = mandate 段与溢出重放双份重复
+  if (resumeTurn && resumeTurn.steers.length > 0) {
+    pendingSteers.push(...resumeTurn.steers);
+  }
   // v2.3.1 消息滚动：自上次 roll 后是否产过新文本——drain 时据此决定是否换行
   //（防「连续 steer 在同一等待期」产生空新行，spec §2.2）
   let hasNewTextSinceLastRoll = false;
@@ -704,6 +743,12 @@ export async function runChatLoop(
       const steer = pendingSteers.shift()!;
       mandate.steers.push(steer);
       messages.push({ role: 'user', content: `[用户中途补充] ${steer}` });
+      // v2.6.0 断点续跑：steer 事件持久化（spec §2 + v2.5 C1 教训）。
+      // 走既有 event buffer 落库（event_type='steer' / payload={body}），
+      // 重启后 turn-reconstructor 据此重建本条 [用户中途补充] user 消息，
+      // 已 drain steer 不会进 steers[]，未 drain 由流末判定入 steers[]。
+      // 纯事件追加（不动消息行状态），与 thinking/text/todo_update 同型。
+      sendStreamChunk({ type: 'steer', streamSessionId, body: steer });
       drained = true;
     }
     if (drained) {
@@ -1164,7 +1209,7 @@ export async function runChatLoop(
  *   - 入：{ type: 'task-config', ... } / { type: 'task-reply', reply }（PM 等 dispatch 回执）
  *   - 出：{ type: 'task-end', streamSessionId, taskId }（task 完成或 abort 后发）
  *   - 出：dispatch / task_reply / abort_dispatch 内部事件（momo-internal-event 信封）
- *   - chunk 流：sendStreamChunk（start/thinking/text/tool_call/tool_result/end）
+ *   - chunk 流：sendStreamChunk（start/thinking/text/tool_call/tool_result/todo_update/segment_boundary/message_roll/steer/end）
  *
  * 错误处理：try/catch 包裹 runChatLoop，失败时发 end(error) chunk + task-end IPC + exit(1)。
  * 不重试——上层 RouterService / AgentRunner 可在 task-end 后决定是否重新派发。
@@ -1200,7 +1245,7 @@ export async function runTaskChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
@@ -1243,6 +1288,13 @@ export async function runTaskChatLoop(
       parentStreamSessionId,
       undefined, // 暂无外部 abort_dispatch event 监听（PM 通过 IPC 直接 abort）
       streamSessionId, // AgentRunner 预分配的 streamSessionId，覆盖 randomUUID
+      // v2.6.0 断点续跑（plan Task 4/Task 5 第 10 参接线）：resume 载荷
+      // 经 cfg.resume 解构透传到 runChatLoop.resumeTurn；runChatLoop 据此接续
+      // messages / 续扣预算 / 重放 steers。缺省 undefined 时既有行为零改动
+      // （spec §5.4 「最小侵入，不动既有 11 个调用点」）。
+      // 消费侧接线锁：tests/agent/runtime-task-driven.test.ts「v2.6.0 接线锁」
+      // 用例——摘掉本解构/传参该锁必红（resume 静默丢失不报错）。
+      resume,
     );
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）

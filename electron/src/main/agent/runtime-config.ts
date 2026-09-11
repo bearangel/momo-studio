@@ -156,7 +156,7 @@ export interface TaskConfig {
   /**
    * dispatch 模式：父 agent（PM）派来的任务上下文。
    * 设置时本 task 是 sub-agent 收到 PM 的 dispatch；
-   * 未设置时是顶层用户消息触发的 ephemeral chat。
+   * 未设置时是顶层用户消息触发的即时对话。
    */
   dispatchContext?: {
     /** PM 的 assignmentId（dispatch event 的 dispatch_from） */
@@ -165,7 +165,7 @@ export interface TaskConfig {
     task_id: string;
     /** PM 分配给本 sub-agent 的工具预算 */
     tool_budget?: number;
-    /** PM 的 streamSessionId（用于 renderer 把子 agent 流嵌套渲染到 PM 气泡内对应 chip 下方） */
+    /** PM 的 streamSessionId（用于 renderer 把子 agent 流嵌套渲染到 PM 气泡内对应 dispatch chip 下方） */
     tool_stream_session_id?: string;
   };
   /**
@@ -176,6 +176,22 @@ export interface TaskConfig {
    * 缺省时回退 AGENT_CONFIG 的 maxToolCalls（parseConfig 默认 10）。
    */
   maxToolCalls?: number;
+  /**
+   * v2.6.0 断点续跑（spec §5.2/§5.4）：断点回合重建段载荷。设置时
+   * runTaskChatLoop 把 messages 拼到 LLM 请求（不重复发 currentBody）、
+   * 预算续扣 toolCallsUsed、未消费 steers 重放进 pendingSteers。
+   * 缺省时 runChatLoop 行为与历史版本一致（既有 11 个调用点零改动）。
+   */
+  resume?: {
+    /** 重建段 LLMMessage[]；首条 role=user 即原回合指令 */
+    messages: import('./llm-provider').LLMMessage[];
+    /** 断点前已消耗的工具预算（rebuildTurn.toolCallsUsed） */
+    toolCallsUsed: number;
+    /** 中断前未消费的中途补充（spec §5.3：流末无后续输出的 steer 入此数组） */
+    steers: string[];
+    /** 主进程 rebuildTurn 已评估；runtime 侧无需再判（沿用 main 决议） */
+    degenerate: boolean;
+  };
 }
 
 /**

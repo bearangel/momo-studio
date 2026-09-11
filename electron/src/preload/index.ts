@@ -254,7 +254,10 @@ const api: ApiSurface = {
       invoke<{ executionSessionId: string; createdNewRoom: boolean }>('task:start', id, opts),
     cancel: (id) => invoke<void>('task:cancel', id),
     // K7-5：恢复暂停的任务（paused → in_progress + kickoff 重注入执行会话）
-    resume: (id) => invoke<TaskRow>('task:resume', id),
+    // v2.6.0 多路扩展：in_progress 走断点续跑；assigned/session_queued 走既有 executor 放行
+    resume: (id) => invoke<TaskRow & { streamSessionId?: string }>('task:resume', id),
+    // v2.6.0 启动恢复卡数据源
+    listInterrupted: () => invoke('task:listInterrupted'),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),
   },

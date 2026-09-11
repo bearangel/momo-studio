@@ -39,6 +39,7 @@ import { executeConflictResolution } from './conflict-executor';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
 import { abortTaskStreamByLane } from '../agent/session-lane';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
+import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -174,24 +175,53 @@ export function registerTaskHandlers(): void {
     notifyExecutor();
   });
 
-  // K7-5：恢复暂停的任务——paused → in_progress + kickoff 重注入执行会话。
-  // agent 接收 kickoff 后接续会话历史继续工作（执行上下文未丢）；agent 已
-  // 停止时接待路由的 ensureRunner 自动拉起。无执行会话的边角（不应出现，
-  // paused 行必经 in_progress 锁定）只转状态，不注入。
-  ipcMain.handle('task:resume', async (_evt, id: string): Promise<TaskRow> => {
-    const row = transitionTaskStatus(id, 'in_progress');
-    if (row.executionSessionId) {
-      await sendUserMessage({
-        sessionId: row.executionSessionId,
-        body: buildKickoffBody(row),
-        mentionedInstanceIds: row.assigneeAgentId ? [row.assigneeAgentId] : undefined,
-        systemKickoff: true,
-      });
-    }
-    void broadcastLocalTaskSnapshot();
-    notifyExecutor();
-    return row;
-  });
+  // K7-5 + v2.6.0 多路恢复：按任务 status 分流（spec §5.6 IPC 面 + D6 卡片唯一闸门）：
+  //   - paused → K7-5 既有路径（transition paused→in_progress + kickoff 重注入）
+  //   - in_progress → v2.6.0 断点续跑（resumeTask：rebuildTurn + 消息行翻回 streaming
+  //     + TaskConfig resume 载荷 + 既有 AgentRunner 派发）
+  //   - assigned / session_queued → v2.6.0 全新执行（resumeTask 内部 notifyExecutor
+  //     触发既有 executor 放行——并发闸 + 队列序 + kickoff 天然生效）
+  // 返回值多路：paused 返回 TaskRow（K7-5 兼容），in_progress/assigned/queued 返回
+  // TaskRow & { streamSessionId? }（v2.6 新增；renderer 可选读取用于 SSE 关联）
+  ipcMain.handle(
+    'task:resume',
+    async (_evt, id: string): Promise<TaskRow & { streamSessionId?: string }> => {
+      const before = getTask(id);
+      if (!before) throw new Error(`task ${id} 不存在`);
+
+      if (before.status === 'paused') {
+        // K7-5 既有行为逐字节保持：transition + kickoff 重注入
+        const row = transitionTaskStatus(id, 'in_progress');
+        if (row.executionSessionId) {
+          await sendUserMessage({
+            sessionId: row.executionSessionId,
+            body: buildKickoffBody(row),
+            mentionedInstanceIds: row.assigneeAgentId ? [row.assigneeAgentId] : undefined,
+            systemKickoff: true,
+          });
+        }
+        void broadcastLocalTaskSnapshot();
+        notifyExecutor();
+        return row;
+      }
+
+      // v2.6.0：其余可恢复状态交由 resume.ts resumeTask 统一处理
+      const result = await resumeTask(id);
+      void broadcastLocalTaskSnapshot();
+      const after = getTask(id);
+      return { ...(after ?? before), streamSessionId: result.streamSessionId };
+    },
+  );
+
+  // v2.6.0 启动恢复卡数据源（spec §5.2）：列出 in_progress / assigned / session_queued
+  // 任务供 renderer 渲染 ResumeNotice（spec §6：boot 现查现示，空列表不渲染）。
+  // D6：检测时不改任务状态（卡片是唯一闸门；scheduler 边界回归锁在 resume.test.ts 固化）。
+  ipcMain.handle(
+    'task:listInterrupted',
+    async (): Promise<InterruptedTaskInfo[]> => {
+      return detectInterrupted();
+    },
+  );
 
   ipcMain.handle(
     'task:start',

@@ -20,7 +20,11 @@ export interface MessageEventRow {
     | 'dispatch_result'
     | 'segment_boundary'
     | 'status_change'
-    | 'final';
+    | 'final'
+    // v2.6.0 断点续跑：runtime-entry 在 steer drain 时发 steer chunk，
+    // stream-relay 落 event_type='steer' / payload={body} 事件。
+    // turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]。
+    | 'steer';
   payload: Record<string, unknown>;
   createdAt: number;
 }

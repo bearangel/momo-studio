@@ -6,6 +6,17 @@
 
 ## 状态
 
+**v2.6.0 — 任务断点续跑（开发中，未发布）**
+
+重启后 in-flight 任务事件重建式断点续跑——工具防御第四期，清偿自 v1.3 起连续四版列出的「重启自动恢复 agent runtime（持久化运行状态）」基础设施债。不新建持久化机制——`message_events` 本来就是流式事件的持久化真相源，断点素材已在 DB 里。spec 见 `docs/specs/2026-09-10-task-resume-design.md`。
+
+- **回合重建器（新增）** — `turn-reconstructor` 按 seq 序聚合事件为合法 LLM messages：完整工具对 verbatim 保留不重跑；孤儿 tool_call（含 dispatch）合成 `[执行中断]` tool result 补齐协议对（LLM 看到事实自决重试）；半截 assistant 文本收尾为完整消息；steer 已 drain 随消息重建、未 drain 进 `steers[]` 随载荷重放；thinking / message_roll / 未知事件类型一律跳过（前向兼容——schema 演进时旧中断任务安全退化）；任何重建抛错 catch 降级 degenerate（等价全新回合，降级本身是设计要求）
+- **关机保态 + 陈旧流清扫** — 正常退出不再被 failTaskOnCrash 误标 failed：runner `markShuttingDown()` 关机先置 flag，`handleChildExit` 据此跳过任务终态转换（保留 in_progress）但消息行仍诚实标 failed；boot `sweepStaleStreaming` 兜底清扫崩溃 / 强制 kill 残留的 streaming 陈旧流（runMigrations 之后、runtime 起动之前）
+- **断点接续执行** — `resumeTask` 经既有 AgentRunner.executeTask + registerLane 派发（maxConcurrentTasks 并发闸 + 会话车道串行性天然生效，同流双恢复被 lane 守卫拦截）；resume 载荷（messages / toolCallsUsed / steers / degenerate）经 task-config 透传子进程，`runChatLoop(resumeTurn)` 从中断点继续——messages 接续不重发 currentBody、预算续扣不重置、steers 重放进 mandate；消费侧接线锁走真实生产路径（runtime-task-driven），红绿变异验证摘掉透传必红
+- **steer 落库** — 中途补充 drain 时补发 `steer` 事件走既有 event buffer 落库（断点重建可见性，v2.6 前只进内存）；重建器消费已 drain steer 随消息重建，未 drain 进恢复载荷重放
+- **恢复卡（v2.5 账本联动）** — 启动右下角非模态卡（SandboxNotice 同款基建，boot 现查现示、瞬态无 kv 标记）：逐任务行（标题 / agent 名 / 「半程变更 M 处」）+ [恢复] / [放弃] 二选一（直接放弃 → cancelled；撤回变更后放弃 → journal:revert 全条目再 cancelled，撤回结果行内摘要）；全部决策完卡片消散；IPC 两通道 `task:listInterrupted` / `task:resume`（与 paused K7-5 恢复多路复用，不新增通道名）
+- 已知边界（spec §3）：会话闲聊流不恢复（中断定格，用户重发一句话）；dispatch 嵌套不自动续跑（父恢复时子流合成中断 result，LLM 自决重派 = 全新子流）；断点不做跨版本兼容保证（未知事件跳过 + 重建失败降级——安全退化为全新回合）
+
 **v2.5.0 — 变更账本与撤销（开发中，未发布）**
 
 agent 文件变更全量记账 + 可靠撤销——工具防御第三期：git 安全网在无 git 机器上失效（D1），改用零依赖零假设的本地账本。spec 见 `docs/specs/2026-09-10-change-journal-undo-design.md`。

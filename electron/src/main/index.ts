@@ -23,6 +23,7 @@ import { tokenizeForIndex } from './storage/memories/tokenize';
 import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
 import { listWorkspaces } from './workspace/crud';
+import { sweepStaleStreaming } from './task/resume';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -44,6 +45,15 @@ app.whenReady().then(async () => {
 
     runMigrations();
     logger.info('Migrations complete');
+
+    // v2.6.0 任务断点续跑：boot 陈旧流清扫（spec §5.4 + T3 移交约束：runMigrations
+    // 之后、runtime 起动之前）。sweepStaleStreaming 内部 try/catch 兜底——DB
+    // 未就绪 / 单行收尾失败均不阻断启动。正常关机由 finalizeStreamOnCrash 在
+    // child exit 时覆盖；这里是 App 崩溃 / 强制 kill 的兜底。
+    const swept = sweepStaleStreaming();
+    if (swept > 0) {
+      logger.info('boot 陈旧流清扫完成', { swept });
+    }
 
     // v2.2 记忆 P2：jieba native binding 冒烟——在首次写库前暴露打包/ABI 问题
     // （better-sqlite3 之外唯一的 native 依赖）。不 exit：冒烟失败只代表记忆检索

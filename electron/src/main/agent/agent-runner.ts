@@ -47,7 +47,7 @@ export interface TaskConfig {
   /**
    * dispatch 模式：父 agent（PM）派来的任务上下文。
    * 设置时本 task 是 sub-agent 收到 PM 的 dispatch（走 handleDispatch 流程）；
-   * 未设置时是顶层用户消息触发的 ephemeral chat。
+   * 未设置时是顶层用户消息触发的即时对话。
    * 形状与 runtime-entry 的 TaskConfigMsg.dispatchContext 保持一致。
    */
   dispatchContext?: {
@@ -59,6 +59,18 @@ export interface TaskConfig {
     tool_budget?: number;
     /** PM 的 streamSessionId（renderer 据此把子 agent 流嵌套渲染到 PM 气泡内对应 chip） */
     tool_stream_session_id?: string;
+  };
+  /**
+   * v2.6.0 断点续跑（spec §5.2）：断点回合重建段载荷。由 resumeTask 编排层
+   * （electron/src/main/task/resume.ts）组装后随 TaskConfig 传入 executeTask，
+   * 经 child.send({ type: 'task-config', resume, ... }) 透传到子进程。
+   * 子进程 runTaskChatLoop 把它作为 runChatLoop 第 10 参 resumeTurn 续接。
+   */
+  resume?: {
+    messages: import('./llm-provider').LLMMessage[];
+    toolCallsUsed: number;
+    steers: string[];
+    degenerate: boolean;
   };
 }
 
@@ -107,6 +119,29 @@ interface ActiveTask {
 
 /** task-end 到达后仍未收尾的兜底宽限上限 */
 const DEFAULT_TASK_END_GRACE_MS = 15_000;
+
+// === v2.6.0 关机保态（计划补强裁定 1） ===
+/**
+ * 模块级关机标志——before-quit 链（runtime-registry.destroyAllTaskDrivenRuntimes）
+ * 前置置位。true 时 handleChildExit 跳过 failTaskOnCrash（in_progress 任务保留
+ * 待启动恢复 T5 检测/续跑），但保留 finalizeStreamOnCrash（消息行标 failed，
+ * UI 诚实呈现中断；恢复时翻回 streaming）。正常崩溃路径（未置位）崩溃收尾
+ * 语义逐字节保持——回归锁见 tests/agent/shutdown-preserve.test.ts。
+ */
+let shuttingDown = false;
+
+/**
+ * 标记应用正在退出——幂等（重复调用无副作用）。仅 destroyAllTaskDrivenRuntimes
+ * 与测试构造调用。
+ */
+export function markShuttingDown(): void {
+  shuttingDown = true;
+}
+
+/** 测试用：复位关机标志（防跨用例污染 C2 回归锁）。 */
+export function __resetShuttingDownForTest(): void {
+  shuttingDown = false;
+}
 
 export class AgentRunner {
   private readonly opts: AgentRunnerOpts;
@@ -221,6 +256,10 @@ export class AgentRunner {
       mentions: task.mentions ?? [],
       ...(resolvedMaxToolCalls !== undefined ? { maxToolCalls: resolvedMaxToolCalls } : {}),
       ...(task.dispatchContext ? { dispatchContext: task.dispatchContext } : {}),
+      // v2.6.0 断点续跑：透传 resume 载荷到子进程（spec §5.2 接线锁
+      // resume.test.ts Part A 锁该透传；摘掉即红）。条件展开避免 undefined 字段
+      // 污染 IPC payload（与 dispatchContext / maxToolCalls 同型）
+      ...(task.resume ? { resume: task.resume } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };
@@ -368,7 +407,17 @@ export class AgentRunner {
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
-        this.failTaskOnCrash(active.taskId, code);
+        if (shuttingDown) {
+          // v2.6.0 关机保态（计划补强裁定 1）：正常退出的子进程 exit 不把
+          // in_progress 任务误标 failed——保留 in_progress 供启动恢复（T5）检测/
+          // 续跑；消息行仍由上方 finalizeStreamOnCrash 标 failed（UI 诚实呈现中断），
+          // 恢复时翻回 streaming。
+          logger.info('关机路径：跳过崩溃任务收尾，保留 in_progress 待启动恢复', {
+            taskId: active.taskId,
+          });
+        } else {
+          this.failTaskOnCrash(active.taskId, code);
+        }
       }
     }
     // v2.3 车道：流崩溃收尾后让道 + 触发排队放行（与 finalizeActiveTask 同语义）

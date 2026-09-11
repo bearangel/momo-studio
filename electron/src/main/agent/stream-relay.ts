@@ -27,6 +27,7 @@ import {
   updateMessageStatus,
   getMessage,
   getMessageByStreamSessionId,
+  getLatestMessageByStreamSessionId,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
 
@@ -219,7 +220,42 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
   try {
     switch (chunk.type) {
       case 'start': {
-        insertMessage({
+        // C1（v2.6.0 final review）幂等化：resume 是首个跨子进程重启复用
+        // streamSessionId 的流程——历史全部 randomUUID 新流，无条件 INSERT
+        // 不会撞 ssi；resume 派发后子进程重发 start chunk 会再 INSERT 一条
+        // status='streaming' body='' 的僵尸行（无 end 引用 → 下次 boot 被
+        // sweepStaleStreaming 标 failed+final「进程中断」→ 会话历史永久幽灵
+        // 气泡）。改为先查该流「当前行」（base 精确或 #roll 后缀最新一行，
+        // 顶层非 segment）：
+        //   - 命中且 streaming → 幂等续流：复用该行不 INSERT——cache 回填 +
+        //     推 renderer + 补 status_change（与 resume flip 的 status_change
+        //     互为反向呼应；后续事件续落旧行，seq 递增天然连续）
+        //   - 命中但非 streaming → 契约外形态（正常 resume 先经
+        //     flipMessageBackToStreaming 翻回 streaming 才派发，不应走到）：
+        //     warn 后按新流 INSERT 独立行兜底（事件时间线不得挂到终态旧行）
+        //   - 未命中 → 历史行为：INSERT 新行
+        const existing = getLatestMessageByStreamSessionId(chunk.streamSessionId);
+        if (existing && existing.status === 'streaming') {
+          streamMessageIdCache.set(chunk.streamSessionId, existing.id);
+          pushSessionMessage(existing);
+          getEventBuffer().append({
+            messageId: existing.id,
+            eventType: 'status_change',
+            payload: { status: 'streaming' },
+          });
+          return;
+        }
+        if (existing) {
+          logger.warn(
+            'start chunk 命中非 streaming 旧流行，按新流处理（正常 resume 不应出现——flip 应已翻回 streaming）',
+            {
+              streamSessionId: chunk.streamSessionId,
+              existingMessageId: existing.id,
+              existingStatus: existing.status,
+            },
+          );
+        }
+        const msg = insertMessage({
           // Task 6 字段迁移：chunk.sessionId（原 roomId）/ chunk.senderAgentId（原 botUserId）
           sessionId: chunk.sessionId,
           sender: chunk.senderAgentId,
@@ -229,8 +265,6 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           parentStreamSessionId: chunk.parentStreamSessionId ?? null,
           status: 'streaming',
         });
-        const msg = getMessageByStreamSessionId(chunk.streamSessionId);
-        if (!msg) return;
         streamMessageIdCache.set(chunk.streamSessionId, msg.id);
         pushSessionMessage(msg);
         getEventBuffer().append({
@@ -305,6 +339,19 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           messageId,
           eventType: 'todo_update',
           payload: { todos: chunk.todos },
+        });
+        return;
+      }
+      case 'steer': {
+        // v2.6.0 断点续跑：steer drain 事件持久化（spec §2）。
+        // 纯事件追加，不动 messages 行状态——与 thinking/text/todo_update 同型。
+        // turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]。
+        const messageId = resolveMessageId(chunk.streamSessionId);
+        if (!messageId) return;
+        getEventBuffer().append({
+          messageId,
+          eventType: 'steer',
+          payload: { body: chunk.body },
         });
         return;
       }

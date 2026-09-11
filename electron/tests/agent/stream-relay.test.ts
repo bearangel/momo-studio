@@ -32,6 +32,7 @@ import {
 } from '../../src/main/agent/stream-relay';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
+  insertMessage,
   getMessageByStreamSessionId,
   listMessagesBySession,
 } from '../../src/main/storage/messages/repo';
@@ -505,5 +506,155 @@ describe('end 终态回写 body + 推送更新行', () => {
     const row = getMessageByStreamSessionId('ss-body-5')!;
     expect(row.status).toBe('failed');
     expect(row.body).toBe('崩溃前文本');
+  });
+});
+
+// === start 幂等化（v2.6.0 final review C1：resume 复用 streamSessionId） ===
+//
+// 历史全部 randomUUID 新流，无条件 INSERT 不会撞 ssi；resume 是首个跨子进程
+// 重启复用 ssi 的流程——旧实现每次恢复 INSERT 一条 status='streaming' body=''
+// 的僵尸行（无 end 引用 → 下次 boot 被 sweepStaleStreaming 标 failed+final
+// 「进程中断」→ 会话历史永久幽灵气泡）。红绿变异记录：摘掉幂等化（恢复为
+// 无条件 INSERT）→ 「行数 1」断言必红（实际 2 行僵尸）。
+
+describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () => {
+  beforeEach(() => {
+    setupDb();
+    __resetEventBufferForTest();
+    mockSend.mockClear();
+  });
+
+  afterEach(() => {
+    __resetEventBufferForTest();
+    teardownDb();
+  });
+
+  it('同一 ssi 二次 start：行数不增、复用同一行、第二次 status_change 已落且 seq 递增', () => {
+    // 第一次 start（resume 前该行已被 flip 翻回 streaming——flip 已有独立锁，
+    // 此处直接以真实 start 建立同形态：streaming 行 + ssi）
+    __routeChunkToBufferForTest({
+      type: 'start',
+      streamSessionId: 'ss-idem-1',
+      sessionId: '!room:idem',
+      senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+    const first = getMessageByStreamSessionId('ss-idem-1')!;
+    expect(first.status).toBe('streaming');
+
+    // 第二次 start：resume 派发后子进程重发（同 ssi）
+    __routeChunkToBufferForTest({
+      type: 'start',
+      streamSessionId: 'ss-idem-1',
+      sessionId: '!room:idem',
+      senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+
+    // 行数不变（红绿点：旧实现 +1 僵尸行）+ 复用同一行 id
+    const rows = listMessagesBySession('!room:idem');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(first.id);
+
+    // 第二次 status_change 已落复用行：共 2 条，seq 严格递增（事件续接不重排）
+    const statusChanges = listEventsByMessage(first.id).filter(
+      (e) => e.eventType === 'status_change',
+    );
+    expect(statusChanges).toHaveLength(2);
+    expect(statusChanges[0]!.seq).toBeLessThan(statusChanges[1]!.seq);
+    expect(statusChanges.every((e) => e.payload.status === 'streaming')).toBe(true);
+
+    // 复用行再次推给 renderer（幂等路径也走 pushSessionMessage——实时可见性）
+    const pushed = mockSend.mock.calls
+      .filter((c) => c[0] === 'session:message')
+      .map((c) => (c[1] as { id: string }).id);
+    expect(pushed.filter((id) => id === first.id).length).toBe(2);
+  });
+
+  it('幂等续流端到端：二次 start 后 text/end 落复用行收尾（单行 done，body 聚合）', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-2', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-2', delta: '续跑输出' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-idem-2', finishReason: 'stop' });
+
+    const rows = listMessagesBySession('!room:idem');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('done');
+    expect(rows[0]!.body).toBe('续跑输出');
+  });
+
+  it('带 roll 的流族：start 用 base ssi 复用最新 #roll1 行（base 保持 done 不动）', () => {
+    // 真实生产路径建 roll 族：base 行 + roll 换行终态化 base + #roll1 承接
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-r', delta: '断点前' });
+    __routeChunkToBufferForTest({ type: 'message_roll', streamSessionId: 'ss-idem-r' });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-r', delta: '滚后' });
+    __flushEventBufferForTest();
+
+    // resume 派发后子进程以 base ssi 重发 start → 必须续流 #roll1（族内当前行）
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-r', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+
+    const rows = listMessagesBySession('!room:idem');
+    expect(rows).toHaveLength(2); // base + #roll1，无新行
+    const base = rows.find((m) => m.streamSessionId === 'ss-idem-r')!;
+    const roll1 = rows.find((m) => m.streamSessionId === 'ss-idem-r#roll1')!;
+    expect(base.status).toBe('done'); // 已被 roll 终态化——不被翻回
+    expect(roll1.status).toBe('streaming'); // 当前行续流
+    // #roll1 上共 2 条 status_change（roll 建行 + 幂等 start）
+    const statusChanges = listEventsByMessage(roll1.id).filter(
+      (e) => e.eventType === 'status_change',
+    );
+    expect(statusChanges).toHaveLength(2);
+  });
+
+  it('命中非 streaming 旧行（契约外形态）：warn 后按新流 INSERT 独立行，事件落新行', () => {
+    // 真实路径造 done 旧行：start + end 收尾
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-idem-d', finishReason: 'stop' });
+    __flushEventBufferForTest();
+    expect(getMessageByStreamSessionId('ss-idem-d')!.status).toBe('done');
+
+    // 同 ssi 再 start（正常 resume 不应出现——flip 先行；防御路径锁行为）
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-d', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-idem-d', delta: '新流文本' });
+    __flushEventBufferForTest();
+
+    // warn 后按新流处理：done 旧行不动 + 新 streaming 行承接事件
+    const rows = listMessagesBySession('!room:idem');
+    expect(rows).toHaveLength(2);
+    const doneRows = rows.filter((m) => m.status === 'done');
+    const streamingRows = rows.filter((m) => m.status === 'streaming');
+    expect(doneRows).toHaveLength(1);
+    expect(streamingRows).toHaveLength(1);
+    expect(
+      listEventsByMessage(streamingRows[0]!.id).some(
+        (e) => e.eventType === 'text_delta' && e.payload.delta === '新流文本',
+      ),
+    ).toBe(true);
+  });
+
+  it('未命中旧行：保持历史行为 INSERT 新行（首启动新流不受幂等化影响）', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-idem-fresh', sessionId: '!room:idem', senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+
+    const rows = listMessagesBySession('!room:idem');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('streaming');
+    expect(rows[0]!.sender).toBe('@bot:localhost');
   });
 });

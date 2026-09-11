@@ -200,6 +200,22 @@ export interface RemoteNodeTasks {
  */
 export type ConflictStrategy = 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
 
+/**
+ * v2.6.0 启动恢复卡条目（spec §5.6 IPC 面）：
+ *   - taskId / title / status：透传任务行（status 仅可恢复三态）
+ *   - agentName：JOIN agent_definitions.name；取不到时降级空串
+ *   - journalCount：v2.5 变更账本条目数（store 未注入时 0）
+ *   - streamSessionId：断点流 base id（剥 #roll 后缀）；assigned 时空串
+ */
+export interface InterruptedTaskInfo {
+  taskId: string;
+  title: string;
+  status: 'in_progress' | 'assigned' | 'session_queued';
+  agentName: string;
+  journalCount: number;
+  streamSessionId: string;
+}
+
 export interface TaskApiSurface {
   create(input: {
     workspaceId: string;
@@ -240,8 +256,19 @@ export interface TaskApiSurface {
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
-  /** K7-5：恢复暂停的任务——paused → in_progress + kickoff 重注入执行会话 */
-  resume(id: string): Promise<TaskRow>;
+  /**
+   * K7-5 + v2.6.0 多路恢复（spec §5.6 IPC 面）：
+   *   - paused → 既有 K7-5：transition + kickoff 重注入（返回 TaskRow）
+   *   - in_progress → v2.6.0 断点续跑：返回 TaskRow & { streamSessionId }（renderer 据此关联 SSE 流）
+   *   - assigned / session_queued → v2.6.0 全新执行：notifyExecutor 触发既有 executor 放行
+   * 不在以上三态的任务抛错。
+   */
+  resume(id: string): Promise<TaskRow & { streamSessionId?: string }>;
+  /**
+   * v2.6.0 启动恢复卡数据源（spec §5.2）：列出 in_progress / assigned / session_queued
+   * 任务供 renderer 渲染 ResumeNotice。D6 检测时不改任务状态。
+   */
+  listInterrupted(): Promise<InterruptedTaskInfo[]>;
   /** B9：任务冲突处理——ConflictDialog 选完策略后调此通道，main process 执行副作用 */
   resolveConflict(input: {
     newTaskId: string;
@@ -671,7 +698,11 @@ export interface MessageEventRow {
     | 'dispatch_result'
     | 'segment_boundary'
     | 'status_change'
-    | 'final';
+    | 'final'
+    // v2.6.0 断点续跑：与 electron 主进程 events-repo.MessageEventRow 联合对齐——
+    // steer 事件从主进程 IPC 推送过来时不会被 TS 类型拒绝。
+    // renderer 聚合器对 steer 自然跳过（switch 无匹配 case）。
+    | 'steer';
   payload: Record<string, unknown>;
   createdAt: number;
 }

@@ -9,7 +9,7 @@ import type { TodoItem } from './tools/todo-types';
 /**
  * 流式 IPC 消息（子进程 → 主进程 → renderer）。
  *
- * 生命周期：start → (thinking | text | tool_call | tool_result | todo_update)* → end
+ * 生命周期：start → (thinking | text | tool_call | tool_result | todo_update | steer)* → end
  * - start: 标记流式会话开始（renderer 据此创建临时气泡）
  * - thinking: 思维链增量（折叠区）
  * - text: 正文文本增量（逐字流式）
@@ -17,6 +17,8 @@ import type { TodoItem } from './tools/todo-types';
  * - tool_result: 工具调用完成（卡片更新结果）
  * - todo_update: v1.5 todowrite 全量替换任务列表（携带完整 todos 数组）
  * - message_roll: v2.3.1 steer 注入换行（旧行定格，新行承接）
+ * - steer: v2.6.0 断点续跑——steer drain 事件持久化（event_type='steer' / payload={body}），
+ *   turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]；纯事件追加，不动消息行状态
  * - end: 流式会话结束（finishReason 区分正常/预算耗尽/中断/错误）
  *
  * v1.4 嵌套字段（仅在嵌套场景出现）：
@@ -133,6 +135,23 @@ export type StreamChunk =
        */
       type: 'message_roll';
       streamSessionId: string;
+    }
+  | {
+      /**
+       * v2.6.0 断点续跑：steer drain 事件持久化（spec §2 + v2.5 C1 教训）。
+       *
+       * runtime-entry 在 drain 中途补充时发此 chunk——stream-relay 落
+       * event_type='steer' / payload={body} 事件（纯事件追加，不动消息行状态）。
+       * turn-reconstructor 据此重建 [用户中途补充] user 消息（已 drain）或
+       * 入 steers[] 随载荷重放（未 drain）。
+       *
+       * 形态与 message_roll 区分：roll 是「换行」（旧行定格 + 新行承接，后续 chunk
+       * 路由到新行）；steer 是「单点事件」追加，路由仍指向原流行。
+       */
+      type: 'steer';
+      streamSessionId: string;
+      /** 用户补充正文（runtime-entry 与 steer drain 同字符串，不加 [用户中途补充] 前缀——前缀是 renderer 端 runtime-entry 消息组装语义，重建器对称组装） */
+      body: string;
     };
 
 /**
