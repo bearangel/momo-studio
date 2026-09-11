@@ -37,6 +37,12 @@ export interface ToolContext {
    * 可选——未注入时跳过守门（向后兼容旧调用方）。
    */
   readTracker?: ReadTracker;
+  /**
+   * v2.5 变更账本：当前关联任务 id（task-driven runtime 派发，快速会话等
+   * 场景无任务 → undefined，记账时归一为 null）。写工具记账（RecordCtx.taskId）
+   * 消费；可选——未注入不影响既有流程（向后兼容旧调用方）。
+   */
+  taskId?: string;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */

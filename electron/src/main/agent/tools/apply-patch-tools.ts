@@ -9,6 +9,12 @@ import { randomUUID } from 'node:crypto';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { parsePatch, type PatchOp } from './apply-patch-parser';
+import type { RecordCtx } from '../../journal/recorder';
+import {
+  buildRecordCtx,
+  toJournalRelPath,
+  recordChangeSafe,
+} from './shared/change-journal';
 
 export class ApplyPatchTools implements ToolModule {
   getDefs(): LLMToolDef[] {
@@ -68,9 +74,12 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
   let applied = 0;
   // 跟踪 add 成功的新文件路径——回滚时需删除（spec §6.1 严格 all-or-nothing）
   const addedFiles: string[] = [];
+  // v2.5 变更账本：单次 patch 共用一个 RecordCtx，逐 op 写前记账（applyOp 内）；
+  // 失败回滚产生的孤儿条目由 revert 的 no-op 守卫兜底（内容已还原 → hash==beforeHash）
+  const jrc = buildRecordCtx('apply_patch', ctx);
   try {
     for (const op of ast.ops) {
-      await applyOp(op, ctx, addedFiles);
+      await applyOp(op, ctx, addedFiles, jrc);
       applied++;
     }
   } catch (err) {
@@ -117,9 +126,11 @@ function* walkDir(dir: string): Generator<string> {
   }
 }
 
-async function applyOp(op: PatchOp, ctx: ToolContext, addedFiles: string[]): Promise<void> {
+async function applyOp(op: PatchOp, ctx: ToolContext, addedFiles: string[], jrc: RecordCtx): Promise<void> {
   switch (op.kind) {
     case 'add':
+      // v2.5：add 的 after 即写入内容；Add 已在路径校验阶段拦截目标已存在
+      recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'create', null, op.content);
       await ctx.wsFs.writeFile(op.path, op.content);
       addedFiles.push(op.path);
       break;
@@ -127,11 +138,19 @@ async function applyOp(op: PatchOp, ctx: ToolContext, addedFiles: string[]): Pro
       {
         const current = (await ctx.wsFs.readFile(op.path)).toString('utf-8');
         const updated = applyHunk(current, op.hunk);
+        // v2.5：hunk 应用成功后、写盘前记账（before=快照循环同源的旧内容）
+        recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'modify', current, updated);
         await ctx.wsFs.writeFile(op.path, updated);
       }
       break;
     case 'delete': {
       const abs = ctx.wsFs.assertInWorkspace(op.path);
+      // v2.5：删除前读内容记账（快照循环只 copyFile 供回滚，账本需要字符串内容）；
+      // 目标不存在时 unlink 原样抛 ENOENT（既有行为），不产生条目
+      if (fs.existsSync(abs)) {
+        const before = await fs.promises.readFile(abs, 'utf-8');
+        recordChangeSafe(jrc, toJournalRelPath(ctx, op.path), 'delete', before, null);
+      }
       await fs.promises.unlink(abs);
       break;
     }
