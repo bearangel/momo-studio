@@ -355,4 +355,109 @@ describe('turn-reconstructor：九场景矩阵', () => {
       { role: 'assistant', content: 'Hello World' },
     ]);
   });
+
+  // === T2 接线回归锁（v2.6.0 Task 2）：steer chunk 走真实生产链落库 ===
+
+  it('10. steer 真实落库链（routeChunkToBuffer → steer 事件）已 drain → 重建为 [用户中途补充] user 消息', () => {
+    // 区别于场景 6（手插事件行）：本场景使用 __routeChunkToBufferForTest 真实生产链
+    // 发 steer chunk，锁「chunk → routeChunkToBuffer switch → event_type='steer' 落库」
+    // 链形态正确（T2 接线前 routeChunkToBuffer 无 steer case，chunk 静默丢弃，
+    // rebuildTurn 见不到 steer → 期望的 [用户中途补充] user 消息缺失 → 测试必红）。
+    insertOwnerMessage(SESSION_ID, '继续重构');
+    startStream('ss-t2-drained');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-t2-drained', delta: '分析中' });
+    __routeChunkToBufferForTest({
+      type: 'tool_call',
+      streamSessionId: 'ss-t2-drained',
+      callId: 'c1',
+      toolName: 'read_file',
+      args: { path: 'src/x.ts' },
+    });
+    __routeChunkToBufferForTest({
+      type: 'tool_result',
+      streamSessionId: 'ss-t2-drained',
+      callId: 'c1',
+      toolName: 'read_file',
+      result: '...',
+      success: true,
+    });
+    __flushEventBufferForTest();
+    // 关键：steer chunk 走真实生产链（不是 insertRawEvent 手插）
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-t2-drained',
+      body: '优先修这个',
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-t2-drained', delta: '好的先修这个' });
+    __flushEventBufferForTest();
+
+    const turn = rebuildTurn('ss-t2-drained');
+
+    expect(turn.messages).toEqual([
+      { role: 'user', content: '继续重构' },
+      {
+        role: 'assistant',
+        content: '分析中',
+        toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/x.ts' } }],
+      },
+      { role: 'tool', content: '...', toolCallId: 'c1' },
+      { role: 'user', content: '[用户中途补充] 优先修这个' },
+      { role: 'assistant', content: '好的先修这个' },
+    ]);
+    expect(turn.steers).toEqual([]);
+    expect(turn.degenerate).toBe(false);
+  });
+
+  it('11. steer 真实落库链（routeChunkToBuffer → steer 事件）未 drain → 进 steers[] 数组', () => {
+    // 区别于场景 7（手插事件行）：本场景使用真实生产链发 steer chunk。
+    insertOwnerMessage(SESSION_ID, '继续优化');
+    startStream('ss-t2-pending');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-t2-pending', delta: '工作中' });
+    __flushEventBufferForTest();
+    // 关键：steer chunk 走真实生产链——T2 接线前必红（chunk 静默丢弃，无事件入 DB）
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-t2-pending',
+      body: '记得补测试',
+    });
+    __flushEventBufferForTest();
+
+    const turn = rebuildTurn('ss-t2-pending');
+
+    // steer 未消费：不重建 user 消息，进 steers[]（T4 随载荷重放进 pendingSteers）
+    expect(turn.messages).toEqual([
+      { role: 'user', content: '继续优化' },
+      { role: 'assistant', content: '工作中' },
+    ]);
+    expect(turn.steers).toEqual(['记得补测试']);
+    expect(turn.degenerate).toBe(false);
+  });
+
+  it('12. 真实落库链：steer 事件行的 event_type 与 payload 字段形态', () => {
+    // 钉死 chunk → 事件落库形态（spec §2 + v2.5 C1 教训）：event_type='steer' / payload={body}。
+    // 防路由把 payload 序列化错 / 字段名错位（落库后 shape 不匹配，rebuildTurn 全部退化为非 string body 跳过）。
+    insertOwnerMessage(SESSION_ID, '形态校验');
+    startStream('ss-t2-shape');
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-t2-shape',
+      body: 'hello',
+    });
+    __flushEventBufferForTest();
+
+    const rows = getDb()
+      .prepare(
+        `SELECT event_type, payload_json FROM message_events
+         WHERE message_id = ? ORDER BY seq ASC`,
+      )
+      .all(streamMessageId('ss-t2-shape')) as Array<{ event_type: string; payload_json: string }>;
+
+    // status_change（start 落库）+ steer，顺序保证
+    const steerRow = rows.find((r) => r.event_type === 'steer');
+    expect(steerRow).toBeDefined();
+    expect(steerRow?.event_type).toBe('steer');
+    expect(JSON.parse(steerRow!.payload_json)).toEqual({ body: 'hello' });
+  });
 });

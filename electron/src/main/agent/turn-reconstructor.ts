@@ -21,7 +21,8 @@
 // 事件形态（照抄 stream-relay.routeChunkToBuffer 落库映射）：
 //   text → text_delta{delta}；tool_call → tool_call_start{callId,toolName,args}
 //   tool_result → tool_call_result{callId,result,success}；steer → steer{body}
-//   （steer 事件生产落库由 v2.6.0 Task 2 接线，本模块先行消费）
+//   （steer 事件生产落库由 v2.6.0 Task 2 接线——runtime-entry drain 循环
+//    sendStreamChunk → stream-relay routeChunkToBuffer steer case → event_type='steer' 落库）
 //   thinking / todo_update / status_change / final / message_roll /
 //   segment_boundary / 未知 kind → 跳过（不进 LLM 上下文 / 前向兼容）
 import type { LLMMessage, LLMToolCall } from './llm-provider';

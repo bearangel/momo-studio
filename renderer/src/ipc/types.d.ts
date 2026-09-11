@@ -671,7 +671,11 @@ export interface MessageEventRow {
     | 'dispatch_result'
     | 'segment_boundary'
     | 'status_change'
-    | 'final';
+    | 'final'
+    // v2.6.0 断点续跑：与 electron 主进程 events-repo.MessageEventRow 联合对齐——
+    // steer 事件从主进程 IPC 推送过来时不会被 TS 类型拒绝。
+    // renderer 聚合器对 steer 自然跳过（switch 无匹配 case）。
+    | 'steer';
   payload: Record<string, unknown>;
   createdAt: number;
 }

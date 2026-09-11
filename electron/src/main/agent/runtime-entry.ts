@@ -704,6 +704,12 @@ export async function runChatLoop(
       const steer = pendingSteers.shift()!;
       mandate.steers.push(steer);
       messages.push({ role: 'user', content: `[用户中途补充] ${steer}` });
+      // v2.6.0 断点续跑：steer 事件持久化（spec §2 + v2.5 C1 教训）。
+      // 走既有 event buffer 落库（event_type='steer' / payload={body}），
+      // 重启后 turn-reconstructor 据此重建本条 [用户中途补充] user 消息，
+      // 已 drain steer 不会进 steers[]，未 drain 由流末判定入 steers[]。
+      // 纯事件追加（不动消息行状态），与 thinking/text/todo_update 同型。
+      sendStreamChunk({ type: 'steer', streamSessionId, body: steer });
       drained = true;
     }
     if (drained) {
@@ -1164,7 +1170,7 @@ export async function runChatLoop(
  *   - 入：{ type: 'task-config', ... } / { type: 'task-reply', reply }（PM 等 dispatch 回执）
  *   - 出：{ type: 'task-end', streamSessionId, taskId }（task 完成或 abort 后发）
  *   - 出：dispatch / task_reply / abort_dispatch 内部事件（momo-internal-event 信封）
- *   - chunk 流：sendStreamChunk（start/thinking/text/tool_call/tool_result/end）
+ *   - chunk 流：sendStreamChunk（start/thinking/text/tool_call/tool_result/todo_update/segment_boundary/message_roll/steer/end）
  *
  * 错误处理：try/catch 包裹 runChatLoop，失败时发 end(error) chunk + task-end IPC + exit(1)。
  * 不重试——上层 RouterService / AgentRunner 可在 task-end 后决定是否重新派发。

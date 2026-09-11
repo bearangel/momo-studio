@@ -313,6 +313,32 @@ describe('aggregateEvents：segments 时间线（思考/工具/正文按实际�
     expect(result.segments[0]).toMatchObject({ kind: 'tool_call', toolName: 'read_file' });
     expect(result.toolCalls).toHaveLength(1);
   });
+
+  it('regression（v2.6.0 T2）：steer 事件不污染聚合，仅入 events 时间线（meta-only）', () => {
+    // 与 message_roll / segment_boundary 同级 meta-only 处理：聚合器不参与
+    // steer→text/thinking/tool/toolCalls/dispatches/todos 任何累积。
+    // 锁未来加 steer case 时不会污染 UI（若某天 renderer 要给 steer 加 UI，
+    // 此回归锁会提醒「先想清楚 chunks/timeline 含义再改」）。
+    const result = aggregateEvents([
+      ev(1, 'text_delta', { delta: '分析中' }),
+      ev(2, 'steer', { body: '优先处理样式' }),
+      ev(3, 'text_delta', { delta: '好的' }),
+    ]);
+
+    // 聚合字段全保持「steer 缺席」语义：只 text_delta 拼接，steer 不注入
+    expect(result.text).toBe('分析中好的');
+    expect(result.thinking).toBe('');
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.dispatches).toHaveLength(0);
+    expect(result.todos).toHaveLength(0);
+    // segments 只反映聚合出 text 段；steer 不产生新段
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({ kind: 'text', text: '分析中好的' });
+    // 时间线按 seq 升序记录（与 message_roll / segment_boundary 同级 meta-only）
+    expect(result.events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(result.events[1]).toMatchObject({ seq: 2, type: 'steer' });
+    expect(result.status).toBe('streaming'); // 无 final 仍是 streaming
+  });
 });
 
 // —— 以下自 renderer/tests/lib/stream-aggregator.test.ts 迁入（2026-08 目录规范统一：renderer 单测贴源存放）——

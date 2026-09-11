@@ -308,6 +308,19 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         });
         return;
       }
+      case 'steer': {
+        // v2.6.0 断点续跑：steer drain 事件持久化（spec §2）。
+        // 纯事件追加，不动 messages 行状态——与 thinking/text/todo_update 同型。
+        // turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]。
+        const messageId = resolveMessageId(chunk.streamSessionId);
+        if (!messageId) return;
+        getEventBuffer().append({
+          messageId,
+          eventType: 'steer',
+          payload: { body: chunk.body },
+        });
+        return;
+      }
       case 'segment_boundary': {
         // A7 fix：分段边界 → INSERT 独立分段 message row。
         // 父 message 必须已存在（由前置的 start chunk 创建）；不存在则静默跳过。
