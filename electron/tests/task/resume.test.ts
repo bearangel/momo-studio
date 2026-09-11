@@ -48,11 +48,17 @@ import {
   updateMessageStatus,
 } from '../../src/main/storage/messages/repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
+import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { __clearRuntimeRegistryForTest } from '../../src/main/agent/runtime-registry';
 import { __clearLaneForTest } from '../../src/main/agent/session-lane';
 import { setJournalStore, getJournalStore } from '../../src/main/journal/recorder';
 import { createJournalStore } from '../../src/main/journal/store';
-import { detectInterrupted, resumeTask } from '../../src/main/task/resume';
+import {
+  detectInterrupted,
+  resumeTask,
+  sweepStaleStreaming,
+  flipMessageBackToStreaming,
+} from '../../src/main/task/resume';
 import { type RebuiltTurn } from '../../src/main/agent/turn-reconstructor';
 import { saveAgentDefinition } from '../../src/main/agent/crud';
 import type { LLMMessage } from '../../src/main/agent/llm-provider';
@@ -808,5 +814,136 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
     expect(resumePayload.toolCallsUsed).toBe(0);
     // steers 数组字段（未消费 steer 数组）
     expect(resumePayload.steers).toEqual([]);
+  });
+});
+
+// ============================================================================
+// flipMessageBackToStreaming（final review I1：SQL 与「base OR LIKE 'base#%'」
+// 注释对齐）+ C1 端到端契约锁
+//
+// I1 危害形态：带 roll 的断点流恢复时旧 SQL 仅精确匹配 base——真正中断的
+// #roll{n} 行保持 failed（sweep 标的），已被 roll 正常终态化的 base 行被从
+// done 错翻回 streaming。红绿变异记录：摘掉 LIKE 子句（恢复精确匹配）→
+// 「base 保持 done」断言必红（旧实现 base 被翻回 streaming）。
+//
+// fixture 全部经真实生产路径：chunk 驱动建流/roll（roll 自动终态化 base）+
+// 真实 sweepStaleStreaming 收尾（只动 streaming 行，不动 done）——不手搓
+// 生产不存在的行形态（momo-test-rules 铁律 1）。
+// ============================================================================
+
+describe('flipMessageBackToStreaming（I1 roll 边界 + C1 start 幂等契约锁）', () => {
+  beforeEach(() => {
+    setupDb();
+    __resetEventBufferForTest();
+  });
+  afterEach(() => {
+    __resetEventBufferForTest();
+    teardownDb();
+  });
+
+  it('无 roll：sweep 标 failed 的流行翻回 streaming + status_change 落库（行为回归锁）', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-flip-1', sessionId: 'sess-flip', senderAgentId: 'agent-bot-1',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-flip-1', delta: '半截输出' });
+    __flushEventBufferForTest();
+    // App 崩溃 → boot sweep 收尾（真实生产路径，非手搓 updateMessageStatus）
+    expect(sweepStaleStreaming()).toBe(1);
+    expect(getMessageByStreamSessionId('ss-flip-1')!.status).toBe('failed');
+
+    flipMessageBackToStreaming('ss-flip-1');
+
+    const row = getMessageByStreamSessionId('ss-flip-1')!;
+    expect(row.status).toBe('streaming');
+    // 不改 body（保留 sweep 聚合回写的正文）
+    expect(row.body).toBe('半截输出');
+    // status_change 事件落库（renderer 聚合器消费——实时/重启两侧同视图）
+    const statusChanges = listEventsByMessage(row.id).filter(
+      (e) => e.eventType === 'status_change' && e.payload.status === 'streaming',
+    );
+    expect(statusChanges.length).toBe(2); // start 建行 1 条 + flip 1 条
+  });
+
+  it('I1 红绿主锁：带 roll 断点流翻最新 #roll1 行，已被 roll 终态化的 base 行保持 done', () => {
+    // 真实生产：start + text → message_roll（base 自动终态化 done + body 聚合回写）
+    // → #roll1 承接后续 → 崩溃 → sweep 只收尾 streaming 的 #roll1
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-flip-r', sessionId: 'sess-flip', senderAgentId: 'agent-bot-1',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-flip-r', delta: '断点前内容' });
+    __routeChunkToBufferForTest({ type: 'message_roll', streamSessionId: 'ss-flip-r' });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-flip-r', delta: '滚后内容' });
+    __flushEventBufferForTest();
+    expect(sweepStaleStreaming()).toBe(1); // 仅 #roll1（base 已 done 不命中）
+
+    const family = listMessagesByStreamSessionId('ss-flip-r');
+    expect(family).toHaveLength(2);
+    const base = family.find((m) => m.streamSessionId === 'ss-flip-r')!;
+    const roll1 = family.find((m) => m.streamSessionId === 'ss-flip-r#roll1')!;
+    expect(base.status).toBe('done');
+    expect(roll1.status).toBe('failed');
+
+    // resume：flip 以 base id 调用（resolveBreakpointStreamId 剥 # 后缀的产物）
+    flipMessageBackToStreaming('ss-flip-r');
+
+    // 关键断言（红绿点）：翻的是真正中断的 #roll1，base 不被错翻
+    expect(getMessageByStreamSessionId('ss-flip-r')!.status).toBe('done');
+    expect(getMessageByStreamSessionId('ss-flip-r#roll1')!.status).toBe('streaming');
+    // status_change 落在 #roll1 上（不是 base）
+    const roll1StatusChanges = listEventsByMessage(roll1.id).filter(
+      (e) => e.eventType === 'status_change',
+    );
+    expect(roll1StatusChanges.length).toBe(2); // roll 建行 1 条 + flip 1 条
+    const baseStatusChanges = listEventsByMessage(base.id).filter(
+      (e) => e.eventType === 'status_change',
+    );
+    expect(baseStatusChanges.length).toBe(1); // 仅 start 建行——flip 未碰 base
+  });
+
+  it('C1 端到端契约锁：sweep → flip → resume 重发 start（base ssi）→ 续流 #roll1 收尾，全程零新行', () => {
+    // ── 中断前：带 roll 的流跑到一半，App 崩溃 ──
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-e2e', sessionId: 'sess-flip', senderAgentId: 'agent-bot-1',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-e2e', delta: '断点前' });
+    __routeChunkToBufferForTest({ type: 'message_roll', streamSessionId: 'ss-e2e' });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-e2e', delta: '滚后' });
+    __flushEventBufferForTest();
+    // ── 重启：boot sweep 收尾 #roll1 ──
+    expect(sweepStaleStreaming()).toBe(1);
+    // ── 恢复：flip 翻回 #roll1（base id 入参，剥 # 后缀后的产物）──
+    flipMessageBackToStreaming('ss-e2e');
+    // ── resume 派发：子进程以 base ssi 重发 start + 续跑输出 + end ──
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-e2e', sessionId: 'sess-flip', senderAgentId: 'agent-bot-1',
+    });
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-e2e', delta: '，续跑补全' });
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-e2e', finishReason: 'stop' });
+
+    // 全程零新行（红绿点：旧 start 实现在 start 重发处 +1 僵尸行）
+    const family = listMessagesByStreamSessionId('ss-e2e');
+    expect(family).toHaveLength(2);
+    const base = family.find((m) => m.streamSessionId === 'ss-e2e')!;
+    const roll1 = family.find((m) => m.streamSessionId === 'ss-e2e#roll1')!;
+    // base：roll 终态化形态原样保持
+    expect(base.status).toBe('done');
+    expect(base.body).toBe('断点前');
+    // #roll1：续流收尾——body 聚合滚后 + 续跑文本，事件续落（seq 全序连续）
+    expect(roll1.status).toBe('done');
+    expect(roll1.body).toBe('滚后，续跑补全');
+    const roll1Events = listEventsByMessage(roll1.id);
+    const seqs = roll1Events.map((e) => e.seq);
+    expect([...seqs].sort((a, b) => a - b)).toEqual(seqs); // seq 升序（时间线性全序）
+    // 时间线诚实：streaming(roll建行) → failed(sweep final 进程中断) →
+    // streaming(flip) → streaming(幂等 start) → done(end final)
+    const statusTimeline = roll1Events
+      .filter((e) => e.eventType === 'status_change' || e.eventType === 'final')
+      .map((e) => (e.payload.status as string));
+    expect(statusTimeline).toEqual(['streaming', 'failed', 'streaming', 'streaming', 'done']);
+  });
+
+  it('无匹配行：no-op 不抛错不插行（边界空输入）', () => {
+    expect(() => flipMessageBackToStreaming('ss-never-existed')).not.toThrow();
+    expect(listMessagesByStreamSessionId('ss-never-existed')).toHaveLength(0);
   });
 });

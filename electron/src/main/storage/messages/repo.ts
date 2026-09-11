@@ -132,6 +132,35 @@ export function getMessageByStreamSessionId(streamSessionId: string): MessageRow
 }
 
 /**
+ * 取流会话的「当前行」——base 精确命中或 `#roll{n}` 后缀命中中 created_at
+ * 最新的一行（排除 `#seg` 分段快照行与 dispatch 子流行）。
+ *
+ * v2.6.0 断点续跑三处共用「流族 = base + #roll，当前行 = 最新一行」语义，
+ * 单点收口防契约漂移：
+ *   - task/resume.ts flipMessageBackToStreaming——恢复时把当前行翻回 streaming
+ *     （带 roll 的断点流真正中断的是 #roll{n} 行；已被 roll 正常终态化的
+ *     base 行不翻回）
+ *   - agent/stream-relay.ts start 幂等复用——resume 复用 streamSessionId 时
+ *     子进程重发 start chunk 续流当前行，不再 INSERT 僵尸行
+ *   - 与 turn-reconstructor 跨行聚合（listMessagesByStreamSessionId 全族
+ *     ASC）同口径；ssi 由系统内部生成（无 LIKE 元字符），前缀匹配安全。
+ */
+export function getLatestMessageByStreamSessionId(streamSessionId: string): MessageRow | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE (stream_session_id = ? OR stream_session_id LIKE ? || '#%')
+         AND segment_of IS NULL
+         AND parent_stream_session_id IS NULL
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(streamSessionId, streamSessionId) as SqlRow | undefined;
+  return row ? rowToCamel(row) : null;
+}
+
+/**
  * 取指定流会话的全部消息行（含 `#seg`/`#roll` 后缀子行），按时间升序。
  * 用途：导出富信息 dispatch 段嵌套展开子 agent 回复（v2.3.2 spec §5）。
  * ssi 由系统内部生成（s- 前缀 + UUID/后缀），无 LIKE 元字符，前缀匹配安全。

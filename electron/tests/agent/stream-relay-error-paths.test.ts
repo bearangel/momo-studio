@@ -27,6 +27,12 @@ vi.mock('../../src/main/storage/messages/repo', () => ({
     return { id: 'm-ok' };
   }),
   getMessageByStreamSessionId: vi.fn(() => relayState.msgById),
+  // start 幂等化的首跳 DB 读（C1 后先于 insertMessage 触库）——同错误模式语义
+  getLatestMessageByStreamSessionId: vi.fn(() => {
+    if (relayState.mode === 'notable') throw new Error('no such table: messages');
+    if (relayState.mode === 'locked') throw new Error('database is locked');
+    return relayState.msgById;
+  }),
   updateMessageStatus: vi.fn(() => {
     if (relayState.mode === 'locked') throw new Error('database is locked');
   }),

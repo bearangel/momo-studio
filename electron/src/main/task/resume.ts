@@ -26,6 +26,7 @@ import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import {
   updateMessageStatus,
+  getLatestMessageByStreamSessionId,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
 import { getEventBuffer } from '../agent/stream-relay';
@@ -376,7 +377,7 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
   // 翻回 streaming 后置到车道检查之后、registerLane/executeTask 之前——
   // 异流占用 / 双恢复 / runner 拉起失败等拒绝路径不再遗留滞留 streaming 的消息行
   if (breakpointSsId) {
-    flipMessageBackToStreaming(task.executionSessionId, breakpointSsId);
+    flipMessageBackToStreaming(breakpointSsId);
   }
   // 注册车道（占道 + 防后续 steer 误派入本流）
   registerLane(
@@ -397,29 +398,27 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
  * 把中断流的最新消息行翻回 streaming（spec §5.4：恢复时翻回）。
  *
  * 形态：
- *   - 取该 executionSessionId 内最新一行 stream_session_id = base OR LIKE 'base#%'
- *     的非 segment 行（status 当时被 sweepStaleStreaming / finalizeStreamOnCrash 标 failed）
+ *   - 取该流「当前行」——stream_session_id = base OR LIKE 'base#%' 的非
+ *     segment 顶层行中最新一行（I1 修复：SQL 与注释对齐。带 roll 的断点流
+ *     真正中断的是 #roll{n} 行——status 当时被 sweepStaleStreaming /
+ *     finalizeStreamOnCrash 标 failed；已被 roll 正常终态化的 base 行不翻回。
+ *     无 roll 时族内仅 base 行，与旧精确匹配行为一致）
  *   - updateMessageStatus(rowId, 'streaming') —— 不改 body（保留聚合正文）
  *   - 追加 status_change 事件 { status: 'streaming' }——事件时间线诚实呈现
  *     「翻回」动作（与 start chunk 写入的 status_change 事件同型；renderer
  *     聚合器会消费该事件把聚合状态翻回 streaming——与消息行状态一致，
  *     实时 / 重启两侧同视图）
  *
+ * 行定位经 getLatestMessageByStreamSessionId 单点——与 stream-relay start
+ * 幂等复用（续流必须落 flip 翻过的同一行）和 rebuildTurn 跨行聚合共用
+ * 「流族 = base + #roll，当前行 = 最新一行」语义（防契约漂移；ssi 系统生成
+ * 全局唯一，无需 session 过滤，与 collectStreamEvents 同口径）。
+ *
  * 若无匹配行（极罕见：assigned 路径被覆盖到此分支等）静默 no-op——调用方已
  * 处理新建流场景。
  */
-function flipMessageBackToStreaming(executionSessionId: string, baseSsId: string): void {
-  const row = getDb()
-    .prepare(
-      `SELECT id FROM messages
-       WHERE session_id = ?
-         AND stream_session_id = ?
-         AND segment_of IS NULL
-         AND parent_stream_session_id IS NULL
-       ORDER BY created_at DESC, rowid DESC
-       LIMIT 1`,
-    )
-    .get(executionSessionId, baseSsId) as { id: string } | undefined;
+export function flipMessageBackToStreaming(baseSsId: string): void {
+  const row = getLatestMessageByStreamSessionId(baseSsId);
   if (!row) return;
   updateMessageStatus(row.id, 'streaming');
   getEventBuffer().append({
