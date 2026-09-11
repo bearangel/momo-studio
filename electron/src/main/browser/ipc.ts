@@ -1,7 +1,8 @@
 // electron/src/main/browser/ipc.ts
 //
-// 浏览器命名空间 IPC（v2.7 McpBrowser Task 7，spec §3.6 通道表 + T9 增设
-// browser:updateSettings，共 12 个 r→m invoke 通道）+ m→r 统一推送接线
+// 浏览器命名空间 IPC（v2.7 McpBrowser Task 7，spec §3.6 通道表 + T7 的
+// browser:updateSettings + T9 的 browser:getSettings / browser:clearBrowsingData，
+// 共 14 个 r→m invoke 通道）+ m→r 统一推送接线
 // （browser:state / browser:notice）。
 //
 // 依赖全部注入（零 electron import——T10 boot 传真 ipcMain / win.webContents，
@@ -177,7 +178,7 @@ export function createBrowserPushHooks(webContentsLike: WebContentsLike): Browse
 }
 
 // =================================================================================
-// 注册（12 invoke 通道）
+// 注册（14 invoke 通道）
 // =================================================================================
 
 export function registerBrowserIpc(
@@ -265,5 +266,17 @@ export function registerBrowserIpc(
     }
   });
 
-  logger.info('Browser IPC handlers 已注册（12 通道）');
+  // 设置读取（T9 设置页/侧栏折叠初始态消费）：store.read 全量六字段（策略四列 +
+  // 侧栏折叠/宽度）；读侧对脏数据全容错（settings-store 契约），不抛错
+  ipcMainLike.handle('browser:getSettings', (_e, wsId) =>
+    store.read(asString(wsId, 'workspaceId')),
+  );
+
+  // 清除浏览数据（T9 设置页按钮）：委托 manager → factory.clearData 清 partition
+  // storage（cookies/cache 等）；设置页路径不经接管门，不要求 ws 活跃
+  ipcMainLike.handle('browser:clearBrowsingData', (_e, wsId) =>
+    manager.clearBrowsingData(asString(wsId, 'workspaceId')),
+  );
+
+  logger.info('Browser IPC handlers 已注册（14 通道）');
 }

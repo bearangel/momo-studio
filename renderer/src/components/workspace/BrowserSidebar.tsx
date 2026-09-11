@@ -32,6 +32,27 @@ export function BrowserSidebar({ workspaceId }: Props) {
   // agent 态接管层消散标记（语义见文件头注释）
   const [overlayDismissed, setOverlayDismissed] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
+  // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
+  const collapsedUserTouchedRef = useRef(false);
+
+  // 折叠初始态跨重启闭环（T9）：挂载 / 切 ws 读 getSettings，collapsed 落库值
+  // 即初始态。width 暂不接——侧栏宽度当前是静态 w-[380px]（接入需先把静态宽
+  // 改为受控值，留待后续）；读取失败保持默认展开（体验性增强不阻塞骨架）。
+  useEffect(() => {
+    collapsedUserTouchedRef.current = false;
+    let cancelled = false;
+    ipc.browser
+      .getSettings(workspaceId)
+      .then((s) => {
+        if (!cancelled && !collapsedUserTouchedRef.current) setCollapsed(s.sidebarCollapsed);
+      })
+      .catch(() => {
+        // 静默：默认展开兜底，后续用户操作照常走 toggleCollapsed
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
   // 挂载 / 切 workspace 拉全量。失败不阻塞 chrome 骨架——订阅推送兜底
   //（boot 早期 / ws 未激活时 getState 可能拒绝，占位区与地址栏仍可用）。
@@ -88,6 +109,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
   }, [collapsed]);
 
   const toggleCollapsed = (): void => {
+    collapsedUserTouchedRef.current = true;
     const next = !collapsed;
     setCollapsed(next);
     // IPC：main 视图销毁/重建 + per-workspace 落库；本地先行（折叠是纯 UI 态，

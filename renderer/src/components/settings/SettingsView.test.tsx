@@ -1,7 +1,8 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
-// SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类）：
-// - 渲染 10 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/Git 策略/审计日志/节点互联/关于）
+// SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类；
+// v2.7 浏览器入列后为 11 分类）：
+// - 渲染 11 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -77,6 +78,19 @@ const mockApi = {
     delete: vi.fn(),
     search: vi.fn(),
   },
+  // v2.7：浏览器分类面板挂载拉 getSettings（默认六字段全量形状）
+  browser: {
+    getSettings: vi.fn().mockResolvedValue({
+      trust: 'ask' as const,
+      evaluateEnabled: false,
+      blacklist: [],
+      whitelist: [],
+      sidebarCollapsed: false,
+      sidebarWidth: 380,
+    }),
+    updateSettings: vi.fn().mockResolvedValue({ ok: true }),
+    clearBrowsingData: vi.fn().mockResolvedValue(undefined),
+  },
 };
 
 describe('SettingsView', () => {
@@ -93,11 +107,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 10 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
+  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(10);
+    expect(navButtons.length).toBe(11);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -106,13 +120,14 @@ describe('SettingsView', () => {
       '记忆',
       '外观',
       '安全沙箱',
+      '浏览器',
       'Git 策略',
       '审计日志',
       '节点互联',
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(10);
+    expect(nav.querySelectorAll('svg').length).toBe(11);
   });
 
   it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {
@@ -140,6 +155,16 @@ describe('SettingsView', () => {
       expect(screen.getByRole('heading', { name: '安全沙箱' })).toBeInTheDocument();
     });
     expect(mockApi.sandbox.getState).toHaveBeenCalled();
+  });
+
+  it('点击「浏览器」分类切换 activeCategory 并渲染面板（拉 browser.getSettings）', async () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole('button', { name: '浏览器' }));
+    expect(useSettingsStore.getState().activeCategory).toBe('browser');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: '浏览器' })).toBeInTheDocument();
+    });
+    expect(mockApi.browser.getSettings).toHaveBeenCalledWith('ws-test');
   });
 
   it('account 分类不存在', () => {

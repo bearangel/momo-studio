@@ -1099,6 +1099,16 @@ export interface BrowserSettingsPatch {
   sidebarWidth?: number;
 }
 
+/** workspace 级浏览器设置完整形态（browser:getSettings 返回——store.read 六字段） */
+export interface BrowserSettings {
+  trust: 'ask' | 'always' | 'deny';
+  evaluateEnabled: boolean;
+  blacklist: string[];
+  whitelist: string[];
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
+}
+
 /** m→r 非模态通知（browser:notice；kind 如 crash-reloaded / popup-blocked / trust-request） */
 export interface BrowserNotice {
   kind: string;
@@ -1130,6 +1140,10 @@ export interface BrowserApiSurface {
     workspaceId: string,
     patch: BrowserSettingsPatch,
   ): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** 设置读取（store.read 全量六字段——设置页表单初始值 / 侧栏折叠初始态消费） */
+  getSettings(workspaceId: string): Promise<BrowserSettings>;
+  /** 清除 partition 浏览数据（设置页「清除浏览数据」按钮；不经接管门） */
+  clearBrowsingData(workspaceId: string): Promise<void>;
   /** 统一状态推送订阅（解订阅函数） */
   onBrowserState(callback: (state: BrowserState) => void): () => void;
   /** 非模态通知订阅（信任卡消费 kind='trust-request'） */
@@ -1380,7 +1394,7 @@ export interface ApiSurface {
   sandbox: SandboxApiSurface;
   /** v2.5：变更账本通道（journal/ipc.handlers.ts） */
   journal: JournalApiSurface;
-  /** v2.7：浏览器通道（browser/ipc.ts——12 invoke + state/notice 两推送） */
+  /** v2.7：浏览器通道（browser/ipc.ts——14 invoke + state/notice 两推送） */
   browser: BrowserApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */

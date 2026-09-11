@@ -45,7 +45,8 @@ const mockApi = {
     list: vi.fn().mockResolvedValue([]),
   },
   // v2.7 Task 8：MiddlePanel im 分支挂 BrowserSidebar——传递渲染需要 browser 面
-  //（getState 空态 + 订阅 no-op + 挂载即调的占位区上报，保持既有断言不受扰）
+  //（getState 空态 + 订阅 no-op + 挂载即调的占位区上报，保持既有断言不受扰；
+  // Task 9 起挂载还读 getSettings 折叠初始态——默认展开不扰动布局断言）
   browser: {
     getState: vi.fn().mockResolvedValue({
       workspaceId: 'ws-test',
@@ -55,6 +56,14 @@ const mockApi = {
       title: '',
       takeover: 'agent' as const,
       trusted: false,
+    }),
+    getSettings: vi.fn().mockResolvedValue({
+      trust: 'ask' as const,
+      evaluateEnabled: false,
+      blacklist: [],
+      whitelist: [],
+      sidebarCollapsed: false,
+      sidebarWidth: 380,
     }),
     setSidebarBounds: vi.fn().mockResolvedValue(undefined),
     onBrowserState: vi.fn().mockReturnValue(() => {}),

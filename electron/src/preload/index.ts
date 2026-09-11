@@ -125,7 +125,7 @@ const api: ApiSurface = {
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
   },
-  // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 12 invoke 通道 + 两推送逐一对应）
+  // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 14 invoke 通道 + 两推送逐一对应）
   browser: {
     getState: (workspaceId) => invoke('browser:getState', workspaceId),
     userNavigate: (workspaceId, url) => invoke('browser:userNavigate', workspaceId, url),
@@ -140,6 +140,8 @@ const api: ApiSurface = {
     answerTrust: (workspaceId, answer) => invoke('browser:answerTrust', workspaceId, answer),
     listDevServers: () => invoke('browser:listDevServers'),
     updateSettings: (workspaceId, patch) => invoke('browser:updateSettings', workspaceId, patch),
+    getSettings: (workspaceId) => invoke('browser:getSettings', workspaceId),
+    clearBrowsingData: (workspaceId) => invoke('browser:clearBrowsingData', workspaceId),
     onBrowserState: (callback) => {
       const handler = (_e: IpcRendererEvent, state: BrowserState): void => callback(state);
       ipcRenderer.on('browser:state', handler);

@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { BrowserSidebar } from './BrowserSidebar';
-import type { BrowserState, BrowserTabInfo } from '../../ipc/types';
+import type { BrowserState, BrowserSettings, BrowserTabInfo } from '../../ipc/types';
 
 // ---------- window.api 桩（browser 命名空间全方法） ----------
 const getStateMock = vi.fn();
@@ -29,6 +29,7 @@ const switchTabMock = vi.fn();
 const setSidebarBoundsMock = vi.fn();
 const setSidebarCollapsedMock = vi.fn();
 const listDevServersMock = vi.fn();
+const getSettingsMock = vi.fn();
 const onBrowserStateMock = vi.fn();
 const onBrowserNoticeMock = vi.fn();
 
@@ -44,6 +45,7 @@ const mockApi = {
     setSidebarBounds: setSidebarBoundsMock,
     setSidebarCollapsed: setSidebarCollapsedMock,
     listDevServers: listDevServersMock,
+    getSettings: getSettingsMock,
     onBrowserState: onBrowserStateMock,
     onBrowserNotice: onBrowserNoticeMock,
   },
@@ -86,6 +88,19 @@ function mkState(overrides?: Partial<BrowserState>): BrowserState {
   };
 }
 
+// ---------- 设置工厂（真实 BrowserSettings 形状——types.d.ts 契约） ----------
+function mkSettings(overrides?: Partial<BrowserSettings>): BrowserSettings {
+  return {
+    trust: 'ask',
+    evaluateEnabled: false,
+    blacklist: [],
+    whitelist: [],
+    sidebarCollapsed: false,
+    sidebarWidth: 380,
+    ...overrides,
+  };
+}
+
 /** onBrowserState 桩默认行为：捕获回调 + 返回解订阅 spy */
 function armOnBrowserState(): { push: (s: BrowserState) => void; unsubscribe: ReturnType<typeof vi.fn> } {
   let captured: ((s: BrowserState) => void) | null = null;
@@ -110,7 +125,7 @@ beforeEach(() => {
   for (const m of [
     getStateMock, userNavigateMock, takeoverMock, releaseTakeoverMock, openTabMock,
     closeTabMock, switchTabMock, setSidebarBoundsMock, setSidebarCollapsedMock,
-    listDevServersMock, onBrowserStateMock, onBrowserNoticeMock,
+    listDevServersMock, getSettingsMock, onBrowserStateMock, onBrowserNoticeMock,
   ]) {
     m.mockReset();
   }
@@ -125,6 +140,7 @@ beforeEach(() => {
   setSidebarBoundsMock.mockResolvedValue(undefined);
   setSidebarCollapsedMock.mockResolvedValue(undefined);
   listDevServersMock.mockResolvedValue([]);
+  getSettingsMock.mockResolvedValue(mkSettings());
   onBrowserStateMock.mockReturnValue(() => {});
   ResizeObserverStub.instances = [];
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
@@ -255,6 +271,52 @@ describe('BrowserSidebar·折叠（spec §3.5 / I2）', () => {
     await waitFor(() => expect(setSidebarCollapsedMock).toHaveBeenCalledWith('w1', false));
     expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+});
+
+describe('BrowserSidebar·折叠初始态跨重启（v2.7 Task 9）', () => {
+  it('挂载读 getSettings(w1)；sidebarCollapsed=true → 初始即折叠竖条（无地址栏/占位区）', async () => {
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: true }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await waitFor(() => expect(getSettingsMock).toHaveBeenCalledWith('w1'));
+    const expand = await screen.findByRole('button', { name: '展开浏览器侧栏' });
+    expect(expand).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    // 初始折叠不重放 setSidebarCollapsed（落库值本就如此，无变更可写）
+    expect(setSidebarCollapsedMock).not.toHaveBeenCalled();
+  });
+
+  it('sidebarCollapsed=false（默认）→ 初始展开，chrome 照常渲染', async () => {
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: false }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
+  });
+
+  it('用户先于读取返回前手动折叠 → 晚到的 collapsed=false 不覆盖用户操作', async () => {
+    let resolveSettings: (s: BrowserSettings) => void = () => {};
+    getSettingsMock.mockReturnValue(
+      new Promise<BrowserSettings>((res) => {
+        resolveSettings = res;
+      }),
+    );
+    render(<BrowserSidebar workspaceId="w1" />);
+    // 读取未返回期间用户点折叠（默认展开态 → 折叠）
+    fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
+    await screen.findByRole('button', { name: '展开浏览器侧栏' });
+    // 晚到的落库值（false）到达——不得把用户刚折叠的侧栏强行展开
+    await act(async () => {
+      resolveSettings(mkSettings({ sidebarCollapsed: false }));
+    });
+    expect(screen.getByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
+  });
+
+  it('getSettings 拒绝 → 保持默认展开（初始态是体验性增强，不阻塞 chrome 骨架）', async () => {
+    getSettingsMock.mockRejectedValue(new Error('boot 早期通道未就绪'));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
   });
 });
 

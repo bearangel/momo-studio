@@ -193,7 +193,7 @@ function activateWs(): void {
 // =================================================================================
 
 describe('registerBrowserIpc 通道注册', () => {
-  it('12 通道（§3.6 表 11 通道 + updateSettings）全部注册，无多余通道', () => {
+  it('14 通道（§3.6 表 11 通道 + updateSettings + getSettings + clearBrowsingData）全部注册，无多余通道', () => {
     const expected = [
       'browser:getState',
       'browser:userNavigate',
@@ -207,6 +207,8 @@ describe('registerBrowserIpc 通道注册', () => {
       'browser:answerTrust',
       'browser:listDevServers',
       'browser:updateSettings',
+      'browser:getSettings',
+      'browser:clearBrowsingData',
     ];
     expect([...handlers.keys()].sort()).toEqual([...expected].sort());
   });
@@ -563,5 +565,66 @@ describe('browser:updateSettings 入参净化', () => {
     const res = await callIpc<{ ok: boolean }>('browser:updateSettings', 'ws-1', null);
     expect(res.ok).toBe(true);
     expect(store.read('ws-1').trust).toBe('ask');
+  });
+});
+
+// =================================================================================
+// browser:getSettings（T9 设置页读通道）
+// =================================================================================
+
+describe('browser:getSettings', () => {
+  it('未写过设置的 ws → 默认六字段（store.read 形态载荷锁）', async () => {
+    const s = await callIpc<Record<string, unknown>>('browser:getSettings', 'ws-fresh');
+    // toEqual 全量比对 = 字段集锁死（与 BrowserSettings 六字段一一对应）
+    expect(s).toEqual({
+      trust: 'ask',
+      evaluateEnabled: false,
+      blacklist: [],
+      whitelist: [],
+      sidebarCollapsed: false,
+      sidebarWidth: 380,
+    });
+  });
+
+  it('写入后读回反映落库值（与 updateSettings 往返闭环）', async () => {
+    await callIpc('browser:updateSettings', 'ws-1', {
+      trust: 'always',
+      evaluateEnabled: true,
+      whitelist: ['Good.COM:443'],
+      sidebarCollapsed: true,
+      sidebarWidth: 420,
+    });
+    const s = await callIpc<Record<string, unknown>>('browser:getSettings', 'ws-1');
+    expect(s).toEqual({
+      trust: 'always',
+      evaluateEnabled: true,
+      blacklist: [],
+      whitelist: ['good.com'], // 归一化：小写 + 去端口（真 store 写侧行为）
+      sidebarCollapsed: true,
+      sidebarWidth: 420,
+    });
+  });
+
+  it('非字符串 wsId → 中文错误拒绝', async () => {
+    await expect(callIpc('browser:getSettings', 42)).rejects.toThrow(
+      '参数 workspaceId 必须为字符串',
+    );
+  });
+});
+
+// =================================================================================
+// browser:clearBrowsingData（T9 设置页「清除浏览数据」）
+// =================================================================================
+
+describe('browser:clearBrowsingData', () => {
+  it('委托 manager.clearBrowsingData → factory.clearData(wsId)（不经接管门，不要求活跃 ws）', async () => {
+    await callIpc('browser:clearBrowsingData', 'ws-1');
+    expect(factory.clearData).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('非字符串 wsId → 中文错误拒绝', async () => {
+    await expect(callIpc('browser:clearBrowsingData', null)).rejects.toThrow(
+      '参数 workspaceId 必须为字符串',
+    );
   });
 });
