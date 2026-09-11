@@ -1,19 +1,14 @@
 # Spec #5 McpBrowser — Agent 浏览器自动化与实时预览
 
-**版本**：v0.1（draft，brainstorming 后落地）
+**版本**：v0.2（brainstorming 复审后重写——方向 A Electron 原生架构 + 单页共享模型 + 8 项硬伤修复）
 **日期**：2026-09-11
-**作者**：brainstorming session
-**状态**：brainstorming → spec → plan → SDD
+**状态**：spec approved → plan → SDD
 
 ## 0. 背景与动机
 
-Momo Studio 当前 `WebTools` 仅提供 `webfetch`（HTTP 抓取 → Markdown/text/html），**无 JS 渲染、无交互、无截图、无登录态**。前端 / UI 工程师使用 agent 编写前端代码时，需要「agent 写完代码 → 用户实时预览」的能力，这要求：
+Momo Studio 当前 `WebTools` 仅提供 `webfetch`（HTTP 抓取 → Markdown），**无 JS 渲染、无交互、无截图、无登录态**。前端 / UI 工程师使用 agent 编写前端代码时，需要「agent 写完代码 → 用户实时预览」的能力。
 
-1. **agent 能驱动真实浏览器**——渲染 SPA、点击登录按钮、提交表单、抓取 dev server 输出
-2. **用户能从 app 内看见浏览器**——前端工程师在 agent 写 Vue/React 代码时实时看到效果
-3. **登录态与跨调用状态保留**——cookie、localStorage、open tabs 不能每次工具调用都重置
-
-竞品参考：Claude Code Browser MCP（Puppeteer）/ Cline Browser / Cursor Browser。三者形态收敛：①Chromium 子进程 ②per-session 持久化 ③LLM 通过工具调用驱动 ④用户可选接管。本 spec 取其核心，按 Momo Studio 既有 ToolModule 架构与 v2.4 sandbox 边界落地。
+v0.1 曾设计为 puppeteer-core 外部 Chromium + BrowserView 嵌入。复审发现该方案存在实现级矛盾（Electron BrowserView 只能渲染 Electron 自带 Chromium，无法显示外部进程输出），且 Electron 30 已废弃 BrowserView。v0.2 改为 **Electron 原生架构**：WebContentsView 承载页面渲染（sidebar 真实像素）、session partition 提供 per-workspace 隔离与跨重启登录态、webContents API + 内建 CDP 子集承载 12 个 agent 工具。零新重依赖。
 
 ## 1. 目标与非目标
 
@@ -21,525 +16,473 @@ Momo Studio 当前 `WebTools` 仅提供 `webfetch`（HTTP 抓取 → Markdown/te
 
 | ID | 描述 |
 |---|---|
-| G1 | 11 个 BrowserTools 作为 ToolModule 接入既有工具注册中心（与 v1.5 24 工具同源架构） |
-| G2 | 每个 workspace 一个 Chromium 实例（puppeteer-core），per-session 持久化（cookie/login/tabs 跨 turn 保留） |
-| G3 | 主窗口右侧 BrowserView 嵌入真实 Chromium 渲染，用户可直接看到 agent 当前 page |
-| G4 | 工具调用与 sidebar 渲染共用同一 Chromium，无状态分裂；tabs 隔离 agent page vs user preview page |
-| G5 | 双预览模式：file:// 静态文件 + http://localhost:dev-server（agent 自动跑 vite/npm run dev 后探活） |
-| G6 | 首启信任卡 + 设置页「浏览器」分类；`browser_evaluate` 单独开关（默认关） |
-| G7 | 与 v2.4 sandbox 接缝明确：dev server 需要网络访问，沙箱默认禁网络，spec 明确两者边界 |
-| G8 | chromium crash 自动恢复 + warm pool 消首次启动延迟 |
+| G1 | 12 个 BrowserTools 作为 ToolModule 接入既有工具注册中心（与 v1.5 24 工具同源架构），**不改 ToolContext**（workspaceId 既有字段够用） |
+| G2 | per-workspace 浏览器隔离：`session.fromPartition('persist:browser-<workspaceId>')`——cookie/localStorage 隔离且**跨 app 重启持久**（登录态保留） |
+| G3 | sidebar = WebContentsView（Electron 原生），主窗口右侧真实像素渲染；可折叠/展开（per-workspace 记忆） |
+| G4 | **单页共享模型**：agent 工具与用户操作同一个「当前 page」；takeover 状态机仲裁并发；tabs 为双方共用 |
+| G5 | 双预览模式：file://（限定 workspace 目录内）+ http://localhost:dev-server（探活 + agent 从 shell banner 自取） |
+| G6 | 信任卡（立即失败 + 重试语义）+ 设置页「浏览器」分类；`browser_evaluate` 单独开关（默认关） |
+| G7 | 安全边界：file:// 目录限定 / target=_blank 收编为 tab / 下载一律取消 / webPreferences 硬化（sandbox + 隔离） |
+| G8 | 崩溃自愈：`render-process-gone` → reload + 通知；无需外部进程管理 |
 
 ### 1.2 非目标（Out of Scope）
 
-- ❌ **不做截图 OCR**——LLM 直接看 sidebar 即可（截图仅做存档与 chat 内嵌）
-- ❌ **不做 extensions**——无意义
-- ❌ **不做跨 workspace 共享 browser**——隔离原则
-- ❌ **不做 agent browser tool 编排层**（如 `browser_plan` 等高级工具）——agent 自决
-- ❌ **不做下载文件 quarantine**——v2.4 sandbox 已隔离 workspace 文件系统
-- ❌ **不做 cross-origin iframe 沙箱**——Chromium 内置同源策略
-- ❌ **不做 browser skill 机制**——不抽象层；工具已足够
-- ❌ **不做多浏览器支持**（Firefox / WebKit）——agent 场景不需要
-- ❌ **不做独立 IPC server 模式**（让 Claude Code / Cursor / Codex 等外部客户端连我们）——独立 spec 范畴（v2.7+）
-- ❌ **不做远端 MCP client**（连别人的 MCP server 取工具）——独立 spec 范畴
+- ❌ 外部 Chromium / puppeteer-core（v0.1 方案，已废弃）
+- ❌ 截图 OCR；extensions；跨 workspace 共享 browser；agent browser 编排层（`browser_plan` 类）
+- ❌ 下载文件保存（v1 一律取消；保存到 workspace 留后续版本）
+- ❌ 多浏览器（Firefox/WebKit）；MCP server 模式（我们当 server 让外部客户端连）；远端 MCP client——均独立 spec（v2.8+）
+- ❌ sidebar 页面内 DevTools（与 CDP 懒附加互斥，已知边界，见 §3.6）
 
-## 2. 架构
+## 2. 架构（Electron 原生）
 
 ### 2.1 分层
 
 ```
 Renderer（React, ESM）
-  ┌────────┬───────────────────────┬──────────────────────┐
-  │Activity│ Chat Column           │ Browser Sidebar      │
-  │ Bar    │ (existing, ~65%)      │ (BrowserView, ~35%) │
-  │        │                       │ + address bar        │
-  │        │  + input box          │ + tabs               │
-  │        │  + tool call cards    │ + takeover btn       │
-  │        │  + inline screenshots │ + dev server probe   │
-  └────────┴───────────────────────┴──────────────────────┘
-            ↑ IPC stream           ↑ BrowserView embed (CDP)
-─────────────────────────────────────────────────────────────
+  ┌────────┬────────────────────────┬───────────────────────┐
+  │Activity│ Chat Column            │ BrowserSidebar(chrome)│
+  │ Bar    │ (消息/工具卡/截图内嵌)  │ tabs/地址栏/探活/接管   │
+  │        │                        │ + 折叠钮 + 视图占位 div │
+  └────────┴────────────────────────┴───────────────────────┘
+              ↑ IPC (browser:*)        ↑ ResizeObserver 上报占位区 rect
+──────────────────────────────────────────────────────────────
 Main Process (CommonJS)
-  ┌──────────────────────────────────────────────────┐
-  │ BrowserTools implements ToolModule              │
-  │  - getDefs(): 11 LLMToolDef                     │
-  │  - execute(name, args, ctx) → BrowserSession    │
-  └──────────────────────┬───────────────────────────┘
-  ┌──────────────────────┴───────────────────────────┐
-  │ BrowserSessionService (per-workspace singleton)  │
-  │  - launch / dispose Chromium                    │
-  │  - tabs (agent page vs user page)                │
-  │  - takeover state machine                        │
-  │  - warm pool + idle cleanup                      │
-  │  - crash recovery                                │
-  └──────────────────────┬───────────────────────────┘
-                         ↓ child_process / CDP
-  ┌──────────────────────────────────────────────────┐
-  │ puppeteer-core  →  Chromium subprocess            │
-  │   (one per workspace, ~150MB, headless flag=true) │
-  └──────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────┐
+  │ BrowserTools implements ToolModule（12 工具）       │
+  │   信任门 / evaluate 门 / 委托 BrowserManager       │
+  └───────────────────────┬────────────────────────────┘
+  ┌───────────────────────┴────────────────────────────┐
+  │ BrowserManager（per-workspace 视图与状态）          │
+  │  - tabs: WebContentsView[]（共用 partition）        │
+  │  - takeover 状态机（agent ↔ user）                  │
+  │  - selector 解析（注入 JS）+ sendInputEvent         │
+  │  - a11y snapshot（debugger 懒附加 CDP）             │
+  │  - file:// 限定 / 域名策略 / popup 收编 / 下载取消   │
+  │  - workspace 切换：销毁视图 + URL 清单恢复          │
+  └───────────────────────┬────────────────────────────┘
+                          ↓ WebContentsView (Electron 内建 Chromium)
+  BrowserWindow.contentView.addChildView(view)——按占位区 rect setBounds
 ```
 
 ### 2.2 关键不变量
 
-1. **一个 workspace 一个 Chromium 实例**——不在主进程内（隔离崩溃 + 隔离内存）
-2. **agent 工具与 sidebar 共用同一 Chromium**——无状态分裂；agent 操作 → sidebar 自动反映
-3. **BrowserView 嵌入主窗口右侧**——sidebar 真实像素渲染（不是 iframe 静态卡片）
-4. **BrowserTools 是 ToolModule**——路由进既有 11 个工具的注册中心
-5. **ToolContext 扩展可选字段 `browserSession`**——向后兼容旧调用方（未注入时跳过守门）
-6. **tabs 隔离 agent / user page**——同一 context 不同 page，互不踩
-7. **生命周期绑定 workspace**——workspace 关闭销毁 Chromium（不持久跨 workspace）
+1. **零外部浏览器进程**——页面渲染 = Electron 自带 Chromium 的 WebContentsView；agent 工具与用户看到的是**同一个 webContents**
+2. **单页共享**——任一时刻一个「当前 tab」；agent navigate / 用户地址栏输入 / 用户点击页内，都作用于当前 tab；并发由 takeover 状态机仲裁
+3. **per-workspace partition**——`persist:browser-<workspaceId>`：cookie/storage 互不串、跨重启保留；视图销毁不销数据
+4. **任一时刻只有当前 workspace 的视图存活**（内存有界）；切走销毁 + URL 清单内存恢复
+5. **BrowserTools 不改 ToolContext**——workspaceId（既有）+ BrowserManager 单例（boot 注入，同 LspTools ensureManager 模式）
+6. **浏览器网络独立于 bash sandbox**——域名黑白名单（§6.2）是浏览器唯一网络策略层；与 v2.4 bwrap/Seatbelt 无耦合
+7. **sidebar chrome 属 renderer**（React），页面内容属 main（WebContentsView 叠加）——靠占位区 rect 同步 bounds
 
 ## 3. 组件
 
-### 3.1 BrowserTools（`electron/src/main/agent/tools/browser-tools.ts`）
+### 3.1 BrowserManager（`electron/src/main/browser/manager.ts`）
 
 ```typescript
-export class BrowserTools implements ToolModule {
-  getDefs(): LLMToolDef[];          // 11 个
-  handles(name: string): boolean;
-  async execute(name, args, ctx): Promise<string>;  // 路由到 BrowserSessionService
+/** 主进程单例；boot 时 init(store)；BrowserTools / IPC handlers 共用 */
+export class BrowserManager {
+  /** workspaceId → 活跃状态（仅当前 workspace 有条目） */
+  private active: ActiveWorkspace | null;
+  /** workspaceId → 切走时的 tab 清单（内存，app 退出即失；cookie 在 partition 不丢） */
+  private stashedTabs: Map<string, { urls: string[]; current: number }>;
+
+  /** 工具入口（12 个，全部先过信任门） */
+  navigate(workspaceId, url): Promise<{ url, title }>;
+  snapshot(workspaceId): Promise<string>;
+  screenshot(workspaceId, filename?): Promise<{ path }>;
+  click(workspaceId, selector): Promise<void>;
+  type(workspaceId, selector, text, submit?): Promise<void>;
+  pressKey(workspaceId, key): Promise<void>;
+  hover(workspaceId, selector): Promise<void>;
+  scroll(workspaceId, direction, amount?): Promise<void>;
+  evaluate(workspaceId, expression): Promise<unknown>;
+  consoleMessages(workspaceId): Promise<string[]>;
+  tabsAction(workspaceId, action, index?): Promise<TabInfo[]>;
+  closeBrowser(workspaceId): Promise<void>;
+
+  /** 生命周期（main index.ts / workspace 切换钩子调用） */
+  onWorkspaceActivated(workspaceId, workspaceDir): void;
+  onWorkspaceDeactivated(workspaceId): void;
+  setSidebarBounds(rect): void;          // renderer 占位区上报
+  disposeAll(): void;                     // before-quit
 }
+
+interface ActiveWorkspace {
+  workspaceId: string;
+  workspaceDir: string;
+  views: WebContentsView[];              // tabs；partition = persist:browser-<wsId>
+  current: number;                       // 当前 tab 下标
+  takeover: 'agent' | 'user';
+  consoleBuffer: Map<viewSerial, string[]>; // 每 tab 环形缓冲 last 50
+  trustGrantedThisSession: boolean;
+}
+
+export interface TabInfo { index: number; url: string; title: string }
 ```
 
-- 单实例，注册时调用 `buildToolRegistry(ctx)` 加入
-- `execute` 内根据 name 分发到 11 个具体函数
-- **不直接持有 BrowserSession 引用**——每次调用通过 ctx 拿（多 workspace 时隔离）
-- ToolContext 扩展字段：
-  ```typescript
-  interface ToolContext {
-    // ... 既有字段
-    /** v2.7 BrowserTools：当前 workspace 的 browser session handle。可选——未注入时跳过守门 */
-    browserSession?: BrowserSessionHandle;
-  }
-  ```
-
-### 3.2 BrowserSessionService（`electron/src/main/browser/session-service.ts`）
+**视图创建硬规则**（每 tab 一致）：
 
 ```typescript
-class BrowserSessionService {
-  private sessions = new Map<workspaceId, BrowserSession>();
-
-  async getOrLaunch(workspaceId: string): Promise<BrowserSession>;
-  async dispose(workspaceId: string): Promise<void>;
-  async disposeAll(): Promise<void>;  // app lifecycle
-
-  // 工具入口（被 BrowserTools.execute 调用）
-  async navigate(workspaceId, url): Promise<{ url, title }>;
-  async snapshot(workspaceId): Promise<string>;
-  async screenshot(workspaceId, filename?): Promise<{ path }>;
-  async click(workspaceId, selector): Promise<void>;
-  async type(workspaceId, selector, text, submit?): Promise<void>;
-  async pressKey(workspaceId, key): Promise<void>;
-  async hover(workspaceId, selector): Promise<void>;
-  async evaluate(workspaceId, expression): Promise<unknown>;
-  async consoleMessages(workspaceId): Promise<string[]>;
-  async tabsAction(workspaceId, action, index?): Promise<TabInfo[]>;
-  async close(workspaceId): Promise<void>;
-}
-
-class BrowserSession {
-  workspaceId: string;
-  chromium: ChildProcess;        // puppeteer.launch() 返回
-  /** agent 主 page（agent 工具导航的初始 tab；后续 browser_tabs open 可在此 context 创建新 tab） */
-  agentPage: Page;
-  /** user preview page（用户在 sidebar 操作的主 tab；同样支持 browser_tabs open 多 tab） */
-  userPreviewPage: Page;
-  /** tab 列表：agent context tab + user preview context tab 一并管理 */
-  tabs: TabInfo[];
-  takeoverState: 'agent' | 'user';
-  warmPoolTimer?: NodeJS.Timeout;
-}
-
-interface TabInfo {
-  index: number;
-  context: 'agent' | 'user-preview';
-  url: string;
-  title: string;
-}
-
-/** ToolContext 注入类型：BrowserTools.execute 通过该 handle 调用 SessionService */
-export interface BrowserSessionHandle {
-  workspaceId: string;
-  navigate(url: string): Promise<{ url: string; title: string }>;
-  snapshot(): Promise<string>;
-  screenshot(filename?: string): Promise<{ path: string }>;
-  click(selector: string): Promise<void>;
-  type(selector: string, text: string, submit?: boolean): Promise<void>;
-  pressKey(key: string): Promise<void>;
-  hover(selector: string): Promise<void>;
-  evaluate(expression: string): Promise<unknown>;
-  consoleMessages(): Promise<string[]>;
-  tabsAction(action: 'list' | 'open' | 'close' | 'switch', index?: number): Promise<TabInfo[] | void>;
-  close(): Promise<void>;
-}
+new WebContentsView({
+  webPreferences: {
+    session: session.fromPartition(`persist:browser-${workspaceId}`),
+    nodeIntegration: false,   // 硬化：绝不开
+    contextIsolation: true,
+    sandbox: true,
+    webSecurity: true,
+  },
+});
+view.webContents.setWindowOpenHandler((details) => {
+  openTab(details.url);                 // C6：target=_blank 收编为 tab
+  return { action: 'deny' };
+});
+session.on('will-download', (e) => {    // C7：下载一律取消
+  e.preventDefault();
+  pushNotice('下载已拦截（v1 不支持保存文件）');
+});
+view.webContents.on('render-process-gone', () => {   // G8
+  view.webContents.reload();
+  pushNotice('页面渲染进程崩溃，已自动重载');
+});
 ```
 
-**takeover 状态机**：
+### 3.2 takeover 状态机（单页仲裁）
 
 ```
-       user click in BrowserView
-   ┌────────────────────────────┐
-   ↓                            │
-agent ───────────────────────→ user
-   ↑                            │
-   └────── user clicks release ─┘
+                ┌── 用户点「接管」按钮（chrome 显式）
+                ├── 用户在地址栏输入 URL 并回车
+  agent ────────┼── 用户点击/键盘页内交互（before-input-event 检测）
+                └──────────────────────────────→ user
+  user ──── 用户点「释放」按钮 ─────────────────→ agent
 ```
 
-- `agent` 状态：agent 工具可正常调用
-- `user` 状态：agent 工具调用抛 `BrowserTakenOverError`；sidebar 顶栏显示 🟡「用户接管中」+ 「释放」按钮
-- 状态变化通过 IPC `browser:takeover-changed` 同步 sidebar
-- agent 工具调用期间 user-takeover 切换：当前调用立即 throw，下一次调用正常
+- `agent` 态：工具正常执行
+- `user` 态：任一 browser_* 工具立即抛 `BrowserTakenOverError`（信息含「等待用户释放」）
+- 切换经 IPC `browser:state`（统一状态推送）广播 sidebar
+- v1 不做自动回切（用户显式释放）；agent 收到错误自决等待/改道
 
-### 3.3 BrowserView 嵌入（renderer 侧）
+### 3.3 selector 引擎（`electron/src/main/browser/selector.ts`）
 
-`renderer/src/components/workspace/BrowserSidebar.tsx`：
+四种前缀（无前缀 = css）：
 
-- 占主窗口右侧 ~35%（Q7 B 锁定）
-- 顶部 chrome：tabs / address bar / 导航按钮 / 探活下拉 / takeover 状态徽标
-- 内容区：Electron `BrowserView` API（绑定到主进程 BrowserSession 的 BrowserWindow 上，CDP target 复用同一 Chromium）；不使用 `<webview>` 标签（与 BrowserView 二选一即可，避免双套绑定复杂度）
-- 探活下拉：监听常见 dev server 端口（5173/3000/8080/4200/8000），活的列出来一键跳转
-- screenshot 内嵌：浏览器工具返回 `{ path }` 后，chat 列渲染 `<img src="momo://..." />`
+| 写法 | 解析方式（注入页内 JS） |
+|---|---|
+| `.btn-primary` | `document.querySelector` |
+| `text=登录` | 遍历元素取 `textContent` 包含匹配（取首个可交互祖先） |
+| `xpath=//button[@type="submit"]` | `document.evaluate` |
+| `aria/[role="button"][name="提交"]` | role + accessible name 匹配 |
 
-**BrowserView vs iframe 决策**：
-- BrowserView：Electron 官方 API，真实 Chromium 渲染；性能好；可绑定 CDP target
-- iframe：renderer 进程内嵌，简单但仅能嵌 HTML；无法跨 context 通信
-- **采用 BrowserView**——渲染真实 Chromium 是核心价值
+解析结果 = `{ x, y, width, height, description }`（元素中心坐标 + 人读描述）：
+- click/hover → `sendInputEvent`（mousePressed/Released/moved，Chromium trusted 事件）
+- type → 元素中心 click 聚焦后 `sendInputEvent`（char 事件序列）+ 可选 Enter
+- scroll → CDP `Input.dispatchMouseEvent(type:'mouseWheel')`（不需 selector）
+- 未命中抛 `BrowserSelectorError`，信息含「已匹配 0 个 + 页面可交互元素前 5 个提示」
 
-### 3.4 IPC 通道
+**内部 executeJavaScript 不受 evaluate 开关约束**——开关只门 `browser_evaluate` 工具（任意 JS 结果返回给 LLM）；selector 解析是内部固定脚本（返回坐标，不回传任意数据）。此区分写入实现注释。
+
+### 3.4 snapshot（a11y 树，`debugger` 懒附加）
+
+```
+调用时：webContents.debugger.attach('1.3')
+      → sendCommand('Accessibility.getFullAXTree')
+      → 格式化为 selector 提示行
+      → detach()（用完即还，避免与用户开 DevTools 长期互斥）
+```
+
+输出格式（I3：给 LLM 可直接复制进 click 的提示）：
+
+```
+- button "登录"  → text=登录
+- textbox "邮箱" placeholder="you@example.com"  → css:[placeholder="you@example.com"]
+- link "注册账号"  → text=注册账号
+- heading "登录到控制台"
+- image "验证码"  → css:img[alt="验证码"]
+```
+
+### 3.5 BrowserSidebar（renderer chrome，`renderer/src/components/workspace/BrowserSidebar.tsx`）
+
+- 布局：右侧栏 = **chrome 条（tabs + 地址栏 + 导航 + 探活下拉 + 接管徽标 + 折叠钮）** + **视图占位 div**（WebContentsView 由 main 叠加在此区域）
+- 占位区同步：`ResizeObserver` + window resize → `getBoundingClientRect()` → IPC `browser:setSidebarBounds`（main 换算 DPR 后 `view.setBounds`）
+- 折叠/展开（I2）：折叠时只留竖条图标按钮；状态 per-workspace 记忆（migration 字段）；折叠时 main 销毁视图（省内存）
+- 订阅 `browser:state`（统一推送：tabs / 当前 url+title / takeover / trust 状态）驱动 chrome 渲染
+
+### 3.6 IPC 通道
 
 | 通道 | 方向 | 用途 |
 |---|---|---|
-| `browser:listActiveDevServers` | renderer→main | sidebar 探活查询 |
-| `browser:getState` | renderer→main | sidebar 启动时同步状态 |
-| `browser:userNavigate` | renderer→main | 用户在 address bar 输入 URL |
-| `browser:userTakeover` | renderer→main | 用户主动接管 |
-| `browser:releaseTakeover` | renderer→main | 用户释放 |
-| `browser:closeTab` | renderer→main | 关闭 tab |
-| `browser:takeover-changed` | main→renderer | 状态变化广播 |
-| `browser:navigated` | main→renderer | agent 导航完成广播 |
-| `browser:urlChanged` | main→renderer | URL/title 实时同步 |
+| `browser:getState` | r→m | sidebar 挂载时拉全量状态 |
+| `browser:userNavigate` | r→m | 地址栏回车（隐式接管，§3.2） |
+| `browser:takeover` / `browser:releaseTakeover` | r→m | 显式接管/释放 |
+| `browser:openTab` / `browser:closeTab` / `browser:switchTab` | r→m | tabs 管理 |
+| `browser:setSidebarBounds` | r→m | 占位区 rect 上报（DPR 换算在 main） |
+| `browser:setSidebarCollapsed` | r→m | 折叠态变更（联动视图销毁/重建 + 落库） |
+| `browser:answerTrust` | r→m | 信任卡应答（session / always / deny） |
+| `browser:listDevServers` | r→m | 探活查询（5173/3000/8080/4200/8000） |
+| `browser:state` | m→r | 统一状态推送（tabs/url/title/takeover/trust） |
+| `browser:notice` | m→r | 非模态提示（崩溃重载 / 下载拦截 / 权限请求） |
 
-注：**agent 调用 BrowserTools 不走 IPC**——同进程内函数调用；只有 sidebar 主动行为 + 状态广播走 IPC。
+### 3.7 与既有系统的接缝
 
-## 4. 工具定义（11 个）
+- **工具注册**：`buildToolRegistry` 加 `new BrowserTools()`（无条件注册；信任门在 execute 内）
+- **信任卡**：`browser:notice` 携带 `kind: 'trust-request'`，renderer 弹 SandboxNotice 同款右下角卡
+- **dev server**：`bash` 起的 server 在 v2.4 沙箱内跑（沙箱需开网络——既有设置，不改）；浏览器连 localhost 与沙箱无关（C4：无耦合）
+- **v2.5 账本**：browser 工具不改文件，不记账；screenshot 落 userData 不入账本
+- **审计**：browser_* 全部走既有 tool-call 审计（自动，无特判）
 
-### 4.1 工具列表
+## 4. 工具定义（12 个）
 
-| # | 工具名 | 输入 schema | 输出 | 备注 |
+| # | 工具 | 输入 | 输出 | 备注 |
 |---|---|---|---|---|
-| 1 | `browser_navigate` | `{ url: string }` | `{ url, title }` | 跳 URL 到 agent page |
-| 2 | `browser_snapshot` | - | a11y 树文本（结构化） | LLM 决策首选 |
-| 3 | `browser_screenshot` | `{ filename?: string }` | `{ path: string }` | 落 userData，chat 内嵌 |
-| 4 | `browser_click` | `{ selector: string }` | `{ ok: true }` | selector 语法见下 |
-| 5 | `browser_type` | `{ selector, text, submit?: boolean }` | `{ ok: true }` | submit=true 按 Enter |
-| 6 | `browser_press_key` | `{ key: string }` | `{ ok: true }` | Enter/Tab/Escape/ArrowUp 等 |
-| 7 | `browser_hover` | `{ selector: string }` | `{ ok: true }` | 触发 hover 菜单 |
-| 8 | `browser_evaluate` | `{ expression: string }` | JSON 序列化结果 | **evaluate 设置默认关** |
-| 9 | `browser_console_messages` | - | 文本块（last 50 条） | 控制台日志 |
-| 10 | `browser_tabs` | `{ action: 'list'\|'open'\|'close'\|'switch', index?: number }` | tab list / `{ ok }` | 多 page 管理 |
-| 11 | `browser_close` | - | `{ ok: true }` | 销毁整个 workspace browser |
+| 1 | `browser_navigate` | `{ url }` | `{ url, title }` | file:// 限 workspace 内（§6.3）；完成后即回，页面加载等待由 loadURL 语义保证 |
+| 2 | `browser_snapshot` | - | a11y 行列表（含 selector 提示） | LLM 决策首选；debugger 懒附加 |
+| 3 | `browser_screenshot` | `{ filename? }` | `{ path }` | `capturePage` → PNG 落 `<userData>/browser-screenshots/<wsId>/`；renderer 经自定义协议 `browser-shot://` 渲染 |
+| 4 | `browser_click` | `{ selector }` | `{ ok }` | §3.3 四种 selector |
+| 5 | `browser_type` | `{ selector, text, submit? }` | `{ ok }` | submit=true 末尾补 Enter |
+| 6 | `browser_press_key` | `{ key }` | `{ ok }` | Enter/Tab/Escape/PageDown/ArrowUp… |
+| 7 | `browser_hover` | `{ selector }` | `{ ok }` | mouseMoved 至元素中心 |
+| 8 | `browser_scroll` | `{ direction: 'up'\|'down', amount?: number }` | `{ ok }` | mouseWheel；amount 默认 3 滚轮格（约 300px）；长页阅读高频动作（I4） |
+| 9 | `browser_evaluate` | `{ expression }` | JSON 序列化结果 | **设置默认关**（§6.2） |
+| 10 | `browser_console_messages` | - | 最近 50 条文本 | 每 tab 环形缓冲 |
+| 11 | `browser_tabs` | `{ action: 'list'\|'open'\|'close'\|'switch', index?, url? }` | TabInfo[] | open 携带 url；close 当前 tab 且为唯一 tab 时视同 closeBrowser |
+| 12 | `browser_close` | - | `{ ok }` | 销毁当前 workspace 全部视图（partition 数据保留） |
 
-### 4.2 selector 语法
-
-支持四种前缀（与 puppeteer-core 一致）：
-- `css:.btn-primary` — CSS selector（默认，无前缀）
-- `text=Login` — 文本匹配
-- `xpath://button[@type="submit"]` — XPath
-- `aria/[role="button"]` — ARIA selector
-
-无前缀默认按 CSS 解析。错误路径：selector 不匹配抛 `BrowserSelectorError`，含「已匹配元素 0 个」+ 临近元素提示。
-
-### 4.3 snapshot 输出格式（a11y 树）
-
-```
-[ref=0] <button> "Login" (primary, role=button)
-[ref=1] <input type="email" placeholder="Email">
-[ref=2] <input type="password" placeholder="Password">
-[ref=3] <a href="/signup"> "Sign up"
-[ref=4] <div role="alert"> "Invalid credentials"
-```
-
-LLM 可直接按 `[ref=N]` 或文本匹配定位；与 puppeteer-core `page.accessibility.snapshot()` 输出对齐。
+工具描述文案（LLM 视角）明确：navigate 适用于 http(s) 与 workspace 内 file://；阅读长页面用 scroll + snapshot 组合。
 
 ## 5. 数据流（关键链路）
 
-### 5.1 agent 调用 browser_navigate
+### 5.1 agent 调 browser_navigate（核心：用户实时看到）
 
 ```
-1. LLM 决定调用 browser_navigate，tool_use 携带 { url: 'http://localhost:5173' }
-2. runtime-entry.executeTool(name, args, ctx)
-3. tools registry 路由到 BrowserTools
-4. BrowserTools.execute 校验 args → 调 BrowserSessionService.navigate(ctx.workspaceId, url)
-5. SessionService.getOrLaunch(workspaceId) → 若无 session，启动 Chromium（~1.5s）
-6. session.agentPage.goto(url, { timeout: 20000 })
-7. 提取 url + title 返回
-8. session 触发 'browser:navigated' IPC 事件（携带 url + title）
-9. renderer BrowserSidebar 监听 → 更新 address bar + tabs 状态
-10. BrowserView 自动反映（CDP target 同一 page）
-11. BrowserTools.execute 返回 `{ url, title }` 给 agent
+1. LLM tool_use browser_navigate { url: 'http://localhost:5173' }
+2. BrowserTools.execute → 信任门 → BrowserManager.navigate(wsId, url)
+3. 协议检查：http(s) → 域名策略；file:// → workspace 目录断言（§6.3）
+4. current view webContents.loadURL(url)（等待 did-finish-load / did-fail-load）
+5. pushState（tabs/url/title）→ renderer chrome 更新地址栏
+   （WebContentsView 本身就在渲染——用户已实时看到新页面）
+6. 返回 { url, title } 给 agent
 ```
 
-### 5.2 agent 调用 browser_evaluate（evaluate 默认关场景）
+### 5.2 信任门（C5：立即失败 + 重试）
 
 ```
-1. agent tool_use browser_evaluate { expression: 'document.title' }
-2. BrowserTools.execute 检查 settings.browserEvaluateEnabled
-3. false → throw EvaluateDisabledError('browser_evaluate 已被设置禁用')
-4. agent 收到错误消息，自决调整 plan（用 snapshot 替代或要求用户开权限）
+1. 工具入口查 workspace 信任设置
+2. 'deny' → throw BrowserDeniedError
+3. 'ask' 且本会话未授 → 推 browser:notice(kind:'trust-request') 弹卡
+   + throw BrowserNotTrustedError('已请求浏览器权限，请在右下角卡片授权后重试')
+4. agent 收到错误 → 文本告知用户/等待 → 用户授权 → agent 重试同工具 → 通过
+5. 'always' 或本会话已授 → 放行
 ```
 
-### 5.3 用户在 sidebar 操作
+无 pending Promise、无工具级等待——与 bash strict 拒绝同构。
+
+### 5.3 用户接管与释放
 
 ```
-1. 用户在 address bar 输入 http://localhost:5174，按 Enter
-2. BrowserSidebar 触发 'browser:userNavigate' IPC
-3. SessionService 接 takeoverState = 'user'（标记接管）
-4. session.userPreviewPage.goto(url)
-5. 触发 'browser:takeover-changed' IPC（state='user'）
-6. sidebar chrome 顶栏显示 🟡「用户接管中」+ 「释放」按钮
-7. agent 此时调用任何 browser_* 抛 BrowserTakenOverError
-8. 用户点「释放」→ takeoverState = 'agent'，广播
+接管三入口（§3.2）→ takeover='user' → pushState
+  agent 此后任一 browser_* → BrowserTakenOverError（信息含「用户已接管，等待释放」）
+释放按钮 → takeover='agent' → pushState → agent 可重试
 ```
 
-### 5.4 dev server URL 探活
+### 5.4 dev server 探活
 
 ```
-1. agent bash 后台启动 `npm run dev`
-2. SessionService 监听端口 5173/3000/8080/4200/8000 变化
-3. 5173 端口 accept 连接 → SessionService 标记 dev-server-detected
-4. 触发 'browser:devServerDetected' IPC { url: 'http://localhost:5173' }
-5. sidebar 探活下拉出现 "http://localhost:5173 (vite)" 选项
-6. 用户点击 → SessionService.userPreviewPage.goto(url)
+sidebar 探活下拉打开 → IPC browser:listDevServers
+→ main 对 [5173,3000,8080,4200,8000] net.connect 试连（~100ms 超时）
+→ 返回存活清单 [{port, url}] → 下拉渲染，点击即 userNavigate
 ```
 
-agent 也可从 shell 输出解析 URL banner（vite 打印 `➜ Local: http://localhost:5173/`）—— 两条路径互不冲突。
+agent 侧无需代码：bash 输出的 vite banner 由 LLM 阅读后自行 navigate（零实现成本）。
 
-### 5.5 Chromium crash 恢复
-
-```
-1. puppeteer-core 'disconnect' 事件触发（chromium 子进程退出）
-2. SessionService 标记 session.crashed = true
-3. dispose 当前 session 资源
-4. 触发 'browser:crashed' IPC 事件
-5. renderer 显示右下角通知卡「浏览器已崩溃，正在恢复...」
-6. 后台异步 restart Chromium
-7. 成功后触发 'browser:recovered' IPC
-8. 通知卡消失；session 继续可用；用户当前 tab 已丢失（边界明确）
-```
-
-**边界**：crash 恢复不保留用户当前 page state；agent 转录历史不受影响（不入 message_events）。
-
-## 6. 权限模型
-
-### 6.1 首启信任卡（右下角非模态）
-
-- 触发时机：workspace 内首次调用 `browser_*` 任意工具
-- UI 与 SandboxNotice / ResumeNotice / UpgradeNotice 同款基建
-- 三选项：
-  - 「本次会话允许」——本次会话 agent 可用 browser；会话结束失效
-  - 「永久允许」——写 `workspace_settings.trust_browser = 'always'`；后续该 workspace 无需再确认
-  - 「取消」——抛 `BrowserNotTrustedError`；agent 收到后告知用户
-
-### 6.2 设置页「浏览器」分类
-
-与「安全沙箱」分类并列。结构：
+### 5.5 workspace 切换（I1）
 
 ```
-分类：浏览器
-  - 信任级别（单选）：
-      ○ 每次询问（默认）
-      ○ 永久允许
-      ○ 拒绝
-  - 域名策略（白名单/黑名单，参考 webfetch 的 SSRF 防线）
-      - 白名单（每行一个域名，留空 = 全部允许）
-      - 黑名单（每行一个域名，命中直接拒绝）
-  - browser_evaluate 单独开关（默认关）
-  - 闲置超时（默认 5 分钟不销毁，可调 aggressive）
-  - 按钮：重新连接 / 立即关闭
+切走：onWorkspaceDeactivated(wsId)
+  → stashedTabs.set(wsId, { urls: tabs.map(url), current })
+  → 销毁全部 views（partition 落盘数据不动）
+切回：onWorkspaceActivated(wsId)
+  → 有 stash：按 urls 重建 views + loadURL + 恢复 current tab
+  → 无 stash（首次/重启后）：空状态（地址栏引导）
+内存不变量：任一时刻仅当前 workspace 的 views 存活
 ```
 
-### 6.3 与 v2.4 sandbox 的接缝
+### 5.6 页面崩溃自愈
 
-dev server 需要网络访问，v2.4 sandbox 默认禁网络。spec 明确：
+```
+view.webContents 'render-process-gone' → reload() + browser:notice('页面崩溃已重载')
+（tab URL 不变；SPA 内存态丢失属正常预期）
+```
 
-| 场景 | 沙箱网络 | browser_* 工具 | 说明 |
-|---|---|---|---|
-| agent bash `npm install` | 需开网络 | 不可用（agent 没起 browser） | 用户在 sandbox 设置中开网络 |
-| agent bash `npm run dev`（后台） | 需开网络 | 可用 | dev server 在沙箱内运行 |
-| agent browser_navigate('http://localhost:5173') | 需开网络 | 可用 | puppeteer-core 经 sandbox 内 localhost |
-| agent browser_navigate('https://github.com') | 需开网络 | 可用 | 走沙箱出网策略 |
+## 6. 权限与安全
 
-**接缝规则**：
-- browser_* 工具的网络策略完全跟随 sandbox 设置（不单独管理）
-- spec 明确：若 sandbox 禁网，agent 调 `browser_navigate('https://...')` 失败时返回 `BrowserNetworkError('sandbox 网络已禁用')`，错误信息含「设置 → 安全沙箱 → 网络」指引
-- spec **不**为 browser_* 单独加 sandbox setting；保持单一网络策略源
+### 6.1 信任模型（C5 语义）
+
+| 设置值 | 行为 |
+|---|---|
+| `ask`（默认） | 首次调用：弹卡 + **立即失败**（BrowserNotTrustedError）；「本次会话允许」→ 会话内放行；「永久允许」→ 落库 `always`；「取消」→ 保持 ask，本次仍失败 |
+| `always` | 直接放行 |
+| `deny` | 直接 BrowserDeniedError（含设置指引） |
+
+### 6.2 设置页「浏览器」分类（与「安全沙箱」并列）
+
+```
+- 信任级别单选：每次询问（默认）/ 永久允许 / 拒绝
+- 域名策略：白名单（空=全放行）/ 黑名单（命中即拒）——浏览器唯一网络策略层（C4）
+- browser_evaluate 开关（默认关）
+- 侧栏默认宽度 + 默认折叠态
+```
+
+### 6.3 file:// 限定（C3，硬安全边界）
+
+- `browser_navigate('file://...')` 与 `browser_tabs open` 的 file:// URL：
+  - 解析为绝对路径 → 复用 workspace 目录断言（与 `wsFs.assertInWorkspace` 同源规则：拒 `..` 越界、拒 symlink 逃逸）
+  - 越界 → `BrowserFileAccessError('file:// 仅限 workspace 目录内')`
+- http(s) 默认放行 localhost（dev server 前提），受 §6.2 域名策略约束
+- 其余协议（ftp/about:blank 之外的 chrome:// 等）一律拒绝
+
+### 6.4 其余硬化（C6/C7）
+
+- popup/window.open → `setWindowOpenHandler` deny + 收编新 tab（不产生游离 OS 窗口）
+- 下载 → `will-download` preventDefault + notice（v1 不保存文件）
+- webPreferences：`nodeIntegration:false` / `contextIsolation:true` / `sandbox:true` / `webSecurity:true`
 
 ## 7. 生命周期
 
-| 事件 | 触发 | 行为 |
-|---|---|---|
-| workspace 打开 | workspace store 激活 | 异步预热 BrowserSession（warm pool，~500ms） |
-| workspace 关闭 | workspace store 切换 / 关闭 | 同步 dispose Chromium（~200ms） |
-| workspace 闲置 5 分钟 | idle timer | session 保留（cookie/login 不丢）；aggressive 模式可设更短超时；超时后销毁（与 workspace 关闭等价：清 chromium + 清 tabs） |
-| agent 首次 navigate | session 首次工具调用 | Chromium 启动延迟 ~1.5s（warm pool 已消大头） |
-| chromium crash | disconnect 事件 | auto-restart + 通知卡（见 §5.5） |
-| app 退出 | before-quit hook | disposeAll 销毁全部 session |
-| session 已被关，agent 再次调用 | 任意工具 | 自动 re-launch session；agent 无感 |
+| 事件 | 行为 |
+|---|---|
+| app boot | `BrowserManager.init(store)`；不预建视图（懒创建，首次 navigate/打开 sidebar 时建） |
+| workspace 激活 | `onWorkspaceActivated`：有 stash 恢复 tabs；无则空态 |
+| workspace 切走 | `onWorkspaceDeactivated`：stash URL 清单 + 销毁视图 |
+| sidebar 折叠 | 销毁视图（等同临时切走；展开按当前 URL 重建） |
+| app 退出（before-quit） | `disposeAll`（partition 数据自动落盘，无显式 flush） |
+| 页面渲染进程崩溃 | §5.6 reload 自愈 |
+| `browser_close` 工具 | 销毁当前 workspace 视图 + 清 stash；下次调用重建 |
 
-### 7.1 Warm Pool 实现
-
-```
-workspace 打开时：
-  setTimeout 500ms → 异步启动 Chromium（不阻塞 UI）
-  启动完成 → 标记 session.warmed = true
-agent 首次工具调用：
-  session.warmed === true → 立即可用（无启动延迟）
-  session.warmed === false → 同步等待启动（最差 ~1.5s）
-```
-
-不设「永远 warm」全局池——workspace 是隔离单位，闲置 workspace 的 Chromium 自然释放（5 分钟 timer）。
+无 warm pool、无外部进程管理、无闲置 timer（视图随切换/折叠自然销毁）。
 
 ## 8. 错误处理
 
-| 错误 | 抛出类 | agent 可见消息 | UI 表现 |
+| 错误 | 类 | agent 可见信息 | UI |
 |---|---|---|---|
-| navigate 超时 | `BrowserTimeoutError` | `browser_navigate 超时（20s）` | sidebar 显示「导航超时」 |
-| selector not found | `BrowserSelectorError` | `选择器 "${selector}" 未匹配到元素` | 同上 |
-| 域名黑名单命中 | `BrowserBlockedError` | `域名 "${host}" 已被浏览器黑名单拦截` | sidebar 显示「拦截」 |
-| evaluate 关闭 | `EvaluateDisabledError` | `browser_evaluate 已被设置禁用` | 无 |
-| user-takeover 中 | `BrowserTakenOverError` | `当前浏览器被用户接管，agent 工具被阻塞` | sidebar 显示 🟡 接管状态 |
-| chromium crash | `BrowserCrashError` | `浏览器已崩溃，正在恢复...` | 通知卡显示 |
-| 网络被沙箱禁 | `BrowserNetworkError` | `sandbox 网络已禁用，请在 设置→安全沙箱 中开启` | 无 |
-| session dispose 中 | `BrowserDisposingError` | `浏览器正在关闭，请稍后重试` | sidebar 显示「关闭中」 |
-| navigate 非 http(s) | `BrowserProtocolError` | `浏览器仅支持 http(s) 协议` | 无 |
+| 信任未授 | `BrowserNotTrustedError` | `已请求浏览器权限，请在右下角卡片授权后重试` | 信任卡 |
+| 信任拒绝 | `BrowserDeniedError` | `浏览器已被设置禁用（设置→浏览器）` | — |
+| evaluate 关 | `EvaluateDisabledError` | `browser_evaluate 已被设置禁用` | — |
+| 用户接管中 | `BrowserTakenOverError` | `浏览器被用户接管，等待释放后重试` | 🟡 徽标 |
+| selector 未命中 | `BrowserSelectorError` | `选择器 "x" 未匹配元素；可交互元素前 5：…` | — |
+| file:// 越界 | `BrowserFileAccessError` | `file:// 仅限 workspace 目录内` | — |
+| 域名策略命中 | `BrowserDomainBlockedError` | `域名 "x" 被浏览器策略拦截` | — |
+| 协议不支持 | `BrowserProtocolError` | `仅支持 http(s) 与 workspace 内 file://` | — |
+| 导航失败 | `BrowserNavigationError` | `导航失败: <did-fail-load description>` | — |
+| 无活跃视图 | `BrowserNoViewError` | `浏览器未打开（先 browser_navigate）` | — |
 
-**错误恢复原则**：
-- 自动可恢复：timeout / selector miss / crash → agent 重试或自决
-- 需用户介入：blocked / evaluate disabled / network disabled → agent 告知用户
-- 状态变更：takeover / dispose → 一次性错误，下次调用正常
+错误恢复原则：全部可重试类错误（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。
 
 ## 9. 数据存储
 
-不新增数据库表。BrowserSession 完全内存状态（chromium / pages / takeover state），workspace 关闭即销毁。
-
-仅 `workspace_settings` 表新增 4 字段（migration v32）：
+migration v32（幂等，`workspace_settings` 加 6 列）：
 
 ```sql
-ALTER TABLE workspace_settings ADD COLUMN trust_browser TEXT DEFAULT 'ask';
-ALTER TABLE workspace_settings ADD COLUMN browser_evaluate_enabled INTEGER DEFAULT 0;
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_blacklist TEXT DEFAULT '[]';  -- JSON array
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_whitelist TEXT DEFAULT '[]';  -- JSON array, 空=全部允许
+ALTER TABLE workspace_settings ADD COLUMN trust_browser TEXT NOT NULL DEFAULT 'ask';
+ALTER TABLE workspace_settings ADD COLUMN browser_evaluate_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workspace_settings ADD COLUMN browser_domain_blacklist TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE workspace_settings ADD COLUMN browser_domain_whitelist TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL DEFAULT 380;
 ```
 
-迁移 v32：幂等 ALTER TABLE（SQLite 兼容）。不强制重置现有 workspace——`trust_browser` 默认 'ask' 触发首启卡。
+浏览器 cookie/storage 在 partition 目录（Electron 自管，不入 state.db）。tab 清单仅内存（重启丢失可接受；登录态不丢）。
 
 ## 10. 测试策略
 
-### 10.1 测试覆盖矩阵
+**分层事实**（诚实声明）：`electron/` vitest 跑在纯 Node（无 Electron runtime）——**视图/CDP/sendInputEvent 行为不可在该层直接测**。覆盖分三层：
 
-| 类别 | 用例 | mock 边界 |
+| 层 | 覆盖 | mock 边界 |
 |---|---|---|
-| BrowserTools.getDefs | 11 个工具定义齐全 + schema 校验 | 无 |
-| BrowserTools.execute 路由 | 11 个工具名分发正确 | BrowserSessionService mock |
-| BrowserSessionService | navigate / click / type / snapshot 等 11 个方法 | 真 puppeteer-core + 真 tmp SQLite |
-| selector 语法 | css / text= / xpath= / aria/ 四种 | 真 Chromium |
-| error path | timeout / selector miss / blocked / disabled / takeover / crash | 触发各 error 路径 |
-| ToolContext 扩展 | browserSession 未注入时跳过守门 | 无 |
-| IPC 双向 | userNavigate → 状态广播；agent 导航 → sidebar 更新 | IPC mock |
-| takeover 状态机 | agent → user → agent 三态切换 + agent 工具阻塞 | BrowserView 嵌入 mock |
-| warm pool | workspace 打开 → 预热；首次调用无延迟 | 计时器 mock |
-| crash recovery | disconnect → restart → 通知 | disconnect 模拟 |
-| Migration v32 | 4 字段新增 + 幂等性 | 真 DB |
-| sidebar 组件 | BrowserSidebar 渲染（chrome + tabs + address bar） | BrowserView mock |
-| 接线锁 | 摘 sidebar IPC 监听必红；摘 BrowserView 嵌入必红 | 双向变异 |
-| e2e | Playwright（root `tests/e2e/`）+ macOS 主机实测 | 真实 |
+| 单测（electron/tests/browser/） | 信任门全分支 / 域名策略 / **file:// 限定（含 .. 与 symlink 逃逸用例）** / takeover 状态机 / tab 注册表与 stash-restore / selector 解析器（前缀拆分+转义）/ snapshot 格式化器（fixture JSON→行）/ 错误类信息 / migration v32 | Electron API（WebContentsView/session/debugger）mock 在模块边界；store 真 SQLite |
+| e2e（tests/e2e/，Playwright 起 xvfb 真应用） | navigate→页面可见 / click/type 真交互 / snapshot 真输出 / tabs 开关切 / popup 收编 / 下载拦截 / 崩溃重载 / bounds 随窗口 resize 同步 | 全真实 |
+| macOS 主机验收 | §12.4 场景（Vue 项目全流程 / 登录态跨重启 / 接管往返） | 全真实 |
 
-### 10.2 关键测试纪律
-
-按 momo-test-rules：
-- **真实运行时形态**：fixture 必须用真 puppeteer-core + 真 tmp SQLite，不 mock Chromium 行为
-- **错误路径专项**：timeout / selector miss / blocked domain / evaluate disabled / user-takeover / crash 必须有专项测试
-- **mock 收窄到边界**：mock 收在 BrowserWindow / Electron BrowserView 边界；agent / session / chromium 全部真实
-- **接线锁**：摘 sidebar IPC 监听必红；摘 BrowserView 嵌入必红；摘 take-changed 广播必红
+接线锁（momo-test-rules）：摘 `browser:state` 推送必红；摘 bounds 上报必红（视图位置漂移）；摘 `setWindowOpenHandler` 必红（popup 用例）；摘 file:// 断言必红（越界用例）。
 
 ## 11. 验收标准（DoD）
 
-| # | 验收项 | 类型 |
+| # | 验收项 | 层 |
 |---|---|---|
-| 1 | 11 工具 schema + execute 路由 + ToolContext 透传 | 单测 |
-| 2 | per-workspace Chromium 启动/销毁生命周期 | 单测 + 集成 |
-| 3 | 11 个工具在真 Chromium 跑通（navigate / click / type / snapshot 等） | 集成 |
-| 4 | takeover 状态机 + agent 工具阻塞 | 单测 |
-| 5 | 首启信任卡 + 三选项 + 设置页同步 | 单测 + 视觉 |
-| 6 | evaluate 默认关 + 单独开关 | 单测 |
-| 7 | 与 v2.4 sandbox 网络策略接缝 | 集成 |
-| 8 | warm pool 预热 + 闲置不销毁 | 单测 |
-| 9 | crash recovery + 通知卡 | 集成 |
-| 10 | sidebar BrowserView 真实像素渲染 | 视觉 + 集成 |
-| 11 | dev server 探活 + address bar + tabs | 集成 |
-| 12 | 主机实测：Vue 项目跑通（agent 写 + dev server + preview） | e2e + macOS |
-| 13 | typecheck 双 Done；electron/renderer 全绿；build exit 0 | 门禁 |
-| 14 | README + engineering.md 条目 | docs |
+| 1 | 12 工具 schema + 路由 + 注册中心接线 | 单测 |
+| 2 | 信任门三分支 + 会话授权 + 立即失败语义 | 单测 |
+| 3 | file:// workspace 限定（含越界/逃逸） | 单测 |
+| 4 | 域名黑白名单 | 单测 |
+| 5 | takeover 状态机 + 三入口 + 工具阻塞 | 单测 |
+| 6 | tab 注册表 + workspace 切换 stash/restore | 单测 |
+| 7 | selector 四语法解析 + 未命中提示 | 单测 |
+| 8 | snapshot 格式化（selector 提示行） | 单测 |
+| 9 | migration v32 六列幂等 | 单测 |
+| 10 | IPC 全通道双端类型 + 状态推送 | 单测 |
+| 11 | sidebar chrome（tabs/地址栏/探活/接管/折叠）colocated | renderer 单测 |
+| 12 | 信任卡 + 设置页分类 | renderer 单测 |
+| 13 | navigate→可见 / click→真交互 / popup→tab / 下载拦截 / 崩溃重载 | e2e |
+| 14 | bounds resize 同步 | e2e |
+| 15 | Vue 项目全流程（agent 写 + dev server + sidebar 实时预览 + hot reload） | macOS 主机 |
+| 16 | 登录态跨重启（partition 持久） | macOS 主机 |
+| 17 | 接管往返（页内点击自动接管 / 释放恢复） | macOS 主机 |
+| 18 | typecheck 双 Done / 双 workspace 全绿 / build exit 0 | 门禁 |
+| 19 | README v2.7.0 + engineering.md 浏览器规则节 | docs |
 
 ## 12. 迁移与发布
 
-### 12.1 Migration 顺序
+### 12.1 Migration
 
-- migration v32：workspace_settings 加 4 字段（幂等）
-- 不强制重置；现有 workspace 默认 `trust_browser='ask'` 触发首启卡
-- migration v32 失败回滚策略：标准 SQLite 备份 + 重命名
+v32 六列（§9），幂等 ALTER；现有 workspace 默认 `ask` 触发信任卡。失败回滚走标准 SQLite 备份策略。
 
-### 12.2 发布步骤
+### 12.2 实施任务分组（11 task）
 
-1. 实施 11 task（按 writing-plans 阶段产出）
-2. task 1-3：BrowserSessionService + 11 tools + ToolContext 扩展
-3. task 4-6：sidebar + BrowserView 嵌入 + IPC
-4. task 7-9：信任卡 + 设置页 + evaluate 开关
-5. task 10：v2.4 sandbox 接缝 + warm pool + crash recovery
-6. task 11：四门验证 + README + engineering.md
-7. final review + merge
+- T1 基础：browser 模块骨架（errors + types + manager 核心：信任门/域名策略/file:// 限定，Electron API 边界注入）
+- T2 视图管理：WebContentsView 创建/销毁/tabs/bounds/硬化（setWindowOpenHandler、will-download、render-process-gone）+ workspace 激活切换 stash
+- T3 selector 引擎 + sendInputEvent 动作层（click/type/press_key/hover/scroll）
+- T4 snapshot：debugger 懒附加 + 格式化器
+- T5 BrowserTools 12 工具 defs + 路由 + 注册 + 门控（mock manager）
+- T6 migration v32 + settings 读写
+- T7 IPC 全通道 + preload + types.d.ts + 统一状态推送
+- T8 BrowserSidebar chrome（AddressBar/TabsBar/TakeoverIndicator/DevServerDropdown/折叠/占位上报）
+- T9 信任卡 + BrowserSettings 分类页
+- T10 workspace 钩子接线（boot init / 切换 / before-quit）+ dev server 探活
+- T11 e2e + 四门 + README/engineering.md
 
 ### 12.3 已知边界（明示）
 
-- session crash 不保留用户当前 page state；agent 转录历史不受影响
-- 跨 workspace 不共享 browser（隔离原则）
-- 多浏览器支持不做（agent 场景不需要）
-- screenshot 落 userData 不入版本控制（路径：`<userData>/browser-screenshots/<workspaceId>/<timestamp>.png`）；renderer 通过 `momo-screenshots://<workspaceId>/` 自定义协议读取（main 进程 protocol handler 拦截并返回文件字节，类比 `momo://` 既有方案）
+- sidebar 页面 DevTools 与 snapshot CDP 附加互斥（懒附加把窗口压到调用瞬间）
+- tab 清单重启即失（cookie/登录不丢）；SPA 内存态在切换/崩溃/重载后丢失
+- v1 不支持浏览器内下载保存
+- `about:blank` 之外的 chrome:// 等特型协议一律拒绝
+- 截图经 `browser-shot://` 自定义协议渲染（main 注册 handler 返回文件字节）
 
 ### 12.4 主机验收（macOS）
 
-- 前端工程师场景：agent 写 Vue todo app → npm run dev → sidebar 实时显示 → 用户在 sidebar 看到 vite hot reload 效果
-- dev server 网络：设置页开启 sandbox 网络后，agent 能 npm install + 启动 vite
-- takeover：用户点击 sidebar 中的按钮，agent 下次工具调用抛 BrowserTakenOverError
-- 信任卡：清空 workspace_settings 后重启，agent 调 browser_* 触发首启卡
-- evaluate：默认调用抛错；设置开启后正常返回结果
-- 多 workspace：workspace A 打开 google.com；切换到 B → 互不干扰；切回 A → google.com 仍在
+1. Vue 全流程：agent 脚手架 → npm install/dev（沙箱开网）→ agent navigate localhost:5173 → sidebar 实时显示 → 改代码 → hot reload 可见
+2. 登录态：sidebar 登录某站 → 重启 app → 重新 navigate → 仍登录（partition 持久）
+3. 接管：agent 长任务浏览中，用户点击页内 → 徽标变 🟡 → agent 下次工具报错 → 点释放 → agent 重试通过
+4. 信任卡：新 workspace 首调 → 弹卡失败 → 「永久允许」→ 重试通过 → 重启后免弹
+5. file:// 安全：agent 尝试 navigate workspace 外 file:// → 明确报错
+6. popup：agent 点 target=_blank → 新 tab 出现，无 OS 游离窗口
 
 ## 13. 风险与缓解
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| Chromium 子进程内存大（~150MB） | 长时间使用累积占用 | 闲置超时 + workspace 切换销毁；不预创建全局池 |
-| puppeteer-core 版本升级破坏 API | 工具调用失败 | 锁版本；测试覆盖 11 工具 schema 与返回值 |
-| BrowserView 与 sandbox 接缝漏 | dev server 跑不通 | spec §6.3 明确；task 10 专项验证 |
-| agent 操作与用户操作冲突 | 状态混乱 | takeover 状态机 + 状态指示器 |
-| chromium crash 频繁 | 体验差 | auto-restart + 通知卡；crash counter 上报 |
-| 11 工具 schema 漂移 | 旧 agent 误用 | 版本号字段（LLMToolDef 加 `version` 字段，可选） |
-| sidebar 嵌入与 Chat 列抢空间 | 1080p 屏局促 | 设置中可调 sidebar 宽度（min 280 / max 600 / default 380） |
+| WebContentsView bounds 与 React 布局漂移（DPR/resize 抖动） | 视图错位 | ResizeObserver + window resize 双触发上报；DPR 换算单点在 main；e2e resize 用例 |
+| Electron CDP 子集（Accessibility 域）在部分站输出空 | snapshot 无内容 | 格式化器对空树返回「页面无可访问元素，建议 screenshot」；e2e 覆盖真实站点 |
+| partition 磁盘累积（每 workspace 一份 profile） | 磁盘占用 | 设置页「清除浏览数据」（调 `session.clearStorageData`）——T9 附带 |
+| before-input-event 自动接管误触发（滚轮/拖拽选择） | 频繁误接管 | v1 只把「鼠标按下 + 键盘字符」计为接管信号；纯滚动/移动不触发 |
+| dev server 端口探活误报（已占用非 http 服务） | 下拉错误条目 | 试连后补发 HEAD 请求校验（非 2xx/3xx/4xx 不列出） |
+| 12 工具 schema 漂移 | 旧 agent 误用 | 工具描述内嵌版本语义；README 记录 |
 
-## 14. 后续路线（v2.7+）
+## 14. 后续路线（v2.8+）
 
-- 远端 MCP server 模式（让 Claude Code / Cursor / Codex 连我们）—— 独立 spec
-- 远端 MCP client（连别人的 MCP server）—— 独立 spec
-- screenshot OCR（视觉理解增强）—— 若 LLM 需要
-- browser skill 机制（高层抽象任务）—— 若有需求
+- 下载保存到 workspace（+ v2.5 账本联动）· 浏览器内查找（find-in-page）· 多窗口浮动视图
+- 远端 MCP server / client 模式（独立 spec）· screenshot 视觉理解增强
 
 ## 15. 参考
 
-- 既有 spec：`docs/specs/2026-09-10-task-resume-design.md`（v2.6 任务断点续跑）
-- v2.4 sandbox：`docs/specs/2026-09-10-shell-tools-os-sandbox-design.md`
-- 既有工具实现参考：`electron/src/main/agent/tools/lsp-tools.ts`（条件注册 + ToolModule）
-- ToolContext 定义：`electron/src/main/agent/tools/types.ts`
-- puppeteer-core 文档：`https://pptr.dev/`
-- Electron BrowserView：`https://www.electronjs.org/docs/latest/api/browser-view`
+- 既有 spec：v2.6 task-resume / v2.4 shell-tools-os-sandbox（沙箱边界——本 spec 与其**无**耦合，§2.2-6）
+- 工具模块范式：`electron/src/main/agent/tools/lsp-tools.ts`（单例 manager 注入模式）
+- Electron WebContentsView / session partitions / webContents.debugger 官方文档
+- v0.1 → v0.2 变更记录：外部 Chromium+puppeteer-core → Electron 原生；双页隔离 → 单页共享+takeover；BrowserView → WebContentsView；+C3/C4/C5/C6/C7/I1/I2/I3/I4 修复（11→12 工具）
