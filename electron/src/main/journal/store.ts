@@ -17,6 +17,8 @@ export interface JournalStore {
   listByTask(workspaceId: string, taskId: string): JournalEntry[];
   listByStream(workspaceId: string, streamSessionId: string): JournalEntry[];
   listByPath(workspaceId: string, path: string): JournalEntry[];
+  /** 全 workspace 条目（created_at 升序）——探测器 taskId=null 对账基线（全量 path 并集） */
+  listByWorkspace(workspaceId: string): JournalEntry[];
   /** 按 id 批量取条目（撤销核心按 id 定位）；不在该 workspace 或不存在的 id 自然落空 */
   listByIds(workspaceId: string, ids: string[]): JournalEntry[];
   /** 删除目标任务组（taskId 匹配；null = 快速会话组）中 created_at < olderThan 的条目，返回删除行数 */
@@ -107,6 +109,11 @@ export function createJournalStore(db: DB): JournalStore {
     WHERE workspace_id = ? AND path = ?
     ORDER BY created_at ASC, id ASC
   `);
+  const stmtListByWorkspace = db.prepare(`
+    SELECT * FROM journal_entries
+    WHERE workspace_id = ?
+    ORDER BY created_at ASC, id ASC
+  `);
   // null taskId 走 IS NULL 分支（task_id = NULL 永不命中），非 null 走等值分支
   const stmtDeleteGroup = db.prepare(`
     DELETE FROM journal_entries
@@ -149,6 +156,9 @@ export function createJournalStore(db: DB): JournalStore {
     },
     listByPath(workspaceId: string, filePath: string): JournalEntry[] {
       return (stmtListByPath.all(workspaceId, filePath) as JournalEntryRow[]).map(rowToEntry);
+    },
+    listByWorkspace(workspaceId: string): JournalEntry[] {
+      return (stmtListByWorkspace.all(workspaceId) as JournalEntryRow[]).map(rowToEntry);
     },
     listByIds(workspaceId: string, ids: string[]): JournalEntry[] {
       if (ids.length === 0) return [];

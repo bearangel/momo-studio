@@ -100,6 +100,19 @@ describe('journal store：条目 CRUD', () => {
     expect(store.countAll()).toBe(4);
   });
 
+  it('listByWorkspace：全 workspace 条目按 created_at 升序；跨 workspace 互斥（探测器 taskId=null 对账基线）', () => {
+    const store = createJournalStore(getDb());
+    const a1 = entry({ createdAt: 200 });
+    const a2 = entry({ taskId: 'T-2', path: 'src/b.ts', createdAt: 100 });
+    const a3 = entry({ taskId: null, sessionId: null, createdAt: 150 });
+    const b1 = entry({ workspaceId: 'ws-B', taskId: null, sessionId: null, createdAt: 50 });
+    for (const e of [a1, a2, a3, b1]) store.insert(e);
+
+    expect(store.listByWorkspace('ws-A')).toEqual([a2, a3, a1]);
+    expect(store.listByWorkspace('ws-B')).toEqual([b1]);
+    expect(store.listByWorkspace('ws-C')).toEqual([]);
+  });
+
   it('错误路径：非法 op 被 CHECK 约束拒绝，不残留', () => {
     const store = createJournalStore(getDb());
     const bad = entry();
