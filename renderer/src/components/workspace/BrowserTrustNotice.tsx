@@ -8,9 +8,10 @@
 //   - 「取消」→ answerTrust('deny')（无操作，工具侧保持 NotTrusted 失败语义）
 // 应答成功卡片即消散；失败保留卡片 + 错误行（ResumeNotice 同语义，不静默吞）。
 //
-// 挂载点 App 层（与 SandboxNotice/ResumeNotice 一致）：通知推送无 workspaceId
-// 载荷，manager 只对单一活跃 workspace 发起——应答目标取 workspace store 的当前
-// 激活 workspace（无激活时渲染 null，应答无目标）。
+// 挂载点 App 层（与 SandboxNotice/ResumeNotice 一致）。v2.7 review M7 起信任卡路由
+// 用 notice.workspaceId（载荷携带）替代 useWorkspaceStore 的当前激活 workspace 推导——
+// 后者在用户切 ws / tool 跨 ws 上下文场景下脆弱：用户切到 B ws，agent 在 A ws 首调工具
+// 推出的卡片可能错误路由到 B ws；载荷携带保证「卡的目标 = notice 的发送方 ws」。
 import { useEffect, useState } from 'react';
 import { ShieldQuestion } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -19,10 +20,11 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 
 export function BrowserTrustNotice() {
-  const workspace = useWorkspaceStore((s) => s.getActive());
   const [notice, setNotice] = useState<BrowserNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 防御用：notice.workspaceId 缺失时（极旧版本 main 推）回退到当前活跃 ws——空串表示无目标
+  const activeWorkspace = useWorkspaceStore((s) => s.getActive());
 
   // 订阅统一通知推送（卸载清理）；只消费 trust-request，其余 kind 忽略
   useEffect(() => {
@@ -32,14 +34,16 @@ export function BrowserTrustNotice() {
     return unsubscribe;
   }, []);
 
-  if (!notice || !workspace) return null;
+  // 应答目标 = notice.workspaceId（M7）；无载荷时回退活跃 ws，仍无则不渲染（应答无目标）
+  const targetWsId = notice?.workspaceId || activeWorkspace?.id;
+  if (!notice || !targetWsId) return null;
 
   const answer = async (value: BrowserTrustAnswer): Promise<void> => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      await ipc.browser.answerTrust(workspace.id, value);
+      await ipc.browser.answerTrust(targetWsId, value);
       setNotice(null); // 应答成功 → 卡片消散
     } catch (err) {
       // 失败保留卡片 + 错误行——决策未完成，用户可重试或换一个应答

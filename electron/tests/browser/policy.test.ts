@@ -64,9 +64,13 @@ describe('信任门', () => {
         pushNotice,
       );
       expect(() => p.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-      // 关键顺序契约：notice 必须在抛错前发出（一次）
+      // 关键顺序契约：notice 必须在抛错前发出（一次）；载荷携带 wsId（M7 路由）
       expect(pushNotice).toHaveBeenCalledTimes(1);
-      expect(pushNotice).toHaveBeenCalledWith('trust-request', expect.stringContaining('agent 请求'));
+      expect(pushNotice).toHaveBeenCalledWith(
+        'trust-request',
+        expect.stringContaining('agent 请求'),
+        'ws1',
+      );
     });
 
     it('ask 且本会话已授权 → 不推 notice（已授权路径不应再骚扰用户）', () => {

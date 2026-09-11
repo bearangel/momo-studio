@@ -79,7 +79,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
   it('kind=trust-request → 渲染卡片（标题 + 推送 text + 三按钮）', () => {
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: 'agent 请求访问 example.com' });
+    push({ kind: 'trust-request', text: 'agent 请求访问 example.com', workspaceId: 'w1' });
     expect(screen.getByTestId('browser-trust-notice')).toBeInTheDocument();
     expect(screen.getByText('agent 请求使用浏览器')).toBeInTheDocument();
     expect(screen.getByText('agent 请求访问 example.com')).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
   it('是非模态卡片（fixed 定位、非遮罩）', () => {
     const { push } = armOnBrowserNotice();
     const { container } = render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     const root = container.firstChild as HTMLElement;
     expect(root.className).toMatch(/fixed/);
     expect(root.className).toMatch(/right-/);
@@ -102,14 +102,14 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
   it('其他 kind（crash-reloaded）→ 不渲染', () => {
     const { push } = armOnBrowserNotice();
     const { container } = render(<BrowserTrustNotice />);
-    push({ kind: 'crash-reloaded', text: '页面渲染进程崩溃，已自动重载' });
+    push({ kind: 'crash-reloaded', text: '页面渲染进程崩溃，已自动重载', workspaceId: 'w1' });
     expect(container.firstChild).toBeNull();
   });
 
   it('「本次会话允许」→ answerTrust(wsId, session) + 卡片消散', async () => {
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '本次会话允许' }));
     await waitFor(() => expect(answerTrustMock).toHaveBeenCalledWith('w1', 'session'));
     await waitFor(() => expect(screen.queryByTestId('browser-trust-notice')).toBeNull());
@@ -118,7 +118,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
   it('「永久允许」→ answerTrust(wsId, always) + 卡片消散', async () => {
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '永久允许' }));
     await waitFor(() => expect(answerTrustMock).toHaveBeenCalledWith('w1', 'always'));
     await waitFor(() => expect(screen.queryByTestId('browser-trust-notice')).toBeNull());
@@ -127,7 +127,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
   it('「取消」→ answerTrust(wsId, deny) + 卡片消散', async () => {
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     await waitFor(() => expect(answerTrustMock).toHaveBeenCalledWith('w1', 'deny'));
     await waitFor(() => expect(screen.queryByTestId('browser-trust-notice')).toBeNull());
@@ -137,7 +137,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
     answerTrustMock.mockRejectedValue(new Error('IPC 通道不可用'));
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '永久允许' }));
     await waitFor(() => {
       expect(screen.getByTestId('browser-trust-notice')).toBeInTheDocument();
@@ -154,7 +154,7 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
     );
     const { push } = armOnBrowserNotice();
     render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '本次会话允许' }));
     expect(screen.getByRole('button', { name: '本次会话允许' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '永久允许' })).toBeDisabled();
@@ -165,11 +165,30 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
     await waitFor(() => expect(screen.queryByTestId('browser-trust-notice')).toBeNull());
   });
 
-  it('无活跃 workspace → 推送也不渲染（应答无目标）', () => {
+  // v2.7 review M7：trust-request notice 自带 workspaceId，路由用载荷而非活跃 ws
+  // 推导——用户切到 B ws 时，A ws agent 首调工具推出的卡片必须路由到 A ws 答案。
+  it('M7：notice.workspaceId 与活跃 ws 不一致时，按载荷路由到 notice 的 ws', async () => {
+    // 活跃 ws 是 w2（用户刚切过去）；trust-request notice 自带 w1（A ws agent 首调）
+    useWorkspaceStore.setState({
+      workspaces: [STUB_WORKSPACE, { ...STUB_WORKSPACE, id: 'w2', name: 'W2' }],
+      activeWorkspaceId: 'w2',
+      loading: false,
+      error: null,
+    });
+    const { push } = armOnBrowserNotice();
+    render(<BrowserTrustNotice />);
+    push({ kind: 'trust-request', text: 'A ws 请求授权', workspaceId: 'w1' });
+    expect(screen.getByTestId('browser-trust-notice')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '本次会话允许' }));
+    await waitFor(() => expect(answerTrustMock).toHaveBeenCalledWith('w1', 'session'));
+  });
+
+  it('无 notice.workspaceId 且无活跃 workspace → 推送也不渲染（应答无目标）', () => {
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null });
     const { push } = armOnBrowserNotice();
     const { container } = render(<BrowserTrustNotice />);
-    push({ kind: 'trust-request', text: '...' });
+    // 注意：workspaceId 缺失走 activeWorkspace 兜底——空活跃即无目标
+    push({ kind: 'trust-request', text: '...', workspaceId: '' });
     expect(container.firstChild).toBeNull();
   });
 });

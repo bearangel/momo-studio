@@ -136,8 +136,10 @@ export interface ViewFactory {
 export interface BrowserManagerHooks {
   /** BrowserState 完整快照（统一推送契约——§3.6 `browser:state`） */
   pushState(state: BrowserState): void;
-  /** 非模态通知（崩溃重载 / 下载拦截 / popup 拦截 / 加载失败等） */
-  pushNotice(kind: string, text: string): void;
+  /** 非模态通知（崩溃重载 / 下载拦截 / popup 拦截 / 加载失败 / 信任卡等）。
+   * workspaceId 携带用于 renderer 信任卡路由（v2.7 review M7）——单活跃 ws 推导脆弱
+   * （用户切 ws、tool 调用跨 ws 上下文等场景），载荷携带更可靠。 */
+  pushNotice(kind: string, text: string, workspaceId: string): void;
 }
 
 /** 构造可选项（T10 boot 注入） */
@@ -615,11 +617,11 @@ export class BrowserManager {
   }
 
   /** fire-and-forget 载入（open/收编/恢复路径）：失败 → notice（tool 路径 navigate 自行 await+抛错） */
-  private async loadForNotice(record: TabRecord, url: string): Promise<void> {
+  private async loadForNotice(record: TabRecord, url: string, wsId: string): Promise<void> {
     try {
       await record.view.webContents.loadURL(url);
     } catch (err) {
-      this.hooks.pushNotice('navigation-error', `加载 ${url} 失败：${errorMessage(err)}`);
+      this.hooks.pushNotice('navigation-error', `加载 ${url} 失败：${errorMessage(err)}`, wsId);
     }
   }
 
@@ -637,7 +639,7 @@ export class BrowserManager {
     const record = this.createTab(ws);
     ws.current = ws.tabs.length - 1; // 新 tab 成为当前（§4 工具 11 语义）
     this.applyLastRect(ws); // 新 current 视图立即套用缓存 rect
-    void this.loadForNotice(record, initialUrl ?? ABOUT_BLANK);
+    void this.loadForNotice(record, initialUrl ?? ABOUT_BLANK, ws.workspaceId);
     return record;
   }
 
@@ -652,7 +654,7 @@ export class BrowserManager {
   private restoreTabs(ws: ActiveWorkspace, stash: TabStash): void {
     for (const url of stash.urls) {
       const record = this.createTab(ws);
-      void this.loadForNotice(record, url);
+      void this.loadForNotice(record, url, ws.workspaceId);
     }
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));
     this.applyLastRect(ws); // 恢复后的 current 视图立即套用缓存 rect
@@ -686,7 +688,7 @@ export class BrowserManager {
     // G8 崩溃自愈：reload + 通知（tab URL 不变；SPA 内存态丢失属预期）
     wc.on('render-process-gone', () => {
       wc.reload();
-      this.hooks.pushNotice('crash-reloaded', '页面渲染进程崩溃，已自动重载');
+      this.hooks.pushNotice('crash-reloaded', '页面渲染进程崩溃，已自动重载', ws.workspaceId);
     });
 
     // console 环形缓冲（每 tab 50 条，serial 键控——tab 关闭即随记录释放，不漂移）
@@ -726,7 +728,7 @@ export class BrowserManager {
     try {
       url = this.policy.assertUrl(ws.workspaceId, rawUrl);
     } catch (err) {
-      this.hooks.pushNotice('popup-blocked', `弹窗已拦截：${errorMessage(err)}`);
+      this.hooks.pushNotice('popup-blocked', `弹窗已拦截：${errorMessage(err)}`, ws.workspaceId);
       return;
     }
     this.ensureLive(ws);

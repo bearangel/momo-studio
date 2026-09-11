@@ -231,14 +231,14 @@ describe('browser:state / browser:notice 统一推送', () => {
       trusted: false,
     };
     hooks.pushState(state);
-    hooks.pushNotice('trust-request', 'agent 请求使用浏览器');
+    hooks.pushNotice('trust-request', 'agent 请求使用浏览器', 'ws-1');
     const st = sends.at(-2);
     const nt = sends.at(-1);
     expect(st?.channel).toBe('browser:state');
     expect(st?.args[0]).toBe(state);
     expect(nt).toEqual({
       channel: 'browser:notice',
-      args: [{ kind: 'trust-request', text: 'agent 请求使用浏览器' }],
+      args: [{ kind: 'trust-request', text: 'agent 请求使用浏览器', workspaceId: 'ws-1' }],
     });
   });
 
@@ -257,7 +257,7 @@ describe('browser:state / browser:notice 统一推送', () => {
     });
   });
 
-  it('崩溃自愈经真实 manager 链路推出 browser:notice {kind:"crash-reloaded", text:中文}', async () => {
+  it('崩溃自愈经真实 manager 链路推出 browser:notice {kind:"crash-reloaded", text:中文, workspaceId}', async () => {
     activateWs();
     await callIpc('browser:userNavigate', 'ws-1', 'http://localhost:5173/');
     sends.length = 0;
@@ -267,6 +267,7 @@ describe('browser:state / browser:notice 统一推送', () => {
     expect(nt?.args[0]).toEqual({
       kind: 'crash-reloaded',
       text: '页面渲染进程崩溃，已自动重载',
+      workspaceId: 'ws-1',
     });
   });
 });

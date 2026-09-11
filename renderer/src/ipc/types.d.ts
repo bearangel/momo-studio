@@ -1109,10 +1109,13 @@ export interface BrowserSettings {
   sidebarWidth: number;
 }
 
-/** m→r 非模态通知（browser:notice；kind 如 crash-reloaded / popup-blocked / trust-request） */
+/** m→r 非模态通知（browser:notice；kind 如 crash-reloaded / popup-blocked / trust-request）。
+ * workspaceId 是发送方所在的 workspace（v2.7 review M7）——信任卡按该字段路由应答目标，
+ * 不再依赖 renderer 端「单活跃 ws」推导（脆弱：用户切 ws、tool 跨 ws 上下文等）。 */
 export interface BrowserNotice {
   kind: string;
   text: string;
+  workspaceId: string;
 }
 
 export interface BrowserApiSurface {

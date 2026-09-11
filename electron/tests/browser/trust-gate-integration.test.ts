@@ -89,9 +89,13 @@ describe('C1 信任门端到端集成（policy + tools 真链路）', () => {
     await expect(tools.execute('browser_navigate', { url: 'https://a.dev/' }, ctx)).rejects.toThrow(
       BrowserNotTrustedError,
     );
-    // 关键顺序契约：notice 在抛错前推（一次）
+    // 关键顺序契约：notice 在抛错前推（一次）；载荷携带 wsId（M7 路由）
     expect(pushNotice).toHaveBeenCalledTimes(1);
-    expect(pushNotice).toHaveBeenCalledWith('trust-request', expect.stringContaining('agent 请求'));
+    expect(pushNotice).toHaveBeenCalledWith(
+      'trust-request',
+      expect.stringContaining('agent 请求'),
+      'ws1',
+    );
   });
 
   it('ask 未授权：12 个 browser_* 工具全部走同一条 trust-request 推送契约', async () => {
@@ -112,9 +116,9 @@ describe('C1 信任门端到端集成（policy + tools 真链路）', () => {
     for (const [name, args] of Object.entries(sampleArgs)) {
       const { pushNotice, tools, ctx } = mkToolChain({ trust: 'ask' });
       await expect(tools.execute(name, args, ctx)).rejects.toThrow(BrowserNotTrustedError);
-      // 每个工具独立 mkToolChain → pushNotice spy 隔离，每次恰好 1 次
+      // 每个工具独立 mkToolChain → pushNotice spy 隔离，每次恰好 1 次；wsId 携带
       expect(pushNotice).toHaveBeenCalledTimes(1);
-      expect(pushNotice).toHaveBeenCalledWith('trust-request', expect.any(String));
+      expect(pushNotice).toHaveBeenCalledWith('trust-request', expect.any(String), 'ws1');
     }
   });
 

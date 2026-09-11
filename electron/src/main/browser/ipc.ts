@@ -36,10 +36,13 @@ export interface BrowserDevServer {
 /** 探活函数依赖签名（注入点：测试 mock / T10 真实现） */
 export type ProbeDevServers = () => Promise<BrowserDevServer[]>;
 
-/** m→r 非模态通知载荷（spec §3.7：信任卡 kind='trust-request'） */
+/** m→r 非模态通知载荷（spec §3.7：信任卡 kind='trust-request'）。
+ * workspaceId 是发送方所在的 workspace（v2.7 review M7）——renderer 信任卡按该字段路由
+ * 应答目标，不再脆弱地依赖「单活跃 workspace」推导。 */
 export interface BrowserNotice {
   kind: string;
   text: string;
+  workspaceId: string;
 }
 
 /** ipcMain 的结构性子集（注入——生产传 electron ipcMain，测试传捕获桩） */
@@ -173,7 +176,8 @@ function sanitizeSettingsPatch(raw: unknown): BrowserSettingsPatch {
 export function createBrowserPushHooks(webContentsLike: WebContentsLike): BrowserManagerHooks {
   return {
     pushState: (state) => webContentsLike.send('browser:state', state),
-    pushNotice: (kind, text) => webContentsLike.send('browser:notice', { kind, text } satisfies BrowserNotice),
+    pushNotice: (kind, text, workspaceId) =>
+      webContentsLike.send('browser:notice', { kind, text, workspaceId } satisfies BrowserNotice),
   };
 }
 

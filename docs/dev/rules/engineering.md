@@ -110,6 +110,7 @@ v2.7 McpBrowser（spec：`docs/specs/2026-09-11-mcp-browser-design.md`）引入�
 - **popup 一律收编 tab**——`setWindowOpenHandler` 恒 deny + incorporatePopup 开新 tab，禁止产生游离 OS 窗口；popup URL 同样过 assertUrl（页面发起的 window.open 也是可见导航面——防御纵深）。新增会开新视图的路径（含 window.open 变体、外链协议）必须沿用收编，不得 `action: 'allow'`
 - **浏览器网络与 bash sandbox 无关**——浏览器视图的网络请求不经 resolveShellSpawn 三态决策（Seatbelt/bwrap 只约束 bash 工具子进程），域名策略（黑白名单 + localhost 恒放行）是浏览器唯一网络层约束。两套体系不混谈、不互相兜底：给 bash 沙箱开网络 ≠ 浏览器放开域名，反之亦然
 - **新增浏览器工具必须过信任门**——`assertAllowed` 先于一切：门序 = 信任门（deny 拒 / ask 未授 NotTrusted）→ 接管门（user 态 TakenOver）→ evaluate 门（仅 browser_evaluate）→ 动作。绕过信任门直连 manager 方法 = 未授权浏览器访问；工具路由（browser-tools.ts）是唯一工具侧入口，新工具在此注册并声明门序
+- **assertAllowed(wsId) 抛 NotTrusted 前必须推 browser:notice(kind:'trust-request')**——spec §5.2 step 3 契约：推 notice 与抛错是同一原子操作的「前半」+「后半」，顺序不可倒（先抛后推 → renderer 信任卡永不弹出 → LLM 永久重试 → 用户无法授权）。pushNotice 自身抛错须向上穿透（IPC 故障可见），不得静默吞回退到 NotTrusted——否则复现同一 bug 类。notice 载荷须带 `workspaceId`（M7，v2.7 review）——renderer 信任卡路由用载荷而非活跃 ws 推导（用户切 ws、tool 跨 ws 上下文时活跃 ws ≠ notice 发送方 ws）
 - **takeover 语义按 source 甄别**——agent 工具在 user 态一律 BrowserTakenOverError（等待释放，可重试）；用户的 tabs IPC（open/close/switch，`browser:*` 通道）显式传 `source='user'` 放行——§3.2 只约束工具不约束人。新增浏览器 IPC 通道必须显式声明调用方（user / agent / 双方），无 source 字段的通道 = 甄别缺口（G4 教训：单门拒绝曾导致用户接管后无法操作自己的 tab）
 
 ---

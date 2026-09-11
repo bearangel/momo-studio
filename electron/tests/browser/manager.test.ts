@@ -577,7 +577,11 @@ describe('硬化接线：setWindowOpenHandler / render-process-gone / will-downl
     const v0 = factory.views[0]!;
     const ret = v0.emitWindowOpen('http://evil.com/payload');
     expect(ret).toEqual({ action: 'deny' });
-    expect(pushNotice).toHaveBeenCalledWith('popup-blocked', expect.stringContaining('evil.com'));
+    expect(pushNotice).toHaveBeenCalledWith(
+      'popup-blocked',
+      expect.stringContaining('evil.com'),
+      'ws1',
+    );
     // 未收编：仍 1 tab
     expect(manager.getState('ws1').tabs).toHaveLength(1);
   });
@@ -589,7 +593,11 @@ describe('硬化接线：setWindowOpenHandler / render-process-gone / will-downl
     const v0 = factory.views[0]!;
     v0.emit('render-process-gone', undefined, { reason: 'oom', exitCode: 5 });
     expect(v0.view.webContents.reload).toHaveBeenCalledTimes(1);
-    expect(pushNotice).toHaveBeenCalledWith('crash-reloaded', '页面渲染进程崩溃，已自动重载');
+    expect(pushNotice).toHaveBeenCalledWith(
+      'crash-reloaded',
+      '页面渲染进程崩溃，已自动重载',
+      'ws1',
+    );
   });
 
   // will-download 由 view-factory 真实现负责（Electron session 级事件，mock 收不到）；

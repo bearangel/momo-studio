@@ -30,8 +30,10 @@ function domainMatches(hostname: string, entry: string): boolean {
   return h === e || h.endsWith(`.${e}`);
 }
 
-/** 通知推送钩子——构造注入（与 BrowserManagerHooks.pushNotice 同形态；缺省不推） */
-export type BrowserPolicyPushNotice = (kind: string, text: string) => void;
+/** 通知推送钩子——构造注入（与 BrowserManagerHooks.pushNotice 同形态；缺省不推）。
+ * workspaceId 缺省回退空串——main 端 push 链路在 BrowserPolicy 场景下恒有 wsId 上下文，
+ * 透传给 renderer 信任卡路由用（spec §3.7 / v2.7 review M7）。 */
+export type BrowserPolicyPushNotice = (kind: string, text: string, workspaceId: string) => void;
 
 export class BrowserPolicy {
   /** 本会话已授权的 workspace（信任卡「本次会话允许」；按 workspace 隔离，app 生命周期内有效） */
@@ -65,12 +67,13 @@ export class BrowserPolicy {
    *   'always' 或 'ask'+本会话已授权 → 放行。
    * 推送与抛错的顺序契约：notice 必须在抛错前发出，否则 LLM 看到 BrowserNotTrustedError
    * 后无限重试，renderer 永远收不到卡、用户永远无法授权——review fix（C1）。
+   * notice 携带 workspaceId（M7）：renderer 信任卡路由用，避免单活跃 ws 推导脆弱。
    */
   assertAllowed(wsId: string): void {
     const settings = this.readSettings(wsId);
     if (settings.trust === 'deny') throw new BrowserDeniedError();
     if (settings.trust === 'ask' && !this.sessionGranted.has(wsId)) {
-      this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）');
+      this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）', wsId);
       throw new BrowserNotTrustedError();
     }
     // 'always' 或 'ask'+本会话已授权 → 放行

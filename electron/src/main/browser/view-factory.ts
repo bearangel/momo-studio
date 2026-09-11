@@ -26,8 +26,8 @@ import { logger } from '../logger';
 
 /** initRealViewFactory 钩子——与 manager 共享（pushNotice 来自 manager 同一 hook 对象） */
 export interface RealFactoryHooks {
-  /** 下载拦截通知（will-download preventDefault 后推送 UI） */
-  pushNotice(kind: string, text: string): void;
+  /** 下载拦截通知（will-download preventDefault 后推送 UI）。wsId 携带用于 renderer 路由（M7）。 */
+  pushNotice(kind: string, text: string, workspaceId: string): void;
   /**
    * 页内点击接管（DoD 17）：overlay mousedown 命中——boot 接 manager.userTakeover(wsId)。
    * factory 按 overlay 归属 ws 传入（命中时无需猜测目标）。
@@ -158,7 +158,7 @@ export function initRealViewFactory(hooks: RealFactoryHooks): ViewFactory &
         // C7：下载一律取消（v1 不支持保存文件）—— spec §6.4 / §13 配额缓解（partition 磁盘）
         ses.on('will-download', (event) => {
           event.preventDefault();
-          hooks.pushNotice('download-blocked', '下载已拦截（v1 不支持保存文件）');
+          hooks.pushNotice('download-blocked', '下载已拦截（v1 不支持保存文件）', wsId);
         });
       }
 
