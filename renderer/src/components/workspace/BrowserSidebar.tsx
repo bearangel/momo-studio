@@ -5,11 +5,11 @@
 //
 // 状态源：挂载 getState 全量 + onBrowserState 推送增量（本组件不含业务状态机）。
 //
-// 鼠标接管 overlay（DoD 17 依赖）：agent 态在占位区盖透明 div（cursor-default），
-// 首次 mousedown → takeover() 且本地立即移除（用户的下一次点击必须直达页面）；
-// user 态不盖（用户直接操作）；观测到 user 态时重置消散标记——释放回 agent 后重挂；
-// takeover 拒绝时重挂（单次 IPC 失败不永久锁死入口）。Electron before-input-event
-// 只覆盖键盘——鼠标接管唯一入口即此 overlay。
+// 鼠标接管路径（DoD 17）：04ecea7 起改用 Electron 原生 overlay view（view-factory.ts：
+// 全透明 WebContentsView 挂栈顶拦截 mousedown → onOverlayHit → manager.userTakeover），
+// 不再依赖 renderer DOM 接管层——OS 合成层序 native overlay → browser view →
+// renderer DOM，DOM 层永远收不到 mousedown（v2.7 review fix C2 移除原接管 div）。
+// 键盘接管仍由 main 进程 before-input-event 监听统一承担。
 import { useEffect, useRef, useState } from 'react';
 import { Globe, PanelRightClose, PanelRightOpen, ShieldCheck, ShieldOff } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -29,8 +29,6 @@ interface Props {
 export function BrowserSidebar({ workspaceId }: Props) {
   const [state, setState] = useState<BrowserState | null>(null);
   const [collapsed, setCollapsed] = useState(false);
-  // agent 态接管层消散标记（语义见文件头注释）
-  const [overlayDismissed, setOverlayDismissed] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
   const collapsedUserTouchedRef = useRef(false);
@@ -77,8 +75,6 @@ export function BrowserSidebar({ workspaceId }: Props) {
     const unsubscribe = ipc.browser.onBrowserState((next) => {
       if (next.workspaceId !== workspaceId) return;
       setState(next);
-      // 观测到 user 态即重置消散标记——之后释放回 agent 时 overlay 重挂
-      if (next.takeover === 'user') setOverlayDismissed(false);
     });
     return unsubscribe;
   }, [workspaceId]);
@@ -139,13 +135,6 @@ export function BrowserSidebar({ workspaceId }: Props) {
     void ipc.browser.releaseTakeover(workspaceId).catch(() => {});
   };
 
-  const handleTakeoverMouseDown = (): void => {
-    setOverlayDismissed(true);
-    void ipc.browser.takeover(workspaceId).catch(() => {
-      setOverlayDismissed(false); // 失败重挂 overlay——入口不因一次 IPC 失败永久锁死
-    });
-  };
-
   const openTab = (): void => {
     // brief 契约：openTab（不带 url → manager 以 about:blank 引导）→ switchTab 到
     // 新 tab 下标（manager open 已自动切 current，此跳幂等——保持两段式行为一致）
@@ -188,9 +177,6 @@ export function BrowserSidebar({ workspaceId }: Props) {
   }
 
   const tabs = state?.tabs ?? [];
-  // 空态（无 tab）不挂 overlay：占位区是引导而非页面——误触发接管会让用户
-  // 「接管」一个空浏览器并锁死 agent 工具（review fix）。tab 出现后照常挂。
-  const showOverlay = state?.takeover === 'agent' && !overlayDismissed && tabs.length > 0;
 
   return (
     <div
@@ -232,7 +218,10 @@ export function BrowserSidebar({ workspaceId }: Props) {
         />
         <AddressBar url={state?.url ?? ''} onNavigate={navigate} />
       </div>
-      {/* 视图占位区：main 的 WebContentsView 按上报 rect 叠加于此 */}
+      {/* 视图占位区：main 的 WebContentsView 按上报 rect 叠加于此。
+          接管层不再走 renderer DOM（v2.7 review fix C2）——OS 合成层序 native overlay →
+          browser view → renderer DOM，DOM 层永远收不到 mousedown；接管唯一入口是 view-factory
+          showOverlay 挂的全透明 WebContentsView（onOverlayHit → manager.userTakeover）。 */}
       <div ref={placeholderRef} data-testid="browser-placeholder" className="relative min-h-0 flex-1">
         {tabs.length === 0 ? (
           <EmptyState
@@ -240,13 +229,6 @@ export function BrowserSidebar({ workspaceId }: Props) {
             title="浏览器待命"
             description="地址栏输入 URL 直接打开，或让 agent 调用浏览器工具浏览页面"
             role="status"
-          />
-        ) : null}
-        {showOverlay ? (
-          <div
-            data-testid="browser-takeover-overlay"
-            className="absolute inset-0 z-10 cursor-default"
-            onMouseDown={handleTakeoverMouseDown}
           />
         ) : null}
       </div>

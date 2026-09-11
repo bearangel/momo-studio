@@ -8,9 +8,13 @@
 //   - 占位区上报锁：ResizeObserver + window resize → getBoundingClientRect →
 //     setSidebarBounds（rect 参数来自 getBoundingClientRect）；卸载 disconnect；
 //     折叠态不上报
-//   - 鼠标接管 overlay（HARD，DoD 17）：agent 态存在 + mousedown → takeover() 且
-//     移除；user 态无 overlay；释放回 agent 后重挂；takeover 拒绝重挂（错误路径）
 //   - TabsBar / DevServerDropdown IPC 接线（openTab→switchTab / closeTab / userNavigate）
+//
+// v2.7 review fix C2 移除「鼠标接管 overlay」describe 块：接管唯一入口是 main 进程
+// 原生 overlay view（view-factory.ts showOverlay），OS 合成层序 native overlay →
+// browser view → renderer DOM，DOM 层永远收不到 mousedown——原 jsdom fireEvent
+// 测试属「假绿」（jsdom 无原生 overlay 竞态即断言通过）。接管契约在 view-factory.test.ts
+// 「showOverlay 三态锁」+「overlay 命中链」段覆盖。
 // mock 形态照抄 SandboxNotice.test.tsx（globalThis.window.api 桩 + ipc Proxy 透传）；
 // ResizeObserver 为平台边界桩（jsdom 不提供且不执行布局）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,7 +25,6 @@ import type { BrowserState, BrowserSettings, BrowserTabInfo } from '../../ipc/ty
 // ---------- window.api 桩（browser 命名空间全方法） ----------
 const getStateMock = vi.fn();
 const userNavigateMock = vi.fn();
-const takeoverMock = vi.fn();
 const releaseTakeoverMock = vi.fn();
 const openTabMock = vi.fn();
 const closeTabMock = vi.fn();
@@ -37,7 +40,8 @@ const mockApi = {
   browser: {
     getState: getStateMock,
     userNavigate: userNavigateMock,
-    takeover: takeoverMock,
+    // takeover IPC 仍由 main 进程原生 overlay 命中触发；renderer 不再调用——移除 mock
+    // 后保留调用计数能力以备未来 IPC 回归（v2.7 review fix C2：接管路径不再走 renderer）
     releaseTakeover: releaseTakeoverMock,
     openTab: openTabMock,
     closeTab: closeTabMock,
@@ -123,7 +127,7 @@ function stubRect(el: Element, rect: { x: number; y: number; width: number; heig
 
 beforeEach(() => {
   for (const m of [
-    getStateMock, userNavigateMock, takeoverMock, releaseTakeoverMock, openTabMock,
+    getStateMock, userNavigateMock, releaseTakeoverMock, openTabMock,
     closeTabMock, switchTabMock, setSidebarBoundsMock, setSidebarCollapsedMock,
     listDevServersMock, getSettingsMock, onBrowserStateMock, onBrowserNoticeMock,
   ]) {
@@ -132,7 +136,6 @@ beforeEach(() => {
   // 默认返回值对齐真实 invoke 语义（恒返回 Promise）——momo-test-rules 保真度
   getStateMock.mockResolvedValue(mkState());
   userNavigateMock.mockResolvedValue({ url: '', title: '' });
-  takeoverMock.mockResolvedValue(undefined);
   releaseTakeoverMock.mockResolvedValue(undefined);
   openTabMock.mockResolvedValue([]);
   closeTabMock.mockResolvedValue([]);
@@ -239,11 +242,27 @@ describe('BrowserSidebar·空态与地址栏（spec §3.5）', () => {
     userNavigateMock.mockResolvedValue({ url: 'https://typed.com/', title: '' });
     render(<BrowserSidebar workspaceId="w1" />);
     expect(await screen.findByText('浏览器待命')).toBeInTheDocument();
+    // 接管唯一入口是 main 进程原生 overlay（view-factory.ts showOverlay）——jsdom 无合成层，
+    // 任何 DOM 级接管断言都属假绿；接管契约在 view-factory.test.ts「showOverlay 三态锁」覆盖。
 
     const input = screen.getByRole('textbox');
     fireEvent.change(input, { target: { value: 'https://typed.com/' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(userNavigateMock).toHaveBeenCalledWith('w1', 'https://typed.com/'));
+  });
+
+  it('空态 → 占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器，agent 工具不被锁死）', async () => {
+    // 接管走 main 原生 overlay，DOM 层无接管 div；占位区点击事件不应触达任何 takeover
+    // IPC——空态若误触接管，agent 工具立即失败（user 态 TakenOver）+ 用户接管空浏览器无意义。
+    const { push } = armOnBrowserState();
+    getStateMock.mockResolvedValue(mkState({ tabs: [], url: '', title: '' }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    expect(await screen.findByText('浏览器待命')).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByTestId('browser-placeholder'));
+    await new Promise((r) => setTimeout(r, 10));
+    // 接管 IPC 在 renderer 端根本不再存在——验证占位区 mousedown 不引任何 IPC 调用即可
+    expect(getStateMock).toHaveBeenCalledTimes(1); // 仅挂载时拉一次
   });
 });
 
@@ -403,92 +422,6 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     fireEvent(window, new Event('resize'));
     await new Promise((r) => setTimeout(r, 10));
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
-  });
-});
-
-describe('BrowserSidebar·鼠标接管 overlay（HARD——DoD 17）', () => {
-  it('agent 态 → overlay 存在；mousedown → takeover(w1) 且 overlay 立即移除', async () => {
-    takeoverMock.mockResolvedValue(undefined);
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByText('Example');
-
-    const overlay = screen.getByTestId('browser-takeover-overlay');
-    fireEvent.mouseDown(overlay);
-    await waitFor(() => expect(takeoverMock).toHaveBeenCalledWith('w1'));
-    // 本地立即移除（不等状态推送——用户的下一次点击必须直达页面）
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
-  });
-
-  it('user 态 → 无 overlay（用户直接操作页面）', async () => {
-    getStateMock.mockResolvedValue(mkState({ takeover: 'user' }));
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByText('用户接管中');
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
-  });
-
-  it('空态（无 tab）→ 无 overlay：占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器）', async () => {
-    const { push } = armOnBrowserState(); // 订阅须在 render 前接线（组件挂载即订阅）
-    takeoverMock.mockResolvedValue(undefined);
-    getStateMock.mockResolvedValue(mkState({ tabs: [], url: '', title: '' }));
-    render(<BrowserSidebar workspaceId="w1" />);
-    expect(await screen.findByText('浏览器待命')).toBeInTheDocument();
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
-
-    // 占位区 mousedown 不调 takeover（agent 工具不被空态误锁）
-    fireEvent.mouseDown(screen.getByTestId('browser-placeholder'));
-    await new Promise((r) => setTimeout(r, 10));
-    expect(takeoverMock).not.toHaveBeenCalled();
-
-    // 反向锁：tab 出现（agent 打开页面）→ overlay 照常挂载
-    push(mkState());
-    expect(await screen.findByTestId('browser-takeover-overlay')).toBeInTheDocument();
-  });
-
-  it('释放（user → agent 推送）→ overlay 重挂', async () => {
-    const { push } = armOnBrowserState();
-    getStateMock.mockResolvedValue(mkState({ takeover: 'user' }));
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByText('用户接管中');
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
-
-    push(mkState({ takeover: 'agent' }));
-    expect(await screen.findByTestId('browser-takeover-overlay')).toBeInTheDocument();
-  });
-
-  it('接管后推送 user 态 → 再回 agent（模拟释放）→ overlay 重挂（完整状态机回环）', async () => {
-    takeoverMock.mockResolvedValue(undefined);
-    const { push } = armOnBrowserState();
-    getStateMock.mockResolvedValue(mkState({ takeover: 'agent' }));
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByTestId('browser-takeover-overlay');
-
-    fireEvent.mouseDown(screen.getByTestId('browser-takeover-overlay'));
-    await waitFor(() => expect(takeoverMock).toHaveBeenCalled());
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
-
-    push(mkState({ takeover: 'user' })); // 接管生效
-    push(mkState({ takeover: 'agent' })); // 释放
-    expect(await screen.findByTestId('browser-takeover-overlay')).toBeInTheDocument();
-  });
-
-  it('takeover IPC 拒绝 → overlay 重挂（错误路径：失败不永久锁死入口）', async () => {
-    takeoverMock.mockRejectedValue(new Error('ws 未激活'));
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByTestId('browser-takeover-overlay');
-
-    fireEvent.mouseDown(screen.getByTestId('browser-takeover-overlay'));
-    await waitFor(() => expect(takeoverMock).toHaveBeenCalled());
-    // 拒绝后 overlay 回来——用户可重试
-    expect(await screen.findByTestId('browser-takeover-overlay')).toBeInTheDocument();
-  });
-
-  it('takeover 仅首次 mousedown 触发（overlay 移除后重复点击不重复调 IPC）', async () => {
-    takeoverMock.mockResolvedValue(undefined);
-    render(<BrowserSidebar workspaceId="w1" />);
-    await screen.findByTestId('browser-takeover-overlay');
-    fireEvent.mouseDown(screen.getByTestId('browser-takeover-overlay'));
-    await waitFor(() => expect(takeoverMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId('browser-takeover-overlay')).not.toBeInTheDocument();
   });
 });
 
