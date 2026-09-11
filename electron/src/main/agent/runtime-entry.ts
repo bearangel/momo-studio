@@ -38,6 +38,9 @@ import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
+// v2.6.0 断点续跑：仅取类型（import type 编译期擦除）——turn-reconstructor
+// 传递依赖 logger / storage（主进程模块），本子进程入口不引入运行时耦合
+import type { RebuiltTurn } from './turn-reconstructor';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
@@ -341,6 +344,13 @@ export async function runChatLoop(
    * 优先级：streamSessionIdOverride > parentStreamSessionId > randomUUID()。
    */
   streamSessionIdOverride?: string,
+  /**
+   * v2.6.0 断点续跑（plan Task 4）：断点回合重建段（T1 rebuildTurn 产物，由
+   * T5 resumeTask 经 TaskConfig.resume 载荷透传到这里）。存在且重建段非空时：
+   * messages 直接拼重建段（不追加 currentBody）、预算续扣 toolCallsUsed、
+   * 未消费 steer 重放；缺省或重建段为空时行为与历史版本一致。
+   */
+  resumeTurn?: RebuiltTurn,
 ): Promise<string> {
   const llm = createLLMProvider(
     // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
@@ -391,7 +401,14 @@ export async function runChatLoop(
   // mandate 尾段每轮基于 mandate 状态对象重写——
   // 「中途补充」与「未完成项」保持实时跨压缩存活
   const staticSystem = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
-  const mandate = { userBody: currentBody, steers: [] as string[] };
+  // v2.6.0 断点续跑：mandate.userBody 取重建段首条 user 消息正文（原回合指令）；
+  // 首条非 user（dispatch 子流重建段可能 assistant 开头，T1 兜底语义）或重建段
+  // 为空时回退 currentBody（恢复载荷的 body 兜底）
+  const resumeFirst = resumeTurn?.messages[0];
+  const mandate = {
+    userBody: resumeFirst && resumeFirst.role === 'user' ? resumeFirst.content : currentBody,
+    steers: [] as string[],
+  };
   const refreshSystem = (): void => {
     messages[0] = {
       role: 'system',
@@ -538,14 +555,29 @@ export async function runChatLoop(
   const convTimes = new WeakMap<LLMMessage, number>();
   convCtx.messages.forEach((m, i) => convTimes.set(convMessages[i]!, m.timestamp));
 
+  // v2.6.0 断点续跑：resumeTurn 存在且重建段非空 → 重建段 verbatim 拼接
+  // （首条即原 user 消息，T1 保证），不追加 currentBody（防指令重复）；
+  // 重建段为空（degenerate 兜底，等价全新回合）或无 resumeTurn → currentBody
+  // 作为本轮 user 消息（与历史行为逐字节一致）
+  const turnMessages: LLMMessage[] =
+    resumeTurn && resumeTurn.messages.length > 0
+      ? resumeTurn.messages
+      : [{ role: 'user', content: currentBody }];
   const messages: LLMMessage[] = [
     { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
     ...convMessages,
-    { role: 'user', content: currentBody },
+    ...turnMessages,
   ];
   refreshSystem();
   const maxToolCalls = config.maxToolCalls;
-  let budgetRemaining = maxToolCalls === -1 ? Infinity : maxToolCalls;
+  // v2.6.0 断点续跑：预算续扣——断点前已消耗的 toolCallsUsed 预先扣除
+  // （Math.max 钳制 ≥0，防 toolCallsUsed 越过上限时出现负预算）；-1 无限保持
+  let budgetRemaining =
+    maxToolCalls === -1
+      ? Infinity
+      : resumeTurn
+        ? Math.max(0, maxToolCalls - resumeTurn.toolCallsUsed)
+        : maxToolCalls;
   let toolCallCount = 0;
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
@@ -571,6 +603,13 @@ export async function runChatLoop(
   // v2.3 steer：与 abort 同监听器（共享全部 process.off 清理点）——
   // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）
   const pendingSteers: string[] = [];
+  // v2.6.0 断点续跑：未消费 steer 重放——断点前到达但从未进入 LLM 上下文的
+  // 中途补充重放进 pendingSteers，经既有 drain 路径注入（user 消息 / mandate
+  // 同步 / steer 事件落库三件事由 drain 统一完成）。不在此预写 mandate.steers：
+  // drain 循环自身会 push，预写 = mandate 段与溢出重放双份重复
+  if (resumeTurn && resumeTurn.steers.length > 0) {
+    pendingSteers.push(...resumeTurn.steers);
+  }
   // v2.3.1 消息滚动：自上次 roll 后是否产过新文本——drain 时据此决定是否换行
   //（防「连续 steer 在同一等待期」产生空新行，spec §2.2）
   let hasNewTextSinceLastRoll = false;
