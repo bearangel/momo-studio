@@ -33,7 +33,7 @@ import type { AgentRuntimeOpts } from './runtime-config';
 // Task 6：chunk 中继（handleStreamChunk）由 stream-relay 承载
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
-import { AgentRunner } from './agent-runner';
+import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './agent-runner';
 import { spawnForAgent } from './runtime-spawner';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -203,6 +203,10 @@ export function populateProviderBuckets(): void {
  * 反注册全部 runner + 销毁全部 pool + 清空 Map。
  */
 export function destroyAllTaskDrivenRuntimes(): void {
+  // v2.6.0 关机保态（计划补强裁定 1）：先置关机标志——本轮 destroy 触发的 child
+  // exit 收尾链据此跳过 failTaskOnCrash（in_progress 任务保留待启动恢复）；
+  // 消息行仍走 finalizeStreamOnCrash 标 failed（UI 诚实呈现中断）。
+  markShuttingDown();
   for (const runner of agentRunners.values()) runner.destroy();
   for (const pool of agentWarmPools.values()) pool.destroyAll();
   agentRunners.clear();
@@ -298,4 +302,7 @@ export function __clearRuntimeRegistryForTest(): void {
   agentRunners.clear();
   agentWarmPools.clear();
   providerBuckets.clear();
+  // v2.6.0 关机保态：清 Map 时同时复位 shutdown 标志——否则 destroyAll 之后
+  // 标志位跨用例残留会污染 C2 崩溃收尾语义回归锁（shutdown-preserve.test.ts）
+  __resetShuttingDownForTest();
 }

@@ -108,6 +108,29 @@ interface ActiveTask {
 /** task-end 到达后仍未收尾的兜底宽限上限 */
 const DEFAULT_TASK_END_GRACE_MS = 15_000;
 
+// === v2.6.0 关机保态（计划补强裁定 1） ===
+/**
+ * 模块级关机标志——before-quit 链（runtime-registry.destroyAllTaskDrivenRuntimes）
+ * 前置置位。true 时 handleChildExit 跳过 failTaskOnCrash（in_progress 任务保留
+ * 待启动恢复 T5 检测/续跑），但保留 finalizeStreamOnCrash（消息行标 failed，
+ * UI 诚实呈现中断；恢复时翻回 streaming）。正常崩溃路径（未置位）崩溃收尾
+ * 语义逐字节保持——回归锁见 tests/agent/shutdown-preserve.test.ts。
+ */
+let shuttingDown = false;
+
+/**
+ * 标记应用正在退出——幂等（重复调用无副作用）。仅 destroyAllTaskDrivenRuntimes
+ * 与测试构造调用。
+ */
+export function markShuttingDown(): void {
+  shuttingDown = true;
+}
+
+/** 测试用：复位关机标志（防跨用例污染 C2 回归锁）。 */
+export function __resetShuttingDownForTest(): void {
+  shuttingDown = false;
+}
+
 export class AgentRunner {
   private readonly opts: AgentRunnerOpts;
   /** streamSessionId → 活跃 task */
@@ -368,7 +391,17 @@ export class AgentRunner {
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
-        this.failTaskOnCrash(active.taskId, code);
+        if (shuttingDown) {
+          // v2.6.0 关机保态（计划补强裁定 1）：正常退出的子进程 exit 不把
+          // in_progress 任务误标 failed——保留 in_progress 供启动恢复（T5）检测/
+          // 续跑；消息行仍由上方 finalizeStreamOnCrash 标 failed（UI 诚实呈现中断），
+          // 恢复时翻回 streaming。
+          logger.info('关机路径：跳过崩溃任务收尾，保留 in_progress 待启动恢复', {
+            taskId: active.taskId,
+          });
+        } else {
+          this.failTaskOnCrash(active.taskId, code);
+        }
       }
     }
     // v2.3 车道：流崩溃收尾后让道 + 触发排队放行（与 finalizeActiveTask 同语义）
