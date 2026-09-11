@@ -97,7 +97,9 @@ export function assembleBrowserSubsystem(deps: BrowserBootDeps): BrowserBootHand
 
   const store = createBrowserSettingsStore(getDb());
   // 初始 root 空串占位——file:// 边界根由 onWorkspaceActivated 动态定标（唯一真相源）
-  const policy = new BrowserPolicy(store.read, '');
+  // 第三个参 pushNotice 接同一 baseHooks——review fix C1：信任门在抛 BrowserNotTrustedError 前
+  // 必须推 trust-request notice 给 renderer 触发右下角信任卡，否则 LLM 永久重试、用户无法授权。
+  const policy = new BrowserPolicy(store.read, '', baseHooks.pushNotice);
   const manager = new BrowserManager(factory, policy, hooks, { screenshotDir });
   overlayHit.target = manager;
   initBrowserTools(policy, manager);

@@ -1,12 +1,13 @@
 // electron/tests/browser/policy.test.ts
-// 信任门三分支 + 会话授权 + 域名策略 + file:// 限定（含 .. 与 symlink 逃逸）。
+// 信任门三分支 + 会话授权 + 域名策略 + file:// 限定（含 .. 与 symlink 逃逸）+ 信任门
+// notice 推送契约（C1 review fix）。
 // BrowserPolicy 是纯逻辑（settings 读取器闭包注入）；file:// 用例需要真实 fs
 // （realpath 反逃逸），用 os.tmpdir 建 workspace root。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserPolicy } from '../../src/main/browser/policy';
 import type { WorkspaceBrowserSettings } from '../../src/main/browser/types';
 import {
@@ -45,6 +46,78 @@ describe('信任门', () => {
     expect(() => mkPolicy({ trust: 'always' }).assertAllowed('ws1')).not.toThrow();
     expect(() => mkPolicy({ trust: 'deny' }).assertAllowed('ws1')).toThrow(BrowserDeniedError);
     expect(() => mkPolicy({ trust: 'deny' }).assertAllowed('ws1')).toThrow(/设置→浏览器/);
+  });
+
+  // C1 review fix：信任门 notice 推送契约——spec §5.2 step 3 要求 ask 未授抛错前
+  // 必须推 trust-request notice，否则 renderer 信任卡永不弹出，LLM 永久重试。
+  describe('信任门 notice 推送（C1 review fix）', () => {
+    it('pushNotice 缺省 → 不抛错且不推（policy 不依赖 IPC 边界——单测友好）', () => {
+      const p = mkPolicy();
+      expect(() => p.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
+    });
+
+    it('ask 且未授权 → pushNotice 在抛错前推一次「trust-request」+ 中性指引', () => {
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(
+        () => ({ ...settings }),
+        '/ws/root',
+        pushNotice,
+      );
+      expect(() => p.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
+      // 关键顺序契约：notice 必须在抛错前发出（一次）
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+      expect(pushNotice).toHaveBeenCalledWith('trust-request', expect.stringContaining('agent 请求'));
+    });
+
+    it('ask 且本会话已授权 → 不推 notice（已授权路径不应再骚扰用户）', () => {
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      p.grantSession('ws1');
+      expect(() => p.assertAllowed('ws1')).not.toThrow();
+      expect(pushNotice).not.toHaveBeenCalled();
+    });
+
+    it('always / deny 分支 → 不推 trust-request（仅 ask 未授权路径触发）', () => {
+      const pushAlways = vi.fn();
+      const pAlways = new BrowserPolicy(
+        () => ({ ...settings, trust: 'always' }),
+        '/ws/root',
+        pushAlways,
+      );
+      expect(() => pAlways.assertAllowed('ws1')).not.toThrow();
+      expect(pushAlways).not.toHaveBeenCalled();
+
+      const pushDeny = vi.fn();
+      const pDeny = new BrowserPolicy(
+        () => ({ ...settings, trust: 'deny' }),
+        '/ws/root',
+        pushDeny,
+      );
+      expect(() => pDeny.assertAllowed('ws1')).toThrow(BrowserDeniedError);
+      expect(pushDeny).not.toHaveBeenCalled();
+    });
+
+    it('pushNotice 抛错 → IPC 故障向上穿透（不静默吞：渲染通道异常必须可见）', () => {
+      // 契约：pushNotice 自身抛错不掩盖——IPC 通道断连是真实故障，必须向上穿透到上层
+      // （tool execute / LLM 看到 IPC error 而非 BrowserNotTrustedError），便于诊断与告警。
+      // 若静默吞回退到 BrowserNotTrustedError，会复现 C1 现象：用户永远看不到卡、LLM
+      // 永久重试——这正是 review fix 要消除的反向回归。
+      const pushNotice = vi.fn(() => {
+        throw new Error('IPC 通道断');
+      });
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      let caught: unknown = null;
+      try {
+        p.assertAllowed('ws1');
+      } catch (e) {
+        caught = e;
+      }
+      // IPC 错误向上穿透——不是 BrowserNotTrustedError
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/IPC 通道断/);
+      expect(caught).not.toBeInstanceOf(BrowserNotTrustedError);
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

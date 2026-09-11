@@ -30,6 +30,9 @@ function domainMatches(hostname: string, entry: string): boolean {
   return h === e || h.endsWith(`.${e}`);
 }
 
+/** 通知推送钩子——构造注入（与 BrowserManagerHooks.pushNotice 同形态；缺省不推） */
+export type BrowserPolicyPushNotice = (kind: string, text: string) => void;
+
 export class BrowserPolicy {
   /** 本会话已授权的 workspace（信任卡「本次会话允许」；按 workspace 隔离，app 生命周期内有效） */
   private sessionGranted = new Set<string>();
@@ -37,6 +40,8 @@ export class BrowserPolicy {
   constructor(
     private readSettings: (wsId: string) => WorkspaceBrowserSettings,
     private workspaceRoot: string,
+    /** 可选信任门 notice 推送（boot 注入 manager.pushNotice 同源；缺省即静默，policy 不依赖 IPC 边界） */
+    private pushNotice?: BrowserPolicyPushNotice,
   ) {}
 
   /**
@@ -53,11 +58,19 @@ export class BrowserPolicy {
     this.sessionGranted.add(wsId);
   }
 
-  /** 信任门（spec §6.1）：deny → 拒绝；ask 且本会话未授 → 立即失败（重试语义）；否则放行 */
+  /**
+   * 信任门（spec §6.1 / §5.2 step 3）：
+   *   deny → BrowserDeniedError；
+   *   ask 且本会话未授 → 推 trust-request notice 给 renderer 触发右下角信任卡，再抛 BrowserNotTrustedError；
+   *   'always' 或 'ask'+本会话已授权 → 放行。
+   * 推送与抛错的顺序契约：notice 必须在抛错前发出，否则 LLM 看到 BrowserNotTrustedError
+   * 后无限重试，renderer 永远收不到卡、用户永远无法授权——review fix（C1）。
+   */
   assertAllowed(wsId: string): void {
     const settings = this.readSettings(wsId);
     if (settings.trust === 'deny') throw new BrowserDeniedError();
     if (settings.trust === 'ask' && !this.sessionGranted.has(wsId)) {
+      this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）');
       throw new BrowserNotTrustedError();
     }
     // 'always' 或 'ask'+本会话已授权 → 放行
