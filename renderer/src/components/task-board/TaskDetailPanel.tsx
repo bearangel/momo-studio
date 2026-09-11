@@ -15,7 +15,18 @@
 //       非终态 → 取消 + 编辑（EditTaskDialog）
 //   - "进入执行会话"：selectSession(executionSessionId) + setActiveView('im')
 import { useEffect, useState } from 'react';
-import { Bot, Calendar, Clock, MessagesSquare, Pencil, Users, X } from 'lucide-react';
+import {
+  Bot,
+  Calendar,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  FileDiff,
+  MessagesSquare,
+  Pencil,
+  Users,
+  X,
+} from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
@@ -25,6 +36,7 @@ import { taskStatusStyle } from '../../lib/task-status';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { Button } from '../ui/Button';
 import { EditTaskDialog } from './EditTaskDialog';
+import { TaskChangesPanel } from './TaskChangesPanel';
 import { useTaskEntityNames } from './useTaskEntityNames';
 
 interface TaskDetailPanelProps {
@@ -48,6 +60,8 @@ function formatTime(ms: number | null): string {
 export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   const [task, setTask] = useState<TaskRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  // 变更审查分区默认折叠——展开才挂载 TaskChangesPanel（scan 懒执行，spec §5.5）
+  const [changesOpen, setChangesOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const refreshTask = (): void => {
     void ipc.task
@@ -280,6 +294,27 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
                 次工具调用
               </span>
             </div>
+          )}
+        </div>
+        <div className="pt-1">
+          <button
+            type="button"
+            aria-expanded={changesOpen}
+            onClick={() => setChangesOpen((v) => !v)}
+            className="flex w-full cursor-pointer items-center gap-1.5 rounded border border-strong bg-surface-3 px-2 py-1 text-left text-xs transition-colors"
+          >
+            <FileDiff size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-500" />
+            <span className="text-primary">变更审查</span>
+            <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
+              {changesOpen ? (
+                <ChevronDown size={16} strokeWidth={1.75} />
+              ) : (
+                <ChevronRight size={16} strokeWidth={1.75} />
+              )}
+            </span>
+          </button>
+          {changesOpen && (
+            <TaskChangesPanel workspaceId={task.workspaceId} taskId={taskId} />
           )}
         </div>
         {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (

@@ -12,104 +12,23 @@
 //   - 五态结果逐条呈现不静默；skipped-diverged 黄标 + detail + [强制撤回]
 //     （force=true 覆盖漂移内容，UI 如实转述主进程 detail 警示）
 //   - 同 path 链式条目归单文件组，净 diff = 首条 beforeText → 末条 afterText
+//
+// DiffBlock / groupByPath / 五态结果列表已提取至 common/JournalChangeViews
+// （v2.5 Task 9 与任务卡「变更审查」面板共享，防平行实现漂移）。
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, FileDiff, Undo2 } from 'lucide-react';
-import { cn } from '../../lib/cn';
-import { diffLines, type DiffLine } from '../../lib/line-diff';
-import type { ImMessage, JournalEntryView, RevertOutcome } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
+import type { ImMessage, JournalEntryView, RevertOutcome } from '../../ipc/types';
 import { Button } from '../ui/Button';
+import {
+  DiffBlock,
+  JournalOutcomeList,
+  groupByPath,
+} from '../common/JournalChangeViews';
 
 export interface ChangesChipProps {
   /** 宿主消息：自取 workspaceId / streamSessionId（挂载点 AgentStreamBubble） */
   message: ImMessage;
-}
-
-/** 撤回五态的呈现文案 + 语义 tone（黄=漂移跳过，红=失败，绿=成功还原） */
-const OUTCOME_META: Record<RevertOutcome['result'], { label: string; className: string }> = {
-  reverted: { label: '已撤回', className: 'text-status-success' },
-  'skipped-diverged': { label: '已跳过：文件已漂移', className: 'text-status-warning' },
-  'restored-missing': { label: '文件缺失已还原', className: 'text-status-success' },
-  'no-op': { label: '无需撤回', className: 'text-tertiary' },
-  failed: { label: '撤回失败', className: 'text-status-error' },
-};
-
-/** 同 path 条目归组：净 diff 取首条 before → 末条 after（组内 createdAt 升序） */
-interface FileChangeGroup {
-  path: string;
-  entries: JournalEntryView[];
-  first: JournalEntryView;
-  last: JournalEntryView;
-}
-
-function groupByPath(entries: JournalEntryView[]): FileChangeGroup[] {
-  const map = new Map<string, JournalEntryView[]>();
-  for (const e of entries) {
-    const arr = map.get(e.path);
-    if (arr !== undefined) arr.push(e);
-    else map.set(e.path, [e]);
-  }
-  const groups: FileChangeGroup[] = [];
-  for (const [path, list] of map) {
-    list.sort((a, b) => a.createdAt - b.createdAt);
-    const first = list[0];
-    const last = list[list.length - 1];
-    // 空组不可达（构造即至少一条）；防御性窄化满足 noUncheckedIndexedAccess
-    if (first === undefined || last === undefined) continue;
-    groups.push({ path, entries: list, first, last });
-  }
-  return groups;
-}
-
-/** 行级 diff 渲染：del 行 text-status-error / add 行 text-status-success / ctx 中性 */
-function DiffBlock({
-  beforeText,
-  afterText,
-}: {
-  beforeText: string | null;
-  afterText: string | null;
-}) {
-  const rows = useMemo<DiffLine[]>(
-    () =>
-      diffLines(
-        beforeText !== null ? beforeText.split('\n') : [],
-        afterText !== null ? afterText.split('\n') : [],
-      ),
-    [beforeText, afterText],
-  );
-
-  // 双侧文本皆缺（hash 为 null 或 blob 被配额清理）→ 无从 diff，如实提示
-  if (beforeText === null && afterText === null) {
-    return (
-      <div className="border-t border-subtle px-2 py-1 text-[11px] text-tertiary">
-        内容快照缺失，无法展示差异
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="overflow-x-auto border-t border-subtle px-2 py-1 font-mono text-[11px]"
-      data-testid="changes-diff"
-    >
-      {rows.map((row, i) => (
-        <div
-          key={`${row.type}-${i}`}
-          className={cn(
-            'whitespace-pre-wrap break-all',
-            row.type === 'del' && 'text-status-error',
-            row.type === 'add' && 'text-status-success',
-            row.type === 'ctx' && 'text-tertiary',
-          )}
-        >
-          <span aria-hidden className="select-none">
-            {row.type === 'del' ? '-' : row.type === 'add' ? '+' : ' '}
-          </span>
-          {row.text}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export function ChangesChip({ message }: ChangesChipProps) {
@@ -255,33 +174,22 @@ export function ChangesChip({ message }: ChangesChipProps) {
           )}
 
           {outcomes !== null && outcomes.length > 0 && (
-            <div className="mt-1.5 border-t border-subtle pt-1.5" data-testid="changes-outcomes">
-              {outcomes.map((o, idx) => {
-                const meta = OUTCOME_META[o.result];
-                return (
-                  <div
-                    key={`${o.id}-${idx}`}
-                    className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 py-0.5"
+            <JournalOutcomeList
+              outcomes={outcomes}
+              testId="changes-outcomes"
+              renderAction={(o) =>
+                o.result === 'skipped-diverged' ? (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void handleRevert([o.id], true)}
                   >
-                    <span className={cn('shrink-0 font-medium', meta.className)}>{meta.label}</span>
-                    <span className="min-w-0 truncate font-mono text-[11px] text-secondary">
-                      {o.path !== '' ? o.path : o.id}
-                    </span>
-                    {o.detail !== undefined && <span className="text-tertiary">{o.detail}</span>}
-                    {o.result === 'skipped-diverged' && (
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void handleRevert([o.id], true)}
-                      >
-                        强制撤回
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                    强制撤回
+                  </Button>
+                ) : null
+              }
+            />
           )}
         </div>
       )}
