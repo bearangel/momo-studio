@@ -73,6 +73,27 @@ describe('BrowserSettingsStore.read', () => {
     expect(vi.mocked(logger.warn)).toHaveBeenCalledTimes(2);
   });
 
+  it('合法 JSON 但非数组（{"a":1}）→ 空数组 + warn（parseListColumn「非数组」分支）', () => {
+    db.prepare(
+      `INSERT INTO workspace_settings (workspace_id, browser_domain_blacklist)
+       VALUES ('ws-A', '{"a":1}')`,
+    ).run();
+    const store = createBrowserSettingsStore(db);
+    expect(store.read('ws-A').blacklist).toEqual([]);
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledTimes(1);
+  });
+
+  it('数组含非字符串元素（[1,"a"]）→ 过滤保留纯字符串项（不 throw 不混入数字）', () => {
+    db.prepare(
+      `INSERT INTO workspace_settings (workspace_id, browser_domain_whitelist)
+       VALUES ('ws-A', '[1,"a"]')`,
+    ).run();
+    const store = createBrowserSettingsStore(db);
+    expect(store.read('ws-A').whitelist).toEqual(['a']);
+    // 非字符串元素被静默过滤（filter 类型守卫，无 warn——解析层只对整体失败 warn）
+    expect(vi.mocked(logger.warn)).not.toHaveBeenCalled();
+  });
+
   it('trust 脏值（库内非法枚举）→ 回退 ask + warn', () => {
     db.prepare(
       `INSERT INTO workspace_settings (workspace_id, trust_browser) VALUES ('ws-A', 'maybe')`,

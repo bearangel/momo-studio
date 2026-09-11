@@ -20,7 +20,7 @@ export interface BrowserState {
   title: string;
   /** 单页仲裁态：agent 工具可用 / 用户接管中（工具立即失败） */
   takeover: 'agent' | 'user';
-  /** 信任卡视角：本会话是否已放行（ask+已授权 或 always/deny 之外的可通行态） */
+  /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
   trusted: boolean;
 }
 
