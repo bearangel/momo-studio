@@ -102,6 +102,16 @@ v2.5 变更账本与撤销（spec：`docs/specs/2026-09-10-change-journal-undo-d
 
 ---
 
+## v2.6 断点续跑规则
+
+v2.6 任务断点续跑（spec：`docs/specs/2026-09-10-task-resume-design.md`）引入的事件重建式恢复约束：
+
+- **新增流 chunk 类型必须走 event buffer 落库**——重建器以 `message_events` 为唯一断点真相源（spec D2），任何绕过 MessageEventBuffer 直推 renderer 的新 chunk 类型在中断后不可见、不可重建（kill 瞬间 ≤50ms 未 flush delta 的丢失是既定可接受界）。先例：v2.6 `steer` 事件即因重建可见性需求在 drain 处补落库（v2.6 前只进内存）——新增 chunk 类型时先问「中断重启后重建器看得到吗」
+- **重建器前向兼容跳过未知事件**——turn-reconstructor 对未知 event type 一律跳过不炸：断点不做跨版本兼容保证，schema 演进时旧中断任务经「未知事件跳过 + 重建失败降级 degenerate」安全退化为全新回合（降级本身是设计要求）。反向约束：给既有事件类型赋予新重建语义时必须同步补重建器场景矩阵测试（`tests/agent/turn-reconstructor.test.ts`），且不得破坏降级阶梯（重建任何抛错 → catch 降级，安全方向）
+- **恢复链不得绕过 executor 并发闸**——resumeTask 必须经 AgentRunner.executeTask + registerLane 派发（对齐 RouterService.routeUserChat 的 runner 查找 / ensureMemberRuntime 拉起 / 派发 / 占道四要素），maxConcurrentTasks、会话车道串行性、预算续扣、压缩游标四重保障全部天然生效；任何「直接 spawn 子进程续跑」的捷径 = 绕开并发闸 + 同流双恢复无守卫。检测侧配套铁律：detectInterrupted 不改任务状态（spec D6，恢复卡是唯一闸门），scheduler 对 in_progress 零触碰的边界由回归锁固化
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |

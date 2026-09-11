@@ -14,9 +14,11 @@
 // 但本模块自持、不 import sandbox。
 //
 // 存储注入：与 revert 层同源，消费 recorder 模块单例 getJournalStore()。
-// 生产有两个注入点——子进程侧 agent/runtime-entry.ts（boot 链
-// setJournalStore）与主进程侧 journal/ipc.handlers.ts（registerJournalIpc
-// 注册即注入），两侧生命周期各自确保 store 就绪。
+// 单例是模块级状态、每进程各一份——生产每进程恰一个注入点：子进程侧
+// agent/runtime-entry.ts（boot 链 setJournalStore，服务工具记账路径）与
+// 主进程侧 journal/ipc.handlers.ts（registerJournalIpc 注册即注入，服务
+// detector / revert / quota / IPC）。detector 只在主进程运行，store 就绪
+// 由主进程注入保证——下方 fail-fast 报错的指引亦指向主进程注入点。
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -186,7 +188,7 @@ export async function scanUnjournaled(
   const runner = opts?.runner ?? defaultGitRunner;
   const store = getJournalStore();
   if (!store) {
-    throw new Error('journal store 未注入（探测器无法对账；生产：boot 链 setJournalStore；测试：__setJournalStoreForTest）');
+    throw new Error('journal store 未注入（探测器无法对账；生产：主进程 registerJournalIpc 注册即注入；测试：__setJournalStoreForTest）');
   }
 
   const repos = discoverRepos(workspaceDir);
