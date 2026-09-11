@@ -400,7 +400,7 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 
 | 层 | 覆盖 | mock 边界 |
 |---|---|---|
-| 单测（electron/tests/browser/） | 信任门全分支 / 域名策略 / **file:// 限定（含 .. 与 symlink 逃逸用例）** / takeover 状态机 / tab 注册表与 stash-restore / selector 解析器（前缀拆分+转义）/ snapshot 格式化器（fixture JSON→行）/ 错误类信息 / migration v32 | Electron API（WebContentsView/session/debugger）mock 在模块边界；store 真 SQLite |
+| 单测（electron/tests/browser/） | 信任门全分支 / 域名策略 / **file:// 限定（含 .. 与 symlink 逃逸用例）** / takeover 状态机 / tab 注册表与 stash-restore / selector 解析器（前缀拆分+转义）/ snapshot 格式化器（fixture JSON→行）/ 错误类信息 / migration 034 | Electron API（WebContentsView/session/debugger）mock 在模块边界；store 真 SQLite |
 | e2e（tests/e2e/，Playwright 起 xvfb 真应用） | navigate→页面可见 / click/type 真交互 / snapshot 真输出 / tabs 开关切 / popup 收编 / 下载拦截 / 崩溃重载 / bounds 随窗口 resize 同步 | 全真实 |
 | macOS 主机验收 | §12.4 场景（Vue 项目全流程 / 登录态跨重启 / 接管往返） | 全真实 |
 
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 | 6 | tab 注册表 + workspace 切换 stash/restore | 单测 |
 | 7 | selector 四语法解析 + 未命中提示 | 单测 |
 | 8 | snapshot 格式化（selector 提示行） | 单测 |
-| 9 | migration v32 六列幂等 | 单测 |
+| 9 | migration 034 建表六列幂等 | 单测 |
 | 10 | IPC 全通道双端类型 + 状态推送 | 单测 |
 | 11 | sidebar chrome（tabs/地址栏/探活/接管/折叠）colocated | renderer 单测 |
 | 12 | 信任卡 + 设置页分类 | renderer 单测 |
@@ -434,7 +434,7 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 
 ### 12.1 Migration
 
-v32 六列（§9），幂等 ALTER；现有 workspace 默认 `ask` 触发信任卡。失败回滚走标准 SQLite 备份策略。
+034 建表（§9 勘误版），幂等；现有 workspace 默认 `ask` 触发信任卡。forward-only 不回滚（对齐 032/033 约定）。
 
 ### 12.2 实施任务分组（11 task）
 
@@ -443,7 +443,7 @@ v32 六列（§9），幂等 ALTER；现有 workspace 默认 `ask` 触发信任�
 - T3 selector 引擎 + sendInputEvent 动作层（click/type/press_key/hover/scroll）
 - T4 snapshot：debugger 懒附加 + 格式化器
 - T5 BrowserTools 12 工具 defs + 路由 + 注册 + 门控（mock manager）
-- T6 migration v32 + settings 读写
+- T6 migration 034 + settings 读写
 - T7 IPC 全通道 + preload + types.d.ts + 统一状态推送
 - T8 BrowserSidebar chrome（AddressBar/TabsBar/TakeoverIndicator/DevServerDropdown/折叠/占位上报）
 - T9 信任卡 + BrowserSettings 分类页
