@@ -378,15 +378,18 @@ view.webContents 'render-process-gone' → reload() + browser:notice('页面崩�
 
 ## 9. 数据存储
 
-migration v32（幂等，`workspace_settings` 加 6 列）：
+migration 034（幂等；**勘误**：v0.2 写作 v32 系猜测——032/033 已被 v2.3/v2.5 占用；且 `workspace_settings` 表在全库从未存在（仅 room_settings/global_settings），故为建表而非加列）：
 
 ```sql
-ALTER TABLE workspace_settings ADD COLUMN trust_browser TEXT NOT NULL DEFAULT 'ask';
-ALTER TABLE workspace_settings ADD COLUMN browser_evaluate_enabled INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_blacklist TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_whitelist TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL DEFAULT 380;
+CREATE TABLE IF NOT EXISTS workspace_settings (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  trust_browser TEXT NOT NULL DEFAULT 'ask',
+  browser_evaluate_enabled INTEGER NOT NULL DEFAULT 0,
+  browser_domain_blacklist TEXT NOT NULL DEFAULT '[]',
+  browser_domain_whitelist TEXT NOT NULL DEFAULT '[]',
+  browser_sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
+  browser_sidebar_width INTEGER NOT NULL DEFAULT 380
+);
 ```
 
 浏览器 cookie/storage 在 partition 目录（Electron 自管，不入 state.db）。tab 清单仅内存（重启丢失可接受；登录态不丢）。
