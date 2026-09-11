@@ -31,6 +31,7 @@ import { MarkdownBody } from './MarkdownBody';
 import { CopyButton } from '../ui/CopyButton';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
+import { ChangesChip } from './ChangesChip';
 import { Button } from '../ui/Button';
 import type { StreamSegment } from '../../stores/stream.store';
 import { groupToolSegments } from '../../lib/group-tool-segments';
@@ -202,6 +203,9 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
           <Hourglass size={11} strokeWidth={1.75} aria-hidden /> 等待 {dispatchCompleted}/{dispatchTotal} 子任务完成
         </div>
       )}
+
+      {/* v2.5 变更 chip：终态（非 streaming 且非 aborted）才挂载懒查；无变更时组件自渲染 null */}
+      {!isStreaming && stream.status !== 'aborted' && <ChangesChip message={message} />}
 
       <div className="mt-2 flex flex-col gap-1 border-t border-subtle pt-1.5 text-[11px]">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
