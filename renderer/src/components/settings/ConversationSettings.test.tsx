@@ -4,6 +4,7 @@
 //   - 挂载时通过 ipc.settings.getGlobal 拉取并显示当前 maxToolCalls
 //   - 修改输入后点击保存，调用 ipc.settings.updateGlobal({ maxToolCalls })
 //   - 加载阶段显示"加载中..."
+//   - v2.5：journalQuotaMb 回显 + 修改保存携带（未配置时不随 patch 下发）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConversationSettings } from './ConversationSettings';
@@ -63,6 +64,27 @@ describe('ConversationSettings', () => {
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => {
       expect(screen.getByText('已保存')).toBeInTheDocument();
+    });
+  });
+
+  it('v2.5：回显已配置的 journalQuotaMb', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 7, journalQuotaMb: 300 });
+    render(<ConversationSettings />);
+    await waitFor(() => {
+      expect((screen.getByDisplayValue('300') as HTMLInputElement).value).toBe('300');
+    });
+  });
+
+  it('v2.5：修改变更保留并保存，updateGlobal 携带 journalQuotaMb', async () => {
+    getGlobalMock.mockResolvedValue({ maxToolCalls: 5, journalQuotaMb: 200 });
+    updateGlobalMock.mockResolvedValue({ maxToolCalls: 5, journalQuotaMb: 500 });
+    render(<ConversationSettings />);
+    await waitFor(() => expect(screen.getByDisplayValue('200')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('200'), { target: { value: '500' } });
+    fireEvent.click(screen.getByText('保存'));
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ maxToolCalls: 5, journalQuotaMb: 500 });
     });
   });
 });

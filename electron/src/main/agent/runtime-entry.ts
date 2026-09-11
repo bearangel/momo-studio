@@ -1222,7 +1222,14 @@ export async function runTaskChatLoop(
   //    sub-agent 自身用 cfg.streamSessionId（两者解耦）。
   const parentStreamSessionId = dispatchContext?.tool_stream_session_id;
 
-  // 3. 跑 chat loop——runChatLoop 内部完成 system prompt 构造 / MemoryProvider 拉 / 工具循环 / abort 处理。
+  // 3. per-run ctx 变体（v2.5 终审 C1）：boot ctx 的 streamSessionId/roomId 是
+  //    WarmPool 预 spawn 期占位空串（真实值经 task-config IPC 后置注入）——不回写
+  //    则 doExecuteTool 组装的 toolCtx 恒空串，账本 streamSessionId/session_id 记
+  //    空值，chip 查询永不命中。只织入变体不改 boot ctx；runChatLoop 对
+  //    ctx.abortSignal 的赋值落在本变体上，与工具链共享同对象，中断语义不变。
+  const runCtx: RuntimeContext = { ...ctx, streamSessionId, roomId };
+
+  // 4. 跑 chat loop——runChatLoop 内部完成 system prompt 构造 / MemoryProvider 拉 / 工具循环 / abort 处理。
   //    stats 用于在 task-end IPC 里上报工具调用次数。
   const stats: RunChatLoopStats = { toolCallsUsed: 0 };
 
@@ -1231,7 +1238,7 @@ export async function runTaskChatLoop(
       roomId,
       body,
       taskConfig,
-      ctx,
+      runCtx,
       stats,
       parentStreamSessionId,
       undefined, // 暂无外部 abort_dispatch event 监听（PM 通过 IPC 直接 abort）
