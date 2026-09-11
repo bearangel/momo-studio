@@ -34,8 +34,8 @@ import {
   __flushEventBufferForTest,
 } from '../../src/main/agent/stream-relay';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertMessage } from '../../src/main/storage/messages/repo';
-import { insertEvent, nextSeqForMessage } from '../../src/main/storage/messages/events-repo';
+import { insertMessage, getMessageByStreamSessionId } from '../../src/main/storage/messages/repo';
+import { nextSeqForMessage } from '../../src/main/storage/messages/events-repo';
 import * as eventsRepo from '../../src/main/storage/messages/events-repo';
 import {
   rebuildTurn,
@@ -113,13 +113,28 @@ function insertRawEvent(
     .run(randomUUID(), messageId, seq ?? nextSeqForMessage(messageId), eventType, payloadJson, Date.now());
 }
 
+/**
+ * 确定性毫秒错开（flake 根治，review Finding 7）：自旋等系统时钟越过 t。
+ *
+ * 根因（DB 层探针 300 次实测，污染次数 == 同毫秒次数，1:1 对应）：场景 1 的
+ * 同步 seeding 全链（start/text/tool chunk + flush）耗时 <1ms，「后续 owner 行」
+ * 约 80% 概率与流行落在同一毫秒——findTurnUserBody 的 `created_at <= 流行时刻`
+ * 边界 + `rowid DESC` 让逻辑上更晚的后续行反超，污染回合起始 user 消息。
+ * 生产语义正确（`<=` 是刻意的「同毫秒 kickoff 不丢」语义），fixture 侧把
+ * 「逻辑上在流行之后」的行钉到严格更晚的毫秒即消除竞态（有界 ~1ms 自旋）。
+ */
+function waitMsPast(t: number): void {
+  while (Date.now() <= t) {
+    /* 自旋至下一毫秒 */
+  }
+}
+
 // === 九场景矩阵 ===
 
 describe('turn-reconstructor：九场景矩阵', () => {
   it('1. 完整回合：user 起始 + assistant 文本 + 1 对 tool_call/tool_result + 后续文本', () => {
     insertOwnerMessage(SESSION_ID, '帮我实现登录页');
     startStream('ss-full-1');
-    const mid = streamMessageId('ss-full-1');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-full-1', delta: '正在分析需求' });
     __routeChunkToBufferForTest({
       type: 'tool_call',
@@ -138,8 +153,10 @@ describe('turn-reconstructor：九场景矩阵', () => {
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-full-1', delta: '已完成' });
     __flushEventBufferForTest();
+    // 后续 owner 行必须严格晚于流行毫秒（同毫秒会被 findTurnUserBody 的 <= 边界
+    // + rowid DESC 反超——本测试的「不污染」意图才成立）
+    waitMsPast(getMessageByStreamSessionId('ss-full-1')!.createdAt);
     insertOwnerMessage(SESSION_ID, '不该被误取的后续消息'); // 流行之后的 owner 行不得污染起始消息
-    void mid;
 
     const turn = rebuildTurn('ss-full-1');
 

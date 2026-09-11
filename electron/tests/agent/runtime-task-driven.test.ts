@@ -24,11 +24,12 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll, type MockIns
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { StreamDelta } from '../../src/main/agent/llm-provider';
+import type { StreamDelta, LLMMessage } from '../../src/main/agent/llm-provider';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
+import { INTERRUPTED_TOOL_RESULT } from '../../src/main/agent/turn-reconstructor';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -248,6 +249,63 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     const startChunk = streamChunks().find((c) => c.type === 'start') as { streamSessionId: string };
     expect(startChunk.streamSessionId).toBe('my-fixed-session-id');
+  });
+
+  it('v2.6.0 接线锁：cfg.resume 经 runTaskChatLoop 解构透传到 runChatLoop.resumeTurn——首轮 LLM messages 含重建段且 currentBody 不重复（摘掉解构/传参必红）', async () => {
+    // 消费侧接线第四环（review Finding 1）：resumeTask → TaskConfig.resume（IPC）
+    // → runTaskChatLoop 解构 → runChatLoop 第 10 参 resumeTurn。T4 的
+    // runtime-resume.test.ts 直调 runChatLoop（锁第 10 参消费语义），本用例锁
+    // 「解构 + 透传」这一环——摘掉 runtime-entry 的 resume 解构/传参后
+    // resume 载荷静默丢失（不报错），只有本用例变红。
+    let first: LLMMessage[] = [];
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        first = [...messages];
+        yield { type: 'text', content: '已续跑' };
+        yield { type: 'done', finishReason: 'stop' };
+      }),
+    });
+
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '恢复兜底正文',
+        streamSessionId: 's-wiring-resume-1',
+        resume: {
+          messages: [
+            { role: 'user', content: '修复登录页崩溃' },
+            {
+              role: 'assistant',
+              content: '我先看下代码',
+              toolCalls: [{ id: 'call-1', name: 'read_file', arguments: { path: 'login.tsx' } }],
+            },
+            { role: 'tool', content: '(login.tsx 内容)', toolCallId: 'call-1' },
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-2', name: 'bash', arguments: { command: 'npm test' } }],
+            },
+            { role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call-2' },
+          ],
+          toolCallsUsed: 2,
+          steers: [],
+          degenerate: false,
+        },
+      }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    // 重建段 verbatim 到位：system + user + assistant(toolCalls) + tool + assistant + tool(孤儿合成)
+    expect(first.map((m) => m.role)).toEqual([
+      'system', 'user', 'assistant', 'tool', 'assistant', 'tool',
+    ]);
+    expect(first[1]).toEqual({ role: 'user', content: '修复登录页崩溃' });
+    // 孤儿 tool_call 的合成 result 用 T1 契约常量（生产者/消费者同源，不手搓文案）
+    expect(first[5]).toEqual({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call-2' });
+    // currentBody 不重复追加：user 仅重建段首条 1 条；兜底正文不进任何消息
+    expect(first.filter((m) => m.role === 'user')).toHaveLength(1);
+    expect(first.some((m) => m.content === '恢复兜底正文')).toBe(false);
   });
 
   it('cfg.taskId 注入 currentTaskId → MemoryProvider.getTaskContext 被调用', async () => {

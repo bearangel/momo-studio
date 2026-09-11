@@ -8,8 +8,9 @@
 //     assigned 任务，按 spec §5.6 字段（taskId/title/status/agentName/
 //     journalCount/streamSessionId）返回
 //   - resumeTask（Task 5 落）：断点续跑派发——定位断点流 → rebuildTurn →
-//     消息行翻回 streaming → 组 TaskConfig（含 resume 载荷 + 复用 streamSessionId）
-//     → 既有 executor 派发路径（AgentRunner.executeTask + registerLane）
+//     组 TaskConfig（含 resume 载荷 + 复用 streamSessionId）→ 既有 executor
+//     派发路径（AgentRunner.executeTask + registerLane）→ 车道检查通过后
+//     才把消息行翻回 streaming（审查修复：失败路径不滞留 streaming 行）
 //   - notifyExecutor / registerLane / AgentRunner.executeTask 由既有模块承担
 //     ——「既有 executor 派发路径，maxConcurrentTasks 天然生效」靠任务行已
 //     in_progress 且车道 DB 兜底已占道，slot accounting 自然正确（spec §5.4）
@@ -24,14 +25,12 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import {
-  getMessageByStreamSessionId,
   updateMessageStatus,
-  listMessagesBySession,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
 import { getEventBuffer } from '../agent/stream-relay';
 import { listTasks, getTask, type TaskRow } from '../storage/tasks/repo';
-import { rebuildTurn, type RebuiltTurn } from '../agent/turn-reconstructor';
+import { rebuildTurn } from '../agent/turn-reconstructor';
 import { agentRunners } from '../agent/runtime-registry';
 import { ensureMemberRuntime } from '../agent/start-chain';
 import { registerLane, getLane } from '../agent/session-lane';
@@ -269,13 +268,15 @@ function resolveAgentName(task: TaskRow): string {
  * assigned/session_queued 返回空串（无可复用流；新 stream 在 executor 放行后才分配）。
  *
  * 派发链路：resolveAssignmentId → ensureMemberRuntime（runner 不在 Map 时拉起）
- * → agentRunners.get → 组成 AgentTaskConfig{resume,...} → registerLane（占道
- * + 防 steer 误派）→ runner.executeTask。
+ * → agentRunners.get → 组成 AgentTaskConfig{resume,...} → 车道检查（异流占用 /
+ * 同流双恢复双拒绝）→ 消息行翻回 streaming → registerLane（占道 + 防 steer
+ * 误派）→ runner.executeTask。
  *
  * 不改任务状态（D6：检测卡片是唯一闸门；恢复链路也不改——in_progress 保持，
  * 任务终态由 AgentRunner 的 task-end 处理，与既有 task-driven 路径同语义）。
  *
  * @throws task 不存在 / status 不可恢复 / 无法解析 assignmentId / runner 拉起失败
+ *   / 执行会话被异流占用 / 该任务已在恢复中（同流重复恢复）
  */
 export async function resumeTask(taskId: string): Promise<{ streamSessionId: string }> {
   const task = getTask(taskId);
@@ -318,8 +319,6 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
   if (breakpointSsId) {
     // 有断点流：rebuildTurn 重建段 + 复用 streamSessionId
     const rebuilt = rebuildTurn(breakpointSsId);
-    // 翻回 streaming：消息行 status 恢复 + 事件时间线 append status_change
-    flipMessageBackToStreaming(task.executionSessionId, breakpointSsId);
     // body 兜底：重建段首条 user 文本 → 否则任务 description → 否则 title
     const firstUserMsg = rebuilt.messages.find((m) => m.role === 'user')?.content;
     const body = firstUserMsg ?? task.description ?? task.title;
@@ -367,6 +366,18 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
       `resumeTask：执行会话 ${task.executionSessionId} 已被另一活跃流占用（stream=${lane.streamSessionId}）`,
     );
   }
+  // 双恢复守卫：同流已在本进程占道（首次 resumeTask 已 registerLane + executeTask、
+  // 流未收尾）→ 二次恢复会给同一 child 发双 task-config 跑双 chat loop，必须拒绝。
+  // registerLane 先于 executeTask 且收尾时 clearLaneIfMatch 清道，故同流 lane 命中
+  // 即等价「该任务已在恢复中」。
+  if (lane && lane.streamSessionId === cfg.streamSessionId) {
+    throw new Error(`resumeTask：该任务已在恢复中（stream=${cfg.streamSessionId}），勿重复恢复`);
+  }
+  // 翻回 streaming 后置到车道检查之后、registerLane/executeTask 之前——
+  // 异流占用 / 双恢复 / runner 拉起失败等拒绝路径不再遗留滞留 streaming 的消息行
+  if (breakpointSsId) {
+    flipMessageBackToStreaming(task.executionSessionId, breakpointSsId);
+  }
   // 注册车道（占道 + 防后续 steer 误派入本流）
   registerLane(
     task.executionSessionId,
@@ -390,8 +401,9 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
  *     的非 segment 行（status 当时被 sweepStaleStreaming / finalizeStreamOnCrash 标 failed）
  *   - updateMessageStatus(rowId, 'streaming') —— 不改 body（保留聚合正文）
  *   - 追加 status_change 事件 { status: 'streaming' }——事件时间线诚实呈现
- *     「翻回」动作（与 start chunk 写入的 status_change 事件同型；renderer 聚合器
- *     对 status_change 已跳过（v2.0 已知语义），不影响前端展示）
+ *     「翻回」动作（与 start chunk 写入的 status_change 事件同型；renderer
+ *     聚合器会消费该事件把聚合状态翻回 streaming——与消息行状态一致，
+ *     实时 / 重启两侧同视图）
  *
  * 若无匹配行（极罕见：assigned 路径被覆盖到此分支等）静默 no-op——调用方已
  * 处理新建流场景。
@@ -417,5 +429,4 @@ function flipMessageBackToStreaming(executionSessionId: string, baseSsId: string
   });
   // 立即落盘（renderer 可能在状态变更事件到达前就拉了消息列表；status 列已是 streaming）
   getEventBuffer().flush();
-  void listMessagesBySession; // 类型保留——unused 警告压制
 }

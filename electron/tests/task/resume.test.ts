@@ -44,9 +44,9 @@ import {
 import {
   insertMessage,
   getMessageByStreamSessionId,
+  listMessagesByStreamSessionId,
   updateMessageStatus,
 } from '../../src/main/storage/messages/repo';
-import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { __clearRuntimeRegistryForTest } from '../../src/main/agent/runtime-registry';
 import { __clearLaneForTest } from '../../src/main/agent/session-lane';
@@ -195,13 +195,13 @@ function seedAgentStream(opts: {
     });
   }
   __flushEventBufferForTest();
-  // 模拟 App 崩溃：消息行 status 保持 streaming（sweepStaleStreaming 之前的状态）
-  // 真实崩溃路径由 sweepStaleStreaming 标 failed；本测试用直接 updateMessageStatus
-  // 复现「sweep 之后」的中断形态
-  updateMessageStatus(opts.streamSessionId, 'failed');
-  // 但 base 行（无 # 后缀）的 status 留 streaming——只翻 roll 后缀行为 failed
-  // 这里为简单起见：整行 failed；spec 真实场景是 roll 行为 streaming/base 行为 failed
-  // 但对 rebuildTurn 的精确匹配不产生影响（rebuildTurn 按 base id 读所有 # 行）
+  // 模拟 App 崩溃后被 sweepStaleStreaming 收尾的形态：按 stream_session_id 查出
+  // 该流全部真实 message 行（base + #roll 后缀行），逐行标 failed。
+  // updateMessageStatus 首参是 message id——误传流 id 是静默 no-op（review
+  // Finding 2），会让「翻回 streaming」的前置/后置断言空转
+  for (const row of listMessagesByStreamSessionId(opts.streamSessionId)) {
+    updateMessageStatus(row.id, 'failed');
+  }
 }
 
 // === 测试 ===
@@ -325,6 +325,14 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     expect(item.status).toBe('assigned');
   });
 
+  it('session_queued 任务命中（executor 放行池语义——锁定既有行为）', () => {
+    seedTask({ id: 'T-SQ', status: 'session_queued', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
+    const [item] = detectInterrupted();
+    expect(item.taskId).toBe('T-SQ');
+    expect(item.status).toBe('session_queued');
+    expect(item.streamSessionId).toBe('');
+  });
+
   it('journal store 未注入时 journalCount 降级为 0（不阻断检测）', () => {
     seedTask({ id: 'T-1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     setJournalStore(null);
@@ -388,6 +396,10 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     const { agentRunners } = await import('../../src/main/agent/runtime-registry');
     agentRunners.set('inst1', runner);
 
+    // 真前置（Finding 2）：seed 修正后消息行确为 failed（sweep 收尾形态）——
+    // 此前传流 id 的 no-op seeding 让「翻回」断言空转
+    expect(getMessageByStreamSessionId('ss-base-r')!.status).toBe('failed');
+
     const result = await resumeTask('T-1');
     expect(result.streamSessionId).toBe('ss-base-r'); // 复用 base id（剥 # 后缀）
 
@@ -408,6 +420,87 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     // 消息行翻回 streaming
     const msg = getMessageByStreamSessionId('ss-base-r')!;
     expect(msg.status).toBe('streaming');
+  });
+
+  it('双恢复守卫（Finding 4）：同流连续两次 resumeTask → 第二次拒绝，child 不收双 task-config', async () => {
+    seedTask({ id: 'T-D1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
+    seedAgentStream({
+      streamSessionId: 'ss-dbl',
+      sessionId: 'sess-task1',
+      senderAgentId: 'agent-bot-1',
+      taskId: 'T-D1',
+      text: ['执行到一半'],
+    });
+
+    const child = new EventEmitter() as ChildProcess;
+    const sendSpy = vi.fn();
+    (child as unknown as { send: typeof sendSpy }).send = sendSpy;
+    (child as unknown as { kill: () => void }).kill = vi.fn();
+    (child as unknown as { connected: boolean }).connected = true;
+    (child as unknown as { exitCode: number | null }).exitCode = null;
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-1',
+      workspaceId: 'ws1',
+      config: {} as never,
+      warmPool,
+    });
+    const { agentRunners } = await import('../../src/main/agent/runtime-registry');
+    agentRunners.set('inst1', runner);
+
+    const first = await resumeTask('T-D1');
+    expect(first.streamSessionId).toBe('ss-dbl');
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+
+    // 第二次恢复同一任务：首次派发的流仍占道（fake child 未收尾）→ 拒绝
+    await expect(resumeTask('T-D1')).rejects.toThrow(/已在恢复中/);
+    // 关键锁：child 仍只收到一次 task-config（同 child 双 chat loop 被守卫拦截）
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('flip 后置（Finding 5）：lane 被异流占用时 resumeTask 抛错且消息行保持 failed', async () => {
+    seedTask({ id: 'T-F5', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
+    seedAgentStream({
+      streamSessionId: 'ss-flip',
+      sessionId: 'sess-task1',
+      senderAgentId: 'agent-bot-1',
+      taskId: 'T-F5',
+      text: ['半截输出'],
+    });
+
+    const child = new EventEmitter() as ChildProcess;
+    const sendSpy = vi.fn();
+    (child as unknown as { send: typeof sendSpy }).send = sendSpy;
+    (child as unknown as { kill: () => void }).kill = vi.fn();
+    (child as unknown as { connected: boolean }).connected = true;
+    (child as unknown as { exitCode: number | null }).exitCode = null;
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-1',
+      workspaceId: 'ws1',
+      config: {} as never,
+      warmPool,
+    });
+    const { agentRunners } = await import('../../src/main/agent/runtime-registry');
+    agentRunners.set('inst1', runner);
+
+    // 同会话被另一条手输快速消息流占道
+    const { registerLane } = await import('../../src/main/agent/session-lane');
+    registerLane('sess-task1', {
+      taskId: null,
+      streamSessionId: 'other-manual-stream',
+      assignmentId: 'inst1',
+    });
+
+    await expect(resumeTask('T-F5')).rejects.toThrow(/已被另一活跃流占用/);
+    // 关键锁：拒绝路径不滞留 streaming 行——flip 未发生，保持 failed
+    expect(getMessageByStreamSessionId('ss-flip')!.status).toBe('failed');
+    // 未派发任何 task-config
+    expect(sendSpy).not.toHaveBeenCalled();
   });
 
   it('重建段含已落库事件：tool_call_start/result 对 + 后续 text → LLMMessage 重建', async () => {
@@ -444,7 +537,8 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-rich', delta: '分析完毕' });
     __flushEventBufferForTest();
-    updateMessageStatus('ss-rich', 'failed'); // 模拟 sweep 之后
+    // 真实 message id（传流 id 是静默 no-op——Finding 2 同型修复）
+    updateMessageStatus(getMessageByStreamSessionId('ss-rich')!.id, 'failed');
 
     const child = new EventEmitter() as ChildProcess;
     const sendSpy = vi.fn();
@@ -472,18 +566,21 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     expect(sent.resume.toolCallsUsed).toBe(1);
   });
 
-  it('assigned 任务：交由既有 executor 放行（notifyExecutor 触发并发闸）', async () => {
+  it('assigned 任务：交由既有 executor 放行（notifyExecutor 真实锁定，不 void 压制）', async () => {
     seedTask({ id: 'T-A', status: 'assigned', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
 
-    const notifySpy = vi.fn();
-    // 直接 spy 不可行——notifyExecutor 来自 executor 模块；改测 taskExecutor 入队是否触发
-    // 简化断言：resumeTask 返回 streamSessionId='' 且不抛错（executor 真正执行是异步）
+    // CJS 模块对象可 spy：resumeTask 内部 await import('./executor') 在调用时
+    // 解析同一模块命名空间 → spy 命中（review Finding 3：删 void notifySpy 压制）
+    const executorModule = await import('../../src/main/task/executor');
+    const notifySpy = vi.spyOn(executorModule, 'notifyExecutor');
+
     const result = await resumeTask('T-A');
     expect(result.streamSessionId).toBe('');
+    // executor 放行链真实锁定——notifyExecutor 被调（并发闸 + 队列序 + kickoff 入口）
+    expect(notifySpy).toHaveBeenCalledTimes(1);
     // 状态保持 assigned（resumeTask 不改任务状态——D6 检测时不改任务状态）
     expect(getTask('T-A')!.status).toBe('assigned');
-    // 静默引用避免 unused 警告
-    void notifySpy;
+    notifySpy.mockRestore();
   });
 
   it('非中断状态（completed/failed/draft/pending）抛错', async () => {
@@ -605,7 +702,7 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-w1', delta: '半截输出' });
     __flushEventBufferForTest();
-    updateMessageStatus('ss-w1', 'failed');
+    updateMessageStatus(getMessageByStreamSessionId('ss-w1')!.id, 'failed');
 
     const child = new EventEmitter() as ChildProcess;
     const sendSpy = vi.fn();
@@ -662,7 +759,7 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
       taskId: 'T-W2',
     });
     __flushEventBufferForTest();
-    updateMessageStatus('ss-w2', 'failed');
+    updateMessageStatus(getMessageByStreamSessionId('ss-w2')!.id, 'failed');
 
     // 注入断点流行（rebuildTurn 应能拉出含 user + text 的 messages）
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-w2', delta: '前情文本' });

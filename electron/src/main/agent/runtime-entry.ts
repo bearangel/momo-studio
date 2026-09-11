@@ -1292,6 +1292,8 @@ export async function runTaskChatLoop(
       // 经 cfg.resume 解构透传到 runChatLoop.resumeTurn；runChatLoop 据此接续
       // messages / 续扣预算 / 重放 steers。缺省 undefined 时既有行为零改动
       // （spec §5.4 「最小侵入，不动既有 11 个调用点」）。
+      // 消费侧接线锁：tests/agent/runtime-task-driven.test.ts「v2.6.0 接线锁」
+      // 用例——摘掉本解构/传参该锁必红（resume 静默丢失不报错）。
       resume,
     );
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，

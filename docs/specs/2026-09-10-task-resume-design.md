@@ -62,8 +62,11 @@ boot → resume.detectInterrupted()
          rebuildTurn(taskId) → 既有 executor 派发（并发闸生效）+ resume 载荷
          → task-config IPC 扩展：resume?: { messages; toolCallsUsed; steers }
          → 子进程 runTaskChatLoop → runChatLoop(resumeTurn) 从中断点继续
-     → [放弃] → 内联二选一：直接 transition('cancelled') / 先 journal:revert 全条目再 cancelled
+      → [放弃] → 内联二选一：直接 transition('cancelled') / 先 journal:revert 全条目再 cancelled
 ```
+
+实施精化：detectInterrupted 含 session_queued（executor 放行池语义——与 assigned
+同走 notifyExecutor 全新执行路径，恢复卡一并呈现）。
 
 ### 5.3 重建器语义（§2 核心纯函数）
 
