@@ -153,10 +153,10 @@ describe('recordChange 五 op 矩阵', () => {
     expect(store.readBlob('ws-A', entry.beforeHash as string)).toBe(before);
   });
 
-  it('rename: 不传 oldPath → 默认 null（接口语义）', () => {
-    const entry = recordChange(ctxOf(), 'src/x.ts', 'rename', 'content', null);
-    expect(entry.op).toBe('rename');
-    expect(entry.oldPath).toBeNull();
+  it('rename: 不传 oldPath → 抛错（fail-fast：撤销缺旧路径无法定位）', () => {
+    expect(() =>
+      recordChange(ctxOf(), 'src/x.ts', 'rename', 'content', null),
+    ).toThrow(/rename 记账必须提供 oldPath/);
   });
 });
 
@@ -196,9 +196,10 @@ describe('recordChange 字段透传', () => {
     expect(store.listByStream('ws-A', 'stream-fast-007')).toHaveLength(1);
   });
 
-  it('多次 recordChange 同 stream → 全部落库并按 createdAt 升序', () => {
-    // 真实 Date.now() 在同毫秒内多次调用返回同值（落库 ORDER BY created_at, id
-    // 退化为随机 id 序）；用假时钟推进保证 createdAt 严格单调，断言插入序。
+  it('多次 recordChange 同 stream → 全部落库并按 createdAt 升序（fakeTimers 验证 ORDER BY 区分度；生产单调时钟是单独用例）', () => {
+    // 此用例刻意走 fakeTimers 推进 Date.now()，验证落库 SQL ORDER BY created_at
+    // 排序字段确有区分度；生产 createdAt 严格全序由 recorder 模块级 nextCreatedAt
+    // 单调时钟保证（独立用例覆盖），不在此处复测。
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-11T00:00:00Z'));
     try {
@@ -214,12 +215,24 @@ describe('recordChange 字段透传', () => {
       expect(entries.map((e) => e.path)).toEqual(['a.ts', 'b.ts', 'c.ts']);
       // createdAt 严格单调递增（验证 ORDER BY 排序字段确有区分度）
       expect(entries[1]!.createdAt).toBeGreaterThan(entries[0]!.createdAt);
-      // createdAt 严格单调（验证 sort 字段区分度，避免后续测试误判插入序）
-      expect(entries[1]!.createdAt).toBeGreaterThan(entries[0]!.createdAt);
       expect(entries[2]!.createdAt).toBeGreaterThan(entries[1]!.createdAt);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('生产单调时钟：同 stream 连调 recordChange 两次（无 fakeTimers）→ createdAt 严格递增', () => {
+    // 不走 vi 推进，直接连调——验证 recorder 模块级 nextCreatedAt 单调时钟在
+    // 真实 Date.now() 同毫秒返回时仍能产生严格递增 createdAt。下游 T3 对称记账
+    // 与 T7 rollbackFileBefore 严格比较依赖此全序。
+    const rctx = ctxOf({ streamSessionId: 'stream-mono' });
+    const e1 = recordChange(rctx, 'x.ts', 'modify', 'old', 'new');
+    const e2 = recordChange(rctx, 'x.ts', 'modify', 'new', 'newer');
+    expect(e2.createdAt).toBeGreaterThan(e1.createdAt);
+
+    const entries = store.listByStream('ws-A', 'stream-mono');
+    expect(entries).toHaveLength(2);
+    expect(entries[1]!.createdAt).toBeGreaterThan(entries[0]!.createdAt);
   });
 });
 
@@ -347,7 +360,7 @@ describe('recordDeleteTree 递归 walk', () => {
     }
   });
 
-  it('walker 不下钻 workspace 外的路径（路径穿越防御边界）', () => {
+  it('walker 接受 ./ 前缀相对路径（越界防御在 WorkspaceFS 层，见注释）', () => {
     // 真实 rm 工具走 WorkspaceFS 防御，这里只验证 walker 不抛错 + 不越权；
     // workspaceDir 在 walker 内部只作为基址参与 join，不做规范化（生产防御在
     // WorkspaceFS 层）。此用例仅验证 walker 输入接受相对路径时不炸。

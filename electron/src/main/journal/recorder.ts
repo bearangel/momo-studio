@@ -33,6 +33,15 @@ export interface RecordCtx {
 
 let store: JournalStore | null = null;
 
+/** 单调时钟：同毫秒紧凑记账（撤销对称条目、rollbackFileBefore 严格比较）依赖
+ *  created_at 全序。Date.now() 连续调用可能同值，last 记录器内上一次值，
+ *  保证严格递增。生产路径唯一时间源；测试 fakeTimers 场景单独走 vi 推进。 */
+let lastCreatedAt = 0;
+function nextCreatedAt(): number {
+  lastCreatedAt = Math.max(Date.now(), lastCreatedAt + 1);
+  return lastCreatedAt;
+}
+
 /**
  * 生产接线：boot 链调用 setJournalStore(createJournalStore(getDb())) 完成注入。
  * 允许多次设置（运行期 store 重启场景）；传入 null 表示清空（主要用于测试）。
@@ -83,14 +92,20 @@ export function recordChange(
 ): JournalEntry {
   const s = requireStore();
 
-  const beforeHash = before === null ? null : hashContent(before);
-  const afterHash = after === null ? null : hashContent(after);
-
-  if (beforeHash !== null) {
-    s.writeBlob(rc.workspaceId, beforeHash, before as string);
+  if (op === 'rename' && oldPath == null) {
+    throw new Error('rename 记账必须提供 oldPath');
   }
-  if (afterHash !== null) {
-    s.writeBlob(rc.workspaceId, afterHash, after as string);
+
+  let beforeHash: string | null = null;
+  if (before !== null) {
+    beforeHash = hashContent(before);
+    s.writeBlob(rc.workspaceId, beforeHash, before);
+  }
+
+  let afterHash: string | null = null;
+  if (after !== null) {
+    afterHash = hashContent(after);
+    s.writeBlob(rc.workspaceId, afterHash, after);
   }
 
   const entry: JournalEntry = {
@@ -105,7 +120,7 @@ export function recordChange(
     beforeHash,
     afterHash,
     oldPath: oldPath ?? null,
-    createdAt: Date.now(),
+    createdAt: nextCreatedAt(),
   };
   s.insert(entry);
   return entry;
