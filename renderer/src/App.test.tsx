@@ -70,6 +70,11 @@ const mockApi = {
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
   },
+  // v2.6.0 Task 6：ResumeNotice 挂载拉取中断任务——默认空列表使恢复卡不渲染，
+  // 既有分支断言不受影响
+  task: {
+    listInterrupted: vi.fn(),
+  },
 };
 
 // 默认 sandbox 聚合信息（linux 已可用 → SandboxNotice 返回 null）
@@ -104,6 +109,9 @@ beforeEach(() => {
   // 默认沙箱已可用——SandboxNotice 不渲染，既有断言不受影响
   mockApi.sandbox.getState.mockReset();
   mockApi.sandbox.getState.mockResolvedValue(mkSandboxInfo());
+  // 默认无中断任务——ResumeNotice 不渲染，既有断言不受影响
+  mockApi.task.listInterrupted.mockReset();
+  mockApi.task.listInterrupted.mockResolvedValue([]);
 });
 
 describe('App 启动分支（v2.0 P1 Task 11）', () => {

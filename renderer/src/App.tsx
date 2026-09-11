@@ -17,6 +17,7 @@ import { MainShell } from './routes/MainShell';
 import { TitleBar } from './components/layout/TitleBar';
 import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
 import { SandboxNotice } from './components/settings/SandboxNotice';
+import { ResumeNotice } from './components/task/ResumeNotice';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -83,6 +84,8 @@ export function App() {
       )}
       {/* v2.4 Task 9：沙箱首启提示（自管显隐——不满足条件时组件内部返回 null） */}
       <SandboxNotice />
+      {/* v2.6.0 Task 6：启动任务恢复卡（自管显隐——boot 现查，无中断任务返回 null） */}
+      <ResumeNotice />
     </>
   );
 }
