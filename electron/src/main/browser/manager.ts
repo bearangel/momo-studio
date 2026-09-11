@@ -107,6 +107,14 @@ export interface ManagedViewBounds {
   setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
 }
 
+/** sidebar 占位区 rect——browser:setSidebarBounds 载荷（与 Electron setBounds 四字段同构） */
+export interface SidebarRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** 单 tab 视图（结构性契约——真 Electron WebContentsView 经 view-factory.ts 适配满足） */
 export interface ManagedView {
   readonly webContents: ManagedWebContents;
@@ -168,6 +176,8 @@ export class BrowserManager {
   private nextSerial = 0;
   /** agent 输入动作进行中（sendInputEvent 在真实环境可能回流 before-input-event——不计接管） */
   private agentInputDepth = 0;
+  /** renderer 最近一次上报的 sidebar 占位区 rect（null = 从未上报）——任何视图成为 current 时立即套用 */
+  private lastRect: SidebarRect | null = null;
 
   constructor(
     private readonly factory: ViewFactory,
@@ -194,8 +204,9 @@ export class BrowserManager {
     return this.buildState(ws);
   }
 
-  /** IPC browser:setSidebarBounds 消费点——renderer 占位区 rect 上报（DPR 换算在 T10 接线层） */
-  setSidebarBounds(rect: { x: number; y: number; width: number; height: number }): void {
+  /** IPC browser:setSidebarBounds 消费点——renderer 占位区 rect 上报（DPR 换算在 T10 接线层）。缓存供任何后续成为 current 的视图立即套用（browser:state 推送不一定触发 renderer ResizeObserver 重报） */
+  setSidebarBounds(rect: SidebarRect): void {
+    this.lastRect = rect;
     const ws = this.active;
     const tab = ws?.tabs[ws.current];
     if (ws && tab) tab.view.bounds.setBounds(rect);
@@ -239,6 +250,7 @@ export class BrowserManager {
     if (!tab) {
       tab = this.createTab(ws);
       ws.current = ws.tabs.length - 1;
+      this.applyLastRect(ws); // 懒建的新视图成为 current——立即套用缓存 rect
     }
     await this.loadChecked(tab, url);
     this.emitState(ws);
@@ -283,6 +295,7 @@ export class BrowserManager {
         ws.consoleBuffer.delete(tab.serial);
         if (idx < ws.current) ws.current -= 1;
         else if (idx === ws.current) ws.current = Math.min(ws.current, ws.tabs.length - 1);
+        this.applyLastRect(ws); // 关闭致 current 迁移时，新 current 视图（此前无 bounds）立即套用
         this.emitState(ws);
         return this.tabInfos(ws);
       }
@@ -292,6 +305,7 @@ export class BrowserManager {
           throw new RangeError(`tab 下标 ${idx} 越界（现有 ${ws.tabs.length} 个 tab）`);
         }
         ws.current = idx;
+        this.applyLastRect(ws); // 切换后的 current 视图此前未持 bounds——立即套用
         this.emitState(ws);
         return this.tabInfos(ws);
       }
@@ -450,7 +464,10 @@ export class BrowserManager {
     this.userTakeover(wsId);
     this.ensureLive(ws);
     let tab = ws.tabs[ws.current];
-    if (!tab) tab = this.createTab(ws);
+    if (!tab) {
+      tab = this.createTab(ws); // tabs 为空时新视图落在 idx 0 == current
+      this.applyLastRect(ws);
+    }
     await this.loadChecked(tab, url);
     this.emitState(ws);
     return {
@@ -617,6 +634,7 @@ export class BrowserManager {
   private openTabInternal(ws: ActiveWorkspace, initialUrl: string | null): TabRecord {
     const record = this.createTab(ws);
     ws.current = ws.tabs.length - 1; // 新 tab 成为当前（§4 工具 11 语义）
+    this.applyLastRect(ws); // 新 current 视图立即套用缓存 rect
     void this.loadForNotice(record, initialUrl ?? ABOUT_BLANK);
     return record;
   }
@@ -635,6 +653,18 @@ export class BrowserManager {
       void this.loadForNotice(record, url);
     }
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));
+    this.applyLastRect(ws); // 恢复后的 current 视图立即套用缓存 rect
+  }
+
+  /**
+   * 把缓存的 sidebar rect 套用到「刚成为 current」的视图：真实 WebContentsView 默认
+   * bounds 0,0,0,0（不可见），新视图不等 renderer 重报——browser:state 推送不一定触发
+   * 其 ResizeObserver。lastRect 为 null（从未上报）时 no-op。
+   */
+  private applyLastRect(ws: ActiveWorkspace): void {
+    if (!this.lastRect) return;
+    const tab = ws.tabs[ws.current];
+    if (tab) tab.view.bounds.setBounds(this.lastRect);
   }
 
   /**

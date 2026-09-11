@@ -603,6 +603,62 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     expect(() => manager.setSidebarBounds({ x: 0, y: 0, width: 380, height: 600 })).not.toThrow();
   });
 
+  // ---- lastRect 缓存回归锁（review fix：新 current 视图不等 renderer 重报，立即套用缓存 rect）----
+
+  it('lastRect 缓存：setSidebarBounds 后 tabsAction open → 新 current 视图立即收到 setBounds(rect)', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // v0 = current
+    const rect = { x: 10, y: 20, width: 380, height: 600 };
+    manager.setSidebarBounds(rect);
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // v1 成为 current
+    const v1 = factory.views[1]!;
+    expect(v1.view.bounds.setBounds).toHaveBeenCalledWith(rect);
+    expect(v1.view.bounds.setBounds).toHaveBeenCalledTimes(1);
+  });
+
+  it('lastRect 缓存：switch 到另一 tab → 该 tab 视图收到 setBounds(rect)', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // idx 0
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    const v0 = factory.views[0]!;
+    const rect = { x: 5, y: 6, width: 200, height: 100 };
+    manager.setSidebarBounds(rect); // 透传到当前 v1；v0 尚无 bounds
+    expect(v0.view.bounds.setBounds).not.toHaveBeenCalled();
+    await manager.tabsAction('ws1', 'switch', 0);
+    expect(v0.view.bounds.setBounds).toHaveBeenCalledWith(rect);
+    expect(v0.view.bounds.setBounds).toHaveBeenCalledTimes(1);
+  });
+
+  it('lastRect 缓存：deactivate → activate（stash 恢复）→ 恢复后的 current 视图收到 setBounds(rect)', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // idx 0
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    const rect = { x: 1, y: 2, width: 300, height: 400 };
+    manager.setSidebarBounds(rect);
+    manager.onWorkspaceDeactivated('ws1');
+    manager.onWorkspaceActivated('ws1', '/ws/ws1'); // 恢复 → 新建 v2(5173)/v3(3000)，current=1
+    const v2 = factory.views[2]!;
+    const v3 = factory.views[3]!;
+    expect(v3.view.bounds.setBounds).toHaveBeenCalledWith(rect); // current 视图立即套用
+    expect(v2.view.bounds.setBounds).not.toHaveBeenCalled(); // 只套用 newly-current——非当前视图不动
+  });
+
+  it('从未 setSidebarBounds → 新建/切换/恢复的视图一律不收 setBounds（null 缓存不误用）', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // 懒建
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // open
+    await manager.tabsAction('ws1', 'switch', 0); // switch
+    manager.onWorkspaceDeactivated('ws1');
+    manager.onWorkspaceActivated('ws1', '/ws/ws1'); // stash 恢复
+    for (const h of factory.views) {
+      expect(h.view.bounds.setBounds).not.toHaveBeenCalled();
+    }
+  });
+
   it('setSidebarCollapsed(true) 销毁视图；折叠期间活动先恢复旧清单再作用（不丢 tab）；false 维持已恢复', async () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
