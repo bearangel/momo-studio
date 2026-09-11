@@ -5,7 +5,8 @@
 // 设计定位：纯组装（hash → writeBlob → insert），**不修改工作区文件**——
 // 工具层（file-tools / apply-patch-tools）先调 recordChange 完成记账，再做
 // 实际写盘。recordDeleteTree 仅 fs walk 读取待删文件以 hash 出 before 内容
-// 并落 blob（撤销时恢复用），不删除文件本身。
+// 并落 blob（撤销时恢复用），不删除文件本身；其多条目经 insertMany 单事务
+// 原子落库。recordChange 尾部挂 maybeEnforceQuota 配额节流（Task 6）。
 //
 // 存储注入：模块级 JournalStore 单例（与 memory/sandbox 同模式）。生产 boot
 // 期由启动链调 setJournalStore 注入；测试经 __setJournalStoreForTest 注入
@@ -15,6 +16,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import nodePath from 'node:path';
+import { maybeEnforceQuota } from './quota';
 import type { JournalStore } from './store';
 import type { JournalEntry, JournalOp } from './types';
 
@@ -99,6 +101,27 @@ export function recordChange(
   oldPath?: string,
 ): JournalEntry {
   const s = requireStore();
+  const entry = assembleEntry(rc, filePath, op, before, after, oldPath);
+  s.insert(entry);
+  // 配额节流：每 50 次记账触发一次滚动清理（失败只 warn，见 quota.ts）
+  maybeEnforceQuota(rc.workspaceId);
+  return entry;
+}
+
+/**
+ * 组装一条条目：hash before/after（null 跳过对应 blob 落盘）并生成 entry 对象，
+ * **不 insert**。recordChange 单条路径与 recordDeleteTree 批量路径共用，
+ * 保证 op 校验与 blob 落盘语义单点。
+ */
+function assembleEntry(
+  rc: RecordCtx,
+  filePath: string,
+  op: JournalOp,
+  before: string | null,
+  after: string | null,
+  oldPath?: string,
+): JournalEntry {
+  const s = requireStore();
 
   if (op === 'rename' && oldPath == null) {
     throw new Error('rename 记账必须提供 oldPath');
@@ -116,7 +139,7 @@ export function recordChange(
     s.writeBlob(rc.workspaceId, afterHash, after);
   }
 
-  const entry: JournalEntry = {
+  return {
     id: `je_${randomUUID()}`,
     workspaceId: rc.workspaceId,
     taskId: rc.taskId,
@@ -130,8 +153,6 @@ export function recordChange(
     oldPath: oldPath ?? null,
     createdAt: nextCreatedAt(),
   };
-  s.insert(entry);
-  return entry;
 }
 
 /**
@@ -160,6 +181,9 @@ function walkFiles(
  * 递归 walk 一棵目录树，为每个文件记一条 delete 条目（含 before 内容 hash 与
  * blob 落盘）。工具层（rm 工具）随后再做实际删除——recorder 仅记账。
  *
+ * 多条目经 insertMany 单事务原子落库（T4 review 移交）：整树 delete 记账
+ * all-or-nothing，避免中途失败留下半棵树的撤销链。节流计数按条数累计。
+ *
  * 边界：
  *   - relDir 不存在 → 返回空数组（不抛错）
  *   - relDir 是空目录 → 返回空数组（无文件可 hash）
@@ -176,16 +200,21 @@ export function recordDeleteTree(
   if (!fs.existsSync(absDir)) return [];
 
   const stat = fs.statSync(absDir);
-  if (!stat.isDirectory()) {
+  const files: Array<{ rel: string; content: string }> = [];
+  if (stat.isDirectory()) {
+    walkFiles(absDir, relDir, (abs, rel) => {
+      files.push({ rel, content: fs.readFileSync(abs, 'utf8') });
+    });
+  } else {
     // 单文件边界：直接 1 条 delete
-    const content = fs.readFileSync(absDir, 'utf8');
-    return [recordChange(rc, relDir, 'delete', content, null)];
+    files.push({ rel: relDir, content: fs.readFileSync(absDir, 'utf8') });
   }
 
-  const entries: JournalEntry[] = [];
-  walkFiles(absDir, relDir, (abs, rel) => {
-    const content = fs.readFileSync(abs, 'utf8');
-    entries.push(recordChange(rc, rel, 'delete', content, null));
-  });
+  const entries = files.map((f) => assembleEntry(rc, f.rel, 'delete', f.content, null));
+  if (entries.length > 0) {
+    const s = requireStore();
+    s.insertMany(entries);
+    maybeEnforceQuota(rc.workspaceId, entries.length);
+  }
   return entries;
 }

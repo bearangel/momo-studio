@@ -34,6 +34,8 @@ export interface GlobalSettings {
   sandboxMode?: 'strict' | 'permissive';
   /** v2.4：沙箱内网络出站开关（仅影响沙箱内 bash，LLM API 调用不受影响）；默认 false */
   sandboxNetwork?: boolean;
+  /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
+  journalQuotaMb?: number;
 }
 
 // 会话级配置（SessionSettings）与 CRUD 直接转调 sessions repo——单一数据源，
@@ -44,6 +46,8 @@ export type { SessionSettings } from '../storage/sessions/repo';
 const GLOBAL_KEY = 'global_settings';
 const DEFAULT_MAX_TOOL_CALLS = 10;
 const DEFAULT_AUDIT_QUOTA_MB = 100;
+/** 变更账本 blob 配额默认值（MB）——导出供 quota 层非法值回退共用（单一事实源） */
+export const DEFAULT_JOURNAL_QUOTA_MB = 200;
 
 /** 读取全局配置；不存在或字段缺失时返回默认值 */
 export function getGlobalSettings(): GlobalSettings {
@@ -65,6 +69,7 @@ export function getGlobalSettings(): GlobalSettings {
       memoryExtractionEnabled: true,
       sandboxMode: 'strict',
       sandboxNetwork: false,
+      journalQuotaMb: DEFAULT_JOURNAL_QUOTA_MB,
     };
   }
   const parsed = JSON.parse(row.value) as Partial<GlobalSettings>;
@@ -80,6 +85,7 @@ export function getGlobalSettings(): GlobalSettings {
     memoryExtractionEnabled: parsed.memoryExtractionEnabled ?? true,
     sandboxMode: parsed.sandboxMode ?? 'strict',
     sandboxNetwork: parsed.sandboxNetwork ?? false,
+    journalQuotaMb: parsed.journalQuotaMb ?? DEFAULT_JOURNAL_QUOTA_MB,
   };
 }
 

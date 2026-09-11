@@ -150,6 +150,26 @@ describe('journal store：条目 CRUD', () => {
     expect(store.deleteByTaskGroup('ws-A', 'T-9', 500)).toBe(0);
     expect(store.deleteByTaskGroup('ws-A', 'T-9', 501)).toBe(1);
   });
+
+  it('insertMany：单事务原子落库——批量含非法 op 整批回滚不残留；空数组 no-op（T4 review 移交）', () => {
+    const store = createJournalStore(getDb());
+    const good1 = entry({ createdAt: 100 });
+    const good2 = entry({ taskId: 'T-2', createdAt: 101 });
+    const bad = entry({ createdAt: 102 });
+    // 经加宽视图写入非法值（避免 any；运行时越过 TS 类型面打 CHECK）
+    (bad as { op?: string }).op = 'destroy';
+    expect(() => store.insertMany([good1, bad, good2])).toThrow(/CHECK constraint failed/);
+    // 整批回滚：good1/good2 不残留（无事务时会留下半批）
+    expect(store.countAll()).toBe(0);
+
+    store.insertMany([good1, good2]);
+    expect(store.countAll()).toBe(2);
+    expect(store.listByTask('ws-A', 'T-1')).toEqual([good1]);
+    expect(store.listByTask('ws-A', 'T-2')).toEqual([good2]);
+
+    expect(() => store.insertMany([])).not.toThrow();
+    expect(store.countAll()).toBe(2);
+  });
 });
 
 describe('journal store：blob 内容寻址存储', () => {

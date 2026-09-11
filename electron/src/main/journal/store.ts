@@ -14,6 +14,9 @@ import type { JournalEntry, JournalOp } from './types';
 
 export interface JournalStore {
   insert(e: JournalEntry): void;
+  /** 批量插入（单 db.transaction 原子提交）：删除树等多条目写入路径用，
+   *  避免逐条 insert 中途失败留下半批（T4 review 移交） */
+  insertMany(entries: JournalEntry[]): void;
   listByTask(workspaceId: string, taskId: string): JournalEntry[];
   listByStream(workspaceId: string, streamSessionId: string): JournalEntry[];
   listByPath(workspaceId: string, path: string): JournalEntry[];
@@ -145,6 +148,28 @@ export function createJournalStore(db: DB): JournalStore {
         e.oldPath,
         e.createdAt,
       );
+    },
+    insertMany(entries: JournalEntry[]): void {
+      if (entries.length === 0) return;
+      const tx = db.transaction((list: JournalEntry[]) => {
+        for (const e of list) {
+          stmtInsert.run(
+            e.id,
+            e.workspaceId,
+            e.taskId,
+            e.sessionId,
+            e.streamSessionId,
+            e.toolName,
+            e.path,
+            e.op,
+            e.beforeHash,
+            e.afterHash,
+            e.oldPath,
+            e.createdAt,
+          );
+        }
+      });
+      tx(entries);
     },
     listByTask(workspaceId: string, taskId: string): JournalEntry[] {
       return (stmtListByTask.all(workspaceId, taskId) as JournalEntryRow[]).map(rowToEntry);

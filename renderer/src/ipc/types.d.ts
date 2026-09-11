@@ -524,6 +524,8 @@ export interface GlobalSettings {
   sandboxMode?: 'strict' | 'permissive';
   /** v2.4：沙箱内 bash 网络出站（仅影响 bash 工具，LLM API 调用不受影响）。默认 false */
   sandboxNetwork?: boolean;
+  /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
+  journalQuotaMb?: number;
 }
 
 /** 会话级配置（v1.4 + B9；v23 起存 sessions.settings_json），与 electron 端 SessionSettings 对齐 */
