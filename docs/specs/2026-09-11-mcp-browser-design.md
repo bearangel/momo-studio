@@ -141,10 +141,37 @@ class BrowserSessionService {
 class BrowserSession {
   workspaceId: string;
   chromium: ChildProcess;        // puppeteer.launch() 返回
-  agentPage: Page;                // agent 工具专用 page
-  userPreviewPage: Page;          // user preview page（隔离 agent 操作）
+  /** agent 主 page（agent 工具导航的初始 tab；后续 browser_tabs open 可在此 context 创建新 tab） */
+  agentPage: Page;
+  /** user preview page（用户在 sidebar 操作的主 tab；同样支持 browser_tabs open 多 tab） */
+  userPreviewPage: Page;
+  /** tab 列表：agent context tab + user preview context tab 一并管理 */
+  tabs: TabInfo[];
   takeoverState: 'agent' | 'user';
   warmPoolTimer?: NodeJS.Timeout;
+}
+
+interface TabInfo {
+  index: number;
+  context: 'agent' | 'user-preview';
+  url: string;
+  title: string;
+}
+
+/** ToolContext 注入类型：BrowserTools.execute 通过该 handle 调用 SessionService */
+export interface BrowserSessionHandle {
+  workspaceId: string;
+  navigate(url: string): Promise<{ url: string; title: string }>;
+  snapshot(): Promise<string>;
+  screenshot(filename?: string): Promise<{ path: string }>;
+  click(selector: string): Promise<void>;
+  type(selector: string, text: string, submit?: boolean): Promise<void>;
+  pressKey(key: string): Promise<void>;
+  hover(selector: string): Promise<void>;
+  evaluate(expression: string): Promise<unknown>;
+  consoleMessages(): Promise<string[]>;
+  tabsAction(action: 'list' | 'open' | 'close' | 'switch', index?: number): Promise<TabInfo[] | void>;
+  close(): Promise<void>;
 }
 ```
 
@@ -170,7 +197,7 @@ agent ───────────────────────→ u
 
 - 占主窗口右侧 ~35%（Q7 B 锁定）
 - 顶部 chrome：tabs / address bar / 导航按钮 / 探活下拉 / takeover 状态徽标
-- 内容区：`<webview>` 或 `BrowserView` API（Electron）—— 指向主进程 BrowserSession 的 CDP target
+- 内容区：Electron `BrowserView` API（绑定到主进程 BrowserSession 的 BrowserWindow 上，CDP target 复用同一 Chromium）；不使用 `<webview>` 标签（与 BrowserView 二选一即可，避免双套绑定复杂度）
 - 探活下拉：监听常见 dev server 端口（5173/3000/8080/4200/8000），活的列出来一键跳转
 - screenshot 内嵌：浏览器工具返回 `{ path }` 后，chat 列渲染 `<img src="momo://..." />`
 
@@ -354,7 +381,7 @@ dev server 需要网络访问，v2.4 sandbox 默认禁网络。spec 明确：
 |---|---|---|
 | workspace 打开 | workspace store 激活 | 异步预热 BrowserSession（warm pool，~500ms） |
 | workspace 关闭 | workspace store 切换 / 关闭 | 同步 dispose Chromium（~200ms） |
-| workspace 闲置 5 分钟 | timer | 保留 session（cookie/login 不丢）；aggressive 模式可设更短 |
+| workspace 闲置 5 分钟 | idle timer | session 保留（cookie/login 不丢）；aggressive 模式可设更短超时；超时后销毁（与 workspace 关闭等价：清 chromium + 清 tabs） |
 | agent 首次 navigate | session 首次工具调用 | Chromium 启动延迟 ~1.5s（warm pool 已消大头） |
 | chromium crash | disconnect 事件 | auto-restart + 通知卡（见 §5.5） |
 | app 退出 | before-quit hook | disposeAll 销毁全部 session |
@@ -478,7 +505,7 @@ ALTER TABLE workspace_settings ADD COLUMN browser_domain_whitelist TEXT DEFAULT 
 - session crash 不保留用户当前 page state；agent 转录历史不受影响
 - 跨 workspace 不共享 browser（隔离原则）
 - 多浏览器支持不做（agent 场景不需要）
-- screenshot 落 userData 不入版本控制（路径：`<userData>/browser-screenshots/<workspaceId>/<timestamp>.png`）
+- screenshot 落 userData 不入版本控制（路径：`<userData>/browser-screenshots/<workspaceId>/<timestamp>.png`）；renderer 通过 `momo-screenshots://<workspaceId>/` 自定义协议读取（main 进程 protocol handler 拦截并返回文件字节，类比 `momo://` 既有方案）
 
 ### 12.4 主机验收（macOS）
 
