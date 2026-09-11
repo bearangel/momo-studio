@@ -1245,7 +1245,7 @@ export async function runTaskChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
@@ -1288,6 +1288,11 @@ export async function runTaskChatLoop(
       parentStreamSessionId,
       undefined, // 暂无外部 abort_dispatch event 监听（PM 通过 IPC 直接 abort）
       streamSessionId, // AgentRunner 预分配的 streamSessionId，覆盖 randomUUID
+      // v2.6.0 断点续跑（plan Task 4/Task 5 第 10 参接线）：resume 载荷
+      // 经 cfg.resume 解构透传到 runChatLoop.resumeTurn；runChatLoop 据此接续
+      // messages / 续扣预算 / 重放 steers。缺省 undefined 时既有行为零改动
+      // （spec §5.4 「最小侵入，不动既有 11 个调用点」）。
+      resume,
     );
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）

@@ -2,35 +2,61 @@
 //
 // v2.6.0 任务断点续跑——启动期清扫与恢复编排。
 //
-// 本模块 Task 3 只落 sweepStaleStreaming（boot 陈旧流清扫）：messages 表中
-// 因 App 崩溃 / 强制 kill 而滞留 status='streaming' 的行 → 'failed' + 中文
-// final 事件「进程中断」。app 崩溃路径兜底，正常关机已由 finalizeStreamOnCrash
-// 在 child exit 时覆盖；T5 启动期调用。boot 接线点由 Task 5 统一注入，避免
-// 两次动 boot 链（裁定 1 的隐含约束）。
+// 模块结构：
+//   - sweepStaleStreaming（Task 3 落）：boot 陈旧流清扫，App 崩溃路径兜底
+//   - detectInterrupted（Task 5 落）：启动恢复卡渲染数据源；命中 in_progress/
+//     assigned 任务，按 spec §5.6 字段（taskId/title/status/agentName/
+//     journalCount/streamSessionId）返回
+//   - resumeTask（Task 5 落）：断点续跑派发——定位断点流 → rebuildTurn →
+//     消息行翻回 streaming → 组 TaskConfig（含 resume 载荷 + 复用 streamSessionId）
+//     → 既有 executor 派发路径（AgentRunner.executeTask + registerLane）
+//   - notifyExecutor / registerLane / AgentRunner.executeTask 由既有模块承担
+//     ——「既有 executor 派发路径，maxConcurrentTasks 天然生效」靠任务行已
+//     in_progress 且车道 DB 兜底已占道，slot accounting 自然正确（spec §5.4）
 //
-// 形态严格对齐 stream-relay.finalizeStreamOnCrash：
-//   - updateMessageStatus(id, 'failed', aggregateTextDeltas(id))：正文聚合回写
-//     （body 单一真相源，与崩溃收尾同契约）
-//   - 追加 final 事件 { status: 'failed', error: STALE_STREAM_ERROR }
-//   - 行末显式 flush（boot 时序：事件立即落盘，不等下一窗口）
-//
-// 幂等：单行 update 完即变 failed，二次清扫无命中；非 streaming 行零触碰。
-// 错误隔离：每行 try/catch——单行收尾失败不阻断其余行清扫；扫描本身失败
-// （DB 未就绪）按 warn 记录返回 0，不阻断 boot。
-//
-// 后续 Task 5 在本文件追加 detectInterrupted / resumeTask / boot 接线 + IPC。
+// 多路 status 语义（D6：检测时不改任务状态）：
+//   - in_progress → 断点续跑（rebuildTurn + resume 载荷）
+//   - assigned / session_queued → 全新执行（notifyExecutor 触发 executor 放行
+//     链路——并发闸 + 队列序 + kickoff 天然生效）
+//   - 其余状态（completed/failed/cancelled/draft/pending）→ 抛错（不该走恢复）
 
+import { randomUUID } from 'node:crypto';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
-import { updateMessageStatus } from '../storage/messages/repo';
+import {
+  getMessageByStreamSessionId,
+  updateMessageStatus,
+  listMessagesBySession,
+} from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
 import { getEventBuffer } from '../agent/stream-relay';
+import { listTasks, getTask, type TaskRow } from '../storage/tasks/repo';
+import { rebuildTurn, type RebuiltTurn } from '../agent/turn-reconstructor';
+import { agentRunners } from '../agent/runtime-registry';
+import { ensureMemberRuntime } from '../agent/start-chain';
+import { registerLane, getLane } from '../agent/session-lane';
+import { getTeamLeaderInstanceId } from '../agent/team';
+import { getJournalStore } from '../journal/recorder';
+import type { TaskConfig as AgentTaskConfig } from '../agent/agent-runner';
 
 /**
  * 陈旧 streaming 消息的统一中文错误文案（final 事件 payload.error）。
  * 导出常量供 UI / 恢复链引用——避免文案漂移。
  */
 export const STALE_STREAM_ERROR = '进程中断';
+
+/** detectInterrupted 返回条目（spec §5.6） */
+export interface InterruptedTaskInfo {
+  taskId: string;
+  title: string;
+  status: 'in_progress' | 'assigned' | 'session_queued';
+  /** agent 显示名；workspace_agent_members JOIN agent_definitions.name */
+  agentName: string;
+  /** v2.5 变更账本条目数（journalEntries where task_id = X） */
+  journalCount: number;
+  /** 断点流 base id（剥 #roll 后缀）；assigned/session_queued 无流时为空串 */
+  streamSessionId: string;
+}
 
 /**
  * 清扫 messages 表中滞留 status='streaming' 的行（App 崩溃 / 强制 kill 未
@@ -79,4 +105,317 @@ export function sweepStaleStreaming(): number {
   // boot 时序：立即落盘——不等下一 append/50ms 窗口（其后可能长期无写入）
   getEventBuffer().flush();
   return swept;
+}
+
+/**
+ * 定位执行会话的断点流 base id（spec §5.3 车道串行性：同会话同时仅一活跃流）。
+ *
+ * 查询条件：
+ *   - session_id = executionSessionId（任务执行会话）
+ *   - stream_session_id IS NOT NULL（agent 流式行；owner 手输行 stream=NULL 排除）
+ *   - parent_stream_session_id IS NULL（仅顶层流；dispatch 子流天然排除）
+ *   - segment_of IS NULL（排除 #seg 分段快照行）
+ * 按 created_at DESC 取最新一行；剥 stream_session_id 的 #roll{n} 后缀回 base id
+ * （T1 报告 Concern #2：rebuildTurn 精确等值匹配 base 行）。
+ */
+function resolveBreakpointStreamId(executionSessionId: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT stream_session_id FROM messages
+       WHERE session_id = ?
+         AND stream_session_id IS NOT NULL
+         AND parent_stream_session_id IS NULL
+         AND segment_of IS NULL
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(executionSessionId) as { stream_session_id: string } | undefined;
+  if (!row?.stream_session_id) return null;
+  // 剥 #roll{n} 后缀（message_roll 换行产生的后缀行带 #，rebuildTurn 按 base 匹配）
+  const hashIdx = row.stream_session_id.indexOf('#');
+  return hashIdx === -1 ? row.stream_session_id : row.stream_session_id.slice(0, hashIdx);
+}
+
+/**
+ * 解析任务的执行 agent assignmentId。
+ *
+ * 优先级：
+ *   1) 任务行 assigneeAgentId（最常见：手动指派 / executor 放行路径）
+ *   2) targetTeamId → 团队 leaderInstanceId（团队任务 kickoff 接待路由）
+ *   3) 断点流 agentUserId → workspace_agent_members.instance_id（兜底：能从
+ *      断点流的 message sender 反查实例——team 任务 leader 改了 / 历史流无
+ *      assignee 时仍可定位）
+ * 全部缺失抛错。
+ */
+function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): string {
+  if (task.assigneeAgentId) return task.assigneeAgentId;
+  if (task.targetTeamId) {
+    const leader = getTeamLeaderInstanceId(task.targetTeamId);
+    if (leader) return leader;
+  }
+  if (breakpointSsId) {
+    // 兜底：断点流的 owner（agent user id）→ workspace_agent_members.instance_id
+    const row = getDb()
+      .prepare(
+        `SELECT wam.instance_id FROM messages m
+         JOIN workspace_agent_members wam
+           ON wam.agent_user_id = m.sender AND wam.workspace_id = ?
+         WHERE m.stream_session_id = ?
+           AND m.parent_stream_session_id IS NULL
+           AND m.segment_of IS NULL
+         ORDER BY m.created_at DESC LIMIT 1`,
+      )
+      .get(task.workspaceId, breakpointSsId) as { instance_id: string } | undefined;
+    if (row?.instance_id) return row.instance_id;
+  }
+  throw new Error(
+    `task ${task.id} 无法解析执行 agent（assignee/targetTeam/断点流 agent 皆缺失）`,
+  );
+}
+
+/**
+ * 启动恢复卡数据源：列出全部可恢复任务（in_progress / assigned / session_queued）。
+ *
+ * 字段语义：
+ *   - taskId / title / status：直接透传任务行
+ *   - agentName：JOIN agent_definitions.name；取不到时退回 instance_id
+ *     （罕见：def 被删 / builtin YAML 加载失败）
+ *   - journalCount：v2.5 变更账本条目数（journal_entries.task_id = X 计数）；
+ *     store 未注入时降级 0（不阻断检测）
+ *   - streamSessionId：in_progress 才定位断点流；assigned/session_queued 空串
+ *     （无 execution_session / 无流事件）
+ *
+ * D6：检测时**不改任务状态**——卡片是唯一闸门；scheduler 边界回归锁在测试侧固化。
+ */
+export function detectInterrupted(): InterruptedTaskInfo[] {
+  const rows = listTasks({ status: ['in_progress', 'assigned', 'session_queued'] });
+  const store = getJournalStore();
+  const result: InterruptedTaskInfo[] = [];
+  for (const task of rows) {
+    const agentName = resolveAgentName(task);
+    const journalCount = store
+      ? store.listByTask(task.workspaceId, task.id).length
+      : 0;
+    const streamSessionId = task.executionSessionId
+      ? (resolveBreakpointStreamId(task.executionSessionId) ?? '')
+      : '';
+    result.push({
+      taskId: task.id,
+      title: task.title,
+      status: task.status as InterruptedTaskInfo['status'],
+      agentName,
+      journalCount,
+      streamSessionId,
+    });
+  }
+  return result;
+}
+
+/** workspace_agent_members JOIN agent_definitions 取 agent 展示名 */
+function resolveAgentName(task: TaskRow): string {
+  // 优先 assigneeAgentId → JOIN def 取 name
+  if (task.assigneeAgentId) {
+    const row = getDb()
+      .prepare(
+        `SELECT d.name FROM workspace_agent_members wam
+         JOIN agent_definitions d ON d.id = wam.agent_definition_id
+         WHERE wam.instance_id = ?`,
+      )
+      .get(task.assigneeAgentId) as { name: string } | undefined;
+    if (row?.name) return row.name;
+  }
+  // team 任务：无 assignee 但有 target_team_id 时取 leader 的 def.name
+  if (task.targetTeamId) {
+    const leader = getTeamLeaderInstanceId(task.targetTeamId);
+    if (leader) {
+      const row = getDb()
+        .prepare(
+          `SELECT d.name FROM workspace_agent_members wam
+           JOIN agent_definitions d ON d.id = wam.agent_definition_id
+           WHERE wam.instance_id = ?`,
+        )
+        .get(leader) as { name: string } | undefined;
+      if (row?.name) return row.name;
+    }
+  }
+  // 兜底：断点流 sender → JOIN 取名（罕见边角）
+  if (task.executionSessionId) {
+    const ssId = resolveBreakpointStreamId(task.executionSessionId);
+    if (ssId) {
+      const row = getDb()
+        .prepare(
+          `SELECT d.name FROM messages m
+           JOIN workspace_agent_members wam
+             ON wam.agent_user_id = m.sender AND wam.workspace_id = ?
+           JOIN agent_definitions d ON d.id = wam.agent_definition_id
+           WHERE m.stream_session_id = ?
+             AND m.parent_stream_session_id IS NULL
+             AND m.segment_of IS NULL
+           ORDER BY m.created_at DESC LIMIT 1`,
+        )
+        .get(task.workspaceId, ssId) as { name: string } | undefined;
+      if (row?.name) return row.name;
+    }
+  }
+  return ''; // 没有任何解析路径（def 已被删等边角）——空串而非抛错，UI 兜底
+}
+
+/**
+ * 恢复任务——根据 status 多路（spec §5.4）：
+ *   - in_progress → 断点续跑（rebuildTurn + resume 载荷 + 复用 streamSessionId）
+ *   - assigned / session_queued → 全新执行（notifyExecutor 触发既有 executor 放行）
+ *
+ * in_progress 路径返回值含 streamSessionId（base id，给 UI 做后续 SSE 关联）；
+ * assigned/session_queued 返回空串（无可复用流；新 stream 在 executor 放行后才分配）。
+ *
+ * 派发链路：resolveAssignmentId → ensureMemberRuntime（runner 不在 Map 时拉起）
+ * → agentRunners.get → 组成 AgentTaskConfig{resume,...} → registerLane（占道
+ * + 防 steer 误派）→ runner.executeTask。
+ *
+ * 不改任务状态（D6：检测卡片是唯一闸门；恢复链路也不改——in_progress 保持，
+ * 任务终态由 AgentRunner 的 task-end 处理，与既有 task-driven 路径同语义）。
+ *
+ * @throws task 不存在 / status 不可恢复 / 无法解析 assignmentId / runner 拉起失败
+ */
+export async function resumeTask(taskId: string): Promise<{ streamSessionId: string }> {
+  const task = getTask(taskId);
+  if (!task) throw new Error(`task ${taskId} 不存在`);
+
+  // assigned / session_queued → 全新执行：交给既有 executor 放行（并发闸 + 队列
+  // 序 + kickoff 全部天然生效）。notifyExecutor 内部 100ms 去抖合并，丢了有 30s
+  // 兜底扫描自愈；本函数不 await executor 完成（executor.launch 是 fire-and-forget
+  // 异步路径，不阻塞 IPC 响应）。
+  if (task.status === 'assigned' || task.status === 'session_queued') {
+    const { notifyExecutor } = await import('./executor');
+    notifyExecutor();
+    logger.info('resumeTask：assigned/session_queued 任务交由既有 executor 放行', { taskId });
+    return { streamSessionId: '' };
+  }
+
+  if (task.status !== 'in_progress') {
+    throw new Error(`task ${taskId} 不可恢复：status=${task.status}`);
+  }
+  if (!task.executionSessionId) {
+    throw new Error(`task ${taskId} 已 in_progress 但 executionSessionId 缺失，无法恢复`);
+  }
+
+  // 定位断点流（base id，剥 #roll 后缀）
+  const breakpointSsId = resolveBreakpointStreamId(task.executionSessionId);
+
+  // 决议执行 agent（assignee > team leader > 断点流 agent 兜底）
+  const assignmentId = resolveAssignmentId(task, breakpointSsId);
+
+  // 确保 runner 就位（ensureMemberRuntime 内部幂等；runner 缺失时按 start 链拉起）
+  await ensureMemberRuntime(assignmentId);
+  const runner = agentRunners.get(assignmentId);
+  if (!runner) {
+    throw new Error(`resumeTask：runner 拉起失败（instance=${assignmentId}）`);
+  }
+
+  let cfg: AgentTaskConfig;
+  let streamSessionIdForReturn: string;
+
+  if (breakpointSsId) {
+    // 有断点流：rebuildTurn 重建段 + 复用 streamSessionId
+    const rebuilt = rebuildTurn(breakpointSsId);
+    // 翻回 streaming：消息行 status 恢复 + 事件时间线 append status_change
+    flipMessageBackToStreaming(task.executionSessionId, breakpointSsId);
+    // body 兜底：重建段首条 user 文本 → 否则任务 description → 否则 title
+    const firstUserMsg = rebuilt.messages.find((m) => m.role === 'user')?.content;
+    const body = firstUserMsg ?? task.description ?? task.title;
+    cfg = {
+      taskId: task.id,
+      executionSessionId: task.executionSessionId,
+      body,
+      streamSessionId: breakpointSsId,
+      resume: {
+        messages: rebuilt.messages,
+        toolCallsUsed: rebuilt.toolCallsUsed,
+        steers: rebuilt.steers,
+        degenerate: rebuilt.degenerate,
+      },
+    };
+    streamSessionIdForReturn = breakpointSsId;
+    logger.info('resumeTask：in_progress 任务断点续跑派发', {
+      taskId,
+      streamSessionId: breakpointSsId,
+      rebuiltMsgCount: rebuilt.messages.length,
+      toolCallsUsed: rebuilt.toolCallsUsed,
+      steerCount: rebuilt.steers.length,
+    });
+  } else {
+    // 无断点流：任务 in_progress 但 agent 从未输出（如 kickoff 注入与崩溃之间）
+    // 新分配 streamSessionId + 走正常回合（无 resume 载荷 = runChatLoop 当作全新回合）
+    const newSsId = randomUUID();
+    cfg = {
+      taskId: task.id,
+      executionSessionId: task.executionSessionId,
+      body: task.description ?? task.title,
+      streamSessionId: newSsId,
+    };
+    streamSessionIdForReturn = newSsId;
+    logger.info('resumeTask：in_progress 但无断点流，按全新回合派发', {
+      taskId,
+      streamSessionId: newSsId,
+    });
+  }
+
+  // 车道并发保护：若同会话已有别的活跃流（手输快速消息等），拒绝派发避免串行性破坏
+  const lane = getLane(task.executionSessionId);
+  if (lane && lane.streamSessionId !== cfg.streamSessionId) {
+    throw new Error(
+      `resumeTask：执行会话 ${task.executionSessionId} 已被另一活跃流占用（stream=${lane.streamSessionId}）`,
+    );
+  }
+  // 注册车道（占道 + 防后续 steer 误派入本流）
+  registerLane(
+    task.executionSessionId,
+    {
+      taskId: task.id,
+      streamSessionId: cfg.streamSessionId,
+      assignmentId,
+    },
+    { kickoff: true },
+  );
+
+  await runner.executeTask(cfg);
+  return { streamSessionId: streamSessionIdForReturn };
+}
+
+/**
+ * 把中断流的最新消息行翻回 streaming（spec §5.4：恢复时翻回）。
+ *
+ * 形态：
+ *   - 取该 executionSessionId 内最新一行 stream_session_id = base OR LIKE 'base#%'
+ *     的非 segment 行（status 当时被 sweepStaleStreaming / finalizeStreamOnCrash 标 failed）
+ *   - updateMessageStatus(rowId, 'streaming') —— 不改 body（保留聚合正文）
+ *   - 追加 status_change 事件 { status: 'streaming' }——事件时间线诚实呈现
+ *     「翻回」动作（与 start chunk 写入的 status_change 事件同型；renderer 聚合器
+ *     对 status_change 已跳过（v2.0 已知语义），不影响前端展示）
+ *
+ * 若无匹配行（极罕见：assigned 路径被覆盖到此分支等）静默 no-op——调用方已
+ * 处理新建流场景。
+ */
+function flipMessageBackToStreaming(executionSessionId: string, baseSsId: string): void {
+  const row = getDb()
+    .prepare(
+      `SELECT id FROM messages
+       WHERE session_id = ?
+         AND stream_session_id = ?
+         AND segment_of IS NULL
+         AND parent_stream_session_id IS NULL
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(executionSessionId, baseSsId) as { id: string } | undefined;
+  if (!row) return;
+  updateMessageStatus(row.id, 'streaming');
+  getEventBuffer().append({
+    messageId: row.id,
+    eventType: 'status_change',
+    payload: { status: 'streaming' },
+  });
+  // 立即落盘（renderer 可能在状态变更事件到达前就拉了消息列表；status 列已是 streaming）
+  getEventBuffer().flush();
+  void listMessagesBySession; // 类型保留——unused 警告压制
 }

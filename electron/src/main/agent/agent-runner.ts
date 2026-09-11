@@ -47,7 +47,7 @@ export interface TaskConfig {
   /**
    * dispatch 模式：父 agent（PM）派来的任务上下文。
    * 设置时本 task 是 sub-agent 收到 PM 的 dispatch（走 handleDispatch 流程）；
-   * 未设置时是顶层用户消息触发的 ephemeral chat。
+   * 未设置时是顶层用户消息触发的即时对话。
    * 形状与 runtime-entry 的 TaskConfigMsg.dispatchContext 保持一致。
    */
   dispatchContext?: {
@@ -59,6 +59,18 @@ export interface TaskConfig {
     tool_budget?: number;
     /** PM 的 streamSessionId（renderer 据此把子 agent 流嵌套渲染到 PM 气泡内对应 chip） */
     tool_stream_session_id?: string;
+  };
+  /**
+   * v2.6.0 断点续跑（spec §5.2）：断点回合重建段载荷。由 resumeTask 编排层
+   * （electron/src/main/task/resume.ts）组装后随 TaskConfig 传入 executeTask，
+   * 经 child.send({ type: 'task-config', resume, ... }) 透传到子进程。
+   * 子进程 runTaskChatLoop 把它作为 runChatLoop 第 10 参 resumeTurn 续接。
+   */
+  resume?: {
+    messages: import('./llm-provider').LLMMessage[];
+    toolCallsUsed: number;
+    steers: string[];
+    degenerate: boolean;
   };
 }
 
@@ -244,6 +256,10 @@ export class AgentRunner {
       mentions: task.mentions ?? [],
       ...(resolvedMaxToolCalls !== undefined ? { maxToolCalls: resolvedMaxToolCalls } : {}),
       ...(task.dispatchContext ? { dispatchContext: task.dispatchContext } : {}),
+      // v2.6.0 断点续跑：透传 resume 载荷到子进程（spec §5.2 接线锁
+      // resume.test.ts Part A 锁该透传；摘掉即红）。条件展开避免 undefined 字段
+      // 污染 IPC payload（与 dispatchContext / maxToolCalls 同型）
+      ...(task.resume ? { resume: task.resume } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };
