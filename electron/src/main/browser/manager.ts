@@ -13,17 +13,24 @@
 //     before-input-event（页内输入自动接管；修饰键不计；agent 期间自锁）
 //   - sidebar bounds 透传 / 折叠销毁（折叠期间活动先恢复旧清单再作用——不丢 tab）
 //
-// 动作原语（click/type/pressKey/hover/scroll/snapshot/screenshot）在 §3.1 列出；本文件给出
-// 最小可直接用的实现（css selector + sendInputEvent + debugger 懒附加 + capturePage 落盘）。
-// T3（selector 四语法 + trusted 事件序列）与 T4（formatAxTree selector 提示行）在同一方法
-// 内部升级——本文件交付门控与视图定位原语，约定换皮不换骨。
+// 动作原语（click/type/pressKey/hover/scroll）自 T3 起委托 actions.ts（selector 四语法
+// 解析 + Electron trusted 事件序列）；本文件负责门控（信任/takeover/视图定位）与
+// 输入自锁（withAgentInput——sendInputEvent 回流 before-input-event 不计接管）。
+// snapshot（T4 formatAxTree 升级）与 screenshot 在本文件内实现。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  clickElement,
+  hoverElement,
+  pressKey,
+  SCROLL_DEFAULT_AMOUNT,
+  scrollWheel,
+  typeText,
+} from './actions';
+import {
   BrowserNavigationError,
   BrowserNoViewError,
-  BrowserSelectorError,
   BrowserTakenOverError,
 } from './errors';
 import { BrowserPolicy } from './policy';
@@ -63,11 +70,7 @@ const MODIFIER_KEYS = new Set([
   'OS',
 ]);
 
-/** scroll 缺省 amount（滚轮格数，约 300px） */
-const SCROLL_DEFAULT_AMOUNT = 3;
-
-/** scroll 单格像素值（≈ 100px/格，对齐 macOS 自然滚动一格） */
-const SCROLL_TICK_PIXELS = 100;
+/** scroll 缺省 amount 常量已移至 actions.ts（SCROLL_DEFAULT_AMOUNT——动作语义单一归属） */
 
 /** snapshot CDP 协议版本（懒附加时 attach 用） */
 const CDP_PROTOCOL_VERSION = '1.3';
@@ -341,69 +344,48 @@ export class BrowserManager {
     return tab.view.webContents.executeJavaScript(expression);
   }
 
-  // ---------- 动作原语（T3 / T4 升级接缝） ----------
+  // ---------- 动作原语（委托 actions.ts——T3 selector 四语法 + trusted 事件序列） ----------
 
   /**
-   * T2 最小 selector：css 直查 → bounding rect；T3 扩展四语法（css/text/xpath/aria）。
-   * 未命中抛 BrowserSelectorError（提示由 T3 的解析脚本返回前 5 元素补齐）。
+   * 输入派发自锁钩子——传给 actions 层，把 sendInputEvent 序列包在 withAgentInput
+   * 内（回流 before-input-event 不触发「用户接管」误判）。
    */
+  private inputGuard(): (run: () => void) => void {
+    return (run) => this.withAgentInput(run);
+  }
+
+  /** click：selector 定位（四语法）→ 元素中心 trusted 点击序列 */
   async click(wsId: string, selector: string): Promise<void> {
     const wc = this.requireCurrentWebContents(wsId);
-    const rect = await resolveCssRect(wc, selector);
-    this.withAgentInput(() => {
-      const center = rectCenter(rect);
-      wc.sendInputEvent({ type: 'mouseDown', x: center.x, y: center.y, button: 'left', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x: center.x, y: center.y, button: 'left', clickCount: 1 });
-    });
+    await clickElement(wc, selector, this.inputGuard());
   }
 
+  /** hover：selector 定位 → mouseMove 至元素中心 */
   async hover(wsId: string, selector: string): Promise<void> {
     const wc = this.requireCurrentWebContents(wsId);
-    const rect = await resolveCssRect(wc, selector);
-    this.withAgentInput(() => {
-      const center = rectCenter(rect);
-      wc.sendInputEvent({ type: 'mouseMoved', x: center.x, y: center.y });
-    });
+    await hoverElement(wc, selector, this.inputGuard());
   }
 
-  /** T2 最小 type：聚焦 → char 逐字符 → submit Enter；T3 升级 keymap/IME */
+  /** type：先 click 聚焦 → char 逐字符 → submit=true 末尾补 Enter */
   async type(wsId: string, selector: string, text: string, submit = false): Promise<void> {
     const wc = this.requireCurrentWebContents(wsId);
-    const rect = await resolveCssRect(wc, selector);
-    this.withAgentInput(() => {
-      const center = rectCenter(rect);
-      wc.sendInputEvent({ type: 'mouseDown', x: center.x, y: center.y, button: 'left', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x: center.x, y: center.y, button: 'left', clickCount: 1 });
-      for (const ch of text) wc.sendInputEvent({ type: 'char', keyCode: ch });
-      if (submit) {
-        wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
-        wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
-      }
-    });
+    await typeText(wc, selector, text, submit, this.inputGuard());
   }
 
-  /** T2 直送 keyDown/Up；T3 增加 key 白名单（Enter/Tab/Escape/PageDown/...） */
+  /** pressKey：白名单（Enter/Tab/Escape/方向/翻页/Home/End）外按键抛 BrowserInvalidKeyError */
   async pressKey(wsId: string, key: string): Promise<void> {
     const wc = this.requireCurrentWebContents(wsId);
-    this.withAgentInput(() => {
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key });
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key });
-    });
+    pressKey(wc, key, this.inputGuard());
   }
 
   /** scroll：mouseWheel 事件，direction='down' 向下滚；amount 单位=滚轮格（缺省 3） */
-  async scroll(wsId: string, direction: 'up' | 'down', amount = SCROLL_DEFAULT_AMOUNT): Promise<void> {
+  async scroll(
+    wsId: string,
+    direction: 'up' | 'down',
+    amount: number = SCROLL_DEFAULT_AMOUNT,
+  ): Promise<void> {
     const wc = this.requireCurrentWebContents(wsId);
-    const sign = direction === 'down' ? 1 : -1;
-    this.withAgentInput(() => {
-      wc.sendInputEvent({
-        type: 'mouseWheel',
-        x: 0,
-        y: 0,
-        deltaX: 0,
-        deltaY: sign * amount * SCROLL_TICK_PIXELS,
-      });
-    });
+    scrollWheel(wc, direction, amount, this.inputGuard());
   }
 
   /** T2 最小 snapshot：a11y 树基础行；T4 升级 formatAxTree（selector 提示行）+ 空树引导 */
@@ -749,46 +731,6 @@ export class BrowserManager {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-interface ElementRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-function rectCenter(r: ElementRect): { x: number; y: number } {
-  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-}
-
-/**
- * T2 最小 selector：css 直查 → bounding rect。T3 升级为四语法（css/text/xpath/aria），
- * 并扩展 pageInteractives 前 5 提示注入。脚本以 IIFE 形式自含（序列化注入——Electron
- * executeJavaScript 通过 V8 context bridge 序列化返回值）。
- */
-async function resolveCssRect(wc: ManagedWebContents, selector: string): Promise<ElementRect> {
-  // JSON.stringify 转义防注入（selector 内含引号/反斜杠的边界）
-  const script =
-    `(() => { const el = document.querySelector(${JSON.stringify(selector)});` +
-    ` if (!el) return null;` +
-    ` const r = el.getBoundingClientRect();` +
-    ` const desc = el.tagName.toLowerCase() + (el.textContent ? ' "' + el.textContent.trim().slice(0, 40) + '"' : '');` +
-    ` return { x: r.x, y: r.y, width: r.width, height: r.height, description: desc };` +
-    `})()`;
-  const raw: unknown = await wc.executeJavaScript(script);
-  if (typeof raw !== 'object' || raw === null) {
-    throw new BrowserSelectorError(selector);
-  }
-  const r = raw as Record<string, unknown>;
-  const x = typeof r['x'] === 'number' ? (r['x'] as number) : 0;
-  const y = typeof r['y'] === 'number' ? (r['y'] as number) : 0;
-  const width = typeof r['width'] === 'number' ? (r['width'] as number) : 0;
-  const height = typeof r['height'] === 'number' ? (r['height'] as number) : 0;
-  if (width <= 0 || height <= 0) {
-    throw new BrowserSelectorError(selector);
-  }
-  return { x, y, width, height };
 }
 
 /**

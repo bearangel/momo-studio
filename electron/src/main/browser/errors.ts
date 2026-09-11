@@ -1,8 +1,9 @@
 // electron/src/main/browser/errors.ts
 //
-// 浏览器工具错误体系（spec 2026-09-11 §8 错误处理表）。10 个错误类统一形态：
+// 浏览器工具错误体系（spec 2026-09-11 §8 错误处理表）。错误类统一形态：
 // name + 中文 message（面向 LLM，含可行动指引）+ code（供 UI/日志分类）。
 // 恢复原则：全部可重试（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。
+// T3 增补 invalid_key（pressKey 白名单外按键，spec §4 工具 6）。
 
 /** 错误分类码（UI 徽标 / 日志聚类的稳定标识） */
 export type BrowserErrorCode =
@@ -15,7 +16,8 @@ export type BrowserErrorCode =
   | 'domain_blocked'
   | 'protocol'
   | 'navigation'
-  | 'no_view';
+  | 'no_view'
+  | 'invalid_key';
 
 /** 浏览器工具错误基类：code 供 UI/日志分类，message 面向 LLM（含指引） */
 export class BrowserError extends Error {
@@ -53,11 +55,21 @@ export class BrowserTakenOverError extends BrowserError {
   }
 }
 
-/** selector 未命中（T3 selector 引擎抛出）：附页面可交互元素前 5 条提示助 LLM 改写 */
+/** selector 未命中（T3 selector 引擎抛出，spec §3.3）：信息含「已匹配 0 个」+ 页面可交互元素前 5 条提示助 LLM 改写 */
 export class BrowserSelectorError extends BrowserError {
   constructor(selector: string, hints: readonly string[] = []) {
     const top5 = hints.slice(0, 5).join('；');
-    super('selector', `选择器 "${selector}" 未匹配元素；可交互元素前 5：${top5 || '（页面无可交互元素）'}`);
+    super('selector', `选择器 "${selector}" 已匹配 0 个元素；可交互元素前 5：${top5 || '（页面无可交互元素）'}`);
+  }
+}
+
+/** pressKey 白名单外按键（T3，spec §4 工具 6）——防修饰键/快捷键注入；白名单见 actions.ts */
+export class BrowserInvalidKeyError extends BrowserError {
+  constructor(key: string) {
+    super(
+      'invalid_key',
+      `按键 "${key}" 不受支持（白名单：Enter/Tab/Escape/PageDown/PageUp/ArrowUp/ArrowDown/Home/End）`,
+    );
   }
 }
 

@@ -705,35 +705,40 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
 });
 
 // =================================================================================
-// 动作原语（T2 最小实现锁——T3 selector/actions 与 T4 snapshot/screenshot 在此升级）
+// 动作原语（T3 起委托 actions.ts——selector 四语法 + trusted 事件序列；此处锁
+// manager 编排语义：门控 + 输入自锁 + 事件序列。executeJavaScript mock 返回真实页内
+// 脚本输出形态——JSON 字符串，见 actions.test.ts）
 // =================================================================================
 
-describe('动作原语（最小实现——T3/T4 升级接缝）', () => {
+describe('动作原语（委托 actions.ts——T3 四语法接线）', () => {
   it('click：css 命中 → mouseDown/Up 于元素中心；executeJavaScript 注入解析脚本', async () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     const v0 = factory.views[0]!;
-    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue({
-      x: 100,
-      y: 200,
-      width: 50,
-      height: 20,
-      description: 'button "Go"',
-    });
+    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue(
+      JSON.stringify({
+        rect: { x: 100, y: 200, width: 50, height: 20, description: 'button "Go"' },
+        hints: [],
+      }),
+    );
     await manager.click('ws1', '#go');
     expect(v0.view.webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('#go'));
     expect(v0.inputEvents[0]).toMatchObject({ type: 'mouseDown', x: 125, y: 210, button: 'left' });
     expect(v0.inputEvents[1]).toMatchObject({ type: 'mouseUp', x: 125, y: 210, button: 'left' });
   });
 
-  it('click：未命中（executeJavaScript 返回 null）→ BrowserSelectorError', async () => {
+  it('click：未命中（rect:null）→ BrowserSelectorError，message 含「已匹配 0 个」与页内提示', async () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     const v0 = factory.views[0]!;
-    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue(null);
+    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue(
+      JSON.stringify({ rect: null, hints: ['button "登录" → text=登录'] }),
+    );
     await expect(manager.click('ws1', '.missing')).rejects.toThrow(BrowserSelectorError);
+    await expect(manager.click('ws1', '.missing')).rejects.toThrow(/已匹配 0 个/);
+    await expect(manager.click('ws1', '.missing')).rejects.toThrow(/text=登录/);
   });
 
   it('type：先 click 聚焦 → char 逐字符 → submit Enter', async () => {
@@ -741,13 +746,12 @@ describe('动作原语（最小实现——T3/T4 升级接缝）', () => {
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     const v0 = factory.views[0]!;
-    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue({
-      x: 0,
-      y: 0,
-      width: 100,
-      height: 24,
-      description: 'input',
-    });
+    (v0.view.webContents.executeJavaScript as Mock).mockResolvedValue(
+      JSON.stringify({
+        rect: { x: 0, y: 0, width: 100, height: 24, description: 'input' },
+        hints: [],
+      }),
+    );
     await manager.type('ws1', '#q', 'hi', true);
     // mouseDown/Up 聚焦 + char 'h' + char 'i' + keyDown Enter + keyUp Enter
     const types = v0.inputEvents.map((e) => e['type']);
