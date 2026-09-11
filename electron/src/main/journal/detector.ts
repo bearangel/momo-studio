@@ -13,8 +13,10 @@
 // sandbox/probe.ts defaultRunner（spawn + 超时 + 输出截断 + 可注入），
 // 但本模块自持、不 import sandbox。
 //
-// 存储注入：与 revert 层同源，消费 recorder 模块单例 getJournalStore()
-// （生产 boot 链 runtime-entry 已注入）。
+// 存储注入：与 revert 层同源，消费 recorder 模块单例 getJournalStore()。
+// 生产有两个注入点——子进程侧 agent/runtime-entry.ts（boot 链
+// setJournalStore）与主进程侧 journal/ipc.handlers.ts（registerJournalIpc
+// 注册即注入），两侧生命周期各自确保 store 就绪。
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
