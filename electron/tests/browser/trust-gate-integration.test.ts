@@ -6,13 +6,16 @@
 //     - 工具 execute 路径：browser_navigate 等 12 个 browser_* 工具经 policy.assertAllowed
 //       → ask 未授权 → pushNotice('trust-request', ...) → throw BrowserNotTrustedError
 //     - 注入 grantSession 后二次调用 → pushNotice 零调用（已授权路径不再骚扰）
-//     - manager.isTrusted 内部辅助路径（trusted=true 时浏览器工具可用）
+//     - manager 状态推送路径（getState / did-navigate 等）：trusted 推导零副作用，
+//       pushNotice 零推送（N1——trust notice 副作用只属于 agent 门）
 //     - 'always' / 'deny' 分支不推 trust-request（仅 ask 未授权路径触发）
 //
 // 与 policy.test.ts 的单元断言互补：本文件验证「policy + tools 真实链路」行为，
 // 单测改签名漂移即红（条件类型契约锁）。
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { BrowserPolicy } from '../../src/main/browser/policy';
+import { BrowserManager } from '../../src/main/browser/manager';
+import type { ManagedView, ManagedWebContents, ViewFactory } from '../../src/main/browser/manager';
 import {
   BrowserNotTrustedError,
   BrowserDeniedError,
@@ -46,6 +49,31 @@ const baseSettings = (): WorkspaceBrowserSettings => ({
   blacklist: [],
   whitelist: [],
 });
+
+/** manager 真实链路所需的最小 Electron 视图 mock——完整 ManagedWebContents 结构面
+ * （接口演进时 typecheck 强制同步，防 mock 漂移）；事件注册/触发与真实 Electron 同形 */
+function mkMockView(): { view: ManagedView; emit: (ev: string) => void } {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  let url = '';
+  const webContents: ManagedWebContents = {
+    loadURL: async (u: string) => {
+      url = u;
+    },
+    on: (ev, fn) => handlers.set(ev, fn),
+    executeJavaScript: async () => null,
+    sendInputEvent: () => {},
+    capturePage: async () => ({ toPNG: () => Buffer.from('x') }),
+    setWindowOpenHandler: () => ({ action: 'deny' }),
+    reload: () => {},
+    getURL: () => url,
+    getTitle: () => '',
+    debugger: { attach: () => {}, detach: () => {}, sendCommand: async () => ({}) },
+  };
+  return {
+    view: { webContents, bounds: { setBounds: () => {} } },
+    emit: (ev) => handlers.get(ev)?.(),
+  };
+}
 
 /** 拼接 BrowserPolicy + pushNotice spy + BrowserTools（policy 注入端口） */
 function mkToolChain(over: Partial<WorkspaceBrowserSettings> = {}): {
@@ -167,15 +195,32 @@ describe('C1 信任门端到端集成（policy + tools 真链路）', () => {
     expect(pushNotice).toHaveBeenCalledTimes(1);
   });
 
-  it('manager.isTrusted 内部路径（trusted 状态推导）：ask 未授权时 isTrusted 返回 false 而不推 notice', () => {
-    // 该路径供 BrowserState.trusted 字段使用——只读、不抛错、不推 notice。
-    // 与 assertAllowed（写入、抛错、推 notice）解耦。
-    const { pushNotice, policy } = mkToolChain({ trust: 'ask' });
-    // 走 isTrusted 等价路径：try/catch 包裹 assertAllowed，policy 自身不暴露 isTrusted，
-    // 通过 assertAllowed 的二次调用模拟（不抛错路径不应再推）
-    expect(() => policy.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-    // 第二次同 wsId 同状态调用仍按 ask 未授权路径 → 再推一次（pushNotice 自身不带去重）
-    expect(() => policy.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-    expect(pushNotice).toHaveBeenCalledTimes(2);
+  it('manager 状态推送路径（getState / emitState）：ask 未授 → trusted=false 且 pushNotice 零推送（N1）', async () => {
+    // N1 回归锁：BrowserState.trusted 推导必须零副作用。泄漏面 = getState（侧栏挂载）+
+    // buildState→emitState 约 15 处（did-navigate / did-navigate-in-page / page-title-updated 等）。
+    // 真实 BrowserManager + 真实 BrowserPolicy（ask 未授）拼接，mock 收窄在 Electron 视图边界
+    // （与 manager.test.ts 同形，momo-test-rules）。修复前 isTrusted 包 assertAllowed，本例必红。
+    const pushNotice = vi.fn();
+    const policy = new BrowserPolicy(() => ({ ...baseSettings(), trust: 'ask' }), '/ws/root', pushNotice);
+    const view = mkMockView();
+    const factory: ViewFactory = {
+      create: () => view.view,
+      destroy: () => {},
+      clearData: async () => {},
+    };
+    const pushState = vi.fn();
+    const manager = new BrowserManager(factory, policy, { pushState, pushNotice });
+
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    // user 路径不过信任门是设计行为（agent 门在 tools 层）——manager.navigate 只过 assertUrl
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    view.emit('did-navigate');
+    view.emit('did-navigate-in-page');
+    view.emit('page-title-updated');
+    const st = manager.getState('ws1');
+
+    expect(st.trusted).toBe(false);
+    // 零推送——trust notice 副作用只属于 agent 门（assertAllowed），绝不泄漏进状态推送
+    expect(pushNotice).not.toHaveBeenCalled();
   });
 });

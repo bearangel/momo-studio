@@ -123,6 +123,40 @@ describe('信任门', () => {
       expect(pushNotice).toHaveBeenCalledTimes(1);
     });
   });
+
+  // N1：isAllowed 纯判定——BrowserState.trusted 推导面（manager.isTrusted 高频只读路径）
+  describe('isAllowed 纯判定（N1）', () => {
+    it('四态判定：ask 未授 / deny → false；ask 已授 / always → true；零副作用', () => {
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      expect(p.isAllowed('ws1')).toBe(false);
+      p.grantSession('ws1');
+      expect(p.isAllowed('ws1')).toBe(true);
+      // 会话授权按 workspace 隔离
+      expect(p.isAllowed('ws2')).toBe(false);
+      expect(new BrowserPolicy(() => ({ ...settings, trust: 'always' }), '/ws/root', pushNotice).isAllowed('ws1')).toBe(true);
+      expect(new BrowserPolicy(() => ({ ...settings, trust: 'deny' }), '/ws/root', pushNotice).isAllowed('ws1')).toBe(false);
+      expect(pushNotice).not.toHaveBeenCalled();
+    });
+
+    it('判定面与 assertAllowed 失败面同构（isAllowed === assertAllowed 不抛，跨三态 + 已授权）', () => {
+      const check = (p: BrowserPolicy, wsId: string) => {
+        let threw = false;
+        try {
+          p.assertAllowed(wsId);
+        } catch {
+          threw = true;
+        }
+        expect(p.isAllowed(wsId)).toBe(!threw);
+      };
+      check(mkPolicy({ trust: 'ask' }), 'ws1');
+      check(mkPolicy({ trust: 'always' }), 'ws1');
+      check(mkPolicy({ trust: 'deny' }), 'ws1');
+      const granted = mkPolicy();
+      granted.grantSession('ws1');
+      check(granted, 'ws1');
+    });
+  });
 });
 
 describe('evaluate 门', () => {

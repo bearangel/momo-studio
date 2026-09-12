@@ -61,8 +61,22 @@ export class BrowserPolicy {
   }
 
   /**
-   * 信任门（spec §6.1 / §5.2 step 3）：
-   *   deny → BrowserDeniedError；
+   * 信任门纯判定（N1）：读 settings + sessionGranted，零副作用（不推 notice、不抛错）。
+   * 供 BrowserState.trusted 等只读推导（manager.isTrusted）——did-navigate /
+   * page-title-updated 等状态推送高频走此路径，绝不触发信任卡。
+   * 判定面与 assertAllowed 失败面同构（deny / ask 未授 → false）。
+   */
+  isAllowed(wsId: string): boolean {
+    const settings = this.readSettings(wsId);
+    if (settings.trust === 'deny') return false;
+    if (settings.trust === 'ask' && !this.sessionGranted.has(wsId)) return false;
+    // 'always' 或 'ask'+本会话已授权 → 放行
+    return true;
+  }
+
+  /**
+   * 信任门（spec §6.1 / §5.2 step 3）——agent 门（带副作用，仅工具执行路径使用）：
+   *   deny → BrowserDeniedError（不推卡——用户主动拒绝的永久态）；
    *   ask 且本会话未授 → 推 trust-request notice 给 renderer 触发右下角信任卡，再抛 BrowserNotTrustedError；
    *   'always' 或 'ask'+本会话已授权 → 放行。
    * 推送与抛错的顺序契约：notice 必须在抛错前发出，否则 LLM 看到 BrowserNotTrustedError
@@ -70,13 +84,10 @@ export class BrowserPolicy {
    * notice 携带 workspaceId（M7）：renderer 信任卡路由用，避免单活跃 ws 推导脆弱。
    */
   assertAllowed(wsId: string): void {
-    const settings = this.readSettings(wsId);
-    if (settings.trust === 'deny') throw new BrowserDeniedError();
-    if (settings.trust === 'ask' && !this.sessionGranted.has(wsId)) {
-      this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）', wsId);
-      throw new BrowserNotTrustedError();
-    }
-    // 'always' 或 'ask'+本会话已授权 → 放行
+    if (this.isAllowed(wsId)) return;
+    if (this.readSettings(wsId).trust === 'deny') throw new BrowserDeniedError();
+    this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）', wsId);
+    throw new BrowserNotTrustedError();
   }
 
   /** evaluate 门：browser_evaluate 默认关（spec §6.2），false 即拒绝 */

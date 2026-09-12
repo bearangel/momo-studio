@@ -585,12 +585,10 @@ export class BrowserManager {
   }
 
   private isTrusted(wsId: string): boolean {
-    try {
-      this.policy.assertAllowed(wsId);
-      return true;
-    } catch {
-      return false;
-    }
+    // N1：纯判定零副作用——本方法位于状态推送面（getState / buildState→emitState，
+    // did-navigate / page-title-updated 等高频触发）；包 assertAllowed 会把 trust notice
+    // 副作用泄漏进每次导航/标题更新（用户自己浏览被误弹「agent 请求访问」卡）。
+    return this.policy.isAllowed(wsId);
   }
 
   private emitState(ws: ActiveWorkspace): void {
