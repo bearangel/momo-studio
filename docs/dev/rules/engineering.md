@@ -125,6 +125,18 @@ v2.6 任务断点续跑（spec：`docs/specs/2026-09-10-task-resume-design.md`�
 
 ---
 
+## v2.8 编排规则
+
+v2.8 Orchestration 元语（spec：`docs/specs/2026-09-12-orchestration-primitives-design.md`）引入的子 agent 续接与异步派发约束：
+
+- **taskId = 链 ID，不可复用不可另造**——followup 多轮沿用原 dispatch 的 task_id（executeFollowup 构造 dispatch content 时不用 buildDispatchMessage 的 randomUUID），`WHERE task_id = ?` 是链历史聚合的唯一键。任何「为新轮次生成新任务 ID」的改动都会把链拆断（重建器查不到前轮、句柄表键漂移）。串行保障：上轮 settle 后才可再 followup（派发侧校验同链无在途条目）——pendingReplies / bgHandles 同键复用的安全前提
+- **bg 句柄是内存态，不承诺跨重启**——`bgHandles: Map<taskId, BgHandle>` 生命周期 = PM runtime 子进程；重启后 status / cancel / gather 一律 not_found（spec §12 明示边界，不做持久化补救）。新增依赖句柄的功能必须先把 not_found 当常态路径处理；同 PM 在途上限 8（BG_HANDLE_LIMIT）是内存约束不是配置项
+- **handleTaskReply 单点收口不破**——子 agent reply 的唯一入口：pendingReplies 命中走既有逻辑，miss 查 bgHandles（in_flight 翻转 / cancel 后迟到忽略 body）+ 唤醒 gatherWaiters。新增任何「消费 reply」的机制必须在此扩展分支，禁止另开监听路径 fork reply 流——双消费者 = 竞态 + 既有渐进超时 / abort 清理语义漂移
+- **historyPrefix 与 resumeTurn 互斥**——两者都是 runChatLoop 尾参且语义正交（resume=恢复中断、messages 非空不追加 body；followup=续聊、前缀 + 新 user 轮），派发侧保证不同时设置；runChatLoop 防御性处理：同现时 resumeTurn 优先、historyPrefix 忽略 + warn。新增第三种载荷前缀类字段必须先回答「与这两者如何互斥」
+- **编排工具注入门统一 length 判定**——getSessionDispatchScope 的 filter 可返回空数组（多成员会话 + 自己是 leader + subAgents 快照与会话成员交集为空），而 `[]` 在 JS 为 truthy：hint 门判 length 而工具门判 truthy 即出现「无教学段却注入工具」的门不一致（T7 Minor，T9 收敛为单一 hasSessionSubs 布尔）。新增依赖 sessionSubs 的注入点必须复用同一布尔，禁止再写裸 truthy 判定
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |
