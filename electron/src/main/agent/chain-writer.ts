@@ -7,8 +7,8 @@
 //   - (task_id = 链 ID, session_id = 执行会话) 双键打标——rebuildSubConversation
 //     （T1）按双键聚合链内全部轮次（子 agent 流行 + followup user 行）；
 //   - sender='owner'（session-service.sendUserMessage 的用户行约定，重建器据此
-//     分辨 user 轮）+ parent_stream_session_id（关联链内子 agent 流，供
-//     renderer 嵌套定位）；
+//     分辨 user 轮）+ parent_stream_session_id（PM 当前流 id——追问行据此嵌套
+//     定位到 PM 本轮的工具调用区，非链内子 agent 流）；
 //   - 列形态照 stream-relay 的 insertMessage 调用（status 缺省 'done'，
 //     workspace_id 缺省 NULL）。
 

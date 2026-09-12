@@ -10,6 +10,8 @@
 //     SkillRegistry 直接由 runtime-entry 调用 loadFull/loadResource）。
 //   - getDispatchToolDefs：主 agent 给每个 sub agent 注册 dispatch:<slug> 工具。
 //     执行也由 runtime-entry 内联处理（发 dispatch 消息 → 等 task_reply）。
+//   - getOrchestrationToolDefs：v2.8.0 编排元语 5 工具面（followup / bg / gather /
+//     status / cancel）。声明在此，执行体在 dispatch-wait.ts，路由同 runtime-entry。
 //   - getBuiltinLoopToolDefs：task_complete 主动分段 / compact 上下文压缩两个
 //     chat loop 内联工具的声明（执行逻辑在 runChatLoop 工具循环顶部，不走 ToolModule）。
 //
@@ -91,6 +93,89 @@ export function getDispatchToolDefs(subAgents: SubAgentRef[]): LLMToolDef[] {
       required: ['task'],
     },
   }));
+}
+
+/**
+ * v2.8.0 Orchestration（Task 7，spec 2026-09-12 orchestration-primitives §5）：
+ * 5 类编排工具定义——与 getDispatchToolDefs 同门注入（sessionSubs 非空的多成员
+ * 会话 leader），执行体在 dispatch-wait.ts（T4/T6），路由在 runtime-entry
+ * doExecuteTool。
+ *   - 4 个静态名：dispatch_followup / dispatch_gather / dispatch_status / dispatch_cancel
+ *   - dispatch_bg:<slug>：随 subAgents 动态生成（同 dispatch:<slug> 模式）
+ * 描述面向 LLM 教学使用模式（bg 先派→干别的→gather 收 / 超时非错误 pending
+ * 可再等 / cancel 长任务止损 / followup 仅用 dispatch 返回的 taskId——T6 review
+ * M2 路由项：禁止 LLM 拿任务板 #T 序号或自造 ID 追问）。
+ */
+export function getOrchestrationToolDefs(subAgents: SubAgentRef[]): LLMToolDef[] {
+  return [
+    {
+      name: 'dispatch_followup',
+      description:
+        '对已完成的 dispatch 任务追问。仅可使用 dispatch 返回的 taskId；子 agent 保留该链全部上下文续答，无需重述背景。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: '此前 dispatch 返回的任务链 taskId' },
+          question: { type: 'string', description: '追问内容' },
+        },
+        required: ['taskId', 'question'],
+      },
+    },
+    ...subAgents.map((sub) => ({
+      name: `dispatch_bg:${sub.slug}`,
+      description: `非阻塞后台派发给 ${sub.description || sub.slug}：立即返回 { taskId } 句柄。使用模式：先派发（可多个）→ 继续其他工作 → 用 dispatch_gather 收割结果。`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: '分配给该子 agent 的任务描述' },
+          toolBudget: { type: 'number', description: '该子任务的工具调用预算（可选）' },
+        },
+        required: ['task'],
+      },
+    })),
+    {
+      name: 'dispatch_gather',
+      description:
+        '收割后台任务句柄（dispatch_bg 返回的 taskId）。mode="all" 等全部完成、mode="any" 任一完成即返回。超时不是错误——返回 { done, pending }，pending 句柄保留可再次 gather。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handles: { type: 'array', items: { type: 'string' }, description: '句柄 taskId 列表' },
+          mode: {
+            type: 'string',
+            enum: ['all', 'any'],
+            description: 'all=全部完成才返回 / any=任一完成即返回',
+          },
+          timeoutMs: { type: 'number', description: '等待上限毫秒（1000-600000，默认 120000）' },
+        },
+        required: ['handles', 'mode'],
+      },
+    },
+    {
+      name: 'dispatch_status',
+      description:
+        '查询单个后台句柄状态（in_flight / done / cancelled / not_found），可选携带结果与耗时。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: '句柄 taskId' },
+        },
+        required: ['handle'],
+      },
+    },
+    {
+      name: 'dispatch_cancel',
+      description:
+        '取消在途后台任务（长任务止损）。幂等：已终态返回当前状态，不重复发中断。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: '句柄 taskId' },
+        },
+        required: ['handle'],
+      },
+    },
+  ];
 }
 
 /**

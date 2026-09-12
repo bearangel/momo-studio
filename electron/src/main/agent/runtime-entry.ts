@@ -31,6 +31,7 @@ import { getWorkspace } from '../workspace/crud';
 import {
   getVirtualToolDefs,
   getDispatchToolDefs,
+  getOrchestrationToolDefs,
   getBuiltinLoopToolDefs,
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
@@ -46,7 +47,17 @@ import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
 import { sendTaskReplyEvent } from './internal-event';
-import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled, getSessionDispatchScope } from './dispatch-wait';
+import {
+  executeDispatch,
+  executeDispatchBg,
+  executeFollowup,
+  executeGather,
+  executeStatus,
+  executeCancel,
+  handleTaskReplyIpc,
+  setDispatchTraceEnabled,
+  getSessionDispatchScope,
+} from './dispatch-wait';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
 import { getTodosForSession } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
@@ -380,6 +391,19 @@ export async function runChatLoop(
     isLeader: sessionSubs !== null && sessionSubs.length > 0,
     subAgents: sessionSubs ?? [],
   });
+  // v2.8.0 Orchestration（Task 7）：5 类编排工具 defs（4 静态 + dispatch_bg:<slug>
+  // 随成员动态）——与 dispatch:<slug> 同门（sessionSubs 非空才注入，非 leader 会话
+  // 工具与教学 prompt 均不出现，LLM 不知道自己有这能力）。
+  const orchestrationDefs = sessionSubs ? getOrchestrationToolDefs(sessionSubs) : [];
+  // 白名单同步：编排工具仅在下方 chatTools 组装层注入（逐轮），不经
+  // buildRuntimeContext 的动态工具名扩充（那里只覆盖启动时静态快照）——带
+  // allowedTools 白名单的 leader 若不同步，调用编排工具会被 assertToolAllowed
+  // 拒绝。注入即授权，同 dispatch:* 白名单先例（v1.7.1）。
+  if (sessionSubs && config.allowedTools.length > 0) {
+    config.allowedTools = [
+      ...new Set([...config.allowedTools, ...orchestrationDefs.map((t) => t.name)]),
+    ];
+  }
 
   // v2（B 子系统 Task B11）：MemoryProvider 取代 loadRecentHistory。
   // 子 agent（parentStreamSessionId 非空）走 fresh session 不拉房间历史，
@@ -791,6 +815,8 @@ export async function runChatLoop(
       ? [
           ...ctx.tools.filter((t) => !t.name.startsWith('dispatch:')),
           ...getDispatchToolDefs(sessionSubs),
+          // v2.8.0：5 类编排工具同门注入（bg→gather 工作流 / followup 续接）
+          ...orchestrationDefs,
         ]
       : ctx.tools.filter((t) => !t.name.startsWith('dispatch:'));
 
@@ -1169,13 +1195,18 @@ export async function runChatLoop(
       }
 
       // === ② 非 dispatch 工具：原路径串行执行（v2 并行仅作用于连续 dispatch 段） ===
-      sendStreamChunk({
-        type: 'tool_call',
-        streamSessionId,
-        callId: tc.id,
-        toolName: tc.name,
-        args: tc.arguments,
-      });
+      // v2.8.0 dispatch_bg:：start chip 由 doExecuteTool 路由层发（isDispatch +
+      // 预生成 subStreamSessionId，照 execDispatchCall 形态）——此处跳过普通 chip：
+      // aggregator 按 callId 分段，两个 start（plain + isDispatch）会渲染出双段。
+      if (!tc.name.startsWith('dispatch_bg:')) {
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          callId: tc.id,
+          toolName: tc.name,
+          args: tc.arguments,
+        });
+      }
 
       let result: string;
       try {
@@ -1504,6 +1535,80 @@ export async function doExecuteTool(
     const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, pmStreamSessionId, executionSessionId, ctx.abortSignal);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
+  }
+  // === v2.8.0 Orchestration（Task 7）：5 类编排工具路由（spec §5） ===
+  // 实参形态照 executeDispatch 既有调用点：pmStreamSessionId = PM 当前流 id、
+  // executionSessionId = 当前执行会话、ctx.abortSignal = 停止按钮级联。
+  // isDispatch 批处理判定仅匹配 'dispatch:' 前缀，dispatch_bg: 天然不命中——
+  // bg 走上方普通路径串行执行（spec §6：bg 不参与批处理，各自独立 tool call）。
+  if (name === 'dispatch_followup') {
+    const taskId = argToString(call.arguments.taskId, 'taskId');
+    const question = argToString(call.arguments.question, 'question');
+    const followupResult = await executeFollowup(
+      taskId,
+      question,
+      config,
+      executionSessionId,
+      ctx.abortSignal,
+      pmStreamSessionId,
+    );
+    return followupResult.body;
+  }
+  if (name.startsWith('dispatch_bg:')) {
+    const subSlug = name.slice('dispatch_bg:'.length);
+    const task = argToString(call.arguments.task, 'task');
+    const bgBudget =
+      typeof call.arguments.toolBudget === 'number' ? call.arguments.toolBudget : undefined;
+    // T4 硬性：预生成 subStreamSessionId 透传（句柄存它——dispatch_cancel 级联
+    // abort 的定位键）；chip 照 execDispatchCall 形态发（模块级 sender + isDispatch
+    // + 子 agent 展示名，streamSessionId = PM 当前流 id），renderer DispatchChip
+    // 据此关联子流。
+    const subStreamSessionId = randomUUID();
+    const subRef = config.subAgents.find((s) => s.slug === subSlug);
+    sendStreamChunk({
+      type: 'tool_call',
+      streamSessionId: pmStreamSessionId ?? '',
+      callId: call.id,
+      toolName: name,
+      args: call.arguments,
+      isDispatch: true,
+      subStreamSessionId,
+      subAgentName: subRef?.description ?? subRef?.slug ?? name,
+      subAgentAvatar: '🤖',
+    });
+    const bgResult = await executeDispatchBg(
+      subSlug,
+      task,
+      config,
+      bgBudget,
+      subStreamSessionId,
+      pmStreamSessionId,
+      executionSessionId,
+    );
+    return JSON.stringify(bgResult);
+  }
+  if (name === 'dispatch_gather') {
+    const handles = call.arguments.handles;
+    if (!Array.isArray(handles) || !handles.every((h) => typeof h === 'string')) {
+      throw new Error('参数 "handles" 缺失或不是字符串数组');
+    }
+    const mode = call.arguments.mode;
+    if (mode !== 'all' && mode !== 'any') {
+      throw new Error('参数 "mode" 必须是 "all" 或 "any"');
+    }
+    const rawTimeout = call.arguments.timeoutMs;
+    if (rawTimeout !== undefined && typeof rawTimeout !== 'number') {
+      throw new Error('参数 "timeoutMs" 不是数字');
+    }
+    return JSON.stringify(await executeGather(handles, mode, rawTimeout));
+  }
+  if (name === 'dispatch_status') {
+    return JSON.stringify(executeStatus(argToString(call.arguments.handle, 'handle')));
+  }
+  if (name === 'dispatch_cancel') {
+    return JSON.stringify(
+      executeCancel(argToString(call.arguments.handle, 'handle'), config, executionSessionId),
+    );
   }
   if (name.startsWith('mcp:')) {
     // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接

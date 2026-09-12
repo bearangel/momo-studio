@@ -46,6 +46,12 @@ ${subList}
 4. 简单请求（<3 文件 / 单步）直接完成，不要为拆分而拆分
 5. 子任务相互独立时，在**同一次回复中连续发出多个 dispatch 工具调用**并行执行，不要拆到多轮（多轮 = 串行等待）
 
+**异步编排工具（v2.8）**：
+- dispatch_bg:<slug>：非阻塞派发——立即返回 { taskId } 句柄，可先派发多个再继续其他工作
+- dispatch_gather：收割后台句柄（mode="all" 全部完成 / "any" 任一完成）；超时不是错误——返回 { done, pending }，pending 句柄稍后可再 gather
+- dispatch_status / dispatch_cancel：查询单句柄状态 / 长任务止损取消
+- dispatch_followup：对已完成的 dispatch 结果追问（仅可使用 dispatch 返回的 taskId，子 agent 保留全部上下文续答）
+
 **长任务自身管理**：
 - 多轮对话累积时调 \`compact\` 工具压缩上下文（结构化摘要由系统生成，无需你撰写总结）
 - 单段回复超 ~3KB 时调 \`task_complete\` 分段持久化（最多 5 段）
