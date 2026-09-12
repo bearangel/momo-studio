@@ -11,6 +11,10 @@
 //   → resolve/reject pending promise。
 //
 // 渐进式超时：3 分钟 → 6 分钟两阶段；收到 in_progress 回执重置当前阶段。
+//
+// v2.8.0 Orchestration：新增 bg 句柄表（dispatch_bg 派发 / dispatch_gather 收割
+// 的内存态，spec 2026-09-12 orchestration-primitives §4）——handleTaskReply
+// 单点收口扩展：pendingReplies miss 后查 bgHandles 翻转句柄并唤醒 gather waiter。
 
 import {
   buildDispatchMessage,
@@ -62,6 +66,85 @@ interface PendingReply {
 
 /** pending dispatch 回执：task_id → 等待中的 Promise（主 agent 发出 dispatch 后注册） */
 const pendingReplies = new Map<string, PendingReply>();
+
+// === v2.8.0 Orchestration：bg 句柄表（异步 dispatch 族，spec §4.1） ===
+
+/** 后台 dispatch 句柄：dispatch_bg 派发后立即返回，句柄留在本表；handleTaskReply 单点翻转 done，dispatch_gather 幂等读取（T4 落地执行体） */
+export interface BgHandle {
+  slug: string;
+  status: 'in_flight' | 'done' | 'cancelled';
+  startedAt: number;
+  /** settle 后填充（翻转 done 时写入；cancelled 态保持 undefined——迟到 body 被忽略） */
+  body?: string;
+  toolCallsUsed?: number;
+  completedAt?: number;
+}
+
+/** 同 PM 在途 bg 句柄上限（spec §4.2：在途数 ≥ 8 → 工具报错含清单；T4 executeDispatchBg 强制） */
+export const BG_HANDLE_LIMIT = 8;
+
+/** bg 句柄表：taskId → 句柄。生产写入口是 T4 executeDispatchBg（注册 in_flight）与 dispatch_cancel（标 cancelled） */
+const bgHandles = new Map<string, BgHandle>();
+
+/** gather 等待者：taskId → 等待翻转的回调集合（spec §4.2 实现裁定——独立于 pendingReplies 键空间，taskId 语义已被 bgHandles 占有） */
+const gatherWaiters = new Map<string, Set<(h: BgHandle) => void>>();
+
+/** 查询某后台任务的句柄（T4 dispatch_status / dispatch_gather / UI 消费；幂等读不删句柄） */
+export function getBgHandle(taskId: string): BgHandle | undefined {
+  return bgHandles.get(taskId);
+}
+
+/** 列出全部 in_flight 后台句柄（T4 上限报错清单 + UI 消费） */
+export function listInFlightBg(): Array<{ taskId: string; slug: string; startedAt: number }> {
+  const out: Array<{ taskId: string; slug: string; startedAt: number }> = [];
+  for (const [taskId, h] of bgHandles) {
+    if (h.status === 'in_flight') out.push({ taskId, slug: h.slug, startedAt: h.startedAt });
+  }
+  return out;
+}
+
+/**
+ * 注册 gather 等待者：句柄翻转 done 时被唤醒（收到更新后的句柄）。
+ * 返回清理函数——gather 超时路径调用以移除 waiter（spec 状态表：句柄保留、waiter 清理）。
+ * T4 dispatch_gather 消费；本模块内仅 handleTaskReply bg 分支唤醒。
+ */
+export function addGatherWaiter(taskId: string, waiter: (h: BgHandle) => void): () => void {
+  let set = gatherWaiters.get(taskId);
+  if (!set) {
+    set = new Set();
+    gatherWaiters.set(taskId, set);
+  }
+  set.add(waiter);
+  return () => {
+    const s = gatherWaiters.get(taskId);
+    if (!s) return;
+    s.delete(waiter);
+    if (s.size === 0) gatherWaiters.delete(taskId);
+  };
+}
+
+/** 翻转后唤醒该 taskId 的全部 gather waiter（一次性排空——waiter 是 resolve 回调，唤醒即消费，重复 reply 不重复唤醒） */
+function wakeGatherWaiters(taskId: string, handle: BgHandle): void {
+  const waiters = gatherWaiters.get(taskId);
+  if (!waiters) return;
+  gatherWaiters.delete(taskId);
+  for (const w of waiters) w(handle);
+}
+
+// 测试缝（照 memory/index.ts __setMemoryProviderForTest 先例）：T4 executeDispatchBg
+// 落地前，测试经 seed 直接注入句柄驱动 handleTaskReply 的 bg 分支；生产代码不经此
+// 路径写表（正式写入口是 executeDispatchBg / dispatch_cancel）。
+
+/** 测试用：注入一个 bg 句柄（形态由调用方完全控制） */
+export function __seedBgHandleForTest(taskId: string, handle: BgHandle): void {
+  bgHandles.set(taskId, handle);
+}
+
+/** 测试用：清空句柄表 + waiter 表（用例隔离） */
+export function __resetBgStateForTest(): void {
+  bgHandles.clear();
+  gatherWaiters.clear();
+}
 
 /**
  * 会话边界判定（spec §4.7 会话语义的执行时修正，2026-09-07 主机报告）：
@@ -253,6 +336,26 @@ export function handleTaskReply(content: Record<string, unknown>): void {
   if (!reply) return;
   const pending = pendingReplies.get(reply.task_id);
   if (!pending) {
+    // v2.8.0 bg 分支（spec §4.2 单点收口）：pendingReplies miss → 查 bgHandles；
+    // 既有同步 dispatch 在上方命中分支原样返回，零改动
+    const bg = bgHandles.get(reply.task_id);
+    if (bg) {
+      if (bg.status === 'in_flight') {
+        if (reply.status === 'in_progress') {
+          // 进度通知：不 settle——与 pendingReplies 的 in_progress 语义一致（保持等待，gather waiter 不唤醒）
+          return;
+        }
+        // 终态 reply（completed / failed / needs_input）→ 翻转 done + 结果缓存。
+        // BgHandle 无 failed 态（spec §4.1 枚举三值）：失败 body 原样保留，gather 收割后由 LLM 自行判读
+        bg.status = 'done';
+        bg.body = reply.body;
+        bg.toolCallsUsed = reply.tool_calls_used ?? 0;
+        bg.completedAt = Date.now();
+        wakeGatherWaiters(reply.task_id, bg);
+      }
+      // 非 in_flight（cancelled / done）→ cancel 后或已收割后的迟到 reply：保留既有终态、忽略 body（幂等）
+      return;
+    }
     console.warn(`[dispatch] 收到迟到的 task_reply（taskId=${reply.task_id}, status=${reply.status}）— 已超时或已处理`);
     return;
   }
