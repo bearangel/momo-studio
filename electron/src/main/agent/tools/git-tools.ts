@@ -202,7 +202,7 @@ export class GitTools implements ToolModule {
           type: 'object',
           properties: {
             staged: { type: 'boolean' },
-            path: { type: 'string' },
+            path: { type: 'string', description: '相对 workspace 的文件路径；repo 指定时为该仓内相对路径' },
             repo: REPO_PARAM,
           },
         },
@@ -240,7 +240,7 @@ export class GitTools implements ToolModule {
             paths: {
               type: 'array',
               items: { type: 'string' },
-              description: '相对 workspace 的文件路径，逐个走沙箱校验',
+              description: '相对 workspace 的文件路径，逐个走沙箱校验；repo 指定时为该仓内相对路径',
             },
             repo: REPO_PARAM,
           },

@@ -6,6 +6,10 @@
 // v2.9 多仓 git Task 4 扩展：9 工具 repo 参数接线——每工具 × {缺省, 内层} 双跑
 // （副作用/输出归属内层仓断言）+ GitPolicy 跨仓（总开关关 / 分支保护读目标仓
 // 当前分支）+ repo 未命中 9 工具统一报错附清单 + inputSchema 契约。
+// v2.9 多仓 git Task 5 扩展：接线锁红绿变异（三组，记录见 task-5-report-git.md）
+// + 集成场景（FileTools 写内层仓 → git_status/add/commit(repo) →
+// scanUnjournaled 真实 runner 对账——journal workspace 相对路径与 git 侧
+// `-C 内层仓` porcelain 的 workspace 相对化两形态零漂移）+ T4 Minor schema 补句。
 // 设计要点：
 //   - 真 tmp fixture：workspace 根仓 + `services/api` 内层仓（各自独立 git init），
 //     走 discoverRepos 真实发现路径——其模块级缓存按 workspaceDir 入键，每用例
@@ -32,8 +36,12 @@ import os from 'node:os';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { GitTools, resolveRepoPath, runGit } from '../../../src/main/agent/tools/git-tools';
-import { runMigrations, closeDb } from '../../../src/main/storage/db';
+import { FileTools } from '../../../src/main/agent/tools/file-tools';
+import { runMigrations, closeDb, getDb } from '../../../src/main/storage/db';
 import { setGitPolicy, getGitPolicy } from '../../../src/main/workspace/git-policy';
+import { createJournalStore } from '../../../src/main/journal/store';
+import { __setJournalStoreForTest } from '../../../src/main/journal/recorder';
+import { scanUnjournaled } from '../../../src/main/journal/detector';
 
 /** 在指定目录执行 git 命令并返回输出（测试 fixture 播种用）。*/
 function git(cwd: string, cmd: string): string {
@@ -382,6 +390,21 @@ describe('inputSchema repo 字段 + 描述多仓提示（Task 4）', () => {
     };
     expect(reposSchema?.properties?.repo).toBeUndefined();
   });
+
+  it('git_add paths / git_diff path 描述含「repo 指定时为该仓内相对路径」（T4 Minor）', () => {
+    const tools = new GitTools();
+    const defs = tools.getDefs();
+    const addSchema = defs.find((d) => d.name === 'git_add')?.inputSchema as {
+      properties?: { paths?: { description?: string } };
+    };
+    expect(addSchema.properties?.paths?.description).toContain(
+      'repo 指定时为该仓内相对路径',
+    );
+    const diffSchema = defs.find((d) => d.name === 'git_diff')?.inputSchema as {
+      properties?: { path?: { description?: string } };
+    };
+    expect(diffSchema.properties?.path?.description).toContain('repo 指定时为该仓内相对路径');
+  });
 });
 
 describe('repo 未命中 → 9 工具统一报错（Task 4）', () => {
@@ -520,5 +543,86 @@ describe('git_commit + GitPolicy 跨仓（Task 4）', () => {
     await expect(
       tools.execute('git_commit', { message: 'feat: x' }, ctx),
     ).rejects.toThrow(/allowAgentCommits/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 5：集成场景——内层仓改动 → repo 工具链 → scanUnjournaled 对账
+// ---------------------------------------------------------------------------
+
+describe('集成：内层仓改动 → repo 工具链 → scanUnjournaled 对账（Task 5，v2.5 联动零漂移）', () => {
+  beforeEach(() => {
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    // journal store 注入照 detector.test.ts 模式：真实 SQLite + 真实 store
+    __setJournalStoreForTest(createJournalStore(getDb()));
+    setGitPolicy('test-ws', {
+      allowAgentCommits: true,
+      defaultBranch: 'main',
+      fallbackBranchPattern: 'agent/{agent_slug}/{task_id}',
+      commitMessage: {
+        template: '{type}{taskId} {summary}',
+        patterns: [
+          {
+            code: 'chore',
+            name: 'Conventional',
+            regex: '^(feat|fix|chore|docs|refactor|test)(\\(.+\\))?:\\s+.+',
+            example: 'feat(api): add endpoint',
+          },
+        ],
+        validation: 'strict',
+        trailers: [],
+      },
+    });
+    // 根仓 .gitignore 忽略 services/：真仓嵌套在根仓 porcelain（含
+    // --untracked-files=all）中折叠为 `?? services/api/` 单行——committed
+    // .gitignore 让对账断言聚焦内层仓路径形态本身。
+    git(tmpDir, 'commit --allow-empty -m "init root"');
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'services/\n');
+    git(tmpDir, 'add .gitignore');
+    git(tmpDir, 'commit -m "chore: ignore nested repos"');
+    // 内层仓空提交：unborn 分支上 rev-parse HEAD 失败，commit 链路需要 HEAD 就绪。
+    git(apiDir, 'commit --allow-empty -m "init api"');
+  });
+
+  afterEach(() => {
+    __setJournalStoreForTest(null);
+    closeDb();
+    delete process.env.AP_USER_DATA_DIR;
+  });
+
+  it('FileTools 写内层仓 → git_status(repo) 可见 → git_add+git_commit(repo) → 对账 journaled 正确', async () => {
+    const gitTools = new GitTools();
+    const fileTools = new FileTools();
+
+    // 1. FileTools 写内层仓文件：生产记账路径落 journal（workspace 相对
+    //    services/api/feature.txt，toJournalRelPath 归一）。
+    await fileTools.execute('write_file', { path: 'services/api/feature.txt', content: 'v1' }, ctx);
+
+    // 2. git_status(repo) 可见 dirty（内层仓 untracked）。
+    const status = await gitTools.execute('git_status', { repo: 'services/api' }, ctx);
+    expect(status).toContain('feature.txt');
+
+    // 3. git_add + git_commit(repo)：内层 main 受保护 → diversion 到 fallback，
+    //    提交落内层仓 fallback 分支（根仓零感知——Task 4 已锁，此处走链路）。
+    await gitTools.execute('git_add', { paths: ['feature.txt'], repo: 'services/api' }, ctx);
+    await gitTools.execute('git_commit', { message: 'feat: inner work', repo: 'services/api' }, ctx);
+    expect(git(apiDir, 'rev-parse --abbrev-ref HEAD').trim()).toBe('agent/agent/test-stream');
+    expect(git(apiDir, 'log -1 --oneline')).toContain('feat: inner work');
+
+    // 4. 提交后再造两类状态：wip.txt 走 FileTools（journaled 且仍 dirty）；
+    //    manual.txt 直接写（bash 式账外改动，journal 无条目）。
+    await fileTools.execute('write_file', { path: 'services/api/wip.txt', content: 'wip' }, ctx);
+    await fs.promises.writeFile(path.join(apiDir, 'manual.txt'), 'out-of-journal');
+
+    // 5. scanUnjournaled 真实 runner 对账（不注入 fake）：git 侧 `-C 内层仓`
+    //    porcelain 相对仓路径 → workspace 相对化 = services/api/wip.txt；journal
+    //    侧 workspace 相对路径同形态——两侧零漂移时 wip 归 journaled、
+    //    manual 归 unjournaled；任一侧形态漂移（如漏做仓相对化）即错分。
+    const scan = await scanUnjournaled('test-ws', tmpDir, null);
+    expect(scan.degraded).toBe(false);
+    expect(scan.journaled).toEqual(['services/api/wip.txt']);
+    expect(scan.unjournaled).toEqual(['services/api/manual.txt']);
+    // 已提交的 feature.txt 已被工具链消化：不出现在任何一侧（提交即对账清零）。
   });
 });
