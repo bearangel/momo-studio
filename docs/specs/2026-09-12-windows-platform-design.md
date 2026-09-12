@@ -54,7 +54,7 @@ Linux 容器可验证                          真机（主机验收清单）
 
 1. **isInsideDir 是唯一边界判定入口**——五模块手工 startsWith 全部替换；新代码禁手写目录包含比对（engineering.md 规则）
 2. **posix 路径零回归**——helper 在 Linux 语义下与被替换的手工比对逐字节等价（既有测试全绿即证）
-3. **toPosixRelPath 保护反斜杠文件名**——`'a\\b.txt'` 在 win32 下归一为 `a/b.txt` 仍是 git 语义正确形态（POSIX 是 git/账本的对账口径）；「保护」指不因 split/join 破坏**多个连续**分隔符或把字面 `\` 当分隔符拆散的 edge（实现以 win32 语义正确解析后归一）
+3. **toPosixRelPath 口径与 git 一致**——win32 下字面反斜杠与分隔符不可区分，按分隔符语义解析后归一 POSIX（与 git 在 Windows 的行为一致，§7 明示边界）；「正确解析后归一」意味着不使用裸 `split(path.sep)`（会把 `C:` 无盘符相对形态等 win32 特有形态拆错）
 4. **spawn win32 分支不改变 Linux 行为**——`shell: process.platform === 'win32'` 三态条件注入
 5. **单实例锁只在缺锁时 quit**——有锁路径行为零变化（second-instance 仅 Windows/macOS 用户双击场景可达）
 
