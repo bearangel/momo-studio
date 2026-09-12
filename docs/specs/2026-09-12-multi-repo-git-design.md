@@ -82,6 +82,8 @@ function resolveRepoPath(ctx: ToolContext, repo: unknown): string;
 async function runGit(args: string[], ctx: ToolContext, maxOutput?: number, repoPath?: string): Promise<GitResult>;
 ```
 
+> **勘误（T2 实现勘定）**：`resolveRepoPath` 实际签名为 `(workspaceDir: string, wsFs: WorkspaceFS, repo: unknown): string`，非上文草图的 `(ctx: ToolContext, repo: unknown)`——plan 层为可测性裁定：路径解析是纯函数，解耦 ToolContext 后单测无需构造完整 ctx mock（只注入 workspaceDir + 真实 WorkspaceFS）。语义与本节描述零漂移；工具层由 `resolveRepoArg` 统一入口从 ctx 拆参后内调。
+
 - 9 个工具的 `inputSchema` 加 `repo: { type: 'string', description: '目标仓（相对 workspace 路径，缺省根仓；可用仓见 git_repos）' }`
 - `handles` 不变（工具名零变化）
 - `git_commit` 的 GitPolicy 分支保护检查改为读 `resolveRepoPath` 产出的仓的当前分支（缺省根仓时与既有逐字节一致）

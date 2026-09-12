@@ -6,6 +6,17 @@
 
 ## 状态
 
+**v2.9.0 — 多仓 git 工具（开发中，未发布）**
+
+workspace 内层仓的 agent 可见可操作——git 九件套（status/diff/log/show/add/commit/branch/checkout/stash）此前固定在 workspace 根仓执行（`runGit` 恒 workspaceDir），agent 能改内层仓文件却看不见也管不了这些仓的 git 状态（monorepo 子服务、vendored 依赖、嵌套克隆是真实工程常态）。v2.9 以「发现列表是唯一 `-C` 入口」为安全骨架，把多仓能力交到 agent 手上。spec 见 `docs/specs/2026-09-12-multi-repo-git-design.md`。
+
+- **git_repos 发现工具（新增，第 10 个 git 工具）** — 列 workspace 内全部 git 仓：每仓一行 `root: <是否根仓>  branch: <当前分支>  dirty: <改动数，50+ 封顶>  <相对路径，根仓为 (.)>`；discoverRepos 已保序（根在前、内层字典序），单仓查询失败该行 `branch: ?  dirty: ?` 不降级整体。工具描述引导 LLM「改内层仓文件或对其 commit 前先调用本工具确认可用仓」
+- **9 工具可选 `repo` 参数** — 全部 git 工具 inputSchema 加 `repo?: string`（workspace 相对路径，缺省根仓）：缺省路径 args 与 spawn **逐字节零变化**（不前置 `-C`，既有 agent / 测试零回归）；指定时经 `resolveRepoPath` 双校验——`wsFs` 边界（拒 `..`/绝对路径/symlink 逃逸）+ 必须命中 `discoverRepos` 发现列表（`./x` / `x/` 等形态归一后比对，Windows 反斜杠同口径 POSIX 归一），未命中报错附可用仓清单（含缓存失效重试指引）；命中后 `git -C <该仓>` 执行
+- **discoverRepos 上提共享** — 探测器自 `journal/detector.ts` 上提为 `git/repos.ts` 共享模块（纯搬家：函数+缓存+mtime 逐字节迁移，仅 `DEFAULT_MAX_DEPTH` 加 export），v2.5 账本对账与 git 工具层从此同源；账本零改动（记账按 workspace 相对路径天然仓无关）
+- **GitPolicy 均匀继承** — 三层校验（总开关 / 分支保护 / message pattern）对任何仓一致适用，分支保护按**目标仓自己的当前分支**匹配同名规则（内层 main 受保护与根 main 同拒；总开关关则全仓拒绝）；commit 的 fallback 分支切换 / 回滚 / 提交全部落目标仓
+- 已知边界：探测深度 3 层（更深用 bash，与账本探测器同深度——对账语义自洽）/ 新克隆仓依赖目录 mtime 缓存失效后可见（父目录条目变化即失效，实践中即时）/ Windows 反斜杠 repo 参数按 POSIX 相对路径归一匹配 / 根仓无 `.gitignore` 覆盖内层仓时对账出现 `?? services/` 目录条目噪声——v2.5 探测器既有口径，非本次引入
+- 主机验收待办：monorepo workspace 实测内层仓 commit（分支保护跨仓生效 + fallback 落目标仓）+ 任务卡「未入账」对账联动（`git_repos` → 内层改动 → `scanUnjournaled` 零漂移归类）
+
 **v2.8.0 — Orchestration 元语（开发中，未发布）**
 
 会话内编排面补齐两大缺口——「子 agent 不可续接」（dispatch 一次性 body 进 / reply 出，无法追问）与「无 fire-and-forget + gather」（leader 派发后必须当场等完）：新增 5 个编排原语（续接族 + 异步句柄族），与既有 dispatch:<slug> 同门注入，路由链（routeDispatch → executeTask）零改动复用。spec 见 `docs/specs/2026-09-12-orchestration-primitives-design.md`。
