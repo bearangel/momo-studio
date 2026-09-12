@@ -21,8 +21,11 @@
 //     丢失工作区修改，或 `git checkout <sha>` 进入 detached HEAD。
 //   - v2.9 多仓 git（Task 2）：resolveRepoPath 解析可选 repo 参数（缺省根仓，
 //     指定时 wsFs 边界校验 + discoverRepos 发现列表双校验）；runGit 增第四参
-//     repoPath 定仓执行（`git -C <repoPath>`）。本 task 只加能力不接工具面——
-//     9 工具的 repo 参数接线在 Task 4。
+//     repoPath 定仓执行（`git -C <repoPath>`）。9 工具的 repo 参数接线在 Task 4。
+//   - v2.9 多仓 git（Task 3）：git_repos 发现工具——discoverRepos 仓清单 + 每仓
+//     并发查 branch --show-current / status --porcelain 行数，行格式
+//     `root: <bool>  branch: <name|?>  dirty: <n|50+|?>  <相对路径|(.)>`；
+//     单仓查询失败容错（该行字段显示 ?），空清单输出提示行。
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -145,16 +148,20 @@ export function resolveRepoPath(workspaceDir: string, wsFs: WorkspaceFS, repo: u
 /**
  * GitTools —— git 工具模块。v1.5 Task 9 引入。
  *
- * 工具清单：
- *   只读（本 task 实现）：git_status / git_diff / git_log / git_show
- *   写（后续 task 实现）：git_add / git_commit / git_branch / git_checkout / git_stash
- *
- * handles(name) 对全部 9 个返回 true——这样 LLM 调用写工具时由本模块给出
- * 「暂未实现」错误，而不会被路由到其他模块或抛 UnknownToolError。
+ * 工具清单（v2.9 Task 3 起共 10 个）：
+ *   发现：git_repos（多仓清单 + 每仓分支 / dirty 摘要）
+ *   只读：git_status / git_diff / git_log / git_show
+ *   写：git_add / git_commit / git_branch / git_checkout / git_stash
  */
 export class GitTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
+      {
+        name: 'git_repos',
+        description:
+          '发现 workspace 内全部 git 仓（根仓 + 限深 3 层内层仓），每仓一行摘要：是否根仓 / 当前分支 / dirty 文件数（≥50 显示 50+）/ 相对路径（根仓显示 (.)）。单仓查询失败时该行 branch/dirty 显示 ?。多仓 git 操作（repo 参数）前先调用本工具获取仓清单。',
+        inputSchema: { type: 'object', properties: {} },
+      },
       {
         name: 'git_status',
         description: '查看 workspace git 状态（porcelain 格式）',
@@ -260,6 +267,7 @@ export class GitTools implements ToolModule {
 
   handles(name: string): boolean {
     return [
+      'git_repos',
       'git_status', 'git_diff', 'git_log', 'git_show',
       'git_add', 'git_commit', 'git_branch', 'git_checkout', 'git_stash',
     ].includes(name);
@@ -267,6 +275,7 @@ export class GitTools implements ToolModule {
 
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     switch (name) {
+      case 'git_repos': return executeRepos(ctx);
       case 'git_status': return executeStatus(args, ctx);
       case 'git_diff': return executeDiff(args, ctx);
       case 'git_log': return executeLog(args, ctx);
@@ -280,6 +289,44 @@ export class GitTools implements ToolModule {
         throw new Error(`未知 git 工具: ${name}`);
     }
   }
+}
+
+/**
+ * git_repos：多仓发现摘要（v2.9 Task 3）。
+ *
+ * discoverRepos 产出根在前、内层字典序的仓清单（保序直接沿用）；每仓
+ * Promise.all 并发查 `branch --show-current` + `status --porcelain=v1` 非空行
+ * 数（复用 runGit 的 10s 超时与输出截断）。单仓失败（code!==0）不阻断其余
+ * 仓——该行 branch / dirty 显示 `?`（坏仓对 agent 可见本身即有价值的信号）。
+ * 行格式（字段组间两空格，输出契约被 git-tools-repo.test.ts 逐字段锁死）：
+ *   `root: <true|false>  branch: <name|?>  dirty: <n|50+|?>  <相对路径|(.)>`
+ */
+async function executeRepos(ctx: ToolContext): Promise<string> {
+  const repos = discoverRepos(ctx.workspaceDir);
+  if (repos.length === 0) return '未发现任何 git 仓';
+  const lines = await Promise.all(
+    repos.map(async (repo) => {
+      const rel = toPosixRel(ctx.workspaceDir, repo);
+      const isRoot = rel === '';
+      const [branchRes, statusRes] = await Promise.all([
+        runGit(['branch', '--show-current'], ctx, undefined, repo),
+        runGit(['status', '--porcelain=v1'], ctx, undefined, repo),
+      ]);
+      // 成功且非空取分支名；失败或空输出（detached HEAD）→ ?
+      const branch =
+        branchRes.code === 0 && branchRes.stdout.trim() ? branchRes.stdout.trim() : '?';
+      // porcelain 非空行计数（空输出 = 0）；≥50 封顶显示 50+；失败 → ?
+      let dirty: string;
+      if (statusRes.code !== 0) {
+        dirty = '?';
+      } else {
+        const n = statusRes.stdout.split('\n').filter((l) => l.length > 0).length;
+        dirty = n >= 50 ? '50+' : String(n);
+      }
+      return `root: ${isRoot}  branch: ${branch}  dirty: ${dirty}  ${isRoot ? '(.)' : rel}`;
+    }),
+  );
+  return lines.join('\n');
 }
 
 /** git_status：porcelain v1 格式。空输出时返回友好提示。*/
