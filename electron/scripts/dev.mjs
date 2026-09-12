@@ -35,7 +35,7 @@ function spawnChild(name, command, args, opts = {}) {
     cwd: opts.cwd ?? ROOT,
     stdio: 'inherit',
     env: opts.env,
-    shell: isWin,
+    shell: isWin, // win32 spawn 豁免审计（v2.10）：npx/tsc 经 .cmd shim，无 shell 必 ENOENT；killAll 的 taskkill 是真 PE（.exe）不需要
   });
   children.push(child);
   log(name, `已启动 (pid ${child.pid})`);

@@ -40,7 +40,10 @@ export interface GitRunResult {
 /** 可注入的 git 执行器（测试注入 fake；生产 defaultGitRunner） */
 export type GitRunner = (args: string[]) => Promise<GitRunResult>;
 
-/** 默认 runner：spawn git + 10s 超时 SIGKILL + 1MB 输出截断（标记 truncated） */
+/** 默认 runner：spawn git + 10s 超时 SIGKILL + 1MB 输出截断（标记 truncated）。
+ *  win32 shell 豁免（v2.10 spawn 审计）：git 是真 PE（git.exe），无 shell 的
+ *  spawn 走 CreateProcess 直寻 .exe 可执行——不经过 .cmd shim 解析、不会
+ *  ENOENT，故不加 shell 分支（对照 mcp/client.ts 的裸命令 npx 问题）。 */
 export const defaultGitRunner: GitRunner = (args) =>
   new Promise((resolve) => {
     const child = spawn('git', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });

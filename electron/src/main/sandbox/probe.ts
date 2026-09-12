@@ -68,7 +68,10 @@ export async function reprobeSandbox(runner: CmdRunner = defaultRunner): Promise
       state.unavailableReason = `sandbox-exec 不可用: ${r.stderr.slice(0, 120)}`;
     }
   } else if (process.platform === 'win32') {
-    // Windows 无 OS 沙箱：available=false 是常态（win32 走 plain 路径，不 block）
+    // Windows 无 OS 沙箱：available=false 是常态（win32 走 plain 路径，不 block）。
+    // win32 shell 豁免（v2.10 spawn 审计）：本分支不 spawn bwrap——平台门即
+    // 豁免；pwsh 探测走 windows.ts 的 'pwsh.exe'（显式 .exe 后缀真 PE，
+    // CreateProcess 直寻），均无 .cmd shim 解析问题（对照 mcp/client.ts）。
     state.windowsShell = await detectWindowsShell(runner);
     state.executionPolicy = await getExecutionPolicy(state.windowsShell, runner);
   } else {
