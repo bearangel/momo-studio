@@ -124,6 +124,13 @@ export interface RuntimeConfig {
   parentStreamSessionId?: string;
   /** v2（B 子系统 Task B11）：当前关联的任务 ID（来自 task-driven runtime 派发），用于向 MemoryProvider 拉 task 上下文注入 system prompt */
   currentTaskId?: string;
+  /**
+   * v2.8.0 Orchestration（Task 5 链路打标）：dispatch 链 ID（TaskConfig.dispatchContext.task_id，
+   * runTaskChatLoop 织入）。与 currentTaskId 分属两个 ID 空间（任务板任务 vs dispatch 链），
+   * 禁止混用（boundary-rules 一义一名）——本字段不参与 MemoryProvider 注入，仅作 start chunk
+   * 的 taskId 来源，由 stream-relay 落到该流全部消息行的 task_id 列。
+   */
+  chainTaskId?: string;
   // === 压缩重构（spec 2026-09-09 §2.3）===
   /** 模型上下文窗口（token）；0=未知（auto 阈值压缩 fail-safe 跳过） */
   contextWindow: number;

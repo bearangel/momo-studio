@@ -656,6 +656,12 @@ export async function runChatLoop(
     if (stats) stats.endChunkSent = true;
   };
 
+  // v2.8.0 链路打标（Task 5）：任务板任务（currentTaskId）或 dispatch 链（chainTaskId）——
+  // start chunk 携带 taskId，主进程 stream-relay 据此给该流全部消息行落 messages.task_id
+  // （rebuildSubConversation / read_task_progress 的查询键）。普通 chat 流（两者皆无）
+  // 不带字段，wire 协议零变化。currentTaskId 优先（同设时任务板语义为准）。
+  const tagTaskId = config.currentTaskId ?? config.chainTaskId;
+
   sendStreamChunk({
     type: 'start',
     streamSessionId,
@@ -664,6 +670,7 @@ export async function runChatLoop(
     // renderer botNameMap 据此解析展示名）
     sessionId: roomId,
     senderAgentId: config.agentUserId,
+    ...(tagTaskId ? { taskId: tagTaskId } : {}),
     // v1.4 嵌套：子 agent 携带父 session ID + 自身展示信息，renderer 据此把子流
     // 嵌套渲染到 PM 气泡内对应 dispatch chip 下方
     ...(parentStreamSessionId
@@ -1272,12 +1279,16 @@ export async function runTaskChatLoop(
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
+  //    - chainTaskId：dispatchContext 设置时织入链 ID（Task 5 链路打标——start chunk 据此
+  //      把 dispatch 链 ID 落到该流全部消息行的 task_id；与 currentTaskId 语义分立，见
+  //      runtime-config 字段注释）
   //    - maxToolCalls：dispatchContext.tool_budget 优先（PM 分配的子任务预算），
   //      其次 cfg.maxToolCalls（主进程按 executionSessionId 解析的会话/全局预算，
   //      v2.2 接线），均缺省时沿用 config（AGENT_CONFIG 默认）
   const taskConfig: RuntimeConfig = {
     ...config,
     ...(taskId ? { currentTaskId: taskId } : {}),
+    ...(dispatchContext ? { chainTaskId: dispatchContext.task_id } : {}),
     ...(dispatchContext?.tool_budget !== undefined
       ? { maxToolCalls: dispatchContext.tool_budget }
       : cfg.maxToolCalls !== undefined

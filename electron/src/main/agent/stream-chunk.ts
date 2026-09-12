@@ -53,6 +53,15 @@ export type StreamChunk =
       subAgentName?: string;
       /** v1.4 嵌套：子 agent emoji 头像（dispatch chip 头部显示） */
       subAgentAvatar?: string;
+      /**
+       * v2.8.0 链路打标（Task 5）：任务板任务 ID（RuntimeConfig.currentTaskId）或
+       * dispatch 链 ID（dispatchContext.task_id，经 RuntimeConfig.chainTaskId 织入）。
+       * 主进程 stream-relay 据此给该流全部消息行（含 roll / segment 后续行）落
+       * messages.task_id——rebuildSubConversation（T1）与 read_task_progress 按
+       * task_id 查询的消费源。普通 chat 流（无任务无 dispatch）不带本字段，
+       * 协议对旧消费者零变化（可选字段，向后兼容）。
+       */
+      taskId?: string;
     }
   | { type: 'thinking'; streamSessionId: string; delta: string }
   | { type: 'text'; streamSessionId: string; delta: string }

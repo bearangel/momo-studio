@@ -60,6 +60,7 @@ export function __resetEventBufferForTest(): void {
   eventBuffer?.destroy();
   eventBuffer = null;
   streamMessageIdCache.clear();
+  streamTaskIds.clear();
 }
 
 /**
@@ -94,6 +95,13 @@ export function __flushEventBufferForTest(): void {
  */
 const streamMessageIdCache = new Map<string, string>();
 
+/**
+ * v2.8.0 链路打标（Task 5）：streamSessionId → 链/任务 taskId（start 建立随 end 清理）。
+ * taskId 是链属性不是流属性——message_roll 换行 / segment 分段的后续行同标
+ * （roll / segment 落库时优先读本记忆，DB 行值兜底跨进程重启场景）。
+ */
+const streamTaskIds = new Map<string, string>();
+
 /** 解析流会话对应的 message id：缓存命中 0 查询；未命中查一次 DB 并回填 */
 function resolveMessageId(streamSessionId: string): string | null {
   const cached = streamMessageIdCache.get(streamSessionId);
@@ -108,6 +116,7 @@ function resolveMessageId(streamSessionId: string): string | null {
 function clearStreamSessionCache(streamSessionId: string): void {
   streamMessageIdCache.delete(streamSessionId);
   rollCounts.delete(streamSessionId);
+  streamTaskIds.delete(streamSessionId);
 }
 
 /** v2.3.1 roll 计数：streamSessionId → 已 roll 次数（新行后缀 #roll{n}）。
@@ -237,6 +246,13 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         const existing = getLatestMessageByStreamSessionId(chunk.streamSessionId);
         if (existing && existing.status === 'streaming') {
           streamMessageIdCache.set(chunk.streamSessionId, existing.id);
+          // 链路打标续流记忆：resume 重发 start——优先 chunk.taskId；
+          // 旧生产者（不带字段）回退既有行的 task_id，跨进程重启不丢标
+          if (chunk.taskId !== undefined) {
+            streamTaskIds.set(chunk.streamSessionId, chunk.taskId);
+          } else if (existing.taskId !== null) {
+            streamTaskIds.set(chunk.streamSessionId, existing.taskId);
+          }
           pushSessionMessage(existing);
           getEventBuffer().append({
             messageId: existing.id,
@@ -264,7 +280,12 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           streamSessionId: chunk.streamSessionId,
           parentStreamSessionId: chunk.parentStreamSessionId ?? null,
           status: 'streaming',
+          // v2.8.0 链路打标（Task 5）：undefined → NULL（普通 chat 流零变化）
+          taskId: chunk.taskId,
         });
+        if (chunk.taskId !== undefined) {
+          streamTaskIds.set(chunk.streamSessionId, chunk.taskId);
+        }
         streamMessageIdCache.set(chunk.streamSessionId, msg.id);
         pushSessionMessage(msg);
         getEventBuffer().append({
@@ -372,6 +393,8 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           segmentIndex: chunk.segmentIndex,
           parentStreamSessionId: parentMsg.parentStreamSessionId,
           workspaceId: parentMsg.workspaceId,
+          // 链路打标：分段快照行同属链（记忆优先，父行 DB 值兜底）
+          taskId: streamTaskIds.get(chunk.streamSessionId) ?? parentMsg.taskId,
           status: 'done',
         });
         const segBuf = getEventBuffer();
@@ -410,6 +433,9 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           streamSessionId: `${chunk.streamSessionId}#roll${n}`,
           parentStreamSessionId: oldMsg.parentStreamSessionId,
           workspaceId: oldMsg.workspaceId,
+          // 链路打标：taskId 是链属性不是流属性——roll 换行不丢标
+          //（记忆优先，旧行 DB 值兜底）
+          taskId: streamTaskIds.get(chunk.streamSessionId) ?? oldMsg.taskId,
           status: 'streaming',
         });
         streamMessageIdCache.set(chunk.streamSessionId, rollMsg.id);
