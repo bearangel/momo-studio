@@ -11,6 +11,9 @@
 // 纯读取（零写入）、同步。任何异常整体降级 degenerate（安全方向——
 // 重建失败等价全新回合，见 spec §5.3 降级阶梯）。
 //
+// v2.8.0：事件聚合状态机抽为可复用辅助（createAssistantRoundAggregator），
+// 与子会话重建器（sub-history-reconstructor）共享聚合语义，不复制代码。
+//
 // 重建形状对齐 runChatLoop 自身的 messages 组装（协议保真）：
 //   - 一轮 LLM 输出 = 单条 assistant 消息（content=本轮累积文本，
 //     toolCalls=本轮全部调用，runtime-entry:841）
@@ -64,6 +67,130 @@ interface PendingCall {
 }
 
 /**
+ * 单 assistant 轮聚合状态机（可复用聚合辅助）。
+ *
+ * v2.8.0 从 rebuildTurn 内联状态抽出：rebuildTurn 自身与子会话重建器
+ * （sub-history-reconstructor）共享同一事件聚合语义——text_delta 拼接 /
+ * tool_call+tool_result 按 callId 配对 / 孤儿 call 流末合成
+ * INTERRUPTED_TOOL_RESULT / 其余事件类型一律跳过（前向兼容）。
+ *
+ * 轮边界（closeRound 语义，对齐 runChatLoop 的 messages 组装序）：
+ *   - text_delta 出现在本轮 tool 活动之后 = 新一轮开始（先收口再累积）
+ *   - 调用方显式收口（steer drain / followup user 追问 / 链末 flush）
+ *
+ * appendMessage 供调用方在轮间插入非 assistant 产出的消息（回合起始
+ * user / steer 补充 / followup 追问），保持链内时序。
+ */
+export interface AssistantRoundAggregator {
+  /** 送入一个事件（text_delta / tool_call_start / tool_call_result；其余跳过） */
+  push(ev: MessageEventRow): void;
+  /** 收口当前轮：assistant(toolCalls) + 逐 call tool 消息；幂等（空轮无输出） */
+  closeRound(): void;
+  /** 追加非 assistant 产出的消息（user 起始 / steer 补充 / followup 追问） */
+  appendMessage(m: LLMMessage): void;
+  /** 流末收口（等价 closeRound） */
+  flush(): void;
+  /** 已聚合的全部消息（含 appendMessage 追加的，按链内时序） */
+  readonly messages: LLMMessage[];
+  /** 已发出 tool_call 事件数（预算消耗口径） */
+  readonly toolCallsUsed: number;
+}
+
+/** args 形态防御：非普通对象（损坏行）按空参数处理，不中断重建 */
+function toPlainArgs(raw: unknown): Record<string, unknown> {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+}
+
+/** 创建一轮聚合状态机（闭包实现，状态私有） */
+export function createAssistantRoundAggregator(): AssistantRoundAggregator {
+  const messages: LLMMessage[] = [];
+  let textBuffer = '';
+  let pendingCalls: PendingCall[] = [];
+  let roundHasCalls = false;
+  let toolCallsUsed = 0;
+
+  /** 收口当前轮：assistant(toolCalls) + 逐 call tool 消息（对齐 runChatLoop 组装序） */
+  const closeRound = (): void => {
+    if (roundHasCalls) {
+      messages.push({
+        role: 'assistant',
+        content: textBuffer,
+        toolCalls: pendingCalls.map((p) => p.call),
+      });
+      for (const p of pendingCalls) {
+        messages.push({
+          role: 'tool',
+          content: p.result ?? INTERRUPTED_TOOL_RESULT,
+          toolCallId: p.call.id,
+        });
+      }
+    } else if (textBuffer !== '') {
+      // 半截文本收尾为完整 assistant 消息（协议合法，spec §1 关键洞察）
+      messages.push({ role: 'assistant', content: textBuffer });
+    }
+    textBuffer = '';
+    pendingCalls = [];
+    roundHasCalls = false;
+  };
+
+  return {
+    push(ev: MessageEventRow): void {
+      // eventType 实为 TEXT 列（可含未来类型 / 未知 kind），repo 联合类型是
+      // 欠近似——放宽到 string 再分发
+      switch (ev.eventType as string) {
+        case 'text_delta': {
+          // tool 活动后的 text = 新一轮开始，先收口上一轮
+          if (roundHasCalls) closeRound();
+          const delta = ev.payload.delta;
+          if (typeof delta === 'string') textBuffer += delta;
+          break;
+        }
+        case 'tool_call_start': {
+          const callId = ev.payload.callId;
+          const toolName = ev.payload.toolName;
+          // 形态坏损（非字符串 id/name）无法构成协议对，跳过且不计预算
+          if (typeof callId !== 'string' || typeof toolName !== 'string') break;
+          pendingCalls.push({
+            call: { id: callId, name: toolName, arguments: toPlainArgs(ev.payload.args) },
+            result: null,
+          });
+          roundHasCalls = true;
+          toolCallsUsed++;
+          break;
+        }
+        case 'tool_call_result': {
+          const callId = ev.payload.callId;
+          const result = ev.payload.result;
+          if (typeof callId !== 'string' || typeof result !== 'string') break;
+          // 孤儿 result（无对应 start，生产不可能出现）无法构造协议对，跳过
+          const pending = pendingCalls.find((p) => p.call.id === callId);
+          if (pending) pending.result = result;
+          break;
+        }
+        default:
+          // thinking / todo_update / status_change / final / message_roll /
+          // segment_boundary / steer / dispatch_start|result（历史遗留）/ 未知
+          // kind：跳过（steer 由调用方按自身语义处理，不进 assistant 聚合）
+          break;
+      }
+    },
+    closeRound,
+    appendMessage(m: LLMMessage): void {
+      messages.push(m);
+    },
+    flush: closeRound,
+    get messages(): LLMMessage[] {
+      return messages;
+    },
+    get toolCallsUsed(): number {
+      return toolCallsUsed;
+    },
+  };
+}
+
+/**
  * 取回合起始 user 消息正文。
  *
  * messages 表无「流 ↔ user 消息」直接外键——生产写入路径
@@ -107,13 +234,6 @@ function isOutputEvent(ev: MessageEventRow): boolean {
   return ev.eventType === 'text_delta' || ev.eventType === 'tool_call_start';
 }
 
-/** args 形态防御：非普通对象（损坏行）按空参数处理，不中断重建 */
-function toPlainArgs(raw: unknown): Record<string, unknown> {
-  return typeof raw === 'object' && raw !== null && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : {};
-}
-
 /**
  * 重建断点回合（同步；纯读取）。
  *
@@ -137,104 +257,46 @@ export function rebuildTurn(streamSessionId: string): RebuiltTurn {
     const baseRow = getMessageByStreamSessionId(streamSessionId);
     if (!baseRow) return emptyDegenerate();
 
-    const messages: LLMMessage[] = [];
+    const agg = createAssistantRoundAggregator();
     const steers: string[] = [];
-    let toolCallsUsed = 0;
 
     const userBody = findTurnUserBody(baseRow);
     if (userBody !== null) {
-      messages.push({ role: 'user', content: userBody });
+      agg.appendMessage({ role: 'user', content: userBody });
     }
 
     const events = collectStreamEvents(streamSessionId);
-
-    // 轮状态
-    let textBuffer = '';
-    let pendingCalls: PendingCall[] = [];
-    let roundHasCalls = false;
-
-    /** 收口当前轮：assistant(toolCalls) + 逐 call tool 消息（对齐 runChatLoop 组装序） */
-    const closeRound = (): void => {
-      if (roundHasCalls) {
-        messages.push({
-          role: 'assistant',
-          content: textBuffer,
-          toolCalls: pendingCalls.map((p) => p.call),
-        });
-        for (const p of pendingCalls) {
-          messages.push({
-            role: 'tool',
-            content: p.result ?? INTERRUPTED_TOOL_RESULT,
-            toolCallId: p.call.id,
-          });
-        }
-      } else if (textBuffer !== '') {
-        // 半截文本收尾为完整 assistant 消息（协议合法，spec §1 关键洞察）
-        messages.push({ role: 'assistant', content: textBuffer });
-      }
-      textBuffer = '';
-      pendingCalls = [];
-      roundHasCalls = false;
-    };
 
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
       // eventType 实为 TEXT 列（可含未来类型 / T2 的 'steer' / 未知 kind），
       // repo 联合类型是欠近似——放宽到 string 再分发
       switch (ev.eventType as string) {
-        case 'text_delta': {
-          // tool 活动后的 text = 新一轮开始，先收口上一轮
-          if (roundHasCalls) closeRound();
-          const delta = ev.payload.delta;
-          if (typeof delta === 'string') textBuffer += delta;
-          break;
-        }
-        case 'tool_call_start': {
-          const callId = ev.payload.callId;
-          const toolName = ev.payload.toolName;
-          // 形态坏损（非字符串 id/name）无法构成协议对，跳过且不计预算
-          if (typeof callId !== 'string' || typeof toolName !== 'string') break;
-          pendingCalls.push({
-            call: { id: callId, name: toolName, arguments: toPlainArgs(ev.payload.args) },
-            result: null,
-          });
-          roundHasCalls = true;
-          toolCallsUsed++;
-          break;
-        }
-        case 'tool_call_result': {
-          const callId = ev.payload.callId;
-          const result = ev.payload.result;
-          if (typeof callId !== 'string' || typeof result !== 'string') break;
-          // 孤儿 result（无对应 start，生产不可能出现）无法构造协议对，跳过
-          const pending = pendingCalls.find((p) => p.call.id === callId);
-          if (pending) pending.result = result;
-          break;
-        }
         case 'steer': {
           const body = ev.payload.body;
           if (typeof body !== 'string') break;
           // 其后是否仍有输出（drain 判定，见函数头注释）
           const drained = events.slice(i + 1).some(isOutputEvent);
           if (drained) {
-            closeRound();
-            messages.push({ role: 'user', content: `[用户中途补充] ${body}` });
+            agg.closeRound();
+            agg.appendMessage({ role: 'user', content: `[用户中途补充] ${body}` });
           } else {
             steers.push(body);
           }
           break;
         }
         default:
-          // thinking / todo_update / status_change / final / message_roll /
-          // segment_boundary / dispatch_start|result（历史遗留）/ 未知 kind：跳过
-          break;
+          // text / tool 事件进共享聚合状态机；其余（thinking / todo_update /
+          // status_change / final / message_roll / segment_boundary / 未知 kind）跳过
+          agg.push(ev);
       }
     }
     // 流末 flush：残留文本收尾 + 未配对 call 合成中断 result
-    closeRound();
+    agg.flush();
 
+    const messages = agg.messages;
     const degenerate = !messages.some((m) => m.role !== 'user');
-    return { messages, toolCallsUsed, steers, degenerate };
+    return { messages, toolCallsUsed: agg.toolCallsUsed, steers, degenerate };
   } catch (err) {
     // 降级阶梯（spec §5.3）：重建任何抛错 → catch 降级 degenerate（安全方向）
     logger.warn('rebuildTurn 重建失败，降级为全新回合', {

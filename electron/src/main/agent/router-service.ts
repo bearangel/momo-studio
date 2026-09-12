@@ -14,7 +14,12 @@
 
 import { randomUUID } from 'node:crypto';
 import { logger } from '../logger';
-import { DISPATCH_EVENT_TYPE, TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE } from './dispatch';
+import {
+  DISPATCH_EVENT_TYPE,
+  TASK_REPLY_EVENT_TYPE,
+  ABORT_DISPATCH_EVENT_TYPE,
+  parseHistoryPrefix,
+} from './dispatch';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
@@ -235,6 +240,11 @@ export class RouterService {
     // 一致）；旧消息无此字段时回退 randomUUID（嵌套展示缺查找键，仅顶层可见）
     const streamSessionId =
       typeof content.sub_stream_session_id === 'string' ? content.sub_stream_session_id : randomUUID();
+    // v2.8.0 Orchestration（Task 6）：followup 续聊前缀——dispatch_followup 派发的
+    // content.history_prefix（rebuildSubConversation 重建的子会话历史）映射为
+    // TaskConfig.historyPrefix，子 agent runChatLoop 拼接在 system 之后。非法载荷
+    // 整字段丢弃（降级方向安全——子 agent 按全新任务处理），不拒整条 dispatch。
+    const historyPrefix = parseHistoryPrefix(content.history_prefix);
     const task: TaskConfig = {
       taskId,
       executionSessionId: event.getRoomId() ?? '',
@@ -248,6 +258,7 @@ export class RouterService {
           ? { tool_stream_session_id: content.tool_stream_session_id }
           : {}),
       },
+      ...(historyPrefix !== undefined ? { historyPrefix } : {}),
     };
     await runner.executeTask(task);
   }

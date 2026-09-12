@@ -60,7 +60,7 @@ Leader chat loop ───┤
 
 1. **taskId = 链 ID**——多轮 followup 沿用原 dispatch 的 task_id；历史查询 `WHERE task_id = ?` 天然聚合全部轮次；串行轮次下 `pendingReplies` 键安全（上轮已 settle 删除）
 2. **historyPrefix ≠ resumeTurn**——resume 是「恢复中断」（messages 非空则不追加 body）；followup 是「续聊」（前缀 + 新 user 轮）。两个正交载荷字段，互不干扰
-3. **每轮新 subStreamSessionId**——renderer DispatchChip 按它渲染，新轮次自然新 chip
+3. **每轮新 subStreamSessionId**——renderer DispatchChip 按它渲染，新轮次自然新 chip（v2.8.0 实现边界：followup chip 未实装——followup 分支不发 isDispatch chip，子流带 parentStreamSessionId 被 MessageList 过滤出顶层且无 chip 匹配，续聊答案仅经工具卡 result 文本可见；chip 实装与 bg chip 终态翻转同批排 v2.8.x）
 4. **handleTaskReply 单点收口**——pendingReplies miss 时查 bgHandles（新分支），reply 路径不fork
 5. **bg 句柄内存态**——`Map<taskId, BgHandle>`；in_flight → done 翻转后结果保留至回合结束
 6. **全部新工具过会话边界门**——注入面（runChatLoop 的 sessionSubs 过滤）+ 执行面（assertSessionDispatchAllowed）双防线，与既有 dispatch 同标准
@@ -263,7 +263,7 @@ timeoutMs 钳制：1000–600000（1 秒到 10 分钟），缺省 120000。
 
 ## 12. 已知边界（明示）
 
-- 孙 agent 嵌套禁止 / followup 仅同步 / bg 句柄不跨重启 / PM abort 不级联 cancel bg / 结构化 reply 不做 / 同链 chip 不分组
+- 孙 agent 嵌套禁止 / followup 仅同步 / bg 句柄不跨重启 / PM abort 不级联 cancel bg / 结构化 reply 不做 / 同链 chip 不分组 / followup 子流暂不嵌套渲染（chip 未实装，答案经工具卡 result 文本可见；chip 实装排 v2.8.x）
 
 ## 13. 风险与缓解
 

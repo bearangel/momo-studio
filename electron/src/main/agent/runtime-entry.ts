@@ -31,6 +31,7 @@ import { getWorkspace } from '../workspace/crud';
 import {
   getVirtualToolDefs,
   getDispatchToolDefs,
+  getOrchestrationToolDefs,
   getBuiltinLoopToolDefs,
 } from './builtin-tools';
 import { buildToolRegistry, executeTool as executeToolModule, getAllToolDefs } from './tools';
@@ -46,7 +47,17 @@ import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
 import { sendTaskReplyEvent } from './internal-event';
-import { executeDispatch, handleTaskReplyIpc, setDispatchTraceEnabled, getSessionDispatchScope } from './dispatch-wait';
+import {
+  executeDispatch,
+  executeDispatchBg,
+  executeFollowup,
+  executeGather,
+  executeStatus,
+  executeCancel,
+  handleTaskReplyIpc,
+  setDispatchTraceEnabled,
+  getSessionDispatchScope,
+} from './dispatch-wait';
 import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
 import { getTodosForSession } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
@@ -351,6 +362,14 @@ export async function runChatLoop(
    * 未消费 steer 重放；缺省或重建段为空时行为与历史版本一致。
    */
   resumeTurn?: RebuiltTurn,
+  /**
+   * v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀——上游把先前回合
+   * 上下文（LLMMessage[]）拼进本轮请求。无 resumeTurn 时拼接在 system 之后、
+   * convMessages 之前（fresh session 下 convMessages 恒空，实际形态
+   * [system, ...前缀, user(currentBody)]）；与 resumeTurn 互斥（派发侧保证），
+   * 同现时 resumeTurn 优先、前缀忽略 + warn。缺省时行为与历史版本逐字节一致。
+   */
+  historyPrefix?: LLMMessage[],
 ): Promise<string> {
   const llm = createLLMProvider(
     // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
@@ -367,11 +386,29 @@ export async function runChatLoop(
   // 执行时拒绝，agent 仍会以为自己能委派（先 brag 再被拒，浪费一轮 + 误导用户）。
   // 不满足会话边界时工具与指南根本不注入，LLM 不知道自己有这能力。
   const sessionSubs = getSessionDispatchScope(roomId, config);
+  // 注入门统一 length 判定（T7 Minor 修正）：getSessionDispatchScope 的 filter
+  // 可返回空数组（多成员会话 + 自己是 leader + subAgents 快照与会话成员交集为空），
+  // 而 [] 在 JS 为 truthy——若 hint 门判 length、工具门判 truthy，即出现
+  // 「无教学 hint 却注入 4 个静态编排工具」的门不一致。全部注入门收敛到同一布尔。
+  const hasSessionSubs = sessionSubs !== null && sessionSubs.length > 0;
   const dispatchHint = formatDispatchHint({
     ...config,
-    isLeader: sessionSubs !== null && sessionSubs.length > 0,
+    isLeader: hasSessionSubs,
     subAgents: sessionSubs ?? [],
   });
+  // v2.8.0 Orchestration（Task 7）：5 类编排工具 defs（4 静态 + dispatch_bg:<slug>
+  // 随成员动态）——与 dispatch:<slug> 同门（sessionSubs 非空才注入，非 leader 会话
+  // 工具与教学 prompt 均不出现，LLM 不知道自己有这能力）。
+  const orchestrationDefs = hasSessionSubs ? getOrchestrationToolDefs(sessionSubs) : [];
+  // 白名单同步：编排工具仅在下方 chatTools 组装层注入（逐轮），不经
+  // buildRuntimeContext 的动态工具名扩充（那里只覆盖启动时静态快照）——带
+  // allowedTools 白名单的 leader 若不同步，调用编排工具会被 assertToolAllowed
+  // 拒绝。注入即授权，同 dispatch:* 白名单先例（v1.7.1）。
+  if (hasSessionSubs && config.allowedTools.length > 0) {
+    config.allowedTools = [
+      ...new Set([...config.allowedTools, ...orchestrationDefs.map((t) => t.name)]),
+    ];
+  }
 
   // v2（B 子系统 Task B11）：MemoryProvider 取代 loadRecentHistory。
   // 子 agent（parentStreamSessionId 非空）走 fresh session 不拉房间历史，
@@ -563,8 +600,23 @@ export async function runChatLoop(
     resumeTurn && resumeTurn.messages.length > 0
       ? resumeTurn.messages
       : [{ role: 'user', content: currentBody }];
+  // v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀拼接。与 resumeTurn
+  // 互斥由派发侧保证，此处防御性兜底：同现时 resumeTurn 优先（前缀忽略 +
+  // warn 不抛错——断点续跑的重建段语义完整自洽，与「全新回合的上下文补充」
+  // 混拼会产生双重历史）；空数组等价无前缀（展开零副作用）
+  let effectivePrefix: LLMMessage[] = [];
+  if (historyPrefix) {
+    if (resumeTurn) {
+      process.stderr.write(
+        'historyPrefix 与 resumeTurn 同现：resumeTurn 优先，historyPrefix 前缀已忽略\n',
+      );
+    } else {
+      effectivePrefix = historyPrefix;
+    }
+  }
   const messages: LLMMessage[] = [
     { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
+    ...effectivePrefix,
     ...convMessages,
     ...turnMessages,
   ];
@@ -633,6 +685,12 @@ export async function runChatLoop(
     if (stats) stats.endChunkSent = true;
   };
 
+  // v2.8.0 链路打标（Task 5）：任务板任务（currentTaskId）或 dispatch 链（chainTaskId）——
+  // start chunk 携带 taskId，主进程 stream-relay 据此给该流全部消息行落 messages.task_id
+  // （rebuildSubConversation / read_task_progress 的查询键）。普通 chat 流（两者皆无）
+  // 不带字段，wire 协议零变化。currentTaskId 优先（同设时任务板语义为准）。
+  const tagTaskId = config.currentTaskId ?? config.chainTaskId;
+
   sendStreamChunk({
     type: 'start',
     streamSessionId,
@@ -641,6 +699,7 @@ export async function runChatLoop(
     // renderer botNameMap 据此解析展示名）
     sessionId: roomId,
     senderAgentId: config.agentUserId,
+    ...(tagTaskId ? { taskId: tagTaskId } : {}),
     // v1.4 嵌套：子 agent 携带父 session ID + 自身展示信息，renderer 据此把子流
     // 嵌套渲染到 PM 气泡内对应 dispatch chip 下方
     ...(parentStreamSessionId
@@ -757,10 +816,13 @@ export async function runChatLoop(
     }
 
     // 会话边界二段修复：静态快照注入的 dispatch:* 剔除，换成当前会话命中成员
-    const chatTools: LLMToolDef[] = sessionSubs
+    // （与 hint / 白名单同步同一 hasSessionSubs 门——sessionSubs=[] 时不注入）
+    const chatTools: LLMToolDef[] = hasSessionSubs
       ? [
           ...ctx.tools.filter((t) => !t.name.startsWith('dispatch:')),
           ...getDispatchToolDefs(sessionSubs),
+          // v2.8.0：5 类编排工具同门注入（bg→gather 工作流 / followup 续接）
+          ...orchestrationDefs,
         ]
       : ctx.tools.filter((t) => !t.name.startsWith('dispatch:'));
 
@@ -1139,13 +1201,18 @@ export async function runChatLoop(
       }
 
       // === ② 非 dispatch 工具：原路径串行执行（v2 并行仅作用于连续 dispatch 段） ===
-      sendStreamChunk({
-        type: 'tool_call',
-        streamSessionId,
-        callId: tc.id,
-        toolName: tc.name,
-        args: tc.arguments,
-      });
+      // v2.8.0 dispatch_bg:：start chip 由 doExecuteTool 路由层发（isDispatch +
+      // 预生成 subStreamSessionId，照 execDispatchCall 形态）——此处跳过普通 chip：
+      // aggregator 按 callId 分段，两个 start（plain + isDispatch）会渲染出双段。
+      if (!tc.name.startsWith('dispatch_bg:')) {
+        sendStreamChunk({
+          type: 'tool_call',
+          streamSessionId,
+          callId: tc.id,
+          toolName: tc.name,
+          args: tc.arguments,
+        });
+      }
 
       let result: string;
       try {
@@ -1245,16 +1312,20 @@ export async function runTaskChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
+  //    - chainTaskId：dispatchContext 设置时织入链 ID（Task 5 链路打标——start chunk 据此
+  //      把 dispatch 链 ID 落到该流全部消息行的 task_id；与 currentTaskId 语义分立，见
+  //      runtime-config 字段注释）
   //    - maxToolCalls：dispatchContext.tool_budget 优先（PM 分配的子任务预算），
   //      其次 cfg.maxToolCalls（主进程按 executionSessionId 解析的会话/全局预算，
   //      v2.2 接线），均缺省时沿用 config（AGENT_CONFIG 默认）
   const taskConfig: RuntimeConfig = {
     ...config,
     ...(taskId ? { currentTaskId: taskId } : {}),
+    ...(dispatchContext ? { chainTaskId: dispatchContext.task_id } : {}),
     ...(dispatchContext?.tool_budget !== undefined
       ? { maxToolCalls: dispatchContext.tool_budget }
       : cfg.maxToolCalls !== undefined
@@ -1295,6 +1366,11 @@ export async function runTaskChatLoop(
       // 消费侧接线锁：tests/agent/runtime-task-driven.test.ts「v2.6.0 接线锁」
       // 用例——摘掉本解构/传参该锁必红（resume 静默丢失不报错）。
       resume,
+      // v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀经 cfg.historyPrefix
+      // 透传到 runChatLoop 第 11 参（与 resume 互斥由派发侧保证，runChatLoop 内
+      // 防御兜底）。接线锁：tests/agent/runtime-history-prefix.test.ts「接线锁」
+      // 用例——摘掉本解构/传参该锁必红（前缀静默丢失不报错）。
+      historyPrefix,
     );
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）
@@ -1465,6 +1541,82 @@ export async function doExecuteTool(
     const dispatchResult = await executeDispatch(subSlug, task, config, toolBudget, toolStreamSessionId, pmStreamSessionId, executionSessionId, ctx.abortSignal);
     if (dispatchInfo) dispatchInfo.toolCallsUsed = dispatchResult.toolCallsUsed;
     return dispatchResult.body;
+  }
+  // === v2.8.0 Orchestration（Task 7）：5 类编排工具路由（spec §5） ===
+  // 实参形态照 executeDispatch 既有调用点：pmStreamSessionId = PM 当前流 id、
+  // executionSessionId = 当前执行会话、ctx.abortSignal = 停止按钮级联。
+  // isDispatch 批处理判定仅匹配 'dispatch:' 前缀，dispatch_bg: 天然不命中——
+  // bg 走上方普通路径串行执行（spec §6：bg 不参与批处理，各自独立 tool call）。
+  if (name === 'dispatch_followup') {
+    const taskId = argToString(call.arguments.taskId, 'taskId');
+    const question = argToString(call.arguments.question, 'question');
+    const followupResult = await executeFollowup(
+      taskId,
+      question,
+      config,
+      executionSessionId,
+      ctx.abortSignal,
+      pmStreamSessionId,
+    );
+    return followupResult.body;
+  }
+  if (name.startsWith('dispatch_bg:')) {
+    const subSlug = name.slice('dispatch_bg:'.length);
+    const task = argToString(call.arguments.task, 'task');
+    const bgBudget =
+      typeof call.arguments.toolBudget === 'number' ? call.arguments.toolBudget : undefined;
+    // T4 硬性：预生成 subStreamSessionId 透传（句柄存它——dispatch_cancel 级联
+    // abort 的定位键）；chip 照 execDispatchCall 形态发（模块级 sender + isDispatch
+    // + 子 agent 展示名，streamSessionId = PM 当前流 id），renderer DispatchChip
+    // 据此关联子流。
+    const subStreamSessionId = randomUUID();
+    const subRef = config.subAgents.find((s) => s.slug === subSlug);
+    sendStreamChunk({
+      type: 'tool_call',
+      streamSessionId: pmStreamSessionId ?? '',
+      callId: call.id,
+      toolName: name,
+      args: call.arguments,
+      isDispatch: true,
+      subStreamSessionId,
+      subAgentName: subRef?.description ?? subRef?.slug ?? name,
+      subAgentAvatar: '🤖',
+    });
+    const bgResult = await executeDispatchBg(
+      subSlug,
+      task,
+      config,
+      bgBudget,
+      subStreamSessionId,
+      pmStreamSessionId,
+      executionSessionId,
+    );
+    return JSON.stringify(bgResult);
+  }
+  if (name === 'dispatch_gather') {
+    const handles = call.arguments.handles;
+    if (!Array.isArray(handles) || !handles.every((h) => typeof h === 'string')) {
+      throw new Error('参数 "handles" 缺失或不是字符串数组');
+    }
+    const mode = call.arguments.mode;
+    if (mode !== 'all' && mode !== 'any') {
+      throw new Error('参数 "mode" 必须是 "all" 或 "any"');
+    }
+    const rawTimeout = call.arguments.timeoutMs;
+    if (rawTimeout !== undefined && typeof rawTimeout !== 'number') {
+      throw new Error('参数 "timeoutMs" 不是数字');
+    }
+    // 终审 I1：传 abortSignal——PM abort 时 gather 立即 AbortError reject，
+    // 不阻塞 chat loop 到 gather 超时（与 dispatch/followup 分支同纪律）
+    return JSON.stringify(await executeGather(handles, mode, rawTimeout, ctx.abortSignal));
+  }
+  if (name === 'dispatch_status') {
+    return JSON.stringify(executeStatus(argToString(call.arguments.handle, 'handle')));
+  }
+  if (name === 'dispatch_cancel') {
+    return JSON.stringify(
+      executeCancel(argToString(call.arguments.handle, 'handle'), config, executionSessionId),
+    );
   }
   if (name.startsWith('mcp:')) {
     // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接

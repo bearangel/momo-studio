@@ -6,6 +6,18 @@
 
 ## 状态
 
+**v2.8.0 — Orchestration 元语（开发中，未发布）**
+
+会话内编排面补齐两大缺口——「子 agent 不可续接」（dispatch 一次性 body 进 / reply 出，无法追问）与「无 fire-and-forget + gather」（leader 派发后必须当场等完）：新增 5 个编排原语（续接族 + 异步句柄族），与既有 dispatch:<slug> 同门注入，路由链（routeDispatch → executeTask）零改动复用。spec 见 `docs/specs/2026-09-12-orchestration-primitives-design.md`。
+
+- **5 编排原语（新增）** — `dispatch_followup`（replay 续接——`rebuildSubConversation` 从 message_events 重建该链全部轮次的 LLM messages 后 re-spawn 续聊，复用 v2.6 重建器语义：完整工具对 verbatim 保留 / 孤儿 tool_call 合成中断 result / 重建抛错降级不阻断）+ `dispatch_bg:<slug>`（非阻塞派发立即返回 `{taskId}` 句柄，同 PM 在途上限 8，超限报错含清单教 LLM 先 gather/cancel）+ `dispatch_gather`（all|any 收割，迟到 reply 缓存命中，超时非错误——返回 done/pending 结构，句柄保留可再 gather）+ `dispatch_status`（单句柄查询）+ `dispatch_cancel`（取消在途，复用 abort_dispatch 链路，幂等）
+- **taskId = 链 ID** — 多轮 followup 沿用原 dispatch 的 task_id（不另造 ID 空间）：`WHERE task_id = ?` 天然聚合全链轮次；上轮 settle 后才可再 followup（同链串行，pendingReplies 键安全）；每轮新 subStreamSessionId；**v2.8.0 已知边界：followup 子流暂不在消息流嵌套渲染（chip 呈现），答案经工具卡 result 文本可见——chip 实装与 bg chip 终态翻转同批排 v2.8.x**
+- **链路打标基础设施** — 派发链 task_id 端到端落库：start chunk 携带 taskId + insertMessage 调用点写 task_id + 追问行 helper（followup 的 user 追问落库关联链）——修复「task_id 恒空」后，followup 重建 / read_task_progress / 记忆注入的链查询才有真实数据域
+- **handleTaskReply 单点收口扩展** — pendingReplies miss 时查 bgHandles（in_flight 翻转 done / cancel 后迟到 reply 忽略 body）+ gatherWaiters 独立等待集唤醒——reply 路径不 fork
+- **零新表零迁移** — followup 重建走 message_events 既有真相源；bg 句柄纯内存（Map）；TaskConfig 仅加可选 `historyPrefix` 字段（与 v2.6 resumeTurn 正交互斥，runChatLoop 防御优先 resumeTurn）
+- 已知边界：孙 agent 嵌套禁止（子 agent 非会话 leader 天然无 dispatch 工具）/ followup 仅同步（无 followup_bg 组合）/ followup 子流暂不嵌套渲染（chip 呈现留 v2.8.x，答案经工具卡 result 文本可见）/ bg 句柄不跨重启（重启后 status → not_found）/ PM abort 不级联 cancel bg（句柄随子进程消亡）/ bg chip 终态 renderer 翻转留 v2.8.x / 结构化 reply 不做、同链 chip 不分组
+- 主机验收待办：dispatch → followup 追问保留上下文实测（子 agent 无需重述背景直接续答）/ bg 三连派 → 干别的 → gather 收割实测（含超时后句柄再 gather）
+
 **v2.7.0 — McpBrowser 浏览器工具（开发中，未发布）**
 
 12 个浏览器工具 + 内嵌浏览器侧栏——puppeteer 零依赖路线：Electron 原生 WebContentsView 叠加渲染（renderer 只画 chrome，页面内容属主进程）+ per-workspace partition 隔离（`persist:browser-<wsId>`，登录态跨重启保留）。spec 见 `docs/specs/2026-09-11-mcp-browser-design.md`。

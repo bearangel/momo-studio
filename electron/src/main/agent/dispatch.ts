@@ -7,6 +7,7 @@
 // 纯函数模块，不持有任何外部副作用，便于单测。
 
 import { randomUUID } from 'node:crypto';
+import type { LLMMessage, LLMToolCall } from './llm-provider';
 
 /** dispatch 消息内容（v2 Task 10 起经内部事件桥传输）。dispatch_from/dispatch_to 的值是 assignmentId */
 export interface DispatchContent {
@@ -29,6 +30,13 @@ export interface DispatchContent {
    * （P0-7：此前 routeDispatch 自造新 UUID，嵌套展开区永远找不到子流）。
    */
   sub_stream_session_id?: string;
+  /**
+   * v2.8.0 Orchestration（Task 6）：followup 续聊前缀——executeFollowup 把
+   * rebuildSubConversation 重建的子会话历史放此处随 dispatch 事件传输，
+   * routeDispatch 映射为 TaskConfig.historyPrefix（子 agent runChatLoop 拼接在
+   * system 之后、新 user 轮之前）。仅 followup 派发设置；普通 dispatch 缺席。
+   */
+  history_prefix?: LLMMessage[];
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -133,6 +141,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
   if (typeof content.body !== 'string') return null;
   if (typeof content.dispatch_from !== 'string') return null;
   if (typeof content.dispatch_to !== 'string') return null;
+  const historyPrefix = parseHistoryPrefix(content.history_prefix);
   return {
     body: content.body,
     task_id: content.task_id,
@@ -150,7 +159,57 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
     ...(typeof content.sub_stream_session_id === 'string'
       ? { sub_stream_session_id: content.sub_stream_session_id }
       : {}),
+    ...(historyPrefix !== undefined ? { history_prefix: historyPrefix } : {}),
   };
+}
+
+/** LLMMessage.role 合法枚举（与 llm-provider LLMMessage 同步） */
+const VALID_PREFIX_ROLES: ReadonlySet<string> = new Set(['system', 'user', 'assistant', 'tool']);
+
+/**
+ * 校验 history_prefix 载荷（v2.8.0 Task 6）：数组且每条 {role 枚举内, content string}
+ * 才返回；否则 undefined（整字段丢弃——半截历史比没有历史更危险，降级方向安全）。
+ * 工具对字段（C1 修复）：assistant.toolCalls / tool.toolCallId 与 LLMMessage 对齐
+ * 校验后 verbatim 保留——剥离会让 followup 后子 agent 首次 LLM 请求携带孤儿
+ * tool result（无 tool_call_id），OpenAI/Anthropic 方言均硬拒（spec §3.3
+ * 「完整工具对 verbatim 保留」）。toolCallId 非 string → 仅丢该字段；
+ * toolCalls 任一项非法 → 整字段丢弃（不半保留——半对即孤儿）。
+ * 生产者 executeFollowup / 消费者 routeDispatch（映射 TaskConfig.historyPrefix）共用。
+ */
+export function parseHistoryPrefix(raw: unknown): LLMMessage[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: LLMMessage[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) return undefined;
+    const r = item as { role?: unknown; content?: unknown; toolCallId?: unknown; toolCalls?: unknown };
+    if (typeof r.role !== 'string' || !VALID_PREFIX_ROLES.has(r.role)) return undefined;
+    if (typeof r.content !== 'string') return undefined;
+    const toolCalls = parsePrefixToolCalls(r.toolCalls);
+    out.push({
+      role: r.role as LLMMessage['role'],
+      content: r.content,
+      ...(typeof r.toolCallId === 'string' ? { toolCallId: r.toolCallId } : {}),
+      ...(toolCalls !== undefined ? { toolCalls } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * 校验前缀里的 assistant.toolCalls：数组且每项 {id: string, name: string}
+ * （arguments 保留原值不校验——生产者聚合器恒产 Record，对端脏值序列化无害）；
+ * 任一项非法返回 undefined（整字段丢弃——保留半截列表等于制造孤儿 tool result）。
+ */
+function parsePrefixToolCalls(raw: unknown): LLMToolCall[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const calls: LLMToolCall[] = [];
+  for (const tc of raw) {
+    if (typeof tc !== 'object' || tc === null) return undefined;
+    const t = tc as { id?: unknown; name?: unknown; arguments?: unknown };
+    if (typeof t.id !== 'string' || typeof t.name !== 'string') return undefined;
+    calls.push({ id: t.id, name: t.name, arguments: t.arguments as Record<string, unknown> });
+  }
+  return calls;
 }
 
 /** 合法 task_reply 状态枚举——与 TaskReplyContent['status'] 同步 */

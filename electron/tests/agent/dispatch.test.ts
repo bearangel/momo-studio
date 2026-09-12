@@ -154,4 +154,121 @@ describe('agent/dispatch', () => {
       expect(parsed?.reply_to).toBeUndefined();
     });
   });
+
+  // v2.8.0 Orchestration Task 6：DispatchContent.history_prefix 协议字段
+  //（followup 续聊前缀——executeFollowup 生产、routeDispatch 消费映射为
+  // TaskConfig.historyPrefix）。parseDispatchEvent 与接口字段同步扩展的
+  // 回归锁：合法原样透传；任一条目非法 → 整字段丢弃不连带拒整条
+  //（半截历史比没有历史更危险——降级方向安全）。
+  describe('history_prefix（v2.8.0 followup 前缀字段）', () => {
+    const base = {
+      body: '追问',
+      task_id: 'T-chain-parse',
+      dispatch_from: 'inst-pm',
+      dispatch_to: 'inst-sub',
+    };
+    it('合法 history_prefix（role 枚举内 + content string）原样解析', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [
+          { role: 'assistant', content: '首轮结论' },
+          { role: 'user', content: '上一问' },
+          { role: 'system', content: '系统段' },
+          { role: 'tool', content: '工具结果' },
+        ],
+      });
+      expect(parsed?.history_prefix).toEqual([
+        { role: 'assistant', content: '首轮结论' },
+        { role: 'user', content: '上一问' },
+        { role: 'system', content: '系统段' },
+        { role: 'tool', content: '工具结果' },
+      ]);
+    });
+    it('任一条目非法（role 枚举外 / content 非 string / 非对象）→ 整字段丢弃，dispatch 本身不被拒', () => {
+      const p1 = parseDispatchEvent({ ...base, history_prefix: [{ role: 'bogus', content: 'x' }] });
+      expect(p1).not.toBeNull();
+      expect(p1?.history_prefix).toBeUndefined();
+
+      const p2 = parseDispatchEvent({ ...base, history_prefix: [{ role: 'user', content: 42 }] });
+      expect(p2?.history_prefix).toBeUndefined();
+
+      const p3 = parseDispatchEvent({ ...base, history_prefix: ['junk'] });
+      expect(p3?.history_prefix).toBeUndefined();
+
+      // 非数组整体（字符串 / 对象）→ 同样丢弃字段
+      const p4 = parseDispatchEvent({ ...base, history_prefix: 'oops' });
+      expect(p4?.history_prefix).toBeUndefined();
+    });
+    it('未携带 / 空数组 → 字段保持 undefined（wire 零变化）', () => {
+      expect(parseDispatchEvent({ ...base })?.history_prefix).toBeUndefined();
+      expect(parseDispatchEvent({ ...base, history_prefix: [] })?.history_prefix).toBeUndefined();
+    });
+
+    // C1（Task 6 review Critical）：工具对字段 verbatim 保留——旧实现把前缀
+    // 重建为仅 {role, content}，followup 后子 agent 首次 LLM 请求携带孤儿
+    // tool result（无 tool_call_id），OpenAI/Anthropic 方言均硬拒
+    //（spec §3.3「完整工具对 verbatim 保留」）。
+    it('工具对字段 verbatim 保留：assistant.toolCalls + tool.toolCallId 原样透传', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [
+          {
+            role: 'assistant',
+            content: '先读文件',
+            toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/login.ts' } }],
+          },
+          { role: 'tool', content: '文件内容', toolCallId: 'c1' },
+          { role: 'assistant', content: '结论完成' },
+        ],
+      });
+      expect(parsed?.history_prefix).toEqual([
+        {
+          role: 'assistant',
+          content: '先读文件',
+          toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/login.ts' } }],
+        },
+        { role: 'tool', content: '文件内容', toolCallId: 'c1' },
+        { role: 'assistant', content: '结论完成' },
+      ]);
+    });
+    it('toolCallId 非 string → 仅丢该字段（消息本体保留）', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [{ role: 'tool', content: '结果', toolCallId: 42 }],
+      });
+      expect(parsed?.history_prefix).toEqual([{ role: 'tool', content: '结果' }]);
+    });
+    it('toolCalls 任一项非法（非数组 / 项非对象 / id 非 string / name 非 string）→ 整字段丢弃不半保留', () => {
+      const mk = (toolCalls: unknown) =>
+        parseDispatchEvent({
+          ...base,
+          history_prefix: [{ role: 'assistant', content: 'x', toolCalls }],
+        })?.history_prefix;
+      // 非数组
+      expect(mk('oops')).toEqual([{ role: 'assistant', content: 'x' }]);
+      // 任一项非对象
+      expect(mk([{ id: 'c1', name: 'n', arguments: {} }, 'junk'])).toEqual([
+        { role: 'assistant', content: 'x' },
+      ]);
+      // id 非 string
+      expect(mk([{ id: 1, name: 'n', arguments: {} }])).toEqual([{ role: 'assistant', content: 'x' }]);
+      // name 非 string
+      expect(mk([{ id: 'c1', name: 2, arguments: {} }])).toEqual([{ role: 'assistant', content: 'x' }]);
+    });
+    it('toolCalls.arguments 保留原值（id/name 合法即透传，不校验形状）', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [
+          {
+            role: 'assistant',
+            content: 'x',
+            toolCalls: [{ id: 'c1', name: 'n', arguments: { nested: { deep: true }, list: [1, 2] } }],
+          },
+        ],
+      });
+      expect(parsed?.history_prefix?.[0]?.toolCalls).toEqual([
+        { id: 'c1', name: 'n', arguments: { nested: { deep: true }, list: [1, 2] } },
+      ]);
+    });
+  });
 });
