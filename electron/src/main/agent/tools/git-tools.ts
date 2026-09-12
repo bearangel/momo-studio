@@ -19,13 +19,20 @@
 //     `..` 越界与符号链接逃逸——与 WorkspaceFS 安全模型对齐。
 //   - git_checkout 仅切分支，不接受 path/commit：避免误用 `git checkout -- file`
 //     丢失工作区修改，或 `git checkout <sha>` 进入 detached HEAD。
+//   - v2.9 多仓 git（Task 2）：resolveRepoPath 解析可选 repo 参数（缺省根仓，
+//     指定时 wsFs 边界校验 + discoverRepos 发现列表双校验）；runGit 增第四参
+//     repoPath 定仓执行（`git -C <repoPath>`）。本 task 只加能力不接工具面——
+//     9 工具的 repo 参数接线在 Task 4。
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import type { WorkspaceFS } from '../../files/workspace-fs';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 import { getGitPolicy } from '../../workspace/git-policy';
+import { discoverRepos } from '../../git/repos';
 import {
   validateCommitMessage,
   isCommitBlocked,
@@ -49,18 +56,24 @@ interface GitResult {
  * @param args    传给 git 的参数（不含 `git` 本身），如 `['status', '--porcelain=v1']`。
  * @param ctx     工具上下文（取 workspaceDir）。
  * @param maxOutput stdout / stderr 各自的字节上限，默认 OUTPUT_LIMITS.git_status。
+ * @param repoPath 目标仓绝对路径（resolveRepoPath 产出）。存在时 args 前置
+ *                `['-C', repoPath]` 定仓执行；缺省（undefined）保持既有
+ *                workspaceDir cwd 行为——args 与 spawn 选项逐字节不变。
  */
-async function runGit(
+export async function runGit(
   args: string[],
   ctx: ToolContext,
   maxOutput: number = OUTPUT_LIMITS.git_status,
+  repoPath?: string,
 ): Promise<GitResult> {
   // 过滤 `-c.` 前缀参数：防止 LLM 通过 `-c user.name=xxx` 绕过身份追踪。
   // 前缀故意用 `-c.`（点号）而非 `-c `，匹配 LLM 显式构造的 `git -c.key=val`，
   // 不会误伤正常的 `-c key=val`（带空格）。
   const safeArgs = args.filter((a) => !a.startsWith('-c.'));
+  // repoPath 由本模块 resolveRepoPath 产出（绝不可能是 '-c.' 开头），在过滤后前置。
+  const finalArgs = repoPath === undefined ? safeArgs : ['-C', repoPath, ...safeArgs];
   return new Promise((resolve) => {
-    const child = spawn('git', safeArgs, {
+    const child = spawn('git', finalArgs, {
       cwd: ctx.workspaceDir,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -88,6 +101,45 @@ async function runGit(
       resolve({ code: -1, stdout, stderr: err.message });
     });
   });
+}
+
+/** 绝对路径 → workspace 相对 POSIX '/' 形态（根仓为空串；Windows 反斜杠同口径归一）。*/
+function toPosixRel(workspaceDir: string, absPath: string): string {
+  return path.relative(workspaceDir, absPath).split(path.sep).join('/');
+}
+
+/**
+ * repo 参数解析（v2.9 多仓 git）：缺省（undefined）→ workspace 根；指定时
+ * 「wsFs 边界校验 + discoverRepos 发现列表命中」双校验，命中返回该仓绝对路径。
+ *
+ * 安全边界（spec §5 G4）：
+ *   - 非 string → `参数 "repo" 不是字符串`
+ *   - 绝对路径 → 拒（repo 契约是 workspace 相对路径，与发现清单同形态）
+ *   - `..` 越界 / symlink 逃逸 / .git 内部 → assertInWorkspace 既有错误
+ *   - symlink 指向 workspace 内的仓 → 边界通过但不命中发现列表
+ *     （discoverRepos 用 Dirent 判断、不追符号链接）
+ *
+ * 命中比对两侧统一 workspace 相对 POSIX '/' 形态：`./services/api` 与
+ * `services/api/` 等形态经 path.normalize 归一后等价命中。
+ */
+export function resolveRepoPath(workspaceDir: string, wsFs: WorkspaceFS, repo: unknown): string {
+  if (repo === undefined) return workspaceDir;
+  if (typeof repo !== 'string') throw new Error('参数 "repo" 不是字符串');
+  if (path.isAbsolute(repo)) throw new Error('参数 "repo" 不接受绝对路径（请用 workspace 相对路径）');
+  // wsFs 边界校验（同源 assertInWorkspace，返回绝对路径）
+  const normalized = path.normalize(wsFs.assertInWorkspace(repo));
+  const rel = toPosixRel(workspaceDir, normalized);
+  const repos = discoverRepos(workspaceDir);
+  for (const r of repos) {
+    if (toPosixRel(workspaceDir, r) === rel) return r;
+  }
+  // 未命中：附可用仓清单（根仓显示 `根仓(.)`、内层为相对路径、逗号分隔），
+  // 尾部提示目录缓存语义——新克隆的仓需待一次目录变更后才发现。
+  const list = repos.map((r) => {
+    const rRel = toPosixRel(workspaceDir, r);
+    return rRel === '' ? '根仓(.)' : rRel;
+  });
+  throw new Error(`仓 "${repo}" 不在发现列表。可用: [${list.join(', ')}] 。新克隆的仓需待目录缓存失效（约一次目录变更后）或直接重试。`);
 }
 
 /**
