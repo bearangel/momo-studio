@@ -45,7 +45,6 @@ const runtimeConfig: AgentRuntimeOpts = {
   workspaceDir: '/tmp/ws-audit',
   agentAssignmentId: 'inst1',
   agentUserId: 'agent-pm-1',
-  teamSessionId: 'sess-team',
   systemPrompt: '',
   modelName: 'glm-4.7',
   llmApiKey: 'k',
@@ -61,7 +60,7 @@ async function spawnAndGetHandler(): Promise<(msg: unknown) => void> {
     onExit: vi.fn(),
   });
   expect(captured.handler).toBeTruthy();
-  return captured.handler as (msg: unknown) => void;
+  return captured.handler as unknown as (msg: unknown) => void;
 }
 
 const AUDIT_MSG = {

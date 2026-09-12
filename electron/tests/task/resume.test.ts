@@ -41,6 +41,7 @@ import {
   transitionTaskStatus,
   getTask,
 } from '../../src/main/storage/tasks/repo';
+import type { TaskStatus } from '../../src/main/storage/tasks/repo';
 import {
   insertMessage,
   getMessageByStreamSessionId,
@@ -133,7 +134,7 @@ function insertMember(
 
 function seedTask(opts: {
   id: string;
-  status: 'draft' | 'assigned' | 'in_progress' | 'session_queued' | 'completed';
+  status: TaskStatus;
   workspaceId: string;
   executionSessionId: string | null;
   assigneeAgentId?: string | null;
@@ -162,7 +163,8 @@ function seedAgentStream(opts: {
   streamSessionId: string;
   sessionId: string;
   senderAgentId: string;
-  taskId: string;
+  /** 仅透传进 start chunk；StreamChunk start 变体无 taskId 字段（运行时被忽略），可选 */
+  taskId?: string;
   text: string[];
   withRoll?: boolean;
 }): void {
@@ -225,13 +227,11 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     insertAgentDef('def2', 'PM');
     insertMember('inst2', 'ws1', 'def2', 'agent-bot-2');
     insertSession({
-      id: 'sess-task1',
       workspaceId: 'ws1',
       title: '任务 #T-1',
       kind: 'task_execution',
     });
     insertSession({
-      id: 'sess-task2',
       workspaceId: 'ws1',
       title: '任务 #T-2',
       kind: 'task_execution',
@@ -264,7 +264,6 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
       streamSessionId: 'ss-base-1',
       sessionId: 'sess-task1',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-1',
       text: ['部分输出'],
     });
 
@@ -285,7 +284,7 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
       createdAt: Date.now(),
     });
 
-    const [item] = detectInterrupted();
+    const item = detectInterrupted()[0]!;
     expect(item).toBeDefined();
     expect(item.taskId).toBe('T-1');
     expect(item.title).toBe('任务 T-1');
@@ -303,7 +302,6 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
       streamSessionId: 'ss-base-roll',
       sessionId: 'sess-task1',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-1',
       text: ['轮1'],
       withRoll: true,
     });
@@ -311,7 +309,7 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     const rollRow = getMessageByStreamSessionId('ss-base-roll#roll1');
     expect(rollRow).not.toBeNull();
 
-    const [item] = detectInterrupted();
+    const item = detectInterrupted()[0]!;
     expect(item.streamSessionId).toBe('ss-base-roll'); // 剥 #roll 后缀
   });
 
@@ -326,14 +324,14 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
 
   it('assigned 任务 streamSessionId 为空（无断点流）', () => {
     seedTask({ id: 'T-2', status: 'assigned', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
-    const [item] = detectInterrupted();
+    const item = detectInterrupted()[0]!;
     expect(item.streamSessionId).toBe('');
     expect(item.status).toBe('assigned');
   });
 
   it('session_queued 任务命中（executor 放行池语义——锁定既有行为）', () => {
     seedTask({ id: 'T-SQ', status: 'session_queued', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
-    const [item] = detectInterrupted();
+    const item = detectInterrupted()[0]!;
     expect(item.taskId).toBe('T-SQ');
     expect(item.status).toBe('session_queued');
     expect(item.streamSessionId).toBe('');
@@ -342,7 +340,7 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
   it('journal store 未注入时 journalCount 降级为 0（不阻断检测）', () => {
     seedTask({ id: 'T-1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     setJournalStore(null);
-    const [item] = detectInterrupted();
+    const item = detectInterrupted()[0]!;
     expect(item.journalCount).toBe(0);
   });
 });
@@ -358,7 +356,6 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     insertAgentDef('def1', 'Coder');
     insertMember('inst1', 'ws1', 'def1', 'agent-bot-1');
     insertSession({
-      id: 'sess-task1',
       workspaceId: 'ws1',
       title: '任务 #T-1',
       kind: 'task_execution',
@@ -378,7 +375,6 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
       streamSessionId: 'ss-base-r',
       sessionId: 'sess-task1',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-1',
       text: ['完成一半'],
     });
 
@@ -523,7 +519,6 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
       streamSessionId: 'ss-rich',
       sessionId: 'sess-task1',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-1',
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-rich', delta: '先想一下' });
     __routeChunkToBufferForTest({
@@ -704,7 +699,6 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
       streamSessionId: 'ss-w1',
       sessionId: 'sess-w1',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-W1',
     });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-w1', delta: '半截输出' });
     __flushEventBufferForTest();
@@ -749,7 +743,7 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
     //   2. 摘掉 agent-runner 的 `...(task.resume ? { resume: task.resume } : {})` 透传 → child.send payload 缺 resume → 锁红
     //   3. 摘掉 runTaskChatLoop 的解构 `resume`（destructure 改 named 字段如 `_resume`）→ IPC 仍含 resume 但 runtime 侧不消费 → T4 的 runtime-resume.test.ts 场景 1/2/3 会红（独立锁）
     seedTask({ id: 'T-W2', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-w2', assigneeAgentId: 'inst1' });
-    insertSession({ id: 'sess-w2', workspaceId: 'ws1', title: 't', kind: 'task_execution' });
+    insertSession({ workspaceId: 'ws1', title: 't', kind: 'task_execution' });
     insertMessage({
       sessionId: 'sess-w2',
       sender: 'owner',
@@ -762,7 +756,6 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
       streamSessionId: 'ss-w2',
       sessionId: 'sess-w2',
       senderAgentId: 'agent-bot-1',
-      taskId: 'T-W2',
     });
     __flushEventBufferForTest();
     updateMessageStatus(getMessageByStreamSessionId('ss-w2')!.id, 'failed');

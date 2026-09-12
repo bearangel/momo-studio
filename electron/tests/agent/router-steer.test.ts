@@ -2,6 +2,7 @@
 //
 // routeUserChat steer 分流（v2.3 spec §5.1）：活跃期手输注入，空闲正常派发
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import { RouterService } from '../../src/main/agent/router-service';
 import { registerLane, __clearLaneForTest } from '../../src/main/agent/session-lane';
 
@@ -14,7 +15,7 @@ function mkRunner() {
   };
 }
 
-const runners = new Map<string, ReturnType<typeof mkRunner>>();
+const runners = new Map<string, AgentRunner>();
 
 /** RouterService 构造（与 router-service.test.ts 既有用法对齐：runners + dispatcher） */
 function mkService(): RouterService {
@@ -29,7 +30,7 @@ beforeEach(() => {
 describe('routeUserChat steer 分流', () => {
   it('车道占用且目标 runner 匹配 → steer 注入，不派发新流', async () => {
     const runner = mkRunner();
-    runners.set('asg-1', runner);
+    runners.set('asg-1', runner as unknown as AgentRunner);
     registerLane('room-1', { taskId: 'T-1', streamSessionId: 's-a', assignmentId: 'asg-1' });
 
     await mkService().routeUserChat({ sessionId: 'room-1', assignmentId: 'asg-1', body: '补充：用 pnpm' });
@@ -40,7 +41,7 @@ describe('routeUserChat steer 分流', () => {
 
   it('车道空闲 → 正常派发（现有行为不变）', async () => {
     const runner = mkRunner();
-    runners.set('asg-1', runner);
+    runners.set('asg-1', runner as unknown as AgentRunner);
 
     await mkService().routeUserChat({ sessionId: 'room-1', assignmentId: 'asg-1', body: '新问题' });
 
@@ -51,8 +52,8 @@ describe('routeUserChat steer 分流', () => {
   it('车道被占但目标是另一 runner（@ 其他成员）→ 正常派发', async () => {
     const leader = mkRunner();
     const other = mkRunner();
-    runners.set('asg-leader', leader);
-    runners.set('asg-other', other);
+    runners.set('asg-leader', leader as unknown as AgentRunner);
+    runners.set('asg-other', other as unknown as AgentRunner);
     registerLane('room-1', { taskId: 'T-1', streamSessionId: 's-a', assignmentId: 'asg-leader' });
 
     await mkService().routeUserChat({ sessionId: 'room-1', assignmentId: 'asg-other', body: '问你一下' });
@@ -63,7 +64,7 @@ describe('routeUserChat steer 分流', () => {
 
   it('systemKickoff 消息不做 steer（车道注册覆盖语义归 Task 3）', async () => {
     const runner = mkRunner();
-    runners.set('asg-1', runner);
+    runners.set('asg-1', runner as unknown as AgentRunner);
     registerLane('room-1', { taskId: 'T-manual', streamSessionId: 's-a', assignmentId: 'asg-1' });
 
     await mkService().routeUserChat({
@@ -78,7 +79,7 @@ describe('routeUserChat steer 分流', () => {
   it('steer 发送失败（死通道）→ 回退正常派发（spec §5.4）', async () => {
     const runner = mkRunner();
     runner.steer = vi.fn(() => false);
-    runners.set('asg-1', runner);
+    runners.set('asg-1', runner as unknown as AgentRunner);
     registerLane('room-1', { taskId: 'T-1', streamSessionId: 's-a', assignmentId: 'asg-1' });
 
     await mkService().routeUserChat({ sessionId: 'room-1', assignmentId: 'asg-1', body: '流刚结束' });

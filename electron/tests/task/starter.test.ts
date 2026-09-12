@@ -16,7 +16,7 @@
 //
 // 测试隔离：每个 case 独立 tmp 目录 + closeDb + AP_USER_DATA_DIR 重置。
 // tasks 表有 FK 到 workspaces，故每个 case 都 seed 一个 ws1 工作空间。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,8 +24,13 @@ import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
 import { insertSession, listSessionMembers } from '../../src/main/storage/sessions/repo';
 
-// starter.ts 必须延迟 import（保持在顶层 await 语义），与实现模块解耦。
-const { startTask } = await import('../../src/main/task/starter');
+// starter.ts 延迟 import（与实现模块解耦）：顶层 await 在 CJS 类型检查下不可用——
+// beforeAll 懒 import 保持「延迟加载」语义（import 发生在全部 vi.mock 提升之后）。
+type StarterModule = typeof import('../../src/main/task/starter');
+let startTask!: StarterModule['startTask'];
+beforeAll(async () => {
+  ({ startTask } = await import('../../src/main/task/starter'));
+});
 
 const tmpRoot = path.join(
   os.tmpdir(),

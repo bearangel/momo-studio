@@ -62,7 +62,6 @@ const runtimeConfig: AgentRuntimeOpts = {
   workspaceDir: '/tmp/ws-mcp',
   agentAssignmentId: 'inst1',
   agentUserId: 'agent-pm-1',
-  teamSessionId: 'sess-team',
   systemPrompt: '',
   modelName: 'glm-4.7',
   llmApiKey: 'k',
@@ -90,7 +89,7 @@ async function spawnAndGetHandler(): Promise<(msg: unknown) => void | Promise<vo
     onExit: vi.fn(),
   });
   expect(captured.handler).toBeTruthy();
-  return captured.handler as (msg: unknown) => void | Promise<void>;
+  return captured.handler as unknown as (msg: unknown) => void | Promise<void>;
 }
 
 /** 取 send 的第 n 次调用载荷（锁精确键集用） */
@@ -144,8 +143,8 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
     });
     // Fix 2：callTool 分支同样先惰性启动（防御 discovery 被跳过的路径）
     expect(getOrStartMcp).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(callMcpTool).mock.invocationCallOrder[0],
+    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(callMcpTool).mock.invocationCallOrder[0]!,
     );
     expect(sentPayload()).toStrictEqual({ id: 'req-3', result: 'issue #42 已创建' });
   });
@@ -236,8 +235,8 @@ describe('runtime-spawner mcp 桥 fix round 1（死通道防御 / 池惰性填�
     expect(getOrStartMcp).toHaveBeenCalledTimes(1);
     expect(getOrStartMcp).toHaveBeenCalledWith('ws-mcp', MCP_CONFIG);
     expect(listMcpTools).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(listMcpTools).mock.invocationCallOrder[0],
+    expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(listMcpTools).mock.invocationCallOrder[0]!,
     );
     expect(sentPayload()).toStrictEqual({ id: 'fix-o1', tools: SAMPLE_TOOLS });
   });

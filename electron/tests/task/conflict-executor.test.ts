@@ -9,15 +9,20 @@
 //   - reject → 无副作用
 //
 // 测试隔离与 starter.test.ts 同：tmp 目录 + closeDb。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 
-const { executeConflictResolution } = await import('../../src/main/task/conflict-executor');
-
+type ConflictExecutorModule = typeof import('../../src/main/task/conflict-executor');
+// 顶层 await 在 CJS 类型检查下不可用——beforeAll 懒 import 保持「延迟加载」语义
+//（import 发生在全部 vi.mock 提升之后，与原顶层 await 次序等价）。
+let executeConflictResolution!: ConflictExecutorModule['executeConflictResolution'];
+beforeAll(async () => {
+  ({ executeConflictResolution } = await import('../../src/main/task/conflict-executor'));
+});
 const tmpRoot = path.join(
   os.tmpdir(),
   `ap-conflict-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -89,7 +94,8 @@ describe('executeConflictResolution', () => {
       currentRoomId: '!room:home',
     };
     const result = await executeConflictResolution(
-      { action: 'fork', newTaskId: next.id, newExecutionRoomId: '!placeholder:home' },
+      // fork 忽略占位 newExecutionSessionId（startTask createNewRoom 创建真实会话）——值仅满足类型
+      { action: 'fork', newTaskId: next.id, newExecutionSessionId: '!placeholder:home' },
       ctx,
     );
     expect(result.action).toBe('fork');

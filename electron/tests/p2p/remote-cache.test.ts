@@ -176,7 +176,7 @@ describe('remote-cache 纯缓存逻辑', () => {
   });
 
   it('④ 多节点覆写：同节点二次写入整条覆写（旧任务不残留），不同节点互不影响', () => {
-    writeTaskSnapshot(mkSnap({ tasks: [mkSnap().tasks[0]] }), 'node-a');
+    writeTaskSnapshot(mkSnap({ tasks: [mkSnap().tasks[0]!] }), 'node-a');
     writeTaskSnapshot(
       mkSnap({
         tasks: [
@@ -198,7 +198,7 @@ describe('remote-cache 纯缓存逻辑', () => {
     writeTaskSnapshot(mkSnap({ nodeName: '新名' }), 'node-a');
 
     expect(getRemoteTasks()).toHaveLength(1);
-    expect(getRemoteTasks()[0].nodeName).toBe('新名');
+    expect(getRemoteTasks()[0]!.nodeName).toBe('新名');
   });
 });
 

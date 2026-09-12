@@ -42,7 +42,7 @@ let fetchSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
-  fetchSpy = vi.spyOn(globalThis, 'fetch');
+  fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as typeof fetchSpy;
 });
 
 afterEach(() => {

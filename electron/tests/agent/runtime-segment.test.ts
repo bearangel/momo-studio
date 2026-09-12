@@ -17,11 +17,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
   __setMemoryProviderForTest,
@@ -45,24 +42,18 @@ function mockProviderMultiRound(rounds: StreamDelta[][]): void {
   });
 }
 
-function mockClient(): LegacyMatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as LegacyMatrixClient;
-}
-
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
     workspaceDir: '/tmp/test',
     workspaceId: 'ws-1',
     role: 'standalone',
+    contextWindow: 0,
+    outputTokens: 0,
     subAgents: [],
     skills: [],
     mcpNames: [],
@@ -92,6 +83,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     systemPrompt: 'You are a helpful assistant.',
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -99,6 +91,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: '!room:localhost',

@@ -92,7 +92,7 @@ type Scripted = {
 let script: Scripted[] = [];
 
 /** 可配置会话历史（stub provider 返回——默认放一条大消息使 head 非空） */
-let convHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+let convHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> = [];
 
 function installScriptedProvider(): void {
   vi.mocked(createLLMProvider).mockImplementation(() => ({
@@ -114,7 +114,7 @@ function installScriptedProvider(): void {
         };
         yield { type: 'done', finishReason: 'tool_use' };
         if (step.emitSteer !== undefined) {
-          process.emit('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
+          (process.emit as (event: string, ...args: unknown[]) => boolean)('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
         }
       } else {
         yield { type: 'thinking', content: '' };
@@ -198,7 +198,7 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
     sentChunks.length = 0;
     script = [];
     // 默认历史：一条 >KEEP 预算的 CJK 大消息（head 非空，压缩有物可压）
-    convHistory = [{ role: 'assistant', content: BIG }];
+    convHistory = [{ role: 'assistant', content: BIG, timestamp: 1, sender: 'bot' }];
     __setTodosForTest(SID, []);
     vi.mocked(createLLMProvider).mockReset();
     installScriptedProvider();

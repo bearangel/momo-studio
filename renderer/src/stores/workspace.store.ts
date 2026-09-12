@@ -1,8 +1,17 @@
 // renderer/src/stores/workspace.store.ts
-// Workspace 状态管理：列表加载、创建、切换激活 workspace
+// Workspace 状态管理：列表加载、创建、切换激活 workspace。
+// v2.7 T10：激活变化（load 默认项 / create 新建 / select 用户切换）经
+// workspace:switch 通知 main（浏览器子系统视图生命周期收口）；通知失败静默——
+// 通知是异步旁路，不阻塞本地激活状态。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { Workspace, CreateWorkspaceInput } from '../ipc/types';
+
+/** 通知 main 激活切换（fire-and-forget；IPC 故障不影响本地状态） */
+function notifySwitch(id: string | null): void {
+  if (!id) return;
+  void ipc.workspace.switch(id).catch(() => {});
+}
 
 interface WorkspaceState {
   workspaces: Workspace[];
@@ -39,6 +48,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       // 列表非空时默认激活第一个（noUncheckedIndexedAccess 下需非空断言）
       const activeId = list.length > 0 ? list[0]!.id : null;
       set({ workspaces: list, activeWorkspaceId: activeId, loading: false });
+      notifySwitch(activeId); // 初始激活通知 main（boot 初始激活的 renderer 侧来源）
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
     }
@@ -51,9 +61,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       workspaces: [ws, ...state.workspaces],
       activeWorkspaceId: ws.id,
     }));
+    notifySwitch(ws.id); // 新建即激活——通知 main 收口浏览器钩子
   },
 
-  select: (id) => set({ activeWorkspaceId: id }),
+  select: (id) => {
+    set({ activeWorkspaceId: id });
+    notifySwitch(id); // 用户切换 tab——main 侧切走旧 ws / 激活新 ws
+  },
 
   getActive: () => {
     const { workspaces, activeWorkspaceId } = get();

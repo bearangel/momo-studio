@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
+import type { TaskRow } from '../../src/main/storage/tasks/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
 import * as executorMod from '../../src/main/task/executor';
 import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
@@ -205,7 +206,7 @@ describe('任务暂停/取消 ↔ agent 执行联动（K7-4/K7-5）', () => {
     sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
 
     const handler = handlers.get('task:resume')!;
-    const row = await handler(null, taskId);
+    const row = (await handler(null, taskId)) as TaskRow;
 
     expect(row.status).toBe('in_progress');
     expect(sendUserMessageSpy).toHaveBeenCalledTimes(1);
@@ -264,7 +265,7 @@ describe('task:start 手动启动 kickoff 注入（K9）', () => {
     sendUserMessageSpy.mockResolvedValue({ ok: true } as never);
 
     const handler = handlers.get('task:start')!;
-    const result = await handler(null, t.id, {});
+    const result = (await handler(null, t.id, {})) as { executionSessionId: string };
 
     expect(getTask(t.id)!.status).toBe('in_progress');
     expect(result.executionSessionId).toBeTruthy();
@@ -353,14 +354,14 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
     const handler = handlers.get('task:create');
     expect(handler).toBeDefined();
 
-    const created = await handler!(null, {
+    const created = (await handler!(null, {
       workspaceId: 'ws1',
       title: '循环任务',
       creatorUserId: 'owner',
       targetTeamId: 'team1',
       recurrenceRule: 'daily@09:00',
       scheduledAt: 123,
-    });
+    })) as TaskRow;
 
     // 入参三列 + 循环规则落到返回 row（T1/T4/T6 消费者以此为权威源）
     expect(created.targetTeamId).toBe('team1');
@@ -375,12 +376,12 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
 
   it('task:create 支持 targetSessionId 委派', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: 'session 委派任务',
       creatorUserId: 'owner',
       targetSessionId: 'sess-1',
-    });
+    })) as TaskRow;
     expect(created.targetSessionId).toBe('sess-1');
     expect(created.targetTeamId).toBeNull();
     expect(created.assigneeAgentId).toBeNull();
@@ -388,11 +389,11 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
 
   it('task:create 不传三列/规则时仍可用（基线行为保持）', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '普通任务',
       creatorUserId: 'owner',
-    });
+    })) as TaskRow;
     expect(created.targetTeamId).toBeNull();
     expect(created.targetSessionId).toBeNull();
     expect(created.recurrenceRule).toBeNull();
@@ -402,13 +403,13 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
   // （spec §4.4「pending = 定时未到」），否则 scheduler 永远扫不到（旧实现恒落 draft）
   it('task:create 带 scheduledAt → 落 pending（定时管线入口）', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '定时任务',
       creatorUserId: 'owner',
       assigneeAgentId: 'inst1',
       scheduledAt: Date.now() + 60_000,
-    });
+    })) as TaskRow;
     expect(created.status).toBe('pending');
   });
 
@@ -418,45 +419,45 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
   // 新行为：有目标 + 无计划时间 → 直接入队 assigned，executor 立即评估放行。
   it('K1: task:create 带 assigneeAgentId 不带 scheduledAt → 落 assigned（立即入队）', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '指派任务',
       creatorUserId: 'owner',
       assigneeAgentId: 'inst1',
-    });
+    })) as TaskRow;
     expect(created.status).toBe('assigned');
   });
 
   it('K1: task:create 带 targetTeamId 不带 scheduledAt → 落 assigned', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '团队任务',
       creatorUserId: 'owner',
       targetTeamId: 'team1',
-    });
+    })) as TaskRow;
     expect(created.status).toBe('assigned');
   });
 
   it('K1: task:create 带 targetSessionId 不带 scheduledAt → 落 assigned', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '会话任务',
       creatorUserId: 'owner',
       targetSessionId: 'sess-1',
-    });
+    })) as TaskRow;
     expect(created.status).toBe('assigned');
   });
 
   // 无目标 = 用户暂存草稿（「不指派」语义），保持 draft 等待手动编辑指派
   it('K1: task:create 无委派目标不带 scheduledAt → 落 draft（草稿暂存）', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '手动任务',
       creatorUserId: 'owner',
-    });
+    })) as TaskRow;
     expect(created.status).toBe('draft');
   });
 
@@ -464,12 +465,12 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
   // 不升级，用户可手动启动——pending 允许 startTask）
   it('K1: task:create 无委派目标但带 scheduledAt → 落 pending（C1 语义保持）', async () => {
     const handler = handlers.get('task:create')!;
-    const created = await handler(null, {
+    const created = (await handler(null, {
       workspaceId: 'ws1',
       title: '定时手动任务',
       creatorUserId: 'owner',
       scheduledAt: Date.now() + 60_000,
-    });
+    })) as TaskRow;
     expect(created.status).toBe('pending');
   });
 });

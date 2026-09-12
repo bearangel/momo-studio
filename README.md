@@ -6,6 +6,18 @@
 
 ## 状态
 
+**v2.7.0 — McpBrowser 浏览器工具（开发中，未发布）**
+
+12 个浏览器工具 + 内嵌浏览器侧栏——puppeteer 零依赖路线：Electron 原生 WebContentsView 叠加渲染（renderer 只画 chrome，页面内容属主进程）+ per-workspace partition 隔离（`persist:browser-<wsId>`，登录态跨重启保留）。spec 见 `docs/specs/2026-09-11-mcp-browser-design.md`。
+
+- **12 浏览器工具** — navigate / tabs(list/open/close/switch) / snapshot（a11y 树 + selector 提示）/ screenshot（落 `userData/browser-screenshots`，经 `browser-shot://` 协议供 renderer）/ evaluate（默认关）/ click / hover / type / press_key（白名单键）/ scroll / console_messages（每 tab 50 条环形）/ close——无 puppeteer/CDP-HTTP 依赖，全部经主进程编排
+- **单页共享 + takeover 三入口** — agent 与用户操作同一页面（单页仲裁，无镜像）；接管三入口：地址栏回车（userNavigate 隐式接管）/ 显式「接管」路径 / 页内点击原生 overlay（agent 态透明 WebContentsView 拦截 mousedown，键盘 before-input-event 同路径）；user 态下任一 agent 浏览器工具立即失败（TakenOver 可重试语义，显式释放回切）
+- **右侧浏览器侧栏** — tabs 栏 + 地址栏 + 接管/信任徽标 + 可折叠（折叠销毁视图省内存，展开按清单重建）+ dev server 探活下拉（5173/3000/8080/4200/8000，TCP 试连 + HTTP HEAD 双校验防裸端口误报）
+- **信任卡 + 设置分类** — trust 三态 ask/always/deny：ask 且 agent 首调推右下角信任卡（本次会话 / 永久允许 / 取消）；设置页「浏览器」分类——信任模式 / 域名黑白名单（子域匹配，白名单优先）/ evaluate 开关 / 清除浏览数据（清 partition storage）；workspace_settings 表 migration 034
+- **安全边界** — file:// 限定 workspace 目录内（resolve 字符串边界 + realpath 最近祖先双防线，拒 `..` 与符号链接逃逸）；popup/window.open 一律 deny + 收编新 tab（不产生游离 OS 窗口，popup URL 同样过策略）；下载一律拦截（will-download preventDefault + notice）；视图 webPreferences 四硬化（nodeIntegration 关 / contextIsolation / sandbox / webSecurity）；域外协议全拒（仅 http(s) 与 workspace 内 file://）
+- 已知边界：域名策略不复检重定向（初航过名单后，页面 302 跳转目标不二次校验）/ 侧栏宽度受控化待接（落库侧就绪，当前静态 380px）/ macOS activate 事件窗口重接待办 / `electron/tests` 未纳入 eslint 门禁（typecheck 门禁已含）/ e2e 容器降级（页内点击经主进程 sendInputEvent 驱动——OS 层 overlay 栈顶命中的真实鼠标链待主机）
+- 主机验收待办：真实鼠标 → overlay 栈顶命中接管 / browser-shot 截图协议打包（electron-builder resourcesPath）落位 / partition 登录态跨重启实测 / dev server 探活真机联动
+
 **v2.6.0 — 任务断点续跑（开发中，未发布）**
 
 重启后 in-flight 任务事件重建式断点续跑——工具防御第四期，清偿自 v1.3 起连续四版列出的「重启自动恢复 agent runtime（持久化运行状态）」基础设施债。不新建持久化机制——`message_events` 本来就是流式事件的持久化真相源，断点素材已在 DB 里。spec 见 `docs/specs/2026-09-10-task-resume-design.md`。

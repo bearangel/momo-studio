@@ -20,6 +20,8 @@ import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
 import { TaskBoardView } from '../task-board/TaskBoardView';
 import { EmptyState } from '../ui/EmptyState';
 import { SidebarRestoreButton } from './SidebarRestoreButton';
+// v2.7 Task 8：浏览器侧栏 chrome（占位区由主进程 WebContentsView 叠加渲染）
+import { BrowserSidebar } from '../workspace/BrowserSidebar';
 
 export function MiddlePanel() {
   const activeView = useUiStore((s) => s.activeView);
@@ -96,6 +98,9 @@ export function MiddlePanel() {
             </>
           )}
         </div>
+        {/* v2.7 Task 8：浏览器侧栏（spec §2.1 布局——chat 列右侧兄弟节点；
+            chrome 属 renderer，页面内容由主进程按占位区 rect 叠加） */}
+        <BrowserSidebar workspaceId={workspace.id} />
       </div>
     );
   }

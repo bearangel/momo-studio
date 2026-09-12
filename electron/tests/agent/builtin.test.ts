@@ -180,8 +180,8 @@ spec:
 
     // suggestions Map 含 parent/platform（v25：无 role 建议）
     const map = getBuiltinSuggestionsMap();
-    const mainEntry = map['builtin-main-x'];
-    const subEntry = map['builtin-sub-x'];
+    const mainEntry = map['builtin-main-x']!;
+    const subEntry = map['builtin-sub-x']!;
     expect(mainEntry).toBeDefined();
     expect(mainEntry.suggestedPlatform).toBe('anthropic');
     expect(subEntry).toBeDefined();
@@ -223,7 +223,7 @@ spec:
     const map = getBuiltinSuggestionsMap();
     expect(map['builtin-orphan']).toBeDefined();
     // 父 slug 解析为 `builtin-missing-parent`（即使该 def 不存在，仍保留作建议）
-    expect(map['builtin-orphan'].suggestedParentDefId).toBe('builtin-missing-parent');
+    expect(map['builtin-orphan']!.suggestedParentDefId).toBe('builtin-missing-parent');
   });
 
   it('clearBuiltinSuggestionsForTest 清空 Map', () => {

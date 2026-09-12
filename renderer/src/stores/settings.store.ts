@@ -9,6 +9,7 @@ export type SettingsCategory =
   | 'memory'
   | 'appearance'
   | 'sandbox'
+  | 'browser'
   | 'git_policy'
   | 'audit_log'
   | 'p2p'

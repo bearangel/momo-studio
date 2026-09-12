@@ -26,11 +26,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
@@ -46,24 +43,18 @@ function mockProvider(deltas: StreamDelta[]): void {
   });
 }
 
-function mockClient(): LegacyMatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as LegacyMatrixClient;
-}
-
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: '你是研发工程师。',
     modelName: 'test-model',
     llmApiKey: 'test-key',
     workspaceDir: '/tmp/test',
     workspaceId: 'ws-1',
     role: 'standalone',
+    contextWindow: 0,
+    outputTokens: 0,
     subAgents: [],
     skills: [],
     mcpNames: [],
@@ -93,6 +84,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     systemPrompt: '你是研发工程师。',
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -100,6 +92,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: '!room:localhost',
@@ -241,10 +234,28 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
         title: '实现登录页',
         description: '完成登录页 UI 与表单校验',
         status: 'in_progress',
-        assigneeBotId: '@bot:localhost',
-        createdBy: '@owner:localhost',
+        assigneeAgentId: null,
+        targetTeamId: null,
+        targetSessionId: null,
+        recurrenceParentId: null,
+        sourceSessionId: null,
+        sourceMessageId: null,
+        priority: 0,
+        scheduledAt: null,
+        recurrenceRule: null,
+        deadlineAt: null,
+        queuePosition: null,
+        runtimeInstanceId: null,
+        estimatedTokens: null,
+        actualTokens: null,
+        toolCallsUsed: 0,
+        errorMessage: null,
+        sourceNodeId: null,
+        creatorUserId: '@owner:localhost',
         createdAt: 1000,
         updatedAt: 1000,
+        startedAt: null,
+        completedAt: null,
       },
       events: [
         { seq: 1, eventType: 'tool_call_start', summary: '调用工具 read_file (src/App.tsx)' },

@@ -26,8 +26,18 @@ import { getAgentDefinition, listMembers } from '../agent/crud';
 import { buildSpawnOpts, resolveApiKey } from '../agent/spawn-helpers';
 import type { CreateWorkspaceInput } from './types';
 
+/** 注册可选项：workspace:* 通道的跨子系统回调（依赖注入，默认无操作） */
+export interface WorkspaceIpcOpts {
+  /**
+   * v2.7 T10：workspace 切换通知收口——renderer select/create/load 后经
+   * workspace:switch 告知 main，浏览器子系统在此调 manager.onWorkspaceActivated
+   * （内部自动切走旧 ws）。回调拿 wsId + directoryPath（file:// 边界根同步用）。
+   */
+  onWorkspaceSwitched?: (wsId: string, workspaceDir: string) => void;
+}
+
 /** 注册 workspace:* IPC handlers。重复注册会被 Electron 拒绝，故仅调用一次。 */
-export function registerWorkspaceHandlers(): void {
+export function registerWorkspaceHandlers(opts: WorkspaceIpcOpts = {}): void {
   ipcMain.handle('workspace:create', async (_evt, input: CreateWorkspaceInput) => {
     // v2（Task 11）：单用户本地应用——owner 身份为结构常量（原从 Matrix 登录会话读取）
     return createWorkspace(input, 'owner');
@@ -59,6 +69,15 @@ export function registerWorkspaceHandlers(): void {
     if (!ws) throw new Error(`Workspace 不存在: ${id}`);
     const errMessage = await shell.openPath(ws.directoryPath);
     if (errMessage !== '') throw new Error(`打开目录失败: ${errMessage}`);
+    return { ok: true };
+  });
+
+  // v2.7 T10：workspace 切换通知——fire-and-forget 语义（renderer 不 await 结果，
+  // main 侧收口浏览器视图生命周期；ws 不存在时抛错给 renderer 提示）
+  ipcMain.handle('workspace:switch', (_evt, id: string) => {
+    const ws = getWorkspace(id);
+    if (!ws) throw new Error(`Workspace 不存在: ${id}`);
+    opts.onWorkspaceSwitched?.(ws.id, ws.directoryPath);
     return { ok: true };
   });
 

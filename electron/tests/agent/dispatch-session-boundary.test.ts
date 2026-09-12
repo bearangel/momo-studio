@@ -48,6 +48,8 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     isLeader: true,
     devMode: false,
     maxToolCalls: -1,
+    contextWindow: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }

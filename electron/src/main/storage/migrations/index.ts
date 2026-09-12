@@ -8,6 +8,7 @@
 
 import { migration032 } from './032_v2.3_builtin_apply_patch';
 import { migration033 } from './033_v2_5_change_journal';
+import { migration034 } from './034_v2_7_browser_settings';
 
 export interface Migration {
   version: number;
@@ -890,6 +891,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 033_v2_5_change_journal.ts（TS 内联字符串常量，约定同上）。
     version: migration033.version,
     sql: migration033.up,
+  },
+  {
+    // v2.7：McpBrowser workspace_settings 六列（spec 2026-09-11 §9）。SQL 住在
+    // 独立模块 034_v2_7_browser_settings.ts（约定同上）。spec 写 v32，但 032/033
+    // 已被 v2.3/v2.5 占用，实际版本 034（详见该模块头注）。
+    version: migration034.version,
+    sql: migration034.up,
   },
 ];
 

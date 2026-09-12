@@ -114,7 +114,7 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   runMigrations();
-  fetchSpy = vi.spyOn(globalThis, 'fetch');
+  fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as typeof fetchSpy;
   execFileCalls.length = 0;
   execCalls.length = 0;
 });

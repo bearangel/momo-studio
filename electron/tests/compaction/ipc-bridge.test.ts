@@ -85,7 +85,7 @@ describe('compaction:request 线协议（子→主）', () => {
     });
     handleCompactionResultIpc({
       type: 'compaction:result',
-      streamSessionId: sent.streamSessionId as string,
+      streamSessionId: sent?.streamSessionId as string,
       ok: true,
       summary: '摘要',
     });
@@ -95,8 +95,8 @@ describe('compaction:request 线协议（子→主）', () => {
   it('并发两次请求 → streamSessionId 真实唯一（配对不串扰）', async () => {
     const p1 = requestCompaction('s-ipc-1', '对话一', 1);
     const p2 = requestCompaction('s-ipc-1', '对话二', 2);
-    const id1 = sentRequests[0].streamSessionId as string;
-    const id2 = sentRequests[1].streamSessionId as string;
+    const id1 = sentRequests[0]!.streamSessionId as string;
+    const id2 = sentRequests[1]!.streamSessionId as string;
     expect(id1).not.toBe(id2);
     handleCompactionResultIpc({ type: 'compaction:result', streamSessionId: id2, ok: true, summary: '第二个' });
     handleCompactionResultIpc({ type: 'compaction:result', streamSessionId: id1, ok: true, summary: '第一个' });
@@ -192,7 +192,7 @@ describe('spawner compaction:request 分支（主→子回写）', () => {
 describe('handleCompactionResultIpc（子进程结果消费）', () => {
   it('ok:false → reject（error 文本透传）', async () => {
     const p = requestCompaction('s-ipc-1', '对话', 1);
-    const id = sentRequests[0].streamSessionId as string;
+    const id = sentRequests[0]!.streamSessionId as string;
     handleCompactionResultIpc({ type: 'compaction:result', streamSessionId: id, ok: false, error: '压缩摘要生成为空，请重试' });
     await expect(p).rejects.toThrow('压缩摘要生成为空，请重试');
   });
@@ -200,7 +200,7 @@ describe('handleCompactionResultIpc（子进程结果消费）', () => {
   it('10s 超时 → reject（pending 清理，迟到结果不崩）', async () => {
     vi.useFakeTimers();
     const p = requestCompaction('s-ipc-1', '对话', 1);
-    const id = sentRequests[0].streamSessionId as string;
+    const id = sentRequests[0]!.streamSessionId as string;
     const assertion = expect(p).rejects.toThrow('超时');
     await vi.advanceTimersByTimeAsync(COMPACTION_REQUEST_TIMEOUT_MS);
     await assertion;

@@ -178,7 +178,7 @@ describe('agent:stop IPC handler（Task 4 销毁）', () => {
     const def = makeStandaloneDef('def-stop-1');
     const ws = await createWorkspace(
       { name: 'WS', description: '', directoryPath: path.join(tmpRoot, 'ws'), iconEmoji: '📁' },
-      '@o:localhost', '!s:localhost', '!t:localhost',
+      '@o:localhost',
     );
     const member = await addMember(ws.id, def.id, '@bot-stop:localhost');
     const instId = member.instanceId;

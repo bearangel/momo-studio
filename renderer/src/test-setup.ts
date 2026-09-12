@@ -25,3 +25,17 @@ if (typeof window.PointerEvent === 'undefined') {
   }
   window.PointerEvent = PointerEventPolyfill as unknown as typeof PointerEvent;
 }
+
+// jsdom 不提供 ResizeObserver：被动 polyfill（observe/unobserve/disconnect no-op、
+// 永不触发回调——需主动触发回调的测试自行覆写 globalThis.ResizeObserver，
+// 见 BrowserSidebar.test.tsx）。MiddlePanel 经 BrowserSidebar 挂载后，任何
+// 传递渲染 MiddlePanel 的测试都会走到 new ResizeObserver(...)。
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverPolyfill {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  (globalThis as unknown as { ResizeObserver: typeof ResizeObserverPolyfill }).ResizeObserver =
+    ResizeObserverPolyfill;
+}

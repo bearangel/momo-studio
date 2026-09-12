@@ -94,7 +94,7 @@ describe('messages repo', () => {
       insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: `m${i}` });
     }
     const all = listMessagesBySession('r1');
-    const midTs = all[2].createdAt;
+    const midTs = all[2]!.createdAt;
     const older = listMessagesBySession('r1', { limit: 10, beforeTs: midTs });
     // beforeTs 排除 midTs 本身（< 严格）
     expect(older.every((m) => m.createdAt < midTs)).toBe(true);
@@ -111,7 +111,7 @@ describe('messages repo', () => {
       insertMessage({ sessionId: 'r1', sender: '@a:home', eventType: 'm.room.message', body: `m${i}` });
     }
     const all = listMessagesBySession('r1');
-    const midTs = all[2].createdAt;
+    const midTs = all[2]!.createdAt;
     const older = listOlderMessages('r1', midTs, 10);
     expect(older.length).toBeLessThanOrEqual(10);
     expect(older.every((m) => m.createdAt < midTs)).toBe(true);

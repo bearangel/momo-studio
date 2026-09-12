@@ -25,11 +25,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import {
   __setMemoryProviderForTest,
   __resetMemoryProviderForTest,
@@ -78,6 +75,8 @@ function makeConfig(): RuntimeConfig {
     isLeader: true, // spawn 快照：曾是某多成员会话 leader（bug 触发前提）
     devMode: false,
     maxToolCalls: -1,
+    contextWindow: 0,
+    outputTokens: 0,
   };
 }
 

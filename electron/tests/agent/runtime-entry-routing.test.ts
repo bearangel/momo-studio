@@ -25,11 +25,8 @@ import fs from 'node:fs';
 import { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { LLMToolCall } from '../../src/main/agent/llm-provider';
-import {
-  doExecuteTool,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { doExecuteTool, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 
@@ -46,7 +43,6 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: '',
     modelName: 'test',
     llmApiKey: 'k',
@@ -61,6 +57,8 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     isLeader: false,
     devMode: false,
     maxToolCalls: 10,
+    contextWindow: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }
@@ -77,6 +75,7 @@ beforeEach(() => {
     wsFs,
     workspaceId: 'ws',
     workspaceDir: tmpDir,
+    creatorUserId: '@owner:test',
     skillRegistry,
     streamSessionId: 'ssn',
     roomId: '!r',
@@ -90,6 +89,7 @@ beforeEach(() => {
     systemPrompt: '',
     workspaceId: 'ws',
     workspaceDir: tmpDir,
+    creatorUserId: '@owner:test',
     roomId: '!r',
     streamSessionId: 'ssn',
     sendStreamChunk,

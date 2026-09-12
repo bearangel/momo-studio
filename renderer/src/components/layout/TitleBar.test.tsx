@@ -47,6 +47,8 @@ const mockApi = {
     delete: vi.fn().mockResolvedValue(undefined),
     rename: vi.fn().mockResolvedValue({ ok: true }),
     openDirectory: vi.fn().mockResolvedValue({ ok: true }),
+    // 对齐真实 ApiSurface（T10 workspace:switch fire-and-forget——notifySwitch 会调用）
+    switch: vi.fn().mockResolvedValue(undefined),
   },
   dialog: {
     pickDirectory: vi.fn().mockResolvedValue(null),

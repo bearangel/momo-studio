@@ -18,9 +18,9 @@ describe('LocalTransport', () => {
     await t.start();
     const nodes = t.discoverNodes();
     expect(nodes.length).toBe(1);
-    expect(nodes[0].nodeId).toBe(id.nodeId);
+    expect(nodes[0]!.nodeId).toBe(id.nodeId);
     // LocalTransport 仅在 discoverNodes 标记自身为 'local'（不在外部枚举 'lan'/'hub' 内）
-    expect(nodes[0].transport).toBe('local');
+    expect(nodes[0]!.transport).toBe('local');
     await t.stop();
   });
 
@@ -32,9 +32,9 @@ describe('LocalTransport', () => {
     t.onMessage((m) => received.push(m));
     await t.send(id.nodeId, { targetNodeId: id.nodeId, type: 'message', body: { text: 'self' } });
     expect(received.length).toBe(1);
-    expect(received[0].fromNodeId).toBe(id.nodeId);
-    expect(received[0].payload.body).toEqual({ text: 'self' });
-    expect(received[0].receivedAt).toBeGreaterThan(0);
+    expect(received[0]!.fromNodeId).toBe(id.nodeId);
+    expect(received[0]!.payload.body).toEqual({ text: 'self' });
+    expect(received[0]!.receivedAt).toBeGreaterThan(0);
     await t.stop();
   });
 

@@ -189,7 +189,7 @@ describe('WorkspaceAgentMember.lastRunning 字段映射', () => {
 
     const list = listMembers(localWsId);
     expect(list).toHaveLength(1);
-    expect(list[0].lastRunning).toBe(true);
+    expect(list[0]!.lastRunning).toBe(true);
   });
 
   it('row.last_running=0 → member.lastRunning=false', async () => {
@@ -203,6 +203,6 @@ describe('WorkspaceAgentMember.lastRunning 字段映射', () => {
 
     const list = listMembers(localWsId);
     expect(list).toHaveLength(1);
-    expect(list[0].lastRunning).toBe(false);
+    expect(list[0]!.lastRunning).toBe(false);
   });
 });

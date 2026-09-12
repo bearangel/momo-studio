@@ -88,7 +88,7 @@ describe('WarmPool', () => {
       // 延迟 spawn 模拟真实 fork 耗时，确保两个 warm 都进入 in-flight 窗口
       await new Promise((r) => setTimeout(r, 5));
       const child = mkMockChild();
-      child.pid = 1000 + seq++;
+      (child as { pid?: number }).pid = 1000 + seq++;
       spawned.push(child);
       return child;
     });
@@ -111,7 +111,7 @@ describe('WarmPool', () => {
     const spawn = vi.fn(async () => {
       await new Promise((r) => setTimeout(r, 5));
       const child = mkMockChild();
-      child.pid = 2000 + seq++;
+      (child as { pid?: number }).pid = 2000 + seq++;
       spawned.push(child);
       return child;
     });

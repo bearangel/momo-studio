@@ -10,14 +10,19 @@
 //
 // 语义裁定：转 paused（而非 failed/cancelled）——用户停的是 agent 不是任务，
 // 任务保留价值，可通过「恢复」重启执行链。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 
-const { stopAgentRuntime } = await import('../../src/main/agent/runtime-registry');
+type RuntimeRegistryModule = typeof import('../../src/main/agent/runtime-registry');
+// 顶层 await 在 CJS 类型检查下不可用——beforeAll 懒 import 保持延迟加载语义
+let stopAgentRuntime!: RuntimeRegistryModule['stopAgentRuntime'];
+beforeAll(async () => {
+  ({ stopAgentRuntime } = await import('../../src/main/agent/runtime-registry'));
+});
 
 const tmpRoot = path.join(
   os.tmpdir(),

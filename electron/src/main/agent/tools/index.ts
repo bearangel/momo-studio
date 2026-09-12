@@ -6,7 +6,12 @@
 //   TaskTools（v2 B10 任务工具：read_task / read_task_history / read_task_progress /
 //     create_task / complete_task / fail_task / list_tasks）+ LspTools
 //   （lsp_diagnostics + lsp_find_references，条件注册——仅 TS/JS workspace）
-//   + MemoryTools（v2.2 记忆三工具：memory_save / memory_search / memory_forget）。
+//   + MemoryTools（v2.2 记忆三工具：memory_save / memory_search / memory_forget）
+//   + BrowserTools（v2.7 McpBrowser 12 工具：browser_navigate / browser_snapshot /
+//     browser_screenshot / browser_click / browser_type / browser_press_key /
+//     browser_hover / browser_scroll / browser_evaluate / browser_console_messages /
+//     browser_tabs / browser_close——无条件注册，信任门在 execute 内，
+//     依赖经 initBrowserTools 由 boot 接线）。
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -22,6 +27,7 @@ import { TodoTools } from './todo-tools';
 import { TaskTools } from './task-tools';
 import { LspTools } from './lsp-tools';
 import { MemoryTools } from './memory-tools';
+import { BrowserTools } from './browser-tools';
 
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
   const modules: ToolModule[] = [
@@ -34,6 +40,7 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new TodoTools(),
     new TaskTools(),
     new MemoryTools(),
+    new BrowserTools(),
   ];
   const lsp = LspTools.create(ctx);
   if (lsp) modules.push(lsp);

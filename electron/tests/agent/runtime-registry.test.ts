@@ -49,7 +49,6 @@ import type { AgentRuntimeOpts } from '../../src/main/agent/runtime-config';
 import type { AgentDefinition } from '../../src/main/agent/types';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import type { WarmPool } from '../../src/main/agent/warm-pool';
-import type { ChildProcess } from 'node:child_process';
 
 /** 构造仿真存活语义的 mock child（运行中：connected=true / exitCode=null） */
 function mkSpawnChild(): ChildProcess {
@@ -181,7 +180,7 @@ describe('runtime-registry', () => {
       expect(ensureRouterService).toHaveBeenCalledOnce();
       // 验证传入的是 Map 引用（应使用 runtime-registry 的全局 agentRunners；
       // spec §9 后 providerBuckets 不再传入——它只服务于已砍除的 dispatcher）
-      const call = vi.mocked(ensureRouterService).mock.calls[0];
+      const call = vi.mocked(ensureRouterService).mock.calls[0]!;
       expect(call).toHaveLength(1);
       expect(call[0]).toBe(agentRunners);
     });
@@ -202,7 +201,7 @@ describe('runtime-registry', () => {
       const spawned: Array<{ opts: SpawnOpts; child: ChildProcess }> = [];
       vi.mocked(spawnForAgent).mockImplementation(async (opts: SpawnOpts) => {
         const child = mkSpawnChild();
-        child.pid = 5000 + spawned.length;
+        (child as { pid?: number }).pid = 5000 + spawned.length;
         spawned.push({ opts, child });
         return { child, assignmentId: opts.assignmentId, spawnedAt: Date.now() };
       });
@@ -226,7 +225,7 @@ describe('runtime-registry', () => {
       const spawnCalls: Array<{ opts: SpawnOpts; child: ChildProcess }> = [];
       vi.mocked(spawnForAgent).mockImplementation(async (opts: SpawnOpts) => {
         const child = mkSpawnChild();
-        child.pid = 6000 + spawnCalls.length;
+        (child as { pid?: number }).pid = 6000 + spawnCalls.length;
         spawnCalls.push({ opts, child });
         return { child, assignmentId: opts.assignmentId, spawnedAt: Date.now() };
       });
@@ -327,7 +326,7 @@ describe('runtime-registry', () => {
     it('stopAgentRuntime 销毁 runtime 并写 last_running=0', async () => {
       const ws = await createWorkspace(
         { name: 'WS-stop', description: '', directoryPath: path.join(tmpRoot, 'ws-stop'), iconEmoji: '📁' },
-        '@u:localhost', '!s:localhost', '!t:localhost',
+        '@u:localhost',
       );
       saveAgentDefinition(mkDef({ id: 'def-stop' }));
       const assignment = await addMember(ws.id, 'def-stop', '@bot-stop:localhost');

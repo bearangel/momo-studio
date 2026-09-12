@@ -122,7 +122,7 @@ describe('富信息渲染（v2.3.2）', () => {
         { kind: 'text', text: '先看目录' },
         { kind: 'tool', callId: 'c1', toolName: 'list_files', args: { path: '/src' }, result: 'a.ts', success: true },
         { kind: 'dispatch', callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: 'tester', task: '验证', status: 'completed', subMarkdown: '**tester** — 2026\n\n验证通过' },
-        { kind: 'todo', items: [{ id: '1', subject: 'A', status: 'completed' }, { id: '2', subject: 'B', status: 'in_progress' }, { id: '3', subject: 'C', status: 'pending' }] },
+        { kind: 'todo', items: [{ id: '1', subject: 'A', status: 'completed', source: 'agent' }, { id: '2', subject: 'B', status: 'in_progress', source: 'agent' }, { id: '3', subject: 'C', status: 'pending', source: 'agent' }] },
       ], status: 'done' } }],
       { roomName: '测试', roomId: 'r1', exportedAt: new Date(), requestedLimit: 10, actualCount: 1 },
     );

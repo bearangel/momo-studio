@@ -30,48 +30,29 @@ describe('agent/types M2 扩展', () => {
     expect(skill.versionRange).toBeUndefined();
   });
 
-  it('AgentDefinition 包含 M2 新字段', () => {
+  it('AgentDefinition 现行形态（v1.3 起 type/parentAgentId/model 退役，provider 引用制）', () => {
     const def: AgentDefinition = {
       id: 'test',
       name: '测试',
       slug: 'test',
       version: '1.0.0',
-      type: 'main',
       runtime: 'declarative',
       systemPrompt: 'test',
-      model: { provider: 'openai', model: 'gpt-4o' },
       defaultTools: [],
       source: 'builtin',
       description: '',
       iconEmoji: '🤖',
-      parentAgentId: undefined,
+      workspaceId: null,
+      modelProviderId: 'prov-1',
+      modelName: 'gpt-4o',
       defaultMcps: [{ kind: 'mcp', ref: 'github' }],
       defaultSkills: [{ kind: 'skill', ref: 'code-review' }],
     };
     expect(def.defaultMcps).toHaveLength(1);
     expect(def.defaultSkills).toHaveLength(1);
-    expect(def.parentAgentId).toBeUndefined();
-  });
-
-  it('AgentDefinition.parentAgentId 用于 sub agent', () => {
-    const sub: AgentDefinition = {
-      id: 'sub-1',
-      name: 'sub',
-      slug: 'sub',
-      version: '1.0.0',
-      type: 'sub',
-      runtime: 'declarative',
-      systemPrompt: '',
-      model: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
-      defaultTools: [],
-      source: 'custom',
-      description: '',
-      iconEmoji: '🤖',
-      parentAgentId: 'main-1',
-      defaultMcps: [],
-      defaultSkills: [],
-    };
-    expect(sub.parentAgentId).toBe('main-1');
-    expect(sub.type).toBe('sub');
+    expect(def.modelProviderId).toBe('prov-1');
+    // 退役字段不再是 AgentDefinition 一部分（运行时对象上自然不存在）
+    expect('parentAgentId' in def).toBe(false);
+    expect('type' in def).toBe(false);
   });
 });

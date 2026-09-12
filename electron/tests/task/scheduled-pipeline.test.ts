@@ -97,8 +97,8 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     expect(task.status).toBe('in_progress');
     expect(task.executionSessionId).not.toBeNull();
     expect(kickoff).toHaveBeenCalledTimes(1);
-    expect(kickoff.mock.calls[0][0].sessionId).toBe(task.executionSessionId);
-    expect(kickoff.mock.calls[0][0].body).toContain('【任务启动】#T-001');
+    expect(kickoff.mock.calls[0]![0]!.sessionId).toBe(task.executionSessionId);
+    expect(kickoff.mock.calls[0]![0]!.body).toContain('【任务启动】#T-001');
   });
 
   it('会话目标任务：到点 pending → checkOnce 升 assigned → admitOnce 就地放行（不新建会话）', async () => {
@@ -125,7 +125,7 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     expect(task.status).toBe('in_progress');
     expect(task.executionSessionId).toBe(sess.id); // 显式 executionSessionId 路径：就地执行
     expect(kickoff).toHaveBeenCalledTimes(1);
-    expect(kickoff.mock.calls[0][0].sessionId).toBe(sess.id);
+    expect(kickoff.mock.calls[0]![0]!.sessionId).toBe(sess.id);
   });
 
   it('未到点 / draft 任务：checkOnce 不升级，executor 不放行', async () => {

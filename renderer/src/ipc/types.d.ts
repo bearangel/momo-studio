@@ -1046,6 +1046,113 @@ export interface JournalApiSurface {
   rollbackFileBefore(workspaceId: string, path: string, beforeEntryId: string): Promise<RevertOutcome[]>;
 }
 
+// v2.7 McpBrowser：浏览器通道载荷与 API 面。
+// 与 electron/src/main/browser/types.ts、ipc.ts 跨进程结构对齐——刻意独立定义
+//（renderer 不 import electron 源码）；契约由 electron/tests/browser/ipc.test.ts
+// 的载荷字段锁保护。
+
+/** tab 清单行（browser_tabs 工具返回 / sidebar tabs 栏渲染共用） */
+export interface BrowserTabInfo {
+  index: number;
+  url: string;
+  title: string;
+}
+
+/** 统一状态推送（IPC browser:state）载荷——单页共享模型的完整快照 */
+export interface BrowserState {
+  workspaceId: string;
+  tabs: BrowserTabInfo[];
+  /** 当前 tab 下标（tabs[current] 即活跃页） */
+  current: number;
+  url: string;
+  title: string;
+  /** 单页仲裁态：agent 工具可用 / 用户接管中（工具立即失败） */
+  takeover: 'agent' | 'user';
+  /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
+  trusted: boolean;
+}
+
+/** sidebar 占位区 rect（browser:setSidebarBounds 载荷，与 Electron setBounds 四字段同构；DPR 换算在 main） */
+export interface BrowserSidebarRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 信任卡应答三值（spec §5.2：session 本会话 / always 落库 / deny 无操作） */
+export type BrowserTrustAnswer = 'session' | 'always' | 'deny';
+
+/** dev server 探活结果（browser:listDevServers） */
+export interface BrowserDevServer {
+  port: number;
+  url: string;
+}
+
+/** workspace 级浏览器设置 patch（browser:updateSettings 载荷；主进程侧净化后落库） */
+export interface BrowserSettingsPatch {
+  trust?: 'ask' | 'always' | 'deny';
+  evaluateEnabled?: boolean;
+  blacklist?: string[];
+  whitelist?: string[];
+  sidebarCollapsed?: boolean;
+  sidebarWidth?: number;
+}
+
+/** workspace 级浏览器设置完整形态（browser:getSettings 返回——store.read 六字段） */
+export interface BrowserSettings {
+  trust: 'ask' | 'always' | 'deny';
+  evaluateEnabled: boolean;
+  blacklist: string[];
+  whitelist: string[];
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
+}
+
+/** m→r 非模态通知（browser:notice；kind 如 crash-reloaded / popup-blocked / trust-request）。
+ * workspaceId 是发送方所在的 workspace（v2.7 review M7）——信任卡按该字段路由应答目标，
+ * 不再依赖 renderer 端「单活跃 ws」推导（脆弱：用户切 ws、tool 跨 ws 上下文等）。 */
+export interface BrowserNotice {
+  kind: string;
+  text: string;
+  workspaceId: string;
+}
+
+export interface BrowserApiSurface {
+  /** sidebar 挂载时拉全量状态 */
+  getState(workspaceId: string): Promise<BrowserState>;
+  /** 地址栏回车（隐式接管，§3.2） */
+  userNavigate(workspaceId: string, url: string): Promise<{ url: string; title: string }>;
+  /** 显式接管 / 释放 */
+  takeover(workspaceId: string): Promise<void>;
+  releaseTakeover(workspaceId: string): Promise<void>;
+  /** tabs 管理（open 携带 url；close 当前 tab 且为唯一 tab 时视同 closeBrowser） */
+  openTab(workspaceId: string, url?: string): Promise<BrowserTabInfo[]>;
+  closeTab(workspaceId: string, index?: number): Promise<BrowserTabInfo[]>;
+  switchTab(workspaceId: string, index: number): Promise<BrowserTabInfo[]>;
+  /** 占位区 rect 上报（ResizeObserver / window resize 触发） */
+  setSidebarBounds(rect: BrowserSidebarRect): Promise<void>;
+  /** 折叠态变更（联动视图销毁/重建 + 落库） */
+  setSidebarCollapsed(workspaceId: string, collapsed: boolean): Promise<void>;
+  /** 信任卡应答（session / always / deny） */
+  answerTrust(workspaceId: string, answer: BrowserTrustAnswer): Promise<void>;
+  /** dev server 探活（5173/3000/8080/4200/8000） */
+  listDevServers(): Promise<BrowserDevServer[]>;
+  /** 设置写入（主进程净化：跳过 undefined 键 / 非数组名单丢弃；非法 trust 结构化错误返回） */
+  updateSettings(
+    workspaceId: string,
+    patch: BrowserSettingsPatch,
+  ): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** 设置读取（store.read 全量六字段——设置页表单初始值 / 侧栏折叠初始态消费） */
+  getSettings(workspaceId: string): Promise<BrowserSettings>;
+  /** 清除 partition 浏览数据（设置页「清除浏览数据」按钮；不经接管门） */
+  clearBrowsingData(workspaceId: string): Promise<void>;
+  /** 统一状态推送订阅（解订阅函数） */
+  onBrowserState(callback: (state: BrowserState) => void): () => void;
+  /** 非模态通知订阅（信任卡消费 kind='trust-request'） */
+  onBrowserNotice(callback: (notice: BrowserNotice) => void): () => void;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -1063,6 +1170,8 @@ export interface ApiSurface {
     delete(id: string): Promise<void>;
     /** v25 Task 6（spec §5）：设置/清空默认会话 agent；instanceId=null 清除（查询随 workspace:get/list 返回） */
     setDefaultAgent(workspaceId: string, instanceId: string | null): Promise<void>;
+    /** v2.7 T10：切换激活 workspace 通知（main 收口浏览器子系统切换钩子；fire-and-forget） */
+    switch(id: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：重命名 workspace（UPDATE name 列） */
     rename(id: string, name: string): Promise<{ ok: boolean }>;
     /** P2 Task 2：在系统文件管理器中打开 workspace 目录 */
@@ -1290,6 +1399,8 @@ export interface ApiSurface {
   sandbox: SandboxApiSurface;
   /** v2.5：变更账本通道（journal/ipc.handlers.ts） */
   journal: JournalApiSurface;
+  /** v2.7：浏览器通道（browser/ipc.ts——14 invoke + state/notice 两推送） */
+  browser: BrowserApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;

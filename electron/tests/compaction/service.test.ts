@@ -125,8 +125,8 @@ describe('generateCompaction', () => {
     expect(chatMock).toHaveBeenCalledTimes(1);
     const messages = chatMock.mock.calls[0][0] as Array<{ role: string; content: string }>;
     expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('user');
-    expect(messages[0].content).toContain('PROMPT[conversation=[用户]: 你好;prior=无]');
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!.content).toContain('PROMPT[conversation=[用户]: 你好;prior=无]');
   });
 
   it('② llm 返回空摘要 → throw（显式反馈）', async () => {
@@ -152,7 +152,7 @@ describe('generateCompaction', () => {
     });
     // prompt 文本里 prior 已并入（服务未直接拼旧摘要绕过纯函数）
     const messages = chatMock.mock.calls[0][0] as Array<{ content: string }>;
-    expect(messages[0].content).toContain('prior=旧版结构化摘要');
+    expect(messages[0]!.content).toContain('prior=旧版结构化摘要');
   });
 
   it('⑤ llm.chat 抛错 → 包装中文错误向上 throw（不吞）', async () => {

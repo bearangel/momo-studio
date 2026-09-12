@@ -141,14 +141,16 @@ describe('chatStream — OpenAI SSE', () => {
     );
 
     const provider = createLLMProvider({ model: 'gpt-4', baseUrl: 'https://api.openai.com/v1' }, 'sk-test');
+    // chatStream 类型面是 AsyncIterable（消费侧 for-await）——abort 语义用例需要
+    // 逐次 next()，收窄到 AsyncGenerator（运行时对象本就是 generator）
     const iter = provider.chatStream!(
       [{ role: 'user', content: 'hi' }],
       undefined,
       ac.signal,
-    );
+    ) as AsyncGenerator<unknown, undefined, unknown>;
     // 读第一个 delta
     const first = await iter.next();
-    expect(first.value.type).toBe('text');
+    expect((first.value as { type: string }).type).toBe('text');
     // abort
     ac.abort();
     // 下一次 next 应该抛 AbortError

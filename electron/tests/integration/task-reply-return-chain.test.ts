@@ -40,12 +40,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runTaskChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-  type TaskConfig,
-} from '../../src/main/agent/runtime-entry';
+import { runTaskChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig, TaskConfig } from '../../src/main/agent/runtime-config';
 import { executeDispatch, handleTaskReply, handleTaskReplyIpc } from '../../src/main/agent/dispatch-wait';
 import { runMigrations, getDb } from '../../src/main/storage/db';
 import { addSessionMember } from '../../src/main/storage/sessions/repo';
@@ -106,7 +102,6 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-pm',
     agentUserId: '@pm:localhost',
-    teamSessionId: TEAM_SESSION,
     systemPrompt: 'You are the PM.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -121,6 +116,8 @@ function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     isLeader: false,
     devMode: false,
     maxToolCalls: 10,
+    contextWindow: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }
@@ -138,6 +135,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
   return {
     wsFs: mockWsFs,
     skillRegistry: mockSkillRegistry,
+    creatorUserId: '@owner:test',
     tools: [],
     systemPrompt: 'You are a helpful assistant.',
     workspaceId: 'ws-1',
@@ -149,6 +147,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       wsFs: mockWsFs,
       workspaceId: 'ws-1',
       workspaceDir: '/tmp/test',
+      creatorUserId: '@owner:test',
       skillRegistry: mockSkillRegistry,
       streamSessionId: 'test-session',
       roomId: TEAM_SESSION,

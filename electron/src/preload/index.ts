@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   ApiSurface,
   AssignmentDeltas,
+  BrowserNotice,
+  BrowserState,
   CollabTarget,
   ImMessage,
   MessageEventBatch,
@@ -38,6 +40,8 @@ const api: ApiSurface = {
     openDirectory: (id) => invoke('workspace:openDirectory', id),
     // v25 Task 6（spec §5）：默认 agent 设置通道（原协调 agent 通道更名）
     setDefaultAgent: (id, instanceId) => invoke('workspace:setDefaultAgent', id, instanceId),
+    // v2.7 T10：切换激活 workspace 通知（main 侧收口浏览器子系统 workspace 钩子）
+    switch: (id) => invoke('workspace:switch', id),
   },
   file: {
     read: (wsId, path) => invoke('file:read', wsId, path),
@@ -122,6 +126,38 @@ const api: ApiSurface = {
     scan: (workspaceId, taskId) => invoke('journal:scan', workspaceId, taskId),
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
+  },
+  // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 14 invoke 通道 + 两推送逐一对应）
+  browser: {
+    getState: (workspaceId) => invoke('browser:getState', workspaceId),
+    userNavigate: (workspaceId, url) => invoke('browser:userNavigate', workspaceId, url),
+    takeover: (workspaceId) => invoke('browser:takeover', workspaceId),
+    releaseTakeover: (workspaceId) => invoke('browser:releaseTakeover', workspaceId),
+    openTab: (workspaceId, url) => invoke('browser:openTab', workspaceId, url),
+    closeTab: (workspaceId, index) => invoke('browser:closeTab', workspaceId, index),
+    switchTab: (workspaceId, index) => invoke('browser:switchTab', workspaceId, index),
+    setSidebarBounds: (rect) => invoke('browser:setSidebarBounds', rect),
+    setSidebarCollapsed: (workspaceId, collapsed) =>
+      invoke('browser:setSidebarCollapsed', workspaceId, collapsed),
+    answerTrust: (workspaceId, answer) => invoke('browser:answerTrust', workspaceId, answer),
+    listDevServers: () => invoke('browser:listDevServers'),
+    updateSettings: (workspaceId, patch) => invoke('browser:updateSettings', workspaceId, patch),
+    getSettings: (workspaceId) => invoke('browser:getSettings', workspaceId),
+    clearBrowsingData: (workspaceId) => invoke('browser:clearBrowsingData', workspaceId),
+    onBrowserState: (callback) => {
+      const handler = (_e: IpcRendererEvent, state: BrowserState): void => callback(state);
+      ipcRenderer.on('browser:state', handler);
+      return () => {
+        ipcRenderer.off('browser:state', handler);
+      };
+    },
+    onBrowserNotice: (callback) => {
+      const handler = (_e: IpcRendererEvent, notice: BrowserNotice): void => callback(notice);
+      ipcRenderer.on('browser:notice', handler);
+      return () => {
+        ipcRenderer.off('browser:notice', handler);
+      };
+    },
   },
   // v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，
   // 仅保留 im:conflict 推送订阅（发送方 session-service，通道名留待 P2 收敛）。

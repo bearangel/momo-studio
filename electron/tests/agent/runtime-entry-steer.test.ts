@@ -14,11 +14,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
-import {
-  runChatLoop,
-  type RuntimeConfig,
-  type RuntimeContext,
-} from '../../src/main/agent/runtime-entry';
+import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
   __setMemoryProviderForTest,
@@ -28,26 +25,27 @@ import {
 
 // === runChatLoop 测试夹具（沿用 runtime-segment.test.ts 模式）===
 
-const sentChunks: unknown[] = [];
+// @types/node 对 emit('message') 有专用重载形态（message + sendHandle），测试以
+// 单参消息体模拟子进程 IPC——经通用签名强转发出（运行时与 process.emit 等价）
+const emitChildMessage = (msg: unknown): void => {
+  (process.emit as (event: string, ...args: unknown[]) => boolean)('message', msg);
+};
 
-function mockClient(): LegacyMatrixClient {
-  return {
-    getRoom: vi.fn().mockReturnValue(null),
-    sendEvent: vi.fn().mockResolvedValue({ event_id: '$test:localhost' }),
-  } as unknown as LegacyMatrixClient;
-}
+const sentChunks: unknown[] = [];
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-bot',
     agentUserId: '@bot:localhost',
-    teamSessionId: '!team:localhost',
     systemPrompt: 'You are a test bot.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
     workspaceDir: '/tmp/test',
     workspaceId: 'ws-1',
     role: 'standalone',
+    // 0 = 窗口未知 → 不触发内联压缩（与本文件 steer 语义一致；此前缺省 undefined 同样不触发）
+    contextWindow: 0,
+    outputTokens: 0,
     subAgents: [],
     skills: [],
     mcpNames: [],
@@ -77,6 +75,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     systemPrompt: 'You are a helpful assistant.',
     workspaceId: 'ws-1',
     workspaceDir: '/tmp/test',
+    creatorUserId: '@owner:test',
     roomId: '!room:localhost',
     streamSessionId: 'test-session',
     sendStreamChunk: () => {},
@@ -88,6 +87,7 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
       streamSessionId: 'test-session',
       roomId: '!room:localhost',
       sendStreamChunk: () => {},
+      creatorUserId: '@owner:test',
       permissionConfig: { allowedTools: [], deniedTools: [] },
     }),
     ...overrides,
@@ -145,7 +145,7 @@ describe('runChatLoop steer 注入', () => {
           };
           yield { type: 'done', finishReason: 'tool_use' };
           // compact 内联处理在 generator 结束后、下一轮 drain 前执行——此刻注入 steer
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
           return;
         }
         round2Messages = [...messages];
@@ -154,7 +154,7 @@ describe('runChatLoop steer 注入', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     const supplement = round2Messages.find(
@@ -181,8 +181,8 @@ describe('runChatLoop steer 注入', () => {
           };
           yield { type: 'done', finishReason: 'tool_use' };
           // compact 内联处理在 generator 结束后、下一轮 drain 前执行——此刻连续注入两条 steer
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: 'body1' });
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: 'body2' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: 'body1' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: 'body2' });
           return;
         }
         round2Messages = [...messages];
@@ -191,7 +191,7 @@ describe('runChatLoop steer 注入', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     const supplements = round2Messages.filter((m) => m.role === 'user' && m.content.startsWith('[用户中途补充]'));
@@ -217,7 +217,7 @@ describe('runChatLoop steer 注入', () => {
           };
           yield { type: 'done', finishReason: 'tool_use' };
           // 注入 streamSessionId 不匹配的 steer——应当被 abortListener 过滤
-          process.emit('message', { type: 'steer', streamSessionId: 's-other', body: '其他流的补充' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-other', body: '其他流的补充' });
           return;
         }
         round2Messages = [...messages];
@@ -226,7 +226,7 @@ describe('runChatLoop steer 注入', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     const supplements = round2Messages.filter((m) => m.role === 'user' && m.content.startsWith('[用户中途补充]'));
@@ -285,7 +285,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
           };
           yield { type: 'done', finishReason: 'tool_use' };
           // compact 内联处理 + emit steer——下一轮 drain 应当先发 roll chunk 再注入
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
           return;
         }
         round2Messages = [...messages];
@@ -294,7 +294,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     // 断言 1：存在 message_roll chunk，streamSessionId 正确
@@ -346,7 +346,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
             toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
           };
           yield { type: 'done', finishReason: 'tool_use' };
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
           return;
         }
         round2Messages = [...messages];
@@ -355,7 +355,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     // 断言 1：无 message_roll chunk（无文本不换行——防空新行，spec §2.2）
@@ -387,7 +387,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
             toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
           };
           yield { type: 'done', finishReason: 'tool_use' };
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: 'steer1' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: 'steer1' });
           return;
         }
         if (callIndex === 2) {
@@ -397,7 +397,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
             toolCall: { id: 'c2', name: 'compact', arguments: { summary: 'T'.repeat(60) } },
           };
           yield { type: 'done', finishReason: 'tool_use' };
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: 'steer2' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: 'steer2' });
           return;
         }
         // round 3: 自然停止，无新文本也无新 steer
@@ -405,7 +405,7 @@ describe('runChatLoop steer 消息滚动（message_roll）', () => {
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     // 断言：message_roll 出现 2 次（每次 drain 各自一次，streamSessionId 都是 's-steer'）
@@ -453,17 +453,17 @@ describe('runChatLoop abort 语义回归（v2.3.1 留位，abort 仍正交）', 
           };
           yield { type: 'done', finishReason: 'tool_use' };
           // compact 内联处理后注入 steer——下一轮 drain 应当消费
-          process.emit('message', { type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
+          emitChildMessage({ type: 'steer', streamSessionId: 's-steer', body: '补充说明 X' });
           return;
         }
         // 第二轮 generator：先捕获 messages（验证 drain 已注入 steer），再 emit abort 后抛
         round2Messages = [...messages];
-        process.emit('message', { type: 'abort', streamSessionId: 's-steer' });
+        emitChildMessage({ type: 'abort', streamSessionId: 's-steer' });
         throw Object.assign(new Error('中断'), { name: 'AbortError' });
       }) as never,
     });
 
-    const stats = { toolCallsUsed: 0 };
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
     const result = await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-steer');
 
     // stats.aborted === true

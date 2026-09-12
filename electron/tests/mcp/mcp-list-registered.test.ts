@@ -62,7 +62,7 @@ describe('mcp listRegistered / deleteRegistered', () => {
   it('registerMcpDefinition 缺省 source 时默认 marketplace', () => {
     registerMcpDefinition({ id: '1', name: 'a', version: '1', command: 'npx', args: [] });
     const list = listRegistered();
-    expect(list[0].source).toBe('marketplace');
+    expect(list[0]!.source).toBe('marketplace');
   });
 
   it('deleteRegistered 仅 custom 可删；marketplace 抛错', () => {

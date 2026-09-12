@@ -75,7 +75,7 @@ describe('provider_models CRUD', () => {
     const models = listProviderModels(p.id);
     expect(models).toHaveLength(2);
     expect(models[0]).toMatchObject({ providerId: p.id, modelId: 'glm-5.2', enabled: true });
-    expect(typeof models[0].addedAt).toBe('number');
+    expect(typeof models[0]!.addedAt).toBe('number');
   });
 
   it('upsertProviderModel 幂等（重复调用不报错不重复）', async () => {
@@ -105,9 +105,9 @@ describe('provider_models CRUD', () => {
     const p = await createProvider({ name: 'A', baseUrl: 'u', apiKey: 'k' });
     upsertProviderModel(p.id, 'm1');
     setProviderModelEnabled(p.id, 'm1', false);
-    expect(listProviderModels(p.id)[0].enabled).toBe(false);
+    expect(listProviderModels(p.id)[0]!.enabled).toBe(false);
     setProviderModelEnabled(p.id, 'm1', true);
-    expect(listProviderModels(p.id)[0].enabled).toBe(true);
+    expect(listProviderModels(p.id)[0]!.enabled).toBe(true);
   });
 
   it('removeProviderModel 删除指定模型行', async () => {
@@ -117,7 +117,7 @@ describe('provider_models CRUD', () => {
     removeProviderModel(p.id, 'm1');
     const models = listProviderModels(p.id);
     expect(models).toHaveLength(1);
-    expect(models[0].modelId).toBe('m2');
+    expect(models[0]!.modelId).toBe('m2');
   });
 
   it('listProviderModels 按 provider 隔离 + 未知 provider 返回空数组', async () => {
@@ -148,14 +148,14 @@ describe('provider_models.context_window（压缩重构 Task 1，migration v30�
   it('新插入行缺省 contextWindow=null（未知，走内置目录）', async () => {
     const p = await createProvider({ name: 'A', baseUrl: 'u', apiKey: 'k' });
     upsertProviderModel(p.id, 'm1');
-    expect(listProviderModels(p.id)[0].contextWindow).toBeNull();
+    expect(listProviderModels(p.id)[0]!.contextWindow).toBeNull();
   });
 
   it('setProviderModelWindow 写入后 listProviderModels 读回', async () => {
     const p = await createProvider({ name: 'A', baseUrl: 'u', apiKey: 'k' });
     upsertProviderModel(p.id, 'm1');
     setProviderModelWindow(p.id, 'm1', 131072);
-    expect(listProviderModels(p.id)[0].contextWindow).toBe(131072);
+    expect(listProviderModels(p.id)[0]!.contextWindow).toBe(131072);
   });
 
   it('setProviderModelWindow(null) 清除覆盖（回退内置目录）', async () => {
@@ -163,7 +163,7 @@ describe('provider_models.context_window（压缩重构 Task 1，migration v30�
     upsertProviderModel(p.id, 'm1');
     setProviderModelWindow(p.id, 'm1', 131072);
     setProviderModelWindow(p.id, 'm1', null);
-    expect(listProviderModels(p.id)[0].contextWindow).toBeNull();
+    expect(listProviderModels(p.id)[0]!.contextWindow).toBeNull();
   });
 
   it('非法值（0 / 负数 / 非整数）在写通道源头被拒', async () => {
@@ -173,7 +173,7 @@ describe('provider_models.context_window（压缩重构 Task 1，migration v30�
     expect(() => setProviderModelWindow(p.id, 'm1', -100)).toThrow();
     expect(() => setProviderModelWindow(p.id, 'm1', 1.5)).toThrow();
     // 拒绝后原值不被污染
-    expect(listProviderModels(p.id)[0].contextWindow).toBeNull();
+    expect(listProviderModels(p.id)[0]!.contextWindow).toBeNull();
   });
 
   it('不存在的模型行：no-op 不炸（与 setProviderModelEnabled 行为一致）', async () => {

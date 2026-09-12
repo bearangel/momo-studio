@@ -75,6 +75,21 @@ const mockApi = {
   task: {
     listInterrupted: vi.fn(),
   },
+  // v2.7 Task 8：browser 面（BrowserSidebar 消费；MainShell 桩下不实际渲染，
+  // 默认 getState 空态 + 双订阅 no-op——保持 mockApi 形状与 ApiSurface 对齐）
+  browser: {
+    getState: vi.fn().mockResolvedValue({
+      workspaceId: '',
+      tabs: [],
+      current: 0,
+      url: '',
+      title: '',
+      takeover: 'agent' as const,
+      trusted: false,
+    }),
+    onBrowserState: vi.fn().mockReturnValue(() => {}),
+    onBrowserNotice: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 // 默认 sandbox 聚合信息（linux 已可用 → SandboxNotice 返回 null）

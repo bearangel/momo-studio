@@ -102,7 +102,7 @@ function installScriptedProvider(): void {
         };
         yield { type: 'done', finishReason: 'tool_use' };
         if (step.emitSteer !== undefined) {
-          process.emit('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
+          (process.emit as (event: string, ...args: unknown[]) => boolean)('message', { type: 'steer', streamSessionId: SID, body: step.emitSteer });
         }
       } else {
         yield { type: 'thinking', content: '' };

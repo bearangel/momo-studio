@@ -87,6 +87,6 @@ describe('message_events repo', () => {
     const payload = { toolName: 'read_file', args: { path: '/a/b/c.ts' }, result: { lines: [1, 2, 3] } };
     insertEvent({ messageId: msgId, seq: 0, eventType: 'tool_call_start', payload });
     const list = listEventsByMessage(msgId);
-    expect(list[0].payload).toEqual(payload);
+    expect(list[0]!.payload).toEqual(payload);
   });
 });

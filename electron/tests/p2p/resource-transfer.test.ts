@@ -606,7 +606,7 @@ describe('handleResourceRequest 供给方', () => {
     await flush();
 
     expect(sendResourceProvide).toHaveBeenCalledTimes(1);
-    const [target, prov] = sendResourceProvide.mock.calls[0] as [
+    const [target, prov] = sendResourceProvide.mock.calls[0] as unknown as [
       string,
       { requestId: string; definition: Record<string, unknown> | null },
     ];
@@ -631,7 +631,7 @@ describe('handleResourceRequest 供给方', () => {
     await flush();
 
     expect(sendResourceProvide).toHaveBeenCalledTimes(1);
-    const [, prov] = sendResourceProvide.mock.calls[0] as [
+    const [, prov] = sendResourceProvide.mock.calls[0] as unknown as [
       string,
       { requestId: string; definition: Record<string, unknown> | null },
     ];
@@ -773,11 +773,14 @@ describe('resource:install p2p 分支端到端', () => {
 
   it('⑦ 节点不在缓存（离线 / 目录已 prune）→ 友好错误（区别于通用 id 不存在）', async () => {
     // 不 seed 缓存——getSharedResources 返回空 → resolveResourceById null
-    const err = await ipcHandlers
-      .get('resource:install')!({} as never, 'p2p-agent-a1b2c3d4-gone')
-      .catch((e: Error) => e);
+    const install = ipcHandlers.get('resource:install') as
+      | ((event: unknown, id: string) => Promise<unknown>)
+      | undefined;
+    const err = (await install!({} as never, 'p2p-agent-a1b2c3d4-gone').catch(
+      (e: unknown) => e,
+    )) as Error;
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toMatch(/来源节点可能已离线/);
+    expect((err as unknown as Error).message).toMatch(/来源节点可能已离线/);
   });
 
   it('⑦b 非 p2p 源的既有守卫不变（custom 不可安装）', async () => {

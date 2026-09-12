@@ -367,26 +367,31 @@ view.webContents 'render-process-gone' → reload() + browser:notice('页面崩�
 | 信任拒绝 | `BrowserDeniedError` | `浏览器已被设置禁用（设置→浏览器）` | — |
 | evaluate 关 | `EvaluateDisabledError` | `browser_evaluate 已被设置禁用` | — |
 | 用户接管中 | `BrowserTakenOverError` | `浏览器被用户接管，等待释放后重试` | 🟡 徽标 |
-| selector 未命中 | `BrowserSelectorError` | `选择器 "x" 未匹配元素；可交互元素前 5：…` | — |
+| selector 未命中 | `BrowserSelectorError` | `选择器 "x" 已匹配 0 个元素；可交互元素前 5：…` | — |
 | file:// 越界 | `BrowserFileAccessError` | `file:// 仅限 workspace 目录内` | — |
 | 域名策略命中 | `BrowserDomainBlockedError` | `域名 "x" 被浏览器策略拦截` | — |
 | 协议不支持 | `BrowserProtocolError` | `仅支持 http(s) 与 workspace 内 file://` | — |
 | 导航失败 | `BrowserNavigationError` | `导航失败: <did-fail-load description>` | — |
 | 无活跃视图 | `BrowserNoViewError` | `浏览器未打开（先 browser_navigate）` | — |
+| 按键不支持 | `BrowserInvalidKeyError` | `按键 "x" 不受支持（白名单：Enter/Tab/Escape/PageDown/PageUp/ArrowUp/ArrowDown/Home/End）` | — |
+| 快照失败 | `BrowserSnapshotError` | `快照获取失败: <detail>（若页面正在使用 DevTools 请关闭后重试）` | — |
 
-错误恢复原则：全部可重试类错误（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。
+错误恢复原则：全部可重试类错误（agent 自决）；需用户介入的（信任/接管）信息中带明确指引。（T11 校对：表行已与 `electron/src/main/browser/errors.ts` 的 12 个 code 类集对齐——`invalid_key` 系 T3 增补、`snapshot` 系 T4 增补，此前表漏收。）
 
 ## 9. 数据存储
 
-migration v32（幂等，`workspace_settings` 加 6 列）：
+migration 034（幂等；**勘误**：v0.2 写作 v32 系猜测——032/033 已被 v2.3/v2.5 占用；且 `workspace_settings` 表在全库从未存在（仅 room_settings/global_settings），故为建表而非加列）：
 
 ```sql
-ALTER TABLE workspace_settings ADD COLUMN trust_browser TEXT NOT NULL DEFAULT 'ask';
-ALTER TABLE workspace_settings ADD COLUMN browser_evaluate_enabled INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_blacklist TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE workspace_settings ADD COLUMN browser_domain_whitelist TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_collapsed INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL DEFAULT 380;
+CREATE TABLE IF NOT EXISTS workspace_settings (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  trust_browser TEXT NOT NULL DEFAULT 'ask',
+  browser_evaluate_enabled INTEGER NOT NULL DEFAULT 0,
+  browser_domain_blacklist TEXT NOT NULL DEFAULT '[]',
+  browser_domain_whitelist TEXT NOT NULL DEFAULT '[]',
+  browser_sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
+  browser_sidebar_width INTEGER NOT NULL DEFAULT 380
+);
 ```
 
 浏览器 cookie/storage 在 partition 目录（Electron 自管，不入 state.db）。tab 清单仅内存（重启丢失可接受；登录态不丢）。
@@ -397,7 +402,7 @@ ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL
 
 | 层 | 覆盖 | mock 边界 |
 |---|---|---|
-| 单测（electron/tests/browser/） | 信任门全分支 / 域名策略 / **file:// 限定（含 .. 与 symlink 逃逸用例）** / takeover 状态机 / tab 注册表与 stash-restore / selector 解析器（前缀拆分+转义）/ snapshot 格式化器（fixture JSON→行）/ 错误类信息 / migration v32 | Electron API（WebContentsView/session/debugger）mock 在模块边界；store 真 SQLite |
+| 单测（electron/tests/browser/） | 信任门全分支 / 域名策略 / **file:// 限定（含 .. 与 symlink 逃逸用例）** / takeover 状态机 / tab 注册表与 stash-restore / selector 解析器（前缀拆分+转义）/ snapshot 格式化器（fixture JSON→行）/ 错误类信息 / migration 034 | Electron API（WebContentsView/session/debugger）mock 在模块边界；store 真 SQLite |
 | e2e（tests/e2e/，Playwright 起 xvfb 真应用） | navigate→页面可见 / click/type 真交互 / snapshot 真输出 / tabs 开关切 / popup 收编 / 下载拦截 / 崩溃重载 / bounds 随窗口 resize 同步 | 全真实 |
 | macOS 主机验收 | §12.4 场景（Vue 项目全流程 / 登录态跨重启 / 接管往返） | 全真实 |
 
@@ -415,7 +420,7 @@ ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL
 | 6 | tab 注册表 + workspace 切换 stash/restore | 单测 |
 | 7 | selector 四语法解析 + 未命中提示 | 单测 |
 | 8 | snapshot 格式化（selector 提示行） | 单测 |
-| 9 | migration v32 六列幂等 | 单测 |
+| 9 | migration 034 建表六列幂等 | 单测 |
 | 10 | IPC 全通道双端类型 + 状态推送 | 单测 |
 | 11 | sidebar chrome（tabs/地址栏/探活/接管/折叠）colocated | renderer 单测 |
 | 12 | 信任卡 + 设置页分类 | renderer 单测 |
@@ -431,7 +436,7 @@ ALTER TABLE workspace_settings ADD COLUMN browser_sidebar_width INTEGER NOT NULL
 
 ### 12.1 Migration
 
-v32 六列（§9），幂等 ALTER；现有 workspace 默认 `ask` 触发信任卡。失败回滚走标准 SQLite 备份策略。
+034 建表（§9 勘误版），幂等；现有 workspace 默认 `ask` 触发信任卡。forward-only 不回滚（对齐 032/033 约定）。
 
 ### 12.2 实施任务分组（11 task）
 
@@ -440,7 +445,7 @@ v32 六列（§9），幂等 ALTER；现有 workspace 默认 `ask` 触发信任�
 - T3 selector 引擎 + sendInputEvent 动作层（click/type/press_key/hover/scroll）
 - T4 snapshot：debugger 懒附加 + 格式化器
 - T5 BrowserTools 12 工具 defs + 路由 + 注册 + 门控（mock manager）
-- T6 migration v32 + settings 读写
+- T6 migration 034 + settings 读写
 - T7 IPC 全通道 + preload + types.d.ts + 统一状态推送
 - T8 BrowserSidebar chrome（AddressBar/TabsBar/TakeoverIndicator/DevServerDropdown/折叠/占位上报）
 - T9 信任卡 + BrowserSettings 分类页

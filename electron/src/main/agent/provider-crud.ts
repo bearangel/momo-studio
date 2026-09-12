@@ -169,7 +169,8 @@ export async function createProvider(input: {
 
 export async function updateProvider(input: {
   id: string; name?: string; baseUrl?: string; apiKey?: string;
-  defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
+  /** null = 显式清空默认模型（区别于 undefined = 不修改）——与下方运行时分支一致 */
+  defaultModel?: string | null; isDefault?: boolean; platform?: ProviderPlatform;
 }): Promise<ModelProvider> {
   const existing = getProvider(input.id);
   if (!existing) throw new Error(`供应商不存在: ${input.id}`);

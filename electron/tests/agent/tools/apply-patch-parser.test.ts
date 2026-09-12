@@ -3,6 +3,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { parsePatch } from '../../../src/main/agent/tools/apply-patch-parser';
+import type { PatchOp } from '../../../src/main/agent/tools/apply-patch-parser';
+
+type AddOp = Extract<PatchOp, { kind: 'add' }>;
+type UpdateOp = Extract<PatchOp, { kind: 'update' }>;
 
 describe('parsePatch — add op', () => {
   it('解析单文件 add', () => {
@@ -23,7 +27,7 @@ describe('parsePatch — add op', () => {
     const patch = `*** Add File: empty.ts
 `;
     const ast = parsePatch(patch);
-    expect(ast.ops[0]?.content).toBe('');
+    expect((ast.ops[0] as AddOp | undefined)?.content).toBe('');
   });
 
   it('add 多文件', () => {
@@ -57,8 +61,8 @@ describe('parsePatch — update op', () => {
 `;
     const ast = parsePatch(patch);
     expect(ast.ops[0]?.kind).toBe('update');
-    expect(ast.ops[0]?.hunk?.anchor).toBe('const old = 1;');
-    expect(ast.ops[0]?.hunk?.changes).toEqual([
+    expect((ast.ops[0] as UpdateOp | undefined)?.hunk?.anchor).toBe('const old = 1;');
+    expect((ast.ops[0] as UpdateOp | undefined)?.hunk?.changes).toEqual([
       { kind: '-', text: 'const old = 1;' },
       { kind: '+', text: 'const updated = 1;' },
     ]);
@@ -72,7 +76,7 @@ describe('parsePatch — update op', () => {
 +added
 `;
     const ast = parsePatch(patch);
-    expect(ast.ops[0]?.hunk?.changes).toEqual([
+    expect((ast.ops[0] as UpdateOp | undefined)?.hunk?.changes).toEqual([
       { kind: ' ', text: 'context line' },
       { kind: '-', text: 'removed' },
       { kind: '+', text: 'added' },
