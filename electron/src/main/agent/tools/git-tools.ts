@@ -26,6 +26,11 @@
 //     并发查 branch --show-current / status --porcelain 行数，行格式
 //     `root: <bool>  branch: <name|?>  dirty: <n|50+|?>  <相对路径|(.)>`；
 //     单仓查询失败容错（该行字段显示 ?），空清单输出提示行。
+//   - v2.9 多仓 git（Task 4）：9 工具接入 repo 参数——各 execute case 经
+//     resolveRepoArg（统一入口，内调 Task 2 的 resolveRepoPath）一次解析后
+//     透传 runGit 第四参；缺省（不传 repo）保持 undefined → runGit 不前置
+//     -C，spawn args 与既有行为逐字节一致。git_commit 的 GitPolicy 分支
+//     保护改读「目标仓」当前分支（策略仍 workspace 级单源，跨仓均匀继承）。
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -146,6 +151,26 @@ export function resolveRepoPath(workspaceDir: string, wsFs: WorkspaceFS, repo: u
 }
 
 /**
+ * repo 参数 → repoPath（Task 4 统一入口）：缺省（args.repo === undefined）保持
+ * undefined——runGit 不前置 `-C`，spawn args 与既有缺省行为逐字节一致（spec §2.2
+ * 不变量 1「缺省零变化」）；指定时经 resolveRepoPath 双校验（缺省根仓路径不
+ * 走该路径，避免无谓的 discoverRepos 扫描）。未命中 / 越界 / 非 string 的
+ * 错误文案由 resolveRepoPath 统一产出（9 工具一致）。
+ */
+function resolveRepoArg(args: Record<string, unknown>, ctx: ToolContext): string | undefined {
+  return args.repo === undefined ? undefined : resolveRepoPath(ctx.workspaceDir, ctx.wsFs, args.repo);
+}
+
+/** 9 工具 inputSchema 共用的 repo 参数定义（spec §3.2 契约文案）。*/
+const REPO_PARAM: { type: 'string'; description: string } = {
+  type: 'string',
+  description: '目标仓（相对 workspace 路径，缺省根仓；可用仓见 git_repos）',
+};
+
+/** 9 工具描述统一追加的多仓提示尾句（spec §3.4）。*/
+const REPO_HINT = '多仓 workspace 中可用 repo 参数指定内层仓（先 git_repos 查询可用仓）';
+
+/**
  * GitTools —— git 工具模块。v1.5 Task 9 引入。
  *
  * 工具清单（v2.9 Task 3 起共 10 个）：
@@ -164,45 +189,51 @@ export class GitTools implements ToolModule {
       },
       {
         name: 'git_status',
-        description: '查看 workspace git 状态（porcelain 格式）',
-        inputSchema: { type: 'object', properties: {} },
+        description: '查看 workspace git 状态（porcelain 格式）。' + REPO_HINT,
+        inputSchema: {
+          type: 'object',
+          properties: { repo: REPO_PARAM },
+        },
       },
       {
         name: 'git_diff',
-        description: '查看 git diff（默认同时显示 staged 和 unstaged）',
+        description: '查看 git diff（默认同时显示 staged 和 unstaged）。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             staged: { type: 'boolean' },
             path: { type: 'string' },
+            repo: REPO_PARAM,
           },
         },
       },
       {
         name: 'git_log',
-        description: '查看提交历史（oneline 格式）',
+        description: '查看提交历史（oneline 格式）。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             limit: { type: 'number', description: '默认 20，上限 100' },
             branch: { type: 'string' },
+            repo: REPO_PARAM,
           },
         },
       },
       {
         name: 'git_show',
-        description: '查看某个 commit 的详情（message + diff）',
+        description: '查看某个 commit 的详情（message + diff）。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             commit: { type: 'string', description: '默认 HEAD' },
             stat: { type: 'boolean' },
+            repo: REPO_PARAM,
           },
         },
       },
       {
         name: 'git_add',
-        description: '暂存文件（git add）。paths 为相对 workspace 的路径数组',
+        description: '暂存文件（git add）。paths 为相对 workspace 的路径数组。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
@@ -211,53 +242,60 @@ export class GitTools implements ToolModule {
               items: { type: 'string' },
               description: '相对 workspace 的文件路径，逐个走沙箱校验',
             },
+            repo: REPO_PARAM,
           },
           required: ['paths'],
         },
       },
       {
         name: 'git_commit',
-        description: '提交暂存区到本地仓库。message 经 workspace GitPolicy 校验（branch + commit message pattern）。',
+        description:
+          '提交暂存区到本地仓库。message 经 workspace GitPolicy 校验（branch + commit message pattern）。' +
+          REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             message: { type: 'string', description: 'commit message 首行' },
             description: { type: 'string', description: 'commit body（可选）' },
+            repo: REPO_PARAM,
           },
           required: ['message'],
         },
       },
       {
         name: 'git_branch',
-        description: '分支管理（双语义）：list=true 或省略 name → 列出分支；给 name → 创建分支',
+        description: '分支管理（双语义）：list=true 或省略 name → 列出分支；给 name → 创建分支。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             list: { type: 'boolean', description: 'true → 列出现有分支' },
             name: { type: 'string', description: '给定则创建该分支' },
+            repo: REPO_PARAM,
           },
         },
       },
       {
         name: 'git_checkout',
-        description: '切换分支（git checkout <branch>）。仅切分支，不接受 path/commit',
+        description: '切换分支（git checkout <branch>）。仅切分支，不接受 path/commit。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             branch: { type: 'string', description: '目标分支名（必须已存在）' },
+            repo: REPO_PARAM,
           },
           required: ['branch'],
         },
       },
       {
         name: 'git_stash',
-        description: 'stash 管理：push（含 -m message）/ list / pop / drop',
+        description: 'stash 管理：push（含 -m message）/ list / pop / drop。' + REPO_HINT,
         inputSchema: {
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['push', 'list', 'pop', 'drop'] },
             message: { type: 'string', description: '仅 push 使用，对应 -m' },
             index: { type: 'number', description: 'pop/drop 的 stash 索引，默认 0' },
+            repo: REPO_PARAM,
           },
           required: ['action'],
         },
@@ -330,8 +368,9 @@ async function executeRepos(ctx: ToolContext): Promise<string> {
 }
 
 /** git_status：porcelain v1 格式。空输出时返回友好提示。*/
-async function executeStatus(_args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
-  const result = await runGit(['status', '--porcelain=v1'], ctx);
+async function executeStatus(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
+  const result = await runGit(['status', '--porcelain=v1'], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git status 失败: ${result.stderr}`);
   if (!result.stdout.trim()) return '干净的工作区（nothing to commit）';
   return truncateString(result.stdout, OUTPUT_LIMITS.git_status);
@@ -339,14 +378,18 @@ async function executeStatus(_args: Record<string, unknown>, ctx: ToolContext): 
 
 /** git_diff：默认 unstaged；staged=true 加 --staged；path 走沙箱断言。*/
 async function executeDiff(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const gitArgs = ['diff'];
   if (args.staged === true) gitArgs.push('--staged');
   if (typeof args.path === 'string') {
-    // 路径双校验：assertInWorkspace 拒绝 `..` 越界与符号链接逃逸。
+    // 路径双校验：assertInWorkspace 拒绝 `..` 越界与符号链接逃逸。多仓语义下
+    // 该校验保持「相对 workspace」不动（路径边界不因 repo 参数改变）；指定
+    // repo 后 path 由 git 在 `-C <repoPath>` 下按仓内相对路径解析——仓已在
+    // workspace 内 + git 自限于仓内，无逃逸面。
     ctx.wsFs.assertInWorkspace(args.path);
     gitArgs.push('--', args.path);
   }
-  const result = await runGit(gitArgs, ctx);
+  const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git diff 失败: ${result.stderr}`);
   if (!result.stdout.trim()) return '(无差异)';
   return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
@@ -354,61 +397,70 @@ async function executeDiff(args: Record<string, unknown>, ctx: ToolContext): Pro
 
 /** git_log：oneline 格式，limit 钳制到 [1, 100]，默认 20。*/
 async function executeLog(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const limit = typeof args.limit === 'number' ? Math.min(100, Math.max(1, args.limit)) : 20;
   const gitArgs = ['log', '--oneline', '-n', String(limit)];
   if (typeof args.branch === 'string') gitArgs.push(args.branch);
-  const result = await runGit(gitArgs, ctx);
+  const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git log 失败: ${result.stderr}`);
   return truncateString(result.stdout, OUTPUT_LIMITS.git_status);
 }
 
 /** git_show：默认 HEAD；stat=true 加 --stat；maxOutput 用更大的 git_show_diff。*/
 async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const commit = typeof args.commit === 'string' ? args.commit : 'HEAD';
   const gitArgs = ['show', commit];
   if (args.stat === true) gitArgs.push('--stat');
-  const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff);
+  const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff, repoPath);
   if (result.code !== 0) throw new Error(`git show 失败: ${result.stderr}`);
   return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
 }
 
 /** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。*/
 async function executeAdd(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   if (!Array.isArray(args.paths)) throw new Error('参数 "paths" 缺失或不是数组');
   const paths = args.paths.map((p, i) => {
     if (typeof p !== 'string') throw new Error(`paths[${i}] 不是字符串`);
+    // 沙箱校验保持「相对 workspace」语义不动（与 git_diff.path 同口径）：指定
+    // repo 后 paths 由 git 在 `-C <repoPath>` 下按仓内相对路径解析——仓已在
+    // workspace 内 + git 自限于仓内，无逃逸面。
     ctx.wsFs.assertInWorkspace(p);
     return p;
   });
-  const result = await runGit(['add', ...paths], ctx);
+  const result = await runGit(['add', ...paths], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git add 失败: ${result.stderr}`);
   return `已暂存 ${paths.length} 个文件`;
 }
 
 /** git_branch：list=true 或 name 缺失 → 列出分支；否则创建 name 分支。*/
 async function executeBranch(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const wantList = args.list === true || typeof args.name !== 'string';
   if (wantList) {
-    const result = await runGit(['branch'], ctx);
+    const result = await runGit(['branch'], ctx, undefined, repoPath);
     if (result.code !== 0) throw new Error(`git branch 失败: ${result.stderr}`);
     return result.stdout;
   }
   const name = parseStringArg(args.name, 'name');
-  const result = await runGit(['branch', name], ctx);
+  const result = await runGit(['branch', name], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git branch 创建失败: ${result.stderr}`);
   return `分支已创建: ${name}`;
 }
 
 /** git_checkout：仅切分支（不接受 path/commit，防丢工作区修改与 detached HEAD）。*/
 async function executeCheckout(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const branch = parseStringArg(args.branch, 'branch');
-  const result = await runGit(['checkout', branch], ctx);
+  const result = await runGit(['checkout', branch], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git checkout 失败: ${result.stderr}`);
   return `已切换到分支: ${branch}`;
 }
 
 /** git_stash：push/list/pop/drop 四 action。push 支持 -m；pop/drop 接 optional index。*/
 async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const action = parseStringArg(args.action, 'action');
   let gitArgs: string[];
   switch (action) {
@@ -429,7 +481,7 @@ async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Pr
     }
     default: throw new Error(`未知 git_stash action: ${action}`);
   }
-  const result = await runGit(gitArgs, ctx);
+  const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git stash ${action} 失败: ${result.stderr}`);
   return result.stdout || `(无输出，action=${action} 完成)`;
 }
@@ -439,25 +491,34 @@ async function executeStash(args: Record<string, unknown>, ctx: ToolContext): Pr
  *
  * 三层校验：
  *   1. allowAgentCommits 总开关——false 直接拒绝
- *   2. 分支保护——当前在 defaultBranch 时自动 checkout -b 到 fallback 分支
+ *   2. 分支保护——目标仓当前在 defaultBranch 时自动 checkout -b 到 fallback 分支
  *   3. commit message pattern——isCommitBlocked 判定（strict 违规阻断 / warning 告警）
  *
  * 校验失败（strict 违规）时回切 defaultBranch + 删 fallback 分支，不留空分支。
  * warning 违规不阻断提交，在返回值末尾追加告警。
+ *
+ * 多仓语义（Task 4）：repo 解析先于 GitPolicy 读取（repo 未命中的统一报错
+ * 不依赖 DB）；策略本身仍 workspace 级单源（跨仓均匀继承）——但分支保护
+ * 读的是**目标仓**（repoPath）的当前分支，分支切换 / 回滚 / 提交也全部
+ * 落在目标仓。缺省根仓时 repoPath 为 undefined，行为与既有逐字节一致。
  */
 async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const repoPath = resolveRepoArg(args, ctx);
   const message = parseStringArg(args.message, 'message');
   const description = typeof args.description === 'string' ? args.description : undefined;
 
   const policy = getGitPolicy(ctx.workspaceId);
 
-  // 第一层：总开关
+  // 第一层：总开关（仓无关——workspace 级单源，根仓与内层仓同拒）
   if (!policy.allowAgentCommits) {
-    throw new Error('GitPolicy 禁止 agent 自动提交（allowAgentCommits=false）');
+    throw new Error(
+      'GitPolicy 禁止 agent 自动提交（allowAgentCommits=false）。' +
+        '如需允许，请在设置的 Git 策略中开启；否则请用 git_diff 呈现变更交由人工审查提交。',
+    );
   }
 
-  // 第二层：分支保护——在 defaultBranch 上不允许直接提交，自动切到 fallback
-  const branchResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], ctx);
+  // 第二层：分支保护——目标仓在 defaultBranch 上不允许直接提交，自动切到 fallback
+  const branchResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], ctx, undefined, repoPath);
   if (branchResult.code !== 0) throw new Error(`获取当前分支失败: ${branchResult.stderr}`);
   const currentBranch = branchResult.stdout.trim();
 
@@ -467,7 +528,7 @@ async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): P
       agentSlug: 'agent',
       taskId: ctx.streamSessionId,
     });
-    const switchResult = await runGit(['checkout', '-b', fallback], ctx);
+    const switchResult = await runGit(['checkout', '-b', fallback], ctx, undefined, repoPath);
     if (switchResult.code !== 0) throw new Error(`自动切到 fallback 分支失败: ${switchResult.stderr}`);
     branchSwitchedTo = fallback;
   }
@@ -478,8 +539,8 @@ async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): P
   if (blocked) {
     // 回切 defaultBranch + 删 fallback 分支，避免残留空分支
     if (branchSwitchedTo) {
-      await runGit(['checkout', policy.defaultBranch], ctx);
-      await runGit(['branch', '-D', branchSwitchedTo], ctx);
+      await runGit(['checkout', policy.defaultBranch], ctx, undefined, repoPath);
+      await runGit(['branch', '-D', branchSwitchedTo], ctx, undefined, repoPath);
     }
     const validation = validateCommitMessage(message, policy);
     throw new Error(
@@ -488,7 +549,7 @@ async function executeCommit(args: Record<string, unknown>, ctx: ToolContext): P
   }
 
   const finalMessage = renderCommitMessage(message, description, policy.commitMessage);
-  const result = await runGit(['commit', '-m', finalMessage], ctx);
+  const result = await runGit(['commit', '-m', finalMessage], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git commit 失败: ${result.stderr}`);
 
   const parts: string[] = [];
