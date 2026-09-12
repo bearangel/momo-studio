@@ -72,6 +72,13 @@ export interface TaskConfig {
     steers: string[];
     degenerate: boolean;
   };
+  /**
+   * v2.8.0 Orchestration（Task 6）：followup 续聊前缀——routeDispatch 从 dispatch
+   * 事件 content.history_prefix 映射而来（executeFollowup 生产），经
+   * child.send({ type: 'task-config' }) 透传到子进程 runChatLoop 拼接。
+   * 未携带时载荷无该字段（既有 dispatch 零变化）。
+   */
+  historyPrefix?: import('./llm-provider').LLMMessage[];
 }
 
 /** notifyTaskReply 的入参——camelCase（由 RouterService 从 task_reply event 转换而来） */
@@ -260,6 +267,9 @@ export class AgentRunner {
       // resume.test.ts Part A 锁该透传；摘掉即红）。条件展开避免 undefined 字段
       // 污染 IPC payload（与 dispatchContext / maxToolCalls 同型）
       ...(task.resume ? { resume: task.resume } : {}),
+      // v2.8.0 Orchestration（Task 6）：followup 续聊前缀同型透传
+      //（dispatch-followup.test.ts 接线锁；摘掉即红）
+      ...(task.historyPrefix ? { historyPrefix: task.historyPrefix } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };

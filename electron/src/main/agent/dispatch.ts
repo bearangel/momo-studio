@@ -7,6 +7,7 @@
 // 纯函数模块，不持有任何外部副作用，便于单测。
 
 import { randomUUID } from 'node:crypto';
+import type { LLMMessage } from './llm-provider';
 
 /** dispatch 消息内容（v2 Task 10 起经内部事件桥传输）。dispatch_from/dispatch_to 的值是 assignmentId */
 export interface DispatchContent {
@@ -29,6 +30,13 @@ export interface DispatchContent {
    * （P0-7：此前 routeDispatch 自造新 UUID，嵌套展开区永远找不到子流）。
    */
   sub_stream_session_id?: string;
+  /**
+   * v2.8.0 Orchestration（Task 6）：followup 续聊前缀——executeFollowup 把
+   * rebuildSubConversation 重建的子会话历史放此处随 dispatch 事件传输，
+   * routeDispatch 映射为 TaskConfig.historyPrefix（子 agent runChatLoop 拼接在
+   * system 之后、新 user 轮之前）。仅 followup 派发设置；普通 dispatch 缺席。
+   */
+  history_prefix?: LLMMessage[];
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -133,6 +141,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
   if (typeof content.body !== 'string') return null;
   if (typeof content.dispatch_from !== 'string') return null;
   if (typeof content.dispatch_to !== 'string') return null;
+  const historyPrefix = parseHistoryPrefix(content.history_prefix);
   return {
     body: content.body,
     task_id: content.task_id,
@@ -150,7 +159,29 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
     ...(typeof content.sub_stream_session_id === 'string'
       ? { sub_stream_session_id: content.sub_stream_session_id }
       : {}),
+    ...(historyPrefix !== undefined ? { history_prefix: historyPrefix } : {}),
   };
+}
+
+/** LLMMessage.role 合法枚举（与 llm-provider LLMMessage 同步） */
+const VALID_PREFIX_ROLES: ReadonlySet<string> = new Set(['system', 'user', 'assistant', 'tool']);
+
+/**
+ * 校验 history_prefix 载荷（v2.8.0 Task 6）：数组且每条 {role 枚举内, content string}
+ * 才原样返回；否则 undefined（整字段丢弃——半截历史比没有历史更危险，降级方向安全）。
+ * 生产者 executeFollowup / 消费者 routeDispatch（映射 TaskConfig.historyPrefix）共用。
+ */
+export function parseHistoryPrefix(raw: unknown): LLMMessage[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: LLMMessage[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) return undefined;
+    const r = item as { role?: unknown; content?: unknown };
+    if (typeof r.role !== 'string' || !VALID_PREFIX_ROLES.has(r.role)) return undefined;
+    if (typeof r.content !== 'string') return undefined;
+    out.push({ role: r.role as LLMMessage['role'], content: r.content });
+  }
+  return out;
 }
 
 /** 合法 task_reply 状态枚举——与 TaskReplyContent['status'] 同步 */

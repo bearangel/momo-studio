@@ -21,10 +21,14 @@ import {
   buildAbortDispatchMessage,
   parseTaskReply,
 } from './dispatch';
+import type { DispatchContent } from './dispatch';
 import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
 import type { RuntimeConfig } from './runtime-config';
 import type { SubAgentRef } from './builtin-tools';
 import { getDb } from '../storage/db';
+import { randomUUID } from 'node:crypto';
+import { rebuildSubConversation } from './sub-history-reconstructor';
+import { appendFollowupQuestionRow } from './chain-writer';
 
 /** 渐进式 dispatch 回复超时：第一阶段 3 分钟，第二阶段 6 分钟，合计 9 分钟 */
 const DISPATCH_STAGE_TIMEOUTS_MS = [180_000, 360_000];
@@ -259,6 +263,70 @@ function dispatchOnce(
 }
 
 /**
+ * 注册 pendingReplies 等待 task_reply（executeDispatch / executeFollowup 共用
+ * 等待封装，v2.8.0 T6 抽出——两执行体的渐进式超时与 abort 清理语义完全一致）。
+ *
+ * 防竞态纪律：本函数必须同步调用于 dispatch 事件发送**之前**（Promise executor
+ * 同步执行，pendingReplies.set 先于 sendDispatchEvent 返回）——子 agent 极快
+ * 回执时 reply 不因注册迟到而丢失。
+ *
+ * abort 语义（v1.5.1 起）：signal 触发即清理 entry + reject(AbortError)，不等
+ * 渐进式超时；settle 路径（reply 到达 / 超时）经 abortCleanup 移除监听器，
+ * 防 reply 后再 abort 重复发 abort_dispatch（minor-10）。
+ */
+function waitForTaskReply(
+  taskId: string,
+  subSlug: string,
+  config: RuntimeConfig,
+  executionSessionId: string | undefined,
+  subStreamSessionId: string | undefined,
+  signal?: AbortSignal,
+): Promise<{ body: string; toolCallsUsed: number }> {
+  return new Promise<{ body: string; toolCallsUsed: number }>((resolve, reject) => {
+    pendingReplies.set(taskId, {
+      resolve,
+      reject,
+      timer: setTimeout(() => {}, 0), // 占位，armDispatchTimer 会替换
+      stage: 0,
+      subSlug,
+    });
+    armDispatchTimer(taskId);
+
+    // v1.5.1：监听 abortSignal，被中断时立即清理 + reject（不等渐进式超时）
+    if (signal) {
+      const onAbort = (): void => {
+        const entry = pendingReplies.get(taskId);
+        if (entry) {
+          clearTimeout(entry.timer);
+          pendingReplies.delete(taskId);
+        }
+        // 发 abort_dispatch 内部事件兜底通知子 agent——子 agent 此刻可能尚未启动，
+        // 主进程 abortStream 找不到它。事件桥是 transient 进程内桥（路由表在
+        // RouterService.runners Map），未启动的子 agent 收不到此事件；兜底是
+        // PM 侧 onAbort 立即 reject + 子 agent 自身渐进式超时（3+6=9 分钟）
+        // 自然收敛——而非依赖事件桥把 abort 投递到后续启动的子 agent。
+        const abortEvt = buildAbortDispatchMessage({
+          taskId,
+          subStreamSessionId,
+        });
+        sendAbortDispatchEvent(executionSessionId ?? '', config.agentUserId, abortEvt.content);
+        const err = new Error('dispatch 被中断');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+      // settle 路径（reply 到达 / 超时 reject）需调 cleanup 移除监听器——否则
+      // 后续 abort 会再次触发 onAbort（即便 entry 已删，仍会发 abort_dispatch
+      // 给本不存在的子 agent / 污染 send 计数）
+      const entry = pendingReplies.get(taskId);
+      if (entry) entry.abortCleanup = cleanup;
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+/**
  * 主 agent 执行 dispatch：<slug> 工具——经内部事件桥发送 dispatch 消息
  * （child IPC → internal-event-bridge → RouterService.routeDispatch），
  * 然后等待对应 task_id 的 task_reply（渐进式超时）。
@@ -302,50 +370,169 @@ export async function executeDispatch(
     executionSessionId,
     traceLabel: '→ dispatch',
     onBuilt: (taskId) => {
-      resultPromise = new Promise<{ body: string; toolCallsUsed: number }>((resolve, reject) => {
-        pendingReplies.set(taskId, {
-          resolve,
-          reject,
-          timer: setTimeout(() => {}, 0), // 占位，armDispatchTimer 会替换
-          stage: 0,
-          subSlug,
-        });
-        armDispatchTimer(taskId);
-
-        // v1.5.1：监听 abortSignal，被中断时立即清理 + reject（不等渐进式超时）
-        if (signal) {
-          const onAbort = (): void => {
-            const entry = pendingReplies.get(taskId);
-            if (entry) {
-              clearTimeout(entry.timer);
-              pendingReplies.delete(taskId);
-            }
-            // 发 abort_dispatch 内部事件兜底通知子 agent——子 agent 此刻可能尚未启动，
-            // 主进程 abortStream 找不到它。事件桥是 transient 进程内桥（路由表在
-            // RouterService.runners Map），未启动的子 agent 收不到此事件；兜底是
-            // PM 侧 onAbort 立即 reject + 子 agent 自身渐进式超时（3+6=9 分钟）
-            // 自然收敛——而非依赖事件桥把 abort 投递到后续启动的子 agent。
-            const abortEvt = buildAbortDispatchMessage({
-              taskId,
-              subStreamSessionId,
-            });
-            sendAbortDispatchEvent(executionSessionId ?? '', config.agentUserId, abortEvt.content);
-            const err = new Error('dispatch 被中断');
-            err.name = 'AbortError';
-            reject(err);
-          };
-          const cleanup = (): void => signal.removeEventListener('abort', onAbort);
-          // settle 路径（reply 到达 / 超时 reject）需调 cleanup 移除监听器——否则
-          // 后续 abort 会再次触发 onAbort（即便 entry 已删，仍会发 abort_dispatch
-          // 给本不存在的子 agent / 污染 send 计数）
-          const entry = pendingReplies.get(taskId);
-          if (entry) entry.abortCleanup = cleanup;
-          if (signal.aborted) onAbort();
-          else signal.addEventListener('abort', onAbort, { once: true });
-        }
-      });
+      resultPromise = waitForTaskReply(
+        taskId,
+        subSlug,
+        config,
+        executionSessionId,
+        subStreamSessionId,
+        signal,
+      );
     },
   });
+
+  return resultPromise;
+}
+
+// === v2.8.0 T6：followup 执行体（dispatch_followup，spec §3） ===
+
+/**
+ * 链不存在 / 会话不匹配的统一文案（spec §13 错误表）。不区分「不存在」与
+ * 「非自己派出」以省探测——所有权已由双重保证：(task_id, session_id) 双键
+ * 过滤（他链会话的伪造行不命中）+ 会话边界校验（本会话成员 ∩ subAgents）。
+ */
+function chainNotFoundMsg(taskId: string): string {
+  return `任务链 ${taskId} 不存在——仅可追问自己此前 dispatch 的任务`;
+}
+
+/**
+ * followup 追问目标不可达的统一文案（链行存在但无法定位子 agent——
+ * 链内无子 agent 消息行，或 sender 反查不到在册 assignment）。
+ */
+function targetUnresolvableMsg(taskId: string): string {
+  return `任务链 ${taskId} 无法定位目标 agent，不能追问`;
+}
+
+/**
+ * 主 agent 执行 dispatch_followup（v2.8.0 Orchestration spec §3）——对已
+ * dispatch 的链追问（replay 续接）：
+ *
+ *   校验三连 → rebuildSubConversation 重建链历史 → 追问 user 行落库 →
+ *   沿用原链 taskId 派发（body=question + history_prefix=重建前缀 + 新
+ *   subStreamSessionId）→ 同步等 task_reply（waitForTaskReply 共用等待封装）。
+ *
+ * 校验三连（顺序即依赖序）：
+ *   a. 链存在——messages 表 (task_id, session_id) 双键有行。executionSessionId
+ *      缺失时无法安全定位链（所有权=会话边界），按链不存在处理。
+ *   b. 同链无在途——pendingReplies 或 bgHandles(in_flight) 有该 taskId 即拒绝
+ *      （spec §2.2 不变量 1：上轮 settle 后才可再 followup，pendingReplies 键
+ *      安全）。bg done / cancelled 是终态，不阻塞。
+ *   c. 会话边界——链首子消息 sender（子 agent 的 agentUserId）经
+ *      workspace_agent_members 反查 assignment，在 config.subAgents 中匹配后
+ *      走 assertSessionDispatchAllowed（既有单成员 / 跨会话 / 非 leader 拒绝）。
+ *      为何 sender 反查而非直接取 dispatch_to：dispatch 内部事件是 transient
+ *      进程内桥不落库，链首子消息无法直接携带目标——sender 是链行上唯一
+ *      可证的目标痕迹（该轮执行者即子 agent 本身）。
+ *
+ * 降级（spec §3.1）：rebuildSubConversation degraded → history_prefix 缺席 +
+ * body 前缀追加「（此前对话历史不可用）」提示（不阻断——子 agent 按带提示的
+ * 全新任务处理）。落库的追问行保持用户原文（提示只注入派发 body，不污染链
+ * 历史——后续轮次重建不受影响）。
+ *
+ * 打标闭环（T5）：派发 content.task_id = 原链 ID → routeDispatch 同值双设
+ * TaskConfig.taskId = dispatchContext.task_id → start chunk 携带 → 新一轮子
+ * 流行落库即带链标——链历史天然聚合。链 ID 无 tasks 表行，getTaskContext
+ * 恒 null，无双重注入风险（T5 review 核实，无需防御）。
+ *
+ * 派发等待语义与 executeDispatch 完全一致（渐进式超时 3+6 分钟 + abortSignal
+ * 即时清理），差异仅三处：taskId 沿用原链 ID（不 randomUUID）、content 多
+ * history_prefix、发送前先落追问行。
+ */
+export async function executeFollowup(
+  taskId: string,
+  question: string,
+  config: RuntimeConfig,
+  executionSessionId?: string,
+  signal?: AbortSignal,
+  /**
+   * PM 自身流 id——追问行 parent_stream_session_id 的来源（与 executeDispatch
+   * 的 pmStreamSessionId 参数同源：工具调用上下文传入，renderer 据此把追问行
+   * 定位到 PM 当前流的本轮工具调用区）。缺省空串（行仍带双键打标，重建不受影响）。
+   */
+  pmStreamSessionId?: string,
+  /**
+   * 本轮新子流 id——缺省自生成 randomUUID（spec §2.2 不变量 3：每轮新
+   * subStreamSessionId，renderer DispatchChip 按它渲染新 chip）。工具层接线
+   * 预生成时可透传（与 dispatch 工具的 chip 查找键机制对齐）。
+   */
+  subStreamSessionId?: string,
+): Promise<{ body: string; toolCallsUsed: number }> {
+  // --- 校验 a：链存在（(task_id, session_id) 双键） ---
+  if (!executionSessionId) throw new Error(chainNotFoundMsg(taskId));
+  const db = getDb();
+  const chainExists = db
+    .prepare('SELECT 1 AS ok FROM messages WHERE task_id = ? AND session_id = ? LIMIT 1')
+    .get(taskId, executionSessionId);
+  if (!chainExists) throw new Error(chainNotFoundMsg(taskId));
+
+  // --- 校验 b：同链无在途轮次 ---
+  if (pendingReplies.has(taskId) || bgHandles.get(taskId)?.status === 'in_flight') {
+    throw new Error(`任务链 ${taskId} 上一轮仍在进行中——请等待子 agent 回复后再追问`);
+  }
+
+  // --- 校验 c：定位目标 agent + 会话边界 ---
+  // 链首子消息 sender（子 agent 的 agentUserId，created_at 升序最早行）。
+  // 不过滤 segment_of / roll 行——它们与流行同 sender，任取首行即可定位目标。
+  const firstSubRow = db
+    .prepare(
+      `SELECT sender FROM messages
+       WHERE task_id = ? AND session_id = ? AND sender != 'owner'
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    )
+    .get(taskId, executionSessionId) as { sender: string } | undefined;
+  if (!firstSubRow) throw new Error(targetUnresolvableMsg(taskId));
+  const targetAssignment = db
+    .prepare(
+      'SELECT instance_id FROM workspace_agent_members WHERE agent_user_id = ? AND workspace_id = ?',
+    )
+    .get(firstSubRow.sender, config.workspaceId) as { instance_id: string } | undefined;
+  const sub = config.subAgents.find((s) => s.assignmentId === targetAssignment?.instance_id);
+  if (!sub) throw new Error(targetUnresolvableMsg(taskId));
+  assertSessionDispatchAllowed(executionSessionId, config, sub.assignmentId);
+
+  // --- 重建链历史（先于追问行落库——本轮 question 不进前缀，由 body 承载） ---
+  const rebuilt = rebuildSubConversation(taskId, executionSessionId);
+  let dispatchBody = question;
+  if (rebuilt.degraded) {
+    dispatchBody = `（此前对话历史不可用）\n${question}`;
+  }
+
+  // --- 追问 user 行落库（原文；双键打标供后续轮次重建聚合） ---
+  appendFollowupQuestionRow(taskId, executionSessionId, pmStreamSessionId ?? '', question);
+
+  // --- 派发：直接构造 content（不用 buildDispatchMessage——其 task_id 单点
+  // randomUUID 生成，followup 必须沿用原链 ID；其余字段形态与之一致） ---
+  const resolvedSubStream = subStreamSessionId ?? randomUUID();
+  const content: DispatchContent = {
+    body: dispatchBody,
+    task_id: taskId,
+    dispatch_from: config.agentAssignmentId,
+    dispatch_to: sub.assignmentId,
+    deadline_ms: DISPATCH_TOTAL_TIMEOUT_MS,
+    ...(pmStreamSessionId ? { tool_stream_session_id: pmStreamSessionId } : {}),
+    sub_stream_session_id: resolvedSubStream,
+    // 空前缀（degraded / 链行无可聚合事件）不携带字段——T2 语义空数组等价无前缀
+    ...(rebuilt.messages.length > 0 ? { history_prefix: rebuilt.messages } : {}),
+  };
+
+  trace('→ dispatch_followup', {
+    target: sub.slug,
+    chain: taskId,
+    question: `${question.length}字`,
+    rounds: rebuilt.rounds,
+    degraded: rebuilt.degraded,
+  });
+
+  // 先注册等待态再发送（防竞态——同 executeDispatch 纪律）
+  const resultPromise = waitForTaskReply(
+    taskId,
+    sub.slug,
+    config,
+    executionSessionId,
+    resolvedSubStream,
+    signal,
+  );
+  sendDispatchEvent(executionSessionId, config.agentUserId, { ...content });
 
   return resultPromise;
 }
@@ -576,8 +763,9 @@ export async function executeGather(
   return await new Promise<GatherResult>((resolve) => {
     let finished = false;
     let settledCount = 0;
-    let timer: NodeJS.Timeout | undefined;
     const cleanups: Array<() => void> = [];
+    // timer 在 waiter 注册之后才初始化；finish 闭包仅在其后才会被调用（waiter
+    // 回调 / 超时回调），无 TDZ 风险
     const finish = (): void => {
       if (finished) return;
       finished = true;
@@ -601,7 +789,7 @@ export async function executeGather(
         }),
       );
     }
-    timer = setTimeout(() => finish(), clampedMs);
+    const timer = setTimeout(() => finish(), clampedMs);
   });
 }
 

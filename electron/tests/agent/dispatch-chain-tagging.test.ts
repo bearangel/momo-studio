@@ -394,6 +394,29 @@ describe('runtime-entry：start chunk 携带 taskId（接线锁）', () => {
     const chunk = startChunk();
     expect(chunk?.type === 'start' && chunk.taskId).toBe('T-board-both');
   });
+
+  // T5 review Minor 补锁（Task 6 顺手）：followup 派发的生产形态——
+  // routeDispatch 恒同值双设 TaskConfig.taskId = dispatchContext.task_id = 链 ID，
+  // 两来源同值时 start chunk 打同值标（新轮子流沿用链 ID 打标，链历史天然聚合）
+  it('11b. 生产形态（followup 派发形状）：taskId === dispatchContext.task_id 同值 → start chunk 同值打标', async () => {
+    const chainId = 'T-chain-sameval';
+    await runTaskChatLoop(
+      makeTaskConfig({
+        taskId: chainId,
+        dispatchContext: {
+          fromAssignmentId: 'inst-pm',
+          task_id: chainId,
+          tool_stream_session_id: 'ss-pm-parent',
+        },
+      }),
+      makeConfig(),
+      makeContext(),
+    );
+
+    const chunk = startChunk();
+    expect(chunk).toBeDefined();
+    expect(chunk?.type === 'start' && chunk.taskId).toBe(chainId);
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════
