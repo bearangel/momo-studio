@@ -50,8 +50,9 @@ const MCP_ALLOWED_ENV = new Set([
 // CreateProcess 找不到 npx.exe → spawn ENOENT，MCP server 永远起不来。
 //
 // 修正：win32 下 spawn opts 加 shell: true（经 cmd.exe 解析 .cmd/.bat shim），
-// 并对 args 逐元素做引号转义（shell 模式下 args 与 command 拼接成一条命令
-// 行，不转义的空格/元字符会被 cmd 二次切分或解释）。
+// 并对 command 与 args 逐元素做引号转义（shell 模式下 args 与 command 拼接成
+// 一条命令行，不转义的空格/元字符会被 cmd 二次切分或解释——含空格的
+// command 本体同样会中招，故同走转义）。
 //
 // 全仓 spawn 点审计豁免清单（仅 MCP client 需要 shell 分支，其余各点理由）：
 //   1. journal/detector.ts defaultGitRunner（spawn 'git'）——git 在 win32 是
@@ -146,10 +147,12 @@ export class McpClient {
   async connect(): Promise<void> {
     // win32 shell 分支：无 shell 的 spawn 不解析 .cmd/.bat shim（npx 实为
     // npx.cmd），裸命令必 ENOENT——豁免清单与转义规则见模块头部总说明。
+    // command 本体与 args 同走 escapeWinArg（终审 I3）：shell 模式下含空格的
+    // command（如 C:\Program Files\nodejs\npx.cmd）不转义会被 cmd 切分。
     // linux 下 opts 不含 shell 键（undefined）——非 win32 行为零变化。
     const isWin = process.platform === 'win32';
     this.proc = spawn(
-      this.config.command,
+      isWin ? escapeWinArg(this.config.command) : this.config.command,
       isWin ? this.config.args.map(escapeWinArg) : this.config.args,
       {
         env: buildMcpEnv(this.config.env),

@@ -4,9 +4,13 @@
 // 裸命令 `npx -y @mcp/server` 在 win32 上必 ENOENT——Node spawn 无 shell 时
 // 直接走 CreateProcess，只解析 .exe（PATHEXT 不参与），而 npx 实为 npx.cmd
 // 批处理 shim。本测试锁死修正契约：
-//   - win32 → spawn opts.shell === true + args 逐元素经 escapeWinArg 转义
-//   - linux → shell 未设（undefined）+ args 原样（零变化）
-//   - 内嵌 `"` → 拒绝启动（中文报错 + spawn 不被调用）
+//   - win32 → spawn opts.shell === true + command/args 逐元素经 escapeWinArg 转义
+//   - linux → shell 未设（undefined）+ command/args 原样（零变化）
+//   - 内嵌 `"`（command 或 args）→ 拒绝启动（中文报错 + spawn 不被调用）
+//
+// 终审 I3 回归锁：command 本体同样过 escapeWinArg——含空格路径
+// （`C:\Program Files\nodejs\npx.cmd`）在 shell:true 下若不转义会被 cmd
+// 切分，与 args 同根因，不能只转义 args 一半。
 //
 // Mock 收窄（对齐 momo-test-rules）：只 mock 进程边界 node:child_process.spawn；
 // escapeWinArg 与 McpClient 全走真实实现。fake proc 的 stdin.write 收到带 id 的
@@ -82,13 +86,14 @@ afterEach(() => {
 async function connectAndCapture(
   platform: NodeJS.Platform,
   args: string[],
+  command = 'npx',
 ): Promise<{ client: McpClient; call: SpawnCall }> {
   setPlatform(platform);
   const config: McpServerConfig = {
     id: 'mcp-win',
     name: 'win-mcp',
     version: '1.0.0',
-    command: 'npx',
+    command,
     args,
   };
   const client = new McpClient(config);
@@ -164,6 +169,40 @@ describe('McpClient.connect 平台双态（win32 shell 分支 / linux 原样）'
     expect(opts.shell).toBeUndefined();
     expect(args).toStrictEqual(originalArgs);
     expect(opts.stdio).toStrictEqual(['pipe', 'pipe', 'pipe']);
+  });
+
+  it('win32 + command 本体含空格 → 同走 escapeWinArg 转义后传入 spawn（终审 I3）', async () => {
+    // `C:\Program Files\nodejs\npx.cmd` 形态：shell:true 下 cmd 会把未转义的
+    // 空格 command 切分（取 C:\Program 当可执行）——与 args 同根因，必须同转义
+    const { call } = await connectAndCapture(
+      'win32',
+      ['-y', '@scope/server'],
+      'C:\\Program Files\\nodejs\\npx.cmd',
+    );
+    const [command] = call;
+    expect(command).toBe('"C:\\Program Files\\nodejs\\npx.cmd"');
+  });
+
+  it('linux + command 本体含空格 → 原样传入 spawn（零变化）', async () => {
+    const { call } = await connectAndCapture('linux', ['-y'], '/opt/tools/my server');
+    const [command, , opts] = call;
+    expect(command).toBe('/opt/tools/my server');
+    expect(opts.shell).toBeUndefined();
+  });
+
+  it('win32 + command 本体内嵌双引号 → connect 拒绝（与 args 同款中文报错）且 spawn 不被调用', async () => {
+    setPlatform('win32');
+    const config: McpServerConfig = {
+      id: 'mcp-cmd-quote',
+      name: 'cmd-quote-mcp',
+      version: '1.0.0',
+      command: 'C:\\tool"s\\npx.cmd',
+      args: ['-y'],
+    };
+    const client = new McpClient(config);
+    await expect(client.connect()).rejects.toThrow(/双引号/);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(client.isConnected).toBe(false);
   });
 
   it('win32 + 参数内嵌双引号 → connect 拒绝（中文报错）且 spawn 不被调用', async () => {
