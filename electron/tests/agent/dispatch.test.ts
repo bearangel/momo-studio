@@ -203,5 +203,72 @@ describe('agent/dispatch', () => {
       expect(parseDispatchEvent({ ...base })?.history_prefix).toBeUndefined();
       expect(parseDispatchEvent({ ...base, history_prefix: [] })?.history_prefix).toBeUndefined();
     });
+
+    // C1（Task 6 review Critical）：工具对字段 verbatim 保留——旧实现把前缀
+    // 重建为仅 {role, content}，followup 后子 agent 首次 LLM 请求携带孤儿
+    // tool result（无 tool_call_id），OpenAI/Anthropic 方言均硬拒
+    //（spec §3.3「完整工具对 verbatim 保留」）。
+    it('工具对字段 verbatim 保留：assistant.toolCalls + tool.toolCallId 原样透传', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [
+          {
+            role: 'assistant',
+            content: '先读文件',
+            toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/login.ts' } }],
+          },
+          { role: 'tool', content: '文件内容', toolCallId: 'c1' },
+          { role: 'assistant', content: '结论完成' },
+        ],
+      });
+      expect(parsed?.history_prefix).toEqual([
+        {
+          role: 'assistant',
+          content: '先读文件',
+          toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/login.ts' } }],
+        },
+        { role: 'tool', content: '文件内容', toolCallId: 'c1' },
+        { role: 'assistant', content: '结论完成' },
+      ]);
+    });
+    it('toolCallId 非 string → 仅丢该字段（消息本体保留）', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [{ role: 'tool', content: '结果', toolCallId: 42 }],
+      });
+      expect(parsed?.history_prefix).toEqual([{ role: 'tool', content: '结果' }]);
+    });
+    it('toolCalls 任一项非法（非数组 / 项非对象 / id 非 string / name 非 string）→ 整字段丢弃不半保留', () => {
+      const mk = (toolCalls: unknown) =>
+        parseDispatchEvent({
+          ...base,
+          history_prefix: [{ role: 'assistant', content: 'x', toolCalls }],
+        })?.history_prefix;
+      // 非数组
+      expect(mk('oops')).toEqual([{ role: 'assistant', content: 'x' }]);
+      // 任一项非对象
+      expect(mk([{ id: 'c1', name: 'n', arguments: {} }, 'junk'])).toEqual([
+        { role: 'assistant', content: 'x' },
+      ]);
+      // id 非 string
+      expect(mk([{ id: 1, name: 'n', arguments: {} }])).toEqual([{ role: 'assistant', content: 'x' }]);
+      // name 非 string
+      expect(mk([{ id: 'c1', name: 2, arguments: {} }])).toEqual([{ role: 'assistant', content: 'x' }]);
+    });
+    it('toolCalls.arguments 保留原值（id/name 合法即透传，不校验形状）', () => {
+      const parsed = parseDispatchEvent({
+        ...base,
+        history_prefix: [
+          {
+            role: 'assistant',
+            content: 'x',
+            toolCalls: [{ id: 'c1', name: 'n', arguments: { nested: { deep: true }, list: [1, 2] } }],
+          },
+        ],
+      });
+      expect(parsed?.history_prefix?.[0]?.toolCalls).toEqual([
+        { id: 'c1', name: 'n', arguments: { nested: { deep: true }, list: [1, 2] } },
+      ]);
+    });
   });
 });

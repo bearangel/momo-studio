@@ -134,6 +134,41 @@ function seedFirstRound(taskId: string): void {
   __flushEventBufferForTest();
 }
 
+/**
+ * seed 含工具对的链首轮（C1 接线锁 fixture）：子 agent 流行经生产落库链写入
+ * text → tool_call → tool_result → text → end（事件序列形态同 T1
+ * sub-history-reconstructor.test.ts 场景 1）——重建器产出 assistant.toolCalls +
+ * tool.toolCallId 完整协议对。
+ */
+function seedFirstRoundWithToolPair(taskId: string): void {
+  __routeChunkToBufferForTest({
+    type: 'start',
+    streamSessionId: 'ss-r1t',
+    sessionId: sessChatId,
+    senderAgentId: 'agent-inst-sub',
+    taskId,
+  });
+  __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-r1t', delta: '先读文件' });
+  __routeChunkToBufferForTest({
+    type: 'tool_call',
+    streamSessionId: 'ss-r1t',
+    callId: 'c1',
+    toolName: 'read_file',
+    args: { path: 'src/login.ts' },
+  });
+  __routeChunkToBufferForTest({
+    type: 'tool_result',
+    streamSessionId: 'ss-r1t',
+    callId: 'c1',
+    toolName: 'read_file',
+    result: '文件内容：export function LoginPage()',
+    success: true,
+  });
+  __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-r1t', delta: '结论完成' });
+  __routeChunkToBufferForTest({ type: 'end', streamSessionId: 'ss-r1t', finishReason: 'stop' });
+  __flushEventBufferForTest();
+}
+
 /** 该链已落库的 followup 追问 user 行 */
 function followupRows(taskId: string): Array<{ body: string; parentStreamSessionId: string | null }> {
   return listMessagesBySession(sessChatId)
@@ -460,6 +495,39 @@ describe('routeDispatch history_prefix 映射（主进程接线锁）', () => {
     });
     expect(tasks).toHaveLength(1);
     expect('historyPrefix' in (tasks[0] ?? {})).toBe(false);
+  });
+
+  // C1 接线锁（boundary-rules 铁律 4——生产者/消费者成对）：工具对链从生产
+  // 落库形态 seed → executeFollowup 真实重建派发 → 真实 content 过
+  // routeDispatch → TaskConfig.historyPrefix。C1 剥离点在 parseHistoryPrefix
+  //（曾把工具对重建为仅 {role, content}）——断言协议对完整落地。
+  it('工具对链 → followup 派发 → TaskConfig.historyPrefix 协议对完整（assistant.toolCalls + tool.toolCallId）', async () => {
+    const CHAIN = 'T-chain-toolpair';
+    seedFirstRoundWithToolPair(CHAIN);
+
+    const p = executeFollowup(CHAIN, '继续', makeConfig(), sessChatId, undefined, 'ss-pm-tp', 'ss-r2tp');
+
+    // 生产者侧：executeFollowup 派发 content.history_prefix 携带完整工具对
+    const c = dispatchContents()[0];
+    const expectedPrefix = [
+      {
+        role: 'assistant',
+        content: '先读文件',
+        toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/login.ts' } }],
+      },
+      { role: 'tool', content: '文件内容：export function LoginPage()', toolCallId: 'c1' },
+      { role: 'assistant', content: '结论完成' },
+    ];
+    expect(c?.task_id).toBe(CHAIN);
+    expect(c?.history_prefix).toEqual(expectedPrefix);
+
+    // 消费者侧：真实派发 content 过 routeDispatch → TaskConfig.historyPrefix
+    const tasks = await routeDispatchCapture(c ?? {});
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.historyPrefix).toEqual(expectedPrefix);
+
+    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '二轮答复', tool_calls_used: 0 });
+    await expect(p).resolves.toEqual({ body: '二轮答复', toolCallsUsed: 0 });
   });
 });
 
