@@ -1,9 +1,12 @@
 // electron/tests/platform/paths.test.ts
 // posix 原生语义测试：isInsideDir 与既有手工形态等价性 + toPosixRelPath 断言。
 //
-// 等价性基准 = 五处模块内联的手工边界判定（workspace-fs.ts / browser/protocol.ts /
-// browser/policy.ts / journal/revert.ts / skill/zip-uploader.ts）：
+// 等价性基准 = 已转换模块内联的手工边界判定（workspace-fs.ts / browser/protocol.ts /
+// browser/policy.ts / journal/revert.ts 等，六模块七处）：
 //   resolve(c) === resolve(r) || resolve(c).startsWith(resolve(r) + path.sep)
+// 勘误（终审 I2）：旧头注释曾把 skill/zip-uploader.ts 列为等价基准——该声明撤回，
+// zip-uploader 从未转换（v2.10 圈定在边界模块适用域外，存量手工形态记 v2.10.x
+// 待办收敛，见 engineering.md 唯一入口规则的适用域注记）。
 // 本文件在边界 + 随机组合下断言 helper 与该手工形态结果一致——T2 逐模块替换的行为锁。
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
