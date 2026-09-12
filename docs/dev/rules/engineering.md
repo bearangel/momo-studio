@@ -137,6 +137,17 @@ v2.8 Orchestration 元语（spec：`docs/specs/2026-09-12-orchestration-primitiv
 
 ---
 
+## v2.9 多仓 git 规则
+
+v2.9 多仓 git 工具（spec：`docs/specs/2026-09-12-multi-repo-git-design.md`）引入的 workspace 内层仓操作约束：
+
+- **发现列表是唯一 `-C` 入口**——任何给 git 子进程定仓的路径必须经 `resolveRepoPath` 产出（`wsFs` 边界校验 + `discoverRepos` 发现列表命中双校验，工具层统一入口 `resolveRepoArg`）。新增 git 工具（或任何 spawn `git -C` 的路径）不得绕过该校验直接拼接仓路径——绕过即任意目录注入面（`..` / 绝对路径 / symlink 逃逸 / 未发现目录全部由此拦）。单点纪律与 v2.3 Read-before-Edit、v2.4 resolveShellSpawn、v2.5 recordChange 同源
+- **`repo` 参数必须命中 discoverRepos**——命中比对在归一化后进行（`path.normalize` + POSIX `/` 形态，Windows 反斜杠同口径），`./x` / `x/` / `x` 等价；未命中报错附可用仓清单 + 缓存失效重试指引（LLM 可自纠）。命中清单来自 `git/repos.ts` 共享模块（v2.9 自 detector 上提纯搬家）——对账与工具层同源，禁止任何一方另起探测实现造成两份仓清单漂移
+- **缺省恒根仓零变化**——`repo` 缺省时 runGit 不前置 `-C`、spawn args 与 v2.9 前逐字节一致（工具层 `resolveRepoArg` 保 `undefined` 而非填 workspaceDir）。给既有 git 工具加新可选参数时必须维持这条缺省契约：既有 agent 提示词、既有测试快照、账本联动全部锚定在「无 repo = 根仓」的零变化路径上——任何「顺手归一成显式 -C 根仓」的改动都是回归
+- **path 沙箱语义保持 workspace 锚定**——`git_add.paths` / `git_diff.path` 的 `assertInWorkspace` 校验基准仍是 workspace（不因 repo 参数改为按目标仓校验）：指定 repo 后 path 由 git 在 `-C` 下按仓内相对路径解析，仓本身已在 workspace 内 + git `-C` 自限于仓内，无逃逸面。改动 path 校验基准前先答「能否构造出 workspace 外落点」——答案恒否就不要动
+
+---
+
 ## 验证有效的方法论（保留）
 
 | 手段 | 用法 | 战绩 |
