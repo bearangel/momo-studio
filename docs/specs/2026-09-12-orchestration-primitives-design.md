@@ -74,7 +74,9 @@ LLM: dispatch_followup(T-xxx, "把结论展开成表格")
 1. 校验
    a. 链存在：该 task_id 有 dispatch 消息事件且 dispatch_from === 自己
       （只能追问自己派出的链）
-   b. 会话边界：目标 agent 仍是本会话成员（assertSessionDispatchAllowed）
+   b. 同链无在途轮次：pendingReplies / bgHandles 无该 taskId 的未 settle 条目
+      （上轮 settle 后才可再 followup——防同键竞态，§13）
+   c. 会话边界：目标 agent 仍是本会话成员（assertSessionDispatchAllowed）
 2. rebuildSubConversation(taskId)
    从 message_events 重建该链全部轮次的 LLM messages：
    - 完整 assistant 文本 / 工具对 verbatim 保留
@@ -148,7 +150,7 @@ miss → 查 bgHandles：
 ```
 
 **`dispatch_gather(handles[], mode, timeoutMs?)`**
-- 已 done 句柄立即收集；in_flight 句柄注册 Promise（复用 pendingReplies 机制——把 bg 句柄临时转入等待：reply 到达即 resolve）
+- 已 done / cancelled 句柄视为终态立即收集（cancelled 收集为 `{taskId, status:'cancelled'}`，无 body——不算错误不阻塞 mode=all）；in_flight 句柄注册 Promise（复用 pendingReplies 机制——把 bg 句柄临时转入等待：reply 到达即 resolve）
   - 实现裁定：gather 等待不直接复用 pendingReplies 键空间（taskId 已被 bgHandles 占有语义）——用**独立 gatherWaiters: Map<taskId, Set<resolve>>**，handleTaskReply 的 bg 分支同时唤醒 waiter
 - `mode='all'`：全部 settle 或超时；`mode='any'`：任一 settle 即返回
 - 超时：返回 `{ done: [{taskId, body, toolCallsUsed}], pending: [taskId...] }`——**非错误**，句柄保留可再 gather
