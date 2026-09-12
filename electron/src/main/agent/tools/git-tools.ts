@@ -31,6 +31,9 @@
 //     透传 runGit 第四参；缺省（不传 repo）保持 undefined → runGit 不前置
 //     -C，spawn args 与既有行为逐字节一致。git_commit 的 GitPolicy 分支
 //     保护改读「目标仓」当前分支（策略仍 workspace 级单源，跨仓均匀继承）。
+//   - v2.10 Windows 全平台化（T2）：本地 toPosixRel 退役，改 import 共享
+//     platform/paths 的 toPosixRelPath——纯搬家，调用点语义不变（win32 反斜杠
+//     相对路径统一 '/' 化由共享 helper 单点承载）。
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -41,6 +44,7 @@ import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 import { getGitPolicy } from '../../workspace/git-policy';
 import { discoverRepos } from '../../git/repos';
+import { toPosixRelPath } from '../../platform/paths';
 import {
   validateCommitMessage,
   isCommitBlocked,
@@ -111,13 +115,7 @@ export async function runGit(
   });
 }
 
-/** 绝对路径 → workspace 相对 POSIX '/' 形态（根仓为空串；Windows 反斜杠同口径归一）。*/
-function toPosixRel(workspaceDir: string, absPath: string): string {
-  return path.relative(workspaceDir, absPath).split(path.sep).join('/');
-}
-
-/**
- * repo 参数解析（v2.9 多仓 git）：缺省（undefined）→ workspace 根；指定时
+/** repo 参数解析（v2.9 多仓 git）：缺省（undefined）→ workspace 根；指定时
  * 「wsFs 边界校验 + discoverRepos 发现列表命中」双校验，命中返回该仓绝对路径。
  *
  * 安全边界（spec §5 G4）：
@@ -136,15 +134,15 @@ export function resolveRepoPath(workspaceDir: string, wsFs: WorkspaceFS, repo: u
   if (path.isAbsolute(repo)) throw new Error('参数 "repo" 不接受绝对路径（请用 workspace 相对路径）');
   // wsFs 边界校验（同源 assertInWorkspace，返回绝对路径）
   const normalized = path.normalize(wsFs.assertInWorkspace(repo));
-  const rel = toPosixRel(workspaceDir, normalized);
+  const rel = toPosixRelPath(workspaceDir, normalized);
   const repos = discoverRepos(workspaceDir);
   for (const r of repos) {
-    if (toPosixRel(workspaceDir, r) === rel) return r;
+    if (toPosixRelPath(workspaceDir, r) === rel) return r;
   }
   // 未命中：附可用仓清单（根仓显示 `根仓(.)`、内层为相对路径、逗号分隔），
   // 尾部提示目录缓存语义——新克隆的仓需待一次目录变更后才发现。
   const list = repos.map((r) => {
-    const rRel = toPosixRel(workspaceDir, r);
+    const rRel = toPosixRelPath(workspaceDir, r);
     return rRel === '' ? '根仓(.)' : rRel;
   });
   throw new Error(`仓 "${repo}" 不在发现列表。可用: [${list.join(', ')}] 。新克隆的仓需待目录缓存失效（约一次目录变更后）或直接重试。`);
@@ -344,7 +342,7 @@ async function executeRepos(ctx: ToolContext): Promise<string> {
   if (repos.length === 0) return '未发现任何 git 仓';
   const lines = await Promise.all(
     repos.map(async (repo) => {
-      const rel = toPosixRel(ctx.workspaceDir, repo);
+      const rel = toPosixRelPath(ctx.workspaceDir, repo);
       const isRoot = rel === '';
       const [branchRes, statusRes] = await Promise.all([
         runGit(['branch', '--show-current'], ctx, undefined, repo),

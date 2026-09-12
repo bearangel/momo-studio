@@ -18,6 +18,17 @@ export interface InsideDirOpts {
 }
 
 /**
+ * 当前 path 模块是否为 win32 语义（分隔符为反斜杠）。
+ *
+ * 生产环境与 process.platform 恒一致（win32 平台的 node:path sep 必为 '\\'，
+ * 其余平台必为 '/'）；win32 单测经 vi.mock('node:path') 注入 win32 path 后
+ * process.platform 仍是 linux（模板明示不可 mock process），调用方以本常量
+ * 作为 isInsideDir 的显式 win32 入口——边界判定随当前 path 模块语义分叉，
+ * 而不是随 OS 分叉，两条路径在生产环境收敛为同一结果。
+ */
+export const PATH_SEMANTICS_WIN32: boolean = path.sep === '\\';
+
+/**
  * 判定 child 是否位于 root 目录内（child === root 自身也算在内）。
  *
  * - 两侧 path.resolve 归一：消 '..' / '.' / 冗余分隔符 / win32 混合斜杠形态

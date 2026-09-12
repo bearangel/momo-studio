@@ -23,6 +23,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { discoverRepos } from '../git/repos';
+import { toPosixRelPath } from '../platform/paths';
 import { getJournalStore } from './recorder';
 
 /** 单次 git 命令执行结果。errCode 承载 spawn error event 的底层错误码
@@ -139,9 +140,11 @@ export async function scanUnjournaled(
     if (r.code !== 0 || r.errCode !== null || r.truncated) return degradedEmpty;
     for (const rel of parsePorcelain(r.stdout)) {
       const abs = path.resolve(repo, rel);
-      const wsRel = path.relative(workspaceDir, abs);
+      // toPosixRelPath：relative 到 workspace 根后统一 POSIX '/'（win32 反斜杠
+      // 相对段与账本侧归一同口径对齐）
+      const wsRel = toPosixRelPath(workspaceDir, abs);
       if (wsRel === '') continue;
-      changed.add(wsRel.split(path.sep).join('/'));
+      changed.add(wsRel);
     }
   }
 

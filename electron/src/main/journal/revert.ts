@@ -22,6 +22,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 import { getJournalStore, hashContent, recordChange } from './recorder';
 import type { RecordCtx } from './recorder';
 import type { JournalStore } from './store';
@@ -88,11 +89,15 @@ export async function revertEntries(
   return outcomes;
 }
 
-/** 路径遏制：条目 path 必须落在 workspaceDir 内（防脏条目/手改库越界写盘） */
-function safeResolve(workspaceDir: string, rel: string): string {
+/**
+ * 路径遏制：条目 path 必须落在 workspaceDir 内（防脏条目/手改库越界写盘）。
+ * 导出供 win32 语义单测直测边界函数（revertEntries 的逆序链 / hash 守卫由
+ * revert.test.ts 既有用例覆盖——两测试面正交）。
+ */
+export function safeResolve(workspaceDir: string, rel: string): string {
   const root = path.resolve(workspaceDir);
   const abs = path.resolve(workspaceDir, rel);
-  if (abs !== root && !abs.startsWith(root + path.sep)) {
+  if (!isInsideDir(root, abs, { win32: PATH_SEMANTICS_WIN32 })) {
     throw new Error(`journal 条目路径越界: ${rel}`);
   }
   return abs;
