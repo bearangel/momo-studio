@@ -1606,7 +1606,9 @@ export async function doExecuteTool(
     if (rawTimeout !== undefined && typeof rawTimeout !== 'number') {
       throw new Error('参数 "timeoutMs" 不是数字');
     }
-    return JSON.stringify(await executeGather(handles, mode, rawTimeout));
+    // 终审 I1：传 abortSignal——PM abort 时 gather 立即 AbortError reject，
+    // 不阻塞 chat loop 到 gather 超时（与 dispatch/followup 分支同纪律）
+    return JSON.stringify(await executeGather(handles, mode, rawTimeout, ctx.abortSignal));
   }
   if (name === 'dispatch_status') {
     return JSON.stringify(executeStatus(argToString(call.arguments.handle, 'handle')));

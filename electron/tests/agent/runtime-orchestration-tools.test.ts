@@ -317,10 +317,11 @@ describe('doExecuteTool 编排工具路由（5 执行体接线）', () => {
     expect(chips[0]!.streamSessionId).toBe('ss-pm');
   });
 
-  it('dispatch_gather → executeGather(handles, mode, timeoutMs) 透传', async () => {
+  it('dispatch_gather → executeGather(handles, mode, timeoutMs, ctx.abortSignal) 透传（终审 I1 接线锁）', async () => {
+    const controller = new AbortController();
     const out = await doExecuteTool(
       call('dispatch_gather', { handles: ['h1', 'h2'], mode: 'any', timeoutMs: 5000 }),
-      makeRoutingCtx(),
+      makeRoutingCtx(controller.signal),
       makeMainConfig(),
       undefined,
       undefined,
@@ -329,7 +330,8 @@ describe('doExecuteTool 编排工具路由（5 执行体接线）', () => {
       'sess-exec',
     );
     expect(out).toBe(JSON.stringify({ done: [], pending: [], notes: [] }));
-    expect(executeGather).toHaveBeenCalledWith(['h1', 'h2'], 'any', 5000);
+    // 第 4 参 = ctx.abortSignal——摘掉接线（漏传 signal）此断言即红
+    expect(executeGather).toHaveBeenCalledWith(['h1', 'h2'], 'any', 5000, controller.signal);
   });
 
   it('dispatch_status → executeStatus(handle) 透传', async () => {

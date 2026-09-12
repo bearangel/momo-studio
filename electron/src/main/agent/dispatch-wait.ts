@@ -726,11 +726,15 @@ function snapshotDoneEntry(taskId: string, h: BgHandle): GatherDoneEntry {
  * - in_flight 句柄注册 gatherWaiter，翻转（reply / cancel）即唤醒
  * - mode='all' 全部 settle 或超时；mode='any' 首个 settle 即返回
  * - 超时是正常返回（done + pending），句柄保留可再 gather——不删句柄（幂等）
+ * - signal 被 abort 时立即以 AbortError reject（中断是错误不是收割结果，
+ *   不返回 done/pending），waiter / timer 同步清理——与 v1.5.1 dispatch 的
+ *   waitForTaskReply signal 语义对齐（终审 I1）
  */
 export async function executeGather(
   handles: string[],
   mode: 'all' | 'any',
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<GatherResult> {
   const clampedMs = clampGatherTimeoutMs(timeoutMs);
   const done: GatherDoneEntry[] = [];
@@ -760,17 +764,31 @@ export async function executeGather(
     return { done, pending: mode === 'any' && done.length > 0 ? [...inFlightIds] : [], notes };
   }
 
-  return await new Promise<GatherResult>((resolve) => {
+  return await new Promise<GatherResult>((resolve, reject) => {
     let finished = false;
     let settledCount = 0;
     const cleanups: Array<() => void> = [];
-    // timer 在 waiter 注册之后才初始化；finish 闭包仅在其后才会被调用（waiter
-    // 回调 / 超时回调），无 TDZ 风险
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const teardown = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      for (const c of cleanups) c();
+    };
+    // 中断立即 reject（err.name = 'AbortError'——照 executeDispatch/executeFollowup
+    // 的 onAbort reject 形态）；不返回 done/pending——收割结果无意义
+    const onAbort = (): void => {
+      if (finished) return;
+      finished = true;
+      teardown();
+      const err = new Error('dispatch_gather 被中断');
+      err.name = 'AbortError';
+      reject(err);
+    };
     const finish = (): void => {
       if (finished) return;
       finished = true;
-      if (timer !== undefined) clearTimeout(timer);
-      for (const c of cleanups) c();
+      teardown();
+      // settle 路径移除 abort 监听（signal 存活整个回合，避免泄漏闭包引用）
+      signal?.removeEventListener('abort', onAbort);
       // 仍在途的句柄进 pending（超时非错误——句柄保留可再 gather）
       const pending: string[] = [];
       for (const id of inFlightIds) {
@@ -789,7 +807,11 @@ export async function executeGather(
         }),
       );
     }
-    const timer = setTimeout(() => finish(), clampedMs);
+    timer = setTimeout(() => finish(), clampedMs);
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 

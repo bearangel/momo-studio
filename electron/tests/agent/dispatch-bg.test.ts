@@ -524,6 +524,56 @@ describe('executeGather 收割语义', () => {
       vi.useRealTimers();
     }
   });
+
+  // === 终审 I1 回归锁：gather 响应 abortSignal（与 v1.5.1 dispatch P0 同症状——
+  // PM abort 后 chat loop 不得阻塞在 await gather 直到 2min 超时） ===
+  it('等待中 abort → 立即 AbortError reject（非 done/pending 收割结果）+ waiter 已清理 + timer 已清理', async () => {
+    vi.useFakeTimers();
+    try {
+      __seedBgHandleForTest('ab-1', inFlight());
+      __seedBgHandleForTest('ab-2', inFlight());
+      const controller = new AbortController();
+      const p = executeGather(['ab-1', 'ab-2'], 'all', 1000, controller.signal);
+      // 先挂 handler 再 abort——abort 同步 reject，后挂会瞬态 unhandled rejection
+      const outcomeP = p.then(
+        (r): { resolved?: GatherResult; rejected?: Error } => ({ resolved: r }),
+        (e): { resolved?: GatherResult; rejected?: Error } => ({ rejected: e }),
+      );
+      controller.abort();
+      // 旧实现（signal 被忽略）：推进超时让旧实现 settle，本用例以「期望 reject」
+      // 快速失败；新实现：abort 已同步 reject，本推进是 timer 清理后的 no-op
+      await vi.advanceTimersByTimeAsync(5000);
+      const outcome = await outcomeP;
+      // 中断是错误不是收割结果——不得返回 done/pending 结构
+      expect(outcome.resolved).toBeUndefined();
+      expect(outcome.rejected).toBeInstanceOf(Error);
+      expect(outcome.rejected?.name).toBe('AbortError');
+
+      // waiter 已清理：迟到 reply 正常翻转句柄表，不触达已中断的 gather（不炸）
+      expect(() =>
+        handleTaskReply({ task_id: 'ab-1', status: 'completed', body: '迟到结果', tool_calls_used: 1 }),
+      ).not.toThrow();
+      expect(getBgHandle('ab-1')?.status).toBe('done');
+      // timer 已清理：推到超时时刻之后无二次 settle / 无句柄副作用——ab-2 保持 in_flight
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(getBgHandle('ab-2')?.status).toBe('in_flight');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('signal 已 aborted（gather 调用前）→ 同步路径外仍立即 AbortError reject，不挂起', async () => {
+    __seedBgHandleForTest('pre-ab', inFlight());
+    const controller = new AbortController();
+    controller.abort();
+    const p = executeGather(['pre-ab'], 'all', 30000, controller.signal);
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    // waiter 已清理：句柄未被 abort 碰改，后续 reply / 再 gather 不受污染
+    expect(getBgHandle('pre-ab')?.status).toBe('in_flight');
+    handleTaskReply({ task_id: 'pre-ab', status: 'completed', body: 'ok', tool_calls_used: 0 });
+    const again = await executeGather(['pre-ab'], 'all');
+    expect(again.done).toEqual([{ taskId: 'pre-ab', status: 'done', body: 'ok', toolCallsUsed: 0 }]);
+  });
 });
 
 describe('executeStatus 状态查询', () => {
