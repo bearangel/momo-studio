@@ -148,7 +148,16 @@ v2.9 多仓 git 工具（spec：`docs/specs/2026-09-12-multi-repo-git-design.md`
 
 ---
 
-## 验证有效的方法论（保留）
+## v2.10 Windows 规则
+
+v2.10 Windows 全平台化（spec：`docs/specs/2026-09-12-windows-platform-design.md`）引入的跨平台路径 / spawn / 打包约束：
+
+- **isInsideDir 是唯一目录边界判定入口，禁手写 startsWith 比对**——「child 是否在 root 内」一律经 `platform/paths.ts` 的 `isInsideDir`（两侧 resolve 归一 + win32 盘符与目录段大小写不敏感 + UNC 等价 + `path.sep` 边界防 `..foo.txt`/兄弟前缀误伤），POSIX 相对化一律 `toPosixRelPath`（禁手写 `split(path.sep).join('/')`）。手写比对在 win32 下必然漏大小写 / UNC / 混合斜杠语义——v2.10 前五处各自为政的内联实现正是本规则动机。需要显式平台分叉的调用方传第三参 `opts.win32`（或用 `PATH_SEMANTICS_WIN32` 常量按当前 path 模块语义分叉），不要读 `process.platform` 自行判定
+- **spawn 裸命令必须带 win32 shell 分支**——无 shell 的 `spawn('npx')` 在 win32 直接 ENOENT（CreateProcess 不解析 .cmd shim，`npx` 实为 shim）：opts 注入 `shell: process.platform === 'win32'` 三态（非 win32 不含 `shell` 键，行为零变化），且 shell 模式下 args 逐元素引号转义、内嵌双引号拒绝启动（`mcp/client.ts` 的 `escapeWinArg` 是转义唯一实现，复用勿另写）。豁免清单（git.exe 真 PE 直寻 / agent-runner 绝对路径 spawn / sandbox probe 平台门 / dev 脚本自带分支）与理由见 spec §3.4——新增 spawn 点先对照清单，不在豁免内即必须补 shell 分支
+- **win32 测试统一 vi.mock 模板（双 win32 default+named 形态）**——容器/CI 是 Linux，win32 路径语义测试统一复制 `electron/tests/platform/paths.win32.test.ts` 文件头模板：`vi.mock('node:path')` 工厂内 `importActual` 后返回 `{ default: actual.win32, ...actual.win32 }`（default 与 named 双形态——被测模块 `import path from` 与 `import { sep } from` 两种引入都要命中，单形态 mock 会静默漏拦截）。两个关键点：被测模块必须带 `node:` 前缀引入 path（vi.mock 按模块 ID 拦截）；mock 只改 path 语义、process.platform 仍是 linux——平台分叉逻辑经显式注入入口（`opts.win32` 传 true）进分支，禁止 vi.mock process
+- **electron-builder 选项落段纪律（win vs nsis）**——`perMachine` / `oneClick` / `allowToChangeInstallationDirectory` 是 **nsis 段**选项（installer 行为），`icon` / `target` / `artifactName` / `certificateFile` 是 **win 段**选项（打包产物与签名；v26 亦可经 `win.signtoolOptions` 嵌套）——放错段会被 app-builder-lib **静默忽略**（构建不报错、选项不生效）。依据：app-builder-lib 26.15.3 schema（`certificateFile` 定义于 `WindowsConfiguration`，`NsisOptions` 无任何签名属性；Task 4/5 两度核对）。改 build 配置前先确认选项归属段，拿不准查 schema 不要「看着像就放」
+
+---
 
 | 手段 | 用法 | 战绩 |
 |---|---|---|
