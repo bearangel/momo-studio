@@ -565,6 +565,40 @@ describe('runChatLoop 注入面 + isDispatch 防御', () => {
     }
   });
 
+  it('subAgents∩会话成员=空（sessionSubs=[]）→ 编排工具零注入 + 教学段不出现（注入门统一 length 判定，T7 Minor）', async () => {
+    // 场景：多成员会话且自己是 leader，但 subAgents 快照成员无一在会话内——
+    // getSessionDispatchScope 走 filter 空交集返回 [] 而非 null。
+    // 修复前：hint 门判 length（isLeader=false → 无教学段）而工具门判 truthy
+    // （[] 为真 → 4 个静态编排工具照注入）——「无 hint 有工具」门不一致。
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO agent_definitions
+         (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+          default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       VALUES ('inst-outsider', 'inst-outsider', 'inst-outsider', '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES ('inst-outsider', 'ws', 'inst-outsider', 'agent-inst-outsider')`,
+    ).run();
+    const disjoint = insertSession({ workspaceId: 'ws', title: 'orch-disjoint' });
+    addSessionMember(disjoint.id, 'inst-bot', true);
+    addSessionMember(disjoint.id, 'inst-outsider', false);
+
+    mockProviderMultiRound([[{ type: 'text', content: 'ok' }, { type: 'done', finishReason: 'stop' }]]);
+    await runChatLoop(disjoint.id, '查', makeMainConfig(), makeLoopContext());
+
+    const first = chatStreamCalls()[0]!;
+    const names = (first.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(names.some((n) => n.startsWith('dispatch_bg:'))).toBe(false);
+    expect(names.some((n) => n.startsWith('dispatch:'))).toBe(false);
+    for (const n of ['dispatch_followup', 'dispatch_gather', 'dispatch_status', 'dispatch_cancel']) {
+      expect(names).not.toContain(n);
+    }
+    // 门一致性另一半：isLeader=false → dispatchHint 空串（system 无教学段）
+    expect(first.messages[0]!.content).not.toContain('dispatch_gather');
+  });
+
   it('isDispatch 防御：dispatch_bg 不被并行批处理拦截——走普通路径 + 同 callId 单 chip（无双重渲染）', async () => {
     const cBg = { id: 'cBg', name: 'dispatch_bg:researcher', arguments: { task: '后台' } };
     const cD = { id: 'cD', name: 'dispatch:writer', arguments: { task: '同步' } };

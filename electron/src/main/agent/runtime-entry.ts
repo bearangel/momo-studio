@@ -386,20 +386,25 @@ export async function runChatLoop(
   // 执行时拒绝，agent 仍会以为自己能委派（先 brag 再被拒，浪费一轮 + 误导用户）。
   // 不满足会话边界时工具与指南根本不注入，LLM 不知道自己有这能力。
   const sessionSubs = getSessionDispatchScope(roomId, config);
+  // 注入门统一 length 判定（T7 Minor 修正）：getSessionDispatchScope 的 filter
+  // 可返回空数组（多成员会话 + 自己是 leader + subAgents 快照与会话成员交集为空），
+  // 而 [] 在 JS 为 truthy——若 hint 门判 length、工具门判 truthy，即出现
+  // 「无教学 hint 却注入 4 个静态编排工具」的门不一致。全部注入门收敛到同一布尔。
+  const hasSessionSubs = sessionSubs !== null && sessionSubs.length > 0;
   const dispatchHint = formatDispatchHint({
     ...config,
-    isLeader: sessionSubs !== null && sessionSubs.length > 0,
+    isLeader: hasSessionSubs,
     subAgents: sessionSubs ?? [],
   });
   // v2.8.0 Orchestration（Task 7）：5 类编排工具 defs（4 静态 + dispatch_bg:<slug>
   // 随成员动态）——与 dispatch:<slug> 同门（sessionSubs 非空才注入，非 leader 会话
   // 工具与教学 prompt 均不出现，LLM 不知道自己有这能力）。
-  const orchestrationDefs = sessionSubs ? getOrchestrationToolDefs(sessionSubs) : [];
+  const orchestrationDefs = hasSessionSubs ? getOrchestrationToolDefs(sessionSubs) : [];
   // 白名单同步：编排工具仅在下方 chatTools 组装层注入（逐轮），不经
   // buildRuntimeContext 的动态工具名扩充（那里只覆盖启动时静态快照）——带
   // allowedTools 白名单的 leader 若不同步，调用编排工具会被 assertToolAllowed
   // 拒绝。注入即授权，同 dispatch:* 白名单先例（v1.7.1）。
-  if (sessionSubs && config.allowedTools.length > 0) {
+  if (hasSessionSubs && config.allowedTools.length > 0) {
     config.allowedTools = [
       ...new Set([...config.allowedTools, ...orchestrationDefs.map((t) => t.name)]),
     ];
@@ -811,7 +816,8 @@ export async function runChatLoop(
     }
 
     // 会话边界二段修复：静态快照注入的 dispatch:* 剔除，换成当前会话命中成员
-    const chatTools: LLMToolDef[] = sessionSubs
+    // （与 hint / 白名单同步同一 hasSessionSubs 门——sessionSubs=[] 时不注入）
+    const chatTools: LLMToolDef[] = hasSessionSubs
       ? [
           ...ctx.tools.filter((t) => !t.name.startsWith('dispatch:')),
           ...getDispatchToolDefs(sessionSubs),
