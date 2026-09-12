@@ -27,7 +27,8 @@ import { randomUUID } from 'node:crypto';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createJournalStore } from '../../src/main/journal/store';
 import { __setJournalStoreForTest } from '../../src/main/journal/recorder';
-import { discoverRepos, scanUnjournaled, defaultGitRunner } from '../../src/main/journal/detector';
+import { discoverRepos } from '../../src/main/git/repos';
+import { scanUnjournaled, defaultGitRunner } from '../../src/main/journal/detector';
 import type { GitRunner } from '../../src/main/journal/detector';
 import type { JournalEntry } from '../../src/main/journal/types';
 
