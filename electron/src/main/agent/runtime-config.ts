@@ -5,6 +5,7 @@
 // 经 AGENT_CONFIG 环境变量 JSON 序列化传入子进程（runtime-entry parseConfig 消费）。
 
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
+import type { LLMMessage } from './llm-provider';
 import { isThinkingRequest, type ThinkingRequest } from '../llm/provider-presets';
 
 /** 启动 agent 子进程所需的全部配置，会以 JSON 序列化后通过 AGENT_CONFIG 传递 */
@@ -192,6 +193,13 @@ export interface TaskConfig {
     /** 主进程 rebuildTurn 已评估；runtime 侧无需再判（沿用 main 决议） */
     degenerate: boolean;
   };
+  /**
+   * v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀——与 resumeTurn
+   * 互斥，派发侧保证。设置时 runChatLoop 把前缀拼接在 system 之后、会话历史
+   * 之前（fresh session 实际形态 [system, ...前缀, user(body)]）；同现 resume
+   * 时 resumeTurn 优先（前缀忽略 + warn）。缺省时行为与历史版本一致。
+   */
+  historyPrefix?: LLMMessage[];
 }
 
 /**

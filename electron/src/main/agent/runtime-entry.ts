@@ -351,6 +351,14 @@ export async function runChatLoop(
    * 未消费 steer 重放；缺省或重建段为空时行为与历史版本一致。
    */
   resumeTurn?: RebuiltTurn,
+  /**
+   * v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀——上游把先前回合
+   * 上下文（LLMMessage[]）拼进本轮请求。无 resumeTurn 时拼接在 system 之后、
+   * convMessages 之前（fresh session 下 convMessages 恒空，实际形态
+   * [system, ...前缀, user(currentBody)]）；与 resumeTurn 互斥（派发侧保证），
+   * 同现时 resumeTurn 优先、前缀忽略 + warn。缺省时行为与历史版本逐字节一致。
+   */
+  historyPrefix?: LLMMessage[],
 ): Promise<string> {
   const llm = createLLMProvider(
     // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
@@ -563,8 +571,23 @@ export async function runChatLoop(
     resumeTurn && resumeTurn.messages.length > 0
       ? resumeTurn.messages
       : [{ role: 'user', content: currentBody }];
+  // v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀拼接。与 resumeTurn
+  // 互斥由派发侧保证，此处防御性兜底：同现时 resumeTurn 优先（前缀忽略 +
+  // warn 不抛错——断点续跑的重建段语义完整自洽，与「全新回合的上下文补充」
+  // 混拼会产生双重历史）；空数组等价无前缀（展开零副作用）
+  let effectivePrefix: LLMMessage[] = [];
+  if (historyPrefix) {
+    if (resumeTurn) {
+      process.stderr.write(
+        'historyPrefix 与 resumeTurn 同现：resumeTurn 优先，historyPrefix 前缀已忽略\n',
+      );
+    } else {
+      effectivePrefix = historyPrefix;
+    }
+  }
   const messages: LLMMessage[] = [
     { role: 'system', content: '' }, // 占位，refreshSystem 立即填充
+    ...effectivePrefix,
     ...convMessages,
     ...turnMessages,
   ];
@@ -1245,7 +1268,7 @@ export async function runTaskChatLoop(
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
@@ -1295,6 +1318,11 @@ export async function runTaskChatLoop(
       // 消费侧接线锁：tests/agent/runtime-task-driven.test.ts「v2.6.0 接线锁」
       // 用例——摘掉本解构/传参该锁必红（resume 静默丢失不报错）。
       resume,
+      // v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀经 cfg.historyPrefix
+      // 透传到 runChatLoop 第 11 参（与 resume 互斥由派发侧保证，runChatLoop 内
+      // 防御兜底）。接线锁：tests/agent/runtime-history-prefix.test.ts「接线锁」
+      // 用例——摘掉本解构/传参该锁必红（前缀静默丢失不报错）。
+      historyPrefix,
     );
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）
