@@ -187,18 +187,19 @@ describe('SandboxSettingsPanel', () => {
     expect(screen.getByRole('radio', { name: /strict/ })).not.toBeChecked();
   });
 
-  it('网络三态：默认选中「每次询问」+ 分态说明文案（ask）', async () => {
+  it('网络三态：默认选中「每次询问」+ 三项行内说明常驻', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
 
-    expect(screen.getByRole('radio', { name: '每次询问' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: '拒绝' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByTestId('network-policy-desc').textContent).toContain('信任卡');
+    expect(screen.getByRole('radio', { name: '每次询问（默认）' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '拒绝' })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: '永久允许' })).not.toBeChecked();
+    expect(screen.getByText(/信任卡阻塞等待/)).toBeInTheDocument();
+    expect(screen.getByText(/一次性引导卡/)).toBeInTheDocument();
   });
 
-  it('网络三态：点「永久允许」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中 + 说明切换', async () => {
+  it('网络三态：点「永久允许」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
@@ -208,12 +209,11 @@ describe('SandboxSettingsPanel', () => {
     await waitFor(() => {
       expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'allow' });
     });
-    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: '每次询问' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByTestId('network-policy-desc').textContent).toContain('不再询问');
+    expect(screen.getByRole('radio', { name: '永久允许' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '每次询问（默认）' })).not.toBeChecked();
   });
 
-  it('网络三态：点「拒绝」→ updateGlobal({ sandboxNetworkPolicy: deny }) + 说明切换', async () => {
+  it('网络三态：点「拒绝」→ updateGlobal({ sandboxNetworkPolicy: deny })', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
@@ -223,14 +223,14 @@ describe('SandboxSettingsPanel', () => {
     await waitFor(() => {
       expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'deny' });
     });
-    expect(screen.getByTestId('network-policy-desc').textContent).toContain('引导卡');
+    expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
   });
 
   it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
     getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: '拒绝' })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
     });
   });
 
@@ -261,7 +261,7 @@ describe('SandboxSettingsPanel', () => {
     expect(reprobeMock).toHaveBeenCalledTimes(1);
     // 返回值里的 settings 同步刷新（模式/网络控件跟随）
     expect(screen.getByRole('radio', { name: /permissive/ })).toBeChecked();
-    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '永久允许' })).toBeChecked();
   });
 
   it('探测进行中按钮禁用并显示"探测中..."，完成后恢复', async () => {
