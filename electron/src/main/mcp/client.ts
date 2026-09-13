@@ -41,6 +41,58 @@ const MCP_ALLOWED_ENV = new Set([
   'XDG_CONFIG_HOME',
 ]);
 
+// ---------------------------------------------------------------------------
+// win32 shell 分支 + spawn 豁免清单（v2.10.0 Windows 全平台化 Task 3）
+//
+// 背景：Node 的 child_process.spawn 在无 shell 模式下直接走 CreateProcess，
+// 只解析 .exe（PATHEXT 不参与）——而 MCP server 的主流启动形态是裸命令
+// `npx -y @scope/server`，npx 在 Windows 上实为 npx.cmd 批处理 shim，
+// CreateProcess 找不到 npx.exe → spawn ENOENT，MCP server 永远起不来。
+//
+// 修正：win32 下 spawn opts 加 shell: true（经 cmd.exe 解析 .cmd/.bat shim），
+// 并对 command 与 args 逐元素做引号转义（shell 模式下 args 与 command 拼接成
+// 一条命令行，不转义的空格/元字符会被 cmd 二次切分或解释——含空格的
+// command 本体同样会中招，故同走转义）。
+//
+// 全仓 spawn 点审计豁免清单（仅 MCP client 需要 shell 分支，其余各点理由）：
+//   1. journal/detector.ts defaultGitRunner（spawn 'git'）——git 在 win32 是
+//      真 PE（git.exe），CreateProcess 直寻 .exe 可执行，无 shim 解析问题；
+//   2. agent/runtime-spawner.ts spawnForAgent（fork runtime-entry）+ WarmPool
+//      注入的 spawn——fork 用 process.execPath（node/Electron 绝对路径，真
+//      PE），agent-runner 的 runtime 全部经此路径拉起；
+//   3. sandbox/probe.ts——win32 分支被平台门天然豁免（不 spawn bwrap）；
+//      pwsh 探测走 windows.ts 的 'pwsh.exe'（显式 .exe 后缀真 PE 直寻）；
+//   4. scripts/dev.mjs——开发编排器自带 shell: isWin 分支（killAll 的
+//      taskkill 亦是真 PE），不在生产链路。
+// ---------------------------------------------------------------------------
+
+/** escapeWinArg 白名单：字母数字与对 cmd 解析、argv 切分均无歧义的常见符号
+ *  （覆盖包名 @scope/pkg、flag -y/--port=3000、版本 1.2.0、路径 C:/x/y.js） */
+const WIN_SAFE_ARG_RE = /^[A-Za-z0-9\-_./:=@+]+$/;
+
+/**
+ * win32 shell 模式下的单个参数转义（导出仅为测试锁契约）。
+ *
+ * 规则：
+ *   - 内嵌 `"` → 直接抛错拒绝启动：引号无法穿过「cmd 命令行 + .cmd shim 批
+ *     处理」双层解析保真传递，静默转义反而制造难排查的参数破损；
+ *   - 白名单安全字符 → 原样返回；
+ *   - 其余（含空格，或含 & ^ % ( ) < > | , ; ! 等 cmd 元字符）→ 双引号
+ *     包裹——双引号内 cmd 对上述元字符与空格全部字面化。
+ *
+ * 已知边界（文档化不追防）：`%` 在 cmd 双引号内仍可能被环境变量展开
+ * （%VAR% 形态且 VAR 恰有定义时）。参数来自用户本机 MCP 配置（非对抗性
+ * 输入），实际 arg 形态（包名/版本号/路径）不含 %；确需传 % 字面量时建议
+ * 改用 config.env 段传递。
+ */
+export function escapeWinArg(arg: string): string {
+  if (arg.includes('"')) {
+    throw new Error(`MCP 参数包含双引号（"），Windows shell 模式下无法安全转义，已拒绝启动：${arg}`);
+  }
+  if (WIN_SAFE_ARG_RE.test(arg)) return arg;
+  return `"${arg}"`;
+}
+
 function buildMcpEnv(configEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of Object.keys(process.env)) {
@@ -93,10 +145,21 @@ export class McpClient {
 
   /** 启动子进程并完成 MCP initialize 握手 */
   async connect(): Promise<void> {
-    this.proc = spawn(this.config.command, this.config.args, {
-      env: buildMcpEnv(this.config.env),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    // win32 shell 分支：无 shell 的 spawn 不解析 .cmd/.bat shim（npx 实为
+    // npx.cmd），裸命令必 ENOENT——豁免清单与转义规则见模块头部总说明。
+    // command 本体与 args 同走 escapeWinArg（终审 I3）：shell 模式下含空格的
+    // command（如 C:\Program Files\nodejs\npx.cmd）不转义会被 cmd 切分。
+    // linux 下 opts 不含 shell 键（undefined）——非 win32 行为零变化。
+    const isWin = process.platform === 'win32';
+    this.proc = spawn(
+      isWin ? escapeWinArg(this.config.command) : this.config.command,
+      isWin ? this.config.args.map(escapeWinArg) : this.config.args,
+      {
+        env: buildMcpEnv(this.config.env),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        ...(isWin ? { shell: true } : {}),
+      },
+    );
 
     this.proc.stdout.on('data', (chunk: Buffer) => this.handleData(chunk));
     this.proc.stderr.on('data', (chunk: Buffer) => {

@@ -1,6 +1,7 @@
 // electron/src/main/files/workspace-fs.ts
 import fs from 'node:fs';
 import path from 'node:path';
+import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 
 export interface DirEntry {
   name: string;
@@ -38,10 +39,14 @@ export class WorkspaceFS {
     const normalized = path.normalize(abs);
     const realRoot = fs.realpathSync(this.rootDir);
 
-    // 1) 字符串边界检查：path.normalize 已消除 "../" 穿越，
-    //    所以仅需确认 normalized 落在 rootDir 之内即可拦截路径穿越与外部绝对路径。
-    const insideWorkspace =
-      normalized === this.rootDir || normalized.startsWith(this.rootDir + path.sep);
+    // 1) 字符串边界检查：path.normalize 已消除 "../" 穿越，仅需确认 normalized
+    //    落在 rootDir 之内。isInsideDir 统一承载（resolve 归一 + sep 边界前缀 +
+    //    win32 大小写不敏感 / 异盘语义）；显式 PATH_SEMANTICS_WIN32 使判定随
+    //    当前 path 模块语义分叉——生产与 process.platform 恒一致，win32 单测
+    //    mock node:path 后仍能进入正确分支。
+    const insideWorkspace = isInsideDir(this.rootDir, normalized, {
+      win32: PATH_SEMANTICS_WIN32,
+    });
     if (!insideWorkspace) {
       throw new Error(`路径越界: ${relativeOrAbsolutePath} 不在 workspace 内`);
     }

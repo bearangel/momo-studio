@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 import {
   BrowserDeniedError,
   BrowserDomainBlockedError,
@@ -150,12 +151,13 @@ export class BrowserPolicy {
     const root = path.resolve(this.workspaceRoot);
     const normalized = path.resolve(filePath);
 
-    // 1) 字符串边界：resolve 已消除 .. 穿越与冗余段，relative 判定必须在 root 之下。
-    //    '..' 前缀带 path.sep 精确判定（防 '..foo.txt' 同前缀误伤）；异盘绝对路径兜底拦。
-    const rel = path.relative(root, normalized);
-    const inside =
-      rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
-    if (!inside) throw new BrowserFileAccessError();
+    // 1) 字符串边界：resolve 已消除 .. 穿越与冗余段。isInsideDir 统一承载，
+    //    语义覆盖原 relative 变体（rel === '..' 或 '..' + sep 前缀或异盘绝对
+    //    形态，等价于 resolve 归一后不在 root 内），并接入 win32 大小写不敏感
+    //    比对（PATH_SEMANTICS_WIN32 显式入口，随当前 path 模块语义分叉）。
+    if (!isInsideDir(root, normalized, { win32: PATH_SEMANTICS_WIN32 })) {
+      throw new BrowserFileAccessError();
+    }
 
     // 2) 符号链接逃逸：向上找真实存在的最近祖先，realpath 解析后不得脱离 workspace
     //    真实根。逐级向上而非直接 realpath(normalized)，是为了支持尚未创建的文件
@@ -167,7 +169,9 @@ export class BrowserPolicy {
     }
     if (anchor !== root) {
       const realAnchor = fs.realpathSync(anchor);
-      if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
+      // 2) 锚定段同样走 isInsideDir（等价于原 realAnchor !== realRoot 且不
+      //    startsWith(realRoot + sep) 的合取形态；win32 态大小写不敏感）
+      if (!isInsideDir(realRoot, realAnchor, { win32: PATH_SEMANTICS_WIN32 })) {
         throw new BrowserFileAccessError();
       }
     }

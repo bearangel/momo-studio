@@ -6,6 +6,19 @@
 
 ## 状态
 
+**v2.10.0 — Windows 全平台化（开发中，未发布）**
+
+Windows 代码层硬化 + 打包就绪——路径语义 / spawn / 单实例 / NSIS 四层补齐。验证策略：Linux 容器内经 `vi.mock('node:path')` 注入 win32 语义锁住纯路径逻辑，真机验收进行中（平台声明标「实验性」）。spec 见 `docs/specs/2026-09-12-windows-platform-design.md`。
+
+- **paths helper（新增）** — `electron/src/main/platform/paths.ts` 统一全仓目录边界判定：`isInsideDir`（win32 盘符与目录段大小写不敏感 + UNC 等价处理 + 分隔符归一 + `..foo.txt` 不误伤；posix 语义与被替换的手工比对逐字节等价）+ `toPosixRelPath`（POSIX 相对化，`replaceAll` 字面替换不依赖 `split` 段重组巧合）——六模块七处收敛（5 处 `startsWith` + 2 处 `split/join`）；skill 域两处与 realpath anchor 链存量待 v2.10.x 收敛（适用域圈定见 engineering.md v2.10 规则）；平台分叉按「当前 path 模块语义」而非 OS（`PATH_SEMANTICS_WIN32`，mock 测试与生产环境收敛同一结果）
+- **六模块 win32 模拟测试** — workspace-fs / journal revert / journal detector / git-tools / browser policy / browser protocol 六模块各配 `*.win32.test.ts`（统一 vi.mock 模板，双 win32 default+named 形态）：大小写命中 / UNC 命中 / 异盘拒 / `..` 边界 / POSIX 归一正确；fs 依赖用例 mock `node:fs` 模拟 NTFS 大小写行为（case-preserving realpath）
+- **MCP spawn 修正** — win32 无 shell 的 `spawn('npx')` 直接 ENOENT（CreateProcess 不解析 .cmd shim）：`shell: process.platform === 'win32'` 三态注入（linux 行为零变化）+ command 本体与 args 逐元素引号转义（含空格 command 同走转义——`C:\Program Files\nodejs\npx.cmd` 类路径不转义会被 cmd 切分；内嵌双引号无法安全转义 → 拒绝启动 + 中文报错）；其余 spawn 点（journal git / agent-runner node 自身 / sandbox probe / dev 脚本）逐一审计豁免并注释记录（豁免理由见 spec §3.4）
+- **MCP spawn 信任前提** — p2p 导入的 MCP 定义以导入信任门为界（peer 可控 command 本体，`%VAR%` 边缘并非升格路径）
+- **单实例锁** — `requestSingleInstanceLock` + `second-instance` 聚焦既有窗口（show + focus，最小化恢复）；无锁实例静默 quit 且 boot 链不执行（修复 v2.0 P2 半成品「quit 后 boot 照跑」）——SQLite WAL 双开锁冲突由此消除
+- **NSIS 加固** — `perMachine: false` 显式（per-user 安装免管理员，默认值固化防漂移）+ `build/icon.ico` 占位 + 未签名 SmartScreen 指引（见「Windows 安装说明」）
+- 已知边界：长路径 >260 Node/Electron 常规路径可过但 git 操作需 `core.longpaths=true` / MCP win32 shell 模式下 `%VAR%` 在 cmd 双引号内仍可能被展开（参数来自用户本机 MCP 配置，非对抗性输入，文档化不追防）/ 字面反斜杠文件名与分隔符 win32 下不可区分——按分隔符语义解析后归一 POSIX（与 git 在 Windows 的行为一致）/ realpath 符号链接反逃逸链的 anchor 比较仍大小写严格的是 workspace-fs / skill loader 两处（browser policy.ts 的 anchor 已转换 isInsideDir）——真实 Windows 靠 NTFS 大小写不敏感 existsSync + case-preserving realpathSync 兜底（分析确认无死循环路径）
+- 主机验收待办（Windows 真机）：安装（NSIS + SmartScreen「仍要运行」实测）→ 首启（如遇 ExecutionPolicy=Restricted 授权卡按指引操作）→ MCP npx server 实启 → 双开聚焦（第二实例静默退出 + 首窗口前置）→ UNC 工作区（创建 + agent 文件操作）
+
 **v2.9.0 — 多仓 git 工具（开发中，未发布）**
 
 workspace 内层仓的 agent 可见可操作——git 九件套（status/diff/log/show/add/commit/branch/checkout/stash）此前固定在 workspace 根仓执行（`runGit` 恒 workspaceDir），agent 能改内层仓文件却看不见也管不了这些仓的 git 状态（monorepo 子服务、vendored 依赖、嵌套克隆是真实工程常态）。v2.9 以「发现列表是唯一 `-C` 入口」为安全骨架，把多仓能力交到 agent 手上。spec 见 `docs/specs/2026-09-12-multi-repo-git-design.md`。
@@ -254,7 +267,7 @@ v1.7 资源库重构——把 v1.6 的 Marketplace + 底部"自定义资源"折�
 
 - **Node.js 20 LTS**：Node 26+ 会破坏 `better-sqlite3` 原生编译（`ERR_DLOPEN_FAILED`）。容器默认是 Node 26，先 `nvm use 20`。
 - **pnpm 9+**
-- 平台：macOS（arm64 / x64）或 Linux（x64）。Windows 是 v2 任务。
+- 平台：macOS（arm64 / x64）/ Linux（x64）/ **Windows（实验性——代码层硬化 + 打包就绪，真机验收进行中，安装见下方「Windows 安装说明」）**
 
 ## 安装
 
@@ -264,6 +277,15 @@ cd momo-studio
 nvm use 20
 npx pnpm@9.0.0 install
 ```
+
+### Windows 安装说明（实验性）
+
+Windows 支持自 v2.10.0 起进入「代码层硬化 + 打包就绪」状态，真机验收进行中——遇到问题请提 issue。安装包为 NSIS 安装器（`electron/dist-installers/` 下 `*-setup.exe`，per-user 安装，无需管理员权限）。
+
+- **SmartScreen 警告（未签名，属常态）**——安装器当前无代码签名证书，首次运行会弹「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」即可继续安装。有证书前该警告每次都会出现，不是安装包损坏。
+- **代码签名（待接入）**——采购证书后在 `electron/package.json` 的 `win` 段写 `signtoolOptions: { certificateFile, certificatePassword }`，或经环境变量 `CSC_LINK` / `WIN_CSC_KEY_PASSWORD` 注入——构建时自动签名，SmartScreen 警告随之消除。注意：顶层 `win.certificateFile` / `win.certificatePassword` 写法**在 electron-builder v26 已不生效**（实现只读 `signtoolOptions` 嵌套值；d.ts 里的顶层声明是 legacy 残留，勿被误导）。
+- **PowerShell 执行策略**——bash 工具的 Windows 路径走 PowerShell plain 模式（v2.4 起）。若系统 `ExecutionPolicy=Restricted`，首启会出现授权指引卡：按卡内指引以当前用户作用域放开（`Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`），或如无 bash 工具需求可忽略。
+- **长路径**——工作区路径超过 260 字符时 Node/Electron 常规读写可过，但 agent 的 git 操作需仓库启用 `core.longpaths=true`（`git config --global core.longpaths true`）。
 
 ## 开发
 

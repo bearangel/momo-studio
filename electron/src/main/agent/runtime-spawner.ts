@@ -169,6 +169,10 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   };
 
   // fork runtime-entry.js
+  // win32 shell 豁免（v2.10 spawn 审计）：fork 经 process.execPath（node/
+  // Electron 自身绝对路径，真 PE）启动——无裸命令 .cmd shim 解析问题，不会
+  // ENOENT；WarmPool 注入的 spawn 同源本路径（agent-runner 的 runtime 全部
+  // 经此拉起），故不加 shell 分支（对照 mcp/client.ts 的裸命令 npx 问题）。
   const child = fork(RUNTIME_ENTRY_PATH, [], {
     env,
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],

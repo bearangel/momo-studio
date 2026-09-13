@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 
 /** 协议 scheme 常量（boot registerSchemesAsPrivileged 与 renderer 引用方契约） */
 export const BROWSER_SHOT_SCHEME = 'browser-shot';
@@ -65,9 +66,10 @@ export function registerBrowserShotProtocol(protocol: ProtocolLike, screenshotDi
       return new Response('browser-shot 拒绝路径穿越', { status: 403 });
     }
     // 基目录锚定后 resolve——即使未来清洗规则有漏，双重边界仍拦绝对逃逸
+    //（isInsideDir 统一 win32 大小写/前缀边界语义）
     const wsRoot = path.resolve(screenshotDir, wsId);
     const abs = path.resolve(wsRoot, ...segments);
-    if (abs !== wsRoot && !abs.startsWith(wsRoot + path.sep)) {
+    if (!isInsideDir(wsRoot, abs, { win32: PATH_SEMANTICS_WIN32 })) {
       return new Response('browser-shot 拒绝路径穿越', { status: 403 });
     }
     let stat: fs.Stats;
