@@ -41,11 +41,14 @@ export function resolveShellSpawn(workspaceDir: string, command: string): SpawnP
   }
 
   const state = getSandboxState();
+  // wrapped tag 携带网络态（net-off/net-on）：网络关时监听/出网在沙箱内必败，
+  // 让 LLM 从结果行一步自诊（「开 设置→安全沙箱→网络」）而非多轮 bind/curl 试探
+  const netTag = settings.networkEnabled ? 'net-on' : 'net-off';
   if (process.platform === 'linux' && state?.sandboxTool === 'bwrap') {
     return {
       kind: 'wrapped', shell: 'bwrap',
       args: [...buildBwrapArgs(policy), '/bin/bash', '-c', command],
-      tag: 'bwrap', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
+      tag: `bwrap/${netTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [],
     };
   }
   if (process.platform === 'darwin' && state?.sandboxTool === 'seatbelt') {
@@ -56,7 +59,7 @@ export function resolveShellSpawn(workspaceDir: string, command: string): SpawnP
       // -f 从文件读 profile（-p 会把参数整串当 SBPL 源码解析——传路径即
       // 「unbound variable」exit 65，macOS 主机实测；probe 冒烟的 -p 是内联字符串，语义不同）
       args: ['-f', profilePath, '/bin/bash', '-c', command],
-      tag: 'seatbelt', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
+      tag: `seatbelt/${netTag}`, envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
     };
   }
 

@@ -27,9 +27,20 @@ describe('resolveShellSpawn', () => {
     expect(plan.shell).toBe('bwrap');
     expect(plan.args[plan.args.length - 2]).toBe('-c');
     expect(plan.args[plan.args.length - 1]).toBe('echo hi');
-    expect(plan.tag).toBe('bwrap');
+    expect(plan.tag).toBe('bwrap/net-off');
     expect(plan.envAdditions.npm_config_cache).toContain('npm-cache');
     expect(plan.envAdditions.PIP_CACHE_DIR).toContain('pip-cache');
+  });
+
+  it('wrapped tag 携带网络态（net-off/net-on）——LLM 一步自诊监听/出网失败', () => {
+    __setSandboxStateForTest(linuxAvail);
+    __setSandboxSettingsForTest({ mode: 'strict', networkEnabled: true });
+    const on = resolveShellSpawn(tmp, 'x');
+    __setSandboxSettingsForTest({ mode: 'strict', networkEnabled: false });
+    const off = resolveShellSpawn(tmp, 'x');
+    if (on.kind !== 'wrapped' || off.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(on.tag).toBe('bwrap/net-on');
+    expect(off.tag).toBe('bwrap/net-off');
   });
 
   it('网络开关驱动 bwrap args（关 → --unshare-net 在 args 里）', () => {
@@ -88,6 +99,7 @@ describe('resolveShellSpawn', () => {
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;
       expect(plan.shell).toBe('sandbox-exec');
+      expect(plan.tag).toBe('seatbelt/net-off');
       // -f = profile 从文件读（-p 是把参数当 SBPL 字符串解析——传文件路径会整串
       // 被当成未绑定变量，主机实测 exit 65「unbound variable」）
       expect(plan.args[0]).toBe('-f');
