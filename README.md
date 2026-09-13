@@ -680,12 +680,13 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 
 ### v2.1 — 效率增强 🔲 概念阶段
 
+- ✅ UI 设计系统（语义 token / 原子组件 / lucide 图标 + ESLint 机械强制，已全仓消费——规范见 `docs/dev/design-system.md`）
 - 🔲 分支工作流（agent 工作在独立 branch，PR 式合并）
 - 🔲 Agent 并发多任务（内部 task queue）
 - 🔲 Token 配额管理
 - 🔲 LSP 集成（Monaco 编辑器语言服务）
 - 🔲 协作实时编辑（CRDT）
-- 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例）
+- 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例；v2.7 已新增 browser e2e——`tests/e2e/browser.spec.ts`）
 - ✅ OS 级沙箱接线（v2.4.0 完成——bash 工具经 `resolveShellSpawn` 接入 Seatbelt/bwrap）
 - 🔲 p2p 私钥入 keytar（当前 Ed25519 私钥落盘位置待硬化）
 - 🔲 LAN 帧加密或对应设计稿
@@ -705,7 +706,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 |---|---|---|
 | **Tailwind 任意值 class 不生成 CSS** | 已定位根因：动态拼接 class 不可见（静态书写正常）；规范已禁动态拼接 | 已于 v2.1 P0 勘正 |
 | ~~**OS 级沙箱简化实现**~~ | **v2.4.0 已接线**——bash 工具经 `resolveShellSpawn` 三态决策接入 Seatbelt/bwrap；Windows 无 OS 沙箱走 PowerShell plain 路径 | ~~v2.1~~ 已完成 |
-| Marketplace 无签名验证 | 不可信包风险 | v2.0 |
+| Marketplace 无签名验证 | 不可信包风险 | 待排期（v2.0 目标已过期，未实施） |
 | ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；运行时接线 P3 已完成（`spawn-helpers.ts` 显式透传 `provider.platform`） | ~~P3~~ 已完成 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
 | ~~**provider.platform 运行时接线**~~ | **P3 已完成**——`spawn-helpers.ts` 显式透传 `provider.platform` 到 `createLLMProvider`，设置页下拉选择生效，baseUrl 启发式检测退役为缺省回退 | ~~P3~~ 已完成 |
