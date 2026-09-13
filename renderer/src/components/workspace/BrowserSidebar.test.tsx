@@ -254,7 +254,7 @@ describe('BrowserSidebar·空态与地址栏（spec §3.5）', () => {
   it('空态 → 占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器，agent 工具不被锁死）', async () => {
     // 接管走 main 原生 overlay，DOM 层无接管 div；占位区点击事件不应触达任何 takeover
     // IPC——空态若误触接管，agent 工具立即失败（user 态 TakenOver）+ 用户接管空浏览器无意义。
-    const { push } = armOnBrowserState();
+    armOnBrowserState();
     getStateMock.mockResolvedValue(mkState({ tabs: [], url: '', title: '' }));
     render(<BrowserSidebar workspaceId="w1" />);
     expect(await screen.findByText('浏览器待命')).toBeInTheDocument();

@@ -51,6 +51,13 @@ export function groupByPath(entries: JournalEntryView[]): FileChangeGroup[] {
   return groups;
 }
 
+/**
+ * 渲染行数上限（审查 C3）：超大 diff（降级视图可达 n+m 行）全量渲染 DOM 行
+ * 会卡死消息流——截断展示前 N 行 + 总行数提示；diff 计算本身有
+ * line-diff 降级阈值兜底，本截断是渲染层的第二道防线。
+ */
+const DIFF_RENDER_ROW_CAP = 500;
+
 /** 行级 diff 渲染：del 行 text-status-error / add 行 text-status-success / ctx 中性 */
 export function DiffBlock({
   beforeText,
@@ -67,6 +74,8 @@ export function DiffBlock({
       ),
     [beforeText, afterText],
   );
+  const truncated = rows.length > DIFF_RENDER_ROW_CAP;
+  const shown = truncated ? rows.slice(0, DIFF_RENDER_ROW_CAP) : rows;
 
   // 双侧文本皆缺（hash 为 null 或 blob 被配额清理）→ 无从 diff，如实提示
   if (beforeText === null && afterText === null) {
@@ -82,7 +91,7 @@ export function DiffBlock({
       className="overflow-x-auto border-t border-subtle px-2 py-1 font-mono text-[11px]"
       data-testid="changes-diff"
     >
-      {rows.map((row, i) => (
+      {shown.map((row, i) => (
         <div
           key={`${row.type}-${i}`}
           className={cn(
@@ -98,6 +107,11 @@ export function DiffBlock({
           {row.text}
         </div>
       ))}
+      {truncated && (
+        <div className="px-2 py-1 text-tertiary" data-testid="changes-diff-truncated">
+          已截断，共 {rows.length} 行
+        </div>
+      )}
     </div>
   );
 }
