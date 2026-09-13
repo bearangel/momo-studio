@@ -1,14 +1,12 @@
 // electron/src/main/sandbox/ipc.handlers.ts
 // sandbox 命名空间 IPC（spec §6.5）：状态/重探测/装 bwrap/关提示卡。
 // 设置读写走既有 settings:getGlobal/updateGlobal（不新增通道）。
-// v2.4.x（spec 2026-09-13 §5）：新增 sandbox:answerNetworkTrust（信任卡三值
-// 应答）+ sandbox:notice m→r 推送（net-trust-request 信任卡）；信任门单例经
-// initNetworkTrustGate 在此接线（readPolicy/persistAlways 走设置真实现）。
+// 2026-09-13 修订 B：ask 信任门下线——sandbox:answerNetworkTrust 应答通道与
+// sandbox:notice 推送通道一并移除（无生产者也无消费者）。
 import { spawn } from 'node:child_process';
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { updateGlobalSettings } from '../settings/crud';
 import {
   getSandboxState,
   reprobeSandbox,
@@ -17,11 +15,6 @@ import {
 } from './probe';
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
-import {
-  initNetworkTrustGate,
-  getNetworkTrustGate,
-  type NetworkTrustNotice,
-} from './network-trust';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -99,25 +92,7 @@ export async function installBwrapViaPkexec(
   };
 }
 
-/**
- * 信任卡 m→r 推送：懒查首个窗口（注册先于窗口创建的 boot 顺序无关性——
- * window-ipc getWin 同款模式）。窗口不在场时静默丢弃（等待侧 180s 超时兜底收敛）。
- */
-function sendNetworkTrustNotice(n: NetworkTrustNotice): void {
-  const win = BrowserWindow.getAllWindows()[0];
-  win?.webContents?.send('sandbox:notice', n);
-}
-
 export function registerSandboxIpc(): void {
-  // 信任门接线（重复调用=替换单例——boot 幂等）：读策略走设置真实现（含懒迁移），
-  // always 持久化落 settings kv（新键 sandboxNetworkPolicy）
-  initNetworkTrustGate({
-    readPolicy: () => getSandboxSettings().networkPolicy,
-    persistAlways: () => {
-      updateGlobalSettings({ sandboxNetworkPolicy: 'allow' });
-    },
-    pushNotice: sendNetworkTrustNotice,
-  });
   ipcMain.handle('sandbox:getState', () => buildInfo());
   ipcMain.handle('sandbox:reprobe', async () => {
     await reprobeSandbox();
@@ -134,20 +109,5 @@ export function registerSandboxIpc(): void {
       )
       .run(key);
   });
-  // 信任卡三值应答（镜像 browser:answerTrust，spec §5 IPC）：迟到应答（无 pending
-  // 等待）在 gate.answer 内 no-op——此处不重复判定。入参做最小运行时校验（IPC
-  // 无类型边界），非法值抛中文 Error（invoke 拒绝，UI 直接呈现）。
-  ipcMain.handle(
-    'sandbox:answerNetworkTrust',
-    (_e, streamSessionId: unknown, answer: unknown) => {
-      if (typeof streamSessionId !== 'string' || streamSessionId === '') {
-        throw new Error('sandbox:answerNetworkTrust 参数 streamSessionId 必须为非空字符串');
-      }
-      if (answer !== 'session' && answer !== 'always' && answer !== 'deny') {
-        throw new Error('sandbox:answerNetworkTrust 应答必须是 session / always / deny');
-      }
-      getNetworkTrustGate()?.answer(streamSessionId, answer);
-    },
-  );
   logger.info('Sandbox IPC handlers 已注册');
 }

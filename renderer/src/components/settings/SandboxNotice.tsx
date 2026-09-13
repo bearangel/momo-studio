@@ -40,8 +40,7 @@ export function SandboxNotice() {
   }, []);
 
   // netOff 卡不依赖探测 state（tag 在场即证明沙箱当时在跑）；bwrap/授权卡仍需 state。
-  // v2.4.x 防双弹（spec §6）：ask 策略下网络失败由 NetworkTrustCard（阻塞式询问）
-  // 负责，本信息卡只在 deny 策略下展示——ask 的裁决/超时收敛后本卡同样不弹。
+  // 双态（修订 B）下本信息卡仅在 deny 策略展示（allow 全放行无引导诉求）。
   if (!info) return null;
 
   const showNetOff =

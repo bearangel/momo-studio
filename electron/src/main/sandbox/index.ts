@@ -36,11 +36,10 @@ export function resolveShellSpawn(
   opts?: { networkEnabled?: boolean },
 ): SpawnPlan {
   const settings = getSandboxSettings();
-  // v2.4.x 网络信任门（spec §5 唯一改动点）：有效策略 effectiveNetwork(taskKey) =
-  // sessionGrants.get(taskKey) ?? settings.networkPolicy 由 shell-tools 经主进程
-  // 信任门解析后以 opts.networkEnabled 显式传入（grants 在主进程内存，子进程不可见）；
-  // 未传时（既有调用方/单测）按设置三态推导：allow → 开，deny/ask → 关——
-  // ask 的 spawn 恒 net-off，命中网络拒绝签名后走阻塞询问。各平台 profile
+  // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
+  // (networkPolicy === 'allow')，由 shell-tools 经主进程策略查询解析后以
+  // opts.networkEnabled 显式传入（设置读取在主进程，子进程不可见）；未传时
+  //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
   const policy = buildPolicy(workspaceDir, networkEnabled);

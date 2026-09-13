@@ -1,9 +1,10 @@
 // electron/tests/sandbox/ipc.handlers.test.ts
 //
-// sandbox 命名空间通道（getState / reprobe / installBwrap / dismissPrompt /
-// answerNetworkTrust）测试。ipcMain.handle mock 形态照抄 tests/files/ipc.handlers.test.ts
+// sandbox 命名空间通道（getState / reprobe / installBwrap / dismissPrompt）测试。
+// ipcMain.handle mock 形态照抄 tests/files/ipc.handlers.test.ts
 // （vi.hoisted + Map 捕获）；db fixture 复用 tests/sandbox/settings.test.ts 模式
 // （AP_USER_DATA_DIR 临时目录 + runMigrations）。
+//（2026-09-13 修订 B：answerNetworkTrust 通道已随 ask 信任门下线移除。）
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,10 +22,6 @@ vi.mock('electron', () => ({
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
       ipcHandlers.set(channel, fn);
     },
-  },
-  // v2.4.x：信任卡推送懒查首个窗口——mock 无窗口环境（推送静默丢弃由 network-trust 测试覆盖）
-  BrowserWindow: {
-    getAllWindows: () => [],
   },
 }));
 
@@ -57,10 +54,6 @@ import {
   type SandboxProbeState,
 } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
-import {
-  getNetworkTrustGate,
-  __resetNetworkTrustGateForTest,
-} from '../../src/main/sandbox/network-trust';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-ipc-test-${Date.now()}`);
@@ -111,67 +104,24 @@ function mkRunner(result: { code: number | null; stdout: string; stderr: string 
 }
 
 describe('sandbox/ipc.handlers 通道注册', () => {
-  it('注册 sandbox:getState / reprobe / installBwrap / dismissPrompt / answerNetworkTrust 五通道', () => {
+  it('注册 sandbox:getState / reprobe / installBwrap / dismissPrompt 四通道', () => {
     expect(ipcHandlers.has('sandbox:getState')).toBe(true);
     expect(ipcHandlers.has('sandbox:reprobe')).toBe(true);
     expect(ipcHandlers.has('sandbox:installBwrap')).toBe(true);
     expect(ipcHandlers.has('sandbox:dismissPrompt')).toBe(true);
-    expect(ipcHandlers.has('sandbox:answerNetworkTrust')).toBe(true);
-  });
-});
-
-describe('sandbox/ipc.handlers 信任门接线（registerSandboxIpc → initNetworkTrustGate）', () => {
-  afterEach(() => { __resetNetworkTrustGateForTest(); });
-
-  it('注册后模块级 gate 单例非空（未接线即生产 no-op 的接线锁）', () => {
-    expect(getNetworkTrustGate()).not.toBeNull();
-  });
-
-  it('readPolicy 走设置真实现：gate.effective 随 DB 三态翻转', () => {
-    getNetworkTrustGate()!.__setGrantForTest('ssn-x', 'granted');
-    expect(getNetworkTrustGate()!.effective('ssn-x').netOn).toBe(true);
-    getNetworkTrustGate()!.clearGrant('ssn-x');
-    // DB 默认（无行 → 懒迁移）→ ask
-    expect(getNetworkTrustGate()!.effective('ssn-y')).toEqual({ netOn: false, awaitingAsk: true });
-  });
-});
-
-describe('sandbox:answerNetworkTrust', () => {
-  afterEach(() => { __resetNetworkTrustGateForTest(); });
-
-  it('非法 answer → 抛中文 Error（IPC 无类型边界防线；生产 ipcMain.handle 包为 rejection）', async () => {
-    const handler = ipcHandlers.get('sandbox:answerNetworkTrust')!;
-    await expect(async () => handler({}, 'ssn-1', 'bogus')).rejects.toThrow('session / always / deny');
-  });
-
-  it('非字符串 streamSessionId → 抛中文 Error', async () => {
-    const handler = ipcHandlers.get('sandbox:answerNetworkTrust')!;
-    await expect(async () => handler({}, 123, 'session')).rejects.toThrow('streamSessionId');
-    await expect(async () => handler({}, '', 'session')).rejects.toThrow('streamSessionId');
-  });
-
-  it('合法应答路由到 gate：无 pending 等待时 no-op 不抛（迟到应答语义）', () => {
-    const handler = ipcHandlers.get('sandbox:answerNetworkTrust')!;
-    expect(() => handler({}, 'ssn-late', 'always')).not.toThrow();
-  });
-
-  it('端到端：gate 等待中 → answerNetworkTrust(session) → 等待者收 granted', async () => {
-    const gate = getNetworkTrustGate()!;
-    const pending = gate.waitForTrust('ssn-e2e');
-    const handler = ipcHandlers.get('sandbox:answerNetworkTrust')!;
-    await handler({}, 'ssn-e2e', 'session');
-    await expect(pending).resolves.toBe('granted');
+    // 修订 B：ask 信任门通道已下线——不再注册（防幽灵复活）
+    expect(ipcHandlers.has('sandbox:answerNetworkTrust')).toBe(false);
   });
 });
 
 describe('sandbox:getState', () => {
-  it('默认 settings（strict/ask）+ 探测状态 null + 提示卡均未关闭', async () => {
+  it('默认 settings（strict/allow）+ 探测状态 null + 提示卡均未关闭', async () => {
     detectPkgMock.mockReturnValue({ manager: 'apt', installCommand: 'sudo apt install bubblewrap' });
     const handler = ipcHandlers.get('sandbox:getState')!;
 
     const info = (await handler()) as SandboxInfo;
 
-    expect(info.settings).toEqual({ mode: 'strict', networkPolicy: 'ask' });
+    expect(info.settings).toEqual({ mode: 'strict', networkPolicy: 'allow' });
     expect(info.state).toBeNull();
     expect(info.installCommand).toBe('sudo apt install bubblewrap');
     expect(info.bwrapPromptDismissed).toBe(false);

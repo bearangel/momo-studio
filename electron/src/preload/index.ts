@@ -8,7 +8,6 @@ import type {
   CollabTarget,
   ImMessage,
   MessageEventBatch,
-  NetworkTrustNotice,
   RegisterMcpInput,
   RemoteNodeTasks,
   ResourceFilter,
@@ -114,21 +113,12 @@ const api: ApiSurface = {
     setModelThinking: (id, modelId, config) => invoke('provider:setModelThinking', id, modelId, config),
   },
   // v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts）——状态/重探测/装 bwrap/关提示卡
-  // + v2.4.x 网络信任卡（answerNetworkTrust 应答 / onNetworkNotice 推送订阅）
+  //（2026-09-13 修订 B：answerNetworkTrust / onNetworkNotice 已随 ask 信任门下线）
   sandbox: {
     getState: () => invoke('sandbox:getState'),
     reprobe: () => invoke('sandbox:reprobe'),
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
-    answerNetworkTrust: (streamSessionId, answer) =>
-      invoke('sandbox:answerNetworkTrust', streamSessionId, answer),
-    onNetworkNotice: (callback) => {
-      const handler = (_e: IpcRendererEvent, notice: NetworkTrustNotice): void => callback(notice);
-      ipcRenderer.on('sandbox:notice', handler);
-      return () => {
-        ipcRenderer.off('sandbox:notice', handler);
-      };
-    },
   },
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚
   journal: {

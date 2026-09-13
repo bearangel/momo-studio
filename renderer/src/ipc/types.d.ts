@@ -549,13 +549,13 @@ export interface GlobalSettings {
   memoryExtractionEnabled?: boolean;
   /** v2.4：OS 沙箱模式（strict=沙箱不可用时 bash 拒绝执行 / permissive=降级运行并审计标记）。默认 strict */
   sandboxMode?: 'strict' | 'permissive';
-  /** v2.4：沙箱内 bash 网络出站布尔开关（已废弃——被 sandboxNetworkPolicy 三态取代；旧键留存供回滚） */
+  /** v2.4：沙箱内 bash 网络出站布尔开关（已废弃——被 sandboxNetworkPolicy 取代；旧键留存供回滚） */
   sandboxNetwork?: boolean;
   /**
-   * v2.4.x：沙箱网络出站三态策略（spec 2026-09-13 §4）：deny 全断 / ask 命中网络
-   * 拒绝后阻塞询问（默认）/ allow 全放行。「永久允许」信任卡应答与设置面板都写本键。
+   * 沙箱网络出站双态策略（2026-09-13 修订 B）：deny 一律禁网 / allow 全放行
+   * （默认——三态时代的 ask 已并入 allow，读时懒迁移收敛）。
    */
-  sandboxNetworkPolicy?: 'deny' | 'ask' | 'allow';
+  sandboxNetworkPolicy?: 'deny' | 'allow';
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
   journalQuotaMb?: number;
 }
@@ -942,23 +942,8 @@ export interface SandboxProbeState {
 /** 沙箱模式，与 electron 端 sandbox/types.ts 的 SandboxMode 对齐 */
 export type SandboxMode = 'strict' | 'permissive';
 
-/** v2.4.x 网络出站三态策略，与 electron 端 sandbox/settings.ts 的 NetworkPolicy 对齐（spec 2026-09-13 §4） */
-export type NetworkPolicy = 'deny' | 'ask' | 'allow';
-
-/** v2.4.x 网络信任卡三值应答（镜像 BrowserTrustAnswer，spec §2）：session=允许本次任务 / always=永久允许 / deny=保持拒绝 */
-export type NetworkTrustAnswer = 'session' | 'always' | 'deny';
-
-/**
- * v2.4.x 网络信任卡 m→r 推送载荷（sandbox:notice 通道，kind 恒 'net-trust-request'）。
- * streamSessionId 是应答路由目标（对应答必须回到发卡的任务流——镜像 BrowserNotice.workspaceId 的 M7 语义）；
- * createdAt 供卡片倒计时（180s 窗口，超时主进程侧自动按拒绝收敛）。
- */
-export interface NetworkTrustNotice {
-  kind: 'net-trust-request';
-  text: string;
-  streamSessionId: string;
-  createdAt: number;
-}
+/** 沙箱网络出站双态策略，与 electron 端 sandbox/settings.ts 的 NetworkPolicy 对齐（2026-09-13 修订 B） */
+export type NetworkPolicy = 'deny' | 'allow';
 
 /**
  * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
@@ -989,10 +974,6 @@ export interface SandboxApiSurface {
   installBwrap(): Promise<{ ok: boolean; output: string }>;
   /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off 拦截引导） */
   dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff'): Promise<void>;
-  /** v2.4.x：网络信任卡三值应答（spec §5；迟到应答主进程侧 no-op） */
-  answerNetworkTrust(streamSessionId: string, answer: NetworkTrustAnswer): Promise<void>;
-  /** v2.4.x：订阅网络信任卡推送（sandbox:notice；卸载需调用返回的解订阅函数） */
-  onNetworkNotice(callback: (notice: NetworkTrustNotice) => void): () => void;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

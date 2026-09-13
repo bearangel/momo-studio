@@ -1,276 +1,28 @@
 // electron/src/main/sandbox/network-trust.ts
 //
-// 沙箱网络出站信任门（spec 2026-09-13 §5，方案 A 阻塞式）——主进程单点：
-//   - sessionGrants：streamSessionId → granted/denied（会话级授权，严格随任务
-//     生命周期——agent-runner 活跃任务表终态时清理，spec §3 非目标：不跨任务记忆）
-//   - 单飞等待表：同 streamSessionId 并发命中只推一张信任卡，join 同一裁决
-//   - 阻塞询问协议：推卡 → 等待（≤180s）→ 三值应答 / 超时=deny /
-//     迟到应答对齐浏览器语义（always 迟到仍持久化，deny/session 迟到 no-op）
+// 沙箱网络出站策略——子进程 IPC 查询的主进程对端（2026-09-13 修订 B）。
+// 三态时代的 ask 信任门机制（sessionGrants / 阻塞等待表 / 三值应答 / 超时
+// 收敛 / 信任卡推送）已全链下线：真机体验存在结构性天花板——事后文本鉴定
+// 永远漏检（用户 echo 的任意格式不可枚举），阻塞等待卡在无人值守场景必然
+// 超时按拒绝收敛，等效于变相 deny。现行有效网络态 = settings kv 双态策略
+// 单点判定：netOn = (networkPolicy === 'allow')。
 //
-// 纪律对齐 browser/policy.ts：纯逻辑零 electron 依赖（推送 / 持久化 / 时钟全部
-// 构造注入，单测直驱）。子进程 shell-tools 经 net-trust-bridge IPC 桥调用本模块
-// （handleNetTrustOp），grants 活在主进程内存、子进程不可见。
-import { logger } from '../logger';
-import type { NetworkPolicy } from './settings';
+// 本模块保留 effective 单 op 的子进程桥对端（线协议名与 op 名不变，payload
+// 仅 netOn 字段——向后兼容旧消费者）：ShellTools 在 runtime 子进程执行，策略
+// 读取必须代理回主进程（子进程不可见 DB 单例）。
+import { getSandboxSettings } from './settings';
 
 export type { NetworkPolicy } from './settings';
-
-/** 阻塞询问上限（spec §5 协议 2）；导出供桥侧超时分档联动（改一处另一处编译期可见） */
-export const NETWORK_TRUST_TIMEOUT_MS = 180_000;
-
-/** 信任卡三值应答（镜像浏览器 answerTrust 语义，spec §2） */
-export type NetworkTrustAnswer = 'session' | 'always' | 'deny';
-/** 等待出口：granted=放行（结果尾追加提示）/ denied=拒绝（失败结果原样返回） */
-export type NetworkTrustOutcome = 'granted' | 'denied';
-export type NetworkGrantValue = 'granted' | 'denied';
-
-/** m→r 推送载荷（sandbox:notice 通道）。createdAt 供卡片倒计时（180s 窗口两端对齐） */
-export interface NetworkTrustNotice {
-  kind: 'net-trust-request';
-  text: string;
-  streamSessionId: string;
-  createdAt: number;
-}
-
-/** 时钟注入面（测试勿真睡铁律）：默认真实 setTimeout（unref）；测试传手动触发桩 */
-export interface TrustClock {
-  setTimer(callback: () => void, ms: number): unknown;
-  clearTimer(handle: unknown): void;
-}
-
-const defaultClock: TrustClock = {
-  setTimer: (cb, ms) => {
-    const t = setTimeout(cb, ms);
-    t.unref?.();
-    return t;
-  },
-  clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
-};
-
-// ─── 网络拒绝签名双条件（主进程侧复刻 renderer/src/stores/stream.store.ts:30，
-// spec §5 要求对齐其正则——tag 在场 = 网络态权威 + 任一失败签名；仅 tag 不触发
-// （未碰网络的命令不打扰）、仅签名不触发（非沙箱所致的网络错误））───
-const SANDBOX_NET_OFF_TAG = /sandbox: (?:seatbelt|bwrap)\/net-off/;
-const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
-  /listen EPERM/i,
-  /(?:connect|connection)[^\n]{0,60}EPERM/i,
-  /Could not resolve host/i,
-  /cannot resolve [^\n]{0,60}Unknown host/i,
-  /curl: \((?:6|7)\)/,
-  // macOS seatbelt 真实形态（2026-09-13 真机会话实证：EPERM 以 strerror 文本出现而非
-  // Linux 风格字面——nslookup/dig 的 socket bind、ping 的 sendto、通用 connect 拒绝）。
-  // 用户 echo 的「退出码: N」等任意格式不可枚举，不纳入（canonical stderr 已覆盖）
-  /(?:bind|connect|sendto|socket)[^\n]{0,60}(?:Operation not permitted|Permission denied|EPERM|unexpected error)/i,
-  // node/getaddrinfo 族：沙箱断 DNS 下解析调用报错
-  /getaddrinfo[^\n]{0,20}(?:EAI_AGAIN|ENOTFOUND|EPERM)/i,
-];
-
-/** 双条件判定：bash 结果文本同时命中 net-off tag 与网络失败签名 */
-export function detectNetworkBlocked(resultText: string): boolean {
-  return (
-    SANDBOX_NET_OFF_TAG.test(resultText) &&
-    NET_BLOCKED_SIGNATURES.some((re) => re.test(resultText))
-  );
-}
-
-/** 信任卡推送文案（单一事实源，测试可断言） */
-const NOTICE_TEXT =
-  'agent 的沙箱命令因网络被拦截而失败——正在等待你裁定本任务是否允许访问网络（3 分钟内有效，超时按拒绝处理）';
-
-interface WaitEntry {
-  readonly promise: Promise<NetworkTrustOutcome>;
-  readonly resolve: (o: NetworkTrustOutcome) => void;
-  readonly timer: unknown;
-}
-
-/** spawn 时逐条求值的单点函数产物（spec §5 effectiveNetwork） */
-export interface EffectiveNetwork {
-  netOn: boolean;
-  /** true = 解析为 ask 且无 session grant（命令失败命中签名后应走阻塞询问） */
-  awaitingAsk: boolean;
-}
-
-export interface NetworkTrustGateDeps {
-  readPolicy: () => NetworkPolicy;
-  /** 「永久允许」持久化（settings kv → allow）；抛错不撤销会话级授权 */
-  persistAlways: () => void;
-  pushNotice: (n: NetworkTrustNotice) => void;
-  clock?: TrustClock;
-}
-
-export class NetworkTrustGate {
-  private readonly grants = new Map<string, NetworkGrantValue>();
-  private readonly waiters = new Map<string, WaitEntry>();
-  private readonly clock: TrustClock;
-
-  constructor(private readonly deps: NetworkTrustGateDeps) {
-    this.clock = deps.clock ?? defaultClock;
-  }
-
-  /** 测试专用：直接注入 grant（生产路径只经 answer / 超时产出） */
-  __setGrantForTest(streamSessionId: string, value: NetworkGrantValue): void {
-    this.grants.set(streamSessionId, value);
-  }
-
-  getGrant(streamSessionId: string): NetworkGrantValue | undefined {
-    return this.grants.get(streamSessionId);
-  }
-
-  /** 任务终态清理（agent-runner 调用；幂等） */
-  clearGrant(streamSessionId: string): void {
-    this.grants.delete(streamSessionId);
-  }
-
-  /** 有效策略解析（spec §5 单点函数）：grants 优先，落空走 settings 三态 */
-  effective(streamSessionId: string): EffectiveNetwork {
-    const grant = this.grants.get(streamSessionId);
-    if (grant === 'granted') return { netOn: true, awaitingAsk: false };
-    if (grant === 'denied') return { netOn: false, awaitingAsk: false };
-    const policy = this.deps.readPolicy();
-    if (policy === 'allow') return { netOn: true, awaitingAsk: false };
-    if (policy === 'deny') return { netOn: false, awaitingAsk: false };
-    return { netOn: false, awaitingAsk: true };
-  }
-
-  /**
-   * 阻塞询问（spec §5 协议）：ask 无 grant 时推卡挂起，直到三值应答 / 超时。
-   *   - 快路径：等待期间授权已到 / 策略已翻转（决定与等待竞态）→ 直接返回现值
-   *   - 单飞：同 streamSessionId 并发等待 join 同一 entry（只推一张卡）
-   *   - 推卡必须先于挂起（否则 renderer 收不到卡、等待必然超时）；推卡抛错
-   *     （IPC 故障）向上穿透且清 entry/timer——不留悬挂等待
-   */
-  async waitForTrust(streamSessionId: string): Promise<NetworkTrustOutcome> {
-    const eff = this.effective(streamSessionId);
-    if (!eff.awaitingAsk) return eff.netOn ? 'granted' : 'denied';
-    const existing = this.waiters.get(streamSessionId);
-    if (existing !== undefined) return existing.promise;
-
-    let resolve!: (o: NetworkTrustOutcome) => void;
-    const promise = new Promise<NetworkTrustOutcome>((res) => {
-      resolve = res;
-    });
-    const timer = this.clock.setTimer(() => {
-      // 超时 = 等效 deny（spec §5 协议 5）：置 denied + 唤醒全部挂起者；
-      // pending 先清——迟到的 answer 对无 entry 是 no-op（协议 6）
-      this.waiters.delete(streamSessionId);
-      this.grants.set(streamSessionId, 'denied');
-      resolve('denied');
-    }, NETWORK_TRUST_TIMEOUT_MS);
-    this.waiters.set(streamSessionId, { promise, resolve, timer });
-    try {
-      this.deps.pushNotice({
-        kind: 'net-trust-request',
-        text: NOTICE_TEXT,
-        streamSessionId,
-        createdAt: Date.now(),
-      });
-    } catch (err) {
-      this.waiters.delete(streamSessionId);
-      this.clock.clearTimer(timer);
-      throw err;
-    }
-    return promise;
-  }
-
-  /**
-   * 信任卡应答出口（sandbox:answerNetworkTrust IPC 入口）：
-   *   - 在时应答：session → grants=granted（任务结束即失效）；
-   *     always → grants=granted + 持久化（本任务即刻生效 + 跨任务生效）；
-   *     deny → grants=denied（本任务内不再询问；不持久化）
-   *   - 迟到应答（无 pending waiter：已超时收敛 / 已应答过 / 幽灵卡）对齐
-   *     浏览器信任门语义（spec §5 协议 6，真机教训 2026-09-13：窗口后台化致
-   *     renderer 倒计时停摆、卡滞留，用户补点「永久允许」被整体丢弃 → 永久
-   *     net-off 且不再询问）：迟到的是用户的持久化意图，仍然生效——
-   *     - always → 仅持久化（下一任务起 net-on）；会话级 grants 不动（本任务
-   *       已按超时 deny 收敛，不复活——已失败命令不重跑、无「用户批准」追加提示）
-   *     - deny → 无操作（超时已等效 deny）
-   *     - session → 无操作（无法追认一个已收敛的等待）
-   *     渲染端卡片消散由其自身点击成功 / 倒计时归零路径处理，无需回推撤卡。
-   *   - 全路径记 in-time/late × answer 诊断日志（真机排查锚点）
-   */
-  answer(streamSessionId: string, ans: NetworkTrustAnswer): void {
-    const entry = this.waiters.get(streamSessionId);
-    if (entry === undefined) {
-      if (ans === 'always') {
-        logger.info('网络信任门：迟到 always 应答——仍持久化（浏览器对齐语义）', {
-          streamSessionId,
-          answer: ans,
-        });
-        try {
-          this.deps.persistAlways();
-        } catch (err) {
-          // 与在时路径同口径：持久化失败只记日志，不向 IPC 抛错（卡片已消散）
-          logger.warn('网络信任门：迟到 always 持久化失败', {
-            streamSessionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      } else {
-        logger.info('网络信任门：迟到应答丢弃（无 pending 等待，仅记日志）', {
-          streamSessionId,
-          answer: ans,
-        });
-      }
-      return;
-    }
-    this.waiters.delete(streamSessionId);
-    this.clock.clearTimer(entry.timer);
-    logger.info('网络信任门：应答在时生效', { streamSessionId, answer: ans });
-    if (ans === 'deny') {
-      this.grants.set(streamSessionId, 'denied');
-      entry.resolve('denied');
-      return;
-    }
-    this.grants.set(streamSessionId, 'granted');
-    if (ans === 'always') {
-      try {
-        this.deps.persistAlways();
-      } catch (err) {
-        // 持久化失败不撤销会话级授权（本任务已放行；跨任务下次再问）
-        logger.warn('网络信任门 always 持久化失败（会话级授权保留）', {
-          streamSessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    entry.resolve('granted');
-  }
-}
-
-// ─── 模块级单例 + 接线（boot / registerSandboxIpc 注入真实依赖）───
-
-let gate: NetworkTrustGate | null = null;
-
-export function initNetworkTrustGate(deps: NetworkTrustGateDeps): void {
-  gate = new NetworkTrustGate(deps);
-}
-
-export function getNetworkTrustGate(): NetworkTrustGate | null {
-  return gate;
-}
-
-export function __resetNetworkTrustGateForTest(): void {
-  gate = null;
-}
-
-/** agent-runner 任务终态清理入口：gate 未接线时 no-op——清理绝不阻断收尾链路 */
-export function clearActiveNetworkGrant(streamSessionId: string): void {
-  gate?.clearGrant(streamSessionId);
-}
-
-// ─── child IPC op 路由（net-trust-bridge 桥的主进程对端，镜像 browser/op-router）───
 
 interface NetTrustOpMsg {
   type: 'net-trust-op';
   requestId: string;
-  op: 'effective' | 'wait';
+  op: 'effective';
   streamSessionId: string;
-  resultText?: string;
 }
 
 export type NetTrustOpResult =
-  | { ok: true; payload: { netOn: boolean; awaitingAsk: boolean } }
-  | { ok: true; payload: { outcome: NetworkTrustOutcome | 'not-triggered' } }
+  | { ok: true; payload: { netOn: boolean } }
   | { ok: false; error: string };
 
 function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
@@ -278,38 +30,26 @@ function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
   const m = msg as Partial<NetTrustOpMsg>;
   if (m.type !== 'net-trust-op') return null;
   if (typeof m.requestId !== 'string' || m.requestId === '') return null;
-  if (m.op !== 'effective' && m.op !== 'wait') return null;
+  if (m.op !== 'effective') return null;
   if (typeof m.streamSessionId !== 'string' || m.streamSessionId === '') return null;
-  if (m.op === 'wait' && typeof m.resultText !== 'string') return null;
   return m as NetTrustOpMsg;
 }
 
 /**
- * 子进程 op 统一路由（永不抛异常——失败统一 { ok:false, error } 序列化回子进程）：
- *   - effective：spawn 前有效策略查询（grants 在主进程内存，子进程不可见）
- *   - wait：命令完成后阻塞询问——触发条件三连（spec §5）：ask 无 grant +
- *     结果文本双条件（net-off tag + 网络拒绝签名，由 resultText 判定）
+ * 子进程 op 统一路由（永不抛异常——失败统一 { ok:false, error } 序列化回子进程）。
+ * effective：spawn 前有效网络态查询，双态策略单点判定（allow → net-on）。
+ * 设置读取失败（DB 异常等）降级 ok:false——子进程 shell-tools 自有回退路径，
+ * 绝不因策略查询挂死 bash 主路径。
  */
 export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> {
-  const g = getNetworkTrustGate();
-  if (g === null) {
-    return { ok: false, error: '网络信任门未初始化（主进程未接线：registerSandboxIpc 应先 initNetworkTrustGate）' };
-  }
   const parsed = parseNetTrustOpMsg(msg);
   if (parsed === null) {
-    return { ok: false, error: 'net-trust-op 载荷形状非法（需 type/requestId/op/streamSessionId[/resultText]）' };
+    return { ok: false, error: 'net-trust-op 载荷形状非法（需 type/requestId/op=effective/streamSessionId）' };
   }
-  if (parsed.op === 'effective') {
-    return { ok: true, payload: g.effective(parsed.streamSessionId) };
+  try {
+    const netOn = getSandboxSettings().networkPolicy === 'allow';
+    return { ok: true, payload: { netOn } };
+  } catch (err) {
+    return { ok: false, error: `网络策略读取失败: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const resultText = parsed.resultText ?? '';
-  if (!detectNetworkBlocked(resultText)) {
-    return { ok: true, payload: { outcome: 'not-triggered' } };
-  }
-  const eff = g.effective(parsed.streamSessionId);
-  if (!eff.awaitingAsk) {
-    return { ok: true, payload: { outcome: eff.netOn ? 'granted' : 'denied' } };
-  }
-  const outcome = await g.waitForTrust(parsed.streamSessionId);
-  return { ok: true, payload: { outcome } };
 }

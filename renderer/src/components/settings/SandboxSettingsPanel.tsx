@@ -2,9 +2,8 @@
 //
 // v2.4 安全沙箱设置（spec §6.4）：沙箱模式 / 沙箱内网络出站 / 探测状态只读区。
 // 状态与重探测走 ipc.sandbox（Task 7）；设置保存走 ipc.settings.updateGlobal。
-// v2.4.x（spec 2026-09-13 §6）：网络出站从布尔开关升级三态信任级别
-// （每次询问（默认）/ 永久允许 / 拒绝）——UI 镜像浏览器信任级形态：
-// 垂直单选列表 + 行内说明（用户裁定弃用横向分段长条控件）。
+// 2026-09-13 修订 B：网络出站三态收敛双态（永久允许（默认）/ 拒绝）——
+// ask 信任卡机制已下线，垂直单选列表 + 行内说明保持既有形态。
 // 全语义 token；lucide ShieldCheck 图标由 SettingsNav 持有。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
@@ -12,13 +11,8 @@ import type { SandboxInfo, SandboxMode, NetworkPolicy } from '../../ipc/types';
 import { Button } from '../ui/Button';
 
 const NETWORK_POLICY_OPTIONS: readonly { value: NetworkPolicy; label: string; hint: string }[] = [
-  {
-    value: 'ask',
-    label: '每次询问（默认）',
-    hint: '命令首次因网络被拦截失败时弹信任卡阻塞等待裁定（3 分钟未应答按拒绝处理）',
-  },
-  { value: 'allow', label: '永久允许', hint: '沙箱内 bash 全放行网络（含端口监听），不再询问' },
-  { value: 'deny', label: '拒绝', hint: '沙箱内 bash 一律禁网；网络失败时仅显示一次性引导卡，不弹出询问' },
+  { value: 'allow', label: '永久允许（默认）', hint: '沙箱内 bash 全放行网络（含端口监听）' },
+  { value: 'deny', label: '拒绝', hint: '沙箱内 bash 一律禁网，网络失败时显示一次性引导卡' },
 ];
 
 export function SandboxSettingsPanel() {

@@ -26,7 +26,6 @@ import { resolveShellSpawn } from '../../sandbox';
 import { buildKillTreeArgs } from '../../sandbox/windows';
 import {
   requestEffectiveNetwork,
-  requestNetworkTrustWait,
   type EffectiveNetworkDecision,
 } from './net-trust-bridge';
 
@@ -117,7 +116,7 @@ export class ShellTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [{
       name: 'bash',
-      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置三态——拒绝/每次询问（默认）/永久允许）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
+      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -143,11 +142,10 @@ export class ShellTools implements ToolModule {
     // 黑名单拦截先于 spawn，命中即抛错（调用方转成 tool result 反馈给 LLM）。
     assertCommandAllowed(command);
 
-    // v2.4.x 网络信任门（spec 2026-09-13 §5）：spawn 前经 IPC 桥问主进程有效策略
-    // effectiveNetwork(streamSessionId) = sessionGrants ?? settings.networkPolicy——
-    // grants 活在主进程内存（agent-runner 任务生命周期管理），子进程不可见。
-    // 桥不可用（非 fork 环境直跑单测 / 主进程超时）回退 resolveShellSpawn 的设置
-    // 三态推导，bash 主路径绝不因信任门故障挂死。
+    // v2.4.x 网络态查询（2026-09-13 修订 B 双态化）：spawn 前经 IPC 桥问主进程
+    // 有效策略 netOn = (networkPolicy === 'allow')——设置读取在主进程 DB 单例，
+    // 子进程不可见。桥不可用（非 fork 环境直跑单测 / 主进程超时）回退
+    // resolveShellSpawn 的设置双态推导，bash 主路径绝不因查询故障挂死。
     let net: EffectiveNetworkDecision | null = null;
     try {
       net = await requestEffectiveNetwork(ctx.streamSessionId);
@@ -299,14 +297,9 @@ export class ShellTools implements ToolModule {
           if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
           if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
           const text = parts.join('\n\n');
-          // v2.4.x 阻塞询问钩子（spec §5 触发条件三连的子进程侧前置双检：ask 无
-          // grant + net-off tag；网络拒绝签名由主进程对 resultText 复判）。方案 A
-          // 阻塞式：agent 环路 await 用户裁决（≤180s 主进程侧超时兜底）。
-          if (net !== null && net.awaitingAsk && plan.kind === 'wrapped' && plan.tag.endsWith('net-off')) {
-            void this.finalizeWithNetworkTrust(ctx.streamSessionId, text).then(resolve, reject);
-            return;
-          }
           // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
+          // （修订 B：ask 阻塞询问收尾已下线——net-off 失败结果原样返回，
+          // renderer stream.store 检测负责 deny 态的一次性引导卡。）
           resolve(text);
         });
       });
@@ -321,25 +314,5 @@ export class ShellTools implements ToolModule {
         });
       });
     });
-  }
-
-  /**
-   * 信任门阻塞询问收尾（spec §5 协议 3/4 + §3 非目标）：
-   *   - granted → 已失败命令结果尾部追加批准提示（不自动重跑——副作用安全，防
-   *     POST 双发；LLM 收到事实自行重试）
-   *   - denied / not-triggered → 失败结果原样返回（LLM 自诊）
-   *   - 桥故障 → 原样返回（信任门故障不挂死命令结果）
-   */
-  private async finalizeWithNetworkTrust(streamSessionId: string, resultText: string): Promise<string> {
-    let outcome: 'granted' | 'denied' | 'not-triggered';
-    try {
-      outcome = await requestNetworkTrustWait(streamSessionId, resultText);
-    } catch {
-      return resultText;
-    }
-    if (outcome === 'granted') {
-      return `${resultText}\n\n(沙箱网络已获用户批准——本任务后续命令可用网络，可重试本命令)`;
-    }
-    return resultText;
   }
 }

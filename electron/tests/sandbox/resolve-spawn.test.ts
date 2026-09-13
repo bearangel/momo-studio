@@ -1,9 +1,8 @@
 // electron/tests/sandbox/resolve-spawn.test.ts
 //
-// resolveShellSpawn 决策测试（v2.4.x 网络三态 + 信任门 spawn 接线，spec 2026-09-13 §5）：
-//   - 三态推导：allow → net-on / deny|ask → net-off（ask 的 spawn 恒 net-off，
-//     命中失败签名后由信任门阻塞询问）
-//   - opts.networkEnabled 显式覆盖（shell-tools 经信任门桥解析 effective 后传入——
+// resolveShellSpawn 决策测试（v2.4.x 网络接线；2026-09-13 修订 B 双态化）：
+//   - 双态推导：allow → net-on / deny → net-off
+//   - opts.networkEnabled 显式覆盖（shell-tools 经策略查询桥解析 netOn 后传入——
 //     接线锁：策略翻转后下一条 spawn 的 tag 随之变化）
 //   - 既有基线：平台分支 / strict 阻断 / permissive 降级
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
@@ -24,7 +23,7 @@ beforeEach(() => { __setSandboxSettingsForTest(null); __setSandboxStateForTest(n
 // 注：win32 分支测试需 mock process.platform——用 Object.defineProperty；
 // linux 容器天然走 linux 分支。darwin 分支无法在本平台触发 → 用 mock platform 测。
 
-describe('resolveShellSpawn 网络三态推导（v2.4.x）', () => {
+describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
   it('policy=allow → net-on（bwrap args 无 --unshare-net）', () => {
     __setSandboxStateForTest(linuxAvail);
     __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
@@ -34,7 +33,7 @@ describe('resolveShellSpawn 网络三态推导（v2.4.x）', () => {
     expect(plan.args).not.toContain('--unshare-net');
   });
 
-  it('policy=deny → net-off（--unshare-net 在 args 里，不询问不升级）', () => {
+  it('policy=deny → net-off（--unshare-net 在 args 里）', () => {
     __setSandboxStateForTest(linuxAvail);
     __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
     const plan = resolveShellSpawn(tmp, 'x');
@@ -43,28 +42,19 @@ describe('resolveShellSpawn 网络三态推导（v2.4.x）', () => {
     expect(plan.args).toContain('--unshare-net');
   });
 
-  it('policy=ask（默认）→ spawn 恒 net-off（命中失败签名后走阻塞询问，spec §2）', () => {
+  it('接线锁：opts.networkEnabled 显式覆盖双态（deny 基线下显式 netOn 翻转下一条 spawn tag）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'ask' });
-    const plan = resolveShellSpawn(tmp, 'x');
-    if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
-    expect(plan.tag).toBe('bwrap/net-off');
-    expect(plan.args).toContain('--unshare-net');
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    // 主进程策略查询解析 netOn 后显式传入（deny → false；allow → true）
+    const beforeFlip = resolveShellSpawn(tmp, 'x', { networkEnabled: false });
+    const afterFlip = resolveShellSpawn(tmp, 'x', { networkEnabled: true });
+    if (beforeFlip.kind !== 'wrapped' || afterFlip.kind !== 'wrapped') throw new Error('应 wrapped');
+    expect(beforeFlip.tag).toBe('bwrap/net-off');
+    expect(afterFlip.tag).toBe('bwrap/net-on');
+    expect(afterFlip.args).not.toContain('--unshare-net');
   });
 
-  it('接线锁：opts.networkEnabled 显式覆盖三态（信任门 session 授权翻转后下一条 spawn tag 变化）', () => {
-    __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'ask' });
-    // 主进程信任门解析 effective（ask 无 grant → net-off；granted → net-on）后显式传入
-    const beforeGrant = resolveShellSpawn(tmp, 'x', { networkEnabled: false });
-    const afterGrant = resolveShellSpawn(tmp, 'x', { networkEnabled: true });
-    if (beforeGrant.kind !== 'wrapped' || afterGrant.kind !== 'wrapped') throw new Error('应 wrapped');
-    expect(beforeGrant.tag).toBe('bwrap/net-off');
-    expect(afterGrant.tag).toBe('bwrap/net-on');
-    expect(afterGrant.args).not.toContain('--unshare-net');
-  });
-
-  it('接线锁：opts 覆盖压过 allow 策略（denied grant 时代 net-off）', () => {
+  it('接线锁：opts 覆盖压过 allow 策略（显式 net-off 时代）', () => {
     __setSandboxStateForTest(linuxAvail);
     __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
     const plan = resolveShellSpawn(tmp, 'x', { networkEnabled: false });
@@ -101,7 +91,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
 
   it('linux + 不可用 + strict → blocked（文案含安装指引 + permissive 逃生门）', () => {
     __setSandboxStateForTest(linuxMissing);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'ask' });
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
     const plan = resolveShellSpawn(tmp, 'echo hi');
     expect(plan.kind).toBe('blocked');
     if (plan.kind !== 'blocked') return;
@@ -111,7 +101,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
 
   it('linux + 不可用 + permissive → plain + unsandboxed tag', () => {
     __setSandboxStateForTest(linuxMissing);
-    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'ask' });
+    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
     const plan = resolveShellSpawn(tmp, 'echo hi');
     expect(plan.kind).toBe('plain');
     if (plan.kind !== 'plain') return;
@@ -134,7 +124,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 
-  it('win32（platform mock）：无论三态/opts 如何，winpolicy 均不消费网络布尔（Windows 核实结论锁）', () => {
+  it('win32（platform mock）：无论双态/opts 如何，winpolicy 均不消费网络布尔（Windows 核实结论锁）', () => {
     const desc = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32' });
     try {
@@ -154,7 +144,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     try {
       __setSandboxStateForTest({ platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: null,
         available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 });
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'ask' });
+      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
       const plan = resolveShellSpawn(tmp, 'echo hi');
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;

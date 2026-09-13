@@ -36,7 +36,7 @@ import { clearLaneIfMatch } from './session-lane';
 import { routeBrowserOp } from '../browser/op-router';
 // v2.4.x 网络信任门（spec 2026-09-13 §5）：子进程 net-trust-op 请求在此路由到
 // 主进程信任门（grants/等待表/推卡都活在主进程）；任务终态同步清理会话级授权
-import { clearActiveNetworkGrant, handleNetTrustOp } from '../sandbox/network-trust';
+import { handleNetTrustOp } from '../sandbox/network-trust';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -207,7 +207,7 @@ export class AgentRunner {
         return;
       }
       // net-trust-op（网络信任门 IPC 桥请求）：同 browser-op——requestId 关联，
-      // 先于 streamSessionId 过滤分发（wait op 最长挂 180s 等用户应答）
+      // 先于 streamSessionId 过滤分发（网络态查询按 op 自带路由，不经流过滤）
       if (m.type === 'net-trust-op') {
         void this.routeNetTrustOpToChild(child, msg);
         return;
@@ -227,8 +227,6 @@ export class AgentRunner {
           child.off('message', messageHandler);
           this.opts.warmPool.release(runtime);
           this.activeTasks.delete(task.streamSessionId);
-          // v2.4.x：网络信任门会话级授权随流终结（ephemeral 同样不跨任务记忆）
-          clearActiveNetworkGrant(task.streamSessionId);
           // v2.3 车道：顶层流收尾让道 + 触发排队放行
           clearLaneIfMatch(task.executionSessionId, task.streamSessionId);
           notifyExecutor();
@@ -298,7 +296,7 @@ export class AgentRunner {
   }
 
   /**
-   * net-trust-op 请求路由回程（routeBrowserOpToChild 同型）：主进程信任门执行 →
+   * net-trust-op 请求路由回程（routeBrowserOpToChild 同型）：主进程网络态查询 →
    * 应答补全线协议字段后回送子进程。handleNetTrustOp 永不抛异常（失败统一
    * {ok:false, error}）；child.send 失败（通道已关）只记日志——子进程桥自有超时兜底。
    * requestId 原样回带（单点生成、沿线透传，不重新生成）。
@@ -362,9 +360,6 @@ export class AgentRunner {
       active.safetyTimer = undefined;
     }
     this.activeTasks.delete(streamSessionId);
-    // v2.4.x：网络信任门会话级授权随任务终态清理（spec §5「任务终态即删」；
-    // gate 未接线时内部 no-op——清理绝不阻断收尾链路）
-    clearActiveNetworkGrant(streamSessionId);
     // 顺序契约：先转换任务终态（DB 可见），再 kill 子进程——确保看板 /
     // 重启恢复读到的终态不依赖 runtime 存活
     if (active.taskId !== null) {
@@ -486,10 +481,6 @@ export class AgentRunner {
       }
       this.activeTasks.delete(active.streamSessionId);
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
-      // v2.4.x：崩溃/退出收尾同样清理网络信任门会话级授权——此路径无 end/
-      // task-end，是 grants 泄漏源（stale denied 会随 resume 复用
-      // breakpointSsId 传导成「恢复后永远 net-off 不再问」）
-      clearActiveNetworkGrant(active.streamSessionId);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
         if (shuttingDown) {
@@ -623,8 +614,6 @@ export class AgentRunner {
       this.opts.warmPool.release(active.runtime);
       // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
-      // v2.4.x：runner 销毁同样清理网络信任门会话级授权（与活跃表同生命周期）
-      clearActiveNetworkGrant(active.streamSessionId);
     }
     this.activeTasks.clear();
   }

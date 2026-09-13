@@ -69,9 +69,6 @@ const mockApi = {
     reprobe: vi.fn(),
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
-    // v2.4.x：NetworkTrustCard 挂载订阅——默认无推送使信任卡不渲染
-    answerNetworkTrust: vi.fn().mockResolvedValue(undefined),
-    onNetworkNotice: vi.fn().mockReturnValue(() => {}),
   },
   // v2.6.0 Task 6：ResumeNotice 挂载拉取中断任务——默认空列表使恢复卡不渲染，
   // 既有分支断言不受影响
@@ -108,7 +105,7 @@ function mkSandboxInfo() {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict' as const, networkPolicy: 'ask' as const },
+    settings: { mode: 'strict' as const, networkPolicy: 'allow' as const },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,

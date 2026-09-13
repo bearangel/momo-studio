@@ -91,3 +91,33 @@ IPC：`sandbox:answerNetworkTrust(answer: 'session'|'always'|'deny')`（镜像 `
 3. 保持拒绝：本任务后续网络命令直接失败无卡；新任务再询问
 4. 超时：180s 无操作自动按拒绝继续
 5. 设置切 deny：回退现行行为（信息卡一次性）
+
+## 修订记录
+
+### 修订 B（2026-09-13，用户决策）：三态收敛双态，ask 信任门机制全链下线
+
+**决策**：网络出站策略从 `deny | ask | allow` 收敛为 `deny | allow` 两态，默认 `allow`。本文 §2/§5/§6 描述的 ask 阻塞式询问机制（信任卡、sessionGrants、等待协议、三值应答、180s 超时收敛）整体下线，不再实现。
+
+**动因**：ask 机制在真机体验上存在**结构性天花板**——
+
+1. **事后文本鉴定永远漏检**。触发询问依赖对 bash 结果文本的双条件判定（net-off tag + 网络失败签名正则），而用户/工具回显的失败格式不可枚举（真机实测：`退出码: 6` 等任意 echo 形态无法覆盖）。漏检 = 询问不弹，机制等同不存在；为覆盖而放宽正则 = 误检打扰。这一矛盾无法在文本鉴定框架内解决。
+2. **阻塞等待在无人值守场景必然退化为变相 deny**。180s 超时按拒绝收敛，意味着用户不在场时 ask 与 deny 无差别，但比 deny 多付 180s 挂起与一整套门机制复杂度。
+3. **默认放行 + 拒绝留挡外传通道**是更诚实的取舍：需要网络的命令默认能跑（沙箱文件系统防线仍在），确需断网的用户显式选 deny（deny 路径的 netOff 一次性引导卡保留，UX 不变）。
+
+**迁移语义**（`electron/src/main/sandbox/settings.ts` 读时懒迁移）：
+
+| 旧值（kv `sandboxNetworkPolicy` / 布尔键 `sandboxNetwork`） | 新值 | 说明 |
+|---|---|---|
+| `'ask'`（三态时代遗留） | `'allow'` | 读取时重写新键 |
+| `'allow'` | `'allow'` | 直接命中，不重写 |
+| `'deny'` | `'deny'` | 显式拒绝原样保留，不重写 |
+| 布尔 `true` / `false` / 全缺省（新装） | `'allow'` | 布尔两值同向收敛（旧语义 false→ask 已并入 allow），写回新键；旧键留存（回滚安全） |
+| 非法脏值 | `'allow'` | 回退新默认 |
+
+**下线清单**（同 commit 成对移除，momo-boundary-rules）：
+
+- 主进程：`NetworkTrustGate` 类 / 等待表 / 三值应答 / 超时收敛 / 推卡（`sandbox:notice` net-trust-request）/ `detectNetworkBlocked` 主侧实现 / agent-runner 四处 `clearActiveNetworkGrant` 终态清理；`handleNetTrustOp` 缩为 effective 单 op（`netOn = policy === 'allow'`，payload 仅 `netOn` 字段，线协议名不变向后兼容）
+- IPC：`sandbox:answerNetworkTrust` 四端成对移除（handlers / preload / renderer types / 渲染端调用）
+- 子进程：shell-tools 的 `finalizeWithNetworkTrust` 阻塞询问收尾与批准提示追加（bash 结果原样返回，netTag 仍由 effective 查询产生）；net-trust-bridge 的 wait op 与 `NET_TRUST_BRIDGE_TIMEOUT_MS` 派生
+- 渲染端：`NetworkTrustCard` 组件 + 挂载/订阅接线；设置面板三态控件改双 radio（永久允许（默认）/ 拒绝）
+- **保留不动**：deny 路径 UX——SandboxNotice netOff 信息卡与 `stream.store` 双条件检测（正则原样）；浏览器信任门（`browser/` 域不受本修订影响）
