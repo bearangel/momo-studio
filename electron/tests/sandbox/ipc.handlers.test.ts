@@ -58,6 +58,7 @@ const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-ipc-test-${Date.now()}`);
 
 const KV_BWRAP = 'sandbox_bwrap_prompt_dismissed';
 const KV_WINPOLICY = 'sandbox_win_policy_prompt_dismissed';
+const KV_NETOFF = 'sandbox_net_prompt_dismissed';
 
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
@@ -121,6 +122,7 @@ describe('sandbox:getState', () => {
     expect(info.installCommand).toBe('sudo apt install bubblewrap');
     expect(info.bwrapPromptDismissed).toBe(false);
     expect(info.winPolicyPromptDismissed).toBe(false);
+    expect(info.netPromptDismissed).toBe(false);
   });
 
   it('kv 提示卡 flag 读取：winPolicy=1 → 仅 winPolicyPromptDismissed=true', async () => {
@@ -172,6 +174,44 @@ describe('sandbox:dismissPrompt', () => {
 
     expect(readKv(KV_WINPOLICY)).toBe('1');
     expect(readKv(KV_BWRAP)).toBeNull();
+  });
+
+  it("dismissPrompt('netOff') 写独立 kv='1'，getState 反映 netPromptDismissed=true（bwrap/winPolicy 不受影响）", async () => {
+    const dismiss = ipcHandlers.get('sandbox:dismissPrompt')!;
+    await dismiss({}, 'netOff');
+
+    expect(readKv(KV_NETOFF)).toBe('1');
+    expect(readKv(KV_BWRAP)).toBeNull();
+    expect(readKv(KV_WINPOLICY)).toBeNull();
+    const info = (await ipcHandlers.get('sandbox:getState')!()) as SandboxInfo;
+    expect(info.netPromptDismissed).toBe(true);
+    expect(info.bwrapPromptDismissed).toBe(false);
+    expect(info.winPolicyPromptDismissed).toBe(false);
+  });
+
+  it('三 kind 全 dismiss 幂等落 kv + getState 回读全部 true（契约锁：kind → kv 键不串写）', async () => {
+    const dismiss = ipcHandlers.get('sandbox:dismissPrompt')!;
+    // 每 kind 重复 dismiss 两次——幂等（upsert 不报错、值恒 '1'）
+    for (const kind of ['bwrap', 'winPolicy', 'netOff'] as const) {
+      await dismiss({}, kind);
+      await dismiss({}, kind);
+    }
+
+    expect(readKv(KV_BWRAP)).toBe('1');
+    expect(readKv(KV_WINPOLICY)).toBe('1');
+    expect(readKv(KV_NETOFF)).toBe('1');
+    const info = (await ipcHandlers.get('sandbox:getState')!()) as SandboxInfo;
+    expect(info.bwrapPromptDismissed).toBe(true);
+    expect(info.winPolicyPromptDismissed).toBe(true);
+    expect(info.netPromptDismissed).toBe(true);
+  });
+
+  it("netOff dismiss 时 kv 预置过 '0'（其他写入方）→ getState 仍读回 true（dismiss 写值以 dismiss 为准）", async () => {
+    setKv(KV_NETOFF, '0');
+    const dismiss = ipcHandlers.get('sandbox:dismissPrompt')!;
+    await dismiss({}, 'netOff');
+
+    expect(readKv(KV_NETOFF)).toBe('1');
   });
 });
 

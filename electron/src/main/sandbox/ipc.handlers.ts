@@ -21,10 +21,13 @@ export interface SandboxInfo {
   installCommand: string | null;
   bwrapPromptDismissed: boolean;
   winPolicyPromptDismissed: boolean;
+  /** net-off 拦截提示卡是否已关闭（v2.4.x：agent bash 命令被沙箱断网拦截时的引导卡） */
+  netPromptDismissed: boolean;
 }
 
 const KV_BWRAP = 'sandbox_bwrap_prompt_dismissed';
 const KV_WINPOLICY = 'sandbox_win_policy_prompt_dismissed';
+const KV_NETOFF = 'sandbox_net_prompt_dismissed';
 
 function readKvFlag(key: string): boolean {
   const row = getDb().prepare('SELECT value FROM kv_store WHERE key = ?').get(key) as
@@ -40,6 +43,7 @@ function buildInfo(): SandboxInfo {
     installCommand: detectPackageManager().installCommand,
     bwrapPromptDismissed: readKvFlag(KV_BWRAP),
     winPolicyPromptDismissed: readKvFlag(KV_WINPOLICY),
+    netPromptDismissed: readKvFlag(KV_NETOFF),
   };
 }
 
@@ -93,8 +97,9 @@ export function registerSandboxIpc(): void {
     return buildInfo();
   });
   ipcMain.handle('sandbox:installBwrap', () => installBwrapViaPkexec());
-  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy') => {
-    const key = kind === 'bwrap' ? KV_BWRAP : KV_WINPOLICY;
+  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff') => {
+    const key =
+      kind === 'bwrap' ? KV_BWRAP : kind === 'winPolicy' ? KV_WINPOLICY : KV_NETOFF;
     getDb()
       .prepare(
         `INSERT INTO kv_store (key, value, updated_at) VALUES (?, '1', datetime('now'))

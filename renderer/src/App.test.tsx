@@ -109,6 +109,7 @@ function mkSandboxInfo() {
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
+    netPromptDismissed: false,
   };
 }
 

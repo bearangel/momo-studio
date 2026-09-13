@@ -48,6 +48,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
+    netPromptDismissed: false,
     ...overrides,
   };
 }

@@ -66,6 +66,7 @@ const mockApi = {
       installCommand: null,
       bwrapPromptDismissed: false,
       winPolicyPromptDismissed: false,
+      netPromptDismissed: false,
     }),
     reprobe: vi.fn(),
     installBwrap: vi.fn(),

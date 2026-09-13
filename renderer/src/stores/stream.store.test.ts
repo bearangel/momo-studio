@@ -148,3 +148,115 @@ describe('stream.store：基础行为', () => {
     expect(useStreamStore.getState().streams.size).toBe(0);
   });
 });
+
+// —— net-off 沙箱网络拦截检测（v2.4.x net-off 通知卡）——
+// 双条件：① sandbox tag 为 net-off（bwrap/seatbelt，tag 由主进程 resolveShellSpawn 生成、
+// 紧跟 exit_code 行——tag 在场=网络态权威）② 命中网络拒绝签名任一。
+// 结果文本仿真 shell-tools.ts 真实输出形态（parts 以 '\n\n' join：exit_code / sandbox / stderr 段）。
+describe('stream.store：net-off 网络拦截检测', () => {
+  /** bash tool_call_result 事件（payload 形状对齐 stream-aggregator 消费的 p.result/p.callId） */
+  function bashResult(seq: number, result: string): MessageEventRow {
+    return {
+      id: `e${seq}`,
+      messageId: 'mb',
+      seq,
+      eventType: 'tool_call_result',
+      payload: { callId: 'c1', result, success: false },
+      createdAt: seq * 1000,
+    };
+  }
+
+  /** 仿真 bash 结果文本：exit_code 段 + 可选 sandbox tag 段 + stderr 段 */
+  function bashOutput(tagLine: string | null, stderrLine: string): string {
+    const parts: string[] = ['exit_code: 1'];
+    if (tagLine) parts.push(tagLine);
+    parts.push(`stderr:\n${stderrLine}`);
+    return parts.join('\n\n');
+  }
+
+  const TAG_BWRAP = 'sandbox: bwrap/net-off';
+  const TAG_SEATBELT = 'sandbox: seatbelt/net-off';
+
+  /** 四类网络拒绝签名 × 真实工具输出样例（node 监听 / node connect / curl DNS / curl 连接失败） */
+  const SIGNATURE_CASES: ReadonlyArray<readonly [string, string]> = [
+    ['listen EPERM', 'Error: listen EPERM 0.0.0.0:3000'],
+    ['connect EPERM', 'Error: connect EPERM 93.184.216.34:443'],
+    ['Could not resolve host', 'curl: (6) Could not resolve host: example.com'],
+    ['curl: (7)', "curl: (7) Failed to connect to example.com port 443 after 10 ms: Couldn't connect to server"],
+  ];
+
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+    // reset 刻意不清一次性标志（生产语义）——测试隔离在此手动归位
+    useStreamStore.setState({ netBlockedSeen: false });
+  });
+
+  // 矩阵：四签名 × tag 有无
+  for (const [name, stderrLine] of SIGNATURE_CASES) {
+    it(`bwrap/net-off tag + ${name} 签名 → 置 netBlockedSeen`, () => {
+      useStreamStore.getState().applyEventBatch([bashResult(1, bashOutput(TAG_BWRAP, stderrLine))]);
+      expect(useStreamStore.getState().netBlockedSeen).toBe(true);
+    });
+
+    it(`无 tag + ${name} 签名 → 不置（非沙箱所致的网络错误）`, () => {
+      useStreamStore.getState().applyEventBatch([bashResult(1, bashOutput(null, stderrLine))]);
+      expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+    });
+  }
+
+  it('seatbelt/net-off tag + listen EPERM → 置位（macOS 主机实测形态）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, bashOutput(TAG_SEATBELT, 'Error: listen EPERM 0.0.0.0:5173')),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(true);
+  });
+
+  it('bwrap/net-on tag + 签名 → 不置（网络开关已开，非 net-off tag）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, bashOutput('sandbox: bwrap/net-on', 'Error: listen EPERM 0.0.0.0:3000')),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+  });
+
+  it('tag 在场但未碰网络（无签名）→ 不置（未产生网络错误的命令不打扰）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, bashOutput(TAG_BWRAP, 'src/index.ts: syntax error')),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+  });
+
+  it('text_delta 正文含 tag + 签名文本 → 不置（仅 bash tool_call_result 参与检测）', () => {
+    useStreamStore.getState().applyEventBatch([
+      mkEvent('m3', 1, 'text_delta', {
+        delta: `sandbox: bwrap/net-off\nError: listen EPERM 0.0.0.0:3000`,
+      }),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+  });
+
+  it('一次性标志：置位后的后续批次不复位（不自动清）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, bashOutput(TAG_BWRAP, 'Error: listen EPERM 0.0.0.0:3000')),
+    ]);
+    useStreamStore.getState().applyEventBatch([
+      bashResult(2, bashOutput(TAG_BWRAP, 'build ok')),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(true);
+  });
+
+  it('reset() 不清 netBlockedSeen（每 app 运行至多置一次——workspace 切换不重置）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, bashOutput(TAG_BWRAP, 'Error: listen EPERM 0.0.0.0:3000')),
+    ]);
+    useStreamStore.getState().reset();
+    expect(useStreamStore.getState().netBlockedSeen).toBe(true);
+  });
+
+  it('hydrateFromEvents 回放含拦截结果的历史 → 不置（重启自然消失：仅实时路径检测）', () => {
+    useStreamStore.getState().hydrateFromEvents('m-replay', [
+      bashResult(1, bashOutput(TAG_BWRAP, 'Error: listen EPERM 0.0.0.0:3000')),
+      mkEvent('m-replay', 2, 'final', { status: 'done' }),
+    ]);
+    expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+  });
+});

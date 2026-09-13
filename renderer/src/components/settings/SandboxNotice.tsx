@@ -2,7 +2,8 @@
 //
 // v2.4 首启提示卡（spec §6.3）：Linux bwrap 安装引导 / Windows ExecutionPolicy 授权指引。
 // 非模态、可忽略（kv 记忆经主进程 dismissPrompt 持久化）；安装/授权后 reprobe 刷新，
-// 满足可用条件即自然消失。显隐条件（ mutually exclusive——platform 二值互斥）：
+// 满足可用条件即自然消失。显隐条件（单卡容器，三者并存时 netOff 优先——最可行动）：
+//   - netOff 卡：netBlockedSeen（stream.store 实时检测标志）&& !netPromptDismissed
 //   - bwrap 卡：linux && !available && !bwrapPromptDismissed && installCommand 存在
 //   - 授权卡：win32 && executionPolicy === 'Restricted' && !winPolicyPromptDismissed
 // 样式照抄 UpgradeNotice（fixed right-4 bottom-4 非模态卡片 + 语义 token）。
@@ -10,6 +11,8 @@ import { useEffect, useState } from 'react';
 import { ClipboardCopy, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { SandboxInfo } from '../../ipc/types';
+import { useStreamStore } from '../../stores/stream.store';
+import { useUiStore } from '../../stores/ui.store';
 import { Button } from '../ui/Button';
 
 /** PowerShell 授权命令（CurrentUser 作用域 + RemoteSigned）；卡片展示与复制单点对齐 */
@@ -27,32 +30,43 @@ const copyText = (text: string): void => {
 export function SandboxNotice() {
   const [info, setInfo] = useState<SandboxInfo | null>(null);
   const [busy, setBusy] = useState(false);
+  // netOff 拦截一次性标志（stream.store 实时检测）；导航走真实 ui.store（不强求定位到安全沙箱分类）
+  const netBlockedSeen = useStreamStore((s) => s.netBlockedSeen);
+  const setActiveView = useUiStore((s) => s.setActiveView);
 
-  // 挂载一次性拉取聚合信息；state 为 null（boot 早期探测未完成）→ 不渲染
+  // 挂载一次性拉取聚合信息
   useEffect(() => {
     void ipc.sandbox.getState().then(setInfo);
   }, []);
 
-  if (!info?.state) return null;
+  // netOff 卡不依赖探测 state（tag 在场即证明沙箱当时在跑）；bwrap/授权卡仍需 state
+  if (!info) return null;
 
+  const showNetOff = netBlockedSeen && !info.netPromptDismissed;
   const showBwrap =
+    !showNetOff &&
+    info.state !== null &&
     info.state.platform === 'linux' &&
     !info.state.available &&
     !info.bwrapPromptDismissed &&
     info.installCommand !== null;
   const showWinPolicy =
+    !showNetOff &&
+    info.state !== null &&
     info.state.platform === 'win32' &&
     info.state.executionPolicy === 'Restricted' &&
     !info.winPolicyPromptDismissed;
-  if (!showBwrap && !showWinPolicy) return null;
+  if (!showNetOff && !showBwrap && !showWinPolicy) return null;
 
   // 忽略提示卡：kv 持久化（主进程）+ 本地立即隐藏
-  const dismiss = (kind: 'bwrap' | 'winPolicy'): void => {
+  const dismiss = (kind: 'bwrap' | 'winPolicy' | 'netOff'): void => {
     void ipc.sandbox.dismissPrompt(kind);
     setInfo(
       kind === 'bwrap'
         ? { ...info, bwrapPromptDismissed: true }
-        : { ...info, winPolicyPromptDismissed: true },
+        : kind === 'winPolicy'
+          ? { ...info, winPolicyPromptDismissed: true }
+          : { ...info, netPromptDismissed: true },
     );
   };
 
@@ -80,18 +94,38 @@ export function SandboxNotice() {
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <h2 className="text-base font-semibold text-primary">
-          {showBwrap ? 'bash 沙箱需要 bubblewrap' : 'PowerShell 脚本执行未授权'}
+          {showNetOff
+            ? 'agent 的网络访问被沙箱拦截'
+            : showBwrap
+              ? 'bash 沙箱需要 bubblewrap'
+              : 'PowerShell 脚本执行未授权'}
         </h2>
         <button
           type="button"
           aria-label="关闭"
-          onClick={() => dismiss(showBwrap ? 'bwrap' : 'winPolicy')}
+          onClick={() =>
+            dismiss(showNetOff ? 'netOff' : showBwrap ? 'bwrap' : 'winPolicy')
+          }
           className="text-tertiary hover:text-primary leading-none -mt-1"
         >
           <X size={16} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
-      {showBwrap ? (
+      {showNetOff ? (
+        <>
+          <p className="mb-3 leading-relaxed">
+            bash 沙箱的网络开关当前为关，agent
+            无法监听端口或访问网络（含 DNS）。如需其启动 dev server 或联网，请到
+            设置 → 安全沙箱 打开网络开关——即时生效，无需重启。
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setActiveView('settings')}>
+              去设置
+            </Button>
+            <Button onClick={() => dismiss('netOff')}>知道了</Button>
+          </div>
+        </>
+      ) : showBwrap ? (
         <>
           <p className="mb-3 leading-relaxed">
             未安装 bwrap 时，bash 工具的 OS 沙箱不可用（strict 模式下 bash 将拒绝执行）。建议安装：

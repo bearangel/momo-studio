@@ -949,6 +949,8 @@ export interface SandboxInfo {
   installCommand: string | null;
   bwrapPromptDismissed: boolean;
   winPolicyPromptDismissed: boolean;
+  /** net-off 拦截提示卡是否已关闭（v2.4.x：agent bash 命令被沙箱断网拦截时的引导卡） */
+  netPromptDismissed: boolean;
 }
 
 /**
@@ -962,8 +964,8 @@ export interface SandboxApiSurface {
   reprobe(): Promise<SandboxInfo>;
   /** pkexec 安装 bubblewrap（Linux）；pkexec 缺失/安装失败返回 ok:false + 输出摘要 */
   installBwrap(): Promise<{ ok: boolean; output: string }>;
-  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导与 win32 策略提示） */
-  dismissPrompt(kind: 'bwrap' | 'winPolicy'): Promise<void>;
+  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off 拦截引导） */
+  dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff'): Promise<void>;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

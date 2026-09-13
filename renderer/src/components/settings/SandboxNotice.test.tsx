@@ -12,6 +12,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { SandboxNotice } from './SandboxNotice';
+import { useStreamStore } from '../../stores/stream.store';
+import { useUiStore } from '../../stores/ui.store';
 import type { SandboxInfo } from '../../ipc/types';
 
 const getStateMock = vi.fn();
@@ -47,6 +49,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
     installCommand: 'sudo apt install bubblewrap',
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
+    netPromptDismissed: false,
     ...overrides,
   };
 }
@@ -381,5 +384,125 @@ describe('SandboxNotice（v2.4 Task 9）', () => {
     const { container } = render(<SandboxNotice />);
     await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
     expect(container.firstChild).toBeNull();
+  });
+});
+
+// —— netOff 拦截卡（v2.4.x）——
+// 显隐 = netBlockedSeen（stream.store 一次性检测标志）&& !netPromptDismissed。
+// 单卡容器三条件并存时 netOff 优先；[去设置] 只导航不 dismiss（卡留待用户开完开关自行关）。
+describe('SandboxNotice：netOff 拦截卡', () => {
+  beforeEach(() => {
+    getStateMock.mockReset();
+    reprobeMock.mockReset();
+    installBwrapMock.mockReset();
+    dismissPromptMock.mockReset();
+    // 真实 store 归位（不 mock——导航断言走 useUiStore 真实状态转移）
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: false });
+      useUiStore.setState({ activeView: 'im' });
+    });
+  });
+
+  it('netBlockedSeen + 未 dismiss → 渲染 netOff 卡（标题 + [去设置] + [知道了]）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 的网络访问被沙箱拦截')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '知道了' })).toBeInTheDocument();
+  });
+
+  it('netBlockedSeen 但 netPromptDismissed → 不渲染', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ netPromptDismissed: true }));
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('netBlockedSeen=false → 不渲染（默认 linux 可用场景）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('优先级：netOff 与 bwrap 条件同时满足 → 仅渲染 netOff 卡（bwrap 标题不在场）', async () => {
+    getStateMock.mockResolvedValue(makeBwrapInfo());
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 的网络访问被沙箱拦截')).toBeInTheDocument();
+    expect(screen.queryByText('bash 沙箱需要 bubblewrap')).toBeNull();
+  });
+
+  it('点击「知道了」→ dismissPrompt(netOff) + 卡片消失', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    dismissPromptMock.mockResolvedValue(undefined);
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '知道了' }));
+
+    expect(dismissPromptMock).toHaveBeenCalledWith('netOff');
+    await waitFor(() => {
+      expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+    });
+  });
+
+  it('点击「去设置」→ 仅导航（activeView=settings），不 dismiss、卡片保留', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '去设置' }));
+
+    expect(useUiStore.getState().activeView).toBe('settings');
+    expect(dismissPromptMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument();
+  });
+
+  it('点击 X 关闭（netOff 卡）→ dismissPrompt(netOff) + 卡片消失', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    dismissPromptMock.mockResolvedValue(undefined);
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+
+    expect(dismissPromptMock).toHaveBeenCalledWith('netOff');
+    await waitFor(() => {
+      expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+    });
+  });
+
+  it('netOff 卡样式与既有卡一致（fixed 右下角 + 非模态）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    const root = container.firstChild as HTMLElement;
+    expect(root.className).toMatch(/fixed/);
+    expect(root.className).toMatch(/right-/);
+    expect(root.className).toMatch(/bottom-/);
+    expect(root.className).not.toMatch(/inset-0/);
   });
 });

@@ -21,6 +21,28 @@ import { aggregateEvents, type AggregatedStream, type StreamSegment } from '../l
 export type { StreamSegment };
 
 /**
+ * v2.4.x net-off 拦截检测双条件（生产者：主进程 resolveShellSpawn 生成 tag、
+ * shell-tools.ts 把 `sandbox: <tag>` 行紧跟 exit_code 写进 bash 结果文本）：
+ * ① tag 为 net-off（bwrap/seatbelt——tag 在场=网络态权威）
+ * ② 命中网络拒绝签名任一（监听 EPERM / connect·connection 近距 EPERM / DNS 解析失败 / curl 6·7）。
+ * 仅 tag 不触发（未碰网络的命令不打扰）；仅签名不触发（非沙箱所致的网络错误）。
+ */
+const SANDBOX_NET_OFF_TAG = /sandbox: (?:seatbelt|bwrap)\/net-off/;
+const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
+  /listen EPERM/i,
+  /(?:connect|connection)[^\n]{0,60}EPERM/i,
+  /Could not resolve host/i,
+  /curl: \((?:6|7)\)/,
+];
+
+function detectNetBlocked(resultText: string): boolean {
+  return (
+    SANDBOX_NET_OFF_TAG.test(resultText) &&
+    NET_BLOCKED_SIGNATURES.some((re) => re.test(resultText))
+  );
+}
+
+/**
  * A 子系统 StreamState。
  *
  * extends AggregatedStream（A5 共用聚合函数输出）+ 补充会话上下文字段。
@@ -46,6 +68,11 @@ interface StreamStoreState {
   /** messageId → 聚合状态（A 子系统：keyed by messageId，不再用 streamSessionId） */
   streams: Map<string, StreamState>;
   /**
+   * v2.4.x net-off 拦截一次性标志：实时批次检测到「沙箱断网导致 bash 网络失败」即置位。
+   * 每 app 运行至多置一次、不自动复位（reset 也不清）——卡由用户 dismiss 或重启自然消失。
+   */
+  netBlockedSeen: boolean;
+  /**
    * 接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 累积到内部 eventLog 后重新聚合所有受影响的 messageId。
    */
@@ -69,9 +96,17 @@ const eventLogByMessage = new Map<string, MessageEventRow[]>();
 
 export const useStreamStore = create<StreamStoreState>((set) => ({
   streams: new Map(),
+  netBlockedSeen: false,
 
   applyEventBatch: (batch) => {
     if (batch.length === 0) return;
+    // net-off 检测只看实时批次；hydrateFromEvents 回放历史不触发（「重启自然消失」语义）
+    const netBlocked = batch.some(
+      (e) =>
+        e.eventType === 'tool_call_result' &&
+        typeof e.payload.result === 'string' &&
+        detectNetBlocked(e.payload.result),
+    );
     // 累积到 eventLog（按 messageId 分桶 + 去重 + 按 seq 升序）
     for (const e of batch) {
       const list = eventLogByMessage.get(e.messageId) ?? [];
@@ -95,7 +130,11 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
           startedAt: events[0]?.createdAt ?? Date.now(),
         });
       }
-      return { streams: newStreams };
+      return {
+        streams: newStreams,
+        // 一次性标志只置不清（netBlocked=false 时不写入，保持现值）
+        ...(netBlocked ? { netBlockedSeen: true } : {}),
+      };
     });
   },
 
@@ -120,6 +159,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
 
   reset: () => {
     eventLogByMessage.clear();
+    // 刻意不清 netBlockedSeen：一次性标志每 app 运行至多置一次，workspace 切换不重置
     set({ streams: new Map() });
   },
 }));
