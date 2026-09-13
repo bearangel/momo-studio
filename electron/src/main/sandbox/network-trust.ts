@@ -55,6 +55,7 @@ const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
   /listen EPERM/i,
   /(?:connect|connection)[^\n]{0,60}EPERM/i,
   /Could not resolve host/i,
+  /cannot resolve [^\n]{0,60}Unknown host/i,
   /curl: \((?:6|7)\)/,
   // macOS seatbelt 真实形态（2026-09-13 真机会话实证：EPERM 以 strerror 文本出现而非
   // Linux 风格字面——nslookup/dig 的 socket bind、ping 的 sendto、通用 connect 拒绝）。

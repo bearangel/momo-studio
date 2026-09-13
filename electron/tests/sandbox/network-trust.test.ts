@@ -117,6 +117,11 @@ describe('detectNetworkBlocked（主进程侧复刻 stream.store 双条件，spe
       'sandbox: seatbelt/net-off\nstderr:\n/AppleInternal/.../socket.c:5580: bind: Operation not permitted';
     expect(detectNetworkBlocked(text)).toBe(true);
   });
+  it('macOS ping cannot resolve Unknown host（真机原文，2026-09-13 二轮实测漏检词形）→ 命中', () => {
+    const text =
+      'sandbox: seatbelt/net-off\nstdout:\nping: cannot resolve www.baidu.com: Unknown host\nping 不可用或被禁';
+    expect(detectNetworkBlocked(text)).toBe(true);
+  });
   it('用户 echo 的任意格式退出码（退出码: 6）→ 刻意不命中（不可枚举，canonical stderr 已覆盖）', () => {
     const text = 'sandbox: seatbelt/net-off\nstdout:\ncurl 访问失败，退出码: 6';
     expect(detectNetworkBlocked(text)).toBe(false);

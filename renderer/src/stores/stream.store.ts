@@ -32,6 +32,7 @@ const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
   /listen EPERM/i,
   /(?:connect|connection)[^\n]{0,60}EPERM/i,
   /Could not resolve host/i,
+  /cannot resolve [^\n]{0,60}Unknown host/i,
   /curl: \((?:6|7)\)/,
   // macOS seatbelt 真实形态（2026-09-13 真机实证，与主进程 network-trust.ts 同源成对修改）
   /(?:bind|connect|sendto|socket)[^\n]{0,60}(?:Operation not permitted|Permission denied|EPERM|unexpected error)/i,
