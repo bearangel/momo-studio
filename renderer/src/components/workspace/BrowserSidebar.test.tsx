@@ -9,6 +9,10 @@
 //     setSidebarBounds（rect 参数来自 getBoundingClientRect）；卸载 disconnect；
 //     折叠态不上报
 //   - TabsBar / DevServerDropdown IPC 接线（openTab→switchTab / closeTab / userNavigate）
+//   - 宽度受控 / 拖拽 / 键盘（280-720）：getSettings 还原（含越界钳制）；
+//     左缘手柄 pointerdown → window pointermove 实时变宽 → pointerup 单次落库；
+//     双向钳制；ArrowLeft/Right ±16 + Home/End 逐键落库；拖拽与还原竞速守卫；
+//     折叠竖条不受宽度受控化影响
 //
 // v2.7 review fix C2 移除「鼠标接管 overlay」describe 块：接管唯一入口是 main 进程
 // 原生 overlay view（view-factory.ts showOverlay），OS 合成层序 native overlay →
@@ -33,6 +37,7 @@ const setSidebarBoundsMock = vi.fn();
 const setSidebarCollapsedMock = vi.fn();
 const listDevServersMock = vi.fn();
 const getSettingsMock = vi.fn();
+const updateSettingsMock = vi.fn();
 const onBrowserStateMock = vi.fn();
 const onBrowserNoticeMock = vi.fn();
 
@@ -50,6 +55,7 @@ const mockApi = {
     setSidebarCollapsed: setSidebarCollapsedMock,
     listDevServers: listDevServersMock,
     getSettings: getSettingsMock,
+    updateSettings: updateSettingsMock,
     onBrowserState: onBrowserStateMock,
     onBrowserNotice: onBrowserNoticeMock,
   },
@@ -130,7 +136,7 @@ beforeEach(() => {
   for (const m of [
     getStateMock, userNavigateMock, releaseTakeoverMock, openTabMock,
     closeTabMock, switchTabMock, setSidebarBoundsMock, setSidebarCollapsedMock,
-    listDevServersMock, getSettingsMock, onBrowserStateMock, onBrowserNoticeMock,
+    listDevServersMock, getSettingsMock, updateSettingsMock, onBrowserStateMock, onBrowserNoticeMock,
   ]) {
     m.mockReset();
   }
@@ -145,6 +151,7 @@ beforeEach(() => {
   setSidebarCollapsedMock.mockResolvedValue(undefined);
   listDevServersMock.mockResolvedValue([]);
   getSettingsMock.mockResolvedValue(mkSettings());
+  updateSettingsMock.mockResolvedValue({ ok: true });
   onBrowserStateMock.mockReturnValue(() => {});
   ResizeObserverStub.instances = [];
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
@@ -517,5 +524,118 @@ describe('BrowserSidebar·释放与 tabs / 探活接线', () => {
     // chrome 仍可用（地址栏在、折叠钮在）
     expect(screen.getByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '折叠浏览器侧栏' })).toBeInTheDocument();
+  });
+});
+
+describe('BrowserSidebar·宽度受控 / 拖拽 / 键盘（280-720）', () => {
+  it('挂载读 getSettings → sidebarWidth 落库值即容器宽度（inline style）；还原只读不写', async () => {
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarWidth: 520 }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '520px' }),
+    );
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it('落库宽度越界（旧库脏值防御）→ 还原时钳制回 720 上界', async () => {
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarWidth: 9999 }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '720px' }),
+    );
+  });
+
+  it('拖拽（左缘手柄，向左拖 = 加宽）：down(600) → move(520) 实时 460 → up 单次落库 460', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    const handle = await screen.findByRole('separator', { name: '调整浏览器侧栏宽度' });
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '380px' });
+
+    fireEvent.pointerDown(handle, { clientX: 600 });
+    fireEvent.pointerMove(window, { clientX: 520 });
+    // 拖拽中本地实时生效，不写 IPC（写释放不写拖动中）
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '460px' });
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    fireEvent.pointerUp(window, { clientX: 520 });
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 460 });
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '460px' });
+  });
+
+  it('钳制上界：向左拖超界（380+1000）→ 720 落库', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    const handle = await screen.findByRole('separator');
+    fireEvent.pointerDown(handle, { clientX: 600 });
+    fireEvent.pointerMove(window, { clientX: -400 });
+    fireEvent.pointerUp(window, { clientX: -400 });
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 720 }),
+    );
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '720px' });
+  });
+
+  it('钳制下界：向右拖超界（380-500）→ 280 落库', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    const handle = await screen.findByRole('separator');
+    fireEvent.pointerDown(handle, { clientX: 600 });
+    fireEvent.pointerMove(window, { clientX: 1100 });
+    fireEvent.pointerUp(window, { clientX: 1100 });
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 280 }),
+    );
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '280px' });
+  });
+
+  it('键盘：ArrowLeft +16 / ArrowRight -16（左=加宽，同拖拽语义），逐键即时落库；Home/End 直达边界', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    const handle = await screen.findByRole('separator');
+    const container = screen.getByTestId('browser-sidebar');
+
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+    expect(container).toHaveStyle({ width: '396px' });
+    expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 396 });
+
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(container).toHaveStyle({ width: '380px' });
+    expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 380 });
+
+    fireEvent.keyDown(handle, { key: 'Home' });
+    expect(container).toHaveStyle({ width: '280px' });
+    expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 280 });
+
+    fireEvent.keyDown(handle, { key: 'End' });
+    expect(container).toHaveStyle({ width: '720px' });
+    expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarWidth: 720 });
+  });
+
+  it('拖拽先于 getSettings 返回 → 晚到的落库宽度不覆盖用户拖拽结果（还原竞速守卫）', async () => {
+    let resolveSettings: (s: BrowserSettings) => void = () => {};
+    getSettingsMock.mockReturnValue(
+      new Promise<BrowserSettings>((res) => {
+        resolveSettings = res;
+      }),
+    );
+    render(<BrowserSidebar workspaceId="w1" />);
+    const handle = await screen.findByRole('separator');
+
+    fireEvent.pointerDown(handle, { clientX: 600 });
+    fireEvent.pointerMove(window, { clientX: 540 }); // +60 → 440
+    fireEvent.pointerUp(window, { clientX: 540 });
+
+    await act(async () => {
+      resolveSettings(mkSettings({ sidebarWidth: 380 }));
+    });
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '440px' });
+  });
+
+  it('折叠竖条不受宽度受控化影响：保持 w-10 静态宽、无手柄、无 inline width', async () => {
+    getSettingsMock.mockResolvedValue(
+      mkSettings({ sidebarCollapsed: true, sidebarWidth: 520 }),
+    );
+    render(<BrowserSidebar workspaceId="w1" />);
+    const strip = await screen.findByTestId('browser-sidebar');
+    expect(strip.className).toContain('w-10');
+    expect(strip.style.width).toBe('');
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
   });
 });

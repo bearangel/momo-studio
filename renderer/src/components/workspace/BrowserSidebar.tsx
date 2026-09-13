@@ -1,7 +1,8 @@
 // renderer/src/components/workspace/BrowserSidebar.tsx
 //
 // v2.7 McpBrowser 侧栏 chrome（spec §3.5）：tabs / 地址栏 / 探活下拉 / 接管徽标 /
-// 折叠钮 + 视图占位 div（页面内容属 main——WebContentsView 按占位区 rect 叠加）。
+// 折叠钮 / 左缘宽度拖拽手柄 / 视图占位 div（页面内容属 main——WebContentsView 按占位区
+// rect 叠加）。
 //
 // 状态源：挂载 getState 全量 + onBrowserState 推送增量（本组件不含业务状态机）。
 //
@@ -26,32 +27,56 @@ interface Props {
   workspaceId: string;
 }
 
+// ---- 侧栏宽度域（280..720，默认 380）——与 main 侧 browser:updateSettings 的数值校验对齐 ----
+const SIDEBAR_WIDTH_DEFAULT = 380;
+const SIDEBAR_WIDTH_MIN = 280;
+const SIDEBAR_WIDTH_MAX = 720;
+
+/** 宽度钳制（拖拽 / 键盘 / 落库值还原三路共用）：越界收边界、四舍五入、非有限值回默认 */
+const clampSidebarWidth = (w: number): number => {
+  if (!Number.isFinite(w)) return SIDEBAR_WIDTH_DEFAULT;
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(w)));
+};
+
 export function BrowserSidebar({ workspaceId }: Props) {
   const [state, setState] = useState<BrowserState | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [width, setWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  const [dragging, setDragging] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
   const collapsedUserTouchedRef = useRef(false);
+  // 宽度还原竞速守卫（同上语义）：读取返回前用户已拖拽/键盘调宽 → 晚到的落库值不覆盖
+  const widthUserTouchedRef = useRef(false);
   // main 已宣告不折叠（活跃推送 collapsed=false）：此后晚到的落库折叠值同样不覆盖
   // ——否则推送先到、getSettings 后到会把已展开的浏览器又压回竖条
   const mainExpandedRef = useRef(false);
+  // 拖拽手势上下文：起点 clientX / 起始宽度；lastX 记录最新位置供 up 时提交（防 state 闭包过期）
+  const dragStartRef = useRef<{ x: number; width: number } | null>(null);
+  const lastXRef = useRef(0);
 
-  // 折叠初始态跨重启闭环（T9）：挂载 / 切 ws 读 getSettings，collapsed 落库值
-  // 即初始态。width 暂不接——侧栏宽度当前是静态 w-[380px]（接入需先把静态宽
-  // 改为受控值，留待后续）；读取失败保持默认展开（体验性增强不阻塞骨架）。
+  // 折叠 / 宽度初始态跨重启闭环（T9 + 宽度受控化）：挂载 / 切 ws 读 getSettings，
+  // collapsed 与 sidebarWidth 落库值即初始态。读取失败保持默认展开 + 默认宽度
+  //（体验性增强不阻塞骨架）。
   useEffect(() => {
     collapsedUserTouchedRef.current = false;
     mainExpandedRef.current = false;
+    widthUserTouchedRef.current = false;
     let cancelled = false;
     ipc.browser
       .getSettings(workspaceId)
       .then((s) => {
-        if (!cancelled && !collapsedUserTouchedRef.current && !mainExpandedRef.current) {
+        if (cancelled) return;
+        if (!collapsedUserTouchedRef.current && !mainExpandedRef.current) {
           setCollapsed(s.sidebarCollapsed);
+        }
+        // 落库宽度越界 / 非有限值同样钳制回有效域（防御旧库脏值撑破布局）
+        if (!widthUserTouchedRef.current) {
+          setWidth(clampSidebarWidth(s.sidebarWidth));
         }
       })
       .catch(() => {
-        // 静默：默认展开兜底，后续用户操作照常走 toggleCollapsed
+        // 静默：默认展开 + 默认宽度兜底，后续用户操作照常走 toggleCollapsed / 拖拽
       });
     return () => {
       cancelled = true;
@@ -138,6 +163,79 @@ export function BrowserSidebar({ workspaceId }: Props) {
     void ipc.browser.setSidebarCollapsed(workspaceId, next).catch(() => {});
   };
 
+  // 宽度落库单点（拖拽释放 / 键盘逐键共用）：写失败静默——本次会话宽度仍生效，
+  // 重启回退旧值（体验性增强，与折叠态同一容错位）
+  const persistWidth = (w: number): void => {
+    void ipc.browser.updateSettings(workspaceId, { sidebarWidth: w }).catch(() => {});
+  };
+
+  // 拖拽 move/up 监听挂 window（同 layout/Sidebar.tsx 先例）：真实 DOM 中
+  // setPointerCapture 后事件仍冒泡到 window，jsdom 无 capture API（try/catch
+  // guard），两环境语义一致——指针移出手柄仍可跟踪。手柄在右侧停靠侧栏的左缘：
+  // clientX 减小（向左拖）= 加宽，与 Sidebar.tsx（左停靠/右缘手柄）的 +Δx 相反。
+  // 拖拽中仅本地 setWidth（占位区 ResizeObserver 自会上报新 bounds，main 据此
+  // 调整 WebContentsView），释放时单次落库（无每帧 IPC）。
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    widthUserTouchedRef.current = true;
+    setDragging(true);
+    dragStartRef.current = { x: e.clientX, width };
+    lastXRef.current = e.clientX;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* jsdom: setPointerCapture not implemented */
+    }
+    const onMove = (ev: PointerEvent): void => {
+      if (!dragStartRef.current) return;
+      lastXRef.current = ev.clientX;
+      setWidth(clampSidebarWidth(dragStartRef.current.width + dragStartRef.current.x - ev.clientX));
+    };
+    // up / cancel 同路径：按最新位置一次提交（refs 取值，不吃过期 state 闭包）
+    const finish = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      const start = dragStartRef.current;
+      dragStartRef.current = null;
+      setDragging(false);
+      if (start) {
+        const final = clampSidebarWidth(start.width + start.x - lastXRef.current);
+        setWidth(final);
+        persistWidth(final);
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+  };
+
+  // 键盘调宽（role=separator 可聚焦）：手柄在侧栏左缘，ArrowLeft 沿拖拽语义加宽、
+  // ArrowRight 收窄；Home/End 直达边界。单次按键 = 单次写（无连发节流需求）。
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    let next: number;
+    switch (e.key) {
+      case 'ArrowLeft':
+        next = width + 16;
+        break;
+      case 'ArrowRight':
+        next = width - 16;
+        break;
+      case 'Home':
+        next = SIDEBAR_WIDTH_MIN;
+        break;
+      case 'End':
+        next = SIDEBAR_WIDTH_MAX;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    widthUserTouchedRef.current = true;
+    const final = clampSidebarWidth(next);
+    setWidth(final);
+    persistWidth(final);
+  };
+
   // 地址栏 / 探活下拉共用的导航入口（userNavigate 隐式接管，§3.2）
   const navigate = (url: string): Promise<void> =>
     ipc.browser.userNavigate(workspaceId, url).then(() => undefined);
@@ -193,8 +291,29 @@ export function BrowserSidebar({ workspaceId }: Props) {
   return (
     <div
       data-testid="browser-sidebar"
-      className="flex w-[380px] shrink-0 flex-col border-l border-subtle bg-surface-1"
+      className={`relative flex shrink-0 flex-col border-l border-subtle bg-surface-1 ${
+        dragging ? 'select-none' : ''
+      }`}
+      style={{ width }}
     >
+      {/* 左缘宽度拖拽手柄：4px 命中区悬于 border-l 之上（z-10）。宽度是数值而非
+          颜色——inline style 是设计系统许可的动态宽度模式（动态 Tailwind 任意值
+          class 不生成 CSS）。拖拽/悬停强调走 accent token（同 layout/Sidebar）。 */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整浏览器侧栏宽度"
+        aria-valuemin={SIDEBAR_WIDTH_MIN}
+        aria-valuemax={SIDEBAR_WIDTH_MAX}
+        aria-valuenow={width}
+        tabIndex={0}
+        data-testid="browser-sidebar-resizer"
+        onPointerDown={handlePointerDown}
+        onKeyDown={handleKeyDown}
+        className={`absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize touch-none transition-colors ${
+          dragging ? 'bg-accent-500' : 'bg-subtle hover:bg-accent-500 focus-visible:bg-accent-500'
+        }`}
+      />
       {/* chrome 行 1：tabs + 接管徽标 + 信任徽标 + 折叠钮 */}
       <div className="flex items-center gap-1.5 border-b border-subtle px-2 py-1.5">
         <TabsBar
