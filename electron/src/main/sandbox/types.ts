@@ -10,7 +10,8 @@ export interface ShellSandboxPolicy {
   workspaceDir: string;
   homeDir: string;
   tmpDir: string;
-  /** 存在于磁盘的敏感目录（~/.ssh 等）；linux 用 --tmpfs 覆盖隐藏，darwin 用 deny 规则 */
+  /** 存在于磁盘的敏感路径（~/.ssh 目录、~/.netrc 文件等）；linux 按类型遮盖
+   * （目录 --tmpfs / 文件 --ro-bind /dev/null），darwin 用 file-read* deny 规则 */
   sensitiveDirs: string[];
   networkEnabled: boolean;
 }

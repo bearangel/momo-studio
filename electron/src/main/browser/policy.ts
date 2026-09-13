@@ -162,7 +162,17 @@ export class BrowserPolicy {
     // 2) 符号链接逃逸：向上找真实存在的最近祖先，realpath 解析后不得脱离 workspace
     //    真实根。逐级向上而非直接 realpath(normalized)，是为了支持尚未创建的文件
     //    路径（与 wsFs 同策）。
-    const realRoot = fs.realpathSync(root);
+    let realRoot: string;
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch {
+      // workspace 根目录不存在/不可读（如运行中被删除）：裸 ENOENT 会逃出错误
+      // 分类体系（审查 Nit）——转 BrowserFileAccessError 并携带根路径，面向
+      // LLM 可诊断可重试。
+      throw new BrowserFileAccessError(
+        `workspace 目录不可访问（可能已被删除或移动）: ${root}`,
+      );
+    }
     let anchor = normalized;
     while (anchor !== root && !fs.existsSync(anchor)) {
       anchor = path.dirname(anchor);

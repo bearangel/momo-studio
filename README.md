@@ -88,6 +88,7 @@ bash 工具接入 OS 级隔离——工具防御第二期，清偿 v2.1 安全�
 - **boot 探测 + IPC 4 通道** — 启动 fire-and-forget 探测（bwrap `--version` / sandbox-exec 最小 profile 冒烟 / pwsh + ExecutionPolicy），失败不影响启动；`sandbox:getState` / `reprobe` / `installBwrap` / `dismissPrompt`
 - **设置「安全沙箱」分类 + 首启提示卡** — 模式单选 / 网络开关 / 探测状态只读区 + 重新探测；Linux 缺 bwrap 右下角非模态引导卡（复制命令 / pkexec 一键安装 / 装后自动重探测），Windows ExecutionPolicy=Restricted 授权指引卡
 - 真实 bwrap 条件集成测试（容器拦 user namespace 时整组自动 skip，不造假绿）
+- 已知边界：Seatbelt `mach-lookup` 未收敛到服务白名单——`(allow file-ioctl sysctl-read mach-lookup)` 全放行下，securityd 等关键服务经 Mach 端口的服务侧 Keychain 访问不受 sensitiveDirs file-deny 约束（目录 deny 只挡文件系统直读）；keychain 服务侧访问需真机验收实测后再收敛，暂以文档化（审查 F4）
 
 **v2.3.0 — FileTools 防御硬化（开发中，未发布）**
 

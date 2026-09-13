@@ -436,9 +436,10 @@ export class BrowserManager {
     );
     const base = this.screenshotDir ?? path.join(os.tmpdir(), 'momo-browser-shots');
     const dir = path.join(base, wsId);
-    fs.mkdirSync(dir, { recursive: true });
+    // fs/promises（审查 Nit）：方法本就 async，同步 IO 会卡主进程事件循环
+    await fs.promises.mkdir(dir, { recursive: true });
     const file = path.join(dir, safeName);
-    fs.writeFileSync(file, image.toPNG());
+    await fs.promises.writeFile(file, image.toPNG());
     return { path: file };
   }
 
