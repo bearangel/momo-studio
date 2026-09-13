@@ -34,7 +34,7 @@ import { listTasks, getTask, type TaskRow } from '../storage/tasks/repo';
 import { rebuildTurn } from '../agent/turn-reconstructor';
 import { agentRunners } from '../agent/runtime-registry';
 import { ensureMemberRuntime } from '../agent/start-chain';
-import { registerLane, getLane } from '../agent/session-lane';
+import { registerLane, getLane, clearLaneIfMatch } from '../agent/session-lane';
 import { getTeamLeaderInstanceId } from '../agent/team';
 import { getJournalStore } from '../journal/recorder';
 import type { TaskConfig as AgentTaskConfig } from '../agent/agent-runner';
@@ -379,7 +379,12 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
   if (breakpointSsId) {
     flipMessageBackToStreaming(breakpointSsId);
   }
-  // 注册车道（占道 + 防后续 steer 误派入本流）
+  // 注册车道（占道 + 防后续 steer 误派入本流）。
+  // 顺序与 router-service.routeUserChat 相反（其 executeTask 成功后才
+  // registerLane）：resume 的 streamSessionId 是预先复用的断点 base id，
+  // 必须先占道才能让上方「双恢复守卫」在 executeTask 的 await 窗口内立即
+  // 生效——后置注册则两次 resumeTask 可在同一条流上并发派发双 task-config。
+  // 代价：executeTask 同步抛错时无收尾方清道，下方 catch 必须补偿。
   registerLane(
     task.executionSessionId,
     {
@@ -390,7 +395,22 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
     { kickoff: true },
   );
 
-  await runner.executeTask(cfg);
+  try {
+    await runner.executeTask(cfg);
+  } catch (err) {
+    // C1 补偿（对照 router-service：其 registerLane 后置于成功路径故无需补偿）：
+    // executeTask 同步抛错（warmPool.acquire spawn ENOENT 等）时流必然不会
+    // 产生任何 chunk、也没有收尾方调 clearLaneIfMatch——不补偿则车道永久
+    // 占道，该会话死锁至重启。
+    clearLaneIfMatch(task.executionSessionId, cfg.streamSessionId);
+    if (breakpointSsId) {
+      rollbackMessageFromStreaming(
+        breakpointSsId,
+        `恢复派发失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    throw err;
+  }
   return { streamSessionId: streamSessionIdForReturn };
 }
 
@@ -427,5 +447,27 @@ export function flipMessageBackToStreaming(baseSsId: string): void {
     payload: { status: 'streaming' },
   });
   // 立即落盘（renderer 可能在状态变更事件到达前就拉了消息列表；status 列已是 streaming）
+  getEventBuffer().flush();
+}
+
+/**
+ * flipMessageBackToStreaming 的反向补偿（C1）：resume 派发失败时把翻回
+ * streaming 的行退回 failed。收尾形态对齐 sweepStaleStreaming 的崩溃兜底
+ * 契约——final 事件携带失败原因，renderer 聚合状态与消息行列同步翻回
+ * failed，不滞留「流不存在却 streaming」的幽灵行。
+ *
+ * 行定位与 flip 同点（getLatestMessageByStreamSessionId 单点——流族 =
+ * base + #roll，当前行 = 最新一行，防两辅助各自理解流族语义的契约漂移）；
+ * 不改 body（flip 未触碰 body，回滚对称）。无匹配行静默 no-op。
+ */
+function rollbackMessageFromStreaming(baseSsId: string, error: string): void {
+  const row = getLatestMessageByStreamSessionId(baseSsId);
+  if (!row) return;
+  updateMessageStatus(row.id, 'failed');
+  getEventBuffer().append({
+    messageId: row.id,
+    eventType: 'final',
+    payload: { status: 'failed', error },
+  });
   getEventBuffer().flush();
 }
