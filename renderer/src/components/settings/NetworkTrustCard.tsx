@@ -3,7 +3,8 @@
 // v2.4.x 网络信任卡（spec 2026-09-13 §6，方案 A 阻塞式——镜像 BrowserTrustNotice
 // 结构）：策略 ask 且 agent 的 bash 命令因网络被拦截失败时，主进程经 sandbox:notice
 // 推送 kind='net-trust-request'，agent 环路在主进程侧阻塞等待本卡应答（180s 内有效；
-// 超时主进程侧自动按拒绝收敛、卡片倒计时归零自散——此后补点为 no-op，spec §5 协议 6）：
+// 超时主进程侧自动按拒绝收敛、卡片倒计时归零自散——此后补点对齐浏览器语义，
+// spec §5 协议 6：迟到「永久允许」仍持久化为下一次任务生效，其余迟到补点 no-op）：
 //   - 「允许本次任务」→ answerNetworkTrust(session)（该 streamSessionId 后续 spawn
 //     net-on；任务结束即失效）
 //   - 「永久允许」→ answerNetworkTrust(always)（落库 networkPolicy=allow + 本任务即刻生效）

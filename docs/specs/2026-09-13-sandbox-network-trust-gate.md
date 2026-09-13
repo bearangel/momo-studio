@@ -59,7 +59,7 @@ effectiveNetwork(taskKey) = sessionGrants.get(taskKey) ?? settings.networkPolicy
 3. `session`/`always` → grants 置 `granted`（`always` 另持久化）；**在已失败命令的 tool result 尾部追加提示**：「沙箱网络已获用户批准，本任务后续命令可用网络，可重试」；唤醒全部挂起者
 4. `deny` → grants 置 `denied`，失败结果原样返回（LLM 自诊）
 5. 超时 → 等效 `deny`（置 `denied`，失败结果原样返回，任务继续跑）
-6. 迟到点击 no-op（卡已按超时收敛后到达的应答丢弃，不污染下一张卡）
+6. 迟到点击对齐浏览器语义（真机教训 2026-09-13 修订：原「整体丢弃」在真机上翻车——窗口后台化致 renderer 倒计时停摆、卡片滞留，用户补点「永久允许」被静默吞掉，后续会话永久 net-off 且不再询问）：迟到应答不整体丢弃，只收窄副作用边界——`always` 迟到 → **持久化照做**（下一任务起 net-on；本任务已按超时 deny 收敛不复活——已失败命令不重跑、无「用户批准」追加提示）；`deny` 迟到 → 无操作（超时已等效 deny）；`session` 迟到 → 无操作（无法追认已收敛的等待）。全路径记 in-time/late × answer 诊断日志。渲染端卡片消散由其自身点击成功 / 倒计时归零路径处理，无需主进程回推撤卡。与浏览器信任门（`browser/policy.ts` 迟到点击 = 为下一次调用授权）语义对齐。
 
 IPC：`sandbox:answerNetworkTrust(answer: 'session'|'always'|'deny')`（镜像 `browser:answerTrust`），prompt 推送通道镜像浏览器信任卡通道。
 
@@ -79,7 +79,7 @@ IPC：`sandbox:answerNetworkTrust(answer: 'session'|'always'|'deny')`（镜像 `
 
 ## 8. 测试策略（momo-test-rules）
 
-- 主进程：迁移三分支；effectiveNetwork 矩阵（settings × grants）；钩子触发条件矩阵（不触发：allow 策略/已有 grant/无签名）；等待协议（单飞/三值唤醒/超时=deny/迟到 no-op——时钟注入，勿真睡）；结果追加提示断言
+- 主进程：迁移三分支；effectiveNetwork 矩阵（settings × grants）；钩子触发条件矩阵（不触发：allow 策略/已有 grant/无签名）；等待协议（单飞/三值唤醒/超时=deny/迟到 always 仍持久化、迟到 deny/session no-op——时钟注入，勿真睡）；结果追加提示断言；agent-runner 全终态路径 grants 清理（ephemeral end / task-end / destroy / **child exit 崩溃与关机保态**——resume 复用 breakpointSsId 防 stale denied 传导）；新 streamSessionId 不继承旧会话 grant
 - 渲染端：面板三态读写；卡片三按钮 → IPC 调用；netOff 信息卡协调（ask 下不双弹 / deny 下保留）
 - 接线锁：resolveShellSpawn 读 effective（策略翻转后下一条 spawn tag 变化）；agent-runner grants 注册/清理
 - 门禁：typecheck 双 Done / electron+renderer 全套零回归 / 根 lint 0

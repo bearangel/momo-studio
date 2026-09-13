@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { AgentRunner } from '../../src/main/agent/agent-runner';
+import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from '../../src/main/agent/agent-runner';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
@@ -158,6 +158,44 @@ describe('AgentRunner 网络信任门接线（v2.4.x）', () => {
     gate.__setGrantForTest(ssn, 'granted');
     runner.destroy();
     expect(gate.getGrant(ssn)).toBeUndefined();
+  });
+
+  it('child exit（崩溃/被杀，无 end/task-end）收尾 → grants 同样清理'
+    + '（防 resume 复用 breakpointSsId 时继承 stale denied——「恢复后永远 net-off 不再问」链路）', async () => {
+    const gate = getNetworkTrustGate()!;
+    const { runner, child } = await mkRunner();
+    const ssn = 'ssn-exit-1';
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: 'sess-1',
+      body: 'hi',
+      streamSessionId: ssn,
+    });
+    gate.__setGrantForTest(ssn, 'denied');
+    runner.handleChildExit(child, 1);
+    expect(gate.getGrant(ssn)).toBeUndefined();
+    // 清理后同 ID 恢复询问语义（resume 复用该 ID 时不再继承 stale denied）
+    expect(gate.effective(ssn)).toEqual({ netOn: false, awaitingAsk: true });
+  });
+
+  it('关机保态路径（markShuttingDown + exit）→ grants 同样清理（保的是任务行 in_progress，不是会话级授权）', async () => {
+    const gate = getNetworkTrustGate()!;
+    const { runner, child } = await mkRunner();
+    const ssn = 'ssn-shutdown-1';
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: 'sess-1',
+      body: 'hi',
+      streamSessionId: ssn,
+    });
+    gate.__setGrantForTest(ssn, 'granted');
+    markShuttingDown();
+    try {
+      runner.handleChildExit(child, null);
+      expect(gate.getGrant(ssn)).toBeUndefined();
+    } finally {
+      __resetShuttingDownForTest();
+    }
   });
 
   it('net-trust-op(effective) 请求路由到信任门 + requestId 原样回带', async () => {

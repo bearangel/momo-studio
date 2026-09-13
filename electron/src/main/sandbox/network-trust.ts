@@ -4,7 +4,8 @@
 //   - sessionGrants：streamSessionId → granted/denied（会话级授权，严格随任务
 //     生命周期——agent-runner 活跃任务表终态时清理，spec §3 非目标：不跨任务记忆）
 //   - 单飞等待表：同 streamSessionId 并发命中只推一张信任卡，join 同一裁决
-//   - 阻塞询问协议：推卡 → 等待（≤180s）→ 三值应答 / 超时=deny / 迟到应答 no-op
+//   - 阻塞询问协议：推卡 → 等待（≤180s）→ 三值应答 / 超时=deny /
+//     迟到应答对齐浏览器语义（always 迟到仍持久化，deny/session 迟到 no-op）
 //
 // 纪律对齐 browser/policy.ts：纯逻辑零 electron 依赖（推送 / 持久化 / 时钟全部
 // 构造注入，单测直驱）。子进程 shell-tools 经 net-trust-bridge IPC 桥调用本模块
@@ -172,18 +173,48 @@ export class NetworkTrustGate {
 
   /**
    * 信任卡应答出口（sandbox:answerNetworkTrust IPC 入口）：
-   *   - 迟到应答（无 pending waiter：已超时收敛 / 已应答过）整体 no-op——
-   *     spec §5 协议 6「丢弃，不污染下一张卡」（与浏览器信任门语义不同：
-   *     浏览器迟到点击为下一次调用授权，网络门严格丢弃）
-   *   - session → grants=granted（任务结束即失效）
-   *   - always → grants=granted + 持久化（本任务即刻生效 + 跨任务生效）
-   *   - deny → grants=denied（本任务内不再询问；不持久化）
+   *   - 在时应答：session → grants=granted（任务结束即失效）；
+   *     always → grants=granted + 持久化（本任务即刻生效 + 跨任务生效）；
+   *     deny → grants=denied（本任务内不再询问；不持久化）
+   *   - 迟到应答（无 pending waiter：已超时收敛 / 已应答过 / 幽灵卡）对齐
+   *     浏览器信任门语义（spec §5 协议 6，真机教训 2026-09-13：窗口后台化致
+   *     renderer 倒计时停摆、卡滞留，用户补点「永久允许」被整体丢弃 → 永久
+   *     net-off 且不再询问）：迟到的是用户的持久化意图，仍然生效——
+   *     - always → 仅持久化（下一任务起 net-on）；会话级 grants 不动（本任务
+   *       已按超时 deny 收敛，不复活——已失败命令不重跑、无「用户批准」追加提示）
+   *     - deny → 无操作（超时已等效 deny）
+   *     - session → 无操作（无法追认一个已收敛的等待）
+   *     渲染端卡片消散由其自身点击成功 / 倒计时归零路径处理，无需回推撤卡。
+   *   - 全路径记 in-time/late × answer 诊断日志（真机排查锚点）
    */
   answer(streamSessionId: string, ans: NetworkTrustAnswer): void {
     const entry = this.waiters.get(streamSessionId);
-    if (entry === undefined) return;
+    if (entry === undefined) {
+      if (ans === 'always') {
+        logger.info('网络信任门：迟到 always 应答——仍持久化（浏览器对齐语义）', {
+          streamSessionId,
+          answer: ans,
+        });
+        try {
+          this.deps.persistAlways();
+        } catch (err) {
+          // 与在时路径同口径：持久化失败只记日志，不向 IPC 抛错（卡片已消散）
+          logger.warn('网络信任门：迟到 always 持久化失败', {
+            streamSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        logger.info('网络信任门：迟到应答丢弃（无 pending 等待，仅记日志）', {
+          streamSessionId,
+          answer: ans,
+        });
+      }
+      return;
+    }
     this.waiters.delete(streamSessionId);
     this.clock.clearTimer(entry.timer);
+    logger.info('网络信任门：应答在时生效', { streamSessionId, answer: ans });
     if (ans === 'deny') {
       this.grants.set(streamSessionId, 'denied');
       entry.resolve('denied');

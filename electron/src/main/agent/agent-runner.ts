@@ -486,6 +486,10 @@ export class AgentRunner {
       }
       this.activeTasks.delete(active.streamSessionId);
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
+      // v2.4.x：崩溃/退出收尾同样清理网络信任门会话级授权——此路径无 end/
+      // task-end，是 grants 泄漏源（stale denied 会随 resume 复用
+      // breakpointSsId 传导成「恢复后永远 net-off 不再问」）
+      clearActiveNetworkGrant(active.streamSessionId);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
         if (shuttingDown) {

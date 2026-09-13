@@ -5,11 +5,13 @@
 //     （tag 正则 + 网络失败签名——仅 tag / 仅签名均不触发）
 //   - effective 矩阵：settings 三态 × grants 两值（spec §8）
 //   - 等待协议：单飞（同 streamSessionId 并发只推一张卡）/ 三值应答唤醒 /
-//     超时 = deny（时钟注入，勿真睡）/ 迟到应答 no-op 不污染下一张卡
+//     超时 = deny（时钟注入，勿真睡）/ 迟到应答对齐浏览器语义（always 迟到
+//     仍持久化、deny/session 迟到 no-op）不污染下一张卡
 //   - clearGrant：任务终态清理（幂等）
 //   - handleNetTrustOp：触发条件矩阵（无签名 not-triggered / gate 未初始化 ok:false）
 // 时钟全部注入手动触发——任何用例不得真睡 180s。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { logger } from '../../src/main/logger';
 import {
   NETWORK_TRUST_TIMEOUT_MS,
   NetworkTrustGate,
@@ -22,6 +24,12 @@ import {
   type NetworkPolicy,
   type TrustClock,
 } from '../../src/main/sandbox/network-trust';
+
+// logger 打桩（纯旁路通道，不参与被测逻辑）：断言 answer() 的 in-time/late ×
+// answer 诊断日志字段（真机排查锚点——「永久允许被静默吞」类问题靠它定位）
+vi.mock('../../src/main/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 /** 手动时钟：不自动走表；测试显式 fire 触发超时（勿真睡铁律） */
 class ManualClock implements TrustClock {
@@ -240,21 +248,86 @@ describe('waitForTrust 等待协议（spec §5 协议 1-6）', () => {
     expect(f.gate.effective(SSN)).toEqual({ netOn: false, awaitingAsk: false });
   });
 
-  it('迟到应答 no-op：超时收敛后到达的应答整体丢弃（不覆盖 denied、不持久化、不污染下一张卡）', async () => {
+  it('迟到 always 对齐浏览器语义（真机教训 2026-09-13）：超时收敛后到达仍持久化，'
+    + '但本任务已按 deny 收敛不复活（grants 不动）、不污染下一张卡', async () => {
     const f = mkGate('ask');
+    // 模拟 ipc.handlers 真实接线：persistAlways → 全局策略翻 allow
+    f.persistAlways.mockImplementation(() => f.setPolicy('allow'));
     const p = f.gate.waitForTrust(SSN);
     f.clock.fire();
     await expect(p).resolves.toBe('denied');
-    // 迟到点击「永久允许」——spec §5.6 整体 no-op
+    // 迟到点击「永久允许」——持久化意图仍然生效（此前为整体 no-op：真机上
+    // 窗口后台化致倒计时停摆、卡滞留，用户补点被静默吞 → 永久 net-off 且不再问）
     f.gate.answer(SSN, 'always');
-    expect(f.persistAlways).not.toHaveBeenCalled();
+    expect(f.persistAlways).toHaveBeenCalledTimes(1);
+    // 会话级授权不复活：本任务保持 denied（已失败命令不重跑、无「用户批准」追加提示）
     expect(f.gate.effective(SSN)).toEqual({ netOn: false, awaitingAsk: false });
-    // 下一张卡不受污染：clearGrant 后新任务同流可再询问
+    // 持久化生效后新任务（新 streamSessionId）读策略 → net-on 不再询问
+    expect(f.gate.effective('ssn-fresh-next')).toEqual({ netOn: true, awaitingAsk: false });
+    // 下一张卡不受污染：用户把策略调回 ask（设置页合法操作）+ clearGrant 后
+    // 同流可再询问（迟到点击不残留任何等待态）
+    f.setPolicy('ask');
     f.gate.clearGrant(SSN);
     const p2 = f.gate.waitForTrust(SSN);
     expect(f.notices).toHaveLength(2);
     f.gate.answer(SSN, 'session');
     await expect(p2).resolves.toBe('granted');
+  });
+
+  it('迟到 deny → 无操作（超时已等效 deny：不重复持久化、grants 不变、不抛错）', async () => {
+    const f = mkGate('ask');
+    const p = f.gate.waitForTrust(SSN);
+    f.clock.fire();
+    await expect(p).resolves.toBe('denied');
+    expect(() => f.gate.answer(SSN, 'deny')).not.toThrow();
+    expect(f.persistAlways).not.toHaveBeenCalled();
+    expect(f.gate.effective(SSN)).toEqual({ netOn: false, awaitingAsk: false });
+  });
+
+  it('迟到 session → 无操作（无法追认一个已超时收敛的等待：不持久化、grants 不动）', async () => {
+    const f = mkGate('ask');
+    const p = f.gate.waitForTrust(SSN);
+    f.clock.fire();
+    await expect(p).resolves.toBe('denied');
+    expect(() => f.gate.answer(SSN, 'session')).not.toThrow();
+    expect(f.persistAlways).not.toHaveBeenCalled();
+    expect(f.gate.effective(SSN)).toEqual({ netOn: false, awaitingAsk: false });
+  });
+
+  it('answer 诊断日志（in-time/late × answer）：迟到 always 记「迟到仍持久化」，在时 always 记 in-time', async () => {
+    vi.mocked(logger.info).mockClear();
+    const f = mkGate('ask');
+    const p = f.gate.waitForTrust(SSN);
+    f.gate.answer(SSN, 'always');
+    await expect(p).resolves.toBe('granted');
+    const ssn2 = 'ssn-log-late';
+    const p2 = f.gate.waitForTrust(ssn2);
+    f.clock.fire();
+    await expect(p2).resolves.toBe('denied');
+    f.gate.answer(ssn2, 'always');
+    const calls = vi.mocked(logger.info).mock.calls;
+    const lateCall = calls.find((c) => String(c[0]).includes('迟到'));
+    expect(lateCall).toBeDefined();
+    expect(String(lateCall![0])).toContain('always');
+    expect(lateCall![1]).toMatchObject({ streamSessionId: ssn2 });
+    const inTimeCall = calls.find((c) => String(c[0]).includes('在时') || String(c[0]).includes('in-time'));
+    expect(inTimeCall).toBeDefined();
+    expect(inTimeCall![1]).toMatchObject({ streamSessionId: SSN, answer: 'always' });
+  });
+
+  it('新 streamSessionId 不继承其他会话的 grant（跨会话污染防线）：A 流超时 denied 不影响 B 流询问', async () => {
+    const f = mkGate('ask');
+    const pA = f.gate.waitForTrust('ssn-a');
+    f.clock.fire();
+    await expect(pA).resolves.toBe('denied');
+    // B 流（新任务新 ID）：不受 A 的 denied 影响——照常询问
+    expect(f.gate.effective('ssn-b')).toEqual({ netOn: false, awaitingAsk: true });
+    const pB = f.gate.waitForTrust('ssn-b');
+    f.gate.answer('ssn-b', 'session');
+    await expect(pB).resolves.toBe('granted');
+    // A 的 grant 仅随 A 的任务终态清理（clearGrant 按 ID 精确命中）
+    f.gate.clearGrant('ssn-a');
+    expect(f.gate.getGrant('ssn-b')).toBe('granted');
   });
 
   it('已应答后的重复应答同样 no-op（双击防重）', async () => {
