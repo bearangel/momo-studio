@@ -1,10 +1,11 @@
 // renderer/src/components/settings/SandboxSettingsPanel.test.tsx
 //
-// SandboxSettingsPanel 行为测试（v2.4 Task 8，spec §6.4）：
+// SandboxSettingsPanel 行为测试（v2.4 Task 8，spec §6.4 + v2.4.x 三态化 2026-09-13 §6）：
 //   - 挂载时通过 ipc.sandbox.getState 拉取并渲染探测状态区
 //   - 状态区四种文案分支：可用（版本）/ win32（pwsh 无 OS 沙箱）/ 不可用（原因）/ 未探测
 //   - 模式切换 → ipc.settings.updateGlobal({ sandboxMode }) + 乐观更新
-//   - 网络开关 → ipc.settings.updateGlobal({ sandboxNetwork })
+//   - 网络三态分段控件（拒绝/每次询问/永久允许）→ updateGlobal({ sandboxNetworkPolicy })
+//     + 分态说明文案切换
 //   - 重新探测 → ipc.sandbox.reprobe 被调 + 状态刷新 + busy 态禁用
 // mock 形态照抄 ConversationSettings.test.tsx（window.api 桩 + ipc Proxy 透传）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -44,7 +45,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkEnabled: false },
+    settings: { mode: 'strict', networkPolicy: 'ask' },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -186,19 +187,51 @@ describe('SandboxSettingsPanel', () => {
     expect(screen.getByRole('radio', { name: /strict/ })).not.toBeChecked();
   });
 
-  it('勾选网络开关 → 调 updateGlobal({ sandboxNetwork: true }) 且乐观选中', async () => {
+  it('网络三态：默认选中「每次询问」+ 分态说明文案（ask）', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
 
-    const checkbox = screen.getByRole('checkbox', { name: /允许沙箱内 bash 访问网络/ });
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
+    expect(screen.getByRole('radio', { name: '每次询问' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '拒绝' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByTestId('network-policy-desc').textContent).toContain('信任卡');
+  });
+
+  it('网络三态：点「永久允许」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中 + 说明切换', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('radio', { name: '永久允许' }));
 
     await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetwork: true });
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'allow' });
     });
-    expect(checkbox).toBeChecked();
+    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '每次询问' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByTestId('network-policy-desc').textContent).toContain('不再询问');
+  });
+
+  it('网络三态：点「拒绝」→ updateGlobal({ sandboxNetworkPolicy: deny }) + 说明切换', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('radio', { name: '拒绝' }));
+
+    await waitFor(() => {
+      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxNetworkPolicy: 'deny' });
+    });
+    expect(screen.getByTestId('network-policy-desc').textContent).toContain('引导卡');
+  });
+
+  it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: '拒绝' })).toHaveAttribute('aria-checked', 'true');
+    });
   });
 
   it('点击"重新探测" → 调 reprobe 并用返回值刷新状态区', async () => {
@@ -214,7 +247,7 @@ describe('SandboxSettingsPanel', () => {
         executionPolicy: null,
         probedAt: 1757500001000,
       },
-      settings: { mode: 'permissive', networkEnabled: true },
+      settings: { mode: 'permissive', networkPolicy: 'allow' },
     });
     reprobeMock.mockResolvedValue(refreshed);
     render(<SandboxSettingsPanel />);
@@ -228,7 +261,7 @@ describe('SandboxSettingsPanel', () => {
     expect(reprobeMock).toHaveBeenCalledTimes(1);
     // 返回值里的 settings 同步刷新（模式/网络控件跟随）
     expect(screen.getByRole('radio', { name: /permissive/ })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /允许沙箱内 bash 访问网络/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '永久允许' })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('探测进行中按钮禁用并显示"探测中..."，完成后恢复', async () => {

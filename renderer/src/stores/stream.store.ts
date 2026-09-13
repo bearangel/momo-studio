@@ -82,6 +82,11 @@ interface StreamStoreState {
    * 与实时路径走同一个 aggregateEvents，保证重启后聚合一致。
    */
   hydrateFromEvents: (messageId: string, events: MessageEventRow[]) => void;
+  /**
+   * v2.4.x 网络信任卡路径置位入口（spec §6 防双弹）：ask 策略下网络失败由信任卡
+   * 负责，本标志由信任卡出现时一并置位——与实时批次检测共用同一一次性语义。
+   */
+  markNetBlockedSeen: () => void;
   /** 清空所有 streams + 累积 events（切换 workspace / 登出时调用） */
   reset: () => void;
 }
@@ -161,5 +166,10 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
     eventLogByMessage.clear();
     // 刻意不清 netBlockedSeen：一次性标志每 app 运行至多置一次，workspace 切换不重置
     set({ streams: new Map() });
+  },
+
+  markNetBlockedSeen: () => {
+    // 一次性标志只置不清（与 applyEventBatch 检测路径同一语义）
+    set((state) => (state.netBlockedSeen ? {} : { netBlockedSeen: true }));
   },
 }));

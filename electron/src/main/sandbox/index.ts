@@ -30,20 +30,32 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
   return 'Linux 安装：sudo apt install bubblewrap（或对应发行版包管理器）；也可在 设置→安全沙箱 切换 permissive 模式（无 OS 隔离，不推荐）';
 }
 
-export function resolveShellSpawn(workspaceDir: string, command: string): SpawnPlan {
+export function resolveShellSpawn(
+  workspaceDir: string,
+  command: string,
+  opts?: { networkEnabled?: boolean },
+): SpawnPlan {
   const settings = getSandboxSettings();
-  const policy = buildPolicy(workspaceDir, settings.networkEnabled);
+  // v2.4.x 网络信任门（spec §5 唯一改动点）：有效策略 effectiveNetwork(taskKey) =
+  // sessionGrants.get(taskKey) ?? settings.networkPolicy 由 shell-tools 经主进程
+  // 信任门解析后以 opts.networkEnabled 显式传入（grants 在主进程内存，子进程不可见）；
+  // 未传时（既有调用方/单测）按设置三态推导：allow → 开，deny/ask → 关——
+  // ask 的 spawn 恒 net-off，命中网络拒绝签名后走阻塞询问。各平台 profile
+  // builder 继续收布尔值（spec §7 平台矩阵）。
+  const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
+  const policy = buildPolicy(workspaceDir, networkEnabled);
 
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';
-    // 刻意不带 -ExecutionPolicy Bypass：保留用户手动授权闸门（spec D5）
+    // 刻意不带 -ExecutionPolicy Bypass：保留用户手动授权闸门（spec D5）。
+    // Windows 无 OS 沙箱：本分支不消费网络态（无 net-off tag → 信任门永不触发）
     return { kind: 'plain', shell, args: ['-NoProfile', '-NonInteractive', '-Command', command], tag: 'win-powershell' };
   }
 
   const state = getSandboxState();
   // wrapped tag 携带网络态（net-off/net-on）：网络关时监听/出网在沙箱内必败，
   // 让 LLM 从结果行一步自诊（「开 设置→安全沙箱→网络」）而非多轮 bind/curl 试探
-  const netTag = settings.networkEnabled ? 'net-on' : 'net-off';
+  const netTag = networkEnabled ? 'net-on' : 'net-off';
   if (process.platform === 'linux' && state?.sandboxTool === 'bwrap') {
     return {
       kind: 'wrapped', shell: 'bwrap',

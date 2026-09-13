@@ -39,10 +39,15 @@ export function SandboxNotice() {
     void ipc.sandbox.getState().then(setInfo);
   }, []);
 
-  // netOff 卡不依赖探测 state（tag 在场即证明沙箱当时在跑）；bwrap/授权卡仍需 state
+  // netOff 卡不依赖探测 state（tag 在场即证明沙箱当时在跑）；bwrap/授权卡仍需 state。
+  // v2.4.x 防双弹（spec §6）：ask 策略下网络失败由 NetworkTrustCard（阻塞式询问）
+  // 负责，本信息卡只在 deny 策略下展示——ask 的裁决/超时收敛后本卡同样不弹。
   if (!info) return null;
 
-  const showNetOff = netBlockedSeen && !info.netPromptDismissed;
+  const showNetOff =
+    netBlockedSeen &&
+    !info.netPromptDismissed &&
+    info.settings.networkPolicy === 'deny';
   const showBwrap =
     !showNetOff &&
     info.state !== null &&

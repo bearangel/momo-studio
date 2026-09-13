@@ -32,7 +32,7 @@ let ctx: ToolContext;
   wsFs = new WorkspaceFS(tmpDir);
   // v2.4：bash 走 resolveShellSpawn（默认 strict + 未探测 → blocked 抛错）。
   // 注入 permissive + linux 沙箱不可用状态 → plain 直跑 + unsandboxed 标记。
-  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,

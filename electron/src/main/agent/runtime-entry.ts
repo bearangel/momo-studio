@@ -69,6 +69,10 @@ import { createJournalStore } from '../journal/store';
 // 活在主进程——子进程以 IPC 代理端口注入 initBrowserTools，见 browser-ipc-bridge.ts
 import { createBrowserToolsIpcBridge, handleBrowserOpResult } from './tools/browser-ipc-bridge';
 import { initBrowserTools } from './tools/browser-tools';
+// v2.4.x 网络信任门 IPC 桥（net-trust-bridge.ts）：信任门状态活在主进程
+// （grants 随 agent-runner 任务生命周期 + 信任卡推送需 webContents），子进程
+// shell-tools 经此桥往返 effective / wait 两 op
+import { handleNetTrustOpResult } from './tools/net-trust-bridge';
 
 /**
  * chat loop 运行时上下文：在启动时构建一次，后续每轮对话复用。
@@ -213,6 +217,8 @@ async function main(): Promise<void> {
       handleTaskReplyIpc(msg);
     } else if (m.type === 'browser-op:result') {
       handleBrowserOpResult(msg);
+    } else if (m.type === 'net-trust-op:result') {
+      handleNetTrustOpResult(msg);
     } else if (m.type === 'compaction:result') {
       handleCompactionResultIpc(msg);
     } else if (m.type === 'shutdown') {

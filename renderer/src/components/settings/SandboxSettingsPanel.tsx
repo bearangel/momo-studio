@@ -2,11 +2,27 @@
 //
 // v2.4 安全沙箱设置（spec §6.4）：沙箱模式 / 沙箱内网络出站 / 探测状态只读区。
 // 状态与重探测走 ipc.sandbox（Task 7）；设置保存走 ipc.settings.updateGlobal。
+// v2.4.x（spec 2026-09-13 §6）：网络出站从布尔开关升级三态分段控件
+// （拒绝 / 每次询问（默认）/ 永久允许）——说明文案区分三态行为。
 // 全语义 token；lucide ShieldCheck 图标由 SettingsNav 持有。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import type { SandboxInfo, SandboxMode } from '../../ipc/types';
+import type { SandboxInfo, SandboxMode, NetworkPolicy } from '../../ipc/types';
 import { Button } from '../ui/Button';
+import { Segmented } from '../ui/Segmented';
+import type { SegmentedOption } from '../ui/Segmented';
+
+const NETWORK_POLICY_OPTIONS: readonly SegmentedOption<NetworkPolicy>[] = [
+  { value: 'deny', label: '拒绝' },
+  { value: 'ask', label: '每次询问' },
+  { value: 'allow', label: '永久允许' },
+];
+
+const NETWORK_POLICY_DESCRIPTIONS: Record<NetworkPolicy, string> = {
+  deny: '沙箱内 bash 一律禁网；网络失败时仅显示一次性引导卡，不弹出询问。',
+  ask: '沙箱内 bash 默认禁网；命令因网络被拦截失败时弹出信任卡阻塞等待你的裁定（3 分钟未应答按拒绝处理）。',
+  allow: '沙箱内 bash 全放行网络（含端口监听），不再询问。',
+};
 
 export function SandboxSettingsPanel() {
   const [info, setInfo] = useState<SandboxInfo | null>(null);
@@ -17,13 +33,13 @@ export function SandboxSettingsPanel() {
   }, []);
 
   // 乐观更新：本地先改 UI，保存 fire-and-forget（与全局设置单一真相源弱一致）
-  const save = (patch: { sandboxMode?: SandboxMode; sandboxNetwork?: boolean }): void => {
+  const save = (patch: { sandboxMode?: SandboxMode; sandboxNetworkPolicy?: NetworkPolicy }): void => {
     if (!info) return;
     setInfo({
       ...info,
       settings: {
         mode: patch.sandboxMode ?? info.settings.mode,
-        networkEnabled: patch.sandboxNetwork ?? info.settings.networkEnabled,
+        networkPolicy: patch.sandboxNetworkPolicy ?? info.settings.networkPolicy,
       },
     });
     void ipc.settings.updateGlobal(patch);
@@ -79,16 +95,18 @@ export function SandboxSettingsPanel() {
         ))}
       </fieldset>
 
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-2">
         <div className="text-sm font-medium text-primary">沙箱内网络出站</div>
-        <label className="flex items-center gap-2 text-sm text-secondary">
-          <input
-            type="checkbox"
-            checked={info.settings.networkEnabled}
-            onChange={(e) => save({ sandboxNetwork: e.target.checked })}
-          />
-          <span>允许沙箱内 bash 访问网络（仅影响 bash；LLM API 调用不受影响）</span>
-        </label>
+        <Segmented
+          options={NETWORK_POLICY_OPTIONS}
+          value={info.settings.networkPolicy}
+          onChange={(v) => save({ sandboxNetworkPolicy: v })}
+          aria-label="沙箱内网络出站策略"
+        />
+        <p className="text-xs text-tertiary leading-relaxed" data-testid="network-policy-desc">
+          {NETWORK_POLICY_DESCRIPTIONS[info.settings.networkPolicy]}
+        </p>
+        <p className="text-xs text-tertiary">仅影响沙箱内 bash；LLM API 调用不受影响。</p>
       </div>
 
       <div className="rounded-lg border border-subtle bg-surface-2 p-3 flex flex-col gap-2">

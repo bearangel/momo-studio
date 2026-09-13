@@ -32,8 +32,18 @@ export interface GlobalSettings {
   memoryExtractionEnabled?: boolean;
   /** v2.4：OS 沙箱模式（strict=不可用则 bash 拒绝执行；permissive=降级运行+标记）；默认 strict */
   sandboxMode?: 'strict' | 'permissive';
-  /** v2.4：沙箱内网络出站开关（仅影响沙箱内 bash，LLM API 调用不受影响）；默认 false */
+  /**
+   * v2.4：沙箱内网络出站布尔开关（已被 sandboxNetworkPolicy 三态取代）。旧键留存
+   * 不删——回滚到旧版本时仍可读到原值；本字段不再被生产消费（读侧经 sandbox/settings.ts 迁移）。
+   */
   sandboxNetwork?: boolean;
+  /**
+   * v2.4.x：沙箱网络出站三态策略（spec 2026-09-13 §4：deny 全断 / ask 失败后阻塞
+   * 询问（默认）/ allow 全放行）。注意：读侧只在「kv 有行」时透传本字段（缺省
+   * undefined），由 sandbox/settings.ts 执行旧布尔键 → 三态的懒迁移——此处给默认值
+   * 会被 updateGlobalSettings 的读改写合并烤进 JSON，污染迁移判定。
+   */
+  sandboxNetworkPolicy?: 'deny' | 'ask' | 'allow';
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
   journalQuotaMb?: number;
 }
@@ -85,6 +95,7 @@ export function getGlobalSettings(): GlobalSettings {
     memoryExtractionEnabled: parsed.memoryExtractionEnabled ?? true,
     sandboxMode: parsed.sandboxMode ?? 'strict',
     sandboxNetwork: parsed.sandboxNetwork ?? false,
+    sandboxNetworkPolicy: parsed.sandboxNetworkPolicy,
     journalQuotaMb: parsed.journalQuotaMb ?? DEFAULT_JOURNAL_QUOTA_MB,
   };
 }

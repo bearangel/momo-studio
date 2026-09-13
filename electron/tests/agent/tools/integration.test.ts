@@ -34,7 +34,7 @@ let modules: ReturnType<typeof buildToolRegistry>;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-integration-'));
   // v2.4：bash 走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证 bash 用例可真实执行
-  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,

@@ -34,6 +34,9 @@ import { clearLaneIfMatch } from './session-lane';
 // browser 工具 IPC 桥（主机验收 P0 修复）：子进程 browser-op 请求在此路由到
 // 主进程真实编排面（BrowserManager 只能活在主进程），见 browser/op-router.ts
 import { routeBrowserOp } from '../browser/op-router';
+// v2.4.x 网络信任门（spec 2026-09-13 §5）：子进程 net-trust-op 请求在此路由到
+// 主进程信任门（grants/等待表/推卡都活在主进程）；任务终态同步清理会话级授权
+import { clearActiveNetworkGrant, handleNetTrustOp } from '../sandbox/network-trust';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -203,6 +206,12 @@ export class AgentRunner {
         void this.routeBrowserOpToChild(child, msg);
         return;
       }
+      // net-trust-op（网络信任门 IPC 桥请求）：同 browser-op——requestId 关联，
+      // 先于 streamSessionId 过滤分发（wait op 最长挂 180s 等用户应答）
+      if (m.type === 'net-trust-op') {
+        void this.routeNetTrustOpToChild(child, msg);
+        return;
+      }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
       if (m.streamSessionId !== task.streamSessionId) return;
       if (m.type === 'end') {
@@ -218,6 +227,8 @@ export class AgentRunner {
           child.off('message', messageHandler);
           this.opts.warmPool.release(runtime);
           this.activeTasks.delete(task.streamSessionId);
+          // v2.4.x：网络信任门会话级授权随流终结（ephemeral 同样不跨任务记忆）
+          clearActiveNetworkGrant(task.streamSessionId);
           // v2.3 车道：顶层流收尾让道 + 触发排队放行
           clearLaneIfMatch(task.executionSessionId, task.streamSessionId);
           notifyExecutor();
@@ -287,6 +298,29 @@ export class AgentRunner {
   }
 
   /**
+   * net-trust-op 请求路由回程（routeBrowserOpToChild 同型）：主进程信任门执行 →
+   * 应答补全线协议字段后回送子进程。handleNetTrustOp 永不抛异常（失败统一
+   * {ok:false, error}）；child.send 失败（通道已关）只记日志——子进程桥自有超时兜底。
+   * requestId 原样回带（单点生成、沿线透传，不重新生成）。
+   */
+  private async routeNetTrustOpToChild(child: ChildProcess, msg: unknown): Promise<void> {
+    const requestId = (msg as { requestId?: unknown }).requestId;
+    const outcome = await handleNetTrustOp(msg);
+    const result =
+      outcome.ok
+        ? { type: 'net-trust-op:result', requestId: typeof requestId === 'string' ? requestId : '', ok: true, payload: outcome.payload }
+        : { type: 'net-trust-op:result', requestId: typeof requestId === 'string' ? requestId : '', ok: false, error: outcome.error };
+    try {
+      child.send(result);
+    } catch (err) {
+      logger.warn('net-trust-op 应答回送失败（IPC 通道已关闭）', {
+        requestId: typeof requestId === 'string' ? requestId : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * browser-op 请求路由回程：主进程真实编排面执行 → 应答补全线协议字段
    * （type / requestId）后回送子进程。routeBrowserOp 永不抛异常（失败统一
    * 序列化 {ok:false, error}）；child.send 失败（通道已关）只记日志——子进程
@@ -328,6 +362,9 @@ export class AgentRunner {
       active.safetyTimer = undefined;
     }
     this.activeTasks.delete(streamSessionId);
+    // v2.4.x：网络信任门会话级授权随任务终态清理（spec §5「任务终态即删」；
+    // gate 未接线时内部 no-op——清理绝不阻断收尾链路）
+    clearActiveNetworkGrant(streamSessionId);
     // 顺序契约：先转换任务终态（DB 可见），再 kill 子进程——确保看板 /
     // 重启恢复读到的终态不依赖 runtime 存活
     if (active.taskId !== null) {
@@ -580,8 +617,10 @@ export class AgentRunner {
         active.safetyTimer = undefined;
       }
       this.opts.warmPool.release(active.runtime);
-      // v2.3 车道：runner 销毁时让道（按 streamSessionId 匹配天然 no-op）
+      // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
+      // v2.4.x：runner 销毁同样清理网络信任门会话级授权（与活跃表同生命周期）
+      clearActiveNetworkGrant(active.streamSessionId);
     }
     this.activeTasks.clear();
   }

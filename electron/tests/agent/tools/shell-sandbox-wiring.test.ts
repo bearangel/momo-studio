@@ -91,7 +91,7 @@ beforeEach(() => {
     toolModules: buildToolRegistry(sharedToolCtxFields),
   };
   // permissive + 沙箱不可用（bwrap 未安装）→ resolveShellSpawn 应降级 plain 直跑
-  __setSandboxSettingsForTest({ mode: 'permissive', networkEnabled: false });
+  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
@@ -114,7 +114,7 @@ describe('bash 工具沙箱接线（真实路由）', () => {
   });
 
   it('strict + 不可用 → 抛错含安装指引（不 spawn）', async () => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkEnabled: false });
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
     await expect(executeBashViaRealRoute('echo hello')).rejects.toThrow('bubblewrap');
   });
 });

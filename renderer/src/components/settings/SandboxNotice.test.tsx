@@ -45,7 +45,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkEnabled: false },
+    settings: { mode: 'strict', networkPolicy: 'deny' },
     installCommand: 'sudo apt install bubblewrap',
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -388,7 +388,9 @@ describe('SandboxNotice（v2.4 Task 9）', () => {
 });
 
 // —— netOff 拦截卡（v2.4.x）——
-// 显隐 = netBlockedSeen（stream.store 一次性检测标志）&& !netPromptDismissed。
+// 显隐 = netBlockedSeen（stream.store 一次性检测标志）&& !netPromptDismissed
+// && networkPolicy === 'deny'（spec §6 防双弹：ask 策略下网络失败由 NetworkTrustCard
+// 阻塞询问负责，本信息卡只在 deny 下展示；makeInfo 默认 deny 即本套件语义）。
 // 单卡容器三条件并存时 netOff 优先；[去设置] 只导航不 dismiss（卡留待用户开完开关自行关）。
 describe('SandboxNotice：netOff 拦截卡', () => {
   beforeEach(() => {
@@ -427,6 +429,26 @@ describe('SandboxNotice：netOff 拦截卡', () => {
 
   it('netBlockedSeen=false → 不渲染（默认 linux 可用场景）', async () => {
     getStateMock.mockResolvedValue(makeInfo());
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('防双弹（spec §6）：policy=ask + netBlockedSeen → 不渲染（网络失败由 NetworkTrustCard 负责）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'ask' } }));
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('policy=allow + netBlockedSeen → 不渲染（全放行下无引导诉求）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow' } }));
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true });
+    });
     const { container } = render(<SandboxNotice />);
     await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
     expect(container.firstChild).toBeNull();
