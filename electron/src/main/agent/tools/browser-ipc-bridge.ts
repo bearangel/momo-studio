@@ -18,6 +18,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isBrowserOpResult } from '../../browser/op-protocol';
+import { TRUST_WAIT_TIMEOUT_MS } from '../../browser/policy';
 import type { BrowserOp, BrowserOpArgs, BrowserOpPayloads } from '../../browser/op-protocol';
 import type { BrowserPolicyPort, BrowserManagerPort } from './browser-tools';
 
@@ -26,6 +27,23 @@ const TIMEOUT_MESSAGE = 'browser IPC 无响应（主进程未接线或超时）'
 
 /** process.send 缺失文案（非 fork 环境直接跑 runtime-entry 的场景） */
 const NO_SEND_MESSAGE = 'browser IPC 不可用（process.send 缺失：非 fork 子进程环境）';
+
+/**
+ * 信任门等待类 op（assertAllowed）的桥超时：主进程侧阻塞等待用户点击信任卡最长
+ * TRUST_WAIT_TIMEOUT_MS（policy 单一真相源，本常量由其推导——编译期联动，改一处
+ * 另一处可见；测试另锁「本值 ≥ TRUST_WAIT_TIMEOUT_MS + 20s」防单边改小）。桥超时
+ * 必须长于等待上限 + 裕量，否则用户还在思考时桥先超时，把「等待授权」误报为
+ * 「IPC 无响应」——授权与执行脱钩（本次修复要消除的 UX 缺陷形态）。
+ */
+export const TRUST_GATE_BRIDGE_TIMEOUT_MS = TRUST_WAIT_TIMEOUT_MS + 20_000;
+
+/**
+ * 按 op 分档超时：assertAllowed 走信任门等待档；其余 op 走默认档（60s——对齐
+ * navigate 等慢操作上限）。
+ */
+function timeoutForOp(op: BrowserOp, defaultTimeoutMs: number): number {
+  return op === 'assertAllowed' ? TRUST_GATE_BRIDGE_TIMEOUT_MS : defaultTimeoutMs;
+}
 
 /** 桥产出：两端口代理（initBrowserTools 直接消费） */
 export interface BrowserToolsIpcBridge {
@@ -91,7 +109,7 @@ function sendBrowserOp<K extends BrowserOp>(
  */
 export function createBrowserToolsIpcBridge(timeoutMs = 60_000): BrowserToolsIpcBridge {
   const call = <K extends BrowserOp>(op: K, args: BrowserOpArgs[K]): Promise<BrowserOpPayloads[K]> =>
-    sendBrowserOp(op, args, timeoutMs);
+    sendBrowserOp(op, args, timeoutForOp(op, timeoutMs));
 
   return {
     // policy 门返回 Promise（端口面为 void | Promise<void> 联合——真实主进程

@@ -20,7 +20,12 @@
 //     未知 requestId 迟到结果不崩
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createBrowserToolsIpcBridge, handleBrowserOpResult } from '../../../src/main/agent/tools/browser-ipc-bridge';
+import {
+  createBrowserToolsIpcBridge,
+  handleBrowserOpResult,
+  TRUST_GATE_BRIDGE_TIMEOUT_MS,
+} from '../../../src/main/agent/tools/browser-ipc-bridge';
+import { TRUST_WAIT_TIMEOUT_MS } from '../../../src/main/browser/policy';
 
 /** UUID v4 形状（randomUUID 产物） */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -191,5 +196,42 @@ describe('browser IPC 桥（子进程侧）', () => {
     const p = manager.snapshot('ws-1');
     // 真实计时器下直接 await——若实现误走挂等路径，此 await 将吊死测试（vitest 超时红）
     await expect(p).rejects.toThrow('browser IPC 不可用');
+  });
+
+  describe('桥超时按 op 分档（信任门阻塞等待联动）', () => {
+    it('常量锁：等待类 op 桥超时 ≥ TRUST_WAIT_TIMEOUT_MS + 20s 裕量（防未来单边改小）', () => {
+      expect(TRUST_WAIT_TIMEOUT_MS).toBe(180_000);
+      expect(TRUST_GATE_BRIDGE_TIMEOUT_MS).toBeGreaterThanOrEqual(TRUST_WAIT_TIMEOUT_MS + 20_000);
+    });
+
+    it('行为锁：assertAllowed 走等待档——默认档 60s 到点不超时，至等待档上限才超时', async () => {
+      installSendMock();
+      vi.useFakeTimers();
+      const { policy } = createBrowserToolsIpcBridge();
+
+      const ret = policy.assertAllowed('ws-1');
+      // 端口面为 void | Promise<void> 联合——桥实现必须返回 Promise（窄化 + 行为断言）
+      if (!(ret instanceof Promise)) throw new Error('桥实现必须以 Promise 返回（可等待/可穿透 rejection）');
+      const gate = ret;
+      await Promise.resolve(); // promise executor 同步 send
+
+      // 默认档（60s）到点仍在等待——用户应答窗口（最长 TRUST_WAIT_TIMEOUT_MS）不被桥截断
+      await vi.advanceTimersByTimeAsync(60_000);
+      let settled = false;
+      void gate.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+
+      // 推进到等待档上限 → 桥超时 reject（等待已越出裕量，视为 IPC 无响应）
+      await vi.advanceTimersByTimeAsync(TRUST_GATE_BRIDGE_TIMEOUT_MS - 60_000);
+      await expect(gate).rejects.toThrow('browser IPC 无响应');
+    });
   });
 });

@@ -37,6 +37,7 @@ import type { BrowserPolicy } from '../../../src/main/browser/policy';
 import {
   BrowserNotTrustedError,
   BrowserTakenOverError,
+  BrowserTrustRefusedError,
   EvaluateDisabledError,
 } from '../../../src/main/browser/errors';
 
@@ -404,6 +405,13 @@ describe('门控顺序锁', () => {
     await tools.execute('browser_click', { selector: '#btn' }, ctx);
     expect(policyMock.assertAllowed).toHaveBeenCalledTimes(1);
     expect(policyMock.assertAllowed).toHaveBeenCalledWith('ws1');
+  });
+
+  it('async 门 rejection 穿透：assertAllowed 为 rejected Promise（桥/阻塞等待实现语义）→ 错误原样穿透、manager 零调用', async () => {
+    const refused = new BrowserTrustRefusedError();
+    policyMock.assertAllowed.mockImplementation(() => Promise.reject(refused));
+    await expect(tools.execute('browser_navigate', { url: 'https://a.dev' }, ctx)).rejects.toBe(refused);
+    expect(managerMock.navigate).not.toHaveBeenCalled();
   });
 
   it('evaluate 双门：assertAllowed 先于 assertEvaluate；assertEvaluate 拒绝时 manager.evaluate 零调用', async () => {

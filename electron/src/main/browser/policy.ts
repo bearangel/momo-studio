@@ -14,12 +14,29 @@ import {
   BrowserFileAccessError,
   BrowserNotTrustedError,
   BrowserProtocolError,
+  BrowserTrustRefusedError,
   EvaluateDisabledError,
 } from './errors';
 import type { WorkspaceBrowserSettings } from './types';
 
 /** 视为本地 dev server 的主机名：http/https 恒放行，不受黑白名单约束（spec §6.3） */
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * 信任门阻塞等待上限（3 分钟）：ask 未授权时工具调用挂起等待用户点击信任卡，
+ * 超时降级为拒绝 + 重试指引（不挂死底线）。导出供桥侧超时分档联动
+ * （browser-ipc-bridge.ts 的 TRUST_GATE_BRIDGE_TIMEOUT_MS 由本值推导——改一处
+ * 另一处编译期可见；测试另锁「桥超时 ≥ 本值 + 20s 裕量」防单边漂移）。
+ */
+export const TRUST_WAIT_TIMEOUT_MS = 180_000;
+
+/** 挂起中的信任等待条目（单飞：同 ws 并发工具 join 同一张卡 / 同一个决定） */
+interface TrustWaitEntry {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (err: Error) => void;
+  readonly timer: NodeJS.Timeout;
+}
 
 /**
  * 域名是否命中名单条目：精确匹配或子域匹配（x.evil.com 命中 evil.com；
@@ -39,6 +56,10 @@ export type BrowserPolicyPushNotice = (kind: string, text: string, workspaceId: 
 export class BrowserPolicy {
   /** 本会话已授权的 workspace（信任卡「本次会话允许」；按 workspace 隔离，app 生命周期内有效） */
   private sessionGranted = new Set<string>();
+
+  /** 挂起中的信任等待（wsId → 单飞 entry）。任一出口（allow/deny/超时）后删除；
+   * 迟到的 resolveTrustWait 对无 pending 是 no-op */
+  private readonly trustWaiters = new Map<string, TrustWaitEntry>();
 
   constructor(
     private readSettings: (wsId: string) => WorkspaceBrowserSettings,
@@ -76,19 +97,75 @@ export class BrowserPolicy {
   }
 
   /**
-   * 信任门（spec §6.1 / §5.2 step 3）——agent 门（带副作用，仅工具执行路径使用）：
-   *   deny → BrowserDeniedError（不推卡——用户主动拒绝的永久态）；
-   *   ask 且本会话未授 → 推 trust-request notice 给 renderer 触发右下角信任卡，再抛 BrowserNotTrustedError；
-   *   'always' 或 'ask'+本会话已授权 → 放行。
-   * 推送与抛错的顺序契约：notice 必须在抛错前发出，否则 LLM 看到 BrowserNotTrustedError
-   * 后无限重试，renderer 永远收不到卡、用户永远无法授权——review fix（C1）。
+   * 信任门（spec §6.1 / §5.2 step 3，阻塞等待语义）——agent 门（带副作用，仅工具执行路径使用）：
+   *   'always' 或 'ask'+本会话已授权 → 快路径立即放行（零开销）；
+   *   deny → 立即拒绝 BrowserDeniedError（不推卡——用户主动拒绝的永久态）；
+   *   ask 且本会话未授 → 单飞阻塞等待：推 trust-request notice 后挂起，直到用户
+   *     在信任卡上做出决定（决定直接驱动 agent 走向——对齐 Claude Code/Cursor 门控语义）。
+   * 并发语义：同 ws 并发浏览器工具 join 同一等待（只推一张卡），任一决定下全体 settle。
+   * notice 必须在进入等待前发出（否则 renderer 收不到卡、等待必然超时）；推送自身
+   * 抛错（IPC 故障）向上穿透且不留悬挂等待。
    * notice 携带 workspaceId（M7）：renderer 信任卡路由用，避免单活跃 ws 推导脆弱。
    */
-  assertAllowed(wsId: string): void {
+  async assertAllowed(wsId: string): Promise<void> {
     if (this.isAllowed(wsId)) return;
     if (this.readSettings(wsId).trust === 'deny') throw new BrowserDeniedError();
-    this.pushNotice?.('trust-request', 'agent 请求访问浏览器（请在右下角授权）', wsId);
-    throw new BrowserNotTrustedError();
+
+    const existing = this.trustWaiters.get(wsId);
+    if (existing !== undefined) return existing.promise;
+
+    let resolve!: () => void;
+    let reject!: (err: Error) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const timer = setTimeout(() => {
+      // 超时出口：降级为拒绝 + 设置/重试指引（不挂死底线）；pending 先清（迟到的
+      // resolveTrustWait 对无 entry 是 no-op）
+      this.trustWaiters.delete(wsId);
+      reject(
+        new BrowserTrustRefusedError(
+          '等待浏览器授权超时（3 分钟未应答）——可在 设置→浏览器 调整信任模式，或重新发起浏览器操作',
+        ),
+      );
+    }, TRUST_WAIT_TIMEOUT_MS);
+    timer.unref?.();
+    this.trustWaiters.set(wsId, { promise, resolve, reject, timer });
+    try {
+      this.pushNotice?.(
+        'trust-request',
+        'agent 请求访问浏览器——正在等待你授权（3 分钟内有效）',
+        wsId,
+      );
+    } catch (err) {
+      // IPC 故障穿透（非信任错误）；entry/timer 同步清理——否则后续调用 join 一个
+      // 永无结果的等待
+      this.trustWaiters.delete(wsId);
+      clearTimeout(timer);
+      throw err;
+    }
+    return promise;
+  }
+
+  /**
+   * 信任等待出口（answerTrust 三值分流驱动）：allow → 重验 isAllowed（防御决定与
+   * 设置竞态——用户点允许的同时设置页被改为 deny）后放行 / 拒绝；deny → 拒绝
+   * BrowserTrustRefusedError（LLM 拿到「用户已拒绝」明确事实自行改道）。
+   * 迟到应答（无 pending）是 no-op：超时后用户补点卡 = 为下一次调用授权
+   * （answerTrust 侧的 grantSession / store.write 照常发生，本方法不重复授权）。
+   */
+  resolveTrustWait(wsId: string, outcome: 'allow' | 'deny'): void {
+    const entry = this.trustWaiters.get(wsId);
+    if (entry === undefined) return;
+    this.trustWaiters.delete(wsId);
+    clearTimeout(entry.timer);
+    if (outcome === 'deny') {
+      entry.reject(new BrowserTrustRefusedError('用户已拒绝本次浏览器授权'));
+      return;
+    }
+    if (this.isAllowed(wsId)) entry.resolve();
+    else entry.reject(new BrowserNotTrustedError());
   }
 
   /** evaluate 门：browser_evaluate 默认关（spec §6.2），false 即拒绝 */

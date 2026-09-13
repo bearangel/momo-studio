@@ -1,18 +1,18 @@
 // electron/tests/browser/policy.test.ts
-// 信任门三分支 + 会话授权 + 域名策略 + file:// 限定（含 .. 与 symlink 逃逸）+ 信任门
-// notice 推送契约（C1 review fix）。
-// BrowserPolicy 是纯逻辑（settings 读取器闭包注入）；file:// 用例需要真实 fs
-// （realpath 反逃逸），用 os.tmpdir 建 workspace root。
+// 信任门阻塞等待语义（用户决定直接驱动 agent 走向）+ 会话授权 + 域名策略 + file://
+// 限定（含 .. 与 symlink 逃逸）。BrowserPolicy 是纯逻辑（settings 读取器闭包注入）；
+// file:// 用例需要真实 fs（realpath 反逃逸），用 os.tmpdir 建 workspace root。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserPolicy } from '../../src/main/browser/policy';
+import { BrowserPolicy, TRUST_WAIT_TIMEOUT_MS } from '../../src/main/browser/policy';
 import type { WorkspaceBrowserSettings } from '../../src/main/browser/types';
 import {
   BrowserNotTrustedError,
   BrowserDeniedError,
+  BrowserTrustRefusedError,
   EvaluateDisabledError,
   BrowserFileAccessError,
   BrowserDomainBlockedError,
@@ -25,102 +25,229 @@ const settings = { trust: 'ask' as const, evaluateEnabled: false, blacklist: ['e
 const mkPolicy = (over: Partial<WorkspaceBrowserSettings> = {}) =>
   new BrowserPolicy(() => ({ ...settings, ...over }), '/ws/root');
 
-describe('信任门', () => {
-  it('ask 且未授权 → 抛 BrowserNotTrustedError（含「授权后重试」指引）', () => {
-    expect(() => mkPolicy().assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-    expect(() => mkPolicy().assertAllowed('ws1')).toThrow(/授权后重试/);
-    // code 供 UI/日志分类（消费字段断言，非占位符）
-    expect(new BrowserNotTrustedError().code).toBe('not_trusted');
+describe('信任门（阻塞等待——用户决定直接驱动 agent 走向）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('ask 但本会话已授权 → 放行；grantSession 幂等', () => {
-    const p = mkPolicy();
-    p.grantSession('ws1');
-    p.grantSession('ws1'); // 幂等：重复授权不抛、不改变行为
-    expect(() => p.assertAllowed('ws1')).not.toThrow();
-    // 会话授权按 workspace 隔离：ws2 仍未授权
-    expect(() => p.assertAllowed('ws2')).toThrow(BrowserNotTrustedError);
-  });
+  /** 排空一拍宏任务（含微任务队列）后断言仍未 settle：阻塞语义的核心形状 */
+  async function assertPending(p: Promise<unknown>): Promise<void> {
+    let settled = false;
+    void p.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise<void>((r) => setImmediate(r));
+    expect(settled).toBe(false);
+  }
 
-  it('always → 放行；deny → BrowserDeniedError 含设置指引', () => {
-    expect(() => mkPolicy({ trust: 'always' }).assertAllowed('ws1')).not.toThrow();
-    expect(() => mkPolicy({ trust: 'deny' }).assertAllowed('ws1')).toThrow(BrowserDeniedError);
-    expect(() => mkPolicy({ trust: 'deny' }).assertAllowed('ws1')).toThrow(/设置→浏览器/);
-  });
-
-  // C1 review fix：信任门 notice 推送契约——spec §5.2 step 3 要求 ask 未授抛错前
-  // 必须推 trust-request notice，否则 renderer 信任卡永不弹出，LLM 永久重试。
-  describe('信任门 notice 推送（C1 review fix）', () => {
-    it('pushNotice 缺省 → 不抛错且不推（policy 不依赖 IPC 边界——单测友好）', () => {
-      const p = mkPolicy();
-      expect(() => p.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-    });
-
-    it('ask 且未授权 → pushNotice 在抛错前推一次「trust-request」+ 中性指引', () => {
+  describe('ask 未授 → 单飞阻塞等待', () => {
+    it('返回 pending Promise（不 sync throw）+ 推一张卡（等待文案含 3 分钟有效期）', async () => {
       const pushNotice = vi.fn();
-      const p = new BrowserPolicy(
-        () => ({ ...settings }),
-        '/ws/root',
-        pushNotice,
-      );
-      expect(() => p.assertAllowed('ws1')).toThrow(BrowserNotTrustedError);
-      // 关键顺序契约：notice 必须在抛错前发出（一次）；载荷携带 wsId（M7 路由）
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      const gate = p.assertAllowed('ws1');
+      expect(gate).toBeInstanceOf(Promise);
+      await assertPending(gate);
       expect(pushNotice).toHaveBeenCalledTimes(1);
       expect(pushNotice).toHaveBeenCalledWith(
         'trust-request',
-        expect.stringContaining('agent 请求'),
+        'agent 请求访问浏览器——正在等待你授权（3 分钟内有效）',
         'ws1',
       );
+      p.resolveTrustWait('ws1', 'deny'); // 收尾：终止等待，不留悬挂 timer
+      await expect(gate).rejects.toThrow(BrowserTrustRefusedError);
     });
 
-    it('ask 且本会话已授权 → 不推 notice（已授权路径不应再骚扰用户）', () => {
+    it('pushNotice 缺省 → 挂起且不抛（policy 不依赖 IPC 边界——单测友好）', async () => {
+      const p = mkPolicy();
+      const gate = p.assertAllowed('ws1');
+      await assertPending(gate);
+      p.resolveTrustWait('ws1', 'deny');
+      await expect(gate).rejects.toThrow(BrowserTrustRefusedError);
+    });
+
+    it('并发 3 个 assertAllowed → pushNotice 恰 1 次（单飞一张卡），allow 决定下三者全部 resolve', async () => {
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      const gates = [p.assertAllowed('ws1'), p.assertAllowed('ws1'), p.assertAllowed('ws1')];
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+      // 用户点「本次会话允许」→ answerTrust('session') 语义：grantSession + resolveTrustWait('allow')
+      p.grantSession('ws1');
+      p.resolveTrustWait('ws1', 'allow');
+      await Promise.all(gates);
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+    });
+
+    it('并发 3 个 assertAllowed → deny 决定下三者全部 reject（同一决定统一 settle）', async () => {
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      const gates = [p.assertAllowed('ws1'), p.assertAllowed('ws1'), p.assertAllowed('ws1')];
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+      p.resolveTrustWait('ws1', 'deny');
+      for (const g of gates) {
+        await expect(g).rejects.toThrow('用户已拒绝本次浏览器授权');
+      }
+    });
+  });
+
+  describe('等待出口三态', () => {
+    it('allow → 重验通过后 resolve（grantSession 已生效）', async () => {
+      const p = mkPolicy();
+      const gate = p.assertAllowed('ws1');
+      p.grantSession('ws1');
+      p.resolveTrustWait('ws1', 'allow');
+      await expect(gate).resolves.toBeUndefined();
+    });
+
+    it('allow 但设置竞态变为 deny → reject BrowserNotTrustedError（重验防线）', async () => {
+      let trust: 'ask' | 'deny' = 'ask';
+      const p = new BrowserPolicy(() => ({ ...settings, trust }), '/ws/root');
+      const gate = p.assertAllowed('ws1');
+      p.grantSession('ws1');
+      trust = 'deny'; // 用户点允许的同一时刻设置页被改为 deny
+      p.resolveTrustWait('ws1', 'allow');
+      await expect(gate).rejects.toThrow(BrowserNotTrustedError);
+    });
+
+    it('deny → reject BrowserTrustRefusedError（用户已拒绝——LLM 拿到明确事实）；code 消费字段', async () => {
+      const p = mkPolicy();
+      const gate = p.assertAllowed('ws1');
+      p.resolveTrustWait('ws1', 'deny');
+      const err = await gate.then(
+        () => {
+          throw new Error('应当 reject');
+        },
+        (e: Error) => e,
+      );
+      expect(err).toBeInstanceOf(BrowserTrustRefusedError);
+      expect(err.message).toBe('用户已拒绝本次浏览器授权');
+      expect((err as BrowserTrustRefusedError).code).toBe('trust_refused');
+    });
+
+    it('超时（TRUST_WAIT_TIMEOUT_MS=180s）→ reject 超时文案（设置/重试指引）+ pending 清空', async () => {
+      vi.useFakeTimers();
+      const pushNotice = vi.fn();
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      expect(TRUST_WAIT_TIMEOUT_MS).toBe(180_000); // 导出常量锁（桥分档联动依赖该值）
+
+      const gate = p.assertAllowed('ws1');
+      await vi.advanceTimersByTimeAsync(179_999);
+      let settled = false;
+      void gate.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false); // 临界点前一毫秒仍在等待
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(gate).rejects.toThrow('等待浏览器授权超时（3 分钟未应答）');
+      await expect(gate).rejects.toThrow(/设置→浏览器/);
+
+      // pending 清空：超时后新调用建新等待（再推一张卡），而非 join 已消散的 entry
+      const gate2 = p.assertAllowed('ws1');
+      expect(pushNotice).toHaveBeenCalledTimes(2);
+      p.resolveTrustWait('ws1', 'deny');
+      await expect(gate2).rejects.toThrow(BrowserTrustRefusedError);
+    });
+  });
+
+  describe('迟到应答与等待生命周期', () => {
+    it('迟到 resolveTrustWait 对无 pending 是 no-op：超时后补点卡 = 为下一次调用授权', async () => {
+      vi.useFakeTimers();
+      const p = mkPolicy();
+      const gate = p.assertAllowed('ws1');
+      // 预挂观察者：rejection 在推进计时器时发生，先附 handler 防 unhandledRejection 误报
+      const observed = gate.then(
+        () => {
+          throw new Error('应当 reject');
+        },
+        (e: Error) => e,
+      );
+      await vi.advanceTimersByTimeAsync(TRUST_WAIT_TIMEOUT_MS);
+      expect((await observed).message).toMatch(/超时/);
+
+      // 用户在超时后才点「本次会话允许」：answerTrust 先 grantSession 再 resolveTrustWait
+      expect(() => {
+        p.grantSession('ws1');
+        p.resolveTrustWait('ws1', 'allow');
+      }).not.toThrow();
+      // 授权已入账：下一次调用直接走快路径
+      await expect(p.assertAllowed('ws1')).resolves.toBeUndefined();
+    });
+
+    it('pushNotice 抛错 → IPC 故障向上穿透（非信任错误）且不悬挂等待', async () => {
+      let broken = true;
+      const pushNotice = vi.fn(() => {
+        if (broken) throw new Error('IPC 通道断');
+      });
+      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
+      const err = await p.assertAllowed('ws1').then(
+        () => {
+          throw new Error('应当 reject');
+        },
+        (e: Error) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/IPC 通道断/);
+      expect(err).not.toBeInstanceOf(BrowserTrustRefusedError);
+      expect(pushNotice).toHaveBeenCalledTimes(1);
+
+      // 无悬挂 entry：恢复后再次调用重新推卡（若泄漏了 entry，本次会 join 而不推）
+      broken = false;
+      const gate2 = p.assertAllowed('ws1');
+      expect(pushNotice).toHaveBeenCalledTimes(2);
+      p.resolveTrustWait('ws1', 'deny');
+      await expect(gate2).rejects.toThrow(BrowserTrustRefusedError);
+    });
+  });
+
+  describe('快路径与回归', () => {
+    it('ask 且本会话已授权 → 立即 resolve（零等待零推卡）；grantSession 幂等；ws 隔离', async () => {
       const pushNotice = vi.fn();
       const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
       p.grantSession('ws1');
-      expect(() => p.assertAllowed('ws1')).not.toThrow();
+      p.grantSession('ws1'); // 幂等：重复授权不抛、不改变行为
+      await expect(p.assertAllowed('ws1')).resolves.toBeUndefined();
       expect(pushNotice).not.toHaveBeenCalled();
+      // 会话授权按 workspace 隔离：ws2 仍进入等待
+      const gate2 = p.assertAllowed('ws2');
+      await assertPending(gate2);
+      p.resolveTrustWait('ws2', 'deny');
+      await expect(gate2).rejects.toThrow(BrowserTrustRefusedError);
     });
 
-    it('always / deny 分支 → 不推 trust-request（仅 ask 未授权路径触发）', () => {
+    it('always → 立即放行；deny → 立即 reject BrowserDeniedError（不推卡不等待）', async () => {
       const pushAlways = vi.fn();
-      const pAlways = new BrowserPolicy(
-        () => ({ ...settings, trust: 'always' }),
-        '/ws/root',
-        pushAlways,
-      );
-      expect(() => pAlways.assertAllowed('ws1')).not.toThrow();
+      const pAlways = new BrowserPolicy(() => ({ ...settings, trust: 'always' }), '/ws/root', pushAlways);
+      await expect(pAlways.assertAllowed('ws1')).resolves.toBeUndefined();
       expect(pushAlways).not.toHaveBeenCalled();
 
       const pushDeny = vi.fn();
-      const pDeny = new BrowserPolicy(
-        () => ({ ...settings, trust: 'deny' }),
-        '/ws/root',
-        pushDeny,
-      );
-      expect(() => pDeny.assertAllowed('ws1')).toThrow(BrowserDeniedError);
+      const pDeny = new BrowserPolicy(() => ({ ...settings, trust: 'deny' }), '/ws/root', pushDeny);
+      await expect(pDeny.assertAllowed('ws1')).rejects.toThrow(BrowserDeniedError);
+      await expect(pDeny.assertAllowed('ws1')).rejects.toThrow(/设置→浏览器/);
       expect(pushDeny).not.toHaveBeenCalled();
     });
 
-    it('pushNotice 抛错 → IPC 故障向上穿透（不静默吞：渲染通道异常必须可见）', () => {
-      // 契约：pushNotice 自身抛错不掩盖——IPC 通道断连是真实故障，必须向上穿透到上层
-      // （tool execute / LLM 看到 IPC error 而非 BrowserNotTrustedError），便于诊断与告警。
-      // 若静默吞回退到 BrowserNotTrustedError，会复现 C1 现象：用户永远看不到卡、LLM
-      // 永久重试——这正是 review fix 要消除的反向回归。
-      const pushNotice = vi.fn(() => {
-        throw new Error('IPC 通道断');
-      });
-      const p = new BrowserPolicy(() => ({ ...settings }), '/ws/root', pushNotice);
-      let caught: unknown = null;
-      try {
-        p.assertAllowed('ws1');
-      } catch (e) {
-        caught = e;
-      }
-      // IPC 错误向上穿透——不是 BrowserNotTrustedError
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toMatch(/IPC 通道断/);
-      expect(caught).not.toBeInstanceOf(BrowserNotTrustedError);
-      expect(pushNotice).toHaveBeenCalledTimes(1);
+    it('等待中设置页改为 always → 新调用走快路径；挂起等待仍由点卡/超时收口（出口仅三态）', async () => {
+      let trust: 'ask' | 'always' = 'ask';
+      const p = new BrowserPolicy(() => ({ ...settings, trust }), '/ws/root');
+      const gate = p.assertAllowed('ws1');
+      await assertPending(gate);
+      trust = 'always'; // 设置页直接改 always（不经信任卡）
+      await expect(p.assertAllowed('ws1')).resolves.toBeUndefined();
+      await assertPending(gate);
+      p.resolveTrustWait('ws1', 'allow');
+      await expect(gate).resolves.toBeUndefined();
     });
   });
 
@@ -139,22 +266,29 @@ describe('信任门', () => {
       expect(pushNotice).not.toHaveBeenCalled();
     });
 
-    it('判定面与 assertAllowed 失败面同构（isAllowed === assertAllowed 不抛，跨三态 + 已授权）', () => {
-      const check = (p: BrowserPolicy, wsId: string) => {
-        let threw = false;
-        try {
-          p.assertAllowed(wsId);
-        } catch {
-          threw = true;
-        }
-        expect(p.isAllowed(wsId)).toBe(!threw);
-      };
-      check(mkPolicy({ trust: 'ask' }), 'ws1');
-      check(mkPolicy({ trust: 'always' }), 'ws1');
-      check(mkPolicy({ trust: 'deny' }), 'ws1');
+    it('判定面与等待面同构：isAllowed=true ⟹ 立即 resolve；false ⟹ 绝不 resolve 成功', async () => {
+      const cases: BrowserPolicy[] = [
+        mkPolicy({ trust: 'ask' }),
+        mkPolicy({ trust: 'always' }),
+        mkPolicy({ trust: 'deny' }),
+      ];
       const granted = mkPolicy();
       granted.grantSession('ws1');
-      check(granted, 'ws1');
+      cases.push(granted);
+      for (const p of cases) {
+        let resolved = false;
+        const gate = p.assertAllowed('ws1');
+        void gate.then(
+          () => {
+            resolved = true;
+          },
+          () => {},
+        );
+        await new Promise<void>((r) => setImmediate(r));
+        expect(resolved).toBe(p.isAllowed('ws1'));
+        p.resolveTrustWait('ws1', 'deny'); // 收尾挂起的等待（对已 settle 的 entry 是 no-op）
+        await Promise.resolve();
+      }
     });
   });
 });

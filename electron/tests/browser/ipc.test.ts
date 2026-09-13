@@ -117,6 +117,7 @@ const tmpRoot = path.join(os.tmpdir(), `ap-browser-ipc-${process.pid}-${Date.now
 
 let db: DB;
 let store: BrowserSettingsStore;
+let policy: BrowserPolicy;
 let factory: MockFactory;
 let manager: BrowserManager;
 let probe: Mock;
@@ -146,7 +147,7 @@ beforeEach(() => {
   ).run();
 
   store = createBrowserSettingsStore(db);
-  const policy = new BrowserPolicy((wsId) => store.read(wsId), '/ws/root');
+  policy = new BrowserPolicy((wsId) => store.read(wsId), '/ws/root');
   factory = mkFactory();
   manager = new BrowserManager(factory, policy, createBrowserPushHooks(webContentsLike));
   probe = vi.fn(async () => [{ port: 5173, url: 'http://localhost:5173' }]);
@@ -442,13 +443,13 @@ describe('browser:setSidebarCollapsed', () => {
 // =================================================================================
 
 describe('browser:answerTrust 三值分流', () => {
-  it('deny → 无操作（不落库 / 会话不放行）；session → 会话放行不落库；always → 落库', async () => {
+  it('deny → 无等待唤醒副作用（不落库 / 会话不放行）；session → 会话放行不落库；always → 落库', async () => {
     activateWs();
 
     // 基线：ask 未授 → trusted=false
     expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).trusted).toBe(false);
 
-    // deny：信任卡「拒绝」——无操作
+    // deny：信任卡「取消」——设置与会话态均不变（挂起等待的拒绝唤醒在下方联动用例锁）
     await callIpc('browser:answerTrust', 'ws-1', 'deny');
     expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).trusted).toBe(false);
     expect(store.read('ws-1').trust).toBe('ask');
@@ -469,6 +470,39 @@ describe('browser:answerTrust 三值分流', () => {
       'browser:answerTrust 应答必须是 session / always / deny',
     );
     expect(store.read('ws-1').trust).toBe('ask');
+  });
+});
+
+// =================================================================================
+// browser:answerTrust 阻塞等待联动（真实 policy pending——非 spy，走真实挂起/唤醒链路）
+// =================================================================================
+
+describe('browser:answerTrust 阻塞等待联动', () => {
+  it('session → grantSession + 唤醒等待：挂起中的 assertAllowed resolve，且不落库', async () => {
+    const gate = policy.assertAllowed('ws-1');
+    await callIpc('browser:answerTrust', 'ws-1', 'session');
+    await expect(gate).resolves.toBeUndefined();
+    expect(store.read('ws-1').trust).toBe('ask');
+  });
+
+  it('always → 落库 + 唤醒等待：挂起中的 assertAllowed resolve', async () => {
+    const gate = policy.assertAllowed('ws-1');
+    await callIpc('browser:answerTrust', 'ws-1', 'always');
+    await expect(gate).resolves.toBeUndefined();
+    expect(store.read('ws-1').trust).toBe('always');
+  });
+
+  it('deny → 唤醒等待为拒绝：挂起中的 assertAllowed reject（用户已拒绝文案）', async () => {
+    const gate = policy.assertAllowed('ws-1');
+    await callIpc('browser:answerTrust', 'ws-1', 'deny');
+    await expect(gate).rejects.toThrow('用户已拒绝本次浏览器授权');
+    expect(store.read('ws-1').trust).toBe('ask');
+  });
+
+  it('无挂起等待时三值应答安全（迟到点击 no-op——授权为下一次调用生效）', async () => {
+    await expect(callIpc('browser:answerTrust', 'ws-1', 'deny')).resolves.toBeUndefined();
+    await expect(callIpc('browser:answerTrust', 'ws-1', 'session')).resolves.toBeUndefined();
+    expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).trusted).toBe(true);
   });
 });
 

@@ -1,12 +1,13 @@
 // renderer/src/components/workspace/BrowserTrustNotice.tsx
 //
-// v2.7 浏览器信任卡（spec §5.2）：trust=ask 且 agent 首次调用浏览器工具时，主进程
-// 经 browser:notice 推送 kind='trust-request'，本组件在右下角呈现三按钮卡
-// （SandboxNotice/ResumeNotice 同款基建，样式照抄）：
-//   - 「本次会话允许」→ answerTrust('session')（会话放行，内存态）
-//   - 「永久允许」→ answerTrust('always')（落库 trust=always）
-//   - 「取消」→ answerTrust('deny')（无操作，工具侧保持 NotTrusted 失败语义）
+// v2.7 浏览器信任卡（spec §5.2 阻塞等待语义）：trust=ask 且 agent 首次调用浏览器工具时，主进程
+// 经 browser:notice 推送 kind='trust-request'，agent 的工具调用阻塞等待本卡应答（3 分钟内有效；
+// 超时主进程侧降级为拒绝 + 重试指引，卡片保留供事后点击——授权为下一次调用生效）：
+//   - 「本次会话允许」→ answerTrust('session')（会话放行 + 唤醒等待，挂起中的工具调用继续执行）
+//   - 「永久允许」→ answerTrust('always')（落库 trust=always + 唤醒等待）
+//   - 「取消」→ answerTrust('deny')（唤醒等待为拒绝——工具收到「用户已拒绝」事实自行改道）
 // 应答成功卡片即消散；失败保留卡片 + 错误行（ResumeNotice 同语义，不静默吞）。
+// 等待期间卡片常驻（无自动消散——决定权在用户）。
 //
 // 挂载点 App 层（与 SandboxNotice/ResumeNotice 一致）。v2.7 review M7 起信任卡路由
 // 用 notice.workspaceId（载荷携带）替代 useWorkspaceStore 的当前激活 workspace 推导——

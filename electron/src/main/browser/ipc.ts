@@ -244,15 +244,24 @@ export function registerBrowserIpc(
     store.write(id, { sidebarCollapsed: asBoolean(collapsed, 'collapsed') });
   });
 
-  // 信任卡三值分流（spec §5.2）：session → 会话放行（内存态）；always → 落库；
-  // deny → 无操作（卡片消散，工具侧保持 NotTrusted 失败语义）
+  // 信任卡三值分流（spec §5.2 阻塞等待语义）：session → 会话放行（内存态）+ 唤醒等待；
+  // always → 落库 + 唤醒等待；deny → 唤醒等待为拒绝（工具侧 BrowserTrustRefusedError
+  // 「用户已拒绝」，LLM 拿到明确事实自行改道）。迟到应答（等待已超时消散）时
+  // resolveTrustWait 是 no-op，grantSession / store.write 照常发生 = 为下一次调用授权。
   ipcMainLike.handle('browser:answerTrust', (_e, wsId, answer) => {
     const id = asString(wsId, 'workspaceId');
     if (answer !== 'session' && answer !== 'always' && answer !== 'deny') {
       throw new Error('browser:answerTrust 应答必须是 session / always / deny');
     }
-    if (answer === 'session') policy.grantSession(id);
-    else if (answer === 'always') store.write(id, { trust: 'always' });
+    if (answer === 'session') {
+      policy.grantSession(id);
+      policy.resolveTrustWait(id, 'allow');
+    } else if (answer === 'always') {
+      store.write(id, { trust: 'always' });
+      policy.resolveTrustWait(id, 'allow');
+    } else {
+      policy.resolveTrustWait(id, 'deny');
+    }
   });
 
   // 探活：纯透传到注入的 probe（真实现 T10；失败拒绝透传，renderer 显示「未发现」）

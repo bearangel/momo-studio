@@ -9,6 +9,7 @@
 /** 错误分类码（UI 徽标 / 日志聚类的稳定标识） */
 export type BrowserErrorCode =
   | 'not_trusted'
+  | 'trust_refused'
   | 'denied'
   | 'evaluate_disabled'
   | 'taken_over'
@@ -29,10 +30,18 @@ export class BrowserError extends Error {
   }
 }
 
-/** 信任未授（ask 且本会话未授权）：已推信任卡，授权后重试同一工具即通过 */
+/** 信任未授（ask 且本会话未授权，allow 应答与设置变更竞态失败）：已推信任卡，授权后重试同一工具即通过 */
 export class BrowserNotTrustedError extends BrowserError {
   constructor() {
     super('not_trusted', '已请求浏览器权限，请在右下角卡片授权后重试');
+  }
+}
+
+/** 用户明确拒绝本次授权，或等待授权超时降级（阻塞等待语义）。默认文案为「用户已拒绝」；
+ *  超时场景传入含设置/重试指引的超时文案——两态对 LLM 都是明确事实，自行改道而非无限重试 */
+export class BrowserTrustRefusedError extends BrowserError {
+  constructor(message = '用户已拒绝本次浏览器授权') {
+    super('trust_refused', message);
   }
 }
 
