@@ -31,6 +31,9 @@ import { resolveMaxToolCalls } from '../settings/crud';
 import { spawnNextInstanceIfRecurring } from '../task/recurrence';
 import { notifyExecutor } from '../task/executor';
 import { clearLaneIfMatch } from './session-lane';
+// browser 工具 IPC 桥（主机验收 P0 修复）：子进程 browser-op 请求在此路由到
+// 主进程真实编排面（BrowserManager 只能活在主进程），见 browser/op-router.ts
+import { routeBrowserOp } from '../browser/op-router';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -187,11 +190,19 @@ export class AgentRunner {
       if (typeof msg !== 'object' || msg === null) return;
       const m = msg as {
         type?: string;
+        requestId?: unknown;
         streamSessionId?: string;
         finishReason?: 'stop' | 'budget_exhausted' | 'interrupted' | 'error';
         error?: string;
         toolCallsUsed?: number;
       };
+      // browser-op（browser 工具 IPC 桥请求）：载荷以 requestId 关联而非
+      // streamSessionId——必须在下方「只处理本 task 的 chunk」过滤之前分发，
+      // 否则被拦截丢弃、子进程 60s 挂等超时
+      if (m.type === 'browser-op') {
+        void this.routeBrowserOpToChild(child, msg);
+        return;
+      }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
       if (m.streamSessionId !== task.streamSessionId) return;
       if (m.type === 'end') {
@@ -273,6 +284,29 @@ export class AgentRunner {
     });
 
     return { streamSessionId: task.streamSessionId };
+  }
+
+  /**
+   * browser-op 请求路由回程：主进程真实编排面执行 → 应答补全线协议字段
+   * （type / requestId）后回送子进程。routeBrowserOp 永不抛异常（失败统一
+   * 序列化 {ok:false, error}）；child.send 失败（通道已关）只记日志——子进程
+   * 侧自有 60s 超时兜底。requestId 原样回带（单点生成、沿线透传，不重新生成）。
+   */
+  private async routeBrowserOpToChild(child: ChildProcess, msg: unknown): Promise<void> {
+    const requestId = (msg as { requestId?: unknown }).requestId;
+    const outcome = await routeBrowserOp(msg);
+    const result =
+      outcome.ok
+        ? { type: 'browser-op:result', requestId: typeof requestId === 'string' ? requestId : '', ok: true, payload: outcome.payload }
+        : { type: 'browser-op:result', requestId: typeof requestId === 'string' ? requestId : '', ok: false, error: outcome.error };
+    try {
+      child.send(result);
+    } catch (err) {
+      logger.warn('browser-op 应答回送失败（IPC 通道已关闭）', {
+        requestId: typeof requestId === 'string' ? requestId : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

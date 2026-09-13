@@ -33,12 +33,16 @@ import type { TabInfo } from '../../browser/types';
 // 注入端口（结构性子集——单测用普通对象满足，真实实现结构性兼容）
 // =================================================================================
 
-/** BrowserTools 消费的策略面（T1 BrowserPolicy 的结构性子集） */
+/** BrowserTools 消费的策略面（T1 BrowserPolicy 的结构性子集）。
+ *  门返回 void | Promise<void> 联合：主进程同步实现（boot 直连）不受影响；
+ *  子进程 IPC 桥实现（browser-ipc-bridge.ts）返回 Promise——execute 以 await
+ *  消费，未信任 / evaluate 禁用错误才能穿透给 LLM（同步 void 门在桥形态下
+ *  会变成无人 await 的 rejection，信任门静默失效）。 */
 export interface BrowserPolicyPort {
   /** 信任门：deny / ask 未授时抛 BrowserError 子类 */
-  assertAllowed(wsId: string): void;
+  assertAllowed(wsId: string): void | Promise<void>;
   /** evaluate 门：设置关闭时抛 EvaluateDisabledError */
-  assertEvaluate(wsId: string): void;
+  assertEvaluate(wsId: string): void | Promise<void>;
 }
 
 /** BrowserTools 消费的浏览器编排面（T2 BrowserManager 的结构性子集——12 工具一一对应） */
@@ -339,10 +343,11 @@ export class BrowserTools implements ToolModule {
     const wsId = ctx.workspaceId;
 
     // 信任门（spec §5.2）：所有 browser_* 工具统一入口——未信任时 manager 零触碰，
-    // 错误（含右下角信任卡指引）原样穿透给 LLM。
-    policy.assertAllowed(wsId);
+    // 错误（含右下角信任卡指引）原样穿透给 LLM。await 消费：主进程同步实现
+    // await 无感，子进程桥实现（IPC 往返）的错误由此可靠穿透（见端口面注释）。
+    await policy.assertAllowed(wsId);
     // evaluate 双门（§6.2 默认关）：信任门之后、任何参数处理之前。
-    if (name === 'browser_evaluate') policy.assertEvaluate(wsId);
+    if (name === 'browser_evaluate') await policy.assertEvaluate(wsId);
 
     switch (name) {
       case 'browser_navigate': {

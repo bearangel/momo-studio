@@ -27,6 +27,9 @@ import { sweepStaleStreaming } from './task/resume';
 import { assembleBrowserSubsystem } from './browser/boot';
 import { initRealViewFactory } from './browser/view-factory';
 import { BROWSER_SHOT_SCHEME } from './browser/protocol';
+// browser 工具 IPC 桥（主机验收 P0 修复）：runtime 子进程 browser-op 请求的
+// 主进程路由——assembleBrowserSubsystem 产出的真实 policy/manager 在此注册
+import { initBrowserOpRouter } from './browser/op-router';
 
 // 单实例锁（v2.10 Windows 全平台化 Task 4）：同一用户数据目录只允许一个实例。
 // 无锁 = 已有实例在运行——app.quit() 后不进入任何 boot（whenReady 不注册、
@@ -112,6 +115,11 @@ if (!app.requestSingleInstanceLock()) {
         createFactory: (hooks) => initRealViewFactory(hooks),
         protocol,
       });
+
+      // browser 工具 IPC 桥主进程侧接线：子进程 browser 工具经 fork IPC 发来
+      // browser-op 请求，agent-runner 的 messageHandler 分发到此路由——未注册
+      // 则全部浏览器工具在子进程 60s 超时（initBrowserTools 只喂了主进程模块态）
+      initBrowserOpRouter(browserBoot.policy, browserBoot.manager);
 
       // boot 初始激活：与 renderer load() 的默认激活同序（created_at DESC 首项）；
       // renderer 随后的 workspace:switch 通知到达时 onWorkspaceActivated 幂等收敛

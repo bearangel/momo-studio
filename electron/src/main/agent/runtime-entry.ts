@@ -65,6 +65,10 @@ import { getDb } from '../storage/db';
 import { setJournalStore } from '../journal/recorder';
 import { reprobeSandbox } from '../sandbox/probe';
 import { createJournalStore } from '../journal/store';
+// 浏览器工具 IPC 桥（主机验收 P0 修复）：BrowserManager 持 WebContentsView 只能
+// 活在主进程——子进程以 IPC 代理端口注入 initBrowserTools，见 browser-ipc-bridge.ts
+import { createBrowserToolsIpcBridge, handleBrowserOpResult } from './tools/browser-ipc-bridge';
+import { initBrowserTools } from './tools/browser-tools';
 
 /**
  * chat loop 运行时上下文：在启动时构建一次，后续每轮对话复用。
@@ -207,6 +211,8 @@ async function main(): Promise<void> {
       }
     } else if (m.type === 'task-reply') {
       handleTaskReplyIpc(msg);
+    } else if (m.type === 'browser-op:result') {
+      handleBrowserOpResult(msg);
     } else if (m.type === 'compaction:result') {
       handleCompactionResultIpc(msg);
     } else if (m.type === 'shutdown') {
@@ -1329,12 +1335,32 @@ export function __resetSandboxProbeForTest(): void {
   sandboxProbePromise = null;
 }
 
+/**
+ * 子进程 browser 工具 IPC 桥接线（once-guard 单飞）：initBrowserTools 只在主进程
+ * boot 调用过，而本进程的 BrowserTools 模块态恒未初始化（BrowserManager 持
+ * WebContentsView 只能活在主进程）——以 IPC 代理端口注入后，12 个浏览器工具
+ * 的调用经 process.send 往返主进程 op-router 分发到真实编排面。
+ */
+let browserBridgeDone = false;
+function ensureBrowserToolsBridged(): void {
+  if (browserBridgeDone) return;
+  browserBridgeDone = true;
+  const bridge = createBrowserToolsIpcBridge();
+  initBrowserTools(bridge.policy, bridge.manager);
+}
+
+/** 测试钩子：重置桥接线单飞（__resetBrowserToolsForTest 配套——同进程多用例各自从零起） */
+export function __resetBrowserBridgeForTest(): void {
+  browserBridgeDone = false;
+}
+
 export async function runTaskChatLoop(
   cfg: TaskConfig,
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
   await ensureSandboxProbed();
+  ensureBrowserToolsBridged();
   const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
