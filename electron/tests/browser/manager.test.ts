@@ -13,6 +13,8 @@ import { ABOUT_BLANK, BrowserManager } from '../../src/main/browser/manager';
 import type { ManagedView, ManagedWebContents, ViewFactory } from '../../src/main/browser/manager';
 import { BrowserPolicy } from '../../src/main/browser/policy';
 import {
+  BrowserDomainBlockedError,
+  BrowserFileAccessError,
   BrowserNavigationError,
   BrowserNoViewError,
   BrowserProtocolError,
@@ -255,6 +257,63 @@ describe('tabsAction', () => {
     const v1 = factory.views[1]!;
     expect(v1.view.webContents.loadURL).toHaveBeenCalledWith(ABOUT_BLANK);
     expect(lastState(pushState)?.tabs[1]).toMatchObject({ url: 'about:blank' });
+  });
+
+  // ---- F1 review fix：open 携带 url 必须过 policy.assertUrl（与 navigate 同口径）----
+  // 此前 url 裸传 openTabInternal 绕过策略——agent 可经 browser_tabs {action:'open'}
+  // 加载 file:///Users/x/.ssh/id_rsa 等任意本地文件，再经 browser_snapshot 读出全文。
+
+  it('open 携带 url → assertUrl 被调用；黑名单域名 → 抛错且不建视图不推 state', async () => {
+    const { manager, factory, policy, pushState } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    pushState.mockClear();
+    const createdBefore = factory.create.mock.calls.length;
+    const spy = vi.spyOn(policy, 'assertUrl');
+    await expect(
+      manager.tabsAction('ws1', 'open', undefined, 'http://evil.com/x'),
+    ).rejects.toThrow(BrowserDomainBlockedError);
+    expect(spy).toHaveBeenCalledWith('ws1', 'http://evil.com/x');
+    // 策略失败零副作用：不建视图、不推 state（与 navigate 失败路径同口径）
+    expect(factory.create).toHaveBeenCalledTimes(createdBefore);
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it('open 携带 workspace 外 file:// → BrowserFileAccessError（F1 攻击链：本地任意文件读取）', async () => {
+    const { manager, factory } = mkManager();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-open-ws-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-outside-'));
+    try {
+      const secret = path.join(outside, 'id_rsa');
+      fs.writeFileSync(secret, 'TOP SECRET');
+      manager.onWorkspaceActivated('ws1', root);
+      await manager.navigate('ws1', 'http://localhost:5173/');
+      const createdBefore = factory.create.mock.calls.length;
+      await expect(
+        manager.tabsAction('ws1', 'open', undefined, pathToFileURL(secret).href),
+      ).rejects.toThrow(BrowserFileAccessError);
+      expect(factory.create).toHaveBeenCalledTimes(createdBefore);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('open 携带 workspace 内 file:// → 放行并载入归一化 URL（不误伤）', async () => {
+    const { manager, factory } = mkManager();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-open-ok-'));
+    try {
+      const page = path.join(root, 'index.html');
+      fs.writeFileSync(page, '<html></html>');
+      manager.onWorkspaceActivated('ws1', root);
+      await manager.navigate('ws1', 'http://localhost:5173/');
+      const tabs = await manager.tabsAction('ws1', 'open', undefined, pathToFileURL(page).href);
+      expect(tabs).toHaveLength(2);
+      const v1 = factory.views[1]!;
+      expect(v1.view.webContents.loadURL).toHaveBeenCalledWith(pathToFileURL(page).href);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('switch 只改 current 并 pushState；不动视图（不重建、不重载）', async () => {
