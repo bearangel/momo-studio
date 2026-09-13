@@ -12,11 +12,12 @@
 // tool_call+tool_result 配对 / 孤儿 call 合成 [执行中断] result /
 // 未知事件类型跳过（前向兼容）。
 //
-// 链行写入契约（本模块是消费侧；生产者 = T5 dispatch_followup 写路径）：
+// 链行写入契约（本模块是消费侧）：
 //   链内全部消息行（子 agent 流行 + followup user 行）都带
 //   (task_id = 链 ID, session_id = executionSessionId) 双键。
-//   当前生产链 start chunk 不落 task_id（stream-relay 无该字段），
-//   T5 接线时负责按本契约写行 / 打标。
+//   链行打标由 stream-relay start chunk 携带 task_id 落库（T5 已接线，
+//   stream-relay insertMessage 写 task_id 列；followup user 行经
+//   appendFollowupQuestionRow 同键落库）——本契约已是生产现状。
 //
 // 首轮指令不回溯：dispatch 首轮 body 不落消息行且内部事件桥 transient
 // ——重建链恒以 assistant 开头（协议合法，LLM 从上下文自推断），
