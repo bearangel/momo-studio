@@ -53,7 +53,9 @@ export function resolveShellSpawn(workspaceDir: string, command: string): SpawnP
     fs.writeFileSync(profilePath, renderSeatbeltProfile(policy), 'utf-8');
     return {
       kind: 'wrapped', shell: 'sandbox-exec',
-      args: ['-p', profilePath, '/bin/bash', '-c', command],
+      // -f 从文件读 profile（-p 会把参数整串当 SBPL 源码解析——传路径即
+      // 「unbound variable」exit 65，macOS 主机实测；probe 冒烟的 -p 是内联字符串，语义不同）
+      args: ['-f', profilePath, '/bin/bash', '-c', command],
       tag: 'seatbelt', envAdditions: cacheEnvAdditions(policy.tmpDir), cleanupFiles: [profilePath],
     };
   }

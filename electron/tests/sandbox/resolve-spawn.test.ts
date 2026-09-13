@@ -88,7 +88,9 @@ describe('resolveShellSpawn', () => {
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;
       expect(plan.shell).toBe('sandbox-exec');
-      expect(plan.args[0]).toBe('-p');
+      // -f = profile 从文件读（-p 是把参数当 SBPL 字符串解析——传文件路径会整串
+      // 被当成未绑定变量，主机实测 exit 65「unbound variable」）
+      expect(plan.args[0]).toBe('-f');
       const profile = plan.args[1]!;
       expect(fs.existsSync(profile)).toBe(true);
       expect(plan.cleanupFiles).toEqual([profile]);
