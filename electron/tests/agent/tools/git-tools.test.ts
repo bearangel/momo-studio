@@ -236,3 +236,85 @@ describe('git_commit + GitPolicy', () => {
     expect(current).toMatch(/^agent\//);
   });
 });
+
+// =====================================================================================
+// 选项注入防护（审查 F2）：LLM 控制的 ref 型字段拒绝前导 "-" + 形态校验。
+// 攻击链（修复前真实成立，红测试先复现）：git 子进程无 OS 沙箱，commit 字段
+// '--output=<绝对路径>' 会被 git 当作选项解析——git show 把 diff 全文写到任意路径。
+// =====================================================================================
+describe('git 选项注入防护（审查 F2）', () => {
+  // 攻击目标路径（容器预置临时区；断言「抛参数错误且文件未创建」双条件）
+  const PWN = '/tmp/opencode';
+
+  beforeEach(() => {
+    fs.mkdirSync(PWN, { recursive: true });
+  });
+
+  it('git_show {commit:"--output=…"} → 抛参数错误且目标文件未创建', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    const target = path.join(PWN, `pwn-show-${Date.now()}.txt`);
+    const tools = new GitTools();
+    await expect(
+      tools.execute('git_show', { commit: `--output=${target}` }, ctx),
+    ).rejects.toThrow(/选项注入/);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('git_log {branch:"--output=…"} → 抛参数错误且目标文件未创建', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    const target = path.join(PWN, `pwn-log-${Date.now()}.txt`);
+    const tools = new GitTools();
+    await expect(
+      tools.execute('git_log', { branch: `--output=${target}` }, ctx),
+    ).rejects.toThrow(/选项注入/);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('git_branch {name:"-x"} / git_checkout {branch:"-b"} → 抛参数错误', async () => {
+    execSync('git commit --allow-empty -m init', { cwd: tmpDir });
+    const tools = new GitTools();
+    await expect(tools.execute('git_branch', { name: '--output=/tmp/opencode/x' }, ctx)).rejects.toThrow(/选项注入/);
+    await expect(tools.execute('git_branch', { name: '-b' }, ctx)).rejects.toThrow(/选项注入/);
+    await expect(tools.execute('git_checkout', { branch: '--force' }, ctx)).rejects.toThrow(/选项注入/);
+    // 未创建任何分支（注入值不落 argv）
+    expect(execSync('git branch', { cwd: tmpDir }).toString()).not.toContain('output');
+  });
+
+  it('含空格/控制字符的 ref 值 → 形态校验拒绝', async () => {
+    const tools = new GitTools();
+    await expect(
+      tools.execute('git_show', { commit: 'HEAD; rm -rf /' }, ctx),
+    ).rejects.toThrow(/不允许的字符/);
+    await expect(
+      tools.execute('git_log', { branch: 'main --output=/tmp/opencode/y' }, ctx),
+    ).rejects.toThrow(/不允许的字符/);
+  });
+
+  it('git_add paths 含 "-" 开头文件名 → 经 "--" 分隔正常暂存（不误伤）', async () => {
+    await fs.promises.writeFile(path.join(tmpDir, '-poison.txt'), 'x');
+    const tools = new GitTools();
+    await tools.execute('git_add', { paths: ['-poison.txt'] }, ctx);
+    const status = execSync('git status --porcelain', { cwd: tmpDir }).toString();
+    expect(status).toMatch(/^A\s+-poison\.txt/);
+  });
+
+  it('合法 ref 不误伤：HEAD~2 / feat/x / v1.0.0 / origin/main', async () => {
+    for (let i = 0; i < 3; i++) {
+      execSync(`git commit --allow-empty -m "c${i}"`, { cwd: tmpDir });
+    }
+    const tools = new GitTools();
+    // HEAD~2：历史语法
+    expect(await tools.execute('git_show', { commit: 'HEAD~2' }, ctx)).toContain('c0');
+    // 分支名（含斜杠分层）
+    expect(await tools.execute('git_log', { branch: 'main', limit: 2 }, ctx)).toBeTruthy();
+    await tools.execute('git_branch', { name: 'feat/x' }, ctx);
+    expect(execSync('git branch', { cwd: tmpDir }).toString()).toContain('feat/x');
+    // tag ref
+    execSync('git tag v1.0.0', { cwd: tmpDir });
+    await tools.execute('git_checkout', { branch: 'v1.0.0' }, ctx);
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: tmpDir }).toString().trim()).toBe('HEAD');
+    // 远端形态分层名（斜杠 + 多段）——仅校验形态，创建本地同名分支验证通过
+    await tools.execute('git_checkout', { branch: 'main' }, ctx);
+    await tools.execute('git_branch', { name: 'origin/main' }, ctx);
+  });
+});

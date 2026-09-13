@@ -45,6 +45,23 @@ describe('buildBwrapArgs', () => {
     expect(args).toEqual(expect.arrayContaining(['--tmpfs', '/home/u/.ssh', '--tmpfs', '/home/u/.aws']));
   });
 
+  it('敏感条目为普通文件（如 ~/.netrc）→ --ro-bind /dev/null 遮盖而非 tmpfs（审查 F4：tmpfs 挂不进文件）', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bwrap-file-'));
+    createdTmpDirs.push(tmp);
+    const netrc = path.join(tmp, '.netrc');
+    fs.writeFileSync(netrc, 'machine x login y password z');
+    const dirEntry = path.join(tmp, '.ssh');
+    fs.mkdirSync(dirEntry);
+    const args = buildBwrapArgs(mkPolicy({ sensitiveDirs: [netrc, dirEntry] }));
+    // 文件条目：/dev/null 只读遮盖（mount tmpfs 的目标必须是目录，否则 bwrap 整体失败）
+    const fileIdx = args.indexOf(netrc);
+    expect(args[fileIdx - 1]).toBe('/dev/null');
+    expect(args[fileIdx - 2]).toBe('--ro-bind');
+    // 目录条目：维持 tmpfs
+    const dirIdx = args.indexOf(dirEntry);
+    expect(args[dirIdx - 1]).toBe('--tmpfs');
+  });
+
   it('快照：完整 args 数组稳定（网络关 + 一敏感目录）', () => {
     // 用固定 workspace 路径让快照与随机 tmpdir 后缀解耦——只锁 bwrap argv 结构
     const p: ShellSandboxPolicy = {

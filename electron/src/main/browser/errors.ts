@@ -75,10 +75,11 @@ export class BrowserInvalidKeyError extends BrowserError {
   }
 }
 
-/** file:// 越界（workspace 目录限定硬安全边界，spec §6.3） */
+/** file:// 越界（workspace 目录限定硬安全边界，spec §6.3）。
+ *  detail 可携带具体场景信息（如 workspace 根不可访问时的路径）。 */
 export class BrowserFileAccessError extends BrowserError {
-  constructor() {
-    super('file_access', 'file:// 仅限 workspace 目录内');
+  constructor(detail?: string) {
+    super('file_access', detail ?? 'file:// 仅限 workspace 目录内');
   }
 }
 

@@ -33,6 +33,7 @@ import {
   __seedBgHandleForTest,
   __resetBgStateForTest,
   BG_HANDLE_LIMIT,
+  BG_SETTLED_CAP,
 } from '../../src/main/agent/dispatch-wait';
 import type { BgHandle, GatherResult } from '../../src/main/agent/dispatch-wait';
 import { INTERNAL_EVENT_MSG, type InternalEventMsg } from '../../src/main/agent/internal-event';
@@ -152,6 +153,68 @@ describe('bgHandles 句柄表 + handleTaskReply bg 分支', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('settled 句柄 LRU 上限（审查 C2：长会话内存有界）', () => {
+  beforeEach(() => {
+    __resetBgStateForTest();
+  });
+
+  it('settled 超上限 → 最旧 settled 被驱逐（gather 返回 not_found 注记），最新仍在，in_flight 不受影响', async () => {
+    // 种子 33 个 settled（done），插入序即创建序——settled-1 最旧
+    for (let i = 1; i <= BG_SETTLED_CAP + 1; i++) {
+      __seedBgHandleForTest(`settled-${i}`, {
+        slug: `s-${i}`,
+        status: 'done',
+        startedAt: i,
+        body: `body-${i}`,
+        toolCallsUsed: 0,
+        completedAt: i + 100,
+      });
+    }
+    // 中途插入的 in_flight——驱逐扫描必须跳过（在途上限 8 语义不变）
+    __seedBgHandleForTest('inflight-keep', { slug: 'live', status: 'in_flight', startedAt: 1 });
+
+    // 最旧 settled-1 已被驱逐 → status not_found
+    expect(getBgHandle('settled-1')).toBeUndefined();
+    expect(executeStatus('settled-1')).toEqual({ status: 'not_found' });
+    // 最新 settled-33 仍在
+    expect(getBgHandle(`settled-${BG_SETTLED_CAP + 1}`)?.status).toBe('done');
+    // in_flight 不受影响
+    expect(getBgHandle('inflight-keep')?.status).toBe('in_flight');
+
+    // gather 对被驱逐句柄返回 not_found 注记（与 runtime 重启后语义一致）
+    const r = await executeGather(
+      ['settled-1', `settled-${BG_SETTLED_CAP + 1}`, 'inflight-keep'],
+      'any',
+      1_000,
+    );
+    expect(r.notes.some((n) => n.includes('settled-1') && n.includes('不存在'))).toBe(true);
+    expect(r.done.some((d) => d.taskId === `settled-${BG_SETTLED_CAP + 1}`)).toBe(true);
+    expect(r.pending).toContain('inflight-keep');
+  });
+
+  it('生产 settle 路径触发驱逐：第 33 个句柄经 handleTaskReply 翻 done → 最旧 settled 让位', () => {
+    // 32 个既有 done + 1 个 in_flight（插入序：done-1 最旧，live 最新）
+    for (let i = 1; i <= BG_SETTLED_CAP; i++) {
+      __seedBgHandleForTest(`done-${i}`, {
+        slug: `d-${i}`,
+        status: 'done',
+        startedAt: i,
+        body: 'x',
+        toolCallsUsed: 0,
+        completedAt: i + 100,
+      });
+    }
+    __seedBgHandleForTest('live-task', { slug: 'live', status: 'in_flight', startedAt: 999 });
+
+    handleTaskReply({ task_id: 'live-task', status: 'completed', body: '结果' });
+
+    // live-task 翻 done（settled 总数 33 → 驱逐最旧 done-1）
+    expect(getBgHandle('live-task')).toMatchObject({ status: 'done', body: '结果' });
+    expect(getBgHandle('done-1')).toBeUndefined();
+    expect(getBgHandle(`done-${BG_SETTLED_CAP}`)?.status).toBe('done');
   });
 });
 

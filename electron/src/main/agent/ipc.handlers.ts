@@ -55,7 +55,7 @@ import {
   setAssignmentDeltas,
   type AssignmentDeltas,
 } from './assignment-capabilities';
-import type { WorkspaceAgentMember, AgentDefinition } from './types';
+import type { WorkspaceAgentMember } from './types';
 import type { ThinkingConfig } from '../llm/provider-presets';
 
 /** agent:addMember 入参（v25 spec §5：AddMemberInput；无 role/parent；同 ws 同 def 重复加入由 UNIQUE 约束报错） */

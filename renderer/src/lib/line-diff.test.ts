@@ -106,3 +106,39 @@ describe('diffLines — 往返锁（顺序保真）', () => {
     ]);
   });
 });
+
+describe('diffLines — 大输入降级（审查 C3：O(n·m) DP 内存/时间尖峰防御）', () => {
+  it('n*m 超阈值（3000×2000=6M > 4M）→ 整文件替换视图（单 hunk 全删 + 全增，零 ctx），往返锁仍成立', () => {
+    // 前 1000 行公共（真实 LCS 会产 1000 ctx）——降级必须放弃对齐产出零 ctx，
+    // 用公共行让「降级与否」可观测（无公共行时两种路径输出恰好同形）
+    const before = Array.from({ length: 3000 }, (_, i) => `b-${i}`);
+    const after = [...before.slice(0, 1000), ...Array.from({ length: 1000 }, (_, i) => `a-${i}`)];
+    const rows = diffLines(before, after);
+    // 单 hunk：前 3000 全 del + 后 2000 全增，无任何 ctx
+    expect(rows).toHaveLength(5000);
+    expect(rows.filter((r) => r.type === 'ctx')).toHaveLength(0);
+    expect(rows.slice(0, 3000).every((r) => r.type === 'del')).toBe(true);
+    expect(rows.slice(3000).every((r) => r.type === 'add')).toBe(true);
+    // 降级路径的往返不变量与正常路径一致
+    expect(rows.filter((r) => r.type !== 'add').map((r) => r.text)).toEqual(before);
+    expect(rows.filter((r) => r.type !== 'del').map((r) => r.text)).toEqual(after);
+  });
+
+  it('n*m 恰好等于阈值（2000×2000=4M）→ 正常 LCS 不降级', () => {
+    const before = Array.from({ length: 2000 }, (_, i) => `b-${i}`);
+    const after = [...before];
+    after[1999] = 'changed';
+    const rows = diffLines(before, after);
+    // 正常路径：1999 ctx + 1 del + 1 add
+    expect(rows).toHaveLength(2001);
+    expect(rows.filter((r) => r.type === 'ctx')).toHaveLength(1999);
+    expect(rows.filter((r) => r.type === 'del').map((r) => r.text)).toEqual(['b-1999']);
+    expect(rows.filter((r) => r.type === 'add').map((r) => r.text)).toEqual(['changed']);
+  });
+
+  it('降级边界含空侧：n*m 超限但一侧为空 → 语义与既有空输入路径一致（全 del / 全 add）', () => {
+    // before 5000 行 × after 0 行 = 0 ≤ 阈值——走正常空侧路径，非降级；此处锁降级判断不误伤空侧
+    const before = Array.from({ length: 5000 }, (_, i) => `b-${i}`);
+    expect(diffLines(before, []).every((r) => r.type === 'del')).toBe(true);
+  });
+});

@@ -190,7 +190,9 @@ export function buildResolveScript(sel: ParsedSelector): string {
       const h = describe(c);
       if (h !== '') hints.push(h);
     }
-  } catch (err) {}
+  } catch (err) {
+    /* hints 收集失败不阻塞，返回空提示 */
+  }
   return JSON.stringify({ rect: null, hints: hints });
 })()`;
 }

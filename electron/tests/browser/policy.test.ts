@@ -267,6 +267,18 @@ describe('URL 策略 assertUrl', () => {
       const oldFile = path.join(tmpRoot, 'index.html');
       expect(() => p.assertUrl('ws1', pathToFileURL(oldFile).href)).toThrow(BrowserFileAccessError);
     });
+
+    it('workspace 根目录不存在（如运行中被删）→ BrowserFileAccessError 而非裸 ENOENT 逃逸（审查 Nit）', () => {
+      const goneRoot = path.join(tmpRoot, 'deleted-root');
+      fs.mkdirSync(goneRoot);
+      fs.rmSync(goneRoot, { recursive: true, force: true });
+      const p = new BrowserPolicy(() => ({ ...settings }), goneRoot);
+      // URL 字符串边界在根内（走到 realpath 步骤），但根已不存在
+      const inside = pathToFileURL(path.join(goneRoot, 'a.html')).href;
+      expect(() => p.assertUrl('ws1', inside)).toThrow(BrowserFileAccessError);
+      expect(() => p.assertUrl('ws1', inside)).toThrow(/workspace 目录不可访问/);
+      expect(() => p.assertUrl('ws1', inside)).toThrow(new RegExp(goneRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    });
   });
 
   it('ftp/javascript/data 等协议 → BrowserProtocolError', () => {

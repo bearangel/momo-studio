@@ -88,6 +88,7 @@ bash 工具接入 OS 级隔离——工具防御第二期，清偿 v2.1 安全�
 - **boot 探测 + IPC 4 通道** — 启动 fire-and-forget 探测（bwrap `--version` / sandbox-exec 最小 profile 冒烟 / pwsh + ExecutionPolicy），失败不影响启动；`sandbox:getState` / `reprobe` / `installBwrap` / `dismissPrompt`
 - **设置「安全沙箱」分类 + 首启提示卡** — 模式单选 / 网络开关 / 探测状态只读区 + 重新探测；Linux 缺 bwrap 右下角非模态引导卡（复制命令 / pkexec 一键安装 / 装后自动重探测），Windows ExecutionPolicy=Restricted 授权指引卡
 - 真实 bwrap 条件集成测试（容器拦 user namespace 时整组自动 skip，不造假绿）
+- 已知边界：Seatbelt `mach-lookup` 未收敛到服务白名单——`(allow file-ioctl sysctl-read mach-lookup)` 全放行下，securityd 等关键服务经 Mach 端口的服务侧 Keychain 访问不受 sensitiveDirs file-deny 约束（目录 deny 只挡文件系统直读）；keychain 服务侧访问需真机验收实测后再收敛，暂以文档化（审查 F4）
 
 **v2.3.0 — FileTools 防御硬化（开发中，未发布）**
 
@@ -679,12 +680,13 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 
 ### v2.1 — 效率增强 🔲 概念阶段
 
+- ✅ UI 设计系统（语义 token / 原子组件 / lucide 图标 + ESLint 机械强制，已全仓消费——规范见 `docs/dev/design-system.md`）
 - 🔲 分支工作流（agent 工作在独立 branch，PR 式合并）
 - 🔲 Agent 并发多任务（内部 task queue）
 - 🔲 Token 配额管理
 - 🔲 LSP 集成（Monaco 编辑器语言服务）
 - 🔲 协作实时编辑（CRDT）
-- 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例）
+- 🔲 e2e 套件重写（替换 v1.x 残留的 Conduit/Matrix 场景用例；v2.7 已新增 browser e2e——`tests/e2e/browser.spec.ts`）
 - ✅ OS 级沙箱接线（v2.4.0 完成——bash 工具经 `resolveShellSpawn` 接入 Seatbelt/bwrap）
 - 🔲 p2p 私钥入 keytar（当前 Ed25519 私钥落盘位置待硬化）
 - 🔲 LAN 帧加密或对应设计稿
@@ -704,7 +706,7 @@ v1.6 把自定义上传的 MCP / Skill 单独放在 Marketplace 底部"自定义
 |---|---|---|
 | **Tailwind 任意值 class 不生成 CSS** | 已定位根因：动态拼接 class 不可见（静态书写正常）；规范已禁动态拼接 | 已于 v2.1 P0 勘正 |
 | ~~**OS 级沙箱简化实现**~~ | **v2.4.0 已接线**——bash 工具经 `resolveShellSpawn` 三态决策接入 Seatbelt/bwrap；Windows 无 OS 沙箱走 PowerShell plain 路径 | ~~v2.1~~ 已完成 |
-| Marketplace 无签名验证 | 不可信包风险 | v2.0 |
+| Marketplace 无签名验证 | 不可信包风险 | 待排期（v2.0 目标已过期，未实施） |
 | ~~**model_providers 表无 platform 字段**~~ | **v24 已加 platform 列 + CHECK 约束 + 设置页显式下拉**；运行时接线 P3 已完成（`spawn-helpers.ts` 显式透传 `provider.platform`） | ~~P3~~ 已完成 |
 | **StreamState 内存累积** | 会话结束后 StreamState 不清理（保留完整展示），长期使用内存增长 | v1.5 加房间切换/定期清理 |
 | ~~**provider.platform 运行时接线**~~ | **P3 已完成**——`spawn-helpers.ts` 显式透传 `provider.platform` 到 `createLLMProvider`，设置页下拉选择生效，baseUrl 启发式检测退役为缺省回退 | ~~P3~~ 已完成 |

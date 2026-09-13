@@ -303,9 +303,15 @@ export class BrowserManager {
       case 'list':
         return this.tabInfos(ws);
       case 'open': {
+        // url 携带时先过策略门（F1 review fix——与 navigate/userNavigate 同口径）：
+        // 此前裸传 openTabInternal 会绕过 assertUrl，agent 可经 browser_tabs
+        // {action:'open', url:'file:///Users/x/.ssh/id_rsa'} 打破 file:// workspace
+        // 硬边界与域名黑白名单。策略失败在 ensureLive/openTabInternal 之前抛出，
+        // 不开 tab、无任何副作用。url 未传 → null 仍走 ABOUT_BLANK（内部常量，
+        // 非 tool/用户输入，不经策略——T1 review 裁定）。
+        const initialUrl = url === undefined ? null : this.policy.assertUrl(wsId, url);
         this.ensureLive(ws);
-        // url 未传 → ABOUT_BLANK（openTabInternal 不经策略）
-        this.openTabInternal(ws, url ?? null);
+        this.openTabInternal(ws, initialUrl);
         this.emitState(ws);
         return this.tabInfos(ws);
       }
@@ -430,9 +436,10 @@ export class BrowserManager {
     );
     const base = this.screenshotDir ?? path.join(os.tmpdir(), 'momo-browser-shots');
     const dir = path.join(base, wsId);
-    fs.mkdirSync(dir, { recursive: true });
+    // fs/promises（审查 Nit）：方法本就 async，同步 IO 会卡主进程事件循环
+    await fs.promises.mkdir(dir, { recursive: true });
     const file = path.join(dir, safeName);
-    fs.writeFileSync(file, image.toPNG());
+    await fs.promises.writeFile(file, image.toPNG());
     return { path: file };
   }
 

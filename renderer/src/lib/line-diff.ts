@@ -6,7 +6,8 @@
 //   - 空 before → 全 add（create）；空 after → 全 del（delete）
 //
 // 性能注记：blob 文本经主进程截断 100KB，行数级别（数千行）下
-// O(n·m) 的 Int32Array DP 表（~25MB @ 2500²）在渲染进程可接受。
+// O(n·m) 的 Int32Array DP 表（~25MB @ 2500²）在渲染进程可接受；
+// 规模超出 LCS_DEGRADE_CELL_LIMIT 时降级为整文件替换视图（见下）。
 
 /** 单行 diff 类型：ctx 公共 / add 新增 / del 删除 */
 export type DiffLineType = 'ctx' | 'add' | 'del';
@@ -18,12 +19,28 @@ export interface DiffLine {
 }
 
 /**
+ * LCS DP 规模上限（审查 C3）：n*m 超过此值放弃 DP，降级为整文件替换视图
+ * （单 hunk 全删 + 全增）。阈值依据：4M 格 × Int32Array 4 字节 = 16MB 瞬时
+ * DP 表，是渲染进程单次 diff 可接受的上界——超过后短行大文件的时间/内存
+ * 尖峰会冻结 UI。降级保往返不变量（del+ctx = before、add+ctx = after），
+ * 仅放弃行级对齐精度。
+ */
+const LCS_DEGRADE_CELL_LIMIT = 4_000_000;
+
+/**
  * 行级 LCS diff：返回按文档序排列的行序列。
  * 往返保证：del+ctx 按序拼接 = before；add+ctx 按序拼接 = after。
  */
 export function diffLines(before: string[], after: string[]): DiffLine[] {
   const n = before.length;
   const m = after.length;
+  if (n * m > LCS_DEGRADE_CELL_LIMIT) {
+    // 降级：整文件替换视图（空侧输入天然落回全 del / 全 add，与正常空侧路径同形）
+    return [
+      ...before.map<DiffLine>((text) => ({ type: 'del', text })),
+      ...after.map<DiffLine>((text) => ({ type: 'add', text })),
+    ];
+  }
   // dp[i][j] = before[i..] 与 after[j..] 的 LCS 长度（后缀表，回溯方向即输出方向）
   const width = m + 1;
   const dp = new Int32Array((n + 1) * width);

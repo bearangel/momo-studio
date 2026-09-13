@@ -51,7 +51,7 @@ import {
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { __clearRuntimeRegistryForTest } from '../../src/main/agent/runtime-registry';
-import { __clearLaneForTest } from '../../src/main/agent/session-lane';
+import { __clearLaneForTest, getLane } from '../../src/main/agent/session-lane';
 import { setJournalStore, getJournalStore } from '../../src/main/journal/recorder';
 import { createJournalStore } from '../../src/main/journal/store';
 import {
@@ -503,6 +503,47 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     expect(getMessageByStreamSessionId('ss-flip')!.status).toBe('failed');
     // 未派发任何 task-config
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it('C1 补偿锁：executeTask 同步抛错（spawn ENOENT 形态）→ lane 清空 + 消息行回滚 failed + 错误抛给调用方', async () => {
+    seedTask({ id: 'T-C1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
+    seedAgentStream({
+      streamSessionId: 'ss-c1',
+      sessionId: 'sess-task1',
+      senderAgentId: 'agent-bot-1',
+      taskId: 'T-C1',
+      text: ['半程输出'],
+    });
+
+    // spawn 失败注入：不预热（池空）→ acquire 冷启动 fallback 直接吃到 spawn 拒绝
+    // （真实形态：node 可执行缺失 / fork ENOENT——错误形状按真实语义仿真）
+    const warmPool = new WarmPool({ spawn: vi.fn().mockRejectedValue(new Error('spawn ENOENT')) });
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-1',
+      workspaceId: 'ws1',
+      config: {} as never,
+      warmPool,
+    });
+    const { agentRunners } = await import('../../src/main/agent/runtime-registry');
+    agentRunners.set('inst1', runner);
+
+    // 真前置：翻回前确为 failed（sweep 收尾形态）
+    expect(getMessageByStreamSessionId('ss-c1')!.status).toBe('failed');
+
+    // IPC 调用方收到错误（不吞）
+    await expect(resumeTask('T-C1')).rejects.toThrow(/spawn ENOENT/);
+
+    // 车道补偿清空——否则 isLaneOccupied 恒真，会话死锁至重启
+    expect(getLane('sess-task1')).toBeNull();
+
+    // 消息行回滚：翻回 streaming 的行退回 failed，不滞留幽灵 streaming 行
+    const msg = getMessageByStreamSessionId('ss-c1')!;
+    expect(msg.status).toBe('failed');
+    // final 事件落库（renderer 聚合状态与消息行同步翻回 failed）
+    const final = listEventsByMessage(msg.id).find((e) => e.eventType === 'final');
+    expect(final).toBeDefined();
+    expect((final?.payload as Record<string, unknown>).status).toBe('failed');
   });
 
   it('重建段含已落库事件：tool_call_start/result 对 + 后续 text → LLMMessage 重建', async () => {

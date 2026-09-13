@@ -92,15 +92,44 @@ export interface BgHandle {
 /** 同 PM 在途 bg 句柄上限（spec §4.2：在途数 ≥ 8 → 工具报错含清单；T4 executeDispatchBg 强制） */
 export const BG_HANDLE_LIMIT = 8;
 
+/**
+ * settled（done/cancelled）句柄保留上限（审查 C2）。设计意图上句柄 settle 后
+ * 保留在表内「可再 gather」（幂等收割）；但长会话反复 dispatch_bg 会让 settled
+ * 句柄（含 body）无界累积、内存单调涨——超限时按 Map 插入序驱逐最旧 settled，
+ * in-flight 永不驱逐（在途上限 BG_HANDLE_LIMIT=8 语义不变）。被驱逐的旧句柄
+ * 再 gather / status → not_found（与 runtime 重启后句柄不跨重启的既有语义一致）。
+ */
+export const BG_SETTLED_CAP = 32;
+
 /** bg 句柄表：taskId → 句柄。生产写入口是 T4 executeDispatchBg（注册 in_flight）与 dispatch_cancel（标 cancelled） */
 const bgHandles = new Map<string, BgHandle>();
 
 /** gather 等待者：taskId → 等待翻转的回调集合（spec §4.2 实现裁定——独立于 pendingReplies 键空间，taskId 语义已被 bgHandles 占有） */
 const gatherWaiters = new Map<string, Set<(h: BgHandle) => void>>();
 
-/** 查询某后台任务的句柄（T4 dispatch_status / dispatch_gather / UI 消费；幂等读不删句柄） */
+/** 查询某后台任务的句柄（dispatch_status / dispatch_gather / UI 消费；幂等读不删句柄——settled 超过 BG_SETTLED_CAP 被驱逐后返回 undefined） */
 export function getBgHandle(taskId: string): BgHandle | undefined {
   return bgHandles.get(taskId);
+}
+
+/**
+ * settled 句柄驱逐（审查 C2）：settled 数超 BG_SETTLED_CAP 时按 Map 插入序删
+ * 最旧 settled。每次 settle 至多让超限 +1，故每次只删一个即可维持不变量；
+ * in_flight 条目跳过（在途语义不受影响）。全部 settle 写入口（handleTaskReply
+ * 翻 done / executeCancel 标 cancelled / 测试种子注入）统一调用。
+ */
+function enforceSettledCap(): void {
+  let settledCount = 0;
+  for (const h of bgHandles.values()) {
+    if (h.status !== 'in_flight') settledCount++;
+  }
+  if (settledCount <= BG_SETTLED_CAP) return;
+  for (const [taskId, h] of bgHandles) {
+    if (h.status !== 'in_flight') {
+      bgHandles.delete(taskId);
+      return;
+    }
+  }
 }
 
 /** 列出全部 in_flight 后台句柄（T4 上限报错清单 + UI 消费） */
@@ -147,6 +176,8 @@ function wakeGatherWaiters(taskId: string, handle: BgHandle): void {
 /** 测试用：注入一个 bg 句柄（形态由调用方完全控制） */
 export function __seedBgHandleForTest(taskId: string, handle: BgHandle): void {
   bgHandles.set(taskId, handle);
+  // 种子直接注入 settled 态也要维持上限不变量（与生产 settle 路径同一约束）
+  enforceSettledCap();
 }
 
 /** 测试用：清空句柄表 + waiter 表（用例隔离） */
@@ -591,6 +622,8 @@ export function handleTaskReply(content: Record<string, unknown>): void {
         bg.toolCallsUsed = reply.tool_calls_used ?? 0;
         bg.completedAt = Date.now();
         wakeGatherWaiters(reply.task_id, bg);
+        // settled 超限驱逐（审查 C2）——唤醒后再驱逐：waiter 已拿到句柄快照/引用
+        enforceSettledCap();
       }
       // 非 in_flight（cancelled / done）→ cancel 后或已收割后的迟到 reply：保留既有终态、忽略 body（幂等）
       return;
@@ -742,12 +775,13 @@ export async function executeGather(
 
   // 同步首扫（与下方 waiter 注册同批同步执行——无窗口让 reply 插队）：
   // 输入去重保序；终态立即收（快照复制）；not_found 进 notes
+  // C4：读路径统一经 getBgHandle——与导出注释言实相符
   const seen = new Set<string>();
   const inFlightIds: string[] = [];
   for (const id of handles) {
     if (seen.has(id)) continue;
     seen.add(id);
-    const h = bgHandles.get(id);
+    const h = getBgHandle(id);
     if (!h) {
       notes.push(`句柄 ${id} 不存在（未派发或 runtime 已重启）`);
       continue;
@@ -768,9 +802,11 @@ export async function executeGather(
     let finished = false;
     let settledCount = 0;
     const cleanups: Array<() => void> = [];
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    // 计时器先于 teardown 声明（teardown 需引用它清理）；回调闭包内才解引用
+    // finish——计时器最早 1s 后触发，届时 finish 必已初始化（waiter 注册同步完成）
+    const timer = setTimeout((): void => finish(), clampedMs);
     const teardown = (): void => {
-      if (timer !== undefined) clearTimeout(timer);
+      clearTimeout(timer);
       for (const c of cleanups) c();
     };
     // 中断立即 reject（err.name = 'AbortError'——照 executeDispatch/executeFollowup
@@ -792,7 +828,7 @@ export async function executeGather(
       // 仍在途的句柄进 pending（超时非错误——句柄保留可再 gather）
       const pending: string[] = [];
       for (const id of inFlightIds) {
-        const h = bgHandles.get(id);
+        const h = getBgHandle(id);
         if (h && h.status === 'in_flight') pending.push(id);
       }
       resolve({ done, pending, notes });
@@ -807,7 +843,6 @@ export async function executeGather(
         }),
       );
     }
-    timer = setTimeout(() => finish(), clampedMs);
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
@@ -825,7 +860,8 @@ export interface BgStatusResult {
 
 /** 查询单个后台句柄状态（dispatch_status）：not_found → 恰好 { status: 'not_found' } */
 export function executeStatus(handle: string): BgStatusResult {
-  const h = bgHandles.get(handle);
+  // C4：读路径统一经 getBgHandle（幂等读不删句柄）——与导出注释言实相符
+  const h = getBgHandle(handle);
   if (!h) return { status: 'not_found' };
   if (h.status === 'in_flight') {
     return { status: 'in_flight', elapsedMs: Date.now() - h.startedAt };
@@ -859,5 +895,7 @@ export function executeCancel(
   h.status = 'cancelled';
   h.completedAt = Date.now();
   wakeGatherWaiters(handle, h);
+  // settled 超限驱逐（审查 C2）——cancel 即 settle，与 handleTaskReply 翻 done 同一不变量
+  enforceSettledCap();
   return { status: 'cancelled' };
 }

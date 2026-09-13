@@ -6,9 +6,9 @@
 //   - 直接 spawn git CLI，不引入 simple-git 之类的 wrapper（少一个依赖、少一层抽象）。
 //   - cwd 锁定 ctx.workspaceDir：spawn 传 cwd，git 只在 workspace 内操作。
 //   - GIT_TERMINAL_PROMPT=0：禁止 git 因缺凭证挂起等待用户输入（会卡住整个 agent）。
-//   - 拦截 -c key=val：args.filter 跳过以 `-c.` 开头的参数，防止 LLM 绕过身份追踪
-//     （`-c user.name=...` 可改提交者）。`-c.` 前缀只在 LLM 显式构造该精确字符串时
-//     命中，正常 `-c foo=bar` 不会被误伤。
+//   - 拦截 `-c key=val` 绕过身份追踪：ref 型字段（show.commit / log.branch /
+//     branch.name / checkout.branch）经 assertGitRefArg 拒绝前导 `-`（审查 F2，
+//     兼防 `--output=` 选项注入任意写）；git_add paths 以 `--` 选项分隔。
 //   - 10s 默认超时：到点 SIGKILL（不可捕获、立即生效），防止恶意构造的死循环
 //     （如巨大的 git log）。
 //   - maxOutput 上限：spawn 后按字节累计 stdout / stderr，超 maxOutput 直接丢弃，
@@ -78,12 +78,13 @@ export async function runGit(
   maxOutput: number = OUTPUT_LIMITS.git_status,
   repoPath?: string,
 ): Promise<GitResult> {
-  // 过滤 `-c.` 前缀参数：防止 LLM 通过 `-c user.name=xxx` 绕过身份追踪。
-  // 前缀故意用 `-c.`（点号）而非 `-c `，匹配 LLM 显式构造的 `git -c.key=val`，
-  // 不会误伤正常的 `-c key=val`（带空格）。
-  const safeArgs = args.filter((a) => !a.startsWith('-c.'));
-  // repoPath 由本模块 resolveRepoPath 产出（绝不可能是 '-c.' 开头），在过滤后前置。
-  const finalArgs = repoPath === undefined ? safeArgs : ['-C', repoPath, ...safeArgs];
+  // 选项注入防线说明（审查 F2）：本模块以分离 argv spawn（无 shell），注入面不是
+  // shell 元字符，而是「LLM 控制的字段以 - 开头被 git 当作选项解析」。真实防线在
+  // 各字段的 assertGitRefArg（拒绝前导 `-`——`-c key=val` 身份追踪绕过同被覆盖）
+  // 与 executeAdd 的 `--` 选项分隔。历史上的 `-c.` 前缀过滤对分离 argv 是死代码
+  // （只能命中 `-c.x=y` 连写形态，而该形态本身是非法 config key、git 自拒），
+  // 且会静默改写 argv 形状，已移除。
+  const finalArgs = repoPath === undefined ? args : ['-C', repoPath, ...args];
   return new Promise((resolve) => {
     const child = spawn('git', finalArgs, {
       cwd: ctx.workspaceDir,
@@ -167,6 +168,26 @@ const REPO_PARAM: { type: 'string'; description: string } = {
 
 /** 9 工具描述统一追加的多仓提示尾句（spec §3.4）。*/
 const REPO_HINT = '多仓 workspace 中可用 repo 参数指定内层仓（先 git_repos 查询可用仓）';
+
+/**
+ * LLM 控制的 ref 型字段共享校验（审查 F2——选项注入防线）。
+ *
+ * 威胁模型：git 子进程无 OS 沙箱，字段以 `-` 开头会被 git 按选项解析——
+ * `git_show {commit:'--output=~/.bashrc'}` 即可把 diff 全文写到任意路径
+ * （--output 是 git show/diff/log 共有选项）；`-c key=val` 可绕过提交身份
+ * 追踪。防线：拒绝前导 `-` + 字符集形态校验（git check-ref-format 的实用
+ * 子集：字母数字与 `_./:^~@+-`，`-` 仅允许非首位）。空串/含空格、控制
+ * 字符、shell 元字符形态一并拒绝。
+ */
+function assertGitRefArg(field: string, value: string): string {
+  if (value.startsWith('-')) {
+    throw new Error(`参数 "${field}" 不接受以 "-" 开头的值（疑似 git 选项注入）: ${value}`);
+  }
+  if (!/^[A-Za-z0-9_./:^~@+\-]+$/.test(value)) {
+    throw new Error(`参数 "${field}" 含 ref 不允许的字符（仅字母数字与 _ . / : ^ ~ @ + -）: ${value}`);
+  }
+  return value;
+}
 
 /**
  * GitTools —— git 工具模块。v1.5 Task 9 引入。
@@ -398,7 +419,7 @@ async function executeLog(args: Record<string, unknown>, ctx: ToolContext): Prom
   const repoPath = resolveRepoArg(args, ctx);
   const limit = typeof args.limit === 'number' ? Math.min(100, Math.max(1, args.limit)) : 20;
   const gitArgs = ['log', '--oneline', '-n', String(limit)];
-  if (typeof args.branch === 'string') gitArgs.push(args.branch);
+  if (typeof args.branch === 'string') gitArgs.push(assertGitRefArg('branch', args.branch));
   const result = await runGit(gitArgs, ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git log 失败: ${result.stderr}`);
   return truncateString(result.stdout, OUTPUT_LIMITS.git_status);
@@ -407,7 +428,7 @@ async function executeLog(args: Record<string, unknown>, ctx: ToolContext): Prom
 /** git_show：默认 HEAD；stat=true 加 --stat；maxOutput 用更大的 git_show_diff。*/
 async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
   const repoPath = resolveRepoArg(args, ctx);
-  const commit = typeof args.commit === 'string' ? args.commit : 'HEAD';
+  const commit = typeof args.commit === 'string' ? assertGitRefArg('commit', args.commit) : 'HEAD';
   const gitArgs = ['show', commit];
   if (args.stat === true) gitArgs.push('--stat');
   const result = await runGit(gitArgs, ctx, OUTPUT_LIMITS.git_show_diff, repoPath);
@@ -415,7 +436,8 @@ async function executeShow(args: Record<string, unknown>, ctx: ToolContext): Pro
   return truncateString(result.stdout, OUTPUT_LIMITS.git_show_diff);
 }
 
-/** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。*/
+/** git_add：paths 数组逐个走 wsFs.assertInWorkspace 后再交给 git add。
+ * `--` 选项分隔（审查 F2）：paths 元素以 `-` 开头时若不分隔会被 git 按选项解析。*/
 async function executeAdd(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
   const repoPath = resolveRepoArg(args, ctx);
   if (!Array.isArray(args.paths)) throw new Error('参数 "paths" 缺失或不是数组');
@@ -427,7 +449,7 @@ async function executeAdd(args: Record<string, unknown>, ctx: ToolContext): Prom
     ctx.wsFs.assertInWorkspace(p);
     return p;
   });
-  const result = await runGit(['add', ...paths], ctx, undefined, repoPath);
+  const result = await runGit(['add', '--', ...paths], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git add 失败: ${result.stderr}`);
   return `已暂存 ${paths.length} 个文件`;
 }
@@ -441,7 +463,7 @@ async function executeBranch(args: Record<string, unknown>, ctx: ToolContext): P
     if (result.code !== 0) throw new Error(`git branch 失败: ${result.stderr}`);
     return result.stdout;
   }
-  const name = parseStringArg(args.name, 'name');
+  const name = assertGitRefArg('name', parseStringArg(args.name, 'name'));
   const result = await runGit(['branch', name], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git branch 创建失败: ${result.stderr}`);
   return `分支已创建: ${name}`;
@@ -450,7 +472,7 @@ async function executeBranch(args: Record<string, unknown>, ctx: ToolContext): P
 /** git_checkout：仅切分支（不接受 path/commit，防丢工作区修改与 detached HEAD）。*/
 async function executeCheckout(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
   const repoPath = resolveRepoArg(args, ctx);
-  const branch = parseStringArg(args.branch, 'branch');
+  const branch = assertGitRefArg('branch', parseStringArg(args.branch, 'branch'));
   const result = await runGit(['checkout', branch], ctx, undefined, repoPath);
   if (result.code !== 0) throw new Error(`git checkout 失败: ${result.stderr}`);
   return `已切换到分支: ${branch}`;
