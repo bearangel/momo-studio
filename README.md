@@ -83,7 +83,7 @@ bash 工具接入 OS 级隔离——工具防御第二期，清偿 v2.1 安全�
 - **三平台沙箱路径（新增）** — macOS Seatbelt（`sandbox-exec` + SBPL profile：全盘只读 + 敏感目录 deny + workspace/tmp 写白名单 + 网络开关）/ Linux bubblewrap（`bwrap`：`--ro-bind` 全盘只读 + 敏感目录 tmpfs 遮盖 + workspace 与 /tmp 可写 bind + `--new-session` 防 TIOCSTI）/ Windows 无 OS 沙箱（PowerShell plain 路径 + `taskkill /T` 杀进程树 + remove-item 黑名单双向语序拦截）
 - **resolveShellSpawn 三态决策** — wrapped（沙箱包裹）/ plain（permissive 降级直跑，审计标记 `unsandboxed:*`）/ blocked（strict 且不可用时 spawn 前拒绝，错误含安装指引）；shell-tools 唯一接入点；npm/pip 缓存 env 重定向沙箱内 tmp（写剖面自洽）
 - **strict 默认 + permissive 逃生门** — 沙箱不可用时默认拒绝 bash 执行（推荐安全位）；设置可切 permissive 降级运行（无 OS 隔离，结果 sandbox 行明示）
-- **网络默认禁 + 设置开关** — 沙箱内 bash 默认无网络（bwrap `--unshare-net` / Seatbelt deny network*）；开关放开仅影响 bash，LLM API 调用不受影响
+- **网络默认禁 + 设置开关** — 沙箱内 bash 默认无网络（bwrap `--unshare-net` / Seatbelt deny network*）；开关放行为**全网络语义**（含本地端口监听/inbound/outbound——agent 起 dev server 需开启；macOS 主机实测仅 outbound 时 `listen EPERM`），仅影响 bash，LLM API 调用不受影响
 - **bash 结果 sandbox 行** — `exit_code:` 行后紧跟 `sandbox: <tag>`，LLM 与用户可感知单次执行是否落在 OS 沙箱内
 - **boot 探测 + IPC 4 通道** — 启动 fire-and-forget 探测（bwrap `--version` / sandbox-exec 最小 profile 冒烟 / pwsh + ExecutionPolicy），失败不影响启动；`sandbox:getState` / `reprobe` / `installBwrap` / `dismissPrompt`
 - **设置「安全沙箱」分类 + 首启提示卡** — 模式单选 / 网络开关 / 探测状态只读区 + 重新探测；Linux 缺 bwrap 右下角非模态引导卡（复制命令 / pkexec 一键安装 / 装后自动重探测），Windows ExecutionPolicy=Restricted 授权指引卡

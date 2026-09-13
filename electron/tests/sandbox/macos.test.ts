@@ -40,9 +40,14 @@ describe('renderSeatbeltProfile', () => {
     expect(p).toContain('(subpath "/Users/dev/.gnupg")');
   });
 
-  it('网络关 → 无 network-outbound；开 → allow', () => {
-    expect(renderSeatbeltProfile(mkPolicy({ networkEnabled: false }))).not.toContain('network-outbound');
-    expect(renderSeatbeltProfile(mkPolicy({ networkEnabled: true }))).toContain('(allow network-outbound)');
+  it('网络关 → 无 network 放行；开 → allow network*（含 bind/inbound——dev server 监听场景）', () => {
+    expect(renderSeatbeltProfile(mkPolicy({ networkEnabled: false }))).not.toContain('network');
+    expect(renderSeatbeltProfile(mkPolicy({ networkEnabled: true }))).toContain('(allow network*)');
+  });
+
+  it('/dev/null 写入常态放行（shell 重定向惯用法 2>/dev/null）', () => {
+    const profile = renderSeatbeltProfile(mkPolicy({ networkEnabled: false }));
+    expect(profile).toContain('(allow file-write* (literal "/dev/null"))');
   });
 
   it('路径含空格/引号转义', () => {
@@ -65,6 +70,7 @@ describe('renderSeatbeltProfile', () => {
       (allow file-read* (subpath "/"))
       (deny file-read* (subpath "/Users/dev/.ssh"))
       (allow file-write* (subpath "/Users/dev/snapshot-ws") (subpath "/private/var/folders/xx/T") (subpath "/private/tmp"))
+      (allow file-write* (literal "/dev/null"))
       (allow process-exec process-fork)
       (allow signal (target self))
       (allow file-ioctl sysctl-read mach-lookup)
