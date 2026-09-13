@@ -19,6 +19,17 @@ function cacheEnvAdditions(tmpDir: string): Record<string, string> {
   };
 }
 
+/**
+ * blocked 文案的平台安装指引（darwin 为系统内置 Seatbelt，指引是排查方向而非
+ * 安装命令——主机验收修复：macOS 曾被展示 apt/bubblewrap 指引）。纯函数供单测锁分支。
+ */
+export function sandboxInstallHint(platform: NodeJS.Platform): string {
+  if (platform === 'darwin') {
+    return 'macOS 沙箱（Seatbelt/sandbox-exec）为系统内置，无需安装；若探测失败请检查系统完整性保护（SIP）与 sandbox-exec 可用性；也可在 设置→安全沙箱 切换 permissive 模式（无 OS 隔离，不推荐）';
+  }
+  return 'Linux 安装：sudo apt install bubblewrap（或对应发行版包管理器）；也可在 设置→安全沙箱 切换 permissive 模式（无 OS 隔离，不推荐）';
+}
+
 export function resolveShellSpawn(workspaceDir: string, command: string): SpawnPlan {
   const settings = getSandboxSettings();
   const policy = buildPolicy(workspaceDir, settings.networkEnabled);
@@ -51,7 +62,7 @@ export function resolveShellSpawn(workspaceDir: string, command: string): SpawnP
   if (settings.mode === 'strict') {
     return {
       kind: 'blocked',
-      reason: `OS 沙箱不可用（${reason}）。Linux 安装：sudo apt install bubblewrap（或对应发行版包管理器）；也可在 设置→安全沙箱 切换 permissive 模式（无 OS 隔离，不推荐）`,
+      reason: `OS 沙箱不可用（${reason}）。${sandboxInstallHint(process.platform)}`,
     };
   }
   return { kind: 'plain', shell: '/bin/bash', args: ['-c', command], tag: `unsandboxed:${reason}` };

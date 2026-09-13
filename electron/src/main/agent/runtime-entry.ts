@@ -63,6 +63,7 @@ import { getTodosForSession } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
 import { getDb } from '../storage/db';
 import { setJournalStore } from '../journal/recorder';
+import { reprobeSandbox } from '../sandbox/probe';
 import { createJournalStore } from '../journal/store';
 
 /**
@@ -1307,11 +1308,33 @@ function sendTaskEndAndExit(msg: Record<string, unknown>, exitCode: number): voi
   });
 }
 
+/**
+ * 子进程侧沙箱探测（单飞）：主进程 boot 的 reprobeSandbox 与本进程的模块级
+ * 单例不在同一地址空间，而 bash 工具的 resolveShellSpawn 在本进程消费
+ * getSandboxState()——不本地探测则恒 null，strict 模式误拦「沙箱未探测」
+ * （macOS 主机验收实测暴露；探测失败仅影响 bash 可用性，与主进程降级语义一致）。
+ */
+let sandboxProbePromise: Promise<void> | null = null;
+function ensureSandboxProbed(): Promise<void> {
+  sandboxProbePromise ??= reprobeSandbox()
+    .then(() => undefined)
+    .catch((err: unknown) => {
+      process.stderr.write(`OS 沙箱探测失败（仅影响 bash 可用性）: ${(err as Error).message}\n`);
+    });
+  return sandboxProbePromise;
+}
+
+/** 测试钩子：重置探测单飞（__setSandboxStateForTest 配套——同进程多用例各自从零起） */
+export function __resetSandboxProbeForTest(): void {
+  sandboxProbePromise = null;
+}
+
 export async function runTaskChatLoop(
   cfg: TaskConfig,
   config: RuntimeConfig,
   ctx: RuntimeContext,
 ): Promise<void> {
+  await ensureSandboxProbed();
   const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：

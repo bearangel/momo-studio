@@ -1,7 +1,7 @@
 // electron/tests/sandbox/resolve-spawn.test.ts
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resolveShellSpawn } from '../../src/main/sandbox';
+import { resolveShellSpawn, sandboxInstallHint } from '../../src/main/sandbox';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 
@@ -93,6 +93,37 @@ describe('resolveShellSpawn', () => {
       expect(fs.existsSync(profile)).toBe(true);
       expect(plan.cleanupFiles).toEqual([profile]);
       fs.rmSync(profile, { force: true });
+    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+  });
+});
+
+describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 修复）', () => {
+  it('darwin → 系统内置指引，不含 Linux 安装命令', () => {
+    const hint = sandboxInstallHint('darwin');
+    expect(hint).toContain('内置');
+    expect(hint).toContain('permissive'); // 逃生门两平台共有
+    expect(hint).not.toContain('apt install');
+    expect(hint).not.toContain('bubblewrap');
+  });
+
+  it('linux → bwrap 安装指引保持原样（既有断言的文案基线）', () => {
+    const hint = sandboxInstallHint('linux');
+    expect(hint).toContain('bubblewrap');
+    expect(hint).toContain('permissive');
+  });
+
+  it('darwin（platform mock）+ 未探测 + strict → blocked 文案走 darwin 分支', () => {
+    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      __setSandboxStateForTest(null);
+      __setSandboxSettingsForTest({ mode: 'strict', networkEnabled: false });
+      const plan = resolveShellSpawn(tmp, 'echo hi');
+      expect(plan.kind).toBe('blocked');
+      if (plan.kind !== 'blocked') return;
+      expect(plan.reason).toContain('沙箱未探测');
+      expect(plan.reason).toContain('内置');
+      expect(plan.reason).not.toContain('apt install');
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });
