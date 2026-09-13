@@ -88,6 +88,7 @@ function mkState(overrides?: Partial<BrowserState>): BrowserState {
     title: 'Example',
     takeover: 'agent',
     trusted: true,
+    collapsed: false,
     ...overrides,
   };
 }
@@ -304,6 +305,19 @@ describe('BrowserSidebar·折叠初始态跨重启（v2.7 Task 9）', () => {
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     // 初始折叠不重放 setSidebarCollapsed（落库值本就如此，无变更可写）
     expect(setSidebarCollapsedMock).not.toHaveBeenCalled();
+  });
+
+  it('折叠态收到 collapsed=false 推送（agent 折叠期间打开网站）→ UI 自动展开整个浏览器（真机 2026-09-13：内容浮出而 chrome 收起）', async () => {
+    const { push } = armOnBrowserState();
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: true }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByRole('button', { name: '展开浏览器侧栏' });
+
+    push(mkState({ url: 'https://agent-opened.com/', title: 'Agent 打开', collapsed: false }));
+    // 整个浏览器展开：地址栏 + 占位区回归，竖条展开钮消失
+    expect(await screen.findByRole('textbox')).toHaveValue('https://agent-opened.com/');
+    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '展开浏览器侧栏' })).not.toBeInTheDocument();
   });
 
   it('sidebarCollapsed=false（默认）→ 初始展开，chrome 照常渲染', async () => {

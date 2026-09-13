@@ -32,17 +32,23 @@ export function BrowserSidebar({ workspaceId }: Props) {
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
   const collapsedUserTouchedRef = useRef(false);
+  // main 已宣告不折叠（活跃推送 collapsed=false）：此后晚到的落库折叠值同样不覆盖
+  // ——否则推送先到、getSettings 后到会把已展开的浏览器又压回竖条
+  const mainExpandedRef = useRef(false);
 
   // 折叠初始态跨重启闭环（T9）：挂载 / 切 ws 读 getSettings，collapsed 落库值
   // 即初始态。width 暂不接——侧栏宽度当前是静态 w-[380px]（接入需先把静态宽
   // 改为受控值，留待后续）；读取失败保持默认展开（体验性增强不阻塞骨架）。
   useEffect(() => {
     collapsedUserTouchedRef.current = false;
+    mainExpandedRef.current = false;
     let cancelled = false;
     ipc.browser
       .getSettings(workspaceId)
       .then((s) => {
-        if (!cancelled && !collapsedUserTouchedRef.current) setCollapsed(s.sidebarCollapsed);
+        if (!cancelled && !collapsedUserTouchedRef.current && !mainExpandedRef.current) {
+          setCollapsed(s.sidebarCollapsed);
+        }
       })
       .catch(() => {
         // 静默：默认展开兜底，后续用户操作照常走 toggleCollapsed
@@ -56,10 +62,11 @@ export function BrowserSidebar({ workspaceId }: Props) {
   //（boot 早期 / ws 未激活时 getState 可能拒绝，占位区与地址栏仍可用）。
   useEffect(() => {
     let cancelled = false;
-    ipc.browser
+        ipc.browser
       .getState(workspaceId)
       .then((s) => {
-        if (!cancelled) setState(s);
+        if (cancelled) return;
+        setState(s);
       })
       .catch(() => {
         // 静默：空态引导文案在位，后续 onBrowserState 推送自会填充
@@ -75,6 +82,11 @@ export function BrowserSidebar({ workspaceId }: Props) {
     const unsubscribe = ipc.browser.onBrowserState((next) => {
       if (next.workspaceId !== workspaceId) return;
       setState(next);
+      // agent 折叠期间打开网站：main 已复活视图（collapsed=false），UI 同步展开整个浏览器
+      if (!next.collapsed) {
+        mainExpandedRef.current = true;
+        setCollapsed(false);
+      }
     });
     return unsubscribe;
   }, [workspaceId]);

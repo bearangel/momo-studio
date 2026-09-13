@@ -22,6 +22,8 @@ export interface BrowserState {
   takeover: 'agent' | 'user';
   /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
   trusted: boolean;
+  /** 侧栏折叠态（真相源=main）：agent 折叠期间活动 → ensureLive 复活视图即置 false，renderer 据此自动展开整个浏览器 UI */
+  collapsed: boolean;
 }
 
 /** workspace 级浏览器设置（migration v32 落 workspace_settings 的策略四列） */

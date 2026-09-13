@@ -11,7 +11,7 @@
 // 真 BrowserPolicy（readSettings 接真 store.read——T10 boot 同款组合）+ 真 BrowserManager。
 //
 // 断言清单（brief Step 1 + T6 review 硬性项）：
-//   12 通道注册齐全 / browser:state 七字段载荷锁（含 trusted=ask 未授 false）/
+//   12 通道注册齐全 / browser:state 八字段载荷锁（含 trusted=ask 未授 false）/
 //   browser:notice {kind,text} 载荷锁（崩溃自愈真实链路）/ getState 空壳与活跃态 /
 //   userNavigate 隐式接管 + 非法 URL 不产生接管副作用 / takeover/release /
 //   tabs 三通道 / setSidebarBounds rect 透传 / setSidebarCollapsed 视图销毁+落库 /
@@ -230,6 +230,7 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
+      collapsed: false,
     };
     hooks.pushState(state);
     hooks.pushNotice('trust-request', 'agent 请求使用浏览器', 'ws-1');
@@ -243,7 +244,7 @@ describe('browser:state / browser:notice 统一推送', () => {
     });
   });
 
-  it('workspace 激活经真实 manager 链路推出 browser:state——七字段载荷锁（ask 未授 → trusted=false）', () => {
+  it('workspace 激活经真实 manager 链路推出 browser:state——八字段载荷锁（ask 未授 → trusted=false；collapsed=侧栏折叠态）', () => {
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();
     // toEqual 全量比对 = 字段集锁死（多字段/少字段/改名即刻红，momo-boundary-rules）
@@ -255,6 +256,7 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
+      collapsed: false,
     });
   });
 
@@ -288,6 +290,7 @@ describe('browser:getState', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
+      collapsed: false,
     });
   });
 

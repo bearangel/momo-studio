@@ -1080,6 +1080,8 @@ export interface BrowserState {
   takeover: 'agent' | 'user';
   /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
   trusted: boolean;
+  /** 侧栏折叠态（真相源=main）：agent 折叠期间活动 → ensureLive 复活视图即置 false，UI 据此自动展开 */
+  collapsed: boolean;
 }
 
 /** sidebar 占位区 rect（browser:setSidebarBounds 载荷，与 Electron setBounds 四字段同构；DPR 换算在 main） */

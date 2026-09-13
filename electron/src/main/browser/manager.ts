@@ -226,6 +226,7 @@ export class BrowserManager {
         current: 0,
         url: '',
         title: '',
+        collapsed: false,
         takeover: 'agent',
         trusted: this.isTrusted(wsId),
       };
@@ -580,6 +581,7 @@ export class BrowserManager {
       title: cur?.title ?? '',
       takeover: ws.takeover,
       trusted: this.isTrusted(ws.workspaceId),
+      collapsed: ws.collapsed,
     };
   }
 
@@ -602,11 +604,14 @@ export class BrowserManager {
     this.hooks.pushState(this.buildState(ws));
   }
 
-  /** 折叠期间发生浏览器活动 → 按折叠前清单恢复视图（折叠不丢 tab——T8 展开无需重建） */
+  /** 折叠期间发生浏览器活动 → 按折叠前清单恢复视图（折叠不丢 tab——T8 展开无需重建）。
+   * 同时清 collapsed 标志：视图既已复活，语义上侧栏不再折叠——renderer 依赖
+   * buildState 推送的 collapsed=false 同步展开整个浏览器 UI（而非只浮出内容）。 */
   private ensureLive(ws: ActiveWorkspace): void {
     if (!ws.collapsed || !ws.collapseStash) return;
     const stash = ws.collapseStash;
     ws.collapseStash = null;
+    ws.collapsed = false;
     this.restoreTabs(ws, stash);
   }
 

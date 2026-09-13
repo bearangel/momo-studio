@@ -790,7 +790,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
   });
 
   it('setSidebarCollapsed(true) 销毁视图；折叠期间活动先恢复旧清单再作用（不丢 tab）；false 维持已恢复', async () => {
-    const { manager, factory } = mkManager();
+    const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
@@ -800,6 +800,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     expect(factory.destroy).toHaveBeenCalledTimes(2);
     expect(factory.destroyed.has(v0.view)).toBe(true);
     expect(factory.destroyed.has(v1.view)).toBe(true);
+    expect(manager.getState('ws1').collapsed).toBe(true);
     // 折叠期间 agent navigate → 先按折叠前清单恢复（2 个 view），再载入目标到 current
     const before = factory.create.mock.calls.length;
     await manager.navigate('ws1', 'http://localhost:8080/');
@@ -807,6 +808,9 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const st = manager.getState('ws1');
     expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:8080/']);
     expect(st.current).toBe(1);
+    // 视图复活即语义上不再折叠——renderer 依赖此字段自动展开整个浏览器 UI
+    expect(st.collapsed).toBe(false);
+    expect(lastState(pushState)?.collapsed).toBe(false);
     // 展开不再重复重建（视图已存在）
     const beforeExpand = factory.create.mock.calls.length;
     manager.setSidebarCollapsed('ws1', false);
