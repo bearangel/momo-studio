@@ -33,6 +33,8 @@ const mockApi = {
 
 beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
+  // 持久化用例先例（theme.store）：每个用例前清空 localStorage，隔离持久键
+  localStorage.clear();
   // 重置 store 状态，保证测试间隔离
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, error: null });
   mockApi.workspace.list.mockResolvedValue([MOCK_WS]);
@@ -177,5 +179,65 @@ describe('workspace.store 激活切换通知（v2.7 T10 workspace:switch）', ()
     useWorkspaceStore.getState().select('ws-2');
 
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+  });
+});
+
+describe('workspace.store 上次活跃持久化（重启恢复回归锁）', () => {
+  it('load 恢复持久化的上次活跃 workspace（持久 id 命中列表）', async () => {
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+    localStorage.setItem('momo.activeWorkspace', 'ws-2');
+
+    await useWorkspaceStore.getState().load();
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+  });
+
+  it('load 持久 id 已被删（不在列表）时回退列表首项并更新持久键', async () => {
+    // 列表首项为 ws-2（main 侧 ORDER BY created_at DESC），持久 id 已失效
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS_2, MOCK_WS]);
+    localStorage.setItem('momo.activeWorkspace', 'ws-gone');
+
+    await useWorkspaceStore.getState().load();
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+  });
+
+  it('load 无持久值时激活列表首项并写入持久键', async () => {
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS, MOCK_WS_2]);
+
+    await useWorkspaceStore.getState().load();
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-1');
+  });
+
+  it('select 切换后写入持久键（下次启动恢复依据）', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().select('ws-2');
+
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+  });
+
+  it('create 新建即激活并写入持久键', async () => {
+    await useWorkspaceStore.getState().create({
+      name: '第二个工作区',
+      directoryPath: '/tmp/ws-2',
+    });
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+  });
+
+  it('remove 删除激活项后持久键随 load 回退结果更新', async () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+    localStorage.setItem('momo.activeWorkspace', 'ws-1');
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS_2]);
+
+    await useWorkspaceStore.getState().remove('ws-1');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
   });
 });

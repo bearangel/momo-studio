@@ -67,6 +67,8 @@ interface SessionState {
 
   /**
    * 拉取会话列表，默认激活第一个会话并加载其消息。
+   * workspaceId 缺省时回退到 currentWorkspaceId；两者皆无时不发 IPC
+   * （跨仓泄漏封堵——绝不走主进程全仓 listAllSessions）。
    * workspaceId 与当前不同时先重置状态（清空 sessions/messages/active session），
    * 保证切换工作空间后旧 workspace 的会话不会残留显示。
    */
@@ -136,10 +138,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   commandHint: null,
 
   loadSessions: async (workspaceId) => {
+    // 无参调用回退到当前 workspace（跨仓泄漏封堵）：主进程 session:list 无参
+    // 走 listAllSessions()（全部 workspace），最近活跃会话（通常=上次停留 ws）
+    // 会置顶覆盖正确范围化加载的结果——无任何 workspace 上下文时绝不拉取。
+    const wsId = workspaceId ?? get().currentWorkspaceId;
+    if (wsId == null) return;
     // 切换 workspace 时清空旧 workspace 的会话、消息、成员、激活会话
-    if (workspaceId && workspaceId !== get().currentWorkspaceId) {
+    if (wsId !== get().currentWorkspaceId) {
       set({
-        currentWorkspaceId: workspaceId,
+        currentWorkspaceId: wsId,
         sessions: [],
         activeSessionId: null,
         messagesBySession: new Map(),
@@ -149,7 +156,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     set({ loading: true, error: null });
     try {
-      const sessionList = await ipc.session.list(workspaceId);
+      const sessionList = await ipc.session.list(wsId);
       // 保留当前选中会话（若仍存在）；仅初次加载或选中会话消失才回退首条
       const cur = get().activeSessionId;
       const stillThere = cur != null && sessionList.some((s) => s.id === cur);

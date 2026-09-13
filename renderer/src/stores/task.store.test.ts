@@ -56,6 +56,7 @@ describe('task.store selectedTaskId（P2 Task 3）', () => {
       selectedTaskId: null,
       loading: false,
       error: null,
+      currentWorkspaceId: null,
     });
     mockApi.task.list.mockClear().mockResolvedValue([]);
   });
@@ -87,6 +88,7 @@ describe('task.store load（v2.3 全生命周期拉取）', () => {
       selectedTaskId: null,
       loading: false,
       error: null,
+      currentWorkspaceId: null,
     });
     mockApi.task.list.mockClear().mockResolvedValue([]);
   });
@@ -115,5 +117,48 @@ describe('task.store load（v2.3 全生命周期拉取）', () => {
     expect(useTaskStore.getState().error).toBe('IPC 异常');
     expect(useTaskStore.getState().loading).toBe(false);
     expect(useTaskStore.getState().tasks).toEqual([]);
+  });
+});
+
+// 看板 workspace 隔离回归锁（重启激活分歧缺陷4实例）：TaskBoardView 的 effect
+// 已按 workspaceId prop 重 load（列表响应式 ✓），但 selectedTaskId 残留旧 ws——
+// TaskDetailPanel 按 taskId 直查 ipc.task.get，旧 ws 任务详情会顶进新 ws 看板。
+// store 侧按 currentWorkspaceId 判变重置（对齐 session.store 先例），
+// 覆盖「切 ws 时看板未挂载 → 之后挂载 load(newWs)」的时序洞。
+describe('task.store — workspace 切换重置（看板隔离回归锁）', () => {
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({
+      tasks: [],
+      selectedTaskId: null,
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+    });
+    mockApi.task.list.mockClear().mockResolvedValue([]);
+  });
+
+  it('load 不同 workspace 时清空旧任务并重置 selectedTaskId', async () => {
+    const ws1Rows = [mkTask({ id: 'T-1', title: 'ws1 任务', status: 'in_progress' })];
+    mockApi.task.list.mockResolvedValue(ws1Rows);
+    await useTaskStore.getState().load('ws1');
+    useTaskStore.getState().setSelectedTaskId('T-1');
+
+    const ws2Rows = [mkTask({ id: 'T-9', title: 'ws2 任务', status: 'pending', workspaceId: 'ws2' })];
+    mockApi.task.list.mockResolvedValue(ws2Rows);
+    await useTaskStore.getState().load('ws2');
+
+    expect(useTaskStore.getState().selectedTaskId).toBeNull();
+    expect(useTaskStore.getState().tasks).toEqual(ws2Rows);
+  });
+
+  it('load 同一 workspace 重复调用保留 selectedTaskId（刷新不清选中）', async () => {
+    mockApi.task.list.mockResolvedValue([mkTask({ id: 'T-1', title: '任务', status: 'draft' })]);
+    await useTaskStore.getState().load('ws1');
+    useTaskStore.getState().setSelectedTaskId('T-1');
+
+    await useTaskStore.getState().load('ws1');
+
+    expect(useTaskStore.getState().selectedTaskId).toBe('T-1');
   });
 });

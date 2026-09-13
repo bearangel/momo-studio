@@ -44,6 +44,11 @@ const mockApi = {
   task: {
     list: vi.fn().mockResolvedValue([]),
   },
+  // 设置视图默认挂 ProviderSettings（mount 即调 provider.list）——
+  // 缺桩会以 unhandled rejection 污染测试运行（vitest 判 exit 1）
+  provider: {
+    list: vi.fn().mockResolvedValue([]),
+  },
   // v2.7 Task 8：MiddlePanel im 分支挂 BrowserSidebar——传递渲染需要 browser 面
   //（getState 空态 + 订阅 no-op + 挂载即调的占位区上报，保持既有断言不受扰；
   // Task 9 起挂载还读 getSettings 折叠初始态——默认展开不扰动布局断言）
@@ -167,9 +172,52 @@ describe('MainLayout', () => {
     expect(screen.getByText(/暂无房间|加载中/i)).toBeInTheDocument();
   });
 
-  it('挂载时触发 session.list 首屏拉取（无 im.startSync）', () => {
+  it('挂载时带 activeWorkspaceId 触发 session.list 首屏拉取（不跨仓）', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [STUB_WORKSPACE],
+      activeWorkspaceId: STUB_WORKSPACE.id,
+    });
     render(<MainLayout />);
-    expect(mockApi.session.list).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApi.session.list).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+  });
+
+  // 缺陷2回归锁（重启激活分歧）：冷启动无 activeWorkspaceId 时绝不无参拉会话——
+  // 无参会走主进程 listAllSessions()（全部 workspace），最近活跃会话置顶并覆盖
+  // RoomList 的正确范围化加载（React 子 effect 先于父执行，父的后落调用会赢）。
+  it('冷启动无 activeWorkspaceId 时不拉会话列表（跨仓泄漏封堵）', async () => {
+    render(<MainLayout />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApi.session.list).not.toHaveBeenCalled();
+  });
+
+  it('activeWorkspaceId 切换时带新 id 重新拉取会话列表', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [STUB_WORKSPACE, STUB_WORKSPACE_2],
+      activeWorkspaceId: STUB_WORKSPACE.id,
+    });
+    const { rerender } = render(<MainLayout />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApi.session.list).toHaveBeenCalledWith(STUB_WORKSPACE.id);
+
+    useWorkspaceStore.setState({ activeWorkspaceId: STUB_WORKSPACE_2.id });
+    rerender(<MainLayout />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApi.session.list).toHaveBeenLastCalledWith(STUB_WORKSPACE_2.id);
+  });
+
+  // MainLayout 自身的预载契约（锁定设计）：RoomList 未挂载（非 im 视图）时，
+  // MainLayout 必须独立完成范围化首屏拉取——无参调用被 store 守卫封死后，
+  // 不改造本组件的话非 im 视图冷启动将完全没有会话预载。
+  it('非 im 视图下挂载仍带 activeWorkspaceId 预载会话（RoomList 未挂载兜底）', async () => {
+    useUiStore.setState({ activeView: 'settings' });
+    useWorkspaceStore.setState({
+      workspaces: [STUB_WORKSPACE],
+      activeWorkspaceId: STUB_WORKSPACE.id,
+    });
+    render(<MainLayout />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockApi.session.list).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 
   // 邀请列表冷启动回归锁（fix #4，commit 3545e97）

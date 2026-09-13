@@ -3,14 +3,38 @@
 // v2.7 T10：激活变化（load 默认项 / create 新建 / select 用户切换）经
 // workspace:switch 通知 main（浏览器子系统视图生命周期收口）；通知失败静默——
 // 通知是异步旁路，不阻塞本地激活状态。
+// 重启恢复：上次活跃 id 持久化到 localStorage['momo.activeWorkspace']——
+// 激活的单一真相源在 renderer 侧收敛于此键 + activeWorkspaceId，load 优先恢复。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { Workspace, CreateWorkspaceInput } from '../ipc/types';
+
+/** 上次活跃 workspace 的持久化键 */
+const ACTIVE_WS_KEY = 'momo.activeWorkspace';
 
 /** 通知 main 激活切换（fire-and-forget；IPC 故障不影响本地状态） */
 function notifySwitch(id: string | null): void {
   if (!id) return;
   void ipc.workspace.switch(id).catch(() => {});
+}
+
+/** 读取持久化的上次活跃 id；读取失败（隐私模式等）按无持久值处理 */
+function readPersistedActive(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_WS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 持久化激活 id；写入失败静默——不影响内存中的激活状态 */
+function persistActive(id: string | null): void {
+  if (!id) return;
+  try {
+    localStorage.setItem(ACTIVE_WS_KEY, id);
+  } catch {
+    // localStorage 写入失败不影响激活语义（下次启动回退列表首项）
+  }
 }
 
 interface WorkspaceState {
@@ -45,9 +69,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const list = await ipc.workspace.list();
-      // 列表非空时默认激活第一个（noUncheckedIndexedAccess 下需非空断言）
-      const activeId = list.length > 0 ? list[0]!.id : null;
+      // 列表非空时恢复上次活跃 workspace；持久 id 已失效（被删）时回退列表首项
+      //（noUncheckedIndexedAccess 下需非空断言）
+      let activeId: string | null = null;
+      if (list.length > 0) {
+        const persisted = readPersistedActive();
+        activeId = list.some((w) => w.id === persisted) ? persisted : list[0]!.id;
+      }
       set({ workspaces: list, activeWorkspaceId: activeId, loading: false });
+      persistActive(activeId); // 回退/恢复结果落盘，保证持久键与激活一致
       notifySwitch(activeId); // 初始激活通知 main（boot 初始激活的 renderer 侧来源）
     } catch (err) {
       set({ loading: false, error: (err as Error).message });
@@ -61,11 +91,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       workspaces: [ws, ...state.workspaces],
       activeWorkspaceId: ws.id,
     }));
+    persistActive(ws.id); // 新建即激活——持久化供下次启动恢复
     notifySwitch(ws.id); // 新建即激活——通知 main 收口浏览器钩子
   },
 
   select: (id) => {
     set({ activeWorkspaceId: id });
+    persistActive(id); // 用户切换 tab——持久化供下次启动恢复
     notifySwitch(id); // 用户切换 tab——main 侧切走旧 ws / 激活新 ws
   },
 

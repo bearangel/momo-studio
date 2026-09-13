@@ -21,6 +21,8 @@ interface TaskState {
   /** 看板选中任务（P2 Task 3 从 TaskBoardView 本地 state 提升：侧边栏写、主区读） */
   selectedTaskId: string | null;
   setSelectedTaskId: (id: string | null) => void;
+  /** 当前 tasks 所属的 workspace ID；load 切换 workspace 时据此重置选中态与列表 */
+  currentWorkspaceId: string | null;
 
   load: (workspaceId: string) => Promise<void>;
   create: (input: Parameters<typeof ipc.task.create>[0]) => Promise<TaskRow>;
@@ -33,14 +35,20 @@ interface TaskState {
   reset: () => void;
 }
 
-export const useTaskStore = create<TaskState>((set) => ({
+export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   loading: false,
   error: null,
   selectedTaskId: null,
+  currentWorkspaceId: null,
   setSelectedTaskId: (id) => set({ selectedTaskId: id }),
 
   load: async (workspaceId) => {
+    // workspace 切换时重置选中态与列表（看板隔离）：TaskDetailPanel 按 taskId
+    // 直查 ipc.task.get，旧 ws 的选中残留会把旧任务详情顶进新 ws 看板
+    if (get().currentWorkspaceId !== workspaceId) {
+      set({ currentWorkspaceId: workspaceId, selectedTaskId: null, tasks: [] });
+    }
     set({ loading: true, error: null });
     try {
       // v2.3：全生命周期拉取（spec §8.1）——单用户桌面端任务量级下
@@ -68,5 +76,6 @@ export const useTaskStore = create<TaskState>((set) => ({
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
   },
 
-  reset: () => set({ tasks: [], loading: false, error: null, selectedTaskId: null }),
+  reset: () =>
+    set({ tasks: [], loading: false, error: null, selectedTaskId: null, currentWorkspaceId: null }),
 }));

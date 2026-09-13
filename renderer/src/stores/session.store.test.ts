@@ -124,14 +124,14 @@ beforeEach(() => {
 
 describe('session.store', () => {
   it('loadSessions populates sessions and activates the first session', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     expect(useSessionStore.getState().sessions).toHaveLength(2);
     expect(useSessionStore.getState().activeSessionId).toBe('sess-a1');
   });
 
   it('loadSessions with empty sessions leaves activeSessionId null', async () => {
     mockApi.session.list.mockResolvedValue([]);
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     expect(useSessionStore.getState().sessions).toHaveLength(0);
     expect(useSessionStore.getState().activeSessionId).toBeNull();
   });
@@ -242,19 +242,19 @@ describe('session.store', () => {
   });
 
   it('sendMessage calls ipc.session.send with the active session id', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     await useSessionStore.getState().sendMessage('hello');
     expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hello', undefined);
   });
 
   it('sendMessage 透传 mentionedInstanceIds（@ 目标 = 会话成员 instanceId，spec §5）', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     await useSessionStore.getState().sendMessage('hi @agent', ['inst-1', 'inst-2']);
     expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hi @agent', ['inst-1', 'inst-2']);
   });
 
   it('sendMessage 不插入本地乐观消息（无本地 echo 时消息列表不变）', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     await useSessionStore.getState().sendMessage('hello');
     const msgs = useSessionStore.getState().messagesBySession.get('sess-a1') ?? [];
     expect(msgs.some((m) => m.sender === '' || m.id.startsWith('local-'))).toBe(false);
@@ -266,7 +266,7 @@ describe('session.store', () => {
   });
 
   it('sendMessage 返回 session:send 的 readOnly 并置只读态（T9 契约，UI 禁用输入依据）', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     mockApi.session.send.mockResolvedValueOnce({ readOnly: true });
 
     const result = await useSessionStore.getState().sendMessage('hello');
@@ -275,12 +275,57 @@ describe('session.store', () => {
   });
 
   it('sendMessage readOnly=false 时清除只读态（前次误置可恢复）', async () => {
-    await useSessionStore.getState().loadSessions();
+    await useSessionStore.getState().loadSessions('ws-a');
     useSessionStore.setState({ activeSessionReadOnly: true });
 
     const result = await useSessionStore.getState().sendMessage('hello');
     expect(result).toEqual({ readOnly: false });
     expect(useSessionStore.getState().activeSessionReadOnly).toBe(false);
+  });
+});
+
+// 跨仓泄漏封堵（重启激活分歧 bug 缺陷3）：loadSessions 无参时必须回退到
+// currentWorkspaceId，无任何 workspace 上下文时绝不发跨仓 IPC——
+// 主进程 session-ops 无参走 listAllSessions()（全 workspace），会置顶
+// 最近活跃会话（通常=上次停留 ws）并覆盖正确范围化加载的结果。
+describe('session.store — 无参 loadSessions 工作空间守卫（跨仓泄漏封堵）', () => {
+  it('无参调用且已有 currentWorkspaceId 时按 current 拉取（不跨仓）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.list.mockClear();
+
+    await useSessionStore.getState().loadSessions();
+
+    expect(mockApi.session.list).toHaveBeenCalledWith('ws-a');
+  });
+
+  it('无参调用且无 currentWorkspaceId 时不发 IPC（冷启动无 workspace 绝不跨仓拉取）', async () => {
+    await useSessionStore.getState().loadSessions();
+
+    expect(mockApi.session.list).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().loading).toBe(false);
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+  });
+
+  it('refreshSessionList 无参时同样按 currentWorkspaceId 拉取', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    mockApi.session.list.mockClear();
+
+    useSessionStore.getState().refreshSessionList();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockApi.session.list).toHaveBeenCalledWith('ws-a');
+  });
+
+  it('显式传参切换 workspace 时仍重置旧会话状态（既有语义回归）', async () => {
+    await useSessionStore.getState().loadSessions('ws-a');
+    useSessionStore.setState({ activeSessionId: 'sess-a1' });
+    mockApi.session.list.mockResolvedValue(MOCK_SESSIONS_B);
+
+    await useSessionStore.getState().loadSessions('ws-b');
+
+    expect(useSessionStore.getState().currentWorkspaceId).toBe('ws-b');
+    expect(useSessionStore.getState().sessions).toEqual(MOCK_SESSIONS_B);
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-b1');
   });
 });
 

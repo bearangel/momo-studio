@@ -61,7 +61,8 @@ export function RoomList() {
   };
 
   useEffect(() => {
-    // 切换 workspace 时按当前 workspace 过滤会话；首次加载若 workspace 尚未就绪则拉全部
+    // 切换 workspace 时按当前 workspace 过滤会话；workspace 尚未就绪时
+    // store 守卫拦截无参拉取（绝不跨仓——主进程无参走 listAllSessions 全仓）
     void loadSessions(activeWorkspaceId ?? undefined);
   }, [loadSessions, activeWorkspaceId]);
 

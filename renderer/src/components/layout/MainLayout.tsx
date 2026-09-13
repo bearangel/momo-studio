@@ -18,26 +18,19 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 export function MainLayout() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
+  // 会话首屏预载（范围化）：workspace 就绪后带 id 拉取，ws 切换时自然重载；
+  // 无 workspace 时短路（无参调用会走主进程 listAllSessions 跨全仓，
+  // 最近活跃会话置顶覆盖正确加载——重启激活分歧缺陷2回归锁）。
+  // RoomList 挂载时同源重复拉取由 loadSessions 的保留选中语义幂等收敛。
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        if (!cancelled) await loadSessions();
-      } catch {
-        // 首屏拉取失败非致命：UI 仍可用，用户切换到会话视图时可手动重试
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadSessions]);
+    if (activeWorkspaceId) void loadSessions(activeWorkspaceId);
+  }, [activeWorkspaceId, loadSessions]);
 
   // 冷启动主动加载 members：RoomList 新建房间的邀请候选消费它——
   // 此前仅在 onRuntimeChanged 推送时加载，重启后直接新建房间会看到空邀请列表，
   // 切到 Agent 视图（MembersPanel 挂载加载）再切回才恢复
-  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   useEffect(() => {
     if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
   }, [activeWorkspaceId, loadMembers]);
