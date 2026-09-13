@@ -89,6 +89,30 @@ describe('detectNetworkBlocked（主进程侧复刻 stream.store 双条件，spe
     const text = 'sandbox: bwrap/net-off\nstderr: curl: (7) Failed to connect';
     expect(detectNetworkBlocked(text)).toBe(true);
   });
+  // ── macOS seatbelt 真机形态（2026-09-13 真机会话原文回归锁——EPERM 以
+  // strerror 文本出现；修复前这批样本全部漏检 → 信任卡不弹）──
+  it('macOS nslookup bind: Operation not permitted（真机原文）→ 命中', () => {
+    const text =
+      'sandbox: seatbelt/net-off\nstderr:\nbind: Operation not permitted\nnslookup: isc_socket_bind: unexpected error';
+    expect(detectNetworkBlocked(text)).toBe(true);
+  });
+  it('macOS ping sendto: Permission denied（真机形态）→ 命中', () => {
+    const text = 'sandbox: seatbelt/net-off\nstderr: ping: sendto: Permission denied';
+    expect(detectNetworkBlocked(text)).toBe(true);
+  });
+  it('node getaddrinfo EAI_AGAIN（断 DNS 形态）→ 命中', () => {
+    const text = 'sandbox: seatbelt/net-off\nstderr: Error: getaddrinfo EAI_AGAIN example.com';
+    expect(detectNetworkBlocked(text)).toBe(true);
+  });
+  it('macOS 真机 socket.c 长路径 bind 拒绝（真机原文截取）→ 命中', () => {
+    const text =
+      'sandbox: seatbelt/net-off\nstderr:\n/AppleInternal/.../socket.c:5580: bind: Operation not permitted';
+    expect(detectNetworkBlocked(text)).toBe(true);
+  });
+  it('用户 echo 的任意格式退出码（退出码: 6）→ 刻意不命中（不可枚举，canonical stderr 已覆盖）', () => {
+    const text = 'sandbox: seatbelt/net-off\nstdout:\ncurl 访问失败，退出码: 6';
+    expect(detectNetworkBlocked(text)).toBe(false);
+  });
   it('仅 tag（未碰网络的命令）→ 不触发（不打扰）', () => {
     const text = 'exit_code: 0\n\nsandbox: bwrap/net-off\n\nstdout:\nok';
     expect(detectNetworkBlocked(text)).toBe(false);

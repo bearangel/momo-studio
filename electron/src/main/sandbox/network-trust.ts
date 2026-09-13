@@ -55,6 +55,12 @@ const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
   /(?:connect|connection)[^\n]{0,60}EPERM/i,
   /Could not resolve host/i,
   /curl: \((?:6|7)\)/,
+  // macOS seatbelt 真实形态（2026-09-13 真机会话实证：EPERM 以 strerror 文本出现而非
+  // Linux 风格字面——nslookup/dig 的 socket bind、ping 的 sendto、通用 connect 拒绝）。
+  // 用户 echo 的「退出码: N」等任意格式不可枚举，不纳入（canonical stderr 已覆盖）
+  /(?:bind|connect|sendto|socket)[^\n]{0,60}(?:Operation not permitted|Permission denied|EPERM|unexpected error)/i,
+  // node/getaddrinfo 族：沙箱断 DNS 下解析调用报错
+  /getaddrinfo[^\n]{0,20}(?:EAI_AGAIN|ENOTFOUND|EPERM)/i,
 ];
 
 /** 双条件判定：bash 结果文本同时命中 net-off tag 与网络失败签名 */

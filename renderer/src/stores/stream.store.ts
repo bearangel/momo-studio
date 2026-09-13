@@ -33,6 +33,9 @@ const NET_BLOCKED_SIGNATURES: readonly RegExp[] = [
   /(?:connect|connection)[^\n]{0,60}EPERM/i,
   /Could not resolve host/i,
   /curl: \((?:6|7)\)/,
+  // macOS seatbelt 真实形态（2026-09-13 真机实证，与主进程 network-trust.ts 同源成对修改）
+  /(?:bind|connect|sendto|socket)[^\n]{0,60}(?:Operation not permitted|Permission denied|EPERM|unexpected error)/i,
+  /getaddrinfo[^\n]{0,20}(?:EAI_AGAIN|ENOTFOUND|EPERM)/i,
 ];
 
 function detectNetBlocked(resultText: string): boolean {
