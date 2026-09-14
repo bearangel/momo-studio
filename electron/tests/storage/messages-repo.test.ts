@@ -156,3 +156,43 @@ describe('listRecentMessagesBySession', () => {
     expect(listRecentMessagesBySession('r-empty', 10)).toEqual([]);
   });
 });
+
+// === A1（spec 2026-09-14 §3）：最近窗口过滤 ===
+
+/** 显式改写 created_at（窗口语义测试需要确定性时序；生产无此路径） */
+function setCreatedAt(id: string, ts: number): void {
+  getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(ts, id);
+}
+
+describe('listRecentMessagesBySession opts（A1 最近窗口过滤）', () => {
+  /** seed 5 行（m1..m5，created_at = 1000..5000 严格递增） */
+  function seed5(): void {
+    for (let i = 1; i <= 5; i++) {
+      const row = insertMessage({
+        sessionId: 'r-window',
+        sender: '@a:home',
+        eventType: 'm.room.message',
+        body: `m${i}`,
+      });
+      setCreatedAt(row.id, i * 1000);
+    }
+  }
+
+  it('limit=3 返回最新 3 条且输出 ASC', () => {
+    seed5();
+    const rows = listRecentMessagesBySession('r-window', 3);
+    expect(rows.map((r) => r.body)).toEqual(['m3', 'm4', 'm5']);
+  });
+
+  it('afterTs：仅拉 created_at 严格大于游标的最近 N 条', () => {
+    seed5();
+    const rows = listRecentMessagesBySession('r-window', 10, { afterTs: 3000 });
+    expect(rows.map((r) => r.body)).toEqual(['m4', 'm5']);
+  });
+
+  it('beforeTs 与 afterTs 组合成区间窗口', () => {
+    seed5();
+    const rows = listRecentMessagesBySession('r-window', 10, { afterTs: 1000, beforeTs: 4000 });
+    expect(rows.map((r) => r.body)).toEqual(['m2', 'm3']);
+  });
+});

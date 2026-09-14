@@ -215,16 +215,34 @@ export function listOlderMessages(sessionId: string, beforeTs: number, limit: nu
 
 /**
  * 取会话「最近 limit 条」消息，输出仍按时间升序（与显示侧时序一致）。
+ * 与 listMessagesBySession({ limit }) 的区别：后者是 ASC+LIMIT = 最早 N 条。
  *
- * 与 listMessagesBySession({ limit }) 的区别：后者是 ASC+LIMIT = 最早 N 条，
- * 用于初始加载+loadOlder 分页；本函数 DESC 取数后反转，供导出等「最近 N 条」
- * 语义消费（2026-09-06 导出方向修复——此前 UI 宣称最近 N 条实际导出最早 N 条）。
+ * A1（spec 2026-09-14 §3）：可选 afterTs / beforeTs 过滤，语义与
+ * listMessagesBySession 一致（created_at 严格大于 / 小于）。DESC 取数后反转；
+ * rowid 作同毫秒并列行的稳定序（后插入者视为更新）。
  */
-export function listRecentMessagesBySession(sessionId: string, limit: number): MessageRow[] {
+export function listRecentMessagesBySession(
+  sessionId: string,
+  limit: number,
+  opts?: { afterTs?: number; beforeTs?: number },
+): MessageRow[] {
   const db = getDb();
+  // 动态拼 WHERE：条件与参数同步追加（与 listMessagesBySession 同款，防分支 SQL 重复）
+  const conds = ['session_id = ?'];
+  const params: Array<string | number> = [sessionId];
+  if (opts?.afterTs !== undefined) {
+    conds.push('created_at > ?');
+    params.push(opts.afterTs);
+  }
+  if (opts?.beforeTs !== undefined) {
+    conds.push('created_at < ?');
+    params.push(opts.beforeTs);
+  }
   const rows = db
-    .prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?')
-    .all(sessionId, limit) as SqlRow[];
+    .prepare(
+      `SELECT * FROM messages WHERE ${conds.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+    )
+    .all(...params, limit) as SqlRow[];
   return rows.reverse().map(rowToCamel);
 }
 
