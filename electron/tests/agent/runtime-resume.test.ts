@@ -21,7 +21,8 @@
 //     mandate.userBody 回退 currentBody
 //   - 预算钳制：toolCallsUsed ≥ max → 剩余 0，首个工具请求即刻 budget_exhausted
 //   - maxToolCalls=-1（无限）+ toolCallsUsed>0 → Infinity 保持，不续扣
-//   - convCtx 照拉：重建段拼接在 convMessages 之后（coveredUntil 游标语义不变）
+//   - convCtx 照拉但排除断点族（C1）：早前会话历史照常进入 conv，被中断族 F
+//     由 resumeTurn 独家携带（convCtx 再展开 = 整族双拼 + user 指令时序倒置）
 //
 // 契约锁（momo-test-rules 铁律 4）：孤儿合成 result 直接 import T1 的
 // INTERRUPTED_TOOL_RESULT 常量断言——生产者（rebuildTurn）与消费者（本参数
@@ -34,7 +35,11 @@ import os from 'node:os';
 import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import { closeDb } from '../../src/main/storage/db';
-import { INTERRUPTED_TOOL_RESULT, type RebuiltTurn } from '../../src/main/agent/turn-reconstructor';
+import {
+  INTERRUPTED_TOOL_RESULT,
+  rebuildTurn,
+  type RebuiltTurn,
+} from '../../src/main/agent/turn-reconstructor';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -261,11 +266,13 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     expect(first.filter((m) => m.role === 'user')).toHaveLength(1);
   });
 
-  it('convCtx 照拉：重建段拼接在 convMessages 之后（早前会话历史仍在上下文）', async () => {
-    // B 段新契约：早前会话历史经生产落库链 seed 进真实 DB（owner 问 + agent 文本族
-    // + 当前指令行——生产时序先落库后派发，excludeTrailingOwnerRow 剔除当前行防双拼）
+  it('convCtx 排除断点族（C1）：生产形态 seed + rebuildTurn 真实产物 → 工具对恰一次、user 原指令恰一次且在族内容之前', async () => {
+    // 生产形态 seed（resume.ts:320-344 的 DB 后遗形态）：早前完整回合 →
+    // owner 原指令行 → 被中断族 F（工具对）——resume 复用断点流派发、不插新
+    // owner 行。resumeTurn 用 rebuildTurn(F) 真实产物（非手搓）。
     const T0 = Date.now();
     const ROOM = '!room:t';
+    // 早前回合（完整）：owner 问 + agent 文本族
     const earlyUser = insertMessage({ sessionId: ROOM, sender: 'owner', eventType: 'm.room.message', body: '早前问题' });
     getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 100, earlyUser.id);
     __routeChunkToBufferForTest({
@@ -275,34 +282,64 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(T0 + 200, 's-early');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 's-early', delta: '早前回答' });
     __flushEventBufferForTest();
-    getDb().prepare(
-      `UPDATE message_events SET created_at = ? WHERE created_at < ? AND message_id IN
-         (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
-    ).run(T0 + 250, T0 + 250, 's-early', 's-early');
     __routeChunkToBufferForTest({ type: 'end', streamSessionId: 's-early', finishReason: 'stop' });
     __flushEventBufferForTest();
-    const curRow = insertMessage({ sessionId: ROOM, sender: 'owner', eventType: 'm.room.message', body: '断点指令' });
-    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 300, curRow.id);
+    // 族事件统一锚定（含 final）：早前族时间窗 [T0+200, T0+250] 确定性闭合，
+    // 防 final 事件真实时刻漂移把 owner 原指令行（T0+300）误吸入 steer 去重窗
+    getDb().prepare(
+      `UPDATE message_events SET created_at = ? WHERE message_id IN
+         (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+    ).run(T0 + 250, 's-early', 's-early');
+    // 断点回合：owner 原指令行 + 被中断族 F（已完成工具对）
+    const orig = insertMessage({ sessionId: ROOM, sender: 'owner', eventType: 'm.room.message', body: '修复登录页崩溃' });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 300, orig.id);
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 's-bp', sessionId: ROOM, senderAgentId: 'agent-bp',
+    });
+    __flushEventBufferForTest();
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(T0 + 400, 's-bp');
+    __routeChunkToBufferForTest({
+      type: 'tool_call', streamSessionId: 's-bp', callId: 'cb-1', toolName: 'bash', args: { command: 'npm test' },
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({
+      type: 'tool_result', streamSessionId: 's-bp', callId: 'cb-1', toolName: 'bash', result: '全部通过', success: true,
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 's-bp', finishReason: 'interrupted' });
+    __flushEventBufferForTest();
+
+    // resumeTurn = rebuildTurn(F) 真实产物（生产同款：resume.ts rebuildTurn(breakpointSsId)）
+    const resumeTurn: RebuiltTurn = rebuildTurn('s-bp');
+    expect(resumeTurn.degenerate).toBe(false); // seed 自检：重建段非空（user + 工具对）
+
     let first: LLMMessage[] = [];
     mockSingleRoundStop((m) => { first = m; });
-
-    const resumeTurn: RebuiltTurn = {
-      messages: [{ role: 'user', content: '断点指令' }],
-      toolCallsUsed: 0,
-      steers: [],
-      degenerate: false,
-    };
     await runChatLoop(
-      '!room:t', '断点指令', makeConfig(), makeContext(),
-      { toolCallsUsed: 0 }, undefined, undefined, 's-resume-conv', resumeTurn,
+      ROOM, '修复登录页崩溃', makeConfig(), makeContext(),
+      { toolCallsUsed: 0 }, undefined, undefined, 's-bp', resumeTurn,
     );
 
-    // conv 早前消息在前、重建段在后（coveredUntil 游标语义不变——conv 拉取不受 resumeTurn 影响）
-    expect(first.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
-    expect(first[1]).toEqual({ role: 'user', content: '早前问题' });
-    expect(first[2]).toEqual({ role: 'assistant', content: '早前回答' });
-    expect(first[3]).toEqual({ role: 'user', content: '断点指令' });
-    expect(first.filter((m) => m.role === 'user')).toHaveLength(2);
+    // 早前回合照拉（排除只针对断点族 F）
+    expect(first.some((m) => m.role === 'user' && m.content === '早前问题')).toBe(true);
+    expect(first.some((m) => m.role === 'assistant' && m.content === '早前回答')).toBe(true);
+    // 断点族工具对（assistant toolCalls + tool result）恰出现一次
+    //（旧代码：convCtx 展开族 F + resumeTurn verbatim 再拼接 = 两份）
+    const toolMsgs = first.filter((m) => m.role === 'tool' && m.toolCallId === 'cb-1');
+    expect(toolMsgs).toHaveLength(1);
+    const callAssistants = first.filter(
+      (m) => m.role === 'assistant' && (m.toolCalls ?? []).some((tc) => tc.id === 'cb-1'),
+    );
+    expect(callAssistants).toHaveLength(1);
+    // user 原指令恰一次，且时序在族内容之前（旧代码：user 夹在两份族内容中间）
+    const origDirective = first.filter((m) => m.role === 'user' && m.content === '修复登录页崩溃');
+    expect(origDirective).toHaveLength(1);
+    const userIdx = first.indexOf(origDirective[0]!);
+    const familyIdx = first.findIndex(
+      (m) => m.toolCallId === 'cb-1' || (m.role === 'assistant' && (m.toolCalls ?? []).some((tc) => tc.id === 'cb-1')),
+    );
+    expect(userIdx).toBeGreaterThan(0); // system 在前
+    expect(userIdx).toBeLessThan(familyIdx); // user 在族内容之前（时序不倒置）
   });
 
   it('预算续扣：toolCallsUsed=2 / maxToolCalls=5 → 再 3 次工具调用后预算耗尽 end(budget_exhausted)', async () => {

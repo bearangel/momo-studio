@@ -375,6 +375,16 @@ export interface SessionContextOptions {
    * 不剔除则当前指令双拼）。顶层 chat / resume 路径恒传 true。
    */
   excludeTrailingOwnerRow?: boolean;
+  /**
+   * 排除该流族（base streamSessionId）的展开内容——resume 断点续跑专用：
+   * 被中断族已由 resumeTurn（rebuildTurn 产物）verbatim 携带，convCtx 再展开
+   * 即整族双拼 + user 指令时序倒置（C1）。实现上该族以零消息族单位入场：
+   * 内容经步骤② 的 messages.length>0 过滤天然剔除，但 [startTs, endTs]
+   * 时间窗保留参与 steer 行去重——族内 steer 内容已随 resumeTurn（drain
+   * 渲染 / steers[] 重放）呈现，owner 行再渲染 = 双份。seenFamilies 照常
+   * 登记（防后续 #roll 行复活该族）。
+   */
+  excludeFamilySsi?: string;
 }
 
 /** 会话重建结果 */
@@ -452,12 +462,16 @@ export function rebuildSessionContext(
           includeUser: false,
           undrainedSteersAsUser: true,
         });
+        // C1：resume 断点族排除——零消息族单位（时间窗保留供步骤② 的 steer
+        // 行去重，内容侧复用零输出族的既成剔除路径）
+        const excluded =
+          opts?.excludeFamilySsi !== undefined && baseSsi === opts.excludeFamilySsi;
         units.push({
           kind: 'family',
           baseSsi,
           startTs: row.createdAt,
           endTs: rebuilt.endTs,
-          messages: rebuilt.messages,
+          messages: excluded ? [] : rebuilt.messages,
         });
       } catch (err) {
         logger.warn('rebuildSessionContext 单族重建失败，跳过该族', {

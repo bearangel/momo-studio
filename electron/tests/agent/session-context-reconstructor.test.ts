@@ -362,4 +362,42 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     const ctx = rebuildSessionContext(SESSION_ID, { limitTurns: 0 });
     expect(ctx.messages).toEqual([{ role: 'user', content: '当前指令' }]);
   });
+  it('C1 excludeFamilySsi：断点族不展开、#roll 行不复活、族窗内 steer 行仍去重、原指令行由 trailing 剔除', () => {
+    const T0 = Date.now();
+    ownerRow('原始指令', T0 + 100);
+    startStream('sx', T0 + 200);
+    toolCall('sx', 'cx1', 'bash', { command: 'ls' });
+    toolResult('sx', 'cx1', 'bash', 'a.ts');
+    bumpStreamEventTs('sx', T0 + 250);
+    // 族窗内 steer 行（已 drain = 有 steer 事件）：内容应随 resumeTurn 呈现，
+    // convCtx 的 owner 行不得再渲染（防 steer 双份）
+    ownerRow('中途补充', T0 + 240);
+    const streamRowId = getDb()
+      .prepare('SELECT id FROM messages WHERE stream_session_id = ?')
+      .get('sx') as { id: string };
+    insertEvent({
+      messageId: streamRowId.id, seq: 99, eventType: 'steer', payload: { body: '中途补充' },
+    });
+    bumpStreamEventTs('sx', T0 + 260);
+    endStream('sx', 'interrupted');
+    bumpStreamEventTs('sx', T0 + 280);
+
+    // resume 路径形态：excludeTrailingOwnerRow + excludeFamilySsi（= 断点 base id）
+    const ctx = rebuildSessionContext(SESSION_ID, {
+      excludeTrailingOwnerRow: true,
+      excludeFamilySsi: 'sx',
+    });
+    // 断点族整族缺席（零消息族单位经步骤② 剔除）
+    expect(ctx.messages.some((m) => m.toolCallId === 'cx1')).toBe(false);
+    expect(ctx.messages.some((m) => m.role === 'assistant')).toBe(false);
+    // 原指令行被 excludeTrailingOwnerRow 剔除（其内容由 resumeTurn 首条 user 携带）
+    expect(ctx.messages.some((m) => m.content === '原始指令')).toBe(false);
+    // 族窗内 steer 行去重（内容已随 resumeTurn 的 drain 渲染 / steers[] 重放）
+    expect(ctx.messages.some((m) => m.content === '中途补充')).toBe(false);
+    expect(ctx.messages.some((m) => m.content.startsWith('[用户中途补充]'))).toBe(false);
+    // 净效果：空上下文（本会话唯一回合即断点族）
+    expect(ctx.messages).toEqual([]);
+    expect(ctx.timestamps).toEqual([]);
+  });
+
 });

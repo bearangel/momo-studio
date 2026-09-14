@@ -433,13 +433,23 @@ export async function runChatLoop(
   // body 拼接切换为 events 级重建（工具对跨轮可见 / 中断轮合成结果 / 最近窗口 /
   // 剔除当前指令行防双拼）。子 agent（parentStreamSessionId 非空）走 fresh
   // session 不拉房间历史——fresh 行为由空上下文自然实现。
+  // C1：resume 断点续跑时排除当前流族——被中断族已由 resumeTurn（rebuildTurn
+  // 产物）verbatim 携带，convCtx 再展开 = 整族双拼 + user 指令夹在两份族内容
+  // 之间。此处 streamSessionId 变量尚未计算（其后才 ?? randomUUID()），直接用
+  // 第 8 参 streamSessionIdOverride（resume 派发侧 = 断点 base id，与族 baseSsi 同源）。
   const memory = getMemoryProvider();
   const [taskCtx, sessionCtx]: [TaskContext | null, RebuiltSessionContext | null] =
     await Promise.all([
       config.currentTaskId ? memory.getTaskContext(config.currentTaskId) : Promise.resolve(null),
       parentStreamSessionId
         ? Promise.resolve(null)
-        : Promise.resolve(rebuildSessionContext(roomId, { limitTurns: 20, excludeTrailingOwnerRow: true })),
+        : Promise.resolve(rebuildSessionContext(roomId, {
+            limitTurns: 20,
+            excludeTrailingOwnerRow: true,
+            ...(resumeTurn && resumeTurn.messages.length > 0 && streamSessionIdOverride
+              ? { excludeFamilySsi: streamSessionIdOverride }
+              : {}),
+          })),
     ]);
 
   const taskHint = taskCtx ? formatTaskHint(taskCtx) : '';
