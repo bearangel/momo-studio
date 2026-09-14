@@ -225,7 +225,7 @@ describe('browser IPC 桥（子进程侧）', () => {
     it('常量锁：manager 类 op 桥超时 ≥ DEFAULT_AGENT_WAIT_MS + 20s 裕量（终审 C1——桥必须晚于 park 诚实 reject）', () => {
       // 主进程 park 诚实 reject 最早在 park 起点 + waitMs + 1s tick 粒度 + IPC 开销；
       // 桥先超时会让子进程拿到「IPC 无响应」错误归因，迟到的诚实错误按未知 requestId 丢弃
-      expect(DEFAULT_AGENT_WAIT_MS).toBe(60_000); // 当前缺省快照（I1 改 120s 时随 commit 更新）
+      expect(DEFAULT_AGENT_WAIT_MS).toBe(120_000); // 当前缺省快照（终审 I1：120s 恢复自愈可达性）
       expect(MANAGER_OP_BRIDGE_TIMEOUT_MS).toBeGreaterThanOrEqual(DEFAULT_AGENT_WAIT_MS + 20_000);
     });
 

@@ -647,7 +647,7 @@ describe('browser:updateSettings 入参净化', () => {
 
   it('【接管等待 §4.4】agentWaitMs / idleAutoReleaseMs 数字键白名单放行 + 落库（FIX ROUND 补 IPC 写通道）', async () => {
     // 修复前 PATCH_KEYS 仅六键，新键被静默丢弃——Task 3 设置 UI 写值后 store 不动，
-    // manager opts reader 每 tick 重读到默认 60000/90000，与用户预期漂移（P0-6 同款）。
+    // manager opts reader 每 tick 重读到默认 120000/90000，与用户预期漂移（P0-6 同款）。
     const res = await callIpc<{ ok: boolean }>('browser:updateSettings', 'ws-1', {
       agentWaitMs: 5_000,
       idleAutoReleaseMs: 0,
@@ -668,7 +668,7 @@ describe('browser:updateSettings 入参净化', () => {
     expect(res.ok).toBe(true);
     const s = store.read('ws-1');
     // 非数字值未落库，回退默认
-    expect(s.agentWaitMs).toBe(60_000);
+    expect(s.agentWaitMs).toBe(120_000);
     expect(s.idleAutoReleaseMs).toBe(90_000);
     // 合法键未受影响
     expect(s.trust).toBe('always');
@@ -699,7 +699,7 @@ describe('browser:getSettings', () => {
       whitelist: [],
       sidebarCollapsed: false,
       sidebarWidth: 380,
-      agentWaitMs: 60_000,
+      agentWaitMs: 120_000,
       idleAutoReleaseMs: 90_000,
     });
   });
@@ -720,7 +720,7 @@ describe('browser:getSettings', () => {
       whitelist: ['good.com'], // 归一化：小写 + 去端口（真 store 写侧行为）
       sidebarCollapsed: true,
       sidebarWidth: 420,
-      agentWaitMs: 60_000, // 未写 → 默认
+      agentWaitMs: 120_000, // 未写 → 默认（终审 I1：120s）
       idleAutoReleaseMs: 90_000, // 未写 → 默认
     });
   });

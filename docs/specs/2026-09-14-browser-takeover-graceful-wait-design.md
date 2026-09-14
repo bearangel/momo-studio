@@ -59,7 +59,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
                           │    │    release ──► 全体 waiter 放行 → 原操作继续
                           │    │    空闲自愈 ─► lastUserInputAt 距今 ≥ idleMs 且 agent 在等
                           │    │                 → 自动 releaseTakeover（同上放行）
-                          │    │    超时(默认60s) ─► 抛 BrowserTakenOverError（诚实文案）
+                           │    │    超时(默认120s) ─► 抛 BrowserTakenOverError（诚实文案）
                           │    └─ ws 切走/浏览器关闭 → 清 waiter（防悬挂）
 ```
 
@@ -74,7 +74,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
   - 循环内每次释放后复查 `takeover`（防「释放瞬间又被接管」竞态：复查仍 user 则继续等，直至超时——deadline 语义）；
   - 清理路径：`closeBrowser` / `onWorkspaceDeactivated` / `disposeAll` 中清空该 ws 的 waiter（resolve——让挂着的调用按空视图/新仲裁态自然走后续门控，不悬挂 Promise）。
 - **waiter 状态**：`Map<wsId, { promise, startedAt, timer }>`（模块内私有；与 policy.trustWaiters 同款生命周期纪律：notice 前置发出、推送抛错同步清理 entry）。
-- 常量默认值：`AGENT_WAIT_MS = 60_000`、`IDLE_AUTO_RELEASE_MS = 90_000`（均可经 settings 覆盖，见 §4.4；`0` = 关闭该能力——等待关闭即回到今天的 fail-fast，向后兼容开关）。
+- 常量默认值：`AGENT_WAIT_MS = 120_000`、`IDLE_AUTO_RELEASE_MS = 90_000`（均可经 settings 覆盖，见 §4.4；`0` = 关闭该能力——等待关闭即回到今天的 fail-fast，向后兼容开关）。wait 缺省取 120s 而非 60s：保证大于 idle 缺省 90s（自愈可达性不变式，见 §4.2；终审 I1 裁定，v35 未发布零成本改缺省）。
 
 ### 4.2 空闲自愈口径
 
@@ -82,6 +82,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
 - 刷新点（全覆盖用户真实输入，排除 agent 自身）：`before-input-event` 非自锁命中（含 user 态持续输入——现监听器对所有态触发，user 态下刷新时刻即可）、overlay mousedown（view-factory → manager.userTakeover 路径顺带刷新）、`userNavigate`（地址栏回车）、显式按钮 `userTakeover`。
 - **只在「agent 正在等待」时判定自愈**：无 waiter 挂起时绝不自动回切（用户长时间阅读不被打扰）；有 waiter 时以 lastUserInputAt 判定，正在操作的用户持续刷新计时，不会被抢。
 - 自愈动作复用 `releaseTakeover`（单一出口：状态翻转 + emitState + waiter 放行 + 卡片自动卸载）。
+- **可达性不变式**：自愈先于超时可达要求 `idleAutoReleaseMs < agentWaitMs`（缺省 90s < 120s 满足）。若配置使 idle ≥ wait：旗舰场景（误触时刻 T0、park 起点 T0+δ、δ<wait-idle）下 timeout 先触发、waiter 消散，「无 waiter 绝不回切」使控制权停在 user 态——自愈事实不可达（终审 I1 的缺省依据）。
 
 ### 4.3 释放提示卡（renderer）
 
@@ -94,7 +95,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
 
 ### 4.4 设置项
 
-- 新增全局 settings key：`browserAgentWaitMs`（默认 60000，`0`=不等待）、`browserIdleAutoReleaseMs`（默认 90000，`0`=关闭自愈）。
+- 新增全局 settings key：`browserAgentWaitMs`（默认 120000，`0`=不等待）、`browserIdleAutoReleaseMs`（默认 90000，`0`=关闭自愈）。
 - manager 构造注入读取器（`readAgentWaitMs?: () => number`，boot 接线读 settings-store——与 `readSidebarCollapsed` 同款注入模式），每 tick 重读（设置即时生效，无需重启）。
 - 设置页 UI 控件**本期不做**（key 已生效，可用 dev 手段调；UI 暴露记 follow-up，避免扩大 renderer 范围）。
 
@@ -132,7 +133,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
 
 ## 7. 风险与取舍
 
-- **等待占用调用位**：park 期间工具调用挂起（最多 60s）。与 bash/dispatch 长调用同类，无 per-tool 超时约束；lane/预算/steer 均不受影响（同进程事件循环不阻塞）。
+- **等待占用调用位**：park 期间工具调用挂起（最多 120s）。与 bash/dispatch 长调用同类，无 per-tool 超时约束；lane/预算/steer 均不受影响（同进程事件循环不阻塞）。
 - **自愈误判**：用户正在**阅读**（无输入）+ agent 恰好被挡 → 90s 后控制权被回切。阅读者不产生输入与离开者不可区分；取保守值 90s 且仅在有 waiter（agent 明确需要）时触发。真在细读的用户可用显式按钮重新接管（一次点击，成本对称）。
 - **v1 仲裁哲学变更**：spec「无自动回切」是有意取舍；本设计把回切条件收紧到「agent 被阻塞 + 用户无输入 N 秒」，默认开启但可 `browserIdleAutoReleaseMs=0` 关闭回到 v1 行为。
 - **多 ws**：waiter 按 wsId 键控，park 期间切走 ws → 清理放行（不跨 ws 等待）。

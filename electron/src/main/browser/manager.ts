@@ -76,8 +76,10 @@ const MODIFIER_KEYS = new Set([
 /** snapshot CDP 协议版本与格式化器已移至 snapshot.ts（T4——懒附加 + 提示行单一归属） */
 
 /** agent 驻留等待缺省时长（spec 2026-09-14 §4.1；readAgentWaitMs 注入覆盖，0=立即失败）。
- *  导出供 IPC 桥推导 manager-op 档超时（终审 C1：桥超时必须晚于 park 诚实 reject 上限） */
-export const DEFAULT_AGENT_WAIT_MS = 60_000;
+ *  导出供 IPC 桥推导 manager-op 档超时（终审 C1：桥超时必须晚于 park 诚实 reject 上限）。
+ *  取 120s（终审 I1）：缺省必须大于 idle 90s——否则旗舰场景（误触后无人操作）timeout
+ *  先于空闲自愈触发，waiter 消散后控制权停在 user 态，自愈事实不可达 */
+export const DEFAULT_AGENT_WAIT_MS = 120_000;
 /** 空闲自动回切缺省阈值（spec §4.2；readIdleAutoReleaseMs 注入覆盖，0=关闭） */
 const DEFAULT_IDLE_AUTO_RELEASE_MS = 90_000;
 /** 驻留等待 tick 间隔（释放检测 + 空闲判定 + 超时判定共用） */

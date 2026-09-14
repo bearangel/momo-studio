@@ -1,7 +1,7 @@
 // electron/tests/migrations/035-browser-takeover-wait.test.ts
 //
 // 迁移 v35 测试：workspace_settings 表加两 INTEGER 列（spec 2026-09-14 §4.4）。
-//   agent_wait_ms INTEGER NOT NULL DEFAULT 60000
+//   agent_wait_ms INTEGER NOT NULL DEFAULT 120000
 //   idle_auto_release_ms INTEGER NOT NULL DEFAULT 90000
 //
 // 三项断言：
@@ -63,13 +63,13 @@ describe('migration v35 workspace_settings 接管等待两列（spec 2026-09-14 
     );
   });
 
-  it('两列默认值 60000 / 90000（INSERT 省略两列回退 DEFAULT）', () => {
+  it('两列默认值 120000 / 90000（INSERT 省略两列回退 DEFAULT）', () => {
     insertWorkspace('ws-dft');
     db.prepare("INSERT INTO workspace_settings (workspace_id) VALUES ('ws-dft')").run();
     const row = db.prepare('SELECT * FROM workspace_settings WHERE workspace_id = ?').get(
       'ws-dft',
     ) as Record<string, unknown>;
-    expect(row.agent_wait_ms).toBe(60_000);
+    expect(row.agent_wait_ms).toBe(120_000);
     expect(row.idle_auto_release_ms).toBe(90_000);
   });
 
@@ -156,11 +156,11 @@ describe('migration v35 升级路径：v34 → v35', () => {
     oldDb.close();
   });
 
-  it('存量 workspace_settings 行自动物化两列 DEFAULT 60000 / 90000（NOT NULL 语义保证）', () => {
+  it('存量 workspace_settings 行自动物化两列 DEFAULT 120000 / 90000（NOT NULL 语义保证）', () => {
     const row = oldDb
       .prepare('SELECT agent_wait_ms, idle_auto_release_ms FROM workspace_settings WHERE workspace_id = ?')
       .get('legacy-ws') as Record<string, unknown>;
-    expect(row.agent_wait_ms).toBe(60_000);
+    expect(row.agent_wait_ms).toBe(120_000);
     expect(row.idle_auto_release_ms).toBe(90_000);
     // 既有列未被 v35 破坏（升级回写非破坏）
     const full = oldDb.prepare('SELECT trust_browser, browser_sidebar_width FROM workspace_settings WHERE workspace_id = ?').get(

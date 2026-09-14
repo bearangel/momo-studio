@@ -23,7 +23,8 @@ export type BrowserSettings = WorkspaceBrowserSettings & {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   /** agent 驻留等待上限（毫秒；0=立即失败 / >0=等用户释放或超时）；
-   *  settings-store 默认 60000；manager 缺省 60000；设置层与运行时层默认值镜像 */
+   *  settings-store 默认 120000；manager 缺省 120000；设置层与运行时层默认值镜像
+   *  （终审 I1：> idle 90000，保住空闲自愈可达性） */
   agentWaitMs: number;
   /** user 接管后空闲自动回切阈值（毫秒；0=关闭自愈 / >0=空闲超此值自动回 agent 态） */
   idleAutoReleaseMs: number;
@@ -40,7 +41,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   whitelist: [],
   sidebarCollapsed: false,
   sidebarWidth: 380,
-  agentWaitMs: 60_000,
+  agentWaitMs: 120_000,
   idleAutoReleaseMs: 90_000,
 };
 

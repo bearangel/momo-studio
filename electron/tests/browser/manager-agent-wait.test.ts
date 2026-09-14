@@ -6,7 +6,7 @@
 // tick/超时/空闲。注意：用例2 的时序为「先推进时间触发超时、再断言 rejection」
 // ——park 中的 promise 只有 fake clock 前进后才会 settle（与用例5b 同模式）。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BrowserManager, type ManagedView, type ManagedWebContents, type ViewFactory } from '../../src/main/browser/manager';
+import { BrowserManager, DEFAULT_AGENT_WAIT_MS, type ManagedView, type ManagedWebContents, type ViewFactory } from '../../src/main/browser/manager';
 import { BrowserPolicy } from '../../src/main/browser/policy';
 import { BrowserTakenOverError, BrowserNoViewError } from '../../src/main/browser/errors';
 import type { WorkspaceBrowserSettings } from '../../src/main/browser/types';
@@ -36,7 +36,7 @@ const baseSettings: WorkspaceBrowserSettings = {
   whitelist: [],
 };
 
-function makeManager(opts?: { waitMs?: number; idleMs?: number }) {
+function makeManager(opts?: { waitMs?: number; idleMs?: number; omitWaitReader?: boolean }) {
   const factory: ViewFactory = { create: () => makeView(), destroy: vi.fn(), clearData: vi.fn(async () => {}) };
   const states: Array<{ takeover: string }> = [];
   const notices: Array<{ kind: string; durationMs?: number }> = [];
@@ -48,7 +48,8 @@ function makeManager(opts?: { waitMs?: number; idleMs?: number }) {
       pushNotice: (kind, _text, _wsId, durationMs) => notices.push({ kind, durationMs }),
     },
     {
-      readAgentWaitMs: () => opts?.waitMs ?? 60_000,
+      // fallback 镜像真实缺省常量（导入防漂移）；omitWaitReader=true 时不注入——锁缺省档
+      readAgentWaitMs: opts?.omitWaitReader ? undefined : () => opts?.waitMs ?? DEFAULT_AGENT_WAIT_MS,
       readIdleAutoReleaseMs: () => opts?.idleMs ?? 90_000,
     },
   );
@@ -199,5 +200,24 @@ describe('gateAgentSide 驻留等待（spec §6）', () => {
     const r = await manager.navigate('w1', 'https://example.com');
     expect(r.url).toBe('https://example.com');
     expect(notices).toHaveLength(0);
+  });
+
+  it('缺省档（终审 I1）：readAgentWaitMs 未注入 → DEFAULT_AGENT_WAIT_MS=120s 生效——119s 仍诚实等待，120s 到点超时', async () => {
+    // idleMs=0 关闭自愈，隔离锁 wait 缺省值本身（缺省档自愈可达性由 idle 90s < wait 120s 不变式保证）
+    const { manager, notices } = makeManager({ omitWaitReader: true, idleMs: 0 });
+    manager.onWorkspaceActivated('w1', '/tmp');
+    manager.userTakeover('w1');
+    const p = manager.navigate('w1', 'https://example.com');
+    void p.catch(() => {}); // 同用例2——超时 rejection 先于断言 attach
+    await vi.advanceTimersByTimeAsync(0);
+    // notice durationMs = 实际生效等待时长 = 缺省常量
+    expect(notices[0]).toMatchObject({ kind: 'agent-waiting-release', durationMs: 120_000 });
+    await vi.advanceTimersByTimeAsync(120_000 - 1_000);
+    let settled = false;
+    void p.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false); // 119s：未到缺省上限，诚实等待中
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(p).rejects.toThrow('已等待 120 秒');
   });
 });

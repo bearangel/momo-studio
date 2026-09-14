@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe('BrowserSettingsStore.read', () => {
-  it('未知 wsId → 全默认（ask / false / [] / [] / false / 380 / 60000 / 90000）', () => {
+  it('未知 wsId → 全默认（ask / false / [] / [] / false / 380 / 120000 / 90000）', () => {
     const store = createBrowserSettingsStore(db);
     expect(store.read('ws-unknown')).toEqual({
       trust: 'ask',
@@ -57,7 +57,7 @@ describe('BrowserSettingsStore.read', () => {
       whitelist: [],
       sidebarCollapsed: false,
       sidebarWidth: 380,
-      agentWaitMs: 60_000,
+      agentWaitMs: 120_000,
       idleAutoReleaseMs: 90_000,
     });
   });
@@ -107,7 +107,7 @@ describe('BrowserSettingsStore.read', () => {
 
   it('agentWaitMs / idleAutoReleaseMs 默认值与覆盖（接管驻留等待 §4.4）', () => {
     const store = createBrowserSettingsStore(db);
-    expect(store.read('ws-A').agentWaitMs).toBe(60_000);
+    expect(store.read('ws-A').agentWaitMs).toBe(120_000);
     expect(store.read('ws-A').idleAutoReleaseMs).toBe(90_000);
     store.write('ws-A', { agentWaitMs: 5_000, idleAutoReleaseMs: 0 });
     expect(store.read('ws-A').agentWaitMs).toBe(5_000);
@@ -150,7 +150,7 @@ describe('BrowserSettingsStore.write', () => {
     expect(settings.evaluateEnabled).toBe(false); // 未动 → 默认
     expect(settings.blacklist).toEqual([]); // 未动 → 默认
     expect(settings.sidebarCollapsed).toBe(false); // 未动 → 默认
-    expect(settings.agentWaitMs).toBe(60_000); // 未动 → 默认
+    expect(settings.agentWaitMs).toBe(120_000); // 未动 → 默认（终审 I1：120s）
     expect(settings.idleAutoReleaseMs).toBe(90_000); // 未动 → 默认
   });
 
