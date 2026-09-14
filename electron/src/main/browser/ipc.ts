@@ -38,11 +38,14 @@ export type ProbeDevServers = () => Promise<BrowserDevServer[]>;
 
 /** m→r 非模态通知载荷（spec §3.7：信任卡 kind='trust-request'）。
  * workspaceId 是发送方所在的 workspace（v2.7 review M7）——renderer 信任卡按该字段路由
- * 应答目标，不再脆弱地依赖「单活跃 workspace」推导。 */
+ * 应答目标，不再脆弱地依赖「单活跃 workspace」推导。
+ * durationMs 可选字段（spec 2026-09-14 §4.3）：agent-waiting-release 卡片本地倒计时用
+ * （= 本轮驻留等待实际生效时长）；其余 kind 不携带，旧消费者无感。 */
 export interface BrowserNotice {
   kind: string;
   text: string;
   workspaceId: string;
+  durationMs?: number;
 }
 
 /** ipcMain 的结构性子集（注入——生产传 electron ipcMain，测试传捕获桩） */
@@ -172,12 +175,16 @@ function sanitizeSettingsPatch(raw: unknown): BrowserSettingsPatch {
 // 统一推送钩子（manager 构造注入 → webContents.send）
 // =================================================================================
 
-/** 把 manager 的 pushState/pushNotice 钩子接到 m→r 推送通道（§3.6） */
+/** 把 manager 的 pushState/pushNotice 钩子接到 m→r 推送通道（§3.6）。
+ *  pushNotice 第 4 参 durationMs 透传进载荷（未携带时省略该键——形状与旧 kind 完全一致）。 */
 export function createBrowserPushHooks(webContentsLike: WebContentsLike): BrowserManagerHooks {
   return {
     pushState: (state) => webContentsLike.send('browser:state', state),
-    pushNotice: (kind, text, workspaceId) =>
-      webContentsLike.send('browser:notice', { kind, text, workspaceId } satisfies BrowserNotice),
+    pushNotice: (kind, text, workspaceId, durationMs) =>
+      webContentsLike.send(
+        'browser:notice',
+        { kind, text, workspaceId, ...(durationMs !== undefined ? { durationMs } : {}) } satisfies BrowserNotice,
+      ),
   };
 }
 

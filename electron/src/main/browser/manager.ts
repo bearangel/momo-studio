@@ -75,6 +75,13 @@ const MODIFIER_KEYS = new Set([
 /** scroll 缺省 amount 常量已移至 actions.ts（SCROLL_DEFAULT_AMOUNT——动作语义单一归属） */
 /** snapshot CDP 协议版本与格式化器已移至 snapshot.ts（T4——懒附加 + 提示行单一归属） */
 
+/** agent 驻留等待缺省时长（spec 2026-09-14 §4.1；readAgentWaitMs 注入覆盖，0=立即失败） */
+const DEFAULT_AGENT_WAIT_MS = 60_000;
+/** 空闲自动回切缺省阈值（spec §4.2；readIdleAutoReleaseMs 注入覆盖，0=关闭） */
+const DEFAULT_IDLE_AUTO_RELEASE_MS = 90_000;
+/** 驻留等待 tick 间隔（释放检测 + 空闲判定 + 超时判定共用） */
+const AGENT_WAIT_TICK_MS = 1_000;
+
 // =================================================================================
 // 结构性子类型（Electron 边界的契约面——单测用普通对象满足）
 // =================================================================================
@@ -138,8 +145,10 @@ export interface BrowserManagerHooks {
   pushState(state: BrowserState): void;
   /** 非模态通知（崩溃重载 / 下载拦截 / popup 拦截 / 加载失败 / 信任卡等）。
    * workspaceId 携带用于 renderer 信任卡路由（v2.7 review M7）——单活跃 ws 推导脆弱
-   * （用户切 ws、tool 调用跨 ws 上下文等场景），载荷携带更可靠。 */
-  pushNotice(kind: string, text: string, workspaceId: string): void;
+   * （用户切 ws、tool 调用跨 ws 上下文等场景），载荷携带更可靠。
+   * durationMs 可选第 4 参：agent-waiting-release 卡片本地倒计时用（= 本轮等待
+   * 实际生效时长，spec 2026-09-14 §4.3——防 renderer 硬编码默认值与设置覆盖值漂移）。 */
+  pushNotice(kind: string, text: string, workspaceId: string, durationMs?: number): void;
 }
 
 /** 构造可选项（T10 boot 注入） */
@@ -155,6 +164,17 @@ export interface BrowserManagerOpts {
    * 折叠态丢失，bug 2）。缺省 false（无库环境 / 旧测试兜底，行为同注入 false）。
    */
   readSidebarCollapsed?: (wsId: string) => boolean;
+  /**
+   * agent 驻留等待时长读取器（毫秒；settings 的 browserAgentWaitMs 投影，boot 接线）。
+   * 缺省恒 DEFAULT_AGENT_WAIT_MS；返回 0 = 关闭等待（user 态立即失败，v1 fail-fast）。
+   * 每 tick 重读——运行中改设置即时生效，无需重启。
+   */
+  readAgentWaitMs?: (wsId: string) => number;
+  /**
+   * 空闲自动回切阈值读取器（毫秒；settings 的 browserIdleAutoReleaseMs 投影）。
+   * 缺省恒 DEFAULT_IDLE_AUTO_RELEASE_MS；返回 0 = 关闭自愈。每 tick 重读（同上）。
+   */
+  readIdleAutoReleaseMs?: (wsId: string) => number;
 }
 
 /**
@@ -192,6 +212,18 @@ interface ActiveWorkspace {
   collapsed: boolean;
   /** 折叠前的清单（折叠时视图已销毁；展开或折叠期间活动用于重建） */
   collapseStash: TabStash | null;
+  /** 最近一次真实用户输入时刻（userTakeover / before-input-event 刷新；空闲自愈判定用，spec §4.2） */
+  lastUserInputAt: number;
+}
+
+/** agent 驻留等待条目（单飞：同 ws 并发工具 join 同一 promise，只推一次 notice）。
+ *  settle 统一收敛在 settleAgentWait——resolve/reject 由其按出口调用。 */
+interface AgentWaitEntry {
+  promise: Promise<void>;
+  promiseResolve: () => void;
+  promiseReject: (err: Error) => void;
+  startedAt: number;
+  timer: NodeJS.Timeout;
 }
 
 // =================================================================================
@@ -207,6 +239,8 @@ export class BrowserManager {
   private agentInputDepth = 0;
   /** renderer 最近一次上报的 sidebar 占位区 rect（null = 从未上报）——任何视图成为 current 时立即套用 */
   private lastRect: SidebarRect | null = null;
+  /** workspaceId → agent 驻留等待条目（单飞：同 ws 并发工具 join 同一 promise） */
+  private readonly agentWaiters = new Map<string, AgentWaitEntry>();
 
   constructor(
     private readonly factory: ViewFactory,
@@ -216,6 +250,8 @@ export class BrowserManager {
   ) {
     this.screenshotDir = opts?.screenshotDir;
     this.readSidebarCollapsed = opts?.readSidebarCollapsed;
+    this.readAgentWaitMs = opts?.readAgentWaitMs;
+    this.readIdleAutoReleaseMs = opts?.readIdleAutoReleaseMs;
   }
 
   /** screenshot 落盘根（null = 缺省 tmpdir 兜底） */
@@ -223,6 +259,12 @@ export class BrowserManager {
 
   /** 激活折叠态读取器（undefined = 恒 false，见 BrowserManagerOpts 注释） */
   private readonly readSidebarCollapsed?: (wsId: string) => boolean;
+
+  /** agent 驻留等待时长读取器（undefined = 恒 DEFAULT_AGENT_WAIT_MS） */
+  private readonly readAgentWaitMs?: (wsId: string) => number;
+
+  /** 空闲自动回切阈值读取器（undefined = 恒 DEFAULT_IDLE_AUTO_RELEASE_MS） */
+  private readonly readIdleAutoReleaseMs?: (wsId: string) => number;
 
   // ---------- 门控与状态 ----------
 
@@ -283,7 +325,7 @@ export class BrowserManager {
   /** browser_navigate：策略门控 → 懒建 / 复用 → loadURL → 推送状态 */
   async navigate(wsId: string, rawUrl: string): Promise<{ url: string; title: string }> {
     const ws = this.requireWorkspace(wsId);
-    this.assertAgentSide(ws);
+    await this.gateAgentSide(ws);
     const url = this.policy.assertUrl(wsId, rawUrl); // 越界/协议错误原样穿透 T5（不建视图）
     this.ensureLive(ws);
     let tab = ws.tabs[ws.current];
@@ -309,7 +351,7 @@ export class BrowserManager {
     source: BrowserActionSource = 'agent',
   ): Promise<TabInfo[]> {
     const ws = this.requireWorkspace(wsId);
-    if (source === 'agent') this.assertAgentSide(ws);
+    if (source === 'agent') await this.gateAgentSide(ws);
     switch (action) {
       case 'list':
         return this.tabInfos(ws);
@@ -362,18 +404,19 @@ export class BrowserManager {
   /** browser_close：销毁当前 workspace 视图 + 清 stash + takeover 复位（spec §7）；source 甄别见 BrowserActionSource */
   async closeBrowser(wsId: string, source: BrowserActionSource = 'agent'): Promise<void> {
     const ws = this.requireWorkspace(wsId);
-    if (source === 'agent') this.assertAgentSide(ws);
+    if (source === 'agent') await this.gateAgentSide(ws);
     this.destroyTabs(ws);
     ws.current = 0;
     ws.takeover = 'agent'; // 全新仲裁起点
     ws.collapseStash = null;
     this.stashedTabs.delete(wsId); // §7：清 stash——下次激活空态
+    this.settleAgentWait(wsId, true); // park 中的 waiter 不悬挂——resolve 后按新仲裁态继续
     this.emitState(ws);
   }
 
   /** browser_console_messages：当前 tab 环形缓冲拷贝——text 序列 */
   async consoleMessages(wsId: string): Promise<string[]> {
-    const { ws, tab } = this.requireCurrentTab(wsId);
+    const { ws, tab } = await this.requireCurrentTab(wsId);
     const buf = ws.consoleBuffer.get(tab.serial);
     return buf ? [...buf] : [];
   }
@@ -381,7 +424,7 @@ export class BrowserManager {
   /** browser_evaluate：设置默认关（§6.2）；内部 selector 解析脚本不受此开关约束（§3.3） */
   async evaluate(wsId: string, expression: string): Promise<unknown> {
     const ws = this.requireWorkspace(wsId);
-    this.assertAgentSide(ws);
+    await this.gateAgentSide(ws);
     this.policy.assertEvaluate(wsId);
     const tab = ws.tabs[ws.current];
     if (!tab) throw new BrowserNoViewError();
@@ -400,25 +443,25 @@ export class BrowserManager {
 
   /** click：selector 定位（四语法）→ 元素中心 trusted 点击序列 */
   async click(wsId: string, selector: string): Promise<void> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     await clickElement(wc, selector, this.inputGuard());
   }
 
   /** hover：selector 定位 → mouseMove 至元素中心 */
   async hover(wsId: string, selector: string): Promise<void> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     await hoverElement(wc, selector, this.inputGuard());
   }
 
   /** type：先 click 聚焦 → char 逐字符 → submit=true 末尾补 Enter */
   async type(wsId: string, selector: string, text: string, submit = false): Promise<void> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     await typeText(wc, selector, text, submit, this.inputGuard());
   }
 
   /** pressKey：白名单（Enter/Tab/Escape/方向/翻页/Home/End）外按键抛 BrowserInvalidKeyError */
   async pressKey(wsId: string, key: string): Promise<void> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     pressKey(wc, key, this.inputGuard());
   }
 
@@ -428,19 +471,19 @@ export class BrowserManager {
     direction: 'up' | 'down',
     amount: number = SCROLL_DEFAULT_AMOUNT,
   ): Promise<void> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     scrollWheel(wc, direction, amount, this.inputGuard());
   }
 
   /** snapshot：a11y 树懒附加采集 + selector 提示行（T4 起委托 snapshot.ts 模块） */
   async snapshot(wsId: string): Promise<string> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     return takeSnapshot(wc);
   }
 
   /** screenshot：capturePage → PNG → 落 `<screenshotDir>/<wsId>/`（boot 注入 userData 目录；缺省 tmpdir 兜底）；filename basename 清洗 */
   async screenshot(wsId: string, filename?: string): Promise<{ path: string }> {
-    const wc = this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId);
     const image = await wc.capturePage();
     const safeName = path.basename(
       filename && filename.trim() !== '' ? filename : `shot-${Date.now()}.png`,
@@ -465,17 +508,22 @@ export class BrowserManager {
    */
   userTakeover(wsId: string): void {
     const ws = this.active;
-    if (!ws || ws.workspaceId !== wsId || ws.takeover === 'user') return;
+    if (!ws || ws.workspaceId !== wsId) return;
+    // 幂等进入也刷新输入时刻——user 态持续输入不断推迟空闲自愈（spec §4.2）；
+    // 刷新点全集（三入口 + overlay mousedown）全部经本方法收敛。
+    ws.lastUserInputAt = Date.now();
+    if (ws.takeover === 'user') return;
     ws.takeover = 'user';
     this.emitState(ws);
   }
 
-  /** 显式释放（v1 无自动回切——agent 收到 TakenOver 错误自决等待/改道） */
+  /** 显式释放（agent 收到 TakenOver 错误自决等待/改道；空闲自愈见 agentWaitTick——spec 2026-09-14 §4.2） */
   releaseTakeover(wsId: string): void {
     const ws = this.active;
     if (!ws || ws.workspaceId !== wsId || ws.takeover === 'agent') return;
     ws.takeover = 'agent';
     this.emitState(ws);
+    this.settleAgentWait(wsId, true); // 放行驻留等待中的 agent 工具调用
   }
 
   /** 地址栏回车（第二入口）：URL 过策略 → 接管 → 当前 tab 载入。校验失败不产生接管副作用 */
@@ -522,6 +570,7 @@ export class BrowserManager {
       consoleBuffer: new Map(),
       collapsed: persistedCollapsed,
       collapseStash: null,
+      lastUserInputAt: Date.now(), // 激活时刻起算空闲计时（spec §4.2）
     };
     this.active = ws;
     if (!persistedCollapsed) {
@@ -538,6 +587,7 @@ export class BrowserManager {
   onWorkspaceDeactivated(wsId: string): void {
     const ws = this.active;
     if (!ws || ws.workspaceId !== wsId) return;
+    this.settleAgentWait(wsId, true); // 不跨 ws 等待——park 中的 waiter 放行防悬挂
     if (ws.collapseStash) {
       this.stashedTabs.set(wsId, ws.collapseStash);
     } else if (!ws.collapsed || !this.stashedTabs.has(wsId)) {
@@ -559,6 +609,7 @@ export class BrowserManager {
   /** app before-quit：销毁活跃视图（partition 数据自动落盘——spec §7） */
   disposeAll(): void {
     if (!this.active) return;
+    this.settleAgentWait(this.active.workspaceId, true); // 退出前放行 waiter，不悬挂 Promise
     this.destroyTabs(this.active);
     this.active = null;
   }
@@ -582,16 +633,105 @@ export class BrowserManager {
     if (ws.takeover === 'user') throw new BrowserTakenOverError();
   }
 
-  private requireCurrentTab(wsId: string): { ws: ActiveWorkspace; tab: TabRecord } {
+  /**
+   * agent 门（带驻留等待，spec 2026-09-14 §4.1）：user 态 park 至释放/空闲自愈/超时；
+   * agent 态立即返回（快路径零开销）。释放后被再接管 → while 复查重新 park
+   * （每次 park 独立 deadline，§4.1 竞态语义）。readAgentWaitMs=0 时回到 v1 fail-fast。
+   */
+  private async gateAgentSide(ws: ActiveWorkspace): Promise<void> {
+    while (ws.takeover === 'user') {
+      const waitMs = this.readAgentWaitMs?.(ws.workspaceId) ?? DEFAULT_AGENT_WAIT_MS;
+      if (waitMs <= 0) {
+        throw new BrowserTakenOverError(
+          '浏览器被用户接管（等待已关闭）。可请用户点击浏览器侧栏的「释放」按钮，或改用 webfetch 等非浏览器方式继续当前任务',
+        );
+      }
+      await this.parkAgentSide(ws, waitMs);
+    }
+  }
+
+  /** 单飞驻留：entry 已存在则 join 其 promise；创建时推 notice（trust 先例：notice 前置，
+   *  推送抛错同步清理 entry/timer——否则后续调用 join 一个永无结果的等待） */
+  private parkAgentSide(ws: ActiveWorkspace, waitMs: number): Promise<void> {
+    const existing = this.agentWaiters.get(ws.workspaceId);
+    if (existing) return existing.promise;
+    let resolve!: () => void;
+    let reject!: (err: Error) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const entry: AgentWaitEntry = {
+      promise,
+      promiseResolve: resolve,
+      promiseReject: reject,
+      startedAt: Date.now(),
+      timer: setInterval(() => this.agentWaitTick(ws.workspaceId), AGENT_WAIT_TICK_MS),
+    };
+    entry.timer.unref?.();
+    this.agentWaiters.set(ws.workspaceId, entry);
+    try {
+      this.hooks.pushNotice(
+        'agent-waiting-release',
+        'agent 正在等待浏览器控制权——点击「释放并继续」恢复任务，或稍候自动恢复',
+        ws.workspaceId,
+        waitMs,
+      );
+    } catch (err) {
+      this.agentWaiters.delete(ws.workspaceId);
+      clearInterval(entry.timer);
+      throw err;
+    }
+    return promise;
+  }
+
+  /** tick 三出口（spec §4.1）：释放复查（双保险）/ 空闲自愈 / 超时。
+   *  自愈仅在「agent 正在等待」时判定——无 waiter 则本 tick 根本不会触发（不打扰原则）。 */
+  private agentWaitTick(wsId: string): void {
+    const ws = this.active;
+    const entry = this.agentWaiters.get(wsId);
+    if (!ws || ws.workspaceId !== wsId || !entry) return;
+    if (ws.takeover !== 'user') {
+      this.settleAgentWait(wsId, true);
+      return;
+    }
+    const idleMs = this.readIdleAutoReleaseMs?.(wsId) ?? DEFAULT_IDLE_AUTO_RELEASE_MS;
+    if (idleMs > 0 && Date.now() - ws.lastUserInputAt >= idleMs) {
+      this.releaseTakeover(wsId); // 单一出口：翻转 + emitState + settle
+      return;
+    }
+    const waitMs = this.readAgentWaitMs?.(wsId) ?? DEFAULT_AGENT_WAIT_MS;
+    if (Date.now() - entry.startedAt >= waitMs) this.settleAgentWait(wsId, false, waitMs);
+  }
+
+  /** settle：resolve（释放/清理）或 reject 超时（文案诚实化，spec §4.5）。
+   *  迟到 settle 对无 entry 是 no-op；entry/timer 此处统一清理，不悬挂 interval。 */
+  private settleAgentWait(wsId: string, ok: boolean, waitedMs?: number): void {
+    const entry = this.agentWaiters.get(wsId);
+    if (!entry) return;
+    this.agentWaiters.delete(wsId);
+    clearInterval(entry.timer);
+    if (ok) {
+      entry.promiseResolve();
+      return;
+    }
+    entry.promiseReject(
+      new BrowserTakenOverError(
+        `浏览器被用户接管，已等待 ${Math.round((waitedMs ?? 0) / 1000)} 秒未释放。用户可点击浏览器侧栏/提示卡上的「释放」按钮；也可以改用 webfetch 等非浏览器方式继续当前任务，稍后再回到浏览器操作`,
+      ),
+    );
+  }
+
+  private async requireCurrentTab(wsId: string): Promise<{ ws: ActiveWorkspace; tab: TabRecord }> {
     const ws = this.requireWorkspace(wsId);
-    this.assertAgentSide(ws);
+    await this.gateAgentSide(ws);
     const tab = ws.tabs[ws.current];
     if (!tab) throw new BrowserNoViewError();
     return { ws, tab };
   }
 
-  private requireCurrentWebContents(wsId: string): ManagedWebContents {
-    return this.requireCurrentTab(wsId).tab.view.webContents;
+  private async requireCurrentWebContents(wsId: string): Promise<ManagedWebContents> {
+    return (await this.requireCurrentTab(wsId)).tab.view.webContents;
   }
 
   private buildState(ws: ActiveWorkspace): BrowserState {
@@ -755,6 +895,8 @@ export class BrowserManager {
     // 可能被 Chromium 转发回 main process 的 before-input-event，压栈自锁防止自接管）。
     wc.on('before-input-event', (...args: unknown[]) => {
       if (this.agentInputDepth > 0) return;
+      // 真实用户输入（含 user 态持续输入）刷新空闲计时——判定自愈用（spec §4.2）
+      ws.lastUserInputAt = Date.now();
       const input = args[1];
       if (typeof input !== 'object' || input === null) return;
       const obj = input as { type?: unknown; key?: unknown };

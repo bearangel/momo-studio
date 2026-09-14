@@ -150,7 +150,10 @@ interface Sut {
 
 function mkManager(
   over: Partial<WorkspaceBrowserSettings> = {},
-  opts?: { readSidebarCollapsed?: (wsId: string) => boolean },
+  opts?: {
+    readSidebarCollapsed?: (wsId: string) => boolean;
+    readAgentWaitMs?: (wsId: string) => number;
+  },
 ): Sut {
   const factory = mkFactory();
   const policy = new BrowserPolicy(() => ({ ...baseSettings, ...over }), '/ws/root');
@@ -158,6 +161,7 @@ function mkManager(
   const pushNotice = vi.fn();
   const manager = new BrowserManager(factory, policy, { pushState, pushNotice }, {
     readSidebarCollapsed: opts?.readSidebarCollapsed,
+    readAgentWaitMs: opts?.readAgentWaitMs,
   });
   return { manager, factory, policy, pushState, pushNotice };
 }
@@ -403,8 +407,8 @@ describe('takeover', () => {
     expect(lastState(pushState)?.takeover).toBe('user');
   });
 
-  it('user 态下 browser_* 工具立即抛 BrowserTakenOverError；release 后恢复', async () => {
-    const { manager } = mkManager();
+  it('user 态下 browser_* 工具立即抛 BrowserTakenOverError；release 后恢复（readAgentWaitMs=0 注入——立即抛仅存在于该形态）', async () => {
+    const { manager } = mkManager({}, { readAgentWaitMs: () => 0 });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     manager.userTakeover('ws1');
@@ -420,7 +424,7 @@ describe('takeover', () => {
   // ---- G4 调用方甄别（review fix）：tabs 双方共用，user 源放行 / agent 源（缺省）拦截 ----
 
   it('user 态下 user 源 tabs 全动作放行（open/switch/close，含关唯一 tab）；同态缺省源 list 仍抛', async () => {
-    const { manager, pushState } = mkManager();
+    const { manager, pushState } = mkManager({}, { readAgentWaitMs: () => 0 });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/'); // 1 tab, current=0
     manager.userTakeover('ws1');
@@ -505,8 +509,8 @@ describe('takeover', () => {
     manager.releaseTakeover('ws-none');
   });
 
-  it('user 态下 closeBrowser 抛 BrowserTakenOverError（tool 一律被拦）', async () => {
-    const { manager } = mkManager();
+  it('user 态下 closeBrowser 抛 BrowserTakenOverError（tool 一律被拦；readAgentWaitMs=0 注入）', async () => {
+    const { manager } = mkManager({}, { readAgentWaitMs: () => 0 });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     manager.userTakeover('ws1');

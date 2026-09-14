@@ -59,10 +59,10 @@ export class EvaluateDisabledError extends BrowserError {
   }
 }
 
-/** 用户接管中：任一 browser_* 工具立即失败，等待用户显式释放 */
+/** 用户接管中：browser_* 工具驻留等待（可配），超时/等待关闭时抛出 */
 export class BrowserTakenOverError extends BrowserError {
-  constructor() {
-    super('taken_over', '浏览器被用户接管，等待释放后重试');
+  constructor(message?: string) {
+    super('taken_over', message ?? '浏览器被用户接管，等待释放后重试');
   }
 }
 
