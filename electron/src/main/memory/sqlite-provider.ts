@@ -8,14 +8,15 @@
 //   - getTaskContext：从 messages(task_id=?) 拿所有相关 message，再 listEventsByMessage 拉事件，
 //     按 KEY_EVENT_TYPES 白名单过滤（剔除 thinking_delta/text_delta 这类 noise），
 //     同时从 tool_call_start 提取文件改动作为 artifacts。
-//   - getConversationContext：直接调 listMessagesBySession，role 用 sender 启发式判断（bot→assistant/owner→user）。
+//   - getConversationContext：直接调 listRecentMessagesBySession（A1 改「最近 N 条」语义；详见 getConversationContext 注释），
+//     role 用 sender 启发式判断（bot→assistant/owner→user）；空 body 的终态行（aborted/failed）合成标记文案（A2）。
 //   - getAgentContext / getUserContext：v1 stub——返回空对象，调用方代码已就绪，
 //     v2 加实现时无需改调用方。
 //   - getWorkspaceContext：单表 SELECT，无 join。
 import { getDb } from '../storage/db';
 import { getTask } from '../storage/tasks/repo';
 import {
-  listMessagesBySession,
+  listRecentMessagesBySession,
   type MessageRow,
 } from '../storage/messages/repo';
 import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../compaction/serialize';
@@ -158,12 +159,23 @@ export class SQLiteMemoryProvider implements MemoryProvider {
       )
       .get(sessionId) as { summary: string; coveredUntil: number } | undefined;
 
-    const rows = listMessagesBySession(sessionId, {
-      limit: opts?.limit,
-      beforeTs: opts?.beforeTs,
-      ...(compaction ? { afterTs: compaction.coveredUntil } : {}),
+    // A1（spec 2026-09-14 §3）：改「最近 N 条」语义——ASC+LIMIT 拿的是最早 N 条
+    //（repo.ts listMessagesBySession 注释自证；session-service.ts /compact 早为此换用
+    // DESC 直取并留有「勿换」警示，主链路此前未修）。游标语义不变：有 compaction 行时
+    // 仅拉 covered_until 之后的最近 N 条。
+    const rows = listRecentMessagesBySession(
+      sessionId,
+      opts?.limit ?? 20,
+      {
+        ...(compaction ? { afterTs: compaction.coveredUntil } : {}),
+        ...(opts?.beforeTs !== undefined ? { beforeTs: opts.beforeTs } : {}),
+      },
+    );
+    const ctx: ContextMessage[] = rows.map((m) => {
+      const c = messageToContext(m);
+      const mark = m.body === '' ? syntheticTerminalBody(m.status) : null;
+      return mark !== null ? { ...c, content: mark } : c;
     });
-    const ctx: ContextMessage[] = rows.map((m) => messageToContext(m));
     // prune 在注入前执行：注入条不参与「最后 user 回合」判定，也永不截断
     pruneOldToolResults(ctx, rows);
     if (!compaction) return { messages: ctx };
@@ -279,6 +291,18 @@ export class SQLiteMemoryProvider implements MemoryProvider {
   async deleteMemory(id: string): Promise<void> {
     repoDelete(id);
   }
+}
+
+/**
+ * A2（spec 2026-09-14 §3）：终态空正文行的合成标记文案。
+ * 作用：(a) 给模型可见的中断/失败信号；(b) 防空 assistant 正文——
+ * Anthropic 系 provider 对空 content 消息有 400 风险。
+ * done 且空正文返回 null（正常终态不该为空，出现也不虚构状态）。
+ */
+function syntheticTerminalBody(status: MessageRow['status']): string | null {
+  if (status === 'aborted') return '[本轮已被用户中断，未产生正文]';
+  if (status === 'failed') return '[本轮执行失败，未产生正文：见消息流详情]';
+  return null;
 }
 
 /**

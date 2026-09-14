@@ -234,3 +234,73 @@ describe('SQLiteMemoryProvider', () => {
     expect(await provider.getWorkspaceContext('nonexistent')).toBeNull();
   });
 });
+
+// === A1/A2（spec 2026-09-14 §3）：最近窗口 + 终态空正文标记 ===
+
+describe('getConversationContext A1/A2（会话连续性修复）', () => {
+  const providerA = new SQLiteMemoryProvider();
+
+  /** seed n 行（m1..mn，created_at = 1000..n*1000 严格递增；奇数 owner / 偶数 bot） */
+  function seedN(n: number, sessionId: string): void {
+    for (let i = 1; i <= n; i++) {
+      const row = insertMessage({
+        sessionId,
+        sender: i % 2 === 0 ? '@bot:home' : 'owner',
+        eventType: 'm.room.message',
+        body: `m${i}`,
+      });
+      getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(i * 1000, row.id);
+    }
+  }
+
+  it('B0 回归锁：超过 limit 行数时返回最新 N 条（修复前为最早 N 条）', async () => {
+    seedN(25, 'r-b0');
+    const ctx = await providerA.getConversationContext('r-b0', { limit: 20 });
+    expect(ctx.messages).toHaveLength(20);
+    expect(ctx.messages[0]!.content).toBe('m6');
+    expect(ctx.messages[19]!.content).toBe('m25');
+  });
+
+  it('A2：aborted/failed 空 body 行替换为合成标记；done 空 body 不替换', async () => {
+    const cases: Array<{ status: 'aborted' | 'failed' | 'done'; ssi: string }> = [
+      { status: 'aborted', ssi: 'sa' },
+      { status: 'failed', ssi: 'sf' },
+      { status: 'done', ssi: 'sd' },
+    ];
+    cases.forEach((c, i) => {
+      const row = insertMessage({
+        sessionId: 'r-a2',
+        sender: '@bot:home',
+        eventType: 'm.room.message',
+        body: '',
+        streamSessionId: c.ssi,
+        status: c.status,
+      });
+      getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run((i + 1) * 1000, row.id);
+    });
+    const ctx = await providerA.getConversationContext('r-a2');
+    expect(ctx.messages.map((m) => m.content)).toEqual([
+      '[本轮已被用户中断，未产生正文]',
+      '[本轮执行失败，未产生正文：见消息流详情]',
+      '',
+    ]);
+  });
+
+  it('compaction 游标：covered_until 之前不再拉取 + 头部注入摘要条', async () => {
+    // session_compactions 有 FK → sessions（beforeEach 已 seed ws1）
+    getDb().prepare(
+      `INSERT INTO sessions (id, workspace_id, title, kind, created_at, updated_at)
+       VALUES ('r-cc', 'ws1', 't', 'chat', 1000, 1000)`,
+    ).run();
+    seedN(5, 'r-cc');
+    getDb().prepare(
+      `INSERT INTO session_compactions (session_id, summary, covered_until, updated_at)
+       VALUES ('r-cc', '早期对话摘要', 3000, 9000)`,
+    ).run();
+    const ctx = await providerA.getConversationContext('r-cc', { limit: 20 });
+    expect(ctx.messages[0]!.role).toBe('user');
+    expect(ctx.messages[0]!.content).toContain('[此前对话压缩摘要]');
+    expect(ctx.messages[0]!.content).toContain('早期对话摘要');
+    expect(ctx.messages.slice(1).map((m) => m.content)).toEqual(['m4', 'm5']);
+  });
+});

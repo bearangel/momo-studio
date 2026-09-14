@@ -128,14 +128,15 @@ describe('历史收缩 + 摘要注入（spec §5）', () => {
     expect(ctx.messages[0]!.content).toBe('[此前对话压缩摘要]\n全覆盖摘要');
   });
 
-  it('收缩 + limit 组合：limit 作用于过滤后集合（covered 之后的最早 N 条）', async () => {
+  it('收缩 + limit 组合：limit 作用于过滤后集合（covered 之后的最**新** N 条——A1 修正）', async () => {
     const rows = seedTwelve();
     upsertSessionCompaction(SESSION_ID, '摘要', rows[7]!.createdAt);
 
     const ctx = await provider.getConversationContext(SESSION_ID, { limit: 2 });
-    // 注入条不计入 limit（limit 语义沿 listMessagesBySession 原样下推 SQL）
+    // 注入条不计入 limit（limit 语义沿 listRecentMessagesBySession 原样下推 SQL）
     expect(ctx.messages).toHaveLength(3);
-    expect(ctx.messages.map((m) => m.content)).toEqual(['[此前对话压缩摘要]\n摘要', 'm9', 'm10']);
+    // A1（spec 2026-09-14 §3）：covered 之后取最**新** 2 条 = m11、m12（不再是 m9、m10）
+    expect(ctx.messages.map((m) => m.content)).toEqual(['[此前对话压缩摘要]\n摘要', 'm11', 'm12']);
   });
 
   it('收缩 + beforeTs 组合：afterTs / beforeTs 同时生效', async () => {
