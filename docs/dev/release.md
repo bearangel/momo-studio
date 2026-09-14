@@ -87,6 +87,19 @@ sha256sum "electron/dist-installers/Momo Studio-2.0.0.AppImage"
 - **MINOR（v1.1.0）**：向后兼容的新功能。例如新增 provider、新增 marketplace 源类型、新增 agent 能力。
 - **PATCH（v1.0.1）**：向后兼容的 bug 修复、文档更新、依赖升级（不引入 breaking）。
 
+### 研发期版本号策略（2026-09-13 起生效）
+
+**产品版本号与研发账本解耦**：README「状态」区与 `docs/specs/` 的 v2.x 条目是特性分组的
+研发叙事（账本），**不是**发布史——账本里的 minor 号不进入产品版本。
+
+- **研发期**：三处 `package.json` 停在 prerelease 号（如 `2.1.0-alpha.0`）。合入大特性时
+  alpha 号 +1（`alpha.0 → alpha.1`），不升 minor。About 页 / 安装包带 `-alpha` 后缀即明示
+  未发布状态。
+- **发版时才定终号**：宣布发正式版时，把累积特性一揽子打包——默认定 `2.1.0`（strip 后缀、
+  打 tag、CHANGELOG 把账本各节折叠成一份 release notes）；若破坏面达到下方「何时升 MAJOR」
+  任一条，则定 `3.0.0`。
+- **纪律**：研发期版本号永不进入「已发布」语境；账本 minor 号与产品版本号互不引用。
+
 ### 版本号修改位置
 
 2.0.0 起版本号在**三处**维护（P5 约定，发版时同步改）：
