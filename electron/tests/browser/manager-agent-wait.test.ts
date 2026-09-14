@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BrowserManager, type ManagedView, type ManagedWebContents, type ViewFactory } from '../../src/main/browser/manager';
 import { BrowserPolicy } from '../../src/main/browser/policy';
-import { BrowserTakenOverError } from '../../src/main/browser/errors';
+import { BrowserTakenOverError, BrowserNoViewError } from '../../src/main/browser/errors';
 import type { WorkspaceBrowserSettings } from '../../src/main/browser/types';
 
 // === mock 视图（仿真 Electron webContents 交互面——本套件不触发事件，on 仅注册） ===
@@ -168,6 +168,29 @@ describe('gateAgentSide 驻留等待（spec §6）', () => {
     // close 后 takeover 复位 agent → park resolve → navigate 走空视图重建路径正常完成
     const r = await p;
     expect(r.url).toBe('https://example.com');
+  });
+
+  it('用例7b（修复回填）：park 中 onWorkspaceDeactivated → navigate 拒绝 NoViewError，不挂起且不再推 notice', async () => {
+    const { manager, notices } = makeManager();
+    manager.onWorkspaceActivated('w1', '/tmp');
+    manager.userTakeover('w1');
+    const p = manager.navigate('w1', 'https://example.com');
+    await vi.advanceTimersByTimeAsync(0);
+    manager.onWorkspaceDeactivated('w1'); // settle 后 stale ws 仍 user 态——gate 不得对失活对象 re-park
+    await expect(p).rejects.toBeInstanceOf(BrowserNoViewError);
+    // 无第二条等待通知（防失活/重激活后 settle→re-park→notice 刷屏循环）
+    expect(notices.filter((n) => n.kind === 'agent-waiting-release')).toHaveLength(1);
+  });
+
+  it('用例7c（修复回填）：park 中 disposeAll → 同样 NoViewError 拒绝，不悬挂', async () => {
+    const { manager, notices } = makeManager();
+    manager.onWorkspaceActivated('w1', '/tmp');
+    manager.userTakeover('w1');
+    const p = manager.navigate('w1', 'https://example.com');
+    await vi.advanceTimersByTimeAsync(0);
+    manager.disposeAll();
+    await expect(p).rejects.toBeInstanceOf(BrowserNoViewError);
+    expect(notices.filter((n) => n.kind === 'agent-waiting-release')).toHaveLength(1);
   });
 
   it('用例8：快路径零回归——agent 态调用零延迟且不推 notice', async () => {

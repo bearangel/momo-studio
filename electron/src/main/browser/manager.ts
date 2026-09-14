@@ -629,17 +629,17 @@ export class BrowserManager {
     return ws;
   }
 
-  private assertAgentSide(ws: ActiveWorkspace): void {
-    if (ws.takeover === 'user') throw new BrowserTakenOverError();
-  }
-
   /**
    * agent 门（带驻留等待，spec 2026-09-14 §4.1）：user 态 park 至释放/空闲自愈/超时；
    * agent 态立即返回（快路径零开销）。释放后被再接管 → while 复查重新 park
    * （每次 park 独立 deadline，§4.1 竞态语义）。readAgentWaitMs=0 时回到 v1 fail-fast。
+   * 循环同时要求 ws 仍是当前活跃对象——deactivate/disposeAll 清理 settle 后 stale ws
+   * 的 takeover 仍 'user'，不判归属会 re-park 成永不 settle 的死等（并致重激活后
+   * settle→re-park→notice ~1Hz 刷屏）；失活退出统一抛 BrowserNoViewError（与
+   * requireWorkspace 对失活 ws 的语义一致）。
    */
   private async gateAgentSide(ws: ActiveWorkspace): Promise<void> {
-    while (ws.takeover === 'user') {
+    while (ws.takeover === 'user' && this.active === ws) {
       const waitMs = this.readAgentWaitMs?.(ws.workspaceId) ?? DEFAULT_AGENT_WAIT_MS;
       if (waitMs <= 0) {
         throw new BrowserTakenOverError(
@@ -648,6 +648,7 @@ export class BrowserManager {
       }
       await this.parkAgentSide(ws, waitMs);
     }
+    if (this.active !== ws) throw new BrowserNoViewError();
   }
 
   /** 单飞驻留：entry 已存在则 join 其 promise；创建时推 notice（trust 先例：notice 前置，
