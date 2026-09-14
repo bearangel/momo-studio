@@ -29,6 +29,8 @@ vi.mock('../../src/main/logger', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import { logger } from '../../src/main/logger';
+
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createBrowserSettingsStore } from '../../src/main/browser/settings-store';
 import type { BrowserSettingsStore } from '../../src/main/browser/settings-store';
@@ -623,6 +625,44 @@ describe('browser:updateSettings 入参净化', () => {
     const res = await callIpc<{ ok: boolean }>('browser:updateSettings', 'ws-1', null);
     expect(res.ok).toBe(true);
     expect(store.read('ws-1').trust).toBe('ask');
+  });
+
+  it('【接管等待 §4.4】agentWaitMs / idleAutoReleaseMs 数字键白名单放行 + 落库（FIX ROUND 补 IPC 写通道）', async () => {
+    // 修复前 PATCH_KEYS 仅六键，新键被静默丢弃——Task 3 设置 UI 写值后 store 不动，
+    // manager opts reader 每 tick 重读到默认 60000/90000，与用户预期漂移（P0-6 同款）。
+    const res = await callIpc<{ ok: boolean }>('browser:updateSettings', 'ws-1', {
+      agentWaitMs: 5_000,
+      idleAutoReleaseMs: 0,
+    });
+    expect(res.ok).toBe(true);
+    const s = store.read('ws-1');
+    expect(s.agentWaitMs).toBe(5_000);
+    expect(s.idleAutoReleaseMs).toBe(0);
+  });
+
+  it('【接管等待 §4.4】agentWaitMs / idleAutoReleaseMs 非数字被丢弃 + warn（其余键仍生效）', async () => {
+    vi.mocked(logger.warn).mockClear();
+    const res = await callIpc<{ ok: boolean }>('browser:updateSettings', 'ws-1', {
+      agentWaitMs: '5000' as unknown as number, // string 而非 number——应被丢弃
+      idleAutoReleaseMs: null as unknown as number, // null 而非 number——应被丢弃
+      trust: 'always', // 合法键应照常生效
+    });
+    expect(res.ok).toBe(true);
+    const s = store.read('ws-1');
+    // 非数字值未落库，回退默认
+    expect(s.agentWaitMs).toBe(60_000);
+    expect(s.idleAutoReleaseMs).toBe(90_000);
+    // 合法键未受影响
+    expect(s.trust).toBe('always');
+    // 两个被丢弃键各 warn 一次
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.stringContaining('agentWaitMs'),
+      expect.objectContaining({ key: 'agentWaitMs' }),
+    );
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.stringContaining('idleAutoReleaseMs'),
+      expect.objectContaining({ key: 'idleAutoReleaseMs' }),
+    );
   });
 });
 

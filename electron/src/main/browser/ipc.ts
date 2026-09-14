@@ -114,7 +114,8 @@ function asSidebarRect(value: unknown): SidebarRect {
 // updateSettings 净化（T6 review Important，硬性项）
 // =================================================================================
 
-/** 允许写入的设置键（与 BrowserSettings 六字段一一对应，未知键一律丢弃） */
+/** 允许写入的设置键（与 BrowserSettings 八字段一一对应，未知键一律丢弃）。
+ *  数字键集合独立抽出——warn 文案不再硬编码单键名（FIX ROUND 防止后续加键改文案漂移）。 */
 const PATCH_KEYS = [
   'trust',
   'evaluateEnabled',
@@ -122,7 +123,16 @@ const PATCH_KEYS = [
   'whitelist',
   'sidebarCollapsed',
   'sidebarWidth',
+  'agentWaitMs',
+  'idleAutoReleaseMs',
 ] as const;
+
+/** 数字键集合（白名单里 typeof number 检查共用同一分支与 warn 文案） */
+const NUMBER_KEYS = new Set<(typeof PATCH_KEYS)[number]>([
+  'sidebarWidth',
+  'agentWaitMs',
+  'idleAutoReleaseMs',
+]);
 
 /**
  * patch 净化规则（测试锁定）：
@@ -130,7 +140,9 @@ const PATCH_KEYS = [
  *   - 显式 undefined 值 → 跳过该键（防 undefined 合并进名单列触发
  *     normalizeDomainList 的英文 TypeError）
  *   - blacklist/whitelist 非数组 → 丢弃该键 + warn（其余键仍生效）
- *   - sidebarWidth 非数字 / 布尔键非布尔 → 丢弃该键 + warn
+ *   - 数字键（sidebarWidth / agentWaitMs / idleAutoReleaseMs）非数字 / 非有限 →
+ *     丢弃该键 + warn（按键名生成）
+ *   - 布尔键非布尔 → 丢弃该键 + warn
  *   - trust 原样透传——store.write 的枚举校验是唯一写侧防线（非法值 fail-fast
  *     抛中文错误，由 handler 包装为 { ok:false } 结构化返回）
  */
@@ -161,12 +173,15 @@ function sanitizeSettingsPatch(raw: unknown): BrowserSettingsPatch {
       patch[key] = value;
       continue;
     }
-    // sidebarWidth
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      logger.warn('browser:updateSettings sidebarWidth 非数字，丢弃该键', { key });
+    if (NUMBER_KEYS.has(key)) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        // 按键名生成文案（FIX ROUND 泛化——数字键集合扩张不再回归硬编码）
+        logger.warn(`browser:updateSettings ${key} 非数字，丢弃该键`, { key });
+        continue;
+      }
+      patch[key] = value;
       continue;
     }
-    patch.sidebarWidth = value;
   }
   return patch;
 }
