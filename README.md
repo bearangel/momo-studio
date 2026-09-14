@@ -2,7 +2,7 @@
 
 **个人桌面端多 agent 协作平台**——把可声明的 agent、MCP/Skill 资源库、内嵌浏览器、多会话协作与受控文件沙箱，全部装进一个本地 Electron 应用。
 
-`2.1.0-alpha（研发中）` · 上一稳定版 `v2.0.0` · macOS / Linux / Windows（实验性） · Apache-2.0
+`2.1.0-alpha（研发中）` · 上一稳定版 `v2.0.0` · macOS / Linux / Windows（实验性） · AGPL-3.0 + 商业授权
 
 ## 为什么用 Momo Studio
 
@@ -114,4 +114,4 @@ docs/       specs（设计）/ plans（实施计划）/ dev（开发指南）
 
 ## 许可
 
-Apache-2.0
+**双授权**：默认 [GNU AGPL-3.0](./LICENSE)——个人与公司内部使用、修改、开源再分发一律免费；**将本项目封装进商业产品销售或闭源托管，须事先取得商业授权**（见 [LICENSE-COMMERCIAL.md](./LICENSE-COMMERCIAL.md)）。提交 PR 视同接受双轨再许可安排（CLA 说明同文件）。

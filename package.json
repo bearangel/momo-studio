@@ -3,7 +3,7 @@
   "private": true,
   "version": "2.1.0-alpha.0",
   "description": "Personal desktop multi-agent collaboration platform",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20.0.0"
