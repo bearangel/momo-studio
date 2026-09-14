@@ -178,4 +178,23 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
       vi.useRealTimers();
     }
   });
+
+  it('error 生命周期清理（终审 I2）：失败显示错误行 → state 卸载 → 新 notice 到达 → 无陈旧错误行', async () => {
+    releaseTakeoverMock.mockImplementationOnce(() => Promise.reject(new Error('boom')));
+    const notice = armOnBrowserNotice();
+    const state = armOnBrowserState();
+    render(<BrowserWaitReleaseNotice />);
+    // 第一轮：释放失败 → 错误行呈现（不静默吞）
+    notice.push({ kind: 'agent-waiting-release', text: '第一轮等待', workspaceId: 'w1' });
+    fireEvent.click(screen.getByRole('button', { name: '释放并继续' }));
+    await waitFor(() => expect(screen.getByText('释放失败：boom')).toBeInTheDocument());
+    // state 卸载（手动释放 / 空闲自愈出口）
+    state.push(mkState('w1', 'agent'));
+    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
+    // 第二轮：新 notice 到达 → 卡片重现，但不得携带上一轮的陈旧错误行
+    notice.push({ kind: 'agent-waiting-release', text: '第二轮等待', workspaceId: 'w1' });
+    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByText('第二轮等待')).toBeInTheDocument();
+    expect(screen.queryByText(/释放失败/)).toBeNull();
+  });
 });

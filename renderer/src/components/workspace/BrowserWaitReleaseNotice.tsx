@@ -22,12 +22,16 @@ export function BrowserWaitReleaseNotice() {
 
   useEffect(() => {
     const offNotice = ipc.browser.onBrowserNotice((n) => {
-      if (n.kind === 'agent-waiting-release') setNotice(n);
+      if (n.kind === 'agent-waiting-release') {
+        setError(null); // 新一轮等待开始——上一轮的释放失败不跨轮残留（终审 I2）
+        setNotice(n);
+      }
     });
     const offState = ipc.browser.onBrowserState((s) => {
       // 仅目标 ws 回切才卸载（用户切走查看其他 ws 不误删卡片）
       if (notice && s.workspaceId === notice.workspaceId && s.takeover === 'agent') {
         setNotice(null);
+        setError(null); // 卡片生命周期结束即清——error 不跨生命周期存活（终审 I2）
       }
     });
     return () => { offNotice(); offState(); };
