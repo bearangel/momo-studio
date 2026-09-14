@@ -5,7 +5,8 @@
 //   1. browser:state takeover='agent'（手动释放 / 空闲自愈——目标 ws 匹配才卸载）
 //   2. 本地 durationMs 兜底计时（超时出口——takeover 不翻转，state 不触发）
 //   3. 收到新的 agent-waiting-release notice 刷新计时（单飞下不应出现，防御）
-// 动作：单一按钮走既有 releaseTakeover 通道（零新 IPC）。
+// 动作：单一按钮走既有 releaseTakeover 通道（零新 IPC）；失败保留卡片 +
+// 错误行（信任卡同语义，不静默吞），按钮复能可重试。
 // 挂载点 App 层（与 BrowserTrustNotice 一致）；路由用 notice.workspaceId（M7 语义）。
 import { useEffect, useRef, useState } from 'react';
 import { MousePointerClick } from 'lucide-react';
@@ -16,6 +17,7 @@ import { Button } from '../ui/Button';
 export function BrowserWaitReleaseNotice() {
   const [notice, setNotice] = useState<BrowserNotice | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -44,9 +46,13 @@ export function BrowserWaitReleaseNotice() {
   const release = async (): Promise<void> => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       await ipc.browser.releaseTakeover(notice.workspaceId);
       setNotice(null);
+    } catch (err) {
+      // 失败保留卡片 + 错误行——释放未完成，用户可重试（信任卡同语义，不静默吞）
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -64,6 +70,11 @@ export function BrowserWaitReleaseNotice() {
           <p className="text-xs text-tertiary mt-0.5">{notice.text}</p>
         </div>
       </div>
+      {error !== null && (
+        <div className="mb-2 rounded border border-status-error/40 bg-status-error-tint px-2 py-1 text-xs text-status-error">
+          释放失败：{error}
+        </div>
+      )}
       <div className="flex justify-end gap-2">
         <Button disabled={busy} onClick={() => void release()}>释放并继续</Button>
       </div>

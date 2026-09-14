@@ -133,4 +133,49 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
     await waitFor(() => expect(releaseTakeoverMock).toHaveBeenCalledWith('w1'));
     await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
   });
+
+  it('releaseTakeover 失败 → 卡片保留 + 错误行「释放失败：boom」+ 按钮复能可重试；busy 期间二次点击不重复调用', async () => {
+    let rejectFirst: (e: Error) => void = () => {};
+    releaseTakeoverMock.mockImplementationOnce(
+      () => new Promise<void>((_, rej) => { rejectFirst = rej; }),
+    );
+    const { push } = armOnBrowserNotice();
+    render(<BrowserWaitReleaseNotice />);
+    push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1' });
+    const btn = screen.getByRole('button', { name: '释放并继续' });
+    fireEvent.click(btn);
+    // in-flight：busy 防双击（disabled + 组件层 if(busy) return 双保险）
+    expect(releaseTakeoverMock).toHaveBeenCalledTimes(1);
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(releaseTakeoverMock).toHaveBeenCalledTimes(1);
+    // 拒绝：卡片保留 + 错误行呈现（不静默吞），按钮复能
+    await act(async () => { rejectFirst(new Error('boom')); });
+    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByText('释放失败：boom')).toBeInTheDocument();
+    expect(btn).toBeEnabled();
+    // 复能后重试：第二次调用回落默认 resolve → 卡片消散
+    fireEvent.click(btn);
+    await waitFor(() => expect(releaseTakeoverMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
+  });
+
+  it('出口3：重复 notice 刷新计时（旧计时作废，从二次 notice 起重新兜底）', () => {
+    vi.useFakeTimers();
+    try {
+      const { push } = armOnBrowserNotice();
+      render(<BrowserWaitReleaseNotice />);
+      push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1', durationMs: 5_000 });
+      act(() => vi.advanceTimersByTime(4_000));
+      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      // 二次 notice：计时重启（单飞下不应出现，防御出口）
+      push({ kind: 'agent-waiting-release', text: '重启计时', workspaceId: 'w1', durationMs: 5_000 });
+      act(() => vi.advanceTimersByTime(4_000));
+      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(3_001));
+      expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
