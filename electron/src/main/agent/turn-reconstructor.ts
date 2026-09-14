@@ -234,6 +234,90 @@ function isOutputEvent(ev: MessageEventRow): boolean {
   return ev.eventType === 'text_delta' || ev.eventType === 'tool_call_start';
 }
 
+/** rebuildTurn / rebuildSessionContext 共享的流重建选项 */
+interface StreamRebuildOptions {
+  /** 头部是否 prepend 回合起始 user 消息（resume 用 true；会话重建的 walk 已渲染 owner 行，用 false） */
+  includeUser: boolean;
+  /**
+   * 流末未 drain 的 steer 是否也渲染为 [用户中途补充] user 消息。
+   * resume 用 false（收集进 steers[] 随载荷重放进 pendingSteers）；
+   * 会话重建用 true（不存在 pendingSteers 消费者，行内渲染语义等价）。
+   */
+  undrainedSteersAsUser: boolean;
+}
+
+/** 共享核心返回形状（RebuiltTurn 超集） */
+interface StreamRebuildResult {
+  messages: LLMMessage[];
+  toolCallsUsed: number;
+  steers: string[];
+  degenerate: boolean;
+  /** 流末 DB 时刻 = 全部关联事件 createdAt 最大值（无事件回落流行 createdAt）——会话重建 steer 时间窗右端点 */
+  endTs: number;
+}
+
+/**
+ * 单流 events → LLMMessage 重建共享核心（rebuildTurn 与 rebuildSessionContext
+ * 的同一语义实现：text_delta 拼接 / tool 对按 callId 配对 / 孤儿 call 合成
+ * INTERRUPTED_TOOL_RESULT / steer 按 drain 语义分支）。
+ */
+function rebuildStreamMessages(
+  streamSessionId: string,
+  opts: StreamRebuildOptions,
+): StreamRebuildResult {
+  // 流行定位失败 = 从未执行（assigned 等）→ 纯重派降级
+  const baseRow = getMessageByStreamSessionId(streamSessionId);
+  if (!baseRow) {
+    return { messages: [], toolCallsUsed: 0, steers: [], degenerate: true, endTs: 0 };
+  }
+
+  const agg = createAssistantRoundAggregator();
+  const steers: string[] = [];
+  let endTs = baseRow.createdAt;
+
+  if (opts.includeUser) {
+    const userBody = findTurnUserBody(baseRow);
+    if (userBody !== null) {
+      agg.appendMessage({ role: 'user', content: userBody });
+    }
+  }
+
+  const events = collectStreamEvents(streamSessionId);
+
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i]!;
+    if (ev.createdAt > endTs) endTs = ev.createdAt;
+    // eventType 实为 TEXT 列（可含未来类型 / T2 的 'steer' / 未知 kind），
+    // repo 联合类型是欠近似——放宽到 string 再分发
+    switch (ev.eventType as string) {
+      case 'steer': {
+        const body = ev.payload.body;
+        if (typeof body !== 'string') break;
+        // 其后是否仍有输出（drain 判定）；会话重建模式下未 drain 也渲染
+        //（其后无任何输出，事件位渲染与流末渲染时序等价）
+        const drained = events.slice(i + 1).some(isOutputEvent);
+        if (drained || opts.undrainedSteersAsUser) {
+          agg.closeRound();
+          agg.appendMessage({ role: 'user', content: `[用户中途补充] ${body}` });
+        } else {
+          steers.push(body);
+        }
+        break;
+      }
+      default:
+        // text / tool 事件进共享聚合状态机；其余（thinking / todo_update /
+        // status_change / final / message_roll / segment_boundary / 未知 kind）跳过
+        agg.push(ev);
+      }
+  }
+  // 流末 flush：残留文本收尾 + 未配对 call 合成中断 result
+  agg.flush();
+
+  const messages = agg.messages;
+  const degenerate = !messages.some((m) => m.role !== 'user');
+  return { messages, toolCallsUsed: agg.toolCallsUsed, steers, degenerate, endTs };
+}
+
 /**
  * 重建断点回合（同步；纯读取）。
  *
@@ -253,50 +337,16 @@ function isOutputEvent(ev: MessageEventRow): boolean {
  */
 export function rebuildTurn(streamSessionId: string): RebuiltTurn {
   try {
-    // 流行定位失败 = 从未执行（assigned 等）→ 纯重派降级
-    const baseRow = getMessageByStreamSessionId(streamSessionId);
-    if (!baseRow) return emptyDegenerate();
-
-    const agg = createAssistantRoundAggregator();
-    const steers: string[] = [];
-
-    const userBody = findTurnUserBody(baseRow);
-    if (userBody !== null) {
-      agg.appendMessage({ role: 'user', content: userBody });
-    }
-
-    const events = collectStreamEvents(streamSessionId);
-
-    for (let i = 0; i < events.length; i++) {
-      const ev = events[i]!;
-      // eventType 实为 TEXT 列（可含未来类型 / T2 的 'steer' / 未知 kind），
-      // repo 联合类型是欠近似——放宽到 string 再分发
-      switch (ev.eventType as string) {
-        case 'steer': {
-          const body = ev.payload.body;
-          if (typeof body !== 'string') break;
-          // 其后是否仍有输出（drain 判定，见函数头注释）
-          const drained = events.slice(i + 1).some(isOutputEvent);
-          if (drained) {
-            agg.closeRound();
-            agg.appendMessage({ role: 'user', content: `[用户中途补充] ${body}` });
-          } else {
-            steers.push(body);
-          }
-          break;
-        }
-        default:
-          // text / tool 事件进共享聚合状态机；其余（thinking / todo_update /
-          // status_change / final / message_roll / segment_boundary / 未知 kind）跳过
-          agg.push(ev);
-      }
-    }
-    // 流末 flush：残留文本收尾 + 未配对 call 合成中断 result
-    agg.flush();
-
-    const messages = agg.messages;
-    const degenerate = !messages.some((m) => m.role !== 'user');
-    return { messages, toolCallsUsed: agg.toolCallsUsed, steers, degenerate };
+    const r = rebuildStreamMessages(streamSessionId, {
+      includeUser: true,
+      undrainedSteersAsUser: false,
+    });
+    return {
+      messages: r.messages,
+      toolCallsUsed: r.toolCallsUsed,
+      steers: r.steers,
+      degenerate: r.degenerate,
+    };
   } catch (err) {
     // 降级阶梯（spec §5.3）：重建任何抛错 → catch 降级 degenerate（安全方向）
     logger.warn('rebuildTurn 重建失败，降级为全新回合', {
