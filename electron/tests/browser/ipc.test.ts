@@ -249,6 +249,24 @@ describe('browser:state / browser:notice 统一推送', () => {
     });
   });
 
+  it('createBrowserPushHooks：pushNotice 携带 durationMs → 载荷含该键；省略 → 键不存在（两态形状锁，spec §4.3）', () => {
+    const hooks = createBrowserPushHooks(webContentsLike);
+    // 携带态：agent-waiting-release 的 durationMs = 本轮 agentWaitMs 实际生效值
+    hooks.pushNotice('agent-waiting-release', 'agent 正在等待浏览器控制权', 'ws-1', 5_000);
+    expect(sends.at(-1)).toEqual({
+      channel: 'browser:notice',
+      args: [
+        { kind: 'agent-waiting-release', text: 'agent 正在等待浏览器控制权', workspaceId: 'ws-1', durationMs: 5_000 },
+      ],
+    });
+    // 省略态：durationMs 键整体不存在（卡片本地计时分支依赖「无键」而非「键为 undefined」）
+    hooks.pushNotice('agent-waiting-release', 'agent 正在等待浏览器控制权', 'ws-2');
+    expect(sends.at(-1)).toEqual({
+      channel: 'browser:notice',
+      args: [{ kind: 'agent-waiting-release', text: 'agent 正在等待浏览器控制权', workspaceId: 'ws-2' }],
+    });
+  });
+
   it('workspace 激活经真实 manager 链路推出 browser:state——八字段载荷锁（ask 未授 → trusted=false；collapsed=侧栏折叠态）', () => {
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();

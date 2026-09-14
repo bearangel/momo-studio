@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { isBrowserOpResult } from '../../browser/op-protocol';
 import { TRUST_WAIT_TIMEOUT_MS } from '../../browser/policy';
+import { DEFAULT_AGENT_WAIT_MS } from '../../browser/manager';
 import type { BrowserOp, BrowserOpArgs, BrowserOpPayloads } from '../../browser/op-protocol';
 import type { BrowserPolicyPort, BrowserManagerPort } from './browser-tools';
 
@@ -38,11 +39,26 @@ const NO_SEND_MESSAGE = 'browser IPC 不可用（process.send 缺失：非 fork 
 export const TRUST_GATE_BRIDGE_TIMEOUT_MS = TRUST_WAIT_TIMEOUT_MS + 20_000;
 
 /**
- * 按 op 分档超时：assertAllowed 走信任门等待档；其余 op 走默认档（60s——对齐
- * navigate 等慢操作上限）。
+ * manager 类 op（navigate/click 等 12 个编排面方法）的桥超时：主进程侧
+ * gateAgentSide 可能 park 最长 DEFAULT_AGENT_WAIT_MS（manager 单一真相源，本常量
+ * 由其推导——编译期联动，改一处另一处可见；测试另锁「本值 ≥
+ * DEFAULT_AGENT_WAIT_MS + 20s」防单边改小）。桥超时必须晚于 park 诚实 reject
+ * 上限（park 起点 + waitMs + 1s tick 粒度 + op 执行 + IPC 开销），否则桥先超时，
+ * 子进程拿到「browser IPC 无响应」的错误归因，迟到的诚实超时按未知 requestId
+ * 静默丢弃（终审 C1）。取舍：settings 把 agentWaitMs 调大于缺省时仍会被本档
+ * 截断——本期无设置 UI（spec §4.4），缺省即运行事实；缺省改 120s（终审 I1）时
+ * 本档自动跟随为 140s，无需单边调整。
+ */
+export const MANAGER_OP_BRIDGE_TIMEOUT_MS = DEFAULT_AGENT_WAIT_MS + 20_000;
+
+/**
+ * 按 op 分档超时：assertAllowed 走信任门等待档；manager 类 op 走驻留等待联动档
+ * （park 最长 DEFAULT_AGENT_WAIT_MS + 裕量）；assertEvaluate 纯判定 op 走默认档。
  */
 function timeoutForOp(op: BrowserOp, defaultTimeoutMs: number): number {
-  return op === 'assertAllowed' ? TRUST_GATE_BRIDGE_TIMEOUT_MS : defaultTimeoutMs;
+  if (op === 'assertAllowed') return TRUST_GATE_BRIDGE_TIMEOUT_MS;
+  if (op === 'assertEvaluate') return defaultTimeoutMs;
+  return MANAGER_OP_BRIDGE_TIMEOUT_MS;
 }
 
 /** 桥产出：两端口代理（initBrowserTools 直接消费） */
@@ -105,7 +121,8 @@ function sendBrowserOp<K extends BrowserOp>(
  * 创建 browser 工具 IPC 桥。两端口的方法全部代理为 sendBrowserOp——真实
  * policy/manager 只活在主进程，子进程经 fork IPC 通道往返调用。
  *
- * @param timeoutMs 单次 op 往返超时（缺省 60s——对齐 navigate 等慢操作上限）
+ * @param timeoutMs 纯判定类 op（assertEvaluate）的往返超时缺省；等待类 op
+ *   （assertAllowed / manager 族）由分档推导常量覆盖，见 timeoutForOp
  */
 export function createBrowserToolsIpcBridge(timeoutMs = 60_000): BrowserToolsIpcBridge {
   const call = <K extends BrowserOp>(op: K, args: BrowserOpArgs[K]): Promise<BrowserOpPayloads[K]> =>

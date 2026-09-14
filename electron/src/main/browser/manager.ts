@@ -75,8 +75,9 @@ const MODIFIER_KEYS = new Set([
 /** scroll 缺省 amount 常量已移至 actions.ts（SCROLL_DEFAULT_AMOUNT——动作语义单一归属） */
 /** snapshot CDP 协议版本与格式化器已移至 snapshot.ts（T4——懒附加 + 提示行单一归属） */
 
-/** agent 驻留等待缺省时长（spec 2026-09-14 §4.1；readAgentWaitMs 注入覆盖，0=立即失败） */
-const DEFAULT_AGENT_WAIT_MS = 60_000;
+/** agent 驻留等待缺省时长（spec 2026-09-14 §4.1；readAgentWaitMs 注入覆盖，0=立即失败）。
+ *  导出供 IPC 桥推导 manager-op 档超时（终审 C1：桥超时必须晚于 park 诚实 reject 上限） */
+export const DEFAULT_AGENT_WAIT_MS = 60_000;
 /** 空闲自动回切缺省阈值（spec §4.2；readIdleAutoReleaseMs 注入覆盖，0=关闭） */
 const DEFAULT_IDLE_AUTO_RELEASE_MS = 90_000;
 /** 驻留等待 tick 间隔（释放检测 + 空闲判定 + 超时判定共用） */

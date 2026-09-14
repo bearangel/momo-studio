@@ -23,9 +23,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createBrowserToolsIpcBridge,
   handleBrowserOpResult,
+  MANAGER_OP_BRIDGE_TIMEOUT_MS,
   TRUST_GATE_BRIDGE_TIMEOUT_MS,
 } from '../../../src/main/agent/tools/browser-ipc-bridge';
 import { TRUST_WAIT_TIMEOUT_MS } from '../../../src/main/browser/policy';
+import { DEFAULT_AGENT_WAIT_MS } from '../../../src/main/browser/manager';
 
 /** UUID v4 形状（randomUUID 产物） */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -155,17 +157,33 @@ describe('browser IPC 桥（子进程侧）', () => {
     expect(err.message).toBe('已请求浏览器权限，请在右下角卡片授权后重试');
   });
 
-  it('60s 超时 → reject 中文文案 + pending 清空（迟到结果安全 no-op）', async () => {
+  it('manager 档超时 → reject 中文文案 + pending 清空（迟到结果安全 no-op）', async () => {
     installSendMock();
     vi.useFakeTimers();
     const { manager } = createBrowserToolsIpcBridge();
 
     const p = manager.snapshot('ws-1');
+    void p.catch(() => {}); // 预挂兜底——超时 rejection 先于断言 attach，防 unhandled rejection 噪音
     await Promise.resolve();
     const requestId = sentRequestId();
-    expect(p).rejects.toThrow('browser IPC 无响应（主进程未接线或超时）');
 
+    // 旧默认档 60s 到点不超时——主进程 gateAgentSide 可能仍在 park 诚实等待
+    // （最长 DEFAULT_AGENT_WAIT_MS + tick 粒度），桥先超时即错误归因（终审 C1）
     await vi.advanceTimersByTimeAsync(60_000);
+    let settled = false;
+    void p.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+
+    // 推进到 manager 档上限 → 桥超时 reject（诚实等待已越出裕量，视为 IPC 无响应）
+    await vi.advanceTimersByTimeAsync(MANAGER_OP_BRIDGE_TIMEOUT_MS - 60_000);
     await expect(p).rejects.toThrow('browser IPC 无响应（主进程未接线或超时）');
 
     // 超时后迟到 result：requestId 已清出 pending——静默忽略不崩
@@ -198,10 +216,17 @@ describe('browser IPC 桥（子进程侧）', () => {
     await expect(p).rejects.toThrow('browser IPC 不可用');
   });
 
-  describe('桥超时按 op 分档（信任门阻塞等待联动）', () => {
+  describe('桥超时按 op 分档（信任门 / 驻留等待阻塞联动）', () => {
     it('常量锁：等待类 op 桥超时 ≥ TRUST_WAIT_TIMEOUT_MS + 20s 裕量（防未来单边改小）', () => {
       expect(TRUST_WAIT_TIMEOUT_MS).toBe(180_000);
       expect(TRUST_GATE_BRIDGE_TIMEOUT_MS).toBeGreaterThanOrEqual(TRUST_WAIT_TIMEOUT_MS + 20_000);
+    });
+
+    it('常量锁：manager 类 op 桥超时 ≥ DEFAULT_AGENT_WAIT_MS + 20s 裕量（终审 C1——桥必须晚于 park 诚实 reject）', () => {
+      // 主进程 park 诚实 reject 最早在 park 起点 + waitMs + 1s tick 粒度 + IPC 开销；
+      // 桥先超时会让子进程拿到「IPC 无响应」错误归因，迟到的诚实错误按未知 requestId 丢弃
+      expect(DEFAULT_AGENT_WAIT_MS).toBe(60_000); // 当前缺省快照（I1 改 120s 时随 commit 更新）
+      expect(MANAGER_OP_BRIDGE_TIMEOUT_MS).toBeGreaterThanOrEqual(DEFAULT_AGENT_WAIT_MS + 20_000);
     });
 
     it('行为锁：assertAllowed 走等待档——默认档 60s 到点不超时，至等待档上限才超时', async () => {
