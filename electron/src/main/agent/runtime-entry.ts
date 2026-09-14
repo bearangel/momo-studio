@@ -132,7 +132,7 @@ const readTracker = new ReadTracker();
 //   2. 尾部选择锚定跳过： mandate 锚点必须是真实用户消息，锚到合成条会把
 //      当前 user 消息误判进可压缩区（切断 mandate 所在轮）。
 const COMPACTION_SYNTHETIC_USER_PREFIXES = [
-  '[此前对话压缩摘要]',   // 主进程 getConversationContext 注入的 prior 摘要（T4）
+  '[此前对话压缩摘要]',   // rebuildSessionContext 读 session_compactions 注入的 prior 摘要（T4）
   '[历史压缩摘要]',       // 本回合内压缩产出的摘要条
   '[系统] 上下文已自动压缩', // auto 压缩后的续行合成条（spec §6.2）
 ] as const;
@@ -521,8 +521,9 @@ export async function runChatLoop(
    * auto 路径自然跳过，工具路径向 LLM 报「无需压缩」。
    *
    * coveredUntil 语义（T5 遗留 Important-1 修复）：created_at ≤ coveredUntil 的
-   * 历史已被摘要覆盖，下轮收缩（getConversationContext 的 afterTs 过滤）不再
-   * 拉取。取「尾部起始前一条（head 末条）的已知时刻」而非压缩时刻 Date.now()——
+   * 历史已被摘要覆盖，下轮收缩（rebuildSessionContext 读 session_compactions
+   * 后的 afterTs 过滤）不再拉取。取「尾部起始前一条（head 末条）的已知时刻」
+   * 而非压缩时刻 Date.now()——
    * 压缩时刻必然晚于本轮已落库的尾部消息，用当下时刻会把未摘要的尾部消息一并
    * 过滤（未摘要却消失）。head 末条：convCtx 来源 → 精确 timestamp（convTimes
    * 命中）；回合内消息 → turnStart - 1（回合内消息 createdAt ≥ turnStart，
@@ -1469,7 +1470,7 @@ export async function runTaskChatLoop(
     // runChatLoop 抛错：仅当本轮未发过 end 时补一条 end(error)（minor-7 防重），
     // 再 task-end + exit(1)。runChatLoop 的内部 try/catch 在大多数错误路径
     // 已 sendEndChunk(error) 后才 throw（endChunkSent=true）；某些早期抛错
-    // （如 getConversationContext 失败）未经此处理则兜底发 end。
+    // （如 memory provider 取数失败）未经此处理则兜底发 end。
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`runTaskChatLoop 异常: ${msg}\n`);
     if (!stats.endChunkSent) {

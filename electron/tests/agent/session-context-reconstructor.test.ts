@@ -93,6 +93,15 @@ function bumpStreamEventTs(ssi: string, floorTs: number): void {
   ).run(floorTs, floorTs, ssi, ssi);
 }
 
+/** 族事件时刻整体锚定（exact set 含 final 事件；族 endTs 断言确定性用——
+ *  bump 只抬不压，final 事件真实时刻漂移会使 endTs 不可断言） */
+function setStreamEventTs(ssi: string, ts: number): void {
+  getDb().prepare(
+    `UPDATE message_events SET created_at = ? WHERE message_id IN
+       (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+  ).run(ts, ssi, ssi);
+}
+
 describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => {
   it('T1 案例回归锁：中断轮的工具对完整进入下一轮上下文，当前指令行被剔除', () => {
     const T0 = Date.now();
@@ -102,7 +111,10 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     toolResult('s1', 'c1', 'bash', 'HTTP状态码: 200');
     bumpStreamEventTs('s1', T0 + 250);
     endStream('s1', 'interrupted');
-    bumpStreamEventTs('s1', T0 + 280);
+    // I1 契约：族时间戳 = endTs（族末事件时刻 ≥ 全部族行 created_at）——压缩
+    // coveredUntil 落在族上时下一轮 afterTs 整族出局。事件锚定用 exact set
+    //（含 final 事件）保证 endTs 可精确断言
+    setStreamEventTs('s1', T0 + 280);
     ownerRow('访问百度', T0 + 300);
 
     const ctx = rebuildSessionContext(SESSION_ID, { excludeTrailingOwnerRow: true });
@@ -113,7 +125,7 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
       toolCalls: [{ id: 'c1', name: 'bash' }],
     });
     expect(ctx.messages[2]).toMatchObject({ role: 'tool', toolCallId: 'c1', content: 'HTTP状态码: 200' });
-    expect(ctx.timestamps).toEqual([T0 + 100, T0 + 200, T0 + 200]);
+    expect(ctx.timestamps).toEqual([T0 + 100, T0 + 280, T0 + 280]);
   });
 
   it('T2 孤儿 tool_call：中断无 result 时合成 INTERRUPTED_TOOL_RESULT', () => {
@@ -362,6 +374,7 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     const ctx = rebuildSessionContext(SESSION_ID, { limitTurns: 0 });
     expect(ctx.messages).toEqual([{ role: 'user', content: '当前指令' }]);
   });
+
   it('C1 excludeFamilySsi：断点族不展开、#roll 行不复活、族窗内 steer 行仍去重、原指令行由 trailing 剔除', () => {
     const T0 = Date.now();
     ownerRow('原始指令', T0 + 100);
@@ -400,4 +413,54 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     expect(ctx.timestamps).toEqual([]);
   });
 
+  it('I1 回归锁：带 #roll 的族被压缩后下一轮不再复活（族时间戳 = endTs，coveredUntil 按其派生）', () => {
+    // session_compactions 有 FK → sessions（照 T5 前置 seed）
+    getDb().prepare(
+      `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+       VALUES ('ws-ctx', 'WS', '', '/tmp', 0, '@owner:s', 'x')`,
+    ).run();
+    getDb().prepare(
+      `INSERT INTO sessions (id, workspace_id, title, kind, created_at, updated_at)
+       VALUES (?, 'ws-ctx', 't', 'chat', 1000, 1000)`,
+    ).run(SESSION_ID);
+
+    const T0 = Date.now();
+    ownerRow('跑多步任务', T0 + 100);
+    startStream('sr', T0 + 200);
+    toolCall('sr', 'cr1', 'bash', { command: 'step1' });
+    toolResult('sr', 'cr1', 'bash', 'step1-ok');
+    // #roll 换行：后续事件落新行（行时刻晚于 base 行——旧 bug 的复活载体：
+    // afterTs 只排除 base 行时 roll 行幸存，walk 经其重建整族）
+    __routeChunkToBufferForTest({ type: 'message_roll', streamSessionId: 'sr' });
+    __flushEventBufferForTest();
+    getDb().prepare(
+      `UPDATE messages SET created_at = ? WHERE stream_session_id LIKE ? || '#%'`,
+    ).run(T0 + 300, 'sr');
+    toolCall('sr', 'cr2', 'bash', { command: 'step2' });
+    toolResult('sr', 'cr2', 'bash', 'step2-ok');
+    endStream('sr', 'stop');
+    setStreamEventTs('sr', T0 + 320);
+
+    // 第一轮（未压缩）：族完整可见。族消息 timestamps 是 runCompaction 经
+    // convTimes 派生 coveredUntil 的生产数据源——旧代码取 startTs（T0+200，
+    // 能排除 base 行但排除不了 roll 行），新代码取 endTs（≥ 全部族行时刻）
+    const ctx1 = rebuildSessionContext(SESSION_ID);
+    const cr1Idx = ctx1.messages.findIndex((m) => m.toolCallId === 'cr1');
+    expect(cr1Idx).toBeGreaterThan(0);
+    const familyTs = ctx1.timestamps[cr1Idx]!;
+    expect(familyTs).toBeGreaterThanOrEqual(T0 + 300); // ≥ roll 行时刻（旧代码红）
+
+    // 模拟压缩落库：covered_until = 族时间戳（生产链 runCompaction 的派生形状）
+    getDb().prepare(
+      `INSERT INTO session_compactions (session_id, summary, covered_until, updated_at)
+       VALUES (?, '多步任务已压缩', ?, ?)`,
+    ).run(SESSION_ID, familyTs, familyTs);
+
+    // 下一轮：族整族缺席、只剩摘要头（旧代码红：roll 行 created_at > startTs
+    // 幸存 afterTs → walk 复活整族，与摘要头双内容）
+    const ctx2 = rebuildSessionContext(SESSION_ID);
+    expect(ctx2.messages).toHaveLength(1);
+    expect(ctx2.messages[0]!.content).toContain('多步任务已压缩');
+    expect(ctx2.messages.some((m) => m.toolCallId === 'cr1' || m.toolCallId === 'cr2')).toBe(false);
+  });
 });

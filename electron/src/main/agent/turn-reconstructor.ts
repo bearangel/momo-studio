@@ -508,8 +508,11 @@ export function rebuildSessionContext(
     const limitTurns = Math.max(1, opts?.limitTurns ?? DEFAULT_LIMIT_TURNS);
     const windowed = rendered.slice(-limitTurns);
 
-    // ⑤ 展平 + 平行时间戳（族单位消息统一取族首行时刻——回合粒度，
-    // runCompaction 的 turnStart-1 兜底语义不受影响）
+    // ⑤ 展平 + 平行时间戳（族消息统一取族末事件时刻 endTs ≥ 全部族行
+    // created_at——压缩游标粒度与族对齐（I1）：coveredUntil 落在族上时下一轮
+    // afterTs 严格大于使整族（含 #roll 行 / steer 行）干净出局，防已摘要族
+    // 经 roll 行复活；runCompaction 的 turnStart-1 兜底语义不受影响——endTs
+    // 只会更保守，多排除不会少排除）
     const messages: LLMMessage[] = [];
     const timestamps: number[] = [];
     for (const u of windowed) {
@@ -518,7 +521,7 @@ export function rebuildSessionContext(
         timestamps.push(u.row.createdAt);
       } else {
         messages.push(...u.messages);
-        for (let i = 0; i < u.messages.length; i++) timestamps.push(u.startTs);
+        for (let i = 0; i < u.messages.length; i++) timestamps.push(u.endTs);
       }
     }
 

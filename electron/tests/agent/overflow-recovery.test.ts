@@ -197,7 +197,8 @@ function seedSessionRow(): void {
   ).run(ROOM);
 }
 
-/** BIG 文本族：流行 created_at 精确锚定 anchorTs（c1 的 coveredUntil 断言值） */
+/** BIG 文本族：流行 created_at 精确锚定 anchorTs；族事件（含 final）锚定
+ *  anchorTs + 50 —— I1 契约下族时间戳 = endTs，c1 的 coveredUntil 断言值 */
 function seedBigFamily(ssi: string, anchorTs: number): void {
   __routeChunkToBufferForTest({
     type: 'start', streamSessionId: ssi, sessionId: ROOM, senderAgentId: 'agent-ov',
@@ -205,13 +206,13 @@ function seedBigFamily(ssi: string, anchorTs: number): void {
   __flushEventBufferForTest();
   getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(anchorTs, ssi);
   __routeChunkToBufferForTest({ type: 'text', streamSessionId: ssi, delta: BIG });
+  __routeChunkToBufferForTest({ type: 'end', streamSessionId: ssi, finishReason: 'stop' });
   __flushEventBufferForTest();
+  // exact set（bump 只抬不压，final 事件真实时刻漂移会使 endTs 不可断言）
   getDb().prepare(
     `UPDATE message_events SET created_at = ? WHERE message_id IN
        (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
   ).run(anchorTs + 50, ssi, ssi);
-  __routeChunkToBufferForTest({ type: 'end', streamSessionId: ssi, finishReason: 'stop' });
-  __flushEventBufferForTest();
 }
 
 /** 旧 stub bigHistory 的 DB 等价物：prior 摘要头（covered_until=1000）+ BIG 文本族（T_BIG） */
@@ -373,9 +374,10 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
       string, string, number,
     ];
     expect(sessionId).toBe(ROOM);
-    // head = [BIG]（convCtx 来源）→ coveredUntil 是其精确落库时刻，
-    // 不是压缩时刻 Date.now()（旧实现过覆盖：下轮收缩误过滤未摘要的尾部消息）
-    expect(coveredUntil).toBe(T_BIG);
+    // head = [BIG]（convCtx 来源）→ coveredUntil 是族时间戳（I1 契约 = endTs =
+    // 全部族事件时刻最大值，此处文本/final 事件均锚定 T_BIG+50），不是压缩时刻
+    // Date.now()（旧实现过覆盖：下轮收缩误过滤未摘要的尾部消息）
+    expect(coveredUntil).toBe(T_BIG + 50);
   });
 
   it('(c2) coveredUntil 精确化：head 末条为回合内消息 → turnStart - 1（< 回合内任何落库时刻）', async () => {
