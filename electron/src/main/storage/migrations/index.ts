@@ -9,6 +9,7 @@
 import { migration032 } from './032_v2.3_builtin_apply_patch';
 import { migration033 } from './033_v2_5_change_journal';
 import { migration034 } from './034_v2_7_browser_settings';
+import { migration035 } from './035_v2_7_browser_takeover_wait';
 
 export interface Migration {
   version: number;
@@ -898,6 +899,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 已被 v2.3/v2.5 占用，实际版本 034（详见该模块头注）。
     version: migration034.version,
     sql: migration034.up,
+  },
+  {
+    // v2.7：接管驻留等待与空闲自愈时长（spec 2026-09-14 §4.4）。SQL 住在独立模块
+    // 035_v2_7_browser_takeover_wait.ts（约定同上）——ALTER TABLE ADD COLUMN 两列。
+    version: migration035.version,
+    sql: migration035.up,
   },
 ];
 

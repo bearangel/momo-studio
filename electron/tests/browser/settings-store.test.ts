@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe('BrowserSettingsStore.read', () => {
-  it('未知 wsId → 全默认（ask / false / [] / [] / false / 380）', () => {
+  it('未知 wsId → 全默认（ask / false / [] / [] / false / 380 / 60000 / 90000）', () => {
     const store = createBrowserSettingsStore(db);
     expect(store.read('ws-unknown')).toEqual({
       trust: 'ask',
@@ -57,6 +57,8 @@ describe('BrowserSettingsStore.read', () => {
       whitelist: [],
       sidebarCollapsed: false,
       sidebarWidth: 380,
+      agentWaitMs: 60_000,
+      idleAutoReleaseMs: 90_000,
     });
   });
 
@@ -102,10 +104,19 @@ describe('BrowserSettingsStore.read', () => {
     expect(store.read('ws-A').trust).toBe('ask');
     expect(vi.mocked(logger.warn)).toHaveBeenCalledTimes(1);
   });
+
+  it('agentWaitMs / idleAutoReleaseMs 默认值与覆盖（接管驻留等待 §4.4）', () => {
+    const store = createBrowserSettingsStore(db);
+    expect(store.read('ws-A').agentWaitMs).toBe(60_000);
+    expect(store.read('ws-A').idleAutoReleaseMs).toBe(90_000);
+    store.write('ws-A', { agentWaitMs: 5_000, idleAutoReleaseMs: 0 });
+    expect(store.read('ws-A').agentWaitMs).toBe(5_000);
+    expect(store.read('ws-A').idleAutoReleaseMs).toBe(0);
+  });
 });
 
 describe('BrowserSettingsStore.write', () => {
-  it('全量读写往返（六字段回显一致）', () => {
+  it('全量读写往返（八字段回显一致）', () => {
     const store = createBrowserSettingsStore(db);
     store.write('ws-A', {
       trust: 'always',
@@ -114,6 +125,8 @@ describe('BrowserSettingsStore.write', () => {
       whitelist: ['good.com'],
       sidebarCollapsed: true,
       sidebarWidth: 512,
+      agentWaitMs: 30_000,
+      idleAutoReleaseMs: 120_000,
     });
     expect(store.read('ws-A')).toEqual({
       trust: 'always',
@@ -122,6 +135,8 @@ describe('BrowserSettingsStore.write', () => {
       whitelist: ['good.com'],
       sidebarCollapsed: true,
       sidebarWidth: 512,
+      agentWaitMs: 30_000,
+      idleAutoReleaseMs: 120_000,
     });
   });
 
@@ -135,6 +150,8 @@ describe('BrowserSettingsStore.write', () => {
     expect(settings.evaluateEnabled).toBe(false); // 未动 → 默认
     expect(settings.blacklist).toEqual([]); // 未动 → 默认
     expect(settings.sidebarCollapsed).toBe(false); // 未动 → 默认
+    expect(settings.agentWaitMs).toBe(60_000); // 未动 → 默认
+    expect(settings.idleAutoReleaseMs).toBe(90_000); // 未动 → 默认
   });
 
   it('域名条目写入归一化全分支：trim / 去 scheme / 去端口 / 小写 / 丢空', () => {

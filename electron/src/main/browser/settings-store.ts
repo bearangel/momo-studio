@@ -1,8 +1,9 @@
 // electron/src/main/browser/settings-store.ts
 //
-// workspace 级浏览器设置读写（v2.7 McpBrowser Task 6，spec 2026-09-11 §6.2/§9）。
-// 持久化形态：workspace_settings 表六列（migration v034）——信任三值枚举 /
-// evaluate 开关 / 黑白名单 JSON 数组 / 侧栏折叠与宽度。
+// workspace 级浏览器设置读写（v2.7 McpBrowser Task 6 + Task 12 驻留等待接线，
+// spec 2026-09-11 §6.2/§9 + 2026-09-14 §4.4）。
+// 持久化形态：workspace_settings 表八列（migration v034 + v035）——信任三值枚举 /
+// evaluate 开关 / 黑白名单 JSON 数组 / 侧栏折叠与宽度 / 接管驻留等待与空闲自愈。
 //
 // db 经 createBrowserSettingsStore(db) 注入（journal store 同款）——测试与生产
 // 共用 getDb()。读侧对脏数据全容错（坏 JSON → 空数组 + warn；非法 trust → ask
@@ -17,16 +18,21 @@ import type { Database as DB } from 'better-sqlite3';
 import { logger } from '../logger';
 import type { WorkspaceBrowserSettings } from './types';
 
-/** 完整浏览器设置：策略四列（T1 契约）+ 侧栏 UI 两列 */
+/** 完整浏览器设置：策略四列（T1 契约）+ 侧栏 UI 两列 + 接管驻留等待两列（§4.4） */
 export type BrowserSettings = WorkspaceBrowserSettings & {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  /** agent 驻留等待上限（毫秒；0=立即失败 / >0=等用户释放或超时）；
+   *  settings-store 默认 60000；manager 缺省 60000；设置层与运行时层默认值镜像 */
+  agentWaitMs: number;
+  /** user 接管后空闲自动回切阈值（毫秒；0=关闭自愈 / >0=空闲超此值自动回 agent 态） */
+  idleAutoReleaseMs: number;
 };
 
 /** write 的 patch 形态：任意字段子集，未给字段保持既有值 */
 export type BrowserSettingsPatch = Partial<BrowserSettings>;
 
-/** 默认值（spec §9 六列 DEFAULT 的 TS 镜像；缺失行 / 脏数据回退到此） */
+/** 默认值（spec §9 + §4.4 DEFAULT 的 TS 镜像；缺失行 / 脏数据回退到此） */
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   trust: 'ask',
   evaluateEnabled: false,
@@ -34,6 +40,8 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   whitelist: [],
   sidebarCollapsed: false,
   sidebarWidth: 380,
+  agentWaitMs: 60_000,
+  idleAutoReleaseMs: 90_000,
 };
 
 export interface BrowserSettingsStore {
@@ -92,6 +100,8 @@ interface SettingsRow {
   browser_domain_whitelist: unknown;
   browser_sidebar_collapsed: unknown;
   browser_sidebar_width: unknown;
+  agent_wait_ms: unknown;
+  idle_auto_release_ms: unknown;
 }
 
 function rowToSettings(row: SettingsRow | undefined, wsId: string): BrowserSettings {
@@ -106,24 +116,35 @@ function rowToSettings(row: SettingsRow | undefined, wsId: string): BrowserSetti
       typeof row.browser_sidebar_width === 'number'
         ? row.browser_sidebar_width
         : DEFAULT_BROWSER_SETTINGS.sidebarWidth,
+    agentWaitMs:
+      typeof row.agent_wait_ms === 'number'
+        ? row.agent_wait_ms
+        : DEFAULT_BROWSER_SETTINGS.agentWaitMs,
+    idleAutoReleaseMs:
+      typeof row.idle_auto_release_ms === 'number'
+        ? row.idle_auto_release_ms
+        : DEFAULT_BROWSER_SETTINGS.idleAutoReleaseMs,
   };
 }
 
 export function createBrowserSettingsStore(db: DB): BrowserSettingsStore {
   const stmtRead = db.prepare(`
     SELECT trust_browser, browser_evaluate_enabled, browser_domain_blacklist,
-           browser_domain_whitelist, browser_sidebar_collapsed, browser_sidebar_width
+           browser_domain_whitelist, browser_sidebar_collapsed, browser_sidebar_width,
+           agent_wait_ms, idle_auto_release_ms
     FROM workspace_settings WHERE workspace_id = ?
   `);
   const stmtUpsert = db.prepare(`
     INSERT INTO workspace_settings (
       workspace_id, trust_browser, browser_evaluate_enabled,
       browser_domain_blacklist, browser_domain_whitelist,
-      browser_sidebar_collapsed, browser_sidebar_width
+      browser_sidebar_collapsed, browser_sidebar_width,
+      agent_wait_ms, idle_auto_release_ms
     ) VALUES (
       @workspaceId, @trustBrowser, @browserEvaluateEnabled,
       @browserDomainBlacklist, @browserDomainWhitelist,
-      @browserSidebarCollapsed, @browserSidebarWidth
+      @browserSidebarCollapsed, @browserSidebarWidth,
+      @agentWaitMs, @idleAutoReleaseMs
     )
     ON CONFLICT(workspace_id) DO UPDATE SET
       trust_browser = excluded.trust_browser,
@@ -131,7 +152,9 @@ export function createBrowserSettingsStore(db: DB): BrowserSettingsStore {
       browser_domain_blacklist = excluded.browser_domain_blacklist,
       browser_domain_whitelist = excluded.browser_domain_whitelist,
       browser_sidebar_collapsed = excluded.browser_sidebar_collapsed,
-      browser_sidebar_width = excluded.browser_sidebar_width
+      browser_sidebar_width = excluded.browser_sidebar_width,
+      agent_wait_ms = excluded.agent_wait_ms,
+      idle_auto_release_ms = excluded.idle_auto_release_ms
   `);
 
   const read = (wsId: string): BrowserSettings =>
@@ -154,6 +177,8 @@ export function createBrowserSettingsStore(db: DB): BrowserSettingsStore {
       browserDomainWhitelist: JSON.stringify(merged.whitelist),
       browserSidebarCollapsed: merged.sidebarCollapsed ? 1 : 0,
       browserSidebarWidth: merged.sidebarWidth,
+      agentWaitMs: merged.agentWaitMs,
+      idleAutoReleaseMs: merged.idleAutoReleaseMs,
     });
   };
 

@@ -104,6 +104,9 @@ export function assembleBrowserSubsystem(deps: BrowserBootDeps): BrowserBootHand
   const manager = new BrowserManager(factory, policy, hooks, {
     screenshotDir,
     readSidebarCollapsed: (wsId) => store.read(wsId).sidebarCollapsed,
+    // 接管驻留等待（spec 2026-09-14 §4.4）：每 tick 重读——设置即时生效
+    readAgentWaitMs: (wsId) => store.read(wsId).agentWaitMs,
+    readIdleAutoReleaseMs: (wsId) => store.read(wsId).idleAutoReleaseMs,
   });
   overlayHit.target = manager;
   initBrowserTools(policy, manager);

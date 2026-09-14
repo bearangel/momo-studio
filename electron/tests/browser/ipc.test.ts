@@ -631,9 +631,9 @@ describe('browser:updateSettings 入参净化', () => {
 // =================================================================================
 
 describe('browser:getSettings', () => {
-  it('未写过设置的 ws → 默认六字段（store.read 形态载荷锁）', async () => {
+  it('未写过设置的 ws → 默认八字段（store.read 形态载荷锁）', async () => {
     const s = await callIpc<Record<string, unknown>>('browser:getSettings', 'ws-fresh');
-    // toEqual 全量比对 = 字段集锁死（与 BrowserSettings 六字段一一对应）
+    // toEqual 全量比对 = 字段集锁死（与 BrowserSettings 八字段一一对应）
     expect(s).toEqual({
       trust: 'ask',
       evaluateEnabled: false,
@@ -641,6 +641,8 @@ describe('browser:getSettings', () => {
       whitelist: [],
       sidebarCollapsed: false,
       sidebarWidth: 380,
+      agentWaitMs: 60_000,
+      idleAutoReleaseMs: 90_000,
     });
   });
 
@@ -660,6 +662,8 @@ describe('browser:getSettings', () => {
       whitelist: ['good.com'], // 归一化：小写 + 去端口（真 store 写侧行为）
       sidebarCollapsed: true,
       sidebarWidth: 420,
+      agentWaitMs: 60_000, // 未写 → 默认
+      idleAutoReleaseMs: 90_000, // 未写 → 默认
     });
   });
 
