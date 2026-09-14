@@ -148,12 +148,17 @@ interface Sut {
   pushNotice: Mock;
 }
 
-function mkManager(over: Partial<WorkspaceBrowserSettings> = {}): Sut {
+function mkManager(
+  over: Partial<WorkspaceBrowserSettings> = {},
+  opts?: { readSidebarCollapsed?: (wsId: string) => boolean },
+): Sut {
   const factory = mkFactory();
   const policy = new BrowserPolicy(() => ({ ...baseSettings, ...over }), '/ws/root');
   const pushState = vi.fn();
   const pushNotice = vi.fn();
-  const manager = new BrowserManager(factory, policy, { pushState, pushNotice });
+  const manager = new BrowserManager(factory, policy, { pushState, pushNotice }, {
+    readSidebarCollapsed: opts?.readSidebarCollapsed,
+  });
   return { manager, factory, policy, pushState, pushNotice };
 }
 
@@ -604,6 +609,64 @@ describe('workspace 切换', () => {
     expect(lastState(pushState)?.takeover).toBe('agent');
     // 重激活按 stash 重建（v0=5173）
     expect(lastState(pushState)?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/']);
+  });
+
+  // ---- bug 2 回归锁：激活折叠态以落库值为准（真相源不再说谎）----
+  // 读取器衬底用可变变量仿真 settings-store：折叠 IPC 落库后 read 值随之为 true。
+
+  it('激活落库折叠=true → 不建视图、推送 collapsed=true、切仓 stash 保留；落库=false 再激活照常恢复', async () => {
+    let persisted = false;
+    const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    manager.setSidebarCollapsed('ws1', true); // 折叠：视图销毁 + collapseStash 置位
+    persisted = true; // 折叠 IPC 落库——read 侧随之翻 true
+    manager.onWorkspaceDeactivated('ws1'); // collapseStash → stashedTabs
+    const createdBefore = factory.create.mock.calls.length;
+
+    pushState.mockClear();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    // 落库 true：激活即折叠——不建视图、推送 collapsed=true（renderer 竞速守卫
+    // 收到与落库一致的值，不再被 collapsed=false 推送吞掉）
+    expect(factory.create.mock.calls.length).toBe(createdBefore);
+    const st = lastState(pushState);
+    expect(st?.collapsed).toBe(true);
+    expect(st?.tabs).toEqual([]);
+
+    // stash 保留：无活动二次切走不丢清单——落库 false 再激活照常重建（今日行为）
+    manager.onWorkspaceDeactivated('ws1');
+    persisted = false;
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    expect(factory.create.mock.calls.length).toBe(createdBefore + 2);
+    const restored = lastState(pushState);
+    expect(restored?.collapsed).toBe(false);
+    expect(restored?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:3000/']);
+    expect(restored?.current).toBe(1);
+  });
+
+  it('激活折叠期间 agent navigate → 按切仓 stash 复活视图 + collapsed=false（同折叠期间活动语义）', async () => {
+    let persisted = false;
+    const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    manager.setSidebarCollapsed('ws1', true);
+    persisted = true;
+    manager.onWorkspaceDeactivated('ws1');
+    manager.onWorkspaceActivated('ws1', '/ws/ws1'); // 按落库折叠激活：无视图
+    expect(manager.getState('ws1').collapsed).toBe(true);
+
+    const before = factory.create.mock.calls.length;
+    await manager.navigate('ws1', 'http://localhost:8080/');
+    // ensureLive 回退 stashedTabs：先按切仓清单复活 2 视图，再载入目标到 current
+    expect(factory.create.mock.calls.length).toBe(before + 2);
+    const st = manager.getState('ws1');
+    expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:8080/']);
+    expect(st.current).toBe(1);
+    // 复活即语义上不再折叠——renderer 依赖此字段同步展开整个浏览器 UI
+    expect(st.collapsed).toBe(false);
+    expect(lastState(pushState)?.collapsed).toBe(false);
   });
 });
 

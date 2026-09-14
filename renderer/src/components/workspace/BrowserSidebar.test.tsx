@@ -628,6 +628,25 @@ describe('BrowserSidebar·宽度受控 / 拖拽 / 键盘（280-720）', () => {
     expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '440px' });
   });
 
+  it('手柄是 chrome 列的前置兄弟（flex 行列结构）——占位区 rect 自手柄右侧起算，原生视图不再盖住手柄（bug 1）', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    const outer = await screen.findByTestId('browser-sidebar');
+    const resizer = screen.getByTestId('browser-sidebar-resizer');
+    const placeholder = screen.getByTestId('browser-placeholder');
+    // jsdom 不执行布局，无法断言 rect 几何——锁 DOM 结构序：手柄是外层容器
+    // 首个子元素（无前置兄弟），占位区所在的 chrome 列紧随其后为 next sibling
+    expect(resizer.parentElement).toBe(outer);
+    expect(resizer.previousElementSibling).toBeNull();
+    const chromeColumn = placeholder.parentElement;
+    expect(chromeColumn).toBeTruthy();
+    expect(resizer.nextElementSibling).toBe(chromeColumn);
+    // 手柄不得回归绝对定位：absolute 脱离文档流，4px 命中区落进占位区 rect 起点
+    // 之内即被原生 WebContentsView（OS 合成层高于一切 renderer 内容）盖住——
+    // z-index 无解，正是 bug 1 根因
+    expect(resizer.className).not.toContain('absolute');
+    expect(outer.className).not.toContain('relative');
+  });
+
   it('折叠竖条不受宽度受控化影响：保持 w-10 静态宽、无手柄、无 inline width', async () => {
     getSettingsMock.mockResolvedValue(
       mkSettings({ sidebarCollapsed: true, sidebarWidth: 520 }),

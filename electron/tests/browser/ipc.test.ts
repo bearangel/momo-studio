@@ -149,7 +149,10 @@ beforeEach(() => {
   store = createBrowserSettingsStore(db);
   policy = new BrowserPolicy((wsId) => store.read(wsId), '/ws/root');
   factory = mkFactory();
-  manager = new BrowserManager(factory, policy, createBrowserPushHooks(webContentsLike));
+  // 激活折叠态读取器接同一真 store（boot.ts 同款投影——bug 2 真相源恢复）
+  manager = new BrowserManager(factory, policy, createBrowserPushHooks(webContentsLike), {
+    readSidebarCollapsed: (wsId) => store.read(wsId).sidebarCollapsed,
+  });
   probe = vi.fn(async () => [{ port: 5173, url: 'http://localhost:5173' }]);
 
   handlers.clear();
@@ -257,6 +260,23 @@ describe('browser:state / browser:notice 统一推送', () => {
       takeover: 'agent',
       trusted: false,
       collapsed: false,
+    });
+  });
+
+  it('落库折叠=true 的 ws 激活 → 推送八字段 collapsed=true（激活真相源与持久化一致——bug 2）', () => {
+    // 折叠态先经 setSidebarCollapsed 落库（真实 IPC 写路径），再切走重激活
+    store.write('ws-1', { sidebarCollapsed: true });
+    manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
+    const st = lastState();
+    expect(st).toEqual({
+      workspaceId: 'ws-1',
+      tabs: [],
+      current: 0,
+      url: '',
+      title: '',
+      takeover: 'agent',
+      trusted: false,
+      collapsed: true,
     });
   });
 

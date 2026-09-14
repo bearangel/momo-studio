@@ -149,6 +149,12 @@ export interface BrowserManagerOpts {
    * 缺省回退 `<tmpdir>/momo-browser-shots`（T2 行为，boot 未注入时的兜底）。
    */
   screenshotDir?: string;
+  /**
+   * 激活时读该 ws 落库的侧栏折叠态（settings-store.read 的 sidebarCollapsed
+   * 投影——真相源恢复：激活推送的 collapsed 必须与持久化一致，否则切仓往返
+   * 折叠态丢失，bug 2）。缺省 false（无库环境 / 旧测试兜底，行为同注入 false）。
+   */
+  readSidebarCollapsed?: (wsId: string) => boolean;
 }
 
 /**
@@ -209,10 +215,14 @@ export class BrowserManager {
     opts?: BrowserManagerOpts,
   ) {
     this.screenshotDir = opts?.screenshotDir;
+    this.readSidebarCollapsed = opts?.readSidebarCollapsed;
   }
 
   /** screenshot 落盘根（null = 缺省 tmpdir 兜底） */
   private readonly screenshotDir?: string;
+
+  /** 激活折叠态读取器（undefined = 恒 false，见 BrowserManagerOpts 注释） */
+  private readonly readSidebarCollapsed?: (wsId: string) => boolean;
 
   // ---------- 门控与状态 ----------
 
@@ -498,6 +508,11 @@ export class BrowserManager {
       return; // 重复激活幂等
     }
     if (cur) this.onWorkspaceDeactivated(cur.workspaceId);
+    // 折叠初始态以落库值为准（真相源不再说谎，bug 2）：激活推送 collapsed=false
+    // 会先于 renderer 异步 getSettings 到达，令其竞速守卫吞掉落库的 true——
+    // 折叠着的 ws 切走再切回即被强行展开。落库 true：不恢复 stash（保留
+    // stashedTabs 条目供折叠期间活动复活）、不建视图、推送 collapsed=true。
+    const persistedCollapsed = this.readSidebarCollapsed?.(wsId) ?? false;
     const ws: ActiveWorkspace = {
       workspaceId: wsId,
       workspaceDir,
@@ -505,14 +520,16 @@ export class BrowserManager {
       current: 0,
       takeover: 'agent', // 激活即全新仲裁（不延续切走前的接管态）
       consoleBuffer: new Map(),
-      collapsed: false,
+      collapsed: persistedCollapsed,
       collapseStash: null,
     };
     this.active = ws;
-    const stash = this.stashedTabs.get(wsId);
-    if (stash && stash.urls.length > 0) {
-      this.stashedTabs.delete(wsId);
-      this.restoreTabs(ws, stash); // stash 是内部恢复（URL 当初过过策略），不重过 assertUrl
+    if (!persistedCollapsed) {
+      const stash = this.stashedTabs.get(wsId);
+      if (stash && stash.urls.length > 0) {
+        this.stashedTabs.delete(wsId);
+        this.restoreTabs(ws, stash); // stash 是内部恢复（URL 当初过过策略），不重过 assertUrl
+      }
     }
     this.emitState(ws);
   }
@@ -521,11 +538,18 @@ export class BrowserManager {
   onWorkspaceDeactivated(wsId: string): void {
     const ws = this.active;
     if (!ws || ws.workspaceId !== wsId) return;
-    const stash: TabStash = ws.collapseStash ?? {
-      urls: ws.tabs.map((t) => t.view.webContents.getURL()),
-      current: ws.current,
-    };
-    this.stashedTabs.set(wsId, stash);
+    if (ws.collapseStash) {
+      this.stashedTabs.set(wsId, ws.collapseStash);
+    } else if (!ws.collapsed || !this.stashedTabs.has(wsId)) {
+      // 展开态照旧从活视图取清单；折叠但无 collapseStash 时——若 stashedTabs 已
+      // 保留该 ws 条目（激活即折叠且期间无活动），不得用空清单覆盖（否则二次
+      // 切仓往返丢 tab，与「折叠不丢 tab」语义冲突）；无条目（会话内 0 tab 折叠）
+      // 照旧落空清单
+      this.stashedTabs.set(wsId, {
+        urls: ws.tabs.map((t) => t.view.webContents.getURL()),
+        current: ws.current,
+      });
+    }
     this.destroyTabs(ws);
     ws.collapseStash = null;
     ws.collapsed = false;
@@ -606,11 +630,20 @@ export class BrowserManager {
 
   /** 折叠期间发生浏览器活动 → 按折叠前清单恢复视图（折叠不丢 tab——T8 展开无需重建）。
    * 同时清 collapsed 标志：视图既已复活，语义上侧栏不再折叠——renderer 依赖
-   * buildState 推送的 collapsed=false 同步展开整个浏览器 UI（而非只浮出内容）。 */
+   * buildState 推送的 collapsed=false 同步展开整个浏览器 UI（而非只浮出内容）。
+   * 清单两个来源：会话内折叠的 collapseStash 优先；激活即按落库折叠（无
+   * collapseStash）时回退 stashedTabs 保留的切仓清单——复活语义与折叠期间
+   * 活动一致（bug 2：agent 在激活折叠的 ws 上导航同样唤起视图）。 */
   private ensureLive(ws: ActiveWorkspace): void {
-    if (!ws.collapsed || !ws.collapseStash) return;
-    const stash = ws.collapseStash;
-    ws.collapseStash = null;
+    if (!ws.collapsed) return;
+    let stash = ws.collapseStash;
+    if (stash) {
+      ws.collapseStash = null;
+    } else {
+      stash = this.stashedTabs.get(ws.workspaceId) ?? null;
+      if (stash) this.stashedTabs.delete(ws.workspaceId);
+    }
+    if (!stash) return; // 无任何清单可恢复（如 0 tab 时折叠）——维持折叠态，调用方按需新建
     ws.collapsed = false;
     this.restoreTabs(ws, stash);
   }

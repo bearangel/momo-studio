@@ -100,7 +100,11 @@ export function assembleBrowserSubsystem(deps: BrowserBootDeps): BrowserBootHand
   // 第三个参 pushNotice 接同一 baseHooks——review fix C1：信任门在抛 BrowserNotTrustedError 前
   // 必须推 trust-request notice 给 renderer 触发右下角信任卡，否则 LLM 永久重试、用户无法授权。
   const policy = new BrowserPolicy(store.read, '', baseHooks.pushNotice);
-  const manager = new BrowserManager(factory, policy, hooks, { screenshotDir });
+  // 激活折叠态经同一 store 读侧投影（bug 2 真相源恢复）——不另开 DB 句柄
+  const manager = new BrowserManager(factory, policy, hooks, {
+    screenshotDir,
+    readSidebarCollapsed: (wsId) => store.read(wsId).sidebarCollapsed,
+  });
   overlayHit.target = manager;
   initBrowserTools(policy, manager);
 

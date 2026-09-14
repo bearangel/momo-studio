@@ -291,14 +291,17 @@ export function BrowserSidebar({ workspaceId }: Props) {
   return (
     <div
       data-testid="browser-sidebar"
-      className={`relative flex shrink-0 flex-col border-l border-subtle bg-surface-1 ${
-        dragging ? 'select-none' : ''
-      }`}
+      className={`flex shrink-0 ${dragging ? 'select-none' : ''}`}
       style={{ width }}
     >
-      {/* 左缘宽度拖拽手柄：4px 命中区悬于 border-l 之上（z-10）。宽度是数值而非
-          颜色——inline style 是设计系统许可的动态宽度模式（动态 Tailwind 任意值
-          class 不生成 CSS）。拖拽/悬停强调走 accent token（同 layout/Sidebar）。 */}
+      {/* 左缘宽度拖拽手柄：静态 flex 子项（w-1 兄弟列，先于 chrome 列）。原生
+          WebContentsView 按 placeholder rect 叠加在 OS 合成层（高于一切 renderer
+          内容，z-index 无解）——手柄此前绝对定位在容器左缘，其命中区落在占位区
+          rect 起点之内，页面一显示即被盖住（bug 1）。兄弟列结构让占位区 rect 从
+          手柄右侧起算（+4px），视图永不覆盖手柄。bg-subtle 即侧栏左缘视觉线
+          （原外层 border-l 语义移入此处，无双线）。宽度是数值而非颜色——inline
+          style 是设计系统许可的动态宽度模式（动态 Tailwind 任意值 class 不生成
+          CSS）。拖拽/悬停强调走 accent token（同 layout/Sidebar）。 */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -310,58 +313,61 @@ export function BrowserSidebar({ workspaceId }: Props) {
         data-testid="browser-sidebar-resizer"
         onPointerDown={handlePointerDown}
         onKeyDown={handleKeyDown}
-        className={`absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize touch-none transition-colors ${
+        className={`w-1 self-stretch cursor-col-resize touch-none transition-colors ${
           dragging ? 'bg-accent-500' : 'bg-subtle hover:bg-accent-500 focus-visible:bg-accent-500'
         }`}
       />
-      {/* chrome 行 1：tabs + 接管徽标 + 信任徽标 + 折叠钮 */}
-      <div className="flex items-center gap-1.5 border-b border-subtle px-2 py-1.5">
-        <TabsBar
-          tabs={tabs}
-          current={state?.current ?? 0}
-          onSelect={switchTab}
-          onClose={closeTab}
-          onOpen={openTab}
-        />
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <TakeoverIndicator takeover={state?.takeover ?? 'agent'} onRelease={release} />
-          {state ? (
-            <Badge tone={state.trusted ? 'success' : 'neutral'}>
-              {state.trusted ? (
-                <ShieldCheck size={16} strokeWidth={1.75} aria-hidden />
-              ) : (
-                <ShieldOff size={16} strokeWidth={1.75} aria-hidden />
-              )}
-              {state.trusted ? '工具已放行' : '工具受限'}
-            </Badge>
-          ) : null}
-          <IconButton aria-label="折叠浏览器侧栏" onClick={toggleCollapsed}>
-            <PanelRightClose size={16} strokeWidth={1.75} aria-hidden />
-          </IconButton>
-        </div>
-      </div>
-      {/* chrome 行 2：探活下拉 + 地址栏 */}
-      <div className="flex items-center gap-1.5 border-b border-subtle px-2 py-1.5">
-        <DevServerDropdown
-          onPick={(url) => {
-            void navigate(url);
-          }}
-        />
-        <AddressBar url={state?.url ?? ''} onNavigate={navigate} />
-      </div>
-      {/* 视图占位区：main 的 WebContentsView 按上报 rect 叠加于此。
-          接管层不再走 renderer DOM（v2.7 review fix C2）——OS 合成层序 native overlay →
-          browser view → renderer DOM，DOM 层永远收不到 mousedown；接管唯一入口是 view-factory
-          showOverlay 挂的全透明 WebContentsView（onOverlayHit → manager.userTakeover）。 */}
-      <div ref={placeholderRef} data-testid="browser-placeholder" className="relative min-h-0 flex-1">
-        {tabs.length === 0 ? (
-          <EmptyState
-            icon={Globe}
-            title="浏览器待命"
-            description="地址栏输入 URL 直接打开，或让 agent 调用浏览器工具浏览页面"
-            role="status"
+      {/* chrome 列（flex-1 纵列）：既有 chrome 行 + 视图占位区 */}
+      <div className="flex min-w-0 flex-1 flex-col bg-surface-1">
+        {/* chrome 行 1：tabs + 接管徽标 + 信任徽标 + 折叠钮 */}
+        <div className="flex items-center gap-1.5 border-b border-subtle px-2 py-1.5">
+          <TabsBar
+            tabs={tabs}
+            current={state?.current ?? 0}
+            onSelect={switchTab}
+            onClose={closeTab}
+            onOpen={openTab}
           />
-        ) : null}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <TakeoverIndicator takeover={state?.takeover ?? 'agent'} onRelease={release} />
+            {state ? (
+              <Badge tone={state.trusted ? 'success' : 'neutral'}>
+                {state.trusted ? (
+                  <ShieldCheck size={16} strokeWidth={1.75} aria-hidden />
+                ) : (
+                  <ShieldOff size={16} strokeWidth={1.75} aria-hidden />
+                )}
+                {state.trusted ? '工具已放行' : '工具受限'}
+              </Badge>
+            ) : null}
+            <IconButton aria-label="折叠浏览器侧栏" onClick={toggleCollapsed}>
+              <PanelRightClose size={16} strokeWidth={1.75} aria-hidden />
+            </IconButton>
+          </div>
+        </div>
+        {/* chrome 行 2：探活下拉 + 地址栏 */}
+        <div className="flex items-center gap-1.5 border-b border-subtle px-2 py-1.5">
+          <DevServerDropdown
+            onPick={(url) => {
+              void navigate(url);
+            }}
+          />
+          <AddressBar url={state?.url ?? ''} onNavigate={navigate} />
+        </div>
+        {/* 视图占位区：main 的 WebContentsView 按上报 rect 叠加于此。
+            接管层不再走 renderer DOM（v2.7 review fix C2）——OS 合成层序 native overlay →
+            browser view → renderer DOM，DOM 层永远收不到 mousedown；接管唯一入口是 view-factory
+            showOverlay 挂的全透明 WebContentsView（onOverlayHit → manager.userTakeover）。 */}
+        <div ref={placeholderRef} data-testid="browser-placeholder" className="relative min-h-0 flex-1">
+          {tabs.length === 0 ? (
+            <EmptyState
+              icon={Globe}
+              title="浏览器待命"
+              description="地址栏输入 URL 直接打开，或让 agent 调用浏览器工具浏览页面"
+              role="status"
+            />
+          ) : null}
+        </div>
       </div>
     </div>
   );
