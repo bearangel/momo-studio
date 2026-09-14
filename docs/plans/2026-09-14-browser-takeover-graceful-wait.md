@@ -577,3 +577,5 @@ git commit -m "test+docs: 工具层接管挂起锁与 CHANGELOG 账本（浏览�
 - **Spec 覆盖**：§4.1 驻留→Task1；§4.2 自愈→Task1（用例5/6）；§4.3 卡片→Task3；§4.4 设置→Task2；§4.5 文案→Task1；§5 契约→Task1+3 成对；§6 矩阵 1-8→Task1、9→Task3、10→Task4；M3 收尾→Task4。
 - **占位符**：Task2 Step1 的 store fixture 与 Task4 Step1 的 ctx 骨架均指向仓库真实既有测试文件为模板（非计划内任务），其余代码完整。
 - **类型一致性**：`readAgentWaitMs(wsId)=>number` / `readIdleAutoReleaseMs(wsId)=>number` / `pushNotice(kind,text,wsId,durationMs?)` / `BrowserNotice.durationMs?: number` / kind `'agent-waiting-release'`——Task1/2/3 交叉核对一致。Task1 代码块中 `AgentWaitEntry` 的 resolve/reject 持有方式已在实现注意中统一（`promiseResolve`/`promiseReject` 字段）。
+
+> 批注（2026-09-14 终审后）：本计划中的 wait 缺省 60000/60s 已由终审 I1 调整为 **120s**（自愈可达性不变式 idle < wait，见 spec §4.2/§4.1）。计划文本为历史执行记录，现行真相以 spec 为准。

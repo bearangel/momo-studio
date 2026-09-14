@@ -82,7 +82,7 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
 - 刷新点（全覆盖用户真实输入，排除 agent 自身）：`before-input-event` 非自锁命中（含 user 态持续输入——现监听器对所有态触发，user 态下刷新时刻即可）、overlay mousedown（view-factory → manager.userTakeover 路径顺带刷新）、`userNavigate`（地址栏回车）、显式按钮 `userTakeover`。
 - **只在「agent 正在等待」时判定自愈**：无 waiter 挂起时绝不自动回切（用户长时间阅读不被打扰）；有 waiter 时以 lastUserInputAt 判定，正在操作的用户持续刷新计时，不会被抢。
 - 自愈动作复用 `releaseTakeover`（单一出口：状态翻转 + emitState + waiter 放行 + 卡片自动卸载）。
-- **可达性不变式**：自愈先于超时可达要求 `idleAutoReleaseMs < agentWaitMs`（缺省 90s < 120s 满足）。若配置使 idle ≥ wait：旗舰场景（误触时刻 T0、park 起点 T0+δ、δ<wait-idle）下 timeout 先触发、waiter 消散，「无 waiter 绝不回切」使控制权停在 user 态——自愈事实不可达（终审 I1 的缺省依据）。
+- **可达性不变式**：自愈先于超时可达要求 `idleAutoReleaseMs < agentWaitMs`（缺省 90s < 120s 满足）。若配置使 idle ≥ wait：旗舰场景（误触时刻 T0、park 起点 T0+δ、δ < idle − wait）下 timeout 先触发、waiter 消散，「无 waiter 绝不回切」使控制权停在 user 态——自愈事实不可达（终审 I1 的缺省依据）。
 
 ### 4.3 释放提示卡（renderer）
 
