@@ -1,7 +1,7 @@
 # 会话连续性修复设计（A 止血 + B 结构性主修）
 
 - 日期：2026-09-14
-- 状态：待评审
+- 状态：已实施（分支 fix/session-continuity；终审修复 C1/I1 已回写本节——excludeFamilySsi 见 §4.1，族时间戳 endTs 见 §4.2-8）
 - 范围：electron 主进程（`storage/messages` / `memory` / `agent`），不改 IPC、不改 renderer
 - 上游分析：2026-09-14 会话连续性架构审计（本文件 §1 摘录）
 
@@ -101,6 +101,13 @@ export interface SessionContextOptions {
   limitTurns?: number;
   /** 丢弃末尾 owner 行（= 当前轮输入，turnMessages 已含；顶层/resume 路径恒 true） */
   excludeTrailingOwnerRow?: boolean;
+  /**
+   * 排除指定流族的完整展开（终审 C1 修复）：resume 断点续跑复用原 streamSessionId
+   * 且不插新 owner 行，被中断族若仍在 convCtx 展开一次、resumeTurn 再拼接一次
+   * = 工具对整段双拼。runtime-entry 在 resumeTurn 非空时传 streamSessionIdOverride。
+   * 被排除族仍注册 seenFamilies（防 #roll 行复活）并保留时间窗参与 steer 行去重。
+   */
+  excludeFamilySsi?: string;
 }
 
 export interface RebuiltSessionContext {
@@ -116,7 +123,7 @@ export function rebuildSessionContext(
 ): RebuiltSessionContext
 ```
 
-`runtime-entry.ts` 顶层路径（`parentStreamSessionId == null`）的 `memory.getConversationContext(roomId, { limit: 20 })` 替换为 `rebuildSessionContext(roomId, { limitTurns: 20, excludeTrailingOwnerRow: true })`；`convTimes` WeakMap 由平行数组 zip 构建（`runCompaction` 不动）。子 agent fresh-session、dispatch followup（historyPrefix）、resumeTurn 三条路径行为不变（resume 路径的 convCtx 同样换成重建器，`excludeTrailingOwnerRow` 同时消解其 user 行重复）。
+`runtime-entry.ts` 顶层路径（`parentStreamSessionId == null`）的 `memory.getConversationContext(roomId, { limit: 20 })` 替换为 `rebuildSessionContext(roomId, { limitTurns: 20, excludeTrailingOwnerRow: true })`；`convTimes` WeakMap 由平行数组 zip 构建（`runCompaction` 不动）。子 agent fresh-session、dispatch followup（historyPrefix）两条路径行为不变。resume 路径的 convCtx 同样换成重建器，并在 `resumeTurn` 非空时额外传 `excludeFamilySsi: streamSessionIdOverride`（C1：被中断族由 resumeTurn 重建段唯一承载，convCtx 不再重复展开；`excludeTrailingOwnerRow` 同时消解其 user 行重复）。
 
 ### 4.2 重建算法
 
@@ -137,7 +144,7 @@ export function rebuildSessionContext(
 5. **窗口裁剪**：取最后 `limitTurns` 个单位（owner 单位与族单位同权计数）。
 6. **摘要注入**：存在 compaction 行时，头部插入 `user: [此前对话压缩摘要]\n{summary}`，timestamp 取 `coveredUntil`（与 provider 现行为同构）。
 7. **prune 移植**：最后一条 user 消息之前的 `role:'tool'` 消息，content 超 `TOOL_RESULT_MAX_LEN` 截断并附 `TRUNCATED_MARKER`（常量从 `compaction/serialize` 共享导入，防双份漂移）。
-8. **timestamps**：owner 单位取行 `created_at`；族单位消息取族首行 `created_at`（同一回合粒度，`runCompaction` 的 fallback `turnStart-1` 兜底语义不变）；合成条取 `coveredUntil`。
+8. **timestamps**：owner 单位取行 `created_at`；**族单位消息取族末事件时刻 `endTs`（= max(族首行 created_at, 全部事件 created_at)，终审 I1 修正，原定族首行时刻）**——理由：compaction 游标 `covered_until` 取 head 末条消息时刻后，下一轮 `created_at > coveredUntil` 严格大于才排除；若族时间戳是首行时刻，则该族的 `#roll` 行 / 窗口内 steer 行（时刻均晚于首行）会幸存游标、经事件级重建**整族复活**与摘要头双内容。endTs ≥ 全部族行时刻，整族干净出局（多排除不少排除，方向安全）；`runCompaction` 的 fallback `turnStart-1` 兜底语义不变；合成条取 `coveredUntil`。
 
 ### 4.3 契约影响评估（boundary-rules 自查）
 
