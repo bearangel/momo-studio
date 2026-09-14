@@ -19,6 +19,9 @@
 // CJK 大消息（20000 字 ÷1.6 ≈ 12500 token），尾部选择在其处截断。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -36,6 +39,14 @@ vi.mock('../../src/main/agent/compaction-ipc', () => ({
   COMPACTION_REQUEST_TIMEOUT_MS: 10_000,
 }));
 
+// mock electron：stream-relay 生产落库链在测试环境静默降级
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+}));
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import { __setTodosForTest } from '../../src/main/agent/tools/todo-tools';
@@ -48,6 +59,13 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertMessage } from '../../src/main/storage/messages/repo';
+import {
+  __routeChunkToBufferForTest,
+  __resetEventBufferForTest,
+  __flushEventBufferForTest,
+} from '../../src/main/agent/stream-relay';
 
 const SID = 'sid-auto';
 const ROOM = 'room-auto';
@@ -70,9 +88,6 @@ type Scripted = {
   emitSteer?: string;
 };
 let script: Scripted[] = [];
-
-/** 可配置会话历史（stub provider 返回——构造超阈值上下文的入口） */
-let convHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> = [];
 
 function installScriptedProvider(): void {
   vi.mocked(createLLMProvider).mockImplementation(() => ({
@@ -176,12 +191,63 @@ function assertNoOrphanToolMessages(messages: LLMMessage[]): void {
   }
 }
 
-/** 超阈值历史：prior 摘要注入条（T4 前缀）+ 一条 >KEEP 预算的 CJK 大消息 */
-function bigHistory(): Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> {
-  return [
-    { role: 'user', content: '[此前对话压缩摘要]\n旧摘要正文-PRIOR', timestamp: 1, sender: 'owner' },
-    { role: 'assistant', content: BIG, timestamp: 2, sender: 'bot' },
-  ];
+// —— 会话连续性 B 段新契约：conv 历史经生产落库链 seed 进真实 DB ——
+// （顶层路径 convCtx 已切 rebuildSessionContext；stub getConversationContext 闲置）
+const tmpRoot = path.join(os.tmpdir(), `ap-compact-auto-${Date.now()}`);
+
+/** 会话/工作区行（session_compactions 有 FK → sessions，compaction seed 前置） */
+function seedSessionRow(): void {
+  getDb().prepare(
+    `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES ('ws-ca', 'WS', '', '/tmp', 0, '@owner:s', 'x')`,
+  ).run();
+  getDb().prepare(
+    `INSERT INTO sessions (id, workspace_id, title, kind, created_at, updated_at)
+     VALUES (?, 'ws-ca', 't', 'chat', 1000, 1000)`,
+  ).run(ROOM);
+}
+
+/** 单条 text 流族（生产链 start → text → end；事件时刻显式归位保证时序确定） */
+function seedTextFamily(ssi: string, text: string, ts: number): void {
+  __routeChunkToBufferForTest({
+    type: 'start', streamSessionId: ssi, sessionId: ROOM, senderAgentId: 'agent-ca',
+  });
+  __flushEventBufferForTest();
+  getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(ts, ssi);
+  __routeChunkToBufferForTest({ type: 'text', streamSessionId: ssi, delta: text });
+  __flushEventBufferForTest();
+  getDb().prepare(
+    `UPDATE message_events SET created_at = ? WHERE created_at < ? AND message_id IN
+       (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+  ).run(ts + 50, ts + 50, ssi, ssi);
+  __routeChunkToBufferForTest({ type: 'end', streamSessionId: ssi, finishReason: 'stop' });
+  __flushEventBufferForTest();
+}
+
+/** owner 行 + 显式时序（字段照抄 session-service.sendUserMessage） */
+function seedOwnerRow(body: string, ts: number): void {
+  const row = insertMessage({ sessionId: ROOM, sender: 'owner', eventType: 'm.room.message', body });
+  getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(ts, row.id);
+}
+
+/** 旧 stub bigHistory 的 DB 等价物：prior 摘要头 + BIG 文本族（head 非空可压） */
+function seedBigHistory(): void {
+  seedSessionRow();
+  const T0 = Date.now();
+  getDb().prepare(
+    `INSERT INTO session_compactions (session_id, summary, covered_until, updated_at)
+     VALUES (?, '旧摘要正文-PRIOR', ?, ?)`,
+  ).run(ROOM, T0 + 100, T0 + 100);
+  seedTextFamily('s-big-1', BIG, T0 + 200);
+}
+
+/** (g) 专用：BIG 族 → 真实 user → BIG 族 → 当前指令行（生产时序：先落库后派发） */
+function seedAnchorSkipHistory(): void {
+  const T0 = Date.now();
+  seedTextFamily('s-g-1', BIG, T0 + 100);
+  seedOwnerRow('真实请求-分析报告', T0 + 200);
+  seedTextFamily('s-g-2', BIG, T0 + 300);
+  seedOwnerRow('[历史压缩摘要]\n上一轮的摘要文本', T0 + 400);
 }
 
 describe('auto 阈值自动压缩（spec §6.2）', () => {
@@ -189,7 +255,8 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
 
   const stubProvider: MemoryProvider = {
     getTaskContext: async () => null,
-    getConversationContext: async () => ({ messages: convHistory }),
+    // B 段后顶层路径不再消费（rebuildSessionContext 接管），保留空返回防契约回退
+    getConversationContext: async () => ({ messages: [] }),
     getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
     getUserContext: async () => ({ preferences: [] }),
     getWorkspaceContext: async () => null,
@@ -208,7 +275,6 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   beforeEach(() => {
     captured.length = 0;
     script = [];
-    convHistory = [];
     __setTodosForTest(SID, []);
     vi.mocked(createLLMProvider).mockReset();
     installScriptedProvider();
@@ -216,15 +282,24 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
     requestCompactionMock.mockResolvedValue(MOCK_SUMMARY);
     __setMemoryProviderForTest(stubProvider);
     process.send = ((_msg: unknown): boolean => true) as NonNullable<typeof process.send>;
+    // B 段新契约：真实 DB（rebuildSessionContext 的数据源），每用例全新库
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    __resetEventBufferForTest();
   });
 
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    __resetEventBufferForTest();
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('(a) 超阈值触发：IPC 收到 head 序列化，压缩后含摘要条且尾部 verbatim 保留', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [{ text: '继续处理。' }];
     const out = await runChatLoop(
       ROOM, '请继续处理任务', mkConfig({ contextWindow: 1000 }), mkCtx(),
@@ -251,7 +326,7 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   });
 
   it('(b) 无 user 挂靠 → wrapUpMode 机械收口（首轮即 tools undefined）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [{ text: '已总结完毕。' }];
     const out = await runChatLoop(
       ROOM, '收尾任务', mkConfig({ contextWindow: 1000 }), mkCtx(),
@@ -267,7 +342,7 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   });
 
   it('(c) 有 user 挂靠 → synthetic 续行消息注入且工具可用', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     __setTodosForTest(SID, [userTodo('分析数据-步骤1')]);
     script = [{ text: '收到，继续执行。' }];
     const out = await runChatLoop(
@@ -286,7 +361,7 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   });
 
   it('(d) contextWindow=0（未知窗口）→ 不触发（mock 零调用，fail-safe）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [{ text: '正常回复。' }];
     const out = await runChatLoop(
       ROOM, '普通消息', mkConfig({ contextWindow: 0 }), mkCtx(),
@@ -299,7 +374,7 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   });
 
   it('(e) auto 压缩失败 → 不阻塞回合：messages 原样、工具可用、正常完成（spec §9）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     requestCompactionMock.mockRejectedValue(new Error('压缩摘要生成为空，请重试'));
     script = [{ text: '降级继续回复。' }];
     const out = await runChatLoop(
@@ -347,11 +422,7 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
     // 才是真实 user 消息——锚点必须跳过合成条落在真实消息上，否则真实消息被
     // 划入可压缩区（切断 mandate 所在轮）。history 前置一条 >KEEP 大消息使
     // head 非空（真实消息与大消息之间的边界即压缩切点）。
-    convHistory = [
-      { role: 'assistant', content: BIG, timestamp: 1, sender: 'bot' },
-      { role: 'user', content: '真实请求-分析报告', timestamp: 2, sender: 'owner' },
-      { role: 'assistant', content: BIG, timestamp: 3, sender: 'bot' },
-    ];
+    seedAnchorSkipHistory();
     script = [{ text: '已总结。' }];
     await runChatLoop(
       ROOM, '[历史压缩摘要]\n上一轮的摘要文本', mkConfig({ contextWindow: 1000 }), mkCtx(),

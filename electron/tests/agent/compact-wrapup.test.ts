@@ -23,6 +23,9 @@
 // 三态 tool_result 文案与「第二份指令消息已删」均在此断言（审查 Important 1）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -40,6 +43,14 @@ vi.mock('../../src/main/agent/compaction-ipc', () => ({
   COMPACTION_REQUEST_TIMEOUT_MS: 10_000,
 }));
 
+// mock electron：stream-relay 生产落库链在测试环境静默降级
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+}));
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import { __setTodosForTest } from '../../src/main/agent/tools/todo-tools';
@@ -51,6 +62,12 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import {
+  __routeChunkToBufferForTest,
+  __resetEventBufferForTest,
+  __flushEventBufferForTest,
+} from '../../src/main/agent/stream-relay';
 
 const SID = 'sid-wrap';
 const MOCK_SUMMARY = 'WRAPUP-结构化摘要正文';
@@ -91,8 +108,28 @@ type Scripted = {
 };
 let script: Scripted[] = [];
 
-/** 可配置会话历史（stub provider 返回——默认放一条大消息使 head 非空） */
-let convHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; sender: string }> = [];
+// —— 会话连续性 B 段新契约：conv 历史经生产落库链 seed 进真实 DB ——
+// （顶层路径 convCtx 已切 rebuildSessionContext；stub getConversationContext 闲置）
+const tmpRoot = path.join(os.tmpdir(), `ap-compact-wrap-${Date.now()}`);
+
+/** 默认历史（旧 stub 单条 BIG assistant 消息的 DB 等价物）：一条 >KEEP 预算的
+ *  CJK 大消息文本族（head 非空，压缩有物可压；事件时刻显式归位保证时序确定） */
+function seedDefaultHistory(): void {
+  const T0 = Date.now();
+  __routeChunkToBufferForTest({
+    type: 'start', streamSessionId: 's-wrap-big', sessionId: 'room-t', senderAgentId: 'agent-cw',
+  });
+  __flushEventBufferForTest();
+  getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(T0 + 100, 's-wrap-big');
+  __routeChunkToBufferForTest({ type: 'text', streamSessionId: 's-wrap-big', delta: BIG });
+  __flushEventBufferForTest();
+  getDb().prepare(
+    `UPDATE message_events SET created_at = ? WHERE created_at < ? AND message_id IN
+       (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+  ).run(T0 + 150, T0 + 150, 's-wrap-big', 's-wrap-big');
+  __routeChunkToBufferForTest({ type: 'end', streamSessionId: 's-wrap-big', finishReason: 'stop' });
+  __flushEventBufferForTest();
+}
 
 function installScriptedProvider(): void {
   vi.mocked(createLLMProvider).mockImplementation(() => ({
@@ -177,7 +214,8 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
 
   const stubProvider: MemoryProvider = {
     getTaskContext: async () => null,
-    getConversationContext: async () => ({ messages: convHistory }),
+    // B 段后顶层路径不再消费（rebuildSessionContext 接管），保留空返回防契约回退
+    getConversationContext: async () => ({ messages: [] }),
     getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
     getUserContext: async () => ({ preferences: [] }),
     getWorkspaceContext: async () => null,
@@ -197,8 +235,6 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
     captured.length = 0;
     sentChunks.length = 0;
     script = [];
-    // 默认历史：一条 >KEEP 预算的 CJK 大消息（head 非空，压缩有物可压）
-    convHistory = [{ role: 'assistant', content: BIG, timestamp: 1, sender: 'bot' }];
     __setTodosForTest(SID, []);
     vi.mocked(createLLMProvider).mockReset();
     installScriptedProvider();
@@ -209,11 +245,22 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
       sentChunks.push(msg);
       return true;
     }) as NonNullable<typeof process.send>;
+    // B 段新契约：真实 DB（rebuildSessionContext 的数据源），每用例全新库 +
+    // 默认历史（一条大消息使 head 非空）
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    __resetEventBufferForTest();
+    seedDefaultHistory();
   });
 
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    __resetEventBufferForTest();
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('(a) 无 user 挂靠 → 压缩后下一轮 tools=undefined，回合终止（收尾模式）', async () => {

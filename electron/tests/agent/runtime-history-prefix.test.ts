@@ -21,18 +21,27 @@
 // runTaskChatLoop 解构透传到 runChatLoop 第 11 参——摘掉解构/传参该锁必红
 // （前缀静默丢失不报错，Task 6 followup 派发侧依赖此环）。
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { LLMMessage, StreamDelta } from '../../src/main/agent/llm-provider';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
-import { closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertMessage } from '../../src/main/storage/messages/repo';
 import { type RebuiltTurn } from '../../src/main/agent/turn-reconstructor';
 
 // 必须在 import runtime-entry 之前 mock llm-provider（vi.mock 会被 hoist）
 vi.mock('../../src/main/agent/llm-provider', () => ({
   createLLMProvider: vi.fn(),
+}));
+
+// mock electron：stream-relay 生产落库链在测试环境静默降级
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
 }));
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
@@ -47,39 +56,42 @@ import {
   __setMemoryProviderForTest,
   __resetMemoryProviderForTest,
   type MemoryProvider,
-  type ContextMessage,
 } from '../../src/main/memory';
+import {
+  __routeChunkToBufferForTest,
+  __resetEventBufferForTest,
+  __flushEventBufferForTest,
+} from '../../src/main/agent/stream-relay';
 
 // === 夹具（沿用 runtime-resume.test.ts 模式）===
 
 const sentChunks: unknown[] = [];
 
-// runChatLoop 会话边界过滤每轮触 DB——文件级兜底（runtime-task-driven.test.ts
-// 同款）：未显式设 AP_USER_DATA_DIR 时指向临时目录，防惰性 getDb 落到默认用户
-// 目录缓存句柄污染后续 describe；每用例后 closeDb 防句柄泄漏
-const fallbackTmp = path.join(
-  os.tmpdir(),
-  `ap-prefix-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-);
+// runChatLoop 会话边界过滤每轮触 DB + B 段 rebuildSessionContext 直读 DB——
+// 每用例全新临时库：既防惰性 getDb 落默认用户目录缓存句柄，也防 seed 历史
+// 跨用例泄漏进 convCtx；用例后 closeDb 防句柄泄漏
+let tmpDir = '';
 beforeEach(() => {
-  if (!process.env.AP_USER_DATA_DIR) {
-    fs.mkdirSync(fallbackTmp, { recursive: true });
-    process.env.AP_USER_DATA_DIR = fallbackTmp;
-  }
+  tmpDir = path.join(
+    os.tmpdir(),
+    `ap-prefix-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  fs.mkdirSync(tmpDir, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpDir;
+  runMigrations();
+  __resetEventBufferForTest();
 });
 afterEach(() => {
+  __resetEventBufferForTest();
   closeDb();
-});
-afterAll(() => {
-  fs.rmSync(fallbackTmp, { recursive: true, force: true });
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env.AP_USER_DATA_DIR;
 });
 
-// convCtx 覆盖钩子（mockProviderOverride 模式）：默认空；用例可注入早前会话消息
-let convOverride: ContextMessage[] | null = null;
+// B 段后顶层路径 convCtx 走 rebuildSessionContext（真实 DB），stub 不再消费
 const stubProvider: MemoryProvider = {
   getTaskContext: async () => null,
-  getConversationContext: async () =>
-    convOverride ? { messages: convOverride } : { messages: [] },
+  getConversationContext: async () => ({ messages: [] }),
   getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
   getUserContext: async () => ({ preferences: [] }),
   getWorkspaceContext: async () => null,
@@ -192,7 +204,6 @@ describe('runChatLoop historyPrefix（followup 续聊前缀参数）', () => {
 
   beforeEach(() => {
     sentChunks.length = 0;
-    convOverride = null;
     vi.mocked(createLLMProvider).mockReset();
     __setMemoryProviderForTest(stubProvider);
     process.send = ((msg: unknown): boolean => {
@@ -230,10 +241,26 @@ describe('runChatLoop historyPrefix（followup 续聊前缀参数）', () => {
   });
 
   it('convCtx 非空 → 前缀拼接在 convMessages 之前（早前会话历史仍在前缀之后）', async () => {
-    convOverride = [
-      { role: 'user', content: '早前问题', timestamp: 1000, sender: 'owner' },
-      { role: 'assistant', content: '早前回答', timestamp: 1001, sender: 'bot' },
-    ];
+    // B 段新契约：早前会话历史经生产落库链 seed 进真实 DB（owner 问 + agent 文本族
+    // + 当前指令行——生产时序先落库后派发，excludeTrailingOwnerRow 剔除当前行防双拼）
+    const T0 = Date.now();
+    const earlyUser = insertMessage({ sessionId: '!room:t', sender: 'owner', eventType: 'm.room.message', body: '早前问题' });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 100, earlyUser.id);
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 's-early-prefix', sessionId: '!room:t', senderAgentId: 'agent-early',
+    });
+    __flushEventBufferForTest();
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(T0 + 200, 's-early-prefix');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 's-early-prefix', delta: '早前回答' });
+    __flushEventBufferForTest();
+    getDb().prepare(
+      `UPDATE message_events SET created_at = ? WHERE message_id IN
+         (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+    ).run(T0 + 250, 's-early-prefix', 's-early-prefix');
+    __routeChunkToBufferForTest({ type: 'end', streamSessionId: 's-early-prefix', finishReason: 'stop' });
+    __flushEventBufferForTest();
+    const curRow = insertMessage({ sessionId: '!room:t', sender: 'owner', eventType: 'm.room.message', body: '本轮新指令' });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 300, curRow.id);
     let first: LLMMessage[] = [];
     mockSingleRoundStop((m) => { first = m; });
 
@@ -319,7 +346,6 @@ describe('runTaskChatLoop historyPrefix 接线锁（payload 字段透传）', ()
 
   beforeEach(() => {
     sentChunks.length = 0;
-    convOverride = null;
     vi.mocked(createLLMProvider).mockReset();
     __setMemoryProviderForTest(stubProvider);
     // process.send 同时捕获 stream chunk 与 task-end IPC（callback 兼容 sendTaskEndAndExit）

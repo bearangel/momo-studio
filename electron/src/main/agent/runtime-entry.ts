@@ -39,9 +39,14 @@ import type { ToolModule, ToolContext } from './tools/types';
 import { ReadTracker } from './tools/shared/read-tracker';
 import { SkillRegistry } from '../skill/registry';
 import { sendStreamChunk, type StreamChunk } from './stream-chunk';
-// v2.6.0 断点续跑：仅取类型（import type 编译期擦除）——turn-reconstructor
-// 传递依赖 logger / storage（主进程模块），本子进程入口不引入运行时耦合
-import type { RebuiltTurn } from './turn-reconstructor';
+// v2.6.0 断点续跑取 RebuiltTurn 类型；会话连续性 B 段（spec 2026-09-14 §4）取
+// rebuildSessionContext 运行时值——其传递依赖 logger / storage 与本入口既有的
+// memory / storage/db 运行时引入同源，无新增耦合
+import {
+  rebuildSessionContext,
+  type RebuiltTurn,
+  type RebuiltSessionContext,
+} from './turn-reconstructor';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
@@ -58,7 +63,7 @@ import {
   setDispatchTraceEnabled,
   getSessionDispatchScope,
 } from './dispatch-wait';
-import { getMemoryProvider, type ConversationContext, type TaskContext } from '../memory';
+import { getMemoryProvider, type TaskContext } from '../memory';
 import { getTodosForSession } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
 import { getDb } from '../storage/db';
@@ -424,15 +429,18 @@ export async function runChatLoop(
   }
 
   // v2（B 子系统 Task B11）：MemoryProvider 取代 loadRecentHistory。
-  // 子 agent（parentStreamSessionId 非空）走 fresh session 不拉房间历史，
-  // 故原 v1.7.4 dispatchModeHint 字符串提示移除——fresh 行为由空 convCtx 自然实现。
+  // 会话连续性 B 段（spec 2026-09-14 §4）：顶层/resume 的 convCtx 从 provider
+  // body 拼接切换为 events 级重建（工具对跨轮可见 / 中断轮合成结果 / 最近窗口 /
+  // 剔除当前指令行防双拼）。子 agent（parentStreamSessionId 非空）走 fresh
+  // session 不拉房间历史——fresh 行为由空上下文自然实现。
   const memory = getMemoryProvider();
-  const [taskCtx, convCtx]: [TaskContext | null, ConversationContext] = await Promise.all([
-    config.currentTaskId ? memory.getTaskContext(config.currentTaskId) : Promise.resolve(null),
-    parentStreamSessionId
-      ? Promise.resolve({ messages: [] })
-      : memory.getConversationContext(roomId, { limit: 20 }),
-  ]);
+  const [taskCtx, sessionCtx]: [TaskContext | null, RebuiltSessionContext | null] =
+    await Promise.all([
+      config.currentTaskId ? memory.getTaskContext(config.currentTaskId) : Promise.resolve(null),
+      parentStreamSessionId
+        ? Promise.resolve(null)
+        : Promise.resolve(rebuildSessionContext(roomId, { limitTurns: 20, excludeTrailingOwnerRow: true })),
+    ]);
 
   const taskHint = taskCtx ? formatTaskHint(taskCtx) : '';
   // v2.2：三层记忆常驻注入（spec §6.3）——每轮现拉，UI 修改下一条消息即生效；
@@ -590,20 +598,20 @@ export async function runChatLoop(
     return { ok: true, beforeCount, tailCount: tail.length, mandateGated, pendingUser };
   };
 
-  const convMessages: LLMMessage[] = convCtx.messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  const convMessages: LLMMessage[] = sessionCtx?.messages ?? [];
 
   // ─── coveredUntil 精确化支撑（T5 遗留 Important-1，T6 修复） ────────────────
   // 回合开始时刻：回合内生成消息（assistant/tool/steer）的 DB 落库时刻下界——
   // LLM 首轮请求发生在 turnStart 之后，chunk 路径落库只会更晚。
   const turnStart = Date.now();
-  // convCtx 来源消息的精确 DB createdAt（ContextMessage.timestamp）。WeakMap 按
-  // 引用跟随：runCompaction 重建 messages 数组后，尾部的 convCtx 条目仍携带
-  // 精确时刻；查不到 = 回合内消息 → 保守取 turnStart - 1（见 runCompaction）。
+  // convCtx 来源消息的 DB createdAt（rebuildSessionContext 的平行 timestamps）。
+  // WeakMap 按引用跟随：runCompaction 重建 messages 数组后，尾部的 convCtx 条目
+  // 仍携带精确时刻；查不到 = 回合内消息 / 重建降级 → 保守取 turnStart - 1（见
+  // runCompaction）。
   const convTimes = new WeakMap<LLMMessage, number>();
-  convCtx.messages.forEach((m, i) => convTimes.set(convMessages[i]!, m.timestamp));
+  convMessages.forEach((m, i) =>
+    convTimes.set(m, sessionCtx?.timestamps[i] ?? turnStart - 1),
+  );
 
   // v2.6.0 断点续跑：resumeTurn 存在且重建段非空 → 重建段 verbatim 拼接
   // （首条即原 user 消息，T1 保证），不追加 currentBody（防指令重复）；

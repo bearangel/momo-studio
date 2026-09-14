@@ -1,17 +1,23 @@
 // electron/tests/agent/dispatch-fresh-session.test.ts
 //
-// v1.7.4 Bug 5 → v2（B 子系统 Task B11）演进测试：
+// v1.7.4 Bug 5 → v2（B 子系统 Task B11）→ 会话连续性 B 段演进测试：
 //   - 旧版本（v1.7.4）：通过 dispatchModeHint 字符串提示 + loadRecentHistory 跳过实现 fresh session
-//   - 新版本（B11）：通过 MemoryProvider.getConversationContext 跳过实现 fresh session，
+//   - B11：通过 MemoryProvider.getConversationContext 跳过实现 fresh session，
 //     dispatchModeHint 字符串已删除——fresh 行为由空 convCtx 自然实现
+//   - B 段（spec 2026-09-14 §4）：顶层 convCtx 切换 rebuildSessionContext（真实 DB
+//     events 级重建），provider.getConversationContext 全路径不再消费
 //
 // 本测试验证：
 //   1. parentStreamSessionId 非空（子 agent）→ getConversationContext 不被调用（fresh session）
-//   2. parentStreamSessionId 为空（顶层 agent）→ getConversationContext 被调用（加载历史）
+//   2. parentStreamSessionId 为空（顶层 agent）→ 历史经 events 级重建进入 LLM 请求，
+//      getConversationContext 不被调用（B 段契约）
 //   3. system prompt 不再含 dispatchModeHint 字符串（B11 已删除）
 //   4. currentTaskId 非空 → getTaskContext 被调用，taskHint 注入 system prompt
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { StreamDelta } from '../../src/main/agent/llm-provider';
 import {
   __setMemoryProviderForTest,
@@ -25,12 +31,22 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
   createLLMProvider: vi.fn(),
 }));
 
+// mock electron：stream-relay 生产落库链在测试环境静默降级
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+}));
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import type { WorkspaceFS } from '../../src/main/files/workspace-fs';
 import type { StreamChunk } from '../../src/main/agent/stream-chunk';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { insertMessage } from '../../src/main/storage/messages/repo';
 
 const sentChunks: unknown[] = [];
 
@@ -105,6 +121,8 @@ function makeContext(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
 
 describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRecentHistory）', () => {
   const originalSend = process.send;
+  // B 段新契约：rebuildSessionContext 直读真实 DB——每用例全新临时库
+  const tmpRoot = path.join(os.tmpdir(), `ap-fresh-${Date.now()}`);
 
   beforeEach(() => {
     sentChunks.length = 0;
@@ -113,11 +131,17 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       sentChunks.push(msg);
       return true;
     }) as NonNullable<typeof process.send>;
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
   });
 
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('parentStreamSessionId 非空（子 agent）→ getConversationContext 不被调用（fresh session）', async () => {
@@ -154,7 +178,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     expect(getTaskContext).not.toHaveBeenCalled();
   });
 
-  it('parentStreamSessionId 为空（顶层 agent）→ getConversationContext 被调用', async () => {
+  it('parentStreamSessionId 为空（顶层 agent）→ 历史经 events 级重建进入请求，getConversationContext 不被调用', async () => {
     const getConversationContext = vi.fn(async () => ({ messages: [] }));
     const getTaskContext = vi.fn(async () => null);
     const stubProvider: MemoryProvider = {
@@ -170,6 +194,13 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
     };
     __setMemoryProviderForTest(stubProvider);
 
+    // B 段契约数据源：早前 owner 行 + 当前指令行落真实 DB（生产时序：先落库后
+    // 派发——excludeTrailingOwnerRow 剔除当前行防双拼，早前行进入重建上下文）
+    const early = insertMessage({ sessionId: '!room:localhost', sender: 'owner', eventType: 'm.room.message', body: '早前的提问' });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(1000, early.id);
+    const cur = insertMessage({ sessionId: '!room:localhost', sender: 'owner', eventType: 'm.room.message', body: 'hi' });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(1001, cur.id);
+
     mockProvider([
       { type: 'text', content: 'done' },
       { type: 'done', finishReason: 'stop' },
@@ -182,7 +213,16 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
       makeContext(),
     );
 
-    expect(getConversationContext).toHaveBeenCalledWith('!room:localhost', { limit: 20 });
+    // 顶层加载历史（events 级重建）：早前 owner 行进入首次 LLM 请求
+    const chatStreamCall = (
+      vi.mocked(createLLMProvider).mock.results[0]!.value as {
+        chatStream: ReturnType<typeof vi.fn>;
+      }
+    ).chatStream.mock.calls[0]!;
+    const messages = chatStreamCall[0] as Array<{ role: string; content: string }>;
+    expect(messages).toContainEqual({ role: 'user', content: '早前的提问' });
+    // B 段契约：顶层 convCtx 已切换 rebuildSessionContext，provider 会话上下文不再消费
+    expect(getConversationContext).not.toHaveBeenCalled();
     expect(getTaskContext).not.toHaveBeenCalled();
   });
 

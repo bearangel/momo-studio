@@ -21,6 +21,9 @@
 // abort 分支优先级不变（既有 abort 套件覆盖，此处不重复）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { LLMMessage, LLMToolDef, StreamDelta } from '../../src/main/agent/llm-provider';
 
 vi.mock('../../src/main/agent/llm-provider', () => ({
@@ -38,10 +41,17 @@ vi.mock('../../src/main/agent/compaction-ipc', () => ({
   COMPACTION_REQUEST_TIMEOUT_MS: 10_000,
 }));
 
+// mock electron：stream-relay 生产落库链在测试环境静默降级
+vi.mock('electron', () => ({
+  BrowserWindow: {
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: vi.fn() } }],
+  },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+}));
+
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import { __setTodosForTest } from '../../src/main/agent/tools/todo-tools';
-import type { ContextMessage } from '../../src/main/memory';
 import type { ToolModule } from '../../src/main/agent/tools/types';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { SkillRegistry } from '../../src/main/skill/registry';
@@ -50,6 +60,12 @@ import {
   __resetMemoryProviderForTest,
   type MemoryProvider,
 } from '../../src/main/memory';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import {
+  __routeChunkToBufferForTest,
+  __resetEventBufferForTest,
+  __flushEventBufferForTest,
+} from '../../src/main/agent/stream-relay';
 
 const SID = 'sid-overflow';
 const ROOM = 'room-overflow';
@@ -75,9 +91,6 @@ type Scripted = {
   emitSteer?: string;
 };
 let script: Scripted[] = [];
-
-/** 可配置会话历史（ContextMessage 全形状——timestamp 参与 coveredUntil 计算） */
-let convHistory: ContextMessage[] = [];
 
 function installScriptedProvider(): void {
   vi.mocked(createLLMProvider).mockImplementation(() => ({
@@ -168,17 +181,47 @@ function endChunks(): Array<Record<string, unknown>> {
   return sentChunks.filter((c) => c.type === 'end');
 }
 
-/** 带 prior 摘要注入条 + 大消息的会话历史（timestamp 全形状） */
-function bigHistory(): ContextMessage[] {
-  return [
-    {
-      role: 'user',
-      content: '[此前对话压缩摘要]\n旧摘要正文-PRIOR',
-      timestamp: 1_000,
-      sender: 'owner',
-    },
-    { role: 'assistant', content: BIG, timestamp: T_BIG, sender: 'agent-coder' },
-  ];
+// —— 会话连续性 B 段新契约：conv 历史经生产落库链 seed 进真实 DB ——
+// （顶层路径 convCtx 已切 rebuildSessionContext；stub getConversationContext 闲置）
+const tmpRoot = path.join(os.tmpdir(), `ap-overflow-${Date.now()}`);
+
+/** 会话/工作区行（session_compactions 有 FK → sessions，compaction seed 前置） */
+function seedSessionRow(): void {
+  getDb().prepare(
+    `INSERT INTO workspaces (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+     VALUES ('ws-ov', 'WS', '', '/tmp', 0, '@owner:s', 'x')`,
+  ).run();
+  getDb().prepare(
+    `INSERT INTO sessions (id, workspace_id, title, kind, created_at, updated_at)
+     VALUES (?, 'ws-ov', 't', 'chat', 1000, 1000)`,
+  ).run(ROOM);
+}
+
+/** BIG 文本族：流行 created_at 精确锚定 anchorTs（c1 的 coveredUntil 断言值） */
+function seedBigFamily(ssi: string, anchorTs: number): void {
+  __routeChunkToBufferForTest({
+    type: 'start', streamSessionId: ssi, sessionId: ROOM, senderAgentId: 'agent-ov',
+  });
+  __flushEventBufferForTest();
+  getDb().prepare('UPDATE messages SET created_at = ? WHERE stream_session_id = ?').run(anchorTs, ssi);
+  __routeChunkToBufferForTest({ type: 'text', streamSessionId: ssi, delta: BIG });
+  __flushEventBufferForTest();
+  getDb().prepare(
+    `UPDATE message_events SET created_at = ? WHERE message_id IN
+       (SELECT id FROM messages WHERE stream_session_id = ? OR stream_session_id LIKE ? || '#%')`,
+  ).run(anchorTs + 50, ssi, ssi);
+  __routeChunkToBufferForTest({ type: 'end', streamSessionId: ssi, finishReason: 'stop' });
+  __flushEventBufferForTest();
+}
+
+/** 旧 stub bigHistory 的 DB 等价物：prior 摘要头（covered_until=1000）+ BIG 文本族（T_BIG） */
+function seedBigHistory(): void {
+  seedSessionRow();
+  getDb().prepare(
+    `INSERT INTO session_compactions (session_id, summary, covered_until, updated_at)
+     VALUES (?, '旧摘要正文-PRIOR', ?, ?)`,
+  ).run(ROOM, 1000, 1000);
+  seedBigFamily('s-ov-big', T_BIG);
 }
 
 describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () => {
@@ -186,7 +229,8 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
 
   const stubProvider: MemoryProvider = {
     getTaskContext: async () => null,
-    getConversationContext: async () => ({ messages: convHistory }),
+    // B 段后顶层路径不再消费（rebuildSessionContext 接管），保留空返回防契约回退
+    getConversationContext: async () => ({ messages: [] }),
     getAgentContext: async () => ({ preferences: [], learnedPatterns: [] }),
     getUserContext: async () => ({ preferences: [] }),
     getWorkspaceContext: async () => null,
@@ -206,7 +250,6 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
     captured.length = 0;
     sentChunks.length = 0;
     script = [];
-    convHistory = [];
     __setTodosForTest(SID, []);
     vi.mocked(createLLMProvider).mockReset();
     installScriptedProvider();
@@ -217,16 +260,25 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
       sentChunks.push(msg as Record<string, unknown>);
       return true;
     }) as NonNullable<typeof process.send>;
+    // B 段新契约：真实 DB（rebuildSessionContext 的数据源），每用例全新库
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+    __resetEventBufferForTest();
   });
 
   afterEach(() => {
     process.send = originalSend;
     __resetMemoryProviderForTest();
     vi.useRealTimers();
+    __resetEventBufferForTest();
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
   });
 
   it('(a) 首轮溢出 → 压缩一次 + 摘要条 + 重放 userBody（末条）+ 回合继续到完成', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [
       { throwError: OVERFLOW_MSG },
       { text: '已恢复，继续完成任务。' },
@@ -258,7 +310,7 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
   });
 
   it('(a2) steers 参与重放：userBody + steer 逐条 push，且不回写 mandate.steers（提示段不翻倍）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [
       { toolCall: { name: 'big_tool', arguments: {} }, emitSteer: '补充要求A' },
       { throwError: OVERFLOW_MSG },
@@ -285,7 +337,7 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
   });
 
   it('(b) 二次溢出 → 按原错误路径终止（end error）+ IPC 仍仅 1 次（防循环）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [
       { throwError: OVERFLOW_MSG },
       { throwError: OVERFLOW_MSG },
@@ -310,9 +362,7 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
   });
 
   it('(c1) coveredUntil 精确化：head 末条为 convCtx 来源 → === 该消息 DB timestamp', async () => {
-    convHistory = [
-      { role: 'assistant', content: BIG, timestamp: T_BIG, sender: 'agent-coder' },
-    ];
+    seedBigFamily('s-ov-c1', T_BIG);
     script = [{ text: '好的。' }];
     await runChatLoop(
       ROOM, '继续任务', mkConfig({ contextWindow: 1000 }), mkCtx(),
@@ -335,7 +385,6 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
     const FROZEN = 1_700_000_000_000;
     vi.useFakeTimers({ now: FROZEN });
     try {
-      convHistory = [];
       script = [
         { toolCall: { name: 'big_tool', arguments: { payload: '参'.repeat(12_000) } }, emitSteer: '继续推进数据分析' },
         { text: '收到，继续。' },
@@ -360,7 +409,7 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
   });
 
   it('(d) 非 overflow 错误 → 直接终止不压缩（特征匹配不过拟合）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     script = [{ throwError: 'network error' }];
     await expect(
       runChatLoop(
@@ -375,7 +424,7 @@ describe('溢出恢复 + 重放 + 防循环（spec §7 + T5 Important-1）', () 
   });
 
   it('(e) 恢复压缩失败 → 按原溢出错误终止（错误路径专项，不吞不改）', async () => {
-    convHistory = bigHistory();
+    seedBigHistory();
     requestCompactionMock.mockRejectedValue(new Error('压缩摘要生成为空，请重试'));
     script = [
       { throwError: OVERFLOW_MSG },
