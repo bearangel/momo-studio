@@ -1,6 +1,10 @@
 # Changelog
 
-本文件记录 Momo Studio 的版本变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+本文件记录 Momo Studio 的版本变更与研发账本。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+> **版本号说明（2026-09-13 起）**：产品版本号与研发账本**解耦**——「未发布」小节的 v2.x 条目是
+> 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
+> `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
 ## [未发布] — v25 agent/会话域重构（去编排 + 团队 + 双会话）
 
@@ -23,6 +27,80 @@
 - 退役概念源码零残留：`AgentRole` / `parentInstanceId` / `coordinator` / `teamSessionId` / `assignMain` / `addToWorkspace` / `AgentAssignment` 过渡别名全部清除（合法残留仅 migrations 历史 SQL 与类型对齐注释）
 - 148 个依赖 v25 前语义的红测试逐文件清账：夹具修复 / 断言重写 / 退役覆盖删除（裁定记录 `.superpowers/sdd/task-15-report.md`）；electron 全量 1306 + renderer 719 全绿
 - e2e：新增 v25 最小冒烟（smoke.spec.ts）；旧 onboarding/Matrix 场景 spec 标记待重写（2.x 技术债在案）
+
+## [未发布·研发账本] — 2.1.0-alpha 累积特性（自 v2.0.0 起）
+
+以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
+
+### Windows 全平台化（v2.10 账本）
+Windows 代码层硬化 + 打包就绪——路径语义 / spawn / 单实例 / NSIS 四层补齐；Linux 容器内 `vi.mock('node:path')` 注入 win32 语义锁住纯路径逻辑，真机验收进行中（平台标「实验性」）。
+- `platform/paths.ts` 统一目录边界判定（win32 大小写/UNC/分隔符归一 + posix 逐字节等价）——六模块七处收敛
+- 六模块 `*.win32.test.ts`（大小写命中 / UNC 命中 / 异盘拒 / `..` 边界 / POSIX 归一）
+- MCP spawn 修正：win32 `shell` 三态注入 + 逐元素引号转义（内嵌双引号拒绝启动）；其余 spawn 点审计豁免
+- 单实例锁（`requestSingleInstanceLock` + second-instance 聚焦，消除 SQLite WAL 双开冲突）
+- NSIS per-user 加固 + 未签名 SmartScreen 指引
+- 待真机验收：安装 / 首启授权卡 / MCP npx 实启 / 双开聚焦 / UNC 工作区
+
+### 多仓 git 工具（v2.9 账本）
+workspace 内层仓 agent 可见可操作——「发现列表是唯一 `-C` 入口」安全骨架。
+- `git_repos` 发现工具（根在前字典序；探测器上提 `git/repos.ts` 与 v2.5 对账同源）
+- 9 工具可选 `repo` 参数：缺省逐字节零变化；指定时 `resolveRepoPath` 双校验（边界 + 命中列表）
+- GitPolicy 均匀继承（分支保护按目标仓当前分支匹配）
+
+### Orchestration 元语（v2.8 账本）
+- `dispatch_followup`（链重建续聊）/ `dispatch_bg`（句柄 + 在途上限 8）/ `dispatch_gather`（all|any，超时非错误）/ `dispatch_status` / `dispatch_cancel`
+- taskId = 链 ID（多轮聚合）；handleTaskReply 单点收口扩展；零新表零迁移
+- 已知边界：followup 子流暂不嵌套渲染 / bg 句柄不跨重启
+
+### McpBrowser 浏览器工具（v2.7 账本）
+puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition。
+- 12 工具（navigate/tabs/snapshot/screenshot/evaluate/click/hover/type/press_key/scroll/console/close）
+- 单页共享 + takeover 三入口（地址栏 / 显式 / overlay）；user 态工具立即失败可重试
+- 右侧浏览器侧栏：可折叠 + 宽度拖拽（280-720 持久化）+ agent 折叠期间打开网站自动展开 + dev server 探活
+- 安全：file:// 限定 workspace（双防线）/ popup 收编 / 下载拦截 / webPreferences 四硬化
+
+### 任务断点续跑（v2.6 账本）
+- `turn-reconstructor` 事件重建（完整工具对 verbatim / 孤儿 tool_call 合成中断 result / 降级 degenerate）
+- 关机保态（`markShuttingDown`）+ boot 陈旧流清扫；`resumeTask` 复用 executeTask + 车道闸
+- 启动恢复卡（[恢复]/[放弃]，撤回后放弃走 journal:revert）
+
+### 变更账本与撤销（v2.5 账本）
+- 五写工具落盘前单点记账（内容寻址 blob）；hash 守卫 + 逆序撤销（漂移拦截 + 黄标）
+- 多仓 git 探测器事后核对 bash 账外变更；200MB + 30 天配额滚动清理
+- 消息流「N 处变更」chip + 任务卡审查面板（`journal:*` 四通道）
+
+### ShellTools OS 沙箱（v2.4 账本）
+- macOS Seatbelt / Linux bwrap / Windows PowerShell plain 三平台；`resolveShellSpawn` 三态（wrapped/plain/blocked）
+- **网络策略（2026-09-13 修订 B）**：三态收敛双态 `deny | allow`，默认 allow；ask 信任门全链下线（事后文本鉴定漏检为结构性天花板）；deny 态保留 netOff 信息卡
+- bash 结果 `sandbox: <tag>` 行；strict 默认 + permissive 逃生门
+
+### FileTools 防御硬化（v2.3 账本）
+- 结构化 apply_patch（V4A + PEG + 原子回滚）；Read-before-Edit 强阻塞；edit_file 失败信息增强
+
+### 供应商预设与思维模式（v2.2.x 账本）
+- 15 家供应商预设两段式新建；思维模式两级配置（模型级 + agent 级，四级 fallback + 四种 wire 方言）
+
+### Agent 记忆系统（v2.2.0 账本，三期完结）
+- 三层记忆（会话/工作空间/全局）+ FTS5/jieba/BM25 检索；注入链路（7000 字符预算）；memory 三工具 + 自动提取 + 滚动压缩；设置页管理 + 导入导出 + 90 天清理建议
+- 待办：macOS 主机冒烟八项
+
+### 效率增强（v2.1 账本）
+- ✅ UI 设计系统（语义 token / 原子组件 / lucide + ESLint 机械强制）
+- ✅ OS 级沙箱接线（由 v2.4 完成）
+- 🔲 分支工作流 / 并发多任务 / token 配额 / LSP 集成 / CRDT / e2e 重写（v2.7 已新增 browser e2e）
+
+### 网络策略收敛为双态（2026-09-13 修订 B，独立条目）
+三态（deny/ask/allow）收敛为 `deny | allow`，默认 allow；ask 信任门机制全链下线（−1717 行）——迟到点击语义、签名词形三轮真机修复后裁定：事后文本鉴定存在结构性漏检天花板，默认放行 + 拒绝留挡外传通道是诚实取舍。kv 迁移：显式 deny 保留，其余一律收敛 allow。
+
+## [2.0.0] — 2026-09 Released
+
+五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。
+- **P1 会话内核**：`sessions`/`session_members` 取代 Matrix room；dispatch/task_reply 内部事件桥
+- **P2 UI 骨架**：无边框 + 自绘 TitleBar；活动栏 + 统一侧边栏；设置独立界面；provider platform 显式化；审计滚动删除；MCP 子进程桥恢复
+- **P3 半成品处置 + IPC 收敛**：platform 运行时接线；#T 双语法 + T-序号任务 id 端到端；资源注册收敛 `resource:*`
+- **P4 局域网 P2P**：payload 五类型分发；任务快照广播 + 远端只读镜像（D7 铁律）；资源分享 + 一键导入
+- **P5 升级体验**：旧库只读导出 Markdown/JSON + `.legacy-v1.bak` 备份 + 首启一次性提示；完全重新开始（D5，不丢数据）
+- 升级说明：v1.x 不做数据兼容；检测旧库自动全量导出 + 备份 + 告知路径；导出异常仅 warn 不阻塞
 
 ## [1.7.4] — 2026-08-12
 
