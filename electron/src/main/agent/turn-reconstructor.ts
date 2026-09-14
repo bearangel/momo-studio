@@ -446,17 +446,25 @@ export function rebuildSessionContext(
       const baseSsi = ssi.split('#')[0] ?? ssi;
       if (seenFamilies.has(baseSsi)) continue; // #roll 换行 / 族内重复行
       seenFamilies.add(baseSsi);
-      const rebuilt = rebuildStreamMessages(baseSsi, {
-        includeUser: false,
-        undrainedSteersAsUser: true,
-      });
-      units.push({
-        kind: 'family',
-        baseSsi,
-        startTs: row.createdAt,
-        endTs: rebuilt.endTs,
-        messages: rebuilt.messages,
-      });
+      // 单族降级：族重建抛错只跳过该族（warn），不牵连其余单位触发整体空上下文降级
+      try {
+        const rebuilt = rebuildStreamMessages(baseSsi, {
+          includeUser: false,
+          undrainedSteersAsUser: true,
+        });
+        units.push({
+          kind: 'family',
+          baseSsi,
+          startTs: row.createdAt,
+          endTs: rebuilt.endTs,
+          messages: rebuilt.messages,
+        });
+      } catch (err) {
+        logger.warn('rebuildSessionContext 单族重建失败，跳过该族', {
+          baseSsi,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // ② steer 行去重 + 空轮流剔除
@@ -482,8 +490,8 @@ export function rebuildSessionContext(
       }
     }
 
-    // ④ 窗口裁剪：最后 limitTurns 个单位
-    const limitTurns = opts?.limitTurns ?? DEFAULT_LIMIT_TURNS;
+    // ④ 窗口裁剪：最后 limitTurns 个单位（下限 1 防 limitTurns=0 时 slice(-0) 全量退化）
+    const limitTurns = Math.max(1, opts?.limitTurns ?? DEFAULT_LIMIT_TURNS);
     const windowed = rendered.slice(-limitTurns);
 
     // ⑤ 展平 + 平行时间戳（族单位消息统一取族首行时刻——回合粒度，

@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 // mock electron：stream-relay 的 BrowserWindow 推送在测试环境静默降级
 vi.mock('electron', () => ({
@@ -258,6 +259,9 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     const big = ctx2.messages.find((m) => m.toolCallId === 'c6')!;
     expect(big.content.length).toBeLessThanOrEqual(TOOL_RESULT_MAX_LEN + TRUNCATED_MARKER.length + 1);
     expect(big.content).toContain(TRUNCATED_MARKER);
+    // 正向断言：cutoff 之后的工具结果不截断（最后一条 user「新任务」之后的 c7 原样保留）
+    const c7 = ctx2.messages.find((m) => m.toolCallId === 'c7')!;
+    expect(c7.content).toBe('hi');
   });
 
   it('T6 空轮流：零输出事件的族不产生空 assistant 消息', () => {
@@ -284,5 +288,78 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
 
     const ctx = rebuildSessionContext(SESSION_ID);
     expect(ctx.messages[ctx.messages.length - 1]).toEqual({ role: 'user', content: '当前指令' });
+  });
+
+  it('T8 单族降级：损坏族（payload 非法 JSON）跳过该族，正常族完整，整体不降级为空', () => {
+    const T0 = Date.now();
+    ownerRow('第一问', T0 + 100);
+    startStream('s-broken', T0 + 200);
+    toolCall('s-broken', 'c9', 'bash', { command: 'ls' });
+    toolResult('s-broken', 'c9', 'bash', 'ok');
+    bumpStreamEventTs('s-broken', T0 + 250);
+    endStream('s-broken', 'stop');
+    // 损坏族触发：裸 SQL 往流行手插一行 payload_json 非法 JSON 的事件（列形状照抄
+    // events-repo.insertEvent）——events-repo rowToCamel 的 JSON.parse 抛 →
+    // collectStreamEvents 抛 → 单族降级路径命中（真实运行时语义，非 monkeypatch）
+    const brokenRowId = getDb()
+      .prepare('SELECT id FROM messages WHERE stream_session_id = ?')
+      .get('s-broken') as { id: string };
+    getDb().prepare(
+      `INSERT INTO message_events (id, message_id, seq, event_type, payload_json, created_at)
+       VALUES (?, ?, 50, 'text_delta', ?, ?)`,
+    ).run(randomUUID(), brokenRowId.id, '{这不是合法JSON', T0 + 260);
+    ownerRow('第二问', T0 + 300);
+    startStream('s-ok', T0 + 400);
+    toolCall('s-ok', 'c10', 'bash', { command: 'pwd' });
+    toolResult('s-ok', 'c10', 'bash', '/tmp');
+    bumpStreamEventTs('s-ok', T0 + 450);
+    endStream('s-ok', 'stop');
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    // 未触发整体降级（若整体 catch 命中则 messages=[]，下列正向断言全红）
+    expect(ctx.messages.some((m) => m.role === 'user' && m.content === '第一问')).toBe(true);
+    expect(ctx.messages.some((m) => m.role === 'user' && m.content === '第二问')).toBe(true);
+    expect(ctx.messages.some((m) => m.toolCallId === 'c10')).toBe(true); // 正常族完整
+    expect(ctx.messages.some((m) => m.toolCallId === 'c9')).toBe(false); // 损坏族缺席
+  });
+
+  it('T9a owner 行带 parentStreamSessionId（dispatch_followup 追问行）→ 保留为 user 单位', () => {
+    const T0 = Date.now();
+    ownerRow('原始指令', T0 + 100);
+    startStream('s9', T0 + 200);
+    toolCall('s9', 'c11', 'dispatch:coder', { task: '干活' });
+    bumpStreamEventTs('s9', T0 + 250);
+    endStream('s9', 'interrupted');
+    // 追问行形态照抄 chain-writer.appendFollowupQuestionRow：sender='owner' +
+    // parentStreamSessionId（PM 当前流 id），streamSessionId 缺省 null
+    const followup = insertMessage({
+      sessionId: SESSION_ID, sender: 'owner', eventType: 'm.room.message', body: '追问：进度如何',
+      taskId: 'task-1', parentStreamSessionId: 's9',
+    });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 300, followup.id);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    expect(ctx.messages.some((m) => m.role === 'user' && m.content === '追问：进度如何')).toBe(true);
+  });
+
+  it('T9b 空会话（bogus id）→ 空上下文（fresh-session 形态）', () => {
+    const ctx = rebuildSessionContext('sess-not-exist');
+    expect(ctx.messages).toEqual([]);
+    expect(ctx.timestamps).toEqual([]);
+  });
+
+  it('T9c limitTurns=0 退化防护：窗口下限 1，不退化为全量', () => {
+    const T0 = Date.now();
+    ownerRow('指令一', T0 + 100);
+    startStream('s10', T0 + 200);
+    toolCall('s10', 'c12', 'bash', { command: 'echo a' });
+    toolResult('s10', 'c12', 'bash', 'a');
+    bumpStreamEventTs('s10', T0 + 250);
+    endStream('s10', 'stop');
+    ownerRow('当前指令', T0 + 300);
+
+    // 无防护时 slice(-0) === slice(0) 返回全部单位；下限 1 后只保留最后 1 个单位
+    const ctx = rebuildSessionContext(SESSION_ID, { limitTurns: 0 });
+    expect(ctx.messages).toEqual([{ role: 'user', content: '当前指令' }]);
   });
 });
