@@ -92,6 +92,11 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 ### 网络策略收敛为双态（2026-09-13 修订 B，独立条目）
 三态（deny/ask/allow）收敛为 `deny | allow`，默认 allow；ask 信任门机制全链下线（−1717 行）——迟到点击语义、签名词形三轮真机修复后裁定：事后文本鉴定存在结构性漏检天花板，默认放行 + 拒绝留挡外传通道是诚实取舍。kv 迁移：显式 deny 保留，其余一律收敛 allow。
 
+### 会话连续性修复（A+B）`2026-09-14`
+- fix: 会话上下文窗口「最早 N 条」→「最近 N 条」（getConversationContext；ASC+LIMIT 语义陷阱，/compact 早在 v30 注释警示）
+- fix: aborted/failed 空 body 行合成中断/失败标记（防 Anthropic 空 assistant 400 + 模型可见信号）
+- feat: rebuildSessionContext——主会话跨轮上下文 events 级重建，工具调用/结果跨轮可见、中断轮孤儿 call 自动合成结果、steer 行时间窗去重、当前指令行双拼消除（spec: docs/specs/2026-09-14-session-continuity-design.md）
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。
