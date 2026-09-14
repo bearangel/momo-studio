@@ -97,6 +97,10 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 - fix: aborted/failed 空 body 行合成中断/失败标记（防 Anthropic 空 assistant 400 + 模型可见信号）
 - feat: rebuildSessionContext——主会话跨轮上下文 events 级重建，工具调用/结果跨轮可见、中断轮孤儿 call 自动合成结果、steer 行时间窗去重、当前指令行双拼消除（spec: docs/specs/2026-09-14-session-continuity-design.md）
 
+### 浏览器接管优雅等待 `2026-09-14`
+- feat: browser_* 工具用户接管时驻留等待（gateAgentSide 单飞，默认 60s 可配）+ 空闲自愈（90s 无输入自动回切，仅 agent 等待中判定）+「释放并继续」提示卡（notice kind agent-waiting-release / durationMs 契约加法）
+- fix: 接管错误文案诚实化——超时出口携带等待秒数与 webfetch 改道指引（原「等待释放后重试」承诺了不存在的等待能力）
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。
