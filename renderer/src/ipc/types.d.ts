@@ -1128,6 +1128,8 @@ export interface BrowserNotice {
   kind: string;
   text: string;
   workspaceId: string;
+  /** agent-waiting-release 专用：本轮驻留等待实际时长 ms——卡片本地兜底计时用（超时出口 takeover 不翻转，state 不会触发卸载） */
+  durationMs?: number;
 }
 
 export interface BrowserApiSurface {

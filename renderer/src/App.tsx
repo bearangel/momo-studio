@@ -19,6 +19,7 @@ import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
 import { SandboxNotice } from './components/settings/SandboxNotice';
 import { ResumeNotice } from './components/task/ResumeNotice';
 import { BrowserTrustNotice } from './components/workspace/BrowserTrustNotice';
+import { BrowserWaitReleaseNotice } from './components/workspace/BrowserWaitReleaseNotice';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -89,6 +90,8 @@ export function App() {
       <ResumeNotice />
       {/* v2.7 Task 9：浏览器信任卡（自管显隐——收到 trust-request 推送才渲染） */}
       <BrowserTrustNotice />
+      {/* 浏览器接管优雅等待（2026-09-14 §4.3）：释放提示卡（自管显隐——收到 agent-waiting-release 推送才渲染） */}
+      <BrowserWaitReleaseNotice />
     </>
   );
 }
