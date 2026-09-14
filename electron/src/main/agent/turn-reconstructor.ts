@@ -34,8 +34,10 @@ import { getDb } from '../storage/db';
 import {
   getMessageByStreamSessionId,
   listMessagesByStreamSessionId,
+  listRecentMessagesBySession,
   type MessageRow,
 } from '../storage/messages/repo';
+import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../compaction/serialize';
 import { listEventsByMessage, type MessageEventRow } from '../storage/messages/events-repo';
 
 /** 孤儿 tool_call（中断时未回 result）的合成 tool result 文案 */
@@ -308,7 +310,7 @@ function rebuildStreamMessages(
         // text / tool 事件进共享聚合状态机；其余（thinking / todo_update /
         // status_change / final / message_roll / segment_boundary / 未知 kind）跳过
         agg.push(ev);
-      }
+    }
   }
   // 流末 flush：残留文本收尾 + 未配对 call 合成中断 result
   agg.flush();
@@ -354,5 +356,182 @@ export function rebuildTurn(streamSessionId: string): RebuiltTurn {
       error: err instanceof Error ? err.message : String(err),
     });
     return emptyDegenerate();
+  }
+}
+
+// ══ 会话连续性（spec 2026-09-14 §4）：主会话跨轮上下文 events 级重建 ══
+//
+// 与 rebuildTurn（单流断点续跑）/ rebuildSubConversation（子 agent 链续聊）同源的
+// 第三条重建路径——主会话「下一轮」的 convCtx。此前该路径走 memory provider 的
+// messages.body 启发式拼接（最早 20 行、无工具层、中断轮空正文），本函数对齐
+// events 级保真：message_events 是事件溯源单一真相源，UI 与模型可见性拉平。
+
+/** 会话重建选项 */
+export interface SessionContextOptions {
+  /** 窗口内「回合单位」数上限（owner 单位与流族单位同权计数），默认 20 */
+  limitTurns?: number;
+  /**
+   * 丢弃时序最后的 owner 行（= 当前轮输入，runtime-entry 的 turnMessages 已含，
+   * 不剔除则当前指令双拼）。顶层 chat / resume 路径恒传 true。
+   */
+  excludeTrailingOwnerRow?: boolean;
+}
+
+/** 会话重建结果 */
+export interface RebuiltSessionContext {
+  /** LLM 消息序列（含 tool 角色），可直接拼进 LLM 请求 */
+  messages: LLMMessage[];
+  /** 与 messages 平行的 DB createdAt（合成条取语义等价值）；供 compaction coveredUntil 精确化 */
+  timestamps: number[];
+}
+
+/** 行拉取上限：两次 compaction 之间行数超此值的会话，窗口退化为最近 200 行内分组 */
+const SESSION_ROW_FETCH_MARGIN = 200;
+/** 默认窗口单位数 */
+const DEFAULT_LIMIT_TURNS = 20;
+
+/** 回合单位：owner 消息 | agent 流族（base + #roll，#seg 排除） */
+type SessionUnit =
+  | { kind: 'owner'; row: MessageRow }
+  | { kind: 'family'; baseSsi: string; startTs: number; endTs: number; messages: LLMMessage[] };
+
+/**
+ * 重建会话跨轮 LLM 上下文（同步；纯读取）。
+ *
+ * 单位分组（spec §4.2）：ASC 行序遍历——owner 行为 user 单位；agent 流族首行触发
+ * rebuildStreamMessages({includeUser:false}) 展开为 assistant/tool 消息族；#seg 快照行、
+ * #roll 后续行、子 agent 流行（parent 非空且非 owner——子 agent 回复经父流 dispatch
+ * 工具结果事件进入上下文）跳过。
+ *
+ * steer 行去重：owner 行落在某族时间窗 [族首行 created_at, 族末事件 created_at] 内
+ * = steer 消息行（先落库、后由族内 steer 事件渲染 [用户中途补充]），walk 层跳过防
+ * 双渲染；未 drain 的 steer（子进程死前未消费，无事件）只剩 owner 行，正常渲染。
+ *
+ * 降级：单族重建抛错跳过该族（warn）；整体抛错返回空上下文（fresh-session 形态，
+ * 安全方向）。
+ */
+export function rebuildSessionContext(
+  sessionId: string,
+  opts?: SessionContextOptions,
+): RebuiltSessionContext {
+  try {
+    // 直读 session_compactions（provider 既有先例：避免与 compaction/service 的静态循环依赖）
+    const compaction = getDb()
+      .prepare(
+        'SELECT summary, covered_until AS coveredUntil FROM session_compactions WHERE session_id = ?',
+      )
+      .get(sessionId) as { summary: string; coveredUntil: number } | undefined;
+
+    const rows = listRecentMessagesBySession(
+      sessionId,
+      SESSION_ROW_FETCH_MARGIN,
+      compaction ? { afterTs: compaction.coveredUntil } : undefined,
+    );
+
+    // ① 骨架 + 族展开
+    const units: SessionUnit[] = [];
+    const seenFamilies = new Set<string>();
+    for (const row of rows) {
+      if (row.segmentOf !== null) continue; // #seg 快照行：事件在父行，快照无增量信息
+      const isOwnerRow = row.sender === 'owner';
+      // 子 agent 流行跳过（父流 dispatch 工具结果已携带其回复）；
+      // owner 行带 parent（dispatch_followup 追问行）保留为 user 单位
+      if (row.parentStreamSessionId !== null && !isOwnerRow) continue;
+      if (isOwnerRow && !row.streamSessionId) {
+        units.push({ kind: 'owner', row });
+        continue;
+      }
+      const ssi = row.streamSessionId;
+      if (!ssi) continue; // 防御：agent 行无流 id（契约外形态）
+      const baseSsi = ssi.split('#')[0] ?? ssi;
+      if (seenFamilies.has(baseSsi)) continue; // #roll 换行 / 族内重复行
+      seenFamilies.add(baseSsi);
+      const rebuilt = rebuildStreamMessages(baseSsi, {
+        includeUser: false,
+        undrainedSteersAsUser: true,
+      });
+      units.push({
+        kind: 'family',
+        baseSsi,
+        startTs: row.createdAt,
+        endTs: rebuilt.endTs,
+        messages: rebuilt.messages,
+      });
+    }
+
+    // ② steer 行去重 + 空轮流剔除
+    const families = units.filter(
+      (u): u is Extract<SessionUnit, { kind: 'family' }> => u.kind === 'family',
+    );
+    let rendered = units.filter((u) => {
+      if (u.kind === 'owner') {
+        return !families.some(
+          (f) => u.row.createdAt >= f.startTs && u.row.createdAt <= f.endTs,
+        );
+      }
+      return u.messages.length > 0; // 零输出事件的族（含 aborted 空转）整体跳过
+    });
+
+    // ③ 剔除时序最后的 owner 单位（当前轮输入，turnMessages 已含）
+    if (opts?.excludeTrailingOwnerRow) {
+      for (let i = rendered.length - 1; i >= 0; i--) {
+        if (rendered[i]!.kind === 'owner') {
+          rendered = rendered.slice(0, i).concat(rendered.slice(i + 1));
+          break;
+        }
+      }
+    }
+
+    // ④ 窗口裁剪：最后 limitTurns 个单位
+    const limitTurns = opts?.limitTurns ?? DEFAULT_LIMIT_TURNS;
+    const windowed = rendered.slice(-limitTurns);
+
+    // ⑤ 展平 + 平行时间戳（族单位消息统一取族首行时刻——回合粒度，
+    // runCompaction 的 turnStart-1 兜底语义不受影响）
+    const messages: LLMMessage[] = [];
+    const timestamps: number[] = [];
+    for (const u of windowed) {
+      if (u.kind === 'owner') {
+        messages.push({ role: 'user', content: u.row.body });
+        timestamps.push(u.row.createdAt);
+      } else {
+        messages.push(...u.messages);
+        for (let i = 0; i < u.messages.length; i++) timestamps.push(u.startTs);
+      }
+    }
+
+    // ⑥ prune：最后一条 user 消息之前的旧轮 tool 结果截断（常量与 compaction 同源，
+    // 防 双份漂移；与 provider pruneOldToolResults 同规则）
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]!.role === 'user') {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    const cutoff = lastUserIdx === -1 ? messages.length : lastUserIdx;
+    for (let i = 0; i < cutoff; i++) {
+      const m = messages[i]!;
+      if (m.role === 'tool' && m.content.length > TOOL_RESULT_MAX_LEN) {
+        m.content = `${m.content.slice(0, TOOL_RESULT_MAX_LEN)}\n${TRUNCATED_MARKER}`;
+      }
+    }
+
+    // ⑦ compaction 摘要头注入（合成条不参与 ⑥ 的截断与锚点判定）
+    if (compaction) {
+      messages.unshift({
+        role: 'user',
+        content: `[此前对话压缩摘要]\n${compaction.summary}`,
+      });
+      timestamps.unshift(compaction.coveredUntil);
+    }
+
+    return { messages, timestamps };
+  } catch (err) {
+    logger.warn('rebuildSessionContext 重建失败，降级为空上下文（fresh-session 形态）', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { messages: [], timestamps: [] };
   }
 }
