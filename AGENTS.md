@@ -75,6 +75,7 @@ npx pnpm@9.0.0 build
 - **Node 20 LTS**：Node 26 会破坏 better-sqlite3 的 native binding（`ERR_DLOPEN_FAILED`）。容器默认 Node 26，必须先 `nvm use 20`。
 - **TypeScript strict**：禁止 `any`、`@ts-ignore`、`as any`。ESLint `no-explicit-any: error` 已启用。
 - **Conventional Commits**：`feat:`、`fix:`、`chore:`、`docs:`、`test:`、`refactor:`。
+- **版本号纪律（2026-09-13 起）**：产品版本号与 README「状态」区研发账本（v2.x 条目）**解耦**。特性 / 修复 commit **一律不动版本号**；合入大特性只把三处 `package.json` 的 alpha 号 +1（当前 `2.1.0-alpha.N`）；发正式版（用户明说「发版」）才定终号——默认打包累积特性定 `2.1.0`，破坏面达 MAJOR 四条则 `3.0.0`。策略全文：`docs/dev/release.md`「研发期版本号策略」。
 - **UI 设计系统（v2.1）**：renderer 新代码只用语义 token（`bg-surface-*` / `text-secondary` 等），禁标准 Tailwind 色阶类、禁 inline 硬编码颜色、禁 emoji 图标（用 lucide-react，16px / stroke 1.75）；原子组件优先（`components/ui/`）；状态色一律 `lib/task-status.ts`。ESLint 已机械强制（P4 起全局 error + Tailwind 默认色阶移除）。规范全文：`docs/dev/design-system.md`
 
 ## 架构关键点（基础设施细节）
