@@ -19,6 +19,7 @@ import { Badge } from '../ui/Badge';
 import { EmptyState } from '../ui/EmptyState';
 import { IconButton } from '../ui/IconButton';
 import { AddressBar } from './AddressBar';
+import { BrowserWaitReleaseBanner } from './BrowserWaitReleaseBanner';
 import { DevServerDropdown } from './DevServerDropdown';
 import { TabsBar } from './TabsBar';
 import { TakeoverIndicator } from './TakeoverIndicator';
@@ -354,6 +355,12 @@ export function BrowserSidebar({ workspaceId }: Props) {
           />
           <AddressBar url={state?.url ?? ''} onNavigate={navigate} />
         </div>
+        {/* chrome 行 3（条件渲染）：agent 驻留等待释放条幅。必须在 chrome 列内、
+            占位区之前渲染——原生 WebContentsView 按 placeholder rect 在 OS 合成层
+            盖住一切 renderer DOM，App 层 fixed 悬浮卡会落在 rect 内被页面遮挡
+            （2026-09-15 实测 bug；同拖拽手柄 bug 1 先例）。条幅占位时 placeholder
+            flex 收缩 + ResizeObserver 上报，原生视图同步缩小，构造上无重叠。 */}
+        <BrowserWaitReleaseBanner />
         {/* 视图占位区：main 的 WebContentsView 按上报 rect 叠加于此。
             接管层不再走 renderer DOM（v2.7 review fix C2）——OS 合成层序 native overlay →
             browser view → renderer DOM，DOM 层永远收不到 mousedown；接管唯一入口是 view-factory

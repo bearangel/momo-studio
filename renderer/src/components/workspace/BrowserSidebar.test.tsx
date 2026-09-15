@@ -24,7 +24,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { BrowserSidebar } from './BrowserSidebar';
-import type { BrowserState, BrowserSettings, BrowserTabInfo } from '../../ipc/types';
+import type { BrowserState, BrowserSettings, BrowserTabInfo, BrowserNotice } from '../../ipc/types';
 
 // ---------- window.api 桩（browser 命名空间全方法） ----------
 const getStateMock = vi.fn();
@@ -153,6 +153,7 @@ beforeEach(() => {
   getSettingsMock.mockResolvedValue(mkSettings());
   updateSettingsMock.mockResolvedValue({ ok: true });
   onBrowserStateMock.mockReturnValue(() => {});
+  onBrowserNoticeMock.mockReturnValue(() => {});
   ResizeObserverStub.instances = [];
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 });
@@ -226,13 +227,13 @@ describe('BrowserSidebar·状态渲染（v2.7 Task 8）', () => {
     expect(screen.getByRole('textbox')).toHaveValue('https://example.com/');
   });
 
-  it('卸载 → onBrowserState 解订阅被调', async () => {
+  it('卸载 → onBrowserState 解订阅被调（sidebar 自身 + 释放条幅共 2 个订阅者，各自清理）', async () => {
     const { unsubscribe } = armOnBrowserState();
     getStateMock.mockResolvedValue(mkState());
     const { unmount } = render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     unmount();
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
   });
 
   it('getState 拒绝 → chrome 骨架仍渲染（订阅推送兜底，不白屏——错误路径）', async () => {
@@ -656,5 +657,61 @@ describe('BrowserSidebar·宽度受控 / 拖拽 / 键盘（280-720）', () => {
     expect(strip.className).toContain('w-10');
     expect(strip.style.width).toBe('');
     expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  });
+});
+
+// ---------- 接管释放条幅集成（2026-09-15 遮挡修复回归锁） ----------
+// 教训：原生 WebContentsView 按 placeholder rect 在 OS 合成层盖住一切 renderer DOM
+// （z-index 无效）——释放提示最初的 App 层 fixed 右下角卡落在 rect 内被浏览器页面
+// 遮挡，用户永远看不到。结构性回归锁：条幅必须是 browser-sidebar 容器的后代
+// （chrome 列内、占位区之前），而非全局悬浮卡。
+describe('BrowserSidebar × BrowserWaitReleaseBanner（遮挡修复回归锁）', () => {
+  /** onBrowserNotice 桩：捕获回调 + 返回解订阅 spy（形态对齐 armOnBrowserState） */
+  function armOnBrowserNotice(): { push: (n: BrowserNotice) => void } {
+    let captured: ((n: BrowserNotice) => void) | null = null;
+    onBrowserNoticeMock.mockImplementation((cb: (n: BrowserNotice) => void) => {
+      captured = cb;
+      return () => {};
+    });
+    return {
+      push: (n: BrowserNotice) => act(() => captured?.(n)),
+    };
+  }
+
+  it('收到 agent-waiting-release notice 才出现，且渲染在侧栏容器内（非全局悬浮卡）', async () => {
+    const notice = armOnBrowserNotice();
+    render(<BrowserSidebar workspaceId="w1" />);
+
+    expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull();
+
+    notice.push({
+      kind: 'agent-waiting-release',
+      text: 'agent 正在等待浏览器控制权——点击「释放并继续」恢复任务，或稍候自动恢复',
+      workspaceId: 'w1',
+      durationMs: 120_000,
+    });
+
+    const sidebar = await screen.findByTestId('browser-sidebar');
+    const banner = screen.getByTestId('browser-wait-release-banner');
+    // 结构性回归锁（遮挡教训）：条幅是侧栏 chrome 列的后代；占位区仍共存
+    expect(sidebar.contains(banner)).toBe(true);
+    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
+    expect(banner.className).not.toContain('fixed');
+  });
+
+  it('点击「释放并继续」→ releaseTakeover(目标 ws)', async () => {
+    const notice = armOnBrowserNotice();
+    render(<BrowserSidebar workspaceId="w1" />);
+
+    notice.push({
+      kind: 'agent-waiting-release',
+      text: 'agent 正在等待浏览器控制权',
+      workspaceId: 'w1',
+      durationMs: 120_000,
+    });
+
+    const btn = await screen.findByRole('button', { name: '释放并继续' });
+    fireEvent.click(btn);
+    await waitFor(() => expect(releaseTakeoverMock).toHaveBeenCalledWith('w1'));
   });
 });

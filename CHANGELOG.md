@@ -100,6 +100,7 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 ### 浏览器接管优雅等待 `2026-09-14`
 - feat: browser_* 工具用户接管时驻留等待（gateAgentSide 单飞，默认 120s 可配）+ 空闲自愈（90s 无输入自动回切，仅 agent 等待中判定）+「释放并继续」提示卡（notice kind agent-waiting-release / durationMs 契约加法）
 - fix: 接管错误文案诚实化——超时出口携带等待秒数与 webfetch 改道指引（原「等待释放后重试」承诺了不存在的等待能力）
+- fix: 释放提示遮挡修复（2026-09-15）——fixed 右下角卡落在浏览器 WebContentsView 占位区 rect 内被页面盖住（OS 合成层高于一切 DOM），改为 BrowserSidebar chrome 列内条幅，构造上无重叠（同类先例：侧栏拖拽手柄 bug 1）
 
 ## [2.0.0] — 2026-09 Released
 

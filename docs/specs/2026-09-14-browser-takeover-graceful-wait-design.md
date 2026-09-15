@@ -87,10 +87,10 @@ agent 执行「黄金价格分析」任务，调用 `browser_navigate`；用户�
 ### 4.3 释放提示卡（renderer）
 
 - 主进程 park 进入时推 `pushNotice('agent-waiting-release', 'agent 正在等待浏览器控制权——点击「释放并继续」恢复任务，或稍候自动恢复', wsId)`（单飞：仅 waiter 创建时一次）。**载荷携带可选字段 `durationMs`（= 本轮 agentWaitMs 实际生效值）**——超时出口下 takeover 仍为 user 态、state 不会翻转，卡片本地计时必须由主进程下发时长，避免 renderer 侧硬编码默认值与 settings 覆盖值漂移。
-- renderer 新增 `BrowserWaitReleaseNotice.tsx`（克隆 `BrowserTrustNotice.tsx` 交互形态）：
+- renderer 组件 `BrowserWaitReleaseBanner`（2026-09-15 遮挡修复：由 App 层 fixed 右下角卡改为 **BrowserSidebar chrome 列内条幅**——原生 WebContentsView 按 placeholder rect 在 OS 合成层高于一切 renderer DOM，悬浮卡落在 rect 内会被浏览器页面盖住、用户永远看不到；chrome 列在 rect 之外天然可见，条幅占位时占位区 flex 收缩 + ResizeObserver 上报，原生视图同步缩小，构造上无重叠。同文件拖拽手柄 bug 1 为同类先例）：
   - 挂载：收到 `kind='agent-waiting-release'` notice（按 workspaceId 路由，同 trust 卡 M7 语义）；
-  - 卸载（三出口全覆盖）：订阅 `browser:state`，`takeover === 'agent'` 即卸载（手动释放与空闲自愈）；本地 `durationMs` 定时器兜底卸载（超时出口，防孤儿卡）；ws 切换即卸载；
-  - 动作：单一按钮「释放并继续」→ `ipc.browser.releaseTakeover(workspaceId)`（既有通道，零新 IPC）。
+  - 卸载（三出口全覆盖）：订阅 `browser:state`，`takeover === 'agent'` 即卸载（手动释放与空闲自愈）；本地 `durationMs` 定时器兜底卸载（超时出口，防孤儿条幅）；ws 切换即卸载；
+  - 动作：单一按钮「释放并继续」→ `ipc.browser.releaseTakeover(workspaceId)`（既有通道，零新 IPC）；失败保留条幅 + 错误行（不静默吞）。
 - 卡片遵循 v2.1 设计系统（语义 token / lucide 图标 / 原子组件），与信任卡同栈展示。
 
 ### 4.4 设置项

@@ -1,4 +1,4 @@
-// renderer/src/components/workspace/BrowserWaitReleaseNotice.test.tsx
+// renderer/src/components/workspace/BrowserWaitReleaseBanner.test.tsx
 //
 // 接管释放提示卡测试（spec 2026-09-14 §4.3，Task 3）：
 //   - 非 agent-waiting-release kind → 不挂载
@@ -10,7 +10,7 @@
 // mock 形态照抄 BrowserTrustNotice.test.tsx（window.api 桩 + ipc Proxy 透传）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { BrowserWaitReleaseNotice } from './BrowserWaitReleaseNotice';
+import { BrowserWaitReleaseBanner } from './BrowserWaitReleaseBanner';
 import type { BrowserNotice, BrowserState } from '../../ipc/types';
 
 const releaseTakeoverMock = vi.fn();
@@ -71,19 +71,19 @@ beforeEach(() => {
   onBrowserStateMock.mockImplementation(() => vi.fn());
 });
 
-describe('BrowserWaitReleaseNotice（Task 3）', () => {
+describe('BrowserWaitReleaseBanner（Task 3）', () => {
   it('非 agent-waiting-release kind（trust-request）→ 不挂载', () => {
     const { push } = armOnBrowserNotice();
-    const { container } = render(<BrowserWaitReleaseNotice />);
+    const { container } = render(<BrowserWaitReleaseBanner />);
     push({ kind: 'trust-request', text: 'agent 请求访问 example.com', workspaceId: 'w1' });
     expect(container.firstChild).toBeNull();
   });
 
   it('kind=agent-waiting-release → 渲染卡片（标题 + 推送 text + 按钮「释放并继续」）', () => {
     const { push } = armOnBrowserNotice();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     push({ kind: 'agent-waiting-release', text: 'agent 等待浏览器释放（最长 30 秒）', workspaceId: 'w1' });
-    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
     expect(screen.getByText('agent 正在等待浏览器')).toBeInTheDocument();
     expect(screen.getByText('agent 等待浏览器释放（最长 30 秒）')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '释放并继续' })).toBeInTheDocument();
@@ -92,25 +92,25 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
   it('onBrowserState 推送 takeover=agent（目标 ws 匹配）→ 卸载', () => {
     const notice = armOnBrowserNotice();
     const state = armOnBrowserState();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     notice.push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1' });
-    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
     state.push(mkState('w1', 'agent'));
-    expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull();
+    expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull();
   });
 
   it('durationMs 到期（+2s 宽限）→ 卸载（超时兜底；宽限前不卸载）', () => {
     vi.useFakeTimers();
     try {
       const { push } = armOnBrowserNotice();
-      render(<BrowserWaitReleaseNotice />);
+      render(<BrowserWaitReleaseBanner />);
       push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1', durationMs: 5_000 });
-      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
       // 宽限 +2s：6_999ms 时尚未到期（takeover 不翻转时 state 不触发，靠本地计时）
       act(() => vi.advanceTimersByTime(6_999));
-      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1));
-      expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull();
+      expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -119,19 +119,19 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
   it('state 的 workspaceId 与卡片目标不符 → 不卸载（用户切走查看其他 ws 不误删卡片）', () => {
     const notice = armOnBrowserNotice();
     const state = armOnBrowserState();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     notice.push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1' });
     state.push(mkState('w2', 'agent'));
-    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
   });
 
   it('点击「释放并继续」→ releaseTakeover(notice.workspaceId) + 卡片消散', async () => {
     const { push } = armOnBrowserNotice();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '释放并继续' }));
     await waitFor(() => expect(releaseTakeoverMock).toHaveBeenCalledWith('w1'));
-    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull());
   });
 
   it('releaseTakeover 失败 → 卡片保留 + 错误行「释放失败：boom」+ 按钮复能可重试；busy 期间二次点击不重复调用', async () => {
@@ -140,7 +140,7 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
       () => new Promise<void>((_, rej) => { rejectFirst = rej; }),
     );
     const { push } = armOnBrowserNotice();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1' });
     const btn = screen.getByRole('button', { name: '释放并继续' });
     fireEvent.click(btn);
@@ -151,29 +151,29 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
     expect(releaseTakeoverMock).toHaveBeenCalledTimes(1);
     // 拒绝：卡片保留 + 错误行呈现（不静默吞），按钮复能
     await act(async () => { rejectFirst(new Error('boom')); });
-    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
     expect(screen.getByText('释放失败：boom')).toBeInTheDocument();
     expect(btn).toBeEnabled();
     // 复能后重试：第二次调用回落默认 resolve → 卡片消散
     fireEvent.click(btn);
     await waitFor(() => expect(releaseTakeoverMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull());
   });
 
   it('出口3：重复 notice 刷新计时（旧计时作废，从二次 notice 起重新兜底）', () => {
     vi.useFakeTimers();
     try {
       const { push } = armOnBrowserNotice();
-      render(<BrowserWaitReleaseNotice />);
+      render(<BrowserWaitReleaseBanner />);
       push({ kind: 'agent-waiting-release', text: '...', workspaceId: 'w1', durationMs: 5_000 });
       act(() => vi.advanceTimersByTime(4_000));
-      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
       // 二次 notice：计时重启（单飞下不应出现，防御出口）
       push({ kind: 'agent-waiting-release', text: '重启计时', workspaceId: 'w1', durationMs: 5_000 });
       act(() => vi.advanceTimersByTime(4_000));
-      expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+      expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(3_001));
-      expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull();
+      expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -183,17 +183,17 @@ describe('BrowserWaitReleaseNotice（Task 3）', () => {
     releaseTakeoverMock.mockImplementationOnce(() => Promise.reject(new Error('boom')));
     const notice = armOnBrowserNotice();
     const state = armOnBrowserState();
-    render(<BrowserWaitReleaseNotice />);
+    render(<BrowserWaitReleaseBanner />);
     // 第一轮：释放失败 → 错误行呈现（不静默吞）
     notice.push({ kind: 'agent-waiting-release', text: '第一轮等待', workspaceId: 'w1' });
     fireEvent.click(screen.getByRole('button', { name: '释放并继续' }));
     await waitFor(() => expect(screen.getByText('释放失败：boom')).toBeInTheDocument());
     // state 卸载（手动释放 / 空闲自愈出口）
     state.push(mkState('w1', 'agent'));
-    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-notice')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('browser-wait-release-banner')).toBeNull());
     // 第二轮：新 notice 到达 → 卡片重现，但不得携带上一轮的陈旧错误行
     notice.push({ kind: 'agent-waiting-release', text: '第二轮等待', workspaceId: 'w1' });
-    expect(screen.getByTestId('browser-wait-release-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-wait-release-banner')).toBeInTheDocument();
     expect(screen.getByText('第二轮等待')).toBeInTheDocument();
     expect(screen.queryByText(/释放失败/)).toBeNull();
   });
