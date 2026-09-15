@@ -235,17 +235,29 @@ describe('BrowserSidebar·状态渲染（v2.7 Task 8）', () => {
     await waitFor(() => expect(screen.queryByText('用户接管中')).not.toBeInTheDocument());
   });
 
-  it('非本 workspace 的推送被忽略（manager 只保证单活跃 ws——契约防御）', async () => {
+  it('非本 workspace 的推送被忽略（manager 只保证单活跃 ws——契约防御；负断言配正对照）', async () => {
     const { push } = armOnBrowserState();
     getStateMock.mockResolvedValue(mkState());
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
 
+    // 负推送：异 ws 快照不覆盖当前显示（push 由 act 包装，handler 同步 flush）
     push({ ...mkState({ url: 'https://other.com/', title: '别家' }), workspaceId: 'w2' });
-    // 等 microtask 后显示不变
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(screen.queryByText('别家')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox')).toHaveValue('https://example.com/');
+
+    // 正对照：本 ws 推送 → 显示确实更新——证明订阅 handler 管道在运转
+    //（tab 标题渲染来自 tabs[].title，与顶层 title 同步换）
+    push(
+      mkState({
+        url: 'https://switched.com/',
+        title: '本家更新',
+        tabs: [{ index: 0, url: 'https://switched.com/', title: '本家更新', owner: 'user' }],
+      }),
+    );
+    expect(await screen.findByText('本家更新')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('https://switched.com/');
   });
 
   it('卸载 → onBrowserState 解订阅被调（sidebar 自身订阅，卸载清理）', async () => {
@@ -281,7 +293,7 @@ describe('BrowserSidebar·空态与地址栏（spec §3.5）', () => {
     await waitFor(() => expect(userNavigateMock).toHaveBeenCalledWith('w1', 'https://typed.com/'));
   });
 
-  it('空态 → 占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器，agent 工具不被锁死）', async () => {
+  it('空态 → 占位区 mousedown 不触发 takeover（review fix：不误接管空浏览器，agent 工具不被锁死；负断言配正对照）', async () => {
     // 接管走 main 原生 overlay，DOM 层无接管 div；占位区点击事件不应触达任何 takeover
     // IPC——空态若误触接管，agent 工具立即失败（user 态 TakenOver）+ 用户接管空浏览器无意义。
     armOnBrowserState();
@@ -289,10 +301,14 @@ describe('BrowserSidebar·空态与地址栏（spec §3.5）', () => {
     render(<BrowserSidebar workspaceId="w1" />);
     expect(await screen.findByText('浏览器待命')).toBeInTheDocument();
 
+    // 负断言：mousedown 同步派发，无 IPC 副作用即计数不动（仅挂载时拉过一次）
     fireEvent.mouseDown(screen.getByTestId('browser-placeholder'));
-    await new Promise((r) => setTimeout(r, 10));
-    // 接管 IPC 在 renderer 端根本不再存在——验证占位区 mousedown 不引任何 IPC 调用即可
-    expect(getStateMock).toHaveBeenCalledTimes(1); // 仅挂载时拉一次
+    await Promise.resolve();
+    expect(getStateMock).toHaveBeenCalledTimes(1);
+    // 正对照：同页面内真实 IPC 入口（新建 tab）计数会增长——证明「事件 → IPC mock」
+    // 管道活着，上面计数不变才是「mousedown 无副作用」而非 mock 失联
+    fireEvent.click(screen.getByRole('button', { name: '新建标签页' }));
+    await waitFor(() => expect(openTabMock).toHaveBeenCalledWith('w1'));
   });
 });
 
@@ -347,16 +363,24 @@ describe('BrowserSidebar·可见性切换（归属制 spec §6.3 / §9.1）', ()
     await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', true));
   });
 
-  it('expandHint=false 推送不展开（普通状态推送无自动展开副作用）', async () => {
+  it('expandHint=false 推送不展开；紧接 expandHint=true 正对照展开（负断言配正对照——固定 sleep 反模式修复）', async () => {
     const { push } = armOnBrowserState();
     useBrowserVisibilityStore.setState({ visibilityBySession: {} });
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByRole('button', { name: '展开浏览器侧栏' });
 
+    // 负推送：普通状态推送（expandHint=false）无自动展开副作用。
+    // push 由 act 包装，handler 同步 flush——微任务一拍即尘埃落定，无需固定 sleep
     push(mkState({ url: 'https://example.com/', title: 'Example', expandHint: false }));
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
     expect(useBrowserVisibilityStore.getState().isVisible('s1')).toBe(false);
+
+    // 正对照：同测试内推 expandHint=true → 展开确实发生。正对照触发即证明
+    // effect 循环已运转，前面的负断言才是可信的「已执行且未误触发」
+    push(mkState({ url: 'https://example.com/', title: 'Example', expandHint: true }));
+    expect(await screen.findByTestId('browser-placeholder')).toBeInTheDocument();
+    expect(useBrowserVisibilityStore.getState().isVisible('s1')).toBe(true);
   });
 
   it('非活跃会话收起记忆独立：切到 s2（无记录）→ 竖条；切回 s1 → 仍展开', async () => {
@@ -456,7 +480,7 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     );
   });
 
-  it('卸载 → ResizeObserver disconnect + window resize 监听移除', async () => {
+  it('卸载 → ResizeObserver disconnect + window resize 监听移除（负断言配正对照）', async () => {
     const { unmount } = render(<BrowserSidebar workspaceId="w1" />);
     const placeholder = await screen.findByTestId('browser-placeholder');
     await waitFor(() => expect(setSidebarBoundsMock).toHaveBeenCalled());
@@ -464,12 +488,19 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     expect(observer.disconnected).toBe(false);
 
     stubRect(placeholder, { x: 11, y: 22, width: 380, height: 600 });
+    // 正对照：卸载前同一 resize 事件源确实会上报——监听管道活的
+    fireEvent(window, new Event('resize'));
+    await waitFor(() =>
+      expect(setSidebarBoundsMock).toHaveBeenLastCalledWith({ x: 11, y: 22, width: 380, height: 600 }),
+    );
+
     unmount();
     expect(observer.disconnected).toBe(true);
-
+    // 负断言基线在卸载零报（unmount effect 的既知上报）落账后取——
+    // 此后同一事件源不再上报（report 回调同步调 mock，微任务一拍即定）
     const countBefore = setSidebarBoundsMock.mock.calls.length;
     fireEvent(window, new Event('resize'));
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
   });
 
@@ -483,22 +514,31 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     expect(setSidebarBoundsMock).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
   });
 
-  it('workspaceId 变化（侧栏仍在位）不触发零尺寸上报——main 按 lastRect 缓存恢复新 ws 视图', async () => {
-    const { rerender } = render(<BrowserSidebar workspaceId="w1" />);
+  it('workspaceId 变化（侧栏仍在位）不触发零尺寸上报——main 按 lastRect 缓存恢复新 ws 视图（负断言配正对照）', async () => {
+    const { rerender, unmount } = render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     setSidebarBoundsMock.mockClear();
 
+    // 负断言：ws 切换（effect 重挂载但占位区布局不变）不零报——
+    // rerender 同步 commit，若有误零报此刻已记录，无需等
     rerender(<BrowserSidebar workspaceId="w2" />);
     await screen.findByText('Example');
-
     expect(setSidebarBoundsMock).not.toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+
+    // 正对照：真卸载（im→files 活动切换）零报确实发生——零报 mock 管道活着，
+    // 上面「未收到零报」才是「ws 切换不零报」而非 mock 失联
+    unmount();
+    await waitFor(() =>
+      expect(setSidebarBoundsMock).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 }),
+    );
   });
 
-  it('收起 → 隐藏过渡帧一次性零报 + 占位区卸载后 window resize 不再上报（manager 隐藏即 bounds 置零，后续无占位区则无真实 rect）', async () => {
+  it('收起 → 隐藏过渡帧一次性零报 + 占位区卸载后 window resize 不再上报（manager 隐藏即 bounds 置零，后续无占位区则无真实 rect；负断言配正对照）', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     const placeholder = screen.getByTestId('browser-placeholder');
     stubRect(placeholder, { x: 11, y: 22, width: 380, height: 600 });
+    // 正对照：收起前同一 resize 事件源确实会上报——监听管道活的
     fireEvent(window, new Event('resize'));
     await waitFor(() =>
       expect(setSidebarBoundsMock).toHaveBeenLastCalledWith({ x: 11, y: 22, width: 380, height: 600 }),
@@ -510,9 +550,10 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     await waitFor(() =>
       expect(setSidebarBoundsMock).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 }),
     );
+    // 负断言：收起后同一事件源不再上报（effect cleanup 同步移除监听，微任务一拍即定）
     const countBefore = setSidebarBoundsMock.mock.calls.length;
     fireEvent(window, new Event('resize'));
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.resolve();
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
   });
 });

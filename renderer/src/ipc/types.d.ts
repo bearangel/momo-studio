@@ -1163,7 +1163,7 @@ export interface BrowserApiSurface {
     workspaceId: string,
     patch: BrowserSettingsPatch,
   ): Promise<{ ok: true } | { ok: false; error: string }>;
-  /** 设置读取（store.read 全量六字段——设置页表单初始值 / 侧栏折叠初始态消费） */
+  /** 设置读取（store.read 全量六字段——设置页表单初始值 / 侧栏宽度初始态消费） */
   getSettings(workspaceId: string): Promise<BrowserSettings>;
   /** 清除 partition 浏览数据（设置页「清除浏览数据」按钮；不经接管门） */
   clearBrowsingData(workspaceId: string): Promise<void>;
