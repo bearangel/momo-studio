@@ -1146,7 +1146,13 @@ export interface BrowserApiSurface {
   switchTab(workspaceId: string, index: number): Promise<BrowserTabInfo[]>;
   /** 占位区 rect 上报（ResizeObserver / window resize 触发） */
   setSidebarBounds(rect: BrowserSidebarRect): Promise<void>;
-  /** 折叠态变更（联动视图销毁/重建 + 落库） */
+  /** 归属制（spec 2026-09-15 §6.3）：侧栏收起 = 纯隐藏——bounds 置零不销毁；可见性记忆在 renderer per-session */
+  setSidebarVisible(workspaceId: string, visible: boolean): Promise<void>;
+  /** 归属制（spec §5.4）：活跃会话上报（自动展开判定输入）；null = 非会话视图（安全缺省） */
+  setActiveSession(sessionId: string | null): Promise<void>;
+  /** 归属制（spec §6.4）：用户显式关闭浏览器（已过确认卡）——user 源全局销毁（含 agent 的 tab） */
+  closeBrowser(workspaceId: string): Promise<void>;
+  /** @deprecated 退役过渡（spec §7.4）：主进程 handler 已下架，调用即 reject——Task 5 renderer 换轨后删除 */
   setSidebarCollapsed(workspaceId: string, collapsed: boolean): Promise<void>;
   /** 信任卡应答（session / always / deny） */
   answerTrust(workspaceId: string, answer: BrowserTrustAnswer): Promise<void>;
@@ -1413,7 +1419,7 @@ export interface ApiSurface {
   sandbox: SandboxApiSurface;
   /** v2.5：变更账本通道（journal/ipc.handlers.ts） */
   journal: JournalApiSurface;
-  /** v2.7：浏览器通道（browser/ipc.ts——14 invoke + state/notice 两推送） */
+  /** v2.7：浏览器通道（browser/ipc.ts——16 invoke + state/notice 两推送） */
   browser: BrowserApiSurface;
   resource: {
     /** v1.7：统一资源列表（builtin + marketplace + custom 三源合并），filter 可选 */

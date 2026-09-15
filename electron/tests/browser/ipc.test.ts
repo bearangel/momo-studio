@@ -197,7 +197,7 @@ function activateWs(): void {
 // =================================================================================
 
 describe('registerBrowserIpc 通道注册', () => {
-  it('15 通道（§3.6 表 11 通道 + updateSettings + getSettings + clearBrowsingData + setSidebarVisible + setActiveSession）全部注册，无多余通道', () => {
+  it('16 通道（§3.6 表 11 通道 + updateSettings + getSettings + clearBrowsingData + setSidebarVisible + setActiveSession + closeBrowser）全部注册，无多余通道', () => {
     const expected = [
       'browser:getState',
       'browser:userNavigate',
@@ -209,6 +209,7 @@ describe('registerBrowserIpc 通道注册', () => {
       'browser:setSidebarBounds',
       'browser:setSidebarVisible',
       'browser:setActiveSession',
+      'browser:closeBrowser',
       'browser:answerTrust',
       'browser:listDevServers',
       'browser:updateSettings',
@@ -507,6 +508,56 @@ describe('browser:setActiveSession', () => {
     await expect(callIpc('browser:setActiveSession', 123)).rejects.toThrow(
       'browser:setActiveSession 参数 sessionId 必须为字符串或 null',
     );
+  });
+});
+
+// =================================================================================
+// 归属制通道（spec 2026-09-15 §6.3/§6.4/§5.4——Task 4 renderer 可调面）
+// =================================================================================
+
+describe('归属制通道（2026-09-15）', () => {
+  it('browser:setSidebarVisible → manager.setSidebarVisible 透传：隐藏后 tabs 存活 + bounds 置零可观测', async () => {
+    activateWs();
+    await callIpc('browser:openTab', 'ws-1', 'http://localhost:5173/');
+    await callIpc('browser:setSidebarVisible', 'ws-1', false);
+    // tabs 存活：state 仍报 1 个 tab（收起 = 纯隐藏不销毁，spec §6.3）
+    const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
+    expect(st.tabs).toHaveLength(1);
+    // bounds 置零可观测：视图收到全零 rect；视图未被销毁
+    expect(factory.views[0]!.view.bounds.setBounds).toHaveBeenLastCalledWith({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+    });
+    expect(factory.destroy).not.toHaveBeenCalled();
+  });
+
+  it('browser:setActiveSession → manager.setActiveSession 透传（null 合法不抛）', async () => {
+    activateWs();
+    // null = 非会话视图（files/agents）——安全缺省，不抛
+    await expect(callIpc('browser:setActiveSession', null)).resolves.toBeUndefined();
+    // 字符串会话 ID 同样透传成功
+    await expect(callIpc('browser:setActiveSession', 'sess-x')).resolves.toBeUndefined();
+  });
+
+  it('browser:closeBrowser → user 源全局销毁：agent 与 user 的 tab 一并清空（list 为空）', async () => {
+    activateWs();
+    // 两个不同 owner 的 tab：agent ctx 导航开的 + 用户 IPC 开的
+    await manager.navigate('ws-1', 'http://localhost:5173/', {
+      ownerId: 'inst-a',
+      sessionId: 'sess-1',
+    });
+    await callIpc('browser:openTab', 'ws-1', 'http://localhost:3000/');
+    expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).tabs).toHaveLength(2);
+
+    await expect(callIpc('browser:closeBrowser', 'ws-1')).resolves.toBeUndefined();
+    // user 源全局销毁：list 为空 + 两个视图都经 factory.destroy（agent 的 tab 不豁免）
+    const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
+    expect(st.tabs).toEqual([]);
+    expect(factory.destroy).toHaveBeenCalledTimes(2);
+    // 仲裁复位全新起点（spec §6.4）
+    expect(st.takeover).toBe('agent');
   });
 });
 

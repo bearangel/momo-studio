@@ -222,7 +222,7 @@ describe('DoD 17：overlay 命中链（页内点击接管端到端）', () => {
 });
 
 describe('attachToWindow', () => {
-  it('注册 15 个 browser: 通道（集合相等锁）', () => {
+  it('注册 16 个 browser: 通道（集合相等锁）', () => {
     const { wc } = mkWebContents();
     handle.attachToWindow(ipcMainLike, wc);
     expect(new Set(handlers.keys())).toEqual(
@@ -237,6 +237,7 @@ describe('attachToWindow', () => {
         'browser:setSidebarBounds',
         'browser:setSidebarVisible',
         'browser:setActiveSession',
+        'browser:closeBrowser',
         'browser:answerTrust',
         'browser:listDevServers',
         'browser:updateSettings',

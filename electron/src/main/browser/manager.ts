@@ -933,7 +933,7 @@ export class BrowserManager {
   private restoreTabs(ws: ActiveWorkspace, stash: TabStash): void {
     stash.urls.forEach((url, i) => {
       const record = this.createTab(ws, stash.owners[i] ?? 'user');
-      ws.ownerCurrent.set(record.owner, i); // 各 owner 光标指向自己首个（多个同 owner 取后者，等价）
+      ws.ownerCurrent.set(record.owner, i); // 各 owner 光标指向自己最后一个 tab（resolveOwnerCurrent 的 owner 校验对同 owner 任意有效下标等价）
       void this.loadForNotice(record, url, ws.workspaceId);
     });
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));

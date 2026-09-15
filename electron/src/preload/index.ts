@@ -128,7 +128,7 @@ const api: ApiSurface = {
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
   },
-  // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 14 invoke 通道 + 两推送逐一对应）
+  // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 16 invoke 通道 + 两推送逐一对应）
   browser: {
     getState: (workspaceId) => invoke('browser:getState', workspaceId),
     userNavigate: (workspaceId, url) => invoke('browser:userNavigate', workspaceId, url),
@@ -138,6 +138,12 @@ const api: ApiSurface = {
     closeTab: (workspaceId, index) => invoke('browser:closeTab', workspaceId, index),
     switchTab: (workspaceId, index) => invoke('browser:switchTab', workspaceId, index),
     setSidebarBounds: (rect) => invoke('browser:setSidebarBounds', rect),
+    // 归属制三通道（spec 2026-09-15）：收起=纯隐藏 / 活跃会话上报 / user 源全局关闭
+    setSidebarVisible: (workspaceId, visible) =>
+      invoke('browser:setSidebarVisible', workspaceId, visible),
+    setActiveSession: (sessionId) => invoke('browser:setActiveSession', sessionId),
+    closeBrowser: (workspaceId) => invoke('browser:closeBrowser', workspaceId),
+    // 退役过渡：主进程 handler 已下架，renderer 调用点 Task 5 换轨后删（成对原则）
     setSidebarCollapsed: (workspaceId, collapsed) =>
       invoke('browser:setSidebarCollapsed', workspaceId, collapsed),
     answerTrust: (workspaceId, answer) => invoke('browser:answerTrust', workspaceId, answer),

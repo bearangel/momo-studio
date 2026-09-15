@@ -2,8 +2,8 @@
 //
 // 浏览器命名空间 IPC（v2.7 McpBrowser Task 7，spec §3.6 通道表 + T7 的
 // browser:updateSettings + T9 的 browser:getSettings / browser:clearBrowsingData +
-// 归属制的 browser:setSidebarVisible / browser:setActiveSession，
-// 共 15 个 r→m invoke 通道）+ m→r 统一推送接线
+// 归属制的 browser:setSidebarVisible / browser:setActiveSession /
+// browser:closeBrowser，共 16 个 r→m invoke 通道）+ m→r 统一推送接线
 // （browser:state / browser:notice）。
 //
 // 依赖全部注入（零 electron import——T10 boot 传真 ipcMain / win.webContents，
@@ -24,6 +24,7 @@
 //     IPC 边界不裸抛，错误文案面向用户中文呈现。
 
 import { logger } from '../logger';
+import { USER_OP_CTX } from './op-protocol';
 import type { BrowserManager, BrowserManagerHooks, SidebarRect } from './manager';
 import type { BrowserPolicy } from './policy';
 import type { BrowserSettingsPatch, BrowserSettingsStore } from './settings-store';
@@ -205,7 +206,7 @@ export function createBrowserPushHooks(webContentsLike: WebContentsLike): Browse
 }
 
 // =================================================================================
-// 注册（15 invoke 通道）
+// 注册（16 invoke 通道）
 // =================================================================================
 
 export function registerBrowserIpc(
@@ -231,7 +232,8 @@ export function registerBrowserIpc(
   );
 
   // tabs 三通道是用户操作（G4：tabs 双方共用）——source='user'：user 态下照常放行，
-  // 不经接管门（§3.2 TakenOver 只约束 agent 的 browser_* 工具）。
+  // 不经接管门（§3.2 TakenOver 只约束 agent 的 browser_* 工具）。ctx 显式传
+  // USER_OP_CTX 锁定身份契约——不依赖 manager 默认参数（防默认值漂移静默换语义）。
   ipcMainLike.handle('browser:openTab', (_e, wsId, url) =>
     manager.tabsAction(
       asString(wsId, 'workspaceId'),
@@ -239,6 +241,7 @@ export function registerBrowserIpc(
       undefined,
       url === undefined ? undefined : asString(url, 'url'),
       'user',
+      USER_OP_CTX,
     ),
   );
 
@@ -249,11 +252,19 @@ export function registerBrowserIpc(
       index === undefined ? undefined : asNumber(index, 'index'),
       undefined,
       'user',
+      USER_OP_CTX,
     ),
   );
 
   ipcMainLike.handle('browser:switchTab', (_e, wsId, index) =>
-    manager.tabsAction(asString(wsId, 'workspaceId'), 'switch', asNumber(index, 'index'), undefined, 'user'),
+    manager.tabsAction(
+      asString(wsId, 'workspaceId'),
+      'switch',
+      asNumber(index, 'index'),
+      undefined,
+      'user',
+      USER_OP_CTX,
+    ),
   );
 
   ipcMainLike.handle('browser:setSidebarBounds', (_e, rect) => {
@@ -274,6 +285,13 @@ export function registerBrowserIpc(
     }
     manager.setActiveSession(sessionId);
   });
+
+  // 用户显式关闭浏览器（renderer 已过确认卡——spec §6.4）：user 源全局销毁
+  // （含 agent 的 tab；仲裁复位全新起点）。agent 的 browser_close 工具不经此通道——
+  // 走 op-router 的 source='agent' 分支（只清自己集合）。
+  ipcMainLike.handle('browser:closeBrowser', (_e, wsId) =>
+    manager.closeBrowser(asString(wsId, 'workspaceId'), 'user', USER_OP_CTX),
+  );
 
   // 信任卡三值分流（spec §5.2 阻塞等待语义）：session → 会话放行（内存态）+ 唤醒等待；
   // always → 落库 + 唤醒等待；deny → 唤醒等待为拒绝（工具侧 BrowserTrustRefusedError
@@ -322,5 +340,5 @@ export function registerBrowserIpc(
     manager.clearBrowsingData(asString(wsId, 'workspaceId')),
   );
 
-  logger.info('Browser IPC handlers 已注册（15 通道）');
+  logger.info('Browser IPC handlers 已注册（16 通道）');
 }
