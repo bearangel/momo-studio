@@ -106,6 +106,17 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 - feat: 阻断类确认居中（信任授权带遮罩 / 释放等待无遮罩，安全区动态避让浏览器侧栏）+ 告知类右下堆叠（NoticeStack，上限 4 + 6s 消散）
 - feat: 死信补渲染——crash 重载/popup 拦截/导航失败三 kind 首次可见；沙箱/升级/恢复三卡迁入堆叠，四卡同位叠放旧债清偿
 
+### 浏览器 tab 归属制与隐藏/销毁分离 `2026-09-15`
+多会话 tab 抢占 + 折叠劫持两痛点根治——agent 各自独立 tab 集合、收起=隐藏不销毁、会话级可见性、自动展开规则、关闭确认防误杀。spec：`docs/specs/2026-09-15-browser-tab-ownership-design.md`；计划：`docs/plans/2026-09-15-browser-tab-ownership.md`（7 任务 TDD 分解）。
+- **tab 归属制**：manager `TabRecord.owner` + per-owner 光标 + `ownerTabs` 集合内重索引；12 工具按 `BrowserOpCtx.ownerId` 解析作用域（agent 实例 ID 或 `'user'`），`browser_tabs.list` 仅返回自身集合（user 源透出真实归属），`browser_close` agent 源只清自己集合、user 源全局销毁（含 agent tab）+ 仲裁复位全新起点
+- **隐藏/销毁分离**：`browser:setSidebarVisible(false)` 视图 bounds 置零不销毁——agent 在用户收起期间照常 click/snapshot；落库折叠列 `browser_sidebar_collapsed` 退役（spec §7.4 列 inert，无 migration 触及）
+- **会话级可见性**：renderer `browser-sidebar-visibility.store` per-session 替代落库 `collapsed`；新建会话默认收起，agent 首次导航自动展开本会话侧栏，他会话不受打扰
+- **自动展开规则**：`browser:setActiveSession` 上报活跃会话（`App.tsx` 顶层 effect）；manager `expandHint` 仅活跃会话的 agent 导航触发，非活跃/null 安全缺省永不动可见 tab
+- **关闭确认卡**：`browser:closeBrowser` 用户路径遇 agent 活 tab 弹居中确认卡（Tier A，`BrowserCloseConfirmCard`）——强制关闭走 user 源全局销毁路径；agent 工具 `browser_close` 不弹卡（其作用域已只清自己集合）
+- **协议层**：线协议 12 op 元组尾部恒携 `BrowserOpCtx = { ownerId, sessionId }`（op-router 信封校验 + 元数上限表双锁 `source='user'` 走私路径）；renderer `BrowserSettings` 读面保留 `sidebarCollapsed`（store 形状不变），写面（`browser:updateSettings` `PATCH_KEYS` + 设置页「默认折叠」勾选 UI）下架
+- **IPC 通道面**：16 → 17 通道（新增 `browser:setSidebarVisible` / `browser:setActiveSession` / `browser:closeBrowser` user 源）；`browser:setSidebarCollapsed` 退役
+- **回归锁矩阵**：`tests/browser/{ipc,manager,manager-hide-expand,manager-ownership,op-ctx-threading,boot-wiring}.test.ts` + `renderer/src/components/workspace/BrowserSidebar.test.tsx` + `renderer/src/App.test.tsx`（活跃会话上报首报+变更重报）；11 commits 全量 typecheck/test 零错误（Task 7 收尾清扫 + 变异验证：`closeBrowser` 复位行摘除→接管区分度断言红；`App.tsx` 上报 effect 摘除→重报断言红）
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。
