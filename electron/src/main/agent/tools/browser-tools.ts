@@ -347,7 +347,20 @@ export class BrowserTools implements ToolModule {
     const wsId = ctx.workspaceId;
 
     // 归属身份（spec §5.1）：agent 实例归一 'user'；roomId 即 session id（v2 语义）
-    const opCtx: BrowserOpCtx = { ownerId: ctx.agentInstanceId ?? 'user', sessionId: ctx.roomId };
+    // 归属身份（spec §5.1 + 2026-09-15 勘误）：ownerId 复合 `${roomId}:${agentInstanceId}`
+    // ——会话作用域隔离。纯实例键在「快速会话共用 workspace 默认 agent 实例」下退化为
+    // 工作区单键（两会话互抢同一 tab，主机验收 P1 复发）。无会话上下文（roomId 空，
+    // 后台任务）退化为纯实例键；无 agent 身份归 'user'。复合格式是跨进程契约：
+    // renderer 徽标按首个 ':' 后段解析 instanceId（两端测试锁定，见
+    // browser-owner-session-scope.test.ts / BrowserSidebar.test.tsx）。
+    const opCtx: BrowserOpCtx = {
+      ownerId: ctx.agentInstanceId
+        ? ctx.roomId !== ''
+          ? `${ctx.roomId}:${ctx.agentInstanceId}`
+          : ctx.agentInstanceId
+        : 'user',
+      sessionId: ctx.roomId,
+    };
 
     // 信任门（spec §5.2）：所有 browser_* 工具统一入口——未信任时 manager 零触碰，
     // 错误（含右下角信任卡指引）原样穿透给 LLM。await 消费：主进程同步实现

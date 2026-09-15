@@ -79,6 +79,8 @@ owner → 名称/颜色的映射由 renderer agentStore 解析（主进程不持
 
 ### 5.1 ToolContext（agent/tools/types.ts）
 
+> **勘误（2026-09-15 主机验收后）**：§4/§5 原定 `ownerId = agent 实例 ID`。实测「快速会话共用 workspace 默认 agent 实例」场景下两会话同实例 → 同 ownerId → 抢占复发。修正为 **会话作用域复合键 `ownerId = ${roomId}:${agentInstanceId}`**（装配点 browser-tools.ts；roomId 空=后台任务退化为纯实例键；无 agent 身份归 'user'）。manager 对 ownerId 不透明零改动；renderer 徽标按首个 ':' 后段解析 instanceId（`parseOwnerAgentId`）。回归锁：`browser-owner-session-scope.test.ts`（四用例）+ BrowserSidebar 复合解析用例。
+
 ```ts
 export interface ToolContext {
   // ... 现有字段

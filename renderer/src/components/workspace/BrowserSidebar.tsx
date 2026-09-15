@@ -43,6 +43,12 @@ const clampSidebarWidth = (w: number): number => {
   return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(w)));
 };
 
+/** ownerId 复合解析（格式真相源：electron browser-tools.ts 装配端 `${sessionId}:${agentInstanceId}`）。
+ *  取首个 ':' 后段还原 agentInstanceId；'user'（无冒号）原样返回（查找落空 → 不渲染徽标）。 */
+export function parseOwnerAgentId(owner: string): string {
+  return owner.includes(':') ? owner.slice(owner.indexOf(':') + 1) : owner;
+}
+
 export function BrowserSidebar({ workspaceId }: Props) {
   const [state, setState] = useState<BrowserState | null>(null);
   const [width, setWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
@@ -71,7 +77,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
       void useAgentStore.getState().loadMembers(workspaceId).catch(() => {});
   }, [workspaceId, visible]);
   const ownerLabel = useCallback(
-    (owner: string): string | undefined => members.find((m) => m.instanceId === owner)?.agentName,
+    (owner: string): string | undefined => members.find((m) => m.instanceId === parseOwnerAgentId(owner))?.agentName,
     [members],
   );
 

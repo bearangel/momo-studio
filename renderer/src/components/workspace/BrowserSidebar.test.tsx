@@ -25,7 +25,7 @@
 // ResizeObserver 为平台边界桩（jsdom 不提供且不执行布局）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { BrowserSidebar } from './BrowserSidebar';
+import { BrowserSidebar, parseOwnerAgentId } from './BrowserSidebar';
 import type { BrowserState, BrowserSettings, BrowserTabInfo, SessionSummary } from '../../ipc/types';
 import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
 import { useBrowserVisibilityStore } from '../../stores/browser-visibility.store';
@@ -806,5 +806,16 @@ describe('BrowserSidebar·宽度受控 / 拖拽 / 键盘（280-720）', () => {
     expect(strip.className).toContain('w-10');
     expect(strip.style.width).toBe('');
     expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  });
+});
+
+describe('parseOwnerAgentId（ownerId 复合解析，会话作用域归属键契约）', () => {
+  it('复合键取首个冒号后段还原 agentInstanceId', () => {
+    expect(parseOwnerAgentId('sess-1:inst-a')).toBe('inst-a');
+    expect(parseOwnerAgentId('sess-uuid-2:inst-uuid-x')).toBe('inst-uuid-x');
+  });
+  it("'user' 与纯实例键（无会话上下文退化形）原样返回", () => {
+    expect(parseOwnerAgentId('user')).toBe('user');
+    expect(parseOwnerAgentId('inst-x')).toBe('inst-x');
   });
 });
