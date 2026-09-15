@@ -787,8 +787,13 @@ export class BrowserManager {
       stash = this.stashedTabs.get(ws.workspaceId) ?? null;
       if (stash) this.stashedTabs.delete(ws.workspaceId);
     }
-    if (!stash) return; // 无任何清单可恢复（如 0 tab 时折叠）——维持折叠态，调用方按需新建
+    // 无任何清单可恢复（启动即按落库折叠 / 切仓清单耗尽）也必须清 collapsed：
+    // 调用方（navigate / userNavigate / popup 收编）会继续建视图加载页面，折叠标志
+    // 残留将使 emitState 持续推送 collapsed=true → renderer 永不展开，页面以陈旧
+    // lastRect 浮出而 chrome 收起（ebc0179 同族回归，2026-09-15 实测复现）。
+    // 空浏览器 + 展开态是诚实形态（无历史 tab 可恢复，新导航即将建首个 tab）。
     ws.collapsed = false;
+    if (!stash) return;
     this.restoreTabs(ws, stash);
   }
 
