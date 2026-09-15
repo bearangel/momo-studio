@@ -15,9 +15,11 @@ interface Props {
   onSelect: (index: number) => void;
   onClose: (index: number) => void;
   onOpen: () => void;
+  /** 归属名解析（spec §9.2）：owner 为 agent 实例 ID 时返回展示名；解析不到兜底「agent」 */
+  ownerLabel?: (owner: string) => string | undefined;
 }
 
-export function TabsBar({ tabs, current, onSelect, onClose, onOpen }: Props) {
+export function TabsBar({ tabs, current, onSelect, onClose, onOpen, ownerLabel }: Props) {
   return (
     <div
       role="tablist"
@@ -37,19 +39,28 @@ export function TabsBar({ tabs, current, onSelect, onClose, onOpen }: Props) {
                 ? 'border-strong bg-surface-3 text-primary'
                 : 'border-subtle bg-surface-2 text-tertiary hover:text-secondary',
             )}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-current={active ? 'true' : undefined}
-              title={label}
-              className="max-w-32 truncate text-xs outline-none"
-              onClick={() => {
-                onSelect(tab.index);
-              }}
             >
-              {label}
-            </button>
+              {tab.owner !== 'user' && ownerLabel ? (
+                <span
+                  data-testid="tab-owner-badge"
+                  title={`归属：${ownerLabel(tab.owner) ?? 'agent'}`}
+                  className="flex h-4 items-center rounded bg-surface-3 px-1 text-[10px] leading-none text-secondary"
+                >
+                  {ownerLabel(tab.owner) ?? 'agent'}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                role="tab"
+                aria-current={active ? 'true' : undefined}
+                title={label}
+                className="max-w-32 truncate text-xs outline-none"
+                onClick={() => {
+                  onSelect(tab.index);
+                }}
+              >
+                {label}
+              </button>
             <IconButton
               aria-label={`关闭 ${label}`}
               size="sm"

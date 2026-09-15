@@ -11,10 +11,12 @@
 // 不再依赖 renderer DOM 接管层——OS 合成层序 native overlay → browser view →
 // renderer DOM，DOM 层永远收不到 mousedown（v2.7 review fix C2 移除原接管 div）。
 // 键盘接管仍由 main 进程 before-input-event 监听统一承担。
-import { useEffect, useRef, useState } from 'react';
-import { Globe, PanelRightClose, PanelRightOpen, ShieldCheck, ShieldOff } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Globe, PanelRightClose, PanelRightOpen, ShieldCheck, ShieldOff, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { BrowserState } from '../../ipc/types';
+import { useAgentStore } from '../../stores/agent.store';
+import { useBrowserCloseConfirmStore } from '../../stores/browser-close-confirm.store';
 import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
 import { useBrowserVisibilityStore } from '../../stores/browser-visibility.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -59,6 +61,19 @@ export function BrowserSidebar({ workspaceId }: Props) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
   const visible = useBrowserVisibilityStore((s) => s.isVisible(activeSessionId));
+
+  // 归属名解析（spec §9.2）：agent.store 成员按 instanceId 对齐（BrowserTabInfo.owner
+  // = agent 实例 ID 或 'user'）——徽标渲染在 TabsBar，这里只负责名字解析。
+  // 拉取门控在 visible：收起态（新会话缺省收起，spec §9.1）不消耗 IPC，展开时补拉
+  const members = useAgentStore((s) => s.members);
+  useEffect(() => {
+    if (workspaceId && visible)
+      void useAgentStore.getState().loadMembers(workspaceId).catch(() => {});
+  }, [workspaceId, visible]);
+  const ownerLabel = useCallback(
+    (owner: string): string | undefined => members.find((m) => m.instanceId === owner)?.agentName,
+    [members],
+  );
 
   // 宽度初始态跨重启闭环：挂载 / 切 ws 读 getSettings，sidebarWidth 落库值即
   // 初始态。读取失败保持默认宽度（体验性增强不阻塞骨架）。
@@ -359,6 +374,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
             onSelect={switchTab}
             onClose={closeTab}
             onOpen={openTab}
+            ownerLabel={ownerLabel}
           />
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <TakeoverIndicator takeover={state?.takeover ?? 'agent'} onRelease={release} />
@@ -372,6 +388,17 @@ export function BrowserSidebar({ workspaceId }: Props) {
                 {state.trusted ? '工具已放行' : '工具受限'}
               </Badge>
             ) : null}
+            <IconButton
+              aria-label="关闭浏览器"
+              title="关闭浏览器（销毁全部标签页）"
+              onClick={() => {
+                useBrowserCloseConfirmStore
+                  .getState()
+                  .request(workspaceId, tabs.some((t) => t.owner !== 'user'));
+              }}
+            >
+              <X size={16} strokeWidth={1.75} aria-hidden />
+            </IconButton>
             <IconButton aria-label="折叠浏览器侧栏" onClick={toggleCollapsed}>
               <PanelRightClose size={16} strokeWidth={1.75} aria-hidden />
             </IconButton>

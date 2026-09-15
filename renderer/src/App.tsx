@@ -21,6 +21,7 @@ import { ResumeNotice } from './components/task/ResumeNotice';
 import { BrowserTrustNotice } from './components/workspace/BrowserTrustNotice';
 import { BrowserWaitReleasePrompt } from './components/workspace/BrowserWaitReleasePrompt';
 import { CenterPromptLayer } from './components/notices/CenterPromptLayer';
+import { BrowserCloseConfirmCard } from './components/notices/BrowserCloseConfirmCard';
 import { NoticeStack } from './components/notices/NoticeStack';
 import { ipc } from './ipc/client';
 
@@ -102,10 +103,11 @@ export function App() {
           <UpgradeNotice exportDir={upgradeExportDir} onDismiss={dismissUpgrade} />
         )}
       </NoticeStack>
-      {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放自管显隐） */}
+      {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放/关闭确认自管显隐） */}
       <CenterPromptLayer>
         <BrowserTrustNotice />
         <BrowserWaitReleasePrompt />
+        <BrowserCloseConfirmCard />
       </CenterPromptLayer>
     </>
   );

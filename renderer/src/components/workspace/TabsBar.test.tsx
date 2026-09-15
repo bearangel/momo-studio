@@ -5,6 +5,9 @@
 //   - 点击 tab → onSelect(index)；关闭钮 → onClose(index)（不冒泡选中）
 //   - 「+」→ onOpen
 // TabsBar 是纯展示组件（回调注入），不触 IPC。
+//
+// 归属制 Task 6（spec §9.2）：tab 归属徽标——agent 拥有的 tab 显示归属名，
+// user tab 无徽标；ownerLabel 解析不到兜底「agent」。
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TabsBar } from './TabsBar';
@@ -75,5 +78,39 @@ describe('TabsBar（v2.7 Task 8）', () => {
       <TabsBar tabs={tabs} current={0} onSelect={vi.fn()} onClose={vi.fn()} onOpen={vi.fn()} />,
     );
     expect(screen.getByRole('tab', { name: 'about:blank' })).toBeInTheDocument();
+  });
+});
+
+describe('TabsBar 归属徽标（spec §9.2）', () => {
+  it('agent 拥有的 tab 显示归属名；user tab 无徽标', () => {
+    render(
+      <TabsBar
+        tabs={[
+          { index: 0, url: 'https://a.com', title: 'A', owner: 'inst-a' },
+          { index: 1, url: 'https://u.com', title: 'U', owner: 'user' },
+        ]}
+        current={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onOpen={() => {}}
+        ownerLabel={(owner) => (owner === 'inst-a' ? 'Coder' : undefined)}
+      />,
+    );
+    expect(screen.getByText('Coder')).toBeInTheDocument();
+    // user tab 不渲染徽标节点（以 data-testid 断言数量）
+    expect(document.querySelectorAll('[data-testid="tab-owner-badge"]')).toHaveLength(1);
+  });
+  it('ownerLabel 解析不到 → 兜底「agent」', () => {
+    render(
+      <TabsBar
+        tabs={[{ index: 0, url: 'u', title: 'T', owner: 'inst-x' }]}
+        current={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onOpen={() => {}}
+        ownerLabel={() => undefined}
+      />,
+    );
+    expect(screen.getByText('agent')).toBeInTheDocument();
   });
 });
