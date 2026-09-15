@@ -102,16 +102,6 @@ describe('BrowserOpCtx 身份透传', () => {
       __resetBrowserOpRouterForTest();
     }
   });
-
-  it('handleBrowserOpResult 仍按 requestId 配对（ctx 扩展不破坏既有应答面）', () => {
-    // 既有行为的等价锁：跨进程应答按 requestId 派发（ctx 改造不得触碰）
-    let resolved: unknown;
-    const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
-    pending.set('rx', { resolve: (v) => { resolved = v; }, reject: () => {}, timer: setTimeout(() => {}, 10_000) });
-    void pending;
-    // 直接以真实桥验证太重——本用例仅锁路由 ok 路径载荷透传
-    expect(true).toBe(true);
-  });
 });
 ```
 
@@ -552,9 +542,18 @@ onWorkspaceActivated 构造 ws 处补 `ownerCurrent: new Map()`。
         return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
       }
       case 'close': {
-        const idx = source === 'agent'
-          ? this.ownerScopedIndex(ws, ctx.ownerId, index ?? this.resolveOwnerCurrent(ws, ctx.ownerId) >= 0 ? this.ownerTabs(ws, ctx.ownerId).indexOf(this.resolveOwnerCurrent(ws, ctx.ownerId)) : undefined)
-          : (index ?? ws.current);
+        let idx: number;
+        if (source === 'agent') {
+          const own = this.ownerTabs(ws, ctx.ownerId);
+          // index 是集合内下标；缺省 = 当前光标的集合内位置
+          const scoped = index ?? own.indexOf(this.resolveOwnerCurrent(ws, ctx.ownerId));
+          if (scoped < 0 || scoped >= own.length) {
+            throw new RangeError(`tab 下标 ${index ?? scoped} 越界（现有 ${own.length} 个 tab）`);
+          }
+          idx = own[scoped]!;
+        } else {
+          idx = index ?? ws.current;
+        }
         const tab = ws.tabs[idx];
         if (!tab) {
           throw new RangeError(`tab 下标 ${index ?? ws.current} 越界（现有 ${ws.tabs.length} 个 tab）`);
@@ -867,14 +866,14 @@ Expected: FAIL——无 setSidebarVisible/setActiveSession/expandHint；readSide
   }
 ```
 
-buildState：`collapsed: false,` → 删；加 `expandHint,`（签名 `buildState(ws: ActiveWorkspace, expandHint: boolean)`）。`types.ts` BrowserState 同步：删 collapsed 行、加：
+buildState：`collapsed: false,` → 删；加 `expandHint,`（签名 `buildState(ws: ActiveWorkspace, expandHint: boolean)`）。`types.ts` BrowserState：**保留** `collapsed: boolean` 字段（注释改 `/** @deprecated 归属制过渡：恒 false，Task 7 删 */`），新增：
 
 ```ts
   /** 本帧推送由「活跃会话的 agent 导航」触发（spec §7.3）——renderer 见 true 且本会话隐藏则展开侧栏 */
   expandHint: boolean;
 ```
 
-⚠️ renderer `types.d.ts` 的 BrowserState 尚未跟进（Task 5）——electron 侧多推 expandHint 字段对 renderer 结构类型无害，反向（renderer 还在读 collapsed）由本 Task 保持推送 `collapsed: false` 过渡……**修正**：直接删 collapsed 会让 renderer `s.collapsed` 读 undefined（falsy）——BrowserSidebar 的 `if (!next.collapsed)` 自动展开分支退化为恒展开。为避免中间态行为漂移，**本 Task 在 buildState 里保留 `collapsed: false` 字面量一行**（types.d.ts 删字段后多余键无害），Task 5 renderer 删读取后 Task 6 收尾再删该行。
+buildState 里 `collapsed: false` 字面量一行保留。理由：Task 5 之前 renderer 旧代码仍读 `next.collapsed`，字段缺席会触发结构性漂移；T3→T5 连续执行（中间态只存在于特性分支的过渡 commit，不合入主干体验），Task 7 统一删除字段与字面量。
 
 **(e) navigate 自动切换**（替换 Task 2 版本的收尾）：
 
@@ -1183,12 +1182,13 @@ export const useBrowserVisibilityStore = create<BrowserVisibilityState>((set, ge
 
 2. getSettings effect 只留宽度逻辑（删 collapsed 分支与两个折叠守卫 ref）。
 
-3. onBrowserState 处理器：
+3. onBrowserState 处理器（**handler 内一律 `getState()` 取活跃会话——订阅 effect 依赖 [workspaceId]，闭包里的 activeSessionId 是首渲染的过期值**）：
 ```tsx
     setState(next);
     // 活跃会话的 agent 导航 → 本会话自动展开（spec §7.3；ws 过滤守卫保留在前）
-    if (next.expandHint && activeSessionId !== null) {
-      useBrowserVisibilityStore.getState().setVisible(activeSessionId, true);
+    const sid = useSessionStore.getState().activeSessionId;
+    if (next.expandHint && sid !== null) {
+      useBrowserVisibilityStore.getState().setVisible(sid, true);
     }
 ```
 
@@ -1498,12 +1498,13 @@ npx pnpm@9.0.0 test
 ```
 Expected: electron + renderer 全绿。任何失败先归因：本特性引入 → 修；无关预存 → 报告不改。
 
-- [ ] **Step 2: 双 typecheck + 冒烟构建面**
+- [ ] **Step 2: 双 typecheck + 残留清扫**
 
 ```bash
 npx pnpm@9.0.0 typecheck
 ```
-Expected: 两 workspace 零错误。残留检查：`grep -rn "setSidebarCollapsed\|collapseStash\|readSidebarCollapsed" electron/src renderer/src` → 应零命中（tests 亦清）。
+Expected: 两 workspace 零错误。残留检查与清除（Task 3 过渡遗留）：
+`grep -rn "setSidebarCollapsed\|collapseStash\|readSidebarCollapsed" electron/src renderer/src` → 应零命中；再删 `electron/src/main/browser/types.ts` BrowserState 的 `collapsed` 字段与 buildState 的 `collapsed: false` 字面量（Task 3 @deprecated 标记项），删后重跑 typecheck + browser 域测试。
 
 - [ ] **Step 3: 手工验收脚本（macOS 主机 / 容器 xvfb 可选）**
 
