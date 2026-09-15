@@ -338,7 +338,7 @@ describe('browser:getState', () => {
     activateWs();
     await callIpc('browser:userNavigate', 'ws-1', 'http://localhost:5173/');
     const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
-    expect(st.tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '' }]);
+    expect(st.tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '', owner: 'user' }]);
     expect(st.url).toBe('http://localhost:5173/');
     expect(st.current).toBe(0);
   });
@@ -402,7 +402,7 @@ describe('browser:openTab / closeTab / switchTab', () => {
     expect(tabs).toHaveLength(1);
     tabs = await callIpc('browser:openTab', 'ws-1', 'http://localhost:3000/');
     expect(tabs).toHaveLength(2);
-    expect(tabs[1]).toEqual({ index: 1, url: 'http://localhost:3000/', title: '' });
+    expect(tabs[1]).toEqual({ index: 1, url: 'http://localhost:3000/', title: '', owner: 'user' });
 
     tabs = await callIpc('browser:closeTab', 'ws-1', 1);
     expect(tabs).toHaveLength(1);

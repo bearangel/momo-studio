@@ -8,6 +8,8 @@ export interface TabInfo {
   index: number;
   url: string;
   title: string;
+  /** 归属方（spec 2026-09-15 §4.1）：agent 实例 ID 或 'user'——user 视角清单透出真实归属；agent 视角集合内恒为自身 */
+  owner: string;
 }
 
 /** 统一状态推送（IPC browser:state）载荷——单页共享模型的完整快照 */

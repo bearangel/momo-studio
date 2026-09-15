@@ -40,7 +40,7 @@ function mkFakePorts(): { policy: BrowserPolicyPort; manager: BrowserManagerPort
       scroll: vi.fn(async () => undefined),
       evaluate: vi.fn(async () => ({ answer: 42 })),
       consoleMessages: vi.fn(async () => ['[log] hi']),
-      tabsAction: vi.fn(async () => [{ index: 0, title: 'Example', url: 'https://example.com' }]),
+      tabsAction: vi.fn(async () => [{ index: 0, title: 'Example', url: 'https://example.com', owner: 'user' }]),
       closeBrowser: vi.fn(async () => undefined),
     },
   };

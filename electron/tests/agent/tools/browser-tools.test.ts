@@ -124,7 +124,7 @@ function mkManagerMock(): ManagerMock {
         _action: 'list' | 'open' | 'close' | 'switch',
         _index?: number,
         _url?: string,
-      ): Promise<TabInfo[]> => [{ index: 0, url: 'https://a.dev/', title: 'A 页面' }],
+      ): Promise<TabInfo[]> => [{ index: 0, url: 'https://a.dev/', title: 'A 页面', owner: 'user' }],
     ),
     closeBrowser: vi.fn(async (_wsId: string) => {}),
   };

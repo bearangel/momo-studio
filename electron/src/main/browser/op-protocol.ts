@@ -35,8 +35,8 @@ export interface BrowserOpCtx {
   sessionId: string;
 }
 
-/** 用户路径（IPC 直连）与旧测试直调的缺省身份 */
-export const USER_OP_CTX: BrowserOpCtx = { ownerId: 'user', sessionId: '' };
+/** 用户路径（IPC 直连）与旧测试直调的缺省身份。冻结防共享实例被意外篡改 */
+export const USER_OP_CTX: BrowserOpCtx = Object.freeze({ ownerId: 'user', sessionId: '' });
 
 /** 每个操作符的参数元组（与 browser-tools.ts 两端口面一一对照）。
  *  线协议为固定元数：可选位以 null 占位（fork IPC 走 JSON 序列化——undefined

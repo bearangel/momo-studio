@@ -6,7 +6,9 @@
 // view-factory.ts，本文件单测用 mock factory——mock 事件参数序与真实 Electron 一致，
 // momo-test-rules 仿真真实运行时语义）。BrowserManager 持有：
 //
-//   - tab 注册表：每个 tab 一个 ManagedView（懒建、serial 键控 console 缓冲）
+//   - tab 注册表：每个 tab 一个 ManagedView（懒建、serial 键控 console 缓冲），
+//     每条记录携 owner 归属（spec 2026-09-15 §4.1）——多 agent tab 并存互不踩踏，
+//     各方光标独立（ownerCurrent）
 //   - takeover 状态机：agent ↔ user（§3.2 三入口收敛 userTakeover）
 //   - workspace 切换：stash {urls,current} → 销毁视图；激活按 stash 重建（重建不重过 assertUrl）
 //   - 视图事件接线：popup 收编 / 崩溃自愈 / console 环形 / did-navigate / page-title-updated /
@@ -34,6 +36,8 @@ import {
   BrowserNoViewError,
   BrowserTakenOverError,
 } from './errors';
+import { USER_OP_CTX } from './op-protocol';
+import type { BrowserOpCtx } from './op-protocol';
 import { BrowserPolicy } from './policy';
 import { takeSnapshot } from './snapshot';
 import type { BrowserState, TabInfo } from './types';
@@ -197,6 +201,8 @@ interface TabRecord {
   view: ManagedView;
   /** tab 唯一序列号——console buffer 以 serial 键控，tab 关闭即释放，零漂移 */
   serial: number;
+  /** 归属方（spec 2026-09-15 §4.1）：agent 实例 ID 或 'user' */
+  owner: string;
 }
 
 interface TabStash {
@@ -209,6 +215,8 @@ interface ActiveWorkspace {
   workspaceDir: string;
   tabs: TabRecord[];
   current: number;
+  /** 归属方 → 该方 current tab 的全局下标（spec §4.1 独立光标） */
+  ownerCurrent: Map<string, number>;
   takeover: 'agent' | 'user';
   /** serial → 环形缓冲（每 tab 50 条，level 前缀） */
   consoleBuffer: Map<number, string[]>;
@@ -325,18 +333,14 @@ export class BrowserManager {
 
   // ---------- 工具方法（§4 12 工具一一对应） ----------
 
-  /** browser_navigate：策略门控 → 懒建 / 复用 → loadURL → 推送状态 */
-  async navigate(wsId: string, rawUrl: string): Promise<{ url: string; title: string }> {
+  /** browser_navigate：策略门控 → owner 光标懒建 / 复用 → loadURL → 推送状态（可见 tab 自动切换在 Task 3 maybeAutoSwitch） */
+  async navigate(wsId: string, rawUrl: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<{ url: string; title: string }> {
     const ws = this.requireWorkspace(wsId);
     await this.gateAgentSide(ws);
     const url = this.policy.assertUrl(wsId, rawUrl); // 越界/协议错误原样穿透 T5（不建视图）
     this.ensureLive(ws);
-    let tab = ws.tabs[ws.current];
-    if (!tab) {
-      tab = this.createTab(ws);
-      ws.current = ws.tabs.length - 1;
-      this.applyLastRect(ws); // 懒建的新视图成为 current——立即套用缓存 rect
-    }
+    const idx = this.ensureOwnerTab(ws, ctx.ownerId);
+    const tab = ws.tabs[idx]!;
     await this.loadChecked(tab, url);
     this.emitState(ws);
     return {
@@ -345,19 +349,22 @@ export class BrowserManager {
     };
   }
 
-  /** browser_tabs：list/open/close/switch 四动作——open 收编与 setWindowOpenHandler 共用 openTabInternal；source 甄别见 BrowserActionSource */
+  /** browser_tabs：list/open/close/switch 四动作——归属制（spec §6.1）：agent 源按 ctx.ownerId
+ *  作用域（集合内重索引、独立光标、close 只清自己集合）；user 源保持全局语义。
+ *  open 收编与 setWindowOpenHandler 共用 openTabInternal；source 甄别见 BrowserActionSource */
   async tabsAction(
     wsId: string,
     action: 'list' | 'open' | 'close' | 'switch',
     index?: number,
     url?: string,
     source: BrowserActionSource = 'agent',
+    ctx: BrowserOpCtx = USER_OP_CTX,
   ): Promise<TabInfo[]> {
     const ws = this.requireWorkspace(wsId);
     if (source === 'agent') await this.gateAgentSide(ws);
     switch (action) {
       case 'list':
-        return this.tabInfos(ws);
+        return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
       case 'open': {
         // url 携带时先过策略门（F1 review fix——与 navigate/userNavigate 同口径）：
         // 此前裸传 openTabInternal 会绕过 assertUrl，agent 可经 browser_tabs
@@ -367,19 +374,41 @@ export class BrowserManager {
         // 非 tool/用户输入，不经策略——T1 review 裁定）。
         const initialUrl = url === undefined ? null : this.policy.assertUrl(wsId, url);
         this.ensureLive(ws);
-        this.openTabInternal(ws, initialUrl);
+        this.openTabInternal(ws, initialUrl, source === 'agent' ? ctx.ownerId : 'user', source !== 'agent');
         this.emitState(ws);
-        return this.tabInfos(ws);
+        return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
       }
       case 'close': {
-        const idx = index ?? ws.current;
+        let idx: number;
+        if (source === 'agent') {
+          const own = this.ownerTabs(ws, ctx.ownerId);
+          // index 是集合内下标；缺省 = 当前光标的集合内位置
+          const scoped = index ?? own.indexOf(this.resolveOwnerCurrent(ws, ctx.ownerId));
+          if (scoped < 0 || scoped >= own.length) {
+            throw new RangeError(`tab 下标 ${index ?? scoped} 越界（现有 ${own.length} 个 tab）`);
+          }
+          idx = own[scoped]!;
+        } else {
+          idx = index ?? ws.current;
+        }
         const tab = ws.tabs[idx];
         if (!tab) {
-          throw new RangeError(`tab 下标 ${idx} 越界（现有 ${ws.tabs.length} 个 tab）`);
+          throw new RangeError(`tab 下标 ${index ?? ws.current} 越界（现有 ${ws.tabs.length} 个 tab）`);
+        }
+        // agent 关光自己最后一个 tab = 集合清空（不触发关浏览器，spec §6.4）
+        if (source === 'agent' && this.ownerTabs(ws, ctx.ownerId).length === 1) {
+          this.factory.destroy(tab.view);
+          ws.tabs.splice(idx, 1);
+          ws.consoleBuffer.delete(tab.serial);
+          ws.ownerCurrent.delete(ctx.ownerId);
+          this.fixCurrentAfterRemoval(ws);
+          this.applyLastRect(ws);
+          this.emitState(ws);
+          return [];
         }
         if (ws.tabs.length === 1) {
-          // 唯一 tab 关闭 = 关闭浏览器（spec §4 工具 11）——source 透传（user 关自己最后一个 tab 不被拦）
-          await this.closeBrowser(wsId, source);
+          // user 关全局唯一 tab = 关闭浏览器（spec §4 工具 11 语义保留于 user 源）
+          await this.closeBrowser(wsId, source, ctx);
           return [];
         }
         this.factory.destroy(tab.view);
@@ -387,11 +416,19 @@ export class BrowserManager {
         ws.consoleBuffer.delete(tab.serial);
         if (idx < ws.current) ws.current -= 1;
         else if (idx === ws.current) ws.current = Math.min(ws.current, ws.tabs.length - 1);
+        // 其他 owner 的光标/缓存随 splice 修正（全局下标移位）
+        this.reindexOwnerCursors(ws, idx);
         this.applyLastRect(ws); // 关闭致 current 迁移时，新 current 视图（此前无 bounds）立即套用
         this.emitState(ws);
-        return this.tabInfos(ws);
+        return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
       }
       case 'switch': {
+        if (source === 'agent') {
+          const global = this.ownerScopedIndex(ws, ctx.ownerId, index ?? 0);
+          ws.ownerCurrent.set(ctx.ownerId, global); // 仅移自己光标，不动可见 tab（spec §6.1）
+          this.emitState(ws);
+          return this.tabInfos(ws, ctx.ownerId);
+        }
         const idx = index ?? 0;
         if (idx < 0 || idx >= ws.tabs.length) {
           throw new RangeError(`tab 下标 ${idx} 越界（现有 ${ws.tabs.length} 个 tab）`);
@@ -399,37 +436,54 @@ export class BrowserManager {
         ws.current = idx;
         this.applyLastRect(ws); // 切换后的 current 视图此前未持 bounds——立即套用
         this.emitState(ws);
-        return this.tabInfos(ws);
+        return this.tabInfos(ws, null);
       }
     }
   }
 
-  /** browser_close：销毁当前 workspace 视图 + 清 stash + takeover 复位（spec §7）；source 甄别见 BrowserActionSource */
-  async closeBrowser(wsId: string, source: BrowserActionSource = 'agent'): Promise<void> {
+  /** browser_close：agent 源只销毁自己集合（spec §6.4 归属制）；user 源全局销毁（renderer 已过确认卡） */
+  async closeBrowser(wsId: string, source: BrowserActionSource = 'agent', ctx: BrowserOpCtx = USER_OP_CTX): Promise<void> {
     const ws = this.requireWorkspace(wsId);
-    if (source === 'agent') await this.gateAgentSide(ws);
+    if (source === 'agent') {
+      await this.gateAgentSide(ws);
+      const own = this.ownerTabs(ws, ctx.ownerId);
+      for (let i = own.length - 1; i >= 0; i--) {
+        const global = own[i]!;
+        const tab = ws.tabs[global]!;
+        this.factory.destroy(tab.view);
+        ws.tabs.splice(global, 1);
+        ws.consoleBuffer.delete(tab.serial);
+      }
+      ws.ownerCurrent.delete(ctx.ownerId);
+      this.fixCurrentAfterRemoval(ws);
+      this.applyLastRect(ws);
+      this.emitState(ws);
+      return;
+    }
     this.destroyTabs(ws);
     ws.current = 0;
-    ws.takeover = 'agent'; // 全新仲裁起点
+    ws.ownerCurrent.clear();
+    ws.takeover = 'agent'; // 全新仲裁起点（仅全局销毁——spec §6.4）
     ws.collapseStash = null;
     this.stashedTabs.delete(wsId); // §7：清 stash——下次激活空态
     this.settleAgentWait(wsId, true); // park 中的 waiter 不悬挂——resolve 后按新仲裁态继续
     this.emitState(ws);
   }
 
-  /** browser_console_messages：当前 tab 环形缓冲拷贝——text 序列 */
-  async consoleMessages(wsId: string): Promise<string[]> {
-    const { ws, tab } = await this.requireCurrentTab(wsId);
+  /** browser_console_messages：owner 当前 tab 环形缓冲拷贝——text 序列 */
+  async consoleMessages(wsId: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<string[]> {
+    const { ws, tab } = await this.requireCurrentTab(wsId, ctx);
     const buf = ws.consoleBuffer.get(tab.serial);
     return buf ? [...buf] : [];
   }
 
-  /** browser_evaluate：设置默认关（§6.2）；内部 selector 解析脚本不受此开关约束（§3.3） */
-  async evaluate(wsId: string, expression: string): Promise<unknown> {
+  /** browser_evaluate：设置默认关（§6.2）；内部 selector 解析脚本不受此开关约束（§3.3）；tab 按 owner 光标解析 */
+  async evaluate(wsId: string, expression: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<unknown> {
     const ws = this.requireWorkspace(wsId);
     await this.gateAgentSide(ws);
     this.policy.assertEvaluate(wsId);
-    const tab = ws.tabs[ws.current];
+    const idx = this.resolveOwnerCurrent(ws, ctx.ownerId);
+    const tab = idx >= 0 ? ws.tabs[idx] : undefined;
     if (!tab) throw new BrowserNoViewError();
     return tab.view.webContents.executeJavaScript(expression);
   }
@@ -444,49 +498,50 @@ export class BrowserManager {
     return (run) => this.withAgentInput(run);
   }
 
-  /** click：selector 定位（四语法）→ 元素中心 trusted 点击序列 */
-  async click(wsId: string, selector: string): Promise<void> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** click：selector 定位（四语法）→ 元素中心 trusted 点击序列（tab 按 owner 光标解析） */
+  async click(wsId: string, selector: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<void> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     await clickElement(wc, selector, this.inputGuard());
   }
 
-  /** hover：selector 定位 → mouseMove 至元素中心 */
-  async hover(wsId: string, selector: string): Promise<void> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** hover：selector 定位 → mouseMove 至元素中心（tab 按 owner 光标解析） */
+  async hover(wsId: string, selector: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<void> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     await hoverElement(wc, selector, this.inputGuard());
   }
 
-  /** type：先 click 聚焦 → char 逐字符 → submit=true 末尾补 Enter */
-  async type(wsId: string, selector: string, text: string, submit = false): Promise<void> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** type：先 click 聚焦 → char 逐字符 → submit=true 末尾补 Enter（tab 按 owner 光标解析） */
+  async type(wsId: string, selector: string, text: string, submit = false, ctx: BrowserOpCtx = USER_OP_CTX): Promise<void> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     await typeText(wc, selector, text, submit, this.inputGuard());
   }
 
-  /** pressKey：白名单（Enter/Tab/Escape/方向/翻页/Home/End）外按键抛 BrowserInvalidKeyError */
-  async pressKey(wsId: string, key: string): Promise<void> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** pressKey：白名单（Enter/Tab/Escape/方向/翻页/Home/End）外按键抛 BrowserInvalidKeyError（tab 按 owner 光标解析） */
+  async pressKey(wsId: string, key: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<void> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     pressKey(wc, key, this.inputGuard());
   }
 
-  /** scroll：mouseWheel 事件，direction='down' 向下滚；amount 单位=滚轮格（缺省 3） */
+  /** scroll：mouseWheel 事件，direction='down' 向下滚；amount 单位=滚轮格（缺省 3）（tab 按 owner 光标解析） */
   async scroll(
     wsId: string,
     direction: 'up' | 'down',
     amount: number = SCROLL_DEFAULT_AMOUNT,
+    ctx: BrowserOpCtx = USER_OP_CTX,
   ): Promise<void> {
-    const wc = await this.requireCurrentWebContents(wsId);
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     scrollWheel(wc, direction, amount, this.inputGuard());
   }
 
-  /** snapshot：a11y 树懒附加采集 + selector 提示行（T4 起委托 snapshot.ts 模块） */
-  async snapshot(wsId: string): Promise<string> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** snapshot：a11y 树懒附加采集 + selector 提示行（T4 起委托 snapshot.ts 模块；tab 按 owner 光标解析） */
+  async snapshot(wsId: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<string> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     return takeSnapshot(wc);
   }
 
-  /** screenshot：capturePage → PNG → 落 `<screenshotDir>/<wsId>/`（boot 注入 userData 目录；缺省 tmpdir 兜底）；filename basename 清洗 */
-  async screenshot(wsId: string, filename?: string): Promise<{ path: string }> {
-    const wc = await this.requireCurrentWebContents(wsId);
+  /** screenshot：capturePage → PNG → 落 `<screenshotDir>/<wsId>/`（boot 注入 userData 目录；缺省 tmpdir 兜底）；filename basename 清洗（tab 按 owner 光标解析） */
+  async screenshot(wsId: string, filename?: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<{ path: string }> {
+    const wc = await this.requireCurrentWebContents(wsId, ctx);
     const image = await wc.capturePage();
     const safeName = path.basename(
       filename && filename.trim() !== '' ? filename : `shot-${Date.now()}.png`,
@@ -529,7 +584,7 @@ export class BrowserManager {
     this.settleAgentWait(wsId, true); // 放行驻留等待中的 agent 工具调用
   }
 
-  /** 地址栏回车（第二入口）：URL 过策略 → 接管 → 当前 tab 载入。校验失败不产生接管副作用 */
+  /** 地址栏回车（第二入口）：URL 过策略 → 接管 → 当前可见 tab 载入（user 路径全局语义）。校验失败不产生接管副作用 */
   async userNavigate(wsId: string, rawUrl: string): Promise<{ url: string; title: string }> {
     const url = this.policy.assertUrl(wsId, rawUrl);
     const ws = this.requireWorkspace(wsId);
@@ -537,7 +592,7 @@ export class BrowserManager {
     this.ensureLive(ws);
     let tab = ws.tabs[ws.current];
     if (!tab) {
-      tab = this.createTab(ws); // tabs 为空时新视图落在 idx 0 == current
+      tab = this.createTab(ws, 'user'); // tabs 为空时新视图落在 idx 0 == current
       this.applyLastRect(ws);
     }
     await this.loadChecked(tab, url);
@@ -569,6 +624,7 @@ export class BrowserManager {
       workspaceDir,
       tabs: [],
       current: 0,
+      ownerCurrent: new Map(),
       takeover: 'agent', // 激活即全新仲裁（不延续切走前的接管态）
       consoleBuffer: new Map(),
       collapsed: persistedCollapsed,
@@ -726,20 +782,72 @@ export class BrowserManager {
     );
   }
 
-  private async requireCurrentTab(wsId: string): Promise<{ ws: ActiveWorkspace; tab: TabRecord }> {
+  private async requireCurrentTab(wsId: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<{ ws: ActiveWorkspace; tab: TabRecord }> {
     const ws = this.requireWorkspace(wsId);
     await this.gateAgentSide(ws);
-    const tab = ws.tabs[ws.current];
+    const idx = this.resolveOwnerCurrent(ws, ctx.ownerId);
+    const tab = idx >= 0 ? ws.tabs[idx] : undefined;
     if (!tab) throw new BrowserNoViewError();
     return { ws, tab };
   }
 
-  private async requireCurrentWebContents(wsId: string): Promise<ManagedWebContents> {
-    return (await this.requireCurrentTab(wsId)).tab.view.webContents;
+  private async requireCurrentWebContents(wsId: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<ManagedWebContents> {
+    return (await this.requireCurrentTab(wsId, ctx)).tab.view.webContents;
+  }
+
+  // ---------- 归属解析（spec 2026-09-15 §4.1 / §6.1——owner 集合与独立光标） ----------
+
+  /** owner 拥有的全部 tab 全局下标（升序） */
+  private ownerTabs(ws: ActiveWorkspace, owner: string): number[] {
+    const idx: number[] = [];
+    ws.tabs.forEach((t, i) => { if (t.owner === owner) idx.push(i); });
+    return idx;
+  }
+
+  /** 解析 owner 光标：缓存命中且未悬空 → 用缓存；悬空 → 修正回集合首个；集合空 → -1 */
+  private resolveOwnerCurrent(ws: ActiveWorkspace, owner: string): number {
+    const cached = ws.ownerCurrent.get(owner);
+    if (cached !== undefined && ws.tabs[cached]?.owner === owner) return cached;
+    const first = this.ownerTabs(ws, owner)[0];
+    if (first === undefined) return -1;
+    ws.ownerCurrent.set(owner, first);
+    return first;
+  }
+
+  /** 保证 owner 的 current tab 存在（无则建专属 tab）——ensureLive 的懒建语义收敛于此 */
+  private ensureOwnerTab(ws: ActiveWorkspace, owner: string): number {
+    const idx = this.resolveOwnerCurrent(ws, owner);
+    if (idx >= 0) return idx;
+    this.createTab(ws, owner);
+    const next = ws.tabs.length - 1;
+    ws.ownerCurrent.set(owner, next);
+    return next;
+  }
+
+  /** agent 作用域下标（0..n-1）→ 全局下标；越界抛 RangeError */
+  private ownerScopedIndex(ws: ActiveWorkspace, owner: string, scoped: number | undefined): number {
+    const own = this.ownerTabs(ws, owner);
+    const raw = scoped ?? 0;
+    if (raw < 0 || raw >= own.length) {
+      throw new RangeError(`tab 下标 ${raw} 越界（现有 ${own.length} 个 tab）`);
+    }
+    return own[raw]!;
+  }
+
+  /** 全局删除 idx 后修正 ws.current（悬空钳制到末位） */
+  private fixCurrentAfterRemoval(ws: ActiveWorkspace): void {
+    if (ws.current >= ws.tabs.length) ws.current = Math.max(ws.tabs.length - 1, 0);
+  }
+
+  private reindexOwnerCursors(ws: ActiveWorkspace, removedIdx: number): void {
+    for (const [owner, cur] of ws.ownerCurrent) {
+      if (cur === removedIdx) ws.ownerCurrent.delete(owner); // 悬空 → 下次解析回集合首个
+      else if (cur > removedIdx) ws.ownerCurrent.set(owner, cur - 1);
+    }
   }
 
   private buildState(ws: ActiveWorkspace): BrowserState {
-    const tabs = this.tabInfos(ws);
+    const tabs = this.tabInfos(ws, null);
     const cur = tabs[ws.current];
     return {
       workspaceId: ws.workspaceId,
@@ -753,11 +861,16 @@ export class BrowserManager {
     };
   }
 
-  private tabInfos(ws: ActiveWorkspace): TabInfo[] {
-    return ws.tabs.map((t, i) => ({
-      index: i,
-      url: t.view.webContents.getURL(),
-      title: t.view.webContents.getTitle(),
+  /** tab 清单：owner 非空 = 该 owner 集合内重索引（agent 视角）；null = 全局（user 视角） */
+  private tabInfos(ws: ActiveWorkspace, owner: string | null): TabInfo[] {
+    if (owner === null) {
+      return ws.tabs.map((t, i) => ({ index: i, url: t.view.webContents.getURL(), title: t.view.webContents.getTitle(), owner: t.owner }));
+    }
+    return this.ownerTabs(ws, owner).map((global, scoped) => ({
+      index: scoped,
+      url: ws.tabs[global]!.view.webContents.getURL(),
+      title: ws.tabs[global]!.view.webContents.getTitle(),
+      owner,
     }));
   }
 
@@ -797,12 +910,12 @@ export class BrowserManager {
     this.restoreTabs(ws, stash);
   }
 
-  /** 不挂事件；调用方负责后续 wiring / loadURL */
-  private createTab(ws: ActiveWorkspace): TabRecord {
+  /** 不挂事件；调用方负责后续 wiring / loadURL。owner 记录归属（spec §4.1） */
+  private createTab(ws: ActiveWorkspace, owner: string): TabRecord {
     const view = this.factory.create(ws.workspaceId);
     const serial = this.nextSerial++;
     ws.consoleBuffer.set(serial, []);
-    const record: TabRecord = { view, serial };
+    const record: TabRecord = { view, serial, owner };
     ws.tabs.push(record);
     this.wireView(ws, record);
     return record;
@@ -826,11 +939,17 @@ export class BrowserManager {
     }
   }
 
-  /** open / popup 收编共用：createTab + 切 current + fire-and-forget 载入 */
-  private openTabInternal(ws: ActiveWorkspace, initialUrl: string | null): TabRecord {
-    const record = this.createTab(ws);
-    ws.current = ws.tabs.length - 1; // 新 tab 成为当前（§4 工具 11 语义）
-    this.applyLastRect(ws); // 新 current 视图立即套用缓存 rect
+  /** open / popup 收编共用：createTab + 移光标 + fire-and-forget 载入。
+   *  focusVisible：user 源 true（新 tab 成为可见——既有语义）；agent 源 false
+   *  （可见 tab 仅由活跃会话自动切换与用户显式切换改变，spec §6.2）。 */
+  private openTabInternal(ws: ActiveWorkspace, initialUrl: string | null, owner: string, focusVisible: boolean): TabRecord {
+    const record = this.createTab(ws, owner);
+    const idx = ws.tabs.length - 1;
+    ws.ownerCurrent.set(owner, idx);
+    if (focusVisible) {
+      ws.current = idx;
+      this.applyLastRect(ws); // 新可见视图立即套用缓存 rect
+    }
     void this.loadForNotice(record, initialUrl ?? ABOUT_BLANK, ws.workspaceId);
     return record;
   }
@@ -842,10 +961,10 @@ export class BrowserManager {
     ws.consoleBuffer.clear();
   }
 
-  /** 按 stash 重建视图——内部恢复（不重过策略） */
+  /** 按 stash 重建视图——内部恢复（不重过策略）；Task 3 给 TabStash 加 owners 后透传真实归属 */
   private restoreTabs(ws: ActiveWorkspace, stash: TabStash): void {
     for (const url of stash.urls) {
-      const record = this.createTab(ws);
+      const record = this.createTab(ws, 'user');
       void this.loadForNotice(record, url, ws.workspaceId);
     }
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));
@@ -926,7 +1045,8 @@ export class BrowserManager {
       return;
     }
     this.ensureLive(ws);
-    this.openTabInternal(ws, url);
+    // popup 由用户页面触发，归 user（spec §4.1）；focusVisible=true——用户可感知的新 tab
+    this.openTabInternal(ws, url, 'user', true);
     this.emitState(ws);
   }
 

@@ -13,8 +13,10 @@
 // 子进程侧还原 .name，LLM 可见可行动指引）；栈不吞——主进程 logger.warn 留痕
 // 后再序列化（栈本身不跨线——线协议只承 name/message）。
 //
-// source 安全铁律：tabsAction / closeBrowser 恒以 ≤4 / ≤1 参调用真实 manager——
-// source 位（'user'）绝不经此通道传递（信封元数上限在 op-protocol 先行拒收）。
+// source 安全铁律：tabsAction / closeBrowser 调用真实 manager 时 source 位以
+// 显式 undefined 占位跳过（恒用工具层缺省 'agent'）——'user' 绝不经此通道传递
+// （信封元数上限在 op-protocol 先行拒收）；归属身份 ctx 经 reqOpCtx 校验后以
+// 尾参透传（Task 2 起 manager 公共方法全部收 ctx 尾参）。
 
 import { logger } from '../logger';
 import { isBrowserOpEnvelope, USER_OP_CTX } from './op-protocol';

@@ -186,7 +186,7 @@ describe('navigate', () => {
     expect(v0.view.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/');
     expect(res).toEqual({ url: 'http://localhost:5173/', title: '' });
     const st = lastState(pushState);
-    expect(st?.tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '' }]);
+    expect(st?.tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '', owner: 'user' }]);
     expect(st?.url).toBe('http://localhost:5173/');
     expect(st?.current).toBe(0);
     expect(st?.takeover).toBe('agent');
@@ -239,15 +239,15 @@ describe('tabsAction', () => {
     await manager.navigate('ws1', 'http://localhost:5173/');
     const callsBefore = pushState.mock.calls.length;
     const tabs = await manager.tabsAction('ws1', 'list');
-    expect(tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '' }]);
+    expect(tabs).toEqual([{ index: 0, url: 'http://localhost:5173/', title: '', owner: 'user' }]);
     expect(pushState).toHaveBeenCalledTimes(callsBefore);
   });
 
-  it('open 建视图，新 tab 成为 current；pushState 携带全部 tabs', async () => {
+  it('open（user 源）建视图，新 tab 成为 current；pushState 携带全部 tabs（agent 源 open 不动可见 tab——spec §6.2）', async () => {
     const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    const tabs = await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/');
+    const tabs = await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user');
     expect(factory.create).toHaveBeenCalledTimes(2);
     const st = lastState(pushState);
     expect(st?.tabs).toHaveLength(2);
@@ -329,11 +329,11 @@ describe('tabsAction', () => {
     const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/');
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user');
     const before = factory.create.mock.calls.length;
     const v0 = factory.views[0]!;
     const v0LoadCount = (v0.view.webContents.loadURL as Mock).mock.calls.length;
-    await manager.tabsAction('ws1', 'switch', 0);
+    await manager.tabsAction('ws1', 'switch', 0, undefined, 'user');
     expect(factory.create).toHaveBeenCalledTimes(before);
     expect(v0.view.webContents.loadURL).toHaveBeenCalledTimes(v0LoadCount);
     expect(lastState(pushState)?.current).toBe(0);
@@ -549,7 +549,7 @@ describe('workspace 切换', () => {
     const { manager, factory, policy, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/'); // idx 0
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
     expect(v0.view.webContents.loadURL).toHaveBeenCalledWith('http://localhost:5173/');
@@ -623,7 +623,7 @@ describe('workspace 切换', () => {
     const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     manager.setSidebarCollapsed('ws1', true); // 折叠：视图销毁 + collapseStash 置位
     persisted = true; // 折叠 IPC 落库——read 侧随之翻 true
     manager.onWorkspaceDeactivated('ws1'); // collapseStash → stashedTabs
@@ -654,7 +654,7 @@ describe('workspace 切换', () => {
     const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     manager.setSidebarCollapsed('ws1', true);
     persisted = true;
     manager.onWorkspaceDeactivated('ws1');
@@ -663,10 +663,11 @@ describe('workspace 切换', () => {
 
     const before = factory.create.mock.calls.length;
     await manager.navigate('ws1', 'http://localhost:8080/');
-    // ensureLive 回退 stashedTabs：先按切仓清单复活 2 视图，再载入目标到 current
+    // ensureLive 回退 stashedTabs：先按切仓清单复活 2 视图，再载入目标到 owner 光标
+    // 归属制（Task 2）：重激活后 ownerCurrent 为空 → 解析修正回集合首个（idx 0）
     expect(factory.create.mock.calls.length).toBe(before + 2);
     const st = manager.getState('ws1');
-    expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:8080/']);
+    expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:8080/', 'http://localhost:3000/']);
     expect(st.current).toBe(1);
     // 复活即语义上不再折叠——renderer 依赖此字段同步展开整个浏览器 UI
     expect(st.collapsed).toBe(false);
@@ -786,7 +787,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    await manager.tabsAction('ws1', 'open');
+    await manager.tabsAction('ws1', 'open', undefined, undefined, 'user');
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
     const rect = { x: 10, y: 20, width: 380, height: 600 };
@@ -808,7 +809,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     await manager.navigate('ws1', 'http://localhost:5173/'); // v0 = current
     const rect = { x: 10, y: 20, width: 380, height: 600 };
     manager.setSidebarBounds(rect);
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // v1 成为 current
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // v1 成为 current
     const v1 = factory.views[1]!;
     expect(v1.view.bounds.setBounds).toHaveBeenCalledWith(rect);
     expect(v1.view.bounds.setBounds).toHaveBeenCalledTimes(1);
@@ -818,12 +819,12 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/'); // idx 0
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const v0 = factory.views[0]!;
     const rect = { x: 5, y: 6, width: 200, height: 100 };
     manager.setSidebarBounds(rect); // 透传到当前 v1；v0 尚无 bounds
     expect(v0.view.bounds.setBounds).not.toHaveBeenCalled();
-    await manager.tabsAction('ws1', 'switch', 0);
+    await manager.tabsAction('ws1', 'switch', 0, undefined, 'user');
     expect(v0.view.bounds.setBounds).toHaveBeenCalledWith(rect);
     expect(v0.view.bounds.setBounds).toHaveBeenCalledTimes(1);
   });
@@ -832,7 +833,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const { manager, factory } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/'); // idx 0
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const rect = { x: 1, y: 2, width: 300, height: 400 };
     manager.setSidebarBounds(rect);
     manager.onWorkspaceDeactivated('ws1');
@@ -860,7 +861,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
-    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/'); // current=1
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
     manager.setSidebarCollapsed('ws1', true);
