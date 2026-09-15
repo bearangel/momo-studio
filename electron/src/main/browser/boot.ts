@@ -4,7 +4,7 @@
 //
 // index.ts boot 链的浏览器段收口：runMigrations 后、窗口创建前调用
 // assembleBrowserSubsystem（manager 构造 + initBrowserTools + 初始激活可先行），
-// 窗口创建后 attachToWindow（推送面定标 + 14 通道注册），before-quit 经
+// 窗口创建后 attachToWindow（推送面定标 + 15 通道注册），before-quit 经
 // bindLifecycle 注册 disposeAll。
 //
 // 本模块零 electron import——Electron 边界（视图工厂 / ipcMain / webContents /
@@ -100,10 +100,8 @@ export function assembleBrowserSubsystem(deps: BrowserBootDeps): BrowserBootHand
   // 第三个参 pushNotice 接同一 baseHooks——review fix C1：信任门在抛 BrowserNotTrustedError 前
   // 必须推 trust-request notice 给 renderer 触发右下角信任卡，否则 LLM 永久重试、用户无法授权。
   const policy = new BrowserPolicy(store.read, '', baseHooks.pushNotice);
-  // 激活折叠态经同一 store 读侧投影（bug 2 真相源恢复）——不另开 DB 句柄
   const manager = new BrowserManager(factory, policy, hooks, {
     screenshotDir,
-    readSidebarCollapsed: (wsId) => store.read(wsId).sidebarCollapsed,
     // 接管驻留等待（spec 2026-09-14 §4.4）：每 tick 重读——设置即时生效
     readAgentWaitMs: (wsId) => store.read(wsId).agentWaitMs,
     readIdleAutoReleaseMs: (wsId) => store.read(wsId).idleAutoReleaseMs,

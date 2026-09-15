@@ -1,8 +1,9 @@
 // electron/src/main/browser/ipc.ts
 //
 // 浏览器命名空间 IPC（v2.7 McpBrowser Task 7，spec §3.6 通道表 + T7 的
-// browser:updateSettings + T9 的 browser:getSettings / browser:clearBrowsingData，
-// 共 14 个 r→m invoke 通道）+ m→r 统一推送接线
+// browser:updateSettings + T9 的 browser:getSettings / browser:clearBrowsingData +
+// 归属制的 browser:setSidebarVisible / browser:setActiveSession，
+// 共 15 个 r→m invoke 通道）+ m→r 统一推送接线
 // （browser:state / browser:notice）。
 //
 // 依赖全部注入（零 electron import——T10 boot 传真 ipcMain / win.webContents，
@@ -204,7 +205,7 @@ export function createBrowserPushHooks(webContentsLike: WebContentsLike): Browse
 }
 
 // =================================================================================
-// 注册（14 invoke 通道）
+// 注册（15 invoke 通道）
 // =================================================================================
 
 export function registerBrowserIpc(
@@ -259,11 +260,19 @@ export function registerBrowserIpc(
     manager.setSidebarBounds(asSidebarRect(rect));
   });
 
-  // 折叠态：视图销毁/重建（manager）+ 落库（store，spec §3.6「联动 + 落库」）
-  ipcMainLike.handle('browser:setSidebarCollapsed', (_e, wsId, collapsed) => {
-    const id = asString(wsId, 'workspaceId');
-    manager.setSidebarCollapsed(id, asBoolean(collapsed, 'collapsed'));
-    store.write(id, { sidebarCollapsed: asBoolean(collapsed, 'collapsed') });
+  // 可见性（spec 2026-09-15 §6.3）：收起 = bounds 置零不销毁——main 无折叠语义，
+  // 不落库（可见性真相源在 renderer per-session store）
+  ipcMainLike.handle('browser:setSidebarVisible', (_e, wsId, visible) => {
+    manager.setSidebarVisible(asString(wsId, 'workspaceId'), asBoolean(visible, 'visible'));
+  });
+
+  // 活跃会话上报（spec §5.4）：renderer 在 activeSessionId 变化时主动上报（模式同
+  // setSidebarBounds）；空（files/agents 等非会话视图）传 null——自动展开安全缺省
+  ipcMainLike.handle('browser:setActiveSession', (_e, sessionId) => {
+    if (sessionId !== null && typeof sessionId !== 'string') {
+      throw new Error('browser:setActiveSession 参数 sessionId 必须为字符串或 null');
+    }
+    manager.setActiveSession(sessionId);
   });
 
   // 信任卡三值分流（spec §5.2 阻塞等待语义）：session → 会话放行（内存态）+ 唤醒等待；
@@ -313,5 +322,5 @@ export function registerBrowserIpc(
     manager.clearBrowsingData(asString(wsId, 'workspaceId')),
   );
 
-  logger.info('Browser IPC handlers 已注册（14 通道）');
+  logger.info('Browser IPC handlers 已注册（15 通道）');
 }

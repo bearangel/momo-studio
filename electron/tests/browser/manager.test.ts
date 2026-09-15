@@ -615,63 +615,46 @@ describe('workspace 切换', () => {
     expect(lastState(pushState)?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/']);
   });
 
-  // ---- bug 2 回归锁：激活折叠态以落库值为准（真相源不再说谎）----
-  // 读取器衬底用可变变量仿真 settings-store：折叠 IPC 落库后 read 值随之为 true。
+  // ---- 折叠链路退役锁（spec 2026-09-15 §7.1/§7.4）：激活不再投影落库折叠态 ----
+  // 读取器衬底保留可变变量仿真旧注入：证明注入仍在 opts 里也不读。
 
-  it('激活落库折叠=true → 不建视图、推送 collapsed=true、切仓 stash 保留；落库=false 再激活照常恢复', async () => {
-    let persisted = false;
-    const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
+  it('激活无视 readSidebarCollapsed 注入（落库折叠不再投影）→ 照常按 stash 重建 + collapsed 恒 false', async () => {
+    const persisted = true;
+    const { manager, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
-    manager.setSidebarCollapsed('ws1', true); // 折叠：视图销毁 + collapseStash 置位
-    persisted = true; // 折叠 IPC 落库——read 侧随之翻 true
-    manager.onWorkspaceDeactivated('ws1'); // collapseStash → stashedTabs
-    const createdBefore = factory.create.mock.calls.length;
-
-    pushState.mockClear();
-    manager.onWorkspaceActivated('ws1', '/ws/ws1');
-    // 落库 true：激活即折叠——不建视图、推送 collapsed=true（renderer 竞速守卫
-    // 收到与落库一致的值，不再被 collapsed=false 推送吞掉）
-    expect(factory.create.mock.calls.length).toBe(createdBefore);
-    const st = lastState(pushState);
-    expect(st?.collapsed).toBe(true);
-    expect(st?.tabs).toEqual([]);
-
-    // stash 保留：无活动二次切走不丢清单——落库 false 再激活照常重建（今日行为）
     manager.onWorkspaceDeactivated('ws1');
-    persisted = false;
+    pushState.mockClear();
+
+    // 落库 true：激活照常重建（旧语义：激活即折叠、不建视图、推送 collapsed=true）
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
-    expect(factory.create.mock.calls.length).toBe(createdBefore + 2);
-    const restored = lastState(pushState);
-    expect(restored?.collapsed).toBe(false);
-    expect(restored?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:3000/']);
-    expect(restored?.current).toBe(1);
+    const st = lastState(pushState);
+    expect(st?.collapsed).toBe(false); // @deprecated 过渡字段恒 false（Task 7 删）
+    expect(st?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:3000/']);
+    expect(st?.current).toBe(1);
+
+    // 再切走再激活：stash 无折叠分支吞清单——往返不丢 tab
+    manager.onWorkspaceDeactivated('ws1');
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    expect(lastState(pushState)?.tabs).toHaveLength(2);
   });
 
-  it('激活折叠期间 agent navigate → 按切仓 stash 复活视图 + collapsed=false（同折叠期间活动语义）', async () => {
-    let persisted = false;
-    const { manager, factory, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
+  it('切仓往返后 agent navigate → stash 恢复的视图照常复用（无折叠复活语义），归属随清单保留', async () => {
+    const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
-    manager.setSidebarCollapsed('ws1', true);
-    persisted = true;
     manager.onWorkspaceDeactivated('ws1');
-    manager.onWorkspaceActivated('ws1', '/ws/ws1'); // 按落库折叠激活：无视图
-    expect(manager.getState('ws1').collapsed).toBe(true);
+    manager.onWorkspaceActivated('ws1', '/ws/ws1'); // 按 stash 重建（2 视图，owners 还原归属）
+    expect(lastState(pushState)?.tabs.map((t) => t.owner)).toEqual(['user', 'user']);
 
     const before = factory.create.mock.calls.length;
-    await manager.navigate('ws1', 'http://localhost:8080/');
-    // ensureLive 回退 stashedTabs：先按切仓清单复活 2 视图，再载入目标到 owner 光标
-    // 归属制（Task 2）：重激活后 ownerCurrent 为空 → 解析修正回集合首个（idx 0）
-    expect(factory.create.mock.calls.length).toBe(before + 2);
+    await manager.navigate('ws1', 'http://localhost:8080/'); // owner 光标解析 → 复用 tab1
+    expect(factory.create.mock.calls.length).toBe(before); // 不新建（旧语义：折叠复活重建 2 视图）
     const st = manager.getState('ws1');
-    expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:8080/', 'http://localhost:3000/']);
+    expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:8080/']);
     expect(st.current).toBe(1);
-    // 复活即语义上不再折叠——renderer 依赖此字段同步展开整个浏览器 UI
-    expect(st.collapsed).toBe(false);
-    expect(lastState(pushState)?.collapsed).toBe(false);
   });
 });
 
@@ -857,33 +840,35 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     }
   });
 
-  it('setSidebarCollapsed(true) 销毁视图；折叠期间活动先恢复旧清单再作用（不丢 tab）；false 维持已恢复', async () => {
+  it('setSidebarVisible(false) 隐藏视图（bounds 置零不销毁、不推送）；隐藏期 navigate 落到既有 tab；true 恢复 current bounds', async () => {
     const { manager, factory, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const v0 = factory.views[0]!;
     const v1 = factory.views[1]!;
-    manager.setSidebarCollapsed('ws1', true);
-    expect(factory.destroy).toHaveBeenCalledTimes(2);
-    expect(factory.destroyed.has(v0.view)).toBe(true);
-    expect(factory.destroyed.has(v1.view)).toBe(true);
-    expect(manager.getState('ws1').collapsed).toBe(true);
-    // 折叠期间 agent navigate → 先按折叠前清单恢复（2 个 view），再载入目标到 current
+    const rect = { x: 10, y: 20, width: 300, height: 200 };
+    manager.setSidebarBounds(rect); // 缓存 + current 视图套用
+
+    pushState.mockClear();
+    manager.setSidebarVisible('ws1', false);
+    expect(pushState).not.toHaveBeenCalled(); // 可见性真相源在 renderer——main 不推送
+    expect(factory.destroy).not.toHaveBeenCalled(); // 隐藏 ≠ 销毁
+    expect(v0.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+    expect(v1.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+    expect(manager.getState('ws1').tabs).toHaveLength(2); // 视图存活
+
+    // 隐藏期 agent navigate → 落到既有 owner tab（不新建不销毁；旧语义：折叠复活重建）
     const before = factory.create.mock.calls.length;
     await manager.navigate('ws1', 'http://localhost:8080/');
-    expect(factory.create.mock.calls.length).toBe(before + 2);
+    expect(factory.create.mock.calls.length).toBe(before);
     const st = manager.getState('ws1');
     expect(st.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:8080/']);
     expect(st.current).toBe(1);
-    // 视图复活即语义上不再折叠——renderer 依赖此字段自动展开整个浏览器 UI
-    expect(st.collapsed).toBe(false);
-    expect(lastState(pushState)?.collapsed).toBe(false);
-    // 展开不再重复重建（视图已存在）
-    const beforeExpand = factory.create.mock.calls.length;
-    manager.setSidebarCollapsed('ws1', false);
-    expect(factory.create.mock.calls.length).toBe(beforeExpand);
-    expect(manager.getState('ws1').tabs).toHaveLength(2);
+
+    // 显示 → applyLastRect 恢复 current 视图 bounds（隐藏期缓存未丢）
+    manager.setSidebarVisible('ws1', true);
+    expect(v1.view.bounds.setBounds).toHaveBeenLastCalledWith(rect);
   });
 
   it('clearBrowsingData 委托 factory.clearData(wsId)，不经接管门（设置页路径）', async () => {

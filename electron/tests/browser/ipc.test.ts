@@ -14,7 +14,8 @@
 //   12 通道注册齐全 / browser:state 八字段载荷锁（含 trusted=ask 未授 false）/
 //   browser:notice {kind,text} 载荷锁（崩溃自愈真实链路）/ getState 空壳与活跃态 /
 //   userNavigate 隐式接管 + 非法 URL 不产生接管副作用 / takeover/release /
-//   tabs 三通道 / setSidebarBounds rect 透传 / setSidebarCollapsed 视图销毁+落库 /
+//   tabs 三通道 / setSidebarBounds rect 透传 / setSidebarVisible bounds 置零不销毁 /
+//   setActiveSession 活跃会话上报（expandHint 判定输入）/
 //   answerTrust 三值分流（deny 无操作 → session 会话态 → always 落库）/
 //   listDevServers probe 注入 + 失败透传 / updateSettings 净化（undefined 键清理 /
 //   非数组名单丢弃 / 非法 trust 包装中文结构化错误不裸抛）+ 合法 patch 落库归一化。
@@ -151,10 +152,7 @@ beforeEach(() => {
   store = createBrowserSettingsStore(db);
   policy = new BrowserPolicy((wsId) => store.read(wsId), '/ws/root');
   factory = mkFactory();
-  // 激活折叠态读取器接同一真 store（boot.ts 同款投影——bug 2 真相源恢复）
-  manager = new BrowserManager(factory, policy, createBrowserPushHooks(webContentsLike), {
-    readSidebarCollapsed: (wsId) => store.read(wsId).sidebarCollapsed,
-  });
+  manager = new BrowserManager(factory, policy, createBrowserPushHooks(webContentsLike));
   probe = vi.fn(async () => [{ port: 5173, url: 'http://localhost:5173' }]);
 
   handlers.clear();
@@ -199,7 +197,7 @@ function activateWs(): void {
 // =================================================================================
 
 describe('registerBrowserIpc 通道注册', () => {
-  it('14 通道（§3.6 表 11 通道 + updateSettings + getSettings + clearBrowsingData）全部注册，无多余通道', () => {
+  it('15 通道（§3.6 表 11 通道 + updateSettings + getSettings + clearBrowsingData + setSidebarVisible + setActiveSession）全部注册，无多余通道', () => {
     const expected = [
       'browser:getState',
       'browser:userNavigate',
@@ -209,7 +207,8 @@ describe('registerBrowserIpc 通道注册', () => {
       'browser:closeTab',
       'browser:switchTab',
       'browser:setSidebarBounds',
-      'browser:setSidebarCollapsed',
+      'browser:setSidebarVisible',
+      'browser:setActiveSession',
       'browser:answerTrust',
       'browser:listDevServers',
       'browser:updateSettings',
@@ -236,6 +235,7 @@ describe('browser:state / browser:notice 统一推送', () => {
       takeover: 'agent',
       trusted: false,
       collapsed: false,
+      expandHint: false,
     };
     hooks.pushState(state);
     hooks.pushNotice('trust-request', 'agent 请求使用浏览器', 'ws-1');
@@ -267,7 +267,7 @@ describe('browser:state / browser:notice 统一推送', () => {
     });
   });
 
-  it('workspace 激活经真实 manager 链路推出 browser:state——八字段载荷锁（ask 未授 → trusted=false；collapsed=侧栏折叠态）', () => {
+  it('workspace 激活经真实 manager 链路推出 browser:state——九字段载荷锁（ask 未授 → trusted=false；collapsed 恒 false；expandHint=false）', () => {
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();
     // toEqual 全量比对 = 字段集锁死（多字段/少字段/改名即刻红，momo-boundary-rules）
@@ -280,11 +280,12 @@ describe('browser:state / browser:notice 统一推送', () => {
       takeover: 'agent',
       trusted: false,
       collapsed: false,
+      expandHint: false,
     });
   });
 
-  it('落库折叠=true 的 ws 激活 → 推送八字段 collapsed=true（激活真相源与持久化一致——bug 2）', () => {
-    // 折叠态先经 setSidebarCollapsed 落库（真实 IPC 写路径），再切走重激活
+  it('落库 sidebarCollapsed=true 不再投影进激活推送（readSidebarCollapsed 读取链路退役，spec §7.4）', () => {
+    // 旧折叠 IPC 落库残留值——激活推送不再消费（collapsed 恒 false 过渡字段）
     store.write('ws-1', { sidebarCollapsed: true });
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();
@@ -296,7 +297,8 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
-      collapsed: true,
+      collapsed: false,
+      expandHint: false,
     });
   });
 
@@ -331,6 +333,7 @@ describe('browser:getState', () => {
       takeover: 'agent',
       trusted: false,
       collapsed: false,
+      expandHint: false,
     });
   });
 
@@ -468,16 +471,42 @@ describe('browser:setSidebarBounds', () => {
 });
 
 // =================================================================================
-// browser:setSidebarCollapsed
+// browser:setSidebarVisible / browser:setActiveSession（spec 2026-09-15 §6.3/§5.4）
 // =================================================================================
 
-describe('browser:setSidebarCollapsed', () => {
-  it('折叠 → 视图销毁 + 折叠态落库（spec §3.6）', async () => {
+describe('browser:setSidebarVisible', () => {
+  it('隐藏 → 视图 bounds 置零、不销毁、不落库（main 无折叠语义——spec §6.3）', async () => {
     activateWs();
     await callIpc('browser:openTab', 'ws-1', 'http://localhost:5173/');
-    await callIpc('browser:setSidebarCollapsed', 'ws-1', true);
-    expect(factory.destroy).toHaveBeenCalledTimes(1);
-    expect(store.read('ws-1').sidebarCollapsed).toBe(true);
+    await callIpc('browser:setSidebarVisible', 'ws-1', false);
+    expect(factory.destroy).not.toHaveBeenCalled();
+    expect(factory.views[0]!.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+    expect(store.read('ws-1').sidebarCollapsed).toBe(false); // 可见性真相源在 renderer——不写库
+  });
+
+  it('visible 非布尔 → 中文错误拒绝（IPC 无类型边界防线）', async () => {
+    await expect(callIpc('browser:setSidebarVisible', 'ws-1', 'yes')).rejects.toThrow(
+      '参数 visible 必须为布尔值',
+    );
+  });
+});
+
+describe('browser:setActiveSession', () => {
+  it('上报活跃会话 → 活跃会话 agent 导航推送 expandHint=true；上报 null → 不打扰（安全缺省）', async () => {
+    activateWs();
+    await callIpc('browser:setActiveSession', 'sess-1');
+    await manager.navigate('ws-1', 'http://localhost:5173/', { ownerId: 'inst-a', sessionId: 'sess-1' });
+    expect(lastState()?.expandHint).toBe(true);
+
+    await callIpc('browser:setActiveSession', null);
+    await manager.navigate('ws-1', 'http://localhost:3000/', { ownerId: 'inst-a', sessionId: 'sess-1' });
+    expect(lastState()?.expandHint).toBe(false);
+  });
+
+  it('sessionId 非字符串非 null → 中文错误拒绝（IPC 无类型边界防线）', async () => {
+    await expect(callIpc('browser:setActiveSession', 123)).rejects.toThrow(
+      'browser:setActiveSession 参数 sessionId 必须为字符串或 null',
+    );
   });
 });
 

@@ -9,7 +9,7 @@
 //     → pushState → showOverlay(wsId,'user')（页内点击接管）
 //   - initBrowserTools 以同一 policy/manager 实例接线（vi.mock 捕获）
 //   - screenshotDir = <userData>/browser-screenshots（构造注入 manager + protocol 共享）
-//   - attachToWindow：推送面定标到窗口 webContents + 14 通道注册 + 二次 attach 重定标不重注册
+//   - attachToWindow：推送面定标到窗口 webContents + 15 通道注册 + 二次 attach 重定标不重注册
 //   - switchWorkspace：激活/切走收口（deactivated/activated 语义经 getState 锁定）
 //   - bindLifecycle：before-quit 注册 → disposeAll 销毁视图
 //
@@ -222,7 +222,7 @@ describe('DoD 17：overlay 命中链（页内点击接管端到端）', () => {
 });
 
 describe('attachToWindow', () => {
-  it('注册 14 个 browser: 通道（集合相等锁）', () => {
+  it('注册 15 个 browser: 通道（集合相等锁）', () => {
     const { wc } = mkWebContents();
     handle.attachToWindow(ipcMainLike, wc);
     expect(new Set(handlers.keys())).toEqual(
@@ -235,7 +235,8 @@ describe('attachToWindow', () => {
         'browser:closeTab',
         'browser:switchTab',
         'browser:setSidebarBounds',
-        'browser:setSidebarCollapsed',
+        'browser:setSidebarVisible',
+        'browser:setActiveSession',
         'browser:answerTrust',
         'browser:listDevServers',
         'browser:updateSettings',

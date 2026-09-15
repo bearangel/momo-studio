@@ -10,10 +10,11 @@
 //     每条记录携 owner 归属（spec 2026-09-15 §4.1）——多 agent tab 并存互不踩踏，
 //     各方光标独立（ownerCurrent）
 //   - takeover 状态机：agent ↔ user（§3.2 三入口收敛 userTakeover）
-//   - workspace 切换：stash {urls,current} → 销毁视图；激活按 stash 重建（重建不重过 assertUrl）
+//   - workspace 切换：stash {urls,current,owners} → 销毁视图；激活按 stash 重建（重建不重过 assertUrl）
 //   - 视图事件接线：popup 收编 / 崩溃自愈 / console 环形 / did-navigate / page-title-updated /
 //     before-input-event（页内输入自动接管；修饰键不计；agent 期间自锁）
-//   - sidebar bounds 透传 / 折叠销毁（折叠期间活动先恢复旧清单再作用——不丢 tab）
+//   - sidebar bounds 透传 / 隐藏与显示（收起 = bounds 置零不销毁，spec 2026-09-15 §6.3；
+//     活跃会话 agent 导航自动切换可见 tab + expandHint 通告，§7.3）
 //
 // 动作原语（click/type/pressKey/hover/scroll）自 T3 起委托 actions.ts（selector 四语法
 // 解析 + Electron trusted 事件序列）；snapshot 自 T4 起委托 snapshot.ts（a11y 懒附加
@@ -166,9 +167,9 @@ export interface BrowserManagerOpts {
    */
   screenshotDir?: string;
   /**
-   * 激活时读该 ws 落库的侧栏折叠态（settings-store.read 的 sidebarCollapsed
-   * 投影——真相源恢复：激活推送的 collapsed 必须与持久化一致，否则切仓往返
-   * 折叠态丢失，bug 2）。缺省 false（无库环境 / 旧测试兜底，行为同注入 false）。
+   * @deprecated 归属制过渡（Task 3 退役）：不再被消费——激活不投影落库折叠态
+   * （spec 2026-09-15 §7.4 落库折叠真相源随可见性会话化失去意义）。字段保留
+   * 仅为构造 opts 形状兼容（旧注入静默忽略），Task 7 统一删除。
    */
   readSidebarCollapsed?: (wsId: string) => boolean;
   /**
@@ -208,6 +209,8 @@ interface TabRecord {
 interface TabStash {
   urls: string[];
   current: number;
+  /** 各 url 的归属（spec §6.5）：切仓往返保归属——restore 按下标还原 owner */
+  owners: string[];
 }
 
 interface ActiveWorkspace {
@@ -220,9 +223,8 @@ interface ActiveWorkspace {
   takeover: 'agent' | 'user';
   /** serial → 环形缓冲（每 tab 50 条，level 前缀） */
   consoleBuffer: Map<number, string[]>;
-  collapsed: boolean;
-  /** 折叠前的清单（折叠时视图已销毁；展开或折叠期间活动用于重建） */
-  collapseStash: TabStash | null;
+  /** 侧栏收起 = 视图全零 bounds 隐藏（不销毁，spec §6.3）——可见性真相源在 renderer */
+  viewsHidden: boolean;
   /** 最近一次真实用户输入时刻（userTakeover / before-input-event 刷新；空闲自愈判定用，spec §4.2） */
   lastUserInputAt: number;
 }
@@ -243,7 +245,7 @@ interface AgentWaitEntry {
 
 export class BrowserManager {
   private active: ActiveWorkspace | null = null;
-  /** workspaceId → {urls, current}；切走时填入，重新激活时取出重建 */
+  /** workspaceId → {urls,current,owners}；切走时填入，重新激活时取出重建 */
   private readonly stashedTabs = new Map<string, TabStash>();
   private nextSerial = 0;
   /** agent 输入动作进行中（sendInputEvent 在真实环境可能回流 before-input-event——不计接管） */
@@ -252,6 +254,8 @@ export class BrowserManager {
   private lastRect: SidebarRect | null = null;
   /** workspaceId → agent 驻留等待条目（单飞：同 ws 并发工具 join 同一 promise） */
   private readonly agentWaiters = new Map<string, AgentWaitEntry>();
+  /** renderer 上报的活跃会话（spec §5.4/§7.3 自动展开判定输入；null = 非会话视图，安全缺省永不 expandHint） */
+  private activeSessionId: string | null = null;
 
   constructor(
     private readonly factory: ViewFactory,
@@ -260,16 +264,12 @@ export class BrowserManager {
     opts?: BrowserManagerOpts,
   ) {
     this.screenshotDir = opts?.screenshotDir;
-    this.readSidebarCollapsed = opts?.readSidebarCollapsed;
     this.readAgentWaitMs = opts?.readAgentWaitMs;
     this.readIdleAutoReleaseMs = opts?.readIdleAutoReleaseMs;
   }
 
   /** screenshot 落盘根（null = 缺省 tmpdir 兜底） */
   private readonly screenshotDir?: string;
-
-  /** 激活折叠态读取器（undefined = 恒 false，见 BrowserManagerOpts 注释） */
-  private readonly readSidebarCollapsed?: (wsId: string) => boolean;
 
   /** agent 驻留等待时长读取器（undefined = 恒 DEFAULT_AGENT_WAIT_MS） */
   private readonly readAgentWaitMs?: (wsId: string) => number;
@@ -292,57 +292,51 @@ export class BrowserManager {
         collapsed: false,
         takeover: 'agent',
         trusted: this.isTrusted(wsId),
+        expandHint: false,
       };
     }
-    return this.buildState(ws);
+    return this.buildState(ws, false);
   }
 
   /** IPC browser:setSidebarBounds 消费点——renderer 占位区 rect 上报（DPR 换算在 T10 接线层）。缓存供任何后续成为 current 的视图立即套用（browser:state 推送不一定触发 renderer ResizeObserver 重报） */
   setSidebarBounds(rect: SidebarRect): void {
-    this.lastRect = rect;
+    this.lastRect = rect; // 隐藏期仍缓存（显示时恢复用），但不施加
     const ws = this.active;
-    const tab = ws?.tabs[ws.current];
-    if (ws && tab) tab.view.bounds.setBounds(rect);
+    if (!ws || ws.viewsHidden) return;
+    const tab = ws.tabs[ws.current];
+    if (tab) tab.view.bounds.setBounds(rect);
   }
 
-  /** IPC browser:setSidebarCollapsed 消费点——折叠销毁视图；展开按折叠前清单重建 */
-  setSidebarCollapsed(wsId: string, collapsed: boolean): void {
+  /** IPC browser:setSidebarVisible 消费点——收起 = 纯隐藏（bounds 全零，视图存活，spec §6.3）；显示 = 恢复可见 tab */
+  setSidebarVisible(wsId: string, visible: boolean): void {
     const ws = this.active;
     if (!ws || ws.workspaceId !== wsId) return;
-    if (ws.collapsed === collapsed) return;
-    if (collapsed) {
-      if (ws.tabs.length > 0) {
-        ws.collapseStash = {
-          urls: ws.tabs.map((t) => t.view.webContents.getURL()),
-          current: ws.current,
-        };
-      }
-      ws.collapsed = true;
-      this.destroyTabs(ws);
-      ws.current = 0;
+    if (ws.viewsHidden === !visible) return;
+    ws.viewsHidden = !visible;
+    if (!visible) {
+      for (const t of ws.tabs) t.view.bounds.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     } else {
-      ws.collapsed = false;
-      const stash = ws.collapseStash;
-      ws.collapseStash = null;
-      if (stash && stash.urls.length > 0 && ws.tabs.length === 0) {
-        this.restoreTabs(ws, stash);
-      }
+      this.applyLastRect(ws);
     }
-    this.emitState(ws);
+    // 不推送状态：可见性真相源在 renderer（per-session），main 无折叠语义
+  }
+
+  /** IPC browser:setActiveSession 消费点——renderer 活跃会话上报（自动展开判定输入，spec §7.3） */
+  setActiveSession(sessionId: string | null): void {
+    this.activeSessionId = sessionId;
   }
 
   // ---------- 工具方法（§4 12 工具一一对应） ----------
 
-  /** browser_navigate：策略门控 → owner 光标懒建 / 复用 → loadURL → 推送状态（可见 tab 自动切换在 Task 3 maybeAutoSwitch） */
+  /** browser_navigate：策略门控 → owner 光标懒建 / 复用 → loadURL → 自动切换/展开（maybeAutoSwitch，spec §7.3） */
   async navigate(wsId: string, rawUrl: string, ctx: BrowserOpCtx = USER_OP_CTX): Promise<{ url: string; title: string }> {
     const ws = this.requireWorkspace(wsId);
     await this.gateAgentSide(ws);
     const url = this.policy.assertUrl(wsId, rawUrl); // 越界/协议错误原样穿透 T5（不建视图）
-    this.ensureLive(ws);
     const idx = this.ensureOwnerTab(ws, ctx.ownerId);
     const tab = ws.tabs[idx]!;
     await this.loadChecked(tab, url);
-    this.emitState(ws);
+    this.maybeAutoSwitch(ws, ctx, idx);
     return {
       url: tab.view.webContents.getURL(),
       title: tab.view.webContents.getTitle(),
@@ -369,11 +363,10 @@ export class BrowserManager {
         // url 携带时先过策略门（F1 review fix——与 navigate/userNavigate 同口径）：
         // 此前裸传 openTabInternal 会绕过 assertUrl，agent 可经 browser_tabs
         // {action:'open', url:'file:///Users/x/.ssh/id_rsa'} 打破 file:// workspace
-        // 硬边界与域名黑白名单。策略失败在 ensureLive/openTabInternal 之前抛出，
+        // 硬边界与域名黑白名单。策略失败在 openTabInternal 之前抛出，
         // 不开 tab、无任何副作用。url 未传 → null 仍走 ABOUT_BLANK（内部常量，
         // 非 tool/用户输入，不经策略——T1 review 裁定）。
         const initialUrl = url === undefined ? null : this.policy.assertUrl(wsId, url);
-        this.ensureLive(ws);
         this.openTabInternal(ws, initialUrl, source === 'agent' ? ctx.ownerId : 'user', source !== 'agent');
         this.emitState(ws);
         return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
@@ -466,7 +459,6 @@ export class BrowserManager {
     ws.current = 0;
     ws.ownerCurrent.clear();
     ws.takeover = 'agent'; // 全新仲裁起点（仅全局销毁——spec §6.4）
-    ws.collapseStash = null;
     this.stashedTabs.delete(wsId); // §7：清 stash——下次激活空态
     this.settleAgentWait(wsId, true); // park 中的 waiter 不悬挂——resolve 后按新仲裁态继续
     this.emitState(ws);
@@ -591,7 +583,6 @@ export class BrowserManager {
     const url = this.policy.assertUrl(wsId, rawUrl);
     const ws = this.requireWorkspace(wsId);
     this.userTakeover(wsId);
-    this.ensureLive(ws);
     let tab = ws.tabs[ws.current];
     if (!tab) {
       tab = this.createTab(ws, 'user'); // tabs 为空时新视图落在 idx 0 == current
@@ -607,7 +598,7 @@ export class BrowserManager {
 
   // ---------- workspace 生命周期 ----------
 
-  /** workspace 激活（main 切 workspace 时调）：自动 deactivate 前一活跃 ws；按 stash 重建；file:// 边界根同步到该 ws 目录 */
+  /** workspace 激活（main 切 workspace 时调）：自动 deactivate 前一活跃 ws；按 stash 重建（含归属还原）；file:// 边界根同步到该 ws 目录。不读落库折叠态（§7.4 退役——可见性真相源在 renderer） */
   onWorkspaceActivated(wsId: string, workspaceDir: string): void {
     this.policy.setWorkspaceRoot(workspaceDir);
     const cur = this.active;
@@ -616,54 +607,40 @@ export class BrowserManager {
       return; // 重复激活幂等
     }
     if (cur) this.onWorkspaceDeactivated(cur.workspaceId);
-    // 折叠初始态以落库值为准（真相源不再说谎，bug 2）：激活推送 collapsed=false
-    // 会先于 renderer 异步 getSettings 到达，令其竞速守卫吞掉落库的 true——
-    // 折叠着的 ws 切走再切回即被强行展开。落库 true：不恢复 stash（保留
-    // stashedTabs 条目供折叠期间活动复活）、不建视图、推送 collapsed=true。
-    const persistedCollapsed = this.readSidebarCollapsed?.(wsId) ?? false;
     const ws: ActiveWorkspace = {
       workspaceId: wsId,
       workspaceDir,
       tabs: [],
       current: 0,
-      ownerCurrent: new Map(),
-      takeover: 'agent', // 激活即全新仲裁（不延续切走前的接管态）
+      takeover: 'agent',
       consoleBuffer: new Map(),
-      collapsed: persistedCollapsed,
-      collapseStash: null,
-      lastUserInputAt: Date.now(), // 激活时刻起算空闲计时（spec §4.2）
+      ownerCurrent: new Map(),
+      viewsHidden: false,
+      lastUserInputAt: Date.now(),
     };
     this.active = ws;
-    if (!persistedCollapsed) {
-      const stash = this.stashedTabs.get(wsId);
-      if (stash && stash.urls.length > 0) {
-        this.stashedTabs.delete(wsId);
-        this.restoreTabs(ws, stash); // stash 是内部恢复（URL 当初过过策略），不重过 assertUrl
-      }
+    const stash = this.stashedTabs.get(wsId);
+    if (stash && stash.urls.length > 0) {
+      this.stashedTabs.delete(wsId);
+      this.restoreTabs(ws, stash);
     }
     this.emitState(ws);
   }
 
-  /** workspace 切走：stash {urls,current} → 销毁视图（partition 数据落盘不动——spec §3.7） */
+  /** workspace 切走：stash {urls,current,owners} → 销毁视图（partition 数据落盘不动——spec §3.7） */
   onWorkspaceDeactivated(wsId: string): void {
     const ws = this.active;
     if (!ws || ws.workspaceId !== wsId) return;
-    this.settleAgentWait(wsId, true); // 不跨 ws 等待——park 中的 waiter 放行防悬挂
-    if (ws.collapseStash) {
-      this.stashedTabs.set(wsId, ws.collapseStash);
-    } else if (!ws.collapsed || !this.stashedTabs.has(wsId)) {
-      // 展开态照旧从活视图取清单；折叠但无 collapseStash 时——若 stashedTabs 已
-      // 保留该 ws 条目（激活即折叠且期间无活动），不得用空清单覆盖（否则二次
-      // 切仓往返丢 tab，与「折叠不丢 tab」语义冲突）；无条目（会话内 0 tab 折叠）
-      // 照旧落空清单
+    this.settleAgentWait(wsId, true);
+    if (ws.tabs.length > 0 || !this.stashedTabs.has(wsId)) {
       this.stashedTabs.set(wsId, {
         urls: ws.tabs.map((t) => t.view.webContents.getURL()),
         current: ws.current,
+        owners: ws.tabs.map((t) => t.owner), // 归属随清单跨 ws 保留（spec §6.5）
       });
     }
     this.destroyTabs(ws);
-    ws.collapseStash = null;
-    ws.collapsed = false;
+    ws.ownerCurrent.clear();
     this.active = null; // 不推送——新 workspace 激活时会推送其状态
   }
 
@@ -848,7 +825,7 @@ export class BrowserManager {
     }
   }
 
-  private buildState(ws: ActiveWorkspace): BrowserState {
+  private buildState(ws: ActiveWorkspace, expandHint: boolean): BrowserState {
     const tabs = this.tabInfos(ws, null);
     const cur = tabs[ws.current];
     return {
@@ -859,7 +836,8 @@ export class BrowserManager {
       title: cur?.title ?? '',
       takeover: ws.takeover,
       trusted: this.isTrusted(ws.workspaceId),
-      collapsed: ws.collapsed,
+      collapsed: false,
+      expandHint,
     };
   }
 
@@ -883,33 +861,21 @@ export class BrowserManager {
     return this.policy.isAllowed(wsId);
   }
 
-  private emitState(ws: ActiveWorkspace): void {
-    this.hooks.pushState(this.buildState(ws));
+  private emitState(ws: ActiveWorkspace, opts?: { expandHint?: boolean }): void {
+    this.hooks.pushState(this.buildState(ws, opts?.expandHint ?? false));
   }
 
-  /** 折叠期间发生浏览器活动 → 按折叠前清单恢复视图（折叠不丢 tab——T8 展开无需重建）。
-   * 同时清 collapsed 标志：视图既已复活，语义上侧栏不再折叠——renderer 依赖
-   * buildState 推送的 collapsed=false 同步展开整个浏览器 UI（而非只浮出内容）。
-   * 清单两个来源：会话内折叠的 collapseStash 优先；激活即按落库折叠（无
-   * collapseStash）时回退 stashedTabs 保留的切仓清单——复活语义与折叠期间
-   * 活动一致（bug 2：agent 在激活折叠的 ws 上导航同样唤起视图）。 */
-  private ensureLive(ws: ActiveWorkspace): void {
-    if (!ws.collapsed) return;
-    let stash = ws.collapseStash;
-    if (stash) {
-      ws.collapseStash = null;
+  /** 自动切换/展开（spec §7.3）：仅活跃会话的 agent 导航触发——切可见 tab + expandHint；
+   *  user 源与非活跃会话不打扰（expandHint=false，不动 ws.current）。 */
+  private maybeAutoSwitch(ws: ActiveWorkspace, ctx: BrowserOpCtx, ownerTabIdx: number): void {
+    const hit = ctx.ownerId !== 'user' && ctx.sessionId !== '' && ctx.sessionId === this.activeSessionId;
+    if (hit) {
+      ws.current = ownerTabIdx;
+      this.applyLastRect(ws); // viewsHidden 时内部 no-op——仅记录 ws.current，显示时恢复
+      this.emitState(ws, { expandHint: true });
     } else {
-      stash = this.stashedTabs.get(ws.workspaceId) ?? null;
-      if (stash) this.stashedTabs.delete(ws.workspaceId);
+      this.emitState(ws);
     }
-    // 无任何清单可恢复（启动即按落库折叠 / 切仓清单耗尽）也必须清 collapsed：
-    // 调用方（navigate / userNavigate / popup 收编）会继续建视图加载页面，折叠标志
-    // 残留将使 emitState 持续推送 collapsed=true → renderer 永不展开，页面以陈旧
-    // lastRect 浮出而 chrome 收起（ebc0179 同族回归，2026-09-15 实测复现）。
-    // 空浏览器 + 展开态是诚实形态（无历史 tab 可恢复，新导航即将建首个 tab）。
-    ws.collapsed = false;
-    if (!stash) return;
-    this.restoreTabs(ws, stash);
   }
 
   /** 不挂事件；调用方负责后续 wiring / loadURL。owner 记录归属（spec §4.1） */
@@ -963,12 +929,13 @@ export class BrowserManager {
     ws.consoleBuffer.clear();
   }
 
-  /** 按 stash 重建视图——内部恢复（不重过策略）；Task 3 给 TabStash 加 owners 后透传真实归属 */
+  /** 按 stash 重建视图——内部恢复（不重过策略）；owners 随清单还原归属（spec §6.5） */
   private restoreTabs(ws: ActiveWorkspace, stash: TabStash): void {
-    for (const url of stash.urls) {
-      const record = this.createTab(ws, 'user');
+    stash.urls.forEach((url, i) => {
+      const record = this.createTab(ws, stash.owners[i] ?? 'user');
+      ws.ownerCurrent.set(record.owner, i); // 各 owner 光标指向自己首个（多个同 owner 取后者，等价）
       void this.loadForNotice(record, url, ws.workspaceId);
-    }
+    });
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));
     this.applyLastRect(ws); // 恢复后的 current 视图立即套用缓存 rect
   }
@@ -976,9 +943,11 @@ export class BrowserManager {
   /**
    * 把缓存的 sidebar rect 套用到「刚成为 current」的视图：真实 WebContentsView 默认
    * bounds 0,0,0,0（不可见），新视图不等 renderer 重报——browser:state 推送不一定触发
-   * 其 ResizeObserver。lastRect 为 null（从未上报）时 no-op。
+   * 其 ResizeObserver。lastRect 为 null（从未上报）时 no-op。隐藏期（viewsHidden）
+   * no-op（spec §6.3）——仅记录 ws.current，显示时恢复。
    */
   private applyLastRect(ws: ActiveWorkspace): void {
+    if (ws.viewsHidden) return;
     if (!this.lastRect) return;
     const tab = ws.tabs[ws.current];
     if (tab) tab.view.bounds.setBounds(this.lastRect);
@@ -1046,7 +1015,6 @@ export class BrowserManager {
       this.hooks.pushNotice('popup-blocked', `弹窗已拦截：${errorMessage(err)}`, ws.workspaceId);
       return;
     }
-    this.ensureLive(ws);
     // popup 由用户页面触发，归 user（spec §4.1）；focusVisible=true——用户可感知的新 tab
     this.openTabInternal(ws, url, 'user', true);
     this.emitState(ws);
