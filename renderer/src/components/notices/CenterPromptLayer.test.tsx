@@ -61,5 +61,10 @@ describe('CenterPromptLayer（Tier A 居中层）', () => {
     for (const cls of [layer.className, anchor.className]) {
       expect(cls).not.toMatch(/translate|scale|rotate|transform/);
     }
+    // inline 样式面：className 正则只锁 Tailwind class——将来若改用 inline
+    // style 定位/位移，className 锁不报警，此行兜底（jsdom 下 style.transform
+    // 恒空串 = 未设置）
+    expect(anchor.style.transform).toBe('');
+    expect(layer.style.transform).toBe('');
   });
 });

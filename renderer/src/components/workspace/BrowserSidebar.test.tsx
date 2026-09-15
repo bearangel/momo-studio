@@ -25,6 +25,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { BrowserSidebar } from './BrowserSidebar';
 import type { BrowserState, BrowserSettings, BrowserTabInfo } from '../../ipc/types';
+import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
 
 // ---------- window.api 桩（browser 命名空间全方法） ----------
 const getStateMock = vi.fn();
@@ -443,6 +444,44 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     fireEvent(window, new Event('resize'));
     await new Promise((r) => setTimeout(r, 10));
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
+  });
+});
+
+// ---------- 安全区生产者锁（spec 2026-09-15 §6.1 前半句，终审回填） ----------
+// 教训（P0-6 同构）：消费者（CenterPromptLayer / NoticeStack）只信任 store，但
+// 生产者（report() 内 setRect / 两处清理 setRect(null)）此前在本套件无任何断言——
+// 重构丢掉任一写入，全套照绿、安全区静默回退全窗口、提示被原生视图盖死。
+describe('BrowserSidebar·安全区生产者锁（spec §6.1）', () => {
+  it('ResizeObserver 触发 → 容器 rect 写入 store（形状 {x,y,width,height}；jsdom 布局恒零不碍形状断言）', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByTestId('browser-placeholder');
+    ResizeObserverStub.instances[0]!.trigger();
+    const rect = useBrowserSidebarRectStore.getState().rect;
+    expect(rect).not.toBeNull();
+    expect(rect).toEqual({
+      x: expect.any(Number),
+      y: expect.any(Number),
+      width: expect.any(Number),
+      height: expect.any(Number),
+    });
+  });
+
+  it('卸载 → store rect 清 null（安全区回全窗口）', async () => {
+    const { unmount } = render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    expect(useBrowserSidebarRectStore.getState().rect).not.toBeNull();
+    unmount();
+    expect(useBrowserSidebarRectStore.getState().rect).toBeNull();
+  });
+
+  it('折叠 → store rect 清 null（折叠即安全区回全窗口——report effect cleanup 路径）', async () => {
+    setSidebarCollapsedMock.mockResolvedValue(undefined);
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    expect(useBrowserSidebarRectStore.getState().rect).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
+    await screen.findByRole('button', { name: '展开浏览器侧栏' });
+    expect(useBrowserSidebarRectStore.getState().rect).toBeNull();
   });
 });
 
