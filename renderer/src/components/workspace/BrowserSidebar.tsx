@@ -16,6 +16,8 @@ import { Globe, PanelRightClose, PanelRightOpen, ShieldCheck, ShieldOff } from '
 import { ipc } from '../../ipc/client';
 import type { BrowserState } from '../../ipc/types';
 import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
+import { useBrowserVisibilityStore } from '../../stores/browser-visibility.store';
+import { useSessionStore } from '../../stores/session.store';
 import { Badge } from '../ui/Badge';
 import { EmptyState } from '../ui/EmptyState';
 import { IconButton } from '../ui/IconButton';
@@ -41,45 +43,39 @@ const clampSidebarWidth = (w: number): number => {
 
 export function BrowserSidebar({ workspaceId }: Props) {
   const [state, setState] = useState<BrowserState | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
   const [dragging, setDragging] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   // 安全区真相源：容器 rect 经下方 report() 写 browser-sidebar-rect store
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
-  const collapsedUserTouchedRef = useRef(false);
-  // 宽度还原竞速守卫（同上语义）：读取返回前用户已拖拽/键盘调宽 → 晚到的落库值不覆盖
+  // 宽度还原竞速守卫：读取返回前用户已拖拽/键盘调宽 → 晚到的落库值不覆盖
   const widthUserTouchedRef = useRef(false);
-  // main 已宣告不折叠（活跃推送 collapsed=false）：此后晚到的落库折叠值同样不覆盖
-  // ——否则推送先到、getSettings 后到会把已展开的浏览器又压回竖条
-  const mainExpandedRef = useRef(false);
   // 拖拽手势上下文：起点 clientX / 起始宽度；lastX 记录最新位置供 up 时提交（防 state 闭包过期）
   const dragStartRef = useRef<{ x: number; width: number } | null>(null);
   const lastXRef = useRef(0);
 
-  // 折叠 / 宽度初始态跨重启闭环（T9 + 宽度受控化）：挂载 / 切 ws 读 getSettings，
-  // collapsed 与 sidebarWidth 落库值即初始态。读取失败保持默认展开 + 默认宽度
-  //（体验性增强不阻塞骨架）。
+  // 可见性（归属制 spec §9.1）：per-session 记忆，新会话缺省收起——
+  // renderer 是可见性真相源，销毁/隐藏语义在 main（setSidebarVisible）
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
+  const visible = useBrowserVisibilityStore((s) => s.isVisible(activeSessionId));
+
+  // 宽度初始态跨重启闭环：挂载 / 切 ws 读 getSettings，sidebarWidth 落库值即
+  // 初始态。读取失败保持默认宽度（体验性增强不阻塞骨架）。
   useEffect(() => {
-    collapsedUserTouchedRef.current = false;
-    mainExpandedRef.current = false;
     widthUserTouchedRef.current = false;
     let cancelled = false;
     ipc.browser
       .getSettings(workspaceId)
       .then((s) => {
         if (cancelled) return;
-        if (!collapsedUserTouchedRef.current && !mainExpandedRef.current) {
-          setCollapsed(s.sidebarCollapsed);
-        }
         // 落库宽度越界 / 非有限值同样钳制回有效域（防御旧库脏值撑破布局）
         if (!widthUserTouchedRef.current) {
           setWidth(clampSidebarWidth(s.sidebarWidth));
         }
       })
       .catch(() => {
-        // 静默：默认展开 + 默认宽度兜底，后续用户操作照常走 toggleCollapsed / 拖拽
+        // 静默：默认宽度兜底，后续用户操作照常走拖拽 / 键盘
       });
     return () => {
       cancelled = true;
@@ -110,21 +106,45 @@ export function BrowserSidebar({ workspaceId }: Props) {
     const unsubscribe = ipc.browser.onBrowserState((next) => {
       if (next.workspaceId !== workspaceId) return;
       setState(next);
-      // agent 折叠期间打开网站：main 已复活视图（collapsed=false），UI 同步展开整个浏览器
-      if (!next.collapsed) {
-        mainExpandedRef.current = true;
-        setCollapsed(false);
+      // 活跃会话的 agent 导航 → 本会话自动展开（spec §7.3）。handler 内一律
+      // getState() 取活跃会话——订阅 effect 依赖 [workspaceId]，闭包里的
+      // activeSessionId 是首渲染的过期值（P0-7 同构陷阱）
+      const sid = useSessionStore.getState().activeSessionId;
+      if (next.expandHint && sid !== null) {
+        useBrowserVisibilityStore.getState().setVisible(sid, true);
       }
     });
     return unsubscribe;
   }, [workspaceId]);
 
+  // 会话删除后的可见性条目清理（spec §9.1）：sessions 引用变化即重算存活集
+  useEffect(() => {
+    useBrowserVisibilityStore.getState().purgeStale(sessions.map((s) => s.id));
+  }, [sessions]);
+
+  // 可见性上报单点（M-1）：挂载 / 切 ws / visible 变化时主动重报——main 的
+  // viewsHidden 不跨 ws 激活往返保持（重激活恒 false），renderer 是可见性真相源，
+  // 不重报则隐藏中的 ws 切走再切回会以 lastRect 浮出。main 侧幂等（同值早退）。
+  // toggleCollapsed 只写 store，IPC 上报全收敛到本 effect。
+  useEffect(() => {
+    void ipc.browser.setSidebarVisible(workspaceId, visible).catch(() => {
+      // boot 早期 / 通道未就绪时静默——下一次 visible 变化自会重报
+    });
+  }, [workspaceId, visible]);
+
   // 占位区上报（bounds 锁）：ResizeObserver + window resize →
   // getBoundingClientRect → setSidebarBounds（main 换算 DPR 后 view.setBounds）。
-  // 折叠态不上报：manager 折叠即销毁视图，上报零尺寸无意义；展开时占位区重挂、
-  // 本 effect 重跑首帧上报恢复（manager 侧另有 lastRect 缓存兜底，见 T2）。
+  // 隐藏态除过渡帧一次性零报外不再上报：manager 隐藏即 bounds 置零（视图存活），
+  // 无占位区则无真实 rect；展开时占位区重挂、本 effect 重跑首帧上报恢复
+  //（manager 侧另有 lastRect 缓存兜底，见 T2）。
   useEffect(() => {
-    if (collapsed) return;
+    if (!visible) {
+      // 隐藏过渡帧：一次性零报（main 对全部视图 bounds 置零已由 setSidebarVisible
+      // 承担，此报维持「renderer 无占位区则无真实 rect」的几何一致性）+ 安全区回全窗口
+      void ipc.browser.setSidebarBounds({ x: 0, y: 0, width: 0, height: 0 }).catch(() => {});
+      useBrowserSidebarRectStore.getState().setRect(null);
+      return;
+    }
     const el = placeholderRef.current;
     if (!el) return;
     const report = (): void => {
@@ -146,10 +166,10 @@ export function BrowserSidebar({ workspaceId }: Props) {
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', report);
-      // 折叠 / 卸载即安全区回全窗口
+      // 隐藏 / 卸载即安全区回全窗口
       useBrowserSidebarRectStore.getState().setRect(null);
     };
-  }, [collapsed]);
+  }, [visible]);
 
   // 卸载（im→files/agents 活动视图切换）上报零尺寸 rect：main 对当前视图立即
   // setBounds(0) 隐藏（tabs/接管/状态保留——manager 状态不动），重挂载时占位区
@@ -160,19 +180,17 @@ export function BrowserSidebar({ workspaceId }: Props) {
       void ipc.browser.setSidebarBounds({ x: 0, y: 0, width: 0, height: 0 }).catch(() => {
         // 卸载竞态（app 关闭中 IPC 已断）——静默即可
       });
-      // 折叠态挂载（report effect 早退未写 rect）/ 真卸载——安全区一律回全窗口
+      // 隐藏态挂载（report effect 早退未写 rect）/ 真卸载——安全区一律回全窗口
       useBrowserSidebarRectStore.getState().setRect(null);
     },
     [],
   );
 
   const toggleCollapsed = (): void => {
-    collapsedUserTouchedRef.current = true;
-    const next = !collapsed;
-    setCollapsed(next);
-    // IPC：main 视图销毁/重建 + per-workspace 落库；本地先行（折叠是纯 UI 态，
-    // 落库失败不回滚——重启后以展开默认兜底）
-    void ipc.browser.setSidebarCollapsed(workspaceId, next).catch(() => {});
+    if (activeSessionId === null) return; // rail 钮仅会话视图出现，防御
+    // 只写 per-session store：隐藏/显示对 main 的上报（bounds 置零/恢复，
+    // agent 后台操作不受影响，spec §6.3）由上方 M-1 可见性上报 effect 收敛承担
+    useBrowserVisibilityStore.getState().setVisible(activeSessionId, !visible);
   };
 
   // 宽度落库单点（拖拽释放 / 键盘逐键共用）：写失败静默——本次会话宽度仍生效，
@@ -284,8 +302,8 @@ export function BrowserSidebar({ workspaceId }: Props) {
     });
   };
 
-  // ---- 折叠态：只剩竖条展开钮（I2：折叠销毁视图省内存，展开按清单重建）----
-  if (collapsed) {
+  // ---- 隐藏态：只剩竖条展开钮（I2 语义承接：隐藏省渲染；视图本身存活，agent 后台操作不受影响）----
+  if (!visible) {
     return (
       <div
         ref={containerRef}

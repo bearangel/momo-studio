@@ -12,8 +12,8 @@ import type { BrowserTabInfo } from '../../ipc/types';
 
 function mkTabs(): BrowserTabInfo[] {
   return [
-    { index: 0, url: 'https://a.example.com/', title: '页面 A' },
-    { index: 1, url: 'https://b.example.com/', title: '页面 B' },
+    { index: 0, url: 'https://a.example.com/', title: '页面 A', owner: 'user' },
+    { index: 1, url: 'https://b.example.com/', title: '页面 B', owner: 'user' },
   ];
 }
 
@@ -70,7 +70,7 @@ describe('TabsBar（v2.7 Task 8）', () => {
   });
 
   it('标题缺失时回退显示 url（防御：about:blank 早期无标题）', () => {
-    const tabs: BrowserTabInfo[] = [{ index: 0, url: 'about:blank', title: '' }];
+    const tabs: BrowserTabInfo[] = [{ index: 0, url: 'about:blank', title: '', owner: 'user' }];
     render(
       <TabsBar tabs={tabs} current={0} onSelect={vi.fn()} onClose={vi.fn()} onOpen={vi.fn()} />,
     );

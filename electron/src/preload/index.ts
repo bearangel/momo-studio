@@ -143,9 +143,6 @@ const api: ApiSurface = {
       invoke('browser:setSidebarVisible', workspaceId, visible),
     setActiveSession: (sessionId) => invoke('browser:setActiveSession', sessionId),
     closeBrowser: (workspaceId) => invoke('browser:closeBrowser', workspaceId),
-    // 退役过渡：主进程 handler 已下架，renderer 调用点 Task 5 换轨后删（成对原则）
-    setSidebarCollapsed: (workspaceId, collapsed) =>
-      invoke('browser:setSidebarCollapsed', workspaceId, collapsed),
     answerTrust: (workspaceId, answer) => invoke('browser:answerTrust', workspaceId, answer),
     listDevServers: () => invoke('browser:listDevServers'),
     updateSettings: (workspaceId, patch) => invoke('browser:updateSettings', workspaceId, patch),

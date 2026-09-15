@@ -1066,6 +1066,8 @@ export interface BrowserTabInfo {
   index: number;
   url: string;
   title: string;
+  /** 归属方（spec 2026-09-15 §4.1）：agent 实例 ID 或 'user'——user 视角清单透出真实归属 */
+  owner: string;
 }
 
 /** 统一状态推送（IPC browser:state）载荷——单页共享模型的完整快照 */
@@ -1080,8 +1082,8 @@ export interface BrowserState {
   takeover: 'agent' | 'user';
   /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
   trusted: boolean;
-  /** 侧栏折叠态（真相源=main）：agent 折叠期间活动 → ensureLive 复活视图即置 false，UI 据此自动展开 */
-  collapsed: boolean;
+  /** 本帧推送由「活跃会话的 agent 导航」触发（spec §7.3）——renderer 见 true 且本会话隐藏则展开侧栏 */
+  expandHint: boolean;
 }
 
 /** sidebar 占位区 rect（browser:setSidebarBounds 载荷，与 Electron setBounds 四字段同构；DPR 换算在 main） */
@@ -1152,8 +1154,6 @@ export interface BrowserApiSurface {
   setActiveSession(sessionId: string | null): Promise<void>;
   /** 归属制（spec §6.4）：用户显式关闭浏览器（已过确认卡）——user 源全局销毁（含 agent 的 tab） */
   closeBrowser(workspaceId: string): Promise<void>;
-  /** @deprecated 退役过渡（spec §7.4）：主进程 handler 已下架，调用即 reject——Task 5 renderer 换轨后删除 */
-  setSidebarCollapsed(workspaceId: string, collapsed: boolean): Promise<void>;
   /** 信任卡应答（session / always / deny） */
   answerTrust(workspaceId: string, answer: BrowserTrustAnswer): Promise<void>;
   /** dev server 探活（5173/3000/8080/4200/8000） */

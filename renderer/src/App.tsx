@@ -11,7 +11,7 @@
 // （新装用户无标记；仅 MainShell 分支承载升级提示）。
 import { useEffect, useState, useCallback } from 'react';
 import { useWorkspaceStore } from './stores/workspace.store';
-import { subscribeSessionChannels } from './stores/session.store';
+import { subscribeSessionChannels, useSessionStore } from './stores/session.store';
 import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDialog';
 import { MainShell } from './routes/MainShell';
 import { TitleBar } from './components/layout/TitleBar';
@@ -39,6 +39,15 @@ export function App() {
   // stream.store.streams（UI 实时渲染用）。
   // 放在 App 顶层保证整个生命周期只订阅一次，避免视图切换重复注册。
   useEffect(() => subscribeSessionChannels(), []);
+
+  // 活跃会话上报（归属制 spec §5.4）：main 的自动展开判定（expandHint 只对活跃
+  // 会话生效）输入；null = 非会话视图（安全缺省）。含启动后首次。
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  useEffect(() => {
+    void ipc.browser.setActiveSession(activeSessionId).catch(() => {
+      // 早期 boot 未挂载时静默——下一个 session 切换自会重报
+    });
+  }, [activeSessionId]);
 
   useEffect(() => {
     void load().finally(() => setBootstrapped(true));

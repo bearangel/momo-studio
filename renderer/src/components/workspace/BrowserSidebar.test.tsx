@@ -1,18 +1,20 @@
 // renderer/src/components/workspace/BrowserSidebar.test.tsx
 //
-// BrowserSidebar 集成测试（v2.7 Task 8，spec §3.5）：
+// BrowserSidebar 集成测试（v2.7 Task 8，spec §3.5；归属制 2026-09-15 改造）：
 //   - 挂载拉 getState 渲染（tabs / 当前 url / 标题 / takeover / trusted）
 //   - 订阅 onBrowserState 增量更新（非本 workspace 推送忽略）；卸载清理订阅
-//   - 折叠 → setSidebarCollapsed(true) 且只剩竖条展开钮；再点展开
+//   - 可见性（per-session，spec §9.1）：收起 → setSidebarVisible(w1,false) 且只剩
+//     竖条展开钮；再点展开；新会话缺省收起；挂载 / visible 变化主动重报（M-1）
+//   - expandHint 条件展开（spec §7.3）：活跃会话隐藏中收到 agent 导航推送 → 自动展开
 //   - 空态（无 tab）→ 引导文案 + 地址栏可用
 //   - 占位区上报锁：ResizeObserver + window resize → getBoundingClientRect →
 //     setSidebarBounds（rect 参数来自 getBoundingClientRect）；卸载 disconnect；
-//     折叠态不上报
+//     隐藏态不上报（隐藏过渡帧一次性零报除外）
 //   - TabsBar / DevServerDropdown IPC 接线（openTab→switchTab / closeTab / userNavigate）
 //   - 宽度受控 / 拖拽 / 键盘（280-720）：getSettings 还原（含越界钳制）；
 //     左缘手柄 pointerdown → window pointermove 实时变宽 → pointerup 单次落库；
 //     双向钳制；ArrowLeft/Right ±16 + Home/End 逐键落库；拖拽与还原竞速守卫；
-//     折叠竖条不受宽度受控化影响
+//     隐藏竖条不受宽度受控化影响
 //
 // v2.7 review fix C2 移除「鼠标接管 overlay」describe 块：接管唯一入口是 main 进程
 // 原生 overlay view（view-factory.ts showOverlay），OS 合成层序 native overlay →
@@ -24,8 +26,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { BrowserSidebar } from './BrowserSidebar';
-import type { BrowserState, BrowserSettings, BrowserTabInfo } from '../../ipc/types';
+import type { BrowserState, BrowserSettings, BrowserTabInfo, SessionSummary } from '../../ipc/types';
 import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
+import { useBrowserVisibilityStore } from '../../stores/browser-visibility.store';
+import { useSessionStore } from '../../stores/session.store';
 
 // ---------- window.api 桩（browser 命名空间全方法） ----------
 const getStateMock = vi.fn();
@@ -35,7 +39,7 @@ const openTabMock = vi.fn();
 const closeTabMock = vi.fn();
 const switchTabMock = vi.fn();
 const setSidebarBoundsMock = vi.fn();
-const setSidebarCollapsedMock = vi.fn();
+const setSidebarVisibleMock = vi.fn();
 const listDevServersMock = vi.fn();
 const getSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
@@ -53,7 +57,7 @@ const mockApi = {
     closeTab: closeTabMock,
     switchTab: switchTabMock,
     setSidebarBounds: setSidebarBoundsMock,
-    setSidebarCollapsed: setSidebarCollapsedMock,
+    setSidebarVisible: setSidebarVisibleMock,
     listDevServers: listDevServersMock,
     getSettings: getSettingsMock,
     updateSettings: updateSettingsMock,
@@ -89,13 +93,13 @@ class ResizeObserverStub {
 function mkState(overrides?: Partial<BrowserState>): BrowserState {
   return {
     workspaceId: 'w1',
-    tabs: [{ index: 0, url: 'https://example.com/', title: 'Example' }],
+    tabs: [{ index: 0, url: 'https://example.com/', title: 'Example', owner: 'user' }],
     current: 0,
     url: 'https://example.com/',
     title: 'Example',
     takeover: 'agent',
     trusted: true,
-    collapsed: false,
+    expandHint: false,
     ...overrides,
   };
 }
@@ -133,10 +137,23 @@ function stubRect(el: Element, rect: { x: number; y: number; width: number; heig
     ({ ...rect, top: rect.y, left: rect.x, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) }) as DOMRect;
 }
 
+/** 会话摘要工厂（purgeStale effect 消费 sessions 时的最小形状） */
+function mkSession(id: string): SessionSummary {
+  return {
+    id,
+    workspaceId: 'w1',
+    title: `会话 ${id}`,
+    titleAuto: true,
+    kind: 'chat',
+    lastMessageAt: null,
+    members: [],
+  };
+}
+
 beforeEach(() => {
   for (const m of [
     getStateMock, userNavigateMock, releaseTakeoverMock, openTabMock,
-    closeTabMock, switchTabMock, setSidebarBoundsMock, setSidebarCollapsedMock,
+    closeTabMock, switchTabMock, setSidebarBoundsMock, setSidebarVisibleMock,
     listDevServersMock, getSettingsMock, updateSettingsMock, onBrowserStateMock, onBrowserNoticeMock,
   ]) {
     m.mockReset();
@@ -149,13 +166,17 @@ beforeEach(() => {
   closeTabMock.mockResolvedValue([]);
   switchTabMock.mockResolvedValue([]);
   setSidebarBoundsMock.mockResolvedValue(undefined);
-  setSidebarCollapsedMock.mockResolvedValue(undefined);
+  setSidebarVisibleMock.mockResolvedValue(undefined);
   listDevServersMock.mockResolvedValue([]);
   getSettingsMock.mockResolvedValue(mkSettings());
   updateSettingsMock.mockResolvedValue({ ok: true });
   onBrowserStateMock.mockReturnValue(() => {});
   ResizeObserverStub.instances = [];
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+  // 可见性默认态：活跃会话 s1 已展开——保持既有用例的「展开态」前提。
+  // 需要缺省收起语义的用例自行重置 visibilityBySession。
+  useSessionStore.setState({ activeSessionId: 's1', sessions: [mkSession('s1')] });
+  useBrowserVisibilityStore.setState({ visibilityBySession: { s1: true } });
 });
 
 describe('BrowserSidebar·状态渲染（v2.7 Task 8）', () => {
@@ -166,7 +187,7 @@ describe('BrowserSidebar·状态渲染（v2.7 Task 8）', () => {
         trusted: false,
         url: 'https://a.com/',
         title: '站点 A',
-        tabs: [{ index: 0, url: 'https://a.com/', title: '站点 A' }],
+        tabs: [{ index: 0, url: 'https://a.com/', title: '站点 A', owner: 'user' }],
       }),
     );
     render(<BrowserSidebar workspaceId="w1" />);
@@ -192,8 +213,8 @@ describe('BrowserSidebar·状态渲染（v2.7 Task 8）', () => {
     await screen.findByText('Example');
 
     const tabs: BrowserTabInfo[] = [
-      { index: 0, url: 'https://example.com/', title: 'Example' },
-      { index: 1, url: 'https://new.com/', title: '新页面' },
+      { index: 0, url: 'https://example.com/', title: 'Example', owner: 'user' },
+      { index: 1, url: 'https://new.com/', title: '新页面', owner: 'user' },
     ];
     push(mkState({ url: 'https://new.com/', title: '新页面', tabs, current: 1 }));
     expect(await screen.findByText('新页面')).toBeInTheDocument();
@@ -275,89 +296,135 @@ describe('BrowserSidebar·空态与地址栏（spec §3.5）', () => {
   });
 });
 
-describe('BrowserSidebar·折叠（spec §3.5 / I2）', () => {
-  it('折叠钮 → setSidebarCollapsed(w1,true)；组件只剩竖条展开钮（无地址栏/占位区）', async () => {
-    setSidebarCollapsedMock.mockResolvedValue(undefined);
+describe('BrowserSidebar·可见性切换（归属制 spec §6.3 / §9.1）', () => {
+  it('收起钮 → setSidebarVisible(w1,false)；组件只剩竖条展开钮（无地址栏/占位区）', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
 
     fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
-    await waitFor(() => expect(setSidebarCollapsedMock).toHaveBeenCalledWith('w1', true));
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', false));
     expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
   });
 
-  it('竖条展开钮 → setSidebarCollapsed(w1,false) + 占位区回归', async () => {
-    setSidebarCollapsedMock.mockResolvedValue(undefined);
+  it('竖条展开钮 → setSidebarVisible(w1,true) + 占位区回归', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
     await screen.findByRole('button', { name: '展开浏览器侧栏' });
 
     fireEvent.click(screen.getByRole('button', { name: '展开浏览器侧栏' }));
-    await waitFor(() => expect(setSidebarCollapsedMock).toHaveBeenCalledWith('w1', false));
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', true));
     expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
-});
 
-describe('BrowserSidebar·折叠初始态跨重启（v2.7 Task 9）', () => {
-  it('挂载读 getSettings(w1)；sidebarCollapsed=true → 初始即折叠竖条（无地址栏/占位区）', async () => {
-    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: true }));
-    render(<BrowserSidebar workspaceId="w1" />);
-    await waitFor(() => expect(getSettingsMock).toHaveBeenCalledWith('w1'));
-    const expand = await screen.findByRole('button', { name: '展开浏览器侧栏' });
-    expect(expand).toBeInTheDocument();
-    expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-    // 初始折叠不重放 setSidebarCollapsed（落库值本就如此，无变更可写）
-    expect(setSidebarCollapsedMock).not.toHaveBeenCalled();
+  it('挂载 / visible 变化主动重报可见性（M-1：main 的 viewsHidden 不跨 ws 激活往返保持，renderer 是真相源）', async () => {
+    const { rerender } = render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+    // 挂载即重报当前态（s1 可见 → true）——隐藏中的 ws 切走再切回不至于以 lastRect 浮出
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', true));
+
+    // 切 ws：同一 effect 以新 workspaceId 重报
+    rerender(<BrowserSidebar workspaceId="w2" />);
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w2', true));
   });
 
-  it('折叠态收到 collapsed=false 推送（agent 折叠期间打开网站）→ UI 自动展开整个浏览器（真机 2026-09-13：内容浮出而 chrome 收起）', async () => {
+  it('expandHint 推送（活跃会话隐藏中，agent 导航）→ 本会话自动展开（spec §7.3）', async () => {
     const { push } = armOnBrowserState();
-    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: true }));
+    // 活跃会话 s1 无可见性记录（缺省收起）——挂载即竖条
+    useBrowserVisibilityStore.setState({ visibilityBySession: {} });
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByRole('button', { name: '展开浏览器侧栏' });
 
-    push(mkState({ url: 'https://agent-opened.com/', title: 'Agent 打开', collapsed: false }));
+    push(mkState({ url: 'https://agent-opened.com/', title: 'Agent 打开', expandHint: true }));
     // 整个浏览器展开：地址栏 + 占位区回归，竖条展开钮消失
     expect(await screen.findByRole('textbox')).toHaveValue('https://agent-opened.com/');
     expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '展开浏览器侧栏' })).not.toBeInTheDocument();
+    // 展开联动 main：M-1 effect 重报可见
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', true));
   });
 
-  it('sidebarCollapsed=false（默认）→ 初始展开，chrome 照常渲染', async () => {
-    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: false }));
+  it('expandHint=false 推送不展开（普通状态推送无自动展开副作用）', async () => {
+    const { push } = armOnBrowserState();
+    useBrowserVisibilityStore.setState({ visibilityBySession: {} });
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByRole('button', { name: '展开浏览器侧栏' });
+
+    push(mkState({ url: 'https://example.com/', title: 'Example', expandHint: false }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
+    expect(useBrowserVisibilityStore.getState().isVisible('s1')).toBe(false);
+  });
+
+  it('非活跃会话收起记忆独立：切到 s2（无记录）→ 竖条；切回 s1 → 仍展开', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
-    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
-  });
 
-  it('用户先于读取返回前手动折叠 → 晚到的 collapsed=false 不覆盖用户操作', async () => {
-    let resolveSettings: (s: BrowserSettings) => void = () => {};
-    getSettingsMock.mockReturnValue(
-      new Promise<BrowserSettings>((res) => {
-        resolveSettings = res;
-      }),
-    );
-    render(<BrowserSidebar workspaceId="w1" />);
-    // 读取未返回期间用户点折叠（默认展开态 → 折叠）
-    fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
-    await screen.findByRole('button', { name: '展开浏览器侧栏' });
-    // 晚到的落库值（false）到达——不得把用户刚折叠的侧栏强行展开
-    await act(async () => {
-      resolveSettings(mkSettings({ sidebarCollapsed: false }));
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 's2', sessions: [mkSession('s1'), mkSession('s2')] });
     });
-    expect(screen.getByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
+
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 's1' });
+    });
+    expect(await screen.findByText('Example')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '展开浏览器侧栏' })).not.toBeInTheDocument();
+  });
+});
+
+describe('BrowserSidebar·可见性初始态（per-session，spec §9.1）', () => {
+  it('新会话（无可见性记录）缺省收起：竖条展开钮，无地址栏/占位区', async () => {
+    useBrowserVisibilityStore.setState({ visibilityBySession: {} });
+    render(<BrowserSidebar workspaceId="w1" />);
+    const expand = await screen.findByRole('button', { name: '展开浏览器侧栏' });
+    expect(expand).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    // 初始收起由 M-1 effect 上报 main（隐藏 = bounds 置零不销毁）
+    await waitFor(() => expect(setSidebarVisibleMock).toHaveBeenCalledWith('w1', false));
   });
 
-  it('getSettings 拒绝 → 保持默认展开（初始态是体验性增强，不阻塞 chrome 骨架）', async () => {
+  it('非会话视图（activeSessionId=null）同样收起（isVisible(null)=false 安全缺省）', async () => {
+    useSessionStore.setState({ activeSessionId: null, sessions: [] });
+    useBrowserVisibilityStore.setState({ visibilityBySession: {} });
+    render(<BrowserSidebar workspaceId="w1" />);
+    expect(await screen.findByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-placeholder')).not.toBeInTheDocument();
+  });
+
+  it('落库 sidebarCollapsed 不再影响初始可见性（per-session store 是唯一真相源，getSettings 只管宽度）', async () => {
+    getSettingsMock.mockResolvedValue(mkSettings({ sidebarCollapsed: true, sidebarWidth: 520 }));
+    render(<BrowserSidebar workspaceId="w1" />);
+    // s1 有可见记录（beforeEach 默认 true）→ 仍展开；落库折叠值被忽略
+    await waitFor(() =>
+      expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '520px' }),
+    );
+    expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('会话删除（sessions 剔除）→ purgeStale 清理条目，该会话回缺省收起', async () => {
+    render(<BrowserSidebar workspaceId="w1" />);
+    await screen.findByText('Example');
+
+    act(() => {
+      // s1 从会话列表消失（删除）→ purgeStale(['s2', ...]) 场景下 s1 条目被清
+      useSessionStore.setState({ sessions: [mkSession('s2')] });
+    });
+    expect(await screen.findByRole('button', { name: '展开浏览器侧栏' })).toBeInTheDocument();
+    expect(useBrowserVisibilityStore.getState().isVisible('s1')).toBe(false);
+  });
+
+  it('getSettings 拒绝 → 宽度回默认 + chrome 骨架照常（初始态是体验性增强，不阻塞）', async () => {
     getSettingsMock.mockRejectedValue(new Error('boot 早期通道未就绪'));
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     expect(screen.getByTestId('browser-placeholder')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-sidebar')).toHaveStyle({ width: '380px' });
   });
 });
 
@@ -427,8 +494,7 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     expect(setSidebarBoundsMock).not.toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
   });
 
-  it('折叠 → 占位区卸载后 window resize 不再上报（折叠态不上报——manager 折叠即销毁视图，零尺寸上报无意义）', async () => {
-    setSidebarCollapsedMock.mockResolvedValue(undefined);
+  it('收起 → 隐藏过渡帧一次性零报 + 占位区卸载后 window resize 不再上报（manager 隐藏即 bounds 置零，后续无占位区则无真实 rect）', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     const placeholder = screen.getByTestId('browser-placeholder');
@@ -437,10 +503,14 @@ describe('BrowserSidebar·占位区上报锁（spec §3.5）', () => {
     await waitFor(() =>
       expect(setSidebarBoundsMock).toHaveBeenLastCalledWith({ x: 11, y: 22, width: 380, height: 600 }),
     );
-    const countBefore = setSidebarBoundsMock.mock.calls.length;
 
     fireEvent.click(screen.getByRole('button', { name: '折叠浏览器侧栏' }));
     await screen.findByRole('button', { name: '展开浏览器侧栏' });
+    // 隐藏分支上报零 rect 一次（几何一致性：renderer 无占位区则无真实 rect）
+    await waitFor(() =>
+      expect(setSidebarBoundsMock).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 }),
+    );
+    const countBefore = setSidebarBoundsMock.mock.calls.length;
     fireEvent(window, new Event('resize'));
     await new Promise((r) => setTimeout(r, 10));
     expect(setSidebarBoundsMock.mock.calls.length).toBe(countBefore);
@@ -474,8 +544,7 @@ describe('BrowserSidebar·安全区生产者锁（spec §6.1）', () => {
     expect(useBrowserSidebarRectStore.getState().rect).toBeNull();
   });
 
-  it('折叠 → store rect 清 null（折叠即安全区回全窗口——report effect cleanup 路径）', async () => {
-    setSidebarCollapsedMock.mockResolvedValue(undefined);
+  it('收起 → store rect 清 null（隐藏即安全区回全窗口——report effect 隐藏分支路径）', async () => {
     render(<BrowserSidebar workspaceId="w1" />);
     await screen.findByText('Example');
     expect(useBrowserSidebarRectStore.getState().rect).not.toBeNull();
@@ -497,8 +566,8 @@ describe('BrowserSidebar·释放与 tabs / 探活接线', () => {
 
   it('「+」→ openTab(w1) → 成功后 switchTab 到新 tab 下标（brief：openTab(about:blank 引导) → switchTab）', async () => {
     openTabMock.mockResolvedValue([
-      { index: 0, url: 'https://example.com/', title: 'Example' },
-      { index: 1, url: 'about:blank', title: '' },
+      { index: 0, url: 'https://example.com/', title: 'Example', owner: 'user' },
+      { index: 1, url: 'about:blank', title: '', owner: 'user' },
     ]);
     switchTabMock.mockResolvedValue([]);
     render(<BrowserSidebar workspaceId="w1" />);
@@ -514,8 +583,8 @@ describe('BrowserSidebar·释放与 tabs / 探活接线', () => {
     getStateMock.mockResolvedValue(
       mkState({
         tabs: [
-          { index: 0, url: 'https://a.com/', title: 'A 页' },
-          { index: 1, url: 'https://b.com/', title: 'B 页' },
+          { index: 0, url: 'https://a.com/', title: 'A 页', owner: 'user' },
+          { index: 1, url: 'https://b.com/', title: 'B 页', owner: 'user' },
         ],
       }),
     );
@@ -530,8 +599,8 @@ describe('BrowserSidebar·释放与 tabs / 探活接线', () => {
     getStateMock.mockResolvedValue(
       mkState({
         tabs: [
-          { index: 0, url: 'https://a.com/', title: 'A 页' },
-          { index: 1, url: 'https://b.com/', title: 'B 页' },
+          { index: 0, url: 'https://a.com/', title: 'A 页', owner: 'user' },
+          { index: 1, url: 'https://b.com/', title: 'B 页', owner: 'user' },
         ],
         current: 0,
       }),
@@ -686,10 +755,11 @@ describe('BrowserSidebar·宽度受控 / 拖拽 / 键盘（280-720）', () => {
     expect(outer.className).not.toContain('relative');
   });
 
-  it('折叠竖条不受宽度受控化影响：保持 w-10 静态宽、无手柄、无 inline width', async () => {
+  it('缺省收起竖条不受宽度受控化影响：保持 w-10 静态宽、无手柄、无 inline width', async () => {
     getSettingsMock.mockResolvedValue(
       mkSettings({ sidebarCollapsed: true, sidebarWidth: 520 }),
     );
+    useBrowserVisibilityStore.setState({ visibilityBySession: {} });
     render(<BrowserSidebar workspaceId="w1" />);
     const strip = await screen.findByTestId('browser-sidebar');
     expect(strip.className).toContain('w-10');

@@ -86,7 +86,10 @@ const mockApi = {
       title: '',
       takeover: 'agent' as const,
       trusted: false,
+      expandHint: false,
     }),
+    // 归属制（Task 5）：App 顶层 activeSessionId 上报 effect 消费
+    setActiveSession: vi.fn().mockResolvedValue(undefined),
     onBrowserState: vi.fn().mockReturnValue(() => {}),
     onBrowserNotice: vi.fn().mockReturnValue(() => {}),
   },

@@ -36,7 +36,7 @@ function mkState(workspaceId: string, takeover: BrowserState['takeover']): Brows
     title: '',
     takeover,
     trusted: false,
-    collapsed: false,
+    expandHint: false,
   };
 }
 
