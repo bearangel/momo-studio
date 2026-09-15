@@ -401,6 +401,7 @@ export class BrowserManager {
           ws.tabs.splice(idx, 1);
           ws.consoleBuffer.delete(tab.serial);
           ws.ownerCurrent.delete(ctx.ownerId);
+          this.reindexOwnerCursors(ws, idx); // 他方光标随 splice 移位（I-1：否则同 owner 校验通过不触发自愈，静默漂移）
           this.fixCurrentAfterRemoval(ws);
           this.applyLastRect(ws);
           this.emitState(ws);
@@ -453,6 +454,7 @@ export class BrowserManager {
         this.factory.destroy(tab.view);
         ws.tabs.splice(global, 1);
         ws.consoleBuffer.delete(tab.serial);
+        this.reindexOwnerCursors(ws, global); // 每次 splice 后即时修正他方光标（I-1：连删逆序也不能漏）
       }
       ws.ownerCurrent.delete(ctx.ownerId);
       this.fixCurrentAfterRemoval(ws);

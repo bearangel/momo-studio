@@ -130,6 +130,21 @@ describe('归属制内核', () => {
     expect(listA[0]!.url).toBe('https://a3.com');
   });
 
+  it('I-1 回归锁：删除点位于他方光标之前时，他方 navigate 仍落在自己的 current tab', async () => {
+    const { manager } = mk();
+    manager.onWorkspaceActivated('w1', '/tmp');
+    await manager.navigate('w1', 'https://a1.com', A);
+    await manager.navigate('w1', 'https://b1.com', B);
+    // B 开第二个 tab 并 switch 到它（全局视角 B 光标 = 2）
+    await manager.tabsAction('w1', 'open', undefined, undefined, 'agent', B);
+    await manager.tabsAction('w1', 'switch', 1, undefined, 'agent', B);
+    // A 关光自己唯一的 tab（删全局 0，B 光标前移）→ B 的 navigate 必须落在其 current（b2）而非漂移
+    await manager.tabsAction('w1', 'close', 0, undefined, 'agent', A);
+    await manager.navigate('w1', 'https://b3.com', B);
+    const listB = await manager.tabsAction('w1', 'list', undefined, undefined, 'agent', B);
+    expect(listB.map((t) => t.url)).toEqual(['https://b1.com', 'https://b3.com']);
+  });
+
   it('user 源保持既有全局语义（缺省 ctx 直调 = user 路径不回归）', async () => {
     const { manager } = mk();
     manager.onWorkspaceActivated('w1', '/tmp');
