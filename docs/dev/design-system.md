@@ -103,3 +103,24 @@ class 字面量；运行时拼接的字符串不在扫描结果里，对应 CSS 
 - **Esc capture 语义**（P2 终审 sweep 后已修；消费方指引见 §6）：`components/ui/Dialog.tsx` 在
   capture 阶段拦截 Esc 并阻断同窗口其余 Esc 监听（如 SettingsView 全局返回）——弹窗内 Esc 只关弹窗；
   多层弹窗自外向内逐层关闭。回归锁：`ui/Dialog.test.tsx`「Esc 只关弹窗」。
+
+## 8. Agent 工具调用授权/确认提示——两级提示规则（2026-09-15 起生效）
+
+**用户裁定**：所有「agent 工具调用需要用户授权或确认」的提示，交互必须统一，且阻断类必须居中弹出（右下角用户不会留意到）。设计全文与决策依据：`docs/specs/2026-09-15-unified-notice-tiers-design.md`。
+
+**分级判定（唯一标准：提示出现时 agent 是否停摆等用户决定）**：
+
+| 级 | 判定 | 形态 | 载体 |
+|---|---|---|---|
+| **Tier A 阻断确认** | agent 已停等（工具挂起/驻留，有超时兜底） | **居中对话框**：强决策类带遮罩且**点击遮罩不消散**（如浏览器信任授权）；等待类无遮罩不剥夺输入（如接管释放等待） | `notices/CenterPromptLayer`（z-50，与 Dialog 同层） |
+| **Tier B 告知** | 不阻断，错过无碍 | 右下角 toast 堆叠（6s 自动消散，上限 4） | `notices/NoticeStack`（z-40） |
+
+**硬性规则（新增提示必须遵守）**：
+
+1. **禁止新增 `fixed right-4 bottom-4` 类裸窗口坐标提示卡**——一律挂入 CenterPromptLayer（阻断类）或 NoticeStack（告知类）。历史教训：原生 WebContentsView（浏览器侧栏）在 OS 合成层盖住一切 renderer DOM（z-index 无效），裸坐标卡落入侧栏 rect 即被盖死（两次实测翻车：拖拽手柄、释放提示卡）；且四卡同锚并发互盖。
+2. **定位一律经安全区**：`useSafeArea()`（`stores/browser-sidebar-rect.store.ts`）——窗口减浏览器侧栏 rect，动态避让原生视图。
+3. **遮罩实现逐字复用 `ui/Dialog.tsx`**（`fixed inset-0 z-50 bg-backdrop`），有字节级契约测试锁；阻断卡自带 transform 居中（`absolute` + `-translate-x/y-1/2`），**锚点/祖先禁止 transform**（transform 祖先会成为 fixed 后代的 containing block，遮罩会缩成卡区大小——jsdom 测不出，真机必炸）。
+4. **`browser:notice` 新 kind 默认落 NoticeStack**（前向兼容，零 renderer 改动可见）；授权/等待类 kind 归 Tier A——路由表单点常量在 `NoticeStack.tsx`（INFO_KINDS），同 kind 禁止双渲染。
+5. **决策必须显式**：Tier A 授权卡不吃「点击外部 = 取消」——用户要么选按钮要么等超时；取消也是显式决定。
+
+现有 Tier A 消费方：`BrowserTrustNotice`（信任授权，带遮罩）、`BrowserWaitReleasePrompt`（接管释放等待，无遮罩）。回归锁：`NoticeStack.test.tsx`（路由/上限/消散/避让数值）、`CenterPromptLayer.test.tsx`（居中锚/无 transform 结构锁）、`BrowserSidebar.test.tsx`（安全区生产者三锁）。
