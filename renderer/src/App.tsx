@@ -19,6 +19,8 @@ import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
 import { SandboxNotice } from './components/settings/SandboxNotice';
 import { ResumeNotice } from './components/task/ResumeNotice';
 import { BrowserTrustNotice } from './components/workspace/BrowserTrustNotice';
+import { BrowserWaitReleasePrompt } from './components/workspace/BrowserWaitReleasePrompt';
+import { CenterPromptLayer } from './components/notices/CenterPromptLayer';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -87,8 +89,11 @@ export function App() {
       <SandboxNotice />
       {/* v2.6.0 Task 6：启动任务恢复卡（自管显隐——boot 现查，无中断任务返回 null） */}
       <ResumeNotice />
-      {/* v2.7 Task 9：浏览器信任卡（自管显隐——收到 trust-request 推送才渲染） */}
-      <BrowserTrustNotice />
+      {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放自管显隐） */}
+      <CenterPromptLayer>
+        <BrowserTrustNotice />
+        <BrowserWaitReleasePrompt />
+      </CenterPromptLayer>
     </>
   );
 }

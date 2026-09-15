@@ -88,15 +88,18 @@ describe('BrowserTrustNotice（v2.7 Task 9）', () => {
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
   });
 
-  it('是非模态卡片（fixed 定位、非遮罩）', () => {
+  it('居中带遮罩（Tier A，spec 2026-09-15 §4.2）：遮罩 class 与 ui/Dialog 逐字一致；点击遮罩卡片仍在（决策必须显式）', () => {
     const { push } = armOnBrowserNotice();
-    const { container } = render(<BrowserTrustNotice />);
+    render(<BrowserTrustNotice />);
     push({ kind: 'trust-request', text: '...', workspaceId: 'w1' });
-    const root = container.firstChild as HTMLElement;
-    expect(root.className).toMatch(/fixed/);
-    expect(root.className).toMatch(/right-/);
-    expect(root.className).toMatch(/bottom-/);
-    expect(root.className).not.toMatch(/inset-0/);
+    const overlay = screen.getByTestId('browser-trust-overlay');
+    expect(overlay).toBeInTheDocument();
+    // 逐字复制锁：Dialog.tsx 遮罩 class 若变更，此处红——同步复制，不得自创
+    expect(overlay.className).toBe('fixed inset-0 z-50 bg-backdrop');
+    // 点击遮罩不消散——与 Dialog（点遮罩关闭）刻意相反：授权决策必须显式，
+    // 误点不得吞掉；超时兜底在 main 侧（3 分钟降级拒绝）
+    fireEvent.click(overlay);
+    expect(screen.getByTestId('browser-trust-notice')).toBeInTheDocument();
   });
 
   it('其他 kind（crash-reloaded）→ 不渲染', () => {

@@ -1,21 +1,22 @@
-// renderer/src/components/workspace/BrowserWaitReleaseBanner.tsx
+// renderer/src/components/workspace/BrowserWaitReleasePrompt.tsx
 //
-// 接管释放提示条幅（spec 2026-09-14 §4.3；2026-09-15 遮挡修复改形态）：
+// 接管释放提示卡（spec 2026-09-14 §4.3；2026-09-15 提示分级统一改 CenterPromptLayer
+// 居中卡，spec 2026-09-15 §4.2）：
 // agent 的 browser_* 工具驻留等待时，主进程推 kind=agent-waiting-release notice。
 //
-// ⚠️ 渲染位置是本组件的核心契约：必须渲染在 BrowserSidebar 的 chrome 列内
-// （工具栏与占位区之间），绝不能用 fixed 悬浮卡。原因：原生 WebContentsView
-// 按 placeholder rect 在 OS 合成层叠加，永远高于全部 renderer DOM（z-index 无效，
-// 见 BrowserSidebar.tsx 头注与拖拽手柄 bug 1 先例）——最初的 fixed 右下角卡恰好
-// 落在占位区 rect 内，被浏览器页面盖住，用户永远看不到（2026-09-15 实测 bug）。
-// chrome 列在占位区 rect 之外天然可见；条幅出现时占位区 flex 收缩，ResizeObserver
-// 上报新 bounds，原生视图同步缩小——构造上杜绝重叠。
+// ⚠️ 渲染位置契约：必须渲染在 App 层 CenterPromptLayer 内（安全区几何居中——
+// 安全区 = 窗口可视区减浏览器侧栏 rect）。原因：原生 WebContentsView 按占位区
+// rect 在 OS 合成层叠加，永远高于全部 renderer DOM（z-index 无效，见
+// BrowserSidebar.tsx 头注与拖拽手柄 bug 1 先例）——按窗口裸坐标居中可能落进
+// 侧栏 rect 被浏览器页面盖死（2026-09-15 两次实测 bug 的共同根因）。CenterPromptLayer
+// 按安全区定位构造上杜绝重叠。居中位移由本卡自带 -translate-x/y-1/2（层锚点是
+// 0×0 无 transform 定位点，见 CenterPromptLayer.tsx 头注）。
 //
 // 三个卸载出口（与驻留等待三出口对应）：
 //   1. browser:state takeover='agent'（手动释放 / 空闲自愈——目标 ws 匹配才卸载）
 //   2. 本地 durationMs 兜底计时（超时出口——takeover 不翻转，state 不触发）
 //   3. 收到新的 agent-waiting-release notice 刷新计时（单飞下不应出现，防御）
-// 动作：单一按钮走既有 releaseTakeover 通道（零新 IPC）；失败保留条幅 +
+// 动作：单一按钮走既有 releaseTakeover 通道（零新 IPC）；失败保留卡片 +
 // 错误行（信任卡同语义，不静默吞），按钮复能可重试。路由用 notice.workspaceId（M7 语义）。
 import { useEffect, useRef, useState } from 'react';
 import { MousePointerClick } from 'lucide-react';
@@ -23,7 +24,7 @@ import { ipc } from '../../ipc/client';
 import type { BrowserNotice } from '../../ipc/types';
 import { Button } from '../ui/Button';
 
-export function BrowserWaitReleaseBanner() {
+export function BrowserWaitReleasePrompt() {
   const [notice, setNotice] = useState<BrowserNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,22 +74,24 @@ export function BrowserWaitReleaseBanner() {
 
   return (
     <div
-      data-testid="browser-wait-release-banner"
-      className="border-b border-subtle px-2 py-1.5 text-sm text-secondary"
+      data-testid="browser-wait-release-prompt"
+      className="absolute left-0 top-0 w-[400px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-subtle bg-surface-1 p-4 text-sm text-secondary shadow-xl"
     >
-      <div className="flex items-center gap-2">
-        <MousePointerClick size={16} strokeWidth={1.75} className="text-tertiary shrink-0" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium leading-4 text-primary">agent 正在等待浏览器</p>
-          <p className="truncate text-xs leading-4 text-tertiary">{notice.text}</p>
+      <div className="flex items-start gap-2 mb-2">
+        <MousePointerClick size={16} strokeWidth={1.75} className="text-tertiary shrink-0 mt-0.5" aria-hidden />
+        <div>
+          <h2 className="text-base font-semibold text-primary">agent 正在等待浏览器</h2>
+          <p className="text-xs text-tertiary mt-0.5">{notice.text}</p>
         </div>
-        <Button disabled={busy} onClick={() => void release()}>释放并继续</Button>
       </div>
       {error !== null && (
-        <div className="mt-1 rounded border border-status-error/40 bg-status-error-tint px-2 py-1 text-xs text-status-error">
+        <div className="mb-2 rounded border border-status-error/40 bg-status-error-tint px-2 py-1 text-xs text-status-error">
           释放失败：{error}
         </div>
       )}
+      <div className="flex justify-end gap-2">
+        <Button disabled={busy} onClick={() => void release()}>释放并继续</Button>
+      </div>
     </div>
   );
 }

@@ -184,6 +184,16 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
   });
 });
 
+describe('App 提示分级挂载（spec 2026-09-15 §4.2，M2）', () => {
+  it('MainShell 分支常驻 CenterPromptLayer（Tier A 居中层——卡自管显隐，层不随卡消散）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    expect(screen.getByTestId('center-prompt-layer')).toBeInTheDocument();
+    expect(screen.getByTestId('center-prompt-anchor')).toBeInTheDocument();
+  });
+});
+
 describe('App 升级提示集成（P5 Task 2）', () => {
   it('getUpgradeNotice 命中 + 已有 workspace → MainShell + UpgradeNotice 同屏', async () => {
     mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);

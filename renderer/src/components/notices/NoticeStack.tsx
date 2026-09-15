@@ -6,7 +6,7 @@
 //
 // kind 路由表（唯一渲染归属，防双渲染）：本组件只消费 INFO_KINDS 三 kind；
 // trust-request → Tier A BrowserTrustNotice；agent-waiting-release → Tier A
-// BrowserWaitReleaseBanner；未来新 kind 默认落此处（前向兼容）。
+// BrowserWaitReleasePrompt；未来新 kind 默认落此处（前向兼容）。
 import { useEffect, useState } from 'react';
 import { Info, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';

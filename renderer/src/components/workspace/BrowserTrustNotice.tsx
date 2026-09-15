@@ -9,7 +9,11 @@
 // 应答成功卡片即消散；失败保留卡片 + 错误行（ResumeNotice 同语义，不静默吞）。
 // 等待期间卡片常驻（无自动消散——决定权在用户）。
 //
-// 挂载点 App 层（与 SandboxNotice/ResumeNotice 一致）。v2.7 review M7 起信任卡路由
+// 挂载点 App 层 CenterPromptLayer 居中层内（spec 2026-09-15 §4.2，Tier A）。
+// 卡自带全屏遮罩（class 逐字复制 ui/Dialog.tsx 遮罩，点击不消散——决策必须显式），
+// 居中位移由本卡自带 -translate-x/y-1/2（CenterPromptLayer 锚点是 0×0 无 transform
+// 定位点——transform 祖先会把 fixed 遮罩困在锚点盒内，见 CenterPromptLayer.tsx 头注）。
+// v2.7 review M7 起信任卡路由
 // 用 notice.workspaceId（载荷携带）替代 useWorkspaceStore 的当前激活 workspace 推导——
 // 后者在用户切 ws / tool 跨 ws 上下文场景下脆弱：用户切到 B ws，agent 在 A ws 首调工具
 // 推出的卡片可能错误路由到 B ws；载荷携带保证「卡的目标 = notice 的发送方 ws」。
@@ -55,33 +59,37 @@ export function BrowserTrustNotice() {
   };
 
   return (
-    <div
-      data-testid="browser-trust-notice"
-      className="fixed right-4 bottom-4 z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
-    >
-      <div className="flex items-start gap-2 mb-2">
-        <ShieldQuestion size={16} strokeWidth={1.75} className="text-tertiary shrink-0 mt-0.5" aria-hidden />
-        <div>
-          <h2 className="text-base font-semibold text-primary">agent 请求使用浏览器</h2>
-          <p className="text-xs text-tertiary mt-0.5">{notice.text}</p>
+    <>
+      {/* 遮罩：与 ui/Dialog 同款（class 逐字复制）；点击不消散——决策须显式，超时兜底在 main */}
+      <div data-testid="browser-trust-overlay" className="fixed inset-0 z-50 bg-backdrop" aria-hidden />
+      <div
+        data-testid="browser-trust-notice"
+        className="absolute left-0 top-0 z-50 w-[360px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
+      >
+        <div className="flex items-start gap-2 mb-2">
+          <ShieldQuestion size={16} strokeWidth={1.75} className="text-tertiary shrink-0 mt-0.5" aria-hidden />
+          <div>
+            <h2 className="text-base font-semibold text-primary">agent 请求使用浏览器</h2>
+            <p className="text-xs text-tertiary mt-0.5">{notice.text}</p>
+          </div>
+        </div>
+        {error !== null && (
+          <div className="mb-2 rounded border border-status-error/40 bg-status-error-tint px-2 py-1 text-xs text-status-error">
+            应答失败：{error}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" disabled={busy} onClick={() => void answer('deny')}>
+            取消
+          </Button>
+          <Button variant="secondary" disabled={busy} onClick={() => void answer('session')}>
+            本次会话允许
+          </Button>
+          <Button disabled={busy} onClick={() => void answer('always')}>
+            永久允许
+          </Button>
         </div>
       </div>
-      {error !== null && (
-        <div className="mb-2 rounded border border-status-error/40 bg-status-error-tint px-2 py-1 text-xs text-status-error">
-          应答失败：{error}
-        </div>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" disabled={busy} onClick={() => void answer('deny')}>
-          取消
-        </Button>
-        <Button variant="secondary" disabled={busy} onClick={() => void answer('session')}>
-          本次会话允许
-        </Button>
-        <Button disabled={busy} onClick={() => void answer('always')}>
-          永久允许
-        </Button>
-      </div>
-    </div>
+    </>
   );
 }
