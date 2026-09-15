@@ -29,33 +29,49 @@ let nextToastId = 1;
 
 export function NoticeStack({ children }: { children?: React.ReactNode }) {
   const safe = useSafeArea();
-  const [toasts, setToasts] = useState<ToastEntry[]>([]);
-  const [overflowCount, setOverflowCount] = useState(0);
+  // 合并态：条目队列与溢出计数同源单 state。React 18 并发渲染会重放 update
+  // queue——updater 必须纯：嵌套 setOverflowCount 或 updater 内突变模块状态
+  // （nextToastId++）都会在重放下使溢出计数静默翻倍，故 dropped 与 toasts
+  // 在同一纯 updater 内一并推导。
+  const [stack, setStack] = useState<{ toasts: ToastEntry[]; dropped: number }>({
+    toasts: [],
+    dropped: 0,
+  });
 
   useEffect(() => {
     const off = ipc.browser.onBrowserNotice((n: BrowserNotice) => {
       if (!INFO_KINDS.has(n.kind)) return;
-      setToasts((prev) => {
-        const appended = [...prev, { id: nextToastId++, kind: n.kind, text: n.text }];
-        if (appended.length <= MAX_VISIBLE) return appended;
-        setOverflowCount((c) => c + (appended.length - MAX_VISIBLE));
-        return appended.slice(-MAX_VISIBLE);
+      // ID 生成在回调体（每事件恰好一次）——updater 重放不得再消耗序号
+      const entry: ToastEntry = { id: nextToastId++, kind: n.kind, text: n.text };
+      setStack((prev) => {
+        const appended = [...prev.toasts, entry];
+        if (appended.length <= MAX_VISIBLE) return { toasts: appended, dropped: prev.dropped };
+        return {
+          toasts: appended.slice(-MAX_VISIBLE),
+          dropped: prev.dropped + (appended.length - MAX_VISIBLE),
+        };
       });
     });
     return off;
   }, []);
 
-  // 自动消散：以队列首条为计时锚（6s 逐条滑出）
+  // 自动消散：以队列首条为计时锚（6s 逐条滑出）；队列清空即溢出计数复位
   useEffect(() => {
-    if (toasts.length === 0) return;
+    if (stack.toasts.length === 0) return;
     const t = setTimeout(() => {
-      setToasts((prev) => prev.slice(1));
+      setStack((prev) => {
+        const toasts = prev.toasts.slice(1);
+        return { toasts, dropped: toasts.length === 0 ? 0 : prev.dropped };
+      });
     }, NOTICE_TTL_MS);
     return () => clearTimeout(t);
-  }, [toasts]);
+  }, [stack.toasts]);
 
   const dismiss = (id: number): void => {
-    setToasts((prev) => prev.filter((e) => e.id !== id));
+    setStack((prev) => {
+      const toasts = prev.toasts.filter((e) => e.id !== id);
+      return { toasts, dropped: toasts.length === 0 ? 0 : prev.dropped };
+    });
   };
 
   return (
@@ -64,16 +80,16 @@ export function NoticeStack({ children }: { children?: React.ReactNode }) {
       className="pointer-events-none fixed bottom-4 z-40 flex w-[360px] flex-col gap-2"
       style={{ right: Math.max(16, window.innerWidth - safe.right + 16) }}
     >
-      {overflowCount > 0 && (
+      {stack.dropped > 0 && (
         <div
           data-testid="notice-overflow"
           className="pointer-events-auto self-end rounded border border-subtle bg-surface-1 px-2 py-0.5 text-xs text-tertiary"
         >
-          还有 {overflowCount} 条更早提示
+          还有 {stack.dropped} 条更早提示
         </div>
       )}
       {children}
-      {toasts.map((e) => (
+      {stack.toasts.map((e) => (
         <div
           key={e.id}
           data-testid="notice-toast"
@@ -87,6 +103,9 @@ export function NoticeStack({ children }: { children?: React.ReactNode }) {
             onClick={() => dismiss(e.id)}
             className="shrink-0 text-tertiary hover:text-primary"
           >
+            {/* 尺寸 14 对齐仓库密集内联关闭钮多数派惯例（UpgradeNotice /
+                TaskDetailPanel / RoomList 等 6 处 14 vs 2 处 16）；设计系统
+                默认 16 用于独立图标钮（IconButton），不适用此内联密度 */}
             <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
