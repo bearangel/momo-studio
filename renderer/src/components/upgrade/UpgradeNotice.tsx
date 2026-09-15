@@ -1,7 +1,8 @@
 // renderer/src/components/upgrade/UpgradeNotice.tsx
 //
 // P5 Task 2：v1.x → 2.0 旧库升级首启提示。
-// 非模态卡片（fixed 右下角，无遮罩）：
+// 非模态卡片（NoticeStack 条目形态，spec 2026-09-15——右下堆叠由容器锚定、
+// 卡片自宣 pointer-events-auto，无遮罩）：
 //   - 标题「已升级到 Momo Studio 2.0」
 //   - 说明：全新架构，历史数据未迁移；已自动导出会话与 agent 定义
 //   - 导出目录（等宽字体 + user-select-all 可直接选中复制）
@@ -23,7 +24,7 @@ export function UpgradeNotice({ exportDir, onDismiss }: UpgradeNoticeProps) {
   return (
     <div
       data-testid="upgrade-notice"
-      className="fixed right-4 bottom-4 z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
+      className="pointer-events-auto w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <h2 className="text-base font-semibold text-primary">已升级到 Momo Studio 2.0</h2>

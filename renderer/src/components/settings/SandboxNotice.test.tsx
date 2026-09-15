@@ -125,16 +125,16 @@ describe('SandboxNotice（v2.4 Task 9）', () => {
     expect(code.className).toMatch(/select-all/);
   });
 
-  it('是非模态卡片（fixed 定位、非遮罩）', async () => {
+  it('是 NoticeStack 条目形态（无 fixed 定位、非遮罩、可交互）', async () => {
     getStateMock.mockResolvedValue(makeBwrapInfo());
     const { container } = render(<SandboxNotice />);
     await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
     const root = container.firstChild as HTMLElement;
-    // fixed 定位 + 右下角锚点 + 无 inset-0（不是全屏遮罩）——与 UpgradeNotice 同款
-    expect(root.className).toMatch(/fixed/);
-    expect(root.className).toMatch(/right-/);
-    expect(root.className).toMatch(/bottom-/);
+    // 定位职责移交 NoticeStack 容器；条目自宣 pointer-events-auto
+    // （容器 pointer-events-none，不自宣则真实浏览器按钮死点击）——与 UpgradeNotice 同款
+    expect(root.className).not.toMatch(/fixed/);
     expect(root.className).not.toMatch(/inset-0/);
+    expect(root.className).toMatch(/pointer-events-auto/);
   });
 
   it('点击「复制命令」→ clipboard.writeText(installCommand)', async () => {
@@ -504,7 +504,7 @@ describe('SandboxNotice：netOff 拦截卡', () => {
     });
   });
 
-  it('netOff 卡样式与既有卡一致（fixed 右下角 + 非模态）', async () => {
+  it('netOff 卡样式与既有卡一致（NoticeStack 条目形态 + 非模态）', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     act(() => {
       useStreamStore.setState({ netBlockedSeen: true });
@@ -512,9 +512,8 @@ describe('SandboxNotice：netOff 拦截卡', () => {
     const { container } = render(<SandboxNotice />);
     await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
     const root = container.firstChild as HTMLElement;
-    expect(root.className).toMatch(/fixed/);
-    expect(root.className).toMatch(/right-/);
-    expect(root.className).toMatch(/bottom-/);
+    expect(root.className).not.toMatch(/fixed/);
     expect(root.className).not.toMatch(/inset-0/);
+    expect(root.className).toMatch(/pointer-events-auto/);
   });
 });

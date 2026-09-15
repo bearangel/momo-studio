@@ -194,6 +194,40 @@ describe('App 提示分级挂载（spec 2026-09-15 §4.2，M2）', () => {
   });
 });
 
+describe('App 提示分级挂载（spec 2026-09-15 §4.3，M3）', () => {
+  it('三自管卡渲染于 NoticeStack 容器内（Tier B 条目——防回退裸挂载四卡互盖）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    // 三卡同时具备渲染条件：升级标记命中 + 沙箱 bwrap 不可用 + 存在中断任务
+    mockApi.system.getUpgradeNotice.mockResolvedValue({
+      exportDir: '/tmp/upgrade-export-x',
+    });
+    const info = mkSandboxInfo();
+    mockApi.sandbox.getState.mockResolvedValue({
+      ...info,
+      installCommand: 'sudo apt install bubblewrap',
+      state: { ...info.state, available: false, unavailableReason: 'bwrap 未安装' },
+    });
+    mockApi.task.listInterrupted.mockResolvedValue([
+      {
+        taskId: 'T-1',
+        title: '中断任务',
+        status: 'in_progress',
+        agentName: 'coder',
+        journalCount: 2,
+        streamSessionId: 'stream-1',
+      },
+    ]);
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    const stack = screen.getByTestId('notice-stack');
+    // 结构回归锁（spec §6 矩阵 5）：三卡必须同容器堆叠——任何一张裸挂载到
+    // 容器外即回到「四卡同锚互盖」旧债（spec §1.1）
+    expect(stack.contains(await screen.findByTestId('upgrade-notice'))).toBe(true);
+    expect(stack.contains(await screen.findByTestId('sandbox-notice'))).toBe(true);
+    expect(stack.contains(await screen.findByTestId('resume-notice'))).toBe(true);
+  });
+});
+
 describe('App 升级提示集成（P5 Task 2）', () => {
   it('getUpgradeNotice 命中 + 已有 workspace → MainShell + UpgradeNotice 同屏', async () => {
     mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);

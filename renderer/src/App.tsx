@@ -21,6 +21,7 @@ import { ResumeNotice } from './components/task/ResumeNotice';
 import { BrowserTrustNotice } from './components/workspace/BrowserTrustNotice';
 import { BrowserWaitReleasePrompt } from './components/workspace/BrowserWaitReleasePrompt';
 import { CenterPromptLayer } from './components/notices/CenterPromptLayer';
+import { NoticeStack } from './components/notices/NoticeStack';
 import { ipc } from './ipc/client';
 
 export function App() {
@@ -82,13 +83,16 @@ export function App() {
   return (
     <>
       <MainShell />
-      {upgradeExportDir && (
-        <UpgradeNotice exportDir={upgradeExportDir} onDismiss={dismissUpgrade} />
-      )}
-      {/* v2.4 Task 9：沙箱首启提示（自管显隐——不满足条件时组件内部返回 null） */}
-      <SandboxNotice />
-      {/* v2.6.0 Task 6：启动任务恢复卡（自管显隐——boot 现查，无中断任务返回 null） */}
-      <ResumeNotice />
+      {/* Tier B 告知堆叠（安全区右下）：三自管卡 + 死信 toast（NoticeStack 内部订阅）。
+          三卡显隐语义不变：Sandbox / Resume 组件内部自管（不满足条件返回 null）；
+          Upgrade 沿用 upgradeExportDir 条件渲染（P5 Task 2） */}
+      <NoticeStack>
+        <SandboxNotice />
+        <ResumeNotice />
+        {upgradeExportDir && (
+          <UpgradeNotice exportDir={upgradeExportDir} onDismiss={dismissUpgrade} />
+        )}
+      </NoticeStack>
       {/* 提示分级（spec 2026-09-15）：Tier A 阻断确认居中层（信任/释放自管显隐） */}
       <CenterPromptLayer>
         <BrowserTrustNotice />

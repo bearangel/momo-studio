@@ -6,7 +6,9 @@
 //   - netOff 卡：netBlockedSeen（stream.store 实时检测标志）&& !netPromptDismissed
 //   - bwrap 卡：linux && !available && !bwrapPromptDismissed && installCommand 存在
 //   - 授权卡：win32 && executionPolicy === 'Restricted' && !winPolicyPromptDismissed
-// 样式照抄 UpgradeNotice（fixed right-4 bottom-4 非模态卡片 + 语义 token）。
+// NoticeStack 条目形态（spec 2026-09-15）：右下堆叠定位由容器锚定（安全区避让
+// 浏览器侧栏），卡片自身无 fixed 定位；容器 pointer-events-none，条目自宣
+// pointer-events-auto 保证按钮可点。
 import { useEffect, useState } from 'react';
 import { ClipboardCopy, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -94,7 +96,7 @@ export function SandboxNotice() {
   return (
     <div
       data-testid="sandbox-notice"
-      className="fixed right-4 bottom-4 z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
+      className="pointer-events-auto w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <h2 className="text-base font-semibold text-primary">

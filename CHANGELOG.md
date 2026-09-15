@@ -102,6 +102,10 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 - fix: 接管错误文案诚实化——超时出口携带等待秒数与 webfetch 改道指引（原「等待释放后重试」承诺了不存在的等待能力）
 - fix: 释放提示遮挡修复（2026-09-15）——fixed 右下角卡落在浏览器 WebContentsView 占位区 rect 内被页面盖住（OS 合成层高于一切 DOM），改为 BrowserSidebar chrome 列内条幅，构造上无重叠（同类先例：侧栏拖拽手柄 bug 1）
 
+### 提示交互分级统一 `2026-09-15`
+- feat: 阻断类确认居中（信任授权带遮罩 / 释放等待无遮罩，安全区动态避让浏览器侧栏）+ 告知类右下堆叠（NoticeStack，上限 4 + 6s 消散）
+- feat: 死信补渲染——crash 重载/popup 拦截/导航失败三 kind 首次可见；沙箱/升级/恢复三卡迁入堆叠，四卡同位叠放旧债清偿
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。

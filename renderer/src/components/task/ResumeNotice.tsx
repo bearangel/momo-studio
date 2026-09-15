@@ -1,9 +1,10 @@
 // renderer/src/components/task/ResumeNotice.tsx
 //
 // v2.6.0 启动恢复卡（spec §6）：重启后检测到 in_progress / assigned / session_queued
-// 任务时右下角非模态呈现（SandboxNotice 同款基建），boot 现查现示——瞬态卡，无 kv
-// 持久化；全部任务决策完（恢复 / 放弃）即消散。D6：卡片是唯一闸门，检测与决策都
-// 不改任务状态，直到用户点按钮。
+// 任务时经 NoticeStack 右下堆叠呈现（条目形态，spec 2026-09-15——定位由容器锚定，
+// 宽度对齐容器 360px：原 380 会向右溢出安全区锚点 20px），boot 现查现示——瞬态卡，
+// 无 kv 持久化；全部任务决策完（恢复 / 放弃）即消散。D6：卡片是唯一闸门，检测与
+// 决策都不改任务状态，直到用户点按钮。
 //
 // 逐任务行：标题 + agent 名 + 「半程变更 M 处」（journalCount=0 → 「无文件变更」）。
 //   - [恢复] → task.resume(taskId)（in_progress 走断点续跑；assigned/session_queued
@@ -121,7 +122,7 @@ export function ResumeNotice() {
   return (
     <div
       data-testid="resume-notice"
-      className="fixed right-4 bottom-4 z-40 w-[380px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
+      className="pointer-events-auto w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-subtle bg-surface-1 shadow-xl p-4 text-sm text-secondary"
     >
       <div className="flex items-start gap-2 mb-2">
         <History size={16} strokeWidth={1.75} className="text-tertiary shrink-0 mt-0.5" aria-hidden />

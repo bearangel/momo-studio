@@ -4,7 +4,8 @@
 //   - exportDir 为 null → 不渲染（return null）
 //   - exportDir 有值 → 渲染标题 + 说明 + 路径 + 关闭按钮
 //   - 点击关闭按钮 → 调 onDismiss
-//   - 非模态卡片：fixed 右下角，无遮罩（无 fixed inset-0 元素）
+//   - NoticeStack 条目形态（spec 2026-09-15）：无 fixed 定位（容器锚定）、无遮罩、
+//     pointer-events-auto（容器 pointer-events-none，条目不自宣则真实浏览器按钮死点击）
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { UpgradeNotice } from './UpgradeNotice';
@@ -45,18 +46,18 @@ describe('UpgradeNotice（P5 Task 2）', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('是非模态卡片（fixed 定位、非遮罩）', () => {
+  it('是 NoticeStack 条目形态（无 fixed 定位、非遮罩、可交互）', () => {
     const { container } = render(
       <UpgradeNotice exportDir="/tmp/export" onDismiss={() => {}} />,
     );
     const root = container.firstChild as HTMLElement;
-    // fixed 定位类：表明非流式布局，绝对定位到视口
-    expect(root.className).toMatch(/fixed/);
+    // 定位职责移交 NoticeStack 容器（安全区右下锚定）——条目自身不得再 fixed
+    expect(root.className).not.toMatch(/fixed/);
     // 无 inset-0：不是全屏遮罩
     expect(root.className).not.toMatch(/inset-0/);
-    // 右下角（right- / bottom- 锚点）
-    expect(root.className).toMatch(/right-/);
-    expect(root.className).toMatch(/bottom-/);
+    // 容器 pointer-events-none，条目必须自宣 pointer-events-auto（jsdom 不做
+    // hit-testing，此断言是真实浏览器可点击性的唯一回归锁）
+    expect(root.className).toMatch(/pointer-events-auto/);
   });
 
   it('路径展示用等宽字体（font-mono）', () => {
