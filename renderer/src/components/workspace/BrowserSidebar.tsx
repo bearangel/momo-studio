@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Globe, PanelRightClose, PanelRightOpen, ShieldCheck, ShieldOff } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { BrowserState } from '../../ipc/types';
+import { useBrowserSidebarRectStore } from '../../stores/browser-sidebar-rect.store';
 import { Badge } from '../ui/Badge';
 import { EmptyState } from '../ui/EmptyState';
 import { IconButton } from '../ui/IconButton';
@@ -45,6 +46,8 @@ export function BrowserSidebar({ workspaceId }: Props) {
   const [width, setWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
   const [dragging, setDragging] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
+  // 安全区真相源：容器 rect 经下方 report() 写 browser-sidebar-rect store
+  const containerRef = useRef<HTMLDivElement | null>(null);
   // 折叠初始态用户操作标记：读取返回前用户已手动切换 → 晚到的落库值不覆盖
   const collapsedUserTouchedRef = useRef(false);
   // 宽度还原竞速守卫（同上语义）：读取返回前用户已拖拽/键盘调宽 → 晚到的落库值不覆盖
@@ -127,6 +130,11 @@ export function BrowserSidebar({ workspaceId }: Props) {
     if (!el) return;
     const report = (): void => {
       const r = el.getBoundingClientRect();
+      const c = containerRef.current?.getBoundingClientRect();
+      // 安全区真相源（spec 2026-09-15 §4.1）：与占位区上报同一观察者，零新增观察者
+      useBrowserSidebarRectStore
+        .getState()
+        .setRect(c ? { x: c.x, y: c.y, width: c.width, height: c.height } : null);
       // 上报失败无 UI 可呈现——main 有 lastRect 缓存，下一次 resize 自会重报
       void ipc.browser
         .setSidebarBounds({ x: r.x, y: r.y, width: r.width, height: r.height })
@@ -139,6 +147,8 @@ export function BrowserSidebar({ workspaceId }: Props) {
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', report);
+      // 折叠 / 卸载即安全区回全窗口
+      useBrowserSidebarRectStore.getState().setRect(null);
     };
   }, [collapsed]);
 
@@ -151,6 +161,8 @@ export function BrowserSidebar({ workspaceId }: Props) {
       void ipc.browser.setSidebarBounds({ x: 0, y: 0, width: 0, height: 0 }).catch(() => {
         // 卸载竞态（app 关闭中 IPC 已断）——静默即可
       });
+      // 折叠态挂载（report effect 早退未写 rect）/ 真卸载——安全区一律回全窗口
+      useBrowserSidebarRectStore.getState().setRect(null);
     },
     [],
   );
@@ -277,6 +289,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
   if (collapsed) {
     return (
       <div
+        ref={containerRef}
         data-testid="browser-sidebar"
         className="flex w-10 shrink-0 flex-col items-center border-l border-subtle bg-surface-1 py-2"
       >
@@ -291,6 +304,7 @@ export function BrowserSidebar({ workspaceId }: Props) {
 
   return (
     <div
+      ref={containerRef}
       data-testid="browser-sidebar"
       className={`flex shrink-0 ${dragging ? 'select-none' : ''}`}
       style={{ width }}
