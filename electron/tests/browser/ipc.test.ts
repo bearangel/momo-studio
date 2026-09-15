@@ -235,7 +235,6 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
-      collapsed: false,
       expandHint: false,
     };
     hooks.pushState(state);
@@ -268,7 +267,7 @@ describe('browser:state / browser:notice 统一推送', () => {
     });
   });
 
-  it('workspace 激活经真实 manager 链路推出 browser:state——九字段载荷锁（ask 未授 → trusted=false；collapsed 恒 false；expandHint=false）', () => {
+  it('workspace 激活经真实 manager 链路推出 browser:state——八字段载荷锁（ask 未授 → trusted=false；expandHint=false）', () => {
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();
     // toEqual 全量比对 = 字段集锁死（多字段/少字段/改名即刻红，momo-boundary-rules）
@@ -280,13 +279,12 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
-      collapsed: false,
       expandHint: false,
     });
   });
 
-  it('落库 sidebarCollapsed=true 不再投影进激活推送（readSidebarCollapsed 读取链路退役，spec §7.4）', () => {
-    // 旧折叠 IPC 落库残留值——激活推送不再消费（collapsed 恒 false 过渡字段）
+  it('落库 sidebarCollapsed=true 不再投影进激活推送（折叠读取链路退役，spec §7.4 列 inert）', () => {
+    // 旧折叠 IPC 落库残留值——激活推送不消费（main 无折叠语义）
     store.write('ws-1', { sidebarCollapsed: true });
     manager.onWorkspaceActivated('ws-1', '/ws/ws-1');
     const st = lastState();
@@ -298,7 +296,6 @@ describe('browser:state / browser:notice 统一推送', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
-      collapsed: false,
       expandHint: false,
     });
   });
@@ -333,7 +330,6 @@ describe('browser:getState', () => {
       title: '',
       takeover: 'agent',
       trusted: false,
-      collapsed: false,
       expandHint: false,
     });
   });
@@ -551,12 +547,16 @@ describe('归属制通道（2026-09-15）', () => {
     await callIpc('browser:openTab', 'ws-1', 'http://localhost:3000/');
     expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).tabs).toHaveLength(2);
 
+    // 先显式接管再关——初始态本就是 agent，不先置 user 则复位断言恒真（Task 4 审查 Minor）
+    await callIpc('browser:takeover', 'ws-1');
+    expect((await callIpc<BrowserState>('browser:getState', 'ws-1')).takeover).toBe('user');
+
     await expect(callIpc('browser:closeBrowser', 'ws-1')).resolves.toBeUndefined();
     // user 源全局销毁：list 为空 + 两个视图都经 factory.destroy（agent 的 tab 不豁免）
     const st = await callIpc<BrowserState>('browser:getState', 'ws-1');
     expect(st.tabs).toEqual([]);
     expect(factory.destroy).toHaveBeenCalledTimes(2);
-    // 仲裁复位全新起点（spec §6.4）
+    // 仲裁复位全新起点（spec §6.4）——从 user 态复位才有区分度
     expect(st.takeover).toBe('agent');
   });
 });
@@ -784,12 +784,12 @@ describe('browser:getSettings', () => {
     });
   });
 
-  it('写入后读回反映落库值（与 updateSettings 往返闭环）', async () => {
+  it('写入后读回反映落库值（与 updateSettings 往返闭环；sidebarCollapsed 键退役——patch 携带也被丢弃）', async () => {
     await callIpc('browser:updateSettings', 'ws-1', {
       trust: 'always',
       evaluateEnabled: true,
       whitelist: ['Good.COM:443'],
-      sidebarCollapsed: true,
+      sidebarCollapsed: true, // 退役键：PATCH_KEYS 白名单不含——静默丢弃（写入面下架，spec §7.4 列 inert）
       sidebarWidth: 420,
     });
     const s = await callIpc<Record<string, unknown>>('browser:getSettings', 'ws-1');
@@ -798,7 +798,7 @@ describe('browser:getSettings', () => {
       evaluateEnabled: true,
       blacklist: [],
       whitelist: ['good.com'], // 归一化：小写 + 去端口（真 store 写侧行为）
-      sidebarCollapsed: true,
+      sidebarCollapsed: false, // 读面保留字段（store 形状不变），写面退役 → 恒默认
       sidebarWidth: 420,
       agentWaitMs: 120_000, // 未写 → 默认（终审 I1：120s）
       idleAutoReleaseMs: 90_000, // 未写 → 默认

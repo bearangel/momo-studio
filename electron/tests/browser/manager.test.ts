@@ -151,7 +151,6 @@ interface Sut {
 function mkManager(
   over: Partial<WorkspaceBrowserSettings> = {},
   opts?: {
-    readSidebarCollapsed?: (wsId: string) => boolean;
     readAgentWaitMs?: (wsId: string) => number;
   },
 ): Sut {
@@ -160,7 +159,6 @@ function mkManager(
   const pushState = vi.fn();
   const pushNotice = vi.fn();
   const manager = new BrowserManager(factory, policy, { pushState, pushNotice }, {
-    readSidebarCollapsed: opts?.readSidebarCollapsed,
     readAgentWaitMs: opts?.readAgentWaitMs,
   });
   return { manager, factory, policy, pushState, pushNotice };
@@ -615,22 +613,20 @@ describe('workspace 切换', () => {
     expect(lastState(pushState)?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/']);
   });
 
-  // ---- 折叠链路退役锁（spec 2026-09-15 §7.1/§7.4）：激活不再投影落库折叠态 ----
-  // 读取器衬底保留可变变量仿真旧注入：证明注入仍在 opts 里也不读。
+  // ---- 折叠链路退役锁（spec 2026-09-15 §7.1/§7.4）：激活不投影落库折叠态 ----
+  // opts 读取器字段已删（Task 7 终清）——本组锁「激活无折叠分支」的行为面。
 
-  it('激活无视 readSidebarCollapsed 注入（落库折叠不再投影）→ 照常按 stash 重建 + collapsed 恒 false', async () => {
-    const persisted = true;
-    const { manager, pushState } = mkManager({}, { readSidebarCollapsed: () => persisted });
+  it('激活不投影落库折叠（折叠链路退役）→ 照常按 stash 重建 + 往返不丢 tab', async () => {
+    const { manager, pushState } = mkManager();
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     await manager.navigate('ws1', 'http://localhost:5173/');
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     manager.onWorkspaceDeactivated('ws1');
     pushState.mockClear();
 
-    // 落库 true：激活照常重建（旧语义：激活即折叠、不建视图、推送 collapsed=true）
+    // 激活照常重建（旧语义：激活即折叠、不建视图、推送 collapsed=true）
     manager.onWorkspaceActivated('ws1', '/ws/ws1');
     const st = lastState(pushState);
-    expect(st?.collapsed).toBe(false); // @deprecated 过渡字段恒 false（Task 7 删）
     expect(st?.tabs.map((t) => t.url)).toEqual(['http://localhost:5173/', 'http://localhost:3000/']);
     expect(st?.current).toBe(1);
 

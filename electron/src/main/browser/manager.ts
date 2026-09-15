@@ -167,12 +167,6 @@ export interface BrowserManagerOpts {
    */
   screenshotDir?: string;
   /**
-   * @deprecated 归属制过渡（Task 3 退役）：不再被消费——激活不投影落库折叠态
-   * （spec 2026-09-15 §7.4 落库折叠真相源随可见性会话化失去意义）。字段保留
-   * 仅为构造 opts 形状兼容（旧注入静默忽略），Task 7 统一删除。
-   */
-  readSidebarCollapsed?: (wsId: string) => boolean;
-  /**
    * agent 驻留等待时长读取器（毫秒；settings 的 browserAgentWaitMs 投影，boot 接线）。
    * 缺省恒 DEFAULT_AGENT_WAIT_MS；返回 0 = 关闭等待（user 态立即失败，v1 fail-fast）。
    * 每 tick 重读——运行中改设置即时生效，无需重启。
@@ -289,7 +283,6 @@ export class BrowserManager {
         current: 0,
         url: '',
         title: '',
-        collapsed: false,
         takeover: 'agent',
         trusted: this.isTrusted(wsId),
         expandHint: false,
@@ -836,7 +829,6 @@ export class BrowserManager {
       title: cur?.title ?? '',
       takeover: ws.takeover,
       trusted: this.isTrusted(ws.workspaceId),
-      collapsed: false,
       expandHint,
     };
   }

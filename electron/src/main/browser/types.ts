@@ -24,8 +24,6 @@ export interface BrowserState {
   takeover: 'agent' | 'user';
   /** 信任卡视角：浏览器工具当前是否放行（trust=always，或 ask 且本会话已授权；deny / ask 未授权为 false） */
   trusted: boolean;
-  /** @deprecated 归属制过渡：恒 false（Task 3 起收起 = 隐藏不销毁，main 无折叠语义）——Task 5 前 renderer 旧代码仍读，Task 7 统一删 */
-  collapsed: boolean;
   /** 本帧推送由「活跃会话的 agent 导航」触发（spec §7.3）——renderer 见 true 且本会话隐藏则展开侧栏 */
   expandHint: boolean;
 }

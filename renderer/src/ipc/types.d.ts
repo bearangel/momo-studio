@@ -1103,13 +1103,13 @@ export interface BrowserDevServer {
   url: string;
 }
 
-/** workspace 级浏览器设置 patch（browser:updateSettings 载荷；主进程侧净化后落库） */
+/** workspace 级浏览器设置 patch（browser:updateSettings 载荷；主进程侧净化后落库）。
+ *  sidebarCollapsed 已退役（spec 2026-09-15 §7.4 列 inert）——patch 不再接受该键。 */
 export interface BrowserSettingsPatch {
   trust?: 'ask' | 'always' | 'deny';
   evaluateEnabled?: boolean;
   blacklist?: string[];
   whitelist?: string[];
-  sidebarCollapsed?: boolean;
   sidebarWidth?: number;
 }
 

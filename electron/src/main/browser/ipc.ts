@@ -116,14 +116,14 @@ function asSidebarRect(value: unknown): SidebarRect {
 // updateSettings 净化（T6 review Important，硬性项）
 // =================================================================================
 
-/** 允许写入的设置键（与 BrowserSettings 八字段一一对应，未知键一律丢弃）。
+/** 允许写入的设置键（BrowserSettings 八字段去掉退役的 sidebarCollapsed——该列
+ *  已 inert，spec 2026-09-15 §7.4 停读停写；未知键一律丢弃）。
  *  数字键集合独立抽出——warn 文案不再硬编码单键名（FIX ROUND 防止后续加键改文案漂移）。 */
 const PATCH_KEYS = [
   'trust',
   'evaluateEnabled',
   'blacklist',
   'whitelist',
-  'sidebarCollapsed',
   'sidebarWidth',
   'agentWaitMs',
   'idleAutoReleaseMs',
@@ -167,7 +167,7 @@ function sanitizeSettingsPatch(raw: unknown): BrowserSettingsPatch {
       patch.trust = value as BrowserSettingsPatch['trust']; // 枚举校验由 store 兜底
       continue;
     }
-    if (key === 'evaluateEnabled' || key === 'sidebarCollapsed') {
+    if (key === 'evaluateEnabled') {
       if (typeof value !== 'boolean') {
         logger.warn('browser:updateSettings 布尔字段类型不符，丢弃该键', { key });
         continue;

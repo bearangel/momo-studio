@@ -5,7 +5,7 @@
 //   - 域名黑白名单 textarea（每行一条；T1 裁定：白名单非空时仅白名单放行，
 //     黑名单仅当白名单为空时生效——帮助文案明示）
 //   - browser_evaluate 开关（默认关 + 警示文案「开启后 agent 可执行任意页面 JS」）
-//   - 侧栏默认宽度 + 默认折叠
+//   - 侧栏默认宽度（「默认折叠」勾选已随折叠语义退役下架——spec 2026-09-15 §7.4）
 //   - 「清除浏览数据」（Dialog confirm 防误触 → clearBrowsingData 清 partition）
 // 读写经 ipc.browser.getSettings / updateSettings（结构化 {ok,error} 返回——
 // 失败呈现错误行，保存成功才翻转本地态）。名单/宽度走本地编辑、blur 提交
@@ -210,15 +210,6 @@ export function BrowserSettings({ workspaceId }: Props) {
           />
           <span className="text-xs text-tertiary">px</span>
         </div>
-        <label className="flex items-center gap-2 text-sm text-secondary">
-          <input
-            type="checkbox"
-            checked={settings.sidebarCollapsed}
-            onChange={(e) => void save({ sidebarCollapsed: e.target.checked })}
-            aria-label="默认折叠"
-          />
-          <span>默认折叠（重启后侧栏以折叠态挂载）</span>
-        </label>
       </div>
 
       {error !== null && (

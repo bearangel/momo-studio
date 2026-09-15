@@ -2,12 +2,13 @@
 //
 // 设置页「浏览器」分类测试（v2.7 Task 9，spec §6.2）：
 //   - 挂载调 getSettings(workspaceId)，各控件按落库值渲染（信任单选 / 双名单
-//     textarea / evaluate 开关 / 侧栏宽度 / 默认折叠）
+//     textarea / evaluate 开关 / 侧栏宽度）
 //   - 信任级别单选 → updateSettings({trust})；evaluate 开关 → {evaluateEnabled}
-//     （警示文案在位）；默认折叠 → {sidebarCollapsed}
+//     （警示文案在位）
 //   - 名单 textarea 按行拆分（trim / 丢空行）blur 提交 → updateSettings({blacklist|
 //     whitelist})；白名单优先语义帮助文案在位（T1 裁定）
 //   - 侧栏宽度 blur 提交 → {sidebarWidth}；非法输入不提交且回显原值
+//   - 「默认折叠」勾选已下架（折叠语义退役，spec 2026-09-15 §7.4）——控件不渲染
 //   - updateSettings {ok:false} → 错误行呈现（不静默吞）
 //   - 「清除浏览数据」Dialog confirm 防误触：确认 → clearBrowsingData；取消 → 不调
 // mock 形态照抄 SandboxNotice.test.tsx（window.api 桩 + ipc Proxy 透传）。
@@ -72,7 +73,8 @@ describe('BrowserSettings（v2.7 Task 9）', () => {
     expect(screen.getByLabelText('域名白名单')).toHaveValue('good.com');
     expect(screen.getByLabelText(/允许 browser_evaluate/)).toBeChecked();
     expect(screen.getByLabelText('侧栏默认宽度')).toHaveValue(420);
-    expect(screen.getByLabelText('默认折叠')).toBeChecked();
+    // 默认折叠勾选已下架：落库残留 true 也不渲染控件（读面容错，写面退役）
+    expect(screen.queryByLabelText('默认折叠')).not.toBeInTheDocument();
   });
 
   it('信任级别切「永久允许」→ updateSettings(w1, {trust:always}) 且本地选中态更新', async () => {
@@ -146,13 +148,12 @@ describe('BrowserSettings（v2.7 Task 9）', () => {
     await waitFor(() => expect(input).toHaveValue(420));
   });
 
-  it('默认折叠勾选 → updateSettings(w1, {sidebarCollapsed:true})', async () => {
+  it('侧栏「默认折叠」勾选已下架（折叠语义退役，spec 2026-09-15 §7.4 停写）→ 控件不渲染、无 sidebarCollapsed 写调用', async () => {
     render(<BrowserSettings workspaceId="w1" />);
     await waitFor(() => expect(getSettingsMock).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByLabelText('默认折叠'));
-    await waitFor(() =>
-      expect(updateSettingsMock).toHaveBeenCalledWith('w1', { sidebarCollapsed: true }),
-    );
+    expect(screen.queryByLabelText('默认折叠')).not.toBeInTheDocument();
+    // 侧栏区仅剩宽度控件——设置页不存在任何折叠写入路径
+    expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 
   it('updateSettings 返回 {ok:false} → 错误行呈现（不静默吞）', async () => {

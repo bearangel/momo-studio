@@ -32,7 +32,7 @@ interface Fixture {
   views: ManagedView[];
 }
 
-function mk(readCollapsed = false): Fixture {
+function mk(): Fixture {
   const views: ManagedView[] = [];
   const factory: ViewFactory = { create: () => { const v = makeView(); views.push(v); return v; }, destroy: vi.fn(), clearData: vi.fn(async () => {}) };
   const states: Fixture['states'] = [];
@@ -40,7 +40,6 @@ function mk(readCollapsed = false): Fixture {
     factory,
     { assertUrl: (_ws: string, u: string) => u, isAllowed: () => true, assertEvaluate: () => {}, setWorkspaceRoot: vi.fn() } as never,
     { pushState: (s) => states.push({ expandHint: s.expandHint, current: s.current, tabs: s.tabs }), pushNotice: vi.fn() },
-    readCollapsed ? { readSidebarCollapsed: () => true } : undefined,
   );
   return { manager, states, views };
 }
@@ -95,16 +94,6 @@ describe('自动展开规则（spec §7.3）', () => {
 });
 
 describe('折叠链路退役（spec §7.1/§7.4）', () => {
-  it('启动即「折叠」（readSidebarCollapsed 兼容注入被无视）→ agent 导航直接建专属 tab 且 expandHint 按会话判定', async () => {
-    // readSidebarCollapsed 注入仍在构造 opts 里也不读——激活不投影折叠态
-    const f = mk(true);
-    f.manager.onWorkspaceActivated('w1', '/tmp');
-    f.manager.setActiveSession('sess-1');
-    const r = await f.manager.navigate('w1', 'https://a.com', A);
-    expect(r.url).toBe('https://a.com');
-    expect(f.states[f.states.length - 1]!.tabs).toHaveLength(1);
-  });
-
   it('跨 ws 切换保留 tab 归属（TabStash.owners）', async () => {
     const f = mk();
     f.manager.onWorkspaceActivated('w1', '/tmp');

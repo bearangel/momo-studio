@@ -10,8 +10,9 @@
 //   - 用户点「知道了」→ 调 dismissUpgradeNotice + 提示消失
 //   - getUpgradeNotice 返回 null → 无提示（既有分支不变）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { Workspace } from './ipc/types';
+import { useSessionStore } from './stores/session.store';
 
 // MainShell 桩：分支断言只关心是否进入主界面，不关心其内部加载逻辑
 vi.mock('./routes/MainShell', () => ({
@@ -288,5 +289,30 @@ describe('App 升级提示集成（P5 Task 2）', () => {
     // 等下一拍确保无二次调用
     await new Promise((r) => setTimeout(r, 10));
     expect(mockApi.system.getUpgradeNotice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('App 活跃会话上报（归属制 spec 2026-09-15 §5.4）', () => {
+  it('挂载首报当前 activeSessionId + 变更后重报（null 安全缺省 → 字符串会话）', async () => {
+    mockApi.workspace.list.mockResolvedValue([mkWs('w1')]);
+    const report = mockApi.browser.setActiveSession;
+    report.mockClear();
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null });
+    });
+
+    render(<App />);
+    expect(await screen.findByTestId('main-shell')).toBeInTheDocument();
+    // 首报：启动即上报（null = 非会话视图，自动展开安全缺省输入）
+    await waitFor(() => expect(report).toHaveBeenCalledWith(null));
+
+    // 变更重报：effect 依赖 activeSessionId——切会话后再次上报新值
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess-1' });
+    });
+    await waitFor(() => expect(report).toHaveBeenCalledWith('sess-1'));
+    // 调用序：首报 null 在前，重报 'sess-1' 在后（无中间乱序调用）
+    expect(report.mock.calls.at(-2)).toEqual([null]);
+    expect(report.mock.calls.at(-1)).toEqual(['sess-1']);
   });
 });
