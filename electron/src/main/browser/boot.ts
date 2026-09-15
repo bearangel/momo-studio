@@ -4,7 +4,7 @@
 //
 // index.ts boot 链的浏览器段收口：runMigrations 后、窗口创建前调用
 // assembleBrowserSubsystem（manager 构造 + initBrowserTools + 初始激活可先行），
-// 窗口创建后 attachToWindow（推送面定标 + 15 通道注册），before-quit 经
+// 窗口创建后 attachToWindow（推送面定标 + 16 通道注册），before-quit 经
 // bindLifecycle 注册 disposeAll。
 //
 // 本模块零 electron import——Electron 边界（视图工厂 / ipcMain / webContents /

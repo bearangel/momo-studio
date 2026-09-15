@@ -114,7 +114,7 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 - **自动展开规则**：`browser:setActiveSession` 上报活跃会话（`App.tsx` 顶层 effect）；manager `expandHint` 仅活跃会话的 agent 导航触发，非活跃/null 安全缺省永不动可见 tab
 - **关闭确认卡**：`browser:closeBrowser` 用户路径遇 agent 活 tab 弹居中确认卡（Tier A，`BrowserCloseConfirmCard`）——强制关闭走 user 源全局销毁路径；agent 工具 `browser_close` 不弹卡（其作用域已只清自己集合）
 - **协议层**：线协议 12 op 元组尾部恒携 `BrowserOpCtx = { ownerId, sessionId }`（op-router 信封校验 + 元数上限表双锁 `source='user'` 走私路径）；renderer `BrowserSettings` 读面保留 `sidebarCollapsed`（store 形状不变），写面（`browser:updateSettings` `PATCH_KEYS` + 设置页「默认折叠」勾选 UI）下架
-- **IPC 通道面**：16 → 17 通道（新增 `browser:setSidebarVisible` / `browser:setActiveSession` / `browser:closeBrowser` user 源）；`browser:setSidebarCollapsed` 退役
+- **IPC 通道面**：14 → 16 通道（新增 `browser:setSidebarVisible` / `browser:setActiveSession` / `browser:closeBrowser` user 源）；`browser:setSidebarCollapsed` 退役
 - **回归锁矩阵**：`tests/browser/{ipc,manager,manager-hide-expand,manager-ownership,op-ctx-threading,boot-wiring}.test.ts` + `renderer/src/components/workspace/BrowserSidebar.test.tsx` + `renderer/src/App.test.tsx`（活跃会话上报首报+变更重报）；11 commits 全量 typecheck/test 零错误（Task 7 收尾清扫 + 变异验证：`closeBrowser` 复位行摘除→接管区分度断言红；`App.tsx` 上报 effect 摘除→重报断言红）
 
 ## [2.0.0] — 2026-09 Released

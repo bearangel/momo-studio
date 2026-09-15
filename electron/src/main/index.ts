@@ -166,7 +166,7 @@ if (!app.requestSingleInstanceLock()) {
 
       // v2.7：视图叠加接线——create/destroy 时 addChildView/removeChildView 到主窗口
       // contentView（占位区 rect 由 renderer 上报 → manager.setBounds）；
-      // 推送面/IPC invoke 面定标到主窗口 webContents（15 通道注册）；
+      // 推送面/IPC invoke 面定标到主窗口 webContents（16 通道注册）；
       // before-quit → disposeAll 销毁活跃视图（partition 数据落盘）
       browserBoot.factory.setMountTarget(win.contentView);
       browserBoot.attachToWindow(ipcMain, win.webContents);
