@@ -3,7 +3,7 @@
 // 归属制身份透传契约锁（spec §5.1/§5.2）：agentInstanceId → BrowserOpCtx →
 // 桥 args 尾参 → 主路由提取 → 真实 manager 收到。三段各自独立断言。
 import { describe, it, expect, vi } from 'vitest';
-import { createBrowserToolsIpcBridge, handleBrowserOpResult } from '../../src/main/agent/tools/browser-ipc-bridge';
+import { createBrowserToolsIpcBridge } from '../../src/main/agent/tools/browser-ipc-bridge';
 import { routeBrowserOp, initBrowserOpRouter, __resetBrowserOpRouterForTest } from '../../src/main/browser/op-router';
 import type { BrowserManagerPort, BrowserPolicyPort } from '../../src/main/agent/tools/browser-tools';
 import type { BrowserOpOutcome } from '../../src/main/browser/op-protocol';
