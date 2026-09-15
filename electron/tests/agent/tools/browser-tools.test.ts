@@ -79,6 +79,9 @@ const SAMPLE_ARGS: Record<BrowserToolName, Record<string, unknown>> = {
   browser_close: {},
 };
 
+/** 归属制 ctx 尾参断言值：fixture 无 agentInstanceId → 归一 'user'；sessionId 即 roomId */
+const OP_CTX = { ownerId: 'user', sessionId: 'room-1' };
+
 /** manager mock——成员类型收窄为 vitest Mock（可断言调用），接口 extends 保证签名与 T2 真实一致 */
 interface ManagerMock extends BrowserManagerPort {
   navigate: Mock;
@@ -270,27 +273,27 @@ describe('execute 路由透传', () => {
   it('browser_navigate → manager.navigate(wsId, url)，结果含最终 URL 与标题', async () => {
     const result = await tools.execute('browser_navigate', { url: 'https://a.dev' }, ctx);
     expect(managerMock.navigate).toHaveBeenCalledTimes(1);
-    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', 'https://a.dev');
+    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', 'https://a.dev', OP_CTX);
     expect(result).toContain('https://a.dev/');
     expect(result).toContain('A 页面');
   });
 
   it('browser_snapshot → manager.snapshot(wsId)，a11y 文本原样返回', async () => {
     const result = await tools.execute('browser_snapshot', {}, ctx);
-    expect(managerMock.snapshot).toHaveBeenCalledWith('ws1');
+    expect(managerMock.snapshot).toHaveBeenCalledWith('ws1', OP_CTX);
     expect(result).toContain('button');
     expect(result).toContain('aria/');
   });
 
   it('browser_screenshot 无 filename → manager.screenshot(wsId, undefined)，结果含保存路径', async () => {
     const result = await tools.execute('browser_screenshot', {}, ctx);
-    expect(managerMock.screenshot).toHaveBeenCalledWith('ws1', undefined);
+    expect(managerMock.screenshot).toHaveBeenCalledWith('ws1', undefined, OP_CTX);
     expect(result).toContain('/tmp/momo-browser-shots/ws1/shot.png');
   });
 
   it('browser_click → manager.click(wsId, selector)', async () => {
     await tools.execute('browser_click', { selector: '#btn' }, ctx);
-    expect(managerMock.click).toHaveBeenCalledWith('ws1', '#btn');
+    expect(managerMock.click).toHaveBeenCalledWith('ws1', '#btn', OP_CTX);
   });
 
   it('browser_type submit=true → manager.type 第四参透传 true，结果注明已提交', async () => {
@@ -299,66 +302,66 @@ describe('execute 路由透传', () => {
       { selector: '#q', text: 'momo', submit: true },
       ctx,
     );
-    expect(managerMock.type).toHaveBeenCalledWith('ws1', '#q', 'momo', true);
+    expect(managerMock.type).toHaveBeenCalledWith('ws1', '#q', 'momo', true, OP_CTX);
     expect(result).toContain('提交');
   });
 
   it('browser_type 缺省 submit → manager.type 第四参 undefined', async () => {
     await tools.execute('browser_type', { selector: '#q', text: 'momo' }, ctx);
-    expect(managerMock.type).toHaveBeenCalledWith('ws1', '#q', 'momo', undefined);
+    expect(managerMock.type).toHaveBeenCalledWith('ws1', '#q', 'momo', undefined, OP_CTX);
   });
 
   it('browser_press_key → manager.pressKey(wsId, key)', async () => {
     await tools.execute('browser_press_key', { key: 'PageDown' }, ctx);
-    expect(managerMock.pressKey).toHaveBeenCalledWith('ws1', 'PageDown');
+    expect(managerMock.pressKey).toHaveBeenCalledWith('ws1', 'PageDown', OP_CTX);
   });
 
   it('browser_hover → manager.hover(wsId, selector)', async () => {
     await tools.execute('browser_hover', { selector: 'text=菜单' }, ctx);
-    expect(managerMock.hover).toHaveBeenCalledWith('ws1', 'text=菜单');
+    expect(managerMock.hover).toHaveBeenCalledWith('ws1', 'text=菜单', OP_CTX);
   });
 
   it('browser_scroll 缺省 amount → manager.scroll 第三参 undefined（manager 侧默认 3）', async () => {
     await tools.execute('browser_scroll', { direction: 'down' }, ctx);
-    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', undefined);
+    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', undefined, OP_CTX);
   });
 
   it('browser_scroll 显式 amount → 原样透传', async () => {
     await tools.execute('browser_scroll', { direction: 'up', amount: 5 }, ctx);
-    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'up', 5);
+    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'up', 5, OP_CTX);
   });
 
   it('browser_evaluate → manager.evaluate(wsId, expression)，结果 JSON 序列化', async () => {
     const result = await tools.execute('browser_evaluate', { expression: 'document.title' }, ctx);
-    expect(managerMock.evaluate).toHaveBeenCalledWith('ws1', 'document.title');
+    expect(managerMock.evaluate).toHaveBeenCalledWith('ws1', 'document.title', OP_CTX);
     expect(result).toContain('"n"');
     expect(result).toContain('1');
   });
 
   it('browser_console_messages → manager.consoleMessages(wsId)，逐条返回', async () => {
     const result = await tools.execute('browser_console_messages', {}, ctx);
-    expect(managerMock.consoleMessages).toHaveBeenCalledWith('ws1');
+    expect(managerMock.consoleMessages).toHaveBeenCalledWith('ws1', OP_CTX);
     expect(result).toContain('[info] hello');
     expect(result).toContain('[error] boom');
   });
 
   it('browser_tabs list → manager.tabsAction(wsId, "list", undefined, undefined)，结果含 tab 行', async () => {
     const result = await tools.execute('browser_tabs', { action: 'list' }, ctx);
-    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'list', undefined, undefined);
+    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'list', undefined, undefined, undefined, OP_CTX);
     expect(result).toContain('A 页面');
     expect(result).toContain('https://a.dev/');
   });
 
   it('browser_tabs open 携带 url / switch 携带 index → 透传', async () => {
     await tools.execute('browser_tabs', { action: 'open', url: 'https://b.dev' }, ctx);
-    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'open', undefined, 'https://b.dev');
+    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'open', undefined, 'https://b.dev', undefined, OP_CTX);
     await tools.execute('browser_tabs', { action: 'switch', index: 1 }, ctx);
-    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'switch', 1, undefined);
+    expect(managerMock.tabsAction).toHaveBeenCalledWith('ws1', 'switch', 1, undefined, undefined, OP_CTX);
   });
 
   it('browser_close → manager.closeBrowser(wsId)', async () => {
     const result = await tools.execute('browser_close', {}, ctx);
-    expect(managerMock.closeBrowser).toHaveBeenCalledWith('ws1');
+    expect(managerMock.closeBrowser).toHaveBeenCalledWith('ws1', undefined, OP_CTX);
     expect(typeof result).toBe('string');
     expect(result.length).toBeGreaterThan(0);
   });
@@ -366,8 +369,8 @@ describe('execute 路由透传', () => {
   it('browser_close 后 browser_navigate 仍直接透传 manager（路由层无缓存状态，懒重建由 T2 锁定）', async () => {
     await tools.execute('browser_close', {}, ctx);
     await tools.execute('browser_navigate', { url: 'https://a.dev' }, ctx);
-    expect(managerMock.closeBrowser).toHaveBeenCalledWith('ws1');
-    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', 'https://a.dev');
+    expect(managerMock.closeBrowser).toHaveBeenCalledWith('ws1', undefined, OP_CTX);
+    expect(managerMock.navigate).toHaveBeenCalledWith('ws1', 'https://a.dev', OP_CTX);
     expect(managerMock.closeBrowser.mock.invocationCallOrder[0]!).toBeLessThan(
       managerMock.navigate.mock.invocationCallOrder[0]!,
     );
@@ -468,7 +471,7 @@ describe('screenshot filename 清洗', () => {
 
   it.each(cases)('filename %j → manager 收到 %j', async (input, expected) => {
     await tools.execute('browser_screenshot', { filename: input }, ctx);
-    expect(managerMock.screenshot).toHaveBeenCalledWith('ws1', expected);
+    expect(managerMock.screenshot).toHaveBeenCalledWith('ws1', expected, OP_CTX);
   });
 
   it('filename 非字符串 → 参数错误', async () => {
@@ -486,12 +489,12 @@ describe('screenshot filename 清洗', () => {
 describe('scroll amount 校验与钳制', () => {
   it('超过上限 20 → 钳制到 20', async () => {
     await tools.execute('browser_scroll', { direction: 'down', amount: 25 }, ctx);
-    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', 20);
+    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', 20, OP_CTX);
   });
 
   it('下界 1 合法透传', async () => {
     await tools.execute('browser_scroll', { direction: 'down', amount: 1 }, ctx);
-    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', 1);
+    expect(managerMock.scroll).toHaveBeenCalledWith('ws1', 'down', 1, OP_CTX);
   });
 
   it.each([0, -3, 2.5, '3', null])('非法值 %j → 报错且 manager 不被调', async (bad) => {

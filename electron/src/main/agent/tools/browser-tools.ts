@@ -28,6 +28,7 @@ import type { ToolContext, ToolModule } from './types';
 import { parseStringArg } from './shared/arg-parse';
 import { SCROLL_DEFAULT_AMOUNT } from '../../browser/actions';
 import type { TabInfo } from '../../browser/types';
+import type { BrowserOpCtx } from '../../browser/op-protocol';
 
 // =================================================================================
 // 注入端口（结构性子集——单测用普通对象满足，真实实现结构性兼容）
@@ -45,18 +46,20 @@ export interface BrowserPolicyPort {
   assertEvaluate(wsId: string): void | Promise<void>;
 }
 
-/** BrowserTools 消费的浏览器编排面（T2 BrowserManager 的结构性子集——12 工具一一对应） */
+/** BrowserTools 消费的浏览器编排面（T2 BrowserManager 的结构性子集——12 工具一一对应）。
+ *  归属制（spec 2026-09-15 §5.2）：全部方法增可选尾参 ctx（BrowserOpCtx 身份）；
+ *  可选——真实 manager 少尾参仍结构性满足（Task 1 只通线协议，manager 消费在 Task 2）。 */
 export interface BrowserManagerPort {
-  navigate(wsId: string, rawUrl: string): Promise<{ url: string; title: string }>;
-  snapshot(wsId: string): Promise<string>;
-  screenshot(wsId: string, filename?: string): Promise<{ path: string }>;
-  click(wsId: string, selector: string): Promise<void>;
-  type(wsId: string, selector: string, text: string, submit?: boolean): Promise<void>;
-  pressKey(wsId: string, key: string): Promise<void>;
-  hover(wsId: string, selector: string): Promise<void>;
-  scroll(wsId: string, direction: 'up' | 'down', amount?: number): Promise<void>;
-  evaluate(wsId: string, expression: string): Promise<unknown>;
-  consoleMessages(wsId: string): Promise<string[]>;
+  navigate(wsId: string, rawUrl: string, ctx?: BrowserOpCtx): Promise<{ url: string; title: string }>;
+  snapshot(wsId: string, ctx?: BrowserOpCtx): Promise<string>;
+  screenshot(wsId: string, filename?: string, ctx?: BrowserOpCtx): Promise<{ path: string }>;
+  click(wsId: string, selector: string, ctx?: BrowserOpCtx): Promise<void>;
+  type(wsId: string, selector: string, text: string, submit?: boolean, ctx?: BrowserOpCtx): Promise<void>;
+  pressKey(wsId: string, key: string, ctx?: BrowserOpCtx): Promise<void>;
+  hover(wsId: string, selector: string, ctx?: BrowserOpCtx): Promise<void>;
+  scroll(wsId: string, direction: 'up' | 'down', amount?: number, ctx?: BrowserOpCtx): Promise<void>;
+  evaluate(wsId: string, expression: string, ctx?: BrowserOpCtx): Promise<unknown>;
+  consoleMessages(wsId: string, ctx?: BrowserOpCtx): Promise<string[]>;
   tabsAction(
     wsId: string,
     action: 'list' | 'open' | 'close' | 'switch',
@@ -64,9 +67,10 @@ export interface BrowserManagerPort {
     url?: string,
     /** 调用方甄别（G4）：工具路径恒用缺省 'agent'（user 态抛 BrowserTakenOverError）；'user' 仅 IPC 用户路径使用 */
     source?: 'agent' | 'user',
+    ctx?: BrowserOpCtx,
   ): Promise<TabInfo[]>;
   /** source 同 tabsAction——browser_close 工具恒用缺省 'agent' */
-  closeBrowser(wsId: string, source?: 'agent' | 'user'): Promise<void>;
+  closeBrowser(wsId: string, source?: 'agent' | 'user', ctx?: BrowserOpCtx): Promise<void>;
 }
 
 // =================================================================================
@@ -342,6 +346,9 @@ export class BrowserTools implements ToolModule {
 
     const wsId = ctx.workspaceId;
 
+    // 归属身份（spec §5.1）：agent 实例归一 'user'；roomId 即 session id（v2 语义）
+    const opCtx: BrowserOpCtx = { ownerId: ctx.agentInstanceId ?? 'user', sessionId: ctx.roomId };
+
     // 信任门（spec §5.2）：所有 browser_* 工具统一入口——未信任时 manager 零触碰，
     // 错误（含右下角信任卡指引）原样穿透给 LLM。await 消费：主进程同步实现
     // await 无感，子进程桥实现（IPC 往返）的错误由此可靠穿透（见端口面注释）。
@@ -352,64 +359,65 @@ export class BrowserTools implements ToolModule {
     switch (name) {
       case 'browser_navigate': {
         const url = parseStringArg(args.url, 'url');
-        const r = await manager.navigate(wsId, url);
+        const r = await manager.navigate(wsId, url, opCtx);
         return `已导航到 ${r.url}\n页面标题: ${r.title}`;
       }
       case 'browser_snapshot': {
-        return manager.snapshot(wsId);
+        return manager.snapshot(wsId, opCtx);
       }
       case 'browser_screenshot': {
         const filename = sanitizeShotFilename(args.filename);
-        const r = await manager.screenshot(wsId, filename);
+        const r = await manager.screenshot(wsId, filename, opCtx);
         return `截图已保存: ${r.path}`;
       }
       case 'browser_click': {
         const selector = parseStringArg(args.selector, 'selector');
-        await manager.click(wsId, selector);
+        await manager.click(wsId, selector, opCtx);
         return `已点击元素（selector="${selector}"）`;
       }
       case 'browser_type': {
         const selector = parseStringArg(args.selector, 'selector');
         const text = parseStringArg(args.text, 'text');
         const submit = typeof args.submit === 'boolean' ? args.submit : undefined;
-        await manager.type(wsId, selector, text, submit);
+        await manager.type(wsId, selector, text, submit, opCtx);
         return `已在元素（selector="${selector}"）输入文本${submit === true ? '并回车提交' : ''}`;
       }
       case 'browser_press_key': {
         const key = parseStringArg(args.key, 'key');
-        await manager.pressKey(wsId, key);
+        await manager.pressKey(wsId, key, opCtx);
         return `已按下按键 ${key}`;
       }
       case 'browser_hover': {
         const selector = parseStringArg(args.selector, 'selector');
-        await manager.hover(wsId, selector);
+        await manager.hover(wsId, selector, opCtx);
         return `已悬停元素（selector="${selector}"）`;
       }
       case 'browser_scroll': {
         const direction = parseScrollDirection(args.direction);
         const amount = parseScrollAmount(args.amount);
-        await manager.scroll(wsId, direction, amount);
+        await manager.scroll(wsId, direction, amount, opCtx);
         return `已向${direction === 'down' ? '下' : '上'}滚动 ${amount ?? SCROLL_DEFAULT_AMOUNT} 格`;
       }
       case 'browser_evaluate': {
         const expression = parseStringArg(args.expression, 'expression');
-        const result = await manager.evaluate(wsId, expression);
+        const result = await manager.evaluate(wsId, expression, opCtx);
         return serializeEvalResult(result);
       }
       case 'browser_console_messages': {
-        const lines = await manager.consoleMessages(wsId);
+        const lines = await manager.consoleMessages(wsId, opCtx);
         return lines.length > 0 ? lines.join('\n') : '（当前 tab 暂无 console 输出）';
       }
       case 'browser_tabs': {
         const action = parseTabsAction(args.action);
         const index = parseTabIndex(args.index);
         const url = parseOptionalString(args.url, 'url');
-        const tabs = await manager.tabsAction(wsId, action, index, url);
+        // source 位显式 undefined（工具路径恒缺省 'agent'）；ctx 经尾参透传
+        const tabs = await manager.tabsAction(wsId, action, index, url, undefined, opCtx);
         if (tabs.length === 0) return '（当前无打开的 tab）';
         return tabs.map((t) => `[${t.index}] ${t.title} — ${t.url}`).join('\n');
       }
       case 'browser_close': {
-        await manager.closeBrowser(wsId);
+        await manager.closeBrowser(wsId, undefined, opCtx);
         return '已关闭浏览器（浏览数据与登录态保留）';
       }
     }

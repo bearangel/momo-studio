@@ -43,6 +43,13 @@ export interface ToolContext {
    * 消费；可选——未注入不影响既有流程（向后兼容旧调用方）。
    */
   taskId?: string;
+  /**
+   * 归属制（spec 2026-09-15 §5.1）：当前 runtime 的 agent 实例 ID
+   * （workspace_agent_members.instance_id）。runtime-entry 从 AGENT_CONFIG
+   * 的 agentAssignmentId 注入；浏览器工具据此路由专属 tab。缺省（测试直调
+   * 无 runner）由消费方归一为 'user'。
+   */
+  agentInstanceId?: string;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */

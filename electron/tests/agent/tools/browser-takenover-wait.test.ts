@@ -161,7 +161,8 @@ describe('工具层 await park 语义穿透（user 态 manager mock）', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(manager.navigate).toHaveBeenCalledTimes(1);
-    expect(manager.navigate).toHaveBeenCalledWith('ws1', 'https://example.com');
+    // 归属制 ctx 尾参：fixture 无 agentInstanceId → 'user'；sessionId 即 roomId
+    expect(manager.navigate).toHaveBeenCalledWith('ws1', 'https://example.com', { ownerId: 'user', sessionId: 'room-1' });
 
     // 清理：resolve pending 让未 await 的 p 不悬挂（不阻塞后续用例）
     manager.navDeferred.resolve({ url: 'https://example.com/final', title: 'Example' });
@@ -180,7 +181,7 @@ describe('工具层 await park 语义穿透（user 态 manager mock）', () => {
 
     expect(result).toContain('已导航到 https://example.com/final');
     expect(result).toContain('页面标题: Example');
-    expect(manager.navigate).toHaveBeenCalledWith('ws1', 'https://example.com');
+    expect(manager.navigate).toHaveBeenCalledWith('ws1', 'https://example.com', { ownerId: 'user', sessionId: 'room-1' });
   });
 
   it('park 多微任务后再 resolve：execute 仍正确 await（不丢延迟）', async () => {

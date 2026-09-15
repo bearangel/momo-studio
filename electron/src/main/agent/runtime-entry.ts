@@ -1597,6 +1597,8 @@ export async function doExecuteTool(
       // v2.5 变更账本：task-driven 派发的任务 id（快速会话无任务 → undefined，
       // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红
       taskId: config.currentTaskId,
+      // 归属制：AGENT_CONFIG 已强校验携带 agentAssignmentId（runtime-config parse）
+      agentInstanceId: config.agentAssignmentId,
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }

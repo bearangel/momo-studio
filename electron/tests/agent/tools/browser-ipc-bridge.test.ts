@@ -83,7 +83,8 @@ describe('browser IPC 桥（子进程侧）', () => {
     const msg = sent[0] as Record<string, unknown>;
     expect(msg['type']).toBe('browser-op');
     expect(msg['op']).toBe('navigate');
-    expect(msg['args']).toEqual(['ws-1', 'https://example.com']);
+    // 尾参缺省身份 USER_OP_CTX（调用方未显式携带 ctx 时桥补缺省——旧调用方兼容）
+    expect(msg['args']).toEqual(['ws-1', 'https://example.com', { ownerId: 'user', sessionId: '' }]);
     expect(typeof msg['requestId']).toBe('string');
     expect(UUID_RE.test(String(msg['requestId']))).toBe(true);
 

@@ -17,8 +17,8 @@
 // source 位（'user'）绝不经此通道传递（信封元数上限在 op-protocol 先行拒收）。
 
 import { logger } from '../logger';
-import { isBrowserOpEnvelope } from './op-protocol';
-import type { BrowserOp, BrowserOpOutcome } from './op-protocol';
+import { isBrowserOpEnvelope, USER_OP_CTX } from './op-protocol';
+import type { BrowserOp, BrowserOpOutcome, BrowserOpCtx } from './op-protocol';
 import type { BrowserPolicyPort, BrowserManagerPort } from '../agent/tools/browser-tools';
 
 /** 模块级注册的真实编排面（index.ts boot 链在 assembleBrowserSubsystem 后接线） */
@@ -81,6 +81,17 @@ function reqTabsAction(v: unknown): 'list' | 'open' | 'close' | 'switch' {
   return v;
 }
 
+/** ctx 尾参校验：对象且 ownerId/sessionId 均字符串；缺失（undefined/null）回退缺省用户身份——旧桥兼容 */
+function reqOpCtx(v: unknown): BrowserOpCtx {
+  if (v === undefined || v === null) return USER_OP_CTX;
+  if (typeof v !== 'object') throw new Error('browser-op 参数 "ctx" 必须是 { ownerId, sessionId } 对象');
+  const o = v as Record<string, unknown>;
+  if (typeof o.ownerId !== 'string' || typeof o.sessionId !== 'string') {
+    throw new Error('browser-op 参数 "ctx" 必须是 { ownerId, sessionId } 对象');
+  }
+  return { ownerId: o.ownerId, sessionId: o.sessionId };
+}
+
 /** 按 op 分发到真实 policy/manager（语义校验留给编排面——错误穿透给 catch） */
 async function dispatchOp(
   policy: BrowserPolicyPort,
@@ -91,34 +102,37 @@ async function dispatchOp(
   switch (op) {
     case 'assertAllowed': return policy.assertAllowed(reqStr(args[0], 'wsId'));
     case 'assertEvaluate': return policy.assertEvaluate(reqStr(args[0], 'wsId'));
-    case 'navigate': return manager.navigate(reqStr(args[0], 'wsId'), reqStr(args[1], 'rawUrl'));
-    case 'snapshot': return manager.snapshot(reqStr(args[0], 'wsId'));
-    case 'screenshot': return manager.screenshot(reqStr(args[0], 'wsId'), optStr(args[1], 'filename'));
-    case 'click': return manager.click(reqStr(args[0], 'wsId'), reqStr(args[1], 'selector'));
+    case 'navigate': return manager.navigate(reqStr(args[0], 'wsId'), reqStr(args[1], 'rawUrl'), reqOpCtx(args[2]));
+    case 'snapshot': return manager.snapshot(reqStr(args[0], 'wsId'), reqOpCtx(args[1]));
+    case 'screenshot': return manager.screenshot(reqStr(args[0], 'wsId'), optStr(args[1], 'filename'), reqOpCtx(args[2]));
+    case 'click': return manager.click(reqStr(args[0], 'wsId'), reqStr(args[1], 'selector'), reqOpCtx(args[2]));
     case 'type':
       return manager.type(
         reqStr(args[0], 'wsId'),
         reqStr(args[1], 'selector'),
         reqStr(args[2], 'text'),
         optBool(args[3], 'submit'),
+        reqOpCtx(args[4]),
       );
-    case 'pressKey': return manager.pressKey(reqStr(args[0], 'wsId'), reqStr(args[1], 'key'));
-    case 'hover': return manager.hover(reqStr(args[0], 'wsId'), reqStr(args[1], 'selector'));
+    case 'pressKey': return manager.pressKey(reqStr(args[0], 'wsId'), reqStr(args[1], 'key'), reqOpCtx(args[2]));
+    case 'hover': return manager.hover(reqStr(args[0], 'wsId'), reqStr(args[1], 'selector'), reqOpCtx(args[2]));
     case 'scroll':
-      return manager.scroll(reqStr(args[0], 'wsId'), reqDirection(args[1]), optNum(args[2], 'amount'));
-    case 'evaluate': return manager.evaluate(reqStr(args[0], 'wsId'), reqStr(args[1], 'expression'));
-    case 'consoleMessages': return manager.consoleMessages(reqStr(args[0], 'wsId'));
+      return manager.scroll(reqStr(args[0], 'wsId'), reqDirection(args[1]), optNum(args[2], 'amount'), reqOpCtx(args[3]));
+    case 'evaluate': return manager.evaluate(reqStr(args[0], 'wsId'), reqStr(args[1], 'expression'), reqOpCtx(args[2]));
+    case 'consoleMessages': return manager.consoleMessages(reqStr(args[0], 'wsId'), reqOpCtx(args[1]));
     case 'tabsAction':
-      // 恒 4 参调用——source 位绝不传递（G4：桥路径工具层缺省 'agent'）
+      // source 位显式 undefined（恒不传递，G4：桥路径工具层缺省 'agent'）；ctx 经尾参透传
       return manager.tabsAction(
         reqStr(args[0], 'wsId'),
         reqTabsAction(args[1]),
         optNum(args[2], 'index'),
         optStr(args[3], 'url'),
+        undefined,
+        reqOpCtx(args[4]),
       );
     case 'closeBrowser':
-      // 恒 1 参调用——source 位绝不传递
-      return manager.closeBrowser(reqStr(args[0], 'wsId'));
+      // source 位显式 undefined（恒不传递）；ctx 经尾参透传
+      return manager.closeBrowser(reqStr(args[0], 'wsId'), undefined, reqOpCtx(args[1]));
   }
 }
 

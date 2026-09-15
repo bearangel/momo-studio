@@ -17,10 +17,10 @@
 //   - process.send 不可用（非 fork 环境）立即 reject，绝不挂等超时
 
 import { randomUUID } from 'node:crypto';
-import { isBrowserOpResult } from '../../browser/op-protocol';
+import { isBrowserOpResult, USER_OP_CTX } from '../../browser/op-protocol';
 import { TRUST_WAIT_TIMEOUT_MS } from '../../browser/policy';
 import { DEFAULT_AGENT_WAIT_MS } from '../../browser/manager';
-import type { BrowserOp, BrowserOpArgs, BrowserOpPayloads } from '../../browser/op-protocol';
+import type { BrowserOp, BrowserOpArgs, BrowserOpPayloads, BrowserOpCtx } from '../../browser/op-protocol';
 import type { BrowserPolicyPort, BrowserManagerPort } from './browser-tools';
 
 /** 超时中文文案（同时覆盖「主进程未接线」情形——两态对子进程不可区分） */
@@ -135,27 +135,30 @@ export function createBrowserToolsIpcBridge(timeoutMs = 60_000): BrowserToolsIpc
       assertAllowed: (wsId: string): Promise<void> => call('assertAllowed', [wsId]),
       assertEvaluate: (wsId: string): Promise<void> => call('assertEvaluate', [wsId]),
     },
+    // manager 族：ctx 尾参透传（归属制 §5.2——缺省 USER_OP_CTX 保旧调用方；
+    // browser-tools execute 恒显式传真实身份）
     manager: {
-      navigate: (wsId: string, rawUrl: string) => call('navigate', [wsId, rawUrl]),
-      snapshot: (wsId: string) => call('snapshot', [wsId]),
-      screenshot: (wsId: string, filename?: string) => call('screenshot', [wsId, filename ?? null]),
-      click: (wsId: string, selector: string) => call('click', [wsId, selector]),
-      type: (wsId: string, selector: string, text: string, submit?: boolean) =>
-        call('type', [wsId, selector, text, submit ?? null]),
-      pressKey: (wsId: string, key: string) => call('pressKey', [wsId, key]),
-      hover: (wsId: string, selector: string) => call('hover', [wsId, selector]),
-      scroll: (wsId: string, direction: 'up' | 'down', amount?: number) =>
-        call('scroll', [wsId, direction, amount ?? null]),
-      evaluate: (wsId: string, expression: string) => call('evaluate', [wsId, expression]),
-      consoleMessages: (wsId: string) => call('consoleMessages', [wsId]),
-      // source 恒不传递：工具层缺省 'agent'（G4 调用方甄别——'user' 仅 IPC 用户路径）
+      navigate: (wsId: string, rawUrl: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('navigate', [wsId, rawUrl, ctx]),
+      snapshot: (wsId: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('snapshot', [wsId, ctx]),
+      screenshot: (wsId: string, filename?: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('screenshot', [wsId, filename ?? null, ctx]),
+      click: (wsId: string, selector: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('click', [wsId, selector, ctx]),
+      type: (wsId: string, selector: string, text: string, submit?: boolean, ctx: BrowserOpCtx = USER_OP_CTX) => call('type', [wsId, selector, text, submit ?? null, ctx]),
+      pressKey: (wsId: string, key: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('pressKey', [wsId, key, ctx]),
+      hover: (wsId: string, selector: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('hover', [wsId, selector, ctx]),
+      scroll: (wsId: string, direction: 'up' | 'down', amount?: number, ctx: BrowserOpCtx = USER_OP_CTX) => call('scroll', [wsId, direction, amount ?? null, ctx]),
+      evaluate: (wsId: string, expression: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('evaluate', [wsId, expression, ctx]),
+      consoleMessages: (wsId: string, ctx: BrowserOpCtx = USER_OP_CTX) => call('consoleMessages', [wsId, ctx]),
+      // source 恒不传递：工具层缺省 'agent'（G4 调用方甄别——'user' 仅 IPC 用户路径）。
+      // source 位占位形参（忽略）：端口面 ctx 为真尾参（source 之后），跳位防 ctx 错绑
       tabsAction: (
         wsId: string,
         action: 'list' | 'open' | 'close' | 'switch',
         index?: number,
         url?: string,
-      ) => call('tabsAction', [wsId, action, index ?? null, url ?? null]),
-      closeBrowser: (wsId: string) => call('closeBrowser', [wsId]),
+        _source?: 'agent' | 'user',
+        ctx: BrowserOpCtx = USER_OP_CTX,
+      ) => call('tabsAction', [wsId, action, index ?? null, url ?? null, ctx]),
+      closeBrowser: (wsId: string, _source?: 'agent' | 'user', ctx: BrowserOpCtx = USER_OP_CTX) => call('closeBrowser', [wsId, ctx]),
     },
   };
 }

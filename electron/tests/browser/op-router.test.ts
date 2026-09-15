@@ -5,8 +5,9 @@
 // 回传子进程（BrowserError 子类名保留，LLM 可见可行动指引）。
 //
 // 安全锁（设计铁律）：
-//   - 主进程路由禁止经此通道传 source='user'——tabsAction 最多 4 参 / closeBrowser
-//     最多 1 参，超量参数一律拒收且真实 manager 不被触碰（元数走私防御）
+//   - 主进程路由禁止经此通道传 source='user'——source 位不在协议面（元数上限 +
+//     ctx 位形状校验双重封死：ctx 位非 {ownerId,sessionId} 对象即拒收，超量参数
+//     一律拒收，真实 manager 不被触碰）
 //   - 未注册路由 / 未知 op / 形状非法 / 参数类型不符 → error 应答（子进程 60s
 //     挂等防护——绝不静默丢弃）
 //
@@ -17,6 +18,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { initBrowserOpRouter, routeBrowserOp, __resetBrowserOpRouterForTest } from '../../src/main/browser/op-router';
 import { BrowserNotTrustedError, BrowserNoViewError } from '../../src/main/browser/errors';
 import type { BrowserPolicyPort, BrowserManagerPort } from '../../src/main/agent/tools/browser-tools';
+
+/** 线上无 ctx（旧桥/直调）时主路由回退的缺省身份（USER_OP_CTX） */
+const FALLBACK_CTX = { ownerId: 'user', sessionId: '' };
 
 /** fake 端口：全方法 vi.fn 记录调用与返回 */
 function mkFakePorts(): { policy: BrowserPolicyPort; manager: BrowserManagerPort } {
@@ -68,7 +72,7 @@ describe('主进程 browser op 路由（routeBrowserOp）', () => {
 
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.payload).toEqual({ url: 'https://example.com/final', title: 'Example' });
-    expect(ports.manager.navigate).toHaveBeenCalledWith('ws-1', 'https://example.com');
+    expect(ports.manager.navigate).toHaveBeenCalledWith('ws-1', 'https://example.com', FALLBACK_CTX);
   });
 
   it('分发命中：policy 两 op（assertAllowed / assertEvaluate 参数 [wsId]）', async () => {
@@ -88,7 +92,7 @@ describe('主进程 browser op 路由（routeBrowserOp）', () => {
     initBrowserOpRouter(ports.policy, ports.manager);
 
     await routeBrowserOp({ type: 'browser-op', requestId: 'r-1', op: 'scroll', args: ['ws-1', 'down', 5] });
-    expect(ports.manager.scroll).toHaveBeenCalledWith('ws-1', 'down', 5);
+    expect(ports.manager.scroll).toHaveBeenCalledWith('ws-1', 'down', 5, FALLBACK_CTX);
 
     await routeBrowserOp({
       type: 'browser-op',
@@ -96,9 +100,9 @@ describe('主进程 browser op 路由（routeBrowserOp）', () => {
       op: 'tabsAction',
       args: ['ws-1', 'open', undefined, 'https://example.com'],
     });
-    // 精确 4 参——source 恒不被传递（桥路径工具层缺省 'agent'）
-    expect(ports.manager.tabsAction).toHaveBeenCalledWith('ws-1', 'open', undefined, 'https://example.com');
-    expect(vi.mocked(ports.manager.tabsAction).mock.calls[0]?.length).toBe(4);
+    // 精确 6 参——source 位显式 undefined 恒不被传递（桥路径工具层缺省 'agent'），ctx 经尾参回退缺省身份
+    expect(ports.manager.tabsAction).toHaveBeenCalledWith('ws-1', 'open', undefined, 'https://example.com', undefined, FALLBACK_CTX);
+    expect(vi.mocked(ports.manager.tabsAction).mock.calls[0]?.length).toBe(6);
   });
 
   it('安全锁：tabsAction 第 5 参走私 source → 拒收且 manager 不被触碰', async () => {
@@ -109,7 +113,7 @@ describe('主进程 browser op 路由（routeBrowserOp）', () => {
       type: 'browser-op',
       requestId: 'r-x',
       op: 'tabsAction',
-      // 恶意/漂移载荷：故意超量（走私 source='user'——真实端口签名第 5 参恰是 source）
+      // 恶意/漂移载荷：第 5 位现为 ctx 槽——走私 'user' 被 reqOpCtx 形状校验拒收
       args: ['ws-1', 'list', undefined, undefined, 'user'],
     });
 
@@ -126,7 +130,7 @@ describe('主进程 browser op 路由（routeBrowserOp）', () => {
       type: 'browser-op',
       requestId: 'r-x',
       op: 'closeBrowser',
-      // 恶意/漂移载荷：故意超量（走私 source='user'——真实端口签名第 2 参恰是 source）
+      // 恶意/漂移载荷：第 2 位现为 ctx 槽——走私 'user' 被 reqOpCtx 形状校验拒收
       args: ['ws-1', 'user'],
     });
 
