@@ -8,7 +8,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fetchCatalog, searchItems, groupByCategory } from '../../src/main/marketplace/client';
+import {
+  fetchCatalog,
+  searchItems,
+  groupByCategory,
+  __resetCatalogCacheForTest,
+  __rewindCatalogCacheForTest,
+  CATALOG_CACHE_TTL_MS,
+} from '../../src/main/marketplace/client';
 import type { Catalog } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mp-client-test-${Date.now()}`);
@@ -43,11 +50,14 @@ beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
   process.env.AP_USER_DATA_DIR = tmpRoot;
   fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as typeof fetchSpy;
+  // I6：fetchCatalog 现有进程内 TTL 缓存——逐用例清零，隔离缓存副作用
+  __resetCatalogCacheForTest();
 });
 
 afterEach(() => {
   fetchSpy.mockRestore();
   vi.restoreAllMocks();
+  __resetCatalogCacheForTest();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
 });
@@ -82,6 +92,62 @@ describe('marketplace/client fetchCatalog', () => {
     const catalog = await fetchCatalog('https://example.test/catalog.json');
     expect(catalog.items.length).toBe(5);
     expect(catalog.version).toBe('1.0');
+  });
+});
+
+// === I6 契约锁（终审修复）：fetchCatalog 进程内 TTL 缓存 ===
+// 缺陷：MentionInput 每次挂载 → resource.list → fetchCatalog——无缓存时离线
+// 环境每次都吃满 10s 超时，门禁本地预置合并。契约：成功结果缓存 5 分钟内
+// 二次调用零网络请求；过期后重取；失败（远程非 2xx / 抛错 / 校验拒）不缓存。
+
+describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
+  function okRemote(): void {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => fakeCatalog,
+    } as Response);
+  }
+
+  it('TTL 内二次调用不发网络请求（命中缓存，同对象）', async () => {
+    okRemote();
+    const first = await fetchCatalog('https://example.test/catalog.json');
+    const second = await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(second.version).toBe(first.version);
+    expect(second).toBe(first); // 缓存命中返回同一引用（零拷贝）
+  });
+
+  it('缓存过期后重取（回拨 TTL+1 → 再次发网络请求）', async () => {
+    okRemote();
+    await fetchCatalog('https://example.test/catalog.json');
+    __rewindCatalogCacheForTest(CATALOG_CACHE_TTL_MS + 1);
+    await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('失败不缓存：远程抛错 → 本地回退后，下一调用仍重试网络', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('offline'));
+    await fetchCatalog('https://example.test/catalog.json'); // 本地回退
+    okRemote();
+    const catalog = await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // 第二次真的发了请求
+    expect(catalog.version).toBe('9.9'); // 恢复后拿到远程
+  });
+
+  it('失败不缓存：远程非 2xx → 本地回退不进缓存，下一调用重试', async () => {
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 503 } as Response);
+    await fetchCatalog('https://example.test/catalog.json');
+    okRemote();
+    await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('不同 catalogUrl 的缓存互不干扰（按 URL 键控）', async () => {
+    okRemote();
+    await fetchCatalog('https://a.test/catalog.json');
+    await fetchCatalog('https://b.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
 

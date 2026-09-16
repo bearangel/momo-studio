@@ -102,9 +102,25 @@ function resolveLocalCatalogPath(): string {
   return path.resolve(__dirname, '..', '..', '..', '..', 'resources', 'marketplace', 'catalog.json');
 }
 
-/** 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置 */
+/** catalog 进程内 TTL 缓存时长（I6）：成功结果缓存 5 分钟 */
+export const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * catalog 进程内缓存（I6）：URL → { expiresAt, catalog }。
+ * 动机：MentionInput 每次挂载 → resource.list → fetchCatalog——无缓存时
+ * 离线环境每次都吃满 10s 超时才回退本地，门禁本地预置合并。只缓存远程
+ * 成功结果；失败（抛错 / 非 2xx / 校验拒）与本地回退不进缓存——下一调用
+ * 仍重试网络，恢复后自动拿到新目录。
+ */
+const catalogCache = new Map<string, { expiresAt: number; catalog: Catalog }>();
+
+/** 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
+ *  远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6） */
 export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   const url = catalogUrl ?? DEFAULT_CATALOG_URL;
+
+  const hit = catalogCache.get(url);
+  if (hit && hit.expiresAt > Date.now()) return hit.catalog;
 
   // 尝试远程（10s 超时，避免 UI 长时间卡住）
   try {
@@ -113,6 +129,7 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
       const raw = (await response.json()) as unknown;
       // 结构校验失败会 throw → 被 catch 捕获 → 回退本地
       const catalog = validateCatalog(raw);
+      catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
       logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
       return catalog;
     }
@@ -121,12 +138,23 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
     logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
   }
 
-  // 回退到本地（应用内置文件，同样过一遍校验作为纵深防御；不合法直接抛错）
+  // 回退到本地（应用内置文件，同样过一遍校验作为纵深防御；不合法直接抛错）。
+  // 本地回退不写缓存——保持「失败不缓存」语义，网络恢复后的下一调用即重试远程
   const local = validateCatalog(
     JSON.parse(fs.readFileSync(resolveLocalCatalogPath(), 'utf-8')) as unknown,
   );
   logger.info('Marketplace catalog 已加载（本地）', { items: local.items.length });
   return local;
+}
+
+/** 测试用：清空 catalog 缓存（隔离用例间缓存副作用） */
+export function __resetCatalogCacheForTest(): void {
+  catalogCache.clear();
+}
+
+/** 测试用：把缓存条目的过期时刻整体前移 ms（模拟 TTL 过期，不伪造系统时钟） */
+export function __rewindCatalogCacheForTest(ms: number): void {
+  for (const entry of catalogCache.values()) entry.expiresAt -= ms;
 }
 
 /** 搜索 catalog：关键词匹配 name/description/slug/tags，可选按类型过滤 */
