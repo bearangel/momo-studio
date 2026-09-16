@@ -78,6 +78,9 @@ import { initBrowserTools } from './tools/browser-tools';
 // （grants 随 agent-runner 任务生命周期 + 信任卡推送需 webContents），子进程
 // shell-tools 经此桥往返 effective / wait 两 op
 import { handleNetTrustOpResult } from './tools/net-trust-bridge';
+// v2.11 输入框上下文（spec 2026-09-16 §5.5）：task-config.context / steer.context
+// 经 renderTurnBody 包装进本轮用户正文；isExpandedContext 收窄 steer 载荷形状
+import { renderTurnBody, isExpandedContext } from './turn-context';
 
 /**
  * chat loop 运行时上下文：在启动时构建一次，后续每轮对话复用。
@@ -698,14 +701,17 @@ export async function runChatLoop(
   //（防「连续 steer 在同一等待期」产生空新行，spec §2.2）
   let hasNewTextSinceLastRoll = false;
   const abortListener = (msg: unknown): void => {
-    const m = msg as { type?: string; streamSessionId?: string; body?: unknown };
+    const m = msg as { type?: string; streamSessionId?: string; body?: unknown; context?: unknown };
     if (m.streamSessionId !== streamSessionId) return;
     if (m.type === 'abort') {
       abortController.abort();
       return;
     }
     if (m.type === 'steer' && typeof m.body === 'string') {
-      pendingSteers.push(m.body);
+      // v2.11 输入框上下文（spec 2026-09-16 §5.5）：steer context 与 task-config
+      // 同一包装语义——块在前正文在后，一次性注入本轮补充；载荷形状不合法按
+      // undefined 回退（isExpandedContext 收窄，防漂移载荷注入垃圾块）
+      pendingSteers.push(renderTurnBody(m.body, isExpandedContext(m.context) ? m.context : undefined));
     }
   };
   process.on('message', abortListener);
@@ -1386,7 +1392,7 @@ export async function runTaskChatLoop(
 ): Promise<void> {
   await ensureSandboxProbed();
   ensureBrowserToolsBridged();
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix } = cfg;
+  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix, context } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
@@ -1426,7 +1432,9 @@ export async function runTaskChatLoop(
   try {
     const finalText = await runChatLoop(
       roomId,
-      body,
+      // v2.11 输入框上下文（spec 2026-09-16 §5.5）：context 包装进本轮用户正文
+      //（一次性注入——DB body 保持原文，后续轮次会话重建不含 skill/文件展开，token 经济）
+      renderTurnBody(body, context),
       taskConfig,
       runCtx,
       stats,

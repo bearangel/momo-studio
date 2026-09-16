@@ -28,6 +28,13 @@ export function renderTurnBody(body: string, context?: ExpandedContext): string 
   return body === '' ? block : `${block}\n\n${body}`;
 }
 
+/** steer 载荷 context 字段的形状收窄（unknown → ExpandedContext | undefined） */
+export function isExpandedContext(v: unknown): v is ExpandedContext {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as Record<string, unknown>;
+  return Array.isArray(c['skills']) && Array.isArray(c['files']);
+}
+
 /** XML 属性值转义（name/path 是受控输入，仍防御引号破坏标签结构） */
 function escapeAttr(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
