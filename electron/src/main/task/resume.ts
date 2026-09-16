@@ -318,8 +318,8 @@ export async function resumeTask(taskId: string): Promise<{ streamSessionId: str
   let streamSessionIdForReturn: string;
 
   if (breakpointSsId) {
-    // 有断点流：rebuildTurn 重建段 + 复用 streamSessionId
-    const rebuilt = rebuildTurn(breakpointSsId);
+    // 有断点流：rebuildTurn 重建段 + 复用 streamSessionId（I1：async——主消息 context 重放）
+    const rebuilt = await rebuildTurn(breakpointSsId);
     // body 兜底：重建段首条 user 文本 → 否则任务 description → 否则 title
     const firstUserMsg = rebuilt.messages.find((m) => m.role === 'user')?.content;
     const body = firstUserMsg ?? task.description ?? task.title;

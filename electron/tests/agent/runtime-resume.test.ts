@@ -310,7 +310,7 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     __flushEventBufferForTest();
 
     // resumeTurn = rebuildTurn(F) 真实产物（生产同款：resume.ts rebuildTurn(breakpointSsId)）
-    const resumeTurn: RebuiltTurn = rebuildTurn('s-bp');
+    const resumeTurn: RebuiltTurn = await rebuildTurn('s-bp');
     expect(resumeTurn.degenerate).toBe(false); // seed 自检：重建段非空（user + 工具对）
 
     let first: LLMMessage[] = [];

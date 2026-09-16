@@ -13,7 +13,7 @@
 //     字段（sender='owner' / eventType='m.room.message' / body=正文）
 //
 // 九场景矩阵 + seq 乱序（plan Task 1 Step 1 全清单）。
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -35,6 +35,7 @@ import {
 } from '../../src/main/agent/stream-relay';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertMessage, getMessageByStreamSessionId } from '../../src/main/storage/messages/repo';
+import { setExpanderDeps } from '../../src/main/im/context-expander';
 import { nextSeqForMessage } from '../../src/main/storage/messages/events-repo';
 import * as eventsRepo from '../../src/main/storage/messages/events-repo';
 import {
@@ -132,8 +133,8 @@ function waitMsPast(t: number): void {
 
 // === 九场景矩阵 ===
 
-describe('turn-reconstructor：九场景矩阵', () => {
-  it('1. 完整回合：user 起始 + assistant 文本 + 1 对 tool_call/tool_result + 后续文本', () => {
+describe('turn-reconstructor：九场景矩阵', async () => {
+  it('1. 完整回合：user 起始 + assistant 文本 + 1 对 tool_call/tool_result + 后续文本', async () => {
     insertOwnerMessage(SESSION_ID, '帮我实现登录页');
     startStream('ss-full-1');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-full-1', delta: '正在分析需求' });
@@ -159,7 +160,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     waitMsPast(getMessageByStreamSessionId('ss-full-1')!.createdAt);
     insertOwnerMessage(SESSION_ID, '不该被误取的后续消息'); // 流行之后的 owner 行不得污染起始消息
 
-    const turn = rebuildTurn('ss-full-1');
+    const turn = await rebuildTurn('ss-full-1');
 
     // 对齐 runChatLoop 自身组装形状（runtime-entry:841 单条 assistant 携带全轮 toolCalls，
     // tool 消息按 call 顺序逐条紧随）
@@ -178,7 +179,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('2. 孤儿 tool_call（有 call 无 result，dispatch 形态 toolName 前缀）→ tool 消息 = 合成中断文案', () => {
+  it('2. 孤儿 tool_call（有 call 无 result，dispatch 形态 toolName 前缀）→ tool 消息 = 合成中断文案', async () => {
     insertOwnerMessage(SESSION_ID, '派个帮手去写登录页');
     startStream('ss-orphan-1');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-orphan-1', delta: '开始委派' });
@@ -194,7 +195,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-orphan-1');
+    const turn = await rebuildTurn('ss-orphan-1');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '派个帮手去写登录页' },
@@ -209,14 +210,14 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('3. 半截 assistant 文本（text_delta 无 end）→ 收尾为完整 assistant 消息', () => {
+  it('3. 半截 assistant 文本（text_delta 无 end）→ 收尾为完整 assistant 消息', async () => {
     insertOwnerMessage(SESSION_ID, '写个说明文档');
     startStream('ss-halftext-1');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-halftext-1', delta: '登录页已' });
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-halftext-1', delta: '完成' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-halftext-1');
+    const turn = await rebuildTurn('ss-halftext-1');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '写个说明文档' },
@@ -225,12 +226,12 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('4. degenerate：仅 start + user，无任何 assistant 输出事件 → messages 仅 [user]', () => {
+  it('4. degenerate：仅 start + user，无任何 assistant 输出事件 → messages 仅 [user]', async () => {
     insertOwnerMessage(SESSION_ID, '开始分析');
     startStream('ss-degen-1');
     __flushEventBufferForTest(); // start 的 status_change 已落盘
 
-    const turn = rebuildTurn('ss-degen-1');
+    const turn = await rebuildTurn('ss-degen-1');
 
     expect(turn.messages).toEqual([{ role: 'user', content: '开始分析' }]);
     expect(turn.degenerate).toBe(true);
@@ -238,8 +239,8 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.steers).toEqual([]);
   });
 
-  it('5. assigned 无事件：查无流行 → 纯重派降级（messages=[]）', () => {
-    const turn = rebuildTurn('ss-never-started');
+  it('5. assigned 无事件：查无流行 → 纯重派降级（messages=[]）', async () => {
+    const turn = await rebuildTurn('ss-never-started');
 
     expect(turn.messages).toEqual([]);
     expect(turn.toolCallsUsed).toBe(0);
@@ -247,7 +248,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(true);
   });
 
-  it('6. steer 已 drain（steer 事件后有输出）→ 随 [用户中途补充] user 消息按位重建', () => {
+  it('6. steer 已 drain（steer 事件后有输出）→ 随 [用户中途补充] user 消息按位重建', async () => {
     insertOwnerMessage(SESSION_ID, '重构登录模块');
     startStream('ss-steer-drained');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-steer-drained', delta: '开始' });
@@ -273,7 +274,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-steer-drained', delta: '收到，先处理样式' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-steer-drained');
+    const turn = await rebuildTurn('ss-steer-drained');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '重构登录模块' },
@@ -291,14 +292,14 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('7. steer 未 drain（steer 事件在末尾之后无输出）→ 进 steers[] 数组', () => {
+  it('7. steer 未 drain（steer 事件在末尾之后无输出）→ 进 steers[] 数组', async () => {
     insertOwnerMessage(SESSION_ID, '继续优化');
     startStream('ss-steer-pending');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-steer-pending', delta: '工作中' });
     __flushEventBufferForTest();
     insertRawEvent(streamMessageId('ss-steer-pending'), 'steer', JSON.stringify({ body: '记得补测试' }));
 
-    const turn = rebuildTurn('ss-steer-pending');
+    const turn = await rebuildTurn('ss-steer-pending');
 
     // steer 未消费：不重建 user 消息，进 steers[]（T4 随载荷重放进 pendingSteers）
     expect(turn.messages).toEqual([
@@ -310,7 +311,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('8. 未知事件类型（future_thing）→ 跳过不炸，其余事件正常聚合', () => {
+  it('8. 未知事件类型（future_thing）→ 跳过不炸，其余事件正常聚合', async () => {
     insertOwnerMessage(SESSION_ID, '分析一下');
     startStream('ss-unknown-1');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-unknown-1', delta: 'A' });
@@ -319,7 +320,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-unknown-1', delta: 'B' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-unknown-1');
+    const turn = await rebuildTurn('ss-unknown-1');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '分析一下' },
@@ -328,18 +329,18 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('9a. 重建抛错（payload 非法 JSON → repo JSON.parse 抛）→ 降级 degenerate 全空', () => {
+  it('9a. 重建抛错（payload 非法 JSON → repo JSON.parse 抛）→ 降级 degenerate 全空', async () => {
     insertOwnerMessage(SESSION_ID, '会崩的流');
     startStream('ss-broken-1');
     __flushEventBufferForTest();
     insertRawEvent(streamMessageId('ss-broken-1'), 'text_delta', '{这不是合法JSON');
 
-    const turn = rebuildTurn('ss-broken-1');
+    const turn = await rebuildTurn('ss-broken-1');
 
     expect(turn).toEqual({ messages: [], toolCallsUsed: 0, steers: [], degenerate: true });
   });
 
-  it('9b. 重建抛错（repo 查询异常 monkeypatch）→ 降级 degenerate 全空', () => {
+  it('9b. 重建抛错（repo 查询异常 monkeypatch）→ 降级 degenerate 全空', async () => {
     insertOwnerMessage(SESSION_ID, '查询会炸');
     startStream('ss-broken-2');
     __flushEventBufferForTest();
@@ -350,14 +351,14 @@ describe('turn-reconstructor：九场景矩阵', () => {
         throw new Error('repo 炸了');
       });
     try {
-      const turn = rebuildTurn('ss-broken-2');
+      const turn = await rebuildTurn('ss-broken-2');
       expect(turn).toEqual({ messages: [], toolCallsUsed: 0, steers: [], degenerate: true });
     } finally {
       spy.mockRestore();
     }
   });
 
-  it('附. seq 乱序插入（先插 seq 大再插小）→ 按 seq 排序聚合', () => {
+  it('附. seq 乱序插入（先插 seq 大再插小）→ 按 seq 排序聚合', async () => {
     insertOwnerMessage(SESSION_ID, '乱序流');
     startStream('ss-unsorted-1');
     __flushEventBufferForTest(); // status_change 占 seq=0
@@ -367,7 +368,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     insertRawEvent(mid, 'text_delta', JSON.stringify({ delta: 'Hello' }), 1);
     insertRawEvent(mid, 'text_delta', JSON.stringify({ delta: ' ' }), 3);
 
-    const turn = rebuildTurn('ss-unsorted-1');
+    const turn = await rebuildTurn('ss-unsorted-1');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '乱序流' },
@@ -377,7 +378,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
 
   // === T2 接线回归锁（v2.6.0 Task 2）：steer chunk 走真实生产链落库 ===
 
-  it('10. steer 真实落库链（routeChunkToBuffer → steer 事件）已 drain → 重建为 [用户中途补充] user 消息', () => {
+  it('10. steer 真实落库链（routeChunkToBuffer → steer 事件）已 drain → 重建为 [用户中途补充] user 消息', async () => {
     // 区别于场景 6（手插事件行）：本场景使用 __routeChunkToBufferForTest 真实生产链
     // 发 steer chunk，锁「chunk → routeChunkToBuffer switch → event_type='steer' 落库」
     // 链形态正确（T2 接线前 routeChunkToBuffer 无 steer case，chunk 静默丢弃，
@@ -411,7 +412,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-t2-drained', delta: '好的先修这个' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-t2-drained');
+    const turn = await rebuildTurn('ss-t2-drained');
 
     expect(turn.messages).toEqual([
       { role: 'user', content: '继续重构' },
@@ -428,7 +429,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('11. steer 真实落库链（routeChunkToBuffer → steer 事件）未 drain → 进 steers[] 数组', () => {
+  it('11. steer 真实落库链（routeChunkToBuffer → steer 事件）未 drain → 进 steers[] 数组', async () => {
     // 区别于场景 7（手插事件行）：本场景使用真实生产链发 steer chunk。
     insertOwnerMessage(SESSION_ID, '继续优化');
     startStream('ss-t2-pending');
@@ -442,7 +443,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-t2-pending');
+    const turn = await rebuildTurn('ss-t2-pending');
 
     // steer 未消费：不重建 user 消息，进 steers[]（T4 随载荷重放进 pendingSteers）
     expect(turn.messages).toEqual([
@@ -454,7 +455,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.degenerate).toBe(false);
   });
 
-  it('12. 真实落库链：steer 事件行的 event_type 与 payload 字段形态', () => {
+  it('12. 真实落库链：steer 事件行的 event_type 与 payload 字段形态', async () => {
     // 钉死 chunk → 事件落库形态（spec §2 + v2.5 C1 教训）：event_type='steer' / payload={body}。
     // 防路由把 payload 序列化错 / 字段名错位（落库后 shape 不匹配，rebuildTurn 全部退化为非 string body 跳过）。
     insertOwnerMessage(SESSION_ID, '形态校验');
@@ -485,7 +486,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
   // 缺陷：push 点包装令 steer 事件 payload.body = <user-context> 包装体 → 本重建器
   // drained 分支在每一后续回合的会话重建里重复注入 skill/文件展开（spec D2 破坏）。
 
-  it('13. steer 带 context 已 drain → [用户中途补充] 经 renderTurnBody 重放展开（消费点渲染，非落库定型）', () => {
+  it('13. steer 带 context 已 drain → [用户中途补充] 经 renderTurnBody 重放展开（消费点渲染，非落库定型）', async () => {
     const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
     insertOwnerMessage(SESSION_ID, '继续重构');
     startStream('ss-ctx-drained');
@@ -503,7 +504,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-drained', delta: '收到' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-ctx-drained');
+    const turn = await rebuildTurn('ss-ctx-drained');
 
     const supplement = turn.messages.find(
       (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
@@ -516,7 +517,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turn.steers).toEqual([]);
   });
 
-  it('14. steer 带 context 未 drain → steers[] 元素形状 {body, context}（原文+元数据，非包装体）', () => {
+  it('14. steer 带 context 未 drain → steers[] 元素形状 {body, context}（原文+元数据，非包装体）', async () => {
     const ctx = { skills: [], files: [{ path: 'src/a.ts', content: 'const a = 1;' }] };
     insertOwnerMessage(SESSION_ID, '继续优化');
     startStream('ss-ctx-pending');
@@ -530,13 +531,13 @@ describe('turn-reconstructor：九场景矩阵', () => {
     });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-ctx-pending');
+    const turn = await rebuildTurn('ss-ctx-pending');
 
     // resume 重放载荷形状锁：原文 + context 元数据（消费点渲染），绝无包装体字符串
     expect(turn.steers).toEqual([{ body: '记得补测试', context: ctx }]);
   });
 
-  it('15. steer 事件 payload 落库形态（带 context）：{body, context}——context 经 stream-relay 透传', () => {
+  it('15. steer 事件 payload 落库形态（带 context）：{body, context}——context 经 stream-relay 透传', async () => {
     const ctx = { skills: [{ slug: 's', name: 'n', body: 'b' }], files: [] };
     insertOwnerMessage(SESSION_ID, '形态校验');
     startStream('ss-ctx-shape');
@@ -562,7 +563,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(JSON.parse(steerRow!.payload_json)).toEqual({ body: 'hello', context: ctx });
   });
 
-  it('16. 历史载荷兼容：steer 事件 payload 无 context 字段 → 渲染原样不包装', () => {
+  it('16. 历史载荷兼容：steer 事件 payload 无 context 字段 → 渲染原样不包装', async () => {
     // 本特性未发布、无真实历史数据，但行为必须自洽：无 context 的 steer 事件
     // renderTurnBody(body, undefined) = 原样
     insertOwnerMessage(SESSION_ID, '历史流');
@@ -573,7 +574,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-legacy-steer', delta: '收到' });
     __flushEventBufferForTest();
 
-    const turn = rebuildTurn('ss-legacy-steer');
+    const turn = await rebuildTurn('ss-legacy-steer');
 
     const supplement = turn.messages.find(
       (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
@@ -588,7 +589,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
   // rebuildSessionContext（后续回合重建）也展开 <user-context>，带 context 的
   // steer 每经一回合重建就重放一次 skill/文件展开（spec D2「一次性注入」破坏）。
 
-  it('17. 同一 seed 两模式对照：session 重建 steer 仅原文；resume（rebuildTurn）同回合重放展开', () => {
+  it('17. 同一 seed 两模式对照：session 重建 steer 仅原文；resume（rebuildTurn）同回合重放展开', async () => {
     const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
     insertOwnerMessage(SESSION_ID, '继续重构');
     startStream('ss-ctx-r2');
@@ -616,7 +617,7 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(sess.messages.some((m) => m.content.includes('技能正文内容'))).toBe(false);
 
     // resume 模式（同回合重放，rebuildTurn）：展开 <user-context>（块在前正文在后）
-    const turn = rebuildTurn('ss-ctx-r2');
+    const turn = await rebuildTurn('ss-ctx-r2');
     const turnSupplement = turn.messages.find(
       (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
     );
@@ -625,5 +626,116 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(turnSupplement!.content).toContain('技能正文内容');
     expect(turnSupplement!.content.endsWith('补充说明 Z')).toBe(true);
     expect(turn.steers).toEqual([]);
+  });
+});
+
+// === I1 回归锁（终审修复）：resume 主消息 context 重放——与 steer 语义对称 ===
+// 缺陷：中断回合重建时 steer 的 context 有展开（expandSteerContext: true），
+// 但首条用户消息的 skill/文件 context 永久丢失（findTurnUserBody 只 SELECT body）
+// ——同一重建内不对称，模型续跑缺上下文。锁四态：有 context 重放 / 无 context
+// 原样（存量 1-17 即是该态的回归锁）/ 空 body+context 重放为块 / 空 body 无
+// context 跳过（M3，对齐发送侧 titleSource 回退）+ 损坏 context_json 降级原文。
+
+describe('rebuildTurn 主消息 context 重放（I1 + M3）', async () => {
+  // 真实临时 workspace（momo-test-rules：不 mock fs，expander 读真实文件）
+  let wsDir: string;
+
+  beforeAll(() => {
+    wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-turn-ctx-'));
+    fs.writeFileSync(path.join(wsDir, 'notes.md'), '会议纪要内容');
+  });
+
+  afterAll(() => {
+    setExpanderDeps({});
+    fs.rmSync(wsDir, { recursive: true, force: true });
+  });
+
+  /** 插带 context_json 的 owner 行（字段对齐 sendUserMessage 落库形态） */
+  function insertOwnerMessageWithCtx(
+    body: string,
+    contextJson: string | null,
+    workspaceId = 'ws-x',
+  ): void {
+    insertMessage({
+      sessionId: SESSION_ID,
+      sender: 'owner',
+      eventType: 'm.room.message',
+      body,
+      contextJson,
+      workspaceId,
+    });
+  }
+
+  it('18. 首条 user 消息带 context → resume 重建重放 <user-context>（块在前正文在后）', async () => {
+    setExpanderDeps({ skillRoots: [], workspaceDir: () => wsDir });
+    try {
+      insertOwnerMessageWithCtx(
+        '检查纪要',
+        JSON.stringify({ skills: [], files: [{ path: 'notes.md' }] }),
+      );
+      startStream('ss-userctx-1');
+      __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userctx-1', delta: '分析中' });
+      __flushEventBufferForTest();
+
+      const turn = await rebuildTurn('ss-userctx-1');
+
+      // 修复前：findTurnUserBody 只取 body → 首条 user 仅 '检查纪要'，无展开块 → 红
+      expect(turn.messages[0]!.role).toBe('user');
+      expect(turn.messages[0]!.content).toContain('<user-context>');
+      expect(turn.messages[0]!.content).toContain('会议纪要内容');
+      expect(turn.messages[0]!.content.endsWith('检查纪要')).toBe(true);
+      expect(turn.degenerate).toBe(false);
+    } finally {
+      setExpanderDeps({});
+    }
+  });
+
+  it('19. M3：空 body 且无 context → 跳过该条 user 消息（不产空 user 前导）', async () => {
+    insertOwnerMessage(SESSION_ID, ''); // 空 body、context_json=NULL
+    startStream('ss-emptybody');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-emptybody', delta: '已经在分析' });
+    __flushEventBufferForTest();
+
+    const turn = await rebuildTurn('ss-emptybody');
+
+    // 修复前：userBody='' !== null 照样 append → 首条是空 user 消息 → 红
+    expect(turn.messages[0]).toEqual({ role: 'assistant', content: '已经在分析' });
+    expect(turn.messages.some((m) => m.role === 'user')).toBe(false);
+    expect(turn.degenerate).toBe(false);
+  });
+
+  it('20. 空 body + context → 首条 user 消息即 <user-context> 块（纯上下文回合）', async () => {
+    setExpanderDeps({ skillRoots: [], workspaceDir: () => wsDir });
+    try {
+      insertOwnerMessageWithCtx('', JSON.stringify({ skills: [], files: [{ path: 'notes.md' }] }));
+      startStream('ss-userctx-2');
+      __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userctx-2', delta: '工作中' });
+      __flushEventBufferForTest();
+
+      const turn = await rebuildTurn('ss-userctx-2');
+
+      expect(turn.messages[0]!.role).toBe('user');
+      expect(turn.messages[0]!.content).toContain('<user-context>');
+      expect(turn.messages[0]!.content).toContain('会议纪要内容');
+    } finally {
+      setExpanderDeps({});
+    }
+  });
+
+  it('21. context_json 损坏 / 形状非法 → 防御降级为原文（不抛错、不吞正文）', async () => {
+    insertOwnerMessageWithCtx('正常正文', '{"skills": [ broken');
+    startStream('ss-userctx-bad1');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userctx-bad1', delta: 'A' });
+    __flushEventBufferForTest();
+    const t1 = await rebuildTurn('ss-userctx-bad1');
+    expect(t1.messages[0]).toEqual({ role: 'user', content: '正常正文' });
+
+    // 形状非法（skills 非数组）：JSON 合法但不过形状校验 → 同款降级
+    insertOwnerMessageWithCtx('形状坏', JSON.stringify({ skills: 'nope', files: [] }));
+    startStream('ss-userctx-bad2');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userctx-bad2', delta: 'B' });
+    __flushEventBufferForTest();
+    const t2 = await rebuildTurn('ss-userctx-bad2');
+    expect(t2.messages[0]).toEqual({ role: 'user', content: '形状坏' });
   });
 });

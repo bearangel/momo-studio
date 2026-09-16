@@ -33,6 +33,7 @@
 import type { LLMMessage, LLMToolCall } from './llm-provider';
 import type { SteerReplayItem } from './runtime-config';
 import { renderTurnBody, isExpandedContext } from './turn-context';
+import { expandMessageContext } from '../im/context-expander';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import {
@@ -43,6 +44,7 @@ import {
 } from '../storage/messages/repo';
 import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../compaction/serialize';
 import { listEventsByMessage, type MessageEventRow } from '../storage/messages/events-repo';
+import type { MessageContext } from '../../../../renderer/src/ipc/types';
 
 /** 孤儿 tool_call（中断时未回 result）的合成 tool result 文案 */
 export const INTERRUPTED_TOOL_RESULT =
@@ -197,7 +199,7 @@ export function createAssistantRoundAggregator(): AssistantRoundAggregator {
 }
 
 /**
- * 取回合起始 user 消息正文。
+ * 取回合起始 user 消息行（body + context_json + workspace_id）。
  *
  * messages 表无「流 ↔ user 消息」直接外键——生产写入路径
  * （session-service.sendUserMessage）的 user 行特征：同 session_id、
@@ -206,15 +208,53 @@ export function createAssistantRoundAggregator(): AssistantRoundAggregator {
  * （同毫秒插入的 kickoff 与流行不丢）。steer 产生的 owner 行创建时刻必然
  * 晚于流行，天然被时间窗排除。
  */
-function findTurnUserBody(baseRow: MessageRow): string | null {
+function findTurnUserRow(
+  baseRow: MessageRow,
+): { body: string; contextJson: string | null; workspaceId: string | null } | null {
   const row = getDb()
     .prepare(
-      `SELECT body FROM messages
+      `SELECT body, context_json AS contextJson, workspace_id AS workspaceId FROM messages
        WHERE session_id = ? AND sender = 'owner' AND created_at <= ?
        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
     )
-    .get(baseRow.sessionId, baseRow.createdAt) as { body: string } | undefined;
-  return row?.body ?? null;
+    .get(baseRow.sessionId, baseRow.createdAt) as
+    | { body: string; contextJson: string | null; workspaceId: string | null }
+    | undefined;
+  return row ?? null;
+}
+
+/**
+ * context_json → MessageContext 防御解析（I1）：损坏 / 形状非法 / NULL → null。
+ * 与 renderer parseMessageContext 同款语义——resume 重放侧的单点收口，
+ * 不让坏行炸 rebuildTurn（其 catch 会整体降级 degenerate，丢整段重建）。
+ */
+function parseContextJson(raw: string | null): MessageContext | null {
+  if (raw === null) return null;
+  try {
+    const v = JSON.parse(raw) as { skills?: unknown; files?: unknown };
+    if (!Array.isArray(v.skills) || !Array.isArray(v.files)) return null;
+    return { skills: v.skills, files: v.files };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 回合起始 user 消息的 resume 重放内容（I1，与 steer 语义对称）。
+ *
+ * 有 context → expandMessageContext 重放后 renderTurnBody 包装（块在前正文
+ * 在后）；无 / 损坏 context → 原文。返回 null = 跳过该条 user 消息（M3：
+ * 重放后内容为空串——空 body 且无 context，对齐发送侧 titleSource 回退，
+ * 不向续跑模型注入空 user 消息）。
+ */
+async function expandTurnUserContent(baseRow: MessageRow): Promise<string | null> {
+  const row = findTurnUserRow(baseRow);
+  if (!row) return null;
+  const parsed = parseContextJson(row.contextJson);
+  if (!parsed) return row.body === '' ? null : row.body;
+  const expanded = await expandMessageContext(row.workspaceId, parsed);
+  const content = renderTurnBody(row.body, expanded);
+  return content === '' ? null : content;
 }
 
 /**
@@ -242,8 +282,17 @@ function isOutputEvent(ev: MessageEventRow): boolean {
 
 /** rebuildTurn / rebuildSessionContext 共享的流重建选项 */
 interface StreamRebuildOptions {
-  /** 头部是否 prepend 回合起始 user 消息（resume 用 true；会话重建的 walk 已渲染 owner 行，用 false） */
+  /**
+   * 头部是否 prepend 回合起始 user 消息（resume 用 true；会话重建的 walk 已渲染 owner 行，用 false）。
+   * true 时配 turnUserContent（调用侧预解析——resume 路径含 context 重放，见 expandTurnUserContent）。
+   */
   includeUser: boolean;
+  /**
+   * 预解析的回合起始 user 消息内容（I1）：string = 原样/重放展开后的正文；
+   * null = 跳过该条 user 消息（M3 空内容）。共享核心保持同步——context 的
+   * async 展开收口在 rebuildTurn 侧完成后传入。
+   */
+  turnUserContent?: string | null;
   /**
    * 流末未 drain 的 steer 是否也渲染为 [用户中途补充] user 消息。
    * resume 用 false（收集进 steers[] 随载荷重放进 pendingSteers）；
@@ -290,9 +339,10 @@ function rebuildStreamMessages(
   let endTs = baseRow.createdAt;
 
   if (opts.includeUser) {
-    const userBody = findTurnUserBody(baseRow);
-    if (userBody !== null) {
-      agg.appendMessage({ role: 'user', content: userBody });
+    // I1：起始 user 内容由调用方预解析传入（context 重放的 async 部分在
+    // rebuildTurn 侧完成）——空串防御性跳过（正常不应出现，expandTurnUserContent 已过滤）
+    if (typeof opts.turnUserContent === 'string' && opts.turnUserContent !== '') {
+      agg.appendMessage({ role: 'user', content: opts.turnUserContent });
     }
   }
 
@@ -341,7 +391,7 @@ function rebuildStreamMessages(
 }
 
 /**
- * 重建断点回合（同步；纯读取）。
+ * 重建断点回合（async；纯读取。唯一生产调用方 task/resume.ts）。
  *
  * 聚合状态机（plan Task 1 Step 2 绑定算法）：
  *   按 seq 序处理事件 → text_delta 累积为当前 assistant 文本缓冲 →
@@ -356,11 +406,20 @@ function rebuildStreamMessages(
  * steer 消费语义：其后仍有输出事件 = 已 drain（按位重建
  * [用户中途补充] user 消息）；位于流末无后续输出 = 未 drain（进 steers[]
  * 随载荷重放——重放进 pendingSteers 后由下轮 drain 注入，语义等价）。
+ *
+ * I1：起始 user 消息的 context_json 经 expandMessageContext 重放展开
+ * （与 steer 的 expandSteerContext 对称——中断前用户挂的 skill/文件，
+ * 续跑模型同样需要）；context 损坏/空 → 原文；重放后空内容 → 跳过（M3）。
  */
-export function rebuildTurn(streamSessionId: string): RebuiltTurn {
+export async function rebuildTurn(streamSessionId: string): Promise<RebuiltTurn> {
   try {
+    // 起始 user 内容预解析（async：context 重放展开）；流行不存在时共享核心
+    // 自有 baseRow 缺失降级，此处直接置 null 即可
+    const baseRow = getMessageByStreamSessionId(streamSessionId);
+    const turnUserContent = baseRow ? await expandTurnUserContent(baseRow) : null;
     const r = rebuildStreamMessages(streamSessionId, {
       includeUser: true,
+      turnUserContent,
       undrainedSteersAsUser: false,
       // resume 同回合重放：steer 的 context 必须展开（模型续跑依赖其 skill/文件）
       expandSteerContext: true,
