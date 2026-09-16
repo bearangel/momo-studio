@@ -21,6 +21,7 @@ import { ipc } from '../ipc/client';
 import type {
   CollabTarget,
   ImMessage,
+  MessageContext,
   MessageEventRow,
   SessionMemberInfo,
   SessionSummary,
@@ -93,10 +94,17 @@ interface SessionState {
    * 按 eventsByMessage 累积，同 event id 不重复。
    */
   onIncomingEventBatch: (batch: MessageEventRow[]) => void;
-  /** 向当前激活会话发送消息（mentionedInstanceIds 为 @ 的成员 instanceId）；无激活会话返回 undefined */
+  /**
+   * 向当前激活会话发送消息。
+   *   - mentionedInstanceIds：@ 目标 = 会话成员 instanceId 列表
+   *   - context（v2.11）：输入框上下文 metadata——skill slug / 文件路径；主进程落 messages.context_json，
+   *     派发时由 context-expander 展开为正文 <user-context> 块
+   * 无激活会话返回 undefined。
+   */
   sendMessage: (
     body: string,
     mentionedInstanceIds?: string[],
+    context?: MessageContext,
   ) => Promise<{ readOnly: boolean } | undefined>;
   /**
    * 快速会话（spec §4.4）：免弹窗直达 workspace 默认 agent。
@@ -346,7 +354,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  sendMessage: async (body, mentionedInstanceIds) => {
+  sendMessage: async (body, mentionedInstanceIds, context) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return undefined;
     // / 命令拦截（spec §5.4）：整条以 / 开头才识别；命令白名单在主进程 commands.ts
@@ -367,7 +375,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     set({ commandHint: null });
     // 不做本地乐观插入：主进程落库后经 session:message 推回 receiveMessage。
-    const result = await ipc.session.send(activeSessionId, body, mentionedInstanceIds);
+    // v2.11 Task 7：context 第 4 参透传——主进程落 messages.context_json，
+    // 派发时由 context-expander 展开为正文 <user-context> 块。
+    const result = await ipc.session.send(activeSessionId, body, mentionedInstanceIds, context);
     // T9 契约：readOnly=true 表示会话全部成员失效——UI 据此禁用输入（spec §7）
     set({ activeSessionReadOnly: result.readOnly });
     return result;

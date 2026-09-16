@@ -245,13 +245,36 @@ describe('session.store', () => {
   it('sendMessage calls ipc.session.send with the active session id', async () => {
     await useSessionStore.getState().loadSessions('ws-a');
     await useSessionStore.getState().sendMessage('hello');
-    expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hello', undefined);
+    // v2.11 Task 7：第 4 参 context 可选，未传时显式 undefined 透传以锁形状契约
+    expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hello', undefined, undefined);
   });
 
   it('sendMessage 透传 mentionedInstanceIds（@ 目标 = 会话成员 instanceId，spec §5）', async () => {
     await useSessionStore.getState().loadSessions('ws-a');
     await useSessionStore.getState().sendMessage('hi @agent', ['inst-1', 'inst-2']);
-    expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hi @agent', ['inst-1', 'inst-2']);
+    expect(mockApi.session.send).toHaveBeenCalledWith('sess-a1', 'hi @agent', ['inst-1', 'inst-2'], undefined);
+  });
+
+  // Task 7 v2.11：renderer→preload→main 契约贯通——send 第 4 参 MessageContext 透传
+  // （spec 2026-09-16 §5.3；主进程 handler 已落 context?: unknown 在 Task 5）
+  it('sendMessage 透传 context 第 4 参（v2.11）', async () => {
+    useSessionStore.setState({ activeSessionId: '会话-id' });
+    const ctx = { skills: [{ slug: 'code-review', name: '代码审查' }], files: [{ path: 'a.ts' }] };
+    const { ipc } = await import('../ipc/client');
+    const sendSpy = vi.spyOn(ipc.session, 'send').mockResolvedValue({ readOnly: false });
+    await useSessionStore.getState().sendMessage('正文', undefined, ctx);
+    expect(sendSpy).toHaveBeenCalledWith('会话-id', '正文', undefined, ctx);
+    sendSpy.mockRestore();
+  });
+
+  // Task 2 v2.11：renderer 删白名单——未知 / 命令一律转发主进程，由 commands.ts 查表 reject
+  it('未知 / 命令转发主进程（白名单已删）', async () => {
+    useSessionStore.setState({ activeSessionId: '会话-id' });
+    const { ipc } = await import('../ipc/client');
+    const cmdSpy = vi.spyOn(ipc.session, 'command').mockResolvedValue({ ok: true, message: 'ok' });
+    await useSessionStore.getState().sendMessage('/whatever');
+    expect(cmdSpy).toHaveBeenCalledWith('会话-id', 'whatever');
+    cmdSpy.mockRestore();
   });
 
   it('sendMessage 不插入本地乐观消息（无本地 echo 时消息列表不变）', async () => {
@@ -361,7 +384,8 @@ describe('session.store — / 命令拦截（spec §5.4）', () => {
   it('// 前缀转义为原样发送', async () => {
     useSessionStore.setState({ activeSessionId: 's1' });
     await useSessionStore.getState().sendMessage('//not-a-command');
-    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/not-a-command', undefined);
+    // v2.11 Task 7：第 4 参 context 可选，未传时显式 undefined 透传以锁形状契约
+    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/not-a-command', undefined, undefined);
     expect(useSessionStore.getState().commandHint).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import type {
   BrowserState,
   CollabTarget,
   ImMessage,
+  MessageContext,
   MessageEventBatch,
   RegisterMcpInput,
   RemoteNodeTasks,
@@ -197,8 +198,8 @@ const api: ApiSurface = {
       invoke('session:createCollab', workspaceId, title, target),
     rename: (sessionId: string, title: string) => invoke('session:rename', sessionId, title),
     delete: (sessionId: string) => invoke('session:delete', sessionId),
-    send: (sessionId: string, body: string, mentionedInstanceIds?: string[]) =>
-      invoke('session:send', sessionId, body, mentionedInstanceIds),
+    send: (sessionId: string, body: string, mentionedInstanceIds?: string[], context?: MessageContext) =>
+      invoke('session:send', sessionId, body, mentionedInstanceIds, context),
     // Task 7：斜杠命令通道（spec §5.4）——/compact 等确定性命令入口；renderer
     // 拦截后去 / 前缀，把裸 command 名（如 'compact'）传给主进程
     command: (sessionId: string, command: string) =>

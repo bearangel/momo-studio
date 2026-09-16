@@ -840,11 +840,13 @@ export interface SessionApiSurface {
   /**
    * 用户消息写入：落库 + 推送 + P2P 广播 + 冲突检测 + 路由到目标 agent（@ 的 instanceId 列表）。
    * v25 Task 9：返回 readOnly——true 表示会话全部成员已失效（spec §7「会话只读」，UI 据此禁用输入）。
+   * v2.11 Task 7：context 第 4 参——输入框上下文 metadata（skill slug / 文件路径），主进程落 messages.context_json。
    */
   send(
     sessionId: string,
     body: string,
     mentionedInstanceIds?: string[],
+    context?: MessageContext,
   ): Promise<{ readOnly: boolean }>;
   /**
    * 历史读取：messages + 每条 message 的 events，
