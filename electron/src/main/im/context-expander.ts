@@ -125,22 +125,28 @@ function workspaceDirOf(workspaceId: string | null): string | null {
 
 /**
  * 契约层路径检查：renderer 契约是 workspace 相对路径（FileContextItem 注释），
- * 绝对路径 / `..` 串一律拒绝（输入面在 renderer，此处是信任边界的第一层）。
+ * 绝对路径 / `.` / `..` / 父逃逸前缀一律拒绝（输入面在 renderer，此处是信任
+ * 边界的第一层）。合法 dotfile（.env / .github/…）是正常 workspace 内容，
+ * 不因 startsWith('.') 一刀切拒绝（I4 修复：旧实现静默降级且提示误导）。
  * 符号链接逃逸由 WorkspaceFS.assertInWorkspace 的 realpath 防御兜底（第二层）。
  */
 function isSafeRelativePath(p: string): boolean {
   if (p === '' || path.isAbsolute(p)) return false;
   const norm = path.normalize(p);
-  return norm !== '..' && !norm.startsWith(`..${path.sep}`) && !norm.startsWith('.');
+  return norm !== '.' && norm !== '..' && !norm.startsWith(`..${path.sep}`);
 }
 
 export async function expandMessageContext(
   workspaceId: string | null,
   context: MessageContext,
 ): Promise<ExpandedContext> {
-  // 1. skills：逐 slug 展开；失败降级占位（不阻塞）
+  // 1. skills：逐 slug 展开；失败降级占位（不阻塞）。
+  //    I5 元素级防御：非 {slug,name:string} 形状的元素直接跳过——IPC 入口
+  //    sanitizeMessageContext 已剔除，此处兜底绕过入口的路径（resume 重放 /
+  //    历史行 context_json），「永不抛错」契约不能依赖上游全对
   const skills: ExpandedSkillItem[] = [];
   for (const s of context.skills) {
+    if (typeof s?.slug !== 'string' || typeof s?.name !== 'string') continue;
     const found = resolveSkillMarkdown(s.slug);
     if (found) {
       skills.push({ slug: s.slug, name: found.name, body: found.body });
@@ -152,12 +158,14 @@ export async function expandMessageContext(
 
   // 2. files：内联读取（单文件 + 总量双上限，超限/失败/逃逸降级 content=null）。
   //    路径防御复用 WorkspaceFS.assertInWorkspace（字符串边界 + 符号链接 realpath，
-  //    与 file:* IPC 同一信任边界）
+  //    与 file:* IPC 同一信任边界）。I5：path 非字符串的元素无法构成降级条目
+  //    （ExpandedFileItem.path 契约 string），跳过不产半截项
   const root = workspaceDirOf(workspaceId);
   const wsFs = root !== null ? new WorkspaceFS(root) : null;
   const files: ExpandedFileItem[] = [];
   let total = 0;
   for (const f of context.files) {
+    if (typeof f?.path !== 'string') continue;
     if (wsFs === null || !isSafeRelativePath(f.path)) {
       files.push({ path: f.path, content: null });
       continue;

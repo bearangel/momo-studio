@@ -48,6 +48,17 @@ describe('files/workspace-fs', () => {
     await expect(wsFs.writeFile('.Git/hooks/x', 'evil')).rejects.toThrow();
   });
 
+  // I4 连带：`.git` 保护是段精确匹配（`.git` 与其内部子路径），同前缀的
+  // `.github` / `.gitattributes` 等正常 dotfile 不误伤。旧实现的字符串前缀
+  // startsWith('.git') 把 .github/… 一并拒绝（composer @ 引用第二层撞墙根因）。
+  it('writeFile 允许 .github/ 等同前缀 dotfile（段精确匹配不误伤）', async () => {
+    await expect(wsFs.writeFile('.github/workflows/ci.yml', 'jobs: {}')).resolves.toBeUndefined();
+    await expect(wsFs.writeFile('.gitattributes', '* text=auto')).resolves.toBeUndefined();
+    // `.git` 本身与其内部路径仍拒（保护语义不变）
+    await expect(wsFs.writeFile('.git/config', 'evil')).rejects.toThrow(/\.git/);
+    await expect(wsFs.writeFile('.git-hooks/x.sh', 'ls')).resolves.toBeUndefined();
+  });
+
   it('listDir 返回文件和子目录', async () => {
     await wsFs.writeFile('a.txt', 'a');
     await wsFs.writeFile('b.txt', 'b');

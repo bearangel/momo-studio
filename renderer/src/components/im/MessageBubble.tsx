@@ -83,7 +83,12 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
 
   // v2.11 Task 11：owner 消息的输入上下文 chips。agent 消息不渲染（上下文只随
   // 用户输入产生）；解析失败 / 项全非法 / 均空数组 → 无 chip 行。
-  const ctx = message.sender === 'owner' ? parseMessageContext(message.contextJson) : null;
+  // I3：P2P 远端镜像的 owner 消息经 sync 改写 sender 为 remote:<nodeId>[:<原sender>]，
+  // 门控放宽为前缀匹配——远端用户的 context 同样渲染 chip。
+  const ctx =
+    message.sender === 'owner' || message.sender.startsWith('remote:')
+      ? parseMessageContext(message.contextJson)
+      : null;
   const ctxSkills = ctx?.skills.filter(isRenderableSkill) ?? [];
   const ctxFiles = ctx?.files.filter(isRenderableFile) ?? [];
   const hasContextChips = ctxSkills.length > 0 || ctxFiles.length > 0;

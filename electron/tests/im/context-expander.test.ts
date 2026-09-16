@@ -12,6 +12,7 @@ import {
   MAX_TOTAL_INLINE_BYTES,
   setExpanderDeps,
 } from '../../src/main/im/context-expander';
+import type { MessageContext } from '../../../renderer/src/ipc/types';
 
 let tmpRoot: string;
 let wsId: string | null;
@@ -21,6 +22,10 @@ beforeAll(() => {
   // 伪 workspace 目录结构：expander 经测试注入的根解析函数取 workspace 目录
   fs.mkdirSync(path.join(tmpRoot, 'ws1'), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'ws1', 'a.ts'), 'export const a = 1;');
+  // I4：合法 dotfile 素材（.env / .github 嵌套路径是正常 workspace 内容）
+  fs.writeFileSync(path.join(tmpRoot, 'ws1', '.env'), 'SECRET=1');
+  fs.mkdirSync(path.join(tmpRoot, 'ws1', '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'ws1', '.github', 'workflows', 'ci.yml'), 'jobs: {}');
   // 超大文件（> 64KB）
   fs.writeFileSync(path.join(tmpRoot, 'ws1', 'big.txt'), 'x'.repeat(MAX_INLINE_FILE_BYTES + 1));
   // 总量超限素材：5 个 60KB 文件（单个 ≤64KB 不触单文件上限；4 个累计 240KB ≤ 256KB，
@@ -126,6 +131,38 @@ describe('expandMessageContext', () => {
     expect(r).toEqual({ skills: [], files: [] });
   });
 
+  // === I4 回归锁（终审修复）：合法 dotfile 不再一刀切拒绝 ===
+  // 缺陷：isSafeRelativePath 的 !norm.startsWith('.') 拒绝一切 dotfile——
+  // .env / .github/... 全静默降级 content=null 且提示误导「文件过大」。
+  // 修复语义：仅拒「. / .. / 父逃逸前缀」；dotfile 是正常 workspace 内容。
+
+  it('I4：.env dotfile 正常内联（不再被 startsWith(.) 误拒）', async () => {
+    const r = await expandMessageContext(wsId, { skills: [], files: [{ path: '.env' }] });
+    expect(r.files[0]!.content).toBe('SECRET=1');
+  });
+
+  it('I4：.github/workflows/ci.yml 嵌套 dotfile 路径正常内联', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [{ path: '.github/workflows/ci.yml' }],
+    });
+    expect(r.files[0]!.content).toBe('jobs: {}');
+  });
+
+  it('I4：`.` / `./` 归一后是当前目录 → 仍拒（content=null）', async () => {
+    const r = await expandMessageContext(wsId, { skills: [], files: [{ path: '.' }, { path: './' }] });
+    expect(r.files[0]!.content).toBeNull();
+    expect(r.files[1]!.content).toBeNull();
+  });
+
+  it('I4：`..` / 父逃逸前缀 / 绝对路径 → 仍拒（安全边界不变）', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [{ path: '..' }, { path: '../x' }, { path: 'a/../../x' }, { path: '/etc/passwd' }],
+    });
+    expect(r.files.map((f) => f.content)).toEqual([null, null, null, null]);
+  });
+
   it('注入的 workspaceDir 抛错时不抛错，文件 content=null 降级（永不抛错契约守卫）', async () => {
     // 模拟 getWorkspace 后端 DB 不可用：注入抛错的 workspaceDir 模拟同款异常。
     // 锁「expander 永不抛错」契约——下游必须自然降级而不是把异常向上冒泡。
@@ -151,5 +188,35 @@ describe('expandMessageContext', () => {
         workspaceDir: () => path.join(tmpRoot, 'ws1'),
       });
     }
+  });
+
+  // === I5 回归锁（终审修复）：元素级畸形输入不击穿「永不抛错」===
+  // 缺陷：skills 元素 slug/name 非字符串时 isValidSkillSlug 的 slug.includes /
+  // files 元素 path 非字符串时 path.isAbsolute 直接 TypeError——异常沿
+  // routeUserChat 顶层 catch 被吃掉，消息落库不派发且无反馈。
+  // IPC 入口（sanitizeMessageContext）剔除畸形元素，此处是绕过入口路径
+  // （resume 重放 / 历史行）的第二层防御：typeof 守卫逐元素跳过。
+
+  it('I5：畸形元素（skills:[123] / files:[456]）不抛错、合法元素照常展开', async () => {
+    const malformed = {
+      skills: [123, null, { slug: 'demo' }, { slug: 'demo', name: '演示技能' }],
+      files: [456, null, {}, { path: 'a.ts' }],
+    } as unknown as MessageContext;
+    const r = await expandMessageContext(wsId, malformed);
+    // 合法 skill（slug+name 均 string）照常展开；其余（数字 / null / 缺 name）剔除
+    expect(r.skills).toHaveLength(1);
+    expect(r.skills[0]!.body).toContain('技能正文。');
+    // 合法文件照常内联；畸形（数字 / null / 缺 path）剔除
+    expect(r.files).toHaveLength(1);
+    expect(r.files[0]).toEqual({ path: 'a.ts', content: 'export const a = 1;' });
+  });
+
+  it('I5：全部元素畸形 → 空结果（不抛错、不产半截条目）', async () => {
+    const malformed = {
+      skills: [{ slug: 789, name: 'x' }],
+      files: [{ path: ['evil'] }],
+    } as unknown as MessageContext;
+    const r = await expandMessageContext(wsId, malformed);
+    expect(r).toEqual({ skills: [], files: [] });
   });
 });

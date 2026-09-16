@@ -40,25 +40,46 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
+import { projectEventsForWire } from '../storage/messages/event-projection';
 import { exportAggregateEvents } from './export-aggregator';
 import { formatRoomToMarkdown, renderSubMessage, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
 import { scheduleExtraction, TRIGGER_TURN_INTERVAL } from '../memory/extraction';
-import type { MessageContext } from '../../../../renderer/src/ipc/types';
+import type {
+  MessageContext,
+  SkillContextItem,
+  FileContextItem,
+} from '../../../../renderer/src/ipc/types';
 
 /**
- * IPC 载荷形状 guard（v2.11）：session:send 第 4 参 context 只在 skills/files
- * 均为数组时透传——renderer 输入面之外的畸形载荷降级为 undefined（无上下文
- * 发送），不拒整条消息。
+ * IPC 载荷清洗（v2.11；I5 升级为元素级）：session:send 第 4 参 context 在
+ * skills/files 均为数组时透传，畸形**元素**剔除保合法元素——expander 内
+ * s.slug.includes / path.isAbsolute 对非字符串元素会 TypeError，一旦穿透
+ * 「永不抛错」契约即被 routeUserChat 顶层 catch 吃掉（消息落库不派发无反馈）。
+ * 外层形状非法（非对象 / 缺字段 / 非数组）整体降级 undefined（无上下文发送），
+ * 不拒整条消息。
  *
- * 已 export 以便契约测试直接断言（v2.11 审查 Important：协议面变更必须有
- * 单测锁三态——合法 / null / 畸形）。
+ * 已 export 以便契约测试直接断言（协议面变更必须有单测锁——外层三态 +
+ * 元素级剔除双关）。
  */
-export function isMessageContextShape(v: unknown): v is MessageContext {
-  if (typeof v !== 'object' || v === null) return false;
+export function sanitizeMessageContext(v: unknown): MessageContext | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
   const c = v as { skills?: unknown; files?: unknown };
-  return Array.isArray(c.skills) && Array.isArray(c.files);
+  if (!Array.isArray(c.skills) || !Array.isArray(c.files)) return undefined;
+  const skills = c.skills.filter(
+    (s): s is SkillContextItem =>
+      typeof s === 'object' &&
+      s !== null &&
+      typeof (s as SkillContextItem).slug === 'string' &&
+      typeof (s as SkillContextItem).name === 'string',
+  );
+  const files = c.files.filter(
+    (f): f is FileContextItem =>
+      typeof f === 'object' && f !== null && typeof (f as FileContextItem).path === 'string',
+  );
+  // spread 保留外层未知字段（透传宽容：未来扩展字段不因清洗被剥掉）
+  return { ...c, skills, files };
 }
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
@@ -152,13 +173,15 @@ export function registerSessionIpcHandlers(): void {
       sessionId: string,
       body: string,
       mentionedInstanceIds?: string[],
-      context?: unknown,
+      rawContext?: unknown,
     ) => {
+      // I5：元素级清洗——畸形元素剔除保合法元素，外层非法降级 undefined
+      const context = sanitizeMessageContext(rawContext);
       const result = await sendUserMessage({
         sessionId,
         body,
         mentionedInstanceIds,
-        ...(isMessageContextShape(context) ? { context } : {}),
+        ...(context ? { context } : {}),
       });
       // v2.2 记忆 P2（spec §6.4 触发点）：用户消息落库成功后按轮次间隔触发自动提取。
       // owner 消息数（含本条）% TRIGGER_TURN_INTERVAL === 0 时触发；fire-and-forget。
@@ -296,13 +319,14 @@ export function registerSessionIpcHandlers(): void {
   logger.info('Session IPC handlers 已注册');
 }
 
-/** messages 批 → { messages, eventsByMessage }（逐条拉 events，与 im:getMessages 同法） */
+/** messages 批 → { messages, eventsByMessage }（逐条拉 events，与 im:getMessages 同法）。
+ *  I2：events 过 egress 投影——steer 事件剥离 context 全文（DB 保留供 resume 重放）。 */
 function withEvents(
   messages: MessageRow[],
 ): { messages: MessageRow[]; eventsByMessage: Record<string, MessageEventRow[]> } {
   const eventsByMessage: Record<string, MessageEventRow[]> = {};
   for (const m of messages) {
-    eventsByMessage[m.id] = listEventsByMessage(m.id);
+    eventsByMessage[m.id] = projectEventsForWire(listEventsByMessage(m.id));
   }
   return { messages, eventsByMessage };
 }

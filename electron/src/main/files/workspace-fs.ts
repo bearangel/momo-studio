@@ -66,10 +66,14 @@ export class WorkspaceFS {
       }
     }
 
-    // 3) 不允许操作 .git/（.gitignore 除外），保护版本库元数据。
-    //    前缀比较用小写——macOS 默认大小写不敏感文件系统上 `.GIT/` 可绕过字面匹配
-    const rel = path.relative(this.rootDir, normalized);
-    if (rel.toLowerCase().startsWith('.git') && rel !== '.gitignore') {
+    // 3) 不允许操作 .git/（版本库元数据保护）。段精确匹配：仅 `.git` 目录本身
+    //    及其内部子路径；`.github` / `.gitignore` / `.gitattributes` 等同前缀
+    //    dotfile 是正常 workspace 内容，不因字符串前缀误伤（I4：旧实现
+    //    startsWith('.git') 把 .github/… 一并拒绝）。分隔符用 path.sep——
+    //    win32 下 path.relative 产反斜杠（`.git\config`），字面 '/'.startsWith 会放行。
+    //    比较用小写——macOS 默认大小写不敏感文件系统上 `.GIT/` 可绕过字面匹配
+    const rel = path.relative(this.rootDir, normalized).toLowerCase();
+    if (rel === '.git' || rel.startsWith(`.git${path.sep}`)) {
       throw new Error(`禁止操作 .git 目录: ${relativeOrAbsolutePath}`);
     }
 

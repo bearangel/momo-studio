@@ -345,6 +345,29 @@ describe('MessageBubble context chip 渲染（v2.11 Task 11）', () => {
     expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
   });
 
+  // I3（终审修复）：P2P 远端镜像的 owner 消息经 sync 改写 sender 为
+  // remote:<nodeId>——门控只认 'owner' 令远端 chip 永不渲染。放宽为前缀匹配。
+  it('I3：remote:<nodeId> sender 的 owner 消息渲染 context chip（P2P 远端镜像）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'remote:node-abc123', body: '远端用户消息',
+      contextJson: JSON.stringify({
+        skills: [{ slug: 'code-review', name: '代码审查' }],
+        files: [{ path: 'src/a.ts' }],
+      }),
+    })} isSelf={false} />);
+    expect(screen.getByTestId('message-context-chips')).toBeInTheDocument();
+    expect(screen.getByText('代码审查')).toBeInTheDocument();
+    expect(screen.getByText('a.ts')).toBeInTheDocument();
+  });
+
+  it('I3：remote: 带原始 sender 尾段的形态（remote:<node>:<sender>）同样渲染', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'remote:node-1:owner', body: 'x',
+      contextJson: JSON.stringify({ skills: [{ slug: 's', name: '技能' }], files: [] }),
+    })} isSelf={false} />);
+    expect(screen.getByText('技能')).toBeInTheDocument();
+  });
+
   it('workspaceId 缺失（异常数据）：不发 IPC，chip 直接降级不可点', async () => {
     render(<MessageBubble message={makeMsg('m1', {
       sender: 'owner', body: 'x', workspaceId: null,

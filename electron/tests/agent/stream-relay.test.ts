@@ -32,7 +32,6 @@ import {
 } from '../../src/main/agent/stream-relay';
 import { runMigrations, closeDb } from '../../src/main/storage/db';
 import {
-  insertMessage,
   getMessageByStreamSessionId,
   listMessagesBySession,
 } from '../../src/main/storage/messages/repo';
@@ -656,5 +655,71 @@ describe('start 幂等化（同 ssi 二次 start 续流行，不 INSERT）', () 
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe('streaming');
     expect(rows[0]!.sender).toBe('@bot:localhost');
+  });
+});
+
+// === I2 契约锁（终审修复）：steer 事件 egress 投影剥离 context，DB 保留 ===
+//
+// 缺陷：steer chunk 的 payload.context（ExpandedContext 全文：skill 正文 +
+// 文件内容）随 event-buffer flush 整体 webContents.send 回流 renderer——
+// 体积放大 + 暴露面扩大。契约（momo-boundary-rules：wire 协议变更两端同锁）：
+//   - wire（session:message_event_batch）：steer 事件 payload 无 context 字段
+//   - DB（message_events.payload_json）：context 原样保留（resume 重建重放依赖）
+
+describe('I2：steer 事件 egress 投影（wire 剥离 context / DB 保留）', () => {
+  beforeEach(() => {
+    setupDb();
+    __resetEventBufferForTest();
+    mockSend.mockClear();
+  });
+
+  afterEach(() => {
+    __resetEventBufferForTest();
+    teardownDb();
+  });
+
+  it('flush 推送的 steer 事件无 context 字段；DB 行 payload 仍有（resume 重放依赖）', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-egress-1', sessionId: '!room:e', senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+    const ctx = { skills: [{ slug: 's', name: 'n', body: '技能正文' }], files: [{ path: 'a.ts', content: '文件内容' }] };
+    __routeChunkToBufferForTest({
+      type: 'steer', streamSessionId: 'ss-egress-1', body: '补充', context: ctx,
+    });
+    mockSend.mockClear();
+    __flushEventBufferForTest();
+
+    // 修复前：wire steer payload 含 context 全文 → toHaveProperty 红
+    const batches = mockSend.mock.calls
+      .filter((c) => c[0] === 'session:message_event_batch')
+      .map((c) => c[1] as Array<{ eventType: string; payload: Record<string, unknown> }>);
+    const steerEvents = batches.flat().filter((e) => e.eventType === 'steer');
+    expect(steerEvents).toHaveLength(1);
+    expect(steerEvents[0]!.payload.body).toBe('补充');
+    expect(steerEvents[0]!.payload).not.toHaveProperty('context');
+
+    // DB 行保留 context（I1 resume / turn-reconstructor 直读重放的单一真相源）
+    const msg = getMessageByStreamSessionId('ss-egress-1')!;
+    const dbSteer = listEventsByMessage(msg.id).find((e) => e.eventType === 'steer');
+    expect(dbSteer).toBeDefined();
+    expect(dbSteer!.payload.context).toEqual(ctx);
+  });
+
+  it('无 context 的 steer 事件原样透传（不克隆不变形状）', () => {
+    __routeChunkToBufferForTest({
+      type: 'start', streamSessionId: 'ss-egress-2', sessionId: '!room:e', senderAgentId: '@bot:localhost',
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({ type: 'steer', streamSessionId: 'ss-egress-2', body: '纯文本补充' });
+    mockSend.mockClear();
+    __flushEventBufferForTest();
+
+    const batches = mockSend.mock.calls
+      .filter((c) => c[0] === 'session:message_event_batch')
+      .map((c) => c[1] as Array<{ eventType: string; payload: Record<string, unknown> }>);
+    const steer = batches.flat().find((e) => e.eventType === 'steer');
+    expect(steer).toBeDefined();
+    expect(steer!.payload).toEqual({ body: '纯文本补充' });
   });
 });

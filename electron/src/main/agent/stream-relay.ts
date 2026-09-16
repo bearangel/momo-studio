@@ -22,6 +22,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { MessageEventBuffer } from '../storage/messages/event-buffer';
+import { projectEventsForWire } from '../storage/messages/event-projection';
 import {
   insertMessage,
   updateMessageStatus,
@@ -48,7 +49,8 @@ export function getEventBuffer(): MessageEventBuffer {
         if (!BrowserWindow) return;
         const win = BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) return;
-        win.webContents.send('session:message_event_batch', events);
+        // I2 egress 投影：steer 事件剥离 context 全文（DB 保留供 resume 重放）
+        win.webContents.send('session:message_event_batch', projectEventsForWire(events));
       },
     });
   }

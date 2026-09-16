@@ -73,4 +73,13 @@ describe('WorkspaceFS.assertInWorkspace（win32 语义）', () => {
     const wsFs = new WorkspaceFS('C:\\WS\\proj');
     expect(wsFs.assertInWorkspace('..foo.txt')).toBe('C:\\WS\\proj\\..foo.txt');
   });
+
+  // I4 连带（win32 分隔符形态）：`.git\…` 反斜杠段仍拒；`.github\…` 同前缀不误伤
+  it('`.git\\config` 反斜杠形态拒绝；`.github\\workflows\\ci.yml` 不误伤', () => {
+    const wsFs = new WorkspaceFS('C:\\WS\\proj');
+    expect(() => wsFs.assertInWorkspace('.git\\config')).toThrow('禁止操作 .git 目录');
+    expect(wsFs.assertInWorkspace('.github\\workflows\\ci.yml')).toBe(
+      'C:\\WS\\proj\\.github\\workflows\\ci.yml',
+    );
+  });
 });

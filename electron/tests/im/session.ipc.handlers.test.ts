@@ -102,7 +102,7 @@ vi.mock('../../src/main/im/markdown-exporter', () => exporterMocks);
 vi.mock('../../src/main/agent/crud', () => agentCrudMocks);
 vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
 
-import { registerSessionIpcHandlers, isMessageContextShape } from '../../src/main/im/session.ipc.handlers';
+import { registerSessionIpcHandlers, sanitizeMessageContext } from '../../src/main/im/session.ipc.handlers';
 import { NoDefaultAgentError } from '../../src/main/im/session-ops';
 import type { SessionRow } from '../../src/main/storage/sessions/repo';
 import type { MessageRow } from '../../src/main/storage/messages/repo';
@@ -385,65 +385,101 @@ describe('session:send handler', () => {
       body: 'hi',
     });
   });
+
+  // === I5 契约锁（终审修复）：元素级畸形剔除，保合法元素 ===
+  // 缺陷：isMessageContextShape 只验 skills/files 是数组——畸形元素（如
+  // skills:[123]）直达 expander 的 s.slug.includes / path.isAbsolute 抛
+  // TypeError，routeUserChat 顶层 catch 吃掉 → 消息落库不派发且无反馈。
+  it('I5：混合元素 context → 畸形元素剔除后透传（合法项保留，消息照常派发）', async () => {
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, {
+      skills: [123, null, { slug: 's', name: 'n' }, { slug: 'bad' }],
+      files: [456, {}, { path: 'a/b.ts' }],
+    });
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      body: 'hi',
+      mentionedInstanceIds: undefined,
+      context: {
+        skills: [{ slug: 's', name: 'n' }],
+        files: [{ path: 'a/b.ts' }],
+      },
+    });
+  });
+
+  it('I5：全部元素畸形 → 空集 context 透传（仍派发，不整体降级）', async () => {
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, {
+      skills: [123],
+      files: [456],
+    });
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      body: 'hi',
+      mentionedInstanceIds: undefined,
+      context: { skills: [], files: [] },
+    });
+  });
 });
 
 /**
- * isMessageContextShape 三态直接契约锁（审查 Important）：
- *   - 合法载荷（外层形状 + skills/files 均为数组）→ true
- *   - null / 非对象 / 缺 skills / 缺 files / 任一非数组 → false
+ * sanitizeMessageContext 契约锁（I5：外层形状 + 元素级校验双关）：
+ *   - 外层：null / 非对象 / 缺 skills / 缺 files / 任一非数组 → undefined
+ *   - 元素：skills 项需 {slug,name} 均 string、files 项需 {path:string}——
+ *     畸形元素剔除保合法元素（expander 的 includes/isAbsolute 对非字符串
+ *     元素会 TypeError，绝不能放行）
  *   - 外层 extra 字段不参与判断（透传宽容，未来扩展字段不破坏兼容）
  */
-describe('isMessageContextShape 三态契约锁', () => {
-  it('合法空集 { skills: [], files: [] } → true', () => {
-    expect(isMessageContextShape({ skills: [], files: [] })).toBe(true);
+describe('sanitizeMessageContext 契约锁（I5 元素级）', () => {
+  it('合法空集 { skills: [], files: [] } → 原样（合法空集不降级）', () => {
+    expect(sanitizeMessageContext({ skills: [], files: [] })).toEqual({ skills: [], files: [] });
   });
 
-  it('合法非空集 { skills:[{slug,name}], files:[{path}] } → true', () => {
-    expect(isMessageContextShape({ skills: [{ slug: 's', name: 'n' }], files: [{ path: 'p' }] })).toBe(true);
+  it('合法非空集 → 元素原样保留', () => {
+    expect(
+      sanitizeMessageContext({ skills: [{ slug: 's', name: 'n' }], files: [{ path: 'p' }] }),
+    ).toEqual({ skills: [{ slug: 's', name: 'n' }], files: [{ path: 'p' }] });
   });
 
-  it('null → false', () => {
-    expect(isMessageContextShape(null)).toBe(false);
+  it('混合 skills 元素：剔除非对象 / 数字 / null / 缺 name，保留 {slug,name} 完整项', () => {
+    expect(
+      sanitizeMessageContext({
+        skills: [123, null, 'x', { slug: 'a' }, { name: 'b' }, { slug: 'c', name: 'C', extra: 1 }],
+        files: [],
+      }),
+    ).toEqual({ skills: [{ slug: 'c', name: 'C', extra: 1 }], files: [] });
   });
 
-  it('undefined → false', () => {
-    expect(isMessageContextShape(undefined)).toBe(false);
+  it('混合 files 元素：剔除非对象 / 数字 / 缺 path / path 非字符串', () => {
+    expect(
+      sanitizeMessageContext({
+        skills: [],
+        files: [456, null, {}, { path: 789 }, { path: 'ok.ts', extra: 2 }],
+      }),
+    ).toEqual({ skills: [], files: [{ path: 'ok.ts', extra: 2 }] });
   });
 
-  it('非对象（字符串/数字/布尔） → false', () => {
-    expect(isMessageContextShape('x')).toBe(false);
-    expect(isMessageContextShape(42)).toBe(false);
-    expect(isMessageContextShape(true)).toBe(false);
+  it('null / undefined / 非对象（字符串/数字/布尔/数组） → undefined', () => {
+    expect(sanitizeMessageContext(null)).toBeUndefined();
+    expect(sanitizeMessageContext(undefined)).toBeUndefined();
+    expect(sanitizeMessageContext('x')).toBeUndefined();
+    expect(sanitizeMessageContext(42)).toBeUndefined();
+    expect(sanitizeMessageContext(true)).toBeUndefined();
+    expect(sanitizeMessageContext([])).toBeUndefined();
   });
 
-  it('数组 → false（typeof === "object" 但 Array.isArray 仍 true；显式 false）', () => {
-    // 注：guard 仅校验 skills/files，外层非 null 对象即过；数组虽过外层但内部
-    // c.skills / c.files 访问仍为 undefined（数组无 .skills），下游 Array.isArray 拒。
-    expect(isMessageContextShape([])).toBe(false);
+  it('缺 skills / 缺 files / 任一非数组 → undefined', () => {
+    expect(sanitizeMessageContext({ files: [] })).toBeUndefined();
+    expect(sanitizeMessageContext({ skills: [] })).toBeUndefined();
+    expect(sanitizeMessageContext({ skills: 'x', files: [] })).toBeUndefined();
+    expect(sanitizeMessageContext({ skills: [], files: 42 })).toBeUndefined();
   });
 
-  it('缺 skills → false', () => {
-    expect(isMessageContextShape({ files: [] })).toBe(false);
-  });
-
-  it('缺 files → false', () => {
-    expect(isMessageContextShape({ skills: [] })).toBe(false);
-  });
-
-  it('skills 非数组（字符串）→ false', () => {
-    expect(isMessageContextShape({ skills: 'x', files: [] })).toBe(false);
-  });
-
-  it('skills 非数组（null）→ false', () => {
-    expect(isMessageContextShape({ skills: null, files: [] })).toBe(false);
-  });
-
-  it('files 非数组 → false', () => {
-    expect(isMessageContextShape({ skills: [], files: {} })).toBe(false);
-  });
-
-  it('外层 extra 字段不参与判断（透传宽容）→ true', () => {
-    expect(isMessageContextShape({ skills: [], files: [], extra: 1 })).toBe(true);
+  it('外层 extra 字段不参与判断（透传宽容）→ 外层字段原样', () => {
+    expect(sanitizeMessageContext({ skills: [], files: [], extra: 1 })).toEqual({
+      skills: [],
+      files: [],
+      extra: 1,
+    });
   });
 });
 
@@ -460,6 +496,50 @@ describe('session:getMessages handler', () => {
       messages: [msgRow],
       eventsByMessage: { 'msg-1': [{ id: 'evt-1', messageId: 'msg-1', seq: 1 }] },
     });
+  });
+
+  // === I2 契约锁：getMessages / loadOlder 的 steer 事件 egress 剥离 context ===
+  // DB 侧（events-repo 直读）保留 context 供 resume 重建；wire 侧（renderer
+  // 拉历史）不得携带 ExpandedContext 全文。此处 events-repo 是 mock（边界），
+  // 投影本身走真实 event-projection 模块（momo-test-rules：mock 收窄 IO 边界）。
+  it('I2：getMessages 返回的 steer 事件无 context 字段（wire 投影剥离）', async () => {
+    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
+      {
+        id: 'evt-steer',
+        messageId: 'msg-1',
+        seq: 2,
+        eventType: 'steer',
+        payload: { body: '补充', context: { skills: [{ slug: 's', name: 'n', body: '全文' }], files: [] } },
+      },
+      { id: 'evt-text', messageId: 'msg-1', seq: 3, eventType: 'text_delta', payload: { delta: 'x' } },
+    ]);
+    const res = await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
+    const events = (res as { eventsByMessage: Record<string, Array<{ eventType: string; payload: Record<string, unknown> }>> }).eventsByMessage['msg-1']!;
+    const steer = events.find((e) => e.eventType === 'steer');
+    expect(steer).toBeDefined();
+    expect(steer!.payload.body).toBe('补充');
+    // 修复前：withEvents 原样回传 → context 全文回流 renderer → 红
+    expect(steer!.payload).not.toHaveProperty('context');
+    // 非 steer 事件不受投影影响
+    expect(events.find((e) => e.eventType === 'text_delta')!.payload).toEqual({ delta: 'x' });
+  });
+
+  it('I2：loadOlder 同款剥离（两处 egress 共用投影，防漂移）', async () => {
+    messagesRepoMocks.listOlderMessages.mockReturnValueOnce([msgRow]);
+    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
+      {
+        id: 'evt-steer-2',
+        messageId: 'msg-1',
+        seq: 1,
+        eventType: 'steer',
+        payload: { body: 'b', context: { skills: [], files: [{ path: 'a', content: 'c' }] } },
+      },
+    ]);
+    const res = await ipcHandlers.get('session:loadOlder')!({} as never, 'sess-1', 500, 30);
+    const events = (res as { eventsByMessage: Record<string, Array<{ eventType: string; payload: Record<string, unknown> }>> }).eventsByMessage['msg-1']!;
+    expect(events[0]!.payload).not.toHaveProperty('context');
+    expect(events[0]!.payload).toEqual({ body: 'b' });
   });
 });
 
