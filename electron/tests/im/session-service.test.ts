@@ -508,4 +508,140 @@ describe('sendUserMessage 全链', () => {
     expect(getTask('T-005')!.status).toBe('in_progress');
     expect(getTask('T-005')!.targetSessionId).toBe(s.id);
   });
+
+  // === v2.11 输入框上下文：空正文时命名回退到 skill/file + context_json 落库契约锁（审查 Important 补全）===
+  // 契约：body='' + context.skills 非空 → applyFirstMessageTitle 截断占位标题为
+  //       skills[0].name（TRUNCATE_LIMIT=20 字）；context 完整 JSON.stringify 落 messages.context_json。
+  //       body='' + 仅 context.files → title 为 files[0].path 的 basename。
+  it('空正文 + context.skills[0].name → 占位标题截断为 skill 名（≤20 字）', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    // 占位标题 + title_auto=1（spec D4：applyFirstMessageTitle 守卫条件之一）
+    const s = insertSession({ workspaceId: 'ws1', title: '新会话', titleAuto: true });
+    addSessionMember(s.id, 'inst-a', true);
+
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '',
+      context: { skills: [{ slug: 'code-reviewer', name: '代码审查' }], files: [] },
+    });
+
+    // 1. 占位标题被截断为 skill 名（≤20 字直接保留）
+    const after = getSession(s.id)!;
+    expect(after.title).toBe('代码审查');
+    expect(after.titleAuto).toBe(true);
+
+    // 2. context 完整落库 messages.context_json（可解析回原对象 + 含 slug）
+    const row = db
+      .prepare('SELECT context_json FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(s.id) as { context_json: string | null };
+    expect(row.context_json).not.toBeNull();
+    const parsed = JSON.parse(row.context_json!);
+    expect(parsed.skills[0].slug).toBe('code-reviewer');
+    expect(parsed.skills[0].name).toBe('代码审查');
+    expect(parsed.files).toEqual([]);
+  });
+
+  it('空正文 + 仅 context.files（无 skills） → 占位标题截断为文件 basename', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '新会话', titleAuto: true });
+    addSessionMember(s.id, 'inst-a', true);
+
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '',
+      context: { skills: [], files: [{ path: 'src/components/Button.tsx' }] },
+    });
+
+    // 占位标题被截断为文件 basename（split('/').pop() = 'Button.tsx'）
+    expect(getSession(s.id)!.title).toBe('Button.tsx');
+
+    // context 同样落库
+    const row = db
+      .prepare('SELECT context_json FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(s.id) as { context_json: string | null };
+    expect(row.context_json).not.toBeNull();
+    const parsed = JSON.parse(row.context_json!);
+    expect(parsed.files[0].path).toBe('src/components/Button.tsx');
+  });
+
+  it('空正文 + context 全空（skills:[], files:[]） → titleSource 为空串 → 不改占位', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '新会话', titleAuto: true });
+    addSessionMember(s.id, 'inst-a', true);
+
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '',
+      context: { skills: [], files: [] },
+    });
+
+    // titleSource 走「空串分支」 → applyFirstMessageTitle 内部 truncateForTitle 返回空 → 不写
+    expect(getSession(s.id)!.title).toBe('新会话');
+  });
+
+  it('非占位标题（title_auto=0） + 空正文 + context.skills → 用户命名不被覆盖', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    // 用户已命名（title_auto=0）——applyFirstMessageTitle 守卫拦截
+    const s = insertSession({ workspaceId: 'ws1', title: '我的会话', titleAuto: false });
+    addSessionMember(s.id, 'inst-a', true);
+
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '',
+      context: { skills: [{ slug: 's', name: '代码审查' }], files: [] },
+    });
+
+    expect(getSession(s.id)!.title).toBe('我的会话');
+  });
+
+  it('有正文 + context → titleSource 用 body（context 不参与命名）；context 仍落库', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '新会话', titleAuto: true });
+    addSessionMember(s.id, 'inst-a', true);
+
+    const { router } = makeSpyRouter();
+    setSessionRouter(router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '帮我审查这段代码',
+      context: { skills: [{ slug: 's', name: '代码审查' }], files: [] },
+    });
+
+    // body 非空 → titleSource = body（不取 skill 名）
+    expect(getSession(s.id)!.title).toBe('帮我审查这段代码');
+
+    // context 仍落库
+    const row = db
+      .prepare('SELECT context_json FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(s.id) as { context_json: string | null };
+    expect(row.context_json).not.toBeNull();
+  });
 });

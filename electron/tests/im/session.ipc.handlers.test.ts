@@ -45,7 +45,7 @@ const {
       getSessionMembersInfo: vi.fn<[], unknown[]>(() => []),
     },
     sessionServiceMocks: {
-      sendUserMessage: vi.fn(async () => undefined),
+      sendUserMessage: vi.fn(),
     },
     sessionsRepoMocks: {
       getSession: vi.fn<[], unknown>(() => null),
@@ -102,7 +102,7 @@ vi.mock('../../src/main/im/markdown-exporter', () => exporterMocks);
 vi.mock('../../src/main/agent/crud', () => agentCrudMocks);
 vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
 
-import { registerSessionIpcHandlers } from '../../src/main/im/session.ipc.handlers';
+import { registerSessionIpcHandlers, isMessageContextShape } from '../../src/main/im/session.ipc.handlers';
 import { NoDefaultAgentError } from '../../src/main/im/session-ops';
 import type { SessionRow } from '../../src/main/storage/sessions/repo';
 import type { MessageRow } from '../../src/main/storage/messages/repo';
@@ -323,6 +323,127 @@ describe('session:send handler', () => {
       body: '你好',
       mentionedInstanceIds: undefined,
     });
+  });
+
+  // === v2.11 上下文护栏契约锁（审查 Important 补全）===
+  // 契约：session:send 第 4 参 context 只在 skills/files 均为数组时透传；
+  //       畸形载荷降级 undefined 不拒整条消息。
+  it('合法 context（skills/files 均为数组） → 原样透传给 sendUserMessage', async () => {
+    const ctx = { skills: [{ slug: 's', name: 'n' }], files: [{ path: 'a/b.ts' }] };
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, ctx);
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      body: 'hi',
+      mentionedInstanceIds: undefined,
+      context: ctx,
+    });
+  });
+
+  it('空 context（skills:[], files:[]）→ 原样透传（不降级；合法空集）', async () => {
+    const ctx = { skills: [], files: [] };
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, ctx);
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      body: 'hi',
+      mentionedInstanceIds: undefined,
+      context: ctx,
+    });
+  });
+
+  it('畸形 context（null） → 降级为 undefined（不传 context 字段），消息不拒', async () => {
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, null);
+    const callArgs = sessionServiceMocks.sendUserMessage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty('context');
+    expect(callArgs.body).toBe('hi');
+  });
+
+  it('畸形 context（skills 非数组） → 降级为 undefined', async () => {
+    const bad = { skills: 'not-array', files: [] };
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, bad);
+    const callArgs = sessionServiceMocks.sendUserMessage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty('context');
+  });
+
+  it('畸形 context（files 非数组） → 降级为 undefined', async () => {
+    const bad = { skills: [], files: 42 };
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, bad);
+    const callArgs = sessionServiceMocks.sendUserMessage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty('context');
+  });
+
+  it('畸形 context（字符串/数字等非对象） → 降级为 undefined', async () => {
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, 'oops');
+    const callArgs = sessionServiceMocks.sendUserMessage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty('context');
+  });
+
+  it('畸形 context 不阻塞消息（消息正常入 sendUserMessage 路径）', async () => {
+    await ipcHandlers.get('session:send')!({} as never, 'sess-1', 'hi', undefined, { skills: null, files: [] });
+    expect(sessionServiceMocks.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sessionServiceMocks.sendUserMessage.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: 'sess-1',
+      body: 'hi',
+    });
+  });
+});
+
+/**
+ * isMessageContextShape 三态直接契约锁（审查 Important）：
+ *   - 合法载荷（外层形状 + skills/files 均为数组）→ true
+ *   - null / 非对象 / 缺 skills / 缺 files / 任一非数组 → false
+ *   - 外层 extra 字段不参与判断（透传宽容，未来扩展字段不破坏兼容）
+ */
+describe('isMessageContextShape 三态契约锁', () => {
+  it('合法空集 { skills: [], files: [] } → true', () => {
+    expect(isMessageContextShape({ skills: [], files: [] })).toBe(true);
+  });
+
+  it('合法非空集 { skills:[{slug,name}], files:[{path}] } → true', () => {
+    expect(isMessageContextShape({ skills: [{ slug: 's', name: 'n' }], files: [{ path: 'p' }] })).toBe(true);
+  });
+
+  it('null → false', () => {
+    expect(isMessageContextShape(null)).toBe(false);
+  });
+
+  it('undefined → false', () => {
+    expect(isMessageContextShape(undefined)).toBe(false);
+  });
+
+  it('非对象（字符串/数字/布尔） → false', () => {
+    expect(isMessageContextShape('x')).toBe(false);
+    expect(isMessageContextShape(42)).toBe(false);
+    expect(isMessageContextShape(true)).toBe(false);
+  });
+
+  it('数组 → false（typeof === "object" 但 Array.isArray 仍 true；显式 false）', () => {
+    // 注：guard 仅校验 skills/files，外层非 null 对象即过；数组虽过外层但内部
+    // c.skills / c.files 访问仍为 undefined（数组无 .skills），下游 Array.isArray 拒。
+    expect(isMessageContextShape([])).toBe(false);
+  });
+
+  it('缺 skills → false', () => {
+    expect(isMessageContextShape({ files: [] })).toBe(false);
+  });
+
+  it('缺 files → false', () => {
+    expect(isMessageContextShape({ skills: [] })).toBe(false);
+  });
+
+  it('skills 非数组（字符串）→ false', () => {
+    expect(isMessageContextShape({ skills: 'x', files: [] })).toBe(false);
+  });
+
+  it('skills 非数组（null）→ false', () => {
+    expect(isMessageContextShape({ skills: null, files: [] })).toBe(false);
+  });
+
+  it('files 非数组 → false', () => {
+    expect(isMessageContextShape({ skills: [], files: {} })).toBe(false);
+  });
+
+  it('外层 extra 字段不参与判断（透传宽容）→ true', () => {
+    expect(isMessageContextShape({ skills: [], files: [], extra: 1 })).toBe(true);
   });
 });
 

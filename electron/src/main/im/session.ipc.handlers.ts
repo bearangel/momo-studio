@@ -51,8 +51,11 @@ import type { MessageContext } from '../../../../renderer/src/ipc/types';
  * IPC 载荷形状 guard（v2.11）：session:send 第 4 参 context 只在 skills/files
  * 均为数组时透传——renderer 输入面之外的畸形载荷降级为 undefined（无上下文
  * 发送），不拒整条消息。
+ *
+ * 已 export 以便契约测试直接断言（v2.11 审查 Important：协议面变更必须有
+ * 单测锁三态——合法 / null / 畸形）。
  */
-function isMessageContextShape(v: unknown): v is MessageContext {
+export function isMessageContextShape(v: unknown): v is MessageContext {
   if (typeof v !== 'object' || v === null) return false;
   const c = v as { skills?: unknown; files?: unknown };
   return Array.isArray(c.skills) && Array.isArray(c.files);

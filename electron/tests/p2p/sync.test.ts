@@ -528,4 +528,162 @@ describe('P2pSync', () => {
 
     expect(onRemote).not.toHaveBeenCalled();
   });
+
+  // === v2.11 输入框上下文透传契约锁（审查 Important 补全）===
+  // 契约：handleIncoming 仅放行 string 类型的 contextJson；
+  //       缺失/null/数字/对象 → 丢弃为 undefined（旧节点载荷兼容）。
+  it('入站 message 带 contextJson:string → onRemoteMessage 收到该字符串', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: '@peer1:home',
+          body: 'hi',
+          eventType: 'm.room.message',
+          contextJson: '{"skills":[{"slug":"s","name":"n"}],"files":[]}',
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledTimes(1);
+    const arg = onRemote.mock.calls[0]![0] as { contextJson?: string };
+    expect(arg.contextJson).toBe('{"skills":[{"slug":"s","name":"n"}],"files":[]}');
+  });
+
+  it('入站 message 带 contextJson:数字（非 string）→ 丢弃为 undefined', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: '@peer1:home',
+          body: 'hi',
+          eventType: 'm.room.message',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          contextJson: 123 as any,
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledTimes(1);
+    const arg = onRemote.mock.calls[0]![0] as { contextJson?: string };
+    expect(arg.contextJson).toBeUndefined();
+  });
+
+  it('入站 message 带 contextJson:null → 丢弃为 undefined（向后兼容旧节点载荷）', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: '@peer1:home',
+          body: 'hi',
+          eventType: 'm.room.message',
+          contextJson: null,
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledTimes(1);
+    const arg = onRemote.mock.calls[0]![0] as { contextJson?: string };
+    expect(arg.contextJson).toBeUndefined();
+  });
+
+  it('入站 message 不带 contextJson 字段（旧节点载荷）→ onRemoteMessage 收到 undefined', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: '@peer1:home',
+          body: 'hi',
+          eventType: 'm.room.message',
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    expect(onRemote).toHaveBeenCalledTimes(1);
+    const arg = onRemote.mock.calls[0]![0] as { contextJson?: string };
+    expect(arg.contextJson).toBeUndefined();
+  });
+
+  it('入站 message 带 contextJson:对象（非 string）→ 丢弃为 undefined', () => {
+    const router = mkMockRouter();
+    const onRemote = vi.fn();
+    const sync = new P2pSync({
+      router: router as unknown as Router,
+      localNodeId: 'me',
+      onRemoteMessage: onRemote,
+    });
+    sync.start();
+
+    router._emit({
+      fromNodeId: 'peer1',
+      payload: {
+        targetNodeId: 'me',
+        type: 'message',
+        body: {
+          roomId: 'r1',
+          sender: '@peer1:home',
+          body: 'hi',
+          eventType: 'm.room.message',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          contextJson: { nested: true } as any,
+        },
+      },
+      receivedAt: Date.now(),
+    });
+
+    const arg = onRemote.mock.calls[0]![0] as { contextJson?: string };
+    expect(arg.contextJson).toBeUndefined();
+  });
 });
