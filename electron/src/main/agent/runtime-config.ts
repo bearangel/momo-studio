@@ -140,6 +140,26 @@ export interface RuntimeConfig {
   thinking?: ThinkingRequest;
 }
 
+/** 主进程展开后下发给子进程的上下文项——skill（loadFull 正文） */
+export interface ExpandedSkillItem {
+  slug: string;
+  name: string;
+  /** SKILL.md 正文 */
+  body: string;
+}
+
+/** 主进程展开后下发给子进程的上下文项——文件（content=null = 超 64KB/读取失败/总量超限降级） */
+export interface ExpandedFileItem {
+  path: string;
+  content: string | null;
+}
+
+/** task-config / steer 线协议的上下文载荷（不落库、不回 renderer） */
+export interface ExpandedContext {
+  skills: ExpandedSkillItem[];
+  files: ExpandedFileItem[];
+}
+
 /**
  * v2（task-driven 切换 Task T3）：task-config IPC 消息体。
  *
@@ -161,6 +181,12 @@ export interface TaskConfig {
   streamSessionId: string;
   /** 消息 metadata（mentions 等）；当前 runTaskChatLoop 不消费，留给后续 RouterService 扩展 */
   mentions?: string[];
+  /**
+   * v2.11 输入框上下文（spec 2026-09-16 §5.4）：主进程展开后的用户指定
+   * skill 正文与文件内容。设置时 runTaskChatLoop 把 <user-context> 块包装进
+   * 本轮用户正文（一次性注入，不落库）。
+   */
+  context?: ExpandedContext;
   /**
    * dispatch 模式：父 agent（PM）派来的任务上下文。
    * 设置时本 task 是 sub-agent 收到 PM 的 dispatch；
