@@ -10,6 +10,7 @@ import { migration032 } from './032_v2.3_builtin_apply_patch';
 import { migration033 } from './033_v2_5_change_journal';
 import { migration034 } from './034_v2_7_browser_settings';
 import { migration035 } from './035_v2_7_browser_takeover_wait';
+import { migration036 } from './036_v2_11_message_context';
 
 export interface Migration {
   version: number;
@@ -905,6 +906,14 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 035_v2_7_browser_takeover_wait.ts（约定同上）——ALTER TABLE ADD COLUMN 两列。
     version: migration035.version,
     sql: migration035.up,
+  },
+  {
+    // v2.11：输入框上下文系统（spec 2026-09-16）——messages 加 context_json 列，
+    // 存 MessageContext 序列化（metadata 级：skill slug / 文件路径）。SQL 住在独立模块
+    // 036_v2_11_message_context.ts（约定同上）——ALTER TABLE ADD COLUMN 单 nullable 列，
+    // 旧消息行自然兼容（NULL = 无上下文）。
+    version: migration036.version,
+    sql: migration036.sql,
   },
 ];
 

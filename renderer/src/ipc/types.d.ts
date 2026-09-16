@@ -323,8 +323,35 @@ export interface ImMessage {
   source: 'local' | 'lan' | 'hub' | 'matrix';
   workspaceId: string | null;
   taskId: string | null;
+  /**
+   * 输入框上下文序列化（v2.11 spec 2026-09-16 §5.3）：renderer ↔ main 契约 + messages.context_json 落库字段。
+   * wire 直通（camelCase 字符串），主进程不做解析；renderer 消费时调 parseMessageContext 解码。
+   * null = 旧消息 / 无上下文。
+   */
+  contextJson: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 输入框上下文项——技能（metadata 级；正文仅派发时在主进程展开） */
+export interface SkillContextItem {
+  slug: string;
+  /** 展示名（选择时从资源索引快照，渲染 chip 不反查） */
+  name: string;
+}
+
+/** 输入框上下文项——workspace 文件路径引用（相对路径，'/' 分隔） */
+export interface FileContextItem {
+  path: string;
+}
+
+/**
+ * 一条消息携带的输入框上下文（renderer ↔ main 契约 + messages.context_json 载荷）。
+ * 解析收口在 renderer 端 src/lib/message-context.ts（防御性：null / 损坏 / 非法形状 → null）。
+ */
+export interface MessageContext {
+  skills: SkillContextItem[];
+  files: FileContextItem[];
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */

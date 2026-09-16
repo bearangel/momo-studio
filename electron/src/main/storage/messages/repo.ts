@@ -24,6 +24,13 @@ export interface MessageRow {
   source: 'local' | 'lan' | 'hub' | 'matrix';
   workspaceId: string | null;
   taskId: string | null;
+  /**
+   * 输入框上下文序列化（v2.11 spec 2026-09-16 §5.3）：renderer ↔ main 契约载荷 +
+   * messages.context_json 落库字段。wire 是 MessageRow 直通（camelCase），主进程不在
+   * 推送侧解析（避免每个推送点遗漏）；renderer 消费时用 parseMessageContext 解析。
+   * NULL = 旧消息 / 无上下文（v2.11 前所有消息均 NULL，旧行为自然兼容）。
+   */
+  contextJson: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -42,6 +49,7 @@ type SqlRow = {
   source: string;
   workspace_id: string | null;
   task_id: string | null;
+  context_json: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -61,6 +69,7 @@ function rowToCamel(r: SqlRow): MessageRow {
     source: r.source as MessageRow['source'],
     workspaceId: r.workspace_id,
     taskId: r.task_id,
+    contextJson: r.context_json,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -87,8 +96,9 @@ export function insertMessage(
       id, session_id, sender, event_type, body,
       stream_session_id, parent_stream_session_id, segment_of, segment_index,
       status, source, workspace_id, task_id,
+      context_json,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.sessionId,
@@ -103,6 +113,7 @@ export function insertMessage(
     source,
     input.workspaceId ?? null,
     input.taskId ?? null,
+    input.contextJson ?? null,
     now,
     now,
   );
