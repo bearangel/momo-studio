@@ -203,6 +203,8 @@ const api: ApiSurface = {
     // 拦截后去 / 前缀，把裸 command 名（如 'compact'）传给主进程
     command: (sessionId: string, command: string) =>
       invoke('session:command', sessionId, command),
+    // 命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；commands.ts 单一真相源
+    listCommands: () => invoke<Array<{ name: string; description: string }>>('session:listCommands'),
     getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
     loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
       invoke('session:loadOlder', sessionId, beforeTs, count),

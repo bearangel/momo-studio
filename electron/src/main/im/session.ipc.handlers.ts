@@ -26,6 +26,7 @@ import {
   type CollabTarget,
 } from './session-ops';
 import { sendUserMessage, handleSessionCommand } from './session-service';
+import { SESSION_COMMANDS } from './commands';
 import { getSession, type SessionRow } from '../storage/sessions/repo';
 import {
   listMessagesBySession,
@@ -261,6 +262,10 @@ export function registerSessionIpcHandlers(): void {
       return handleSessionCommand({ sessionId, command });
     },
   );
+
+  // 命令注册表（v2.11，spec §6.1）—— / 菜单命令组数据源：renderer 启动拉一次，
+  // 后续命令输入拦截按此判定（命令白名单单一真相源在主进程 commands.ts）。
+  ipcMain.handle('session:listCommands', () => SESSION_COMMANDS);
 
   logger.info('Session IPC handlers 已注册');
 }

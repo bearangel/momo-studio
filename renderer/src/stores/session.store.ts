@@ -349,22 +349,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (body, mentionedInstanceIds) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return undefined;
-    // / 命令拦截（spec §5.4）：整条以 / 开头才识别；白名单本地判定避免无意义 IPC；
-    // '//' 转义为原样 '/' 发送。成功/失败中文 message 写入 commandHint 给用户看。
+    // / 命令拦截（spec §5.4）：整条以 / 开头才识别；命令白名单在主进程 commands.ts
+    // 维护（renderer 不存副本）——一律转发 session:command，未知/运行中/无模型配置
+    // 由主进程 reject，中文 Error.message 写入 commandHint 给用户看。
+    // '//' 转义为原样 '/' 发送。
     if (body.startsWith('//')) {
       body = body.slice(1);
     } else if (body.startsWith('/')) {
       const command = body.slice(1).trim();
-      if (command === 'compact') {
-        try {
-          const r = await ipc.session.command(activeSessionId, command);
-          set({ commandHint: r.message });
-        } catch (err) {
-          set({ commandHint: err instanceof Error ? err.message : String(err) });
-        }
-        return undefined;
+      try {
+        const r = await ipc.session.command(activeSessionId, command);
+        set({ commandHint: r.message });
+      } catch (err) {
+        set({ commandHint: err instanceof Error ? err.message : String(err) });
       }
-      set({ commandHint: `未知命令: /${command}（当前支持 /compact）` });
       return undefined;
     }
     set({ commandHint: null });

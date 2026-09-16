@@ -330,11 +330,11 @@ describe('session.store — 无参 loadSessions 工作空间守卫（跨仓泄�
   });
 });
 
-// === / 命令拦截（spec §5.4）— renderer 端拦截 + 白名单本地判定 + // 转义 ===
+// === / 命令拦截（spec §5.4）— renderer 端拦截 + 主进程注册表转发 + // 转义 ===
 // 背景：主进程 session:command 通道已由 58f8d3e 落地；renderer 端在 sendMessage
-// 前置拦截——整条以 / 开头才识别为命令，// 转义为原样发送。白名单本地判定避免无意义
-// IPC 往返；未知命令 / 运行中 / 无模型配置由主进程 reject，renderer 接收中文 Error
-// 写入 commandHint 给用户看。
+// 前置拦截——整条以 / 开头才识别为命令，// 转义为原样发送。命令白名单在主进程
+// commands.ts 维护（v2.11 spec §6.1 单一真相源），renderer 一律转发，由主进程
+// 查表 reject 未知名命令；renderer 接收中文 Error.message 写入 commandHint。
 describe('session.store — / 命令拦截（spec §5.4）', () => {
   it('整条以 / 开头且白名单命中 → 走 session.command，不走 send', async () => {
     useSessionStore.setState({ activeSessionId: 's1' });
@@ -343,10 +343,18 @@ describe('session.store — / 命令拦截（spec §5.4）', () => {
     expect(mockApi.session.send).not.toHaveBeenCalled();
   });
 
-  it('未知命令 → 不发送，置 commandHint 提示', async () => {
+  // 未知命令：renderer 不再做本地白名单判定，统一转发到主进程；主进程查表后
+  // reject（中文 Error.message），renderer 捕获写入 commandHint。
+  it('未知命令 → 转发 session:command 由主进程 reject，置 commandHint 错误提示', async () => {
     useSessionStore.setState({ activeSessionId: 's1' });
+    mockApi.session.command.mockRejectedValueOnce(
+      new Error('未知命令: /wat（当前支持 /compact）'),
+    );
     await useSessionStore.getState().sendMessage('/wat');
     expect(mockApi.session.send).not.toHaveBeenCalled();
+    // 转发到主进程（不再本地拦截）
+    expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'wat');
+    // 主进程 reject 的中文错误写入 commandHint
     expect(useSessionStore.getState().commandHint).toContain('未知命令');
   });
 

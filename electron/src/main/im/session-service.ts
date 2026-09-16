@@ -38,6 +38,7 @@ import { activateMentionedTasks } from '../task/activation';
 import { listTasks, getTask } from '../storage/tasks/repo';
 import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
+import { SESSION_COMMANDS, isKnownSessionCommand } from './commands';
 import type { BrowserWindow } from 'electron';
 import { logger } from '../logger';
 
@@ -257,8 +258,9 @@ export async function handleSessionCommand(input: {
   sessionId: string;
   command: string;
 }): Promise<{ ok: true; message: string }> {
-  if (input.command !== 'compact') {
-    throw new Error(`未知命令: /${input.command}（当前支持 /compact）`);
+  const supported = SESSION_COMMANDS.map((c) => `/${c.name}`).join('、');
+  if (!isKnownSessionCommand(input.command)) {
+    throw new Error(`未知命令: /${input.command}（当前支持 ${supported}）`);
   }
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);

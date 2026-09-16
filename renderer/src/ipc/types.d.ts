@@ -855,6 +855,8 @@ export interface SessionApiSurface {
   ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
   /** 斜杠命令（spec §5.4）：/compact 等确定性命令。未知命令/运行中/无模型配置时 reject（Error.message 中文提示） */
   command(sessionId: string, command: string): Promise<{ ok: true; message: string }>;
+  /** 会话命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；主进程 commands.ts 单一真相源 */
+  listCommands(): Promise<Array<{ name: string; description: string }>>;
   /**
    * 向前翻页：返回 created_at < beforeTs 的消息。
    * beforeTs 由调用方从当前可见消息的最小 createdAt 推导；count 默认 30。
