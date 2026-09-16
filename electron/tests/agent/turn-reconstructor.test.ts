@@ -304,7 +304,8 @@ describe('turn-reconstructor：九场景矩阵', () => {
       { role: 'user', content: '继续优化' },
       { role: 'assistant', content: '工作中' },
     ]);
-    expect(turn.steers).toEqual(['记得补测试']);
+    // Task 6 审查修复：steers[] 元素 = {body} 形状（原文 + 可选 context 元数据）
+    expect(turn.steers).toEqual([{ body: '记得补测试' }]);
     expect(turn.degenerate).toBe(false);
   });
 
@@ -447,7 +448,8 @@ describe('turn-reconstructor：九场景矩阵', () => {
       { role: 'user', content: '继续优化' },
       { role: 'assistant', content: '工作中' },
     ]);
-    expect(turn.steers).toEqual(['记得补测试']);
+    // Task 6 审查修复：steers[] 元素 = {body} 形状（原文 + 可选 context 元数据）
+    expect(turn.steers).toEqual([{ body: '记得补测试' }]);
     expect(turn.degenerate).toBe(false);
   });
 
@@ -476,5 +478,107 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(steerRow).toBeDefined();
     expect(steerRow?.event_type).toBe('steer');
     expect(JSON.parse(steerRow!.payload_json)).toEqual({ body: 'hello' });
+  });
+
+  // === Task 6 审查修复回归锁（v2.11）：steer 线协议原文 + context，展开收口消费点 ===
+  // 缺陷：push 点包装令 steer 事件 payload.body = <user-context> 包装体 → 本重建器
+  // drained 分支在每一后续回合的会话重建里重复注入 skill/文件展开（spec D2 破坏）。
+
+  it('13. steer 带 context 已 drain → [用户中途补充] 经 renderTurnBody 重放展开（消费点渲染，非落库定型）', () => {
+    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
+    insertOwnerMessage(SESSION_ID, '继续重构');
+    startStream('ss-ctx-drained');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-drained', delta: '分析中' });
+    __flushEventBufferForTest();
+    // 线协议（修复后）：chunk body=原文 + context 元数据（修复前只可能是包装体
+    // 或 context 被消费侧忽略——两形态都令下方展开断言红）
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-ctx-drained',
+      body: '补充说明 Y',
+      context: ctx,
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-drained', delta: '收到' });
+    __flushEventBufferForTest();
+
+    const turn = rebuildTurn('ss-ctx-drained');
+
+    const supplement = turn.messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.content).toContain('<user-context>');
+    expect(supplement!.content).toContain('技能正文内容');
+    // 块在前正文在后（与 runtime-entry drain 注入语义一致）
+    expect(supplement!.content.endsWith('补充说明 Y')).toBe(true);
+    expect(turn.steers).toEqual([]);
+  });
+
+  it('14. steer 带 context 未 drain → steers[] 元素形状 {body, context}（原文+元数据，非包装体）', () => {
+    const ctx = { skills: [], files: [{ path: 'src/a.ts', content: 'const a = 1;' }] };
+    insertOwnerMessage(SESSION_ID, '继续优化');
+    startStream('ss-ctx-pending');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-pending', delta: '工作中' });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-ctx-pending',
+      body: '记得补测试',
+      context: ctx,
+    });
+    __flushEventBufferForTest();
+
+    const turn = rebuildTurn('ss-ctx-pending');
+
+    // resume 重放载荷形状锁：原文 + context 元数据（消费点渲染），绝无包装体字符串
+    expect(turn.steers).toEqual([{ body: '记得补测试', context: ctx }]);
+  });
+
+  it('15. steer 事件 payload 落库形态（带 context）：{body, context}——context 经 stream-relay 透传', () => {
+    const ctx = { skills: [{ slug: 's', name: 'n', body: 'b' }], files: [] };
+    insertOwnerMessage(SESSION_ID, '形态校验');
+    startStream('ss-ctx-shape');
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-ctx-shape',
+      body: 'hello',
+      context: ctx,
+    });
+    __flushEventBufferForTest();
+
+    const rows = getDb()
+      .prepare(
+        `SELECT event_type, payload_json FROM message_events
+         WHERE message_id = ? ORDER BY seq ASC`,
+      )
+      .all(streamMessageId('ss-ctx-shape')) as Array<{ event_type: string; payload_json: string }>;
+
+    const steerRow = rows.find((r) => r.event_type === 'steer');
+    expect(steerRow).toBeDefined();
+    // body=原文 + context 元数据整体落库（摘掉 stream-relay 透传 → context 缺失必红）
+    expect(JSON.parse(steerRow!.payload_json)).toEqual({ body: 'hello', context: ctx });
+  });
+
+  it('16. 历史载荷兼容：steer 事件 payload 无 context 字段 → 渲染原样不包装', () => {
+    // 本特性未发布、无真实历史数据，但行为必须自洽：无 context 的 steer 事件
+    // renderTurnBody(body, undefined) = 原样
+    insertOwnerMessage(SESSION_ID, '历史流');
+    startStream('ss-legacy-steer');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-legacy-steer', delta: '工作中' });
+    __flushEventBufferForTest();
+    insertRawEvent(streamMessageId('ss-legacy-steer'), 'steer', JSON.stringify({ body: '旧格式补充' }));
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-legacy-steer', delta: '收到' });
+    __flushEventBufferForTest();
+
+    const turn = rebuildTurn('ss-legacy-steer');
+
+    const supplement = turn.messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.content).toBe('[用户中途补充] 旧格式补充');
+    expect(supplement!.content).not.toContain('<user-context>');
   });
 });

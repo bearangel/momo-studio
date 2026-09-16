@@ -395,6 +395,118 @@ describe('steer 监听器 context 包装（steer → pendingSteers）', () => {
 
 // === isExpandedContext guard（steer 载荷 unknown → ExpandedContext | undefined） ===
 
+// === steer 线协议（Task 6 审查修复回归锁）：chunk emit 原文 + context，非包装体 ===
+// 缺陷复现锁：修复前 push 点即包装——drain emit 的 steer chunk body 是
+// <user-context> 包装体且无 context 字段 → stream-relay 落库 → turn-reconstructor
+// 在每一后续回合的会话重建里重复注入 skill/文件展开（spec D2「一次性注入」破坏）。
+
+describe('steer drain 线协议（chunk emit 原文+context）', () => {
+  const originalSend = process.send;
+  const wireChunks: unknown[] = [];
+
+  beforeEach(() => {
+    wireChunks.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    __setMemoryProviderForTest(stubMemoryProvider);
+    process.send = ((msg: unknown): boolean => {
+      wireChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+    vi.restoreAllMocks();
+  });
+
+  it('带 context 的 steer → chunk body=原文、context=元数据；LLM 注入消息仍见包装体', async () => {
+    const steerCtx = { skills: [{ slug: 's', name: 'n', body: '技能指令' }], files: [] };
+    let callIndex = 0;
+    let round2Messages: LLMMessage[] = [];
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        callIndex++;
+        if (callIndex === 1) {
+          yield { type: 'text', content: '先总结' };
+          yield {
+            type: 'tool_use',
+            toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
+          };
+          yield { type: 'done', finishReason: 'tool_use' };
+          emitChildMessage({
+            type: 'steer',
+            streamSessionId: 's-ctx-wire',
+            body: '补充说明 X',
+            context: steerCtx,
+          });
+          return;
+        }
+        round2Messages = [...messages];
+        yield { type: 'text', content: '收到补充' };
+        yield { type: 'done', finishReason: 'stop' };
+      }) as never,
+    });
+
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+    await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-ctx-wire');
+
+    // ① 线协议：steer chunk body=原文（不含包装），context 携带元数据
+    const steerChunks = wireChunks.filter(
+      (c): c is { type: 'steer'; streamSessionId: string; body: string; context?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'steer',
+    );
+    expect(steerChunks).toHaveLength(1);
+    expect(steerChunks[0]!.body).toBe('补充说明 X');
+    expect(steerChunks[0]!.body).not.toContain('<user-context>');
+    expect(steerChunks[0]!.context).toEqual(steerCtx);
+
+    // ② LLM 视角不变：注入消息 = 包装体（块在前正文在后）
+    const supplement = round2Messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.content).toContain('<user-context>');
+    expect(supplement!.content.endsWith('补充说明 X')).toBe(true);
+  });
+
+  it('无 context 的 steer → chunk body=原文且无 context 字段（线协议零变化回归锁）', async () => {
+    let callIndex = 0;
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (): AsyncGenerator<StreamDelta> {
+        callIndex++;
+        if (callIndex === 1) {
+          yield { type: 'text', content: '先总结' };
+          yield {
+            type: 'tool_use',
+            toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
+          };
+          yield { type: 'done', finishReason: 'tool_use' };
+          emitChildMessage({ type: 'steer', streamSessionId: 's-ctx-wire', body: '补充说明 X' });
+          return;
+        }
+        yield { type: 'text', content: '收到补充' };
+        yield { type: 'done', finishReason: 'stop' };
+      }) as never,
+    });
+
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+    await runChatLoop('!room:t', '初始问题', makeConfig(), makeContext(), stats, undefined, undefined, 's-ctx-wire');
+
+    const steerChunks = wireChunks.filter(
+      (c): c is { type: 'steer'; streamSessionId: string; body: string; context?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'steer',
+    );
+    expect(steerChunks).toHaveLength(1);
+    expect(steerChunks[0]!.body).toBe('补充说明 X');
+    expect('context' in steerChunks[0]!).toBe(false);
+  });
+});
+
+// === isExpandedContext guard（steer 载荷 unknown → ExpandedContext | undefined） ===
+
 describe('isExpandedContext（形状收窄）', () => {
   it('合法 ExpandedContext 通过', () => {
     expect(isExpandedContext({ skills: [], files: [] })).toBe(true);

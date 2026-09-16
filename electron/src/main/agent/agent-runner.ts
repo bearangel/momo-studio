@@ -21,7 +21,7 @@
 //   4. ephemeral chat（taskId=null）无后续 IPC 依赖，保持旧语义：end 即回收。
 import type { ChildProcess } from 'node:child_process';
 import type { WarmPool, WarmRuntime } from './warm-pool';
-import type { AgentRuntimeOpts, ExpandedContext } from './runtime-config';
+import type { AgentRuntimeOpts, ExpandedContext, SteerReplayItem } from './runtime-config';
 import { logger } from '../logger';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
@@ -75,7 +75,8 @@ export interface TaskConfig {
   resume?: {
     messages: import('./llm-provider').LLMMessage[];
     toolCallsUsed: number;
-    steers: string[];
+    /** 待重放 steer = 原文 + context 元数据（Task 6 审查修复：消费点渲染，非包装体） */
+    steers: SteerReplayItem[];
     degenerate: boolean;
   };
   /**

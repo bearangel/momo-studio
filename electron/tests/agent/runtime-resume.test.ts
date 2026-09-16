@@ -465,7 +465,7 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     const resumeTurn: RebuiltTurn = {
       messages: [{ role: 'user', content: '原始指令' }],
       toolCallsUsed: 0,
-      steers: ['优先跑测试'],
+      steers: [{ body: '优先跑测试' }],
       degenerate: false,
     };
     await runChatLoop(
@@ -491,6 +491,41 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     expect(sys).toContain('中途补充：「优先跑测试」');
     expect(sys.match(/优先跑测试/g)).toHaveLength(1);
     expect(sys).toContain('「原始指令」');
+  });
+
+  it('未消费 steer 重放（带 context）：注入消息含展开、steer chunk emit 原文+context（Task 6 审查修复）', async () => {
+    let first: LLMMessage[] = [];
+    mockSingleRoundStop((m) => { first = m; });
+
+    const steerCtx = { skills: [{ slug: 's', name: 'n', body: '技能指令' }], files: [] };
+    const resumeTurn: RebuiltTurn = {
+      messages: [{ role: 'user', content: '原始指令' }],
+      toolCallsUsed: 0,
+      steers: [{ body: '优先跑测试', context: steerCtx }],
+      degenerate: false,
+    };
+    await runChatLoop(
+      '!room:t', '原始指令', makeConfig(), makeContext(),
+      { toolCallsUsed: 0 }, undefined, undefined, 's-resume-steer-ctx', resumeTurn,
+    );
+
+    // 注入消息 = 消费点 renderTurnBody 重放的包装体（LLM 视角与到达时一致）
+    const supplement = first.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.content).toContain('<user-context>');
+    expect(supplement!.content).toContain('技能指令');
+    expect(supplement!.content.endsWith('优先跑测试')).toBe(true);
+    // 线协议：steer chunk emit 原文 + context 元数据（不是包装体）
+    const steerChunks = sentChunks.filter(
+      (c): c is { type: 'steer'; streamSessionId: string; body: string; context?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'steer',
+    );
+    expect(steerChunks).toHaveLength(1);
+    expect(steerChunks[0]!.body).toBe('优先跑测试');
+    expect(steerChunks[0]!.body).not.toContain('<user-context>');
+    expect(steerChunks[0]!.context).toEqual(steerCtx);
   });
 
   it('无 resumeTurn → 首轮 messages 形状与现状一致（system + user(currentBody)，无额外消息）', async () => {

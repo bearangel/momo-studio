@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
-import { parseConfig, type RuntimeConfig, type TaskConfig } from './runtime-config';
+import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext } from './runtime-config';
 import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
@@ -688,14 +688,18 @@ export async function runChatLoop(
     else externalAbortSignal.addEventListener('abort', () => abortController.abort(), { once: true });
   }
   // v2.3 steer：与 abort 同监听器（共享全部 process.off 清理点）——
-  // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）
-  const pendingSteers: string[] = [];
+  // push 进闭包队列，chat loop 每轮构建 LLM 请求前 drain（spec §5.2）。
+  // Task 6 审查修复：队列元素 = {orig, context}——push 点只存原文与上下文
+  // 元数据，<user-context> 包装收口到 drain 消费点（注入渲染 / mandate /
+  // steer chunk emit 原文）。包装体若在 push 点定型会随 steer 事件落库，
+  // 在每一后续回合的会话重建里重复注入 skill/文件展开（spec D2 一次性注入）。
+  const pendingSteers: { orig: string; context?: ExpandedContext }[] = [];
   // v2.6.0 断点续跑：未消费 steer 重放——断点前到达但从未进入 LLM 上下文的
   // 中途补充重放进 pendingSteers，经既有 drain 路径注入（user 消息 / mandate
   // 同步 / steer 事件落库三件事由 drain 统一完成）。不在此预写 mandate.steers：
   // drain 循环自身会 push，预写 = mandate 段与溢出重放双份重复
   if (resumeTurn && resumeTurn.steers.length > 0) {
-    pendingSteers.push(...resumeTurn.steers);
+    pendingSteers.push(...resumeTurn.steers.map((s) => ({ orig: s.body, context: s.context })));
   }
   // v2.3.1 消息滚动：自上次 roll 后是否产过新文本——drain 时据此决定是否换行
   //（防「连续 steer 在同一等待期」产生空新行，spec §2.2）
@@ -709,9 +713,12 @@ export async function runChatLoop(
     }
     if (m.type === 'steer' && typeof m.body === 'string') {
       // v2.11 输入框上下文（spec 2026-09-16 §5.5）：steer context 与 task-config
-      // 同一包装语义——块在前正文在后，一次性注入本轮补充；载荷形状不合法按
-      // undefined 回退（isExpandedContext 收窄，防漂移载荷注入垃圾块）
-      pendingSteers.push(renderTurnBody(m.body, isExpandedContext(m.context) ? m.context : undefined));
+      // 同一语义，但包装收口到 drain 消费点——此处只存原文 + 收窄后的 context
+      //（isExpandedContext 防漂移载荷注入垃圾块）
+      pendingSteers.push({
+        orig: m.body,
+        context: isExpandedContext(m.context) ? m.context : undefined,
+      });
     }
   };
   process.on('message', abortListener);
@@ -837,15 +844,24 @@ export async function runChatLoop(
       // turn-mandate Task 3：把 steer 同步进 mandate 状态对象——
       // 下一次 refreshSystem 即把补充纳入 mandate 尾段，
       // 跨压缩存活路径同步生效。
-      const steer = pendingSteers.shift()!;
-      mandate.steers.push(steer);
-      messages.push({ role: 'user', content: `[用户中途补充] ${steer}` });
+      const item = pendingSteers.shift()!;
+      // 展开收口点：本回合内 LLM 视图渲染包装体（块在前正文在后，与
+      // task-config.context 注入语义一致）；线协议 emit 原文 + context 元数据
+      const rendered = renderTurnBody(item.orig, item.context);
+      mandate.steers.push(rendered);
+      messages.push({ role: 'user', content: `[用户中途补充] ${rendered}` });
       // v2.6.0 断点续跑：steer 事件持久化（spec §2 + v2.5 C1 教训）。
-      // 走既有 event buffer 落库（event_type='steer' / payload={body}），
-      // 重启后 turn-reconstructor 据此重建本条 [用户中途补充] user 消息，
-      // 已 drain steer 不会进 steers[]，未 drain 由流末判定入 steers[]。
-      // 纯事件追加（不动消息行状态），与 thinking/text/todo_update 同型。
-      sendStreamChunk({ type: 'steer', streamSessionId, body: steer });
+      // 走既有 event buffer 落库（event_type='steer' / payload={body: 原文,
+      // context?}），重启后 turn-reconstructor 据此重建本条 [用户中途补充]
+      // user 消息（重建点 renderTurnBody 重放展开），已 drain steer 不会进
+      // steers[]，未 drain 由流末判定入 steers[]。纯事件追加（不动消息行
+      // 状态），与 thinking/text/todo_update 同型。
+      sendStreamChunk({
+        type: 'steer',
+        streamSessionId,
+        body: item.orig,
+        ...(item.context ? { context: item.context } : {}),
+      });
       drained = true;
     }
     if (drained) {

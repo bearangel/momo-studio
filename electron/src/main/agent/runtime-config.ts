@@ -161,6 +161,20 @@ export interface ExpandedContext {
 }
 
 /**
+ * steer 线协议 / resume 载荷携带的待重放 steer 项（Task 6 审查修复）。
+ * 线上只传原文 + context 元数据，`<user-context>` 包装收口到消费点
+ * （注入 / 重建时 renderTurnBody 渲染）——包装体若在 push 点定型会随
+ * steer 事件落 message_events，在每一后续回合的会话重建里重复注入
+ * skill/文件展开（违反 spec D2「一次性注入」）。
+ */
+export interface SteerReplayItem {
+  /** 用户补充正文原文（不含包装） */
+  body: string;
+  /** steer 到达时的展开上下文；undefined = 无上下文 / 历史载荷（向后兼容） */
+  context?: ExpandedContext;
+}
+
+/**
  * v2（task-driven 切换 Task T3）：task-config IPC 消息体。
  *
  * 由主进程 AgentRunner.executeTask 通过 child.send({ type: 'task-config', ... }) 注入，
@@ -221,8 +235,8 @@ export interface TaskConfig {
     messages: import('./llm-provider').LLMMessage[];
     /** 断点前已消耗的工具预算（rebuildTurn.toolCallsUsed） */
     toolCallsUsed: number;
-    /** 中断前未消费的中途补充（spec §5.3：流末无后续输出的 steer 入此数组） */
-    steers: string[];
+    /** 中断前未消费的中途补充（spec §5.3：流末无后续输出的 steer 入此数组；原文+context 元数据，消费点再渲染） */
+    steers: SteerReplayItem[];
     /** 主进程 rebuildTurn 已评估；runtime 侧无需再判（沿用 main 决议） */
     degenerate: boolean;
   };

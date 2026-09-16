@@ -367,12 +367,14 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         // v2.6.0 断点续跑：steer drain 事件持久化（spec §2）。
         // 纯事件追加，不动 messages 行状态——与 thinking/text/todo_update 同型。
         // turn-reconstructor 据此重建 [用户中途补充] user 消息或入 steers[]。
+        // Task 6 审查修复：payload 携带原文 + context 元数据（无 context 时缺省，
+        // 线协议零变化）——包装在重建消费点 renderTurnBody 渲染，不在落库侧定型。
         const messageId = resolveMessageId(chunk.streamSessionId);
         if (!messageId) return;
         getEventBuffer().append({
           messageId,
           eventType: 'steer',
-          payload: { body: chunk.body },
+          payload: { body: chunk.body, ...(chunk.context ? { context: chunk.context } : {}) },
         });
         return;
       }

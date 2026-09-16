@@ -19,16 +19,19 @@
 //     toolCalls=本轮全部调用，runtime-entry:841）
 //   - 每个工具调用 = 紧随的一条 role='tool' 消息（content=结果字符串，
 //     toolCallId=call id，按原 call 顺序）
-//   - steer drain = { role:'user', content:'[用户中途补充] <body>' }（runtime-entry:706）
+//   - steer drain = { role:'user', content:'[用户中途补充] <renderTurnBody(body, context)>' }
+//     （runtime-entry drain 同语义；展开收口在本消费点重放——Task 6 审查修复）
 //
 // 事件形态（照抄 stream-relay.routeChunkToBuffer 落库映射）：
 //   text → text_delta{delta}；tool_call → tool_call_start{callId,toolName,args}
-//   tool_result → tool_call_result{callId,result,success}；steer → steer{body}
+//   tool_result → tool_call_result{callId,result,success}；steer → steer{body, context?}
 //   （steer 事件生产落库由 v2.6.0 Task 2 接线——runtime-entry drain 循环
 //    sendStreamChunk → stream-relay routeChunkToBuffer steer case → event_type='steer' 落库）
 //   thinking / todo_update / status_change / final / message_roll /
 //   segment_boundary / 未知 kind → 跳过（不进 LLM 上下文 / 前向兼容）
 import type { LLMMessage, LLMToolCall } from './llm-provider';
+import type { SteerReplayItem } from './runtime-config';
+import { renderTurnBody, isExpandedContext } from './turn-context';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import {
@@ -50,8 +53,8 @@ export interface RebuiltTurn {
   messages: LLMMessage[];
   /** 已消耗工具预算（= 已发出 tool_call 事件数） */
   toolCallsUsed: number;
-  /** 中断前未消费的中途补充（随恢复载荷重放进 pendingSteers） */
-  steers: string[];
+  /** 中断前未消费的中途补充（随恢复载荷重放进 pendingSteers；原文+context 元数据，消费点渲染） */
+  steers: SteerReplayItem[];
   /** true = 本轮尚无任何 assistant 输出（等价全新回合） */
   degenerate: boolean;
 }
@@ -252,7 +255,7 @@ interface StreamRebuildOptions {
 interface StreamRebuildResult {
   messages: LLMMessage[];
   toolCallsUsed: number;
-  steers: string[];
+  steers: SteerReplayItem[];
   degenerate: boolean;
   /** 流末 DB 时刻 = 全部关联事件 createdAt 最大值（无事件回落流行 createdAt）——会话重建 steer 时间窗右端点 */
   endTs: number;
@@ -274,7 +277,7 @@ function rebuildStreamMessages(
   }
 
   const agg = createAssistantRoundAggregator();
-  const steers: string[] = [];
+  const steers: SteerReplayItem[] = [];
   let endTs = baseRow.createdAt;
 
   if (opts.includeUser) {
@@ -295,14 +298,19 @@ function rebuildStreamMessages(
       case 'steer': {
         const body = ev.payload.body;
         if (typeof body !== 'string') break;
+        // Task 6 审查修复：线协议携带原文 + context 元数据（历史载荷无
+        // context 字段 → undefined，renderTurnBody 原样回退）。展开收口在本
+        // 消费点：渲染时 renderTurnBody 重放 <user-context> 块——一次性注入
+        // 语义不因落库侧定型包装体而在后续回合重复展开
+        const context = isExpandedContext(ev.payload.context) ? ev.payload.context : undefined;
         // 其后是否仍有输出（drain 判定）；会话重建模式下未 drain 也渲染
         //（其后无任何输出，事件位渲染与流末渲染时序等价）
         const drained = events.slice(i + 1).some(isOutputEvent);
         if (drained || opts.undrainedSteersAsUser) {
           agg.closeRound();
-          agg.appendMessage({ role: 'user', content: `[用户中途补充] ${body}` });
+          agg.appendMessage({ role: 'user', content: `[用户中途补充] ${renderTurnBody(body, context)}` });
         } else {
-          steers.push(body);
+          steers.push({ body, ...(context ? { context } : {}) });
         }
         break;
       }

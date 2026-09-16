@@ -36,6 +36,7 @@ import {
 } from '../../src/main/agent/stream-relay';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
 import { WarmPool } from '../../src/main/agent/warm-pool';
+import type { SteerReplayItem } from '../../src/main/agent/runtime-config';
 import {
   insertTask,
   transitionTaskStatus,
@@ -413,7 +414,7 @@ describe('resumeTask（v2.6.0 断点续跑派发）', () => {
     expect(sent.executionSessionId).toBe('sess-task1');
     expect(sent.streamSessionId).toBe('ss-base-r');
     expect(sent.resume).toBeDefined();
-    const resume = sent.resume as { messages: unknown[]; toolCallsUsed: number; steers: string[] };
+    const resume = sent.resume as { messages: unknown[]; toolCallsUsed: number; steers: SteerReplayItem[] };
     expect(resume.messages.length).toBeGreaterThan(0);
     expect(Array.isArray(resume.messages)).toBe(true);
     expect(resume.toolCallsUsed).toBe(0);
@@ -770,7 +771,7 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
     const sent = sendSpy.mock.calls[0]![0] as Record<string, unknown>;
     expect(sent.type).toBe('task-config');
     expect(sent.resume).toBeDefined();
-    const resumePayload = sent.resume as { messages: LLMMessage[]; toolCallsUsed: number; steers: string[] };
+    const resumePayload = sent.resume as { messages: LLMMessage[]; toolCallsUsed: number; steers: SteerReplayItem[] };
     expect(Array.isArray(resumePayload.messages)).toBe(true);
     expect(resumePayload.messages.length).toBeGreaterThan(0);
     expect(resumePayload.toolCallsUsed).toBe(0);
@@ -837,7 +838,7 @@ describe('接线锁：AgentRunner.executeTask → child.send task-config 透传 
     const resumePayload = sent.resume as {
       messages: LLMMessage[];
       toolCallsUsed: number;
-      steers: string[];
+      steers: SteerReplayItem[];
     };
     expect(Array.isArray(resumePayload.messages)).toBe(true);
     expect(resumePayload.messages.length).toBeGreaterThan(0);
