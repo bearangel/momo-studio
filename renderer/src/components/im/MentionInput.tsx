@@ -81,6 +81,8 @@ export function MentionInput() {
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
   const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
+  // 📎 文件引用触发信号（Task 10）：InputToolbar 📞 按钮递增
+  const fileTriggerTick = useSessionStore((s) => s.fileTriggerTick);
   // 斜杠命令提示（spec §5.4）：成功 message 或失败 Error.message；下一次正常
   // 发消息时 store 自动置 null
   const commandHint = useSessionStore((s) => s.commandHint);
@@ -264,6 +266,28 @@ export function MentionInput() {
     setText(newValue);
     detectTrigger(newValue, e.target.selectionStart ?? newValue.length);
   };
+
+  // 📎 文件引用触发（Task 10）：fileTriggerTick 递增 → 聚焦 + 追加 '@/' 打开
+  // 文件菜单。程序化 setText 不经 onChange——须在此直调 detectTrigger 同步菜单
+  // 态，否则沿用旧 menuType（如已打开的命令菜单）残留到下一次输入。
+  useEffect(() => {
+    if (fileTriggerTick === 0) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    // 已有正文以非空白收尾时补一个空格防粘连（'hello' → 'hello @/'）；
+    // 空正文 / 空白收尾直接追加，不产生双空格
+    const next = text === '' ? '@/' : /[^\s]$/.test(text) ? `${text} @/` : `${text}@/`;
+    setText(next);
+    detectTrigger(next, next.length);
+    // 光标移到末尾（与 insertMention 同法：等 React 提交新值后再定位）
+    setTimeout(() => {
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }, 0);
+    // text / detectTrigger 刻意不入依赖：仅应在 tick 变化时执行一次；
+    // 二者每渲染变值，入依赖会导致每次渲染重复追加 '@/'
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileTriggerTick]);
 
   /** 替换光标前最近的 @xxx / #T-xxx / /xxx 局部输入为完整标记；尾随空格防继续输入粘连破坏 mention 边界 */
   const insertMention = (marker: string): void => {

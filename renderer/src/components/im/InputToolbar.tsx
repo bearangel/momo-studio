@@ -1,9 +1,13 @@
 // renderer/src/components/im/InputToolbar.tsx
 //
-// 输入框上方工具条：成员切换按钮 + 创建任务按钮（B7），预留更多扩展位。
-// 纯展示组件（CreateTaskButton 自管 dialog 状态），showMembers 状态由 MiddlePanel 管理。
-import { Users } from 'lucide-react';
+// 输入框上方工具条：成员切换按钮 + 创建任务按钮（B7）+ 📎 文件引用入口（Task 10），
+// 预留更多扩展位。showMembers 状态由 MiddlePanel 管理；📎 点击递增 session.store
+// 的 fileTriggerTick（与 inputFocusTick 同型信号），MentionInput 订阅后聚焦并
+// 插入 '@/' 触发文件菜单——不引 refs/context 跨组件耦合。
+import { Paperclip, Users } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { useSessionStore } from '../../stores/session.store';
+import { IconButton } from '../ui/IconButton';
 import { CreateTaskButton } from './CreateTaskButton';
 
 interface Props {
@@ -26,6 +30,8 @@ export function InputToolbar({
   workspaceId,
   activeSessionId,
 }: Props) {
+  // 会话只读（有效成员全失效）时与 MentionInput 输入框同步禁用 📎
+  const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
   return (
     <div className="flex items-center gap-2 px-3 py-1 border-t border-subtle bg-surface-1">
       <button
@@ -49,7 +55,15 @@ export function InputToolbar({
       {workspaceId && activeSessionId && (
         <CreateTaskButton workspaceId={workspaceId} sourceSessionId={activeSessionId} />
       )}
-      {/* 预留扩展位：附件、表情等未来功能 */}
+      <IconButton
+        aria-label="引用文件"
+        title="引用文件"
+        disabled={disabled || readOnly}
+        onClick={() => useSessionStore.getState().bumpFileTrigger()}
+      >
+        <Paperclip size={16} strokeWidth={1.75} aria-hidden />
+      </IconButton>
+      {/* 预留扩展位：表情等未来功能 */}
     </div>
   );
 }

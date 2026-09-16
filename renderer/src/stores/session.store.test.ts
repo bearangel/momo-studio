@@ -449,6 +449,15 @@ describe('session.store — 只读态与聚焦信号（v25 spec §7「会话只�
     });
     expect(useSessionStore.getState().inputFocusTick).toBe(1);
   });
+
+  it('bumpFileTrigger → fileTriggerTick +1；reset() 归零（Task 10 📎 聚焦通道）', () => {
+    expect(useSessionStore.getState().fileTriggerTick).toBe(0);
+    useSessionStore.getState().bumpFileTrigger();
+    useSessionStore.getState().bumpFileTrigger();
+    expect(useSessionStore.getState().fileTriggerTick).toBe(2);
+    useSessionStore.getState().reset();
+    expect(useSessionStore.getState().fileTriggerTick).toBe(0);
+  });
 });
 
 describe('session.store — createQuickSession / createCollabSession（v25 spec §4.4/§5）', () => {

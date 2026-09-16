@@ -28,6 +28,7 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     loadSessions: vi.fn(),
     activeSessionReadOnly: false,
     inputFocusTick: 0,
+    fileTriggerTick: 0,
   },
   taskState: {
     tasks: [] as TaskRow[],
@@ -151,6 +152,7 @@ function resetState(): void {
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
   sessionState.activeSessionReadOnly = false;
   sessionState.inputFocusTick = 0;
+  sessionState.fileTriggerTick = 0;
   taskState.tasks = [];
   taskState.load = vi.fn().mockResolvedValue(undefined);
 }
@@ -750,5 +752,73 @@ describe('MentionInput / 菜单（命令 + 技能两组，Task 9）', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } });
     expect(await screen.findByText('命令')).toBeInTheDocument();
     expect(screen.queryByText('代码审查工作流')).not.toBeInTheDocument();
+  });
+});
+
+describe('MentionInput 📎 文件触发（fileTriggerTick，Task 10）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const advanceDebounce = async (): Promise<void> => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+  };
+
+  it('fileTriggerTick 递增 → 聚焦 + 空正文插入 @/；继续输入即出文件菜单', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'src/a.ts', isDirectory: false }]);
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(document.activeElement).not.toBe(ta);
+
+    sessionState.fileTriggerTick = 1;
+    rerender(<MentionInput />);
+    expect(document.activeElement).toBe(ta);
+    expect(ta.value).toBe('@/');
+    // @/ 就位后用户继续输入查询词 → 文件菜单弹出（文件分支接管）
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    expect(screen.getByText(/选择要引用的文件/)).toBeInTheDocument();
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+  });
+
+  it('已有正文以非空白收尾 → 追加空格防粘连（hello → hello @/）', () => {
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'hello' } });
+    sessionState.fileTriggerTick = 1;
+    rerender(<MentionInput />);
+    expect(ta.value).toBe('hello @/');
+  });
+
+  it('已有正文以空白收尾 → 直接追加不产生双空格（"hello " → "hello @/"）', () => {
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'hello ' } });
+    sessionState.fileTriggerTick = 1;
+    rerender(<MentionInput />);
+    expect(ta.value).toBe('hello @/');
+  });
+
+  it('effect 内直调 detectTrigger：命令菜单打开时触发 → 旧菜单立即关闭（文件态接管）', async () => {
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/' } });
+    expect(await screen.findByText('命令')).toBeInTheDocument();
+
+    sessionState.fileTriggerTick = 1;
+    rerender(<MentionInput />);
+    // '/' 以非空白收尾 → '/ @/'；detectTrigger 同步刷新菜单态：命令菜单让位
+    expect(ta.value).toBe('/ @/');
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+  });
+
+  it('tick=0（初始）不插入 @/ 也不抢焦点', () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(ta.value).toBe('');
+    expect(document.activeElement).not.toBe(ta);
   });
 });
