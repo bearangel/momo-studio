@@ -9,6 +9,7 @@
 
 import { fetchCatalog } from '../marketplace/client';
 import { getSharedResources } from '../p2p/resource-share';
+import { listInstalled as listInstalledSkills } from '../skill/zip-uploader';
 import { listBuiltinResources } from './builtin';
 import { listMarketplaceResources } from './marketplace';
 import { listCustomResources } from './custom';
@@ -54,6 +55,38 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   }
 
   await Promise.all(tasks);
+
+  // v2.11 本地预置 skill（spec 2026-09-16 §6.4）：catalog 是 builtin 的网络面，
+  // resources/skills/ 目录扫描（zip-uploader listInstalled 的 builtin 分支）是装机面——
+  // 两面合并后 / 菜单技能组开箱即含预置包。slug 冲突时 catalog 优先（市场条目元数据
+  // 更完整）；扫描失败降级为空，不阻塞列表。
+  if (needCatalog && (!filter?.type || filter.type === 'skill')) {
+    try {
+      const catalogSkillSlugs = new Set(
+        [...builtinItems, ...marketplaceItems]
+          .filter((i) => i.type === 'skill')
+          .map((i) => i.slug),
+      );
+      for (const s of listInstalledSkills()) {
+        if (s.source !== 'builtin' || catalogSkillSlugs.has(s.slug)) continue;
+        builtinItems.push({
+          id: buildResourceId('builtin', 'skill', s.slug),
+          type: 'skill',
+          source: 'builtin',
+          slug: s.slug,
+          name: s.name,
+          description: s.description,
+          installed: true,
+          installable: false,
+          removable: false,
+        });
+      }
+    } catch (err) {
+      logger.warn('listResources: 本地预置 skill 扫描失败，跳过', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // p2p：远端共享目录（内存缓存同步读，无 IO——不参与上面的并行任务）。
   // id 拼 nodeId 前 8 字符前缀：多节点同名 slug 不碰撞；远端项统一

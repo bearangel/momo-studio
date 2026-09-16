@@ -58,9 +58,24 @@ const { p2pShareMocks } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/p2p/resource-share', () => p2pShareMocks);
 
+// mock skill zip-uploader（v2.11：library 直接消费其 listInstalled 的 builtin 分支——
+// 本地预置 skill 并入 builtin 源；fixture 含与 marketplace 同 slug 的条目锁去重语义）
+const { skillZipMocks } = vi.hoisted(() => ({
+  skillZipMocks: {
+    listInstalled: vi.fn(),
+  },
+}));
+vi.mock('../../src/main/skill/zip-uploader', () => skillZipMocks);
+
 beforeEach(() => {
   p2pShareMocks.getSharedResources.mockReset();
   p2pShareMocks.getSharedResources.mockReturnValue([]);
+  skillZipMocks.listInstalled.mockReset();
+  skillZipMocks.listInstalled.mockReturnValue([
+    { slug: 'code-review', name: '代码审查', description: '预置审查技能', source: 'builtin', installedAt: null },
+    { slug: 'remote', name: '重复条目', description: '与 marketplace 同 slug', source: 'builtin', installedAt: null },
+    { slug: 'my-upload', name: '我的上传', description: 'custom 源应被忽略', source: 'custom', installedAt: '2026-09-16' },
+  ]);
 });
 
 describe('listResources', () => {
@@ -74,8 +89,32 @@ describe('listResources', () => {
       },
     ]);
     const items = await listResources();
-    expect(items).toHaveLength(4);  // 1 builtin + 1 marketplace + 1 custom + 1 p2p
-    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'custom', 'marketplace', 'p2p']);
+    // 5 项 = 1 catalog builtin(agent) + 1 marketplace(skill) + 1 本地预置 builtin(skill)
+    //       + 1 custom(mcp) + 1 p2p(agent)——本地预置并入 builtin 源（v2.11）
+    expect(items).toHaveLength(5);
+    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom', 'marketplace', 'p2p']);
+  });
+
+  it('本地预置 skill 并入 builtin 源（catalog 优先去重，custom 源条目忽略）', async () => {
+    const skills = await listResources({ type: 'skill' });
+    // code-review（本地预置）出现在 builtin 源，四态正确
+    const local = skills.find((i) => i.slug === 'code-review');
+    expect(local).toBeDefined();
+    expect(local).toMatchObject({
+      id: 'builtin-skill-code-review',
+      type: 'skill',
+      source: 'builtin',
+      installed: true,
+      installable: false,
+      removable: false,
+      name: '代码审查',
+    });
+    // slug='remote' 与 marketplace 同名——catalog 优先，本地条目丢弃，不重复
+    const remotes = skills.filter((i) => i.slug === 'remote');
+    expect(remotes).toHaveLength(1);
+    expect(remotes[0]!.source).toBe('marketplace');
+    // listInstalled 的 custom 源条目不属于 builtin 合并面（custom 走 custom.ts，本测试其 mock 无 skill）
+    expect(skills.some((i) => i.slug === 'my-upload')).toBe(false);
   });
 
   it('filter.type 只返回对应类型', async () => {
@@ -96,12 +135,16 @@ describe('listResources', () => {
     expect(fetchCatalog).not.toHaveBeenCalled();  // 不需要 catalog
   });
 
-  it('fetchCatalog 失败时 builtin+marketplace 返回空，但 custom 仍工作', async () => {
+  it('fetchCatalog 失败时 marketplace 返回空，但 custom 与本地预置 builtin 仍工作', async () => {
     const { fetchCatalog } = await import('../../src/main/marketplace/client');
     (fetchCatalog as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network'));
     const items = await listResources();
-    expect(items).toHaveLength(1);  // 只有 custom
-    expect(items[0]!.source).toBe('custom');
+    // 本地预置 skill 是装机面扫描，不依赖 catalog 网络——网络失败仍可见（v2.11 语义）。
+    // 此时去重集为空（catalog 缺席），fixture 的同 slug 'remote' 本地条目也合法出现（本地兜底）
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.source).sort()).toEqual(['builtin', 'builtin', 'custom']);
+    expect(items.find((i) => i.slug === 'code-review')).toBeDefined();
+    expect(items.find((i) => i.slug === 'remote')?.source).toBe('builtin');
   });
 });
 
