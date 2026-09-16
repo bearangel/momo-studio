@@ -135,7 +135,7 @@ export interface ExpandedContext {
 | `session:listCommands`（新增） | 返回 `Array<{ name: string; description: string }>`——主进程命令注册表查询，`/` 菜单命令组数据源 |
 | `session:command` | 不变（renderer 不再本地白名单，未知命令统一转发，由主进程返回中文错误） |
 
-`ImMessage`（types.d.ts L312）增加 `context?: MessageContext`——由主进程从 `context_json` 解析后填充。
+`ImMessage`（types.d.ts L312）增加 `contextJson: string | null`——wire 契约：`session:message` 推送与 `getMessages` 返回的都是原始 `MessageRow` 直通（camelCase），主进程不做解析变换（避免多推送点遗漏）；renderer 消费时经 `renderer/src/lib/message-context.ts` 的 `parseMessageContext` 单点解析（损坏 → null）。
 
 ### 5.3 存储变更
 
@@ -260,7 +260,7 @@ interface PendingContext {
 - 命令：`insertMention('/name ')` 插入文本，Enter 沿用现有命令路径执行
 - 技能：`pendingContext.skills` 登记（body 不插文本）+ 关闭菜单
 
-**chip 区**：`pendingMentions`（现有）+ `pendingContext.skills` + `pendingContext.files` 同区渲染；skill chip 用 `Zap`、文件 chip 用 `FileText`（lucide-react，16px / stroke 1.75）；逐个可移除；发送失败全部恢复；会话切换草稿恢复纳入 chips（与 text / mentions 同生命周期）。
+**chip 区**：`pendingMentions`（现有）+ `pendingContext.skills` + `pendingContext.files` 同区渲染；skill chip 用 `Zap`、文件 chip 用 `FileText`（lucide-react，16px / stroke 1.75）；逐个可移除；发送失败全部恢复；会话切换时 chips 与 pendingMentions 同生命周期清空（正文文本随草稿保留，见 §8 边界表）。
 
 **发送**：`handleSend` 校验放宽为 `trimmed || pendingContext 非空`；`sendMessage(trimmed || '', mentions, context)`。仅 skill 无正文是合法消息（skill 正文即 prompt）。
 
@@ -298,6 +298,7 @@ owner 消息且 `message.context` 非空 → body 上方渲染 chip 行：
 | `context_json` 损坏 | `rowToCamel` 防御性解析 → `context: undefined`，消息正常显示（无 chip） |
 | 发送失败 | 正文 + mentions + context chips 一并恢复（照抄现有 pendingMentions 恢复模式） |
 | 只读会话 | 输入禁用（现有），📎 同步禁用 |
+| 会话切换草稿 | 正文文本随草稿恢复（现有 draftsRef 机制）；context chips 与 pendingMentions 同生命周期——切换即清空（与现有 @ 行为对齐，正文中的 `@/路径` 标记文本仍随草稿保留） |
 | IME 组合期 Enter | 不发送（现有 isComposing / 229 守卫，天然覆盖新菜单） |
 | P2P 远端消息 | context 只读渲染 chip，不展开不回传（spec D7 铁律不涉——本特性不写远端 tasks） |
 | steer 中途追加 | context 随 steer 消息下发，下一轮 LLM 请求注入（一次性语义在 steer 分支同样成立） |
