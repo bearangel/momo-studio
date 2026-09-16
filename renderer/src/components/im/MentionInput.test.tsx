@@ -10,8 +10,13 @@
 //      #T 任务标记只进正文（主进程 conflict-detector 从正文解析）
 //   7. 菜单激活时 Enter 不发送；Escape 关菜单（原 MessageInput 行为 parity）
 //   8. 发送失败恢复正文与 mentions（原 MessageInput 行为 parity）
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+//   9. @/ 文件分组（Task 8）：@/ 触发文件搜索菜单（ipc.file.searchNames，
+//      debounce 200ms / 仅文件 / 限 8 条）、选择插入 @/路径 标记 + chip、
+//      chip 可移除、发送失败恢复、会话切换 chips 清空（正文草稿保留）
+//   10. 既有 @ 成员菜单 / #T 任务菜单用例全部保留（回归锁——文件分组
+//      不得破坏成员分支的触发正则与行为）
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { SessionMemberInfo, TaskRow } from '../../ipc/types';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
@@ -43,6 +48,15 @@ vi.mock('../../stores/task.store', () => ({
 vi.mock('../../stores/workspace.store', () => ({
   useWorkspaceStore: (selector: (s: typeof workspaceState) => unknown) => selector(workspaceState),
 }));
+
+// window.api mock：@ 菜单文件分组数据源（Task 8）。组件经 ipc Proxy 直读
+// window.api.file.searchNames（FileTree 同形态，不经 file.store）——不设置时
+// 组件内 ipc.file 访问即抛错。
+const mockApi = {
+  file: {
+    searchNames: vi.fn().mockResolvedValue([]),
+  },
+};
 
 import { MentionInput } from './MentionInput';
 
@@ -93,6 +107,10 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
 }
 
 function resetState(): void {
+  // 仅设置 api，不替换整个 window（保留 jsdom Window 的其它属性与方法，避免破坏 react-dom）
+  (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+  mockApi.file.searchNames.mockClear();
+  mockApi.file.searchNames.mockResolvedValue([]);
   sessionState.activeSessionId = 'sess-1';
   sessionState.members = [];
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -355,5 +373,152 @@ describe('MentionInput 会话草稿（切换会话内容隔离）', () => {
     sessionState.activeSessionId = 'sess-1';
     rerender(<MentionInput />);
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('会话A的草稿');
+  });
+});
+
+describe('MentionInput @ 菜单文件分组（@/ 路径引用，Task 8）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 推进防抖窗口（200ms）并冲刷微任务，让 searchNames 结果落进渲染 */
+  const advanceDebounce = async (): Promise<void> => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+  };
+
+  it('输入 @/ 触发文件菜单并展示搜索结果', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+      { path: 'src/b.ts', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/a' } });
+    await advanceDebounce();
+    expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', 'a');
+    expect(screen.getByText(/选择要引用的文件/)).toBeInTheDocument();
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+    expect(screen.getByText('src/b.ts')).toBeInTheDocument();
+  });
+
+  it('选择文件插入 @/路径 标记并登记 chip', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+      { path: 'src/b.ts', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('src/a.ts'));
+    expect(ta.value).toMatch(/@\/src\/a\.ts\s$/);
+    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
+    // 选择后菜单关闭
+    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
+  });
+
+  it('chip 可移除', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+      { path: 'src/b.ts', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('src/a.ts'));
+    fireEvent.click(screen.getByLabelText('移除文件 src/a.ts'));
+    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
+  });
+
+  it('发送失败恢复文件 chips 与正文', async () => {
+    vi.useFakeTimers();
+    // brief 原文 vi.spyOn(ipc.session, 'send') 在 store 层 mock 架构下不可达
+    // （组件消费 mocked sessionState.sendMessage）——照抄本文件既有失败注入形态
+    sessionState.sendMessage = vi.fn().mockRejectedValue(new Error('boom'));
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+      { path: 'src/b.ts', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('src/a.ts'));
+    fireEvent.change(ta, { target: { value: '@/src/a.ts 看看这个' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(ta.value).toMatch(/@\/src\/a\.ts/);
+    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
+  });
+
+  it('仅输入 @/（空 query）不搜索——防抖窗口过后也不发 IPC', async () => {
+    vi.useFakeTimers();
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/' } });
+    await advanceDebounce();
+    expect(mockApi.file.searchNames).not.toHaveBeenCalled();
+    // 无结果不渲染文件组
+    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
+  });
+
+  it('目录命中被过滤、仅文件进菜单且限 8 条', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'docs', isDirectory: true },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        path: `src/f${i}.ts`,
+        isDirectory: false,
+      })),
+    ]);
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/f' } });
+    await advanceDebounce();
+    expect(screen.queryByText('docs')).not.toBeInTheDocument();
+    expect(screen.getByText('src/f0.ts')).toBeInTheDocument();
+    expect(screen.getByText('src/f7.ts')).toBeInTheDocument();
+    expect(screen.queryByText('src/f8.ts')).not.toBeInTheDocument();
+    expect(screen.queryByText('src/f9.ts')).not.toBeInTheDocument();
+  });
+
+  it('searchNames 失败 → 不渲染文件组且不崩（错误路径）', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockRejectedValue(new Error('boom'));
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/a' } });
+    await advanceDebounce();
+    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
+    expect(screen.queryByText('src/a.ts')).not.toBeInTheDocument();
+  });
+
+  it('会话切换清空文件 chips，正文里的 @/路径 文本随草稿保留', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+      { path: 'src/b.ts', isDirectory: false },
+    ]);
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('src/a.ts'));
+    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
+
+    // 切走：chips 清空（MVP 取舍：不按正文标记重建，实现注释已标注）
+    sessionState.activeSessionId = 'sess-2';
+    rerender(<MentionInput />);
+    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
+
+    // 切回：正文草稿（含 @/ 路径文本）恢复，chips 不恢复
+    sessionState.activeSessionId = 'sess-1';
+    rerender(<MentionInput />);
+    expect(ta.value).toMatch(/@\/src\/a\.ts/);
+    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
   });
 });

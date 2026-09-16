@@ -8,14 +8,20 @@
 //     本地 MENU_STATUSES 过滤（draft/pending/assigned）是唯一过滤点，
 //     选择后向正文插入 #T-xxx 文本——后端 conflict-detector 从正文解析任务引用，
 //     不进 sendMessage 载荷（纯 renderer affordance）
+//   - 输入 @/ 触发文件菜单（Task 8）：数据源 ipc.file.searchNames（FileTree 同
+//     形态直接调用，不经 file.store），debounce 200ms / 空查询不搜索 / 仅文件
+//     （isDirectory === false）/ 限 8 条；选择后向正文插入 @/路径 标记并登记
+//     pendingFiles chip（发送清空、失败恢复、会话切换清空——正文标记文本随
+//     草稿保留，chips 不按标记重建为 MVP 取舍）；context 组装发送由 Task 9 统一做
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, Lock, Pin, X } from 'lucide-react';
+import { Bot, FileText, Lock, Pin, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+import type { FileContextItem, SearchHit, SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
 
 type MenuKind = 'agent' | 'task';
 
@@ -23,6 +29,10 @@ type MenuKind = 'agent' | 'task';
 const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
 /** 菜单最多展示条目数（pending 任务可能较多） */
 const MENU_LIMIT = 10;
+/** @/ 文件菜单最多展示条目数（主进程 searchNames 默认 limit 200，renderer 端截取） */
+const FILE_MENU_LIMIT = 8;
+/** 文件搜索防抖间隔（毫秒），与 FileTree 的 SEARCH_DEBOUNCE_MS 对齐 */
+const FILE_SEARCH_DEBOUNCE_MS = 200;
 
 export function MentionInput() {
   const [text, setText] = useState('');
@@ -30,6 +40,16 @@ export function MentionInput() {
   const [query, setQuery] = useState('');
   // @ 目标 instanceId 列表（菜单选择时记录，发送后清空；失败恢复）
   const [pendingMentions, setPendingMentions] = useState<string[]>([]);
+  // @/ 文件引用列表（Task 8）：菜单选择时记录 { path }，与 pendingMentions 同
+  // 生命周期——发送清空 / 失败恢复 / 会话切换清空
+  const [pendingFiles, setPendingFiles] = useState<FileContextItem[]>([]);
+  // @/ 文件触发态与局部查询（fileMode=true 时 @ 菜单只展示文件组）
+  const [fileMode, setFileMode] = useState(false);
+  const [fileQuery, setFileQuery] = useState('');
+  // 文件搜索命中（searchNames 过滤目录后的文件子集，限 FILE_MENU_LIMIT 条）
+  const [fileHits, setFileHits] = useState<SearchHit[]>([]);
+  // 文件搜索竞态守卫：响应返回时序号不匹配则丢弃（与 FileTree 一致）
+  const fileSearchSeqRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -61,10 +81,53 @@ export function MentionInput() {
     setText(next);
     setMenuType(null);
     setQuery('');
+    setFileMode(false);
+    // MVP 取舍：文件 chips 不按正文里的 @/ 标记重建（正文文本随草稿自然保留），
+    // 切会话即清空——chips 重建留待后续增强
+    setPendingFiles([]);
     prevSessionRef.current = activeSessionId;
     // text 刻意不入依赖：仅在会话切换边界执行存取
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
+
+  // @/ 文件搜索（Task 8）：debounce 200ms 调 ipc.file.searchNames（FileTree 同
+  // 形态——(workspaceId, query) 二参，不经 file.store）；空 query 不搜索；
+  // 仅保留文件命中（isDirectory === false）并截取 FILE_MENU_LIMIT 条。
+  // 依赖取 workspace?.id（字符串）而非 workspace 对象——对象引用每渲染一换，
+  // 配合 setState 会构成无限渲染环；seqRef 竞态守卫：旧响应不覆盖新结果。
+  const workspaceId = workspace?.id;
+  useEffect(() => {
+    if (!fileMode) {
+      // 退出文件模式：命中集被渲染门控（fileMode && ...）隐藏，无需清空，
+      // 仅失效在途请求
+      fileSearchSeqRef.current++;
+      return;
+    }
+    const trimmed = fileQuery.trim();
+    if (trimmed === '') {
+      fileSearchSeqRef.current++;
+      // 引用守卫：已空则原引用返回，避免无谓重渲
+      setFileHits((prev) => (prev.length > 0 ? [] : prev));
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (!workspaceId) return;
+      const seq = ++fileSearchSeqRef.current;
+      ipc.file
+        .searchNames(workspaceId, trimmed)
+        .then((hits) => {
+          if (fileSearchSeqRef.current !== seq) return;
+          setFileHits(hits.filter((h) => !h.isDirectory).slice(0, FILE_MENU_LIMIT));
+        })
+        .catch(() => {
+          // 搜索失败静默清空（菜单随之收起）；与 FileTree 不同，此处无专用错误
+          // 文案位——菜单是瞬时 affordance，用户继续输入即重试
+          if (fileSearchSeqRef.current !== seq) return;
+          setFileHits((prev) => (prev.length > 0 ? [] : prev));
+        });
+    }, FILE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [fileMode, fileQuery, workspaceId]);
 
   // # 菜单数据接线：task.store 此前仅 TaskBoardView（tasks 视图）加载，
   // IM 视图挂载时主动拉取当前 workspace 的任务（v2.3 起为全生命周期，
@@ -98,9 +161,20 @@ export function MentionInput() {
           .slice(0, MENU_LIMIT)
       : [];
 
-  /** 光标前缀触发检测：@ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
+  /** 光标前缀触发检测：@/ 接文件路径局部 / @ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
   const detectTrigger = (newValue: string, cursorPos: number): void => {
     const before = newValue.slice(0, cursorPos);
+    // 文件分支在前并短路返回：@/ 前缀走文件搜索。现有 @ 成员正则
+    // `(?:^|\s)@([A-Za-z0-9-]*)$` 字符集不含 '/'，与本法互斥——若不短路，
+    // '@/x' 会落入下方 else 分支把 menuType 清空
+    const fileMatch = before.match(/(?:^|\s)@\/([^\s]*)$/);
+    if (fileMatch) {
+      setMenuType('agent'); // 文件并入 @ 菜单分组展示
+      setFileQuery(fileMatch[1] ?? '');
+      setFileMode(true);
+      return;
+    }
+    setFileMode(false);
     const atMatch = before.match(/(?:^|\s)@([A-Za-z0-9-]*)$/);
     // 任务 trigger 允许 T-/数字 的任意局部输入，有效性在 filteredTasks 按 id/title 过滤
     const taskMatch = before.match(/(?:^|\s)#([A-Za-z0-9-]*)$/);
@@ -157,27 +231,64 @@ export function MentionInput() {
     insertMention(`#${t.id}`);
   };
 
+  /** insertMention 的文件变体：现有正则字符集不含 '/'，无法覆盖 @/ 局部输入。
+   * 回调式替换保留前导空白（与 insertMention 同法）——句中 "word @/a" 选择后
+   * 不吃掉 @ 前的空格；裸 replace 整段匹配会把前导空白一并吞掉 */
+  const selectFile = (f: SearchHit): void => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const pos = ta.selectionStart;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    // 局部匹配字符集与 detectTrigger 文件分支一致（覆盖未敲完的 @/xxx 局部输入）
+    const newValue =
+      before.replace(
+        /(?:^|\s)(@\/[^\s]*$)/,
+        (match, partial: string) => match.replace(partial, `@/${f.path}`),
+      ) + ' ' + after;
+    setText(newValue);
+    setMenuType(null);
+    setQuery('');
+    setFileMode(false);
+    setPendingFiles((prev) =>
+      prev.some((x) => x.path === f.path) ? prev : [...prev, { path: f.path }],
+    );
+    // 焦点与光标回到标记末尾（菜单按钮点击会移走焦点）
+    setTimeout(() => {
+      ta.focus();
+      const np = newValue.length - after.length;
+      ta.setSelectionRange(np, np);
+    }, 0);
+  };
+
   const handleSend = async (): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || !activeSessionId) return;
     const mentions = pendingMentions.length > 0 ? [...pendingMentions] : undefined;
+    const files = pendingFiles.length > 0 ? [...pendingFiles] : undefined;
     setText('');
     setPendingMentions([]);
+    setPendingFiles([]);
     setMenuType(null);
     setQuery('');
+    setFileMode(false);
     try {
+      // context（{ skills, files } 第 3 参）的组装发送由 Task 9 统一接线——
+      // 本任务先落 pendingFiles 的清空 / 失败恢复生命周期
       await sendMessage(trimmed, mentions);
       await loadSessions();
     } catch {
-      // 发送失败恢复正文与 mentions，用户可修改后重发
+      // 发送失败恢复正文与 mentions / 文件 chips，用户可修改后重发
       setText(trimmed);
       if (mentions) setPendingMentions(mentions);
+      if (files) setPendingFiles(files);
     }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (menuType !== null && e.key === 'Escape') {
       setMenuType(null);
+      setFileMode(false);
       return;
     }
     // 输入法组合期（中文拼音选字等）的 Enter 是选字确认不是发送——
@@ -197,7 +308,9 @@ export function MentionInput() {
 
   return (
     <div className="border-t border-subtle bg-surface-1 p-3 relative">
-      {menuType === 'agent' && filteredMembers.length > 0 && (
+      {/* 成员组在 fileMode 下隐藏：@/ 局部输入无法被 insertMention 的成员字符集
+          匹配（不含 '/'），此时点成员会静默丢失标记——文件意图期间只展示文件组 */}
+      {menuType === 'agent' && !fileMode && filteredMembers.length > 0 && (
         <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
           <div className="px-3 py-1 text-xs text-tertiary">选择要 @ 的 agent</div>
           {filteredMembers.map((m) => (
@@ -211,6 +324,23 @@ export function MentionInput() {
                 {m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}
               </span>
               <span className="truncate">{m.agentName}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {menuType === 'agent' && fileMode && fileHits.length > 0 && (
+        <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
+          <div className="px-3 py-1 text-xs text-tertiary">选择要引用的文件</div>
+          {fileHits.map((f) => (
+            <button
+              key={f.path}
+              type="button"
+              onClick={() => selectFile(f)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
+            >
+              <FileText size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              <span className="truncate">{f.path}</span>
             </button>
           ))}
         </div>
@@ -235,7 +365,7 @@ export function MentionInput() {
         </div>
       )}
 
-      {pendingMentions.length > 0 && (
+      {(pendingMentions.length > 0 || pendingFiles.length > 0) && (
         <div className="flex flex-wrap gap-1 mb-2">
           {pendingMentions.map((instanceId) => (
             <button
@@ -248,6 +378,19 @@ export function MentionInput() {
               className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
             >
               @{mentionDisplayName(instanceId)}
+              <X size={11} strokeWidth={1.75} aria-hidden />
+            </button>
+          ))}
+          {pendingFiles.map((f) => (
+            <button
+              key={`file-${f.path}`}
+              type="button"
+              aria-label={`移除文件 ${f.path}`}
+              onClick={() => setPendingFiles((prev) => prev.filter((x) => x.path !== f.path))}
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
+            >
+              <FileText size={11} strokeWidth={1.75} aria-hidden />
+              {f.path.split('/').pop()}
               <X size={11} strokeWidth={1.75} aria-hidden />
             </button>
           ))}
