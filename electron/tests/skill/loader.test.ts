@@ -28,7 +28,8 @@ tags:
 describe('skill/loader', () => {
   it('parseSkillMd 解析 frontmatter + body', () => {
     const def = parseSkillMd(VALID_SKILL_MD, '/cache/code-review');
-    expect(def.slug).toBe('code-review-workflow');
+    // v2.11 slug 语义统一：slug = 目录名（与 listInstalled 同约），name = frontmatter 展示名
+    expect(def.slug).toBe('code-review');
     expect(def.name).toBe('code-review-workflow');
     expect(def.description).toBe('执行标准的代码审查流程');
     expect(def.version).toBe('1.0.0');

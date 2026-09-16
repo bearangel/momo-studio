@@ -35,7 +35,8 @@ export class SkillRegistry {
   getIndex(): string {
     const lines: string[] = [];
     for (const def of this.skills.values()) {
-      lines.push(`- ${def.name} v${def.version}: ${def.description}`);
+      // [slug] 必须在索引行：loadSkill 以 slug（目录名，与 listInstalled 同约）为查找键，name 仅展示
+      lines.push(`- ${def.name} v${def.version}: ${def.description} [${def.slug}]`);
     }
     return lines.join('\n');
   }

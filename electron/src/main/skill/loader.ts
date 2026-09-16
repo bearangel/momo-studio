@@ -35,9 +35,13 @@ export function parseSkillMd(content: string, cachePath: string): SkillDefinitio
   if (!fm.name) throw new Error('SKILL.md frontmatter 缺少 name');
   if (!fm.description) throw new Error('SKILL.md frontmatter 缺少 description');
 
+  // slug 始终来自 cachePath 的目录名（与 zip-uploader.listInstalled 的「目录=slug」约定保持一致；
+  // frontmatter.name 作为显示名称，不作为幂等 key）。这样 SkillRegistry 注册与 listInstalled
+  // 读 builtin 根时用同一 slug，不会出现「注册是中文名、列表是英文目录」的不一致。
+  const slug = path.basename(cachePath);
   return {
     id: randomUUID(),
-    slug: fm.name,
+    slug,
     name: fm.name,
     description: fm.description,
     version: fm.version ?? '1.0.0',
