@@ -24,6 +24,7 @@ function makeDispatch(overrides: Partial<ImMessage> = {}): ImMessage {
     source: 'local',
     workspaceId: null,
     taskId: 'task-abc1234567',
+    contextJson: null,
     createdAt: 0,
     updatedAt: 0,
     ...overrides,

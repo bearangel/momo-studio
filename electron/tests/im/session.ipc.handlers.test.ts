@@ -135,6 +135,7 @@ const msgRow: MessageRow = {
   source: 'local',
   workspaceId: 'ws-1',
   taskId: null,
+  contextJson: null,
   createdAt: 100,
   updatedAt: 100,
 };

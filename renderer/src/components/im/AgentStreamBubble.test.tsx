@@ -78,6 +78,7 @@ function makeMessage(overrides: Partial<ImMessage> = {}): ImMessage {
     source: 'local',
     workspaceId: null,
     taskId: null,
+    contextJson: null,
     createdAt: 0,
     updatedAt: 0,
     ...overrides,

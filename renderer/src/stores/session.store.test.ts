@@ -83,6 +83,7 @@ function mk(id: string, body: string, createdAt = 0, sessionId = 'sess-r'): ImMe
     source: 'local',
     workspaceId: null,
     taskId: null,
+    contextJson: null,
     createdAt,
     updatedAt: createdAt,
   };

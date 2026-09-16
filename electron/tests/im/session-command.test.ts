@@ -36,6 +36,7 @@ const { historyFixture } = vi.hoisted((): { historyFixture: import('../../src/ma
     source: 'local' as const,
     workspaceId: 'w1',
     taskId: null,
+    contextJson: null,
     createdAt: 1000 + i,
     updatedAt: 1000 + i,
   })),
