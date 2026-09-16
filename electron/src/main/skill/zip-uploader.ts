@@ -110,8 +110,9 @@ function nameToSlug(name: string): string {
 /**
  * 解析内置 skill 目录（dev: <repo>/electron/resources/skills/，packaged: resourcesPath/skills）。
  * 与 agent/builtin.ts 的 resolveBuiltinAgentsDir 同款模式。目录不存在时 listInstalled 返回空。
+ * v2.11 起导出：context-expander 复用同一 builtin 根解析（单一真相源，防两处路径漂移）。
  */
-function resolveBuiltinSkillsDir(): string {
+export function resolveBuiltinSkillsDir(): string {
   if (process.resourcesPath && !process.defaultApp) {
     return path.join(process.resourcesPath, 'skills');
   }
