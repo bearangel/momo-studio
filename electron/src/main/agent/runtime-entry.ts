@@ -268,7 +268,7 @@ export async function buildRuntimeContext(config: RuntimeConfig): Promise<Runtim
     ? `${basePrompt}
 
 ## 已安装技能索引
-以下是你可用的技能。当任务匹配某技能描述时，应主动调用 loadSkill('<name>') 加载完整指令。
+以下是你可用的技能。当任务匹配某技能描述时，应主动调用 loadSkill('<slug>') 加载完整指令（slug 见各条目末尾方括号）。
 
 ${skillIndex}`
     : basePrompt;

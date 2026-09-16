@@ -38,6 +38,8 @@ export function parseSkillMd(content: string, cachePath: string): SkillDefinitio
   // slug 始终来自 cachePath 的目录名（与 zip-uploader.listInstalled 的「目录=slug」约定保持一致；
   // frontmatter.name 作为显示名称，不作为幂等 key）。这样 SkillRegistry 注册与 listInstalled
   // 读 builtin 根时用同一 slug，不会出现「注册是中文名、列表是英文目录」的不一致。
+  // 注意例外：marketplace 安装的 cachePath 是版本化路径（…/<slug>/<version>），basename 是
+  // 版本号——skill_definitions.cache_path 不得直接喂 register（需取其上一级作 slug）。
   const slug = path.basename(cachePath);
   return {
     id: randomUUID(),

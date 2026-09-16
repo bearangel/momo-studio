@@ -12,15 +12,33 @@
 //   - 打包后生产代码走 `process.resourcesPath/skills`，本测试不覆盖该路径
 //     （打包产物在容器内不可重现——以源码路径为准）。
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { SkillRegistry } from '../../src/main/skill/registry';
+import { listInstalled } from '../../src/main/skill/zip-uploader';
+import { runMigrations, closeDb } from '../../src/main/storage/db';
 
 const RESOURCES_SKILLS = path.resolve(__dirname, '../../resources/skills');
 
 describe('builtin 预置技能包', () => {
   const slugs = ['code-review', 'write-tests', 'debug-reproduce'];
+
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    // listInstalled 依赖 userData（custom 扫描）与 DB（marketplace 分支）——照 upload-zip.test 模式隔离
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-builtin-'));
+    process.env.AP_USER_DATA_DIR = tmpRoot;
+    runMigrations();
+  });
+
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
+  });
 
   it.each(slugs)('%s 存在且可注册', (slug) => {
     const reg = new SkillRegistry();
@@ -37,6 +55,19 @@ describe('builtin 预置技能包', () => {
       expect(fm![1]).toMatch(/^name:\s*\S+/m);
       expect(fm![1]).toMatch(/^description:\s*\S+/m);
       expect(fm![1]).toMatch(/^version:\s*\S+/m);
+    }
+  });
+
+  // Produces 契约锁：三包经 resolveBuiltinSkillsDir + listInstalled builtin 扫描分支对外可见
+  //（「resource:list 可见 source=builtin」的回归锁——防止 builtin 根解析或目录扫描回归而测试仍绿）
+  it('listInstalled 收录三包（source=builtin，slug=目录名，中文展示名）', () => {
+    const installed = listInstalled();
+    for (const slug of slugs) {
+      const hit = installed.find((s) => s.slug === slug);
+      expect(hit, `${slug} 未出现在 listInstalled`).toBeDefined();
+      expect(hit!.source).toBe('builtin');
+      expect(hit!.name).toBeTruthy();
+      expect(hit!.description.length).toBeGreaterThan(0);
     }
   });
 });
