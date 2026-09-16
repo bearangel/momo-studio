@@ -302,6 +302,8 @@ owner 消息且 `message.context` 非空 → body 上方渲染 chip 行：
 | IME 组合期 Enter | 不发送（现有 isComposing / 229 守卫，天然覆盖新菜单） |
 | P2P 远端消息 | context 只读渲染 chip，不展开不回传（spec D7 铁律不涉——本特性不写远端 tasks） |
 | steer 中途追加 | context 随 steer 消息下发，下一轮 LLM 请求注入（一次性语义在 steer 分支同样成立） |
+| steer 事件的持久化不对称（实现期裁定） | steer 线协议携带原文 + context 元数据（`message_events` 持久化 ExpandedContext 全量，为主进程 resume 重放所需）；后续回合会话重建只回原文不展开（`expandSteerContext` 模式分流），展开仅在活回合与 resume 同回合重放发生 |
+| 未 drain 的带 context steer | 若流在 drain 前中断，该 steer 的 context 从未送达模型（会话重建只回原文）——与主路径降级姿态一致（展开只在活回合保证），属设计立场 |
 
 ## 9. 测试策略
 
