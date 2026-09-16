@@ -35,6 +35,13 @@ const STUB_WORKSPACE_2: Workspace = {
 const mockApi = {
   session: {
     list: vi.fn().mockResolvedValue([]),
+    // v2.11 Task 9：IM 输入框（MentionInput）挂载拉取 / 菜单命令组——缺桩会
+    // commit 期抛错（ipc Proxy 直读 window.api）
+    listCommands: vi.fn().mockResolvedValue([]),
+  },
+  resource: {
+    // v2.11 Task 9：同上——/ 菜单技能组挂载拉取（resource:list filter 形态）
+    list: vi.fn().mockResolvedValue([]),
   },
   agent: {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),

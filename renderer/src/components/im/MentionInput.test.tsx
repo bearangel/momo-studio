@@ -17,7 +17,7 @@
 //      不得破坏成员分支的触发正则与行为）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import type { SessionMemberInfo, TaskRow } from '../../ipc/types';
+import type { ResourceItem, SessionMemberInfo, TaskRow } from '../../ipc/types';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
 const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
@@ -49,12 +49,22 @@ vi.mock('../../stores/workspace.store', () => ({
   useWorkspaceStore: (selector: (s: typeof workspaceState) => unknown) => selector(workspaceState),
 }));
 
-// window.api mock：@ 菜单文件分组数据源（Task 8）。组件经 ipc Proxy 直读
-// window.api.file.searchNames（FileTree 同形态，不经 file.store）——不设置时
-// 组件内 ipc.file 访问即抛错。
+// window.api mock：@ 菜单文件分组数据源（Task 8）+ / 菜单两组数据源（Task 9）。
+// 组件经 ipc Proxy 直读 window.api（Task 8 file.searchNames / Task 9
+// session.listCommands + resource.list 均为直调形态，不经 store）——不设置时
+// 组件内对应 ipc 命名空间访问即抛错。
 const mockApi = {
   file: {
     searchNames: vi.fn().mockResolvedValue([]),
+  },
+  session: {
+    // 默认值仿真主进程 commands.ts SESSION_COMMANDS 真实注册表（单一真相源）
+    listCommands: vi.fn().mockResolvedValue([{ name: 'compact', description: '压缩会话历史，释放上下文窗口' }]),
+  },
+  resource: {
+    // 默认值仿真 resource:list({ type: 'skill' }) 真实形状：builtin skill
+    // （catalog.json 的 code-review-workflow）+ 一个未安装项（锁 installed 过滤）
+    list: vi.fn().mockResolvedValue([] as ResourceItem[]),
   },
 };
 
@@ -106,11 +116,35 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
   };
 }
 
+/** 构造技能资源项（默认 builtin + 已安装，形状对齐 catalog.json 的 code-review-workflow） */
+function makeSkillResource(overrides: Partial<ResourceItem> & { slug: string }): ResourceItem {
+  return {
+    id: `builtin-skill-${overrides.slug}`,
+    type: 'skill',
+    source: 'builtin',
+    name: overrides.slug,
+    description: '',
+    installed: true,
+    installable: false,
+    removable: false,
+    ...overrides,
+  };
+}
+
 function resetState(): void {
   // 仅设置 api，不替换整个 window（保留 jsdom Window 的其它属性与方法，避免破坏 react-dom）
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   mockApi.file.searchNames.mockClear();
   mockApi.file.searchNames.mockResolvedValue([]);
+  mockApi.session.listCommands.mockClear();
+  mockApi.session.listCommands.mockResolvedValue([
+    { name: 'compact', description: '压缩会话历史，释放上下文窗口' },
+  ]);
+  mockApi.resource.list.mockClear();
+  mockApi.resource.list.mockResolvedValue([
+    makeSkillResource({ slug: 'code-review-workflow', name: '代码审查工作流' }),
+    makeSkillResource({ slug: 'not-installed-flow', name: '未安装技能', installed: false }),
+  ]);
   sessionState.activeSessionId = 'sess-1';
   sessionState.members = [];
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -274,7 +308,7 @@ describe('MentionInput 发送', () => {
     fireEvent.change(input, { target: { value: '@PM-agent #T-001 请跟进' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
-    expect(sessionState.sendMessage).toHaveBeenCalledWith('@PM-agent #T-001 请跟进', ['inst-pm']);
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('@PM-agent #T-001 请跟进', ['inst-pm'], undefined);
     // 发送后清空 + 刷新会话列表
     expect(input.value).toBe('');
     expect(sessionState.loadSessions).toHaveBeenCalled();
@@ -286,7 +320,7 @@ describe('MentionInput 发送', () => {
     fireEvent.change(input, { target: { value: '普通消息' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
-    expect(sessionState.sendMessage).toHaveBeenCalledWith('普通消息', undefined);
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('普通消息', undefined, undefined);
   });
 
   it('空正文 Enter 不发送', () => {
@@ -310,7 +344,7 @@ describe('MentionInput 发送', () => {
     expect(screen.queryByText('选择要 @ 的 agent')).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: '@PM-agent 你好' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(sessionState.sendMessage).toHaveBeenCalledWith('@PM-agent 你好', undefined);
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('@PM-agent 你好', undefined, undefined);
   });
 
   it('发送失败恢复正文与 mentions', async () => {
@@ -355,7 +389,7 @@ describe('MentionInput 输入法组合期 Enter（中文拼音选字不误发）
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(ta, { target: { value: 'hello' } });
     fireEvent.keyDown(ta, { key: 'Enter', shiftKey: false, isComposing: false } as unknown as Parameters<typeof fireEvent.keyDown>[1]);
-    expect(sessionState.sendMessage).toHaveBeenCalledWith('hello', undefined);
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined);
   });
 });
 
@@ -520,5 +554,201 @@ describe('MentionInput @ 菜单文件分组（@/ 路径引用，Task 8）', () =
     rerender(<MentionInput />);
     expect(ta.value).toMatch(/@\/src\/a\.ts/);
     expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
+  });
+});
+
+describe('MentionInput / 菜单（命令 + 技能两组，Task 9）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const advanceDebounce = async (): Promise<void> => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+  };
+
+  it('空 body 输入 / 触发命令+技能两组菜单；未安装技能不出现', async () => {
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } });
+    expect(await screen.findByText('命令')).toBeInTheDocument();
+    expect(screen.getByText('技能')).toBeInTheDocument();
+    expect(screen.getByText('/compact')).toBeInTheDocument();
+    expect(screen.getByText(/压缩会话历史/)).toBeInTheDocument();
+    expect(screen.getByText('代码审查工作流')).toBeInTheDocument();
+    expect(screen.queryByText('未安装技能')).not.toBeInTheDocument();
+  });
+
+  it('选择命令插入 /name 文本（尾随空格）并关闭菜单', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/com' } });
+    fireEvent.click(await screen.findByText('/compact'));
+    expect(ta.value).toBe('/compact ');
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+  });
+
+  it('选择技能登记 chip 且 body 不插文本', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    fireEvent.click(await screen.findByText('代码审查工作流'));
+    expect(ta.value).toBe('');
+    expect(screen.getByLabelText('移除技能 代码审查工作流')).toBeInTheDocument();
+    expect(screen.queryByText('技能')).not.toBeInTheDocument();
+  });
+
+  it('技能 chip 可移除；重复选择同一技能去重', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    fireEvent.click(await screen.findByText('代码审查工作流'));
+    fireEvent.change(ta, { target: { value: '/' } });
+    // 菜单行按钮可访问名 = 裸名，chip 按钮 = aria-label「移除技能 …」——精确名唯一定位菜单行
+    fireEvent.click(screen.getByRole('button', { name: '代码审查工作流' }));
+    expect(screen.getAllByLabelText('移除技能 代码审查工作流')).toHaveLength(1);
+    fireEvent.click(screen.getByLabelText('移除技能 代码审查工作流'));
+    expect(screen.queryByLabelText('移除技能 代码审查工作流')).not.toBeInTheDocument();
+  });
+
+  it('query 过滤：/comp 仅命中命令组，/zzz 无匹配整菜单收起', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/' } });
+    await screen.findByText('命令');
+    fireEvent.change(ta, { target: { value: '/comp' } });
+    expect(screen.getByText('命令')).toBeInTheDocument();
+    expect(screen.queryByText('技能')).not.toBeInTheDocument();
+    fireEvent.change(ta, { target: { value: '/zzz' } });
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    expect(screen.queryByText('技能')).not.toBeInTheDocument();
+  });
+
+  it('菜单激活时 Enter 不发送（命令菜单）', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/' } });
+    await screen.findByText('命令');
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('Escape 关命令菜单', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/' } });
+    await screen.findByText('命令');
+    fireEvent.keyDown(ta, { key: 'Escape' });
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+  });
+
+  it('空 body + 技能 chip 可发送（context 透传，技能正文即 prompt）', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    fireEvent.click(await screen.findByText('代码审查工作流'));
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    expect(sessionState.sendMessage).toHaveBeenCalledWith(
+      '',
+      undefined,
+      { skills: [{ slug: 'code-review-workflow', name: '代码审查工作流' }], files: [] },
+    );
+    expect(screen.queryByLabelText('移除技能 代码审查工作流')).not.toBeInTheDocument();
+    expect(sessionState.loadSessions).toHaveBeenCalled();
+  });
+
+  it('技能 + 文件 chip 组装完整 context 发送', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/a.ts', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('代码审查工作流'));
+    fireEvent.change(ta, { target: { value: '@/a' } });
+    await advanceDebounce();
+    fireEvent.click(screen.getByText('src/a.ts'));
+    fireEvent.change(ta, { target: { value: '@/src/a.ts 帮我看看' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(sessionState.sendMessage).toHaveBeenCalledWith(
+      '@/src/a.ts 帮我看看',
+      undefined,
+      {
+        skills: [{ slug: 'code-review-workflow', name: '代码审查工作流' }],
+        files: [{ path: 'src/a.ts' }],
+      },
+    );
+  });
+
+  it('body 非空时不触发 / 菜单（回归锁——句中 / 不属于命令命名空间）', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    // 等挂载数据就绪并确认菜单可开，排除「数据未到」假阴性
+    fireEvent.change(ta, { target: { value: '/' } });
+    await screen.findByText('命令');
+    fireEvent.change(ta, { target: { value: '看下' } });
+    fireEvent.change(ta, { target: { value: '看下/' } });
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    expect(screen.queryByText('技能')).not.toBeInTheDocument();
+  });
+
+  it('// 转义路径：第二个 / 即关菜单，Enter 原样发送 //（strip 在 session.store）', async () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/' } });
+    await screen.findByText('命令');
+    // 第二个 / 不在命令字符集 [A-Za-z0-9-] 内：命令正则不命中，菜单关闭
+    fireEvent.change(ta, { target: { value: '//' } });
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    fireEvent.change(ta, { target: { value: '//not-a-command' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('//not-a-command', undefined, undefined);
+  });
+
+  it('发送失败恢复技能 chips 与正文', async () => {
+    sessionState.sendMessage = vi.fn().mockRejectedValue(new Error('boom'));
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    fireEvent.click(await screen.findByText('代码审查工作流'));
+    fireEvent.change(ta, { target: { value: '帮我审查这段逻辑' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await waitFor(() => expect(ta.value).toBe('帮我审查这段逻辑'));
+    expect(screen.getByLabelText('移除技能 代码审查工作流')).toBeInTheDocument();
+  });
+
+  it('会话切换清空技能 chips（与 pendingMentions/files 同生命周期）', async () => {
+    const { rerender } = render(<MentionInput />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: '/code' } });
+    fireEvent.click(await screen.findByText('代码审查工作流'));
+    expect(screen.getByLabelText('移除技能 代码审查工作流')).toBeInTheDocument();
+    sessionState.activeSessionId = 'sess-2';
+    rerender(<MentionInput />);
+    expect(screen.queryByLabelText('移除技能 代码审查工作流')).not.toBeInTheDocument();
+  });
+
+  it('listCommands 失败 → 菜单不渲染且不崩（错误路径静默）', async () => {
+    mockApi.session.listCommands.mockRejectedValue(new Error('boom'));
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } });
+    await act(async () => {});
+    expect(screen.queryByText('命令')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeEnabled();
+  });
+
+  it('resource.list 失败 → 技能组缺席，命令组不受影响（错误路径静默）', async () => {
+    mockApi.resource.list.mockRejectedValue(new Error('boom'));
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } });
+    expect(await screen.findByText('命令')).toBeInTheDocument();
+    expect(screen.queryByText('代码审查工作流')).not.toBeInTheDocument();
   });
 });

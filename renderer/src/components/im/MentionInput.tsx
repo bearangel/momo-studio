@@ -12,18 +12,31 @@
 //     形态直接调用，不经 file.store），debounce 200ms / 空查询不搜索 / 仅文件
 //     （isDirectory === false）/ 限 8 条；选择后向正文插入 @/路径 标记并登记
 //     pendingFiles chip（发送清空、失败恢复、会话切换清空——正文标记文本随
-//     草稿保留，chips 不按标记重建为 MVP 取舍）；context 组装发送由 Task 9 统一做
+//     草稿保留，chips 不按标记重建为 MVP 取舍）
+//   - 输入 / 触发命令+技能菜单（Task 9，spec §7.1）：仅空 body 以 / 开头触发
+//     （正则 ^\/([A-Za-z0-9-]*)$ 锚定整串）；命令组数据源 ipc.session.listCommands
+//     （主进程 commands.ts 单一真相源），选择 = insertMention('/name') 插正文，
+//     Enter 沿用既有 / 命令路径执行；技能组数据源 ipc.resource.list({ type: 'skill' })
+//     过滤 installed，选择 = pendingSkills chip（不插正文），随 context 第 3 参发送
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, FileText, Lock, Pin, X } from 'lucide-react';
+import { Bot, FileText, Lock, Pin, Terminal, X, Zap } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
-import type { FileContextItem, SearchHit, SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
+import type {
+  FileContextItem,
+  MessageContext,
+  SearchHit,
+  SessionMemberInfo,
+  SkillContextItem,
+  TaskRow,
+  TaskStatus,
+} from '../../ipc/types';
 
-type MenuKind = 'agent' | 'task';
+type MenuKind = 'agent' | 'task' | 'command';
 
 /** # 菜单仅展示可激活态（v2.3：store 全量拉取后此过滤成为唯一防线） */
 const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
@@ -31,6 +44,8 @@ const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'
 const MENU_LIMIT = 10;
 /** @/ 文件菜单最多展示条目数（主进程 searchNames 默认 limit 200，renderer 端截取） */
 const FILE_MENU_LIMIT = 8;
+/** / 菜单命令组 / 技能组各自最多展示条目数（与 @ 菜单分组限额对齐） */
+const COMMAND_MENU_LIMIT = 8;
 /** 文件搜索防抖间隔（毫秒），与 FileTree 的 SEARCH_DEBOUNCE_MS 对齐 */
 const FILE_SEARCH_DEBOUNCE_MS = 200;
 
@@ -43,6 +58,9 @@ export function MentionInput() {
   // @/ 文件引用列表（Task 8）：菜单选择时记录 { path }，与 pendingMentions 同
   // 生命周期——发送清空 / 失败恢复 / 会话切换清空
   const [pendingFiles, setPendingFiles] = useState<FileContextItem[]>([]);
+  // / 菜单技能列表（Task 9）：选择时记录 { slug, name }（name 为选择时资源索引
+  // 快照，chip 渲染不反查），与 pendingFiles 同生命周期
+  const [pendingSkills, setPendingSkills] = useState<SkillContextItem[]>([]);
   // @/ 文件触发态与局部查询（fileMode=true 时 @ 菜单只展示文件组）
   const [fileMode, setFileMode] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
@@ -50,6 +68,10 @@ export function MentionInput() {
   const [fileHits, setFileHits] = useState<SearchHit[]>([]);
   // 文件搜索竞态守卫：响应返回时序号不匹配则丢弃（与 FileTree 一致）
   const fileSearchSeqRef = useRef(0);
+  // / 菜单两组数据缓存（Task 9）：命令注册表 + 已安装技能（挂载时拉取一次，
+  // 均为全局数据不随会话切换；失败静默——菜单数据缺失不阻塞输入）
+  const [commands, setCommands] = useState<Array<{ name: string; description: string }>>([]);
+  const [skillItems, setSkillItems] = useState<Array<{ slug: string; name: string }>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -83,8 +105,9 @@ export function MentionInput() {
     setQuery('');
     setFileMode(false);
     // MVP 取舍：文件 chips 不按正文里的 @/ 标记重建（正文文本随草稿自然保留），
-    // 切会话即清空——chips 重建留待后续增强
+    // 切会话即清空——chips 重建留待后续增强；技能 chips 同生命周期
     setPendingFiles([]);
+    setPendingSkills([]);
     prevSessionRef.current = activeSessionId;
     // text 刻意不入依赖：仅在会话切换边界执行存取
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,6 +159,22 @@ export function MentionInput() {
     if (workspace) void loadTasks(workspace.id);
   }, [workspace, loadTasks]);
 
+  // / 菜单数据接线（Task 9）：命令组 + 技能组并行拉取缓存。调用形态照
+  // resource.store.load 的 ipc.resource.list(filter)（type 维度后端过滤），
+  // 但不走 store——store 的 typeFilter 是资源库页面的 tab 全局态，此处需要
+  // 固定 { type: 'skill' } 视图（与 Task 8 file.searchNames 直调同理）
+  useEffect(() => {
+    void ipc.session.listCommands().then(setCommands).catch(() => {});
+    void ipc.resource
+      .list({ type: 'skill' })
+      .then((items) =>
+        setSkillItems(
+          items.filter((i) => i.installed).map((i) => ({ slug: i.slug, name: i.name })),
+        ),
+      )
+      .catch(() => {});
+  }, []);
+
   // 在线成员判定与 MembersPanel 同源：lastRunning = 用户最近运行意图
   const filteredMembers =
     menuType === 'agent'
@@ -161,9 +200,39 @@ export function MentionInput() {
           .slice(0, MENU_LIMIT)
       : [];
 
-  /** 光标前缀触发检测：@/ 接文件路径局部 / @ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
+  const filteredCommands =
+    menuType === 'command'
+      ? commands
+          .filter((c) => !query || c.name.toLowerCase().includes(query.toLowerCase()))
+          .slice(0, COMMAND_MENU_LIMIT)
+      : [];
+
+  const filteredSkills =
+    menuType === 'command'
+      ? skillItems
+          .filter(
+            (s) =>
+              !query ||
+              s.slug.toLowerCase().includes(query.toLowerCase()) ||
+              s.name.toLowerCase().includes(query.toLowerCase()),
+          )
+          .slice(0, COMMAND_MENU_LIMIT)
+      : [];
+
+  /** 光标前缀触发检测：命令整串锚定（仅空 body）/ @/ 接文件路径局部 / @ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
   const detectTrigger = (newValue: string, cursorPos: number): void => {
     const before = newValue.slice(0, cursorPos);
+    // 命令分支在最前并短路返回（Task 8 教训：新分支不短路会落入后续 else 清空
+    // menuType）。正则锚定整串——仅空 body 以 / 开头才触发：句中 / 不命中；
+    // '//' 转义（第二个 / 不在 [A-Za-z0-9-] 字符集）也不命中，strip 语义在
+    // session.store.sendMessage，菜单不越权
+    const cmdMatch = before.match(/^\/([A-Za-z0-9-]*)$/);
+    if (cmdMatch) {
+      setMenuType('command');
+      setQuery(cmdMatch[1] ?? '');
+      setFileMode(false);
+      return;
+    }
     // 文件分支在前并短路返回：@/ 前缀走文件搜索。现有 @ 成员正则
     // `(?:^|\s)@([A-Za-z0-9-]*)$` 字符集不含 '/'，与本法互斥——若不短路，
     // '@/x' 会落入下方 else 分支把 menuType 清空
@@ -196,17 +265,18 @@ export function MentionInput() {
     detectTrigger(newValue, e.target.selectionStart ?? newValue.length);
   };
 
-  /** 替换光标前最近的 @xxx / #T-xxx 局部输入为完整标记；尾随空格防继续输入粘连破坏 mention 边界 */
+  /** 替换光标前最近的 @xxx / #T-xxx / /xxx 局部输入为完整标记；尾随空格防继续输入粘连破坏 mention 边界 */
   const insertMention = (marker: string): void => {
     const ta = textareaRef.current;
     if (!ta) return;
     const pos = ta.selectionStart;
     const before = text.slice(0, pos);
     const after = text.slice(pos);
-    // 局部匹配字符集与 detectTrigger 一致（覆盖 '@'、'#T' 等未敲完的局部输入）
+    // 局部匹配字符集与 detectTrigger 一致（覆盖 '@'、'#T'、'/com' 等未敲完的
+    // 局部输入；'/' sigil 为 Task 9 命令选择追加——字符集本就匹配，仅缺 sigil）
     const newValue =
       before.replace(
-        /(?:^|\s)(@[A-Za-z0-9-]*$|#[A-Za-z0-9-]*$)/,
+        /(?:^|\s)(@[A-Za-z0-9-]*$|#[A-Za-z0-9-]*$|\/[A-Za-z0-9-]*$)/,
         (match, partial: string) => match.replace(partial, marker),
       ) + ' ' + after;
     setText(newValue);
@@ -229,6 +299,28 @@ export function MentionInput() {
 
   const selectTask = (t: TaskRow): void => {
     insertMention(`#${t.id}`);
+  };
+
+  const selectCommand = (name: string): void => {
+    insertMention(`/${name}`);
+  };
+
+  /** 技能选择（Task 9）：不插正文（skill 正文在主进程 context-expander 展开），
+   * 剥掉光标前的 /局部 输入并登记 chip——命令触发条件保证该局部即整串 body */
+  const selectSkill = (s: SkillContextItem): void => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const after = text.slice(ta.selectionStart);
+    setText(after);
+    setMenuType(null);
+    setQuery('');
+    setFileMode(false);
+    setPendingSkills((prev) =>
+      prev.some((x) => x.slug === s.slug) ? prev : [...prev, s],
+    );
+    setTimeout(() => {
+      ta.focus();
+    }, 0);
   };
 
   /** insertMention 的文件变体：现有正则字符集不含 '/'，无法覆盖 @/ 局部输入。
@@ -263,25 +355,31 @@ export function MentionInput() {
 
   const handleSend = async (): Promise<void> => {
     const trimmed = text.trim();
-    if (!trimmed || !activeSessionId) return;
+    // 空 body + context 是合法消息（spec §7.1：skill 正文即 prompt）
+    const hasContext = pendingSkills.length > 0 || pendingFiles.length > 0;
+    if ((!trimmed && !hasContext) || !activeSessionId) return;
     const mentions = pendingMentions.length > 0 ? [...pendingMentions] : undefined;
-    const files = pendingFiles.length > 0 ? [...pendingFiles] : undefined;
+    const context: MessageContext | undefined = hasContext
+      ? { skills: [...pendingSkills], files: [...pendingFiles] }
+      : undefined;
     setText('');
     setPendingMentions([]);
     setPendingFiles([]);
+    setPendingSkills([]);
     setMenuType(null);
     setQuery('');
     setFileMode(false);
     try {
-      // context（{ skills, files } 第 3 参）的组装发送由 Task 9 统一接线——
-      // 本任务先落 pendingFiles 的清空 / 失败恢复生命周期
-      await sendMessage(trimmed, mentions);
+      // context（{ skills, files } 第 3 参）：主进程落 messages.context_json，
+      // 派发时展开为正文 <user-context> 块（v2.11 Task 7 契约）
+      await sendMessage(trimmed, mentions, context);
       await loadSessions();
     } catch {
-      // 发送失败恢复正文与 mentions / 文件 chips，用户可修改后重发
+      // 发送失败恢复正文与 mentions / 文件与技能 chips，用户可修改后重发
       setText(trimmed);
       if (mentions) setPendingMentions(mentions);
-      if (files) setPendingFiles(files);
+      if (context?.files.length) setPendingFiles(context.files);
+      if (context?.skills.length) setPendingSkills(context.skills);
     }
   };
 
@@ -365,7 +463,45 @@ export function MentionInput() {
         </div>
       )}
 
-      {(pendingMentions.length > 0 || pendingFiles.length > 0) && (
+      {menuType === 'command' && (filteredCommands.length > 0 || filteredSkills.length > 0) && (
+        <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
+          {filteredCommands.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-xs text-tertiary">命令</div>
+              {filteredCommands.map((c) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  onClick={() => selectCommand(c.name)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
+                >
+                  <Terminal size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <span className="truncate">{`/${c.name}`}</span>
+                  <span className="truncate text-tertiary">{c.description}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {filteredSkills.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-xs text-tertiary">技能</div>
+              {filteredSkills.map((s) => (
+                <button
+                  key={s.slug}
+                  type="button"
+                  onClick={() => selectSkill(s)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
+                >
+                  <Zap size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <span className="truncate">{s.name}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {(pendingMentions.length > 0 || pendingFiles.length > 0 || pendingSkills.length > 0) && (
         <div className="flex flex-wrap gap-1 mb-2">
           {pendingMentions.map((instanceId) => (
             <button
@@ -378,6 +514,19 @@ export function MentionInput() {
               className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
             >
               @{mentionDisplayName(instanceId)}
+              <X size={11} strokeWidth={1.75} aria-hidden />
+            </button>
+          ))}
+          {pendingSkills.map((s) => (
+            <button
+              key={`skill-${s.slug}`}
+              type="button"
+              aria-label={`移除技能 ${s.name}`}
+              onClick={() => setPendingSkills((prev) => prev.filter((x) => x.slug !== s.slug))}
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
+            >
+              <Zap size={11} strokeWidth={1.75} aria-hidden />
+              {s.name}
               <X size={11} strokeWidth={1.75} aria-hidden />
             </button>
           ))}
