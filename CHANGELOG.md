@@ -117,6 +117,17 @@ puppeteer 零依赖——原生 WebContentsView 叠加 + per-workspace partition
 - **IPC 通道面**：14 → 16 通道（新增 `browser:setSidebarVisible` / `browser:setActiveSession` / `browser:closeBrowser` user 源）；`browser:setSidebarCollapsed` 退役
 - **回归锁矩阵**：`tests/browser/{ipc,manager,manager-hide-expand,manager-ownership,op-ctx-threading,boot-wiring}.test.ts` + `renderer/src/components/workspace/BrowserSidebar.test.tsx` + `renderer/src/App.test.tsx`（活跃会话上报首报+变更重报）；11 commits 全量 typecheck/test 零错误（Task 7 收尾清扫 + 变异验证：`closeBrowser` 复位行摘除→接管区分度断言红；`App.tsx` 上报 effect 摘除→重报断言红）
 
+### 会话输入框上下文系统（v2.11 账本）
+spec：`docs/specs/2026-09-16-composer-context-system-design.md`。输入框从纯文本升级为结构化上下文载体——用户意图（skill / 文件）一次性注入本轮对话，metadata 与正文分离。
+- **@ 文件引用**：composer `@` 提及 workspace 相对路径文件，随消息下发（≤64KB/文件、256KB/条消息内联，超限降级路径引用由 LLM 转文件工具自读）
+- **/ 菜单命令 + 技能**：斜杠命令注册表（主进程 `commands.ts` 单一真相源）+ `/技能名` 挂载上下文；预置三技能（代码审查 / 调试 / 文档）
+- **context 一次性注入（spec D2）**：主进程 `context-expander` 展开 → `<user-context>` 块包装进本轮用户正文（`turn-context.ts`）——每会话轮仅注入一次，会话重建只重放原文不重放展开
+- **消息 chip**：owner 消息气泡上方的技能 / 文件 chip 行；文件 chip 点击 `file:read` 直开编辑器 tab，读取失败降级 disabled
+- **P2P context 同步**：`SyncMessage.contextJson` 随消息广播，远端镜像同样渲染 chip
+- **resume 断点重放（终审 I1）**：中断回合重建时首条用户消息的 context 与 steer 对称重放展开
+- **egress 投影（终审 I2）**：steer 事件 `context` 全文只留 DB 供 resume，两处 renderer 出口（event batch 推送 / getMessages）一律剥离
+- 已知边界：builtin 预置技能包不进子进程运行时 skill 索引——composer 注入路径不受影响；`<user-context>` 对内容零转义为设计取舍（与 file:read 等价暴露面）；selectSkill 光标居中会丢弃前段文本（低频边角）；e2e 打包路径待容器外验证
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。
