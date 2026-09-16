@@ -17,8 +17,17 @@
 // v2.1 会话渲染优化：
 //   - 删除本地 SafeAnchor 副本，正文经 MarkdownBody 统一入口（S2 链接拦截一致）
 //   - 静态气泡补时间戳；agent 回复（非自己）hover 气泡显示复制按钮
-import type { ImMessage } from '../../ipc/types';
+//
+// v2.11 Task 11：
+//   - owner 消息 body 上方渲染输入上下文 chip 行：技能 chip 纯展示、文件 chip
+//     点击 file:read(workspaceId, path) 后打开编辑器 tab；读取失败降级 disabled
+import { useState } from 'react';
+import { Zap, FileText } from 'lucide-react';
+import type { ImMessage, SkillContextItem, FileContextItem } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
 import { useStreamStore } from '../../stores/stream.store';
+import { useEditorStore } from '../../stores/editor.store';
+import { parseMessageContext } from '../../lib/message-context';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
@@ -26,6 +35,17 @@ import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
 import { MarkdownBody } from './MarkdownBody';
 import { CopyButton } from '../ui/CopyButton';
+
+// 信任边界：parseMessageContext 只校验 skills/files 是数组，不校验项内字段
+// （Task 1 已知 Minor）。chip 渲染处过滤缺字段项——s.name 直接渲染、
+// f.path.split('/') 对 undefined 都会抛 TypeError，损坏 contextJson 不能崩气泡。
+function isRenderableSkill(s: SkillContextItem): boolean {
+  return typeof s?.slug === 'string' && typeof s?.name === 'string';
+}
+
+function isRenderableFile(f: FileContextItem): boolean {
+  return typeof f?.path === 'string' && f.path.length > 0;
+}
 
 interface Props {
   message: ImMessage;
@@ -38,6 +58,35 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
   // A 子系统：按 message.id 查 stream。streaming 或已完成带富信息时用 AgentStreamBubble
   // 渲染（thinking/工具调用/dispatches 从 message_events 聚合），否则渲染静态消息。
   const stream = useStreamStore((s) => s.streams.get(message.id));
+  // v2.11 Task 11：文件 chip 读取失败降级记录（失败一次即置 disabled，不崩不弹窗）
+  const [failedPaths, setFailedPaths] = useState<string[]>([]);
+
+  /** 文件 chip 点击：读 workspace 文件后打开编辑器 tab；失败记入 failedPaths 置 disabled */
+  async function openInEditor(filePath: string): Promise<void> {
+    // owner 消息落库必带 workspaceId（sendUserMessage 写入 session.workspaceId）；
+    // 缺失属异常数据——直接走失败降级，不发必然失败的 IPC
+    if (message.workspaceId === null) {
+      markFailed(filePath);
+      return;
+    }
+    try {
+      const content = await ipc.file.read(message.workspaceId, filePath);
+      useEditorStore.getState().openFile(filePath, content);
+    } catch {
+      markFailed(filePath);
+    }
+  }
+
+  function markFailed(filePath: string): void {
+    setFailedPaths((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
+  }
+
+  // v2.11 Task 11：owner 消息的输入上下文 chips。agent 消息不渲染（上下文只随
+  // 用户输入产生）；解析失败 / 项全非法 / 均空数组 → 无 chip 行。
+  const ctx = message.sender === 'owner' ? parseMessageContext(message.contextJson) : null;
+  const ctxSkills = ctx?.skills.filter(isRenderableSkill) ?? [];
+  const ctxFiles = ctx?.files.filter(isRenderableFile) ?? [];
+  const hasContextChips = ctxSkills.length > 0 || ctxFiles.length > 0;
 
   if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
@@ -72,6 +121,33 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
       )}
       timestamp={message.createdAt}
     >
+      {hasContextChips && (
+        <div className="mb-1.5 flex flex-wrap gap-1" data-testid="message-context-chips">
+          {ctxSkills.map((s) => (
+            <span
+              key={`skill-${s.slug}`}
+              className="inline-flex items-center gap-1 rounded bg-surface-active px-2 py-0.5 text-xs text-accent-600 dark:text-accent-300"
+            >
+              <Zap size={11} strokeWidth={1.75} aria-hidden />
+              {s.name}
+            </span>
+          ))}
+          {ctxFiles.map((f) => (
+            <button
+              key={`file-${f.path}`}
+              type="button"
+              aria-label={f.path}
+              title={f.path}
+              disabled={failedPaths.includes(f.path)}
+              onClick={() => void openInEditor(f.path)}
+              className="inline-flex items-center gap-1 rounded bg-surface-active px-2 py-0.5 text-xs text-secondary hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FileText size={11} strokeWidth={1.75} aria-hidden />
+              {f.path.split('/').pop()}
+            </button>
+          ))}
+        </div>
+      )}
       <MarkdownBody>{message.body}</MarkdownBody>
       {!isSelf && (
         <CopyButton

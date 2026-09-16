@@ -7,8 +7,12 @@
 //   - 按 message.id 查 stream.store，streaming 时渲染 AgentStreamBubble
 //   - 删除旧版从 content 提取 io.momo-studio.* 富字段的测试（逻辑已移除）
 //   - 新增 streaming/静态分支测试
+//
+// v2.11 Task 11：
+//   - owner 消息 context chip 渲染（技能纯展示 / 文件点击 file:read 打开编辑器 tab）
+//   - 错误路径：读取失败降级 disabled、损坏 JSON 不崩、非法项过滤、workspaceId 缺失
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ImMessage } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
 
@@ -36,7 +40,17 @@ vi.mock('./AgentStreamBubble', () => ({
   ),
 }));
 
+// window.api mock：文件 chip 点击经 ipc Proxy 直读 window.api.file.read
+// （真实契约：read(workspaceId, filePath) → Promise<string>，同 ViewSidebar 用法）。
+// 不设置时组件内 ipc.file.read 访问即抛错。
+const mockApi = {
+  file: {
+    read: vi.fn(),
+  },
+};
+
 import { MessageBubble } from './MessageBubble';
+import { useEditorStore } from '../../stores/editor.store';
 
 function makeMsg(id: string, overrides: Partial<ImMessage> = {}): ImMessage {
   return {
@@ -230,5 +244,117 @@ describe('MessageBubble 链接拦截（S2 导航劫持防护）', () => {
       expect(ev.defaultPrevented).toBe(true);
       expect(openSpy).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('MessageBubble context chip 渲染（v2.11 Task 11）', () => {
+  beforeEach(() => {
+    mockStreams.clear();
+    // 仅设置 api，不替换整个 window（保留 jsdom Window 的其它属性，避免破坏 react-dom）
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    mockApi.file.read.mockReset();
+    // 编辑器是真实 zustand store：逐用例重置，避免 activeTab 跨用例泄漏
+    useEditorStore.setState({ tabs: [], activeTab: null });
+  });
+
+  it('owner 消息渲染技能与文件 chip', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: '检查这个',
+      contextJson: JSON.stringify({
+        skills: [{ slug: 'code-review', name: '代码审查' }],
+        files: [{ path: 'src/a.ts' }],
+      }),
+    })} isSelf={true} />);
+    expect(screen.getByTestId('message-context-chips')).toBeInTheDocument();
+    expect(screen.getByText('代码审查')).toBeInTheDocument();
+    expect(screen.getByText('a.ts')).toBeInTheDocument();
+    expect(screen.getByText('检查这个')).toBeInTheDocument();
+  });
+
+  it('文件 chip 点击 file:read 后打开编辑器 tab（workspaceId 取自消息）', async () => {
+    mockApi.file.read.mockResolvedValue('const a = 1;');
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: 'ws-1',
+      contextJson: JSON.stringify({ skills: [], files: [{ path: 'src/a.ts' }] }),
+    })} isSelf={true} />);
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.ts' }));
+    await waitFor(() => {
+      expect(useEditorStore.getState().activeTab).toBe('src/a.ts');
+    });
+    expect(mockApi.file.read).toHaveBeenCalledWith('ws-1', 'src/a.ts');
+    expect(useEditorStore.getState().tabs[0]!.content).toBe('const a = 1;');
+  });
+
+  it('agent 消息不渲染 context chip（回归锁）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'agent-x', body: '回复',
+      contextJson: JSON.stringify({ skills: [{ slug: 's', name: '技能' }], files: [] }),
+    })} isSelf={false} />);
+    expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
+    expect(screen.queryByText('技能')).not.toBeInTheDocument();
+  });
+
+  it('读取失败 chip 降级不可点（错误路径用例）', async () => {
+    mockApi.file.read.mockRejectedValue(new Error('不存在'));
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: 'ws-1',
+      contextJson: JSON.stringify({ skills: [], files: [{ path: 'gone.ts' }] }),
+    })} isSelf={true} />);
+    fireEvent.click(screen.getByRole('button', { name: 'gone.ts' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'gone.ts' })).toBeDisabled();
+    });
+    expect(useEditorStore.getState().activeTab).toBeNull();
+  });
+
+  it('损坏 contextJson 不崩、无 chip 行（解析失败按无上下文兜底）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: '正文还在',
+      contextJson: '{"skills": [ truncated',
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
+    expect(screen.getByText('正文还在')).toBeInTheDocument();
+  });
+
+  it('contextJson 非数组形状（parseMessageContext 判非法）→ 无 chip 行', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x',
+      contextJson: JSON.stringify({ skills: 'nope', files: [] }),
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
+  });
+
+  it('非法项（缺 name / 缺 path）过滤不崩，合法项照常渲染（信任边界防御）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x',
+      contextJson: JSON.stringify({
+        skills: [{ slug: 'ok', name: '好技能' }, { slug: 'bad' }],
+        files: [{ path: 'src/a.ts' }, {}],
+      }),
+    })} isSelf={true} />);
+    expect(screen.getByText('好技能')).toBeInTheDocument();
+    expect(screen.getByText('a.ts')).toBeInTheDocument();
+    expect(screen.queryByText('bad')).not.toBeInTheDocument();
+  });
+
+  it('owner 消息空 context（skills/files 均空数组）→ 不渲染 chip 行', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x',
+      contextJson: JSON.stringify({ skills: [], files: [] }),
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
+  });
+
+  it('workspaceId 缺失（异常数据）：不发 IPC，chip 直接降级不可点', async () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: null,
+      contextJson: JSON.stringify({ skills: [], files: [{ path: 'a.ts' }] }),
+    })} isSelf={true} />);
+    fireEvent.click(screen.getByRole('button', { name: 'a.ts' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'a.ts' })).toBeDisabled();
+    });
+    expect(mockApi.file.read).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().activeTab).toBeNull();
   });
 });
