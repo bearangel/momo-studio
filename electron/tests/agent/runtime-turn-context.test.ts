@@ -393,8 +393,6 @@ describe('steer 监听器 context 包装（steer → pendingSteers）', () => {
   });
 });
 
-// === isExpandedContext guard（steer 载荷 unknown → ExpandedContext | undefined） ===
-
 // === steer 线协议（Task 6 审查修复回归锁）：chunk emit 原文 + context，非包装体 ===
 // 缺陷复现锁：修复前 push 点即包装——drain emit 的 steer chunk body 是
 // <user-context> 包装体且无 context 字段 → stream-relay 落库 → turn-reconstructor

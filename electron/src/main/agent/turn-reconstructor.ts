@@ -19,8 +19,9 @@
 //     toolCalls=本轮全部调用，runtime-entry:841）
 //   - 每个工具调用 = 紧随的一条 role='tool' 消息（content=结果字符串，
 //     toolCallId=call id，按原 call 顺序）
-//   - steer drain = { role:'user', content:'[用户中途补充] <renderTurnBody(body, context)>' }
-//     （runtime-entry drain 同语义；展开收口在本消费点重放——Task 6 审查修复）
+//   - steer drain = { role:'user', content:'[用户中途补充] <body 或 renderTurnBody(body, context)>' }
+//     （runtime-entry drain 同语义；展开按重建模式分流——resume 同回合重放展开、
+//      session 后续回合重建仅原文，spec D2 一次性注入）
 //
 // 事件形态（照抄 stream-relay.routeChunkToBuffer 落库映射）：
 //   text → text_delta{delta}；tool_call → tool_call_start{callId,toolName,args}
@@ -249,6 +250,14 @@ interface StreamRebuildOptions {
    * 会话重建用 true（不存在 pendingSteers 消费者，行内渲染语义等价）。
    */
   undrainedSteersAsUser: boolean;
+  /**
+   * 已 drain 的 steer 渲染时是否展开 context 元数据为 <user-context> 块
+   * （renderTurnBody）。resume 同回合重放用 true（断点续跑的模型需要
+   * steer 的 skill/文件上下文才能继续）；session 后续回合重建用 false
+   * （一次性注入语义，spec D2——context 在本回合首次注入已生效，后续
+   * 轮次会话重建只重放原文）。缺省 false（保守：不展开）。
+   */
+  expandSteerContext?: boolean;
 }
 
 /** 共享核心返回形状（RebuiltTurn 超集） */
@@ -298,17 +307,20 @@ function rebuildStreamMessages(
       case 'steer': {
         const body = ev.payload.body;
         if (typeof body !== 'string') break;
-        // Task 6 审查修复：线协议携带原文 + context 元数据（历史载荷无
-        // context 字段 → undefined，renderTurnBody 原样回退）。展开收口在本
-        // 消费点：渲染时 renderTurnBody 重放 <user-context> 块——一次性注入
-        // 语义不因落库侧定型包装体而在后续回合重复展开
+        // Task 6 二轮：线协议携带原文 + context 元数据（历史载荷无 context
+        // 字段 → undefined，renderTurnBody 原样回退）。展开按重建模式分流：
+        // resume 同回合重放展开（expandSteerContext=true）；session 后续
+        // 回合重建仅原文（一次性注入，spec D2——每经一回合重建重放一次
+        // <user-context> 即跨回合泄漏）
         const context = isExpandedContext(ev.payload.context) ? ev.payload.context : undefined;
         // 其后是否仍有输出（drain 判定）；会话重建模式下未 drain 也渲染
         //（其后无任何输出，事件位渲染与流末渲染时序等价）
         const drained = events.slice(i + 1).some(isOutputEvent);
         if (drained || opts.undrainedSteersAsUser) {
           agg.closeRound();
-          agg.appendMessage({ role: 'user', content: `[用户中途补充] ${renderTurnBody(body, context)}` });
+          const steerBody =
+            opts.expandSteerContext === true ? renderTurnBody(body, context) : body;
+          agg.appendMessage({ role: 'user', content: `[用户中途补充] ${steerBody}` });
         } else {
           steers.push({ body, ...(context ? { context } : {}) });
         }
@@ -350,6 +362,8 @@ export function rebuildTurn(streamSessionId: string): RebuiltTurn {
     const r = rebuildStreamMessages(streamSessionId, {
       includeUser: true,
       undrainedSteersAsUser: false,
+      // resume 同回合重放：steer 的 context 必须展开（模型续跑依赖其 skill/文件）
+      expandSteerContext: true,
     });
     return {
       messages: r.messages,
@@ -469,6 +483,8 @@ export function rebuildSessionContext(
         const rebuilt = rebuildStreamMessages(baseSsi, {
           includeUser: false,
           undrainedSteersAsUser: true,
+          // expandSteerContext 不传（缺省 false）：后续回合重建 steer 仅原文
+          //（一次性注入，spec D2——resume 轮已展开过，此处再展开即跨回合泄漏）
         });
         // C1：resume 断点族排除——零消息族单位（时间窗保留供步骤② 的 steer
         // 行去重，内容侧复用零输出族的既成剔除路径）

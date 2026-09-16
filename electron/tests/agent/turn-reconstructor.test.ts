@@ -39,6 +39,7 @@ import { nextSeqForMessage } from '../../src/main/storage/messages/events-repo';
 import * as eventsRepo from '../../src/main/storage/messages/events-repo';
 import {
   rebuildTurn,
+  rebuildSessionContext,
   INTERRUPTED_TOOL_RESULT,
 } from '../../src/main/agent/turn-reconstructor';
 
@@ -580,5 +581,49 @@ describe('turn-reconstructor：九场景矩阵', () => {
     expect(supplement).toBeDefined();
     expect(supplement!.content).toBe('[用户中途补充] 旧格式补充');
     expect(supplement!.content).not.toContain('<user-context>');
+  });
+
+  // === Task 6 二轮回归锁：steer context 展开按重建模式分流 ===
+  // 缺陷复现锁（Round 2）：修复前共享核心 drained 分支无条件 renderTurnBody——
+  // rebuildSessionContext（后续回合重建）也展开 <user-context>，带 context 的
+  // steer 每经一回合重建就重放一次 skill/文件展开（spec D2「一次性注入」破坏）。
+
+  it('17. 同一 seed 两模式对照：session 重建 steer 仅原文；resume（rebuildTurn）同回合重放展开', () => {
+    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
+    insertOwnerMessage(SESSION_ID, '继续重构');
+    startStream('ss-ctx-r2');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-r2', delta: '分析中' });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({
+      type: 'steer',
+      streamSessionId: 'ss-ctx-r2',
+      body: '补充说明 Z',
+      context: ctx,
+    });
+    __flushEventBufferForTest();
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-r2', delta: '收到' });
+    __flushEventBufferForTest();
+
+    // session 模式（后续回合重建，rebuildSessionContext）：纯原文——
+    // 无 <user-context> 块、无 skill 正文（一次性注入，spec D2）
+    const sess = rebuildSessionContext(SESSION_ID);
+    const sessSupplement = sess.messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(sessSupplement).toBeDefined();
+    expect(sessSupplement!.content).toBe('[用户中途补充] 补充说明 Z');
+    expect(sess.messages.some((m) => m.content.includes('<user-context>'))).toBe(false);
+    expect(sess.messages.some((m) => m.content.includes('技能正文内容'))).toBe(false);
+
+    // resume 模式（同回合重放，rebuildTurn）：展开 <user-context>（块在前正文在后）
+    const turn = rebuildTurn('ss-ctx-r2');
+    const turnSupplement = turn.messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充]'),
+    );
+    expect(turnSupplement).toBeDefined();
+    expect(turnSupplement!.content).toContain('<user-context>');
+    expect(turnSupplement!.content).toContain('技能正文内容');
+    expect(turnSupplement!.content.endsWith('补充说明 Z')).toBe(true);
+    expect(turn.steers).toEqual([]);
   });
 });
