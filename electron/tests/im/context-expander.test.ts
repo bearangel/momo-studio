@@ -125,4 +125,31 @@ describe('expandMessageContext', () => {
     const r = await expandMessageContext(wsId, { skills: [], files: [] });
     expect(r).toEqual({ skills: [], files: [] });
   });
+
+  it('注入的 workspaceDir 抛错时不抛错，文件 content=null 降级（永不抛错契约守卫）', async () => {
+    // 模拟 getWorkspace 后端 DB 不可用：注入抛错的 workspaceDir 模拟同款异常。
+    // 锁「expander 永不抛错」契约——下游必须自然降级而不是把异常向上冒泡。
+    setExpanderDeps({
+      skillRoots: [path.join(tmpRoot, 'skills')],
+      workspaceDir: () => {
+        throw new Error('db down');
+      },
+    });
+    try {
+      const r = await expandMessageContext(wsId, {
+        skills: [],
+        files: [{ path: 'a.ts' }, { path: 'big.txt' }],
+      });
+      // 抛错 → wsFs=null → 所有文件降级 content=null（不阻塞，不抛错）
+      expect(r.files).toHaveLength(2);
+      expect(r.files[0]!.content).toBeNull();
+      expect(r.files[1]!.content).toBeNull();
+    } finally {
+      // 恢复 beforeAll 的注入，避免污染后续用例
+      setExpanderDeps({
+        skillRoots: [path.join(tmpRoot, 'skills')],
+        workspaceDir: () => path.join(tmpRoot, 'ws1'),
+      });
+    }
+  });
 });

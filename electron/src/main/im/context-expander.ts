@@ -104,11 +104,23 @@ function resolveSkillMarkdown(slug: string): { name: string; body: string } | nu
   }
 }
 
-/** workspace 目录：注入优先，生产走 getWorkspace（真值：Workspace.directoryPath） */
+/** workspace 目录：注入优先，生产走 getWorkspace（真值：Workspace.directoryPath）。
+ *  两路都包 try/catch：注入分支模拟 getWorkspace 在 DB 不可用 / 表不存在时的行为，
+ *  生产分支直接调 getWorkspace。任一路抛错都会逃逸出 expandMessageContext 违反
+ *  「expander 永不抛错」契约——按 marketplaceSkillMdPath 同款守卫降级返回 null，
+ *  让下游 wsFs=null → 文件全部 content=null。 */
 function workspaceDirOf(workspaceId: string | null): string | null {
   if (!workspaceId) return null;
-  if (deps.workspaceDir) return deps.workspaceDir(workspaceId);
-  return getWorkspace(workspaceId)?.directoryPath ?? null;
+  try {
+    if (deps.workspaceDir) return deps.workspaceDir(workspaceId);
+    return getWorkspace(workspaceId)?.directoryPath ?? null;
+  } catch (err) {
+    logger.warn('context-expander：workspace 目录解析失败，降级', {
+      workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 /**
