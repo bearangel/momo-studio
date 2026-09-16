@@ -31,6 +31,11 @@ export interface SyncMessage {
   sender: string;
   body: string;
   eventType: string;
+  /**
+   * v2.11：输入框上下文序列化（messages.context_json 同载荷）。可选字段——
+   * 旧节点不带该字段不破坏（handleIncoming 仅放行 string，其余丢弃为 undefined）。
+   */
+  contextJson?: string | null;
 }
 
 export interface P2pSyncOpts {
@@ -162,6 +167,9 @@ export class P2pSync {
           sender,
           body: m.body,
           eventType: m.eventType,
+          // v2.11：可选上下文——非 string（缺失/null/畸形）直接丢弃为 undefined，
+          // 对端落库回退 null（向后兼容旧节点不带该字段）
+          ...(typeof m.contextJson === 'string' ? { contextJson: m.contextJson } : {}),
         });
         return;
       }

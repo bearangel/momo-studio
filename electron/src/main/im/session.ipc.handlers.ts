@@ -45,6 +45,18 @@ import { formatRoomToMarkdown, renderSubMessage, type ExportMessage } from './ma
 import { listMembers, getAgentDefinition } from '../agent/crud';
 import { listWorkspaces } from '../workspace/crud';
 import { scheduleExtraction, TRIGGER_TURN_INTERVAL } from '../memory/extraction';
+import type { MessageContext } from '../../../../renderer/src/ipc/types';
+
+/**
+ * IPC 载荷形状 guard（v2.11）：session:send 第 4 参 context 只在 skills/files
+ * 均为数组时透传——renderer 输入面之外的畸形载荷降级为 undefined（无上下文
+ * 发送），不拒整条消息。
+ */
+function isMessageContextShape(v: unknown): v is MessageContext {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as { skills?: unknown; files?: unknown };
+  return Array.isArray(c.skills) && Array.isArray(c.files);
+}
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
 function toSummary(row: SessionRow): SessionSummary {
@@ -132,8 +144,19 @@ export function registerSessionIpcHandlers(): void {
   // 用户消息写入：INSERT → touch → 推 session:message → P2P 广播 → 冲突检测 → 路由。
   ipcMain.handle(
     'session:send',
-    async (_evt, sessionId: string, body: string, mentionedInstanceIds?: string[]) => {
-      const result = await sendUserMessage({ sessionId, body, mentionedInstanceIds });
+    async (
+      _evt,
+      sessionId: string,
+      body: string,
+      mentionedInstanceIds?: string[],
+      context?: unknown,
+    ) => {
+      const result = await sendUserMessage({
+        sessionId,
+        body,
+        mentionedInstanceIds,
+        ...(isMessageContextShape(context) ? { context } : {}),
+      });
       // v2.2 记忆 P2（spec §6.4 触发点）：用户消息落库成功后按轮次间隔触发自动提取。
       // owner 消息数（含本条）% TRIGGER_TURN_INTERVAL === 0 时触发；fire-and-forget。
       // 计数失败仅告警——消息已落库并路由，绝不能因提取触发拖垮 send 返回（spec §8）。

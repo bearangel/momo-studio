@@ -21,7 +21,7 @@
 //   4. ephemeral chat（taskId=null）无后续 IPC 依赖，保持旧语义：end 即回收。
 import type { ChildProcess } from 'node:child_process';
 import type { WarmPool, WarmRuntime } from './warm-pool';
-import type { AgentRuntimeOpts } from './runtime-config';
+import type { AgentRuntimeOpts, ExpandedContext } from './runtime-config';
 import { logger } from '../logger';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { canTransition, isTerminal, type TaskStatus } from '../storage/tasks/state-machine';
@@ -85,6 +85,12 @@ export interface TaskConfig {
    * 未携带时载荷无该字段（既有 dispatch 零变化）。
    */
   historyPrefix?: import('./llm-provider').LLMMessage[];
+  /**
+   * v2.11 输入框上下文（spec 2026-09-16 §5.4）：RouterService 展开后的用户
+   * 指定 skill 正文与文件内容，经 task-config / steer 线协议下发（不落库、
+   * 不回 renderer）。与 runtime-config.ts TaskConfig.context 同型。
+   */
+  context?: ExpandedContext;
 }
 
 /** notifyTaskReply 的入参——camelCase（由 RouterService 从 task_reply event 转换而来） */
@@ -290,6 +296,8 @@ export class AgentRunner {
       // v2.8.0 Orchestration（Task 6）：followup 续聊前缀同型透传
       //（dispatch-followup.test.ts 接线锁；摘掉即红）
       ...(task.historyPrefix ? { historyPrefix: task.historyPrefix } : {}),
+      // v2.11 输入框上下文同型透传（router-context.test.ts 接线锁；摘掉即红）
+      ...(task.context ? { context: task.context } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };
@@ -537,13 +545,20 @@ export class AgentRunner {
    * 与 abort 同线协议模式——child.send({ type:'steer', streamSessionId, body })，
    * runtime-entry 的消息监听器 push 进 pendingSteers，chat loop 下一轮构建
    * LLM 请求前消费。不触发 AbortController（与停止按钮语义正交）。
+   * v2.11：第 3 参 context 携带主进程展开后的输入框上下文（与 task-config
+   * 线协议同型条件展开；无上下文时载荷零变化）。
    * 返回 false = 无活跃流或通道已关（调用方回退正常派发）。
    */
-  steer(streamSessionId: string, body: string): boolean {
+  steer(streamSessionId: string, body: string, context?: ExpandedContext): boolean {
     const active = this.activeTasks.get(streamSessionId);
     if (!active) return false;
     try {
-      active.runtime.child.send({ type: 'steer', streamSessionId, body });
+      active.runtime.child.send({
+        type: 'steer',
+        streamSessionId,
+        body,
+        ...(context ? { context } : {}),
+      });
       return true;
     } catch {
       // 通道已关闭（流恰好结束）——回退由调用方处理

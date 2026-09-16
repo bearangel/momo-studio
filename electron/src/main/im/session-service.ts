@@ -39,6 +39,7 @@ import { listTasks, getTask } from '../storage/tasks/repo';
 import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
 import { SESSION_COMMANDS, isKnownSessionCommand } from './commands';
+import type { MessageContext } from '../../../../renderer/src/ipc/types';
 import type { BrowserWindow } from 'electron';
 import { logger } from '../logger';
 
@@ -53,6 +54,8 @@ interface SessionRouter {
     systemKickoff?: boolean;
     /** v2.3：kickoff 来源任务 id（车道注册；手输消息为 null） */
     sourceTaskId?: string | null;
+    /** v2.11：输入框上下文（RouterService 展开后随 task-config / steer 下发） */
+    context?: MessageContext;
   }): Promise<void>;
 }
 
@@ -151,6 +154,11 @@ export async function sendUserMessage(input: {
    * 用户手输消息不传（注册时 taskId 记 null）。
    */
   sourceTaskId?: string | null;
+  /**
+   * v2.11：输入框上下文（metadata 级 MessageContext）。落库 messages.context_json、
+   * 随 P2P 广播与 routeUserChat 透传（RouterService 展开后下发子进程）。
+   */
+  context?: MessageContext;
 }): Promise<SendUserMessageResult> {
   const session = getSession(input.sessionId);
   if (!session) throw new Error(`会话不存在: ${input.sessionId}`);
@@ -162,12 +170,18 @@ export async function sendUserMessage(input: {
     eventType: 'm.room.message', // 事件类型字符串保留（renderer 渲染分支依赖；P2 收敛命名）
     body: input.body,
     workspaceId: session.workspaceId,
+    ...(input.context ? { contextJson: JSON.stringify(input.context) } : {}),
   });
   touchSessionLastMessage(input.sessionId);
   pushMessageRow(msg);
 
-  // 首条用户消息截断占位（T8 接线；守卫：title=「新会话」占位 且 title_auto=1）
-  applyFirstMessageTitle(input.sessionId, input.body);
+  // v2.11：空正文 + context 非空时，首条消息命名回退到 skill 名 / 文件 basename
+  const titleSource =
+    input.body !== '' || !input.context
+      ? input.body
+      : input.context.skills[0]?.name ??
+        (input.context.files[0] ? input.context.files[0].path.split('/').pop()! : '');
+  applyFirstMessageTitle(input.sessionId, titleSource);
 
   // P2P 广播（fire-and-forget；sync 未初始化时静默返回）。
   // 注意：p2p SyncMessage 字段名仍为 roomId（p2p 模块属阶段三重构范围，本 task 不动），
@@ -177,6 +191,7 @@ export async function sendUserMessage(input: {
     sender: 'owner',
     body: input.body,
     eventType: 'm.room.message',
+    ...(input.context ? { contextJson: JSON.stringify(input.context) } : {}),
   });
 
   // 冲突检测（沿用 im:send 的保护语义：失败不阻塞消息发送）。
@@ -225,6 +240,7 @@ export async function sendUserMessage(input: {
         body: input.body,
         systemKickoff: input.systemKickoff === true,
         sourceTaskId: input.sourceTaskId ?? null,
+        ...(input.context ? { context: input.context } : {}),
       });
     } else {
       // router 缺席（RouterService 未启动/销毁）必须留痕——防静默死路

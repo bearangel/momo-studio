@@ -207,6 +207,8 @@ export function handleRemoteMessage(msg: SyncMessage): void {
       eventType: msg.eventType,
       body: msg.body,
       source: 'lan',
+      // v2.11：对端消息携带的输入框上下文原样落库（旧节点载荷无此字段 → null）
+      contextJson: msg.contextJson ?? null,
     });
     const win = BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {

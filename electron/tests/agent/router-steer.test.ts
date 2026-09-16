@@ -35,7 +35,8 @@ describe('routeUserChat steer 分流', () => {
 
     await mkService().routeUserChat({ sessionId: 'room-1', assignmentId: 'asg-1', body: '补充：用 pnpm' });
 
-    expect(runner.steer).toHaveBeenCalledWith('s-a', '补充：用 pnpm');
+    // v2.11：steer 签名加第 3 参 context（无上下文时为 undefined——恒传）
+    expect(runner.steer).toHaveBeenCalledWith('s-a', '补充：用 pnpm', undefined);
     expect(runner.executeTask).not.toHaveBeenCalled();
   });
 

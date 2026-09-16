@@ -23,6 +23,9 @@ import {
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
+import { getSession } from '../storage/sessions/repo';
+import { expandMessageContext } from '../im/context-expander';
+import type { MessageContext } from '../../../../renderer/src/ipc/types';
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -66,6 +69,8 @@ export interface RouteUserChatInput {
   systemKickoff?: boolean;
   /** v2.3：kickoff 来源任务 id（车道注册；手输为 null） */
   sourceTaskId?: string | null;
+  /** v2.11：输入框上下文（metadata 级；展开为 ExpandedContext 后随 task-config / steer 下发） */
+  context?: MessageContext;
 }
 
 /**
@@ -112,6 +117,13 @@ export class RouterService {
       return;
     }
 
+    // v2.11：上下文在 steer 分支前展开一次，executeTask 与 steer 两分支共用
+    //（expander 永不抛错，无需 try/catch；workspaceId 解析失败降级 null →
+    //  文件引用全降级，消息派发不受影响）
+    const expandedContext = input.context
+      ? await expandMessageContext(this.resolveWorkspaceId(input.sessionId), input.context)
+      : undefined;
+
     // v2.3 steer 分流（spec §5.1）：活跃流期间用户手输 → 注入当前流而非新流。
     // 分流键 = (sessionId, assignmentId)：@ 其他成员不 steer（目标 runner 不同）
     // typeof guard：真实 AgentRunner 必有 steer；测试中 mock 是结构子集（仅 executeTask/notifyTaskReply），
@@ -119,7 +131,7 @@ export class RouterService {
     if (!input.systemKickoff && typeof runner.steer === 'function') {
       const laneEntry = getLane(input.sessionId);
       if (laneEntry && laneEntry.assignmentId === input.assignmentId) {
-        const steered = runner.steer(laneEntry.streamSessionId, input.body);
+        const steered = runner.steer(laneEntry.streamSessionId, input.body, expandedContext);
         if (steered) return;
         // 死通道回退（spec §5.4）：流恰好结束——继续走正常派发，消息不丢
         logger.info('steer 通道已关，回退正常派发', {
@@ -134,6 +146,7 @@ export class RouterService {
       executionSessionId: input.sessionId,
       body: input.body,
       streamSessionId: input.streamSessionId ?? randomUUID(),
+      ...(expandedContext ? { context: expandedContext } : {}),
     };
     await runner.executeTask(task);
     // v2.3 会话车道注册（spec §4.1）：顶层流派发即占道；dispatch 子流走
@@ -199,6 +212,19 @@ export class RouterService {
   private extractBody(content: Record<string, unknown>): string {
     const body = content.body;
     return typeof body === 'string' ? body : '';
+  }
+
+  /**
+   * sessionId → workspaceId（v2.11：文件上下文展开需要 workspace 根目录）。
+   * DB 异常（未初始化/表缺失）降级 null——上下文是增强不是前提，
+   * 与 expander「永不抛错」契约对齐，绝不阻塞消息派发。
+   */
+  private resolveWorkspaceId(sessionId: string): string | null {
+    try {
+      return getSession(sessionId)?.workspaceId ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
