@@ -29,6 +29,11 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     activeSessionReadOnly: false,
     inputFocusTick: 0,
     fileTriggerTick: 0,
+    // v2.11.1 F3：📎 移入 MentionInput 容器——仿真真实 store 的 bumpFileTrigger
+    // 语义（fileTriggerTick +1）；箭头体在调用时才执行，sessionState 届时已初始化
+    bumpFileTrigger: vi.fn(() => {
+      sessionState.fileTriggerTick += 1;
+    }),
   },
   taskState: {
     tasks: [] as TaskRow[],
@@ -40,7 +45,13 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../stores/session.store', () => ({
-  useSessionStore: (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
+  // v2.11.1 F3：📎 onClick 经 useSessionStore.getState().bumpFileTrigger() 触发——
+  // 真实 zustand store 的 getState 挂在 hook 函数自身，mock 同形（Object.assign
+  // 保留函数可调用性并追加属性，不改模块导出形状）
+  useSessionStore: Object.assign(
+    (selector: (s: typeof sessionState) => unknown) => selector(sessionState),
+    { getState: () => sessionState },
+  ),
 }));
 vi.mock('../../stores/task.store', () => ({
   useTaskStore: (selector?: (s: typeof taskState) => unknown) =>
@@ -157,6 +168,10 @@ function resetState(): void {
   sessionState.activeSessionReadOnly = false;
   sessionState.inputFocusTick = 0;
   sessionState.fileTriggerTick = 0;
+  // 每用例还原 bumpFileTrigger 实现——防上个用例替换实现或跨用例残留影响递增语义
+  sessionState.bumpFileTrigger = vi.fn(() => {
+    sessionState.fileTriggerTick += 1;
+  });
   taskState.tasks = [];
   taskState.load = vi.fn().mockResolvedValue(undefined);
 }
@@ -803,5 +818,33 @@ describe('MentionInput 触发正则放宽（v2.11.1 F1：中文过滤）', () =>
     expect(screen.queryByText('命令')).toBeNull();
     fireEvent.change(ta, { target: { value: '邮箱a@b.com不发菜单' } });
     expect(screen.queryByText('选择要 @ 的 agent')).toBeNull();
+  });
+});
+
+// === v2.11.1 F3：Kimi 式容器——chips 与 📎 在输入框容器内 ===
+describe('MentionInput Kimi 式容器（v2.11.1 F3）', () => {
+  it('chips 渲染在输入框容器内（非顶置工具条）', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'a.ts', isDirectory: false }]);
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@a' } });
+    fireEvent.click(await screen.findByText('a.ts'));
+    const chip = screen.getByLabelText('移除文件 a.ts');
+    expect(chip.closest('.rounded-lg')).toBeTruthy(); // 容器框内
+  });
+
+  it('📎 在输入框容器内左下角且触发 bumpFileTrigger', async () => {
+    render(<MentionInput />);
+    const btn = screen.getByLabelText('引用文件');
+    expect(btn.closest('.rounded-lg')).toBeTruthy();
+    fireEvent.click(btn);
+    // bumpFileTrigger 经真实 store mock 生效（getState + tick 递增语义）
+    expect(sessionState.fileTriggerTick).toBe(1);
+  });
+
+  it('readOnly → 📎 禁用；无 chips 时底行仅 📎', () => {
+    sessionState.activeSessionReadOnly = true;
+    render(<MentionInput />);
+    expect((screen.getByLabelText('引用文件') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText(/移除/)).toBeNull();
   });
 });

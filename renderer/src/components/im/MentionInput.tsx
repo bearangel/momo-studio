@@ -22,12 +22,16 @@
 //     过滤 installed，选择 = pendingSkills chip（不插正文），随 context 第 3 参发送
 //   - 手动键入 @ 文本（不经菜单选择）不注册 mention——与原 MessageInput 一致
 //   - 空态 parity：无激活会话禁用 + placeholder 提示；发送失败恢复正文与 mentions
+//   - Kimi 式单一容器（v2.11.1 F3）：textarea 无边框置于容器内，框内底行 =
+//     📎 左下角 + chips（mention/skill/file）换行限高滚动。chips 自输入框
+//     上方整体迁入框内、📎 自 InputToolbar 移入——只动位置不动行为
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, FileText, Lock, Pin, Terminal, X, Zap } from 'lucide-react';
+import { Bot, FileText, Lock, Paperclip, Pin, Terminal, X, Zap } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
+import { IconButton } from '../ui/IconButton';
 import type {
   FileContextItem,
   MessageContext,
@@ -82,7 +86,8 @@ export function MentionInput() {
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
   const readOnly = useSessionStore((s) => s.activeSessionReadOnly);
   const inputFocusTick = useSessionStore((s) => s.inputFocusTick);
-  // 📎 文件引用触发信号（Task 10）：InputToolbar 📞 按钮递增
+  // 📎 文件引用触发信号（Task 10 信号机制不变；v2.11.1 F3 起按钮在本组件容器内）：
+  // 框内 📎 点击递增
   const fileTriggerTick = useSessionStore((s) => s.fileTriggerTick);
   // 斜杠命令提示（spec §5.4）：成功 message 或失败 Error.message；下一次正常
   // 发消息时 store 自动置 null
@@ -506,51 +511,6 @@ export function MentionInput() {
         </div>
       )}
 
-      {(pendingMentions.length > 0 || pendingFiles.length > 0 || pendingSkills.length > 0) && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {pendingMentions.map((instanceId) => (
-            <button
-              key={instanceId}
-              type="button"
-              aria-label={`移除 @${mentionDisplayName(instanceId)}`}
-              onClick={() =>
-                setPendingMentions((prev) => prev.filter((m) => m !== instanceId))
-              }
-              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
-            >
-              @{mentionDisplayName(instanceId)}
-              <X size={11} strokeWidth={1.75} aria-hidden />
-            </button>
-          ))}
-          {pendingSkills.map((s) => (
-            <button
-              key={`skill-${s.slug}`}
-              type="button"
-              aria-label={`移除技能 ${s.name}`}
-              onClick={() => setPendingSkills((prev) => prev.filter((x) => x.slug !== s.slug))}
-              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
-            >
-              <Zap size={11} strokeWidth={1.75} aria-hidden />
-              {s.name}
-              <X size={11} strokeWidth={1.75} aria-hidden />
-            </button>
-          ))}
-          {pendingFiles.map((f) => (
-            <button
-              key={`file-${f.path}`}
-              type="button"
-              aria-label={`移除文件 ${f.path}`}
-              onClick={() => setPendingFiles((prev) => prev.filter((x) => x.path !== f.path))}
-              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
-            >
-              <FileText size={11} strokeWidth={1.75} aria-hidden />
-              {f.path.split('/').pop()}
-              <X size={11} strokeWidth={1.75} aria-hidden />
-            </button>
-          ))}
-        </div>
-      )}
-
       {readOnly && (
         <div className="mb-2 text-xs text-tertiary inline-flex items-center gap-1">
           <Lock size={12} strokeWidth={1.75} aria-hidden className="inline-block align-[-1px]" />
@@ -562,22 +522,80 @@ export function MentionInput() {
         <div className="px-3 py-1 text-xs text-secondary border-t border-subtle">{commandHint}</div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        disabled={!activeSessionId || readOnly}
-        placeholder={
-          readOnly
-            ? '会话只读'
-            : activeSessionId
-              ? '输入消息，Enter 发送。输入 @ 提到 agent，# 引用任务'
-              : '请先选择房间'
-        }
-        rows={2}
-        className="w-full resize-none rounded-md border border-subtle bg-surface-2 px-3 py-2 text-sm text-primary placeholder:text-disabled focus:border-focus focus:outline-none disabled:opacity-50"
-      />
+      {/* Kimi 式单一容器（v2.11.1 F3）：textarea 无边框置顶；框内底行 = 📎 左下 +
+          chips 换行限高滚动；focus 态上移容器边框 */}
+      <div className="rounded-lg border border-subtle bg-surface-2 focus-within:border-focus transition-colors">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          disabled={!activeSessionId || readOnly}
+          placeholder={
+            readOnly
+              ? '会话只读'
+              : activeSessionId
+                ? '输入消息，Enter 发送。输入 @ 提到 agent，# 引用任务'
+                : '请先选择房间'
+          }
+          rows={2}
+          className="w-full resize-none bg-transparent px-3 pt-2 pb-1 text-sm text-primary placeholder:text-disabled focus:outline-none disabled:opacity-50"
+        />
+        <div className="flex items-end gap-2 px-2 pb-2">
+          <IconButton
+            aria-label="引用文件"
+            title="引用文件"
+            disabled={!activeSessionId || readOnly}
+            onClick={() => useSessionStore.getState().bumpFileTrigger()}
+          >
+            <Paperclip size={16} strokeWidth={1.75} aria-hidden />
+          </IconButton>
+          {(pendingMentions.length > 0 || pendingSkills.length > 0 || pendingFiles.length > 0) && (
+            <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+              {pendingMentions.map((instanceId) => (
+                <button
+                  key={instanceId}
+                  type="button"
+                  aria-label={`移除 @${mentionDisplayName(instanceId)}`}
+                  onClick={() =>
+                    setPendingMentions((prev) => prev.filter((m) => m !== instanceId))
+                  }
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:bg-status-error-tint hover:text-status-error"
+                >
+                  @{mentionDisplayName(instanceId)}
+                  <X size={11} strokeWidth={1.75} aria-hidden />
+                </button>
+              ))}
+              {pendingSkills.map((s) => (
+                <button
+                  key={`skill-${s.slug}`}
+                  type="button"
+                  aria-label={`移除技能 ${s.name}`}
+                  onClick={() => setPendingSkills((prev) => prev.filter((x) => x.slug !== s.slug))}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
+                >
+                  <Zap size={11} strokeWidth={1.75} aria-hidden />
+                  {s.name}
+                  <X size={11} strokeWidth={1.75} aria-hidden />
+                </button>
+              ))}
+              {pendingFiles.map((f) => (
+                <button
+                  key={`file-${f.path}`}
+                  type="button"
+                  aria-label={`移除文件 ${f.path}`}
+                  onClick={() => setPendingFiles((prev) => prev.filter((x) => x.path !== f.path))}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-surface-active text-secondary hover:bg-status-error-tint hover:text-status-error"
+                >
+                  <FileText size={11} strokeWidth={1.75} aria-hidden />
+                  {f.path.split('/').pop()}
+                  <X size={11} strokeWidth={1.75} aria-hidden />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
