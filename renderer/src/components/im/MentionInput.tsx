@@ -15,9 +15,9 @@
 //   - #T 任务菜单：数据源 task.store.tasks，本地 MENU_STATUSES 过滤
 //     （draft/pending/assigned）是唯一过滤点，选择 → task pill（序列化进
 //     body `#id`——后端 conflict-detector 从正文解析，不进 sendMessage 载荷）
-//   - / 命令+技能菜单（spec §7.1）：仅空 body 以 / 开头触发（正则
-//     ^\/([^\s/]*)$ 锚定整串——pill 折叠为空格使命令/技能 pill 只能是
-//     编辑器第一个节点，整串语义保持）；命令组 ipc.session.listCommands，
+//   - / 命令+技能菜单（spec §7.1；v3.1 句中触发）：空白前缀锚定
+//     (?:^|\s)\/([^\s/]*)$（与 @/# 对称——句中空格后与 pill 折叠空格后均可
+//     触发；无空白前导的 / 不触发）；命令组 ipc.session.listCommands，
 //     选择 → command pill（序列化进 body `/name`）；技能组
 //     ipc.resource.list({ type: 'skill' }) 过滤 installed，选择 → skill pill
 //     （不进正文，随 context 第 3 参发送）
@@ -226,17 +226,20 @@ export function MentionInput() {
 
   /**
    * 光标前缀触发检测（RichComposer onInputText 的 beforeCaret——pill 已折叠
-   * 为单空格、剥 ZWSP）：命令整串锚定（仅空 body）/ @ 接 slug 与文件路径
-   * 局部（统一菜单）/ # 接 T-数字局部。pill 折叠空格使 `^\/` 在 pill 存在时
-   * 自然失效——命令/技能 pill 只能是编辑器第一个节点，整串语义保持。
+   * 为单空格、剥 ZWSP）：/ 接命令与技能局部 / @ 接 slug 与文件路径局部
+   * （统一菜单）/ # 接 T-数字局部。三触发同用空白前缀锚定 `(?:^|\s)`
+   * （v3.1：句中 / 与 @/# 对称触发，主机反馈）——pill 折叠空格天然充当
+   * 前导空白，pill 之后同样可触发。
    */
   const detectTrigger = (before: string): void => {
     // 命令分支在最前并短路返回（Task 8 教训：新分支不短路会落入后续 else
-    // 清空 menuType）。正则锚定整串——仅空 body 以 / 开头才触发：句中 /
-    // 不命中；'//' 转义（第二个 / 不在 [^\s/] 字符集）也不命中，strip 语义
-    // 在 session.store.sendMessage，菜单不越权。字符集 [^\s/]（非空白且
-    // 非 /）——支持中文命令/技能名过滤，同时保留 '//' 转义与句中 / 不触发
-    const cmdMatch = before.match(/^\/([^\s/]*)$/);
+    // 清空 menuType）。空白前缀锚定：仅行首或空白后的 / 触发——无空白前导
+    // 的 /（路径 src/文件、24/7、and/or、URL）不命中；'//' 转义（第二个 /
+    // 不在 [^\s/] 字符集）不命中，strip 语义在 session.store.sendMessage，
+    // 菜单不越权。字符集 [^\s/]——支持中文命令/技能名过滤。命令整串拦截
+    // 语义不受影响：store 侧只拦纯命令 body（/^\/([A-Za-z0-9-]+)\s*$/），
+    // 句中选命令 pill 序列化为混排正文按普通消息发送（spec §3）。
+    const cmdMatch = before.match(/(?:^|\s)\/([^\s/]*)$/);
     if (cmdMatch) {
       setMenuType('command');
       setQuery(cmdMatch[1] ?? '');

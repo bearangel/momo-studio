@@ -986,7 +986,7 @@ describe('MentionInput 触发正则放宽（中文过滤）', () => {
     expect(screen.queryByText(/写文档/)).toBeNull();
   });
 
-  it('语义保持：句中 / 不触发命令菜单、// 转义不触发、正文后 @ 不弹成员菜单', () => {
+  it('语义保持：无空白前导的 / 不触发（路径/分数）、// 转义不触发、正文后 @ 不弹成员菜单', () => {
     render(<MentionInput />);
     typeInEditor(editor(), '看下 src/文件');
     expect(screen.queryByText('命令')).toBeNull();
@@ -994,6 +994,61 @@ describe('MentionInput 触发正则放宽（中文过滤）', () => {
     expect(screen.queryByText('命令')).toBeNull();
     typeInEditor(editor(), '邮箱a@b.com不发菜单');
     expect(screen.queryByText('选择要 @ 的 agent')).toBeNull();
+  });
+});
+
+// === v3.1 主机反馈：句中 /（空白前导）触发命令+技能菜单——与 @/# 对称 ===
+// 语义变更：v2.11 整串锚定（仅空 body 以 / 开头）→ 空白前缀锚定
+// `(?:^|\s)\/`。噪声守卫：无空白前导的 /（路径 src/文件、24/7、and/or、
+// URL）仍不触发；'//' 转义仍不触发（第二个 / 不在字符集）。
+describe('MentionInput 句中 / 触发（v3.1：与 @/# 对称）', () => {
+  it('句中空格后的 / 触发命令+技能两组菜单（帮我执行 /）', async () => {
+    render(<MentionInput />);
+    typeInEditor(editor(), '帮我执行 /');
+    await waitFor(() => expect(screen.getByText('命令')).toBeTruthy());
+    expect(screen.getByText('技能')).toBeTruthy();
+  });
+
+  it('句中 /xxx 过滤命令组（query 接管）', async () => {
+    render(<MentionInput />);
+    typeInEditor(editor(), '帮我执行 /compact');
+    await waitFor(() => expect(screen.getByText('/compact')).toBeTruthy());
+  });
+
+  it('pill 之后的 / 同样触发（pill 折叠空格作空白前导）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'i-1', agentName: 'coder' })];
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    fireEvent.click(await screen.findByText('coder'));
+    // pill 就位（ZWSP 末节点），追加 ' /' —— beforeCaret 为 ' @coder折叠空格/'
+    typeAtEnd(editor(), ' /');
+    await waitFor(() => expect(screen.getByText('命令')).toBeTruthy());
+  });
+
+  it('噪声守卫：24/7、and/or、https://x 的 / 不触发', () => {
+    render(<MentionInput />);
+    typeInEditor(editor(), '24/7 天假');
+    expect(screen.queryByText('命令')).toBeNull();
+    typeInEditor(editor(), 'and/or 与 https://x/y');
+    expect(screen.queryByText('命令')).toBeNull();
+  });
+
+  it('句中选择技能 pill：replaceLen 只吞 /局部，正文保留、context 照常下发', async () => {
+    render(<MentionInput />);
+    typeInEditor(editor(), '帮我执行 /');
+    const skillItem = await screen.findByText('代码审查工作流');
+    fireEvent.click(skillItem);
+    // 菜单关闭 + Enter 发送：body='帮我执行'（skill 不进正文 + /局部被吞），context 透传
+    fireEvent.keyDown(editor(), { key: 'Enter' });
+    await waitFor(() =>
+      expect(sessionState.sendMessage).toHaveBeenCalledWith(
+        '帮我执行',
+        undefined,
+        expect.objectContaining({
+          skills: [expect.objectContaining({ slug: 'code-review-workflow' })],
+        }),
+      ),
+    );
   });
 });
 
