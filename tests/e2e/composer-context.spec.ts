@@ -2,12 +2,12 @@
 //
 // v2.11 输入框上下文系统 e2e（Task 13）：真实构建应用全链路——
 // 启动 → 建 workspace → 加 agent 成员 → ⚡ 快速会话（首次设默认 agent）
-// → @/ 文件引用菜单 → / 技能菜单 → 发送 → 消息气泡 context chip 渲染。
+// → @ 统一菜单（agent+文件同浮层，v2.11.1）→ / 技能菜单 → 发送 → 消息气泡 context chip 渲染。
 //
-// 被测链路（Task 1-12 全链消费）：
-//   - @/ 触发（MentionInput detectTrigger 文件分支）→ ipc.file.searchNames
-//     （主进程 WorkspaceFS 实时递归扫描）→ 菜单选择 → 正文 @/路径 标记 +
-//     pendingFiles chip
+// 被测链路（Task 1-12 全链消费 + v2.11.1 交互精简）：
+//   - @ 触发统一菜单（v2.11.1：移除 @/ 独立语法，agent + 文件同浮层双源过滤）
+//     文件分支：ipc.file.searchNames（主进程 WorkspaceFS 实时递归扫描）→ 菜单选择
+//     → 正文 @路径 标记 + pendingFiles chip
 //   - / 触发（空 body 锚定）→ 命令组（session.listCommands，主进程 commands.ts
 //     单一真相源）+ 技能组（ipc.resource.list 过滤 installed，builtin 三技能）
 //     → 技能选择 → pendingSkills chip（正文不插入）
@@ -38,8 +38,8 @@ const tmpWsDir = path.join(os.tmpdir(), `momo-composer-e2e-ws-${Date.now()}-${pr
 test.beforeAll(() => {
   fs.mkdirSync(tmpUserData, { recursive: true });
   fs.mkdirSync(tmpWsDir, { recursive: true });
-  // @/ 文件菜单数据源是 searchNames 实时扫描 workspace 目录——
-  // 预写 package.json 保证 '@/package' 查询有稳定命中
+  // @ 统一菜单文件分支数据源是 searchNames 实时扫描 workspace 目录——
+  // 预写 package.json 保证 '@package' 查询有稳定命中（v2.11.1 移除 @/ 独立语法）
   fs.writeFileSync(
     path.join(tmpWsDir, 'package.json'),
     JSON.stringify({ name: 'momo-composer-e2e', version: '1.0.0' }, null, 2),
@@ -147,15 +147,15 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     await picker.getByRole('button', { name: '设为默认并继续' }).click();
 
     // 快速会话建立 → 输入框启用（placeholder 从「请先选择房间」切到发送提示）
-    const input = win.getByPlaceholder(/Enter 发送/);
+    const input = win.getByPlaceholder(/Enter 发送.*输入 @ 提到 agent/);
     await expect(input).toBeEnabled({ timeout: 15000 });
 
-    // ---- 5. @ 文件引用：@/ 前缀 → 菜单 → 选择 package.json ----
+    // ---- 5. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json ----
     // 文件搜索 debounce 200ms + IPC，断言自带 15s 超时窗足够
-    await input.fill('@/package');
-    await expect(win.getByText('选择要引用的文件')).toBeVisible();
+    await input.fill('@package');
+    await expect(win.getByText('引用文件')).toBeVisible();
     await win.getByRole('button', { name: 'package.json', exact: true }).click();
-    await expect(input).toHaveValue(/@\/package\.json/);
+    await expect(input).toHaveValue(/@package\.json/);
     // pendingFiles chip：aria-label「移除文件 <path>」，展示文本为 basename
     await expect(win.getByLabel('移除文件 package.json')).toBeVisible();
 

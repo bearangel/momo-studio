@@ -126,6 +126,7 @@ spec：`docs/specs/2026-09-16-composer-context-system-design.md`。输入框从�
 - **P2P context 同步**：`SyncMessage.contextJson` 随消息广播，远端镜像同样渲染 chip
 - **resume 断点重放（终审 I1）**：中断回合重建时首条用户消息的 context 与 steer 对称重放展开
 - **egress 投影（终审 I2）**：steer 事件 `context` 全文只留 DB 供 resume，两处 renderer 出口（event batch 推送 / getMessages）一律剥离
+- **交互精简（v2.11.1 主机验收反馈）**：`@` 统一菜单（agent + 文件同浮层双源过滤，移除 `@/` 独立语法，文件标记 `@路径` 与 agent 同形）；`/`、`@`、`#` 触发正则放宽为非空白字符集——中文名直接过滤；📎 点击直开菜单 + 空查询根目录默认文件列表（`file.list`，主进程零改动）；chips 自顶置工具条移入输入框容器内底部（Kimi 式），📎 移至框内左下角
 - 已知边界：builtin 预置技能包不进子进程运行时 skill 索引——composer 注入路径不受影响；`<user-context>` 对内容零转义为设计取舍（与 file:read 等价暴露面）；selectSkill 光标居中会丢弃前段文本（低频边角）；e2e 打包路径待容器外验证
 
 ## [2.0.0] — 2026-09 Released
