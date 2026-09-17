@@ -280,6 +280,10 @@ export function MentionInput() {
   ): void => {
     const replaceLen = 1 + query.length;
     composerRef.current?.insertPill({ type: 'pill', ...pill }, replaceLen);
+    // 菜单 button 的 mousedown 偷走焦点（v2.11.1 insertMention 同款问题）——
+    // 选择后显式恢复，否则键盘输入落空。insertPill 已设好 selection，focus
+    // 保留元素内既有选区；勿用 moveCaretToEnd——中段插入场景会错误跳末尾
+    composerRef.current?.focus();
     setMenuType(null);
     setQuery('');
   };

@@ -184,9 +184,10 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     // ---- 6. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json → 文件 pill 内联 ----
     // 文件搜索 debounce 200ms + IPC，断言自带 15s 超时窗足够
     // 文件菜单可在 pill 之后触发：@ 触发正则 (?:^|\s)@([^\s#]*)$ 允许非空 body
-    // （pill 折叠单空格作为前导空白边界）。先 click 重聚焦编辑器（菜单按钮偷焦点）
-    // 再 type ——contentEditable 上 fill 会 select-all 抹掉已有 skill pill
-    await input.click();
+    // （pill 折叠单空格作为前导空白边界）。终审 I1 已修：selectWithPill 插 pill
+    // 后显式恢复焦点——旧「先 click 重聚焦编辑器（菜单按钮偷焦点）」workaround
+    // 退役，type 直接可用（此为 I1 的 e2e 回归锁：若焦点恢复回退，后续 type
+    // 将落空）。contentEditable 上 fill 会 select-all 抹掉已有 skill pill，故用 type
     await input.type('@package');
     await expect(win.getByText('引用文件')).toBeVisible();
     await win.getByRole('button', { name: 'package.json', exact: true }).click();
@@ -201,8 +202,9 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
 
     // ---- 7. 输入正文发送 → 气泡 context chip 渲染（context_json 落库回读全链） ----
     // 关键：不能用 fill('检查一下')——fill 会 select-all 抹掉两个 pill；
-    // type() 在光标处追加，pill 保留 → serializeSegments 时 files+skills 都进 context
-    await input.click();
+    // type() 在光标处追加，pill 保留 → serializeSegments 时 files+skills 都进
+    // context。终审 I1 已修：菜单选择后焦点在编辑器（selectWithPill 显式恢复），
+    // 此处旧「先 click 重聚焦」workaround 同步退役，type 落点即 insertPill 留下的选区
     await input.type('检查一下');
     await input.press('Enter');
 

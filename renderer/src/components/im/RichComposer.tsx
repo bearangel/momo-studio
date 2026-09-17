@@ -435,6 +435,11 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         selectPill(pill);
       } else {
         clearSelectedPills(); // 点击文字区清除选中态
+        // 终审 I2：点编辑器=放弃菜单（与清选中态对称）。菜单开着时移动光标
+        // （点击 / 方向键均无 input 事件，query 不变）后再选菜单项，
+        // insertPill 的 replaceLen 与光标实况失联会静默吞字——点击时关菜单，
+        // 「移动光标后选择」无从发生（onEscape 幂等，菜单已关时无副作用）
+        onEscape();
       }
     };
 

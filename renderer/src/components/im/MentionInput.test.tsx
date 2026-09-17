@@ -1024,3 +1024,65 @@ describe('MentionInput Kimi 式容器（pill 时代形态）', () => {
     expect(screen.queryByLabelText(/移除/)).toBeNull();
   });
 });
+
+// === 终审修复回归锁（I1 焦点恢复 / I2 点编辑器=放弃菜单）===
+// I1：菜单 button 的 mousedown 在真实浏览器中偷走焦点（选完 pill 焦点落
+// body → 键盘输入落空）；v2.11.1 insertMention 有显式 focus 恢复，v3
+// selectWithPill 迁移时遗失。jsdom 的 fireEvent.click 不仿真 mousedown
+// 焦点转移——手动 focus 菜单按钮仿真「偷焦点后」状态，断言选择后编辑器
+// 重新持有焦点（spy + activeElement 双断言）。
+// I2：菜单激活时点击编辑器文字区 = 放弃菜单（RichComposer.handleMouseDown
+// 文字区分支同步 onEscape，与「点文字区清除选中态」对称）。防御：菜单开着
+// 移动光标（点击 / 方向键均无 input 事件，menuType/query 不变）后再点菜单
+// 项，insertPill 的 replaceLen 与光标实况失联，会无条件删新光标前字符——
+// 正常文字被静默吞掉；菜单在点击编辑器时即关闭，「移动光标后选择」无从发生。
+describe('MentionInput 终审修复（I1 焦点恢复 / I2 点编辑器关菜单）', () => {
+  it('I1：菜单选择后编辑器获得焦点（selectWithPill 显式恢复——菜单按钮偷焦点后键盘不落空）', () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    // jsdom 的 click 不做焦点转移——手动 focus 菜单按钮，仿真真实浏览器
+    // 「菜单 button 的 mousedown 偷走焦点」后的状态
+    const menuBtn = screen.getByText('PM-agent').closest('button') as HTMLElement;
+    menuBtn.focus();
+    expect(document.activeElement).not.toBe(el);
+    const focusSpy = vi.spyOn(el, 'focus');
+    fireEvent.click(menuBtn);
+    expect(hasPill(el, 'agent', 'inst-pm')).toBe(true);
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(el);
+  });
+
+  it('I2：菜单激活时点击编辑器文字区 → 菜单关闭（移动光标即放弃，无从吞字）', () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+    fireEvent.mouseDown(el);
+    expect(screen.queryByText('选择要 @ 的 agent')).not.toBeInTheDocument();
+  });
+
+  it('I2 反向锁：菜单激活时点击 pill → pill 选中且菜单保持（pill 路径不触发放弃语义）', () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-pm', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    fireEvent.click(screen.getByText('PM-agent'));
+    // pill 后继续敲 @ 再开菜单（折叠空格仍可触发）
+    typeAtEnd(el, ' @');
+    expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+    const pill = el.querySelector('span[data-kind="agent"]') as HTMLSpanElement;
+    fireEvent.mouseDown(pill);
+    expect(pill.dataset.selected).toBe('1');
+    // 菜单保持——点 pill 是选中操作，不是放弃菜单
+    expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+  });
+});
