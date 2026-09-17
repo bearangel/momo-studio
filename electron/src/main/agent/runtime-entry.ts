@@ -64,7 +64,7 @@ import {
   getSessionDispatchScope,
 } from './dispatch-wait';
 import { getMemoryProvider, type TaskContext } from '../memory';
-import { getTodosForSession } from './tools/todo-tools';
+import { getTodosForSession, completeInProgressTodos } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
 import { getDb } from '../storage/db';
 import { setJournalStore } from '../journal/recorder';
@@ -994,6 +994,22 @@ export async function runChatLoop(
     if (finishReason === 'stop' || toolCalls.length === 0) {
       process.off('message', abortListener);
       const finalText = accumulatedText.trim() || '(空回复)';
+      // 回合收尾 todo 收敛（P0「最后一项永不完成」）：LLM 的 todowrite 是转移
+      // 驱动，最后一项的完成动作与终文重合、无下一项触发簿记——终文即交付，
+      // in_progress 项由 harness 机械标 completed。收敛 chunk 必须先于 end：
+      // message_events 按 seq 重放（后写胜出），实时面板与重载还原都拿到终态。
+      // pending 不动（未启动 ≠ 完成）；强停路径（interrupted / error /
+      // budget_exhausted / 重复检测截断）不经此块，in_progress 保持原状供断点续跑。
+      const reconciled = completeInProgressTodos(streamSessionId);
+      if (reconciled.changed) {
+        sendStreamChunk({
+          type: 'todo_update',
+          streamSessionId,
+          sessionId: roomId,
+          todos: reconciled.todos,
+          ...(parentStreamSessionId ? { parentStreamSessionId } : {}),
+        });
+      }
       sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
       if (stats) stats.toolCallsUsed = toolCallCount;
       return finalText;
