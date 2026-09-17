@@ -44,6 +44,7 @@ MentionInput（保留：菜单触发逻辑 / @ 双源搜索 / 📎 / 发送 / �
 | 技能 | `⚡ 代码审查`（紫底） | **不进正文**（v2.11 语义：展开块由主进程注入 `<user-context>`，防双重曝光；气泡侧由 context chip 呈现） | `context.skills[]`（按 slug 去重） |
 | 命令 | `/compact`（橙底，无图标） | `/compact` | 无——**整串拦截语义原样保留**：composer 仅含命令 pill（序列化恰为 `/^\/[A-Za-z0-9-]+$/`）时走 session.store 本地命令执行；混排则当普通消息发送 |
 
+- **标记分隔**：pill 标记前（body 非空且末字符非空白时）与标记后各保证一个空格——对齐 v2.11 insertMention 语义，维持 conflict-detector 双向空白边界解析
 - **IPC 契约不变**：`sendMessage(body, mentionedInstanceIds, context)` 三参形状与含义照旧
 - 同一 pill 重复插入：body 保留全部出现（等价手敲两遍），结构化数组去重
 - 空 body + 仅技能/文件 pill：合法发送（v2.11 §7.1 语义保持——序列化后 hasContext 判定）

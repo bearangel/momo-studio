@@ -39,16 +39,39 @@ export interface ComposerPayload {
  *   skill → 不进正文（展开块由主进程注入 <user-context>，防双重曝光）+ context.skills（按 slug 去重）
  *   command → body `/name`（纯命令 pill 时序列化恰为 `/name`——整串拦截语义由形态保持）
  *   重复 pill：body 保留全部出现（等价手敲两遍），结构化数组去重
+ *   标记分隔（spec §3「标记分隔」行）：标记前（body 非空且末字符非空白时）与
+ *   标记后各保证一个空格——永不叠加双空格（后续内容自带首空白时尾随空格让
+ *   位）。对齐 v2.11 insertMention 尾随空格语义，维持 conflict-detector 双向
+ *   空白边界解析；收尾空格由 handleSend 端 trim 处理。
  */
 export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
   let body = '';
+  // 上一个标记承诺的尾随空格：延迟到下一内容落盘，避免与文本段自带首空白叠成双空格
+  let pendingSpace = false;
   const mentions: string[] = [];
   const skills: Array<{ slug: string; name: string }> = [];
   const files: Array<{ path: string }> = [];
   for (const seg of segs) {
     if (seg.type === 'text') {
+      if (seg.text === '') continue;
+      if (pendingSpace) {
+        if (!/\s/.test(seg.text.charAt(0))) body += ' ';
+        pendingSpace = false;
+      }
       body += seg.text;
       continue;
+    }
+    // skill 不进正文、不参与标记分隔（对 body 完全透明）
+    if (seg.kind === 'skill') {
+      if (!skills.some((s) => s.slug === seg.id)) skills.push({ slug: seg.id, name: seg.label });
+      continue;
+    }
+    // 标记前保证分隔：上一标记的待落空格优先，否则 body 非空且末字符非空白才补
+    if (pendingSpace) {
+      body += ' ';
+      pendingSpace = false;
+    } else if (body !== '' && !/\s/.test(body.charAt(body.length - 1))) {
+      body += ' ';
     }
     switch (seg.kind) {
       case 'agent':
@@ -62,14 +85,13 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
       case 'task':
         body += `#${seg.id}`;
         break;
-      case 'skill':
-        if (!skills.some((s) => s.slug === seg.id)) skills.push({ slug: seg.id, name: seg.label });
-        break;
       case 'command':
         body += `/${seg.id}`;
         break;
     }
+    pendingSpace = true;
   }
+  if (pendingSpace) body += ' ';
   return {
     body,
     mentions: mentions.length > 0 ? mentions : undefined,

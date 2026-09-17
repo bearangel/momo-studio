@@ -484,8 +484,9 @@ describe('MentionInput 发送（serializeSegments 三参契约）', () => {
     typeAtEnd(el, ' 请跟进');
     fireEvent.keyDown(el, { key: 'Enter' });
     await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
-    // body 非整串命令（不匹配 /^\/[A-Za-z0-9-]+$/）→ session.store 不拦截，
-    // 按普通消息发送（spec §3 命令行「混排则当普通消息发送」）
+    // store 侧语义：纯命令形态 /^\/([A-Za-z0-9-]+)\s*$/ 才拦截，混排体按普通
+    // 消息发送（spec §3 命令行「混排则当普通消息发送」）。本测试 mock 了
+    // store.sendMessage，此处只断言三参调用形状
     expect(sessionState.sendMessage).toHaveBeenCalledWith(
       '/compact @PM-agent #T-001 @package.json 请跟进',
       ['inst-pm'],

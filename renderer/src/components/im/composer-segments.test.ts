@@ -23,7 +23,7 @@ describe('serializeSegments（spec §3 序列化规则表）', () => {
       skill('code-review', '代码审查'),
       command('compact'),
     ]);
-    expect(r.body).toBe('@coder 审查 @src/a.ts#T-3/compact');
+    expect(r.body).toBe('@coder 审查 @src/a.ts #T-3 /compact ');
     expect(r.mentions).toEqual(['inst-1']);
     expect(r.context).toEqual({
       skills: [{ slug: 'code-review', name: '代码审查' }],
@@ -44,10 +44,10 @@ describe('serializeSegments（spec §3 序列化规则表）', () => {
     expect(r.mentions).toBeUndefined();
   });
 
-  it('命令 pill → body 恰为 /name（整串拦截语义由序列化形态自然保持）', () => {
-    expect(serializeSegments([command('compact')]).body).toBe('/compact');
-    // 混排时不是纯命令串
-    expect(serializeSegments([{ type: 'text', text: 'hi ' }, command('compact')]).body).toBe('hi /compact');
+  it('命令 pill → body 为 /name + 尾随空格（handleSend trim 后整串拦截形态保持）', () => {
+    expect(serializeSegments([command('compact')]).body).toBe('/compact ');
+    // 混排时不是纯命令串（trim 后按普通消息发送）
+    expect(serializeSegments([{ type: 'text', text: 'hi ' }, command('compact')]).body).toBe('hi /compact ');
   });
 
   it('重复 pill：body 保留全部出现，结构化数组按 id/slug/path 去重（保序）', () => {
@@ -56,7 +56,7 @@ describe('serializeSegments（spec §3 序列化规则表）', () => {
       file('f.ts'), file('f.ts'),
       skill('s1', 'x'), skill('s1', 'x'),
     ]);
-    expect(r.body).toBe('@a@a@f.ts@f.ts');
+    expect(r.body).toBe('@a @a @f.ts @f.ts ');
     expect(r.mentions).toEqual(['i1']);
     expect(r.context?.files).toEqual([{ path: 'f.ts' }]);
     expect(r.context?.skills).toEqual([{ slug: 's1', name: 'x' }]);
@@ -65,6 +65,37 @@ describe('serializeSegments（spec §3 序列化规则表）', () => {
   it('纯文本与空数组', () => {
     expect(serializeSegments([])).toEqual({ body: '' });
     expect(serializeSegments([{ type: 'text', text: '你好' }])).toEqual({ body: '你好' });
+  });
+});
+
+// F2 回归锁：邻接 pill 无用户文本分隔时，序列化必须保证标记前后空格——否则
+// body 如 '#T-001@PM-agent' / '#T-001请跟进' 不命中 conflict-detector 的
+// TASK_MENTION_REGEX（双向空白边界，electron/src/main/im/conflict-detector.ts），
+// 任务引用静默丢失（激活 + 冲突检测全漏）。正则在此镜像锁契约（renderer 测试
+// 不 import 主进程代码）。
+const TASK_MENTION_MIRROR = /(?:^|\s)#(T-\d+)(?=\s|$)/g;
+
+describe('serializeSegments 标记分隔（F2 邻接回归锁，spec §3「标记分隔」行）', () => {
+  it('① task pill 紧跟 agent pill（无中间文本）→ 标记间保证空格，两端可解析', () => {
+    const body = serializeSegments([task('T-001', '修复登录'), agent('inst-pm', 'PM-agent')]).body;
+    expect(body).toBe('#T-001 @PM-agent ');
+    expect(body.match(TASK_MENTION_MIRROR)).toEqual(['#T-001']);
+  });
+
+  it('② task pill 后直接跟文本段 → #T 标记与文本间保证空格', () => {
+    const body = serializeSegments([task('T-001', '修复登录'), { type: 'text', text: '请跟进' }]).body;
+    expect(body).toBe('#T-001 请跟进');
+    expect(body.match(TASK_MENTION_MIRROR)).toEqual(['#T-001']);
+  });
+
+  it('③ 首 pill 前 body 空 → 无前导空格', () => {
+    expect(serializeSegments([file('src/a.ts'), task('T-3', '修复登录')]).body).toBe('@src/a.ts #T-3 ');
+    expect(serializeSegments([agent('i', 'a')]).body.startsWith(' ')).toBe(false);
+  });
+
+  it('④ 用户已敲空格 → 不双空格（前侧让位 + 尾随空格让位文本自带首空白）', () => {
+    expect(serializeSegments([{ type: 'text', text: '审查 ' }, agent('i', 'a')]).body).toBe('审查 @a ');
+    expect(serializeSegments([agent('i', 'a'), { type: 'text', text: ' 请跟进' }]).body).toBe('@a 请跟进');
   });
 });
 

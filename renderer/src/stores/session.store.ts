@@ -362,13 +362,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (body, mentionedInstanceIds, context) => {
     const { activeSessionId } = get();
     if (!activeSessionId) return undefined;
-    // / 命令拦截（spec §5.4）：整条以 / 开头才识别；命令白名单在主进程 commands.ts
-    // 维护（renderer 不存副本）——一律转发 session:command，未知/运行中/无模型配置
-    // 由主进程 reject，中文 Error.message 写入 commandHint 给用户看。
+    // / 命令拦截（spec §5.4 / 2026-09-17 §3）：仅纯命令形态
+    // ^\/[A-Za-z0-9-]+\s*$（整串命令 + 可选尾空白）才拦截，混排体（如
+    // '/compact @PM-agent …'）当普通消息发送。命令白名单在主进程 commands.ts
+    // 维护（renderer 不存副本）——一律转发 session:command，未知/运行中/无模型
+    // 配置由主进程 reject，中文 Error.message 写入 commandHint 给用户看。
     // '//' 转义为原样 '/' 发送。
     if (body.startsWith('//')) {
       body = body.slice(1);
-    } else if (body.startsWith('/')) {
+    } else if (/^\/([A-Za-z0-9-]+)\s*$/.test(body)) {
       const command = body.slice(1).trim();
       try {
         const r = await ipc.session.command(activeSessionId, command);

@@ -353,22 +353,31 @@ describe('session.store — 无参 loadSessions 工作空间守卫（跨仓泄�
   });
 });
 
-// === / 命令拦截（spec §5.4）— renderer 端拦截 + 主进程注册表转发 + // 转义 ===
+// === / 命令拦截（spec §5.4 / 2026-09-17 §3）— renderer 纯命令形态拦截 + 主进程注册表转发 + // 转义 ===
 // 背景：主进程 session:command 通道已由 58f8d3e 落地；renderer 端在 sendMessage
-// 前置拦截——整条以 / 开头才识别为命令，// 转义为原样发送。命令白名单在主进程
-// commands.ts 维护（v2.11 spec §6.1 单一真相源），renderer 一律转发，由主进程
-// 查表 reject 未知名命令；renderer 接收中文 Error.message 写入 commandHint。
+// 前置拦截——仅纯命令形态 ^\/[A-Za-z0-9-]+\s*$（整串命令 + 可选尾空白）才识别
+// 为命令，混排体（如 '/compact @PM-agent …'）当普通消息发送（spec §3 命令行
+// 「混排则当普通消息发送」）。命令白名单在主进程 commands.ts 维护（v2.11 spec
+// §6.1 单一真相源），renderer 一律转发，由主进程查表 reject 未知名命令；
+// renderer 接收中文 Error.message 写入 commandHint。
 describe('session.store — / 命令拦截（spec §5.4）', () => {
-  it('整条以 / 开头且白名单命中 → 走 session.command，不走 send', async () => {
+  it('纯命令形态 → 走 session.command，不走 send', async () => {
     useSessionStore.setState({ activeSessionId: 's1' });
     await useSessionStore.getState().sendMessage('/compact');
     expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'compact');
     expect(mockApi.session.send).not.toHaveBeenCalled();
   });
 
+  it('纯命令形态含尾空白 → 仍拦截，name 提取 trim', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('/compact  ');
+    expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'compact');
+    expect(mockApi.session.send).not.toHaveBeenCalled();
+  });
+
   // 未知命令：renderer 不再做本地白名单判定，统一转发到主进程；主进程查表后
   // reject（中文 Error.message），renderer 捕获写入 commandHint。
-  it('未知命令 → 转发 session:command 由主进程 reject，置 commandHint 错误提示', async () => {
+  it('未知命令（纯形态）→ 转发 session:command 由主进程 reject，置 commandHint 错误提示', async () => {
     useSessionStore.setState({ activeSessionId: 's1' });
     mockApi.session.command.mockRejectedValueOnce(
       new Error('未知命令: /wat（当前支持 /compact）'),
@@ -379,6 +388,38 @@ describe('session.store — / 命令拦截（spec §5.4）', () => {
     expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'wat');
     // 主进程 reject 的中文错误写入 commandHint
     expect(useSessionStore.getState().commandHint).toContain('未知命令');
+  });
+
+  it('混排体（/compact hello）→ 不拦截，按普通消息走 send 三参透传', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('/compact hello');
+    expect(mockApi.session.command).not.toHaveBeenCalled();
+    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/compact hello', undefined, undefined);
+  });
+
+  it('混排体（命令 pill 领头序列化产物）→ 不拦截，mentions/context 透传', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage(
+      '/compact @PM-agent #T-001 请跟进',
+      ['inst-pm'],
+      undefined,
+    );
+    expect(mockApi.session.command).not.toHaveBeenCalled();
+    expect(mockApi.session.send).toHaveBeenCalledWith(
+      's1',
+      '/compact @PM-agent #T-001 请跟进',
+      ['inst-pm'],
+      undefined,
+    );
+  });
+
+  it('裸 / 与非命令字符集前缀 → 非纯命令形态，按普通消息发送', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    await useSessionStore.getState().sendMessage('/');
+    await useSessionStore.getState().sendMessage('/你好');
+    expect(mockApi.session.command).not.toHaveBeenCalled();
+    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/', undefined, undefined);
+    expect(mockApi.session.send).toHaveBeenCalledWith('s1', '/你好', undefined, undefined);
   });
 
   it('// 前缀转义为原样发送', async () => {
