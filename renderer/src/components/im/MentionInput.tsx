@@ -226,18 +226,20 @@ export function MentionInput() {
     const before = newValue.slice(0, cursorPos);
     // 命令分支在最前并短路返回（Task 8 教训：新分支不短路会落入后续 else 清空
     // menuType）。正则锚定整串——仅空 body 以 / 开头才触发：句中 / 不命中；
-    // '//' 转义（第二个 / 不在 [A-Za-z0-9-] 字符集）也不命中，strip 语义在
-    // session.store.sendMessage，菜单不越权
-    const cmdMatch = before.match(/^\/([A-Za-z0-9-]*)$/);
+    // '//' 转义（第二个 / 不在 [^\s/] 字符集）也不命中，strip 语义在
+    // session.store.sendMessage，菜单不越权。
+    // v2.11.1 F1：字符集放宽为 [^\s/]（非空白且非 /）——支持中文命令/技能名过滤，
+    // 同时保留 '//' 转义与句中 / 不触发的语义
+    const cmdMatch = before.match(/^\/([^\s/]*)$/);
     if (cmdMatch) {
       setMenuType('command');
       setQuery(cmdMatch[1] ?? '');
       setFileMode(false);
       return;
     }
-    // 文件分支在前并短路返回：@/ 前缀走文件搜索。现有 @ 成员正则
-    // `(?:^|\s)@([A-Za-z0-9-]*)$` 字符集不含 '/'，与本法互斥——若不短路，
-    // '@/x' 会落入下方 else 分支把 menuType 清空
+    // 文件分支在前并短路返回：@/ 前缀走文件搜索。v2.11.1 F1 起 @ 成员正则
+    // 字符集已放宽为 [^\s#]*（含 '/'），与本法不再以字符集互斥——靠 fileMatch
+    // 短路顺序保证 '@/x' 落入文件分支不落到成员菜单
     const fileMatch = before.match(/(?:^|\s)@\/([^\s]*)$/);
     if (fileMatch) {
       setMenuType('agent'); // 文件并入 @ 菜单分组展示
@@ -246,9 +248,11 @@ export function MentionInput() {
       return;
     }
     setFileMode(false);
-    const atMatch = before.match(/(?:^|\s)@([A-Za-z0-9-]*)$/);
-    // 任务 trigger 允许 T-/数字 的任意局部输入，有效性在 filteredTasks 按 id/title 过滤
-    const taskMatch = before.match(/(?:^|\s)#([A-Za-z0-9-]*)$/);
+    // v2.11.1 F1：字符集放宽为 [^\s#]（非空白且非 #）——支持中文 agent 名过滤，
+    // 含 '/' 是 Task 2 统一菜单的前置条件（selectFile 复插 @路径 局部）
+    const atMatch = before.match(/(?:^|\s)@([^\s#]*)$/);
+    // v2.11.1 F1：字符集放宽为 [^\s@]（非空白且非 @）——支持中文任务标题过滤
+    const taskMatch = before.match(/(?:^|\s)#([^\s@]*)$/);
     if (atMatch) {
       setMenuType('agent');
       setQuery(atMatch[1] ?? '');
@@ -296,11 +300,11 @@ export function MentionInput() {
     const pos = ta.selectionStart;
     const before = text.slice(0, pos);
     const after = text.slice(pos);
-    // 局部匹配字符集与 detectTrigger 一致（覆盖 '@'、'#T'、'/com' 等未敲完的
-    // 局部输入；'/' sigil 为 Task 9 命令选择追加——字符集本就匹配，仅缺 sigil）
+    // v2.11.1 F1：字符集放宽与 detectTrigger 对齐——非空白字符集覆盖中文与
+    // '@路径局部'（Task 2 selectFile 将复用此正则插 @路径）
     const newValue =
       before.replace(
-        /(?:^|\s)(@[A-Za-z0-9-]*$|#[A-Za-z0-9-]*$|\/[A-Za-z0-9-]*$)/,
+        /(?:^|\s)(@[^\s#]*$|#[^\s@]*$|\/[^\s/]*$)/,
         (match, partial: string) => match.replace(partial, marker),
       ) + ' ' + after;
     setText(newValue);

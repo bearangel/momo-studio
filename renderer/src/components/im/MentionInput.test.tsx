@@ -822,3 +822,54 @@ describe('MentionInput 📎 文件触发（fileTriggerTick，Task 10）', () => 
     expect(document.activeElement).not.toBe(ta);
   });
 });
+
+// === v2.11.1 F1：触发正则放宽（中文过滤）——旧字符集 [A-Za-z0-9-] 不含中文，
+// 敲中文名菜单即关（预置技能名恰是中文）===
+describe('MentionInput 触发正则放宽（v2.11.1 F1：中文过滤）', () => {
+  it('/代码 → 命令菜单技能组按中文名过滤（含中文名技能命中、其它排除）', async () => {
+    mockApi.resource.list.mockResolvedValue([
+      makeSkillResource({ slug: 'code-review', name: '代码审查' }),
+      makeSkillResource({ slug: 'write-tests', name: '写测试' }),
+    ]);
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox');
+    fireEvent.change(ta, { target: { value: '/代码' } });
+    await waitFor(() => expect(screen.getByText('代码审查')).toBeTruthy());
+    expect(screen.queryByText('写测试')).toBeNull();
+    // 命令组不被中文 query 误杀：compact 不含「代码」，整组不渲染即可（断言其不存在）
+    expect(screen.queryByText('/compact')).toBeNull();
+  });
+
+  it('@中文名 → agent 菜单按中文 agentName 过滤', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'i-1', agentName: '代码助手' }),
+      makeMember({ instanceId: 'i-2', agentName: 'writer' }),
+    ];
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@代码' } });
+    await waitFor(() => expect(screen.getByText('代码助手')).toBeTruthy());
+    expect(screen.queryByText('writer')).toBeNull();
+  });
+
+  it('#中文 → 任务菜单按中文标题过滤', async () => {
+    taskState.tasks = [
+      makeTask({ id: 'T-1', title: '修复登录' }),
+      makeTask({ id: 'T-2', title: '写文档' }),
+    ];
+    render(<MentionInput />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '#登录' } });
+    await waitFor(() => expect(screen.getByText(/修复登录/)).toBeTruthy());
+    expect(screen.queryByText(/写文档/)).toBeNull();
+  });
+
+  it('语义保持：句中 / 不触发命令菜单、// 转义不触发、正文后 @ 不弹成员菜单', () => {
+    render(<MentionInput />);
+    const ta = screen.getByRole('textbox');
+    fireEvent.change(ta, { target: { value: '看下 src/文件' } });
+    expect(screen.queryByText('命令')).toBeNull();
+    fireEvent.change(ta, { target: { value: '//' } });
+    expect(screen.queryByText('命令')).toBeNull();
+    fireEvent.change(ta, { target: { value: '邮箱a@b.com不发菜单' } });
+    expect(screen.queryByText('选择要 @ 的 agent')).toBeNull();
+  });
+});
