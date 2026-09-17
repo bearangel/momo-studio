@@ -1,18 +1,20 @@
 // renderer/src/components/im/MentionInput.tsx
 //
-// 现役消息输入框（P3 Task 3：@ + # 双语法输入框替换 MessageInput）。
-//   - 输入 @ 触发 agent 菜单：数据源 session.store.members（当前会话成员），
-//     仅列 lastRunning 在线成员；选择时记录 instanceId，
-//     发送经 session.store.sendMessage(body, mentionedInstanceIds) 透传
+// 现役消息输入框（P3 Task 3：@ + # 双语法输入框替换 MessageInput，v2.11.1 F2：
+// 移除 @/ 独立语法，@ 单触发统一菜单——opencode 式交互）。
+//   - 输入 @ 触发统一菜单（v2.11.1 F2）：agent 组 + 文件组同浮层渲染，同 query
+//     双源；成员数据源 session.store.members（仅 lastRunning 在线成员），文件数据
+//     源双形态（空 query → ipc.file.list('.') 根目录默认列表，非空 → debounce
+//     200ms ipc.file.searchNames，统一过滤目录 + 限 FILE_MENU_LIMIT 条）。
+//     选择成员记录 instanceId（→ sendMessage 第 2 参 mentionedInstanceIds）；
+//     选择文件向正文插入 @路径 标记（与 agent 同形，复用 Task 1 放宽的
+//     insertMention 正则）并登记 pendingFiles chip。pendingFiles 与 pendingMentions
+//     同生命周期——发送清空 / 失败恢复 / 会话切换清空（正文标记随草稿保留，
+//     chips 不按标记重建为 MVP 取舍）
 //   - 输入 #T 触发任务菜单：数据源 task.store.tasks（v2.3 起全生命周期任务），
 //     本地 MENU_STATUSES 过滤（draft/pending/assigned）是唯一过滤点，
 //     选择后向正文插入 #T-xxx 文本——后端 conflict-detector 从正文解析任务引用，
 //     不进 sendMessage 载荷（纯 renderer affordance）
-//   - 输入 @/ 触发文件菜单（Task 8）：数据源 ipc.file.searchNames（FileTree 同
-//     形态直接调用，不经 file.store），debounce 200ms / 空查询不搜索 / 仅文件
-//     （isDirectory === false）/ 限 8 条；选择后向正文插入 @/路径 标记并登记
-//     pendingFiles chip（发送清空、失败恢复、会话切换清空——正文标记文本随
-//     草稿保留，chips 不按标记重建为 MVP 取舍）
 //   - 输入 / 触发命令+技能菜单（Task 9，spec §7.1）：仅空 body 以 / 开头触发
 //     （正则 ^\/([A-Za-z0-9-]*)$ 锚定整串）；命令组数据源 ipc.session.listCommands
 //     （主进程 commands.ts 单一真相源），选择 = insertMention('/name') 插正文，
@@ -55,16 +57,15 @@ export function MentionInput() {
   const [query, setQuery] = useState('');
   // @ 目标 instanceId 列表（菜单选择时记录，发送后清空；失败恢复）
   const [pendingMentions, setPendingMentions] = useState<string[]>([]);
-  // @/ 文件引用列表（Task 8）：菜单选择时记录 { path }，与 pendingMentions 同
-  // 生命周期——发送清空 / 失败恢复 / 会话切换清空
+  // @ 文件引用列表（v2.11.1 F2：@ 统一菜单——选文件与选 agent 同形插正文
+  // @路径标记，文件组与成员组同浮层渲染）：菜单选择时记录 { path }，
+  // 与 pendingMentions 同生命周期——发送清空 / 失败恢复 / 会话切换清空
   const [pendingFiles, setPendingFiles] = useState<FileContextItem[]>([]);
   // / 菜单技能列表（Task 9）：选择时记录 { slug, name }（name 为选择时资源索引
   // 快照，chip 渲染不反查），与 pendingFiles 同生命周期
   const [pendingSkills, setPendingSkills] = useState<SkillContextItem[]>([]);
-  // @/ 文件触发态与局部查询（fileMode=true 时 @ 菜单只展示文件组）
-  const [fileMode, setFileMode] = useState(false);
-  const [fileQuery, setFileQuery] = useState('');
-  // 文件搜索命中（searchNames 过滤目录后的文件子集，限 FILE_MENU_LIMIT 条）
+  // 文件组命中（@ 菜单双源之一；空 query 显示 ipc.file.list('.') 根目录默认列表，
+  // 非空 query debounce 200ms 调 searchNames；统一过滤目录 + 截 FILE_MENU_LIMIT）
   const [fileHits, setFileHits] = useState<SearchHit[]>([]);
   // 文件搜索竞态守卫：响应返回时序号不匹配则丢弃（与 FileTree 一致）
   const fileSearchSeqRef = useRef(0);
@@ -105,8 +106,7 @@ export function MentionInput() {
     setText(next);
     setMenuType(null);
     setQuery('');
-    setFileMode(false);
-    // MVP 取舍：文件 chips 不按正文里的 @/ 标记重建（正文文本随草稿自然保留），
+    // MVP 取舍：文件 chips 不按正文里的 @路径 标记重建（正文文本随草稿自然保留），
     // 切会话即清空——chips 重建留待后续增强；技能 chips 同生命周期
     setPendingFiles([]);
     setPendingSkills([]);
@@ -115,28 +115,38 @@ export function MentionInput() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
-  // @/ 文件搜索（Task 8）：debounce 200ms 调 ipc.file.searchNames（FileTree 同
-  // 形态——(workspaceId, query) 二参，不经 file.store）；空 query 不搜索；
-  // 仅保留文件命中（isDirectory === false）并截取 FILE_MENU_LIMIT 条。
-  // 依赖取 workspace?.id（字符串）而非 workspace 对象——对象引用每渲染一换，
-  // 配合 setState 会构成无限渲染环；seqRef 竞态守卫：旧响应不覆盖新结果。
+  // @ 统一菜单文件组（v2.11.1 F2）：query 双源之一。空 query → file.list('.') 根目录
+  // 默认列表（仅文件截 FILE_MENU_LIMIT；主进程 searchNames 语义不动，FileTree 零影响）；
+  // 非空 → debounce 200ms searchNames（FileTree 同形态）。seqRef 竞态守卫覆盖两路径
+  // （默认列表与搜索结果可交错返回）。
   const workspaceId = workspace?.id;
   useEffect(() => {
-    if (!fileMode) {
-      // 退出文件模式：命中集被渲染门控（fileMode && ...）隐藏，无需清空，
-      // 仅失效在途请求
+    if (menuType !== 'agent') {
       fileSearchSeqRef.current++;
       return;
     }
-    const trimmed = fileQuery.trim();
+    if (!workspaceId) return;
+    const trimmed = query.trim();
     if (trimmed === '') {
-      fileSearchSeqRef.current++;
-      // 引用守卫：已空则原引用返回，避免无谓重渲
-      setFileHits((prev) => (prev.length > 0 ? [] : prev));
+      const seq = ++fileSearchSeqRef.current;
+      void ipc.file
+        .list(workspaceId, '.')
+        .then((entries) => {
+          if (fileSearchSeqRef.current !== seq) return;
+          setFileHits(
+            entries
+              .filter((e) => !e.isDirectory)
+              .slice(0, FILE_MENU_LIMIT)
+              .map((e) => ({ path: e.name, isDirectory: false })),
+          );
+        })
+        .catch(() => {
+          if (fileSearchSeqRef.current !== seq) return;
+          setFileHits((prev) => (prev.length > 0 ? [] : prev));
+        });
       return;
     }
     const timer = setTimeout(() => {
-      if (!workspaceId) return;
       const seq = ++fileSearchSeqRef.current;
       ipc.file
         .searchNames(workspaceId, trimmed)
@@ -145,14 +155,12 @@ export function MentionInput() {
           setFileHits(hits.filter((h) => !h.isDirectory).slice(0, FILE_MENU_LIMIT));
         })
         .catch(() => {
-          // 搜索失败静默清空（菜单随之收起）；与 FileTree 不同，此处无专用错误
-          // 文案位——菜单是瞬时 affordance，用户继续输入即重试
           if (fileSearchSeqRef.current !== seq) return;
           setFileHits((prev) => (prev.length > 0 ? [] : prev));
         });
     }, FILE_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [fileMode, fileQuery, workspaceId]);
+  }, [menuType, query, workspaceId]);
 
   // # 菜单数据接线：task.store 此前仅 TaskBoardView（tasks 视图）加载，
   // IM 视图挂载时主动拉取当前 workspace 的任务（v2.3 起为全生命周期，
@@ -221,7 +229,9 @@ export function MentionInput() {
           .slice(0, COMMAND_MENU_LIMIT)
       : [];
 
-  /** 光标前缀触发检测：命令整串锚定（仅空 body）/ @/ 接文件路径局部 / @ 接 slug 局部 / # 接 T-数字局部（输入事件时刻取光标值，防中间输入漂移） */
+  /** 光标前缀触发检测：命令整串锚定（仅空 body）/ @ 接 slug 与文件路径局部（v2.11.1
+   * F2 统一菜单——@/ 独立分支移除，文件路径与 agent slug 同走 atMatch）/ # 接 T-数字局部。
+   * 输入事件时刻取光标值，防中间输入漂移 */
   const detectTrigger = (newValue: string, cursorPos: number): void => {
     const before = newValue.slice(0, cursorPos);
     // 命令分支在最前并短路返回（Task 8 教训：新分支不短路会落入后续 else 清空
@@ -234,22 +244,10 @@ export function MentionInput() {
     if (cmdMatch) {
       setMenuType('command');
       setQuery(cmdMatch[1] ?? '');
-      setFileMode(false);
       return;
     }
-    // 文件分支在前并短路返回：@/ 前缀走文件搜索。v2.11.1 F1 起 @ 成员正则
-    // 字符集已放宽为 [^\s#]*（含 '/'），与本法不再以字符集互斥——靠 fileMatch
-    // 短路顺序保证 '@/x' 落入文件分支不落到成员菜单
-    const fileMatch = before.match(/(?:^|\s)@\/([^\s]*)$/);
-    if (fileMatch) {
-      setMenuType('agent'); // 文件并入 @ 菜单分组展示
-      setFileQuery(fileMatch[1] ?? '');
-      setFileMode(true);
-      return;
-    }
-    setFileMode(false);
     // v2.11.1 F1：字符集放宽为 [^\s#]（非空白且非 #）——支持中文 agent 名过滤，
-    // 含 '/' 是 Task 2 统一菜单的前置条件（selectFile 复插 @路径 局部）
+    // 含 '/' 是 v2.11.1 F2 统一菜单的前置条件（selectFile 复插 @路径 局部）
     const atMatch = before.match(/(?:^|\s)@([^\s#]*)$/);
     // v2.11.1 F1：字符集放宽为 [^\s@]（非空白且非 @）——支持中文任务标题过滤
     const taskMatch = before.match(/(?:^|\s)#([^\s@]*)$/);
@@ -271,17 +269,18 @@ export function MentionInput() {
     detectTrigger(newValue, e.target.selectionStart ?? newValue.length);
   };
 
-  // 📎 文件引用触发（Task 10）：fileTriggerTick 递增 → 聚焦 + 追加 '@/' 打开
-  // 文件菜单。程序化 setText 不经 onChange——须在此直调 detectTrigger 同步菜单
-  // 态，否则沿用旧 menuType（如已打开的命令菜单）残留到下一次输入。
+// 📎 文件引用触发（Task 10 + v2.11.1 F2）：fileTriggerTick 递增 → 聚焦 +
+  // 追加 '@' 直接打开统一菜单（成员组空 + 文件组根目录默认列表 = ipc.file.list('.')）。
+  // 程序化 setText 不经 onChange——须在此直调 detectTrigger 同步菜单态，否则沿用
+  // 旧 menuType（如已打开的命令菜单）残留到下一次输入。
   useEffect(() => {
     if (fileTriggerTick === 0) return;
     const ta = textareaRef.current;
     if (!ta) return;
     ta.focus();
-    // 已有正文以非空白收尾时补一个空格防粘连（'hello' → 'hello @/'）；
+    // 已有正文以非空白收尾时补一个空格防粘连（'hello' → 'hello @'）；
     // 空正文 / 空白收尾直接追加，不产生双空格
-    const next = text === '' ? '@/' : /[^\s]$/.test(text) ? `${text} @/` : `${text}@/`;
+    const next = text === '' ? '@' : /[^\s]$/.test(text) ? `${text} @` : `${text}@`;
     setText(next);
     detectTrigger(next, next.length);
     // 光标移到末尾（与 insertMention 同法：等 React 提交新值后再定位）
@@ -289,7 +288,7 @@ export function MentionInput() {
       ta.setSelectionRange(ta.value.length, ta.value.length);
     }, 0);
     // text / detectTrigger 刻意不入依赖：仅应在 tick 变化时执行一次；
-    // 二者每渲染变值，入依赖会导致每次渲染重复追加 '@/'
+    // 二者每渲染变值，入依赖会导致每次渲染重复追加 '@'
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileTriggerTick]);
 
@@ -342,7 +341,6 @@ export function MentionInput() {
     setText(after);
     setMenuType(null);
     setQuery('');
-    setFileMode(false);
     setPendingSkills((prev) =>
       prev.some((x) => x.slug === s.slug) ? prev : [...prev, s],
     );
@@ -351,34 +349,13 @@ export function MentionInput() {
     }, 0);
   };
 
-  /** insertMention 的文件变体：现有正则字符集不含 '/'，无法覆盖 @/ 局部输入。
-   * 回调式替换保留前导空白（与 insertMention 同法）——句中 "word @/a" 选择后
-   * 不吃掉 @ 前的空格；裸 replace 整段匹配会把前导空白一并吞掉 */
+  /** 文件选择（v2.11.1 统一）：与 agent 同形插 @路径（insertMention 放宽正则
+   * 覆盖 '@路径局部'），另登记结构化 pendingFiles */
   const selectFile = (f: SearchHit): void => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const pos = ta.selectionStart;
-    const before = text.slice(0, pos);
-    const after = text.slice(pos);
-    // 局部匹配字符集与 detectTrigger 文件分支一致（覆盖未敲完的 @/xxx 局部输入）
-    const newValue =
-      before.replace(
-        /(?:^|\s)(@\/[^\s]*$)/,
-        (match, partial: string) => match.replace(partial, `@/${f.path}`),
-      ) + ' ' + after;
-    setText(newValue);
-    setMenuType(null);
-    setQuery('');
-    setFileMode(false);
+    insertMention(`@${f.path}`);
     setPendingFiles((prev) =>
       prev.some((x) => x.path === f.path) ? prev : [...prev, { path: f.path }],
     );
-    // 焦点与光标回到标记末尾（菜单按钮点击会移走焦点）
-    setTimeout(() => {
-      ta.focus();
-      const np = newValue.length - after.length;
-      ta.setSelectionRange(np, np);
-    }, 0);
   };
 
   const handleSend = async (): Promise<void> => {
@@ -396,7 +373,6 @@ export function MentionInput() {
     setPendingSkills([]);
     setMenuType(null);
     setQuery('');
-    setFileMode(false);
     try {
       // context（{ skills, files } 第 3 参）：主进程落 messages.context_json，
       // 派发时展开为正文 <user-context> 块（v2.11 Task 7 契约）
@@ -414,7 +390,6 @@ export function MentionInput() {
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (menuType !== null && e.key === 'Escape') {
       setMenuType(null);
-      setFileMode(false);
       return;
     }
     // 输入法组合期（中文拼音选字等）的 Enter 是选字确认不是发送——
@@ -434,41 +409,43 @@ export function MentionInput() {
 
   return (
     <div className="border-t border-subtle bg-surface-1 p-3 relative">
-      {/* 成员组在 fileMode 下隐藏：@/ 局部输入无法被 insertMention 的成员字符集
-          匹配（不含 '/'），此时点成员会静默丢失标记——文件意图期间只展示文件组 */}
-      {menuType === 'agent' && !fileMode && filteredMembers.length > 0 && (
+      {/* v2.11.1 F2：@ 统一菜单——agent 组 + 文件组同浮层，任一组命中即渲染 */}
+      {menuType === 'agent' && (filteredMembers.length > 0 || fileHits.length > 0) && (
         <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
-          <div className="px-3 py-1 text-xs text-tertiary">选择要 @ 的 agent</div>
-          {filteredMembers.map((m) => (
-            <button
-              key={m.instanceId}
-              type="button"
-              onClick={() => selectMember(m)}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
-            >
-              <span>
-                {m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}
-              </span>
-              <span className="truncate">{m.agentName}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {menuType === 'agent' && fileMode && fileHits.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 border border-subtle bg-surface-1 rounded-lg shadow-lg py-1 max-h-48 overflow-auto z-50">
-          <div className="px-3 py-1 text-xs text-tertiary">选择要引用的文件</div>
-          {fileHits.map((f) => (
-            <button
-              key={f.path}
-              type="button"
-              onClick={() => selectFile(f)}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
-            >
-              <FileText size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
-              <span className="truncate">{f.path}</span>
-            </button>
-          ))}
+          {filteredMembers.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-xs text-tertiary">选择要 @ 的 agent</div>
+              {filteredMembers.map((m) => (
+                <button
+                  key={m.instanceId}
+                  type="button"
+                  onClick={() => selectMember(m)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
+                >
+                  <span>
+                    {m.iconEmoji ?? <Bot size={12} strokeWidth={1.75} aria-hidden />}
+                  </span>
+                  <span className="truncate">{m.agentName}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {fileHits.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-xs text-tertiary">引用文件</div>
+              {fileHits.map((f) => (
+                <button
+                  key={f.path}
+                  type="button"
+                  onClick={() => selectFile(f)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-3 flex items-center gap-2"
+                >
+                  <FileText size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <span className="truncate">{f.path}</span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
 

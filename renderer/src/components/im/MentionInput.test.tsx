@@ -57,6 +57,8 @@ vi.mock('../../stores/workspace.store', () => ({
 const mockApi = {
   file: {
     searchNames: vi.fn().mockResolvedValue([]),
+    // v2.11.1 F2：@ 统一菜单空 query 默认列表数据源（根目录 ipc.file.list）
+    list: vi.fn().mockResolvedValue([]),
   },
   session: {
     // 默认值仿真主进程 commands.ts SESSION_COMMANDS 真实注册表（单一真相源）
@@ -137,6 +139,8 @@ function resetState(): void {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   mockApi.file.searchNames.mockClear();
   mockApi.file.searchNames.mockResolvedValue([]);
+  mockApi.file.list.mockClear();
+  mockApi.file.list.mockResolvedValue([]);
   mockApi.session.listCommands.mockClear();
   mockApi.session.listCommands.mockResolvedValue([
     { name: 'compact', description: '压缩会话历史，释放上下文窗口' },
@@ -412,150 +416,78 @@ describe('MentionInput 会话草稿（切换会话内容隔离）', () => {
   });
 });
 
-describe('MentionInput @ 菜单文件分组（@/ 路径引用，Task 8）', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  /** 推进防抖窗口（200ms）并冲刷微任务，让 searchNames 结果落进渲染 */
-  const advanceDebounce = async (): Promise<void> => {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(200);
-    });
-  };
-
-  it('输入 @/ 触发文件菜单并展示搜索结果', async () => {
-    vi.useFakeTimers();
+// === v2.11.1 F2：@ 统一菜单（移除 @/ 独立语法，opencode 式）===
+// 契约：@ 触发同一浮层 agent 组 + 文件组，同 query 双源；选文件插 @路径（与
+// agent 同形）；空 query 文件组显示根目录默认列表（file.list，不发 searchNames）；
+// 📎 直开菜单。mockApi.file 需新增 list mock（resetState 同步重置）。
+describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
+  it('输入 @ → agent 组与文件组同浮层渲染（双源同 query）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'i-1', agentName: 'coder' })];
     mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-      { path: 'src/b.ts', isDirectory: false },
+      { path: 'coder-notes.md', isDirectory: false },
+      { path: 'src/', isDirectory: true },
     ]);
     render(<MentionInput />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/a' } });
-    await advanceDebounce();
-    expect(mockApi.file.searchNames).toHaveBeenCalledWith('ws-1', 'a');
-    expect(screen.getByText(/选择要引用的文件/)).toBeInTheDocument();
-    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
-    expect(screen.getByText('src/b.ts')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@coder' } });
+    await waitFor(() => expect(screen.getByText('选择要 @ 的 agent')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('coder-notes.md')).toBeTruthy());
+    expect(screen.queryByText('src/')).toBeNull(); // 目录命中被过滤
   });
 
-  it('选择文件插入 @/路径 标记并登记 chip', async () => {
-    vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-      { path: 'src/b.ts', isDirectory: false },
-    ]);
+  it('选择文件插入 @路径 标记（无 / 前缀，尾随空格）并登记可移除 chip', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'package.json', isDirectory: false }]);
     render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
-    fireEvent.change(ta, { target: { value: '@/a' } });
-    await advanceDebounce();
-    fireEvent.click(screen.getByText('src/a.ts'));
-    expect(ta.value).toMatch(/@\/src\/a\.ts\s$/);
-    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
-    // 选择后菜单关闭
-    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
+    fireEvent.change(ta, { target: { value: '@pack' } });
+    const item = await screen.findByText('package.json');
+    fireEvent.click(item);
+    expect(ta.value).toBe('@package.json ');
+    fireEvent.click(screen.getByLabelText('移除文件 package.json'));
+    expect(screen.queryByLabelText('移除文件 package.json')).toBeNull();
   });
 
-  it('chip 可移除', async () => {
-    vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-      { path: 'src/b.ts', isDirectory: false },
+  it('空 query → 根目录默认列表（file.list，不发 searchNames；仅文件截 8 条）', async () => {
+    mockApi.file.list.mockResolvedValue([
+      ...Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.ts`, isDirectory: false, size: 1 })),
+      { name: 'src', isDirectory: true, size: 0 },
     ]);
     render(<MentionInput />);
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
-    fireEvent.change(ta, { target: { value: '@/a' } });
-    await advanceDebounce();
-    fireEvent.click(screen.getByText('src/a.ts'));
-    fireEvent.click(screen.getByLabelText('移除文件 src/a.ts'));
-    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
-  });
-
-  it('发送失败恢复文件 chips 与正文', async () => {
-    vi.useFakeTimers();
-    // brief 原文 vi.spyOn(ipc.session, 'send') 在 store 层 mock 架构下不可达
-    // （组件消费 mocked sessionState.sendMessage）——照抄本文件既有失败注入形态
-    sessionState.sendMessage = vi.fn().mockRejectedValue(new Error('boom'));
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-      { path: 'src/b.ts', isDirectory: false },
-    ]);
-    render(<MentionInput />);
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
-    fireEvent.change(ta, { target: { value: '@/a' } });
-    await advanceDebounce();
-    fireEvent.click(screen.getByText('src/a.ts'));
-    fireEvent.change(ta, { target: { value: '@/src/a.ts 看看这个' } });
-    fireEvent.keyDown(ta, { key: 'Enter' });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(ta.value).toMatch(/@\/src\/a\.ts/);
-    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
-  });
-
-  it('仅输入 @/（空 query）不搜索——防抖窗口过后也不发 IPC', async () => {
-    vi.useFakeTimers();
-    render(<MentionInput />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/' } });
-    await advanceDebounce();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@' } });
+    await waitFor(() => expect(screen.getByText('f7.ts')).toBeTruthy());
+    expect(screen.queryByText('f8.ts')).toBeNull(); // 截 8（FILE_MENU_LIMIT）
+    expect(screen.queryByText('src')).toBeNull();
     expect(mockApi.file.searchNames).not.toHaveBeenCalled();
-    // 无结果不渲染文件组
-    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
   });
 
-  it('目录命中被过滤、仅文件进菜单且限 8 条', async () => {
-    vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'docs', isDirectory: true },
-      ...Array.from({ length: 10 }, (_, i) => ({
-        path: `src/f${i}.ts`,
-        isDirectory: false,
-      })),
-    ]);
+  it('📎 点击直开菜单：追加 @（空格防粘连）+ 默认列表可见', async () => {
+    sessionState.fileTriggerTick = 1;
+    mockApi.file.list.mockResolvedValue([{ name: 'README.md', isDirectory: false, size: 1 }]);
     render(<MentionInput />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/f' } });
-    await advanceDebounce();
-    expect(screen.queryByText('docs')).not.toBeInTheDocument();
-    expect(screen.getByText('src/f0.ts')).toBeInTheDocument();
-    expect(screen.getByText('src/f7.ts')).toBeInTheDocument();
-    expect(screen.queryByText('src/f8.ts')).not.toBeInTheDocument();
-    expect(screen.queryByText('src/f9.ts')).not.toBeInTheDocument();
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    await waitFor(() => expect(ta.value).toBe('@'));
+    await waitFor(() => expect(screen.getByText('README.md')).toBeTruthy());
   });
 
-  it('searchNames 失败 → 不渲染文件组且不崩（错误路径）', async () => {
-    vi.useFakeTimers();
+  it('searchNames 失败 → 文件组静默不渲染且不崩（错误路径）', async () => {
     mockApi.file.searchNames.mockRejectedValue(new Error('boom'));
     render(<MentionInput />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@/a' } });
-    await advanceDebounce();
-    expect(screen.queryByText(/选择要引用的文件/)).not.toBeInTheDocument();
-    expect(screen.queryByText('src/a.ts')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@zzz' } });
+    await waitFor(() => expect(mockApi.file.searchNames).toHaveBeenCalled());
+    // 无菜单渲染（agent 组也空）、输入框仍在
+    expect(screen.queryByText('引用文件')).toBeNull();
+    expect(screen.getByRole('textbox')).toBeTruthy();
   });
 
-  it('会话切换清空文件 chips，正文里的 @/路径 文本随草稿保留', async () => {
-    vi.useFakeTimers();
-    mockApi.file.searchNames.mockResolvedValue([
-      { path: 'src/a.ts', isDirectory: false },
-      { path: 'src/b.ts', isDirectory: false },
-    ]);
-    const { rerender } = render(<MentionInput />);
+  it('发送失败恢复文件 chips 与正文（@路径 标记形态）', async () => {
+    sessionState.sendMessage.mockRejectedValue(new Error('net'));
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'a.ts', isDirectory: false }]);
+    render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
-    fireEvent.change(ta, { target: { value: '@/a' } });
-    await advanceDebounce();
-    fireEvent.click(screen.getByText('src/a.ts'));
-    expect(screen.getByLabelText('移除文件 src/a.ts')).toBeInTheDocument();
-
-    // 切走：chips 清空（MVP 取舍：不按正文标记重建，实现注释已标注）
-    sessionState.activeSessionId = 'sess-2';
-    rerender(<MentionInput />);
-    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
-
-    // 切回：正文草稿（含 @/ 路径文本）恢复，chips 不恢复
-    sessionState.activeSessionId = 'sess-1';
-    rerender(<MentionInput />);
-    expect(ta.value).toMatch(/@\/src\/a\.ts/);
-    expect(screen.queryByLabelText('移除文件 src/a.ts')).not.toBeInTheDocument();
+    fireEvent.change(ta, { target: { value: '@a' } });
+    fireEvent.click(await screen.findByText('a.ts'));
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    await waitFor(() => expect(ta.value).toBe('@a.ts'));
+    expect(screen.getByLabelText('移除文件 a.ts')).toBeTruthy();
   });
 });
 
@@ -766,7 +698,7 @@ describe('MentionInput 📎 文件触发（fileTriggerTick，Task 10）', () => 
     });
   };
 
-  it('fileTriggerTick 递增 → 聚焦 + 空正文插入 @/；继续输入即出文件菜单', async () => {
+  it('fileTriggerTick 递增 → 聚焦 + 空正文插入 @；继续输入即出文件菜单', async () => {
     vi.useFakeTimers();
     mockApi.file.searchNames.mockResolvedValue([{ path: 'src/a.ts', isDirectory: false }]);
     const { rerender } = render(<MentionInput />);
@@ -776,33 +708,33 @@ describe('MentionInput 📎 文件触发（fileTriggerTick，Task 10）', () => 
     sessionState.fileTriggerTick = 1;
     rerender(<MentionInput />);
     expect(document.activeElement).toBe(ta);
-    expect(ta.value).toBe('@/');
-    // @/ 就位后用户继续输入查询词 → 文件菜单弹出（文件分支接管）
+    expect(ta.value).toBe('@');
+    // @ 就位后用户继续输入查询词 → @ 统一菜单文件组接管（atMatch 包含 /）
     fireEvent.change(ta, { target: { value: '@/a' } });
     await advanceDebounce();
-    expect(screen.getByText(/选择要引用的文件/)).toBeInTheDocument();
+    expect(screen.getByText('引用文件')).toBeInTheDocument();
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
   });
 
-  it('已有正文以非空白收尾 → 追加空格防粘连（hello → hello @/）', () => {
+  it('已有正文以非空白收尾 → 追加空格防粘连（hello → hello @）', () => {
     const { rerender } = render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(ta, { target: { value: 'hello' } });
     sessionState.fileTriggerTick = 1;
     rerender(<MentionInput />);
-    expect(ta.value).toBe('hello @/');
+    expect(ta.value).toBe('hello @');
   });
 
-  it('已有正文以空白收尾 → 直接追加不产生双空格（"hello " → "hello @/"）', () => {
+  it('已有正文以空白收尾 → 直接追加不产生双空格（"hello " → "hello @"）', () => {
     const { rerender } = render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(ta, { target: { value: 'hello ' } });
     sessionState.fileTriggerTick = 1;
     rerender(<MentionInput />);
-    expect(ta.value).toBe('hello @/');
+    expect(ta.value).toBe('hello @');
   });
 
-  it('effect 内直调 detectTrigger：命令菜单打开时触发 → 旧菜单立即关闭（文件态接管）', async () => {
+  it('effect 内直调 detectTrigger：命令菜单打开时触发 → 旧菜单立即关闭（@ 菜单接管）', async () => {
     const { rerender } = render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(ta, { target: { value: '/' } });
@@ -810,12 +742,12 @@ describe('MentionInput 📎 文件触发（fileTriggerTick，Task 10）', () => 
 
     sessionState.fileTriggerTick = 1;
     rerender(<MentionInput />);
-    // '/' 以非空白收尾 → '/ @/'；detectTrigger 同步刷新菜单态：命令菜单让位
-    expect(ta.value).toBe('/ @/');
+    // '/' 以非空白收尾 → '/ @'；detectTrigger 同步刷新菜单态：命令菜单让位
+    expect(ta.value).toBe('/ @');
     expect(screen.queryByText('命令')).not.toBeInTheDocument();
   });
 
-  it('tick=0（初始）不插入 @/ 也不抢焦点', () => {
+  it('tick=0（初始）不插入 @ 也不抢焦点', () => {
     render(<MentionInput />);
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
     expect(ta.value).toBe('');
