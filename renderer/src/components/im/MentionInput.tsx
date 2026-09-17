@@ -48,7 +48,7 @@ type MenuKind = 'agent' | 'task' | 'command';
 const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'];
 /** 菜单最多展示条目数（pending 任务可能较多） */
 const MENU_LIMIT = 10;
-/** @/ 文件菜单最多展示条目数（主进程 searchNames 默认 limit 200，renderer 端截取） */
+/** @ 统一菜单文件组最多展示条目数（searchNames 命中与 file.list 根目录默认列表共用此上限，renderer 端截取） */
 const FILE_MENU_LIMIT = 8;
 /** / 菜单命令组 / 技能组各自最多展示条目数（与 @ 菜单分组限额对齐） */
 const COMMAND_MENU_LIMIT = 8;
@@ -115,6 +115,10 @@ export function MentionInput() {
     // 切会话即清空——chips 重建留待后续增强；技能 chips 同生命周期
     setPendingFiles([]);
     setPendingSkills([]);
+    // 跨 workspace 陈旧命中防闪现（终审 M1）：menuType 同步置 null 后文件 effect
+    // 会跳过分支不清 fileHits；切会话时显式清空，下一次 @ 触发前菜单条件
+    // (filteredMembers.length > 0 || fileHits.length > 0) 不会拿旧 ws 数据渲染
+    setFileHits([]);
     prevSessionRef.current = activeSessionId;
     // text 刻意不入依赖：仅在会话切换边界执行存取
     // eslint-disable-next-line react-hooks/exhaustive-deps

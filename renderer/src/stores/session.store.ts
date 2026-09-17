@@ -52,7 +52,7 @@ interface SessionState {
   activeSessionReadOnly: boolean;
   /** 输入框聚焦请求信号：新建会话成功后 +1，MentionInput 订阅后聚焦（spec §6.2 ⚡ 直达） */
   inputFocusTick: number;
-  /** 文件引用触发信号：工具栏 📎 按钮 +1，MentionInput 订阅后聚焦并插入 '@/'（Task 10） */
+  /** 文件引用触发信号：MentionInput 容器内 📎 按钮 +1（v2.11.1 起移入；Task 10 信号机制不变） */
   fileTriggerTick: number;
   /** 分页加载状态——sessionId → 是否正在加载更早消息（防抖） */
   loadingOlderBySession: Map<string, boolean>;
@@ -125,7 +125,7 @@ interface SessionState {
   ) => Promise<boolean>;
   /** 向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
   loadOlder: (sessionId: string) => Promise<void>;
-  /** 递增 fileTriggerTick（InputToolbar 📎 按钮，Task 10） */
+  /** 递增 fileTriggerTick（MentionInput 容器内 📎 按钮，v2.11.1 起移入；Task 10 信号机制不变） */
   bumpFileTrigger: () => void;
   /** 重置全部状态（登出时调用） */
   reset: () => void;

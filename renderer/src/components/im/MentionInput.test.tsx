@@ -493,6 +493,37 @@ describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
     expect(screen.getByRole('textbox')).toBeTruthy();
   });
 
+  // 终审 M1：会话切换清空陈旧 fileHits——跨 workspace 切会话后再敲 @ 不闪现
+  // 旧文件命中。切会话 effect 只清 menuType/query/pendingFiles/pendingSkills，
+  // 未清 fileHits：菜单条件 filteredMembers.length > 0 || fileHits.length > 0
+  // 会拿旧值渲染直到新 workspaceId 的 file.list resolve。修复点：会话切换 effect
+  // 显式 setFileHits([])。mock 构造：ws-1 返回旧文件后切 ws-2+sess-2，新 ws 的
+  // file.list 永不 resolve（pending Promise），断言同步完成。
+  it('会话切换清空陈旧 fileHits——跨 workspace 切会话后再敲 @ 不闪现旧文件', async () => {
+    mockApi.file.list.mockResolvedValueOnce([{ name: 'old-ws.md', isDirectory: false, size: 1 }]);
+    const { rerender } = render(<MentionInput />);
+    // 敲 @ 触发 ws-1 默认列表：fileHits 填入 old-ws.md，文件组渲染
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@' } });
+    await waitFor(() => expect(screen.getByText('old-ws.md')).toBeTruthy());
+
+    // 切到 ws-2 + sess-2：会话切换 effect 应清空 fileHits（终审 M1 行为补丁）
+    sessionState.activeSessionId = 'sess-2';
+    workspaceState.getActive = () => ({ id: 'ws-2', name: 'ws-2' });
+    // 新 workspace file.list 永不 resolve——模拟 IPC 未返回期间
+    mockApi.file.list.mockReturnValueOnce(new Promise(() => {}));
+    rerender(<MentionInput />);
+
+    // 再敲 @：触发 ws-2 默认列表请求（menuType='agent' + workspaceId='ws-2'），
+    // 但 mock 挂起——若无会话切换清理，fileHits 残留 old-ws.md 导致菜单闪现
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@' } });
+
+    // 断言：陈旧 fileHits 已清，菜单文件组不渲染（agent 组也空），旧文件不在
+    expect(screen.queryByText('old-ws.md')).toBeNull();
+    expect(screen.queryByText('引用文件')).toBeNull();
+    // 新 ws 的 file.list 必须已被发起——证明 effect 链路正确，只是 await 未返回
+    expect(mockApi.file.list).toHaveBeenCalledWith('ws-2', '.');
+  });
+
   it('发送失败恢复文件 chips 与正文（@路径 标记形态）', async () => {
     sessionState.sendMessage.mockRejectedValue(new Error('net'));
     mockApi.file.searchNames.mockResolvedValue([{ path: 'a.ts', isDirectory: false }]);
