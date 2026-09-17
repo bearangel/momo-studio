@@ -191,6 +191,48 @@ describe('RichComposer pill 插入', () => {
     h2!.insertPill(agentPill, 1);
     expect(h2!.getSegments()).toEqual([{ type: 'text', text: '开头 ' }, agentPill]);
   });
+
+  it('insertPill 中段插入不吞尾文（replaceLen=0 纯插入，splitText 路径尾文保留）', () => {
+    const h = mount();
+    // 末尾 offset（=length）：after 分支 → 整段保留 + pill 随后
+    h!.setSegments([{ type: 'text', text: 'abc' }]);
+    setCaret(editor().firstChild as Text, 3);
+    h!.insertPill(agentPill, 0);
+    expect(h!.getSegments()).toEqual([{ type: 'text', text: 'abc' }, agentPill]);
+    // 中段 offset（< length）：splitText 分支 → 前后文本都保留（同一编辑器两轮）
+    h!.clear();
+    h!.setSegments([{ type: 'text', text: 'abc' }]);
+    setCaret(editor().firstChild as Text, 2);
+    h!.insertPill(agentPill, 0);
+    expect(h!.getSegments()).toEqual([
+      { type: 'text', text: 'ab' },
+      agentPill,
+      { type: 'text', text: 'c' },
+    ]);
+  });
+});
+
+describe('RichComposer 文本保真（换行 / 粘贴对等）', () => {
+  it('Shift+Enter 换行保真：<br> 折叠为 \\n，getSegments 与 beforeCaret 均不丢换行', () => {
+    const onInputText = vi.fn();
+    const h = mount({ onInputText });
+    h!.setSegments([{ type: 'text', text: '第一行' }]);
+    // 手工构造 Shift+Enter 浏览器默认产物：<br> + 后续文本
+    editor().append(document.createElement('br'), document.createTextNode('第二行'));
+    expect(h!.getSegments()).toEqual([{ type: 'text', text: '第一行\n第二行' }]);
+    h!.moveCaretToEnd();
+    fireEvent.input(editor());
+    expect(onInputText).toHaveBeenLastCalledWith('第一行\n第二行', '第一行\n第二行');
+  });
+
+  it('粘贴保真：div 内文本递归提取，块级尾补换行（粘贴A\\n续）', () => {
+    const h = mount();
+    // 手工构造粘贴形态：root 下 <div>文本</div> + 后续文本
+    const div = document.createElement('div');
+    div.textContent = '粘贴A';
+    editor().append(div, document.createTextNode('续'));
+    expect(h!.getSegments()).toEqual([{ type: 'text', text: '粘贴A\n续' }]);
+  });
 });
 
 describe('RichComposer 原子编辑', () => {
@@ -208,6 +250,18 @@ describe('RichComposer 原子编辑', () => {
     fireEvent.keyDown(editor(), { key: 'Backspace' });
     expect(pillNodes()).toHaveLength(0);
     expect(h!.getSegments()).toEqual([]);
+  });
+
+  it('Backspace 邻接判定：ZWSP 节点 offset 1（光标在 ZWSP 后）仍高亮', () => {
+    const h = mount();
+    h!.setSegments([agentPill]);
+    const pill = pillNodes()[0]!;
+    const zwsp = pill.nextSibling as Text;
+    // ZWSP-only 节点任意 offset 均视为紧邻其前 pill——真实浏览器光标落 ZWSP 后的形态
+    setCaret(zwsp, 1);
+    fireEvent.keyDown(editor(), { key: 'Backspace' });
+    expect(pill.dataset.selected).toBe('1');
+    expect(pillNodes()).toHaveLength(1);
   });
 
   it('Delete 删选中 pill；点击文字区清除选中态', () => {

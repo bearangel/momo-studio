@@ -65,6 +65,27 @@ function isPill(node: Node | null | undefined): node is HTMLSpanElement {
   return node instanceof HTMLSpanElement && node.dataset.kind !== undefined;
 }
 
+/**
+ * 读侧非文本节点的纯文本折叠（换行 / 粘贴 textarea 对等，getSegments 与
+ * caretContext 共用）：<br> → '\n'；嵌套 pill → 单空格（与光标前文本折叠一致）；
+ * 其它元素递归取内部文本（纯文本化，不带格式）；div/p 折叠文本非空时尾补 '\n'
+ * （简化语义——不做完整 HTML 块级模型）。产出不剥 ZWSP，由调用方统一剥。
+ */
+function elementPlainText(node: Element): string {
+  if (isPill(node)) return ' ';
+  if (node.tagName === 'BR') return '\n';
+  let text = '';
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      text += child.textContent ?? '';
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      text += elementPlainText(child as Element);
+    }
+  }
+  if ((node.tagName === 'DIV' || node.tagName === 'P') && text !== '') text += '\n';
+  return text;
+}
+
 /** Task 3 依赖的 handle 契约（签名与 brief 逐字一致） */
 export interface RichComposerHandle {
   focus(): void;
@@ -166,6 +187,11 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             }
           }
           all += raw;
+        } else if (node instanceof Element) {
+          // <br> / 粘贴产生的元素：纯文本折叠（换行保真，与 getSegments 同规则）
+          const raw = elementPlainText(node);
+          if (!past) before += raw;
+          all += raw;
         }
       }
       if (startContainer === null) before = all;
@@ -195,8 +221,14 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             id: node.dataset.id ?? '',
             label: node.dataset.label ?? '',
           });
+        } else if (node instanceof Element) {
+          // <br> / 粘贴产生的元素：纯文本折叠并入文本流（相邻文本段合并协议同前）
+          const text = elementPlainText(node).replaceAll(ZWSP, '');
+          if (text === '') continue; // 空元素（如空 div）不产生内容
+          const last = segs[segs.length - 1];
+          if (last !== undefined && last.type === 'text') last.text += text;
+          else segs.push({ type: 'text', text });
         }
-        // 其它节点类型忽略（防御——正常编辑协议下不产生）
       }
       return segs;
     };
