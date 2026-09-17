@@ -4,6 +4,9 @@
 //   - / 菜单命令组数据（session:listCommands → renderer）
 //   - handleSessionCommand 查表分发
 // 新增命令 = 在此追加一条 + handler 挂到 session-service 的分发映射。
+//
+// 备忘：命令名当前限 ASCII（[A-Za-z0-9-]）——session.store 拦截形态同步（纯命令形态
+// /^\/([A-Za-z0-9-]+)\s*$/）；若未来注册中文名命令需两侧同步放宽（正则 + 此处命名约束）。
 export interface SessionCommandDef {
   name: string;
   description: string;

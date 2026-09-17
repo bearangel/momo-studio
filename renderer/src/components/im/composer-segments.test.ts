@@ -70,7 +70,7 @@ describe('serializeSegments（spec §3 序列化规则表）', () => {
 
 // F2 回归锁：邻接 pill 无用户文本分隔时，序列化必须保证标记前后空格——否则
 // body 如 '#T-001@PM-agent' / '#T-001请跟进' 不命中 conflict-detector 的
-// TASK_MENTION_REGEX（双向空白边界，electron/src/main/im/conflict-detector.ts），
+// TASK_MENTION_REGEX（双向空白边界，electron/src/main/task/conflict-detector.ts），
 // 任务引用静默丢失（激活 + 冲突检测全漏）。正则在此镜像锁契约（renderer 测试
 // 不 import 主进程代码）。
 const TASK_MENTION_MIRROR = /(?:^|\s)#(T-\d+)(?=\s|$)/g;

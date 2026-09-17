@@ -1,18 +1,30 @@
 // tests/e2e/composer-context.spec.ts
 //
-// v2.11 输入框上下文系统 e2e（Task 13）：真实构建应用全链路——
+// v3 输入框内联 pill 富输入块 e2e（Task 4 收尾）：真实构建应用全链路——
 // 启动 → 建 workspace → 加 agent 成员 → ⚡ 快速会话（首次设默认 agent）
-// → @ 统一菜单（agent+文件同浮层，v2.11.1）→ / 技能菜单 → 发送 → 消息气泡 context chip 渲染。
+// → @ 统一菜单（v2.11.1）→ 文件 pill 内联 → / 技能菜单 → 技能 pill 内联
+// → 输入正文发送 → 消息气泡 context chip 渲染。
 //
-// 被测链路（Task 1-12 全链消费 + v2.11.1 交互精简）：
+// 被测链路（Task 1-3 全链消费 + v3 RichComposer 内联 pill 模型）：
+//   - 编辑器是 contentEditable div（role=textbox 仍命中）；Playwright fill() 原生
+//     支持 contentEditable（输入事件触发菜单）
 //   - @ 触发统一菜单（v2.11.1：移除 @/ 独立语法，agent + 文件同浮层双源过滤）
 //     文件分支：ipc.file.searchNames（主进程 WorkspaceFS 实时递归扫描）→ 菜单选择
-//     → 正文 @路径 标记 + pendingFiles chip
+//     → RichComposer.insertPill 插入文件 pill（contenteditable=false span，
+//     data-kind="file"，文字流中原子块，取代 v2.11 的 pendingFiles chip）
 //   - / 触发（空 body 锚定）→ 命令组（session.listCommands，主进程 commands.ts
 //     单一真相源）+ 技能组（ipc.resource.list 过滤 installed，builtin 三技能）
-//     → 技能选择 → pendingSkills chip（正文不插入）
-//   - 发送（session.send 第 4 参 context）→ 主进程落 messages.context_json →
-//     session:message 推送 → MessageBubble 渲染 data-testid=message-context-chips
+//     → 技能选择 → 技能 pill（不进正文、随 context 第 3 参发送，
+//     取代 v2.11 的 pendingSkills chip）
+//   - 发送：serializeSegments(getSegments()) → sendMessage(body, mentions, context)
+//     三参；IPC 形状与 v2.11 完全一致（主进程零感知）；消息气泡渲染
+//     data-testid=message-context-chips（文件 chip 可点 + 技能 chip）
+//
+// contentEditable 适配要点（v3 编辑器）：
+//   - 值断言：编辑器无 value 属性，toHaveValue 失效；改用 toHaveText /
+//     toContainText（Playwright 读 textContent，pill 文字 + ZWSP 都在内）
+//   - pill 文本形态——file pill 显示 label（路径，无 @ 前缀；@ 前缀仅
+//     serializeSegments 阶段添加进 body），skill pill 显示 label（技能名）
 //
 // 会话建立说明（brief 骨架的「会话建立 helper」实际不存在——旧 e2e-full 走 v1.x
 // 已 skip，本 spec 自建 v2.x 链路）：输入框需 activeSessionId 才启用，快速会话
@@ -40,6 +52,7 @@ test.beforeAll(() => {
   fs.mkdirSync(tmpWsDir, { recursive: true });
   // @ 统一菜单文件分支数据源是 searchNames 实时扫描 workspace 目录——
   // 预写 package.json 保证 '@package' 查询有稳定命中（v2.11.1 移除 @/ 独立语法）
+  // v3 RichComposer 仍消费同一菜单（file pill 替换旧 pendingFiles chip）
   fs.writeFileSync(
     path.join(tmpWsDir, 'package.json'),
     JSON.stringify({ name: 'momo-composer-e2e', version: '1.0.0' }, null, 2),
@@ -146,33 +159,51 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
     await radio.first().click();
     await picker.getByRole('button', { name: '设为默认并继续' }).click();
 
-    // 快速会话建立 → 输入框启用（placeholder 从「请先选择房间」切到发送提示）
-    const input = win.getByPlaceholder(/Enter 发送.*输入 @ 提到 agent/);
+    // 快速会话建立 → 输入框启用（v3：placeholder 是 data-placeholder 属性在
+// contentEditable div 上，aria-label='消息输入框'；不能用 getByPlaceholder 匹配）
+// 同时存在「搜索会话」input（aria-label 同类），用 role+name 精确锁定
+    const input = win.getByRole('textbox', { name: '消息输入框' });
     await expect(input).toBeEnabled({ timeout: 15000 });
 
-    // ---- 5. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json ----
-    // 文件搜索 debounce 200ms + IPC，断言自带 15s 超时窗足够
-    await input.fill('@package');
-    await expect(win.getByText('引用文件')).toBeVisible();
-    await win.getByRole('button', { name: 'package.json', exact: true }).click();
-    await expect(input).toHaveValue(/@package\.json/);
-    // pendingFiles chip：aria-label「移除文件 <path>」，展示文本为 basename
-    await expect(win.getByLabel('移除文件 package.json')).toBeVisible();
-
-    // ---- 6. / 技能：空 body 以 / 开头 → 命令+技能两组 → 选择技能出 chip ----
-    // 技能组数据源 = 已安装技能：全新 userData 仅 catalog 的 builtin skill
-    // 「代码审查工作流」（Task 12 预置三技能包装机后才进列表）。命令按钮可访问名
-    // 含描述文本，用前缀匹配锚定
+    // ---- 5. / 技能：编辑器为空 → / 触发命令+技能菜单 → 选技能 → 技能 pill 内联 ----
+    // v3 编辑器是 contentEditable div；fill 触发 input 事件 → detectTrigger 拉起菜单
+    // 关键：/ 菜单正则 /^\/([^\s/]*)$/ 要求 body 为空（pill 折叠为单空格，非空）。
+    // 因此顺序必须是「/ 技能 → @ 文件 → 正文」——技能 pill 必须在文件 pill 之前
+    // （MentionInput.tsx 注释「命令/技能 pill 只能是编辑器第一个节点，整串语义保持」）。
+    // 后续步骤不能用 fill（会 select-all 替换、清掉已插 pill）——改 type 保留 pill。
     await input.fill('/');
     await expect(win.getByRole('button', { name: /^\/compact/ })).toBeVisible();
     await expect(win.getByText('技能', { exact: true })).toBeVisible();
     await win.getByRole('button', { name: '代码审查工作流', exact: true }).click();
-    // 技能选择不插正文：/ 局部输入被剥掉，body 归空
-    await expect(input).toHaveValue('');
-    await expect(win.getByLabel('移除技能 代码审查工作流')).toBeVisible();
+    // 技能选择不插正文：/ 触发字符被剥掉、skill pill 替代——编辑器现在
+    // 含技能 pill（label = 技能名；spec §3：技能不进 body），编辑器
+    // textContent 应包含技能名；空字符串断言（toHaveValue('')）已不适用
+    await expect(input).toContainText('代码审查工作流');
+    await expect(input.locator('span[data-kind="skill"]')).toHaveCount(1);
+
+    // ---- 6. @ 文件引用：@ 前缀（v2.11.1 统一菜单）→ 选 package.json → 文件 pill 内联 ----
+    // 文件搜索 debounce 200ms + IPC，断言自带 15s 超时窗足够
+    // 文件菜单可在 pill 之后触发：@ 触发正则 (?:^|\s)@([^\s#]*)$ 允许非空 body
+    // （pill 折叠单空格作为前导空白边界）。先 click 重聚焦编辑器（菜单按钮偷焦点）
+    // 再 type ——contentEditable 上 fill 会 select-all 抹掉已有 skill pill
+    await input.click();
+    await input.type('@package');
+    await expect(win.getByText('引用文件')).toBeVisible();
+    await win.getByRole('button', { name: 'package.json', exact: true }).click();
+    // 文件 pill 文本形态：pillDisplayText(file) = label（路径，无 @ 前缀；
+    // @ 前缀仅 serializeSegments 阶段加进 body）。编辑器无 value 属性，改用
+    // toHaveText / toContainText 读 textContent（含 pill 文字 + 末尾 ZWSP）
+    await expect(input).toContainText('package.json');
+    // 直接断言内联 pill 元素存在（data-kind=file）：与 v2.11 的「移除文件」
+    // aria-label chip 等价但语义不同——v3 没有独立 pendingFiles chip，
+    // pill 本身就是引用；删除通过 Backspace 两段式（点选 + 整删）
+    await expect(input.locator('span[data-kind="file"][data-id="package.json"]')).toHaveCount(1);
 
     // ---- 7. 输入正文发送 → 气泡 context chip 渲染（context_json 落库回读全链） ----
-    await input.fill('检查一下');
+    // 关键：不能用 fill('检查一下')——fill 会 select-all 抹掉两个 pill；
+    // type() 在光标处追加，pill 保留 → serializeSegments 时 files+skills 都进 context
+    await input.click();
+    await input.type('检查一下');
     await input.press('Enter');
 
     const chips = win.getByTestId('message-context-chips');
