@@ -257,6 +257,17 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           tail.before(span, zwsp);
         }
       } else if (c === root) {
+        // root 元素层光标（moveCaretToEnd / insertTextAtEnd 后的形态）：
+        // 触发局部在前一个子节点（若为文本节点）的尾部；前兄弟是 pill 等元素时无字符可删。
+        // 空文本节点留待 getSegments 剥空清理——避免 offset 位移复杂化。
+        if (replaceLen > 0 && offset > 0) {
+          const prev = root.childNodes[offset - 1];
+          if (prev !== undefined && prev.nodeType === Node.TEXT_NODE) {
+            const pt = prev as Text;
+            const take = Math.min(replaceLen, pt.length);
+            if (take > 0) pt.deleteData(pt.length - take, take);
+          }
+        }
         const refNode = root.childNodes[offset];
         if (refNode !== undefined) {
           root.insertBefore(span, refNode);

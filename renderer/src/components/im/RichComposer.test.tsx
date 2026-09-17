@@ -174,6 +174,23 @@ describe('RichComposer pill 插入', () => {
     expect(h!.getSegments()).toEqual([{ type: 'text', text: '开头' }, filePill]);
     expect(pillNodes()).toHaveLength(1);
   });
+
+  it('insertPill root 元素层光标下删除触发局部（moveCaretToEnd / insertTextAtEnd 后的光标形态）', () => {
+    // 用户真实路径：原生敲 @（无防粘连空格）→ 光标经 moveCaretToEnd 落 root 层 → 菜单选 pill
+    const h = mount();
+    h!.setSegments([{ type: 'text', text: '开头@' }]);
+    h!.moveCaretToEnd(); // startContainer = root（元素层）
+    h!.insertPill(agentPill, 1);
+    expect(h!.getSegments()).toEqual([{ type: 'text', text: '开头' }, agentPill]);
+
+    // 审查复现链路：insertTextAtEnd 防粘连补的空格是 insertTextAtEnd 自身语义，
+    // 触发局部 '@' 必须删净（空格保留）
+    const h2 = mount();
+    h2!.setSegments([{ type: 'text', text: '开头' }]);
+    h2!.insertTextAtEnd('@');
+    h2!.insertPill(agentPill, 1);
+    expect(h2!.getSegments()).toEqual([{ type: 'text', text: '开头 ' }, agentPill]);
+  });
 });
 
 describe('RichComposer 原子编辑', () => {
@@ -254,5 +271,14 @@ describe('RichComposer insertTextAtEnd', () => {
     h!.insertTextAtEnd('@');
     expect(onInputText).toHaveBeenCalledTimes(1);
     expect(onInputText).toHaveBeenCalledWith('@', '@');
+  });
+
+  it('末尾是 pill 时插入 @：pill 折叠单空格且不与 @ 粘连（Task 3 触发检测契约）', () => {
+    const onInputText = vi.fn();
+    const h = mount({ onInputText });
+    h!.setSegments([agentPill]);
+    h!.insertTextAtEnd('@');
+    expect(onInputText).toHaveBeenCalledTimes(1);
+    expect(onInputText).toHaveBeenLastCalledWith(' @', ' @');
   });
 });
