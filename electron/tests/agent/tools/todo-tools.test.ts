@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   TodoTools,
   hasPendingUserTodos,
+  completeInProgressTodos,
   __setTodosForTest,
 } from '../../../src/main/agent/tools/todo-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
@@ -226,5 +227,41 @@ describe('todo source 挂靠', () => {
     );
     expect(out).toContain('[ ] [u] U项');
     expect(out).toContain('[ ] [a] A项');
+  });
+});
+
+describe('completeInProgressTodos 回合收尾收敛', () => {
+  const sid = 'stream-wrapup-test';
+
+  it('in_progress → completed；pending/completed 原样；id/subject/source 保留', () => {
+    __setTodosForTest(sid, [
+      { id: 'a', subject: '已完成项', status: 'completed', source: 'user' },
+      { id: 'b', subject: '进行中项（终文交付）', status: 'in_progress', source: 'user' },
+      { id: 'c', subject: '未启动项', status: 'pending', source: 'agent' },
+    ]);
+    const r = completeInProgressTodos(sid);
+    expect(r.changed).toBe(true);
+    expect(r.todos.map((t) => t.status)).toEqual(['completed', 'completed', 'pending']);
+    // 生产消费字段逐项断言（momo-test-rules #2）：id 是 renderer 列表 key，不得漂移
+    expect(r.todos.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    expect(r.todos.map((t) => t.subject)).toEqual(['已完成项', '进行中项（终文交付）', '未启动项']);
+    expect(r.todos.map((t) => t.source)).toEqual(['user', 'user', 'agent']);
+  });
+
+  it('无 in_progress 项 → changed:false（幂等门：不追加事件）', () => {
+    __setTodosForTest(sid, [
+      { id: 'a', subject: 'x', status: 'completed', source: 'agent' },
+      { id: 'b', subject: 'y', status: 'pending', source: 'agent' },
+    ]);
+    const before = completeInProgressTodos(sid).todos;
+    const r = completeInProgressTodos(sid);
+    expect(r.changed).toBe(false);
+    expect(r.todos).toBe(before); // 未变更时返回同一数组引用
+  });
+
+  it('会话无记录（空输入边界）→ changed:false + 空列表', () => {
+    const r = completeInProgressTodos('no-such-session');
+    expect(r.changed).toBe(false);
+    expect(r.todos).toEqual([]);
   });
 });

@@ -53,6 +53,34 @@ export function hasPendingUserTodos(streamSessionId: string): boolean {
 }
 
 /**
+ * 回合正常终止时的 todo 收敛：把该流仍在 in_progress 的项机械标记 completed。
+ *
+ * 根因背景（P0「最后一项永不完成」）：todowrite 是全量替换协议，LLM 的实际
+ * 书写习惯是转移驱动——开始下一项时才补上一项的 completed；最后一项的完成
+ * 动作与终文重合，没有「下一项」触发簿记，模型产出终文即停。终文即交付，
+ * 此处由 harness 收尾兜底。
+ *
+ * 语义边界：只动 in_progress（交付中）；pending 不动（未启动 ≠ 完成，不伪造
+ * 数据真相）。强停路径（interrupted / error / budget_exhausted）不应调用——
+ * in_progress 保持原状以支撑断点续跑。无变更时返回原数组引用（幂等门：
+ * 调用方据此跳过 todo_update 推送，不产生多余事件）。
+ */
+export function completeInProgressTodos(streamSessionId: string): {
+  changed: boolean;
+  todos: TodoItem[];
+} {
+  const todos = todoStore.get(streamSessionId);
+  if (!todos || !todos.some((t) => t.status === 'in_progress')) {
+    return { changed: false, todos: todos ?? [] };
+  }
+  const next = todos.map((t) =>
+    t.status === 'in_progress' ? { ...t, status: 'completed' as const } : t,
+  );
+  todoStore.set(streamSessionId, next);
+  return { changed: true, todos: next };
+}
+
+/**
  * todowrite 工具模块（v1.5）。仅 1 个工具：`todowrite`。
  *
  * 返回给 LLM 的结构化摘要格式（便于 LLM 自我感知进度）：
