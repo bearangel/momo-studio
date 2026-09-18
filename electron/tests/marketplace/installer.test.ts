@@ -109,7 +109,7 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     const refs = def!.defaultTools.map((t) => t.ref);
     expect(refs).not.toContain('bash');
     expect(refs).not.toContain('git_commit');
-    // 全部落在安全最小集内（文件里仍是 25 工具全集，钳制只作用于注册结果）
+    // 全部落在安全最小集内（文件里仍是 33 工具全集，钳制只作用于注册结果）
     const safe = new Set<string>(SAFE_MINIMUM_TOOLS);
     expect(refs.every((r) => safe.has(r))).toBe(true);
     expect(def!.source).toBe('marketplace');

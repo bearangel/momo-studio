@@ -1,6 +1,6 @@
 # 办公助理 — 日常办公文档处理（Excel / Word / PPT / PDF）。
-# 单一 main（无子 agent）；应用启动时由 builtin.ts 注册（source=builtin），
-# marketplace catalog 同步提供内联包条目。
+# 单一 main（无子 agent）；marketplace 按需安装（builtin.ts 注册链自 v1.1 起休眠，
+# 见该文件头注）；YAML 与 catalog 双轨同 coder 先例。
 apiVersion: v1
 kind: AgentDefinition
 metadata:

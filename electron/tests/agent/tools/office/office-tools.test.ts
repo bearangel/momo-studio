@@ -136,6 +136,14 @@ describe('office_read / office_read_cells', () => {
     await expect(tools.execute('office_read', { path: 'a.txt' }, ctx)).rejects.toThrow(/不支持的文档格式/);
     await expect(tools.execute('office_read', { path: '../outside.xlsx' }, ctx)).rejects.toThrow();
   });
+  it('预置 abortSignal：office_read 与 read_cells 立即返回已中断', async () => {
+    const ctl = new AbortController();
+    ctl.abort();
+    const abortedCtx = { ...ctx, abortSignal: ctl.signal };
+    await tools.execute('office_create_excel', { path: 'a.xlsx' }, ctx);
+    await expect(tools.execute('office_read', { path: 'a.xlsx' }, abortedCtx)).resolves.toBe('已中断');
+    await expect(tools.execute('office_read_cells', { path: 'a.xlsx', sheet: 'Sheet1' }, abortedCtx)).resolves.toBe('已中断');
+  });
 });
 
 describe('office_create_doc', () => {

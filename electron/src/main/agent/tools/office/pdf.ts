@@ -21,7 +21,7 @@ export function resolveFontPath(): string {
   return path.join(__dirname, '..', '..', '..', '..', '..', 'resources', 'fonts', FONT_FILE);
 }
 
-export async function readPdf(abs: string): Promise<string> {
+export async function readPdf(abs: string, signal?: AbortSignal): Promise<string> {
   const data = new Uint8Array(fs.readFileSync(abs));
   // Node 运行时约定：isEvalSupported/useWorkerFetch/disableFontFace 关掉浏览器侧
   // 能力；verbosity 0 压制 fake-worker 等告警噪声（测试输出必须干净）
@@ -35,6 +35,8 @@ export async function readPdf(abs: string): Promise<string> {
   try {
     const pageTexts: string[] = [];
     for (let i = 1; i <= doc.numPages; i++) {
+      // 循环点抛已中断（spec §7）：对齐 bash/webfetch 的 resolve 先例，让 office_read catch 透传
+      if (signal?.aborted) throw new Error('已中断');
       const page = await doc.getPage(i);
       const tc = await page.getTextContent();
       // TextItem | TextMarkedContent 联合类型：'str' in 收窄

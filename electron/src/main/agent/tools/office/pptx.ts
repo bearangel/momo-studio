@@ -18,7 +18,7 @@ function slideTexts(xml: string): string[] {
     .filter((t) => t.trim().length > 0);
 }
 
-export async function readPptx(abs: string): Promise<string> {
+export async function readPptx(abs: string, signal?: AbortSignal): Promise<string> {
   const zip = new AdmZip(abs);
   const slides = zip
     .getEntries()
@@ -36,6 +36,8 @@ export async function readPptx(abs: string): Promise<string> {
   if (slides.length === 0) return '(未发现幻灯片)';
   const parts: string[] = [];
   for (const [i, entry] of slides.entries()) {
+    // 循环点抛已中断（spec §7）：对齐 bash/webfetch 的 resolve 先例，让 office_read catch 透传
+    if (signal?.aborted) throw new Error('已中断');
     const texts = slideTexts(entry.getData().toString('utf-8'));
     parts.push(`## Slide ${i + 1}\n${texts.length > 0 ? texts.join('\n') : '(无文本)'}`);
     const note = notes.get(i + 1);

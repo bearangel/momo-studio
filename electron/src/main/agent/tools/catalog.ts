@@ -2,9 +2,9 @@
 // v1.6 能力配置的共享常量集中地。后续 Migration v16（builtin YAML defaultTools
 // 同步）、DefinitionEditor UI（工具勾选）、crud.ts（新建 custom agent 默认工具）
 // 都从这里 import，保证工具全集 / 安全最小集 / 类别分组三处定义一致。
-// v2.3 加入 apply_patch 后全集从 24 扩为 25；v2.1 加入 OfficeTools 八工具后
-// 全集从 25 扩为 33；安全最小集保持 v1.5 范围不变（apply_patch 多文件原子破坏力
-// 高，OfficeTools 含文件覆盖/复制，按设计也不放进默认勾选集）。
+// v2.3 加 apply_patch 扩至 25；v2.1 办公工具组扩至 33（产品版本序，非 capability-config 版本序）。
+// 安全最小集保持 v1.5 范围不变（apply_patch 多文件原子破坏力高，OfficeTools 含文件覆盖/复制，
+// 按设计也不放进默认勾选集）。
 //
 // 设计依据：docs/plans/2026-08-11-v1.6-capability-config.md「共享常量」块。
 // 工具名必须与 tools/index.ts 注册中心实际暴露的 name 字段一一对应。

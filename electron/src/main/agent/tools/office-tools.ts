@@ -18,8 +18,8 @@ import { createDocx, parseDocSections, readDocx } from './office/docx';
 import { createPptx, parsePptxSlides, readPptx } from './office/pptx';
 import { createPdf, parsePdfBlocks, readPdf } from './office/pdf';
 
-/** 各格式读取器注册表 */
-const READERS: Partial<Record<OfficeFormat, (abs: string) => Promise<string>>> = {
+/** 各格式读取器注册表：signal 沿 ctx.abortSignal 透传，helper 循环点自决 throw '已中断'（spec §7） */
+const READERS: Partial<Record<OfficeFormat, (abs: string, signal?: AbortSignal) => Promise<string>>> = {
   xlsx: readXlsxPreview,
   docx: readDocx,
   pptx: readPptx,
@@ -255,14 +255,20 @@ export class OfficeTools implements ToolModule {
         if (!reader) throw new Error(`该格式读取器尚未接线: ${fmt}`);
         let out: string;
         try {
-          out = await reader(abs);
+          out = await reader(abs, ctx.abortSignal);
         } catch (err) {
-          throw new Error(`读取失败（文件损坏或非预期格式）: ${(err as Error).message}`);
+          const msg = (err as Error).message;
+          // 中断透传：与 bash/webfetch 的 resolve '已中断' 对齐（spec §7）
+          if (msg === '已中断') return '已中断';
+          // 规范文案透传：spec §10「无文本层」明确为扫描版语义，不被「文件损坏」前缀稀释
+          if (msg.includes('无文本层')) throw err;
+          throw new Error(`读取失败（文件损坏或非预期格式）: ${msg}`);
         }
         ctx.readTracker?.add(ctx.streamSessionId, abs);
         return truncateString(out, OUTPUT_LIMITS.office_read);
       }
       case 'office_read_cells': {
+        if (ctx.abortSignal?.aborted) return '已中断';
         const rel = parseStringArg(args.path, 'path');
         const abs = ctx.wsFs.assertInWorkspace(rel);
         if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${rel}`);
@@ -275,6 +281,7 @@ export class OfficeTools implements ToolModule {
           out = await readXlsxCells(abs, sheet, range, formulas);
         } catch (err) {
           const msg = (err as Error).message;
+          if (msg === '已中断') return '已中断';
           if (msg.includes('sheet 不存在') || msg.includes('读取区域过大') || msg.includes('range')) throw err;
           throw new Error(`读取失败（文件损坏或非预期格式）: ${msg}`);
         }
