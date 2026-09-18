@@ -14,10 +14,12 @@ import { assertOfficeFormat, type OfficeFormat } from './office/format';
 import {
   createXlsx, parseExcelWriteOps, parseSheetInits, readXlsxCells, readXlsxPreview, writeXlsxOps,
 } from './office/excel';
+import { createDocx, parseDocSections, readDocx } from './office/docx';
 
-/** 各格式读取器注册表（docx / pptx / pdf 由后续任务补齐） */
+/** 各格式读取器注册表（pptx / pdf 由后续任务补齐） */
 const READERS: Partial<Record<OfficeFormat, (abs: string) => Promise<string>>> = {
   xlsx: readXlsxPreview,
+  docx: readDocx,
 };
 
 /** Read-before-Edit 包装：office 场景补充 office_read 指引 */
@@ -128,11 +130,42 @@ const COPY_DEF: LLMToolDef = {
   },
 };
 
+const OFFICE_CREATE_DOC_DEF: LLMToolDef = {
+  name: 'office_create_doc',
+  description:
+    '生成 Word 文档（.docx）：按 sections 顺序输出标题（1-4 级）/段落/列表（有序或无序）/表格。' +
+    '目标已存在时须先 office_read 读取后覆盖。参考模板重写 = office_read 读模板 → 按其结构给 sections 重新生成。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对 workspace 的输出路径（.docx）' },
+      sections: {
+        type: 'array',
+        description: '内容序列',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['heading', 'para', 'list', 'table'] },
+            level: { type: 'number', description: 'heading 1-4，默认 1' },
+            text: { type: 'string', description: 'heading/para 正文' },
+            items: { type: 'array', items: { type: 'string' }, description: 'list 条目' },
+            ordered: { type: 'boolean', description: 'list 是否有序' },
+            header: { type: 'array', items: { type: 'string' }, description: 'table 表头' },
+            rows: { type: 'array', items: { type: 'array' }, description: 'table 数据行' },
+          },
+          required: ['type'],
+        },
+      },
+    },
+    required: ['path', 'sections'],
+  },
+};
+
 // ── ToolModule 实现 ──
 
 export class OfficeTools implements ToolModule {
   getDefs(): LLMToolDef[] {
-    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, COPY_DEF];
+    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, COPY_DEF];
   }
 
   handles(name: string): boolean {
@@ -209,6 +242,25 @@ export class OfficeTools implements ToolModule {
         fs.writeFileSync(abs, buf);
         ctx.readTracker?.add(ctx.streamSessionId, abs);
         return `已执行 ${ops.length} 个操作并写入: ${rel}`;
+      }
+      case 'office_create_doc': {
+        const rel = parseStringArg(args.path, 'path');
+        const abs = ctx.wsFs.assertInWorkspace(rel);
+        assertOfficeFormat(rel);
+        const existed = fs.existsSync(abs);
+        if (existed) assertReadForOffice(ctx, abs);
+        const sections = parseDocSections(args.sections);
+        const buf = await createDocx(sections);
+        recordChangeSafe(
+          buildRecordCtx('office_create_doc', ctx),
+          toJournalRelPath(ctx, rel),
+          existed ? 'modify' : 'create',
+          existed ? fs.readFileSync(abs) : null,
+          buf,
+        );
+        fs.writeFileSync(abs, buf);
+        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        return `Word 已${existed ? '覆盖' : '生成'}: ${rel}（${sections.length} 节）`;
       }
       case 'office_copy': {
         const fromRel = parseStringArg(args.from, 'from');
