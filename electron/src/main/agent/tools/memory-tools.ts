@@ -27,7 +27,7 @@ import type { MemoryEntry, SaveMemoryInput } from '../../storage/memories/repo';
 import type { LLMToolDef } from '../llm-provider';
 import { logToolCall } from './shared/audit';
 import { parseStringArg } from './shared/arg-parse';
-import { hasPendingUserTodos } from './todo-tools';
+import { hasUserTodos } from './todo-tools';
 import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
 import type { ToolContext, ToolModule } from './types';
 
@@ -90,7 +90,9 @@ export class MemoryTools implements ToolModule {
           '保存一条长期记忆供后续任务复用。kind：rule=规范 / preference=偏好 / knowledge=知识 / summary=摘要'
           + '（rule 与 preference 默认常驻注入每轮上下文）。scope 缺省 workspace（当前工作空间）；'
           + 'global=跨工作空间共享；session=仅本会话可见。'
-          + '仅在用户请求或明确受益时保存；记录系统性结论（如产品缺陷判定）前必须先核实原始证据（工具调用记录、错误信息等）。',
+          + '仅在用户请求或明确受益时保存；记录系统性结论（如产品缺陷判定）前必须先核实原始证据（工具调用记录、错误信息等）；'
+          + '涉及文件路径/存在性等事实断言的记忆，写入前先用工具实地核实，并在内容中注明核实日期（例：「已核实(2026-09-18)：…」）'
+          + '——陈旧记忆会在后续注入时被系统标注「使用前请核实」。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -183,9 +185,11 @@ export class MemoryTools implements ToolModule {
     };
     const entry = await getMemoryProvider().saveMemory(input);
     const base = `已保存记忆（id=${entry.id}，kind=${entry.kind}，常驻=${entry.pinned ? '是' : '否'}）`;
-    // 软门禁（spec §5.3）：无 user 挂靠追加警告行，不阻断——主路径文本保持
-    // 「已保存记忆」开头，便于消费方按前缀判定成功路径
-    if (!hasPendingUserTodos(ctx.streamSessionId)) {
+    // 软门禁（spec §5.3，F7 谓词修正）：本流从未有过 user 待办 → 追加警告行，
+    // 不阻断——主路径文本保持「已保存记忆」开头，便于消费方按前缀判定成功路径。
+    // 谓词用 hasUserTodos（任意状态）：收尾沉淀发生在全部待办完成之后，
+    // hasPendingUserTodos 在该时刻恒 false 会误伤正常收尾。
+    if (!hasUserTodos(ctx.streamSessionId)) {
       return `${base}\n${SIDEEFFECT_UNLINKED_WARNING}`;
     }
     return base;

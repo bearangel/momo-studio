@@ -79,6 +79,34 @@ describe('副作用软门禁', () => {
     expect(out).toContain('已保存记忆'); // 主路径文本未改
     expect(out).toContain('⚠'); // 警告行追加
   });
+
+  it('F7：全部 user 待办已完成的收尾沉淀 → 不再误报警告', async () => {
+    __setTodosForTest(sid, [
+      { id: 't1', subject: '已完成事项', status: 'completed', source: 'user' },
+      { id: 't2', subject: 'agent 备忘', status: 'pending', source: 'agent' },
+    ]);
+    const { MemoryTools } = await import('../../../src/main/agent/tools/memory-tools');
+    const out = await new MemoryTools().execute(
+      'memory_save',
+      { kind: 'knowledge', content: '收尾沉淀：测试结论' },
+      mkCtx(sid),
+    );
+    expect(out).toContain('已保存记忆');
+    expect(out).not.toContain('⚠'); // 有 user 挂靠史（已完成）——收尾沉淀合法
+  });
+
+  it('F7：仅有 agent 待办（无 user 挂靠史）→ 仍警告', async () => {
+    __setTodosForTest(sid, [
+      { id: 't1', subject: 'agent 备忘', status: 'in_progress', source: 'agent' },
+    ]);
+    const { MemoryTools } = await import('../../../src/main/agent/tools/memory-tools');
+    const out = await new MemoryTools().execute(
+      'memory_save',
+      { kind: 'summary', content: '自发的记忆' },
+      mkCtx(sid),
+    );
+    expect(out).toContain('⚠');
+  });
 });
 
 // ─── T4 审查遗留项：谓词一致性回归锁 ────────────────────────────────────────

@@ -144,6 +144,10 @@ compact(summary) 被调用（summary 校验不变：≥50 字符，过短拒绝�
 ```typescript
 hasPendingUserTodos(streamSessionId): boolean
   = todoStore.get(streamSessionId)?.some(t => t.status !== 'completed' && t.source === 'user') ?? false
+
+// F7（2026-09-18 修订）：memory_save 软门禁专用谓词——user 来源待办存在即挂靠（任意状态）
+hasUserTodos(streamSessionId): boolean
+  = todoStore.get(streamSessionId)?.some(t => t.source === 'user') ?? false
 ```
 
 ### 5.3 软门禁（`create_task` / `memory_save`）
@@ -151,11 +155,14 @@ hasPendingUserTodos(streamSessionId): boolean
 执行成功后追加判定，沿 `NO_ASSIGNMENT_WARNING` 顶层附加模式（`{...result, warning}`，向后兼容，不阻断）：
 
 ```
-if (!hasPendingUserTodos(ctx.streamSessionId)) → 附 warning：
+create_task: if (!hasPendingUserTodos(ctx.streamSessionId)) → 附 warning
+memory_save: if (!hasUserTodos(ctx.streamSessionId))       → 附 warning（F7）
 「⚠ 本操作未挂靠到本轮用户请求（当前无 source=user 待办项）。若确属用户
   本轮请求范围，请先用 todowrite 建立对应 user 待办；若属你自行发起的工作，
   请先向用户说明并获同意。本警告不阻断操作。」
 ```
+
+**F7 谓词分叉依据（2026-09-18 实测）**：收尾沉淀（保存测试结论 / 经验记忆）天然发生在全部待办完成之后——`hasPendingUserTodos` 在该时刻恒 false，把最正常的任务收尾动作误报为「未挂靠」。memory_save 是沉淀类操作，挂靠判定放宽到「本轮存在过 user 待办」（`hasUserTodos`）；create_task 是开新工作，维持未完成挂靠判定（`hasPendingUserTodos`）不变。
 
 **dispatch 不门禁**：dispatch 是回合内同步等待操作（结果回传前 PM 不脱离本回合），越界面远小于持久化副作用。
 
