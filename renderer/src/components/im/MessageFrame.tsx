@@ -17,6 +17,8 @@ interface Props {
   /** 发送者 Matrix userId（@xxx:server）；用于头像 emoji 与回退短名 */
   sender: string;
   isSelf: boolean;
+  /** 根元素锚点 id（透传给 DOM）——头部任务进度按钮「定位到消息」用（如 `msg-{messageId}`） */
+  id?: string;
   /** bot 配置名（优先于 shortName）；自己消息不显示名字 */
   senderName?: string;
   /** 消息时间戳（epoch ms）——agent 消息显示在名字行旁，自己消息显示在气泡下方 */
@@ -47,6 +49,7 @@ interface Props {
 export function MessageFrame({
   sender,
   isSelf,
+  id,
   senderName,
   timestamp,
   bubbleClassName,
@@ -56,6 +59,7 @@ export function MessageFrame({
 }: Props) {
   return (
     <div
+      id={id}
       className={cn('flex gap-2 px-4 py-1', isSelf ? 'flex-row-reverse' : 'flex-row')}
       style={{ minWidth: 0, overflow: 'hidden' }}
     >

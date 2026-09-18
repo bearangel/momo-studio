@@ -14,6 +14,7 @@ import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
+import { TaskProgressButton } from '../im/TaskProgressButton';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -76,6 +77,7 @@ export function MiddlePanel() {
             </span>
             {activeSessionId && <RoomToolBudgetBadge sessionId={activeSessionId} />}
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
+            {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
           </div>
           <MessageList />
           <InputToolbar

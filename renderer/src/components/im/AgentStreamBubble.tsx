@@ -132,6 +132,7 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
     <MessageFrame
       sender={message.sender}
       isSelf={false}
+      id={`msg-${message.id}`}
       senderName={senderName}
       bubbleClassName="group bg-surface-2 text-primary border border-subtle"
       maxWidthPct={90}
