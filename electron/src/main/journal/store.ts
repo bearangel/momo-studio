@@ -29,9 +29,11 @@ export interface JournalStore {
   countAll(): number;
   /** 全部 workspace 的 blob 对象磁盘字节总和（配额计量） */
   sumBlobBytes(): number;
-  /** 内容寻址写盘，幂等（同 hash 已存在即跳过） */
-  writeBlob(workspaceId: string, hash: string, content: string): void;
+  /** 内容寻址写盘，幂等（同 hash 已存在即跳过）。v2.1 二进制扩展：接受 Buffer。 */
+  writeBlob(workspaceId: string, hash: string, content: string | Buffer): void;
   readBlob(workspaceId: string, hash: string): string | null;
+  /** v2.1 二进制扩展：字节读取（撤销恢复二进制文件用）；文本 blob 读回即其 utf-8 字节 */
+  readBlobBytes(workspaceId: string, hash: string): Buffer | null;
   /** 引用计数（before_hash/after_hash 命中该 hash 的总行数）归零时物理删除对象文件 */
   dropBlobIfUnreferenced(workspaceId: string, hash: string): void;
 }
@@ -210,17 +212,22 @@ export function createJournalStore(db: DB): JournalStore {
     sumBlobBytes(): number {
       return walkDirBytes(path.join(resolveUserDataDir(), 'journal'));
     },
-    writeBlob(workspaceId: string, hash: string, content: string): void {
+    writeBlob(workspaceId: string, hash: string, content: string | Buffer): void {
       const file = resolveJournalDir(workspaceId, hash);
       // 内容寻址：同 hash 即同内容，已存在直接跳过（幂等，不重写不覆盖）
       if (fs.existsSync(file)) return;
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content, 'utf8');
+      fs.writeFileSync(file, typeof content === 'string' ? Buffer.from(content, 'utf-8') : content);
     },
     readBlob(workspaceId: string, hash: string): string | null {
       const file = resolveJournalDir(workspaceId, hash);
       if (!fs.existsSync(file)) return null;
-      return fs.readFileSync(file, 'utf8');
+      return fs.readFileSync(file, 'utf-8');
+    },
+    readBlobBytes(workspaceId: string, hash: string): Buffer | null {
+      const file = resolveJournalDir(workspaceId, hash);
+      if (!fs.existsSync(file)) return null;
+      return fs.readFileSync(file);
     },
     dropBlobIfUnreferenced(workspaceId: string, hash: string): void {
       const { c } = stmtRefCount.get(workspaceId, hash, hash) as { c: number };

@@ -12,6 +12,8 @@
 // 期由启动链调 setJournalStore 注入；测试经 __setJournalStoreForTest 注入
 // 真实 createJournalStore(getDb())——mock store 会掩盖 hashContent sha256
 // 真实语义与 blob 落盘路径漂移（momo-test-rules 铁律 1 + 5）。
+//
+// v2.1 二进制扩展：before/after 泛化 string|Buffer（office 工具组；spec 2026-09-18 §6.3）。
 
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -75,13 +77,16 @@ function requireStore(): JournalStore {
   return store;
 }
 
-/** sha256 hex 内容寻址；与 store.writeBlob 内容寻址存储契约一致 */
-export function hashContent(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+/** sha256 hex 内容寻址；与 store.writeBlob 内容寻址存储契约一致。
+ * v2.1 二进制扩展：接受 Buffer（office 文档等 zip 容器）；字符串按 utf-8 编码后
+ * hash——同一字节流两种传法同 hash，既有文本条目的撤销守卫语义不变。 */
+export function hashContent(content: string | Buffer): string {
+  const buf = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+  return createHash('sha256').update(buf).digest('hex');
 }
 
 /**
- * 记一笔变更。先 hash before/after 字符串（null 跳过对应 blob 落盘），再写
+ * 记一笔变更。先 hash before/after 内容（string|Buffer；null 跳过对应 blob 落盘），再写
  * 条目入 state.db。返回插入的 entry（带生成 id 与 createdAt），便于工具层
  * 在同一调用栈内联引用或回传。
  *
@@ -96,8 +101,8 @@ export function recordChange(
   rc: RecordCtx,
   filePath: string,
   op: JournalOp,
-  before: string | null,
-  after: string | null,
+  before: string | Buffer | null,
+  after: string | Buffer | null,
   oldPath?: string,
 ): JournalEntry {
   const s = requireStore();
@@ -117,8 +122,8 @@ function assembleEntry(
   rc: RecordCtx,
   filePath: string,
   op: JournalOp,
-  before: string | null,
-  after: string | null,
+  before: string | Buffer | null,
+  after: string | Buffer | null,
   oldPath?: string,
 ): JournalEntry {
   const s = requireStore();
