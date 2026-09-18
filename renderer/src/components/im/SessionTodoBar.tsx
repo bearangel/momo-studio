@@ -191,6 +191,9 @@ export function SessionTodoBar() {
         data-testid="todo-summary"
         onClick={() => setExpanded((v) => !v)}
         onKeyDown={(e) => {
+          // 只处理摘要行自身的键盘事件——嵌套按钮（返回最新/历史待办/关闭）的
+          // Enter/Space 必须走按钮原生激活，不能被这里吞掉（Task 1 审查修订）
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             setExpanded((v) => !v);

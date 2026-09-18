@@ -232,4 +232,100 @@ describe('SessionTodoBar v2', () => {
     expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
     expect(summaryProgress()).toBe('0/1');
   });
+
+  // --- Task 2：页签仅多流式 + 固定语义 ---
+
+  /** 双候选夹具：m1（3 项完成 2）+ m2（3 项完成 1），状态可覆写 */
+  function setupTwo(
+    s1: StreamState['status'] = 'done',
+    s2: StreamState['status'] = 'streaming',
+  ): void {
+    setStores(
+      [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws')],
+      [
+        ['m1', mkStream('m1', mkTodos(3, 2), s1)],
+        ['m2', mkStream('m2', mkTodos(3, 1), s2)],
+      ],
+    );
+  }
+
+  function activeTabProgress(): string | null {
+    const tabs = screen.getAllByRole('tab');
+    const activeTab = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
+    const m = activeTab?.textContent?.match(/(\d+\/\d+)/);
+    return m?.[1] ?? null;
+  }
+
+  it('全终态：无页签，显示最新候选摘要（页签堆积痛点锁）', () => {
+    setupTwo('done', 'done');
+    render(<SessionTodoBar />);
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(summaryProgress()).toBe('1/3'); // m2 最新
+  });
+
+  it('单流式：无页签，流式候选成为摘要（自动跟随保留）', () => {
+    setupTwo('done', 'streaming');
+    render(<SessionTodoBar />);
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(summaryProgress()).toBe('1/3'); // m2 流式优先于 m1 历史
+  });
+
+  it('双流式：页签出现，自动跟随最后一个流式候选', () => {
+    setupTwo('streaming', 'streaming');
+    render(<SessionTodoBar />);
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(activeTabProgress()).toBe('1/3');
+  });
+
+  it('点击页签固定：另一流式更新不抢；固定流转终态解除，跟随剩余流式', () => {
+    setupTwo('streaming', 'streaming');
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ })); // 固定 m1
+    expect(activeTabProgress()).toBe('2/3');
+    // m2 仍流式——固定不抢
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 2), 'streaming')],
+          ['m2', mkStream('m2', mkTodos(3, 2), 'streaming')],
+        ]),
+      });
+    });
+    expect(activeTabProgress()).toBe('2/3');
+    // m1 → done：解除固定且页签消失（仅剩 m2 流式）→ 自动跟随 m2——改读摘要行
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 3), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 2), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(summaryProgress()).toBe('2/3'); // m2 的 2/3
+  });
+
+  it('嵌套按钮的 Enter 不触发摘要行展开切换（键盘守卫回归锁）', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    // 焦点在关闭按钮上按 Enter——事件冒泡到摘要行也不得切换展开
+    fireEvent.keyDown(screen.getByRole('button', { name: '关闭会话任务条' }), { key: 'Enter' });
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('全部转终态：页签消失，回最新候选摘要', () => {
+    setupTwo('streaming', 'streaming');
+    render(<SessionTodoBar />);
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 3), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 3), 'done')],
+        ]),
+      });
+    });
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(summaryProgress()).toBe('3/3'); // m2 最新
+  });
 });
