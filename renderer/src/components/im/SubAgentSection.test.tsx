@@ -82,7 +82,7 @@ describe('SubAgentSection — segments 时间线', () => {
     expect(screen.queryByLabelText('子 agent 流式光标')).not.toBeInTheDocument();
   });
 
-  it('stream 带 todos 也不渲染 TodoSection（待办已移至会话底部 SessionTodoBar）', () => {
+  it('stream 带 todos 渲染嵌套区内联 TodoSection（v3 恢复）', () => {
     render(
       <SubAgentSection
         stream={makeStream({
@@ -93,7 +93,8 @@ describe('SubAgentSection — segments 时间线', () => {
         })}
       />,
     );
-    expect(screen.queryByText('任务')).not.toBeInTheDocument();
+    expect(screen.getByText('任务')).toBeInTheDocument();
+    expect(screen.getByText('0/2（0%）')).toBeInTheDocument();
   });
 });
 

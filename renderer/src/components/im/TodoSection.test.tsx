@@ -1,41 +1,47 @@
 // renderer/src/components/im/TodoSection.test.tsx
 //
-// TodoSection v2 契约：纯列表渲染（header/展开/自动展开语义已移至 SessionTodoBar，
-// spec 2026-09-18-session-todo-bar-ux-refine-design.md §4）。
+// TodoSection v1 语义恢复（v3 回归气泡内联）：header 进度 / 流式自动展开 /
+// 完成自动折叠 / 手动开合 / 空数组。条目渲染断言经 TodoList 透传。
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { TodoItem } from '../../ipc/types';
 import { TodoSection } from './TodoSection';
 
 const todos: TodoItem[] = [
-  { id: 't1', subject: '已完成项', status: 'completed' },
-  { id: 't2', subject: '进行中项', status: 'in_progress' },
-  { id: 't3', subject: '待办项', status: 'pending' },
+  { id: 't1', subject: '条目一', status: 'completed' },
+  { id: 't2', subject: '条目二', status: 'in_progress' },
 ];
 
-describe('TodoSection（纯列表，v2 契约）', () => {
-  it('渲染全部条目（带序号）', () => {
-    render(<TodoSection todos={todos} />);
-    expect(screen.getByText('1. 已完成项')).toBeInTheDocument();
-    expect(screen.getByText('2. 进行中项')).toBeInTheDocument();
-    expect(screen.getByText('3. 待办项')).toBeInTheDocument();
+describe('TodoSection（v1 折叠语义恢复）', () => {
+  it('流式默认展开：header 进度 + 列表条目可见', () => {
+    render(<TodoSection todos={todos} isStreaming={true} />);
+    expect(screen.getByText('1/2（50%）')).toBeInTheDocument();
+    expect(screen.getByText('2. 条目二')).toBeInTheDocument();
   });
 
-  it('完成态条目 line-through 弱化', () => {
-    const { container } = render(<TodoSection todos={todos} />);
-    const first = container.querySelector('li');
-    expect(first).not.toBeNull();
-    expect(first!.className).toContain('line-through');
+  it('非流式默认折叠：仅 header，条目不可见', () => {
+    render(<TodoSection todos={todos} isStreaming={false} />);
+    expect(screen.getByText('1/2（50%）')).toBeInTheDocument();
+    expect(screen.queryByText('2. 条目二')).not.toBeInTheDocument();
   });
 
-  it('进行中条目 accent 高亮', () => {
-    const { container } = render(<TodoSection todos={todos} />);
-    const items = container.querySelectorAll('li');
-    expect(items[1]!.className).toContain('text-accent-600');
+  it('流式转完成：自动折叠', () => {
+    const { rerender } = render(<TodoSection todos={todos} isStreaming={true} />);
+    expect(screen.getByText('2. 条目二')).toBeInTheDocument();
+    rerender(<TodoSection todos={todos} isStreaming={false} />);
+    expect(screen.queryByText('2. 条目二')).not.toBeInTheDocument();
+  });
+
+  it('手动开合：点击 header 切换', () => {
+    render(<TodoSection todos={todos} isStreaming={false} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('2. 条目二')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.queryByText('2. 条目二')).not.toBeInTheDocument();
   });
 
   it('空数组返回 null', () => {
-    const { container } = render(<TodoSection todos={[]} />);
+    const { container } = render(<TodoSection todos={[]} isStreaming={true} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

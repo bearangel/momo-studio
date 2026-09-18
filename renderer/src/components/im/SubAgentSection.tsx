@@ -18,6 +18,7 @@ import { ThinkingSection } from './ThinkingSection';
 import { ToolCallChip } from './ToolCallChip';
 import { ContextGroupChip } from './ContextGroupChip';
 import { MarkdownBody } from './MarkdownBody';
+import { TodoSection } from './TodoSection';
 
 interface Props {
   /** 子 agent 的流式聚合状态（从 streams Map 按 subStreamSessionId 查找后传入） */
@@ -31,6 +32,9 @@ export function SubAgentSection({ stream }: Props) {
     // 左边框竖线（紫色=委派语义，与 DispatchChip 头行 tint 同源）+ 低对比度底色：
     // 视觉上把子 agent 工作区锚定到 dispatch chip 下方
     <div className="my-1 rounded-r-lg border-l-2 border-status-violet bg-surface-1 py-1 pl-2 pr-2">
+      {stream.todos.length > 0 && (
+        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
+      )}
       {groupToolSegments(stream.segments).map((seg, i, arr) => {
         const isLastSegment = i === arr.length - 1;
         switch (seg.kind) {

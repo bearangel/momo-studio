@@ -27,6 +27,7 @@ import { ThinkingSection } from './ThinkingSection';
 import { ToolCallChip } from './ToolCallChip';
 import { ContextGroupChip } from './ContextGroupChip';
 import { MarkdownBody } from './MarkdownBody';
+import { TodoSection } from './TodoSection';
 import { CopyButton } from '../ui/CopyButton';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
@@ -137,6 +138,9 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
       fillWidth
       timestamp={message.createdAt}
     >
+      {stream.todos.length > 0 && (
+        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
+      )}
       {renderSegments.map((seg, i) => {
         const isLastSegment = i === renderSegments.length - 1;
         switch (seg.kind) {

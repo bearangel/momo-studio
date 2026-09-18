@@ -9,7 +9,6 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { CodeEditor } from '../editor/CodeEditor';
 import { MessageList } from '../im/MessageList';
-import { SessionTodoBar } from '../im/SessionTodoBar';
 import { MentionInput } from '../im/MentionInput';
 import { MembersPanel } from '../im/MembersPanel';
 import { InputToolbar } from '../im/InputToolbar';
@@ -79,7 +78,6 @@ export function MiddlePanel() {
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
           </div>
           <MessageList />
-          <SessionTodoBar />
           <InputToolbar
             showMembers={showMembers}
             onToggleMembers={() => setShowMembers((v) => !v)}
