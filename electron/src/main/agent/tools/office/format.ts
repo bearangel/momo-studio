@@ -27,6 +27,7 @@ export function assertOfficeFormat(fileName: string): OfficeFormat {
 
 /** 列字母 → 1-based 列号（A=1, Z=26, AA=27） */
 export function colToIndex(letters: string): number {
+  if (letters.length === 0) throw new Error('非法列字母: (空串)');
   let n = 0;
   for (const ch of letters.toUpperCase()) {
     const code = ch.charCodeAt(0);

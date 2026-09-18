@@ -28,6 +28,9 @@ describe('assertOfficeFormat', () => {
   it('支持格式原样通过', () => {
     expect(assertOfficeFormat('x.xlsx')).toBe('xlsx');
   });
+  it('非 Office 扩展名报「不支持的文档格式」', () => {
+    expect(() => assertOfficeFormat('a.txt')).toThrow(/不支持的文档格式/);
+  });
 });
 
 describe('parseRange', () => {
@@ -51,6 +54,12 @@ describe('colToIndex', () => {
     expect(colToIndex('A')).toBe(1);
     expect(colToIndex('Z')).toBe(26);
     expect(colToIndex('AA')).toBe(27);
+  });
+  it('非法字母拒绝', () => {
+    expect(() => colToIndex('A1')).toThrow(/非法列字母/);
+  });
+  it('colToIndex 空串拒绝', () => {
+    expect(() => colToIndex('')).toThrow(/非法列字母/);
   });
 });
 
