@@ -5,7 +5,7 @@
 // 新写的公式无缓存，显示空），需要精确计算时由 agent 在上下文中完成运算。
 
 import ExcelJS from 'exceljs';
-import { parseRange } from './format';
+import { parseRange, asString, asStringArray } from './format';
 
 export const PREVIEW_ROWS = 20;
 export const PREVIEW_COLS = 12;
@@ -102,4 +102,125 @@ export async function readXlsxCells(
     if (r === startRow) lines.push(`|${' --- |'.repeat(cols)}`);
   }
   return lines.join('\n');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 写链路：类型 + 窄化 + 序列化。返回 Buffer（调用方记账后落盘）。
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface ExcelSheetInit {
+  name: string;
+  headers?: string[];
+}
+
+/** sheets 参数窄化：缺省 [{name:'Sheet1'}]；name 必填且查重 */
+export function parseSheetInits(raw: unknown): ExcelSheetInit[] {
+  if (raw === undefined || raw === null) return [{ name: 'Sheet1' }];
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error('参数 sheets 缺失或不是非空数组');
+  const seen = new Set<string>();
+  return raw.map((s, i) => {
+    if (typeof s !== 'object' || s === null) throw new Error(`sheets[${i}] 不是对象`);
+    const rec = s as Record<string, unknown>;
+    const name = asString(rec.name, `sheets[${i}].name`);
+    if (seen.has(name)) throw new Error(`sheet 重名: ${name}`);
+    seen.add(name);
+    return {
+      name,
+      headers: rec.headers === undefined ? undefined : asStringArray(rec.headers, `sheets[${i}].headers`),
+    };
+  });
+}
+
+export type CellInput = string | number | boolean | null | { formula: string };
+
+export type ExcelWriteOp =
+  | { op: 'add_sheet'; name: string }
+  | { op: 'set_cells'; sheet: string; range?: string; values: CellInput[][] };
+
+function parseCellInput(v: unknown, what: string): CellInput {
+  if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    return v;
+  }
+  if (typeof v === 'object' && typeof (v as Record<string, unknown>).formula === 'string') {
+    return { formula: (v as Record<string, unknown>).formula as string };
+  }
+  throw new Error(`参数 ${what} 不是合法单元格值（string/number/boolean/null/{formula}）`);
+}
+
+export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error('参数 ops 缺失或不是非空数组');
+  return raw.map((o, i) => {
+    if (typeof o !== 'object' || o === null) throw new Error(`ops[${i}] 不是对象`);
+    const rec = o as Record<string, unknown>;
+    if (rec.op === 'add_sheet') {
+      return { op: 'add_sheet' as const, name: asString(rec.name, `ops[${i}].name`) };
+    }
+    if (rec.op === 'set_cells') {
+      const sheet = asString(rec.sheet, `ops[${i}].sheet`);
+      const range = typeof rec.range === 'string' ? rec.range : undefined;
+      if (!Array.isArray(rec.values) || rec.values.length === 0) {
+        throw new Error(`ops[${i}].values 缺失或不是非空二维数组`);
+      }
+      const values = rec.values.map((row, ri) => {
+        if (!Array.isArray(row)) throw new Error(`ops[${i}].values[${ri}] 不是数组`);
+        return row.map((c, ci) => parseCellInput(c, `ops[${i}].values[${ri}][${ci}]`));
+      });
+      return { op: 'set_cells' as const, sheet, range, values };
+    }
+    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells）`);
+  });
+}
+
+/** 建新 xlsx 骨架（可选列头），返回文件字节 */
+export async function createXlsx(sheets: ExcelSheetInit[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  for (const s of sheets) {
+    const ws = wb.addWorksheet(s.name);
+    if (s.headers) ws.addRow(s.headers);
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** 增量写：原字节 → 内存变更 → 新字节（一次序列化） */
+export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
+  await wb.xlsx.load(before as unknown as ArrayBuffer);
+  for (const op of ops) {
+    if (op.op === 'add_sheet') {
+      if (wb.getWorksheet(op.name)) throw new Error(`sheet 已存在: ${op.name}`);
+      wb.addWorksheet(op.name);
+      continue;
+    }
+    const ws = wb.getWorksheet(op.sheet);
+    if (!ws) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
+    const r =
+      op.range === undefined
+        ? { startRow: 1, startCol: 1, endRow: null, endCol: null }
+        : parseRange(op.range);
+    const startRow = r.startRow;
+    const startCol = r.startCol;
+    const maxLen = op.values.reduce((m, row) => Math.max(m, row.length), 0);
+    let endRow = r.endRow;
+    let endCol = r.endCol;
+    if (endRow === null || endCol === null) {
+      endRow = startRow + op.values.length - 1;
+      endCol = startCol + maxLen - 1;
+    } else if (endRow - startRow + 1 !== op.values.length || endCol - startCol + 1 !== maxLen) {
+      throw new Error(
+        `range 与 values 形状不一致：range 为 ${endRow - startRow + 1}×${endCol - startCol + 1}，values 为 ${op.values.length}×${maxLen}`,
+      );
+    }
+    for (const [ri, row] of op.values.entries()) {
+      for (const [ci, val] of row.entries()) {
+        const cell = ws.getCell(startRow + ri, startCol + ci);
+        if (val !== null && typeof val === 'object') {
+          cell.value = { formula: val.formula };
+        } else {
+          cell.value = val;
+        }
+      }
+    }
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }

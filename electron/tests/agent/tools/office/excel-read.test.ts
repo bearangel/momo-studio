@@ -69,3 +69,24 @@ describe('readXlsxCells', () => {
     await expect(readXlsxCells(bigAbs, '大表')).rejects.toThrow(/500/);
   });
 });
+
+describe('cellText 分支契约（Date/richText/hyperlink）', () => {
+  it('Date 单元格显示 ISO 日期', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('日期');
+    ws.getCell('A1').value = new Date(Date.UTC(2026, 0, 15));
+    const abs2 = path.join(tmpDir, 'date.xlsx');
+    await wb.xlsx.writeFile(abs2);
+    const out = await readXlsxCells(abs2, '日期');
+    expect(out).toContain('2026-01-15');
+  });
+  it('richText 拼接显示', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('富文本');
+    ws.getCell('A1').value = { richText: [{ text: '加粗' }, { text: '普通' }] } as ExcelJS.CellValue;
+    const abs2 = path.join(tmpDir, 'rich.xlsx');
+    await wb.xlsx.writeFile(abs2);
+    const out = await readXlsxCells(abs2, '富文本');
+    expect(out).toContain('加粗普通');
+  });
+});
