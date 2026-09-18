@@ -17,7 +17,7 @@ Momo Studio 的 agent 工具面目前覆盖代码域（file / git / lsp / shell 
 
 | 维度 | 裁定 |
 |---|---|
-| 操作范围 | **读取 + 生成**；精确编辑已有文档（改单元格 / 替换段落）与格式转换不在第一期 |
+| 操作范围 | **读取 + 生成**。docx / pptx / pdf 为生成式（不做段落级精确编辑、不做格式转换）；**Excel 例外含增量写**（add_sheet / set_cells 改已有文件）——计算型场景刚需，见下行 |
 | 格式范围 | **xlsx / docx / pptx / pdf 四件套**（读写都做） |
 | 模板能力 | **通用能力、按对话流按需采用**：用户随时提供模板文件，agent 读取其内容与结构后模仿产出——不建预置模板系统、不引入占位符填充机制。典型流：初稿 → 用户不满意 → 用户给模板 → agent `office_read` 模板 → 按其结构重新生成 |
 | Excel 特性 | 计算型读写：读多份 → 按用户规则运算 → 创建新表或写入新 sheet；需要 **sheet / 行 / 单元格级增量写**，不能只有整文件一次性生成 |
@@ -110,7 +110,8 @@ ops: [
 ```
 
 - 文件必须已存在且已读（assertRead 强制）
-- `set_cells.values` 二维数组，元素 `string | number | boolean | null | {formula: string}`；`range` 给左上角或完整区域，区域形状与 values 不一致报错
+- `set_cells.values` 二维数组，元素 `string | number | boolean | null | {formula: string}`
+- `range` 两种语义：给**左上角单格**（如 `A1`）→ 按 values 形状向右下展开，不校验；给**完整区域**（如 `A1:F50`）→ 区域行列数必须与 values 形状一致，否则报错。省略 `range` 等价 `A1`
 - sheet 不存在 → 报错（须显式 add_sheet，防误建）；一次工具调用记一条 modify（before=原文件字节，after=新文件字节）
 - 内部流程：exceljs load → 逐 op 内存变更 → buffer 落盘（一次 IO）
 
