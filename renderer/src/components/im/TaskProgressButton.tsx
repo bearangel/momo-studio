@@ -151,7 +151,8 @@ export function TaskProgressButton({ sessionId }: Props) {
               <X size={13} strokeWidth={1.75} aria-hidden />
             </button>
           </div>
-          <div className="max-h-[32vh] overflow-y-auto">
+          {/* 字号对齐气泡内联清单（TodoSection 容器同为 13px）——不设则继承根默认偏大 */}
+          <div className="max-h-[32vh] overflow-y-auto text-[13px]">
             <TodoList todos={todos} />
           </div>
           <button
