@@ -87,6 +87,11 @@ export function TaskProgressButton({ sessionId }: Props) {
     };
   }, [open]);
 
+  // 目标消失（清单清空）→ 收起浮层，防隐藏期 open 残留导致新目标出现时自动弹开（终审 Important 项）
+  useEffect(() => {
+    if (target === null) setOpen(false);
+  }, [target]);
+
   if (target === null) return null;
 
   const todos = target.stream.todos;

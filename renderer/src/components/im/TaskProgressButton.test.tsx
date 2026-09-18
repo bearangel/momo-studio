@@ -180,6 +180,26 @@ describe('TaskProgressButton', () => {
     }
   });
 
+  it('目标消失（清单清空）→ 浮层收起；新目标出现不自动弹开', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<TaskProgressButton sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: /查看会话任务/ }));
+    expect(screen.getByTestId('task-progress-popover')).toBeInTheDocument();
+    // todos 清空 → 目标消失 → 组件返回 null（浮层随之消失）
+    act(() => {
+      useStreamStore.setState({ streams: new Map([['m1', mkStream('m1', [], 'done')]]) });
+    });
+    expect(screen.queryByTestId('task-progress-popover')).not.toBeInTheDocument();
+    // 新目标出现 → 按钮回归但浮层保持关闭（open 不残留）
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([['m1', mkStream('m1', mkTodos(3, 0), 'streaming')]]),
+      });
+    });
+    expect(screen.getByRole('button', { name: /查看会话任务/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('task-progress-popover')).not.toBeInTheDocument();
+  });
+
   it('会话切换 → 浮层收起且目标跟随新会话', () => {
     // s2 清单需播种：spec §5 规定无 todos 流的消息不是目标（brief 原稿漏播种）
     setStores(
