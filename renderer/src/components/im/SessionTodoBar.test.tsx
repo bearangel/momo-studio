@@ -215,4 +215,67 @@ describe('SessionTodoBar', () => {
     });
     expect(activeTabProgress()).toBe('2/3');
   });
+
+  // --- Task 3：生命周期（✕ 关闭 / 增员重现 / 切会话重置）---
+
+  it('✕ 关闭后隐藏；同一候选流式更新不重现', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 0), 'streaming')]]);
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' }));
+    expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
+    // m1 继续 todowrite 更新（同 id，非增员）——保持隐藏
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([['m1', mkStream('m1', mkTodos(2, 1), 'streaming')]]),
+      });
+    });
+    expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
+  });
+
+  it('候选增员（新消息的流获得 todos）→ 任务条重现', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' }));
+    expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
+    // 新消息 m2 的流获得 todos → 增员 → 重现（自动跟随无流式 → 最后候选 m2）
+    act(() => {
+      useSessionStore.setState({
+        messagesBySession: new Map([
+          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws')]],
+        ]),
+      });
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(2, 1), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 0), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+  });
+
+  it('切换会话：dismissed / pinned 重置，显示新会话候选', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' })); // s1 关闭
+    // 切到 s2（自带候选）——关闭状态不跨会话
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: 's2',
+        messagesBySession: new Map([
+          ['s1', [mkMessage('m1', '@a:ws')]],
+          ['s2', [mkMessage('m-s2', '@c:ws')]],
+        ]),
+      });
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(2, 1), 'done')],
+          ['m-s2', mkStream('m-s2', mkTodos(1, 0), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
+    expect(screen.getByText('0/1（0%）')).toBeInTheDocument();
+  });
 });
