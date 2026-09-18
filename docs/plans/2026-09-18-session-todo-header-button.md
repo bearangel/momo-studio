@@ -550,9 +550,17 @@ describe('TaskProgressButton', () => {
           ['s2', [mkMessage('m-s2', '@c:ws')]],
         ]),
       });
+      // s2 的目标必须有 stream——无 stream 则无清单目标，按钮隐藏（0/1 断言无从谈起）
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(2, 1), 'done')],
+          ['m-s2', mkStream('m-s2', mkTodos(1, 0), 'done')],
+        ]),
+      });
     });
     rerender(<TaskProgressButton sessionId="s2" />);
     expect(screen.queryByTestId('task-progress-popover')).not.toBeInTheDocument();
+    // s2 目标：m-s2 需播种 stream（无 stream 则无目标，按钮隐藏——0/1 断言无从谈起）
     expect(screen.getByRole('button', { name: /查看会话任务/ }).textContent).toContain('0/1');
   });
 });
@@ -741,7 +749,7 @@ export function TaskProgressButton({ sessionId }: Props) {
 cd renderer && npx pnpm@9.0.0 vitest run src/components/im/TaskProgressButton.test.tsx
 ```
 
-Expected: PASS 8 用例（会话切换用例按 rerender 简化版落地后计数一致）。
+Expected: PASS 9 用例（含会话切换 rerender 版；其 store 播种须含 s2 的 m-s2 stream）。
 
 - [ ] **Step 5: 全量验证 + 提交**
 
