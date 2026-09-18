@@ -42,7 +42,7 @@ describe('buildPinnedView 注入预算', () => {
     const e2 = entry({ content: 'B'.repeat(900) });
     const e3 = entry({ content: 'C'.repeat(900) });
     const view = buildPinnedView({
-      globalPinned: [e1, e2, e3], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [],
+      globalPinned: [e1, e2, e3], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [], now: 10_000_000_000,
     });
     expect(view.pinnedIds).toEqual([e1.id, e2.id]);
     expect(view.truncatedCount).toBe(1);
@@ -53,7 +53,7 @@ describe('buildPinnedView 注入预算', () => {
   });
 
   it('全空 parts：返回空视图（不注入空段）', () => {
-    const view = buildPinnedView({ globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [] });
+    const view = buildPinnedView({ globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [], now: 10_000_000_000 });
     expect(view).toEqual({ hint: '', truncatedCount: 0, pinnedIds: [] });
   });
 
@@ -61,7 +61,7 @@ describe('buildPinnedView 注入预算', () => {
     const short = buildPinnedView({
       globalPinned: [], workspacePinned: [], sessionPinned: [],
       sessionSummary: { summary: '短摘要应全部注入', coveredUntil: 1, updatedAt: 1 },
-      catalog: [],
+      catalog: [], now: 10_000_000_000,
     });
     expect(short.hint).toContain('### 本会话背景摘要');
     expect(short.hint).toContain('短摘要应全部注入');
@@ -71,7 +71,7 @@ describe('buildPinnedView 注入预算', () => {
     const long = buildPinnedView({
       globalPinned: [], workspacePinned: [], sessionPinned: [],
       sessionSummary: { summary: 'x'.repeat(1000) + marker, coveredUntil: 1, updatedAt: 1 },
-      catalog: [],
+      catalog: [], now: 10_000_000_000,
     });
     expect(long.hint).not.toContain(marker);
   });
@@ -80,7 +80,7 @@ describe('buildPinnedView 注入预算', () => {
     const pinned = entry({ content: '常驻规范条目' });
     const cat = entry({ kind: 'knowledge', pinned: false, content: 'X'.repeat(30) + '超出预览长度的尾部内容' });
     const view = buildPinnedView({
-      globalPinned: [pinned], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [cat],
+      globalPinned: [pinned], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [cat], now: 10_000_000_000,
     });
     expect(view.hint).toContain('### 可检索记忆目录');
     expect(view.hint).toContain(`- (knowledge) ${'X'.repeat(30)}`);
@@ -94,7 +94,7 @@ describe('buildPinnedView 注入预算', () => {
     const view = buildPinnedView({
       globalPinned: [], workspacePinned: [], sessionPinned: [sp1, sp2],
       sessionSummary: { summary: '本会话摘要正文', coveredUntil: 1, updatedAt: 1 },
-      catalog: [],
+      catalog: [], now: 10_000_000_000,
     });
     expect(view.hint).toContain('### 会话记忆');
     expect(view.hint).toContain('会话常驻：优先用 vitest');
@@ -110,9 +110,52 @@ describe('buildPinnedView 注入预算', () => {
     const catalog = Array.from({ length: 35 }, (_, i) =>
       entry({ kind: 'knowledge', pinned: false, content: `目录条目 ${String(i).padStart(2, '0')}` }));
     const view = buildPinnedView({
-      globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog,
+      globalPinned: [], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog, now: 10_000_000_000,
     });
     // 35 条合并限量 30，溢出 5 条计入；行短不触发 1000 字符预算
     expect(view.truncatedCount).toBe(5);
+  });
+});
+
+// ─── F14：常驻记忆陈旧度标注 ────────────────────────────────────────────────
+
+describe('buildPinnedView 记忆陈旧度（F14）', () => {
+  const NOW = 10_000_000_000_000; // epoch ms 基准
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('超过 7 天未更新的常驻条目追加「保存于 N 天前，使用前请核实」', () => {
+    const stale = entry({ content: '设计事实源位于 design/color-tokens.json', updatedAt: NOW - 30 * DAY });
+    const view = buildPinnedView({
+      globalPinned: [stale], workspacePinned: [], sessionPinned: [], sessionSummary: null, catalog: [], now: NOW,
+    });
+    expect(view.hint).toContain('设计事实源位于 design/color-tokens.json（保存于 30 天前，使用前请核实）');
+  });
+
+  it('7 天内更新的条目不标注（低噪声）', () => {
+    const fresh = entry({ content: '刚核实的规范', updatedAt: NOW - 3 * DAY });
+    const view = buildPinnedView({
+      globalPinned: [], workspacePinned: [fresh], sessionPinned: [], sessionSummary: null, catalog: [], now: NOW,
+    });
+    expect(view.hint).toContain('刚核实的规范');
+    expect(view.hint).not.toContain('使用前请核实');
+  });
+
+  it('边界：恰好 7 天不标注，7 天 + 1 秒标注', () => {
+    const edge = entry({ content: '边界条目A', updatedAt: NOW - 7 * DAY });
+    const over = entry({ content: '边界条目B', updatedAt: NOW - 7 * DAY - 1000 });
+    const view = buildPinnedView({
+      globalPinned: [edge], workspacePinned: [over], sessionPinned: [], sessionSummary: null, catalog: [], now: NOW,
+    });
+    expect(view.hint).toContain('- 边界条目A\n');
+    expect(view.hint).toContain('边界条目B（保存于 7 天前，使用前请核实）');
+  });
+
+  it('会话层常驻条目同样标注（三段一致）', () => {
+    const sp = entry({ scope: 'session', workspaceId: 'ws1', sessionId: 's1', content: '会话陈旧记忆', updatedAt: NOW - 10 * DAY });
+    const view = buildPinnedView({
+      globalPinned: [], workspacePinned: [], sessionPinned: [sp],
+      sessionSummary: { summary: 'x', coveredUntil: 1, updatedAt: 1 }, catalog: [], now: NOW,
+    });
+    expect(view.hint).toContain('会话陈旧记忆（保存于 10 天前，使用前请核实）');
   });
 });

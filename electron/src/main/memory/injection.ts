@@ -15,6 +15,11 @@ export interface PinnedParts {
   sessionPinned: MemoryEntry[];  // 会话层常驻条目（子 agent sessionId=null 时为空数组）
   sessionSummary: SessionSummaryRow | null;
   catalog: MemoryEntry[];       // 非 pinned 检索型目录行（各路已 SQL 限量；合并后超 CATALOG_MAX_ROWS 计入截断）
+  /**
+   * F14：计算记忆陈旧度的基准时刻（epoch ms）。显式传入保持纯函数可测；
+   * 生产调用方传 Date.now()。
+   */
+  now: number;
 }
 
 export interface PinnedMemoryView {
@@ -49,15 +54,30 @@ function section(title: string, lines: string[]): string | null {
   return `### ${title}\n${lines.join('\n')}`;
 }
 
+/** F14：陈旧阈值——超过 7 天未更新的常驻记忆标注核实提醒 */
+export const MEMORY_STALENESS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * F14：常驻条目渲染行——陈旧条目追加核实提醒（实测案例：记忆声称某事实源文件
+ * 存在、实际不存在，无任何时效信号导致 agent 反复采信）。目录预览行不标注
+ * （预览本身已是低信任形态）。
+ */
+function pinnedLine(e: MemoryEntry, now: number): string {
+  const age = now - e.updatedAt;
+  if (age <= MEMORY_STALENESS_MS) return `- ${e.content}`;
+  const days = Math.floor(age / (24 * 60 * 60 * 1000));
+  return `- ${e.content}（保存于 ${days} 天前，使用前请核实）`;
+}
+
 export function buildPinnedView(parts: PinnedParts): PinnedMemoryView {
   const g = takeWithinBudget(parts.globalPinned, BUDGET_GLOBAL);
   const w = takeWithinBudget(parts.workspacePinned, BUDGET_WORKSPACE);
   const sp = takeWithinBudget(parts.sessionPinned, BUDGET_SESSION_PINNED);
   const sections: string[] = [];
 
-  const gSec = section('全局（用户偏好与通用规范）', g.kept.map((e) => `- ${e.content}`));
+  const gSec = section('全局（用户偏好与通用规范）', g.kept.map((e) => pinnedLine(e, parts.now)));
   if (gSec) sections.push(gSec);
-  const wSec = section('项目记忆（workspace 规范）', w.kept.map((e) => `- ${e.content}`));
+  const wSec = section('项目记忆（workspace 规范）', w.kept.map((e) => pinnedLine(e, parts.now)));
   if (wSec) sections.push(wSec);
 
   if (parts.sessionSummary) {
@@ -66,7 +86,7 @@ export function buildPinnedView(parts: PinnedParts): PinnedMemoryView {
   }
 
   // 会话层常驻条目：置于摘要段之后（spec §6.3 分段顺序）
-  const spSec = section('会话记忆', sp.kept.map((e) => `- ${e.content}`));
+  const spSec = section('会话记忆', sp.kept.map((e) => pinnedLine(e, parts.now)));
   if (spSec) sections.push(spSec);
 
   // 目录先按行数限量（溢出计入截断），再按字符预算截断

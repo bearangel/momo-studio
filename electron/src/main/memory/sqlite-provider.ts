@@ -254,7 +254,7 @@ export class SQLiteMemoryProvider implements MemoryProvider {
           ? listMemories({ kind: 'session', sessionId: opts.sessionId }, { pinned: false }, CATALOG_MAX_ROWS)
           : []),
       ];
-      return buildPinnedView({ globalPinned, workspacePinned, sessionPinned, sessionSummary, catalog });
+      return buildPinnedView({ globalPinned, workspacePinned, sessionPinned, sessionSummary, catalog, now: Date.now() });
     } catch (err) {
       logger.error('getPinnedContext 失败，降级为空视图（不阻塞消息处理）', {
         workspaceId: opts.workspaceId,
