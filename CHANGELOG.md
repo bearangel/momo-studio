@@ -21,7 +21,6 @@
 
 ### 新增
 - **todo 稳定 ID**：全量替换协议不变，按归一 subject（写入即 trim）延续既有 id——跨重写逐项身份稳定，同批重复 subject 仅首个延续
-- **会话 todo 聚合视图**：SessionTodosPanel 挂载会话主区消息列表上方，跨 agent（PM + 子 agent）清单总览（纯前端聚合零 IPC；无清单整体隐藏）
 - **记忆时效**：超 7 天未更新的常驻记忆注入时标注「保存于 N 天前，使用前请核实」；memory_save 教学补「事实类记忆先核实、内容注明核实日期」
 - **workspace 卫生约定**：一次性/测试/演示产物写入 `.momo-scratch/<任务名>/`（注入全部 agent + dispatch 教学指定子 agent 子目录，并行不踩踏）
 
