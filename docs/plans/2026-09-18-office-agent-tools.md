@@ -81,8 +81,8 @@ import {
   hashContent,
   recordChange,
   type RecordCtx,
-} from '../../../src/main/journal/recorder';
-import { createJournalStore } from '../../../src/main/journal/store';
+} from '../../src/main/journal/recorder';
+import { createJournalStore } from '../../src/main/journal/store';
 import { migration033 } from '../../../src/main/storage/migrations/033_v2_5_change_journal';
 
 let tmpDir: string;
@@ -252,9 +252,9 @@ import {
   getJournalStore,
   recordChange,
   type RecordCtx,
-} from '../../../src/main/journal/recorder';
-import { createJournalStore } from '../../../src/main/journal/store';
-import { revertEntries } from '../../../src/main/journal/revert';
+} from '../../src/main/journal/recorder';
+import { createJournalStore } from '../../src/main/journal/store';
+import { revertEntries } from '../../src/main/journal/revert';
 import { migration033 } from '../../../src/main/storage/migrations/033_v2_5_change_journal';
 
 let tmpDir: string;      // userData（blob 根）
@@ -2638,7 +2638,7 @@ GIT_MASTER=1 git commit -m "feat: 办公助理内置 agent——YAML/marketplace
 // electron/tests/storage/migration-037-office-builtin.test.ts
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
-import { migration037 } from '../../../src/main/storage/migrations/037_v2_1_office_tools_builtin';
+import { migration037 } from '../../src/main/storage/migrations/037_v2_1_office_tools_builtin';
 
 const OFFICE_TOOLS = [
   'office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel',
