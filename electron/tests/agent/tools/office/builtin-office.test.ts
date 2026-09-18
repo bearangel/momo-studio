@@ -6,6 +6,7 @@ import path from 'node:path';
 import { load as loadYamlRaw } from 'js-yaml';
 import { OfficeTools } from '../../../../src/main/agent/tools/office-tools';
 import { ALL_BUILTIN_TOOLS, TOOL_CATEGORIES } from '../../../../src/main/agent/tools/catalog';
+import { parseAgentManifestWithSuggestion } from '../../../../src/main/agent/manifest-parser';
 
 // __dirname = electron/tests/agent/tools/office（5 级）→ 4 级上溯到 electron/（agents 在
 // electron/resources/agents），5 级上溯到仓库根（marketplace 在根 resources/marketplace）。
@@ -45,6 +46,17 @@ describe('office-assistant.yaml', () => {
       'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy',
     ]) {
       expect(tools.some((t) => t.ref === n), `缺少 ${n}`).toBe(true);
+    }
+  });
+
+  it('能被生产解析器 parseAgentManifestWithSuggestion 解析（defaultTools 13 项契约锁）', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'office-assistant.yaml'), 'utf-8');
+    const { def } = parseAgentManifestWithSuggestion(content);
+    expect(def.slug).toBe('office-assistant');
+    expect(def.defaultTools).toHaveLength(13);
+    const refs = def.defaultTools.map((t) => t.ref);
+    for (const n of ['office_read', 'office_copy', 'office_create_pdf', 'webfetch']) {
+      expect(refs, n).toContain(n);
     }
   });
 });

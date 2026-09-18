@@ -11,6 +11,7 @@ import { migration033 } from './033_v2_5_change_journal';
 import { migration034 } from './034_v2_7_browser_settings';
 import { migration035 } from './035_v2_7_browser_takeover_wait';
 import { migration036 } from './036_v2_11_message_context';
+import { migration037 } from './037_v2_1_office_tools_builtin';
 
 export interface Migration {
   version: number;
@@ -914,6 +915,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 旧消息行自然兼容（NULL = 无上下文）。
     version: migration036.version,
     sql: migration036.sql,
+  },
+  {
+    // v2.1：builtin agent defaultTools 追加 office 八工具（spec 2026-09-18 §8-3，
+    // 沿用 v32 同步策略：json_insert '$[#]' 末尾追加 + NOT EXISTS 幂等守卫）。
+    // SQL 住在独立模块 037_v2_1_office_tools_builtin.ts（约定同上）。
+    version: migration037.version,
+    sql: migration037.up,
   },
 ];
 
