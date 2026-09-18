@@ -81,6 +81,20 @@ describe('SubAgentSection — segments 时间线', () => {
     );
     expect(screen.queryByLabelText('子 agent 流式光标')).not.toBeInTheDocument();
   });
+
+  it('stream 带 todos 也不渲染 TodoSection（待办已移至会话底部 SessionTodoBar）', () => {
+    render(
+      <SubAgentSection
+        stream={makeStream({
+          todos: [
+            { id: 't1', subject: '条目1', status: 'pending' },
+            { id: 't2', subject: '条目2', status: 'in_progress' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.queryByText('任务')).not.toBeInTheDocument();
+  });
 });
 
 // === 委派区紫色竖线（2026-09-06 UI 修复） ===

@@ -208,6 +208,25 @@ describe('AgentStreamBubble', () => {
     expect(screen.getByText(/流式中/)).toBeInTheDocument();
     expect(container.firstChild).not.toBeNull();
   });
+
+  it('stream 带 todos 也不渲染 TodoSection（待办已移至会话底部 SessionTodoBar）', () => {
+    useStreamStore.setState({ streams: new Map() });
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          todos: [
+            { id: 't1', subject: '条目1', status: 'completed' },
+            { id: 't2', subject: '条目2', status: 'in_progress' },
+          ],
+          text: '正文',
+        })}
+        message={makeMessage()}
+      />,
+    );
+    // TodoSection 头部按钮文案是「任务」——气泡内不得出现
+    expect(screen.queryByText('任务')).not.toBeInTheDocument();
+    expect(screen.getByText('正文')).toBeInTheDocument();
+  });
 });
 
 describe('AgentStreamBubble — dispatch chips 集成', () => {

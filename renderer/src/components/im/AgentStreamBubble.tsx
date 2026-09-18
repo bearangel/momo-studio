@@ -24,7 +24,6 @@ import { ipc } from '../../ipc/client';
 import type { ImMessage } from '../../ipc/types';
 import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
-import { TodoSection } from './TodoSection';
 import { ToolCallChip } from './ToolCallChip';
 import { ContextGroupChip } from './ContextGroupChip';
 import { MarkdownBody } from './MarkdownBody';
@@ -138,10 +137,6 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
       fillWidth
       timestamp={message.createdAt}
     >
-      {stream.todos.length > 0 && (
-        <TodoSection todos={stream.todos} isStreaming={isStreaming} />
-      )}
-
       {renderSegments.map((seg, i) => {
         const isLastSegment = i === renderSegments.length - 1;
         switch (seg.kind) {
