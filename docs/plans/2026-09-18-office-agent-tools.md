@@ -6,7 +6,7 @@
 
 **Architecture:** 单一 `OfficeTools` ToolModule 无条件注册进 `buildToolRegistry`；内部按格式拆 helper（`tools/office/*.ts`）。写路径统一模式：沙箱断言 → 已存在则 assertRead → 读旧字节 → write-ahead 记账（before/after 为 Buffer，经账本二进制扩展落 blob）→ 落盘 → 标记已读。前置扩展 journal（recorder/store/revert）接受 `string | Buffer`，既有文本调用方零变化。
 
-**Tech Stack:** exceljs / docx / mammoth / pptxgenjs / pdfkit / pdf-parse（全部纯 JS 无 native binding）；pptx 读取用既有 adm-zip + cheerio 自解析。
+**Tech Stack:** exceljs / docx / mammoth / pptxgenjs / pdfkit / pdfjs-dist ^3.11（全部纯 JS 无 native binding）；pptx 读取用既有 adm-zip + cheerio 自解析。（2026-09-18 裁定：弃 pdf-parse——v2 硬依赖 @napi-rs/canvas 原生二进制）
 
 **Spec:** `docs/specs/2026-09-18-office-agent-tools-design.md`（本计划的唯一需求来源，冲突时以 spec 为准）
 
@@ -440,8 +440,9 @@ GIT_MASTER=1 git commit -m "feat: 账本撤销字节化 + 视图二进制容错�
 
 ```bash
 nvm use 20
-npx pnpm@9.0.0 --filter momo-studio-electron add exceljs docx pptxgenjs mammoth pdfkit pdf-parse
-npx pnpm@9.0.0 --filter momo-studio-electron add -D @types/pdfkit @types/pdf-parse @types/mammoth
+npx pnpm@9.0.0 --filter momo-studio-electron add exceljs docx pptxgenjs mammoth pdfkit pdfjs-dist@^3.11.174
+npx pnpm@9.0.0 --filter momo-studio-electron add -D @types/pdfkit
+# 注：@types/mammoth 不存在（npm 404，T7 用本地模块声明）；@types/pdf-parse 不需要（pdfjs-dist 自带 types）；pdf-parse 已弃用（裁定见 spec §4.2）
 ```
 预期：pnpm-lock 更新，无 native 编译产物（全部纯 JS）
 
@@ -2168,13 +2169,14 @@ cd electron && npx pnpm@9.0.0 vitest run tests/agent/tools/office/pdf.test.ts
 
 ```ts
 // electron/src/main/agent/tools/office/pdf.ts
-// PDF 读写：pdf-parse（pdf.js 内核）逐页提取 + pdfkit 生成（内嵌 Noto Sans SC，
-// pdfkit 默认字体无 CJK）。扫描版（无文本层）读取明确报错。
+// PDF 读写：pdfjs-dist（v3 UMD CJS，Node fake-worker 路径，verbosity 0 压噪）逐页
+// 提取 + pdfkit 生成（内嵌 Noto Sans SC，pdfkit 默认字体无 CJK）。
+// 扫描版（无文本层）读取明确报错。仅用 getTextContent，不触渲染，无需 canvas。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import PDFDocument from 'pdfkit';
-import pdfParse from 'pdf-parse';
+import * as pdfjsLib from 'pdfjs-dist';
 import { asString, asStringArray } from './format';
 
 const FONT_FILE = 'NotoSansSC-Regular.ttf';
@@ -2189,25 +2191,32 @@ export function resolveFontPath(): string {
   return path.join(__dirname, '..', '..', '..', '..', '..', 'resources', 'fonts', FONT_FILE);
 }
 
-/** pdfjs 页对象最小面（仅取文本项） */
-interface PdfPageData {
-  getTextContent(): Promise<{ items: Array<{ str?: string }> }>;
-}
-
 export async function readPdf(abs: string): Promise<string> {
-  const pages: string[] = [];
-  await pdfParse(fs.readFileSync(abs), {
-    // 自带 pagerender：逐页收集文本（默认实现只拼全文不暴露分页）
-    pagerender: async (pageData: PdfPageData) => {
-      const tc = await pageData.getTextContent();
-      pages.push(tc.items.map((i) => i.str ?? '').join(' '));
-      return '';
-    },
-  });
-  if (pages.every((p) => p.trim().length === 0)) {
-    throw new Error('PDF 无文本层（疑似扫描版，无法提取文本）');
+  const data = new Uint8Array(fs.readFileSync(abs));
+  // Node 运行时约定：isEvalSupported/useWorkerFetch/disableFontFace 关掉浏览器侧
+  // 能力；verbosity 0 压制 fake-worker 等告警噪声（测试输出必须干净）
+  const doc = await pdfjsLib.getDocument({
+    data,
+    isEvalSupported: false,
+    useWorkerFetch: false,
+    disableFontFace: true,
+    verbosity: 0,
+  }).promise;
+  try {
+    const pageTexts: string[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const tc = await page.getTextContent();
+      // TextItem | TextMarkedContent 联合类型：'str' in 收窄
+      pageTexts.push(tc.items.map((it) => ('str' in it ? it.str : '')).join(' ').trim());
+    }
+    if (pageTexts.every((t) => t.length === 0)) {
+      throw new Error('PDF 无文本层（疑似扫描版，无法提取文本）');
+    }
+    return pageTexts.map((t, i) => `## 第 ${i + 1} 页\n${t}`).join('\n\n');
+  } finally {
+    await doc.cleanup();
   }
-  return pages.map((t, i) => `## 第 ${i + 1} 页\n${t.trim()}`).join('\n\n');
 }
 
 export type PdfBlock =

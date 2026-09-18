@@ -58,7 +58,7 @@ electron/src/main/agent/tools/
 | `mammoth` ^1 | docx 读取 | 转 markdown，保结构丢样式 |
 | `pptxgenjs` ^3 | pptx 生成 | 标题+内容+表格+备注版式 |
 | `pdfkit` ^0.15 | pdf 生成 | 需内嵌 CJK 字体（§9） |
-| `pdf-parse` ^1 | pdf 读取 | 基于 pdf.js；若维护性出问题备选 pdfjs-dist legacy build |
+| `pdfjs-dist` ^3.11 | pdf 读取 | 官方库 legacy/UMD build（CJS 主进程直用）；`getTextContent` 逐页文本提取，纯 JS 零 native。（2026-09-18 裁定：弃 pdf-parse——v2 硬依赖 @napi-rs/canvas 原生 Skia 二进制，违反纯 JS 约束） |
 
 pptx 读取不自加依赖：pptx 是 zip 容器，slide XML 的 `<a:t>` 文本用现有 `adm-zip` + `cheerio` 提取（仓库既有依赖）。
 
@@ -216,7 +216,7 @@ ops: [
 - 精确编辑已有 docx / pptx（段落替换等）不在第一期（Excel 有增量写因为计算型场景刚需）
 - 格式转换（如 docx→pdf）不在第一期
 - `.xls` / `.doc` / `.ppt` 旧格式不支持
-- pdf-parse 维护性风险：出问题切 pdfjs-dist legacy build（API 面小，替换成本可控）
+- pdfjs-dist 直用（无 pdf-parse 封装层）：worker 走 Node fake-worker 路径，`verbosity: 0` 压制噪声；仅用 getTextContent（不触渲染），无需 canvas
 
 ## 13. 实施切分建议（供实施计划参考）
 
