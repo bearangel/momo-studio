@@ -7,7 +7,7 @@
 //
 // 测试模式：真实 zustand store + setState 注入（不 vi.mock store 模块）。
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import type { ImMessage, TodoItem } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -327,5 +327,85 @@ describe('SessionTodoBar v2', () => {
     });
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
     expect(summaryProgress()).toBe('3/3'); // m2 最新
+  });
+
+  // --- Task 3：历史下拉 + Ctrl+T ---
+
+  it('历史下拉：多候选显示入口，点开列出非激活候选，点击临时查看快照', () => {
+    setupTwo('done', 'done'); // active = m2（最新）
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '历史待办' }));
+    const menu = screen.getByTestId('todo-history-menu');
+    expect(menu).toBeInTheDocument();
+    // 只列 m1（非激活），含进度（m1 = mkTodos(3,2) → 2/3）
+    expect(menu.textContent).toContain('2/3');
+    // 点击 m1 → 历史查看态：返回最新在场 + 列表展开显示 m1 快照
+    fireEvent.click(within(menu).getByRole('button'));
+    expect(screen.getByRole('button', { name: '返回最新' })).toBeInTheDocument();
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('2. 条目2')).toBeInTheDocument(); // m1 快照（mkTodos(3,2) 进行中项）
+  });
+
+  it('返回最新：退出历史查看，回最新候选摘要', () => {
+    setupTwo('done', 'done');
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '历史待办' }));
+    fireEvent.click(within(screen.getByTestId('todo-history-menu')).getByRole('button'));
+    fireEvent.click(screen.getByRole('button', { name: '返回最新' }));
+    expect(screen.queryByRole('button', { name: '返回最新' })).not.toBeInTheDocument();
+    expect(summaryProgress()).toBe('1/3'); // 回 m2
+  });
+
+  it('历史查看中候选增员：自动退出历史，显示新清单', () => {
+    setupTwo('done', 'done');
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '历史待办' }));
+    fireEvent.click(within(screen.getByTestId('todo-history-menu')).getByRole('button'));
+    expect(screen.getByRole('button', { name: '返回最新' })).toBeInTheDocument();
+    // 新候选 m3 增员 → 退出历史 + dismissed 清除路径同源
+    act(() => {
+      useSessionStore.setState({
+        messagesBySession: new Map([
+          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws'), mkMessage('m3', '@a:ws')]],
+        ]),
+      });
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 2), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 1), 'done')],
+          ['m3', mkStream('m3', mkTodos(2, 0), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.queryByRole('button', { name: '返回最新' })).not.toBeInTheDocument();
+    expect(summaryProgress()).toBe('0/2'); // m3 流式
+  });
+
+  it('历史查看中新流式开始：自动退出历史', () => {
+    setupTwo('done', 'done');
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '历史待办' }));
+    fireEvent.click(within(screen.getByTestId('todo-history-menu')).getByRole('button'));
+    // m2 开始流式（此前无流式 → 「新流式开始」）→ 退出历史
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 2), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 1), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.queryByRole('button', { name: '返回最新' })).not.toBeInTheDocument();
+    expect(summaryProgress()).toBe('1/3');
+  });
+
+  it('Ctrl+T 切换展开（capture 拦截默认）', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.keyDown(window, { key: 't', ctrlKey: true });
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(window, { key: 't', ctrlKey: true });
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
   });
 });
