@@ -23,6 +23,17 @@ describe('exportAggregateEvents', () => {
     expect(JSON.stringify(r.segments)).not.toContain('内心独白');
   });
 
+  it('F3：text 段剥离 <secrecy> 隐藏上下文（含跨 delta 拆分的块）', () => {
+    const r = exportAggregateEvents([
+      ev('text_delta', { delta: '正文。<sec' }),
+      ev('text_delta', { delta: 'recy>私有规划' }),
+      ev('text_delta', { delta: '不外泄</secrecy>' }),
+      ev('text_delta', { delta: '收尾。' }),
+      ev('final', { status: 'done' }),
+    ]);
+    expect(r.segments).toEqual([{ kind: 'text', text: '正文。收尾。' }]);
+  });
+
   it('tool start/result 按 callId 配对（含 args/result/success）', () => {
     const r = exportAggregateEvents([
       ev('text_delta', { delta: '查一下' }),
@@ -51,21 +62,50 @@ describe('exportAggregateEvents', () => {
 
   it('isDispatch 分流为 dispatch 段，subStatus 回执更新终态', () => {
     const r = exportAggregateEvents([
-      ev('tool_call_start', { callId: 'd1', toolName: 'dispatch', isDispatch: true, subStreamSessionId: 'ss-sub', subAgentName: 'tester', args: { task: '验证' } }),
+      ev('tool_call_start', { callId: 'd1', toolName: 'dispatch:tester', isDispatch: true, subStreamSessionId: 'ss-sub', subAgentName: 'tester', args: { task: '验证' } }),
       ev('tool_call_result', { callId: 'd1', subStatus: 'completed' }),
       ev('final', { status: 'done' }),
     ]);
     expect(r.segments).toEqual([
-      { kind: 'dispatch', callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: 'tester', task: '验证', status: 'completed' },
+      { kind: 'dispatch', callId: 'd1', toolName: 'dispatch:tester', subStreamSessionId: 'ss-sub', subAgentName: 'tester', task: '验证', status: 'completed' },
     ]);
   });
 
-  it('dispatch 终态后无回执收敛为 aborted（镜像 UI 防永久执行中）', () => {
+  it('dispatch 终态后无回执收敛为 aborted（镜像 UI 防永久执行中；同步 dispatch 保持旧语义）', () => {
     const r = exportAggregateEvents([
-      ev('tool_call_start', { callId: 'd1', toolName: 'dispatch', isDispatch: true, subStreamSessionId: 'ss-sub', subAgentName: 't', args: {} }),
+      ev('tool_call_start', { callId: 'd1', toolName: 'dispatch:coder', isDispatch: true, subStreamSessionId: 'ss-sub', subAgentName: 't', args: {} }),
       ev('final', { status: 'aborted' }),
     ]);
     expect(r.segments[0]).toMatchObject({ kind: 'dispatch', status: 'aborted' });
+  });
+
+  it('F2：dispatch_bg 流终态仍未收割 → 收敛为 delegated（诚实展示已派出，不误判中断）', () => {
+    const r = exportAggregateEvents([
+      ev('tool_call_start', { callId: 'b1', toolName: 'dispatch_bg:coder', isDispatch: true, subStreamSessionId: 'ss-bg', subAgentName: '码农', args: { task: '后台' } }),
+      ev('final', { status: 'done' }),
+    ]);
+    expect(r.segments[0]).toMatchObject({ kind: 'dispatch', status: 'delegated', toolName: 'dispatch_bg:coder' });
+  });
+
+  it('F2：gather 回链 patch（tool_result subStatus）把 bg 委派翻为真实终态，不再被收敛覆盖', () => {
+    const r = exportAggregateEvents([
+      ev('tool_call_start', { callId: 'b1', toolName: 'dispatch_bg:coder', isDispatch: true, subStreamSessionId: 'ss-bg', subAgentName: '码农', args: {} }),
+      ev('tool_call_start', { callId: 'g1', toolName: 'dispatch_gather', args: { handles: ['b1'] } }),
+      ev('tool_call_result', { callId: 'g1', result: '{"done":[]}', success: true }),
+      ev('tool_call_result', { callId: 'b1', result: '后台任务完成', success: true, subStatus: 'completed' }),
+      ev('final', { status: 'done' }),
+    ]);
+    const dispatch = r.segments.find((s) => s.kind === 'dispatch');
+    expect(dispatch).toMatchObject({ callId: 'b1', status: 'completed' });
+  });
+
+  it('F2：subStatus=failed 的回链 patch → dispatch 段 failed（失败不被显示为完成）', () => {
+    const r = exportAggregateEvents([
+      ev('tool_call_start', { callId: 'b1', toolName: 'dispatch_bg:coder', isDispatch: true, subStreamSessionId: 'ss-bg', subAgentName: '码农', args: {} }),
+      ev('tool_call_result', { callId: 'b1', result: '后台任务失败', success: false, subStatus: 'failed' }),
+      ev('final', { status: 'done' }),
+    ]);
+    expect(r.segments[0]).toMatchObject({ kind: 'dispatch', status: 'failed' });
   });
 
   it('todo_update 每次一个位置快照段（非末值胜出）', () => {

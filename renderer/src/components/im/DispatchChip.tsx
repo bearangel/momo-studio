@@ -23,13 +23,14 @@ interface DispatchChipProps {
   subStream?: StreamState;
 }
 
-/** 状态图标：executing 用旋转 Loader（活动指示） */
+/** 状态图标：executing 用旋转 Loader（活动指示）；delegated 用 Send（已派出后台） */
 const STATUS_ICON: Record<DispatchStatus, LucideIcon> = {
   queued: Clock,
   executing: Loader2,
   completed: CircleCheck,
   failed: CircleX,
   aborted: CircleSlash,
+  delegated: Send,
 };
 
 /** 各状态的自动展开默认值（用户未手动 toggle 前） */
@@ -39,6 +40,7 @@ const AUTO_EXPANDED: Record<DispatchStatus, boolean> = {
   completed: false,
   queued: false,
   aborted: false,
+  delegated: false,
 };
 
 /** 活动提示：最后内容段 → 小图标 + 文案 */

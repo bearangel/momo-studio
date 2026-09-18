@@ -47,7 +47,7 @@ export function taskStatusStyle(status: TaskStatusKey): TaskStatusStyle {
   };
 }
 
-export type DispatchStatus = 'queued' | 'executing' | 'completed' | 'failed' | 'aborted';
+export type DispatchStatus = 'queued' | 'executing' | 'completed' | 'failed' | 'aborted' | 'delegated';
 
 const DISPATCH_LABEL: Record<DispatchStatus, string> = {
   queued: '排队',
@@ -55,6 +55,7 @@ const DISPATCH_LABEL: Record<DispatchStatus, string> = {
   completed: '完成',
   failed: '失败',
   aborted: '已中断',
+  delegated: '已派出',
 };
 
 /** dispatch 委派状态 tone（旧 DispatchChip STATUS_CONFIG 的 hex 收敛） */
@@ -64,6 +65,7 @@ const DISPATCH_TONE: Record<DispatchStatus, BadgeTone> = {
   completed: 'success',
   failed: 'error',
   aborted: 'warning',
+  delegated: 'neutral',
 };
 
 export function dispatchStatusStyle(status: DispatchStatus): TaskStatusStyle {

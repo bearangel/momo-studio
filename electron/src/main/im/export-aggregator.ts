@@ -7,9 +7,18 @@
 // import renderer 源码（electron tsconfig rootDir: src 封死），故镜像实现
 // + 本单测锁语义。改 stream-aggregator 配对规则时此处必须同步。
 import type { MessageEventRow } from '../storage/messages/events-repo';
+import { stripHiddenContext } from '../storage/messages/text-hygiene';
 import type { TodoItem } from '../agent/tools/todo-types';
 
-export type ExportDispatchStatus = 'queued' | 'executing' | 'completed' | 'failed' | 'timeout' | 'aborted';
+export type ExportDispatchStatus =
+  | 'queued'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'timeout'
+  | 'aborted'
+  /** F2：dispatch_bg 派发成功、流终态时仍未收割——后台任务可能在途，诚实展示「已派出」而非误判中断 */
+  | 'delegated';
 
 export type ExportSegment =
   | { kind: 'text'; text: string }
@@ -24,6 +33,8 @@ export type ExportSegment =
   | {
       kind: 'dispatch';
       callId: string;
+      /** 委派工具名（dispatch:<slug> 同步 / dispatch_bg:<slug> 后台）——终态收敛区分 delegated/aborted 的判别键（F2） */
+      toolName: string;
       subStreamSessionId: string;
       subAgentName: string;
       task: string;
@@ -77,6 +88,7 @@ export function exportAggregateEvents(events: MessageEventRow[]): ExportAggregat
           segments.push({
             kind: 'dispatch',
             callId: p.callId,
+            toolName: typeof p.toolName === 'string' ? p.toolName : '',
             subStreamSessionId: p.subStreamSessionId,
             subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
             task: typeof args.task === 'string' ? args.task : '',
@@ -115,11 +127,13 @@ export function exportAggregateEvents(events: MessageEventRow[]): ExportAggregat
         if (Array.isArray(p.todos)) segments.push({ kind: 'todo', items: p.todos as TodoItem[] });
         break;
       case 'dispatch_start':
-        // 旧形状（v2 生产链路不产生，防御保留——镜像 stream-aggregator）
+        // 旧形状（v2 生产链路不产生，防御保留——镜像 stream-aggregator）。
+        // toolName 旧 payload 不携带 → ''（收敛按同步 dispatch 语义判 aborted，保旧行为）
         if (typeof p.callId === 'string' && typeof p.subStreamSessionId === 'string') {
           segments.push({
             kind: 'dispatch',
             callId: p.callId,
+            toolName: '',
             subStreamSessionId: p.subStreamSessionId,
             subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
             task: typeof p.task === 'string' ? p.task : '',
@@ -151,7 +165,10 @@ export function exportAggregateEvents(events: MessageEventRow[]): ExportAggregat
   }
 
   // 终态收敛（镜像 stream-aggregator:268-288）：流结束后未回填的 tool/dispatch
-  // 收敛为终态展示，防导出里出现永久「执行中」
+  // 收敛为终态展示，防导出里出现永久「执行中」。
+  // F2：dispatch_bg 的 tool_result 不带 subStatus（后台完成走 gather 旁路）——
+  // 已被 gather 回链 patch 的段此处已是终态；仍未收割的 bg 委派按「已派出」
+  // （delegated）诚实收敛，只有同步 dispatch 才收敛为 aborted（用户中断/失败）。
   if (status !== 'streaming') {
     const pending = status === 'aborted' ? '(已中断)' : '(未返回结果)';
     for (const seg of segments) {
@@ -159,9 +176,14 @@ export function exportAggregateEvents(events: MessageEventRow[]): ExportAggregat
         seg.result = pending;
         seg.success = false;
       } else if (seg.kind === 'dispatch' && (seg.status === 'executing' || seg.status === 'queued')) {
-        seg.status = 'aborted';
+        seg.status = seg.toolName.startsWith('dispatch_bg:') ? 'delegated' : 'aborted';
       }
     }
+  }
+
+  // F3：导出是用户可见面——文本段剥离 <secrecy> 隐藏上下文（事件库原文保真不动）
+  for (const seg of segments) {
+    if (seg.kind === 'text') seg.text = stripHiddenContext(seg.text);
   }
 
   return { segments, status, ...(error !== undefined ? { error } : {}) };

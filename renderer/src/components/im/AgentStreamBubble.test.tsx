@@ -241,6 +241,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
           dispatches: [
             {
               callId: 'd1',
+              toolName: 'dispatch:研究员',
               subStreamSessionId: 'child-1',
               subAgentName: '研究员',
               task: '',
@@ -263,6 +264,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
           dispatches: [
             {
               callId: 'd1',
+              toolName: 'dispatch:研究员',
               subStreamSessionId: 'c1',
               subAgentName: '研究员',
               task: '',
@@ -270,6 +272,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
             },
             {
               callId: 'd2',
+              toolName: 'dispatch:码农',
               subStreamSessionId: 'c2',
               subAgentName: '码农',
               task: '',
@@ -302,6 +305,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
           dispatches: [
             {
               callId: 'd1',
+              toolName: 'dispatch:研究员',
               subStreamSessionId: 'c1',
               subAgentName: 'A',
               task: '',
@@ -309,6 +313,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
             },
             {
               callId: 'd2',
+              toolName: 'dispatch:码农',
               subStreamSessionId: 'c2',
               subAgentName: 'B',
               task: '',
@@ -329,6 +334,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
           dispatches: [
             {
               callId: 'd1',
+              toolName: 'dispatch:研究员',
               subStreamSessionId: 'c1',
               subAgentName: 'A',
               task: '',
@@ -336,6 +342,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
             },
             {
               callId: 'd2',
+              toolName: 'dispatch:码农',
               subStreamSessionId: 'c2',
               subAgentName: 'B',
               task: '',
@@ -359,6 +366,7 @@ describe('AgentStreamBubble — dispatch chips 集成', () => {
           dispatches: [
             {
               callId: 'd1',
+              toolName: 'dispatch:研究员',
               subStreamSessionId: 'c1',
               subAgentName: 'A',
               task: '',
@@ -452,7 +460,7 @@ describe('AgentStreamBubble — dispatch subStream 接线（子 agent 工作过�
           status: 'streaming',
           segments: [
             { kind: 'text', text: '派出任务' },
-            { kind: 'dispatch', callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: '码农', task: '写代码', status: 'executing' },
+            { kind: 'dispatch', callId: 'd1', toolName: 'dispatch:码农', subStreamSessionId: 'ss-sub', subAgentName: '码农', task: '写代码', status: 'executing' },
           ],
         })}
         message={parentMsg}
@@ -475,7 +483,7 @@ describe('AgentStreamBubble — dispatch subStream 接线（子 agent 工作过�
         stream={makeStream({
           messageId: 'm-p2',
           segments: [
-            { kind: 'dispatch', callId: 'd2', subStreamSessionId: 'ss-none', subAgentName: '码农', task: '', status: 'executing' },
+            { kind: 'dispatch', callId: 'd2', toolName: 'dispatch:码农', subStreamSessionId: 'ss-none', subAgentName: '码农', task: '', status: 'executing' },
           ],
         })}
         message={parentMsg}

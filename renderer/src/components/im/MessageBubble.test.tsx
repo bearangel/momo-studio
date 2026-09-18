@@ -192,7 +192,7 @@ describe('MessageBubble 已完成带富信息分支（A9：done 显示富信息�
     mockStreams.set('m1', makeStream({
       messageId: 'm1',
       status: 'done',
-      dispatches: [{ callId: 'd1', subStreamSessionId: 's1', subAgentName: 'coder', task: 't', status: 'completed' }],
+      dispatches: [{ callId: 'd1', toolName: 'dispatch:coder', subStreamSessionId: 's1', subAgentName: 'coder', task: 't', status: 'completed' }],
     }));
     const msg = makeMsg('m1', { body: '已完成正文' });
     render(<MessageBubble message={msg} isSelf={false} senderName="协调员" />);

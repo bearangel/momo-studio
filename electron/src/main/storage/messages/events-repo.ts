@@ -5,6 +5,7 @@
 // insertEventBatch 用单事务批量插入（性能优化——比逐条快 ~50 倍）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
+import { stripHiddenContext } from './text-hygiene';
 
 export interface MessageEventRow {
   id: string;
@@ -136,5 +137,7 @@ export function aggregateTextDeltas(messageId: string): string {
       // 损坏行跳过：见函数头注释
     }
   }
-  return out;
+  // F3：messages.body 是用户可见正文的单一真相源（复制/导出消费）——
+  // 剥离 <secrecy> 隐藏上下文块；事件库原文不动（保真优先）
+  return stripHiddenContext(out);
 }

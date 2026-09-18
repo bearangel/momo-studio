@@ -163,6 +163,50 @@ describe('aggregateEvents：终态收敛（停止/崩溃后 pending 段不再永
     ]);
     expect(result.dispatches[0]!.status).toBe('aborted');
   });
+
+  it('F2：dispatch_bg 流终态仍未收割 → 收敛为 delegated（段与平铺一致，不误判中断）', () => {
+    const result = aggregateEvents([
+      ev(1, 'status_change', { status: 'streaming' }),
+      ev(2, 'tool_call_start', {
+        callId: 'b1',
+        toolName: 'dispatch_bg:coder',
+        args: { task: '后台' },
+        isDispatch: true,
+        subStreamSessionId: 'ss-bg-1',
+        subAgentName: '码农',
+      }),
+      ev(3, 'final', { status: 'done' }),
+    ]);
+    const dispatch = result.segments.find((s) => s.kind === 'dispatch') as Extract<
+      typeof result.segments[number],
+      { kind: 'dispatch' }
+    >;
+    expect(dispatch.status).toBe('delegated');
+    expect(result.dispatches[0]).toMatchObject({ callId: 'b1', status: 'delegated', toolName: 'dispatch_bg:coder' });
+  });
+
+  it('F2：gather 回链 patch（tool_result subStatus）把 bg 委派翻为 completed', () => {
+    const result = aggregateEvents([
+      ev(1, 'tool_call_start', {
+        callId: 'b1',
+        toolName: 'dispatch_bg:coder',
+        args: {},
+        isDispatch: true,
+        subStreamSessionId: 'ss-bg-2',
+        subAgentName: '码农',
+      }),
+      ev(2, 'tool_call_start', { callId: 'g1', toolName: 'dispatch_gather', args: { handles: ['b1'] } }),
+      ev(3, 'tool_call_result', { callId: 'g1', result: '{"done":[…]}', success: true }),
+      ev(4, 'tool_call_result', { callId: 'b1', result: '后台任务完成', success: true, subStatus: 'completed' }),
+      ev(5, 'final', { status: 'done' }),
+    ]);
+    const dispatch = result.segments.find((s) => s.kind === 'dispatch') as Extract<
+      typeof result.segments[number],
+      { kind: 'dispatch' }
+    >;
+    expect(dispatch.status).toBe('completed');
+    expect(result.dispatches[0]!.status).toBe('completed');
+  });
 });
 
 describe('aggregateEvents：基础聚合（无 final）', () => {
@@ -175,6 +219,19 @@ describe('aggregateEvents：基础聚合（无 final）', () => {
     expect(result.thinking).toBe('想');
     expect(result.text).toBe('你好世界');
     expect(result.status).toBe('streaming');
+  });
+
+  it('F3：正文剥离 <secrecy> 隐藏上下文（平铺 text 与 segments 同步），thinking 不剥离', () => {
+    const result = aggregateEvents([
+      ev(1, 'text_delta', { delta: '正文。' }),
+      ev(2, 'text_delta', { delta: '<secrecy>工具预算 50 次</secrecy>' }),
+      ev(3, 'text_delta', { delta: '收尾。' }),
+      ev(4, 'thinking_delta', { delta: '<secrecy>thinking 里的同类块保留</secrecy>' }),
+    ]);
+    expect(result.text).toBe('正文。收尾。');
+    const textSeg = result.segments.find((s): s is Extract<typeof s, { kind: 'text' }> => s.kind === 'text');
+    expect(textSeg?.text).toBe('正文。收尾。');
+    expect(result.thinking).toContain('thinking 里的同类块保留');
   });
 });
 

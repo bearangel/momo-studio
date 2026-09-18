@@ -9,6 +9,7 @@
 // 输入约定：events 必须按 seq 升序（DB 层 ORDER BY seq ASC 已保证）。
 // 输出：聚合后的 StreamState-like 结构（与 stream.store 的 StreamState 兼容字段）。
 import type { MessageEventRow, TodoItem } from '../ipc/types';
+import { stripHiddenContext } from './text-hygiene';
 
 export interface AggregatedToolCall {
   callId: string;
@@ -20,17 +21,21 @@ export interface AggregatedToolCall {
 
 export interface AggregatedDispatch {
   callId: string;
+  /** 委派工具名（dispatch:<slug> 同步 / dispatch_bg:<slug> 后台）——终态收敛区分 delegated/aborted 的判别键（F2） */
+  toolName: string;
   subStreamSessionId: string;
   subAgentName: string;
   subAgentAvatar?: string;
   task: string;
   /**
-   * aborted = 流到达终态时仍未收到回执的委派（用户停止 / 流失败）。
+   * aborted = 流到达终态时仍未收到回执的同步委派（用户停止 / 流失败）。
    * runtime 中断路径刻意不回填 dispatch result（防「中断-重试」死循环），
    * 由 aggregateEvents 终态收敛把 executing/queued 改写为 aborted——
    * 与 tool_call 段的 '(已中断)' 收敛同源。
+   * delegated = dispatch_bg 后台委派在流终态时仍未收割（F2）——派发成功、
+   * 后台任务可能在途或已完成后未收割，诚实展示「已派出」，不再误判中断。
    */
-  status: 'queued' | 'executing' | 'completed' | 'failed' | 'timeout' | 'aborted';
+  status: 'queued' | 'executing' | 'completed' | 'failed' | 'timeout' | 'aborted' | 'delegated';
 }
 
 export interface AggregatedStream {
@@ -64,6 +69,7 @@ export type StreamSegment =
   | {
       kind: 'dispatch';
       callId: string;
+      toolName: string;
       subStreamSessionId: string;
       subAgentName: string;
       subAgentAvatar?: string;
@@ -132,6 +138,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
             const args = (p.args as Record<string, unknown>) ?? {};
             const start = {
               callId: p.callId,
+              toolName: typeof p.toolName === 'string' ? p.toolName : '',
               subStreamSessionId: p.subStreamSessionId,
               subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
               ...(typeof p.subAgentAvatar === 'string' ? { subAgentAvatar: p.subAgentAvatar } : {}),
@@ -199,6 +206,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         if (typeof p.callId === 'string' && typeof p.subStreamSessionId === 'string') {
           dispatchStarts.set(p.callId, {
             callId: p.callId,
+            toolName: '',
             subStreamSessionId: p.subStreamSessionId,
             subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
             ...(typeof p.subAgentAvatar === 'string' ? { subAgentAvatar: p.subAgentAvatar } : {}),
@@ -208,6 +216,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           segments.push({
             kind: 'dispatch',
             callId: p.callId,
+            toolName: '',
             subStreamSessionId: p.subStreamSessionId,
             subAgentName: typeof p.subAgentName === 'string' ? p.subAgentName : '',
             ...(typeof p.subAgentAvatar === 'string' ? { subAgentAvatar: p.subAgentAvatar } : {}),
@@ -265,6 +274,8 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
   // 刻意不回填的 tool_result / dispatch result 必须在此收敛为终态展示，
   // 否则 UI 永久显示「执行中」、dispatch chip 计时器持续跳动
   // （实时与重启两路径共用本函数，收敛在这里做一次即两路一致）。
+  // F2：dispatch_bg 的后台完成走 gather 旁路（已被 gather 回链 patch 的段已是终态），
+  // 仍未收割的 bg 委派收敛为 delegated（已派出），只有同步 dispatch 才收敛 aborted。
   if (status !== 'streaming') {
     const pendingToolResult =
       status === 'aborted' ? '(已中断)' : '(未返回结果)';
@@ -273,7 +284,7 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         seg.result = pendingToolResult;
         seg.success = false;
       } else if (seg.kind === 'dispatch' && (seg.status === 'executing' || seg.status === 'queued')) {
-        seg.status = 'aborted';
+        seg.status = seg.toolName.startsWith('dispatch_bg:') ? 'delegated' : 'aborted';
       }
     }
     // 平铺字段（toolCalls / dispatches）与 segments 保持一致
@@ -282,9 +293,19 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
         toolResults.set(callId, { result: pendingToolResult, success: false });
       }
     }
-    for (const [callId, s] of dispatchStatuses) {
-      if (s === 'executing' || s === 'queued') dispatchStatuses.set(callId, 'aborted');
+    for (const [callId, start] of dispatchStarts) {
+      const s = dispatchStatuses.get(callId);
+      if (s === 'executing' || s === 'queued') {
+        dispatchStatuses.set(callId, start.toolName.startsWith('dispatch_bg:') ? 'delegated' : 'aborted');
+      }
     }
+  }
+
+  // F3：实时 UI 是用户可见面——正文剥离 <secrecy> 隐藏上下文（事件库原文保真不动）；
+  // thinking 不剥离（折叠区本就是模型私有推理展示位）
+  text = stripHiddenContext(text);
+  for (const seg of segments) {
+    if (seg.kind === 'text') seg.text = stripHiddenContext(seg.text);
   }
 
   // 配对 tool calls
