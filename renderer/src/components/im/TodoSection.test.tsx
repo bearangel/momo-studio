@@ -1,43 +1,41 @@
 // renderer/src/components/im/TodoSection.test.tsx
-// TodoSection 行为：流式中默认展开 / 进度显示 / 完成项 line-through /
-// 点击 header 折叠 / 空数组不渲染。
 //
-// 注意：组件把序号与 subject 渲染在同一 <span>（"2. 实现"），
-// 因此用正则 /实现/ 做子串匹配，而非精确字符串。
+// TodoSection v2 契约：纯列表渲染（header/展开/自动展开语义已移至 SessionTodoBar，
+// spec 2026-09-18-session-todo-bar-ux-refine-design.md §4）。
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import type { TodoItem } from '../../ipc/types';
 import { TodoSection } from './TodoSection';
 
-const todos = [
-  { id: '1', subject: '设计', status: 'completed' as const },
-  { id: '2', subject: '实现', status: 'in_progress' as const },
-  { id: '3', subject: '测试', status: 'pending' as const },
+const todos: TodoItem[] = [
+  { id: 't1', subject: '已完成项', status: 'completed' },
+  { id: 't2', subject: '进行中项', status: 'in_progress' },
+  { id: 't3', subject: '待办项', status: 'pending' },
 ];
 
-describe('TodoSection', () => {
-  it('流式中默认展开', () => {
-    render(<TodoSection todos={todos} isStreaming={true} />);
-    expect(screen.getByText(/实现/)).toBeInTheDocument();
+describe('TodoSection（纯列表，v2 契约）', () => {
+  it('渲染全部条目（带序号）', () => {
+    render(<TodoSection todos={todos} />);
+    expect(screen.getByText('1. 已完成项')).toBeInTheDocument();
+    expect(screen.getByText('2. 进行中项')).toBeInTheDocument();
+    expect(screen.getByText('3. 待办项')).toBeInTheDocument();
   });
 
-  it('显示进度', () => {
-    render(<TodoSection todos={todos} isStreaming={true} />);
-    expect(screen.getByText(/1\/3/)).toBeInTheDocument();
+  it('完成态条目 line-through 弱化', () => {
+    const { container } = render(<TodoSection todos={todos} />);
+    const first = container.querySelector('li');
+    expect(first).not.toBeNull();
+    expect(first!.className).toContain('line-through');
   });
 
-  it('完成项有 line-through class', () => {
-    const { container } = render(<TodoSection todos={todos} isStreaming={true} />);
-    expect(container.querySelector('.line-through')).toBeTruthy();
+  it('进行中条目 accent 高亮', () => {
+    const { container } = render(<TodoSection todos={todos} />);
+    const items = container.querySelectorAll('li');
+    expect(items[1]!.className).toContain('text-accent-600');
   });
 
-  it('点击折叠', () => {
-    render(<TodoSection todos={todos} isStreaming={true} />);
-    fireEvent.click(screen.getByRole('button'));
-    expect(screen.queryByText(/实现/)).not.toBeInTheDocument();
-  });
-
-  it('空数组不渲染', () => {
-    const { container } = render(<TodoSection todos={[]} isStreaming={true} />);
-    expect(container.firstChild).toBeNull();
+  it('空数组返回 null', () => {
+    const { container } = render(<TodoSection todos={[]} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

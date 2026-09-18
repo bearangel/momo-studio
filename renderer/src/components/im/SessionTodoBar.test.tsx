@@ -1,12 +1,11 @@
 // renderer/src/components/im/SessionTodoBar.test.tsx
 //
-// SessionTodoBar 行为测试（spec docs/specs/2026-09-18-session-todo-bar-design.md）：
-//   Task 1 部分——候选推导（无候选不渲染 / 单候选无页签 / 子 agent 消息入候选）
-//   Task 2 部分——多候选页签 / 自动跟随 / 手动固定
-//   Task 3 部分——手动关闭 / 增员重现 / 切会话重置
+// SessionTodoBar v2 行为测试（spec 2026-09-18-session-todo-bar-ux-refine-design.md）：
+//   Task 1 核心——默认折叠 / 摘要行内容 / 点击切换 / 活清单替换 / v1 生命周期回归
+//   Task 2 页签——仅多流式出现 / 固定与解除 / 终态消失
+//   Task 3 历史——下拉临时查看 / 自动退出 / Ctrl+T
 //
-// 测试模式与 AgentStreamBubble.test.tsx 一致：真实 zustand store + setState 注入，
-// 不 vi.mock store 模块（momo-test-rules：mock 收窄）。
+// 测试模式：真实 zustand store + setState 注入（不 vi.mock store 模块）。
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { ImMessage, TodoItem } from '../../ipc/types';
@@ -16,7 +15,7 @@ import { useStreamStore } from '../../stores/stream.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { SessionTodoBar } from './SessionTodoBar';
 
-/** 构造 ImMessage（字段契约见 types.d.ts，与 AgentStreamBubble.test 同型） */
+/** 构造 ImMessage（契约同 v1 测试） */
 function mkMessage(id: string, sender: string, overrides: Partial<ImMessage> = {}): ImMessage {
   return {
     id,
@@ -39,7 +38,7 @@ function mkMessage(id: string, sender: string, overrides: Partial<ImMessage> = {
   };
 }
 
-/** 构造 n 项待办：前 done 项 completed、第 done+1 项 in_progress、其余 pending */
+/** n 项待办：前 done 项 completed、第 done+1 项 in_progress、其余 pending */
 function mkTodos(n: number, done: number): TodoItem[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `t-${i}`,
@@ -48,7 +47,6 @@ function mkTodos(n: number, done: number): TodoItem[] {
   }));
 }
 
-/** 构造 StreamState（status / todos 可覆写） */
 function mkStream(messageId: string, todos: TodoItem[], status: StreamState['status']): StreamState {
   return {
     thinking: '',
@@ -64,7 +62,6 @@ function mkStream(messageId: string, todos: TodoItem[], status: StreamState['sta
   };
 }
 
-/** 注入两 store：会话 s1 的消息 + streams Map（renderer 真实 store，setState 合并） */
 function setStores(
   messages: ImMessage[],
   streams: Array<[string, StreamState]>,
@@ -77,171 +74,126 @@ function setStores(
   useStreamStore.setState({ streams: new Map(streams) });
 }
 
-describe('SessionTodoBar', () => {
+/** 摘要行的 n/m 进度文本（断言与 agent 名解耦） */
+function summaryProgress(): string | null {
+  const el = screen.getByTestId('todo-summary');
+  const m = el.textContent?.match(/(\d+\/\d+)/);
+  return m?.[1] ?? null;
+}
+
+describe('SessionTodoBar v2', () => {
   beforeEach(() => {
-    // agent 名映射置空——页签名走 shortName 回退，断言不耦合名字
     useAgentStore.setState({ members: [], definitions: [] });
   });
 
-  // --- Task 1：候选推导 ---
+  // --- Task 1：默认折叠 + 摘要行 ---
 
-  it('无 todos 候选时不渲染', () => {
-    setStores([mkMessage('m1', '@bot:ws')], [['m1', mkStream('m1', [], 'done')]]);
-    const { container } = render(<SessionTodoBar />);
-    expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
-    expect(container).toBeEmptyDOMElement();
+  it('默认折叠：流式候选也只渲染摘要行，不渲染列表', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(3, 1), 'streaming')]]);
+    render(<SessionTodoBar />);
+    const summary = screen.getByTestId('todo-summary');
+    expect(summary).toHaveAttribute('aria-expanded', 'false');
+    // 列表未渲染：带序号的列表条目不出现（摘要行的当前进行项 subject 无序号前缀，
+    // 见下一用例）；无滚动容器
+    expect(screen.queryByText(/^\d+\. 条目\d/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('todo-list-scroll')).not.toBeInTheDocument();
   });
 
-  it('单候选：渲染任务条与 TodoSection，无页签行', () => {
-    setStores(
-      [mkMessage('m1', '@bot:ws')],
-      [['m1', mkStream('m1', mkTodos(3, 2), 'done')]],
-    );
+  it('摘要行内容：n/m + 当前进行项 subject', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(3, 1), 'streaming')]]);
     render(<SessionTodoBar />);
-    expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
-    // TodoSection 头部：进度 2/3（67%）
-    expect(screen.getByText('2/3（67%）')).toBeInTheDocument();
-    // 单候选不渲染页签
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
-    // 单候选标签行（agent 名 + 待办）
-    expect(screen.getByText(/· 待办$/)).toBeInTheDocument();
+    expect(summaryProgress()).toBe('1/3');
+    // mkTodos(3,1)：进行中项 = 条目2
+    expect(screen.getByText('条目2')).toBeInTheDocument();
   });
 
-  it('子 agent 消息（parentStreamSessionId 非空）同样入候选', () => {
-    setStores(
-      [mkMessage('m-sub', '@member:ws', { parentStreamSessionId: 'ps-1' })],
-      [['m-sub', mkStream('m-sub', mkTodos(2, 1), 'streaming')]],
-    );
+  it('摘要行无进行中项时不显示条目文本（全完成）', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 2), 'done')]]);
     render(<SessionTodoBar />);
-    expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
-    expect(screen.getByText('1/2（50%）')).toBeInTheDocument();
+    expect(summaryProgress()).toBe('2/2');
+    expect(screen.queryByText(/条目\d/)).not.toBeInTheDocument();
   });
 
-  // --- Task 2：多候选页签 + 自动跟随 + 手动固定 ---
-
-  /** 多候选夹具：m1（3 项完成 2）+ m2（3 项完成 1），状态可覆写 */
-  function setupTwo(
-    s1: StreamState['status'] = 'done',
-    s2: StreamState['status'] = 'streaming',
-  ): void {
-    setStores(
-      [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws')],
-      [
-        ['m1', mkStream('m1', mkTodos(3, 2), s1)],
-        ['m2', mkStream('m2', mkTodos(3, 1), s2)],
-      ],
-    );
-  }
-
-  /** 取当前激活页签的进度文本（'2/3' 或 '1/3'）——断言不耦合 agent 名 */
-  function activeTabProgress(): string | null {
-    const tabs = screen.getAllByRole('tab');
-    const activeTab = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
-    const m = activeTab?.textContent?.match(/(\d+\/\d+)/);
-    return m ? (m[1] ?? null) : null;
-  }
-
-  it('多候选：渲染页签行，自动跟随最后一个流式候选', () => {
-    // m1 done、m2 streaming → 激活 m2（流式优先）
-    setupTwo('done', 'streaming');
+  it('点击摘要行切换展开：列表 + 限高滚动容器出现，再点收起', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(3, 1), 'done')]]);
     render(<SessionTodoBar />);
-    expect(screen.getAllByRole('tab')).toHaveLength(2);
-    expect(activeTabProgress()).toBe('1/3');
-    // 流式页签带高亮点（aria-hidden 指示圆点）
-    expect(document.querySelector('[role="tab"] .bg-accent-500')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('todo-summary'));
+    const summary = screen.getByTestId('todo-summary');
+    expect(summary).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('todo-list-scroll')).toBeInTheDocument();
+    // 列表三项齐全（TodoSection 纯列表渲染）
+    expect(screen.getByText('1. 条目1')).toBeInTheDocument();
+    expect(screen.getByText('2. 条目2')).toBeInTheDocument();
+    expect(screen.getByText('3. 条目3')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('todo-summary'));
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('todo-list-scroll')).not.toBeInTheDocument();
   });
 
-  it('流式候选在前、完成候选在后：仍自动跟随流式者', () => {
-    // m1 streaming、m2 done → 激活 m1（不是最后一个候选）
-    setupTwo('streaming', 'done');
-    render(<SessionTodoBar />);
-    expect(activeTabProgress()).toBe('2/3');
-  });
+  // --- Task 1：活清单替换 ---
 
-  it('全部终态：激活最后一个候选（最新快照）', () => {
-    setupTwo('done', 'done');
-    render(<SessionTodoBar />);
-    expect(activeTabProgress()).toBe('1/3'); // m2 是最后候选
-  });
-
-  it('手动点击页签固定：另一候选流式中也不抢焦点', () => {
-    setupTwo('streaming', 'streaming'); // 自动跟随 m2
-    render(<SessionTodoBar />);
-    expect(activeTabProgress()).toBe('1/3');
-    // 点击 m1 页签（accessible name 含 '2/3'）
-    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ }));
-    expect(activeTabProgress()).toBe('2/3');
-    // m2 仍在流式——固定不被抢
+  it('活清单替换：新一轮流式清单成为摘要，终态后停留为最新；展开选择跨替换保持', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(5, 5), 'done')]]);
+    const { unmount } = render(<SessionTodoBar />);
+    expect(summaryProgress()).toBe('5/5');
+    // 用户展开——替换后应保持展开（spec §3「展开选择跨替换保持」）
+    fireEvent.click(screen.getByTestId('todo-summary'));
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'true');
+    // 新一轮开始（m2 streaming）——流式优先
     act(() => {
+      useSessionStore.setState({
+        messagesBySession: new Map([
+          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@a:ws')]],
+        ]),
+      });
       useStreamStore.setState({
         streams: new Map([
-          ['m1', mkStream('m1', mkTodos(3, 2), 'streaming')],
-          ['m2', mkStream('m2', mkTodos(3, 1), 'streaming')],
+          ['m1', mkStream('m1', mkTodos(5, 5), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 0), 'streaming')],
         ]),
       });
     });
-    expect(activeTabProgress()).toBe('2/3');
-  });
-
-  it('固定候选由流式转入终态：解除固定，恢复自动跟随', () => {
-    setupTwo('streaming', 'streaming');
-    render(<SessionTodoBar />);
-    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ })); // 固定 m1
-    // m1 → done（曾流式 → 解除固定），m2 仍流式 → 自动跟随回 m2
+    expect(summaryProgress()).toBe('0/3');
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'true'); // 保持
+    // m2 结束——停留为最新活清单（不回退 m1），展开仍保持
     act(() => {
       useStreamStore.setState({
         streams: new Map([
-          ['m1', mkStream('m1', mkTodos(3, 3), 'done')],
-          ['m2', mkStream('m2', mkTodos(3, 1), 'streaming')],
+          ['m1', mkStream('m1', mkTodos(5, 5), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 3), 'done')],
         ]),
       });
     });
-    expect(activeTabProgress()).toBe('1/3');
+    expect(summaryProgress()).toBe('3/3');
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'true');
+    unmount();
   });
 
-  it('固定已完成的历史候选（回看）：不自动解除', () => {
-    setupTwo('done', 'streaming'); // 自动跟随 m2
+  it('单候选无历史按钮', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
     render(<SessionTodoBar />);
-    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ })); // 固定 m1（done）
-    expect(activeTabProgress()).toBe('2/3');
-    // m2 继续流式更新——m1 固定不动
-    act(() => {
-      useStreamStore.setState({
-        streams: new Map([
-          ['m1', mkStream('m1', mkTodos(3, 2), 'done')],
-          ['m2', mkStream('m2', mkTodos(3, 2), 'streaming')],
-        ]),
-      });
-    });
-    expect(activeTabProgress()).toBe('2/3');
+    expect(screen.queryByRole('button', { name: '历史待办' })).not.toBeInTheDocument();
   });
 
-  // --- Task 3：生命周期（✕ 关闭 / 增员重现 / 切会话重置）---
+  // --- Task 1：v1 生命周期回归 ---
 
-  it('✕ 关闭后隐藏；同一候选流式更新不重现', () => {
+  it('✕ 关闭后隐藏；同一候选流式更新不重现；增员才重现', () => {
     setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 0), 'streaming')]]);
     render(<SessionTodoBar />);
     fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' }));
     expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
-    // m1 继续 todowrite 更新（同 id，非增员）——保持隐藏
+    // 同候选流式更新（同 id，非增员）——保持隐藏
     act(() => {
       useStreamStore.setState({
         streams: new Map([['m1', mkStream('m1', mkTodos(2, 1), 'streaming')]]),
       });
     });
     expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
-  });
-
-  it('候选增员（新消息的流获得 todos）→ 任务条重现', () => {
-    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
-    render(<SessionTodoBar />);
-    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' }));
-    expect(screen.queryByTestId('session-todo-bar')).not.toBeInTheDocument();
-    // 新消息 m2 的流获得 todos → 增员 → 重现（自动跟随无流式 → 最后候选 m2）
+    // 新候选增员——重现且摘要为新清单（活清单替换）
     act(() => {
       useSessionStore.setState({
         messagesBySession: new Map([
-          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws')]],
+          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@a:ws')]],
         ]),
       });
       useStreamStore.setState({
@@ -252,14 +204,15 @@ describe('SessionTodoBar', () => {
       });
     });
     expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
-    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(summaryProgress()).toBe('0/3');
   });
 
-  it('切换会话：dismissed / pinned 重置，显示新会话候选', () => {
+  it('切换会话：dismissed / expanded / 历史查看全部重置，显示新会话候选', () => {
     setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
     render(<SessionTodoBar />);
-    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' })); // s1 关闭
-    // 切到 s2（自带候选）——关闭状态不跨会话
+    fireEvent.click(screen.getByTestId('todo-summary')); // 展开
+    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' }));
+    // 切到 s2（自带候选）——关闭与展开状态不跨会话
     act(() => {
       useSessionStore.setState({
         activeSessionId: 's2',
@@ -276,6 +229,7 @@ describe('SessionTodoBar', () => {
       });
     });
     expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
-    expect(screen.getByText('0/1（0%）')).toBeInTheDocument();
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+    expect(summaryProgress()).toBe('0/1');
   });
 });
