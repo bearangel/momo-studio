@@ -52,8 +52,8 @@ afterEach(() => {
 });
 
 describe('handles / getDefs', () => {
-  it('五个工具名全部路由命中', () => {
-    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_copy']) {
+  it('全部工具名全部路由命中', () => {
+    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_copy']) {
       expect(tools.handles(n)).toBe(true);
     }
     expect(tools.handles('read_file')).toBe(false);
@@ -141,6 +141,7 @@ describe('office_read / office_read_cells', () => {
 describe('office_create_doc', () => {
   it('office_create_doc 覆盖已读目标：modify 记账且 beforeHash 非空、before blob 字节一致', async () => {
     await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'v1' }] }, ctx);
+    const v1Bytes = fs.readFileSync(path.join(tmpDir, 'd.docx'));
     await tools.execute('office_read', { path: 'd.docx' }, ctx);
     await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'v2' }] }, ctx);
     const entries = getJournalStore()!.listByPath('ws-office', 'd.docx');
@@ -149,5 +150,6 @@ describe('office_create_doc', () => {
     expect(mod[0]?.beforeHash).not.toBeNull();
     const beforeBlob = getJournalStore()!.readBlobBytes('ws-office', mod[0]!.beforeHash!);
     expect(beforeBlob).not.toBeNull(); // v1 文件字节（docx zip）
+    expect(beforeBlob!.equals(v1Bytes)).toBe(true);
   });
 });
