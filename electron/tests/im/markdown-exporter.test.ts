@@ -6,7 +6,7 @@
 //   - 导出器仅输出 body + 时间戳 + sender（富字段 thinking/tool_calls/dispatch 已废弃）
 //   - dispatch/task_reply 消息作为顶层消息统一渲染（不再分组嵌套）
 import { describe, it, expect } from 'vitest';
-import { formatRoomToMarkdown, renderSubMessage, TOOL_RESULT_MAX_CHARS, type ExportMessage, type ExportMeta } from '../../src/main/im/markdown-exporter';
+import { formatRoomToMarkdown, renderSubMessage, type ExportMessage, type ExportMeta } from '../../src/main/im/markdown-exporter';
 
 const meta: ExportMeta = {
   roomName: '项目经理办公室',
@@ -59,6 +59,25 @@ describe('agent 文本消息', () => {
     const out = formatRoomToMarkdown([msg], meta);
     expect(out).toContain('## 🤖 项目经理 @bot.pm-agent:localhost —');
     expect(out).toContain('已读完文件');
+  });
+
+  it('F11：携带 endedAt 的 agent 消息渲染起止区间与耗时；无 endedAt 保持单时刻', () => {
+    const start = Date.parse('2026-09-18T11:55:58+08:00');
+    const end = Date.parse('2026-09-18T12:01:03+08:00');
+    const withSpan = mkMsg({
+      sender: '@bot.pm:localhost',
+      botName: '项目经理',
+      endedAt: end,
+      timestamp: start,
+    });
+    const out = formatRoomToMarkdown([withSpan], meta);
+    expect(out).toContain('2026-09-18 11:55:58 ~ 2026-09-18 12:01:03（跨 5 分 05 秒）');
+    // 用户消息（无 endedAt）消息头保持单时刻；零跨度不注「跨」
+    const userOut = formatRoomToMarkdown([mkMsg({ timestamp: start })], meta);
+    expect(userOut).toMatch(/## 👤 用户 @owner:localhost — \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\n/);
+    expect(userOut).not.toContain('（跨 ');
+    const zero = mkMsg({ sender: '@bot.pm:localhost', botName: '项目经理', timestamp: start, endedAt: start });
+    expect(formatRoomToMarkdown([zero], meta)).not.toContain('（跨 ');
   });
 
   it('botName 为 null 时 fallback shortName(sender)', () => {
@@ -121,7 +140,7 @@ describe('富信息渲染（v2.3.2）', () => {
       [{ ...base, rich: { segments: [
         { kind: 'text', text: '先看目录' },
         { kind: 'tool', callId: 'c1', toolName: 'list_files', args: { path: '/src' }, result: 'a.ts', success: true },
-        { kind: 'dispatch', callId: 'd1', subStreamSessionId: 'ss-sub', subAgentName: 'tester', task: '验证', status: 'completed', subMarkdown: '**tester** — 2026\n\n验证通过' },
+        { kind: 'dispatch', callId: 'd1', toolName: 'dispatch:tester', subStreamSessionId: 'ss-sub', subAgentName: 'tester', task: '验证', status: 'completed', subMarkdown: '**tester** — 2026\n\n验证通过' },
         { kind: 'todo', items: [{ id: '1', subject: 'A', status: 'completed', source: 'agent' }, { id: '2', subject: 'B', status: 'in_progress', source: 'agent' }, { id: '3', subject: 'C', status: 'pending', source: 'agent' }] },
       ], status: 'done' } }],
       { roomName: '测试', roomId: 'r1', exportedAt: new Date(), requestedLimit: 10, actualCount: 1 },
@@ -141,7 +160,7 @@ describe('富信息渲染（v2.3.2）', () => {
     expect(md).toContain('- ○ C');
   });
 
-  it('工具结果截断 2000 字符并标注原长', () => {
+  it('F5：工具结果无损渲染（导出定位审计/备份产物，不再截断）', () => {
     const long = 'x'.repeat(2500);
     const md = formatRoomToMarkdown(
       [{ ...base, rich: { segments: [
@@ -149,9 +168,18 @@ describe('富信息渲染（v2.3.2）', () => {
       ], status: 'done' } }],
       { roomName: 't', roomId: 'r1', exportedAt: new Date(), requestedLimit: 1, actualCount: 1 },
     );
-    expect(TOOL_RESULT_MAX_CHARS).toBe(2000);
-    expect(md).toContain('（已截断，原文 2500 字符）');
-    expect(md).not.toContain('x'.repeat(2001));
+    expect(md).toContain(long);
+    expect(md).not.toContain('已截断');
+  });
+
+  it('F2：delegated 委派状态渲染「已派出后台」标注', () => {
+    const md = formatRoomToMarkdown(
+      [{ ...base, rich: { segments: [
+        { kind: 'dispatch', callId: 'd1', toolName: 'dispatch_bg:coder', subStreamSessionId: 'ss-bg', subAgentName: '码农', task: '后台', status: 'delegated' },
+      ], status: 'done' } }],
+      { roomName: 't', roomId: 'r1', exportedAt: new Date(), requestedLimit: 1, actualCount: 1 },
+    );
+    expect(md).toContain('📤 delegated（已派出后台，结果未收割）');
   });
 
   it('无 rich 字段回退纯 body（legacy 兼容路径不变）', () => {
@@ -184,7 +212,7 @@ describe('富信息渲染（v2.3.2）', () => {
         [{ ...base, rich: seg }],
         { roomName: 't', roomId: 'r1', exportedAt: new Date(), requestedLimit: 1, actualCount: 1 },
       );
-    expect(mk({ segments: [{ kind: 'dispatch', callId: 'd1', subStreamSessionId: 's', subAgentName: 't', task: 'x', status: 'completed', subOmitted: true }], status: 'done' })).toContain('（深层委派已省略）');
-    expect(mk({ segments: [{ kind: 'dispatch', callId: 'd1', subStreamSessionId: 's', subAgentName: 't', task: 'x', status: 'completed' }], status: 'done' })).toContain('✅ completed');
+    expect(mk({ segments: [{ kind: 'dispatch', callId: 'd1', toolName: 'dispatch:t', subStreamSessionId: 's', subAgentName: 't', task: 'x', status: 'completed', subOmitted: true }], status: 'done' })).toContain('（深层委派已省略）');
+    expect(mk({ segments: [{ kind: 'dispatch', callId: 'd1', toolName: 'dispatch:t', subStreamSessionId: 's', subAgentName: 't', task: 'x', status: 'completed' }], status: 'done' })).toContain('✅ completed');
   });
 });

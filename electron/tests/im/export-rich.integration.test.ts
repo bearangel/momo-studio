@@ -42,7 +42,7 @@ vi.mock('../../src/main/agent/crud', () => ({
   getAgentDefinition: vi.fn(() => undefined),
 }));
 
-import { runMigrations, closeDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertMessage } from '../../src/main/storage/messages/repo';
 import { insertEvent, nextSeqForMessage } from '../../src/main/storage/messages/events-repo';
 import { registerSessionIpcHandlers } from '../../src/main/im/session.ipc.handlers';
@@ -88,18 +88,34 @@ describe('session:exportMessages 富信息', () => {
     pushEvent(ms.id, 'text_delta', { delta: '构建验证通过' });
     pushEvent(ms.id, 'final', { status: 'done' });
 
+    // F11：消息与事件同毫秒落库时 endedAt==timestamp（不注水——行为正确）。
+    // 回填消息 created_at 制造确定性 5 秒跨度，断言起止区间渲染。
+    const db = getDb();
+    const maxEvt = db
+      .prepare('SELECT MAX(created_at) AS m FROM message_events WHERE message_id = ?')
+      .get(mp.id) as { m: number | null };
+    db.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run((maxEvt.m ?? Date.now()) - 5_000, mp.id);
+
     const handler = ipcHandlers.get('session:exportMessages') as (evt: unknown, sid: string, limit: number) => Promise<{ filename: string; content: string }>;
     const { content } = await handler(null, SESSION, 100);
 
     // thinking 排除（spec §7-3）
     expect(content).not.toContain('内心策略不外泄');
+    // F10：actualCount = 顶层条目数（子 agent 嵌套行不计——此前 rows.length 宣称 3 条误导审计）
+    expect(content).toContain('最近 100 条（实际 2 条）');
+    // F11：agent 消息（有 events）渲染起止区间与耗时；用户消息（无 events）保持单时刻。
+    // 该夹具 botNameMap 为空且 sender '@coder.x' 无 :host 后缀——不依赖名称回退形态，按 sender + 跨度断言
+    expect(content).toMatch(/@coder\.x — \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ~ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}（跨 5 秒）/);
+    expect(content).toMatch(/## 👤 用户 owner — \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\n/);
     // 无事件消息回退（spec §7-5）
     expect(content).toContain('帮我检查');
     // 时间线顺序（spec §7-1）：text → 工具 → 委派 → todo → text
-    const order = ['先看文件', '🔧 **工具** `read_file`', '（已截断，原文 2500 字符）', '📤 **委派** tester：验证构建 —— ✅ completed', '- ✓ 检查', '完成']
+    // F5：导出无损——2500 字符工具结果全文出现（不再 2000 截断）
+    const order = ['先看文件', '🔧 **工具** `read_file`', 'y'.repeat(2500), '📤 **委派** tester：验证构建 —— ✅ completed', '- ✓ 检查', '完成']
       .map((s) => content.indexOf(s));
     for (const idx of order) expect(idx).toBeGreaterThanOrEqual(0);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(content).not.toContain('已截断');
     // 子 agent 嵌套（spec §7-2）：引块内出现子回复，且顶层不重复出现
     expect(content).toContain('> **tester**');
     expect(content).toContain('> 构建验证通过');

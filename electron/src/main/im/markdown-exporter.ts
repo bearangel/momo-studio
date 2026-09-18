@@ -3,7 +3,7 @@
 // 会话导出 Markdown 格式化纯函数。无 IPC / DB 依赖——IPC handler 反查 agent 名字
 // 后注入 ExportMessage.botName 字段传入。
 //
-// v2.0 A 子系统简化：
+//   v2.0 A 子系统简化：
 //   - Matrix event content 富字段（thinking/tool_calls/dispatch 元数据）已废弃，
 //     富信息统一在 message_events 表（renderer 端用 aggregateEvents 重建）。
 //   - v2.3.2 已升级：rich 字段为可选，缺省（legacy-export 路径 / 无事件消息）仍
@@ -11,12 +11,13 @@
 //   - 所有消息统一渲染为顶层条目（不再分组 dispatch/task_reply 嵌套）；
 //     子 agent 嵌套由 dispatch.subMarkdown 以引块形式呈现（handler 递归填充）。
 //
+//   F5（2026-09-18）：导出定位为无损审计/备份产物，工具结果不再截断——
+//     此前 2000 字符截断使 gather 回执（2217 字符）等关键证据在导出中失真。
+//
 // v2.0 P1 Task 12：原 extends MatrixMessagePayload（matrix/sync-manager 已删），
 // 字段就地展开——形状与 SQLite MessageRow 导出视图一致。
 
 import type { ExportDispatchStatus, ExportSegment } from './export-aggregator';
-
-export const TOOL_RESULT_MAX_CHARS = 2000;
 
 export interface ExportMessage {
   /** 消息唯一标识（SQLite messages.id） */
@@ -36,6 +37,12 @@ export interface ExportMessage {
     status: 'streaming' | 'done' | 'failed' | 'aborted';
     error?: string;
   };
+  /**
+   * F11：回合结束时刻（消息 events 末条 createdAt）。agent 回合耗时可达数分钟——
+   * 仅凭 timestamp（回合起点，与用户消息同秒）会伪装成消息完成时刻。用户消息无
+   * events，缺省不变。
+   */
+  endedAt?: number;
 }
 
 export interface ExportMeta {
@@ -58,10 +65,19 @@ function formatTime(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** 工具结果截断：超限截到 2000 字符并标注原文长度 */
-function truncateResult(result: string): string {
-  if (result.length <= TOOL_RESULT_MAX_CHARS) return result;
-  return `${result.slice(0, TOOL_RESULT_MAX_CHARS)}…（已截断，原文 ${result.length} 字符）`;
+/** F11：回合耗时人话（秒/分秒/时分）——导出头时间跨度标注用 */
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec} 秒`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin} 分 ${String(totalSec % 60).padStart(2, '0')} 秒`;
+  return `${Math.floor(totalMin / 60)} 时 ${String(totalMin % 60).padStart(2, '0')} 分`;
+}
+
+/** F11：起止区间标注——endedAt 晚于起点才渲染（events 缺失/零跨度不注水） */
+function timeSpanSuffix(timestamp: number, endedAt: number | undefined): string {
+  if (endedAt === undefined || endedAt <= timestamp) return '';
+  return ` ~ ${formatTime(endedAt)}（跨 ${formatDuration(endedAt - timestamp)}）`;
 }
 
 const DISPATCH_STATUS_ICON: Record<ExportDispatchStatus, string> = {
@@ -71,6 +87,7 @@ const DISPATCH_STATUS_ICON: Record<ExportDispatchStatus, string> = {
   failed: '❌ failed',
   timeout: '⏱ timeout',
   aborted: '🛑 aborted',
+  delegated: '📤 delegated（已派出后台，结果未收割）',
 };
 
 /** 逐行加 `> ` 前缀（工具结果 / 子 agent 嵌套内容用引块呈现） */
@@ -90,7 +107,7 @@ function renderSegments(segments: ExportSegment[]): string {
         break;
       case 'tool': {
         out += `🔧 **工具** \`${seg.toolName}\` → \`${JSON.stringify(seg.args)}\`\n\n`;
-        const result = seg.result === null ? '（执行中）' : truncateResult(seg.result);
+        const result = seg.result === null ? '（执行中）' : seg.result;
         out += `${quoteBlock(result)}\n\n`;
         break;
       }
@@ -133,7 +150,7 @@ function renderMessage(msg: ExportMessage): string {
   const icon = isBot ? '🤖' : '👤';
   const role = isBot ? (msg.botName ?? shortName(msg.sender)) : '用户';
   // Matrix sender 已是 @user:host 形式，无需额外 @ 前缀
-  let out = `## ${icon} ${role} ${msg.sender} — ${formatTime(msg.timestamp)}${statusSuffix(msg.rich)}\n\n`;
+  let out = `## ${icon} ${role} ${msg.sender} — ${formatTime(msg.timestamp)}${timeSpanSuffix(msg.timestamp, msg.endedAt)}${statusSuffix(msg.rich)}\n\n`;
 
   if (msg.rich && msg.rich.segments.length > 0) {
     out += renderSegments(msg.rich.segments);
@@ -151,7 +168,7 @@ function renderMessage(msg: ExportMessage): string {
 export function renderSubMessage(msg: ExportMessage): string {
   const isBot = msg.botName !== null || msg.sender.startsWith('@bot.');
   const role = isBot ? (msg.botName ?? shortName(msg.sender)) : '用户';
-  let out = `**${role}** — ${formatTime(msg.timestamp)}${statusSuffix(msg.rich)}\n\n`;
+  let out = `**${role}** — ${formatTime(msg.timestamp)}${timeSpanSuffix(msg.timestamp, msg.endedAt)}${statusSuffix(msg.rich)}\n\n`;
   if (msg.rich && msg.rich.segments.length > 0) {
     out += renderSegments(msg.rich.segments);
   } else if (msg.body) {

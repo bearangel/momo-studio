@@ -243,22 +243,27 @@ export function registerSessionIpcHandlers(): void {
       }
 
       // 3.5 富信息（v2.3.2）：events → 段序列；dispatch 段递归嵌套子回复（深度上限 3）
+      // F11：events 只查一次——endedAt（末条事件时刻，回合结束近似）与 rich 共用。
       const MAX_DISPATCH_DEPTH = 3;
       // botNameOverride：dispatch 段展开子回复时传 seg.subAgentName——子 agent 的
       // userId 不在 botNameMap 反查索引里也能正确落名（子 agent 名在 start payload 已知）
-      const toExport = (m: MessageRow, depth: number, botNameOverride?: string): ExportMessage => ({
-        eventId: m.id,
-        roomId: m.sessionId,
-        sender: m.sender,
-        body: m.body,
-        eventType: m.eventType,
-        content: {},
-        timestamp: m.createdAt,
-        botName: botNameOverride ?? botNameMap.get(m.sender) ?? null,
-        rich: buildRich(m, depth),
-      });
-      const buildRich = (m: MessageRow, depth: number): ExportMessage['rich'] => {
+      const toExport = (m: MessageRow, depth: number, botNameOverride?: string): ExportMessage => {
         const events = listEventsByMessage(m.id);
+        return {
+          eventId: m.id,
+          roomId: m.sessionId,
+          sender: m.sender,
+          body: m.body,
+          eventType: m.eventType,
+          content: {},
+          timestamp: m.createdAt,
+          botName: botNameOverride ?? botNameMap.get(m.sender) ?? null,
+          // F11：回合结束时刻 = events 末条 createdAt（用户消息无 events → 缺省不注水）
+          ...(events.length > 0 ? { endedAt: events[events.length - 1]!.createdAt } : {}),
+          rich: buildRich(events, depth),
+        };
+      };
+      const buildRich = (events: ReturnType<typeof listEventsByMessage>, depth: number): ExportMessage['rich'] => {
         if (events.length === 0) return undefined; // 无事件（user/legacy）→ 纯 body 路径
         const agg = exportAggregateEvents(events);
         if (agg.segments.length === 0) return undefined;
@@ -280,12 +285,15 @@ export function registerSessionIpcHandlers(): void {
       const roomName = getSession(sessionId)?.title ?? sessionId;
 
       // 5. 格式化 Markdown
+      // F10：actualCount 口径 = 实际渲染的顶层条目数（entries 已剔除子 agent 嵌套行
+      // 与分段行）。此前用 rows.length（含嵌套子行），导出头宣称「实际 12 条」却只
+      // 渲染 6 个顶层条目——计数与内容不符，误导审计（2026-09-18 实测）。
       const content = formatRoomToMarkdown(exportMessages, {
         roomName: roomName || sessionId,
         roomId: sessionId,
         exportedAt: new Date(),
         requestedLimit: limit,
-        actualCount: rows.length,
+        actualCount: exportMessages.length,
       });
 
       // 6. 生成 filename：momo-session-<safeTitle>-<YYYYMMDD-HHmm>.md
