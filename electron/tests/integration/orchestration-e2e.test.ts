@@ -360,9 +360,10 @@ describe('bg 三连派 → reply ×3 → gather all 全中', () => {
     expect(r.notes).toEqual([]);
     expect(r.done).toHaveLength(3);
     const doneById = new Map(r.done.map((d) => [d.taskId, d]));
-    expect(doneById.get(b1.taskId)).toEqual({ taskId: b1.taskId, status: 'done', body: '结果一', toolCallsUsed: 1 });
-    expect(doneById.get(b2.taskId)).toEqual({ taskId: b2.taskId, status: 'done', body: '结果二', toolCallsUsed: 2 });
-    expect(doneById.get(b3.taskId)).toEqual({ taskId: b3.taskId, status: 'done', body: '结果三', toolCallsUsed: 3 });
+    // F2：outcome 随收割条目透传（completed reply → outcome=completed）
+    expect(doneById.get(b1.taskId)).toEqual({ taskId: b1.taskId, status: 'done', outcome: 'completed', body: '结果一', toolCallsUsed: 1 });
+    expect(doneById.get(b2.taskId)).toEqual({ taskId: b2.taskId, status: 'done', outcome: 'completed', body: '结果二', toolCallsUsed: 2 });
+    expect(doneById.get(b3.taskId)).toEqual({ taskId: b3.taskId, status: 'done', outcome: 'completed', body: '结果三', toolCallsUsed: 3 });
   });
 });
 
@@ -390,7 +391,7 @@ describe('bg → gather(any, 短超时) pending → 迟到 reply → 二次 gath
 
     // 二次 gather：同步首扫命中缓存立即返回（不挂计时器）
     const r2 = await executeGather([taskId], 'any');
-    expect(r2.done).toEqual([{ taskId, status: 'done', body: '迟到结果', toolCallsUsed: 2 }]);
+    expect(r2.done).toEqual([{ taskId, status: 'done', outcome: 'completed', body: '迟到结果', toolCallsUsed: 2 }]);
     expect(r2.pending).toEqual([]);
     expect(r2.notes).toEqual([]);
   });

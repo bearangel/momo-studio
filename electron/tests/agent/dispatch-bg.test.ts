@@ -425,7 +425,8 @@ describe('executeDispatchBg 异步派发执行体', () => {
     const { taskId } = await executeDispatchBg('ui', '迟到任务', makeConfig(), undefined, 'ss-sub', 'ss-pm', sessChatId);
     handleTaskReply({ task_id: taskId, status: 'completed', body: '迟到结果', tool_calls_used: 4 });
     const r = await executeGather([taskId], 'all', 30000);
-    expect(r.done).toEqual([{ taskId, status: 'done', body: '迟到结果', toolCallsUsed: 4 }]);
+    // F2：outcome 随快照透传（回链 chip 终态的判别键）
+    expect(r.done).toEqual([{ taskId, status: 'done', outcome: 'completed', body: '迟到结果', toolCallsUsed: 4 }]);
     expect(r.pending).toEqual([]);
     expect(r.notes).toEqual([]);
   });
@@ -467,7 +468,7 @@ describe('executeGather 收割语义', () => {
     const p = executeGather(['a1', 'a2'], 'any', 30000);
     handleTaskReply({ task_id: 'a2', status: 'completed', body: '先完成', tool_calls_used: 1 });
     const r = await p;
-    expect(r.done).toEqual([{ taskId: 'a2', status: 'done', body: '先完成', toolCallsUsed: 1 }]);
+    expect(r.done).toEqual([{ taskId: 'a2', status: 'done', outcome: 'completed', body: '先完成', toolCallsUsed: 1 }]);
     expect(r.pending).toEqual(['a1']);
     expect(r.notes).toEqual([]);
   });
@@ -635,7 +636,7 @@ describe('executeGather 收割语义', () => {
     expect(getBgHandle('pre-ab')?.status).toBe('in_flight');
     handleTaskReply({ task_id: 'pre-ab', status: 'completed', body: 'ok', tool_calls_used: 0 });
     const again = await executeGather(['pre-ab'], 'all');
-    expect(again.done).toEqual([{ taskId: 'pre-ab', status: 'done', body: 'ok', toolCallsUsed: 0 }]);
+    expect(again.done).toEqual([{ taskId: 'pre-ab', status: 'done', outcome: 'completed', body: 'ok', toolCallsUsed: 0 }]);
   });
 });
 

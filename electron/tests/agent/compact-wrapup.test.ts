@@ -290,15 +290,20 @@ describe('compact 双态（chat 路径，spec §5.1/§7-2）', () => {
 
   it('(b) 有 user 挂靠 → 压缩后工具正常（续跑模式），mandate 段跨压缩存活', async () => {
     __setTodosForTest(SID, [userTodo('重构X模块-步骤1')]);
+    // 第三条脚本喂给 F1 收尾校验轮：终文时 user 待办仍 in_progress →
+    // 注入一次性「待办收尾校验」合成条后模型重述收尾（todo 未标完成是本场景前提）
     script = [
       { toolCall: { name: 'compact', arguments: {} } },
       { text: '继续完成重构。' },
+      { text: '已核对待办，继续完成重构。' },
     ];
     const out = await runChatLoop('room-t', '帮我重构X模块', mkConfig(), mkCtx(), undefined, undefined, undefined, SID);
     expect(requestCompactionMock).toHaveBeenCalledTimes(1);
-    expect(captured.length).toBe(2);
+    expect(captured.length).toBe(3);
     expect(Array.isArray(captured[1]!.tools)).toBe(true);
     expect(out).toContain('继续完成重构');
+    // F1 收尾校验轮：第三次调用携带合成校验条（一次性）
+    expect(JSON.stringify(captured[2]!.messages)).toContain('[系统] 待办收尾校验');
     // 压缩后 messages[0] 仍含 mandate（system 保留，spec §2 跨压缩存活）
     const sys = captured[1]!.messages[0]!;
     expect(sys.role).toBe('system');

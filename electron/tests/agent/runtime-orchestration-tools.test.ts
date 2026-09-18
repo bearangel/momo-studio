@@ -408,6 +408,157 @@ describe('doExecuteTool 编排工具路由（5 执行体接线）', () => {
   });
 });
 
+// === Part 1.5：F2 状态回链（taskId ↔ callId 映射 + gather/cancel patch 事件） ===
+
+describe('doExecuteTool F2 状态回链（bg 委派终态经 patch 事件回写 chip）', () => {
+  const originalSend = process.send;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    clearExecutorMocks();
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+  });
+
+  const toolResultsOf = (callId: string) =>
+    sentChunks.filter(
+      (c) => (c as { type?: string }).type === 'tool_result' && (c as { callId?: string }).callId === callId,
+    ) as Extract<StreamChunk, { type: 'tool_result' }>[];
+
+  const bgDispatch = async (callId: string, taskId: string): Promise<void> => {
+    vi.mocked(executeDispatchBg).mockResolvedValueOnce({ taskId });
+    await doExecuteTool(
+      { id: callId, name: 'dispatch_bg:researcher', arguments: { task: '后台' } },
+      makeRoutingCtx(),
+      makeMainConfig(),
+      undefined,
+      undefined,
+      undefined,
+      'ss-pm',
+      'sess-exec',
+    );
+  };
+
+  const gather = async (handles: string[]): Promise<string> =>
+    doExecuteTool(
+      { id: `g-${handles.join('-')}`, name: 'dispatch_gather', arguments: { handles, mode: 'all' } },
+      makeRoutingCtx(),
+      makeMainConfig(),
+      undefined,
+      undefined,
+      undefined,
+      'ss-pm',
+      'sess-exec',
+    );
+
+  it('gather 收割 done(outcome=completed) → 按映射补发 subStatus=completed patch（streamSessionId=PM 流）', async () => {
+    await bgDispatch('cb-a', 'bg-link-a');
+    vi.mocked(executeGather).mockResolvedValueOnce({
+      done: [{ taskId: 'bg-link-a', status: 'done', outcome: 'completed', toolCallsUsed: 4 }],
+      pending: [],
+      notes: [],
+    });
+    const out = await gather(['bg-link-a']);
+
+    expect(JSON.parse(out).done).toHaveLength(1);
+    const patches = toolResultsOf('cb-a');
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.subStatus).toBe('completed');
+    expect(patches[0]!.success).toBe(true);
+    expect(patches[0]!.streamSessionId).toBe('ss-pm');
+    expect(patches[0]!.toolName).toBe('dispatch_bg:researcher');
+    expect(patches[0]!.result).toContain('toolCallsUsed=4');
+  });
+
+  it('gather 收割 done(outcome=failed) → patch subStatus=failed（失败不被显示为完成）', async () => {
+    await bgDispatch('cb-b', 'bg-link-b');
+    vi.mocked(executeGather).mockResolvedValueOnce({
+      done: [{ taskId: 'bg-link-b', status: 'done', outcome: 'failed', body: '子任务失败', toolCallsUsed: 2 }],
+      pending: [],
+      notes: [],
+    });
+    await gather(['bg-link-b']);
+
+    const patches = toolResultsOf('cb-b');
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.subStatus).toBe('failed');
+    expect(patches[0]!.success).toBe(false);
+  });
+
+  it('gather 收割 cancelled → patch subStatus=failed（取消是异常终态）', async () => {
+    await bgDispatch('cb-c', 'bg-link-c');
+    vi.mocked(executeGather).mockResolvedValueOnce({
+      done: [{ taskId: 'bg-link-c', status: 'cancelled' }],
+      pending: [],
+      notes: [],
+    });
+    await gather(['bg-link-c']);
+
+    const patches = toolResultsOf('cb-c');
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.subStatus).toBe('failed');
+    expect(patches[0]!.result).toContain('取消');
+  });
+
+  it('bg 派发失败 → 立即 patch subStatus=failed 且错误上抛（chip 不留 executing）', async () => {
+    vi.mocked(executeDispatchBg).mockRejectedValueOnce(new Error('在途后台任务已达上限'));
+    await expect(
+      doExecuteTool(
+        { id: 'cb-e', name: 'dispatch_bg:researcher', arguments: { task: '后台' } },
+        makeRoutingCtx(),
+        makeMainConfig(),
+        undefined,
+        undefined,
+        undefined,
+        'ss-pm',
+        'sess-exec',
+      ),
+    ).rejects.toThrow('在途后台任务已达上限');
+
+    const patches = toolResultsOf('cb-e');
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.subStatus).toBe('failed');
+    expect(patches[0]!.result).toContain('在途后台任务已达上限');
+  });
+
+  it('dispatch_cancel 取消成功 → patch subStatus=failed', async () => {
+    await bgDispatch('cb-f', 'bg-link-f');
+    const out = await doExecuteTool(
+      { id: 'cancel-f', name: 'dispatch_cancel', arguments: { handle: 'bg-link-f' } },
+      makeRoutingCtx(),
+      makeMainConfig(),
+      undefined,
+      undefined,
+      undefined,
+      'ss-pm',
+      'sess-exec',
+    );
+    expect(out).toBe(JSON.stringify({ status: 'cancelled' }));
+    const patches = toolResultsOf('cb-f');
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.subStatus).toBe('failed');
+  });
+
+  it('gather 收割未映射句柄（runtime 重启 / 非 bg 派发）→ 不发 patch', async () => {
+    vi.mocked(executeGather).mockResolvedValueOnce({
+      done: [{ taskId: 'ghost-9', status: 'done', outcome: 'completed', toolCallsUsed: 1 }],
+      pending: [],
+      notes: [],
+    });
+    await gather(['ghost-9']);
+    // 无任何 tool_result patch 指向不存在的 callId——sentChunks 里只有 gather 自身
+    // 的普通工具 result（callId = gather 调用 id），无其他补发
+    expect(toolResultsOf('cb-a')).toHaveLength(0);
+    expect(toolResultsOf('cb-b')).toHaveLength(0);
+  });
+});
+
 // === Part 2：工具面 defs + hint 教学段（纯函数单元） ===
 
 describe('getOrchestrationToolDefs 工具面（spec §5）', () => {

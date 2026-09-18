@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext } from './runtime-config';
-import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint } from './prompt-hints';
+import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint, formatClockHint, formatWorkspaceHygieneHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
 import {
@@ -138,6 +138,7 @@ const COMPACTION_SYNTHETIC_USER_PREFIXES = [
   '[此前对话压缩摘要]',   // rebuildSessionContext 读 session_compactions 注入的 prior 摘要（T4）
   '[历史压缩摘要]',       // 本回合内压缩产出的摘要条
   '[系统] 上下文已自动压缩', // auto 压缩后的续行合成条（spec §6.2）
+  '[系统] 待办收尾校验',  // F1 收尾校验轮注入的合成条（见 buildTodoReconcileNotice）
 ] as const;
 
 /** mandate 锚点/序列化共用的合成条判定：role=user 且 content 命中任一前缀 */
@@ -151,6 +152,24 @@ function isSyntheticUserMessage(m: LLMMessage): boolean {
 /** auto 压缩后的续行合成条全文（spec §6.2 逐字） */
 const AUTO_COMPACT_NOTICE =
   '[系统] 上下文已自动压缩。若仍有未完成的用户请求步骤请继续；否则输出总结并停下。';
+
+/**
+ * F1（mandate 死锁）收尾校验合成条：终文前仍有 user-source in_progress 待办时注入。
+ *
+ * 根因背景（2026-09-18 会话实测）：mandate 每轮重写、未完成判定完全依赖 agent 手动
+ * todowrite 状态；agent 忘记中途标完成 → mandate 每轮宣称「用户请求未完成」→ 模型把
+ * 滞留状态误读为新的用户请求，同一条指令被完整执行两遍。本合成条在回合收尾前强制
+ * 模型先核对 todowrite 状态再输出终文（一次性，防循环）。
+ */
+function buildTodoReconcileNotice(items: Array<{ subject: string }>): string {
+  const list = items.map((t) => `  - ${t.subject}`).join('\n');
+  return (
+    '[系统] 待办收尾校验：以下用户请求的待办仍标记为进行中，但本轮即将结束：\n' +
+    `${list}\n` +
+    '请核对实际进度：确已完成的项立即用 todowrite 标记 completed；确未完成的项保留状态并在总结中说明原因。' +
+    '随后输出最终总结结束本轮。这是状态核对提醒，不是新的任务请求——严禁重复执行已完成的工作。'
+  );
+}
 
 /**
  * provider 上下文溢出错误特征（spec §7，T6）：错误信息命中即视为「上下文超限」，
@@ -471,7 +490,8 @@ export async function runChatLoop(
   // turn-mandate Task 3（spec §2「每轮重写」）：static 段一次组装；
   // mandate 尾段每轮基于 mandate 状态对象重写——
   // 「中途补充」与「未完成项」保持实时跨压缩存活
-  const staticSystem = ctx.systemPrompt + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
+  const staticSystem =
+    ctx.systemPrompt + formatClockHint(new Date()) + formatWorkspaceHygieneHint() + budgetHint + dispatchHint + taskHint + pinnedMem.hint;
   // v2.6.0 断点续跑：mandate.userBody 取重建段首条 user 消息正文（原回合指令）；
   // 首条非 user（dispatch 子流重建段可能 assistant 开头，T1 兜底语义）或重建段
   // 为空时回退 currentBody（恢复载荷的 body 兜底）
@@ -674,6 +694,8 @@ export async function runChatLoop(
   // 置位；steer drain 出新指令时清除（新指令优先于收尾）。回合级内存状态，
   // 随回合结束消亡。
   let wrapUpMode = false;
+  // F1（mandate 死锁）：收尾校验轮是否已注入过——一次性门，防「校验→终文→校验」循环
+  let todoReconciled = false;
   // 溢出恢复标记（spec §7，T6）：回合级——本回合内只允许一次「溢出 → 压缩 →
   // 重放」恢复，二次溢出按原错误路径终止（防「压缩-重放-再溢出」死循环）。
   let overflowRecovered = false;
@@ -992,6 +1014,29 @@ export async function runChatLoop(
     }
 
     if (finishReason === 'stop' || toolCalls.length === 0) {
+      // F1（mandate 死锁）收尾校验轮：终文前仍有 user-source in_progress 待办时，
+      // 注入一次性合成校验消息，让模型先 todowrite 对齐状态再收尾。否则 mandate
+      // 每轮都宣称「用户请求未完成」，模型会把滞留状态误读为新请求并整轮重跑
+      // （2026-09-18 实测：一条请求被完整执行两遍）。仅顶层 chat 路径（与
+      // runCompaction 的 mandateGated 同谓词）且预算未耗尽（模型需要 todowrite 工具）。
+      const staleUserItems = pendingUserItems().filter((t) => t.status === 'in_progress');
+      if (
+        !todoReconciled &&
+        staleUserItems.length > 0 &&
+        parentStreamSessionId == null &&
+        config.currentTaskId === undefined &&
+        budgetRemaining > 0
+      ) {
+        todoReconciled = true;
+        messages.push({
+          role: 'assistant',
+          content: accumulatedText,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        });
+        messages.push({ role: 'user', content: buildTodoReconcileNotice(staleUserItems) });
+        accumulatedText = '';
+        continue;
+      }
       process.off('message', abortListener);
       const finalText = accumulatedText.trim() || '(空回复)';
       // 回合收尾 todo 收敛（P0「最后一项永不完成」）：LLM 的 todowrite 是转移
@@ -1595,6 +1640,17 @@ async function executeTool(
  * 统一工具执行路由：按工具名前缀分派到 builtin / 虚拟(skill) / dispatch / MCP 四类执行器。
  * 未知工具抛错（由 chat loop 捕获转成 tool result，LLM 可见并自我纠正）。
  */
+
+/**
+ * F2（dispatch_bg 状态回链）：taskId → 委派 chip 的 { callId, toolName }。
+ * dispatch_bg 的 tool_result 立即返回句柄文本（不带 subStatus），子任务完成走
+ * handleTaskReply → gather 旁路，与原 callId 无关联——双聚合器终态收敛因此把
+ * 成功委派误判为 aborted（2026-09-18 实测 6/6 全部错标）。gather / cancel 收割到
+ * 终态时按本表补发 tool_result(subStatus) patch 事件；进程级生命周期与 bgHandles
+ * 一致（runtime 子进程退出即失效，与 gather 的「runtime 已重启」notes 语义同源）。
+ */
+const bgDispatchCallLinks = new Map<string, { callId: string; toolName: string }>();
+
 export async function doExecuteTool(
   call: LLMToolCall,
   ctx: RuntimeContext,
@@ -1698,15 +1754,32 @@ export async function doExecuteTool(
       subAgentName: subRef?.description ?? subRef?.slug ?? name,
       subAgentAvatar: '🤖',
     });
-    const bgResult = await executeDispatchBg(
-      subSlug,
-      task,
-      config,
-      bgBudget,
-      subStreamSessionId,
-      pmStreamSessionId,
-      executionSessionId,
-    );
+    let bgResult: { taskId: string };
+    try {
+      bgResult = await executeDispatchBg(
+        subSlug,
+        task,
+        config,
+        bgBudget,
+        subStreamSessionId,
+        pmStreamSessionId,
+        executionSessionId,
+      );
+    } catch (err) {
+      // F2 回链：派发失败也必须给 chip 终态（failed）——否则聚合器收敛误判
+      sendStreamChunk({
+        type: 'tool_result',
+        streamSessionId: pmStreamSessionId ?? '',
+        callId: call.id,
+        toolName: name,
+        result: `后台派发失败: ${err instanceof Error ? err.message : String(err)}`,
+        success: false,
+        subStatus: 'failed',
+      });
+      throw err;
+    }
+    // F2 回链：记录 taskId ↔ callId 映射，dispatch_gather / dispatch_cancel 终态时回写 chip
+    bgDispatchCallLinks.set(bgResult.taskId, { callId: call.id, toolName: name });
     return JSON.stringify(bgResult);
   }
   if (name === 'dispatch_gather') {
@@ -1724,15 +1797,64 @@ export async function doExecuteTool(
     }
     // 终审 I1：传 abortSignal——PM abort 时 gather 立即 AbortError reject，
     // 不阻塞 chat loop 到 gather 超时（与 dispatch/followup 分支同纪律）
-    return JSON.stringify(await executeGather(handles, mode, rawTimeout, ctx.abortSignal));
+    const gatherResult = await executeGather(handles, mode, rawTimeout, ctx.abortSignal);
+    // F2 状态回链：收割到终态的 bg 句柄按映射补发 tool_result(subStatus) patch——
+    // 双聚合器（renderer stream-aggregator / export-aggregator）的 dispatch 段
+    // 据此从 executing 翻为真实终态（completed / failed），不再被收敛误判 aborted
+    for (const entry of gatherResult.done) {
+      const link = bgDispatchCallLinks.get(entry.taskId);
+      if (!link) continue;
+      if (entry.status === 'cancelled') {
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId: pmStreamSessionId ?? '',
+          callId: link.callId,
+          toolName: link.toolName,
+          result: '后台任务已被取消（dispatch_cancel）',
+          success: false,
+          subStatus: 'failed',
+        });
+      } else {
+        const failed = entry.outcome === 'failed';
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId: pmStreamSessionId ?? '',
+          callId: link.callId,
+          toolName: link.toolName,
+          result: failed
+            ? '后台任务失败，详见 dispatch_gather 结果中的 body'
+            : `后台任务完成（toolCallsUsed=${entry.toolCallsUsed ?? 0}），回执见 dispatch_gather 结果`,
+          success: !failed,
+          subStatus: failed ? 'failed' : 'completed',
+        });
+      }
+      bgDispatchCallLinks.delete(entry.taskId);
+    }
+    return JSON.stringify(gatherResult);
   }
   if (name === 'dispatch_status') {
     return JSON.stringify(executeStatus(argToString(call.arguments.handle, 'handle')));
   }
   if (name === 'dispatch_cancel') {
-    return JSON.stringify(
-      executeCancel(argToString(call.arguments.handle, 'handle'), config, executionSessionId),
-    );
+    const handle = argToString(call.arguments.handle, 'handle');
+    const cancelResult = executeCancel(handle, config, executionSessionId);
+    // F2 回链：取消成功时同步给 chip 终态（后续迟到 gather 对该句柄已无映射，不重复 patch）
+    if (cancelResult.status === 'cancelled') {
+      const link = bgDispatchCallLinks.get(handle);
+      if (link) {
+        sendStreamChunk({
+          type: 'tool_result',
+          streamSessionId: pmStreamSessionId ?? '',
+          callId: link.callId,
+          toolName: link.toolName,
+          result: '后台任务已被取消（dispatch_cancel）',
+          success: false,
+          subStatus: 'failed',
+        });
+        bgDispatchCallLinks.delete(handle);
+      }
+    }
+    return JSON.stringify(cancelResult);
   }
   if (name.startsWith('mcp:')) {
     // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接

@@ -87,6 +87,13 @@ export interface BgHandle {
   body?: string;
   toolCallsUsed?: number;
   completedAt?: number;
+  /**
+   * 子任务结局（F2 状态回链）：翻转 done 时按 reply.status 记录——completed /
+   * failed（needs_input 归 failed，与同步 pending 路径 reject 语义一致）。
+   * cancelled 态不设。BgHandle 无 failed 态（spec §4.1 三值枚举），失败事实靠本字段
+   * 传递——gather 回链 dispatch chip 终态时据此区分 ✅/❌，避免失败子任务被显示为完成。
+   */
+  outcome?: 'completed' | 'failed';
 }
 
 /** 同 PM 在途 bg 句柄上限（spec §4.2：在途数 ≥ 8 → 工具报错含清单；T4 executeDispatchBg 强制） */
@@ -616,11 +623,13 @@ export function handleTaskReply(content: Record<string, unknown>): void {
           return;
         }
         // 终态 reply（completed / failed / needs_input）→ 翻转 done + 结果缓存。
-        // BgHandle 无 failed 态（spec §4.1 枚举三值）：失败 body 原样保留，gather 收割后由 LLM 自行判读
+        // BgHandle 无 failed 态（spec §4.1 枚举三值）：失败 body 原样保留，gather 收割后由 LLM 自行判读；
+        // 结局记入 outcome（F2 状态回链——gather 据此回链 chip 终态 completed/failed）
         bg.status = 'done';
         bg.body = reply.body;
         bg.toolCallsUsed = reply.tool_calls_used ?? 0;
         bg.completedAt = Date.now();
+        bg.outcome = reply.status === 'completed' ? 'completed' : 'failed';
         wakeGatherWaiters(reply.task_id, bg);
         // settled 超限驱逐（审查 C2）——唤醒后再驱逐：waiter 已拿到句柄快照/引用
         enforceSettledCap();
@@ -720,6 +729,8 @@ export async function executeDispatchBg(
 export interface GatherDoneEntry {
   taskId: string;
   status: string;
+  /** 子任务结局（F2 回链）：done 句柄才有；cancelled 缺省——回链方据此映射 chip 终态 */
+  outcome?: 'completed' | 'failed';
   body?: string;
   toolCallsUsed?: number;
 }
@@ -748,6 +759,7 @@ function snapshotDoneEntry(taskId: string, h: BgHandle): GatherDoneEntry {
   return {
     taskId,
     status: h.status,
+    ...(h.outcome !== undefined ? { outcome: h.outcome } : {}),
     ...(h.body !== undefined ? { body: h.body } : {}),
     ...(h.toolCallsUsed !== undefined ? { toolCallsUsed: h.toolCallsUsed } : {}),
   };

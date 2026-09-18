@@ -344,7 +344,9 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
   it('(c) 有 user 挂靠 → synthetic 续行消息注入且工具可用', async () => {
     seedBigHistory();
     __setTodosForTest(SID, [userTodo('分析数据-步骤1')]);
-    script = [{ text: '收到，继续执行。' }];
+    // 第二条脚本喂给 F1 收尾校验轮：终文时 user 待办仍 in_progress →
+    // 注入一次性「待办收尾校验」合成条后再收尾（脚本化模型重述同一句）
+    script = [{ text: '收到，继续执行。' }, { text: '收到，继续执行。' }];
     const out = await runChatLoop(
       ROOM, '帮我分析数据', mkConfig({ contextWindow: 1000 }), mkCtx(),
       undefined, undefined, undefined, SID,
@@ -357,6 +359,8 @@ describe('auto 阈值自动压缩（spec §6.2）', () => {
     expect(round1).toContain('若仍有未完成的用户请求步骤');
     // mandate 段跨压缩存活（system 保留）
     expect(captured[0]!.messages[0]!.content).toContain('本轮用户授权');
+    // F1 收尾校验轮已注入（第二次 LLM 调用携带合成条）
+    expect(JSON.stringify(captured[1]!.messages)).toContain('[系统] 待办收尾校验');
     expect(out).toContain('继续执行');
   });
 
