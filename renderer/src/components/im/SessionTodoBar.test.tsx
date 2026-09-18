@@ -116,4 +116,103 @@ describe('SessionTodoBar', () => {
     expect(screen.getByTestId('session-todo-bar')).toBeInTheDocument();
     expect(screen.getByText('1/2（50%）')).toBeInTheDocument();
   });
+
+  // --- Task 2：多候选页签 + 自动跟随 + 手动固定 ---
+
+  /** 多候选夹具：m1（3 项完成 2）+ m2（3 项完成 1），状态可覆写 */
+  function setupTwo(
+    s1: StreamState['status'] = 'done',
+    s2: StreamState['status'] = 'streaming',
+  ): void {
+    setStores(
+      [mkMessage('m1', '@a:ws'), mkMessage('m2', '@b:ws')],
+      [
+        ['m1', mkStream('m1', mkTodos(3, 2), s1)],
+        ['m2', mkStream('m2', mkTodos(3, 1), s2)],
+      ],
+    );
+  }
+
+  /** 取当前激活页签的进度文本（'2/3' 或 '1/3'）——断言不耦合 agent 名 */
+  function activeTabProgress(): string | null {
+    const tabs = screen.getAllByRole('tab');
+    const activeTab = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
+    const m = activeTab?.textContent?.match(/(\d+\/\d+)/);
+    return m ? (m[1] ?? null) : null;
+  }
+
+  it('多候选：渲染页签行，自动跟随最后一个流式候选', () => {
+    // m1 done、m2 streaming → 激活 m2（流式优先）
+    setupTwo('done', 'streaming');
+    render(<SessionTodoBar />);
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(activeTabProgress()).toBe('1/3');
+    // 流式页签带高亮点（aria-hidden 指示圆点）
+    expect(document.querySelector('[role="tab"] .bg-accent-500')).not.toBeNull();
+  });
+
+  it('流式候选在前、完成候选在后：仍自动跟随流式者', () => {
+    // m1 streaming、m2 done → 激活 m1（不是最后一个候选）
+    setupTwo('streaming', 'done');
+    render(<SessionTodoBar />);
+    expect(activeTabProgress()).toBe('2/3');
+  });
+
+  it('全部终态：激活最后一个候选（最新快照）', () => {
+    setupTwo('done', 'done');
+    render(<SessionTodoBar />);
+    expect(activeTabProgress()).toBe('1/3'); // m2 是最后候选
+  });
+
+  it('手动点击页签固定：另一候选流式中也不抢焦点', () => {
+    setupTwo('streaming', 'streaming'); // 自动跟随 m2
+    render(<SessionTodoBar />);
+    expect(activeTabProgress()).toBe('1/3');
+    // 点击 m1 页签（accessible name 含 '2/3'）
+    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ }));
+    expect(activeTabProgress()).toBe('2/3');
+    // m2 仍在流式——固定不被抢
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 2), 'streaming')],
+          ['m2', mkStream('m2', mkTodos(3, 1), 'streaming')],
+        ]),
+      });
+    });
+    expect(activeTabProgress()).toBe('2/3');
+  });
+
+  it('固定候选由流式转入终态：解除固定，恢复自动跟随', () => {
+    setupTwo('streaming', 'streaming');
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ })); // 固定 m1
+    // m1 → done（曾流式 → 解除固定），m2 仍流式 → 自动跟随回 m2
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 3), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 1), 'streaming')],
+        ]),
+      });
+    });
+    expect(activeTabProgress()).toBe('1/3');
+  });
+
+  it('固定已完成的历史候选（回看）：不自动解除', () => {
+    setupTwo('done', 'streaming'); // 自动跟随 m2
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('tab', { name: /2\/3/ })); // 固定 m1（done）
+    expect(activeTabProgress()).toBe('2/3');
+    // m2 继续流式更新——m1 固定不动
+    act(() => {
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(3, 2), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 2), 'streaming')],
+        ]),
+      });
+    });
+    expect(activeTabProgress()).toBe('2/3');
+  });
 });
