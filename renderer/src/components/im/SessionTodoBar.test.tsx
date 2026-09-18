@@ -408,4 +408,28 @@ describe('SessionTodoBar v2', () => {
     fireEvent.keyDown(window, { key: 't', ctrlKey: true });
     expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
   });
+
+  // --- 终审修复回归锁 ---
+
+  it('Ctrl+T 在任务条隐藏时无效——增员重现后保持默认折叠', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭会话任务条' })); // 隐藏
+    fireEvent.keyDown(window, { key: 't', ctrlKey: true }); // 隐藏态按 Ctrl+T——不得翻转
+    // 增员重现——必须保持默认折叠
+    act(() => {
+      useSessionStore.setState({
+        messagesBySession: new Map([
+          ['s1', [mkMessage('m1', '@a:ws'), mkMessage('m2', '@a:ws')]],
+        ]),
+      });
+      useStreamStore.setState({
+        streams: new Map([
+          ['m1', mkStream('m1', mkTodos(2, 1), 'done')],
+          ['m2', mkStream('m2', mkTodos(3, 0), 'streaming')],
+        ]),
+      });
+    });
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+  });
 });

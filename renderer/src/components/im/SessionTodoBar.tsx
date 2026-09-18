@@ -119,8 +119,12 @@ export function SessionTodoBar() {
     }
   }, [activeSessionId]);
 
-  // Ctrl+T 切换展开（已核实全仓库无快捷键冲突；capture 阶段拦截默认行为）
+  // Ctrl+T 切换展开（已核实全仓库无快捷键冲突；capture 阶段拦截默认行为）。
+  // 任务条可见（非 dismissed 且有候选）时才注册监听——隐藏态不翻转展开，
+  // 避免重现时意外展开（v2 终审 Important 项）
+  const barVisible = !dismissed && candidates.length > 0;
   useEffect(() => {
+    if (!barVisible) return;
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
@@ -129,7 +133,7 @@ export function SessionTodoBar() {
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, []);
+  }, [barVisible]);
 
   if (dismissed || candidates.length === 0) return null;
 
