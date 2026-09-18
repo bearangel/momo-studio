@@ -6,6 +6,25 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 会话卫生与状态真实性修复（2026-09-18 会话实测发现）
+
+设计依据：`docs/specs/2026-09-18-session-hygiene-batch-design.md`。上游：一次「待办列表 + 并行委派」实测会话的 14 项发现全量处置。
+
+### 修复
+- **mandate 死锁（同一请求双倍执行）**：未完成判定完全依赖 agent 手动 todowrite 状态——hint 分级措辞（进行中/未开始 +「切勿重做」+「列表非新请求」）+ 一次性收尾校验轮（终文前仍有 user-source in_progress 待办时注入合成校验条，强制先对齐状态再收尾）
+- **dispatch_bg 状态误报**：后台完成走 handleTaskReply→gather 旁路、tool_result 不带 subStatus，成功委派被双聚合器终态收敛误判 aborted（实测 6/6）——gather/cancel/派发失败补发 subStatus patch 事件回链 chip；仍未收割的收敛为 `delegated`（已派出后台）；句柄新增 `outcome` 区分子任务成败（失败不再显示为完成）
+- **secrecy 泄漏**：模型私有规划块（`<secrecy>…</secrecy>`，含工具预算等内部策略）原样进入用户可见消息与导出——三个呈现面（messages.body 回写 / 导出文本段 / 实时 UI）统一剥离（含流式中途未闭合尾段），事件库原文保真不动（断点续跑/审计不受影响）
+- **导出保真**：工具结果不再 2000 字符截断（导出定位无损审计产物）；`actualCount` 对齐实际渲染的顶层条目数（不再「宣称 12 条只渲染 6 条」）；agent 消息头渲染起止时间跨度 `开始 ~ 结束（跨 N）`（回合起点时间戳不再伪装成完成时刻）
+- **memory_save 挂靠误伤**：全部待办完成后的收尾沉淀不再误报「未挂靠」（新谓词 `hasUserTodos` 任意状态；create_task 维持未完成挂靠判定）
+- **args 写入链路契约锁**：tool_call args 经 chunk→routeChunkToBuffer→批量落盘→payload 的字节级一致回归锁（3KB 中文/emoji/引号对抗载荷 + 35 条跨批阈值 + 委派 chip）；生产库损坏裁决指引留档测试头
+- **prompt 注入**：当前时间常驻注入（实测出现「2025」年份幻觉并写入持久记忆）；dispatch 教学「以 gather 的 toolCallsUsed 客观计数为准，不采信子 agent 自报」
+
+### 新增
+- **todo 稳定 ID**：全量替换协议不变，按归一 subject（写入即 trim）延续既有 id——跨重写逐项身份稳定，同批重复 subject 仅首个延续
+- **会话 todo 聚合视图**：SessionTodosPanel 挂载会话主区消息列表上方，跨 agent（PM + 子 agent）清单总览（纯前端聚合零 IPC；无清单整体隐藏）
+- **记忆时效**：超 7 天未更新的常驻记忆注入时标注「保存于 N 天前，使用前请核实」；memory_save 教学补「事实类记忆先核实、内容注明核实日期」
+- **workspace 卫生约定**：一次性/测试/演示产物写入 `.momo-scratch/<任务名>/`（注入全部 agent + dispatch 教学指定子 agent 子目录，并行不踩踏）
+
 ## [未发布] — v25 agent/会话域重构（去编排 + 团队 + 双会话）
 
 设计依据：`docs/specs/2026-08-31-agent-team-session-redesign.md`。无旧数据兼容负担（migration v25 丢弃 role/parent 数据）。
