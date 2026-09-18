@@ -15,7 +15,6 @@ import { InputToolbar } from '../im/InputToolbar';
 import { RoomToolBudgetBadge } from '../im/RoomToolBudgetBadge';
 import { ExportChatButton } from '../im/ExportChatButton';
 import { TaskProgressButton } from '../im/TaskProgressButton';
-import { SessionTodosPanel } from '../im/SessionTodosPanel';
 import { AgentsView } from '../agent/AgentsView';
 import { SettingsView } from '../settings/SettingsView';
 import { ResourceLibraryView } from '../resource-library/ResourceLibraryView';
@@ -80,9 +79,6 @@ export function MiddlePanel() {
             {activeSessionId && <ExportChatButton sessionId={activeSessionId} />}
             {activeSessionId && <TaskProgressButton sessionId={activeSessionId} />}
           </div>
-          {/* 会话 todo 聚合视图（spec 2026-09-18 §2c）：消息列表上方总览各 agent
-              清单；无清单时组件自渲染 null 整体隐藏，不占布局 */}
-          {activeSessionId && <SessionTodosPanel sessionId={activeSessionId} />}
           <MessageList />
           <InputToolbar
             showMembers={showMembers}
