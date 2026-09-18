@@ -585,6 +585,9 @@ export function SessionTodoBar() {
         data-testid="todo-summary"
         onClick={() => setExpanded((v) => !v)}
         onKeyDown={(e) => {
+          // 只处理摘要行自身的键盘事件——嵌套按钮（返回最新/历史待办/关闭）的
+          // Enter/Space 必须走按钮原生激活，不能被这里吞掉（终审修订）
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             setExpanded((v) => !v);
@@ -732,10 +735,11 @@ Expected: typecheck 0 error；renderer 全绿（AgentStreamBubble/SubAgentSectio
 
 ---
 
-### Task 2: 页签仅多流式 + 固定语义锁（测试追加）
+### Task 2: 页签仅多流式 + 固定语义锁 + 摘要行键盘守卫（测试追加 + 一行组件修复）
 
 **Files:**
-- Modify: `renderer/src/components/im/SessionTodoBar.test.tsx`（追加用例；组件已在 Task 1 落全）
+- Modify: `renderer/src/components/im/SessionTodoBar.tsx`（仅一处：摘要行 `onKeyDown` 顶部加 `if (e.target !== e.currentTarget) return;` + 中文注释——Task 1 审查发现的 plan 缺陷修订，防嵌套按钮键盘激活被劫持）
+- Modify: `renderer/src/components/im/SessionTodoBar.test.tsx`（追加用例）
 
 **Interfaces:**
 - Consumes: Task 1 测试工厂与 `summaryProgress()`
@@ -818,6 +822,14 @@ Expected: typecheck 0 error；renderer 全绿（AgentStreamBubble/SubAgentSectio
     expect(summaryProgress()).toBe('2/3'); // m2 的 2/3
   });
 
+  it('嵌套按钮的 Enter 不触发摘要行展开切换（键盘守卫回归锁）', () => {
+    setStores([mkMessage('m1', '@a:ws')], [['m1', mkStream('m1', mkTodos(2, 1), 'done')]]);
+    render(<SessionTodoBar />);
+    // 焦点在关闭按钮上按 Enter——事件冒泡到摘要行也不得切换展开
+    fireEvent.keyDown(screen.getByRole('button', { name: '关闭会话任务条' }), { key: 'Enter' });
+    expect(screen.getByTestId('todo-summary')).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('全部转终态：页签消失，回最新候选摘要', () => {
     setupTwo('streaming', 'streaming');
     render(<SessionTodoBar />);
@@ -835,19 +847,37 @@ Expected: typecheck 0 error；renderer 全绿（AgentStreamBubble/SubAgentSectio
   });
 ```
 
-- [ ] **Step 2: 跑测试（实现已就位应直接绿）**
+- [ ] **Step 2: 跑测试——键盘守卫用例应红（复现 plan 缺陷），其余应绿**
 
 ```bash
 cd renderer && npx pnpm@9.0.0 vitest run src/components/im/SessionTodoBar.test.tsx
 ```
 
-Expected: PASS 13 用例（Task 1 的 8 + 本任务 5）。红则对照 Task 1 Step 5 实现修偏差（不得改组件语义）。
+Expected: 仅「嵌套按钮的 Enter 不触发摘要行展开切换」FAIL（Task 1 代码无守卫，Enter 冒泡切换了展开）；其余新用例绿（组件其余逻辑已在 Task 1 落全）。
 
-- [ ] **Step 3: 提交**
+- [ ] **Step 3: 应用一行守卫修复（组件）**
+
+在 `SessionTodoBar.tsx` 摘要行 div 的 `onKeyDown` 处理器顶部（`if (e.key === 'Enter' ...)` 之前）加入：
+
+```tsx
+          // 只处理摘要行自身的键盘事件——嵌套按钮（返回最新/历史待办/关闭）的
+          // Enter/Space 必须走按钮原生激活，不能被这里吞掉（Task 1 审查修订）
+          if (e.target !== e.currentTarget) return;
+```
+
+- [ ] **Step 4: 跑测试确认全绿**
 
 ```bash
-git add renderer/src/components/im/SessionTodoBar.test.tsx
-git commit -m "test: SessionTodoBar v2 页签仅多流式与固定语义锁"
+cd renderer && npx pnpm@9.0.0 vitest run src/components/im/SessionTodoBar.test.tsx
+```
+
+Expected: PASS 14 用例（Task 1 的 8 + 本任务 6）。
+
+- [ ] **Step 5: 提交（组件一行修复 + 测试）**
+
+```bash
+git add renderer/src/components/im/SessionTodoBar.tsx renderer/src/components/im/SessionTodoBar.test.tsx
+git commit -m "fix: SessionTodoBar 摘要行键盘守卫——嵌套按钮 Enter 不再被劫持 + v2 页签语义锁"
 ```
 
 ---
