@@ -53,7 +53,7 @@ afterEach(() => {
 
 describe('handles / getDefs', () => {
   it('全部工具名全部路由命中', () => {
-    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_copy']) {
+    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy']) {
       expect(tools.handles(n)).toBe(true);
     }
     expect(tools.handles('read_file')).toBe(false);

@@ -46,6 +46,10 @@
         "to": "marketplace"
       },
       {
+        "from": "./resources/fonts",
+        "to": "fonts"
+      },
+      {
         "from": "../renderer/dist",
         "to": "renderer"
       }

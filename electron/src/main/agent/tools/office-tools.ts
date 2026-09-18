@@ -16,12 +16,14 @@ import {
 } from './office/excel';
 import { createDocx, parseDocSections, readDocx } from './office/docx';
 import { createPptx, parsePptxSlides, readPptx } from './office/pptx';
+import { createPdf, parsePdfBlocks, readPdf } from './office/pdf';
 
-/** 各格式读取器注册表（pdf 由后续任务补齐） */
+/** 各格式读取器注册表 */
 const READERS: Partial<Record<OfficeFormat, (abs: string) => Promise<string>>> = {
   xlsx: readXlsxPreview,
   docx: readDocx,
   pptx: readPptx,
+  pdf: readPdf,
 };
 
 /** Read-before-Edit 包装：office 场景补充 office_read 指引 */
@@ -199,11 +201,42 @@ const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   },
 };
 
+const OFFICE_CREATE_PDF_DEF: LLMToolDef = {
+  name: 'office_create_pdf',
+  description:
+    '生成 PDF：blocks 顺序输出标题/段落/列表/表格/分页符，内嵌中文字体。' +
+    '目标已存在时须先 office_read 读取后覆盖。表格为均分列宽简单网格线（v1 边界）。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '相对 workspace 的输出路径（.pdf）' },
+      blocks: {
+        type: 'array',
+        description: '内容序列',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['heading', 'para', 'list', 'table', 'pagebreak'] },
+            level: { type: 'number' },
+            text: { type: 'string' },
+            items: { type: 'array', items: { type: 'string' } },
+            ordered: { type: 'boolean' },
+            header: { type: 'array', items: { type: 'string' } },
+            rows: { type: 'array', items: { type: 'array' } },
+          },
+          required: ['type'],
+        },
+      },
+    },
+    required: ['path', 'blocks'],
+  },
+};
+
 // ── ToolModule 实现 ──
 
 export class OfficeTools implements ToolModule {
   getDefs(): LLMToolDef[] {
-    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, OFFICE_CREATE_PPT_DEF, COPY_DEF];
+    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, OFFICE_CREATE_PPT_DEF, OFFICE_CREATE_PDF_DEF, COPY_DEF];
   }
 
   handles(name: string): boolean {
@@ -318,6 +351,25 @@ export class OfficeTools implements ToolModule {
         fs.writeFileSync(abs, buf);
         ctx.readTracker?.add(ctx.streamSessionId, abs);
         return `PPT 已${existed ? '覆盖' : '生成'}: ${rel}（${slides.length} 页）`;
+      }
+      case 'office_create_pdf': {
+        const rel = parseStringArg(args.path, 'path');
+        const abs = ctx.wsFs.assertInWorkspace(rel);
+        assertOfficeFormat(rel);
+        const existed = fs.existsSync(abs);
+        if (existed) assertReadForOffice(ctx, abs);
+        const blocks = parsePdfBlocks(args.blocks);
+        const buf = await createPdf(blocks);
+        recordChangeSafe(
+          buildRecordCtx('office_create_pdf', ctx),
+          toJournalRelPath(ctx, rel),
+          existed ? 'modify' : 'create',
+          existed ? fs.readFileSync(abs) : null,
+          buf,
+        );
+        fs.writeFileSync(abs, buf);
+        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        return `PDF 已${existed ? '覆盖' : '生成'}: ${rel}（${blocks.length} 块）`;
       }
       case 'office_copy': {
         const fromRel = parseStringArg(args.from, 'from');
