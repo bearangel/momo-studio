@@ -905,8 +905,8 @@ git commit -m "fix: SessionTodoBar 摘要行键盘守卫——嵌套按钮 Enter
     fireEvent.click(screen.getByRole('button', { name: '历史待办' }));
     const menu = screen.getByTestId('todo-history-menu');
     expect(menu).toBeInTheDocument();
-    // 只列 m1（非激活），含进度
-    expect(menu.textContent).toContain('1/3');
+    // 只列 m1（非激活），含进度（m1 = mkTodos(3,2) → 2/3）
+    expect(menu.textContent).toContain('2/3');
     // 点击 m1 → 历史查看态：返回最新在场 + 列表展开显示 m1 快照
     fireEvent.click(within(menu).getByRole('button'));
     expect(screen.getByRole('button', { name: '返回最新' })).toBeInTheDocument();
