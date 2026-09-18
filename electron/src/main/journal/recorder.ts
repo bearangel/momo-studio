@@ -190,7 +190,7 @@ function walkFiles(
  * all-or-nothing，避免中途失败留下半棵树的撤销链。节流计数按条数累计。
  *
  * 内存有界（T6 review 修复）：assembleEntry + writeBlob 移入 walkFiles 回调
- * 内逐文件完成，content 字符串每次迭代出作用域即释放；循环外只收集已组装的
+ * 内逐文件完成，content（字符串或字节）每次迭代出作用域即释放；循环外只收集已组装的
  * entry 元数据，避免把整树 content 同时驻留内存（rm 大目录打爆主进程）。
  * 事务原子性保留：insertMany 仍一次性提交，保 all-or-nothing 语义。
  *
@@ -212,7 +212,8 @@ export function recordDeleteTree(
   const entries: JournalEntry[] = [];
   const stat = fs.statSync(absDir);
   const handle = (rel: string, abs: string): void => {
-    const content = fs.readFileSync(abs, 'utf8');
+    // v2.1 二进制扩展：按字节读取（office 文档等二进制文件的 before blob 保真）
+    const content = fs.readFileSync(abs);
     entries.push(assembleEntry(rc, rel, 'delete', content, null));
     // content 引用随迭代结束释放；assembleEntry 内部已 hash + writeBlob 落盘
   };

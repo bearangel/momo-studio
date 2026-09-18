@@ -60,12 +60,16 @@ function requireWorkspaceDir(workspaceId: string): string {
   return ws.directoryPath;
 }
 
-/** hash 侧文本：hash 为 null（无内容侧）或 blob 缺失 → null；否则截断 100KB */
+/** hash 侧文本：hash 为 null（无内容侧）或 blob 缺失 → null；二进制 blob（非严格
+ *  utf-8）→ null（视图层显示占位）；否则截断 100KB。
+ * v2.1 二进制扩展：office 文档 blob 不是文本，解码再编码不等于原字节即判非文本。 */
 function readTextCapped(workspaceId: string, hash: string | null): string | null {
   if (hash === null) return null;
-  const content = requireStore().readBlob(workspaceId, hash);
-  if (content === null) return null;
-  return content.length > TEXT_CAP ? content.slice(0, TEXT_CAP) : content;
+  const buf = requireStore().readBlobBytes(workspaceId, hash);
+  if (buf === null) return null;
+  const text = buf.toString('utf-8');
+  if (!Buffer.from(text, 'utf-8').equals(buf)) return null;
+  return text.length > TEXT_CAP ? text.slice(0, TEXT_CAP) : text;
 }
 
 function toView(workspaceId: string, e: JournalEntry): JournalEntryView {

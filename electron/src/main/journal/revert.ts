@@ -107,10 +107,11 @@ function isEnoent(err: unknown): boolean {
   return err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
-/** 读取文件当前内容；不存在返回 null；其余读错误向上抛（→ failed） */
-async function readFileOrNull(absPath: string): Promise<string | null> {
+/** 读取文件当前字节；不存在返回 null；其余读错误向上抛（→ failed）
+ * v2.1 字节化：二进制与文本统一按字节处理（文本是字节子集，utf-8 无损） */
+async function readFileBytesOrNull(absPath: string): Promise<Buffer | null> {
   try {
-    return await fs.readFile(absPath, 'utf8');
+    return await fs.readFile(absPath);
   } catch (err) {
     if (isEnoent(err)) return null;
     throw err;
@@ -126,16 +127,16 @@ async function existsFile(absPath: string): Promise<boolean> {
   }
 }
 
-/** 取 before 内容 blob；条目脏数据（缺 beforeHash）或 blob 缺失 → 抛错（→ failed） */
+/** 取 before 内容 blob 字节；条目脏数据（缺 beforeHash）或 blob 缺失 → 抛错（→ failed） */
 function fetchBeforeContent(
   store: JournalStore,
   workspaceId: string,
   entry: JournalEntry,
-): string {
+): Buffer {
   if (entry.beforeHash == null) {
     throw new Error('条目缺少 beforeHash，无法撤回（数据异常）');
   }
-  const content = store.readBlob(workspaceId, entry.beforeHash);
+  const content = store.readBlobBytes(workspaceId, entry.beforeHash);
   if (content === null) {
     throw new Error(`before 内容 blob 缺失（hash=${entry.beforeHash}）`);
   }
@@ -147,19 +148,19 @@ function recordInverse(
   rc: RecordCtx | undefined,
   filePath: string,
   op: 'create' | 'modify' | 'delete' | 'rename',
-  before: string | null,
-  after: string | null,
+  before: string | Buffer | null,
+  after: string | Buffer | null,
   oldPath?: string,
 ): void {
   if (!rc) return;
   recordChange({ ...rc, toolName: 'undo' }, filePath, op, before, after, oldPath);
 }
 
-/** 写回内容（先确保父目录存在——restore 场景父目录可能已删；父路径被普通文件
+/** 写回内容字节（先确保父目录存在——restore 场景父目录可能已删；父路径被普通文件
  *  占位时 mkdir 抛 EEXIST → 由调用方 catch 成 failed） */
-async function writeBack(absPath: string, content: string): Promise<void> {
+async function writeBack(absPath: string, content: Buffer): Promise<void> {
   await fs.mkdir(path.dirname(absPath), { recursive: true });
-  await fs.writeFile(absPath, content, 'utf8');
+  await fs.writeFile(absPath, content);
 }
 
 function skippedDiverged(entry: JournalEntry): RevertOutcome {
@@ -186,7 +187,7 @@ async function revertOne(
     }
     const absOldPath = entry.oldPath != null ? safeResolve(workspaceDir, entry.oldPath) : null;
 
-    const current = await readFileOrNull(absPath);
+    const current = await readFileBytesOrNull(absPath);
     const curHash = current !== null ? hashContent(current) : null;
 
     switch (entry.op) {
