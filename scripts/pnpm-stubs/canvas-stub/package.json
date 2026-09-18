@@ -1,0 +1,7 @@
+{
+  "name": "canvas-stub",
+  "version": "0.0.0",
+  "description": "pnpm.overrides 替身——pdfjs-dist optionalDependencies.canvas 仅渲染路径需要，本项目只用 getTextContent",
+  "main": "index.js",
+  "private": true
+}

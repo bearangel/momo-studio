@@ -26,8 +26,8 @@
     "typescript-eslint": "^8.0.0"
   },
   "pnpm": {
-    "ignoredOptionalDependencies": [
-      "canvas"
-    ]
+    "overrides": {
+      "canvas": "link:./scripts/pnpm-stubs/canvas-stub"
+    }
   }
 }
