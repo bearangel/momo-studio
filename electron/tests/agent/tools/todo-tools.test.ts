@@ -5,12 +5,14 @@
 //   - 会话隔离（不同 streamSessionId 不串数据）
 //   - StreamChunk 推送（todo_update chunk 携带完整 todos）
 // v2.3 turn-mandate 扩展：todo source 挂靠字段 + hasPendingUserTodos 判定。
+// F9a 扩展：稳定 ID——同归一 subject 跨重写延续 id。
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   TodoTools,
   hasPendingUserTodos,
   completeInProgressTodos,
+  getTodosForSession,
   __setTodosForTest,
 } from '../../../src/main/agent/tools/todo-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
@@ -34,8 +36,7 @@ beforeEach(() => {
 });
 
 describe('todowrite', () => {
-  it('创建 3 项 pending', async () => {
-    const tools = new TodoTools();
+  it('创建 3 项 pending', async () => {    const tools = new TodoTools();
     const result = await tools.execute(
       'todowrite',
       {
@@ -263,5 +264,83 @@ describe('completeInProgressTodos 回合收尾收敛', () => {
     const r = completeInProgressTodos('no-such-session');
     expect(r.changed).toBe(false);
     expect(r.todos).toEqual([]);
+  });
+});
+
+// ─── F9a：稳定 ID（subject 归一延续） ────────────────────────────────────────
+
+describe('todowrite 稳定 ID', () => {
+  const tools = new TodoTools();
+
+  it('同 subject 跨重写延续 id（含 trim 归一）；subject 改写换新 id', async () => {
+    await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          { subject: '委派 CodeForge', status: 'completed', source: 'user' },
+          { subject: '委派 PixelMuse', status: 'in_progress', source: 'user' },
+        ],
+      },
+      ctx,
+    );
+    const first = getTodosForSession('ssn-1');
+    const idBySubject = new Map(first.map((t) => [t.subject, t.id]));
+
+    await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          // trim 归一：前后空格不影响匹配
+          { subject: '  委派 CodeForge ', status: 'completed', source: 'user' },
+          { subject: '收割回执并汇总', status: 'pending', source: 'agent' },
+        ],
+      },
+      ctx,
+    );
+    const second = getTodosForSession('ssn-1');
+    expect(second).toHaveLength(2);
+    // 同 subject 延续既有 id
+    expect(second.find((t) => t.subject === '委派 CodeForge')!.id).toBe(idBySubject.get('委派 CodeForge'));
+    // 「委派 PixelMuse」被移除（全量替换）+ 新 subject 全新 id
+    expect(second.find((t) => t.subject === '收割回执并汇总')!.id).not.toBe(idBySubject.get('委派 PixelMuse'));
+  });
+
+  it('同批重复 subject 仅首个延续既有 id，其余新 id（表内 id 不重复）', async () => {
+    await tools.execute(
+      'todowrite',
+      { todos: [{ subject: '重复项', status: 'pending', source: 'user' }] },
+      ctx,
+    );
+    const firstId = getTodosForSession('ssn-1')[0]!.id;
+
+    await tools.execute(
+      'todowrite',
+      {
+        todos: [
+          { subject: '重复项', status: 'in_progress', source: 'user' },
+          { subject: '重复项', status: 'pending', source: 'user' },
+        ],
+      },
+      ctx,
+    );
+    const second = getTodosForSession('ssn-1');
+    expect(second.map((t) => t.id)).toEqual([firstId, expect.not.stringMatching(new RegExp(`^${firstId}$`))]);
+    // 表内 id 唯一（renderer 列表 key 不得撞车）
+    expect(new Set(second.map((t) => t.id)).size).toBe(second.length);
+  });
+
+  it('id 稳定跨多次重写（三轮链式）', async () => {
+    for (const status of ['pending', 'in_progress', 'completed'] as const) {
+      await tools.execute(
+        'todowrite',
+        { todos: [{ subject: '链式任务', status, source: 'user' }] },
+        ctx,
+      );
+    }
+    const final = getTodosForSession('ssn-1');
+    expect(final).toHaveLength(1);
+    expect(final[0]!.status).toBe('completed');
+    // 三轮重写 id 不变（身份稳定——聚合视图/历史追踪的前提）
+    expect(final[0]!.id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

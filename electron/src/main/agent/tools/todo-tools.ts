@@ -53,6 +53,17 @@ export function hasPendingUserTodos(streamSessionId: string): boolean {
 }
 
 /**
+ * 挂靠判定（F7，spec §5.3 memory_save 软门禁用）：本流是否存在 user 来源待办
+ * （任意状态）。收尾沉淀（保存测试结论 / 经验记忆）天然发生在全部待办完成之后
+ * ——原谓词 hasPendingUserTodos 在该时刻恒 false，会把最正常的任务收尾动作
+ * 误报为「未挂靠」（2026-09-18 实测）。create_task 门禁维持 hasPendingUserTodos
+ * （新建任务理应挂在未完成授权下）。
+ */
+export function hasUserTodos(streamSessionId: string): boolean {
+  return (todoStore.get(streamSessionId) ?? []).some((t) => t.source === 'user');
+}
+
+/**
  * 回合正常终止时的 todo 收敛：把该流仍在 in_progress 的项机械标记 completed。
  *
  * 根因背景（P0「最后一项永不完成」）：todowrite 是全量替换协议，LLM 的实际
@@ -151,10 +162,25 @@ export class TodoTools implements ToolModule {
     if (name !== 'todowrite') throw new Error(`未知 todo 工具: ${name}`);
     if (!Array.isArray(args.todos)) throw new Error('参数 "todos" 缺失或不是数组');
 
+    // F9a 稳定 ID：全量替换协议不变，但按归一 subject（trim）匹配既有条目延续 id——
+    // 同 subject 跨重写保持逐项身份（消费方可按 id 追踪历史）；subject 改写 = 新条目
+    // （无重命名语义）；同批重复 subject 仅首个延续，其余新 id（防同表 id 重复）。
+    const existing = todoStore.get(ctx.streamSessionId) ?? [];
+    const idBySubject = new Map<string, string>();
+    for (const t of existing) {
+      const key = t.subject.trim();
+      if (!idBySubject.has(key)) idBySubject.set(key, t.id);
+    }
+    const claimedIds = new Set<string>();
+
     // 先逐项校验并生成 id（任一失败立即抛错，store 不变）
     const newTodos: TodoItem[] = args.todos.map((t, i) => {
       const item = t as { subject?: unknown; status?: unknown; source?: unknown };
-      const subject = parseStringArg(item?.subject, `todos[${i}].subject`);
+      // 写入即 trim：subject 是匹配键（稳定 ID 归一），两侧空白属手误噪声
+      const subject = parseStringArg(item?.subject, `todos[${i}].subject`).trim();
+      if (subject === '') {
+        throw new Error(`todos[${i}].subject 不能为空`);
+      }
       const status = item?.status;
       if (
         status !== 'pending' &&
@@ -181,7 +207,10 @@ export class TodoTools implements ToolModule {
           `todos[${i}].subject 过长（${subject.length} > ${MAX_SUBJECT_LEN}），请拆分`,
         );
       }
-      return { id: randomUUID(), subject, status, source };
+      const keptId = idBySubject.get(subject.trim());
+      const id = keptId !== undefined && !claimedIds.has(keptId) ? keptId : randomUUID();
+      claimedIds.add(id);
+      return { id, subject, status, source };
     });
 
     // 数量上限放在逐项校验之后，避免对已被截断的输入做错位计数。
