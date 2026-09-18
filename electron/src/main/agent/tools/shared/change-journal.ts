@@ -65,13 +65,14 @@ function degradeIfNoStore(): boolean {
   return true;
 }
 
-/** 单条记账（write-ahead）：任何失败只 warn，绝不阻塞工具执行 */
+/** 单条记账（write-ahead）：任何失败只 warn，绝不阻塞工具执行。
+ * v2.1 二进制扩展：before/after 泛化 string|Buffer（office 工具组，对齐 recordChange 签名）。 */
 export function recordChangeSafe(
   rc: RecordCtx,
   filePath: string,
   op: JournalOp,
-  before: string | null,
-  after: string | null,
+  before: string | Buffer | null,
+  after: string | Buffer | null,
   oldPath?: string,
 ): void {
   if (!journalEnabled) return;

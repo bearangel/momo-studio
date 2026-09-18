@@ -14,6 +14,8 @@ export const OUTPUT_LIMITS = {
   lsp_diagnostics: 50,
   lsp_references: 50,
   read_file: 200 * 1024,
+  office_read: 20 * 1024,
+  office_read_cells: 24 * 1024,
 } as const;
 
 /** 截断字符串到 maxLen 字节，超长追加标记 */

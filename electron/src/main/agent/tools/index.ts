@@ -12,6 +12,9 @@
 //     browser_hover / browser_scroll / browser_evaluate / browser_console_messages /
 //     browser_tabs / browser_close——无条件注册，信任门在 execute 内，
 //     依赖经 initBrowserTools 由 boot 接线）。
+//   + OfficeTools（v2.1 办公工具组：office_read / office_read_cells /
+//     office_create_excel / office_write_excel / office_copy——docx/pptx/pdf
+//     生成三工具与读取器由后续 commit 补齐——无条件注册）。
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -28,6 +31,7 @@ import { TaskTools } from './task-tools';
 import { LspTools } from './lsp-tools';
 import { MemoryTools } from './memory-tools';
 import { BrowserTools } from './browser-tools';
+import { OfficeTools } from './office-tools';
 
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
   const modules: ToolModule[] = [
@@ -41,6 +45,7 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new TaskTools(),
     new MemoryTools(),
     new BrowserTools(),
+    new OfficeTools(),
   ];
   const lsp = LspTools.create(ctx);
   if (lsp) modules.push(lsp);
