@@ -18,6 +18,33 @@ export function formatBudgetHint(maxToolCalls: number): string {
 }
 
 /**
+ * 当前时间注入（F13：实测会话中模型把年份写成 2025、并把错误日期写进持久化记忆）。
+ * 每回合注入一次（staticSystem 组装时刻），模型涉及时空表述时以此为准。
+ */
+export function formatClockHint(now: Date): string {
+  const pad = (n: number): string => n.toString().padStart(2, '0');
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'] as const;
+  return (
+    `\n\n## 当前时间\n现在是 ${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日` +
+    `（星期${weekdays[now.getDay()]}）${pad(now.getHours())}:${pad(now.getMinutes())}。` +
+    '回答与产出文档中涉及日期时间时以此为准，禁止凭记忆推断年份或日期。'
+  );
+}
+
+/**
+ * workspace 卫生约定（F8）：一次性产物与正式交付物的落盘边界。
+ * 实测（2026-09-18）：测试产物直接写进真实项目根（docs/、scripts/、todos/），
+ * 并行子 agent 仅靠 PM 人工分配路径避冲突。约定 scratch 根目录，全部 agent 注入。
+ */
+export function formatWorkspaceHygieneHint(): string {
+  return (
+    '\n\n## 工作区卫生约定\n' +
+    '- 一次性/测试/演示产物（标记文件、验证脚本、临时清单）一律写入 .momo-scratch/<任务名>/ 子目录，不要写入项目正式目录\n' +
+    '- 正式交付物（用户要求的功能代码、文档）才写入项目目录；.momo-scratch/ 下的内容不视为交付物'
+  );
+}
+
+/**
  * 为多成员会话 leader（会话快照判定 + 有 subAgents）注入任务拆分教学 prompt。
  * 教 LLM 在以下场景主动 dispatch 给 sub agent：
  *   - 任务涉及多文件 / 多模块（>3 文件）
@@ -51,6 +78,8 @@ ${subList}
 - dispatch_gather：收割后台句柄（mode="all" 全部完成 / "any" 任一完成）；超时不是错误——返回 { done, pending }，pending 句柄稍后可再 gather
 - dispatch_status / dispatch_cancel：查询单句柄状态 / 长任务止损取消
 - dispatch_followup：对已完成的 dispatch 结果追问（仅可使用 dispatch 返回的 taskId，子 agent 保留全部上下文续答）
+- 收割结果（gather / status）里的 toolCallsUsed 是系统客观计数——统计子 agent 工具用量以它为准，不要采信子 agent 回执中的自报数字
+- 委派测试/演示类任务时，在任务描述中明确指定子 agent 的产出目录为 .momo-scratch/<任务名>/——并行子 agent 各用各的子目录，避免相互踩踏与污染项目根
 
 **长任务自身管理**：
 - 多轮对话累积时调 \`compact\` 工具压缩上下文（结构化摘要由系统生成，无需你撰写总结）
@@ -97,14 +126,22 @@ export function buildMandateHint(opts: {
   }
   lines.push(
     pending.length > 0
-      ? `- 用户请求的未完成项：\n${pending.map((t) => `  - [${t.status === 'in_progress' ? '>' : ' '}] ${t.subject}`).join('\n')}`
+      ? `- 用户请求的未完成项（状态由你的 todowrite 记录维护，可能滞后于实际进度）：\n${pending
+          .map((t) =>
+            t.status === 'in_progress'
+              ? `  - [进行中] ${t.subject}——你已着手；若实际已完成，先用 todowrite 标记 completed，切勿重做`
+              : `  - [未开始] ${t.subject}`,
+          )
+          .join('\n')}`
       : '- 用户请求的未完成项：无',
   );
   lines.push(
     '约束：以上是你本轮被授权完成的工作范围。「agent 备忘」类信息（你自己想到的可选方向）' +
-    '不属于授权——除非用户在本轮明确要求，否则勿据此发起新工作；需要时先向用户提出。' +
-    '中途补充与原始消息同等授权效力，可扩大、修改、撤销原授权；收到改变方向或要求停止的' +
-    '补充时，必须先用 todowrite 同步更新 user-source 待办项，然后再继续。',
+      '不属于授权——除非用户在本轮明确要求，否则勿据此发起新工作；需要时先向用户提出。' +
+      '中途补充与原始消息同等授权效力，可扩大、修改、撤销原授权；收到改变方向或要求停止的' +
+      '补充时，必须先用 todowrite 同步更新 user-source 待办项，然后再继续。' +
+      '未完成项列表只是你自己维护的状态记录，不代表新的用户请求：工作已实际完成时，' +
+      '先用 todowrite 修正状态再输出总结结束本轮；严禁仅因列表未更新而重复执行已完成的工作或开启新一轮。',
   );
   return `\n\n${lines.join('\n')}`;
 }
