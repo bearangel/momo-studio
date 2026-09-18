@@ -86,12 +86,12 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(installed[0]!.cachePath).toBe(cachePath);
   });
 
-  it('agent 类型 manifest.yaml 含全部 25 个 builtin defaultTools（v2.3 +apply_patch）', async () => {
+  it('agent 类型 manifest.yaml 含全部 33 个 builtin defaultTools（v2.3 +apply_patch / v2.1 +office 八工具）', async () => {
     const { cachePath } = await installPackage(makeItem());
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    expect(manifest.spec.defaultTools).toHaveLength(25);
+    expect(manifest.spec.defaultTools).toHaveLength(33);
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
     expect(refs).toContain('bash');
@@ -99,6 +99,7 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(refs).toContain('git_commit');
     expect(refs).toContain('lsp_diagnostics');
     expect(refs).toContain('apply_patch');
+    expect(refs).toContain('office_read'); // v2.1 办公八工具入全集
   });
 
   it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/git_commit 被剔除', async () => {

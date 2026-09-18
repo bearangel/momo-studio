@@ -90,7 +90,7 @@ describe('marketplace/client fetchCatalog', () => {
     fetchSpy.mockRejectedValue(new Error('network down'));
 
     const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(catalog.items.length).toBe(5);
+    expect(catalog.items.length).toBe(6);
     expect(catalog.version).toBe('1.0');
   });
 });
@@ -334,7 +334,7 @@ describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
     };
   }
 
-  /** 期望远程 catalog 被判为不可信 → 回退本地内置（5 items / version 1.0） */
+  /** 期望远程 catalog 被判为不可信 → 回退本地内置（6 items / version 1.0——v2.1 加办公助理） */
   async function expectLocalFallback(catalog: unknown): Promise<void> {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -343,7 +343,7 @@ describe('marketplace/client fetchCatalog 安全校验（S1）', () => {
     } as Response);
     const result = await fetchCatalog('https://example.test/catalog.json');
     expect(result.version).toBe('1.0');
-    expect(result.items).toHaveLength(5);
+    expect(result.items).toHaveLength(6);
   }
 
   it('item.slug 含 shell 元字符 → 远程 catalog 整体拒绝，回退本地', async () => {
