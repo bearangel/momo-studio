@@ -83,7 +83,7 @@ import {
   type RecordCtx,
 } from '../../src/main/journal/recorder';
 import { createJournalStore } from '../../src/main/journal/store';
-import { migration033 } from '../../../src/main/storage/migrations/033_v2_5_change_journal';
+import { migration033 } from '../../src/main/storage/migrations/033_v2_5_change_journal';
 
 let tmpDir: string;
 let prevUserData: string | undefined;
@@ -255,7 +255,7 @@ import {
 } from '../../src/main/journal/recorder';
 import { createJournalStore } from '../../src/main/journal/store';
 import { revertEntries } from '../../src/main/journal/revert';
-import { migration033 } from '../../../src/main/storage/migrations/033_v2_5_change_journal';
+import { migration033 } from '../../src/main/storage/migrations/033_v2_5_change_journal';
 
 let tmpDir: string;      // userData（blob 根）
 let wsDir: string;       // workspace
