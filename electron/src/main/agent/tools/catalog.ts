@@ -2,15 +2,16 @@
 // v1.6 能力配置的共享常量集中地。后续 Migration v16（builtin YAML defaultTools
 // 同步）、DefinitionEditor UI（工具勾选）、crud.ts（新建 custom agent 默认工具）
 // 都从这里 import，保证工具全集 / 安全最小集 / 类别分组三处定义一致。
-// v2.3 加入 apply_patch 后全集从 24 扩为 25；安全最小集保持 v1.5 范围不变
-// （apply_patch 多文件原子破坏力高，按设计不放进默认勾选集）。
+// v2.3 加入 apply_patch 后全集从 24 扩为 25；v2.1 加入 OfficeTools 八工具后
+// 全集从 25 扩为 33；安全最小集保持 v1.5 范围不变（apply_patch 多文件原子破坏力
+// 高，OfficeTools 含文件覆盖/复制，按设计也不放进默认勾选集）。
 //
 // 设计依据：docs/plans/2026-08-11-v1.6-capability-config.md「共享常量」块。
 // 工具名必须与 tools/index.ts 注册中心实际暴露的 name 字段一一对应。
 
 /**
- * v2.3 全部 25 个内置工具的名称全集（v1.5 24 + apply_patch）。
- * 来源：tools/{file,search,shell,git,web,todo,lsp,apply-patch}-tools.ts 中各 ToolDef.name 字段。
+ * v2.1 全部 33 个内置工具的名称全集（v2.3 的 25 + OfficeTools 八工具）。
+ * 来源：tools/{file,search,shell,git,web,todo,lsp,apply-patch,office}-tools.ts 中各 ToolDef.name 字段。
  * 修改本数组前，必须先确认对应工具模块已注册。
  */
 export const ALL_BUILTIN_TOOLS = [
@@ -30,6 +31,11 @@ export const ALL_BUILTIN_TOOLS = [
   'todowrite',
   // LSP（2）
   'lsp_diagnostics', 'lsp_find_references',
+  // 办公（8）— v2.1 OfficeTools（xlsx/docx/pptx/pdf 读写）
+  'office_read', 'office_read_cells',
+  'office_create_excel', 'office_write_excel',
+  'office_create_doc', 'office_create_ppt', 'office_create_pdf',
+  'office_copy',
 ] as const;
 
 /**
@@ -57,4 +63,5 @@ export const TOOL_CATEGORIES: Array<{ label: string; emoji: string; tools: strin
   { label: 'Web', emoji: '🌐', tools: ['webfetch'] },
   { label: 'Todo', emoji: '✅', tools: ['todowrite'] },
   { label: 'LSP', emoji: '🔧', tools: ['lsp_diagnostics', 'lsp_find_references'] },
+  { label: '办公', emoji: '💼', tools: ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy'] },
 ];
