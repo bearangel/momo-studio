@@ -54,7 +54,7 @@
 | 修改 | `layout/MiddlePanel.tsx` | 头部接入 `<TaskProgressButton />`（导出旁）；移除 `<SessionTodoBar />` 挂载 |
 | 修改 | `im/MessageBubble.tsx` | 外层加滚动锚点 `id="msg-{message.id}"` |
 | 删除 | `im/SessionTodoBar.tsx` + `SessionTodoBar.test.tsx` | 组件与 20 用例随形态退役 |
-| 修改 | `renderer/src/styles/globals.css` | 加 `momo-todo-breath`（呼吸）/ `momo-todo-flash`（定位闪烁）keyframes，对齐既有 `momo-stream-blink` 模式；颜色走 accent 语义类 |
+| 修改 | ~~`renderer/src/styles/globals.css`~~ | **勘误（终审）**：keyframes 按仓库既有模式以**组件内 `<style>` 标签注入**（先例 `AgentStreamBubble.tsx` momo-stream-blink），不改 globals.css；色用 `rgb(var(--accent-500))` token 形式 |
 
 ## 5. 数据推导（零新 store、零 IPC）
 
