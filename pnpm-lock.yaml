@@ -4239,6 +4239,9 @@ packages:
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
+ignoredOptionalDependencies:
+  - canvas
+
 snapshots:
 
   '@adobe/css-tools@4.5.0': {}
@@ -7741,11 +7744,7 @@ snapshots:
 
   pdfjs-dist@3.11.174:
     optionalDependencies:
-      canvas: 2.11.2
       path2d-polyfill: 2.0.1
-    transitivePeerDependencies:
-      - encoding
-      - supports-color
 
   pdfkit@0.20.2:
     dependencies:
