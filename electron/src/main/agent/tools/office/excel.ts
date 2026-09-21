@@ -3,14 +3,72 @@
 // 记账由 office-tools 统一处理（write-ahead：先记账后写盘）。
 // 公式注意：exceljs 不计算公式——读取公式的 result 仅取文件内缓存值（写入侧
 // 新写的公式无缓存，显示空），需要精确计算时由 agent 在上下文中完成运算。
+// 读图表隔离：sanitizeXlsxForRead 读前净化内存副本（剥离 drawings/charts/media
+// 部件 + sheet rels 过滤 drawing 条目 + sheet XML 剥 <drawing/> 标签），
+// 解决 exceljs 解析 real-Excel 形态 xdr:graphicFrame / unsupported anchor
+// 类型崩溃的问题（P0 read-fix）。
 
 import ExcelJS from 'exceljs';
+import AdmZip from 'adm-zip';
+import fs from 'node:fs';
 import { parseRange, asString, asStringArray } from './format';
 
 export const PREVIEW_ROWS = 20;
 export const PREVIEW_COLS = 12;
 export const MAX_READ_ROWS = 500;
 export const MAX_READ_COLS = 64;
+
+/** 读前净化（内存副本，不动原件）：剥离 exceljs 无法解析的 drawing/chart/media 部件。
+ *  sheet rels 仅过滤 Type 以 '/drawing' 或 '/chart' 结尾的条目（hyperlink 等保留；
+ *  过滤后为空则删该 rels 文件）；sheet XML 剥 <drawing .../> 标签。
+ *  chartCount = 原始缓冲中 xl/charts/ 下的部件数（仅用于提示，不代表 sanitize 后数量）。 */
+export function sanitizeXlsxForRead(buf: Buffer): { data: Buffer; chartCount: number } {
+  const zip = new AdmZip(buf);
+  const entries = zip.getEntries();
+  // 统计原始 chart 部件数（在删前快照，提示用）
+  const chartCount = entries.filter((e) => e.entryName.startsWith('xl/charts/') && !e.isDirectory).length;
+  // 第一遍：删 drawings / charts / media（media 仅被 drawing 引用）
+  for (const e of entries) {
+    if (
+      e.entryName.startsWith('xl/drawings/') ||
+      e.entryName.startsWith('xl/charts/') ||
+      e.entryName.startsWith('xl/media/')
+    ) {
+      zip.deleteFile(e.entryName);
+    }
+  }
+  // 第二遍：sheet rels 过滤 drawing/chart 条目；过滤后为空则删除该 rels 文件
+  for (const e of entries) {
+    if (/^xl\/worksheets\/_rels\/sheet\d+\.xml\.rels$/.test(e.entryName)) {
+      const xml = zip.readAsText(e.entryName);
+      const relationships = xml.match(/<Relationship\b[^>]*\/>/g) ?? [];
+      const kept = relationships.filter((r) => !/\/drawing["']/.test(r) && !/\/chart["']/.test(r));
+      if (kept.length === 0) {
+        zip.deleteFile(e.entryName);
+      } else if (kept.length !== relationships.length) {
+        zip.updateFile(
+          e.entryName,
+          Buffer.from(
+            `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+              `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+              `${kept.join('')}` +
+              `</Relationships>`,
+          ),
+        );
+      }
+    }
+  }
+  // 第三遍：sheet XML 剥 <drawing .../> 标签（自身闭合形态，real-Excel 写法）
+  for (const e of entries) {
+    if (/^xl\/worksheets\/sheet\d+\.xml$/.test(e.entryName)) {
+      const xml = zip.readAsText(e.entryName);
+      if (xml.includes('<drawing ')) {
+        zip.updateFile(e.entryName, Buffer.from(xml.replace(/<drawing\b[^>]*\/>/g, '')));
+      }
+    }
+  }
+  return { data: zip.toBuffer(), chartCount };
+}
 
 /** 单元格值 → 展示文本。formulas=true 时公式显示 =原文，否则显示缓存 result */
 export function cellText(v: ExcelJS.CellValue, formulas = false): string {
@@ -33,9 +91,15 @@ export function cellText(v: ExcelJS.CellValue, formulas = false): string {
 
 /** sheet 预览：每 sheet 一节（维度 + 前 20 行 × 12 列 markdown 表格） */
 export async function readXlsxPreview(abs: string, signal?: AbortSignal): Promise<string> {
+  const raw = fs.readFileSync(abs);
+  const { data, chartCount } = sanitizeXlsxForRead(raw);
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(abs);
+  // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
+  await wb.xlsx.load(data as unknown as ArrayBuffer);
   const parts: string[] = [];
+  if (chartCount > 0) {
+    parts.push(`（注：文件含 ${chartCount} 个图表/图形部件，读取仅覆盖单元格数据）`);
+  }
   for (const ws of wb.worksheets) {
     if (signal?.aborted) throw new Error('已中断');
     const rows = ws.rowCount;
@@ -70,8 +134,11 @@ export async function readXlsxCells(
   range?: string,
   formulas = false,
 ): Promise<string> {
+  const raw = fs.readFileSync(abs);
+  const { data } = sanitizeXlsxForRead(raw);
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(abs);
+  // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
+  await wb.xlsx.load(data as unknown as ArrayBuffer);
   const ws = typeof sheet === 'number' ? wb.worksheets[sheet - 1] : wb.getWorksheet(sheet);
   if (!ws) {
     throw new Error(`sheet 不存在: ${typeof sheet === 'number' ? `#${sheet}` : sheet}`);
