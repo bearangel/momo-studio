@@ -86,12 +86,12 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(installed[0]!.cachePath).toBe(cachePath);
   });
 
-  it('agent 类型 manifest.yaml 含全部 33 个 builtin defaultTools（v2.3 +apply_patch / v2.1 +office 八工具）', async () => {
+  it('agent 类型 manifest.yaml 含全部 34 个 builtin defaultTools（v2.3 +apply_patch / v2.1 +office 九工具）', async () => {
     const { cachePath } = await installPackage(makeItem());
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    expect(manifest.spec.defaultTools).toHaveLength(33);
+    expect(manifest.spec.defaultTools).toHaveLength(34);
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
     expect(refs).toContain('bash');
