@@ -293,8 +293,8 @@ const OFFICE_CREATE_DOC_DEF: LLMToolDef = {
 const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   name: 'office_create_ppt',
   description:
-    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注。简单版式（标题+内容），' +
-    '复杂排版不支持（spec 边界）。目标已存在时须先 office_read 读取后覆盖。' +
+    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注，支持页背景色/插图/图表。' +
+    '简单版式（标题+内容），复杂排版不支持（spec 边界）。目标已存在时须先 office_read 读取后覆盖。' +
     '参考模板重写 = office_read 读模板文本结构 → 按其分页与要点重新生成。',
   inputSchema: {
     type: 'object',
@@ -317,6 +317,52 @@ const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
               required: ['header'],
             },
             notes: { type: 'string' },
+            background: {
+              type: 'string',
+              description: '页背景色（6 位 hex，如 1F3864；深色底建议配浅色正文——v1 正文色固定黑，深底场景慎用）',
+            },
+            images: {
+              type: 'array',
+              description:
+                '插图列表：path 为 workspace 相对路径（png/jpg/jpeg/gif/webp/bmp，须已存在——' +
+                '图片进 workspace 是用户/文件工具的职责，本工具只引用）；x/y/w/h 英寸可选，' +
+                '缺省 x=0.5/y=1.8/w=9、h 按 w×0.6 兜底（需精确宽高比时显式给 h）',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: '相对 workspace 的图片路径' },
+                  x: { type: 'number', description: '左上角 x（英寸）' },
+                  y: { type: 'number', description: '左上角 y（英寸）' },
+                  w: { type: 'number', description: '宽（英寸，正数）' },
+                  h: { type: 'number', description: '高（英寸，正数；缺省按 w×0.6）' },
+                },
+                required: ['path'],
+              },
+            },
+            chart: {
+              type: 'object',
+              description:
+                '原生图表（活图表非截图；数据由 agent 经 office_read_cells 取数提供）',
+              properties: {
+                type: { type: 'string', enum: ['bar', 'bar_h', 'line', 'pie'], description: '柱/横条/折线/饼' },
+                categories: { type: 'array', items: { type: 'string' }, description: '类别轴标签' },
+                series: {
+                  type: 'array',
+                  description: '数据序列（pie 仅 1 个）；color 为 6 位 hex 系列色（可选）',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string', description: '序列名' },
+                      values: { type: 'array', items: { type: 'number' }, description: '数值（与 categories 等长）' },
+                      color: { type: 'string', description: '系列色（6 位 hex，如 4472C4）' },
+                    },
+                    required: ['name', 'values'],
+                  },
+                },
+                title: { type: 'string', description: '图表标题（可选）' },
+              },
+              required: ['type', 'categories', 'series'],
+            },
           },
           required: ['title'],
         },
@@ -471,7 +517,8 @@ export class OfficeTools implements ToolModule {
         assertOfficeFormat(rel);
         const existed = fs.existsSync(abs);
         if (existed) assertReadForOffice(ctx, abs);
-        const slides = parsePptxSlides(args.slides);
+        // 箭头包装而非裸传方法引用：assertInWorkspace 读 this（P0-1 this 解绑教训）
+        const slides = parsePptxSlides(args.slides, (rel) => ctx.wsFs.assertInWorkspace(rel));
         const buf = await createPptx(slides);
         recordChangeSafe(
           buildRecordCtx('office_create_ppt', ctx),

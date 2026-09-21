@@ -1,6 +1,7 @@
 // OfficeTools 全链路（真实 tmp + 真实 WorkspaceFS + 真实 ReadTracker + 真实 journal store）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
+import AdmZip from 'adm-zip';
 import ExcelJS from 'exceljs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -159,5 +160,29 @@ describe('office_create_doc', () => {
     const beforeBlob = getJournalStore()!.readBlobBytes('ws-office', mod[0]!.beforeHash!);
     expect(beforeBlob).not.toBeNull(); // v1 文件字节（docx zip）
     expect(beforeBlob!.equals(v1Bytes)).toBe(true);
+  });
+});
+
+describe('office_create_ppt 视觉能力（真实 WorkspaceFS 端到端）', () => {
+  it('插图经真实 wsFs 解析入包；越界图片路径被沙箱拒绝', async () => {
+    // 1x1 PNG：office_create_ppt → media 部件存在（pptxgenjs 仅嵌入不解析像素）
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    fs.writeFileSync(path.join(tmpDir, 'logo.png'), png);
+    const out = await tools.execute('office_create_ppt', {
+      path: 'v.pptx',
+      slides: [{ title: '带图', images: [{ path: 'logo.png' }], background: '1F3864' }],
+    }, ctx);
+    expect(out).toContain('v.pptx');
+    const zip = new AdmZip(path.join(tmpDir, 'v.pptx'));
+    expect(zip.getEntries().some((e) => /^ppt\/media\/.+\.png$/.test(e.entryName))).toBe(true);
+    // 越界（真实 WorkspaceFS 防御，端到端）：图片 path 不允许逃出 workspace
+    await expect(tools.execute('office_create_ppt', {
+      path: 'e.pptx',
+      slides: [{ title: '逃逸', images: [{ path: '../logo.png' }] }],
+    }, ctx)).rejects.toThrow();
+    expect(fs.existsSync(path.join(tmpDir, 'e.pptx'))).toBe(false);
   });
 });
