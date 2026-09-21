@@ -8,10 +8,13 @@ import { parseRange } from './format';
 export type ChartType = 'bar' | 'bar_h' | 'line' | 'pie';
 
 /** 单序列数据：nameRef / nameLiteral 二选一；catCache / valCache 是写入时缓存，
- * 避免 Excel 重新读源数据时被空值遮蔽（与 openpyxl 写法对齐）。 */
+ * 避免 Excel 重新读源数据时被空值遮蔽（与 openpyxl 写法对齐）。
+ * nameCache：nameRef 模式下序列名缓存值（编排层从内存 workbook 读 B1 等单元格填充），
+ * 提供时 strRef 内 c:f 之后发 c:strCache（brief 契约：c:tx = strRef+strCache | c:v）。 */
 export interface ChartSeriesData {
   nameRef?: string;
   nameLiteral?: string;
+  nameCache?: string;
   catRef: string;
   catCache: string[];
   valRef: string;
@@ -71,7 +74,10 @@ const VAL_AX_ID = '222222222';
 
 function buildTxXml(s: ChartSeriesData): string {
   if (s.nameRef !== undefined) {
-    return `<c:tx><c:strRef><c:f>${xmlEscape(s.nameRef)}</c:f></c:strRef></c:tx>`;
+    const cacheXml = s.nameCache !== undefined
+      ? `<c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${xmlEscape(s.nameCache)}</c:v></c:pt></c:strCache>`
+      : '';
+    return `<c:tx><c:strRef><c:f>${xmlEscape(s.nameRef)}</c:f>${cacheXml}</c:strRef></c:tx>`;
   }
   if (s.nameLiteral !== undefined) {
     return `<c:tx><c:v>${xmlEscape(s.nameLiteral)}</c:v></c:tx>`;

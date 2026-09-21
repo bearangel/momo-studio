@@ -27,6 +27,11 @@ describe('buildChartXml', () => {
     expect($('c\\:catAx c\\:axId').attr('val')).toBe('111111111');
     expect($('c\\:valAx c\\:axId').attr('val')).toBe('222222222');
   });
+  it('nameCache 提供时 tx 发 strCache（引用+缓存）', () => {
+    const $ = cheerio.load(buildChartXml({ type: 'bar', series: [{ ...barSeries[0], nameCache: '销售额' }] }), { xmlMode: true });
+    expect($('c\\:tx c\\:strRef c\\:f').text()).toBe(`'汇总'!$B$1`);
+    expect($('c\\:tx c\\:strRef c\\:strCache c\\:pt c\\:v').text()).toBe('销售额');
+  });
   it('bar_h：barDir=bar + catAx axPos=l / valAx axPos=b', () => {
     const $ = cheerio.load(buildChartXml({ type: 'bar_h', series: barSeries }), { xmlMode: true });
     expect($('c\\:barChart c\\:barDir').attr('val')).toBe('bar');
