@@ -89,7 +89,7 @@ describe('writeXlsxOps fill（会话回归锁：一次 fill 80 行 × 10 列）'
           { type: 'literal', values: channels },
           { type: 'random_int', min: 3, max: 15 },
           { type: 'pick', items: prices },
-          { type: 'formula', template: '=H{row}*I{row}' },
+          { type: 'formula', template: '=G{row}*H{row}' },
           { type: 'pick', items: sellers },
         ],
       },
@@ -117,7 +117,7 @@ describe('writeXlsxOps fill（会话回归锁：一次 fill 80 行 × 10 列）'
     expect(ws.getCell('B81').value).toMatchObject({ formula: 'MONTH(A81)' });
     expect(ws.getCell('D2').value).toMatchObject({ formula: 'VLOOKUP(C2,目录!$A$2:$B$4,2,0)' });
     for (let r = 2; r <= 81; r++) {
-      expect(ws.getCell(`I${r}`).value).toMatchObject({ formula: `H${r}*I${r}` });
+      expect(ws.getCell(`I${r}`).value).toMatchObject({ formula: `G${r}*H${r}` });
     }
     // 内容零污染：枚举/数值列全部落在声明的值域内（无混入无关字符串）
     for (let r = 2; r <= 81; r++) {
@@ -191,6 +191,20 @@ describe('seed 确定性', () => {
     expect(a.map((row) => row[3])).not.toEqual(b.map((row) => row[3])); // random 日期
     expect(a.map((row) => row[4])).toEqual(b.map((row) => row[4])); // literal 无关 seed
     expect(a.map((row) => row[5])).toEqual(b.map((row) => row[5])); // 等差无关 seed
+  });
+
+  it('seed 省略 ≡ 显式 42：generateFillRows 逐元素相等', () => {
+    // 故意从 baseFillOp 剥离默认 seed（覆盖 undefined）——验证省略路径走 FILL_DEFAULT_SEED
+    const opOmit: Record<string, unknown> = {
+      op: 'fill',
+      sheet: '数据',
+      anchor: 'A2',
+      rows: 50,
+      columns: mixedCols,
+      seed: undefined,
+    };
+    const opExplicit42: Record<string, unknown> = { ...opOmit, seed: 42 };
+    expect(generateFillRows(parseFillOp(opOmit))).toEqual(generateFillRows(parseFillOp(opExplicit42)));
   });
 });
 

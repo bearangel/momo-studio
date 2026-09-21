@@ -98,7 +98,10 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
     'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
     '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +
     'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。' +
-    '汇总统计建议用 SUMIF/COUNTIF 公式引用明细区域（Excel 计算、避免手算误差；公式格作图表数据缓存留空打开后自算）。',
+    '汇总统计建议用 SUMIF/COUNTIF 公式引用明细区域（Excel 计算、避免手算误差；公式格作图表数据缓存留空打开后自算）。' +
+    '模拟/批量数据用 fill 声明式生成（七型列规格：日期序列/数字序列/随机整数/随机小数/加权抽取/字面量循环/公式模板 {row}；' +
+    'seed 可复现，单次最多 5 万行）——**禁止手写超过 20 行的大数组**（易形状错乱）；' +
+    '派生列（如类别=产品映射）用公式 =VLOOKUP(C{row},目录区,2,0)。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -111,24 +114,41 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
           properties: {
             op: {
               type: 'string',
-              enum: ['add_sheet', 'set_cells', 'add_chart'],
-              description: 'add_chart：建原生图表（柱/横条/折线/饼）',
+              enum: ['add_sheet', 'set_cells', 'fill', 'add_chart'],
+              description: 'add_chart：建原生图表（柱/横条/折线/饼）；fill：声明式批量数据生成（替代手写大数组）',
             },
             name: { type: 'string', description: 'add_sheet：新页签名' },
             sheet: {
               type: 'string',
-              description: 'set_cells/add_chart：目标页签名（add_chart：图表所在 sheet）',
+              description: 'set_cells/fill/add_chart：目标页签名（add_chart：图表所在 sheet）',
             },
             range: { type: 'string', description: 'set_cells：A1 range；省略=从 A1 按 values 形状展开' },
             values: { type: 'array', items: { type: 'array' }, description: 'set_cells：二维数组' },
+            anchor: {
+              type: 'string',
+              description:
+                'fill：单格左上角锚点（如 A2），生成区域按 rows × columns.length 向右下展开；' +
+                'add_chart：图表左上角单格锚点（如 B2）；省略默认尺寸 8 列 × 15 行',
+            },
+            rows: {
+              type: 'number',
+              description: 'fill：生成行数（1..50000 整数）',
+            },
+            seed: {
+              type: 'number',
+              description: 'fill：确定性 PRNG 种子（省略 = 42；同 seed 同参数逐字节可复现）',
+            },
+            columns: {
+              type: 'array',
+              description:
+                'fill：列生成器数组（七型 sequence_date / sequence_number / random_int / random_float / ' +
+                'pick / literal / formula）；非空',
+              items: { type: 'object' },
+            },
             type: {
               type: 'string',
               enum: ['bar', 'bar_h', 'line', 'pie'],
               description: 'add_chart：图表类型（柱/横条/折线/饼）',
-            },
-            anchor: {
-              type: 'string',
-              description: 'add_chart：图表左上角单格锚点（如 B2）；省略默认尺寸 8 列 × 15 行',
             },
             size: {
               type: 'object',

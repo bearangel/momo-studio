@@ -293,7 +293,7 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
     if (rec.op === 'fill') {
       // 全量窄化在 fill.ts（错误路径文案含字段路径）；运行时 columns 已是
       // FillColumn[]，静态类型保持 unknown[] 由窄化层管（write 侧二次窄化取值）
-      const spec = parseFillOp(rec);
+      const spec = parseFillOp(rec, `ops[${i}]`);
       return {
         op: 'fill' as const,
         sheet: spec.sheet,
@@ -502,7 +502,8 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
   // 注入依赖 writeBuffer 产出的最终 workbook.xml（resolveSheetFile 按 sheet 名定位），
   // 故图表先按 sheet 收集、序列化后统一注入
   const chartsBySheet = new Map<string, Array<{ chartXml: string; anchorXml: string }>>();
-  for (const op of ops) {
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]!;
     if (op.op === 'add_sheet') {
       if (wb.getWorksheet(op.name)) throw new Error(`sheet 已存在: ${op.name}`);
       wb.addWorksheet(op.name);
@@ -533,7 +534,7 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
       if (!ws) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
       // columns 静态类型 unknown[]（窄化层在 fill.ts）——parseFillOp 纯函数幂等，
       // 二次窄化同时保证 rows/anchor/区间合法性；rows×columns 上限 50000×列数由此成立
-      const data = generateFillRows(parseFillOp(op));
+      const data = generateFillRows(parseFillOp(op, `ops[${i}]`));
       const a = parseRange(op.anchor);
       applyCellValues(ws, a.startRow, a.startCol, data);
       continue;

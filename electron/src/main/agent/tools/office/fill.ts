@@ -152,27 +152,30 @@ function parseFillColumn(raw: unknown, what: string): FillColumn {
 }
 
 /** fill op 参数窄化：全部错误路径在此校验（中文文案含字段路径）。
+ *  what：可选前缀（如 'ops[2]'）— 加在每条错误文案字段路径前，excel.ts 侧传递 op
+ *  索引便于用户定位是哪一项 ops 报错；省略时保持纯函数文案不变（纯函数测试合约）。
  *  纯函数幂等——已窄化的 FillSpec 再解析结果一致（writeXlsxOps 侧复用）。 */
-export function parseFillOp(raw: Record<string, unknown>): FillSpec {
-  const sheet = asString(raw.sheet, 'sheet');
-  const anchor = asString(raw.anchor, 'anchor');
+export function parseFillOp(raw: Record<string, unknown>, what = ''): FillSpec {
+  const path = (field: string): string => (what === '' ? field : `${what}.${field}`);
+  const sheet = asString(raw.sheet, path('sheet'));
+  const anchor = asString(raw.anchor, path('anchor'));
   const a = parseRange(anchor);
   if (a.endRow !== null || a.endCol !== null) {
-    throw new Error(`参数 anchor 必须是单格左上角（如 A2），收到: "${anchor}"`);
+    throw new Error(`参数 ${path('anchor')} 必须是单格左上角（如 A2），收到: "${anchor}"`);
   }
   const rows = raw.rows;
   if (typeof rows !== 'number' || !Number.isInteger(rows) || rows < 1 || rows > FILL_MAX_ROWS) {
-    throw new Error(`参数 rows 必须是 1..${FILL_MAX_ROWS} 的整数`);
+    throw new Error(`参数 ${path('rows')} 必须是 1..${FILL_MAX_ROWS} 的整数`);
   }
   let seed = FILL_DEFAULT_SEED;
   if (raw.seed !== undefined) {
-    const s = asFiniteNumber(raw.seed, 'seed');
+    const s = asFiniteNumber(raw.seed, path('seed'));
     seed = s >>> 0; // 归一 uint32（负数/小数截断，mulberry32 定义域）
   }
   if (!Array.isArray(raw.columns) || raw.columns.length === 0) {
-    throw new Error('参数 columns 缺失或不是非空数组');
+    throw new Error(`参数 ${path('columns')} 缺失或不是非空数组`);
   }
-  const columns = raw.columns.map((c, i) => parseFillColumn(c, `columns[${i}]`));
+  const columns = raw.columns.map((c, i) => parseFillColumn(c, path(`columns[${i}]`)));
   return { sheet, anchor, rows, seed, columns };
 }
 

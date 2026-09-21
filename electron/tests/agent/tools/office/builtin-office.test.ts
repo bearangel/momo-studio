@@ -113,4 +113,23 @@ describe('marketplace catalog', () => {
     expect(item!.readme).toContain('SUMIF');
     expect(writeDef!.description).toContain('SUMIF');
   });
+
+  it('fill 提示词同步锁（spec §14.7）：YAML / catalog readme / WRITE_EXCEL_DEF 三处一致 + op enum 含 fill', () => {
+    const yaml = loadYaml('office-assistant.yaml');
+    const yamlPrompt = ((yaml.spec as Record<string, unknown>).declarative as Record<string, unknown>)
+      .systemPrompt as string;
+    expect(yamlPrompt).toContain('fill');
+
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
+      items: Array<{ slug: string; readme: string }>;
+    };
+    const item = catalog.items.find((i) => i.slug === 'office-assistant');
+    expect(item!.readme).toContain('fill');
+
+    const writeDef = new OfficeTools().getDefs().find((d) => d.name === 'office_write_excel');
+    expect(writeDef!.description).toContain('fill');
+    const props = writeDef!.inputSchema.properties as Record<string, unknown>;
+    const opsSchema = props['ops'] as { items: { properties: { op: { enum: string[] } } } };
+    expect(opsSchema.items.properties.op.enum).toContain('fill');
+  });
 });
