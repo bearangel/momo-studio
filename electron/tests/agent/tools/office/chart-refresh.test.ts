@@ -14,6 +14,7 @@ import {
   parseExcelWriteOps,
 } from '../../../../src/main/agent/tools/office/excel';
 import { parseChartRef, refreshChartCaches } from '../../../../src/main/agent/tools/office/xlsx-zip';
+import { injectP0ChartDrawing, withChartXml, richChartXml } from './xlsx-chart-fixture';
 
 /** 读取 zip 内某部件全文；缺失即抛（fixture/实现坏了要让测试大声失败） */
 function readText(buf: Buffer, name: string): string {
@@ -557,5 +558,79 @@ describe('review-fix：$ 注入防御与公式格 omit', () => {
     // valCache 落值
     expect(xml).toContain('<c:v>10</c:v>');
     expect(xml).toContain('<c:v>30</c:v>');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// R1（spec §14.8-1）：openpyxl 默认命名空间形态（无 c: 前缀）的缓存重算
+// openpyxl 产图表用默认命名空间（<f>/<numRef> 无 c: 前缀，a: 保留）——旧实现
+// 匹配正则硬编码 c: 致缓存重算静默跳过（改数后图表缓存陈旧）。本节为回归锁。
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 月度底稿 + 无 c: 前缀 bar 图（引用 名 B1 / 类别 A2:A4 / 数值 B2:B4，
+ *  缓存初值为占位值——重算后必须被工作簿真实值覆盖） */
+async function makeOpenpyxlChartedBase(): Promise<Buffer> {
+  const base = await injectP0ChartDrawing(await makeMonthlyBase(), {
+    charts: 1,
+    addHyperlink: false,
+  });
+  return withChartXml(
+    base,
+    1,
+    richChartXml(
+      {
+        kind: 'bar',
+        title: '月度销售',
+        nameRef: `'销售明细'!$B$1`,
+        catRef: `'销售明细'!$A$2:$A$4`,
+        valRef: `'销售明细'!$B$2:$B$4`,
+      },
+      false,
+    ),
+  );
+}
+
+describe('R1：openpyxl 默认命名空间形态缓存重算（spec §14.8-1）', () => {
+  it('无前缀图表不被静默跳过：set_cells 改引用区域 → numCache/strCache 重算为工作簿新值', async () => {
+    const charted = await makeOpenpyxlChartedBase();
+    const out = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'B2:B4', values: [[10], [20], [30]] },
+      ]),
+    );
+    const xml = chartXml(out, 1);
+    // numCache 更新（无前缀 <v> 形态）
+    expect(xml).toContain('<v>10</v>');
+    expect(xml).toContain('<v>30</v>');
+    expect(xml).not.toContain('<v>100</v>');
+    // strCache（categories）按工作簿真实值重建（不再是 fixture 占位的 门店A..E）
+    expect(xml).toContain('<v>1月</v>');
+    expect(xml).not.toContain('<v>门店A</v>');
+    // 序列名 strRef（B1 单格）同步重算
+    expect(xml).toContain('<v>金额</v>');
+  });
+
+  it('前缀形态保留：重算回写不把无前缀文件改写成带 c: 前缀', async () => {
+    const charted = await makeOpenpyxlChartedBase();
+    const out = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'B2:B4', values: [[7], [8], [9]] },
+      ]),
+    );
+    const xml = chartXml(out, 1);
+    expect(xml).toContain('<v>7</v>');
+    // 标签保持无前缀形态（numRef/numCache/strCache/formatCode/ptCount）
+    expect(xml).toContain('<numRef>');
+    expect(xml).toContain('<numCache>');
+    expect(xml).toContain('<formatCode>');
+    expect(xml).toContain('<ptCount val="3"/>');
+    expect(xml).not.toContain('<c:numRef>');
+    expect(xml).not.toContain('<c:numCache>');
+    expect(xml).not.toContain('<c:strCache>');
+    expect(xml).not.toContain('<c:f>');
+    // 活引用不动（无前缀形态）
+    expect(xml).toContain(`<f>'销售明细'!$B$2:$B$4</f>`);
   });
 });

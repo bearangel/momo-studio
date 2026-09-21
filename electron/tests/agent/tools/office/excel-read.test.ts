@@ -21,7 +21,7 @@ import {
   sanitizeXlsxForRead,
 } from '../../../../src/main/agent/tools/office/excel';
 // P0 形态 drawing/chart 注入 fixture 已抽公共 helper（xlsx-zip.test.ts 共用，防两份副本漂移）
-import { makeBaseXlsxBuffer, injectP0ChartDrawing } from './xlsx-chart-fixture';
+import { makeBaseXlsxBuffer, injectP0ChartDrawing, withChartXml, richChartXml } from './xlsx-chart-fixture';
 
 let tmpDir: string;
 let abs: string;
@@ -183,13 +183,124 @@ describe('sanitizeXlsxForRead', () => {
       'xl/worksheets/_rels/sheet1.xml.rels',
       Buffer.from(
         `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-        `<Relationship Id="rIdD" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` +
-        `</Relationships>`,
+          `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+          `<Relationship Id="rIdD" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` +
+          `</Relationships>`,
       ),
     );
     const { data } = sanitizeXlsxForRead(zip.toBuffer());
     const out = new AdmZip(data).getEntries().map((e) => e.entryName);
     expect(out).not.toContain('xl/worksheets/_rels/sheet1.xml.rels');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// R4（spec §14.8-4）：office_read 图表摘要——预览头部逐图一行（类型/标题/引用）
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 2 图 fixture（bar + pie，带标题与 cat/val 引用）；prefixed=false 输出 openpyxl 无前缀形态 */
+async function makeRichChartFixture(dir: string, name: string, prefixed: boolean): Promise<string> {
+  const target = path.join(dir, name);
+  let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer());
+  buf = withChartXml(
+    buf,
+    1,
+    richChartXml(
+      { kind: 'bar', title: '各门店销售额', catRef: `'门店明细'!$F$2:$F$6`, valRef: `'门店明细'!$G$2:$G$6` },
+      prefixed,
+    ),
+  );
+  buf = withChartXml(
+    buf,
+    2,
+    richChartXml(
+      { kind: 'pie', title: '各门店占比', catRef: `'门店明细'!$F$2:$F$6`, valRef: `'门店明细'!$H$2:$H$6` },
+      prefixed,
+    ),
+  );
+  fs.writeFileSync(target, buf);
+  return target;
+}
+
+describe('R4：readXlsxPreview 图表摘要', () => {
+  it('2 图（c: 前缀形态）→ 部件提示 + 逐图摘要行（类型/标题/类别/数值引用），位于 sheet 节之前', async () => {
+    const target = await makeRichChartFixture(tmpDir, 'rich-charts.xlsx', true);
+    const out = await readXlsxPreview(target);
+    expect(out).toContain('文件含 2 个图表');
+    expect(out).toContain(`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`);
+    expect(out).toContain(`图表2[pie] 各门店占比 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$H$2:$H$6`);
+    expect(out.indexOf('图表1[bar]')).toBeGreaterThanOrEqual(0);
+    expect(out.indexOf('图表1[bar]')).toBeLessThan(out.indexOf('## Sheet:'));
+  });
+
+  it('openpyxl 无前缀形态 → 同样出摘要', async () => {
+    const target = await makeRichChartFixture(tmpDir, 'rich-charts-nopfx.xlsx', false);
+    const out = await readXlsxPreview(target);
+    expect(out).toContain('文件含 2 个图表');
+    expect(out).toContain(`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`);
+    expect(out).toContain(`图表2[pie] 各门店占比 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$H$2:$H$6`);
+  });
+
+  it('单图 → 提示与摘要同行（文件含 1 个图表）图表N[类型] …', async () => {
+    const target = path.join(tmpDir, 'single-chart.xlsx');
+    let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer(), { charts: 1 });
+    buf = withChartXml(
+      buf,
+      1,
+      richChartXml(
+        { kind: 'bar', title: '各门店销售额', catRef: `'门店明细'!$F$2:$F$6`, valRef: `'门店明细'!$G$2:$G$6` },
+        true,
+      ),
+    );
+    fs.writeFileSync(target, buf);
+    const out = await readXlsxPreview(target);
+    expect(out).toContain(
+      `（注：文件含 1 个图表）图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`,
+    );
+  });
+
+  it('坏 chart XML 跳过不炸：摘要缺位但部件计数与单元格数据不受影响', async () => {
+    const target = path.join(tmpDir, 'broken-chart.xlsx');
+    let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer());
+    buf = withChartXml(buf, 1, '<?xml version="1.0"?><垃圾内容不是图表');
+    buf = withChartXml(
+      buf,
+      2,
+      richChartXml(
+        { kind: 'pie', title: '各门店占比', catRef: `'门店明细'!$F$2:$F$6`, valRef: `'门店明细'!$H$2:$H$6` },
+        true,
+      ),
+    );
+    fs.writeFileSync(target, buf);
+    const out = await readXlsxPreview(target);
+    // chart1 损坏被跳过，仅剩 chart2 摘要；部件计数仍按 2 计
+    expect(out).toContain('文件含 2 个图表');
+    expect(out).toContain('图表1[pie] 各门店占比');
+    expect(out).not.toContain('[bar]');
+    // 单元格数据照常读出
+    expect(out).toContain('## Sheet: 销售 (3×3)');
+    expect(out).toContain('2026-01-01');
+  });
+
+  it('引用超过 4 个 → 按出现序截断提示（不强行标注类别/数值）', async () => {
+    const ref = (col: string): string => `'门店明细'!$${col}$2:$${col}$10`;
+    // 5 序列各引不同列（无 cat/name，仅 numRef）→ refs 共 5 个
+    const sers = ['B', 'C', 'D', 'E', 'F']
+      .map((col) => `<c:ser><c:val><c:numRef><c:f>${ref(col)}</c:f></c:numRef></c:val></c:ser>`)
+      .join('');
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+      `<c:chart><c:plotArea><c:layout/><c:barChart>${sers}</c:barChart>` +
+      `<c:catAx><c:axId val="111111111"/></c:catAx><c:valAx><c:axId val="222222222"/></c:valAx>` +
+      `</c:plotArea></c:chart></c:chartSpace>`;
+    const target = path.join(tmpDir, 'many-refs.xlsx');
+    let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer(), { charts: 1 });
+    buf = withChartXml(buf, 1, xml);
+    fs.writeFileSync(target, buf);
+    const out = await readXlsxPreview(target);
+    expect(out).toContain(
+      `图表1[bar] → ${ref('B')}、${ref('C')}、${ref('D')}、${ref('E')} 等 5 个引用`,
+    );
   });
 });

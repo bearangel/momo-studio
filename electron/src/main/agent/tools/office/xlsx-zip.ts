@@ -7,7 +7,8 @@
 //   restoreChartParts    exceljs 重写后回注快照（rels 合并 + Id 冲突重命名 + ContentTypes 补缺）
 //   injectCharts         向目标 sheet 注入新图表（无 drawing 新建 / 已有 drawing 合并锚点）
 //   parseChartRef        c:f 引用解析（'表'!$A$1:$A$5 → { sheet, range }）
-//   refreshChartCaches   全部 chart 部件缓存重算（spec §14.6 P1a，字符串分段替换）
+//   refreshChartCaches   全部 chart 部件缓存重算（spec §14.6 P1a，字符串分段替换；前缀无关）
+//   extractChartSummaries 全部 chart 部件摘要（spec §14.8-4，office_read 图表提示）
 // 实证依据（PoC 复核）：exceljs 可 load 含 graphicFrame 锚点的注入产物；
 // adm-zip updateFile 对不存在条目是静默 no-op——所有写入必须走 upsertFile。
 // refreshChartCaches 不用 cheerio round-trip 而用字符串分段替换：DOM 序列化会重排
@@ -471,22 +472,25 @@ export interface ChartRefValues {
   numbers?: Array<number | null>;
 }
 
-const F_TAG_RE = /<c:f>([\s\S]*?)<\/c:f>/;
-const NUM_CACHE_RE = /<c:numCache>[\s\S]*?<\/c:numCache>/;
-const STR_CACHE_RE = /<c:strCache>[\s\S]*?<\/c:strCache>/;
-const FORMAT_CODE_RE = /<c:numCache>[\s\S]*?<c:formatCode>([^<]*)<\/c:formatCode>/;
+// c: 前缀是惯例非规范：openpyxl 产图表用默认命名空间（<f>/<numRef> 等无前缀，
+// 参照 spec §14.8-1）。匹配正则一律双形态（<(?:c:)?f> 式）；回写用捕获到的原
+// 前缀还原——不把无前缀文件重写成带前缀（保持部件形态稳定）。
+const F_TAG_RE = /<((?:c:)?)f>([\s\S]*?)<\/(?:c:)?f>/;
+const NUM_CACHE_RE = /<(?:c:)?numCache>[\s\S]*?<\/(?:c:)?numCache>/;
+const STR_CACHE_RE = /<(?:c:)?strCache>[\s\S]*?<\/(?:c:)?strCache>/;
+const FORMAT_CODE_RE = /<(?:c:)?numCache>[\s\S]*?<(?:c:)?formatCode>([^<]*)<\/(?:c:)?formatCode>/;
 
-/** 单个 chart XML 的缓存重算：遍历全部 <c:numRef>/<c:strRef>（含 c:tx 序列名
- *  strRef），<c:f> 经 parseChartRef + readRef 取值后只替换 cache 子树（无 cache
- *  则插到 </c:f> 之后），其余节点字节不动。 */
+/** 单个 chart XML 的缓存重算：遍历全部 numRef/strRef（含 tx 序列名 strRef；两种
+ *  前缀形态均匹配），f 经 parseChartRef + readRef 取值后只替换 cache 子树（无 cache
+ *  则插到 </f> 之后），其余节点字节不动。 */
 function refreshChartXmlCaches(
   xml: string,
   readRef: (ref: { sheet: string; range: string }) => ChartRefValues | null,
 ): string {
-  const refresh = (block: string, inner: string, isNum: boolean): string => {
+  const refresh = (block: string, inner: string, isNum: boolean, pfx: string): string => {
     const f = inner.match(F_TAG_RE);
     if (f === null) return block;
-    const parsed = parseChartRef(xmlUnescapeAttr(f[1] ?? ''));
+    const parsed = parseChartRef(xmlUnescapeAttr(f[2] ?? ''));
     if (parsed === null) return block;
     const values = readRef(parsed);
     if (values === null) return block;
@@ -506,19 +510,21 @@ function refreshChartXmlCaches(
       cache = buildStrCacheXml(values.texts);
       cacheRe = STR_CACHE_RE;
     }
+    // 无前缀文档：生成器产物（c: 前缀）仅剥标签边界前缀（文本内容不含裸 '<'，安全）
+    if (pfx === '') cache = cache.replace(/<\/?c:/g, (m) => (m.startsWith('</') ? '</' : '<'));
     // 函数型 replacer：cache 携带用户可控文本（strCache categories / 序列名等），
     // 字符串 replacement 会把 $$/$&/$`/$' 解释为特殊模式——返回字面量才是真正替换。
     const nextInner = cacheRe.test(inner)
       ? inner.replace(cacheRe, () => cache)
-      : inner.replace(/<\/c:f>/, () => `</c:f>${cache}`);
-    return `<c:${isNum ? 'numRef' : 'strRef'}>${nextInner}</c:${isNum ? 'numRef' : 'strRef'}>`;
+      : inner.replace(/<\/(?:c:)?f>/, () => `</${pfx}f>${cache}`);
+    return `<${pfx}${isNum ? 'numRef' : 'strRef'}>${nextInner}</${pfx}${isNum ? 'numRef' : 'strRef'}>`;
   };
   return xml
-    .replace(/<c:numRef>([\s\S]*?)<\/c:numRef>/g, (block, inner: string) =>
-      refresh(block, inner, true),
+    .replace(/<((?:c:)?)numRef>([\s\S]*?)<\/(?:c:)?numRef>/g, (block, pfx: string, inner: string) =>
+      refresh(block, inner, true, pfx),
     )
-    .replace(/<c:strRef>([\s\S]*?)<\/c:strRef>/g, (block, inner: string) =>
-      refresh(block, inner, false),
+    .replace(/<((?:c:)?)strRef>([\s\S]*?)<\/(?:c:)?strRef>/g, (block, pfx: string, inner: string) =>
+      refresh(block, inner, false, pfx),
     );
 }
 
@@ -545,4 +551,103 @@ export function refreshChartCaches(
     }
   }
   return changed ? zip.toBuffer() : buf;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 图表摘要（spec §14.8-4）：office_read 预览头部的图表提示数据源
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 图表摘要：类型/标题/引用（前缀无关解析；损坏图表跳过不炸）。
+ *  refs 按文档出现序去重；catRefs/valRefs/nameRefs 为能从父节点（ser > cat/val/tx
+ *  下的 strRef/numRef）判定的分类引用——渲染端能则标注 类别/数值/序列名。 */
+export interface ChartSummary {
+  kind: 'bar' | 'line' | 'pie' | 'other';
+  title: string | null;
+  refs: string[];
+  catRefs?: string[];
+  valRefs?: string[];
+  nameRefs?: string[];
+}
+
+/** 单个 chart XML → 摘要；无 chart 元素的垃圾内容返回 null（调用方跳过）。
+ *  正则与 refreshChartXmlCaches 同款双形态（<(?:c:)?f> 式），openpyxl 默认命名
+ *  空间产物同样可解析。 */
+function summarizeChartXml(xml: string): ChartSummary | null {
+  if (!/<(?:c:)?chart[\s>]/.test(xml)) return null;
+  // 类型按节点判定：bar 含横向（barDir="bar"）；组合图（bar+line 同图）取 bar 优先
+  let kind: ChartSummary['kind'] = 'other';
+  if (/<(?:c:)?barChart[\s>]/.test(xml)) kind = 'bar';
+  else if (/<(?:c:)?lineChart[\s>]/.test(xml)) kind = 'line';
+  else if (/<(?:c:)?pieChart[\s>]/.test(xml)) kind = 'pie';
+
+  // 标题：title 块内首个文本 run（a:t；openpyxl 默认命名空间产物为无前缀 <t>）
+  let title: string | null = null;
+  const titleBlock = xml.match(/<(?:c:)?title\b[\s\S]*?<\/(?:c:)?title>/);
+  if (titleBlock !== null) {
+    const t = (titleBlock[0] ?? '').match(/<(?:a:)?t>([^<]*)<\/(?:a:)?t>/);
+    if (t !== null) {
+      const text = xmlUnescapeAttr(t[1] ?? '');
+      if (text !== '') title = text;
+    }
+  }
+
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  const nameRefs: string[] = [];
+  const catRefs: string[] = [];
+  const valRefs: string[] = [];
+  const addRef = (raw: string, bucket: string[] | null): void => {
+    const ref = xmlUnescapeAttr(raw.trim());
+    if (ref === '') return;
+    if (!seen.has(ref)) {
+      seen.add(ref);
+      refs.push(ref);
+    }
+    if (bucket !== null && !bucket.includes(ref)) bucket.push(ref);
+  };
+
+  // refs 取全部 f 元素（按出现序去重）；分类只认 ser 容器内的 tx/cat/val
+  // （title 的 strRef 引用不属于任何桶 → 渲染端退化为按出现序列出）
+  const F_ALL_RE = /<(?:c:)?f>([\s\S]*?)<\/(?:c:)?f>/g;
+  for (const fm of xml.match(F_ALL_RE) ?? []) {
+    addRef(fm.replace(/^<(?:c:)?f>/, '').replace(/<\/(?:c:)?f>$/, ''), null);
+  }
+  const SER_RE = /<(?:c:)?ser\b[^>]*>([\s\S]*?)<\/(?:c:)?ser>/g;
+  for (const ser of xml.match(SER_RE) ?? []) {
+    const CONTAINER_RE = /<(?:c:)?(tx|cat|val)\b[^>]*>([\s\S]*?)<\/(?:c:)?(?:tx|cat|val)>/g;
+    for (const container of ser.match(CONTAINER_RE) ?? []) {
+      const nameMatch = container.match(/^<(?:c:)?(tx|cat|val)\b/);
+      const containerName = nameMatch === null ? '' : nameMatch[1] ?? '';
+      const bucket = containerName === 'tx' ? nameRefs : containerName === 'cat' ? catRefs : containerName === 'val' ? valRefs : null;
+      const F_IN_RE = /<(?:c:)?f>([\s\S]*?)<\/(?:c:)?f>/g;
+      for (const fm of container.match(F_IN_RE) ?? []) {
+        addRef(fm.replace(/^<(?:c:)?f>/, '').replace(/<\/(?:c:)?f>$/, ''), bucket);
+      }
+    }
+  }
+
+  const summary: ChartSummary = { kind, title, refs };
+  if (nameRefs.length > 0) summary.nameRefs = nameRefs;
+  if (catRefs.length > 0) summary.catRefs = catRefs;
+  if (valRefs.length > 0) summary.valRefs = valRefs;
+  return summary;
+}
+
+/** 提取全部 chart 部件摘要（chartN 按数值序，与部件编号一致）；损坏部件跳过。 */
+export function extractChartSummaries(buf: Buffer): ChartSummary[] {
+  const zip = new AdmZip(buf);
+  const chartNum = (name: string): number => {
+    const m = name.match(/^xl\/charts\/chart(\d+)\.xml$/);
+    return m === null ? 0 : parseInt(m[1] ?? '0', 10);
+  };
+  const entries = zip
+    .getEntries()
+    .filter((e) => !e.isDirectory && chartNum(e.entryName) > 0)
+    .sort((a, b) => chartNum(a.entryName) - chartNum(b.entryName));
+  const summaries: ChartSummary[] = [];
+  for (const e of entries) {
+    const s = summarizeChartXml(zip.readAsText(e.entryName));
+    if (s !== null) summaries.push(s);
+  }
+  return summaries;
 }

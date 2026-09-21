@@ -34,6 +34,90 @@ export async function makeBaseXlsxBuffer(withHyperlinkCell = false): Promise<Buf
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** 替换 zip 内第 N 个 chart 部件内容（fixture 换形态 / 造坏图用；不改入参）。
+ *  部件不存在即抛——fixture 组装错了要让测试大声失败。 */
+export function withChartXml(buf: Buffer, n: number, xml: string): Buffer {
+  const zip = new AdmZip(buf);
+  const name = `xl/charts/chart${n}.xml`;
+  if (zip.getEntry(name) === null) throw new Error(`zip 缺少部件: ${name}`);
+  zip.updateFile(name, Buffer.from(xml, 'utf8'));
+  return zip.toBuffer();
+}
+
+export interface RichChartSpec {
+  kind: 'bar' | 'line' | 'pie';
+  /** rich 标题文本（缺省 = 无 title 节点，autoTitleDeleted=1） */
+  title?: string;
+  /** 类别引用（ser > cat > strRef > f） */
+  catRef: string;
+  /** 数值引用（ser > val > numRef > f） */
+  valRef: string;
+  /** 序列名引用（ser > tx > strRef > f；缺省无 tx 节点） */
+  nameRef?: string;
+}
+
+/** 完整 ser/cat/val/title 的 chartSpace XML（cat/val 缓存各 5 点占位初值）。
+ *  prefixed=true 输出 c: 前缀形态（真实 Excel / 本项目生成器）；
+ *  prefixed=false 输出 openpyxl 默认命名空间形态——chart 命名空间落在根节点
+ *  xmlns（元素无前缀）、a:（drawingml 文本）保留前缀，与真实 openpyxl 产物一致。 */
+export function richChartXml(spec: RichChartSpec, prefixed = true): string {
+  const p = prefixed ? 'c:' : '';
+  const rootOpen = prefixed
+    ? `<c:chartSpace xmlns:c="${C_NS}" xmlns:a="${A_NS}">`
+    : `<chartSpace xmlns="${C_NS}" xmlns:a="${A_NS}">`;
+  const rootClose = prefixed ? '</c:chartSpace>' : '</chartSpace>';
+  const titlePart =
+    spec.title === undefined
+      ? `<${p}autoTitleDeleted val="1"/>`
+      : `<${p}title><${p}tx><${p}rich><a:bodyPr/><a:lstStyle/>` +
+        `<a:p><a:r><a:t>${spec.title}</a:t></a:r></a:p>` +
+        `</${p}rich></${p}tx><${p}overlay val="0"/></${p}title>` +
+        `<${p}autoTitleDeleted val="0"/>`;
+  const namePart =
+    spec.nameRef === undefined
+      ? ''
+      : `<${p}tx><${p}strRef><${p}f>${spec.nameRef}</${p}f>` +
+        `<${p}strCache><${p}ptCount val="1"/><${p}pt idx="0"><${p}v>序列1</${p}v></${p}pt></${p}strCache>` +
+        `</${p}strRef></${p}tx>`;
+  const catCache = Array.from(
+    { length: 5 },
+    (_, i) => `<${p}pt idx="${i}"><${p}v>门店${String.fromCharCode(65 + i)}</${p}v></${p}pt>`,
+  ).join('');
+  const valCache = Array.from(
+    { length: 5 },
+    (_, i) => `<${p}pt idx="${i}"><${p}v>${(i + 1) * 100}</${p}v></${p}pt>`,
+  ).join('');
+  const ser =
+    `<${p}ser><${p}idx val="0"/><${p}order val="0"/>${namePart}` +
+    `<${p}cat><${p}strRef><${p}f>${spec.catRef}</${p}f>` +
+    `<${p}strCache><${p}ptCount val="5"/>${catCache}</${p}strCache></${p}strRef></${p}cat>` +
+    `<${p}val><${p}numRef><${p}f>${spec.valRef}</${p}f>` +
+    `<${p}numCache><${p}formatCode>General</${p}formatCode><${p}ptCount val="5"/>${valCache}</${p}numCache>` +
+    `</${p}numRef></${p}val></${p}ser>`;
+  const dirPart =
+    spec.kind === 'bar'
+      ? `<${p}barDir val="col"/><${p}grouping val="clustered"/>`
+      : spec.kind === 'line'
+        ? `<${p}grouping val="standard"/><${p}marker val="1"/>`
+        : `<${p}varyColors val="1"/>`;
+  // 饼图无轴；bar 横向（barDir="bar"）与纵向同归 barChart 节点判定
+  const axesPart =
+    spec.kind === 'pie'
+      ? ''
+      : `<${p}catAx><${p}axId val="111111111"/></${p}catAx>` +
+        `<${p}valAx><${p}axId val="222222222"/></${p}valAx>`;
+  const axIds = spec.kind === 'pie' ? '' : `<${p}axId val="111111111"/><${p}axId val="222222222"/>`;
+  return (
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    rootOpen +
+    `<${p}chart>${titlePart}<${p}plotArea><${p}layout/>` +
+    `<${p}${spec.kind}Chart>${dirPart}${ser}${axIds}</${p}${spec.kind}Chart>` +
+    `${axesPart}</${p}plotArea>` +
+    `<${p}plotVisOnly val="1"/><${p}dispBlanksAs val="gap"/></${p}chart>` +
+    rootClose
+  );
+}
+
 export interface InjectDrawingOpts {
   /** 注入 chart 部件数（默认 2 = P0 回归形态：chart1 + chart2，drawing rels 两条） */
   charts?: 1 | 2;

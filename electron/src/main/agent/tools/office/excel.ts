@@ -21,7 +21,8 @@ import fs from 'node:fs';
 import { parseRange, asString, asStringArray } from './format';
 import { buildChartXml, buildAnchorXml, sheetAbsRef } from './chart-xml';
 import type { ChartData, ChartSeriesData, ChartType } from './chart-xml';
-import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts, refreshChartCaches } from './xlsx-zip';
+import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts, refreshChartCaches, extractChartSummaries } from './xlsx-zip';
+import type { ChartSummary } from './xlsx-zip';
 import { parseFillOp, generateFillRows } from './fill';
 
 export const PREVIEW_ROWS = 20;
@@ -32,11 +33,17 @@ export const MAX_READ_COLS = 64;
 /** 读前净化（内存副本，不动原件）：剥离 exceljs 无法解析的 drawing/chart/media 部件。
  *  sheet rels 仅过滤 Type 以 '/drawing' 或 '/chart' 结尾的条目（hyperlink 等保留；
  *  过滤后为空则删该 rels 文件）；sheet XML 剥 <drawing .../> 标签。
- *  chartCount = 原始缓冲中 xl/charts/ 下的部件数（仅用于提示，不代表 sanitize 后数量）。 */
-export function sanitizeXlsxForRead(buf: Buffer): { data: Buffer; chartCount: number } {
+ *  chartCount = 原始缓冲中 xl/charts/ 下的部件数；chartSummaries 从原始缓冲提取
+ *  （先于删除——净化件已无 chart 部件），供预览头部图表提示（spec §14.8-4）。 */
+export function sanitizeXlsxForRead(buf: Buffer): {
+  data: Buffer;
+  chartCount: number;
+  chartSummaries: ChartSummary[];
+} {
   const zip = new AdmZip(buf);
   const entries = zip.getEntries();
-  // 统计原始 chart 部件数（在删前快照，提示用）
+  // 摘要从原始 buffer 提取（对原件而非净化件）；统计原始 chart 部件数（提示用）
+  const chartSummaries = extractChartSummaries(buf);
   const chartCount = entries.filter((e) => e.entryName.startsWith('xl/charts/') && !e.isDirectory).length;
   // 第一遍：删 drawings / charts / media（media 仅被 drawing 引用）
   for (const e of entries) {
@@ -78,7 +85,7 @@ export function sanitizeXlsxForRead(buf: Buffer): { data: Buffer; chartCount: nu
       }
     }
   }
-  return { data: zip.toBuffer(), chartCount };
+  return { data: zip.toBuffer(), chartCount, chartSummaries };
 }
 
 /** 单元格值 → 展示文本。formulas=true 时公式显示 =原文，否则显示缓存 result */
@@ -100,16 +107,58 @@ export function cellText(v: ExcelJS.CellValue, formulas = false): string {
   return String(v);
 }
 
+/** 图表摘要引用段渲染（spec §14.8-4）：cat/val/name 桶覆盖全部引用且 ≤4 个时
+ *  标注 序列名/类别/数值；否则按出现序列出，超过 4 个截断提示。 */
+function chartRefSeg(s: ChartSummary): string {
+  const refs = s.refs;
+  if (refs.length === 0) return '';
+  const name = s.nameRefs ?? [];
+  const cat = s.catRefs ?? [];
+  const val = s.valRefs ?? [];
+  const classified = new Set([...name, ...cat, ...val]);
+  if (refs.every((r) => classified.has(r)) && refs.length <= 4) {
+    const segs: string[] = [];
+    if (name.length > 0) segs.push(`序列名 ${name.join('、')}`);
+    if (cat.length > 0) segs.push(`类别 ${cat.join('、')}`);
+    if (val.length > 0) segs.push(`数值 ${val.join('、')}`);
+    return segs.join(' / ');
+  }
+  const shown = refs.slice(0, 4).join('、');
+  return refs.length > 4 ? `${shown} 等 ${refs.length} 个引用` : shown;
+}
+
+/** 单图摘要行：图表N[类型] 标题 → 引用段（无标题/无引用时省略对应段） */
+function chartSummaryLine(n: number, s: ChartSummary): string {
+  const head = `图表${n}[${s.kind}]${s.title === null ? '' : ` ${s.title}`}`;
+  const seg = chartRefSeg(s);
+  return seg === '' ? head : `${head} → ${seg}`;
+}
+
+/** 头部图表提示块（spec §14.8-4）：单图提示与摘要同行；多图提示行 + 逐图行；
+ *  部件存在但全部无法解析时退回纯部件计数提示（读取仅覆盖单元格数据）。 */
+function chartHintBlock(chartCount: number, summaries: ChartSummary[]): string {
+  const first = summaries[0];
+  if (summaries.length === 0) {
+    return `（注：文件含 ${chartCount} 个图表/图形部件，读取仅覆盖单元格数据）`;
+  }
+  if (chartCount === 1 && first !== undefined) {
+    return `（注：文件含 1 个图表）${chartSummaryLine(1, first)}`;
+  }
+  const lines = [`（注：文件含 ${chartCount} 个图表）`];
+  summaries.forEach((s, i) => lines.push(chartSummaryLine(i + 1, s)));
+  return lines.join('\n');
+}
+
 /** sheet 预览：每 sheet 一节（维度 + 前 20 行 × 12 列 markdown 表格） */
 export async function readXlsxPreview(abs: string, signal?: AbortSignal): Promise<string> {
   const raw = fs.readFileSync(abs);
-  const { data, chartCount } = sanitizeXlsxForRead(raw);
+  const { data, chartCount, chartSummaries } = sanitizeXlsxForRead(raw);
   const wb = new ExcelJS.Workbook();
   // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
   await wb.xlsx.load(data as unknown as ArrayBuffer);
   const parts: string[] = [];
   if (chartCount > 0) {
-    parts.push(`（注：文件含 ${chartCount} 个图表/图形部件，读取仅覆盖单元格数据）`);
+    parts.push(chartHintBlock(chartCount, chartSummaries));
   }
   for (const ws of wb.worksheets) {
     if (signal?.aborted) throw new Error('已中断');

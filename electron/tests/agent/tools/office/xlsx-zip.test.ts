@@ -13,11 +13,13 @@ import {
   snapshotChartParts,
   restoreChartParts,
   injectCharts,
+  extractChartSummaries,
 } from '../../../../src/main/agent/tools/office/xlsx-zip';
+import type { ChartSummary } from '../../../../src/main/agent/tools/office/xlsx-zip';
 import { sanitizeXlsxForRead } from '../../../../src/main/agent/tools/office/excel';
 import { buildAnchorXml, buildChartXml } from '../../../../src/main/agent/tools/office/chart-xml';
 import type { ChartData } from '../../../../src/main/agent/tools/office/chart-xml';
-import { makeBaseXlsxBuffer, injectP0ChartDrawing } from './xlsx-chart-fixture';
+import { makeBaseXlsxBuffer, injectP0ChartDrawing, withChartXml, richChartXml } from './xlsx-chart-fixture';
 
 const chartData: ChartData = {
   type: 'bar',
@@ -308,5 +310,89 @@ describe('边界：空输入', () => {
     const namesAfter = new AdmZip(restored).getEntries().map((e) => e.entryName).sort();
     expect(namesAfter).toEqual(namesBefore);
     await loadXlsx(restored);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// extractChartSummaries（spec §14.8-4）：office_read 图表摘要的数据源
+// ────────────────────────────────────────────────────────────────────────────
+
+const BAR_SPEC = {
+  kind: 'bar' as const,
+  title: '各门店销售额',
+  nameRef: `'门店明细'!$G$1`,
+  catRef: `'门店明细'!$F$2:$F$6`,
+  valRef: `'门店明细'!$G$2:$G$6`,
+};
+const PIE_SPEC = {
+  kind: 'pie' as const,
+  title: '各门店占比',
+  catRef: `'门店明细'!$F$2:$F$6`,
+  valRef: `'门店明细'!$H$2:$H$6`,
+};
+
+describe('extractChartSummaries', () => {
+  it('c: 前缀与 openpyxl 无前缀形态解析结果一致：kind/title/refs 按出现序去重 + cat/val/name 分类', async () => {
+    const run = async (prefixed: boolean): Promise<ChartSummary[]> => {
+      let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer());
+      buf = withChartXml(buf, 1, richChartXml(BAR_SPEC, prefixed));
+      buf = withChartXml(buf, 2, richChartXml(PIE_SPEC, prefixed));
+      return extractChartSummaries(buf);
+    };
+    const withPfx = await run(true);
+    const noPfx = await run(false);
+    // 两种前缀形态产出完全一致（前缀无关性回归锁）
+    expect(withPfx).toEqual(noPfx);
+    expect(withPfx).toHaveLength(2);
+    const [bar, pie] = withPfx;
+    expect(bar?.kind).toBe('bar');
+    expect(bar?.title).toBe('各门店销售额');
+    // refs 按文档出现序（tx 名 → cat → val）
+    expect(bar?.refs).toEqual([`'门店明细'!$G$1`, `'门店明细'!$F$2:$F$6`, `'门店明细'!$G$2:$G$6`]);
+    expect(bar?.nameRefs).toEqual([`'门店明细'!$G$1`]);
+    expect(bar?.catRefs).toEqual([`'门店明细'!$F$2:$F$6`]);
+    expect(bar?.valRefs).toEqual([`'门店明细'!$G$2:$G$6`]);
+    expect(pie?.kind).toBe('pie');
+    expect(pie?.title).toBe('各门店占比');
+    expect(pie?.refs).toEqual([`'门店明细'!$F$2:$F$6`, `'门店明细'!$H$2:$H$6`]);
+    expect(pie?.catRefs).toEqual([`'门店明细'!$F$2:$F$6`]);
+    expect(pie?.valRefs).toEqual([`'门店明细'!$H$2:$H$6`]);
+  });
+
+  it('同一引用多处出现 → refs 去重（首现位置），cat/val 桶各自独立收录', async () => {
+    // 同一区域既作类别又作数值（畸形但合法）——refs 只留一份
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
+      `<c:chart><c:plotArea><c:layout/><c:barChart>` +
+      `<c:ser><c:cat><c:strRef><c:f>Sheet1!$A$1:$A$5</c:f></c:strRef></c:cat>` +
+      `<c:val><c:numRef><c:f>Sheet1!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>` +
+      `</c:barChart></c:plotArea></c:chart></c:chartSpace>`;
+    const zip = new AdmZip(await makeBaseXlsxBuffer());
+    zip.addFile('xl/charts/chart1.xml', Buffer.from(xml, 'utf8'));
+    const [s] = extractChartSummaries(zip.toBuffer());
+    expect(s?.kind).toBe('bar');
+    expect(s?.refs).toEqual(['Sheet1!$A$1:$A$5']);
+    expect(s?.catRefs).toEqual(['Sheet1!$A$1:$A$5']);
+    expect(s?.valRefs).toEqual(['Sheet1!$A$1:$A$5']);
+  });
+
+  it('损坏 chart（无 chart 元素的垃圾内容）跳过不炸；无前缀垃圾同样跳过', async () => {
+    let buf = injectP0ChartDrawing(await makeBaseXlsxBuffer());
+    buf = withChartXml(buf, 1, '<?xml version="1.0"?><垃圾内容不是图表');
+    buf = withChartXml(buf, 2, richChartXml(PIE_SPEC, true));
+    const summaries = extractChartSummaries(buf);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.kind).toBe('pie');
+
+    let buf2 = injectP0ChartDrawing(await makeBaseXlsxBuffer(), { charts: 1 });
+    buf2 = withChartXml(buf2, 1, '<<<');
+    expect(extractChartSummaries(buf2)).toEqual([]);
+  });
+
+  it('无 chart 部件 → 空数组；P0 最小 chart（仅空 title 节点）→ other / 无标题 / 无引用', async () => {
+    expect(extractChartSummaries(await makeBaseXlsxBuffer())).toEqual([]);
+    const minimal = injectP0ChartDrawing(await makeBaseXlsxBuffer(), { charts: 1 });
+    expect(extractChartSummaries(minimal)).toEqual([{ kind: 'other', title: null, refs: [] }]);
   });
 });
