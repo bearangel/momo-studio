@@ -295,9 +295,13 @@ const OFFICE_CREATE_DOC_DEF: LLMToolDef = {
 const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   name: 'office_create_ppt',
   description:
-    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注，支持页背景色/插图/图表。' +
+    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注；' +
+    '支持页级背景色（background，6 位 hex 如 1F3864）/插图（images，图先入 workspace、' +
+    '本工具只引用，扩展白名单 png/jpg/jpeg/gif/webp/bmp）/原生图表（chart，活图表非截图，' +
+    '数据由 agent 经 office_read_cells 取数提供）。' +
     '简单版式（标题+内容），复杂排版不支持（spec 边界）。目标已存在时须先 office_read 读取后覆盖。' +
-    '参考模板重写 = office_read 读模板文本结构 → 按其分页与要点重新生成。',
+    '用户提供 .pptx 模板要保留版式/主题/品牌时，改用 office_fill_ppt_template 按页填充；' +
+    '本页工具是基于 pptxgenjs 的全新生成，不继承模板样式。',
   inputSchema: {
     type: 'object',
     properties: {

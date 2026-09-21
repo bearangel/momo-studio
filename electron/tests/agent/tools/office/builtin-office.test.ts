@@ -207,4 +207,45 @@ describe('marketplace catalog', () => {
     expect(writeDef!.description).toContain('repeat');
     expect(writeDef!.description).toContain('sequence_date');
   });
+
+  it('§14.9 PPT 视觉四能力三联动契约锁：YAML/catalog/DEF 三处各含 office_fill_ppt_template + DEF 含 background/chart + YAML 含模板工作流关键词', () => {
+    const yaml = loadYaml('office-assistant.yaml');
+    const yamlPrompt = ((yaml.spec as Record<string, unknown>).declarative as Record<string, unknown>)
+      .systemPrompt as string;
+    expect(yamlPrompt).toContain('office_fill_ppt_template');
+
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
+      items: Array<{ slug: string; readme: string }>;
+    };
+    const item = catalog.items.find((i) => i.slug === 'office-assistant');
+    expect(item!.readme).toContain('office_fill_ppt_template');
+
+    const pptCreate = new OfficeTools().getDefs().find((d) => d.name === 'office_create_ppt');
+    expect(pptCreate!.description).toContain('office_fill_ppt_template');
+    // 双保险：DEF 名 + description 都点名，防 description 改了工具名还在
+    expect(new OfficeTools().getDefs().some((d) => d.name === 'office_fill_ppt_template')).toBe(true);
+
+    expect(pptCreate!.description).toContain('background');
+    expect(pptCreate!.description).toContain('chart');
+    expect(pptCreate!.description).toContain('images');
+    // schema properties 也含 background/chart/images（双路锁：description + schema）
+    const pptProps = pptCreate!.inputSchema.properties as Record<string, unknown>;
+    const pptSlides = (pptProps['slides'] as { items: { properties: Record<string, unknown> } }).items.properties;
+    expect(pptSlides).toHaveProperty('background');
+    expect(pptSlides).toHaveProperty('images');
+    expect(pptSlides).toHaveProperty('chart');
+
+    // 模板工作流关键词（spec §14.9-3 模板填充工具 + YAML 教学指引）
+    expect(yamlPrompt).toContain('模板');
+    expect(yamlPrompt).toContain('填充');
+    expect(item!.readme).toContain('模板');
+    expect(item!.readme).toContain('填充');
+
+    // OFFICE_FILL_PPT_DEF 模板不动 / 产出新文件 / 版式主题品牌全保留（T2 已写，本用例兜底防回归）
+    const fillDef = new OfficeTools().getDefs().find((d) => d.name === 'office_fill_ppt_template');
+    expect(fillDef).toBeDefined();
+    expect(fillDef!.description).toContain('模板');
+    expect(fillDef!.description).toContain('另存');
+    expect(fillDef!.description).toMatch(/版式|主题|品牌/);
+  });
 });
