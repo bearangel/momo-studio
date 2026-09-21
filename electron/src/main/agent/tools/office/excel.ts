@@ -235,6 +235,25 @@ export async function readXlsxCells(
 // 写链路：类型 + 窄化 + 序列化。返回 Buffer（调用方记账后落盘）。
 // ────────────────────────────────────────────────────────────────────────────
 
+/** set_format 数字格式白名单（spec §14.8-2）：防 agent 注入任意格式串写 styles
+ *  部件。比对用逐项正则转义 + 锚定（'0.00' 含 '.' 等特殊字符，裸正则会被绕过）。 */
+export const NUM_FORMAT_WHITELIST = [
+  'General',
+  '0',
+  '0.00',
+  '#,##0',
+  '#,##0.00',
+  '0.0%',
+  '0.00%',
+  'yyyy-mm-dd',
+  'yyyy/m/d',
+  '¥#,##0',
+] as const;
+
+const NUM_FORMAT_RE = new RegExp(
+  `^(?:${NUM_FORMAT_WHITELIST.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`,
+);
+
 export interface ExcelSheetInit {
   name: string;
   headers?: string[];
@@ -266,16 +285,19 @@ export interface SheetRangeRef {
   range: string;
 }
 
-/** 图表序列入参：name 可选（单格引用或字面量），values 必填（单行/单列区域） */
+/** 图表序列入参：name 可选（单格引用或字面量），color 可选（6 位 hex 系列色），
+ *  values 必填（单行/单列区域） */
 export interface ChartSeriesSpec {
   name?: SheetRangeRef | string;
+  color?: string;
   values: SheetRangeRef;
 }
 
 export const CHART_DEFAULT_COLS = 8;
 export const CHART_DEFAULT_ROWS = 15;
 
-/** add_chart op（parse 后形态）：size 已解析为完整正整数，title/name 可选已归一 */
+/** add_chart op（parse 后形态）：size 已解析为完整正整数，title/name/color 可选已归一；
+ *  dataPointColors 逐数据点着色（index 非负已校验，hex 已校验） */
 export interface ChartOpSpec {
   op: 'add_chart';
   sheet: string;
@@ -286,11 +308,13 @@ export interface ChartOpSpec {
   title?: string;
   categories: SheetRangeRef;
   series: ChartSeriesSpec[];
+  dataPointColors?: Array<{ index: number; color: string }>;
 }
 
 export type ExcelWriteOp =
   | { op: 'add_sheet'; name: string }
   | { op: 'set_cells'; sheet: string; range?: string; values: CellInput[][] }
+  | { op: 'set_format'; sheet: string; range: string; format: string }
   | { op: 'fill'; sheet: string; anchor: string; rows: number; seed?: number; columns: unknown[] }
   | ChartOpSpec;
 
@@ -325,6 +349,16 @@ function asPositiveInt(v: unknown, what: string): number {
   return v;
 }
 
+/** 6 位 hex 颜色校验（spec §14.8-5）：add_chart 系列色与数据点色共用 */
+const HEX_COLOR_RE = /^[0-9A-Fa-f]{6}$/;
+
+function parseHexColor(v: unknown, what: string): string {
+  if (typeof v !== 'string' || !HEX_COLOR_RE.test(v)) {
+    throw new Error(`参数 ${what} 必须是 6 位 hex 颜色（如 4472C4）`);
+  }
+  return v;
+}
+
 function parseSheetRangeRef(v: unknown, what: string): SheetRangeRef {
   if (typeof v !== 'object' || v === null) {
     throw new Error(`参数 ${what} 缺失或不是 {sheet, range} 对象`);
@@ -352,6 +386,16 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
         return row.map((c, ci) => parseCellInput(c, `ops[${i}].values[${ri}][${ci}]`));
       });
       return { op: 'set_cells' as const, sheet, range, values };
+    }
+    if (rec.op === 'set_format') {
+      const sheet = asString(rec.sheet, `ops[${i}].sheet`);
+      const range = asString(rec.range, `ops[${i}].range`);
+      parseRange(range); // 形状校验（单格或区域均可，写侧幂等再解析）
+      const format = asString(rec.format, `ops[${i}].format`);
+      if (!NUM_FORMAT_RE.test(format)) {
+        throw new Error(`不支持的数字格式 ${format}（支持：${NUM_FORMAT_WHITELIST.join(' / ')}）`);
+      }
+      return { op: 'set_format' as const, sheet, range, format };
     }
     if (rec.op === 'fill') {
       // 全量窄化在 fill.ts（错误路径文案含字段路径）；运行时 columns 已是
@@ -413,8 +457,25 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
             throw new Error(`ops[${i}].series[${si}].name 必须是 {sheet, range} 对象或字符串`);
           }
         }
-        return { name, values: parseSheetRangeRef(sr.values, `ops[${i}].series[${si}].values`) };
+        const color = sr.color !== undefined ? parseHexColor(sr.color, `ops[${i}].series[${si}].color`) : undefined;
+        return { name, color, values: parseSheetRangeRef(sr.values, `ops[${i}].series[${si}].values`) };
       });
+      // 逐数据点着色（spec §14.8-5）：index 非负已校验；与系列点数不校验上限——
+      // 超出点数的项 Excel 渲染时忽略（条件预警色场景由 agent 自决阈值下标）
+      let dataPointColors: Array<{ index: number; color: string }> | undefined;
+      if (rec.dataPointColors !== undefined) {
+        if (!Array.isArray(rec.dataPointColors)) {
+          throw new Error(`参数 ops[${i}].dataPointColors 不是数组`);
+        }
+        dataPointColors = rec.dataPointColors.map((d, di) => {
+          if (typeof d !== 'object' || d === null) throw new Error(`ops[${i}].dataPointColors[${di}] 不是对象`);
+          const dr = d as Record<string, unknown>;
+          if (typeof dr.index !== 'number' || !Number.isInteger(dr.index) || dr.index < 0) {
+            throw new Error(`参数 ops[${i}].dataPointColors[${di}].index 必须是非负整数`);
+          }
+          return { index: dr.index, color: parseHexColor(dr.color, `ops[${i}].dataPointColors[${di}].color`) };
+        });
+      }
       return {
         op: 'add_chart' as const,
         sheet,
@@ -424,9 +485,10 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
         title,
         categories,
         series,
+        dataPointColors,
       };
     }
-    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells / fill / add_chart）`);
+    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells / set_format / fill / add_chart）`);
   });
 }
 
@@ -511,6 +573,7 @@ function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
       valRef: sheetAbsRef(s.values.sheet, s.values.range),
       valCache: vals.numbers,
     };
+    if (s.color !== undefined) out.color = s.color;
     if (typeof s.name === 'string') {
       out.nameLiteral = s.name;
     } else if (s.name !== undefined) {
@@ -525,6 +588,9 @@ function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
     }
     return out;
   });
+  if (op.dataPointColors !== undefined) {
+    return { type: op.type, title: op.title, series, dataPointColors: op.dataPointColors };
+  }
   return { type: op.type, title: op.title, series };
 }
 
@@ -600,6 +666,21 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
       const data = generateFillRows(parseFillOp(op, `ops[${i}]`));
       const a = parseRange(op.anchor);
       applyCellValues(ws, a.startRow, a.startCol, data);
+      continue;
+    }
+    if (op.op === 'set_format') {
+      const ws = wb.getWorksheet(op.sheet);
+      if (!ws) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
+      // exceljs numFmt 属性走正常序列化管线写 styles 部件；本 op 不涉图表部件，
+      // 既有部件保真由快照/回注机制覆盖，与数据 op 同批混排天然一致
+      const r = parseRange(op.range);
+      const endRow = r.endRow ?? r.startRow;
+      const endCol = r.endCol ?? r.startCol;
+      for (let row = r.startRow; row <= endRow; row++) {
+        for (let col = r.startCol; col <= endCol; col++) {
+          ws.getCell(row, col).numFmt = op.format;
+        }
+      }
       continue;
     }
     const ws = wb.getWorksheet(op.sheet);

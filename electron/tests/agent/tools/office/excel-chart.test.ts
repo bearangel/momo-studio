@@ -455,3 +455,98 @@ describe('add_chart：顺序语义', () => {
     expect(drawing1).toContain('<xdr:row>15</xdr:row>');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// R6（spec §14.8-5）：add_chart 着色——parse 层 hex/index 校验 + 编排透传。
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('add_chart 着色：parse 校验（spec §14.8-5）', () => {
+  const chart = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    op: 'add_chart',
+    sheet: '销售明细',
+    type: 'bar',
+    anchor: 'D2',
+    categories: { sheet: '销售明细', range: 'A2:A10' },
+    series: [{ values: { sheet: '销售明细', range: 'B2:B10' } }],
+    ...over,
+  });
+  const seriesWith = (seriesOver: Record<string, unknown>): Record<string, unknown> =>
+    chart({ series: [{ values: { sheet: '销售明细', range: 'B2:B10' }, ...seriesOver }] });
+
+  it('系列 color 非法（长度≠6 / 非 hex 字符 / 带 # / 空串 / 非字符串）报错', () => {
+    for (const color of ['4472C', '4472C44', 'ZZZZZZ', '#4472C4', '', 42]) {
+      expect(() => parseExcelWriteOps([seriesWith({ color })])).toThrow(/color.*hex|hex.*color/);
+    }
+  });
+
+  it('dataPointColors 非法：非数组 / 元素非对象 / index 负数 / index 非整数 / color 非 hex', () => {
+    expect(() => parseExcelWriteOps([chart({ dataPointColors: 'x' })])).toThrow(/dataPointColors/);
+    expect(() => parseExcelWriteOps([chart({ dataPointColors: [3] })])).toThrow(/dataPointColors\[0\]/);
+    expect(() =>
+      parseExcelWriteOps([chart({ dataPointColors: [{ index: -1, color: 'FF0000' }] })]),
+    ).toThrow(/index 必须是非负整数/);
+    expect(() =>
+      parseExcelWriteOps([chart({ dataPointColors: [{ index: 0.5, color: 'FF0000' }] })]),
+    ).toThrow(/index 必须是非负整数/);
+    expect(() =>
+      parseExcelWriteOps([chart({ dataPointColors: [{ index: 0, color: 'RED' }] })]),
+    ).toThrow(/hex/);
+    expect(() =>
+      parseExcelWriteOps([chart({ dataPointColors: [{ index: 0 }] })]),
+    ).toThrow(/color/);
+  });
+
+  it('合法 hex 大小写均收；index 超出系列点数不校验（Excel 渲染忽略越界项）', () => {
+    expect(() =>
+      parseExcelWriteOps([seriesWith({ color: 'aBc123' })]),
+    ).not.toThrow();
+    expect(() =>
+      parseExcelWriteOps([chart({ dataPointColors: [{ index: 999, color: 'FF0000' }] })]),
+    ).not.toThrow();
+  });
+});
+
+describe('add_chart 着色：writeXlsxOps 透传（spec §14.8-5）', () => {
+  it('series.color → ser spPr solidFill；dataPointColors → 逐项 dPt；数据/引用不受影响', async () => {
+    const out = await writeXlsxOps(
+      await makeMonthlyBase(),
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'A1', values: MONTH_ROWS },
+        {
+          op: 'add_chart',
+          sheet: '销售明细',
+          type: 'bar',
+          anchor: 'D2',
+          title: '月度达成',
+          categories: { sheet: '销售明细', range: 'A2:A10' },
+          series: [{ color: '4472C4', values: { sheet: '销售明细', range: 'B2:B10' } }],
+          dataPointColors: [
+            { index: 1, color: 'FF0000' },
+            { index: 2, color: 'FFC000' },
+            { index: 8, color: '00B050' },
+          ],
+        },
+      ]),
+    );
+    const chart1 = readText(out, 'xl/charts/chart1.xml');
+    // 系列色（PoC 形态：solidFill 后接描边 ln）
+    expect(chart1).toContain('<a:solidFill><a:srgbClr val="4472C4"/></a:solidFill>');
+    expect(chart1).toContain('<a:ln w="9525">');
+    // 三个数据点色逐项
+    for (const [idx, color] of [
+      ['1', 'FF0000'],
+      ['2', 'FFC000'],
+      ['8', '00B050'],
+    ] as const) {
+      expect(chart1).toContain(
+        `<c:dPt><c:idx val="${idx}"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr></c:dPt>`,
+      );
+    }
+    // 引用与缓存不受着色影响
+    expect(chart1).toContain(`<c:f>'销售明细'!$A$2:$A$10</c:f>`);
+    expect(chart1).toContain('<c:v>195</c:v>');
+    // 产物 exceljs 仍可读
+    const wb = await loadXlsx(out);
+    expect(wb.getWorksheet('销售明细')?.getCell('B10').value).toBe(195);
+  });
+});

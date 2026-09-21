@@ -21,13 +21,25 @@ export interface ChartSeriesData {
   catCache: Array<string | null>;
   valRef: string;
   valCache: Array<number | null>;
+  /** 系列实心填充色（6 位 hex，spec §14.8-5；hex 校验在 excel.ts parse 层）——
+   *  缺省走类型默认（bar/line 黑描边无填充、pie 无 spPr） */
+  color?: string;
 }
 
-/** 图表数据：type 决定布局（pie 无轴、bar_h 横纵翻转）；title 缺省时 c:title 节点不输出。 */
+/** 逐数据点着色项（spec §14.8-5）：index 非负；不与系列点数校验上限——
+ *  超出点数的项 Excel 渲染时忽略 */
+export interface DataPointColor {
+  index: number;
+  color: string;
+}
+
+/** 图表数据：type 决定布局（pie 无轴、bar_h 横纵翻转）；title 缺省时 c:title 节点不输出；
+ *  dataPointColors 对图表内每个 ser 生成 c:dPt（典型场景单序列柱/饼条件预警色）。 */
 export interface ChartData {
   type: ChartType;
   title?: string;
   series: ChartSeriesData[];
+  dataPointColors?: DataPointColor[];
 }
 
 /** drawing twoCellAnchor 锚点：0-based 列/行下标（Excel 模型）。 */
@@ -87,14 +99,29 @@ function buildTxXml(s: ChartSeriesData): string {
   return '';
 }
 
-// bar / line 默认黑色细线（9525 EMU = 0.75pt，与 openpyxl 默认一致）；pie 无 spPr。
-function buildSpPrXml(type: ChartType): string {
-  if (type === 'pie') return '';
+// bar / line 默认黑色细线（9525 EMU = 0.75pt，与 openpyxl 默认一致）；pie 无描边。
+// 系列色（spec §14.8-5）：solidFill 置于 ln 之前（PoC 形态）；pie 无色时保持无 spPr。
+function buildSpPrXml(type: ChartType, color?: string): string {
+  const fill = color !== undefined ? `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>` : '';
+  if (type === 'pie') return fill === '' ? '' : `<c:spPr>${fill}</c:spPr>`;
   return `<c:spPr>
-    <a:ln w="9525">
+    ${fill}<a:ln w="9525">
       <a:solidFill><a:srgbClr val="000000"/></a:solidFill>
     </a:ln>
   </c:spPr>`;
+}
+
+/** 逐数据点着色 c:dPt×N（spec §14.8-5）：按 index 升序输出（OOXML 惯例次序），
+ *  每项 idx + spPr solidFill。OOXML CT_BarSer/CT_LineSer/CT_PieSer 均允许 dPt
+ *  位于 spPr（line 为 marker）与 cat 之间——由 buildSeriesXml 的拼接次序保证。 */
+function buildDPtXml(items: DataPointColor[]): string {
+  return [...items]
+    .sort((a, b) => a.index - b.index)
+    .map(
+      (d) =>
+        `<c:dPt><c:idx val="${d.index}"/><c:spPr><a:solidFill><a:srgbClr val="${d.color}"/></a:solidFill></c:spPr></c:dPt>`,
+    )
+    .join('');
 }
 
 function buildMarkerXml(): string {
@@ -140,10 +167,13 @@ function buildValXml(s: ChartSeriesData): string {
   </c:val>`;
 }
 
-function buildSeriesXml(s: ChartSeriesData, idx: number, type: ChartType): string {
+/** 单 ser 组装。次序：idx → order → tx → spPr →（line: marker）→ dPt×N → cat → val
+ *  （OOXML CT_*Ser 元素次序；dPt 由 dataPointColors 生成，逐 ser 应用） */
+function buildSeriesXml(s: ChartSeriesData, idx: number, type: ChartType, pointColors?: DataPointColor[]): string {
   const txXml = buildTxXml(s);
-  const spPrXml = buildSpPrXml(type);
+  const spPrXml = buildSpPrXml(type, s.color);
   const markerXml = type === 'line' ? buildMarkerXml() : '';
+  const dPtXml = pointColors !== undefined && pointColors.length > 0 ? buildDPtXml(pointColors) : '';
   const catXml = buildCatXml(s);
   const valXml = buildValXml(s);
   return `<c:ser>
@@ -152,6 +182,7 @@ function buildSeriesXml(s: ChartSeriesData, idx: number, type: ChartType): strin
     ${txXml}
     ${spPrXml}
     ${markerXml}
+    ${dPtXml}
     ${catXml}
     ${valXml}
   </c:ser>`;
@@ -159,7 +190,7 @@ function buildSeriesXml(s: ChartSeriesData, idx: number, type: ChartType): strin
 
 function buildBarChartBody(data: ChartData): string {
   const barDir = data.type === 'bar_h' ? 'bar' : 'col';
-  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type)).join('');
+  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type, data.dataPointColors)).join('');
   return `<c:barChart>
     <c:barDir val="${barDir}"/>
     <c:grouping val="clustered"/>
@@ -172,7 +203,7 @@ function buildBarChartBody(data: ChartData): string {
 }
 
 function buildLineChartBody(data: ChartData): string {
-  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type)).join('');
+  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type, data.dataPointColors)).join('');
   return `<c:lineChart>
     <c:grouping val="standard"/>
     <c:varyColors val="0"/>
@@ -184,7 +215,7 @@ function buildLineChartBody(data: ChartData): string {
 }
 
 function buildPieChartBody(data: ChartData): string {
-  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type)).join('');
+  const sers = data.series.map((s, i) => buildSeriesXml(s, i, data.type, data.dataPointColors)).join('');
   return `<c:pieChart>
     <c:varyColors val="1"/>
     ${sers}

@@ -13,6 +13,7 @@ import { buildRecordCtx, recordChangeSafe, toJournalRelPath } from './shared/cha
 import { assertOfficeFormat, type OfficeFormat } from './office/format';
 import {
   createXlsx, parseExcelWriteOps, parseSheetInits, readXlsxCells, readXlsxPreview, writeXlsxOps,
+  NUM_FORMAT_WHITELIST,
 } from './office/excel';
 import { createDocx, parseDocSections, readDocx } from './office/docx';
 import { createPptx, parsePptxSlides, readPptx } from './office/pptx';
@@ -96,13 +97,18 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
     '增量写已有 xlsx：ops 数组依次执行。**ops 批次原子性：任一 op 校验或执行失败，整批不落盘**。' +
     'add_sheet 建新页签；set_cells 写二维区域（值或 {formula}；以 = 开头的字符串自动按公式处理，前导 = 自动剥离）。' +
     'range 省略=从 A1 按 values 形状展开；给左上角单格同省略语义；给完整区域（A1:F50）则形状必须一致。' +
+    `set_format 设区域数字格式（白名单：${NUM_FORMAT_WHITELIST.join(' / ')}；先写值再设格式，百分比/日期列必用）。` +
     'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
     '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +
+    'add_chart 着色：series[].color 设系列色（6 位 hex 如 4472C4）；dataPointColors=[{index,color}] 逐数据点着色' +
+    '（条件预警色，如超阈值红柱；index 超出点数 Excel 忽略）。' +
     'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。' +
     '汇总统计建议用 SUMIF/COUNTIF 公式引用明细区域（Excel 计算、避免手算误差；公式格作图表数据缓存留空打开后自算）。' +
     'fill 七型列规格——sequence_date{start,end,distribute:even|random}；sequence_number{start,step}；' +
     'random_int{min,max}；random_float{min,max,decimals}；pick{items,weights?}；literal{values}；' +
-    'formula{template，{row} 占位实际行号}；锚点 anchor+行数 rows+可选 seed（省略 42，同参数同 seed 逐格复现）' +
+    'formula{template，{row} 占位实际行号}；sequence_date/sequence_number 另可选 repeat（正整数，默认 1）' +
+    '——值每 repeat 行推进一次（块重复，如「每 5 行同一天」）；' +
+    '锚点 anchor+行数 rows+可选 seed（省略 42，同参数同 seed 逐格复现）' +
     '——**禁止手写超过 20 行的大数组**（易形状错乱）；' +
     '派生列（如类别=产品映射）从第一列起就用公式 =VLOOKUP(C{row},目录区,2,0)（不要先随机再修）；' +
     '验证数据一致性优先用 office_read_cells 抽样比对。',
@@ -118,15 +124,24 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
           properties: {
             op: {
               type: 'string',
-              enum: ['add_sheet', 'set_cells', 'fill', 'add_chart'],
-              description: 'add_chart：建原生图表（柱/横条/折线/饼）；fill：声明式批量数据生成（替代手写大数组）',
+              enum: ['add_sheet', 'set_cells', 'set_format', 'fill', 'add_chart'],
+              description:
+                'add_chart：建原生图表（柱/横条/折线/饼）；fill：声明式批量数据生成（替代手写大数组）；' +
+                'set_format：设区域数字格式（白名单校验）',
             },
             name: { type: 'string', description: 'add_sheet：新页签名' },
             sheet: {
               type: 'string',
-              description: 'set_cells/fill/add_chart：目标页签名（add_chart：图表所在 sheet）',
+              description: 'set_cells/set_format/fill/add_chart：目标页签名（add_chart：图表所在 sheet）',
             },
-            range: { type: 'string', description: 'set_cells：A1 range；省略=从 A1 按 values 形状展开' },
+            range: {
+              type: 'string',
+              description: 'set_cells：A1 range；省略=从 A1 按 values 形状展开；set_format：目标区域（单格或 A1:F50）',
+            },
+            format: {
+              type: 'string',
+              description: `set_format：数字格式（白名单：${NUM_FORMAT_WHITELIST.join(' / ')}）`,
+            },
             values: {
               type: 'array',
               items: { type: 'array' },
@@ -153,7 +168,8 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
               description:
                 'fill 七型列规格——sequence_date{start,end,distribute:even|random}；' +
                 'sequence_number{start,step}；random_int{min,max}；random_float{min,max,decimals}；' +
-                'pick{items,weights?}；literal{values}；formula{template，{row} 占位实际行号}',
+                'pick{items,weights?}；literal{values}；formula{template，{row} 占位实际行号}；' +
+                'sequence_date/sequence_number 可选 repeat（正整数，默认 1）——值每 repeat 行推进一次',
               items: { type: 'object' },
             },
             type: {
@@ -170,6 +186,20 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
               },
             },
             title: { type: 'string', description: 'add_chart：图表标题（可选）' },
+            dataPointColors: {
+              type: 'array',
+              description:
+                'add_chart：逐数据点着色 [{index, color}]（条件预警色，如超阈值红柱；' +
+                'index 非负整数，超出系列点数的项 Excel 忽略；6 位 hex）',
+              items: {
+                type: 'object',
+                properties: {
+                  index: { type: 'number', description: '数据点下标（0-based 非负整数）' },
+                  color: { type: 'string', description: '6 位 hex（如 FF0000）' },
+                },
+                required: ['index', 'color'],
+              },
+            },
             categories: {
               type: 'object',
               description: 'add_chart：类别轴引用 {sheet, range}（单行或单列）',
@@ -187,6 +217,10 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
                 properties: {
                   name: {
                     description: '序列名：字符串字面量 或 {sheet, range} 单格引用',
+                  },
+                  color: {
+                    type: 'string',
+                    description: '序列实心填充色（6 位 hex，如 4472C4）',
                   },
                   values: {
                     type: 'object',

@@ -478,3 +478,92 @@ describe('fill + add_chart 同批混排', () => {
     expect(xml).toContain('$B$1:$B$12');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 7. repeat 块重复（spec §14.8-3）
+// B4 场景死点：会话要「每 5 行同一天」的日期列，fill 无重复模式 → agent 外逃
+// 危险 zip 手术——本套件锁定块语义三型 + B4 参数回归锁。
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('repeat 块重复（spec §14.8-3）', () => {
+  it('sequence_date even repeat=5 rows=10 → 2 个块值各重复 5 行（even 首尾=start/end）', () => {
+    const out = oneColumn(
+      { type: 'sequence_date', start: '2026-01-01', end: '2026-01-08', distribute: 'even', repeat: 5 },
+      10,
+    );
+    expect(out).toEqual([
+      ...Array<CellInput>(5).fill('2026-01-01'),
+      ...Array<CellInput>(5).fill('2026-01-08'),
+    ]);
+  });
+
+  it('repeat=3 rows=7 → 块序 [0,0,0,1,1,1,2]（末块截断）', () => {
+    const out = oneColumn({ type: 'sequence_number', start: 0, step: 1, repeat: 3 }, 7);
+    expect(out).toEqual([0, 0, 0, 1, 1, 1, 2]);
+  });
+
+  it('sequence_number repeat=2：块值 = start + k*step（块内同值）', () => {
+    expect(oneColumn({ type: 'sequence_number', start: 100, step: 5, repeat: 2 }, 6)).toEqual([
+      100, 100, 105, 105, 110, 110,
+    ]);
+  });
+
+  it('sequence_date random repeat：每块一次随机（块内同值）、同 seed 复现', () => {
+    const col: FillColumn = {
+      type: 'sequence_date', start: '2026-03-01', end: '2026-03-05', distribute: 'random', repeat: 4,
+    };
+    const a = oneColumn(col, 20);
+    expect(a).toEqual(oneColumn(col, 20));
+    for (let blk = 0; blk < 5; blk++) {
+      for (let j = 1; j < 4; j++) expect(a[blk * 4 + j]).toBe(a[blk * 4]);
+    }
+  });
+
+  it('repeat 省略 ≡ 显式 1（三型逐元素一致，旧语义零变更）', () => {
+    const even = { type: 'sequence_date', start: '2026-01-01', end: '2026-01-10', distribute: 'even' } as const;
+    expect(oneColumn({ ...even }, 7)).toEqual(oneColumn({ ...even, repeat: 1 }, 7));
+    const rand = { type: 'sequence_date', start: '2026-01-01', end: '2026-01-10', distribute: 'random' } as const;
+    expect(oneColumn({ ...rand }, 7)).toEqual(oneColumn({ ...rand, repeat: 1 }, 7));
+    const num = { type: 'sequence_number', start: 3, step: 2 } as const;
+    expect(oneColumn({ ...num }, 7)).toEqual(oneColumn({ ...num, repeat: 1 }, 7));
+  });
+
+  it('repeat 非正数 / 非整数报错（sequence_date 与 sequence_number 同列校验，含字段路径）', () => {
+    for (const bad of [0, -1, 1.5]) {
+      expect(() =>
+        parseFillOp(baseFillOp({ columns: [{ type: 'sequence_number', start: 1, step: 1, repeat: bad }] })),
+      ).toThrow(/columns\[0\]\.repeat/);
+      expect(() =>
+        parseFillOp(
+          baseFillOp({
+            columns: [
+              { type: 'sequence_date', start: '2026-01-01', end: '2026-01-02', distribute: 'even', repeat: bad },
+            ],
+          }),
+        ),
+      ).toThrow(/columns\[0\]\.repeat/);
+    }
+    expect(() =>
+      parseFillOp(baseFillOp({ columns: [{ type: 'sequence_number', start: 1, step: 1, repeat: 'x' }] })),
+    ).toThrow(/repeat/);
+  });
+
+  it('B4 场景回归锁：start=2026-09-20 end=2026-11-12 repeat=5 rows=270——每 5 行同一天、逐块递增、末块=2026-11-12', () => {
+    const out = oneColumn(
+      { type: 'sequence_date', start: '2026-09-20', end: '2026-11-12', distribute: 'even', repeat: 5 },
+      270,
+    );
+    expect(out).toHaveLength(270);
+    expect(out[0]).toBe('2026-09-20');
+    expect(out[269]).toBe('2026-11-12');
+    // span=53 天 / blocks=54 → 每块恰好 +1 天：块内 5 行同值、块间严格递增
+    let prev = '';
+    for (let blk = 0; blk < 54; blk++) {
+      const head = out[blk * 5];
+      if (typeof head !== 'string') throw new Error(`块 ${blk} 值不是字符串`);
+      for (let j = 0; j < 5; j++) expect(out[blk * 5 + j]).toBe(head);
+      if (prev !== '') expect(head > prev).toBe(true);
+      prev = head;
+    }
+  });
+});

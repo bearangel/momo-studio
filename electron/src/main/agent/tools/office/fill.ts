@@ -8,10 +8,11 @@
 import type { CellInput } from './excel';
 import { parseRange, asString, asStringArray } from './format';
 
-/** 七型列生成器规格（spec §14.7） */
+/** 七型列生成器规格（spec §14.7）。sequence_date / sequence_number 可选 repeat
+ *  （正整数，默认 1，spec §14.8-3）：块重复——值每 repeat 行推进一次。 */
 export type FillColumn =
-  | { type: 'sequence_date'; start: string; end: string; distribute: 'even' | 'random' }
-  | { type: 'sequence_number'; start: number; step: number }
+  | { type: 'sequence_date'; start: string; end: string; distribute: 'even' | 'random'; repeat?: number }
+  | { type: 'sequence_number'; start: number; step: number; repeat?: number }
   | { type: 'random_int'; min: number; max: number }
   | { type: 'random_float'; min: number; max: number; decimals: number }
   | { type: 'pick'; items: string[]; weights?: number[] }
@@ -47,6 +48,15 @@ function asFiniteNumber(v: unknown, what: string): number {
 function asInt(v: unknown, what: string): number {
   if (typeof v !== 'number' || !Number.isInteger(v)) {
     throw new Error(`参数 ${what} 缺失或不是整数`);
+  }
+  return v;
+}
+
+/** 窄化原语：可选正整数（repeat 用；缺省 undefined = 生成侧按 1 处理） */
+function parseRepeat(v: unknown, what: string): number | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
+    throw new Error(`参数 ${what} 必须是正整数`);
   }
   return v;
 }
@@ -96,14 +106,19 @@ function parseFillColumn(raw: unknown, what: string): FillColumn {
       if (distribute !== 'even' && distribute !== 'random') {
         throw new Error(`参数 ${what}.distribute 非法（支持 even / random）`);
       }
-      return { type: 'sequence_date', start: startStr, end: endStr, distribute };
+      const repeat = parseRepeat(rec.repeat, `${what}.repeat`);
+      return repeat === undefined
+        ? { type: 'sequence_date', start: startStr, end: endStr, distribute }
+        : { type: 'sequence_date', start: startStr, end: endStr, distribute, repeat };
     }
-    case 'sequence_number':
-      return {
-        type: 'sequence_number',
-        start: asFiniteNumber(rec.start, `${what}.start`),
-        step: asFiniteNumber(rec.step, `${what}.step`),
-      };
+    case 'sequence_number': {
+      const start = asFiniteNumber(rec.start, `${what}.start`);
+      const step = asFiniteNumber(rec.step, `${what}.step`);
+      const repeat = parseRepeat(rec.repeat, `${what}.repeat`);
+      return repeat === undefined
+        ? { type: 'sequence_number', start, step }
+        : { type: 'sequence_number', start, step, repeat };
+    }
     case 'random_int': {
       const min = asInt(rec.min, `${what}.min`);
       const max = asInt(rec.max, `${what}.max`);
@@ -190,20 +205,32 @@ function generateColumn(
     case 'sequence_date': {
       const start = parseIsoDate(col.start, 'columns.start'); // parse 已校验，此处仅取毫秒
       const spanDays = Math.round((parseIsoDate(col.end, 'columns.end') - start) / MS_PER_DAY);
-      if (col.distribute === 'even') {
-        // start..end 均分 rows 个点（含首尾）；rows=1 取 start
-        return Array.from({ length: rows }, (_, i) =>
-          toIsoDate(start + (rows === 1 ? 0 : Math.round((spanDays * i) / (rows - 1))) * MS_PER_DAY),
-        );
-      }
-      // random：[start,end] 日粒度随机（可重复）
-      return Array.from({ length: rows }, () =>
-        toIsoDate(start + Math.floor(rand() * (spanDays + 1)) * MS_PER_DAY),
+      // 块语义（spec §14.8-3）：第 i 行取第 floor(i/repeat) 块的值；repeat 省略=1 时
+      // blocks=rows，块 k ≡ 行 k——与旧逐行语义逐字节一致（含 rand 调用次数与顺序）
+      const repeat = col.repeat ?? 1;
+      const blocks = Math.ceil(rows / repeat);
+      const blockDays =
+        col.distribute === 'even'
+          ? // even：块 k 日期 = start + round(spanDays*k/(blocks-1))；blocks=1 全取 start；
+            // 首尾块恒为 start/end（含首尾不变）
+            Array.from(
+              { length: blocks },
+              (_, k) => (blocks === 1 ? 0 : Math.round((spanDays * k) / (blocks - 1))),
+            )
+          : // random：每块一次随机（块内同值）——rand 调用次数 = 块数
+            Array.from({ length: blocks }, () => Math.floor(rand() * (spanDays + 1)));
+      return Array.from(
+        { length: rows },
+        (_, i) => toIsoDate(start + blockDays[Math.floor(i / repeat)]! * MS_PER_DAY),
       );
     }
     case 'sequence_number':
-      // 显式 start + i*step（非增量累加，避免浮点漂移）
-      return Array.from({ length: rows }, (_, i) => col.start + i * col.step);
+      // 块语义（spec §14.8-3）：第 i 行 = start + floor(i/repeat)*step；显式算式非
+      // 增量累加，避免浮点漂移；repeat 省略=1 退化为 start + i*step（旧语义）
+      return Array.from(
+        { length: rows },
+        (_, i) => col.start + Math.floor(i / (col.repeat ?? 1)) * col.step,
+      );
     case 'random_int':
       // 闭区间 [min,max]：floor(rand()*(max-min+1)) ∈ [0, max-min]
       return Array.from({ length: rows }, () => col.min + Math.floor(rand() * (col.max - col.min + 1)));
