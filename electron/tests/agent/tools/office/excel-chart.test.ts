@@ -221,6 +221,54 @@ describe('add_chart：保真红线（P0 chart fixture）', () => {
     expect(wb.getWorksheet('销售')?.getCell('C3').value).toBe(200);
     expect(wb.getWorksheet('汇总')?.getCell('A2').value).toBe('图表页');
   });
+
+  it('add_chart 到已有图表的 sheet（原 sheet，非新页签）→ 锚点合并入 drawing1 + 原 chart 字节不变 + sheet rels drawing 引用不变', async () => {
+    const orig = injectP0ChartDrawing(await makeBaseXlsxBuffer()); // 2 chart + drawing1 已有 1 个 twoCellAnchor
+    const out = await writeXlsxOps(
+      orig,
+      parseExcelWriteOps([
+        {
+          op: 'add_chart',
+          sheet: '销售', // ← 原 sheet，非新页签
+          type: 'pie',
+          anchor: 'F10',
+          categories: { sheet: '销售', range: 'A2:A3' },
+          series: [{ values: { sheet: '销售', range: 'C2:C3' } }],
+        },
+      ]),
+    );
+
+    // 3 个 chart 部件：原 chart1/chart2 + 新 chart3
+    expect(chartPartNames(out)).toEqual([
+      'xl/charts/chart1.xml',
+      'xl/charts/chart2.xml',
+      'xl/charts/chart3.xml',
+    ]);
+
+    // 原 chart1/chart2.xml 字节不变
+    const zipOut = new AdmZip(out);
+    const zipOrig = new AdmZip(orig);
+    for (const part of ['xl/charts/chart1.xml', 'xl/charts/chart2.xml']) {
+      const after = zipOut.getEntry(part)?.getData();
+      const before = zipOrig.getEntry(part)?.getData();
+      expect(after && before && after.equals(before)).toBe(true);
+    }
+
+    // drawing1.xml：原 1 个 twoCellAnchor + 新 1 个 = 2 个（同一 drawing 合并模式）
+    const drawing1 = readText(out, 'xl/drawings/drawing1.xml');
+    expect((drawing1.match(/<xdr:twoCellAnchor\b/g) ?? []).length).toBe(2);
+    // sheet rels 的 drawing 引用未变（仍指向 drawing1.xml）
+    const sheetRels = readText(out, 'xl/worksheets/_rels/sheet1.xml.rels');
+    expect(sheetRels).toContain('Target="../drawings/drawing1.xml"');
+    // drawing rels 新增 chart3 引用（原 2 + 新 1 = 3）
+    const drawingRels = readText(out, 'xl/drawings/_rels/drawing1.xml.rels');
+    expect((drawingRels.match(/<Relationship\b/g) ?? []).length).toBe(3);
+    expect(drawingRels).toContain('Target="../charts/chart3.xml"');
+
+    // 产物 exceljs 仍可读 + 数据完好
+    const wb = await loadXlsx(out);
+    expect(wb.getWorksheet('销售')?.getCell('C3').value).toBe(200);
+  });
 });
 
 describe('add_chart：错误路径', () => {
@@ -258,6 +306,14 @@ describe('add_chart：错误路径', () => {
     expect(() =>
       parseExcelWriteOps([chart({ type: 'bar', categories: { range: 'A2:A4' } })]),
     ).toThrow(/categories\.sheet/);
+    expect(() =>
+      parseExcelWriteOps([
+        chart({
+          type: 'bar',
+          series: [{ name: { sheet: '销售明细', range: 'B1:B2' }, values: { sheet: '销售明细', range: 'B2:B4' } }],
+        }),
+      ]),
+    ).toThrow(/name 引用必须是单格/);
   });
 
   it('values 区域含文本 → 运行期报错文案含单元格地址', async () => {

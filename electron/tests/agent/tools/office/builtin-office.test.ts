@@ -85,4 +85,27 @@ describe('marketplace catalog', () => {
     expect(item!.downloadUrl).toBe(''); // 内联包（createInlinePackage 就地生成 manifest）
     expect(item!.readme.length).toBeGreaterThan(50); // readme 即 systemPrompt 载体
   });
+
+  it('add_chart 提示词同步锁：YAML systemPrompt / catalog readme / WRITE_EXCEL_DEF description 三处一致', () => {
+    // YAML systemPrompt 含 add_chart 工作流指引
+    const yaml = loadYaml('office-assistant.yaml');
+    const yamlPrompt = ((yaml.spec as Record<string, unknown>).declarative as Record<string, unknown>)
+      .systemPrompt as string;
+    expect(yamlPrompt).toContain('add_chart');
+
+    // catalog readme 含 add_chart 指引（readme 即 systemPrompt 载体）
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
+      items: Array<{ slug: string; readme: string }>;
+    };
+    const item = catalog.items.find((i) => i.slug === 'office-assistant');
+    expect(item!.readme).toContain('add_chart');
+
+    // WRITE_EXCEL_DEF description 含 add_chart（LLM 看到的工具描述）
+    const writeDef = new OfficeTools().getDefs().find((d) => d.name === 'office_write_excel');
+    expect(writeDef!.description).toContain('add_chart');
+    // op enum 已扩展
+    const props = writeDef!.inputSchema.properties as Record<string, unknown>;
+    const opsSchema = props['ops'] as { items: { properties: { op: { enum: string[] } } } };
+    expect(opsSchema.items.properties.op.enum).toContain('add_chart');
+  });
 });

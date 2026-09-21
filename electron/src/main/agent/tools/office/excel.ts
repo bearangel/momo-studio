@@ -321,7 +321,12 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
           if (typeof sr.name === 'string') {
             name = asString(sr.name, `ops[${i}].series[${si}].name`);
           } else if (typeof sr.name === 'object' && sr.name !== null) {
-            name = parseSheetRangeRef(sr.name, `ops[${i}].series[${si}].name`);
+            const nameRef = parseSheetRangeRef(sr.name, `ops[${i}].series[${si}].name`);
+            const nameRange = parseRange(nameRef.range);
+            if (nameRange.endRow !== null || nameRange.endCol !== null) {
+              throw new Error(`ops[${i}].series[${si}].name 引用必须是单格（如 B1）`);
+            }
+            name = nameRef;
           } else {
             throw new Error(`ops[${i}].series[${si}].name 必须是 {sheet, range} 对象或字符串`);
           }

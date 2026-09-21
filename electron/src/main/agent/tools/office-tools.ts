@@ -95,6 +95,8 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
   description:
     '增量写已有 xlsx：ops 数组依次执行。add_sheet 建新页签；set_cells 写二维区域（值或 {formula}）。' +
     'range 省略=从 A1 按 values 形状展开；给左上角单格同省略语义；给完整区域（A1:F50）则形状必须一致。' +
+    'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
+    '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +
     'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。',
   inputSchema: {
     type: 'object',
@@ -106,11 +108,67 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
         items: {
           type: 'object',
           properties: {
-            op: { type: 'string', enum: ['add_sheet', 'set_cells'] },
+            op: {
+              type: 'string',
+              enum: ['add_sheet', 'set_cells', 'add_chart'],
+              description: 'add_chart：建原生图表（柱/横条/折线/饼）',
+            },
             name: { type: 'string', description: 'add_sheet：新页签名' },
-            sheet: { type: 'string', description: 'set_cells：目标页签名' },
-            range: { type: 'string' },
+            sheet: {
+              type: 'string',
+              description: 'set_cells/add_chart：目标页签名（add_chart：图表所在 sheet）',
+            },
+            range: { type: 'string', description: 'set_cells：A1 range；省略=从 A1 按 values 形状展开' },
             values: { type: 'array', items: { type: 'array' }, description: 'set_cells：二维数组' },
+            type: {
+              type: 'string',
+              enum: ['bar', 'bar_h', 'line', 'pie'],
+              description: 'add_chart：图表类型（柱/横条/折线/饼）',
+            },
+            anchor: {
+              type: 'string',
+              description: 'add_chart：图表左上角单格锚点（如 B2）；省略默认尺寸 8 列 × 15 行',
+            },
+            size: {
+              type: 'object',
+              description: 'add_chart：图表尺寸 {cols, rows}（列/行数，正整数）',
+              properties: {
+                cols: { type: 'number', description: '宽度（列数）' },
+                rows: { type: 'number', description: '高度（行数）' },
+              },
+            },
+            title: { type: 'string', description: 'add_chart：图表标题（可选）' },
+            categories: {
+              type: 'object',
+              description: 'add_chart：类别轴引用 {sheet, range}（单行或单列）',
+              properties: {
+                sheet: { type: 'string', description: '源数据 sheet 名' },
+                range: { type: 'string', description: 'A1 range（如 A2:A10）' },
+              },
+              required: ['sheet', 'range'],
+            },
+            series: {
+              type: 'array',
+              description: 'add_chart：数据序列；pie 仅 1 个',
+              items: {
+                type: 'object',
+                properties: {
+                  name: {
+                    description: '序列名：字符串字面量 或 {sheet, range} 单格引用',
+                  },
+                  values: {
+                    type: 'object',
+                    description: '数值引用 {sheet, range}（单行或单列）',
+                    properties: {
+                      sheet: { type: 'string' },
+                      range: { type: 'string', description: 'A1 range（如 B2:B10）' },
+                    },
+                    required: ['sheet', 'range'],
+                  },
+                },
+                required: ['values'],
+              },
+            },
           },
           required: ['op'],
         },
