@@ -335,3 +335,13 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 4. **office_read 图表摘要**：xlsx 预览头部图表提示升级为逐图一行：`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`（类型/标题/引用，前缀无关解析）。
 5. **add_chart 着色**：series 增可选 `color`（6 位 hex，整系列实心填充）+ op 增可选 `dataPointColors: [{index, color}]`（逐数据点 dPt spPr 实心填充，晚于系列色）——支持条件预警色。hex 校验 `^[0-9A-Fa-f]{6}$`。
 6. **描述/提示词三句**：set_cells 省略 range = 从 A1 写（会覆盖表头，追加数据务必给 range）；跨文件搬运教学（无脚本环境用 read_cells 精读 → set_cells 分批写，每批 ≤50 行）；筛选/预警清单用公式列（IF/COUNTIF）而非上下文心算。
+
+### 14.9 PPT 视觉能力四项（2026-09-21 裁定：全部处理）
+
+**动机**：内网汇报场景「像样」的 PPT 需要底色/图片/真模板/图表；v1 纯文字版式是裁剪非库限制（pptxgenjs 原生支持）。
+
+1. **背景色**：`slides[i].background`（6 位 hex，parse 层校验）→ pptxgenjs `slide.background = { color }`。页级优先，无全局主题概念（v1）。
+2. **插图/背景图**：`slides[i].images: [{path, x?, y?, w?, h?}]`——path 为 workspace 相对路径（assertInWorkspace + 存在性 + 扩展白名单 png/jpg/jpeg/gif/webp/bmp）；坐标英寸（pptxgenjs 单位），缺省 x=0.5/y=1.8/w=9/h 按宽高比；图经 base64 data 注入（不传 path，规避打包相对路径问题）。图片**进 workspace 是用户/文件工具的职责**，本工具只引用。
+3. **模板填充（新工具 office_fill_ppt_template）**：`{template, path, slides:[{title, bullets?}]}`——以现有 .pptx 为底**另存**输出（模板字节不动）。实现走 zip 手术（pptx 版保真链）：对每页定位 `p:ph type="title"/"body"` 占位符 shape，替换其 txBody 文本（**首个 a:r 的 a:t 写全量文本、保留其 rPr 样式、其余 a:r 删除**——样式继承零破坏）；页索引超模板页数/占位符缺失 → 明确报错；其余部件（母版/主题/媒体/rels）字节不动。这是「真模板」路线：公司模板的版式/主题/品牌全保留。
+4. **图表入页**：`slides[i].chart: {type: 'bar'|'bar_h'|'line'|'pie', categories, series:[{name, values, color?}], title?}`——pptxgenjs 原生 addChart（活图表非截图）；数据由 agent 经 read_cells 取数提供（不做 xlsx 直引用——工具面保持单一职责）；hex 色校验复用 §14.8-5。
+5. **边界保持**：复杂自由排版（任意文本框定位/艺术字/动画/SmartArt）仍不支持；E10 类「文本级模板重写」语义不变，新工具是补充而非取代。
