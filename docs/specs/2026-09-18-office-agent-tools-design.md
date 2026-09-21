@@ -212,7 +212,7 @@ ops: [
 
 - pptxgenjs 简单版式：无母版继承 / 复杂排版；「参考模板」只能模仿内容结构，不能复刻样式。重样式 PPT 需求明确告知用户走人工
 - mammoth 读 docx 保结构（标题 / 列表 / 表格）丢样式（字体 / 颜色 / 版式）
-- 样式级写入（单元格底色 / 字体 / 幻灯片母版）第一期不做，列二期候选
+- 样式级写入（单元格底色 / 字体 / 幻灯片母版）仍为二期候选；**原生 Excel 图表已落地（§14，2026-09-19 增补）**
 - 精确编辑已有 docx / pptx（段落替换等）不在第一期（Excel 有增量写因为计算型场景刚需）
 - 格式转换（如 docx→pdf）不在第一期
 - `.xls` / `.doc` / `.ppt` 旧格式不支持
@@ -224,3 +224,58 @@ ops: [
 2. **P2 Excel 全链路**（read / read_cells / create / write / copy + 守门记账接线 + round-trip 测试）——用户核心场景闭环
 3. **P3 docx / pptx / pdf 生成与读取**（含 pptx 自解析 + PDF 字体打包）
 4. **P4 office-assistant 交付三联动**（YAML + catalog + ALL_BUILTIN_TOOLS + migration）+ 全量回归
+
+## 14. 原生 Excel 图表（v2.1 增补，2026-09-19 裁定：内网用户关键能力）
+
+### 14.1 背景与定位
+
+真实用户场景（会话 2026-09-18）：「销售明细 + 图表页签」——office 工具无图表能力，agent 只能外逃 Python+openpyxl，而内网/无网办公机器上该路径不存在。纯 JS 生态无可写原生 xlsx 图表的成熟库（exceljs 明确不支持），故**自研 chart XML 注入**：exceljs 序列化后用 adm-zip 后处理注入 chart/drawing 部件，零外部依赖。可行性已由 PoC 验证（openpyxl 完整识别注入结果：类型/引用/缓存/轴全对；两处 XML 陷阱已排雷——drawing 根需声明 xmlns:r、graphicFrame 必须显式闭合）。
+
+### 14.2 op 设计（office_write_excel 第三 op）
+
+```jsonc
+{ "op": "add_chart",
+  "sheet": "汇总图表",            // 图表所在页签（须已存在）
+  "type": "bar" | "bar_h" | "line" | "pie",
+  "anchor": "A16",               // 左上角 A1 记法；默认尺寸 8 列 × 15 行
+  "size": { "cols": 12, "rows": 20 },  // 可选覆盖
+  "title": "月度销售趋势",         // 可选
+  "categories": { "sheet": "汇总", "range": "A2:A10" },   // 类别轴区域引用
+  "series": [ { "name": { "sheet": "汇总", "range": "B1" },  // 可选：单元格引用或字面量串
+                "values": { "sheet": "汇总", "range": "B2:B10" } } ]
+}
+```
+
+规则：
+- bar/bar_h/line 支持 1..N 序列；**pie 恰 1 序列**（多序列报错）
+- 数据一律**区域引用**（活引用：Excel 中改单元格图表跟随刷新）；字面量数组不支持——报错文案指引「先 set_cells 写数再引用」（agent 工作流）
+- **缓存值**：注入时从内存 workbook 读区域值写 numCache/strCache——任何查看器免重算直接渲染；引用与缓存由实现同源填充，不会漂移
+- 序列名：区域引用（strRef）或字面量串；省略则 Series N
+- 目标 sheet 已有 drawing 部件（既有图表/图片）→ 锚点**合并进既有 drawing**（一 sheet 仅允许一个 drawing 部件，另起第二个会损坏文件）
+
+### 14.3 实现架构
+
+```
+office/chart-xml.ts   纯函数 XML 生成器：buildChartXml（bar/bar_h/line/pie + 轴 + 序列 + 缓存）
+                      buildDrawingAnchor（twoCellAnchor 片段，editAs=oneCell）
+                      模板以 2026-09-19 PoC 验证版为基准（openpyxl 识别通过）
+office/xlsx-zip.ts    zip 注入与保真：注入 chartN/drawingN 部件 + sheet↔drawing↔chart rels 接线
+                      + [Content_Types] Override；**既有部件快照/回注**（见红线）
+excel.ts              add_chart op 解析与编排：exceljs 应用数据 ops → 读区域值生成缓存
+                      → writeBuffer → zip 后处理注入
+```
+
+- 注入必须在 exceljs `writeBuffer` **之后**（exceljs 重建 zip 会丢未知部件）
+- **既有图表保真（红线）**：写路径 load 前净化（P0 机制）会剥 drawing/chart——`office_write_excel` 必须先**快照**既有 chart/drawing 部件及全部接线（rels/ContentTypes/sheet 标签），ops 序列化后**原样回注**再叠加新图表。「复制带图表报表加汇总页签」为验收用例（图表部件数不减）
+- 读取侧不变：office_read 净化剥离 + 「文件含 N 个图表/图形部件」提示（P0 已落地）
+
+### 14.4 错误路径
+
+series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet 指引）、anchor 非法——各专项中文文案与用例。
+
+### 14.5 验收
+
+1. 结构断言（vitest，纯 JS）：zip 部件齐、rels 图闭合、ContentTypes Override 齐、chart XML 关键节点（c:barChart/c:lineChart/c:pieChart、c:ser、c:f、numCache/strCache 值）
+2. **真实消费方验证（controller 终验）**：openpyxl `load_workbook` 写出文件 → `_charts` 数量/类型/引用/缓存逐项断言（PoC 同款）
+3. 保真回归：带图表文件（P0 fixture）→ copy → write_excel 加汇总 → 部件数不减、既有 chart XML 字节不变
+4. office-assistant systemPrompt 与 WRITE_EXCEL_DEF 描述同步图表能力
