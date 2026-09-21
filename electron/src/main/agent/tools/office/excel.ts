@@ -7,11 +7,17 @@
 // 部件 + sheet rels 过滤 drawing 条目 + sheet XML 剥 <drawing/> 标签），
 // 解决 exceljs 解析 real-Excel 形态 xdr:graphicFrame / unsupported anchor
 // 类型崩溃的问题（P0 read-fix）。
+// 写图表编排（add_chart）：exceljs 只懂单元格——writeXlsxOps 走「快照 → 净化 →
+// exceljs 重写 → 回注快照 → 注入新图表」管线，chart/drawing XML 由 chart-xml
+// 纯函数生成、zip 层操作由 xlsx-zip 承担，本文件只做编排与区域读值。
 
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
 import fs from 'node:fs';
 import { parseRange, asString, asStringArray } from './format';
+import { buildChartXml, buildAnchorXml, sheetAbsRef } from './chart-xml';
+import type { ChartData, ChartSeriesData, ChartType } from './chart-xml';
+import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts } from './xlsx-zip';
 
 export const PREVIEW_ROWS = 20;
 export const PREVIEW_COLS = 12;
@@ -200,9 +206,38 @@ export function parseSheetInits(raw: unknown): ExcelSheetInit[] {
 
 export type CellInput = string | number | boolean | null | { formula: string };
 
+/** 区域引用：sheet 显示名 + A1 记法（图表 categories / values / name 用） */
+export interface SheetRangeRef {
+  sheet: string;
+  range: string;
+}
+
+/** 图表序列入参：name 可选（单格引用或字面量），values 必填（单行/单列区域） */
+export interface ChartSeriesSpec {
+  name?: SheetRangeRef | string;
+  values: SheetRangeRef;
+}
+
+export const CHART_DEFAULT_COLS = 8;
+export const CHART_DEFAULT_ROWS = 15;
+
+/** add_chart op（parse 后形态）：size 已解析为完整正整数，title/name 可选已归一 */
+export interface ChartOpSpec {
+  op: 'add_chart';
+  sheet: string;
+  type: ChartType;
+  /** 图表左上角单格锚点（A1 记法，parse 保证单格） */
+  anchor: string;
+  size: { cols: number; rows: number };
+  title?: string;
+  categories: SheetRangeRef;
+  series: ChartSeriesSpec[];
+}
+
 export type ExcelWriteOp =
   | { op: 'add_sheet'; name: string }
-  | { op: 'set_cells'; sheet: string; range?: string; values: CellInput[][] };
+  | { op: 'set_cells'; sheet: string; range?: string; values: CellInput[][] }
+  | ChartOpSpec;
 
 function parseCellInput(v: unknown, what: string): CellInput {
   if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
@@ -212,6 +247,21 @@ function parseCellInput(v: unknown, what: string): CellInput {
     return { formula: (v as Record<string, unknown>).formula as string };
   }
   throw new Error(`参数 ${what} 不是合法单元格值（string/number/boolean/null/{formula}）`);
+}
+
+function asPositiveInt(v: unknown, what: string): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
+    throw new Error(`参数 ${what} 必须是正整数`);
+  }
+  return v;
+}
+
+function parseSheetRangeRef(v: unknown, what: string): SheetRangeRef {
+  if (typeof v !== 'object' || v === null) {
+    throw new Error(`参数 ${what} 缺失或不是 {sheet, range} 对象`);
+  }
+  const rec = v as Record<string, unknown>;
+  return { sheet: asString(rec.sheet, `${what}.sheet`), range: asString(rec.range, `${what}.range`) };
 }
 
 export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
@@ -234,7 +284,62 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
       });
       return { op: 'set_cells' as const, sheet, range, values };
     }
-    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells）`);
+    if (rec.op === 'add_chart') {
+      const sheet = asString(rec.sheet, `ops[${i}].sheet`);
+      const type = asString(rec.type, `ops[${i}].type`);
+      if (type !== 'bar' && type !== 'bar_h' && type !== 'line' && type !== 'pie') {
+        throw new Error(`ops[${i}].type 非法（支持 bar / bar_h / line / pie）`);
+      }
+      const anchor = asString(rec.anchor, `ops[${i}].anchor`);
+      const anchorRange = parseRange(anchor);
+      if (anchorRange.endRow !== null || anchorRange.endCol !== null) {
+        throw new Error(`ops[${i}].anchor 必须是单格左上角（如 A16）`);
+      }
+      let cols = CHART_DEFAULT_COLS;
+      let rows = CHART_DEFAULT_ROWS;
+      if (rec.size !== undefined) {
+        if (typeof rec.size !== 'object' || rec.size === null) {
+          throw new Error(`参数 ops[${i}].size 不是对象`);
+        }
+        const sz = rec.size as Record<string, unknown>;
+        if (sz.cols !== undefined) cols = asPositiveInt(sz.cols, `ops[${i}].size.cols`);
+        if (sz.rows !== undefined) rows = asPositiveInt(sz.rows, `ops[${i}].size.rows`);
+      }
+      const title = typeof rec.title === 'string' && rec.title.length > 0 ? rec.title : undefined;
+      const categories = parseSheetRangeRef(rec.categories, `ops[${i}].categories`);
+      if (!Array.isArray(rec.series) || rec.series.length === 0) {
+        throw new Error(`ops[${i}].series 缺失或不是非空数组`);
+      }
+      if (type === 'pie' && rec.series.length > 1) {
+        throw new Error(`pie 图仅支持 1 个序列（收到 ${rec.series.length} 个）`);
+      }
+      const series: ChartSeriesSpec[] = rec.series.map((s, si) => {
+        if (typeof s !== 'object' || s === null) throw new Error(`ops[${i}].series[${si}] 不是对象`);
+        const sr = s as Record<string, unknown>;
+        let name: SheetRangeRef | string | undefined;
+        if (sr.name !== undefined) {
+          if (typeof sr.name === 'string') {
+            name = asString(sr.name, `ops[${i}].series[${si}].name`);
+          } else if (typeof sr.name === 'object' && sr.name !== null) {
+            name = parseSheetRangeRef(sr.name, `ops[${i}].series[${si}].name`);
+          } else {
+            throw new Error(`ops[${i}].series[${si}].name 必须是 {sheet, range} 对象或字符串`);
+          }
+        }
+        return { name, values: parseSheetRangeRef(sr.values, `ops[${i}].series[${si}].values`) };
+      });
+      return {
+        op: 'add_chart' as const,
+        sheet,
+        type,
+        anchor,
+        size: { cols, rows },
+        title,
+        categories,
+        series,
+      };
+    }
+    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells / add_chart）`);
   });
 }
 
@@ -248,15 +353,110 @@ export async function createXlsx(sheets: ExcelSheetInit[]): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-/** 增量写：原字节 → 内存变更 → 新字节（一次序列化） */
+/** 区域读值：单行或单列区域逐格取值（多行多列报错）。
+ *  texts 恒为文本侧（cellText：Date 转 ISO 日期串、公式取缓存 result）——categories
+ *  与序列名消费；numeric=true（series values 消费）时逐格必须 typeof number，非数字
+ *  抛错且文案含 'sheet'!地址；numeric=false 时 numbers 槽位以 NaN 占位对齐，不可消费。 */
+export function readRangeValues(
+  wb: ExcelJS.Workbook,
+  ref: SheetRangeRef,
+  numeric = false,
+): { texts: string[]; numbers: number[] } {
+  const ws = wb.getWorksheet(ref.sheet);
+  if (!ws) throw new Error(`sheet 不存在: ${ref.sheet}（须先 add_sheet）`);
+  const r = parseRange(ref.range);
+  const endRow = r.endRow ?? r.startRow;
+  const endCol = r.endCol ?? r.startCol;
+  if (endRow > r.startRow && endCol > r.startCol) {
+    throw new Error(`引用区域必须是单行或单列: '${ref.sheet}'!${ref.range}`);
+  }
+  const horizontal = endCol > r.startCol;
+  const count = horizontal ? endCol - r.startCol + 1 : endRow - r.startRow + 1;
+  const texts: string[] = [];
+  const numbers: number[] = [];
+  for (let k = 0; k < count; k++) {
+    const row = horizontal ? r.startRow : r.startRow + k;
+    const col = horizontal ? r.startCol + k : r.startCol;
+    const cell = ws.getCell(row, col);
+    const v = cell.value;
+    texts.push(cellText(v));
+    if (typeof v === 'number') {
+      numbers.push(v);
+    } else if (numeric) {
+      throw new Error(`'${ref.sheet}'!${cell.address} 不是数字`);
+    } else {
+      numbers.push(Number.NaN);
+    }
+  }
+  return { texts, numbers };
+}
+
+/** 组装单个 add_chart 的 ChartData（从内存 wb 读区域值——同批更早 set_cells 刚写入
+ *  的值天然可见，即 op 顺序语义）。序列名三分支：单格引用 → nameRef+nameCache；
+ *  字符串 → nameLiteral；缺省 → Series N 占位。 */
+function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
+  const cats = readRangeValues(wb, op.categories);
+  const series: ChartSeriesData[] = op.series.map((s, si) => {
+    const vals = readRangeValues(wb, s.values, true);
+    const out: ChartSeriesData = {
+      catRef: sheetAbsRef(op.categories.sheet, op.categories.range),
+      catCache: cats.texts,
+      valRef: sheetAbsRef(s.values.sheet, s.values.range),
+      valCache: vals.numbers,
+    };
+    if (typeof s.name === 'string') {
+      out.nameLiteral = s.name;
+    } else if (s.name !== undefined) {
+      out.nameRef = sheetAbsRef(s.name.sheet, s.name.range);
+      out.nameCache = readRangeValues(wb, s.name).texts[0] ?? '';
+    } else {
+      out.nameLiteral = `Series ${si + 1}`;
+    }
+    return out;
+  });
+  return { type: op.type, title: op.title, series };
+}
+
+/** 增量写：原字节 → 内存变更 → 新字节（一次序列化）。
+ *  add_chart 编排管线：snapshotChartParts（重写前快照）→ sanitizeXlsxForRead（P0 净化，
+ *  否则 exceljs 遇 real-Excel 图表形态直接崩）→ exceljs 重写（图表侧全丢）→
+ *  restoreChartParts 回注快照（既有图表保真）→ injectCharts 注入新图表。
+ *  ⚠️ restoreChartParts 契约：仅限本函数的重写管线内重写后单次调用（T2 审查 Minor
+ *  裁定），外部不得复用。同 sheet 多个 add_chart 合并为一次 injectCharts 调用（注入
+ *  层支持数组批量，部件编号续接语义与逐次注入一致——择简实现）。 */
 export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise<Buffer> {
+  const snap = snapshotChartParts(before);
+  const sanitized = sanitizeXlsxForRead(before).data;
   const wb = new ExcelJS.Workbook();
   // exceljs 类型层 Buffer extends ArrayBuffer，与 Node Buffer<ArrayBufferLike> 结构不兼容——断言为 ArrayBuffer，运行时字节布局一致
-  await wb.xlsx.load(before as unknown as ArrayBuffer);
+  await wb.xlsx.load(sanitized as unknown as ArrayBuffer);
+  // 注入依赖 writeBuffer 产出的最终 workbook.xml（resolveSheetFile 按 sheet 名定位），
+  // 故图表先按 sheet 收集、序列化后统一注入
+  const chartsBySheet = new Map<string, Array<{ chartXml: string; anchorXml: string }>>();
   for (const op of ops) {
     if (op.op === 'add_sheet') {
       if (wb.getWorksheet(op.name)) throw new Error(`sheet 已存在: ${op.name}`);
       wb.addWorksheet(op.name);
+      continue;
+    }
+    if (op.op === 'add_chart') {
+      if (!wb.getWorksheet(op.sheet)) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
+      const chartXml = buildChartXml(buildChartData(wb, op));
+      // parse 已保证 anchor 单格（ends null）；1-based → 0-based，尺寸按 size 展开
+      const a = parseRange(op.anchor);
+      const anchorXml = buildAnchorXml(
+        {
+          fromCol: a.startCol - 1,
+          fromRow: a.startRow - 1,
+          toCol: a.startCol - 1 + op.size.cols - 1,
+          toRow: a.startRow - 1 + op.size.rows - 1,
+        },
+        'rIdPLACE', // 占位：注入层无条件重指派为实际分配的 drawing-rels Id
+        0,
+      );
+      const list = chartsBySheet.get(op.sheet);
+      if (list === undefined) chartsBySheet.set(op.sheet, [{ chartXml, anchorXml }]);
+      else list.push({ chartXml, anchorXml });
       continue;
     }
     const ws = wb.getWorksheet(op.sheet);
@@ -289,5 +489,14 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
       }
     }
   }
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  // 显式宽类型：exceljs Buffer.from 产物是 Buffer<Buffer>，restore/inject 返回
+  // Buffer<ArrayBufferLike>——裸 Buffer（= ArrayBufferLike）两者皆可赋值
+  let out: Buffer = Buffer.from(await wb.xlsx.writeBuffer());
+  out = restoreChartParts(out, snap);
+  for (const [sheetName, charts] of chartsBySheet) {
+    const sheetFile = resolveSheetFile(new AdmZip(out), sheetName);
+    if (sheetFile === null) throw new Error(`sheet 不存在: ${sheetName}`);
+    out = injectCharts(out, sheetFile, charts);
+  }
+  return out;
 }
