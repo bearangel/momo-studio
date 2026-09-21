@@ -1,15 +1,17 @@
 // Excel 读写封装（exceljs）。读取两档：sheet 预览（office_read）与区域精读
 // （office_read_cells）；写路径 createXlsx / writeXlsxOps 返回 Buffer，落盘与
 // 记账由 office-tools 统一处理（write-ahead：先记账后写盘）。
-// 公式注意：exceljs 不计算公式——读取公式的 result 仅取文件内缓存值（写入侧
-// 新写的公式无缓存，显示空），需要精确计算时由 agent 在上下文中完成运算。
+// 公式注意：exceljs 不计算公式——读取公式的 result 仅取文件内缓存值；写入侧
+// 新写的公式无缓存（显示空）。图表缓存语义（spec §14.6 P1b）：add_chart 引用
+// 区域容忍公式格——有缓存 result 用之，无缓存该点 omit（c:pt 省略、ptCount 全长），
+// Excel 打开后自动计算回填；写路径每次写盘对全部既有图表按 c:f 重算缓存（P1a）。
 // 读图表隔离：sanitizeXlsxForRead 读前净化内存副本（剥离 drawings/charts/media
 // 部件 + sheet rels 过滤 drawing 条目 + sheet XML 剥 <drawing/> 标签），
 // 解决 exceljs 解析 real-Excel 形态 xdr:graphicFrame / unsupported anchor
 // 类型崩溃的问题（P0 read-fix）。
 // 写图表编排（add_chart）：exceljs 只懂单元格——writeXlsxOps 走「快照 → 净化 →
-// exceljs 重写 → 回注快照 → 注入新图表」管线，chart/drawing XML 由 chart-xml
-// 纯函数生成、zip 层操作由 xlsx-zip 承担，本文件只做编排与区域读值。
+// exceljs 重写 → 回注快照 → 缓存重算 → 注入新图表」管线，chart/drawing XML 由
+// chart-xml 纯函数生成、zip 层操作由 xlsx-zip 承担，本文件只做编排与区域读值。
 
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
@@ -17,7 +19,7 @@ import fs from 'node:fs';
 import { parseRange, asString, asStringArray } from './format';
 import { buildChartXml, buildAnchorXml, sheetAbsRef } from './chart-xml';
 import type { ChartData, ChartSeriesData, ChartType } from './chart-xml';
-import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts } from './xlsx-zip';
+import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts, refreshChartCaches } from './xlsx-zip';
 
 export const PREVIEW_ROWS = 20;
 export const PREVIEW_COLS = 12;
@@ -358,15 +360,27 @@ export async function createXlsx(sheets: ExcelSheetInit[]): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** exceljs 公式单元格值判定（formula / sharedFormula 两形态），非公式格返回 null */
+function asFormulaCell(
+  v: ExcelJS.CellValue,
+): { formula?: unknown; sharedFormula?: unknown; result?: unknown } | null {
+  if (typeof v !== 'object' || v === null || v instanceof Date) return null;
+  const rec = v as { formula?: unknown; sharedFormula?: unknown };
+  if (typeof rec.formula === 'string' || typeof rec.sharedFormula === 'string') return rec;
+  return null;
+}
+
 /** 区域读值：单行或单列区域逐格取值（多行多列报错）。
- *  texts 恒为文本侧（cellText：Date 转 ISO 日期串、公式取缓存 result）——categories
- *  与序列名消费；numeric=true（series values 消费）时逐格必须 typeof number，非数字
- *  抛错且文案含 'sheet'!地址；numeric=false 时 numbers 槽位以 NaN 占位对齐，不可消费。 */
+ *  texts 槽为文本侧（cellText：Date 转 ISO 日期串）——categories 与序列名消费；
+ *  公式格（spec §14.6 P1b）取缓存 result：string 用之否则空串。
+ *  numbers 槽为数值侧：number 用之；公式格 number result 用之、无缓存 result 该点
+ *  null（omit c:pt）；numeric=true（series values 消费）时其余非数字值仍抛错且文案
+ *  含 'sheet'!地址；numeric=false（lenient，缓存重算消费）时该点 null 不抛。 */
 export function readRangeValues(
   wb: ExcelJS.Workbook,
   ref: SheetRangeRef,
   numeric = false,
-): { texts: string[]; numbers: number[] } {
+): { texts: string[]; numbers: Array<number | null> } {
   const ws = wb.getWorksheet(ref.sheet);
   if (!ws) throw new Error(`sheet 不存在: ${ref.sheet}（须先 add_sheet）`);
   const r = parseRange(ref.range);
@@ -378,19 +392,25 @@ export function readRangeValues(
   const horizontal = endCol > r.startCol;
   const count = horizontal ? endCol - r.startCol + 1 : endRow - r.startRow + 1;
   const texts: string[] = [];
-  const numbers: number[] = [];
+  const numbers: Array<number | null> = [];
   for (let k = 0; k < count; k++) {
     const row = horizontal ? r.startRow : r.startRow + k;
     const col = horizontal ? r.startCol + k : r.startCol;
     const cell = ws.getCell(row, col);
     const v = cell.value;
-    texts.push(cellText(v));
-    if (typeof v === 'number') {
-      numbers.push(v);
-    } else if (numeric) {
-      throw new Error(`'${ref.sheet}'!${cell.address} 不是数字`);
+    const formula = asFormulaCell(v);
+    if (formula !== null) {
+      texts.push(typeof formula.result === 'string' ? formula.result : '');
+      numbers.push(typeof formula.result === 'number' ? formula.result : null);
     } else {
-      numbers.push(Number.NaN);
+      texts.push(cellText(v));
+      if (typeof v === 'number') {
+        numbers.push(v);
+      } else if (numeric) {
+        throw new Error(`'${ref.sheet}'!${cell.address} 不是数字`);
+      } else {
+        numbers.push(null);
+      }
     }
   }
   return { texts, numbers };
@@ -425,7 +445,8 @@ function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
 /** 增量写：原字节 → 内存变更 → 新字节（一次序列化）。
  *  add_chart 编排管线：snapshotChartParts（重写前快照）→ sanitizeXlsxForRead（P0 净化，
  *  否则 exceljs 遇 real-Excel 图表形态直接崩）→ exceljs 重写（图表侧全丢）→
- *  restoreChartParts 回注快照（既有图表保真）→ injectCharts 注入新图表。
+ *  restoreChartParts 回注快照（既有图表保真）→ refreshChartCaches 缓存重算（P1a）→
+ *  injectCharts 注入新图表。
  *  ⚠️ restoreChartParts 契约：仅限本函数的重写管线内重写后单次调用（T2 审查 Minor
  *  裁定），外部不得复用。同 sheet 多个 add_chart 合并为一次 injectCharts 调用（注入
  *  层支持数组批量，部件编号续接语义与逐次注入一致——择简实现）。 */
@@ -498,6 +519,17 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
   // Buffer<ArrayBufferLike>——裸 Buffer（= ArrayBufferLike）两者皆可赋值
   let out: Buffer = Buffer.from(await wb.xlsx.writeBuffer());
   out = restoreChartParts(out, snap);
+  // P1a（spec §14.6）：全部既有图表缓存重算——按 chart XML 的 c:f 引用从内存 wb
+  // （已应用本批 ops）重读区域值重建 numCache/strCache，消灭「改数后缓存陈旧」。
+  // 置于 injectCharts 之前：新注入图表缓存在 add_chart 时点已同源正确，无需重算。
+  // readRef 失败（sheet 不存在 / 区域非法多行多列）返回 null → 该引用保持原缓存。
+  out = refreshChartCaches(out, (ref) => {
+    try {
+      return readRangeValues(wb, ref);
+    } catch {
+      return null;
+    }
+  });
   for (const [sheetName, charts] of chartsBySheet) {
     const sheetFile = resolveSheetFile(new AdmZip(out), sheetName);
     if (sheetFile === null) throw new Error(`sheet 不存在: ${sheetName}`);

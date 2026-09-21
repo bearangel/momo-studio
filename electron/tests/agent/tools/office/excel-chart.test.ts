@@ -269,6 +269,48 @@ describe('add_chart：保真红线（P0 chart fixture）', () => {
     const wb = await loadXlsx(out);
     expect(wb.getWorksheet('销售')?.getCell('C3').value).toBe(200);
   });
+
+  it('缓存重算双分支（spec §14.6）：引用区域未被本批 ops 修改 → chart 字节不变；被修改 → 缓存更新', async () => {
+    // 造带真实引用的既有图（本生成器产物与 refreshChartCaches 重建子树字节同构）
+    const charted = await writeXlsxOps(
+      await makeBaseXlsxBuffer(),
+      parseExcelWriteOps([
+        {
+          op: 'add_chart',
+          sheet: '销售',
+          type: 'bar',
+          anchor: 'E2',
+          categories: { sheet: '销售', range: 'A2:A3' },
+          series: [{ values: { sheet: '销售', range: 'C2:C3' } }],
+        },
+      ]),
+    );
+
+    // 分支一：本批 ops 只动未被引用区域 → chart1.xml 字节不变
+    const untouched = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([{ op: 'set_cells', sheet: '销售', range: 'D5', values: [['备注']] }]),
+    );
+    const before = new AdmZip(charted).getEntry('xl/charts/chart1.xml')?.getData();
+    const afterUntouched = new AdmZip(untouched).getEntry('xl/charts/chart1.xml')?.getData();
+    expect(afterUntouched && before && afterUntouched.equals(before)).toBe(true);
+
+    // 分支二：修改被引用区域 C2:C3 → 缓存更新（字节变化 + 新值在 + 旧值不在）
+    const touched = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售', range: 'C2:C3', values: [[999], [888]] },
+      ]),
+    );
+    const afterTouched = new AdmZip(touched).getEntry('xl/charts/chart1.xml')?.getData();
+    expect(afterTouched && before && afterTouched.equals(before)).toBe(false);
+    const xml = readText(touched, 'xl/charts/chart1.xml');
+    expect(xml).toContain('<c:v>999</c:v>');
+    expect(xml).toContain('<c:v>888</c:v>');
+    expect(xml).not.toContain('<c:v>100</c:v>');
+    // 活引用不动（重算只重建缓存子树）
+    expect(xml).toContain(`<c:f>'销售'!$C$2:$C$3</c:f>`);
+  });
 });
 
 describe('add_chart：错误路径', () => {

@@ -8,17 +8,19 @@ import { parseRange } from './format';
 export type ChartType = 'bar' | 'bar_h' | 'line' | 'pie';
 
 /** 单序列数据：nameRef / nameLiteral 二选一；catCache / valCache 是写入时缓存，
- * 避免 Excel 重新读源数据时被空值遮蔽（与 openpyxl 写法对齐）。
- * nameCache：nameRef 模式下序列名缓存值（编排层从内存 workbook 读 B1 等单元格填充），
- * 提供时 strRef 内 c:f 之后发 c:strCache（brief 契约：c:tx = strRef+strCache | c:v）。 */
+ *  避免 Excel 重新读源数据时被空值遮蔽（与 openpyxl 写法对齐）。
+ *  nameCache：nameRef 模式下序列名缓存值（编排层从内存 workbook 读 B1 等单元格填充），
+ *  提供时 strRef 内 c:f 之后发 c:strCache（brief 契约：c:tx = strRef+strCache | c:v）。
+ *  缓存 null 点语义（spec §14.6 P1b）：公式格无缓存 result 时该点 omit——生成侧
+ *  省略 c:pt、ptCount 保持区域全长（Excel 打开后自动计算回填，诚实优于错值）。 */
 export interface ChartSeriesData {
   nameRef?: string;
   nameLiteral?: string;
   nameCache?: string;
   catRef: string;
-  catCache: string[];
+  catCache: Array<string | null>;
   valRef: string;
-  valCache: number[];
+  valCache: Array<number | null>;
 }
 
 /** 图表数据：type 决定布局（pie 无轴、bar_h 横纵翻转）；title 缺省时 c:title 节点不输出。 */
@@ -102,29 +104,38 @@ function buildMarkerXml(): string {
   </c:marker>`;
 }
 
+/** numCache 子树：null 点省略 c:pt、ptCount 保持全长、formatCode 缺省 General。
+ *  xlsx-zip.refreshChartCaches 复用同款生成——引用值未变时重算结果与原生成器
+ *  字节同构（保真分支「未被修改则字节不变」依赖此约定）。 */
+export function buildNumCacheXml(values: Array<number | null>, formatCode = 'General'): string {
+  const pts = values
+    .map((v, i) => (v === null ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`))
+    .join('');
+  return `<c:numCache><c:formatCode>${xmlEscape(formatCode)}</c:formatCode><c:ptCount val="${values.length}"/>${pts}</c:numCache>`;
+}
+
+/** strCache 子树：语义同 buildNumCacheXml（文本侧，无 formatCode）。 */
+export function buildStrCacheXml(values: Array<string | null>): string {
+  const pts = values
+    .map((v, i) => (v === null ? '' : `<c:pt idx="${i}"><c:v>${xmlEscape(v)}</c:v></c:pt>`))
+    .join('');
+  return `<c:strCache><c:ptCount val="${values.length}"/>${pts}</c:strCache>`;
+}
+
 function buildCatXml(s: ChartSeriesData): string {
-  const pts = s.catCache.map((v, i) => `<c:pt idx="${i}"><c:v>${xmlEscape(v)}</c:v></c:pt>`).join('');
   return `<c:cat>
     <c:strRef>
       <c:f>${xmlEscape(s.catRef)}</c:f>
-      <c:strCache>
-        <c:ptCount val="${s.catCache.length}"/>
-        ${pts}
-      </c:strCache>
+      ${buildStrCacheXml(s.catCache)}
     </c:strRef>
   </c:cat>`;
 }
 
 function buildValXml(s: ChartSeriesData): string {
-  const pts = s.valCache.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('');
   return `<c:val>
     <c:numRef>
       <c:f>${xmlEscape(s.valRef)}</c:f>
-      <c:numCache>
-        <c:formatCode>General</c:formatCode>
-        <c:ptCount val="${s.valCache.length}"/>
-        ${pts}
-      </c:numCache>
+      ${buildNumCacheXml(s.valCache)}
     </c:numRef>
   </c:val>`;
 }

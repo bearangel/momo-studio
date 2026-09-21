@@ -1,15 +1,22 @@
 // xlsx zip 层图表部件操作（office_write_excel add_chart 的注入与保真底座）。
 // 设计取舍：与 P0 sanitizeXlsxForRead 同款字符串级 rels 操作（<Relationship .../> 数组化
 // 增删再重组），不引 DOM 解析——xlsx 部件 XML 结构稳定，字符串手法可控且零依赖。
-// 三个入口：
+// 入口：
 //   resolveSheetFile     sheet 显示名 → sheetN.xml 路径（workbook.xml + workbook rels）
 //   snapshotChartParts   exceljs 重写前快照 drawing/chart/media 侧（镜像 sanitize 的收集版）
 //   restoreChartParts    exceljs 重写后回注快照（rels 合并 + Id 冲突重命名 + ContentTypes 补缺）
 //   injectCharts         向目标 sheet 注入新图表（无 drawing 新建 / 已有 drawing 合并锚点）
+//   parseChartRef        c:f 引用解析（'表'!$A$1:$A$5 → { sheet, range }）
+//   refreshChartCaches   全部 chart 部件缓存重算（spec §14.6 P1a，字符串分段替换）
 // 实证依据（PoC 复核）：exceljs 可 load 含 graphicFrame 锚点的注入产物；
 // adm-zip updateFile 对不存在条目是静默 no-op——所有写入必须走 upsertFile。
+// refreshChartCaches 不用 cheerio round-trip 而用字符串分段替换：DOM 序列化会重排
+// 属性/空白/自闭合形态，破坏「其余节点字节不变」的保真红线；缓存子树重建复用
+// chart-xml 的 buildNumCacheXml/buildStrCacheXml，保证值未变时字节同构（幂等）。
 
 import AdmZip from 'adm-zip';
+import { parseRange } from './format';
+import { buildNumCacheXml, buildStrCacheXml } from './chart-xml';
 
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const REL_DRAWING = `${REL_NS}/drawing`;
@@ -404,4 +411,136 @@ export function injectCharts(
 
   appendContentOverrides(zip, newOverrides);
   return zip.toBuffer();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 缓存重算（spec §14.6 P1a）：set_cells 修改被引用区域后既有图表缓存跟随刷新
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 引用解析：'汇总图表'!$C$10:$C$13 或 汇总!$B$1 → { sheet, range }（range 归一为
+ *  无 $ 的 A1 记法）；非法形态（无 sheet 段 / 引号未配对 / 非法区域 / 外部工作簿
+ *  引用）返回 null。 */
+export function parseChartRef(ref: string): { sheet: string; range: string } | null {
+  const s = ref.trim();
+  if (s.length === 0) return null;
+  let sheet: string;
+  let rest: string;
+  if (s.startsWith("'")) {
+    // 引号形态：内部 '' 是转义的单引号，需配对解析（表名可含 ! 与空格）
+    let name = '';
+    let i = 1;
+    let closed = false;
+    while (i < s.length) {
+      const ch = s[i] ?? '';
+      if (ch === "'") {
+        if (s[i + 1] === "'") {
+          name += "'";
+          i += 2;
+          continue;
+        }
+        closed = true;
+        i += 1;
+        break;
+      }
+      name += ch;
+      i += 1;
+    }
+    if (!closed || name.length === 0 || s[i] !== '!') return null;
+    sheet = name;
+    rest = s.slice(i + 1);
+  } else {
+    const bang = s.indexOf('!');
+    if (bang <= 0) return null;
+    sheet = s.slice(0, bang);
+    rest = s.slice(bang + 1);
+  }
+  if (sheet.startsWith('[')) return null;
+  const range = rest.replace(/\$/g, '');
+  try {
+    parseRange(range);
+  } catch {
+    return null;
+  }
+  return { sheet, range };
+}
+
+/** readRef 回调返回的区域值：texts 喂 strCache 重建、numbers 喂 numCache 重建；
+ *  数组内的 null 点 = omit（c:pt 省略、ptCount 全长）。 */
+export interface ChartRefValues {
+  texts?: Array<string | null>;
+  numbers?: Array<number | null>;
+}
+
+const F_TAG_RE = /<c:f>([\s\S]*?)<\/c:f>/;
+const NUM_CACHE_RE = /<c:numCache>[\s\S]*?<\/c:numCache>/;
+const STR_CACHE_RE = /<c:strCache>[\s\S]*?<\/c:strCache>/;
+const FORMAT_CODE_RE = /<c:numCache>[\s\S]*?<c:formatCode>([^<]*)<\/c:formatCode>/;
+
+/** 单个 chart XML 的缓存重算：遍历全部 <c:numRef>/<c:strRef>（含 c:tx 序列名
+ *  strRef），<c:f> 经 parseChartRef + readRef 取值后只替换 cache 子树（无 cache
+ *  则插到 </c:f> 之后），其余节点字节不动。 */
+function refreshChartXmlCaches(
+  xml: string,
+  readRef: (ref: { sheet: string; range: string }) => ChartRefValues | null,
+): string {
+  const refresh = (block: string, inner: string, isNum: boolean): string => {
+    const f = inner.match(F_TAG_RE);
+    if (f === null) return block;
+    const parsed = parseChartRef(xmlUnescapeAttr(f[1] ?? ''));
+    if (parsed === null) return block;
+    const values = readRef(parsed);
+    if (values === null) return block;
+    let cache: string | null = null;
+    let cacheRe: RegExp;
+    if (isNum) {
+      if (values.numbers === undefined) return block;
+      // 保留原 numCache 的 formatCode（无则 General）
+      const fc = inner.match(FORMAT_CODE_RE);
+      cache = buildNumCacheXml(
+        values.numbers,
+        fc === null ? 'General' : xmlUnescapeAttr(fc[1] ?? 'General'),
+      );
+      cacheRe = NUM_CACHE_RE;
+    } else {
+      if (values.texts === undefined) return block;
+      cache = buildStrCacheXml(values.texts);
+      cacheRe = STR_CACHE_RE;
+    }
+    const nextInner = cacheRe.test(inner)
+      ? inner.replace(cacheRe, cache)
+      : inner.replace(/<\/c:f>/, `</c:f>${cache}`);
+    return `<c:${isNum ? 'numRef' : 'strRef'}>${nextInner}</c:${isNum ? 'numRef' : 'strRef'}>`;
+  };
+  return xml
+    .replace(/<c:numRef>([\s\S]*?)<\/c:numRef>/g, (block, inner: string) =>
+      refresh(block, inner, true),
+    )
+    .replace(/<c:strRef>([\s\S]*?)<\/c:strRef>/g, (block, inner: string) =>
+      refresh(block, inner, false),
+    );
+}
+
+/** 对 zip 内全部 xl/charts/chartN.xml 重建缓存：每个 <c:numRef>/<c:strRef> 的 <c:f>
+ *  经 readRef 回调取值，重建 numCache/strCache（null 点省略 c:pt、ptCount 全长、
+ *  formatCode 保留）；readRef 返回 null 或相应值槽缺失时跳过该引用（保持原缓存）。
+ *  无 chart 部件 / 全部未变化时原字节返回（幂等）。 */
+export function refreshChartCaches(
+  buf: Buffer,
+  readRef: (ref: { sheet: string; range: string }) => ChartRefValues | null,
+): Buffer {
+  const zip = new AdmZip(buf);
+  const chartEntries = zip
+    .getEntries()
+    .filter((e) => !e.isDirectory && /^xl\/charts\/chart\d+\.xml$/.test(e.entryName));
+  if (chartEntries.length === 0) return buf;
+  let changed = false;
+  for (const e of chartEntries) {
+    const xml = zip.readAsText(e.entryName);
+    const next = refreshChartXmlCaches(xml, readRef);
+    if (next !== xml) {
+      zip.updateFile(e.entryName, Buffer.from(next, 'utf8'));
+      changed = true;
+    }
+  }
+  return changed ? zip.toBuffer() : buf;
 }
