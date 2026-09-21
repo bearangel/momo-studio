@@ -279,3 +279,13 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 2. **真实消费方验证（controller 终验）**：openpyxl `load_workbook` 写出文件 → `_charts` 数量/类型/引用/缓存逐项断言（PoC 同款）
 3. 保真回归：带图表文件（P0 fixture）→ copy → write_excel 加汇总 → 部件数不减、既有 chart XML 字节不变
 4. office-assistant systemPrompt 与 WRITE_EXCEL_DEF 描述同步图表能力
+
+### 14.6 缓存刷新与公式语义（2026-09-21 增补，源自真实会话验收）
+
+**缺口回顾**：真实会话（2026-09-21）暴露两个缺口——① 汇总数字由 agent 上下文心算，60 行 × 4 维 16 组全错（正解是 SUMIF 公式引用明细，但 add_chart 当时不容忍公式单元格）；② set_cells 修改被图表引用的区域后，既有图表缓存不刷新（字节级快照回注不感知引用变更），agent 被迫外逃 Python 修缓存。
+
+**裁定三项**：
+
+1. **公式优先工作流（P1c）**：汇总/统计类结果一律用公式（SUMIF/COUNTIF/SUMPRODUCT 引用明细区域）写入，不在上下文心算大量数字——结果由 Excel 计算保证正确。office-assistant 提示词与 WRITE_EXCEL_DEF 描述同步此指引。
+2. **公式单元格缓存语义（P1b）**：add_chart 的 values/categories 区域容忍公式单元格——有缓存 result 用 result，无缓存（新写公式）该点 **omit**（c:pt 省略、ptCount 保持区域全长）；纯文本等非法值仍报错。Excel 打开后自动计算并回填，轻量预览器显示留空（诚实优于错值）。
+3. **写路径缓存重算（P1a）**：`office_write_excel` 每次写盘时对**全部既有图表**做缓存重算——按 chart XML 的 `c:f` 引用从内存 workbook（已应用本批 ops）重读区域值重建 numCache/strCache。消灭「改数后图表缓存陈旧」及由此引发的 python 逃逸。新注入图表的缓存在 add_chart 时点已同源正确，无需重算。
