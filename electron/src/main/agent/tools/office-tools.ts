@@ -97,6 +97,7 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
     '增量写已有 xlsx：ops 数组依次执行。**ops 批次原子性：任一 op 校验或执行失败，整批不落盘**。' +
     'add_sheet 建新页签；set_cells 写二维区域（值或 {formula}；以 = 开头的字符串自动按公式处理，前导 = 自动剥离）。' +
     'range 省略=从 A1 按 values 形状展开；给左上角单格同省略语义；给完整区域（A1:F50）则形状必须一致。' +
+    '**省略 range = 从 A1 开始写（会覆盖表头！追加数据务必给 range 如 A100）**。' +
     `set_format 设区域数字格式（白名单：${NUM_FORMAT_WHITELIST.join(' / ')}；先写值再设格式，百分比/日期列必用）。` +
     'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
     '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +

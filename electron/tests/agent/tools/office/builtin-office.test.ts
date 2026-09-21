@@ -161,4 +161,50 @@ describe('marketplace catalog', () => {
     expect(item!.readme).toContain('第一');
     expect(item!.readme).toContain('office_read_cells');
   });
+
+  it('§14.8-6 三联动契约锁：set_format 提示词/搬运教学 三处一致 + 表头覆盖警示 + fill 表 repeat', () => {
+    const writeDef = new OfficeTools().getDefs().find((d) => d.name === 'office_write_excel');
+    const props = writeDef!.inputSchema.properties as Record<string, unknown>;
+    const opsSchema = props['ops'] as { items: { properties: { op: { enum: string[] } } } };
+
+    // set_format 三处一致：YAML systemPrompt / catalog readme / WRITE_EXCEL_DEF
+    const yaml = loadYaml('office-assistant.yaml');
+    const yamlPrompt = ((yaml.spec as Record<string, unknown>).declarative as Record<string, unknown>)
+      .systemPrompt as string;
+    expect(yamlPrompt).toContain('set_format');
+    // set_format 在系统提示里要求白名单提一句（防 LLM 注入未白名单格式）
+    expect(yamlPrompt).toContain('白名单');
+    // set_format 在系统提示里要求显式提「百分比/千分位」场景词
+    expect(yamlPrompt).toContain('百分比');
+
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
+      items: Array<{ slug: string; readme: string }>;
+    };
+    const item = catalog.items.find((i) => i.slug === 'office-assistant');
+    expect(item!.readme).toContain('set_format');
+    expect(item!.readme).toContain('百分比');
+
+    expect(writeDef!.description).toContain('set_format');
+    // op enum 已扩（T2 已加，本用例兜底）
+    expect(opsSchema.items.properties.op.enum).toContain('set_format');
+
+    // 表头覆盖警示（spec §14.8-6 三句之一；YAML/catalog 不必逐句重复，DEF 是 LLM 看到的关键）
+    expect(writeDef!.description).toContain('覆盖表头');
+
+    // 跨文件搬数据教学：read_cells 精读 + set_cells 分批 ≤50 行 + 公式列筛选预警（YAML/catalog/DEF 三处一致）
+    for (const source of [yamlPrompt, item!.readme, writeDef!.description]) {
+      // 三个教学要点都要落到三处（语义等价允许表述差异，但关键词必须出现）
+      expect(source).toContain('office_read_cells');
+    }
+    // 分批 ≤50 行：YAML 系统提示里必含（教学最常落地处）；catalog readme 语义同步
+    expect(yamlPrompt).toContain('50 行');
+    expect(item!.readme).toContain('50 行');
+    // 公式列筛选/预警：IF/COUNTIF/SUMIF 三选其一即可（spec 给「IF/COUNTIF」）
+    expect(yamlPrompt).toMatch(/IF|COUNTIF|SUMIF/);
+    expect(item!.readme).toMatch(/IF|COUNTIF|SUMIF/);
+
+    // fill 表含 repeat（spec §14.8-3 + §14.8-6 复用 fill 七型表，T2 已加，本用例锁语义）
+    expect(writeDef!.description).toContain('repeat');
+    expect(writeDef!.description).toContain('sequence_date');
+  });
 });
