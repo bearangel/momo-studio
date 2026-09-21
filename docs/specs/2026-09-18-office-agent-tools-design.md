@@ -291,3 +291,36 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 3. **写路径缓存重算（P1a）**：`office_write_excel` 每次写盘时对**全部既有图表**做缓存重算——按 chart XML 的 `c:f` 引用从内存 workbook（已应用本批 ops）重读区域值重建 numCache/strCache。消灭「改数后图表缓存陈旧」及由此引发的 python 逃逸。新注入图表的缓存在 add_chart 时点已同源正确，无需重算。
 
 **边界（审查备案）**：refreshChartCaches 的字节幂等仅对自产图表布局成立；外来（真实 Excel / openpyxl 产）图表的缓存子树首过重算会归一为紧凑布局（语义值等价、Excel 容忍），第二过起幂等。
+
+### 14.7 fill 数据生成 op（2026-09-21 增补，源自第三轮真实会话验收）
+
+**缺口回顾**：第三轮会话中 agent 尝试一次 set_cells 手写 80 行 × 10 列 → 形状失控（声明 80×10 实产 27×11）+ 内容污染（数组生成退化混入无关字符串）→ 合理判断「手写大数组不可靠」后整体外逃 Python 生成数据。模拟/批量数据是办公高频场景，内网无 Python 路径——工具链需自带声明式数据生成。
+
+**op 契约**：
+
+```jsonc
+{ "op": "fill", "sheet": "销售明细", "anchor": "A2", "rows": 80, "seed": 20260921,
+  "columns": [
+    { "type": "sequence_date", "start": "2026-01-01", "end": "2026-09-30", "distribute": "even" | "random" },
+    { "type": "sequence_number", "start": 1, "step": 1 },
+    { "type": "random_int", "min": 3, "max": 15 },
+    { "type": "random_float", "min": 0.8, "max": 1.2, "decimals": 2 },
+    { "type": "pick", "items": ["智能手表", "..."], "weights": [2, 3] },
+    { "type": "literal", "values": ["李明", "王芳"] },
+    { "type": "formula", "template": "=MONTH(A{row})" }
+  ] }
+```
+
+**语义**：
+
+- 列生成器七型（上列顺序）；`literal` 循环取用；`pick` 加权可选（weights 与 items 等长）；`formula` 模板 `{row}` 替换实际行号；`sequence_date` 输出 `YYYY-MM-DD` 字符串（even 均分区间 / random 日粒度随机）
+- **确定性**：`seed` 省略 = 42；同 seed 同参数逐字节可复现，换 seed 得新数据（mulberry32 PRNG）
+- `rows` 上限 **50,000**（防误传），输出**零上下文占用**（只回摘要「已生成 N 行 × M 列 + 区域 + seed」）
+- 派生列不解耦词汇表——类别/单价等派生关系交给公式（`=VLOOKUP(C{row},目录,2,0)`、`=MONTH(A{row})`），与 §14.6 公式优先一脉相承
+- 与 set_cells/add_chart 同批混排；fill 属数据 op，图表后挂的顺序语义不变；公式列无缓存 → 图表缓存 omit（§14.6 一致）
+
+**错误路径**：rows 超限（0 或 >50000）/ columns 空 / 未知 type / weights≠items 等长 / literal values 空 / 日期 start>end / 随机 min>max——各专项文案与用例。
+
+**配套三联动**：WRITE_EXCEL_DEF 补 fill 指引（模拟/批量数据用 fill，**禁止手写大数组 >20 行**）；office-assistant 提示词与 catalog readme 同步（含 VLOOKUP 目录模式）。
+
+**验收**：各生成器语义测试（seed 复现/日期边界/加权分布/公式行号）+ 错误路径全表 + 会话回归锁（80 行 10 列一次 fill 成功）+ controller 终验（复刻本轮会话场景，openpyxl 验证数据一致性）。
