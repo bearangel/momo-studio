@@ -324,3 +324,14 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 **配套三联动**：WRITE_EXCEL_DEF 补 fill 指引（模拟/批量数据用 fill，**禁止手写大数组 >20 行**）；office-assistant 提示词与 catalog readme 同步（含 VLOOKUP 目录模式）。
 
 **验收**：各生成器语义测试（seed 复现/日期边界/加权分布/公式行号）+ 错误路径全表 + 会话回归锁（80 行 10 列一次 fill 成功）+ controller 终验（复刻本轮会话场景，openpyxl 验证数据一致性）。
+
+### 14.8 B/C/D 验收能力增补（2026-09-21 裁定：全修）
+
+**验收回顾**：D7/D8 保真红线完美通过；三组暴露四类工具缺口驱动 python 逃逸——① 数字格式（C5 百分比）；② fill 无重复模式（B4 每 5 行同一天 → 危险 zip 手术）；③ 图表元数据不可见（B3/D7 unzip 分析）；④ 图表逐柱着色（C5 预警红柱）。另发现正确性 bug：openpyxl 产图表用默认命名空间（`<f>` 无 `c:` 前缀），refreshChartCaches 前缀硬编码致其静默跳过。
+
+1. **命名空间前缀无关化（bug 修复）**：chart XML 解析/缓存重算的正则同时匹配 `<c:f>` 与 `<f>`、`<c:numRef>` 与 `<numRef>` 等两种形态（c: 前缀是惯例非规范；openpyxl 用默认命名空间）。
+2. **set_format op**：`{op:'set_format', sheet, range, format}`——format 白名单：`General / 0 / 0.00 / #,##0 / #,##0.00 / 0.0% / 0.00% / yyyy-mm-dd / yyyy/m/d / ¥#,##0`（正则精确匹配，防注入 styles 注入面）。
+3. **fill repeat**：`sequence_date` / `sequence_number` 增可选 `repeat`（正整数，默认 1）——值每 repeat 行推进一次（块语义：第 floor(i/repeat) 块取第 k 个值；even 日期对块数均分含首尾）。
+4. **office_read 图表摘要**：xlsx 预览头部图表提示升级为逐图一行：`图表1[bar] 各门店销售额 → 类别 '门店明细'!$F$2:$F$6 / 数值 '门店明细'!$G$2:$G$6`（类型/标题/引用，前缀无关解析）。
+5. **add_chart 着色**：series 增可选 `color`（6 位 hex，整系列实心填充）+ op 增可选 `dataPointColors: [{index, color}]`（逐数据点 dPt spPr 实心填充，晚于系列色）——支持条件预警色。hex 校验 `^[0-9A-Fa-f]{6}$`。
+6. **描述/提示词三句**：set_cells 省略 range = 从 A1 写（会覆盖表头，追加数据务必给 range）；跨文件搬运教学（无脚本环境用 read_cells 精读 → set_cells 分批写，每批 ≤50 行）；筛选/预警清单用公式列（IF/COUNTIF）而非上下文心算。
