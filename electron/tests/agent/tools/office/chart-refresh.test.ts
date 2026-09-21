@@ -634,3 +634,78 @@ describe('R1：openpyxl 默认命名空间形态缓存重算（spec §14.8-1）'
     expect(xml).toContain(`<f>'销售明细'!$B$2:$B$4</f>`);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// E2E D7 复盘回归锁（2026-09-21）：无缓存外来图的字节保真
+// openpyxl 产图表默认不写 numCache/strCache（Excel 打开自算），且 set_categories
+// 把文本类别写成 numRef。旧实现「无 cache 则插入」会：① 破坏 D7 铁律「原 chart
+// 字节不变」；② 文本列 numRef 被插出空 numCache（readRef 全 null → 0 pt）。
+// 裁定：无 cache 的引用一律跳过——只替换已存在的 cache。
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 无缓存最小 openpyxl 形态 bar 图：cat 是 numRef（set_categories 真实行为）、
+ *  全部 ref 无 numCache/strCache 子树 */
+const NO_CACHE_CHART_XML =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  `<chartSpace xmlns="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
+  `<chart><plotArea><barChart><ser>` +
+  `<tx><strRef><f>'销售明细'!$B$1</f></strRef></tx>` +
+  `<cat><numRef><f>'销售明细'!$A$2:$A$4</f></numRef></cat>` +
+  `<val><numRef><f>'销售明细'!$B$2:$B$4</f></numRef></val>` +
+  `</ser></barChart></plotArea></chart></chartSpace>`;
+
+describe('E2E D7 复盘：无缓存外来图字节保真', () => {
+  it('set_cells 改引用区域 → 无缓存 chart XML 逐字节不变（工作表值确已变）', async () => {
+    const base = await injectP0ChartDrawing(await makeMonthlyBase(), {
+      charts: 1,
+      addHyperlink: false,
+    });
+    const charted = withChartXml(base, 1, NO_CACHE_CHART_XML);
+    const out = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'B2:B4', values: [[10], [20], [30]] },
+      ]),
+    );
+    // chart 部件逐字节不变（保真铁律）
+    expect(chartXml(out, 1)).toBe(NO_CACHE_CHART_XML);
+    // 防假阳性：工作表数据确实被改（读回经 exceljs 内存态验证写入路径真实执行）
+    const out2 = await writeXlsxOps(
+      out,
+      parseExcelWriteOps([{ op: 'set_cells', sheet: '销售明细', range: 'B2', values: [[99]] }]),
+    );
+    expect(chartXml(out2, 1)).toBe(NO_CACHE_CHART_XML);
+  });
+
+  it('同文件混合形态：无缓存图不动、有缓存图正常刷新（两图并存互不干扰）', async () => {
+    const base = await injectP0ChartDrawing(await makeMonthlyBase(), {
+      charts: 2,
+      addHyperlink: false,
+    });
+    // chart1 = 无缓存 openpyxl 形态；chart2 = 有缓存占位值（c: 前缀）
+    const mixed = withChartXml(
+      withChartXml(base, 1, NO_CACHE_CHART_XML),
+      2,
+      richChartXml(
+        {
+          kind: 'bar',
+          title: '对照图',
+          nameRef: `'销售明细'!$B$1`,
+          catRef: `'销售明细'!$A$2:$A$4`,
+          valRef: `'销售明细'!$B$2:$B$4`,
+        },
+        true,
+      ),
+    );
+    const out = await writeXlsxOps(
+      mixed,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'B2:B4', values: [[11], [22], [33]] },
+      ]),
+    );
+    expect(chartXml(out, 1)).toBe(NO_CACHE_CHART_XML);
+    const xml2 = chartXml(out, 2);
+    expect(xml2).toContain('<c:v>11</c:v>');
+    expect(xml2).toContain('<c:v>33</c:v>');
+  });
+});

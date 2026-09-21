@@ -481,13 +481,17 @@ const STR_CACHE_RE = /<(?:c:)?strCache>[\s\S]*?<\/(?:c:)?strCache>/;
 const FORMAT_CODE_RE = /<(?:c:)?numCache>[\s\S]*?<(?:c:)?formatCode>([^<]*)<\/(?:c:)?formatCode>/;
 
 /** 单个 chart XML 的缓存重算：遍历全部 numRef/strRef（含 tx 序列名 strRef；两种
- *  前缀形态均匹配），f 经 parseChartRef + readRef 取值后只替换 cache 子树（无 cache
- *  则插到 </f> 之后），其余节点字节不动。 */
+ *  前缀形态均匹配），f 经 parseChartRef + readRef 取值后只替换**已存在**的 cache
+ *  子树，其余节点字节不动。无 cache 的引用一律跳过（E2E 2026-09-21 D7 复盘裁定：
+ *  外来图表无缓存是作者的形态选择，Excel 打开自算——强行插入既破坏字节保真
+ *  （D7 铁律「原 chart 字节不变」），且 openpyxl set_categories 把文本类别写成
+ *  numRef 时会插出空 numCache，语义双输）。 */
 function refreshChartXmlCaches(
   xml: string,
   readRef: (ref: { sheet: string; range: string }) => ChartRefValues | null,
 ): string {
   const refresh = (block: string, inner: string, isNum: boolean, pfx: string): string => {
+    if (!(isNum ? NUM_CACHE_RE : STR_CACHE_RE).test(inner)) return block;
     const f = inner.match(F_TAG_RE);
     if (f === null) return block;
     const parsed = parseChartRef(xmlUnescapeAttr(f[2] ?? ''));
@@ -514,9 +518,7 @@ function refreshChartXmlCaches(
     if (pfx === '') cache = cache.replace(/<\/?c:/g, (m) => (m.startsWith('</') ? '</' : '<'));
     // 函数型 replacer：cache 携带用户可控文本（strCache categories / 序列名等），
     // 字符串 replacement 会把 $$/$&/$`/$' 解释为特殊模式——返回字面量才是真正替换。
-    const nextInner = cacheRe.test(inner)
-      ? inner.replace(cacheRe, () => cache)
-      : inner.replace(/<\/(?:c:)?f>/, () => `</${pfx}f>${cache}`);
+    const nextInner = inner.replace(cacheRe, () => cache);
     return `<${pfx}${isNum ? 'numRef' : 'strRef'}>${nextInner}</${pfx}${isNum ? 'numRef' : 'strRef'}>`;
   };
   return xml
