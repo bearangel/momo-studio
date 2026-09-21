@@ -93,22 +93,26 @@ const CREATE_EXCEL_DEF: LLMToolDef = {
 const WRITE_EXCEL_DEF: LLMToolDef = {
   name: 'office_write_excel',
   description:
-    '增量写已有 xlsx：ops 数组依次执行。add_sheet 建新页签；set_cells 写二维区域（值或 {formula}）。' +
+    '增量写已有 xlsx：ops 数组依次执行。**ops 批次原子性：任一 op 校验或执行失败，整批不落盘**。' +
+    'add_sheet 建新页签；set_cells 写二维区域（值或 {formula}；以 = 开头的字符串自动按公式处理，前导 = 自动剥离）。' +
     'range 省略=从 A1 按 values 形状展开；给左上角单格同省略语义；给完整区域（A1:F50）则形状必须一致。' +
     'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
     '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +
     'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。' +
     '汇总统计建议用 SUMIF/COUNTIF 公式引用明细区域（Excel 计算、避免手算误差；公式格作图表数据缓存留空打开后自算）。' +
-    '模拟/批量数据用 fill 声明式生成（七型列规格：日期序列/数字序列/随机整数/随机小数/加权抽取/字面量循环/公式模板 {row}；' +
-    'seed 可复现，单次最多 5 万行）——**禁止手写超过 20 行的大数组**（易形状错乱）；' +
-    '派生列（如类别=产品映射）用公式 =VLOOKUP(C{row},目录区,2,0)。',
+    'fill 七型列规格——sequence_date{start,end,distribute:even|random}；sequence_number{start,step}；' +
+    'random_int{min,max}；random_float{min,max,decimals}；pick{items,weights?}；literal{values}；' +
+    'formula{template，{row} 占位实际行号}；锚点 anchor+行数 rows+可选 seed（省略 42，同参数同 seed 逐格复现）' +
+    '——**禁止手写超过 20 行的大数组**（易形状错乱）；' +
+    '派生列（如类别=产品映射）从第一列起就用公式 =VLOOKUP(C{row},目录区,2,0)（不要先随机再修）；' +
+    '验证数据一致性优先用 office_read_cells 抽样比对。',
   inputSchema: {
     type: 'object',
     properties: {
       path: { type: 'string', description: '相对 workspace 的 .xlsx 路径（须已存在）' },
       ops: {
         type: 'array',
-        description: '操作序列',
+        description: '操作序列（任一 op 失败整批不落盘）',
         items: {
           type: 'object',
           properties: {
@@ -123,7 +127,13 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
               description: 'set_cells/fill/add_chart：目标页签名（add_chart：图表所在 sheet）',
             },
             range: { type: 'string', description: 'set_cells：A1 range；省略=从 A1 按 values 形状展开' },
-            values: { type: 'array', items: { type: 'array' }, description: 'set_cells：二维数组' },
+            values: {
+              type: 'array',
+              items: { type: 'array' },
+              description:
+                'set_cells：二维数组（元素 string/number/boolean/null/{formula}）；' +
+                '以 = 开头的字符串自动按公式处理（{formula} 形态亦会自动剥前导 =）',
+            },
             anchor: {
               type: 'string',
               description:
@@ -141,8 +151,9 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
             columns: {
               type: 'array',
               description:
-                'fill：列生成器数组（七型 sequence_date / sequence_number / random_int / random_float / ' +
-                'pick / literal / formula）；非空',
+                'fill 七型列规格——sequence_date{start,end,distribute:even|random}；' +
+                'sequence_number{start,step}；random_int{min,max}；random_float{min,max,decimals}；' +
+                'pick{items,weights?}；literal{values}；formula{template，{row} 占位实际行号}',
               items: { type: 'object' },
             },
             type: {

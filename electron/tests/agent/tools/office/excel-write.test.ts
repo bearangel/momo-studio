@@ -3,7 +3,7 @@
 // 「方便测试」的 mock 简化 = 漏掉库类型/行为契约——本套件要求库行为真实。
 // 覆盖：骨架创建 + 列头 / 缺省 Sheet1 / sheet 名查重 / add_sheet + set_cells 值与公式
 // round-trip / 左上角单格按 values 形状展开 / 完整区域形状不一致报错 / 不存在的 sheet
-// 报错 / 非法 op 拒绝。
+// 报错 / 非法 op 拒绝 / 公式前导等号剥离（A 场景验收 P1）+ 裸 "=..." 自动转公式（P2）。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import ExcelJS from 'exceljs';
@@ -13,6 +13,7 @@ import path from 'node:path';
 import {
   createXlsx, writeXlsxOps, parseSheetInits, parseExcelWriteOps,
 } from '../../../../src/main/agent/tools/office/excel';
+import { readXlsxCells } from '../../../../src/main/agent/tools/office/excel';
 
 let tmpDir: string;
 
@@ -99,5 +100,71 @@ describe('writeXlsxOps', () => {
   it('非法 op 结构拒绝', () => {
     expect(() => parseExcelWriteOps([{ op: 'del_sheet', name: 'x' }])).toThrow(/op/);
     expect(() => parseExcelWriteOps('不是数组')).toThrow();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// A 场景验收：公式前导等号剥离（P1）+ 裸 "=..." 字符串自动转公式（P2）
+// 真实写入 xlsx 后用 exceljs 重读——cell.value.formula === '...'（不带前导 =）；
+// 公式单元格用 readXlsxCells(formulas=true) 读取显示 =SUMIF(...) 单 = 形态。
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('parseCellInput 公式处理（A 场景验收 P1/P2）', () => {
+  /** 写入单个 set_cells 行（左上角 = rowRef）并用 exceljs 重读断言 formula 字段 */
+  async function writeAndReadFormula(row: unknown[], rowRef = 'A1'): Promise<{
+    raw: unknown; formulasTrue: string;
+  }> {
+    const abs = path.join(tmpDir, `formula-${Math.random().toString(36).slice(2)}.xlsx`);
+    fs.writeFileSync(abs, await createXlsx(parseSheetInits(undefined)));
+    const ops = parseExcelWriteOps([{ op: 'set_cells', sheet: 'Sheet1', range: rowRef, values: [row] }]);
+    const out = await writeXlsxOps(fs.readFileSync(abs), ops);
+    fs.writeFileSync(abs, out);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(abs);
+    const ws = wb.worksheets[0]!;
+    const formulasTrue = await readXlsxCells(abs, 'Sheet1', rowRef, true);
+    return { raw: ws.getCell(rowRef).value, formulasTrue };
+  }
+
+  it('用例 1：{formula:"=SUM(A1:A2)"} 写入 → 重读 cell.value.formula === "SUM(A1:A2)"（无前导 =）', async () => {
+    const { raw, formulasTrue } = await writeAndReadFormula([{ formula: '=SUM(A1:A2)' }], 'A1');
+    expect(raw).toMatchObject({ formula: 'SUM(A1:A2)' });
+    expect(formulasTrue).toContain('=SUM(A1:A2)');
+  });
+
+  it('用例 2：裸 "=SUM(A1:A2)" 字符串 → 同上（自动转 {formula} + 剥前导 =）', async () => {
+    const { raw, formulasTrue } = await writeAndReadFormula(['=SUM(A1:A2)'], 'A2');
+    expect(raw).toMatchObject({ formula: 'SUM(A1:A2)' });
+    expect(formulasTrue).toContain('=SUM(A1:A2)');
+  });
+
+  it('用例 3a："=" 单字符保持文本（不转公式）', async () => {
+    const { raw } = await writeAndReadFormula(['='], 'A3');
+    // 文本：cell.value 是字符串 '='，不带 formula 属性
+    expect(raw).toBe('=');
+    expect(typeof raw === 'object').toBe(false);
+  });
+
+  it('用例 3b：普通文本 "合计" 保持文本', async () => {
+    const { raw } = await writeAndReadFormula(['合计'], 'A4');
+    expect(raw).toBe('合计');
+    expect(typeof raw === 'object').toBe(false);
+  });
+
+  it('用例 4：无前导 = 的 {formula:"SUM(A1:A2)"} 兼容不变（既有行为回归）', async () => {
+    const { raw, formulasTrue } = await writeAndReadFormula([{ formula: 'SUM(A1:A2)' }], 'A5');
+    expect(raw).toMatchObject({ formula: 'SUM(A1:A2)' });
+    expect(formulasTrue).toContain('=SUM(A1:A2)');
+  });
+
+  it('用例 6：==SUMIF(...) 场景回归——{formula:"=SUMIF(...)"} 写入后 formulas:true 读回显示单 =（不再 ==）', async () => {
+    const { raw, formulasTrue } = await writeAndReadFormula(
+      [{ formula: '=SUMIF(明细!C:C,A10,明细!I:I)' }],
+      'B1',
+    );
+    expect(raw).toMatchObject({ formula: 'SUMIF(明细!C:C,A10,明细!I:I)' });
+    // 关键断言：formulas:true 输出形如 "=SUMIF(...)" 而非 "==SUMIF(...)"
+    expect(formulasTrue).toContain('=SUMIF(明细!C:C,A10,明细!I:I)');
+    expect(formulasTrue).not.toContain('==SUMIF');
   });
 });

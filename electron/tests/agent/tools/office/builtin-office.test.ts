@@ -132,4 +132,33 @@ describe('marketplace catalog', () => {
     const opsSchema = props['ops'] as { items: { properties: { op: { enum: string[] } } } };
     expect(opsSchema.items.properties.op.enum).toContain('fill');
   });
+
+  it('A 场景验收契约锁：WRITE_EXCEL_DEF 含 fill 七型字段名 + 原子性契约；YAML/readme 含 VLOOKUP 第一列起措辞 + 验证一致性', () => {
+    const writeDef = new OfficeTools().getDefs().find((d) => d.name === 'office_write_excel');
+    // WRITE_EXCEL_DEF description 含 fill 七型字段关键词 + 原子性契约
+    expect(writeDef!.description).toContain('sequence_date');
+    expect(writeDef!.description).toContain('template');
+    expect(writeDef!.description).toContain('原子');
+
+    // columns 子 schema 双重锁定（description + schema 两路锁）
+    const props = writeDef!.inputSchema.properties as Record<string, unknown>;
+    const opsSchema = props['ops'] as { items: { properties: { columns: { description: string } } } };
+    expect(opsSchema.items.properties.columns.description).toContain('sequence_date');
+    expect(opsSchema.items.properties.columns.description).toContain('template');
+
+    // YAML systemPrompt：VLOOKUP 从第一列起 + office_read_cells 验证一致性
+    const yaml = loadYaml('office-assistant.yaml');
+    const yamlPrompt = ((yaml.spec as Record<string, unknown>).declarative as Record<string, unknown>)
+      .systemPrompt as string;
+    expect(yamlPrompt).toContain('第一');
+    expect(yamlPrompt).toContain('office_read_cells');
+
+    // catalog readme 同步锁
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8')) as {
+      items: Array<{ slug: string; readme: string }>;
+    };
+    const item = catalog.items.find((i) => i.slug === 'office-assistant');
+    expect(item!.readme).toContain('第一');
+    expect(item!.readme).toContain('office_read_cells');
+  });
 });

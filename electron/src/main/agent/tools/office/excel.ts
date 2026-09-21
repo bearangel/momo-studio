@@ -246,11 +246,25 @@ export type ExcelWriteOp =
   | ChartOpSpec;
 
 function parseCellInput(v: unknown, what: string): CellInput {
-  if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+  if (v === null || typeof v === 'number' || typeof v === 'boolean') {
     return v;
   }
-  if (typeof v === 'object' && typeof (v as Record<string, unknown>).formula === 'string') {
-    return { formula: (v as Record<string, unknown>).formula as string };
+  if (typeof v === 'string') {
+    // 裸 `"=..."` 字符串自动转公式：agent 第一直觉写法兼容。长度 > 1 才转换——
+    // 单字符 `"="` 与普通文本保持文本语义（与 Excel 单元格行为一致：`=SUM()`
+    // 进入 Excel 才会被识别为公式，单纯输入 `=` 是文本）。
+    if (v.length > 1 && v.startsWith('=')) {
+      return { formula: v.slice(1) };
+    }
+    return v;
+  }
+  if (typeof v === 'object') {
+    const rec = v as Record<string, unknown>;
+    if (typeof rec.formula === 'string') {
+      // `{formula:"=..."}` 剥前导 `=`：与 fill.ts `formula` 列生成器 `replace(/^=/, '')`
+      // 对齐，保证存储后 Excel 打开时公式只有单 `=`（双 `=` 报解析失败）。
+      return { formula: rec.formula.replace(/^=/, '') };
+    }
   }
   throw new Error(`参数 ${what} 不是合法单元格值（string/number/boolean/null/{formula}）`);
 }
