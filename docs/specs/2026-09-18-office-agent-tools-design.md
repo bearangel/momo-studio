@@ -313,7 +313,7 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 
 **语义**：
 
-- 列生成器七型（上列顺序）；`literal` 循环取用；`pick` 加权可选（weights 与 items 等长）；`formula` 模板 `{row}` 替换实际行号；`sequence_date` 输出 `YYYY-MM-DD` 字符串（even 均分区间 / random 日粒度随机）
+- 列生成器七型（上列顺序）；`literal` 循环取用；`pick` 加权可选（weights 与 items 等长）；`formula` 模板 `{row}` 替换实际行号；`sequence_date` 输出 `YYYY-MM-DD` 字符串（even 均分区间 / random 日粒度随机）；`sequence_date`/`sequence_number` 可选 `repeat`——值每 repeat 行推进一次（§14.8-3）
 - **确定性**：`seed` 省略 = 42；同 seed 同参数逐字节可复现，换 seed 得新数据（mulberry32 PRNG）
 - `rows` 上限 **50,000**（防误传），输出**零上下文占用**（只回摘要「已生成 N 行 × M 列 + 区域 + seed」）
 - 派生列不解耦词汇表——类别/单价等派生关系交给公式（`=VLOOKUP(C{row},目录,2,0)`、`=MONTH(A{row})`），与 §14.6 公式优先一脉相承
