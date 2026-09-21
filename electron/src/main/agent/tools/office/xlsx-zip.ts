@@ -32,8 +32,9 @@ const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 // 内部工具：XML / 路径 / rels 字符串级操作
 // ────────────────────────────────────────────────────────────────────────────
 
-/** 取 XML 标签内某属性值（限定名属性如 r:id 用 \b 前界匹配）；无则 null */
-function attrValue(tag: string, attrName: string): string | null {
+/** 取 XML 标签内某属性值（限定名属性如 r:id 用 \b 前界匹配）；无则 null。
+ *  pptx-zip 复用（占位符 ph 标签 / sldId 标签的属性提取） */
+export function attrValue(tag: string, attrName: string): string | null {
   const m = tag.match(new RegExp(`\\b${attrName}="([^"]*)"`));
   return m === null || m[1] === undefined ? null : m[1];
 }
@@ -56,8 +57,8 @@ interface RelEntry {
   raw: string;
 }
 
-/** rels XML → Relationship 条目数组（P0 sanitize 同款手法） */
-function parseRels(xml: string): RelEntry[] {
+/** rels XML → Relationship 条目数组（P0 sanitize 同款手法；pptx-zip 复用） */
+export function parseRels(xml: string): RelEntry[] {
   return (xml.match(/<Relationship\b[^>]*\/>/g) ?? []).map((raw) => ({
     raw,
     id: attrValue(raw, 'Id') ?? '',
@@ -102,8 +103,9 @@ function dirName(p: string): string {
   return idx < 0 ? '' : p.slice(0, idx);
 }
 
-/** rels Target 归一为 zip 内完整路径：相对 baseDir 解析（Target 以 / 开头为包内绝对路径） */
-function normalizeOfficePath(baseDir: string, target: string): string {
+/** rels Target 归一为 zip 内完整路径：相对 baseDir 解析（Target 以 / 开头为包内绝对路径）。
+ *  pptx-zip 复用（presentation rels 的 slides/slideN.xml 解析） */
+export function normalizeOfficePath(baseDir: string, target: string): string {
   const raw = target.startsWith('/') ? target.slice(1) : `${baseDir}/${target}`;
   const out: string[] = [];
   for (const seg of raw.split('/')) {

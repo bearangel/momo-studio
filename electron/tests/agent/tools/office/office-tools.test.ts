@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import AdmZip from 'adm-zip';
 import ExcelJS from 'exceljs';
+import PptxGenJS from 'pptxgenjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,7 +55,7 @@ afterEach(() => {
 
 describe('handles / getDefs', () => {
   it('全部工具名全部路由命中', () => {
-    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy']) {
+    for (const n of ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_fill_ppt_template', 'office_create_pdf', 'office_copy']) {
       expect(tools.handles(n)).toBe(true);
     }
     expect(tools.handles('read_file')).toBe(false);
@@ -118,6 +119,77 @@ describe('office_copy', () => {
     await expect(tools.execute('office_copy', { from: 'no.xlsx', to: 'b.xlsx' }, ctx)).rejects.toThrow(/不存在/);
     fs.writeFileSync(path.join(tmpDir, 'old.xls'), 'x');
     await expect(tools.execute('office_copy', { from: 'old.xls', to: 'b.xlsx' }, ctx)).rejects.toThrow(/另存/);
+  });
+});
+
+describe('office_fill_ppt_template（spec §14.9-3）', () => {
+  /** 1 页占位符模板（pptxgenjs 真生成；母版带 title/body 占位符） */
+  async function buildPlaceholderPptx(): Promise<Buffer> {
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_16x9';
+    pptx.defineSlideMaster({
+      title: 'M',
+      objects: [
+        { placeholder: { options: { name: 'title', type: 'title', x: 0.5, y: 0.4, w: 9, h: 1 }, text: 't' } },
+        { placeholder: { options: { name: 'body', type: 'body', x: 0.7, y: 1.7, w: 8, h: 3 }, text: 'b' } },
+      ],
+    });
+    const s = pptx.addSlide({ masterName: 'M' });
+    s.addText('旧标题', { placeholder: 'title' });
+    s.addText([{ text: '旧要点', options: { bullet: true } }], { placeholder: 'body' });
+    const out = await pptx.write({ outputType: 'nodebuffer' });
+    return Buffer.from(out as Uint8Array);
+  }
+
+  it('填充产出新文件 + 记账 create + 模板文件字节不变 + 输出标记已读', async () => {
+    fs.writeFileSync(path.join(tmpDir, '模板.pptx'), await buildPlaceholderPptx());
+    const templateBytes = fs.readFileSync(path.join(tmpDir, '模板.pptx'));
+    const out = await tools.execute('office_fill_ppt_template', {
+      template: '模板.pptx',
+      path: 'filled.pptx',
+      slides: [{ title: '新标题', bullets: ['要点一', '要点二'] }],
+    }, ctx);
+    expect(out).toContain('filled.pptx');
+    // 另存语义：模板零修改
+    expect(fs.readFileSync(path.join(tmpDir, '模板.pptx')).equals(templateBytes)).toBe(true);
+    // 记账 create（copy 语义）且 after blob 与磁盘一致
+    const entries = getJournalStore()!.listByPath('ws-office', 'filled.pptx');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.op).toBe('create');
+    expect(entries[0]?.beforeHash).toBeNull();
+    expect(getJournalStore()!.readBlobBytes('ws-office', entries[0]!.afterHash!)!.equals(
+      fs.readFileSync(path.join(tmpDir, 'filled.pptx')),
+    )).toBe(true);
+    // 产物内容真实生效
+    const zip = new AdmZip(path.join(tmpDir, 'filled.pptx'));
+    const slide = zip.readAsText('ppt/slides/slide1.xml');
+    expect(slide).toContain('新标题');
+    expect(slide).toContain('要点一');
+    // 输出标记已读：紧跟再填充同目标不抛未读错
+    const again = await tools.execute('office_fill_ppt_template', {
+      template: '模板.pptx',
+      path: 'filled.pptx',
+      slides: [{ title: '再填标题' }],
+    }, ctx);
+    expect(again).toContain('filled.pptx');
+    expect(getJournalStore()!.listByPath('ws-office', 'filled.pptx').at(-1)?.op).toBe('modify');
+  });
+  it('模板不存在 / 非 pptx 模板 / 输出与模板同路径 / 覆盖未读输出 报错', async () => {
+    await expect(tools.execute('office_fill_ppt_template', {
+      template: 'no.pptx', path: 'o.pptx', slides: [{ title: 'x' }],
+    }, ctx)).rejects.toThrow(/模板不存在/);
+    await tools.execute('office_create_doc', { path: 'd.docx', sections: [{ type: 'para', text: 'x' }] }, ctx);
+    await expect(tools.execute('office_fill_ppt_template', {
+      template: 'd.docx', path: 'o.pptx', slides: [{ title: 'x' }],
+    }, ctx)).rejects.toThrow(/pptx/);
+    fs.writeFileSync(path.join(tmpDir, 't.pptx'), await buildPlaceholderPptx());
+    await expect(tools.execute('office_fill_ppt_template', {
+      template: 't.pptx', path: 't.pptx', slides: [{ title: 'x' }],
+    }, ctx)).rejects.toThrow(/另存/);
+    fs.writeFileSync(path.join(tmpDir, 'exists.pptx'), 'old');
+    await expect(tools.execute('office_fill_ppt_template', {
+      template: 't.pptx', path: 'exists.pptx', slides: [{ title: 'x' }],
+    }, ctx)).rejects.toThrow(/office_read/);
   });
 });
 

@@ -1,5 +1,6 @@
 // electron/src/main/agent/tools/office-tools.ts
-// 办公文档工具组（spec 2026-09-18 §5）：四格式读取 + 生成 + Excel 增量写 + 复制。
+// 办公文档工具组（spec 2026-09-18 §5）：四格式读取 + 生成 + Excel 增量写 + 复制
+// + PPT 模板填充（spec §14.9-3）。
 // 写路径统一模式（对齐 file-tools v2.5）：沙箱断言 → 已存在则 Read-before-Edit
 // → 读旧字节 → write-ahead 记账（before/after 为 Buffer，走账本二进制扩展）→
 // 落盘 → 标记已读。读路径：沙箱断言 → 读取（预算截断）→ 标记已读。
@@ -17,6 +18,7 @@ import {
 } from './office/excel';
 import { createDocx, parseDocSections, readDocx } from './office/docx';
 import { createPptx, parsePptxSlides, readPptx } from './office/pptx';
+import { fillPptTemplate, parsePptTemplateFills } from './office/pptx-zip';
 import { createPdf, parsePdfBlocks, readPdf } from './office/pdf';
 
 /** 各格式读取器注册表：signal 沿 ctx.abortSignal 透传，helper 循环点自决 throw '已中断'（spec §7） */
@@ -372,6 +374,39 @@ const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   },
 };
 
+const OFFICE_FILL_PPT_DEF: LLMToolDef = {
+  name: 'office_fill_ppt_template',
+  description:
+    '以现有 .pptx 为模板填充标题与要点，产出新文件（另存语义——模板本身不动，字节零修改）。' +
+    '公司模板的版式/主题/母版/品牌元素（背景/Logo/配色）全保留，只替换各页占位符文本。' +
+    'slides 第 i 项填模板第 i 页：少于模板页数时多余页保持原样；某页不给 bullets 则该页正文不变；' +
+    '超出模板页数报错。输出已存在时须先 office_read 读取后覆盖。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      template: { type: 'string', description: '相对 workspace 的模板路径（.pptx，只读不改）' },
+      path: { type: 'string', description: '相对 workspace 的输出路径（.pptx）' },
+      slides: {
+        type: 'array',
+        description: '逐页填充内容（第 i 项对应模板第 i 页）',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: '新标题（保留模板标题样式）' },
+            bullets: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '要点列表（每条一段，保留模板正文样式；省略 = 正文不变）',
+            },
+          },
+          required: ['title'],
+        },
+      },
+    },
+    required: ['template', 'path', 'slides'],
+  },
+};
+
 const OFFICE_CREATE_PDF_DEF: LLMToolDef = {
   name: 'office_create_pdf',
   description:
@@ -407,7 +442,7 @@ const OFFICE_CREATE_PDF_DEF: LLMToolDef = {
 
 export class OfficeTools implements ToolModule {
   getDefs(): LLMToolDef[] {
-    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, OFFICE_CREATE_PPT_DEF, OFFICE_CREATE_PDF_DEF, COPY_DEF];
+    return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, OFFICE_CREATE_PPT_DEF, OFFICE_FILL_PPT_DEF, OFFICE_CREATE_PDF_DEF, COPY_DEF];
   }
 
   handles(name: string): boolean {
@@ -530,6 +565,37 @@ export class OfficeTools implements ToolModule {
         fs.writeFileSync(abs, buf);
         ctx.readTracker?.add(ctx.streamSessionId, abs);
         return `PPT 已${existed ? '覆盖' : '生成'}: ${rel}（${slides.length} 页）`;
+      }
+      case 'office_fill_ppt_template': {
+        const templateRel = parseStringArg(args.template, 'template');
+        const templateAbs = ctx.wsFs.assertInWorkspace(templateRel);
+        if (!fs.existsSync(templateAbs)) throw new Error(`模板不存在: ${templateRel}`);
+        if (assertOfficeFormat(templateRel) !== 'pptx') {
+          throw new Error(`模板必须是 .pptx: ${templateRel}（模板填充仅支持 pptx）`);
+        }
+        const rel = parseStringArg(args.path, 'path');
+        const abs = ctx.wsFs.assertInWorkspace(rel);
+        if (assertOfficeFormat(rel) !== 'pptx') {
+          throw new Error(`输出必须是 .pptx 路径: ${rel}`);
+        }
+        if (abs === templateAbs) {
+          throw new Error(`输出路径不能与模板相同（另存语义，模板保持不动）: ${rel}`);
+        }
+        const existed = fs.existsSync(abs);
+        if (existed) assertReadForOffice(ctx, abs);
+        const slides = parsePptTemplateFills(args.slides);
+        // 读写分离：先读模板字节再手术——输出落盘不触碰模板文件
+        const buf = fillPptTemplate(fs.readFileSync(templateAbs), slides);
+        recordChangeSafe(
+          buildRecordCtx('office_fill_ppt_template', ctx),
+          toJournalRelPath(ctx, rel),
+          existed ? 'modify' : 'create',
+          existed ? fs.readFileSync(abs) : null,
+          buf,
+        );
+        fs.writeFileSync(abs, buf);
+        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        return `PPT 模板填充完成: ${templateRel} → ${rel}（填充 ${slides.length} 页；版式/主题/品牌保留，模板未修改）`;
       }
       case 'office_create_pdf': {
         const rel = parseStringArg(args.path, 'path');
