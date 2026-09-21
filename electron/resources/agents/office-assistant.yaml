@@ -49,6 +49,8 @@ spec:
     - kind: builtin
       ref: office_create_ppt
     - kind: builtin
+      ref: office_fill_ppt_template
+    - kind: builtin
       ref: office_create_pdf
     - kind: builtin
       ref: office_copy

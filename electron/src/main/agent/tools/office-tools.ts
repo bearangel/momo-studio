@@ -582,7 +582,15 @@ export class OfficeTools implements ToolModule {
         if (assertOfficeFormat(rel) !== 'pptx') {
           throw new Error(`输出必须是 .pptx 路径: ${rel}`);
         }
-        if (abs === templateAbs) {
+        // realpath 归一比较：大小写不敏感 FS（macOS/Windows）与 symlink 别名下
+        // 字符串相等会漏判，落盘即毁模板（review Minor-2）
+        const sameTarget = (a: string, b: string): boolean => {
+          const norm = (p: string): string => {
+            try { return fs.realpathSync(p); } catch { return p; }
+          };
+          return norm(a) === norm(b);
+        };
+        if (sameTarget(abs, templateAbs)) {
           throw new Error(`输出路径不能与模板相同（另存语义，模板保持不动）: ${rel}`);
         }
         const existed = fs.existsSync(abs);

@@ -191,6 +191,15 @@ describe('office_fill_ppt_template（spec §14.9-3）', () => {
       template: 't.pptx', path: 'exists.pptx', slides: [{ title: 'x' }],
     }, ctx)).rejects.toThrow(/office_read/);
   });
+  it('symlink 别名指向模板 → 同路径守卫仍拒绝（realpath 归一，模板不被毁）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 't2.pptx'), await buildPlaceholderPptx());
+    const before = fs.readFileSync(path.join(tmpDir, 't2.pptx'));
+    fs.symlinkSync(path.join(tmpDir, 't2.pptx'), path.join(tmpDir, 'alias.pptx'));
+    await expect(tools.execute('office_fill_ppt_template', {
+      template: 't2.pptx', path: 'alias.pptx', slides: [{ title: 'x' }],
+    }, ctx)).rejects.toThrow(/另存/);
+    expect(fs.readFileSync(path.join(tmpDir, 't2.pptx')).equals(before)).toBe(true);
+  });
 });
 
 describe('office_read / office_read_cells', () => {

@@ -31,11 +31,11 @@ export const ALL_BUILTIN_TOOLS = [
   'todowrite',
   // LSP（2）
   'lsp_diagnostics', 'lsp_find_references',
-  // 办公（8）— v2.1 OfficeTools（xlsx/docx/pptx/pdf 读写）
+  // 办公（9）— v2.1 OfficeTools（xlsx/docx/pptx/pdf 读写 + §14.9-3 模板填充）
   'office_read', 'office_read_cells',
   'office_create_excel', 'office_write_excel',
   'office_create_doc', 'office_create_ppt', 'office_create_pdf',
-  'office_copy',
+  'office_copy', 'office_fill_ppt_template',
 ] as const;
 
 /**
@@ -63,5 +63,5 @@ export const TOOL_CATEGORIES: Array<{ label: string; emoji: string; tools: strin
   { label: 'Web', emoji: '🌐', tools: ['webfetch'] },
   { label: 'Todo', emoji: '✅', tools: ['todowrite'] },
   { label: 'LSP', emoji: '🔧', tools: ['lsp_diagnostics', 'lsp_find_references'] },
-  { label: '办公', emoji: '💼', tools: ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy'] },
+  { label: '办公', emoji: '💼', tools: ['office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel', 'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy', 'office_fill_ppt_template'] },
 ];

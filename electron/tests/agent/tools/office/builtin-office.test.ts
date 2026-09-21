@@ -49,23 +49,24 @@ describe('office-assistant.yaml', () => {
     }
   });
 
-  it('能被生产解析器 parseAgentManifestWithSuggestion 解析（defaultTools 13 项契约锁）', () => {
+  it('能被生产解析器 parseAgentManifestWithSuggestion 解析（defaultTools 14 项契约锁）', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'office-assistant.yaml'), 'utf-8');
     const { def } = parseAgentManifestWithSuggestion(content);
     expect(def.slug).toBe('office-assistant');
-    expect(def.defaultTools).toHaveLength(13);
+    expect(def.defaultTools).toHaveLength(14);
     const refs = def.defaultTools.map((t) => t.ref);
-    for (const n of ['office_read', 'office_copy', 'office_create_pdf', 'webfetch']) {
+    for (const n of ['office_read', 'office_copy', 'office_create_pdf', 'office_fill_ppt_template', 'webfetch']) {
       expect(refs, n).toContain(n);
     }
   });
 });
 
 describe('工具全集与分类', () => {
-  it('office 八工具全部进入全集（33 个）', () => {
-    expect(ALL_BUILTIN_TOOLS).toHaveLength(33);
+  it('office 九工具全部进入全集（34 个）', () => {
+    expect(ALL_BUILTIN_TOOLS).toHaveLength(34);
     expect(ALL_BUILTIN_TOOLS).toContain('office_read');
     expect(ALL_BUILTIN_TOOLS).toContain('office_copy');
+    expect(ALL_BUILTIN_TOOLS).toContain('office_fill_ppt_template');
   });
   it('分类并集 == 全集（既有不变量）', () => {
     const union = new Set(TOOL_CATEGORIES.flatMap((c) => c.tools));
