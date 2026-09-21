@@ -12,6 +12,8 @@
 // 写图表编排（add_chart）：exceljs 只懂单元格——writeXlsxOps 走「快照 → 净化 →
 // exceljs 重写 → 回注快照 → 缓存重算 → 注入新图表」管线，chart/drawing XML 由
 // chart-xml 纯函数生成、zip 层操作由 xlsx-zip 承担，本文件只做编排与区域读值。
+// fill 数据生成（spec §14.7）：引擎在 fill.ts（七型列生成器 + mulberry32 确定性
+// seed）；writeXlsxOps 校验 sheet 后 generateFillRows → 复用 set_cells 逐格写入。
 
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
@@ -20,6 +22,7 @@ import { parseRange, asString, asStringArray } from './format';
 import { buildChartXml, buildAnchorXml, sheetAbsRef } from './chart-xml';
 import type { ChartData, ChartSeriesData, ChartType } from './chart-xml';
 import { resolveSheetFile, snapshotChartParts, restoreChartParts, injectCharts, refreshChartCaches } from './xlsx-zip';
+import { parseFillOp, generateFillRows } from './fill';
 
 export const PREVIEW_ROWS = 20;
 export const PREVIEW_COLS = 12;
@@ -239,6 +242,7 @@ export interface ChartOpSpec {
 export type ExcelWriteOp =
   | { op: 'add_sheet'; name: string }
   | { op: 'set_cells'; sheet: string; range?: string; values: CellInput[][] }
+  | { op: 'fill'; sheet: string; anchor: string; rows: number; seed?: number; columns: unknown[] }
   | ChartOpSpec;
 
 function parseCellInput(v: unknown, what: string): CellInput {
@@ -285,6 +289,19 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
         return row.map((c, ci) => parseCellInput(c, `ops[${i}].values[${ri}][${ci}]`));
       });
       return { op: 'set_cells' as const, sheet, range, values };
+    }
+    if (rec.op === 'fill') {
+      // 全量窄化在 fill.ts（错误路径文案含字段路径）；运行时 columns 已是
+      // FillColumn[]，静态类型保持 unknown[] 由窄化层管（write 侧二次窄化取值）
+      const spec = parseFillOp(rec);
+      return {
+        op: 'fill' as const,
+        sheet: spec.sheet,
+        anchor: spec.anchor,
+        rows: spec.rows,
+        seed: spec.seed,
+        columns: spec.columns,
+      };
     }
     if (rec.op === 'add_chart') {
       const sheet = asString(rec.sheet, `ops[${i}].sheet`);
@@ -346,7 +363,7 @@ export function parseExcelWriteOps(raw: unknown): ExcelWriteOp[] {
         series,
       };
     }
-    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells / add_chart）`);
+    throw new Error(`ops[${i}].op 非法（支持 add_sheet / set_cells / fill / add_chart）`);
   });
 }
 
@@ -448,6 +465,26 @@ function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
   return { type: op.type, title: op.title, series };
 }
 
+/** 逐格写入（set_cells 与 fill 共用）：公式对象只取 formula 字段重建（剥除
+ *  result 等多余字段），标量原样赋值。 */
+function applyCellValues(
+  ws: ExcelJS.Worksheet,
+  startRow: number,
+  startCol: number,
+  values: CellInput[][],
+): void {
+  for (const [ri, row] of values.entries()) {
+    for (const [ci, val] of row.entries()) {
+      const cell = ws.getCell(startRow + ri, startCol + ci);
+      if (val !== null && typeof val === 'object') {
+        cell.value = { formula: val.formula };
+      } else {
+        cell.value = val;
+      }
+    }
+  }
+}
+
 /** 增量写：原字节 → 内存变更 → 新字节（一次序列化）。
  *  add_chart 编排管线：snapshotChartParts（重写前快照）→ sanitizeXlsxForRead（P0 净化，
  *  否则 exceljs 遇 real-Excel 图表形态直接崩）→ exceljs 重写（图表侧全丢）→
@@ -491,6 +528,16 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
       else list.push({ chartXml, anchorXml });
       continue;
     }
+    if (op.op === 'fill') {
+      const ws = wb.getWorksheet(op.sheet);
+      if (!ws) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
+      // columns 静态类型 unknown[]（窄化层在 fill.ts）——parseFillOp 纯函数幂等，
+      // 二次窄化同时保证 rows/anchor/区间合法性；rows×columns 上限 50000×列数由此成立
+      const data = generateFillRows(parseFillOp(op));
+      const a = parseRange(op.anchor);
+      applyCellValues(ws, a.startRow, a.startCol, data);
+      continue;
+    }
     const ws = wb.getWorksheet(op.sheet);
     if (!ws) throw new Error(`sheet 不存在: ${op.sheet}（须先 add_sheet）`);
     const r =
@@ -510,16 +557,7 @@ export async function writeXlsxOps(before: Buffer, ops: ExcelWriteOp[]): Promise
         `range 与 values 形状不一致：range 为 ${endRow - startRow + 1}×${endCol - startCol + 1}，values 为 ${op.values.length}×${maxLen}`,
       );
     }
-    for (const [ri, row] of op.values.entries()) {
-      for (const [ci, val] of row.entries()) {
-        const cell = ws.getCell(startRow + ri, startCol + ci);
-        if (val !== null && typeof val === 'object') {
-          cell.value = { formula: val.formula };
-        } else {
-          cell.value = val;
-        }
-      }
-    }
+    applyCellValues(ws, startRow, startCol, op.values);
   }
   // 显式宽类型：exceljs Buffer.from 产物是 Buffer<Buffer>，restore/inject 返回
   // Buffer<ArrayBufferLike>——裸 Buffer（= ArrayBufferLike）两者皆可赋值
