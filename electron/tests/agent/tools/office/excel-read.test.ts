@@ -14,11 +14,14 @@ import AdmZip from 'adm-zip';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   readXlsxPreview,
   readXlsxCells,
   sanitizeXlsxForRead,
 } from '../../../../src/main/agent/tools/office/excel';
+// P0 形态 drawing/chart 注入 fixture 已抽公共 helper（xlsx-zip.test.ts 共用，防两份副本漂移）
+import { makeBaseXlsxBuffer, injectP0ChartDrawing } from './xlsx-chart-fixture';
 
 let tmpDir: string;
 let abs: string;
@@ -31,7 +34,7 @@ beforeEach(async () => {
   ws.addRow(['日期', '地区', '金额']);
   ws.addRow(['2026-01-01', '华东', 100]);
   ws.addRow(['2026-01-02', '华北', 200]);
-  const ws2 = wb.addWorksheet('空表');
+  wb.addWorksheet('空表');
   const fws = wb.addWorksheet('公式');
   fws.getCell('A1').value = 1;
   fws.getCell('A2').value = 2;
@@ -109,95 +112,10 @@ describe('cellText 分支契约（Date/richText/hyperlink）', () => {
 // 「unexpected close tag」。同事流转的报表几乎必带图表，故读前需 sanitize。
 // ────────────────────────────────────────────────────────────────────────────
 
-/** 给 exceljs 正常生成的 xlsx 注入 drawing/chart 部件 + rels + sheet XML 标签，
- *  模拟真实 Excel/WPS/openpyxl 产物。返回写入后的字节。 */
-function injectChartParts(buf: Buffer): Buffer {
-  const zip = new AdmZip(buf);
-
-  // 1. drawing.xml 含 xdr:graphicFrame 引 chart（exceljs 无法解析此形态）
-  zip.addFile(
-    'xl/drawings/drawing1.xml',
-    Buffer.from(
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-      `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"` +
-      ` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"` +
-      ` xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"` +
-      ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-      `<xdr:twoCellAnchor editAs="oneCell">` +
-      `<xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
-      `<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
-      `<xdr:graphicFrame macro="">` +
-      `<xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
-      `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>` +
-      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
-      `<c:chart r:id="rIdC1"/>` +
-      `</a:graphicData></a:graphic>` +
-      `</xdr:graphicFrame>` +
-      `</xdr:twoCellAnchor>` +
-      `</xdr:wsDr>`,
-    ),
-  );
-
-  // 2. drawing.rels：引 chart1 + chart2
-  zip.addFile(
-    'xl/drawings/_rels/drawing1.xml.rels',
-    Buffer.from(
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-      `<Relationship Id="rIdC1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>` +
-      `<Relationship Id="rIdC2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>` +
-      `</Relationships>`,
-    ),
-  );
-
-  // 3. 两个 chart.xml
-  const chartXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
-    `<c:chart><c:title><c:tx><c:rich>` +
-    `<a:bodyPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>` +
-    `</c:rich></c:tx></c:title></c:chart></c:chartSpace>`;
-  zip.addFile('xl/charts/chart1.xml', Buffer.from(chartXml));
-  zip.addFile('xl/charts/chart2.xml', Buffer.from(chartXml));
-
-  // 4. sheet1 rels：drawing + hyperlink 混合（hyperlink 必须保留）
-  zip.addFile(
-    'xl/worksheets/_rels/sheet1.xml.rels',
-    Buffer.from(
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-      `<Relationship Id="rIdD" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` +
-      `<Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>` +
-      `</Relationships>`,
-    ),
-  );
-
-  // 5. sheet1.xml：追加 <drawing/> 标签（自身行尾）
-  for (const entry of zip.getEntries()) {
-    if (entry.entryName === 'xl/worksheets/sheet1.xml') {
-      const xml = zip.readAsText(entry.entryName);
-      const updated = xml.replace(
-        /<\/worksheet>/,
-        `<drawing r:id="rIdD"/></worksheet>`,
-      );
-      zip.updateFile(entry.entryName, Buffer.from(updated));
-      break;
-    }
-  }
-
-  return zip.toBuffer();
-}
-
 /** 写一份含图表/链接的 xlsx fixture 到 tmpDir，返回绝对路径 */
 async function makeChartFixture(dir: string, name = 'chart.xlsx'): Promise<string> {
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('销售');
-  ws.addRow(['日期', '地区', '金额']);
-  ws.addRow(['2026-01-01', '华东', 100]);
-  ws.addRow(['2026-01-02', '华北', 200]);
-  const plain = path.join(dir, '_plain.xlsx');
-  await wb.xlsx.writeFile(plain);
   const withCharts = path.join(dir, name);
-  fs.writeFileSync(withCharts, injectChartParts(fs.readFileSync(plain)));
+  fs.writeFileSync(withCharts, injectP0ChartDrawing(await makeBaseXlsxBuffer()));
   return withCharts;
 }
 
@@ -227,7 +145,7 @@ describe('sanitizeXlsxForRead', () => {
   it('剥离 drawings/charts/media 部件；chartCount 准确；sheet rels 仅留 hyperlink；<drawing/> 标签被剥；原入参 buf 字节不变', async () => {
     const abs = await makeChartFixture(tmpDir, 'for-sanitize.xlsx');
     const original = fs.readFileSync(abs);
-    const originalHash = require('node:crypto').createHash('sha256').update(original).digest('hex');
+    const originalHash = createHash('sha256').update(original).digest('hex');
     const originalSnapshot = new AdmZip(original).getEntries().map((e) => e.entryName).sort();
 
     const { data, chartCount } = sanitizeXlsxForRead(original);
@@ -252,7 +170,7 @@ describe('sanitizeXlsxForRead', () => {
     expect(sheetXml).not.toContain('<drawing');
 
     // 4. 原 buf 字节不变（深拷贝验证：再次 zip 原 buf 部件清单一致）
-    const afterHash = require('node:crypto').createHash('sha256').update(original).digest('hex');
+    const afterHash = createHash('sha256').update(original).digest('hex');
     expect(afterHash).toBe(originalHash);
     const originalSnapshotAfter = new AdmZip(original).getEntries().map((e) => e.entryName).sort();
     expect(originalSnapshotAfter).toEqual(originalSnapshot);

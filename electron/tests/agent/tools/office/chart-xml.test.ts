@@ -5,8 +5,10 @@
 import { describe, it, expect } from 'vitest';
 import * as cheerio from 'cheerio';
 import { buildChartXml, buildAnchorXml, sheetAbsRef, xmlEscape } from '../../../../src/main/agent/tools/office/chart-xml';
+import type { ChartSeriesData } from '../../../../src/main/agent/tools/office/chart-xml';
 
-const barSeries = [{
+// 1 元组而非数组：noUncheckedIndexedAccess 下 barSeries[0] 展开需要非 undefined 类型
+const barSeries: [ChartSeriesData] = [{
   nameRef: `'汇总'!$B$1`, catRef: `'汇总'!$A$2:$A$5`, catCache: ['1月', '2月', '3月', '4月'],
   valRef: `'汇总'!$B$2:$B$5`, valCache: [100, 200, 300, 400],
 }];
