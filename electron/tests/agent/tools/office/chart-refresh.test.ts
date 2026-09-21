@@ -1,4 +1,5 @@
-// P1a+P1b 回归锁（spec §14.6）：写路径缓存重算 + 公式单元格缓存语义。
+// P1a+P1b+P1c 回归锁（spec §14.6）：写路径缓存重算 + 公式单元格缓存语义 +
+// 缓存重算 `$` 模式注入防御 + categories/name 公式格 omit 文面对齐。
 // 全程真实操作（momo-test-rules：不 mock exceljs / adm-zip）：createXlsx 造底 →
 // writeXlsxOps → adm-zip 解包断言 chart XML 缓存内容。
 // 核心场景＝真实会话死点：set_cells 修改被图表引用的区域后，既有图表缓存必须重算
@@ -30,6 +31,16 @@ function chartXml(buf: Buffer, n: number): string {
 /** 提取全部 numCache 子树——断言作用域收窄（catCache 的 idx 与 valCache 无关） */
 function numCaches(xml: string): string[] {
   return xml.match(/<c:numCache>[\s\S]*?<\/c:numCache>/g) ?? [];
+}
+
+/** 提取全部 strCache 子树（categories 与序列名共享） */
+function strCaches(xml: string): string[] {
+  return xml.match(/<c:strCache>[\s\S]*?<\/c:strCache>/g) ?? [];
+}
+
+/** 提取 c:tx 序列名块（nameRef/nameLiteral 都内嵌此节点） */
+function txBlocks(xml: string): string[] {
+  return xml.match(/<c:tx>[\s\S]*?<\/c:tx>/g) ?? [];
 }
 
 /** 造「销售明细」底稿：表头 + 3 行月度数据（A 列分类 / B 列数值） */
@@ -390,5 +401,161 @@ describe('P1b：公式单元格缓存语义', () => {
     // strCache（categories/name）未被 readRef 触达 → 原缓存保留
     expect(xml).toContain('<c:v>1月</c:v>');
     expect(xml).toContain('<c:v>金额</c:v>');
+  });
+});
+
+describe('P1c：spec §14.6 文面对齐（$ 注入防御 + 公式格 omit）', () => {
+  it('categories 含 $&/$$/$` 文本 → 写路径缓存重算后逐字保留，无 $ 模式展开', async () => {
+    // 真实会话死点：用户在 categories 区域写含 $& 的促销名（如 "$&特价"），
+    // 原 buggy 实现用字符串 replacement，$& 在 JS replace 中被替换为「匹配到的
+    // 整段 cache 子树」→ 缓存被复制错位 / 后续公式 / 标签错位。函数型 replacer
+    // 把 replacement 当字面量返回才安全。
+    const charted = await writeXlsxOps(
+      await makeBase(),
+      parseExcelWriteOps([
+        {
+          op: 'set_cells',
+          sheet: '销售明细',
+          range: 'A1',
+          values: [
+            ['月份', '金额'],
+            ['$&特价', 10],
+            ['A$$B', 20],
+            ['$`X', 30],
+          ],
+        },
+        {
+          op: 'add_chart',
+          sheet: '销售明细',
+          type: 'bar',
+          anchor: 'D2',
+          categories: { sheet: '销售明细', range: 'A2:A4' },
+          series: [{ values: { sheet: '销售明细', range: 'B2:B4' } }],
+        },
+      ]),
+    );
+    // 触发 refreshChartCaches：再 set_cells 修改值区域即可（refreshChartCaches 对
+    // 全部既有 chart 的 c:f 都执行；catRef 与 valRef 都命中）。
+    const out = await writeXlsxOps(
+      charted,
+      parseExcelWriteOps([
+        { op: 'set_cells', sheet: '销售明细', range: 'B2:B4', values: [[100], [200], [300]] },
+      ]),
+    );
+    const xml = chartXml(out, 1);
+    // 字面量逐字保留——$ 模式未被 JS replace 解释。
+    // '&' 走 xmlEscape → '&amp;'（Excel 渲染回 '$&特价'）；'$$' / '$`' 是单字符
+    // 非特殊，无需转义，原样保留。buggy 字符串 replacer 会把 '$&' / '$$' / '$`' 解释
+    // 为特殊模式，导致 cache 子树被复制错位或文本被改写。
+    expect(xml).toContain('<c:v>$&amp;特价</c:v>');
+    expect(xml).toContain('<c:v>A$$B</c:v>');
+    expect(xml).toContain('<c:v>$`X</c:v>');
+    // 无 $& / $$ 展开痕迹：
+    //   - '$&' 被解释 → cache 子树被复制，原 cache 块后跟额外 'amp;特价...strCache' 段
+    //   - '$$' 被解释 → 'A$$B' 塌成 'A$B'
+    expect(xml).not.toContain('A$B');
+    expect(xml).not.toContain('<c:strCache><c:strCache>');
+    // 新 valCache 也照常落
+    expect(xml).toContain('<c:v>100</c:v>');
+    expect(xml).toContain('<c:v>200</c:v>');
+    expect(xml).toContain('<c:v>300</c:v>');
+    // c:f 引用保持
+    expect(xml).toContain(`<c:f>'销售明细'!$A$2:$A$4</c:f>`);
+  });
+
+  it('categories 区域含公式格（无缓存 result）→ strCache 该点 omit、ptCount 全长', async () => {
+    // spec §14.6 P1b：「无缓存（新写公式）该点 omit（c:pt 省略、ptCount 保持区域全长）」。
+    // readRangeValues 文本槽从 string[] 放宽为 Array<string | null>——公式无 string
+    // result 时 push null（不再用 '' 占位）；chart-xml buildStrCacheXml 据此省略 c:pt。
+    const out = await writeXlsxOps(
+      await makeBase(),
+      parseExcelWriteOps([
+        {
+          op: 'set_cells',
+          sheet: '销售明细',
+          range: 'A1',
+          values: [
+            ['月份', '金额'],
+            ['1月', 10],
+            // 公式无缓存 result：exceljs 新写公式 result 字段未填
+            [{ formula: 'B2*2' }, 20],
+            ['3月', 30],
+          ],
+        },
+        {
+          op: 'add_chart',
+          sheet: '销售明细',
+          type: 'bar',
+          anchor: 'D2',
+          categories: { sheet: '销售明细', range: 'A2:A4' },
+          series: [{ values: { sheet: '销售明细', range: 'B2:B4' } }],
+        },
+      ]),
+    );
+    const xml = chartXml(out, 1);
+    // categories 在 c:cat > c:strRef 下；strCache 整段是 categories 的（序列名 strCache
+    // 已用 <c:tx> 隔开，匹配顺序按 chart XML 文档序：先 c:tx 再 c:cat）。直接断言文档
+    // 内全部 strCache：categories 那个就是 idx=0/2 有 c:pt、idx=1 缺。
+    const cats = strCaches(xml)[0] ?? '';
+    expect(cats).toContain('<c:pt idx="0"><c:v>1月</c:v></c:pt>');
+    expect(cats).not.toContain('<c:pt idx="1"');
+    expect(cats).toContain('<c:pt idx="2"><c:v>3月</c:v></c:pt>');
+    // ptCount 仍为区域全长 3——而非按已有点数 2 计
+    expect(cats).toContain('<c:ptCount val="3"/>');
+    // 引用与未污染的 valCache 照常
+    expect(xml).toContain(`<c:f>'销售明细'!$A$2:$A$4</c:f>`);
+    expect(xml).toContain('<c:v>10</c:v>');
+    expect(xml).toContain('<c:v>30</c:v>');
+  });
+
+  it('序列名引用公式无 result → c:tx 仅 c:f 无 strCache（spec §14.6 omit 语义）', async () => {
+    // nameCache：公式无 result 时置 undefined（不发 strCache），与 categories 的 null
+    // 省略 c:pt 同语义——避免空串 c:v 被渲染为空序列名。
+    const out = await writeXlsxOps(
+      await makeBase(),
+      parseExcelWriteOps([
+        {
+          op: 'set_cells',
+          sheet: '销售明细',
+          range: 'A1',
+          values: [
+            ['月份', '金额', { formula: 'B2*2' }], // C1：公式无缓存 result 作序列名
+            ['1月', 10, 100],
+            ['2月', 20, 200],
+            ['3月', 30, 300],
+          ],
+        },
+        {
+          op: 'add_chart',
+          sheet: '销售明细',
+          type: 'bar',
+          anchor: 'D2',
+          categories: { sheet: '销售明细', range: 'A2:A4' },
+          series: [
+            {
+              name: { sheet: '销售明细', range: 'C1' },
+              values: { sheet: '销售明细', range: 'B2:B4' },
+            },
+          ],
+        },
+      ]),
+    );
+    const xml = chartXml(out, 1);
+    // 全部 c:tx 节点：nameRef 模式下应只有 c:f，无 strCache 子树
+    const txs = txBlocks(xml);
+    expect(txs.length).toBeGreaterThan(0);
+    for (const tx of txs) {
+      expect(tx).toContain('<c:f>');
+      expect(tx).not.toContain('<c:strCache>');
+    }
+    // 防御性断言：第一个 tx 内引用的 c:f 是序列名引用（C1 单格引用），无 strCache
+    const nameTx = txs[0] ?? '';
+    expect(nameTx).toContain(`<c:f>'销售明细'!$C$1</c:f>`);
+    expect(nameTx).not.toContain('strCache');
+    // categories 区域（公式 A2:A4 实际是数字，本测试中 A 列是文本「1月」等）有值
+    expect(xml).toContain('<c:v>1月</c:v>');
+    // valCache 落值
+    expect(xml).toContain('<c:v>10</c:v>');
+    expect(xml).toContain('<c:v>30</c:v>');
   });
 });

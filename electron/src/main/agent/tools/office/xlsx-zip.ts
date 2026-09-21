@@ -490,7 +490,7 @@ function refreshChartXmlCaches(
     if (parsed === null) return block;
     const values = readRef(parsed);
     if (values === null) return block;
-    let cache: string | null = null;
+    let cache: string;
     let cacheRe: RegExp;
     if (isNum) {
       if (values.numbers === undefined) return block;
@@ -506,9 +506,11 @@ function refreshChartXmlCaches(
       cache = buildStrCacheXml(values.texts);
       cacheRe = STR_CACHE_RE;
     }
+    // 函数型 replacer：cache 携带用户可控文本（strCache categories / 序列名等），
+    // 字符串 replacement 会把 $$/$&/$`/$' 解释为特殊模式——返回字面量才是真正替换。
     const nextInner = cacheRe.test(inner)
-      ? inner.replace(cacheRe, cache)
-      : inner.replace(/<\/c:f>/, `</c:f>${cache}`);
+      ? inner.replace(cacheRe, () => cache)
+      : inner.replace(/<\/c:f>/, () => `</c:f>${cache}`);
     return `<c:${isNum ? 'numRef' : 'strRef'}>${nextInner}</c:${isNum ? 'numRef' : 'strRef'}>`;
   };
   return xml

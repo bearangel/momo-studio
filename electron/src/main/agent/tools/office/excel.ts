@@ -372,7 +372,9 @@ function asFormulaCell(
 
 /** 区域读值：单行或单列区域逐格取值（多行多列报错）。
  *  texts 槽为文本侧（cellText：Date 转 ISO 日期串）——categories 与序列名消费；
- *  公式格（spec §14.6 P1b）取缓存 result：string 用之否则空串。
+ *  公式格（spec §14.6 P1b）取缓存 result：string 用之否则 **null**（chart-xml
+ *  buildStrCacheXml 对 null 省略 c:pt——对齐 spec 「该点 omit」文面，不再用空串
+ *  占位造成 chart 渲染时把空串当合法分类）。
  *  numbers 槽为数值侧：number 用之；公式格 number result 用之、无缓存 result 该点
  *  null（omit c:pt）；numeric=true（series values 消费）时其余非数字值仍抛错且文案
  *  含 'sheet'!地址；numeric=false（lenient，缓存重算消费）时该点 null 不抛。 */
@@ -380,7 +382,7 @@ export function readRangeValues(
   wb: ExcelJS.Workbook,
   ref: SheetRangeRef,
   numeric = false,
-): { texts: string[]; numbers: Array<number | null> } {
+): { texts: Array<string | null>; numbers: Array<number | null> } {
   const ws = wb.getWorksheet(ref.sheet);
   if (!ws) throw new Error(`sheet 不存在: ${ref.sheet}（须先 add_sheet）`);
   const r = parseRange(ref.range);
@@ -391,7 +393,7 @@ export function readRangeValues(
   }
   const horizontal = endCol > r.startCol;
   const count = horizontal ? endCol - r.startCol + 1 : endRow - r.startRow + 1;
-  const texts: string[] = [];
+  const texts: Array<string | null> = [];
   const numbers: Array<number | null> = [];
   for (let k = 0; k < count; k++) {
     const row = horizontal ? r.startRow : r.startRow + k;
@@ -400,7 +402,7 @@ export function readRangeValues(
     const v = cell.value;
     const formula = asFormulaCell(v);
     if (formula !== null) {
-      texts.push(typeof formula.result === 'string' ? formula.result : '');
+      texts.push(typeof formula.result === 'string' ? formula.result : null);
       numbers.push(typeof formula.result === 'number' ? formula.result : null);
     } else {
       texts.push(cellText(v));
@@ -433,7 +435,11 @@ function buildChartData(wb: ExcelJS.Workbook, op: ChartOpSpec): ChartData {
       out.nameLiteral = s.name;
     } else if (s.name !== undefined) {
       out.nameRef = sheetAbsRef(s.name.sheet, s.name.range);
-      out.nameCache = readRangeValues(wb, s.name).texts[0] ?? '';
+      // 公式无 result（readRangeValues 文本槽 null）→ undefined：chart-xml buildTxXml
+      // 据此不发 strCache，对齐 spec §14.6 「该点 omit」——非公式格文本侧空串（cellText）
+      // 仍照常作为合法序列名缓存。
+      const firstName = readRangeValues(wb, s.name).texts[0];
+      out.nameCache = firstName === null ? undefined : firstName;
     } else {
       out.nameLiteral = `Series ${si + 1}`;
     }
