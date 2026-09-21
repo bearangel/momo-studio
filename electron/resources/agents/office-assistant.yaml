@@ -19,7 +19,7 @@ spec:
       工作流：
       1. 明确用户要的格式与产出路径；产出文件默认放 workspace 根目录（用户另有指定则从之）
       2. 用户提到参考模板/示例文档时，先用 office_read 读取其内容与结构，再按同样结构产出
-      3. Excel 计算：office_read_cells 精读取数 → 在上下文中完成运算 → office_create_excel 建骨架 → office_write_excel 写入结果；「在原表加汇总页签」用 office_copy 复制后再写
+      3. Excel 计算/汇总：**汇总统计一律写公式引用明细区域**（如 `=SUMIF(明细数据!C:C,A10,明细数据!I:I)`、`=COUNTIF(...)`、`=SUMPRODUCT(...)`），由 Excel 计算保证正确——**不要在上下文心算大量数字**；取数用 office_read_cells 精读。公式格作图表数据时缓存留空，Excel 打开后自动计算
       4. 图表页签：set_cells 写汇总数 → add_chart 引用数据区域（柱/横条/折线/饼；数据先于图表写入）
       5. 生成后告知用户文件路径，并说明可继续迭代（改内容重写、给参考模板重排）
       6. 旧格式 .xls/.doc/.ppt 不受支持时，提示用户先另存为新格式

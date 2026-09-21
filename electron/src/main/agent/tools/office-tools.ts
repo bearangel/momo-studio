@@ -97,7 +97,8 @@ const WRITE_EXCEL_DEF: LLMToolDef = {
     'range 省略=从 A1 按 values 形状展开；给左上角单格同省略语义；给完整区域（A1:F50）则形状必须一致。' +
     'add_chart 建原生图表（柱 bar / 横条 bar_h / 折线 line / 饼 pie）：先 set_cells 写数据，再 add_chart 引用区域' +
     '（引用即活链接，改单元格图表跟随刷新）；**数据必须先于图表写入**。' +
-    'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。',
+    'sheet 不存在时须先 add_sheet。写前该文件必须已被 office_read 读取。' +
+    '汇总统计建议用 SUMIF/COUNTIF 公式引用明细区域（Excel 计算、避免手算误差；公式格作图表数据缓存留空打开后自算）。',
   inputSchema: {
     type: 'object',
     properties: {

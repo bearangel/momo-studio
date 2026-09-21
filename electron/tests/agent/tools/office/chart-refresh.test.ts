@@ -404,7 +404,7 @@ describe('P1b：公式单元格缓存语义', () => {
   });
 });
 
-describe('P1c：spec §14.6 文面对齐（$ 注入防御 + 公式格 omit）', () => {
+describe('review-fix：$ 注入防御与公式格 omit', () => {
   it('categories 含 $&/$$/$` 文本 → 写路径缓存重算后逐字保留，无 $ 模式展开', async () => {
     // 真实会话死点：用户在 categories 区域写含 $& 的促销名（如 "$&特价"），
     // 原 buggy 实现用字符串 replacement，$& 在 JS replace 中被替换为「匹配到的

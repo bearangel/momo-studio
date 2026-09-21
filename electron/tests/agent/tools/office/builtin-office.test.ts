@@ -107,5 +107,10 @@ describe('marketplace catalog', () => {
     const props = writeDef!.inputSchema.properties as Record<string, unknown>;
     const opsSchema = props['ops'] as { items: { properties: { op: { enum: string[] } } } };
     expect(opsSchema.items.properties.op.enum).toContain('add_chart');
+
+    // 公式优先工作流同步锁（P1c）：YAML / catalog readme / WRITE_EXCEL_DEF 三处一致
+    expect(yamlPrompt).toContain('SUMIF');
+    expect(item!.readme).toContain('SUMIF');
+    expect(writeDef!.description).toContain('SUMIF');
   });
 });

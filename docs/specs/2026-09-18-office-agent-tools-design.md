@@ -289,3 +289,5 @@ series 空、pie 多序列、range 非法、sheet 不存在（沿用 add_sheet �
 1. **公式优先工作流（P1c）**：汇总/统计类结果一律用公式（SUMIF/COUNTIF/SUMPRODUCT 引用明细区域）写入，不在上下文心算大量数字——结果由 Excel 计算保证正确。office-assistant 提示词与 WRITE_EXCEL_DEF 描述同步此指引。
 2. **公式单元格缓存语义（P1b）**：add_chart 的 values/categories 区域容忍公式单元格——有缓存 result 用 result，无缓存（新写公式）该点 **omit**（c:pt 省略、ptCount 保持区域全长）；纯文本等非法值仍报错。Excel 打开后自动计算并回填，轻量预览器显示留空（诚实优于错值）。
 3. **写路径缓存重算（P1a）**：`office_write_excel` 每次写盘时对**全部既有图表**做缓存重算——按 chart XML 的 `c:f` 引用从内存 workbook（已应用本批 ops）重读区域值重建 numCache/strCache。消灭「改数后图表缓存陈旧」及由此引发的 python 逃逸。新注入图表的缓存在 add_chart 时点已同源正确，无需重算。
+
+**边界（审查备案）**：refreshChartCaches 的字节幂等仅对自产图表布局成立；外来（真实 Excel / openpyxl 产）图表的缓存子树首过重算会归一为紧凑布局（语义值等价、Excel 容忍），第二过起幂等。
