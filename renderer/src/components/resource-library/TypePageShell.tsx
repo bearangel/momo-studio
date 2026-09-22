@@ -84,9 +84,12 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           <Icon size={14} strokeWidth={1.75} aria-hidden />
           {type === 'agent' ? '智能体' : type === 'mcp' ? 'MCP 服务器' : '技能'}
         </h2>
-        <div className="w-56">
-          <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        </div>
+        {/* 外层搜索仅已安装模式渲染——registry 模式由 RegistryBrowse 自带搜索框（防双搜索框） */}
+        {mode === 'installed' && (
+          <div className="w-56">
+            <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+        )}
         {mode === 'installed' &&
           SOURCE_CHIPS.map((chip) => (
             <button

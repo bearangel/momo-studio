@@ -30,7 +30,7 @@ export function createSkillFromForm(input: SkillCreateInput, skillsDir: string =
   const content = `---\nname: ${JSON.stringify(input.name)}\ndescription: ${JSON.stringify(input.description)}\n---\n${input.body}`;
   fs.mkdirSync(targetDir, { recursive: true });
   fs.writeFileSync(path.join(targetDir, 'SKILL.md'), content, 'utf-8');
-  // .sha256 标记 = custom 源识别依据（内容 hash，与 zip 上传同口径）
+  // .sha256 存在即 custom 源标记（同 zip 语义）；hash 为 SKILL.md 内容 hash
   fs.writeFileSync(
     path.join(targetDir, '.sha256'),
     crypto.createHash('sha256').update(content, 'utf-8').digest('hex'),

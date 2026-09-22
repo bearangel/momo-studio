@@ -12,7 +12,7 @@
 // window = {...} 写法）会抹掉 DOM 构造器导致 react-dom 崩溃（momo-test-rules：
 // mock 收窄到 IPC 边界）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TypePageShell } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
 import type { ResourceItem } from '../../ipc/types';
@@ -93,5 +93,18 @@ describe('TypePageShell', () => {
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     expect(screen.getByText('加载失败：导入失败：boom')).toBeTruthy();
+  });
+
+  it('registry 模式外层搜索框不渲染（消除双搜索框）', () => {
+    useResourceStore.setState({ mode: 'registry' });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    // 全页只剩 RegistryBrowse 自带的搜索框
+    expect(screen.getAllByPlaceholderText('搜索名称 / 描述 / slug…')).toHaveLength(1);
+    // 外层工具栏（含页标题 h2）内不再有搜索框
+    const toolbar = screen.getByText('MCP 服务器').parentElement;
+    expect(toolbar).not.toBeNull();
+    expect(within(toolbar as HTMLElement).queryByPlaceholderText('搜索名称 / 描述 / slug…')).toBeNull();
   });
 });
