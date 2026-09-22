@@ -45,7 +45,7 @@ describe('TypePageShell', () => {
     expect(screen.getByRole('radio', { name: '已安装' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '网络获取' })).toBeTruthy();
     expect(screen.getByText('预置')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '＋ 添加服务器' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
   it('已安装空列表渲染 EmptyState 文案', () => {

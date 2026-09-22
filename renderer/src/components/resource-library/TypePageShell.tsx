@@ -35,11 +35,11 @@ const MODE_OPTIONS = [
   { value: 'registry', label: '网络获取' },
 ] as const;
 
-/** 每类页的「＋」按钮文案 */
+/** 每类页的 AddMenu 按钮文案（lucide Plus 图标单独承担「+」语义） */
 const ADD_LABEL: Record<ResourceType, string> = {
-  agent: '＋ 新建 / 导入',
-  mcp: '＋ 添加服务器',
-  skill: '＋ 添加技能',
+  agent: '新建 / 导入',
+  mcp: '添加服务器',
+  skill: '添加技能',
 };
 
 interface TypePageShellProps {

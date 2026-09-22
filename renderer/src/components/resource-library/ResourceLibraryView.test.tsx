@@ -86,13 +86,13 @@ describe('ResourceLibraryView（三页壳）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     expect(screen.getByText('MCP 服务器')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '＋ 添加服务器' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
   it('MCP 页下拉含三条路径（手动配置/粘贴 JSON/网络获取）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
-    fireEvent.click(screen.getByRole('button', { name: '＋ 添加服务器' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.getByText('手动配置…')).toBeTruthy();
     expect(screen.getByText('粘贴 JSON…')).toBeTruthy();
     expect(screen.getByText('从网络获取…')).toBeTruthy();

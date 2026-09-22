@@ -15,7 +15,7 @@ export interface AddMenuItem {
 }
 
 interface AddMenuProps {
-  /** 按钮文案（按类型命名，如「＋ 添加服务器」） */
+  /** 按钮文案（按类型命名，如「添加服务器」；前缀「+」由 lucide Plus 图标传达） */
   label: string;
   items: AddMenuItem[];
 }
