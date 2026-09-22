@@ -4,36 +4,50 @@
 //   - 工具栏：模式 Segmented（已安装|网络获取）+ 来源 chips（已安装模式专属）+ AddMenu
 //   - 已安装空列表 → EmptyState 文案（按类型命名）
 //   - 行点击选中 → 右侧详情面板挂载（「关闭详情」按钮出现）
-//   - mode=registry → 渲染 RegistryBrowse（来源标注出现）
+//   - mode=registry → 渲染 RegistryBrowse（provider 选择器出现，Task 6）
 //
 // Mock 方式遵循 ResourceLibraryView.test.tsx 既有形态（组件渲染测试变体）：不 vi.mock
 // ipc/client 模块，而是在真实 jsdom window 上装 window.api 属性——ipc.client 是真实
-// Proxy，registry 模式下 RegistryBrowse 经 Provider 走真通道；整窗替换（store 测试的
+// Proxy，registry 模式下 RegistryBrowse 经真通道取数；整窗替换（store 测试的
 // window = {...} 写法）会抹掉 DOM 构造器导致 react-dom 崩溃（momo-test-rules：
 // mock 收窄到 IPC 边界）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { TypePageShell } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
-import type { ResourceItem } from '../../ipc/types';
+import type { RegistryProviderMeta, RegistryListEntry, ResourceItem } from '../../ipc/types';
 
 const listMock = vi.fn();
+const registryProvidersMock = vi.fn();
+const registryListMock = vi.fn();
 
 const mockApi = {
   resource: {
     list: listMock,
+    registryProviders: registryProvidersMock,
+    registryList: registryListMock,
   },
 };
 
 beforeEach(() => {
   listMock.mockReset();
   listMock.mockResolvedValue([] as ResourceItem[]);
+  registryProvidersMock.mockReset();
+  registryProvidersMock.mockResolvedValue([
+    { key: 'builtin', label: '内置市场', region: 'local', types: ['agent', 'mcp', 'skill'], degraded: false },
+    { key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], degraded: false },
+    { key: 'modelscope', label: '魔搭社区', region: 'cn', types: ['mcp'], degraded: false },
+  ] as RegistryProviderMeta[]);
+  registryListMock.mockReset();
+  registryListMock.mockResolvedValue({ entries: [] as RegistryListEntry[], degraded: false });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+  localStorage.clear();
 
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
     activeType: 'mcp', mode: 'installed',
+    registryProviderKey: 'builtin',
   });
 });
 
@@ -69,12 +83,13 @@ describe('TypePageShell', () => {
     expect(screen.getByLabelText('关闭详情')).toBeTruthy();
   });
 
-  it('mode=registry 时渲染 RegistryBrowse（来源标注出现）', () => {
+  it('mode=registry 时渲染 RegistryBrowse（provider 选择器出现）', async () => {
     useResourceStore.setState({ mode: 'registry' });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    expect(screen.getByText('来源：内置市场')).toBeTruthy();
+    expect(screen.getByLabelText('registry provider')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('option', { name: '内置市场' })).toBeTruthy());
   });
 
   // ── 终审 Important-1 回归锁：registry 模式安装反馈 ─────────────────────

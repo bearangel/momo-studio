@@ -6,6 +6,8 @@
 //   - installResource 失败：error 写入「导入失败：...」前缀，installNotice 清空；
 //     store 不 rethrow（避免 p2p 离线/未找到/超时 unhandled rejection）
 //   - installNotice 在 filter 切换 / setQuery 时清掉（防止陈旧成功提示残留）
+//   - registryProviderKey（Task 6）：setRegistryProvider 更新 + 持久化（写失败静默）；
+//     启动恢复合法值 / 非法值回退 builtin（模块尾恢复块，vi.resetModules + 动态 import 锁）
 //
 // 注：view 层的端到端测试见 ResourceLibraryView.test.tsx；本文件锁 store 层契约。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -142,5 +144,41 @@ describe('resource.store 资源库重设计（activeType + mode）', () => {
     useResourceStore.getState().setMode('registry');
     expect(useResourceStore.getState().mode).toBe('registry');
     expect(useResourceStore.getState().items.length).toBe(1);
+  });
+});
+
+describe('resource.store — registryProviderKey 记忆（Task 6）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  it('setRegistryProvider 更新状态并持久化 localStorage', async () => {
+    const { useResourceStore: fresh } = await import('./resource.store');
+    fresh.getState().setRegistryProvider('smithery');
+    expect(fresh.getState().registryProviderKey).toBe('smithery');
+    expect(localStorage.getItem('momo.resourceLibrary.providerKey')).toBe('smithery');
+  });
+
+  it('持久化写失败静默（隐私模式等场景不影响内存状态）', async () => {
+    const { useResourceStore: fresh } = await import('./resource.store');
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new Error('QuotaExceededError');
+    });
+    expect(() => fresh.getState().setRegistryProvider('modelscope')).not.toThrow();
+    expect(fresh.getState().registryProviderKey).toBe('modelscope');
+    spy.mockRestore();
+  });
+
+  it('启动恢复：localStorage 记忆 smithery → 模块加载即恢复', async () => {
+    localStorage.setItem('momo.resourceLibrary.providerKey', 'smithery');
+    const { useResourceStore: fresh } = await import('./resource.store');
+    expect(fresh.getState().registryProviderKey).toBe('smithery');
+  });
+
+  it('启动恢复：非法值回退 builtin', async () => {
+    localStorage.setItem('momo.resourceLibrary.providerKey', 'mcphub');
+    const { useResourceStore: fresh } = await import('./resource.store');
+    expect(fresh.getState().registryProviderKey).toBe('builtin');
   });
 });

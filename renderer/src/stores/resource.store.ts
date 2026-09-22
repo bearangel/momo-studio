@@ -19,7 +19,12 @@
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ResourceItem, ResourceFilter, ResourceType } from '../ipc/types';
+import type {
+  ResourceItem,
+  ResourceFilter,
+  ResourceType,
+  RegistryProviderMeta,
+} from '../ipc/types';
 
 interface ResourceStore {
   items: ResourceItem[];
@@ -38,6 +43,8 @@ interface ResourceStore {
   activeType: ResourceType;
   /** 页面模式：installed=已安装列表 / registry=网络获取（注册表浏览） */
   mode: 'installed' | 'registry';
+  /** 网络获取模式当前 provider（P2 双轨 hub，Task 6）——选择经 localStorage 记忆 */
+  registryProviderKey: RegistryProviderMeta['key'];
 
   /** 按当前 filter 重新拉取列表 */
   load: () => Promise<void>;
@@ -51,6 +58,8 @@ interface ResourceStore {
   setActiveType: (t: ResourceType) => void;
   /** 切换页面模式（registry 数据由 RegistryBrowse 自行经 Provider 拉取，不动 items） */
   setMode: (m: 'installed' | 'registry') => void;
+  /** 切换网络获取 provider：持久化记忆 + 更新状态（写失败静默——隐私模式等场景不影响内存） */
+  setRegistryProvider: (key: RegistryProviderMeta['key']) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
   /** 安装某资源后刷新；返回是否成功（false 时错误在 error 字段）——marketplace agent 安装引导据此触发 */
@@ -67,6 +76,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   query: '',
   activeType: 'agent',
   mode: 'installed',
+  registryProviderKey: 'builtin',
 
   load: async () => {
     set({ loading: true, error: null });
@@ -108,6 +118,16 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
 
   setMode: (m) => set({ mode: m, installNotice: null }),
 
+  setRegistryProvider: (key) => {
+    // 持久化上次选择（写入失败静默——隐私模式等场景不影响内存状态）
+    try {
+      localStorage.setItem('momo.resourceLibrary.providerKey', key);
+    } catch {
+      // 忽略
+    }
+    set({ registryProviderKey: key });
+  },
+
   deleteResource: async (id) => {
     await ipc.resource.delete(id);
     await get().load();
@@ -143,4 +163,20 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   const valid: ResourceType =
     persisted === 'agent' || persisted === 'mcp' || persisted === 'skill' ? persisted : 'agent';
   useResourceStore.setState({ activeType: valid, typeFilter: valid });
+}
+
+// 启动恢复上次选择的网络获取 provider（失效值回退 'builtin'；Task 6 记忆）
+{
+  const persisted = (() => {
+    try {
+      return localStorage.getItem('momo.resourceLibrary.providerKey');
+    } catch {
+      return null;
+    }
+  })();
+  const valid: RegistryProviderMeta['key'] =
+    persisted === 'builtin' || persisted === 'smithery' || persisted === 'modelscope'
+      ? persisted
+      : 'builtin';
+  useResourceStore.setState({ registryProviderKey: valid });
 }
