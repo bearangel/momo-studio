@@ -5,14 +5,22 @@
 //   - 切 MCP 页：标题与「＋」按钮文案随类型切换
 //   - MCP 页「＋」下拉三条路径（手动配置 / 粘贴 JSON / 网络获取）
 //   - localStorage 持久化恢复上次激活页
+//   - mount 时自动首拉 resource.list（旧视图同语义回归锁）
 //
 // Mock 方式遵循 TypePageShell.test.tsx 既有形态：不 vi.mock ipc/client 模块，而是在
 // 真实 jsdom window 上装 window.api 属性——ipc.client 是真实 Proxy，store 的 load 经
 // 真通道走桩（momo-test-rules：mock 收窄到 IPC 边界）。vitest globals:false，显式导入。
+//
+// 关注项修复回归锁（Task 8 收尾）：
+//   - ③ mount-load：挂在 → resource.list 被调（waitFor）。锁住「冷启动首拉」语义。
+//   - ① closePresetDialog 三重刷新：EnablePresetDialog 真实驱动需写表单/选模型，
+//     跨子组件深交互，与本壳渲染测试范畴不成比例；代码修复为权威（见视图 commit）。
+//     详见 /workspace/.superpowers/sdd/task-8-report.md「关注项修复」。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ResourceLibraryView } from './ResourceLibraryView';
 import { useResourceStore } from '../../stores/resource.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { AgentDefinition, ResourceItem } from '../../ipc/types';
 
 // ---- mock IPC 桩（本壳测试只触达 resource / agent 两个命名空间）----
@@ -39,6 +47,9 @@ beforeEach(() => {
     typeFilter: 'agent', sourceFilter: 'all', query: '',
     activeType: 'agent', mode: 'installed',
   });
+  // activeWorkspaceId 复位为 null——closePresetDialog 三重刷新按 null 走分支，
+  // 不发 agent.listMembers，测试避免悬空 mock 引用。
+  useWorkspaceStore.setState({ activeWorkspaceId: null });
 });
 
 describe('ResourceLibraryView（三页壳）', () => {
@@ -69,5 +80,11 @@ describe('ResourceLibraryView（三页壳）', () => {
     useResourceStore.setState({ activeType: 'skill', typeFilter: 'skill' });
     render(<ResourceLibraryView />);
     expect(screen.getByText('技能')).toBeTruthy();
+  });
+
+  it('mount 时自动首拉 resource.list（旧视图冷启动语义回归锁）', async () => {
+    expect(resourceList).not.toHaveBeenCalled();
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(resourceList).toHaveBeenCalled());
   });
 });

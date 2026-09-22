@@ -2,8 +2,10 @@
 // 资源库壳（spec §2.1 重设计）：TypeSidebar（Agent/MCP/Skill 二级菜单）+ TypePageShell。
 // 弹窗开关全部集中在本层；agent 专属回调和 preset/edit 逻辑自旧单页 View 平移。
 // Task 10/12/13 接线三个新弹窗；Task 14 起向导替换 CreateAgentDialog。
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useResourceStore } from '../../stores/resource.store';
+import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { TypeSidebar } from './TypeSidebar';
 import { TypePageShell } from './TypePageShell';
@@ -17,6 +19,9 @@ import type { AgentDefinition, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
   const { activeType, setActiveType, setMode, items, installResource, load } = useResourceStore();
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
+  const loadMembers = useAgentStore((s) => s.loadMembers);
   // 弹窗开关（本层集中）
   const [registerMcpOpen, setRegisterMcpOpen] = useState(false);
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
@@ -27,6 +32,11 @@ export function ResourceLibraryView() {
   const [_skillCreateOpen, setSkillCreateOpen] = useState(false);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
+
+  // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   // ── agent 专属回调（自旧 View 平移，逻辑不变）─────────────────────────
   const handleEditAgent = async (itemId: string): Promise<void> => {
@@ -69,6 +79,8 @@ export function ResourceLibraryView() {
   const closePresetDialog = (): void => {
     setPresetTarget(null);
     void load();
+    void loadDefinitions(activeWorkspaceId ?? undefined);
+    if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
   };
 
   // ── 三类页的「＋」菜单（最后一条固定「从网络获取」）───────────────────
