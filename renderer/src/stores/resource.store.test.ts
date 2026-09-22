@@ -38,6 +38,8 @@ beforeEach(() => {
     typeFilter: 'all',
     sourceFilter: 'all',
     query: '',
+    activeType: 'agent',
+    mode: 'installed',
   });
 });
 
@@ -106,5 +108,39 @@ describe('resource.store — install 反馈闭环', () => {
     await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
     useResourceStore.getState().setSourceFilter('custom');
     expect(useResourceStore.getState().installNotice).toBeNull();
+  });
+});
+
+describe('resource.store 资源库重设计（activeType + mode）', () => {
+  beforeEach(() => {
+    resourceList.mockClear();
+    localStorage.clear();
+    useResourceStore.setState({
+      activeType: 'agent',
+      mode: 'installed',
+      typeFilter: 'all',
+      sourceFilter: 'all',
+    });
+  });
+
+  it('setActiveType 驱动 typeFilter 并按 type 过滤拉取', () => {
+    // setActiveType 返回 void（接口契约：Task 7/8 依赖）；load() 内部同步触发 resourceList，
+    // 所以无需 await——resourceList 调用发生在 setActiveType 同步段内。
+    useResourceStore.getState().setActiveType('mcp');
+    expect(useResourceStore.getState().typeFilter).toBe('mcp');
+    expect(useResourceStore.getState().mode).toBe('installed');
+    expect(resourceList).toHaveBeenLastCalledWith({ type: 'mcp' });
+  });
+
+  it('setActiveType 持久化到 localStorage', () => {
+    useResourceStore.getState().setActiveType('skill');
+    expect(localStorage.getItem('momo.resourceLibrary.activeType')).toBe('skill');
+  });
+
+  it('setMode 切换 registry 模式且不动列表数据', () => {
+    useResourceStore.setState({ items: [{ id: 'x' } as never] });
+    useResourceStore.getState().setMode('registry');
+    expect(useResourceStore.getState().mode).toBe('registry');
+    expect(useResourceStore.getState().items.length).toBe(1);
   });
 });

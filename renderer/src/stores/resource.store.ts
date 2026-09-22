@@ -19,7 +19,7 @@
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
-import type { ResourceItem, ResourceFilter } from '../ipc/types';
+import type { ResourceItem, ResourceFilter, ResourceType } from '../ipc/types';
 
 interface ResourceStore {
   items: ResourceItem[];
@@ -34,6 +34,11 @@ interface ResourceStore {
   /** 搜索关键词（前端过滤，无 IPC） */
   query: string;
 
+  /** 资源库重设计：当前激活的资源页类型（无 'all'——三页结构） */
+  activeType: ResourceType;
+  /** 页面模式：installed=已安装列表 / registry=网络获取（注册表浏览） */
+  mode: 'installed' | 'registry';
+
   /** 按当前 filter 重新拉取列表 */
   load: () => Promise<void>;
   /** 切换 type tab 并刷新 */
@@ -42,6 +47,10 @@ interface ResourceStore {
   setSourceFilter: (f: ResourceFilter['source'] | 'all') => void;
   /** 设置搜索关键词（不触发 IPC）；同时清掉陈旧的成功提示 */
   setQuery: (q: string) => void;
+  /** 切换资源页：驱动 typeFilter、持久化、立即刷新；并复位到已安装模式 */
+  setActiveType: (t: ResourceType) => void;
+  /** 切换页面模式（registry 数据由 RegistryBrowse 自行经 Provider 拉取，不动 items） */
+  setMode: (m: 'installed' | 'registry') => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
   /** 安装某资源后刷新；返回是否成功（false 时错误在 error 字段）——marketplace agent 安装引导据此触发 */
@@ -56,6 +65,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
+  activeType: 'agent',
+  mode: 'installed',
 
   load: async () => {
     set({ loading: true, error: null });
@@ -84,6 +95,19 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
 
   setQuery: (q) => set({ query: q, installNotice: null }),
 
+  setActiveType: (t) => {
+    // 持久化上次选择（写入失败静默——隐私模式等场景不影响内存状态）
+    try {
+      localStorage.setItem('momo.resourceLibrary.activeType', t);
+    } catch {
+      // 忽略
+    }
+    set({ activeType: t, typeFilter: t, mode: 'installed', installNotice: null });
+    void get().load();
+  },
+
+  setMode: (m) => set({ mode: m, installNotice: null }),
+
   deleteResource: async (id) => {
     await ipc.resource.delete(id);
     await get().load();
@@ -106,3 +130,17 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     }
   },
 }));
+
+// 启动恢复上次激活的资源页类型（失效值回退 'agent'；typeFilter 同步对齐）
+{
+  const persisted = (() => {
+    try {
+      return localStorage.getItem('momo.resourceLibrary.activeType');
+    } catch {
+      return null;
+    }
+  })();
+  const valid: ResourceType =
+    persisted === 'agent' || persisted === 'mcp' || persisted === 'skill' ? persisted : 'agent';
+  useResourceStore.setState({ activeType: valid, typeFilter: valid });
+}
