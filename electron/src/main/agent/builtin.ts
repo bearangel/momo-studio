@@ -91,5 +91,53 @@ export function clearBuiltinSuggestionsForTest(): void {
   builtinSuggestions.clear();
 }
 
+/** 写入单条 suggestion（preset.ts 按需启用时调用；spec 2026-09-22） */
+export function setBuiltinSuggestion(defId: string, suggestion: BuiltinSuggestion): void {
+  builtinSuggestions.set(defId, suggestion);
+}
+
+/**
+ * 按 slug 读取单个内置 agent manifest（preset.ts 启用链路）。
+ * 文件缺失抛错——按需启用是用户显式动作，缺文件必须可见
+ * （区别于 registerBuiltinAgents 整目录扫描的静默跳过）。
+ */
+export function readBuiltinManifestBySlug(slug: string): {
+  def: AgentDefinition;
+  suggestion: BuiltinSuggestion;
+} {
+  const dir = dirOverride ?? resolveBuiltinAgentsDir();
+  const file = path.join(dir, `${slug}.yaml`);
+  if (!fs.existsSync(file)) {
+    throw new Error(`预设 agent 文件不存在: ${file}`);
+  }
+  return parseAgentManifestWithSuggestion(fs.readFileSync(file, 'utf-8'));
+}
+
+/**
+ * 启动轻量加载：解析全部内置 YAML 只填 suggestions Map，不落库（spec §5）。
+ * 保证 agent:getBuiltinSuggestions 开箱有数据（平台预选可用），
+ * DB 维持「按需启用」语义——def 行仅在用户点启用时写入。
+ */
+export function loadBuiltinSuggestionsOnly(): void {
+  builtinSuggestions.clear();
+  const dir = dirOverride ?? resolveBuiltinAgentsDir();
+  if (!fs.existsSync(dir)) {
+    logger.warn('内置 agent 目录不存在，跳过 suggestions 加载', { dir });
+    return;
+  }
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+    try {
+      const yamlContent = fs.readFileSync(path.join(dir, file), 'utf-8');
+      const { def, suggestion } = parseAgentManifestWithSuggestion(yamlContent);
+      builtinSuggestions.set(`builtin-${def.slug}`, suggestion);
+    } catch (err) {
+      logger.error('解析内置 agent 失败（suggestions only）', {
+        file,
+        error: (err as Error).message,
+      });
+    }
+  }
+}
+
 // 向下兼容：listAgentDefinitions 引用保留（虽然本文件未直接使用，旧测试可能调用）
 void listAgentDefinitions;

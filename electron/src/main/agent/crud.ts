@@ -33,7 +33,7 @@ function randomSuffix(): string {
  * 读侧 parseThinkingConfig 只会静默治愈为 null（UI 显示「跟随」，坏值被无声
  * 吃掉），与 setProviderModelThinking 的源头拒绝语义对齐。
  */
-function assertThinkingConfigShape(config: ThinkingConfig): void {
+export function assertThinkingConfigShape(config: ThinkingConfig): void {
   if (parseThinkingConfig(config) === null) {
     throw new Error(
       `thinkingJson 形状非法（须为 { mode: 'auto' | 'off' | 'on', effort: string | null }）: ${JSON.stringify(config)}`,
