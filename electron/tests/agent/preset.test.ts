@@ -143,6 +143,39 @@ describe('enablePresetDef — def 层', () => {
     ).toThrow(/modelName/);
   });
 
+  // N2 终审修复回归锁：catalog 文件名与 YAML metadata.slug 漂移（如文件 requirement-analyst.yaml
+  // 但 metadata.slug: other-name）必须被立刻拒绝——否则 def 会以 'builtin-other-name' 落库，
+  // 而调用方拿到的 def.id 与基于请求 slug 计算的 'builtin-requirement-analyst' 不一致，
+  // 启用态永远无法被重复启用的同请求幂等命中（死循环）。
+  it('YAML metadata.slug 与请求不符 → 拒绝（catalog slug 漂移防御）', () => {
+    const agentDir = path.join(tmpRoot, 'agents');
+    fs.writeFileSync(
+      path.join(agentDir, 'requirement-analyst.yaml'),
+      `
+apiVersion: v1
+kind: AgentDefinition
+metadata:
+  name: 别名
+  slug: other-name
+  version: 1.0.0
+  description: ''
+spec:
+  type: standalone
+  runtime: declarative
+  declarative:
+    systemPrompt: "漂移的 systemPrompt"
+    model:
+      provider: openai
+      model: m
+  defaultTools: []
+`,
+      'utf-8',
+    );
+    expect(() =>
+      enablePresetDef({ slug: 'requirement-analyst', modelProviderId: 'prov-1', modelName: 'm' }),
+    ).toThrow(/slug 与请求不符/);
+  });
+
   // 故意注入运行时坏形状——thinkingJson 形状非法是 spec 终审 I-2 锁的源头拒绝语义。
   // 编译期 ThinkingConfig 类型已限定 mode 枚举；此处 `as never` 是为了让运行时校验真
   // 正触发（typecheck 关闭，运行时形状是实际被测面）。回归锁——若有人改成「静默吞坏值」

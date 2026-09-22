@@ -136,20 +136,29 @@ export function registerAgentHandlers(): void {
       const workspace = getWorkspace(input.joinWorkspaceId);
       if (!workspace) throw new Error(`未找到 workspace: ${input.joinWorkspaceId}`);
       const providerId = outcome.def.modelProviderId;
-      if (providerId) {
-        const apiKey = await resolveApiKey(outcome.member.instanceId, providerId);
-        await startAgentRuntime(
-          await buildSpawnOpts({
-            instanceId: outcome.member.instanceId,
-            agentUserId: outcome.member.agentUserId,
-            workspaceId: input.joinWorkspaceId,
-            workspaceDir: workspace.directoryPath,
-            def: outcome.def,
-            llmApiKey: apiKey,
-          }),
-        );
+      // 硬守卫：enablePresetDef 已校验 providerId 非空且供应商存在（throw 路径），
+      // 此处若未配置 modelProviderId 即为契约漂移，禁止静默吞状态让用户拿到一个
+      // 看似启用但成员永远无法启动的僵尸成员。
+      if (!providerId) {
+        throw new Error(`agent 定义「${outcome.def.name}」未配置 modelProviderId，请先到 Agent 库配置`);
       }
+      const apiKey = await resolveApiKey(outcome.member.instanceId, providerId);
+      await startAgentRuntime(
+        await buildSpawnOpts({
+          instanceId: outcome.member.instanceId,
+          agentUserId: outcome.member.agentUserId,
+          workspaceId: input.joinWorkspaceId,
+          workspaceDir: workspace.directoryPath,
+          def: outcome.def,
+          llmApiKey: apiKey,
+        }),
+      );
     }
+    logger.info('预设 agent 已启用', {
+      slug: input.slug,
+      joinedNow: outcome.joinedNow,
+      instanceId: outcome.member?.instanceId,
+    });
     return { def: outcome.def, member: outcome.member };
   });
 

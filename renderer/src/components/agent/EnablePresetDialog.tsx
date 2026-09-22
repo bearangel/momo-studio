@@ -45,6 +45,7 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
   const members = useAgentStore((s) => s.members);
   const loadMembers = useAgentStore((s) => s.loadMembers);
   const builtinSuggestions = useAgentStore((s) => s.builtinSuggestions);
+  const loadBuiltinSuggestions = useAgentStore((s) => s.loadBuiltinSuggestions);
   const stopMember = useAgentStore((s) => s.stopMember);
   const startMember = useAgentStore((s) => s.startMember);
 
@@ -61,7 +62,8 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
 
   useEffect(() => {
     void loadProviders();
-  }, [loadProviders]);
+    void loadBuiltinSuggestions();
+  }, [loadProviders, loadBuiltinSuggestions]);
 
   // 编辑模式：拉当前 ws 成员（保存后判定 pendingRestart 用）
   useEffect(() => {

@@ -16,6 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { EnablePresetDialog } from './EnablePresetDialog';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useProviderStore } from '../../stores/provider.store';
+import { useAgentStore } from '../../stores/agent.store';
 import type { AgentDefinition } from '../../ipc/types';
 
 const getGlobal = vi.fn();
@@ -25,6 +26,7 @@ const enablePreset = vi.fn();
 const updateDefinition = vi.fn();
 const agentList = vi.fn();
 const listMembers = vi.fn();
+const getBuiltinSuggestions = vi.fn();
 
 const DEF: AgentDefinition = {
   id: 'builtin-coder', name: '程序员', slug: 'coder', version: '1.0.0',
@@ -54,10 +56,11 @@ beforeEach(() => {
   ]);
   agentList.mockResolvedValue([]);
   listMembers.mockResolvedValue([]);
+  getBuiltinSuggestions.mockResolvedValue({});
   (globalThis as unknown as { window: { api: unknown } }).window.api = {
     settings: { getGlobal },
     provider: { list: providerList, listModels },
-    agent: { enablePreset, updateDefinition, list: agentList, listMembers },
+    agent: { enablePreset, updateDefinition, list: agentList, listMembers, getBuiltinSuggestions },
   };
   useProviderStore.setState({
     providers: [
@@ -73,6 +76,7 @@ beforeEach(() => {
     clear: vi.fn(),
   });
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null });
+  useAgentStore.setState({ builtinSuggestions: {} });
 });
 
 describe('EnablePresetDialog — 启用模式', () => {
@@ -151,5 +155,20 @@ describe('EnablePresetDialog — 默认模型预填', () => {
     render(<EnablePresetDialog slug="coder" name="程序员" onClose={() => {}} />);
     await waitFor(() => expect(screen.getAllByRole('combobox')[0]).toHaveValue('p1'));
     await waitFor(() => expect(screen.getAllByRole('combobox')[1]).toHaveValue('m-1'));
+  });
+});
+
+describe('EnablePresetDialog — suggestedPlatform 预选', () => {
+  // N1 终审修复回归锁：loadBuiltinSuggestions 必须挂载即调，否则 builtinSuggestions 恒为 {}
+  // → suggestedPlatform 平台预选永不命中。这是死链接线，唯一证据是组件主动调用。
+  it('builtinSuggestions 含 suggestedPlatform + 无 defaultChatModel → 供应商预选 p2（anthropic 匹配）', async () => {
+    // 组件挂载后 loadBuiltinSuggestions 会主动拉一次，覆盖 setState 注入
+    getBuiltinSuggestions.mockResolvedValue({
+      'builtin-coder': { suggestedPlatform: 'anthropic' },
+    });
+    render(<EnablePresetDialog slug="coder" name="程序员" onClose={() => {}} />);
+    // 等待 IPC 完成（effect → loadBuiltinSuggestions → setState → 预填② effect）
+    await waitFor(() => expect(getBuiltinSuggestions).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByRole('combobox')[0]).toHaveValue('p2'));
   });
 });

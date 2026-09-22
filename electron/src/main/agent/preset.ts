@@ -69,6 +69,12 @@ export function enablePresetDef(input: EnablePresetDefInput): AgentDefinition {
   if (input.thinkingJson != null) assertThinkingConfigShape(input.thinkingJson);
 
   const { def: parsed, suggestion } = readBuiltinManifestBySlug(input.slug);
+  // catalog 文件名与 YAML metadata.slug 漂移防御：解析后强制对齐，理论不可达
+  // （catalog 索引按 slug 检索），但留契约守卫避免静默死循环——若未来允许
+  // catalog 按路径直接载入而非 slug 索引，此处即可挡住错误启用。
+  if (parsed.slug !== input.slug) {
+    throw new Error(`预设 manifest slug 与请求不符: ${input.slug} vs ${parsed.slug}`);
+  }
   const def: AgentDefinition = {
     ...parsed,
     id: `builtin-${parsed.slug}`,
