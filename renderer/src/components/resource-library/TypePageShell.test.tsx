@@ -76,4 +76,22 @@ describe('TypePageShell', () => {
     );
     expect(screen.getByText('来源：内置市场')).toBeTruthy();
   });
+
+  // ── 终审 Important-1 回归锁：registry 模式安装反馈 ─────────────────────
+  it('registry 模式下安装成功横幅可见（不再被 mode 门控）', () => {
+    useResourceStore.setState({ mode: 'registry', installNotice: '已导入至「我的上传」' });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByTestId('install-notice')).toBeTruthy();
+    expect(screen.getByText('已导入至「我的上传」')).toBeTruthy();
+  });
+
+  it('registry 模式下 store 错误行可见（安装失败反馈）', () => {
+    useResourceStore.setState({ mode: 'registry', error: '导入失败：boom' });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByText('加载失败：导入失败：boom')).toBeTruthy();
+  });
 });

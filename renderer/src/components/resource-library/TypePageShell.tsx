@@ -109,8 +109,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
       </div>
 
-      {/* 一次性成功横幅（沿用原 View） */}
-      {mode === 'installed' && installNotice && (
+      {/* 一次性成功横幅（双模式渲染——registry 安装成功同样可见，终审 Important-1） */}
+      {installNotice && (
         <div data-testid="install-notice" className="mx-4 mt-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm inline-flex items-center gap-1.5 self-start">
           {installNotice}
         </div>
@@ -119,10 +119,11 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
       {/* 主区 */}
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* store 错误行（双模式渲染——registry 安装失败同样可见；RegistryBrowse 的
+              Provider 拉取错误仍由其内部分支自渲染，终审 Important-1） */}
+          {error && <div className="text-center text-status-error text-sm py-2">加载失败：{error}</div>}
           {mode === 'registry' ? (
             <RegistryBrowse type={type} onInstall={onInstall} />
-          ) : error ? (
-            <div className="text-center text-status-error text-sm py-8">加载失败：{error}</div>
           ) : loading && items.length === 0 ? (
             <div className="text-center text-tertiary text-sm py-8">加载中…</div>
           ) : filteredItems.length === 0 ? (

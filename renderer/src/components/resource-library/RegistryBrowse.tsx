@@ -1,5 +1,6 @@
 // renderer/src/components/resource-library/RegistryBrowse.tsx
 // 网络获取模式（spec §4.4）：RegistryProvider 拉取 + 前端搜索/分类 chips + 行列表。
+// 行的已安装态从 resource store 实时派生（安装成功刷新 store 即翻转，非挂载时快照）。
 // v1 Provider = 内置市场；未来多 Provider 时顶部说明位变选择器。
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
@@ -7,6 +8,7 @@ import type { ResourceType } from '../../ipc/types';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
 import { ResourceRow } from './ResourceRow';
+import { useResourceStore } from '../../stores/resource.store';
 import { marketplaceCatalogProvider } from '../../services/registry/marketplace-catalog-provider';
 import type { RegistryEntry } from '../../services/registry/types';
 
@@ -45,6 +47,10 @@ export function RegistryBrowse({ type, onInstall }: RegistryBrowseProps) {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [type, attempt]);
+
+  // 已安装态实时派生：安装成功 → store.load() 刷新 items → 行即刻翻转「已安装」
+  const installedItems = useResourceStore((s) => s.items);
+  const installedIds = useMemo(() => new Set(installedItems.map((i) => i.id)), [installedItems]);
 
   const tags = useMemo(() => topTags(entries), [entries]);
   const q = query.trim().toLowerCase();
@@ -103,7 +109,13 @@ export function RegistryBrowse({ type, onInstall }: RegistryBrowseProps) {
           <EmptyState icon={RefreshCw} title="目录中没有匹配项" description="试试清除搜索或切换分类" />
         ) : (
           visible.map((e) => (
-            <ResourceRow key={e.id} item={e.item} selected={false} onSelect={() => undefined} onInstall={onInstall} />
+            <ResourceRow
+              key={e.id}
+              item={{ ...e.item, installed: installedIds.has(e.id) }}
+              selected={false}
+              onSelect={() => undefined}
+              onInstall={onInstall}
+            />
           ))
         )}
       </div>

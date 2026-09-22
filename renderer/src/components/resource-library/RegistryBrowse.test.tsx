@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RegistryBrowse } from './RegistryBrowse';
+import { useResourceStore } from '../../stores/resource.store';
 import type { ResourceItem } from '../../ipc/types';
 
 const listMock = vi.fn();
@@ -38,6 +39,8 @@ describe('RegistryBrowse', () => {
     listMock.mockReset();
     listMock.mockResolvedValue([] as ResourceItem[]);
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    // 组件订阅 store.items 派生已安装态——逐测复位防跨用例泄漏
+    useResourceStore.setState({ items: [], loading: false, error: null, installNotice: null });
   });
 
   it('挂载即拉取该类型 marketplace 条目并渲染行与来源标注', async () => {
@@ -68,5 +71,16 @@ describe('RegistryBrowse', () => {
     listMock.mockResolvedValue([]);
     render(<RegistryBrowse type="mcp" onInstall={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('目录中没有匹配项')).toBeTruthy());
+  });
+
+  it('store 出现该条目后行翻转「已安装」（终审 Important-1 回归锁）', async () => {
+    listMock.mockResolvedValue([mkItem({})]);
+    render(<RegistryBrowse type="mcp" onInstall={vi.fn()} />);
+    await waitFor(() => screen.getByText('X服务'));
+    expect(screen.getByRole('button', { name: '安装' })).toBeTruthy();
+    // 安装成功 → store.items 刷新出该条目 → 行实时翻转（非挂载时快照）
+    useResourceStore.setState({ items: [mkItem({ id: 'marketplace-mcp-x', installed: true })] });
+    await waitFor(() => expect(screen.getByText('已安装')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: '安装' })).toBeNull();
   });
 });
