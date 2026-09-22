@@ -142,6 +142,22 @@ describe('enablePresetDef — def 层', () => {
       enablePresetDef({ slug: 'requirement-analyst', modelProviderId: 'prov-1', modelName: '' }),
     ).toThrow(/modelName/);
   });
+
+  // 故意注入运行时坏形状——thinkingJson 形状非法是 spec 终审 I-2 锁的源头拒绝语义。
+  // 编译期 ThinkingConfig 类型已限定 mode 枚举；此处 `as never` 是为了让运行时校验真
+  // 正触发（typecheck 关闭，运行时形状是实际被测面）。回归锁——若有人改成「静默吞坏值」
+  // 让它落库，本用例立刻红。
+  it('thinkingJson 形状非法源头拒绝（assertThinkingConfigShape 抛错文案）', () => {
+    expect(() =>
+      enablePresetDef({
+        slug: 'requirement-analyst',
+        modelProviderId: 'prov-1',
+        modelName: 'm',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        thinkingJson: { mode: 'bogus', effort: null } as never,
+      }),
+    ).toThrow(/thinkingJson 形状非法|形状非法/);
+  });
 });
 
 describe('enablePresetWithJoin — 编排层（DB 断言）', () => {
@@ -194,6 +210,19 @@ describe('enablePresetWithJoin — 编排层（DB 断言）', () => {
     expect(second.joinedNow).toBe(false);
     expect(second.member?.instanceId).toBe(first.member?.instanceId);
     expect(listMembers(ws.id)).toHaveLength(1);
+  });
+
+  // 编排层源头拒绝——joinWorkspaceId 在 DB 不存在时拒绝继续；不让 def 写入后才发现
+  // workspace 不存在导致「半启用态」（def 已落、join 未落，与 enablePresetDef 校验语义对齐）。
+  it('未知 joinWorkspaceId 拒绝', async () => {
+    await expect(
+      enablePresetWithJoin({
+        slug: 'requirement-analyst',
+        modelProviderId: 'prov-1',
+        modelName: 'glm-4.7',
+        joinWorkspaceId: 'no-such-ws',
+      }),
+    ).rejects.toThrow(/未找到 workspace/);
   });
 });
 
