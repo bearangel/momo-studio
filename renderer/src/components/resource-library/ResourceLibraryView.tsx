@@ -17,6 +17,7 @@ import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
 import { McpJsonPasteDialog } from './McpJsonPasteDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
+import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import type { AgentDefinition, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
@@ -28,8 +29,7 @@ export function ResourceLibraryView() {
   const [registerMcpOpen, setRegisterMcpOpen] = useState(false);
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
-  // Task 13/14 接线新弹窗前暂无读取方——值加 '_' 前缀过 no-unused-vars（接线时去前缀）
-  const [_importYamlOpen, setImportYamlOpen] = useState(false);
+  const [importYamlOpen, setImportYamlOpen] = useState(false);
   const [mcpJsonOpen, setMcpJsonOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
@@ -131,6 +131,9 @@ export function ResourceLibraryView() {
       )}
       {skillCreateOpen && (
         <SkillCreateDialog onClose={() => setSkillCreateOpen(false)} onSuccess={() => void load()} />
+      )}
+      {importYamlOpen && (
+        <ImportAgentYamlDialog onClose={() => setImportYamlOpen(false)} onSuccess={() => void load()} />
       )}
       {createAgentOpen && (
         <CreateAgentDialog source="library" onClose={() => { setCreateAgentOpen(false); void load(); }} />
