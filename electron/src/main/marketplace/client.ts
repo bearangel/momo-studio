@@ -105,41 +105,53 @@ function resolveLocalCatalogPath(): string {
 /** catalog 进程内 TTL 缓存时长（I6）：成功结果缓存 5 分钟 */
 export const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** 失败退避窗口时长：失败后窗口内直接本地回退、零网络重试 */
+export const CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
+
 /**
- * catalog 进程内缓存（I6）：URL → { expiresAt, catalog }。
- * 动机：MentionInput 每次挂载 → resource.list → fetchCatalog——无缓存时
- * 离线环境每次都吃满 10s 超时才回退本地，门禁本地预置合并。只缓存远程
- * 成功结果；失败（抛错 / 非 2xx / 校验拒）与本地回退不进缓存——下一调用
- * 仍重试网络，恢复后自动拿到新目录。
+ * catalog 进程内缓存（I6）：URL → { expiresAt, catalog }，仅缓存远程成功结果。
+ * 失败退避负缓存（2026-09-22 方案 A）：URL → 失败退避截止时刻。离线环境下成功
+ * 缓存从未建立，若失败不记忆，resource.list（面板切换 / MentionInput 挂载等高频
+ * 路径）每次都同步重试远程、吃满网络超时才回退本地。窗口内二次调用零网络请求；
+ * 窗口过期后重试远程，网络恢复即可拿到新目录（最长延迟一个退避窗口）。
  */
 const catalogCache = new Map<string, { expiresAt: number; catalog: Catalog }>();
+const catalogFailureBackoff = new Map<string, number>();
 
 /** 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
- *  远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6） */
+ *  远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6），失败进
+ *  CATALOG_FAILURE_BACKOFF_MS 退避负缓存 */
 export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   const url = catalogUrl ?? DEFAULT_CATALOG_URL;
 
   const hit = catalogCache.get(url);
   if (hit && hit.expiresAt > Date.now()) return hit.catalog;
 
-  // 尝试远程（10s 超时，避免 UI 长时间卡住）
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (response.ok) {
-      const raw = (await response.json()) as unknown;
-      // 结构校验失败会 throw → 被 catch 捕获 → 回退本地
-      const catalog = validateCatalog(raw);
-      catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
-      logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
-      return catalog;
+  if ((catalogFailureBackoff.get(url) ?? 0) > Date.now()) {
+    logger.info('远程 catalog 失败退避中，直接使用本地');
+  } else {
+    // 尝试远程（3s 超时，避免 UI 长时间卡住）
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (response.ok) {
+        const raw = (await response.json()) as unknown;
+        // 结构校验失败会 throw → 被 catch 捕获 → 回退本地
+        const catalog = validateCatalog(raw);
+        catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
+        catalogFailureBackoff.delete(url);
+        logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
+        return catalog;
+      }
+      logger.warn('远程 catalog 响应非 2xx，使用本地', { status: response.status });
+      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+    } catch (err) {
+      logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
+      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
     }
-    logger.warn('远程 catalog 响应非 2xx，使用本地', { status: response.status });
-  } catch (err) {
-    logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
   }
 
   // 回退到本地（应用内置文件，同样过一遍校验作为纵深防御；不合法直接抛错）。
-  // 本地回退不写缓存——保持「失败不缓存」语义，网络恢复后的下一调用即重试远程
+  // 本地回退不进成功缓存——保持「失败不缓存」语义，退避窗口过期即重试远程
   const local = validateCatalog(
     JSON.parse(fs.readFileSync(resolveLocalCatalogPath(), 'utf-8')) as unknown,
   );
@@ -150,11 +162,17 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
 /** 测试用：清空 catalog 缓存（隔离用例间缓存副作用） */
 export function __resetCatalogCacheForTest(): void {
   catalogCache.clear();
+  catalogFailureBackoff.clear();
 }
 
 /** 测试用：把缓存条目的过期时刻整体前移 ms（模拟 TTL 过期，不伪造系统时钟） */
 export function __rewindCatalogCacheForTest(ms: number): void {
   for (const entry of catalogCache.values()) entry.expiresAt -= ms;
+}
+
+/** 测试用：把失败退避截止时刻整体前移 ms（模拟退避窗口流逝，不伪造系统时钟） */
+export function __rewindFailureBackoffForTest(ms: number): void {
+  for (const [url, until] of catalogFailureBackoff) catalogFailureBackoff.set(url, until - ms);
 }
 
 /** 搜索 catalog：关键词匹配 name/description/slug/tags，可选按类型过滤 */

@@ -14,7 +14,9 @@ import {
   groupByCategory,
   __resetCatalogCacheForTest,
   __rewindCatalogCacheForTest,
+  __rewindFailureBackoffForTest,
   CATALOG_CACHE_TTL_MS,
+  CATALOG_FAILURE_BACKOFF_MS,
 } from '../../src/main/marketplace/client';
 import type { Catalog } from '../../src/main/marketplace/types';
 
@@ -95,10 +97,11 @@ describe('marketplace/client fetchCatalog', () => {
   });
 });
 
-// === I6 契约锁（终审修复）：fetchCatalog 进程内 TTL 缓存 ===
-// 缺陷：MentionInput 每次挂载 → resource.list → fetchCatalog——无缓存时离线
-// 环境每次都吃满 10s 超时，门禁本地预置合并。契约：成功结果缓存 5 分钟内
-// 二次调用零网络请求；过期后重取；失败（远程非 2xx / 抛错 / 校验拒）不缓存。
+// === I6 契约锁（终审修复）：fetchCatalog 进程内缓存 ===
+// 成功结果缓存 5 分钟；失败（远程非 2xx / 抛错 / 校验拒）进 60s 退避负缓存。
+// 方案 A（2026-09-22）：退避窗口内二次调用零网络请求、直接本地回退——修复
+// 「Agent/MCP/Skill 面板切换每次都吃满网络超时」（离线环境成功缓存从未建立，
+// 每次列表都同步重试远程）。窗口过期后重试远程，网络恢复即可拿到新目录。
 
 describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
   function okRemote(): void {
@@ -126,21 +129,44 @@ describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('失败不缓存：远程抛错 → 本地回退后，下一调用仍重试网络', async () => {
-    fetchSpy.mockRejectedValueOnce(new Error('offline'));
-    await fetchCatalog('https://example.test/catalog.json'); // 本地回退
-    okRemote();
-    const catalog = await fetchCatalog('https://example.test/catalog.json');
-    expect(fetchSpy).toHaveBeenCalledTimes(2); // 第二次真的发了请求
-    expect(catalog.version).toBe('9.9'); // 恢复后拿到远程
+  it('失败进退避：远程抛错 → 窗口内二次调用零网络请求（直接本地）', async () => {
+    fetchSpy.mockRejectedValue(new Error('fetch failed'));
+    await fetchCatalog('https://example.test/catalog.json'); // 失败 → 本地回退 + 进退避
+    const second = await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(second.version).toBe('1.0');
   });
 
-  it('失败不缓存：远程非 2xx → 本地回退不进缓存，下一调用重试', async () => {
-    fetchSpy.mockResolvedValueOnce({ ok: false, status: 503 } as Response);
+  it('失败进退避：远程非 2xx → 同样进入退避窗口', async () => {
+    fetchSpy.mockResolvedValue({ ok: false, status: 503 } as Response);
     await fetchCatalog('https://example.test/catalog.json');
-    okRemote();
     await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it('失败进退避：校验拒（200 但 catalog 非法）→ 同样进入退避窗口', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ version: '9.9', updatedAt: 'x', items: 'nope' }),
+    } as Response);
+    await fetchCatalog('https://example.test/catalog.json');
+    await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it('退避窗口过期后重试远程（网络恢复 → 拿到远程目录）', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('offline'));
+    await fetchCatalog('https://example.test/catalog.json'); // 失败进退避
+    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => fakeCatalog,
+    } as Response);
+    const catalog = await fetchCatalog('https://example.test/catalog.json');
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(catalog.version).toBe('9.9');
   });
 
   it('不同 catalogUrl 的缓存互不干扰（按 URL 键控）', async () => {
