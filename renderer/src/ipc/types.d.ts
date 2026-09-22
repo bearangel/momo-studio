@@ -639,6 +639,13 @@ export interface RegisterMcpInput {
   version?: string;
 }
 
+/** resource:createSkill 入参——表单创建 skill（spec 2026-09-22 资源库重设计） */
+export interface SkillCreateInput {
+  name: string;
+  description: string;
+  body: string;
+}
+
 /**
  * v1.7 资源类型：agent（子 agent 定义）/ mcp（MCP server 包）/ skill（技能包）。
  * 与 electron 端 resource/types.ts 的 ResourceType 对齐。
@@ -1491,6 +1498,8 @@ export interface ApiSurface {
     registerMcp(config: RegisterMcpInput): Promise<ResourceItem>;
     /** P3 Task 7：上传自定义 skill zip，返回 UploadedSkill[]（v1.6.2 起支持批量） */
     uploadSkill(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
+    /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖，返回同 zip 上传形状） */
+    createSkill(input: SkillCreateInput): Promise<UploadedSkill>;
   };
   task: TaskApiSurface;
   /**

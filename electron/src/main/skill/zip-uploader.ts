@@ -98,8 +98,9 @@ function isIgnoredEntry(entryName: string): boolean {
 /**
  * v1.6.2：frontmatter.name → slug（kebab-case）。扁平结构（SKILL.md 在根目录）时使用。
  * 例："My Cool Skill" → "my-cool-skill"。空串则由调用方 fallback 到 zip filename。
+ * v2.11 起导出：form-create.ts 表单创建路径（spec §5.1 唯一新 IPC）复用同一 slug 算法。
  */
-function nameToSlug(name: string): string {
+export function nameToSlug(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')

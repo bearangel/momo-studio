@@ -28,6 +28,7 @@ import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
+import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
 import { deleteDefinition } from '../agent/crud';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import { requestResourceImport } from '../p2p/resource-transfer';
@@ -184,6 +185,15 @@ export function registerResourceHandlers(): void {
       return uploaded;
     },
   );
+
+  // resource:createSkill — 表单创建 skill（spec 2026-09-22 资源库重设计，唯一新通道）。
+  // 写 <skillsDir>/<slug>/SKILL.md + .sha256 标记（listInstalled 自动识别 custom 源）；
+  // slug 冲突覆盖（与 zip 重复上传同语义——UI 提交前自行比对提示）。
+  ipcMain.handle('resource:createSkill', async (_evt, input: SkillCreateInput) => {
+    const uploaded = createSkillFromForm(input);
+    void broadcastLocalResourceCatalog();
+    return uploaded;
+  });
 
   logger.info('Resource IPC handlers 已注册');
 }

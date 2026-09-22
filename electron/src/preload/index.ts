@@ -13,6 +13,7 @@ import type {
   RemoteNodeTasks,
   ResourceFilter,
   ResourceItem,
+  SkillCreateInput,
   TaskRow,
   UploadedSkill,
 } from '../../../renderer/src/ipc/types';
@@ -286,6 +287,8 @@ const api: ApiSurface = {
     // 用标准 Uint8Array view 让 structured clone 正确拷贝，main process 自己转回 Buffer。
     uploadSkill: (buffer: ArrayBuffer, filename: string) =>
       invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
+    /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖） */
+    createSkill: (input: SkillCreateInput) => invoke<UploadedSkill>('resource:createSkill', input),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
