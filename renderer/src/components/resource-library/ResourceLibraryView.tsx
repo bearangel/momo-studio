@@ -1,124 +1,47 @@
 // renderer/src/components/resource-library/ResourceLibraryView.tsx
-//
-// v1.7 Task 9：资源库主视图。布局为「左主网格 + 右详情面板（条件渲染）+ 三类弹窗」。
-//
-// 关键设计：
-//   - 双层 tab：第一行 4 个 type tab（全部/Agent/MCP/Skill），第二行 5 个 source tab
-//     （全部/系统预置/我的上传/网络资源/P2P 共享）。两层 AND：filter = { type?, source? }
-//   - 搜索：前端 in-memory filter（name/description/slug 模糊匹配），无 IPC
-//   - 主网格：filteredItems 渲染为 ResourceCard 列表（grid auto-fill 220px）
-//   - 选中卡片 → 右侧 ResourceDetail 滑出（条件渲染，selectedId 找不到则收起）
-//   - 三类弹窗（RegisterMcpDialog / UploadSkillDialog / CreateAgentDialog）由
-//     AddResourceMenu 触发；前两者 onSuccess → load() 刷新 + 关弹窗
-//   - 导入反馈：store installResource 成功后设置 installNotice（一次性绿色横幅），
-//     store installResource 失败后设置 error（红色横幅覆盖主网格区）。view 端只读渲染。
-//   - 编辑入口：custom agent 资源 → 详情面板「编辑」按钮 → 查 ipc.agent.list
-//     找对应 def → 挂载 DefinitionEditor mode='edit'，onClose 重新 load 刷新
-//   - useEffect 依赖 [load, typeFilter, sourceFilter] —— filter 变化时自动 load；
-//     setTypeFilter/setSourceFilter 也会主动 load（双保险）
-//
-// v2.1 P3：token 化（tab 选中态 accent 形态 / 横幅 status tint）；📚 → Library lucide；
-// 空态接 EmptyState 原子件。
-import { useEffect, useState } from 'react';
-import { Check, Library } from 'lucide-react';
+// 资源库壳（spec §2.1 重设计）：TypeSidebar（Agent/MCP/Skill 二级菜单）+ TypePageShell。
+// 弹窗开关全部集中在本层；agent 专属回调和 preset/edit 逻辑自旧单页 View 平移。
+// Task 10/12/13 接线三个新弹窗；Task 14 起向导替换 CreateAgentDialog。
+import { useState } from 'react';
 import { useResourceStore } from '../../stores/resource.store';
 import { ipc } from '../../ipc/client';
-import { Input } from '../ui/Input';
-import { EmptyState } from '../ui/EmptyState';
-import { cn } from '../../lib/cn';
-import { ResourceCard } from './ResourceCard';
-import { ResourceDetail } from './ResourceDetail';
-import { AddResourceMenu } from './AddResourceMenu';
+import { TypeSidebar } from './TypeSidebar';
+import { TypePageShell } from './TypePageShell';
+import type { AddMenuItem } from './AddMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
-import { useAgentStore } from '../../stores/agent.store';
-import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { AgentDefinition, ResourceItem, ResourceFilter } from '../../ipc/types';
-
-/** 第一行：type tab（全部 / Agent / MCP / Skill） */
-const TYPE_TABS: Array<{ key: ResourceFilter['type'] | 'all'; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'agent', label: 'Agent' },
-  { key: 'mcp', label: 'MCP' },
-  { key: 'skill', label: 'Skill' },
-];
-
-/** 第二行：source tab（全部 / 系统预置 / 我的上传 / 网络资源 / P2P 共享——P4 启用） */
-const SOURCE_TABS: Array<{ key: ResourceFilter['source'] | 'all'; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'builtin', label: '系统预置' },
-  { key: 'custom', label: '我的上传' },
-  { key: 'marketplace', label: '网络资源' },
-  { key: 'p2p', label: 'P2P 共享' },
-];
+import type { AgentDefinition, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
-  const {
-    items,
-    loading,
-    error,
-    installNotice,
-    typeFilter,
-    sourceFilter,
-    query,
-    load,
-    setTypeFilter,
-    setSourceFilter,
-    setQuery,
-    deleteResource,
-    installResource,
-  } = useResourceStore();
-
-  // 当前选中的资源 id（null = 详情面板收起）
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // 三类添加资源弹窗开关
+  const { activeType, setActiveType, setMode, items, installResource, load } = useResourceStore();
+  // 弹窗开关（本层集中）
   const [registerMcpOpen, setRegisterMcpOpen] = useState(false);
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
-  // 编辑中的 custom agent 定义（非 null 时挂载 DefinitionEditor）
+  // Task 10/12/13 接线新弹窗前暂无读取方——值加 '_' 前缀过 no-unused-vars（接线时去前缀）
+  const [_importYamlOpen, setImportYamlOpen] = useState(false);
+  const [_mcpJsonOpen, setMcpJsonOpen] = useState(false);
+  const [_skillCreateOpen, setSkillCreateOpen] = useState(false);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
-  // 预设 agent 启用/配置弹窗目标（def 缺省 = 启用模式；已启用/marketplace = 配置模式）
-  const [presetTarget, setPresetTarget] = useState<{
-    slug: string;
-    name: string;
-    def?: AgentDefinition;
-  } | null>(null);
-  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
-  const loadMembers = useAgentStore((s) => s.loadMembers);
+  const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
 
-  // 资源 id → 全局定义查找 → 打开编辑弹窗。custom agent 的资源 slug 口径 = def.id
-  // （UUID，非 def.slug——见 electron/src/main/resource/custom.ts「agent 用 def.id 作为
-  // slug 部分，def.slug 可能重名」；p2p/resource-transfer.ts 同口径反查）
+  // ── agent 专属回调（自旧 View 平移，逻辑不变）─────────────────────────
   const handleEditAgent = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
     try {
       const defs = await ipc.agent.list();
       const def = defs.find((d) => d.source === 'custom' && d.id === item.slug);
-      if (def) {
-        setEditingDef(def);
-      } else {
-        console.warn('未找到资源对应的 agent 定义', { itemId, slug: item.slug });
-      }
+      if (def) setEditingDef(def);
+      else console.warn('未找到资源对应的 agent 定义', { itemId, slug: item.slug });
     } catch (err) {
-      // IPC 失败（如 handler 抛错）：记录并以无操作收场——不挂 unhandled rejection
-      console.error('打开 agent 编辑失败', {
-        itemId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      console.error('打开 agent 编辑失败', { itemId, error: err instanceof Error ? err.message : String(err) });
     }
   };
 
-  // 预设 agent 启用/配置弹窗入口：按 item.slug 打开弹窗；查到 def = 配置模式（def
-  // 传入），查不到 = 启用模式（enablePreset 落库）。slug 口径与 catalog-adapter 的
-  // agentEnabled 计算、marketplace install 的 def 复用保持一致（同 slug 即同一预设）。
-  // builtin 项 def 绑定优先确定性 id `builtin-<slug>`——custom def.slug 可能与预设 slug
-  // 撞名，配置弹窗必须绑到规范 builtin def 防误绑；命中不到再回落 slug 匹配
-  // （marketplace 安装复用 slug 时 def id 非规范形态）。
   const openPresetDialog = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item || item.type !== 'agent') return;
@@ -126,228 +49,77 @@ export function ResourceLibraryView() {
       const defs = await ipc.agent.list();
       const def =
         item.source === 'builtin'
-          ? (defs.find((d) => d.id === `builtin-${item.slug}`) ??
-            defs.find((d) => d.slug === item.slug))
+          ? (defs.find((d) => d.id === `builtin-${item.slug}`) ?? defs.find((d) => d.slug === item.slug))
           : defs.find((d) => d.slug === item.slug);
       setPresetTarget({ slug: item.slug, name: item.name, def });
     } catch (err) {
-      console.error('打开预设 agent 配置失败', {
-        itemId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      console.error('打开预设 agent 配置失败', { itemId, error: err instanceof Error ? err.message : String(err) });
     }
   };
 
-  // 安装包装（spec §7 marketplace 同修）：成功且是 marketplace agent → 弹配置引导
-  // （def 刚落库 modelProviderId=NULL，引导一步配模型；取消亦可稍后从「配置」按钮再配）
   const handleInstall = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     const ok = await installResource(itemId);
+    // marketplace agent 安装成功 → 配置引导（def 刚落库需配模型；取消可稍后从「配置」再配）
     if (ok && item?.type === 'agent' && item.source === 'marketplace') {
       await openPresetDialog(itemId);
     }
   };
 
-  // 弹窗关闭：刷新资源列表（agentEnabled 态）+ agent store（definitions/members）
   const closePresetDialog = (): void => {
     setPresetTarget(null);
     void load();
-    void loadDefinitions(activeWorkspaceId ?? undefined);
-    if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
   };
 
-  // filter 变化时自动 load（mount 时 typeFilter/sourceFilter 均为 'all'，触发首次拉取）
-  useEffect(() => {
-    void load();
-  }, [load, typeFilter, sourceFilter]);
-
-  // 详情面板数据：从 items 里查 selectedId（删除后 items 更新可能让 selected 失效 → 自动收起）
-  const selected: ResourceItem | undefined = selectedId
-    ? items.find((i) => i.id === selectedId)
-    : undefined;
-
-  // 前端搜索过滤（按 name / description / slug 模糊匹配，case-insensitive）
-  const q = query.trim().toLowerCase();
-  const filteredItems = q
-    ? items.filter(
-        (i) =>
-          i.name.toLowerCase().includes(q) ||
-          i.description.toLowerCase().includes(q) ||
-          i.slug.toLowerCase().includes(q),
-      )
-    : items;
+  // ── 三类页的「＋」菜单（最后一条固定「从网络获取」）───────────────────
+  const addItemsFor = (type: ResourceType): AddMenuItem[] => {
+    if (type === 'agent') {
+      return [
+        { key: 'wizard', title: '新建智能体…', hint: '分步向导：基础信息 → 提示词 → 能力 → 模型', onSelect: () => setCreateAgentOpen(true) },
+        { key: 'import-yaml', title: '导入 YAML 文件…', hint: 'manifest 格式，校验后注册为自定义 agent', onSelect: () => setImportYamlOpen(true) },
+        { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
+      ];
+    }
+    if (type === 'mcp') {
+      return [
+        { key: 'form', title: '手动配置…', hint: '名称 / 命令 / 参数 / 环境变量（高级项默认折叠）', onSelect: () => setRegisterMcpOpen(true) },
+        { key: 'json', title: '粘贴 JSON…', hint: 'mcpServers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
+        { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
+      ];
+    }
+    return [
+      { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
+      { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
+      { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
+    ];
+  };
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header：标题 + 添加按钮 + 搜索框 */}
-        <div className="px-4 py-3 border-b border-subtle flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-primary">
-              <Library size={14} strokeWidth={1.75} aria-hidden />
-              资源库
-            </h2>
-            <div className="flex items-center gap-2">
-              <AddResourceMenu
-                onCreateAgent={() => setCreateAgentOpen(true)}
-                onRegisterMcp={() => setRegisterMcpOpen(true)}
-                onUploadSkill={() => setUploadSkillOpen(true)}
-              />
-              <div className="w-64">
-                <Input
-                  placeholder="搜索 agent / mcp / skill…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
+      <TypeSidebar activeType={activeType} onSelect={setActiveType} />
+      <TypePageShell
+        type={activeType}
+        addItems={addItemsFor(activeType)}
+        onInstall={handleInstall}
+        onEditAgent={handleEditAgent}
+        onOpenPreset={openPresetDialog}
+      />
 
-          {/* 双层 tab 行 */}
-          <div className="flex flex-col gap-1">
-            {/* type 行 */}
-            <div className="flex gap-1">
-              <span className="text-xs text-tertiary mr-2 self-center">类型</span>
-              {TYPE_TABS.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={cn(
-                    'text-xs px-2.5 py-1 rounded-md transition-colors',
-                    typeFilter === tab.key
-                      ? 'bg-surface-active text-accent-600 dark:text-accent-300'
-                      : 'text-secondary hover:bg-surface-3',
-                  )}
-                  onClick={() => setTypeFilter(tab.key)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            {/* source 行 */}
-            <div className="flex gap-1">
-              <span className="text-xs text-tertiary mr-2 self-center">来源</span>
-              {SOURCE_TABS.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={cn(
-                    'text-xs px-2.5 py-1 rounded-md transition-colors',
-                    sourceFilter === tab.key
-                      ? 'bg-surface-active text-accent-600 dark:text-accent-300'
-                      : 'text-secondary hover:bg-surface-3',
-                  )}
-                  onClick={() => setSourceFilter(tab.key)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 主网格区 */}
-        <div className="flex-1 overflow-auto p-4">
-          {/* 导入成功一次性横幅——store filter 切换时清掉（保持简单：自然过期，不挂 setTimeout） */}
-          {installNotice && (
-            <div
-              data-testid="install-notice"
-              className="mb-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm inline-flex items-center gap-1.5"
-            >
-              <Check size={12} strokeWidth={1.75} aria-hidden />
-              {installNotice}
-            </div>
-          )}
-          {error ? (
-            <div className="text-center text-status-error text-sm py-8">
-              加载失败：{error}
-            </div>
-          ) : loading && items.length === 0 ? (
-            <div className="text-center text-tertiary text-sm py-8">加载中…</div>
-          ) : filteredItems.length === 0 ? (
-            <EmptyState
-              icon={Library}
-              title="没有匹配的资源"
-              description={
-                sourceFilter === 'custom' ? '点击右上角「添加资源」上传' : undefined
-              }
-            />
-          ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-              {filteredItems.map((item) => (
-                <ResourceCard
-                  key={item.id}
-                  item={item}
-                  selected={selectedId === item.id}
-                  onSelect={setSelectedId}
-                  onInstall={handleInstall}
-                  onDelete={deleteResource}
-                  onEnable={openPresetDialog}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 右侧详情面板（条件渲染） */}
-      {selected && (
-        <ResourceDetail
-          item={selected}
-          onClose={() => setSelectedId(null)}
-          onInstall={handleInstall}
-          onDelete={deleteResource}
-          onEdit={handleEditAgent}
-          onEnable={openPresetDialog}
-          onConfigure={openPresetDialog}
-        />
-      )}
-
-      {/* 三类添加资源弹窗 */}
+      {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
       {registerMcpOpen && (
-        <RegisterMcpDialog
-          onClose={() => setRegisterMcpOpen(false)}
-          onSuccess={() => {
-            setRegisterMcpOpen(false);
-            void load();
-          }}
-        />
+        <RegisterMcpDialog onClose={() => setRegisterMcpOpen(false)} onSuccess={() => { setRegisterMcpOpen(false); void load(); }} />
       )}
       {uploadSkillOpen && (
-        <UploadSkillDialog
-          onClose={() => setUploadSkillOpen(false)}
-          onSuccess={() => {
-            setUploadSkillOpen(false);
-            void load();
-          }}
-        />
+        <UploadSkillDialog onClose={() => setUploadSkillOpen(false)} onSuccess={() => void load()} />
       )}
       {createAgentOpen && (
-        <CreateAgentDialog
-          source="library"
-          onClose={() => {
-            setCreateAgentOpen(false);
-            void load();
-          }}
-        />
+        <CreateAgentDialog source="library" onClose={() => { setCreateAgentOpen(false); void load(); }} />
       )}
       {editingDef && (
-        <DefinitionEditor
-          mode="edit"
-          def={editingDef}
-          onClose={() => {
-            setEditingDef(null);
-            void load();
-          }}
-        />
+        <DefinitionEditor mode="edit" def={editingDef} onClose={() => { setEditingDef(null); void load(); }} />
       )}
       {presetTarget && (
-        <EnablePresetDialog
-          slug={presetTarget.slug}
-          name={presetTarget.name}
-          def={presetTarget.def}
-          onClose={closePresetDialog}
-        />
+        <EnablePresetDialog slug={presetTarget.slug} name={presetTarget.name} def={presetTarget.def} onClose={closePresetDialog} />
       )}
     </div>
   );
