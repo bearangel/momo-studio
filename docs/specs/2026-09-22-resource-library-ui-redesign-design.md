@@ -44,7 +44,8 @@
 | `resource:registerMcp` 已存在（`RegisterMcpInput`，id/version 主进程补全，name 冲突 INSERT OR REPLACE） | `renderer/src/ipc/types.d.ts:633` | JSON 批量导入 = renderer 循环现有通道；**覆盖前 UI 必须显式确认** |
 | `resource:uploadSkill` 返回 `UploadedSkill[]`，zip 落盘后经 `SkillRegistry.register(cachePath)` | `skill/registry.ts:22` | `resource:createSkill` 复用同一条落盘链路（写 SKILL.md → register） |
 | marketplace catalog 为本地打包 JSON | `resources/marketplace/catalog.json` | RegistryProvider v1 实现直接消费现有 `resource:list` |
-| `agent:createCustom` 现入参 = name/slug/description/systemPrompt/iconEmoji/scope/modelProviderId/modelName/thinkingJson/defaultTools（**不含 mcps/skills**）；模型选择用 `ProviderModelPicker` + `ThinkingOverrideControl` | `renderer/src/components/agent/CreateAgentDialog.tsx:97` | 向导第 3 步的 MCP/Skill 绑定需**可选扩展**入参（§5.1）；模型步复用同两个组件 |
+| `agent.createFromYaml(yaml)` 通道**已存在**（manifest 解析 + 校验 + 落库一体） | `renderer/src/ipc/types.d.ts:1268` | Agent YAML 导入**零新 IPC**，直接复用 |
+| `agent:createCustom` 入参**已含** `defaultMcps` / `defaultSkills`（v1.6 起，主进程 `CreateCustomDefInput` 同构） | `types.d.ts:1284-1286`、`crud.ts:58-76` | 向导第 3 步能力绑定**零 IPC 扩展**，renderer 直接传字段 |
 
 ---
 
@@ -128,7 +129,7 @@ export interface RegistryProvider {
 | 菜单项 | 副文案 | 实现 |
 |---|---|---|
 | 新建智能体… | 分步向导：基础信息 → 提示词 → 能力 → 模型 | `AgentCreateWizard`（新，见下） |
-| 导入 YAML 文件… | frontmatter + prompt，校验后注册为自定义 agent | `ImportAgentYamlDialog`（新）+ `resource:importAgentYaml`（§5） |
+| 导入 YAML 文件… | manifest 格式（apiVersion/kind/metadata/spec），校验后注册为自定义 agent | `ImportAgentYamlDialog`（新）+ 现有 `agent.createFromYaml` 通道（零新 IPC） |
 | 从网络获取… | 浏览注册表（内置市场） | 切 registry 模式 |
 
 **AgentCreateWizard（4 步，Dialog 内左侧步进条）**：
@@ -186,24 +187,9 @@ export interface RegistryProvider {
 
 > 遵循 momo-boundary-rules：新通道两端（`renderer/src/ipc/types.d.ts` 与 electron 侧类型）**同一 commit 对齐**；ID 单点生成沿线透传（安装沿用 resource.id，不重新生成）；跨 workspace 改动双 typecheck。
 
-### 5.1 通道改动（2 个新通道 + 1 个入参可选扩展）
+### 5.1 新增通道（仅 1 个）
 
-**`resource:importAgentYaml`**（新）
-
-```ts
-// renderer/src/ipc/types.d.ts（与 electron 端同 commit 对齐）
-importAgentYaml(content: string, fileName: string): Promise<ImportedAgentSummary>;
-// 返回
-interface ImportedAgentSummary {
-  /** 落库后的 agent def id（UUID，主进程单点生成） */
-  defId: string;
-  name: string;
-  slug: string;
-}
-```
-
-- 主进程：解析 YAML（复用 `manifest-parser` 链路）→ 校验必填字段（缺字段/格式错抛中文错误信息，含字段名）→ 注册 custom agent def（复用现有 agent CRUD 落库路径，source='custom'）；
-- 渲染端 `ImportAgentYamlDialog`：文件选择（accept `.yaml,.yml,.txt`）→ 读文本 → 调通道；失败内联红字不关弹窗。
+**`resource:importAgentYaml` 已取消**——调研核实 `agent.createFromYaml(yaml)` 通道已存在（manifest 解析 + 校验 + 落库），YAML 导入直接复用；向导能力绑定同理复用 `agent.createCustom` 现成的 `defaultMcps` / `defaultSkills` 字段。本节仅新增：
 
 **`resource:createSkill`**
 
@@ -217,20 +203,7 @@ interface SkillCreateInput {
 // 返回复用 UploadedSkill（slug/name/description）——与 zip 上传同形状
 ```
 
-- 主进程：生成 `SKILL.md`（frontmatter + body）→ 写入 skill 缓存目录 → `SkillRegistry.register(cachePath)` → 落 installed 记录（复用 `resource:uploadSkill` 的落库后段，仅省去 zip 解压）；slug 冲突 = 覆盖（与 zip 重复上传同语义，UI 提交前用 `resource:list` 比对提示）。
-
-**`agent:createCustom` 入参可选扩展**：
-
-```ts
-createCustom(input: CreateCustomAgentInput & {
-  /** 向导第 3 步可选绑定；缺省不传 = 行为与现状完全一致 */
-  mcps?: string[];    // 已注册 MCP name 列表
-  skills?: string[];  // 已安装 skill slug 列表
-}): Promise<AgentDefinition>;
-```
-
-- 主进程将引用写入 def 的能力字段（与 manifest / 成员 assignment 同一合并语义，`capability-merger` 消费）；引用不存在时抛中文错误（含名称）；
-- 两端类型同 commit 对齐 + 契约测试锁形状（momo-boundary-rules 第 4 条）。
+- 主进程：生成 `SKILL.md`（frontmatter + body，frontmatter 值经 JSON 风格引号转义防 YAML 注入）→ 写入 `<skillsDir>/<slug>/` + `.sha256` 标记文件（与 zip 上传同布局，`listInstalled` 自动识别为 custom 源）→ 广播资源目录；slug 冲突 = 覆盖（与 zip 重复上传同语义，UI 提交前用 `resource:list` 比对提示）。
 
 ### 5.2 复用通道（零改动）
 
@@ -240,7 +213,9 @@ createCustom(input: CreateCustomAgentInput & {
 | `resource:install` / `resource:delete` | 安装 / 删除（含 p2p 导入语义） |
 | `resource:registerMcp` | MCP 手动表单 + JSON 批量循环 |
 | `resource:uploadSkill` | Skill zip 导入 |
-| `agent.list` / agent 编辑 / 启用 / 配置链路 | 向导提交（`createCustom`，入参扩展见 §5.1）、DefinitionEditor、EnablePresetDialog 等既有消费点 |
+| `agent.createFromYaml` | Agent YAML 导入（解析 + 校验 + 落库一体，校验错误含字段名） |
+| `agent.createCustom` | 向导提交（入参现成含 `defaultMcps` / `defaultSkills` 能力绑定） |
+| `agent.list` / agent 编辑 / 启用 / 配置链路 | DefinitionEditor、EnablePresetDialog 等既有消费点 |
 
 ### 5.3 明确不动
 
@@ -295,7 +270,7 @@ createCustom(input: CreateCustomAgentInput & {
 | 组件 | `TypeSidebar`（三态选中/持久化）；`TypePageShell`（模式切换、来源 chip 联动）；`ResourceRow`（三类尾部槽条件、选中、stopPropagation）；`AddMenu` × 3（菜单项与副文案、点击回调）；`AgentCreateWizard`（分步流转、必填校验、步骤回退、提交字段完整性）；`McpJsonPasteDialog`（两种输入结构、字段校验、覆盖确认、部分失败摘要）；`SkillCreateDialog`（必填、预览拼接、成功保留）；`ImportAgentYamlDialog`（读文件、错误内联） |
 | Provider | `MarketplaceCatalogProvider`（list 映射、query 过滤、错误透传；注入 mock ipc） |
 | store | `resource.store`（typeFilter 驱动、mode 切换、registry 数据段） |
-| IPC 契约 | 两个新通道的入参/出参形状测试 + `createCustom` 扩展字段（mcps/skills 不传 = 现状行为）契约用例（types 断言 + mock handler 行为，双端同 commit） |
+| IPC 契约 | `resource:createSkill` 新通道入参/出参形状测试（electron 侧单测 + renderer types 断言，双端同 commit）；向导 `createCustom` 传 `defaultMcps`/`defaultSkills` 的调用形状用例 |
 | 迁移 | `ResourceLibraryView.test.tsx` 重写（壳 + 侧边菜单 + 页面切换）；`ResourceCard.test.tsx` → `ResourceRow.test.tsx`；`ResourceDetail.test.tsx` 更新三段结构 |
 | 错误路径 | §7 表每行至少一款专项用例 |
 | e2e 预留 | 资源库导航三页切换冒烟 + MCP JSON 导入 happy path（Playwright，实施计划的独立任务） |
@@ -340,9 +315,9 @@ ipc/client.ts                                          // 新通道绑定（如�
 
 **修改（electron）**
 ```
-src/main/resource/*                                    // 两个新 handler（importAgentYaml / createSkill）
-                                                        // + 与 renderer types.d.ts 同 commit 对齐的类型定义
-src/preload/index.ts                                    // 两个新通道桥接
+src/main/skill/form-create.ts                           // 新：createSkillFromForm（SKILL.md 生成 + .sha256 标记）
+src/main/resource/ipc.handlers.ts                       // 新增 resource:createSkill handler
+src/preload/index.ts                                    // createSkill 通道桥接（1 行）
 ```
 
 **移除/取代**
