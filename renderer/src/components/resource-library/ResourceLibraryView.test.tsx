@@ -17,28 +17,51 @@
 //     跨子组件深交互，与本壳渲染测试范畴不成比例；代码修复为权威（见视图 commit）。
 //     详见 /workspace/.superpowers/sdd/task-8-report.md「关注项修复」。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { ResourceLibraryView } from './ResourceLibraryView';
 import { useResourceStore } from '../../stores/resource.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { AgentDefinition, ResourceItem } from '../../ipc/types';
+import type { AgentDefinition, ResourceItem, ResourceType } from '../../ipc/types';
 
-// ---- mock IPC 桩（本壳测试只触达 resource / agent 两个命名空间）----
+// ---- mock IPC 桩（本壳测试触达 resource / agent / provider / settings 命名空间）----
 const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
 const agentList = vi.fn();
+const agentBuiltinSuggestions = vi.fn();
+const providerList = vi.fn();
+const settingsGetGlobal = vi.fn();
 
 const mockApi = {
   resource: { list: resourceList, install: resourceInstall, delete: resourceDelete },
-  agent: { list: agentList },
+  agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
+  provider: { list: providerList },
+  settings: { getGlobal: settingsGetGlobal },
 };
+
+// marketplace 可安装项工厂（安装链路回归锁用）
+function mkInstallable(
+  over: Partial<ResourceItem> & { id: string; type: ResourceType; slug: string; name: string },
+): ResourceItem {
+  return {
+    source: 'marketplace',
+    description: 'd',
+    installed: false,
+    installable: true,
+    removable: false,
+    marketplace: { author: 'a', readme: '', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: [], category: 'c' },
+    ...over,
+  } as ResourceItem;
+}
 
 beforeEach(() => {
   resourceList.mockReset().mockResolvedValue([] as ResourceItem[]);
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
+  agentBuiltinSuggestions.mockReset().mockResolvedValue({});
+  providerList.mockReset().mockResolvedValue([]);
+  settingsGetGlobal.mockReset().mockResolvedValue({});
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
   localStorage.clear();
@@ -86,5 +109,42 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(resourceList).not.toHaveBeenCalled();
     render(<ResourceLibraryView />);
     await waitFor(() => expect(resourceList).toHaveBeenCalled());
+  });
+});
+
+// ── 终审 Important-3：安装链路回归锁（旧 View 测试删除后补）─────────────
+// 链路：ResourceRow 安装按钮 → View.handleInstall → store.installResource（真实实现，
+// 经 mock IPC 边界）→ 成功横幅；marketplace agent 成功 → openPresetDialog 引导门控。
+describe('安装链路回归锁（终审 Important-3）', () => {
+  it('marketplace agent 安装成功 → install 调用后触发配置引导（agent.list）+ 成功横幅', async () => {
+    useResourceStore.setState({
+      items: [mkInstallable({ id: 'marketplace-agent-g', type: 'agent', slug: 'agent-g', name: '市场智能体' })],
+    });
+    render(<ResourceLibraryView />);
+    fireEvent.click(
+      within(screen.getByTestId('resource-row-marketplace-agent-g')).getByRole('button', { name: '安装' }),
+    );
+    await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-agent-g'));
+    // 引导链：install 成功 → openPresetDialog → agent.list（EnablePresetDialog 挂载前置）
+    await waitFor(() => expect(agentList).toHaveBeenCalled());
+    // 成功横幅经真实 store 链路渲染（installNotice → shell 横幅）
+    await waitFor(() => expect(screen.getByTestId('install-notice')).toBeTruthy());
+  });
+
+  it('marketplace MCP 安装成功不触发 agent 引导（门控负例）', async () => {
+    useResourceStore.setState({
+      items: [mkInstallable({ id: 'marketplace-mcp-g', type: 'mcp', slug: 'mcp-g', name: '市场MCP' })],
+    });
+    render(<ResourceLibraryView />);
+    fireEvent.click(
+      within(screen.getByTestId('resource-row-marketplace-mcp-g')).getByRole('button', { name: '安装' }),
+    );
+    await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-mcp-g'));
+    // 横幅出现 = installResource 已 resolve，handleInstall 续体（引导分支）已跑完
+    await waitFor(() => expect(screen.getByTestId('install-notice')).toBeTruthy());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(agentList).not.toHaveBeenCalled();
   });
 });
