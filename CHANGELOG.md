@@ -50,6 +50,15 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### 双轨 Hub MCP 接入（v2.12 账本，spec 2026-09-22 P2）
+资源库 MCP「从网络获取」双轨 provider + 远程 MCP 传输——Smithery（国际）/ 魔搭（降级骨架，P3 复核 API 后接通）。
+- Provider 框架：主进程 `resource/hub/`（60s 失败退避负缓存复用 catalog 模式）+ `resource:registryProviders` / `resource:registryList` IPC；RegistryBrowse 顶栏来源选择器（不可达置灰 + localStorage 记忆；置灰由 registryList degraded 驱动「最新信号胜出」）
+- Smithery：registry list（无 key，q 搜索，首页 30 条）→ install-config → npx 命令注册（command 白名单 + args 滤引号，S1）；`installable = !remote`（hosted 项展示不可装）
+- 远程传输：migration 038（mcp_definitions url/headers_json）+ `McpServerConfig` 二态（stdio | streamable_http）+ `HttpMcpClient`（JSON-RPC over HTTP POST，通知无 id 规范语义，零新依赖）+ 进程池按 transport 分流
+- `ResourceSource` 扩 `smithery` / `modelscope`（两端契约 + 契约锁测试）；hub 安装/卸载链（installed_packages 记账 `${source}:${slug}` 先删后插幂等）
+- MCP JSON 批量导入支持 url 型远程条目（https 强制双层校验 + 远程/本地徽标 + registerMcp 二态透传）
+- catalog 面板切换卡顿修复（失败 60s 退避 + 超时 10s→3s，独立提前合入）
+
 ### Windows 全平台化（v2.10 账本）
 Windows 代码层硬化 + 打包就绪——路径语义 / spawn / 单实例 / NSIS 四层补齐；Linux 容器内 `vi.mock('node:path')` 注入 win32 语义锁住纯路径逻辑，真机验收进行中（平台标「实验性」）。
 - `platform/paths.ts` 统一目录边界判定（win32 大小写/UNC/分隔符归一 + posix 逐字节等价）——六模块七处收敛

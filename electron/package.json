@@ -1,7 +1,7 @@
 {
   "name": "momo-studio-electron",
   "private": true,
-  "version": "2.1.0-alpha.1",
+  "version": "2.1.0-alpha.2",
   "description": "Momo Studio — 个人桌面端多 agent 协作平台",
   "author": "Momo Studio",
   "license": "AGPL-3.0-only",
