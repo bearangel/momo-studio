@@ -1,7 +1,7 @@
 // renderer/src/components/resource-library/ResourceLibraryView.tsx
 // 资源库壳（spec §2.1 重设计）：TypeSidebar（Agent/MCP/Skill 二级菜单）+ TypePageShell。
 // 弹窗开关全部集中在本层；agent 专属回调和 preset/edit 逻辑自旧单页 View 平移。
-// Task 10/12/13 接线三个新弹窗；Task 14 起向导替换 CreateAgentDialog。
+// Task 10/12/13 接线三个新弹窗；Task 14 新建智能体入口已替换为 AgentCreateWizard。
 import { useEffect, useState } from 'react';
 import { useResourceStore } from '../../stores/resource.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -12,7 +12,7 @@ import { TypePageShell } from './TypePageShell';
 import type { AddMenuItem } from './AddMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
-import { CreateAgentDialog } from '../agent/CreateAgentDialog';
+import { AgentCreateWizard } from './wizard/AgentCreateWizard';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
 import { McpJsonPasteDialog } from './McpJsonPasteDialog';
@@ -136,7 +136,7 @@ export function ResourceLibraryView() {
         <ImportAgentYamlDialog onClose={() => setImportYamlOpen(false)} onSuccess={() => void load()} />
       )}
       {createAgentOpen && (
-        <CreateAgentDialog source="library" onClose={() => { setCreateAgentOpen(false); void load(); }} />
+        <AgentCreateWizard onClose={() => { setCreateAgentOpen(false); void load(); }} onSuccess={() => void load()} />
       )}
       {editingDef && (
         <DefinitionEditor mode="edit" def={editingDef} onClose={() => { setEditingDef(null); void load(); }} />
