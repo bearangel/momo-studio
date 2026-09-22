@@ -58,6 +58,18 @@ vi.mock('../../src/main/resource/hub/modelscope', () => ({
   isModelScopeDegraded: vi.fn(() => true),
 }));
 
+// P2 Task 5：hub 安装/卸载模块 mock（真实链路由 tests/resource/hub-install.test.ts
+// 以真实 DB + fetch 桩覆盖；本文件只测 IPC 路由分支）。
+const { hubInstallMocks } = vi.hoisted(() => ({
+  hubInstallMocks: {
+    installSmitheryMcp: vi.fn(),
+    installModelScopeMcp: vi.fn(),
+    uninstallHubMcp: vi.fn(),
+    listHubInstalledResources: vi.fn(() => []),
+  },
+}));
+vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
+
 // mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
 // 以回归保护"误传 ResourceItem.id 给 uninstallPackage"的静默 no-op bug。
 vi.mock('../../src/main/marketplace/client', () => ({
@@ -377,5 +389,75 @@ describe('registerResourceHandlers', () => {
       type: string,
     ) => Promise<unknown>;
     await expect(handler({}, 'mcphub', 'mcp')).rejects.toThrow(/未知 registry provider/);
+  });
+
+  it('resource:install hub 分支路由（P2 Task 5）：未装 smithery 条目 id 反解直装', async () => {
+    // 未安装的 registry 条目不在 library（library 只映射已装行）→ resolve 返回 null
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    hubInstallMocks.installSmitheryMcp.mockResolvedValueOnce(undefined);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    const result = await handler({}, 'smithery-mcp-@owner/weather');
+    // slug 是完整 qualifiedName（含 @ 与 /），id 贪婪反解整体透传
+    expect(hubInstallMocks.installSmitheryMcp).toHaveBeenCalledWith('@owner/weather');
+    expect(result).toEqual({ cachePath: '' });
+  });
+
+  it('resource:install 未装 modelscope 条目：无 url 可解析 → 抛错（骨架期无网络条目）', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'modelscope-mcp-ms-weather')).rejects.toThrow(/魔搭条目缺少端点 url/);
+    expect(hubInstallMocks.installModelScopeMcp).not.toHaveBeenCalled();
+  });
+
+  it('resource:install 已解析 modelscope 条目：downloadUrl 装配 → installModelScopeMcp(slug, url, name)', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'modelscope-mcp-ms-weather',
+      type: 'mcp',
+      source: 'modelscope',
+      slug: 'ms-weather',
+      name: '魔搭天气',
+      installable: true,
+      removable: false,
+      marketplace: {
+        author: 'modelscope',
+        readme: 'r',
+        downloadUrl: 'https://api.modelscope.ai/mcp/weather',
+        checksum: '',
+        verificationStatus: 'unverified',
+        tags: [],
+        category: 'modelscope',
+      },
+    });
+    hubInstallMocks.installModelScopeMcp.mockResolvedValueOnce(undefined);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    const result = await handler({}, 'modelscope-mcp-ms-weather');
+    expect(hubInstallMocks.installModelScopeMcp).toHaveBeenCalledWith(
+      'ms-weather',
+      'https://api.modelscope.ai/mcp/weather',
+      '魔搭天气',
+    );
+    expect(result).toEqual({ cachePath: '' });
+  });
+
+  it('resource:delete smithery/modelscope 条目路由到 uninstallHubMcp（switch 前提前 return）', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'smithery-mcp-@owner/weather',
+      type: 'mcp',
+      source: 'smithery',
+      slug: '@owner/weather',
+      removable: true,
+      name: 'weather',
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
+    const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
+    await handler({}, 'smithery-mcp-@owner/weather');
+    expect(hubInstallMocks.uninstallHubMcp).toHaveBeenCalledWith('smithery', '@owner/weather');
   });
 });

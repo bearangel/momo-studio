@@ -67,6 +67,15 @@ const { skillZipMocks } = vi.hoisted(() => ({
 }));
 vi.mock('../../src/main/skill/zip-uploader', () => skillZipMocks);
 
+// mock hub-install（P2 Task 5：hub 已装 MCP 第五源——真实 DB 行为由
+// tests/resource/hub-install.test.ts 以真实库覆盖，本文件只测四源合并逻辑）
+const { hubInstallMocks } = vi.hoisted(() => ({
+  hubInstallMocks: {
+    listHubInstalledResources: vi.fn(),
+  },
+}));
+vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
+
 beforeEach(() => {
   p2pShareMocks.getSharedResources.mockReset();
   p2pShareMocks.getSharedResources.mockReturnValue([]);
@@ -76,6 +85,8 @@ beforeEach(() => {
     { slug: 'remote', name: '重复条目', description: '与 marketplace 同 slug', source: 'builtin', installedAt: null },
     { slug: 'my-upload', name: '我的上传', description: 'custom 源应被忽略', source: 'custom', installedAt: '2026-09-16' },
   ]);
+  hubInstallMocks.listHubInstalledResources.mockReset();
+  hubInstallMocks.listHubInstalledResources.mockReturnValue([]);
 });
 
 describe('listResources', () => {
