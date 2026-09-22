@@ -8,6 +8,7 @@
 //       remote url 非 https → 注册抛错
 //       DB 行 transport 非法值 → 读回白名单外回退 'stdio'
 //       DB 行 headers_json 坏 JSON → 读回 undefined 不抛（+ warn）
+//       DB 行 headers_json 合法 JSON 但非 plain object（数组等）→ 同上
 //
 // DB 隔离沿用仓库既定模式（照抄 mcp-list-registered.test.ts）：
 //   - process.env.AP_USER_DATA_DIR 指向临时目录
@@ -62,8 +63,14 @@ describe('mcp_definitions 二态读写（P2 remote transport）', () => {
       command: 'npx', args: ['-y', 'mcp-server-fs'], source: 'smithery',
     });
     const cfg = getMcpConfig('fs');
-    expect(cfg?.transport ?? 'stdio').toBe('stdio');
+    expect(cfg?.transport).toBe('stdio');
     expect(cfg?.command).toBe('npx');
+    // 锁 stdio 行 NULL 不变量：url / headers_json 仅 remote 形态落值
+    const row = getDb()
+      .prepare('SELECT url, headers_json FROM mcp_definitions WHERE name = ?')
+      .get('fs') as { url: string | null; headers_json: string | null };
+    expect(row.url).toBeNull();
+    expect(row.headers_json).toBeNull();
   });
 
   it('listRegistered 返回二态字段与 source 扩展值', () => {
@@ -119,5 +126,15 @@ describe('mcp_definitions 二态读写（P2 remote transport）', () => {
     expect(cfg?.headers).toBeUndefined();
     expect(() => listRegistered()).not.toThrow();
     expect(listRegistered().find((m) => m.name === 'corrupt')?.headers).toBeUndefined();
+  });
+
+  it('DB 行 headers_json 合法 JSON 但非 plain object → 读回 headers undefined 不抛', () => {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO mcp_definitions (id, name, version, transport, command, url, headers_json)
+       VALUES ('h2', 'array-headers', '1.0.0', 'streamable_http', '', 'https://x.test/mcp', '["a","b"]')`,
+    ).run();
+    expect(getMcpConfig('array-headers')?.headers).toBeUndefined();
+    expect(listRegistered().find((m) => m.name === 'array-headers')?.headers).toBeUndefined();
   });
 });

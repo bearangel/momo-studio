@@ -1,15 +1,18 @@
 // electron/src/main/mcp/host-manager.ts
 //
-// workspace 级 MCP 进程池。包装 T4 的 McpClient，让同一 workspace 内的多个
-// agent 共用同一组 MCP server 子进程，避免重复 spawn 带来的资源浪费与协议握手开销。
+// workspace 级 MCP 进程池。包装 T4 的 McpClient（stdio）与 HttpMcpClient
+// （streamable_http 远程），让同一 workspace 内的多个 agent 共用同一组 MCP
+// 客户端实例，避免重复 spawn / 握手带来的资源浪费与开销。
 //
 // 设计要点：
 //   - 池的 key = `${workspaceId}:${mcpName}`，天然隔离不同 workspace。
-//   - getOrStartMcp 命中已连接的实例则直接复用，否则新起子进程并完成 initialize 握手。
-//   - stopAllMcpForWorkspace 用于 workspace 销毁时统一回收该 workspace 的全部 MCP 进程。
+//   - getOrStartMcp 命中已连接的实例则直接复用；否则按 config.transport 分流
+//     创建客户端（stdio 新起子进程并完成 initialize 握手；remote 发 HTTP 握手）。
+//   - stopAllMcpForWorkspace 用于 workspace 销毁时统一回收该 workspace 的全部 MCP 实例。
 //   - MCP server 定义持久化在 SQLite（mcp_definitions 表），通过 name 唯一索引读取。
 
 import { McpClient } from './client';
+import { HttpMcpClient } from './http-client';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import type { McpServerConfig, McpToolInfo, RegisteredMcp } from './types';
@@ -36,7 +39,8 @@ function normalizeTransport(raw: string): 'stdio' | 'streamable_http' {
   return TRANSPORT_VALUES.has(raw) ? (raw as 'stdio' | 'streamable_http') : 'stdio';
 }
 
-/** headers_json 列解析：NULL/空串 → undefined；坏 JSON → warn + undefined（脏数据不炸读取链路）。
+/** headers_json 列解析：NULL/空串 → undefined；坏 JSON 或合法 JSON 但非
+ *  plain object（数组/字符串/数字等）→ warn + undefined（脏数据不炸读取链路）。
  *  warn 不带原始值——该列可能含 Authorization token，不落日志。 */
 function parseHeadersJson(
   raw: string | null,
@@ -44,7 +48,12 @@ function parseHeadersJson(
 ): Record<string, string> | undefined {
   if (!raw) return undefined;
   try {
-    return JSON.parse(raw) as Record<string, string>;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      logger.warn('mcp_definitions.headers_json 非 JSON object，已忽略该列', { name });
+      return undefined;
+    }
+    return parsed as Record<string, string>;
   } catch {
     logger.warn('mcp_definitions.headers_json 非法 JSON，已忽略该列', { name });
     return undefined;
@@ -69,11 +78,16 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
   };
 }
 
+/** 池内客户端联合类型。两种传输同表面（isConnected / connect / listTools /
+ *  callTool / disconnect），仅 callTool 返回形态不同：stdio 返回 McpToolResult
+ *  （由 callMcpTool 统一提取文本），remote 已返回提取后的 text 字符串。 */
+type PooledMcpClient = McpClient | HttpMcpClient;
+
 // 按 workspace 分组的 MCP 客户端池。
-// 存 Promise<McpClient> 而非 McpClient：并发调用 getOrStartMcp 时共享同一个
+// 存 Promise 而非客户端实例：并发调用 getOrStartMcp 时共享同一个
 // in-flight Promise，避免重复 spawn 同一个 MCP server。
 // key = `${workspaceId}:${mcpName}`
-const pool = new Map<string, Promise<McpClient>>();
+const pool = new Map<string, Promise<PooledMcpClient>>();
 
 function poolKey(workspaceId: string, mcpName: string): string {
   return `${workspaceId}:${mcpName}`;
@@ -81,7 +95,9 @@ function poolKey(workspaceId: string, mcpName: string): string {
 
 /**
  * 启动或复用某 workspace 内指定 MCP server 的客户端实例。
- * 同一 workspace + 同一 mcpName 只持有一个 McpClient（进程复用）。
+ * 同一 workspace + 同一 mcpName 只持有一个客户端（进程/连接复用）。
+ * 按 config.transport 分流：stdio（缺省）→ McpClient 子进程；
+ * streamable_http → HttpMcpClient 远程连接。
  *
  * 并发防护：pool 存的是 in-flight Promise。多个调用同时到达时，第一个写入 Promise
  * 后其余调用 await 同一 Promise，只 spawn 一次。若已存在但已断开（子进程退出）或上次
@@ -90,7 +106,7 @@ function poolKey(workspaceId: string, mcpName: string): string {
 export async function getOrStartMcp(
   workspaceId: string,
   config: McpServerConfig,
-): Promise<McpClient> {
+): Promise<PooledMcpClient> {
   const key = poolKey(workspaceId, config.name);
   const existing = pool.get(key);
   if (existing) {
@@ -102,8 +118,11 @@ export async function getOrStartMcp(
     }
   }
   // in-flight Promise：并发调用共享，只 spawn 一次
-  const promise = (async (): Promise<McpClient> => {
-    const client = new McpClient(config);
+  const promise = (async (): Promise<PooledMcpClient> => {
+    const client =
+      (config.transport ?? 'stdio') === 'streamable_http'
+        ? new HttpMcpClient(config)
+        : new McpClient(config);
     await client.connect();
     logger.info('MCP server 已启动', { workspaceId, name: config.name });
     return client;
@@ -139,7 +158,8 @@ export async function callMcpTool(
   const client = await promise;
   if (!client.isConnected) throw new Error(`MCP ${mcpName} 未启动`);
   const result = await client.callTool(toolName, args);
-  // 提取文本内容
+  // 远程客户端已返回提取后的文本；stdio 客户端返回 McpToolResult，在此统一提取
+  if (typeof result === 'string') return result;
   return result.content
     .filter((c) => c.type === 'text')
     .map((c) => c.text ?? '')
