@@ -12,6 +12,7 @@ import { migration034 } from './034_v2_7_browser_settings';
 import { migration035 } from './035_v2_7_browser_takeover_wait';
 import { migration036 } from './036_v2_11_message_context';
 import { migration037 } from './037_v2_1_office_tools_builtin';
+import { migration038 } from './038_p2_mcp_remote_transport';
 
 export interface Migration {
   version: number;
@@ -922,6 +923,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 037_v2_1_office_tools_builtin.ts（约定同上）。
     version: migration037.version,
     sql: migration037.up,
+  },
+  {
+    // P2：mcp_definitions 加 url/headers_json（远程 MCP，spec 2026-09-22 §4.2）。
+    // SQL 住在独立模块 038_p2_mcp_remote_transport.ts（约定同 032-037）。
+    version: migration038.version,
+    sql: migration038.up,
   },
 ];
 

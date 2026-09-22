@@ -14,7 +14,7 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import type { McpServerConfig, McpToolInfo, RegisteredMcp } from './types';
 
-/** mcp_definitions 表的一行原始结构（getMcpConfig 读取时做类型断言用） */
+/** mcp_definitions 表的一行原始结构（getMcpConfig / listRegistered 读取时做类型断言用） */
 interface McpDefinitionRow {
   id: string;
   name: string;
@@ -23,6 +23,50 @@ interface McpDefinitionRow {
   command: string;
   args: string;
   env: string;
+  url: string | null;
+  headers_json: string | null;
+  source: string;
+  installed_at: string;
+}
+
+/** transport 合法值集合——白名单外的行值（历史脏数据/未知形态）一律回退 'stdio' */
+const TRANSPORT_VALUES: ReadonlySet<string> = new Set(['stdio', 'streamable_http']);
+
+function normalizeTransport(raw: string): 'stdio' | 'streamable_http' {
+  return TRANSPORT_VALUES.has(raw) ? (raw as 'stdio' | 'streamable_http') : 'stdio';
+}
+
+/** headers_json 列解析：NULL/空串 → undefined；坏 JSON → warn + undefined（脏数据不炸读取链路）。
+ *  warn 不带原始值——该列可能含 Authorization token，不落日志。 */
+function parseHeadersJson(
+  raw: string | null,
+  name: string,
+): Record<string, string> | undefined {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    logger.warn('mcp_definitions.headers_json 非法 JSON，已忽略该列', { name });
+    return undefined;
+  }
+}
+
+/** mcp_definitions 行 → RegisteredMcp（getMcpConfig / listRegistered 共用映射，
+ *  两处读回的二态语义保持一致）。 */
+function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
+  return {
+    id: row.id,
+    name: row.name,
+    version: row.version,
+    transport: normalizeTransport(row.transport),
+    command: row.command,
+    args: JSON.parse(row.args) as string[],
+    env: (JSON.parse(row.env) as Record<string, string>) ?? {},
+    url: row.url ?? undefined,
+    headers: parseHeadersJson(row.headers_json, row.name),
+    source: row.source as RegisteredMcp['source'],
+    installedAt: row.installed_at,
+  };
 }
 
 // 按 workspace 分组的 MCP 客户端池。
@@ -151,75 +195,62 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, source, installed_at FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, source, installed_at FROM mcp_definitions WHERE name = ?',
     )
-    .get(mcpName) as (McpDefinitionRow & { source: string; installed_at: string }) | undefined;
+    .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
-  return {
-    id: row.id,
-    name: row.name,
-    version: row.version,
-    command: row.command,
-    args: JSON.parse(row.args) as string[],
-    env: (JSON.parse(row.env) as Record<string, string>) ?? {},
-    source: row.source as 'marketplace' | 'custom',
-    installedAt: row.installed_at,
-  };
+  return rowToRegistered(row);
 }
 
 /**
- * 注册（或覆盖）一条 MCP server 定义到 SQLite。
- * transport 固定为 stdio（当前仅支持 stdio 传输），name 唯一冲突时整体替换。
- * source 缺省按 'marketplace' 写入（与 DB 列默认值一致），installed_at 由 DB 默认值填充。
+ * 注册（或覆盖）一条 MCP server 定义到 SQLite。二态：
+ *   - stdio（缺省）：command/args/env 启动子进程
+ *   - streamable_http：url（强制 https）+ headers 远程连接，command 写空串占位
+ *     （DB 列 NOT NULL，migration 038 不重建表），url/headers_json 仅 remote 形态落值。
+ * name 唯一冲突时整体替换。source 缺省按 'marketplace' 写入（与 DB 列默认值一致），
+ * installed_at 由 DB 默认值填充。
  */
 export function registerMcpDefinition(config: McpServerConfig): void {
+  const transport = config.transport ?? 'stdio';
+  if (transport === 'streamable_http' && !config.url?.startsWith('https://')) {
+    throw new Error(`远程 MCP ${config.name} 注册失败：url 必须是 https 地址`);
+  }
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO mcp_definitions
-       (id, name, version, transport, command, args, env, source)
-     VALUES (?, ?, ?, 'stdio', ?, ?, ?, ?)`,
+       (id, name, version, transport, command, args, env, source, url, headers_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     config.id,
     config.name,
     config.version,
-    config.command,
+    transport,
+    transport === 'streamable_http' && !config.command ? '' : config.command,
     JSON.stringify(config.args),
     JSON.stringify(config.env ?? {}),
     config.source ?? 'marketplace',
+    transport === 'streamable_http' ? (config.url ?? null) : null,
+    transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
   );
-  logger.info('MCP 定义已注册', { name: config.name, source: config.source ?? 'marketplace' });
+  logger.info('MCP 定义已注册', {
+    name: config.name,
+    transport,
+    source: config.source ?? 'marketplace',
+  });
 }
 
 /**
  * v1.6：列出所有已注册 MCP（含 source 区分），按 installed_at 倒序（最新优先）。
- * DB 列 source / installed_at 均为 NOT NULL DEFAULT，故返回项这两个字段必填。
+ * DB 列 source / installed_at / transport 均为 NOT NULL DEFAULT，故返回项这三个字段必填。
  */
 export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, command, args, env, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
     )
-    .all() as Array<{
-    id: string;
-    name: string;
-    version: string;
-    command: string;
-    args: string;
-    env: string;
-    source: string;
-    installed_at: string;
-  }>;
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    version: r.version,
-    command: r.command,
-    args: JSON.parse(r.args) as string[],
-    env: r.env ? (JSON.parse(r.env) as Record<string, string>) : undefined,
-    source: r.source as 'marketplace' | 'custom',
-    installedAt: r.installed_at,
-  }));
+    .all() as McpDefinitionRow[];
+  return rows.map(rowToRegistered);
 }
 
 /**

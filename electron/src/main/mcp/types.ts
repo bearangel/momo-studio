@@ -4,33 +4,39 @@
 // 这些类型描述了 MCP server 配置、工具元信息以及工具调用结果，
 // 被 McpClient 与上层 agent runtime 共享。
 
-/** MCP server 配置（从 agent manifest 的 mcp 段解析而来） */
+/** MCP server 配置（agent manifest mcp 段或资源库安装链解析而来）。
+ *  二态：stdio（command/args/env）或 streamable_http（url/headers）——transport 判别。 */
 export interface McpServerConfig {
   id: string;
   name: string;
   version: string;
+  /** 传输形态；缺省 'stdio'（存量调用方零改动） */
+  transport?: 'stdio' | 'streamable_http';
+  /** stdio 启动命令（remote 行写空串占位——DB 列 NOT NULL） */
   command: string;
   args: string[];
   env?: Record<string, string>;
-  /** v1.6：来源标识。'marketplace' 装的不可删（需走卸载按钮），'custom' 可删。缺省按 'marketplace' 处理 */
-  source?: 'marketplace' | 'custom';
-  /** v1.6：注册时间 ISO 字符串。缺省时由 DB 列默认值 datetime('now') 填充 */
+  /** remote 端点（transport='streamable_http' 必填，强制 https） */
+  url?: string;
+  /** remote 请求头（token 等；不落日志） */
+  headers?: Record<string, string>;
+  /** 来源标识。缺省按 'marketplace' 处理 */
+  source?: 'marketplace' | 'custom' | 'smithery' | 'modelscope';
   installedAt?: string;
 }
 
-/**
- * v1.6：listRegistered 返回的项。与 McpServerConfig 的区别是 source / installedAt 在
- * DB 中都有 NOT NULL DEFAULT，从 DB 读出的行这两个字段必然有值，故用独立类型表达「必填」。
- * renderer 端的 RegisteredMcp 与此结构对齐。
- */
+/** listRegistered 返回项（source/installedAt/transport 必填——DB 行必然有值） */
 export interface RegisteredMcp {
   id: string;
   name: string;
   version: string;
+  transport: 'stdio' | 'streamable_http';
   command: string;
   args: string[];
   env?: Record<string, string>;
-  source: 'marketplace' | 'custom';
+  url?: string;
+  headers?: Record<string, string>;
+  source: 'marketplace' | 'custom' | 'smithery' | 'modelscope';
   installedAt: string;
 }
 
