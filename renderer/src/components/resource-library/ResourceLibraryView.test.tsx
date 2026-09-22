@@ -552,4 +552,105 @@ describe('ResourceLibraryView — 预设 agent 启用入口（spec 2026-09-22）
       expect(screen.getByText(/配置 Agent/)).toBeInTheDocument();
     });
   });
+
+  // Controller rider（Task 5 审查加固）：custom def.slug 可与预设 slug 撞名，
+  // def 绑定必须优先确定性 id `builtin-<slug>`——custom def 刻意排在 defs 首位，
+  // 旧口径（纯 slug 匹配）会误绑撞名 custom def，标题即露出破绽。
+  it('builtin item 撞名时 def 绑定优先规范 builtin def（id=builtin-<slug> 先于 slug 匹配）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        slug: 'coder',
+        name: '程序员',
+        builtin: { agentEnabled: true },
+      }),
+    ]);
+    agentListDefinitions.mockResolvedValue([
+      {
+        id: 'custom-uuid-coder', name: '撞名自定义', slug: 'coder', version: '1.0.0',
+        runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'custom',
+        description: '', iconEmoji: '🛠️', defaultMcps: [], defaultSkills: [],
+        workspaceId: null, modelProviderId: 'p-custom', modelName: 'm-custom',
+      },
+      {
+        id: 'builtin-coder', name: '程序员', slug: 'coder', version: '1.0.0',
+        runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'builtin',
+        description: '', iconEmoji: '💻', defaultMcps: [], defaultSkills: [],
+        workspaceId: null, modelProviderId: 'p-canonical', modelName: 'm-canonical',
+      },
+    ]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('程序员')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('程序员'));
+    await waitFor(() => {
+      expect(screen.getAllByText('程序员').length).toBeGreaterThanOrEqual(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
+
+    // 弹窗预填必须来自规范 builtin def（edit 模式标题 = def.iconEmoji + def.name）
+    await waitFor(() => {
+      expect(screen.getByText(/配置 Agent：💻 程序员/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/撞名自定义/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ResourceLibraryView — marketplace 安装后配置引导（spec §7）', () => {
+  it('marketplace agent 安装成功 → 自动弹「配置 Agent」引导', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'marketplace-agent-coder',
+        source: 'marketplace',
+        slug: 'coder',
+        name: '程序员',
+        description: '写代码',
+        installed: false,
+        installable: true,
+        removable: false,
+      }),
+    ]);
+    resourceInstall.mockResolvedValue(undefined);
+    agentListDefinitions.mockResolvedValue([
+      {
+        id: 'def-mkt-coder', name: '程序员', slug: 'coder', version: '1.0.0',
+        runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'marketplace',
+        description: '', iconEmoji: '💻', defaultMcps: [], defaultSkills: [],
+        workspaceId: null, modelProviderId: null, modelName: 'claude-3-5-sonnet',
+      },
+    ]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('程序员')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    // 安装成功 → 查全局定义（同 slug）→ 弹「配置 Agent」对话框（edit 模式）
+    await waitFor(() => {
+      expect(screen.getByText(/配置 Agent/)).toBeInTheDocument();
+    });
+  });
+
+  it('marketplace agent 安装失败 → 不弹引导，错误横幅照常（ok=false 短路）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'marketplace-agent-gone', source: 'marketplace', slug: 'gone',
+        name: '离线市场项', description: '不可达', installed: false,
+        installable: true, removable: false,
+      }),
+    ]);
+    resourceInstall.mockRejectedValueOnce(new Error('下载超时'));
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('离线市场项')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/导入失败/)).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/配置 Agent/)).not.toBeInTheDocument();
+    });
+  });
 });

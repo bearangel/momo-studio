@@ -57,10 +57,10 @@ describe('resource.store — install 反馈闭环', () => {
   it('installResource 失败 → error 写入「导入失败：...」+ installNotice 清空；不 rethrow', async () => {
     resourceInstall.mockRejectedValueOnce(new Error('对端节点可能已离线'));
 
-    // 不应 unhandled rejection——catch 在 store 内消化错误
+    // 不应 unhandled rejection——catch 在 store 内消化错误，并以 false 返回（引导短路依据）
     await expect(
       useResourceStore.getState().installResource('p2p-agent-x1y2-gone'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     const state = useResourceStore.getState();
     expect(state.error).toMatch(/^导入失败：/);
@@ -81,6 +81,18 @@ describe('resource.store — install 反馈闭环', () => {
     const state = useResourceStore.getState();
     expect(state.error).toBeNull();
     expect(state.installNotice).toBe('已导入至「我的上传」');
+  });
+
+  it('installResource 返回成功布尔值（true=成功；false=失败且 error 落位）——安装引导依据', async () => {
+    resourceInstall.mockResolvedValue(undefined);
+    const ok1 = await useResourceStore.getState().installResource('marketplace-agent-coder');
+    expect(ok1).toBe(true);
+    expect(useResourceStore.getState().error).toBeNull();
+
+    resourceInstall.mockRejectedValueOnce(new Error('网络超时'));
+    const ok2 = await useResourceStore.getState().installResource('marketplace-agent-coder');
+    expect(ok2).toBe(false);
+    expect(useResourceStore.getState().error).toContain('网络超时');
   });
 
   it('setTypeFilter / setSourceFilter 清掉 installNotice', async () => {

@@ -12,7 +12,8 @@
 //     清掉 installNotice（防止下一次 filter 切换仍显示陈旧的成功提示）
 //   - deleteResource / installResource：调对应 IPC 后立即 load 刷新
 //   - installResource：包 try/catch——p2p 导入失败（离线/未找到/超时）必须落到 error 字段，
-//     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅
+//     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
+//     返回 true/false 表示成功/失败（false 时错误已在 error 字段）
 //
 // 注意：搜索（query）刻意不进 IPC filter——v1.7 后端 filter 只支持 type/source 两个维度，
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
@@ -43,8 +44,8 @@ interface ResourceStore {
   setQuery: (q: string) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
-  /** 安装某资源后刷新；失败时把 message 写入 error，rethrow 不再向上（避免 unhandled） */
-  installResource: (id: string) => Promise<void>;
+  /** 安装某资源后刷新；返回是否成功（false 时错误在 error 字段）——marketplace agent 安装引导据此触发 */
+  installResource: (id: string) => Promise<boolean>;
 }
 
 export const useResourceStore = create<ResourceStore>((set, get) => ({
@@ -95,11 +96,13 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
       await get().load();
       // 落地 ok → 设置成功横幅；item 在 load 后会出现在「我的上传」tab
       set({ installNotice: '已导入至「我的上传」' });
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set({ error: `导入失败：${message}`, loading: false, installNotice: null });
       // 不 rethrow——p2p 导入失败（离线/未找到/超时）必须落到 error 字段给 View 渲染，
-      // 避免 unhandled rejection；调用方 await installResource() 拿不到 reject 语义
+      // 避免 unhandled rejection；调用方 await installResource() 拿到 false 语义
+      return false;
     }
   },
 }));

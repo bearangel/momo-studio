@@ -116,18 +116,35 @@ export function ResourceLibraryView() {
   // 预设 agent 打开启用/配置弹窗：按 slug 查全局定义——查到 = 配置模式（def 传入），
   // 查不到 = 启用模式（enablePreset 落库）。slug 口径与 catalog-adapter 的
   // agentEnabled 计算、marketplace install 的 def 复用一致（同 slug 即同一预设）。
+  // def 绑定优先确定性 id：builtin 项先命中规范 def id `builtin-<slug>`——custom
+  // def.slug 可与预设 slug 撞名，配置弹窗必须绑到规范 builtin def；命中不到再回落
+  // slug 匹配（marketplace 安装复用 slug 时 def id 非规范形态）。
   const openPresetDialog = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item || item.type !== 'agent') return;
     try {
       const defs = await ipc.agent.list();
-      const def = defs.find((d) => d.slug === item.slug);
+      const def =
+        item.source === 'builtin'
+          ? (defs.find((d) => d.id === `builtin-${item.slug}`) ??
+            defs.find((d) => d.slug === item.slug))
+          : defs.find((d) => d.slug === item.slug);
       setPresetTarget({ slug: item.slug, name: item.name, def });
     } catch (err) {
       console.error('打开预设 agent 配置失败', {
         itemId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  };
+
+  // 安装包装（spec §7 marketplace 同修）：成功且是 marketplace agent → 弹配置引导
+  // （def 刚落库 modelProviderId=NULL，引导一步配模型；取消亦可稍后从「配置」按钮再配）
+  const handleInstall = async (itemId: string): Promise<void> => {
+    const item = items.find((i) => i.id === itemId);
+    const ok = await installResource(itemId);
+    if (ok && item?.type === 'agent' && item.source === 'marketplace') {
+      await openPresetDialog(itemId);
     }
   };
 
@@ -263,7 +280,7 @@ export function ResourceLibraryView() {
                   item={item}
                   selected={selectedId === item.id}
                   onSelect={setSelectedId}
-                  onInstall={installResource}
+                  onInstall={handleInstall}
                   onDelete={deleteResource}
                 />
               ))}
@@ -277,7 +294,7 @@ export function ResourceLibraryView() {
         <ResourceDetail
           item={selected}
           onClose={() => setSelectedId(null)}
-          onInstall={installResource}
+          onInstall={handleInstall}
           onDelete={deleteResource}
           onEdit={handleEditAgent}
           onEnable={openPresetDialog}
