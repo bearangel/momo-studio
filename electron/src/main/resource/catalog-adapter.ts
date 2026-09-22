@@ -7,8 +7,9 @@
 //   - builtin：installed 恒 true（系统预置随应用分发，不可移除）
 //   - marketplace：installed 由 marketplace/installer.listInstalled() 判断
 //
-// 设计上保持纯函数风格（除 listInstalled 一处查 DB），便于测试与组合。
-// listInstalled 复用现有底层而非重新实现安装状态查询，避免双写数据源。
+// 设计上保持纯函数风格（除 listInstalled / listAgentDefinitions 两处查 DB），
+// 便于测试与组合。listInstalled 复用现有底层而非重新实现安装状态查询，
+// listAgentDefinitions 用于 agentEnabled 计算——均避免双写数据源。
 
 import type { MarketplaceItem } from '../marketplace/types';
 import type { ResourceItem, ResourceSource } from './types';

@@ -58,6 +58,12 @@ describe('fromCatalogItem — builtin agent 启用态', () => {
     expect(r.builtin?.agentEnabled).toBe(true);
   });
 
+  it('同 slug marketplace-source def 存在 → 同样视为已启用（slug 口径不分 source）', () => {
+    saveAgentDefinition(mkDef('coder', 'marketplace'));
+    const r = fromCatalogItem(AGENT_ITEM, 'builtin');
+    expect(r.builtin?.agentEnabled).toBe(true);
+  });
+
   it('非 agent 类型 / marketplace source → 不带 agentEnabled 字段', () => {
     const mcp = fromCatalogItem(MCP_ITEM, 'builtin');
     expect(mcp.builtin?.agentEnabled).toBeUndefined();
