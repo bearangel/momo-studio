@@ -47,4 +47,16 @@ describe('createSkillFromForm', () => {
     const dir = tmpDir();
     expect(() => createSkillFromForm({ name: '***', description: 'd', body: 'b' }, dir)).toThrow('无法从名称生成合法 slug');
   });
+
+  it('覆盖时清空旧目录（zip 来源同名 skill 的附加文件不遗留）', () => {
+    const dir = tmpDir();
+    const skillDir = path.join(dir, 'dup');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'old');
+    fs.writeFileSync(path.join(skillDir, 'scripts-tool.sh'), 'stale asset');
+    createSkillFromForm({ name: 'dup', description: 'd', body: 'new' }, dir);
+    expect(fs.existsSync(path.join(skillDir, 'scripts-tool.sh'))).toBe(false);
+    expect(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8')).toContain('new');
+    expect(fs.existsSync(path.join(skillDir, '.sha256'))).toBe(true);
+  });
 });

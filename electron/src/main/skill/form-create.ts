@@ -24,6 +24,8 @@ export function createSkillFromForm(input: SkillCreateInput, skillsDir: string =
   if (!slug) throw new Error(`无法从名称生成合法 slug：${input.name}`);
 
   const targetDir = path.join(skillsDir, slug);
+  // 覆盖 = 全量替换（与 zip 重复上传同语义）：先清空旧目录，防 zip 来源的同名 skill 遗留附加文件
+  fs.rmSync(targetDir, { recursive: true, force: true });
   // frontmatter 值用 JSON 风格双引号转义——防描述含 ': ' 等 YAML 破坏字符
   const content = `---\nname: ${JSON.stringify(input.name)}\ndescription: ${JSON.stringify(input.description)}\n---\n${input.body}`;
   fs.mkdirSync(targetDir, { recursive: true });
