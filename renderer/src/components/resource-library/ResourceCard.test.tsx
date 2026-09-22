@@ -22,8 +22,14 @@ describe('ResourceCard', () => {
     expect(screen.getByText('系统预置')).toBeInTheDocument();
   });
 
-  it('builtin 项显示"✓ 已安装"无删除按钮', () => {
-    render(<ResourceCard item={baseItem()} selected={false} onSelect={() => {}} />);
+  it('builtin 非 agent 项（mcp/skill）显示"✓ 已安装"无删除按钮（随应用分发语义）', () => {
+    render(
+      <ResourceCard
+        item={baseItem({ id: 'builtin-mcp-foo', type: 'mcp', slug: 'foo' })}
+        selected={false}
+        onSelect={() => {}}
+      />,
+    );
     expect(screen.getByText(/已安装/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/删除/)).not.toBeInTheDocument();
   });
@@ -71,5 +77,36 @@ describe('ResourceCard', () => {
   it('selected=true 时卡片边框高亮', () => {
     const { container } = render(<ResourceCard item={baseItem()} selected={true} onSelect={() => {}} />);
     expect(container.firstChild).toHaveClass('border-accent-500');
+  });
+});
+
+describe('ResourceCard - builtin agent 启用三态（spec 2026-09-22）', () => {
+  it('builtin agent 未启用：显示「启用」按钮触发 onEnable，不显示误导性「已安装」', () => {
+    const onEnable = vi.fn();
+    render(
+      <ResourceCard
+        item={baseItem({ builtin: { agentEnabled: false } })}
+        selected={false}
+        onSelect={() => {}}
+        onEnable={onEnable}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: '启用' });
+    fireEvent.click(btn);
+    expect(onEnable).toHaveBeenCalledWith('builtin-agent-pm');
+    expect(screen.queryByText(/已安装/)).not.toBeInTheDocument();
+  });
+
+  it('builtin agent 已启用：显示「✓ 已启用」标记，无「启用」按钮', () => {
+    render(
+      <ResourceCard
+        item={baseItem({ builtin: { agentEnabled: true } })}
+        selected={false}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByText(/已启用/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '启用' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/已安装/)).not.toBeInTheDocument();
   });
 });

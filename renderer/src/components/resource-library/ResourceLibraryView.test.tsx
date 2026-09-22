@@ -515,6 +515,29 @@ describe('ResourceLibraryView — 预设 agent 启用入口（spec 2026-09-22）
     await waitFor(() => {
       expect(screen.getAllByText('程序员').length).toBeGreaterThanOrEqual(2);
     });
+    // 卡片与详情面板各有一个「启用」按钮；DOM 序网格在前、详情面板在后，取后者
+    const enableBtns = screen.getAllByRole('button', { name: '启用' });
+    fireEvent.click(enableBtns[enableBtns.length - 1]!);
+
+    await waitFor(() => {
+      expect(screen.getByText(/启用预设 Agent/)).toBeInTheDocument();
+    });
+  });
+
+  it('builtin agent 卡片「启用」按钮直达弹窗（不经详情面板，卡片层三态入口）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        slug: 'coder',
+        name: '程序员',
+        builtin: { agentEnabled: false },
+      }),
+    ]);
+    agentListDefinitions.mockResolvedValue([]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('程序员')).toBeInTheDocument());
+
+    // 卡片层「启用」直达弹窗——按钮 stopPropagation，不触发卡片 onSelect
     fireEvent.click(screen.getByRole('button', { name: '启用' }));
 
     await waitFor(() => {

@@ -1,9 +1,12 @@
 // renderer/src/components/resource-library/ResourceCard.tsx
 // 资源库统一卡片——展示 name/description/source 徽章，并按资源状态条件渲染
-// 「安装」/「删除」/「已安装」三态操作区。点击卡片触发 onSelect；按钮内部点击
-// 调用 e.stopPropagation() 防止冒泡到卡片 onSelect。
+// 「安装」/「删除」/「已安装」/「启用」/「已启用」操作区。点击卡片触发 onSelect；
+// 按钮内部点击调用 e.stopPropagation() 防止冒泡到卡片 onSelect。
 // v2.1 P3：token 化；类型兜底 emoji → lucide（Bot/Puzzle/Package，iconEmoji 用户数据照渲染）；
 // 🗑 → Trash2、「✓ 已安装」→ Check lucide。
+// 2026-09-22：builtin agent 三态对齐详情面板（spec §4/§6）——未启用→「启用」按钮
+// （与详情同链路弹 EnablePresetDialog）；已启用→「✓ 已启用」标记；「已安装」静态
+// 标记收窄到 builtin 非 agent 项（mcp/skill 的「随应用分发」语义，不再误导）。
 import type { LucideIcon } from 'lucide-react';
 import { Bot, Check, Package, Puzzle, Trash2 } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
@@ -19,6 +22,8 @@ interface Props {
   onInstall?: (id: string) => void;
   /** 可选删除按钮回调；仅当 item.installed && item.removable 时显示 */
   onDelete?: (id: string) => void;
+  /** builtin agent 未启用时的「启用」回调（弹 EnablePresetDialog，spec 2026-09-22） */
+  onEnable?: (id: string) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -28,7 +33,7 @@ const TYPE_ICON: Record<ResourceItem['type'], LucideIcon> = {
   skill: Package,
 };
 
-export function ResourceCard({ item, selected, onSelect, onInstall, onDelete }: Props) {
+export function ResourceCard({ item, selected, onSelect, onInstall, onDelete, onEnable }: Props) {
   const TypeIcon = TYPE_ICON[item.type];
   return (
     <div
@@ -77,8 +82,25 @@ export function ResourceCard({ item, selected, onSelect, onInstall, onDelete }: 
             删除
           </button>
         )}
-        {/* 已安装静态标记：仅 installed 且不可删除（如 builtin）时显示 */}
-        {item.installed && !item.removable && (
+        {/* 启用按钮：builtin agent 未启用（def 不在库）——与详情面板同链路（spec 2026-09-22） */}
+        {item.type === 'agent' && item.source === 'builtin' && !item.builtin?.agentEnabled && onEnable && (
+          <button
+            type="button"
+            className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"
+            onClick={(e) => { e.stopPropagation(); onEnable(item.id); }}
+          >
+            启用
+          </button>
+        )}
+        {/* 已启用标记：builtin agent def 已在库 */}
+        {item.type === 'agent' && item.source === 'builtin' && item.builtin?.agentEnabled && (
+          <span className="inline-flex items-center gap-1 text-xs text-status-success">
+            <Check size={12} strokeWidth={1.75} aria-hidden />
+            已启用
+          </span>
+        )}
+        {/* 已安装静态标记：仅 installed 且不可删除的 builtin 非 agent 项（随应用分发语义） */}
+        {item.installed && !item.removable && !(item.type === 'agent' && item.source === 'builtin') && (
           <span className="inline-flex items-center gap-1 text-xs text-status-success">
             <Check size={12} strokeWidth={1.75} aria-hidden />
             已安装

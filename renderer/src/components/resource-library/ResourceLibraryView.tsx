@@ -282,6 +282,7 @@ export function ResourceLibraryView() {
                   onSelect={setSelectedId}
                   onInstall={handleInstall}
                   onDelete={deleteResource}
+                  onEnable={openPresetDialog}
                 />
               ))}
             </div>
