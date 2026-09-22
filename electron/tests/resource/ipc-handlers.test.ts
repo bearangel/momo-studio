@@ -6,6 +6,9 @@
 // P3 Task 7 追加：resource:registerMcp（注册 custom mcp + 返回 ResourceItem）与
 // resource:uploadSkill（转调 zip-uploader 返回 UploadedSkill[]）——注册面收敛到
 // resource:* 命名空间（mcp:register / skill:uploadZip 退役）。
+//
+// P2 Task 4 追加：resource:registryProviders / resource:registryList（hub provider
+// 框架 IPC 面）。hub 模块整体 mock——provider 行为由 tests/resource/hub/* 单测覆盖。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -33,6 +36,26 @@ vi.mock('../../src/main/agent/crud', () => ({ deleteDefinition: vi.fn() }));
 vi.mock('../../src/main/marketplace/installer', () => ({
   installPackage: vi.fn(),
   uninstallPackage: vi.fn(),
+}));
+
+// P2 Task 4：hub provider 模块整体 mock（真实行为由 tests/resource/hub/* 覆盖）。
+// vi.mock 工厂会被提升到文件顶部——共享 spy 须经 vi.hoisted 声明，避免 TDZ。
+const { smitheryList, modelscopeList } = vi.hoisted(() => ({
+  smitheryList: vi.fn(),
+  modelscopeList: vi.fn(),
+}));
+vi.mock('../../src/main/resource/hub/smithery', () => ({
+  smitheryProvider: {
+    key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], list: smitheryList,
+  },
+  isSmitheryDegraded: vi.fn(() => false),
+  __resetHubBackoffForTest: vi.fn(),
+}));
+vi.mock('../../src/main/resource/hub/modelscope', () => ({
+  modelscopeProvider: {
+    key: 'modelscope', label: '魔搭社区', region: 'cn', types: ['mcp'], list: modelscopeList,
+  },
+  isModelScopeDegraded: vi.fn(() => true),
 }));
 
 // mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
@@ -259,5 +282,100 @@ describe('registerResourceHandlers', () => {
     expect(buf.equals(Buffer.from(bytes))).toBe(true);
     expect(filename).toBe('demo.zip');
     expect(result).toBe(uploaded);
+  });
+
+  it('注册 registryProviders / registryList 通道', () => {
+    const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+    expect(channels).toEqual(
+      expect.arrayContaining(['resource:registryProviders', 'resource:registryList']),
+    );
+  });
+
+  it('resource:registryProviders 返回 builtin + 两 hub（degraded 取各自封装）', async () => {
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const metaCall = calls.find((c: unknown[]) => c[0] === 'resource:registryProviders');
+    const handler = metaCall![1] as () => Promise<unknown>;
+    const providers = (await handler()) as Array<{
+      key: string; label: string; region: string; types: string[]; degraded: boolean;
+    }>;
+    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery', 'modelscope']);
+    expect(providers[0]).toMatchObject({ region: 'local', degraded: false });
+    expect(providers[0]!.types).toEqual(['agent', 'mcp', 'skill']);
+    expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
+    expect(providers[2]).toMatchObject({ label: '魔搭社区', region: 'cn', degraded: true });
+  });
+
+  it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射', async () => {
+    const items = [
+      {
+        id: 'marketplace-mcp-installed', type: 'mcp', source: 'marketplace', slug: 'installed',
+        name: '已装服务', description: 'd1', installed: true, installable: false,
+        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: ['t'], category: 'c1' },
+      },
+      {
+        id: 'marketplace-mcp-fs', type: 'mcp', source: 'marketplace', slug: 'fs-tool',
+        name: 'File System', description: '文件系统', installed: false, installable: true,
+        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: [], category: 'c2' },
+      },
+      {
+        id: 'marketplace-mcp-other', type: 'mcp', source: 'marketplace', slug: 'other',
+        name: 'Other', description: '无关条目', installed: false, installable: true,
+        marketplace: { author: 'a', readme: 'r', downloadUrl: '', checksum: '', verificationStatus: 'community', tags: [], category: 'c3' },
+      },
+    ];
+    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce(items);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
+    const handler = listCall![1] as (
+      evt: unknown,
+      providerKey: string,
+      type: string,
+      query?: string,
+    ) => Promise<{ entries: Array<{ id: string; tags: string[]; category?: string }>; degraded: boolean }>;
+    const result = await handler({}, 'builtin', 'mcp', 'file');
+    expect(listResources).toHaveBeenCalledWith({ type: 'mcp', source: 'marketplace' });
+    expect(result.degraded).toBe(false);
+    // 「file」只命中 File System（name 模糊）；installed 排序垫底语义由下方无 query 用例覆盖
+    expect(result.entries.map((e) => e.id)).toEqual(['marketplace-mcp-fs']);
+    expect(result.entries[0]!.tags).toEqual([]);
+    expect(result.entries[0]!.category).toBe('c2');
+
+    // 无 query：全量返回且未安装在前、已安装垫底（与 renderer catalog provider 同语义）
+    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce(items);
+    const all = await handler({}, 'builtin', 'mcp');
+    expect(all.entries.map((e) => e.id)).toEqual([
+      'marketplace-mcp-fs', 'marketplace-mcp-other', 'marketplace-mcp-installed',
+    ]);
+  });
+
+  it('resource:registryList hub 分支委托对应 provider.list', async () => {
+    smitheryList.mockResolvedValueOnce({ entries: [], degraded: false });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
+    const handler = listCall![1] as (
+      evt: unknown,
+      providerKey: string,
+      type: string,
+      query?: string,
+    ) => Promise<unknown>;
+    const result = await handler({}, 'smithery', 'mcp', 'weather');
+    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather');
+    expect(result).toEqual({ entries: [], degraded: false });
+
+    await handler({}, 'modelscope', 'mcp');
+    expect(modelscopeList).toHaveBeenCalledWith('mcp', undefined);
+  });
+
+  it('resource:registryList 未知 provider 抛错', async () => {
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
+    const handler = listCall![1] as (
+      evt: unknown,
+      providerKey: string,
+      type: string,
+    ) => Promise<unknown>;
+    await expect(handler({}, 'mcphub', 'mcp')).rejects.toThrow(/未知 registry provider/);
   });
 });

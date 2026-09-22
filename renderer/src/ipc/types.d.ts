@@ -727,6 +727,34 @@ export interface ResourceItem {
 }
 
 /**
+ * 网络获取 provider 元信息（P2 双轨 hub，spec 2026-09-22 §4.1）。
+ * resource:registryProviders 返回——builtin 恒可用（本地 catalog 零网络），
+ * hub 项 degraded 取各自退避状态（UI 置灰信号，不隐藏）。
+ */
+export interface RegistryProviderMeta {
+  key: 'builtin' | 'smithery' | 'modelscope';
+  label: string;
+  region: 'local' | 'intl' | 'cn';
+  types: ResourceType[];
+  degraded: boolean;
+}
+
+/**
+ * resource:registryList 返回条目——与 services/registry 的 RegistryEntry 同构
+ * （经 IPC 序列化；跨进程独立定义，仅结构对齐）。
+ */
+export interface RegistryListEntry {
+  id: string;
+  type: ResourceType;
+  name: string;
+  description: string;
+  version?: string;
+  tags: string[];
+  category?: string;
+  item: ResourceItem;
+}
+
+/**
  * v1.5 TodoTools 任务项。与 electron 端 tools/todo-types.ts 的 TodoItem 对齐。
  * 因 renderer 无法直接 import electron 源码，这里维持一份等价的本地定义。
  */
@@ -1502,6 +1530,14 @@ export interface ApiSurface {
     uploadSkill(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖，返回同 zip 上传形状） */
     createSkill(input: SkillCreateInput): Promise<UploadedSkill>;
+    /** P2 Task 4：网络获取 provider 元信息（builtin 恒可用 + 两 hub 含 degraded 状态） */
+    registryProviders(): Promise<RegistryProviderMeta[]>;
+    /** P2 Task 4：按 provider 拉取注册表条目（builtin 分支本地过滤排序；hub 失败 degraded 不抛错） */
+    registryList(
+      providerKey: RegistryProviderMeta['key'],
+      type: ResourceType,
+      query?: string,
+    ): Promise<{ entries: RegistryListEntry[]; degraded: boolean }>;
   };
   task: TaskApiSurface;
   /**

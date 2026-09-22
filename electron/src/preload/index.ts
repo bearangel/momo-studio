@@ -10,6 +10,8 @@ import type {
   MessageContext,
   MessageEventBatch,
   RegisterMcpInput,
+  RegistryListEntry,
+  RegistryProviderMeta,
   RemoteNodeTasks,
   ResourceFilter,
   ResourceItem,
@@ -289,6 +291,15 @@ const api: ApiSurface = {
       invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖） */
     createSkill: (input: SkillCreateInput) => invoke<UploadedSkill>('resource:createSkill', input),
+    // P2 Task 4：网络注册表（hub provider 框架）——renderer 经此消费，不直连 hub
+    registryProviders: () => invoke<RegistryProviderMeta[]>('resource:registryProviders'),
+    registryList: (providerKey: RegistryProviderMeta['key'], type: RegistryListEntry['type'], query?: string) =>
+      invoke<{ entries: RegistryListEntry[]; degraded: boolean }>(
+        'resource:registryList',
+        providerKey,
+        type,
+        query,
+      ),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),

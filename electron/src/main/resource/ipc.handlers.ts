@@ -1,12 +1,15 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。6 个通道：
+// 资源库 IPC handler 注册。9 个通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
 //   - resource:delete       统一删除/卸载（按 source+type 路由到底层删除函数）
 //   - resource:registerMcp  注册自定义 MCP（P3 收敛自 mcp:register，返回 ResourceItem）
 //   - resource:uploadSkill  上传自定义 skill zip（P3 收敛自 skill:uploadZip）
+//   - resource:createSkill  表单创建 skill（spec 2026-09-22 资源库重设计）
+//   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
+//     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
@@ -23,7 +26,10 @@ import { randomUUID } from 'node:crypto';
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
-import { sourceLabel, type ResourceFilter, type ResourceItem } from './types';
+import { sourceLabel, type ResourceFilter, type ResourceItem, type ResourceType } from './types';
+import { HUB_PROVIDERS } from './hub';
+import { isSmitheryDegraded } from './hub/smithery';
+import { isModelScopeDegraded } from './hub/modelscope';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -194,6 +200,70 @@ export function registerResourceHandlers(): void {
     void broadcastLocalResourceCatalog();
     return uploaded;
   });
+
+  // resource:registryProviders — 网络获取模式 provider 元信息（含可达性，spec §4.1）。
+  // builtin 恒可用（本地 catalog，零网络）；hub degraded 取各自退避状态——不打网络，
+  // 退避窗口内即视为不可达，窗口过期后首次 list 才真探测。
+  ipcMain.handle('resource:registryProviders', async () => {
+    const hubs = HUB_PROVIDERS.map((p) => ({
+      key: p.key,
+      label: p.label,
+      region: p.region,
+      types: [...p.types],
+      degraded: p.key === 'smithery' ? isSmitheryDegraded() : isModelScopeDegraded(),
+    }));
+    return [
+      {
+        key: 'builtin',
+        label: '内置市场',
+        region: 'local' as const,
+        types: ['agent', 'mcp', 'skill'] as const,
+        degraded: false,
+      },
+      ...hubs,
+    ];
+  });
+
+  // resource:registryList — 按 provider 拉取注册表条目（P2 双轨 hub 唯一列表入口）。
+  // builtin 分支走现有 listResources({type, source:'marketplace'}) + 前端 catalog
+  // provider 同款过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）；
+  // hub 分支委托对应 provider（各自带退避负缓存，失败返回 degraded 不抛错）。
+  ipcMain.handle(
+    'resource:registryList',
+    async (_evt, providerKey: string, type: ResourceType, query?: string) => {
+      if (providerKey === 'builtin') {
+        const items = await listResources({ type, source: 'marketplace' });
+        const q = query?.trim().toLowerCase();
+        const matched = q
+          ? items.filter(
+              (i) =>
+                i.name.toLowerCase().includes(q) ||
+                i.description.toLowerCase().includes(q) ||
+                i.slug.toLowerCase().includes(q),
+            )
+          : items;
+        return {
+          entries: matched
+            .slice()
+            .sort((a, b) => Number(a.installed) - Number(b.installed))
+            .map((item) => ({
+              id: item.id,
+              type: item.type,
+              name: item.name,
+              description: item.description,
+              version: item.version,
+              tags: item.marketplace?.tags ?? [],
+              category: item.marketplace?.category,
+              item,
+            })),
+          degraded: false,
+        };
+      }
+      const provider = HUB_PROVIDERS.find((p) => p.key === providerKey);
+      if (!provider) throw new Error(`未知 registry provider: ${providerKey}`);
+      return provider.list(type, query);
+    },
+  );
 
   logger.info('Resource IPC handlers 已注册');
 }
