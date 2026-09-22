@@ -113,12 +113,12 @@ export function ResourceLibraryView() {
     }
   };
 
-  // 预设 agent 打开启用/配置弹窗：按 slug 查全局定义——查到 = 配置模式（def 传入），
-  // 查不到 = 启用模式（enablePreset 落库）。slug 口径与 catalog-adapter 的
-  // agentEnabled 计算、marketplace install 的 def 复用一致（同 slug 即同一预设）。
-  // def 绑定优先确定性 id：builtin 项先命中规范 def id `builtin-<slug>`——custom
-  // def.slug 可与预设 slug 撞名，配置弹窗必须绑到规范 builtin def；命中不到再回落
-  // slug 匹配（marketplace 安装复用 slug 时 def id 非规范形态）。
+  // 预设 agent 启用/配置弹窗入口：按 item.slug 打开弹窗；查到 def = 配置模式（def
+  // 传入），查不到 = 启用模式（enablePreset 落库）。slug 口径与 catalog-adapter 的
+  // agentEnabled 计算、marketplace install 的 def 复用保持一致（同 slug 即同一预设）。
+  // builtin 项 def 绑定优先确定性 id `builtin-<slug>`——custom def.slug 可能与预设 slug
+  // 撞名，配置弹窗必须绑到规范 builtin def 防误绑；命中不到再回落 slug 匹配
+  // （marketplace 安装复用 slug 时 def id 非规范形态）。
   const openPresetDialog = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
     if (!item || item.type !== 'agent') return;

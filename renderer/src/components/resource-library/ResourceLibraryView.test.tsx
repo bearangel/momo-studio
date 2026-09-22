@@ -653,4 +653,57 @@ describe('ResourceLibraryView — marketplace 安装后配置引导（spec §7�
       expect(screen.queryByText(/配置 Agent/)).not.toBeInTheDocument();
     });
   });
+
+  // 引导门控负向：仅 (source=marketplace && type=agent) 同时成立才弹配置 Agent。
+  // marketplace MCP / p2p agent 安装成功都不应触发——前者 type 非 agent，
+  // 后者 source 非 marketplace。两者都只走成功横幅。
+  it('marketplace MCP 安装成功 → 不弹「配置 Agent」（type≠agent 门控短路）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'marketplace-mcp-github', source: 'marketplace', type: 'mcp',
+        slug: 'github', name: 'GitHub MCP', description: '远端 MCP', installed: false,
+        installable: true, removable: false,
+      }),
+    ]);
+    resourceInstall.mockResolvedValue(undefined);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('GitHub MCP')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    // 成功横幅出现
+    await waitFor(() => {
+      expect(screen.getByTestId('install-notice')).toHaveTextContent('已导入至「我的上传」');
+    });
+    // 配置 Agent 引导不应触发——type=mcp 直接绕过 openPresetDialog
+    await waitFor(() => {
+      expect(screen.queryByText(/配置 Agent/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('p2p agent 安装成功 → 不弹「配置 Agent」（source≠marketplace 门控短路）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        id: 'p2p-agent-remote-coder', source: 'p2p', slug: 'remote-coder',
+        name: '远端程序员', description: 'p2p 共享', installed: false,
+        installable: true, removable: false,
+      }),
+    ]);
+    resourceInstall.mockResolvedValue(undefined);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('远端程序员')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    // 成功横幅出现
+    await waitFor(() => {
+      expect(screen.getByTestId('install-notice')).toHaveTextContent('已导入至「我的上传」');
+    });
+    // 配置 Agent 引导不应触发——source=p2p 非 marketplace，不属安装即配范畴
+    await waitFor(() => {
+      expect(screen.queryByText(/配置 Agent/)).not.toBeInTheDocument();
+    });
+  });
 });
