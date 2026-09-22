@@ -658,9 +658,11 @@ export type ResourceType = 'agent' | 'mcp' | 'skill';
  *   - marketplace  网络资源（远程 catalog 下载安装）
  *   - custom       我的上传（用户本地注册 / 上传）
  *   - p2p          P2P 共享（v2 引入）
+ *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
+ *   - modelscope   魔搭社区 hosted MCP（P2 双轨·国内，spec 2026-09-22）
  * 与 electron 端 resource/types.ts 的 ResourceSource 对齐。
  */
-export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'p2p';
+export type ResourceSource = 'builtin' | 'marketplace' | 'custom' | 'p2p' | 'smithery' | 'modelscope';
 
 /**
  * v1.7 资源列表过滤条件，所有字段可选，undefined 表示不过滤该维度。

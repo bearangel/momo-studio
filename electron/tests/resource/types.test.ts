@@ -6,6 +6,7 @@
 //   3. parseResourceId 非法 id 返回 null（空 slug / 未知 source / 未知 type）
 //   4. buildResourceId ↔ parseResourceId 互逆
 //   5. sourceLabel 中文文案
+//   6. P2 双轨 hub 契约锁（smithery / modelscope 两源）
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -53,5 +54,28 @@ describe('resource/types', () => {
     expect(sourceLabel('custom')).toBe('我的上传');
     expect(sourceLabel('marketplace')).toBe('网络资源');
     expect(sourceLabel('p2p')).toBe('P2P 共享');
+  });
+});
+
+// P2 双轨 hub 契约锁：smithery（国际）/ modelscope（国内）两源加入枚举。
+// 后续 7 个 task（adapter / IPC / store / UI）都依赖此契约，形状在此锁死。
+describe('ResourceSource 扩展（P2 双轨 hub）', () => {
+  it('parseResourceId 解析 smithery / modelscope 前缀', () => {
+    expect(parseResourceId('smithery-mcp-@owner/server')).toEqual({
+      source: 'smithery', type: 'mcp', slug: '@owner/server',
+    });
+    expect(parseResourceId('modelscope-mcp-weather')).toEqual({
+      source: 'modelscope', type: 'mcp', slug: 'weather',
+    });
+  });
+  it('buildResourceId 往返一致', () => {
+    expect(buildResourceId('smithery', 'mcp', 'a-b')).toBe('smithery-mcp-a-b');
+  });
+  it('sourceLabel 新增两源有中文标签', () => {
+    expect(sourceLabel('smithery')).toBe('Smithery');
+    expect(sourceLabel('modelscope')).toBe('魔搭社区');
+  });
+  it('未知前缀仍拒绝', () => {
+    expect(parseResourceId('evil-mcp-x')).toBeNull();
   });
 });
