@@ -3,12 +3,17 @@
 //   - builtin/marketplace（含 marketplace 元数据）: README + author + 校验状态 + downloadUrl
 //   - custom MCP: command + args + env(KEY=*** 隐藏值) + installedAt
 //   - custom Skill: frontmatter + installedAt
-//   - custom Agent: systemPromptHash + installedAt
+//   - custom Agent: systemPromptHash + installedAt + 定义预览（YAML-ish，反查 def）
 // 底部按钮区按 installed / installable / removable 三态切换。
-import { describe, it, expect, vi } from 'vitest';
+//
+// v2.1 Task 15：内容区三段式（状态/配置预览/元数据）+ custom agent 定义预览。
+// Mock 方式遵循 TypePageShell.test.tsx 既有形态：不 vi.mock ipc/client 模块，而是在
+// 真实 jsdom window 上装 window.api 属性——ipc.client 是真实 Proxy，组件经
+// ipc.agent.list 反查 custom agent def 走真通道（momo-test-rules：mock 收窄到 IPC 边界）。
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ResourceDetail } from './ResourceDetail';
-import type { ResourceItem } from '../../ipc/types';
+import type { AgentDefinition, ResourceItem } from '../../ipc/types';
 
 /** 测试用基线 item，默认为 builtin agent */
 const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
@@ -22,6 +27,42 @@ const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
   installable: false,
   removable: false,
   ...overrides,
+});
+
+/** 测试用基线 AgentDefinition，默认为 custom 源 */
+const baseDef = (overrides: Partial<AgentDefinition> = {}): AgentDefinition => ({
+  id: 'def-uuid-1',
+  name: 'Researcher',
+  slug: 'researcher',
+  version: '1.0.0',
+  runtime: 'local',
+  systemPrompt: '你是一个严谨的研究员，逐条给出出处。',
+  defaultTools: [{ kind: 'builtin', ref: 'read_file' }],
+  source: 'custom',
+  description: '',
+  iconEmoji: '',
+  workspaceId: null,
+  modelProviderId: 'openai',
+  modelName: 'gpt-4o',
+  defaultMcps: [],
+  defaultSkills: [],
+  ...overrides,
+});
+
+// window.api 属性安装（ipc.client 是真实 Proxy，只装组件触达的 agent 命名空间）
+const agentListMock = vi.fn();
+
+const mockApi = {
+  agent: {
+    list: agentListMock,
+  },
+};
+
+beforeEach(() => {
+  agentListMock.mockReset();
+  // 默认空库：custom agent 反查不到 def → 不渲染定义预览（错误路径基线）
+  agentListMock.mockResolvedValue([] as AgentDefinition[]);
+  (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
 describe('ResourceDetail - 按 source 分支显示', () => {
@@ -272,5 +313,61 @@ describe('ResourceDetail - 预设 agent 启用/配置（spec 2026-09-22）', () 
     });
     render(<ResourceDetail item={item} onClose={() => {}} onConfigure={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ResourceDetail - 三段式结构 + custom agent 定义预览（Task 15）', () => {
+  it('三段式标签齐全：状态 / 配置预览 / 元数据', () => {
+    const item = baseItem({
+      id: 'custom-mcp-github',
+      source: 'custom',
+      type: 'mcp',
+      name: 'GitHub MCP',
+      description: '自定义注册',
+      custom: {
+        installedAt: '2026-08-12T03:00:00.000Z',
+        mcpConfig: { command: 'npx', args: ['-y', 'server-github'], env: {} },
+      },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(screen.getByText('状态')).toBeInTheDocument();
+    expect(screen.getByText('配置预览')).toBeInTheDocument();
+    expect(screen.getByText('元数据')).toBeInTheDocument();
+  });
+
+  it('custom agent 反查 def 并展示 YAML 预览（slug=def.id 口径，非 def.slug）', async () => {
+    // def.slug 是 researcher 而资源 slug 是 def.id（UUID）——口径错成 def.slug 即反查失败
+    agentListMock.mockResolvedValue([baseDef({ id: 'def-uuid-1', slug: 'researcher', name: 'Researcher' })]);
+    const item = baseItem({
+      id: 'custom-agent-researcher',
+      source: 'custom',
+      type: 'agent',
+      name: 'Researcher',
+      description: '自定义 agent',
+      slug: 'def-uuid-1',
+      installed: true,
+      installable: false,
+      removable: true,
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'sha256:abc' },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(await screen.findByText(/systemPrompt:/)).toBeInTheDocument();
+    // 预览头部为 def 名 + def.slug（区别于资源 slug 的 UUID）
+    expect(screen.getByText(/# Researcher \(researcher\)/)).toBeInTheDocument();
+    expect(screen.getByText(/model: openai \/ gpt-4o/)).toBeInTheDocument();
+  });
+
+  it('custom agent 反查不到 def：不渲染定义预览', () => {
+    const item = baseItem({
+      id: 'custom-agent-researcher',
+      source: 'custom',
+      type: 'agent',
+      name: 'Researcher',
+      description: '自定义 agent',
+      slug: 'pm',
+      custom: { installedAt: '2026-08-12T03:00:00.000Z', agentSystemPromptHash: 'sha256:abc' },
+    });
+    render(<ResourceDetail item={item} onClose={vi.fn()} />);
+    expect(screen.queryByText(/systemPrompt:/)).not.toBeInTheDocument();
   });
 });

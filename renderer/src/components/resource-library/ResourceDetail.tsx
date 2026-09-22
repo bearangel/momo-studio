@@ -18,9 +18,15 @@
 //
 // v2.1 P3：token 化；类型兜底 emoji → lucide（Bot/Puzzle/Package，iconEmoji 用户数据照渲染）；
 // × 关闭 / 🗑 删除 / ✓ 已安装 / ✏️ 编辑 → X / Trash2 / Check / Pencil lucide。
+//
+// v2.1 Task 15：内容区三段式（状态 / 配置预览 / 元数据，「描述」保留为导语）；
+// custom agent 新增定义预览——经 ipc.agent.list 反查 def（资源 slug = def.id，
+// 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
+import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Bot, Check, Package, Pencil, Puzzle, Settings2, Trash2, X } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { SourceBadge } from './SourceBadge';
 import { sourceLabel } from '../../lib/resource-helpers';
@@ -55,6 +61,42 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
+  // custom agent 定义预览（只读 YAML-ish）；非 custom agent 项恒为 null
+  const [defPreview, setDefPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!(item.source === 'custom' && item.type === 'agent')) {
+      setDefPreview(null);
+      return;
+    }
+    let cancelled = false;
+    // custom agent 资源 slug = def.id（UUID）——与 View 层 handleEditAgent 同口径
+    ipc.agent
+      .list()
+      .then((defs) => {
+        if (cancelled) return;
+        const def = defs.find((d) => d.source === 'custom' && d.id === item.slug);
+        if (!def) {
+          setDefPreview(null);
+          return;
+        }
+        const promptHead = def.systemPrompt.slice(0, 200);
+        setDefPreview(
+          `# ${def.name} (${def.slug})\n` +
+            `model: ${def.modelProviderId || '(未配置)'} / ${def.modelName}\n` +
+            `tools: ${def.defaultTools.map((t) => t.ref).join(', ') || '(空)'}\n` +
+            `mcps: ${(def.defaultMcps ?? []).map((m) => m.ref).join(', ') || '(空)'}\n` +
+            `skills: ${(def.defaultSkills ?? []).map((s) => s.ref).join(', ') || '(空)'}\n\n` +
+            `systemPrompt:\n${promptHead}${def.systemPrompt.length > 200 ? '…' : ''}`,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setDefPreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item]);
+
   return (
     <div className="w-80 border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-subtle flex items-center justify-between">
@@ -78,112 +120,138 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-sm">
-        <div className="flex gap-1 flex-wrap items-center">
-          <SourceBadge source={item.source} />
-          <span className="text-xs text-tertiary">
-            {sourceLabel(item.source)} · {item.type}{item.version && ` · v${item.version}`}
-          </span>
-        </div>
-
+        {/* 导语：描述（不属于三段） */}
         <div>
           <div className="text-xs text-tertiary mb-1">描述</div>
           <div className="text-secondary">{item.description}</div>
         </div>
 
-        {/* builtin / marketplace 共用 catalog 元数据（仅当 item.marketplace 存在时显示） */}
-        {(item.source === 'builtin' || item.source === 'marketplace') && item.marketplace && (
-          <>
-            <div>
-              <div className="text-xs text-tertiary mb-1">作者</div>
-              <div className="text-secondary">{item.marketplace.author}</div>
-            </div>
-            <div>
-              <div className="text-xs text-tertiary mb-1">校验状态</div>
-              <div className="text-secondary">{item.marketplace.verificationStatus}</div>
-            </div>
-            {item.marketplace.downloadUrl && (
-              <div>
-                <div className="text-xs text-tertiary mb-1">下载地址</div>
-                <code className="text-xs text-secondary break-all">{item.marketplace.downloadUrl}</code>
-              </div>
-            )}
-            <div>
-              <div className="text-xs text-tertiary mb-1">README</div>
-              <div className="text-secondary text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
-                {item.marketplace.readme}
-              </div>
-            </div>
-          </>
-        )}
+        {/* ── 状态 ── */}
+        <section>
+          <div className="text-xs text-tertiary mb-1">状态</div>
+          <div className="flex gap-1 flex-wrap items-center">
+            <SourceBadge source={item.source} />
+            <span className="text-xs text-tertiary">
+              {sourceLabel(item.source)} · {item.type}{item.version && ` · v${item.version}`}
+            </span>
+          </div>
+        </section>
 
-        {/* custom MCP：command + args + env（KEY=*** 隐藏值） */}
-        {item.source === 'custom' && item.type === 'mcp' && item.custom?.mcpConfig && (
-          <>
-            <div>
-              <div className="text-xs text-tertiary mb-1">命令</div>
-              <code className="text-xs text-secondary">{item.custom.mcpConfig.command}</code>
-            </div>
-            <div>
-              <div className="text-xs text-tertiary mb-1">参数</div>
-              <code className="text-xs text-secondary break-all">
-                {item.custom.mcpConfig.args.join(' ')}
-              </code>
-            </div>
-            {envEntries.length > 0 && (
+        {/* ── 配置预览 ── */}
+        <section>
+          <div className="text-xs text-tertiary mb-1">配置预览</div>
+          <div className="flex flex-col gap-3">
+            {/* custom MCP：command + args + env（KEY=*** 隐藏值） */}
+            {item.source === 'custom' && item.type === 'mcp' && item.custom?.mcpConfig && (
+              <>
+                <div>
+                  <div className="text-xs text-tertiary mb-1">命令</div>
+                  <code className="text-xs text-secondary">{item.custom.mcpConfig.command}</code>
+                </div>
+                <div>
+                  <div className="text-xs text-tertiary mb-1">参数</div>
+                  <code className="text-xs text-secondary break-all">
+                    {item.custom.mcpConfig.args.join(' ')}
+                  </code>
+                </div>
+                {envEntries.length > 0 && (
+                  <div>
+                    <div className="text-xs text-tertiary mb-1">环境变量</div>
+                    <div className="space-y-0.5">
+                      {envEntries.map(([k]) => (
+                        <code key={k} className="block text-xs text-secondary">{k}=***</code>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* custom Skill：frontmatter（name/version） */}
+            {item.source === 'custom' && item.type === 'skill' && item.custom?.skillFrontmatter && (
               <div>
-                <div className="text-xs text-tertiary mb-1">环境变量</div>
-                <div className="space-y-0.5">
-                  {envEntries.map(([k]) => (
-                    <code key={k} className="block text-xs text-secondary">{k}=***</code>
-                  ))}
+                <div className="text-xs text-tertiary mb-1">Frontmatter</div>
+                <div className="text-secondary text-xs space-y-0.5">
+                  {item.custom.skillFrontmatter.name && (
+                    <div>name: {item.custom.skillFrontmatter.name}</div>
+                  )}
+                  {item.custom.skillFrontmatter.version && (
+                    <div>version: {item.custom.skillFrontmatter.version}</div>
+                  )}
                 </div>
               </div>
             )}
-          </>
-        )}
 
-        {/* custom Skill：frontmatter（name/version） */}
-        {item.source === 'custom' && item.type === 'skill' && item.custom?.skillFrontmatter && (
-          <div>
-            <div className="text-xs text-tertiary mb-1">Frontmatter</div>
-            <div className="text-secondary text-xs space-y-0.5">
-              {item.custom.skillFrontmatter.name && (
-                <div>name: {item.custom.skillFrontmatter.name}</div>
-              )}
-              {item.custom.skillFrontmatter.version && (
-                <div>version: {item.custom.skillFrontmatter.version}</div>
-              )}
-            </div>
-          </div>
-        )}
+            {/* custom Agent：定义预览（YAML-ish 只读，反查 def 结果） */}
+            {defPreview && (
+              <pre className="text-xs text-secondary font-mono whitespace-pre-wrap">{defPreview}</pre>
+            )}
 
-        {/* custom Agent：systemPromptHash */}
-        {item.source === 'custom' && item.type === 'agent' && item.custom?.agentSystemPromptHash && (
-          <div>
-            <div className="text-xs text-tertiary mb-1">System Prompt Hash</div>
-            <code className="text-xs text-secondary break-all">{item.custom.agentSystemPromptHash}</code>
-          </div>
-        )}
+            {/* custom Agent：systemPromptHash */}
+            {item.source === 'custom' && item.type === 'agent' && item.custom?.agentSystemPromptHash && (
+              <div>
+                <div className="text-xs text-tertiary mb-1">System Prompt Hash</div>
+                <code className="text-xs text-secondary break-all">{item.custom.agentSystemPromptHash}</code>
+              </div>
+            )}
 
-        {/* p2p：来源节点（目录元数据不含完整定义，导入经 request/provide 拉取——T5） */}
-        {item.source === 'p2p' && item.p2p && (
-          <div>
-            <div className="text-xs text-tertiary mb-1">来源节点</div>
-            <div className="text-secondary">{item.p2p.peerName}</div>
+            {/* builtin / marketplace：README 折叠（catalog 元数据在「元数据」段） */}
+            {(item.source === 'builtin' || item.source === 'marketplace') && item.marketplace && (
+              <div>
+                <div className="text-xs text-tertiary mb-1">README</div>
+                <div className="text-secondary text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
+                  {item.marketplace.readme}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        </section>
 
-        {/* custom 共用：上传时间 */}
-        {item.custom?.installedAt && (
-          <div>
-            <div className="text-xs text-tertiary mb-1">
-              {item.source === 'custom' ? '上传时间' : '安装时间'}
-            </div>
-            <div className="text-secondary">
-              {new Date(item.custom.installedAt).toLocaleString('zh-CN')}
-            </div>
+        {/* ── 元数据 ── */}
+        <section>
+          <div className="text-xs text-tertiary mb-1">元数据</div>
+          <div className="flex flex-col gap-3">
+            {/* builtin / marketplace 共用 catalog 元数据（仅当 item.marketplace 存在时显示） */}
+            {(item.source === 'builtin' || item.source === 'marketplace') && item.marketplace && (
+              <>
+                <div>
+                  <div className="text-xs text-tertiary mb-1">作者</div>
+                  <div className="text-secondary">{item.marketplace.author}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-tertiary mb-1">校验状态</div>
+                  <div className="text-secondary">{item.marketplace.verificationStatus}</div>
+                </div>
+                {item.marketplace.downloadUrl && (
+                  <div>
+                    <div className="text-xs text-tertiary mb-1">下载地址</div>
+                    <code className="text-xs text-secondary break-all">{item.marketplace.downloadUrl}</code>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* p2p：来源节点（目录元数据不含完整定义，导入经 request/provide 拉取——T5） */}
+            {item.source === 'p2p' && item.p2p && (
+              <div>
+                <div className="text-xs text-tertiary mb-1">来源节点</div>
+                <div className="text-secondary">{item.p2p.peerName}</div>
+              </div>
+            )}
+
+            {/* custom 共用：上传时间 */}
+            {item.custom?.installedAt && (
+              <div>
+                <div className="text-xs text-tertiary mb-1">
+                  {item.source === 'custom' ? '上传时间' : '安装时间'}
+                </div>
+                <div className="text-secondary">
+                  {new Date(item.custom.installedAt).toLocaleString('zh-CN')}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        </section>
       </div>
 
       <div className="px-4 py-3 border-t border-subtle flex gap-2">
