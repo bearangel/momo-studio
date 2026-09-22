@@ -1,6 +1,6 @@
 // renderer/src/components/resource-library/ResourceRow.tsx
 // 资源库紧凑行（spec §6.1）——取代卡片网格。结构：
-//   图标 + 名称 + 一行描述(截断) + 来源徽章 + 尾部操作槽（条件逻辑平移自 ResourceCard）
+//   图标 + 名称 + 一行描述(截断) + 来源徽章 + 尾部操作槽（按 installed/installable/removable 条件渲染按钮）
 // 操作按钮点击 stopPropagation 防冒泡到行 onSelect（沿用卡片防线）。
 import type { LucideIcon } from 'lucide-react';
 import { Bot, Check, Package, Puzzle, Trash2 } from 'lucide-react';
