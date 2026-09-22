@@ -637,6 +637,10 @@ export interface RegisterMcpInput {
   env?: Record<string, string>;
   /** 可选版本号；缺省由主进程存 '1.0.0' */
   version?: string;
+  /** 传输形态；缺省 'stdio'。远程条目传 'streamable_http' + url（P2 Task 7 二态透传） */
+  transport?: 'stdio' | 'streamable_http';
+  /** 远程端点（transport='streamable_http' 必填，强制 https；remote 时 command 空串占位） */
+  url?: string;
 }
 
 /** resource:createSkill 入参——表单创建 skill（spec 2026-09-22 资源库重设计） */

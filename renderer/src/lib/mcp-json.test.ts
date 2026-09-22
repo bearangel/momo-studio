@@ -39,15 +39,32 @@ describe('parseMcpServersJson', () => {
     );
   });
 
-  it('args 非数组 / env 值非字符串 / url 型远程条目 抛错误', () => {
+  it('args 非数组 / env 值非字符串 抛错误', () => {
     expect(() =>
       parseMcpServersJson(JSON.stringify({ mcpServers: { a: { command: 'x', args: 'y' } } })),
     ).toThrow('args 必须是字符串数组');
     expect(() =>
       parseMcpServersJson(JSON.stringify({ mcpServers: { a: { command: 'x', env: { K: 1 } } } })),
     ).toThrow('env.K 值必须是字符串');
+  });
+
+  it('url 型远程条目解析为 remote entry（P2 转正）', () => {
+    const entries = parseMcpServersJson(
+      '{"mcpServers": {"weather": {"url": "https://mcp.modelscope.cn/sse"}}}',
+    );
+    expect(entries[0]!.url).toBe('https://mcp.modelscope.cn/sse');
+    expect(entries[0]!.command).toBe('');
+  });
+
+  it('非 https url 拒绝', () => {
     expect(() =>
-      parseMcpServersJson(JSON.stringify({ mcpServers: { r: { url: 'https://x' } } })),
-    ).toThrow('仅支持 stdio');
+      parseMcpServersJson('{"mcpServers": {"bad": {"url": "http://x.test"}}}'),
+    ).toThrow(/https/);
+  });
+
+  it('url 空串视为未提供（走 stdio 校验，缺 command 抛错）', () => {
+    expect(() =>
+      parseMcpServersJson(JSON.stringify({ mcpServers: { blank: { url: '' } } })),
+    ).toThrow('服务器 "blank" 缺少 command 字段');
   });
 });

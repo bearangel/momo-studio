@@ -120,4 +120,51 @@ describe('McpJsonPasteDialog', () => {
     // 1 成功 → onSuccess 触发
     expect(onSuccess).toHaveBeenCalledTimes(1);
   });
+
+  it('远程条目展示「远程」徽标与 url，本地条目展示「本地」徽标（P2 转正）', async () => {
+    render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('粘贴 JSON'), {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            weather: { url: 'https://mcp.modelscope.cn/sse' },
+            fs: { command: 'npx' },
+          },
+        }),
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    expect(await screen.findByText('远程')).toBeTruthy();
+    expect(screen.getByText('本地')).toBeTruthy();
+    // 远程行展示端点 url（command 为空串无可展示）
+    expect(screen.getByText('https://mcp.modelscope.cn/sse')).toBeTruthy();
+  });
+
+  it('远程条目导入时 registerMcp 收到 transport + url（二态转发）', async () => {
+    const onSuccess = vi.fn();
+    render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={onSuccess} />);
+    fireEvent.change(screen.getByLabelText('粘贴 JSON'), {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            weather: { url: 'https://mcp.modelscope.cn/sse' },
+            fs: { command: 'npx' },
+          },
+        }),
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认导入' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(2));
+    expect(resourceRegisterMcp).toHaveBeenNthCalledWith(1, {
+      name: 'weather',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://mcp.modelscope.cn/sse',
+    });
+    // 本地条目不带 transport/url（缺省 stdio）
+    expect(resourceRegisterMcp).toHaveBeenNthCalledWith(2, { name: 'fs', command: 'npx' });
+    expect(await screen.findByText(/成功 2 条/)).toBeTruthy();
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
 });

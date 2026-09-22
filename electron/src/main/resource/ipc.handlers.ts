@@ -59,6 +59,10 @@ export interface RegisterMcpInput {
   env?: Record<string, string>;
   /** 可选版本号；缺省存 '1.0.0'（DB 列 version NOT NULL） */
   version?: string;
+  /** 传输形态；缺省 'stdio'。远程条目传 'streamable_http' + url（P2 Task 7 二态透传） */
+  transport?: 'stdio' | 'streamable_http';
+  /** 远程端点（transport='streamable_http' 必填，强制 https；remote 时 command 空串占位） */
+  url?: string;
 }
 
 /**
@@ -209,6 +213,10 @@ export function registerResourceHandlers(): void {
       id: randomUUID(),
       name: config.name,
       version: config.version ?? '1.0.0',
+      // 二态透传（P2 Task 7）：remote（streamable_http+url）由 registerMcpDefinition
+      // 校验 https 并给 command 兜底空串（DB 列 NOT NULL）；stdio 缺省不受影响
+      transport: config.transport,
+      url: config.url,
       command: config.command,
       args: config.args ?? [],
       env: config.env,

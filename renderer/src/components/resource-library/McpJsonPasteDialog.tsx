@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { ParsedMcpEntry } from '../../lib/mcp-json';
 import { parseMcpServersJson } from '../../lib/mcp-json';
+import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 
@@ -56,6 +57,9 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
           command: entry.command,
           args: entry.args,
           env: entry.env,
+          // 二态转发（P2 转正）：url 条目按 streamable_http 注册，本地条目缺省 stdio
+          transport: entry.url ? 'streamable_http' : undefined,
+          url: entry.url,
         });
         ok += 1;
       } catch (err) {
@@ -72,7 +76,7 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
         {phase.kind === 'input' && (
           <>
             <label htmlFor="mcp-json-input" className="text-sm text-secondary">
-              粘贴 JSON（支持 {'{ "mcpServers": { … } }'} 或裸 {'{ "名称": { command, args, env } }'}）
+              粘贴 JSON（支持 {'{ "mcpServers": { … } }'} 或裸 {'{ "名称": { command, args, env } }'}；远程条目写 url，须 https）
             </label>
             <textarea
               id="mcp-json-input"
@@ -98,7 +102,11 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
               {phase.entries.map((e) => (
                 <li key={e.name} className="text-xs text-secondary bg-surface-2 rounded-md px-2.5 py-1.5 flex items-center gap-2">
                   <span className="font-medium text-primary">{e.name}</span>
-                  <code className="text-tertiary truncate">{e.command} {(e.args ?? []).join(' ')}</code>
+                  {/* 远程/本地徽标：tone 与来源徽标同语义分组（网络源 violet / 本地 neutral） */}
+                  <Badge tone={e.url ? 'violet' : 'neutral'}>{e.url ? '远程' : '本地'}</Badge>
+                  <code className="text-tertiary truncate">
+                    {e.url ?? `${e.command} ${(e.args ?? []).join(' ')}`.trim()}
+                  </code>
                 </li>
               ))}
             </ul>

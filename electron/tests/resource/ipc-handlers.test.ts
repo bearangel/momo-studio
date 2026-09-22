@@ -9,6 +9,10 @@
 //
 // P2 Task 4 追加：resource:registryProviders / resource:registryList（hub provider
 // 框架 IPC 面）。hub 模块整体 mock——provider 行为由 tests/resource/hub/* 单测覆盖。
+//
+// P2 Task 7 追加：resource:registerMcp 二态透传（remote 输入 transport/url 传给
+// registerMcpDefinition）。真实 DB 全链往返由 register-mcp-remote-contract.test.ts
+// 覆盖，本文件只锁 handler 的调用形状。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -254,10 +258,58 @@ describe('registerResourceHandlers', () => {
       env: { API_KEY: 'secret' },
       source: 'custom',
     });
+    // stdio 路径不受二态扩展污染：不传 transport/url 时两字段不落入注册配置
+    expect(config.transport).toBeUndefined();
+    expect(config.url).toBeUndefined();
     expect(typeof config.id).toBe('string');
     expect((config.id as string).length).toBeGreaterThan(0);
     expect(typeof config.version).toBe('string');
     expect((config.version as string).length).toBeGreaterThan(0);
+    expect(result).toBe(item);
+  });
+
+  it('resource:registerMcp remote 输入透传 transport/url（command 空串占位）', async () => {
+    const item = {
+      id: 'custom-mcp-weather',
+      type: 'mcp',
+      source: 'custom',
+      slug: 'weather',
+      name: 'weather',
+      description: '自定义 MCP（）',
+      installed: true,
+      installable: false,
+      removable: true,
+    };
+    (listResources as ReturnType<typeof vi.fn>).mockResolvedValueOnce([item]);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const registerCall = calls.find((c: unknown[]) => c[0] === 'resource:registerMcp');
+    const handler = registerCall![1] as (
+      evt: unknown,
+      config: {
+        name: string;
+        command: string;
+        transport?: 'stdio' | 'streamable_http';
+        url?: string;
+      },
+    ) => Promise<unknown>;
+    const result = await handler({}, {
+      name: 'weather',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://mcp.modelscope.cn/sse',
+    });
+    expect(registerMcpDefinition).toHaveBeenCalledTimes(1);
+    const config = (registerMcpDefinition as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(config).toMatchObject({
+      name: 'weather',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://mcp.modelscope.cn/sse',
+      source: 'custom',
+    });
     expect(result).toBe(item);
   });
 
