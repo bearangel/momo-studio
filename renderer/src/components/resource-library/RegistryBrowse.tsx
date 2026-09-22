@@ -1,6 +1,7 @@
 // renderer/src/components/resource-library/RegistryBrowse.tsx
 // 网络获取模式（spec §4.4）：RegistryProvider 拉取 + 前端搜索/分类 chips + 行列表。
-// 行的已安装态从 resource store 实时派生（安装成功刷新 store 即翻转，非挂载时快照）。
+// 行的已安装态从 resource store 实时派生（安装成功刷新 store 即翻转，非挂载时快照）；
+// 点行在右栏挂载 ResourceDetail（marketplace 元数据段）。
 // v1 Provider = 内置市场；未来多 Provider 时顶部说明位变选择器。
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
@@ -8,6 +9,7 @@ import type { ResourceType } from '../../ipc/types';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
 import { ResourceRow } from './ResourceRow';
+import { ResourceDetail } from './ResourceDetail';
 import { useResourceStore } from '../../stores/resource.store';
 import { marketplaceCatalogProvider } from '../../services/registry/marketplace-catalog-provider';
 import type { RegistryEntry } from '../../services/registry/types';
@@ -33,6 +35,8 @@ export function RegistryBrowse({ type, onInstall }: RegistryBrowseProps) {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   // 递增触发重试（重试按钮 = attempt 变化重挂 effect）
   const [attempt, setAttempt] = useState(0);
+  // 点选行 id（spec §4.4：右栏挂载 ResourceDetail；条目从 visible 消失时自动收起）
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +68,8 @@ export function RegistryBrowse({ type, onInstall }: RegistryBrowseProps) {
     );
   });
 
+  const selectedEntry = selectedId ? (visible.find((e) => e.id === selectedId) ?? null) : null;
+
   if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-2 p-8">
@@ -81,44 +87,54 @@ export function RegistryBrowse({ type, onInstall }: RegistryBrowseProps) {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 工具栏：搜索 + 分类 chips + 来源标注 */}
-      <div className="px-4 py-2.5 border-b border-subtle flex items-center gap-2 flex-wrap">
-        <div className="w-56">
-          <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
+    <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* 工具栏：搜索 + 分类 chips + 来源标注 */}
+        <div className="px-4 py-2.5 border-b border-subtle flex items-center gap-2 flex-wrap">
+          <div className="w-56">
+            <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          {tags.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={tagFilter === t
+                ? 'text-xs px-2 py-0.5 rounded-full bg-surface-active text-accent-600 dark:text-accent-300'
+                : 'text-xs px-2 py-0.5 rounded-full bg-surface-3 text-secondary hover:bg-surface-active'}
+              onClick={() => setTagFilter(tagFilter === t ? null : t)}
+            >
+              {t}
+            </button>
+          ))}
+          <span className="ml-auto text-xs text-tertiary">来源：{marketplaceCatalogProvider.label}</span>
         </div>
-        {tags.map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={tagFilter === t
-              ? 'text-xs px-2 py-0.5 rounded-full bg-surface-active text-accent-600 dark:text-accent-300'
-              : 'text-xs px-2 py-0.5 rounded-full bg-surface-3 text-secondary hover:bg-surface-active'}
-            onClick={() => setTagFilter(tagFilter === t ? null : t)}
-          >
-            {t}
-          </button>
-        ))}
-        <span className="ml-auto text-xs text-tertiary">来源：{marketplaceCatalogProvider.label}</span>
+
+        <div className="flex-1 overflow-auto p-4 flex flex-col gap-1.5">
+          {loading ? (
+            <div className="text-center text-tertiary text-sm py-8">加载中…</div>
+          ) : visible.length === 0 ? (
+            <EmptyState icon={RefreshCw} title="目录中没有匹配项" description="试试清除搜索或切换分类" />
+          ) : (
+            visible.map((e) => (
+              <ResourceRow
+                key={e.id}
+                item={{ ...e.item, installed: installedIds.has(e.id) }}
+                selected={selectedId === e.id}
+                onSelect={setSelectedId}
+                onInstall={onInstall}
+              />
+            ))
+          )}
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4 flex flex-col gap-1.5">
-        {loading ? (
-          <div className="text-center text-tertiary text-sm py-8">加载中…</div>
-        ) : visible.length === 0 ? (
-          <EmptyState icon={RefreshCw} title="目录中没有匹配项" description="试试清除搜索或切换分类" />
-        ) : (
-          visible.map((e) => (
-            <ResourceRow
-              key={e.id}
-              item={{ ...e.item, installed: installedIds.has(e.id) }}
-              selected={false}
-              onSelect={() => undefined}
-              onInstall={onInstall}
-            />
-          ))
-        )}
-      </div>
+      {selectedEntry && (
+        <ResourceDetail
+          item={{ ...selectedEntry.item, installed: installedIds.has(selectedEntry.id) }}
+          onClose={() => setSelectedId(null)}
+          onInstall={onInstall}
+        />
+      )}
     </div>
   );
 }

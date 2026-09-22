@@ -3,6 +3,8 @@
 // RegistryBrowse 行为（spec §4.4 网络获取模式）：
 //   - 挂载即经 marketplaceCatalogProvider 拉取该类型 marketplace 条目并渲染行 + 来源标注
 //   - 未安装行点「安装」→ onInstall(条目 id)（透传 Provider 给的 resource id，禁止重生成）
+//   - store.items 出现条目 id → 行翻转「已安装」（实时派生，非挂载快照）
+//   - 点行 → 右栏挂载 ResourceDetail；关闭按钮卸载（spec §4.4 行点击详情）
 //   - Provider 抛错 → 错误态 + 重试按钮（attempt 递增重挂 effect）
 //   - 空目录 → 空态文案
 //
@@ -82,5 +84,16 @@ describe('RegistryBrowse', () => {
     useResourceStore.setState({ items: [mkItem({ id: 'marketplace-mcp-x', installed: true })] });
     await waitFor(() => expect(screen.getByText('已安装')).toBeTruthy());
     expect(screen.queryByRole('button', { name: '安装' })).toBeNull();
+  });
+
+  it('点击行挂载详情面板，关闭按钮卸载（spec §4.4，终审 Important-2 回归锁）', async () => {
+    listMock.mockResolvedValue([mkItem({})]);
+    render(<RegistryBrowse type="mcp" onInstall={vi.fn()} />);
+    await waitFor(() => screen.getByText('X服务'));
+    expect(screen.queryByLabelText('关闭详情')).toBeNull();
+    fireEvent.click(screen.getByText('X服务'));
+    await waitFor(() => expect(screen.getByLabelText('关闭详情')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('关闭详情'));
+    await waitFor(() => expect(screen.queryByLabelText('关闭详情')).toBeNull());
   });
 });
