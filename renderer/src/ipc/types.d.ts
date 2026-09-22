@@ -297,6 +297,25 @@ export interface AddMemberInput {
   apiKeyOverride?: string;
 }
 
+/** agent:enablePreset 入参（spec 2026-09-22 资源库预设 agent 启用与 LLM 配置） */
+export interface EnablePresetInput {
+  /** 预设 agent slug（resources/agents/<slug>.yaml） */
+  slug: string;
+  modelProviderId: string;
+  modelName: string;
+  thinkingJson?: ThinkingConfig | null;
+  /** 传入则加入该 workspace 并启动（幂等） */
+  joinWorkspaceId?: string;
+  /** 仅 joinWorkspaceId 存在时生效 */
+  setAsDefault?: boolean;
+}
+
+/** agent:enablePreset 返回 */
+export interface EnablePresetResult {
+  def: AgentDefinition;
+  member: WorkspaceAgentMember | null;
+}
+
 /**
  * A 子系统：IM 消息（SQLite messages 表 row）。
  *
@@ -1295,6 +1314,8 @@ export interface ApiSurface {
       /** v31：agent 级思维模式覆盖；undefined=不改；null=清除（回退模型级） */
       thinkingJson?: ThinkingConfig | null;
     }): Promise<{ definition: AgentDefinition; stoppedInstanceIds: string[] }>;
+    /** 预设 agent 按需启用（spec 2026-09-22）：def 入库 + 模型 + 可选加入/设默认 */
+    enablePreset(input: EnablePresetInput): Promise<EnablePresetResult>;
     /** v25：原 updateAssignmentApiKey 平移更名（apiKey=null 清除 override） */
     setMemberApiKeyOverride(instanceId: string, apiKey: string | null): Promise<{ ok: boolean }>;
     /** v1.3 新增：删除自定义 def（builtin 不可删；级联清理成员） */

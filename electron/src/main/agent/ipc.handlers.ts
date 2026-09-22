@@ -49,6 +49,7 @@ import { isAgentRunning } from './runtime-status';
 import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
+import { enablePresetWithJoin, type EnablePresetWithJoinInput } from './preset';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import {
   getAssignmentDeltas,
@@ -126,6 +127,31 @@ export function registerAgentHandlers(): void {
       return member;
     },
   );
+
+  // 预设 agent 按需启用（spec 2026-09-22）：def 入库 + 模型写入 +（可选）加入并启动。
+  // DB 语义在 preset.ts（可测）；此处仅补 runtime 启动（与 agent:addMember 同模式）。
+  ipcMain.handle('agent:enablePreset', async (_evt, input: EnablePresetWithJoinInput) => {
+    const outcome = await enablePresetWithJoin(input);
+    if (outcome.joinedNow && outcome.member && input.joinWorkspaceId) {
+      const workspace = getWorkspace(input.joinWorkspaceId);
+      if (!workspace) throw new Error(`未找到 workspace: ${input.joinWorkspaceId}`);
+      const providerId = outcome.def.modelProviderId;
+      if (providerId) {
+        const apiKey = await resolveApiKey(outcome.member.instanceId, providerId);
+        await startAgentRuntime(
+          await buildSpawnOpts({
+            instanceId: outcome.member.instanceId,
+            agentUserId: outcome.member.agentUserId,
+            workspaceId: input.joinWorkspaceId,
+            workspaceDir: workspace.directoryPath,
+            def: outcome.def,
+            llmApiKey: apiKey,
+          }),
+        );
+      }
+    }
+    return { def: outcome.def, member: outcome.member };
+  });
 
   // 从 YAML 创建 agent 定义。v1.3：不再做 parentAgentId slug→UUID 解析
   //（角色/父子关系已移到 assignment 级，def 不再存这些字段）

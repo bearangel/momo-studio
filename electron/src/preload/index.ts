@@ -68,6 +68,7 @@ const api: ApiSurface = {
     removeMember: (instanceId) => invoke('agent:removeMember', instanceId),
     isRunning: (instanceId) => invoke('agent:isRunning', instanceId),
     updateDefinition: (input) => invoke('agent:updateDefinition', input),
+    enablePreset: (input) => invoke('agent:enablePreset', input),
     setMemberApiKeyOverride: (instanceId: string, apiKey: string | null) =>
       invoke('agent:setMemberApiKeyOverride', instanceId, apiKey),
     deleteDefinition: (defId: string) => invoke('agent:deleteDefinition', defId),
