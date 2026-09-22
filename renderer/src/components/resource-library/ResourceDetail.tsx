@@ -61,6 +61,14 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
+  // hub 源（smithery/modelscope）经 marketplace 元数据段渲染（spec 2026-09-22 §4.4）；
+  // builtin/marketplace 也走同一段——一处定义两处复用，避免门控漂移
+  const hasMarketplaceMeta =
+    item.source === 'builtin' ||
+    item.source === 'marketplace' ||
+    item.source === 'smithery' ||
+    item.source === 'modelscope';
+
   // custom agent 定义预览（只读 YAML-ish）；非 custom agent 项恒为 null
   const [defPreview, setDefPreview] = useState<string | null>(null);
   useEffect(() => {
@@ -195,8 +203,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
               </div>
             )}
 
-            {/* builtin / marketplace：README 折叠（catalog 元数据在「元数据」段） */}
-            {(item.source === 'builtin' || item.source === 'marketplace') && item.marketplace && (
+            {/* builtin / marketplace / hub（smithery/modelscope）：README 折叠（catalog 元数据在「元数据」段） */}
+            {hasMarketplaceMeta && item.marketplace && (
               <div>
                 <div className="text-xs text-tertiary mb-1">README</div>
                 <div className="text-secondary text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
@@ -211,8 +219,8 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
         <section>
           <div className="text-xs text-tertiary mb-1">元数据</div>
           <div className="flex flex-col gap-3">
-            {/* builtin / marketplace 共用 catalog 元数据（仅当 item.marketplace 存在时显示） */}
-            {(item.source === 'builtin' || item.source === 'marketplace') && item.marketplace && (
+            {/* builtin / marketplace / hub（smithery/modelscope）共用 catalog 元数据（仅当 item.marketplace 存在时显示） */}
+            {hasMarketplaceMeta && item.marketplace && (
               <>
                 <div>
                   <div className="text-xs text-tertiary mb-1">作者</div>
