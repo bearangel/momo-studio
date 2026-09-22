@@ -231,6 +231,17 @@ describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
+  it('环境变量区默认折叠在「高级」内，展开后可输入', () => {
+    render(<RegisterMcpDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.getByText('高级：环境变量')).toBeTruthy();
+    const details = screen.getByText('高级：环境变量').closest('details');
+    expect(details).toBeTruthy();
+    expect(details).not.toHaveProperty('open', true);
+    fireEvent.click(screen.getByText('高级：环境变量'));
+    expect(details).toHaveProperty('open', true);
+    expect(screen.getByPlaceholderText('KEY=VALUE')).toBeTruthy();
+  });
+
   it('提交期间按钮 disabled（防双击）', async () => {
     // 用未解决的 promise 卡住提交过程
     let resolveRegister: () => void = () => {};

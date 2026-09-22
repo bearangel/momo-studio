@@ -123,31 +123,34 @@ export function RegisterMcpDialog({ onClose, onSuccess }: Props) {
           placeholder="逗号分隔，如：-y, server.js, --port 3000"
         />
 
-        <div className="flex flex-col gap-1">
-          <label className="text-sm text-secondary">环境变量</label>
-          {envRows.map((row, idx) => (
-            <input
-              key={idx}
-              type="text"
-              value={row}
-              onChange={(e) => {
-                const next = [...envRows];
-                next[idx] = e.target.value;
-                setEnvRows(next);
-              }}
-              placeholder="KEY=VALUE"
-              className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary placeholder:text-disabled focus:border-focus focus:outline-none"
-            />
-          ))}
-          <button
-            type="button"
-            onClick={() => setEnvRows((rows) => [...rows, ''])}
-            className="self-start rounded-md px-2 py-1 text-xs text-accent-600 hover:bg-surface-3 dark:text-accent-300"
-            aria-label="+"
-          >
-            + 添加环境变量
-          </button>
-        </div>
+        <details className="border border-subtle rounded-md px-3 py-2">
+          <summary className="text-sm text-secondary cursor-pointer select-none">高级：环境变量</summary>
+          <div className="flex flex-col gap-1 pt-2">
+            <label className="text-sm text-secondary">环境变量</label>
+            {envRows.map((row, idx) => (
+              <input
+                key={idx}
+                type="text"
+                value={row}
+                onChange={(e) => {
+                  const next = [...envRows];
+                  next[idx] = e.target.value;
+                  setEnvRows(next);
+                }}
+                placeholder="KEY=VALUE"
+                className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary placeholder:text-disabled focus:border-focus focus:outline-none"
+              />
+            ))}
+            <button
+              type="button"
+              onClick={() => setEnvRows((rows) => [...rows, ''])}
+              className="self-start rounded-md px-2 py-1 text-xs text-accent-600 hover:bg-surface-3 dark:text-accent-300"
+              aria-label="+"
+            >
+              + 添加环境变量
+            </button>
+          </div>
+        </details>
 
         {error && <div className="text-status-error text-sm">{error}</div>}
         <div className="flex gap-2 justify-end mt-2">
