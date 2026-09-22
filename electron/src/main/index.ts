@@ -19,6 +19,7 @@ import { logger } from './logger';
 import { destroyAllTaskDrivenRuntimes } from './agent/runtime-registry';
 import { initTaskDrivenRuntime } from './agent/init-runtime';
 import { destroyRouterService } from './agent/router-bootstrap';
+import { loadBuiltinSuggestionsOnly } from './agent/builtin';
 import { tokenizeForIndex } from './storage/memories/tokenize';
 import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
@@ -72,6 +73,10 @@ if (!app.requestSingleInstanceLock()) {
 
       runMigrations();
       logger.info('Migrations complete');
+
+      // v2.1 预设 agent 启用链路（spec 2026-09-22）：启动只填 suggestions Map（平台
+      // 预选用），不落 agent_definitions——def 行仅在用户于资源库点「启用」时写入。
+      loadBuiltinSuggestionsOnly();
 
       // v2.6.0 任务断点续跑：boot 陈旧流清扫（spec §5.4 + T3 移交约束：runMigrations
       // 之后、runtime 起动之前）。sweepStaleStreaming 内部 try/catch 兜底——DB
