@@ -688,7 +688,12 @@ export interface ResourceItem {
   /** 是否可删除（仅 builtin = false） */
   removable: boolean;
   /** builtin 项的扩展元数据 */
-  builtin?: { category?: string; tags?: string[] };
+  builtin?: {
+    category?: string;
+    tags?: string[];
+    /** 仅 type=agent：预设已启用（spec 2026-09-22） */
+    agentEnabled?: boolean;
+  };
   /** marketplace 项的扩展元数据 */
   marketplace?: {
     author: string;

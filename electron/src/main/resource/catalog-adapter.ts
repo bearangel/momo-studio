@@ -14,6 +14,7 @@ import type { MarketplaceItem } from '../marketplace/types';
 import type { ResourceItem, ResourceSource } from './types';
 import { buildResourceId } from './types';
 import { listInstalled as listMarketplaceInstalled } from '../marketplace/installer';
+import { listAgentDefinitions } from '../agent/crud';
 
 /**
  * 把单条 catalog item 转成 ResourceItem。
@@ -37,6 +38,13 @@ export function fromCatalogItem(item: MarketplaceItem, source: ResourceSource): 
   const installedPackageIds = listMarketplaceInstalled().map((p) => p.itemId);
   const installed = source === 'builtin' ? true : installedPackageIds.includes(item.id);
 
+  // 预设启用态（spec 2026-09-22 §6）：仅 builtin agent 计算——按 slug 匹配
+  // agent_definitions（与 marketplace install 的 slug 复用同口径，不分 source）
+  const agentEnabled =
+    source === 'builtin' && item.type === 'agent'
+      ? listAgentDefinitions().some((d) => d.slug === item.slug)
+      : undefined;
+
   return {
     id,
     type: item.type,
@@ -52,7 +60,14 @@ export function fromCatalogItem(item: MarketplaceItem, source: ResourceSource): 
     removable: source === 'marketplace' && installed,
     // builtin 项的轻量分类信息（与 marketplace namespace 字段重叠但语义独立，
     // 便于前端按 source 路由到不同详情面板时快速读取）
-    builtin: source === 'builtin' ? { category: item.category, tags: item.tags } : undefined,
+    builtin:
+      source === 'builtin'
+        ? {
+            category: item.category,
+            tags: item.tags,
+            ...(agentEnabled !== undefined ? { agentEnabled } : {}),
+          }
+        : undefined,
     // 完整 catalog 元数据保留——builtin 项也保留（详情面板共用同一渲染逻辑）
     marketplace: {
       author: item.author,

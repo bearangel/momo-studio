@@ -51,7 +51,12 @@ export interface ResourceItem {
   /** 是否可删除（仅 builtin = false） */
   removable: boolean;
   /** builtin 项的扩展元数据 */
-  builtin?: { category?: string; tags?: string[] };
+  builtin?: {
+    category?: string;
+    tags?: string[];
+    /** 仅 type=agent：预设已启用（agent_definitions 存在同 slug def）。spec 2026-09-22 启用链路 */
+    agentEnabled?: boolean;
+  };
   /** marketplace 项的扩展元数据（校验状态 / 下载地址 / 统计等） */
   marketplace?: {
     author: string;
