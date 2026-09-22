@@ -34,7 +34,7 @@ export class HttpMcpClient {
       capabilities: {},
       clientInfo: { name: 'momo-studio', version: '2.1.0' },
     });
-    await this.post('notifications/initialized', {});
+    await this.notify('notifications/initialized', {});
     this.connected = true;
     logger.info('远程 MCP 已连接', { name: this.config.name }); // 不打 url/headers（含 token）
   }
@@ -57,20 +57,10 @@ export class HttpMcpClient {
     this.connected = false;
   }
 
-  /** 单次 JSON-RPC POST；error 响应抛错；通知（无 id 期望）也走同一端点 */
+  /** 单次 JSON-RPC 请求（带 id，期望 JSON 响应）；error 响应抛错 */
   private async post(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = this.nextId++;
-    const body = JSON.stringify({ jsonrpc: '2.0', id, method, params });
-    const response = await fetch(this.config.url!, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...this.config.headers,
-      },
-      body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    const response = await this.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     if (!response.ok) {
       this.connected = false;
       throw new Error(`远程 MCP ${method} 失败：HTTP ${response.status}`);
@@ -81,5 +71,32 @@ export class HttpMcpClient {
     };
     if (json.error) throw new Error(`远程 MCP ${method} 错误：${json.error.message}`);
     return json.result;
+  }
+
+  /**
+   * JSON-RPC notification（无 id，服务器禁止回应）。MCP streamable HTTP 规范：
+   * 纯通知 POST 的合规响应是 202 无 body——只检查 response.ok（202/200 均可），
+   * 绝不调用 response.json()（严格服务器回空 body 会让 json() 抛 SyntaxError）。
+   */
+  private async notify(method: string, params: Record<string, unknown>): Promise<void> {
+    const response = await this.send(JSON.stringify({ jsonrpc: '2.0', method, params }));
+    if (!response.ok) {
+      this.connected = false;
+      throw new Error(`远程 MCP ${method} 通知失败：HTTP ${response.status}`);
+    }
+  }
+
+  /** 共用 POST 管道：统一 headers + 30s 超时，返回原始响应 */
+  private async send(body: string): Promise<Response> {
+    return fetch(this.config.url!, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...this.config.headers,
+      },
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   }
 }
