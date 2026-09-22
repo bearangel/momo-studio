@@ -33,6 +33,9 @@ import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
+import { EnablePresetDialog } from '../agent/EnablePresetDialog';
+import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { AgentDefinition, ResourceItem, ResourceFilter } from '../../ipc/types';
 
 /** 第一行：type tab（全部 / Agent / MCP / Skill） */
@@ -77,6 +80,15 @@ export function ResourceLibraryView() {
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   // 编辑中的 custom agent 定义（非 null 时挂载 DefinitionEditor）
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
+  // 预设 agent 启用/配置弹窗目标（def 缺省 = 启用模式；已启用/marketplace = 配置模式）
+  const [presetTarget, setPresetTarget] = useState<{
+    slug: string;
+    name: string;
+    def?: AgentDefinition;
+  } | null>(null);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
+  const loadMembers = useAgentStore((s) => s.loadMembers);
 
   // 资源 id → 全局定义查找 → 打开编辑弹窗。custom agent 的资源 slug 口径 = def.id
   // （UUID，非 def.slug——见 electron/src/main/resource/custom.ts「agent 用 def.id 作为
@@ -99,6 +111,32 @@ export function ResourceLibraryView() {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  // 预设 agent 打开启用/配置弹窗：按 slug 查全局定义——查到 = 配置模式（def 传入），
+  // 查不到 = 启用模式（enablePreset 落库）。slug 口径与 catalog-adapter 的
+  // agentEnabled 计算、marketplace install 的 def 复用一致（同 slug 即同一预设）。
+  const openPresetDialog = async (itemId: string): Promise<void> => {
+    const item = items.find((i) => i.id === itemId);
+    if (!item || item.type !== 'agent') return;
+    try {
+      const defs = await ipc.agent.list();
+      const def = defs.find((d) => d.slug === item.slug);
+      setPresetTarget({ slug: item.slug, name: item.name, def });
+    } catch (err) {
+      console.error('打开预设 agent 配置失败', {
+        itemId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  // 弹窗关闭：刷新资源列表（agentEnabled 态）+ agent store（definitions/members）
+  const closePresetDialog = (): void => {
+    setPresetTarget(null);
+    void load();
+    void loadDefinitions(activeWorkspaceId ?? undefined);
+    if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
   };
 
   // filter 变化时自动 load（mount 时 typeFilter/sourceFilter 均为 'all'，触发首次拉取）
@@ -242,6 +280,8 @@ export function ResourceLibraryView() {
           onInstall={installResource}
           onDelete={deleteResource}
           onEdit={handleEditAgent}
+          onEnable={openPresetDialog}
+          onConfigure={openPresetDialog}
         />
       )}
 
@@ -281,6 +321,14 @@ export function ResourceLibraryView() {
             setEditingDef(null);
             void load();
           }}
+        />
+      )}
+      {presetTarget && (
+        <EnablePresetDialog
+          slug={presetTarget.slug}
+          name={presetTarget.name}
+          def={presetTarget.def}
+          onClose={closePresetDialog}
         />
       )}
     </div>

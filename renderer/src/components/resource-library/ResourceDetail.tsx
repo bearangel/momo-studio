@@ -13,11 +13,13 @@
 //   - installed && !removable       → 显示「已安装」静态标记（Check 图标，builtin）
 //   - type=agent && source=custom   → 显示「编辑」按钮（Pencil 图标，调用 onEdit 挂载
 //                                       DefinitionEditor 编辑定义；仅 installed 渲染）
+//   - builtin agent 未启用            → 「启用」按钮（onEnable；spec 2026-09-22）
+//   - builtin 已启用 / marketplace 装 → 「配置」按钮（onConfigure）+ builtin「已启用」标记
 //
 // v2.1 P3：token 化；类型兜底 emoji → lucide（Bot/Puzzle/Package，iconEmoji 用户数据照渲染）；
 // × 关闭 / 🗑 删除 / ✓ 已安装 / ✏️ 编辑 → X / Trash2 / Check / Pencil lucide。
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Package, Pencil, Puzzle, Trash2, X } from 'lucide-react';
+import { Bot, Check, Package, Pencil, Puzzle, Settings2, Trash2, X } from 'lucide-react';
 import type { ResourceItem } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { SourceBadge } from './SourceBadge';
@@ -30,6 +32,10 @@ interface Props {
   onInstall?: (id: string) => void;
   /** 编辑 custom agent 定义（仅 type=agent && source=custom 显示按钮） */
   onEdit?: (id: string) => void;
+  /** builtin agent 未启用 → 弹启用表单（spec 2026-09-22） */
+  onEnable?: (id: string) => void;
+  /** builtin 已启用 / marketplace 已安装 agent → 弹配置表单 */
+  onConfigure?: (id: string) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -45,7 +51,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -198,6 +204,25 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit }: P
             编辑
           </Button>
         )}
+        {/* 启用按钮：builtin agent 未启用（def 不在库）——落库 + 配模型一步完成（spec 2026-09-22） */}
+        {item.type === 'agent' && item.source === 'builtin' && !item.builtin?.agentEnabled && onEnable && (
+          <Button size="sm" onClick={() => onEnable(item.id)}>
+            启用
+          </Button>
+        )}
+        {/* 配置按钮：builtin 已启用 / marketplace 已安装（def 已落库，可改模型） */}
+        {item.type === 'agent' && onConfigure &&
+          ((item.source === 'builtin' && item.builtin?.agentEnabled) ||
+            (item.source === 'marketplace' && item.installed)) && (
+          <Button
+            size="sm"
+            onClick={() => onConfigure(item.id)}
+            className="inline-flex items-center gap-1"
+          >
+            <Settings2 size={12} strokeWidth={1.75} aria-hidden />
+            配置
+          </Button>
+        )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}
         {item.installed && item.removable && onDelete && (
           <Button
@@ -210,8 +235,15 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit }: P
             删除
           </Button>
         )}
-        {/* 已安装静态标记：installed 且不可删除（builtin）时显示 */}
-        {item.installed && !item.removable && (
+        {/* 已启用标记：builtin agent def 已在库（区别于「已安装」的随应用分发语义） */}
+        {item.type === 'agent' && item.source === 'builtin' && item.builtin?.agentEnabled && (
+          <span className="inline-flex items-center gap-1 text-xs text-status-success self-center">
+            <Check size={12} strokeWidth={1.75} aria-hidden />
+            已启用
+          </span>
+        )}
+        {/* 已安装静态标记：installed 且不可删除（builtin 非 agent 项）时显示 */}
+        {item.installed && !item.removable && !(item.type === 'agent' && item.source === 'builtin') && (
           <span className="inline-flex items-center gap-1 text-xs text-status-success self-center">
             <Check size={12} strokeWidth={1.75} aria-hidden />
             已安装

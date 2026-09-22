@@ -37,6 +37,9 @@ const providerListModels = vi.fn();
 const agentListDefinitions = vi.fn();
 const agentCreateCustom = vi.fn();
 const agentUpdateDefinition = vi.fn();
+// EnablePresetDialog 挂载需要（spec 2026-09-22 启用/配置弹窗）
+const settingsGetGlobal = vi.fn();
+const agentListMembers = vi.fn();
 
 const mockApi = {
   resource: {
@@ -54,10 +57,14 @@ const mockApi = {
     list: providerList,
     listModels: providerListModels,
   },
+  settings: {
+    getGlobal: settingsGetGlobal,
+  },
   agent: {
     list: agentListDefinitions,
     createCustom: agentCreateCustom,
     updateDefinition: agentUpdateDefinition,
+    listMembers: agentListMembers,
   },
 };
 
@@ -103,6 +110,8 @@ beforeEach(() => {
     agentListDefinitions,
     agentCreateCustom,
     agentUpdateDefinition,
+    settingsGetGlobal,
+    agentListMembers,
   ].forEach((fn) => fn.mockReset());
 
   resourceList.mockResolvedValue([] as ResourceItem[]);
@@ -119,6 +128,8 @@ beforeEach(() => {
     { providerId: 'p1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
   ]);
   agentUpdateDefinition.mockResolvedValue(undefined);
+  settingsGetGlobal.mockResolvedValue({});
+  agentListMembers.mockResolvedValue([]);
 
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api =
     mockApi;
@@ -482,6 +493,63 @@ describe('ResourceLibraryView — custom agent 编辑入口', () => {
     // 等微任务排空后仍无编辑弹窗（catch 吞下 rejection，无 unhandled rejection 外抛）
     await waitFor(() => {
       expect(screen.queryByText('编辑 agent 定义')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('ResourceLibraryView — 预设 agent 启用入口（spec 2026-09-22）', () => {
+  it('builtin agent 未启用：详情点「启用」→ 弹「启用预设 Agent」对话框（enable 模式）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        slug: 'coder',
+        name: '程序员',
+        builtin: { agentEnabled: false },
+      }),
+    ]);
+    agentListDefinitions.mockResolvedValue([]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('程序员')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('程序员'));
+    await waitFor(() => {
+      expect(screen.getAllByText('程序员').length).toBeGreaterThanOrEqual(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/启用预设 Agent/)).toBeInTheDocument();
+    });
+  });
+
+  it('builtin agent 已启用：详情点「配置」→ 弹「配置 Agent」对话框（edit 模式）', async () => {
+    resourceList.mockResolvedValue([
+      baseItem({
+        slug: 'coder',
+        name: '程序员',
+        builtin: { agentEnabled: true },
+      }),
+    ]);
+    agentListDefinitions.mockResolvedValue([
+      {
+        id: 'builtin-coder', name: '程序员', slug: 'coder', version: '1.0.0',
+        runtime: 'declarative', systemPrompt: 'p', defaultTools: [], source: 'builtin',
+        description: '', iconEmoji: '💻', defaultMcps: [], defaultSkills: [],
+        workspaceId: null, modelProviderId: 'p1', modelName: 'gpt-4o',
+      },
+    ]);
+
+    render(<ResourceLibraryView />);
+    await waitFor(() => expect(screen.getByText('程序员')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('程序员'));
+    await waitFor(() => {
+      expect(screen.getAllByText('程序员').length).toBeGreaterThanOrEqual(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/配置 Agent/)).toBeInTheDocument();
     });
   });
 });

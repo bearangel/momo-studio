@@ -167,11 +167,10 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
   });
 
-  it('builtin (removable=false): 不显示删除按钮', () => {
+  it('builtin mcp (removable=false): 不显示删除按钮，保留「已安装」静态标记', () => {
     const onDelete = vi.fn();
-    const item = baseItem({ removable: false });
+    const item = baseItem({ id: 'builtin-mcp-foo', type: 'mcp', removable: false });
     render(<ResourceDetail item={item} onClose={() => {}} onDelete={onDelete} />);
-    // 仅显示"✓ 已安装"静态标记，无删除按钮
     expect(screen.getByText(/已安装/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
   });
@@ -231,5 +230,47 @@ describe('ResourceDetail - custom agent 编辑按钮', () => {
     });
     render(<ResourceDetail item={item} onClose={() => {}} onEdit={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ResourceDetail - 预设 agent 启用/配置（spec 2026-09-22）', () => {
+  it('builtin agent 未启用：显示「启用」按钮并触发 onEnable', () => {
+    const onEnable = vi.fn();
+    const item = baseItem({ builtin: { agentEnabled: false } });
+    render(<ResourceDetail item={item} onClose={() => {}} onEnable={onEnable} />);
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+    expect(onEnable).toHaveBeenCalledWith('builtin-agent-pm');
+    // 未启用不再显示误导性的「已安装」标记
+    expect(screen.queryByText(/已安装/)).not.toBeInTheDocument();
+  });
+
+  it('builtin agent 已启用：显示「配置」按钮 + 「已启用」标记，无「启用」', () => {
+    const onConfigure = vi.fn();
+    const item = baseItem({ builtin: { agentEnabled: true } });
+    render(<ResourceDetail item={item} onClose={() => {}} onConfigure={onConfigure} />);
+    expect(screen.getByText(/已启用/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
+    expect(onConfigure).toHaveBeenCalledWith('builtin-agent-pm');
+    expect(screen.queryByRole('button', { name: '启用' })).not.toBeInTheDocument();
+  });
+
+  it('marketplace agent 已安装：显示「配置」按钮', () => {
+    const onConfigure = vi.fn();
+    const item = baseItem({
+      id: 'marketplace-agent-coder', source: 'marketplace', installed: true,
+      installable: false, removable: true,
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onConfigure={onConfigure} />);
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
+    expect(onConfigure).toHaveBeenCalledWith('marketplace-agent-coder');
+  });
+
+  it('marketplace agent 未安装：无「配置」按钮（先安装）', () => {
+    const item = baseItem({
+      id: 'marketplace-agent-coder', source: 'marketplace', installed: false,
+      installable: true,
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onConfigure={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
   });
 });
