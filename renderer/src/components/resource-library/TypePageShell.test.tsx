@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 
 describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
-  it('工具栏含搜索框、来源 chips、AddMenu；不渲染模式 Segmented 与「网络获取」', () => {
+  it('工具栏含搜索框、来源 chips、AddMenu、外部市场入口；不渲染模式 Segmented 与「网络获取」', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
@@ -55,6 +55,8 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(screen.getByPlaceholderText('搜索名称 / 描述 / slug…')).toBeTruthy();
     expect(screen.getByText('预置')).toBeTruthy();
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
+    // P2.3 Task 3：外部市场快捷打开入口挂载（原 Segmented 位）
+    expect(screen.getByRole('button', { name: '外部市场' })).toBeTruthy();
   });
 
   it('已安装空列表渲染 EmptyState 文案', () => {

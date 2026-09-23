@@ -10,6 +10,7 @@ import { Input } from '../ui/Input';
 import { cn } from '../../lib/cn';
 import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
+import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
 import { DanglingRefsCard } from './DanglingRefsCard';
 import { ResourceRow, TYPE_ICON } from './ResourceRow';
 import { ResourceDetail } from './ResourceDetail';
@@ -100,6 +101,8 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
+          {/* 外部市场快捷打开（P2.3 spec §4，原 Segmented 位） */}
+          <ExternalMarketplacePopover type={type} />
           <AddMenu label={ADD_LABEL[type]} items={addItems} />
         </div>
       </div>

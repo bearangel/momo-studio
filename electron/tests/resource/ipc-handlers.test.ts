@@ -23,7 +23,7 @@
 // compose 重组 / 悬空聚合）由 tests/resource/mcp-config.test.ts 真实 DB 覆盖，
 // 本文件只锁 IPC 边界：通道注册、参数透传、返回保真、中文异常上抛、空入参防御。
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // mock electron 模块（ipcMain.handle 在测试环境不存在）。
 // P2.3 Task 2：补 shell.openExternal spy——misc:openExternal 校验放行后的唯一副作用，
@@ -152,6 +152,10 @@ import {
 } from '../../src/main/mcp/bundle-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../../src/main/agent/crud';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
+import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 describe('registerResourceHandlers', () => {
   beforeEach(() => {
@@ -1026,6 +1030,61 @@ describe('registerResourceHandlers', () => {
       await expect(handler({}, undefined)).rejects.toThrow(/链接不能为空/);
       await expect(handler({}, 12345)).rejects.toThrow(/链接不能为空/);
       expect(shellOpenExternal).not.toHaveBeenCalled();
+    });
+  });
+
+  // P2.3 Task 3 顺手补 Task 2 审查 Minor-1：listBuiltinPresets 两条错误路径。
+  // agent/builtin 在本文件未 mock——真解析链经 setBuiltinAgentsDir 钩子切到
+  // 临时目录（momo-test-rules：不硬造 mock，钩子可达就走真实实现）。
+  describe('P2.3 Task 2 审查 Minor-1：listBuiltinPresets 错误路径', () => {
+    const tmpRoot = path.join(os.tmpdir(), `ap-preset-err-${Date.now()}-${process.pid}`);
+
+    afterEach(() => {
+      // 恢复默认目录（electron/resources/agents），避免污染同文件真 YAML 用例
+      setBuiltinAgentsDir(null);
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    const getPresetHandler = (): ((evt: unknown, type: string) => Promise<unknown>) => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
+      return presetCall![1] as (evt: unknown, type: string) => Promise<unknown>;
+    };
+
+    it('目录缺失 → reject 中文错误含「不存在」', async () => {
+      setBuiltinAgentsDir(path.join(tmpRoot, 'does-not-exist'));
+      await expect(getPresetHandler()({}, 'agent')).rejects.toThrow(/不存在/);
+    });
+
+    it('坏 YAML 文件 → 该条跳过、其余正常返回，整体不抛', async () => {
+      const agentDir = path.join(tmpRoot, 'agents');
+      fs.mkdirSync(agentDir, { recursive: true });
+      // 一个合法 manifest（slug 决定清单条目）+ 一个必然解析失败的坏文件
+      fs.writeFileSync(
+        path.join(agentDir, 'good-one.yaml'),
+        [
+          'apiVersion: v1',
+          'kind: AgentDefinition',
+          'metadata:',
+          '  name: 预置甲',
+          '  slug: good-one',
+          '  version: 1.0.0',
+          'spec:',
+          '  type: standalone',
+          '  runtime: declarative',
+          '  declarative:',
+          '    systemPrompt: "你是预置甲"',
+          '    model:',
+          '      provider: openai',
+          '      model: gpt-4o',
+        ].join('\n'),
+        'utf-8',
+      );
+      fs.writeFileSync(path.join(agentDir, 'zz-broken.yaml'), 'metadata: [unclosed\n', 'utf-8');
+      setBuiltinAgentsDir(agentDir);
+
+      const presets = (await getPresetHandler()({}, 'agent')) as Array<{ slug: string }>;
+      expect(presets.map((p) => p.slug)).toEqual(['good-one']);
     });
   });
 });
