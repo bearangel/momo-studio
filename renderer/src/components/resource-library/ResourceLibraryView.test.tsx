@@ -28,6 +28,8 @@ const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
 const resourceInstallSmitheryRemote = vi.fn();
+// P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
+const resourceDanglingMcpRefs = vi.fn();
 const agentList = vi.fn();
 const agentBuiltinSuggestions = vi.fn();
 const providerList = vi.fn();
@@ -39,6 +41,7 @@ const mockApi = {
     install: resourceInstall,
     delete: resourceDelete,
     installSmitheryRemote: resourceInstallSmitheryRemote,
+    danglingMcpRefs: resourceDanglingMcpRefs,
   },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
@@ -65,6 +68,7 @@ beforeEach(() => {
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
   resourceInstallSmitheryRemote.mockReset().mockResolvedValue(undefined);
+  resourceDanglingMcpRefs.mockReset().mockResolvedValue([]);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
   providerList.mockReset().mockResolvedValue([]);

@@ -398,3 +398,68 @@ describe('ResourceDetail - 三段式结构 + custom agent 定义预览（Task 15
     expect(screen.queryByText(/systemPrompt:/)).not.toBeInTheDocument();
   });
 });
+
+// ── P2.2 Task 7：远程 MCP 配置按钮（spec §6.1）──────────────────────────
+// 显示条件：type=mcp && installed && custom.transport==='streamable_http'
+// 且 onEditMcpConfig prop 注入；回调透传整个 item（View 层按 item.slug 接线弹窗）。
+describe('ResourceDetail - 远程 MCP 配置按钮（P2.2 Task 7）', () => {
+  const remoteMcp = (overrides: Partial<ResourceItem> = {}): ResourceItem =>
+    baseItem({
+      id: 'smithery-mcp-context7',
+      source: 'smithery',
+      type: 'mcp',
+      name: 'Context7',
+      description: '文档上下文 MCP',
+      installed: true,
+      installable: false,
+      removable: true,
+      custom: { installedAt: '2026-09-23T00:00:00.000Z', transport: 'streamable_http' },
+      ...overrides,
+    });
+
+  it('streamable_http 已装条目：显示「配置」按钮，回调透传整个 item', () => {
+    const onEditMcpConfig = vi.fn();
+    const item = remoteMcp();
+    render(<ResourceDetail item={item} onClose={() => {}} onEditMcpConfig={onEditMcpConfig} />);
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
+    expect(onEditMcpConfig).toHaveBeenCalledWith(item);
+  });
+
+  it('stdio 条目：不显示「配置」按钮（编辑仅远程，D1）', () => {
+    render(
+      <ResourceDetail
+        item={remoteMcp({ custom: { installedAt: '2026-09-23T00:00:00.000Z', transport: 'stdio' } })}
+        onClose={() => {}}
+        onEditMcpConfig={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
+  });
+
+  it('custom.transport 缺省：不显示「配置」按钮', () => {
+    render(
+      <ResourceDetail
+        item={remoteMcp({ custom: { installedAt: '2026-09-23T00:00:00.000Z' } })}
+        onClose={() => {}}
+        onEditMcpConfig={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
+  });
+
+  it('未安装条目：不显示「配置」按钮', () => {
+    render(
+      <ResourceDetail
+        item={remoteMcp({ installed: false, installable: true })}
+        onClose={() => {}}
+        onEditMcpConfig={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
+  });
+
+  it('prop 缺省（onEditMcpConfig 未注入）：不显示「配置」按钮', () => {
+    render(<ResourceDetail item={remoteMcp()} onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
+  });
+});

@@ -20,18 +20,23 @@ import type { RegistryProviderMeta, RegistryListEntry, ResourceItem } from '../.
 const listMock = vi.fn();
 const registryProvidersMock = vi.fn();
 const registryListMock = vi.fn();
+// P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
+const danglingMcpRefsMock = vi.fn();
 
 const mockApi = {
   resource: {
     list: listMock,
     registryProviders: registryProvidersMock,
     registryList: registryListMock,
+    danglingMcpRefs: danglingMcpRefsMock,
   },
 };
 
 beforeEach(() => {
   listMock.mockReset();
   listMock.mockResolvedValue([] as ResourceItem[]);
+  danglingMcpRefsMock.mockReset();
+  danglingMcpRefsMock.mockResolvedValue([]);
   registryProvidersMock.mockReset();
   registryProvidersMock.mockResolvedValue([
     { key: 'builtin', label: '内置市场', region: 'local', types: ['agent', 'mcp', 'skill'], degraded: false },

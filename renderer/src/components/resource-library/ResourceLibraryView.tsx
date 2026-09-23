@@ -15,12 +15,13 @@ import { UploadSkillDialog } from '../agent/UploadSkillDialog';
 import { AgentCreateWizard } from './wizard/AgentCreateWizard';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
+import { McpConfigDialog } from './McpConfigDialog';
 import { McpJsonPasteDialog } from './McpJsonPasteDialog';
 import { McpConnectDialog } from './McpConnectDialog';
 import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
-import type { AgentDefinition, JsonSchemaLike, ResourceType } from '../../ipc/types';
+import type { AgentDefinition, JsonSchemaLike, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
   const { activeType, setActiveType, setMode, items, installResource, load } = useResourceStore();
@@ -43,6 +44,10 @@ export function ResourceLibraryView() {
   } | null>(null);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
+  // P2.2 Task 7：远程 MCP 配置编辑目标（null = 弹窗关）。name 是 MCP 定义名
+  // （ResourceItem.slug），displayName 是展示名——getMcpConfig/updateMcpConfig
+  // 入参走 name（spec §6.2），弹窗标题用 displayName。
+  const [configTarget, setConfigTarget] = useState<{ name: string; displayName: string } | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
@@ -111,6 +116,22 @@ export function ResourceLibraryView() {
     if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
   };
 
+  // P2.2 Task 7：远程 MCP 配置编辑。ResourceDetail「配置」按钮触发——
+  // 透传整 item（item.slug 作为 MCP 定义名供 getMcpConfig/updateMcpConfig）。
+  const handleEditMcpConfig = (item: ResourceItem): void => {
+    setConfigTarget({ name: item.slug, displayName: item.name });
+  };
+
+  // 配置编辑提交：updateMcpConfig 写盘 → load 刷新（headers/查询参数变化
+  // 不改 installedAt，但 ResourceItem 字段不变，主要靠下一轮 list 拿新元数据）→
+  // 「已更新」横幅走 installNotice 机制。失败由 McpConfigDialog 自渲染红字。
+  const handleMcpConfigSubmit = async (input: McpConfigUpdateInput): Promise<void> => {
+    if (!configTarget) return;
+    await ipc.resource.updateMcpConfig(configTarget.name, input);
+    await load();
+    useResourceStore.setState({ installNotice: `配置已更新：${configTarget.displayName}` });
+  };
+
   // ── 三类页的「＋」菜单（最后一条固定「从网络获取」）───────────────────
   const addItemsFor = (type: ResourceType): AddMenuItem[] => {
     if (type === 'agent') {
@@ -144,6 +165,7 @@ export function ResourceLibraryView() {
         onInstall={handleInstall}
         onEditAgent={handleEditAgent}
         onOpenPreset={openPresetDialog}
+        onEditMcpConfig={handleEditMcpConfig}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
@@ -182,6 +204,15 @@ export function ResourceLibraryView() {
       )}
       {presetTarget && (
         <EnablePresetDialog slug={presetTarget.slug} name={presetTarget.name} def={presetTarget.def} onClose={closePresetDialog} />
+      )}
+      {/* P2.2 Task 7：远程 MCP 配置编辑弹窗（McpConfigDialog mount 拉 getMcpConfig） */}
+      {configTarget && (
+        <McpConfigDialog
+          name={configTarget.name}
+          serverName={configTarget.displayName}
+          onSubmit={handleMcpConfigSubmit}
+          onClose={() => setConfigTarget(null)}
+        />
       )}
     </div>
   );

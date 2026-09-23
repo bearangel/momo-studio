@@ -42,6 +42,8 @@ interface Props {
   onEnable?: (id: string) => void;
   /** builtin 已启用 / marketplace 已安装 agent → 弹配置表单 */
   onConfigure?: (id: string) => void;
+  /** 已装远程 MCP → 弹配置编辑表单（仅 streamable_http；spec §6.1 / Task 7） */
+  onEditMcpConfig?: (item: ResourceItem) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -57,7 +59,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -292,6 +294,17 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           <Button
             size="sm"
             onClick={() => onConfigure(item.id)}
+            className="inline-flex items-center gap-1"
+          >
+            <Settings2 size={12} strokeWidth={1.75} aria-hidden />
+            配置
+          </Button>
+        )}
+        {/* 配置按钮：已装远程 MCP（spec §6.1 / Task 7）——与卸载按钮同排；stdio 不编辑（D1） */}
+        {item.type === 'mcp' && item.installed && item.custom?.transport === 'streamable_http' && onEditMcpConfig && (
+          <Button
+            size="sm"
+            onClick={() => onEditMcpConfig(item)}
             className="inline-flex items-center gap-1"
           >
             <Settings2 size={12} strokeWidth={1.75} aria-hidden />

@@ -2,7 +2,7 @@
 // 资源页公共骨架（spec §2.1）：工具栏（搜索 + 来源 chips + AddMenu + 模式 Segmented）
 // + 已安装行列表 / RegistryBrowse + 右侧详情面板。三页同构，type 参数驱动。
 import { useState } from 'react';
-import type { ResourceFilter, ResourceSource, ResourceType } from '../../ipc/types';
+import type { ResourceFilter, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
 import { useResourceStore } from '../../stores/resource.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
@@ -10,6 +10,7 @@ import { Segmented } from '../ui/Segmented';
 import { cn } from '../../lib/cn';
 import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
+import { DanglingRefsCard } from './DanglingRefsCard';
 import { RegistryBrowse } from './RegistryBrowse';
 import { ResourceRow, TYPE_ICON } from './ResourceRow';
 import { ResourceDetail } from './ResourceDetail';
@@ -52,9 +53,11 @@ interface TypePageShellProps {
   onEditAgent: (id: string) => void;
   /** builtin/marketplace agent 启用/配置入口（EnablePresetDialog 挂载在 View 层） */
   onOpenPreset: (id: string) => void;
+  /** 已装远程 MCP 配置编辑入口（McpConfigDialog 挂载在 View 层；P2.2 Task 7） */
+  onEditMcpConfig?: (item: ResourceItem) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, sourceFilter, query, mode,
     setSourceFilter, setQuery, setMode, deleteResource,
@@ -119,6 +122,9 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
       )}
 
+      {/* MCP 悬空引用提示卡（spec §6.3）——仅 MCP 页 installed 模式挂载；空/null 静默不渲染 */}
+      {type === 'mcp' && mode === 'installed' && <DanglingRefsCard />}
+
       {/* 主区 */}
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -160,6 +166,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
             onEdit={onEditAgent}
             onEnable={onOpenPreset}
             onConfigure={onOpenPreset}
+            onEditMcpConfig={onEditMcpConfig}
           />
         )}
       </div>
