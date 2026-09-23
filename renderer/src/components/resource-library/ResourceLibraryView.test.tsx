@@ -32,6 +32,8 @@ const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
 // P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
 const resourceDanglingMcpRefs = vi.fn();
+// P2.3 Task 4：预置库弹窗挂载拉预置清单
+const resourceListBuiltinPresets = vi.fn();
 const agentList = vi.fn();
 const agentBuiltinSuggestions = vi.fn();
 const providerList = vi.fn();
@@ -43,6 +45,7 @@ const mockApi = {
     install: resourceInstall,
     delete: resourceDelete,
     danglingMcpRefs: resourceDanglingMcpRefs,
+    listBuiltinPresets: resourceListBuiltinPresets,
   },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
@@ -69,6 +72,7 @@ beforeEach(() => {
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
   resourceDanglingMcpRefs.mockReset().mockResolvedValue([]);
+  resourceListBuiltinPresets.mockReset().mockResolvedValue([]);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
   providerList.mockReset().mockResolvedValue([]);
@@ -172,5 +176,64 @@ describe('DXT/MCPB 导入入口', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     fireEvent.click(screen.getByText('导入 DXT / MCPB 包'));
     expect(screen.getByRole('dialog', { name: '导入 DXT / MCPB 包' })).toBeTruthy();
+  });
+});
+
+// ── 预置库入口与接线（P2.3 Task 4）─────────────────────────────────────────
+// 链路：AddMenu「启用预置库」（仅 agent 页组装，Task 0 裁定：只有 agent 有
+// YAML→落库启用管线）→ PresetLibraryDialog（mount 拉 listBuiltinPresets）→
+// 选中 slug → 关预置库 + openPresetBySlug（builtin-<slug> def 反查，与
+// openPresetDialog 同形状）→ EnablePresetDialog（presetTarget 挂载位，enable 模式）。
+describe('预置库入口与接线（P2.3 Task 4）', () => {
+  it('Agent 页「＋」菜单含「启用预置库」；MCP / Skill 页无（仅 agent 有启用语义）', () => {
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
+    expect(screen.getByText('启用预置库')).toBeTruthy();
+    // 关菜单 → 切 MCP 页：下拉无该入口
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
+    expect(screen.queryByText('启用预置库')).toBeNull();
+    // 切 Skill 页：同样无
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加技能' }));
+    expect(screen.queryByText('启用预置库')).toBeNull();
+  });
+
+  it('入口打开预置库 → 选中 → 关预置库并打开 EnablePresetDialog（enable 模式）', async () => {
+    // 展示名来源：resource.list 返回的 builtin agent 清单项（真实语义：agent 页
+    // 已安装列表本就含 4 个预置 agent，catalog 是展示名权威——mount 首拉后 items
+    // 即为该清单）
+    resourceList.mockResolvedValueOnce([
+      {
+        id: 'agent-coder',
+        type: 'agent',
+        source: 'builtin',
+        slug: 'coder',
+        name: '程序员',
+        description: '根据需求实现代码，支持多种编程语言',
+        installed: true,
+        installable: false,
+        removable: false,
+      } as ResourceItem,
+    ]);
+    resourceListBuiltinPresets.mockResolvedValueOnce([
+      { slug: 'coder', name: '程序员', description: '根据需求实现代码，支持多种编程语言', iconEmoji: '💻' },
+    ]);
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
+    fireEvent.click(screen.getByText('启用预置库'));
+    // 预置库弹窗挂载并按当前 activeType 拉清单
+    await waitFor(() => expect(resourceListBuiltinPresets).toHaveBeenCalledWith('agent'));
+    const libDialog = await screen.findByRole('dialog', { name: '启用预置库' });
+    expect(within(libDialog).getByText('程序员')).toBeTruthy();
+    // 选中 → def 反查走 agent.list（builtin-<slug> ?? slug 形状）→ EnablePresetDialog
+    // 以 enable 模式打开（agent.list 返回空 = 未启用，def undefined；标题名取自
+    // store 同 slug 清单项）
+    fireEvent.click(within(libDialog).getByRole('button', { name: '选择' }));
+    await screen.findByRole('dialog', { name: '启用预设 Agent：程序员' });
+    expect(screen.queryByRole('dialog', { name: '启用预置库' })).toBeNull();
+    await waitFor(() => expect(agentList).toHaveBeenCalled());
   });
 });

@@ -2,9 +2,11 @@
 // 资源库壳（spec §2.1 重设计）：TypeSidebar（Agent/MCP/Skill 二级菜单）+ TypePageShell。
 // 弹窗开关全部集中在本层；agent 专属回调和 preset/edit 逻辑自旧单页 View 平移。
 // Task 10/12/13 接线三个新弹窗；Task 14 新建智能体入口已替换为 AgentCreateWizard。
-// P2.3 Task 1：移除网络获取模式接线（registry 安装流 / smithery 连接配置弹窗）；
-// 预置启用挂载位保留（presetTarget / EnablePresetDialog——Task 4 接回预置库触发）。
+// P2.3 Task 1：移除网络获取模式接线（registry 安装流 / smithery 连接配置弹窗）。
+// P2.3 Task 4：AddMenu「启用预置库」入口（仅 agent 分支）→ PresetLibraryDialog →
+// 选中 slug 复用 presetTarget/EnablePresetDialog 保留位完成启用即配。
 import { useEffect, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useResourceStore } from '../../stores/resource.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -22,6 +24,7 @@ import { McpJsonPasteDialog } from './McpJsonPasteDialog';
 import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
+import { PresetLibraryDialog } from './PresetLibraryDialog';
 import type { AgentDefinition, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
@@ -39,6 +42,8 @@ export function ResourceLibraryView() {
   const [bundleOpen, setBundleOpen] = useState(false);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
+  // P2.3 Task 4：预置库弹窗开关（入口仅 agent 页组装）
+  const [presetLibraryOpen, setPresetLibraryOpen] = useState(false);
   // P2.2 Task 7：远程 MCP 配置编辑目标（null = 弹窗关）。name 是 MCP 定义名
   // （ResourceItem.slug），displayName 是展示名——getMcpConfig/updateMcpConfig
   // 入参走 name（spec §6.2），弹窗标题用 displayName。
@@ -78,6 +83,24 @@ export function ResourceLibraryView() {
     }
   };
 
+  // P2.3 Task 4：预置库选中 slug → 打开 EnablePresetDialog（复用 presetTarget 挂载位）。
+  // def 反查与 openPresetDialog 同形状（builtin-<slug> 优先、slug 兜底——启用链
+  // enablePresetDef 落库 id 即 builtin-<slug>）；展示名优先 store 同 slug builtin
+  // 清单项（catalog 是展示名权威）、退 def 名、退 slug——不依赖 catalog 必含该预置。
+  const openPresetBySlug = async (slug: string): Promise<void> => {
+    try {
+      const defs = await ipc.agent.list();
+      const def = defs.find((d) => d.id === `builtin-${slug}`) ?? defs.find((d) => d.slug === slug);
+      const name =
+        items.find((i) => i.type === 'agent' && i.source === 'builtin' && i.slug === slug)?.name ??
+        def?.name ??
+        slug;
+      setPresetTarget({ slug, name, def });
+    } catch (err) {
+      console.error('打开预设 agent 配置失败', { slug, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   // 本地安装流（installed 列表 installable 项——p2p 导入）：直连 store.installResource，
   // 错误与成功横幅均由 store 落位（P2.3 Task 1 起 registry 安装包装流已移除）
   const handleInstall = (itemId: string): void => {
@@ -113,6 +136,8 @@ export function ResourceLibraryView() {
       return [
         { key: 'wizard', title: '新建智能体…', hint: '分步向导：基础信息 → 提示词 → 能力 → 模型', onSelect: () => setCreateAgentOpen(true) },
         { key: 'import-yaml', title: '导入 YAML 文件…', hint: 'manifest 格式，校验后注册为自定义 agent', onSelect: () => setImportYamlOpen(true) },
+        // 预置库入口仅 agent 页（Task 0 裁定：只有 agent 有启用管线）
+        { key: 'preset-library', title: '启用预置库', hint: '从内置预设清单选择 agent，配置模型后启用', icon: Sparkles, onSelect: () => setPresetLibraryOpen(true) },
       ];
     }
     if (type === 'mcp') {
@@ -168,6 +193,17 @@ export function ResourceLibraryView() {
       )}
       {presetTarget && (
         <EnablePresetDialog slug={presetTarget.slug} name={presetTarget.name} def={presetTarget.def} onClose={closePresetDialog} />
+      )}
+      {/* P2.3 Task 4：预置库弹窗（选中 slug → 关预置库 → 复用 presetTarget 打开 EnablePresetDialog） */}
+      {presetLibraryOpen && (
+        <PresetLibraryDialog
+          type={activeType}
+          onSelect={(slug) => {
+            setPresetLibraryOpen(false);
+            void openPresetBySlug(slug);
+          }}
+          onClose={() => setPresetLibraryOpen(false)}
+        />
       )}
       {/* P2.2 Task 7：远程 MCP 配置编辑弹窗（McpConfigDialog mount 拉 getMcpConfig） */}
       {configTarget && (

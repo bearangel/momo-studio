@@ -1,8 +1,10 @@
 // renderer/src/components/resource-library/AddMenu.tsx
 // 类型专属「＋」下拉（spec §4，Cherry Studio MCP 模式）：命名路径 + 一句副文案。
 // 点击外部收起；菜单项点击后必收起。图标 lucide Plus（禁 emoji）。
+// P2.3 Task 4：菜单项支持可选 lucide 前导图标（「启用预置库」项 Sparkles 16px）。
 import { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 /** 单条添加路径 */
 export interface AddMenuItem {
@@ -11,6 +13,8 @@ export interface AddMenuItem {
   title: string;
   /** 一句副文案（如「名称 / 命令 / 参数」） */
   hint?: string;
+  /** 可选前导图标（16px / stroke 1.75，语义 token 着色） */
+  icon?: LucideIcon;
   onSelect: () => void;
 }
 
@@ -61,8 +65,13 @@ export function AddMenu({ label, items }: AddMenuProps) {
                 item.onSelect();
               }}
             >
-              <span className="block text-[13px] text-primary">{item.title}</span>
-              {item.hint && <span className="block text-xs text-tertiary">{item.hint}</span>}
+              <span className="flex items-center gap-2">
+                {item.icon && <item.icon size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-secondary" />}
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-primary">{item.title}</span>
+                  {item.hint && <span className="block text-xs text-tertiary">{item.hint}</span>}
+                </span>
+              </span>
             </button>
           ))}
         </div>
