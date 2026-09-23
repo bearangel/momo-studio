@@ -28,7 +28,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import { runMigrations, closeDb } from '../../src/main/storage/db';
 import { getMessageByStreamSessionId } from '../../src/main/storage/messages/repo';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
 import { logger } from '../../src/main/logger';
@@ -65,12 +65,19 @@ function makeFakeChild(): {
   };
 }
 
-vi.mock('node:child_process', () => ({
-  fork: vi.fn(() => {
-    captured.child = makeFakeChild();
-    return captured.child;
-  }),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  // 部分 mock：fork 走 fake child（捕获 message handler）；spawn 等其余导出
+  // 保持真实——F 段全链依赖真 McpClient.spawn 触发真实 ENOENT（momo-test-rules：
+  // mock 收窄到进程边界，链内行为用真实实现）
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    fork: vi.fn(() => {
+      captured.child = makeFakeChild();
+      return captured.child;
+    }),
+  };
+});
 
 import { spawnForAgent } from '../../src/main/agent/runtime-spawner';
 import { handleStreamChunk } from '../../src/main/agent/stream-relay';
@@ -223,4 +230,117 @@ describe('MCP 发现失败可观测性（缺陷 #2 回归锁）', () => {
     // （下次 start 不会重复发同一失败——但实现里没有去重，目前会重复；可接受：
     // 实际 DB 故障后通常进程也死了，不会复现）
   });
+
+  it('F. 全链：command 不存在的 MCP 定义 → 真实 discoverMcpTools 失败 → 子进程上报 → 主进程 warn + start 后落库', async () => {
+    // brief 红测原文（P1）：「注入 command 不存在的 MCP 定义 → 断言主进程 warn
+    // （+ 事件落库）」。A-E 用构造载荷测主进程半边；本段补全链——DB 注册真实
+    // 定义（command 指向不存在路径）→ 子进程侧真实 discoverMcpTools → 主进程
+    // 真实 host-manager（spawn ENOENT）→ 应答回灌 → 子进程 catch 上报
+    // mcp-discovery-failed（真实载荷）→ 回灌主进程 → warn + status_change 落库。
+    // 修复前两半皆红：子进程 catch 不上报（discoveryEvents 空）+ 主进程无此分支。
+    const { registerMcpDefinition } = await import('../../src/main/mcp/host-manager');
+    registerMcpDefinition({
+      id: 'mcp-broken-enoent',
+      name: 'broken-mcp',
+      version: '1.0.0',
+      command: '/nonexistent/enoent-mcp-cmd',
+      args: [],
+      env: {},
+      source: 'custom',
+    });
+
+    const onChunk = (c: StreamChunk): void => handleStreamChunk(c);
+    const handler = await setupHandler(onChunk);
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    // 子进程 IPC 线仿真：
+    //   process.send（子 → 主）：mcp:listTools 转发主进程 handler；
+    //     mcp-discovery-failed 捕获待断言
+    //   process.on（子进程监听注册）：捕获 mcp-bridge 注册的 message handler——
+    //     主进程应答（fake child.send 的 {id, error}）直接调它回灌（绕开
+    //     process.emit 的 Signals 类型限制，与 iserror-propagation 测试同手法）
+    const { discoverMcpTools } = await import('../../src/main/agent/mcp-bridge');
+    const discoveryEvents: Array<Record<string, unknown>> = [];
+    const origSend = process.send;
+    const origOn = process.on;
+    let childListener: ((msg: unknown) => void) | null = null;
+    process.on = ((event: string, cb: (msg: unknown) => void): typeof process => {
+      if (event === 'message') childListener = cb;
+      return process;
+    }) as typeof process.on;
+    const childObj = captured.child as { send: (payload: unknown) => boolean } | null;
+    if (!childObj) throw new Error('fake child 未创建');
+    const origChildSend = childObj.send;
+    childObj.send = (payload: unknown): boolean => {
+      childListener?.(payload);
+      return true;
+    };
+    process.send = ((msg: unknown): boolean => {
+      const m = msg as { type?: string };
+      if (m.type === 'mcp:listTools') {
+        void Promise.resolve(handler(msg)).catch(() => undefined);
+        return true;
+      }
+      if (m.type === 'mcp-discovery-failed') {
+        discoveryEvents.push(msg as Record<string, unknown>);
+        return true;
+      }
+      return true;
+    }) as NonNullable<typeof process.send>;
+
+    try {
+      const defs = await discoverMcpTools({
+        workspaceId: 'ws-mcp',
+        mcpNames: ['broken-mcp'],
+      } as never);
+      // 既有语义保持：失败跳过不阻塞上线（返回空工具面）
+      expect(defs).toEqual([]);
+
+      // 子进程真实上报（载荷真实：spawn ENOENT）
+      expect(discoveryEvents).toHaveLength(1);
+      const report = discoveryEvents[0] as
+        | { type?: string; serverName?: string; error?: string }
+        | undefined;
+      expect(report).toMatchObject({
+        type: 'mcp-discovery-failed',
+        serverName: 'broken-mcp',
+      });
+      expect(String(report?.error)).toContain('ENOENT');
+
+      // 上报事件回灌主进程（真实 IPC 投递仿真）→ logger.warn
+      await handler(discoveryEvents[0]);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ serverName: 'broken-mcp' }),
+      );
+
+      // start chunk（真实 handleStreamChunk 插 messages 行）→ status_change 落库，
+      // 真实 ENOENT 载荷全链存活到 message_events
+      const ssi = 'ssi-disc-fullchain';
+      await handler({
+        type: 'start',
+        streamSessionId: ssi,
+        sessionId: '!sess-mcp',
+        senderAgentId: '@bot:mcp',
+      } as StreamChunk);
+      const messageId = getMessageByStreamSessionId(ssi)?.id;
+      expect(messageId).toBeDefined();
+      const events = listEventsByMessage(messageId!);
+      const notice = events.find(
+        (e) =>
+          e.eventType === 'status_change' &&
+          typeof e.payload.mcpDiscoveryFailed === 'object' &&
+          e.payload.mcpDiscoveryFailed !== null &&
+          (e.payload.mcpDiscoveryFailed as { serverName?: string }).serverName === 'broken-mcp',
+      );
+      expect(notice).toBeDefined();
+      expect(
+        String((notice?.payload.mcpDiscoveryFailed as { error?: string }).error),
+      ).toContain('ENOENT');
+    } finally {
+      process.send = origSend;
+      process.on = origOn;
+      childObj.send = origChildSend;
+    }
+  }, 30_000);
 });
