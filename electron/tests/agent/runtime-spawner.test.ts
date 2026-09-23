@@ -9,11 +9,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { spawnForAgent, stopRuntime } from '../../src/main/agent/runtime-spawner';
 
-// mock fork（避免真实 fork runtime-entry）
+// mock fork（避免真实 fork runtime-entry）。P0 boot 握手契约：真实子进程在
+// 注册完监听器后异步发一次性 {type:'runtime-ready'}——mock 以 setImmediate
+// 仿真该时序（消息监听器注册后、测试 await 恢复前到达）。
 vi.mock('node:child_process', () => ({
   fork: vi.fn(() => ({
     pid: 12345,
-    on: vi.fn(),
+    on: vi.fn((event: string, cb: (msg: unknown) => void) => {
+      if (event === 'message') {
+        setImmediate(() => cb({ type: 'runtime-ready' }));
+      }
+    }),
     off: vi.fn(),
     send: vi.fn(),
     kill: vi.fn(),

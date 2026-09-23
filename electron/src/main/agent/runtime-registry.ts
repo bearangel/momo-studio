@@ -34,7 +34,7 @@ import type { AgentRuntimeOpts } from './runtime-config';
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './agent-runner';
-import { spawnForAgent } from './runtime-spawner';
+import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
 // ─── 全局注册表 ───────────────────────────────────────────────────────────
@@ -120,6 +120,11 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
   const pool = new WarmPool({
     poolSize: 2,
     spawn: async (agentId) => {
+      // P0 boot 握手：spawnForAgent 现在等 runtime-ready 才 resolve——握手期间
+      // 子进程可能退出（exit handler 触发 spawn reject）。onExit 闭包不得解引用
+      // 尚未赋值的 runtime（const + await 的 TDZ 会抛 ReferenceError 变 uncaught），
+      // 用 holder 空值防御：握手期退出时尚未入池/入活跃表，无物可清。
+      let spawned: SpawnedRuntime | null = null;
       const runtime = await spawnForAgent({
         assignmentId: agentId,
         runtimeConfig: opts,
@@ -127,14 +132,15 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
         onExit: (code) => {
           logger.info('task-driven runtime 退出', { agentId, code });
           // C2 清理链：池剔除 + runner 活跃收尾。经全局 Map 实时查询保证幂等
-          // （此闭包可能比 pool/runner 自身存活更久）。runtime 在此处必已赋值
-          // （exit 是宏任务事件，晚于 await spawnForAgent 的微任务恢复）。
+          // （此闭包可能比 pool/runner 自身存活更久）。
+          if (!spawned) return;
           const poolNow = agentWarmPools.get(instanceId);
-          if (poolNow) poolNow.evict(agentId, runtime.child);
+          if (poolNow) poolNow.evict(agentId, spawned.child);
           const runnerNow = agentRunners.get(instanceId);
-          if (runnerNow) runnerNow.handleChildExit(runtime.child, code);
+          if (runnerNow) runnerNow.handleChildExit(spawned.child, code);
         },
       });
+      spawned = runtime;
       return runtime.child;
     },
   });

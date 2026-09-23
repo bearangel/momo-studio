@@ -254,6 +254,15 @@ async function main(): Promise<void> {
     }
   };
   process.on('message', taskMessageListener);
+
+  // P0 修复（boot 完成握手）：监听器注册完毕后向主进程发一次性 runtime-ready 信号。
+  // 主进程 spawnForAgent 在收到本信号前不 resolve——否则 WarmPool.acquire会把
+  // 「已 fork 但 boot 未完成」的子进程交给 AgentRunner 立即 send(task-config)，
+  // 消息在上方监听器注册前的事件循环窗口（MCP 发现 await 等）内被 channel
+  // parser emit 而永久丢弃，回合静默死亡（零 chunk / 零消息行 / 零错误）。
+  // 必须置于 process.on('message', taskMessageListener) 之后：ready 即承诺
+  // 「task-config 监听器已就位」。
+  process.send?.({ type: 'runtime-ready' });
 }
 
 

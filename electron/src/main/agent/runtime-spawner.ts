@@ -37,12 +37,82 @@ export interface SpawnOpts {
   runtimeConfig: AgentRuntimeOpts;
   onChunk: (chunk: StreamChunk) => void;
   onExit: (code: number | null) => void;
+  /**
+   * P0 boot 握手超时（毫秒）：spawnForAgent 等待子进程 runtime-ready 信号的上限，
+   * 超时 kill 子进程并以中文错误 reject。缺省 30s；测试可注入小值。
+   */
+  readyTimeoutMs?: number;
 }
 
 const RUNTIME_ENTRY_PATH = path.join(__dirname, 'runtime-entry.js');
 const SHUTDOWN_TIMEOUT_MS = 5000;
 /** 审计巡检周期：每 200 次 audit:toolCall 写入触发一次 enforceAuditQuota */
 const AUDIT_ENFORCE_INTERVAL = 200;
+
+/** boot 握手默认超时——子进程 boot（含 MCP 发现 IPC 往返）远短于此值 */
+const RUNTIME_READY_TIMEOUT_MS = 30_000;
+
+/**
+ * 测试钩子：覆写 runtime-entry fork 路径。vitest 下 __dirname 指向 src 源码目录
+ * （无 .js 产物），fork 级测试用它指向 dist 编译产物；传 null 还原缺省路径。
+ */
+let runtimeEntryPathOverride: string | null = null;
+
+export function __setRuntimeEntryPathForTest(p: string | null): void {
+  runtimeEntryPathOverride = p;
+}
+
+/**
+ * boot 完成握手 gate（P0 修复）：spawnForAgent resolve 前必须等到子进程的
+ * {type:'runtime-ready'}——子进程在注册完 task-config 监听器后发的一次性信号。
+ * 未等握手即把 child 交给 AgentRunner.send(task-config) 会把消息丢在监听器
+ * 注册前的事件循环窗口内（静默回合丢失，见 tests/agent/runtime-boot-handshake*）。
+ *
+ * settle 幂等（ready / 超时 / 握手期退出三种终态先到先得）：
+ *   - ready        → resolve
+ *   - 超时          → kill 子进程 + 中文错误 reject（防孤儿、防静默悬挂）
+ *   - 握手期 exit  → 中文错误 reject（exit handler 调 settle(err)，ready 后 no-op）
+ */
+interface ReadyGate {
+  promise: Promise<void>;
+  settle: (err: Error | null) => void;
+}
+
+function makeReadyGate(child: ChildProcess, timeoutMs: number): ReadyGate {
+  let settled = false;
+  let resolveFn!: () => void;
+  let rejectFn!: (err: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolveFn = res;
+    rejectFn = rej;
+  });
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    try {
+      child.kill();
+    } catch {
+      // 子进程已退出
+    }
+    rejectFn(
+      new Error(
+        `runtime 启动握手超时（${Math.round(timeoutMs / 1000)}s 内未收到 runtime-ready 信号），` +
+          '子进程已终止，本次派发中止',
+      ),
+    );
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    promise,
+    settle(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) rejectFn(err);
+      else resolveFn();
+    },
+  };
+}
 
 /** 审计写入计数器（模块级，跨全部 runtime 共享——配额是 per-workspace 全局资源） */
 let auditToolCallCounter = 0;
@@ -173,10 +243,14 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   // Electron 自身绝对路径，真 PE）启动——无裸命令 .cmd shim 解析问题，不会
   // ENOENT；WarmPool 注入的 spawn 同源本路径（agent-runner 的 runtime 全部
   // 经此拉起），故不加 shell 分支（对照 mcp/client.ts 的裸命令 npx 问题）。
-  const child = fork(RUNTIME_ENTRY_PATH, [], {
+  const child = fork(runtimeEntryPathOverride ?? RUNTIME_ENTRY_PATH, [], {
     env,
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
   });
+
+  // P0 boot 握手 gate：fork 后立即创建（监听器注册与 fork 同一同步块，不存在
+  // 信号先于监听器到达的竞态窗口）
+  const readyGate = makeReadyGate(child, opts.readyTimeoutMs ?? RUNTIME_READY_TIMEOUT_MS);
 
   // 按线协议回写 MCP 响应。子进程可能已在 await 期间死亡（release kill / 中止
   // 竞态）——通道关闭时 send 同步抛 ERR_IPC_CHANNEL_CLOSED；吞掉避免 async
@@ -205,6 +279,11 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     if (handleChildMessage(msg)) return;
     if (typeof msg !== 'object' || msg === null) return;
     const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
+    // P0 boot 握手：子进程监听器注册完毕的一次性信号——resolve readyGate
+    if (m.type === 'runtime-ready') {
+      readyGate.settle(null);
+      return;
+    }
     // 审计桥（P2 Task 8，恢复 v1 被删的桥接）：子进程 audit.ts 的 process.send
     // 载荷无 workspace/agent 身份，用 spawn 闭包的 runtimeConfig 补全。
     // durationMs 可能是字符串/浮点/NaN（IPC 类型漂移），收敛为安全整数。
@@ -279,14 +358,22 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   };
   child.on('message', messageHandler);
 
-  // 注册 exit handler
+  // 注册 exit handler。握手期退出同时 settle readyGate（err）——spawnForAgent
+  // 以中文错误 reject 而非悬挂；ready 之后的 exit 对已 settle 的 gate 是 no-op。
   const exitHandler = (code: number | null): void => {
     logger.info('runtime 退出', { assignmentId, code });
+    readyGate.settle(
+      new Error(`runtime 子进程在启动握手完成前退出（exit code=${code ?? 'null'}）`),
+    );
     onExit(code);
   };
   child.on('exit', exitHandler);
 
-  logger.info('runtime 已 spawn', { assignmentId, pid: child.pid });
+  logger.info('runtime 已 spawn（等待 boot 握手）', { assignmentId, pid: child.pid });
+
+  // P0 boot 握手：等子进程 runtime-ready（= task-config 监听器已注册）后才算
+  // spawn 完成。WarmPool 据此保证 acquire 返回的 runtime 可立即接收 task-config。
+  await readyGate.promise;
 
   return {
     child,

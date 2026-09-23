@@ -32,7 +32,11 @@ vi.mock('node:child_process', () => ({
   fork: vi.fn(() => ({
     pid: 4343,
     on: (event: string, cb: (msg: unknown) => void) => {
-      if (event === 'message') captured.handler = cb;
+      if (event === 'message') {
+        // P0 boot 握手契约：仿真子进程注册完监听器后发的一次性 runtime-ready
+        setImmediate(() => cb({ type: 'runtime-ready' }));
+        captured.handler = cb;
+      }
     },
     off: vi.fn(),
     send: captured.send,
