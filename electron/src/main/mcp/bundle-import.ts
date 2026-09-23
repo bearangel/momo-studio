@@ -29,6 +29,7 @@ import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { resolveUserDataDir } from '../paths';
 import { deleteRegistered, getMcpConfig, registerMcpDefinition } from './host-manager';
+import { removeMcpRefsFromAgents } from '../agent/crud';
 import { isValidSlug } from '../marketplace/types';
 import { buildResourceId, type ResourceItem } from '../resource/types';
 
@@ -567,6 +568,11 @@ export function uninstallMcpBundle(slug: string): void {
 
   // bundle 行 source='custom'，无 marketplace 保护拦截；不存在时静默（幂等）
   deleteRegistered(slug);
+  // P2.2 Task 5：删行成功后级联清理 agent 侧引用（删行失败上抛时不动引用）
+  const cleaned = removeMcpRefsFromAgents(slug);
+  if (cleaned.length > 0) {
+    logger.info('卸载级联清理 MCP 引用', { name: slug, agents: cleaned });
+  }
   if (row.cache_path !== '') {
     try {
       fs.rmSync(row.cache_path, { recursive: true, force: true });

@@ -61,7 +61,7 @@ import {
 } from '../mcp/bundle-import';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
-import { deleteDefinition } from '../agent/crud';
+import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import { requestResourceImport } from '../p2p/resource-transfer';
 
@@ -237,6 +237,12 @@ export function registerResourceHandlers(): void {
             uninstallMcpBundle(item.slug);
           } else {
             deleted = deleteRegistered(item.slug);
+            // P2.2 Task 5：删行成功后级联清理 agent 侧引用（bundle 条目的级联
+            // 在 uninstallMcpBundle 内部，此处只挂直删断面，防双重级联）
+            const cleaned = removeMcpRefsFromAgents(item.slug);
+            if (cleaned.length > 0) {
+              logger.info('卸载级联清理 MCP 引用', { name: item.slug, agents: cleaned });
+            }
           }
         } else if (item.type === 'skill') deleted = deleteCustomSkill(item.slug);
         else if (item.type === 'agent') deleted = deleteDefinition(item.slug);

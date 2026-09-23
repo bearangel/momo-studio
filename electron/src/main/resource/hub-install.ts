@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { registerMcpDefinition, listRegistered, deleteRegistered } from '../mcp/host-manager';
+import { removeMcpRefsFromAgents } from '../agent/crud';
 import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
 
@@ -143,9 +144,15 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
     }));
 }
 
-/** hub 卸载：删 mcp_definitions 行 + installed_packages 记账（幂等） */
+/** hub 卸载：删 mcp_definitions 行 + 级联清理 agent 引用 + installed_packages 记账（幂等） */
 export function uninstallHubMcp(source: 'smithery', slug: string): void {
   deleteRegisteredHubSafe(slug);
+  // P2.2 Task 5：删行成功后级联清理 agent 侧引用（删行失败上抛时不到这里；
+  // 级联内部尽力而为，失败不阻断卸载）
+  const cleaned = removeMcpRefsFromAgents(slug);
+  if (cleaned.length > 0) {
+    logger.info('卸载级联清理 MCP 引用', { name: slug, agents: cleaned });
+  }
   const db = getDb();
   db.prepare('DELETE FROM installed_packages WHERE item_id = ?').run(`${source}:${slug}`);
 }

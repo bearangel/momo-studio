@@ -40,7 +40,12 @@ vi.mock('../../src/main/skill/zip-uploader', () => ({
   deleteCustomSkill: vi.fn(),
   uploadSkillZip: vi.fn(),
 }));
-vi.mock('../../src/main/agent/crud', () => ({ deleteDefinition: vi.fn() }));
+vi.mock('../../src/main/agent/crud', () => ({
+  deleteDefinition: vi.fn(),
+  // P2.2 Task 5：卸载级联 helper——返回空名单（IPC 路由层只锁调用事实，
+  // 真实级联语义由 tests/agent/crud-remove-mcp-refs.test.ts 真 DB 覆盖）
+  removeMcpRefsFromAgents: vi.fn(() => []),
+}));
 vi.mock('../../src/main/marketplace/installer', () => ({
   installPackage: vi.fn(),
   uninstallPackage: vi.fn(),
@@ -123,7 +128,7 @@ import {
   uninstallMcpBundle,
   isBundleInstalled,
 } from '../../src/main/mcp/bundle-import';
-import { deleteDefinition } from '../../src/main/agent/crud';
+import { deleteDefinition, removeMcpRefsFromAgents } from '../../src/main/agent/crud';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
 
 describe('registerResourceHandlers', () => {
@@ -176,6 +181,8 @@ describe('registerResourceHandlers', () => {
     const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
     await handler({}, 'custom-mcp-github');
     expect(deleteRegistered).toHaveBeenCalledWith('github');
+    // P2.2 Task 5：直删断面删行成功后级联清理 agent 引用
+    expect(removeMcpRefsFromAgents).toHaveBeenCalledWith('github');
   });
 
   it('resource:delete builtin-* 抛错（不可移除）', async () => {
@@ -716,6 +723,8 @@ describe('registerResourceHandlers', () => {
       expect(isBundleInstalled).toHaveBeenCalledWith('demo-bundle');
       expect(uninstallMcpBundle).toHaveBeenCalledWith('demo-bundle');
       expect(deleteRegistered).not.toHaveBeenCalled();
+      // 级联在 uninstallMcpBundle 内部（真实链路），IPC 层不重复挂——防双重级联
+      expect(removeMcpRefsFromAgents).not.toHaveBeenCalled();
     });
 
     it('resource:delete custom-mcp 非 bundle 条目维持原 deleteRegistered（路由判据 isBundleInstalled=false）', async () => {
@@ -735,6 +744,8 @@ describe('registerResourceHandlers', () => {
       expect(isBundleInstalled).toHaveBeenCalledWith('plain');
       expect(uninstallMcpBundle).not.toHaveBeenCalled();
       expect(deleteRegistered).toHaveBeenCalledWith('plain');
+      // P2.2 Task 5：非 bundle 直删断面同样级联清理 agent 引用
+      expect(removeMcpRefsFromAgents).toHaveBeenCalledWith('plain');
     });
   });
 });

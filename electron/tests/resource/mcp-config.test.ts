@@ -14,6 +14,8 @@
 //     非 https url——中文错误上抛且行不动；fetch 非 2xx 抛错 → warn + 裸模式
 //   - 集成锁（承 Task 3 host-manager-edit.test.ts 手法）：编辑 → 驱逐 →
 //     callMcpTool 重建握手携带新 Authorization（编辑即时生效闭环）
+//   - P2.2 Task 5 追加：listDanglingMcpRefs 悬空扫描——未注册名聚合 /
+//     已注册不列 / 同 def 重复引用去重 / 扫描异常（坏 JSON 行）降级空数组
 //
 // Mock 策略（铁律 5 收窄）：仅模块级 mock fetchSmitheryDetail（网络边界，
 // spread 实际模块保 composeRemoteConfig 等真实现）；evictMcpByName 包
@@ -41,8 +43,12 @@ import { fetchSmitheryDetail } from '../../src/main/resource/hub-install';
 import {
   getMcpConfigView,
   updateRemoteMcpConfig,
+  listDanglingMcpRefs,
 } from '../../src/main/resource/mcp-config';
+import { saveAgentDefinition } from '../../src/main/agent/crud';
+import { logger } from '../../src/main/logger';
 import type { McpServerConfig } from '../../src/main/mcp/types';
+import type { McpRef } from '../../src/main/agent/types';
 
 // 模块级 mock：只盖 fetchSmitheryDetail（网络边界），其余导出（含
 // composeRemoteConfig）走真实实现——编辑链的分流重组必须是真的。
@@ -498,6 +504,98 @@ describe('集成锁：编辑生效闭环', () => {
       expect(stub.authSeen).toEqual(['Bearer old', 'Bearer new']);
     } finally {
       stub.restore();
+    }
+  });
+});
+
+// ─── listDanglingMcpRefs：悬空引用扫描（P2.2 Task 5，spec §5.4） ────────────
+
+describe('listDanglingMcpRefs 悬空引用扫描', () => {
+  /** 落一条引用给定 MCP 列表的 agent 定义（id 即 slug，保证唯一） */
+  function saveAgent(
+    id: string,
+    name: string,
+    mcps: McpRef[],
+    source: 'custom' | 'builtin' = 'custom',
+  ): void {
+    saveAgentDefinition({
+      id,
+      name,
+      slug: id,
+      version: '1.0',
+      runtime: 'declarative',
+      systemPrompt: 'p',
+      defaultTools: [],
+      source,
+      description: 'd',
+      iconEmoji: '🤖',
+      defaultMcps: mcps,
+      defaultSkills: [],
+      workspaceId: null,
+      modelProviderId: null,
+      modelName: '',
+    });
+  }
+
+  function mcpRef(ref: string): McpRef {
+    return { kind: 'mcp', ref };
+  }
+
+  it('custom def 引用未注册名 → 按 refName 聚合 agent 名单（已启用 builtin 的 DB 行同样入扫）', () => {
+    saveAgent('def-a', '甲', [mcpRef('filesystem')]);
+    saveAgent('def-b', '乙', [mcpRef('filesystem')], 'builtin');
+    saveAgent('def-c', '丙', [mcpRef('ghost-two')]);
+
+    const refs = listDanglingMcpRefs();
+
+    // 聚合形状（spec §4.3）：refName → agents[{definitionId, name}]
+    const fsRef = refs.find((r) => r.refName === 'filesystem')!;
+    expect([...fsRef.agents].sort((x, y) => x.definitionId.localeCompare(y.definitionId))).toEqual([
+      { definitionId: 'def-a', name: '甲' },
+      { definitionId: 'def-b', name: '乙' },
+    ]);
+    const ghostRef = refs.find((r) => r.refName === 'ghost-two')!;
+    expect(ghostRef.agents).toEqual([{ definitionId: 'def-c', name: '丙' }]);
+  });
+
+  it('引用已注册 MCP 名 → 不列入悬空', () => {
+    registerMcpDefinition({
+      id: 'reg-fs-1',
+      name: 'filesystem',
+      version: '1.0.0',
+      command: 'npx',
+      args: ['-y', 'mcp-server-fs'],
+      source: 'custom',
+    });
+    saveAgent('def-installed', '已装用户', [mcpRef('filesystem')]);
+
+    const refs = listDanglingMcpRefs();
+
+    expect(refs.find((r) => r.refName === 'filesystem')).toBeUndefined();
+  });
+
+  it('同 def 重复引用同名 MCP → agents 去重（该 def 只计一次）', () => {
+    saveAgent('def-dup', '重复', [mcpRef('filesystem'), mcpRef('filesystem')]);
+
+    const refs = listDanglingMcpRefs();
+
+    const fsRef = refs.find((r) => r.refName === 'filesystem')!;
+    expect(fsRef.agents).toEqual([{ definitionId: 'def-dup', name: '重复' }]);
+  });
+
+  it('扫描异常（坏 JSON 行真实注入）→ warn + 空数组（UI 卡片静默不显示）', () => {
+    saveAgent('def-bad-json', '坏行', []);
+    // 坏 JSON 行 → listAgentDefinitions 在 rowToDef 的 JSON.parse 处真实抛错
+    getDb()
+      .prepare("UPDATE agent_definitions SET default_mcps = '{bad json' WHERE id = 'def-bad-json'")
+      .run();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(listDanglingMcpRefs()).toEqual([]);
+      // 降级必须可观测（warn），否则脏数据被无声吞掉
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('悬空'), expect.anything());
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

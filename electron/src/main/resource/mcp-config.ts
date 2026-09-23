@@ -12,16 +12,21 @@
 //     直写 → updateRemoteMcpDefinition（Task 3 专用 UPDATE，保 id/
 //     installed_at）→ evictMcpByName 驱逐池连接（下回合 getOrStartMcp 用
 //     新定义重建即生效）
-// 类型 McpConfigView / McpConfigUpdateInput 在本文件定义并导出，Task 6 做
-// renderer types.d.ts 镜像。
+// P2.2 Task 5 追加：listDanglingMcpRefs 悬空引用扫描（spec §4.3/§5.4）——
+// agent 全量 defaultMcps 引用与已注册 MCP 名集比对，查无者按 refName 聚合
+// agent 名单（UI DanglingRefsCard 数据源）。
+// 类型 McpConfigView / McpConfigUpdateInput / DanglingMcpRef 在本文件定义并
+// 导出，Task 6 做 renderer types.d.ts 镜像。
 
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import {
   evictMcpByName,
   getMcpConfig,
+  listRegistered,
   updateRemoteMcpDefinition,
 } from '../mcp/host-manager';
+import { listAgentDefinitions } from '../agent/crud';
 import type { McpConfigSchema, RegisteredMcp } from '../mcp/types';
 import { composeRemoteConfig, fetchSmitheryDetail } from './hub-install';
 
@@ -169,4 +174,39 @@ export async function updateRemoteMcpConfig(
   // input.schema 透传落库（编辑期间拉到的新 schema 顺手保存；缺省保留原列值）
   updateRemoteMcpDefinition(name, finalUrl, headers, input.schema);
   await evictMcpByName(name);
+}
+
+/** 悬空 MCP 引用条目（spec §4.3，renderer types.d.ts 镜像源） */
+export interface DanglingMcpRef {
+  /** 悬空引用名（如 'filesystem'） */
+  refName: string;
+  /** 引用了该未注册名字的全部 agent（definitionId + 展示名） */
+  agents: Array<{ definitionId: string; name: string }>;
+}
+
+/**
+ * P2.2 Task 5：悬空 MCP 引用扫描（spec §5.4）——agent 全量（含已启用
+ * builtin 的 DB 行与 custom/marketplace 定义）defaultMcps[].ref 与
+ * listRegistered() 名字集比对，查无者按 refName 聚合 agent 名单；同 def
+ * 重复引用去重。扫描异常 warn + 空数组（UI 卡片静默不显示，spec §7）。
+ */
+export function listDanglingMcpRefs(): DanglingMcpRef[] {
+  try {
+    const registeredNames = new Set(listRegistered().map((m) => m.name));
+    const byRef = new Map<string, Array<{ definitionId: string; name: string }>>();
+    for (const def of listAgentDefinitions()) {
+      // 同 def 重复引用同名 MCP 去重（Set 收敛，一个 def 只计一次）
+      const refs = new Set(def.defaultMcps.map((r) => r.ref));
+      for (const ref of refs) {
+        if (registeredNames.has(ref)) continue;
+        const agents = byRef.get(ref) ?? [];
+        agents.push({ definitionId: def.id, name: def.name });
+        byRef.set(ref, agents);
+      }
+    }
+    return Array.from(byRef.entries()).map(([refName, agents]) => ({ refName, agents }));
+  } catch (err) {
+    logger.warn('悬空 MCP 引用扫描失败，返回空列表', { error: (err as Error).message });
+    return [];
+  }
 }

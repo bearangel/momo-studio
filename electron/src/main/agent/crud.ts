@@ -514,6 +514,47 @@ export function updateAgentDefinition(input: {
   return getAgentDefinition(input.id)!;
 }
 
+/**
+ * P2.2 Task 5 卸载级联：从全部 agent 定义移除指定 MCP 引用，返回被清理的
+ * agent 名单。供三个 deleteRegistered 生产断面（resource/ipc.handlers 直删 /
+ * mcp/bundle-import bundle 卸载 / resource/hub-install hub 卸载）在删行
+ * 成功后调用——放 agent 层而非 deleteRegistered 体内，避免 mcp 层反向
+ * import agent/crud 成环（agent 层已经 host-manager 引用 mcp 层）。
+ * 失败隔离：单行 update 失败仅 warn 不整体上抛（删行已成功，级联尽力而为，
+ * 其余行继续清理）；列表读取失败同样降级返回空数组。
+ */
+export function removeMcpRefsFromAgents(name: string): string[] {
+  let defs: AgentDefinition[];
+  try {
+    defs = listAgentDefinitions();
+  } catch (err) {
+    logger.warn('MCP 引用级联清理：agent 定义读取失败，跳过清理', {
+      name,
+      error: (err as Error).message,
+    });
+    return [];
+  }
+  const cleaned: string[] = [];
+  for (const d of defs) {
+    if (!d.defaultMcps.some((r) => r.ref === name)) continue;
+    try {
+      updateAgentDefinition({
+        id: d.id,
+        defaultMcps: d.defaultMcps.filter((r) => r.ref !== name),
+      });
+      cleaned.push(d.name);
+    } catch (err) {
+      // 级联失败单行 update 不整体上抛：该行保持原状（悬空留给扫描兜底），其余行继续
+      logger.warn('MCP 引用级联清理：单行清理失败，跳过该 agent', {
+        name,
+        agent: d.name,
+        error: (err as Error).message,
+      });
+    }
+  }
+  return cleaned;
+}
+
 /** 列出某定义的全部成员 instanceId（调用方再按 isAgentRunning 过滤） */
 export function listRunningInstanceIdsByDefinition(definitionId: string): string[] {
   const db = getDb();
