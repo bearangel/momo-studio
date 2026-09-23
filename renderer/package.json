@@ -1,7 +1,7 @@
 {
   "name": "momo-studio-renderer",
   "private": true,
-  "version": "2.1.0-alpha.3",
+  "version": "2.1.0-alpha.4",
   "type": "module",
   "scripts": {
     "dev": "vite",

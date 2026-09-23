@@ -48,6 +48,21 @@ const SCHEMA_VIEW: McpConfigView = {
   headers: {},
 };
 
+// 多 required 字段 fixture（回归锁：缺失任一 required 字段应禁提交）
+const MULTI_REQ_VIEW: McpConfigView = {
+  ...SCHEMA_VIEW,
+  name: 'multi-req',
+  schema: {
+    required: ['apiKey', 'region'],
+    properties: {
+      apiKey: { title: 'API Key', description: 'Context7 API 密钥' },
+      region: { title: 'Region', description: '区域' },
+    },
+  },
+  values: { apiKey: 'sk-old-key', region: 'us' },
+  url: 'https://mcp.context7.com/mcp',
+};
+
 // 裸模式 fixture（bare=true：schema 键缺省——IPC 契约 'schema' in result === false）
 const BARE_VIEW: McpConfigView = {
   name: 'remote-bare',
@@ -108,6 +123,25 @@ describe('McpConfigDialog — schema 模式回显（D9）', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: '' } });
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-new' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+  });
+
+  it('多 required 字段 → 缺一禁提交；全填恢复（Task 7 复审补强）', async () => {
+    getMcpConfigMock.mockResolvedValueOnce(MULTI_REQ_VIEW);
+    render(<McpConfigDialog name="multi-req" serverName="s" onSubmit={vi.fn()} onClose={vi.fn()} />);
+    const apiKey = await screen.findByLabelText('API Key');
+    const region = screen.getByLabelText('Region');
+    // 初态全填 → enabled
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    // 清空 apiKey → 仍缺 region 的 required，disabled
+    fireEvent.change(apiKey, { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+    // 补 apiKey 但清空 region → 仍缺任一 required，disabled
+    fireEvent.change(apiKey, { target: { value: 'sk-new' } });
+    fireEvent.change(region, { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+    // 补 region → 全填，enabled
+    fireEvent.change(region, { target: { value: 'eu' } });
     expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
   });
 
