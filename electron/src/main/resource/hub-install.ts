@@ -4,7 +4,8 @@
 // P2.1 Task 3 直连翻转：install-config 端点已 404（死码移除），Smithery 安装改为
 // 详情接口取 deploymentUrl → streamable_http 直连注册（免账号 A1）。配置字段按
 // configSchema 的 x-from 元数据分流：'query' 拼进 URL query（encodeURIComponent），
-// 其余（含缺省——实证样本均无 x-from，spec D5）进 headers。
+// 其余（含缺省——实证样本均无 x-from，spec D5）进 headers。P2.2 Task 2 起
+// 分流段单点收敛为 composeRemoteConfig（安装/编辑共用）。
 // 记账走 installed_packages（item_id = `${source}:${slug}`），与 marketplace 同表
 // 不同前缀，卸载互不误伤。
 // 魔搭 remote 安装轨已于 P2.1 移除（registry 100% hosted 后放弃）；P3 若公开
@@ -70,20 +71,20 @@ export async function fetchSmitheryDetail(slug: string): Promise<SmitheryServerD
   return (await res.json()) as SmitheryServerDetail;
 }
 
-/** Smithery hosted 条目直连安装：x-from 分流 → streamable_http 注册 + 记账。
- *  url 须为 https（与 registerMcpDefinition 远端校验同一防线，前置给出可读错误）。 */
-export async function installSmitheryRemote(
-  slug: string,
+/** 安装/编辑共用的 x-from 分流组装（spec §5.2）。空串值剔除（编辑链表单可选
+ *  字段留空不产生占位项）；非 https 拒绝。Task 4 编辑链消费——返回形状变更
+ *  需同步 compose-remote-config.test.ts 契约锁。 */
+export function composeRemoteConfig(
   url: string,
   config: Record<string, string>,
-  schema?: JsonSchemaLike,
-): Promise<void> {
+  schema?: McpConfigSchema,
+): { finalUrl: string; headers: Record<string, string> } {
   if (!url.startsWith('https://')) {
-    throw new Error(`Smithery 服务器 ${slug} 的 deploymentUrl 非 https，拒绝直连：${url}`);
+    throw new Error(`远程 MCP url 必须以 https:// 开头: ${url}`);
   }
   const headers: Record<string, string> = {};
   const queryParts: string[] = [];
-  for (const [key, value] of Object.entries(config)) {
+  for (const [key, value] of Object.entries(config).filter(([, v]) => v !== '')) {
     if (schema?.properties?.[key]?.['x-from'] === 'query') {
       queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
     } else {
@@ -91,7 +92,21 @@ export async function installSmitheryRemote(
     }
   }
   const finalUrl =
-    queryParts.length > 0 ? `${url}${url.includes('?') ? '&' : '?'}${queryParts.join('&')}` : url;
+    queryParts.length > 0
+      ? `${url}${url.includes('?') ? '&' : '?'}${queryParts.join('&')}`
+      : url;
+  return { finalUrl, headers };
+}
+
+/** Smithery hosted 条目直连安装：x-from 分流 → streamable_http 注册 + 记账。
+ *  分流/https 防线单点收敛在 composeRemoteConfig（编辑链 Task 4 复用）。 */
+export async function installSmitheryRemote(
+  slug: string,
+  url: string,
+  config: Record<string, string>,
+  schema?: JsonSchemaLike,
+): Promise<void> {
+  const { finalUrl, headers } = composeRemoteConfig(url, config, schema);
   registerMcpDefinition({
     id: randomUUID(),
     name: slug,
