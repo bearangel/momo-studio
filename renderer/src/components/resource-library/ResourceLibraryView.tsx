@@ -16,9 +16,11 @@ import { AgentCreateWizard } from './wizard/AgentCreateWizard';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
 import { McpJsonPasteDialog } from './McpJsonPasteDialog';
+import { McpConnectDialog } from './McpConnectDialog';
+import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
-import type { AgentDefinition, ResourceType } from '../../ipc/types';
+import type { AgentDefinition, JsonSchemaLike, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
   const { activeType, setActiveType, setMode, items, installResource, load } = useResourceStore();
@@ -32,6 +34,13 @@ export function ResourceLibraryView() {
   const [importYamlOpen, setImportYamlOpen] = useState(false);
   const [mcpJsonOpen, setMcpJsonOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
+  const [bundleOpen, setBundleOpen] = useState(false);
+  // P2.1 Task 6：smithery needsConfig 连接配置目标（null = 弹窗关）
+  const [connectTarget, setConnectTarget] = useState<{
+    id: string;
+    name: string;
+    schema: JsonSchemaLike;
+  } | null>(null);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
 
@@ -71,11 +80,28 @@ export function ResourceLibraryView() {
 
   const handleInstall = async (itemId: string): Promise<void> => {
     const item = items.find((i) => i.id === itemId);
-    const ok = await installResource(itemId);
+    const result = await installResource(itemId);
+    // P2.1 Task 6：smithery needsConfig 两态——需补配置时弹连接配置弹窗（此前静默
+    // 无反馈），待用户提交 installSmitheryRemote 后才完成安装；store 已约定此态
+    // 不刷列表不设横幅，此处直接 return
+    if (result && typeof result === 'object' && result.needsConfig && result.schema) {
+      setConnectTarget({ id: itemId, name: item?.name ?? itemId, schema: result.schema });
+      return;
+    }
     // marketplace agent 安装成功 → 配置引导（def 刚落库需配模型；取消可稍后从「配置」再配）
-    if (ok && item?.type === 'agent' && item.source === 'marketplace') {
+    if (result && item?.type === 'agent' && item.source === 'marketplace') {
       await openPresetDialog(itemId);
     }
+  };
+
+  // smithery 连接配置提交：完成二段安装 → 刷新列表 → 「已连接」横幅。横幅复用既有
+  // installNotice 机制，经 store 全局 setState 写入（与 installResource 成功路径同形，
+  // 零新增 store API）；弹窗在 onSubmit 成功后自关（失败红字留在弹窗内由其自渲染）
+  const handleConnectSubmit = async (config: Record<string, string>): Promise<void> => {
+    if (!connectTarget) return;
+    await ipc.resource.installSmitheryRemote(connectTarget.id, config);
+    await load();
+    useResourceStore.setState({ installNotice: `已连接：${connectTarget.name}` });
   };
 
   const closePresetDialog = (): void => {
@@ -98,6 +124,7 @@ export function ResourceLibraryView() {
       return [
         { key: 'form', title: '手动配置…', hint: '名称 / 命令 / 参数 / 环境变量（高级项默认折叠）', onSelect: () => setRegisterMcpOpen(true) },
         { key: 'json', title: '粘贴 JSON…', hint: 'mcpServers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
+        { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
         { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
       ];
     }
@@ -125,6 +152,18 @@ export function ResourceLibraryView() {
       )}
       {mcpJsonOpen && (
         <McpJsonPasteDialog onClose={() => setMcpJsonOpen(false)} onSuccess={() => void load()} />
+      )}
+      {/* P2.1 Task 6：smithery 连接配置 + DXT/MCPB 本地包导入 */}
+      {connectTarget && (
+        <McpConnectDialog
+          serverName={connectTarget.name}
+          schema={connectTarget.schema}
+          onSubmit={handleConnectSubmit}
+          onClose={() => setConnectTarget(null)}
+        />
+      )}
+      {bundleOpen && (
+        <ImportBundleDialog onClose={() => setBundleOpen(false)} onSuccess={() => void load()} />
       )}
       {uploadSkillOpen && (
         <UploadSkillDialog onClose={() => setUploadSkillOpen(false)} onSuccess={() => void load()} />

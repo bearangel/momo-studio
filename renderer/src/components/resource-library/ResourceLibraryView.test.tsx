@@ -27,13 +27,19 @@ import type { AgentDefinition, ResourceItem, ResourceType } from '../../ipc/type
 const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
+const resourceInstallSmitheryRemote = vi.fn();
 const agentList = vi.fn();
 const agentBuiltinSuggestions = vi.fn();
 const providerList = vi.fn();
 const settingsGetGlobal = vi.fn();
 
 const mockApi = {
-  resource: { list: resourceList, install: resourceInstall, delete: resourceDelete },
+  resource: {
+    list: resourceList,
+    install: resourceInstall,
+    delete: resourceDelete,
+    installSmitheryRemote: resourceInstallSmitheryRemote,
+  },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
   settings: { getGlobal: settingsGetGlobal },
@@ -58,6 +64,7 @@ beforeEach(() => {
   resourceList.mockReset().mockResolvedValue([] as ResourceItem[]);
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
+  resourceInstallSmitheryRemote.mockReset().mockResolvedValue(undefined);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
   providerList.mockReset().mockResolvedValue([]);
@@ -89,12 +96,13 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
-  it('MCP 页下拉含三条路径（手动配置/粘贴 JSON/网络获取）', () => {
+  it('MCP 页下拉含四条路径（手动配置/粘贴 JSON/导入包/网络获取）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.getByText('手动配置…')).toBeTruthy();
     expect(screen.getByText('粘贴 JSON…')).toBeTruthy();
+    expect(screen.getByText('导入 DXT / MCPB 包')).toBeTruthy();
     expect(screen.getByText('从网络获取…')).toBeTruthy();
   });
 
@@ -146,5 +154,70 @@ describe('安装链路回归锁（终审 Important-3）', () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(agentList).not.toHaveBeenCalled();
+  });
+});
+
+// ── P2.1 Task 6：smithery needsConfig 连接配置闭环 + DXT/MCPB 导入入口 ────
+// 链路：安装按钮 → View.handleInstall 消费 store.installResource 透传的
+// SmitheryInstallResult → needsConfig:true 时弹 McpConnectDialog（不再静默）→
+// 提交 → ipc.resource.installSmitheryRemote(id, values) → load + 「已连接」横幅 + 关闭。
+describe('P2.1 Task 6：smithery 连接配置闭环', () => {
+  it('smithery 安装返回 needsConfig → 连接配置弹窗出现（不再静默），且不设成功横幅', async () => {
+    useResourceStore.setState({
+      items: [mkInstallable({ id: 'marketplace-mcp-weather', type: 'mcp', slug: 'weather', name: 'Weather MCP' })],
+    });
+    resourceInstall.mockResolvedValueOnce({
+      needsConfig: true,
+      schema: {
+        required: ['apiKey'],
+        properties: { apiKey: { title: 'API Key', description: 'key' } },
+      },
+    });
+    render(<ResourceLibraryView />);
+    fireEvent.click(
+      within(screen.getByTestId('resource-row-marketplace-mcp-weather')).getByRole('button', { name: '安装' }),
+    );
+    // 弹窗出现（标题「连接 {name}」——此前 needsConfig 静默无反馈，本任务闭合）
+    expect(await screen.findByRole('dialog', { name: '连接 Weather MCP' })).toBeInTheDocument();
+    // store 契约：needsConfig:true 时未安装——不设成功横幅
+    expect(screen.queryByTestId('install-notice')).toBeNull();
+  });
+
+  it('弹窗提交 → installSmitheryRemote 收到配置 → load 刷新 + 「已连接」横幅 + 弹窗关闭', async () => {
+    useResourceStore.setState({
+      items: [mkInstallable({ id: 'marketplace-mcp-weather', type: 'mcp', slug: 'weather', name: 'Weather MCP' })],
+    });
+    resourceInstall.mockResolvedValueOnce({
+      needsConfig: true,
+      schema: {
+        required: ['apiKey'],
+        properties: { apiKey: { title: 'API Key', description: 'key' } },
+      },
+    });
+    render(<ResourceLibraryView />);
+    fireEvent.click(
+      within(screen.getByTestId('resource-row-marketplace-mcp-weather')).getByRole('button', { name: '安装' }),
+    );
+    fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'sk-live-7' } });
+    fireEvent.click(screen.getByRole('button', { name: '连接' }));
+    await waitFor(() =>
+      expect(resourceInstallSmitheryRemote).toHaveBeenCalledWith('marketplace-mcp-weather', {
+        apiKey: 'sk-live-7',
+      }),
+    );
+    // 成功横幅复用既有 installNotice 机制（经真实 store 链路渲染）
+    await waitFor(() =>
+      expect(screen.getByTestId('install-notice').textContent).toContain('已连接：Weather MCP'),
+    );
+    // 提交成功后弹窗关闭
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('MCP「＋」菜单点「导入 DXT / MCPB 包」→ 挂载 ImportBundleDialog', () => {
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
+    fireEvent.click(screen.getByText('导入 DXT / MCPB 包'));
+    expect(screen.getByRole('dialog', { name: '导入 DXT / MCPB 包' })).toBeTruthy();
   });
 });
