@@ -23,6 +23,8 @@ import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
 import type { McpToolInfo } from '../mcp/types';
 import { generateCompaction, upsertSessionCompaction, type CompactionResultMsg } from '../compaction/service';
+import { getMessageByStreamSessionId } from '../storage/messages/repo';
+import { nextSeqForMessage, insertEvent } from '../storage/messages/events-repo';
 
 import type { AgentRuntimeOpts } from './runtime-config';
 
@@ -272,6 +274,71 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     }
   };
 
+  // P1 MCP 发现失败可观测性：per-child 待发列表（事件流渲染入口）
+  // 子进程 mcp-bridge discoverMcpTools 单 server 失败时发
+  // {type:'mcp-discovery-failed', serverName, error}；主进程累积到首个 start
+  // chunk 时一次性 flush 为 status_change 事件挂到该消息行（message_events 表
+  // 即事件流渲染入口——renderer 已有事件流渲染，无需新增 UI）。
+  const pendingDiscoveryFailures: Array<{ serverName: string; error: string }> = [];
+
+  // wrappedOnChunk：流 chunk 转给调用方（routeChunkToBuffer）前先尝试 flush
+  // 待发发现失败。flush 时机 = start chunk 之后（此时消息行已 INSERT，可解析
+  // messageId 挂事件）。messageId 不可解析 → 不崩，pending 保留待下次 start 重发。
+  //
+  // 直接 insertEvent（绕过 MessageEventBuffer）：一次性事件量极小（≤ 几个 MCP），
+  // 避免 buffer 的 50ms 聚合延迟 + onFlush 回调在非 Electron 环境的兼容复杂度。
+  // 失败保留 pending，下次 start 重试（与 segment_boundary 即时落库一致）。
+  const flushPendingDiscoveryFailures = (streamSessionId: string): void => {
+    if (pendingDiscoveryFailures.length === 0) return;
+    let messageId: string | null | undefined;
+    try {
+      messageId = getMessageByStreamSessionId(streamSessionId)?.id ?? null;
+    } catch (err) {
+      logger.warn('flushPendingDiscoveryFailures 解析 messageId 失败（DB 故障？）', {
+        assignmentId,
+        streamSessionId,
+        error: throwableText(err),
+      });
+      return;
+    }
+    if (!messageId) return; // 待下次 start
+    let succeeded = 0;
+    for (const f of pendingDiscoveryFailures) {
+      try {
+        insertEvent({
+          messageId,
+          seq: nextSeqForMessage(messageId),
+          eventType: 'status_change',
+          payload: {
+            status: 'streaming',
+            notice: `MCP "${f.serverName}" 工具发现失败：${f.error}；本次回合该 MCP 工具不可用`,
+            mcpDiscoveryFailed: { serverName: f.serverName, error: f.error },
+          },
+        });
+        succeeded++;
+      } catch (err) {
+        logger.error('mcp-discovery-failed 落库失败（pending 保留待下次 start）', {
+          assignmentId,
+          streamSessionId,
+          serverName: f.serverName,
+          error: throwableText(err),
+        });
+      }
+    }
+    if (succeeded === pendingDiscoveryFailures.length) {
+      pendingDiscoveryFailures.length = 0;
+    }
+  };
+  const wrappedOnChunk = (chunk: StreamChunk): void => {
+    if (chunk.type === 'start') {
+      opts.onChunk(chunk);
+      // start chunk 经 routeChunkToBuffer 已同步插入 messages 行——此处 flush 安全
+      flushPendingDiscoveryFailures(chunk.streamSessionId);
+      return;
+    }
+    opts.onChunk(chunk);
+  };
+
   // 注册 message handler（chunk 转发）。handler 为 async：仅 mcp 分支含 await，
   // handleChildMessage / audit 分支仍同步执行，优先语义与 T8 行为不变。
   const messageHandler = async (msg: unknown): Promise<void> => {
@@ -282,6 +349,19 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // P0 boot 握手：子进程监听器注册完毕的一次性信号——resolve readyGate
     if (m.type === 'runtime-ready') {
       readyGate.settle(null);
+      return;
+    }
+    // P1 MCP 发现失败：子进程逐 server 上报，主进程 warn + 入待发列表
+    if (m.type === 'mcp-discovery-failed') {
+      const mm = m as { serverName?: unknown; error?: unknown };
+      const serverName = String(mm.serverName ?? '');
+      const error = String(mm.error ?? '');
+      pendingDiscoveryFailures.push({ serverName, error });
+      logger.warn('MCP tool discovery failed（已累积待首个 start chunk 落库）', {
+        assignmentId,
+        serverName,
+        error,
+      });
       return;
     }
     // 审计桥（P2 Task 8，恢复 v1 被删的桥接）：子进程 audit.ts 的 process.send
@@ -350,9 +430,10 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       }
       return;
     }
-    // StreamChunk 类型的消息转发给 onChunk
+    // StreamChunk 类型的消息转发给 wrappedOnChunk（先触发下游 routeChunkToBuffer，
+    // 再 flush 待发的 MCP 发现失败事件挂到该消息行——P1 注入点）
     if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'todo_update', 'end', 'segment_boundary', 'message_roll'].includes(m.type)) {
-      onChunk(msg as StreamChunk);
+      wrappedOnChunk(msg as StreamChunk);
     }
     // 其他类型的消息（task-end 等）由调用方在 child.on('message') 内处理
   };

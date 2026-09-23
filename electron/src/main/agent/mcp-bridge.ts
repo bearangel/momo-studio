@@ -98,9 +98,19 @@ export async function discoverMcpTools(config: RuntimeConfig): Promise<LLMToolDe
         });
       }
     } catch (err) {
+      // P1 可观测性修复：除了 stderr 一行 + 静默跳过，还向主进程发一次性
+      // mcp-discovery-failed 事件。主进程 logger.warn + 待首个 start chunk 时
+      // 落 message_events status_change 事件（事件流渲染可见）。
+      // 之前只走 stderr：主进程无痕 / DB 无痕 / UI 无痕——agent 正常上线
+      // 但工具面缺一块，用户无从得知（缺陷 #2）。
       process.stderr.write(
         `MCP ${mcpName} 工具发现失败（已跳过）: ${(err as Error).message}\n`,
       );
+      process.send?.({
+        type: 'mcp-discovery-failed',
+        serverName: mcpName,
+        error: (err as Error).message,
+      });
     }
   }
   return defs;
