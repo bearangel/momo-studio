@@ -24,8 +24,10 @@
 // 捕获 ipcMain.handle 注册表；Router mock 捕获 onIncoming handler 模拟入站消息；
 // 依赖全 mock，不依赖真实 DB / 网络 / 文件 IO。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-// 被上方 vi.mock 替换的 db 模块——导入即 mock（getDb 为 vi.fn，用例内配桩）
-import { getDb as getDbMock } from '../../src/main/storage/db';
+// 被上方 vi.mock 替换的 db 模块——导入即 mock（vi.mocked 收窄出 Mock 类型，用例内配桩）
+import { getDb } from '../../src/main/storage/db';
+
+const getDbMock = vi.mocked(getDb);
 
 const {
   ipcHandlers,
@@ -555,9 +557,10 @@ describe('custom 资源写路径触发接线', () => {
     ]);
     // P2.1 起 custom+mcp 删除先查 bundle 记账行（isBundleInstalled → getDb）——
     // 桩真实语义：prepare(...).get(...) 对不存在的 bundle 行返回 undefined（非 bundle → 原路径）
+    // 桩仅承载 isBundleInstalled 的 prepare(...).get(...) miss 语义——双断言对齐全 Database 类型
     getDbMock.mockReturnValue({
       prepare: () => ({ get: () => undefined }),
-    });
+    } as unknown as ReturnType<typeof getDb>);
 
     await ipcHandlers.get('resource:delete')!({} as never, 'custom-mcp-weather');
 
@@ -620,9 +623,10 @@ describe('custom 资源写路径触发接线', () => {
     resourceCustomMocks.listCustomResources.mockReturnValue([
       makeCustomItems()[1]!, // custom mcp weather
     ]);
+    // 桩仅承载 isBundleInstalled 的 prepare(...).get(...) miss 语义——双断言对齐全 Database 类型
     getDbMock.mockReturnValue({
       prepare: () => ({ get: () => undefined }),
-    });
+    } as unknown as ReturnType<typeof getDb>);
     hostManagerMocks.deleteRegistered.mockImplementationOnce(() => {
       throw new Error('db locked');
     });
