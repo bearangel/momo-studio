@@ -1,27 +1,24 @@
 // electron/tests/resource/hub-install.test.ts
 //
-// P2 Task 5：hub MCP 安装/卸载链路 + library 已装列表接入测试。
-// 覆盖：
-//   - Smithery stdio 安装全链路：install-config 请求形状（encodeURIComponent(slug) +
-//     POST + body {profile:{}} + 10s 超时信号）→ npx 命令注册 → installed_packages
-//     记账（item_id = `${source}:${slug}`）→ listHubInstalledResources 映射
-//   - S1 安全专项（错误路径，momo-test-rules 铁律 3）：
-//       install-config 返回非法 command（shell 元字符）→ 拒绝且双表均不落库
-//       install-config HTTP 非 2xx → 抛错不落库
-//       fetch 网络异常 → 上抛不落库
-//       args 含 `"` 的项被过滤（注入防线）
-//   - 重复安装幂等（mcp_definitions 一行 + installed_packages 一行 + 列表一条）
-//   - hub 卸载：mcp 行 + 记账行同删 + 幂等（二次卸载不抛）
-//   - library 接入（needHub）：listResources 按 source 短路取 hub 已装条目；
-//     无 source 过滤时 hub 并入合并面（真实 DB + 真空 catalog，契约测试：
-//     生产者 listRegistered 真实产出 → 消费者 listResources 直接消费）
+// P2.1 Task 3：Smithery 直连安装（deploymentUrl + x-from 配置分流）测试。
+// install-config 端点已 404（死码移除）；本文件覆盖：
+//   - fetchSmitheryDetail：GET /servers/{encodeURIComponent(slug)} + 10s 超时信号；
+//     HTTP 非 2xx → 「Smithery 详情获取失败：HTTP {status}」；网络异常上抛
+//   - installSmitheryRemote：x-from=query 字段 encodeURIComponent 拼进 URL query、
+//     x-from=header 与缺省（实证样本均无 x-from 元数据，spec D5 缺省进 header）
+//     进 headers；streamable_http 注册（command 空串占位）+ installed_packages 记账
+//     （item_id = `smithery:${slug}`）
+//   - S1 错误路径（momo-test-rules 铁律 3）：deploymentUrl 非 https → 拒绝且双表不落库
+//   - 重复安装幂等 / hub 卸载（mcp 行 + 记账同删）/ listHubInstalledResources 映射
+//     （remote 行描述 = 远程 MCP（域名））/ library 接入（needHub 合并契约）
 //
 // DB 隔离沿用仓库既定模式（照抄 tests/mcp/host-manager-remote.test.ts）：
 //   - process.env.AP_USER_DATA_DIR 指向临时目录
 //   - runMigrations() 经 getDb() 单例建表（真实跑全量迁移）
 //   - closeDb() 在 afterEach 复位单例
 // 网络边界：vi.stubGlobal('fetch', fetchSpy)（仅 mock 网络，业务逻辑全真实）。
-// 魔搭 remote 安装链路已于 P2.1 随轨移除（原 keychain token 桩随之退役）。
+// installSmitheryRemote 本身零网络（url/config 由调用方给入）——fetch 桩只服务
+// fetchSmitheryDetail 与 library 接入用例的 fetchCatalog。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -29,7 +26,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
-  installSmitheryMcp,
+  fetchSmitheryDetail,
+  installSmitheryRemote,
   uninstallHubMcp,
   listHubInstalledResources,
 } from '../../src/main/resource/hub-install';
@@ -59,80 +57,154 @@ afterEach(() => {
   delete process.env.AP_USER_DATA_DIR;
 });
 
-describe('Smithery stdio 安装链路', () => {
-  it('install-config → npx 命令注册 + 记账 + 列表可见', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({
-        command: 'npx',
-        args: ['-y', '@owner/weather-mcp'],
-        env: { KEY: 'v' },
-      }),
-    );
+// 详情 mock（实证形状，task-0 §1.4 / brief Step 1）：
+// x-from 实证样本均无——此处刻意注入双向 x-from 验证分流（header / query）
+const DETAIL = {
+  qualifiedName: 'brave',
+  displayName: 'Brave Search',
+  remote: true,
+  connections: [
+    {
+      type: 'http',
+      deploymentUrl: 'https://brave.run.tools',
+      configSchema: {
+        type: 'object',
+        required: ['braveApiKey'],
+        properties: {
+          braveApiKey: { type: 'string', title: 'Brave API Key', 'x-from': 'header' as const },
+          projectId: { type: 'string', 'x-from': 'query' as const },
+        },
+      },
+    },
+  ],
+};
 
-    await installSmitheryMcp('@owner/weather');
+describe('fetchSmitheryDetail', () => {
+  it('GET /servers/{encodeURIComponent(slug)}（10s 超时信号）并透传 connections', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse(DETAIL));
 
-    // 请求形状契约（硬规则 1）：POST + encodeURIComponent(slug) + body {profile:{}}
+    const detail = await fetchSmitheryDetail('@owner/weather');
+
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://registry.smithery.ai/servers/%40owner%2Fweather/install-config');
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({ profile: {} });
+    expect(url).toBe('https://registry.smithery.ai/servers/%40owner%2Fweather');
+    // GET 缺省——不显式带 method/body（与 install-config 时代的 POST 形状诀别）
+    expect(init.method).toBeUndefined();
+    expect(init.body).toBeUndefined();
     expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(detail.connections).toHaveLength(1);
+    expect(detail.connections[0]).toMatchObject({
+      type: 'http',
+      deploymentUrl: 'https://brave.run.tools',
+    });
+  });
 
-    // 注册形态：stdio npx 命令 + source='smithery'
-    const cfg = getMcpConfig('@owner/weather');
-    expect(cfg?.command).toBe('npx');
-    expect(cfg?.args).toEqual(['-y', '@owner/weather-mcp']);
-    expect(cfg?.env).toEqual({ KEY: 'v' });
-    expect(cfg?.source).toBe('smithery');
-    expect(cfg?.transport).toBe('stdio');
+  it('HTTP 非 2xx → 抛「Smithery 详情获取失败：HTTP {status}」', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({}, false, 503));
+    await expect(fetchSmitheryDetail('srv-err')).rejects.toThrow(
+      'Smithery 详情获取失败：HTTP 503',
+    );
+  });
 
-    // 记账形状（硬规则 2）：item_id = `${source}:${slug}`，与 marketplace 不撞
+  it('fetch 网络异常 → 原样上抛（不吞状态）', async () => {
+    fetchSpy.mockRejectedValue(new Error('network down'));
+    await expect(fetchSmitheryDetail('net-err')).rejects.toThrow(/network down/);
+  });
+});
+
+describe('installSmitheryRemote x-from 分流', () => {
+  it('x-from=query 拼进 URL（encodeURIComponent）、x-from=header 进 headers + 注册 + 记账', async () => {
+    await installSmitheryRemote(
+      'brave',
+      'https://brave.run.tools',
+      { braveApiKey: 'k1', projectId: 'p1' },
+      DETAIL.connections[0]!.configSchema,
+    );
+
+    // 注册形态：streamable_http + query 并入后的最终 URL + headers 只含 header 字段
+    const cfg = getMcpConfig('brave');
+    expect(cfg).not.toBeNull();
+    expect(cfg!.transport).toBe('streamable_http');
+    expect(cfg!.url).toBe('https://brave.run.tools?projectId=p1');
+    expect(cfg!.headers).toEqual({ braveApiKey: 'k1' });
+    expect(cfg!.command).toBe('');
+    expect(cfg!.args).toEqual([]);
+    expect(cfg!.source).toBe('smithery');
+
+    // 记账形状：item_id = `smithery:${slug}`，与 marketplace 不撞
     const pkg = getDb()
       .prepare('SELECT item_id, item_type, slug FROM installed_packages')
       .get() as { item_id: string; item_type: string; slug: string };
     expect(pkg).toEqual({
-      item_id: 'smithery:@owner/weather',
+      item_id: 'smithery:brave',
       item_type: 'mcp',
-      slug: '@owner/weather',
+      slug: 'brave',
     });
 
-    // 已装列表映射：installed/removable 翻转依赖此形状（Task 6 契约）
+    // 已装列表映射：remote 行描述 = 远程 MCP（域名）（Task 6 契约）
     const items = listHubInstalledResources('mcp');
-    const item = items.find((i) => i.slug === '@owner/weather');
+    const item = items.find((i) => i.slug === 'brave');
     expect(item).toMatchObject({
-      id: 'smithery-mcp-@owner/weather',
+      id: 'smithery-mcp-brave',
       type: 'mcp',
       source: 'smithery',
       installed: true,
       installable: false,
       removable: true,
-      name: 'owner/weather',
+      description: '远程 MCP（https://brave.run.tools?projectId=p1）',
     });
   });
 
-  it('install-config 返回非法 command（shell 元字符）→ S1 拒绝且不落库', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ command: 'sh -c "evil"', args: [], env: {} }),
+  it('无 x-from 字段缺省进 headers（实证样本均无 x-from，spec D5）', async () => {
+    // 完全不带 schema（ipc 直装路径 required 为空时不传 schema 也须成立）
+    await installSmitheryRemote('plain', 'https://plain.run.tools', { token: 't1' });
+
+    const cfg = getMcpConfig('plain');
+    expect(cfg!.url).toBe('https://plain.run.tools');
+    expect(cfg!.headers).toEqual({ token: 't1' });
+  });
+
+  it('schema 有 properties 但字段无 x-from → 同样缺省进 headers', async () => {
+    await installSmitheryRemote(
+      'no-xfrom',
+      'https://no-xfrom.run.tools',
+      { apiKey: 'a1', region: 'r1' },
+      { properties: { apiKey: { title: 'API Key' }, region: { title: 'Region' } } },
     );
 
-    await expect(installSmitheryMcp('bad')).rejects.toThrow(/非法|拒绝/);
+    const cfg = getMcpConfig('no-xfrom');
+    expect(cfg!.url).toBe('https://no-xfrom.run.tools');
+    expect(cfg!.headers).toEqual({ apiKey: 'a1', region: 'r1' });
+  });
 
-    // 双表均不落库（校验失败不得留半成品）
-    expect(getMcpConfig('bad')).toBeNull();
+  it('query 值特殊字符被 encodeURIComponent（S1 注入防线：空格/& 不破 URL 结构）', async () => {
+    await installSmitheryRemote(
+      'esc',
+      'https://esc.run.tools',
+      { projectId: 'a b&c' },
+      { properties: { projectId: { 'x-from': 'query' as const } } },
+    );
+
+    const cfg = getMcpConfig('esc');
+    expect(cfg!.url).toBe('https://esc.run.tools?projectId=a%20b%26c');
+    expect(cfg!.headers).toEqual({});
+  });
+
+  it('deploymentUrl 非 https → 拒绝且双表均不落库', async () => {
+    await expect(
+      installSmitheryRemote('insecure', 'http://insecure.run.tools', {}),
+    ).rejects.toThrow(/https/);
+
+    expect(getMcpConfig('insecure')).toBeNull();
     const count = getDb()
       .prepare('SELECT COUNT(*) AS c FROM installed_packages')
       .get() as { c: number };
     expect(count.c).toBe(0);
   });
 
-  it('重复安装幂等（INSERT OR REPLACE + 记账 REPLACE）', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ command: 'npx', args: ['-y', 'p'], env: {} }),
-    );
-
-    await installSmitheryMcp('dup');
-    await installSmitheryMcp('dup');
+  it('重复安装幂等（mcp_definitions 一行 + installed_packages 一行 + 列表一条）', async () => {
+    await installSmitheryRemote('dup', 'https://dup.run.tools', {});
+    await installSmitheryRemote('dup', 'https://dup.run.tools', {});
 
     const mcpCount = getDb()
       .prepare("SELECT COUNT(*) AS c FROM mcp_definitions WHERE name = 'dup'")
@@ -146,42 +218,11 @@ describe('Smithery stdio 安装链路', () => {
     expect(pkgCount.c).toBe(1);
     expect(listHubInstalledResources('mcp').filter((i) => i.slug === 'dup')).toHaveLength(1);
   });
-
-  it('args 含双引号的项被过滤（注入防线）', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ command: 'npx', args: ['-y', 'p', 'bad"arg'], env: {} }),
-    );
-
-    await installSmitheryMcp('filter-args');
-
-    expect(getMcpConfig('filter-args')?.args).toEqual(['-y', 'p']);
-  });
-
-  it('install-config HTTP 非 2xx → 抛错且不落库', async () => {
-    fetchSpy.mockResolvedValue(jsonResponse({}, false, 503));
-
-    await expect(installSmitheryMcp('srv-err')).rejects.toThrow(/install-config 失败/);
-    expect(getMcpConfig('srv-err')).toBeNull();
-    const count = getDb()
-      .prepare('SELECT COUNT(*) AS c FROM installed_packages')
-      .get() as { c: number };
-    expect(count.c).toBe(0);
-  });
-
-  it('fetch 网络异常 → 上抛且不落库', async () => {
-    fetchSpy.mockRejectedValue(new Error('network down'));
-
-    await expect(installSmitheryMcp('net-err')).rejects.toThrow(/network down/);
-    expect(getMcpConfig('net-err')).toBeNull();
-  });
 });
 
 describe('hub 卸载', () => {
   it('卸载 smithery 条目：mcp 行 + 记账行同删 + 列表消失；二次卸载幂等不抛', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ command: 'npx', args: ['-y', 'p'], env: {} }),
-    );
-    await installSmitheryMcp('@owner/gone');
+    await installSmitheryRemote('@owner/gone', 'https://gone.run.tools', {});
     expect(getMcpConfig('@owner/gone')).not.toBeNull();
 
     uninstallHubMcp('smithery', '@owner/gone');
@@ -202,16 +243,13 @@ describe('hub 卸载', () => {
 
 describe('listHubInstalledResources 过滤语义', () => {
   it('type 非 mcp（hub 只有 mcp）→ 空数组', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ command: 'npx', args: [], env: {} }),
-    );
-    await installSmitheryMcp('only-mcp');
+    await installSmitheryRemote('only-mcp', 'https://only.run.tools', {});
     expect(listHubInstalledResources('agent')).toEqual([]);
     expect(listHubInstalledResources('skill')).toEqual([]);
     expect(listHubInstalledResources('mcp')).toHaveLength(1);
   });
 
-  it('marketplace/custom 源的 mcp 行不进 hub 列表（源隔离）', async () => {
+  it('marketplace/custom 源的 mcp 行不进 hub 列表（源隔离）', () => {
     const db = getDb();
     db.prepare(
       `INSERT INTO mcp_definitions (id, name, version, transport, command, args, env, source)
@@ -224,15 +262,10 @@ describe('listHubInstalledResources 过滤语义', () => {
 
 describe('library 接入（needHub 合并，契约测试：真实 DB 生产 → listResources 直接消费）', () => {
   it('filter.source=smithery 短路返回已装 hub 条目；无 source 过滤时并入合并面', async () => {
-    // fetch 按 URL 分流：smithery install-config 返回 npx 配置，其余（fetchCatalog）返回空 catalog
-    fetchSpy.mockImplementation(async (url: unknown) => {
-      if (String(url).includes('registry.smithery.ai')) {
-        return jsonResponse({ command: 'npx', args: ['-y', 'p'], env: {} });
-      }
-      return jsonResponse({ version: '1.0', updatedAt: 't', items: [] });
-    });
+    // installSmitheryRemote 零网络——fetch 桩只服务 fetchCatalog（空 catalog）
+    fetchSpy.mockResolvedValue(jsonResponse({ version: '1.0', updatedAt: 't', items: [] }));
 
-    await installSmitheryMcp('@owner/weather');
+    await installSmitheryRemote('@owner/weather', 'https://weather.run.tools', {});
 
     // source 短路：只取对应 hub 源，不触发 fetchCatalog
     const bySmithery = await listResources({ source: 'smithery' });

@@ -13,7 +13,9 @@
 //   - deleteResource / installResource：调对应 IPC 后立即 load 刷新
 //   - installResource：包 try/catch——p2p 导入失败（离线/未找到/超时）必须落到 error 字段，
 //     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
-//     返回 true/false 表示成功/失败（false 时错误已在 error 字段）
+//     返回 true/false 表示成功/失败（false 时错误已在 error 字段）。
+//     P2.1 Task 3：smithery needsConfig:true 时原样透传 SmitheryInstallResult
+//     （未安装——不刷列表不设横幅；对象对旧布尔消费方恒真，语义兼容）
 //
 // 注意：搜索（query）刻意不进 IPC filter——v1.7 后端 filter 只支持 type/source 两个维度，
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
@@ -24,6 +26,7 @@ import type {
   ResourceFilter,
   ResourceType,
   RegistryProviderMeta,
+  SmitheryInstallResult,
 } from '../ipc/types';
 
 interface ResourceStore {
@@ -62,8 +65,12 @@ interface ResourceStore {
   setRegistryProvider: (key: RegistryProviderMeta['key']) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
-  /** 安装某资源后刷新；返回是否成功（false 时错误在 error 字段）——marketplace agent 安装引导据此触发 */
-  installResource: (id: string) => Promise<boolean>;
+  /**
+   * 安装某资源后刷新；返回成功布尔（false 时错误在 error 字段）——marketplace
+   * agent 安装引导据此触发。P2.1 Task 3：smithery needsConfig:true 时原样透传
+   * SmitheryInstallResult（对象对旧布尔消费方恒真，语义兼容）；横幅精修归 Task 6。
+   */
+  installResource: (id: string) => Promise<boolean | SmitheryInstallResult>;
 }
 
 export const useResourceStore = create<ResourceStore>((set, get) => ({
@@ -136,7 +143,12 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   installResource: async (id) => {
     set({ error: null });
     try {
-      await ipc.resource.install(id);
+      const result = await ipc.resource.install(id);
+      // P2.1 Task 3：smithery needsConfig 两态——需要用户补配置时未安装，
+      // 不刷列表、不设成功横幅，结果原样透传给调用方（Task 6 弹窗消费）
+      if (result && typeof result === 'object' && result.needsConfig) {
+        return result;
+      }
       await get().load();
       // 落地 ok → 设置成功横幅；item 在 load 后会出现在「我的上传」tab
       set({ installNotice: '已导入至「我的上传」' });

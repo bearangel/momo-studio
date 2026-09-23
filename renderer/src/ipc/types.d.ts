@@ -744,6 +744,31 @@ export interface RegistryProviderMeta {
 }
 
 /**
+ * Smithery configSchema 的 renderer 镜像（P2.1 Task 3 直连安装契约）。
+ * 与 electron 端 resource/hub-install.ts 的 JsonSchemaLike 对齐（跨进程独立定义，
+ * 仅结构对齐）；properties 键即配置字段名，x-from 声明注入位置（缺省 header）。
+ */
+export interface JsonSchemaLike {
+  required?: string[];
+  properties?: Record<string, {
+    title?: string;
+    description?: string;
+    'x-from'?: 'header' | 'query';
+  }>;
+}
+
+/**
+ * resource:install smithery 条目两态返回（P2.1 Task 3）：
+ *   - { needsConfig: true, schema }  详情 configSchema.required 非空——需用户补配置
+ *     （Task 6 弹窗渲染表单，提交走 resource.installSmitheryRemote）
+ *   - { needsConfig: false }         已直连安装完成
+ */
+export interface SmitheryInstallResult {
+  needsConfig: boolean;
+  schema?: JsonSchemaLike;
+}
+
+/**
  * resource:registryList 返回条目——与 services/registry 的 RegistryEntry 同构
  * （经 IPC 序列化；跨进程独立定义，仅结构对齐）。
  */
@@ -1524,8 +1549,17 @@ export interface ApiSurface {
     list(filter?: ResourceFilter): Promise<ResourceItem[]>;
     /** v1.7：按 id 查单个资源详情（找不到返回 null） */
     getDetail(id: string): Promise<ResourceItem | null>;
-    /** v1.7：安装 marketplace 资源（builtin/custom 不可安装，抛错） */
-    install(id: string): Promise<void>;
+    /**
+     * v1.7：安装资源（builtin/custom 不可安装，抛错）。
+     * P2.1 Task 3：smithery 条目返回两态 SmitheryInstallResult（needsConfig=true
+     * 带 schema 未安装）；其余源返回空。
+     */
+    install(id: string): Promise<SmitheryInstallResult | void>;
+    /**
+     * P2.1 Task 3：smithery needsConfig 二段安装——Task 6 弹窗收集配置后提交。
+     * 主进程重拉详情作 schema 真源，按 x-from 分流（query 进 URL / 其余进 headers）。
+     */
+    installSmitheryRemote(id: string, config: Record<string, string>): Promise<void>;
     /** v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 按 type 三分支） */
     delete(id: string): Promise<void>;
     /** P3 Task 7：注册自定义 MCP（source 固定 'custom'），返回新条目的 ResourceItem */

@@ -4,7 +4,8 @@
 // 端点与字段以 Task 0 实测核实文档为准（.superpowers/sdd/task-0-api-verify.md）：
 //   - GET /servers?pageSize=N&q=关键词（无 key；q 搜索已实测可用）
 //   - 条目标识是 qualifiedName（如 '@owner/weather' / 'brave'），不是 id（那是 UUID）
-//   - remote=true 为 Smithery 托管（hosted），stdio 安装仅对 remote:false → installable:!remote
+//   - P2.1 直连翻转：installable 由 isDeployed 驱动（false=未部署不可装）；
+//     remote 字段不再是安装开关——hosted 条目经详情 deploymentUrl 直连安装
 //   - inactive / unlisted 条目过滤不展示
 import { createBackoff } from './backoff';
 import type { HubEntry, HubListResult, HubProvider } from './types';
@@ -62,8 +63,9 @@ function toEntry(raw: SmitheryServer): HubEntry | null {
     name: raw.displayName,
     description,
     installed: false,
-    // remote=true 是 Smithery 托管（hosted）项——展示但 P2 不可本地 stdio 安装
-    installable: !raw.remote,
+    // P2.1 直连翻转：isDeployed=false（未部署）展示但不可装；
+    // remote（hosted）不再挡安装——详情 deploymentUrl 直连链对所有 hosted 条目开放
+    installable: !!raw.isDeployed,
     removable: false,
     marketplace: {
       author: namespace,

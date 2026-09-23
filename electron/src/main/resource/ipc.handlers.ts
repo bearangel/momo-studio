@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。9 个通道：
+// 资源库 IPC handler 注册。10 个通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -10,11 +10,13 @@
 //   - resource:createSkill  表单创建 skill（spec 2026-09-22 资源库重设计）
 //   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
 //     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
+//   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
 //   - install 支持 marketplace / p2p / hub（smithery）三源（builtin 不可装、
-//     custom 已在本地）；hub 未装条目经 id 反解直装，不经 library
+//     custom 已在本地）；hub 未装条目经 id 反解直装，不经 library（两态返回：
+//     needsConfig=true 时带 schema 给 renderer 弹窗，不注册）
 //   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
 //     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
 //   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
@@ -36,8 +38,10 @@ import {
   type ResourceType,
 } from './types';
 import {
-  installSmitheryMcp,
+  fetchSmitheryDetail,
+  installSmitheryRemote,
   uninstallHubMcp,
+  type SmitheryInstallResult,
 } from './hub-install';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
@@ -65,7 +69,27 @@ export interface RegisterMcpInput {
 }
 
 /**
- * 注册 resource:* 命名空间的 6 个 IPC handler。
+ * smithery 条目安装两态判定（P2.1 Task 3）：拉详情 → deploymentUrl 校验 →
+ * required 非空返回 needsConfig（不注册——Task 6 弹窗收集后走
+ * resource:installSmitheryRemote 二段通道）；否则直装。
+ */
+async function installSmitheryEntry(slug: string): Promise<SmitheryInstallResult> {
+  const detail = await fetchSmitheryDetail(slug);
+  const conn = detail.connections[0];
+  const deploymentUrl = conn?.deploymentUrl;
+  if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
+    throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
+  }
+  const schema = conn?.configSchema;
+  if (schema?.required?.length) {
+    return { needsConfig: true, schema };
+  }
+  await installSmitheryRemote(slug, deploymentUrl, {}, schema);
+  return { needsConfig: false };
+}
+
+/**
+ * 注册 resource:* 命名空间的 IPC handler。
  * 在 app ready 后由 registerIpcHandlers（ipc/index.ts）统一调用。
  */
 export function registerResourceHandlers(): void {
@@ -79,12 +103,13 @@ export function registerResourceHandlers(): void {
     return resolveResourceById(id);
   });
 
-  // resource:install — marketplace 安装 + p2p 导入（P4 Task 5）+ hub 安装（P2 Task 5）
+  // resource:install — marketplace 安装 + p2p 导入（P4 Task 5）+ hub 安装（P2.1 Task 3）
   // marketplace：installPackage 底层需要完整的 MarketplaceItem（含 downloadUrl/checksum 等），
   // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
   // p2p：目录条目 → request/provide 按需拉取完整定义 → 落地 custom（agent 走
   // createCustomDef 等价路径 / mcp 走 registerMcpDefinition 幂等覆盖）。
-  // hub：smithery install-config → npx 注册（hub-install.ts）。
+  // hub：smithery 详情 deploymentUrl 直连（两态返回——needsConfig 见
+  // installSmitheryEntry；renderer types.d.ts 的 SmitheryInstallResult 有镜像）。
   ipcMain.handle('resource:install', async (_evt, id: string) => {
     const item = await resolveResourceById(id);
     if (!item) {
@@ -92,8 +117,7 @@ export function registerResourceHandlers(): void {
       // 注册表「安装」按钮的主路径：id 反解三元组直接进 hub 安装链
       const hubParsed = parseResourceId(id);
       if (hubParsed?.type === 'mcp' && hubParsed.source === 'smithery') {
-        await installSmitheryMcp(hubParsed.slug);
-        return { cachePath: '' };
+        return installSmitheryEntry(hubParsed.slug);
       }
       // p2p 项由内存目录缓存解析——来源节点离线 / 目录超 5min prune 后条目消失，
       // 给针对性文案（区别于 marketplace 的 id 不存在）
@@ -124,14 +148,11 @@ export function registerResourceHandlers(): void {
       throw new Error(`导入「${item.name}」超时：对端节点无响应（可能已离线）`);
     }
 
-    if (item.source === 'smithery' && item.type === 'mcp') {
-      await installSmitheryMcp(item.slug);
-      return { cachePath: '' };
-    }
-
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
     }
+    // 注：已装 smithery 条目不在此分支——listHubInstalledResources 恒置
+    // installable=false，上方「不可安装」守卫先抛，无需重复处理
     // fetchCatalog 拿到完整 catalog，按 slug 找到原 MarketplaceItem
     const catalog = await fetchCatalog();
     const catalogItem = catalog.items.find((ci) => ci.slug === item.slug);
@@ -140,6 +161,26 @@ export function registerResourceHandlers(): void {
     }
     return installPackage(catalogItem);
   });
+
+  // resource:installSmitheryRemote — smithery needsConfig 二段安装（P2.1 Task 3）。
+  // 反解 id → 重拉详情（schema 真源——不信任 renderer 回传，防漂移）→
+  // 带用户配置直装（x-from 分流在 installSmitheryRemote 内完成）。
+  ipcMain.handle(
+    'resource:installSmitheryRemote',
+    async (_evt, id: string, config: Record<string, string>) => {
+      const parsed = parseResourceId(id);
+      if (!parsed || parsed.source !== 'smithery' || parsed.type !== 'mcp') {
+        throw new Error(`非 smithery MCP 资源：${id}`);
+      }
+      const detail = await fetchSmitheryDetail(parsed.slug);
+      const conn = detail.connections[0];
+      const deploymentUrl = conn?.deploymentUrl;
+      if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
+        throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
+      }
+      await installSmitheryRemote(parsed.slug, deploymentUrl, config, conn?.configSchema);
+    },
+  );
 
   // resource:delete — 按 source + type 路由到底层删除函数
   //   - builtin        → 抛错（系统预置不可移除）

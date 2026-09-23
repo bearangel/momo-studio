@@ -3,7 +3,8 @@
 // Smithery provider 契约测试。mock globalThis.fetch（手法同 tests/marketplace/client.test.ts）。
 // 字段形状以 Task 0 实测核实文档为准（.superpowers/sdd/task-0-api-verify.md）：
 //   qualifiedName（安装标识，非 id）/ displayName / description / verified / useCount /
-//   remote（true=Smithery 托管 → installable:!remote）/ isDeployed / inactive / unlisted（后两者过滤）
+//   isDeployed（P2.1 直连翻转：false=未部署 → installable:false；remote 不再是安装开关）/
+//   inactive / unlisted（后两者过滤）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   smitheryProvider,
@@ -40,7 +41,7 @@ const LIST_BODY = {
 };
 
 describe('smitheryProvider', () => {
-  it('list 映射为 HubEntry（slug=qualifiedName / name=displayName / verified→verificationStatus / useCount→installCount / installable=!remote）', async () => {
+  it('list 映射为 HubEntry（slug=qualifiedName / name=displayName / verified→verificationStatus / useCount→installCount / installable=isDeployed）', async () => {
     fetchSpy.mockResolvedValue({
       ok: true, status: 200, json: async () => LIST_BODY,
     } as Response);
@@ -110,7 +111,7 @@ describe('smitheryProvider', () => {
     expect(entries[0]!.item.slug).toBe('@owner/weather');
   });
 
-  it('remote=true（Smithery 托管）→ 展示但 installable=false；verified=false → unverified', async () => {
+  it('P2.1 直连翻转：remote=true（hosted）不再挡安装——installable 仍由 isDeployed 驱动', async () => {
     fetchSpy.mockResolvedValue({
       ok: true, status: 200,
       json: async () => ({
@@ -121,8 +122,23 @@ describe('smitheryProvider', () => {
     } as Response);
     const { entries } = await smitheryProvider.list('mcp');
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.item.installable).toBe(false);
+    // isDeployed 继承 LIST_BODY 的 true——hosted（remote）条目现在可直连安装
+    expect(entries[0]!.item.installable).toBe(true);
     expect(entries[0]!.item.marketplace?.verificationStatus).toBe('unverified');
+  });
+
+  it('isDeployed:false（未部署）→ 展示但 installable=false', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({
+        servers: [
+          { ...LIST_BODY.servers[0]!, qualifiedName: 'undeployed-svc', isDeployed: false },
+        ],
+      }),
+    } as Response);
+    const { entries } = await smitheryProvider.list('mcp');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.item.installable).toBe(false);
   });
 
   it('query 非空时作为 q 参数下发（Task 0 实测 q 搜索可用）', async () => {

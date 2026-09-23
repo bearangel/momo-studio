@@ -13,6 +13,10 @@
 // P2 Task 7 追加：resource:registerMcp 二态透传（remote 输入 transport/url 传给
 // registerMcpDefinition）。真实 DB 全链往返由 register-mcp-remote-contract.test.ts
 // 覆盖，本文件只锁 handler 的调用形状。
+//
+// P2.1 Task 3 追加：resource:install smithery 分支两态（needsConfig 判定——拉详情
+// 后 required 非空返回 schema 不注册；否则直装）+ 新通道 resource:installSmitheryRemote
+// （needsConfig 二段安装：反解 id → 重拉详情 → 带用户配置直装）。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -57,9 +61,12 @@ vi.mock('../../src/main/resource/hub/smithery', () => ({
 
 // P2 Task 5：hub 安装/卸载模块 mock（真实链路由 tests/resource/hub-install.test.ts
 // 以真实 DB + fetch 桩覆盖；本文件只测 IPC 路由分支）。
+// P2.1 Task 3：installSmitheryMcp（install-config 死码）退役，换成
+// fetchSmitheryDetail + installSmitheryRemote 两函数。
 const { hubInstallMocks } = vi.hoisted(() => ({
   hubInstallMocks: {
-    installSmitheryMcp: vi.fn(),
+    fetchSmitheryDetail: vi.fn(),
+    installSmitheryRemote: vi.fn(),
     uninstallHubMcp: vi.fn(),
     listHubInstalledResources: vi.fn(() => []),
   },
@@ -121,6 +128,8 @@ describe('registerResourceHandlers', () => {
         'resource:delete',
         'resource:registerMcp',
         'resource:uploadSkill',
+        // P2.1 Task 3：smithery needsConfig 二段安装通道
+        'resource:installSmitheryRemote',
       ]),
     );
   });
@@ -431,17 +440,115 @@ describe('registerResourceHandlers', () => {
     await expect(handler({}, 'mcphub', 'mcp')).rejects.toThrow(/未知 registry provider/);
   });
 
-  it('resource:install hub 分支路由（P2 Task 5）：未装 smithery 条目 id 反解直装', async () => {
+  it('resource:install hub 分支（P2.1 Task 3 两态）：未装 smithery 条目 → 拉详情直装 + needsConfig:false', async () => {
     // 未安装的 registry 条目不在 library（library 只映射已装行）→ resolve 返回 null
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    hubInstallMocks.installSmitheryMcp.mockResolvedValueOnce(undefined);
+    const schema = { properties: { token: { type: 'string' } } };
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
+      connections: [{ type: 'http', deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
+    });
+    hubInstallMocks.installSmitheryRemote.mockResolvedValueOnce(undefined);
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
     const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
     const result = await handler({}, 'smithery-mcp-@owner/weather');
     // slug 是完整 qualifiedName（含 @ 与 /），id 贪婪反解整体透传
-    expect(hubInstallMocks.installSmitheryMcp).toHaveBeenCalledWith('@owner/weather');
-    expect(result).toEqual({ cachePath: '' });
+    expect(hubInstallMocks.fetchSmitheryDetail).toHaveBeenCalledWith('@owner/weather');
+    expect(hubInstallMocks.installSmitheryRemote).toHaveBeenCalledWith(
+      '@owner/weather', 'https://brave.run.tools', {}, schema,
+    );
+    expect(result).toEqual({ needsConfig: false });
+  });
+
+  it('resource:install smithery：configSchema.required 非空 → needsConfig:true 带 schema，不注册', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    const schema = {
+      required: ['braveApiKey'],
+      properties: { braveApiKey: { type: 'string', title: 'Brave API Key', 'x-from': 'header' } },
+    };
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
+      connections: [{ type: 'http', deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    const result = await handler({}, 'smithery-mcp-brave');
+    // 两态分支：需要用户补配置——绝不触发安装（Task 6 弹窗收集后走二段通道）
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
+    expect(result).toEqual({ needsConfig: true, schema });
+  });
+
+  it('resource:install smithery：deploymentUrl 缺失 → 抛「暂不可直连」且不安装', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({ connections: [{}] });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'smithery-mcp-oauth-only')).rejects.toThrow(
+      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
+    );
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
+  });
+
+  it('resource:install smithery：deploymentUrl 非 https → 抛「暂不可直连」且不安装', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
+      connections: [{ deploymentUrl: 'http://plain.run.tools' }],
+    });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'smithery-mcp-insecure')).rejects.toThrow(/暂不可直连/);
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
+  });
+
+  it('resource:installSmitheryRemote：反解 id → 重拉详情（schema 真源）→ 带用户配置直装', async () => {
+    const schema = {
+      required: ['braveApiKey'],
+      properties: { braveApiKey: { type: 'string', 'x-from': 'header' } },
+    };
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
+      connections: [{ deploymentUrl: 'https://brave.run.tools', configSchema: schema }],
+    });
+    hubInstallMocks.installSmitheryRemote.mockResolvedValueOnce(undefined);
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
+    const handler = remoteCall![1] as (
+      evt: unknown,
+      id: string,
+      config: Record<string, string>,
+    ) => Promise<void>;
+    await handler({}, 'smithery-mcp-@owner/weather', { braveApiKey: 'k9' });
+    // 重拉详情保持 schema 真源（不信任 renderer 回传），配置原样透传
+    expect(hubInstallMocks.fetchSmitheryDetail).toHaveBeenCalledWith('@owner/weather');
+    expect(hubInstallMocks.installSmitheryRemote).toHaveBeenCalledWith(
+      '@owner/weather', 'https://brave.run.tools', { braveApiKey: 'k9' }, schema,
+    );
+  });
+
+  it('resource:installSmitheryRemote：非 smithery MCP id 抛错', async () => {
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
+    const handler = remoteCall![1] as (
+      evt: unknown,
+      id: string,
+      config: Record<string, string>,
+    ) => Promise<void>;
+    await expect(handler({}, 'custom-mcp-github', {})).rejects.toThrow(/非 smithery/);
+    expect(hubInstallMocks.fetchSmitheryDetail).not.toHaveBeenCalled();
+  });
+
+  it('resource:installSmitheryRemote：详情缺 deploymentUrl → 抛「暂不可直连」', async () => {
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({ connections: [] });
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const remoteCall = calls.find((c: unknown[]) => c[0] === 'resource:installSmitheryRemote');
+    const handler = remoteCall![1] as (
+      evt: unknown,
+      id: string,
+      config: Record<string, string>,
+    ) => Promise<void>;
+    await expect(handler({}, 'smithery-mcp-gone', {})).rejects.toThrow(/暂不可直连/);
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
   });
 
   it('resource:delete smithery 条目路由到 uninstallHubMcp（switch 前提前 return）', async () => {

@@ -16,6 +16,7 @@ import type {
   ResourceFilter,
   ResourceItem,
   SkillCreateInput,
+  SmitheryInstallResult,
   TaskRow,
   UploadedSkill,
 } from '../../../renderer/src/ipc/types';
@@ -276,8 +277,12 @@ const api: ApiSurface = {
     list: (filter?: ResourceFilter) => invoke<ResourceItem[]>('resource:list', filter),
     // v1.7：按 id 查单个资源详情（找不到返回 null）
     getDetail: (id: string) => invoke<ResourceItem | null>('resource:getDetail', id),
-    // v1.7：安装 marketplace 资源（builtin/custom 不可安装）
-    install: (id: string) => invoke<void>('resource:install', id),
+    // v1.7：安装资源（builtin/custom 不可安装）。P2.1 Task 3：smithery 条目返回
+    // needsConfig 两态（Task 6 弹窗消费），其余源返回空
+    install: (id: string) => invoke<SmitheryInstallResult | void>('resource:install', id),
+    // P2.1 Task 3：smithery needsConfig 二段安装（弹窗收集配置后提交）
+    installSmitheryRemote: (id: string, config: Record<string, string>) =>
+      invoke<void>('resource:installSmitheryRemote', id, config),
     // v1.7：删除/卸载资源（builtin 抛错；marketplace→uninstall；custom 三分支）
     delete: (id: string) => invoke<void>('resource:delete', id),
     // P3 Task 7：注册自定义 MCP（收敛自 api.mcp.register），返回新资源的 ResourceItem

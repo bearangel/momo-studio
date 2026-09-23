@@ -113,6 +113,42 @@ describe('resource.store — install 反馈闭环', () => {
   });
 });
 
+describe('resource.store — smithery needsConfig 两态透传（P2.1 Task 3）', () => {
+  beforeEach(() => {
+    resourceList.mockClear();
+  });
+
+  it('install 返回 {needsConfig:true} → 原样透传；不设成功横幅、不刷列表、不写 error', async () => {
+    const schema = { required: ['braveApiKey'], properties: { braveApiKey: { type: 'string' } } };
+    resourceInstall.mockResolvedValueOnce({ needsConfig: true, schema });
+
+    const result = await useResourceStore.getState().installResource('smithery-mcp-brave');
+
+    // 未安装——结果对象原样透传给调用方（Task 6 弹窗消费）
+    expect(result).toEqual({ needsConfig: true, schema });
+    const state = useResourceStore.getState();
+    expect(state.installNotice).toBeNull();
+    expect(state.error).toBeNull();
+    // 未发生安装——不该触发列表刷新
+    expect(resourceList).not.toHaveBeenCalled();
+  });
+
+  it('install 返回 {needsConfig:false} → 走成功路径（true + 横幅 + 刷新）', async () => {
+    resourceInstall.mockResolvedValueOnce({ needsConfig: false });
+
+    const ok = await useResourceStore.getState().installResource('smithery-mcp-plain');
+
+    expect(ok).toBe(true);
+    expect(useResourceStore.getState().installNotice).toBe('已导入至「我的上传」');
+  });
+
+  it('旧路径返回 undefined（marketplace/p2p）→ 布尔语义不变', async () => {
+    resourceInstall.mockResolvedValueOnce(undefined);
+    const ok = await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
+    expect(ok).toBe(true);
+  });
+});
+
 describe('resource.store 资源库重设计（activeType + mode）', () => {
   beforeEach(() => {
     resourceList.mockClear();
