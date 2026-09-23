@@ -48,6 +48,7 @@ import {
   type RebuiltSessionContext,
 } from './turn-reconstructor';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
+import { McpToolError } from '../mcp/types';
 import { buildTaskReply } from './dispatch';
 // v2（P1 Task 5）：内部事件桥——dispatch/task_reply/abort_dispatch 经 child IPC
 // 直达主进程 RouterService，取代 Matrix 自定义 event 传输
@@ -1364,7 +1365,9 @@ export async function runChatLoop(
         }
 
         const errMsg = err instanceof Error ? err.message : String(err);
-        result = `工具执行失败: ${errMsg}`;
+        // P2 修复：McpToolError 文本即服务端语义文案（含错误码），原样回填——
+        // 加「工具执行失败:」前缀会破坏模型对错误码/重试提示的解析
+        result = toolFailureText(err);
         sendStreamChunk({
           type: 'tool_result',
           streamSessionId,
@@ -1866,14 +1869,30 @@ export async function doExecuteTool(
     return JSON.stringify(cancelResult);
   }
   if (name.startsWith('mcp:')) {
-    // 格式 mcp:<mcpName>:<toolName>；toolName 理论上可含冒号，用剩余段拼接
+    // P2 isError 透传：服务端 isError:true 时 doExecuteTool 抛 McpToolError
+    // （message = 服务端错误文本）；chat loop catch 据此原样回填到
+    // tool_result chunk（success=false）而不加「工具执行失败:」前缀——模型
+    // 仍看到 raw 错误语义文案（保留 S4 实测行为），回合不崩。
     const parts = name.split(':');
     const mcpName = parts[1];
     const toolName = parts.slice(2).join(':');
     if (!mcpName || !toolName) throw new Error(`非法 MCP 工具名: ${name}`);
-    return requestMcpCall(config.workspaceId, mcpName, toolName, call.arguments);
+    const outcome = await requestMcpCall(config.workspaceId, mcpName, toolName, call.arguments);
+    if (outcome.isError) throw new McpToolError(outcome.text);
+    return outcome.text;
   }
   throw new Error(`未知工具: ${name}`);
+}
+
+/**
+ * P2 工具失败结果文本决策（McpToolError 原样回填 / 其他错误加前缀）
+ * ——抽离为可单元测试的纯函数（iserror-propagation 契约锁）。
+ * McpToolError 的 message 本身即服务端语义文案（可能含错误码/重试提示），
+ * 加「工具执行失败:」前缀会破坏模型对原始文本的解析能力。
+ */
+export function toolFailureText(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return err instanceof McpToolError ? msg : `工具执行失败: ${msg}`;
 }
 
 /** 从 unknown 取 string，缺失/类型不符时抛错（给 LLM 明确反馈） */

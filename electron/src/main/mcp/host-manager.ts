@@ -15,7 +15,7 @@ import { McpClient } from './client';
 import { HttpMcpClient } from './http-client';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import type { McpServerConfig, McpToolInfo, RegisteredMcp } from './types';
+import type { McpServerConfig, McpToolInfo, McpToolCallOutcome, RegisteredMcp } from './types';
 
 /** mcp_definitions 表的一行原始结构（getMcpConfig / listRegistered 读取时做类型断言用） */
 interface McpDefinitionRow {
@@ -145,27 +145,40 @@ export async function listMcpTools(workspaceId: string, mcpName: string): Promis
 
 /**
  * 调用某 workspace 内已启动 MCP server 的指定工具。
- * 返回值只提取 text 类型内容并用 \n 拼接（上层 agent 只关心文本输出），
- * image/resource 类型由 MCP server 各自定义，暂不在文本流里透传。
+ * 返回 McpToolCallOutcome { text, isError }——text 是 content 中 text 段拼接结果
+ * （\n 连接），isError 透传 MCP 规范的失败标位。isError 用于：
+ *   - 子进程 runtime-entry 决定 tool_call_result chunk success 字段（审计红线）
+ *   - UI / 账本区分失败调用与成功调用
+ *
+ * 两端 client 统一返回原始 McpToolResult——提取逻辑收敛在本函数一处。
+ * P2 修复：池未启动时惰性填充（与 spawner 桥 ensureMcpStarted 同款），原
+ * 行为是「未启动抛错」——直接调用方（renderer IPC handler / 测试）不需要
+ * 预先 listTools 触发。
  */
 export async function callMcpTool(
   workspaceId: string,
   mcpName: string,
   toolName: string,
   args: Record<string, unknown>,
-): Promise<string> {
+): Promise<McpToolCallOutcome> {
   const key = poolKey(workspaceId, mcpName);
-  const promise = pool.get(key);
-  if (!promise) throw new Error(`MCP ${mcpName} 未启动`);
+  let promise = pool.get(key);
+  if (!promise) {
+    const config = getMcpConfig(mcpName);
+    if (!config) throw new Error(`MCP ${mcpName} 未注册`);
+    promise = getOrStartMcp(workspaceId, config);
+    pool.set(key, promise);
+  }
   const client = await promise;
   if (!client.isConnected) throw new Error(`MCP ${mcpName} 未启动`);
   const result = await client.callTool(toolName, args);
-  // 远程客户端已返回提取后的文本；stdio 客户端返回 McpToolResult，在此统一提取
-  if (typeof result === 'string') return result;
-  return result.content
-    .filter((c) => c.type === 'text')
-    .map((c) => c.text ?? '')
-    .join('\n');
+  return {
+    text: (result.content ?? [])
+      .filter((c) => c.type === 'text')
+      .map((c) => c.text ?? '')
+      .join('\n'),
+    isError: result.isError === true,
+  };
 }
 
 /** 停止并移除某 workspace 内的指定 MCP server 实例。未启动则静默跳过。 */

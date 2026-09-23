@@ -129,9 +129,9 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
     expect(sentPayload()).toStrictEqual({ id: 'req-2', error: 'MCP github 未启动' });
   });
 
-  it('mcp:callTool 成功 → args 原样透传 + 回写恰为 { id, result }', async () => {
+  it('mcp:callTool 成功 → args 原样透传 + 回写恰为 { id, result, isError }（isError 透传契约 #3）', async () => {
     const handler = await spawnAndGetHandler();
-    vi.mocked(callMcpTool).mockResolvedValue('issue #42 已创建');
+    vi.mocked(callMcpTool).mockResolvedValue({ text: 'issue #42 已创建', isError: false });
     await handler({
       type: 'mcp:callTool',
       id: 'req-3',
@@ -150,7 +150,21 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
     expect(vi.mocked(getOrStartMcp).mock.invocationCallOrder[0]!).toBeLessThan(
       vi.mocked(callMcpTool).mock.invocationCallOrder[0]!,
     );
-    expect(sentPayload()).toStrictEqual({ id: 'req-3', result: 'issue #42 已创建' });
+    expect(sentPayload()).toStrictEqual({ id: 'req-3', result: 'issue #42 已创建', isError: false });
+  });
+
+  it('mcp:callTool 服务端 isError:true → 回写携带 isError: true（契约锁）', async () => {
+    const handler = await spawnAndGetHandler();
+    vi.mocked(callMcpTool).mockResolvedValue({ text: '操作失败：E-500', isError: true });
+    await handler({
+      type: 'mcp:callTool',
+      id: 'req-3e',
+      workspaceId: 'ws-mcp',
+      mcpName: 'github',
+      toolName: 'create_issue',
+      args: {},
+    });
+    expect(sentPayload()).toStrictEqual({ id: 'req-3e', result: '操作失败：E-500', isError: true });
   });
 
   it('mcp:callTool 失败 → 回写恰为 { id, error }', async () => {
@@ -169,7 +183,7 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
 
   it('mcp:callTool args 缺省 → 以空对象调用 host-manager', async () => {
     const handler = await spawnAndGetHandler();
-    vi.mocked(callMcpTool).mockResolvedValue('pong');
+    vi.mocked(callMcpTool).mockResolvedValue({ text: 'pong', isError: false });
     await handler({
       type: 'mcp:callTool',
       id: 'req-5',
@@ -178,7 +192,7 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
       toolName: 'ping',
     });
     expect(callMcpTool).toHaveBeenCalledWith('ws-mcp', 'github', 'ping', {});
-    expect(sentPayload()).toStrictEqual({ id: 'req-5', result: 'pong' });
+    expect(sentPayload()).toStrictEqual({ id: 'req-5', result: 'pong', isError: false });
   });
 
   it('audit:toolCall 分支与 mcp 分支共存：audit 仍落库且不回写，mcp 照常响应', async () => {
@@ -207,7 +221,7 @@ describe('runtime-spawner mcp 桥（mcp:listTools / mcp:callTool）', () => {
     captured.handler = null;
     await spawnForAgent({ assignmentId: 'inst1', runtimeConfig, onChunk, onExit: vi.fn() });
     const handler = captured.handler!;
-    vi.mocked(callMcpTool).mockResolvedValue('ok');
+    vi.mocked(callMcpTool).mockResolvedValue({ text: 'ok', isError: false });
     await handler({
       type: 'mcp:callTool',
       id: 'req-7',
@@ -283,7 +297,7 @@ describe('runtime-spawner mcp 桥 fix round 1（死通道防御 / 池惰性填�
       handler({ type: 'mcp:listTools', id: 'fix-d2', workspaceId: 'ws-mcp', mcpName: 'github' }),
     ).resolves.toBeUndefined();
     // callTool 分支同构竞态
-    vi.mocked(callMcpTool).mockResolvedValue('ok');
+    vi.mocked(callMcpTool).mockResolvedValue({ text: 'ok', isError: false });
     await expect(
       handler({ type: 'mcp:callTool', id: 'fix-d3', workspaceId: 'ws-mcp', mcpName: 'github', toolName: 't', args: {} }),
     ).resolves.toBeUndefined();

@@ -39,6 +39,9 @@ export function registerMcpHandlers(): void {
   );
 
   // 调用某 workspace 内已启动 MCP 的指定工具，返回拼接后的文本输出。
+  // P2 修复：callMcpTool 返回 {text, isError}——renderer 端 UI 无 isError 消费
+  // （types.d.ts 维持文本返回），仅取 text 字段，isError 走 audit 红线由
+  // 运行时桥（runtime-spawner mcp:callTool）独立透传到子进程。
   ipcMain.handle(
     'mcp:callTool',
     async (
@@ -48,7 +51,8 @@ export function registerMcpHandlers(): void {
       toolName: string,
       args: Record<string, unknown>,
     ) => {
-      return callMcpTool(workspaceId, mcpName, toolName, args);
+      const outcome = await callMcpTool(workspaceId, mcpName, toolName, args);
+      return outcome.text;
     },
   );
 

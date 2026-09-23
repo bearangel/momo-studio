@@ -6,7 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { LLMToolDef } from './llm-provider';
-import type { McpToolInfo } from '../mcp/types';
+import type { McpToolInfo, McpToolCallOutcome } from '../mcp/types';
 import type { RuntimeConfig } from './runtime-config';
 
 /** 单次 MCP IPC 调用的超时时间（毫秒） */
@@ -48,14 +48,17 @@ function requestMcpListTools(workspaceId: string, mcpName: string): Promise<McpT
   });
 }
 
-/** 请求主进程调用某 MCP 工具；语义同 requestMcpListTools 但走 mcp:callTool 通道 */
+/** 请求主进程调用某 MCP 工具；语义同 requestMcpListTools 但走 mcp:callTool 通道。
+ * P2 修复：返回 McpToolCallOutcome { text, isError }——isError 透传 MCP 失败标位，
+ * 消费点（doExecuteTool mcp: 分支）据此置 tool_call_result.success=false；
+ * 模型仍收到 text 内容（保留语义文案）。 */
 export function requestMcpCall(
   workspaceId: string,
   mcpName: string,
   toolName: string,
   args: Record<string, unknown>,
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+): Promise<McpToolCallOutcome> {
+  return new Promise<McpToolCallOutcome>((resolve, reject) => {
     if (!process.send) {
       reject(new Error('MCP 调用不可用：子进程未建立 IPC 通道'));
       return;
@@ -66,14 +69,22 @@ export function requestMcpCall(
       reject(new Error(`MCP ${mcpName}.${toolName} 调用超时（${MCP_CALL_TIMEOUT_MS / 1000}s）`));
     }, MCP_CALL_TIMEOUT_MS);
     const handler = (msg: unknown): void => {
-      const m = msg as { type?: string; id?: string; result?: string; error?: string };
+      const m = msg as {
+        id?: unknown;
+        result?: unknown;
+        isError?: unknown;
+        error?: unknown;
+      };
       if (m.id !== id) return;
       process.off('message', handler);
       clearTimeout(timer);
       if (m.error !== undefined) {
-        reject(new Error(m.error));
+        reject(new Error(String(m.error)));
       } else {
-        resolve(m.result ?? '');
+        resolve({
+          text: typeof m.result === 'string' ? m.result : '',
+          isError: m.isError === true,
+        });
       }
     };
     process.on('message', handler);

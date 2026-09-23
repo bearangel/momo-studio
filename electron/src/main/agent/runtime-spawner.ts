@@ -154,7 +154,7 @@ interface McpChildRequestMsg {
 /** mcp 桥回写响应的线协议形状（与子进程 mcp-bridge.ts 的配对解析对齐） */
 type McpBridgeResponse =
   | { id: string; tools?: McpToolInfo[] }
-  | { id: string; result?: string }
+  | { id: string; result?: string; isError?: boolean }
   | { id: string; error?: string };
 
 /**
@@ -418,13 +418,16 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
       try {
         // 同上：防御 discovery 被跳过时池为空的调用路径
         await ensureMcpStarted(String(m.workspaceId), String(m.mcpName));
-        const result = await callMcpTool(
+        // P2 修复：callMcpTool 返回 {text, isError}——同步透传到子进程 mcp-bridge
+        // requestMcpCall（doExecuteTool 据 isError 置 tool_call_result success=
+        // false，模型仍收到 text 内容）
+        const outcome = await callMcpTool(
           String(m.workspaceId),
           String(m.mcpName),
           String(m.toolName),
           (m.args as Record<string, unknown>) ?? {},
         );
-        sendMcpResponse({ id: m.id, result });
+        sendMcpResponse({ id: m.id, result: outcome.text, isError: outcome.isError });
       } catch (err) {
         sendMcpResponse({ id: m.id, error: throwableText(err) });
       }

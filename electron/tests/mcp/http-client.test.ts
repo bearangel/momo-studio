@@ -106,7 +106,7 @@ describe('HttpMcpClient（streamable_http 传输）', () => {
     expect(await client.listTools()).toEqual([]);
   });
 
-  it('callTool 提取 text 内容并用 \\n 拼接', async () => {
+  it('callTool 返回原始 McpToolResult（含 content+isError），不再返回拼接文本——消除 host-manager 的 typeof string 分支（契约 #3）', async () => {
     mockResponses({
       initialize: initializeOk,
       'tools/call': rpcResult({
@@ -116,7 +116,16 @@ describe('HttpMcpClient（streamable_http 传输）', () => {
     });
     const client = new HttpMcpClient(cfg);
     await client.connect();
-    expect(await client.callTool('t1', {})).toBe('a\nb');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (client as any).callTool('t1', {});
+    expect(result).toEqual({
+      content: [
+        { type: 'text', text: 'a' },
+        { type: 'text', text: 'b' },
+      ],
+      isError: false,
+    });
+    expect(typeof result).not.toBe('string');
   });
 
   it('JSON-RPC error 响应抛错且透出服务器 message（错误路径专项）', async () => {

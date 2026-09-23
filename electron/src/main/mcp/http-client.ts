@@ -6,8 +6,10 @@
 // host-manager.getOrStartMcp 按 transport 分流，进程池逻辑无需感知传输差异。
 // SSE 流式响应留 P3（本实现按简单请求-响应处理）。
 //
-// 与 McpClient 的返回值差异：callTool 直接返回提取后的文本（'\n' 拼接），
-// 与 host-manager.callMcpTool 对 stdio 结果的提取语义一致——上层消费同一形态。
+// 与 McpClient 的返回值差异（P2 修复）：callTool 改为返回原始 McpToolResult
+// （含 content+isError），由 host-manager.callMcpTool 统一提取 isError + 拼接文本。
+// 旧实现直接返回拼接文本导致 typeof string 分支与 isError 静默丢失（缺陷 #3）
+// ——两端 client 现统一返回 McpToolResult，提取层只在 host-manager 一处。
 
 import { logger } from '../logger';
 import type { McpServerConfig, McpToolInfo, McpToolResult } from './types';
@@ -44,12 +46,12 @@ export class HttpMcpClient {
     return res.tools ?? [];
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
     const res = (await this.post('tools/call', { name, arguments: args })) as McpToolResult;
-    return (res.content ?? [])
-      .filter((c) => c.type === 'text')
-      .map((c) => c.text ?? '')
-      .join('\n');
+    return {
+      content: res.content ?? [],
+      isError: res.isError === true,
+    };
   }
 
   /** 无进程可杀——仅翻状态（进程池语义：下次调用重建） */

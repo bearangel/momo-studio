@@ -59,3 +59,28 @@ export interface McpToolResult {
   }>;
   isError: boolean;
 }
+
+/**
+ * P2 isError 语义透传契约（缺陷 #3）：
+ * host-manager.callMcpTool 统一返回该形状——text 是拼接后的文本（上层只关心
+ * 文本输出），isError 透传 MCP 规范的失败标位，审计与 UI 据此判定 success。
+ * 两端 client（McpClient stdio / HttpMcpClient remote）契约层收敛在本接口：
+ * 旧实现 HttpMcpClient 直接返回拼接文本（消除 host-manager 的 typeof string
+ * 分支后改为返回原始 McpToolResult，本类型在 host-manager 提取层组装）。
+ */
+export interface McpToolCallOutcome {
+  text: string;
+  isError: boolean;
+}
+
+/**
+ * P2 子进程侧失败标位：isError=true 时 doExecuteTool 抛此异常，message =
+ * 服务端返回的错误文本（保留模型可见语义文案）；chat loop catch 据此原样
+ * 回填到 tool_result chunk（success=false）而不加「工具执行失败:」前缀。
+ */
+export class McpToolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpToolError';
+  }
+}
