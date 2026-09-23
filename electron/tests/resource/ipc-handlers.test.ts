@@ -531,6 +531,26 @@ describe('registerResourceHandlers', () => {
     expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
   });
 
+  // 复审网眼补：installSmitheryRemote 通道（site #2）的镜像退化用例——
+  // 既有 { connections: [] } 用例对「无守卫也绿」（空数组索引不抛 TypeError），本例用 {}
+  // 才能锁死 ipc.handlers.ts 中 resource:installSmitheryRemote handler 的 Array.isArray 防御。
+  it('resource:installSmitheryRemote：响应缺 connections → 同样抛中文错误而非 TypeError', async () => {
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({});
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const remoteCall = calls.find(
+      (c: unknown[]) => c[0] === 'resource:installSmitheryRemote',
+    );
+    const handler = remoteCall![1] as (
+      evt: unknown,
+      id: string,
+      config: Record<string, string>,
+    ) => Promise<void>;
+    await expect(handler({}, 'smithery-mcp-empty2', {})).rejects.toThrow(
+      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
+    );
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
+  });
+
   it('resource:install smithery：deploymentUrl 非 https → 抛「暂不可直连」且不安装', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({
