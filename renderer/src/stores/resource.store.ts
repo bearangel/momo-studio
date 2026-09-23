@@ -33,7 +33,7 @@ interface ResourceStore {
   items: ResourceItem[];
   loading: boolean;
   error: string | null;
-  /** 安装成功提示横幅文本（null = 无；下一次 filter 切换或下一次 load 清掉） */
+  /** 安装成功提示横幅文本（null = 无；下一次 filter/mode/type 切换清掉，load 不清） */
   installNotice: string | null;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';

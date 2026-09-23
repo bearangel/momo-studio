@@ -50,6 +50,13 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### Smithery 直连 + DXT/MCPB 导入（v2.13 账本，spec 2026-09-23 P2.1）
+P2 主机验收驱动：registry 已 100% hosted 且 install-config 端点死亡 → 直连翻转；魔搭轨移除。
+- Smithery 直连安装（A1 免账号）：详情 `deploymentUrl` + `configSchema`（x-from 分 header/query，缺省 header）→ needsConfig 弹窗（McpConnectDialog）→ `installSmitheryRemote` 注册远程 MCP；`installable = isDeployed`
+- Smithery 分页：registryList page 参数 + hasMore +「加载更多」+ 300ms 防抖服务端搜索
+- DXT/MCPB 包导入：两阶段（parseMcpBundle 预览 + user_config 表单 → importMcpBundle 变量替换 `${__dirname}/${user_config.*}` + S1 校验 + cwd 注册 migration 039 + binary 执行位恢复 + 卸载清目录）
+- 魔搭轨整体移除（ResourceSource 缩五源；无公开 API，P3 复核后再评估）；Store 安装流消费 needsConfig 闭合静默窗口
+
 ### 双轨 Hub MCP 接入（v2.12 账本，spec 2026-09-22 P2）
 资源库 MCP「从网络获取」双轨 provider + 远程 MCP 传输——Smithery（国际）/ 魔搭（降级骨架，P3 复核 API 后接通）。
 - Provider 框架：主进程 `resource/hub/`（60s 失败退避负缓存复用 catalog 模式）+ `resource:registryProviders` / `resource:registryList` IPC；RegistryBrowse 顶栏来源选择器（不可达置灰 + localStorage 记忆；置灰由 registryList degraded 驱动「最新信号胜出」）

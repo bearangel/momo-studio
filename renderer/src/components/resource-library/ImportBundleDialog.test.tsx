@@ -154,4 +154,22 @@ describe('ImportBundleDialog — DXT / MCPB 两阶段导入', () => {
     expect(await screen.findByText(/不是合法的 DXT \/ MCPB 包/)).toBeInTheDocument();
     expect(resourceImportMcpBundle).not.toHaveBeenCalled();
   });
+
+  it('导入阶段失败 → 红字错误、无误报成功、不触发 onSuccess、可重试', async () => {
+    // 预览成功（无 user_config 表单的最小路径），import 第一次 reject 第二次成功——
+    // 锁「失败不吞、成功路径可重入」的完整错误路径（Task 6 审查 Minor 补测）
+    resourceParseMcpBundle.mockResolvedValueOnce(mkPreview({ userConfigSchema: {} }));
+    resourceImportMcpBundle.mockRejectedValueOnce(new Error('slug 冲突后缀超限'));
+    const onSuccess = vi.fn();
+    render(<ImportBundleDialog onClose={vi.fn()} onSuccess={onSuccess} />);
+    pickFile(new File([new Uint8Array([0])], 'conflict.mcpb'));
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    fireEvent.click(await screen.findByRole('button', { name: '导入' }));
+    expect(await screen.findByText(/slug 冲突后缀超限/)).toBeInTheDocument();
+    expect(screen.queryByText(/已导入/)).not.toBeInTheDocument();
+    expect(onSuccess).not.toHaveBeenCalled();
+    // 重试同包：import 再次调用并成功 → onSuccess 触发
+    fireEvent.click(screen.getByRole('button', { name: '导入' }));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+  });
 });
