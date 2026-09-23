@@ -488,6 +488,17 @@ export function importMcpBundle(
     fs.renameSync(tempDir, destDir);
     landed = true;
 
+    // zip 不保留 POSIX 执行位，binary 型 command 落盘后恢复 0o755
+    // 仅 chmod 包内文件——serverType 非 binary、command 是白名单裸命令
+    // （指向系统二进制）则跳过，避免误改系统二进制位（Windows chmod 近似 no-op 无害）
+    if (
+      parsed.serverType === 'binary' &&
+      (command.includes('/') || command.includes('\\')) &&
+      fs.existsSync(command)
+    ) {
+      fs.chmodSync(command, 0o755);
+    }
+
     registerMcpDefinition({
       id: randomUUID(),
       name: slug,

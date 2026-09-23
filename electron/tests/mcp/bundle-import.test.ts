@@ -424,6 +424,24 @@ describe('importMcpBundle 注册链', () => {
     expect(getMcpConfig('demo-bundle')!.cwd).toBe(bundleDir);
   });
 
+  it('binary 型 command 落盘后恢复 0o755（zip 不保留 POSIX 执行位，至少一个 +x 位为真）', () => {
+    const manifest = {
+      ...MCPB_MANIFEST,
+      server: {
+        type: 'binary',
+        mcp_config: { command: './bin/tool', args: [], env: {} },
+      },
+    };
+    importMcpBundle(makeBundle(manifest, { 'bin/tool': '#!/bin/sh\necho hi\n' }), 'demo-bundle.mcpb', {
+      api_key: 'k',
+    });
+
+    const bundleDir = path.join(bundlesRoot, 'demo-bundle');
+    // mode & 0o111 三位执行位只要有一个为真即通过（owner/group/other 任一可执行）
+    const mode = fs.statSync(path.join(bundleDir, 'bin', 'tool')).mode;
+    expect(mode & 0o111).toBeTruthy();
+  });
+
   it('`..` 逃逸 command → 拒绝', () => {
     const manifest = {
       ...MCPB_MANIFEST,
