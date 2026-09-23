@@ -25,9 +25,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// mock electron 模块（ipcMain.handle 在测试环境不存在）
+// mock electron 模块（ipcMain.handle 在测试环境不存在）。
+// P2.3 Task 2：补 shell.openExternal spy——misc:openExternal 校验放行后的唯一副作用，
+// 经 vi.hoisted 声明共享（同 smitheryList 先例，避免 mock 工厂提升导致 TDZ）。
+const { shellOpenExternal } = vi.hoisted(() => ({
+  shellOpenExternal: vi.fn(),
+}));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
+  shell: { openExternal: shellOpenExternal },
 }));
 
 // mock library
@@ -922,6 +928,104 @@ describe('registerResourceHandlers', () => {
       const handler = danglingCall![1] as () => Promise<unknown>;
       const result = await handler();
       expect(result).toEqual([]);
+    });
+  });
+
+  // P2.3 Task 2（spec 2026-09-23 §5/§6/§7）：预置清单只读 + 外链打开两通道。
+  // listBuiltinPresets 不 mock 解析链——默认目录解析 electron/resources/agents 下
+  // 4 个真 YAML，锁「真产物」契约（slug/name/emoji 均为生产消费字段）；openExternal
+  // 用 shell spy 锁校验门（放行才触达 shell，拒绝路径 shell 必须零调用）。
+  describe('P2.3 Task 2 预置清单 + 外链打开', () => {
+    it('注册 resource:listBuiltinPresets / misc:openExternal 通道', () => {
+      const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c: unknown[]) => c[0],
+      );
+      expect(channels).toEqual(
+        expect.arrayContaining(['resource:listBuiltinPresets', 'misc:openExternal']),
+      );
+    });
+
+    it("resource:listBuiltinPresets('agent') 返回 4 个真 YAML 预置（含 office-assistant）", async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
+      const handler = presetCall![1] as (evt: unknown, type: string) => Promise<unknown>;
+      const presets = (await handler({}, 'agent')) as Array<{
+        slug: string;
+        name: string;
+        description: string;
+        iconEmoji: string;
+      }>;
+      expect(presets.map((p) => p.slug)).toEqual([
+        'coder',
+        'office-assistant',
+        'pm-agent',
+        'requirement-analyst',
+      ]);
+      // 每条都是生产消费字段：四字段全为非空字符串（清单卡片直接渲染）
+      for (const p of presets) {
+        expect(typeof p.slug).toBe('string');
+        expect(p.slug.length).toBeGreaterThan(0);
+        expect(typeof p.name).toBe('string');
+        expect(p.name.length).toBeGreaterThan(0);
+        expect(typeof p.description).toBe('string');
+        expect(p.description.length).toBeGreaterThan(0);
+        expect(typeof p.iconEmoji).toBe('string');
+        expect(p.iconEmoji.length).toBeGreaterThan(0);
+      }
+      const office = presets.find((p) => p.slug === 'office-assistant');
+      expect(office).toMatchObject({ name: '办公助理', iconEmoji: '💼' });
+      const coder = presets.find((p) => p.slug === 'coder');
+      expect(coder).toMatchObject({ name: '程序员', iconEmoji: '💻' });
+    });
+
+    it("resource:listBuiltinPresets('mcp') / ('skill') 返回空数组（当前预置仅 agent）", async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
+      const handler = presetCall![1] as (evt: unknown, type: string) => Promise<unknown>;
+      expect(await handler({}, 'mcp')).toEqual([]);
+      expect(await handler({}, 'skill')).toEqual([]);
+    });
+
+    it('resource:listBuiltinPresets 非法 type → 中文错误', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
+      const handler = presetCall![1] as (evt: unknown, type: unknown) => Promise<unknown>;
+      await expect(handler({}, 'plugin')).rejects.toThrow(/资源类型非法/);
+      await expect(handler({}, undefined)).rejects.toThrow(/资源类型非法/);
+    });
+
+    it('misc:openExternal https 链接放行 → shell.openExternal 原样透传', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
+      const handler = openCall![1] as (evt: unknown, url: string) => Promise<void>;
+      await handler({}, 'https://smithery.io/');
+      expect(shellOpenExternal).toHaveBeenCalledWith('https://smithery.io/');
+      expect(shellOpenExternal).toHaveBeenCalledTimes(1);
+    });
+
+    it('misc:openExternal http:// 前缀 → 中文拒绝且 shell 不被调', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
+      const handler = openCall![1] as (evt: unknown, url: string) => Promise<void>;
+      await expect(handler({}, 'http://insecure.example.com/')).rejects.toThrow(/https/);
+      expect(shellOpenExternal).not.toHaveBeenCalled();
+    });
+
+    it('misc:openExternal 空串 → 中文拒绝且 shell 不被调', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
+      const handler = openCall![1] as (evt: unknown, url: string) => Promise<void>;
+      await expect(handler({}, '')).rejects.toThrow(/链接不能为空/);
+      expect(shellOpenExternal).not.toHaveBeenCalled();
+    });
+
+    it('misc:openExternal 非字符串入参 → 中文拒绝且 shell 不被调', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const openCall = calls.find((c: unknown[]) => c[0] === 'misc:openExternal');
+      const handler = openCall![1] as (evt: unknown, url: unknown) => Promise<void>;
+      await expect(handler({}, undefined)).rejects.toThrow(/链接不能为空/);
+      await expect(handler({}, 12345)).rejects.toThrow(/链接不能为空/);
+      expect(shellOpenExternal).not.toHaveBeenCalled();
     });
   });
 });

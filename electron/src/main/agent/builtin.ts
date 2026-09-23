@@ -114,6 +114,52 @@ export function readBuiltinManifestBySlug(slug: string): {
 }
 
 /**
+ * 预置清单条目（P2.3 spec §5——resource:listBuiltinPresets 返回形状）。
+ * 只读清单的最小面：不含 systemPrompt / 工具引用等重字段。
+ * renderer types.d.ts 有同形独立定义（跨进程仅结构对齐，repo 惯例）。
+ */
+export interface BuiltinPresetItem {
+  slug: string;
+  name: string;
+  description: string;
+  iconEmoji: string;
+}
+
+/**
+ * 枚举内置 agent YAML 目录产出预置清单（AddMenu「启用预置库」数据源，P2.3）。
+ * 本地直读零网络——刻意不走 fetchCatalog（其远程优先语义违背零网络红线）。
+ * 目录缺失抛中文错（弹窗红字 + 重试，spec §7）；单文件解析失败记日志跳过
+ * （与 registerBuiltinAgents 同语义——坏一个 YAML 不拖垮整张清单）。
+ */
+export function listBuiltinPresetAgents(): BuiltinPresetItem[] {
+  const dir = dirOverride ?? resolveBuiltinAgentsDir();
+  if (!fs.existsSync(dir)) {
+    throw new Error(`预置清单读取失败：内置 agent 目录不存在（${dir}）`);
+  }
+  const items: BuiltinPresetItem[] = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+    try {
+      const { def } = parseAgentManifestWithSuggestion(
+        fs.readFileSync(path.join(dir, file), 'utf-8'),
+      );
+      items.push({
+        slug: def.slug,
+        name: def.name,
+        description: def.description,
+        iconEmoji: def.iconEmoji,
+      });
+    } catch (err) {
+      logger.error('解析内置 agent 失败（预置清单）', {
+        file,
+        error: (err as Error).message,
+      });
+    }
+  }
+  items.sort((a, b) => a.slug.localeCompare(b.slug));
+  return items;
+}
+
+/**
  * 启动轻量加载：解析全部内置 YAML 只填 suggestions Map，不落库（spec §5）。
  * 保证 agent:getBuiltinSuggestions 开箱有数据（平台预选可用），
  * DB 维持「按需启用」语义——def 行仅在用户点启用时写入。

@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。15 个通道：
+// 资源库 IPC handler 注册。16 个 resource 通道 + 1 个 misc 通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -16,6 +16,9 @@
 //   - resource:getMcpConfig / resource:updateMcpConfig / resource:danglingMcpRefs
 //     MCP 配置编辑与悬空引用扫描（P2.2 Task 6——spec §4.1/§4.2/§4.3；业务逻辑
 //     在 resource/mcp-config.ts，本层只做入参防御与透传）
+//   - resource:listBuiltinPresets  预置清单只读（P2.3 spec §5——本地 YAML 直读零网络）
+//   - misc:openExternal     外链转系统浏览器（P2.3 spec §6——misc 命名空间首个
+//     通道，无独立 misc 注册点，归属此文件，后续 misc:* 在此追加）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
@@ -34,7 +37,7 @@
 // （broadcastLocalResourceCatalog——P2P 未启用时静默 no-op，本地写路径不受影响）。
 
 import { randomUUID } from 'node:crypto';
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
 import { logger } from '../logger';
 import { listResources, resolveResourceById } from './library';
 import {
@@ -71,6 +74,7 @@ import {
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
+import { listBuiltinPresetAgents } from '../agent/builtin';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import { requestResourceImport } from '../p2p/resource-transfer';
 
@@ -456,6 +460,31 @@ export function registerResourceHandlers(): void {
   // 扫描异常在 listDanglingMcpRefs 内降级空数组（卡片静默不显示，spec §7）。
   ipcMain.handle('resource:danglingMcpRefs', async () => {
     return listDanglingMcpRefs();
+  });
+
+  // resource:listBuiltinPresets — 预置清单只读（P2.3 spec §5）。本地直读
+  // resources/agents/*.yaml（agent/builtin.ts 现有解析链），零网络——刻意不走
+  // fetchCatalog（其远程优先语义违背零网络红线）。当前预置仅 agent 有「启用」
+  // 管线（preset.ts），mcp/skill 无预置语义 → 固定返回空数组。
+  ipcMain.handle('resource:listBuiltinPresets', async (_evt, type: ResourceType) => {
+    if (type !== 'agent' && type !== 'mcp' && type !== 'skill') {
+      throw new Error(`资源类型非法: ${String(type)}`);
+    }
+    return type === 'agent' ? listBuiltinPresetAgents() : [];
+  });
+
+  // misc:openExternal — 外链转系统浏览器（P2.3 spec §6）。显式 https 校验
+  // （区别于 window.ts setWindowOpenHandler 的无条件转发——那是被动安全闸，
+  // 本通道是 renderer 主动调用的受控入口）；空串 / 非 https 一律中文拒绝，
+  // 不触碰系统浏览器。
+  ipcMain.handle('misc:openExternal', async (_evt, url: string) => {
+    if (typeof url !== 'string' || url === '') {
+      throw new Error('链接不能为空');
+    }
+    if (!url.startsWith('https://')) {
+      throw new Error('仅支持打开 https:// 开头的链接');
+    }
+    await shell.openExternal(url);
   });
 
   logger.info('Resource IPC handlers 已注册');

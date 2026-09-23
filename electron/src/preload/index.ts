@@ -6,6 +6,7 @@ import type {
   BrowserNotice,
   BrowserState,
   BundlePreview,
+  BuiltinPresetItem,
   CollabTarget,
   DanglingMcpRef,
   ImMessage,
@@ -19,6 +20,7 @@ import type {
   RemoteNodeTasks,
   ResourceFilter,
   ResourceItem,
+  ResourceType,
   SkillCreateInput,
   SmitheryInstallResult,
   TaskRow,
@@ -335,6 +337,9 @@ const api: ApiSurface = {
       invoke<void>('resource:updateMcpConfig', name, input),
     // P2.2 Task 6：悬空 MCP 引用扫描（空数组 = 无悬空，卡片不显示）
     danglingMcpRefs: () => invoke<DanglingMcpRef[]>('resource:danglingMcpRefs'),
+    // P2.3：预置清单只读（本地 resources/agents/*.yaml 直读零网络；mcp/skill 空数组）
+    listBuiltinPresets: (type: ResourceType) =>
+      invoke<BuiltinPresetItem[]>('resource:listBuiltinPresets', type),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
@@ -356,6 +361,10 @@ const api: ApiSurface = {
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),
+  },
+  // P2.3：misc 命名空间首个通道——外链转系统浏览器（主进程侧强制 https 校验）
+  misc: {
+    openExternal: (url: string) => invoke<void>('misc:openExternal', url),
   },
   p2p: {
     // C8：P2P 节点发现 + 信任管理

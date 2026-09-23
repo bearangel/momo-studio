@@ -678,6 +678,21 @@ export interface ResourceFilter {
 }
 
 /**
+ * P2.3 预置清单条目（resource:listBuiltinPresets 返回形状的最小只读面，
+ * 不含 systemPrompt / 工具引用等重字段）。
+ * 与 electron 端 agent/builtin.ts 的 BuiltinPresetItem 对齐（renderer 端独立
+ * 定义，仅结构对齐——同 ResourceItem 惯例）。
+ */
+export interface BuiltinPresetItem {
+  /** 预设 slug（启用链路 resource key——EnablePresetDialog / enablePresetWithJoin 消费） */
+  slug: string;
+  /** 展示名 */
+  name: string;
+  description: string;
+  iconEmoji: string;
+}
+
+/**
  * v1.7 统一资源项——前端 UI/IPC 的核心数据结构。
  * 顶层字段对所有 source 通用；source 特有信息放在对应的可选 namespace 字段中。
  * 与 electron 端 resource/types.ts 的 ResourceItem 对齐（renderer 端独立定义，仅结构对齐）。
@@ -1376,6 +1391,15 @@ export interface BrowserApiSurface {
   onBrowserNotice(callback: (notice: BrowserNotice) => void): () => void;
 }
 
+/**
+ * P2.3 杂项通道（misc:* 命名空间——壳能力级小通道归属地，首个成员为外链
+ * 打开；主进程 handler 注册在 electron resource/ipc.handlers.ts）。
+ */
+export interface MiscApiSurface {
+  /** 外链转系统浏览器（主进程强制 https 校验；空串/非 https 中文拒绝） */
+  openExternal(url: string): Promise<void>;
+}
+
 export interface ApiSurface {
   system: {
     getInfo(): Promise<SystemInfo>;
@@ -1608,6 +1632,8 @@ export interface ApiSurface {
     /** 弹出原生目录选择对话框，返回绝对路径；用户取消返回 null */
     pickDirectory(opts?: { title?: string; defaultPath?: string }): Promise<string | null>;
   };
+  /** P2.3：杂项通道（misc:* 命名空间——外链打开等壳能力级小通道） */
+  misc: MiscApiSurface;
   settings: {
     /** 读取全局会话配置（未配置返回默认值） */
     getGlobal(): Promise<GlobalSettings>;
@@ -1694,6 +1720,11 @@ export interface ApiSurface {
      * 空数组 = 无悬空（含扫描异常降级），卡片不显示。
      */
     danglingMcpRefs(): Promise<DanglingMcpRef[]>;
+    /**
+     * P2.3：预置清单只读（本地 resources/agents/*.yaml 直读，零网络——
+     * 预置库弹窗数据源）。当前预置仅 agent 有「启用」管线，mcp/skill 固定空数组。
+     */
+    listBuiltinPresets(type: ResourceType): Promise<BuiltinPresetItem[]>;
   };
   task: TaskApiSurface;
   /**
