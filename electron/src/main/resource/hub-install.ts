@@ -110,7 +110,8 @@ export async function installSmitheryRemote(
     source: 'smithery',
   });
   recordInstall(`smithery:${slug}`, slug);
-  logger.info('Smithery 远程 MCP 已安装', { slug, url: finalUrl });
+  // query 可能含用户 config 值（如 API key），日志只记基础 url 避免泄漏
+  logger.info('Smithery 远程 MCP 已安装', { slug, url: finalUrl.split('?')[0] });
 }
 
 /** mcp_definitions 中 hub 来源行 → ResourceItem（installed=true / removable=true） */

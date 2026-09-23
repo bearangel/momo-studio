@@ -514,6 +514,23 @@ describe('registerResourceHandlers', () => {
     expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
   });
 
+  // 终审 Minor-2：API 响应缺 connections 字段时 detail.connections[0] 抛英文 TypeError
+  // （pino/console.error 链路会把 TypeError 原文抛给 renderer，可读性 0）。
+  // 该测试为回归锁：任何重写 installSmitheryEntry / installSmitheryRemote 取连接的代码
+  // 若未做形状防御必失败。配合 ipc.handlers.ts 的 Array.isArray 守卫阅读。
+  it('resource:install smithery：响应缺 connections → 抛「暂不可直连」中文错误而非 TypeError', async () => {
+    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    // {}——无 connections 键，最小退化响应
+    hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({});
+    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
+    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
+    await expect(handler({}, 'smithery-mcp-empty')).rejects.toThrow(
+      /该服务器暂不可直连（可能需要 Smithery 托管 OAuth）/,
+    );
+    expect(hubInstallMocks.installSmitheryRemote).not.toHaveBeenCalled();
+  });
+
   it('resource:install smithery：deploymentUrl 非 https → 抛「暂不可直连」且不安装', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
     hubInstallMocks.fetchSmitheryDetail.mockResolvedValueOnce({

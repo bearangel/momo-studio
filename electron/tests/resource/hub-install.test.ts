@@ -33,6 +33,7 @@ import {
 } from '../../src/main/resource/hub-install';
 import { getMcpConfig } from '../../src/main/mcp/host-manager';
 import { listResources } from '../../src/main/resource/library';
+import { logger } from '../../src/main/logger';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-hub-install-test-${Date.now()}`);
 const fetchSpy = vi.fn();
@@ -217,6 +218,39 @@ describe('installSmitheryRemote x-from 分流', () => {
     expect(mcpCount.c).toBe(1);
     expect(pkgCount.c).toBe(1);
     expect(listHubInstalledResources('mcp').filter((i) => i.slug === 'dup')).toHaveLength(1);
+  });
+
+  // 终审 Important-1（spec §6 红线）：x-from=query 字段（可能是用户 API key 等
+  // config 值）经 logger.info 落盘前必须剥离 query——日志只记基础 url。
+  // 该测试为回归锁：任何人重写 logger.info 字段时若带回 finalUrl 必失败。
+  it('x-from=query 字段安装时 logger.info 收到的 url 不含 query（config 值不落日志）', async () => {
+    const SECRET_TOKEN = 'SECRET_API_KEY_xyz_should_never_log';
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    try {
+      await installSmitheryRemote(
+        'secrets',
+        'https://secrets.run.tools',
+        { token: SECRET_TOKEN },
+        { properties: { token: { 'x-from': 'query' as const } } },
+      );
+
+      // 运行链路语义：注册的实际 URL 仍带 query（远程 MCP 需要 token）
+      const cfg = getMcpConfig('secrets');
+      expect(cfg!.url).toBe(`https://secrets.run.tools?token=${SECRET_TOKEN}`);
+
+      // 日志链路语义：logger.info 的 url 必须是基础 URL，绝不携带 SECRET_TOKEN
+      const calls = infoSpy.mock.calls.filter(
+        (c) => c[0] === 'Smithery 远程 MCP 已安装',
+      );
+      expect(calls).toHaveLength(1);
+      const payload = calls[0]![1] as { slug: string; url: string };
+      expect(payload.slug).toBe('secrets');
+      expect(payload.url).toBe('https://secrets.run.tools');
+      expect(payload.url).not.toContain('?');
+      expect(payload.url).not.toContain(SECRET_TOKEN);
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
 

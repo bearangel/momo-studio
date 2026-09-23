@@ -86,7 +86,9 @@ export interface RegisterMcpInput {
  */
 async function installSmitheryEntry(slug: string): Promise<SmitheryInstallResult> {
   const detail = await fetchSmitheryDetail(slug);
-  const conn = detail.connections[0];
+  // detail.connections 可能缺失（响应形状退化），防御读取后由下方「!conn?.deploymentUrl」
+  // 分支自然落到中文「暂不可直连」错误，避免对 renderer 抛不可读的英文 TypeError
+  const conn = Array.isArray(detail.connections) ? detail.connections[0] : undefined;
   const deploymentUrl = conn?.deploymentUrl;
   if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
     throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
@@ -184,7 +186,8 @@ export function registerResourceHandlers(): void {
         throw new Error(`非 smithery MCP 资源：${id}`);
       }
       const detail = await fetchSmitheryDetail(parsed.slug);
-      const conn = detail.connections[0];
+      // 同 installSmitheryEntry：防御响应缺 connections 字段，避免英文 TypeError 上抛
+      const conn = Array.isArray(detail.connections) ? detail.connections[0] : undefined;
       const deploymentUrl = conn?.deploymentUrl;
       if (!deploymentUrl || !deploymentUrl.startsWith('https://')) {
         throw new Error('该服务器暂不可直连（可能需要 Smithery 托管 OAuth）');
