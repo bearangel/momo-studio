@@ -139,13 +139,17 @@ describe('HttpMcpClient raw shape（消除 typeof string 分支）', () => {
       }
       if (body.method === 'initialize') {
         return {
-          ok: true, status: 200,
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }), // 生产代码按 content-type 分流
           json: async () => ({ jsonrpc: '2.0', id: body.id, result: { serverInfo: {}, capabilities: {} } }),
         } as unknown as Response;
       }
       if (body.method === 'tools/call') {
         return {
-          ok: true, status: 200,
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
           json: async () => ({
             jsonrpc: '2.0', id: body.id,
             result: { content: [{ type: 'text', text: 'upstream-down' }], isError: true },

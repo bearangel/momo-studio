@@ -134,6 +134,7 @@ function stubRemoteFetch(): { restore: () => void; authSeen: string[] } {
         return {
           ok: true,
           status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }), // 生产代码按 content-type 分流
           json: async () => ({
             jsonrpc: '2.0',
             id: body.id,
@@ -148,6 +149,7 @@ function stubRemoteFetch(): { restore: () => void; authSeen: string[] } {
         return {
           ok: true,
           status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
           json: async () => ({
             jsonrpc: '2.0',
             id: body.id,
