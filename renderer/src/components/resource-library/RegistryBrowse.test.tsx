@@ -40,12 +40,11 @@ const mockApi = {
   },
 };
 
-/** 与主进程 registryProviders 返回同构的三源元信息（可按用例覆写 degraded） */
+/** 与主进程 registryProviders 返回同构的元信息（可按用例覆写 degraded） */
 function mkProviders(overrides?: Partial<RegistryProviderMeta>[]): RegistryProviderMeta[] {
   const base: RegistryProviderMeta[] = [
     { key: 'builtin', label: '内置市场', region: 'local', types: ['agent', 'mcp', 'skill'], degraded: false },
     { key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], degraded: false },
-    { key: 'modelscope', label: '魔搭社区', region: 'cn', types: ['mcp'], degraded: false },
   ];
   if (!overrides) return base;
   return base.map((p) => ({ ...p, ...overrides.find((o) => o.key === p.key) }));
@@ -108,18 +107,16 @@ describe('RegistryBrowse', () => {
     expect(providerSelect().value).toBe('builtin');
   });
 
-  it('provider 选择器在 mcp 页渲染三个来源 option', async () => {
+  it('provider 选择器在 mcp 页渲染两个来源 option', async () => {
     render(<RegistryBrowse type="mcp" onInstall={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole('option', { name: '内置市场' })).toBeTruthy());
     expect(screen.getByRole('option', { name: 'Smithery' })).toBeTruthy();
-    expect(screen.getByRole('option', { name: '魔搭社区' })).toBeTruthy();
   });
 
   it('type 过滤：agent 页仅渲染内置市场（hub 仅支持 mcp）', async () => {
     render(<RegistryBrowse type="agent" onInstall={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole('option', { name: '内置市场' })).toBeTruthy());
     expect(screen.queryByRole('option', { name: 'Smithery' })).toBeNull();
-    expect(screen.queryByRole('option', { name: '魔搭社区' })).toBeNull();
   });
 
   it('切到 Smithery → registryList("smithery", type) 取数渲染 hub 条目 + 记忆持久化', async () => {
@@ -156,14 +153,13 @@ describe('RegistryBrowse', () => {
 
   it('meta.degraded 的 option 置灰并标注不可达（初值参考，Task 4 审查裁定）', async () => {
     registryProvidersMock.mockResolvedValue(
-      mkProviders([{ key: 'smithery', degraded: true }, { key: 'modelscope', degraded: true }]),
+      mkProviders([{ key: 'smithery', degraded: true }]),
     );
     render(<RegistryBrowse type="mcp" onInstall={vi.fn()} />);
     const smithery = await waitFor(() =>
       screen.getByRole('option', { name: /Smithery（当前网络不可达）/ }),
     );
     expect(smithery.hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('option', { name: /魔搭社区（当前网络不可达）/ }).hasAttribute('disabled')).toBe(true);
     // builtin 恒可用（本地 catalog 零网络）
     const builtin = screen.getByRole('option', { name: '内置市场' });
     expect(builtin.hasAttribute('disabled')).toBe(false);

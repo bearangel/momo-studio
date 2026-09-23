@@ -1,6 +1,6 @@
 // electron/src/main/resource/types.ts
 //
-// v1.7 资源库统一类型定义。所有来源（builtin/custom/marketplace/p2p/smithery/modelscope）的资源
+// v1.7 资源库统一类型定义。所有来源（builtin/custom/marketplace/p2p/smithery）的资源
 // 都映射成 ResourceItem，前端只感知这一种数据结构，不感知 source 差异。
 //
 // 这是 v1.7 整个 UI + IPC 重构的核心类型——后续 14 个 task（registry / IPC /
@@ -16,15 +16,16 @@ export type ResourceType = 'agent' | 'mcp' | 'skill';
  *   - custom       我的上传（用户本地注册 / 上传）
  *   - p2p          P2P 共享（其他 peer 推送过来的资源，v2 引入）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
- *   - modelscope   魔搭社区 hosted MCP（P2 双轨·国内，spec 2026-09-22）
+ *
+ * modelscope（魔搭社区）已于 P2.1 移除——registry 100% hosted 后骨架轨无意义；
+ * P3 若公开 API 落地再评估。
  */
 export type ResourceSource =
   | 'builtin'
   | 'marketplace'
   | 'custom'
   | 'p2p'
-  | 'smithery'
-  | 'modelscope';
+  | 'smithery';
 
 /** 资源列表过滤条件——所有字段可选，undefined 表示不过滤该维度 */
 export interface ResourceFilter {
@@ -96,7 +97,6 @@ const SOURCE_LABELS: Record<ResourceSource, string> = {
   marketplace: '网络资源',
   p2p: 'P2P 共享',
   smithery: 'Smithery',
-  modelscope: '魔搭社区',
 };
 
 /**
@@ -125,7 +125,7 @@ export function buildResourceId(source: ResourceSource, type: ResourceType, slug
  */
 export function parseResourceId(id: string): { source: ResourceSource; type: ResourceType; slug: string } | null {
   // slug 部分允许任意非空字符（包括 UUID 中的连字符），用贪婪匹配
-  const m = id.match(/^(builtin|marketplace|custom|p2p|smithery|modelscope)-(agent|mcp|skill)-(.+)$/);
+  const m = id.match(/^(builtin|marketplace|custom|p2p|smithery)-(agent|mcp|skill)-(.+)$/);
   if (!m || !m[3]) return null;
   return {
     source: m[1] as ResourceSource,

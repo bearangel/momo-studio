@@ -165,7 +165,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   useResourceStore.setState({ activeType: valid, typeFilter: valid });
 }
 
-// 启动恢复上次选择的网络获取 provider（失效值回退 'builtin'；Task 6 记忆）
+// 启动恢复上次选择的网络获取 provider（失效值回退 'builtin'；Task 6 记忆）。
+// 白名单缩 ['builtin','smithery']——P2.1 移除 modelscope 后，记忆了它的存量回退 builtin。
 {
   const persisted = (() => {
     try {
@@ -175,8 +176,6 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     }
   })();
   const valid: RegistryProviderMeta['key'] =
-    persisted === 'builtin' || persisted === 'smithery' || persisted === 'modelscope'
-      ? persisted
-      : 'builtin';
+    persisted === 'builtin' || persisted === 'smithery' ? persisted : 'builtin';
   useResourceStore.setState({ registryProviderKey: valid });
 }

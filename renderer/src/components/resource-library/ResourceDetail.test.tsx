@@ -211,31 +211,6 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     expect(screen.getByText('community')).toBeInTheDocument();
   });
 
-  it('modelscope（含 marketplace 元数据）: 显示 README + author', () => {
-    const item = baseItem({
-      id: 'modelscope-mcp-amap',
-      source: 'modelscope',
-      type: 'mcp',
-      name: '高德 MCP (魔搭)',
-      description: '魔搭 hosted MCP',
-      installed: true,
-      installable: false,
-      removable: true,
-      marketplace: {
-        author: 'amap-official',
-        readme: '# amap\n魔搭 hosted MCP 示例',
-        downloadUrl: 'https://modelscope.example/amap',
-        checksum: 'ghi789',
-        verificationStatus: 'official',
-        tags: ['map'],
-        category: 'mcp',
-      },
-    });
-    render(<ResourceDetail item={item} onClose={() => {}} />);
-    expect(screen.getByText('amap-official')).toBeInTheDocument();
-    expect(screen.getByText(/魔搭 hosted MCP 示例/)).toBeInTheDocument();
-  });
-
   it('p2p: 显示来源节点 + 「导入」按钮（走 onInstall；P4 Task 4）', () => {
     const onInstall = vi.fn();
     const item = baseItem({

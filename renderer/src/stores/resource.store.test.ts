@@ -165,8 +165,8 @@ describe('resource.store — registryProviderKey 记忆（Task 6）', () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
       throw new Error('QuotaExceededError');
     });
-    expect(() => fresh.getState().setRegistryProvider('modelscope')).not.toThrow();
-    expect(fresh.getState().registryProviderKey).toBe('modelscope');
+    expect(() => fresh.getState().setRegistryProvider('smithery')).not.toThrow();
+    expect(fresh.getState().registryProviderKey).toBe('smithery');
     spy.mockRestore();
   });
 
@@ -178,6 +178,12 @@ describe('resource.store — registryProviderKey 记忆（Task 6）', () => {
 
   it('启动恢复：非法值回退 builtin', async () => {
     localStorage.setItem('momo.resourceLibrary.providerKey', 'mcphub');
+    const { useResourceStore: fresh } = await import('./resource.store');
+    expect(fresh.getState().registryProviderKey).toBe('builtin');
+  });
+
+  it('启动恢复：P2.1 移除的 modelscope 记忆回退 builtin（存量迁移）', async () => {
+    localStorage.setItem('momo.resourceLibrary.providerKey', 'modelscope');
     const { useResourceStore: fresh } = await import('./resource.store');
     expect(fresh.getState().registryProviderKey).toBe('builtin');
   });

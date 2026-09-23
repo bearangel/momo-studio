@@ -3,7 +3,7 @@
 // P2 Task 2：mcp_definitions 二态读写（stdio / streamable_http）测试。
 //   - remote 定义注册 → getMcpConfig 读回 transport/url/headers（command 空串占位）
 //   - stdio 定义缺省 transport 不受影响（存量行为兼容）
-//   - listRegistered 返回二态字段与 source 扩展值（smithery/modelscope）
+//   - listRegistered 返回二态字段与 source 扩展值（smithery）
 //   - 错误路径专项（momo-test-rules 铁律 3）：
 //       remote url 非 https → 注册抛错
 //       DB 行 transport 非法值 → 读回白名单外回退 'stdio'
@@ -44,15 +44,15 @@ afterEach(() => {
 describe('mcp_definitions 二态读写（P2 remote transport）', () => {
   it('注册 remote 定义 → getMcpConfig 读回 transport/url/headers', () => {
     registerMcpDefinition({
-      id: 'r1', name: 'ms-weather', version: '1.0.0',
+      id: 'r1', name: 'remote-weather', version: '1.0.0',
       transport: 'streamable_http', command: '', args: [],
-      url: 'https://api.modelscope.ai/mcp/weather',
+      url: 'https://mcp.example.com/weather',
       headers: { Authorization: 'Bearer tk' },
-      source: 'modelscope',
+      source: 'custom',
     });
-    const cfg = getMcpConfig('ms-weather');
+    const cfg = getMcpConfig('remote-weather');
     expect(cfg?.transport).toBe('streamable_http');
-    expect(cfg?.url).toBe('https://api.modelscope.ai/mcp/weather');
+    expect(cfg?.url).toBe('https://mcp.example.com/weather');
     expect(cfg?.headers).toEqual({ Authorization: 'Bearer tk' });
     expect(cfg?.command).toBe(''); // NOT NULL 占位
   });
@@ -77,10 +77,10 @@ describe('mcp_definitions 二态读写（P2 remote transport）', () => {
     registerMcpDefinition({
       id: 'r2', name: 'ms-2', version: '1.0.0',
       transport: 'streamable_http', command: '', args: [],
-      url: 'https://x.test/mcp', source: 'modelscope',
+      url: 'https://x.test/mcp', source: 'smithery',
     });
     const row = listRegistered().find((m) => m.name === 'ms-2');
-    expect(row?.source).toBe('modelscope');
+    expect(row?.source).toBe('smithery');
     expect(row?.transport).toBe('streamable_http');
     expect(row?.url).toBe('https://x.test/mcp');
   });

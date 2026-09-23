@@ -24,9 +24,9 @@ export interface HubListResult {
   degraded: boolean;
 }
 
-/** hub provider 契约——每个网络注册表一个实现（smithery / modelscope） */
+/** hub provider 契约——每个网络注册表一个实现（smithery；modelscope 已于 P2.1 移除） */
 export interface HubProvider {
-  readonly key: 'smithery' | 'modelscope';
+  readonly key: 'smithery';
   readonly label: string;
   readonly region: 'intl' | 'cn';
   readonly types: ResourceType[];

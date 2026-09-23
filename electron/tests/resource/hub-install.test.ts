@@ -11,8 +11,6 @@
 //       fetch 网络异常 → 上抛不落库
 //       args 含 `"` 的项被过滤（注入防线）
 //   - 重复安装幂等（mcp_definitions 一行 + installed_packages 一行 + 列表一条）
-//   - 魔搭 remote 安装：https url 直注册（streamable_http + Authorization 装配）+
-//     无 token 时 headers 为空 object + 非 https url 拒绝
 //   - hub 卸载：mcp 行 + 记账行同删 + 幂等（二次卸载不抛）
 //   - library 接入（needHub）：listResources 按 source 短路取 hub 已装条目；
 //     无 source 过滤时 hub 并入合并面（真实 DB + 真空 catalog，契约测试：
@@ -23,17 +21,15 @@
 //   - runMigrations() 经 getDb() 单例建表（真实跑全量迁移）
 //   - closeDb() 在 afterEach 复位单例
 // 网络边界：vi.stubGlobal('fetch', fetchSpy)（仅 mock 网络，业务逻辑全真实）。
-// keychain 边界：setKeychainImpl 注入内存桩（keychain.ts 官方测试钩子）。
+// 魔搭 remote 安装链路已于 P2.1 随轨移除（原 keychain token 桩随之退役）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { setKeychainImpl } from '../../src/main/storage/keychain';
 import {
   installSmitheryMcp,
-  installModelScopeMcp,
   uninstallHubMcp,
   listHubInstalledResources,
 } from '../../src/main/resource/hub-install';
@@ -54,12 +50,6 @@ beforeEach(() => {
   runMigrations();
   fetchSpy.mockReset();
   vi.stubGlobal('fetch', fetchSpy);
-  // keychain 默认桩：无 token（魔搭带 token 用例各自覆盖注入）
-  setKeychainImpl({
-    setSecret: async () => {},
-    getSecret: async () => null,
-    deleteSecret: async () => {},
-  });
 });
 
 afterEach(() => {
@@ -186,53 +176,6 @@ describe('Smithery stdio 安装链路', () => {
   });
 });
 
-describe('魔搭 remote 安装链路（骨架期无 UI 入口，函数实现保留供 P3 复核）', () => {
-  it('https url 直注册（streamable_http）+ token 装配 Authorization + 记账', async () => {
-    setKeychainImpl({
-      setSecret: async () => {},
-      getSecret: async () => 'tk-123',
-      deleteSecret: async () => {},
-    });
-
-    await installModelScopeMcp('ms-weather', 'https://api.modelscope.ai/mcp/weather', '魔搭天气');
-
-    const cfg = getMcpConfig('ms-weather');
-    expect(cfg?.transport).toBe('streamable_http');
-    expect(cfg?.url).toBe('https://api.modelscope.ai/mcp/weather');
-    expect(cfg?.headers).toEqual({ Authorization: 'Bearer tk-123' });
-    expect(cfg?.command).toBe(''); // NOT NULL 占位
-    expect(cfg?.source).toBe('modelscope');
-
-    // 记账：modelscope 前缀与 marketplace/smithery 不撞
-    const pkg = getDb()
-      .prepare('SELECT item_id FROM installed_packages')
-      .get() as { item_id: string };
-    expect(pkg.item_id).toBe('modelscope:ms-weather');
-
-    // 列表映射：远程形态描述携带 url
-    const item = listHubInstalledResources('mcp').find((i) => i.slug === 'ms-weather');
-    expect(item?.source).toBe('modelscope');
-    expect(item?.description).toContain('https://api.modelscope.ai/mcp/weather');
-  });
-
-  it('无 token → headers 为空 object（无 Authorization 头）', async () => {
-    await installModelScopeMcp('ms-anon', 'https://api.modelscope.ai/mcp/anon', '匿名');
-
-    expect(getMcpConfig('ms-anon')?.headers).toEqual({});
-  });
-
-  it('非 https url → 拒绝且不落库', async () => {
-    await expect(
-      installModelScopeMcp('ms-bad', 'http://api.modelscope.ai/mcp/bad', '坏地址'),
-    ).rejects.toThrow(/https/);
-    expect(getMcpConfig('ms-bad')).toBeNull();
-    const count = getDb()
-      .prepare('SELECT COUNT(*) AS c FROM installed_packages')
-      .get() as { c: number };
-    expect(count.c).toBe(0);
-  });
-});
-
 describe('hub 卸载', () => {
   it('卸载 smithery 条目：mcp 行 + 记账行同删 + 列表消失；二次卸载幂等不抛', async () => {
     fetchSpy.mockResolvedValue(
@@ -280,7 +223,7 @@ describe('listHubInstalledResources 过滤语义', () => {
 });
 
 describe('library 接入（needHub 合并，契约测试：真实 DB 生产 → listResources 直接消费）', () => {
-  it('filter.source=smithery/modelscope 短路返回已装 hub 条目；无 source 过滤时并入合并面', async () => {
+  it('filter.source=smithery 短路返回已装 hub 条目；无 source 过滤时并入合并面', async () => {
     // fetch 按 URL 分流：smithery install-config 返回 npx 配置，其余（fetchCatalog）返回空 catalog
     fetchSpy.mockImplementation(async (url: unknown) => {
       if (String(url).includes('registry.smithery.ai')) {
@@ -290,18 +233,14 @@ describe('library 接入（needHub 合并，契约测试：真实 DB 生产 → 
     });
 
     await installSmitheryMcp('@owner/weather');
-    await installModelScopeMcp('ms-a', 'https://api.modelscope.example/mcp/a', 'A');
 
     // source 短路：只取对应 hub 源，不触发 fetchCatalog
     const bySmithery = await listResources({ source: 'smithery' });
     expect(bySmithery.map((i) => i.id)).toEqual(['smithery-mcp-@owner/weather']);
-    const byModelScope = await listResources({ source: 'modelscope' });
-    expect(byModelScope.map((i) => i.id)).toEqual(['modelscope-mcp-ms-a']);
 
     // 合并面：无 source 过滤（type=mcp）时 hub 与空 catalog/custom/p2p 合并
     const mcpAll = await listResources({ type: 'mcp' });
     expect(mcpAll.map((i) => i.id).sort()).toEqual([
-      'modelscope-mcp-ms-a',
       'smithery-mcp-@owner/weather',
     ]);
   });

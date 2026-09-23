@@ -36,7 +36,6 @@ beforeEach(() => {
   registryProvidersMock.mockResolvedValue([
     { key: 'builtin', label: '内置市场', region: 'local', types: ['agent', 'mcp', 'skill'], degraded: false },
     { key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], degraded: false },
-    { key: 'modelscope', label: '魔搭社区', region: 'cn', types: ['mcp'], degraded: false },
   ] as RegistryProviderMeta[]);
   registryListMock.mockReset();
   registryListMock.mockResolvedValue({ entries: [] as RegistryListEntry[], degraded: false });

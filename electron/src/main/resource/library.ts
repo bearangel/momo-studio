@@ -3,7 +3,7 @@
 // listResources：统一五源（builtin/custom/marketplace/p2p/hub）资源列表的主入口。
 // 内部一次 fetchCatalog（远程优先 + 本地回退），按 downloadUrl 分流到 builtin/marketplace，
 // 再合并 custom（DB/fs 同步读）、p2p（远端共享目录内存缓存，P4 Task 4）与
-// hub（smithery/modelscope 已装 MCP，P2 Task 5）。
+// hub（smithery 已装 MCP，P2 Task 5）。
 // fetchCatalog 失败时只丢 builtin+marketplace，custom/p2p/hub 仍正常返回。
 //
 // filter 支持按 type/source 过滤。filter.source 指定时短路不必要源（避免 fetchCatalog）。
@@ -27,7 +27,7 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
   const needCatalog = !filter?.source || filter.source === 'builtin' || filter.source === 'marketplace';
   const needCustom = !filter?.source || filter.source === 'custom';
   const needP2p = !filter?.source || filter.source === 'p2p';
-  const needHub = !filter?.source || filter.source === 'smithery' || filter.source === 'modelscope';
+  const needHub = !filter?.source || filter.source === 'smithery';
 
   // 并行：catalog（如需要）+ custom
   const tasks: Promise<unknown>[] = [];
@@ -113,7 +113,7 @@ export async function listResources(filter?: ResourceFilter): Promise<ResourceIt
     );
   }
 
-  // hub：已装 smithery/modelscope MCP（mcp_definitions 同步读，无 IO——不参与
+  // hub：已装 smithery MCP（mcp_definitions 同步读，无 IO——不参与
   // 上面的并行任务）。id 即安装标识（qualifiedName 整体作 slug），Task 6 的
   // installed 翻转依赖本映射。
   let hubItems: ResourceItem[] = [];

@@ -20,8 +20,8 @@ export interface McpServerConfig {
   url?: string;
   /** remote 请求头（token 等；不落日志） */
   headers?: Record<string, string>;
-  /** 来源标识。缺省按 'marketplace' 处理 */
-  source?: 'marketplace' | 'custom' | 'smithery' | 'modelscope';
+  /** 来源标识。缺省按 'marketplace' 处理（modelscope 已于 P2.1 移除） */
+  source?: 'marketplace' | 'custom' | 'smithery';
   installedAt?: string;
 }
 
@@ -36,7 +36,7 @@ export interface RegisteredMcp {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
-  source: 'marketplace' | 'custom' | 'smithery' | 'modelscope';
+  source: 'marketplace' | 'custom' | 'smithery';
   installedAt: string;
 }
 

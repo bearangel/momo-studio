@@ -44,9 +44,8 @@ vi.mock('../../src/main/marketplace/installer', () => ({
 
 // P2 Task 4：hub provider 模块整体 mock（真实行为由 tests/resource/hub/* 覆盖）。
 // vi.mock 工厂会被提升到文件顶部——共享 spy 须经 vi.hoisted 声明，避免 TDZ。
-const { smitheryList, modelscopeList } = vi.hoisted(() => ({
+const { smitheryList } = vi.hoisted(() => ({
   smitheryList: vi.fn(),
-  modelscopeList: vi.fn(),
 }));
 vi.mock('../../src/main/resource/hub/smithery', () => ({
   smitheryProvider: {
@@ -55,19 +54,12 @@ vi.mock('../../src/main/resource/hub/smithery', () => ({
   isSmitheryDegraded: vi.fn(() => false),
   __resetHubBackoffForTest: vi.fn(),
 }));
-vi.mock('../../src/main/resource/hub/modelscope', () => ({
-  modelscopeProvider: {
-    key: 'modelscope', label: '魔搭社区', region: 'cn', types: ['mcp'], list: modelscopeList,
-  },
-  isModelScopeDegraded: vi.fn(() => true),
-}));
 
 // P2 Task 5：hub 安装/卸载模块 mock（真实链路由 tests/resource/hub-install.test.ts
 // 以真实 DB + fetch 桩覆盖；本文件只测 IPC 路由分支）。
 const { hubInstallMocks } = vi.hoisted(() => ({
   hubInstallMocks: {
     installSmitheryMcp: vi.fn(),
-    installModelScopeMcp: vi.fn(),
     uninstallHubMcp: vi.fn(),
     listHubInstalledResources: vi.fn(() => []),
   },
@@ -296,7 +288,7 @@ describe('registerResourceHandlers', () => {
       name: 'weather',
       command: '',
       transport: 'streamable_http',
-      url: 'https://mcp.modelscope.cn/sse',
+      url: 'https://mcp.example.com/sse',
     });
     expect(registerMcpDefinition).toHaveBeenCalledTimes(1);
     const config = (registerMcpDefinition as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<
@@ -307,7 +299,7 @@ describe('registerResourceHandlers', () => {
       name: 'weather',
       command: '',
       transport: 'streamable_http',
-      url: 'https://mcp.modelscope.cn/sse',
+      url: 'https://mcp.example.com/sse',
       source: 'custom',
     });
     expect(result).toBe(item);
@@ -357,18 +349,17 @@ describe('registerResourceHandlers', () => {
     );
   });
 
-  it('resource:registryProviders 返回 builtin + 两 hub（degraded 取各自封装）', async () => {
+  it('resource:registryProviders 返回 builtin + hub（degraded 取各自封装）', async () => {
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const metaCall = calls.find((c: unknown[]) => c[0] === 'resource:registryProviders');
     const handler = metaCall![1] as () => Promise<unknown>;
     const providers = (await handler()) as Array<{
       key: string; label: string; region: string; types: string[]; degraded: boolean;
     }>;
-    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery', 'modelscope']);
+    expect(providers.map((p) => p.key)).toEqual(['builtin', 'smithery']);
     expect(providers[0]).toMatchObject({ region: 'local', degraded: false });
     expect(providers[0]!.types).toEqual(['agent', 'mcp', 'skill']);
     expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
-    expect(providers[2]).toMatchObject({ label: '魔搭社区', region: 'cn', degraded: true });
   });
 
   it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射', async () => {
@@ -427,9 +418,6 @@ describe('registerResourceHandlers', () => {
     const result = await handler({}, 'smithery', 'mcp', 'weather');
     expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather');
     expect(result).toEqual({ entries: [], degraded: false });
-
-    await handler({}, 'modelscope', 'mcp');
-    expect(modelscopeList).toHaveBeenCalledWith('mcp', undefined);
   });
 
   it('resource:registryList 未知 provider 抛错', async () => {
@@ -456,48 +444,7 @@ describe('registerResourceHandlers', () => {
     expect(result).toEqual({ cachePath: '' });
   });
 
-  it('resource:install 未装 modelscope 条目：无 url 可解析 → 抛错（骨架期无网络条目）', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    await expect(handler({}, 'modelscope-mcp-ms-weather')).rejects.toThrow(/魔搭条目缺少端点 url/);
-    expect(hubInstallMocks.installModelScopeMcp).not.toHaveBeenCalled();
-  });
-
-  it('resource:install 已解析 modelscope 条目：downloadUrl 装配 → installModelScopeMcp(slug, url, name)', async () => {
-    (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      id: 'modelscope-mcp-ms-weather',
-      type: 'mcp',
-      source: 'modelscope',
-      slug: 'ms-weather',
-      name: '魔搭天气',
-      installable: true,
-      removable: false,
-      marketplace: {
-        author: 'modelscope',
-        readme: 'r',
-        downloadUrl: 'https://api.modelscope.ai/mcp/weather',
-        checksum: '',
-        verificationStatus: 'unverified',
-        tags: [],
-        category: 'modelscope',
-      },
-    });
-    hubInstallMocks.installModelScopeMcp.mockResolvedValueOnce(undefined);
-    const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
-    const installCall = calls.find((c: unknown[]) => c[0] === 'resource:install');
-    const handler = installCall![1] as (evt: unknown, id: string) => Promise<unknown>;
-    const result = await handler({}, 'modelscope-mcp-ms-weather');
-    expect(hubInstallMocks.installModelScopeMcp).toHaveBeenCalledWith(
-      'ms-weather',
-      'https://api.modelscope.ai/mcp/weather',
-      '魔搭天气',
-    );
-    expect(result).toEqual({ cachePath: '' });
-  });
-
-  it('resource:delete smithery/modelscope 条目路由到 uninstallHubMcp（switch 前提前 return）', async () => {
+  it('resource:delete smithery 条目路由到 uninstallHubMcp（switch 前提前 return）', async () => {
     (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       id: 'smithery-mcp-@owner/weather',
       type: 'mcp',

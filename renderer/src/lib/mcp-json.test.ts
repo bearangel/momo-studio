@@ -50,9 +50,9 @@ describe('parseMcpServersJson', () => {
 
   it('url 型远程条目解析为 remote entry（P2 转正）', () => {
     const entries = parseMcpServersJson(
-      '{"mcpServers": {"weather": {"url": "https://mcp.modelscope.cn/sse"}}}',
+      '{"mcpServers": {"weather": {"url": "https://mcp.example.com/sse"}}}',
     );
-    expect(entries[0]!.url).toBe('https://mcp.modelscope.cn/sse');
+    expect(entries[0]!.url).toBe('https://mcp.example.com/sse');
     expect(entries[0]!.command).toBe('');
   });
 

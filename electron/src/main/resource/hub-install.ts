@@ -1,10 +1,11 @@
 // electron/src/main/resource/hub-install.ts
 //
 // hub MCP 安装/卸载与已装映射（spec §4.3）。
-// Smithery：POST install-config 拿 stdio 命令（npx）→ S1 校验 → 注册；
-// 魔搭：remote url 直注册（url 由 provider 条目携带，token 装配时从 keychain 取）。
+// Smithery：POST install-config 拿 stdio 命令（npx）→ S1 校验 → 注册。
 // 记账走 installed_packages（item_id = `${source}:${slug}`），与 marketplace 同表
 // 不同前缀，卸载互不误伤。
+// 魔搭 remote 安装轨已于 P2.1 移除（registry 100% hosted 后放弃）；P3 若公开
+// API 落地再评估。
 //
 // S1 注入防线（Task 2/4 审查传递）：slug 只进 encodeURIComponent 拼的 URL 与 DB 列，
 // 禁止直接用作文件路径/本地标识（smithery 条目的 S1 只校验过 namespace 段——
@@ -12,7 +13,6 @@
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
-import { getSecret } from '../storage/keychain';
 import { logger } from '../logger';
 import { registerMcpDefinition, listRegistered, deleteRegistered } from '../mcp/host-manager';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
@@ -55,24 +55,10 @@ export async function installSmitheryMcp(slug: string): Promise<void> {
   logger.info('Smithery MCP 已安装', { slug });
 }
 
-/** 魔搭 remote 安装：url 直注册（token 装配 Authorization 头） */
-export async function installModelScopeMcp(slug: string, url: string, displayName: string): Promise<void> {
-  if (!url.startsWith('https://')) throw new Error('魔搭 MCP 端点必须是 https 地址');
-  const token = await getSecret('modelscope-token');
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  registerMcpDefinition({
-    id: randomUUID(), name: slug, version: '1.0.0',
-    transport: 'streamable_http', url, headers, command: '', args: [],
-    source: 'modelscope',
-  });
-  recordInstall(`modelscope:${slug}`, slug);
-  logger.info('魔搭 MCP 已安装', { slug, name: displayName });
-}
-
 /** mcp_definitions 中 hub 来源行 → ResourceItem（installed=true / removable=true） */
 export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
   return listRegistered()
-    .filter((m) => (m.source === 'smithery' || m.source === 'modelscope') && (!type || type === 'mcp'))
+    .filter((m) => m.source === 'smithery' && (!type || type === 'mcp'))
     .map((m) => ({
       id: buildResourceId(m.source, 'mcp', m.name),
       type: 'mcp' as const,
@@ -89,7 +75,7 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
 }
 
 /** hub 卸载：删 mcp_definitions 行 + installed_packages 记账（幂等） */
-export function uninstallHubMcp(source: 'smithery' | 'modelscope', slug: string): void {
+export function uninstallHubMcp(source: 'smithery', slug: string): void {
   deleteRegisteredHubSafe(slug);
   const db = getDb();
   db.prepare('DELETE FROM installed_packages WHERE item_id = ?').run(`${source}:${slug}`);

@@ -49,24 +49,24 @@ function getRegisterMcpHandler(): (evt: unknown, config: unknown) => Promise<unk
 describe('resource:registerMcp 二态透传全链（真实 DB 契约）', () => {
   it('remote 输入注册后 getMcpConfig 读回 transport/url（command 空串占位）', async () => {
     const item = (await getRegisterMcpHandler()({}, {
-      name: 'ms-weather-import',
+      name: 'remote-weather-import',
       command: '',
       transport: 'streamable_http',
-      url: 'https://mcp.modelscope.cn/sse',
+      url: 'https://mcp.example.com/sse',
     })) as ResourceItem;
 
     // 落库读回：二态字段原样持久化
-    const cfg = getMcpConfig('ms-weather-import');
+    const cfg = getMcpConfig('remote-weather-import');
     expect(cfg).not.toBeNull();
     expect(cfg!.transport).toBe('streamable_http');
-    expect(cfg!.url).toBe('https://mcp.modelscope.cn/sse');
+    expect(cfg!.url).toBe('https://mcp.example.com/sse');
     expect(cfg!.command).toBe(''); // DB 列 NOT NULL 占位
     expect(cfg!.source).toBe('custom');
 
     // 返回值来自真实 library custom 映射（非手写构造）
     expect(item.source).toBe('custom');
     expect(item.type).toBe('mcp');
-    expect(item.slug).toBe('ms-weather-import');
+    expect(item.slug).toBe('remote-weather-import');
     expect(item.installed).toBe(true);
   });
 

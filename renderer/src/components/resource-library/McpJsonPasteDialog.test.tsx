@@ -127,7 +127,7 @@ describe('McpJsonPasteDialog', () => {
       target: {
         value: JSON.stringify({
           mcpServers: {
-            weather: { url: 'https://mcp.modelscope.cn/sse' },
+            weather: { url: 'https://mcp.example.com/sse' },
             fs: { command: 'npx' },
           },
         }),
@@ -137,7 +137,7 @@ describe('McpJsonPasteDialog', () => {
     expect(await screen.findByText('远程')).toBeTruthy();
     expect(screen.getByText('本地')).toBeTruthy();
     // 远程行展示端点 url（command 为空串无可展示）
-    expect(screen.getByText('https://mcp.modelscope.cn/sse')).toBeTruthy();
+    expect(screen.getByText('https://mcp.example.com/sse')).toBeTruthy();
   });
 
   it('远程条目导入时 registerMcp 收到 transport + url（二态转发）', async () => {
@@ -147,7 +147,7 @@ describe('McpJsonPasteDialog', () => {
       target: {
         value: JSON.stringify({
           mcpServers: {
-            weather: { url: 'https://mcp.modelscope.cn/sse' },
+            weather: { url: 'https://mcp.example.com/sse' },
             fs: { command: 'npx' },
           },
         }),
@@ -160,7 +160,7 @@ describe('McpJsonPasteDialog', () => {
       name: 'weather',
       command: '',
       transport: 'streamable_http',
-      url: 'https://mcp.modelscope.cn/sse',
+      url: 'https://mcp.example.com/sse',
     });
     // 本地条目不带 transport/url（缺省 stdio）
     expect(resourceRegisterMcp).toHaveBeenNthCalledWith(2, { name: 'fs', command: 'npx' });

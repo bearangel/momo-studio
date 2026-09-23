@@ -13,12 +13,13 @@
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
-//   - install 支持 marketplace / p2p / hub（smithery+modelscope）三源（builtin 不可装、
+//   - install 支持 marketplace / p2p / hub（smithery）三源（builtin 不可装、
 //     custom 已在本地）；hub 未装条目经 id 反解直装，不经 library
 //   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
 //     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
 //   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
 //     落库 source='custom' 后复用 library 的 custom 映射取回 ResourceItem 返回。
+//     （modelscope hub 轨已于 P2.1 移除，P3 若公开 API 落地再评估）
 //
 // P4 Task 4 追加：三个 custom 写通道成功后 fire-and-forget 广播资源目录
 // （broadcastLocalResourceCatalog——P2P 未启用时静默 no-op，本地写路径不受影响）。
@@ -36,12 +37,10 @@ import {
 } from './types';
 import {
   installSmitheryMcp,
-  installModelScopeMcp,
   uninstallHubMcp,
 } from './hub-install';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
-import { isModelScopeDegraded } from './hub/modelscope';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
@@ -85,23 +84,16 @@ export function registerResourceHandlers(): void {
   // ResourceItem 不携带这些字段，故先 fetchCatalog 按 slug 找到原 catalog item 再传入。
   // p2p：目录条目 → request/provide 按需拉取完整定义 → 落地 custom（agent 走
   // createCustomDef 等价路径 / mcp 走 registerMcpDefinition 幂等覆盖）。
-  // hub：smithery install-config → npx 注册 / 魔搭 remote 直注册（hub-install.ts）。
+  // hub：smithery install-config → npx 注册（hub-install.ts）。
   ipcMain.handle('resource:install', async (_evt, id: string) => {
     const item = await resolveResourceById(id);
     if (!item) {
-      // hub（smithery/modelscope）未安装条目不在 library——library 只映射已装行。
+      // hub（smithery）未安装条目不在 library——library 只映射已装行。
       // 注册表「安装」按钮的主路径：id 反解三元组直接进 hub 安装链
       const hubParsed = parseResourceId(id);
-      if (
-        hubParsed?.type === 'mcp' &&
-        (hubParsed.source === 'smithery' || hubParsed.source === 'modelscope')
-      ) {
-        if (hubParsed.source === 'smithery') {
-          await installSmitheryMcp(hubParsed.slug);
-          return { cachePath: '' };
-        }
-        // 魔搭骨架期 provider 无网络条目，url 无从解析——P3 接通后经条目详情装配
-        throw new Error('魔搭条目缺少端点 url（骨架期无网络条目可解析）');
+      if (hubParsed?.type === 'mcp' && hubParsed.source === 'smithery') {
+        await installSmitheryMcp(hubParsed.slug);
+        return { cachePath: '' };
       }
       // p2p 项由内存目录缓存解析——来源节点离线 / 目录超 5min prune 后条目消失，
       // 给针对性文案（区别于 marketplace 的 id 不存在）
@@ -136,13 +128,6 @@ export function registerResourceHandlers(): void {
       await installSmitheryMcp(item.slug);
       return { cachePath: '' };
     }
-    if (item.source === 'modelscope' && item.type === 'mcp') {
-      // 魔搭条目的 url 随 ResourceItem.marketplace.downloadUrl 携带（provider 装配）
-      const url = item.marketplace?.downloadUrl;
-      if (!url) throw new Error('魔搭条目缺少端点 url');
-      await installModelScopeMcp(item.slug, url, item.name);
-      return { cachePath: '' };
-    }
 
     if (item.source !== 'marketplace') {
       throw new Error(`source=${item.source} 不支持 install 操作`);
@@ -162,7 +147,7 @@ export function registerResourceHandlers(): void {
   //   - custom + mcp   → deleteRegistered(item.slug)（按 mcp_definitions.name 查删）
   //   - custom + skill → deleteCustomSkill(item.slug)（按 skills 目录名查删）
   //   - custom + agent → deleteDefinition(item.slug)（按 agent_definitions.slug 查删）
-  //   - smithery/modelscope → uninstallHubMcp（mcp 行 + installed_packages 记账同删）
+  //   - smithery       → uninstallHubMcp（mcp 行 + installed_packages 记账同删）
   ipcMain.handle('resource:delete', async (_evt, id: string) => {
     const item = await resolveResourceById(id);
     if (!item) throw new Error(`资源 ${id} 不存在`);
@@ -170,9 +155,9 @@ export function registerResourceHandlers(): void {
       // 错误文案须含 "系统预置不可移除" 连续子串（builtin 场景），用 sourceLabel 拼接保证一致
       throw new Error(`${sourceLabel(item.source)}不可移除：「${item.name}」`);
     }
-    // hub 分支须在 switch 之前：source 联合已扩 smithery/modelscope，但 switch
+    // hub 分支须在 switch 之前：source 联合已扩 smithery，但 switch
     // default 会拒——hub 行直接删（deleteRegistered 只拦 marketplace）
-    if (item.source === 'smithery' || item.source === 'modelscope') {
+    if (item.source === 'smithery') {
       uninstallHubMcp(item.source, item.slug);
       return;
     }
@@ -264,7 +249,8 @@ export function registerResourceHandlers(): void {
       label: p.label,
       region: p.region,
       types: [...p.types],
-      degraded: p.key === 'smithery' ? isSmitheryDegraded() : isModelScopeDegraded(),
+      // 新增 provider 默认视为可达（false），接入退避后再挂各自探测函数
+      degraded: p.key === 'smithery' ? isSmitheryDegraded() : false,
     }));
     return [
       {
