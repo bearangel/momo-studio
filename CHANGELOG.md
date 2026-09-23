@@ -50,6 +50,12 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### 移除网络获取 + 外部市场快捷打开（v2.15 账本，spec 2026-09-23 P2.3）
+战略转向：应用内不再承诺网络下载安装（外部市场适配成本高），资源获取收敛「本地导入 + P2P」；外部市场改浏览器快捷打开，为 momo-hub 统一市场让路。
+- 移除面（仅 renderer，−1165 行）：资源页「网络获取」模式整体下线（Segmented 双态/RegistryBrowse/McpConnectDialog/registry 安装接线/store mode 字段）；registry IPC 契约两端保留（electron 管线零改动，momo-hub 复用地基）
+- 外部市场 Popover：三页工具栏「外部市场」按钮 → 市场卡片（MCP：Smithery/mcp.so/Glama/PulseMCP/官方目录；Skill：skills.sh/ClawHub；Agent：momo-hub 预告位）→ `misc:openExternal`（https 校验）浏览器打开；面板常驻「回来怎么装」两行指引
+- 预置库：AddMenu「启用预置库」（仅 agent 页）→ `resource:listBuiltinPresets` 本地 YAML 零网络清单 → 现有 EnablePresetDialog 配模型启用
+
 ### 已装远程 MCP 配置编辑 + MCP 引用对齐（v2.14 账本，spec 2026-09-23 P2.2）
 P2.1 主机验收驱动：Smithery 装完 API key 无处改（401 只能卸载重装）、agent 按名引用 MCP 名字对不上即静默悬空。
 - 配置编辑链：migration 040（`config_schema` 列，安装时落表单元数据）→ `getMcpConfig` 三级降级（库存 schema → Smithery 实时拉取+回写 → 裸表单）→ `McpConfigDialog` 双模式弹窗（schema 字段回显/裸模式 url+headers 键值行；D9：schema 模式 url 预填去 query）→ `updateRemoteMcpConfig`（`composeRemoteConfig` 单点 x-from 分流 + 专用 UPDATE 保 id/installed_at + name 级池驱逐即时生效）
