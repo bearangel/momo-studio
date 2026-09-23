@@ -18,23 +18,17 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 import { registerMcpDefinition, listRegistered, deleteRegistered } from '../mcp/host-manager';
+import type { McpConfigSchema } from '../mcp/types';
 import { buildResourceId, type ResourceItem, type ResourceType } from './types';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
 
 /**
  * Smithery configSchema 的消费面形状（详情接口 connections[].configSchema）。
- * 只声明安装链消费的字段；响应可能携带更多（如 type: 'object'），运行时原样透传。
+ * P2.2 起单源化为 McpConfigSchema 别名（config_schema 列同形状，安装时原样落库）；
+ * 响应可能携带更多（如 type: 'object'），运行时原样透传。
  */
-export interface JsonSchemaLike {
-  required?: string[];
-  properties?: Record<string, {
-    title?: string;
-    description?: string;
-    /** 字段注入位置（spec D5）；缺省进 header（实证样本均无此元数据） */
-    'x-from'?: 'header' | 'query';
-  }>;
-}
+export type JsonSchemaLike = McpConfigSchema;
 
 /** 详情接口单条 connection（字段全部宽松可选以容错第三方响应） */
 export interface SmitheryConnection {
@@ -105,6 +99,7 @@ export async function installSmitheryRemote(
     transport: 'streamable_http',
     url: finalUrl,
     headers,
+    configSchema: schema,
     command: '',
     args: [],
     source: 'smithery',

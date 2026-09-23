@@ -165,6 +165,32 @@ describe('installSmitheryRemote x-from 分流', () => {
     expect(cfg!.headers).toEqual({ token: 't1' });
   });
 
+  // P2.2 Task 1：安装链落 config_schema——schema 原样落 mcp_definitions，
+  // getMcpConfig 回读深等（后续编辑功能 Task 4 的表单回填数据源）
+  it('安装链落 config_schema：getMcpConfig 回读安装时 schema 深等', async () => {
+    await installSmitheryRemote(
+      'schema-srv',
+      'https://schema-srv.run.tools',
+      { braveApiKey: 'k1' },
+      {
+        required: ['braveApiKey'],
+        properties: { braveApiKey: { title: 'Brave API Key', 'x-from': 'header' as const } },
+      },
+    );
+
+    const cfg = getMcpConfig('schema-srv');
+    expect(cfg!.configSchema).toEqual({
+      required: ['braveApiKey'],
+      properties: { braveApiKey: { title: 'Brave API Key', 'x-from': 'header' } },
+    });
+  });
+
+  it('不带 schema 安装 → config_schema 回读 undefined（"{}" 视为无）', async () => {
+    await installSmitheryRemote('no-schema', 'https://no-schema.run.tools', { token: 't1' });
+
+    expect(getMcpConfig('no-schema')?.configSchema).toBeUndefined();
+  });
+
   it('schema 有 properties 但字段无 x-from → 同样缺省进 headers', async () => {
     await installSmitheryRemote(
       'no-xfrom',

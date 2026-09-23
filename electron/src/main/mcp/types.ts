@@ -4,6 +4,20 @@
 // 这些类型描述了 MCP server 配置、工具元信息以及工具调用结果，
 // 被 McpClient 与上层 agent runtime 共享。
 
+/** config_schema 列的单字段元数据（Smithery configSchema 消费面形状） */
+export interface McpConfigSchemaMeta {
+  title?: string;
+  description?: string;
+  /** 字段注入位置；缺省进 header */
+  'x-from'?: 'header' | 'query';
+}
+
+/** 远程 MCP 配置表单元数据（mcp_definitions.config_schema 列，JSON 序列化） */
+export interface McpConfigSchema {
+  required?: string[];
+  properties?: Record<string, McpConfigSchemaMeta>;
+}
+
 /** MCP server 配置（agent manifest mcp 段或资源库安装链解析而来）。
  *  二态：stdio（command/args/env）或 streamable_http（url/headers）——transport 判别。 */
 export interface McpServerConfig {
@@ -22,6 +36,8 @@ export interface McpServerConfig {
   url?: string;
   /** remote 请求头（token 等；不落日志） */
   headers?: Record<string, string>;
+  /** 配置表单元数据（安装时 Smithery configSchema 原样落库；'{}' 视为无） */
+  configSchema?: McpConfigSchema;
   /** 来源标识。缺省按 'marketplace' 处理（modelscope 已于 P2.1 移除） */
   source?: 'marketplace' | 'custom' | 'smithery';
   installedAt?: string;
@@ -40,6 +56,8 @@ export interface RegisteredMcp {
   cwd?: string;
   url?: string;
   headers?: Record<string, string>;
+  /** 配置表单元数据（DB 行 config_schema='{}' → undefined；编辑功能表单回填源） */
+  configSchema?: McpConfigSchema;
   source: 'marketplace' | 'custom' | 'smithery';
   installedAt: string;
 }

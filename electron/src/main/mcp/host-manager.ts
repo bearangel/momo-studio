@@ -15,7 +15,13 @@ import { McpClient } from './client';
 import { HttpMcpClient } from './http-client';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import type { McpServerConfig, McpToolInfo, McpToolCallOutcome, RegisteredMcp } from './types';
+import type {
+  McpServerConfig,
+  McpToolInfo,
+  McpToolCallOutcome,
+  RegisteredMcp,
+  McpConfigSchema,
+} from './types';
 
 /** mcp_definitions 表的一行原始结构（getMcpConfig / listRegistered 读取时做类型断言用） */
 interface McpDefinitionRow {
@@ -29,6 +35,7 @@ interface McpDefinitionRow {
   url: string | null;
   headers_json: string | null;
   cwd: string | null;
+  config_schema: string;
   source: string;
   installed_at: string;
 }
@@ -61,6 +68,29 @@ function parseHeadersJson(
   }
 }
 
+/** config_schema 列解析：NULL/空串/空对象 '{}'（NOT NULL DEFAULT 兜底值）→ undefined；
+ *  坏 JSON 或合法 JSON 但非 plain object（数组/字符串/数字等）→ warn + undefined
+ *  （脏数据不炸读取链路，与 parseHeadersJson 同模式）。 */
+function parseConfigSchema(
+  raw: string | null,
+  name: string,
+): McpConfigSchema | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      logger.warn('mcp_definitions.config_schema 非 JSON object，已忽略该列', { name });
+      return undefined;
+    }
+    // '{}' = 无 schema（缺省兜底值，读取侧还原缺省语义）
+    if (Object.keys(parsed).length === 0) return undefined;
+    return parsed as McpConfigSchema;
+  } catch {
+    logger.warn('mcp_definitions.config_schema 非法 JSON，已忽略该列', { name });
+    return undefined;
+  }
+}
+
 /** mcp_definitions 行 → RegisteredMcp（getMcpConfig / listRegistered 共用映射，
  *  两处读回的二态语义保持一致）。 */
 function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
@@ -75,6 +105,7 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     url: row.url ?? undefined,
     headers: parseHeadersJson(row.headers_json, row.name),
     cwd: row.cwd ?? undefined,
+    configSchema: parseConfigSchema(row.config_schema, row.name),
     source: row.source as RegisteredMcp['source'],
     installedAt: row.installed_at,
   };
@@ -230,7 +261,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, source, installed_at FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
@@ -253,8 +284,8 @@ export function registerMcpDefinition(config: McpServerConfig): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO mcp_definitions
-       (id, name, version, transport, command, args, env, source, url, headers_json, cwd)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, version, transport, command, args, env, source, url, headers_json, cwd, config_schema)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     config.id,
     config.name,
@@ -267,6 +298,7 @@ export function registerMcpDefinition(config: McpServerConfig): void {
     transport === 'streamable_http' ? (config.url ?? null) : null,
     transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
     config.cwd ?? null,
+    JSON.stringify(config.configSchema ?? {}),
   );
   logger.info('MCP 定义已注册', {
     name: config.name,
@@ -283,7 +315,7 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);

@@ -14,6 +14,7 @@ import { migration036 } from './036_v2_11_message_context';
 import { migration037 } from './037_v2_1_office_tools_builtin';
 import { migration038 } from './038_p2_mcp_remote_transport';
 import { migration039 } from './039_p21_mcp_bundle_cwd';
+import { migration040 } from './040_p22_mcp_config_schema';
 
 export interface Migration {
   version: number;
@@ -936,6 +937,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 039_p21_mcp_bundle_cwd.ts（约定同 032-038）。
     version: migration039.version,
     sql: migration039.up,
+  },
+  {
+    // P2.2：mcp_definitions 加 config_schema（Smithery 安装时表单元数据落库，
+    // 供远程 MCP 配置编辑回填，Task 4）。SQL 住在独立模块 040_p22_mcp_config_schema.ts
+    //（约定同 032-039）；down 是真 DROP COLUMN（模块内供测试直调，数组只接 .up）。
+    version: migration040.version,
+    sql: migration040.up,
   },
 ];
 
