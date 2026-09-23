@@ -296,14 +296,21 @@ const api: ApiSurface = {
       invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖） */
     createSkill: (input: SkillCreateInput) => invoke<UploadedSkill>('resource:createSkill', input),
-    // P2 Task 4：网络注册表（hub provider 框架）——renderer 经此消费，不直连 hub
+    // P2 Task 4：网络注册表（hub provider 框架）——renderer 经此消费，不直连 hub。
+    // P2.1 Task 4：query（服务端搜索）与 page（1 起始）透传，返回加 hasMore
     registryProviders: () => invoke<RegistryProviderMeta[]>('resource:registryProviders'),
-    registryList: (providerKey: RegistryProviderMeta['key'], type: RegistryListEntry['type'], query?: string) =>
-      invoke<{ entries: RegistryListEntry[]; degraded: boolean }>(
+    registryList: (
+      providerKey: RegistryProviderMeta['key'],
+      type: RegistryListEntry['type'],
+      query?: string,
+      page?: number,
+    ) =>
+      invoke<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean }>(
         'resource:registryList',
         providerKey,
         type,
         query,
+        page,
       ),
   },
   task: {

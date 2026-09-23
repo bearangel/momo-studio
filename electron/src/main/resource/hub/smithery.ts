@@ -2,7 +2,8 @@
 //
 // Smithery registry provider（spec §4.1，决策 D4：主进程代理，renderer 经 IPC 消费）。
 // 端点与字段以 Task 0 实测核实文档为准（.superpowers/sdd/task-0-api-verify.md）：
-//   - GET /servers?pageSize=N&q=关键词（无 key；q 搜索已实测可用）
+//   - GET /servers?pageSize=N&q=关键词&page=页码（无 key；q 搜索已实测可用；
+//     page 1 起始——2026-09-23 复测 page=0 被 422 拒绝、page=1 与缺省等价）
 //   - 条目标识是 qualifiedName（如 '@owner/weather' / 'brave'），不是 id（那是 UUID）
 //   - P2.1 直连翻转：installable 由 isDeployed 驱动（false=未部署不可装）；
 //     remote 字段不再是安装开关——hosted 条目经详情 deploymentUrl 直连安装
@@ -58,7 +59,7 @@ function toEntry(raw: SmitheryServer): HubEntry | null {
     id: buildResourceId('smithery', 'mcp', qualifiedName),
     type: 'mcp',
     source: 'smithery',
-    // qualifiedName 整体作 slug——安装标识沿线透传（Task 5 install-config 用它拼路径）
+    // qualifiedName 整体作 slug——安装标识沿线透传（安装时 GET 详情取 deploymentUrl 直连）
     slug: qualifiedName,
     name: raw.displayName,
     description,
@@ -70,7 +71,7 @@ function toEntry(raw: SmitheryServer): HubEntry | null {
     marketplace: {
       author: namespace,
       readme: description,
-      // P2 无 zip 下载链路——smithery 安装走 Task 5 的 install-config → npx 生成
+      // P2 无 zip 下载链路——smithery 安装走 Task 3 直连——注册远程 MCP
       downloadUrl: '',
       checksum: '',
       verificationStatus: raw.verified ? 'verified' : 'unverified',
@@ -95,26 +96,36 @@ export const smitheryProvider: HubProvider = {
   label: 'Smithery',
   region: 'intl',
   types: ['mcp'],
-  async list(type, query): Promise<HubListResult> {
+  async list(type, query, page = 1): Promise<HubListResult> {
     if (type !== 'mcp') throw new Error(`Smithery 暂只支持 MCP（收到 ${type}）`);
     // 退避窗口内零网络——直接返回 degraded（UI 置灰，不隐藏）
-    if (backoff.isBackedOff()) return { entries: [], degraded: true };
+    if (backoff.isBackedOff()) return { entries: [], degraded: true, hasMore: false };
     try {
       const q = query?.trim();
       const url =
         `${API_BASE}/servers?pageSize=${PAGE_SIZE}` +
-        (q ? `&q=${encodeURIComponent(q)}` : '');
+        (q ? `&q=${encodeURIComponent(q)}` : '') +
+        `&page=${page}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { servers?: SmitheryServer[] };
+      const body = (await res.json()) as {
+        servers?: SmitheryServer[];
+        pagination?: { totalPages?: number };
+      };
       backoff.recordSuccess();
       const entries = (body.servers ?? [])
         .map(toEntry)
         .filter((e): e is HubEntry => e !== null);
-      return { entries, degraded: false };
+      // hasMore = totalPages > page；响应缺 pagination 时保守视为末页（不渲染加载更多）
+      const totalPages = body.pagination?.totalPages;
+      return {
+        entries,
+        degraded: false,
+        hasMore: totalPages !== undefined ? totalPages > page : false,
+      };
     } catch {
       backoff.recordFailure();
-      return { entries: [], degraded: true };
+      return { entries: [], degraded: true, hasMore: false };
     }
   },
 };

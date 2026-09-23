@@ -371,7 +371,7 @@ describe('registerResourceHandlers', () => {
     expect(providers[1]).toMatchObject({ label: 'Smithery', region: 'intl', degraded: false });
   });
 
-  it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射', async () => {
+  it('resource:registryList builtin 分支：marketplace 源 + 前端同款过滤排序映射（hasMore 恒 false）', async () => {
     const items = [
       {
         id: 'marketplace-mcp-installed', type: 'mcp', source: 'marketplace', slug: 'installed',
@@ -397,10 +397,13 @@ describe('registerResourceHandlers', () => {
       providerKey: string,
       type: string,
       query?: string,
-    ) => Promise<{ entries: Array<{ id: string; tags: string[]; category?: string }>; degraded: boolean }>;
-    const result = await handler({}, 'builtin', 'mcp', 'file');
+      page?: number,
+    ) => Promise<{ entries: Array<{ id: string; tags: string[]; category?: string }>; degraded: boolean; hasMore: boolean }>;
+    const result = await handler({}, 'builtin', 'mcp', 'file', 1);
     expect(listResources).toHaveBeenCalledWith({ type: 'mcp', source: 'marketplace' });
     expect(result.degraded).toBe(false);
+    // builtin 是本地全量目录，无服务端分页——page 参数被忽略且 hasMore 恒 false
+    expect(result.hasMore).toBe(false);
     // 「file」只命中 File System（name 模糊）；installed 排序垫底语义由下方无 query 用例覆盖
     expect(result.entries.map((e) => e.id)).toEqual(['marketplace-mcp-fs']);
     expect(result.entries[0]!.tags).toEqual([]);
@@ -412,10 +415,11 @@ describe('registerResourceHandlers', () => {
     expect(all.entries.map((e) => e.id)).toEqual([
       'marketplace-mcp-fs', 'marketplace-mcp-other', 'marketplace-mcp-installed',
     ]);
+    expect(all.hasMore).toBe(false);
   });
 
-  it('resource:registryList hub 分支委托对应 provider.list', async () => {
-    smitheryList.mockResolvedValueOnce({ entries: [], degraded: false });
+  it('resource:registryList hub 分支委托对应 provider.list（query / page 透传 + hasMore 透出）', async () => {
+    smitheryList.mockResolvedValueOnce({ entries: [], degraded: false, hasMore: true });
     const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
     const listCall = calls.find((c: unknown[]) => c[0] === 'resource:registryList');
     const handler = listCall![1] as (
@@ -423,10 +427,11 @@ describe('registerResourceHandlers', () => {
       providerKey: string,
       type: string,
       query?: string,
+      page?: number,
     ) => Promise<unknown>;
-    const result = await handler({}, 'smithery', 'mcp', 'weather');
-    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather');
-    expect(result).toEqual({ entries: [], degraded: false });
+    const result = await handler({}, 'smithery', 'mcp', 'weather', 2);
+    expect(smitheryList).toHaveBeenCalledWith('mcp', 'weather', 2);
+    expect(result).toEqual({ entries: [], degraded: false, hasMore: true });
   });
 
   it('resource:registryList 未知 provider 抛错', async () => {

@@ -307,11 +307,18 @@ export function registerResourceHandlers(): void {
 
   // resource:registryList — 按 provider 拉取注册表条目（P2 双轨 hub 唯一列表入口）。
   // builtin 分支走现有 listResources({type, source:'marketplace'}) + 前端 catalog
-  // provider 同款过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）；
-  // hub 分支委托对应 provider（各自带退避负缓存，失败返回 degraded 不抛错）。
+  // provider 同款过滤（name/description/slug 模糊）排序（未安装在前、已装垫底）——
+  // 本地全量目录无服务端分页，page 参数忽略、hasMore 恒 false；hub 分支委托对应
+  // provider（query / page 透传，各自带退避负缓存，失败返回 degraded 不抛错）。
   ipcMain.handle(
     'resource:registryList',
-    async (_evt, providerKey: string, type: ResourceType, query?: string) => {
+    async (
+      _evt,
+      providerKey: string,
+      type: ResourceType,
+      query?: string,
+      page?: number,
+    ) => {
       if (providerKey === 'builtin') {
         const items = await listResources({ type, source: 'marketplace' });
         const q = query?.trim().toLowerCase();
@@ -338,11 +345,12 @@ export function registerResourceHandlers(): void {
               item,
             })),
           degraded: false,
+          hasMore: false,
         };
       }
       const provider = HUB_PROVIDERS.find((p) => p.key === providerKey);
       if (!provider) throw new Error(`未知 registry provider: ${providerKey}`);
-      return provider.list(type, query);
+      return provider.list(type, query, page);
     },
   );
 

@@ -22,7 +22,9 @@ afterEach(() => {
   __resetHubBackoffForTest();
 });
 
-// Task 0 实测形状：qualifiedName 形如 '@owner/weather' 或 'brave'（含 / 与可能的 @）
+// Task 0 实测形状：qualifiedName 形如 '@owner/weather' 或 'brave'（含 / 与可能的 @）。
+// pagination.currentPage 与 page 参数同基（2026-09-23 实测：page=1 → currentPage=1，
+// page=0 被 422 校验拒绝「expected number to be >=1」——page 参数 1 起始）
 const LIST_BODY = {
   servers: [
     {
@@ -37,7 +39,7 @@ const LIST_BODY = {
       unlisted: false,
     },
   ],
-  pagination: { currentPage: 0, pageSize: 30, totalPages: 530, totalCount: 15861 },
+  pagination: { currentPage: 1, pageSize: 30, totalPages: 530, totalCount: 15861 },
 };
 
 describe('smitheryProvider', () => {
@@ -161,5 +163,62 @@ describe('smitheryProvider', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]!.id).toBe('smithery-mcp-onesignal/onesignal');
     expect(entries[0]!.item.marketplace?.author).toBe('onesignal');
+  });
+});
+
+describe('smitheryProvider 分页（P2.1 Task 4）', () => {
+  /** 按 totalPages 定制响应体（page 与响应 currentPage 同基——见 LIST_BODY 注释） */
+  function pageBody(totalPages: number) {
+    return { ...LIST_BODY, pagination: { currentPage: 1, pageSize: 30, totalPages, totalCount: 85 } };
+  }
+
+  it('page 参数透传：list(type, query, page) → URL 追加 &page=', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200, json: async () => pageBody(3),
+    } as Response);
+    await smitheryProvider.list('mcp', undefined, 2);
+    const url = (fetchSpy.mock.calls[0] as unknown[])[0] as string;
+    expect(url).toContain('&page=2');
+  });
+
+  it('hasMore = totalPages > page：page=1（totalPages=3）→ true；page=3（末页）→ false', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200, json: async () => pageBody(3),
+    } as Response);
+    const first = await smitheryProvider.list('mcp', undefined, 1);
+    expect(first.hasMore).toBe(true);
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200, json: async () => pageBody(3),
+    } as Response);
+    const last = await smitheryProvider.list('mcp', undefined, 3);
+    expect(last.hasMore).toBe(false);
+  });
+
+  it('未传 page 默认第 1 页（URL &page=1）', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200, json: async () => pageBody(3),
+    } as Response);
+    await smitheryProvider.list('mcp');
+    const url = (fetchSpy.mock.calls[0] as unknown[])[0] as string;
+    expect(url).toContain('&page=1');
+  });
+
+  it('畸形响应（缺 pagination）→ hasMore 保守 false，不拖垮条目映射', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ servers: LIST_BODY.servers }),
+    } as Response);
+    const { entries, hasMore } = await smitheryProvider.list('mcp', undefined, 2);
+    expect(entries).toHaveLength(1);
+    expect(hasMore).toBe(false);
+  });
+
+  it('degraded 路径（退避窗口 / fetch 失败）hasMore 恒 false', async () => {
+    fetchSpy.mockRejectedValue(new Error('fetch failed'));
+    const first = await smitheryProvider.list('mcp', undefined, 2);
+    expect(first.degraded).toBe(true);
+    expect(first.hasMore).toBe(false);
+    const second = await smitheryProvider.list('mcp', undefined, 2);
+    expect(second.degraded).toBe(true);
+    expect(second.hasMore).toBe(false);
   });
 });

@@ -22,6 +22,8 @@ export interface HubListResult {
   entries: HubEntry[];
   /** 命中退避窗口（上次失败后未重试）——UI 置灰信号，不隐藏 */
   degraded: boolean;
+  /** 请求页之后还有更多页（smithery 按 pagination.totalPages 判定；错误路径恒 false） */
+  hasMore: boolean;
 }
 
 /** hub provider 契约——每个网络注册表一个实现（smithery；modelscope 已于 P2.1 移除） */
@@ -30,5 +32,6 @@ export interface HubProvider {
   readonly label: string;
   readonly region: 'intl' | 'cn';
   readonly types: ResourceType[];
-  list(type: ResourceType, query?: string): Promise<HubListResult>;
+  /** page 1 起始（2026-09-23 实测 Smithery page 参数 1 起、page=0 被 422 拒绝） */
+  list(type: ResourceType, query?: string, page?: number): Promise<HubListResult>;
 }

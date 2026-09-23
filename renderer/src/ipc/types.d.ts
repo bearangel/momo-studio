@@ -1570,12 +1570,17 @@ export interface ApiSurface {
     createSkill(input: SkillCreateInput): Promise<UploadedSkill>;
     /** P2 Task 4：网络获取 provider 元信息（builtin 恒可用 + 两 hub 含 degraded 状态） */
     registryProviders(): Promise<RegistryProviderMeta[]>;
-    /** P2 Task 4：按 provider 拉取注册表条目（builtin 分支本地过滤排序；hub 失败 degraded 不抛错） */
+    /**
+     * P2 Task 4：按 provider 拉取注册表条目（builtin 分支本地过滤排序、hasMore 恒 false；
+     * hub 失败 degraded 不抛错）。P2.1 Task 4：query 服务端搜索 + page 分页（1 起始），
+     * hasMore 驱动「加载更多」。
+     */
     registryList(
       providerKey: RegistryProviderMeta['key'],
       type: ResourceType,
       query?: string,
-    ): Promise<{ entries: RegistryListEntry[]; degraded: boolean }>;
+      page?: number,
+    ): Promise<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean }>;
   };
   task: TaskApiSurface;
   /**

@@ -38,7 +38,7 @@ beforeEach(() => {
     { key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], degraded: false },
   ] as RegistryProviderMeta[]);
   registryListMock.mockReset();
-  registryListMock.mockResolvedValue({ entries: [] as RegistryListEntry[], degraded: false });
+  registryListMock.mockResolvedValue({ entries: [] as RegistryListEntry[], degraded: false, hasMore: false });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   localStorage.clear();
 
