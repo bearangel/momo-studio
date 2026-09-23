@@ -158,6 +158,9 @@ export class McpClient {
         env: buildMcpEnv(this.config.env),
         stdio: ['pipe', 'pipe', 'pipe'],
         ...(isWin ? { shell: true } : {}),
+        // bundle 类命令（DXT/MCPB 导入）需要显式工作目录；缺省不传 cwd 键
+        // （undefined 传给 spawn 虽等价，但条件展开保持既有行为字节级不变）
+        ...(this.config.cwd ? { cwd: this.config.cwd } : {}),
       },
     );
 

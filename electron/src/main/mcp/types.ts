@@ -16,6 +16,8 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** stdio 子进程工作目录（DXT/MCPB bundle 类命令需要；缺省 = 继承当前进程，零变化） */
+  cwd?: string;
   /** remote 端点（transport='streamable_http' 必填，强制 https） */
   url?: string;
   /** remote 请求头（token 等；不落日志） */
@@ -34,6 +36,8 @@ export interface RegisteredMcp {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** stdio 子进程工作目录（DB 行 NULL → undefined；缺省 = 继承当前进程） */
+  cwd?: string;
   url?: string;
   headers?: Record<string, string>;
   source: 'marketplace' | 'custom' | 'smithery';

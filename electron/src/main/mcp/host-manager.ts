@@ -28,6 +28,7 @@ interface McpDefinitionRow {
   env: string;
   url: string | null;
   headers_json: string | null;
+  cwd: string | null;
   source: string;
   installed_at: string;
 }
@@ -73,6 +74,7 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     env: (JSON.parse(row.env) as Record<string, string>) ?? {},
     url: row.url ?? undefined,
     headers: parseHeadersJson(row.headers_json, row.name),
+    cwd: row.cwd ?? undefined,
     source: row.source as RegisteredMcp['source'],
     installedAt: row.installed_at,
   };
@@ -215,7 +217,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, source, installed_at FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, source, installed_at FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
@@ -238,8 +240,8 @@ export function registerMcpDefinition(config: McpServerConfig): void {
   const db = getDb();
   db.prepare(
     `INSERT OR REPLACE INTO mcp_definitions
-       (id, name, version, transport, command, args, env, source, url, headers_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, version, transport, command, args, env, source, url, headers_json, cwd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     config.id,
     config.name,
@@ -251,6 +253,7 @@ export function registerMcpDefinition(config: McpServerConfig): void {
     config.source ?? 'marketplace',
     transport === 'streamable_http' ? (config.url ?? null) : null,
     transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
+    config.cwd ?? null,
   );
   logger.info('MCP 定义已注册', {
     name: config.name,
@@ -267,7 +270,7 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);

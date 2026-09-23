@@ -137,4 +137,31 @@ describe('mcp_definitions 二态读写（P2 remote transport）', () => {
     expect(getMcpConfig('array-headers')?.headers).toBeUndefined();
     expect(listRegistered().find((m) => m.name === 'array-headers')?.headers).toBeUndefined();
   });
+
+  it('注册含 cwd 的 stdio 定义 → getMcpConfig / listRegistered 读回 cwd 精确值', () => {
+    registerMcpDefinition({
+      id: 'c1', name: 'bundle-mcp', version: '1.0.0',
+      command: 'node', args: ['server/index.js'], source: 'custom',
+      cwd: '/tmp/some-bundle-dir',
+    });
+    const cfg = getMcpConfig('bundle-mcp');
+    expect(cfg?.cwd).toBe('/tmp/some-bundle-dir');
+    expect(listRegistered().find((m) => m.name === 'bundle-mcp')?.cwd).toBe(
+      '/tmp/some-bundle-dir',
+    );
+  });
+
+  it('注册不含 cwd 的定义 → 读回 cwd undefined 且 DB 行 NULL（存量零变化）', () => {
+    registerMcpDefinition({
+      id: 'c2', name: 'plain-mcp', version: '1.0.0',
+      command: 'npx', args: ['-y', 'mcp-server-fs'], source: 'custom',
+    });
+    expect(getMcpConfig('plain-mcp')?.cwd).toBeUndefined();
+    expect(listRegistered().find((m) => m.name === 'plain-mcp')?.cwd).toBeUndefined();
+    // 锁 DB 侧不变量：缺省 cwd 落 NULL（spawn 透传据此判定零变化）
+    const row = getDb()
+      .prepare('SELECT cwd FROM mcp_definitions WHERE name = ?')
+      .get('plain-mcp') as { cwd: string | null };
+    expect(row.cwd).toBeNull();
+  });
 });
