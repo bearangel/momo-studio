@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。10 个通道：
+// 资源库 IPC handler 注册。15 个通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -13,6 +13,9 @@
 //   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
 //   - resource:parseMcpBundle / resource:importMcpBundle  DXT/MCPB 本地包两阶段
 //     导入（P2.1 Task 5——parse 预览不落盘，import 重解包替换注册）
+//   - resource:getMcpConfig / resource:updateMcpConfig / resource:danglingMcpRefs
+//     MCP 配置编辑与悬空引用扫描（P2.2 Task 6——spec §4.1/§4.2/§4.3；业务逻辑
+//     在 resource/mcp-config.ts，本层只做入参防御与透传）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
@@ -47,6 +50,12 @@ import {
   uninstallHubMcp,
   type SmitheryInstallResult,
 } from './hub-install';
+import {
+  getMcpConfigView,
+  updateRemoteMcpConfig,
+  listDanglingMcpRefs,
+  type McpConfigUpdateInput,
+} from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
@@ -99,6 +108,16 @@ async function installSmitheryEntry(slug: string): Promise<SmitheryInstallResult
   }
   await installSmitheryRemote(slug, deploymentUrl, {}, schema);
   return { needsConfig: false };
+}
+
+/**
+ * MCP 配置编辑两通道的入参防御：name 须非空字符串（IPC 序列化缺参/空串兜底，
+ * 防止空名落进 service 层查库后抛出不可读的「未注册」误报）。
+ */
+function assertMcpName(name: string): void {
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new Error('MCP 名不能为空');
+  }
 }
 
 /**
@@ -410,6 +429,34 @@ export function registerResourceHandlers(): void {
       return provider.list(type, query, page);
     },
   );
+
+  // resource:getMcpConfig — 查看已装远程 MCP 配置（P2.2 Task 6，spec §4.1）。
+  // 三级 schema 降级与 values 回显在 mcp-config.getMcpConfigView 内完成；
+  // bare=true 时返回体无 schema 键（renderer 镜像 schema?: 与此同形）。
+  ipcMain.handle(
+    'resource:getMcpConfig',
+    async (_evt, name: string) => {
+      assertMcpName(name);
+      return getMcpConfigView(name);
+    },
+  );
+
+  // resource:updateMcpConfig — 编辑已装远程 MCP 配置（P2.2 Task 6，spec §4.2）。
+  // 校验（存在 / streamable_http / https）与 x-from 重组在 updateRemoteMcpConfig 内；
+  // headers 仅裸模式整包覆盖、schema 可选透传落库——IPC 层不判模式，形状随 input。
+  ipcMain.handle(
+    'resource:updateMcpConfig',
+    async (_evt, name: string, input: McpConfigUpdateInput) => {
+      assertMcpName(name);
+      await updateRemoteMcpConfig(name, input);
+    },
+  );
+
+  // resource:danglingMcpRefs — 悬空 MCP 引用扫描（P2.2 Task 6，spec §4.3）。
+  // 扫描异常在 listDanglingMcpRefs 内降级空数组（卡片静默不显示，spec §7）。
+  ipcMain.handle('resource:danglingMcpRefs', async () => {
+    return listDanglingMcpRefs();
+  });
 
   logger.info('Resource IPC handlers 已注册');
 }

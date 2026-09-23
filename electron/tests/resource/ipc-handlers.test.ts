@@ -17,6 +17,11 @@
 // P2.1 Task 3 追加：resource:install smithery 分支两态（needsConfig 判定——拉详情
 // 后 required 非空返回 schema 不注册；否则直装）+ 新通道 resource:installSmitheryRemote
 // （needsConfig 二段安装：反解 id → 重拉详情 → 带用户配置直装）。
+//
+// P2.2 Task 6 追加：resource:getMcpConfig / resource:updateMcpConfig /
+// resource:danglingMcpRefs 三通道（spec §4.1/§4.2/§4.3）。业务语义（三级降级 /
+// compose 重组 / 悬空聚合）由 tests/resource/mcp-config.test.ts 真实 DB 覆盖，
+// 本文件只锁 IPC 边界：通道注册、参数透传、返回保真、中文异常上抛、空入参防御。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -87,6 +92,17 @@ vi.mock('../../src/main/mcp/bundle-import', () => ({
   isBundleInstalled: vi.fn(() => false),
   resolveBundleCommand: vi.fn(),
 }));
+
+// P2.2 Task 6：MCP 配置编辑/悬空引用服务 mock（真实链路由 tests/resource/
+// mcp-config.test.ts 以真实 DB 覆盖；本文件只锁 IPC 透传形状）
+const { mcpConfigMocks } = vi.hoisted(() => ({
+  mcpConfigMocks: {
+    getMcpConfigView: vi.fn(),
+    updateRemoteMcpConfig: vi.fn(),
+    listDanglingMcpRefs: vi.fn((): unknown[] => []),
+  },
+}));
+vi.mock('../../src/main/resource/mcp-config', () => mcpConfigMocks);
 
 // mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
 // 以回归保护"误传 ResourceItem.id 给 uninstallPackage"的静默 no-op bug。
@@ -746,6 +762,166 @@ describe('registerResourceHandlers', () => {
       expect(deleteRegistered).toHaveBeenCalledWith('plain');
       // P2.2 Task 5：非 bundle 直删断面同样级联清理 agent 引用
       expect(removeMcpRefsFromAgents).toHaveBeenCalledWith('plain');
+    });
+  });
+
+  // P2.2 Task 6：MCP 配置编辑 / 悬空引用三通道（spec §4.1/§4.2/§4.3）。
+  // McpConfigView 契约关键字段在透传用例中深锁（bare=true 时 schema 缺省、
+  // schema 模式 values/url 形状）——renderer types.d.ts 镜像消费同一形状。
+  describe('P2.2 Task 6 MCP 配置编辑 / 悬空引用', () => {
+    it('注册 getMcpConfig / updateMcpConfig / danglingMcpRefs 三通道', () => {
+      const channels = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c: unknown[]) => c[0],
+      );
+      expect(channels).toEqual(
+        expect.arrayContaining([
+          'resource:getMcpConfig',
+          'resource:updateMcpConfig',
+          'resource:danglingMcpRefs',
+        ]),
+      );
+    });
+
+    it('resource:getMcpConfig 透传 name 并保真返回 view（bare 模式 schema 键缺省）', async () => {
+      const view = {
+        name: '@owner/context7',
+        transport: 'streamable_http' as const,
+        bare: true,
+        values: {},
+        url: 'https://ctx.example.com/mcp?key=k1',
+        headers: { Authorization: 'Bearer k1' },
+      };
+      mcpConfigMocks.getMcpConfigView.mockResolvedValueOnce(view);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const configCall = calls.find((c: unknown[]) => c[0] === 'resource:getMcpConfig');
+      const handler = configCall![1] as (evt: unknown, name: string) => Promise<unknown>;
+      const result = await handler({}, '@owner/context7');
+      expect(mcpConfigMocks.getMcpConfigView).toHaveBeenCalledWith('@owner/context7');
+      expect(result).toEqual(view);
+      // 契约锁（spec §4.1）：bare=true 时 schema 缺省——renderer 镜像 schema?:
+      // 与 electron 端同形，编辑弹窗按 bare 分支渲染
+      expect('schema' in (result as Record<string, unknown>)).toBe(false);
+    });
+
+    it('resource:getMcpConfig schema 模式 view 保真透传（schema/values/url 关键字段）', async () => {
+      const view = {
+        name: 'brave',
+        transport: 'streamable_http' as const,
+        bare: false,
+        schema: {
+          required: ['apiKey'],
+          properties: { apiKey: { title: 'API Key', 'x-from': 'header' as const } },
+        },
+        values: { apiKey: 'k9' },
+        url: 'https://brave.run.tools?projectId=p1',
+        headers: {},
+      };
+      mcpConfigMocks.getMcpConfigView.mockResolvedValueOnce(view);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const configCall = calls.find((c: unknown[]) => c[0] === 'resource:getMcpConfig');
+      const handler = configCall![1] as (evt: unknown, name: string) => Promise<unknown>;
+      const result = await handler({}, 'brave');
+      expect(mcpConfigMocks.getMcpConfigView).toHaveBeenCalledWith('brave');
+      expect(result).toEqual(view);
+    });
+
+    it('resource:getMcpConfig name 空串 / 缺省 → 中文错误且不调服务', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const configCall = calls.find((c: unknown[]) => c[0] === 'resource:getMcpConfig');
+      const handler = configCall![1] as (evt: unknown, name: string) => Promise<unknown>;
+      await expect(handler({}, '')).rejects.toThrow(/MCP 名不能为空/);
+      await expect(handler({}, undefined as unknown as string)).rejects.toThrow(/MCP 名不能为空/);
+      expect(mcpConfigMocks.getMcpConfigView).not.toHaveBeenCalled();
+    });
+
+    it('resource:getMcpConfig 服务层中文错误原样上抛（不吞不改）', async () => {
+      mcpConfigMocks.getMcpConfigView.mockRejectedValueOnce(
+        new Error('MCP gone 未注册'),
+      );
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const configCall = calls.find((c: unknown[]) => c[0] === 'resource:getMcpConfig');
+      const handler = configCall![1] as (evt: unknown, name: string) => Promise<unknown>;
+      await expect(handler({}, 'gone')).rejects.toThrow(/MCP gone 未注册/);
+    });
+
+    it('resource:updateMcpConfig 透传 name + input（headers 仅裸模式、schema 可选——IPC 层不判模式）', async () => {
+      mcpConfigMocks.updateRemoteMcpConfig.mockResolvedValueOnce(undefined);
+      const input = {
+        url: 'https://brave.run.tools',
+        config: { apiKey: 'k2' },
+        headers: { 'X-Custom': 'y' },
+        schema: { properties: { apiKey: { 'x-from': 'header' as const } } },
+      };
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const updateCall = calls.find((c: unknown[]) => c[0] === 'resource:updateMcpConfig');
+      const handler = updateCall![1] as (
+        evt: unknown,
+        name: string,
+        input: unknown,
+      ) => Promise<unknown>;
+      const result = await handler({}, 'brave', input);
+      expect(mcpConfigMocks.updateRemoteMcpConfig).toHaveBeenCalledWith('brave', input);
+      expect(result).toBeUndefined();
+    });
+
+    it('resource:updateMcpConfig name 空串 / 缺省 → 中文错误且不调服务', async () => {
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const updateCall = calls.find((c: unknown[]) => c[0] === 'resource:updateMcpConfig');
+      const handler = updateCall![1] as (
+        evt: unknown,
+        name: string,
+        input: unknown,
+      ) => Promise<unknown>;
+      await expect(handler({}, '', { url: 'https://x', config: {} })).rejects.toThrow(
+        /MCP 名不能为空/,
+      );
+      await expect(
+        handler({}, undefined as unknown as string, { url: 'https://x', config: {} }),
+      ).rejects.toThrow(/MCP 名不能为空/);
+      expect(mcpConfigMocks.updateRemoteMcpConfig).not.toHaveBeenCalled();
+    });
+
+    it('resource:updateMcpConfig 服务层中文错误原样上抛（https 防线文案）', async () => {
+      mcpConfigMocks.updateRemoteMcpConfig.mockRejectedValueOnce(
+        new Error('远程 MCP brave 配置更新失败：url 必须以 https:// 开头'),
+      );
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const updateCall = calls.find((c: unknown[]) => c[0] === 'resource:updateMcpConfig');
+      const handler = updateCall![1] as (
+        evt: unknown,
+        name: string,
+        input: unknown,
+      ) => Promise<unknown>;
+      await expect(handler({}, 'brave', { url: 'http://insecure', config: {} })).rejects.toThrow(
+        /必须以 https:\/\/ 开头/,
+      );
+    });
+
+    it('resource:danglingMcpRefs 透传返回扫描结果（refName + agents 聚合形状）', async () => {
+      const refs = [
+        {
+          refName: 'filesystem',
+          agents: [
+            { definitionId: 'uuid-1', name: 'coder' },
+            { definitionId: 'uuid-2', name: 'requirement-analyst' },
+          ],
+        },
+      ];
+      mcpConfigMocks.listDanglingMcpRefs.mockReturnValueOnce(refs);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const danglingCall = calls.find((c: unknown[]) => c[0] === 'resource:danglingMcpRefs');
+      const handler = danglingCall![1] as () => Promise<unknown>;
+      const result = await handler();
+      expect(result).toEqual(refs);
+    });
+
+    it('resource:danglingMcpRefs 空结果透传（卡片静默不显示）', async () => {
+      mcpConfigMocks.listDanglingMcpRefs.mockReturnValueOnce([]);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const danglingCall = calls.find((c: unknown[]) => c[0] === 'resource:danglingMcpRefs');
+      const handler = danglingCall![1] as () => Promise<unknown>;
+      const result = await handler();
+      expect(result).toEqual([]);
     });
   });
 });

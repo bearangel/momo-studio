@@ -23,11 +23,25 @@ vi.mock('../../src/main/mcp/host-manager', () => ({
       id: 'm1',
       name: 'github',
       version: '1.0.0',
+      transport: 'stdio',
       command: 'npx',
       args: ['-y', 'x'],
       env: { TOKEN: 't' },
       source: 'custom',
       installedAt: '2026-08-11T10:00:00Z',
+    },
+    {
+      // P2.2 Task 6：custom 源远程行（resource:registerMcp transport='streamable_http'
+      // 注册）——custom.transport 填充的 streamable_http 形态
+      id: 'm3',
+      name: 'weather',
+      version: '1.0.0',
+      transport: 'streamable_http',
+      command: '',
+      args: [],
+      url: 'https://mcp.example.com/sse',
+      source: 'custom',
+      installedAt: '2026-08-11T10:30:00Z',
     },
     {
       id: 'm2',
@@ -86,8 +100,8 @@ vi.mock('../../src/main/agent/crud', () => ({
 describe('listCustomResources', () => {
   it('合并 mcp + skill + agent 三类 custom', () => {
     const items = listCustomResources();
-    expect(items).toHaveLength(3); // 1 mcp + 1 skill + 1 agent（builtin/marketplace 被过滤）
-    expect(items.map((i) => i.type).sort()).toEqual(['agent', 'mcp', 'skill']);
+    expect(items).toHaveLength(4); // 2 mcp（stdio + streamable_http）+ 1 skill + 1 agent（builtin/marketplace 被过滤）
+    expect(items.map((i) => i.type).sort()).toEqual(['agent', 'mcp', 'mcp', 'skill']);
   });
 
   it('所有 custom 项 source=custom', () => {
@@ -111,6 +125,24 @@ describe('listCustomResources', () => {
       env: { TOKEN: 't' },
     });
     expect(mcp.id).toBe('custom-mcp-github');
+  });
+
+  // P2.2 Task 6：custom.transport 双形态填充——ResourceDetail「配置」按钮的
+  // 显示条件（transport === 'streamable_http'）消费该字段（spec §6.1）
+  it('MCP custom 项填充 custom.transport（stdio / streamable_http 双形态）', () => {
+    const items = listCustomResources();
+    const stdio = items.find((i) => i.slug === 'github')!;
+    expect(stdio.custom?.transport).toBe('stdio');
+    const remote = items.find((i) => i.slug === 'weather')!;
+    expect(remote.custom?.transport).toBe('streamable_http');
+  });
+
+  it('非 MCP custom 项不填 transport（skill / agent 无该字段）', () => {
+    const items = listCustomResources();
+    const skill = items.find((i) => i.type === 'skill')!;
+    expect(skill.custom?.transport).toBeUndefined();
+    const agent = items.find((i) => i.type === 'agent')!;
+    expect(agent.custom?.transport).toBeUndefined();
   });
 
   it('Skill custom 项含 installedAt', () => {

@@ -7,7 +7,10 @@ import type {
   BrowserState,
   BundlePreview,
   CollabTarget,
+  DanglingMcpRef,
   ImMessage,
+  McpConfigUpdateInput,
+  McpConfigView,
   MessageContext,
   MessageEventBatch,
   RegisterMcpInput,
@@ -325,6 +328,13 @@ const api: ApiSurface = {
         query,
         page,
       ),
+    // P2.2 Task 6：查看已装远程 MCP 配置（bare=true 时无 schema——裸表单回显 url/headers）
+    getMcpConfig: (name: string) => invoke<McpConfigView>('resource:getMcpConfig', name),
+    // P2.2 Task 6：编辑已装远程 MCP 配置（headers 仅裸模式整包覆盖；schema 可选透传落库）
+    updateMcpConfig: (name: string, input: McpConfigUpdateInput) =>
+      invoke<void>('resource:updateMcpConfig', name, input),
+    // P2.2 Task 6：悬空 MCP 引用扫描（空数组 = 无悬空，卡片不显示）
+    danglingMcpRefs: () => invoke<DanglingMcpRef[]>('resource:danglingMcpRefs'),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),

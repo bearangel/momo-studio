@@ -85,6 +85,8 @@ export interface ResourceItem {
     mcpConfig?: { command: string; args: string[]; env?: Record<string, string> };
     skillFrontmatter?: { name?: string; version?: string };
     agentSystemPromptHash?: string;
+    /** MCP 条目的传输形态（只读；ResourceDetail「配置」按钮显示条件消费，spec §6.1） */
+    transport?: 'stdio' | 'streamable_http';
   };
   /** p2p 项的扩展元数据（来源 peer 标识） */
   p2p?: { peerId: string; peerName: string };

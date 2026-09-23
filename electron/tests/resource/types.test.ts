@@ -78,3 +78,38 @@ describe('ResourceSource 扩展（P2 双轨 hub）', () => {
     expect(parseResourceId('modelscope-mcp-x')).toBeNull();
   });
 });
+
+// P2.2 Task 6 契约锁：ResourceItem.custom 加可选 transport（双镜像——此处锁
+// electron 侧 resource/types.ts；renderer types.d.ts 镜像由双 workspace
+// typecheck 编译期保证）。ResourceDetail「配置」按钮显示条件
+// （custom.transport === 'streamable_http'）消费该字段（spec §6.1）。
+describe('ResourceItem.custom.transport（P2.2 Task 6）', () => {
+  /** 最小合法 ResourceItem 构造（custom 段由各用例覆写） */
+  function baseItem(custom: ResourceItem['custom']): ResourceItem {
+    return {
+      id: 'custom-mcp-github',
+      type: 'mcp',
+      source: 'custom',
+      slug: 'github',
+      name: 'github',
+      description: 'd',
+      installed: true,
+      installable: false,
+      removable: true,
+      custom,
+    };
+  }
+
+  it('MCP custom 项可携带 transport（stdio / streamable_http 双形态）', () => {
+    expect(baseItem({ installedAt: '2026-09-23T00:00:00Z', transport: 'stdio' }).custom?.transport)
+      .toBe('stdio');
+    expect(
+      baseItem({ installedAt: '2026-09-23T00:00:00Z', transport: 'streamable_http' }).custom?.transport,
+    ).toBe('streamable_http');
+  });
+
+  it('transport 可选：存量 custom 项（skill / agent / 旧 mcp 行）不带该字段仍合法', () => {
+    const item = baseItem({ installedAt: '2026-09-23T00:00:00Z' });
+    expect(item.custom?.transport).toBeUndefined();
+  });
+});

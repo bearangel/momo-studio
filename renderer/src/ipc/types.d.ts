@@ -725,6 +725,8 @@ export interface ResourceItem {
     mcpConfig?: { command: string; args: string[]; env?: Record<string, string> };
     skillFrontmatter?: { name?: string; version?: string };
     agentSystemPromptHash?: string;
+    /** MCP 条目的传输形态（只读；「配置」按钮显示条件：transport === 'streamable_http'，spec §6.1） */
+    transport?: 'stdio' | 'streamable_http';
   };
   /** p2p 项的扩展元数据 */
   p2p?: { peerId: string; peerName: string };
@@ -814,6 +816,53 @@ export interface RegistryListEntry {
   tags: string[];
   category?: string;
   item: ResourceItem;
+}
+
+/**
+ * P2.2 Task 6：resource:getMcpConfig 返回的配置视图（McpConfigDialog 数据源）。
+ * 与 electron 端 resource/mcp-config.ts 的 McpConfigView 对齐（跨进程独立定义，
+ * 仅结构对齐）；schema 镜像用 JsonSchemaLike（electron 端 McpConfigSchema 同源概念）。
+ */
+export interface McpConfigView {
+  name: string;
+  transport: 'stdio' | 'streamable_http';
+  /** 裸模式标志：无 schema 时 true，编辑弹窗渲染 url 整条 + headers 键值行 */
+  bare: boolean;
+  /** schema 模式的字段元数据（bare=false 时必有；裸模式缺省） */
+  schema?: JsonSchemaLike;
+  /** 各字段现值回显（schema 模式按 x-from 反解；裸模式为空对象） */
+  values: Record<string, string>;
+  /** 远程端点整条（裸模式可编辑回显用；schema 模式表单预填取 url.split('?')[0]，spec §9 D9） */
+  url: string;
+  /** 裸模式的现有 headers 键值（schema 模式为空对象） */
+  headers: Record<string, string>;
+}
+
+/**
+ * P2.2 Task 6：resource:updateMcpConfig 入参（与 electron 端
+ * resource/mcp-config.ts 的 McpConfigUpdateInput 对齐）。
+ *   - url 须 https（主进程双防线拒绝）
+ *   - config 为 schema 模式字段级值（trim 后空串剔除）
+ *   - headers 仅裸模式生效：整包覆盖，schema 模式不传
+ */
+export interface McpConfigUpdateInput {
+  url: string;
+  config: Record<string, string>;
+  headers?: Record<string, string>;
+  /** 编辑期间拉到的新 schema 顺手落库（可选透传） */
+  schema?: JsonSchemaLike;
+}
+
+/**
+ * P2.2 Task 6：resource:danglingMcpRefs 返回的悬空引用条目
+ * （DanglingRefsCard 数据源；与 electron 端 resource/mcp-config.ts 的
+ * DanglingMcpRef 对齐）。
+ */
+export interface DanglingMcpRef {
+  /** 悬空引用名（如 'filesystem'） */
+  refName: string;
+  /** 引用了该未注册名字的全部 agent（definitionId + 展示名） */
+  agents: Array<{ definitionId: string; name: string }>;
 }
 
 /**
@@ -1630,6 +1679,21 @@ export interface ApiSurface {
       query?: string,
       page?: number,
     ): Promise<{ entries: RegistryListEntry[]; degraded: boolean; hasMore: boolean }>;
+    /**
+     * P2.2 Task 6：查看已装远程 MCP 配置（McpConfigDialog 打开时拉取）。
+     * bare=true 时无 schema（裸表单回显 url/headers）；三级降级在主进程完成。
+     */
+    getMcpConfig(name: string): Promise<McpConfigView>;
+    /**
+     * P2.2 Task 6：编辑已装远程 MCP 配置，保存后即时生效（池驱逐 + 下回合重建）。
+     * headers 仅裸模式整包覆盖；schema 模式表单预填 url 须去 query（spec §9 D9）。
+     */
+    updateMcpConfig(name: string, input: McpConfigUpdateInput): Promise<void>;
+    /**
+     * P2.2 Task 6：悬空 MCP 引用扫描（MCP 标签页顶部提示卡数据源）。
+     * 空数组 = 无悬空（含扫描异常降级），卡片不显示。
+     */
+    danglingMcpRefs(): Promise<DanglingMcpRef[]>;
   };
   task: TaskApiSurface;
   /**

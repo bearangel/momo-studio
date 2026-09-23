@@ -85,6 +85,9 @@ const {
     updateAgentDefinition: vi.fn(),
     createCustomDef: vi.fn(),
     stopRunningInstancesByDefinition: vi.fn(),
+    // P2.2 Task 5：卸载级联 helper——返回空名单（resource:delete custom-mcp 分支
+    // 调用；真实级联语义由 tests/agent/crud-remove-mcp-refs.test.ts 真 DB 覆盖）
+    removeMcpRefsFromAgents: vi.fn(() => []),
   },
 }));
 
@@ -293,6 +296,8 @@ beforeEach(() => {
   Object.values(hostManagerMocks).forEach((m) => m.mockReset());
   Object.values(zipUploaderMocks).forEach((m) => m.mockReset());
   Object.values(agentCrudMocks).forEach((m) => m.mockReset());
+  // mockReset 清掉 vi.fn(() => []) 工厂——照本文件模式 reset 后补默认返回值
+  agentCrudMocks.removeMcpRefsFromAgents.mockReturnValue([]);
   clearSharedResourceCache();
   clearResourceShareDeps();
 });

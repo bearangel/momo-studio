@@ -54,6 +54,8 @@ export function listCustomResources(): ResourceItem[] {
       custom: {
         installedAt: mcp.installedAt,
         mcpConfig: { command: mcp.command, args: mcp.args, env: mcp.env },
+        // P2.2 Task 6：只读 transport 透出（「配置」按钮显示条件消费，spec §6.1）
+        transport: mcp.transport,
       },
     });
   }

@@ -140,7 +140,7 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
       installed: true,
       installable: false,
       removable: true,
-      custom: { installedAt: m.installedAt },
+      custom: { installedAt: m.installedAt, transport: m.transport },
     }));
 }
 

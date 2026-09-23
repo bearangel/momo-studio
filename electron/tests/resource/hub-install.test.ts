@@ -153,6 +153,8 @@ describe('installSmitheryRemote x-from 分流', () => {
       installable: false,
       removable: true,
       description: '远程 MCP（https://brave.run.tools?projectId=p1）',
+      // P2.2 Task 6：custom.transport 填充（ResourceDetail「配置」按钮显示条件消费）
+      custom: { transport: 'streamable_http' },
     });
   });
 
