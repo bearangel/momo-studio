@@ -5,6 +5,7 @@ import type {
   AssignmentDeltas,
   BrowserNotice,
   BrowserState,
+  BundlePreview,
   CollabTarget,
   ImMessage,
   MessageContext,
@@ -296,6 +297,18 @@ const api: ApiSurface = {
       invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖） */
     createSkill: (input: SkillCreateInput) => invoke<UploadedSkill>('resource:createSkill', input),
+    // P2.1 Task 5：DXT/MCPB 本地包两阶段导入。与 uploadSkill 同款 Uint8Array
+    // 传输——contextBridge 里 Node Buffer 跨 IPC structured clone 会损坏，main
+    // 收到后自行 Buffer.from 重建。
+    parseMcpBundle: (buffer: ArrayBuffer, filename: string) =>
+      invoke<BundlePreview>('resource:parseMcpBundle', new Uint8Array(buffer), filename),
+    importMcpBundle: (buffer: ArrayBuffer, filename: string, userConfig: Record<string, string>) =>
+      invoke<ResourceItem>(
+        'resource:importMcpBundle',
+        new Uint8Array(buffer),
+        filename,
+        userConfig,
+      ),
     // P2 Task 4：网络注册表（hub provider 框架）——renderer 经此消费，不直连 hub。
     // P2.1 Task 4：query（服务端搜索）与 page（1 起始）透传，返回加 hasMore
     registryProviders: () => invoke<RegistryProviderMeta[]>('resource:registryProviders'),

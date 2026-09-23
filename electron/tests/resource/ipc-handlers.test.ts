@@ -63,6 +63,9 @@ vi.mock('../../src/main/resource/hub/smithery', () => ({
 // 以真实 DB + fetch 桩覆盖；本文件只测 IPC 路由分支）。
 // P2.1 Task 3：installSmitheryMcp（install-config 死码）退役，换成
 // fetchSmitheryDetail + installSmitheryRemote 两函数。
+// P2.1 Task 5：bundle-import（DXT/MCPB 本地包导入）——真实行为由
+// tests/mcp/bundle-import.test.ts 以真实 DB + AdmZip 全量覆盖；本文件仅测
+// IPC handler 的转调与 delete 分支路由。
 const { hubInstallMocks } = vi.hoisted(() => ({
   hubInstallMocks: {
     fetchSmitheryDetail: vi.fn(),
@@ -72,6 +75,13 @@ const { hubInstallMocks } = vi.hoisted(() => ({
   },
 }));
 vi.mock('../../src/main/resource/hub-install', () => hubInstallMocks);
+vi.mock('../../src/main/mcp/bundle-import', () => ({
+  parseMcpBundle: vi.fn(),
+  importMcpBundle: vi.fn(),
+  uninstallMcpBundle: vi.fn(),
+  isBundleInstalled: vi.fn(() => false),
+  resolveBundleCommand: vi.fn(),
+}));
 
 // mock fetchCatalog（marketplace delete 分支需要）。catalog id 刻意不同于 ResourceItem.id，
 // 以回归保护"误传 ResourceItem.id 给 uninstallPackage"的静默 no-op bug。
@@ -107,6 +117,12 @@ import { registerResourceHandlers } from '../../src/main/resource/ipc.handlers';
 import { listResources, resolveResourceById } from '../../src/main/resource/library';
 import { deleteRegistered, registerMcpDefinition } from '../../src/main/mcp/host-manager';
 import { deleteCustomSkill, uploadSkillZip } from '../../src/main/skill/zip-uploader';
+import {
+  parseMcpBundle,
+  importMcpBundle,
+  uninstallMcpBundle,
+  isBundleInstalled,
+} from '../../src/main/mcp/bundle-import';
 import { deleteDefinition } from '../../src/main/agent/crud';
 import { uninstallPackage } from '../../src/main/marketplace/installer';
 
@@ -130,6 +146,9 @@ describe('registerResourceHandlers', () => {
         'resource:uploadSkill',
         // P2.1 Task 3：smithery needsConfig 二段安装通道
         'resource:installSmitheryRemote',
+        // P2.1 Task 5：DXT/MCPB 本地包两阶段导入通道
+        'resource:parseMcpBundle',
+        'resource:importMcpBundle',
       ]),
     );
   });
@@ -570,5 +589,115 @@ describe('registerResourceHandlers', () => {
     const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
     await handler({}, 'smithery-mcp-@owner/weather');
     expect(hubInstallMocks.uninstallHubMcp).toHaveBeenCalledWith('smithery', '@owner/weather');
+  });
+
+  // P2.1 Task 5：DXT/MCPB 本地包两阶段导入 handler 契约 + delete custom+mcp 分支路由
+  describe('P2.1 Task 5 DXT/MCPB 本地包', () => {
+    it('resource:parseMcpBundle 转调 parseMcpBundle（Uint8Array → Buffer）', async () => {
+      const preview = {
+        name: 'demo',
+        displayName: 'Demo',
+        version: '1.0.0',
+        description: 'd',
+        serverType: 'node' as const,
+        commandPreview: 'node x.js',
+        userConfigSchema: {},
+        tempId: 'tid-1',
+      };
+      (parseMcpBundle as ReturnType<typeof vi.fn>).mockReturnValueOnce(preview);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const parseCall = calls.find((c: unknown[]) => c[0] === 'resource:parseMcpBundle');
+      const handler = parseCall![1] as (
+        evt: unknown,
+        data: Uint8Array,
+        filename: string,
+      ) => Promise<unknown>;
+      const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+      const result = await handler({}, bytes, 'demo.mcpb');
+      expect(parseMcpBundle).toHaveBeenCalledTimes(1);
+      const [buf, filename] = (parseMcpBundle as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        Buffer,
+        string,
+      ];
+      expect(Buffer.isBuffer(buf)).toBe(true);
+      expect(buf.equals(Buffer.from(bytes))).toBe(true);
+      expect(filename).toBe('demo.mcpb');
+      expect(result).toBe(preview);
+    });
+
+    it('resource:importMcpBundle 转调 importMcpBundle（Uint8Array → Buffer + userConfig 透传）', async () => {
+      const item = {
+        id: 'custom-mcp-demo',
+        type: 'mcp',
+        source: 'custom',
+        slug: 'demo',
+        name: 'Demo',
+        description: 'd',
+        installed: true,
+        installable: false,
+        removable: true,
+      };
+      (importMcpBundle as ReturnType<typeof vi.fn>).mockReturnValueOnce(item);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const importCall = calls.find((c: unknown[]) => c[0] === 'resource:importMcpBundle');
+      const handler = importCall![1] as (
+        evt: unknown,
+        data: Uint8Array,
+        filename: string,
+        userConfig: Record<string, string>,
+      ) => Promise<unknown>;
+      const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+      const userConfig = { apiKey: 'k1' };
+      const result = await handler({}, bytes, 'demo.mcpb', userConfig);
+      expect(importMcpBundle).toHaveBeenCalledTimes(1);
+      const [buf, filename, cfg] = (importMcpBundle as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        Buffer,
+        string,
+        Record<string, string>,
+      ];
+      expect(Buffer.isBuffer(buf)).toBe(true);
+      expect(buf.equals(Buffer.from(bytes))).toBe(true);
+      expect(filename).toBe('demo.mcpb');
+      expect(cfg).toBe(userConfig);
+      expect(result).toBe(item);
+    });
+
+    it('resource:delete custom-mcp bundle 条目路由到 uninstallMcpBundle（不调 deleteRegistered）', async () => {
+      (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        id: 'custom-mcp-demo-bundle',
+        type: 'mcp',
+        source: 'custom',
+        slug: 'demo-bundle',
+        removable: true,
+        name: 'Demo Bundle',
+      });
+      (isBundleInstalled as ReturnType<typeof vi.fn>).mockReturnValueOnce(true);
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
+      const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
+      await handler({}, 'custom-mcp-demo-bundle');
+      expect(isBundleInstalled).toHaveBeenCalledWith('demo-bundle');
+      expect(uninstallMcpBundle).toHaveBeenCalledWith('demo-bundle');
+      expect(deleteRegistered).not.toHaveBeenCalled();
+    });
+
+    it('resource:delete custom-mcp 非 bundle 条目维持原 deleteRegistered（路由判据 isBundleInstalled=false）', async () => {
+      (resolveResourceById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        id: 'custom-mcp-plain',
+        type: 'mcp',
+        source: 'custom',
+        slug: 'plain',
+        removable: true,
+        name: 'plain',
+      });
+      // isBundleInstalled 默认返回 false（mock 工厂）→ deleteRegistered 路径
+      const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
+      const deleteCall = calls.find((c: unknown[]) => c[0] === 'resource:delete');
+      const handler = deleteCall![1] as (evt: unknown, id: string) => Promise<void>;
+      await handler({}, 'custom-mcp-plain');
+      expect(isBundleInstalled).toHaveBeenCalledWith('plain');
+      expect(uninstallMcpBundle).not.toHaveBeenCalled();
+      expect(deleteRegistered).toHaveBeenCalledWith('plain');
+    });
   });
 });

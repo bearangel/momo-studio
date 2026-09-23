@@ -11,6 +11,8 @@
 //   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
 //     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
 //   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
+//   - resource:parseMcpBundle / resource:importMcpBundle  DXT/MCPB 本地包两阶段
+//     导入（P2.1 Task 5——parse 预览不落盘，import 重解包替换注册）
 //
 // 设计原则：
 //   - list / getDetail 直接转发给 library（纯查询，无副作用）
@@ -19,6 +21,8 @@
 //     needsConfig=true 时带 schema 给 renderer 弹窗，不注册）
 //   - delete 按 source + type 路由：marketplace→uninstallPackage / custom 三分支 /
 //     builtin 抛错。各底层删除函数的参数语义不同，详见各分支注释。
+//     custom+mcp 先查 bundle 记账行（P2.1 Task 5：DXT/MCPB 条目走 bundle 卸载，
+//     同步清理解包目录与记账行）。
 //   - registerMcp / uploadSkill 是注册表写入口，语义归 resource 域：registerMcp
 //     落库 source='custom' 后复用 library 的 custom 映射取回 ResourceItem 返回。
 //     （modelscope hub 轨已于 P2.1 移除，P3 若公开 API 落地再评估）
@@ -48,6 +52,13 @@ import { isSmitheryDegraded } from './hub/smithery';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
 import { fetchCatalog } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
+import {
+  parseMcpBundle,
+  importMcpBundle,
+  uninstallMcpBundle,
+  isBundleInstalled,
+  type BundlePreview,
+} from '../mcp/bundle-import';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
 import { deleteDefinition } from '../agent/crud';
@@ -216,8 +227,15 @@ export function registerResourceHandlers(): void {
       }
       case 'custom': {
         let deleted: unknown;
-        if (item.type === 'mcp') deleted = deleteRegistered(item.slug);
-        else if (item.type === 'skill') deleted = deleteCustomSkill(item.slug);
+        if (item.type === 'mcp') {
+          // P2.1 Task 5：先查 bundle 记账行——DXT/MCPB 导入条目走 bundle 卸载
+          //（删 mcp 行 + 清理解包目录 + 删记账行），否则维持原单行删除
+          if (isBundleInstalled(item.slug)) {
+            uninstallMcpBundle(item.slug);
+          } else {
+            deleted = deleteRegistered(item.slug);
+          }
+        } else if (item.type === 'skill') deleted = deleteCustomSkill(item.slug);
         else if (item.type === 'agent') deleted = deleteDefinition(item.slug);
         else throw new Error(`未知 custom type: ${item.type}`);
         // 统一等待删除成功再广播（失败上抛时不广播旧目录）
@@ -280,6 +298,36 @@ export function registerResourceHandlers(): void {
     void broadcastLocalResourceCatalog();
     return uploaded;
   });
+
+  // resource:parseMcpBundle — DXT/MCPB 本地包两阶段导入的第一阶段（P2.1 Task 5）。
+  // 解包校验 + manifest 解析 + user_config 形状判定，不落正式目录。renderer 持有
+  // 原文件 buffer，第二阶段（importMcpBundle）重解包——主进程零中间状态。
+  // Uint8Array → Buffer 同 uploadSkill 模式（contextBridge 里 Node Buffer 跨 IPC
+  // structured clone 会损坏）。
+  ipcMain.handle(
+    'resource:parseMcpBundle',
+    async (_evt, data: Uint8Array | Buffer, filename: string): Promise<BundlePreview> => {
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      return parseMcpBundle(buffer, filename);
+    },
+  );
+
+  // resource:importMcpBundle — 第二阶段：变量替换 + S1 校验 + cwd 注册 + 记账，
+  // 返回 custom ResourceItem（Task 6 弹窗提交表单后调用）。
+  ipcMain.handle(
+    'resource:importMcpBundle',
+    async (
+      _evt,
+      data: Uint8Array | Buffer,
+      filename: string,
+      userConfig: Record<string, string>,
+    ) => {
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      const item = importMcpBundle(buffer, filename, userConfig);
+      void broadcastLocalResourceCatalog();
+      return item;
+    },
+  );
 
   // resource:registryProviders — 网络获取模式 provider 元信息（含可达性，spec §4.1）。
   // builtin 恒可用（本地 catalog，零网络）；hub degraded 取各自退避状态——不打网络，

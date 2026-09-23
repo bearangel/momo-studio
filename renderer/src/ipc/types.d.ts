@@ -769,6 +769,39 @@ export interface SmitheryInstallResult {
 }
 
 /**
+ * P2.1 Task 5：DXT / MCPB 本地包 user_config 字段描述（resource:parseMcpBundle
+ * 返回 userConfigSchema 的元素）。与 electron 端 mcp/bundle-import.ts 的
+ * BundleConfigField 对齐（跨进程独立定义，仅结构对齐）。
+ *   - type='string' v1 表单渲染；其它类型 required → import 阶段直接拒绝导入
+ */
+export interface BundleConfigField {
+  type: 'string' | 'number' | 'boolean' | 'directory' | 'file';
+  title?: string;
+  description?: string;
+  required?: boolean;
+  sensitive?: boolean;
+}
+
+/**
+ * P2.1 Task 5：DXT / MCPB 本地包两阶段导入第一阶段（resource:parseMcpBundle）
+ * 返回的预览——含解包元信息与 user_config schema（Task 6 ImportBundleDialog
+ * 渲染表单）。与 electron 端 mcp/bundle-import.ts 的 BundlePreview 对齐。
+ *   - tempId 仅为无状态占位（import 阶段重解包方案，renderer 持有原文件 buffer
+ *     二次传参，无需回传 tempId；主进程不维护 tempId→目录映射）
+ */
+export interface BundlePreview {
+  name: string;
+  displayName: string;
+  version: string;
+  description: string;
+  serverType: 'node' | 'python' | 'binary';
+  /** 启动结构预览（command + args 原始拼接，${...} 占位保留——替换发生在 import） */
+  commandPreview: string;
+  userConfigSchema: Record<string, BundleConfigField>;
+  tempId: string;
+}
+
+/**
  * resource:registryList 返回条目——与 services/registry 的 RegistryEntry 同构
  * （经 IPC 序列化；跨进程独立定义，仅结构对齐）。
  */
@@ -1568,6 +1601,22 @@ export interface ApiSurface {
     uploadSkill(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖，返回同 zip 上传形状） */
     createSkill(input: SkillCreateInput): Promise<UploadedSkill>;
+    /**
+     * P2.1 Task 5：解析 DXT/MCPB 本地包（两阶段导入第一阶段）。解包校验 + manifest
+     * 解析 + user_config 形状判定，不落正式目录。返回 BundlePreview 供 Task 6
+     * ImportBundleDialog 渲染表单。
+     */
+    parseMcpBundle(buffer: ArrayBuffer, filename: string): Promise<BundlePreview>;
+    /**
+     * P2.1 Task 5：导入 DXT/MCPB 本地包（两阶段导入第二阶段）。变量替换 + S1 校验 +
+     * cwd 注册 + 记账，返回 custom ResourceItem。renderer 持有原文件 buffer 二次传参
+     * （主进程零中间状态）。
+     */
+    importMcpBundle(
+      buffer: ArrayBuffer,
+      filename: string,
+      userConfig: Record<string, string>,
+    ): Promise<ResourceItem>;
     /** P2 Task 4：网络获取 provider 元信息（builtin 恒可用 + 两 hub 含 degraded 状态） */
     registryProviders(): Promise<RegistryProviderMeta[]>;
     /**
