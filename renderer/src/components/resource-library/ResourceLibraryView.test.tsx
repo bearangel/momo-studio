@@ -3,9 +3,12 @@
 // 资源库壳重写测试（spec §2.1 三页结构）：TypeSidebar 二级菜单 + TypePageShell 组合。
 //   - 默认渲染 Agent 页（导航 landmark + 页标题「智能体」）
 //   - 切 MCP 页：标题与「＋」按钮文案随类型切换
-//   - MCP 页「＋」下拉三条路径（手动配置 / 粘贴 JSON / 网络获取）
+//   - MCP 页「＋」下拉三条本地路径（手动配置 / 粘贴 JSON / 导入包；P2.3 Task 1
+//     起「从网络获取」项已移除——单态负例断言）
 //   - localStorage 持久化恢复上次激活页
 //   - mount 时自动首拉 resource.list（旧视图同语义回归锁）
+//   - 安装链路：onInstall 直连 store.installResource（registry 侧包装流已删——
+//     成功横幅仍在，marketplace agent 不再自动弹配置引导）
 //
 // Mock 方式遵循 TypePageShell.test.tsx 既有形态：不 vi.mock ipc/client 模块，而是在
 // 真实 jsdom window 上装 window.api 属性——ipc.client 是真实 Proxy，store 的 load 经
@@ -27,7 +30,6 @@ import type { AgentDefinition, ResourceItem, ResourceType } from '../../ipc/type
 const resourceList = vi.fn();
 const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
-const resourceInstallSmitheryRemote = vi.fn();
 // P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
 const resourceDanglingMcpRefs = vi.fn();
 const agentList = vi.fn();
@@ -40,7 +42,6 @@ const mockApi = {
     list: resourceList,
     install: resourceInstall,
     delete: resourceDelete,
-    installSmitheryRemote: resourceInstallSmitheryRemote,
     danglingMcpRefs: resourceDanglingMcpRefs,
   },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
@@ -67,7 +68,6 @@ beforeEach(() => {
   resourceList.mockReset().mockResolvedValue([] as ResourceItem[]);
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
-  resourceInstallSmitheryRemote.mockReset().mockResolvedValue(undefined);
   resourceDanglingMcpRefs.mockReset().mockResolvedValue([]);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
@@ -79,7 +79,7 @@ beforeEach(() => {
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
     typeFilter: 'agent', sourceFilter: 'all', query: '',
-    activeType: 'agent', mode: 'installed',
+    activeType: 'agent',
   });
   // activeWorkspaceId 复位为 null——closePresetDialog 三重刷新按 null 走分支，
   // 不发 agent.listMembers，测试避免悬空 mock 引用。
@@ -100,14 +100,14 @@ describe('ResourceLibraryView（三页壳）', () => {
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
 
-  it('MCP 页下拉含四条路径（手动配置/粘贴 JSON/导入包/网络获取）', () => {
+  it('MCP 页下拉含三条本地路径，无「从网络获取」（P2.3 Task 1 单态）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.getByText('手动配置…')).toBeTruthy();
     expect(screen.getByText('粘贴 JSON…')).toBeTruthy();
     expect(screen.getByText('导入 DXT / MCPB 包')).toBeTruthy();
-    expect(screen.getByText('从网络获取…')).toBeTruthy();
+    expect(screen.queryByText('从网络获取…')).toBeNull();
   });
 
   it('持久化恢复上次激活页', () => {
@@ -124,11 +124,12 @@ describe('ResourceLibraryView（三页壳）', () => {
   });
 });
 
-// ── 终审 Important-3：安装链路回归锁（旧 View 测试删除后补）─────────────
-// 链路：ResourceRow 安装按钮 → View.handleInstall → store.installResource（真实实现，
-// 经 mock IPC 边界）→ 成功横幅；marketplace agent 成功 → openPresetDialog 引导门控。
-describe('安装链路回归锁（终审 Important-3）', () => {
-  it('marketplace agent 安装成功 → install 调用后触发配置引导（agent.list）+ 成功横幅', async () => {
+// ── 安装链路回归锁（终审 Important-3；P2.3 Task 1 起单态语义）─────────────
+// 链路：ResourceRow 安装按钮 → View.onInstall → store.installResource（真实实现，
+// 经 mock IPC 边界）→ 成功横幅。registry 侧包装流（smithery needsConfig 弹窗 /
+// marketplace agent 配置引导）已随网络获取模式移除——onInstall 只剩本地安装语义。
+describe('安装链路回归锁（单态）', () => {
+  it('marketplace agent 安装成功 → install 调用 + 成功横幅；不弹配置引导（registry 侧接线已删）', async () => {
     useResourceStore.setState({
       items: [mkInstallable({ id: 'marketplace-agent-g', type: 'agent', slug: 'agent-g', name: '市场智能体' })],
     });
@@ -137,13 +138,16 @@ describe('安装链路回归锁（终审 Important-3）', () => {
       within(screen.getByTestId('resource-row-marketplace-agent-g')).getByRole('button', { name: '安装' }),
     );
     await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-agent-g'));
-    // 引导链：install 成功 → openPresetDialog → agent.list（EnablePresetDialog 挂载前置）
-    await waitFor(() => expect(agentList).toHaveBeenCalled());
     // 成功横幅经真实 store 链路渲染（installNotice → shell 横幅）
     await waitFor(() => expect(screen.getByTestId('install-notice')).toBeTruthy());
+    // 配置引导（openPresetDialog → agent.list）不再随安装自动触发
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(agentList).not.toHaveBeenCalled();
   });
 
-  it('marketplace MCP 安装成功不触发 agent 引导（门控负例）', async () => {
+  it('marketplace MCP 安装成功 → install 调用 + 成功横幅（无 agent 引导）', async () => {
     useResourceStore.setState({
       items: [mkInstallable({ id: 'marketplace-mcp-g', type: 'mcp', slug: 'mcp-g', name: '市场MCP' })],
     });
@@ -152,7 +156,6 @@ describe('安装链路回归锁（终审 Important-3）', () => {
       within(screen.getByTestId('resource-row-marketplace-mcp-g')).getByRole('button', { name: '安装' }),
     );
     await waitFor(() => expect(resourceInstall).toHaveBeenCalledWith('marketplace-mcp-g'));
-    // 横幅出现 = installResource 已 resolve，handleInstall 续体（引导分支）已跑完
     await waitFor(() => expect(screen.getByTestId('install-notice')).toBeTruthy());
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
@@ -161,62 +164,8 @@ describe('安装链路回归锁（终审 Important-3）', () => {
   });
 });
 
-// ── P2.1 Task 6：smithery needsConfig 连接配置闭环 + DXT/MCPB 导入入口 ────
-// 链路：安装按钮 → View.handleInstall 消费 store.installResource 透传的
-// SmitheryInstallResult → needsConfig:true 时弹 McpConnectDialog（不再静默）→
-// 提交 → ipc.resource.installSmitheryRemote(id, values) → load + 「已连接」横幅 + 关闭。
-describe('P2.1 Task 6：smithery 连接配置闭环', () => {
-  it('smithery 安装返回 needsConfig → 连接配置弹窗出现（不再静默），且不设成功横幅', async () => {
-    useResourceStore.setState({
-      items: [mkInstallable({ id: 'marketplace-mcp-weather', type: 'mcp', slug: 'weather', name: 'Weather MCP' })],
-    });
-    resourceInstall.mockResolvedValueOnce({
-      needsConfig: true,
-      schema: {
-        required: ['apiKey'],
-        properties: { apiKey: { title: 'API Key', description: 'key' } },
-      },
-    });
-    render(<ResourceLibraryView />);
-    fireEvent.click(
-      within(screen.getByTestId('resource-row-marketplace-mcp-weather')).getByRole('button', { name: '安装' }),
-    );
-    // 弹窗出现（标题「连接 {name}」——此前 needsConfig 静默无反馈，本任务闭合）
-    expect(await screen.findByRole('dialog', { name: '连接 Weather MCP' })).toBeInTheDocument();
-    // store 契约：needsConfig:true 时未安装——不设成功横幅
-    expect(screen.queryByTestId('install-notice')).toBeNull();
-  });
-
-  it('弹窗提交 → installSmitheryRemote 收到配置 → load 刷新 + 「已连接」横幅 + 弹窗关闭', async () => {
-    useResourceStore.setState({
-      items: [mkInstallable({ id: 'marketplace-mcp-weather', type: 'mcp', slug: 'weather', name: 'Weather MCP' })],
-    });
-    resourceInstall.mockResolvedValueOnce({
-      needsConfig: true,
-      schema: {
-        required: ['apiKey'],
-        properties: { apiKey: { title: 'API Key', description: 'key' } },
-      },
-    });
-    render(<ResourceLibraryView />);
-    fireEvent.click(
-      within(screen.getByTestId('resource-row-marketplace-mcp-weather')).getByRole('button', { name: '安装' }),
-    );
-    fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'sk-live-7' } });
-    fireEvent.click(screen.getByRole('button', { name: '连接' }));
-    await waitFor(() =>
-      expect(resourceInstallSmitheryRemote).toHaveBeenCalledWith('marketplace-mcp-weather', {
-        apiKey: 'sk-live-7',
-      }),
-    );
-    // 成功横幅复用既有 installNotice 机制（经真实 store 链路渲染）
-    await waitFor(() =>
-      expect(screen.getByTestId('install-notice').textContent).toContain('已连接：Weather MCP'),
-    );
-    // 提交成功后弹窗关闭
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  });
-
+// ── DXT/MCPB 本地包导入入口（P2.1 Task 6；smithery 连接配置弹窗已随安装流移除）──
+describe('DXT/MCPB 导入入口', () => {
   it('MCP「＋」菜单点「导入 DXT / MCPB 包」→ 挂载 ImportBundleDialog', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));

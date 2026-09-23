@@ -1,17 +1,16 @@
 // renderer/src/components/resource-library/TypePageShell.tsx
-// 资源页公共骨架（spec §2.1）：工具栏（搜索 + 来源 chips + AddMenu + 模式 Segmented）
-// + 已安装行列表 / RegistryBrowse + 右侧详情面板。三页同构，type 参数驱动。
+// 资源页公共骨架（spec §2.1）：工具栏（搜索 + 来源 chips + AddMenu）+ 已安装行列表
+// + 右侧详情面板。三页同构，type 参数驱动。P2.3 Task 1 起恒「已安装」单态——
+// 网络获取模式已移除（原 Segmented 位的外部市场入口由后续任务接入）。
 import { useState } from 'react';
 import type { ResourceFilter, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
 import { useResourceStore } from '../../stores/resource.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
-import { Segmented } from '../ui/Segmented';
 import { cn } from '../../lib/cn';
 import { AddMenu } from './AddMenu';
 import type { AddMenuItem } from './AddMenu';
 import { DanglingRefsCard } from './DanglingRefsCard';
-import { RegistryBrowse } from './RegistryBrowse';
 import { ResourceRow, TYPE_ICON } from './ResourceRow';
 import { ResourceDetail } from './ResourceDetail';
 
@@ -31,11 +30,6 @@ const EMPTY_COPY: Record<ResourceType, string> = {
   skill: '还没有技能',
 };
 
-const MODE_OPTIONS = [
-  { value: 'installed', label: '已安装' },
-  { value: 'registry', label: '网络获取' },
-] as const;
-
 /** 每类页的 AddMenu 按钮文案（lucide Plus 图标单独承担「+」语义） */
 const ADD_LABEL: Record<ResourceType, string> = {
   agent: '新建 / 导入',
@@ -47,7 +41,7 @@ interface TypePageShellProps {
   type: ResourceType;
   /** 类型专属「＋」下拉项（由 ResourceLibraryView 组装——弹窗开关都在那边） */
   addItems: AddMenuItem[];
-  /** 安装包装（marketplace agent 成功后弹配置引导——逻辑在 View 层） */
+  /** 本地安装回调（installed 列表 installable 项——p2p 导入；实现直连 store.installResource） */
   onInstall: (id: string) => void;
   /** custom agent 编辑入口（DefinitionEditor 挂载在 View 层） */
   onEditAgent: (id: string) => void;
@@ -59,8 +53,8 @@ interface TypePageShellProps {
 
 export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig }: TypePageShellProps) {
   const {
-    items, loading, error, installNotice, sourceFilter, query, mode,
-    setSourceFilter, setQuery, setMode, deleteResource,
+    items, loading, error, installNotice, sourceFilter, query,
+    setSourceFilter, setQuery, deleteResource,
   } = useResourceStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const Icon = TYPE_ICON[type];
@@ -87,53 +81,45 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           <Icon size={14} strokeWidth={1.75} aria-hidden />
           {type === 'agent' ? '智能体' : type === 'mcp' ? 'MCP 服务器' : '技能'}
         </h2>
-        {/* 外层搜索仅已安装模式渲染——registry 模式由 RegistryBrowse 自带搜索框（防双搜索框） */}
-        {mode === 'installed' && (
-          <div className="w-56">
-            <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
-          </div>
-        )}
-        {mode === 'installed' &&
-          SOURCE_CHIPS.map((chip) => (
-            <button
-              key={chip.key}
-              type="button"
-              className={cn(
-                'text-xs px-2 py-0.5 rounded-full transition-colors',
-                sourceFilter === chip.key
-                  ? 'bg-surface-active text-accent-600 dark:text-accent-300'
-                  : 'bg-surface-3 text-secondary hover:bg-surface-active',
-              )}
-              onClick={() => setSourceFilter(chip.key as ResourceSource | 'all')}
-            >
-              {chip.label}
-            </button>
-          ))}
+        <div className="w-56">
+          <Input placeholder="搜索名称 / 描述 / slug…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        {SOURCE_CHIPS.map((chip) => (
+          <button
+            key={chip.key}
+            type="button"
+            className={cn(
+              'text-xs px-2 py-0.5 rounded-full transition-colors',
+              sourceFilter === chip.key
+                ? 'bg-surface-active text-accent-600 dark:text-accent-300'
+                : 'bg-surface-3 text-secondary hover:bg-surface-active',
+            )}
+            onClick={() => setSourceFilter(chip.key as ResourceSource | 'all')}
+          >
+            {chip.label}
+          </button>
+        ))}
         <div className="ml-auto flex items-center gap-2">
-          <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => setMode(v)} aria-label="列表模式" />
           <AddMenu label={ADD_LABEL[type]} items={addItems} />
         </div>
       </div>
 
-      {/* 一次性成功横幅（双模式渲染——registry 安装成功同样可见，终审 Important-1） */}
+      {/* 一次性成功横幅（本地导入/安装反馈） */}
       {installNotice && (
         <div data-testid="install-notice" className="mx-4 mt-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm inline-flex items-center gap-1.5 self-start">
           {installNotice}
         </div>
       )}
 
-      {/* MCP 悬空引用提示卡（spec §6.3）——仅 MCP 页 installed 模式挂载；空/null 静默不渲染 */}
-      {type === 'mcp' && mode === 'installed' && <DanglingRefsCard />}
+      {/* MCP 悬空引用提示卡（spec §6.3）——仅 MCP 页挂载；空/null 静默不渲染 */}
+      {type === 'mcp' && <DanglingRefsCard />}
 
       {/* 主区 */}
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* store 错误行（双模式渲染——registry 安装失败同样可见；RegistryBrowse 的
-              Provider 拉取错误仍由其内部分支自渲染，终审 Important-1） */}
+          {/* store 错误行（导入/删除等写操作失败反馈） */}
           {error && <div className="text-center text-status-error text-sm py-2">加载失败：{error}</div>}
-          {mode === 'registry' ? (
-            <RegistryBrowse type={type} onInstall={onInstall} />
-          ) : loading && items.length === 0 ? (
+          {loading && items.length === 0 ? (
             <div className="text-center text-tertiary text-sm py-8">加载中…</div>
           ) : filteredItems.length === 0 ? (
             <EmptyState icon={Icon} title={EMPTY_COPY[type]} description="从右上角「＋」选择添加方式" />
@@ -157,7 +143,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
 
         {/* 右侧详情面板（条件渲染；Task 15 升级三段式，props 不变） */}
-        {mode === 'installed' && selected && (
+        {selected && (
           <ResourceDetail
             item={selected}
             onClose={() => setSelectedId(null)}

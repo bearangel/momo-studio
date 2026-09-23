@@ -1,33 +1,29 @@
 // renderer/src/components/resource-library/TypePageShell.test.tsx
 //
-// TypePageShell 行为（spec §2.1 页面骨架）：
-//   - 工具栏：模式 Segmented（已安装|网络获取）+ 来源 chips（已安装模式专属）+ AddMenu
+// TypePageShell 行为（spec §2.1 页面骨架；P2.3 Task 1 起恒「已安装」单态）：
+//   - 工具栏：搜索框 + 来源 chips + AddMenu（模式 Segmented 已随网络获取模式移除）
 //   - 已安装空列表 → EmptyState 文案（按类型命名）
 //   - 行点击选中 → 右侧详情面板挂载（「关闭详情」按钮出现）
-//   - mode=registry → 渲染 RegistryBrowse（provider 选择器出现，Task 6）
+//   - installNotice / store 错误行恒可见（原「双模式渲染」回归锁的单态化延续）
+//   - 全页唯一搜索框在工具栏内（原「消除双搜索框」防回归的单态化延续）
 //
 // Mock 方式遵循 ResourceLibraryView.test.tsx 既有形态（组件渲染测试变体）：不 vi.mock
 // ipc/client 模块，而是在真实 jsdom window 上装 window.api 属性——ipc.client 是真实
-// Proxy，registry 模式下 RegistryBrowse 经真通道取数；整窗替换（store 测试的
-// window = {...} 写法）会抹掉 DOM 构造器导致 react-dom 崩溃（momo-test-rules：
-// mock 收窄到 IPC 边界）。
+// Proxy；整窗替换（store 测试的 window = {...} 写法）会抹掉 DOM 构造器导致 react-dom
+// 崩溃（momo-test-rules：mock 收窄到 IPC 边界）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { TypePageShell } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
-import type { RegistryProviderMeta, RegistryListEntry, ResourceItem } from '../../ipc/types';
+import type { ResourceItem } from '../../ipc/types';
 
 const listMock = vi.fn();
-const registryProvidersMock = vi.fn();
-const registryListMock = vi.fn();
-// P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
+// MCP 页挂载 DanglingRefsCard → mount 拉一次悬空引用
 const danglingMcpRefsMock = vi.fn();
 
 const mockApi = {
   resource: {
     list: listMock,
-    registryProviders: registryProvidersMock,
-    registryList: registryListMock,
     danglingMcpRefs: danglingMcpRefsMock,
   },
 };
@@ -37,31 +33,26 @@ beforeEach(() => {
   listMock.mockResolvedValue([] as ResourceItem[]);
   danglingMcpRefsMock.mockReset();
   danglingMcpRefsMock.mockResolvedValue([]);
-  registryProvidersMock.mockReset();
-  registryProvidersMock.mockResolvedValue([
-    { key: 'builtin', label: '内置市场', region: 'local', types: ['agent', 'mcp', 'skill'], degraded: false },
-    { key: 'smithery', label: 'Smithery', region: 'intl', types: ['mcp'], degraded: false },
-  ] as RegistryProviderMeta[]);
-  registryListMock.mockReset();
-  registryListMock.mockResolvedValue({ entries: [] as RegistryListEntry[], degraded: false, hasMore: false });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   localStorage.clear();
 
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
-    activeType: 'mcp', mode: 'installed',
-    registryProviderKey: 'builtin',
+    activeType: 'mcp',
   });
 });
 
-describe('TypePageShell', () => {
-  it('工具栏含模式 Segmented（已安装|网络获取）、来源 chips、AddMenu', () => {
+describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
+  it('工具栏含搜索框、来源 chips、AddMenu；不渲染模式 Segmented 与「网络获取」', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    expect(screen.getByRole('radio', { name: '已安装' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: '网络获取' })).toBeTruthy();
+    // 单态断言：模式切换 Segmented（已安装|网络获取）整体不渲染
+    expect(screen.queryByRole('radio', { name: '已安装' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: '网络获取' })).toBeNull();
+    expect(screen.queryByText('网络获取')).toBeNull();
+    expect(screen.getByPlaceholderText('搜索名称 / 描述 / slug…')).toBeTruthy();
     expect(screen.getByText('预置')).toBeTruthy();
     expect(screen.getByRole('button', { name: '添加服务器' })).toBeTruthy();
   });
@@ -87,18 +78,8 @@ describe('TypePageShell', () => {
     expect(screen.getByLabelText('关闭详情')).toBeTruthy();
   });
 
-  it('mode=registry 时渲染 RegistryBrowse（provider 选择器出现）', async () => {
-    useResourceStore.setState({ mode: 'registry' });
-    render(
-      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
-    );
-    expect(screen.getByLabelText('registry provider')).toBeTruthy();
-    await waitFor(() => expect(screen.getByRole('option', { name: '内置市场' })).toBeTruthy());
-  });
-
-  // ── 终审 Important-1 回归锁：registry 模式安装反馈 ─────────────────────
-  it('registry 模式下安装成功横幅可见（不再被 mode 门控）', () => {
-    useResourceStore.setState({ mode: 'registry', installNotice: '已导入至「我的上传」' });
+  it('安装成功横幅可见（单态——无模式门控）', () => {
+    useResourceStore.setState({ installNotice: '已导入至「我的上传」' });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
@@ -106,24 +87,21 @@ describe('TypePageShell', () => {
     expect(screen.getByText('已导入至「我的上传」')).toBeTruthy();
   });
 
-  it('registry 模式下 store 错误行可见（安装失败反馈）', () => {
-    useResourceStore.setState({ mode: 'registry', error: '导入失败：boom' });
+  it('store 错误行可见（导入失败反馈，单态——无模式门控）', () => {
+    useResourceStore.setState({ error: '导入失败：boom' });
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
     expect(screen.getByText('加载失败：导入失败：boom')).toBeTruthy();
   });
 
-  it('registry 模式外层搜索框不渲染（消除双搜索框）', () => {
-    useResourceStore.setState({ mode: 'registry' });
+  it('全页唯一搜索框且在工具栏内（原双搜索框防回归的单态延续）', () => {
     render(
       <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
     );
-    // 全页只剩 RegistryBrowse 自带的搜索框
     expect(screen.getAllByPlaceholderText('搜索名称 / 描述 / slug…')).toHaveLength(1);
-    // 外层工具栏（含页标题 h2）内不再有搜索框
     const toolbar = screen.getByText('MCP 服务器').parentElement;
     expect(toolbar).not.toBeNull();
-    expect(within(toolbar as HTMLElement).queryByPlaceholderText('搜索名称 / 描述 / slug…')).toBeNull();
+    expect(within(toolbar as HTMLElement).getByPlaceholderText('搜索名称 / 描述 / slug…')).toBeTruthy();
   });
 });

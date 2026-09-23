@@ -2,6 +2,8 @@
 // 资源库壳（spec §2.1 重设计）：TypeSidebar（Agent/MCP/Skill 二级菜单）+ TypePageShell。
 // 弹窗开关全部集中在本层；agent 专属回调和 preset/edit 逻辑自旧单页 View 平移。
 // Task 10/12/13 接线三个新弹窗；Task 14 新建智能体入口已替换为 AgentCreateWizard。
+// P2.3 Task 1：移除网络获取模式接线（registry 安装流 / smithery 连接配置弹窗）；
+// 预置启用挂载位保留（presetTarget / EnablePresetDialog——Task 4 接回预置库触发）。
 import { useEffect, useState } from 'react';
 import { useResourceStore } from '../../stores/resource.store';
 import { useAgentStore } from '../../stores/agent.store';
@@ -17,14 +19,13 @@ import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
 import { McpConfigDialog } from './McpConfigDialog';
 import { McpJsonPasteDialog } from './McpJsonPasteDialog';
-import { McpConnectDialog } from './McpConnectDialog';
 import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
-import type { AgentDefinition, JsonSchemaLike, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
+import type { AgentDefinition, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
-  const { activeType, setActiveType, setMode, items, installResource, load } = useResourceStore();
+  const { activeType, setActiveType, items, installResource, load } = useResourceStore();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
@@ -36,12 +37,6 @@ export function ResourceLibraryView() {
   const [mcpJsonOpen, setMcpJsonOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
   const [bundleOpen, setBundleOpen] = useState(false);
-  // P2.1 Task 6：smithery needsConfig 连接配置目标（null = 弹窗关）
-  const [connectTarget, setConnectTarget] = useState<{
-    id: string;
-    name: string;
-    schema: JsonSchemaLike;
-  } | null>(null);
   const [editingDef, setEditingDef] = useState<AgentDefinition | null>(null);
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
   // P2.2 Task 7：远程 MCP 配置编辑目标（null = 弹窗关）。name 是 MCP 定义名
@@ -83,30 +78,10 @@ export function ResourceLibraryView() {
     }
   };
 
-  const handleInstall = async (itemId: string): Promise<void> => {
-    const item = items.find((i) => i.id === itemId);
-    const result = await installResource(itemId);
-    // P2.1 Task 6：smithery needsConfig 两态——需补配置时弹连接配置弹窗（此前静默
-    // 无反馈），待用户提交 installSmitheryRemote 后才完成安装；store 已约定此态
-    // 不刷列表不设横幅，此处直接 return
-    if (result && typeof result === 'object' && result.needsConfig && result.schema) {
-      setConnectTarget({ id: itemId, name: item?.name ?? itemId, schema: result.schema });
-      return;
-    }
-    // marketplace agent 安装成功 → 配置引导（def 刚落库需配模型；取消可稍后从「配置」再配）
-    if (result && item?.type === 'agent' && item.source === 'marketplace') {
-      await openPresetDialog(itemId);
-    }
-  };
-
-  // smithery 连接配置提交：完成二段安装 → 刷新列表 → 「已连接」横幅。横幅复用既有
-  // installNotice 机制，经 store 全局 setState 写入（与 installResource 成功路径同形，
-  // 零新增 store API）；弹窗在 onSubmit 成功后自关（失败红字留在弹窗内由其自渲染）
-  const handleConnectSubmit = async (config: Record<string, string>): Promise<void> => {
-    if (!connectTarget) return;
-    await ipc.resource.installSmitheryRemote(connectTarget.id, config);
-    await load();
-    useResourceStore.setState({ installNotice: `已连接：${connectTarget.name}` });
+  // 本地安装流（installed 列表 installable 项——p2p 导入）：直连 store.installResource，
+  // 错误与成功横幅均由 store 落位（P2.3 Task 1 起 registry 安装包装流已移除）
+  const handleInstall = (itemId: string): void => {
+    void installResource(itemId);
   };
 
   const closePresetDialog = (): void => {
@@ -132,13 +107,12 @@ export function ResourceLibraryView() {
     useResourceStore.setState({ installNotice: `配置已更新：${configTarget.displayName}` });
   };
 
-  // ── 三类页的「＋」菜单（最后一条固定「从网络获取」）───────────────────
+  // ── 三类页的「＋」菜单（本地导入单态；P2.3 Task 1 移除「从网络获取」项）───
   const addItemsFor = (type: ResourceType): AddMenuItem[] => {
     if (type === 'agent') {
       return [
         { key: 'wizard', title: '新建智能体…', hint: '分步向导：基础信息 → 提示词 → 能力 → 模型', onSelect: () => setCreateAgentOpen(true) },
         { key: 'import-yaml', title: '导入 YAML 文件…', hint: 'manifest 格式，校验后注册为自定义 agent', onSelect: () => setImportYamlOpen(true) },
-        { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
       ];
     }
     if (type === 'mcp') {
@@ -146,13 +120,11 @@ export function ResourceLibraryView() {
         { key: 'form', title: '手动配置…', hint: '名称 / 命令 / 参数 / 环境变量（高级项默认折叠）', onSelect: () => setRegisterMcpOpen(true) },
         { key: 'json', title: '粘贴 JSON…', hint: 'mcpServers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
         { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
-        { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
       ];
     }
     return [
       { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
       { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
-      { key: 'registry', title: '从网络获取…', hint: '浏览注册表（内置市场）', onSelect: () => setMode('registry') },
     ];
   };
 
@@ -175,15 +147,7 @@ export function ResourceLibraryView() {
       {mcpJsonOpen && (
         <McpJsonPasteDialog onClose={() => setMcpJsonOpen(false)} onSuccess={() => void load()} />
       )}
-      {/* P2.1 Task 6：smithery 连接配置 + DXT/MCPB 本地包导入 */}
-      {connectTarget && (
-        <McpConnectDialog
-          serverName={connectTarget.name}
-          schema={connectTarget.schema}
-          onSubmit={handleConnectSubmit}
-          onClose={() => setConnectTarget(null)}
-        />
-      )}
+      {/* DXT/MCPB 本地包导入（P2.1 Task 6） */}
       {bundleOpen && (
         <ImportBundleDialog onClose={() => setBundleOpen(false)} onSuccess={() => void load()} />
       )}

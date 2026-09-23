@@ -25,7 +25,6 @@ import type {
   ResourceItem,
   ResourceFilter,
   ResourceType,
-  RegistryProviderMeta,
   SmitheryInstallResult,
 } from '../ipc/types';
 
@@ -33,7 +32,7 @@ interface ResourceStore {
   items: ResourceItem[];
   loading: boolean;
   error: string | null;
-  /** 安装成功提示横幅文本（null = 无；下一次 filter/mode/type 切换清掉，load 不清） */
+  /** 安装成功提示横幅文本（null = 无；下一次 filter/type 切换清掉，load 不清） */
   installNotice: string | null;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';
@@ -44,10 +43,6 @@ interface ResourceStore {
 
   /** 资源库重设计：当前激活的资源页类型（无 'all'——三页结构） */
   activeType: ResourceType;
-  /** 页面模式：installed=已安装列表 / registry=网络获取（注册表浏览） */
-  mode: 'installed' | 'registry';
-  /** 网络获取模式当前 provider（P2 双轨 hub，Task 6）——选择经 localStorage 记忆 */
-  registryProviderKey: RegistryProviderMeta['key'];
 
   /** 按当前 filter 重新拉取列表 */
   load: () => Promise<void>;
@@ -57,12 +52,8 @@ interface ResourceStore {
   setSourceFilter: (f: ResourceFilter['source'] | 'all') => void;
   /** 设置搜索关键词（不触发 IPC）；同时清掉陈旧的成功提示 */
   setQuery: (q: string) => void;
-  /** 切换资源页：驱动 typeFilter、持久化、立即刷新；并复位到已安装模式 */
+  /** 切换资源页：驱动 typeFilter、持久化、立即刷新 */
   setActiveType: (t: ResourceType) => void;
-  /** 切换页面模式（registry 数据由 RegistryBrowse 自行经 Provider 拉取，不动 items） */
-  setMode: (m: 'installed' | 'registry') => void;
-  /** 切换网络获取 provider：持久化记忆 + 更新状态（写失败静默——隐私模式等场景不影响内存） */
-  setRegistryProvider: (key: RegistryProviderMeta['key']) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
   /**
@@ -82,8 +73,6 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   sourceFilter: 'all',
   query: '',
   activeType: 'agent',
-  mode: 'installed',
-  registryProviderKey: 'builtin',
 
   load: async () => {
     set({ loading: true, error: null });
@@ -119,20 +108,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     } catch {
       // 忽略
     }
-    set({ activeType: t, typeFilter: t, mode: 'installed', installNotice: null });
+    set({ activeType: t, typeFilter: t, installNotice: null });
     void get().load();
-  },
-
-  setMode: (m) => set({ mode: m, installNotice: null }),
-
-  setRegistryProvider: (key) => {
-    // 持久化上次选择（写入失败静默——隐私模式等场景不影响内存状态）
-    try {
-      localStorage.setItem('momo.resourceLibrary.providerKey', key);
-    } catch {
-      // 忽略
-    }
-    set({ registryProviderKey: key });
   },
 
   deleteResource: async (id) => {
@@ -177,17 +154,3 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   useResourceStore.setState({ activeType: valid, typeFilter: valid });
 }
 
-// 启动恢复上次选择的网络获取 provider（失效值回退 'builtin'；Task 6 记忆）。
-// 白名单缩 ['builtin','smithery']——P2.1 移除 modelscope 后，记忆了它的存量回退 builtin。
-{
-  const persisted = (() => {
-    try {
-      return localStorage.getItem('momo.resourceLibrary.providerKey');
-    } catch {
-      return null;
-    }
-  })();
-  const valid: RegistryProviderMeta['key'] =
-    persisted === 'builtin' || persisted === 'smithery' ? persisted : 'builtin';
-  useResourceStore.setState({ registryProviderKey: valid });
-}
