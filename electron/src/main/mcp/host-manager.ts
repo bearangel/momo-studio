@@ -256,6 +256,34 @@ export async function stopAllMcpForWorkspace(workspaceId: string): Promise<void>
   );
 }
 
+/**
+ * P2.2：按名字驱逐全部 workspace 的池连接（编辑生效用；下回合 getOrStartMcp
+ * 用库里的新定义重建连接）。与 stopAllMcpForWorkspace 的差别：按 mcpName 跨
+ * workspace 匹配（编辑是全局定义变更，所有 workspace 的旧连接一律失效）。
+ * 并发 disconnect 各实例；启动失败态（rejected promise）或 disconnect 失败
+ * 吞掉——驱逐是尽力回收，不阻塞编辑主流程。
+ */
+export async function evictMcpByName(name: string): Promise<void> {
+  const keys = [...pool.keys()].filter((k) => k.endsWith(`:${name}`));
+  // 先收集并删除全部 key，再并发 await+disconnect（避免边遍历边改 Map）
+  const promises = keys.map((k) => {
+    const p = pool.get(k);
+    pool.delete(k);
+    return p;
+  });
+  await Promise.all(
+    promises.map(async (p) => {
+      if (!p) return;
+      try {
+        const client = await p;
+        await client.disconnect();
+      } catch {
+        // 启动失败或进程已退出，无需 disconnect
+      }
+    }),
+  );
+}
+
 /** 从 SQLite 读取已注册的 MCP server 定义（按 name 查找）。不存在返回 null。 */
 export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
@@ -305,6 +333,37 @@ export function registerMcpDefinition(config: McpServerConfig): void {
     transport,
     source: config.source ?? 'marketplace',
   });
+}
+
+/**
+ * P2.2：编辑已装远程 MCP 定义（专用 UPDATE——保 id/installed_at，不走
+ * INSERT OR REPLACE 换行；Task 4 resource 层编辑服务消费）。仅限
+ * streamable_http 条目；url 强制 https（与注册同安全边界）；configSchema
+ * 缺省时保留原列值（表单未动 schema 就不覆盖）。
+ */
+export function updateRemoteMcpDefinition(
+  name: string,
+  url: string,
+  headers: Record<string, string>,
+  configSchema?: McpConfigSchema,
+): void {
+  if (!url.startsWith('https://')) {
+    throw new Error(`远程 MCP ${name} 配置更新失败：url 必须以 https:// 开头`);
+  }
+  const db = getDb();
+  const row = db
+    .prepare('SELECT transport, config_schema FROM mcp_definitions WHERE name = ?')
+    .get(name) as { transport: string; config_schema: string } | undefined;
+  if (!row) throw new Error(`MCP ${name} 未注册`);
+  if (normalizeTransport(row.transport) !== 'streamable_http') {
+    throw new Error(`MCP ${name} 不是远程条目，不支持配置编辑`);
+  }
+  const schemaJson =
+    configSchema !== undefined ? JSON.stringify(configSchema) : row.config_schema || '{}';
+  db.prepare(
+    'UPDATE mcp_definitions SET url = ?, headers_json = ?, config_schema = ? WHERE name = ?',
+  ).run(url, JSON.stringify(headers), schemaJson, name);
+  logger.info('MCP 定义配置已更新', { name }); // 不打 url/headers（含 key）
 }
 
 /**
