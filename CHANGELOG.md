@@ -50,6 +50,12 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### 已装远程 MCP 配置编辑 + MCP 引用对齐（v2.14 账本，spec 2026-09-23 P2.2）
+P2.1 主机验收驱动：Smithery 装完 API key 无处改（401 只能卸载重装）、agent 按名引用 MCP 名字对不上即静默悬空。
+- 配置编辑链：migration 040（`config_schema` 列，安装时落表单元数据）→ `getMcpConfig` 三级降级（库存 schema → Smithery 实时拉取+回写 → 裸表单）→ `McpConfigDialog` 双模式弹窗（schema 字段回显/裸模式 url+headers 键值行；D9：schema 模式 url 预填去 query）→ `updateRemoteMcpConfig`（`composeRemoteConfig` 单点 x-from 分流 + 专用 UPDATE 保 id/installed_at + name 级池驱逐即时生效）
+- 引用对齐：卸载级联（三 deleteRegistered 断面挂 `removeMcpRefsFromAgents`，单行失败降级不破坏卸载原子性 D8）+ MCP 页「未满足引用」提示卡（`listDanglingMcpRefs` 扫描 agent 定义悬空引用，点名 agent 与引用名）
+- 配置入口：已装远程条目详情「配置」按钮（`custom.transport` 双镜像填充 hub/custom 两点位）
+
 ### Smithery 直连 + DXT/MCPB 导入（v2.13 账本，spec 2026-09-23 P2.1）
 P2 主机验收驱动：registry 已 100% hosted 且 install-config 端点死亡 → 直连翻转；魔搭轨移除。
 - Smithery 直连安装（A1 免账号）：详情 `deploymentUrl` + `configSchema`（x-from 分 header/query，缺省 header）→ needsConfig 弹窗（McpConnectDialog）→ `installSmitheryRemote` 注册远程 MCP；`installable = isDeployed`
