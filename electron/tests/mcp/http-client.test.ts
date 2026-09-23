@@ -116,8 +116,7 @@ describe('HttpMcpClient（streamable_http 传输）', () => {
     });
     const client = new HttpMcpClient(cfg);
     await client.connect();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await (client as any).callTool('t1', {});
+    const result = await client.callTool('t1', {});
     expect(result).toEqual({
       content: [
         { type: 'text', text: 'a' },

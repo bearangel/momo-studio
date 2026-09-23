@@ -156,8 +156,7 @@ describe('HttpMcpClient raw shape（消除 typeof string 分支）', () => {
     });
     const client = new HttpMcpClient(cfg);
     await client.connect();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await (client as any).callTool('op', {});
+    const result = await client.callTool('op', {});
     expect(result).toEqual({
       content: [{ type: 'text', text: 'upstream-down' }],
       isError: true,

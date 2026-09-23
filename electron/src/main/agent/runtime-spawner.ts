@@ -274,11 +274,12 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     }
   };
 
-  // P1 MCP 发现失败可观测性：per-child 待发列表（事件流渲染入口）
+  // P1 MCP 发现失败可观测性：per-child 待发列表（DB + 日志可见；UI 渲染待 P3）
   // 子进程 mcp-bridge discoverMcpTools 单 server 失败时发
   // {type:'mcp-discovery-failed', serverName, error}；主进程累积到首个 start
-  // chunk 时一次性 flush 为 status_change 事件挂到该消息行（message_events 表
-  // 即事件流渲染入口——renderer 已有事件流渲染，无需新增 UI）。
+  // chunk 时一次性 flush 为 status_change 事件挂到该消息行。注意：renderer
+  // stream-aggregator 目前只消费 status_change 的 status 字段，notice 载荷
+  // 尚无 UI 消费者——可见性现状 = message_events 落库 + electron-log（补渲染列 P3）。
   const pendingDiscoveryFailures: Array<{ serverName: string; error: string }> = [];
 
   // wrappedOnChunk：流 chunk 转给调用方（routeChunkToBuffer）前先尝试 flush
