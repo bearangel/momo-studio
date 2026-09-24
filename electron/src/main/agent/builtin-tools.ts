@@ -111,7 +111,7 @@ export function getOrchestrationToolDefs(subAgents: SubAgentRef[]): LLMToolDef[]
     {
       name: 'dispatch_followup',
       description:
-        '对已完成的 dispatch 任务追问。仅可使用 dispatch 返回的 taskId；子 agent 保留该链全部上下文续答，无需重述背景。',
+        '对已完成的 dispatch 任务追问（异步）：立即返回送达确认、不阻塞等待——可继续其他工作或直接结束本轮回复；子 agent 保留该链全部上下文续答，回执完成后将作为新输入自动送达（含结果全文），无需 gather 或轮询。仅可使用 dispatch 返回的 taskId。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -123,7 +123,7 @@ export function getOrchestrationToolDefs(subAgents: SubAgentRef[]): LLMToolDef[]
     },
     ...subAgents.map((sub) => ({
       name: `dispatch_bg:${sub.slug}`,
-      description: `非阻塞后台派发给 ${sub.description || sub.slug}：立即返回 { taskId } 句柄。使用模式：先派发（可多个）→ 继续其他工作 → 用 dispatch_gather 收割结果。`,
+      description: `非阻塞后台派发给 ${sub.description || sub.slug}：立即返回 { taskId } 句柄。使用模式：先派发（可多个）→ 继续其他工作 → 用 dispatch_gather 收割结果。回合结束时仍在途的任务不会丢失——完成回执将作为新输入自动送达；回合内已完成的任务应在结束回复前用 dispatch_gather 收割（正常收尾不补投未收割的已完成结果；回合被预算/中断强制截断时系统会自动补投）。`,
       inputSchema: {
         type: 'object',
         properties: {

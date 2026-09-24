@@ -13,8 +13,11 @@
 // 统一用 process.stdout/stderr 输出，由父进程 runtime-spawner 转发到主日志。
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
+import type { ThinkingRequest } from '../llm/provider-presets';
 import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext } from './runtime-config';
 import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint, formatClockHint, formatWorkspaceHygieneHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
@@ -64,6 +67,9 @@ import {
   setDispatchTraceEnabled,
   getSessionDispatchScope,
 } from './dispatch-wait';
+// v2.9 事件驱动 dispatch：仅取心跳间隔契约常量（与主进程 DispatchRegistry
+// 死亡检测共享同一数值源；模块为纯逻辑，子进程引入无副作用）
+import { HEARTBEAT_INTERVAL_MS } from './dispatch-registry';
 import { getMemoryProvider, type TaskContext } from '../memory';
 import { getTodosForSession, completeInProgressTodos } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
@@ -421,13 +427,24 @@ export async function runChatLoop(
    */
   historyPrefix?: LLMMessage[],
 ): Promise<string> {
+  // 供应商预设：思维配置随 AGENT_CONFIG 定型（缺省 = 不发参数）；
+  // P0-3：outputTokens 透传为 LLM max_tokens（model-catalog 单点配置，
+  // 0=未知不透传——OpenAI 沿用模型默认，Anthropic 回退内置缺省）；
+  // B1：官方 reasoning 模型参数名分流（max_completion_tokens）。
+  // 全部缺省时保持 undefined 第三参（P3 接线锁锁定的旧 wire 形态）
+  const llmOpts: { thinking?: ThinkingRequest; maxTokens?: number; maxTokensParam?: 'max_completion_tokens' } = {
+    ...(config.thinking ? { thinking: config.thinking } : {}),
+    ...(config.outputTokens > 0 ? { maxTokens: config.outputTokens } : {}),
+    ...(config.modelMaxTokensParam === 'max_completion_tokens'
+      ? { maxTokensParam: 'max_completion_tokens' as const }
+      : {}),
+  };
   const llm = createLLMProvider(
     // P3 Task 1：modelPlatform 显式透传（来自 buildSpawnOpts provider.platform）。
     // undefined 时 createLLMProvider 退回到 baseUrl 启发式（v1.3 兼容路径）。
     { model: config.modelName, baseUrl: config.modelBaseUrl, ...(config.modelPlatform ? { provider: config.modelPlatform } : {}) },
     config.llmApiKey,
-    // 供应商预设：思维配置随 AGENT_CONFIG 定型（缺省 = 不发参数）
-    config.thinking ? { thinking: config.thinking } : undefined,
+    Object.keys(llmOpts).length > 0 ? llmOpts : undefined,
   );
 
   const budgetHint = formatBudgetHint(config.maxToolCalls);
@@ -699,6 +716,21 @@ export async function runChatLoop(
   // v1.5.6 task_complete 分段计数：每调一次 +1，超 MAX_TASK_SEGMENTS 强制结束
   let segmentCount = 0;
   let accumulatedText = '';
+  // P0-1（结果完整性，spec 2026-09-24 §6）：已持久化段全文收集——终态回执
+  // 重组「全部段 + 末段尾巴」。旧实现只回传 accumulatedText（最后一次
+  // task_complete 之后的文本）——长报告分段后 task_reply.body 只剩收尾句，
+  // 前段内容全部丢失（会话 e7f8ec7e 实测：14 项报告回执只剩 1 行摘要）。
+  const completedSegments: string[] = [];
+  /**
+   * 终态全文组装：全部已持久化段（task_complete 顺序）+ 末段累积文本 + 出口
+   * 特有的额外段（如分段上限时未持久化的 summary），空段过滤、双换行连接。
+   * @param fallback 全部为空时的出口占位文案（语义同旧 `|| '(空回复)'`）
+   */
+  const buildFinalText = (fallback: string, ...extras: string[]): string => {
+    const parts = [...completedSegments, accumulatedText.trim(), ...extras.map((e) => e.trim())];
+    const joined = parts.filter((p) => p.length > 0).join('\n\n');
+    return joined.length > 0 ? joined : fallback;
+  };
   // turn mandate（spec §5.1）：收尾模式标记——置位后下一轮 LLM 请求不传 tools，
   // 模型无工具可调只能输出终文，回合机械终止。仅顶层 chat 路径的 compact 分支
   // 置位；steer drain 出新指令时清除（新指令优先于收尾）。回合级内存状态，
@@ -1048,7 +1080,7 @@ export async function runChatLoop(
         continue;
       }
       process.off('message', abortListener);
-      const finalText = accumulatedText.trim() || '(空回复)';
+      const finalText = buildFinalText('(空回复)');
       // 回合收尾 todo 收敛（P0「最后一项永不完成」）：LLM 的 todowrite 是转移
       // 驱动，最后一项的完成动作与终文重合、无下一项触发簿记——终文即交付，
       // in_progress 项由 harness 机械标 completed。收敛 chunk 必须先于 end：
@@ -1095,7 +1127,9 @@ export async function runChatLoop(
       const dupCount = recentToolCallSignatures.filter((s) => s === sig).length;
       if (dupCount >= MAX_DUPLICATE_TOOLS) {
         process.off('message', abortListener);
-        const finalText = accumulatedText.trim() || `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${tc.name}，已强制终止防循环)`;
+        const finalText = buildFinalText(
+          `(检测到连续 ${MAX_DUPLICATE_TOOLS} 次重复操作 ${tc.name}，已强制终止防循环)`,
+        );
         sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
@@ -1103,7 +1137,7 @@ export async function runChatLoop(
 
       if (budgetRemaining <= 0) {
         process.off('message', abortListener);
-        const finalText = accumulatedText.trim() || '(工具预算耗尽)';
+        const finalText = buildFinalText('(工具预算耗尽)');
         sendEndChunk({ type: 'end', streamSessionId, finishReason: 'budget_exhausted' });
         if (stats) stats.toolCallsUsed = toolCallCount;
         return finalText;
@@ -1117,9 +1151,10 @@ export async function runChatLoop(
         const nextStep = typeof tc.arguments.nextStep === 'string' ? tc.arguments.nextStep : '';
         segmentCount++;
         if (segmentCount > MAX_TASK_SEGMENTS) {
-          // 防无限分段：超过上限时强制结束 chat loop
+          // 防无限分段：超过上限时强制结束 chat loop。
+          // 溢出段未持久化——summary 作为额外段并入终态全文（不丢）
           process.off('message', abortListener);
-          const finalText = accumulatedText.trim() || summary || '(分段上限)';
+          const finalText = buildFinalText('(分段上限)', summary);
           sendEndChunk({ type: 'end', streamSessionId, finishReason: 'stop' });
           if (stats) stats.toolCallsUsed = toolCallCount;
           return finalText;
@@ -1127,6 +1162,8 @@ export async function runChatLoop(
 
         // 持久化当前段：summary（如有）优先，否则用 accumulatedText
         const segText = summary || accumulatedText.trim() || '(空段)';
+        // P0-1：段全文收集——终态回执重组用
+        completedSegments.push(segText);
         // 分段持久化的 session id 加后缀，避免与最终消息冲突
         const segSessionId = `${streamSessionId}#seg${segmentCount}`;
         // 分段行由 segment_boundary chunk 经主进程 routeChunkToBuffer 落 SQLite。
@@ -1291,7 +1328,7 @@ export async function runChatLoop(
         // （与原串行 catch 分支语义一致，防「中断-重试」死循环）
         if (abortController.signal.aborted || settled.some((r) => r.status === 'rejected')) {
           process.off('message', abortListener);
-          const finalText = accumulatedText.trim() || '(中断)';
+          const finalText = buildFinalText('(中断)');
           sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
           if (stats) {
             stats.toolCallsUsed = toolCallCount;
@@ -1315,7 +1352,7 @@ export async function runChatLoop(
         // 段内截断（§4.3）：已执行成员的回执已发，按截断原因退出
         if (exitAfterSegment) {
           process.off('message', abortListener);
-          const finalText = accumulatedText.trim() || exitAfterSegment.fallbackText;
+          const finalText = buildFinalText(exitAfterSegment.fallbackText);
           sendEndChunk({ type: 'end', streamSessionId, finishReason: exitAfterSegment.finishReason });
           if (stats) stats.toolCallsUsed = toolCallCount;
           return finalText;
@@ -1355,7 +1392,7 @@ export async function runChatLoop(
         // （否则 LLM 看到失败结果后重试，形成「中断-重试-中断」死循环）
         if ((err as Error).name === 'AbortError' || abortController.signal.aborted) {
           process.off('message', abortListener);
-          const finalText = accumulatedText.trim() || '(中断)';
+          const finalText = buildFinalText('(中断)');
           sendEndChunk({ type: 'end', streamSessionId, finishReason: 'interrupted' });
           if (stats) {
             stats.toolCallsUsed = toolCallCount;
@@ -1474,6 +1511,89 @@ export function __resetBrowserBridgeForTest(): void {
   browserBridgeDone = false;
 }
 
+/**
+ * v2.9 事件驱动 dispatch：dispatch 任务心跳上报器（runTaskChatLoop 消费）。
+ *
+ * 60s 周期 in_progress task_reply（HEARTBEAT_INTERVAL_MS 与主进程 DispatchRegistry
+ * 死亡检测共享同一数值源）。主进程据 lastHeartbeatAt 判活：静默超
+ * HEARTBEAT_DEAD_THRESHOLD_MS 判无响应，经统一回传路径 settle failed（PM 侧
+ * 同步等待立即 reject，替代盲等 9 分钟）。
+ *
+ * 首拍立即发送——注册即证明子 agent 已启动，消除「派发后排队/首 LLM 调用慢」
+ * 期间的死亡误判窗口。timer unref：不阻塞进程自然退出。
+ *
+ * @returns 停止函数（终态回执发送前必须调用——防迟拍 in_progress 翻活已 settle 的链）
+ */
+export function startDispatchHeartbeat(
+  roomId: string,
+  config: RuntimeConfig,
+  dispatchContext: NonNullable<TaskConfig['dispatchContext']>,
+  stats: { toolCallsUsed: number },
+  maxToolCalls: number | undefined,
+): () => void {
+  const emitHeartbeat = (): void => {
+    sendTaskReplyEvent(roomId, config.agentUserId, {
+      body: `子任务运行中（已用 ${stats.toolCallsUsed} 次工具调用）`,
+      task_id: dispatchContext.task_id,
+      status: 'in_progress',
+      ...(typeof maxToolCalls === 'number' && maxToolCalls > 0
+        ? { progress_pct: Math.min(99, Math.floor((stats.toolCallsUsed / maxToolCalls) * 100)) }
+        : {}),
+      tool_calls_used: stats.toolCallsUsed,
+      reply_to: dispatchContext.fromAssignmentId,
+    });
+  };
+  emitHeartbeat();
+  const timer = setInterval(emitHeartbeat, HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+  return (): void => clearInterval(timer);
+}
+
+/** P0-2（结果完整性，spec 2026-09-24 §6）：dispatch 回执落盘阈值（字节）——超过则全文写盘、body 换引用 */
+export const DISPATCH_BODY_SPILL_THRESHOLD_BYTES = 8 * 1024;
+/** 落盘引用里的头部摘录长度（字符） */
+const SPILL_EXCERPT_CHARS = 1500;
+
+/**
+ * P0-2：dispatch 终态回执超长落盘 + 摘要引用回传。
+ *
+ * 全文写入 `<workspaceDir>/.momo-scratch/dispatch/<chainId>.md`（scratch 约定
+ * 目录 + workspace 沙箱内——PM 的 read_file 可直接 offset/limit 分页读取），
+ * body 替换为「落盘说明 + 头部摘录 + 相对路径」。生产点在子进程发送 task_reply
+ * 前（单点收口——同步等待、gather 收割、v2.9 注入送达三种消费路径拿到同一形态）。
+ *
+ * 写盘失败降级返回原文（回执绝不因落盘失败而丢失）。阈值内原样返回（零开销）。
+ */
+export function spillDispatchBodyIfNeeded(
+  body: string,
+  chainTaskId: string,
+  workspaceDir: string,
+): string {
+  const totalBytes = Buffer.byteLength(body, 'utf8');
+  if (totalBytes <= DISPATCH_BODY_SPILL_THRESHOLD_BYTES) return body;
+  // B3（安全 review）：taskId 来自 dispatch 事件 content（子进程自报字段）——
+  // 非法形状（路径穿越字符 / 超长）不得进入文件名，fallback 随机名（原文仍完整落盘）
+  const SAFE_CHAIN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const fileStem = SAFE_CHAIN_ID_RE.test(chainTaskId) ? chainTaskId : `unsafe-${randomUUID()}`;
+  const relPath = `.momo-scratch/dispatch/${fileStem}.md`;
+  try {
+    const absDir = path.join(workspaceDir, '.momo-scratch', 'dispatch');
+    fs.mkdirSync(absDir, { recursive: true });
+    fs.writeFileSync(path.join(absDir, `${fileStem}.md`), body, 'utf8');
+  } catch (err) {
+    process.stderr.write(
+      `[dispatch] 回执落盘失败（回传原文）: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return body;
+  }
+  const excerpt = body.slice(0, SPILL_EXCERPT_CHARS);
+  return (
+    `【结果过长已落盘】全文 ${body.length} 字符（约 ${Math.round(totalBytes / 1024)}KB），已写入 ${relPath}（可用 read_file 的 offset/limit 分页读取）。\n` +
+    `--- 头部摘录（前 ${SPILL_EXCERPT_CHARS} 字符）---\n${excerpt}\n--- 摘要结束 ---\n` +
+    `需要完整内容时读取 ${relPath}。`
+  );
+}
+
 export async function runTaskChatLoop(
   cfg: TaskConfig,
   config: RuntimeConfig,
@@ -1518,6 +1638,12 @@ export async function runTaskChatLoop(
   //    stats 用于在 task-end IPC 里上报工具调用次数。
   const stats: RunChatLoopStats = { toolCallsUsed: 0 };
 
+  // v2.9 事件驱动 dispatch：dispatch 任务心跳上报（emitDispatchHeartbeat 首拍
+  // 立即发送 + 60s 周期；终态回执前停止——见 runChatLoop 返回后清理）
+  const stopHeartbeat = dispatchContext
+    ? startDispatchHeartbeat(roomId, config, dispatchContext, stats, taskConfig.maxToolCalls)
+    : undefined;
+
   try {
     const finalText = await runChatLoop(
       roomId,
@@ -1543,6 +1669,8 @@ export async function runTaskChatLoop(
       // 用例——摘掉本解构/传参该锁必红（前缀静默丢失不报错）。
       historyPrefix,
     );
+    // 心跳先停再发终态回执——防终态 reply 后 timer 再发 in_progress 翻活主进程链
+    stopHeartbeat?.();
     // dispatch 任务完成 → 经内部事件桥回 task_reply（reply_to 精确路由回 PM，
     // RouterService → notifyTaskReply → PM 子进程 handleTaskReply resolve dispatch）
     if (dispatchContext) {
@@ -1555,7 +1683,9 @@ export async function runTaskChatLoop(
           ? 'completed'
           : 'failed';
       const reply = buildTaskReply({
-        body: finalText,
+        // P0-2：超长回执落盘 + 摘要引用（单点收口——同步等待 / gather / v2.9
+        // 注入送达三种消费路径拿到同一形态）
+        body: spillDispatchBodyIfNeeded(finalText, dispatchContext.task_id, config.workspaceDir),
         taskId: dispatchContext.task_id,
         status: replyStatus,
         toolCallsUsed: stats.toolCallsUsed,
@@ -1564,6 +1694,8 @@ export async function runTaskChatLoop(
       sendTaskReplyEvent(roomId, config.agentUserId, { ...reply.content });
     }
   } catch (err) {
+    // 心跳与终态失败回执同纪律——先停再发
+    stopHeartbeat?.();
     // runChatLoop 抛错：仅当本轮未发过 end 时补一条 end(error)（minor-7 防重），
     // 再 task-end + exit(1)。runChatLoop 的内部 try/catch 在大多数错误路径
     // 已 sendEndChunk(error) 后才 throw（endChunkSent=true）；某些早期抛错
@@ -1734,15 +1866,9 @@ export async function doExecuteTool(
   if (name === 'dispatch_followup') {
     const taskId = argToString(call.arguments.taskId, 'taskId');
     const question = argToString(call.arguments.question, 'question');
-    const followupResult = await executeFollowup(
-      taskId,
-      question,
-      config,
-      executionSessionId,
-      ctx.abortSignal,
-      pmStreamSessionId,
-    );
-    return followupResult.body;
+    // v2.9：异步追问——executeFollowup 同步返回送达确认（不再阻塞等待）；
+    // 终态回执由主进程 DispatchRegistry 落消息行 + routeUserChat 注入唤醒送达
+    return executeFollowup(taskId, question, config, executionSessionId, pmStreamSessionId);
   }
   if (name.startsWith('dispatch_bg:')) {
     const subSlug = name.slice('dispatch_bg:'.length);

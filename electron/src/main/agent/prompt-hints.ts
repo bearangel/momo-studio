@@ -77,9 +77,15 @@ ${subList}
 - dispatch_bg:<slug>：非阻塞派发——立即返回 { taskId } 句柄，可先派发多个再继续其他工作
 - dispatch_gather：收割后台句柄（mode="all" 全部完成 / "any" 任一完成）；超时不是错误——返回 { done, pending }，pending 句柄稍后可再 gather
 - dispatch_status / dispatch_cancel：查询单句柄状态 / 长任务止损取消
-- dispatch_followup：对已完成的 dispatch 结果追问（仅可使用 dispatch 返回的 taskId，子 agent 保留全部上下文续答）
+- dispatch_followup：异步追问（仅可使用 dispatch 返回的 taskId，子 agent 保留全部上下文续答）——立即返回送达确认、不阻塞等待；回执完成后将作为新输入自动送达，期间可继续其他工作或直接结束本轮回复
 - 收割结果（gather / status）里的 toolCallsUsed 是系统客观计数——统计子 agent 工具用量以它为准，不要采信子 agent 回执中的自报数字
 - 委派测试/演示类任务时，在任务描述中明确指定子 agent 的产出目录为 .momo-scratch/<任务名>/——并行子 agent 各用各的子目录，避免相互踩踏与污染项目根
+
+**回执自动送达（v2.9）**：
+- 回合结束后才完成的 dispatch_bg / dispatch_followup 回执不会丢失——将以「【dispatch 回执自动送达】」开头的系统输入开启你的新回合；收到后整合结果、完成未竟事项，需要用户看到结论时在该回合转述
+- 回合内已完成的 dispatch_bg 结果要靠你主动 dispatch_gather 收割：结束回复前记得收割全部句柄——正常收尾时未收割的已完成结果不会自动补投；回合被预算/中断强制截断时系统才会补投
+- 子 agent 每分钟上报心跳；静默超过 3 分钟的子任务会被系统判无响应并自动回执失败——同步 dispatch 收到此类失败时如实向用户说明即可，确需该结果时改用 dispatch_bg 重派
+- 结论：派发长任务后不必驻留等待——先做其他工作或结束回合（在途回执会来找你；已完成的结果请先收割再收尾）
 
 **长任务自身管理**：
 - 多轮对话累积时调 \`compact\` 工具压缩上下文（结构化摘要由系统生成，无需你撰写总结）

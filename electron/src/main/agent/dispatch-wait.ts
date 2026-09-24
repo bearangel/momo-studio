@@ -114,6 +114,15 @@ const bgHandles = new Map<string, BgHandle>();
 /** gather 等待者：taskId → 等待翻转的回调集合（spec §4.2 实现裁定——独立于 pendingReplies 键空间，taskId 语义已被 bgHandles 占有） */
 const gatherWaiters = new Map<string, Set<(h: BgHandle) => void>>();
 
+/**
+ * v2.9 事件驱动 dispatch：异步追问在途集（executeFollowup 派发前加入，
+ * task_reply 到达时 handleTaskReply 清除）。followup 不再注册 pendingReplies，
+ * 本集承担两职：同批并行重复追问的同步拒绝 + 跨轮在途的可见性。
+ * 进程级生命周期与 pendingReplies / bgHandles 一致（runtime 子进程退出即失效；
+ * 跨轮在途由主进程 DispatchRegistry 兜底拒绝）。
+ */
+const inFlightFollowups = new Set<string>();
+
 /** 查询某后台任务的句柄（dispatch_status / dispatch_gather / UI 消费；幂等读不删句柄——settled 超过 BG_SETTLED_CAP 被驱逐后返回 undefined） */
 export function getBgHandle(taskId: string): BgHandle | undefined {
   return bgHandles.get(taskId);
@@ -187,10 +196,11 @@ export function __seedBgHandleForTest(taskId: string, handle: BgHandle): void {
   enforceSettledCap();
 }
 
-/** 测试用：清空句柄表 + waiter 表（用例隔离） */
+/** 测试用：清空句柄表 + waiter 表 + 追问在途集（用例隔离） */
 export function __resetBgStateForTest(): void {
   bgHandles.clear();
   gatherWaiters.clear();
+  inFlightFollowups.clear();
 }
 
 /**
@@ -442,19 +452,25 @@ function targetUnresolvableMsg(taskId: string): string {
 }
 
 /**
- * 主 agent 执行 dispatch_followup（v2.8.0 Orchestration spec §3）——对已
- * dispatch 的链追问（replay 续接）：
+ * 主 agent 执行 dispatch_followup——对已 dispatch 的链追问（replay 续接）。
  *
- *   校验三连 → rebuildSubConversation 重建链历史 → 追问 user 行落库 →
- *   沿用原链 taskId 派发（body=question + history_prefix=重建前缀 + 新
- *   subStreamSessionId）→ 同步等 task_reply（waitForTaskReply 共用等待封装）。
+ * v2.9 事件驱动 dispatch（spec 2026-09-24）：**异步化**——派发后立即返回送达
+ * 确认，不再 waitForTaskReply 同步阻塞（旧版盲等最长 9 分钟且对子 agent 存活
+ * 零感知）。终态回执由主进程 DispatchRegistry（恒投递语义）落消息行 +
+ * routeUserChat 自动唤醒 PM 新回合送达。
+ *
+ * 流程：校验三连 → rebuildSubConversation 重建链历史 → 追问 user 行落库 →
+ * 沿用原链 taskId 派发（body=question + history_prefix=重建前缀 +
+ * followup_round=true + 新 subStreamSessionId）→ 在途轮标记 → 立即返回确认。
  *
  * 校验三连（顺序即依赖序）：
  *   a. 链存在——messages 表 (task_id, session_id) 双键有行。executionSessionId
  *      缺失时无法安全定位链（所有权=会话边界），按链不存在处理。
- *   b. 同链无在途——pendingReplies 或 bgHandles(in_flight) 有该 taskId 即拒绝
- *      （spec §2.2 不变量 1：上轮 settle 后才可再 followup，pendingReplies 键
- *      安全）。bg done / cancelled 是终态，不阻塞。
+ *   b. 同链无在途——pendingReplies / bgHandles(in_flight) / inFlightFollowups
+ *      任一命中该 taskId 即拒绝（spec §2.2 不变量 1：上轮 settle 后才可再
+ *      followup）。inFlightFollowups 是 v2.9 新增的追问在途集：本函数不再
+ *      注册 pendingReplies，靠该集挡同批并行重复追问 + 跨轮在途（task_reply
+ *      到达时 handleTaskReply 统一清除）。终态（done / cancelled）不阻塞。
  *   c. 会话边界——链首子消息 sender（子 agent 的 agentUserId）经
  *      workspace_agent_members 反查 assignment，在 config.subAgents 中匹配后
  *      走 assertSessionDispatchAllowed（既有单成员 / 跨会话 / 非 leader 拒绝）。
@@ -471,17 +487,12 @@ function targetUnresolvableMsg(taskId: string): string {
  * TaskConfig.taskId = dispatchContext.task_id → start chunk 携带 → 新一轮子
  * 流行落库即带链标——链历史天然聚合。链 ID 无 tasks 表行，getTaskContext
  * 恒 null，无双重注入风险（T5 review 核实，无需防御）。
- *
- * 派发等待语义与 executeDispatch 完全一致（渐进式超时 3+6 分钟 + abortSignal
- * 即时清理），差异仅三处：taskId 沿用原链 ID（不 randomUUID）、content 多
- * history_prefix、发送前先落追问行。
  */
-export async function executeFollowup(
+export function executeFollowup(
   taskId: string,
   question: string,
   config: RuntimeConfig,
   executionSessionId?: string,
-  signal?: AbortSignal,
   /**
    * PM 自身流 id——追问行 parent_stream_session_id 的来源（与 executeDispatch
    * 的 pmStreamSessionId 参数同源：工具调用上下文传入，renderer 据此把追问行
@@ -494,7 +505,7 @@ export async function executeFollowup(
    * 预生成时可透传（与 dispatch 工具的 chip 查找键机制对齐）。
    */
   subStreamSessionId?: string,
-): Promise<{ body: string; toolCallsUsed: number }> {
+): string {
   // --- 校验 a：链存在（(task_id, session_id) 双键） ---
   if (!executionSessionId) throw new Error(chainNotFoundMsg(taskId));
   const db = getDb();
@@ -503,9 +514,15 @@ export async function executeFollowup(
     .get(taskId, executionSessionId);
   if (!chainExists) throw new Error(chainNotFoundMsg(taskId));
 
-  // --- 校验 b：同链无在途轮次 ---
-  if (pendingReplies.has(taskId) || bgHandles.get(taskId)?.status === 'in_flight') {
-    throw new Error(`任务链 ${taskId} 上一轮仍在进行中——请等待子 agent 回复后再追问`);
+  // --- 校验 b：同链无在途轮次（含 v2.9 异步追问在途集） ---
+  if (
+    pendingReplies.has(taskId) ||
+    bgHandles.get(taskId)?.status === 'in_flight' ||
+    inFlightFollowups.has(taskId)
+  ) {
+    throw new Error(
+      `任务链 ${taskId} 上一轮仍在进行中——追问是异步的：请继续其他工作或结束本轮回复，回执完成后会作为新输入自动送达，无需重发`,
+    );
   }
 
   // --- 校验 c：定位目标 agent + 会话边界 ---
@@ -551,6 +568,8 @@ export async function executeFollowup(
     sub_stream_session_id: resolvedSubStream,
     // 空前缀（degraded / 链行无可聚合事件）不携带字段——T2 语义空数组等价无前缀
     ...(rebuilt.messages.length > 0 ? { history_prefix: rebuilt.messages } : {}),
+    // v2.9：追问轮标记——主进程 DispatchRegistry 据此走「恒投递」（回执注入唤醒 PM）
+    followup_round: true,
   };
 
   trace('→ dispatch_followup', {
@@ -561,18 +580,16 @@ export async function executeFollowup(
     degraded: rebuilt.degraded,
   });
 
-  // 先注册等待态再发送（防竞态——同 executeDispatch 纪律）
-  const resultPromise = waitForTaskReply(
-    taskId,
-    sub.slug,
-    config,
-    executionSessionId,
-    resolvedSubStream,
-    signal,
-  );
+  // 在途标记先于发送（同步段完成——同批并行的第二次追问在本轮返回前即被
+  // 校验 b 拒绝；task_reply 到达时 handleTaskReply 统一清除）
+  inFlightFollowups.add(taskId);
   sendDispatchEvent(executionSessionId, config.agentUserId, { ...content });
 
-  return resultPromise;
+  return (
+    `追问已送达：任务链 ${taskId}（第 ${rebuilt.rounds + 1} 轮，目标 ${sub.slug}——保留该链全部上下文续答）。\n` +
+    '本轮为异步追问，不阻塞等待：可继续其他工作或直接结束本轮回复；' +
+    '子 agent 完成后，回执将作为新的输入自动送达（含结果全文），无需 gather 或轮询。'
+  );
 }
 
 /**
@@ -596,8 +613,12 @@ function armDispatchTimer(taskId: string): void {
         pending.abortCleanup?.();
         pendingReplies.delete(taskId);
         const totalMin = Math.round(DISPATCH_TOTAL_TIMEOUT_MS / 60000);
+        // v2.9：超时文案面向 agent 可操作（旧版「请直接查看该 agent 的回复」
+        // 是写给人类的——PM 没有任何查看子 agent 消息流的工具，死循环）
         pending.reject(new Error(
-          `等待子 agent ${pending.subSlug} 回复超时（已等待 ${totalMin} 分钟）。任务可能仍在后台执行，请直接查看该 agent 的回复。`,
+          `等待子 agent ${pending.subSlug} 回执超时（已等待 ${totalMin} 分钟，期间无有效进度信号）。` +
+          '该任务可能仍在运行（结果会在完成后作为新输入自动送达，不会丢失）或已无响应。' +
+          '可结束本轮回复等待自动送达；如确认无响应可再次派发或改用 dispatch_bg + dispatch_gather 编排。'
         ));
       }
     }, timeoutMs);
@@ -611,6 +632,10 @@ function armDispatchTimer(taskId: string): void {
 export function handleTaskReply(content: Record<string, unknown>): void {
   const reply = parseTaskReply(content);
   if (!reply) return;
+  // v2.9（质量 review B5 修正）：异步追问在途标记仅在终态清除——in_progress
+  // 心跳保持标记（链仍在途）。旧实现任意回执清除会造成子/主校验漂移：心跳
+  // 清标记后 PM 的第二次追问通过子侧校验拿到「已送达」确认，但主进程注册表
+  // 以在途拒绝且 steer 通知可能丢失 → 追问被静默吞掉。
   const pending = pendingReplies.get(reply.task_id);
   if (!pending) {
     // v2.8.0 bg 分支（spec §4.2 单点收口）：pendingReplies miss → 查 bgHandles；
@@ -630,6 +655,7 @@ export function handleTaskReply(content: Record<string, unknown>): void {
         bg.toolCallsUsed = reply.tool_calls_used ?? 0;
         bg.completedAt = Date.now();
         bg.outcome = reply.status === 'completed' ? 'completed' : 'failed';
+        inFlightFollowups.delete(reply.task_id);
         wakeGatherWaiters(reply.task_id, bg);
         // settled 超限驱逐（审查 C2）——唤醒后再驱逐：waiter 已拿到句柄快照/引用
         enforceSettledCap();
@@ -637,7 +663,11 @@ export function handleTaskReply(content: Record<string, unknown>): void {
       // 非 in_flight（cancelled / done）→ cancel 后或已收割后的迟到 reply：保留既有终态、忽略 body（幂等）
       return;
     }
-    console.warn(`[dispatch] 收到迟到的 task_reply（taskId=${reply.task_id}, status=${reply.status}）— 已超时或已处理`);
+    if (reply.status !== 'in_progress') {
+      // 迟到终态（已超时或已处理）：清除残留的在途追问标记（若有）
+      inFlightFollowups.delete(reply.task_id);
+      console.warn(`[dispatch] 收到迟到的 task_reply（taskId=${reply.task_id}, status=${reply.status}）— 已超时或已处理`);
+    }
     return;
   }
   if (reply.status === 'in_progress') {
@@ -645,6 +675,7 @@ export function handleTaskReply(content: Record<string, unknown>): void {
     armDispatchTimer(reply.task_id);
     return;
   }
+  inFlightFollowups.delete(reply.task_id);
   trace('← reply', { status: reply.status, body: `${reply.body.length}字` });
   // minor-10：settle 路径统一调 abortCleanup 移除 abortSignal 监听器——
   // 否则 reply 到达后若用户再触发 abort，onAbort 会再次执行（entry 已删，

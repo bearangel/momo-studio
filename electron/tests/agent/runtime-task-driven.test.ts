@@ -629,10 +629,13 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
 
     await runPromise;
 
+    // v2.9：心跳 in_progress 先于终态——过滤 failed 定位终态回执（abort 场景心跳
+    // 可能来不及发出，直接按状态找不依赖顺序）
     const replyEvt = sentIpc.find(
       (m) =>
         (m as { type?: string }).type === 'momo-internal-event' &&
-        (m as { eventType?: string }).eventType === 'io.momo-studio.task_reply',
+        (m as { eventType?: string }).eventType === 'io.momo-studio.task_reply' &&
+        (m as { content?: { status?: string } }).content?.status === 'failed',
     ) as { content: { task_id: string; status: string; body: string } } | undefined;
     expect(replyEvt).toBeDefined();
     expect(replyEvt!.content.task_id).toBe('task-abort-1');
@@ -672,12 +675,20 @@ describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
     exitSpy.mockRestore();
   });
 
-  /** 从 sentIpc 里找 task_reply 内部事件信封 */
-  function findReplyEvent():
+  /**
+   * 从 sentIpc 里找 task_reply 内部事件信封。
+   * v2.9：dispatch 任务先发心跳（in_progress）再发终态回执——按 status 过滤
+   * 定位目标回执；不传 status 返回首条（即首拍心跳）。
+   */
+  function findReplyEvent(status?: string):
     | { eventType: string; sessionId: string; sender: string; content: Record<string, unknown> }
     | undefined {
     return sentIpc.find(
-      (m) => (m as { type?: string }).type === 'momo-internal-event',
+      (m) =>
+        (m as { type?: string }).type === 'momo-internal-event' &&
+        (m as { eventType?: string }).eventType === 'io.momo-studio.task_reply' &&
+        (status === undefined ||
+          (m as { content?: { status?: string } }).content?.status === status),
     ) as
       | { eventType: string; sessionId: string; sender: string; content: Record<string, unknown> }
       | undefined;
@@ -702,7 +713,13 @@ describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
       makeContext(),
     );
 
-    const evt = findReplyEvent();
+    // v2.9 契约锁：首条回执是首拍心跳（in_progress——注册即活，主进程死亡检测基准）
+    const hb = findReplyEvent();
+    expect(hb).toBeDefined();
+    expect(hb!.content.status).toBe('in_progress');
+    expect(hb!.content.reply_to).toBe('inst-pm');
+
+    const evt = findReplyEvent('completed');
     expect(evt).toBeDefined();
     expect(evt!.eventType).toBe('io.momo-studio.task_reply');
     expect(evt!.content.task_id).toBe('task-disp-1');
@@ -723,7 +740,7 @@ describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
       makeContext(),
     );
 
-    const evt = findReplyEvent();
+    const evt = findReplyEvent('failed');
     expect(evt).toBeDefined();
     expect(evt!.eventType).toBe('io.momo-studio.task_reply');
     expect(evt!.content.task_id).toBe('task-disp-2');

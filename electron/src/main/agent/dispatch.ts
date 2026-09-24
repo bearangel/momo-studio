@@ -37,6 +37,13 @@ export interface DispatchContent {
    * system 之后、新 user 轮之前）。仅 followup 派发设置；普通 dispatch 缺席。
    */
   history_prefix?: LLMMessage[];
+  /**
+   * v2.9 事件驱动 dispatch（spec 2026-09-24）：本轮是否 followup 追问轮。
+   * executeFollowup 置 true；routeDispatch 据此把主进程 DispatchRegistry 链
+   * 标记为「恒投递」——终态回执经消息行注入自动唤醒 PM（followup 已异步化，
+   * PM 不再同步等待）。普通 dispatch / dispatch_bg 缺省 false。
+   */
+  followup_round?: boolean;
 }
 
 /** task_reply 消息内容（Matrix event type: io.momo-studio.task_reply） */
@@ -160,6 +167,7 @@ export function parseDispatchEvent(content: Record<string, unknown>): DispatchCo
       ? { sub_stream_session_id: content.sub_stream_session_id }
       : {}),
     ...(historyPrefix !== undefined ? { history_prefix: historyPrefix } : {}),
+    ...(content.followup_round === true ? { followup_round: true } : {}),
   };
 }
 
