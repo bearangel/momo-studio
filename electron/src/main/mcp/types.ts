@@ -43,6 +43,29 @@ export interface McpServerConfig {
   installedAt?: string;
 }
 
+/**
+ * P2.5：全字段编辑入参（resource:updateMcpEntry）——RegisterMcpInput 去 name。
+ * name 是 agent 引用键，编辑不可改（改名=破坏引用），由通道第一参单独携带。
+ * 与 McpServerConfig 的可编辑字段子集：transport/version/args/env/url/headers/cwd
+ * 可选，command 必填（远程形态传空串——落库端给空串占位，与注册同构）。
+ */
+export interface McpEntryUpdateInput {
+  /** 传输形态；缺省 'stdio' */
+  transport?: 'stdio' | 'streamable_http';
+  /** 可选版本号；缺省存 '1.0.0'（DB 列 version NOT NULL） */
+  version?: string;
+  /** stdio 启动命令（远程形态空串占位——DB 列 NOT NULL） */
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** 远程端点（transport='streamable_http' 必填，强制 https） */
+  url?: string;
+  /** 远程请求头（token 等；不落日志） */
+  headers?: Record<string, string>;
+  /** stdio 子进程工作目录；缺省清 NULL */
+  cwd?: string;
+}
+
 /** listRegistered 返回项（source/installedAt/transport 必填——DB 行必然有值） */
 export interface RegisteredMcp {
   id: string;

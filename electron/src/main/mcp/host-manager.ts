@@ -21,6 +21,7 @@ import type {
   McpToolCallOutcome,
   RegisteredMcp,
   McpConfigSchema,
+  McpEntryUpdateInput,
 } from './types';
 
 /** mcp_definitions 表的一行原始结构（getMcpConfig / listRegistered 读取时做类型断言用） */
@@ -364,6 +365,37 @@ export function updateRemoteMcpDefinition(
     'UPDATE mcp_definitions SET url = ?, headers_json = ?, config_schema = ? WHERE name = ?',
   ).run(url, JSON.stringify(headers), schemaJson, name);
   logger.info('MCP 定义配置已更新', { name }); // 不打 url/headers（含 key）
+}
+
+/**
+ * P2.5：全字段编辑 UPDATE（保 id/source/installed_at/config_schema——与
+ * registerMcpDefinition 的 INSERT OR REPLACE 整行覆盖语义不同）。字段组装/
+ * https 校验与注册同构；池驱逐由服务层（mcp-config.updateMcpEntry）负责。
+ */
+export function updateMcpEntryDefinition(name: string, config: McpEntryUpdateInput): void {
+  const db = getDb();
+  const row = db.prepare('SELECT id FROM mcp_definitions WHERE name = ?').get(name) as
+    | { id: string }
+    | undefined;
+  if (!row) throw new Error(`MCP ${name} 未注册`);
+  const transport = config.transport ?? 'stdio';
+  if (transport === 'streamable_http' && !config.url?.startsWith('https://')) {
+    throw new Error(`远程 MCP ${name} 更新失败：url 必须是 https 地址`);
+  }
+  db.prepare(
+    `UPDATE mcp_definitions SET version = ?, transport = ?, command = ?, args = ?, env = ?, url = ?, headers_json = ?, cwd = ? WHERE name = ?`,
+  ).run(
+    config.version ?? '1.0.0',
+    transport,
+    transport === 'streamable_http' && !config.command ? '' : config.command,
+    JSON.stringify(config.args ?? []),
+    JSON.stringify(config.env ?? {}),
+    transport === 'streamable_http' ? (config.url ?? null) : null,
+    transport === 'streamable_http' ? JSON.stringify(config.headers ?? {}) : null,
+    config.cwd ?? null,
+    name,
+  );
+  logger.info('MCP 定义已编辑', { name, transport }); // 不打 url/headers（含 key）
 }
 
 /**

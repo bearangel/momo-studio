@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。16 个 resource 通道 + 1 个 misc 通道：
+// 资源库 IPC handler 注册。18 个 resource 通道 + 1 个 misc 通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -16,6 +16,9 @@
 //   - resource:getMcpConfig / resource:updateMcpConfig / resource:danglingMcpRefs
 //     MCP 配置编辑与悬空引用扫描（P2.2 Task 6——spec §4.1/§4.2/§4.3；业务逻辑
 //     在 resource/mcp-config.ts，本层只做入参防御与透传）
+//   - resource:getMcpEditView / resource:updateMcpEntry  MCP 全字段编辑
+//     （P2.5 Task 2——spec §3.1-3.3；stdio + 远程通吃，custom 源专用入口；
+//     UPDATE 保 id/source/installed_at，业务逻辑在 resource/mcp-config.ts）
 //   - resource:listBuiltinPresets  预置清单只读（P2.3 spec §5——本地 YAML 直读零网络）
 //   - misc:openExternal     外链转系统浏览器（P2.3 spec §6——misc 命名空间首个
 //     通道，无独立 misc 注册点，归属此文件，后续 misc:* 在此追加）
@@ -57,7 +60,10 @@ import {
   getMcpConfigView,
   updateRemoteMcpConfig,
   listDanglingMcpRefs,
+  getMcpEditView,
+  updateMcpEntry,
   type McpConfigUpdateInput,
+  type McpEntryUpdateInput,
 } from './mcp-config';
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
@@ -460,6 +466,26 @@ export function registerResourceHandlers(): void {
     async (_evt, name: string, input: McpConfigUpdateInput) => {
       assertMcpName(name);
       await updateRemoteMcpConfig(name, input);
+    },
+  );
+
+  // P2.5 Task 2：MCP 全字段编辑（stdio + 远程；custom 源专用入口，spec §3.3）。
+  // view 供编辑弹窗预填全字段；update 走 mcp-config.updateMcpEntry（专用 UPDATE
+  // 保 id/source/installed_at + 池驱逐 + 目录广播），async 包裹让 getMcpEditView
+  // 的同步抛错在 IPC 侧统一为 rejected promise。
+  ipcMain.handle(
+    'resource:getMcpEditView',
+    async (_evt, name: string) => {
+      assertMcpName(name);
+      return getMcpEditView(name);
+    },
+  );
+
+  ipcMain.handle(
+    'resource:updateMcpEntry',
+    async (_evt, name: string, input: McpEntryUpdateInput) => {
+      assertMcpName(name);
+      await updateMcpEntry(name, input);
     },
   );
 

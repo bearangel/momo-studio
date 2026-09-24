@@ -24,11 +24,16 @@ import {
   evictMcpByName,
   getMcpConfig,
   listRegistered,
+  updateMcpEntryDefinition,
   updateRemoteMcpDefinition,
 } from '../mcp/host-manager';
 import { listAgentDefinitions } from '../agent/crud';
-import type { McpConfigSchema, RegisteredMcp } from '../mcp/types';
+import type { McpConfigSchema, McpEntryUpdateInput, RegisteredMcp } from '../mcp/types';
 import { composeRemoteConfig, fetchSmitheryDetail } from './hub-install';
+import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
+
+/** P2.5：全字段编辑入参（定义在 mcp/types.ts；renderer types.d.ts 同形镜像） */
+export type { McpEntryUpdateInput };
 
 /** resource:getMcpConfig 返回形状（spec §4.1，renderer types.d.ts 镜像源） */
 export interface McpConfigView {
@@ -209,4 +214,44 @@ export function listDanglingMcpRefs(): DanglingMcpRef[] {
     logger.warn('悬空 MCP 引用扫描失败，返回空列表', { error: (err as Error).message });
     return [];
   }
+}
+
+/** P2.5：全字段编辑视图（stdio + 远程通吃；renderer types.d.ts 镜像源） */
+export interface McpEditView {
+  name: string;
+  transport: 'stdio' | 'streamable_http';
+  version: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  /** 仅远程；stdio 为 undefined */
+  url?: string;
+  /** 仅远程；stdio 为空对象 */
+  headers: Record<string, string>;
+  /** 仅 stdio */
+  cwd?: string;
+}
+
+/** 读全字段编辑视图（未注册抛中文错） */
+export function getMcpEditView(name: string): McpEditView {
+  const def = getMcpConfig(name) as RegisteredMcp | null;
+  if (!def) throw new Error(`MCP ${name} 未注册`);
+  return {
+    name,
+    transport: def.transport,
+    version: def.version,
+    command: def.command,
+    args: def.args ?? [],
+    env: def.env ?? {},
+    url: def.url,
+    headers: def.transport === 'streamable_http' ? (def.headers ?? {}) : {},
+    cwd: def.cwd,
+  };
+}
+
+/** 全字段编辑：校验 → UPDATE（保 id/source/installed_at/config_schema）→ 驱逐池连接 → 广播目录 */
+export async function updateMcpEntry(name: string, input: McpEntryUpdateInput): Promise<void> {
+  updateMcpEntryDefinition(name, input);
+  await evictMcpByName(name);
+  void broadcastLocalResourceCatalog();
 }

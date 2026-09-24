@@ -873,6 +873,48 @@ export interface McpConfigUpdateInput {
 }
 
 /**
+ * P2.5 Task 2：resource:getMcpEditView 返回的全字段编辑视图（编辑弹窗预填源）。
+ * 与 electron 端 resource/mcp-config.ts 的 McpEditView 对齐（跨进程独立定义，
+ * 仅结构对齐）；stdio 与远程形态通吃——另一形态的字段缺省/空对象。
+ */
+export interface McpEditView {
+  name: string;
+  transport: 'stdio' | 'streamable_http';
+  version: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  /** 仅远程；stdio 为 undefined */
+  url?: string;
+  /** 仅远程；stdio 为空对象 */
+  headers: Record<string, string>;
+  /** 仅 stdio */
+  cwd?: string;
+}
+
+/**
+ * P2.5 Task 2：resource:updateMcpEntry 入参——RegisterMcpInput 去 name（与
+ * electron 端 mcp/types.ts 的 McpEntryUpdateInput 对齐）。name 是 agent 引用键，
+ * 编辑不可改，由通道第一参携带；提交走保 id/source/installed_at 的专用 UPDATE。
+ */
+export interface McpEntryUpdateInput {
+  /** 传输形态；缺省 'stdio' */
+  transport?: 'stdio' | 'streamable_http';
+  /** 可选版本号；缺省存 '1.0.0' */
+  version?: string;
+  /** stdio 启动命令（远程形态空串占位） */
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** 远程端点（transport='streamable_http' 必填，强制 https） */
+  url?: string;
+  /** 远程请求头（含鉴权 key，不落日志） */
+  headers?: Record<string, string>;
+  /** stdio 子进程工作目录；缺省清空 */
+  cwd?: string;
+}
+
+/**
  * P2.2 Task 6：resource:danglingMcpRefs 返回的悬空引用条目
  * （DanglingRefsCard 数据源；与 electron 端 resource/mcp-config.ts 的
  * DanglingMcpRef 对齐）。
@@ -1719,6 +1761,16 @@ export interface ApiSurface {
      * headers 仅裸模式整包覆盖；schema 模式表单预填 url 须去 query（spec §9 D9）。
      */
     updateMcpConfig(name: string, input: McpConfigUpdateInput): Promise<void>;
+    /**
+     * P2.5 Task 2：读 MCP 全字段编辑视图（stdio + 远程通吃，编辑弹窗 mount 时
+     * 拉取预填；name 是 agent 引用键，编辑模式名称只读）。
+     */
+    getMcpEditView(name: string): Promise<McpEditView>;
+    /**
+     * P2.5 Task 2：MCP 全字段编辑提交——保 id/source/installed_at 的专用 UPDATE
+     * + 池驱逐（旧连接立即失效，下回合 getOrStartMcp 按新定义重建）+ 目录广播。
+     */
+    updateMcpEntry(name: string, input: McpEntryUpdateInput): Promise<void>;
     /**
      * P2.2 Task 6：悬空 MCP 引用扫描（MCP 标签页顶部提示卡数据源）。
      * 空数组 = 无悬空（含扫描异常降级），卡片不显示。

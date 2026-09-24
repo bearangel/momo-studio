@@ -12,6 +12,8 @@ import type {
   ImMessage,
   McpConfigUpdateInput,
   McpConfigView,
+  McpEditView,
+  McpEntryUpdateInput,
   MessageContext,
   MessageEventBatch,
   RegisterMcpInput,
@@ -335,6 +337,11 @@ const api: ApiSurface = {
     // P2.2 Task 6：编辑已装远程 MCP 配置（headers 仅裸模式整包覆盖；schema 可选透传落库）
     updateMcpConfig: (name: string, input: McpConfigUpdateInput) =>
       invoke<void>('resource:updateMcpConfig', name, input),
+    // P2.5 Task 2：MCP 全字段编辑视图（stdio + 远程通吃，编辑弹窗预填数据源）
+    getMcpEditView: (name: string) => invoke<McpEditView>('resource:getMcpEditView', name),
+    // P2.5 Task 2：MCP 全字段编辑提交（专用 UPDATE 保 id/source/installed_at + 池驱逐）
+    updateMcpEntry: (name: string, input: McpEntryUpdateInput) =>
+      invoke<void>('resource:updateMcpEntry', name, input),
     // P2.2 Task 6：悬空 MCP 引用扫描（空数组 = 无悬空，卡片不显示）
     danglingMcpRefs: () => invoke<DanglingMcpRef[]>('resource:danglingMcpRefs'),
     // P2.3：预置清单只读（本地 resources/agents/*.yaml 直读零网络；mcp/skill 空数组）
