@@ -34,6 +34,7 @@ import type { AgentRuntimeOpts } from './runtime-config';
 import { handleStreamChunk, setAbortResolver } from './stream-relay';
 import { WarmPool } from './warm-pool';
 import { AgentRunner, markShuttingDown, __resetShuttingDownForTest } from './agent-runner';
+import { notifyRunnerIdle } from './router-service';
 import { spawnForAgent, type SpawnedRuntime } from './runtime-spawner';
 import { ProviderTokenBucket } from './llm/token-bucket';
 
@@ -151,6 +152,9 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     agentUserId,
     workspaceId,
     warmPool: pool,
+    // v2.9 事件驱动 dispatch：回合归零边沿 → RouterService PM 空闲快照 +
+    // 自动送达结果投递（模块级 handler 注入，避免构造期循环依赖）
+    onIdle: notifyRunnerIdle,
   });
   agentRunners.set(instanceId, runner);
 

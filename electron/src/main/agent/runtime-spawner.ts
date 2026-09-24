@@ -343,8 +343,9 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
   // 注册 message handler（chunk 转发）。handler 为 async：仅 mcp 分支含 await，
   // handleChildMessage / audit 分支仍同步执行，优先语义与 T8 行为不变。
   const messageHandler = async (msg: unknown): Promise<void> => {
-    // 内部事件（dispatch/task_reply/abort_dispatch）优先转给桥处理；已消费则不进 chunk 通道
-    if (handleChildMessage(msg)) return;
+    // 内部事件（dispatch/task_reply/abort_dispatch）优先转给桥处理；已消费则不进 chunk 通道。
+    // B2（安全 review）：附 owner 身份——桥据此校验 envelope sender，拦截跨身份伪造
+    if (handleChildMessage(msg, runtimeConfig.agentUserId)) return;
     if (typeof msg !== 'object' || msg === null) return;
     const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
     // P0 boot 握手：子进程监听器注册完毕的一次性信号——resolve readyGate

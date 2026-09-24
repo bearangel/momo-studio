@@ -23,11 +23,30 @@ export function setBridgeRouter(svc: RouteTarget | null): void {
   router = svc;
 }
 
-/** child IPC message 分发入口（runtime-spawner 调用）。返回 true 表示已消费。 */
-export function handleChildMessage(msg: unknown): boolean {
+/**
+ * child IPC message 分发入口（runtime-spawner 调用）。返回 true 表示已消费。
+ *
+ * B2（安全 review 2026-09-24）：ownerAgentUserId = spawner 闭包里该子进程的
+ * 真实身份（AGENT_CONFIG.agentUserId）——envelope 的 sender 是子进程自报字段，
+ * 不绑定时任意子进程可伪造他人身份发 dispatch/task_reply。绑定后 sender 与
+ * 真实身份不符的内部事件直接丢弃（不转发）。缺省不校验（旧测试直连路径），
+ * 生产 spawner 恒传。
+ */
+export function handleChildMessage(msg: unknown, ownerAgentUserId?: string): boolean {
   if (typeof msg !== 'object' || msg === null) return false;
   const m = msg as Partial<InternalEventMsg>;
   if (m.type !== INTERNAL_EVENT_MSG || typeof m.eventType !== 'string') return false;
+  if (
+    ownerAgentUserId !== undefined &&
+    m.sender !== ownerAgentUserId
+  ) {
+    logger.warn('内部事件 sender 与子进程身份不符，丢弃', {
+      eventType: m.eventType,
+      declaredSender: m.sender,
+      ownerAgentUserId,
+    });
+    return true;
+  }
   if (!router) {
     logger.warn('内部事件到达但 RouterService 未启动，丢弃', { eventType: m.eventType });
     return true;

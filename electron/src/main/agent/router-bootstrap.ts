@@ -20,7 +20,7 @@
 // 均直接派发 runner，不经过 dispatcher——本模块不再构造 TaskDispatcher，
 // 也不再把 providerBuckets 传入（buckets 只为 dispatcher 的限流检查存在）。
 
-import { RouterService } from './router-service';
+import { RouterService, setRunnerIdleHandler } from './router-service';
 import { setBridgeRouter } from './internal-event-bridge';
 import { setSessionRouter } from '../im/session-service';
 import { setFinalListener } from './stream-relay';
@@ -60,6 +60,11 @@ export async function ensureRouterService(
   setBridgeRouter(currentRouterService);
   setSessionRouter(currentRouterService);
   setFinalListener(onLeaderFinal);
+  // v2.9 事件驱动 dispatch：runner 空闲边沿 → PM 空闲快照 + 投递自动送达结果
+  // （B4(i)：forcedExit = 强制截断——Router 据此补投已翻转未投递的链）
+  setRunnerIdleHandler((assignmentId, forcedExit) =>
+    currentRouterService?.onPmIdle(assignmentId, forcedExit),
+  );
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }
 
@@ -73,6 +78,8 @@ export function destroyRouterService(): void {
   setBridgeRouter(null);
   setSessionRouter(null);
   setFinalListener(null);
+  setRunnerIdleHandler(null);
+  currentRouterService.stop();
   currentRouterService = null;
   logger.info('RouterService 已销毁');
 }

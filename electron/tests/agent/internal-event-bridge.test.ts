@@ -208,3 +208,44 @@ describe('子进程侧：send*Event（process.send 信封契约）', () => {
     expect(() => sendDispatchEvent('!room:h', '@pm:h', {})).not.toThrow();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// B2（安全 review 2026-09-24）：owner 身份绑定——envelope sender 与子进程真实
+// 身份不符的内部事件被丢弃（防跨身份伪造 dispatch/task_reply）。
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('主进程侧：handleChildMessage owner 身份绑定（B2）', () => {
+  let router: ReturnType<typeof mkMockRouter>;
+
+  beforeEach(() => {
+    router = mkMockRouter();
+    setBridgeRouter(router);
+  });
+
+  afterEach(() => {
+    setBridgeRouter(null);
+  });
+
+  const evt = (sender: string): unknown => ({
+    type: INTERNAL_EVENT_MSG,
+    eventType: TASK_REPLY_EVENT_TYPE,
+    sessionId: '!room:h',
+    sender,
+    content: { task_id: 't1', status: 'completed', body: 'x' },
+  });
+
+  it('sender 与 owner 身份不符 → 已消费（丢弃）且不进 router', () => {
+    expect(handleChildMessage(evt('@imposter:home'), '@real:home')).toBe(true);
+    expect(router.routeEvent).not.toHaveBeenCalled();
+  });
+
+  it('sender 与 owner 身份一致 → 正常转发', () => {
+    expect(handleChildMessage(evt('@real:home'), '@real:home')).toBe(true);
+    expect(router.routeEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('未传 owner（旧测试直连路径）→ 不校验，维持旧行为', () => {
+    expect(handleChildMessage(evt('@anyone:home'))).toBe(true);
+    expect(router.routeEvent).toHaveBeenCalledTimes(1);
+  });
+});

@@ -20,12 +20,93 @@ import {
   ABORT_DISPATCH_EVENT_TYPE,
   parseHistoryPrefix,
 } from './dispatch';
+import {
+  dispatchRegistry,
+  HEARTBEAT_INTERVAL_MS,
+  type DispatchChainHandle,
+} from './dispatch-registry';
+import { insertMessage } from '../storage/messages/repo';
+import { getDb } from '../storage/db';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
 import { getSession } from '../storage/sessions/repo';
 import { expandMessageContext } from '../im/context-expander';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
+
+// === v2.9 事件驱动 dispatch：runner 空闲通知通道（依赖注入，与 setBridgeRouter 同法） ===
+// runtime-registry 构造 AgentRunner 时注入 onIdle = notifyRunnerIdle；router-bootstrap
+// 启动时经 setRunnerIdleHandler 绑定到当前 RouterService 实例。模块级间接避免
+// runtime-registry → RouterService 的构造期循环依赖。
+
+/** 模块级空闲处理器（ensureRouterService 注入 / destroyRouterService 置空） */
+let runnerIdleHandler: ((assignmentId: string, forcedExit: boolean) => void) | null = null;
+
+export function setRunnerIdleHandler(
+  handler: ((assignmentId: string, forcedExit: boolean) => void) | null,
+): void {
+  runnerIdleHandler = handler;
+}
+
+/** AgentRunner onIdle 回调的注入目标（回调抛错只记日志——不拖垮收尾链路） */
+export function notifyRunnerIdle(assignmentId: string, forcedExit = false): void {
+  try {
+    runnerIdleHandler?.(assignmentId, forcedExit);
+  } catch (err) {
+    logger.warn('runner 空闲通知处理失败', { assignmentId, error: String(err) });
+  }
+}
+
+// === B2/B3（安全 review 2026-09-24）：内部事件身份与 taskId 加固 ===
+
+/** B3：taskId 进入注册表 / 文件名 / 提示文本前的合法形状（拒绝路径穿越与控制字符） */
+const SAFE_TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** B3：taskId 进入提示文本前的净化——剥离控制字符（防伪造消息结构注入 PM 上下文） */
+function safeTaskIdText(taskId: string): string {
+  return taskId.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 64);
+}
+
+/**
+ * B2（安全复审 R2 修正）：sender（agentUserId）→ assignmentId 反查结果。
+ *
+ * 三态而非二值：降级与拒绝必须区分——
+ * - ok：解析成功（assignment 可与 dispatch_from / subAssignmentId 比对）
+ * - degrade：环境性失败（DB 不可用）——降级放行 + 日志（桥层身份绑定仍是
+ *   主防线：sender 无法跨身份伪造，环境失败不等于攻击）
+ * - reject：会话不存在 / 发送者非该会话 workspace 成员 / 非法身份（owner/空）。
+ *   这些状态可被攻击者经 envelope sessionId **主动安排**（跨 workspace 会话 /
+ *   不存在的会话 → 反查必然落空），必须 fail-closed——否则 round-1 HIGH-A
+ *   （持久化 owner 行注入 + 任意 PM 唤醒 + 第三方链 settle 劫持）经此复活。
+ */
+type SenderLookup =
+  | { outcome: 'ok'; assignment: string }
+  | { outcome: 'degrade' }
+  | { outcome: 'reject' };
+
+function resolveSender(sender: string | undefined, sessionId: string): SenderLookup {
+  if (typeof sender !== 'string' || sender.length === 0 || sender === 'owner') {
+    return { outcome: 'reject' };
+  }
+  let ws: string | null;
+  try {
+    ws = getSession(sessionId)?.workspaceId ?? null;
+  } catch {
+    return { outcome: 'degrade' };
+  }
+  // 合法子进程的内部事件必引用真实会话——不存在的会话是攻击面（伪造 sessionId）
+  if (!ws) return { outcome: 'reject' };
+  try {
+    const row = getDb()
+      .prepare(
+        'SELECT instance_id FROM workspace_agent_members WHERE agent_user_id = ? AND workspace_id = ?',
+      )
+      .get(sender, ws) as { instance_id: string } | undefined;
+    return row ? { outcome: 'ok', assignment: row.instance_id } : { outcome: 'reject' };
+  } catch {
+    return { outcome: 'degrade' };
+  }
+}
 
 /** RouterService 构造选项 */
 export interface RouterServiceOpts {
@@ -85,6 +166,9 @@ export interface InternalEvent {
 }
 
 export class RouterService {
+  /** v2.9：心跳死亡清扫计时器（start() 武装 / stop() 清除；unref 不阻塞退出） */
+  private sweepTimer?: NodeJS.Timeout;
+
   constructor(private readonly opts: RouterServiceOpts) {}
 
   /**
@@ -261,6 +345,72 @@ export class RouterService {
       return;
     }
 
+    // v2.9 事件驱动 dispatch：链注册进主进程 DispatchRegistry（跨轮真相源——
+    // PM 子进程状态随回合消亡，主进程链态承担迟到回执投递与死亡检测）。
+    // B2（安全 review）：dispatch_from 必须与事件真实 sender 反查一致——
+    // 子进程不得冒充其它 agent 派发（会话成员身份经 workspace 反查）。
+    // B3：taskId 形状门（拒绝路径穿越字符/超长——注册表键与落盘文件名的上游）。
+    // 同链在途重复轮（并行批次重复 followup 的竞态兜底）→ 拒绝且绝不静默：
+    // PM 回合内经 steer 注入拒绝提示；流已关则仅记日志（下一轮追问由链态兜底拒绝）。
+    const roomId = event.getRoomId() ?? '';
+    if (!SAFE_TASK_ID_RE.test(taskId)) {
+      logger.warn('routeDispatch taskId 形状非法，丢弃', { taskId });
+      return;
+    }
+    // B2（R2 fail-closed）：dispatch_from 必须与事件真实 sender 反查一致。
+    // reject（会话不存在/非成员/非法身份——攻击者可经 sessionId 安排）与
+    // 不匹配一律丢弃；仅环境性 DB 失败降级放行（记日志）
+    const senderLookup = resolveSender(event.getSender(), roomId);
+    if (senderLookup.outcome === 'degrade') {
+      logger.warn('routeDispatch sender 反查环境性失败，降级放行', { taskId });
+    } else if (senderLookup.outcome !== 'ok' || senderLookup.assignment !== dispatchFrom) {
+      logger.warn('routeDispatch sender 身份校验失败，丢弃', {
+        taskId,
+        dispatchFrom,
+        outcome: senderLookup.outcome,
+      });
+      return;
+    }
+    const chainStreamId =
+      typeof content.sub_stream_session_id === 'string' ? content.sub_stream_session_id : undefined;
+    const pmStreamSessionId =
+      typeof content.tool_stream_session_id === 'string' ? content.tool_stream_session_id : undefined;
+    // B4(ii)（R3 复审修正）：链复用会重置 done 链的回执字段——复用前若上一轮
+    // 终态从未投递，取快照入 pendingDeliveries 队列，经 tryDeliver 的 busy 门
+    // 与串行化循环消费（PM 派发时必然在回合中，直接投递会造成并发顶层流）
+    const priorUndelivered = dispatchRegistry.requeueUndelivered(taskId);
+    if (priorUndelivered) {
+      logger.info('routeDispatch 链复用前补投上一轮未投递回执', { taskId });
+      const q = this.pendingDeliveries.get(priorUndelivered.pmAssignmentId);
+      if (q) q.push(priorUndelivered);
+      else
+        this.pendingDeliveries.set(priorUndelivered.pmAssignmentId, [priorUndelivered]);
+      this.tryDeliver(priorUndelivered.pmAssignmentId);
+    }
+    const registered = dispatchRegistry.register({
+      taskId,
+      pmAssignmentId: dispatchFrom,
+      subAssignmentId: assignmentId,
+      sessionId: roomId,
+      ...(chainStreamId !== undefined ? { subStreamSessionId: chainStreamId } : {}),
+      ...(pmStreamSessionId !== undefined ? { pmStreamSessionId } : {}),
+      isFollowupRound: content.followup_round === true,
+    });
+    if (!registered) {
+      logger.warn('routeDispatch 同链在途轮次，拒绝重复派发', { taskId, assignmentId });
+      // 拒绝必须让 PM 感知（绝不静默丢）：PM 回合内 → steer 注入提示到 PM 的
+      // 当前流（注意目标是 PM 的 runner，不是本 dispatch 的目标子 agent）；
+      // PM 空闲/流已关 → 仅记日志（下一轮追问由主进程链态兜底拒绝）
+      const pmRunner = this.opts.runners.get(dispatchFrom);
+      if (pmStreamSessionId && pmRunner && typeof pmRunner.steer === 'function') {
+        pmRunner.steer(
+          pmStreamSessionId,
+          `【系统提示】任务链 ${safeTaskIdText(taskId)} 已有在途轮次，本次重复派发被拒绝——回执完成后会自动送达，无需重发。`,
+        );
+      }
+      return;
+    }
+
     const body = this.extractBody(content);
     // P0-7：优先用 PM 预生成的 sub_stream_session_id（与 renderer chip 的查找键
     // 一致）；旧消息无此字段时回退 randomUUID（嵌套展示缺查找键，仅顶层可见）
@@ -305,6 +455,17 @@ export class RouterService {
     const content = event.getContent();
     const taskId = content.task_id;
     if (typeof taskId !== 'string') return;
+
+    // v2.9 事件驱动 dispatch：主进程链注册表更新（心跳 / 终态翻转 + 投递判定）。
+    // 先于下方转发——PM 空闲时的投递唤醒依赖链态已就绪。
+    // B2（R2 fail-closed）：settle/心跳只接受链的目标子 agent 本人回执——
+    // reject（会话不存在/非成员——攻击者可经 envelope sessionId 安排）或
+    // 反查不一致一律忽略；仅环境性 DB 失败降级放行。第三方子进程经此路径
+    // 既不能翻转他人链终态，也不能用伪造心跳为死亡链续命
+    this.applyRegistryReply(
+      content,
+      resolveSender(event.getSender(), event.getRoomId() ?? ''),
+    );
 
     const notification: TaskReplyNotification = {
       taskId,
@@ -356,6 +517,8 @@ export class RouterService {
       logger.warn('routeAbortDispatch content 缺关键字段（task_id / sub_stream_session_id）', { content });
       return;
     }
+    // v2.9：链注册表取消——cancelled 恒不投递（abort 止损后的迟到回执不唤醒 PM）
+    dispatchRegistry.cancel(taskId);
     if (this.opts.runners.size === 0) {
       // 无 runner 可广播——子 agent 未启动 / 已停止 / 进程重启中。abort 信号丢失，
       // 兜底交给 PM 侧 abort 后 reject（dispatch-wait onAbort）+ 子 agent 自身的
@@ -376,8 +539,202 @@ export class RouterService {
     });
   }
 
-  /** 启动钩子（当前仅日志；RouterService 为 lazy 单例，无其他初始化职责） */
+  // === v2.9 事件驱动 dispatch：链注册表联动 + 自动投递 ===
+
+  /**
+   * task_reply content → DispatchRegistry 更新 + 投递判定（routeTaskReply 消费）。
+   * in_progress → 心跳续命；终态 → 翻转后按 isFollowupRound / awaitWake 决定投递。
+   * 未注册链（历史遗留 / 伪造 task_id）→ no-op，不影响既有转发路径。
+   * B2（R2 fail-closed）：链存在时，reject 或反查 ≠ subAssignmentId 一律忽略；
+   * degrade（环境性 DB 失败）降级放行（桥层绑定已保证 sender 不可伪造）。
+   */
+  private applyRegistryReply(
+    content: Record<string, unknown>,
+    senderLookup: SenderLookup,
+  ): void {
+    const taskId = content.task_id;
+    if (typeof taskId !== 'string') return;
+    const status = content.status;
+    if (typeof status !== 'string') return;
+    const chain = dispatchRegistry.get(taskId);
+    if (chain) {
+      if (senderLookup.outcome === 'reject') {
+        logger.warn('task_reply sender 身份校验失败，忽略', { taskId });
+        return;
+      }
+      if (
+        senderLookup.outcome === 'ok' &&
+        senderLookup.assignment !== chain.subAssignmentId
+      ) {
+        logger.warn('task_reply sender 与链的目标子 agent 不符，忽略', {
+          taskId,
+          senderAssignment: senderLookup.assignment,
+          subAssignmentId: chain.subAssignmentId,
+        });
+        return;
+      }
+    }
+    if (status === 'in_progress') {
+      dispatchRegistry.heartbeat(taskId);
+      return;
+    }
+    if (status !== 'completed' && status !== 'failed' && status !== 'needs_input') return;
+    const body = typeof content.body === 'string' ? content.body : '';
+    const toolCallsUsed =
+      typeof content.tool_calls_used === 'number' ? content.tool_calls_used : undefined;
+    const handle = dispatchRegistry.settle(taskId, status, body, toolCallsUsed);
+    if (handle && (handle.isFollowupRound || handle.awaitWake)) {
+      this.tryDeliver(handle.pmAssignmentId);
+    }
+  }
+
+  /**
+   * 投递自动送达结果（PM 空闲时机）。
+   *
+   * B6（质量 review 2026-09-24）：per-runner 串行投递——逐条 takeNextDeliverable
+   * + await deliverChainResult + 每条前重查 busy。deliverChainResult 会完整 await
+   * routeUserChat（含 executeTask 的 activeTasks.set），因此下一条投递时 PM 已
+   * 占线 → 本批中断，余下链留给下一个 onIdle 边沿（连续投递自然级联，一回合
+   * 一条）——消除同会话并发 PM 回合与 session-lane 互相覆盖。
+   * delivering 守卫防 onPmIdle 与 applyRegistryReply 的同步重入。
+   */
+  private readonly delivering = new Set<string>();
+
+  /**
+   * B4(ii)（R3 复审修正）：链复用前补投的暂存队列（pmAssignmentId → 待投递快照）。
+   * 旧实现直接 deliverChainResult——但 routeDispatch 时 PM 必然在回合中（其
+   * dispatch 事件刚到达），直接投递绕过 busy 门与 delivering 守卫，会在 PM
+   * 回合中并发拉起第二条顶层流（恰是 B6 要消除的形态）。改经本队列由
+   * tryDeliver 的串行化循环消费——busy 时挂起，idle 边沿逐条投递。
+   */
+  private readonly pendingDeliveries = new Map<string, DispatchChainHandle[]>();
+
+  tryDeliver(pmAssignmentId: string): void {
+    if (this.delivering.has(pmAssignmentId)) return;
+    this.delivering.add(pmAssignmentId);
+    void (async () => {
+      try {
+        for (;;) {
+          // runner 缺失不阻断（routeUserChat 的 ensureRunner 可自动拉起）；
+          // busy 才中断——余下链留给下一个 idle 边沿
+          const runner = this.opts.runners.get(pmAssignmentId);
+          if (runner?.busy) break;
+          // R3：复用前补投的暂存队列优先于注册表（快照不经 takeNextDeliverable）
+          const queue = this.pendingDeliveries.get(pmAssignmentId);
+          const h =
+            queue && queue.length > 0
+              ? queue.shift()!
+              : dispatchRegistry.takeNextDeliverable(pmAssignmentId);
+          if (queue && queue.length === 0) this.pendingDeliveries.delete(pmAssignmentId);
+          if (!h) break;
+          await this.deliverChainResult(h).catch((err: unknown) =>
+            logger.error('dispatch 回执自动送达失败', {
+              taskId: h.taskId,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }
+      } finally {
+        this.delivering.delete(pmAssignmentId);
+      }
+    })();
+  }
+
+  /**
+   * 自动送达一条链终态（v2.9 核心）：
+   * 1. 落库 dispatch-result 消息行（sender='owner' + taskId=链 ID——行因此
+   *    进链历史，后续 followup 的 rebuildSubConversation 天然聚合本轮结果；
+   *    streamSessionId 单点生成，与唤醒流共用 = routeUserChat 的输入流）
+   * 2. routeUserChat(systemKickoff) 唤醒 PM 新回合——PM 上下文重建时该行
+   *    即用户轮输入，结果全文随历史进入推理
+   */
+  private async deliverChainResult(h: DispatchChainHandle): Promise<void> {
+    const streamSessionId = randomUUID();
+    const statusText = h.outcome === 'failed' ? '失败' : '完成';
+    // B3：taskId 经净化插值（防伪造消息结构注入 PM 上下文）
+    const chainIdText = safeTaskIdText(h.taskId);
+    const body =
+      `【dispatch 回执自动送达】任务链 ${chainIdText}（第 ${h.round} 轮）已${statusText}` +
+      `（工具调用 ${h.toolCallsUsed ?? 0} 次）。\n` +
+      `--- 回执正文 ---\n${h.body ?? ''}\n--- 回执结束 ---\n` +
+      '如需就该结果继续追问，使用 dispatch_followup(taskId)；本通知已持久化到会话历史。';
+    try {
+      insertMessage({
+        sessionId: h.sessionId,
+        sender: 'owner',
+        eventType: 'm.room.message',
+        body,
+        taskId: h.taskId,
+        streamSessionId,
+      });
+    } catch (err) {
+      // 行落库失败不阻断唤醒（会话历史少一行，但 PM 本轮仍能拿到结果正文）
+      logger.warn('dispatch 回执注入行落库失败（继续唤醒）', {
+        taskId: h.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    await this.routeUserChat({
+      sessionId: h.sessionId,
+      assignmentId: h.pmAssignmentId,
+      body,
+      streamSessionId,
+      systemKickoff: true,
+    });
+  }
+
+  /**
+   * PM 空闲入口（AgentRunner.onIdle → notifyRunnerIdle → 本方法）：
+   * 空闲快照（在途链置 awaitWake）+ 投递已就绪结果。连续投递自然级联——
+   * 每次唤醒回合结束再次触发本方法，直至无待投递。
+   * B4(i)（质量 review）：forcedExit = 回合被强制截断（预算耗尽 / 中断 /
+   * 错误 / 子进程崩溃）——此时 PM 没有公平机会 gather，已翻转未投递的链
+   * 一并置 awaitWake 补投；正常收尾（stop）维持 gather 契约不补投。
+   */
+  onPmIdle(assignmentId: string, forcedExit = false): void {
+    dispatchRegistry.markPmIdle(assignmentId, forcedExit ? { deliverSettledUndelivered: true } : undefined);
+    this.tryDeliver(assignmentId);
+  }
+
+  /**
+   * 心跳死亡清扫（周期 = HEARTBEAT_INTERVAL_MS）：判死链已由 sweepDead 在
+   * 注册表内 settle failed，此处走终态统一后半段——转发 PM（同步等待立即
+   * reject，替代盲等 9 分钟）+ 投递判定。
+   * B6（质量 review）：notifyTaskReply 补 .catch——主进程不残留 unhandled
+   * rejection 崩溃面（child.send 通道异常时的 reject 路径）。
+   */
+  private sweepOnce(): void {
+    for (const d of dispatchRegistry.sweepDead()) {
+      logger.warn('dispatch 链心跳超时判死', { taskId: d.taskId, reason: d.reason });
+      const handle = dispatchRegistry.get(d.taskId);
+      if (!handle) continue;
+      const runner = this.opts.runners.get(handle.pmAssignmentId);
+      runner
+        ?.notifyTaskReply({ taskId: d.taskId, status: 'failed', body: d.reason })
+        .catch((err: unknown) =>
+          logger.warn('死亡清扫通知 PM 失败', {
+            taskId: d.taskId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      if (handle.isFollowupRound || handle.awaitWake) {
+        this.tryDeliver(handle.pmAssignmentId);
+      }
+    }
+  }
+
+  /** 启动钩子：日志 + v2.9 心跳死亡清扫计时器（unref——不阻塞进程退出） */
   start(): void {
     logger.info('RouterService 已启动');
+    this.sweepTimer = setInterval(() => this.sweepOnce(), HEARTBEAT_INTERVAL_MS);
+    this.sweepTimer.unref();
+  }
+
+  /** 停止清扫计时器（destroyRouterService / 测试清理调用；幂等） */
+  stop(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
   }
 }

@@ -120,6 +120,16 @@ export interface AgentRunnerOpts {
    * 上限，超时强制收尾（kill 子进程 + 终态转换）。缺省 15s；测试可注入小值。
    */
   taskEndGraceMs?: number;
+  /**
+   * v2.9 事件驱动 dispatch（spec 2026-09-24）：活跃 task 归零回调——PM 一轮
+   * 结束（ephemeral end / task-end 收尾 / 兜底计时器强制收尾 / 子进程退出
+   * 均含）时触发。RouterService 据此做 PM 空闲快照（在途 dispatch 链置
+   * awaitWake）并投递已就绪的自动送达结果。fire-and-forget：回调抛错只记
+   * 日志，绝不影响收尾链路。
+   * B4(i)：forcedExit 标记回合是被强制截断（预算/中断/错误/崩溃）——Router
+   * 据此对已翻转未投递的链补投。
+   */
+  onIdle?: (assignmentId: string, forcedExit: boolean) => void;
 }
 
 /** 活跃 task 记录——keyed by streamSessionId */
@@ -177,6 +187,29 @@ export class AgentRunner {
   get assignmentId(): string { return this.opts.agentAssignmentId; }
   get agentUserId(): string { return this.opts.agentUserId; }
   get workspaceId(): string { return this.opts.workspaceId; }
+  /** v2.9：是否有活跃 task（RouterService 据此判定 PM 是否可立即接收注入唤醒） */
+  get busy(): boolean { return this.activeTasks.size > 0; }
+
+  /**
+   * v2.9：活跃归零时触发 onIdle 回调（ephemeral end / task-end 收尾 / 子进程
+   * 退出路径在删除活跃表项后调用）。电平触发：调用时刻 activeTasks 为空即触发
+   * （R1 复审修正——实现并非边沿锁存，连续两次空调用会两次触发；各调用方
+   * 的触发时机互斥于回合生命周期，消费端 markPmIdle/tryDeliver 幂等）。
+   * B4(i)：forcedExit = 本轮收尾非正常 stop（预算耗尽/中断/错误/崩溃/未见
+   * end chunk 的兜底）——正常收尾 false。
+   */
+  private maybeFireIdle(forcedExit: boolean): void {
+    if (this.activeTasks.size > 0) return;
+    if (!this.opts.onIdle) return;
+    try {
+      this.opts.onIdle(this.opts.agentAssignmentId, forcedExit);
+    } catch (err) {
+      logger.warn('onIdle 回调抛错（不影响收尾链路）', {
+        assignmentId: this.opts.agentAssignmentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   /**
    * 启动一个 task（含 ephemeral chat）。
@@ -237,6 +270,11 @@ export class AgentRunner {
           // v2.3 车道：顶层流收尾让道 + 触发排队放行
           clearLaneIfMatch(task.executionSessionId, task.streamSessionId);
           notifyExecutor();
+          // v2.9 事件驱动 dispatch：PM 回合结束——空闲快照 + 投递自动送达结果。
+          // B4(i)：end chunk 的 finishReason 非 stop（预算/中断/错误）= 强制截断
+          this.maybeFireIdle(
+            active?.lastFinish ? active.lastFinish.finishReason !== 'stop' : true,
+          );
         } else if (active) {
           // task-driven：不 kill（C3）——end 之后子进程还要发 task_reply / task-end；
           // 武装安全兜底，task-end / exit 迟迟不达时强制收尾
@@ -378,6 +416,11 @@ export class AgentRunner {
     // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
     clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
     notifyExecutor();
+    // v2.9 事件驱动 dispatch：task-driven 回合收尾——空闲快照 + 投递自动送达结果。
+    // B4(i)：未见 end chunk 的兜底收尾（safetyTimer/exit 路径）视为强制截断
+    this.maybeFireIdle(
+      active.lastFinish ? active.lastFinish.finishReason !== 'stop' : true,
+    );
     // v2.2 记忆 P2（spec §6.4 触发点）：任务正常收尾（非 error/abort）→
     // fire-and-forget 触发记忆提取。gate 口径与 transitionTaskTerminal 的
     // failed/cancelled 判定对齐：task-end 携带 error、或前置 end chunk
@@ -481,8 +524,12 @@ export class AgentRunner {
    * 幂等：正常 end/task-end 路径已清理的 task 不在活跃表中，天然跳过。
    */
   handleChildExit(child: ChildProcess, code: number | null): void {
+    // R1（复审 2026-09-24）：cleanedAny 标记本次退出是否确实中止了活跃任务——
+    // 仅此情形才在收尾后触发 forced 空闲边沿（崩溃/中断语义）。
+    let cleanedAny = false;
     for (const active of [...this.activeTasks.values()]) {
       if (active.runtime.child !== child) continue;
+      cleanedAny = true;
       active.runtime.child.off('message', active.messageHandler);
       if (active.safetyTimer) {
         clearTimeout(active.safetyTimer);
@@ -507,6 +554,17 @@ export class AgentRunner {
     }
     // v2.3 车道：流崩溃收尾后让道 + 触发排队放行（与 finalizeActiveTask 同语义）
     notifyExecutor();
+    // v2.9 事件驱动 dispatch（R1 复审修正）：子进程退出路径的 forced 空闲边沿。
+    // warmPool.release() 是 v1 销毁语义——每轮正常收尾都会 kill 子进程，exit
+    // 事件在正常结束后必然到达；若无条件补发 forcedExit=true，每个正常回合都会
+    // 把已被同步消费（executeDispatch 返回值 / gather）的 done-未投递链重复补投，
+    // 违反「正常收尾不补投」契约（正常路径的空闲边沿已由 end-chunk / finalize
+    // 路径按 lastFinish 语义触发）。因此仅当本次退出确实中止了活跃任务
+    // （cleanedAny = 崩溃/中断）才触发；关机期（shuttingDown）不触发——
+    // 避免应用退出时经补投拉起新 PM 回合。
+    if (cleanedAny && !shuttingDown && this.activeTasks.size === 0) {
+      this.maybeFireIdle(true);
+    }
   }
 
   /** C2：崩溃时把仍处 in_progress 的任务行转 failed（其余状态不动——保持状态机合法性） */

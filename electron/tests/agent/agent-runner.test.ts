@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
+import { markShuttingDown, __resetShuttingDownForTest } from '../../src/main/agent/agent-runner';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
@@ -465,6 +466,67 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     closeDb();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     delete process.env.AP_USER_DATA_DIR;
+  });
+
+  it('R1 回归锁（复审）：退出路径 forced 空闲边沿仅在中止活跃任务时触发——崩溃触发、例行退出不触发、关机不触发', async () => {
+    // 三用例共用夹具构造helper
+    const mk = async () => {
+      const child = mkMockChild();
+      const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+      await warmPool.warm('inst1');
+      const onIdle = vi.fn();
+      const runner = new AgentRunner({
+        agentAssignmentId: 'inst1',
+        agentUserId: 'agent-bot-x1',
+        workspaceId: 'ws-1',
+        warmPool,
+        onIdle,
+      });
+      return { child, runner, onIdle };
+    };
+
+    // (a) 崩溃中止活跃任务（ephemeral）→ exit 清理活跃表 → forced 空闲边沿触发
+    {
+      const { child, runner, onIdle } = await mk();
+      await runner.executeTask({
+        taskId: null,
+        executionSessionId: '!r:home',
+        body: 'x',
+        streamSessionId: 'ss-r1-crash',
+      });
+      expect(runner.activeTaskCount()).toBe(1);
+      onIdle.mockClear(); // executeTask 本身不触发 idle（尚有活跃）
+      runner.handleChildExit(child, 1);
+      expect(runner.activeTaskCount()).toBe(0);
+      expect(onIdle).toHaveBeenCalledTimes(1);
+      expect(onIdle).toHaveBeenCalledWith('inst1', true); // 崩溃 = forcedExit
+    }
+
+    // (b) 例行退出（活跃表已空——正常收尾后 warmPool.release kill 到达）→ 不触发
+    // （否则每个正常回合都会补投已消费结果，违反「正常收尾不补投」契约）
+    {
+      const { child, runner, onIdle } = await mk();
+      runner.handleChildExit(child, 0);
+      expect(onIdle).not.toHaveBeenCalled();
+    }
+
+    // (c) 关机期（shuttingDown）即便崩溃也不触发——避免退出时经补投拉起新回合
+    {
+      const { child, runner, onIdle } = await mk();
+      await runner.executeTask({
+        taskId: null,
+        executionSessionId: '!r:home',
+        body: 'x',
+        streamSessionId: 'ss-r1-shutdown',
+      });
+      markShuttingDown();
+      try {
+        runner.handleChildExit(child, 1);
+        expect(onIdle).not.toHaveBeenCalled();
+      } finally {
+        __resetShuttingDownForTest();
+      }
+    }
   });
 
   it('C2 回归锁：子进程退出（未发 end）→ 活跃表清理 + streaming 消息置 failed + in_progress 任务转 failed', async () => {
