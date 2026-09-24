@@ -136,7 +136,7 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
                 value={argsText}
                 onChange={(e) => { setOverwriteWarning(null); setArgsText(e.target.value); }}
                 placeholder={'一行一个参数，如：\n-y\n@modelcontextprotocol/server-github'}
-                rows={3}
+                rows={6}
                 className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] font-mono text-primary placeholder:text-disabled focus:border-focus focus:outline-none resize-y"
               />
             </div>

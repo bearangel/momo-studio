@@ -7,10 +7,14 @@
 //   - done 阶段：成功/失败分别统计；只要至少一条成功就触发 onSuccess（父级刷新）
 // P2.4（spec §6.2）：弹窗更名「导入 JSON」+ 一键插入结构化示例（非空输入二段确认替换）
 // + 远程条目 headers 透传（导入后可在「配置」里替换占位 key）。
+// P2.5（spec ①②③/D1-D3）：弹窗加宽 640 / textarea 14 行；done 阶段二态——
+//   全成功 → 直写 installNotice 横幅（TypePageShell 既有渲染）+ 自动关弹窗；
+//   部分失败 → 留窗展示失败明细（不横幅化，等用户手动处理）。
 import { useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { ParsedMcpEntry } from '../../lib/mcp-json';
 import { parseMcpServersJson } from '../../lib/mcp-json';
+import { useResourceStore } from '../../stores/resource.store';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
@@ -106,11 +110,17 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
     }
     setPhase({ kind: 'done', ok, failures });
     if (ok > 0) onSuccess();
+    // P2.5 D3：全部成功 → 横幅 + 自动关（弹窗内直写 store，与 View 层 handleMcpConfigSubmit 同模式）。
+    // 解析器对空对象直接抛错（review 阶段必 ≥1 条），failures 为空即 ok ≥ 1，无「0 条成功」误横幅路径。
+    if (failures.length === 0) {
+      useResourceStore.setState({ installNotice: `导入成功 ${ok} 条 MCP` });
+      onClose();
+    }
   };
 
   return (
     // 容器可访问名与 textarea aria-label「导入 JSON」区分（否则 getByLabelText 撞名）
-    <Dialog open onClose={onClose} title="导入 JSON" ariaLabel="批量导入 MCP" width={520}>
+    <Dialog open onClose={onClose} title="导入 JSON" ariaLabel="批量导入 MCP" width={640}>
       <div className="flex flex-col gap-3">
         {phase.kind === 'input' && (
           <>
@@ -120,7 +130,7 @@ export function McpJsonPasteDialog({ onClose, onSuccess }: Props) {
             <textarea
               id="mcp-json-input"
               aria-label="导入 JSON"
-              rows={8}
+              rows={14}
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder='支持 mcpServers / VS Code servers / 裸对象'
