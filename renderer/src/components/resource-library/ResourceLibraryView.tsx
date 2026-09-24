@@ -142,8 +142,8 @@ export function ResourceLibraryView() {
     }
     if (type === 'mcp') {
       return [
-        { key: 'form', title: '手动配置…', hint: '名称 / 命令 / 参数 / 环境变量（高级项默认折叠）', onSelect: () => setRegisterMcpOpen(true) },
-        { key: 'json', title: '粘贴 JSON…', hint: 'mcpServers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
+        { key: 'form', title: '快速创建…', hint: '本地 stdio / 远程 HTTP，名称命令或 URL', onSelect: () => setRegisterMcpOpen(true) },
+        { key: 'json', title: '导入 JSON…', hint: 'mcpServers / VS Code servers 格式，支持一次导入多条', onSelect: () => setMcpJsonOpen(true) },
         { key: 'import-bundle', title: '导入 DXT / MCPB 包', hint: '本地 .dxt / .mcpb 文件', onSelect: () => setBundleOpen(true) },
       ];
     }

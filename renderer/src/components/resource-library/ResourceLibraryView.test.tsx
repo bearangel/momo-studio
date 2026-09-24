@@ -3,7 +3,7 @@
 // 资源库壳重写测试（spec §2.1 三页结构）：TypeSidebar 二级菜单 + TypePageShell 组合。
 //   - 默认渲染 Agent 页（导航 landmark + 页标题「智能体」）
 //   - 切 MCP 页：标题与「＋」按钮文案随类型切换
-//   - MCP 页「＋」下拉三条本地路径（手动配置 / 粘贴 JSON / 导入包；P2.3 Task 1
+//   - MCP 页「＋」下拉三条本地路径（快速创建 / 导入 JSON / 导入包；P2.3 Task 1
 //     起「从网络获取」项已移除——单态负例断言）
 //   - localStorage 持久化恢复上次激活页
 //   - mount 时自动首拉 resource.list（旧视图同语义回归锁）
@@ -108,8 +108,8 @@ describe('ResourceLibraryView（三页壳）', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
     fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
-    expect(screen.getByText('手动配置…')).toBeTruthy();
-    expect(screen.getByText('粘贴 JSON…')).toBeTruthy();
+    expect(screen.getByText('快速创建…')).toBeTruthy();
+    expect(screen.getByText('导入 JSON…')).toBeTruthy();
     expect(screen.getByText('导入 DXT / MCPB 包')).toBeTruthy();
     expect(screen.queryByText('从网络获取…')).toBeNull();
   });

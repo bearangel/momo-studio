@@ -1,36 +1,28 @@
 // renderer/src/components/agent/RegisterMcpDialog.test.tsx
 //
-// v1.6 Task 13：RegisterMcpDialog 测试——表单式注册自定义 MCP server。
-//
-// 行为约定：
-//   - 表单字段：名称*（必填）+ 版本 + 命令*（必填）+ 参数（逗号分隔）+ 环境变量（多行 KEY=VALUE，[+] 加行）
-//   - 必填校验：名称或命令为空 → 提交按钮 disabled
-//   - 提交：
-//       args = params.split(',').map(trim).filter(Boolean)
-//       env = Object.fromEntries(envRows 解析)
-//       await ipc.resource.registerMcp({ name, version, command, args, env })
-//       （P3 收敛：id / source 由主进程补全，payload 不含这两者）
-//       await ipc.mcp.start(activeWorkspaceId, name)
-//       成功 → onSuccess() 刷新父列表 + onClose() 关闭
-//   - 提交期间按钮 disabled（防双击）；失败 → 红字错误，弹窗不关
-//
-// Mock 策略：window.api 桩（resource.registerMcp / mcp.start）+ useWorkspaceStore.setState 注入 activeWorkspaceId。
+// P2.4 Task 3：快速创建 MCP 表单测试（spec §4）。
+//   - 传输二态 Segmented：本地（stdio）名称/命令/参数(一行一个)/高级(env KeyValueRows+cwd)；
+//     远程（HTTP）名称/URL(https)/高级(headers KeyValueRows)；切换清空对方态字段
+//   - 同名二段确认：预检命中 → 警示条 + 按钮变「确认覆盖」；改字段重置
+//   - 提交 payload：stdio { name, version?, command, args, env, cwd? }；
+//     http { name, version?, command:'', transport:'streamable_http', url, headers }
+//   - 提交后 mcp.start + onSuccess + onClose；失败红字不关（既有语义）
+// Mock：window.api 桩（resource.registerMcp / resource.list / mcp.start）+ workspace store 注入。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RegisterMcpDialog } from './RegisterMcpDialog';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { ResourceItem, Workspace } from '../../ipc/types';
 
-// ---- mock IPC 桩 ----
 const resourceRegisterMcp = vi.fn();
+const resourceList = vi.fn();
 const mcpStart = vi.fn();
 
 const mockApi = {
-  resource: { registerMcp: resourceRegisterMcp },
+  resource: { registerMcp: resourceRegisterMcp, list: resourceList },
   mcp: { start: mcpStart },
 };
 
-// registerMcp 成功时的返回值（主进程 custom 映射产出的 ResourceItem）
 const REGISTERED_ITEM: ResourceItem = {
   id: 'custom-mcp-my-mcp',
   type: 'mcp',
@@ -57,213 +49,186 @@ const WS: Workspace = {
 
 beforeEach(() => {
   resourceRegisterMcp.mockReset();
+  resourceList.mockReset();
   mcpStart.mockReset();
   resourceRegisterMcp.mockResolvedValue(REGISTERED_ITEM);
+  resourceList.mockResolvedValue([]); // 默认无同名
   mcpStart.mockResolvedValue(undefined);
-
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+  useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: 'ws-active', loading: false, error: null });
+});
 
-  useWorkspaceStore.setState({
-    workspaces: [WS],
-    activeWorkspaceId: 'ws-active',
-    loading: false,
-    error: null,
+describe('RegisterMcpDialog — 快速创建 MCP：传输二态', () => {
+  it('默认本地态：渲染 名称/版本/命令/参数；无 URL 字段', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    expect(screen.getByLabelText('名称')).toBeInTheDocument();
+    expect(screen.getByLabelText('命令')).toBeInTheDocument();
+    expect(screen.getByLabelText('参数')).toBeInTheDocument();
+    expect(screen.queryByLabelText('URL')).toBeNull();
+  });
+
+  it('切到远程态：URL 出现、命令/参数隐藏', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    expect(screen.getByLabelText('URL')).toBeInTheDocument();
+    expect(screen.queryByLabelText('命令')).toBeNull();
+    expect(screen.queryByLabelText('参数')).toBeNull();
+  });
+
+  it('切换清空对方态字段：本地填命令 → 切远程 → URL 空；切回本地 → 命令空', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'npx' } });
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('');
+    fireEvent.click(screen.getByRole('radio', { name: '本地（stdio）' }));
+    expect((screen.getByLabelText('命令') as HTMLInputElement).value).toBe('');
+  });
+
+  it('远程态 URL 非 https → 提交 disabled + 提示', () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'http://x.example.com' } });
+    expect(screen.getByRole('button', { name: '注册并启动' })).toBeDisabled();
+    expect(screen.getByText('URL 必须以 https:// 开头')).toBeInTheDocument();
   });
 });
 
-describe('RegisterMcpDialog — 表单式注册自定义 MCP server', () => {
-  it('渲染所有表单字段（名称/版本/命令/参数/环境变量）+ 初始一行 env', () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    expect(screen.getByLabelText('名称')).toBeInTheDocument();
-    expect(screen.getByLabelText('版本')).toBeInTheDocument();
-    expect(screen.getByLabelText('命令')).toBeInTheDocument();
-    expect(screen.getByLabelText('参数')).toBeInTheDocument();
-    // 环境变量至少一行（用 placeholder 定位）
-    expect(screen.getAllByPlaceholderText('KEY=VALUE').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('必填校验：名称和命令都为空 → 提交按钮 disabled', () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    expect(screen.getByRole('button', { name: '注册并启动' })).toBeDisabled();
-  });
-
-  it('必填校验：只填名称（命令为空）→ 仍 disabled', () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'my-mcp' } });
-    expect(screen.getByRole('button', { name: '注册并启动' })).toBeDisabled();
-  });
-
-  it('必填校验：名称+命令都填 → 按钮 enabled', () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'my-mcp' } });
-    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'node' } });
-    expect(screen.getByRole('button', { name: '注册并启动' })).toBeEnabled();
-  });
-
-  it('[+] 按钮点击后追加一行新的 env 输入', () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    const initialCount = screen.getAllByPlaceholderText('KEY=VALUE').length;
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
-    expect(screen.getAllByPlaceholderText('KEY=VALUE').length).toBe(initialCount + 1);
-  });
-
-  it('提交 → ipc.resource.registerMcp 收到正确 payload（不含 id / source，由主进程补全）', async () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'my-mcp' } });
-    fireEvent.change(screen.getByLabelText('版本'), { target: { value: '1.2.0' } });
-    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'npx' } });
-    fireEvent.change(screen.getByLabelText('参数'), { target: { value: '-y, server.js, --port 3000' } });
-    // 填第一行 env
-    const envInputs = screen.getAllByPlaceholderText('KEY=VALUE');
-    fireEvent.change(envInputs[0]!, { target: { value: 'API_KEY=secret123' } });
-
-    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(resourceRegisterMcp).toHaveBeenCalledTimes(1);
-    });
-    const [config] = resourceRegisterMcp.mock.calls[0]!;
-    expect(config).toMatchObject({
-      name: 'my-mcp',
-      version: '1.2.0',
-      command: 'npx',
-    });
-    expect(config).not.toHaveProperty('id');
-    expect(config).not.toHaveProperty('source');
-    // args 逗号分隔 → trim + 过滤空串
-    expect(config.args).toEqual(['-y', 'server.js', '--port 3000']);
-    // env 多行 → Record
-    expect(config.env).toEqual({ API_KEY: 'secret123' });
-  });
-
-  it('版本留空 → payload version 为 undefined（主进程补默认值）', async () => {
+describe('RegisterMcpDialog — env 行编辑（KeyValueRows）', () => {
+  it('删除第 1 行 env → 提交 payload env 为空对象', async () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-
+    // 高级区默认折叠——展开
+    fireEvent.click(screen.getByText('高级：环境变量与工作目录'));
+    fireEvent.change(screen.getByLabelText('环境变量名 1'), { target: { value: 'FOO' } });
+    fireEvent.change(screen.getByLabelText('环境变量值 1'), { target: { value: 'bar' } });
+    fireEvent.click(screen.getByRole('button', { name: '删除第 1 行' }));
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(resourceRegisterMcp).toHaveBeenCalled();
-    });
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
     const [config] = resourceRegisterMcp.mock.calls[0]!;
-    expect(config.version).toBeUndefined();
+    expect(config.env).toEqual({});
   });
 
-  it('args 解析：空串 / 多余逗号 / 前后空格 → 干净的 string[]', async () => {
+  it('env 两行 + cwd → payload 透传', async () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-    fireEvent.change(screen.getByLabelText('参数'), { target: { value: ' a , , b ,  ,c,' } });
-
+    fireEvent.click(screen.getByText('高级：环境变量与工作目录'));
+    fireEvent.change(screen.getByLabelText('环境变量名 1'), { target: { value: 'FOO' } });
+    fireEvent.change(screen.getByLabelText('环境变量值 1'), { target: { value: 'bar' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加环境变量' }));
+    fireEvent.change(screen.getByLabelText('环境变量名 2'), { target: { value: 'BAZ' } });
+    fireEvent.change(screen.getByLabelText('环境变量值 2'), { target: { value: 'qux' } });
+    fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/opt/wd' } });
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(resourceRegisterMcp).toHaveBeenCalled();
-    });
-    const [config] = resourceRegisterMcp.mock.calls[0]!;
-    expect(config.args).toEqual(['a', 'b', 'c']);
-  });
-
-  it('env 解析：多行 KEY=VALUE（含 [+] 追加的行）→ Record', async () => {
-    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
-    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-    // 第一行
-    const envInputs0 = screen.getAllByPlaceholderText('KEY=VALUE');
-    fireEvent.change(envInputs0[0]!, { target: { value: 'FOO=bar' } });
-    // 追加第二行
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
-    const envInputs1 = screen.getAllByPlaceholderText('KEY=VALUE');
-    fireEvent.change(envInputs1[1]!, { target: { value: 'BAZ=qux' } });
-
-    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(resourceRegisterMcp).toHaveBeenCalled();
-    });
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalled());
     const [config] = resourceRegisterMcp.mock.calls[0]!;
     expect(config.env).toEqual({ FOO: 'bar', BAZ: 'qux' });
+    expect(config.cwd).toBe('/opt/wd');
   });
+});
 
-  it('提交 → ipc.mcp.start 用 activeWorkspaceId + name 启动', async () => {
+describe('RegisterMcpDialog — args 一行一个', () => {
+  it('参数 textarea 按行拆分（含带空格的参数值）', async () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'runner' } });
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-
+    fireEvent.change(screen.getByLabelText('参数'), { target: { value: '-y\nserver.js\n--port 3000' } });
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalled());
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
+    expect(config.args).toEqual(['-y', 'server.js', '--port 3000']);
+  });
+});
 
-    await waitFor(() => {
-      expect(mcpStart).toHaveBeenCalledTimes(1);
+describe('RegisterMcpDialog — 远程提交', () => {
+  it('远程态提交 payload：transport/url/headers 透传，command 空串', async () => {
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: '远程（HTTP）' }));
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'context7' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://mcp.context7.com/mcp' } });
+    fireEvent.click(screen.getByText('高级：请求头'));
+    fireEvent.change(screen.getByLabelText('请求头名 1'), { target: { value: 'Authorization' } });
+    fireEvent.change(screen.getByLabelText('请求头值 1'), { target: { value: 'Bearer ctx7sk-x' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
+    const [config] = resourceRegisterMcp.mock.calls[0]!;
+    expect(config).toMatchObject({
+      name: 'context7',
+      command: '',
+      transport: 'streamable_http',
+      url: 'https://mcp.context7.com/mcp',
+      headers: { Authorization: 'Bearer ctx7sk-x' },
     });
-    expect(mcpStart).toHaveBeenCalledWith('ws-active', 'runner');
+  });
+});
+
+describe('RegisterMcpDialog — 同名二段确认', () => {
+  it('预检命中 → 警示条 + 按钮变「确认覆盖」且未提交；再点才提交', async () => {
+    resourceList.mockResolvedValue([{ slug: 'dup-mcp' }]);
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'dup-mcp' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(screen.getByText('将覆盖同名服务器：dup-mcp')).toBeInTheDocument());
+    expect(resourceRegisterMcp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '确认覆盖' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
   });
 
-  it('成功 → 触发 onSuccess 刷新父列表 + onClose 关闭', async () => {
+  it('警示后改字段 → 重置回一段态（警示条消失）', async () => {
+    resourceList.mockResolvedValue([{ slug: 'dup-mcp' }]);
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'dup-mcp' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(screen.getByText('将覆盖同名服务器：dup-mcp')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd2' } });
+    expect(screen.queryByText('将覆盖同名服务器：dup-mcp')).toBeNull();
+    expect(screen.getByRole('button', { name: '注册并启动' })).toBeInTheDocument();
+  });
+
+  it('预检 list 失败 → 不阻塞直接提交（主进程覆盖语义兜底）', async () => {
+    resourceList.mockRejectedValue(new Error('net down'));
+    render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
+    fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('RegisterMcpDialog — 既有语义回归', () => {
+  it('成功 → mcp.start(activeWorkspaceId, name) + onSuccess + onClose', async () => {
     const onClose = vi.fn();
     const onSuccess = vi.fn();
     render(<RegisterMcpDialog onClose={onClose} onSuccess={onSuccess} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'runner' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(onSuccess).toHaveBeenCalledTimes(1);
-    });
+    await waitFor(() => expect(mcpStart).toHaveBeenCalledWith('ws-active', 'runner'));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('registerMcp 失败 → 红字错误显示，弹窗不关，onSuccess 不触发', async () => {
-    resourceRegisterMcp.mockRejectedValueOnce(new Error('名称已存在'));
+  it('提交失败 → 红字不关弹窗', async () => {
+    resourceRegisterMcp.mockRejectedValueOnce(new Error('启动失败'));
     const onClose = vi.fn();
-    const onSuccess = vi.fn();
-    render(<RegisterMcpDialog onClose={onClose} onSuccess={onSuccess} />);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'dup' } });
+    render(<RegisterMcpDialog onClose={onClose} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('名称已存在')).toBeInTheDocument();
-    });
+    await waitFor(() => expect(screen.getByText('启动失败')).toBeInTheDocument());
     expect(onClose).not.toHaveBeenCalled();
-    expect(onSuccess).not.toHaveBeenCalled();
   });
 
-  it('环境变量区默认折叠在「高级」内，展开后可输入', () => {
-    render(<RegisterMcpDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
-    expect(screen.getByText('高级：环境变量')).toBeTruthy();
-    const details = screen.getByText('高级：环境变量').closest('details');
-    expect(details).toBeTruthy();
-    expect(details).not.toHaveProperty('open', true);
-    fireEvent.click(screen.getByText('高级：环境变量'));
-    expect(details).toHaveProperty('open', true);
-    expect(screen.getByPlaceholderText('KEY=VALUE')).toBeTruthy();
-  });
-
-  it('提交期间按钮 disabled（防双击）', async () => {
-    // 用未解决的 promise 卡住提交过程
-    let resolveRegister: () => void = () => {};
-    resourceRegisterMcp.mockImplementationOnce(
-      () => new Promise<ResourceItem>((resolve) => { resolveRegister = () => resolve(REGISTERED_ITEM); }),
-    );
+  it('版本留空 → payload version undefined', async () => {
     render(<RegisterMcpDialog onClose={() => {}} onSuccess={() => {}} />);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd' } });
-
     fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
-    // 提交进行中 → 按钮文案变化 + disabled
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: '注册中…' })).toBeDisabled();
-    });
-    // registerMcp 只被调一次（防双击）
-    expect(resourceRegisterMcp).toHaveBeenCalledTimes(1);
-
-    // 解除卡死，让组件清理
-    resolveRegister();
-    await waitFor(() => {
-      expect(mcpStart).toHaveBeenCalled();
-    });
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalled());
+    expect(resourceRegisterMcp.mock.calls[0]![0].version).toBeUndefined();
   });
 });

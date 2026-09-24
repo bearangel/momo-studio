@@ -1,90 +1,108 @@
 // renderer/src/components/agent/RegisterMcpDialog.tsx
-// v1.6 Task 13：表单式注册自定义 MCP server 弹窗。
-//
-// 字段：名称* / 版本 / 命令* / 参数（逗号分隔）/ 环境变量（多行 KEY=VALUE，[+] 加行）
-// 提交流程：
-//   1. args = params.split(',').map(trim).filter(Boolean)
-//   2. env = Object.fromEntries(envRows 过滤空行后按首个 '=' 拆键值)
-//   3. await ipc.resource.registerMcp({ name, version, command, args, env })
-//      （P3 收敛：id / source 由主进程补全，返回新资源的 ResourceItem）
-//   4. await ipc.mcp.start(activeWorkspaceId, name)
-//   5. onSuccess() 通知父组件刷新列表 → onClose() 关闭弹窗
-//
-// 约束：
-//   - 提交期间按钮 disabled（防双击）
-//   - 失败 → 红字错误显示在表单底部，弹窗保持打开
-//
-// v2.1 P3：手写 modal 外壳 → Dialog 原子件；名称/版本/命令/参数原本就是 Input 原子件；
-// 环境变量行动态增删保留原生 input（TeamDialog 先例：行内原生控件仅 token 化，
-// placeholder 同时是测试定位钩子）。
+// P2.4：快速创建 MCP（spec §4，D7 原地升级——文件/组件名保留）。
+// 传输二态（Segmented）：本地 stdio（名称/命令/参数一行一个/高级：env+cwd）；
+// 远程 streamable HTTP（名称/URL https/高级：headers）。切换清空对方态字段。
+// env/headers 用 KeyValueRows（D5）；同名二段确认（D2：预检命中 → 警示条 +
+// 「确认覆盖」，改任一字段重置）。提交 → resource:registerMcp → mcp:start →
+// onSuccess 刷新 + onClose。
 import { useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
+import { Segmented } from '../ui/Segmented';
+import { KeyValueRows, type KVRow } from '../ui/KeyValueRows';
 
-interface Props {
-  onClose: () => void;
-  /** 注册并启动成功后调用（父组件据此刷新已注册 MCP 列表） */
-  onSuccess: () => void;
-}
+type Transport = 'stdio' | 'http';
 
-/**
- * 把多行 "KEY=VALUE" 字符串数组解析为 env 对象。
- * 按首个 '=' 拆分（值里允许出现 '='）；空行与无 '=' 的行跳过。
- */
-function parseEnv(rows: string[]): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const raw of rows) {
-    const line = raw.trim();
-    if (!line) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue; // 无 '=' 或 key 为空 → 跳过
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1);
-    if (key) env[key] = value;
+const TRANSPORT_OPTIONS = [
+  { value: 'stdio' as const, label: '本地（stdio）' },
+  { value: 'http' as const, label: '远程（HTTP）' },
+];
+
+/** 行数组 → Record：key/value 任一为空的行静默剔除（spec §4.2） */
+function rowsToRecord(rows: KVRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const k = r.key.trim();
+    if (k && r.value !== '') out[k] = r.value;
   }
-  return env;
+  return out;
 }
 
-export function RegisterMcpDialog({ onClose, onSuccess }: Props) {
+export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
+  const [transport, setTransport] = useState<Transport>('stdio');
   const [name, setName] = useState('');
   const [version, setVersion] = useState('');
   const [command, setCommand] = useState('');
-  const [args, setArgs] = useState('');
-  // env 行：初始一行空串，[+] 按钮追加
-  const [envRows, setEnvRows] = useState<string[]>(['']);
+  const [argsText, setArgsText] = useState('');
+  const [cwd, setCwd] = useState('');
+  const [url, setUrl] = useState('');
+  const [envRows, setEnvRows] = useState<KVRow[]>([{ key: '', value: '' }]);
+  const [headerRows, setHeaderRows] = useState<KVRow[]>([{ key: '', value: '' }]);
+  // 同名二段确认态：null=一段；命中后存同名（警示条展示 + 按钮变「确认覆盖」）
+  const [overwriteWarning, setOverwriteWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const urlInvalid = transport === 'http' && url.trim() !== '' && !url.trim().startsWith('https://');
+  const valid =
+    transport === 'stdio'
+      ? name.trim() !== '' && command.trim() !== ''
+      : name.trim() !== '' && url.trim().startsWith('https://');
+
+  const switchTransport = (next: Transport): void => {
+    if (next === transport) return;
+    setTransport(next);
+    setOverwriteWarning(null);
+    // 清空对方态专属字段（防脏数据残留误提交，spec §4.1）
+    if (next === 'http') {
+      setCommand(''); setArgsText(''); setCwd(''); setEnvRows([{ key: '', value: '' }]);
+    } else {
+      setUrl(''); setHeaderRows([{ key: '', value: '' }]);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
-    if (!name.trim() || !command.trim()) return;
-    if (!activeWorkspaceId) {
-      setError('未激活的工作空间，无法启动 MCP');
-      return;
+    if (!valid) return;
+    const trimmedName = name.trim();
+    if (!activeWorkspaceId) { setError('未激活的工作空间，无法启动 MCP'); return; }
+    // 一段态先做同名预检（与 JSON 导入流同手法）；list 失败不阻塞（主进程覆盖语义兜底）
+    if (overwriteWarning === null) {
+      try {
+        const installed = await ipc.resource.list({ type: 'mcp' });
+        const names = new Set(installed.map((i) => i.slug));
+        if (names.has(trimmedName)) { setOverwriteWarning(trimmedName); return; }
+      } catch { /* 预检失败放行 */ }
     }
     setSubmitting(true);
     setError(null);
     try {
-      const parsedArgs = args
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const env = parseEnv(envRows);
-      // 注册定义（P3 收敛：resource:registerMcp，id/source 由主进程补全并返回 ResourceItem）
-      await ipc.resource.registerMcp({
-        name: name.trim(),
-        version: version.trim() || undefined,
-        command: command.trim(),
-        args: parsedArgs,
-        env,
-      });
-      // 在当前 workspace 启动该 MCP 进程（进程池复用）
-      await ipc.mcp.start(activeWorkspaceId, name.trim());
+      if (transport === 'http') {
+        await ipc.resource.registerMcp({
+          name: trimmedName,
+          version: version.trim() || undefined,
+          command: '',
+          transport: 'streamable_http',
+          url: url.trim(),
+          headers: rowsToRecord(headerRows),
+        });
+      } else {
+        const parsedArgs = argsText.split('\n').map((s) => s.trim()).filter(Boolean);
+        await ipc.resource.registerMcp({
+          name: trimmedName,
+          version: version.trim() || undefined,
+          command: command.trim(),
+          args: parsedArgs,
+          env: rowsToRecord(envRows),
+          cwd: cwd.trim() || undefined,
+        });
+      }
+      await ipc.mcp.start(activeWorkspaceId, trimmedName);
       onSuccess();
       onClose();
     } catch (err) {
@@ -94,72 +112,62 @@ export function RegisterMcpDialog({ onClose, onSuccess }: Props) {
     }
   };
 
+  const submitLabel = overwriteWarning !== null ? '确认覆盖' : submitting ? '注册中…' : '注册并启动';
+
   return (
-    <Dialog open onClose={onClose} title="注册自定义 MCP server" width={448}>
+    <Dialog open onClose={onClose} title="快速创建 MCP" width={448}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <Input
-          label="名称"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="如：github"
-          autoFocus
+        <Segmented
+          options={TRANSPORT_OPTIONS}
+          value={transport}
+          onChange={switchTransport}
+          aria-label="传输类型"
         />
-        <Input
-          label="版本"
-          value={version}
-          onChange={(e) => setVersion(e.target.value)}
-          placeholder="如：1.0.0（可选）"
-        />
-        <Input
-          label="命令"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="如：npx"
-        />
-        <Input
-          label="参数"
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          placeholder="逗号分隔，如：-y, server.js, --port 3000"
-        />
+        <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus />
+        <Input label="版本" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="如：1.0.0（可选）" />
 
-        <details className="border border-subtle rounded-md px-3 py-2">
-          <summary className="text-sm text-secondary cursor-pointer select-none">高级：环境变量</summary>
-          <div className="flex flex-col gap-1 pt-2">
-            <label className="text-sm text-secondary">环境变量</label>
-            {envRows.map((row, idx) => (
-              <input
-                key={idx}
-                type="text"
-                value={row}
-                onChange={(e) => {
-                  const next = [...envRows];
-                  next[idx] = e.target.value;
-                  setEnvRows(next);
-                }}
-                placeholder="KEY=VALUE"
-                className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary placeholder:text-disabled focus:border-focus focus:outline-none"
+        {transport === 'stdio' ? (
+          <>
+            <Input label="命令" value={command} onChange={(e) => { setOverwriteWarning(null); setCommand(e.target.value); }} placeholder="如：npx" />
+            <div className="flex flex-col gap-1">
+              <label htmlFor="mcp-args" className="text-sm text-secondary">参数</label>
+              <textarea
+                id="mcp-args"
+                value={argsText}
+                onChange={(e) => setArgsText(e.target.value)}
+                placeholder={'一行一个参数，如：\n-y\n@modelcontextprotocol/server-github'}
+                rows={3}
+                className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] font-mono text-primary placeholder:text-disabled focus:border-focus focus:outline-none resize-y"
               />
-            ))}
-            <button
-              type="button"
-              onClick={() => setEnvRows((rows) => [...rows, ''])}
-              className="self-start rounded-md px-2 py-1 text-xs text-accent-600 hover:bg-surface-3 dark:text-accent-300"
-              aria-label="+"
-            >
-              + 添加环境变量
-            </button>
-          </div>
-        </details>
+            </div>
+            <details className="border border-subtle rounded-md px-3 py-2">
+              <summary className="text-sm text-secondary cursor-pointer select-none">高级：环境变量与工作目录</summary>
+              <div className="flex flex-col gap-2 pt-2">
+                <KeyValueRows rows={envRows} onChange={(rows) => { setOverwriteWarning(null); setEnvRows(rows); }} keyPlaceholder="变量名" valuePlaceholder="值" addLabel="添加环境变量" ariaLabel="环境变量" />
+                <Input label="工作目录" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="如：/opt/project（可选，子进程 cwd）" />
+              </div>
+            </details>
+          </>
+        ) : (
+          <>
+            <Input label="URL" value={url} onChange={(e) => { setOverwriteWarning(null); setUrl(e.target.value); }} placeholder="https://mcp.example.com/mcp" />
+            {urlInvalid && <div className="text-status-error text-sm">URL 必须以 https:// 开头</div>}
+            <details className="border border-subtle rounded-md px-3 py-2">
+              <summary className="text-sm text-secondary cursor-pointer select-none">高级：请求头</summary>
+              <div className="pt-2">
+                <KeyValueRows rows={headerRows} onChange={(rows) => { setOverwriteWarning(null); setHeaderRows(rows); }} keyPlaceholder="Header 名" valuePlaceholder="值" addLabel="添加请求头" ariaLabel="请求头" />
+              </div>
+            </details>
+          </>
+        )}
 
+        {overwriteWarning !== null && (
+          <div className="text-status-warning text-sm">将覆盖同名服务器：{overwriteWarning}</div>
+        )}
         {error && <div className="text-status-error text-sm">{error}</div>}
         <div className="flex gap-2 justify-end mt-2">
-          <Button variant="ghost" type="button" onClick={onClose}>
-            取消
-          </Button>
-          <Button type="submit" disabled={submitting || !name.trim() || !command.trim()}>
-            {submitting ? '注册中…' : '注册并启动'}
-          </Button>
+          <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
+          <Button type="submit" disabled={submitting || !valid}>{submitLabel}</Button>
         </div>
       </form>
     </Dialog>
