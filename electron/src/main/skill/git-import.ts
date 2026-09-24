@@ -126,8 +126,12 @@ function hashSkillFiles(items: Array<{ rel: string; data: Buffer }>): string {
   return h.digest('hex');
 }
 
-/** scan→import 会话表：importId → tmp zip 路径（一次性，取出即删——D5） */
-const IMPORT_SESSIONS = new Map<string, string>();
+/**
+ * scan→import 会话表：importId → tmp zip 路径 + 仓库名（一次性，取出即删——D5）。
+ * repoName 供 import 阶段根级无 name 条目的 slug 兜底——与 scan 阶段同源，
+ * 保证「根级无 frontmatter.name」条目 scan/import 两阶段 slug 一致（Minor ①）。
+ */
+const IMPORT_SESSIONS = new Map<string, { tmpPath: string; repoName: string }>();
 
 /** URL 里的仓库名（根级 SKILL.md slug 兜底用） */
 function repoNameFromUrl(repoUrl: string): string {
@@ -151,7 +155,8 @@ export async function scanGitRepoSkills(
   }
   const buffer = await (deps.fetchZip ?? defaultFetchZip)(archiveUrl);
   const files = collectFiles(new AdmZip(buffer));
-  const roots = collectSkillRoots(files, repoNameFromUrl(repoUrl));
+  const repoName = repoNameFromUrl(repoUrl);
+  const roots = collectSkillRoots(files, repoName);
   const skills: ScannedSkill[] = roots.map((r) => {
     const md = files.find((f) => f.rel === `${r.dirPrefix}SKILL.md`)!.data.toString('utf-8');
     const front = parseFrontmatter(md);
@@ -160,7 +165,7 @@ export async function scanGitRepoSkills(
   const importId = crypto.randomUUID();
   const tmpPath = path.join(tmpDir, `git-import-${importId}.zip`);
   fs.writeFileSync(tmpPath, buffer);
-  IMPORT_SESSIONS.set(importId, tmpPath);
+  IMPORT_SESSIONS.set(importId, { tmpPath, repoName });
   // 日志不打 URL 全文（可能带 token 形态查询串），只打 host + 数量
   logger.info('Git 仓库 skill 扫描完成', { host: new URL(repoUrl).host, count: skills.length });
   return { importId, skills };
@@ -170,15 +175,17 @@ export async function importGitRepoSkills(
   importId: string,
   deps: { skillsDir?: string } = {},
 ): Promise<{ imported: UploadedSkill[]; failures: Array<{ slug: string; reason: string }> }> {
-  const tmpPath = IMPORT_SESSIONS.get(importId);
-  if (!tmpPath) throw new Error('导入会话已失效，请重新扫描');
+  const session = IMPORT_SESSIONS.get(importId);
+  if (!session) throw new Error('导入会话已失效，请重新扫描');
   IMPORT_SESSIONS.delete(importId);
+  const { tmpPath, repoName } = session;
   const skillsDir = deps.skillsDir ?? getSkillsDir();
   const imported: UploadedSkill[] = [];
   const failures: Array<{ slug: string; reason: string }> = [];
   try {
     const files = collectFiles(new AdmZip(fs.readFileSync(tmpPath)));
-    const roots = collectSkillRoots(files, ''); // slug 已在 scan 定型，此处 repoName 不参与
+    // 根级无 name 条目用会话携带的仓库名兜底——与 scan 阶段同源（Minor ①）
+    const roots = collectSkillRoots(files, repoName);
     for (const root of roots) {
       try {
         // 该 skill 的文件集（根级 = 全部；包裹级 = dirPrefix 之下）+ 三层路径防御

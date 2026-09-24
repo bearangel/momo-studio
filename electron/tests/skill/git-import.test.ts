@@ -73,7 +73,8 @@ const SUPERPOWERS_LIKE = {
   'superpowers-main/skills/brainstorming/references/guide.md': '# 指南',
   'superpowers-main/skills/tdd/SKILL.md': SKILL_MD('TDD', '测试驱动'),
   'superpowers-main/README.md': '# 非 skill 文件',
-  'superpowers-main/__MACOSX/junk': '垃圾',       // 应被 isIgnoredEntry 过滤
+  // 包裹级 __MACOSX 不被 isIgnoredEntry 过滤（只匹配根级前缀），但不在任何 skill 前缀下故无害
+  'superpowers-main/__MACOSX/junk': '垃圾',
   'superpowers-main/skills/.DS_Store': '垃圾',
 };
 
@@ -242,6 +243,25 @@ describe('importGitRepoSkills — 落盘 + 幂等/覆盖 + 一次性会话', () 
     });
     await importGitRepoSkills(scan.importId, { skillsDir });
     await expect(importGitRepoSkills(scan.importId, { skillsDir })).rejects.toThrow(/失效/);
+  });
+
+  it('根级 SKILL.md 无 frontmatter.name → scan/import 均以仓库名兜底 slug（对称，P2.6 Task 1 Minor ①）', async () => {
+    // 根级无 name：scan 阶段 slug 兜底链落到仓库名（URL 第二段，.git 后缀已剥）；
+    // import 阶段须从会话取同一仓库名重导出 collectSkillRoots——否则 slug 兜底为空串
+    // 抛「非法 slug」，与 scan 结果不对称（根级条目永远导不进）。
+    const scan = await scanGitRepoSkills('https://github.com/obra/superpowers', {
+      fetchZip: async () => makeArchive({
+        'SKILL.md': '---\ndescription: 根级无名字\n---\n\n正文\n',
+      }),
+      tmpDir: tmpRoot,
+    });
+    expect(scan.skills).toHaveLength(1);
+    expect(scan.skills[0]!.slug).toBe('superpowers');
+    expect(scan.skills[0]!.name).toBe('superpowers');
+    const imp = await importGitRepoSkills(scan.importId, { skillsDir });
+    expect(imp.imported.map((s) => s.slug)).toEqual(['superpowers']);
+    expect(imp.failures).toEqual([]);
+    expect(fs.existsSync(path.join(skillsDir, 'superpowers', 'SKILL.md'))).toBe(true);
   });
 
   it('skill 目录内 entry 名含 .. → 跳过（不抛错、不越界落盘）', async () => {
