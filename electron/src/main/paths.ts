@@ -34,3 +34,10 @@ export function resolveSkillsDir(): string {
   }
   return dir;
 }
+
+/** 临时文件目录（<userData>/tmp；git 导入等中转用途，AP_USER_DATA_DIR 注入可测） */
+export function resolveTmpDir(): string {
+  const dir = path.join(resolveUserDataDir(), 'tmp');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}

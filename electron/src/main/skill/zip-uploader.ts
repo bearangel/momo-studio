@@ -65,8 +65,8 @@ interface SkillFrontmatter {
 /** 匹配 --- 包围的 YAML frontmatter（兼容 \n 与 \r\n 行尾） */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 
-/** 轻量 YAML frontmatter 解析（比 loader.ts 的 parseSkillMd 更宽容：不抛错） */
-function parseFrontmatter(md: string): SkillFrontmatter {
+/** 轻量 YAML frontmatter 解析（比 loader.ts 的 parseSkillMd 更宽容：不抛错）。P2.6 git-import 复用 */
+export function parseFrontmatter(md: string): SkillFrontmatter {
   const m = md.match(FRONTMATTER_RE);
   if (!m) return {};
   const yamlText = m[1];
@@ -81,9 +81,9 @@ function parseFrontmatter(md: string): SkillFrontmatter {
 /**
  * v1.6.2：判断某 entry 是否为 OS 元数据（解压时跳过）。
  * macOS Finder 压缩会注入 __MACOSX/ + ._* AppleDouble；Windows 资源管理器注入 Thumbs.db。
- * 用户上传场景必须忽略这些，否则会把垃圾文件写进 skill 目录。
+ * 用户上传场景必须忽略这些，否则会把垃圾文件写进 skill 目录。P2.6 git-import 复用。
  */
-function isIgnoredEntry(entryName: string): boolean {
+export function isIgnoredEntry(entryName: string): boolean {
   const norm = entryName.replace(/\\/g, '/');
   if (norm.startsWith('__MACOSX/')) return true;
   // 逐段检查：.DS_Store / Thumbs.db / ._ 开头（AppleDouble 资源叉）/ .bak 后缀
