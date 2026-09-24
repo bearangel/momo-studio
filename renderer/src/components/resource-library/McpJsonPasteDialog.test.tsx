@@ -65,7 +65,7 @@ beforeEach(() => {
 describe('McpJsonPasteDialog', () => {
   it('非法 JSON 解析错误内联展示且不触发注册', async () => {
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), { target: { value: 'not json' } });
+    fireEvent.change(screen.getByLabelText('导入 JSON'), { target: { value: 'not json' } });
     fireEvent.click(screen.getByRole('button', { name: '解析' }));
     expect(await screen.findByText('内容不是合法 JSON')).toBeTruthy();
     expect(resourceRegisterMcp).not.toHaveBeenCalled();
@@ -73,7 +73,7 @@ describe('McpJsonPasteDialog', () => {
 
   it('解析成功展示待导入清单（名称+命令摘要）', async () => {
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), { target: { value: NEW_JSON } });
+    fireEvent.change(screen.getByLabelText('导入 JSON'), { target: { value: NEW_JSON } });
     fireEvent.click(screen.getByRole('button', { name: '解析' }));
     expect(await screen.findByText('fresh')).toBeTruthy();
     // 命令摘要：命令 + 参数拼合
@@ -87,7 +87,7 @@ describe('McpJsonPasteDialog', () => {
     resourceList.mockResolvedValueOnce([INSTALLED_GITHUB]);
     const onSuccess = vi.fn();
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={onSuccess} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), { target: { value: OVERLAP_JSON } });
+    fireEvent.change(screen.getByLabelText('导入 JSON'), { target: { value: OVERLAP_JSON } });
     fireEvent.click(screen.getByRole('button', { name: '解析' }));
     expect(await screen.findByText(/将覆盖 1 个同名服务器/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
@@ -106,7 +106,7 @@ describe('McpJsonPasteDialog', () => {
       .mockResolvedValueOnce(REGISTERED_FRESH);
     const onSuccess = vi.fn();
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={onSuccess} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), {
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
       target: { value: JSON.stringify({ mcpServers: { a: { command: 'x' }, b: { command: 'y' } } }) },
     });
     fireEvent.click(screen.getByRole('button', { name: '解析' }));
@@ -123,7 +123,7 @@ describe('McpJsonPasteDialog', () => {
 
   it('远程条目展示「远程」徽标与 url，本地条目展示「本地」徽标（P2 转正）', async () => {
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), {
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
       target: {
         value: JSON.stringify({
           mcpServers: {
@@ -143,7 +143,7 @@ describe('McpJsonPasteDialog', () => {
   it('远程条目导入时 registerMcp 收到 transport + url（二态转发）', async () => {
     const onSuccess = vi.fn();
     render(<McpJsonPasteDialog onClose={vi.fn()} onSuccess={onSuccess} />);
-    fireEvent.change(screen.getByLabelText('粘贴 JSON'), {
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
       target: {
         value: JSON.stringify({
           mcpServers: {
@@ -166,5 +166,60 @@ describe('McpJsonPasteDialog', () => {
     expect(resourceRegisterMcp).toHaveBeenNthCalledWith(2, { name: 'fs', command: 'npx' });
     expect(await screen.findByText(/成功 2 条/)).toBeTruthy();
     expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('P2.4：导入 JSON 升级', () => {
+  it('空输入点「插入示例」→ 直接填入多行示例（含 stdio + 远程 headers 条目）', () => {
+    render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '插入示例' }));
+    const area = screen.getByLabelText('导入 JSON') as HTMLTextAreaElement;
+    expect(area.value).toContain('"mcpServers"');
+    expect(area.value).toContain('"context7"');
+    expect(area.value).toContain('"headers"');
+    expect(area.value.split('\n').length).toBeGreaterThan(5); // 结构化多行，非一行串
+  });
+
+  it('非空输入点「插入示例」→ 变「确认替换」；再点才替换', () => {
+    render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('导入 JSON'), { target: { value: '{"x":{"command":"npx"}}' } });
+    fireEvent.click(screen.getByRole('button', { name: '插入示例' }));
+    expect((screen.getByLabelText('导入 JSON') as HTMLTextAreaElement).value).toBe('{"x":{"command":"npx"}}'); // 未替换
+    fireEvent.click(screen.getByRole('button', { name: '确认替换' }));
+    expect((screen.getByLabelText('导入 JSON') as HTMLTextAreaElement).value).toContain('"mcpServers"');
+  });
+
+  it('远程条目带 headers → 注册入参透传 headers', async () => {
+    render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
+      target: { value: '{"mcpServers":{"c7":{"type":"http","url":"https://mcp.context7.com/mcp","headers":{"Authorization":"Bearer k"}}}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认导入' }));
+    await waitFor(() => expect(resourceRegisterMcp).toHaveBeenCalledTimes(1));
+    expect(resourceRegisterMcp.mock.calls[0]![0]).toMatchObject({
+      name: 'c7',
+      transport: 'streamable_http',
+      url: 'https://mcp.context7.com/mcp',
+      headers: { Authorization: 'Bearer k' },
+    });
+  });
+
+  it('VS Code servers 格式 → 走通导入', async () => {
+    render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
+      target: { value: '{"servers":{"vs":{"type":"stdio","command":"npx","args":["-y","x"]}}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    expect(await screen.findByText('待导入 1 条：')).toBeInTheDocument();
+  });
+
+  it('type:sse → 解析阶段红字报「暂不支持 SSE」', async () => {
+    render(<McpJsonPasteDialog onClose={() => {}} onSuccess={() => {}} />);
+    fireEvent.change(screen.getByLabelText('导入 JSON'), {
+      target: { value: '{"old":{"type":"sse","url":"https://x.com/sse"}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+    expect(await screen.findByText(/暂不支持 SSE 传输/)).toBeInTheDocument();
   });
 });

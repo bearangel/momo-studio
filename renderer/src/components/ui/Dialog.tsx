@@ -14,9 +14,11 @@ interface Props {
   footer?: ReactNode;
   /** 内容区宽度 px，默认 480 */
   width?: number;
+  /** 容器可访问名覆盖（默认取 title）——弹窗内控件 aria-label 与标题撞名时用它区分 */
+  ariaLabel?: string;
 }
 
-export function Dialog({ open, onClose, title, children, footer, width = 480 }: Props) {
+export function Dialog({ open, onClose, title, children, footer, width = 480, ariaLabel }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,7 +47,7 @@ export function Dialog({ open, onClose, title, children, footer, width = 480 }: 
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={ariaLabel ?? title}
         tabIndex={-1}
         className={cn(
           'fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-strong bg-surface-1 shadow-2xl outline-none',
