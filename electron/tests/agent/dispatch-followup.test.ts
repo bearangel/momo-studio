@@ -1,23 +1,26 @@
 // electron/tests/agent/dispatch-followup.test.ts
 //
 // v2.8.0 Orchestration 元语 Task 6：dispatch_followup 执行体（spec §3）。
-// 锁定语义：
+// v2.9 事件驱动 dispatch（spec 2026-09-24）异步化改写：executeFollowup 派发后
+// 立即返回送达确认字符串（不再 waitForTaskReply），终态回执由主进程
+// DispatchRegistry 自动投递。锁定语义：
 //   1. 校验三连：
 //      a. 链存在——messages 表 (task_id, session_id) 双键有行；无行（含会话
 //         不匹配 / executionSessionId 缺失）→ 统一文案「仅可追问自己此前
 //         dispatch 的任务」（不区分不存在/非自己以省探测——所有权=会话边界）
-//      b. 同链无在途——pendingReplies 或 bgHandles(in_flight) 有该 taskId →
-//         「上一轮仍在进行中」拒绝；bg done / 已 settle 不阻塞
+//      b. 同链无在途——pendingReplies / bgHandles(in_flight) / inFlightFollowups
+//         任一命中该 taskId → 「上一轮仍在进行中」拒绝；回执到达（任意状态）
+//         清除 inFlightFollowups 后放行下一轮
 //      c. 会话边界——链首子消息 sender（agentUserId）反查 assignment →
 //         assertSessionDispatchAllowed 既有跨会话/单成员拒绝
 //   2. 成功路径：重建前缀 → 追问 user 行落库（原文，无降级提示）→ 派发
 //      content 沿用原 taskId + 新 subStreamSessionId + history_prefix +
-//      body=question → pendingReplies 注册 → reply resolve
+//      followup_round=true + body=question → 立即返回含「自动送达」的确认
 //   3. degraded：重建降级 → history_prefix 字段缺席 + body 前缀追加
 //      「（此前对话历史不可用）」提示；落库行仍是原文
-//   4. abort signal：onAbort 清理 pendingReplies + reject(AbortError) +
-//      发 abort_dispatch（携带新 subStreamSessionId）
-//   5. 接线锁（boundary-rules 铁律 4——生产者/消费者成对）：
+//   4. 接线锁（boundary-rules 铁律 4——生产者/消费者成对）：
+//      - executeFollowup → content.followup_round=true（消费方 routeDispatch
+//        → DispatchRegistry 恒投递语义的输入）
 //      - routeDispatch：content.history_prefix → TaskConfig.historyPrefix
 //        （非法载荷丢弃字段不拒整条；taskId === dispatchContext.task_id 同值双设）
 //      - AgentRunner.executeTask：historyPrefix 透传 task-config（未携带时
@@ -52,6 +55,7 @@ import {
   __seedBgHandleForTest,
   __resetBgStateForTest,
 } from '../../src/main/agent/dispatch-wait';
+import { __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
 import {
   __routeChunkToBufferForTest,
   __resetEventBufferForTest,
@@ -80,7 +84,7 @@ let sessChatId = '';
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-pm',
-    agentUserId: 'agent-pm-01',
+    agentUserId: 'agent-inst-pm',
     systemPrompt: 'x',
     modelName: 'm',
     llmApiKey: 'k',
@@ -199,6 +203,7 @@ beforeEach(() => {
 
   __resetBgStateForTest();
   __resetEventBufferForTest();
+  __resetDispatchRegistryForTest();
   sentEvents.length = 0;
   process.send = ((msg: unknown): boolean => {
     const m = msg as InternalEventMsg;
@@ -221,65 +226,91 @@ afterEach(() => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe('executeFollowup 校验三连', () => {
-  it('链不存在（未知 taskId）→ 统一文案拒绝，不落库不发事件', async () => {
-    await expect(
+  it('链不存在（未知 taskId）→ 统一文案拒绝，不落库不发事件', () => {
+    expect(() =>
       executeFollowup('T-chain-ghost', '追问', makeConfig(), sessChatId),
-    ).rejects.toThrow('仅可追问自己此前 dispatch 的任务');
+    ).toThrow('仅可追问自己此前 dispatch 的任务');
 
     expect(dispatchContents()).toHaveLength(0);
     expect(followupRows('T-chain-ghost')).toHaveLength(0);
   });
 
-  it('链存在但在别的会话（session_id 过滤）→ 同样按链不存在拒绝（所有权=会话边界）', async () => {
+  it('链存在但在别的会话（session_id 过滤）→ 同样按链不存在拒绝（所有权=会话边界）', () => {
     const CHAIN = 'T-chain-x-session';
     seedFirstRound(CHAIN);
     // 同 taskId 的行存在，但用另一会话 id 追问 → 双键查询无行
-    await expect(
+    expect(() =>
       executeFollowup(CHAIN, '追问', makeConfig(), 'sess-别的会话'),
-    ).rejects.toThrow('仅可追问自己此前 dispatch 的任务');
+    ).toThrow('仅可追问自己此前 dispatch 的任务');
     expect(dispatchContents()).toHaveLength(0);
   });
 
-  it('executionSessionId 缺失 → 无法定位链，按链不存在拒绝', async () => {
-    await expect(
+  it('executionSessionId 缺失 → 无法定位链，按链不存在拒绝', () => {
+    expect(() =>
       executeFollowup('T-any', '追问', makeConfig(), undefined),
-    ).rejects.toThrow('仅可追问自己此前 dispatch 的任务');
+    ).toThrow('仅可追问自己此前 dispatch 的任务');
   });
 
-  it('同链 pendingReplies 在途 → 「上一轮仍在进行中」拒绝；不重复落库；settle 后放行', async () => {
+  it('同链追问在途（inFlightFollowups）→ 拒绝且不落库；回执到达后放行下一轮', () => {
     const CHAIN = 'T-chain-inflight';
     seedFirstRound(CHAIN);
     const cfg = makeConfig();
 
-    const p1 = executeFollowup(CHAIN, '第一问', cfg, sessChatId, undefined, 'ss-pm-a', 'ss-r2a');
-    await expect(
-      executeFollowup(CHAIN, '第二问', cfg, sessChatId),
-    ).rejects.toThrow('上一轮仍在进行中');
+    const ack = executeFollowup(CHAIN, '第一问', cfg, sessChatId, 'ss-pm-a', 'ss-r2a');
+    expect(ack).toContain('追问已送达');
+    // 在途轮未收回执 → 同链再问被拒（含指引：回执会自动送达）
+    expect(() => executeFollowup(CHAIN, '第二问', cfg, sessChatId)).toThrow(
+      '上一轮仍在进行中',
+    );
+    expect(() => executeFollowup(CHAIN, '第二问', cfg, sessChatId)).toThrow('自动送达');
     // 拒绝路径不落追问行（仍只有第一问）
     expect(followupRows(CHAIN)).toHaveLength(1);
     expect(followupRows(CHAIN)[0]?.body).toBe('第一问');
 
-    // settle 第一轮后同链可再 followup（pendingReplies 键安全——spec §2.2 不变量 1）
+    // 终态回执到达清除在途标记（handleTaskReply 统一清除）→ 下一轮可追问
     handleTaskReply({ task_id: CHAIN, status: 'completed', body: '答一', tool_calls_used: 1 });
-    await expect(p1).resolves.toEqual({ body: '答一', toolCallsUsed: 1 });
+    const ack2 = executeFollowup(CHAIN, '第二问', cfg, sessChatId, 'ss-pm-b', 'ss-r2b');
+    expect(ack2).toContain('追问已送达');
+    expect(followupRows(CHAIN)).toHaveLength(2);
   });
 
-  it('同链 bgHandles in_flight → 拒绝；done 句柄不阻塞（bg 链追问合法）', async () => {
+  it('B5 回归锁：in_progress 心跳不清除在途标记（子/主校验对齐）——终态才放行', () => {
+    const CHAIN = 'T-chain-heartbeat-hold';
+    seedFirstRound(CHAIN);
+    const cfg = makeConfig();
+
+    const ack = executeFollowup(CHAIN, '第一问', cfg, sessChatId, 'ss-pm-h', 'ss-rh');
+    expect(ack).toContain('追问已送达');
+
+    // 心跳到达：链活着但仍在途——子侧标记必须保持（否则 PM 二次追问会拿到
+    // 「已送达」确认后被主进程拒绝 + steer 丢失 → 追问被静默吞掉）
+    handleTaskReply({ task_id: CHAIN, status: 'in_progress', body: '子任务运行中', tool_calls_used: 2 });
+    expect(() => executeFollowup(CHAIN, '第二问', cfg, sessChatId)).toThrow(
+      '上一轮仍在进行中',
+    );
+
+    // 终态到达才清除 → 放行
+    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '答一', tool_calls_used: 3 });
+    const ack2 = executeFollowup(CHAIN, '第二问', cfg, sessChatId, 'ss-pm-h2', 'ss-rh2');
+    expect(ack2).toContain('追问已送达');
+  });
+
+  it('同链 bgHandles in_flight → 拒绝；done 句柄不阻塞（bg 链追问合法）', () => {
     const CHAIN = 'T-chain-bg';
     seedFirstRound(CHAIN);
     __seedBgHandleForTest(CHAIN, { slug: 'ui', status: 'in_flight', startedAt: 1 });
-    await expect(
-      executeFollowup(CHAIN, '追问', makeConfig(), sessChatId),
-    ).rejects.toThrow('上一轮仍在进行中');
+    expect(() => executeFollowup(CHAIN, '追问', makeConfig(), sessChatId)).toThrow(
+      '上一轮仍在进行中',
+    );
 
-    // done（已收割终态）= 上轮已 settle → 放行
+    // done（已收割终态）= 上轮已 settle → 放行（返回送达确认，不阻塞）
     __seedBgHandleForTest(CHAIN, { slug: 'ui', status: 'done', startedAt: 1, body: 'bg 结果', toolCallsUsed: 0, completedAt: 2 });
-    const p = executeFollowup(CHAIN, '追问 bg 链', makeConfig(), sessChatId);
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: 'bg 续答', tool_calls_used: 0 });
-    await expect(p).resolves.toEqual({ body: 'bg 续答', toolCallsUsed: 0 });
+    const ack = executeFollowup(CHAIN, '追问 bg 链', makeConfig(), sessChatId);
+    expect(ack).toContain('追问已送达');
+    expect(dispatchContents()).toHaveLength(1);
   });
 
-  it('链内只有 owner 行（无子 agent 行）→ 无法定位目标 agent 拒绝', async () => {
+  it('链内只有 owner 行（无子 agent 行）→ 无法定位目标 agent 拒绝', () => {
     const CHAIN = 'T-chain-owner-only';
     // 构造：上一轮 followup 已写追问行但子 agent 流行缺失（极端清理后形态）
     insertMessage({
@@ -290,21 +321,21 @@ describe('executeFollowup 校验三连', () => {
       taskId: CHAIN,
       parentStreamSessionId: 'ss-old',
     });
-    await expect(
-      executeFollowup(CHAIN, '再问', makeConfig(), sessChatId),
-    ).rejects.toThrow('无法定位目标 agent');
+    expect(() => executeFollowup(CHAIN, '再问', makeConfig(), sessChatId)).toThrow(
+      '无法定位目标 agent',
+    );
     expect(dispatchContents()).toHaveLength(0);
   });
 
-  it('目标被移出会话（session_members 删行）→ 既有跨会话错误（assertSessionDispatchAllowed）', async () => {
+  it('目标被移出会话（session_members 删行）→ 既有跨会话错误（assertSessionDispatchAllowed）', () => {
     const CHAIN = 'T-chain-boundary';
     seedFirstRound(CHAIN);
     getDb()
       .prepare(`DELETE FROM session_members WHERE session_id = ? AND instance_id = 'inst-sub'`)
       .run(sessChatId);
-    await expect(
-      executeFollowup(CHAIN, '追问', makeConfig(), sessChatId),
-    ).rejects.toThrow('目标 agent 不是当前会话成员，不能跨会话委派');
+    expect(() => executeFollowup(CHAIN, '追问', makeConfig(), sessChatId)).toThrow(
+      '目标 agent 不是当前会话成员，不能跨会话委派',
+    );
     expect(dispatchContents()).toHaveLength(0);
     expect(followupRows(CHAIN)).toHaveLength(0);
   });
@@ -314,20 +345,24 @@ describe('executeFollowup 校验三连', () => {
 // 2. 成功路径 + degraded + abort
 // ══════════════════════════════════════════════════════════════════════════
 
-describe('executeFollowup 成功路径（replay 续接）', () => {
-  it('重建前缀 → 追问行落库 → 派发沿用原 taskId + 新 subStream + history_prefix → reply resolve', async () => {
+describe('executeFollowup 成功路径（异步送达确认）', () => {
+  it('重建前缀 → 追问行落库 → 派发沿用原 taskId + 新 subStream + history_prefix + followup_round → 立即返回确认', () => {
     const CHAIN = 'T-chain-ok';
     seedFirstRound(CHAIN);
 
-    const p = executeFollowup(
+    const ack = executeFollowup(
       CHAIN,
       '把结论展开成表格',
       makeConfig(),
       sessChatId,
-      undefined,
       'ss-pm-cur',
       'ss-r2',
     );
+
+    // 异步语义：立即返回送达确认（含自动送达教学），无 promise 等待
+    expect(ack).toContain('追问已送达');
+    expect(ack).toContain(CHAIN);
+    expect(ack).toContain('自动送达');
 
     // 追问 user 行已落库：原文 + 双键打标 + parent = PM 当前流
     const rows = followupRows(CHAIN);
@@ -335,7 +370,7 @@ describe('executeFollowup 成功路径（replay 续接）', () => {
     expect(rows[0]?.body).toBe('把结论展开成表格');
     expect(rows[0]?.parentStreamSessionId).toBe('ss-pm-cur');
 
-    // 派发 content：沿用原链 taskId（不是新 UUID）+ 重建前缀 + 新 subStream
+    // 派发 content：沿用原链 taskId（不是新 UUID）+ 重建前缀 + 新 subStream + 追问轮标记
     const contents = dispatchContents();
     expect(contents).toHaveLength(1);
     const c = contents[0];
@@ -346,18 +381,16 @@ describe('executeFollowup 成功路径（replay 续接）', () => {
     expect(c?.tool_stream_session_id).toBe('ss-pm-cur');
     expect(c?.sub_stream_session_id).toBe('ss-r2');
     expect(c?.history_prefix).toEqual([{ role: 'assistant', content: '首轮结论' }]);
+    // v2.9 接线锁：追问轮标记——主进程 DispatchRegistry 恒投递语义的输入
+    expect(c?.followup_round).toBe(true);
 
     // 事件发往当前执行会话 + sender 是 PM 本地身份
     const evt = sentEvents.find((e) => e.eventType === 'io.momo-studio.dispatch');
     expect(evt?.sessionId).toBe(sessChatId);
-    expect(evt?.sender).toBe('agent-pm-01');
-
-    // 同步等 reply（pendingReplies 注册 + 渐进超时语义同 executeDispatch）
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '二轮答复', tool_calls_used: 2 });
-    await expect(p).resolves.toEqual({ body: '二轮答复', toolCallsUsed: 2 });
+    expect(evt?.sender).toBe('agent-inst-pm');
   });
 
-  it('degraded（链行只有分段快照，重建器双键空链降级）→ 前缀缺席 + question 前缀提示；落库原文', async () => {
+  it('degraded（链行只有分段快照，重建器双键空链降级）→ 前缀缺席 + question 前缀提示；落库原文', () => {
     const CHAIN = 'T-chain-deg';
     // 只 seed segment 快照行：链存在（task_id+session 有行）但 queryChainRows
     // 过滤 segment_of IS NULL 后为空 → rebuildSubConversation 降级
@@ -371,49 +404,20 @@ describe('executeFollowup 成功路径（replay 续接）', () => {
     });
 
     // 不传 subStreamSessionId → 执行体自生成（新 chip 查找键）
-    const p = executeFollowup(CHAIN, '追问细节', makeConfig(), sessChatId, undefined, 'ss-pm-deg');
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '降级答复', tool_calls_used: 0 });
-
-    const r = await p;
-    expect(r).toEqual({ body: '降级答复', toolCallsUsed: 0 });
+    const ack = executeFollowup(CHAIN, '追问细节', makeConfig(), sessChatId, 'ss-pm-deg');
+    expect(ack).toContain('追问已送达');
 
     const c = dispatchContents()[0];
     expect(c?.task_id).toBe(CHAIN);
     // 降级：body 前缀提示 + history_prefix 字段缺席（T2 语义：空数组等价无前缀）
     expect(c?.body).toBe('（此前对话历史不可用）\n追问细节');
     expect('history_prefix' in (c ?? {})).toBe(false);
+    expect(c?.followup_round).toBe(true);
     // 自生成 subStreamSessionId：非空字符串
     expect(typeof c?.sub_stream_session_id).toBe('string');
     expect(String(c?.sub_stream_session_id).length).toBeGreaterThan(0);
     // 落库行是用户原文（提示只注入派发 body，不污染链历史）
     expect(followupRows(CHAIN)[0]?.body).toBe('追问细节');
-  });
-
-  it('abort signal：onAbort 清理 pendingReplies + reject(AbortError) + 发 abort_dispatch（携带新 subStream）', async () => {
-    const CHAIN = 'T-chain-abort';
-    seedFirstRound(CHAIN);
-    const ac = new AbortController();
-
-    const p = executeFollowup(CHAIN, '问', makeConfig(), sessChatId, ac.signal, 'ss-pm-ab', 'ss-r2ab');
-    ac.abort();
-
-    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
-
-    // abort_dispatch 兜底事件已发（routeAbortDispatch 以 subStreamSessionId 定位）
-    const abortEvt = sentEvents.find((e) => e.eventType === 'io.momo-studio.abort_dispatch');
-    expect(abortEvt).toBeDefined();
-    expect(abortEvt?.content.task_id).toBe(CHAIN);
-    expect(abortEvt?.content.sub_stream_session_id).toBe('ss-r2ab');
-
-    // pendingReplies 已清理：reply 到达走「迟到」warn 路径（不复活 promise）
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      handleTaskReply({ task_id: CHAIN, status: 'completed', body: '迟到', tool_calls_used: 0 });
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(String(warnSpy.mock.calls[0]?.[0])).toContain('迟到的 task_reply');
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 });
 
@@ -438,7 +442,7 @@ describe('routeDispatch history_prefix 映射（主进程接线锁）', () => {
       {
         getType: () => 'io.momo-studio.dispatch',
         getContent: () => content,
-        getSender: () => 'agent-pm-01',
+        getSender: () => 'agent-inst-pm',
         getRoomId: () => sessChatId,
       },
       'owner',
@@ -505,7 +509,8 @@ describe('routeDispatch history_prefix 映射（主进程接线锁）', () => {
     const CHAIN = 'T-chain-toolpair';
     seedFirstRoundWithToolPair(CHAIN);
 
-    const p = executeFollowup(CHAIN, '继续', makeConfig(), sessChatId, undefined, 'ss-pm-tp', 'ss-r2tp');
+    const ack = executeFollowup(CHAIN, '继续', makeConfig(), sessChatId, 'ss-pm-tp', 'ss-r2tp');
+    expect(ack).toContain('追问已送达');
 
     // 生产者侧：executeFollowup 派发 content.history_prefix 携带完整工具对
     const c = dispatchContents()[0];
@@ -525,9 +530,6 @@ describe('routeDispatch history_prefix 映射（主进程接线锁）', () => {
     const tasks = await routeDispatchCapture(c ?? {});
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.historyPrefix).toEqual(expectedPrefix);
-
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '二轮答复', tool_calls_used: 0 });
-    await expect(p).resolves.toEqual({ body: '二轮答复', toolCallsUsed: 0 });
   });
 });
 

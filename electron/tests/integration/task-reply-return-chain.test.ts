@@ -101,7 +101,7 @@ const TEAM_SESSION = '!team:reply-chain';
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-pm',
-    agentUserId: '@pm:localhost',
+    agentUserId: 'agent-inst-pm',
     systemPrompt: 'You are the PM.',
     modelName: 'test-model',
     llmApiKey: 'test-key',
@@ -334,7 +334,7 @@ describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 →
     const pmConfig = makeConfig();
     const subConfig = makeConfig({
       agentAssignmentId: 'inst-sub',
-      agentUserId: '@sub:localhost',
+      agentUserId: 'agent-inst-sub',
       role: 'sub',
       subAgents: [],
     });
@@ -345,13 +345,13 @@ describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 →
 
     const pmRunner = new AgentRunner({
       agentAssignmentId: 'inst-pm',
-      agentUserId: '@pm:localhost',
+      agentUserId: 'agent-inst-pm',
       workspaceId: 'ws-1',
       warmPool: new WarmPool({ spawn: vi.fn().mockResolvedValue(pmChild.child) }),
     });
     const subRunner = new AgentRunner({
       agentAssignmentId: 'inst-sub',
-      agentUserId: '@sub:localhost',
+      agentUserId: 'agent-inst-sub',
       workspaceId: 'ws-1',
       warmPool: new WarmPool({ spawn: vi.fn().mockResolvedValue(subChild.child) }),
     });
@@ -383,9 +383,13 @@ describe('task_reply 回传全链路（PM dispatch → SUB 执行 → 回执 →
       { timeout: 2000 },
     );
 
+    // v2.9：SUB 首条回执是首拍心跳（in_progress）——终态断言按 completed 过滤
     const replyEvt = internalEvents.find(
-      (e) => e.eventType === TASK_REPLY_EVENT_TYPE,
+      (e) =>
+        e.eventType === TASK_REPLY_EVENT_TYPE &&
+        (e.content as { status?: string }).status === 'completed',
     )!;
+    expect(replyEvt).toBeDefined();
     expect(replyEvt.content.task_id).toBe(lastDispatchContent?.task_id);
     expect(replyEvt.content.status).toBe('completed');
     expect(replyEvt.content.body).toBe('报告完成');

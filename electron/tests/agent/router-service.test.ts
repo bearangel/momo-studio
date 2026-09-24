@@ -10,9 +10,56 @@
 //
 // AgentRunner / TaskDispatcher 用 mock（与 agent-runner.test.ts 同模式，避免真实子进程）。
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { RouterService } from '../../src/main/agent/router-service';
+import { __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
+
+// v2.9：dispatch 链注册表是模块级单例（生命周期=主进程）——按用例复位，
+// 防止固定 taskId 跨用例残留 in_flight 触发 routeDispatch 的重复轮拒绝。
+// R2（安全复审）：routeDispatch 对 sender 三态校验（ok/degrade/reject）——
+// dispatch 用例需真实身份 fixture（会话 + workspace 成员），sender '@pm:home'
+// 反查 inst-pm 与 dispatch_from 一致；DB 不可用用例（无 fixture 的其余测试）
+// 走 degrade 放行不受影响。
+const tmpRoot = path.join(
+  os.tmpdir(),
+  `ap-router-svc-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
+  const db = getDb();
+  db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+  for (const inst of ['inst-pm', 'inst-sub']) {
+    db.prepare(
+      `INSERT INTO agent_definitions
+         (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+          default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+    ).run(inst, inst, inst);
+    db.prepare(
+      `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES (?, 'ws', ?, ?)`,
+    ).run(inst, inst, inst === 'inst-pm' ? '@pm:home' : '@sub:home');
+  }
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
+     VALUES ('!room:home', 'ws', 'T', 0, 'chat', NULL, ?, ?)`,
+  ).run(Date.now(), Date.now());
+  __resetDispatchRegistryForTest();
+});
+
+afterEach(() => {
+  closeDb();
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  delete process.env.AP_USER_DATA_DIR;
+});
 
 /**
  * 构造 mock Matrix event——只暴露 RouterService.routeEvent 用到的方法。
@@ -120,7 +167,7 @@ describe('RouterService', () => {
           // v2（Task 10）：dispatch_from / dispatch_to 的值是 assignmentId（本地身份路由键）
           dispatch_from: 'inst-pm',
           dispatch_to: 'inst-sub',
-        }),
+        }, '@pm:home'),
         'inst-pm',
         '!room:home',
         'inst-sub',
@@ -147,7 +194,7 @@ describe('RouterService', () => {
           dispatch_to: 'inst-sub',
           sub_stream_session_id: 'ss-pre-gen',
           tool_stream_session_id: 'ss-pm-cur',
-        }),
+        }, '@pm:home'),
         'inst-pm',
         '!room:home',
         'inst-sub',
@@ -174,7 +221,7 @@ describe('RouterService', () => {
           task_id: 'task-789',
           dispatch_from: 'inst-pm',
           dispatch_to: 'inst-sub',
-        }),
+        }, '@pm:home'),
         'inst-pm',
         '!room:home',
         'inst-sub',
@@ -220,7 +267,7 @@ describe('RouterService', () => {
           task_id: 'task-456',
           dispatch_from: 'inst-pm',
           dispatch_to: 'inst-sub',
-        }),
+        }, '@pm:home'),
         'inst-pm',
         null,
       );
@@ -245,7 +292,7 @@ describe('RouterService', () => {
           task_id: 'task-789',
           dispatch_from: 'inst-pm',
           dispatch_to: 'inst-unknown',
-        }),
+        }, '@pm:home'),
         'inst-pm',
         null,
       );

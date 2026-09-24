@@ -65,6 +65,7 @@ import {
   handleTaskReply,
   __resetBgStateForTest,
 } from '../../src/main/agent/dispatch-wait';
+import { __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
 import {
   __routeChunkToBufferForTest,
   __resetEventBufferForTest,
@@ -108,7 +109,7 @@ const originalSend = process.send;
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     agentAssignmentId: 'inst-pm',
-    agentUserId: 'agent-pm-01',
+    agentUserId: 'agent-inst-pm',
     systemPrompt: 'x',
     modelName: 'm',
     llmApiKey: 'k',
@@ -198,6 +199,25 @@ async function waitForCapture(n: number): Promise<void> {
   );
 }
 
+/**
+ * v2.9 回执双路 settle（集成夹具的诚实双路径）：
+ *   1. 直接 handleTaskReply——resolve 本进程内的 pendingReplies（executeDispatch
+ *      的 promise 在测试进程里等价于「PM 子进程侧」状态）
+ *   2. 经 mock process.send → 真桥 → routeTaskReply——settle 主进程
+ *      DispatchRegistry（routeDispatch 对在途链的重复轮拒绝以此为准——
+ *      不走此路则下一轮 followup 派发会被误拒）
+ */
+function settleBoth(taskId: string, body: string, toolCallsUsed: number): void {
+  handleTaskReply({ task_id: taskId, status: 'completed', body, tool_calls_used: toolCallsUsed });
+  process.send?.({
+    type: INTERNAL_EVENT_MSG,
+    eventType: 'io.momo-studio.task_reply',
+    sessionId: sessChatId,
+    sender: 'agent-inst-sub',
+    content: { task_id: taskId, status: 'completed', body, tool_calls_used: toolCallsUsed, reply_to: 'inst-pm' },
+  });
+}
+
 beforeEach(() => {
   // ── DB：真实 SQLite + 会话边界数据域（inst-pm leader + inst-sub 成员） ──
   fs.mkdirSync(tmpRoot, { recursive: true });
@@ -214,6 +234,7 @@ beforeEach(() => {
   // ── 真实路由链：bridge → RouterService → AgentRunner → mock 子进程壳 ──
   __resetBgStateForTest();
   __resetEventBufferForTest();
+  __resetDispatchRegistryForTest();
   sentEvents.length = 0;
   capturedConfigs.length = 0;
   const subRunner = new AgentRunner({
@@ -285,12 +306,14 @@ describe('followup 端到端（dispatch 派发 → 回复落库 → followup 续
     // ── 手动 seed 子回复（模拟子 agent 流式消息经生产落库链写入 + task_id 打标） ──
     seedSubRound(CHAIN, 'ss-r1', 'ss-pm-r1', '首轮结论');
 
-    // ── reply settle：真 handleTaskReply → dispatch promise 及时 resolve ──
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '首轮结论', tool_calls_used: 1 });
+    // ── reply settle：双路（child 侧 promise resolve + 主进程 registry settle） ──
+    settleBoth(CHAIN, '首轮结论', 1);
     await expect(p1).resolves.toEqual({ body: '首轮结论', toolCallsUsed: 1 });
 
-    // ── followup：真 executeFollowup → 重建器读链 → 追问行落库 → 沿用链 ID 派发 ──
-    const p2 = executeFollowup(CHAIN, '把结论展开成表格', cfg, sessChatId, undefined, 'ss-pm-r2', 'ss-r2');
+    // ── followup：真 executeFollowup（v2.9 异步——立即返回确认）→ 重建器读链 →
+    //    追问行落库 → 沿用链 ID 派发 ──
+    const ack2 = executeFollowup(CHAIN, '把结论展开成表格', cfg, sessChatId, 'ss-pm-r2', 'ss-r2');
+    expect(ack2).toContain('追问已送达');
     await waitForCapture(2);
     const cfg2 = capturedConfigs[1]!;
     // 核心断言（brief）：第二次捕获的 TaskConfig——
@@ -303,25 +326,41 @@ describe('followup 端到端（dispatch 派发 → 回复落库 → followup 续
     expect(cfg2.dispatchContext?.task_id).toBe(CHAIN);
     expect(cfg2.dispatchContext?.fromAssignmentId).toBe('inst-pm');
 
-    // ── 二轮回复落库 + settle ──
+    // ── 二轮回复落库 + 双路 settle ──
     seedSubRound(CHAIN, 'ss-r2', 'ss-pm-r2', '二轮结论');
-    handleTaskReply({ task_id: CHAIN, status: 'completed', body: '二轮结论', tool_calls_used: 2 });
-    await expect(p2).resolves.toEqual({ body: '二轮结论', toolCallsUsed: 2 });
+    settleBoth(CHAIN, '二轮结论', 2);
 
     // ── 再 followup：重建器读到两轮完整链（assistant → user → assistant） ──
-    const p3 = executeFollowup(CHAIN, '再问一句', cfg, sessChatId, undefined, 'ss-pm-r3', 'ss-r3');
+    const ack3 = executeFollowup(CHAIN, '再问一句', cfg, sessChatId, 'ss-pm-r3', 'ss-r3');
+    expect(ack3).toContain('追问已送达');
     await waitForCapture(3);
     const cfg3 = capturedConfigs[2]!;
     expect(cfg3.taskId).toBe(CHAIN);
     expect(cfg3.body).toBe('再问一句');
+    // v2.9 自动送达 + B4(ii) 复用前补投：二轮 settle 经真 routeTaskReply →
+    // followup 轮恒投递（第 3 条）；三轮 followup 复用链时二轮回执若未投递
+    // 则先补投（第 4 条）。行均 sender=owner + taskId=链 ID → 进链历史，
+    // 重建器聚合进前缀（结果随链历史进入后续轮次）
     expect(cfg3.historyPrefix).toEqual([
       { role: 'assistant', content: '首轮结论' },
       { role: 'user', content: '把结论展开成表格' },
+      expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('【dispatch 回执自动送达】'),
+      }),
       { role: 'assistant', content: '二轮结论' },
+      expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('【dispatch 回执自动送达】'),
+      }),
     ]);
+    // 注入行正文含对应轮次的结果全文（第 1/3 条首轮、第 4/5 条二轮）
+    const prefixText = JSON.stringify(cfg3.historyPrefix);
+    expect(prefixText).toContain('首轮结论');
+    expect(prefixText).toContain('二轮结论');
 
+    // 末轮收尾：清除追问在途标记（下一轮 followup 可用）
     handleTaskReply({ task_id: CHAIN, status: 'completed', body: '三轮结论', tool_calls_used: 0 });
-    await expect(p3).resolves.toEqual({ body: '三轮结论', toolCallsUsed: 0 });
   });
 });
 

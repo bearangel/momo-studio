@@ -15,8 +15,8 @@
 // 核心断言：
 //   1. 注入面：leader 会话 LLM 首轮可见 5 类工具（4 静态 + dispatch_bg:<slug>×成员数）；
 //      单成员会话（非 leader 域）5 类零注入
-//   2. 路由透传：每工具名 → 对应执行体被调（followup 的 signal / bg 的预生成
-//      subStreamSessionId 非空 / gather 的 handles+mode / status+cancel 的 handle）
+//   2. 路由透传：每工具名 → 对应执行体被调（followup 的 v2.9 异步送达确认 /
+//      bg 的预生成 subStreamSessionId 非空 / gather 的 handles+mode / status+cancel 的 handle）
 //   3. isDispatch 防御：dispatch_bg: 不被 dispatch-parallel 批处理拦截（走普通路径），
 //      同 callId 仅一个 tool_call chip（路由层 isDispatch 形态，无双重渲染）
 //   4. 白名单同步：带 allowedTools 的 leader 可调编排工具（不被 permission 拒绝）
@@ -45,7 +45,7 @@ vi.mock('../../src/main/agent/dispatch-wait', async (importOriginal) => {
     ...actual,
     executeDispatch: vi.fn(async () => ({ body: '同步结果', toolCallsUsed: 1 })),
     executeDispatchBg: vi.fn(async () => ({ taskId: 'bg-task-1' })),
-    executeFollowup: vi.fn(async () => ({ body: '续答正文', toolCallsUsed: 0 })),
+    executeFollowup: vi.fn(() => '追问已送达：任务链 T-1 第 2 轮已派发（v2.9 异步——回执将自动送达）'),
     executeGather: vi.fn(async () => ({ done: [], pending: [], notes: [] })),
     executeStatus: vi.fn(() => ({ status: 'in_flight', elapsedMs: 5 })),
     executeCancel: vi.fn(() => ({ status: 'cancelled' })),
@@ -254,12 +254,11 @@ describe('doExecuteTool 编排工具路由（5 执行体接线）', () => {
     process.send = originalSend;
   });
 
-  it('dispatch_followup → executeFollowup(taskId, question, config, executionSessionId, signal, pmStreamSessionId)，返回 body', async () => {
-    const controller = new AbortController();
+  it('dispatch_followup → executeFollowup(taskId, question, config, executionSessionId, pmStreamSessionId) 同步返回送达确认', async () => {
     const config = makeMainConfig();
     const out = await doExecuteTool(
       call('dispatch_followup', { taskId: 'T-1', question: '展开结论' }),
-      makeRoutingCtx(controller.signal),
+      makeRoutingCtx(),
       config,
       undefined,
       undefined,
@@ -267,14 +266,14 @@ describe('doExecuteTool 编排工具路由（5 执行体接线）', () => {
       'ss-pm',
       'sess-exec',
     );
-    expect(out).toBe('续答正文');
+    // v2.9：异步追问——工具结果即送达确认字符串（无等待、无 body 包装）
+    expect(out).toContain('追问已送达');
     expect(executeFollowup).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(executeFollowup).mock.calls[0]!.slice(0, 6)).toEqual([
+    expect(vi.mocked(executeFollowup).mock.calls[0]!.slice(0, 5)).toEqual([
       'T-1',
       '展开结论',
       config,
       'sess-exec',
-      controller.signal,
       'ss-pm',
     ]);
   });

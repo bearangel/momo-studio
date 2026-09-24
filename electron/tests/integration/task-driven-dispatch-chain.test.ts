@@ -13,9 +13,52 @@
 //   3. dispatch event → routeDispatch → executeTask（含 dispatchContext）
 //   4. task_reply + reply_to → 精确路由 → notifyTaskReply
 //   5. task_reply 无 reply_to → 广播 → 所有 runner 收到 notifyTaskReply
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { AgentRunner } from '../../src/main/agent/agent-runner';
 import { RouterService } from '../../src/main/agent/router-service';
+import { __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+
+// R2（安全复审）fail-closed 身份校验 fixture：dispatch 事件 sender '@pm:home'
+// 反查 inst-pm === dispatch_from；会话 '!room:home' 真实存在于 workspace ws。
+const tmpRoot = path.join(
+  os.tmpdir(),
+  `ap-td-dispatch-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+);
+
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
+  const db = getDb();
+  db.prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws', 'T', '/tmp', '@o')`).run();
+  for (const inst of ['inst-pm', 'inst-sub']) {
+    db.prepare(
+      `INSERT INTO agent_definitions
+         (id, name, slug, version, runtime, system_prompt, default_tools, default_mcps,
+          default_skills, source, description, icon_emoji, model_provider_id, model_name, task_driven)
+       VALUES (?, ?, ?, '1.0.0', 'declarative', 'p', '[]', '[]', '[]', 'custom', '', '🤖', 'prov-1', 'm', 1)`,
+    ).run(inst, inst, inst);
+    db.prepare(
+      `INSERT INTO workspace_agent_members (instance_id, workspace_id, agent_definition_id, agent_user_id)
+       VALUES (?, 'ws', ?, ?)`,
+    ).run(inst, inst, inst === 'inst-pm' ? '@pm:home' : '@sub:home');
+  }
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, title, title_auto, kind, settings_json, created_at, updated_at)
+     VALUES ('!room:home', 'ws', 'T', 0, 'chat', NULL, ?, ?)`,
+  ).run(Date.now(), Date.now());
+  __resetDispatchRegistryForTest();
+});
+
+afterEach(() => {
+  closeDb();
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  delete process.env.AP_USER_DATA_DIR;
+});
 
 function mkMockEvent(
   type: string,
@@ -95,12 +138,16 @@ describe('task-driven dispatch chain（Matrix event → RouterService → AgentR
     });
 
     await svc.routeEvent(
-      mkMockEvent('io.momo-studio.dispatch', {
-        body: '写登录页',
-        task_id: 'task-dispatch-1',
-        dispatch_from: 'inst-pm',
-        dispatch_to: 'inst-sub',
-      }),
+      mkMockEvent(
+        'io.momo-studio.dispatch',
+        {
+          body: '写登录页',
+          task_id: 'task-dispatch-1',
+          dispatch_from: 'inst-pm',
+          dispatch_to: 'inst-sub',
+        },
+        '@pm:home',
+      ),
       'inst-pm',
       '!room:home',
       'inst-sub',
