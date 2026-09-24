@@ -14,6 +14,7 @@ import { ExternalMarketplacePopover } from './ExternalMarketplacePopover';
 import { DanglingRefsCard } from './DanglingRefsCard';
 import { ResourceRow, TYPE_ICON } from './ResourceRow';
 import { ResourceDetail } from './ResourceDetail';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 /** 来源筛选 chips（'all' = 不限） */
 const SOURCE_CHIPS: Array<{ key: ResourceFilter['source'] | 'all'; label: string }> = [
@@ -60,7 +61,15 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
     setSourceFilter, setQuery, deleteResource,
   } = useResourceStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
   const Icon = TYPE_ICON[type];
+
+  /** 拦截行/详情删除 → 二次确认（P2.5 D5；三类型统一） */
+  const requestDelete = (id: string): void => {
+    const item = items.find((i) => i.id === id);
+    if (item) setPendingDelete(item);
+    else void deleteResource(id); // 列表已无此行（竞态兜底）——直删
+  };
 
   // 详情数据：删除后 items 更新可能让 selected 失效 → 自动收起（沿用原 View 语义）
   const selected = selectedId ? items.find((i) => i.id === selectedId) : undefined;
@@ -137,7 +146,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
                   selected={selectedId === item.id}
                   onSelect={setSelectedId}
                   onInstall={onInstall}
-                  onDelete={deleteResource}
+                  onDelete={requestDelete}
                   onEnable={onOpenPreset}
                   onEdit={onEditAgent}
                   onConfigure={onOpenPreset}
@@ -153,7 +162,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
             item={selected}
             onClose={() => setSelectedId(null)}
             onInstall={onInstall}
-            onDelete={deleteResource}
+            onDelete={requestDelete}
             onEdit={onEditAgent}
             onEnable={onOpenPreset}
             onConfigure={onOpenPreset}
@@ -162,6 +171,21 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           />
         )}
       </div>
+
+      {/* 删除二次确认弹窗（P2.5 D5）：确认才执行 deleteResource */}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`删除 ${pendingDelete.name}？`}
+          message={
+            pendingDelete.type === 'mcp'
+              ? '此操作不可撤销。引用它的 agent 将出现悬空提示，需手动移除引用。'
+              : '此操作不可撤销。'
+          }
+          confirmLabel="确认删除"
+          onConfirm={() => void deleteResource(pendingDelete.id)}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

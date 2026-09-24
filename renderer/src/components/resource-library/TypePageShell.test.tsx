@@ -12,7 +12,7 @@
 // Proxy；整窗替换（store 测试的 window = {...} 写法）会抹掉 DOM 构造器导致 react-dom
 // 崩溃（momo-test-rules：mock 收窄到 IPC 边界）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { TypePageShell } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
 import type { ResourceItem } from '../../ipc/types';
@@ -20,11 +20,14 @@ import type { ResourceItem } from '../../ipc/types';
 const listMock = vi.fn();
 // MCP 页挂载 DanglingRefsCard → mount 拉一次悬空引用
 const danglingMcpRefsMock = vi.fn();
+// P2.5 Task 4：删除确认流的 ipc delete 桩（store.deleteResource → ipc.resource.delete）
+const deleteMock = vi.fn();
 
 const mockApi = {
   resource: {
     list: listMock,
     danglingMcpRefs: danglingMcpRefsMock,
+    delete: deleteMock,
   },
 };
 
@@ -33,6 +36,8 @@ beforeEach(() => {
   listMock.mockResolvedValue([] as ResourceItem[]);
   danglingMcpRefsMock.mockReset();
   danglingMcpRefsMock.mockResolvedValue([]);
+  deleteMock.mockReset();
+  deleteMock.mockResolvedValue(undefined);
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   localStorage.clear();
 
@@ -133,3 +138,82 @@ describe('TypePageShell - onEditMcpEntry 透传（P2.5 Task 3）', () => {
     expect(onEditMcpEntry).toHaveBeenCalledWith(item);
   });
 });
+
+// ── P2.5 Task 4：删除二次确认（行/详情 onDelete 改 requestDelete 拦截）─────
+describe('TypePageShell - 删除二次确认（P2.5 Task 4）', () => {
+  const mcpItem: ResourceItem = {
+    id: 'custom-mcp-a', type: 'mcp', source: 'custom', slug: 'a', name: '甲',
+    description: '', installed: true, installable: false, removable: true,
+  };
+
+  it('行删除钮点击 → 确认弹窗出现（标题含资源名），此时不执行删除', () => {
+    useResourceStore.setState({ items: [mcpItem] });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除 甲' }));
+    expect(screen.getByRole('dialog', { name: '删除 甲？' })).toBeInTheDocument();
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it('确认 → 执行删除（ipc delete 桩收到 id）且弹窗消失', async () => {
+    useResourceStore.setState({ items: [mcpItem] });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除 甲' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('custom-mcp-a'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('取消 → 不删除且弹窗消失', () => {
+    useResourceStore.setState({ items: [mcpItem] });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除 甲' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('MCP 类型弹窗 message 含悬空引用提示句', () => {
+    useResourceStore.setState({ items: [mcpItem] });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除 甲' }));
+    expect(
+      screen.getByText('此操作不可撤销。引用它的 agent 将出现悬空提示，需手动移除引用。'),
+    ).toBeInTheDocument();
+  });
+
+  it('skill 类型弹窗 message 仅「此操作不可撤销。」（无悬空句）', () => {
+    useResourceStore.setState({
+      items: [{
+        id: 'custom-skill-b', type: 'skill', source: 'custom', slug: 'b', name: '乙',
+        description: '', installed: true, installable: false, removable: true,
+      }],
+    });
+    render(
+      <TypePageShell type="skill" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除 乙' }));
+    expect(screen.getByText('此操作不可撤销。')).toBeInTheDocument();
+    expect(screen.queryByText(/悬空/)).toBeNull();
+  });
+
+  it('详情面板删除钮同样走确认弹窗（非直删）', () => {
+    useResourceStore.setState({ items: [mcpItem] });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByText('甲'));
+    // 详情面板删除钮可访问名为「删除」（行内钮带资源名为「删除 甲」，互不冲突）
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    expect(screen.getByRole('dialog', { name: '删除 甲？' })).toBeInTheDocument();
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+});
+
