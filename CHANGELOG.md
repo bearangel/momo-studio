@@ -50,6 +50,13 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### MCP 测试反馈五项修复（v2.17 账本，spec 2026-09-24 P2.5）
+主机测试反馈驱动的体验补全：表单尺寸 / 导入反馈横幅化 / MCP 全字段编辑 / 删除二次确认。
+- 尺寸：快速创建参数框 3→6 行；导入 JSON 弹窗 520→640 宽、输入区 8→14 行
+- 导入完成横幅化：全部成功 → 自动关弹窗 + 顶部绿色横幅「导入成功 N 条 MCP」；存在失败 → 留弹窗展示逐条失败明细
+- MCP 全字段编辑（stdio + 远程）：已装自定义 MCP 详情页新增「编辑」——快速创建表单复用为编辑模式（预填全字段/名称只读防引用断裂/支持 stdio↔远程切换/版本防降级回传）；electron 新增 `getMcpEditView`/`updateMcpEntry` 双通道（UPDATE 保 id/installed_at/source，编辑后池驱逐 + 当前 workspace 自动重连）；smithery/marketplace 源的「配置」（连接参数专用）保留
+- 删除二次确认：新 `ConfirmDialog` 原子件；mcp/skill/agent 三类型行/详情删除入口统一拦截（MCP 提示 agent 悬空影响），红色危险钮确认后才执行
+
 ### MCP 快速创建 + JSON 导入增强（v2.16 账本，spec 2026-09-24 P2.4）
 资源库 MCP 页新增/导入体验补全：表单从「只能建 stdio」升级为二态全覆盖，JSON 导入兼容三家格式。
 - 快速创建（原「手动配置」）：传输二态 Segmented（本地 stdio：名称/命令/参数一行一个/高级 env+cwd；远程 HTTP：名称/URL https/高级 headers）；env/headers 行可加可删（KeyValueRows 原子件，KEY/VALUE 两列）；同名覆盖二段确认（警示条+「确认覆盖」，改字段重置）；args 从逗号分隔改换行分隔（支持带空格参数值）；标题/入口文案同步更新
