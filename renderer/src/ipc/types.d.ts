@@ -626,6 +626,28 @@ export interface UploadedSkill {
 }
 
 /**
+ * P2.6：Git 仓库 skill 扫描结果条目（resource:scanGitRepoSkills 返回的 skills 项）。
+ * 与 electron 端 skill/git-import.ts 的 ScannedSkill 对齐（renderer 端独立定义，仅结构对齐）。
+ */
+export interface ScannedSkill {
+  /** 安装目录名（SKILL.md 父目录名；根级条目用 frontmatter.name 转 kebab，无则仓库名兜底） */
+  slug: string;
+  /** 展示名（来自 frontmatter.name，无则用 slug 兜底） */
+  name: string;
+  description: string;
+}
+
+/**
+ * P2.6：Git 仓库 skill 导入结果（resource:importGitRepoSkills 返回）。
+ * imported 为成功清单（含同 hash 幂等跳过的既有条目）；failures 为逐条失败原因
+ * （单条失败不中断其余导入）。与 electron 端 skill/git-import.ts 返回形状对齐。
+ */
+export interface GitImportResult {
+  imported: UploadedSkill[];
+  failures: Array<{ slug: string; reason: string }>;
+}
+
+/**
  * P3 Task 7：resource:registerMcp 入参——注册自定义 MCP 的最小配置。
  * id / version 由主进程补全（version 缺省存 '1.0.0'），source 固定 'custom'，
  * 注册成功返回新条目的 ResourceItem。
@@ -1722,6 +1744,18 @@ export interface ApiSurface {
     uploadSkill(buffer: ArrayBuffer, filename: string): Promise<UploadedSkill[]>;
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖，返回同 zip 上传形状） */
     createSkill(input: SkillCreateInput): Promise<UploadedSkill>;
+    /**
+     * P2.6：扫描 Git 仓库（GitHub/GitLab zip 归档）发现全部 SKILL.md——下载+解析
+     * 落 tmp 不进正式目录。返回 importId（导入凭证，一次性消费）+ skills 清单
+     * 供 GitImportDialog 预览（同名覆盖警示按 slug 比对）。
+     */
+    scanGitRepoSkills(url: string): Promise<{ importId: string; skills: ScannedSkill[] }>;
+    /**
+     * P2.6：确认导入扫描结果（importId 一次性，失效须重扫）。逐 skill 幂等/覆盖
+     * （同内容 hash 跳过、不同 hash 全量替换），单条失败不中断——结果分
+     * imported / failures 两栏，全成功由弹窗自动关闭+绿横幅。
+     */
+    importGitRepoSkills(importId: string): Promise<GitImportResult>;
     /**
      * P2.1 Task 5：解析 DXT/MCPB 本地包（两阶段导入第一阶段）。解包校验 + manifest
      * 解析 + user_config 形状判定，不落正式目录。返回 BundlePreview 供 Task 6

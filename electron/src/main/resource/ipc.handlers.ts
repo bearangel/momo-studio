@@ -1,6 +1,6 @@
 // electron/src/main/resource/ipc.handlers.ts
 //
-// 资源库 IPC handler 注册。18 个 resource 通道 + 1 个 misc 通道：
+// 资源库 IPC handler 注册。20 个 resource 通道 + 1 个 misc 通道：
 //   - resource:list         统一列表（filter 可选）
 //   - resource:getDetail    按 id 查详情
 //   - resource:install      marketplace 资源安装（封装现有 installPackage）
@@ -8,6 +8,9 @@
 //   - resource:registerMcp  注册自定义 MCP（P3 收敛自 mcp:register，返回 ResourceItem）
 //   - resource:uploadSkill  上传自定义 skill zip（P3 收敛自 skill:uploadZip）
 //   - resource:createSkill  表单创建 skill（spec 2026-09-22 资源库重设计）
+//   - resource:scanGitRepoSkills / resource:importGitRepoSkills  Git 仓库
+//     skill 导入两通道（P2.6 spec 2026-09-24 §4——scan 下载+解析落 tmp 返回
+//     importId+清单；import 一次性消费返回 imported/failures 逐条结果）
 //   - resource:registryProviders / resource:registryList  网络注册表（P2 双轨 hub，
 //     spec 2026-09-22 §4.1——renderer 经此二通道消费 hub，不直连外网）
 //   - resource:installSmitheryRemote  smithery needsConfig 二段安装（P2.1 Task 3）
@@ -79,6 +82,7 @@ import {
 } from '../mcp/bundle-import';
 import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
+import { importGitRepoSkills, scanGitRepoSkills } from '../skill/git-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
 import { listBuiltinPresetAgents } from '../agent/builtin';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
@@ -342,6 +346,22 @@ export function registerResourceHandlers(): void {
     const uploaded = createSkillFromForm(input);
     void broadcastLocalResourceCatalog();
     return uploaded;
+  });
+
+  // P2.6：Git 仓库 skill 导入第一阶段——scan 下载 zip 归档落 tmp 并解析出全部
+  // skill 清单（spec 2026-09-24 §4）。只读预览（不落正式目录）→ 不广播；
+  // importId 是第二阶段的消费凭证（一次性）。
+  ipcMain.handle('resource:scanGitRepoSkills', async (_evt, url: string) =>
+    scanGitRepoSkills(url),
+  );
+
+  // P2.6：第二阶段——按 importId 一次性消费 tmp，逐 skill 幂等/覆盖落盘，返回
+  // { imported, failures }（单条失败不中断）。await 之后才广播：失败 reject 时
+  // 不广播旧目录（与 registerMcp/uploadSkill 同语义）。
+  ipcMain.handle('resource:importGitRepoSkills', async (_evt, importId: string) => {
+    const result = await importGitRepoSkills(importId);
+    void broadcastLocalResourceCatalog();
+    return result;
   });
 
   // resource:parseMcpBundle — DXT/MCPB 本地包两阶段导入的第一阶段（P2.1 Task 5）。

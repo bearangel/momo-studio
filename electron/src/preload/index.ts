@@ -9,6 +9,7 @@ import type {
   BuiltinPresetItem,
   CollabTarget,
   DanglingMcpRef,
+  GitImportResult,
   ImMessage,
   McpConfigUpdateInput,
   McpConfigView,
@@ -23,6 +24,7 @@ import type {
   ResourceFilter,
   ResourceItem,
   ResourceType,
+  ScannedSkill,
   SkillCreateInput,
   SmitheryInstallResult,
   TaskRow,
@@ -304,6 +306,14 @@ const api: ApiSurface = {
       invoke<UploadedSkill[]>('resource:uploadSkill', new Uint8Array(buffer), filename),
     /** 表单创建 skill（frontmatter+正文 → custom skill；slug 冲突覆盖） */
     createSkill: (input: SkillCreateInput) => invoke<UploadedSkill>('resource:createSkill', input),
+    // P2.6：Git 仓库 skill 导入两通道——scan 下载+解析落 tmp（只读预览，返回
+    // importId 一次性凭证 + skills 清单）；import 消费 tmp 落正式目录，返回
+    // { imported, failures } 逐条结果（单条失败不中断）。通道名与 renderer
+    // types.d.ts 的 ApiSurface 两方法逐字对齐。
+    scanGitRepoSkills: (url: string) =>
+      invoke<{ importId: string; skills: ScannedSkill[] }>('resource:scanGitRepoSkills', url),
+    importGitRepoSkills: (importId: string) =>
+      invoke<GitImportResult>('resource:importGitRepoSkills', importId),
     // P2.1 Task 5：DXT/MCPB 本地包两阶段导入。与 uploadSkill 同款 Uint8Array
     // 传输——contextBridge 里 Node Buffer 跨 IPC structured clone 会损坏，main
     // 收到后自行 Buffer.from 重建。
