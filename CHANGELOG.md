@@ -6,6 +6,33 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — v2.9 事件驱动 dispatch 与回执结果完整性（两轮 5-agent review 修复闭环）
+
+设计依据：`docs/specs/2026-09-24-v2.9-event-driven-dispatch.md`。上游：主机会话实测（followup 盲等 9 分钟 + 子 agent 长报告回执截断丢失）+ opencode/oh-my-openagent 契约调研。
+
+### 问题定义
+- **followup 盲等三盲区**：发送前不知子 agent 存活、等待中零感知、超时后死局（「请直接查看该 agent 的回复」——PM 无任何查看工具）
+- **回执截断三根因**：task_complete 分段后终态回执只携带末段尾巴（14 项报告只剩 1 行摘要）；无超长落盘机制；max_tokens 从未透传（OpenAI 请求体无该参数）
+
+### 新增
+- **DispatchRegistry（主进程跨轮链真相源）**：runtime 子进程每轮 task-end 即退出——pendingReplies/bgHandles 不跨轮存活，迟到回执被静默丢弃。注册表上移主进程：心跳续命/终态翻转/PM 空闲快照 awaitWake/死亡清扫（3×60s 无信号判死）/settled 容量驱逐。纯逻辑 + 可注入时钟
+- **followup 异步化**：派发即返回送达确认（不再盲等 3+6 分钟）；终态回执恒投递——落 dispatch-result 消息行（sender='owner' + taskId=链 ID，进链历史供后续 followup 聚合）+ routeUserChat(systemKickoff) 唤醒 PM 新回合
+- **子 agent 心跳**：dispatch 任务 60s 周期 in_progress task_reply（首拍立即发，注册即活）；主进程据 lastHeartbeatAt 判活——活链永不误杀（心跳重置同步计时器），死链约 3 分钟确诊（替代盲等 9 分钟）
+- **分段重组进终态回执**：completedSegments 收集全部已持久化段——终态全文 = 全部段 + 末段尾巴（七个出口统一 buildFinalText 组装，分段上限溢出的 summary 也并入不丢）
+- **超长回执落盘引用**：>8KB 全文写 `.momo-scratch/dispatch/<chainId>.md`（workspace 沙箱内，read_file 可分页读），body 换「落盘说明 + 头部摘录 1500 字符 + 相对路径」；写盘失败降级回原文（回执绝不丢）
+- **max_tokens 透传**：model-catalog outputTokens → AgentRuntimeOpts → AGENT_CONFIG → parseConfig → createLLMProvider → OpenAI/Anthropic 请求体（此前 OpenAI 从不发该参数、Anthropic 硬编码 4096/16384）
+
+### 修复（两轮 5-agent review 阻塞项）
+- **B1**：OpenAI 官方 reasoning 模型（gpt-5/o 系）硬拒 `max_tokens`（400）——`resolveMaxTokensParam` 单点判别（官方模型名前缀 + 无自定义 baseUrl → `max_completion_tokens`；GLM/DeepSeek 兼容端点保持 `max_tokens`），11 项判别矩阵锁死
+- **B2（含 R2 fail-closed 收紧）**：内部事件桥层 owner 身份绑定（envelope sender 与 spawn 闭包身份不符即丢弃）+ routeDispatch dispatch_from↔sender 反查 + settle 只接受链的 subAssignmentId 本人回执；R2 三态化——环境性 DB 失败降级放行，「会话不存在/非成员」等攻击者可经 envelope sessionId 安排的反查落空一律拒绝（堵死 owner 行注入 + 任意 PM 唤醒 + 第三方链 settle 劫持的复活路径）
+- **B3**：taskId 消费点加固——routeDispatch 形状门（`/^[A-Za-z0-9_-]{1,64}$/`）、spill 文件名同门 + `unsafe-<uuid>` fallback（堵路径穿越逃逸 workspace 沙箱）、steer/送达文案插值剥离控制字符（堵伪造结构注入）
+- **B4（含 R1 退出边沿修正）**：强制截断（预算/中断/错误）时 done-未投递链补投；R1——退出路径仅当确实中止活跃任务（cleanedAny）才触发 forced 边沿（warmPool.release 每轮 kill 子进程，无条件触发会把每个正常回合都当强制截断，重复补投已消费结果）；链复用前 requeueUndelivered 快照补投上一轮（R3：经 pendingDeliveries 队列走串行化 busy 门，不并发拉起第二条顶层流）；教学文案诚实化（回合内完成请先 gather，正常收尾不补投）
+- **B5**：inFlightFollowups 仅终态清除——心跳清标记曾造成子/主校验漂移（PM 二次追问拿到「已送达」确认后被静默吞掉）
+- **B6**：sweepOnce notifyTaskReply 补 .catch（主进程 unhandled rejection 面）+ tryDeliver per-runner 串行化（takeNextDeliverable 单条取走 + await + busy 重查——一回合一条，消除同会话并发 PM 回合与 session-lane 覆盖）
+
+### 已知遗留（spec §7.7/§8.6，择期）
+回执全文双计（注入行 + 流行，需去重裁定）；task_reply body 无大小上限；spill 文件被 followup 下轮同名覆盖；notifyTaskReply reply_to 转发未门控（taskId 为能力凭证）；Playwright e2e 与真机验收未跑
+
 ## [未发布] — 会话卫生与状态真实性修复（2026-09-18 会话实测发现）
 
 设计依据：`docs/specs/2026-09-18-session-hygiene-batch-design.md`。上游：一次「待办列表 + 并行委派」实测会话的 14 项发现全量处置。
