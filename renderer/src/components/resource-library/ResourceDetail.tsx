@@ -44,6 +44,8 @@ interface Props {
   onConfigure?: (id: string) => void;
   /** 已装远程 MCP → 弹配置编辑表单（仅 streamable_http；spec §6.1 / Task 7） */
   onEditMcpConfig?: (item: ResourceItem) => void;
+  /** 已装 custom MCP → 弹全字段编辑表单（stdio+远程通吃；P2.5 D4） */
+  onEditMcpEntry?: (item: ResourceItem) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -59,7 +61,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -309,6 +311,13 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           >
             <Settings2 size={12} strokeWidth={1.75} aria-hidden />
             配置
+          </Button>
+        )}
+        {/* P2.5 D4：custom 源已装 MCP 全字段编辑（stdio+远程）；smithery/marketplace 走上方「配置」 */}
+        {item.type === 'mcp' && item.installed && item.source === 'custom' && onEditMcpEntry && (
+          <Button size="sm" onClick={() => onEditMcpEntry(item)} className="inline-flex items-center gap-1">
+            <Pencil size={12} strokeWidth={1.75} aria-hidden />
+            编辑
           </Button>
         )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}

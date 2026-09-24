@@ -50,9 +50,11 @@ interface TypePageShellProps {
   onOpenPreset: (id: string) => void;
   /** 已装远程 MCP 配置编辑入口（McpConfigDialog 挂载在 View 层；P2.2 Task 7） */
   onEditMcpConfig?: (item: ResourceItem) => void;
+  /** 已装 custom MCP 全字段编辑入口（RegisterMcpDialog edit 模式挂载在 View 层；P2.5 Task 3） */
+  onEditMcpEntry?: (item: ResourceItem) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource,
@@ -156,6 +158,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
             onEnable={onOpenPreset}
             onConfigure={onOpenPreset}
             onEditMcpConfig={onEditMcpConfig}
+            onEditMcpEntry={onEditMcpEntry}
           />
         )}
       </div>

@@ -48,6 +48,8 @@ export function ResourceLibraryView() {
   // （ResourceItem.slug），displayName 是展示名——getMcpConfig/updateMcpConfig
   // 入参走 name（spec §6.2），弹窗标题用 displayName。
   const [configTarget, setConfigTarget] = useState<{ name: string; displayName: string } | null>(null);
+  // P2.5：MCP 全字段编辑目标（null = 弹窗关）。值为 MCP 定义名（ResourceItem.slug）
+  const [mcpEditTarget, setMcpEditTarget] = useState<string | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
@@ -163,6 +165,7 @@ export function ResourceLibraryView() {
         onEditAgent={handleEditAgent}
         onOpenPreset={openPresetDialog}
         onEditMcpConfig={handleEditMcpConfig}
+        onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
@@ -203,6 +206,14 @@ export function ResourceLibraryView() {
             void openPresetBySlug(slug);
           }}
           onClose={() => setPresetLibraryOpen(false)}
+        />
+      )}
+      {/* P2.5 Task 3：MCP 全字段编辑弹窗（RegisterMcpDialog edit 模式，mount 拉 getMcpEditView 预填） */}
+      {mcpEditTarget && (
+        <RegisterMcpDialog
+          edit={{ name: mcpEditTarget }}
+          onClose={() => setMcpEditTarget(null)}
+          onSuccess={() => { setMcpEditTarget(null); void load(); }}
         />
       )}
       {/* P2.2 Task 7：远程 MCP 配置编辑弹窗（McpConfigDialog mount 拉 getMcpConfig） */}

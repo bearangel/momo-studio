@@ -463,3 +463,60 @@ describe('ResourceDetail - 远程 MCP 配置按钮（P2.2 Task 7）', () => {
     expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
   });
 });
+
+// ── P2.5 Task 3（D4）：custom 源已装 MCP 全字段编辑按钮 ─────────────────
+// 显示条件：type=mcp && installed && source='custom' 且 onEditMcpEntry 注入；
+// smithery/marketplace 源远程条目走上方「配置」按钮（schema 模式），不出编辑。
+describe('ResourceDetail - custom MCP 全字段编辑按钮（P2.5 Task 3）', () => {
+  const customMcp = (overrides: Partial<ResourceItem> = {}): ResourceItem =>
+    baseItem({
+      id: 'custom-mcp-github',
+      source: 'custom',
+      type: 'mcp',
+      name: 'GitHub MCP',
+      description: '本地 stdio MCP',
+      installed: true,
+      installable: false,
+      removable: true,
+      custom: {
+        installedAt: '2026-09-24T00:00:00.000Z',
+        transport: 'stdio',
+        mcpConfig: { command: 'npx', args: ['-y', 'server-github'], env: {} },
+      },
+      ...overrides,
+    });
+
+  it('custom 已装 mcp：显示「编辑」按钮，回调透传整个 item', () => {
+    const onEditMcpEntry = vi.fn();
+    const item = customMcp();
+    render(<ResourceDetail item={item} onClose={() => {}} onEditMcpEntry={onEditMcpEntry} />);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(onEditMcpEntry).toHaveBeenCalledWith(item);
+  });
+
+  it('smithery 源 mcp：无「编辑」按钮（远程配置走「配置」）', () => {
+    const item = customMcp({
+      id: 'smithery-mcp-context7',
+      source: 'smithery',
+      custom: { installedAt: '2026-09-24T00:00:00.000Z', transport: 'streamable_http' },
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} onEditMcpEntry={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+
+  it('prop 缺省（onEditMcpEntry 未注入）：不显示「编辑」按钮', () => {
+    render(<ResourceDetail item={customMcp()} onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+
+  it('未安装条目：不显示「编辑」按钮', () => {
+    render(
+      <ResourceDetail
+        item={customMcp({ installed: false, installable: true })}
+        onClose={() => {}}
+        onEditMcpEntry={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+});

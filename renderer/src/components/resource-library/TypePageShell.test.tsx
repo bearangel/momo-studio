@@ -107,3 +107,29 @@ describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
     expect(within(toolbar as HTMLElement).getByPlaceholderText('搜索名称 / 描述 / slug…')).toBeTruthy();
   });
 });
+
+// ── P2.5 Task 3：onEditMcpEntry 透传（详情面板出现编辑按钮）──────────────
+describe('TypePageShell - onEditMcpEntry 透传（P2.5 Task 3）', () => {
+  it('选中 custom mcp 行 → 详情面板出现「编辑」按钮，点击触发透传回调', () => {
+    const onEditMcpEntry = vi.fn();
+    const item: ResourceItem = {
+      id: 'custom-mcp-a', type: 'mcp', source: 'custom', slug: 'a', name: '甲',
+      description: '', installed: true, installable: false, removable: true,
+      custom: { installedAt: '2026-09-24T00:00:00.000Z', transport: 'stdio' },
+    };
+    useResourceStore.setState({ items: [item] });
+    render(
+      <TypePageShell
+        type="mcp"
+        addItems={[]}
+        onInstall={vi.fn()}
+        onEditAgent={vi.fn()}
+        onOpenPreset={vi.fn()}
+        onEditMcpEntry={onEditMcpEntry}
+      />,
+    );
+    fireEvent.click(screen.getByText('甲'));
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(onEditMcpEntry).toHaveBeenCalledWith(item);
+  });
+});

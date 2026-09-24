@@ -5,7 +5,12 @@
 // env/headers 用 KeyValueRows（D5）；同名二段确认（D2：预检命中 → 警示条 +
 // 「确认覆盖」，改任一字段重置）。提交 → resource:registerMcp → mcp:start →
 // onSuccess 刷新 + onClose。
-import { useState, type FormEvent } from 'react';
+// P2.5 Task 3：edit 模式（spec §3.4/D4）——mount 经 getMcpEditView 预填全
+// 字段，提交分流 updateMcpEntry（保 id/source/installed_at 的 UPDATE）。
+// name 是 agent 引用键，编辑不可改；编辑语义即覆盖自身，跳过同名二段确认。
+// version '1.0.0' 是 electron 缺省值不回显（提交省略→主进程回落 1.0.0，
+// 与非缺省回显回传恰好闭环，避免全字段 UPDATE 静默降级）。
+import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Button } from '../ui/Button';
@@ -31,7 +36,23 @@ function rowsToRecord(rows: KVRow[]): Record<string, string> {
   return out;
 }
 
-export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+/** Record → 行数组（编辑预填用）：空对象给一行空行——与初始态一致 */
+function recordToRows(rec: Record<string, string>): KVRow[] {
+  const entries = Object.entries(rec);
+  if (entries.length === 0) return [{ key: '', value: '' }];
+  return entries.map(([key, value]) => ({ key, value }));
+}
+
+export function RegisterMcpDialog({
+  onClose,
+  onSuccess,
+  edit,
+}: {
+  onClose: () => void;
+  onSuccess: () => void;
+  /** 编辑模式：name 指向已注册 MCP（mount 拉视图预填；名称锁定） */
+  edit?: { name: string };
+}) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
   const [transport, setTransport] = useState<Transport>('stdio');
@@ -47,6 +68,38 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
   const [overwriteWarning, setOverwriteWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 编辑视图加载中（mount 起，视图就位或失败止——期间表单体渲染占位）
+  const [loadingEdit, setLoadingEdit] = useState<boolean>(Boolean(edit));
+
+  // edit 模式 mount 预填：getMcpEditView 全字段回显（cancelled 防卸载后 setState）
+  useEffect(() => {
+    if (!edit) return;
+    let cancelled = false;
+    ipc.resource
+      .getMcpEditView(edit.name)
+      .then((view) => {
+        if (cancelled) return;
+        setTransport(view.transport === 'streamable_http' ? 'http' : 'stdio');
+        setName(view.name);
+        // 缺省版本 '1.0.0' 不回显——提交省略后主进程回落同值，闭环不降级
+        setVersion(view.version === '1.0.0' ? '' : view.version);
+        setCommand(view.command);
+        setArgsText(view.args.join('\n'));
+        setCwd(view.cwd ?? '');
+        setUrl(view.url ?? '');
+        setEnvRows(recordToRows(view.env));
+        setHeaderRows(recordToRows(view.headers));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(`读取 MCP 配置失败：${(err as Error).message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingEdit(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [edit]);
 
   const urlInvalid = transport === 'http' && url.trim() !== '' && !url.trim().startsWith('https://');
   const valid =
@@ -71,8 +124,9 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
     if (!valid) return;
     const trimmedName = name.trim();
     if (!activeWorkspaceId) { setError('未激活的工作空间，无法启动 MCP'); return; }
-    // 一段态先做同名预检（与 JSON 导入流同手法）；list 失败不阻塞（主进程覆盖语义兜底）
-    if (overwriteWarning === null) {
+    // 一段态先做同名预检（与 JSON 导入流同手法）；list 失败不阻塞（主进程覆盖语义兜底）。
+    // 编辑模式跳过——UPDATE 语义即覆盖自身条目，不存在「覆盖他人」歧义
+    if (!edit && overwriteWarning === null) {
       try {
         const installed = await ipc.resource.list({ type: 'mcp' });
         const names = new Set(installed.map((i) => i.slug));
@@ -82,27 +136,28 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
     setSubmitting(true);
     setError(null);
     try {
-      if (transport === 'http') {
-        await ipc.resource.registerMcp({
-          name: trimmedName,
-          version: version.trim() || undefined,
-          command: '',
-          transport: 'streamable_http',
-          url: url.trim(),
-          headers: rowsToRecord(headerRows),
-        });
+      const parsedArgs = argsText.split('\n').map((s) => s.trim()).filter(Boolean);
+      const payload = transport === 'http'
+        ? {
+            version: version.trim() || undefined,
+            command: '',
+            transport: 'streamable_http' as const,
+            url: url.trim(),
+            headers: rowsToRecord(headerRows),
+          }
+        : {
+            version: version.trim() || undefined,
+            command: command.trim(),
+            args: parsedArgs,
+            env: rowsToRecord(envRows),
+            cwd: cwd.trim() || undefined,
+          };
+      if (edit) {
+        await ipc.resource.updateMcpEntry(edit.name, payload);
       } else {
-        const parsedArgs = argsText.split('\n').map((s) => s.trim()).filter(Boolean);
-        await ipc.resource.registerMcp({
-          name: trimmedName,
-          version: version.trim() || undefined,
-          command: command.trim(),
-          args: parsedArgs,
-          env: rowsToRecord(envRows),
-          cwd: cwd.trim() || undefined,
-        });
+        await ipc.resource.registerMcp({ name: trimmedName, ...payload });
       }
-      await ipc.mcp.start(activeWorkspaceId, trimmedName);
+      await ipc.mcp.start(activeWorkspaceId, edit ? edit.name : trimmedName);
       onSuccess();
       onClose();
     } catch (err) {
@@ -112,18 +167,25 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
     }
   };
 
-  const submitLabel = overwriteWarning !== null ? '确认覆盖' : submitting ? '注册中…' : '注册并启动';
+  const submitLabel = edit
+    ? (submitting ? '保存中…' : '保存')
+    : overwriteWarning !== null ? '确认覆盖' : submitting ? '注册中…' : '注册并启动';
 
   return (
-    <Dialog open onClose={onClose} title="快速创建 MCP" width={448}>
+    <Dialog open onClose={onClose} title={edit ? '编辑 MCP' : '快速创建 MCP'} width={448}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        {loadingEdit ? (
+          <div className="text-center text-tertiary text-sm py-8">加载中…</div>
+        ) : (
+        <>
         <Segmented
           options={TRANSPORT_OPTIONS}
           value={transport}
           onChange={switchTransport}
           aria-label="传输类型"
         />
-        <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus />
+        {/* 名称是 agent 引用键（defaultMcps[].ref），编辑模式锁定不可改 */}
+        <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus disabled={Boolean(edit)} />
         <Input label="版本" value={version} onChange={(e) => { setOverwriteWarning(null); setVersion(e.target.value); }} placeholder="如：1.0.0（可选）" />
 
         {transport === 'stdio' ? (
@@ -169,6 +231,8 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
           <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
           <Button type="submit" disabled={submitting || !valid}>{submitLabel}</Button>
         </div>
+        </>
+        )}
       </form>
     </Dialog>
   );
