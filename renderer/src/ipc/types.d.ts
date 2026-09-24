@@ -641,6 +641,10 @@ export interface RegisterMcpInput {
   transport?: 'stdio' | 'streamable_http';
   /** 远程端点（transport='streamable_http' 必填，强制 https；remote 时 command 空串占位） */
   url?: string;
+  /** P2.4：远程条目请求头（含鉴权 key，沿用不落日志纪律）；与 electron 端 ipc.handlers.ts 对齐 */
+  headers?: Record<string, string>;
+  /** P2.4：stdio 条目子进程工作目录；缺省不传（与 bundle 导入 spawn 同语义）；与 electron 端 ipc.handlers.ts 对齐 */
+  cwd?: string;
 }
 
 /** resource:createSkill 入参——表单创建 skill（spec 2026-09-22 资源库重设计） */

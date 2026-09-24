@@ -90,6 +90,10 @@ export interface RegisterMcpInput {
   transport?: 'stdio' | 'streamable_http';
   /** 远程端点（transport='streamable_http' 必填，强制 https；remote 时 command 空串占位） */
   url?: string;
+  /** P2.4：远程条目请求头（含鉴权 key，沿用不落日志纪律） */
+  headers?: Record<string, string>;
+  /** P2.4：stdio 条目子进程工作目录；缺省不传（与 bundle 导入 spawn 同语义） */
+  cwd?: string;
 }
 
 /**
@@ -296,6 +300,9 @@ export function registerResourceHandlers(): void {
       command: config.command,
       args: config.args ?? [],
       env: config.env,
+      // P2.4：headers/cwd 透传（落库端 registerMcpDefinition 本就支持）
+      headers: config.headers,
+      cwd: config.cwd,
       source: 'custom',
     });
     const items: ResourceItem[] = await listResources({ type: 'mcp', source: 'custom' });
