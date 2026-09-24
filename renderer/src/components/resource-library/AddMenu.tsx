@@ -9,7 +9,7 @@ import type { LucideIcon } from 'lucide-react';
 /** 单条添加路径 */
 export interface AddMenuItem {
   key: string;
-  /** 菜单项标题（如「手动配置…」） */
+  /** 菜单项标题（如「快速创建…」） */
   title: string;
   /** 一句副文案（如「名称 / 命令 / 参数」） */
   hint?: string;
