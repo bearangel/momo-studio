@@ -124,7 +124,7 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
           aria-label="传输类型"
         />
         <Input label="名称" value={name} onChange={(e) => { setOverwriteWarning(null); setName(e.target.value); }} placeholder="如：github" autoFocus />
-        <Input label="版本" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="如：1.0.0（可选）" />
+        <Input label="版本" value={version} onChange={(e) => { setOverwriteWarning(null); setVersion(e.target.value); }} placeholder="如：1.0.0（可选）" />
 
         {transport === 'stdio' ? (
           <>
@@ -134,7 +134,7 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
               <textarea
                 id="mcp-args"
                 value={argsText}
-                onChange={(e) => setArgsText(e.target.value)}
+                onChange={(e) => { setOverwriteWarning(null); setArgsText(e.target.value); }}
                 placeholder={'一行一个参数，如：\n-y\n@modelcontextprotocol/server-github'}
                 rows={3}
                 className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] font-mono text-primary placeholder:text-disabled focus:border-focus focus:outline-none resize-y"
@@ -144,7 +144,7 @@ export function RegisterMcpDialog({ onClose, onSuccess }: { onClose: () => void;
               <summary className="text-sm text-secondary cursor-pointer select-none">高级：环境变量与工作目录</summary>
               <div className="flex flex-col gap-2 pt-2">
                 <KeyValueRows rows={envRows} onChange={(rows) => { setOverwriteWarning(null); setEnvRows(rows); }} keyPlaceholder="变量名" valuePlaceholder="值" addLabel="添加环境变量" ariaLabel="环境变量" />
-                <Input label="工作目录" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="如：/opt/project（可选，子进程 cwd）" />
+                <Input label="工作目录" value={cwd} onChange={(e) => { setOverwriteWarning(null); setCwd(e.target.value); }} placeholder="如：/opt/project（可选，子进程 cwd）" />
               </div>
             </details>
           </>

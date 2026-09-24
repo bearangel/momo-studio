@@ -187,6 +187,12 @@ describe('RegisterMcpDialog — 同名二段确认', () => {
     fireEvent.change(screen.getByLabelText('命令'), { target: { value: 'cmd2' } });
     expect(screen.queryByText('将覆盖同名服务器：dup-mcp')).toBeNull();
     expect(screen.getByRole('button', { name: '注册并启动' })).toBeInTheDocument();
+    // 再触发一次警示后改「参数」字段——同样重置（Task 3 Minor：argsText onChange 缺重置）
+    fireEvent.click(screen.getByRole('button', { name: '注册并启动' }));
+    await waitFor(() => expect(screen.getByText('将覆盖同名服务器：dup-mcp')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('参数'), { target: { value: '-y' } });
+    expect(screen.queryByText('将覆盖同名服务器：dup-mcp')).toBeNull();
+    expect(screen.getByRole('button', { name: '注册并启动' })).toBeInTheDocument();
   });
 
   it('预检 list 失败 → 不阻塞直接提交（主进程覆盖语义兜底）', async () => {
