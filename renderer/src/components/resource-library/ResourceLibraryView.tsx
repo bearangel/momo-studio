@@ -25,6 +25,7 @@ import { ImportBundleDialog } from './ImportBundleDialog';
 import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import { PresetLibraryDialog } from './PresetLibraryDialog';
+import { GitImportDialog } from './GitImportDialog';
 import type { AgentDefinition, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
@@ -44,6 +45,8 @@ export function ResourceLibraryView() {
   const [presetTarget, setPresetTarget] = useState<{ slug: string; name: string; def?: AgentDefinition } | null>(null);
   // P2.3 Task 4：预置库弹窗开关（入口仅 agent 页组装）
   const [presetLibraryOpen, setPresetLibraryOpen] = useState(false);
+  // P2.6 Task 3：Git 仓库导入弹窗开关（入口仅 skill 页组装）
+  const [gitImportOpen, setGitImportOpen] = useState(false);
   // P2.2 Task 7：远程 MCP 配置编辑目标（null = 弹窗关）。name 是 MCP 定义名
   // （ResourceItem.slug），displayName 是展示名——getMcpConfig/updateMcpConfig
   // 入参走 name（spec §6.2），弹窗标题用 displayName。
@@ -152,6 +155,8 @@ export function ResourceLibraryView() {
     return [
       { key: 'zip', title: '导入 zip 包…', hint: '拖放或选择文件（SKILL.md 打包）', onSelect: () => setUploadSkillOpen(true) },
       { key: 'create', title: '新建 SKILL.md…', hint: 'frontmatter（name/description）+ Markdown 正文', onSelect: () => setSkillCreateOpen(true) },
+      // P2.6 Task 3：Git 仓库导入（下载 zip 归档自动发现全部 SKILL.md，两阶段确认）
+      { key: 'git-import', title: '从 Git 仓库导入…', hint: 'GitHub / GitLab 地址，自动发现全部 SKILL.md', onSelect: () => setGitImportOpen(true) },
     ];
   };
 
@@ -184,6 +189,10 @@ export function ResourceLibraryView() {
       )}
       {skillCreateOpen && (
         <SkillCreateDialog onClose={() => setSkillCreateOpen(false)} onSuccess={() => void load()} />
+      )}
+      {/* P2.6 Task 3：Git 仓库导入弹窗（扫描 → 预览 → 确认导入，弹窗内部自治） */}
+      {gitImportOpen && (
+        <GitImportDialog onClose={() => setGitImportOpen(false)} onSuccess={() => void load()} />
       )}
       {importYamlOpen && (
         <ImportAgentYamlDialog onClose={() => setImportYamlOpen(false)} onSuccess={() => void load()} />

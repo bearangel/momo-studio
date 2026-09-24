@@ -237,3 +237,31 @@ describe('预置库入口与接线（P2.3 Task 4）', () => {
     await waitFor(() => expect(agentList).toHaveBeenCalled());
   });
 });
+
+// ── Git 仓库导入入口与接线（P2.6 Task 3）────────────────────────────────────
+// 链路：Skill 页 AddMenu「从 Git 仓库导入…」→ GitImportDialog（两阶段：
+// 扫描 → 预览/确认导入，弹窗内部自治）→ onSuccess = View 层 load() 刷新。
+describe('Git 仓库导入入口（P2.6 Task 3）', () => {
+  it('Skill 页「＋」菜单含「从 Git 仓库导入…」；点击挂载 GitImportDialog', async () => {
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加技能' }));
+    expect(screen.getByText('从 Git 仓库导入…')).toBeTruthy();
+    // 副文案（hint）随项渲染
+    expect(screen.getByText('GitHub / GitLab 地址，自动发现全部 SKILL.md')).toBeTruthy();
+    fireEvent.click(screen.getByText('从 Git 仓库导入…'));
+    // 弹窗挂载（ariaLabel「从 Git 仓库导入技能」与其它 skill 弹窗区分）
+    expect(await screen.findByRole('dialog', { name: '从 Git 仓库导入技能' })).toBeTruthy();
+  });
+
+  it('Agent / MCP 页「＋」菜单无该入口（仅 skill 页组装）', () => {
+    render(<ResourceLibraryView />);
+    fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
+    expect(screen.queryByText('从 Git 仓库导入…')).toBeNull();
+    // 关菜单 → 切 MCP 页：同样无
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(screen.getByRole('button', { name: /MCP/ }));
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
+    expect(screen.queryByText('从 Git 仓库导入…')).toBeNull();
+  });
+});
