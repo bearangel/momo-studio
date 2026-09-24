@@ -50,6 +50,12 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### MCP 快速创建 + JSON 导入增强（v2.16 账本，spec 2026-09-24 P2.4）
+资源库 MCP 页新增/导入体验补全：表单从「只能建 stdio」升级为二态全覆盖，JSON 导入兼容三家格式。
+- 快速创建（原「手动配置」）：传输二态 Segmented（本地 stdio：名称/命令/参数一行一个/高级 env+cwd；远程 HTTP：名称/URL https/高级 headers）；env/headers 行可加可删（KeyValueRows 原子件，KEY/VALUE 两列）；同名覆盖二段确认（警示条+「确认覆盖」，改字段重置）；args 从逗号分隔改换行分隔（支持带空格参数值）；标题/入口文案同步更新
+- IPC 契约：`RegisterMcpInput` 补 `headers`/`cwd` 双端镜像透传（落库端零改动，headers 含鉴权 key 沿用不落日志纪律）
+- 导入 JSON（原「粘贴 JSON」）：顶层三格式识别（`mcpServers` > VS Code `servers` > 裸对象）；条目 `type` 权威判定——`sse` 明确报「暂不支持 SSE 传输」（不再静默误注册）、`http`/`streamable-http`/`streamable_http` 归一远程、stdio/远程字段矛盾检测；远程条目支持 `headers` 直导（导入后可在「配置」替换占位 key）；「插入示例」按钮一键填入结构化多行示例（stdio+带 headers 远程各一条，空输入直填/非空二段确认替换）
+
 ### 移除网络获取 + 外部市场快捷打开（v2.15 账本，spec 2026-09-23 P2.3）
 战略转向：应用内不再承诺网络下载安装（外部市场适配成本高），资源获取收敛「本地导入 + P2P」；外部市场改浏览器快捷打开，为 momo-hub 统一市场让路。
 - 移除面（仅 renderer，−1165 行）：资源页「网络获取」模式整体下线（Segmented 双态/RegistryBrowse/McpConnectDialog/registry 安装接线/store mode 字段）；registry IPC 契约两端保留（electron 管线零改动，momo-hub 复用地基）
