@@ -69,6 +69,12 @@ export interface AgentRuntimeOpts {
   contextWindow?: number;
   /** 模型最大输出 token；0=未知 */
   outputTokens?: number;
+  /**
+   * B1（结果完整性 review 2026-09-24）：OpenAI 输出上限参数名（官方 reasoning
+   * 模型 → max_completion_tokens）。由 buildSpawnOpts 经 resolveMaxTokensParam
+   * 单点解析后注入。
+   */
+  modelMaxTokensParam?: 'max_tokens' | 'max_completion_tokens';
   // === 供应商预设（spec 2026-09-09-provider-presets）===
   /** 思维模式配置（resolveThinkingConfig 产出；缺省=不发任何 thinking 参数） */
   thinking?: ThinkingRequest;
@@ -136,6 +142,13 @@ export interface RuntimeConfig {
   contextWindow: number;
   /** 模型最大输出 token；0=未知 */
   outputTokens: number;
+  /**
+   * B1（结果完整性 review 2026-09-24）：OpenAI 方言输出上限参数名。
+   * 'max_completion_tokens' = 官方 reasoning 模型（gpt-5/o 系，无自定义 baseUrl）；
+   * 缺省/其它 = max_tokens。spawn-helpers 经 resolveMaxTokensParam 单点解析，
+   * 子进程 llm-provider 只消费不判别（boundary-rules：单一真相源）。
+   */
+  modelMaxTokensParam?: 'max_tokens' | 'max_completion_tokens';
   /** 思维模式配置；undefined=不发任何 thinking 参数（旧配置兼容） */
   thinking?: ThinkingRequest;
 }
@@ -351,6 +364,9 @@ export function parseConfig(raw: unknown): RuntimeConfig {
     // 压缩重构：窗口元数据缺省/非法按 0（未知）处理——旧 AGENT_CONFIG 兼容 + fail-safe
     contextWindow: typeof r.contextWindow === 'number' && r.contextWindow > 0 ? r.contextWindow : 0,
     outputTokens: typeof r.outputTokens === 'number' && r.outputTokens > 0 ? r.outputTokens : 0,
+    // B1：输出上限参数名（仅合法字面量透传；缺省 = max_tokens 旧语义）
+    modelMaxTokensParam:
+      r.modelMaxTokensParam === 'max_completion_tokens' ? 'max_completion_tokens' : undefined,
     // 供应商预设：thinking 结构守卫失败 → undefined（不发参数，fail-safe）
     thinking: isThinkingRequest(r.thinking) ? r.thinking : undefined,
   };

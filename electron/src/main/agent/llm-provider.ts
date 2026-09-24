@@ -261,18 +261,24 @@ function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
 }
 
 /** 统一的 LLM provider 工厂。
- *  platform 显式传入时优先用；缺省时按 baseUrl 自动检测（OpenAI 兼容为默认）。 */
+ *  platform 显式传入时优先用；缺省时按 baseUrl 自动检测（OpenAI 兼容为默认）。
+ *  maxTokens（P0-3，spec 2026-09-24 §6）：输出 token 上限——OpenAI 方言按
+ *  配置携带（未配置不携带，沿用模型默认）；Anthropic 方言为必填参数，配置值
+ *  替换旧硬编码（非流式 4096 / 流式 16384）。来源是 model-catalog 的
+ *  outputTokens（resolveModelLimits 解析，>0 才透传）。
+ *  maxTokensParam（review B1）：OpenAI 方言参数名——官方 reasoning 模型
+ *  （gpt-5/o 系）须用 max_completion_tokens（发 max_tokens 即 400）。 */
 export function createLLMProvider(
   model: { provider?: 'openai' | 'anthropic'; model: string; baseUrl?: string },
   apiKey: string,
-  opts?: { thinking?: ThinkingRequest },
+  opts?: { thinking?: ThinkingRequest; maxTokens?: number; maxTokensParam?: 'max_tokens' | 'max_completion_tokens' },
 ): LLMProvider {
   const provider = model.provider ?? detectPlatform(model.baseUrl);
   if (provider === 'openai') {
-    return new OpenAIProvider(model.model, apiKey, model.baseUrl, opts?.thinking);
+    return new OpenAIProvider(model.model, apiKey, model.baseUrl, opts?.thinking, opts?.maxTokens, opts?.maxTokensParam);
   }
   if (provider === 'anthropic') {
-    return new AnthropicProvider(model.model, apiKey, model.baseUrl, opts?.thinking);
+    return new AnthropicProvider(model.model, apiKey, model.baseUrl, opts?.thinking, opts?.maxTokens);
   }
   throw new Error(`不支持的 LLM provider: ${provider}`);
 }
@@ -285,6 +291,8 @@ class OpenAIProvider implements LLMProvider {
     private apiKey: string,
     private baseUrl?: string,
     private thinking?: ThinkingRequest,
+    private maxTokens?: number,
+    private maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens',
   ) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
@@ -295,6 +303,9 @@ class OpenAIProvider implements LLMProvider {
       model: this.model,
       messages: messages.map((m) => toOpenAIMessage(m)),
     };
+    if (this.maxTokens && this.maxTokens > 0) {
+      body[this.maxTokensParam] = this.maxTokens;
+    }
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
         type: 'function',
@@ -353,7 +364,7 @@ class OpenAIProvider implements LLMProvider {
     tools: LLMToolDef[] | undefined,
     signal: AbortSignal,
   ): AsyncIterable<StreamDelta> {
-    yield* chatStreamOpenAI(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking);
+    yield* chatStreamOpenAI(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking, this.maxTokens, this.maxTokensParam);
   }
 }
 
@@ -365,6 +376,7 @@ class AnthropicProvider implements LLMProvider {
     private apiKey: string,
     private baseUrl?: string,
     private thinking?: ThinkingRequest,
+    private maxTokens?: number,
   ) {}
 
   async chat(messages: LLMMessage[], tools?: LLMToolDef[]): Promise<LLMResponse> {
@@ -374,7 +386,8 @@ class AnthropicProvider implements LLMProvider {
 
     const body: Record<string, unknown> = {
       model: this.model,
-      max_tokens: 4096,
+      // P0-3：配置值替换硬编码 4096（Anthropic max_tokens 必填——缺省回退旧值）
+      max_tokens: this.maxTokens && this.maxTokens > 0 ? this.maxTokens : 4096,
       messages: conversationMessages.map((m) => toAnthropicMessage(m)),
     };
     if (systemMsg) {
@@ -431,7 +444,7 @@ class AnthropicProvider implements LLMProvider {
     tools: LLMToolDef[] | undefined,
     signal: AbortSignal,
   ): AsyncIterable<StreamDelta> {
-    yield* chatStreamAnthropic(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking);
+    yield* chatStreamAnthropic(this.model, this.baseUrl, this.apiKey, messages, tools, signal, this.thinking, this.maxTokens);
   }
 }
 
@@ -456,6 +469,8 @@ async function* chatStreamOpenAI(
   tools: LLMToolDef[] | undefined,
   signal: AbortSignal,
   thinking: ThinkingRequest | undefined,
+  maxTokens?: number,
+  maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens',
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -463,6 +478,9 @@ async function* chatStreamOpenAI(
     messages: messages.map(toOpenAIMessage),
     stream: true,
   };
+  if (maxTokens && maxTokens > 0) {
+    body[maxTokensParam] = maxTokens;
+  }
   if (tools && tools.length > 0) {
     body.tools = tools.map((t) => ({
       type: 'function',
@@ -602,12 +620,14 @@ async function* chatStreamAnthropic(
   tools: LLMToolDef[] | undefined,
   signal: AbortSignal,
   thinking: ThinkingRequest | undefined,
+  maxTokens?: number,
 ): AsyncIterable<StreamDelta> {
   const url = `${baseUrl ?? 'https://api.anthropic.com'}/v1/messages`;
   const body: Record<string, unknown> = {
     model,
-    // 开启 thinking 时 max_tokens 由 applyAnthropicThinking 按 budget+4096 抬升（严格大于 budget_tokens，否则 400）
-    max_tokens: 16384,
+    // P0-3：配置值替换硬编码 16384；开启 thinking 时由 applyAnthropicThinking
+    // 按 budget+4096 抬升（严格大于 budget_tokens，否则 400）
+    max_tokens: maxTokens && maxTokens > 0 ? maxTokens : 16384,
     stream: true,
     messages: messages
       .filter((m) => m.role !== 'system')

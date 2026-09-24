@@ -28,6 +28,7 @@ import { logger } from '../logger';
 import {
   lookupModelLimits,
   lookupReasoningCapability,
+  resolveMaxTokensParam,
   type ModelLimits,
 } from '../llm/model-catalog';
 import {
@@ -348,6 +349,9 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // 窗口元数据（null→0=未知）：子进程 auto 阈值压缩的依据，未知则 fail-safe 跳过
     contextWindow: limits?.contextWindow ?? 0,
     outputTokens: limits?.outputTokens ?? 0,
+    // B1（结果完整性 review 2026-09-24）：OpenAI 输出上限参数名单点解析——
+    // 官方 reasoning 模型（gpt-5/o 系）+ 官方端点 → max_completion_tokens
+    modelMaxTokensParam: resolveMaxTokensParam(provider.platform, def.modelName, provider.baseUrl),
     // 思维配置（spawn 时快照；mode=auto 请求层不发参数）
     thinking,
   };

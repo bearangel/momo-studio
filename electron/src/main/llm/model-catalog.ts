@@ -257,6 +257,30 @@ export function lookupModelLimits(
 }
 
 /**
+ * B1（结果完整性 review 2026-09-24）：OpenAI 输出上限参数名解析。
+ *
+ * OpenAI 官方 reasoning 模型（gpt-5 全系 / o1 / o3 / o4）对 `max_tokens`
+ * 硬拒 400——必须改用 `max_completion_tokens`。判别维度刻意用「官方模型名
+ * 前缀 + 无自定义 baseUrl」而非 catalog 的 reasoning.kind：GLM-5 / DeepSeek-v4
+ * 同为 platform='openai' + kind='effort'，但走 OpenAI 兼容端点，
+ * `max_tokens` 才是兼容面最广的参数名。
+ *
+ * @param platform 供应商 platform（openai / anthropic）
+ * @param modelId 模型名（原样字符串）
+ * @param baseUrl 自定义端点；非空 = 代理/第三方语义，恒 max_tokens
+ */
+export function resolveMaxTokensParam(
+  platform: string | undefined,
+  modelId: string,
+  baseUrl?: string,
+): 'max_tokens' | 'max_completion_tokens' {
+  if (baseUrl) return 'max_tokens';
+  // platform 缺失（旧供应商行）按 openai 启发式（与 detectPlatform 同语义）
+  if (platform === 'anthropic') return 'max_tokens';
+  return /^(gpt-5|o[134])/.test(modelId) ? 'max_completion_tokens' : 'max_tokens';
+}
+
+/**
  * 按协议平台 + 模型名查思维模式能力（正则兜底层）；未命中返回 none。
  * 优先级低于预设模型表（provider-presets，spec §4）。
  */
