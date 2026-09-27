@@ -8,10 +8,8 @@
 //   - 归档是单事务级联：组内非终态任务先 cancel，再全组任务 + 组本体置 archived_at，
 //     任一步失败整体回滚；cancelledIds 返回给 IPC 层补执行中断（abort 是进程级
 //     副作用，不入 DB 事务）
-//   - Task 2 过渡：listTasks 的 archived 过滤参数由 Task 2 落地，本 repo 组内任务
-//     清点/级联暂用直查 SQL（见 archiveGroup 内注释），Task 2 后统一换 listTasks
 import { getDb } from '../db';
-import { transitionTaskStatus, type TaskStatus } from '../tasks/repo';
+import { transitionTaskStatus, listTasks, type TaskStatus } from '../tasks/repo';
 import { isTerminal } from '../tasks/state-machine';
 
 export interface GroupRow {
@@ -144,15 +142,11 @@ export function archiveGroup(id: string): { cancelledIds: string[]; archivedCoun
   if (group.archivedAt != null) return { cancelledIds: [], archivedCount: 0 };
   const now = Date.now();
   return db.transaction((): { cancelledIds: string[]; archivedCount: number } => {
-    // Task 2 过渡（任务裁决）：listTasks 的 archived 过滤参数未落地，此处直查
-    // 组内任务清点级联目标；Task 2 后统一换 listTasks({ workspaceId }, { archived: 'all' }) + groupId 映射
-    const rows = db.prepare('SELECT id, status FROM tasks WHERE group_id = ?').all(id) as Array<{
-      id: string;
-      status: string;
-    }>;
+    // 组内任务清点走 tasks repo 统一入口（archived: 'all' + groupId 精确过滤）
+    const rows = listTasks({ workspaceId: group.workspaceId, archived: 'all', groupId: id });
     const cancelledIds: string[] = [];
     for (const r of rows) {
-      if (!isTerminal(r.status as TaskStatus)) {
+      if (!isTerminal(r.status)) {
         transitionTaskStatus(r.id, 'cancelled');
         cancelledIds.push(r.id);
       }

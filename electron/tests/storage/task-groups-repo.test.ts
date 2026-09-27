@@ -12,11 +12,6 @@
 // 测试隔离：对齐 tasks-repo.test.ts 既有 fixture——每个 case 独立 tmp 目录 +
 // closeDb + AP_USER_DATA_DIR 重置，真实 SQLite 文件库 + 全量 migrations，禁 mock。
 // tasks 表有 FK 到 workspaces(id)，故每个 case seed ws1–ws5 工作空间。
-//
-// Task 2 过渡说明（任务裁决）：级联/归档两用例依赖 Task 2 的 tasks repo 字段映射
-// （insertTask.groupId / listTasks.archived / TaskRow.archivedAt）。本文件以「直查
-// SQL」薄封装透传（语义与 Task 2 完成后一致），类型零违例；Task 2 收尾后删除
-// 「Task 2 过渡 shim」区块并恢复对真实签名的直连断言。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,36 +26,6 @@ import {
   updateGroup,
 } from '../../src/main/storage/task-groups/repo';
 import { insertTask, getTask, listTasks } from '../../src/main/storage/tasks/repo';
-
-// ─── Task 2 过渡 shim（见文件头说明）────────────────────────────────────────
-
-/** Task 2 将把 groupId 纳入 insertTask 映射；此前经直查 UPDATE 落 group_id。 */
-function insertTaskInGroup(
-  input: Parameters<typeof insertTask>[0] & { groupId?: string },
-) {
-  const { groupId, ...rest } = input;
-  const row = insertTask(rest);
-  if (groupId != null) {
-    getDb().prepare('UPDATE tasks SET group_id = ? WHERE id = ?').run(groupId, row.id);
-  }
-  return row;
-}
-
-/** Task 2 将把 archivedAt 纳入 TaskRow；此前经直查询列。 */
-function getTaskArchivedAt(id: string): number | null {
-  const row = getDb().prepare('SELECT archived_at FROM tasks WHERE id = ?').get(id) as {
-    archived_at: number | null;
-  };
-  return row.archived_at;
-}
-
-/** Task 2 将由 listTasks({ archived: 'only' }) 承担；此前直查计数。 */
-function countArchivedTasks(workspaceId: string): number {
-  const row = getDb()
-    .prepare('SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND archived_at IS NOT NULL')
-    .get(workspaceId) as { c: number };
-  return row.c;
-}
 
 // ─── fixture（对齐 tasks-repo.test.ts 顶部）─────────────────────────────────
 
@@ -113,29 +78,29 @@ describe('task_groups repo', () => {
 
   it('归档组：非终态任务级联 cancel + 全组 archived，事务原子', () => {
     const g = createGroup({ workspaceId: 'ws3', name: 'ver' });
-    const running = insertTaskInGroup({
+    const running = insertTask({
       workspaceId: 'ws3', title: '跑着', creatorUserId: 'owner', status: 'in_progress', groupId: g.id,
     });
-    const done = insertTaskInGroup({
+    const done = insertTask({
       workspaceId: 'ws3', title: '完了', creatorUserId: 'owner', status: 'completed', groupId: g.id,
     });
     const res = archiveGroup(g.id);
     expect(res.cancelledIds).toEqual([running.id]);
     expect(res.archivedCount).toBe(2);
     expect(getTask(running.id)?.status).toBe('cancelled');
-    expect(getTaskArchivedAt(running.id)).not.toBeNull();
-    expect(getTaskArchivedAt(done.id)).not.toBeNull();
-    // 默认 listTasks 不见归档——Task 2 的 archived 默认 exclude 过滤收口（当前红）
+    expect(getTask(running.id)?.archivedAt).not.toBeNull();
+    expect(getTask(done.id)?.archivedAt).not.toBeNull();
+    // 默认 listTasks 不见归档——archived 默认 exclude 过滤
     expect(listTasks({ workspaceId: 'ws3' })).toHaveLength(0);
   });
 
   it('unarchive 组只复活组，任务保持归档', () => {
     // 自含前置（per-case 隔离 fixture 下不依赖其他用例的 ws3 状态）
     const g = createGroup({ workspaceId: 'ws3', name: 'ver' });
-    insertTaskInGroup({
+    insertTask({
       workspaceId: 'ws3', title: '跑着', creatorUserId: 'owner', status: 'in_progress', groupId: g.id,
     });
-    insertTaskInGroup({
+    insertTask({
       workspaceId: 'ws3', title: '完了', creatorUserId: 'owner', status: 'completed', groupId: g.id,
     });
     archiveGroup(g.id);
@@ -143,8 +108,8 @@ describe('task_groups repo', () => {
     if (!archived) throw new Error('归档组未找到——only 过滤失效');
     unarchiveGroup(archived.id);
     expect(listGroups('ws3').map((x) => x.id)).toContain(archived.id);
-    // 任务保持归档——Task 2 后换 listTasks({ workspaceId: 'ws3', archived: 'only' })
-    expect(countArchivedTasks('ws3')).toBe(2);
+    // 任务保持归档——archived: 'only' 仍可见两条
+    expect(listTasks({ workspaceId: 'ws3', archived: 'only' })).toHaveLength(2);
   });
 
   it('reorder 按入参顺序重写 position', () => {
