@@ -40,7 +40,7 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
 import { BOARD_COLUMNS, canDropIntoColumn, columnOf, type BoardColumnKey } from '../../ipc/board-columns';
-import { splitLanes, sortColumn, type BoardLane } from '../../lib/board';
+import { groupChipColor, splitLanes, sortColumn, type BoardLane } from '../../lib/board';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
@@ -266,9 +266,19 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
   // 落点协调(Task 13 收敛到 hook):确认拦截/move/toast/指示线;
   // 组件只做 dnd 事件 → 原始 id 的适配
   const drop = useBoardDrop({ tasks, laneMode, dropIndex });
+  // 组 chip 组装（UX 波 2 #7）：组色在此单点解析成 fg/bg 配色串传入 BoardCard，
+  // 卡片与 DragOverlay 免重复解析；未知/无色 → null/null（卡片回退中性样式）
   const chipByGroup = useMemo(() => {
     const map = new Map<string, BoardGroupChip>();
-    for (const g of groups) map.set(g.id, { name: g.name, color: g.color });
+    for (const g of groups) {
+      const chip = groupChipColor(g.color);
+      map.set(g.id, {
+        name: g.name,
+        color: g.color,
+        fg: chip?.fg ?? null,
+        bg: chip?.bg ?? null,
+      });
+    }
     return map;
   }, [groups]);
 

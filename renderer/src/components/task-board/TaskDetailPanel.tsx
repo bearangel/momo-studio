@@ -23,7 +23,6 @@ import {
   Clock,
   FileDiff,
   MessagesSquare,
-  Pencil,
   Users,
   X,
 } from 'lucide-react';
@@ -154,15 +153,14 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         <span className="font-medium">#{task.id}</span>
         <div className="flex items-center gap-1">
           {!terminal && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               aria-label="编辑任务"
-              title="编辑任务"
               onClick={() => setEditOpen(true)}
-              className="text-tertiary hover:text-primary leading-none px-1 rounded"
             >
-              <Pencil size={13} strokeWidth={1.75} aria-hidden />
-            </button>
+              编辑
+            </Button>
           )}
           <button
             type="button"

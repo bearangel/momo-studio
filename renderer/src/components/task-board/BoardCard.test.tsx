@@ -1,13 +1,14 @@
 // renderer/src/components/task-board/BoardCard.test.tsx
 //
-// 看板卡片静态渲染测试（看板重构 Task 11）：
+// 看板卡片静态渲染测试（看板重构 Task 11；UX 波 2 #1/#7）：
 //   - 基础行：[高] 优先级前缀 + #短ID · 标题 + 状态徽标（task-status.ts 单源）
 //   - 中间态徽标：session_queued →「排队中」、paused →「已暂停」（spec §5.2，
 //     状态徽标天然按底层状态词表渲染，不占列）
-//   - 平铺模式 groupChip：色点 + 组名；null / 不传 → 不渲染
+//   - 平铺模式 groupChip：组色低透明底+组色文字/边框（fg/bg 由父层解析传入，
+//     UX 波 2 #7）；未知/无色 → 中性回退；null / 不传 → 不渲染
 //   - 点击回调 + selected 的 aria-pressed 语义
-//   - 终态卡右键归档（spec §5.2）：终态三态出菜单 / 点归档调 archive 且 store 剔除 /
-//     非终态无菜单 / 失败 toast（错误路径）
+//   - 右键菜单全状态（UX 波 2 #1）：终态出「归档」（spec §5.2，调 task.store.archive
+//     成功即本地剔除 / 失败 toast）；非终态出「编辑」打开内嵌 EditTaskDialog
 // mock 边界对齐 TaskCard.test：仅 mock IPC（window.api），store 用真实实现。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -86,13 +87,13 @@ describe('BoardCard 中间态徽标（spec §5.2：不占列，徽标表达）',
 });
 
 describe('BoardCard 平铺模式组 chip', () => {
-  it('groupChip 传入 → 显示组名（色点为纯样式装饰）', () => {
+  it('groupChip 传入（未解析色）→ 中性回退仍显示组名', () => {
     render(
       <BoardCard
         task={base}
         selected={false}
         onClick={() => {}}
-        groupChip={{ name: 'v2.1.0 看板重构', color: 'accent' }}
+        groupChip={{ name: 'v2.1.0 看板重构', color: 'accent', fg: null, bg: null }}
       />,
     );
     expect(screen.getByText('v2.1.0 看板重构')).toBeInTheDocument();
@@ -108,6 +109,58 @@ describe('BoardCard 平铺模式组 chip', () => {
     // 元信息行不因缺 chip 崩溃，标题行仍在
     expect(screen.getByText(/任务A/)).toBeInTheDocument();
   });
+
+  it('fg/bg 解析传入 → 组色渲染：低透明底 + 组色文字/边框（UX 波 2 #7）', () => {
+    render(
+      <BoardCard
+        task={base}
+        selected={false}
+        onClick={() => {}}
+        groupChip={{
+          name: '前端组',
+          color: 'accent',
+          fg: 'rgb(var(--accent-500))',
+          bg: 'color-mix(in srgb, rgb(var(--accent-500)) 14%, transparent)',
+        }}
+      />,
+    );
+    const chip = screen.getByText('前端组');
+    expect(chip.style.backgroundColor).toBe(
+      'color-mix(in srgb, rgb(var(--accent-500)) 14%, transparent)',
+    );
+    expect(chip.style.color).toBe('rgb(var(--accent-500))');
+    expect(chip.style.borderColor).toBe('rgb(var(--accent-500))');
+  });
+
+  it('自定义 hex 组色 → 原值前景 + 原值22 底色（UX 波 2 #5/#7）', () => {
+    render(
+      <BoardCard
+        task={base}
+        selected={false}
+        onClick={() => {}}
+        groupChip={{ name: '自定义组', color: '#ff8800', fg: '#ff8800', bg: '#ff880022' }}
+      />,
+    );
+    const chip = screen.getByText('自定义组');
+    // jsdom CSSOM 把 #rrggbbaa 规范化为 rgba（0x22/255 ≈ 0.133）
+    expect(chip.style.backgroundColor).toBe('rgba(255, 136, 0, 0.133)');
+    expect(chip.style.color).toBe('rgb(255, 136, 0)');
+    expect(chip.style.borderColor).toBe('rgb(255, 136, 0)');
+  });
+
+  it('fg/bg 为 null（未知/无色）→ 中性样式回退（bg-surface-2，无 inline 色）', () => {
+    render(
+      <BoardCard
+        task={base}
+        selected={false}
+        onClick={() => {}}
+        groupChip={{ name: '无色组', color: null, fg: null, bg: null }}
+      />,
+    );
+    const chip = screen.getByText('无色组');
+    expect(chip.className).toContain('bg-surface-2');
+    expect(chip.style.backgroundColor).toBe('');
+  });
 });
 
 describe('BoardCard 终态卡右键归档（spec §5.2）', () => {
@@ -115,12 +168,8 @@ describe('BoardCard 终态卡右键归档（spec §5.2）', () => {
     render(<BoardCard task={{ ...base, status }} selected={false} onClick={() => {}} />);
     fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
     expect(screen.getByRole('button', { name: /归档/ })).toBeInTheDocument();
-  });
-
-  it('非终态（assigned）右键 → 无菜单', () => {
-    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
-    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
-    expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
+    // 终态不出编辑项（编辑入口仅非终态）
+    expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
   });
 
   it('点归档 → 调 ipc.task.archive(id) 且 store 本地剔除该行（卡片消失）', async () => {
@@ -166,5 +215,45 @@ describe('BoardCard 终态卡右键归档（spec §5.2）', () => {
     expect(await screen.findByTestId('ui-toast')).toHaveTextContent('归档失败: 归档冲突');
     // store.archive 失败 rethrow 且本地不动
     expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['T-001']);
+  });
+});
+
+describe('BoardCard 非终态卡右键编辑（UX 波 2 #1：入口可达性）', () => {
+  it('非终态（assigned）右键 → 出「编辑」菜单（不再放行原生菜单）', () => {
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    expect(screen.getByRole('button', { name: /^编辑$/ })).toBeInTheDocument();
+    // 非终态不出归档项（主进程同样 reject）
+    expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
+  });
+
+  it.each(['draft', 'pending', 'session_queued', 'in_progress', 'paused'] as const)(
+    '非终态 %s 右键 → 出「编辑」菜单',
+    (status) => {
+      render(<BoardCard task={{ ...base, status }} selected={false} onClick={() => {}} />);
+      fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+      expect(screen.getByRole('button', { name: /^编辑$/ })).toBeInTheDocument();
+    },
+  );
+
+  it('点「编辑」→ 打开 EditTaskDialog（workspaceId 取 task.workspaceId）', async () => {
+    // EditTaskDialog 打开即拉三类目标列表——mock 为空列表防未处理 rejection
+    mockApi.agent.listMembers.mockResolvedValue([]);
+    mockApi.team.list.mockResolvedValue([]);
+    mockApi.session.list.mockResolvedValue([]);
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^编辑$/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-label', '编辑任务 #T-001');
+    // 菜单点编辑后关闭
+    expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
+  });
+
+  it('非终态卡不挂 EditTaskDialog 于关闭态（open=false 渲染 null，无对话框副作用）', () => {
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    // EditTaskDialog open=false 不渲染（卡片自身的 useTaskEntityNames 兜底拉取不计入）
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
