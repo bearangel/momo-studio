@@ -3,8 +3,8 @@
 // 任务看板主区（看板重构 Task 12 改造）：
 //   - 顶部标题栏：SidebarRestoreButton + 标题（并发徽标在 BoardToolbar）
 //   - BoardToolbar：搜索/指派人筛选（filterBoardTasks 生效）/ 泳道模式开关
-//     （Task 12 接线；localStorage 持久化）/ 并发徽标 / 归档（disabled，Task 14）/
-//     新建任务（CreateTaskDialog）
+//     （Task 12 接线；localStorage 持久化）/ 并发徽标 / 归档入口（Task 14 接线
+//     ArchivePanel）/ 新建任务（CreateTaskDialog）
 //   - BoardCanvas：DndContext 拖拽画板（泳道 splitLanes / 平铺单道；拖拽三分支
 //     语义与 DragOverlay 见 BoardCanvas 头注）
 //   - selectedTaskId → TaskDetailDrawer 右侧滑入抽屉叠加（主区互斥渲染退役，
@@ -33,6 +33,7 @@ import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { BoardToolbar, type BoardConcurrency } from './BoardToolbar';
 import { BoardCanvas } from './BoardCanvas';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
+import { ArchivePanel } from './ArchivePanel';
 
 /** 泳道模式持久化 key（spec §5.3 纯 UI 偏好） */
 const LANE_MODE_STORAGE_KEY = 'kanban-lane-mode';
@@ -72,6 +73,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   /** 用户手动切换的持久化偏好；null=未表态 → 按组存在性派生默认（spec §5.3） */
   const [laneModePref, setLaneModePref] = useState<LaneMode | null>(() => readStoredLaneMode());
   const [createOpen, setCreateOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
 
@@ -162,9 +164,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         assigneeOptions={assigneeOptions}
         laneMode={laneMode}
         onLaneMode={handleLaneMode}
-        onOpenArchive={() => {
-          // Task 14 接线：ArchivePanel 入口，按钮 disabled 期间不可达
-        }}
+        onOpenArchive={() => setArchiveOpen(true)}
         concurrency={concurrency}
         onCreateTask={() => setCreateOpen(true)}
       />
@@ -179,6 +179,12 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
       {selectedTaskId !== null && (
         <TaskDetailDrawer taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
       )}
+      {/* 归档面板（Task 14）：工具栏归档入口打开，恢复走 task.store.unarchive */}
+      <ArchivePanel
+        open={archiveOpen}
+        onClose={() => setArchiveOpen(false)}
+        workspaceId={workspaceId}
+      />
       <CreateTaskDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}

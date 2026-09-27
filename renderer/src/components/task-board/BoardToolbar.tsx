@@ -3,14 +3,19 @@
 // 看板工具栏（看板重构 Task 11 建立，spec §5.1）——受控组件，state 全部由
 // TaskBoardView 持有：搜索 / 指派人筛选 / 泳道模式开关（Task 12 接线：平铺↔
 // 按组分道，偏好持久化在 TaskBoardView）/ 并发徽标（自 TaskBoardView 顶部
-// 状态栏迁入，文案格式不变）/ 归档入口 / 新建任务。
-// 接线边界：归档按钮渲染但 disabled——ArchivePanel Task 14 接线，
-// onOpenArchive 回调已按最终契约连线，接线时移除 disabled 即可。
+// 状态栏迁入，文案格式不变）/ 归档入口（Task 14 接线 ArchivePanel）/
+// 新建任务。
 import { Archive, Plus, Search } from 'lucide-react';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
-import type { AssigneeOption } from './TaskFilters';
+
+/** assignee 下拉单个选项；label=agentName，value=instanceId（与 task.assigneeAgentId 匹配）。
+ *  TaskFilters 退役后迁入（Task 14），类型契约不变。 */
+export interface AssigneeOption {
+  value: string;
+  label: string;
+}
 
 /** 并发徽标数据（TaskBoardView 从 tasks + settings 派生后传入） */
 export interface BoardConcurrency {
@@ -98,8 +103,8 @@ export function BoardToolbar({
       <span className="ml-auto shrink-0 text-[11px] text-tertiary">
         并发: {concurrency.active}/{concurrency.max}　排队: {concurrency.queued}
       </span>
-      {/* 归档入口：Task 14 ArchivePanel 接线前禁用 */}
-      <Button variant="secondary" size="sm" disabled onClick={onOpenArchive}>
+      {/* 归档入口：打开 ArchivePanel（Task 14 接线） */}
+      <Button variant="secondary" size="sm" onClick={onOpenArchive}>
         <Archive size={12} strokeWidth={1.75} aria-hidden />
         归档
       </Button>

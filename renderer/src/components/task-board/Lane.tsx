@@ -2,18 +2,20 @@
 //
 // 看板泳道（看板重构 Task 12，spec §5.1）：
 //   - LaneHeader（仅泳道模式渲染；平铺=单道无 header）：组色标（groupColorStyle
-//     语义色 token）/ 组名 / 任务计数 / 折叠 chevron / 组菜单 MoreHorizontal
-//     （重命名·换色·归档组——Task 14 实装，本任务禁用占位）
+//     语义色 token）/ 组名 / 任务计数 / 折叠 chevron / 组菜单 GroupMenu
+//     （重命名·换色·归档组——Task 14 经 useGroupActions 公共逻辑实装；
+//     未分组道无菜单）
 //   - 折叠态只留 header；展开态 5 列横排（BoardColumn × BOARD_COLUMNS）
 //   - 卡片渲染由 BoardCanvas 注入（SortableBoardCard）；拖拽手持源状态
 //     透传 BoardColumn 做禁投预判（canDropIntoColumn → droppable disabled + 变暗）；
 //     拖悬指示线定位（Task 13 dropHint）按列 droppableId 匹配透传
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { BOARD_COLUMNS } from '../../ipc/board-columns';
 import { groupColorStyle, type BoardLane } from '../../lib/board';
 import type { TaskRow, TaskStatus } from '../../ipc/types';
 import { BoardColumn } from './BoardColumn';
+import { GroupMenu } from './GroupMenu';
 import type { DropHint } from './useBoardDrop';
 
 interface LaneProps {
@@ -58,38 +60,11 @@ export function Lane({ lane, laneMode, renderCard, activeDragStatus, dropHint = 
               <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
             )}
           </button>
-          {/* 组菜单：重命名/换色/归档组 Task 14 实装，先禁用占位（Popover 原子件届时引入） */}
-          <details className="relative ml-auto">
-            <summary
-              aria-label={`泳道菜单 ${name}`}
-              className="cursor-pointer list-none rounded px-0.5 leading-none text-tertiary hover:text-primary [&::-webkit-details-marker]:hidden"
-            >
-              <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
-            </summary>
-            <div className="absolute right-0 z-10 mt-1 w-28 rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg">
-              <button
-                type="button"
-                disabled
-                className="block w-full px-3 py-1 text-left text-secondary disabled:opacity-50"
-              >
-                重命名
-              </button>
-              <button
-                type="button"
-                disabled
-                className="block w-full px-3 py-1 text-left text-secondary disabled:opacity-50"
-              >
-                换色
-              </button>
-              <button
-                type="button"
-                disabled
-                className="block w-full px-3 py-1 text-left text-secondary disabled:opacity-50"
-              >
-                归档组
-              </button>
-            </div>
-          </details>
+          {/* 组菜单（Task 14 实装）：重命名/换色/归档组走 GroupMenu 公共逻辑；
+              未分组道（group=null）无菜单 */}
+          {lane.group !== null && (
+            <GroupMenu group={lane.group} triggerLabel={`泳道菜单 ${name}`} />
+          )}
         </header>
       )}
       {!collapsed && (

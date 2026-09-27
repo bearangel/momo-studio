@@ -94,11 +94,11 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     useTaskStore.setState({ tasks: fixture });
     render(<TaskBoardView workspaceId="ws-1" />);
     expect(screen.getByText('任务看板')).toBeInTheDocument();
-    // 工具栏：搜索 + 新建；泳道开关已接线（Task 12），归档仍 disabled（Task 14）
+    // 工具栏：搜索 + 新建；泳道开关已接线（Task 12），归档入口已接线（Task 14）
     expect(screen.getByRole('textbox', { name: '搜索任务' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新建任务/ })).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: /^分组$/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /归档/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /归档/ })).toBeEnabled();
     // 五列（BOARD_COLUMNS 契约）
     for (const label of ['待办', '已分配', '进行中', '已完成', '已关闭']) {
       expect(screen.getByText(label)).toBeInTheDocument();
