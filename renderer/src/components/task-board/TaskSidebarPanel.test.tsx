@@ -1,9 +1,11 @@
 // renderer/src/components/task-board/TaskSidebarPanel.test.tsx
 //
-// 看板侧边栏面板测试（看板重构 Task 14 重构后）：
+// 看板侧边栏面板测试（看板重构 Task 14 重构后；UX 修复：新建任务入口移除——
+// 主区工具栏已有，侧边栏不再重复）：
 //   - 三区块：分组管理（GroupManageList）/ 归档入口（计数）/ 远端节点（原样保留）
 //   - 归档入口：mount 拉一次 task.list({archived:'only'}) 计数；点击打开 ArchivePanel
 //   - 远端节点分区（P4 Task 3 原样保留回归）：节点卡 / 只读 / 空态 / stale
+//   - 新建任务入口已退役：不再渲染 Plus 按钮 / CreateTaskDialog
 //
 // mock 边界：仅 mock window.api；task.store / group.store / workspace.store 真实实现。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -78,21 +80,11 @@ const ARCHIVED_TASKS = [
 ];
 
 const mockApi = {
-  agent: {
-    listMembers: vi.fn().mockResolvedValue([]),
-  },
   task: {
-    create: vi.fn(),
     list: vi.fn(),
   },
   taskGroup: {
     list: vi.fn(),
-  },
-  team: {
-    list: vi.fn().mockResolvedValue([]),
-  },
-  session: {
-    list: vi.fn().mockResolvedValue([]),
   },
   p2p: {
     getRemoteTasks: vi.fn().mockResolvedValue([]),
@@ -141,16 +133,12 @@ describe('TaskSidebarPanel（Task 14 重构：分组管理 + 归档入口 + 远�
   beforeEach(() => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     setupStores();
-    mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
-    mockApi.task.create.mockReset();
     mockApi.task.list.mockReset().mockResolvedValue(ARCHIVED_TASKS);
     // taskGroup.list 两态：默认活跃组；archived:'only' 无归档组（折叠区不渲染）
     mockApi.taskGroup.list.mockReset().mockImplementation(
       async (_ws: string, opts?: { archived?: 'exclude' | 'only' | 'all' }) =>
         opts?.archived === 'only' ? [] : [mkGroup({ id: 'g-1', name: '组一' })],
     );
-    mockApi.team.list.mockClear().mockResolvedValue([]);
-    mockApi.session.list.mockClear().mockResolvedValue([]);
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });
 
@@ -190,10 +178,10 @@ describe('TaskSidebarPanel（Task 14 重构：分组管理 + 归档入口 + 远�
     expect(await screen.findByText(/归档一/)).toBeInTheDocument();
   });
 
-  it('新建任务入口保留：Plus 按钮打开创建任务对话框', () => {
+  it('新建任务入口已退役：无 Plus 按钮、不渲染创建任务对话框', () => {
     render(<TaskSidebarPanel />);
-    fireEvent.click(screen.getByLabelText('新建任务'));
-    expect(screen.getByRole('heading', { name: '创建任务' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('新建任务')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '创建任务' })).not.toBeInTheDocument();
   });
 });
 
@@ -201,12 +189,8 @@ describe('TaskSidebarPanel 远端节点分区（P4 Task 3 只读镜像，原样�
   beforeEach(() => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     setupStores();
-    mockApi.agent.listMembers.mockClear().mockResolvedValue([]);
-    mockApi.task.create.mockReset();
     mockApi.task.list.mockReset().mockResolvedValue([]);
     mockApi.taskGroup.list.mockReset().mockResolvedValue([]);
-    mockApi.team.list.mockClear().mockResolvedValue([]);
-    mockApi.session.list.mockClear().mockResolvedValue([]);
     mockApi.p2p.getRemoteTasks.mockReset().mockResolvedValue([]);
   });
 
