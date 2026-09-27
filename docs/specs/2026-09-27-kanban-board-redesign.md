@@ -70,8 +70,9 @@ taskGroup.create(input: { workspaceId: string; name: string; color?: string }): 
 taskGroup.update(id: string, patch: { name?: string; color?: string }): Promise<GroupRow>
 taskGroup.reorder(orderedIds: string[]): Promise<void>
   // 组数量少(个位~十位),直接按入参顺序重写 position 1..N
-taskGroup.archive(id: string): Promise<{ cancelledCount: number; archivedCount: number }>
-  // 单事务:组内非终态任务逐个走 cancel 语义转终态 → 组内全部任务置 archived_at → 组置 archived_at
+taskGroup.archive(id: string): Promise<{ cancelledIds: string[]; archivedCount: number }>
+  // 单事务:组内非终态任务逐个转 cancelled → 组内全部任务置 archived_at → 组置 archived_at
+  // cancelledIds 供 IPC 层对 in_progress 来源补执行中断(abort 是进程级副作用,不入 DB 事务)
   // 任一步失败整体回滚(组与任务都不动)
 taskGroup.unarchive(id: string): Promise<GroupRow>
   // 仅组恢复活跃,组内任务保持归档(在归档面板单条/批量/按组捞回)
@@ -103,7 +104,7 @@ task.list(opts): 原参数 + archived?: 'exclude' | 'only' | 'all'   // 默认 '
 
 ### 3.3 契约单源
 
-`BOARD_COLUMNS` 定义在 `renderer/src/ipc/types.d.ts`(该文件已被 electron preload 三层引用,天然双端共享),主进程 move 校验引用同一常量——两侧列语义不可能漂移(momo-boundary-rules:契约单点)。
+`BOARD_COLUMNS` 定义在 `renderer/src/ipc/board-columns.ts`(value module 而非 types.d.ts——常量需要运行时值,.d.ts 不产出代码;该目录已被 electron preload 三层相对路径引用,天然双端共享),主进程 move 校验引用同一常量——两侧列语义不可能漂移(momo-boundary-rules:契约单点)。
 
 ```ts
 export const BOARD_COLUMNS = [
