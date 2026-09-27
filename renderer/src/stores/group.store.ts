@@ -10,9 +10,10 @@
 // reorder 本地同步会镜像 repo 的 (i+1)*1024 重写语义（未列入的组 position 不动），
 // 保证后续排序动作（create 追加 / unarchive 塞回）依赖的本地 position 不失真。
 //
-// 注意：archiveGroup 会级联取消/归档组内任务（DB 事务），但本 store 不跨 store
-// 联动刷新 task.store（照 task.store 单一职责先例）——调用方（UI 层）在归档
-// 成功后自行触发任务列表 load。
+// 注意：archiveGroup / unarchiveGroup 都会改变组内任务的 task:list 可见性
+// （归档级联 / 解档连带恢复，主进程事务），但本 store 不跨 store 联动刷新
+// task.store（照 task.store 单一职责先例）——调用方（UI 层）在动作成功后
+// 自行触发任务列表 load。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { GroupRow } from '../ipc/types';
@@ -39,7 +40,7 @@ interface GroupState {
   reorder: (orderedIds: string[]) => Promise<void>;
   /** 归档组（主进程级联取消+归档组内任务）；成功即本地剔除该组 */
   archive: (id: string) => Promise<void>;
-  /** 解档组（任务保持归档）；成功即把返回行按 position 塞回 */
+  /** 解档组（主进程事务内组+组内归档任务一并恢复）；成功即把返回行按 position 塞回；调用方需自行刷新任务列表 */
   unarchive: (id: string) => Promise<void>;
   reset: () => void;
 }

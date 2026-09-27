@@ -6,10 +6,13 @@
 //   - 过滤：搜索框（标题/ID 子串）+ 组 select + 状态 select，三维 AND
 //   - 行：checkbox / #短ID·标题 / 组名 / 状态徽标 / 归档时间 / 单条「恢复」
 //   - 底部：已选 n · 批量恢复（按列表序逐条）· 恢复整组 select（候选=还有
-//     归档任务的已归档组，选中即恢复该组全部归档任务）
+//     归档任务的已归档组，选中即一次 taskGroup.unarchive——主进程事务内
+//     组+组内归档任务一并恢复，2026-09-27 spec §3.1 修订）
 //
-// 恢复链路：task.store.unarchive（ipc.task.unarchive + 本地 tasks 追加——恢复
-// 行立即回看板）；成功后本地归档列表剔除该行，失败 toast 且行保留。
+// 恢复链路：单条/批量走 task.store.unarchive（ipc.task.unarchive + 本地 tasks
+// 追加——恢复行立即回看板）；恢复整组走 ipc.taskGroup.unarchive 一次调用，
+// 成功后重拉 rows/groups + task.store.load（组内任务即时回看板，不等 5s 轮询）；
+// 失败 toast 且行保留。
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Archive } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -44,6 +47,7 @@ interface ArchivePanelProps {
 
 export function ArchivePanel({ open, onClose, workspaceId }: ArchivePanelProps) {
   const unarchiveTask = useTaskStore((s) => s.unarchive);
+  const loadTasks = useTaskStore((s) => s.load);
   const [rows, setRows] = useState<TaskRow[]>([]);
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [search, setSearch] = useState('');
@@ -155,10 +159,29 @@ export function ArchivePanel({ open, onClose, workspaceId }: ArchivePanelProps) 
     }
   };
 
-  /** 恢复整组：该组全部归档任务逐条 */
+  /** 恢复整组：一次 taskGroup.unarchive（组+组内归档任务主进程事务一体恢复），重拉面板数据并刷新看板任务 */
   const restoreWholeGroup = async (groupId: string): Promise<void> => {
-    for (const t of rows.filter((x) => x.groupId === groupId)) {
-      await restoreOne(t.id);
+    setRestoring(true);
+    try {
+      await ipc.taskGroup.unarchive(groupId);
+      const [tasks, groupRows] = await Promise.all([
+        ipc.task.list({ workspaceId, archived: 'only', orderBy: 'created_at_desc', limit: 500 }),
+        ipc.taskGroup.list(workspaceId, { archived: 'all' }),
+      ]);
+      setRows(tasks);
+      setGroups(groupRows);
+      setSelected((s) => {
+        const next = new Set(s);
+        for (const id of next) {
+          if (!tasks.some((t) => t.id === id)) next.delete(id);
+        }
+        return next;
+      });
+      void loadTasks(workspaceId); // 看板即时回归（load 内部吞错，不阻断面板）
+    } catch (err) {
+      showToast(`恢复整组失败: ${(err as Error).message}`);
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -277,6 +300,7 @@ export function ArchivePanel({ open, onClose, workspaceId }: ArchivePanelProps) 
             ))}
           </Select>
         </div>
+        <p className="mt-1.5 text-xs text-tertiary">恢复组会把组内全部归档任务一并带回</p>
       </Dialog>
       <Toast />
     </>

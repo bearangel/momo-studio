@@ -29,7 +29,7 @@ export interface GroupActions {
   runRename: (id: string, name: string) => Promise<boolean>;
   /** 换色；失败 toast，返回是否成功 */
   runSetColor: (id: string, color: string) => Promise<boolean>;
-  /** 取消归档（只复活组本体，任务保持归档）；失败 toast */
+  /** 取消归档（主进程组+组内归档任务一并恢复，成功后刷新任务列表）；失败 toast */
   runUnarchive: (id: string) => Promise<void>;
   /** 请求归档组（打开确认框） */
   requestArchive: (group: GroupRow) => void;
@@ -82,11 +82,13 @@ export function useGroupActions(workspaceId: string): GroupActions {
     async (id: string): Promise<void> => {
       try {
         await unarchiveGroup(id);
+        // 解档连带恢复组内任务（主进程事务）→ 刷新任务列表（照 confirmArchive 承接模式）
+        await loadTasks(workspaceId);
       } catch (err) {
         showToast(`取消归档失败: ${(err as Error).message}`);
       }
     },
-    [unarchiveGroup],
+    [unarchiveGroup, loadTasks, workspaceId],
   );
 
   /** 确认归档：级联归档 + 任务列表刷新（Task 10 承接）；无论成败关确认框 */

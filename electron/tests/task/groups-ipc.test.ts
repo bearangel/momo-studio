@@ -32,7 +32,7 @@ vi.mock('electron', () => ({
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createGroup } from '../../src/main/storage/task-groups/repo';
 import type { GroupRow } from '../../src/main/storage/task-groups/repo';
-import { insertTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { insertTask, transitionTaskStatus, listTasks } from '../../src/main/storage/tasks/repo';
 import type { TaskRow, TaskStatus } from '../../src/main/storage/tasks/repo';
 import { registerTaskGroupHandlers } from '../../src/main/task/groups.ipc.handlers';
 import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
@@ -189,6 +189,20 @@ describe('taskGroup:unarchive IPC', () => {
     await handlers.get('taskGroup:archive')!(null, g.id);
     const row = (await handlers.get('taskGroup:unarchive')!(null, g.id)) as GroupRow;
     expect(row.archivedAt).toBeNull();
+  });
+
+  it('经通道解档后组内归档任务一并回归默认列表', async () => {
+    const g = createGroup({ workspaceId: WS, name: 'v' });
+    const run = seedInProgress({ groupId: g.id });
+    const done = seed('completed', { groupId: g.id });
+    await handlers.get('taskGroup:archive')!(null, g.id);
+    expect(listTasks({ workspaceId: WS })).toHaveLength(0);
+
+    await handlers.get('taskGroup:unarchive')!(null, g.id);
+
+    expect(listTasks({ workspaceId: WS }).map((t) => t.id).sort()).toEqual(
+      [run.id, done.id].sort(),
+    );
   });
 
   it('不存在的组拒绝(错误路径)', async () => {

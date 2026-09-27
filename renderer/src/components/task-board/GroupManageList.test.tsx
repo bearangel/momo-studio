@@ -6,7 +6,7 @@
 //   - 重命名：菜单触发行内编辑，回车调 taskGroup.update(id, {name})
 //   - 换色：色板固定 5 语义色，点选调 taskGroup.update(id, {color})
 //   - 归档组：确认文案含实时未完结数 N；确认后 taskGroup.archive + task.list 级联刷新
-//   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive
+//   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive + task.list 级联刷新
 //   - 调序（spec §5.1）：上/下移与相邻组交换后以新序调 taskGroup.reorder；
 //     首组上移/末组下移 disabled；失败 toast（错误路径）
 //
@@ -239,7 +239,7 @@ describe('GroupManageList', () => {
     });
   });
 
-  it('取消归档：折叠区列出归档组，点选调 taskGroup.unarchive', async () => {
+  it('取消归档：折叠区列出归档组，点选调 taskGroup.unarchive + task.list 级联刷新', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
@@ -250,6 +250,12 @@ describe('GroupManageList', () => {
 
     await waitFor(() => {
       expect(mockApi.taskGroup.unarchive).toHaveBeenCalledWith('g-z');
+    });
+    // 解档连带恢复组内任务（主进程事务）→ 任务列表级联刷新（照归档组承接模式）
+    await waitFor(() => {
+      expect(mockApi.task.list).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceId: 'ws-1' }),
+      );
     });
   });
 

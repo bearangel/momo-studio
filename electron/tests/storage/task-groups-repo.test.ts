@@ -5,7 +5,7 @@
 //   - createGroup（默认活跃 / position 按 workspace 自增 / 语义色可选）
 //   - listGroups（exclude / only / all 三态归档过滤）
 //   - archiveGroup（非终态任务级联 cancel + 全组 archived + 组置归档，单事务）
-//   - unarchiveGroup（只复活组，任务保持归档）
+//   - unarchiveGroup（组与组内全部归档任务一并恢复；他组/未分组不受影响）
 //   - reorderGroups（按入参顺序重写 position）
 //   - updateGroup（改名 / 换色 + bump updated_at）
 //
@@ -25,7 +25,7 @@ import {
   reorderGroups,
   updateGroup,
 } from '../../src/main/storage/task-groups/repo';
-import { insertTask, getTask, listTasks } from '../../src/main/storage/tasks/repo';
+import { insertTask, getTask, listTasks, updateTask } from '../../src/main/storage/tasks/repo';
 
 // ─── fixture（对齐 tasks-repo.test.ts 顶部）─────────────────────────────────
 
@@ -94,13 +94,13 @@ describe('task_groups repo', () => {
     expect(listTasks({ workspaceId: 'ws3' })).toHaveLength(0);
   });
 
-  it('unarchive 组只复活组，任务保持归档', () => {
+  it('unarchive 组后组内归档任务一并恢复（archived_at 清空）', () => {
     // 自含前置（per-case 隔离 fixture 下不依赖其他用例的 ws3 状态）
     const g = createGroup({ workspaceId: 'ws3', name: 'ver' });
-    insertTask({
+    const running = insertTask({
       workspaceId: 'ws3', title: '跑着', creatorUserId: 'owner', status: 'in_progress', groupId: g.id,
     });
-    insertTask({
+    const done = insertTask({
       workspaceId: 'ws3', title: '完了', creatorUserId: 'owner', status: 'completed', groupId: g.id,
     });
     archiveGroup(g.id);
@@ -108,8 +108,36 @@ describe('task_groups repo', () => {
     if (!archived) throw new Error('归档组未找到——only 过滤失效');
     unarchiveGroup(archived.id);
     expect(listGroups('ws3').map((x) => x.id)).toContain(archived.id);
-    // 任务保持归档——archived: 'only' 仍可见两条
-    expect(listTasks({ workspaceId: 'ws3', archived: 'only' })).toHaveLength(2);
+    // 组与任务同进退：默认 listTasks（exclude）重新可见，archived_at 已清空
+    expect(listTasks({ workspaceId: 'ws3' }).map((t) => t.id).sort()).toEqual(
+      [running.id, done.id].sort(),
+    );
+    expect(getTask(running.id)?.archivedAt).toBeNull();
+    expect(getTask(done.id)?.archivedAt).toBeNull();
+    expect(listTasks({ workspaceId: 'ws3', archived: 'only' })).toHaveLength(0);
+  });
+
+  it('unarchive 组不影响他组与未分组的归档任务', () => {
+    const mine = createGroup({ workspaceId: 'ws3', name: 'mine' });
+    const other = createGroup({ workspaceId: 'ws3', name: 'other' });
+    const tMine = insertTask({
+      workspaceId: 'ws3', title: '本组', creatorUserId: 'owner', status: 'completed', groupId: mine.id,
+    });
+    const tOther = insertTask({
+      workspaceId: 'ws3', title: '他组', creatorUserId: 'owner', status: 'completed', groupId: other.id,
+    });
+    const tFloating = insertTask({
+      workspaceId: 'ws3', title: '未分组', creatorUserId: 'owner', status: 'completed',
+    });
+    archiveGroup(mine.id);
+    archiveGroup(other.id);
+    updateTask(tFloating.id, { archivedAt: Date.now() }); // 未分组归档行（task.archive 同款落点）
+    unarchiveGroup(mine.id);
+    // 本组任务回归；他组/未分组保持归档
+    expect(getTask(tMine.id)?.archivedAt).toBeNull();
+    expect(getTask(tOther.id)?.archivedAt).not.toBeNull();
+    expect(getTask(tFloating.id)?.archivedAt).not.toBeNull();
+    expect(listTasks({ workspaceId: 'ws3' }).map((t) => t.id)).toEqual([tMine.id]);
   });
 
   it('reorder 按入参顺序重写 position', () => {

@@ -160,12 +160,21 @@ export function archiveGroup(id: string): { cancelledIds: string[]; archivedCoun
   })();
 }
 
-/** 解档组：只复活组本体，任务保持归档（spec：任务归档独立于组归档）。 */
+/**
+ * 解档组：组与组内全部归档任务一并恢复（2026-09-27 用户反馈语义修订，spec §3.1
+ * 「组与任务同进退」）——单事务内组内归档任务 archived_at 清空 + 组本体恢复，
+ * 他组/未分组任务不受影响。返回类型不变（GroupRow），任务恢复是副作用。
+ */
 export function unarchiveGroup(id: string): GroupRow {
+  const db = getDb();
   const group = getGroup(id);
   if (!group) throw new Error(`task_group ${id} 不存在`);
-  getDb()
-    .prepare('UPDATE task_groups SET archived_at = NULL, updated_at = ? WHERE id = ?')
-    .run(Date.now(), id);
+  const now = Date.now();
+  db.transaction(() => {
+    db.prepare(
+      'UPDATE tasks SET archived_at = NULL, updated_at = ? WHERE group_id = ? AND archived_at IS NOT NULL',
+    ).run(now, id);
+    db.prepare('UPDATE task_groups SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
+  })();
   return getGroup(id)!;
 }

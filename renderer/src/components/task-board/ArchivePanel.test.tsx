@@ -6,7 +6,8 @@
 //   - 渲染：归档行（#短ID·标题 / 组名 / 状态徽标 / 归档时间）+ 空态
 //   - 单条恢复：调 task.store.unarchive（真实 store → ipc.task.unarchive）后行消失
 //   - 批量恢复：勾选 n → 按列表序逐条 unarchive
-//   - 恢复整组：select 选归档组 → 该组全部归档任务逐条 unarchive
+//   - 恢复整组：select 选归档组 → 一次 taskGroup.unarchive（组+任务一体恢复）
+//     后重拉面板数据并刷新看板任务；失败 toast 行保留
 //   - 过滤：搜索框（标题）+ 组 select + 状态 select
 //
 // mock 边界（momo-test-rules #5）：仅 mock window.api（IPC 边界），task.store 用
@@ -84,6 +85,7 @@ const mockApi = {
   },
   taskGroup: {
     list: vi.fn(),
+    unarchive: vi.fn(),
   },
 };
 
@@ -98,6 +100,9 @@ describe('ArchivePanel', () => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
     mockApi.task.list.mockReset().mockResolvedValue([T_IN_G1_A, T_IN_G1_B, T_NO_GROUP]);
     mockApi.taskGroup.list.mockReset().mockResolvedValue(GROUPS_ALL);
+    mockApi.taskGroup.unarchive
+      .mockReset()
+      .mockResolvedValue(mkGroup({ ...GROUPS_ALL[0]!, archivedAt: null }));
     mockApi.task.unarchive.mockReset().mockImplementation(async (id: string) =>
       mkTask({ ...T_IN_G1_A, id, archivedAt: null }),
     );
@@ -176,22 +181,56 @@ describe('ArchivePanel', () => {
     expect(screen.getByText(/已选 0/)).toBeInTheDocument();
   });
 
-  it('恢复整组 select：选已归档组 → 该组全部归档任务逐条恢复', async () => {
+  it('恢复整组 select：选已归档组 → 一次 taskGroup.unarchive（组+任务一体），面板重拉且看板任务刷新', async () => {
+    // task.list 按参数分派：archived:'only' → 面板归档行；无 archived → task.store.load 全量
+    let archivedRows: TaskRow[] = [T_IN_G1_A, T_IN_G1_B, T_NO_GROUP];
+    let activeRows: TaskRow[] = [];
+    mockApi.task.list.mockReset().mockImplementation(
+      async (opts?: { archived?: 'exclude' | 'only' | 'all' }) =>
+        opts?.archived === 'only' ? archivedRows : activeRows,
+    );
+    // 服务端语义仿真：unarchive 落库后，两类 list 查询自然返回恢复后的数据
+    mockApi.taskGroup.unarchive.mockReset().mockImplementation(async (gid: string) => {
+      if (gid !== 'g-1') throw new Error('未知组');
+      archivedRows = [T_NO_GROUP];
+      activeRows = [{ ...T_IN_G1_A, archivedAt: null }, { ...T_IN_G1_B, archivedAt: null }];
+      return mkGroup({ ...GROUPS_ALL[0]!, archivedAt: null });
+    });
     render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
     await screen.findByText(/归档任务甲/);
 
     fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
 
     await waitFor(() => {
-      expect(mockApi.task.unarchive).toHaveBeenCalledTimes(2);
+      expect(mockApi.taskGroup.unarchive).toHaveBeenCalledTimes(1);
     });
-    expect(mockApi.task.unarchive.mock.calls.map((c) => c[0])).toEqual(['T-0001aa', 'T-0002bb']);
+    expect(mockApi.taskGroup.unarchive).toHaveBeenCalledWith('g-1');
+    // 语义修订回归锁：不再逐条 task.unarchive
+    expect(mockApi.task.unarchive).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(screen.queryByText(/归档任务甲/)).not.toBeInTheDocument();
       expect(screen.queryByText(/归档任务乙/)).not.toBeInTheDocument();
     });
-    // 无组任务不受影响
     expect(screen.getByText(/归档任务丙/)).toBeInTheDocument();
+    // 看板任务即时刷新（task.store.load 走无 archived 参数的分派）
+    await waitFor(() => {
+      expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['T-0001aa', 'T-0002bb']);
+    });
+  });
+
+  it('恢复整组失败：toast 提示且行保留（错误路径）', async () => {
+    mockApi.taskGroup.unarchive.mockRejectedValue(new Error('组不存在'));
+    render(<ArchivePanel open onClose={() => undefined} workspaceId="ws-1" />);
+    await screen.findByText(/归档任务甲/);
+
+    fireEvent.change(screen.getByLabelText('恢复整组'), { target: { value: 'g-1' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/恢复整组失败/)).toBeInTheDocument();
+    expect(screen.getByText(/归档任务甲/)).toBeInTheDocument();
+    expect(screen.getByText(/归档任务乙/)).toBeInTheDocument();
   });
 
   it('恢复整组候选只列「还有归档任务的已归档组」', async () => {
