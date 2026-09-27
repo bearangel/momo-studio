@@ -97,43 +97,43 @@ const GROUPS = [mkGroup({ id: 'G-1', name: '组一', position: 1 }), mkGroup({ i
 
 // ── resolveDrop:拖拽三分支 + 禁投 + 边界(纯函数,无渲染)─────────────────────
 describe('resolveDrop 拖拽落点裁决(纯函数)', () => {
-  it('同列同泳道下移 → 纯排序:before=落卡(组不变)', () => {
+  it('同列同泳道下移 → 纯排序:after=落卡(值小锚,卡落其下)', () => {
     const tasks = backlogFixture();
     const laneIds = idsOf(splitLanes(tasks, GROUPS, 'lanes')[0]!);
-    // T1 拖到 T2 上(T1 原在 T2 上方 → 落在 T2 之下):seq(除 T1)=[T2],before=T2
+    // T1 拖到 T2 上(T1 原在 T2 上方 → 落在 T2 之下):afterTaskId=T2(单值小锚)
     expect(
       resolveDrop('T1', { type: 'card', taskId: 'T2', column: 'backlog', groupId: 'G-1' }, { tasks, laneTaskIds: laneIds }),
-    ).toEqual({ column: 'backlog', groupId: 'G-1', beforeTaskId: 'T2' });
+    ).toEqual({ column: 'backlog', groupId: 'G-1', afterTaskId: 'T2' });
   });
 
-  it('同列同泳道下移(中段)→ before/after 双邻透传(中值落位)', () => {
+  it('同列同泳道下移(中段)→ 双锚中值:before=落卡下一位(值大)、after=落卡(值小)', () => {
     const tasks = [
       mkTask({ id: 'T1', title: '甲', status: 'draft', groupId: null, boardPosition: 1024 }),
       mkTask({ id: 'T2', title: '乙', status: 'draft', groupId: null, boardPosition: 2048 }),
       mkTask({ id: 'T3', title: '丙', status: 'draft', groupId: null, boardPosition: 3072 }),
     ];
-    // T1 拖到 T2 上:seq(除 T1)=[T2,T3] → before=T2,after=T3
+    // T1 拖到 T2 上:槽在 T2 与 T3 之间 → after=T2(上方位)、before=T3(下方位)
     expect(
       resolveDrop('T1', { type: 'card', taskId: 'T2', column: 'backlog', groupId: null }, { tasks }),
-    ).toEqual({ column: 'backlog', groupId: null, beforeTaskId: 'T2', afterTaskId: 'T3' });
+    ).toEqual({ column: 'backlog', groupId: null, beforeTaskId: 'T3', afterTaskId: 'T2' });
   });
 
-  it('同列同泳道上移 → 纯排序:after=落卡', () => {
+  it('同列同泳道上移 → 纯排序:before=落卡(值大锚,卡落其上)', () => {
     const tasks = backlogFixture();
     const laneIds = idsOf(splitLanes(tasks, GROUPS, 'lanes')[1]!);
-    // T4 拖到 T3 上(T4 原在 T3 下方 → 落在 T3 之上):seq(除 T4)=[T3] → after=T3
+    // T4 拖到 T3 上(T4 原在 T3 下方 → 落在 T3 之上):beforeTaskId=T3(单值大锚)
     expect(
       resolveDrop('T4', { type: 'card', taskId: 'T3', column: 'backlog', groupId: 'G-2' }, { tasks, laneTaskIds: laneIds }),
-    ).toEqual({ column: 'backlog', groupId: 'G-2', afterTaskId: 'T3' });
+    ).toEqual({ column: 'backlog', groupId: 'G-2', beforeTaskId: 'T3' });
   });
 
   it('同列跨泳道(落卡片)→ 换组:groupId=目标泳道组,跨源默认插落卡之上', () => {
     const tasks = backlogFixture();
     const laneIds = idsOf(splitLanes(tasks, GROUPS, 'lanes')[1]!); // G-2 泳道
-    // T1(G-1)拖到 G-2 泳道的 T3 上:不在同序 → 插 T3 之上 → after=T3
+    // T1(G-1)拖到 G-2 泳道的 T3 上:不在同序 → 插 T3 之上 → before=T3(值大锚)
     expect(
       resolveDrop('T1', { type: 'card', taskId: 'T3', column: 'backlog', groupId: 'G-2' }, { tasks, laneTaskIds: laneIds }),
-    ).toEqual({ column: 'backlog', groupId: 'G-2', afterTaskId: 'T3' });
+    ).toEqual({ column: 'backlog', groupId: 'G-2', beforeTaskId: 'T3' });
   });
 
   it('同列跨泳道(落列容器)→ 换组 + 列尾 afterTaskId=泳道内末卡', () => {
@@ -215,10 +215,88 @@ describe('resolveDrop 拖拽落点裁决(纯函数)', () => {
   it('泳道成员集裁剪:邻居序只含目标泳道卡(跨泳道卡不参与锚点)', () => {
     const tasks = backlogFixture();
     const laneIds = new Set(['T3', 'T4']);
-    // T4 拖到 T3 上(同泳道上移):seq=[T3] → after=T3、无 before(T1/T2 不得成为上邻)
+    // T4 拖到 T3 上(同泳道上移):seq=[T3] → before=T3(值大锚,落其上)、无 after
     expect(
       resolveDrop('T4', { type: 'card', taskId: 'T3', column: 'backlog', groupId: 'G-2' }, { tasks, laneTaskIds: laneIds }),
-    ).toEqual({ column: 'backlog', groupId: 'G-2', afterTaskId: 'T3' });
+    ).toEqual({ column: 'backlog', groupId: 'G-2', beforeTaskId: 'T3' });
+  });
+});
+
+// ── 跨层落点契约:resolveDrop wire 输出 ↔ 主进程 placeBetween(momo-test-rules #4)──
+// 锚点方向曾与本修复同源的 Critical 缺陷:renderer 与主进程各自正确、对接面颠倒
+// (双锚中值对称掩盖,单锚翻车)。本契约测试直接 import 主进程 placeBetween
+// (vitest esbuild 跨 workspace 合法,先例 electron/tests/task/board-columns-sync),
+// 复刻主进程 computeDropPosition 的映射(prevPos=afterTaskId 锚位、nextPos=
+// beforeTaskId 锚位)断言落位侧别——任一侧改义立刻红。
+import { placeBetween } from '../../../../electron/src/main/task/board-position';
+
+describe('跨层落点契约(resolveDrop ↔ 主进程 placeBetween)', () => {
+  /** 复刻 move.ts computeDropPosition 的锚位映射——契约核心两行 */
+  function mainProcessDropPosition(
+    resolution: { beforeTaskId?: string; afterTaskId?: string },
+    posOf: (id: string) => number,
+  ): number {
+    const prevPos = resolution.afterTaskId !== undefined ? posOf(resolution.afterTaskId) : null;
+    const nextPos = resolution.beforeTaskId !== undefined ? posOf(resolution.beforeTaskId) : null;
+    return placeBetween(prevPos, nextPos);
+  }
+
+  it('上移插顶卡之上:单 beforeTaskId 锚 → placeBetween 落该卡之上(move.test 同款 next-GAP)', () => {
+    const tasks = [
+      mkTask({ id: 'T3', title: '丙', status: 'draft', groupId: null, boardPosition: 5000 }),
+      mkTask({ id: 'T4', title: '丁', status: 'draft', groupId: null, boardPosition: 6000 }),
+    ];
+    const r = resolveDrop('T4', { type: 'card', taskId: 'T3', column: 'backlog', groupId: null }, { tasks });
+    expect(r).toEqual({ column: 'backlog', groupId: null, beforeTaskId: 'T3' });
+    const pos = mainProcessDropPosition(r!, (id) => tasks.find((t) => t.id === id)!.boardPosition!);
+    // 主进程单 before 锚语义(move.test「锚点缺失」用例):5000 - 1024 = 3976,落 T3 之上
+    expect(pos).toBe(5000 - 1024);
+    expect(pos).toBeLessThan(5000);
+  });
+
+  it('下移插末卡之下:单 afterTaskId 锚 → placeBetween 落该卡之下(prev+GAP)', () => {
+    const tasks = [
+      mkTask({ id: 'T1', title: '甲', status: 'draft', groupId: null, boardPosition: 1024 }),
+      mkTask({ id: 'T2', title: '乙', status: 'draft', groupId: null, boardPosition: 2048 }),
+    ];
+    const r = resolveDrop('T1', { type: 'card', taskId: 'T2', column: 'backlog', groupId: null }, { tasks });
+    expect(r).toEqual({ column: 'backlog', groupId: null, afterTaskId: 'T2' });
+    const pos = mainProcessDropPosition(r!, (id) => tasks.find((t) => t.id === id)!.boardPosition!);
+    expect(pos).toBe(2048 + 1024);
+    expect(pos).toBeGreaterThan(2048);
+  });
+
+  it('双锚中值:before=下方值大锚、after=上方值小锚 → 落两卡之间', () => {
+    const tasks = [
+      mkTask({ id: 'T1', title: '甲', status: 'draft', groupId: null, boardPosition: 1024 }),
+      mkTask({ id: 'T2', title: '乙', status: 'draft', groupId: null, boardPosition: 2048 }),
+      mkTask({ id: 'T3', title: '丙', status: 'draft', groupId: null, boardPosition: 3072 }),
+    ];
+    const r = resolveDrop('T1', { type: 'card', taskId: 'T2', column: 'backlog', groupId: null }, { tasks });
+    expect(r).toEqual({ column: 'backlog', groupId: null, beforeTaskId: 'T3', afterTaskId: 'T2' });
+    const pos = mainProcessDropPosition(r!, (id) => tasks.find((t) => t.id === id)!.boardPosition!);
+    expect(pos).toBeGreaterThan(2048);
+    expect(pos).toBeLessThan(3072);
+    expect(pos).toBe((2048 + 3072) / 2);
+  });
+
+  it('列容器列尾:afterTaskId=末卡 → placeBetween 落末卡之下', () => {
+    const tasks = backlogFixture();
+    const laneIds = idsOf(splitLanes(tasks, GROUPS, 'lanes')[1]!);
+    const r = resolveDrop('T1', { type: 'column', column: 'backlog', groupId: 'G-2' }, { tasks, laneTaskIds: laneIds });
+    expect(r).toEqual({ column: 'backlog', groupId: 'G-2', afterTaskId: 'T4' });
+    const pos = mainProcessDropPosition(r!, (id) => tasks.find((t) => t.id === id)!.boardPosition!);
+    expect(pos).toBe(2048 + 1024); // T4=2048 → 落其下
+  });
+
+  it('空列无锚点 → placeBetween(null, null)=0(主进程空列落位)', () => {
+    const tasks = [
+      mkTask({ id: 'T1', title: '甲', status: 'draft', groupId: 'G-1', boardPosition: 1024 }),
+      mkTask({ id: 'A1', title: '戊', status: 'assigned', groupId: 'G-1', boardPosition: 1024 }),
+    ];
+    const r = resolveDrop('A1', { type: 'column', column: 'assigned', groupId: 'G-1' }, { tasks });
+    expect(r).toEqual({ column: 'assigned', groupId: 'G-1' });
+    expect(mainProcessDropPosition(r!, () => 0)).toBe(0);
   });
 });
 

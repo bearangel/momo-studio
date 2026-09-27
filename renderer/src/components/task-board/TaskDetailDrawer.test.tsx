@@ -32,6 +32,7 @@ vi.mock('../../stores/ui.store', () => ({
 }));
 
 import { TaskDetailDrawer } from './TaskDetailDrawer';
+import { Dialog } from '../ui/Dialog';
 import type { TaskRow } from '../../ipc/types';
 
 const mockApi = {
@@ -121,5 +122,24 @@ describe('TaskDetailDrawer 详情抽屉', () => {
     await screen.findByText('抽屉示例任务');
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('ESC 让位:抽屉内有 Dialog 打开(EditTaskDialog 场景)→ ESC 只关弹窗,抽屉 onClose 不触发', async () => {
+    const drawerOnClose = vi.fn();
+    const dialogOnClose = vi.fn();
+    // 渲染顺序复刻生产:抽屉先挂(先注册 capture 监听),弹窗后开(注册晚)——
+    // 抽屉让位逻辑必须在这种情况下放行,否则 ESC 连抽屉一起关
+    render(
+      <>
+        <TaskDetailDrawer taskId="task-1" onClose={drawerOnClose} />
+        <Dialog open onClose={dialogOnClose} title="编辑任务">
+          表单内容
+        </Dialog>
+      </>,
+    );
+    await screen.findByText('抽屉示例任务');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dialogOnClose).toHaveBeenCalledTimes(1);
+    expect(drawerOnClose).not.toHaveBeenCalled();
   });
 });

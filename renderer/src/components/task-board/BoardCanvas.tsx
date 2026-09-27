@@ -14,7 +14,15 @@
 // 纯函数出口（单测主战场，BoardCanvas.test.tsx）：
 //   - resolveDrop：落点裁决（禁投预判 canDropIntoColumn 单源 → null）
 //   - buildDropIndex / buildDropTarget：dnd over.id → 落点目标组装
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -62,17 +70,25 @@ export interface DropCtx {
 export interface DropResolution {
   column: BoardColumnKey;
   groupId: string | null;
-  /** 落点上方位可见邻居 */
+  /**
+   * 落点下方位可见邻居（值大锚——移动卡落在其上方）。
+   * 主进程锁定的 wire 语义（move.test「锚点缺失」用例）：单 beforeTaskId 锚
+   * → placeBetween(null, next) = next-GAP，即落该卡之上。
+   */
   beforeTaskId?: string;
-  /** 落点下方位可见邻居 */
+  /**
+   * 落点上方位可见邻居（值小锚——移动卡落在其下方）。
+   * 单 afterTaskId 锚 → placeBetween(prev, null) = prev+GAP，即落该卡之下。
+   */
   afterTaskId?: string;
 }
 
 /**
  * 拖拽落点裁决（纯函数）：
  *   - active 不在 ctx.tasks / 目标列禁投（canDropIntoColumn 单源）/ over 卡=自身 → null
- *   - over 卡片：同列可见序中算落槽邻居——同序下移落 over 卡之下（before=over 卡），
- *     上移与跨源（跨列/跨泳道）默认插 over 卡之上（after=over 卡）
+ *   - over 卡片：同列可见序中算落槽上下邻——同序下移落 over 卡之下、上移与跨源
+ *     （跨列/跨泳道）默认插 over 卡之上；wire 字段方向按主进程契约：
+ *     beforeTaskId=下方值大锚、afterTaskId=上方值小锚（见 DropResolution 字段注）
  *   - over 列容器：列尾（afterTaskId=泳道内末卡，空列无锚点）
  *   - over 卡片不在目标可见序（泳道外/数据不一致）→ null
  */
@@ -97,11 +113,13 @@ export function resolveDrop(activeId: string, over: DropOverTarget, ctx: DropCtx
   const overIdx = seq.findIndex((t) => t.id === over.taskId);
   if (overFullIdx < 0 || overIdx < 0) return null;
   const dropBelow = activeIdx >= 0 && activeIdx < overFullIdx;
-  const before = dropBelow ? seq[overIdx] : seq[overIdx - 1];
-  const after = dropBelow ? seq[overIdx + 1] : seq[overIdx];
+  // 落槽上下邻（以除 active 的可见序计）：下移 → 槽在落卡之下（上=落卡，下=落卡下一位）；
+  // 上移/跨源 → 槽在落卡之上（上=落卡上一位，下=落卡）
+  const above = dropBelow ? seq[overIdx] : seq[overIdx - 1];
+  const below = dropBelow ? seq[overIdx + 1] : seq[overIdx];
   const resolution: DropResolution = { column: over.column, groupId: over.groupId };
-  if (before) resolution.beforeTaskId = before.id;
-  if (after) resolution.afterTaskId = after.id;
+  if (below) resolution.beforeTaskId = below.id;
+  if (above) resolution.afterTaskId = above.id;
   return resolution;
 }
 
@@ -247,6 +265,14 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE_PX } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  // unmount 兜底：拖拽手持中切走视图（workspace 切换卸载画板）时复位轮询守卫，
+  // 防 dragging=true 永久卡住后续 load
+  useEffect(() => {
+    return () => {
+      setDragging(false);
+    };
+  }, [setDragging]);
 
   const handleDragStart = (event: DragStartEvent): void => {
     setActiveDragId(String(event.active.id));
