@@ -39,7 +39,9 @@ function allowCross(from: TaskStatus, to: BoardColumnKey): boolean {
   switch (to) {
     case 'backlog': return false; // 只出不进(draft/pending 已在 backlog,跨列进来的一律禁)
     case 'assigned': return from === 'draft' || from === 'pending';
-    case 'active': return from === 'assigned' || from === 'session_queued' || from === 'paused';
+    // paused 不在此列:paused 本属 active 列,canDropIntoColumn 同列早退恒先命中,
+    // 此处列出 paused 分支永不可达(Task 5 review 死代码清理)
+    case 'active': return from === 'assigned' || from === 'session_queued';
     case 'done': return from === 'in_progress';
     case 'closed': return from !== 'completed'; // completed→closed 同为关闭语义但无转换意义,禁
   }
