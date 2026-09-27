@@ -4,12 +4,15 @@
 //   - DndContext（PointerSensor 距离激活 + KeyboardSensor 方向键排序）包裹整个板，
 //     Lane × N 泳道渲染（泳道模式 splitLanes 切道；平铺模式单道）
 //   - DragOverlay：微倾跟手卡片；原位 sortable 卡变虚线洞（Lane 内 SortableBoardCard）
-//   - onDragStart → task.store.setDragging(true)（5s 轮询跳过，防手上列表跳动）；
-//     onDragEnd → resolveDrop 纯函数裁决 → task.store.move（乐观+回滚已内置），
-//     失败 console.error——toast 文案统一在 Task 13 接入
-//   - 拖拽三分支语义（spec §4 裁决表）：同列同泳道=纯排序（before/after 邻居透传）、
-//     同列跨泳道=换组、跨列=column 变化；renderer 只发落点，动作裁决单点在主进程
-//     executeMove。in_progress→done/closed 的确认框是 Task 13，本任务直接发 move
+//   - onDragStart → 轮询守卫 setDragging;onDragEnd/onDragOver → useBoardDrop
+//     (Task 13 收敛):resolveDrop 裁决 → requireConfirm(in_progress→done/closed)
+//     先弹 ui/ConfirmDialog(取消零调用)/ 否则 task.store.move(乐观+回滚),
+//     move 失败 → ui/Toast 直出主进程中文原因;onDragOver → 拖悬指示线
+//     (禁投列变暗标注 / 合法列 accent 虚线 / 插入槽 2px 线,渲染在 BoardColumn)
+//
+// 拖拽三分支语义(spec §4 裁决表)：同列同泳道=纯排序（before/after 邻居透传）、
+// 同列跨泳道=换组、跨列=column 变化；renderer 只发落点，动作裁决单点在主进程
+// executeMove。
 //
 // 纯函数出口（单测主战场，BoardCanvas.test.tsx）：
 //   - resolveDrop：落点裁决（禁投预判 canDropIntoColumn 单源 → null）
@@ -19,7 +22,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type CSSProperties,
   type ReactNode,
 } from 'react';
@@ -33,8 +35,6 @@ import {
   useSensor,
   useSensors,
   type CollisionDetection,
-  type DragEndEvent,
-  type DragStartEvent,
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -45,6 +45,9 @@ import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
 import { Lane } from './Lane';
+import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { Toast } from '../ui/Toast';
 
 /** PointerSensor 激活位移阈值（px）：小于该位移视为点击（选中卡片），不启动拖拽 */
 const DRAG_ACTIVATION_DISTANCE_PX = 5;
@@ -66,21 +69,27 @@ export interface DropCtx {
   laneTaskIds?: Set<string>;
 }
 
-/** 落点决议：与 ipc.task.move 的 target 契约完全对齐 */
+/** 落点决议:requireConfirm 之外的字段与 ipc.task.move 的 target 契约对齐 */
 export interface DropResolution {
   column: BoardColumnKey;
   groupId: string | null;
   /**
-   * 落点下方位可见邻居（值大锚——移动卡落在其上方）。
-   * 主进程锁定的 wire 语义（move.test「锚点缺失」用例）：单 beforeTaskId 锚
-   * → placeBetween(null, next) = next-GAP，即落该卡之上。
+   * 落点下方位可见邻居(值大锚——移动卡落在其上方)。
+   * 主进程锁定的 wire 语义(move.test「锚点缺失」用例):单 beforeTaskId 锚
+   * → placeBetween(null, next) = next-GAP,即落该卡之上。
    */
   beforeTaskId?: string;
   /**
-   * 落点上方位可见邻居（值小锚——移动卡落在其下方）。
-   * 单 afterTaskId 锚 → placeBetween(prev, null) = prev+GAP，即落该卡之下。
+   * 落点上方位可见邻居(值小锚——移动卡落在其下方)。
+   * 单 afterTaskId 锚 → placeBetween(prev, null) = prev+GAP,即落该卡之下。
    */
   afterTaskId?: string;
+  /**
+   * in_progress → done/closed 松手需二次确认(Task 13:agent 可能仍在运行)。
+   * UI 决策字段——useBoardDrop.toMoveTarget 剥离后才发 wire,
+   * 不进主进程 MoveTarget 契约(momo-boundary-rules)。
+   */
+  requireConfirm: boolean;
 }
 
 /**
@@ -102,22 +111,26 @@ export function resolveDrop(activeId: string, over: DropOverTarget, ctx: DropCtx
   const fullSeq = sortColumn(ctx.tasks.filter((t) => columnOf(t.status) === over.column && inLaneScope(t)));
   const activeIdx = fullSeq.findIndex((t) => t.id === activeId);
   const seq = fullSeq.filter((t) => t.id !== activeId);
+  // 确认拦截(Task 13):运行中任务移终态列(done/closed)松手先弹确认——
+  // done 不停 agent、closed 终止,语义需用户二次拍板(spec §4 裁定)
+  const requireConfirm =
+    activeTask.status === 'in_progress' && (over.column === 'done' || over.column === 'closed');
 
   if (over.type === 'column') {
     const last = seq[seq.length - 1];
-    if (!last) return { column: over.column, groupId: over.groupId };
-    return { column: over.column, groupId: over.groupId, afterTaskId: last.id };
+    if (!last) return { column: over.column, groupId: over.groupId, requireConfirm };
+    return { column: over.column, groupId: over.groupId, afterTaskId: last.id, requireConfirm };
   }
 
   const overFullIdx = fullSeq.findIndex((t) => t.id === over.taskId);
   const overIdx = seq.findIndex((t) => t.id === over.taskId);
   if (overFullIdx < 0 || overIdx < 0) return null;
   const dropBelow = activeIdx >= 0 && activeIdx < overFullIdx;
-  // 落槽上下邻（以除 active 的可见序计）：下移 → 槽在落卡之下（上=落卡，下=落卡下一位）；
+  // 落槽上下邻(以除 active 的可见序计)：下移 → 槽在落卡之下（上=落卡，下=落卡下一位）；
   // 上移/跨源 → 槽在落卡之上（上=落卡上一位，下=落卡）
   const above = dropBelow ? seq[overIdx] : seq[overIdx - 1];
   const below = dropBelow ? seq[overIdx + 1] : seq[overIdx];
-  const resolution: DropResolution = { column: over.column, groupId: over.groupId };
+  const resolution: DropResolution = { column: over.column, groupId: over.groupId, requireConfirm };
   if (below) resolution.beforeTaskId = below.id;
   if (above) resolution.afterTaskId = above.id;
   return resolution;
@@ -243,22 +256,23 @@ const collisionDetectionStrategy: CollisionDetection = (args) => {
 };
 
 export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: BoardCanvasProps) {
-  const move = useTaskStore((s) => s.move);
   const setDragging = useTaskStore((s) => s.setDragging);
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
   // 拖拽刚结束标志：pointerup 后浏览器仍会派发 click 到源卡（pointer capture），
   // capture 阶段拦截防止「拖完一张卡误开详情抽屉」
   const suppressClickRef = useRef(false);
 
   const lanes = useMemo(() => splitLanes(tasks, groups, laneMode), [tasks, groups, laneMode]);
   const dropIndex = useMemo(() => buildDropIndex(lanes, laneMode), [lanes, laneMode]);
+  // 落点协调(Task 13 收敛到 hook):确认拦截/move/toast/指示线;
+  // 组件只做 dnd 事件 → 原始 id 的适配
+  const drop = useBoardDrop({ tasks, laneMode, dropIndex });
   const chipByGroup = useMemo(() => {
     const map = new Map<string, BoardGroupChip>();
     for (const g of groups) map.set(g.id, { name: g.name, color: g.color });
     return map;
   }, [groups]);
 
-  const activeTask = activeDragId !== null ? (tasks.find((t) => t.id === activeDragId) ?? null) : null;
+  const activeTask = drop.activeDragId !== null ? (tasks.find((t) => t.id === drop.activeDragId) ?? null) : null;
   const activeDragStatus = activeTask?.status ?? null;
 
   const sensors = useSensors(
@@ -273,34 +287,6 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
       setDragging(false);
     };
   }, [setDragging]);
-
-  const handleDragStart = (event: DragStartEvent): void => {
-    setActiveDragId(String(event.active.id));
-    setDragging(true);
-  };
-
-  const clearDrag = (): void => {
-    setActiveDragId(null);
-    setDragging(false);
-    suppressClickRef.current = true;
-  };
-
-  const handleDragEnd = (event: DragEndEvent): void => {
-    const { active, over } = event;
-    clearDrag();
-    if (!over) return;
-    const activeId = String(active.id);
-    const activeRow = tasks.find((t) => t.id === activeId);
-    if (!activeRow) return;
-    const built = buildDropTarget(String(over.id), activeRow, dropIndex, laneMode);
-    if (!built) return;
-    const resolution = resolveDrop(activeId, built.over, { tasks, laneTaskIds: built.laneTaskIds });
-    if (!resolution) return;
-    void move(activeId, resolution).catch((err: unknown) => {
-      // toast 文案 Task 13 统一接入；先 console.error 保底可观测
-      console.error('看板拖拽 move 失败', err);
-    });
-  };
 
   const renderCard = useCallback(
     (task: TaskRow): ReactNode => (
@@ -321,9 +307,17 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
     <DndContext
       sensors={sensors}
       collisionDetection={collisionDetectionStrategy}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={clearDrag}
+      onDragStart={(event) => drop.dragStart(String(event.active.id))}
+      onDragOver={(event) => drop.dragOver(String(event.active.id), event.over ? String(event.over.id) : null)}
+      onDragEnd={(event) => {
+        // 松手即拦截后续 click(pointer capture 复用源卡),防误开详情抽屉
+        suppressClickRef.current = true;
+        drop.dragEnd(String(event.active.id), event.over ? String(event.over.id) : null);
+      }}
+      onDragCancel={() => {
+        suppressClickRef.current = true;
+        drop.dragCancel();
+      }}
     >
       <div
         className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3"
@@ -345,6 +339,7 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
             laneMode={laneMode}
             renderCard={renderCard}
             activeDragStatus={activeDragStatus}
+            dropHint={drop.dropHint}
           />
         ))}
       </div>
@@ -364,6 +359,16 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
           </div>
         )}
       </DragOverlay>
+      {/* in_progress → done/closed 确认框(Task 13):取消零调用卡片归位、确认才 move */}
+      {drop.pendingConfirm !== null && (
+        <ConfirmDialog
+          {...dropConfirmContent(drop.pendingConfirm.resolution.column)}
+          onConfirm={drop.confirmMove}
+          onClose={drop.cancelConfirm}
+        />
+      )}
+      {/* move 失败 toast:文案由主进程中文消息直出 */}
+      <Toast />
     </DndContext>
   );
 }

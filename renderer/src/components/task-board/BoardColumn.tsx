@@ -13,7 +13,8 @@
 //       可投列拖悬高亮 border-focus
 //     * renderCard 注入（BoardCanvas 的 SortableBoardCard + SortableContext）；
 //       缺省渲染静态 BoardCard（Task 11 行为，selectedId/onSelect 走旧通道）
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
+import { Ban } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { canDropIntoColumn, type BoardColumnDef } from '../../ipc/board-columns';
@@ -37,6 +38,17 @@ interface BoardColumnProps {
   dropFromStatus?: TaskStatus | null;
   /** 卡片渲染注入（SortableBoardCard）；缺省静态 BoardCard */
   renderCard?: (task: TaskRow) => ReactNode;
+  /** 插入指示线：画在该卡上方（Task 13 拖悬落点下边界锚） */
+  dropIndicatorBeforeTaskId?: string | null;
+  /** 插入指示线：画在该卡下方 */
+  dropIndicatorAfterTaskId?: string | null;
+  /** 插入指示线：空列尾线（落点无锚卡时） */
+  showTailDropIndicator?: boolean;
+}
+
+/** 插入指示线（2px accent）：落槽位置的视觉占位 */
+function DropIndicatorLine(): ReactNode {
+  return <div data-testid="drop-indicator" aria-hidden className="h-0.5 shrink-0 rounded-full bg-focus" />;
 }
 
 export function BoardColumn({
@@ -48,6 +60,9 @@ export function BoardColumn({
   droppableId,
   dropFromStatus = null,
   renderCard,
+  dropIndicatorBeforeTaskId = null,
+  dropIndicatorAfterTaskId = null,
+  showTailDropIndicator = false,
 }: BoardColumnProps) {
   const sorted = sortColumn(tasks);
   const dropForbidden = dropFromStatus !== null && !canDropIntoColumn(dropFromStatus, column.key);
@@ -55,43 +70,74 @@ export function BoardColumn({
     id: droppableId ?? `static-col:${column.key}`,
     disabled: dropForbidden,
   });
+  // 拖拽视觉三态(Task 13):forbidden 禁投变暗 / over 拖悬升级 / ok 可投虚线 / idle 常规
+  const dropState = dropForbidden
+    ? 'forbidden'
+    : dropFromStatus !== null
+      ? isOver
+        ? 'over'
+        : 'ok'
+      : 'idle';
+  const dropStateClass =
+    dropState === 'forbidden'
+      ? 'border-subtle opacity-50'
+      : dropState === 'over'
+        ? 'border-dashed border-focus bg-surface-2'
+        : dropState === 'ok'
+          ? 'border-dashed border-focus'
+          : 'border-subtle';
 
   return (
     <section
       ref={setNodeRef}
       aria-label={column.label}
-      className={`flex w-[232px] shrink-0 flex-col rounded-lg border bg-surface-1 ${
-        dropForbidden
-          ? 'border-subtle opacity-50' // 禁投列变暗（spec §4 列级投影）
-          : isOver && dropFromStatus !== null
-            ? 'border-focus' // 拖悬可投列高亮
-            : 'border-subtle'
-      }`}
+      data-drop-state={dropState}
+      className={`flex w-[232px] shrink-0 flex-col rounded-lg border bg-surface-1 ${dropStateClass}`}
     >
       <header className="flex items-center gap-1.5 border-b border-subtle px-2.5 pb-1.5 pt-2 text-xs font-semibold text-secondary">
         <span>{column.label}</span>
         <span className="text-[11px] font-normal text-tertiary">{tasks.length}</span>
+        {dropState === 'forbidden' && (
+          <span className="inline-flex items-center gap-0.5 text-[11px] font-normal text-tertiary">
+            <Ban size={11} strokeWidth={1.75} aria-hidden />
+            不可投放
+          </span>
+        )}
         {column.hint !== '' && (
           <span className="ml-auto text-[11px] font-normal text-tertiary">{column.hint}</span>
         )}
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
-        {sorted.length === 0 ? (
+        {sorted.length === 0 && !showTailDropIndicator ? (
           <div className="py-6 text-center text-xs text-tertiary">暂无</div>
-        ) : renderCard ? (
-          <SortableContext items={sorted.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-            {sorted.map((task) => renderCard(task))}
-          </SortableContext>
         ) : (
-          sorted.map((task) => (
-            <BoardCard
-              key={task.id}
-              task={task}
-              selected={task.id === selectedId}
-              onClick={() => onSelect?.(task.id)}
-              groupChip={groupChipOf ? groupChipOf(task) : null}
-            />
-          ))
+          <>
+            {renderCard ? (
+              <SortableContext items={sorted.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                {sorted.map((task) => (
+                  <Fragment key={task.id}>
+                    {dropIndicatorBeforeTaskId === task.id && <DropIndicatorLine />}
+                    {renderCard(task)}
+                    {dropIndicatorAfterTaskId === task.id && <DropIndicatorLine />}
+                  </Fragment>
+                ))}
+              </SortableContext>
+            ) : (
+              sorted.map((task) => (
+                <Fragment key={task.id}>
+                  {dropIndicatorBeforeTaskId === task.id && <DropIndicatorLine />}
+                  <BoardCard
+                    task={task}
+                    selected={task.id === selectedId}
+                    onClick={() => onSelect?.(task.id)}
+                    groupChip={groupChipOf ? groupChipOf(task) : null}
+                  />
+                  {dropIndicatorAfterTaskId === task.id && <DropIndicatorLine />}
+                </Fragment>
+              ))
+            )}
+            {showTailDropIndicator && <DropIndicatorLine />}
+          </>
         )}
       </div>
     </section>

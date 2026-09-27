@@ -4,6 +4,12 @@
 //   - 列头：label + 卡片计数 + hint 灰字（与 BOARD_COLUMNS 契约一致）
 //   - 列内排序：sortColumn（boardPosition 升序、NULL 垫底）在组件内部生效
 //   - 空态「暂无」；点击卡片回调 onSelect(id)；selectedId 高亮语义
+// 拖拽视觉反馈（看板重构 Task 13，spec §4 列级投影）：
+//   - 禁投列：变暗 +「不可投放」标注（data-drop-state=forbidden）
+//   - 拖拽中合法列：accent 虚线边框（data-drop-state=ok）
+//   - 插入指示线：卡前/卡后/空列尾 2px accent 线（drop-indicator）
+// isOver 拖悬升级态（data-drop-state=over）依赖 dnd-kit 碰撞检测实时驱动，
+// jsdom 矩形全零不可信（Task 12 裁定），由 e2e/手工冒烟承接。
 // mock 边界对齐 TaskCard.test：仅 mock IPC（window.api），store 用真实实现。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -130,5 +136,82 @@ describe('BoardColumn 列内排序（sortColumn 内部生效）', () => {
       expect.stringContaining('无位老卡'),
       expect.stringContaining('无位新卡'),
     ]);
+  });
+});
+
+// ── 拖拽视觉反馈(看板重构 Task 13:禁投变暗 / 合法虚线 / 插入指示线)──────────
+describe('BoardColumn 拖拽视觉反馈', () => {
+  const assigned: BoardColumnDef = BOARD_COLUMNS[1]!;
+
+  it('禁投列(dropFromStatus 状态机不允许)→ 变暗 + 「不可投放」标注', () => {
+    // in_progress → backlog 只出不进,禁投
+    render(<BoardColumn column={backlog} tasks={[]} dropFromStatus="in_progress" />);
+    const section = screen.getByRole('region', { name: '待办' });
+    expect(section).toHaveAttribute('data-drop-state', 'forbidden');
+    expect(section.className).toContain('opacity-50');
+    expect(screen.getByText('不可投放')).toBeInTheDocument();
+  });
+
+  it('拖拽中合法列 → accent 虚线边框,无禁投标注', () => {
+    // draft → assigned 合法
+    render(<BoardColumn column={assigned} tasks={[]} dropFromStatus="draft" />);
+    const section = screen.getByRole('region', { name: '已分配' });
+    expect(section).toHaveAttribute('data-drop-state', 'ok');
+    expect(section.className).toContain('border-dashed');
+    expect(section.className).toContain('border-focus');
+    expect(screen.queryByText('不可投放')).not.toBeInTheDocument();
+  });
+
+  it('无拖拽 → idle 常规边框(无虚线/无变暗)', () => {
+    render(<BoardColumn column={backlog} tasks={[]} />);
+    const section = screen.getByRole('region', { name: '待办' });
+    expect(section).toHaveAttribute('data-drop-state', 'idle');
+    expect(section.className).not.toContain('opacity-50');
+    expect(section.className).not.toContain('border-dashed');
+  });
+
+  it('指示线:dropIndicatorBeforeTaskId → 该卡上方 2px accent 线,其余卡无', () => {
+    render(
+      <BoardColumn
+        column={backlog}
+        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 }), mkTask({ id: 'T-002', title: '乙', boardPosition: 2048 })]}
+        dropIndicatorBeforeTaskId="T-002"
+      />,
+    );
+    const lines = screen.getAllByTestId('drop-indicator');
+    expect(lines).toHaveLength(1);
+    const line = lines[0]!;
+    expect(line.className).toContain('bg-focus');
+    // 线紧贴 T-002 之前(其后继文本含乙卡)
+    expect(line.nextElementSibling?.textContent).toContain('乙');
+  });
+
+  it('指示线:dropIndicatorAfterTaskId → 该卡下方 2px accent 线', () => {
+    render(
+      <BoardColumn
+        column={backlog}
+        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 }), mkTask({ id: 'T-002', title: '乙', boardPosition: 2048 })]}
+        dropIndicatorAfterTaskId="T-001"
+      />,
+    );
+    const lines = screen.getAllByTestId('drop-indicator');
+    expect(lines).toHaveLength(1);
+    // 线在 T-001 之后(其前驱文本含甲卡)
+    expect(lines[0]!.previousElementSibling?.textContent).toContain('甲');
+  });
+
+  it('指示线:空列尾线(showTailDropIndicator)→ 列表尾部 2px accent 线', () => {
+    render(
+      <BoardColumn
+        column={backlog}
+        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 })]}
+        showTailDropIndicator
+      />,
+    );
+    const lines = screen.getAllByTestId('drop-indicator');
+    expect(lines).toHaveLength(1);
+    // 尾线是列内最后一个元素(其前驱含甲卡、无后继)
+    expect(lines[0]!.previousElementSibling?.textContent).toContain('甲');
+    expect(lines[0]!.nextElementSibling).toBeNull();
   });
 });

@@ -6,13 +6,15 @@
 //     （重命名·换色·归档组——Task 14 实装，本任务禁用占位）
 //   - 折叠态只留 header；展开态 5 列横排（BoardColumn × BOARD_COLUMNS）
 //   - 卡片渲染由 BoardCanvas 注入（SortableBoardCard）；拖拽手持源状态
-//     透传 BoardColumn 做禁投预判（canDropIntoColumn → droppable disabled + 变暗）
+//     透传 BoardColumn 做禁投预判（canDropIntoColumn → droppable disabled + 变暗）；
+//     拖悬指示线定位（Task 13 dropHint）按列 droppableId 匹配透传
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
 import { BOARD_COLUMNS } from '../../ipc/board-columns';
 import { groupColorStyle, type BoardLane } from '../../lib/board';
 import type { TaskRow, TaskStatus } from '../../ipc/types';
 import { BoardColumn } from './BoardColumn';
+import type { DropHint } from './useBoardDrop';
 
 interface LaneProps {
   lane: BoardLane;
@@ -21,9 +23,11 @@ interface LaneProps {
   renderCard: (task: TaskRow) => ReactNode;
   /** 拖拽手持卡的源状态（null=无拖拽）；透传 BoardColumn 做禁投预判 */
   activeDragStatus: TaskStatus | null;
+  /** 拖悬插入指示线定位（Task 13，null=无拖拽/禁投） */
+  dropHint?: DropHint | null;
 }
 
-export function Lane({ lane, laneMode, renderCard, activeDragStatus }: LaneProps) {
+export function Lane({ lane, laneMode, renderCard, activeDragStatus, dropHint = null }: LaneProps) {
   const [collapsed, setCollapsed] = useState(false);
   const name = lane.group?.name ?? '未分组';
   const count = lane.tasks.length;
@@ -90,16 +94,22 @@ export function Lane({ lane, laneMode, renderCard, activeDragStatus }: LaneProps
       )}
       {!collapsed && (
         <div className="flex gap-3 overflow-x-auto pb-1">
-          {BOARD_COLUMNS.map((column) => (
-            <BoardColumn
-              key={column.key}
-              column={column}
-              tasks={lane.tasks.filter((t) => column.statuses.includes(t.status))}
-              droppableId={`col:${laneKey}:${column.key}`}
-              dropFromStatus={activeDragStatus}
-              renderCard={renderCard}
-            />
-          ))}
+          {BOARD_COLUMNS.map((column) => {
+            const droppableId = `col:${laneKey}:${column.key}`;
+            return (
+              <BoardColumn
+                key={column.key}
+                column={column}
+                tasks={lane.tasks.filter((t) => column.statuses.includes(t.status))}
+                droppableId={droppableId}
+                dropFromStatus={activeDragStatus}
+                renderCard={renderCard}
+                dropIndicatorBeforeTaskId={dropHint?.beforeTaskId ?? null}
+                dropIndicatorAfterTaskId={dropHint?.afterTaskId ?? null}
+                showTailDropIndicator={dropHint?.tailOf === droppableId}
+              />
+            );
+          })}
         </div>
       )}
     </section>
