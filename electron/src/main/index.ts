@@ -25,6 +25,8 @@ import { reprobeSandbox } from './sandbox/probe';
 import { enforceQuota } from './journal/quota';
 import { listWorkspaces } from './workspace/crud';
 import { sweepStaleStreaming } from './task/resume';
+import { sweepTaggedOrphans } from './sandbox/process-registry';
+import { backfillAllCompactSnapshotsInBackground } from './storage/messages/event-compaction';
 import { assembleBrowserSubsystem } from './browser/boot';
 import { initRealViewFactory } from './browser/view-factory';
 import { BROWSER_SHOT_SCHEME } from './browser/protocol';
@@ -85,6 +87,25 @@ if (!app.requestSingleInstanceLock()) {
       const swept = sweepStaleStreaming();
       if (swept > 0) {
         logger.info('boot 陈旧流清扫完成', { swept });
+      }
+
+      // C 方案（2026-09-25）：历史消息压缩快照后台回填——setImmediate 分片
+      // 不阻塞启动；用户先打开旧会话时读路径惰性回填与这里幂等互备
+      backfillAllCompactSnapshotsInBackground();
+
+      // 沙箱进程生命周期（2026-09-25 立项）：boot 清扫历史泄漏孤儿（bash 工具
+      // `npm start &` 类后台进程脱离沙箱生命周期孤儿化，幽灵端口跨任务累积；
+      // 识别口径见 process-registry.sweepTaggedOrphans）。此刻本 app 尚未跑
+      // 任何 bash 工具，命中者必为历史泄漏
+      try {
+        const sweptProcs = sweepTaggedOrphans(listWorkspaces().map((w) => w.directoryPath));
+        if (sweptProcs.killed > 0) {
+          logger.info('boot 沙箱孤儿进程清扫完成', sweptProcs);
+        }
+      } catch (err) {
+        logger.warn('boot 沙箱孤儿清扫失败（不阻塞启动）', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // v2.2 记忆 P2：jieba native binding 冒烟——在首次写库前暴露打包/ABI 问题

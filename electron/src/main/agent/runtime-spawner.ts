@@ -18,6 +18,7 @@ import path from 'node:path';
 import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
+import { registerFromChildMsg } from '../sandbox/process-registry';
 import { insertToolCall } from '../audit/insert';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
@@ -348,6 +349,9 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     if (handleChildMessage(msg, runtimeConfig.agentUserId)) return;
     if (typeof msg !== 'object' || msg === null) return;
     const m = msg as AuditToolCallChildMsg & McpChildRequestMsg;
+    // 沙箱进程组登记（2026-09-25 生命周期立项）：shell 工具 spawn 后上报 pgid，
+    // 主进程 registry 是回合收割（finalizeActiveTask）的唯一真相源
+    if (registerFromChildMsg(m)) return;
     // P0 boot 握手：子进程监听器注册完毕的一次性信号——resolve readyGate
     if (m.type === 'runtime-ready') {
       readyGate.settle(null);

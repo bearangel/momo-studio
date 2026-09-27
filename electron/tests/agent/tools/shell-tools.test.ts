@@ -168,3 +168,34 @@ describe('bash 输出截断', () => {
     expect(result).toContain('截断');
   });
 });
+
+// 进程组上报（2026-09-25 生命周期立项）：spawn 成功后经 child IPC 上报 pgid，
+// 主进程 registry 是回合收割的唯一真相源。单测环境 process.send 缺省为
+// undefined——临时替换捕获载荷，finally 恢复。
+describe('bash 进程组上报（proc-group:register）', () => {
+  it('spawn 成功后上报 streamSessionId + pgid', async () => {
+    const sent: unknown[] = [];
+    const origSend = process.send;
+    (process as { send?: (msg: unknown) => boolean }).send = (msg: unknown) => {
+      // net-trust 桥请求抛错让桥快速 reject（真实子进程有主进程应答；测试环境
+      // 无桥——吞掉请求会让桥等到超时，见 net-trust-bridge.ts sendNetTrustOp）
+      if ((msg as { type?: string }).type === 'net-trust-op') {
+        throw new Error('测试环境无 net-trust 桥');
+      }
+      sent.push(msg);
+      return true;
+    };
+    try {
+      const res = await new ShellTools().execute('bash', { command: 'true' }, ctx);
+      expect(res).toContain('exit_code: 0');
+      const reg = sent.find(
+        (m) => (m as { type?: string }).type === 'proc-group:register',
+      ) as { streamSessionId?: string; pgid?: number } | undefined;
+      expect(reg).toBeDefined();
+      expect(reg!.streamSessionId).toBe('test-stream');
+      expect(typeof reg!.pgid).toBe('number');
+    } finally {
+      (process as { send?: (msg: unknown) => boolean }).send = origSend;
+    }
+  });
+});

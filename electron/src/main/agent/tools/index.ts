@@ -25,6 +25,7 @@ import { FileTools } from './file-tools';
 import { ApplyPatchTools } from './apply-patch-tools';
 import { SearchTools } from './search-tools';
 import { ShellTools } from './shell-tools';
+import { ProcessTools } from './process-tools';
 import { GitTools } from './git-tools';
 import { WebTools } from './web-tools';
 import { TodoTools } from './todo-tools';
@@ -40,6 +41,7 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new ApplyPatchTools(),
     new SearchTools(),
     new ShellTools(),
+    new ProcessTools(),
     new GitTools(),
     new WebTools(),
     new TodoTools(),

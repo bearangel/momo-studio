@@ -6,21 +6,31 @@
 //      （含 Task 6 字段迁移：start.sessionId / start.senderAgentId）
 //   2. segment_boundary 分段场景（自 runtime-segment.test.ts 平移，字段同步迁移）
 //   3. abortStreamBySessionId：注册反转（setAbortResolver 注入）的广播语义
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-// mock electron：BrowserWindow.getAllWindows 返回可控假窗口。
+// electron API 假件：BrowserWindow.getAllWindows 返回可控假窗口。
 // 回归锁（2.0.0 主机验收 P0-2）：start/segment_boundary INSERT 消息行后必须推
 // session:message 给 renderer——否则 agent 流式气泡实时永远不出现，重启才可见。
-const { mockSend } = vi.hoisted(() => ({ mockSend: vi.fn() }));
-vi.mock('electron', () => ({
-  BrowserWindow: {
-    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
-  },
-  ipcMain: { handle: vi.fn(), on: vi.fn() },
-}));
+// 注：vi.mock 只拦 transformed import、不拦 electron-access 内部的 raw require()，
+// 故经 __setElectronApisForTest 显式注入（进程边界 DI）。
+const mockSend = vi.fn();
+import { __setElectronApisForTest } from '../../src/main/electron-access';
+
+beforeAll(() => {
+  __setElectronApisForTest({
+    BrowserWindow: {
+      getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
+    },
+    ipcMain: { handle: vi.fn() },
+  });
+});
+
+afterAll(() => {
+  __setElectronApisForTest(null);
+});
 
 import {
   __routeChunkToBufferForTest,

@@ -2,8 +2,8 @@
 // v2.3 结构化 patch 工具（V4A 语法 + Lark-style parser + 多文件原子执行）。
 // 与 FileTools 并存：edit_file / write_file 保留为简单场景 fallback。
 
-import { app } from 'electron';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { LLMToolDef } from '../llm-provider';
@@ -54,15 +54,23 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
   //    Add File 目标已存在 → 整个 patch 拒绝（V4A 语义，对齐 Codex：Add 只创建新文件）。
   //    必须在执行阶段之前拦截——否则 add-overwrite 成功后若后续 op 失败，回滚的
   //    addedFiles 清理会删掉被覆盖的原文件且无备份（终审 I1 回滚洞）
+  //    update / delete 补 Read-before-Edit 守门（2026-09-26 对齐 file-tools：
+  //    原先完全旁路——未读文件可经 patch 改删）；add 创建新文件豁免
   for (const op of ast.ops) {
     const abs = ctx.wsFs.assertInWorkspace(op.path);
     if (op.kind === 'add' && fs.existsSync(abs)) {
       throw new Error(`apply_patch 失败: Add File 目标已存在: ${op.path}（如需修改请用 Update File）`);
     }
+    if (op.kind !== 'add') {
+      ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
+    }
   }
 
-  // 2. 快照受影响文件到 Electron userData/apply-patch-tmp/<uuid>/
-  const backupDir = path.join(app.getPath('userData'), 'apply-patch-tmp', randomUUID());
+  // 2. 快照受影响文件到 <userDataDir|tmpdir>/apply-patch-tmp/<uuid>/。
+  //    本工具在 runtime 子进程执行（无 electron API，顶层 import 即崩）——
+  //    userData 路径由主进程经 AGENT_CONFIG 定型注入 ctx.userDataDir，
+  //    缺省（测试直调 / 旧配置）回退 os.tmpdir()
+  const backupDir = path.join(ctx.userDataDir ?? os.tmpdir(), 'apply-patch-tmp', randomUUID());
   fs.mkdirSync(backupDir, { recursive: true });
   for (const op of ast.ops) {
     if (op.kind === 'update' || op.kind === 'delete') {
@@ -95,8 +103,14 @@ async function executePatch(patchText: string, ctx: ToolContext): Promise<string
     throw new Error(`apply_patch 失败，已回滚（已应用 ${applied}/${ast.ops.length} ops）: ${msg}`);
   }
 
-  // 5. 成功清理
+  // 5. 成功清理 + 写后注册读取指纹（add/update 产物 agent 已知晓内容，
+  //    后续 edit_file 免重读；delete 无文件可注册）
   fs.rmSync(backupDir, { recursive: true, force: true });
+  for (const op of ast.ops) {
+    if (op.kind === 'add' || op.kind === 'update') {
+      ctx.readTracker?.add(ctx.roomId, ctx.wsFs.assertInWorkspace(op.path), ctx.parentStreamSessionId);
+    }
+  }
   return `已应用 ${applied} 个文件`;
 }
 

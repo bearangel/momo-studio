@@ -151,6 +151,9 @@ function registerTaskDrivenRuntime(opts: AgentRuntimeOpts): WarmPool {
     agentAssignmentId: instanceId,
     agentUserId,
     workspaceId,
+    // 回合收尾逃逸清扫的扫描根（2026-09-25 生命周期立项）——与 spawn 用的
+    // workspaceDir 同值单源
+    workspaceDir: opts.workspaceDir,
     warmPool: pool,
     // v2.9 事件驱动 dispatch：回合归零边沿 → RouterService PM 空闲快照 +
     // 自动送达结果投递（模块级 handler 注入，避免构造期循环依赖）

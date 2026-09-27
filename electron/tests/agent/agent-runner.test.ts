@@ -23,10 +23,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
 import { markShuttingDown, __resetShuttingDownForTest } from '../../src/main/agent/agent-runner';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+import {
+  registerProcessGroup,
+  __registeredForTest,
+  __clearRegistryForTest,
+} from '../../src/main/sandbox/process-registry';
 import {
   insertTask,
   transitionTaskStatus,
@@ -90,12 +96,12 @@ function getMessageHandler(child: ChildProcess): (msg: unknown) => void {
   return handler;
 }
 
-function mkRunner(pool: WarmPool, taskEndGraceMs?: number): AgentRunner {
+function mkRunner(pool: WarmPool, taskEndGraceMs?: number, workspaceDir?: string): AgentRunner {
   return new AgentRunner({
     agentAssignmentId: 'inst1',
     agentUserId: 'agent-bot-x1',
     workspaceId: 'ws1',
-    config: {} as never,
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
     warmPool: pool,
     ...(taskEndGraceMs !== undefined ? { taskEndGraceMs } : {}),
   });
@@ -312,6 +318,130 @@ describe('AgentRunner task-driven 生命周期（C1/C3）', () => {
     expect(child.kill).toHaveBeenCalled();
     expect(runner.activeTaskCount()).toBe(0);
     expect(child.off).toHaveBeenCalled(); // handler 已反注册
+  });
+
+  it('进程组收割（2026-09-25 生命周期立项）：task-end 收尾时该回合登记的进程组全灭', async () => {
+    // 真进程语义（momo-test-rules）：登记一个真实 sleeper 组，task-end 后组死
+    const sleeper = spawn('sleep', ['60'], { stdio: 'ignore', detached: true });
+    sleeper.unref();
+    registerProcessGroup('ss-reap', sleeper.pid!);
+    try {
+      expect(() => process.kill(sleeper.pid!, 0)).not.toThrow();
+
+      const child = mkMockChild();
+      const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+      await warmPool.warm('inst1');
+      const runner = mkRunner(warmPool);
+      const taskId = seedInProgressTask('T-reap');
+
+      await runner.executeTask({
+        taskId,
+        executionSessionId: '!r:home',
+        body: 'x',
+        streamSessionId: 'ss-reap',
+      });
+      getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-reap', finishReason: 'stop' });
+      getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-reap', taskId, toolCallsUsed: 0 });
+
+      expect(runner.activeTaskCount()).toBe(0);
+      await vi.waitFor(
+        () => {
+          expect(() => process.kill(sleeper.pid!, 0)).toThrow();
+        },
+        { timeout: 3000, interval: 50 },
+      );
+      // 登记条目已清
+      expect(__registeredForTest().has('ss-reap')).toBe(false);
+    } finally {
+      try {
+        process.kill(sleeper.pid!, 'SIGKILL');
+      } catch {
+        // 已被收割
+      }
+      __clearRegistryForTest();
+    }
+  });
+
+  it('逃逸补扫（2026-09-25 缺口修复）：setsid/孤儿化形态进程随 task-end 被清扫', async () => {
+    // 逃逸形态：中间 bash 退出后 sleep 孤儿化（ppid=1）——脱离注册进程组，
+    // 组杀打不着，靠 sweepRoundEscapes（时间窗 + cwd）补杀
+    const wsDir = path.join(os.tmpdir(), `ap-escape-${Date.now()}`);
+    fs.mkdirSync(wsDir, { recursive: true });
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool, undefined, wsDir);
+    const taskId = seedInProgressTask('T-escape');
+
+    await runner.executeTask({
+      taskId,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-escape',
+    });
+
+    // 回合进行中制造逃逸孤儿（晚于 startedAt → 落入清扫时间窗）
+    const orphan = spawn('bash', ['-c', 'sleep 60 & echo $!'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: wsDir,
+    });
+    const orphanPid = await new Promise<number>((resolve) => {
+      let buf = '';
+      orphan.stdout!.on('data', (d: Buffer) => {
+        buf += d.toString();
+      });
+      orphan.on('exit', () => resolve(Number(buf.trim())));
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-escape', finishReason: 'stop' });
+    getMessageHandler(child)({ type: 'task-end', streamSessionId: 'ss-escape', taskId, toolCallsUsed: 0 });
+    expect(runner.activeTaskCount()).toBe(0);
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(orphanPid, 0)).toThrow();
+      },
+      { timeout: 3000, interval: 50 },
+    );
+  });
+
+  it('逃逸补扫——ephemeral 路径（taskId=null，end 即回收）：同样收割（普通用户对话回合全覆盖）', async () => {
+    const wsDir = path.join(os.tmpdir(), `ap-escape-eph-${Date.now()}`);
+    fs.mkdirSync(wsDir, { recursive: true });
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const runner = mkRunner(warmPool, undefined, wsDir);
+
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-escape-eph',
+    });
+
+    const orphan = spawn('bash', ['-c', 'sleep 60 & echo $!'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: wsDir,
+    });
+    const orphanPid = await new Promise<number>((resolve) => {
+      let buf = '';
+      orphan.stdout!.on('data', (d: Buffer) => {
+        buf += d.toString();
+      });
+      orphan.on('exit', () => resolve(Number(buf.trim())));
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    // ephemeral：end chunk 即收尾（无 task-end）
+    getMessageHandler(child)({ type: 'end', streamSessionId: 'ss-escape-eph', finishReason: 'stop' });
+    expect(runner.activeTaskCount()).toBe(0);
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(orphanPid, 0)).toThrow();
+      },
+      { timeout: 3000, interval: 50 },
+    );
   });
 
   it('C1：task-end 携带 error（子进程错误路径）→ failed + errorMessage', async () => {
@@ -684,3 +814,53 @@ describe('AgentRunner child exit 清理链（C2）', () => {
     expect(sendCallsAfter).toBe(sendCallsBefore);
   });
 });
+
+  it('process-op 桥路由（E-A）：list/kill 请求 → 主进程执行 → 应答原路回送', async () => {
+    // 真实语义：登记一个真 sleeper 组，经消息桥 list 应答带出成员
+    const sleeper = spawn('sleep', ['60'], { stdio: 'ignore', detached: true });
+    sleeper.unref();
+    registerProcessGroup('ss-procop', sleeper.pid!);
+    try {
+      const child = mkMockChild();
+      const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+      await warmPool.warm('inst1');
+      const runner = mkRunner(warmPool);
+      await runner.executeTask({
+        taskId: null,
+        executionSessionId: '!r:home',
+        body: 'x',
+        streamSessionId: 'ss-procop',
+      });
+
+      getMessageHandler(child)({ type: 'process-op', requestId: 'req-1', op: 'list', streamSessionId: 'ss-procop' });
+      await new Promise((r) => setTimeout(r, 200));
+      const calls = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      const reply = calls.find(
+        (m) => (m as { type?: string }).type === 'process-op:result' && (m as { requestId?: string }).requestId === 'req-1',
+      ) as { ok?: boolean; payload?: { groups?: Array<{ pgid: number; members: Array<{ pid: number }> }> } } | undefined;
+      expect(reply?.ok).toBe(true);
+      expect(reply!.payload!.groups!.some((g) => g.members.some((mem) => mem.pid === sleeper.pid))).toBe(true);
+
+      // kill 应答：按 pid 击杀 + requestId 透传
+      getMessageHandler(child)({ type: 'process-op', requestId: 'req-2', op: 'kill', streamSessionId: 'ss-procop', pid: sleeper.pid! });
+      await vi.waitFor(
+        () => {
+          expect(() => process.kill(sleeper.pid!, 0)).toThrow();
+        },
+        { timeout: 3000, interval: 50 },
+      );
+      const calls2 = (child.send as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      const reply2 = calls2.find(
+        (m) => (m as { type?: string }).type === 'process-op:result' && (m as { requestId?: string }).requestId === 'req-2',
+      ) as { ok?: boolean; payload?: { killedGroups?: number } } | undefined;
+      expect(reply2?.ok).toBe(true);
+      expect(reply2!.payload!.killedGroups).toBe(1);
+    } finally {
+      try {
+        process.kill(sleeper.pid!, 'SIGKILL');
+      } catch {
+        // 已被击杀
+      }
+      __clearRegistryForTest();
+    }
+  });

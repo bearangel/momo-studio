@@ -9,13 +9,11 @@ import { ApplyPatchTools } from '../../../src/main/agent/tools/apply-patch-tools
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
-// mock electron.app.getPath（实现里备份目录走 app.getPath('userData')）。
-// 仓库标准 vi.mock('electron') 模式；brief 原句 `(app.getPath as ...) = vi.fn(...)`
-// 缺 vi import 且未 mock 模块（裸 import 'electron' 时 app 为 undefined），此处按
-// 仓库既有 26 个测试的工厂模式最小修正。
-vi.mock('electron', () => ({
-  app: { getPath: () => os.tmpdir() },
-}));
+// electron 环境隔离说明（v2.1.0-alpha.9 打包回归）：apply-patch-tools 在 runtime
+// 子进程执行，禁止顶层 import 'electron'（打包后子进程 MODULE_NOT_FOUND 即崩）。
+// 备份目录基准走 ctx.userDataDir（AGENT_CONFIG 注入）缺省回退 os.tmpdir()。
+// 「electron 不可解析时模块仍可加载」的专项回归锁见
+// tests/agent/runtime-child-electron-isolation.test.ts。
 
 let tmpDir: string;
 let ctx: ToolContext;
@@ -64,6 +62,41 @@ describe('execute — 单文件 add', () => {
     expect(result).toContain('已应用');
     expect(fs.existsSync(path.join(tmpDir, 'new.ts'))).toBe(true);
     expect(fs.readFileSync(path.join(tmpDir, 'new.ts'), 'utf-8')).toBe('export const x = 1;\n');
+  });
+});
+
+describe('execute — 备份目录基准（runtime 子进程 electron 隔离）', () => {
+  const backupMkdirPath = (calls: Array<Parameters<typeof fs.mkdirSync>>): string | undefined =>
+    calls.map((c) => String(c[0])).find((p) => p.includes('apply-patch-tmp'));
+
+  it('ctx.userDataDir 注入时备份目录以注入值为基准', async () => {
+    const customBase = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-v23-ud-'));
+    const spy = vi.spyOn(fs, 'mkdirSync');
+    try {
+      await tools.execute(
+        'apply_patch',
+        { patch: `*** Add File: u.ts\n+u\n` },
+        { ...ctx, userDataDir: customBase },
+      );
+      const backupDir = backupMkdirPath(spy.mock.calls);
+      expect(backupDir).toBeDefined();
+      expect(backupDir?.startsWith(customBase)).toBe(true);
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(customBase, { recursive: true, force: true });
+    }
+  });
+
+  it('缺省 userDataDir 回退 os.tmpdir()（子进程旧配置兼容）', async () => {
+    const spy = vi.spyOn(fs, 'mkdirSync');
+    try {
+      await tools.execute('apply_patch', { patch: `*** Add File: t.ts\n+t\n` }, ctx);
+      const backupDir = backupMkdirPath(spy.mock.calls);
+      expect(backupDir).toBeDefined();
+      expect(backupDir?.startsWith(os.tmpdir())).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

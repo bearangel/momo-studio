@@ -50,6 +50,12 @@ export interface ToolContext {
    * 无 runner）由消费方归一为 'user'。
    */
   agentInstanceId?: string;
+  /**
+   * 主进程 userData 目录绝对路径（spawn-helpers 经 AGENT_CONFIG 定型注入）。
+   * 工具在 runtime 子进程执行——无 electron API，apply_patch 备份等落盘位置
+   * 以此为基准；缺省（测试直调 / 旧配置）由消费方回退 os.tmpdir()。
+   */
+  userDataDir?: string;
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */

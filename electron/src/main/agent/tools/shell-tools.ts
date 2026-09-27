@@ -116,7 +116,7 @@ export class ShellTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [{
       name: 'bash',
-      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。',
+      description: '在 workspace 根目录执行 shell 命令（受 OS 沙箱约束：读全盘但敏感目录不可读、仅可写 workspace 与 /tmp；网络出站按沙箱设置双态——永久允许（默认）/拒绝）。沙箱内无法启动 GUI 应用与系统浏览器（open/LaunchServices 被拒）——需要打开网页时用 browser_navigate 等浏览器工具。30s 超时，stdout+stderr 各截断 10KB。退出码非 0 不抛错。每条命令独立 shell，cd 不持久。后台进程（& 启动）在本回合内可跨命令存活，回合结束时由平台统一回收——不要依赖跨回合的后台服务（下回合需重启）。沙箱内 ps 与 kill 系统调用被拦截（kill -0/pkill 会误报「进程已死/无权限」）：查自己启动的进程用 process_list，判端口占用用 lsof/curl，关闭自己启动的服务用 process_kill（bash 里 kill 必失败）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -175,6 +175,13 @@ export class ShellTools implements ToolModule {
         detached: !isWin,
         windowsHide: true,
       });
+      // 进程组登记（2026-09-25 生命周期立项）：pgid 经 child IPC 上报主进程——
+      // 回合收尾（finalizeActiveTask）由主进程统一收割。本工具运行在 runtime
+      // 子进程内，主进程登记是唯一真相源；非 fork 环境（单测/直跑）send 为
+      // undefined，?. 即 no-op。POSIX 下 detached spawn 的 child.pid 即 pgid。
+      if (child.pid) {
+        process.send?.({ type: 'proc-group:register', streamSessionId: ctx.streamSessionId, pgid: child.pid });
+      }
 
       let stdout = '';
       let stderr = '';
