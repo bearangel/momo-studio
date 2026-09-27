@@ -79,7 +79,13 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
       currentWorkspaceId: 'ws-1',
     });
     // zustand 单例隔离：组/成员跨用例残留会污染画板 chip 与下拉选项
-    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null });
+    useGroupStore.setState({
+      groups: [],
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      selectedGroupId: null,
+    });
     useAgentStore.setState({ members: [], teams: [] });
     mockApi.task.list.mockClear().mockResolvedValue([]);
     mockApi.task.get.mockClear().mockResolvedValue(null);
@@ -97,7 +103,10 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     // 工具栏：搜索 + 新建；泳道开关已接线（Task 12），归档入口已接线（Task 14）
     expect(screen.getByRole('textbox', { name: '搜索任务' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新建任务/ })).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: /^分组$/ })).toBeEnabled();
+    // 泳道开关已改 pill toggle（UX 修复）：aria-pressed 语义查询
+    const laneToggle = screen.getByRole('button', { name: /^分组$/ });
+    expect(laneToggle).toBeEnabled();
+    expect(laneToggle).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: /归档/ })).toBeEnabled();
     // 五列（BOARD_COLUMNS 契约）
     for (const label of ['待办', '已分配', '进行中', '已完成', '已关闭']) {
@@ -142,6 +151,49 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(await screen.findByRole('heading', { name: /泳道组/ })).toBeInTheDocument();
   });
 
+  // UX 修复回归锁：点侧边栏组行 → 看板只显示该组；selectedGroupId 悬空（组已
+  // 不在活跃集合）时视为未选中，不死过滤
+  it('selectedGroupId 置位 → 泳道只渲染被选组、他组任务不出现', async () => {
+    const fixture = [
+      mkTask({ id: 't1', title: '一组任务', status: 'pending', priority: 5, groupId: 'G-1' }),
+      mkTask({ id: 't2', title: '二组任务', status: 'pending', priority: 5, groupId: 'G-2' }),
+    ];
+    const groupRows = [
+      { id: 'G-1', workspaceId: 'ws-1', name: '泳道组一', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'G-2', workspaceId: 'ws-1', name: '泳道组二', color: null, position: 2048, archivedAt: null, createdAt: 2, updatedAt: 2 },
+    ];
+    mockApi.taskGroup.list.mockResolvedValue(groupRows);
+    mockApi.task.list.mockResolvedValue(fixture);
+    // 预置当前 ws：防 group.store load 的切换分支在首次 paint 前清空 fixture
+    useTaskStore.setState({ tasks: fixture, currentWorkspaceId: 'ws-1' });
+    useGroupStore.setState({ groups: groupRows, currentWorkspaceId: 'ws-1', selectedGroupId: 'G-1' });
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    // 只剩被选组的泳道 heading；他组泳道与其任务被过滤
+    expect(await screen.findByRole('heading', { name: /泳道组一/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /泳道组二/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/一组任务/)).toBeInTheDocument();
+    expect(screen.queryByText(/二组任务/)).not.toBeInTheDocument();
+  });
+
+  it('selectedGroupId 指向不存在的组 → 视为未选中（全部泳道照常渲染）', async () => {
+    const fixture = [
+      mkTask({ id: 't1', title: '一组任务', status: 'pending', priority: 5, groupId: 'G-1' }),
+    ];
+    const groupRows = [
+      { id: 'G-1', workspaceId: 'ws-1', name: '泳道组一', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ];
+    mockApi.taskGroup.list.mockResolvedValue(groupRows);
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture, currentWorkspaceId: 'ws-1' });
+    // G-gone 不在活跃组集合（如已被归档）：过滤悬空不吞任务
+    useGroupStore.setState({ groups: groupRows, currentWorkspaceId: 'ws-1', selectedGroupId: 'G-gone' });
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    expect(await screen.findByRole('heading', { name: /泳道组一/ })).toBeInTheDocument();
+    expect(screen.getByText(/一组任务/)).toBeInTheDocument();
+  });
+
   it('切换分组开关 → 泳道/平铺切换 + localStorage 持久化 key kanban-lane-mode', async () => {
     const fixture = [
       mkTask({ id: 't1', title: '组内任务', status: 'pending', priority: 5, groupId: 'G-1' }),
@@ -155,13 +207,14 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     render(<TaskBoardView workspaceId="ws-1" />);
     // 有组默认 lanes
     expect(await screen.findByRole('heading', { name: /泳道组/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^分组$/ })).toHaveAttribute('aria-pressed', 'true');
     // 切回平铺：泳道 heading 消失（页面 h2 标题仍在）、卡片带组 chip
-    fireEvent.click(screen.getByRole('switch', { name: /^分组$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^分组$/ }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: /泳道组/ })).not.toBeInTheDocument());
     expect(screen.getByText('泳道组')).toBeInTheDocument(); // chip 组名
     expect(window.localStorage.getItem('kanban-lane-mode')).toBe('flat');
     // 再切回泳道
-    fireEvent.click(screen.getByRole('switch', { name: /^分组$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^分组$/ }));
     await waitFor(() => expect(screen.getByRole('heading', { name: /泳道组/ })).toBeInTheDocument());
     expect(window.localStorage.getItem('kanban-lane-mode')).toBe('lanes');
   });

@@ -1,8 +1,12 @@
 // renderer/src/components/task-board/GroupManageList.tsx
 //
-// 分组管理列表（看板重构 Task 14，spec §5 侧边栏）：
+// 分组管理列表（看板重构 Task 14，spec §5 侧边栏；UX 修复：行高/字号调大 +
+// 点击组行过滤看板）：
+//   - 「全部」行：列表头部，selectedGroupId=null 态高亮；计数=全部活跃任务数
 //   - 活跃组列表：position 升序；行 = 色点（groupColorStyle 语义 token）/
-//     组名 / 任务数（task.store.tasks 按 groupId 实时计）/ GroupMenu 菜单
+//     组名 / 任务数（task.store.tasks 按 groupId 实时计）/ GroupMenu 菜单；
+//     点击色点+组名+计数区 → 看板只显示该组（再点取消）——选择区与调序箭头/
+//     菜单按钮为兄弟节点，结构上隔离（点击操作按钮不可能冒泡成选中）
 //   - 新建组：「+ 新建组」→ 内联输入回车提交（taskGroup.create 契约）
 //   - 重命名：菜单触发 → 行内编辑输入（Enter 提交 / Esc 取消）
 //   - 调序（spec §5.1 可调序）：行尾 ChevronUp/ChevronDown，与相邻组交换后
@@ -18,6 +22,7 @@ import { Archive, ChevronDown, ChevronRight, ChevronUp, Plus } from 'lucide-reac
 import { ipc } from '../../ipc/client';
 import type { CSSProperties } from 'react';
 import type { GroupRow } from '../../ipc/types';
+import { cn } from '../../lib/cn';
 import { groupColorStyle } from '../../lib/board';
 import { useGroupStore } from '../../stores/group.store';
 import { useTaskStore } from '../../stores/task.store';
@@ -32,6 +37,8 @@ export function GroupManageList() {
   const { runRename, runUnarchive } = useGroupActions(workspace?.id ?? '');
   const groups = useGroupStore((s) => s.groups);
   const groupsLoading = useGroupStore((s) => s.loading);
+  const selectedGroupId = useGroupStore((s) => s.selectedGroupId);
+  const setSelectedGroupId = useGroupStore((s) => s.setSelectedGroupId);
   const loadGroups = useGroupStore((s) => s.load);
   const createGroup = useGroupStore((s) => s.create);
   const reorderGroups = useGroupStore((s) => s.reorder);
@@ -137,9 +144,26 @@ export function GroupManageList() {
               setNewName('');
             }
           }}
-          className="rounded border border-subtle bg-surface-2 px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
+          className="rounded border border-subtle bg-surface-2 px-2 py-1.5 text-[13px] text-primary focus:border-focus focus:outline-none"
         />
       )}
+
+      {/* 「全部」行：selectedGroupId=null 态（显示全部任务）；计数=活跃任务总数 */}
+      <button
+        type="button"
+        aria-label="筛选全部分组"
+        aria-pressed={selectedGroupId === null}
+        onClick={() => setSelectedGroupId(null)}
+        className={cn(
+          'flex min-h-7 w-full items-center gap-1.5 rounded border px-1.5 py-1.5 text-left text-[13px] leading-4 transition-colors',
+          selectedGroupId === null
+            ? 'border-focus bg-surface-active text-primary'
+            : 'border-transparent text-secondary hover:bg-surface-2',
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">全部</span>
+        <span className="shrink-0 text-tertiary">{tasks.length}</span>
+      </button>
 
       <ul className="flex flex-col gap-0.5">
         {groups.map((g, index) => {
@@ -147,11 +171,12 @@ export function GroupManageList() {
           const dotStyle: CSSProperties = colorCss
             ? { backgroundColor: colorCss }
             : { backgroundColor: 'rgb(var(--text-tertiary))' };
+          const selected = selectedGroupId === g.id;
           return (
             <li
               key={g.id}
               aria-label={`分组 ${g.name}`}
-              className="flex min-h-6 items-center gap-1.5 rounded px-1 py-0.5 text-xs"
+              className="flex min-h-7 items-center gap-1 rounded text-[13px] leading-4"
             >
               {renamingId === g.id ? (
                 <input
@@ -166,20 +191,35 @@ export function GroupManageList() {
                     }
                     if (e.key === 'Escape') setRenamingId(null);
                   }}
-                  className="w-full rounded border border-subtle bg-surface-2 px-2 py-1 text-xs text-primary focus:border-focus focus:outline-none"
+                  className="w-full rounded border border-subtle bg-surface-2 px-2 py-1.5 text-[13px] text-primary focus:border-focus focus:outline-none"
                 />
               ) : (
                 <>
-                  <i aria-hidden className="inline-block h-2 w-2 shrink-0 rounded-[2px]" style={dotStyle} />
-                  <span className="min-w-0 flex-1 truncate text-secondary">{g.name}</span>
-                  <span className="shrink-0 text-tertiary">{countByGroup.get(g.id) ?? 0}</span>
+                  {/* 选择区按钮：与调序箭头/菜单按钮兄弟布局——点击操作按钮结构上不可能触发选中 */}
+                  <button
+                    type="button"
+                    aria-label={`筛选分组 ${g.name}`}
+                    aria-pressed={selected}
+                    title={selected ? '取消分组过滤' : '只看该组任务'}
+                    onClick={() => setSelectedGroupId(selected ? null : g.id)}
+                    className={cn(
+                      'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded border px-1.5 py-1.5 text-left transition-colors',
+                      selected
+                        ? 'border-focus bg-surface-active text-primary'
+                        : 'border-transparent text-secondary hover:bg-surface-2',
+                    )}
+                  >
+                    <i aria-hidden className="inline-block h-2 w-2 shrink-0 rounded-[2px]" style={dotStyle} />
+                    <span className="min-w-0 flex-1 truncate">{g.name}</span>
+                    <span className="shrink-0 text-tertiary">{countByGroup.get(g.id) ?? 0}</span>
+                  </button>
                   <button
                     type="button"
                     aria-label={`上移 ${g.name}`}
                     title="上移"
                     disabled={index === 0}
                     onClick={() => moveGroup(index, -1)}
-                    className="shrink-0 rounded px-0.5 text-tertiary hover:text-primary disabled:opacity-40"
+                    className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-tertiary hover:text-primary disabled:opacity-40"
                   >
                     <ChevronUp size={14} strokeWidth={1.75} aria-hidden />
                   </button>
@@ -189,7 +229,7 @@ export function GroupManageList() {
                     title="下移"
                     disabled={index === groups.length - 1}
                     onClick={() => moveGroup(index, 1)}
-                    className="shrink-0 rounded px-0.5 text-tertiary hover:text-primary disabled:opacity-40"
+                    className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-tertiary hover:text-primary disabled:opacity-40"
                   >
                     <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
                   </button>

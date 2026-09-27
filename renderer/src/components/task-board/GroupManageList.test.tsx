@@ -118,7 +118,13 @@ describe('GroupManageList', () => {
     mockApi.taskGroup.unarchive.mockReset().mockResolvedValue(G_ARCHIVED);
     mockApi.task.list.mockClear().mockResolvedValue([]);
     useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null });
-    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null });
+    useGroupStore.setState({
+      groups: [],
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      selectedGroupId: null,
+    });
     useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: WS.id, loading: false, error: null });
     dismissToast(); // toast 单例复位，防跨用例串扰
   });
@@ -259,6 +265,72 @@ describe('GroupManageList', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(mockApi.taskGroup.archive).not.toHaveBeenCalled();
+  });
+
+  describe('分组点击过滤看板（UX 修复：selectedGroupId）', () => {
+    it('「全部」行默认选中（aria-pressed），计数=活跃任务总数', async () => {
+      useTaskStore.setState({
+        tasks: [
+          mkTask({ id: 't-1', status: 'draft', groupId: 'g-a' }),
+          mkTask({ id: 't-2', status: 'draft', groupId: null }),
+        ],
+        selectedTaskId: null,
+        loading: false,
+        error: null,
+      });
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      expect(screen.getByLabelText('筛选全部分组')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByLabelText('筛选全部分组')).toHaveTextContent('2');
+    });
+
+    it('点击组行选择区 → selectedGroupId 置位；再点同组 → 取消回 null', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('筛选分组 组A'));
+      expect(useGroupStore.getState().selectedGroupId).toBe('g-a');
+      expect(screen.getByLabelText('筛选分组 组A')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByLabelText('筛选全部分组')).toHaveAttribute('aria-pressed', 'false');
+
+      fireEvent.click(screen.getByLabelText('筛选分组 组A'));
+      expect(useGroupStore.getState().selectedGroupId).toBeNull();
+    });
+
+    it('选中组后点「全部」→ selectedGroupId 清空', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('筛选分组 组B'));
+      expect(useGroupStore.getState().selectedGroupId).toBe('g-b');
+      fireEvent.click(screen.getByLabelText('筛选全部分组'));
+      expect(useGroupStore.getState().selectedGroupId).toBeNull();
+    });
+
+    it('调序箭头点击不触发选中（兄弟布局结构隔离）：reorder 生效、selectedGroupId 不动', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+      await waitFor(() => {
+        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
+      });
+      expect(useGroupStore.getState().selectedGroupId).toBeNull();
+
+      // 先选中再调序：选中态不被调序点击清掉/改变
+      fireEvent.click(screen.getByLabelText('筛选分组 组A'));
+      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+      expect(useGroupStore.getState().selectedGroupId).toBe('g-a');
+    });
+
+    it('分组菜单触发不触发选中', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('分组菜单 组A'));
+      expect(useGroupStore.getState().selectedGroupId).toBeNull();
+    });
   });
 
   describe('分组调序（spec §5.1 可调序）', () => {

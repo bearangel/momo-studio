@@ -64,6 +64,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
   const setSelectedTaskId = useTaskStore((s) => s.setSelectedTaskId);
   const groups = useGroupStore((s) => s.groups);
+  const selectedGroupId = useGroupStore((s) => s.selectedGroupId);
   const loadGroups = useGroupStore((s) => s.load);
   const members = useAgentStore((s) => s.members);
 
@@ -143,10 +144,26 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     [members, workspaceId],
   );
 
-  // 搜索 + 指派人过滤（Task 9 纯函数）→ BoardCanvas 可见任务
-  const visibleTasks = useMemo(
-    () => filterBoardTasks(tasks, { text, assigneeId: assignee === 'all' ? null : assignee }),
-    [tasks, text, assignee],
+  // 生效的组过滤：选中组已不在活跃组集合（被归档等）→ 视为未选中，防死过滤
+  const activeGroupId = useMemo(
+    () =>
+      selectedGroupId !== null && groups.some((g) => g.id === selectedGroupId)
+        ? selectedGroupId
+        : null,
+    [selectedGroupId, groups],
+  );
+
+  // 搜索 + 指派人过滤（Task 9 纯函数）+ 组过滤（UX 修复）→ BoardCanvas 可见任务
+  const visibleTasks = useMemo(() => {
+    const base = filterBoardTasks(tasks, { text, assigneeId: assignee === 'all' ? null : assignee });
+    return activeGroupId === null ? base : base.filter((t) => t.groupId === activeGroupId);
+  }, [tasks, text, assignee, activeGroupId]);
+
+  // 选中组时泳道只留该组（view 层先过滤，BoardCanvas 零改动；未分组道因任务
+  // 已按组过滤自然为空，splitLanes 不产出空未分组道）
+  const visibleGroups = useMemo(
+    () => (activeGroupId === null ? groups : groups.filter((g) => g.id === activeGroupId)),
+    [groups, activeGroupId],
   );
 
   return (
@@ -170,7 +187,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
       />
       <BoardCanvas
         tasks={visibleTasks}
-        groups={groups}
+        groups={visibleGroups}
         laneMode={laneMode}
         selectedId={selectedTaskId}
         onSelect={setSelectedTaskId}

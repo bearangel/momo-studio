@@ -28,6 +28,9 @@ interface GroupState {
   error: string | null;
   /** 当前 groups 所属的 workspace ID；load 切换 workspace 时据此重置列表 */
   currentWorkspaceId: string | null;
+  /** 看板组过滤（UX 修复）：null=不过滤；不持久化，reset / 切 ws 清空 */
+  selectedGroupId: string | null;
+  setSelectedGroupId: (id: string | null) => void;
 
   load: (workspaceId: string) => Promise<void>;
   create: (input: Parameters<typeof ipc.taskGroup.create>[0]) => Promise<GroupRow>;
@@ -46,10 +49,13 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   loading: false,
   error: null,
   currentWorkspaceId: null,
+  selectedGroupId: null,
+  setSelectedGroupId: (id) => set({ selectedGroupId: id }),
 
   load: async (workspaceId) => {
     if (get().currentWorkspaceId !== workspaceId) {
-      set({ currentWorkspaceId: workspaceId, groups: [] });
+      // 切 ws 连带清空组过滤——旧 ws 的选中组在新 ws 无意义
+      set({ currentWorkspaceId: workspaceId, groups: [], selectedGroupId: null });
     }
     set({ loading: true, error: null });
     try {
@@ -93,7 +99,11 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 
   archive: async (id) => {
     await ipc.taskGroup.archive(id); // 组不存在等失败 → 本地不动，错误上抛
-    set((s) => ({ groups: s.groups.filter((g) => g.id !== id) }));
+    set((s) => ({
+      groups: s.groups.filter((g) => g.id !== id),
+      // 被归档组若正被选中过滤 → 一并清空（空组过滤无意义）
+      ...(s.selectedGroupId === id ? { selectedGroupId: null } : {}),
+    }));
   },
 
   unarchive: async (id) => {
@@ -102,5 +112,5 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   },
 
   reset: () =>
-    set({ groups: [], loading: false, error: null, currentWorkspaceId: null }),
+    set({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null }),
 }));

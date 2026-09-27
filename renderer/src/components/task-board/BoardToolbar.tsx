@@ -5,7 +5,9 @@
 // 按组分道，偏好持久化在 TaskBoardView）/ 并发徽标（自 TaskBoardView 顶部
 // 状态栏迁入，文案格式不变）/ 归档入口（Task 14 接线 ArchivePanel）/
 // 新建任务。
-import { Archive, Plus, Search } from 'lucide-react';
+// UX 修复：泳道开关改为 pill 形 toggle 按钮（旧 switch 轨道形态不像可点按钮）。
+import { Archive, Columns3, Plus, Search } from 'lucide-react';
+import { cn } from '../../lib/cn';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
@@ -82,22 +84,21 @@ export function BoardToolbar({
           </option>
         ))}
       </Select>
-      {/* 泳道模式开关（Task 12 接线）：平铺 ↔ 按组分道 */}
+      {/* 泳道模式开关（Task 12 接线，UX 修复改 pill toggle）：平铺 ↔ 按组分道 */}
       <button
         type="button"
-        role="switch"
-        aria-checked={laneMode === 'lanes'}
+        aria-pressed={laneMode === 'lanes'}
         title="泳道模式（按分组横向分道）"
         onClick={() => onLaneMode(laneMode === 'flat' ? 'lanes' : 'flat')}
-        className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-secondary"
+        className={cn(
+          'inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors',
+          laneMode === 'lanes'
+            ? 'border-focus bg-surface-active text-primary'
+            : 'border-subtle bg-surface-2 text-secondary hover:bg-surface-3 hover:text-primary',
+        )}
       >
+        <Columns3 size={14} strokeWidth={1.75} aria-hidden />
         分组
-        <span
-          aria-hidden
-          className={`inline-block h-3.5 w-6 rounded-full border border-subtle ${
-            laneMode === 'lanes' ? 'bg-surface-active' : 'bg-surface-3'
-          }`}
-        />
       </button>
       {/* 并发徽标：文案格式与迁入前一致（TaskBoardView 既有测试锁死） */}
       <span className="ml-auto shrink-0 text-[11px] text-tertiary">
