@@ -29,10 +29,18 @@ vi.mock('electron', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// handler 内 logger.warn 契约断言用——mock 掉 electron-log 真实落盘路径
+vi.mock('../../src/main/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, updateTask, transitionTaskStatus } from '../../src/main/storage/tasks/repo';
+import { insertTask, updateTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 import type { TaskRow, TaskStatus } from '../../src/main/storage/tasks/repo';
+import { createGroup } from '../../src/main/storage/task-groups/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
+import { logger } from '../../src/main/logger';
 import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
 
 // 写通道成功后 fire-and-forget 广播——spy 模块导出(tsc→CJS 属性访问,spy 生效)
@@ -140,5 +148,36 @@ describe('task:list archived 三态透传', () => {
     expect(new Set(all.map((r) => r.id))).toEqual(new Set([active.id, done.id]));
     const excluded = (await listHandler(null, { workspaceId: WS })) as TaskRow[];
     expect(excluded.map((r) => r.id)).toEqual([active.id]);
+  });
+});
+
+describe('task:update 受保护字段剥离（看板重构 Task 8 契约洞加固）', () => {
+  // Task 7 review：通用 update 通道可绕过 task:move / task:archive 的不变式
+  // （boardPosition 排序、archivedAt 归档域、groupId 落组）——patch 携带三字段
+  // 必须静默剥离（落库保持 NULL 不生效）且不抛错，合法字段照常应用
+  it('patch 携带 boardPosition/archivedAt/groupId → 不生效且不抛错,合法字段照常应用', async () => {
+    const g = createGroup({ workspaceId: WS, name: 'g1' });
+    const t = seed('draft');
+    const handler = handlers.get('task:update');
+    expect(handler).toBeDefined();
+
+    await expect(
+      handler!(null, t.id, {
+        title: '改名',
+        boardPosition: 512,
+        archivedAt: 12345,
+        groupId: g.id,
+      }),
+    ).resolves.toBeUndefined();
+
+    const row = getTask(t.id)!;
+    expect(row.title).toBe('改名');
+    expect(row.boardPosition).toBeNull();
+    expect(row.archivedAt).toBeNull();
+    expect(row.groupId).toBeNull();
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.stringContaining('已剥离'),
+      { id: t.id },
+    );
   });
 });

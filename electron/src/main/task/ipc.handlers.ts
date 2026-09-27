@@ -129,14 +129,33 @@ export function registerTaskHandlers(): void {
   ipcMain.handle(
     'task:update',
     async (_evt, id: string, patch: Parameters<typeof updateTask>[1]): Promise<void> => {
-      // minor-11：剥离 status 字段——task:update 是部分字段补丁通道，绕开
-      // state-machine 直接写 status 会让终端任务复活 / 非法迁移。状态变更
-      // 强制走 task:transition / task:cancel（断言 + bump updated_at）。
-      // renderer 误传时记 warn 帮助定位，status 字段静默丢弃
+      // minor-11 + 看板重构 Task 8 契约洞加固：task:update 是部分字段补丁通道，
+      // 但 status / boardPosition / archivedAt / groupId 四字段各有专属通道，
+      // 直接写会绕过 move / archive 的不变式（Task 7 review 发现通用 update
+      // 可绕过排序位与归档域校验）。状态变更强制走 task:transition / task:cancel
+      // （断言 + bump updated_at），列位/分组走 task:move，归档走 task:archive /
+      // task:unarchive，分组管理走 taskGroup 通道。renderer 误传时记 warn 帮助
+      // 定位，受保护字段静默丢弃
       let applied: Partial<TaskRow>;
-      if (patch && Object.prototype.hasOwnProperty.call(patch, 'status')) {
-        const { status: _stripped, ...rest } = patch;
-        logger.warn('task:update 携带 status 字段已剥离——请用 task:transition / task:cancel', { id });
+      if (patch) {
+        const {
+          status: _status,
+          boardPosition: _boardPosition,
+          archivedAt: _archivedAt,
+          groupId: _groupId,
+          ...rest
+        } = patch;
+        const protectedKeys = (
+          ['status', 'boardPosition', 'archivedAt', 'groupId'] as const
+        ).filter((k) => Object.prototype.hasOwnProperty.call(patch, k));
+        if (protectedKeys.length > 0) {
+          logger.warn(
+            `task:update 携带受保护字段已剥离（${protectedKeys.join('/')}）——` +
+              '状态请用 task:transition / task:cancel，列位与分组请用 task:move，' +
+              '归档请用 task:archive / task:unarchive，分组管理请用 taskGroup 通道',
+            { id },
+          );
+        }
         applied = rest;
       } else {
         applied = patch;
