@@ -169,7 +169,7 @@ TaskList/TaskCard 平铺列表退役(已核实 TaskList 的 3 个调用方全在
 
 ### 5.2 卡片与视觉
 
-- BoardCard 从 TaskCard 派生:独立圆角卡片(bg-surface-2 + border-subtle),保留优先级徽标([高]/[中]/[低])、#短ID·标题、状态徽标、元信息行(agent/日程/循环/委派目标/排队名次)
+- BoardCard 从 TaskCard 派生:独立圆角卡片(底色 bg-canvas、hover bg-surface-1,落在 bg-surface-1 列上形成凹感层次——以用户确认的 UI 预览为准;border-subtle),保留优先级徽标([高]/[中]/[低])、#短ID·标题、状态徽标、元信息行(agent/日程/循环/委派目标/排队名次)
 - 中间态徽标:已分配列卡显「排队中」、进行中列卡显「已暂停」——不占列,复用 task-status.ts 词表
 - **平铺模式**下卡片补显所属组 chip(色点+组名);泳道模式下组即道,省略
 - 全部走语义 token + lucide-react(16px / stroke 1.75),状态色一律 task-status.ts 单源;ESLint 机械强制(v2.1 设计系统)
