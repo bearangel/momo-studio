@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { runMigrations, closeDb } from '../../../src/main/storage/db';
 import { FileTools } from '../../../src/main/agent/tools/file-tools';
 import { ReadTracker } from '../../../src/main/agent/tools/shared/read-tracker';
 import { WorkspaceFS } from '../../../src/main/files/workspace-fs';
@@ -13,11 +15,16 @@ import { SkillRegistry } from '../../../src/main/skill/registry';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
 let tmpDir: string;
+let dbRoot: string;
 let ctx: ToolContext;
 let tools: FileTools;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-v23-readgate-'));
+  // 读账本 2026-09-26 起落 SQLite——隔离测试库，绝不触碰真实 userData
+  dbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-v23-readgate-db-'));
+  process.env.AP_USER_DATA_DIR = dbRoot;
+  runMigrations();
   ctx = {
     wsFs: new WorkspaceFS(tmpDir),
     workspaceId: 'test-ws',
@@ -33,7 +40,12 @@ beforeEach(() => {
   tools = new FileTools();
 });
 
-afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+afterEach(() => {
+  closeDb();
+  delete process.env.AP_USER_DATA_DIR;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(dbRoot, { recursive: true, force: true });
+});
 
 describe('edit_file — Read-before-Edit 强阻塞', () => {
   it('未 read_file 直接 edit_file 抛错', async () => {
@@ -82,5 +94,26 @@ describe('write_file — Read-before-Edit（仅覆盖场景）', () => {
     // 专门锁定 write_file 成功后自动标记已读的行为。
     await expect(tools.execute('write_file', { path: 'fresh.ts', content: 'new' }, ctx)).resolves.toContain('已写入');
     await expect(tools.execute('edit_file', { path: 'fresh.ts', oldString: 'new', newString: 'newer' }, ctx)).resolves.toContain('已编辑');
+  });
+});
+
+describe('read gate — 会话持久化 + 指纹守门（2026-09-26）', () => {
+  it('跨 tracker 实例（模拟 app 重启/新回合）读取记录仍有效——edit 不再被误拒', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'persist.ts'), 'const y = 1;');
+    // 回合 1：读
+    await tools.execute('read_file', { path: 'persist.ts' }, ctx);
+    // 回合 2（新 tracker 实例 = 新进程内存）：同 session 直接编辑——DB 兜底放行
+    ctx.readTracker = new ReadTracker();
+    await tools.execute('edit_file', { path: 'persist.ts', oldString: 'const y = 1;', newString: 'const y = 2;' }, ctx);
+    expect(fs.readFileSync(path.join(tmpDir, 'persist.ts'), 'utf-8')).toBe('const y = 2;');
+  });
+
+  it('读取后 bash 修改文件 → edit 被拒且提示重读（真实防漂移）', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'drift.ts'), 'const z = 1;');
+    await tools.execute('read_file', { path: 'drift.ts' }, ctx);
+    fs.writeFileSync(path.join(tmpDir, 'drift.ts'), 'const z = 999; // bash 改的');
+    await expect(
+      tools.execute('edit_file', { path: 'drift.ts', oldString: 'const z = 999;', newString: 'x' }, ctx),
+    ).rejects.toThrow(/在读取后被修改/);
   });
 });

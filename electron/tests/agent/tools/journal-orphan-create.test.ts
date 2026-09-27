@@ -115,6 +115,8 @@ describe('孤儿 create 条目撤回 no-op 语义（apply_patch 失败回滚真�
   it('add 成功 + update 失败 → 回滚删新文件但条目留存 → revertEntries 判 no-op（安全方向）', async () => {
     // 既有文件（op2 的 update 目标；anchor 故意写错使其失败）
     fs.writeFileSync(path.join(tmpDir, 'keep.ts'), 'const stable = 1;\n');
+    // Read-before-Edit（2026-09-26 apply_patch 补守门）：update 目标先读
+    await doExecuteTool(call('read_file', { path: 'keep.ts' }), ctx, makeConfig());
     const patch = `*** Add File: born-to-die.ts
 +const transient = true;
 *** Update File: keep.ts
@@ -151,6 +153,8 @@ describe('孤儿 create 条目撤回 no-op 语义（apply_patch 失败回滚真�
 
   it('孤儿 create 幂等：二次 revertEntries 同条目仍 no-op', async () => {
     fs.writeFileSync(path.join(tmpDir, 'k2.ts'), 'x\n');
+    // Read-before-Edit（2026-09-26 apply_patch 补守门）：update 目标先读
+    await doExecuteTool(call('read_file', { path: 'k2.ts' }), ctx, makeConfig());
     const patch = `*** Add File: orphan2.ts
 +content
 *** Update File: k2.ts

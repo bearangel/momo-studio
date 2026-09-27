@@ -32,7 +32,7 @@ const READERS: Partial<Record<OfficeFormat, (abs: string, signal?: AbortSignal) 
 /** Read-before-Edit 包装：office 场景补充 office_read 指引 */
 function assertReadForOffice(ctx: ToolContext, abs: string): void {
   try {
-    ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
+    ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
   } catch (err) {
     throw new Error(`${(err as Error).message}（office 文档可用 office_read 读取）`);
   }
@@ -474,7 +474,7 @@ export class OfficeTools implements ToolModule {
           if (msg.includes('无文本层')) throw err;
           throw new Error(`读取失败（文件损坏或非预期格式）: ${msg}`);
         }
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return truncateString(out, OUTPUT_LIMITS.office_read);
       }
       case 'office_read_cells': {
@@ -495,7 +495,7 @@ export class OfficeTools implements ToolModule {
           if (msg.includes('sheet 不存在') || msg.includes('读取区域过大') || msg.includes('range')) throw err;
           throw new Error(`读取失败（文件损坏或非预期格式）: ${msg}`);
         }
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         const label = `Sheet: ${typeof sheet === 'number' ? `#${sheet}` : sheet}\n\n`;
         return label + truncateString(out, OUTPUT_LIMITS.office_read_cells);
       }
@@ -515,7 +515,7 @@ export class OfficeTools implements ToolModule {
           buf,
         );
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `Excel 已${existed ? '覆盖' : '创建'}: ${rel}（sheet: ${sheets.map((s) => s.name).join(', ')}）`;
       }
       case 'office_write_excel': {
@@ -528,7 +528,7 @@ export class OfficeTools implements ToolModule {
         const buf = await writeXlsxOps(before, ops);
         recordChangeSafe(buildRecordCtx('office_write_excel', ctx), toJournalRelPath(ctx, rel), 'modify', before, buf);
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `已执行 ${ops.length} 个操作并写入: ${rel}`;
       }
       case 'office_create_doc': {
@@ -547,7 +547,7 @@ export class OfficeTools implements ToolModule {
           buf,
         );
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `Word 已${existed ? '覆盖' : '生成'}: ${rel}（${sections.length} 节）`;
       }
       case 'office_create_ppt': {
@@ -567,7 +567,7 @@ export class OfficeTools implements ToolModule {
           buf,
         );
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `PPT 已${existed ? '覆盖' : '生成'}: ${rel}（${slides.length} 页）`;
       }
       case 'office_fill_ppt_template': {
@@ -606,7 +606,7 @@ export class OfficeTools implements ToolModule {
           buf,
         );
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `PPT 模板填充完成: ${templateRel} → ${rel}（填充 ${slides.length} 页；版式/主题/品牌保留，模板未修改）`;
       }
       case 'office_create_pdf': {
@@ -625,7 +625,7 @@ export class OfficeTools implements ToolModule {
           buf,
         );
         fs.writeFileSync(abs, buf);
-        ctx.readTracker?.add(ctx.streamSessionId, abs);
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
         return `PDF 已${existed ? '覆盖' : '生成'}: ${rel}（${blocks.length} 块）`;
       }
       case 'office_copy': {
@@ -646,7 +646,7 @@ export class OfficeTools implements ToolModule {
           bytes,
         );
         fs.writeFileSync(toAbs, bytes);
-        ctx.readTracker?.add(ctx.streamSessionId, toAbs);
+        ctx.readTracker?.add(ctx.roomId, toAbs, ctx.parentStreamSessionId);
         return `已复制: ${fromRel} → ${toRel}（可用 office_write_excel 向副本增量写）`;
       }
       default:

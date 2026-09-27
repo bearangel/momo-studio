@@ -204,6 +204,9 @@ describe('变更账本生产接线回归锁（doExecuteTool 真实路由，Task 
   it('3) apply_patch update 两文件 → 恰好 2 条 modify（逐文件记账）', async () => {
     fs.writeFileSync(path.join(tmpDir, 'f1.ts'), 'const x = 1;\n');
     fs.writeFileSync(path.join(tmpDir, 'f2.ts'), 'const y = 1;\n');
+    // Read-before-Edit（2026-09-26 apply_patch 补守门）：update 目标先读
+    await doExecuteTool(call('read_file', { path: 'f1.ts' }), ctx, makeConfig());
+    await doExecuteTool(call('read_file', { path: 'f2.ts' }), ctx, makeConfig());
     const patch = `*** Update File: f1.ts
 @@ const x = 1;
 -const x = 1;

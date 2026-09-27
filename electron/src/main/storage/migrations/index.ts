@@ -18,6 +18,7 @@ import { migration040 } from './040_p22_mcp_config_schema';
 import { migration041 } from './041_events_structural_partial_index';
 import { migration042 } from './042_events_thinking_partial_index';
 import { migration043 } from './043_message_compact_events';
+import { migration044 } from './044_session_file_reads';
 
 export interface Migration {
   version: number;
@@ -969,6 +970,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 043_message_compact_events.ts（约定同 032-042）。
     version: migration043.version,
     sql: migration043.up,
+  },
+  {
+    // session_file_reads 表（Read-before-Edit 会话级持久化 + 内容指纹守门，
+    // 2026-09-26）。SQL 住在独立模块 044_session_file_reads.ts（约定同 032-043）。
+    version: migration044.version,
+    sql: migration044.up,
   },
 ];
 

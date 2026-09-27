@@ -21,8 +21,10 @@ import { buildToolRegistry } from '../../../src/main/agent/tools';
 import type { LLMToolCall } from '../../../src/main/agent/llm-provider';
 import type { RuntimeConfig } from '../../../src/main/agent/runtime-config';
 import { doExecuteTool, type RuntimeContext } from '../../../src/main/agent/runtime-entry';
+import { runMigrations, closeDb } from '../../../src/main/storage/db';
 
 let tmpDir: string;
+let wiringDbRoot: string;
 let ctx: RuntimeContext;
 
 /** 构造 LLMToolCall（id/name/arguments 三段） */
@@ -56,6 +58,10 @@ function makeConfig(): RuntimeConfig {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-v23-wiring-'));
+  // 读账本 2026-09-26 起落 SQLite——隔离测试库（模块级 readTracker 单例经 doExecuteTool 触库）
+  wiringDbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-v23-wiring-db-'));
+  process.env.AP_USER_DATA_DIR = wiringDbRoot;
+  runMigrations();
   const wsFs = new WorkspaceFS(tmpDir);
   // runtime-entry 模块级 readTracker 是跨测试共享的单例——streamSessionId 每测唯一，
   // 隔离 tracker 状态（真实生产语义：一任务一进程一 session）
@@ -87,7 +93,12 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+afterEach(() => {
+  closeDb();
+  delete process.env.AP_USER_DATA_DIR;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(wiringDbRoot, { recursive: true, force: true });
+});
 
 describe('ReadTracker 生产接线回归锁（doExecuteTool ctx 组装，终审 C1）', () => {
   it('未 read_file 直接 edit_file：经生产路由被守门拒绝（删 readTracker 字段本用例变红）', async () => {

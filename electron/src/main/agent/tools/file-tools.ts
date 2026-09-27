@@ -130,7 +130,7 @@ export function getFileToolDefs(): LLMToolDef[] {
  * @param toolName 工具名（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists）
  * @param args LLM 返回的已解析参数对象
  * @param ctx 工具执行上下文（v2.3 起接 ctx 而非 wsFs：Read-before-Edit 守门需要
- *   ctx.readTracker 与 ctx.streamSessionId / ctx.parentStreamSessionId）
+ *   ctx.readTracker 与 ctx.roomId / ctx.parentStreamSessionId）
  * @returns 工具执行结果，序列化为字符串（回传给 LLM 作为 tool result）
  * @throws 路径越界 / IO 失败 / 未知工具 / Read-before-Edit 守门未读时抛错，由调用方转成 tool result 文本
  */
@@ -156,7 +156,7 @@ export async function executeFileTool(
       const content = await wsFs.readFile(filePath);
       // v2.3 Read-before-Edit：read 成功即标记已读（后续 edit_file / write_file 守门依据）。
       // 键用 assertInWorkspace 归一化的绝对路径——'./a.ts' 与 'a.ts' 等价（review M4）
-      ctx.readTracker?.add(ctx.streamSessionId, wsFs.assertInWorkspace(filePath));
+      ctx.readTracker?.add(ctx.roomId, wsFs.assertInWorkspace(filePath), ctx.parentStreamSessionId);
       const text = content.toString('utf-8');
       const allLines = text.split('\n');
       const totalLines = allLines.length;
@@ -189,7 +189,7 @@ export async function executeFileTool(
       // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
       // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
       if (existed) {
-        ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
+        ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
       }
       // v2.5 变更账本：写前记账（write-ahead）——覆盖场景取旧内容为 before；
       // 记账失败不阻塞工具执行（Safe 包装内部降级）
@@ -203,7 +203,7 @@ export async function executeFileTool(
       );
       await wsFs.writeFile(filePath, content);
       // 写入成功后标记已读（让后续 edit_file 通过守门）
-      ctx.readTracker?.add(ctx.streamSessionId, abs);
+      ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
       return `文件已写入: ${filePath}`;
     }
     case 'list_files': {
@@ -224,7 +224,7 @@ export async function executeFileTool(
       if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
 
       // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）
-      ctx.readTracker?.assertRead(ctx.streamSessionId, ctx.parentStreamSessionId, abs);
+      ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
 
       const original = await fs.promises.readFile(abs, 'utf-8');
       const firstIdx = original.indexOf(oldStr);
@@ -249,6 +249,8 @@ export async function executeFileTool(
         updated,
       );
       await fs.promises.writeFile(abs, updated, 'utf-8');
+      // 写后注册新指纹（agent 知晓写后内容——后续编辑免重读）
+      ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
 
       const beforeLines = original.slice(0, firstIdx).split('\n');
       const startLine = Math.max(0, beforeLines.length - 2);
