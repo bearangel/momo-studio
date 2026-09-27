@@ -2,7 +2,7 @@
 //
 // 任务工具（v2 B10）——暴露给 agent 用，让 agent 能读任务上下文、创建 / 完成任务。
 //
-// 8 个工具的语义：
+// 9 个工具的语义：
 //   - read_task(taskId)             → TaskContext 摘要（go through MemoryProvider）
 //   - read_task_history(taskId)     → execution_room 内的 messages
 //   - read_task_progress(taskId)    → task 关联的所有 message_events
@@ -10,7 +10,8 @@
 //   - create_task(input)            → 新建任务（K1 落态：有目标 assigned / 有计划 pending / 否则 draft）
 //   - complete_task(taskId)         → 标记 completed
 //   - fail_task(taskId, reason)     → 标记 failed + errorMessage
-//   - list_tasks(filter?)           → 多维过滤列表
+//   - list_tasks(filter?)           → 多维过滤列表（结果附 groupName）
+//   - list_task_groups()            → 看板分组清单（活跃组，create_task groupId 的发现入口，Task 8）
 //
 // 全部是 SQLite 薄包装，所有数据库读写都走已有的 tasks repo / messages repo /
 //   events repo / agent crud / team / sessions repo / SQLiteMemoryProvider；本文件不含 SQL。
@@ -37,6 +38,7 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../../storage/messages/events-repo';
+import { getGroup, listGroups } from '../../storage/task-groups/repo';
 import { getDb } from '../../storage/db';
 import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
@@ -66,6 +68,10 @@ export interface ReadTaskResult {
   deadlineAt: number | null;
   errorMessage: string | null;
   completedAt: number | null;
+  /** 看板分组 ID（G-<seq>），NULL=未分组（看板重构 Task 8） */
+  groupId: string | null;
+  /** 分组名（组被删/查不到时为 null，兜底防断档） */
+  groupName: string | null;
   events: Array<{ seq: number; eventType: string; summary: string }>;
   artifacts: Array<{ toolName: string; path: string; action: 'read' | 'write' | 'edit' }>;
 }
@@ -91,6 +97,8 @@ export async function readTask(taskId: string): Promise<ReadTaskResult | null> {
     deadlineAt: ctx.task.deadlineAt,
     errorMessage: ctx.task.errorMessage,
     completedAt: ctx.task.completedAt,
+    groupId: ctx.task.groupId,
+    groupName: ctx.task.groupId ? (getGroup(ctx.task.groupId)?.name ?? null) : null,
     events: ctx.events,
     artifacts: ctx.artifacts,
   };
@@ -149,6 +157,8 @@ export interface CreateTaskInput {
   recurrenceRule?: string | null;
   /** 计划开始时间（ms epoch）；设置时任务落 pending 交 scheduler 接管 */
   scheduledAt?: number | null;
+  /** 看板分组 ID（task_groups.id，G-<seq>）；设置时校验组存在 / 同 ws / 未归档（Task 8） */
+  groupId?: string;
 }
 
 /**
@@ -164,6 +174,20 @@ export interface CreateTaskInput {
  * description / priority 缺省取 '' / 0；返回插入后的 TaskRow（含自动生成的 id）。
  */
 export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
+  // 分组校验（看板重构 Task 8）：组存在 + 同 ws + 未归档，任一不满足即拒绝落库
+  // ——防 LLM 幻觉 ID 产出孤儿分组引用 / 跨 ws 落组 / 落进已归档组复活语义
+  if (input.groupId != null) {
+    const group = getGroup(input.groupId);
+    if (!group) {
+      throw new Error(`任务分组 ${input.groupId} 不存在，请先调用 list_task_groups 获取真实分组 ID`);
+    }
+    if (group.workspaceId !== input.workspaceId) {
+      throw new Error(`任务分组 ${input.groupId} 不属于当前工作空间，拒绝跨工作空间落组`);
+    }
+    if (group.archivedAt != null) {
+      throw new Error(`任务分组 ${input.groupId} 已归档，不可作为 create_task 目标`);
+    }
+  }
   // 委派信息闭环 ④：与 IPC task:create 的 K1 落态决策对齐（决策表注释见
   // task/ipc.handlers.ts）——scheduler 只消费 pending、executor 只消费
   // assigned；agent 建的带目标任务此前落 draft 两个调度器都不认（死局换形态）。
@@ -181,6 +205,7 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
     targetSessionId: input.targetSessionId,
     recurrenceRule: input.recurrenceRule,
     scheduledAt: input.scheduledAt,
+    groupId: input.groupId,
   });
   // assigned 落态即时触发放行评估（100ms 去抖合并；丢了有 30s 兜底扫描自愈）
   if (row.status === 'assigned') notifyExecutor();
@@ -322,8 +347,9 @@ const NO_ASSIGNMENT_WARNING =
   '2) 告知用户在看板手动处理本条死任务（取消或编辑指派）。';
 
 /**
- * 任务工具模块（v2 B10）：注册 7 个工具 read_task / read_task_history /
- *   read_task_progress / create_task / complete_task / fail_task / list_tasks。
+ * 任务工具模块（v2 B10）：注册 9 个工具 read_task / read_task_history /
+ *   read_task_progress / list_delegation_targets / create_task / complete_task /
+ *   fail_task / list_tasks / list_task_groups。
  *
  * 结果通过 JSON.stringify 回给 LLM（message 数据天然是结构化的，JSON 表达最清晰）。
  */
@@ -416,6 +442,11 @@ export class TaskTools implements ToolModule {
               type: 'number',
               description: '计划开始时间（毫秒 epoch；设置后任务直接落 pending 由调度器接管）',
             },
+            groupId: {
+              type: 'string',
+              description:
+                '任务分组 ID（看板泳道）。传前先调用 list_task_groups 获取真实 ID；组不存在/跨工作空间/已归档会被拒绝',
+            },
           },
           required: ['title'],
         },
@@ -471,6 +502,10 @@ export class TaskTools implements ToolModule {
               description: '按状态过滤（单值；多值请用 list_tasks 多次调用）',
             },
             assigneeAgentId: { type: 'string', description: '指派 agent ID' },
+            groupId: {
+              type: 'string',
+              description: '按任务分组 ID 过滤（从 list_task_groups 查询真实 ID）',
+            },
             orderBy: {
               type: 'string',
               enum: ['priority', 'scheduled_at', 'created_at'],
@@ -479,6 +514,12 @@ export class TaskTools implements ToolModule {
             limit: { type: 'number', description: '最多返回条数' },
           },
         },
+      },
+      {
+        name: 'list_task_groups',
+        description:
+          '列出当前工作空间的任务分组（看板泳道，含 ID / 名称 / 颜色）。create_task 传 groupId 落组前先调用本工具获取真实 ID——组不存在或已归档会被拒绝；仅返回活跃组。',
+        inputSchema: { type: 'object', properties: {} },
       },
     ];
   }
@@ -492,7 +533,8 @@ export class TaskTools implements ToolModule {
       name === 'create_task' ||
       name === 'complete_task' ||
       name === 'fail_task' ||
-      name === 'list_tasks'
+      name === 'list_tasks' ||
+      name === 'list_task_groups'
     );
   }
 
@@ -547,6 +589,8 @@ export class TaskTools implements ToolModule {
             'recurrenceRule',
           ),
           scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
+          // 分组入参照 assigneeAgentId 的 '' → undefined 归一先例（防空串误判有组）
+          groupId: parseStringArgOptional(args.groupId, 'groupId') || undefined,
         };
         const result = await createTask(input);
         // 委派信息闭环 ③：无指派 → TaskRow 顶层附加 warning（形状向后兼容，
@@ -588,8 +632,11 @@ export class TaskTools implements ToolModule {
         if (typeof args.status === 'string') {
           opts.status = args.status as TaskRow['status'];
         }
-        if (typeof args.assigneeAgentId === 'string') {
+        if (typeof args.assigneeAgentId === 'string' && args.assigneeAgentId) {
           opts.assigneeAgentId = args.assigneeAgentId;
+        }
+        if (typeof args.groupId === 'string' && args.groupId) {
+          opts.groupId = args.groupId;
         }
         if (
           args.orderBy === 'priority' ||
@@ -602,7 +649,26 @@ export class TaskTools implements ToolModule {
           opts.limit = args.limit;
         }
         const result = await listTasks(opts);
-        return JSON.stringify(result);
+        // 组名 map 预构建（archived:'all' 覆盖归档组引用，防 groupName 断档），
+        // 结果逐行附 groupName——LLM 看名字不看裸 ID（spec §8 补信息不给能力）
+        const groupNameById = new Map(
+          listGroups(ctx.workspaceId, { archived: 'all' }).map((g) => [g.id, g.name]),
+        );
+        return JSON.stringify(
+          result.map((r) => ({
+            ...r,
+            groupName: r.groupId ? (groupNameById.get(r.groupId) ?? null) : null,
+          })),
+        );
+      }
+      case 'list_task_groups': {
+        return JSON.stringify(
+          listGroups(ctx.workspaceId).map((g) => ({
+            id: g.id,
+            name: g.name,
+            color: g.color,
+          })),
+        );
       }
       default:
         throw new Error(`未知任务工具: ${name}`);
