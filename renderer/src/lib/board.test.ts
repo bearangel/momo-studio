@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { GroupRow, TaskRow } from '../ipc/types';
 import {
   filterBoardTasks,
+  groupChipColor,
   groupColorStyle,
   sortColumn,
   splitLanes,
@@ -164,6 +165,11 @@ describe('groupColorStyle', () => {
     expect(groupColorStyle('violet')).toBe('rgb(var(--status-violet))');
   });
 
+  it('自定义 hex（#rrggbb 小写）原值直返（UX 波 2 #5）', () => {
+    expect(groupColorStyle('#5e6ad2')).toBe('#5e6ad2');
+    expect(groupColorStyle('#ff0000')).toBe('#ff0000');
+  });
+
   it('null 返回 null', () => {
     expect(groupColorStyle(null)).toBeNull();
   });
@@ -171,5 +177,35 @@ describe('groupColorStyle', () => {
   it('未知名返回 null（调用方自定回退）', () => {
     expect(groupColorStyle('magenta')).toBeNull();
     expect(groupColorStyle('')).toBeNull();
+  });
+
+  it('非 6 位 / 大写 / 非 hex 串不按自定义色处理（入库约定小写 6 位）', () => {
+    expect(groupColorStyle('#5E6AD2')).toBeNull();
+    expect(groupColorStyle('#fff')).toBeNull();
+    expect(groupColorStyle('#gggggg')).toBeNull();
+    expect(groupColorStyle('5e6ad2')).toBeNull();
+  });
+});
+
+describe('groupChipColor（UX 波 2 #7：平铺组 chip 配色）', () => {
+  it('hex → 前景原值 / 底色原值 + 22 alpha', () => {
+    expect(groupChipColor('#5e6ad2')).toEqual({ fg: '#5e6ad2', bg: '#5e6ad222' });
+  });
+
+  it('语义名 → 前景 CSS 变量串 / 底色 color-mix 14% 透明', () => {
+    expect(groupChipColor('accent')).toEqual({
+      fg: 'rgb(var(--accent-500))',
+      bg: 'color-mix(in srgb, rgb(var(--accent-500)) 14%, transparent)',
+    });
+    expect(groupChipColor('violet')).toEqual({
+      fg: 'rgb(var(--status-violet))',
+      bg: 'color-mix(in srgb, rgb(var(--status-violet)) 14%, transparent)',
+    });
+  });
+
+  it('null / 未知名 → null（调用方回退中性样式）', () => {
+    expect(groupChipColor(null)).toBeNull();
+    expect(groupChipColor('magenta')).toBeNull();
+    expect(groupChipColor('#FFF')).toBeNull();
   });
 });

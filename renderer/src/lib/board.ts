@@ -96,11 +96,43 @@ const GROUP_COLOR_VARS: Record<string, string> = {
   violet: 'rgb(var(--status-violet))',
 };
 
+/** 自定义组色格式：6 位小写 hex（入库约定小写，UX 波 2 #5） */
+const GROUP_HEX_RE = /^#[0-9a-f]{6}$/;
+
+/** 是否为自定义组色 hex（#rrggbb，小写）；类型谓词收窄 null */
+export function isGroupHexColor(color: string | null): color is string {
+  return color !== null && GROUP_HEX_RE.test(color);
+}
+
 /**
- * 组色语义名映射为 CSS 颜色串。
- * null 或未知名 → null（调用方自定回退，如中性色）。
+ * 组色语义名或自定义 hex 映射为 CSS 颜色串。
+ * - hex（^#[0-9a-f]{6}$）→ 原值直返（用户内容色，豁免设计系统 inline 色禁令）
+ * - null 或未知名 → null（调用方自定回退，如中性色）
  */
 export function groupColorStyle(color: string | null): string | null {
   if (color === null) return null;
+  if (isGroupHexColor(color)) return color;
   return GROUP_COLOR_VARS[color] ?? null;
+}
+
+/** 组色 chip 配色：前景（文字/边框）+ 低透明底（透明度量级对齐 --status-*-tint） */
+export interface GroupChipColor {
+  fg: string;
+  bg: string;
+}
+
+/**
+ * 组色 → 平铺模式组 chip 配色（UX 波 2 #7）：
+ * - hex → 前景原值 / 底色原值 + '22' alpha（≈13%，双主题下低透明底保可读）
+ * - 语义名 → 前景 rgb(var(--x-500)) / 底色 color-mix 14% 透明
+ * - null / 未知名 → null（调用方回退中性样式）
+ * 用户内容色豁免设计系统禁 inline 色（UI chrome 才受限）。
+ */
+export function groupChipColor(color: string | null): GroupChipColor | null {
+  if (color !== null && GROUP_HEX_RE.test(color)) {
+    return { fg: color, bg: `${color}22` };
+  }
+  const base = color === null ? null : (GROUP_COLOR_VARS[color] ?? null);
+  if (base === null) return null;
+  return { fg: base, bg: `color-mix(in srgb, ${base} 14%, transparent)` };
 }

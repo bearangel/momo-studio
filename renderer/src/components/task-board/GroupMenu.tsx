@@ -2,7 +2,11 @@
 //
 // 分组菜单（看板重构 Task 14）：MoreHorizontal 触发的下拉菜单——重命名（菜单内
 // 联输入，或经 onRenameRequest 委托宿主行内编辑）/ 换色（GROUP_PALETTE 固定
-// 5 语义色色板）/ 归档组（ConfirmDialog 确认，文案 N 实时算）。
+// 5 语义色色板 + 原生 input type=color 自定义 hex，UX 波 2 #5）/ 归档组
+// （ConfirmDialog 确认，文案 N 实时算）。
+//
+// 点外关闭（UX 波 2 #4）：菜单打开时渲染全屏透明遮罩（fixed inset-0，照
+// BoardCard 右键菜单先例）；details 本体 z 序抬高——再点触发按钮本身仍切换。
 //
 // 两处消费：Lane 泳道头（Task 12 占位实装）与 GroupManageList 行菜单——
 // 逻辑全部走 useGroupActions 公共 hook，行为单源。
@@ -12,9 +16,12 @@
 // 避免宿主测试的 role 查询误命中菜单项）。
 import { useRef, useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
-import { groupColorStyle } from '../../lib/board';
+import { groupColorStyle, isGroupHexColor } from '../../lib/board';
 import type { GroupRow } from '../../ipc/types';
 import { GROUP_PALETTE, useGroupActions } from './useGroupActions';
+
+/** input type=color 初始值兜底（当前组色非 hex 时）：与 accent-500 同值的靛蓝 */
+const DEFAULT_CUSTOM_COLOR = '#5e6ad2';
 
 interface GroupMenuProps {
   group: GroupRow;
@@ -57,11 +64,23 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
 
   return (
     <>
+      {open && (
+        <div
+          aria-hidden
+          data-testid="group-menu-overlay"
+          className="fixed inset-0 z-10"
+          onClick={closeMenu}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            closeMenu();
+          }}
+        />
+      )}
       <details
         ref={menuRef}
         open={open}
         onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-        className="relative ml-auto"
+        className="relative z-20 ml-auto"
       >
         <summary
           aria-label={triggerLabel}
@@ -76,7 +95,7 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
           <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
         </summary>
         {open && (
-          <div className="absolute right-0 z-10 mt-1 w-32 rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg">
+          <div className="absolute right-0 z-10 mt-1 w-40 rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg">
             {mode === 'idle' && (
               <>
                 <button
@@ -124,8 +143,8 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
               <div className="flex items-center gap-1.5 px-3 py-1.5">
                 {GROUP_PALETTE.map((color) => {
                   const css = groupColorStyle(color);
-                  // 组色点：语义 token 的 CSS 变量串（设计系统唯一豁免的 inline 色）；
-                  // 未知色回退中性——与 Lane/BoardCard 同款 const 提升写法
+                  // 组色点：语义 token 的 CSS 变量串 / 自定义 hex 原值（用户内容色，
+                  // 豁免设计系统禁 inline 色——UI chrome 才受限）；未知色回退中性
                   const dotStyle: CSSProperties = css
                     ? { backgroundColor: css }
                     : { backgroundColor: 'rgb(var(--text-tertiary))' };
@@ -148,6 +167,18 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
                     </button>
                   );
                 })}
+                {/* 自定义色（UX 波 2 #5）：选色即存 hex（小写入库），存后关菜单 */}
+                <input
+                  type="color"
+                  aria-label="自定义组色"
+                  title="自定义颜色"
+                  value={isGroupHexColor(group.color) ? group.color : DEFAULT_CUSTOM_COLOR}
+                  onChange={(e) => {
+                    void runSetColor(group.id, e.target.value.toLowerCase());
+                    closeMenu();
+                  }}
+                  className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-full border border-subtle bg-transparent p-0"
+                />
               </div>
             )}
           </div>
