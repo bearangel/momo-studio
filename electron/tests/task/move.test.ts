@@ -98,6 +98,16 @@ describe('executeMove 语义表——同列(纯排序/换泳道)', () => {
     expect(resumeMock).not.toHaveBeenCalled();
   });
 
+  it('paused 同列拖动 = 纯排序(controller 修订:同列一律纯排序含 paused)', async () => {
+    // 断点续跑是重副作用,无拖拽入口——只走卡片/抽屉的 task:resume 按钮
+    const t = seedViaChain('paused');
+    await executeMove(t.id, { column: 'active', groupId: null });
+    expect(getTask(t.id)?.status).toBe('paused'); // 原样保持
+    expect(getTask(t.id)?.boardPosition).not.toBeNull();
+    expect(resumeMock).not.toHaveBeenCalled();
+    expect(startMock).not.toHaveBeenCalled();
+  });
+
   it('同列跨泳道 → group_id 更新(状态不动)', async () => {
     const g = createGroup({ workspaceId: WS, name: 'v1' });
     const t = seed('draft');
@@ -142,11 +152,16 @@ describe('executeMove 语义表——跨列动作映射', () => {
     expect(startMock).toHaveBeenCalledWith(t.id);
   });
 
-  it('paused→active:走 resumePausedTask(断点续跑手势,spec §4 该格裁决)', async () => {
-    const t = seedViaChain('paused');
-    await executeMove(t.id, { column: 'active', groupId: null });
-    expect(resumeMock).toHaveBeenCalledWith(t.id);
-    expect(startMock).not.toHaveBeenCalled();
+  it('paused 跨列格不变:→assigned/done 拒;→closed 走 cancelTask', async () => {
+    const p1 = seedViaChain('paused');
+    await expect(executeMove(p1.id, { column: 'assigned', groupId: null })).rejects.toThrow();
+    const p2 = seedViaChain('paused');
+    await expect(executeMove(p2.id, { column: 'done', groupId: null })).rejects.toThrow();
+    expect(getTask(p2.id)?.status).toBe('paused'); // 拒后原样
+    const p3 = seedViaChain('paused');
+    await executeMove(p3.id, { column: 'closed', groupId: null });
+    expect(cancelMock).toHaveBeenCalledWith(p3.id);
+    expect(resumeMock).not.toHaveBeenCalled();
   });
 
   it('in_progress→done:transition completed + completedAt', async () => {
@@ -199,6 +214,13 @@ describe('executeMove 语义表——拒绝格(错误路径)', () => {
 
   it('任务不存在 → 抛错(预检)', async () => {
     await expect(executeMove('T-999', { column: 'backlog', groupId: null })).rejects.toThrow('不存在');
+  });
+
+  it('归档任务 → 拒(archivedAt 预检;即使同列纯排序也不放行)', async () => {
+    const t = seedViaChain('completed'); // completed 属 done 列,同列 move 本是纯排序
+    updateTask(t.id, { archivedAt: Date.now() }); // 归档终态卡
+    await expect(executeMove(t.id, { column: 'done', groupId: null })).rejects.toThrow('任务已归档');
+    expect(getTask(t.id)?.boardPosition).toBeNull(); // 零副作用:落点不写
   });
 });
 

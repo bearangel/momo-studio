@@ -5,9 +5,10 @@
 // 不定动作:动作裁决全部收敛在此(momo-boundary-rules:契约不漂移的关键)。
 //
 // 语义表(与 renderer board-columns 的 canDropIntoColumn 列级投影对齐,此处为权威):
-//   - 同列 = 纯排序 / 换泳道(不动状态)
+//   - 同列 = 纯排序 / 换泳道(不动状态;含 paused——controller 修订:同列拖动
+//     一律纯排序,断点续跑是重副作用,只走卡片/抽屉按钮(task:resume),不被排序手势误触发)
 //   - →assigned:draft 须有委派目标;pending 手动放行(均 transition + notify)
-//   - →active:assigned/session_queued 走 startTaskAndKickoff;paused 走 resumePausedTask
+//   - →active:assigned/session_queued 走 startTaskAndKickoff
 //   - →done:in_progress → completed(+completedAt)+ 循环续期 + notify
 //   - →closed:任意非终态走 cancelTask(确认框在 renderer,主进程不二次确认)
 //   - →backlog 一律拒(只出不进);终态跨列一律拒
@@ -27,7 +28,7 @@ import { getGroup } from '../storage/task-groups/repo';
 import { hasDelegationTarget } from './starter';
 import { notifyExecutor } from './executor';
 import { spawnNextInstanceIfRecurring } from './recurrence';
-import { startTaskAndKickoff, resumePausedTask, cancelTask } from './lifecycle';
+import { startTaskAndKickoff, cancelTask } from './lifecycle';
 import { columnOf, canDropIntoColumn, type BoardColumnKey } from './board-columns';
 import { placeBetween, needsRebalance, rebalanceColumnPositions } from './board-position';
 
@@ -41,9 +42,11 @@ export interface MoveTarget {
 }
 
 export async function executeMove(id: string, target: MoveTarget): Promise<TaskRow> {
-  // 预检①:存在性(getTask 单点;lifecycle 三函数不再各自预检,Task 4 review 约定)
+  // 预检①:存在性 + 归档(getTask 单点;lifecycle 三函数不再各自预检,Task 4 review 约定)。
+  // 归档卡即使同列纯排序也拒——恢复归任务归档域,不经 move
   const task = getTask(id);
   if (!task) throw new Error(`task ${id} 不存在`);
+  if (task.archivedAt != null) throw new Error('任务已归档,请先恢复');
 
   const fromCol = columnOf(task.status);
   const sameColumn = fromCol === target.column;
@@ -62,13 +65,9 @@ export async function executeMove(id: string, target: MoveTarget): Promise<TaskR
     if (g.archivedAt != null) throw new Error('目标分组已归档,请先取消归档');
   }
 
-  // ① 换列语义动作(spec §4 逐格裁决表为权威)。
-  // 特例:paused 拖回进行中列 = 显式断点续跑手势——虽是同列(paused 本就属于
-  // active 列),spec §4 表格裁决该格为 task.resume(),与 in_progress×active
-  // 的「仅列内排序」刻意不对称
-  if (task.status === 'paused' && target.column === 'active') {
-    await resumePausedTask(id);
-  } else if (!sameColumn) {
+  // ① 换列语义动作(spec §4 逐格裁决表为权威;同列不进此分支——
+  // 含 paused:resume 无拖拽入口,断点续跑只走 task:resume 按钮)
+  if (!sameColumn) {
     switch (target.column) {
       case 'assigned': {
         // draft 无委派目标 → 手动放行只会建出无人接待的空会话(与 starter K2 同语义)
