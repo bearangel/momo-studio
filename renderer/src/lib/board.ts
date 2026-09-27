@@ -1,7 +1,17 @@
 // renderer/src/lib/board.ts
 // 看板列组装纯函数（看板重构 Task 9）：排序 / 泳道切分 / 过滤 / 组色映射。
 // 全部无副作用——调用方先 sortColumn 再按列 filter，列分组是渲染层 BoardColumn 的职责。
-import type { GroupRow, TaskRow } from '../ipc/types';
+import type { GroupRow, TaskRow, TaskStatus } from '../ipc/types';
+
+/**
+ * 终态集合（看板 done/closed 两列合并的底层状态；与 electron state-machine
+ * TERMINAL 集合同步）——归档等终态限定入口（spec §5.2 终态卡片右键归档）的判定单源。
+ */
+export const TERMINAL_STATUSES: readonly TaskStatus[] = ['completed', 'failed', 'cancelled'];
+
+export function isTerminalStatus(status: TaskStatus): boolean {
+  return TERMINAL_STATUSES.includes(status);
+}
 
 /**
  * boardPosition 升序排序，NULL 垫底（spec §3 NULLS-LAST）。

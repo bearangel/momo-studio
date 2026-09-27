@@ -6,13 +6,16 @@
 //     中间态 session_queued→「排队中」/ paused→「已暂停」由徽标天然表达，不占列）
 //   - 元信息行复用 TaskCard 内容：日程/截止/指派 agent/循环/委派目标
 //   - 平铺模式补显 groupChip（色点+组名，spec §5.2）；泳道模式（Task 12）组即道省略
-// 静态渲染阶段（本任务）：纯点击选中，拖拽接线在 Task 12（@dnd-kit sortable 包装）。
-import { Bot, Calendar, Clock, MessagesSquare, Repeat, Users } from 'lucide-react';
-import type { CSSProperties } from 'react';
+//   - 终态卡（done/closed 列）右键「归档」菜单（spec §5.2）：调 task.store.archive
+//     （成功即本地剔除，卡片消失）；失败 toast。非终态不出菜单（主进程同样 reject）
+import { Archive, Bot, Calendar, Clock, MessagesSquare, Repeat, Users } from 'lucide-react';
+import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
 import { taskStatusStyle } from '../../lib/task-status';
-import { groupColorStyle } from '../../lib/board';
+import { groupColorStyle, isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
+import { useTaskStore } from '../../stores/task.store';
+import { showToast } from '../ui/Toast';
 import { useTaskEntityNames } from './useTaskEntityNames';
 
 /** 优先级标签（0=无 / 1=低 / 5=中 / 10=高）——与 TaskCard 同源词表 */
@@ -36,6 +39,9 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
   const status = taskStatusStyle(task.status);
   const priorityLabel = PRIORITY_LABEL[task.priority];
   const names = useTaskEntityNames(task.workspaceId);
+  // 右键归档菜单定位（null=关）；仅终态卡可开（spec §5.2）
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const canArchive = isTerminalStatus(task.status);
   // 组色点：groupColorStyle 返回 token 形式的 CSS 变量串（设计系统唯一豁免的
   // inline 色），未知/无色 → 中性 tertiary
   const dotColor = groupChip ? groupColorStyle(groupChip.color) : null;
@@ -43,15 +49,30 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
     ? { backgroundColor: dotColor }
     : { backgroundColor: 'rgb(var(--text-tertiary))' };
 
+  const handleArchive = async (): Promise<void> => {
+    try {
+      // store.archive：IPC 成功即本地剔除 tasks 行（卡片随之消失）
+      await useTaskStore.getState().archive(task.id);
+    } catch (err) {
+      showToast(`归档失败: ${(err as Error).message}`);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onClick}
-      className={`w-full cursor-pointer rounded-md border bg-canvas px-2.5 py-2 text-left transition-colors hover:border-strong hover:bg-surface-1 ${
-        selected ? 'border-focus' : 'border-subtle'
-      }`}
-    >
+    <>
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={onClick}
+        onContextMenu={(e) => {
+          if (!canArchive) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        className={`w-full cursor-pointer rounded-md border bg-canvas px-2.5 py-2 text-left transition-colors hover:border-strong hover:bg-surface-1 ${
+          selected ? 'border-focus' : 'border-subtle'
+        }`}
+      >
       <div className="flex items-start justify-between gap-1.5">
         <span className="min-w-0 flex-1 text-xs font-medium leading-relaxed text-primary">
           {priorityLabel && <span className="mr-0.5 text-status-warning">[{priorityLabel}]</span>}
@@ -116,6 +137,39 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
           已用 {Math.round((Date.now() - task.startedAt) / 60000)} min · {task.toolCallsUsed} 工具调用
         </div>
       )}
-    </button>
+      </button>
+      {menu && (
+        <>
+          {/* 全屏遮罩：点击或右键关闭菜单（照 FileContextMenu 先例） */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <ul
+            aria-label={`任务菜单 ${task.title}`}
+            className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
+            style={{ left: menu.x, top: menu.y }}
+          >
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenu(null);
+                  void handleArchive();
+                }}
+                className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+              >
+                <Archive size={12} strokeWidth={1.75} aria-hidden />
+                归档
+              </button>
+            </li>
+          </ul>
+        </>
+      )}
+    </>
   );
 }
