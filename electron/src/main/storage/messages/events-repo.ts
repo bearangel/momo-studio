@@ -103,6 +103,72 @@ export function listEventsByMessage(messageId: string): MessageEventRow[] {
   return rows.map(rowToCamel);
 }
 
+/** IN 查询分块上限（SQLite 变量数安全边界，远低于 32766 上限） */
+const IN_CHUNK = 500;
+
+/** 生成 `?,?,?` 占位符串（better-sqlite3 不自动展开数组到 IN——须显式占位） */
+function placeholders(n: number): string {
+  return Array.from({ length: n }, () => '?').join(',');
+}
+
+/** 按消息批量分组（SQL ORDER BY message_id, seq 已保证组内 seq 升序） */
+function groupByMessage(rows: SqlRow[]): Map<string, MessageEventRow[]> {
+  const out = new Map<string, MessageEventRow[]>();
+  for (const r of rows) {
+    const list = out.get(r.message_id);
+    if (list) list.push(rowToCamel(r));
+    else out.set(r.message_id, [rowToCamel(r)]);
+  }
+  return out;
+}
+
+function chunkIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) chunks.push(ids.slice(i, i + IN_CHUNK));
+  return chunks;
+}
+
+/**
+ * 批量拉多条消息的全量事件（message_events.message_id IN (...)）。
+ * 消费方：getMessages 事件裁剪（events-pruning.ts）——替代逐消息
+ * listEventsByMessage 的 N+1 往返。组内按 seq 升序（同 listEventsByMessage）。
+ */
+export function listEventsForMessages(messageIds: string[]): Map<string, MessageEventRow[]> {
+  if (messageIds.length === 0) return new Map();
+  const db = getDb();
+  const out = new Map<string, MessageEventRow[]>();
+  for (const chunk of chunkIds(messageIds)) {
+    const stmt = db.prepare(
+      `SELECT id, message_id, seq, event_type, payload_json, created_at FROM message_events WHERE message_id IN (${placeholders(chunk.length)}) ORDER BY message_id, seq ASC`,
+    );
+    for (const [id, list] of groupByMessage(stmt.all(...chunk) as SqlRow[])) {
+      const existing = out.get(id);
+      if (existing) existing.push(...list);
+      else out.set(id, list);
+    }
+  }
+  return out;
+}
+
+/**
+ * 批量统计各消息事件总数（只扫索引，不取 payload 行体）。
+ * 消费方：事件裁剪的巨型消息判定（单消息事件数 > cap 则降级压缩快照）。
+ */
+export function countEventsByMessage(messageIds: string[]): Map<string, number> {
+  if (messageIds.length === 0) return new Map();
+  const db = getDb();
+  const out = new Map<string, number>();
+  for (const chunk of chunkIds(messageIds)) {
+    const stmt = db.prepare(
+      `SELECT message_id, COUNT(*) AS c FROM message_events WHERE message_id IN (${placeholders(chunk.length)}) GROUP BY message_id`,
+    );
+    for (const row of stmt.all(...chunk) as Array<{ message_id: string; c: number }>) {
+      out.set(row.message_id, row.c);
+    }
+  }
+  return out;
+}
+
 export function nextSeqForMessage(messageId: string): number {
   const db = getDb();
   const row = db.prepare('SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM message_events WHERE message_id = ?').get(messageId) as { next: number } | undefined;

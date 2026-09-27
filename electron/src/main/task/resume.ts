@@ -29,6 +29,7 @@ import {
   getLatestMessageByStreamSessionId,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
+import { writeCompactSnapshot } from '../storage/messages/event-compaction';
 import { getEventBuffer } from '../agent/stream-relay';
 import { listTasks, getTask, type TaskRow } from '../storage/tasks/repo';
 import { rebuildTurn } from '../agent/turn-reconstructor';
@@ -83,6 +84,7 @@ export function sweepStaleStreaming(): number {
   }
 
   let swept = 0;
+  const sweptIds: string[] = [];
   for (const id of staleIds) {
     try {
       // 与 finalizeStreamOnCrash 同契约：正文聚合回写（body 单一真相源）
@@ -92,6 +94,7 @@ export function sweepStaleStreaming(): number {
         eventType: 'final',
         payload: { status: 'failed', error: STALE_STREAM_ERROR },
       });
+      sweptIds.push(id);
       swept += 1;
     } catch (err) {
       // 单行失败不阻断其余行（下一行可能属于另一个会话/任务）
@@ -104,6 +107,17 @@ export function sweepStaleStreaming(): number {
 
   // boot 时序：立即落盘——不等下一 append/50ms 窗口（其后可能长期无写入）
   getEventBuffer().flush();
+  // 终态快照（C 方案）：final 落盘后补压缩快照；失败只 warn（读路径惰性回填自愈）
+  for (const id of sweptIds) {
+    try {
+      writeCompactSnapshot(id);
+    } catch (err) {
+      logger.warn('陈旧消息压缩快照写入失败（读路径将惰性回填）', {
+        messageId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   return swept;
 }
 

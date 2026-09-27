@@ -18,7 +18,7 @@
 // messages 表一次，千级 delta 流即千次查询；命中缓存后为 0 次。
 //
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { loadElectronApis } from '../electron-access';
 import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { MessageEventBuffer } from '../storage/messages/event-buffer';
@@ -31,6 +31,23 @@ import {
   getLatestMessageByStreamSessionId,
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
+import { writeCompactSnapshot } from '../storage/messages/event-compaction';
+
+/**
+ * 终态点写压缩快照（C 方案，2026-09-25）：final 事件落盘后调用——事件流压缩
+ * 落 message_compact_events，getMessages 历史读取从此不碰巨量增量行。
+ * 失败只 warn 不断流（快照缺失时读路径会惰性回填自愈）。
+ */
+function snapshotAtFinalize(messageId: string): void {
+  try {
+    writeCompactSnapshot(messageId);
+  } catch (err) {
+    logger.warn('压缩快照写入失败（读路径将惰性回填）', {
+      messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 // === A7：stream chunk → MessageEventBuffer 落盘 ===
 
@@ -45,7 +62,9 @@ export function getEventBuffer(): MessageEventBuffer {
   if (!eventBuffer) {
     eventBuffer = new MessageEventBuffer({
       onFlush: (events) => {
-        // headless / 测试环境 BrowserWindow 可能为 undefined，静默跳过 IPC 推送
+        // headless / 测试环境 / runtime 子进程 BrowserWindow 可能为 undefined，
+        // 静默跳过 IPC 推送（打包后子进程无 electron 模块——electron-access 降级）
+        const { BrowserWindow } = loadElectronApis();
         if (!BrowserWindow) return;
         const win = BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) return;
@@ -74,6 +93,8 @@ export function __resetEventBufferForTest(): void {
  * 的窗口获取方式一致；非 Electron 环境（测试/headless）静默跳过。
  */
 function pushSessionMessage(msg: ReturnType<typeof insertMessage>): void {
+  // 同 onFlush：非主进程环境（测试 / headless / runtime 子进程）静默跳过
+  const { BrowserWindow } = loadElectronApis();
   if (!BrowserWindow) return;
   const win = BrowserWindow.getAllWindows()[0];
   if (!win || win.isDestroyed()) return;
@@ -201,6 +222,7 @@ export function finalizeStreamOnCrash(streamSessionId: string, exitCode: number 
       payload: { status: 'failed', error: errorText },
     });
     buf.flush();
+    snapshotAtFinalize(msg.id);
   } catch (err) {
     // 收尾自身失败不得向上传播（调用方在 child exit 事件回调里）——记 error 后放行
     logger.error('崩溃流收尾失败（消息可能滞留 streaming 状态）', {
@@ -409,6 +431,7 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           payload: { body: chunk.segmentBody },
         });
         segBuf.flush();
+        snapshotAtFinalize(segMsg.id);
         return;
       }
       case 'message_roll': {
@@ -425,6 +448,7 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         if (oldUpdated) pushSessionMessage(oldUpdated);
         buf.append({ messageId: oldId, eventType: 'final', payload: { body: oldBody } });
         buf.flush();
+        snapshotAtFinalize(oldId);
         // ② 新行：继承旧行会话身份，streamSessionId 加 roll 后缀（避免双行同值歧义）
         const oldMsg = getMessage(oldId)!;
         const n = (rollCounts.get(chunk.streamSessionId) ?? 0) + 1;
@@ -481,6 +505,7 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           payload: { status, ...(errorText !== undefined ? { error: errorText } : {}) },
         });
         buf.flush();
+        snapshotAtFinalize(messageId);
         // T9：final 事件落库点 → 命名服务等下游监听（非 owner 流即 agent 回复完成）
         notifyFinalListener(messageId);
         return;
@@ -531,8 +556,13 @@ export function abortStreamBySessionId(streamSessionId: string): boolean {
   return abortResolver(streamSessionId);
 }
 
-/** 注册流式相关 IPC handler（agent:abortStream，入参 streamSessionId） */
+/** 注册流式相关 IPC handler（agent:abortStream，入参 streamSessionId）。仅在主进程调用；runtime 子进程无 electron IPC，防御性跳过 */
 export function registerStreamIpc(): void {
+  const { ipcMain } = loadElectronApis();
+  if (!ipcMain) {
+    logger.warn('agent:abortStream 未注册——当前进程无 electron IPC（非主进程环境）');
+    return;
+  }
   ipcMain.handle('agent:abortStream', (_event, streamSessionId: string) => {
     abortStreamBySessionId(streamSessionId);
   });

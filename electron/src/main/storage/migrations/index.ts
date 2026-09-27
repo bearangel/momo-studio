@@ -15,6 +15,9 @@ import { migration037 } from './037_v2_1_office_tools_builtin';
 import { migration038 } from './038_p2_mcp_remote_transport';
 import { migration039 } from './039_p21_mcp_bundle_cwd';
 import { migration040 } from './040_p22_mcp_config_schema';
+import { migration041 } from './041_events_structural_partial_index';
+import { migration042 } from './042_events_thinking_partial_index';
+import { migration043 } from './043_message_compact_events';
 
 export interface Migration {
   version: number;
@@ -944,6 +947,28 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     //（约定同 032-039）；down 是真 DROP COLUMN（模块内供测试直调，数组只接 .up）。
     version: migration040.version,
     sql: migration040.up,
+  },
+  {
+    // message_events 结构事件部分索引（getMessages 事件裁剪查询支撑，
+    // 2026-09-25 工作空间切换卡顿修复）。SQL 住在独立模块
+    // 041_events_structural_partial_index.ts（约定同 032-040）。
+    version: migration041.version,
+    sql: migration041.up,
+  },
+  {
+    // message_events thinking 增量部分索引（历史消息 thinking 异步补全：
+    // thinkingPendingIds 判定 + fetchMessageEvents 补拉查询支撑，
+    // 2026-09-25）。SQL 住在独立模块 042_events_thinking_partial_index.ts
+    //（约定同 032-041）。
+    version: migration042.version,
+    sql: migration042.up,
+  },
+  {
+    // message_compact_events 表（历史消息显示一致性 C 方案：终态写时压缩
+    // 快照——连续 delta 游程合并、结构事件保留，交错顺序保真，2026-09-25）。
+    // SQL 住在独立模块 043_message_compact_events.ts（约定同 032-042）。
+    version: migration043.version,
+    sql: migration043.up,
   },
 ];
 

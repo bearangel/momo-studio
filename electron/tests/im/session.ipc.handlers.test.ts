@@ -16,6 +16,7 @@ const {
   sessionsRepoMocks,
   messagesRepoMocks,
   eventsRepoMocks,
+  compactionMocks,
   exporterMocks,
   agentCrudMocks,
   workspaceCrudMocks,
@@ -58,6 +59,14 @@ const {
     },
     eventsRepoMocks: {
       listEventsByMessage: vi.fn<[], unknown[]>(() => []),
+      // 事件裁剪（2026-09-25 C 方案）：getMessages/loadOlder 经 buildEventsByMessage
+      // 走批量全量查询 + 压缩快照回填（mock 边界；投影/裁剪/压缩规则由
+      // events-pruning.test.ts + event-compaction.test.ts 对真实 DB 锁定）
+      listEventsForMessages: vi.fn<[], unknown>(() => new Map()),
+      countEventsByMessage: vi.fn<[], unknown>(() => new Map()),
+    },
+    compactionMocks: {
+      backfillCompactSnapshots: vi.fn<[], unknown>(() => new Map()),
     },
     exporterMocks: {
       formatRoomToMarkdown: vi.fn<unknown[], string>(() => '# 导出内容'),
@@ -98,6 +107,9 @@ vi.mock('../../src/main/im/session-service', () => sessionServiceMocks);
 vi.mock('../../src/main/storage/sessions/repo', () => sessionsRepoMocks);
 vi.mock('../../src/main/storage/messages/repo', () => messagesRepoMocks);
 vi.mock('../../src/main/storage/messages/events-repo', () => eventsRepoMocks);
+// C 方案：压缩快照模块是 getMessages 读路径的 DB 边界（真实规则由
+// event-compaction.test.ts 对真实 SQLite 锁定，此处 mock 边界）
+vi.mock('../../src/main/storage/messages/event-compaction', () => compactionMocks);
 vi.mock('../../src/main/im/markdown-exporter', () => exporterMocks);
 vi.mock('../../src/main/agent/crud', () => agentCrudMocks);
 vi.mock('../../src/main/workspace/crud', () => workspaceCrudMocks);
@@ -147,6 +159,9 @@ beforeEach(() => {
   Object.values(sessionsRepoMocks).forEach((m) => m.mockClear());
   Object.values(messagesRepoMocks).forEach((m) => m.mockClear());
   Object.values(eventsRepoMocks).forEach((m) => m.mockClear());
+  // once 队列会跨用例泄漏（mockClear 只清调用记录）——压缩快照 mock 全量 reset
+  compactionMocks.backfillCompactSnapshots.mockReset();
+  compactionMocks.backfillCompactSnapshots.mockReturnValue(new Map());
   Object.values(exporterMocks).forEach((m) => m.mockClear());
   Object.values(agentCrudMocks).forEach((m) => m.mockClear());
   Object.values(workspaceCrudMocks).forEach((m) => m.mockClear());
@@ -527,15 +542,23 @@ describe('session:getMessages handler', () => {
 
   it('I2：loadOlder 同款剥离（两处 egress 共用投影，防漂移）', async () => {
     messagesRepoMocks.listOlderMessages.mockReturnValueOnce([msgRow]);
-    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
-      {
-        id: 'evt-steer-2',
-        messageId: 'msg-1',
-        seq: 1,
-        eventType: 'steer',
-        payload: { body: 'b', context: { skills: [], files: [{ path: 'a', content: 'c' }] } },
-      },
-    ]);
+    // loadOlder 全量窗口恒 0 → steer 事件经压缩快照批量回填返回
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
+      new Map([
+        [
+          'msg-1',
+          [
+            {
+              id: 'evt-steer-2',
+              messageId: 'msg-1',
+              seq: 1,
+              eventType: 'steer',
+              payload: { body: 'b', context: { skills: [], files: [{ path: 'a', content: 'c' }] } },
+            },
+          ],
+        ],
+      ]),
+    );
     const res = await ipcHandlers.get('session:loadOlder')!({} as never, 'sess-1', 500, 30);
     const events = (res as { eventsByMessage: Record<string, Array<{ eventType: string; payload: Record<string, unknown> }>> }).eventsByMessage['msg-1']!;
     expect(events[0]!.payload).not.toHaveProperty('context');
@@ -544,24 +567,30 @@ describe('session:getMessages handler', () => {
 });
 
 describe('session:loadOlder handler', () => {
-  it('委托 listOlderMessages(sessionId, beforeTs, count) 并回传 hasMore', async () => {
+  it('委托 listOlderMessages(sessionId, beforeTs, count) 并回传 hasMore；压缩快照（fullRecentCount=0）', async () => {
     messagesRepoMocks.listOlderMessages.mockReturnValueOnce([msgRow, msgRow, msgRow]);
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
+      new Map([['msg-1', [{ id: 'evt-1', messageId: 'msg-1', seq: 1, eventType: 'final', payload: {} }]]]),
+    );
     const res = await ipcHandlers.get('session:loadOlder')!({} as never, 'sess-1', 500, 3);
     expect(messagesRepoMocks.listOlderMessages).toHaveBeenCalledWith('sess-1', 500, 3);
+    // 翻页语义：全量事件查询入参恒空（翻页消息不走全量路径——快照承载）——
+    // 真实实现对空入参早退，mock 侧以「调用参数为空数组」锁定该语义
+    expect(eventsRepoMocks.listEventsForMessages).toHaveBeenCalledWith([]);
     expect(res).toEqual({
       messages: [msgRow, msgRow, msgRow],
-      eventsByMessage: { 'msg-1': [] },
+      eventsByMessage: { 'msg-1': [{ id: 'evt-1', messageId: 'msg-1', seq: 1, eventType: 'final', payload: {} }] },
       hasMore: true, // 满批 → 可能还有更早的
     });
   });
 
-  it('count 缺省时默认 30；未满批 hasMore=false', async () => {
+  it('count 缺省时默认 30；未满批 hasMore=false；零事件消息省略 key', async () => {
     messagesRepoMocks.listOlderMessages.mockReturnValueOnce([msgRow]);
     const res = await ipcHandlers.get('session:loadOlder')!({} as never, 'sess-1', 500);
     expect(messagesRepoMocks.listOlderMessages).toHaveBeenCalledWith('sess-1', 500, 30);
     expect(res).toEqual({
       messages: [msgRow],
-      eventsByMessage: { 'msg-1': [] },
+      eventsByMessage: {},
       hasMore: false,
     });
   });

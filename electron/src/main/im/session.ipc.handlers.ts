@@ -40,7 +40,7 @@ import {
   listEventsByMessage,
   type MessageEventRow,
 } from '../storage/messages/events-repo';
-import { projectEventsForWire } from '../storage/messages/event-projection';
+import { buildEventsByMessage } from './events-pruning';
 import { exportAggregateEvents } from './export-aggregator';
 import { formatRoomToMarkdown, renderSubMessage, type ExportMessage } from './markdown-exporter';
 import { listMembers, getAgentDefinition } from '../agent/crud';
@@ -207,11 +207,12 @@ export function registerSessionIpcHandlers(): void {
   });
 
   // 向前翻页：created_at < beforeTs 的消息；满批 hasMore=true（与 im:loadOlderMessages 同法）。
+  // 翻页消息天然比已加载的更早 → 全部走压缩快照（fullRecentCount=0）。
   ipcMain.handle(
     'session:loadOlder',
     async (_evt, sessionId: string, beforeTs: number, count = 30) => {
       const messages = listOlderMessages(sessionId, beforeTs, count);
-      return { ...withEvents(messages), hasMore: messages.length >= count };
+      return { ...(await withEvents(messages, { fullRecentCount: 0 })), hasMore: messages.length >= count };
     },
   );
 
@@ -327,14 +328,16 @@ export function registerSessionIpcHandlers(): void {
   logger.info('Session IPC handlers 已注册');
 }
 
-/** messages 批 → { messages, eventsByMessage }（逐条拉 events，与 im:getMessages 同法）。
- *  I2：events 过 egress 投影——steer 事件剥离 context 全文（DB 保留供 resume 重放）。 */
-function withEvents(
+/** messages 批 → { messages, eventsByMessage }（事件裁剪：最近窗口全量 /
+ *  巨型与更早消息走压缩快照——thinking/正文/工具卡全量保序，见
+ *  events-pruning.ts 契约注释）。I2 egress 投影（steer 剥离 context）在
+ *  buildEventsByMessage 内统一执行。async：快照回填按片让出事件循环。 */
+async function withEvents(
   messages: MessageRow[],
-): { messages: MessageRow[]; eventsByMessage: Record<string, MessageEventRow[]> } {
-  const eventsByMessage: Record<string, MessageEventRow[]> = {};
-  for (const m of messages) {
-    eventsByMessage[m.id] = projectEventsForWire(listEventsByMessage(m.id));
-  }
-  return { messages, eventsByMessage };
+  opts?: { fullRecentCount?: number },
+): Promise<{
+  messages: MessageRow[];
+  eventsByMessage: Record<string, MessageEventRow[]>;
+}> {
+  return { messages, eventsByMessage: await buildEventsByMessage(messages, opts) };
 }
