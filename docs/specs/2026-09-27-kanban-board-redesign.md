@@ -75,7 +75,9 @@ taskGroup.archive(id: string): Promise<{ cancelledIds: string[]; archivedCount: 
   // cancelledIds 供 IPC 层对 in_progress 来源补执行中断(abort 是进程级副作用,不入 DB 事务)
   // 任一步失败整体回滚(组与任务都不动)
 taskGroup.unarchive(id: string): Promise<GroupRow>
-  // 仅组恢复活跃,组内任务保持归档(在归档面板单条/批量/按组捞回)
+  // 组恢复活跃,组内全部归档任务一并恢复(2026-09-27 用户实测反馈修订:
+  // 原设计「组恢复任务留档、按需捞回」的拆分反直觉——恢复组后任务不回来,
+  // 用户仍需逐条手工恢复;现改为组与任务同进退,「恢复」一词一个语义)
 ```
 
 ### 3.2 task 面扩展
@@ -220,7 +222,7 @@ TaskList/TaskCard 平铺列表退役(已核实 TaskList 的 3 个调用方全在
 
 | 层 | 覆盖 |
 |---|---|
-| electron 单测 | 迁移测试(老库升列/默认 NULL/索引);**move 语义表逐格断言**(每个 from×列:合法动作调用/拒绝原因;start/resume/cancel 联动按 this 绑定与 ID 唯一性仿真,拒绝「方便测试」的简化 mock);board_position 中值/列首尾/精度重整;归档边界(非终态拒/终态成功/组归档事务含自动 cancel 计数/unarchive 不复活任务);group CRUD/reorder/list archived 三态;repo listTasks archived 过滤 |
+| electron 单测 | 迁移测试(老库升列/默认 NULL/索引);**move 语义表逐格断言**(每个 from×列:合法动作调用/拒绝原因;start/resume/cancel 联动按 this 绑定与 ID 唯一性仿真,拒绝「方便测试」的简化 mock);board_position 中值/列首尾/精度重整;归档边界(非终态拒/终态成功/组归档事务含自动 cancel 计数/**unarchive 组与组内归档任务事务内一并恢复**);group CRUD/reorder/list archived 三态;repo listTasks archived 过滤 |
 | renderer 单测 | lib/board.ts 纯函数(列映射/排序兜底/中值);task.store 乐观更新+失败回滚+轮询跳过窗口;group.store;BoardCanvas 拖拽组件测试(@dnd-kit 官方测试模式:传感器模拟);TaskDetailDrawer/ArchivePanel |
 | 一致性 | BOARD_COLUMNS 主进程与 renderer 引用同一常量——无两份定义可漂移 |
 | e2e | 拖拽换列冒烟一条(Playwright drag API,可选) |
