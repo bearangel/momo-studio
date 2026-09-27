@@ -115,6 +115,29 @@ export function groupColorStyle(color: string | null): string | null {
   return GROUP_COLOR_VARS[color] ?? null;
 }
 
+/** 语义色名 → hex（亮色主题值，与 globals.css :root 同源）——仅作应用内取色器初始值 */
+const GROUP_COLOR_HEX: Record<string, string> = {
+  accent: '#5e6ad2',
+  violet: '#6e56cf',
+  success: '#23835c',
+  warning: '#b7791f',
+  error: '#d33f49',
+};
+
+/** 取色器初始值兜底（无色/未知色）：与 accent-500 同值的靛蓝 */
+const DEFAULT_PICKER_COLOR = '#5e6ad2';
+
+/**
+ * 组色 → 应用内取色器（react-colorful）初始 hex。
+ * - 自定义 hex → 原值
+ * - 语义名 → 亮色主题 hex（暗色值不同，但取色器只作选色起点无须跟随主题）
+ * - null / 未知名 → 兜底靛蓝 #5e6ad2（与 accent-500 同值）
+ */
+export function groupColorHex(color: string | null): string {
+  if (isGroupHexColor(color)) return color;
+  return GROUP_COLOR_HEX[color ?? ''] ?? DEFAULT_PICKER_COLOR;
+}
+
 /** 组色 chip 配色：前景（文字/边框）+ 低透明底（透明度量级对齐 --status-*-tint） */
 export interface GroupChipColor {
   fg: string;

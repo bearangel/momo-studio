@@ -4,8 +4,8 @@
 //   - 渲染：position 升序、色点/组名/任务数（任务数从 task.store.tasks 实时按 groupId 计）
 //   - 新建组：内联输入回车调 taskGroup.create（契约锁 {workspaceId, name}）
 //   - 重命名：菜单触发行内编辑，回车调 taskGroup.update(id, {name})
-//   - 换色：色板固定 5 语义色 + 自定义取色三路确认（input→本地预览零 IPC、
-//     「应用」显式提交、change/onBlur 兜底等价提交；UX 波 2 #5 + 无处确认修复）
+//   - 换色：色板固定 5 语义色 + 应用内取色器（react-colorful；onChange 只更本地
+//     预览零 IPC，「应用」唯一提交并关菜单；原生 input type=color 路径已移除）
 //   - 菜单点外关闭：全屏遮罩点击关闭；再点触发按钮本身仍切换（UX 波 2 #4）
 //   - 归档组：确认文案含实时未完结数 N；确认后 taskGroup.archive + task.list 级联刷新
 //   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive + task.list 级联刷新
@@ -14,7 +14,12 @@
 //     单测打在导出的纯函数 computeGroupOrder（照 Task 12 resolveDrop 模式）与
 //     编排函数 applyGroupReorder（reorder 调用契约 + 失败 toast 错误路径）
 //
-// mock 边界：仅 mock window.api；group.store / task.store 真实实现。
+// mock 边界：仅 mock window.api 与 react-colorful；group.store / task.store 真实实现。
+//
+// react-colorful mock 头注：jsdom 不渲染指针交互（PointerEvent / 布局量均缺），
+// HexColorPicker 在单测中 mock 掉——保真其受控契约：接收 color、经 onChange(hex)
+// 上报新值。mock 暴露一个原生 input 驱动 onChange（fireEvent.change），等价真实
+// 交互「拖动选色 → 连发回调」；指针交互本身不在单测覆盖面（视觉验收走真机）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { GroupManageList, computeGroupOrder, applyGroupReorder } from './GroupManageList';
@@ -23,6 +28,20 @@ import { useGroupStore } from '../../stores/group.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { GroupRow, TaskRow, Workspace } from '../../ipc/types';
 import { Toast, dismissToast } from '../ui/Toast';
+
+vi.mock('react-colorful', () => ({
+  HexColorPicker: ({
+    color,
+    onChange,
+  }: {
+    color: string;
+    onChange: (hex: string) => void;
+  }) => (
+    <div data-testid="hex-color-picker" data-color={color}>
+      <input aria-label="模拟取色器选色" onChange={(e) => onChange(e.target.value)} />
+    </div>
+  ),
+}));
 
 function mkGroup(partial: Partial<GroupRow> & Pick<GroupRow, 'id' | 'name'>): GroupRow {
   return {
@@ -207,66 +226,52 @@ describe('GroupManageList', () => {
     });
   });
 
-  it('换色：自定义原生 change（色板带选择关闭）兜底提交小写 hex（与「应用」等价）', async () => {
+  it('换色：应用内取色器渲染，初始值 = 当前组色映射 hex（语义名→亮色值），hex 文本同步', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
     openMenu('组A');
     fireEvent.click(screen.getByRole('button', { name: '换色' }));
-    fireEvent.change(screen.getByLabelText('自定义组色'), { target: { value: '#ff8800' } });
-
-    await waitFor(() => {
-      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#ff8800' });
-    });
+    // 组A color='accent' → #5e6ad2（globals.css accent-500 亮色值，映射纯函数
+    // groupColorHex 的分支细节见 board.test.ts）
+    expect(screen.getByTestId('hex-color-picker')).toHaveAttribute('data-color', '#5e6ad2');
+    expect(screen.getByText('#5e6ad2')).toBeInTheDocument();
   });
 
-  it('换色：input 事件只更本地预览（hex 文本实时跟随、零 IPC、菜单不关）；change 兜底才提交', async () => {
+  it('换色：取色器 onChange 只更本地预览（hex 文本实时跟随、大写规整小写、零 IPC、菜单不关）', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
     openMenu('组A');
     fireEvent.click(screen.getByRole('button', { name: '换色' }));
-    const colorInput = screen.getByLabelText('自定义组色');
+    const pickerInput = screen.getByLabelText('模拟取色器选色');
 
-    // 拖动中间态连发 input → 预览行 hex 实时跟随，零 IPC，菜单不关
-    fireEvent.input(colorInput, { target: { value: '#00ff00' } });
+    // 拖动中间态连发 onChange → 预览 hex 实时跟随（受控联动），零 IPC，菜单不关
+    fireEvent.change(pickerInput, { target: { value: '#00ff00' } });
     expect(await screen.findByText('#00ff00')).toBeInTheDocument();
-    fireEvent.input(colorInput, { target: { value: '#00cc00' } });
-    expect(await screen.findByText('#00cc00')).toBeInTheDocument();
+    fireEvent.change(pickerInput, { target: { value: '#AB34CD' } });
+    expect(await screen.findByText('#ab34cd')).toBeInTheDocument();
     expect(screen.queryByText('#00ff00')).not.toBeInTheDocument();
+    expect(screen.getByTestId('hex-color-picker')).toHaveAttribute('data-color', '#ab34cd');
     expect(mockApi.taskGroup.update).not.toHaveBeenCalled();
     expect(screen.getByTestId('group-menu-overlay')).toBeInTheDocument();
-
-    // 原生 change（色板确认关闭时触发一次）→ 保存小写 hex + 关菜单
-    fireEvent.change(colorInput, { target: { value: '#00cc00' } });
-    await waitFor(() => {
-      expect(mockApi.taskGroup.update).toHaveBeenCalledTimes(1);
-      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#00cc00' });
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();
-    });
   });
 
-  it('换色：预览旁「应用」按钮以预览 hex 调 updateGroup 并关菜单（显式确认，大写转小写）', async () => {
+  it('换色：「应用」以预览 hex 调 taskGroup.update 并关菜单（唯一提交路径）', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
     openMenu('组A');
     fireEvent.click(screen.getByRole('button', { name: '换色' }));
-    const colorInput = screen.getByLabelText('自定义组色');
-
-    // 未动原生色板前：无预览行、无「应用」按钮
-    expect(screen.queryByRole('button', { name: '应用' })).not.toBeInTheDocument();
-
-    fireEvent.input(colorInput, { target: { value: '#AB34CD' } });
-    // 预览行：hex 小写显示 + 「应用」出现
-    expect(await screen.findByText('#ab34cd')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('模拟取色器选色'), {
+      target: { value: '#00cc00' },
+    });
+    expect(await screen.findByText('#00cc00')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '应用' }));
 
     await waitFor(() => {
       expect(mockApi.taskGroup.update).toHaveBeenCalledTimes(1);
-      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#ab34cd' });
+      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#00cc00' });
     });
     await waitFor(() => {
       expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();

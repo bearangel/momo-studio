@@ -5,6 +5,7 @@ import type { GroupRow, TaskRow } from '../ipc/types';
 import {
   filterBoardTasks,
   groupChipColor,
+  groupColorHex,
   groupColorStyle,
   sortColumn,
   splitLanes,
@@ -184,6 +185,28 @@ describe('groupColorStyle', () => {
     expect(groupColorStyle('#fff')).toBeNull();
     expect(groupColorStyle('#gggggg')).toBeNull();
     expect(groupColorStyle('5e6ad2')).toBeNull();
+  });
+});
+
+describe('groupColorHex（react-colorful 取色器初始值映射）', () => {
+  it('5 语义色名映射到亮色主题 hex（与 globals.css :root 同源）', () => {
+    expect(groupColorHex('accent')).toBe('#5e6ad2');
+    expect(groupColorHex('violet')).toBe('#6e56cf');
+    expect(groupColorHex('success')).toBe('#23835c');
+    expect(groupColorHex('warning')).toBe('#b7791f');
+    expect(groupColorHex('error')).toBe('#d33f49');
+  });
+
+  it('自定义 hex（#rrggbb 小写）原值直返（取色器起点 = 当前自定义色）', () => {
+    expect(groupColorHex('#ff8800')).toBe('#ff8800');
+  });
+
+  it('null / 未知名 / 非小写 6 位 hex → 兜底靛蓝 #5e6ad2（与 accent-500 同值）', () => {
+    expect(groupColorHex(null)).toBe('#5e6ad2');
+    expect(groupColorHex('magenta')).toBe('#5e6ad2');
+    expect(groupColorHex('')).toBe('#5e6ad2');
+    expect(groupColorHex('#5E6AD2')).toBe('#5e6ad2');
+    expect(groupColorHex('#fff')).toBe('#5e6ad2');
   });
 });
 
