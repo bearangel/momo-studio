@@ -15,6 +15,9 @@ describe('BOARD_COLUMNS 契约', () => {
     expect(columnOf('completed')).toBe('done');
     expect(columnOf('failed')).toBe('closed');
   });
+  it('columnOf 未知状态抛错(错误路径)', () => {
+    expect(() => columnOf('bogus' as TaskStatus)).toThrow(/未知任务状态/);
+  });
   it('canDropIntoColumn 与语义表一致(抽验关键格)', () => {
     const s = (x: string) => x as TaskStatus;
     expect(canDropIntoColumn(s('completed'), 'active')).toBe(false); // 终态锁死
