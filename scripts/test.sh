@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
+# scripts/test.sh — 双 workspace 单元测试
+#
+# ABI 前置：vitest 在系统 Node 下加载 better-sqlite3（Node ABI 面）——
+# 上次跑过 dev/打包后二进制是 Electron ABI，直接跑测试必挂 ERR_DLOPEN_FAILED。
+# 注意：仓库根 `pnpm rebuild better-sqlite3` 会静默 no-op（AGENTS.md 陷阱），
+# 唯一可靠切法是包目录 prebuild-install（由 abi.sh 封装，含真实构造验证）。
 set -euo pipefail
-if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh"; nvm use 20 2>/dev/null || nvm use 22 2>/dev/null || true; fi
-NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_MAJOR" -lt 20 ]; then echo "❌ 需要 Node 20+，当前 $(node -v)"; exit 1; fi
-# 检查依赖是否已安装
-if [ ! -d node_modules ]; then echo "❌ node_modules 不存在，请先运行: ./scripts/setup.sh"; exit 1; fi
-
 cd "$(dirname "$0")/.."
-echo "📦 重建 Node.js native binding（vitest 用）..."
-npx pnpm@9.0.0 rebuild better-sqlite3
+# shellcheck disable=SC1091
+source scripts/lib/common.sh
+momo_require_node20
+momo_require_deps
+
+SQLITE_DIR=$(momo_sqlite_pkg_dir)
+[ -n "$SQLITE_DIR" ] || { echo "❌ 未找到 better-sqlite3 包目录（先跑 ./scripts/setup.sh）"; exit 1; }
+export MOMO_SQLITE_PATH="./$SQLITE_DIR"
+if momo_abi_ok node; then
+  echo "✅ native ABI 已是 Node——跳过切换"
+else
+  echo "⚠️ native ABI 不是 Node（上次 dev/打包过？）——切换中..."
+  ./scripts/abi.sh node
+fi
+
 echo "🧪 运行测试..."
 npx pnpm@9.0.0 test

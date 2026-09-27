@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
+# scripts/dev.sh — 开发模式入口（vite HMR + tsc watch + Electron，编排见 electron/scripts/dev.mjs）
+#
+# v2 精简说明：旧版每次启动前全量 build renderer + build electron + electron-rebuild
+# （约 1 分钟）——dev.mjs 用 vite dev server（从不读 renderer/dist）、自带 tsc watch，
+# 三步全部冗余。现在只在 native ABI 面孔不对时才重建（探测 ~1s；不兜住的话
+# dev 启动必挂 ERR_DLOPEN_FAILED）。
 set -euo pipefail
-if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh"; nvm use 20 2>/dev/null || nvm use 22 2>/dev/null || true; fi
-NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_MAJOR" -lt 20 ]; then echo "❌ 需要 Node 20+，当前 $(node -v)"; exit 1; fi
-if [ ! -d node_modules ]; then echo "❌ 请先运行: ./scripts/setup.sh"; exit 1; fi
-
 cd "$(dirname "$0")/.."
+# shellcheck disable=SC1091
+source scripts/lib/common.sh
+momo_require_node20
+momo_require_deps
 
-echo "🔨 构建 renderer..."
-npx pnpm@9.0.0 --filter ./renderer build
+SQLITE_DIR=$(momo_sqlite_pkg_dir)
+[ -n "$SQLITE_DIR" ] || { echo "❌ 未找到 better-sqlite3 包目录（先跑 ./scripts/setup.sh）"; exit 1; }
+EB=$(cd electron && node -p "require('electron')")
+export MOMO_SQLITE_PATH="./$SQLITE_DIR"
+if momo_abi_ok electron "$EB"; then
+  echo "✅ native ABI 已是 Electron——跳过 rebuild"
+else
+  echo "⚠️ native ABI 不是 Electron（上次跑了 vitest？）——切换中..."
+  ./scripts/abi.sh electron
+fi
 
-echo "🔨 构建 electron（确保最新代码编译进 dist/）..."
-npx pnpm@9.0.0 --filter ./electron build
-
-echo "📦 重建 Electron native binding..."
-npx pnpm@9.0.0 --filter ./electron exec -- npx @electron/rebuild -f -w better-sqlite3 -w keytar
-
-echo "🚀 启动开发模式（tsc watch + electron）..."
-npx pnpm@9.0.0 dev
+echo "🚀 启动开发模式（vite HMR + tsc watch + Electron）..."
+exec npx pnpm@9.0.0 dev
