@@ -4,6 +4,8 @@ import { logger } from '../logger';
 import { registerSystemHandlers } from './system.handlers';
 import { registerWorkspaceHandlers } from '../workspace/ipc.handlers';
 import { registerFileHandlers } from '../files/ipc.handlers';
+import { registerAssetHandlers } from '../files/asset-ipc';
+import { registerAssetReadHandlers } from '../files/asset-read-ipc';
 import { registerAgentHandlers } from '../agent/ipc.handlers';
 import { registerStreamIpc } from '../agent/stream-relay';
 import { registerSessionIpcHandlers } from '../im/session.ipc.handlers';
@@ -32,6 +34,10 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerSystemHandlers();
   registerWorkspaceHandlers(opts);
   registerFileHandlers();
+  // 2026-09-26 多模态：asset:saveImage（粘贴/拖入降采样图片内容寻址落盘，spec §5）
+  registerAssetHandlers();
+  // 2026-09-26 多模态：asset:readDataUrl（气泡缩略图读图，spec §10；与 saveImage 同址接线）
+  registerAssetReadHandlers();
   registerAgentHandlers();
   registerStreamIpc();
   registerSessionIpcHandlers();

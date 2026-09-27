@@ -15,6 +15,7 @@
 //   概念退役删除（dispatch 目标会话一律用 executionSessionId）。
 
 import path from 'node:path';
+import { loadElectronApis } from '../electron-access';
 import {
   mergeCapabilities,
   readAllocationLayer,
@@ -33,6 +34,7 @@ import {
 } from '../llm/model-catalog';
 import {
   getProviderPreset,
+  getPresetModel,
   parseThinkingConfig,
   type ThinkingRequest,
   type ThinkingWire,
@@ -268,6 +270,39 @@ export function resolveThinkingConfig(
 }
 
 /**
+ * vision 能力 resolve（spec 2026-09-26-image-input-multimodal §3.3/§7，单点定型）：
+ *   生效能力 = provider_models.vision（用户覆盖，0/1 双向压过预设）
+ *            → PresetModel.vision（presetKey + modelId 命中）
+ *            → false
+ * provider_models 仅按 (provider_id, model_id) 键控（无 workspace 维度），
+ * 与 resolveModelLimits/resolveThinkingConfig 同款查询形态。
+ * DB 查询失败降级 preset-only（warn + 永不抛错——vision 是能力提示，
+ * 不值得炸 spawn / 成员列表）。
+ */
+export function resolveVisionCapability(providerId: string, modelId: string): boolean {
+  let row: { vision: number | null } | undefined;
+  try {
+    row = getDb()
+      .prepare('SELECT vision FROM provider_models WHERE provider_id = ? AND model_id = ?')
+      .get(providerId, modelId) as { vision: number | null } | undefined;
+  } catch (err) {
+    logger.warn('provider_models vision 查询失败，降级预设表判定', {
+      providerId,
+      model: modelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  // 三态（2026-09-26 P0 修复）：1=用户显式开 / 0=用户显式关（双向覆盖预设）/
+  // NULL 或无行=未决定 → 预设表。旧行 0 来自列默认而非用户意愿（聚合商标题行
+  // 如 zai-org/GLM-5.3 曾被误判显式关），迁移 046 已将其归 NULL。
+  if (row?.vision === 1) return true;
+  if (row?.vision === 0) return false;
+  const provider = getProvider(providerId);
+  if (!provider?.presetKey) return false;
+  return getPresetModel(provider.presetKey, modelId)?.vision === true;
+}
+
+/**
  * 构建完整的 AgentRuntimeOpts，供 spawnAgent 使用。
  *
  * v1.3 改造：
@@ -310,6 +345,10 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
 
   // 思维配置（spec §4）：同 resolve 链单点解析，随 AGENT_CONFIG 定型
   const thinking = resolveThinkingConfig(def, provider);
+
+  // vision 能力（spec 2026-09-26 §7）：spawn 时快照进 AGENT_CONFIG——运行时
+  // 单一真相源（防换模型竞态，§8）
+  const vision = resolveVisionCapability(provider.id, def.modelName);
 
   // 会话快照：dispatch 注入条件 + subAgents（spec §4.7；spawn 时点定型）
   const { isLeader, subAgents } = buildDispatchSnapshot(workspaceId, instanceId);
@@ -354,5 +393,12 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     modelMaxTokensParam: resolveMaxTokensParam(provider.platform, def.modelName, provider.baseUrl),
     // 思维配置（spawn 时快照；mode=auto 请求层不发参数）
     thinking,
+    // vision 能力（spawn 时快照；运行时剥图/降级注入的唯一判定位）
+    vision,
+    // 子进程落盘基准（apply_patch 备份等）：主进程在此单点解析 userData 绝对
+    // 路径定型——子进程无 electron API。本模块仅主进程调用，但走 loadElectronApis
+    // 惰性取用（顶层 import 会让 12 个无 electron mock 的 buildSpawnOpts 测试
+    // 拿到 undefined app；主进程真实调用时 API 齐备）
+    userDataDir: loadElectronApis().app?.getPath('userData'),
   };
 }

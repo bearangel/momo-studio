@@ -11,10 +11,16 @@
 // v2.11 Task 11：
 //   - owner 消息 context chip 渲染（技能纯展示 / 文件点击 file:read 打开编辑器 tab）
 //   - 错误路径：读取失败降级 disabled、损坏 JSON 不崩、非法项过滤、workspaceId 缺失
+//
+// 2026-09-26 多模态 Task 10：
+//   - context_json.images 缩略图行（ipc.asset.readDataUrl mock → data URL img）
+//   - 读失败 / workspaceId 缺失 → ImageOff「图片不可用」降级
+//   - 无图消息零变化（回归锁）+ 模块级缓存去重（同 path 只发一次 IPC）
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ImMessage } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
+import { __resetAssetDataUrlCacheForTests } from '../../lib/asset-data-url';
 
 // 可控 mock streams（测试注入 streaming entry）
 const mockStreams = new Map<string, StreamState>();
@@ -46,6 +52,9 @@ vi.mock('./AgentStreamBubble', () => ({
 const mockApi = {
   file: {
     read: vi.fn(),
+  },
+  asset: {
+    readDataUrl: vi.fn(),
   },
 };
 
@@ -379,5 +388,123 @@ describe('MessageBubble context chip 渲染（v2.11 Task 11）', () => {
     });
     expect(mockApi.file.read).not.toHaveBeenCalled();
     expect(useEditorStore.getState().activeTab).toBeNull();
+  });
+});
+
+describe('MessageBubble context 缩略图（2026-09-26 多模态 Task 10）', () => {
+  const IMG = { path: '.momo/assets/0123456789ab.png', w: 512, h: 384 };
+
+  function imgMsg(overrides: Partial<ImMessage> = {}): ImMessage {
+    return makeMsg('m1', {
+      sender: 'owner',
+      body: '看这张图',
+      workspaceId: 'ws-1',
+      contextJson: JSON.stringify({ skills: [], files: [], images: [IMG] }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    mockStreams.clear();
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    mockApi.file.read.mockReset();
+    mockApi.asset.readDataUrl.mockReset();
+    __resetAssetDataUrlCacheForTests();
+  });
+
+  it('images 在 context_json → 渲染缩略图 img，src 为 data URL，alt 为 path', async () => {
+    mockApi.asset.readDataUrl.mockResolvedValue('data:image/png;base64,aGVsbG8=');
+    render(<MessageBubble message={imgMsg()} isSelf={true} />);
+
+    const img = await waitFor(() => {
+      const el = screen.getByAltText(IMG.path);
+      expect(el).toBeInTheDocument();
+      return el;
+    });
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
+    expect(screen.getByTestId('message-context-images')).toBeInTheDocument();
+    expect(screen.getByText('看这张图')).toBeInTheDocument();
+    expect(mockApi.asset.readDataUrl).toHaveBeenCalledWith('ws-1', IMG.path);
+  });
+
+  it('读取 reject → ImageOff「图片不可用」降级（spec §11 删图场景）', async () => {
+    mockApi.asset.readDataUrl.mockRejectedValue(new Error('文件不存在'));
+    render(<MessageBubble message={imgMsg()} isSelf={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('图片不可用')).toBeInTheDocument();
+    });
+    expect(screen.queryByAltText(IMG.path)).not.toBeInTheDocument();
+  });
+
+  it('workspaceId 缺失 → 不发 IPC 直接降级「图片不可用」', async () => {
+    render(<MessageBubble message={imgMsg({ workspaceId: null })} isSelf={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('图片不可用')).toBeInTheDocument();
+    });
+    expect(mockApi.asset.readDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('无 images 字段（旧消息）→ 不渲染缩略图行，chips/body 照旧（零变化回归锁）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: 'ws-1',
+      contextJson: JSON.stringify({
+        skills: [{ slug: 'code-review', name: '代码审查' }],
+        files: [{ path: 'src/a.ts' }],
+      }),
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-images')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-context-chips')).toBeInTheDocument();
+    expect(mockApi.asset.readDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('images 非法形状（缺 w/h）→ parseMessageContext 判无图，不渲染缩略图行', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner', body: 'x', workspaceId: 'ws-1',
+      contextJson: JSON.stringify({ skills: [], files: [], images: [{ path: 'a.png' }] }),
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-images')).not.toBeInTheDocument();
+    expect(mockApi.asset.readDataUrl).not.toHaveBeenCalled();
+  });
+
+  it('模块级缓存：同 path 的两个气泡只发一次 IPC（防 stream 重渲染风暴）', async () => {
+    mockApi.asset.readDataUrl.mockResolvedValue('data:image/png;base64,aGVsbG8=');
+    const { rerender } = render(
+      <>
+        <MessageBubble message={imgMsg({ id: 'm1' })} isSelf={true} />
+        <MessageBubble message={imgMsg({ id: 'm2' })} isSelf={true} />
+      </>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByAltText(IMG.path)).toHaveLength(2);
+    });
+
+    // 触发一轮重渲染（缓存命中路径：不再新增 IPC 调用）
+    rerender(
+      <>
+        <MessageBubble message={imgMsg({ id: 'm1' })} isSelf={true} />
+        <MessageBubble message={imgMsg({ id: 'm2' })} isSelf={true} />
+      </>,
+    );
+    expect(mockApi.asset.readDataUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('多图：每张独立渲染缩略图', async () => {
+    const images = [
+      { path: '.momo/assets/aaaaaaaaaaaa.png', w: 100, h: 100 },
+      { path: '.momo/assets/bbbbbbbbbbbb.jpg', w: 200, h: 100 },
+    ];
+    mockApi.asset.readDataUrl.mockImplementation(async (_ws: string, p: string) =>
+      `data:image/*;base64,${p}`,
+    );
+    render(<MessageBubble message={imgMsg({
+      contextJson: JSON.stringify({ skills: [], files: [], images }),
+    })} isSelf={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByAltText(images[0]!.path)).toBeInTheDocument();
+      expect(screen.getByAltText(images[1]!.path)).toBeInTheDocument();
+    });
   });
 });

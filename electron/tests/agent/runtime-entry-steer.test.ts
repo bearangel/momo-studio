@@ -479,3 +479,199 @@ describe('runChatLoop abort 语义回归（v2.3.1 留位，abort 仍正交）', 
     expect(supplement).toBeDefined();
   });
 });
+
+// === 多模态 steer 图片消费（Task 9 D6，spec §7/§9 同 vision 门 + caps）===
+// steer 载荷 ExpandedContext.images 此前无消费点（中途补充图静默丢）——现在
+// vision=true 附到 steer 合成 user 消息；vision=false 注入降级行（与 T8 同文案）。
+describe('runChatLoop steer 图片消费（Task 9 D6）', () => {
+  const originalSend = process.send;
+
+  /** 带 1 图的 ExpandedContext（线协议形状） */
+  const steerImgContext = {
+    skills: [],
+    files: [],
+    images: [{ path: 'assets/s1.png', mime: 'image/png', base64: 'aW1n', w: 320, h: 240 }],
+    droppedImages: [],
+  };
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    __setMemoryProviderForTest(stubProvider);
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+  });
+
+  /** 两轮 chatStream：round1 末注入带图 steer，round2 捕获 messages */
+  function twoRoundSteer(round2Messages: LLMMessage[]): void {
+    let callIndex = 0;
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        callIndex++;
+        if (callIndex === 1) {
+          yield { type: 'text', content: '先总结' };
+          yield {
+            type: 'tool_use',
+            toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
+          };
+          yield { type: 'done', finishReason: 'tool_use' };
+          emitChildMessage({
+            type: 'steer',
+            streamSessionId: 's-steer',
+            body: '补这张图',
+            context: steerImgContext,
+          });
+          return;
+        }
+        Object.assign(round2Messages, messages);
+        yield { type: 'text', content: '收到补充' };
+        yield { type: 'done', finishReason: 'stop' };
+      }) as never,
+    });
+  }
+
+  it('vision=true → steer 合成 user 消息携带 images（provider 可见）', async () => {
+    const round2Messages: LLMMessage[] = [];
+    twoRoundSteer(round2Messages);
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+
+    await runChatLoop(
+      '!room:t', '初始问题', makeConfig({ vision: true }), makeContext(), stats, undefined, undefined, 's-steer',
+    );
+
+    const supplement = round2Messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充] 补这张图'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.images).toEqual([
+      { mime: 'image/png', base64: 'aW1n', w: 320, h: 240, path: 'assets/s1.png' },
+    ]);
+    // 正文无降级行（vision 分支干净）
+    expect(supplement!.content).not.toContain('[图片已省略');
+  });
+
+  it('vision=false → 剥图 + 降级行（[图片已省略：当前模型不支持视觉]），无 images 字段', async () => {
+    const round2Messages: LLMMessage[] = [];
+    twoRoundSteer(round2Messages);
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+
+    await runChatLoop(
+      '!room:t', '初始问题', makeConfig({ vision: false }), makeContext(), stats, undefined, undefined, 's-steer',
+    );
+
+    const supplement = round2Messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充] 补这张图'),
+    );
+    expect(supplement).toBeDefined();
+    expect(supplement!.images).toBeUndefined();
+    expect(supplement!.content).toContain('[图片已省略：当前模型不支持视觉]');
+  });
+
+  it('无图 steer 载荷 → 合成消息逐字节不变（零回归锁）', async () => {
+    let callIndex = 0;
+    let round2Messages: LLMMessage[] = [];
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        callIndex++;
+        if (callIndex === 1) {
+          yield { type: 'text', content: '先总结' };
+          yield {
+            type: 'tool_use',
+            toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
+          };
+          yield { type: 'done', finishReason: 'tool_use' };
+          // 旧线协议：context 无 images/droppedImages 字段
+          emitChildMessage({
+            type: 'steer',
+            streamSessionId: 's-steer',
+            body: '纯文本补充',
+            context: { skills: [], files: [] },
+          });
+          return;
+        }
+        round2Messages = [...messages];
+        yield { type: 'text', content: '收到补充' };
+        yield { type: 'done', finishReason: 'stop' };
+      }) as never,
+    });
+
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+    await runChatLoop(
+      '!room:t', '初始问题', makeConfig({ vision: true }), makeContext(), stats, undefined, undefined, 's-steer',
+    );
+
+    const supplement = round2Messages.find(
+      (m) => m.role === 'user' && m.content.startsWith('[用户中途补充]'),
+    );
+    expect(supplement).toEqual({ role: 'user', content: '[用户中途补充] 纯文本补充' });
+  });
+
+  it('fix I1 预算共享：当前轮 4 图 + steer 带 5 图 → steer 只附余量 2，请求总量 ≤6', async () => {
+    // 5 图 steer 载荷（fix I1 红灯形：旧实现 slice(0,6) 会附满 5 → 总 9 破 6 上限）
+    const fiveImgContext = {
+      skills: [],
+      files: [],
+      images: [1, 2, 3, 4, 5].map((n) => ({
+        path: `assets/s${n}.png`, mime: 'image/png', base64: `b${n}`, w: 100, h: 100,
+      })),
+      droppedImages: [],
+    };
+    const fourTurnImages = [1, 2, 3, 4].map((n) => ({
+      path: `assets/t${n}.png`, mime: 'image/png', base64: `t${n}`, w: 100, h: 100,
+    }));
+    let callIndex = 0;
+    let round2Messages: LLMMessage[] = [];
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        callIndex++;
+        if (callIndex === 1) {
+          yield { type: 'text', content: '先总结' };
+          yield {
+            type: 'tool_use',
+            toolCall: { id: 'c1', name: 'compact', arguments: { summary: 'S'.repeat(60) } },
+          };
+          yield { type: 'done', finishReason: 'tool_use' };
+          emitChildMessage({
+            type: 'steer', streamSessionId: 's-steer', body: '再看五张', context: fiveImgContext,
+          });
+          return;
+        }
+        round2Messages = [...messages];
+        yield { type: 'text', content: '收到补充' };
+        yield { type: 'done', finishReason: 'stop' };
+      }) as never,
+    });
+
+    const stats = { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean };
+    await runChatLoop(
+      '!room:t', '初始问题', makeConfig({ vision: true }), makeContext(), stats,
+      undefined, undefined, 's-steer',
+      undefined, // resumeTurn
+      undefined, // historyPrefix
+      // T8 当前轮载荷：4 图（vision=true 附到当前轮 user 消息）
+      { images: fourTurnImages, droppedImages: [] },
+    );
+
+    const total = round2Messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+    expect(total).toBeLessThanOrEqual(6);
+    const supplement = round2Messages.find(
+      (m) => m.role === 'user' && m.content.includes('[用户中途补充] 再看五张'),
+    );
+    // 余量 = 6 - 4（当前轮）= 2 → steer 只附前 2 张
+    expect(supplement!.images).toHaveLength(2);
+    expect(supplement!.images!.map((i) => i.path)).toEqual(['assets/s1.png', 'assets/s2.png']);
+    // 当前轮 4 图原样保留
+    const current = round2Messages.find((m) => m.role === 'user' && m.content === '初始问题');
+    expect(current!.images).toHaveLength(4);
+  });
+});

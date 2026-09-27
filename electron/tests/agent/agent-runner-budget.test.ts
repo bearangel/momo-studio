@@ -185,3 +185,110 @@ describe('AgentRunner 会话工具预算接线（v2.2 修复）', () => {
     expect(payload).not.toHaveProperty('maxToolCalls');
   });
 });
+
+// ─── task-config IPC 载荷接线锁（多模态 Task 8 fix C1）─────────────────────────
+//
+// 根因（boundary-rules 铁律 4 半边修改）：routeUserChat 构造 TaskConfig.visionHint
+// 后，executeTask 的 child.send 载荷漏转发该字段——Router 侧测试 mock 掉
+// executeTask、runtime 侧测试直调 runTaskChatLoop，两端的绿都绕过了这一跳，
+// spec §8 场景 2（leader 路由提示）在生产静默失效。本 describe 在跳的发送面
+// 做字段级清点，摘掉任一透传该锁必红。
+describe('AgentRunner task-config 载荷接线锁（多模态 Task 8）', () => {
+  beforeEach(() => {
+    setupDb();
+  });
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.AP_USER_DATA_DIR;
+  });
+
+  it('TaskConfig.vision → task-config 载荷透传（2026-09-26 P0 每消息覆盖）；缺省无字段', async () => {
+    const session = insertSession({ workspaceId: 'ws1', title: '会话' });
+    const { runner, child } = await mkRunner();
+
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: session.id,
+      body: '看图',
+      streamSessionId: 'ss-vision-hop-1',
+      vision: true,
+    });
+    expect(taskConfigPayload(child)).toMatchObject({ vision: true });
+
+    const { runner: r2, child: c2 } = await mkRunner();
+    await r2.executeTask({
+      taskId: null,
+      executionSessionId: session.id,
+      body: '普通消息',
+      streamSessionId: 'ss-vision-hop-2',
+    });
+    expect('vision' in taskConfigPayload(c2)).toBe(false);
+  });
+
+  it('TaskConfig 携带 visionHint → task-config 载荷透传 visionHint.members（C1 回归锁）', async () => {
+    const session = insertSession({ workspaceId: 'ws1', title: '团队会话' });
+    const { runner, child } = await mkRunner();
+
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: session.id,
+      body: '看图',
+      streamSessionId: 'ss-hint-hop-1',
+      visionHint: {
+        members: [
+          { name: '千里眼', model: 'glm-4.6v' },
+          { name: '二郎神', model: 'gpt-5.2' },
+        ],
+      },
+    });
+
+    expect(taskConfigPayload(child)).toMatchObject({
+      type: 'task-config',
+      streamSessionId: 'ss-hint-hop-1',
+      visionHint: {
+        members: [
+          { name: '千里眼', model: 'glm-4.6v' },
+          { name: '二郎神', model: 'gpt-5.2' },
+        ],
+      },
+    });
+  });
+
+  it('未提供 visionHint → 载荷不携带该字段（条件展开，不污染 IPC wire）', async () => {
+    const session = insertSession({ workspaceId: 'ws1', title: '普通会话' });
+    const { runner, child } = await mkRunner();
+
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: session.id,
+      body: 'hi',
+      streamSessionId: 'ss-hint-hop-2',
+    });
+
+    expect(taskConfigPayload(child)).not.toHaveProperty('visionHint');
+  });
+
+  it('TaskConfig 携带 context（含 images/droppedImages）→ 载荷字段级透传（图片不清零）', async () => {
+    const session = insertSession({ workspaceId: 'ws1', title: '带图会话' });
+    const { runner, child } = await mkRunner();
+
+    const context = {
+      skills: [],
+      files: [],
+      images: [
+        { path: 'a.png', mime: 'image/png', base64: 'QVFB', w: 100, h: 80 },
+      ],
+      droppedImages: ['bad.png'],
+    };
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: session.id,
+      body: '看图',
+      streamSessionId: 'ss-hint-hop-3',
+      context,
+    });
+
+    expect(taskConfigPayload(child).context).toEqual(context);
+  });
+});

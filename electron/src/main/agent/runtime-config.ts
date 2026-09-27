@@ -78,6 +78,18 @@ export interface AgentRuntimeOpts {
   // === 供应商预设（spec 2026-09-09-provider-presets）===
   /** 思维模式配置（resolveThinkingConfig 产出；缺省=不发任何 thinking 参数） */
   thinking?: ThinkingRequest;
+  /**
+   * vision 能力（resolveVisionCapability 产出，spec 2026-09-26-image-input-multimodal
+   * §7）：spawn 时快照，运行时图片剥除/降级注入的唯一判定位。
+   * 缺省 = false（旧 spawn 站点 / 测试构造的载荷兼容）。
+   */
+  vision?: boolean;
+  /**
+   * 主进程 userData 目录绝对路径（spawn-helpers 从 electron app.getPath 注入）。
+   * 子进程无 electron API——apply_patch 备份目录等落盘基准靠此字段定型；
+   * 缺省时消费方回退 os.tmpdir()（旧 AGENT_CONFIG / 测试兼容）。
+   */
+  userDataDir?: string;
 }
 
 /** runtime-spawner 通过 AGENT_CONFIG 传入的完整配置 */
@@ -124,7 +136,7 @@ export interface RuntimeConfig {
   // === v1.5 工具库共享上下文 ===
   /** 当前活跃的 Matrix room ID；运行时未必可知，FileTools 不消费，留空字符串兼容 */
   roomId?: string;
-  /** 流式会话 ID（每条用户消息分配新 UUID）；同 roomId，FileTools 不消费 */
+  /** 流式会话 ID（每条用户消息分配新 UUID）；同 roomId——读账本等按会话维度消费 roomId */
   streamSessionId?: string;
   /** 父 agent 流式会话 ID（v1.4 dispatch 嵌套场景）；非嵌套时为 undefined */
   parentStreamSessionId?: string;
@@ -151,6 +163,14 @@ export interface RuntimeConfig {
   modelMaxTokensParam?: 'max_tokens' | 'max_completion_tokens';
   /** 思维模式配置；undefined=不发任何 thinking 参数（旧配置兼容） */
   thinking?: ThinkingRequest;
+  /**
+   * vision 能力（AGENT_CONFIG 定型快照，spec 2026-09-26-image-input-multimodal §7）。
+   * 类型可选以兼容旧 wire 载荷与存量测试构造；parseConfig 产物恒携带解析值
+   * （缺省/非布尔 → false），消费方一律 `vision === true` 判定。
+   */
+  vision?: boolean;
+  /** 主进程 userData 绝对路径（AGENT_CONFIG 定型）；缺省=消费方回退 os.tmpdir() */
+  userDataDir?: string;
 }
 
 /** 主进程展开后下发给子进程的上下文项——skill（loadFull 正文） */
@@ -167,10 +187,28 @@ export interface ExpandedFileItem {
   content: string | null;
 }
 
+/** 主进程展开后下发给子进程的上下文项——图片（base64 内联；失败/超限项不进数组，见 ExpandedContext.droppedImages） */
+export interface ExpandedImageItem {
+  /** workspace 相对路径（占位渲染 / 调试回溯） */
+  path: string;
+  /** 扩展名映射产物（image/png · image/jpeg · image/webp · image/gif · image/bmp） */
+  mime: string;
+  /** 图片字节 base64（单图文本 ≤8MB，expander 契约） */
+  base64: string;
+  /** 降采样后宽度 px（token 估算消费，spec §9） */
+  w: number;
+  /** 降采样后高度 px */
+  h: number;
+}
+
 /** task-config / steer 线协议的上下文载荷（不落库、不回 renderer） */
 export interface ExpandedContext {
   skills: ExpandedSkillItem[];
   files: ExpandedFileItem[];
+  /** 图片展开成功项（多模态 Task 5；旧消息 / 无图 → 空数组） */
+  images: ExpandedImageItem[];
+  /** 被剔除图片的 path 清单（读取失败 / 超限 / 路径非法 / 未知扩展名）；runtime 注入 `[图片加载失败: path]` 占位（Task 8 消费） */
+  droppedImages: string[];
 }
 
 /**
@@ -209,11 +247,26 @@ export interface TaskConfig {
   /** 消息 metadata（mentions 等）；当前 runTaskChatLoop 不消费，留给后续 RouterService 扩展 */
   mentions?: string[];
   /**
+   * 多模态能力（2026-09-26 P0 修复）：主进程按 (provider, model) 现解析的
+   * vision 位，每条消息派发时随 task-config 下发——用户改「视觉输入」开关或
+   * 模型目录后**下一条消息即生效**，不受 warm runtime AGENT_CONFIG 定型影响
+   * （同 v2.2 maxToolCalls 接线教义）。缺省时 runtime 回退 AGENT_CONFIG.vision
+   * 快照；仅带图消息附带（无图零开销）。
+   */
+  vision?: boolean;
+  /**
    * v2.11 输入框上下文（spec 2026-09-16 §5.4）：主进程展开后的用户指定
    * skill 正文与文件内容。设置时 runTaskChatLoop 把 <user-context> 块包装进
    * 本轮用户正文（一次性注入，不落库）。
    */
   context?: ExpandedContext;
+  /**
+   * 多模态团队路由提示（spec 2026-09-26-image-input-multimodal §8 场景 2）：
+   * 团队协作会话 + 接待者模型非 vision + 消息带图 + 存在其它 vision 成员时由
+   * routeUserChat 构造（成员 vision 与 session-ops 同源 resolveVisionCapability
+   * 解析）。runtime 据此向 leader 注入一次性系统提示（不落库）。缺省不附。
+   */
+  visionHint?: { members: Array<{ name: string; model: string }> };
   /**
    * dispatch 模式：父 agent（PM）派来的任务上下文。
    * 设置时本 task 是 sub-agent 收到 PM 的 dispatch；
@@ -369,6 +422,13 @@ export function parseConfig(raw: unknown): RuntimeConfig {
       r.modelMaxTokensParam === 'max_completion_tokens' ? 'max_completion_tokens' : undefined,
     // 供应商预设：thinking 结构守卫失败 → undefined（不发参数，fail-safe）
     thinking: isThinkingRequest(r.thinking) ? r.thinking : undefined,
+    // vision：缺省/非布尔按 false（旧 AGENT_CONFIG 兼容 + fail-safe 剥图）
+    vision: r.vision === true,
+    // 子进程落盘基准（apply_patch 备份等）：仅非空字符串透传，否则回退消费方缺省
+    userDataDir:
+      typeof r.userDataDir === 'string' && r.userDataDir.length > 0
+        ? r.userDataDir
+        : undefined,
   };
 }
 

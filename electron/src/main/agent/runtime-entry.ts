@@ -18,7 +18,7 @@ import path from 'node:path';
 import { WorkspaceFS } from '../files/workspace-fs';
 import { createLLMProvider, type LLMMessage, type LLMToolCall, type LLMToolDef } from './llm-provider';
 import type { ThinkingRequest } from '../llm/provider-presets';
-import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext } from './runtime-config';
+import { parseConfig, type RuntimeConfig, type TaskConfig, type ExpandedContext, type ExpandedImageItem } from './runtime-config';
 import { formatBudgetHint, formatDispatchHint, formatTaskHint, buildMandateHint, formatClockHint, formatWorkspaceHygieneHint } from './prompt-hints';
 import { logToolCall } from './tools/shared/audit';
 import { assertToolAllowed } from './tools/shared/permission';
@@ -47,9 +47,11 @@ import { sendStreamChunk, type StreamChunk } from './stream-chunk';
 // memory / storage/db 运行时引入同源，无新增耦合
 import {
   rebuildSessionContext,
+  applyRecentImageReplay,
   type RebuiltTurn,
   type RebuiltSessionContext,
 } from './turn-reconstructor';
+import { MAX_IMAGES_PER_REQUEST } from '../im/context-expander';
 import { discoverMcpTools, requestMcpCall } from './mcp-bridge';
 import { McpToolError } from '../mcp/types';
 import { buildTaskReply } from './dispatch';
@@ -85,6 +87,7 @@ import { initBrowserTools } from './tools/browser-tools';
 // （grants 随 agent-runner 任务生命周期 + 信任卡推送需 webContents），子进程
 // shell-tools 经此桥往返 effective / wait 两 op
 import { handleNetTrustOpResult } from './tools/net-trust-bridge';
+import { handleProcessOpResult } from './tools/process-bridge';
 // v2.11 输入框上下文（spec 2026-09-16 §5.5）：task-config.context / steer.context
 // 经 renderTurnBody 包装进本轮用户正文；isExpandedContext 收窄 steer 载荷形状
 import { renderTurnBody, isExpandedContext } from './turn-context';
@@ -186,6 +189,39 @@ function buildTodoReconcileNotice(items: Array<{ subject: string }>): string {
  */
 const OVERFLOW_ERROR_RE = /context|token.{0,20}(limit|exceed)|maximum.{0,20}length|too (long|many)/i;
 
+/**
+ * 流中断错误特征（2026-09-26 terminated P0）：undici body 中断（terminated）/
+ * 连接层闪断。命中即指数退避重发本轮请求——已完成工具轮次全在 transcript，
+ * 仅当前生成步重来；供应商网关 60s 空闲掐流与网络抖动全覆盖。
+ * ECONNREFUSED 不入列（服务不可达——建连层 fetchWithRetry 已有独立重试）。
+ */
+const STREAM_INTERRUPTED_RE =
+  /terminated|ECONNRESET|EPIPE|socket hang up|other side closed/i;
+/** 单一生成步的流中断重试上限（每步独立计数；回合内多步各自享有全额度） */
+const STREAM_RETRY_MAX = 3;
+/** 重试退避：2s → 8s → 30s（网关空闲掐流后立即重发通常已恢复）；测试可注入缩短 */
+let streamRetryDelaysMs: readonly number[] = [2_000, 8_000, 30_000];
+
+/** 测试钩子：缩短重试退避（生产禁用——经模块导出面约束） */
+export function __setStreamRetryDelaysForTest(delays: readonly number[]): void {
+  streamRetryDelaysMs = delays;
+}
+
+/** 可中断休眠（流中断重试退避用）：abort 即时返回，由下一轮循环的 abort 分支收口 */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
 /** runCompaction 的结果：成功携带计数与双态判定（tool result 文案消费） */
 type CompactionRunResult =
   | { ok: true; beforeCount: number; tailCount: number; mandateGated: boolean; pendingUser: boolean }
@@ -253,6 +289,8 @@ async function main(): Promise<void> {
       handleBrowserOpResult(msg);
     } else if (m.type === 'net-trust-op:result') {
       handleNetTrustOpResult(msg);
+    } else if (m.type === 'process-op:result') {
+      handleProcessOpResult(msg);
     } else if (m.type === 'compaction:result') {
       handleCompactionResultIpc(msg);
     } else if (m.type === 'shutdown') {
@@ -383,6 +421,101 @@ export interface RunChatLoopStats {
 }
 
 /**
+ * 图片输入回合载荷（多模态 Task 8，spec 2026-09-26-image-input-multimodal §7/§8）。
+ * runTaskChatLoop 从 TaskConfig.context（宽进归一，旧线载荷缺字段按空数组）与
+ * TaskConfig.visionHint 组装，透传给 runChatLoop 做当前轮一次性注入。
+ */
+export interface ImageTurnPayload {
+  /** 展开成功的图片（base64 内联；vision=true 时附到当前轮 user LLMMessage） */
+  images: ExpandedImageItem[];
+  /** 读取失败/超限被剔除的 path 清单（正文注入占位行） */
+  droppedImages: string[];
+  /** 团队路由提示（leader 非 vision 且存在 vision 成员时 routeUserChat 附带） */
+  visionHint?: TaskConfig['visionHint'];
+}
+
+/**
+ * 图片降级/路由提示文本组装（纯函数，spec §7 非 vision 降级 + §8 场景 2）：
+ *   - 非 vision 且带图：N 张 N 条 `[图片已省略：当前模型不支持视觉]` 行
+ *   - droppedImages：每条一行 `[图片加载失败: path]` 占位（vision 两分支都注入）
+ *   - visionHint 在场且非 vision 且带图：leader 系统提示行（成员「名」（模型）拼接）
+ * 返回空串 = 无任何注入（无图消息字节零变化）。
+ * 产物只作当前轮 user 消息尾注（LLM 请求组装 seam，一次性注入不落库）。
+ */
+export function buildImageTurnNotice(
+  imageTurn: ImageTurnPayload | undefined,
+  vision: boolean,
+): string {
+  if (!imageTurn) return '';
+  const lines: string[] = [];
+  if (!vision && imageTurn.images.length > 0) {
+    for (let i = 0; i < imageTurn.images.length; i++) {
+      lines.push('[图片已省略：当前模型不支持视觉]');
+    }
+  }
+  for (const p of imageTurn.droppedImages) {
+    lines.push(`[图片加载失败: ${p}]`);
+  }
+  if (
+    !vision &&
+    imageTurn.images.length > 0 &&
+    imageTurn.visionHint &&
+    imageTurn.visionHint.members.length > 0
+  ) {
+    const paths = imageTurn.images.map((im) => im.path).join('、');
+    const members = imageTurn.visionHint.members
+      .map((m) => `「${m.name}」（${m.model}）`)
+      .join('、');
+    lines.push(
+      `[系统提示：用户消息附带 ${imageTurn.images.length} 张图片（${paths}）。` +
+        `你当前模型不支持视觉。团队成员${members}可识别图片——` +
+        `直接 dispatch 任务给它，子任务会自动附上会话近期图片。]`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * resume 重建段的图片门控（Task 9 D2，spec §9「断点续跑」）。
+ *
+ * 断点消息是 resume 语义的「当前轮」：rebuildTurn 侧无条件保留 base64 载荷
+ * （主进程不判能力），此处按 AGENT_CONFIG.vision 定型——
+ *   vision=true  → 保留 images，全局钳制 ≤ MAX_IMAGES_PER_REQUEST（防御
+ *                  rebuildTurn 侧未来引入多消息附图时的预算漂移）
+ *   vision=false → 剥除 images + 首个带图 user 消息尾注降级行（文案与 T8
+ *                  buildImageTurnNotice 同源，模型可知图被省略）
+ * 无图载荷原引用返回（逐字节不变，不触发浅拷贝）。
+ */
+function gateResumeTurnImages(messages: LLMMessage[], vision: boolean): LLMMessage[] {
+  if (!messages.some((m) => m.images && m.images.length > 0)) return messages;
+  if (vision) {
+    let budget = MAX_IMAGES_PER_REQUEST;
+    return messages.map((m) => {
+      if (!m.images || m.images.length === 0) return m;
+      const take = m.images.slice(0, Math.max(0, budget));
+      budget -= take.length;
+      return take.length === m.images.length ? m : { ...m, images: take };
+    });
+  }
+  let noticed = false;
+  return messages.map((m) => {
+    if (!m.images || m.images.length === 0) return m;
+    const rest: LLMMessage = { role: m.role, content: m.content };
+    if (m.toolCallId !== undefined) rest.toolCallId = m.toolCallId;
+    if (m.toolCalls !== undefined) rest.toolCalls = m.toolCalls;
+    if (!noticed && m.role === 'user') {
+      noticed = true;
+      const lines = Array.from(
+        { length: m.images.length },
+        () => '[图片已省略：当前模型不支持视觉]',
+      ).join('\n');
+      rest.content = m.content === '' ? lines : `${m.content}\n${lines}`;
+    }
+    return rest;
+  });
+}
+
+/**
  * 完整 chat loop（流式）：组装上下文 → 循环调用 chatStream → 逐 chunk 通过
  * process.send 推送（renderer 中继 + SQLite 落盘由主进程 chunk 路径承载）。
  *
@@ -426,6 +559,13 @@ export async function runChatLoop(
    * 同现时 resumeTurn 优先、前缀忽略 + warn。缺省时行为与历史版本逐字节一致。
    */
   historyPrefix?: LLMMessage[],
+  /**
+   * 图片输入回合载荷（多模态 Task 8，spec 2026-09-26-image-input-multimodal
+   * §7/§8）：vision=true 时 images 附到当前轮 user LLMMessage（path 剥除）；
+   * vision=false 时正文尾注降级提示 + visionHint 的 leader 系统提示（一次性
+   * 注入，不落库）。缺省时行为与历史版本逐字节一致（无图消息零变化）。
+   */
+  imageTurn?: ImageTurnPayload,
 ): Promise<string> {
   // 供应商预设：思维配置随 AGENT_CONFIG 定型（缺省 = 不发参数）；
   // P0-3：outputTokens 透传为 LLM max_tokens（model-catalog 单点配置，
@@ -678,10 +818,42 @@ export async function runChatLoop(
   // （首条即原 user 消息，T1 保证），不追加 currentBody（防指令重复）；
   // 重建段为空（degenerate 兜底，等价全新回合）或无 resumeTurn → currentBody
   // 作为本轮 user 消息（与历史行为逐字节一致）
+  //
+  // 多模态（Task 8，spec 2026-09-26 §7/§8）：全新回合的当前轮 user 消息在此
+  // 一次性注入图片与降级提示。注入点 = LLM 请求组装 seam（本数组只进
+  // llm.chatStream 请求），与 renderTurnBody 同一持久化语义——用户消息行已由
+  // 主进程在派发前落库，runtime 侧的任何追加都不回流 DB / chunk 线协议（不落
+  // 库）；mandate.userBody 不受染（系统提示段与溢出重放保持原文）。resume
+  // 重建段 verbatim 拼接不经此分支（近 2 轮图片恢复归 Task 9）。
+  const imageAttach =
+    imageTurn && config.vision === true && imageTurn.images.length > 0
+      ? imageTurn.images.map(({ mime, base64, w, h }) => ({ mime, base64, w, h }))
+      : undefined;
+  const imageNotice = buildImageTurnNotice(imageTurn, config.vision === true);
   const turnMessages: LLMMessage[] =
     resumeTurn && resumeTurn.messages.length > 0
-      ? resumeTurn.messages
-      : [{ role: 'user', content: currentBody }];
+      ? gateResumeTurnImages(resumeTurn.messages, config.vision === true)
+      : [
+          {
+            role: 'user',
+            content: imageNotice === '' ? currentBody : `${currentBody}\n${imageNotice}`,
+            ...(imageAttach ? { images: imageAttach } : {}),
+          },
+        ];
+  // 多模态近 2 轮重发（Task 9 D1，spec §9）：convCtx（排除当前轮后的会话历史）
+  // 的最后 2 个 owner 轮按余量附图——预算 = 6 - 当前轮图片数（T8 注入或 resume
+  // 重建段），从最新轮向最旧轮分配。vision=false 时 no-op。须在 messages 组装
+  // （...convMessages 展开复制引用）之前完成就地附图。
+  if (sessionCtx) {
+    const currentTurnImageCount = turnMessages.reduce(
+      (n, m) => n + (m.images?.length ?? 0),
+      0,
+    );
+    await applyRecentImageReplay(sessionCtx, {
+      vision: config.vision === true,
+      budget: MAX_IMAGES_PER_REQUEST - currentTurnImageCount,
+    });
+  }
   // v2.8.0 Orchestration 元语（Task 2）：followup 续聊前缀拼接。与 resumeTurn
   // 互斥由派发侧保证，此处防御性兜底：同现时 resumeTurn 优先（前缀忽略 +
   // warn 不抛错——断点续跑的重建段语义完整自洽，与「全新回合的上下文补充」
@@ -741,6 +913,8 @@ export async function runChatLoop(
   // 溢出恢复标记（spec §7，T6）：回合级——本回合内只允许一次「溢出 → 压缩 →
   // 重放」恢复，二次溢出按原错误路径终止（防「压缩-重放-再溢出」死循环）。
   let overflowRecovered = false;
+  // 流中断重试计数（循环外声明——continue 不清零防无限重试；成功步后复位）
+  let streamRetries = 0;
 
   const abortController = new AbortController();
   // v1.5.1：把 signal 暴露给 ctx，doExecuteTool 调 executeDispatch 时透传，
@@ -913,7 +1087,37 @@ export async function runChatLoop(
       // task-config.context 注入语义一致）；线协议 emit 原文 + context 元数据
       const rendered = renderTurnBody(item.orig, item.context);
       mandate.steers.push(rendered);
-      messages.push({ role: 'user', content: `[用户中途补充] ${rendered}` });
+      // 多模态（Task 9 D6，spec §7/§9）：steer 载荷 context.images 消费——
+      // 此前无消费点（中途补充的图静默丢）。vision=true 附到本条合成 user
+      // 消息（同 T8 当前轮语义：LLM 请求组装 seam，不落库）；vision=false 走
+      // buildImageTurnNotice 降级行。无图载荷路径零变化（notice='' 且不附字段）。
+      const steerImages = item.context?.images ?? [];
+      const steerNotice = buildImageTurnNotice(
+        {
+          images: steerImages,
+          droppedImages: item.context?.droppedImages ?? [],
+        },
+        config.vision === true,
+      );
+      // 预算共享（fix I1）：「6 张/请求」是请求级不变量——当前轮（T8 注入）+
+      // 重放窗口 + 已 drain steer 已占用的额度全部从 messages 现值反推，
+      // steer 只附余量内的图片（超出部分静默丢弃：降级行未覆盖的部分由
+      // 下一次会话重建的 [图片: name] 锚点兜底，不破坏请求形状）。
+      const attached = messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+      const room = Math.max(0, MAX_IMAGES_PER_REQUEST - attached);
+      const steerAttach =
+        config.vision === true && steerImages.length > 0 && room > 0
+          ? steerImages.slice(0, room).map(({ mime, base64, w, h, path }) => ({
+              mime, base64, w, h, ...(path !== undefined ? { path } : {}),
+            }))
+          : undefined;
+      const steerContent =
+        steerNotice === '' ? `[用户中途补充] ${rendered}` : `[用户中途补充] ${rendered}\n${steerNotice}`;
+      messages.push({
+        role: 'user',
+        content: steerContent,
+        ...(steerAttach ? { images: steerAttach } : {}),
+      });
       // v2.6.0 断点续跑：steer 事件持久化（spec §2 + v2.5 C1 教训）。
       // 走既有 event buffer 落库（event_type='steer' / payload={body: 原文,
       // context?}），重启后 turn-reconstructor 据此重建本条 [用户中途补充]
@@ -982,6 +1186,11 @@ export async function runChatLoop(
 
     const toolCalls: LLMToolCall[] = [];
     let finishReason: 'stop' | 'tool_use' = 'stop';
+    // 流中断重试快照：中断重发时 accumulatedText 回滚到本步起点——被掐的
+    // 半截文本不进 transcript（transcript 无重复），UI 侧孤儿文本由重试提示
+    // 标注。thinking 不累积（每响应独立显示），无需快照。
+    const textAtStepStart = accumulatedText;
+    const rollFlagAtStepStart: boolean = hasNewTextSinceLastRoll;
 
     try {
       for await (const delta of llm.chatStream(messages, tools, abortController.signal)) {
@@ -1017,6 +1226,22 @@ export async function runChatLoop(
       // （est > MIN_TRIGGER）→ 压缩一次后重放本轮授权继续本轮。压缩失败或二次
       // 溢出 → 落入下方原错误路径终止（end error + throw，错误不吞不改）。
       const errMsg = err instanceof Error ? err.message : String(err);
+      // ─── 流中断自动重试（2026-09-26 terminated P0）───────────────────────
+      // terminated / 连接闪断 → 指数退避重发本步请求。已完成工具轮次全在
+      // transcript 不受影响；半截文本回滚（见快照注释），重试提示入正文留痕。
+      if (streamRetries < STREAM_RETRY_MAX && STREAM_INTERRUPTED_RE.test(errMsg)) {
+        streamRetries += 1;
+        accumulatedText = textAtStepStart;
+        hasNewTextSinceLastRoll = rollFlagAtStepStart;
+        sendStreamChunk({
+          type: 'text',
+          streamSessionId,
+          delta: `\n\n（连接中断：${errMsg}。自动重试 ${streamRetries}/${STREAM_RETRY_MAX}，已完成的步骤不受影响）\n\n`,
+        });
+        trace(`流中断重试 ${streamRetries}/${STREAM_RETRY_MAX}`, { error: errMsg });
+        await abortableSleep(streamRetryDelaysMs[streamRetries - 1] ?? 30_000, abortController.signal);
+        continue;
+      }
       if (
         !overflowRecovered &&
         OVERFLOW_ERROR_RE.test(errMsg) &&
@@ -1054,6 +1279,9 @@ export async function runChatLoop(
       if (stats) stats.toolCallsUsed = toolCallCount;
       throw err;
     }
+
+    // 本步完整生成（未被中断）→ 重试额度复位，下一步重新享有全额度
+    streamRetries = 0;
 
     if (finishReason === 'stop' || toolCalls.length === 0) {
       // F1（mandate 死锁）收尾校验轮：终文前仍有 user-source in_progress 待办时，
@@ -1594,6 +1822,22 @@ export function spillDispatchBodyIfNeeded(
   );
 }
 
+/**
+ * TaskConfig → ImageTurnPayload 组装（多模态 Task 8）。
+ * 宽进归一：旧线协议 context 可能缺 images/droppedImages 字段（?? 空数组）；
+ * 全空且无 visionHint → undefined（runChatLoop 缺省参 = 无图消息字节零变化）。
+ */
+function buildImageTurnPayload(cfg: TaskConfig): ImageTurnPayload | undefined {
+  const images = cfg.context?.images ?? [];
+  const droppedImages = cfg.context?.droppedImages ?? [];
+  if (images.length === 0 && droppedImages.length === 0 && !cfg.visionHint) return undefined;
+  return {
+    images,
+    droppedImages,
+    ...(cfg.visionHint ? { visionHint: cfg.visionHint } : {}),
+  };
+}
+
 export async function runTaskChatLoop(
   cfg: TaskConfig,
   config: RuntimeConfig,
@@ -1620,6 +1864,9 @@ export async function runTaskChatLoop(
       : cfg.maxToolCalls !== undefined
         ? { maxToolCalls: cfg.maxToolCalls }
         : {}),
+    // 多模态能力每消息覆盖（2026-09-26 P0）：主进程现解析值压过 AGENT_CONFIG
+    // 快照——用户改「视觉输入」开关/模型目录后下一条消息即生效（v2.2 教义）
+    ...(cfg.vision !== undefined ? { vision: cfg.vision } : {}),
   };
 
   // 2. parentStreamSessionId：dispatchContext 设置时为 PM 的 streamSessionId，
@@ -1668,6 +1915,10 @@ export async function runTaskChatLoop(
       // 防御兜底）。接线锁：tests/agent/runtime-history-prefix.test.ts「接线锁」
       // 用例——摘掉本解构/传参该锁必红（前缀静默丢失不报错）。
       historyPrefix,
+      // 多模态（Task 8，spec 2026-09-26 §7/§8）：当前轮图片载荷。宽进归一——
+      // 旧线协议载荷可能缺 images/droppedImages 字段，?? 空数组兜底；全空且无
+      // visionHint 时传 undefined（无图消息零变化）。
+      buildImageTurnPayload(cfg),
     );
     // 心跳先停再发终态回执——防终态 reply 后 timer 再发 in_progress 翻活主进程链
     stopHeartbeat?.();
@@ -1839,6 +2090,9 @@ export async function doExecuteTool(
       taskId: config.currentTaskId,
       // 归属制：AGENT_CONFIG 已强校验携带 agentAssignmentId（runtime-config parse）
       agentInstanceId: config.agentAssignmentId,
+      // 子进程落盘基准（apply_patch 备份）：主进程经 AGENT_CONFIG 定型注入；
+      // 缺省（旧配置）由 apply-patch-tools 回退 os.tmpdir()
+      userDataDir: config.userDataDir,
     };
     return executeToolModule(name, call.arguments, toolCtx, ctx.toolModules);
   }

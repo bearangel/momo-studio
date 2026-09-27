@@ -31,9 +31,9 @@
 //   thinking / todo_update / status_change / final / message_roll /
 //   segment_boundary / 未知 kind → 跳过（不进 LLM 上下文 / 前向兼容）
 import type { LLMMessage, LLMToolCall } from './llm-provider';
-import type { SteerReplayItem } from './runtime-config';
+import type { SteerReplayItem, ExpandedImageItem } from './runtime-config';
 import { renderTurnBody, isExpandedContext } from './turn-context';
-import { expandMessageContext } from '../im/context-expander';
+import { expandMessageContext, MAX_IMAGES_PER_REQUEST } from '../im/context-expander';
 import { logger } from '../logger';
 import { getDb } from '../storage/db';
 import {
@@ -227,34 +227,74 @@ function findTurnUserRow(
  * context_json → MessageContext 防御解析（I1）：损坏 / 形状非法 / NULL → null。
  * 与 renderer parseMessageContext 同款语义——resume 重放侧的单点收口，
  * 不让坏行炸 rebuildTurn（其 catch 会整体降级 degenerate，丢整段重建）。
+ * images（Task 9 D2，spec §9）可选保留：与 parseMessageContext 同规则形状
+ * 校验（元素均 {path:string, w/h 正数}）；缺省 / 非法 → 视为无图，
+ * 绝不让 images 新 null 化 skills/files 仍合法的 context。
  */
 function parseContextJson(raw: string | null): MessageContext | null {
   if (raw === null) return null;
   try {
-    const v = JSON.parse(raw) as { skills?: unknown; files?: unknown };
+    const v = JSON.parse(raw) as { skills?: unknown; files?: unknown; images?: unknown };
     if (!Array.isArray(v.skills) || !Array.isArray(v.files)) return null;
-    return { skills: v.skills, files: v.files };
+    const images = shapeValidImages(v.images);
+    return images !== null
+      ? { skills: v.skills, files: v.files, images }
+      : { skills: v.skills, files: v.files };
   } catch {
     return null;
   }
+}
+
+/** images 字段形状校验（renderer message-context.shapeValidImages 同款）：合法数组原样返回；缺省/非数组/含畸形元素 → null（视为无图） */
+function shapeValidImages(v: unknown): MessageContext['images'] | null {
+  if (!Array.isArray(v)) return null;
+  const ok = v.every(
+    (i) =>
+      typeof i === 'object' &&
+      i !== null &&
+      typeof (i as { path: unknown }).path === 'string' &&
+      typeof (i as { w: unknown }).w === 'number' &&
+      (i as { w: number }).w > 0 &&
+      typeof (i as { h: unknown }).h === 'number' &&
+      (i as { h: number }).h > 0,
+  );
+  return ok ? (v as MessageContext['images']) : null;
+}
+
+/**
+ * 只读 images 的 expander 复用入口（Task 9 共享读取 helper）：
+ * {skills:[], files:[], images} 形状调 expandMessageContext——workspace 解析 /
+ * WorkspaceFS 路径防御 / 8MB base64 上限 / 失败剔除+warn 全部同源，
+ * 不另立第二套读图语义（防两处漂移）。
+ */
+async function expandImagesOnly(
+  workspaceId: string | null,
+  images: MessageContext['images'],
+): Promise<ExpandedImageItem[]> {
+  return (await expandMessageContext(workspaceId, { skills: [], files: [], images })).images;
 }
 
 /**
  * 回合起始 user 消息的 resume 重放内容（I1，与 steer 语义对称）。
  *
  * 有 context → expandMessageContext 重放后 renderTurnBody 包装（块在前正文
- * 在后）；无 / 损坏 context → 原文。返回 null = 跳过该条 user 消息（M3：
+ * 在后）；无 / 损坏 context → 原文。content=null = 跳过该条 user 消息（M3：
  * 重放后内容为空串——空 body 且无 context，对齐发送侧 titleSource 回退，
  * 不向续跑模型注入空 user 消息）。
+ * images（Task 9 D2）：parsed context 带合法 images 时随展开读盘带出
+ * （base64）；vision 门控与 6 张上限在 runtime 子进程侧（AGENT_CONFIG 快照
+ * 单一真相源，resume.ts 主进程不判能力——base64 过一次 IPC 的代价可接受）。
  */
-async function expandTurnUserContent(baseRow: MessageRow): Promise<string | null> {
+async function expandTurnUserContent(
+  baseRow: MessageRow,
+): Promise<{ content: string | null; images: ExpandedImageItem[] }> {
   const row = findTurnUserRow(baseRow);
-  if (!row) return null;
+  if (!row) return { content: null, images: [] };
   const parsed = parseContextJson(row.contextJson);
-  if (!parsed) return row.body === '' ? null : row.body;
+  if (!parsed) return { content: row.body === '' ? null : row.body, images: [] };
   const expanded = await expandMessageContext(row.workspaceId, parsed);
   const content = renderTurnBody(row.body, expanded);
-  return content === '' ? null : content;
+  return { content: content === '' ? null : content, images: expanded.images };
 }
 
 /**
@@ -293,6 +333,12 @@ interface StreamRebuildOptions {
    * async 展开收口在 rebuildTurn 侧完成后传入。
    */
   turnUserContent?: string | null;
+  /**
+   * 回合起始 user 消息的图片附件（Task 9 D2）：rebuildTurn 经
+   * expandTurnUserContent 读盘带出的 base64；非空时附到首条 user 消息的
+   * images 字段（vision 门控在 runtime 子进程侧）。缺省不附。
+   */
+  turnUserImages?: ExpandedImageItem[];
   /**
    * 流末未 drain 的 steer 是否也渲染为 [用户中途补充] user 消息。
    * resume 用 false（收集进 steers[] 随载荷重放进 pendingSteers）；
@@ -342,7 +388,14 @@ function rebuildStreamMessages(
     // I1：起始 user 内容由调用方预解析传入（context 重放的 async 部分在
     // rebuildTurn 侧完成）——空串防御性跳过（正常不应出现，expandTurnUserContent 已过滤）
     if (typeof opts.turnUserContent === 'string' && opts.turnUserContent !== '') {
-      agg.appendMessage({ role: 'user', content: opts.turnUserContent });
+      agg.appendMessage({
+        role: 'user',
+        content: opts.turnUserContent,
+        // Task 9 D2：图片随首条 user 消息重放（payload 保留；子进程侧门控）
+        ...(opts.turnUserImages && opts.turnUserImages.length > 0
+          ? { images: opts.turnUserImages.map(toLLMImage) }
+          : {}),
+      });
     }
   }
 
@@ -414,12 +467,13 @@ function rebuildStreamMessages(
 export async function rebuildTurn(streamSessionId: string): Promise<RebuiltTurn> {
   try {
     // 起始 user 内容预解析（async：context 重放展开）；流行不存在时共享核心
-    // 自有 baseRow 缺失降级，此处直接置 null 即可
+    // 自有 baseRow 缺失降级，此处直接置空即可
     const baseRow = getMessageByStreamSessionId(streamSessionId);
-    const turnUserContent = baseRow ? await expandTurnUserContent(baseRow) : null;
+    const turnUser = baseRow ? await expandTurnUserContent(baseRow) : { content: null, images: [] };
     const r = rebuildStreamMessages(streamSessionId, {
       includeUser: true,
-      turnUserContent,
+      turnUserContent: turnUser.content,
+      ...(turnUser.images.length > 0 ? { turnUserImages: turnUser.images } : {}),
       undrainedSteersAsUser: false,
       // resume 同回合重放：steer 的 context 必须展开（模型续跑依赖其 skill/文件）
       expandSteerContext: true,
@@ -474,6 +528,22 @@ export interface RebuiltSessionContext {
   messages: LLMMessage[];
   /** 与 messages 平行的 DB createdAt（合成条取语义等价值）；供 compaction coveredUntil 精确化 */
   timestamps: number[];
+  /**
+   * owner 轮 user 消息的定位元数据（Task 9 D1，spec §9 近 2 轮重发窗口输入）。
+   * 升序（时序）；无 owner 轮时缺省。rebuildSessionContext 保持同步零 IO——
+   * 读盘与附图延后到 applyRecentImageReplay（调用方持 AGENT_CONFIG.vision）。
+   */
+  imageReplayTargets?: SessionImageReplayTarget[];
+}
+
+/** 近 2 轮重发的窗口输入：owner 轮在 messages 中的下标 + 读图所需的行元数据 */
+export interface SessionImageReplayTarget {
+  /** messages 数组下标（含 ⑦ 摘要头 unshift 位移修正后的最终值） */
+  msgIndex: number;
+  /** owner 行 workspace_id（expander 读图基准；NULL → 全部剔除降级） */
+  workspaceId: string | null;
+  /** owner 行 context_json 原文（消费点 parseContextJson 防御解析） */
+  contextJson: string | null;
 }
 
 /** 行拉取上限：两次 compaction 之间行数超此值的会话，窗口退化为最近 200 行内分组 */
@@ -598,10 +668,16 @@ export function rebuildSessionContext(
     // 只会更保守，多排除不会少排除）
     const messages: LLMMessage[] = [];
     const timestamps: number[] = [];
+    const imageReplayTargets: SessionImageReplayTarget[] = [];
     for (const u of windowed) {
       if (u.kind === 'owner') {
         messages.push({ role: 'user', content: u.row.body });
         timestamps.push(u.row.createdAt);
+        imageReplayTargets.push({
+          msgIndex: messages.length - 1,
+          workspaceId: u.row.workspaceId,
+          contextJson: u.row.contextJson,
+        });
       } else {
         messages.push(...u.messages);
         for (let i = 0; i < u.messages.length; i++) timestamps.push(u.endTs);
@@ -632,14 +708,130 @@ export function rebuildSessionContext(
         content: `[此前对话压缩摘要]\n${compaction.summary}`,
       });
       timestamps.unshift(compaction.coveredUntil);
+      // 摘要头使 messages 整体后移一位——重发窗口下标同步修正
+      for (const t of imageReplayTargets) t.msgIndex += 1;
     }
 
-    return { messages, timestamps };
+    return {
+      messages,
+      timestamps,
+      ...(imageReplayTargets.length > 0 ? { imageReplayTargets } : {}),
+    };
   } catch (err) {
     logger.warn('rebuildSessionContext 重建失败，降级为空上下文（fresh-session 形态）', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
     return { messages: [], timestamps: [] };
+  }
+}
+
+/** ExpandedImageItem → LLMMessage.images 元素（path 保留供占位/回溯，provider 映射忽略） */
+function toLLMImage(i: ExpandedImageItem): {
+  mime: string;
+  base64: string;
+  w: number;
+  h: number;
+  path: string;
+} {
+  return { mime: i.mime, base64: i.base64, w: i.w, h: i.h, path: i.path };
+}
+
+/**
+ * 近 2 轮图片重发（Task 9 D1，spec 2026-09-26-image-input-multimodal §9）。
+ *
+ * 对 rebuildSessionContext 产物就地附图：窗口 = imageReplayTargets 末 2 个
+ * owner 轮（时序最新两条 user 轮次；当前轮由 Task 8 注入、调用方已在
+ * rebuildSessionContext 侧剔除，不占窗口位）。逐轮经 expandImagesOnly 读盘
+ * （失败/超限剔除 + warn，绝不阻塞）；预算跨窗口 + 当前轮共享（≤
+ * MAX_IMAGES_PER_REQUEST），从最新轮向最旧轮分配，超预算的最先丢（oldest
+ * dropped）——只 warn 不改写正文（[图片: name] 锚点由 T7 序列化承载）。
+ *
+ * vision=false / 无 targets / 预算耗尽 → no-op（无图请求逐字节不变）。
+ * 永不抛错（读图失败全部降级为跳过该轮）。
+ */
+export async function applyRecentImageReplay(
+  ctx: RebuiltSessionContext,
+  opts: { vision: boolean; budget: number },
+): Promise<void> {
+  if (!opts.vision || opts.budget <= 0) return;
+  const allTargets = ctx.imageReplayTargets;
+  if (!allTargets || allTargets.length === 0) return;
+  // 窗口 = 时序最后 2 个 owner 轮（更早轮不恢复——正文 [图片: name] 锚点承载）
+  const windowTargets = allTargets.slice(-2);
+  let budget = Math.min(opts.budget, MAX_IMAGES_PER_REQUEST);
+  for (let i = windowTargets.length - 1; i >= 0 && budget > 0; i--) {
+    const t = windowTargets[i]!;
+    if (t.msgIndex >= ctx.messages.length) continue; // 防御：调用方裁剪过 messages
+    const parsed = parseContextJson(t.contextJson);
+    if (!parsed?.images || parsed.images.length === 0) continue;
+    try {
+      const read = await expandImagesOnly(t.workspaceId, parsed.images);
+      if (read.length === 0) continue;
+      const take = read.slice(0, budget);
+      if (take.length < read.length) {
+        logger.warn('applyRecentImageReplay：超出请求图片预算，丢弃最旧轮 surplus 图片', {
+          path: t.contextJson,
+          kept: take.length,
+          dropped: read.length - take.length,
+        });
+      }
+      const msg = ctx.messages[t.msgIndex]!;
+      msg.images = [...(msg.images ?? []), ...take.map(toLLMImage)];
+      budget -= take.length;
+    } catch (err) {
+      logger.warn('applyRecentImageReplay：窗口轮读图失败，跳过该轮', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/**
+ * 会话近 2 轮图片窗口读取（Task 9 D3，spec §8 dispatch 自动附图的主进程侧）。
+ *
+ * 取 sessionId 时序最后 windowSize（默认 2）条 owner 轮，逐轮读图合并；
+ * 总量 ≤ maxImages（默认 6），从最新轮向最旧轮分配（超限的最先丢 + warn）。
+ * 返回按时序升序（旧→新，贴合阅读序）。永不抛错（DB / 读盘失败 → 空数组）。
+ */
+export async function collectRecentSessionImages(
+  sessionId: string,
+  opts?: { windowSize?: number; maxImages?: number },
+): Promise<ExpandedImageItem[]> {
+  const windowSize = opts?.windowSize ?? 2;
+  const maxImages = opts?.maxImages ?? MAX_IMAGES_PER_REQUEST;
+  try {
+    const rows = getDb()
+      .prepare(
+        `SELECT context_json AS contextJson, workspace_id AS workspaceId FROM messages
+         WHERE session_id = ? AND sender = 'owner'
+         ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(sessionId, windowSize) as Array<{ contextJson: string | null; workspaceId: string | null }>;
+    const collected: ExpandedImageItem[] = [];
+    for (const row of rows) {
+      if (collected.length >= maxImages) break;
+      const parsed = parseContextJson(row.contextJson);
+      if (!parsed?.images || parsed.images.length === 0) continue;
+      const read = await expandImagesOnly(row.workspaceId, parsed.images);
+      const room = maxImages - collected.length;
+      const take = read.slice(0, room);
+      if (take.length < read.length) {
+        logger.warn('collectRecentSessionImages：超出附图上限，丢弃 surplus 图片', {
+          sessionId,
+          kept: take.length,
+          dropped: read.length - take.length,
+        });
+      }
+      collected.push(...take);
+    }
+    // 收集序为最新→最旧；反转为时序升序（旧→新）
+    return collected.reverse();
+  } catch (err) {
+    logger.warn('collectRecentSessionImages：窗口读取失败，降级为空（不阻塞 dispatch）', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
   }
 }

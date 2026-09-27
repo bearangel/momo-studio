@@ -133,3 +133,47 @@ describe('serializeMessages - 工具结果截断（spec §4.2 + §8）', () => {
     expect(out).not.toContain('[truncated]');
   });
 });
+
+// === 多模态压缩占位（Task 9 D4，spec §9：压缩后历史天然无图）===
+describe('serializeMessages - 图片占位（spec 2026-09-26-image-input-multimodal §9）', () => {
+  it('带 2 图的 user 消息 → [用户] 行后逐图 [图片: path] 占位行，base64 不进摘要', () => {
+    const messages: LLMMessage[] = [
+      {
+        role: 'user',
+        content: '看这两张图',
+        images: [
+          { mime: 'image/png', base64: 'AAAA', w: 100, h: 80, path: 'assets/a.png' },
+          { mime: 'image/jpeg', base64: 'BBBB', w: 100, h: 80, path: 'assets/b.jpg' },
+        ],
+      },
+    ];
+    const out = serializeMessages(messages);
+    const userLine = out.indexOf('[用户]: 看这两张图');
+    const ph1 = out.indexOf('[图片: assets/a.png]');
+    const ph2 = out.indexOf('[图片: assets/b.jpg]');
+    expect(userLine).toBeGreaterThan(-1);
+    // 占位行存在且顺序跟随 [用户] 行
+    expect(ph1).toBeGreaterThan(userLine);
+    expect(ph2).toBeGreaterThan(ph1);
+    // images 字段本身不进压缩表示（base64 绝不泄漏）
+    expect(out).not.toContain('AAAA');
+    expect(out).not.toContain('BBBB');
+  });
+
+  it('path 缺省（契约外但防御）→ 回退 mime 标注占位', () => {
+    const messages: LLMMessage[] = [
+      {
+        role: 'user',
+        content: '匿名图',
+        images: [{ mime: 'image/png', base64: 'CCCC', w: 10, h: 10 }],
+      },
+    ];
+    const out = serializeMessages(messages);
+    expect(out).toContain('[图片: image/png]');
+  });
+
+  it('无图消息 → 输出逐字节不变（零回归）', () => {
+    const out = serializeMessages([{ role: 'user', content: '纯文本' }]);
+    expect(out).toBe('[用户]: 纯文本');
+  });
+});

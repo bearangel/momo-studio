@@ -28,6 +28,7 @@ import { insertMessage } from '../../src/main/storage/messages/repo';
 import { insertEvent } from '../../src/main/storage/messages/events-repo';
 import {
   rebuildSessionContext,
+  applyRecentImageReplay,
   INTERRUPTED_TOOL_RESULT,
 } from '../../src/main/agent/turn-reconstructor';
 import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../../src/main/compaction/serialize';
@@ -462,5 +463,189 @@ describe('rebuildSessionContext（spec 2026-09-14 §4.5 回归矩阵）', () => 
     expect(ctx2.messages).toHaveLength(1);
     expect(ctx2.messages[0]!.content).toContain('多步任务已压缩');
     expect(ctx2.messages.some((m) => m.toolCallId === 'cr1' || m.toolCallId === 'cr2')).toBe(false);
+  });
+});
+
+// === 多模态近 2 轮重发（Task 9，spec 2026-09-26-image-input-multimodal §9）===
+//
+// rebuildSessionContext 产 imageReplayTargets（owner 轮定位元数据，同步零 IO），
+// applyRecentImageReplay 按 {vision, budget} 异步读取并附图（expander 复用：
+// WorkspaceFS + 8MB cap + 失败剔除）。保真度：真实 workspace 目录 + 真实文件，
+// 不 mock fs（momo-test-rules）。
+describe('applyRecentImageReplay（近 2 轮图片重发窗口）', () => {
+  const WS_ID = 'ws-img-replay';
+  let wsDir: string;
+
+  beforeEach(() => {
+    wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-img-replay-'));
+    getDb().prepare(
+      `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, 'WS', ?, '@o')`,
+    ).run(WS_ID, wsDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(wsDir, { recursive: true, force: true });
+  });
+
+  /** 写一张「图片」文件（expander 按扩展名映射 mime，内容不校验） */
+  function writeImage(name: string, byte: number): void {
+    fs.writeFileSync(path.join(wsDir, name), Buffer.from([byte]));
+  }
+
+  /** 带 images context_json 的 owner 行（字段对齐 sendUserMessage 落库形态） */
+  function ownerRowWithImages(body: string, ts: number, images: string[]): void {
+    const row = insertMessage({
+      sessionId: SESSION_ID,
+      sender: 'owner',
+      eventType: 'm.room.message',
+      body,
+      workspaceId: WS_ID,
+      contextJson: JSON.stringify({
+        skills: [],
+        files: [],
+        images: images.map((p) => ({ path: p, w: 100, h: 80 })),
+      }),
+    });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(ts, row.id);
+  }
+
+  it('近 2 轮带图 user 消息恢复 images，第 3 轮不恢复（窗口边界）', async () => {
+    const T0 = Date.now();
+    writeImage('old.png', 1);
+    writeImage('mid.png', 2);
+    writeImage('new.png', 3);
+    ownerRowWithImages('第一轮', T0 + 100, ['old.png']);
+    ownerRowWithImages('第二轮', T0 + 200, ['mid.png']);
+    ownerRowWithImages('第三轮', T0 + 300, ['new.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    await applyRecentImageReplay(ctx, { vision: true, budget: 6 });
+
+    const msgs = ctx.messages;
+    expect(msgs).toHaveLength(3);
+    // 最新两条 user 消息带图（新→旧：第三轮 / 第二轮）
+    expect(msgs[2]!.images).toHaveLength(1);
+    expect(msgs[2]!.images![0]).toMatchObject({ mime: 'image/png', w: 100, h: 80, path: 'new.png' });
+    expect(msgs[2]!.images![0]!.base64).toBe(Buffer.from([3]).toString('base64'));
+    expect(msgs[1]!.images).toHaveLength(1);
+    expect(msgs[1]!.images![0]).toMatchObject({ path: 'mid.png' });
+    // 第 3 轮（最旧）不恢复——正文锚点由 T7 序列化承载
+    expect(msgs[0]!.images).toBeUndefined();
+  });
+
+  it('vision=false → 全部不恢复（非视觉模型不带图）', async () => {
+    const T0 = Date.now();
+    writeImage('a.png', 1);
+    ownerRowWithImages('第一轮', T0 + 100, ['a.png']);
+    ownerRowWithImages('第二轮', T0 + 200, ['a.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    await applyRecentImageReplay(ctx, { vision: false, budget: 6 });
+
+    expect(ctx.messages.every((m) => m.images === undefined)).toBe(true);
+  });
+
+  it('预算上限：当前轮已占 2，窗口 3+2 → 只恢复 4 张，最旧的先丢', async () => {
+    const T0 = Date.now();
+    for (const [i, name] of ['w1.png', 'w2.png', 'n1.png', 'n2.png', 'n3.png'].entries()) {
+      writeImage(name, i + 1);
+    }
+    ownerRowWithImages('上上轮', T0 + 100, ['w1.png', 'w2.png']);
+    ownerRowWithImages('上一轮', T0 + 200, ['n1.png', 'n2.png', 'n3.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    // 当前轮（Task 8 注入）已带 2 张 → 重发窗口余量 6-2=4
+    await applyRecentImageReplay(ctx, { vision: true, budget: 4 });
+
+    // 最新窗口消息整份保留（3 张）
+    expect(ctx.messages[1]!.images).toHaveLength(3);
+    // 较旧窗口消息只余 1 张（其第 1 张），第 2 张被丢（oldest dropped）
+    expect(ctx.messages[0]!.images).toHaveLength(1);
+    expect(ctx.messages[0]!.images![0]).toMatchObject({ path: 'w1.png' });
+    // 窗口累计恰为预算 4
+    const total = ctx.messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+    expect(total).toBe(4);
+  });
+
+  it('budget=0（当前轮占满）→ 窗口不附图', async () => {
+    const T0 = Date.now();
+    writeImage('a.png', 1);
+    ownerRowWithImages('第一轮', T0 + 100, ['a.png']);
+    ownerRowWithImages('第二轮', T0 + 200, ['a.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    await applyRecentImageReplay(ctx, { vision: true, budget: 0 });
+
+    expect(ctx.messages.every((m) => m.images === undefined)).toBe(true);
+  });
+
+  it('读取失败（文件被删）→ 该图剔除不阻塞，其余照常恢复', async () => {
+    const T0 = Date.now();
+    writeImage('ok.png', 1);
+    // 'gone.png' 不写盘——rebuild 时读取失败 → 剔除 + warn
+    ownerRowWithImages('第一轮', T0 + 100, ['gone.png']);
+    ownerRowWithImages('第二轮', T0 + 200, ['ok.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    await applyRecentImageReplay(ctx, { vision: true, budget: 6 });
+
+    // 失败轮：无 images 字段（不产空数组占位）
+    expect(ctx.messages[0]!.images).toBeUndefined();
+    // 健全轮：照常恢复
+    expect(ctx.messages[1]!.images).toHaveLength(1);
+    expect(ctx.messages[1]!.images![0]).toMatchObject({ path: 'ok.png' });
+  });
+
+  it('无图会话（imageReplayTargets 缺省 / 空）→ no-op 零变化', async () => {
+    const T0 = Date.now();
+    ownerRow('纯文本第一轮', T0 + 100);
+    ownerRow('纯文本第二轮', T0 + 200);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    const before = JSON.stringify(ctx.messages);
+    await applyRecentImageReplay(ctx, { vision: true, budget: 6 });
+    expect(JSON.stringify(ctx.messages)).toBe(before);
+  });
+
+  it('fix M1 组合：压缩摘要头在场 + 带图轮 → images 落 user 消息（unshift 下标修正不漂移）', async () => {
+    // 摘要头 unshift 使 messages 整体 +1——若 msgIndex 修正缺失，图会错附到
+    // 前一条 assistant 消息（部分平台 400）。组合锁：头 + 带图轮 + assistant 族。
+    const T0 = Date.now();
+    writeImage('h1.png', 1);
+    writeImage('h2.png', 2);
+    // 压缩摘要（生产形态：session_compactions 行 + sessions 前置）
+    getDb().prepare(
+      `INSERT INTO sessions (id, workspace_id, title, kind, created_at, updated_at)
+       VALUES (?, 'ws-img-replay', 't', 'chat', 1000, 1000)`,
+    ).run(SESSION_ID);
+    getDb().prepare(
+      `INSERT INTO session_compactions (session_id, summary, covered_until, updated_at)
+       VALUES (?, '更早轮已压缩', ?, ?)`,
+    ).run(SESSION_ID, T0 - 1, T0 - 1);
+    ownerRowWithImages('第一轮', T0 + 100, ['h1.png']);
+    // 带图轮后跟一个 assistant 族（错位受害者：无修正时 h1 会附到它头上）
+    startStream('sf', T0 + 150);
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'sf', delta: '答一' });
+    __flushEventBufferForTest();
+    bumpStreamEventTs('sf', T0 + 160);
+    endStream('sf', 'stop');
+    setStreamEventTs('sf', T0 + 170);
+    ownerRowWithImages('第二轮', T0 + 200, ['h2.png']);
+
+    const ctx = rebuildSessionContext(SESSION_ID);
+    await applyRecentImageReplay(ctx, { vision: true, budget: 6 });
+
+    // messages = [摘要头(user), 第一轮(user), assistant, 第二轮(user)]
+    expect(ctx.messages).toHaveLength(4);
+    expect(ctx.messages[0]!.content).toContain('更早轮已压缩');
+    expect(ctx.messages[0]!.images).toBeUndefined();
+    expect(ctx.messages[1]!.content).toBe('第一轮');
+    expect(ctx.messages[1]!.images).toHaveLength(1);
+    expect(ctx.messages[1]!.images![0]).toMatchObject({ path: 'h1.png' });
+    expect(ctx.messages[2]).toMatchObject({ role: 'assistant', content: '答一' });
+    expect(ctx.messages[2]!.images).toBeUndefined();
+    expect(ctx.messages[3]!.content).toBe('第二轮');
+    expect(ctx.messages[3]!.images).toHaveLength(1);
+    expect(ctx.messages[3]!.images![0]).toMatchObject({ path: 'h2.png' });
   });
 });

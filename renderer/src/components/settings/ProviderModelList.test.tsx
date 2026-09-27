@@ -17,21 +17,22 @@ const addModel = vi.fn();
 const setModelEnabled = vi.fn();
 const removeModel = vi.fn();
 const setModelWindow = vi.fn();
+const setModelVision = vi.fn();
 
 const mockApi = {
-  provider: { listModels, fetchModels, addModel, setModelEnabled, removeModel, setModelWindow },
+  provider: { listModels, fetchModels, addModel, setModelEnabled, removeModel, setModelWindow, setModelVision },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
 const MODELS = [
-  // thinking 三字段为 v31 数据形状升级（Task 9）；断言语义不变
+  // thinking 三字段为 v31 数据形状升级（Task 9）；vision 为多模态 Task 2 新列；断言语义不变
   {
     providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1, contextWindow: 131072,
-    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null, vision: true,
   },
   {
     providerId: 'p1', modelId: 'glm-5.2', enabled: false, addedAt: 2, contextWindow: null,
-    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null,
+    reasoning: { kind: 'none' }, thinkingJson: null, effectiveWindow: null, vision: false,
   },
 ];
 
@@ -43,6 +44,7 @@ describe('ProviderModelList', () => {
     setModelEnabled.mockReset().mockResolvedValue(undefined);
     removeModel.mockReset().mockResolvedValue(undefined);
     setModelWindow.mockReset().mockResolvedValue(undefined);
+    setModelVision.mockReset().mockResolvedValue(undefined);
   });
 
   it('挂载时渲染模型行（model_id + 启用状态）', async () => {
@@ -63,6 +65,13 @@ describe('ProviderModelList', () => {
     await screen.findByText('glm-5.3');
     fireEvent.click(screen.getByRole('checkbox', { name: '启用 glm-5.3' }));
     await waitFor(() => expect(setModelEnabled).toHaveBeenCalledWith('p1', 'glm-5.3', false));
+  });
+
+  it('点击视觉输入开关 → setModelVision(providerId, modelId, 取反值)', async () => {
+    render(<ProviderModelList providerId="p1" />);
+    await screen.findByText('glm-5.3');
+    fireEvent.click(screen.getByRole('checkbox', { name: '视觉输入 glm-5.3' }));
+    await waitFor(() => expect(setModelVision).toHaveBeenCalledWith('p1', 'glm-5.3', false));
   });
 
   it('点击行删除 → removeModel(providerId, modelId) + onChanged', async () => {

@@ -24,12 +24,12 @@ const P2: ModelProvider = {
   defaultModel: null, isDefault: false, createdAt: '', platform: 'openai', presetKey: null,
 };
 const P1_MODELS: ProviderModel[] = [
-  { providerId: 'p1', modelId: 'glm-4.7', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
-  { providerId: 'p1', modelId: 'glm-4.7-flash', enabled: true, addedAt: 2, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
-  { providerId: 'p1', modelId: 'glm-4.7-disabled', enabled: false, addedAt: 3, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
+  { providerId: 'p1', modelId: 'glm-4.7', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null, vision: false },
+  { providerId: 'p1', modelId: 'glm-4.7-flash', enabled: true, addedAt: 2, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null, vision: false },
+  { providerId: 'p1', modelId: 'glm-4.7-disabled', enabled: false, addedAt: 3, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null, vision: false },
 ];
 const P2_MODELS: ProviderModel[] = [
-  { providerId: 'p2', modelId: 'deepseek-chat', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null },
+  { providerId: 'p2', modelId: 'deepseek-chat', enabled: true, addedAt: 1, contextWindow: null, thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null, vision: false },
 ];
 
 const listMock = vi.fn();

@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   estimateTokens,
   estimateConversation,
+  estimateImageTokens,
   COMPACTION_BUFFER_TOKENS,
   COMPACTION_KEEP_TOKENS,
   COMPACTION_MIN_TRIGGER,
@@ -118,6 +119,47 @@ describe('estimateConversation - 串行汇总（spec §3）', () => {
     const tokens = estimateConversation({ system: '', messages, tools: [] });
     // 路径 50 字符（非 CJK）→ 50/4 = 12.5 → ceil 13；name 'lookup' 也计入
     expect(tokens).toBeGreaterThanOrEqual(13);
+  });
+});
+
+describe('estimateImageTokens - 图片 token 估算（spec 2026-09-26-image-input §9）', () => {
+  it('典型 2048×1536：⌈3145728/750⌉=⌈4194.304⌉=4195', () => {
+    expect(estimateImageTokens(2048, 1536)).toBe(4195);
+  });
+
+  it('小图触发 258 下限：10×10 → max(258, ⌈0.133…⌉)=258', () => {
+    expect(estimateImageTokens(10, 10)).toBe(258);
+  });
+
+  it('极端长条触发下限：750×1 → max(258, 1)=258', () => {
+    expect(estimateImageTokens(750, 1)).toBe(258);
+  });
+});
+
+describe('estimateConversation - images 累加（spec 2026-09-26-image-input §9）', () => {
+  it('带 2 张图片的消息：文本 + 两图逐张累加（数值精确锁定）', () => {
+    // 文本 'hello' 5 非 CJK → ⌈5/4⌉=2；system 空 → 0
+    // 图1 2048×1536 → 4195；图2 1024×1024 → ⌈1048576/750⌉=⌈1398.101…⌉=1399
+    // 总计 2 + 4195 + 1399 = 5596
+    const messages: LLMMessage[] = [
+      {
+        role: 'user',
+        content: 'hello',
+        images: [
+          { mime: 'image/png', base64: '', w: 2048, h: 1536 },
+          { mime: 'image/jpeg', base64: '', w: 1024, h: 1024 },
+        ],
+      },
+    ];
+    expect(estimateConversation({ system: '', messages, tools: [] })).toBe(5596);
+  });
+
+  it('无 images 的消息估算与纯文本时代 golden 值完全一致（纯加性零项）', () => {
+    // golden（旧逻辑）：system 'hi' ⌈2/4⌉=1 + user 10 CJK ⌈10/1.6⌉=7 → 8
+    const messages: LLMMessage[] = [
+      { role: 'user', content: '一二三四五六七八九十' },
+    ];
+    expect(estimateConversation({ system: 'hi', messages, tools: [] })).toBe(8);
   });
 });
 

@@ -11,6 +11,8 @@ const ctx: ExpandedContext = {
     { path: 'src/a.ts', content: 'const a = 1;' },
     { path: 'big.bin', content: null },
   ],
+  images: [],
+  droppedImages: [],
 };
 
 describe('renderUserContext', () => {
@@ -30,7 +32,7 @@ describe('renderUserContext', () => {
   });
 
   it('空上下文返回空串', () => {
-    expect(renderUserContext({ skills: [], files: [] })).toBe('');
+    expect(renderUserContext({ skills: [], files: [], images: [], droppedImages: [] })).toBe('');
   });
 });
 

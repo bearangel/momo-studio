@@ -16,9 +16,23 @@
 //   8. IME 组字期 Enter 不发送（守卫在 RichComposer 内，此处锁集成层不误发）
 //   9. 📎 fileTriggerTick：focus + insertTextAtEnd('@') 直开菜单 + 防粘连空格
 //  10. F3 容器：pill 在编辑器内（pills-in-editor）、📎 仍在 .rounded-lg 容器框内
+//  11. 菜单键盘导航（2026-09-26 可用性 P0）：↑↓ 循环高亮 / Enter·Tab 选中 /
+//      Esc 关闭 / 零命中 Enter 照发 / IME compositionend 提交补偿（过滤立即生效）
+//  12. 图片输入（2026-09-26 多模态 spec §5/§10）：粘贴/拖入 → downscale →
+//      asset:saveImage → image pill → context.images 序列化；@ 菜单图片扩展名
+//      分流（lucide-image 图标 + 选中进 images 通道，2048 哨兵尺寸）；
+//      上限 6 拦截 + 失败不插 pill；全员 vision=false 时能力提示行
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ResourceItem, SessionMemberInfo, TaskRow } from '../../ipc/types';
+
+// 图片管线 canvas 边界 mock（jsdom 无 createImageBitmap/canvas.toBlob）：
+// 仅替换 downscaleImage——纯函数与常量经 importOriginal 保真（momo-test-rules：mock 收窄到边界）
+const { downscaleMock } = vi.hoisted(() => ({ downscaleMock: vi.fn() }));
+vi.mock('../../lib/image-downscale', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/image-downscale')>();
+  return { ...actual, downscaleImage: downscaleMock };
+});
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
 const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
@@ -79,6 +93,10 @@ const mockApi = {
     // 默认值仿真 resource:list({ type: 'skill' }) 真实形状：builtin skill
     // + 一个未安装项（锁 installed 过滤）
     list: vi.fn().mockResolvedValue([] as ResourceItem[]),
+  },
+  asset: {
+    // Task 4 契约：saveImage(workspaceId, data, ext) → { path }
+    saveImage: vi.fn(),
   },
 };
 
@@ -222,6 +240,15 @@ function resetState(): void {
     makeSkillResource({ slug: 'code-review-workflow', name: '代码审查工作流' }),
     makeSkillResource({ slug: 'not-installed-flow', name: '未安装技能', installed: false }),
   ]);
+  mockApi.asset.saveImage.mockReset();
+  mockApi.asset.saveImage.mockResolvedValue({ path: '.momo/assets/abc123def456.png' });
+  // downscale 真实产物形状：降采样后字节 + 目标尺寸 + 扩展名
+  downscaleMock.mockReset();
+  downscaleMock.mockResolvedValue({ data: new Uint8Array([1, 2, 3]), w: 800, h: 600, ext: 'png' as const });
+  // 跨用例残留归位：终审 M1 用例会把 getActive 改成 ws-2、Once 队列若不
+  // mockReset 会压过后续 mockRejectedValue——两处不还原会让后置用例拿到
+  // 错误 workspace / 假 resolve（mockClear 保留 Once 实现，这里必须 Reset）
+  workspaceState.getActive = () => ({ id: 'ws-1', name: 'ws' });
   sessionState.activeSessionId = 'sess-1';
   sessionState.members = [];
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -1139,5 +1166,381 @@ describe('MentionInput 终审修复（I1 焦点恢复 / I2 点编辑器关菜单
     expect(pill.dataset.selected).toBe('1');
     // 菜单保持——点 pill 是选中操作，不是放弃菜单
     expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+  });
+});
+
+describe('MentionInput 菜单键盘导航（2026-09-26 可用性 P0：↑↓/Enter/Tab/Esc）', () => {
+  /** 当前高亮菜单按钮（data-active="1" 是渲染契约） */
+  function activeButton(): HTMLButtonElement | null {
+    return document.querySelector<HTMLButtonElement>('button[data-active="1"]');
+  }
+
+  it('↑↓ 循环移动高亮；Enter 选中高亮项落 pill 且不发送消息', () => {
+    // given：两名在线成员，@ 菜单开
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-a', agentName: 'Alpha' }),
+      makeMember({ instanceId: 'inst-b', agentName: 'Beta' }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    expect(activeButton()?.textContent).toContain('Alpha');
+    // when：ArrowDown → 高亮第二条
+    fireEvent.keyDown(el, { key: 'ArrowDown' });
+    expect(activeButton()?.textContent).toContain('Beta');
+    // when：再 ArrowDown → 两条循环回顶
+    fireEvent.keyDown(el, { key: 'ArrowDown' });
+    expect(activeButton()?.textContent).toContain('Alpha');
+    // when：ArrowUp → 逆向循环到底
+    fireEvent.keyDown(el, { key: 'ArrowUp' });
+    expect(activeButton()?.textContent).toContain('Beta');
+    // then：Enter 选中 Beta——agent pill 就位、菜单关闭、消息不发送
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(hasPill(el, 'agent', 'inst-b')).toBe(true);
+    expect(activeButton()).toBeNull();
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('Tab 选中高亮条目（/ 菜单命令组，异步数据源 waitFor 后）', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '/');
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument());
+    expect(activeButton()?.textContent).toContain('/compact');
+    fireEvent.keyDown(el, { key: 'Tab' });
+    expect(hasPill(el, 'command', 'compact')).toBe(true);
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('Esc 关闭菜单（正文保留，后续 Enter 恢复发送语义）', async () => {
+    sessionState.members = [makeMember({ instanceId: 'inst-a', agentName: 'Alpha' })];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+    fireEvent.keyDown(el, { key: 'Escape' });
+    expect(screen.queryByText('选择要 @ 的 agent')).not.toBeInTheDocument();
+    expect(visibleText(el)).toBe('@');
+    // 菜单关后 Enter = 正常发送
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalledWith('@', undefined, undefined));
+  });
+
+  it('@ 零命中（菜单无条目）时 Enter 照常发送——不再静默吞 Enter', async () => {
+    sessionState.members = [];
+    mockApi.file.searchNames.mockResolvedValue([]);
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@zzz');
+    expect(activeButton()).toBeNull();
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalledWith('@zzz', undefined, undefined));
+  });
+
+  it('IME 提交补偿（P0 回归锁）：compositionend 后过滤立即生效，无需再敲一个字符', () => {
+    // given：Alpha/Beta 两成员，@ 菜单已开（query 空，双条目可见）
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-a', agentName: 'Alpha' }),
+      makeMember({ instanceId: 'inst-b', agentName: 'Beta' }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@');
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    // when：中文 IME 组合输入 Al——组合期 input 被守卫跳过（Beta 仍在 = 检测未跑）
+    fireEvent.compositionStart(el);
+    el.textContent = '@Al';
+    setCaret(el.lastChild!, 3);
+    fireEvent.input(el);
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    // then：compositionend 提交 → 补发检测 → query='Al' 过滤掉 Beta
+    fireEvent.compositionEnd(el);
+    expect(screen.queryByText('Beta')).not.toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(activeButton()?.textContent).toContain('Alpha');
+  });
+});
+
+// === 图片输入管线（2026-09-26 多模态 spec §5/§10）===
+describe('MentionInput 粘贴/拖入图片管线', () => {
+  /** 模拟一次单图粘贴事件（RichComposer onPaste 已拦截上抛，此处从事件起全链路） */
+  function pasteImage(el: HTMLElement, name = 'shot.png'): void {
+    fireEvent.paste(el, {
+      clipboardData: { files: [new File([new Uint8Array([1])], name, { type: 'image/png' })] },
+    });
+  }
+
+  it('粘贴图片 → downscale → saveImage → image pill；Enter 发送 context.images 透传', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    pasteImage(el);
+    await waitFor(() =>
+      expect(el.querySelector('span[data-kind="image"][data-id=".momo/assets/abc123def456.png"]')).not.toBeNull(),
+    );
+    expect(downscaleMock).toHaveBeenCalledTimes(1);
+    expect(mockApi.asset.saveImage).toHaveBeenCalledWith('ws-1', expect.any(Uint8Array), 'png');
+    // pill 显示文件名（label）+ 图标 svg
+    const pill = el.querySelector('span[data-kind="image"]') as HTMLElement;
+    expect(pill.dataset.label).toBe('shot.png');
+    expect(pill.querySelector('svg')).not.toBeNull();
+    typeAtEnd(el, '看下这张');
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('[图片: shot.png] 看下这张', undefined, {
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/abc123def456.png', w: 800, h: 600 }],
+    });
+  });
+
+  it('拖入图片走同一管线（drop 事件 → image pill）', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    fireEvent.drop(el, {
+      dataTransfer: { files: [new File([new Uint8Array([1])], 'drop.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    expect(mockApi.asset.saveImage).toHaveBeenCalledWith('ws-1', expect.any(Uint8Array), 'png');
+  });
+
+  it('第 7 张被拒：仅 6 pill + 「最多 6 张图片」提示（拒绝发生在 downscale 之前）', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    for (let i = 0; i < 7; i++) {
+      mockApi.asset.saveImage.mockResolvedValueOnce({ path: `.momo/assets/p${i}.png` });
+      pasteImage(el, `s${i}.png`);
+      await waitFor(() =>
+        expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(Math.min(i + 1, 6)),
+      );
+    }
+    expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(6);
+    expect(downscaleMock).toHaveBeenCalledTimes(6);
+    expect(mockApi.asset.saveImage).toHaveBeenCalledTimes(6);
+    expect(screen.getByText('最多 6 张图片')).toBeInTheDocument();
+  });
+
+  it('saveImage 失败 → 不插 pill + 内联错误提示（spec §11：输入不受影响）', async () => {
+    mockApi.asset.saveImage.mockRejectedValue(new Error('磁盘空间不足'));
+    render(<MentionInput />);
+    const el = editor();
+    pasteImage(el);
+    await waitFor(() => expect(screen.getByText(/磁盘空间不足/)).toBeInTheDocument());
+    expect(el.querySelector('span[data-kind="image"]')).toBeNull();
+    // 编辑器仍可正常输入
+    typeInEditor(el, '正常输入');
+    expect(visibleText(el)).toBe('正常输入');
+  });
+
+  it('downscale 失败（>20MB）→ 不调 saveImage + 中文错误提示', async () => {
+    downscaleMock.mockRejectedValue(new Error('图片超过 20MB 上限，已忽略：huge.png'));
+    render(<MentionInput />);
+    const el = editor();
+    pasteImage(el, 'huge.png');
+    await waitFor(() => expect(screen.getByText(/图片超过 20MB/)).toBeInTheDocument());
+    expect(mockApi.asset.saveImage).not.toHaveBeenCalled();
+    expect(el.querySelector('span[data-kind="image"]')).toBeNull();
+  });
+
+  it('多张同批粘贴超限：批次内截断（已有 4 张 + 一次贴 3 张 → 只收 2 张 + 提示）', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    for (let i = 0; i < 4; i++) {
+      mockApi.asset.saveImage.mockResolvedValueOnce({ path: `.momo/assets/p${i}.png` });
+      pasteImage(el, `s${i}.png`);
+      await waitFor(() => expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(i + 1));
+    }
+    const three = ['a.png', 'b.png', 'c.png'].map(
+      (n) => new File([new Uint8Array([1])], n, { type: 'image/png' }),
+    );
+    mockApi.asset.saveImage
+      .mockResolvedValueOnce({ path: '.momo/assets/x1.png' })
+      .mockResolvedValueOnce({ path: '.momo/assets/x2.png' });
+    fireEvent.paste(el, { clipboardData: { files: three } });
+    await waitFor(() => expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(6));
+    expect(mockApi.asset.saveImage).toHaveBeenCalledTimes(6);
+    expect(screen.getByText('最多 6 张图片')).toBeInTheDocument();
+  });
+
+  it('并发双批次上限（Task 9 fold-in b）：已有 5 张 + 两批 2 张在途 → 第 7 张跨批被拒', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    for (let i = 0; i < 5; i++) {
+      mockApi.asset.saveImage.mockResolvedValueOnce({ path: `.momo/assets/p${i}.png` });
+      pasteImage(el, `s${i}.png`);
+      await waitFor(() => expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(i + 1));
+    }
+    // 两批并发在途：旧实现 room 在批次开始时快照（各算 1）→ 5+1+1=7 超限；
+    // 修复后 insertPill 前权威现值复查 → 跨批第 7 张被拒（输家已付出的
+    // downscale/saveImage 不回收——pill 不落编辑器即用户可见语义正确）
+    const batch = (prefix: string): File[] =>
+      [`${prefix}1.png`, `${prefix}2.png`].map(
+        (n) => new File([new Uint8Array([1])], n, { type: 'image/png' }),
+      );
+    mockApi.asset.saveImage.mockResolvedValue({ path: '.momo/assets/x.png' });
+    fireEvent.paste(el, { clipboardData: { files: batch('a') } });
+    fireEvent.paste(el, { clipboardData: { files: batch('b') } });
+    await waitFor(() => expect(screen.getByText('最多 6 张图片')).toBeInTheDocument());
+    expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(6);
+    // 两个批次的首张都完成 downscale/saveImage（6 种子 + 输家 1 次），
+    // 但只有先到者落 pill
+    expect(downscaleMock).toHaveBeenCalledTimes(7);
+    expect(mockApi.asset.saveImage).toHaveBeenCalledTimes(7);
+  });
+});
+
+describe('MentionInput @ 菜单图片分流（spec §5）', () => {
+  it('图片扩展名条目 lucide-image 图标差异；选中插 image pill（2048 哨兵尺寸）+ images 通道', async () => {
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'docs/diagram.png', isDirectory: false },
+      { path: 'docs/readme.md', isDirectory: false },
+    ]);
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@diagram');
+    const imgBtn = (await screen.findByText('docs/diagram.png')).closest('button') as HTMLElement;
+    // 图标分流：图片条目 lucide-image，普通文件条目 lucide-file-text
+    expect(imgBtn.querySelector('svg.lucide-image')).not.toBeNull();
+    const mdBtn = screen.getByText('docs/readme.md').closest('button') as HTMLElement;
+    expect(mdBtn.querySelector('svg.lucide-file-text')).not.toBeNull();
+    fireEvent.click(imgBtn);
+    expect(hasPill(el, 'image', 'docs/diagram.png')).toBe(true);
+    // 哨兵尺寸（@ 选择时无 File 可解码——主进程 expand 拿真图，token 估算按上界）
+    const pill = el.querySelector('span[data-kind="image"]') as HTMLElement;
+    expect(pill.dataset.w).toBe('2048');
+    expect(pill.dataset.h).toBe('2048');
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('[图片: docs/diagram.png]', undefined, {
+      skills: [],
+      files: [],
+      images: [{ path: 'docs/diagram.png', w: 2048, h: 2048 }],
+    });
+  });
+
+  it('非图片扩展名条目照旧进 file 通道（回归锁——分流不误伤普通文件）', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'docs/readme.md', isDirectory: false }]);
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '@readme');
+    fireEvent.click(await screen.findByText('docs/readme.md'));
+    expect(hasPill(el, 'file', 'docs/readme.md')).toBe(true);
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    expect(sessionState.sendMessage).toHaveBeenCalledWith('@docs/readme.md', undefined, {
+      skills: [],
+      files: [{ path: 'docs/readme.md' }],
+    });
+  });
+
+  it('@ 图片选择同样受上限 6 拦截（第 7 个图片条目点击 → 无 pill + 提示）', async () => {
+    mockApi.file.searchNames.mockResolvedValue([{ path: 'docs/d7.png', isDirectory: false }]);
+    render(<MentionInput />);
+    const el = editor();
+    // 先经粘贴灌满 6 张
+    for (let i = 0; i < 6; i++) {
+      mockApi.asset.saveImage.mockResolvedValueOnce({ path: `.momo/assets/p${i}.png` });
+      fireEvent.paste(el, {
+        clipboardData: {
+          files: [new File([new Uint8Array([1])], `s${i}.png`, { type: 'image/png' })],
+        },
+      });
+      await waitFor(() => expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(i + 1));
+    }
+    typeAtEnd(el, ' @d7');
+    fireEvent.click(await screen.findByText('docs/d7.png'));
+    expect(el.querySelectorAll('span[data-kind="image"]')).toHaveLength(6);
+    expect(hasPill(el, 'image', 'docs/d7.png')).toBe(false);
+    expect(screen.getByText('最多 6 张图片')).toBeInTheDocument();
+    // 菜单已关（放弃语义与选择一致）
+    expect(screen.queryByText('引用文件')).not.toBeInTheDocument();
+  });
+});
+
+describe('MentionInput 能力提示行（spec §8 场景 1）', () => {
+  function pasteOne(el: HTMLElement): void {
+    fireEvent.paste(el, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1])], 'shot.png', { type: 'image/png' })],
+      },
+    });
+  }
+
+  it('全员 vision=false（含缺省）+ image pill → 提示行出现；删 pill → 消失', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'i-1', agentName: 'coder', vision: false }),
+      makeMember({ instanceId: 'i-2', agentName: 'writer' }), // 旧载荷缺省 → 按 false 消费
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    // 无 image pill 时不显示
+    expect(screen.queryByText(/不支持图片/)).toBeNull();
+    pasteOne(el);
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    expect(
+      screen.getByText('当前 agent 的模型不支持图片，发送时图片将省略'),
+    ).toBeInTheDocument();
+    // Backspace 两段删除 pill → removePill 补发 onInputText → 提示即时消失
+    const pill = el.querySelector('span[data-kind="image"]') as HTMLSpanElement;
+    setCaret(pill.nextSibling as Text, 0);
+    fireEvent.keyDown(el, { key: 'Backspace' });
+    fireEvent.keyDown(el, { key: 'Backspace' });
+    await waitFor(() => expect(screen.queryByText(/不支持图片/)).toBeNull());
+  });
+
+  it('任一成员 vision=true → 不显示提示', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'i-1', agentName: 'coder', vision: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    pasteOne(el);
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    expect(screen.queryByText(/不支持图片/)).toBeNull();
+  });
+
+it('发送后提示随 pill 清空消失', async () => {
+    sessionState.members = [makeMember({ instanceId: 'i-1', agentName: 'coder' })];
+    render(<MentionInput />);
+    const el = editor();
+    pasteOne(el);
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    expect(screen.getByText(/不支持图片/)).toBeInTheDocument();
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(/不支持图片/)).toBeNull());
+  });
+
+  // F-5：混合团队提示（spec §8 场景 2）——与场景 1 全员非 vision 分支互斥
+  it('混合团队：leader 非 vision + 存在 vision 成员 + image pill → 列出 vision 成员名（场景 1 提示不出现）', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'i-pm', agentName: 'pm-agent', isLeader: true, vision: false }),
+      makeMember({ instanceId: 'i-vision', agentName: 'vision-bot', isLeader: false, vision: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    pasteOne(el);
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    // 场景 1 文案「发送时图片将省略」必须缺席（互斥分支）
+    expect(screen.queryByText(/发送时图片将省略/)).toBeNull();
+    // 混合提示行：含 vision 成员名「vision-bot」+ 团队措辞（精确匹配提示 span 文本）
+    expect(
+      screen.getByText(/团队成员.+vision-bot.+可识别图片/),
+    ).toBeInTheDocument();
+  });
+
+  it('全员 vision=true（leader 也 vision）→ 混合提示与场景 1 提示均不出现', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'i-pm', agentName: 'pm-agent', isLeader: true, vision: true }),
+      makeMember({ instanceId: 'i-coder', agentName: 'coder', isLeader: false, vision: true }),
+    ];
+    render(<MentionInput />);
+    const el = editor();
+    pasteOne(el);
+    await waitFor(() => expect(el.querySelector('span[data-kind="image"]')).not.toBeNull());
+    // 场景 1 文案缺席
+    expect(screen.queryByText(/不支持图片/)).toBeNull();
+    expect(screen.queryByText(/发送时图片将省略/)).toBeNull();
+    // 混合提示行缺席（无「团队成员」措辞）
+    expect(screen.queryByText(/团队成员/)).toBeNull();
   });
 });

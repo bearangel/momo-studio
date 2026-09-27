@@ -364,6 +364,16 @@ export interface FileContextItem {
   path: string;
 }
 
+/** 输入框上下文项——图片（多模态 spec 2026-09-26 §6：粘贴/拖入落盘产物或 @ 菜单图片文件） */
+export interface ImageContextItem {
+  /** workspace 相对路径（asset:saveImage 的 `.momo/assets/<hash>.<ext>` 或 @ 菜单文件） */
+  path: string;
+  /** 降采样后宽度 px（token 估算免图片解析依赖，spec §9） */
+  w: number;
+  /** 降采样后高度 px */
+  h: number;
+}
+
 /**
  * 一条消息携带的输入框上下文（renderer ↔ main 契约 + messages.context_json 载荷）。
  * 解析收口在 renderer 端 src/lib/message-context.ts（防御性：null / 损坏 / 非法形状 → null）。
@@ -371,6 +381,8 @@ export interface FileContextItem {
 export interface MessageContext {
   skills: SkillContextItem[];
   files: FileContextItem[];
+  /** 图片引用（可选：旧消息 / 无图消息缺省 = 无图，全链路按缺省兼容）；单条消息上限 6 张（renderer 拦截 + sanitize 双层） */
+  images?: ImageContextItem[];
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */
@@ -552,6 +564,8 @@ export interface ProviderModel {
   reasoning: ReasoningCapability;
   /** resolve 链生效窗口（用户列→预设→目录）；null=未知 */
   effectiveWindow: number | null;
+  /** 视觉输入能力位（用户覆盖列，migration 045 起；与 electron 端 ProviderModel 对齐） */
+  vision: boolean;
 }
 
 /** 全局模型供应商（注册表项，不含 apiKey） */
@@ -1036,6 +1050,12 @@ export interface SessionMemberInfo {
   lastRunning: boolean;
   /** 会话创建时的 leader 快照（session_members.is_leader） */
   isLeader: boolean;
+  /**
+   * 视觉输入能力（2026-09-26 多模态 spec §8）：主进程按成员 def 的
+   * (provider, model) 同源 resolve。可选兼容：旧载荷/存量 mock 缺省
+   * 按 false 消费（vision ?? false）。运行时以 AGENT_CONFIG 快照为准。
+   */
+  vision?: boolean;
 }
 
 /**
@@ -1106,6 +1126,13 @@ export interface SessionApiSurface {
   /**
    * 历史读取：messages + 每条 message 的 events，
    * renderer 用 stream-aggregator 重建 StreamState。
+   *
+   * 事件裁剪契约（2026-09-25 工作空间切换卡顿修复 + C 方案显示一致性）：
+   * - 最近 30 条消息携带全量事件；窗口内单消息事件数 > 2000 或更早消息
+   *   走压缩快照（终态写时游程合并：连续 thinking/text delta 合一、结构
+   *   事件保留——thinking/正文/工具卡全量保序，交错顺序与流式一致）
+   * - 快照缺失（历史数据）由主进程就地回填并落库（首访一次付出）
+   * - 零事件消息省略 eventsByMessage key（静态气泡渲染 body）
    */
   getMessages(
     sessionId: string,
@@ -1117,6 +1144,7 @@ export interface SessionApiSurface {
   /**
    * 向前翻页：返回 created_at < beforeTs 的消息。
    * beforeTs 由调用方从当前可见消息的最小 createdAt 推导；count 默认 30。
+   * 翻页消息全部走压缩快照（fullRecentCount=0，语义同 getMessages）。
    */
   loadOlder(
     sessionId: string,
@@ -1502,6 +1530,30 @@ export interface ApiSurface {
     /** 文件名搜索（侧边栏搜索，spec §5.1）：主进程递归扫描，返回相对路径命中项 */
     searchNames(workspaceId: string, query: string): Promise<SearchHit[]>;
   };
+  /**
+   * 2026-09-26 多模态（spec §5）：粘贴/拖入图片的资源通道。
+   * renderer 降采样后 Uint8Array 经此 IPC 写入 workspace `.momo/assets/`，返回相对路径。
+   * 内容寻址去重：同字节 re-paste 直接复用，不重写。
+   */
+  asset: {
+    /**
+     * 保存一张已降采样的图片到 workspace 内，返回相对路径（workspace 根下的
+     * `.momo/assets/<sha1 前 12 hex>.<ext>`）。
+     * 失败语义：未知 workspace / 越界 / 字节超过 8MB / 扩展名非 png|jpg → 抛错
+     * （spec §11：renderer 接 reject 后不插 pill + toast 错误，输入不受影响）。
+     */
+    saveImage(
+      workspaceId: string,
+      data: Uint8Array,
+      ext: 'png' | 'jpg',
+    ): Promise<{ path: string }>;
+    /**
+     * 读 workspace 内 `.momo/assets/<hash>.(png|jpg)` 图片为 data URL（气泡缩略图，
+     * spec 2026-09-26 §10）。失败语义：路径不合规 / 越界 / 文件缺失 / 超 8MB /
+     * 未知 workspace → 抛中文错误（渲染端降级「图片不可用」占位，spec §11）。
+     */
+    readDataUrl(workspaceId: string, path: string): Promise<string>;
+  };
   agent: {
     /** v25：成员加入（无 role/parent；同 ws 同 def 重复加入报错） */
     addMember(input: AddMemberInput): Promise<WorkspaceAgentMember>;
@@ -1637,6 +1689,8 @@ export interface ApiSurface {
       modelId: string,
       config: ThinkingConfig | null,
     ) => Promise<void>;
+    /** 视觉输入能力位（用户覆盖，双向压过预设表；2026-09-26 多模态 spec §3.3） */
+    setModelVision: (providerId: string, modelId: string, vision: boolean) => Promise<void>;
   };
   /**
    * v2.0 P1 Task 12：im 命名空间收缩——全部 im:* invoke 通道已随 Matrix 全家删除，

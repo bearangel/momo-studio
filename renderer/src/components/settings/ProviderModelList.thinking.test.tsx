@@ -12,19 +12,19 @@ const models: ProviderModel[] = [
     providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1,
     contextWindow: null, thinkingJson: null,
     reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' },
-    effectiveWindow: 1000000,
+    effectiveWindow: 1000000, vision: true,
   },
   {
     providerId: 'p1', modelId: 'glm-4.6', enabled: true, addedAt: 2,
     contextWindow: null, thinkingJson: null,
     reasoning: { kind: 'toggle' },
-    effectiveWindow: 200000,
+    effectiveWindow: 200000, vision: false,
   },
   {
     providerId: 'p1', modelId: 'glm-4.5-air', enabled: true, addedAt: 3,
     contextWindow: null, thinkingJson: null,
     reasoning: { kind: 'none' },
-    effectiveWindow: null,
+    effectiveWindow: null, vision: false,
   },
 ];
 
@@ -92,7 +92,7 @@ describe('默认清除（fix 哨兵冲突）', () => {
       providerId: 'p1', modelId: 'glm-5.3', enabled: true, addedAt: 1,
       contextWindow: 1000000, thinkingJson: { mode: 'on', effort: 'low' },
       reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' },
-      effectiveWindow: 1000000,
+      effectiveWindow: 1000000, vision: true,
     },
   ];
   let setModelThinking: ReturnType<typeof vi.fn<[], Promise<undefined>>>;

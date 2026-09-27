@@ -497,7 +497,7 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     let first: LLMMessage[] = [];
     mockSingleRoundStop((m) => { first = m; });
 
-    const steerCtx = { skills: [{ slug: 's', name: 'n', body: '技能指令' }], files: [] };
+    const steerCtx = { skills: [{ slug: 's', name: 'n', body: '技能指令' }], files: [], images: [], droppedImages: [] };
     const resumeTurn: RebuiltTurn = {
       messages: [{ role: 'user', content: '原始指令' }],
       toolCallsUsed: 0,
@@ -621,5 +621,113 @@ describe('runChatLoop resumeTurn（断点续跑参数）', () => {
     expect(first[2]).toEqual({ role: 'tool', content: INTERRUPTED_TOOL_RESULT, toolCallId: 'call-9' });
     const sys = systemContentOf(first);
     expect(sys).toContain('「子任务指令兜底」');
+  });
+});
+
+// === 多模态 resume 图片门控（Task 9 fix M2，spec §9 断点续跑）===
+// gateResumeTurnImages 三态经 runChatLoop resume 路径端到端锁定
+// （rebuildTurn 侧只保载荷，能力门控收口在子进程 AGENT_CONFIG.vision）。
+describe('runChatLoop resumeTurn 图片门控（gateResumeTurnImages）', () => {
+  const originalSend = process.send;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    __setMemoryProviderForTest(stubProvider);
+    process.send = ((msg: unknown): boolean => {
+      sentChunks.push(msg);
+      return true;
+    }) as NonNullable<typeof process.send>;
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+  });
+
+  const img = (n: number, tag: string): { mime: string; base64: string; w: number; h: number; path: string } => ({
+    mime: 'image/png', base64: `b${tag}${n}`, w: 100, h: 100, path: `assets/${tag}${n}.png`,
+  });
+
+  it('(a) vision=false → 重建段 images 剥除 + 首个带图 user 消息尾注降级行（N 张 N 条）', async () => {
+    const resumeTurn: RebuiltTurn = {
+      messages: [
+        { role: 'user', content: '看图修 bug', images: [img(1, 'a'), img(2, 'a')] },
+        { role: 'assistant', content: '分析中', images: [img(3, 'a')] },
+      ],
+      toolCallsUsed: 0,
+      steers: [],
+      degenerate: false,
+    };
+    let first: LLMMessage[] = [];
+    mockSingleRoundStop((m) => {
+      first = m;
+    });
+
+    await runChatLoop(
+      '!room:t', '看图修 bug', makeConfig({ vision: false }), makeContext(),
+      { toolCallsUsed: 0 }, undefined, undefined, 's-gate-a', resumeTurn,
+    );
+
+    const user = first.find((m) => m.role === 'user')!;
+    expect(user.images).toBeUndefined();
+    expect(user.content).toBe(
+      '看图修 bug\n[图片已省略：当前模型不支持视觉]\n[图片已省略：当前模型不支持视觉]',
+    );
+    // assistant 消息的（契约外防御）images 同样剥除
+    expect(first.every((m) => m.images === undefined)).toBe(true);
+  });
+
+  it('(b) vision=true → images 保留 + 按段内预算钳制（4+4 → 4+2，总量 ≤6）', async () => {
+    const resumeTurn: RebuiltTurn = {
+      messages: [
+        { role: 'user', content: '看这四张', images: [1, 2, 3, 4].map((n) => img(n, 'b')) },
+        { role: 'assistant', content: '收到' },
+        { role: 'user', content: '再看四张', images: [1, 2, 3, 4].map((n) => img(n, 'c')) },
+      ],
+      toolCallsUsed: 0,
+      steers: [],
+      degenerate: false,
+    };
+    let first: LLMMessage[] = [];
+    mockSingleRoundStop((m) => {
+      first = m;
+    });
+
+    await runChatLoop(
+      '!room:t', '看这四张', makeConfig({ vision: true }), makeContext(),
+      { toolCallsUsed: 0 }, undefined, undefined, 's-gate-b', resumeTurn,
+    );
+
+    const users = first.filter((m) => m.role === 'user');
+    expect(users[0]!.images).toHaveLength(4);
+    // 第二个带图 user 只余预算 2（6-4），从其序列头部取
+    expect(users[1]!.images).toHaveLength(2);
+    expect(users[1]!.images!.map((i) => i.path)).toEqual(['assets/c1.png', 'assets/c2.png']);
+    expect(first.reduce((n, m) => n + (m.images?.length ?? 0), 0)).toBeLessThanOrEqual(6);
+  });
+
+  it('(c) 无图载荷 → 重建段逐字节 verbatim（不触发浅拷贝 / 不附字段）', async () => {
+    const resumeTurn: RebuiltTurn = {
+      messages: [
+        { role: 'user', content: '纯文本续跑' },
+        { role: 'assistant', content: '好的' },
+      ],
+      toolCallsUsed: 0,
+      steers: [],
+      degenerate: false,
+    };
+    let first: LLMMessage[] = [];
+    mockSingleRoundStop((m) => {
+      first = m;
+    });
+
+    await runChatLoop(
+      '!room:t', '纯文本续跑', makeConfig({ vision: true }), makeContext(),
+      { toolCallsUsed: 0 }, undefined, undefined, 's-gate-c', resumeTurn,
+    );
+
+    expect(first[1]).toEqual({ role: 'user', content: '纯文本续跑' });
+    expect(first[2]).toEqual({ role: 'assistant', content: '好的' });
   });
 });

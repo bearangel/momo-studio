@@ -10,7 +10,7 @@
 // 编辑的是本地 draft，"保存"才写回主进程。预览校验复用与 electron 端
 // commit-validator 等价的纯逻辑（命中任一 pattern 即合规），避免每次按键都走 IPC。
 import { useEffect, useState, type FormEvent } from 'react';
-import { X, CircleCheck, CircleX } from 'lucide-react';
+import { X, CircleCheck, CircleX, Info } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { type GitPolicy, type CommitPattern, type CommitValidation } from '../../ipc/types';
 import { defaultGitPolicy } from '../../lib/git-policy';
@@ -137,6 +137,16 @@ export function GitPolicySettings({ workspaceId }: Props) {
       </div>
 
       {error && <div className="text-sm text-status-error">{error}</div>}
+
+      {/* F-1：spec §5 承诺的 git 污染提示（不代写用户 .gitignore） */}
+      <div className="flex items-start gap-1.5 text-xs text-secondary">
+        <Info size={12} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+        <span>
+          图片缓存位于 <code className="font-mono text-primary">.momo/assets/</code>，
+          建议加入 <code className="font-mono text-primary">.gitignore</code>：
+          <code className="ml-1 font-mono text-primary">echo '.momo/' &gt;&gt; .gitignore</code>
+        </span>
+      </div>
 
       {/* 基础开关 */}
       <Checkbox

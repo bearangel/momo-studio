@@ -37,6 +37,13 @@ import { routeBrowserOp } from '../browser/op-router';
 // v2.4.x 网络信任门（spec 2026-09-13 §5）：子进程 net-trust-op 请求在此路由到
 // 主进程信任门（grants/等待表/推卡都活在主进程）；任务终态同步清理会话级授权
 import { handleNetTrustOp } from '../sandbox/network-trust';
+import {
+  reapProcessGroups,
+  sweepRoundEscapes,
+  listRoundProcesses,
+  killRoundProcess,
+  keepRoundProcess,
+} from '../sandbox/process-registry';
 
 /** task 配置——由上层（消息路由层）构造后传给 executeTask */
 export interface TaskConfig {
@@ -92,6 +99,15 @@ export interface TaskConfig {
    * 不回 renderer）。与 runtime-config.ts TaskConfig.context 同型。
    */
   context?: ExpandedContext;
+  /**
+   * 多模态团队路由提示（spec 2026-09-26-image-input-multimodal §8 场景 2）：
+   * routeUserChat 在「团队会话 + 接待者非 vision + 消息带图 + 存在 vision 成员」
+   * 时构造，随 task-config 下发；runtime 据此向 leader 注入一次性系统提示
+   * （不落库）。与 runtime-config.ts TaskConfig.visionHint 同型。
+   */
+  visionHint?: { members: Array<{ name: string; model: string }> };
+  /** 多模态能力每消息现解析（2026-09-26 P0，同 runtime-config TaskConfig.vision） */
+  vision?: boolean;
 }
 
 /** notifyTaskReply 的入参——camelCase（由 RouterService 从 task_reply event 转换而来） */
@@ -111,6 +127,12 @@ export interface AgentRunnerOpts {
   agentUserId: string;
   /** 所属 workspace ID */
   workspaceId: string;
+  /**
+   * workspace 根目录（startAgentRuntime 的 AgentRuntimeOpts 同值透传）——
+   * 回合收尾的逃逸清扫（sweepRoundEscapes）扫描根。缺省时逃逸补扫跳过
+   * （组收割不受影响）。
+   */
+  workspaceDir?: string;
   /** runtime 配置（task-driven 模式下由 warmPool spawn 注入，runner 自身不直接使用） */
   config?: AgentRuntimeOpts;
   /** 共享 warm pool（多个 AgentRunner 可共用同一 pool） */
@@ -139,6 +161,8 @@ interface ActiveTask {
   executionSessionId: string;
   runtime: WarmRuntime;
   taskId: string | null;
+  /** 回合开始时刻（进程逃逸清扫的时间窗锚点） */
+  startedAt: number;
   /** 注册到 child 的 message handler，destroy/end 时用于 off 反注册 */
   messageHandler: (msg: unknown) => void;
   /** 最近一次 end chunk 的完成状态（task-end 终态映射依据；未见 end 时 undefined） */
@@ -252,6 +276,12 @@ export class AgentRunner {
         void this.routeNetTrustOpToChild(child, msg);
         return;
       }
+      // process-op（回合进程管理桥请求，2026-09-25 E-A）：同上——requestId
+      // 关联先于流过滤；授权按消息自带 streamSessionId 在 registry 层校验
+      if (m.type === 'process-op') {
+        void this.routeProcessOpToChild(child, msg);
+        return;
+      }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
       if (m.streamSessionId !== task.streamSessionId) return;
       if (m.type === 'end') {
@@ -267,6 +297,10 @@ export class AgentRunner {
           child.off('message', messageHandler);
           this.opts.warmPool.release(runtime);
           this.activeTasks.delete(task.streamSessionId);
+          // 进程组收割 + 逃逸补扫（与 finalizeActiveTask 同语义——普通用户
+          // 对话回合全走本路径，漏钩即全量泄漏）
+          reapProcessGroups(task.streamSessionId);
+          if (active) this.sweepEscapes(active);
           // v2.3 车道：顶层流收尾让道 + 触发排队放行
           clearLaneIfMatch(task.executionSessionId, task.streamSessionId);
           notifyExecutor();
@@ -299,6 +333,7 @@ export class AgentRunner {
       executionSessionId: task.executionSessionId,
       runtime,
       taskId: task.taskId,
+      startedAt: Date.now(),
       messageHandler,
     };
     this.activeTasks.set(task.streamSessionId, active);
@@ -337,6 +372,11 @@ export class AgentRunner {
       ...(task.historyPrefix ? { historyPrefix: task.historyPrefix } : {}),
       // v2.11 输入框上下文同型透传（router-context.test.ts 接线锁；摘掉即红）
       ...(task.context ? { context: task.context } : {}),
+      // 多模态团队路由提示（spec 2026-09-26-image-input-multimodal §8 场景 2）
+      // 同型条件透传——漏转发该字段则 leader 路由提示在生产静默失效
+      //（agent-runner-budget.test.ts「C1 回归锁」；摘掉即红）
+      ...(task.visionHint ? { visionHint: task.visionHint } : {}),
+      ...(task.vision !== undefined ? { vision: task.vision } : {}),
     });
 
     return { streamSessionId: task.streamSessionId };
@@ -360,6 +400,70 @@ export class AgentRunner {
     } catch (err) {
       logger.warn('net-trust-op 应答回送失败（IPC 通道已关闭）', {
         requestId: typeof requestId === 'string' ? requestId : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * process-op 请求路由回程（routeNetTrustOpToChild 同型）：process_list /
+   * process_kill 主进程侧执行（授权 = 该回合 registry 登记的进程组）→
+   * 应答补全线协议字段后回送子进程。失败统一 {ok:false, error}；
+   * child.send 失败只记日志——子进程桥自有超时兜底。requestId 原样回带。
+   */
+  private async routeProcessOpToChild(child: ChildProcess, msg: unknown): Promise<void> {
+    const m = msg as {
+      requestId?: unknown;
+      op?: unknown;
+      streamSessionId?: unknown;
+      workspaceId?: unknown;
+      pgid?: unknown;
+      pid?: unknown;
+      port?: unknown;
+    };
+    const requestId = typeof m.requestId === 'string' ? m.requestId : '';
+    const streamSessionId = typeof m.streamSessionId === 'string' ? m.streamSessionId : '';
+    const workspaceId = typeof m.workspaceId === 'string' ? m.workspaceId : undefined;
+    let outcome: { ok: boolean; payload?: unknown; error?: string };
+    try {
+      if (m.op === 'list') {
+        outcome = { ok: true, payload: { groups: listRoundProcesses(streamSessionId, workspaceId) } };
+      } else if (m.op === 'kill') {
+        const target: { pgid?: number; pid?: number; port?: number } = {};
+        if (typeof m.pgid === 'number') target.pgid = m.pgid;
+        if (typeof m.pid === 'number') target.pid = m.pid;
+        if (typeof m.port === 'number') target.port = m.port;
+        if (Object.keys(target).length === 0) {
+          outcome = { ok: false, error: 'process_kill 需要 pgid / pid / port 三选一' };
+        } else {
+          outcome = { ok: true, payload: killRoundProcess(streamSessionId, target, workspaceId) };
+        }
+      } else if (m.op === 'keep') {
+        if (workspaceId === undefined) {
+          outcome = { ok: false, error: 'process_keep 需要 workspaceId' };
+        } else {
+          const target: { pgid?: number; pid?: number; port?: number } = {};
+          if (typeof m.pgid === 'number') target.pgid = m.pgid;
+          if (typeof m.pid === 'number') target.pid = m.pid;
+          if (typeof m.port === 'number') target.port = m.port;
+          const kept = keepRoundProcess(streamSessionId, workspaceId, target);
+          outcome = kept.ok ? { ok: true, payload: kept } : { ok: false, error: kept.error };
+        }
+      } else {
+        outcome = { ok: false, error: `未知 process-op: ${String(m.op)}` };
+      }
+    } catch (err) {
+      outcome = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    const result =
+      outcome.ok
+        ? { type: 'process-op:result', requestId, ok: true, payload: outcome.payload }
+        : { type: 'process-op:result', requestId, ok: false, error: outcome.error };
+    try {
+      child.send(result);
+    } catch (err) {
+      logger.warn('process-op 应答回送失败（IPC 通道已关闭）', {
+        requestId: requestId || undefined,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -413,6 +517,13 @@ export class AgentRunner {
       this.transitionTaskTerminal(active, taskEndInfo);
     }
     this.opts.warmPool.release(active.runtime);
+    // 沙箱进程组收割（2026-09-25 生命周期立项）：任务（回合）拥有其进程组——
+    // 后台 & 子进程（npm start 泄漏源）随回合收尾全组回收，主进程侧执行
+    reapProcessGroups(active.streamSessionId);
+    // 逃逸补扫（2026-09-25 缺口修复）：setsid / double-fork 守护化进程脱离
+    // 进程组，组杀打不着——按「本回合时间窗 + cwd ∈ workspace」补杀刚逃逸的
+    // 孤儿（识别口径与 boot 清扫一致，见 process-registry.sweepRoundEscapes）
+    this.sweepEscapes(active);
     // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
     clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
     notifyExecutor();
@@ -515,6 +626,23 @@ export class AgentRunner {
   }
 
   /**
+   * 逃逸补扫统一入口（finalizeActiveTask / handleChildExit / destroy 共用）：
+   * workspaceDir 未配置时跳过；失败只 warn 不影响收尾链路。
+   */
+  private sweepEscapes(active: ActiveTask): void {
+    const dir = this.opts.workspaceDir;
+    if (typeof dir !== 'string' || dir === '') return;
+    try {
+      sweepRoundEscapes([dir], active.startedAt);
+    } catch (err) {
+      logger.warn('回合逃逸清扫失败（不影响收尾链路）', {
+        streamSessionId: active.streamSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * C2：child 'exit' 清理链的 runner 侧入口（由 runtime-registry 的 spawn
    * onExit 回调接线）。对该子进程上仍未收尾的活跃 task：
    *   - 反注册 message handler + 清兜底计时器 + 移出活跃表
@@ -537,6 +665,9 @@ export class AgentRunner {
       }
       this.activeTasks.delete(active.streamSessionId);
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
+      // 崩溃/退出路径同款收割（与 finalizeActiveTask 同语义——组杀 + 逃逸补扫）
+      reapProcessGroups(active.streamSessionId);
+      this.sweepEscapes(active);
       finalizeStreamOnCrash(active.streamSessionId, code);
       if (active.taskId !== null) {
         if (shuttingDown) {
@@ -686,6 +817,9 @@ export class AgentRunner {
         active.safetyTimer = undefined;
       }
       this.opts.warmPool.release(active.runtime);
+      // 进程组收割 + 逃逸补扫（destroy 是进程级清理路径——与 finalizeActiveTask 同语义）
+      reapProcessGroups(active.streamSessionId);
+      this.sweepEscapes(active);
       // v2.3 车道：流收尾让道（迟到收尾按 streamSessionId 匹配天然 no-op）
       clearLaneIfMatch(active.executionSessionId, active.streamSessionId);
     }

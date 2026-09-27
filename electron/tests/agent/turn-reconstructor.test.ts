@@ -487,7 +487,7 @@ describe('turn-reconstructor：九场景矩阵', async () => {
   // drained 分支在每一后续回合的会话重建里重复注入 skill/文件展开（spec D2 破坏）。
 
   it('13. steer 带 context 已 drain → [用户中途补充] 经 renderTurnBody 重放展开（消费点渲染，非落库定型）', async () => {
-    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
+    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [], images: [], droppedImages: [] };
     insertOwnerMessage(SESSION_ID, '继续重构');
     startStream('ss-ctx-drained');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-drained', delta: '分析中' });
@@ -518,7 +518,7 @@ describe('turn-reconstructor：九场景矩阵', async () => {
   });
 
   it('14. steer 带 context 未 drain → steers[] 元素形状 {body, context}（原文+元数据，非包装体）', async () => {
-    const ctx = { skills: [], files: [{ path: 'src/a.ts', content: 'const a = 1;' }] };
+    const ctx = { skills: [], files: [{ path: 'src/a.ts', content: 'const a = 1;' }], images: [], droppedImages: [] };
     insertOwnerMessage(SESSION_ID, '继续优化');
     startStream('ss-ctx-pending');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-pending', delta: '工作中' });
@@ -538,7 +538,7 @@ describe('turn-reconstructor：九场景矩阵', async () => {
   });
 
   it('15. steer 事件 payload 落库形态（带 context）：{body, context}——context 经 stream-relay 透传', async () => {
-    const ctx = { skills: [{ slug: 's', name: 'n', body: 'b' }], files: [] };
+    const ctx = { skills: [{ slug: 's', name: 'n', body: 'b' }], files: [], images: [], droppedImages: [] };
     insertOwnerMessage(SESSION_ID, '形态校验');
     startStream('ss-ctx-shape');
     __flushEventBufferForTest();
@@ -590,7 +590,7 @@ describe('turn-reconstructor：九场景矩阵', async () => {
   // steer 每经一回合重建就重放一次 skill/文件展开（spec D2「一次性注入」破坏）。
 
   it('17. 同一 seed 两模式对照：session 重建 steer 仅原文；resume（rebuildTurn）同回合重放展开', async () => {
-    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [] };
+    const ctx = { skills: [{ slug: 's', name: '技能名', body: '技能正文内容' }], files: [], images: [], droppedImages: [] };
     insertOwnerMessage(SESSION_ID, '继续重构');
     startStream('ss-ctx-r2');
     __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-ctx-r2', delta: '分析中' });
@@ -737,5 +737,68 @@ describe('rebuildTurn 主消息 context 重放（I1 + M3）', async () => {
     __flushEventBufferForTest();
     const t2 = await rebuildTurn('ss-userctx-bad2');
     expect(t2.messages[0]).toEqual({ role: 'user', content: '形状坏' });
+  });
+
+  // === 多模态（Task 9 D2，spec §9 断点续跑）：resume 重放保留 context_json.images ===
+  // rebuildTurn 读图附到重建段首条 user 消息（vision 门控在 runtime 子进程侧，
+  // 此处只锁「载荷保留」）。旧载荷（无 images 字段 / images 形状非法）不变。
+  it('22. 首条 user 消息 context_json.images → resume 重建段携带 base64（断点消息 = 当前轮）', async () => {
+    const imgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-turn-img-'));
+    try {
+      fs.writeFileSync(path.join(imgDir, 'shot.png'), Buffer.from([7]));
+      setExpanderDeps({ skillRoots: [], workspaceDir: () => imgDir });
+      insertOwnerMessageWithCtx(
+        '看图说话',
+        JSON.stringify({ skills: [], files: [], images: [{ path: 'shot.png', w: 640, h: 480 }] }),
+      );
+      startStream('ss-userimg-1');
+      __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userimg-1', delta: '分析中' });
+      __flushEventBufferForTest();
+
+      const turn = await rebuildTurn('ss-userimg-1');
+
+      expect(turn.messages[0]!.role).toBe('user');
+      expect(turn.messages[0]!.images).toHaveLength(1);
+      expect(turn.messages[0]!.images![0]).toMatchObject({
+        mime: 'image/png',
+        w: 640,
+        h: 480,
+        path: 'shot.png',
+      });
+      expect(turn.messages[0]!.images![0]!.base64).toBe(Buffer.from([7]).toString('base64'));
+      // 正文保持 renderTurnBody 形态（无 images 时正文不受染）
+      expect(turn.messages[0]!.content).toBe('看图说话');
+    } finally {
+      setExpanderDeps({});
+      fs.rmSync(imgDir, { recursive: true, force: true });
+    }
+  });
+
+  it('23. 旧载荷兼容：无 images 字段 / images 元素畸形 → 首条 user 无 images（逐字节不变）', async () => {
+    insertOwnerMessageWithCtx('旧消息', JSON.stringify({ skills: [], files: [] }));
+    startStream('ss-userimg-old');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userimg-old', delta: 'ok' });
+    __flushEventBufferForTest();
+    const t1 = await rebuildTurn('ss-userimg-old');
+    expect(t1.messages[0]).toEqual({ role: 'user', content: '旧消息' });
+
+    // images 存在但元素畸形（w 非正数）→ 视为无图（parseContextJson 形状校验，
+    // 与 renderer parseMessageContext 同规则）
+    const badDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-turn-imgbad-'));
+    try {
+      setExpanderDeps({ skillRoots: [], workspaceDir: () => badDir });
+      insertOwnerMessageWithCtx(
+        '畸形图',
+        JSON.stringify({ skills: [], files: [], images: [{ path: 'x.png', w: 0, h: 10 }] }),
+      );
+      startStream('ss-userimg-bad');
+      __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-userimg-bad', delta: 'B' });
+      __flushEventBufferForTest();
+      const t2 = await rebuildTurn('ss-userimg-bad');
+      expect(t2.messages[0]).toEqual({ role: 'user', content: '畸形图' });
+    } finally {
+      setExpanderDeps({});
+      fs.rmSync(badDir, { recursive: true, force: true });
+    }
   });
 });

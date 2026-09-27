@@ -3,6 +3,7 @@
 // 中文混合系数 token 估算（spec §3）：
 //   - CJK 字符 ÷1.6，其余 ÷4，向上取整
 //   - estimateConversation 串行汇总 system + messages（含 toolCalls JSON）+ tools 定义
+//   - estimateImageTokens：图片 token 估算 max(258, ⌈w×h/750⌉)，messages.images 累加（§9）
 //   - 三个 COMPACTION_* 常量透出（子进程与主进程共享同一份真理源）
 //
 // 系数理由：opencode 用 ÷4 对中文系统性低估 50%+；本实现按 spec §3
@@ -66,11 +67,25 @@ export function estimateTokens(text: string): number {
 }
 
 /**
+ * 估算单张图片的 token 数（spec 2026-09-26-image-input-multimodal §9）：
+ *   max(258, ⌈w×h/750⌉)
+ *
+ * 对齐 OpenAI vision 计价的 tiles 近似（每 750 平方像素约 1 tile token，
+ * 每张图固定 ~85 token 基础开销已折算进下限）——258 为下限，防止小图
+ * 估算为零导致压缩阈值误判。w/h 来自降采样后的尺寸（Task 3 / §7），
+ * 无需解析图片二进制。
+ */
+export function estimateImageTokens(w: number, h: number): number {
+  return Math.max(258, Math.ceil((w * h) / 750));
+}
+
+/**
  * 估算整次对话的 token 数（spec §3）。
  *
  * 计算范围：
  *   - system 字符串（顶层 system prompt）
  *   - 每条 LLMMessage 的 content；assistant 角色额外累加 toolCalls.arguments 的 JSON 序列化
+ *   - 每条 LLMMessage 的 images（若存在）：逐张 estimateImageTokens 累加（§9）
  *   - tools 数组中的每个工具定义（name + description + inputSchema JSON 序列化）
  *
  * 串行加法：与 estimateTokens 同系数（中文 ÷1.6，其余 ÷4），不引入
@@ -85,6 +100,11 @@ export function estimateConversation(input: {
 
   for (const m of input.messages) {
     total += estimateTokens(m.content ?? '');
+    if (m.images) {
+      for (const img of m.images) {
+        total += estimateImageTokens(img.w, img.h);
+      }
+    }
     if (m.role === 'assistant' && m.toolCalls) {
       for (const tc of m.toolCalls) {
         // 工具调用名 + JSON 参数：与 OpenAI/Anthropic 转换路径一致

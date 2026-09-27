@@ -32,6 +32,9 @@ import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
 import { getSession } from '../storage/sessions/repo';
 import { expandMessageContext } from '../im/context-expander';
+import { resolveVisionCapability } from './spawn-helpers';
+import { collectRecentSessionImages } from './turn-reconstructor';
+import type { ExpandedContext } from './runtime-config';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
 
 // === v2.9 事件驱动 dispatch：runner 空闲通知通道（依赖注入，与 setBridgeRouter 同法） ===
@@ -225,12 +228,31 @@ export class RouterService {
       }
     }
 
+    // 多模态（spec 2026-09-26-image-input-multimodal §8 场景 2）：消息带图才解析
+    // 团队路由提示（DB 查询门控在 images 非空上——无图消息零额外开销）；快速/
+    // 单 agent 会话、接待者可视觉、无 vision 成员 → undefined（不附字段）
+    const visionHint =
+      input.context?.images && input.context.images.length > 0
+        ? this.buildVisionHint(input.sessionId, input.assignmentId)
+        : undefined;
+
+    // 多模态能力每消息现解析（2026-09-26 P0）：带图消息附 vision——用户改开关
+    // 后下一条消息即生效，不受 warm runtime AGENT_CONFIG 定型影响（v2.2 教义）；
+    // 门控在输入意图（pre-expand，与 visionHint 同门）——展开即便丢弃图片，
+    // runtime 降级/占位行仍需正确 vision；无图消息零查询开销不附
+    const visionNow =
+      (input.context?.images?.length ?? 0) > 0
+        ? this.resolveTargetVision(input.assignmentId)
+        : undefined;
+
     const task: TaskConfig = {
       taskId: null,
       executionSessionId: input.sessionId,
       body: input.body,
       streamSessionId: input.streamSessionId ?? randomUUID(),
       ...(expandedContext ? { context: expandedContext } : {}),
+      ...(visionHint ? { visionHint } : {}),
+      ...(visionNow !== undefined ? { vision: visionNow } : {}),
     };
     await runner.executeTask(task);
     // v2.3 会话车道注册（spec §4.1）：顶层流派发即占道；dispatch 子流走
@@ -308,6 +330,94 @@ export class RouterService {
       return getSession(sessionId)?.workspaceId ?? null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * 多模态团队路由提示（spec 2026-09-26-image-input-multimodal §8 场景 2）：
+   * 团队协作会话（有效成员 > 1）+ 接待者模型非 vision + 存在其它 vision 成员
+   * → 返回可视觉成员清单（name = agent_definitions.name、model = model_name），
+   * runtime 据此向 leader 注入一次性系统提示（不落库）。
+   *
+   * 成员 vision 与 session-ops.getSessionMembersInfo 同源——复用
+   * resolveVisionCapability 三级解析（provider_models.vision → 预设表 → false，
+   * 不在本处重复）；额外取 model_name 是 SessionMemberInfo 不携带的 hint 专属
+   * 字段，故独立 JOIN。查询失败降级 undefined（hint 是增强不是前提，与
+   * resolveWorkspaceId 同纪律）；快速/单 agent 协作会话（成员 ≤ 1）天然不附。
+   */
+  private buildVisionHint(
+    sessionId: string,
+    receiverAssignmentId: string,
+  ): TaskConfig['visionHint'] | undefined {
+    try {
+      const rows = getDb()
+        .prepare(
+          `SELECT m.instance_id, d.name, d.model_provider_id, d.model_name
+           FROM session_members m
+           JOIN workspace_agent_members a ON m.instance_id = a.instance_id
+           JOIN agent_definitions d ON a.agent_definition_id = d.id
+           WHERE m.session_id = ?
+           ORDER BY m.added_at ASC`,
+        )
+        .all(sessionId) as Array<{
+          instance_id: string;
+          name: string;
+          model_provider_id: string | null;
+          model_name: string;
+        }>;
+      // 团队会话 ⇔ 有效成员 > 1（快速会话/单 agent 协作会话唯一成员 → 不附）
+      if (rows.length <= 1) return undefined;
+      const receiver = rows.find((r) => r.instance_id === receiverAssignmentId);
+      if (!receiver) return undefined;
+      // 接待者可视觉 → 无需路由提示；def 未配 provider 时解析自然落 false
+      if (resolveVisionCapability(receiver.model_provider_id ?? '', receiver.model_name)) {
+        return undefined;
+      }
+      const members = rows
+        .filter((r) => r.instance_id !== receiverAssignmentId)
+        .filter(
+          (r) =>
+            r.model_provider_id !== null &&
+            resolveVisionCapability(r.model_provider_id, r.model_name),
+        )
+        .map((r) => ({ name: r.name, model: r.model_name }));
+      return members.length > 0 ? { members } : undefined;
+    } catch (err) {
+      logger.warn('visionHint 成员解析失败（降级不附）', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * 目标 agent 的 vision 能力解析（Task 9 D3，spec §8 dispatch 附图过滤）。
+   * instance_id → workspace_agent_members → agent_definitions 的 model 信息，
+   * 经 resolveVisionCapability（provider_models 覆盖 → preset，DB 失败降级
+   * preset-only）。查询失败 / 目标不在 workspace → false（fail-safe 剥图——
+   * 宁可不传图也不给非视觉模型塞 base64）。
+   */
+  private resolveTargetVision(targetAssignmentId: string): boolean {
+    try {
+      const def = getDb()
+        .prepare(
+          `SELECT d.model_provider_id AS providerId, d.model_name AS modelName
+           FROM workspace_agent_members m
+           JOIN agent_definitions d ON m.agent_definition_id = d.id
+           WHERE m.instance_id = ?`,
+        )
+        .get(targetAssignmentId) as
+        | { providerId: string | null; modelName: string }
+        | undefined;
+      if (!def) return false;
+      return resolveVisionCapability(def.providerId ?? '', def.modelName);
+    } catch (err) {
+      logger.warn('dispatch 附图：目标 vision 解析失败，fail-safe 按非视觉剥图', {
+        targetAssignmentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
   }
 
@@ -421,11 +531,36 @@ export class RouterService {
     // TaskConfig.historyPrefix，子 agent runChatLoop 拼接在 system 之后。非法载荷
     // 整字段丢弃（降级方向安全——子 agent 按全新任务处理），不拒整条 dispatch。
     const historyPrefix = parseHistoryPrefix(content.history_prefix);
+    // 多模态（Task 9 D3，spec §8「dispatch 自动附图」）：会话近 2 轮 images 合入
+    // 子 task-config.context，按目标 agent vision 过滤——vision 目标附 base64
+    //（≤6 张，窗口内 newest-first 分配），非 vision 目标 images: []（不传 base64，
+    // droppedImages 不伪造；子进程 T8 降级自然渲染为无图）。窗口无图 → 不附
+    // context（dispatch wire 零变化）；窗口读取任何失败 → warn 后照常派发。
+    let imageContext: ExpandedContext | undefined;
+    let windowImages: Awaited<ReturnType<typeof collectRecentSessionImages>> = [];
+    try {
+      windowImages = await collectRecentSessionImages(roomId);
+      if (windowImages.length > 0) {
+        imageContext = {
+          skills: [],
+          files: [],
+          images: this.resolveTargetVision(assignmentId) ? windowImages : [],
+          droppedImages: [],
+        };
+      }
+    } catch (err) {
+      logger.warn('dispatch 附图：近 2 轮窗口读取失败，跳过附图（不阻塞派发）', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     const task: TaskConfig = {
       taskId,
       executionSessionId: event.getRoomId() ?? '',
       body,
       streamSessionId,
+      // 子代理多模态能力同样每派发现解析（热 runtime 快照可能过期）
+      ...(windowImages.length > 0 ? { vision: this.resolveTargetVision(assignmentId) } : {}),
       dispatchContext: {
         fromAssignmentId: dispatchFrom,
         task_id: taskId,
@@ -435,6 +570,7 @@ export class RouterService {
           : {}),
       },
       ...(historyPrefix !== undefined ? { historyPrefix } : {}),
+      ...(imageContext !== undefined ? { context: imageContext } : {}),
     };
     await runner.executeTask(task);
   }

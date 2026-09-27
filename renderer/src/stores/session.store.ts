@@ -60,7 +60,7 @@ interface SessionState {
   hasMoreBySession: Map<string, boolean>;
   /** loadOlder 最近一次失败的中文消息（success/retry 时清空，留给未来 UI 表面） */
   loadOlderError: string | null;
-  /** loadMembers 最近一次失败的中文消息（success/retry 时清空） */
+  /** loadMembers 最近一次失败的中文消息（success/retry 时清空，留给未来 UI 表面） */
   membersError: string | null;
   /**
    * 斜杠命令提示文本（spec §5.4）：成功 message 或失败 Error.message；下一次
@@ -149,6 +149,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loadOlderError: null,
   membersError: null,
   commandHint: null,
+  thinkingPendingBySession: new Map(),
 
   loadSessions: async (workspaceId) => {
     // 无参调用回退到当前 workspace（跨仓泄漏封堵）：主进程 session:list 无参
@@ -222,8 +223,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         // A8 fix：把 events 灌入 stream.store，让重启后能从 events 重建 StreamState。
         // 否则 MessageBubble 查 stream.store.get(message.id) 返回 undefined，所有历史
         // agent 消息都只渲染 message.body，thinking/toolCalls/dispatches 富信息不显示。
+        // 事件裁剪（C 方案压缩快照）：历史消息 events 已含全量 thinking/text 游程；
+        // 传 body 供零事件防御路径的终态正文回退。
+        const bodyById = new Map(messages.map((m) => [m.id, m.body]));
         for (const [msgId, evs] of Object.entries(eventsByMessage)) {
-          useStreamStore.getState().hydrateFromEvents(msgId, evs);
+          useStreamStore.getState().hydrateFromEvents(msgId, evs, bodyById.get(msgId));
         }
         set((state) => {
           const msgMap = new Map(state.messagesBySession);
@@ -263,8 +267,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const result = await ipc.session.loadOlder(sessionId, beforeTs, 30);
       // A8 fix：翻页拉到更早消息的 events 也要灌入 stream.store（与 selectSession 一致）。
       // hydrateFromEvents 是幂等覆盖式写入，边界重复推送同一 messageId 也安全。
+      // 翻页消息走压缩快照（裁剪契约）——thinking/正文全量在场。
+      const bodyById = new Map(result.messages.map((m) => [m.id, m.body]));
       for (const [msgId, evs] of Object.entries(result.eventsByMessage)) {
-        useStreamStore.getState().hydrateFromEvents(msgId, evs);
+        useStreamStore.getState().hydrateFromEvents(msgId, evs, bodyById.get(msgId));
       }
       set((s) => {
         const map = new Map(s.messagesBySession);
@@ -425,7 +431,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   bumpFileTrigger: () => set((s) => ({ fileTriggerTick: s.fileTriggerTick + 1 })),
 
-  reset: () =>
+  reset: () => {
     set({
       sessions: [],
       activeSessionId: null,
@@ -444,7 +450,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       loadOlderError: null,
       membersError: null,
       commandHint: null,
-    }),
+    });
+  },
 }));
 
 /** 新建会话置顶加入列表并设为激活（消息/成员由随后 selectSession 拉取） */

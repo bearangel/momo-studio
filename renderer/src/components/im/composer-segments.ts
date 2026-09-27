@@ -4,9 +4,13 @@
 //   segments 类型 → 发送序列化（body/mentions/context）+ 会话草稿往返。
 //   不含任何 DOM 依赖——RichComposer 负责 DOM↔segments，本层可独立单测。
 import type { MessageContext } from '../../ipc/types';
+// 单条消息图片上限：与输入拦截层共用同一常量（Task 9 fold-in c 统一——
+// 此前的 IMAGE_PILL_LIMIT 双定义会漂移）。image-downscale 对本模块只有
+// type-only 反向依赖（PillSeg），此处值导入不构成运行时环。
+import { IMAGE_PER_MESSAGE_CAP } from '../../lib/image-downscale';
 
-/** pill 五类：agent / 文件 / 任务 / 技能 / 命令（spec §3 表） */
-export type PillKind = 'agent' | 'file' | 'task' | 'skill' | 'command';
+/** pill 六类：agent / 文件 / 任务 / 技能 / 命令 / 图片（spec §3 表 + 2026-09-26 多模态 §10） */
+export type PillKind = 'agent' | 'file' | 'task' | 'skill' | 'command' | 'image';
 
 /** 文本段（连续文字，含用户手敲的一切） */
 export interface TextSeg {
@@ -20,6 +24,10 @@ export interface PillSeg {
   kind: PillKind;
   id: string;
   label: string;
+  /** 图片宽 px（仅 kind='image'：降采样后尺寸，序列化进 context.images 供 token 估算） */
+  w?: number;
+  /** 图片高 px（仅 kind='image'） */
+  h?: number;
 }
 
 export type ComposerSegment = TextSeg | PillSeg;
@@ -32,12 +40,14 @@ export interface ComposerPayload {
 }
 
 /**
- * 发送序列化（spec §3 规则表）：
+ * 发送序列化（spec §3 规则表 + 2026-09-26 多模态 §5/§10）：
  *   agent → body `@label` + mentions（按 instanceId 去重保序）
  *   file  → body `@path`   + context.files（按 path 去重）
  *   task  → body `#id`（conflict-detector 照旧解析正文）
  *   skill → 不进正文（展开块由主进程注入 <user-context>，防双重曝光）+ context.skills（按 slug 去重）
  *   command → body `/name`（纯命令 pill 时序列化恰为 `/name`——整串拦截语义由形态保持）
+ *   image → body 锚点 `[图片: label]` + context.images（按 path 去重保序、
+ *           上限 6 张；w/h 非正整数不进 images——与主进程 sanitize 同规则防御）
  *   重复 pill：body 保留全部出现（等价手敲两遍），结构化数组去重
  *   标记分隔（spec §3「标记分隔」行）：标记前（body 非空且末字符非空白时）与
  *   标记后各保证一个空格——永不叠加双空格（后续内容自带首空白时尾随空格让
@@ -51,6 +61,15 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
   const mentions: string[] = [];
   const skills: Array<{ slug: string; name: string }> = [];
   const files: Array<{ path: string }> = [];
+  const images: Array<{ path: string; w: number; h: number }> = [];
+  const pushImage = (seg: PillSeg): void => {
+    if (images.some((i) => i.path === seg.id)) return;
+    if (images.length >= IMAGE_PER_MESSAGE_CAP) return;
+    // w/h 与主进程 sanitizeMessageContext 同规则（正整数）——非法形状不进 IPC 载荷
+    const dims = validImageDims(seg.w, seg.h);
+    if (dims === null) return;
+    images.push({ path: seg.id, w: dims.w, h: dims.h });
+  };
   for (const seg of segs) {
     if (seg.type === 'text') {
       if (seg.text === '') continue;
@@ -88,6 +107,10 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
       case 'command':
         body += `/${seg.id}`;
         break;
+      case 'image':
+        body += `[图片: ${seg.label}]`;
+        pushImage(seg);
+        break;
     }
     pendingSpace = true;
   }
@@ -95,7 +118,10 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
   return {
     body,
     mentions: mentions.length > 0 ? mentions : undefined,
-    context: skills.length > 0 || files.length > 0 ? { skills, files } : undefined,
+    context:
+      skills.length > 0 || files.length > 0 || images.length > 0
+        ? { skills, files, ...(images.length > 0 ? { images } : {}) }
+        : undefined,
   };
 }
 
@@ -104,11 +130,19 @@ export function segmentsToDraft(segs: ComposerSegment[]): string {
   return JSON.stringify(segs);
 }
 
-const PILL_KINDS: ReadonlyArray<PillKind> = ['agent', 'file', 'task', 'skill', 'command'];
+const PILL_KINDS: ReadonlyArray<PillKind> = ['agent', 'file', 'task', 'skill', 'command', 'image'];
+
+/** image pill 的 w/h 形状校验（正整数——与主进程 sanitizeMessageContext 同规则）；合法返回数值对，否则 null */
+function validImageDims(w: unknown, h: unknown): { w: number; h: number } | null {
+  if (typeof w !== 'number' || typeof h !== 'number') return null;
+  if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) return null;
+  return { w, h };
+}
 
 /**
  * 草稿反序列化：null/undefined → 空；JSON 解析失败 / 非数组 / 元素形状非法 /
  * 旧版纯文本草稿 → 整体降级为单文本 segment（宽容恢复，绝不抛错）。
+ * image pill 额外要求 w/h 为正整数（缺失/非法 → 整份降级，与既有形状规则一致）。
  */
 export function draftToSegments(raw: string | null | undefined): ComposerSegment[] {
   if (raw === null || raw === undefined) return [];
@@ -130,7 +164,17 @@ export function draftToSegments(raw: string | null | undefined): ComposerSegment
         typeof o.id === 'string' &&
         typeof o.label === 'string'
       ) {
-        segs.push({ type: 'pill', kind: o.kind as PillKind, id: o.id, label: o.label });
+        const kind = o.kind as PillKind;
+        const dims = validImageDims(o.w, o.h);
+        if (kind === 'image' && dims === null) {
+          return [{ type: 'text', text: raw }];
+        }
+        const seg: PillSeg = { type: 'pill', kind, id: o.id, label: o.label };
+        if (kind === 'image' && dims !== null) {
+          seg.w = dims.w;
+          seg.h = dims.h;
+        }
+        segs.push(seg);
         continue;
       }
       return [{ type: 'text', text: raw }];

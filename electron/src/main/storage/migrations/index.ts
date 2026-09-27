@@ -19,6 +19,8 @@ import { migration041 } from './041_events_structural_partial_index';
 import { migration042 } from './042_events_thinking_partial_index';
 import { migration043 } from './043_message_compact_events';
 import { migration044 } from './044_session_file_reads';
+import { migration045 } from './045_provider_models_vision';
+import { migration046 } from './046_provider_models_vision_tri_state';
 
 export interface Migration {
   version: number;
@@ -976,6 +978,21 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 2026-09-26）。SQL 住在独立模块 044_session_file_reads.ts（约定同 032-043）。
     version: migration044.version,
     sql: migration044.up,
+  },
+  {
+    // provider_models 加 vision 列 + 旧库预设行回填（图片输入多模态
+    // spec §3.3，2026-09-26）。SQL 住在独立模块 045_provider_models_vision.ts
+    //（约定同 032-044）；内嵌预设对与 provider-presets 的一致性由
+    // spawn-helpers-vision.test.ts 守卫。
+    version: migration045.version,
+    sql: migration045.up,
+  },
+  {
+    // provider_models.vision 三态化（2026-09-26 图片识别 P0 修复）：列改
+    // nullable、旧 0（列默认值≠用户意愿）归 NULL，能力解析回退预设表——
+    // 修聚合商标题行误判「显式关」+ 预设翻转传导。SQL 住 046 模块（约定同上）。
+    version: migration046.version,
+    sql: migration046.up,
   },
 ];
 

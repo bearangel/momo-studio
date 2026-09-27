@@ -229,4 +229,57 @@ describe('runChatLoop 顶层上下文 events 级重建（B 段接线）', () => 
     // 中断轮不产生空 assistant 消息
     expect(msgs.some((m) => m.role === 'assistant' && m.content === '' && !m.toolCalls?.length)).toBe(false);
   });
+
+  // === 多模态近 2 轮重发接线锁（Task 9 D1，spec §9）===
+  // runChatLoop 消费 rebuildSessionContext 产物后按 AGENT_CONFIG.vision 调
+  // applyRecentImageReplay：历史 user 消息带图进入 LLM 请求；非 vision 剥图。
+  it('历史带图 owner 轮：vision=true 时近 2 轮 images 进入首个 LLM 请求；vision=false 不带', async () => {
+    // 真实 workspace + 图片文件（expander 生产路径读盘）
+    const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-rt-ctx-img-'));
+    try {
+      getDb().prepare(
+        `INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES ('ws-1', 'W', ?, '@o')`,
+      ).run(wsDir);
+      fs.writeFileSync(path.join(wsDir, 'old.png'), Buffer.from([1]));
+      fs.writeFileSync(path.join(wsDir, 'new.png'), Buffer.from([2]));
+      const T0 = Date.now();
+      const mkImgRow = (body: string, ts: number, img: string): void => {
+        const row = insertMessage({
+          sessionId: ROOM_ID, sender: 'owner', eventType: 'm.room.message', body,
+          workspaceId: 'ws-1',
+          contextJson: JSON.stringify({ skills: [], files: [], images: [{ path: img, w: 64, h: 64 }] }),
+        });
+        getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(ts, row.id);
+      };
+      mkImgRow('看旧图', T0 + 100, 'old.png');
+      mkImgRow('看新图', T0 + 200, 'new.png');
+      const cur = insertMessage({ sessionId: ROOM_ID, sender: 'owner', eventType: 'm.room.message', body: '现在呢' });
+      getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(T0 + 300, cur.id);
+
+      __setMemoryProviderForTest(makeStubProvider());
+      await runChatLoop(
+        ROOM_ID, '现在呢', makeConfig({ vision: true }), makeContext(),
+        { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean },
+        undefined, undefined, 's-img-1',
+      );
+      let msgs = firstChatStreamMessages() as Array<{ role: string; content: string; images?: unknown[] }>;
+      const withImgs = msgs.filter((m) => m.images && m.images.length > 0);
+      expect(withImgs).toHaveLength(2);
+      expect(withImgs[0]!.content).toBe('看旧图');
+      expect(withImgs[1]!.content).toBe('看新图');
+
+      // 非 vision：同一历史重建不带任何 images
+      vi.mocked(createLLMProvider).mockReset();
+      mockProvider();
+      await runChatLoop(
+        ROOM_ID, '现在呢', makeConfig({ vision: false }), makeContext(),
+        { toolCallsUsed: 0 } as { toolCallsUsed: number; aborted?: boolean },
+        undefined, undefined, 's-img-2',
+      );
+      msgs = firstChatStreamMessages() as Array<{ role: string; content: string; images?: unknown[] }>;
+      expect(msgs.every((m) => m.images === undefined)).toBe(true);
+    } finally {
+      fs.rmSync(wsDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -693,7 +693,7 @@ describe('I2：steer 事件 egress 投影（wire 剥离 context / DB 保留）',
       type: 'start', streamSessionId: 'ss-egress-1', sessionId: '!room:e', senderAgentId: '@bot:localhost',
     });
     __flushEventBufferForTest();
-    const ctx = { skills: [{ slug: 's', name: 'n', body: '技能正文' }], files: [{ path: 'a.ts', content: '文件内容' }] };
+    const ctx = { skills: [{ slug: 's', name: 'n', body: '技能正文' }], files: [{ path: 'a.ts', content: '文件内容' }], images: [], droppedImages: [] };
     __routeChunkToBufferForTest({
       type: 'steer', streamSessionId: 'ss-egress-1', body: '补充', context: ctx,
     });

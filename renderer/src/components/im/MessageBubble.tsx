@@ -21,13 +21,18 @@
 // v2.11 Task 11：
 //   - owner 消息 body 上方渲染输入上下文 chip 行：技能 chip 纯展示、文件 chip
 //     点击 file:read(workspaceId, path) 后打开编辑器 tab；读取失败降级 disabled
-import { useState } from 'react';
-import { Zap, FileText } from 'lucide-react';
-import type { ImMessage, SkillContextItem, FileContextItem } from '../../ipc/types';
+//
+// 2026-09-26 多模态 Task 10（spec §10/§11）：
+//   - context_json.images 缩略图行：经 ipc.asset.readDataUrl 读 data URL，
+//     纯展示无点击；读取失败 / img 解码失败 → ImageOff「图片不可用」占位
+import { useEffect, useState } from 'react';
+import { Zap, FileText, ImageOff } from 'lucide-react';
+import type { ImMessage, SkillContextItem, FileContextItem, ImageContextItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useStreamStore } from '../../stores/stream.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { parseMessageContext } from '../../lib/message-context';
+import { loadAssetDataUrl } from '../../lib/asset-data-url';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
@@ -45,6 +50,69 @@ function isRenderableSkill(s: SkillContextItem): boolean {
 
 function isRenderableFile(f: FileContextItem): boolean {
   return typeof f?.path === 'string' && f.path.length > 0;
+}
+
+function isRenderableImage(i: ImageContextItem): boolean {
+  return typeof i?.path === 'string' && i.path.length > 0;
+}
+
+/**
+ * 单张 context 图片缩略图（spec §10：max-w-60 圆角、纯展示无点击）。
+ * data URL 经 loadAssetDataUrl 取（模块级缓存防 stream 重渲染请求风暴）；
+ * workspaceId 缺失（异常数据）/ IPC 失败 / img onerror → ImageOff「图片不可用」。
+ */
+function ContextImageThumb({ workspaceId, image }: { workspaceId: string | null; image: ImageContextItem }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (workspaceId === null) {
+      setFailed(true);
+      return;
+    }
+    let alive = true;
+    loadAssetDataUrl(workspaceId, image.path)
+      .then((url) => {
+        if (alive) setSrc(url);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [workspaceId, image.path]);
+
+  if (failed || src === null) {
+    if (failed) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 rounded bg-surface-active px-2 py-0.5 text-xs text-secondary"
+          data-testid="image-fallback"
+        >
+          <ImageOff size={11} strokeWidth={1.75} aria-hidden />
+          图片不可用
+        </span>
+      );
+    }
+    // 载入中占位（避免 img 弹出时布局跳动）：按 context 自带 w/h 撑出同比例骨架
+    return (
+      <div
+        className="w-24 animate-pulse rounded-lg border border-subtle bg-surface-active"
+        style={{ aspectRatio: `${image.w} / ${image.h}` }}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={image.path}
+      title={image.path}
+      onError={() => setFailed(true)}
+      className="max-w-60 rounded-lg border border-subtle"
+    />
+  );
 }
 
 interface Props {
@@ -91,6 +159,8 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
       : null;
   const ctxSkills = ctx?.skills.filter(isRenderableSkill) ?? [];
   const ctxFiles = ctx?.files.filter(isRenderableFile) ?? [];
+  // images 已由 parseMessageContext 做过整体形状校验（元素均含 path/w/h），此处只滤 path
+  const ctxImages = ctx?.images?.filter(isRenderableImage) ?? [];
   const hasContextChips = ctxSkills.length > 0 || ctxFiles.length > 0;
 
   if (message.eventType === 'io.momo-studio.dispatch') {
@@ -126,6 +196,13 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
       )}
       timestamp={message.createdAt}
     >
+      {ctxImages.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5" data-testid="message-context-images">
+          {ctxImages.map((image) => (
+            <ContextImageThumb key={`img-${image.path}`} workspaceId={message.workspaceId} image={image} />
+          ))}
+        </div>
+      )}
       {hasContextChips && (
         <div className="mb-1.5 flex flex-wrap gap-1" data-testid="message-context-chips">
           {ctxSkills.map((s) => (

@@ -247,13 +247,14 @@ describe('session-ops', () => {
     const info = getSessionMembersInfo(row.id);
     expect(info).toHaveLength(2);
 
-    // added_at ASC：member 在前；契约五字段逐一断言
+    // added_at ASC：member 在前；契约六字段逐一断言（vision：def 未配置 provider → false）
     expect(info[0]).toEqual({
       instanceId: 'inst-member',
       agentName: 'Beta',
       iconEmoji: '🐼',
       lastRunning: false,
       isLeader: false,
+      vision: false,
     });
     expect(info[1]).toEqual({
       instanceId: 'inst-leader',
@@ -261,6 +262,7 @@ describe('session-ops', () => {
       iconEmoji: '🦊',
       lastRunning: true,
       isLeader: true,
+      vision: false,
     });
 
     // 快照独立性锁：默认 agent 指向 inst-member，但其 isLeader 仍按快照 = false；
@@ -274,6 +276,49 @@ describe('session-ops', () => {
     seedWorkspace(db, 'ws1');
     const row = insertSession({ workspaceId: 'ws1', title: 'empty' });
     expect(getSessionMembersInfo(row.id)).toEqual([]);
+  });
+
+  it('getSessionMembersInfo vision：按成员 def 的 (provider, model) 同源 resolve（spec §8）', () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    // def-v：预设 vision=true 模型（行缺省 → 预设命中）；def-off：同行显式 0 覆盖；
+    // def-plain：未配置 provider（model_provider_id NULL）→ false
+    db.prepare(
+      `INSERT INTO model_providers
+         (id, name, base_url, api_key_ref, default_model, is_default, platform, preset_key)
+       VALUES ('pv', 'PV', 'https://api.test.com', 'ref', NULL, 0, 'openai', 'openai')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO provider_models (provider_id, model_id, enabled, added_at, vision)
+       VALUES ('pv', 'gpt-4o', 1, 1, 0)`,
+    ).run();
+    const seedDefWithModel = (id: string, providerId: string | null, modelName: string): void => {
+      db.prepare(
+        `INSERT INTO agent_definitions
+           (id, name, slug, version, system_prompt, model_name, icon_emoji, model_provider_id)
+         VALUES (?, ?, ?, '1', 'p', ?, '🤖', ?)`,
+      ).run(id, id, id.toLowerCase(), modelName, providerId);
+    };
+    seedDefWithModel('def-v', 'pv', 'gpt-5.2');
+    seedDefWithModel('def-off', 'pv', 'gpt-4o');
+    seedDefWithModel('def-plain', null, 'whatever');
+    seedMember(db, 'inst-v', 'ws1', 'def-v', '@v:s', 1);
+    seedMember(db, 'inst-off', 'ws1', 'def-off', '@off:s', 1);
+    seedMember(db, 'inst-plain', 'ws1', 'def-plain', '@plain:s', 0);
+
+    const row = insertSession({ workspaceId: 'ws1', title: 'vision' });
+    addSessionMember(row.id, 'inst-v');
+    addSessionMember(row.id, 'inst-off');
+    addSessionMember(row.id, 'inst-plain');
+
+    const visionByInstance = Object.fromEntries(
+      getSessionMembersInfo(row.id).map((m) => [m.instanceId, m.vision]),
+    );
+    expect(visionByInstance).toEqual({
+      'inst-v': true,   // 预设 vision=true，行缺省 → 预设命中
+      'inst-off': false, // DB 行 vision=0 显式覆盖 preset true
+      'inst-plain': false, // 未配置 provider → false
+    });
   });
 });
 

@@ -20,11 +20,11 @@ const listModels = vi.fn();
 const fetchModels = vi.fn();
 const addModel = vi.fn();
 
-/** 构造全量字段 ProviderModel（契约对齐，不写占位符）；新三字段取「未配置」真实值 */
+/** 构造全量字段 ProviderModel（契约对齐，不写占位符）；新字段取「未配置」真实值 */
 function pm(providerId: string, modelId: string, enabled: boolean): ProviderModel {
   return {
     providerId, modelId, enabled, addedAt: 0, contextWindow: null,
-    thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null,
+    thinkingJson: null, reasoning: { kind: 'none' }, effectiveWindow: null, vision: false,
   };
 }
 

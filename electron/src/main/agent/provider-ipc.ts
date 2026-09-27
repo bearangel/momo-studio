@@ -10,7 +10,7 @@ import {
   deleteProvider, setDefaultProvider, getProviderApiKey,
   fetchRemoteModels, listProviderModels, upsertProviderModel,
   setProviderModelEnabled, removeProviderModel, setProviderModelWindow,
-  setProviderModelThinking,
+  setProviderModelThinking, setProviderModelVision,
 } from './provider-crud';
 import { listProviderPresets } from '../llm/provider-presets';
 
@@ -127,6 +127,14 @@ export function registerProviderHandlers(): void {
     'provider:setModelThinking',
     (_e, id: string, modelId: string, config: Parameters<typeof setProviderModelThinking>[2]) => {
       setProviderModelThinking(id, modelId, config);
+    },
+  );
+
+  // 视觉输入能力位（用户覆盖，spec 2026-09-26-image-input-multimodal §3.3）
+  ipcMain.handle(
+    'provider:setModelVision',
+    (_e, id: string, modelId: string, vision: boolean) => {
+      setProviderModelVision(id, modelId, vision);
     },
   );
 

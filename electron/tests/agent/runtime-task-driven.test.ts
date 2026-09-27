@@ -38,7 +38,8 @@ vi.mock('../../src/main/agent/llm-provider', () => ({
 
 import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runTaskChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
-import type { RuntimeConfig, TaskConfig } from '../../src/main/agent/runtime-config';
+import { __setStreamRetryDelaysForTest } from '../../src/main/agent/runtime-entry';
+import type { RuntimeConfig, TaskConfig, ExpandedImageItem } from '../../src/main/agent/runtime-config';
 import { executeDispatch, handleTaskReplyIpc } from '../../src/main/agent/dispatch-wait';
 import { buildToolRegistry } from '../../src/main/agent/tools';
 import {
@@ -641,6 +642,84 @@ describe('runTaskChatLoop（task-driven 模式入口）', () => {
     expect(replyEvt!.content.task_id).toBe('task-abort-1');
     expect(replyEvt!.content.status).toBe('failed'); // 关键断言：不能是 completed
   });
+
+  describe('流中断自动重试（terminated P0 方案 B）', () => {
+    beforeEach(() => {
+      __setStreamRetryDelaysForTest([10, 10, 10]);
+    });
+
+    it('terminated 第一步半截回滚 → 退避重发 → 正常完成；重试提示入正文留痕', async () => {
+      let call = 0;
+      vi.mocked(createLLMProvider).mockReturnValue({
+        chat: vi.fn(),
+        chatStream: vi.fn(async function* (): AsyncGenerator<StreamDelta> {
+          call += 1;
+          if (call === 1) {
+            yield { type: 'text', content: '半截输出' };
+            throw new Error('terminated');
+          }
+          yield { type: 'text', content: '完整输出' };
+          yield { type: 'done', finishReason: 'stop' as const };
+        }),
+      });
+
+      await runTaskChatLoop(
+        makeTaskConfig({ taskId: 'task-retry', streamSessionId: 'sess-retry' }),
+        makeConfig(),
+        makeContext(),
+      );
+
+      // 重试提示入正文（用户可见留痕）
+      const notice = streamChunks().find(
+        (c) =>
+          c.type === 'text' &&
+          typeof (c as { delta?: unknown }).delta === 'string' &&
+          (c as { delta: string }).delta.includes('自动重试 1/3'),
+      );
+      expect(notice).toBeDefined();
+
+      // 重发确实发生（第一次 terminated、第二次完成）
+      expect(call).toBe(2);
+
+      // 终态正常——无 error end，exit(0)
+      const endChunk = streamChunks().find((c) => c.type === 'end') as {
+        finishReason: string;
+        error?: string;
+      } | undefined;
+      expect(endChunk).toBeDefined();
+      expect(endChunk?.finishReason).not.toBe('error');
+      expect(endChunk?.error).toBeUndefined();
+      expect(exitCode).toBe(0);
+    });
+
+    it('重试上限：连续 terminated 耗尽 3 次后落入原 error 终态（不无限循环）', async () => {
+      let call = 0;
+      vi.mocked(createLLMProvider).mockReturnValue({
+        chat: vi.fn(),
+        chatStream: vi.fn(async function* (): AsyncGenerator<StreamDelta> {
+          call += 1;
+          yield { type: 'text', content: 'x' };
+          throw new Error('terminated');
+        }),
+      });
+
+      await runTaskChatLoop(
+        makeTaskConfig({ taskId: 'task-retry-exhaust', streamSessionId: 'sess-retry-exhaust' }),
+        makeConfig(),
+        makeContext(),
+      );
+
+      // 初次 + 3 次重试 = 4 次调用
+      expect(call).toBe(4);
+      const endChunk = streamChunks().find((c) => c.type === 'end') as {
+        finishReason: string;
+        error?: string;
+      } | undefined;
+      expect(endChunk?.finishReason).toBe('error');
+      expect(endChunk?.error).toContain('terminated');
+      expect(exitCode).toBe(1);
+    });
+  });
 });
 
 describe('runTaskChatLoop dispatch 回执（Task 13 A 线）', () => {
@@ -1003,5 +1082,276 @@ describe('parseConfig taskDriven 字段', () => {
     // 退役字段不再是 RuntimeConfig 一部分（运行时对象上自然不存在）
     expect('taskDriven' in config).toBe(false);
     expect('teamSessionId' in config).toBe(false);
+  });
+});
+
+// ─── 多模态图片注入（Task 8，spec 2026-09-26-image-input-multimodal §7/§8）──────
+//
+// 覆盖 runtime 侧三动作（AGENT_CONFIG.vision 快照为唯一判定位）：
+//   1. vision=true：当前轮 user LLMMessage 附 images（path 剥除，w/h 保留）
+//   2. vision=false：剥图 + 正文尾注降级提示（N 张 N 条省略行 + 加载失败占位行）
+//   3. visionHint（团队路由提示）：leader 场景一次性系统提示文本
+//
+// 持久化零污染锁：注入文本只进 LLM 请求 messages，绝不进任何 chunk / IPC 出站
+// （用户消息行由主进程在派发前落库，runtime 侧无从回流——断言出站面无泄漏）。
+describe('runTaskChatLoop 图片输入（vision 注入 / 非 vision 降级 / leader 提示）', () => {
+  const originalSend = process.send;
+  let exitSpy: MockInstance<Parameters<typeof process.exit>, ReturnType<typeof process.exit>>;
+
+  beforeEach(() => {
+    sentChunks.length = 0;
+    sentIpc.length = 0;
+    vi.mocked(createLLMProvider).mockReset();
+    mockProviderOverride = null;
+    __setMemoryProviderForTest(stubMemoryProvider);
+    process.send = ((
+      msg: unknown,
+      callback?: (err: Error | null) => void,
+    ): boolean => {
+      const m = msg as { type?: string };
+      if (m.type && ['start', 'thinking', 'text', 'tool_call', 'tool_result', 'end'].includes(m.type)) {
+        sentChunks.push(msg);
+      } else {
+        sentIpc.push(msg);
+      }
+      if (callback) callback(null);
+      return true;
+    }) as NonNullable<typeof process.send>;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    process.send = originalSend;
+    __resetMemoryProviderForTest();
+    exitSpy.mockRestore();
+  });
+
+  /** 捕获首轮 LLM 请求 messages 的 provider mock（单轮 stop 收口）；messages() 取快照 */
+  function captureProvider(): { messages: () => LLMMessage[] } {
+    let captured: LLMMessage[] = [];
+    vi.mocked(createLLMProvider).mockReturnValue({
+      chat: vi.fn(),
+      chatStream: vi.fn(async function* (messages: LLMMessage[]): AsyncGenerator<StreamDelta> {
+        captured = [...messages];
+        yield { type: 'text', content: 'ok' };
+        yield { type: 'done', finishReason: 'stop' as const };
+      }),
+    });
+    return { messages: () => captured };
+  }
+
+  /** 图片夹具（ExpandedImageItem 形状，base64 显式传入——不含 path 子串，防断言串味） */
+  function img(relPath: string, base64: string, w = 100, h = 80): ExpandedImageItem {
+    return { path: relPath, mime: 'image/png', base64, w, h };
+  }
+
+  function firstUser(messages: LLMMessage[]): LLMMessage {
+    const user = messages.find((m) => m.role === 'user');
+    if (!user) throw new Error('user 消息未找到');
+    return user;
+  }
+
+  it('vision=true + 2 图：当前轮 user 消息携带 images（path 剥除、w/h 保留），正文无省略提示', async () => {
+    const cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '看下这两张图',
+        streamSessionId: 'sess-img-1',
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB'), img('b.png', 'QkJC', 640, 480)], droppedImages: [] },
+      }),
+      makeConfig({ vision: true }),
+      makeContext(),
+    );
+
+    const user = firstUser(cap.messages());
+    expect(user.images).toHaveLength(2);
+    // 逐元素形状锁：{mime, base64, w, h} 四字段，path 不上线协议
+    expect(user.images![0]).toEqual({ mime: 'image/png', base64: 'QVFB', w: 100, h: 80 });
+    expect(user.images![1]).toEqual({ mime: 'image/png', base64: 'QkJC', w: 640, h: 480 });
+    expect(JSON.stringify(user.images)).not.toContain('a.png');
+    // vision 分支正文零污染
+    expect(user.content).toBe('看下这两张图');
+    expect(user.content).not.toContain('图片已省略');
+  });
+
+  it('TaskConfig.vision 每消息覆盖（2026-09-26 P0）：task-config true 压过 AGENT_CONFIG 快照 false——改开关后下一条消息即带图', async () => {
+    const cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '开关刚打开，热 runtime 快照还是 false',
+        streamSessionId: 'sess-img-ovr',
+        vision: true,
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB')], droppedImages: [] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+
+    const user = firstUser(cap.messages());
+    // 快照被覆盖：images 附上、无省略行
+    expect(user.images).toHaveLength(1);
+    expect(user.content).not.toContain('图片已省略');
+  });
+
+  it('TaskConfig.vision 反向覆盖：task-config false 压过快照 true（关开关即时剥图）', async () => {
+    const cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '关掉开关',
+        streamSessionId: 'sess-img-ovr2',
+        vision: false,
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB')], droppedImages: [] },
+      }),
+      makeConfig({ vision: true }),
+      makeContext(),
+    );
+
+    const user = firstUser(cap.messages());
+    expect('images' in user).toBe(false);
+    expect(user.content).toContain('[图片已省略：当前模型不支持视觉]');
+  });
+
+  it('vision=false + 2 图：不附 images 字段；正文恰 2 行省略提示；注入文本不进任何 chunk/IPC（不落库）', async () => {
+    const cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '看图',
+        streamSessionId: 'sess-img-2',
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB'), img('b.png', 'QkJC')], droppedImages: [] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+
+    const user = firstUser(cap.messages());
+    // 剥图：images 字段整体不存在（provider 请求维持纯文本形态）
+    expect('images' in user).toBe(false);
+    // N 张 N 条省略行（精确匹配整行，防止拼接漂移）
+    const omitLines = user.content.split('\n').filter((l) => l === '[图片已省略：当前模型不支持视觉]');
+    expect(omitLines).toHaveLength(2);
+    // 原正文仍在最前（尾注语义）
+    expect(user.content.startsWith('看图')).toBe(true);
+    // 持久化零污染：注入文本只进 LLM 请求，全部出站（chunk + IPC）无泄漏
+    const allOutbound = JSON.stringify([...sentChunks, ...sentIpc]);
+    expect(allOutbound).not.toContain('图片已省略');
+  });
+
+  it('droppedImages 2 条：vision=true / false 两分支正文各含 2 行加载失败占位', async () => {
+    for (const vision of [true, false] as const) {
+      sentChunks.length = 0;
+      sentIpc.length = 0;
+      vi.mocked(createLLMProvider).mockReset();
+      const cap = captureProvider();
+      await runTaskChatLoop(
+        makeTaskConfig({
+          body: 'x',
+          streamSessionId: `sess-drop-${vision ? 't' : 'f'}`,
+          context: {
+            skills: [],
+            files: [],
+            images: vision ? [img('ok.png', 'QVFB')] : [],
+            droppedImages: ['bad1.png', 'bad2.png'],
+          },
+        }),
+        makeConfig({ vision }),
+        makeContext(),
+      );
+
+      const user = firstUser(cap.messages());
+      const dropLines = user.content
+        .split('\n')
+        .filter((l) => l.startsWith('[图片加载失败: '));
+      expect(dropLines).toEqual(['[图片加载失败: bad1.png]', '[图片加载失败: bad2.png]']);
+    }
+  });
+
+  it('visionHint 在场 + vision=false + 带图：正文含系统提示（成员名+模型+路径清单）；无 hint → 仅降级行', async () => {
+    // —— 有 hint：系统提示逐字锁（N/路径/成员名/模型拼接）——
+    let cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '看图',
+        streamSessionId: 'sess-hint-1',
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB'), img('b.png', 'QkJC')], droppedImages: [] },
+        visionHint: { members: [{ name: '千里眼', model: 'glm-4.6v' }, { name: '二郎神', model: 'gpt-5.2' }] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+    let user = firstUser(cap.messages());
+    expect(user.content).toContain(
+      '[系统提示：用户消息附带 2 张图片（a.png、b.png）。你当前模型不支持视觉。' +
+        '团队成员「千里眼」（glm-4.6v）、「二郎神」（gpt-5.2）可识别图片——' +
+        '直接 dispatch 任务给它，子任务会自动附上会话近期图片。]',
+    );
+    // 系统提示不顶替降级行（§7 省略行仍在）
+    expect(user.content.split('\n').filter((l) => l === '[图片已省略：当前模型不支持视觉]')).toHaveLength(2);
+
+    // —— 无 hint：仅 deliverable 2 降级文本，无系统提示 ——
+    vi.mocked(createLLMProvider).mockReset();
+    cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '看图',
+        streamSessionId: 'sess-hint-2',
+        context: { skills: [], files: [], images: [img('a.png', 'QVFB'), img('b.png', 'QkJC')], droppedImages: [] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+    user = firstUser(cap.messages());
+    expect(user.content).not.toContain('系统提示');
+    expect(user.content.split('\n').filter((l) => l === '[图片已省略：当前模型不支持视觉]')).toHaveLength(2);
+
+    // —— hint 在场但本轮无展开成功图片（全部加载失败）：系统提示抑制（N=0 无意义）——
+    vi.mocked(createLLMProvider).mockReset();
+    cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: '看图',
+        streamSessionId: 'sess-hint-3',
+        context: { skills: [], files: [], images: [], droppedImages: ['gone.png'] },
+        visionHint: { members: [{ name: '千里眼', model: 'glm-4.6v' }] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+    user = firstUser(cap.messages());
+    expect(user.content).not.toContain('系统提示');
+    expect(user.content).toContain('[图片加载失败: gone.png]');
+  });
+
+  it('无图消息零变化：user 消息 = renderTurnBody 产物原样、无 images 字段、无任何注入行（含旧线协议缺字段载荷）', async () => {
+    // —— 空 images/droppedImages 的 context（新版载荷）——
+    let cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: 'hi',
+        streamSessionId: 'sess-noimg-1',
+        context: { skills: [], files: [], images: [], droppedImages: [] },
+      }),
+      makeConfig({ vision: false }),
+      makeContext(),
+    );
+    let user = firstUser(cap.messages());
+    expect(user.content).toBe('hi');
+    expect('images' in user).toBe(false);
+
+    // —— 旧线协议载荷（缺 images/droppedImages 字段，宽进归一为空数组）——
+    vi.mocked(createLLMProvider).mockReset();
+    cap = captureProvider();
+    await runTaskChatLoop(
+      makeTaskConfig({
+        body: 'hi',
+        streamSessionId: 'sess-noimg-2',
+        // 仿真 Task 5 之前的线载荷：只有 skills/files
+        context: { skills: [], files: [] } as unknown as Parameters<typeof runTaskChatLoop>[0]['context'],
+      }),
+      makeConfig({ vision: true }),
+      makeContext(),
+    );
+    user = firstUser(cap.messages());
+    expect(user.content).toBe('hi');
+    expect('images' in user).toBe(false);
   });
 });

@@ -102,7 +102,10 @@ function mkEvent(id: string, messageId: string, seq: number): MessageEventRow {
 }
 
 beforeEach(() => {
-  Object.assign(globalThis, { window: { api: mockApi } });
+  // 只换 api 槽、保留 jsdom window 其余成员（HTMLElement 等）——整体替换
+  // globalThis.window 会砸掉同 worker 后续测试文件的 jsdom 全局（singleThread
+  // 形态下跨文件泄漏，2026-09-25 实测）；Proxy 运行时读 window.api，等价
+  (globalThis.window as unknown as Record<string, unknown>).api = mockApi;
   useSessionStore.getState().reset();
   mockApi.session.list.mockReset();
   mockApi.session.list.mockResolvedValue(MOCK_SESSIONS_A);
@@ -1156,3 +1159,4 @@ describe('receiveMessage 同 id 原位替换', () => {
     expect(msgs[1]!.body).toBe('中间消息终态');
   });
 });
+

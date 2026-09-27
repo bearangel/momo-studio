@@ -1,8 +1,9 @@
 // electron/src/main/im/context-expander.ts
-// 输入框上下文展开器（v2.11，spec 2026-09-16 §6.2）。
+// 输入框上下文展开器（v2.11，spec 2026-09-16 §6.2；多模态图片 spec 2026-09-26 §6）。
 // renderer 传来的 MessageContext（slug/路径）→ 子进程消费的 ExpandedContext
-// （skill 正文 + 文件内容）。所有失败路径一律降级（占位 / content=null），
-// 绝不阻塞消息派发——上下文是增强不是前提。
+// （skill 正文 + 文件内容 + 图片 base64）。所有失败路径一律降级
+// （占位 / content=null / 剔除进 droppedImages），绝不阻塞消息派发——
+// 上下文是增强不是前提。
 //
 // skill 三源定位（对齐 skill/zip-uploader.ts listInstalled 的三源合并语义）：
 //   - custom：<userData>/skills/<slug>/SKILL.md（resolveSkillsDir）
@@ -16,16 +17,44 @@ import { getWorkspace } from '../workspace/crud';
 import { getDb } from '../storage/db';
 import { resolveBuiltinSkillsDir } from '../skill/zip-uploader';
 import { WorkspaceFS } from '../files/workspace-fs';
-import type { ExpandedContext, ExpandedFileItem, ExpandedSkillItem } from '../agent/runtime-config';
+import type {
+  ExpandedContext,
+  ExpandedFileItem,
+  ExpandedImageItem,
+  ExpandedSkillItem,
+} from '../agent/runtime-config';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
 
 /** 单文件内联上限；超出降级为路径引用（LLM 转用文件工具自读） */
 export const MAX_INLINE_FILE_BYTES = 64 * 1024;
 /** 单条消息文件内容累计内联上限；超出后其余文件全部降级 */
 export const MAX_TOTAL_INLINE_BYTES = 256 * 1024;
+/** 单图 base64 文本上限（8MB，spec 2026-09-26 §6）；超出剔除进 droppedImages */
+export const MAX_IMAGE_BASE64_CHARS = 8 * 1024 * 1024;
+/**
+ * 单请求图片张数上限（spec 2026-09-26 §6「重发窗口内累计同限」）：
+ * 当前轮 + 近 2 轮重发窗口共享（Task 9），dispatch 附图同限。
+ * 主进程侧唯一常量源（renderer 侧同名 IMAGE_PER_MESSAGE_CAP 负责输入拦截，
+ * 两层各守一段，数值由 spec 锁定）。
+ */
+export const MAX_IMAGES_PER_REQUEST = 6;
 
 /** skill 不可用占位（renderTurnBody 原样注入，用户意图在流内可见） */
 const SKILL_UNAVAILABLE = '[skill 已不可用]';
+
+/**
+ * 图片扩展名 → MIME（白名单外的扩展名一律剔除）。bmp 不在 asset:saveImage
+ * 落盘白名单，但 @ 菜单可把 workspace 内 bmp 文件选进 images（spec §5）；
+ * provider 层是否接受 bmp 由 Task 8 按平台过滤，本层只做扩展名映射。
+ */
+const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+};
 
 /** 匹配 --- 包围的 YAML frontmatter（兼容 \n 与 \r\n 行尾，与 zip-uploader 同款） */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
@@ -189,5 +218,66 @@ export async function expandMessageContext(
     }
   }
 
-  return { skills, files };
+  // 3. images（多模态 Task 5，spec 2026-09-26 §6）：读文件转 base64 进
+  //    ExpandedContext.images；读取失败 / 超 8MB / 路径逃逸 / 未知扩展名
+  //    一律剔除并记入 droppedImages（Task 8 的 runtime 据此注入
+  //    [图片加载失败: path] 占位——本层不掺渲染字符串）。
+  //    与 skills/files 同款双层防御：sanitize 入口已过滤，此处元素级守卫
+  //    兜底历史行 / resume 重放；单图失败绝不阻塞消息派发（永不抛错契约）。
+  //    畸形元素直接跳过不进 droppedImages（path 可能不是字符串，占位无从渲染）。
+  const images: ExpandedImageItem[] = [];
+  const droppedImages: string[] = [];
+  if (Array.isArray(context.images)) {
+    for (const img of context.images) {
+      if (
+        typeof img?.path !== 'string' ||
+        typeof img.w !== 'number' ||
+        typeof img.h !== 'number'
+      ) {
+        continue;
+      }
+      const mime = IMAGE_MIME_BY_EXT[path.extname(img.path).toLowerCase()];
+      if (mime === undefined) {
+        logger.warn('context-expander：图片扩展名不在白名单，剔除', { path: img.path });
+        droppedImages.push(img.path);
+        continue;
+      }
+      if (wsFs === null || !isSafeRelativePath(img.path)) {
+        logger.warn('context-expander：图片路径非法（逃逸 / 无 workspace），剔除', { path: img.path });
+        droppedImages.push(img.path);
+        continue;
+      }
+      try {
+        const abs = wsFs.assertInWorkspace(img.path);
+        const stat = await fs.promises.stat(abs);
+        // base64 长度 = 4·⌈n/3⌉：按 stat 预判超限，避免把大文件整个读进内存
+        if (4 * Math.ceil(stat.size / 3) > MAX_IMAGE_BASE64_CHARS) {
+          logger.warn('context-expander：图片 base64 超 8MB 上限，剔除', {
+            path: img.path,
+            size: stat.size,
+          });
+          droppedImages.push(img.path);
+          continue;
+        }
+        const base64 = (await fs.promises.readFile(abs)).toString('base64');
+        // stat 与 readFile 之间文件可能增长（TOCTOU），编码后复核边界
+        if (base64.length > MAX_IMAGE_BASE64_CHARS) {
+          logger.warn('context-expander：图片 base64 超 8MB 上限（编码后复核），剔除', {
+            path: img.path,
+          });
+          droppedImages.push(img.path);
+          continue;
+        }
+        images.push({ path: img.path, mime, base64, w: img.w, h: img.h });
+      } catch (err) {
+        logger.warn('context-expander：图片读取失败，剔除', {
+          path: img.path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        droppedImages.push(img.path);
+      }
+    }
+  }
+
+  return { skills, files, images, droppedImages };
 }

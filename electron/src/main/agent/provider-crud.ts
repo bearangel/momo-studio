@@ -52,6 +52,7 @@ export interface ProviderModelRow {
   added_at: number;
   context_window: number | null;
   thinking_json: string | null;
+  vision: number;
 }
 
 /** 供应商的模型列表条目（provider_models 表，v24 起） */
@@ -68,6 +69,8 @@ export interface ProviderModel {
   reasoning: ReasoningCapability;
   /** resolve 链生效窗口（用户列→预设→目录）；null=未知（UI placeholder 用） */
   effectiveWindow: number | null;
+  /** 视觉输入能力位（用户覆盖列，migration 045 起；种子行初值随预设表） */
+  vision: boolean;
 }
 
 /** keychain 引用 key：provider.<id>.api_key */
@@ -110,6 +113,7 @@ function rowToProviderModel(row: ProviderModelRow): Omit<ProviderModel, 'reasoni
     addedAt: row.added_at,
     contextWindow: row.context_window,
     thinkingJson: parseThinkingConfig(safeParseJson(row.thinking_json)),
+    vision: row.vision === 1,
   };
 }
 
@@ -237,14 +241,21 @@ export function listProviderModels(providerId: string): ProviderModel[] {
 
 /**
  * 添加模型到供应商列表（幂等）。INSERT OR IGNORE：已存在时不动既有行
- * （enabled 等字段保持原值），enabled 仅对新插入生效（默认 true）。
+ * （enabled/vision 等字段保持原值），enabled 与 vision 仅对新插入生效。
+ * vision 三态（2026-09-26 P0 修复）：null=未决定（落 NULL，能力解析回退预设表，
+ * 预设表未来翻转可自然传导）；true/false=显式决定（用户开关写入，双向覆盖预设）。
  */
-export function upsertProviderModel(providerId: string, modelId: string, enabled?: boolean): void {
+export function upsertProviderModel(
+  providerId: string,
+  modelId: string,
+  enabled?: boolean,
+  vision?: boolean | null,
+): void {
   const db = getDb();
   db.prepare(
-    `INSERT OR IGNORE INTO provider_models (provider_id, model_id, enabled, added_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(providerId, modelId, enabled === false ? 0 : 1, Date.now());
+    `INSERT OR IGNORE INTO provider_models (provider_id, model_id, enabled, added_at, vision)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(providerId, modelId, enabled === false ? 0 : 1, Date.now(), vision == null ? null : vision ? 1 : 0);
 }
 
 export function setProviderModelEnabled(providerId: string, modelId: string, enabled: boolean): void {
@@ -273,12 +284,13 @@ export function setProviderModelWindow(
   ).run(contextWindow, providerId, modelId);
 }
 
-/** 预设模型种子写入（幂等；种子行 enabled=true、context_window=NULL 走预设表 resolve） */
+/** 预设模型种子写入（幂等；种子行 enabled=true、context_window/vision=NULL 走预设表 resolve——
+ *  能力真相留在预设表，未来预设 vision 翻转可传导到存量种子行，不再被行值 0 误判「显式关」） */
 export function seedPresetModels(providerId: string, presetKey: string): void {
   const preset = getProviderPreset(presetKey);
   if (!preset) throw new Error(`未知供应商预设: ${presetKey}`);
   for (const m of preset.models) {
-    upsertProviderModel(providerId, m.id, true);
+    upsertProviderModel(providerId, m.id, true, null);
   }
 }
 
@@ -307,6 +319,18 @@ export function setProviderModelThinking(
   db.prepare(
     'UPDATE provider_models SET thinking_json = ? WHERE provider_id = ? AND model_id = ?',
   ).run(config === null ? null : JSON.stringify(config), providerId, modelId);
+}
+
+/**
+ * 设置模型的视觉输入能力位（用户覆盖，spec 2026-09-26-image-input-multimodal §3.3）。
+ * 布尔值双向生效（true/false 均压过预设表）；行不存在时 no-op
+ * （与 setProviderModelEnabled/setProviderModelWindow 行为一致）。
+ */
+export function setProviderModelVision(providerId: string, modelId: string, vision: boolean): void {
+  const db = getDb();
+  db.prepare(
+    'UPDATE provider_models SET vision = ? WHERE provider_id = ? AND model_id = ?',
+  ).run(vision ? 1 : 0, providerId, modelId);
 }
 
 export function removeProviderModel(providerId: string, modelId: string): void {

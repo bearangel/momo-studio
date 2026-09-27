@@ -203,17 +203,17 @@ describe('session:list handler', () => {
 });
 
 describe('session:get handler', () => {
-  it('返回 { session, members }（getSession + getSessionMembersInfo）', async () => {
+  it('返回 { session, members }（getSession + getSessionMembersInfo）；vision 字段透传（多模态 spec §8）', async () => {
     sessionsRepoMocks.getSession.mockReturnValueOnce(sessionRow);
     sessionOpsMocks.getSessionMembersInfo.mockReturnValueOnce([
-      { instanceId: 'inst-1', agentName: '小助手', isLeader: true },
+      { instanceId: 'inst-1', agentName: '小助手', isLeader: true, vision: true },
     ]);
     const res = await ipcHandlers.get('session:get')!({} as never, 'sess-1');
     expect(sessionsRepoMocks.getSession).toHaveBeenCalledWith('sess-1');
     expect(sessionOpsMocks.getSessionMembersInfo).toHaveBeenCalledWith('sess-1');
     expect(res).toEqual({
       session: sessionRow,
-      members: [{ instanceId: 'inst-1', agentName: '小助手', isLeader: true }],
+      members: [{ instanceId: 'inst-1', agentName: '小助手', isLeader: true, vision: true }],
     });
   });
 
@@ -231,7 +231,7 @@ describe('session:createQuick handler', () => {
       ...sessionRow, id: 'sess-quick', title: '新会话', titleAuto: true, lastMessageAt: null,
     });
     sessionOpsMocks.getSessionMembersInfo.mockReturnValueOnce([
-      { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true },
+      { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true, vision: false },
     ]);
 
     const res = await ipcHandlers.get('session:createQuick')!({} as never, 'ws-1');
@@ -246,7 +246,7 @@ describe('session:createQuick handler', () => {
       kind: 'chat',
       lastMessageAt: null,
       members: [
-        { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true },
+        { instanceId: 'inst-default', agentName: '默认Agent', iconEmoji: '🤖', isLeader: true, lastRunning: true, vision: false },
       ],
     });
   });
@@ -496,20 +496,98 @@ describe('sanitizeMessageContext 契约锁（I5 元素级）', () => {
       extra: 1,
     });
   });
+
+  // === 多模态 Task 5：images 可选字段（元素级过滤 + 上限 6，spec §6） ===
+
+  it('合法 images（2 张）元素原样保留（含元素 extra 字段）', () => {
+    expect(
+      sanitizeMessageContext({
+        skills: [],
+        files: [],
+        images: [
+          { path: '.momo/assets/ab.png', w: 100, h: 50 },
+          { path: 'pics/cd.jpg', w: 80, h: 60, extra: 3 },
+        ],
+      }),
+    ).toEqual({
+      skills: [],
+      files: [],
+      images: [
+        { path: '.momo/assets/ab.png', w: 100, h: 50 },
+        { path: 'pics/cd.jpg', w: 80, h: 60, extra: 3 },
+      ],
+    });
+  });
+
+  it('7 张合法 images 截断为前 6 张（单条消息上限）', () => {
+    const images = Array.from({ length: 7 }, (_, i) => ({ path: `img${i}.png`, w: 1, h: 1 }));
+    const r = sanitizeMessageContext({ skills: [], files: [], images });
+    expect(r?.images).toHaveLength(6);
+    expect(r?.images?.[5]).toEqual({ path: 'img5.png', w: 1, h: 1 });
+  });
+
+  it('畸形 images 元素剔除：空 path / w=0 / 负 h / 非整数 w / 非对象，合法项保留', () => {
+    const r = sanitizeMessageContext({
+      skills: [],
+      files: [],
+      images: [
+        { path: '', w: 10, h: 10 },
+        { path: 'a.png', w: 0, h: 10 },
+        { path: 'b.png', w: 10, h: -1 },
+        { path: 'c.png', w: 1.5, h: 10 },
+        { path: 'd.png', w: 10 },
+        42,
+        null,
+        { path: 'ok.png', w: 3, h: 4 },
+      ],
+    });
+    expect(r?.images).toEqual([{ path: 'ok.png', w: 3, h: 4 }]);
+  });
+
+  it('images 非数组 → 字段剔除为缺省（不透传垃圾），skills/files 流不受影响', () => {
+    expect(sanitizeMessageContext({ skills: [], files: [], images: 'x' })).toEqual({
+      skills: [],
+      files: [],
+    });
+    expect(sanitizeMessageContext({ skills: [{ slug: 's', name: 'n' }], files: [], images: 42 })).toEqual({
+      skills: [{ slug: 's', name: 'n' }],
+      files: [],
+    });
+  });
+
+  it('images 缺省 → 保持缺省（旧客户端形状零变化）', () => {
+    expect(sanitizeMessageContext({ skills: [], files: [] })).toEqual({ skills: [], files: [] });
+  });
 });
 
 describe('session:getMessages handler', () => {
-  it('返回 messages + 每条消息的 eventsByMessage', async () => {
+  it('返回 messages + 每条消息的 eventsByMessage（最近窗口走批量全量查询）', async () => {
     messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
-    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
-      { id: 'evt-1', messageId: 'msg-1', seq: 1 },
-    ]);
+    eventsRepoMocks.listEventsForMessages.mockReturnValueOnce(
+      new Map([['msg-1', [{ id: 'evt-1', messageId: 'msg-1', seq: 1 }]]]),
+    );
+    eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map([['msg-1', 1]]));
     const res = await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
     expect(messagesRepoMocks.listMessagesBySession).toHaveBeenCalledWith('sess-1');
-    expect(eventsRepoMocks.listEventsByMessage).toHaveBeenCalledWith('msg-1');
+    expect(eventsRepoMocks.listEventsForMessages).toHaveBeenCalledWith(['msg-1']);
     expect(res).toEqual({
       messages: [msgRow],
       eventsByMessage: { 'msg-1': [{ id: 'evt-1', messageId: 'msg-1', seq: 1 }] },
+    });
+  });
+
+  it('更早消息经压缩快照回填返回（backfillCompactSnapshots 批量）', async () => {
+    messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
+    // 单消息但事件数超 cap（巨型路径）→ msg-1 走降级集合 → 压缩快照
+    eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map([['msg-1', 99999]]));
+    compactionMocks.backfillCompactSnapshots.mockReturnValueOnce(
+      new Map([['msg-1', [{ id: 'evt-c', messageId: 'msg-1', seq: 0, eventType: 'text_delta', payload: { delta: '压缩正文' } }]]]),
+    );
+    const res = await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
+    expect(compactionMocks.backfillCompactSnapshots).toHaveBeenCalledWith(['msg-1']);
+    expect(res).toEqual({
+      messages: [msgRow],
+      eventsByMessage: { 'msg-1': [{ id: 'evt-c', messageId: 'msg-1', seq: 0, eventType: 'text_delta', payload: { delta: '压缩正文' } }] },
     });
   });
 
@@ -519,16 +597,24 @@ describe('session:getMessages handler', () => {
   // 投影本身走真实 event-projection 模块（momo-test-rules：mock 收窄 IO 边界）。
   it('I2：getMessages 返回的 steer 事件无 context 字段（wire 投影剥离）', async () => {
     messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);
-    eventsRepoMocks.listEventsByMessage.mockReturnValueOnce([
-      {
-        id: 'evt-steer',
-        messageId: 'msg-1',
-        seq: 2,
-        eventType: 'steer',
-        payload: { body: '补充', context: { skills: [{ slug: 's', name: 'n', body: '全文' }], files: [] } },
-      },
-      { id: 'evt-text', messageId: 'msg-1', seq: 3, eventType: 'text_delta', payload: { delta: 'x' } },
-    ]);
+    eventsRepoMocks.listEventsForMessages.mockReturnValueOnce(
+      new Map([
+        [
+          'msg-1',
+          [
+            {
+              id: 'evt-steer',
+              messageId: 'msg-1',
+              seq: 2,
+              eventType: 'steer',
+              payload: { body: '补充', context: { skills: [{ slug: 's', name: 'n', body: '全文' }], files: [] } },
+            },
+            { id: 'evt-text', messageId: 'msg-1', seq: 3, eventType: 'text_delta', payload: { delta: 'x' } },
+          ],
+        ],
+      ]),
+    );
+    eventsRepoMocks.countEventsByMessage.mockReturnValueOnce(new Map([['msg-1', 2]]));
     const res = await ipcHandlers.get('session:getMessages')!({} as never, 'sess-1');
     const events = (res as { eventsByMessage: Record<string, Array<{ eventType: string; payload: Record<string, unknown> }>> }).eventsByMessage['msg-1']!;
     const steer = events.find((e) => e.eventType === 'steer');

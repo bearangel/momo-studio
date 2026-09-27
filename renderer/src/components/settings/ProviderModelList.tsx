@@ -1,7 +1,7 @@
 // renderer/src/components/settings/ProviderModelList.tsx
 //
 // 供应商模型列表管理（P2 Task 6）：
-// - 每行：model_id（等宽字体）+ 启用开关 + 上下文窗口（可选，压缩重构 Task 1）+ 思维模式三态控件（Task 9）+ 删除
+// - 每行：model_id（等宽字体）+ 启用开关 + 上下文窗口（可选，压缩重构 Task 1）+ 思维模式三态控件（Task 9）+ 视觉输入开关（多模态 Task 2）+ 删除
 // - 「获取模型列表」：fetchModels 拉取远端列表 → 逐个 addModel 幂等入库 → 刷新
 // - 「手动添加」：内联输入 model_id → addModel
 // - 增删后通过 onChanged 通知父组件刷新左列模型数徽标
@@ -193,6 +193,16 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
     }
   };
 
+  // 视觉输入能力位（用户覆盖，双向压过预设表，多模态 spec §3.3）
+  const handleToggleVision = async (m: ProviderModel): Promise<void> => {
+    try {
+      await ipc.provider.setModelVision(providerId, m.modelId, !m.vision);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleRemove = async (m: ProviderModel): Promise<void> => {
     try {
       await ipc.provider.removeModel(providerId, m.modelId);
@@ -298,6 +308,17 @@ export function ProviderModelList({ providerId, onChanged }: Props) {
               config={m.thinkingJson}
               onError={setError}
             />
+            <span
+              className="flex items-center gap-1"
+              title="视觉输入——开启后该模型可接收图片（用户覆盖，优先于预设表）"
+            >
+              <Checkbox
+                checked={m.vision}
+                onChange={() => void handleToggleVision(m)}
+                aria-label={`视觉输入 ${m.modelId}`}
+              />
+              <span className="text-xs text-secondary select-none">视觉</span>
+            </span>
             <button type="button" onClick={() => void handleRemove(m)} aria-label={`删除 ${m.modelId}`}
               className="text-xs text-tertiary hover:text-status-error">删除</button>
           </div>

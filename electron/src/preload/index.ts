@@ -67,6 +67,15 @@ const api: ApiSurface = {
     rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
     searchNames: (wsId, query) => invoke('file:searchNames', wsId, query),
   },
+  // 2026-09-26 多模态（spec §5）：粘贴/拖入降采样图片内容寻址落盘，路径返回相对路径
+  asset: {
+    // Uint8Array 跨 contextBridge 走 structured clone 安全，IPC handler 自转 Buffer
+    saveImage: (workspaceId: string, data: Uint8Array, ext: 'png' | 'jpg') =>
+      invoke<{ path: string }>('asset:saveImage', workspaceId, data, ext),
+    // 2026-09-26 多模态（spec §10）：气泡缩略图读图——`.momo/assets/` 白名单路径 → data URL
+    readDataUrl: (workspaceId: string, path: string) =>
+      invoke<string>('asset:readDataUrl', workspaceId, path),
+  },
   // v25 Task 6（spec §5）：assignment 系列通道平移更名 member；角色指派/
   // 改角色通道随 role 概念退役删除（preload 悬空绑定一并清理）。
   agent: {
@@ -127,6 +136,7 @@ const api: ApiSurface = {
     removeModel: (id, modelId) => invoke('provider:removeModel', id, modelId),
     listPresets: () => invoke('provider:listPresets'),
     setModelThinking: (id, modelId, config) => invoke('provider:setModelThinking', id, modelId, config),
+    setModelVision: (id, modelId, vision) => invoke('provider:setModelVision', id, modelId, vision),
   },
   // v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts）——状态/重探测/装 bwrap/关提示卡
   //（2026-09-13 修订 B：answerNetworkTrust / onNetworkNotice 已随 ask 信任门下线）

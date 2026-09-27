@@ -84,8 +84,12 @@ interface StreamStoreState {
   /**
    * 重启场景：从 IPC im.getMessages 拉到的 events 初始化指定 messageId 的 StreamState。
    * 与实时路径走同一个 aggregateEvents，保证重启后聚合一致。
+   *
+   * fallbackBody（事件裁剪回退，2026-09-25）：getMessages 对更早/巨型消息只回
+   * 结构事件（无 text_delta）——终态且聚合正文为空时用 message.body 回填，
+   * 缺省（旧调用方）行为不变。
    */
-  hydrateFromEvents: (messageId: string, events: MessageEventRow[]) => void;
+  hydrateFromEvents: (messageId: string, events: MessageEventRow[], fallbackBody?: string) => void;
   /**
    * v2.4.x 网络信任卡路径置位入口（spec §6 防双弹）：ask 策略下网络失败由信任卡
    * 负责，本标志由信任卡出现时一并置位——与实时批次检测共用同一一次性语义。
@@ -147,20 +151,41 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
     });
   },
 
-  hydrateFromEvents: (messageId, events) => {
+  hydrateFromEvents: (messageId, events, fallbackBody) => {
     // 空 events 防御（P0-4）：零事件消息（用户消息）不创建 streams 条目——
     // aggregateEvents([]) 的默认 status 是 'streaming'，写入会让 MessageBubble
     // 把静态消息渲染成空的"流式中"气泡，消息文本不可见。
     if (events.length === 0) return;
-    // 用传入的 events 覆盖该 messageId 的 eventLog（重启场景：IPC 拉的是权威全量）
-    eventLogByMessage.set(messageId, [...events].sort((a, b) => a.seq - b.seq));
+    // 按 seq 归并而非整体覆盖（2026-09-26 任务框丢失 P0）：同 seq 以 hydrate
+    // （DB 权威）为准；已积累的更大 seq 实时事件保留——截断载荷（如流中快照）
+    // 不得抹掉实时视图
+    const bySeq = new Map((eventLogByMessage.get(messageId) ?? []).map((e) => [e.seq, e]));
+    for (const e of events) bySeq.set(e.seq, e);
+    const merged = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+    eventLogByMessage.set(messageId, merged);
     set((state) => {
       const newStreams = new Map(state.streams);
       const aggregated = aggregateEvents(eventLogByMessage.get(messageId) ?? []);
+      // 事件裁剪回退（2026-09-25）：getMessages 对更早/巨型消息只回结构事件
+      //（无 text_delta）——终态消息正文以 message.body 为单一真相源，聚合
+      // 正文为空且给了 fallbackBody 时回填，保证带工具卡的历史消息文本可见；
+      // segments 末尾补 text 段（AgentStreamBubble 按 segments 线性渲染）。
+      // 仅终态生效：流式消息正文以 delta 为准，回退会盖掉进行中的空窗。
+      const useFallback =
+        fallbackBody !== undefined &&
+        fallbackBody.trim() !== '' &&
+        aggregated.status !== 'streaming' &&
+        aggregated.text === '';
+      const text = useFallback ? fallbackBody : aggregated.text;
+      const segments = useFallback
+        ? [...aggregated.segments, { kind: 'text' as const, text: fallbackBody }]
+        : aggregated.segments;
       newStreams.set(messageId, {
         ...aggregated,
+        text,
+        segments,
         messageId,
-        startedAt: events[0]?.createdAt ?? Date.now(),
+        startedAt: merged[0]?.createdAt ?? Date.now(),
       });
       return { streams: newStreams };
     });

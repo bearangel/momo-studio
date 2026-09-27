@@ -41,6 +41,8 @@ export interface PresetModel {
   reasoning: ReasoningCapability;
   /** 覆写供应商级方言（缺省继承）——同一供应商混供 toggle-only 与 effort 模型时使用（如 moonshot K3） */
   thinkingWire?: ThinkingWire;
+  /** 支持图片输入（缺省 false）——spec 2026-09-26-image-input-multimodal §3 能力表 */
+  vision?: boolean;
 }
 
 /** 供应商预设条目 */
@@ -70,11 +72,18 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'toggle-effort',
     docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     models: [
-      { id: 'glm-5.3', contextWindow: 1_000_000, outputTokens: 128_000, reasoning: GLM5_EFFORT },
+      { id: 'glm-5.3', contextWindow: 1_000_000, outputTokens: 128_000, reasoning: GLM5_EFFORT, vision: true },
+      // 2026-09-26 官方文档补录（docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash）：
+      // 原生多模态（图像/视频/文件输入）、1M 窗口 / 128K 输出、thinking 仅 enabled
+      { id: 'glm-5.3-flash', contextWindow: 1_000_000, outputTokens: 128_000, reasoning: GLM5_EFFORT, vision: true },
+      { id: 'glm-5.3-flashx', contextWindow: 1_000_000, outputTokens: 128_000, reasoning: GLM5_EFFORT, vision: true },
       { id: 'glm-5.2', contextWindow: 1_000_000, outputTokens: 128_000, reasoning: GLM5_EFFORT },
       { id: 'glm-4.7', contextWindow: 200_000, outputTokens: 96_000, reasoning: { kind: 'toggle' } },
       { id: 'glm-4.6', contextWindow: 200_000, outputTokens: 96_000, reasoning: { kind: 'toggle' } },
       { id: 'glm-4.5', contextWindow: 128_000, outputTokens: 96_000, reasoning: { kind: 'toggle' } },
+      // GLM-V 视觉主线（spec §3.2）：输出上限官方未公布，保守档，用户可覆盖
+      { id: 'glm-4.6v', contextWindow: 131_072, outputTokens: 32_768, reasoning: NONE, vision: true },
+      { id: 'glm-4.6v-flash', contextWindow: 131_072, outputTokens: 16_384, reasoning: NONE, vision: true },
     ],
   },
   {
@@ -83,7 +92,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.deepseek.com/api_keys',
     models: [
       { id: 'deepseek-v4-pro', contextWindow: 1_000_000, outputTokens: 384_000, reasoning: V4_EFFORT },
-      { id: 'deepseek-v4-flash', contextWindow: 1_000_000, outputTokens: 65_536, reasoning: V4_EFFORT },
+      { id: 'deepseek-v4-flash', contextWindow: 1_000_000, outputTokens: 65_536, reasoning: V4_EFFORT, vision: true },
       { id: 'deepseek-chat', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE },
       { id: 'deepseek-reasoner', contextWindow: 128_000, outputTokens: 32_768, reasoning: NONE },
     ],
@@ -94,8 +103,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.moonshot.cn/console/api-keys',
     models: [
       // K3 顶层 reasoning_effort、无 thinking 开关 → 模型级覆写 'effort' 方言
-      { id: 'kimi-k3', contextWindow: 1_000_000, outputTokens: 32_768, reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' }, thinkingWire: 'effort' },
-      { id: 'kimi-k2.6', contextWindow: 262_144, outputTokens: 8_192, reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'high' } },
+      { id: 'kimi-k3', contextWindow: 1_000_000, outputTokens: 32_768, reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'max' }, thinkingWire: 'effort', vision: true },
+      { id: 'kimi-k2.6', contextWindow: 262_144, outputTokens: 8_192, reasoning: { kind: 'effort', values: ['low', 'high', 'max'], default: 'high' }, vision: true },
       { id: 'kimi-k2', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE },
     ],
   },
@@ -106,8 +115,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: [
       // 来源 help.aliyun.com qwen3-max / qwen-plus 模型页。qwen3-max 思考模式输出上限
       // 32_768，目录按通用档 65_536 记录（用户覆盖列可下修）
-      { id: 'qwen3-max', contextWindow: 262_144, outputTokens: 65_536, reasoning: NONE },
-      { id: 'qwen-plus', contextWindow: 1_000_000, outputTokens: 32_768, reasoning: NONE },
+      { id: 'qwen3-max', contextWindow: 262_144, outputTokens: 65_536, reasoning: NONE, vision: true },
+      { id: 'qwen-plus', contextWindow: 1_000_000, outputTokens: 32_768, reasoning: NONE, vision: true },
     ],
   },
   {
@@ -117,8 +126,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: [
       // 来源 developer.volcengine.com Seed1.6 技术介绍 + 发布文章。两个条目 id
       // 改为可查证形态：默认输出上限 4K，按最大档 16_384 记录（用户覆盖列可下修）
-      { id: 'doubao-seed-1-6-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE },
-      { id: 'doubao-seed-1-6-flash-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE },
+      { id: 'doubao-seed-1-6-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE, vision: true },
+      { id: 'doubao-seed-1-6-flash-250615', contextWindow: 256_000, outputTokens: 16_384, reasoning: NONE, vision: true },
     ],
   },
   // ── 国际直连 ──────────────────────────────────────────────────────────────
@@ -127,11 +136,11 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'openai', thinkingWire: 'effort',
     docsUrl: 'https://platform.openai.com/api-keys',
     models: [
-      { id: 'gpt-5.2', contextWindow: 400_000, outputTokens: 128_000, reasoning: GPT5_EFFORT },
-      { id: 'gpt-5.1', contextWindow: 400_000, outputTokens: 128_000, reasoning: { kind: 'effort', values: ['none', 'low', 'medium', 'high'], default: 'medium' } },
-      { id: 'gpt-5-mini', contextWindow: 400_000, outputTokens: 128_000, reasoning: { kind: 'effort', values: ['none', 'low', 'medium', 'high'], default: 'medium' } },
-      { id: 'gpt-4.1', contextWindow: 1_048_576, outputTokens: 32_768, reasoning: NONE },
-      { id: 'gpt-4o', contextWindow: 128_000, outputTokens: 16_384, reasoning: NONE },
+      { id: 'gpt-5.2', contextWindow: 400_000, outputTokens: 128_000, reasoning: GPT5_EFFORT, vision: true },
+      { id: 'gpt-5.1', contextWindow: 400_000, outputTokens: 128_000, reasoning: { kind: 'effort', values: ['none', 'low', 'medium', 'high'], default: 'medium' }, vision: true },
+      { id: 'gpt-5-mini', contextWindow: 400_000, outputTokens: 128_000, reasoning: { kind: 'effort', values: ['none', 'low', 'medium', 'high'], default: 'medium' }, vision: true },
+      { id: 'gpt-4.1', contextWindow: 1_048_576, outputTokens: 32_768, reasoning: NONE, vision: true },
+      { id: 'gpt-4o', contextWindow: 128_000, outputTokens: 16_384, reasoning: NONE, vision: true },
     ],
   },
   {
@@ -139,9 +148,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     platform: 'anthropic', thinkingWire: 'anthropic-budget',
     docsUrl: 'https://console.anthropic.com/settings/keys',
     models: [
-      { id: 'claude-opus-4-5', contextWindow: 200_000, outputTokens: 32_000, reasoning: CLAUDE_EFFORT },
-      { id: 'claude-sonnet-4-5', contextWindow: 200_000, outputTokens: 64_000, reasoning: CLAUDE_EFFORT },
-      { id: 'claude-haiku-4-5', contextWindow: 200_000, outputTokens: 64_000, reasoning: CLAUDE_EFFORT },
+      { id: 'claude-opus-4-5', contextWindow: 200_000, outputTokens: 32_000, reasoning: CLAUDE_EFFORT, vision: true },
+      { id: 'claude-sonnet-4-5', contextWindow: 200_000, outputTokens: 64_000, reasoning: CLAUDE_EFFORT, vision: true },
+      { id: 'claude-haiku-4-5', contextWindow: 200_000, outputTokens: 64_000, reasoning: CLAUDE_EFFORT, vision: true },
     ],
   },
   {
@@ -152,8 +161,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       // 来源 ai.google.dev/gemini-api/docs/openai + /gemini-3：OpenAI 兼容端点接受
       // reasoning_effort 并映射 thinking_level。Pro 仅支持 low/high（medium 会被 Pro
       // 拒绝，Google 论坛官方回复确认）。
-      { id: 'gemini-3.1-pro-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'high'], default: 'high' } },
-      { id: 'gemini-3-flash-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'medium', 'high'], default: 'high' } },
+      { id: 'gemini-3.1-pro-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'high'], default: 'high' }, vision: true },
+      { id: 'gemini-3-flash-preview', contextWindow: 1_048_576, outputTokens: 65_536, reasoning: { kind: 'effort', values: ['low', 'medium', 'high'], default: 'high' }, vision: true },
     ],
   },
   {
@@ -163,7 +172,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: [
       // grok-4.6 来源 docs.x.ai/developers/grok-4-6 + release notes：contextWindow 500K；
       // 官方标注「无文本输出上限」，按上下文窗口档记录 outputTokens=500K
-      { id: 'grok-4.6', contextWindow: 500_000, outputTokens: 500_000, reasoning: { kind: 'effort', values: ['low', 'medium', 'high', 'xhigh'], default: 'high' } },
+      { id: 'grok-4.6', contextWindow: 500_000, outputTokens: 500_000, reasoning: { kind: 'effort', values: ['low', 'medium', 'high', 'xhigh'], default: 'high' }, vision: true },
     ],
   },
   {
@@ -175,7 +184,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       // Large 3 model card 256K；输出上限各来源不一致，按保守 8K 记录。
       { id: 'mistral-large-latest', contextWindow: 262_144, outputTokens: 8_192, reasoning: NONE },
       // magistral-medium 收录 128K；旧版 1.2 为 40K，按最新收录档记录
-      { id: 'magistral-medium-latest', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE },
+      { id: 'magistral-medium-latest', contextWindow: 128_000, outputTokens: 8_192, reasoning: NONE, vision: true },
     ],
   },
   {
@@ -187,6 +196,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       // openai/gpt-oss-120b MAX COMPLETION 65_536（原 32_768 修正）
       { id: 'llama-3.3-70b-versatile', contextWindow: 131_072, outputTokens: 32_768, reasoning: NONE },
       { id: 'openai/gpt-oss-120b', contextWindow: 131_072, outputTokens: 65_536, reasoning: NONE },
+      // Groq 唯一视觉模型（spec §3.2）：输出上限保守档，官方未公布，用户可覆盖
+      { id: 'qwen/qwen3.8-27b', contextWindow: 131_072, outputTokens: 32_768, reasoning: NONE, vision: true },
     ],
   },
   // ── 聚合 / 本地 ────────────────────────────────────────────────────────────

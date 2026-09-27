@@ -29,6 +29,7 @@ import {
 } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
 import { listTeams } from '../agent/team';
+import { resolveVisionCapability } from '../agent/spawn-helpers';
 
 /** 协作会话目标（spec §4.4）：单个 agent 或团队（建会时快照展开） */
 export type CollabTarget =
@@ -59,6 +60,13 @@ export interface SessionMemberInfo {
   lastRunning: boolean;
   /** 会话创建时的 leader 快照（session_members.is_leader；接待判定依据，spec §3.3） */
   isLeader: boolean;
+  /**
+   * 视觉输入能力（spec 2026-09-26-image-input-multimodal §8）：与 spawn 同源
+   * resolveVisionCapability 解析（provider_models.vision → 预设表 → false）。
+   * 仅 UX 提示用；运行时以 AGENT_CONFIG.vision 快照为准（防换模型竞态）。
+   * def 未配置 provider（model_provider_id NULL）时恒 false。
+   */
+  vision: boolean;
 }
 
 export interface SessionSummary {
@@ -249,7 +257,8 @@ function listAllSessions(): SessionRow[] {
 
 /**
  * 读会话成员信息：JOIN session_members → workspace_agent_members → agent_definitions；
- * isLeader 读 session_members.is_leader 快照列（建会时写入，spec §3.3）。
+ * isLeader 读 session_members.is_leader 快照列（建会时写入，spec §3.3）；
+ * vision 按成员 def 的 (model_provider_id, model_name) 同源 resolve（spec §8）。
  *
  * 空成员返回 []（不抛错）。
  */
@@ -258,7 +267,8 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
 
   const rows = db
     .prepare(
-      `SELECT m.instance_id, m.is_leader, a.last_running, d.name, d.icon_emoji
+      `SELECT m.instance_id, m.is_leader, a.last_running, d.name, d.icon_emoji,
+              d.model_provider_id, d.model_name
        FROM session_members m
        JOIN workspace_agent_members a ON m.instance_id = a.instance_id
        JOIN agent_definitions d ON a.agent_definition_id = d.id
@@ -271,6 +281,8 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
     last_running: number;
     name: string;
     icon_emoji: string;
+    model_provider_id: string | null;
+    model_name: string;
   }>;
 
   return rows.map((r) => ({
@@ -279,5 +291,9 @@ export function getSessionMembersInfo(sessionId: string): SessionMemberInfo[] {
     iconEmoji: r.icon_emoji,
     lastRunning: r.last_running === 1,
     isLeader: r.is_leader === 1,
+    vision:
+      r.model_provider_id !== null
+        ? resolveVisionCapability(r.model_provider_id, r.model_name)
+        : false,
   }));
 }

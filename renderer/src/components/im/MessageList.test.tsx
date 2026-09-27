@@ -316,3 +316,4 @@ describe('MessageList v2.0 分段行渲染契约（富信息不丢）', () => {
     expect(screen.getAllByTestId('bubble')).toHaveLength(1);
   });
 });
+

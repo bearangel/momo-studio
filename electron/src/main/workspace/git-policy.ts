@@ -10,7 +10,7 @@
 // 未显式配置的 workspace 永远读到一个一致的默认 policy（defaultGitPolicy），
 // 因此调用方无需区分“未配置”与“显式配置成默认”两种状态。
 
-import { ipcMain } from 'electron';
+import { loadElectronApis } from '../electron-access';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
 
@@ -130,6 +130,13 @@ export function setGitPolicy(workspaceId: string, policy: GitPolicy): void {
  * 与 allocation 一样归属 workspace 域，但通道命名空间独立。
  */
 export function registerGitPolicyHandlers(): void {
+  // 本模块被 runtime 子进程依赖图加载（git 工具读 policy）——顶层 import
+  // 'electron' 会让打包子进程 boot 即崩，故 ipcMain 惰性取用（electron-access）
+  const { ipcMain } = loadElectronApis();
+  if (!ipcMain) {
+    logger.warn('Git Policy IPC handlers 未注册——当前进程无 electron IPC（非主进程环境）');
+    return;
+  }
   ipcMain.handle('gitPolicy:get', async (_evt, workspaceId: string) => {
     return getGitPolicy(workspaceId);
   });

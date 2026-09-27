@@ -293,3 +293,168 @@ describe('resolveMaxTokensParam 目录单测（B1 判别矩阵）', () => {
     },
   );
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// T3（spec §7）：LLMMessage.images 双平台 parts 映射——provider 层只负责
+// 映射，无 vision 能力判定（能力 gating 是 Task 8 runtime 责任）。
+// 无 images 时 content 保持 string（字节不变回归锁）。
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('llm-provider LLMMessage.images 双平台映射（T3 / spec §7）', () => {
+  /** OpenAI 非流式应答夹具 */
+  const openAiOk = {
+    ok: true,
+    json: async () => ({
+      choices: [{ message: { content: 'ok', tool_calls: undefined }, finish_reason: 'stop' }],
+    }),
+  };
+  /** Anthropic 非流式应答夹具 */
+  const anthropicOk = {
+    ok: true,
+    json: async () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }),
+  };
+
+  /** 提取本次 fetch 调用发送的 JSON 请求体 */
+  function sentBody(): Record<string, unknown> {
+    const call = mockFetch.mock.calls[0]!;
+    return JSON.parse((call[1] as { body: string }).body) as Record<string, unknown>;
+  }
+
+  it('OpenAI：消息含 2 张图 → content 数组 [text, image_url, image_url]，data URL 良构', async () => {
+    mockFetch.mockResolvedValueOnce(openAiOk);
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'k');
+    await provider.chat([
+      {
+        role: 'user',
+        content: '描述这两张图',
+        images: [
+          { mime: 'image/png', base64: 'AAA', w: 1024, h: 768 },
+          { mime: 'image/jpeg', base64: 'BBB', w: 800, h: 600 },
+        ],
+      },
+    ]);
+    const body = sentBody();
+    const messages = body.messages as Array<{ role: string; content: unknown }>;
+    const content = messages[0]!.content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toEqual([
+      { type: 'text', text: '描述这两张图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBB' } },
+    ]);
+  });
+
+  it('OpenAI：无 images → content 是字符串，深度等于原文（字节不变回归锁）', async () => {
+    mockFetch.mockResolvedValueOnce(openAiOk);
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'k');
+    await provider.chat([{ role: 'user', content: '你好' }]);
+    const messages = (sentBody().messages as Array<{ role: string; content: unknown }>);
+    const content = messages[0]!.content;
+    expect(typeof content).toBe('string');
+    expect(content).toBe('你好');
+  });
+
+  it('Anthropic：消息含 2 张图 → content 数组 [image, image, text]，base64 + media_type + data', async () => {
+    mockFetch.mockResolvedValueOnce(anthropicOk);
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude-3-5-sonnet' }, 'k');
+    await provider.chat([
+      {
+        role: 'user',
+        content: '看图说话',
+        images: [
+          { mime: 'image/png', base64: 'AAA', w: 1024, h: 768 },
+          { mime: 'image/jpeg', base64: 'BBB', w: 800, h: 600 },
+        ],
+      },
+    ]);
+    const body = sentBody();
+    const messages = body.messages as Array<{ role: string; content: unknown }>;
+    const content = messages[0]!.content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toEqual([
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'AAA' },
+      },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: 'BBB' },
+      },
+      { type: 'text', text: '看图说话' },
+    ]);
+  });
+
+  it('Anthropic：无 images → content 是字符串（字节不变）', async () => {
+    mockFetch.mockResolvedValueOnce(anthropicOk);
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude-3-5-sonnet' }, 'k');
+    await provider.chat([{ role: 'user', content: 'Hi' }]);
+    const messages = (sentBody().messages as Array<{ role: string; content: unknown }>);
+    const content = messages[0]!.content;
+    expect(typeof content).toBe('string');
+    expect(content).toBe('Hi');
+  });
+
+  it('OpenAI 流式：含 images → chatStream 请求体 content 数组同样带 image_url parts', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: (): string => 'application/json' },
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'k');
+    const stream = provider.chatStream(
+      [
+        {
+          role: 'user',
+          content: '看图',
+          images: [{ mime: 'image/png', base64: 'AAA', w: 1024, h: 768 }],
+        },
+      ],
+      undefined,
+      new AbortController().signal,
+    );
+    for await (const _d of stream) { void _d; }
+    const messages = (sentBody().messages as Array<{ role: string; content: unknown }>);
+    const content = messages[0]!.content;
+    expect(content).toEqual([
+      { type: 'text', text: '看图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+    ]);
+  });
+
+  it('OpenAI：images 空数组 → content 保持字符串（length===0 不切 parts 边界锁）', async () => {
+    mockFetch.mockResolvedValueOnce(openAiOk);
+    const provider = createLLMProvider({ provider: 'openai', model: 'gpt-4o' }, 'k');
+    await provider.chat([{ role: 'user', content: '普通文本', images: [] }]);
+    const messages = (sentBody().messages as Array<{ role: string; content: unknown }>);
+    const content = messages[0]!.content;
+    expect(typeof content).toBe('string');
+    expect(content).toBe('普通文本');
+  });
+
+  it('Anthropic 流式：含 images → chatStream 请求体 content 数组同样带 image + text blocks', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: (): string => 'application/json' },
+      json: async () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }),
+    });
+    const provider = createLLMProvider({ provider: 'anthropic', model: 'claude-3-5-sonnet' }, 'k');
+    const stream = provider.chatStream(
+      [
+        {
+          role: 'user',
+          content: '看图',
+          images: [{ mime: 'image/png', base64: 'AAA', w: 1024, h: 768 }],
+        },
+      ],
+      undefined,
+      new AbortController().signal,
+    );
+    for await (const _d of stream) { void _d; }
+    const messages = (sentBody().messages as Array<{ role: string; content: unknown }>);
+    const content = messages[0]!.content;
+    expect(content).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+      { type: 'text', text: '看图' },
+    ]);
+  });
+});

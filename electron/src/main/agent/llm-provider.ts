@@ -18,6 +18,15 @@ export interface LLMMessage {
   toolCallId?: string;
   /** role='assistant' 时附带的工具调用列表 */
   toolCalls?: LLMToolCall[];
+  /**
+   * 多模态图片附件（T3 / spec §7）：base64 + mime 直达 LLM 请求体。
+   * 双平台 mapper 据此切换 content 为 parts 数组；provider 层不做 vision
+   * 能力判定（gating 在 runtime / Task 8），调用方需自行保证非视觉模型不带图。
+   * w/h 仅供 token 估算（Task 6 / §9）消费，provider 映射忽略。
+   * path（Task 9）可选：workspace 相对路径，供 compaction 占位（§9）与
+   * 降级提示回溯；provider 映射同样忽略。
+   */
+  images?: Array<{ mime: string; base64: string; w: number; h: number; path?: string }>;
 }
 
 /** 一次工具调用（id + name + 已解析的参数对象） */
@@ -238,6 +247,21 @@ function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
       })),
     };
   }
+  // 多模态（T3 / spec §7）：images 非空 → content 切 parts 数组；text part 在前，
+  // image_url parts 在后，data URL `data:<mime>;base64,<b64>`。无 images → content
+  // 保持字符串，字节等于 m.content（回归锁保证）。
+  if (m.images && m.images.length > 0) {
+    return {
+      role: m.role,
+      content: [
+        { type: 'text', text: m.content },
+        ...m.images.map((i) => ({
+          type: 'image_url' as const,
+          image_url: { url: `data:${i.mime};base64,${i.base64}` },
+        })),
+      ],
+    };
+  }
   return { role: m.role, content: m.content };
 }
 
@@ -273,6 +297,21 @@ function toAnthropicMessage(m: LLMMessage): Record<string, unknown> {
           name: tc.name,
           input: tc.arguments,
         })),
+      ],
+    };
+  }
+  // 多模态（T3 / spec §7）：images 非空 → content 切 parts 数组；image blocks 在前
+  // （Anthropic 官方示例顺序，text block 殿后）。无 images → content 保持字符串，
+  // 字节等于 m.content（回归锁保证）。
+  if (m.images && m.images.length > 0) {
+    return {
+      role: m.role,
+      content: [
+        ...m.images.map((i) => ({
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: i.mime, data: i.base64 },
+        })),
+        { type: 'text', text: m.content },
       ],
     };
   }

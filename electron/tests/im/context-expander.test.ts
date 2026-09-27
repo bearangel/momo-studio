@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   expandMessageContext,
+  MAX_IMAGE_BASE64_CHARS,
   MAX_INLINE_FILE_BYTES,
   MAX_TOTAL_INLINE_BYTES,
   setExpanderDeps,
@@ -16,6 +17,8 @@ import type { MessageContext } from '../../../renderer/src/ipc/types';
 
 let tmpRoot: string;
 let wsId: string | null;
+/** 图片素材字节（多模态 Task 5：断言 base64 与 mime 的已知输入） */
+let pngBytes: Buffer;
 
 beforeAll(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-ctx-'));
@@ -43,6 +46,18 @@ beforeAll(() => {
     path.join(tmpRoot, 'skills', 'demo', 'SKILL.md'),
     '---\nname: 演示技能\ndescription: 测试用\nversion: 1.0.0\n---\n\n技能正文。',
   );
+  // 图片素材（多模态 Task 5）：.momo/assets 内容寻址形态 + 各失败形态素材。
+  // 字节不必是真实图片——expander 只按扩展名映射 mime、按字节算 base64
+  const assetsDir = path.join(tmpRoot, 'ws1', '.momo', 'assets');
+  fs.mkdirSync(assetsDir, { recursive: true });
+  pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  fs.writeFileSync(path.join(assetsDir, 'ab.png'), pngBytes);
+  fs.writeFileSync(path.join(assetsDir, 'cd.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 4, 5]));
+  fs.writeFileSync(path.join(assetsDir, 'ef.bmp'), Buffer.from([0x42, 0x4d, 6, 7]));
+  // base64 超限素材：raw 8MB+ → base64 文本 ≈11MB > 8MB 上限
+  fs.writeFileSync(path.join(assetsDir, 'huge.png'), Buffer.alloc(8 * 1024 * 1024 + 1024, 7));
+  // 未知扩展名素材（.txt 不在图片 mime 白名单）
+  fs.writeFileSync(path.join(assetsDir, 'note.txt'), 'not an image');
   // 注入测试依赖（生产路径依赖 electron app / SQLite，不进测试）：
   // skillRoots 注入即完全接管 skill 解析；workspaceDir 注入即绕开 getWorkspace DB 查询
   setExpanderDeps({
@@ -126,9 +141,9 @@ describe('expandMessageContext', () => {
     expect(r.skills[0]!.body).toBe('[skill 已不可用]');
   });
 
-  it('空 context 返回空结构', async () => {
+  it('空 context 返回空结构（images/droppedImages 恒为数组）', async () => {
     const r = await expandMessageContext(wsId, { skills: [], files: [] });
-    expect(r).toEqual({ skills: [], files: [] });
+    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [] });
   });
 
   // === I4 回归锁（终审修复）：合法 dotfile 不再一刀切拒绝 ===
@@ -217,6 +232,122 @@ describe('expandMessageContext', () => {
       files: [{ path: ['evil'] }],
     } as unknown as MessageContext;
     const r = await expandMessageContext(wsId, malformed);
-    expect(r).toEqual({ skills: [], files: [] });
+    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [] });
+  });
+
+  // === 多模态 Task 5：images 展开（读文件→base64；一切失败剔除进 droppedImages） ===
+  // 契约：expander 永不抛错；失败占位 [图片加载失败: path] 由 runtime（Task 8）
+  // 从 droppedImages 渲染，本层只负责剔除 + 返回清单。
+
+  it('合法图片读取为 base64（png/jpg/bmp mime 映射），droppedImages 空', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [
+        { path: '.momo/assets/ab.png', w: 100, h: 50 },
+        { path: '.momo/assets/cd.jpg', w: 80, h: 60 },
+        { path: '.momo/assets/ef.bmp', w: 10, h: 12 },
+      ],
+    });
+    expect(r.images).toEqual([
+      {
+        path: '.momo/assets/ab.png',
+        mime: 'image/png',
+        base64: pngBytes.toString('base64'),
+        w: 100,
+        h: 50,
+      },
+      { path: '.momo/assets/cd.jpg', mime: 'image/jpeg', base64: expect.any(String), w: 80, h: 60 },
+      { path: '.momo/assets/ef.bmp', mime: 'image/bmp', base64: expect.any(String), w: 10, h: 12 },
+    ]);
+    expect(r.droppedImages).toEqual([]);
+  });
+
+  it('文件缺失 → droppedImages 记录 path，不抛错', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/gone.png', w: 1, h: 1 }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual(['.momo/assets/gone.png']);
+  });
+
+  it('单图 base64 超 8MB 上限 → 剔除（raw 8MB → base64 ≈11MB）', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/huge.png', w: 1, h: 1 }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual(['.momo/assets/huge.png']);
+    expect(MAX_IMAGE_BASE64_CHARS).toBe(8 * 1024 * 1024);
+  });
+
+  it('路径逃逸（../ 与绝对路径）→ 剔除不越 workspace', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [{ path: '../escape.png', w: 1, h: 1 }, { path: '/etc/hosts.png', w: 1, h: 1 }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual(['../escape.png', '/etc/hosts.png']);
+  });
+
+  it('未知扩展名（.txt）→ 剔除', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/note.txt', w: 1, h: 1 }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual(['.momo/assets/note.txt']);
+  });
+
+  it('旧消息无 images 字段 → images/droppedImages 空数组（兼容锁）', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [{ slug: 'demo', name: '演示技能' }],
+      files: [{ path: 'a.ts' }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual([]);
+    // skills/files 流不受 images 缺省影响
+    expect(r.skills[0]!.body).toContain('技能正文。');
+    expect(r.files[0]!.content).toBe('export const a = 1;');
+  });
+
+  it('workspaceId=null 时图片全部降级 droppedImages（无根可依附）', async () => {
+    const r = await expandMessageContext(null, {
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/ab.png', w: 1, h: 1 }],
+    });
+    expect(r.images).toEqual([]);
+    expect(r.droppedImages).toEqual(['.momo/assets/ab.png']);
+  });
+
+  it('畸形元素（数字/null/缺 path/w 非数字）跳过，合法元素照常展开（元素级兜底）', async () => {
+    const r = await expandMessageContext(wsId, {
+      skills: [],
+      files: [],
+      images: [
+        123,
+        null,
+        { path: 1, w: 2, h: 3 },
+        { w: 1, h: 1 },
+        { path: '.momo/assets/ab.png', w: 5, h: 5 },
+      ],
+    } as unknown as MessageContext);
+    expect(r.images).toEqual([
+      {
+        path: '.momo/assets/ab.png',
+        mime: 'image/png',
+        base64: pngBytes.toString('base64'),
+        w: 5,
+        h: 5,
+      },
+    ]);
+    // 畸形元素不进 droppedImages（path 可能都不是字符串，无法构成占位）
+    expect(r.droppedImages).toEqual([]);
   });
 });

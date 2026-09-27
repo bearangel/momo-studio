@@ -50,7 +50,11 @@ import type {
   MessageContext,
   SkillContextItem,
   FileContextItem,
+  ImageContextItem,
 } from '../../../../renderer/src/ipc/types';
+
+/** 单条消息图片上限（spec 2026-09-26 §6：renderer 拦截 + sanitize 双层防线） */
+const MAX_CONTEXT_IMAGES = 6;
 
 /**
  * IPC 载荷清洗（v2.11；I5 升级为元素级）：session:send 第 4 参 context 在
@@ -60,12 +64,15 @@ import type {
  * 外层形状非法（非对象 / 缺字段 / 非数组）整体降级 undefined（无上下文发送），
  * 不拒整条消息。
  *
+ * images（多模态 Task 5，可选字段）：元素级过滤（path 非空 string + w/h 正整数）
+ * + 数组上限 6；非数组 → 字段剔除为缺省（旧客户端形状零变化）。
+ *
  * 已 export 以便契约测试直接断言（协议面变更必须有单测锁——外层三态 +
  * 元素级剔除双关）。
  */
 export function sanitizeMessageContext(v: unknown): MessageContext | undefined {
   if (typeof v !== 'object' || v === null) return undefined;
-  const c = v as { skills?: unknown; files?: unknown };
+  const c = v as { skills?: unknown; files?: unknown; images?: unknown };
   if (!Array.isArray(c.skills) || !Array.isArray(c.files)) return undefined;
   const skills = c.skills.filter(
     (s): s is SkillContextItem =>
@@ -78,8 +85,25 @@ export function sanitizeMessageContext(v: unknown): MessageContext | undefined {
     (f): f is FileContextItem =>
       typeof f === 'object' && f !== null && typeof (f as FileContextItem).path === 'string',
   );
-  // spread 保留外层未知字段（透传宽容：未来扩展字段不因清洗被剥掉）
-  return { ...c, skills, files };
+  const images = Array.isArray(c.images)
+    ? c.images
+        .filter(
+          (i): i is ImageContextItem =>
+            typeof i === 'object' &&
+            i !== null &&
+            typeof (i as ImageContextItem).path === 'string' &&
+            (i as ImageContextItem).path !== '' &&
+            Number.isInteger((i as ImageContextItem).w) &&
+            (i as ImageContextItem).w > 0 &&
+            Number.isInteger((i as ImageContextItem).h) &&
+            (i as ImageContextItem).h > 0,
+        )
+        .slice(0, MAX_CONTEXT_IMAGES)
+    : undefined;
+  // spread 保留外层未知字段（透传宽容：未来扩展字段不因清洗被剥掉）；
+  // images 单独处理——非数组时剔除字段（spread 会把垃圾形状原样透传）
+  const { images: _rawImages, ...rest } = c;
+  return images !== undefined ? { ...rest, skills, files, images } : { ...rest, skills, files };
 }
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */

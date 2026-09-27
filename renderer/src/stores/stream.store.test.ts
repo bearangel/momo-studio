@@ -37,8 +37,7 @@ describe('hydrateFromEvents 空 events 防御（P0-4）', () => {
 
   it('先空后实（同 messageId 二次 hydrate）→ 实数据正常生效', () => {
     useStreamStore.getState().hydrateFromEvents('m2', []);
-    expect(useStreamStore.getState().streams.has('m2')).toBe(false);
-    useStreamStore.getState().hydrateFromEvents('m2', [ev(1, 'text_delta', { delta: 'x' })]);
+    expect(useStreamStore.getState().streams.has('m2')).toBe(false);    useStreamStore.getState().hydrateFromEvents('m2', [ev(1, 'text_delta', { delta: 'x' })]);
     const s = useStreamStore.getState().streams.get('m2');
     expect(s?.text).toBe('x');
   });
@@ -258,5 +257,122 @@ describe('stream.store：net-off 网络拦截检测', () => {
       mkEvent('m-replay', 2, 'final', { status: 'done' }),
     ]);
     expect(useStreamStore.getState().netBlockedSeen).toBe(false);
+  });
+});
+
+// ====================================================================
+// 事件裁剪水合回退（工作空间切换卡顿修复，2026-09-25）
+// 新契约：getMessages 对非最近窗口消息只回结构事件（无 text/thinking delta），
+// 终态正文以 messages.body 为单一真相源——水合层在 stream.text 为空且给了
+// fallbackBody 时回填正文与末尾 text 段，保证带工具卡的历史消息正文可见。
+describe('hydrateFromEvents 裁剪回退（fallbackBody）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  it('终态 + 结构事件 + fallbackBody → text 回填 body、segments 末尾补 text 段', () => {
+    useStreamStore.getState().hydrateFromEvents(
+      'pruned-1',
+      [
+        ev(1, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+        ev(2, 'tool_call_result', { callId: 'c1', result: 'ok', success: true }),
+        ev(3, 'final', { status: 'done' }),
+      ],
+      '历史消息正文全文',
+    );
+    const s = useStreamStore.getState().streams.get('pruned-1');
+    expect(s).toBeDefined();
+    expect(s!.status).toBe('done');
+    expect(s!.text).toBe('历史消息正文全文');
+    expect(s!.toolCalls).toHaveLength(1);
+    const last = s!.segments[s!.segments.length - 1];
+    expect(last?.kind).toBe('text');
+    if (last?.kind === 'text') expect(last.text).toBe('历史消息正文全文');
+  });
+
+  it('流式中的消息不回退（fallbackBody 仅终态生效——流式正文以 delta 为准）', () => {
+    useStreamStore.getState().hydrateFromEvents(
+      'live-1',
+      [
+        ev(1, 'status_change', { status: 'streaming' }),
+        ev(2, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      ],
+      '不应出现的正文',
+    );
+    const s = useStreamStore.getState().streams.get('live-1');
+    expect(s!.status).toBe('streaming');
+    expect(s!.text).toBe('');
+  });
+
+  it('无 fallbackBody（旧调用方兼容）→ 行为与旧契约一致（text 空）', () => {
+    useStreamStore.getState().hydrateFromEvents('legacy-1', [
+      ev(1, 'final', { status: 'done' }),
+    ]);
+    expect(useStreamStore.getState().streams.get('legacy-1')!.text).toBe('');
+  });
+
+  it('已有 text_delta 聚合的非空正文 → fallbackBody 不覆盖（去重保护）', () => {
+    useStreamStore.getState().hydrateFromEvents(
+      'full-1',
+      [
+        ev(1, 'text_delta', { delta: '增量正文' }),
+        ev(2, 'final', { status: 'done' }),
+      ],
+      '不应覆盖',
+    );
+    expect(useStreamStore.getState().streams.get('full-1')!.text).toBe('增量正文');
+  });
+});
+
+describe('hydrateFromEvents 按 seq 归并（2026-09-26 P0：截断水合抹掉实时积累）', () => {
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+  });
+
+  const rev = (seq: number, eventType: MessageEventRow['eventType'], payload: Record<string, unknown>): MessageEventRow => ({
+    id: `h${seq}`, messageId: 'm-h', seq, eventType, payload, createdAt: seq * 1000,
+  });
+
+  it('实时积累 5 事件后 hydrate 子集（流中截断快照形态）→ 工具卡与文本不丢', () => {
+    // 场景：流式回合进行中切走工作空间再切回——实时批次已积累完整事件，
+    // getMessages 却只回了 2 条事件的截断快照
+    useStreamStore.getState().applyEventBatch([
+      rev(0, 'thinking_delta', { delta: '思考' }),
+      rev(1, 'text_delta', { delta: '开头' }),
+      rev(2, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+      rev(3, 'tool_call_result', { callId: 'c1', result: 'ok', success: true }),
+      rev(4, 'text_delta', { delta: '结尾' }),
+    ]);
+    useStreamStore.getState().hydrateFromEvents('m-h', [
+      rev(0, 'thinking_delta', { delta: '思考' }),
+      rev(1, 'text_delta', { delta: '开头' }),
+    ]);
+    const s = useStreamStore.getState().streams.get('m-h');
+    expect(s?.toolCalls).toHaveLength(1);
+    expect(s?.text).toBe('开头结尾');
+    expect(s?.segments.map((x) => x.kind)).toEqual(['thinking', 'text', 'tool_call', 'text']);
+  });
+
+  it('hydrate 全量后再 hydrate 子集 → 不缩水（归并幂等上界）', () => {
+    useStreamStore.getState().hydrateFromEvents('m-h', [
+      rev(0, 'text_delta', { delta: 'a' }),
+      rev(1, 'text_delta', { delta: 'b' }),
+    ]);
+    useStreamStore.getState().hydrateFromEvents('m-h', [rev(0, 'text_delta', { delta: 'a' })]);
+    expect(useStreamStore.getState().streams.get('m-h')?.text).toBe('ab');
+  });
+
+  it('归并后续流：水合后实时批次 seq 无缝追加', () => {
+    useStreamStore.getState().hydrateFromEvents('m-h', [
+      rev(0, 'text_delta', { delta: 'a' }),
+      rev(1, 'tool_call_start', { callId: 'c1', toolName: 'bash', args: {} }),
+    ]);
+    useStreamStore.getState().applyEventBatch([
+      rev(2, 'tool_call_result', { callId: 'c1', result: 'ok', success: true }),
+      rev(3, 'text_delta', { delta: 'z' }),
+    ]);
+    const s = useStreamStore.getState().streams.get('m-h');
+    expect(s?.text).toBe('az');
+    expect(s?.toolCalls).toHaveLength(1);
   });
 });
