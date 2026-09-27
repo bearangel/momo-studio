@@ -1,0 +1,62 @@
+// renderer/src/components/task-board/TaskDetailDrawer.tsx
+//
+// 任务详情抽屉（看板重构 Task 12，spec §5.1）：
+//   - 右侧滑入壳：portal 到 body + fixed right w-[380px] bg-canvas border-l shadow，
+//     transform 进场动画（GPU 合成；面板自身 transform 不影响遮罩——遮罩是兄弟层）
+//   - 遮罩 bg-backdrop 点击关 + ESC 关（capture 阶段拦截，与 ui/Dialog 同款——
+//     不与宿主视图其余 ESC 监听双触发）
+//   - 内容：TaskDetailPanel 函数体包壳复用（props 不变，{taskId, onClose} 透传）；
+//     主区互斥渲染退役（Task 12 起看板常驻，抽屉叠加）
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { cn } from '../../lib/cn';
+import { TaskDetailPanel } from './TaskDetailPanel';
+
+interface TaskDetailDrawerProps {
+  taskId: string;
+  onClose: () => void;
+}
+
+export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
+  // 进场动画：mount 后下一帧从 translate-x-full 滑到 0
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        // capture 阶段最先执行，阻断同窗口其余 Esc 监听（ui/Dialog 同款语义）
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
+  }, [onClose]);
+
+  return createPortal(
+    <>
+      <div
+        data-testid="drawer-backdrop"
+        aria-hidden
+        className="fixed inset-0 z-50 bg-backdrop"
+        onClick={onClose}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="任务详情"
+        className={cn(
+          'fixed bottom-0 right-0 top-0 z-50 flex w-[380px] flex-col border-l border-subtle bg-canvas shadow-2xl transition-transform duration-200 ease-out',
+          entered ? 'translate-x-0' : 'translate-x-full',
+        )}
+      >
+        <TaskDetailPanel taskId={taskId} onClose={onClose} />
+      </aside>
+    </>,
+    document.body,
+  );
+}

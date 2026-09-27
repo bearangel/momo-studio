@@ -1,13 +1,14 @@
 // renderer/src/components/task-board/TaskBoardView.test.tsx
 //
-// 看板主区测试（看板重构 Task 11 同步改造）：
-//   - 未选中任务 → 标题栏 + BoardToolbar + 平铺画板（五列 + 卡片）
-//   - selectedTaskId → TaskDetailPanel（现状主区面板；抽屉 Task 12 接线）
+// 看板主区测试（看板重构 Task 12 同步改造）：
+//   - 未选中任务 → 标题栏 + BoardToolbar + 画板（五列 + 卡片）
+//   - selectedTaskId → TaskDetailDrawer 右侧抽屉叠加（主区互斥渲染退役，
+//     画板仍在）；泳道模式开关已接线（Task 12）+ localStorage 持久化 + 有组默认泳道
 //   - 并发徽标（迁入 BoardToolbar，文案格式不变）：getGlobal 缺字段 fallback 3 /
 //     返回 5 生效 / IPC 抛错兜底
 // mock 边界：仅 mock IPC（window.api），store 用真实实现（momo-test-rules #5）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TaskBoardView } from './TaskBoardView';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
@@ -67,6 +68,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
 describe('TaskBoardView 主区（看板重构 Task 11）', () => {
   beforeEach(() => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    window.localStorage.clear();
     useTaskStore.setState({
       tasks: [],
       selectedTaskId: null,
@@ -92,10 +94,10 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     useTaskStore.setState({ tasks: fixture });
     render(<TaskBoardView workspaceId="ws-1" />);
     expect(screen.getByText('任务看板')).toBeInTheDocument();
-    // 工具栏：搜索 + 新建；分组开关/归档静态阶段 disabled（Task 12/14 接线）
+    // 工具栏：搜索 + 新建；泳道开关已接线（Task 12），归档仍 disabled（Task 14）
     expect(screen.getByRole('textbox', { name: '搜索任务' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新建任务/ })).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: /分组/ })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: /^分组$/ })).toBeEnabled();
     expect(screen.getByRole('button', { name: /归档/ })).toBeDisabled();
     // 五列（BOARD_COLUMNS 契约）
     for (const label of ['待办', '已分配', '进行中', '已完成', '已关闭']) {
@@ -120,14 +122,48 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(screen.queryByText(/_alpha 任务/)).not.toBeInTheDocument();
   });
 
-  it('selectedTaskId 非空时渲染 TaskDetailPanel', async () => {
+  it('selectedTaskId 非空 → TaskDetailDrawer 抽屉叠加，画板仍在（互斥渲染退役）', async () => {
     const task = mkTask({ id: 't1', title: '任务1', status: 'pending', priority: 5 });
     mockApi.task.get.mockResolvedValue(task);
     useTaskStore.setState({ tasks: [task], selectedTaskId: 't1' });
     render(<TaskBoardView workspaceId="ws-1" />);
-    // TaskDetailPanel 异步拉取 task.get 后渲染标题行
+    // 抽屉内 TaskDetailPanel 异步拉取 task.get 后渲染标题行
     expect(await screen.findByText(`#${task.id.slice(0, 8)}`)).toBeInTheDocument();
-    expect(screen.queryByText('从左侧选择任务')).not.toBeInTheDocument();
+    // 画板与工具栏不被替换
+    expect(screen.getByRole('textbox', { name: '搜索任务' })).toBeInTheDocument();
+    expect(screen.getByText('待办')).toBeInTheDocument();
+  });
+
+  it('有活跃组且无持久化偏好 → 默认泳道模式（组名 heading 出现）', async () => {
+    mockApi.taskGroup.list.mockResolvedValue([
+      { id: 'G-1', workspaceId: 'ws-1', name: '泳道组', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    render(<TaskBoardView workspaceId="ws-1" />);
+    expect(await screen.findByRole('heading', { name: /泳道组/ })).toBeInTheDocument();
+  });
+
+  it('切换分组开关 → 泳道/平铺切换 + localStorage 持久化 key kanban-lane-mode', async () => {
+    const fixture = [
+      mkTask({ id: 't1', title: '组内任务', status: 'pending', priority: 5, groupId: 'G-1' }),
+    ];
+    mockApi.taskGroup.list.mockResolvedValue([
+      { id: 'G-1', workspaceId: 'ws-1', name: '泳道组', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    // 5s 轮询/首载返回同一 fixture——防 load 用空列表覆盖本地态
+    mockApi.task.list.mockResolvedValue(fixture);
+    useTaskStore.setState({ tasks: fixture });
+    render(<TaskBoardView workspaceId="ws-1" />);
+    // 有组默认 lanes
+    expect(await screen.findByRole('heading', { name: /泳道组/ })).toBeInTheDocument();
+    // 切回平铺：泳道 heading 消失（页面 h2 标题仍在）、卡片带组 chip
+    fireEvent.click(screen.getByRole('switch', { name: /^分组$/ }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: /泳道组/ })).not.toBeInTheDocument());
+    expect(screen.getByText('泳道组')).toBeInTheDocument(); // chip 组名
+    expect(window.localStorage.getItem('kanban-lane-mode')).toBe('flat');
+    // 再切回泳道
+    fireEvent.click(screen.getByRole('switch', { name: /^分组$/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /泳道组/ })).toBeInTheDocument());
+    expect(window.localStorage.getItem('kanban-lane-mode')).toBe('lanes');
   });
 
   it('settings.getGlobal 缺 maxConcurrentTasks 字段 → 状态栏显示 fallback 3', async () => {

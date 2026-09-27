@@ -1,12 +1,11 @@
 // renderer/src/components/task-board/BoardToolbar.tsx
 //
-// 看板工具栏（看板重构 Task 11，spec §5.1）——受控组件，state 全部由
-// TaskBoardView 持有：搜索 / 指派人筛选 / 分组开关（平铺↔泳道）/ 并发徽标
-// （自 TaskBoardView 顶部状态栏迁入，文案格式不变）/ 归档入口 / 新建任务。
-// 本任务（Task 11 静态渲染阶段）接线边界：
-//   - 分组开关渲染但 disabled——泳道模式 Task 12 接线（laneMode 恒 'flat'）
-//   - 归档按钮渲染但 disabled——ArchivePanel Task 14 接线
-//   两者 onLaneMode/onOpenArchive 回调已按最终契约连线，接线时移除 disabled 即可。
+// 看板工具栏（看板重构 Task 11 建立，spec §5.1）——受控组件，state 全部由
+// TaskBoardView 持有：搜索 / 指派人筛选 / 泳道模式开关（Task 12 接线：平铺↔
+// 按组分道，偏好持久化在 TaskBoardView）/ 并发徽标（自 TaskBoardView 顶部
+// 状态栏迁入，文案格式不变）/ 归档入口 / 新建任务。
+// 接线边界：归档按钮渲染但 disabled——ArchivePanel Task 14 接线，
+// onOpenArchive 回调已按最终契约连线，接线时移除 disabled 即可。
 import { Archive, Plus, Search } from 'lucide-react';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -78,15 +77,14 @@ export function BoardToolbar({
           </option>
         ))}
       </Select>
-      {/* 分组开关（泳道模式）：Task 12 接线前禁用；回调按最终契约连线 */}
+      {/* 泳道模式开关（Task 12 接线）：平铺 ↔ 按组分道 */}
       <button
         type="button"
         role="switch"
         aria-checked={laneMode === 'lanes'}
-        title="泳道模式（Task 12 接入）"
-        disabled
+        title="泳道模式（按分组横向分道）"
         onClick={() => onLaneMode(laneMode === 'flat' ? 'lanes' : 'flat')}
-        className="inline-flex cursor-not-allowed items-center gap-1.5 text-xs text-tertiary disabled:opacity-50"
+        className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-secondary"
       >
         分组
         <span

@@ -1,41 +1,57 @@
 // renderer/src/components/task-board/TaskBoardView.tsx
 //
-// 任务看板主区（看板重构 Task 11 改造）：
-//   - 顶部标题栏：SidebarRestoreButton + 标题（并发徽标迁入 BoardToolbar）
-//   - BoardToolbar：搜索/指派人筛选（filterBoardTasks 生效）/ 分组开关（disabled，
-//     Task 12）/ 并发徽标 / 归档（disabled，Task 14）/ 新建任务（CreateTaskDialog）
-//   - 平铺画板：BOARD_COLUMNS 五列横排（列宽 ~232px，横向滚动），任务按
-//     column.statuses 分桶进列；平铺模式卡片带组 chip（group.store 解析）
+// 任务看板主区（看板重构 Task 12 改造）：
+//   - 顶部标题栏：SidebarRestoreButton + 标题（并发徽标在 BoardToolbar）
+//   - BoardToolbar：搜索/指派人筛选（filterBoardTasks 生效）/ 泳道模式开关
+//     （Task 12 接线；localStorage 持久化）/ 并发徽标 / 归档（disabled，Task 14）/
+//     新建任务（CreateTaskDialog）
+//   - BoardCanvas：DndContext 拖拽画板（泳道 splitLanes / 平铺单道；拖拽三分支
+//     语义与 DragOverlay 见 BoardCanvas 头注）
+//   - selectedTaskId → TaskDetailDrawer 右侧滑入抽屉叠加（主区互斥渲染退役，
+//     Task 12 起画板常驻）
 //
 // 数据流（保持不变）：
 //   - mount 时 task.store.load(workspaceId) 全生命周期拉取 + 每 5s 轮询
+//     （拖拽手持/在途乐观 move 期间 store 内部自守卫跳过）
 //   - group.store.load 与任务并行拉取一次（spec §6；组变更走 store 动作本地同步）
 //   - 并发从本地 tasks 派生（active=in_progress / queued=assigned）；max 接
 //     settings:getGlobal 的 maxConcurrentTasks，失败/缺字段 fallback 3
-//   - selectedTaskId 持有在 task.store——点卡片写入，主区渲染 TaskDetailPanel
-//     （右侧滑出抽屉是 Task 12，当前沿用主区面板避免中间态断档）
+//   - selectedTaskId 持有在 task.store——点卡片写入，抽屉读
 //
-// 本任务静态渲染边界：laneMode 恒 'flat'（开关 disabled）、无拖拽（Task 12）。
+// 泳道模式默认值（spec §5.3）：无持久化偏好时有活跃组→lanes、无组→flat；
+// 用户手动切换写 localStorage（纯 UI 偏好不入库），key 见 LANE_MODE_STORAGE_KEY。
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { GlobalSettings } from '../../ipc/types';
-import { BOARD_COLUMNS } from '../../ipc/board-columns';
 import { filterBoardTasks } from '../../lib/board';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import { useAgentStore } from '../../stores/agent.store';
-import { TaskDetailPanel } from './TaskDetailPanel';
 import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { BoardToolbar, type BoardConcurrency } from './BoardToolbar';
-import { BoardColumn } from './BoardColumn';
-import type { BoardGroupChip } from './BoardCard';
+import { BoardCanvas } from './BoardCanvas';
+import { TaskDetailDrawer } from './TaskDetailDrawer';
 
+/** 泳道模式持久化 key（spec §5.3 纯 UI 偏好） */
+const LANE_MODE_STORAGE_KEY = 'kanban-lane-mode';
 /** 并发上限缺省值（后端 GlobalSettings 缺 maxConcurrentTasks 字段时的 UI 兜底） */
 const MAX_CONCURRENCY_FALLBACK = 3;
 /** 列表轮询间隔（毫秒） */
 const REFRESH_INTERVAL_MS = 5000;
+
+type LaneMode = 'flat' | 'lanes';
+
+/** 读持久化泳道偏好；非法值/存储不可用 → null（走派生默认） */
+function readStoredLaneMode(): LaneMode | null {
+  try {
+    const v = window.localStorage.getItem(LANE_MODE_STORAGE_KEY);
+    return v === 'lanes' || v === 'flat' ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 interface TaskBoardViewProps {
   workspaceId: string;
@@ -53,9 +69,20 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const [maxConcurrency, setMaxConcurrency] = useState<number>(MAX_CONCURRENCY_FALLBACK);
   const [text, setText] = useState('');
   const [assignee, setAssignee] = useState<string>('all');
-  /** 视图模式：本任务恒 'flat'（开关 disabled），Task 12 接泳道后开放切换 */
-  const [laneMode] = useState<'flat' | 'lanes'>('flat');
+  /** 用户手动切换的持久化偏好；null=未表态 → 按组存在性派生默认（spec §5.3） */
+  const [laneModePref, setLaneModePref] = useState<LaneMode | null>(() => readStoredLaneMode());
   const [createOpen, setCreateOpen] = useState(false);
+
+  const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
+
+  const handleLaneMode = useCallback((mode: LaneMode): void => {
+    setLaneModePref(mode);
+    try {
+      window.localStorage.setItem(LANE_MODE_STORAGE_KEY, mode);
+    } catch {
+      // localStorage 不可用（极端环境）只丢偏好，不阻塞切换
+    }
+  }, []);
 
   // mount + workspaceId 变化 → 任务 load（5s 轮询）+ 组并行拉取
   useEffect(() => {
@@ -114,16 +141,11 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     [members, workspaceId],
   );
 
-  // 搜索 + 指派人过滤（Task 9 纯函数）；组 chip 解析表（平铺模式专用）
+  // 搜索 + 指派人过滤（Task 9 纯函数）→ BoardCanvas 可见任务
   const visibleTasks = useMemo(
     () => filterBoardTasks(tasks, { text, assigneeId: assignee === 'all' ? null : assignee }),
     [tasks, text, assignee],
   );
-  const chipByGroup = useMemo(() => {
-    const map = new Map<string, BoardGroupChip>();
-    for (const g of groups) map.set(g.id, { name: g.name, color: g.color });
-    return map;
-  }, [groups]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -132,45 +154,30 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         <SidebarRestoreButton />
         <h2 className="text-lg font-medium">任务看板</h2>
       </div>
-      {selectedTaskId ? (
-        // 点卡片仍走现状主区 TaskDetailPanel；右侧滑出抽屉 Task 12 接线
-        <TaskDetailPanel taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
-      ) : (
-        <>
-          <BoardToolbar
-            text={text}
-            onText={setText}
-            assignee={assignee}
-            onAssignee={setAssignee}
-            assigneeOptions={assigneeOptions}
-            laneMode={laneMode}
-            onLaneMode={() => {
-              // Task 12 接线：开关 disabled 期间不可达，保持受控签名完整
-            }}
-            onOpenArchive={() => {
-              // Task 14 接线：ArchivePanel 入口，按钮 disabled 期间不可达
-            }}
-            concurrency={concurrency}
-            onCreateTask={() => setCreateOpen(true)}
-          />
-          {/* 平铺画板：五列横排 + 横向滚动（mockup 基线 ~232px 列宽） */}
-          <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-3">
-            {BOARD_COLUMNS.map((column) => (
-              <BoardColumn
-                key={column.key}
-                column={column}
-                tasks={visibleTasks.filter((t) => column.statuses.includes(t.status))}
-                selectedId={selectedTaskId}
-                onSelect={(id) => setSelectedTaskId(id)}
-                groupChipOf={(t) =>
-                  laneMode === 'flat' && t.groupId !== null
-                    ? (chipByGroup.get(t.groupId) ?? null)
-                    : null
-                }
-              />
-            ))}
-          </div>
-        </>
+      <BoardToolbar
+        text={text}
+        onText={setText}
+        assignee={assignee}
+        onAssignee={setAssignee}
+        assigneeOptions={assigneeOptions}
+        laneMode={laneMode}
+        onLaneMode={handleLaneMode}
+        onOpenArchive={() => {
+          // Task 14 接线：ArchivePanel 入口，按钮 disabled 期间不可达
+        }}
+        concurrency={concurrency}
+        onCreateTask={() => setCreateOpen(true)}
+      />
+      <BoardCanvas
+        tasks={visibleTasks}
+        groups={groups}
+        laneMode={laneMode}
+        selectedId={selectedTaskId}
+        onSelect={setSelectedTaskId}
+      />
+      {/* 详情抽屉叠加层：画板常驻，selectedTaskId 驱动滑入 */}
+      {selectedTaskId !== null && (
+        <TaskDetailDrawer taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />
       )}
       <CreateTaskDialog
         open={createOpen}
