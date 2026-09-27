@@ -20,6 +20,9 @@
 //     而非 p2p 门面——避免把 electron/传输层依赖拖进 scheduler 等纯逻辑模块的测试图。
 //   - Task 5：同一批写通道成功后 notifyExecutor()——队列状态变化立即触发放行评估
 //     （executor 内部 100ms 去抖合并；通知丢了有 30s 兜底扫描自愈）。
+//   - 看板重构 Task 4：start / resume-paused / cancel 三动作的语义单点抽取到
+//     lifecycle.ts（机械搬运，行为零变化），handler 改一行委托——Task 5 的
+//     move.ts 与 IPC 同源消费，杜绝两套语义漂移。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import {
@@ -32,13 +35,11 @@ import {
   type TaskStatus,
 } from '../storage/tasks/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
-import { notifyExecutor, buildKickoffBody } from './executor';
-import { startTask, hasDelegationTarget, type StartTaskOpts } from './starter';
+import { notifyExecutor } from './executor';
+import { hasDelegationTarget, type StartTaskOpts } from './starter';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
-import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
-import { abortTaskStreamByLane } from '../agent/session-lane';
-import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
+import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
@@ -72,17 +73,9 @@ interface ListOpts {
 }
 
 /**
- * K7-4 + v2.3 精确中止（spec §6）：任务转 paused / cancelled 时联动中断 agent 执行。
- * 优先按 taskId 反查车道流精确 abort——同会话 dispatch 子流（未注册车道）
- * 与其他任务的流不受影响；车道无记录（流未注册的窗口 / 旧数据）回退按
- * executionSessionId 广播（原 K7-4 语义兜底）。
+ * K7-4 精确中止联动已随 cancel/start 语义一并抽取到 lifecycle.ts
+ * （abortTaskExecution）——transition 的 paused/cancelled 分支同源消费。
  */
-function abortTaskExecutionIfAny(taskId: string): void {
-  if (abortTaskStreamByLane(taskId)) return;
-  const row = getTask(taskId);
-  if (!row?.executionSessionId) return;
-  abortTasksBySessionEverywhere(row.executionSessionId);
-}
 
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
@@ -160,7 +153,7 @@ export function registerTaskHandlers(): void {
     ): Promise<TaskRow> => {
       const row = transitionTaskStatus(id, to, extraPatch);
       if (to === 'paused' || to === 'cancelled') {
-        abortTaskExecutionIfAny(id);
+        abortTaskExecution(id);
       }
       void broadcastLocalTaskSnapshot();
       notifyExecutor();
@@ -169,10 +162,8 @@ export function registerTaskHandlers(): void {
   );
 
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
-    transitionTaskStatus(id, 'cancelled');
-    abortTaskExecutionIfAny(id);
-    void broadcastLocalTaskSnapshot();
-    notifyExecutor();
+    // 语义单点在 lifecycle.ts（cancelTask），move.ts 同源消费
+    await cancelTask(id);
   });
 
   // K7-5 + v2.6.0 多路恢复：按任务 status 分流（spec §5.6 IPC 面 + D6 卡片唯一闸门）：
@@ -190,19 +181,9 @@ export function registerTaskHandlers(): void {
       if (!before) throw new Error(`task ${id} 不存在`);
 
       if (before.status === 'paused') {
-        // K7-5 既有行为逐字节保持：transition + kickoff 重注入
-        const row = transitionTaskStatus(id, 'in_progress');
-        if (row.executionSessionId) {
-          await sendUserMessage({
-            sessionId: row.executionSessionId,
-            body: buildKickoffBody(row),
-            mentionedInstanceIds: row.assigneeAgentId ? [row.assigneeAgentId] : undefined,
-            systemKickoff: true,
-          });
-        }
-        void broadcastLocalTaskSnapshot();
-        notifyExecutor();
-        return row;
+        // 语义单点在 lifecycle.ts（resumePausedTask = K7-5：transition + kickoff
+        // 重注入），move.ts 同源消费
+        return await resumePausedTask(id);
       }
 
       // v2.6.0：其余可恢复状态交由 resume.ts resumeTask 统一处理
@@ -230,40 +211,10 @@ export function registerTaskHandlers(): void {
       id: string,
       opts?: StartTaskOpts,
     ): Promise<{ executionSessionId: string; createdNewRoom: boolean }> => {
-      // K9：手动启动与 executor 自动放行等价——startTask 只建会话/转状态，
-      // kickoff 消息注入才是驱动 agent 开始执行的指令（旧实现漏了这半步，
-      // 手动启动后新会话空转无任何执行）。启动前快照区分「新启动」与
-      // 「幂等返回」：仅新启动注入，重复点击不重复驱动
-      const before = getTask(id);
-      const result = await startTask(id, opts);
-      // K10：新建执行会话 → 通知 renderer 刷新会话列表（停留 IM 视图可见）
-      if (result.createdNewRoom) broadcastSessionListChanged();
-      const newlyStarted =
-        before != null && before.status !== 'in_progress' && result.task.executionSessionId != null;
-      if (newlyStarted) {
-        try {
-          await sendUserMessage({
-            sessionId: result.executionSessionId,
-            body: buildKickoffBody(result.task),
-            mentionedInstanceIds: result.task.assigneeAgentId
-              ? [result.task.assigneeAgentId]
-              : undefined,
-            systemKickoff: true,
-          });
-        } catch (err) {
-          // kickoff 失败 = 无执行驱动（半启动状态不可恢复）——与 executor
-          // failQuietly 同语义转 failed，错误信息透出给 UI
-          const reason = err instanceof Error ? err.message : String(err);
-          try {
-            transitionTaskStatus(id, 'failed', { completedAt: Date.now(), errorMessage: `kickoff 注入失败: ${reason}` });
-          } catch {
-            // 并发改态——终态以先到者为准
-          }
-          throw err;
-        }
-      }
-      void broadcastLocalTaskSnapshot();
-      notifyExecutor();
+      // 语义单点在 lifecycle.ts（startTaskAndKickoff = K9 全语义：startTask +
+      // 幂等判定 + kickoff 注入 + 失败转 failed + broadcast/notify），move.ts
+      // 同源消费。IPC 返回形状保持两字段（renderer 契约不变）
+      const result = await startTaskAndKickoff(id, opts);
       return {
         executionSessionId: result.executionSessionId,
         createdNewRoom: result.createdNewRoom,
