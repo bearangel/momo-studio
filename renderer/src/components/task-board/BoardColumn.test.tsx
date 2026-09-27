@@ -89,7 +89,7 @@ describe('BoardColumn 列头与卡片', () => {
     render(
       <BoardColumn column={backlog} tasks={[]} selectedId={null} onSelect={() => {}} />,
     );
-    expect(screen.getByText('draft+pending')).toBeInTheDocument();
+    expect(screen.getByText('草稿+待分配')).toBeInTheDocument();
   });
 
   it('空列 → 显示「暂无」空态', () => {

@@ -38,6 +38,7 @@ import {
   type TaskStatus,
 } from '../storage/tasks/repo';
 import { isTerminal } from '../storage/tasks/state-machine';
+import { getGroup } from '../storage/task-groups/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor } from './executor';
 import { hasDelegationTarget, type StartTaskOpts } from './starter';
@@ -64,6 +65,8 @@ interface CreateInput {
   recurrenceRule?: string | null;
   scheduledAt?: number | null;
   deadlineAt?: number | null;
+  /** 看板分组（UX 修复）：落组 id，落库前三重校验（存在/同 ws/未归档） */
+  groupId?: string;
 }
 
 /** renderer task:list 入参，与 listTasks opts 对齐 */
@@ -97,6 +100,19 @@ export function registerTaskHandlers(): void {
     const hasTarget = hasDelegationTarget(input);
     const status =
       input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined;
+    // 分组三重校验（与 agent 工具 createTask 同款单源语义）：存在 / 同 ws / 未归档
+    if (input.groupId != null) {
+      const group = getGroup(input.groupId);
+      if (!group) {
+        throw new Error(`任务分组 ${input.groupId} 不存在`);
+      }
+      if (group.workspaceId !== input.workspaceId) {
+        throw new Error(`任务分组 ${input.groupId} 不属于当前工作空间，拒绝跨工作空间落组`);
+      }
+      if (group.archivedAt != null) {
+        throw new Error(`任务分组 ${input.groupId} 已归档，不可作为新建任务的目标分组`);
+      }
+    }
     const created = insertTask({
       workspaceId: input.workspaceId,
       title: input.title,
@@ -112,6 +128,7 @@ export function registerTaskHandlers(): void {
       recurrenceRule: input.recurrenceRule,
       scheduledAt: input.scheduledAt,
       deadlineAt: input.deadlineAt,
+      groupId: input.groupId,
     });
     void broadcastLocalTaskSnapshot();
     notifyExecutor();
