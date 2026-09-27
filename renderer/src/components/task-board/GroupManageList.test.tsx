@@ -1,19 +1,22 @@
 // renderer/src/components/task-board/GroupManageList.test.tsx
 //
-// 分组管理列表测试（看板重构 Task 14）：
+// 分组管理列表测试（看板重构 Task 14；UX 波 2 #2/#3/#4/#5）：
 //   - 渲染：position 升序、色点/组名/任务数（任务数从 task.store.tasks 实时按 groupId 计）
 //   - 新建组：内联输入回车调 taskGroup.create（契约锁 {workspaceId, name}）
 //   - 重命名：菜单触发行内编辑，回车调 taskGroup.update(id, {name})
-//   - 换色：色板固定 5 语义色，点选调 taskGroup.update(id, {color})
+//   - 换色：色板固定 5 语义色 + 自定义 input type=color 存小写 hex（UX 波 2 #5）
+//   - 菜单点外关闭：全屏遮罩点击关闭；再点触发按钮本身仍切换（UX 波 2 #4）
 //   - 归档组：确认文案含实时未完结数 N；确认后 taskGroup.archive + task.list 级联刷新
 //   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive + task.list 级联刷新
-//   - 调序（spec §5.1）：上/下移与相邻组交换后以新序调 taskGroup.reorder；
-//     首组上移/末组下移 disabled；失败 toast（错误路径）
+//   - 行满宽可点（UX 波 2 #3）：选择按钮 w-full；手柄/菜单点击不触发选中（结构隔离）
+//   - 拖动调序（UX 波 2 #2，替代上下移按钮）：dnd DOM 拖拽 jsdom 测不了——
+//     单测打在导出的纯函数 computeGroupOrder（照 Task 12 resolveDrop 模式）与
+//     编排函数 applyGroupReorder（reorder 调用契约 + 失败 toast 错误路径）
 //
 // mock 边界：仅 mock window.api；group.store / task.store 真实实现。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { GroupManageList } from './GroupManageList';
+import { GroupManageList, computeGroupOrder, applyGroupReorder } from './GroupManageList';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -68,6 +71,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status' | 'gro
 
 const G_A = mkGroup({ id: 'g-a', name: '组A', position: 1024, color: 'accent' });
 const G_B = mkGroup({ id: 'g-b', name: '组B', position: 2048 });
+const G_C = mkGroup({ id: 'g-c', name: '组C', position: 3072 });
 const G_ARCHIVED = mkGroup({ id: 'g-z', name: '已归档组Z', position: 4096, archivedAt: 12345 });
 
 const WS: Workspace = {
@@ -202,6 +206,38 @@ describe('GroupManageList', () => {
     });
   });
 
+  it('换色：自定义 input type=color 选色存小写 hex（UX 波 2 #5）', async () => {
+    render(<GroupManageList />);
+    await screen.findByLabelText('分组 组A');
+
+    openMenu('组A');
+    fireEvent.click(screen.getByRole('button', { name: '换色' }));
+    fireEvent.change(screen.getByLabelText('自定义组色'), { target: { value: '#ff8800' } });
+
+    await waitFor(() => {
+      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#ff8800' });
+    });
+  });
+
+  it('菜单点外关闭：遮罩点击关闭菜单（UX 波 2 #4）；再点触发按钮本身仍切换', async () => {
+    render(<GroupManageList />);
+    await screen.findByLabelText('分组 组A');
+
+    openMenu('组A');
+    expect(screen.getByRole('button', { name: '重命名' })).toBeInTheDocument();
+    expect(screen.getByTestId('group-menu-overlay')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('group-menu-overlay'));
+    expect(screen.queryByRole('button', { name: '重命名' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();
+
+    // 再点按钮本身 → 重新打开（触发器 z 序在遮罩上，仍可切换）
+    openMenu('组A');
+    expect(screen.getByRole('button', { name: '重命名' })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('分组菜单 组A'));
+    expect(screen.queryByRole('button', { name: '重命名' })).not.toBeInTheDocument();
+  });
+
   it('归档组确认文案含实时未完结数 N（终态不计）；确认后 archive + task.list 级联刷新', async () => {
     useTaskStore.setState({
       tasks: [
@@ -291,7 +327,7 @@ describe('GroupManageList', () => {
       expect(screen.getByLabelText('筛选全部分组')).toHaveTextContent('2');
     });
 
-    it('点击组行选择区 → selectedGroupId 置位；再点同组 → 取消回 null', async () => {
+    it('点击组行 → selectedGroupId 置位；再点同组 → 取消回 null', async () => {
       render(<GroupManageList />);
       await screen.findByLabelText('分组 组A');
 
@@ -314,19 +350,17 @@ describe('GroupManageList', () => {
       expect(useGroupStore.getState().selectedGroupId).toBeNull();
     });
 
-    it('调序箭头点击不触发选中（兄弟布局结构隔离）：reorder 生效、selectedGroupId 不动', async () => {
+    it('拖动手柄点击不触发选中也不调 reorder（结构隔离 + 点击≠拖动）：selectedGroupId 不动', async () => {
       render(<GroupManageList />);
       await screen.findByLabelText('分组 组A');
 
-      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
-      await waitFor(() => {
-        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
-      });
+      fireEvent.click(screen.getByLabelText('拖动排序 组B'));
       expect(useGroupStore.getState().selectedGroupId).toBeNull();
+      expect(mockApi.taskGroup.reorder).not.toHaveBeenCalled();
 
-      // 先选中再调序：选中态不被调序点击清掉/改变
+      // 先选中再点手柄：选中态不被手柄点击清掉/改变
       fireEvent.click(screen.getByLabelText('筛选分组 组A'));
-      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+      fireEvent.click(screen.getByLabelText('拖动排序 组B'));
       expect(useGroupStore.getState().selectedGroupId).toBe('g-a');
     });
 
@@ -338,54 +372,68 @@ describe('GroupManageList', () => {
       expect(useGroupStore.getState().selectedGroupId).toBeNull();
     });
   });
+});
 
-  describe('分组调序（spec §5.1 可调序）', () => {
-    it('上移组B → 与相邻组交换后以新序调 taskGroup.reorder（参数序正确）', async () => {
-      render(<GroupManageList />);
-      await screen.findByLabelText('分组 组A');
+describe('computeGroupOrder（UX 波 2 #2：拖动落点 → 新组序纯函数）', () => {
+  it('下移：active 落到 over 位次（g-a 拖到 g-b 上 → 新序 [g-b, g-a]）', () => {
+    expect(computeGroupOrder([G_A, G_B], 'g-a', 'g-b')).toEqual(['g-b', 'g-a']);
+  });
 
-      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+  it('上移：g-b 拖到 g-a 上 → 新序 [g-b, g-a]', () => {
+    expect(computeGroupOrder([G_A, G_B], 'g-b', 'g-a')).toEqual(['g-b', 'g-a']);
+  });
 
-      await waitFor(() => {
-        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
-      });
-    });
+  it('跨多位移动：三组中 g-a 拖到 g-c 上 → 新序 [g-b, g-c, g-a]', () => {
+    expect(computeGroupOrder([G_A, G_B, G_C], 'g-a', 'g-c')).toEqual(['g-b', 'g-c', 'g-a']);
+  });
 
-    it('下移组A → 新序 [g-b, g-a] 调 taskGroup.reorder', async () => {
-      render(<GroupManageList />);
-      await screen.findByLabelText('分组 组A');
+  it('同位（active===over）→ null（不调 reorder）', () => {
+    expect(computeGroupOrder([G_A, G_B], 'g-a', 'g-a')).toBeNull();
+  });
 
-      fireEvent.click(screen.getByRole('button', { name: '下移 组A' }));
+  it('active 或 over 不在列表 → null', () => {
+    expect(computeGroupOrder([G_A, G_B], 'g-x', 'g-a')).toBeNull();
+    expect(computeGroupOrder([G_A, G_B], 'g-a', 'g-x')).toBeNull();
+    expect(computeGroupOrder([], 'g-a', 'g-b')).toBeNull();
+  });
 
-      await waitFor(() => {
-        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
-      });
-    });
+  it('不修改输入数组（纯函数）', () => {
+    const input = [G_A, G_B, G_C];
+    const snapshot = [...input];
+    computeGroupOrder(input, 'g-a', 'g-c');
+    expect(input).toEqual(snapshot);
+  });
+});
 
-    it('首组「上移」/ 末组「下移」disabled，点击不调 reorder', async () => {
-      render(<GroupManageList />);
-      await screen.findByLabelText('分组 组A');
+describe('applyGroupReorder（拖动落点编排：reorder 调用契约）', () => {
+  it('有效落点 → 以 computeGroupOrder 新序调 reorder', async () => {
+    const reorder = vi.fn().mockResolvedValue(undefined);
+    await applyGroupReorder([G_A, G_B], 'g-b', 'g-a', reorder);
+    expect(reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
+  });
 
-      expect(screen.getByRole('button', { name: '上移 组A' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: '下移 组B' })).toBeDisabled();
-      expect(mockApi.taskGroup.reorder).not.toHaveBeenCalled();
-    });
+  it('同位 / 未知 id → 零调用', async () => {
+    const reorder = vi.fn().mockResolvedValue(undefined);
+    await applyGroupReorder([G_A, G_B], 'g-a', 'g-a', reorder);
+    await applyGroupReorder([G_A, G_B], 'g-x', 'g-a', reorder);
+    expect(reorder).not.toHaveBeenCalled();
+  });
 
-    it('reorder 失败（IPC reject）→ toast 提示，本地 groups 不动（错误路径）', async () => {
-      mockApi.taskGroup.reorder.mockRejectedValue(new Error('网络断开'));
-      render(
-        <>
-          <GroupManageList />
-          <Toast />
-        </>,
-      );
-      await screen.findByLabelText('分组 组A');
+  it('reorder 失败 → toast 提示（错误路径；store.reorder 失败 rethrow，本地 groups 不动）', async () => {
+    mockApi.taskGroup.reorder.mockRejectedValue(new Error('网络断开'));
+    render(
+      <>
+        <GroupManageList />
+        <Toast />
+      </>,
+    );
+    await screen.findByLabelText('分组 组A');
 
-      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+    // 真实 store.reorder（走 mockApi）：失败 rethrow 由编排函数承接为 toast
+    await applyGroupReorder([G_A, G_B], 'g-b', 'g-a', useGroupStore.getState().reorder);
 
-      expect(await screen.findByTestId('ui-toast')).toHaveTextContent('调整分组顺序失败: 网络断开');
-      // store.reorder 失败本地不动：仍为原序
-      expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['g-a', 'g-b']);
-    });
+    expect(await screen.findByTestId('ui-toast')).toHaveTextContent('调整分组顺序失败: 网络断开');
+    // store.reorder 失败本地不动：仍为原序
+    expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['g-a', 'g-b']);
   });
 });
