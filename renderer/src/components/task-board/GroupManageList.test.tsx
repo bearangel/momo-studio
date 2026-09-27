@@ -7,6 +7,8 @@
 //   - 换色：色板固定 5 语义色，点选调 taskGroup.update(id, {color})
 //   - 归档组：确认文案含实时未完结数 N；确认后 taskGroup.archive + task.list 级联刷新
 //   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive
+//   - 调序（spec §5.1）：上/下移与相邻组交换后以新序调 taskGroup.reorder；
+//     首组上移/末组下移 disabled；失败 toast（错误路径）
 //
 // mock 边界：仅 mock window.api；group.store / task.store 真实实现。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -16,6 +18,7 @@ import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { GroupRow, TaskRow, Workspace } from '../../ipc/types';
+import { Toast, dismissToast } from '../ui/Toast';
 
 function mkGroup(partial: Partial<GroupRow> & Pick<GroupRow, 'id' | 'name'>): GroupRow {
   return {
@@ -110,12 +113,14 @@ describe('GroupManageList', () => {
       mkGroup({ id: 'g-new', name: input.name, position: 3072 }),
     );
     mockApi.taskGroup.update.mockReset().mockResolvedValue(G_A);
+    mockApi.taskGroup.reorder.mockReset().mockResolvedValue(undefined);
     mockApi.taskGroup.archive.mockReset().mockResolvedValue({ cancelledIds: [], archivedCount: 2 });
     mockApi.taskGroup.unarchive.mockReset().mockResolvedValue(G_ARCHIVED);
     mockApi.task.list.mockClear().mockResolvedValue([]);
     useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null });
     useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: null });
     useWorkspaceStore.setState({ workspaces: [WS], activeWorkspaceId: WS.id, loading: false, error: null });
+    dismissToast(); // toast 单例复位，防跨用例串扰
   });
 
   it('渲染组列表：position 升序 + 色点 + 组名 + 任务数（从 task.store 实时计）', async () => {
@@ -254,5 +259,55 @@ describe('GroupManageList', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(mockApi.taskGroup.archive).not.toHaveBeenCalled();
+  });
+
+  describe('分组调序（spec §5.1 可调序）', () => {
+    it('上移组B → 与相邻组交换后以新序调 taskGroup.reorder（参数序正确）', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+
+      await waitFor(() => {
+        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
+      });
+    });
+
+    it('下移组A → 新序 [g-b, g-a] 调 taskGroup.reorder', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByRole('button', { name: '下移 组A' }));
+
+      await waitFor(() => {
+        expect(mockApi.taskGroup.reorder).toHaveBeenCalledWith(['g-b', 'g-a']);
+      });
+    });
+
+    it('首组「上移」/ 末组「下移」disabled，点击不调 reorder', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      expect(screen.getByRole('button', { name: '上移 组A' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '下移 组B' })).toBeDisabled();
+      expect(mockApi.taskGroup.reorder).not.toHaveBeenCalled();
+    });
+
+    it('reorder 失败（IPC reject）→ toast 提示，本地 groups 不动（错误路径）', async () => {
+      mockApi.taskGroup.reorder.mockRejectedValue(new Error('网络断开'));
+      render(
+        <>
+          <GroupManageList />
+          <Toast />
+        </>,
+      );
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByRole('button', { name: '上移 组B' }));
+
+      expect(await screen.findByTestId('ui-toast')).toHaveTextContent('调整分组顺序失败: 网络断开');
+      // store.reorder 失败本地不动：仍为原序
+      expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['g-a', 'g-b']);
+    });
   });
 });

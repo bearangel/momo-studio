@@ -5,6 +5,8 @@
 //     组名 / 任务数（task.store.tasks 按 groupId 实时计）/ GroupMenu 菜单
 //   - 新建组：「+ 新建组」→ 内联输入回车提交（taskGroup.create 契约）
 //   - 重命名：菜单触发 → 行内编辑输入（Enter 提交 / Esc 取消）
+//   - 调序（spec §5.1 可调序）：行尾 ChevronUp/ChevronDown，与相邻组交换后
+//     以新序调 group.store.reorder；首组禁用上移、末组禁用下移
 //   - 归档组 / 换色：GroupMenu（useGroupActions 公共逻辑）
 //   - 取消归档：底部折叠区列归档组（taskGroup.list archived:'only'），
 //     点选 taskGroup.unarchive（只复活组本体）
@@ -12,7 +14,7 @@
 // 数据：group.store 活跃组（mount 拉一次，与 TaskBoardView 的 load 幂等并行）；
 // 归档组列表在活跃组集合每次变化后刷新（archive/unarchive 都会改 groups）。
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, ChevronUp, Plus } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { CSSProperties } from 'react';
 import type { GroupRow } from '../../ipc/types';
@@ -32,6 +34,7 @@ export function GroupManageList() {
   const groupsLoading = useGroupStore((s) => s.loading);
   const loadGroups = useGroupStore((s) => s.load);
   const createGroup = useGroupStore((s) => s.create);
+  const reorderGroups = useGroupStore((s) => s.reorder);
   const tasks = useTaskStore((s) => s.tasks);
 
   const [creating, setCreating] = useState(false);
@@ -90,6 +93,19 @@ export function GroupManageList() {
     }
   };
 
+  /** 与相邻组交换后取新序调 reorder（store 镜像 repo 的 (i+1)*1024 重写） */
+  const moveGroup = (index: number, delta: -1 | 1): void => {
+    const target = index + delta;
+    if (target < 0 || target >= groups.length) return;
+    const next = [...groups];
+    const [row] = next.splice(index, 1);
+    if (!row) return;
+    next.splice(target, 0, row);
+    void reorderGroups(next.map((g) => g.id)).catch((err) => {
+      showToast(`调整分组顺序失败: ${(err as Error).message}`);
+    });
+  };
+
   if (!workspace) return null;
 
   return (
@@ -126,7 +142,7 @@ export function GroupManageList() {
       )}
 
       <ul className="flex flex-col gap-0.5">
-        {groups.map((g) => {
+        {groups.map((g, index) => {
           const colorCss = groupColorStyle(g.color);
           const dotStyle: CSSProperties = colorCss
             ? { backgroundColor: colorCss }
@@ -157,6 +173,26 @@ export function GroupManageList() {
                   <i aria-hidden className="inline-block h-2 w-2 shrink-0 rounded-[2px]" style={dotStyle} />
                   <span className="min-w-0 flex-1 truncate text-secondary">{g.name}</span>
                   <span className="shrink-0 text-tertiary">{countByGroup.get(g.id) ?? 0}</span>
+                  <button
+                    type="button"
+                    aria-label={`上移 ${g.name}`}
+                    title="上移"
+                    disabled={index === 0}
+                    onClick={() => moveGroup(index, -1)}
+                    className="shrink-0 rounded px-0.5 text-tertiary hover:text-primary disabled:opacity-40"
+                  >
+                    <ChevronUp size={14} strokeWidth={1.75} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`下移 ${g.name}`}
+                    title="下移"
+                    disabled={index === groups.length - 1}
+                    onClick={() => moveGroup(index, 1)}
+                    className="shrink-0 rounded px-0.5 text-tertiary hover:text-primary disabled:opacity-40"
+                  >
+                    <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
+                  </button>
                   <GroupMenu
                     group={g}
                     triggerLabel={`分组菜单 ${g.name}`}
