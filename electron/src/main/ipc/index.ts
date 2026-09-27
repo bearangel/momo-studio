@@ -20,6 +20,7 @@ import { registerMemoryIpc } from '../memory/ipc.handlers';
 import { registerJournalIpc } from '../journal/ipc.handlers';
 import { registerResourceHandlers } from '../resource/ipc.handlers';
 import { registerTaskHandlers } from '../task/ipc.handlers';
+import { registerTaskGroupHandlers } from '../task/groups.ipc.handlers';
 import { registerP2pHandlers } from '../p2p';
 import { registerDialogHandlers } from './dialog.handlers';
 import { registerWindowIpc } from '../window-ipc';
@@ -53,6 +54,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerJournalIpc();
   registerResourceHandlers();
   registerTaskHandlers();
+  // 看板重构 Task 7：taskGroup 命名空间（组 CRUD + 归档级联 + abort 补偿）
+  registerTaskGroupHandlers();
   registerP2pHandlers();
   registerDialogHandlers();
   // 窗口控制（自绘 titlebar）——注册先于窗口创建，getWin 每次调用时懒查首个窗口

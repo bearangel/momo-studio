@@ -38,6 +38,9 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
     updatedAt: 100,
     startedAt: null,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...overrides,
   };
 }

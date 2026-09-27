@@ -64,6 +64,9 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...partial,
   };
 }

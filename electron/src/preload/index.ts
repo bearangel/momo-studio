@@ -10,6 +10,7 @@ import type {
   CollabTarget,
   DanglingMcpRef,
   GitImportResult,
+  GroupRow,
   ImMessage,
   McpConfigUpdateInput,
   McpConfigView,
@@ -385,6 +386,20 @@ const api: ApiSurface = {
     listInterrupted: () => invoke('task:listInterrupted'),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),
+    // 看板重构 Task 6：拖拽换列 / 归档域（动作裁决单点在主进程 move.ts）
+    move: (id, target) => invoke<TaskRow>('task:move', id, target),
+    archive: (id) => invoke<TaskRow>('task:archive', id),
+    unarchive: (id) => invoke<TaskRow>('task:unarchive', id),
+  },
+  // 看板重构 Task 7：任务组命名空间（组 CRUD + 归档级联，groups.ipc.handlers.ts）
+  taskGroup: {
+    list: (workspaceId, opts?) => invoke<GroupRow[]>('taskGroup:list', workspaceId, opts),
+    create: (input) => invoke<GroupRow>('taskGroup:create', input),
+    update: (id, patch) => invoke<GroupRow>('taskGroup:update', id, patch),
+    reorder: (orderedIds) => invoke<void>('taskGroup:reorder', orderedIds),
+    archive: (id) =>
+      invoke<{ cancelledIds: string[]; archivedCount: number }>('taskGroup:archive', id),
+    unarchive: (id) => invoke<GroupRow>('taskGroup:unarchive', id),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

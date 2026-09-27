@@ -25,6 +25,7 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
+  groupId: null, boardPosition: null, archivedAt: null,
 };
 
 function mkMember(instanceId: string, agentName: string): WorkspaceAgentMember {
