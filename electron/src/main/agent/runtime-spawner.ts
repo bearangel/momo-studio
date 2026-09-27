@@ -233,7 +233,7 @@ async function ensureMcpStarted(workspaceId: string, mcpName: string): Promise<v
 }
 
 export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
-  const { assignmentId, runtimeConfig, onChunk, onExit } = opts;
+  const { assignmentId, runtimeConfig, onExit } = opts;
 
   // AGENT_CONFIG 环境变量传递 runtime config
   const env: NodeJS.ProcessEnv = {

@@ -153,7 +153,7 @@ interface DropAnchor {
 function computeDropPosition(column: TaskRow[], target: MoveTarget): DropAnchor {
   const idxBefore = target.beforeTaskId ? column.findIndex((t) => t.id === target.beforeTaskId) : -1;
   const idxAfter = target.afterTaskId ? column.findIndex((t) => t.id === target.afterTaskId) : -1;
-  const prevPos = idxAfter >= 0 ? column[idxAfter]!.boardPosition : null; // after=下方位邻居 → 值更小
+  const prevPos = idxAfter >= 0 ? column[idxAfter]!.boardPosition : null; // after=上方位邻居 → 值更小
   const nextPos = idxBefore >= 0 ? column[idxBefore]!.boardPosition : null;
   return { position: placeBetween(prevPos, nextPos), prevPos, nextPos };
 }

@@ -9,7 +9,7 @@
 //     任一步失败整体回滚；cancelledIds 返回给 IPC 层补执行中断（abort 是进程级
 //     副作用，不入 DB 事务）
 import { getDb } from '../db';
-import { transitionTaskStatus, listTasks, type TaskStatus } from '../tasks/repo';
+import { transitionTaskStatus, listTasks } from '../tasks/repo';
 import { isTerminal } from '../tasks/state-machine';
 
 export interface GroupRow {

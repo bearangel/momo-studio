@@ -1629,7 +1629,6 @@ export async function runChatLoop(
           return finalText;
         }
 
-        const errMsg = err instanceof Error ? err.message : String(err);
         // P2 修复：McpToolError 文本即服务端语义文案（含错误码），原样回填——
         // 加「工具执行失败:」前缀会破坏模型对错误码/重试提示的解析
         result = toolFailureText(err);
