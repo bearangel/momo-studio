@@ -1,28 +1,24 @@
 // renderer/src/components/task-board/TaskSidebarPanel.tsx
 //
-// 看板侧边栏面板（P2 Task 3）：TaskFilters + TaskList + 新建任务按钮从
-// TaskBoardView 整体迁入。选中态与筛选逻辑与主区解耦——
-//   - 任务数据/选中态走 task.store（TaskBoardView 主区负责 load + 5s 轮询）
-//   - 筛选/排序 state 本地持有（原 TaskBoardView filteredTasks useMemo 等价迁移）
-//   - 新建任务复用 CreateTaskDialog（与 IM 输入条 📌 入口同源），创建后自动选中
+// 看板侧边栏面板（看板重构 Task 14 重构）：
+//   - 分组管理：GroupManageList（组列表/新建/重命名/换色/归档组/取消归档）
+//   - 归档入口：显示归档计数（mount 拉一次 task.list({archived:'only'})），
+//     点击打开 ArchivePanel（大号弹窗，恢复动作在面板内完成）
+//   - 远端节点：P4 Task 3 只读分区——函数体原样保留（p2p:getRemoteTasks 5s
+//     轮询，每节点一张分组卡，无任何操作按钮）
+//   - 新建任务：Plus 入口 + CreateTaskDialog（创建后自动选中）保留
 //
-// P4 Task 3 追加：底部「远端节点」只读分区——p2p:getRemoteTasks 5s 轮询，
-// 每节点一张分组卡（节点名 + 相对时间 + 已离线? 标记 + 只读任务行），
-// 无任何操作按钮（远端任务不进本地 tasks 表，仅镜像展示）。
-//
-// sidebar-search Task 5：过滤+排序逻辑外迁至 task-filter.ts（applyTaskFilters 纯函数）；
-// 文本过滤态与 status/assignee AND 叠加；切 workspace 时清空文本（spec §6）。
-import { useEffect, useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+// 旧 TaskFilters/TaskList/task-filter 列表形态随本重构退役（Task 14）——
+// 任务列表消费移入画板主区（BoardToolbar 过滤 + BoardCanvas）。
+import { useEffect, useState } from 'react';
+import { Archive, Plus } from 'lucide-react';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { useAgentStore } from '../../stores/agent.store';
 import { ipc } from '../../ipc/client';
 import type { RemoteNodeTasks } from '../../ipc/types';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
-import { TaskList } from './TaskList';
-import { TaskFilters, type FilterState, type AssigneeOption } from './TaskFilters';
-import { applyTaskFilters } from './task-filter';
+import { ArchivePanel } from './ArchivePanel';
+import { GroupManageList } from './GroupManageList';
 import { remoteStatusStyle } from '../../lib/task-status';
 
 /** 远端镜像轮询间隔（毫秒）——同 NodeDiscoveryPanel 的发现节点轮询节奏 */
@@ -93,54 +89,28 @@ function RemoteTaskSection() {
 }
 
 export function TaskSidebarPanel() {
-  const tasks = useTaskStore((s) => s.tasks);
-  const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
   const setSelectedTaskId = useTaskStore((s) => s.setSelectedTaskId);
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const members = useAgentStore((s) => s.members);
-  const [filter, setFilter] = useState<FilterState>({
-    status: 'all',
-    assignee: 'all',
-    sort: 'priority',
-    text: '',
-  });
   const [createOpen, setCreateOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archivedCount, setArchivedCount] = useState(0);
 
-  // spec §6：切 workspace 时清空文本过滤（组件常驻不卸载，需显式复位；与 RoomList/FileTree 同款）
+  // mount 拉一次归档计数（面板内恢复会自行刷新展示，此处不轮询）
   useEffect(() => {
-    setFilter((f) => ({ ...f, text: '' }));
+    if (!workspace) return;
+    let cancelled = false;
+    ipc.task
+      .list({ workspaceId: workspace.id, archived: 'only', limit: 500 })
+      .then((rows) => {
+        if (!cancelled) setArchivedCount(rows.length);
+      })
+      .catch(() => {
+        // 计数拉取失败静默保持 0（入口仍可用）
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [workspace?.id]);
-
-  // assignee 下拉选项：从当前 workspace 的 members 派生
-  // （agentName 由后端 JOIN definitions 产出，v2.2 起恒有值）
-  const assigneeOptions = useMemo<AssigneeOption[]>(
-    () =>
-      members
-        .filter((a) => (workspace ? a.workspaceId === workspace.id : true))
-        .map((a) => ({
-          value: a.instanceId,
-          label: a.agentName,
-        })),
-    [members, workspace],
-  );
-
-  // 过滤 + 排序（纯函数抽至 task-filter.ts，spec §4）
-  const filteredTasks = useMemo(() => applyTaskFilters(tasks, filter), [tasks, filter]);
-
-  /** 排队排名：assigned 按放行序（spec §4.4 同款排序）计算「排队 #N」 */
-  const queueRanks = useMemo(() => {
-    const assigned = [...tasks]
-      .filter((t) => t.status === 'assigned')
-      .sort(
-        (a, b) =>
-          b.priority - a.priority ||
-          (a.scheduledAt ?? a.createdAt) - (b.scheduledAt ?? b.createdAt) ||
-          a.createdAt - b.createdAt,
-      );
-    const map = new Map<string, number>();
-    assigned.forEach((t, i) => map.set(t.id, i + 1));
-    return map;
-  }, [tasks]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -158,15 +128,30 @@ export function TaskSidebarPanel() {
           <Plus size={12} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
-      <TaskFilters value={filter} onChange={setFilter} assigneeOptions={assigneeOptions} />
-      <TaskList
-        tasks={filteredTasks}
-        selectedId={selectedTaskId}
-        onSelect={(id) => setSelectedTaskId(id)}
-        queueRanks={queueRanks}
-        emptyText={filter.text.trim() !== '' ? '无匹配任务' : undefined}
-      />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <GroupManageList />
+      </div>
+      {/* 归档入口：计数 = 当前 workspace 归档任务数 */}
+      <div className="shrink-0 border-t border-subtle px-3 py-2">
+        <button
+          type="button"
+          aria-label={`归档 ${archivedCount}`}
+          onClick={() => setArchiveOpen(true)}
+          disabled={!workspace}
+          className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-secondary hover:text-primary disabled:opacity-40"
+        >
+          <Archive size={12} strokeWidth={1.75} aria-hidden />
+          归档 <span className="text-tertiary">{archivedCount}</span>
+        </button>
+      </div>
       <RemoteTaskSection />
+      {workspace && (
+        <ArchivePanel
+          open={archiveOpen}
+          onClose={() => setArchiveOpen(false)}
+          workspaceId={workspace.id}
+        />
+      )}
       {workspace && (
         <CreateTaskDialog
           open={createOpen}
