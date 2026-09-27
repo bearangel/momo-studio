@@ -21,6 +21,7 @@ import { migration043 } from './043_message_compact_events';
 import { migration044 } from './044_session_file_reads';
 import { migration045 } from './045_provider_models_vision';
 import { migration046 } from './046_provider_models_vision_tri_state';
+import { migration047 } from './047_kanban_groups_archive';
 
 export interface Migration {
   version: number;
@@ -993,6 +994,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 修聚合商标题行误判「显式关」+ 预设翻转传导。SQL 住 046 模块（约定同上）。
     version: migration046.version,
     sql: migration046.up,
+  },
+  {
+    // task_groups 表 + tasks 三新列（group_id / board_position / archived_at，
+    // 任务看板重构 spec 2026-09-27 §2）。全部可空/带默认，老数据零处理。
+    // SQL 住在独立模块 047_kanban_groups_archive.ts（约定同 032-046）。
+    version: migration047.version,
+    sql: migration047.sql,
   },
 ];
 
