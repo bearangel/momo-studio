@@ -300,7 +300,6 @@ export function ArchivePanel({ open, onClose, workspaceId }: ArchivePanelProps) 
             ))}
           </Select>
         </div>
-        <p className="mt-1.5 text-xs text-tertiary">恢复组会把组内全部归档任务一并带回</p>
       </Dialog>
       <Toast />
     </>
