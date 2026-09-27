@@ -54,6 +54,12 @@ export interface TaskRow {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2，迁移 047） */
+  groupId: string | null;
+  /** 组/列内排序位（1024 间隔尾插），NULL=未入板 */
+  boardPosition: number | null;
+  /** 归档时间戳（ms），NULL=活跃；listTasks 默认排除归档行 */
+  archivedAt: number | null;
 }
 
 // better-sqlite3 返回行是 snake_case 列名直出。
@@ -86,6 +92,9 @@ type SqlRow = {
   updated_at: number;
   started_at: number | null;
   completed_at: number | null;
+  group_id: string | null;
+  board_position: number | null;
+  archived_at: number | null;
 };
 
 function rowToCamel(r: SqlRow): TaskRow {
@@ -118,6 +127,9 @@ function rowToCamel(r: SqlRow): TaskRow {
     updatedAt: r.updated_at,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+    groupId: r.group_id,
+    boardPosition: r.board_position,
+    archivedAt: r.archived_at,
   };
 }
 
@@ -183,8 +195,9 @@ export function insertTask(
       target_team_id, target_session_id, recurrence_parent_id,
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message, source_node_id,
-      created_at, updated_at, started_at, completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created_at, updated_at, started_at, completed_at,
+      group_id, board_position, archived_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.workspaceId,
@@ -214,6 +227,9 @@ export function insertTask(
     now,
     input.startedAt,
     input.completedAt,
+    input.groupId ?? null,
+    input.boardPosition ?? null,
+    input.archivedAt ?? null,
   );
   return getTask(id)!;
 }
@@ -241,6 +257,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       target_team_id=?, target_session_id=?, recurrence_parent_id=?,
       priority=?, scheduled_at=?, recurrence_rule=?, deadline_at=?,
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?, source_node_id=?,
+      group_id=?, board_position=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?
     WHERE id=?`,
   ).run(
@@ -267,6 +284,9 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.toolCallsUsed,
     next.errorMessage,
     next.sourceNodeId,
+    next.groupId,
+    next.boardPosition,
+    next.archivedAt,
     next.updatedAt,
     next.startedAt,
     next.completedAt,
@@ -306,7 +326,8 @@ export function getTask(id: string): TaskRow | null {
 /**
  * 多维过滤 + 排序的任务列表。
  *
- * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionSessionId / sourceSessionId。
+ * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionSessionId / sourceSessionId /
+ *       archived（三态，默认 'exclude' 排除归档行）/ groupId（组过滤，null=只查未分组）。
  * 排序：priority（高优先 + created_at 升序兜底）/ scheduled_at（升序，NULLS LAST + created_at 兜底）/
  *       created_at（默认升序）/ created_at_desc（降序，配合 limit 截断保留最新 N 条——任务看板
  *       「终态历史靠 limit 500 截断」语义要求最新优先，spec §8.1）。
@@ -318,6 +339,10 @@ export function listTasks(opts: {
   assigneeAgentId?: string;
   executionSessionId?: string;
   sourceSessionId?: string;
+  /** 归档三态：'exclude'（默认）只回活跃行；'only' 只回归档行；'all' 全回 */
+  archived?: 'exclude' | 'only' | 'all';
+  /** 看板分组过滤；null = 只查未分组（group_id IS NULL） */
+  groupId?: string | null;
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }): TaskRow[] {
@@ -349,6 +374,16 @@ export function listTasks(opts: {
   if (opts.sourceSessionId) {
     where.push('source_session_id = ?');
     params.push(opts.sourceSessionId);
+  }
+  const archivedMode = opts.archived ?? 'exclude';
+  if (archivedMode === 'exclude') where.push('archived_at IS NULL');
+  else if (archivedMode === 'only') where.push('archived_at IS NOT NULL');
+  if (opts.groupId !== undefined) {
+    if (opts.groupId === null) where.push('group_id IS NULL');
+    else {
+      where.push('group_id = ?');
+      params.push(opts.groupId);
+    }
   }
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const orderClause =
