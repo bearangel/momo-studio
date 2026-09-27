@@ -1,7 +1,13 @@
 // renderer/src/ipc/types.d.ts
-// BoardColumnKey 是 value module（renderer 与 electron 主进程 move 校验共用），
-// 与本文件同目录——type-only 引用，避免把运行时代码拖进 .d.ts
-import type { BoardColumnKey } from './board-columns';
+//
+// BoardColumnKey 联合类型内联于此、不再 import board-columns.ts：electron 构建
+// （tsc -p tsconfig.json）会沿本文件的 type import 把 board-columns.ts 拖进
+// 编译图，在 renderer 源码树旁路产出 board-columns.js——vite 解析 .js 优先于
+// .ts，污染存在时 renderer build 必失败（Task 14 收尾发现）。列常量与该联合
+// 的双向等值由 board-columns.ts 编译期断言锁死。
+
+/** 看板五列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁） */
+export type BoardColumnKey = 'backlog' | 'assigned' | 'active' | 'done' | 'closed';
 
 export interface SystemInfo {
   platform: string;

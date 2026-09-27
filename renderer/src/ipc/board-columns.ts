@@ -1,11 +1,23 @@
-// 看板列契约单源(spec §3.3/§4):renderer 与 electron 主进程(move 校验)共同 import。
-// 注意这是 value module(非 .d.ts)——主进程经相对路径引用,与 preload 引 types.d.ts 同款。
-import type { TaskStatus } from './types';
+// 看板列契约单源(spec §3.3/§4)。
+// 注意这是 value module(非 .d.ts)——electron 侧不 import 本文件(自有镜像
+// electron/src/main/task/board-columns.ts,同步由 tests/task/board-columns-sync.test.ts 锁死);
+// BoardColumnKey 联合类型的真源在 types.d.ts(见该文件头注),此处 re-export 保住
+// 既有消费方导入路径,并用编译期断言把常量值域与联合锁死。
+import type { TaskStatus, BoardColumnKey } from './types';
 
-export type { TaskStatus };
+export type { TaskStatus, BoardColumnKey };
 
 export const BOARD_COLUMN_KEYS = ['backlog', 'assigned', 'active', 'done', 'closed'] as const;
-export type BoardColumnKey = (typeof BOARD_COLUMN_KEYS)[number];
+
+// 编译期双向锁:BOARD_COLUMN_KEYS 常量值域与 types.d.ts 手写联合完全一致,
+// 任一侧增删列另一侧未同步,此处立即编译错误(防契约漂移)
+type _KeysMatchUnion = [BoardColumnKey] extends [(typeof BOARD_COLUMN_KEYS)[number]]
+  ? [(typeof BOARD_COLUMN_KEYS)[number]] extends [BoardColumnKey]
+    ? true
+    : never
+  : never;
+const _keysLock: _KeysMatchUnion = true;
+void _keysLock;
 
 export interface BoardColumnDef {
   key: BoardColumnKey;
