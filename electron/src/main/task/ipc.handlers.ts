@@ -10,6 +10,9 @@
 //   - task:transition  状态机驱动的状态转换（可带 extraPatch 副作用字段）
 //   - task:cancel      等价 transition(id, 'cancelled')
 //   - task:start       启动任务（execution_room 决策树 + 转 in_progress + 锁定 execution_room）
+//   - task:move        看板拖拽换列/换组/排序（动作裁决单点在 move.ts，Task 6）
+//   - task:archive     归档（仅终态；软删 archived_at）
+//   - task:unarchive   取消归档（清 archived_at）
 //
 // 设计要点：
 //   - v2（Task 11）：无登录概念——creatorUserId 由 main process 注入结构常量 'owner'
@@ -34,6 +37,7 @@ import {
   type TaskRow,
   type TaskStatus,
 } from '../storage/tasks/repo';
+import { isTerminal } from '../storage/tasks/state-machine';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor } from './executor';
 import { hasDelegationTarget, type StartTaskOpts } from './starter';
@@ -41,6 +45,7 @@ import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
 import { detectInterrupted, resumeTask, type InterruptedTaskInfo } from './resume';
+import { executeMove, type MoveTarget } from './move';
 
 /** renderer task:create 入参（不含 creatorUserId，由 main 注入） */
 interface CreateInput {
@@ -68,6 +73,8 @@ interface ListOpts {
   assigneeAgentId?: string;
   executionSessionId?: string;
   sourceSessionId?: string;
+  /** 归档三态透传（看板重构 Task 6）：'exclude' 默认 / 'only' 只回归档 / 'all' 全回 */
+  archived?: 'exclude' | 'only' | 'all';
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
   limit?: number;
 }
@@ -164,6 +171,33 @@ export function registerTaskHandlers(): void {
   ipcMain.handle('task:cancel', async (_evt, id: string): Promise<void> => {
     // 语义单点在 lifecycle.ts（cancelTask），move.ts 同源消费
     await cancelTask(id);
+  });
+
+  // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发落点（column/groupId/
+  // before/after），动作裁决（start/complete/cancel/纯排序）全部在 executeMove
+  // 单点；成功后广播快照，远端看板镜像即时同步
+  ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
+    const row = await executeMove(id, target);
+    void broadcastLocalTaskSnapshot();
+    return row;
+  });
+
+  // 归档域（看板重构 Task 6）：仅终态任务可归档（软删，archived_at 置时间戳）；
+  // 非终态拒绝——运行中任务先 cancel/complete 再归档。归档改变 task:list 默认
+  // 可见性，成功后同样广播快照
+  ipcMain.handle('task:archive', async (_evt, id: string): Promise<TaskRow> => {
+    const t = getTask(id);
+    if (!t) throw new Error(`task ${id} 不存在`);
+    if (!isTerminal(t.status)) throw new Error('仅终态任务可归档(completed/failed/cancelled)');
+    updateTask(id, { archivedAt: Date.now() });
+    void broadcastLocalTaskSnapshot();
+    return getTask(id)!;
+  });
+
+  ipcMain.handle('task:unarchive', async (_evt, id: string): Promise<TaskRow> => {
+    updateTask(id, { archivedAt: null });
+    void broadcastLocalTaskSnapshot();
+    return getTask(id)!;
   });
 
   // K7-5 + v2.6.0 多路恢复：按任务 status 分流（spec §5.6 IPC 面 + D6 卡片唯一闸门）：
