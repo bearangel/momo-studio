@@ -36,7 +36,7 @@
 // 避免宿主测试的 role 查询误命中菜单项）。
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { create } from 'zustand';
-import { MoreHorizontal } from 'lucide-react';
+import { Check, MoreHorizontal } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 import { groupColorHex, groupColorStyle } from '../../lib/board';
 import type { GroupRow } from '../../ipc/types';
@@ -168,7 +168,8 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
         {open && (
           <div
             className={`absolute right-0 z-10 mt-1 ${
-              mode === 'color' ? 'w-56' : 'w-40'
+              // 换色态独立定宽：picker 232 + px-3×2 = 256 < 260，完整显示无横向裁切
+              mode === 'color' ? 'w-[260px]' : 'w-40'
             } rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg`}
           >
             {mode === 'idle' && (
@@ -219,11 +220,11 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
               </div>
             )}
             {mode === 'color' && (
-              <div className="px-3 py-1.5">
-                <div className="flex items-center gap-1.5">
+              <div className="px-3 py-2">
+                <div className="flex items-center gap-2">
                   {GROUP_PALETTE.map((color) => {
                     const css = groupColorStyle(color);
-                    // 组色点：语义 token 的 CSS 变量串 / 自定义 hex 原值（用户内容色，
+                    // 组色块：语义 token 的 CSS 变量串 / 自定义 hex 原值（用户内容色，
                     // 豁免设计系统禁 inline 色——UI chrome 才受限）；未知色回退中性
                     const dotStyle: CSSProperties = css
                       ? { backgroundColor: css }
@@ -238,28 +239,36 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
                           void runSetColor(group.id, color);
                           closeMenu();
                         }}
-                        className={`rounded-full border border-subtle ${
+                        className={`flex h-[22px] w-[22px] items-center justify-center rounded-md border border-subtle transition-shadow hover:border-strong hover:ring-1 hover:ring-strong ${
                           group.color === color ? 'ring-1 ring-focus' : ''
                         }`}
                         style={dotStyle}
                       >
-                        <span className="block h-3 w-3" aria-hidden />
+                        {group.color === color && (
+                          <Check
+                            size={12}
+                            strokeWidth={2}
+                            aria-hidden
+                            className="text-inverse drop-shadow"
+                          />
+                        )}
                       </button>
                     );
                   })}
                 </div>
                 {/* 应用内取色器（react-colorful）：onChange 只更本地预览 state（实时，
                     零 IPC）；提交唯一走下方「应用」。样式经 globals.css 的
-                    .group-menu-picker 作用域覆写（约 180×140、圆角/边框对齐设计系统） */}
-                <div className="group-menu-picker mt-1.5">
+                    .group-menu-picker 作用域覆写（232×150、圆角/边框对齐设计系统）；
+                    flex 居中兜底防溢出 */}
+                <div className="group-menu-picker mt-2 flex justify-center">
                   <HexColorPicker color={customColorPreview} onChange={handleCustomColorChange} />
                 </div>
                 {/* hex 只读预览行：色块 backgroundColor 为用户内容色（自定义 hex），
                     同预设色点豁免设计系统禁 inline 色 */}
-                <div className="mt-1.5 flex items-center gap-1.5">
+                <div className="mt-2 flex items-center gap-1.5">
                   <span
                     aria-hidden
-                    className="h-3 w-3 shrink-0 rounded-full border border-subtle"
+                    className="h-3.5 w-3.5 shrink-0 rounded-sm border border-subtle"
                     style={{ backgroundColor: customColorPreview }}
                   />
                   <span className="font-mono text-xs text-secondary">{customColorPreview}</span>
