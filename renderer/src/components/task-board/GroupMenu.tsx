@@ -8,6 +8,15 @@
 // 点外关闭（UX 波 2 #4）：菜单打开时渲染全屏透明遮罩（fixed inset-0，照
 // BoardCard 右键菜单先例）；details 本体 z 序抬高——再点触发按钮本身仍切换。
 //
+// 浮层裁切修复（窄侧栏）：菜单浮层与遮罩原先渲染在侧栏 DOM 内，受父容器
+// 宽度/overflow 裁剪（换色态 260px 在最小宽度侧栏被切）。现二者一律
+// createPortal 到 document.body（照 Dialog / TaskDetailDrawer 先例）：浮层
+// fixed 定位，open/mode 变化时按触发按钮 getBoundingClientRect() 重算坐标
+// ——左对齐优先、左溢时右对齐兜底、视口 8px 钳制、底部放不下上翻到按钮
+// 上方；极窄窗口 max-width 兜底 min(260px, 100vw-16px)。滚动/resize 跟随
+// 取简：直接关菜单（业界常规做法，不做复杂跟锚重算）。z 序维持遮罩 z-40 /
+// 浮层 z-50。
+//
 // 两处消费：Lane 泳道头（Task 12 占位实装）与 GroupManageList 行菜单——
 // 逻辑全部走 useGroupActions 公共 hook，行为单源。
 //
@@ -34,7 +43,16 @@
 // 可达性细节：details 用受控 open（jsdom 不派发 summary 默认激活行为，显式
 // onClick 切换保证测试确定性）；菜单内容仅在 open 时渲染（关闭态不落 DOM，
 // 避免宿主测试的 role 查询误命中菜单项）。
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import { Check, MoreHorizontal } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
@@ -64,7 +82,12 @@ interface GroupMenuProps {
 }
 
 export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuProps) {
-  const menuRef = useRef<HTMLDetailsElement>(null);
+  /** 定位锚：触发按钮（summary），open 时取 getBoundingClientRect() 定浮层 */
+  const triggerRef = useRef<HTMLElement>(null);
+  /** 浮层本体：量实际 offsetWidth/Height 做视口钳制与上翻 */
+  const popupRef = useRef<HTMLDivElement>(null);
+  /** 浮层 fixed 坐标（layout effect 计算后落入；渲染于 body portal，不受侧栏裁剪） */
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
   /** 实例唯一 key：同组双宿主（侧边栏行 + 泳道头）也互斥 */
   const menuId = useId();
   // 受控 open：内部 open state 已移除，唯一真相在模块级单开 store
@@ -96,6 +119,48 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
     };
   }, [menuId]);
 
+  // 浮层定位：open/mode 变化后（paint 前）按触发按钮 rect 算 fixed 坐标。水平
+  // 默认与按钮左对齐（窄侧栏场景浮层向右探出而非被裁）；左对齐溢出视口右侧
+  // 且右对齐能收回时改右对齐；垂直默认按钮下方 4px，底部放不下且上方能放下
+  // 时上翻；最后整体 8px 钳进视口。jsdom 无布局（offsetWidth/Height 恒 0）：
+  // 宽度回退标称值（换色 260 / 常规 160），高度 0 → 不触发上翻（测试不断言坐标）
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const popup = popupRef.current;
+    const width = popup?.offsetWidth || (mode === 'color' ? 260 : 160);
+    const height = popup?.offsetHeight || 0;
+    const margin = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.left;
+    if (left + width > vw - margin && rect.right - width >= margin) {
+      left = rect.right - width;
+    }
+    left = Math.min(Math.max(left, margin), Math.max(margin, vw - width - margin));
+    let top = rect.bottom + 4;
+    if (top + height > vh - margin && rect.top - height - 4 >= margin) {
+      top = rect.top - height - 4;
+    }
+    top = Math.min(Math.max(top, margin), Math.max(margin, vh - height - margin));
+    setPos({ left, top });
+  }, [open, mode]);
+
+  // 滚动/resize 浮层跟随取简：直接关菜单（业界常规做法，不做跟锚重算）；
+  // scroll 事件不冒泡但可捕获——capture 兜住侧栏等任意滚动容器
+  useEffect(() => {
+    if (!open) return;
+    const handleGeometryChange = (): void => closeMenu();
+    window.addEventListener('resize', handleGeometryChange);
+    window.addEventListener('scroll', handleGeometryChange, true);
+    return () => {
+      window.removeEventListener('resize', handleGeometryChange);
+      window.removeEventListener('scroll', handleGeometryChange, true);
+    };
+  }, [open, closeMenu]);
+
   const handleRenameClick = (): void => {
     if (onRenameRequest) {
       onRenameRequest();
@@ -125,20 +190,21 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
 
   return (
     <>
-      {open && (
-        <div
-          aria-hidden
-          data-testid="group-menu-overlay"
-          className="fixed inset-0 z-40"
-          onClick={closeMenu}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            closeMenu();
-          }}
-        />
-      )}
+      {open &&
+        createPortal(
+          <div
+            aria-hidden
+            data-testid="group-menu-overlay"
+            className="fixed inset-0 z-40"
+            onClick={closeMenu}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              closeMenu();
+            }}
+          />,
+          document.body,
+        )}
       <details
-        ref={menuRef}
         open={open}
         onToggle={(e) => {
           // 外部因素改变 open 属性（非本组件点击路径）→ 同步回单开 store；
@@ -149,6 +215,7 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
         className={`relative ml-auto ${open ? 'z-50' : 'z-20'}`}
       >
         <summary
+          ref={triggerRef}
           aria-label={triggerLabel}
           className="cursor-pointer list-none rounded px-0.5 leading-none text-tertiary hover:text-primary [&::-webkit-details-marker]:hidden"
           onClick={(e) => {
@@ -165,10 +232,15 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
         >
           <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
         </summary>
-        {open && (
+      </details>
+      {open &&
+        createPortal(
           <div
-            className={`absolute right-0 z-10 mt-1 ${
-              // 换色态独立定宽：picker 232 + px-3×2 = 256 < 260，完整显示无横向裁切
+            ref={popupRef}
+            style={{ left: pos.left, top: pos.top }}
+            className={`fixed z-50 max-w-[min(260px,calc(100vw-16px))] ${
+              // 换色态独立定宽：picker 232 + px-3×2 = 256 < 260，完整显示无横向裁切；
+              // max-width 兜底极窄窗口（视口 < 276px 时收缩，两侧共留 16px）
               mode === 'color' ? 'w-[260px]' : 'w-40'
             } rounded-md border border-subtle bg-canvas py-1 text-xs shadow-lg`}
           >
@@ -278,9 +350,9 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
                 </div>
               </div>
             )}
-          </div>
+          </div>,
+          document.body,
         )}
-      </details>
       {/* 归档确认框（useGroupActions 持有文案与级联刷新逻辑） */}
       {archiveConfirm}
     </>
