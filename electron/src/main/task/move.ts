@@ -35,9 +35,13 @@ import { placeBetween, needsRebalance, rebalanceColumnPositions } from './board-
 export interface MoveTarget {
   column: BoardColumnKey;
   groupId: string | null;
-  /** 落点上方位邻居(渲染层可见任务 id) */
+  /**
+   * 落点下方位可见邻居(值大锚——移动卡落在其上方)。
+   * computeDropPosition 映射为 nextPos;锚点方向以 move.test.ts 锚点用例为权威
+   * (Task 12 review:原注释「上方位邻居」与实现颠倒,已订正对齐 renderer 契约)。
+   */
   beforeTaskId?: string;
-  /** 落点下方位邻居(值更小侧) */
+  /** 落点上方位可见邻居(值小锚——移动卡落在其下方);computeDropPosition 映射为 prevPos */
   afterTaskId?: string;
 }
 
@@ -140,9 +144,9 @@ function cmpColumn(a: TaskRow, b: TaskRow): number {
 
 interface DropAnchor {
   position: number;
-  /** 下方位邻居(值更小侧)的位置;无锚点/锚点不在列内为 null */
+  /** 上方位邻居(值更小侧 = afterTaskId 锚)的位置;无锚点/锚点不在列内为 null */
   prevPos: number | null;
-  /** 上方位邻居的位置 */
+  /** 下方位邻居(值更大侧 = beforeTaskId 锚)的位置 */
   nextPos: number | null;
 }
 
