@@ -219,6 +219,50 @@ describe('GroupManageList', () => {
     });
   });
 
+  it('换色：自定义色 input 事件（macOS 拖动连发）不提交不关菜单；原生 change（确认）才提交（修复秒关）', async () => {
+    render(<GroupManageList />);
+    await screen.findByLabelText('分组 组A');
+
+    openMenu('组A');
+    fireEvent.click(screen.getByRole('button', { name: '换色' }));
+    const colorInput = screen.getByLabelText('自定义组色');
+
+    // 修复前根因：React onChange ≙ 原生 input 事件 → 首个事件即提交 + 关菜单。
+    // 现要求：拖动中间态连发 input——菜单不关、零 IPC
+    fireEvent.input(colorInput, { target: { value: '#00ff00' } });
+    fireEvent.input(colorInput, { target: { value: '#00cc00' } });
+    expect(mockApi.taskGroup.update).not.toHaveBeenCalled();
+    expect(screen.getByTestId('group-menu-overlay')).toBeInTheDocument();
+
+    // 原生 change（色板确认关闭时触发一次）→ 保存小写 hex + 关菜单
+    fireEvent.change(colorInput, { target: { value: '#00cc00' } });
+    await waitFor(() => {
+      expect(mockApi.taskGroup.update).toHaveBeenCalledTimes(1);
+      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#00cc00' });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();
+    });
+  });
+
+  it('单开纪律：A 组菜单开着再点 B 组菜单——A 卸载只剩 B（修复叠加残留/穿透错乱）', async () => {
+    render(<GroupManageList />);
+    await screen.findByLabelText('分组 组A');
+
+    openMenu('组A');
+    expect(screen.getByRole('button', { name: '重命名' })).toBeInTheDocument();
+
+    openMenu('组B');
+    // 修复前：两份遮罩 + 两份菜单叠放。现：至多一遮罩一菜单
+    expect(screen.getAllByTestId('group-menu-overlay')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: '重命名' })).toHaveLength(1);
+
+    // 留下的确实是 B 的菜单（重命名委托进 B 的行内编辑）
+    fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+    expect(screen.getByLabelText('重命名组B')).toBeInTheDocument();
+    expect(screen.queryByLabelText('重命名组A')).not.toBeInTheDocument();
+  });
+
   it('菜单点外关闭：遮罩点击关闭菜单（UX 波 2 #4）；再点触发按钮本身仍切换', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
