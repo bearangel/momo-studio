@@ -112,7 +112,8 @@ export class MemoryTools implements ToolModule {
         name: 'memory_search',
         description:
           'BM25 全文检索既有记忆（全局 + 当前工作空间 + 本会话三层并集），返回 top-N'
-          + `（缺省 ${SEARCH_LIMIT_DEFAULT} 条）：每条含 id / kind / 内容前 ${PREVIEW_MAX} 字。命中条目自动计入使用热度。`,
+          + `（缺省 ${SEARCH_LIMIT_DEFAULT} 条）：每条含 id / kind / 内容前 ${PREVIEW_MAX} 字。命中条目自动计入使用热度。`
+          + '预览被截断时用 memory_get 按 id 取全文——不要反复换关键词猜全文。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -121,6 +122,19 @@ export class MemoryTools implements ToolModule {
             limit: { type: 'number', description: `返回条数上限（缺省 ${SEARCH_LIMIT_DEFAULT}，最大 ${SEARCH_LIMIT_MAX}）` },
           },
           required: ['query'],
+        },
+      },
+      {
+        name: 'memory_get',
+        description:
+          '按 id 读取一条记忆的全文（memory_search 结果只含前 120 字预览——'
+          + '命中相关记忆但预览不够用时，用本工具取完整内容，不要反复换关键词检索）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: '记忆条目 id（来自 memory_search 结果或 memory_save 返回）' },
+          },
+          required: ['id'],
         },
       },
       {
@@ -139,14 +153,24 @@ export class MemoryTools implements ToolModule {
   }
 
   handles(name: string): boolean {
-    return name === 'memory_save' || name === 'memory_search' || name === 'memory_forget';
+    return name === 'memory_save' || name === 'memory_search' || name === 'memory_get' || name === 'memory_forget';
   }
 
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (name === 'memory_save') return audited(name, args, () => this.executeSave(args, ctx));
     if (name === 'memory_search') return this.executeSearch(args, ctx);
+    if (name === 'memory_get') return this.executeGet(args);
     if (name === 'memory_forget') return audited(name, args, () => this.executeForget(args));
     throw new Error(`未知记忆工具: ${name}`);
+  }
+
+  /** memory_get：按 id 读全文（读操作，不重复审计；getMemory 与 forget 同源） */
+  private executeGet(args: Record<string, unknown>): string {
+    const id = parseStringArg(args.id, 'id');
+    const entry = getMemory(id);
+    if (!entry) throw new Error(`记忆不存在: ${id}`);
+    const meta = [entry.id, entry.kind, `scope=${entry.scope}`].join(' | ');
+    return `${meta}\n${entry.content}`;
   }
 
   /** memory_save：写操作（source='agent'） */

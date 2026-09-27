@@ -379,3 +379,28 @@ describe('注册中心', () => {
     expect(tools.handles('read_file')).toBe(false);
   });
 });
+
+// memory_get（2026-09-25 E-B）：按 id 取全文——终结「预览 120 字截断 +
+// 无全文工具」导致的反复换关键词空转（沙箱测试-5 实测痛点）
+describe('memory_get', () => {
+  it('按 id 返回全文（超预览长度完整可读）', async () => {
+    const long = `kill 全家桶实测结论（${new Date().toISOString().slice(0, 10)} 核实）：`
+      + 'bash kill/pkill//bin/kill/python os.kill/launchctl kill/launchctl remove 全部 Operation not permitted；'
+      + '正确做法：关自己启动的服务用 process_kill 工具（按 port），查存活用 process_list / lsof。';
+    const saved = await tools.execute('memory_save', { kind: 'knowledge', content: long }, ctx);
+    const id = (saved.match(/id=([0-9a-f-]+)/) ?? [])[1];
+    expect(id).toBeTruthy();
+
+    const got = await tools.execute('memory_get', { id }, ctx);
+    expect(got).toContain(long); // 全文原样返回（非 120 字预览）
+    expect(got).toContain(`scope=`);
+  });
+
+  it('id 不存在 → 中文报错（错误路径）', async () => {
+    await expect(tools.execute('memory_get', { id: 'nonexistent-id' }, ctx)).rejects.toThrow('记忆不存在');
+  });
+
+  it('缺 id → 参数报错', async () => {
+    await expect(tools.execute('memory_get', {}, ctx)).rejects.toThrow('id');
+  });
+});
