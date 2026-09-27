@@ -7,6 +7,8 @@
 //   传 children / 不用 dangerouslySetInnerHTML 管内容。
 //   本组件独立交付（Task 3 才接入 MentionInput）；序列化纯函数层在 composer-segments.ts。
 import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { Image as ImageIcon } from 'lucide-react';
 import type { ComposerSegment, PillKind, PillSeg } from './composer-segments';
 
 /** pill 后随的零宽空格——光标落点；getSegments / 光标前文本一律剥离 */
@@ -16,13 +18,20 @@ const ZWSP = '\u200b';
 const PILL_BASE_CLASS =
   'rounded px-1.5 text-xs leading-5 inline-flex items-center align-baseline select-none';
 
-/** 五类 pill 语义底色（全语义 token，spec D-2 填充底色式） */
+/**
+ * 六类 pill 语义底色（全语义 token，spec D-2 填充底色式）。
+ * image 与 file 同底色（bg-surface-active——图片本质也是 workspace 文件引用），
+ * 区分度交给 text-accent + 前缀 Image 图标：四种 status tint 已被
+ * skill/command/task 占用，剩 error-tint 语义是「错误」不适用（spec §10 缩略图
+ * 属中性内容呈现，红色会误读为失败态）。
+ */
 const PILL_CLASS: Record<PillKind, string> = {
   agent: 'bg-accent-600/10 text-accent-600 dark:text-accent-300',
   file: 'bg-surface-active text-secondary',
   skill: 'bg-status-violet-tint text-status-violet',
   command: 'bg-status-warning-tint text-status-warning',
   task: 'bg-status-success-tint text-status-success',
+  image: 'bg-surface-active text-accent-600 dark:text-accent-300',
 };
 
 /** 选中态追加（两段式 Backspace 高亮 / 点击选中；data-selected="1" 同时落 DOM） */
@@ -31,6 +40,17 @@ const PILL_SELECTED_CLASS = 'ring-1 ring-accent-500';
 /** 编辑器基类：placeholder 用 :empty 伪元素呈现；disabled 态条件追加 opacity-50（div 无 disabled 属性） */
 const ROOT_CLASS =
   'w-full min-h-[2.6rem] max-h-48 overflow-y-auto bg-transparent px-3 pt-2 text-sm text-primary focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-disabled disabled:opacity-50';
+
+/**
+ * image pill 的内联图标（lucide-react 是 React 组件，而 pill DOM 是本组件
+ * imperative 构建的——模块级一次性静态渲染出 svg 字符串，逐 pill 复用；
+ * 缩略图留气泡侧（Task 10），composer 内不做逐 pill 图片读取 IPC）。
+ */
+const IMAGE_PILL_ICON = renderToStaticMarkup(
+  <span className="inline-flex shrink-0 mr-0.5">
+    <ImageIcon size={12} strokeWidth={1.75} aria-hidden />
+  </span>,
+);
 
 /** pill 显示文本：命令无前缀图标（D-3——斜杠本身即前缀标识），无 emoji 图标 */
 function pillDisplayText(pill: PillSeg): string {
@@ -45,6 +65,8 @@ function pillDisplayText(pill: PillSeg): string {
       return pill.label;
     case 'command':
       return `/${pill.id}`;
+    case 'image':
+      return pill.label; // label = 文件名（图标由 IMAGE_PILL_ICON 承担前缀标识）
   }
 }
 
@@ -56,8 +78,18 @@ function buildPillNode(pill: PillSeg): HTMLSpanElement {
   span.dataset.kind = pill.kind;
   span.dataset.id = pill.id;
   span.dataset.label = pill.label;
+  if (pill.kind === 'image') {
+    // w/h 落 DOM：getSegments 反向提取后随序列化进 context.images（token 估算消费）
+    if (typeof pill.w === 'number') span.dataset.w = String(pill.w);
+    if (typeof pill.h === 'number') span.dataset.h = String(pill.h);
+  }
   span.className = `${PILL_BASE_CLASS} ${PILL_CLASS[pill.kind]}`;
-  span.textContent = pillDisplayText(pill);
+  if (pill.kind === 'image') {
+    span.innerHTML = IMAGE_PILL_ICON;
+    span.append(document.createTextNode(pillDisplayText(pill)));
+  } else {
+    span.textContent = pillDisplayText(pill);
+  }
   return span;
 }
 
@@ -105,13 +137,27 @@ export interface RichComposerProps {
   onInputText(beforeCaret: string, allText: string): void;
   onEnter(): void;
   onEscape(): void;
+  /**
+   * 图片粘贴/拖入上抛（2026-09-26 多模态 spec §10）：paste 与 drop 的
+   * clipboardData/DataTransfer files 中 type 以 image/ 开头者一次性收齐上抛
+   * （含 preventDefault）；无图片命中或未提供时默认粘贴行为不变。
+   */
+  onPasteImage?(files: File[]): void;
+  /**
+   * 菜单键盘导航接管（2026-09-26 输入框可用性 P0）：ArrowUp/ArrowDown/Tab
+   * 先经上层（MentionInput 菜单）裁决——返回 true = 菜单已消费（移动高亮 /
+   * 选中条目），本组件 preventDefault（阻止方向键把光标跳到行首/行尾、Tab
+   * 移走焦点）；返回 false / 未提供 = 保留编辑器默认行为。组合态守卫在前，
+   * IME 组字期间永不派发。
+   */
+  onNavigate?(key: 'ArrowUp' | 'ArrowDown' | 'Tab'): boolean;
 }
 
 export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
-  function RichComposer(
-    { disabled, placeholder, ariaLabel, onInputText, onEnter, onEscape },
-    ref,
-  ) {
+    function RichComposer(
+      { disabled, placeholder, ariaLabel, onInputText, onEnter, onEscape, onPasteImage, onNavigate },
+      ref,
+    ) {
     const rootRef = useRef<HTMLDivElement>(null);
     /** IME 组字标记：compositionstart~end 之间不触发 onInputText、按键拦截逻辑跳过 */
     const composingRef = useRef(false);
@@ -215,12 +261,20 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           if (last !== undefined && last.type === 'text') last.text += text; // 相邻文本节点合并
           else segs.push({ type: 'text', text });
         } else if (isPill(node)) {
-          segs.push({
+          const seg: PillSeg = {
             type: 'pill',
             kind: node.dataset.kind as PillKind,
             id: node.dataset.id ?? '',
             label: node.dataset.label ?? '',
-          });
+          };
+          if (seg.kind === 'image') {
+            // 外来源粘贴可携带伪造 data-*：非正整数一律不采信（serialize 层二次防御）
+            const w = Number(node.dataset.w);
+            const h = Number(node.dataset.h);
+            if (Number.isInteger(w) && w > 0) seg.w = w;
+            if (Number.isInteger(h) && h > 0) seg.h = h;
+          }
+          segs.push(seg);
         } else if (node instanceof Element) {
           // <br> / 粘贴产生的元素：纯文本折叠并入文本流（相邻文本段合并协议同前）
           const text = elementPlainText(node).replaceAll(ZWSP, '');
@@ -394,6 +448,13 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
         return;
       }
+      // 菜单导航键优先裁决：消费即 preventDefault，未消费落回编辑器默认
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Tab') {
+        if (onNavigate?.(e.key)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault(); // 阻止换行（Shift+Enter 走默认换行）
         onEnter();
@@ -409,6 +470,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           e.preventDefault();
           if (pill.dataset.selected === '1') {
             removePill(pill); // 第二次：整块删除（连带 ZWSP）
+            emitInput(); // DOM 手术不触发原生 input——补发让上层（能力提示行等）即时感知
           } else {
             clearSelectedPills();
             selectPill(pill); // 第一次：仅高亮
@@ -423,8 +485,29 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         if (pill) {
           e.preventDefault();
           removePill(pill);
+          emitInput();
         }
       }
+    };
+
+    /** clipboardData / dataTransfer 里的图片文件提取（type 前缀判定，无则交还默认行为） */
+    const extractImageFiles = (dt: DataTransfer | null): File[] =>
+      dt === null ? [] : Array.from(dt.files).filter((f) => f.type.startsWith('image/'));
+
+    const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>): void => {
+      if (!onPasteImage) return;
+      const files = extractImageFiles(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      onPasteImage(files);
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>): void => {
+      if (!onPasteImage) return;
+      const files = extractImageFiles(e.dataTransfer);
+      if (files.length === 0) return;
+      e.preventDefault();
+      onPasteImage(files);
     };
 
     const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>): void => {
@@ -447,9 +530,15 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       composingRef.current = true;
     };
 
-    // compositionend 后浏览器会派发 final input → 届时 emitInput；此处不重复触发
+    // Chromium/Electron 事件序是 input(final) → compositionend：final input 到达时
+    // composingRef 仍为 true 被 handleInput 跳过，之后不再有 input——若只清标记，
+    // IME 回车提交的文本永远不触发检测（实测：中文输入法 @+拼音回车后菜单不过滤，
+    // 手删一个字符才生效）。故此处清标记后主动补发 emitInput；即使个别环境
+    // compositionend 后还有 final input 再来一次也无害——onInputText →
+    // detectTrigger 幂等（同一 beforeCaret → 同一菜单状态）。
     const handleCompositionEnd = (): void => {
       composingRef.current = false;
+      emitInput();
     };
 
     // 省略 deps（每次渲染重建 handle）：回调 props（onEnter 等）闭包永远新鲜，
@@ -479,6 +568,9 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         onMouseDown={handleMouseDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
+        onPaste={handlePaste}
+        onDrop={handleDrop}
+        onDragOver={(e) => e.preventDefault()}
       />
     );
   },

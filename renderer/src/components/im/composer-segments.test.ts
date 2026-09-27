@@ -1,4 +1,6 @@
-// segments 纯函数层：五类 pill 序列化规则 + 草稿往返。规则表 = spec §3。
+// segments 纯函数层：六类 pill 序列化规则 + 草稿往返。规则表 = spec §3
+// （image pill = 2026-09-26 多模态 spec §5/§10：body 锚点 `[图片: name]` +
+// context.images 去重保序上限 6）。
 import { describe, it, expect } from 'vitest';
 import {
   serializeSegments,
@@ -12,6 +14,9 @@ const file = (path: string): PillSeg => ({ type: 'pill', kind: 'file', id: path,
 const task = (id: string, title: string): PillSeg => ({ type: 'pill', kind: 'task', id, label: title });
 const skill = (slug: string, name: string): PillSeg => ({ type: 'pill', kind: 'skill', id: slug, label: name });
 const command = (name: string): PillSeg => ({ type: 'pill', kind: 'command', id: name, label: name });
+const image = (path: string, label: string, w = 100, h = 50): PillSeg => ({
+  type: 'pill', kind: 'image', id: path, label, w, h,
+});
 
 describe('serializeSegments（spec §3 序列化规则表）', () => {
   it('五类混排：body 标记形态 + mentions/context 归位', () => {
@@ -117,5 +122,105 @@ describe('草稿往返（segmentsToDraft / draftToSegments）', () => {
     expect(draftToSegments('{{{')).toEqual([{ type: 'text', text: '{{{' }]);
     expect(draftToSegments(JSON.stringify([{ type: 'pill', kind: 'hack', id: 'x', label: 'x' }])))
       .toEqual([{ type: 'text', text: JSON.stringify([{ type: 'pill', kind: 'hack', id: 'x', label: 'x' }]) }]);
+  });
+});
+
+// === image pill（2026-09-26 多模态 spec §5/§10）===
+describe('serializeSegments image pill（spec §5/§10）', () => {
+  it('单个 image pill → body 锚点 `[图片: name] ` + context.images（无图消息 context 形状不变）', () => {
+    const r = serializeSegments([image('.momo/assets/abc.png', '截图.png', 800, 600)]);
+    expect(r.body).toBe('[图片: 截图.png] ');
+    expect(r.context).toEqual({
+      skills: [],
+      files: [],
+      images: [{ path: '.momo/assets/abc.png', w: 800, h: 600 }],
+    });
+  });
+
+  it('image 与文本/其它 pill 混排：锚点位置保序，标记分隔规则与其它 pill 一致', () => {
+    const r = serializeSegments([
+      { type: 'text', text: '看 ' },
+      image('a.png', 'a.png', 100, 50),
+      { type: 'text', text: ' 和 ' },
+      agent('i1', 'coder'),
+      image('b.jpg', 'b.jpg', 2048, 1365),
+    ]);
+    expect(r.body).toBe('看 [图片: a.png] 和 @coder [图片: b.jpg] ');
+    expect(r.mentions).toEqual(['i1']);
+    expect(r.context?.images).toEqual([
+      { path: 'a.png', w: 100, h: 50 },
+      { path: 'b.jpg', w: 2048, h: 1365 },
+    ]);
+  });
+
+  it('image pill 单独存在 → body 即锚点 + context.images 有值（可独立发送）', () => {
+    const r = serializeSegments([image('a.png', 'a.png')]);
+    expect(r.body).toBe('[图片: a.png] ');
+    expect(r.mentions).toBeUndefined();
+    expect(r.context?.images).toHaveLength(1);
+  });
+
+  it('重复路径 image pill：body 锚点保留全部出现，images 按 path 去重保序', () => {
+    const r = serializeSegments([
+      image('a.png', 'a.png'),
+      image('b.png', 'b.png'),
+      image('a.png', 'a.png'),
+    ]);
+    expect(r.body).toBe('[图片: a.png] [图片: b.png] [图片: a.png] ');
+    expect(r.context?.images).toEqual([
+      { path: 'a.png', w: 100, h: 50 },
+      { path: 'b.png', w: 100, h: 50 },
+    ]);
+  });
+
+  it('第 7 张起不进 images（单条消息 ≤6，renderer 拦截层；body 锚点保留全部出现）', () => {
+    const segs = Array.from({ length: 8 }, (_, i) => image(`p${i}.png`, `p${i}.png`));
+    const r = serializeSegments(segs);
+    expect(r.context?.images).toHaveLength(6);
+    expect(r.context?.images?.map((i) => i.path)).toEqual([
+      'p0.png', 'p1.png', 'p2.png', 'p3.png', 'p4.png', 'p5.png',
+    ]);
+    expect(r.body.match(/\[图片:/g)).toHaveLength(8);
+  });
+
+  it('w/h 非法（缺失 / 0 / 负数 / 非整数）的 image pill → 不进 images（sanitize 同规则防御），body 锚点照发', () => {
+    const malformed: PillSeg[] = [
+      { type: 'pill', kind: 'image', id: 'x1.png', label: 'x1.png' },
+      { type: 'pill', kind: 'image', id: 'x2.png', label: 'x2.png', w: 0, h: 10 },
+      { type: 'pill', kind: 'image', id: 'x3.png', label: 'x3.png', w: 10, h: -1 },
+      { type: 'pill', kind: 'image', id: 'x4.png', label: 'x4.png', w: 10.5, h: 10 },
+    ];
+    const r = serializeSegments(malformed);
+    expect(r.context).toBeUndefined();
+    expect(r.body).toBe('[图片: x1.png] [图片: x2.png] [图片: x3.png] [图片: x4.png] ');
+  });
+});
+
+describe('草稿往返 image pill（draftToSegments 白名单 + w/h 校验）', () => {
+  it('round-trip：image pill 含 w/h 原样恢复', () => {
+    const segs: Parameters<typeof segmentsToDraft>[0] = [
+      { type: 'text', text: '图 ' },
+      image('.momo/assets/ab12.png', '截图.png', 2048, 1365),
+    ];
+    expect(draftToSegments(segmentsToDraft(segs))).toEqual(segs);
+  });
+
+  it('image pill 缺 w/h 或 w/h 非正整数 → 整份草稿降级单文本（与既有形状非法规则一致）', () => {
+    const cases = [
+      [{ type: 'pill', kind: 'image', id: 'a.png', label: 'a.png' }],
+      [{ type: 'pill', kind: 'image', id: 'a.png', label: 'a.png', w: 100 }],
+      [{ type: 'pill', kind: 'image', id: 'a.png', label: 'a.png', w: 0, h: 100 }],
+      [{ type: 'pill', kind: 'image', id: 'a.png', label: 'a.png', w: 100, h: -1 }],
+      [{ type: 'pill', kind: 'image', id: 'a.png', label: 'a.png', w: '100' as unknown as number, h: 100 }],
+    ];
+    for (const segs of cases) {
+      const raw = JSON.stringify(segs);
+      expect(draftToSegments(raw)).toEqual([{ type: 'text', text: raw }]);
+    }
+  });
+
+  it('非 image pill 不要求 w/h（旧草稿兼容——草稿里 agent pill 无 w/h 照常恢复）', () => {
+    const segs: Parameters<typeof segmentsToDraft>[0] = [agent('i1', 'coder')];
+    expect(draftToSegments(segmentsToDraft(segs))).toEqual(segs);
   });
 });

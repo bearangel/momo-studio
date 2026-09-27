@@ -36,6 +36,8 @@ function harnessUi(handle: HandleRef, props: Partial<RichComposerProps> = {}) {
       onInputText={props.onInputText ?? vi.fn()}
       onEnter={props.onEnter ?? vi.fn()}
       onEscape={props.onEscape ?? vi.fn()}
+      onNavigate={props.onNavigate}
+      onPasteImage={props.onPasteImage}
     />
   );
 }
@@ -62,6 +64,9 @@ const filePill: PillSeg = { type: 'pill', kind: 'file', id: 'src/a.ts', label: '
 const taskPill: PillSeg = { type: 'pill', kind: 'task', id: 'T-3', label: '修复登录' };
 const skillPill: PillSeg = { type: 'pill', kind: 'skill', id: 'code-review', label: '代码审查' };
 const commandPill: PillSeg = { type: 'pill', kind: 'command', id: 'compact', label: '压缩' };
+const imagePill: PillSeg = {
+  type: 'pill', kind: 'image', id: '.momo/assets/ab12cd34.png', label: '截图.png', w: 800, h: 600,
+};
 
 function editor(): HTMLElement {
   return screen.getByRole('textbox', { name: '消息输入框' }) as HTMLElement;
@@ -283,15 +288,40 @@ describe('RichComposer 原子编辑', () => {
 });
 
 describe('RichComposer IME 与按键', () => {
-  it('IME 组字保护：compositionstart~end 之间 input 不触发 onInputText，之后恢复', () => {
+  it('IME 组字保护 + compositionend 提交补偿（Chromium 序 input(final)→compositionend）', () => {
     const onInputText = vi.fn();
-    mount({ onInputText });
+    const h = mount({ onInputText });
+    h!.setSegments([{ type: 'text', text: '@任' }]);
+    onInputText.mockClear();
     fireEvent.compositionStart(editor());
+    // Chromium：final input 先于 compositionend 到达，组合标记仍 true → 跳过
+    // （IME 回车提交后菜单不过滤、删一个字符才生效的 P0 根因）
     fireEvent.input(editor());
     expect(onInputText).not.toHaveBeenCalled();
+    // compositionend 清标记并补发——提交文本立即触发检测
     fireEvent.compositionEnd(editor());
-    fireEvent.input(editor());
     expect(onInputText).toHaveBeenCalledTimes(1);
+    expect(onInputText).toHaveBeenLastCalledWith('@任', '@任');
+    // 组合结束后恢复正常：后续 input 正常派发
+    fireEvent.input(editor());
+    expect(onInputText).toHaveBeenCalledTimes(2);
+  });
+
+  it('onNavigate 裁决：消费时 preventDefault，未消费/未提供放行编辑器默认', () => {
+    // Tab 未消费（菜单关闭场景），方向键消费（菜单开）
+    const onNavigate = vi.fn((key: string) => key !== 'Tab');
+    mount({ onNavigate });
+    const el = editor();
+    const captured: KeyboardEvent[] = [];
+    el.addEventListener('keydown', (e) => captured.push(e as KeyboardEvent));
+    fireEvent.keyDown(el, { key: 'ArrowDown' });
+    expect(onNavigate).toHaveBeenCalledWith('ArrowDown');
+    expect(captured[0]?.defaultPrevented).toBe(true);
+    fireEvent.keyDown(el, { key: 'Tab' });
+    expect(onNavigate).toHaveBeenCalledWith('Tab');
+    expect(captured[1]?.defaultPrevented).toBe(false);
+    // Enter/普通键不经 onNavigate（Enter 走 onEnter 通道）
+    expect(onNavigate).toHaveBeenCalledTimes(2);
   });
 
   it('Enter/Escape 回调；Shift+Enter 与 isComposing 的 Enter 不触发 onEnter', () => {
@@ -334,5 +364,134 @@ describe('RichComposer insertTextAtEnd', () => {
     h!.insertTextAtEnd('@');
     expect(onInputText).toHaveBeenCalledTimes(1);
     expect(onInputText).toHaveBeenLastCalledWith(' @', ' @');
+  });
+});
+
+// === image pill + 粘贴/拖入拦截（2026-09-26 多模态 spec §10）===
+describe('RichComposer image pill 渲染（spec §10）', () => {
+  it('image pill DOM：data-kind/id/label/w/h + 图标 svg + 文件名文本 + 语义类名', () => {
+    const h = mount();
+    h!.setSegments([imagePill]);
+    const pills = pillNodes();
+    expect(pills).toHaveLength(1);
+    const p = pills[0]!;
+    expect(p.dataset.kind).toBe('image');
+    expect(p.dataset.id).toBe('.momo/assets/ab12cd34.png');
+    expect(p.dataset.label).toBe('截图.png');
+    // w/h 落 DOM——getSegments 反向提取契约（序列化进 context.images）
+    expect(p.dataset.w).toBe('800');
+    expect(p.dataset.h).toBe('600');
+    expect(p.textContent).toBe('截图.png');
+    // lucide Image 图标（禁 emoji——图标以 svg 呈现）与既有 pill 语义 token 体系
+    expect(p.querySelector('svg')).not.toBeNull();
+    expect(p.className).toContain('bg-surface-active');
+    expect(p.className).toContain('text-accent-600');
+  });
+
+  it('image pill segments 往返：w/h 经 DOM data-* 保真（缺 w/h 的外来 span 不炸）', () => {
+    const h = mount();
+    h!.setSegments([{ type: 'text', text: '图 ' }, imagePill]);
+    expect(h!.getSegments()).toEqual([{ type: 'text', text: '图 ' }, imagePill]);
+    // 防御：伪造 data-kind=image 但无 w/h 的 span（外来源 HTML 粘贴）——提取不抛错，
+    // w/h 缺省（序列化层 validImageDims 会把它挡在 context.images 之外）
+    const el = editor();
+    el.textContent = '';
+    const foreign = document.createElement('span');
+    foreign.setAttribute('contenteditable', 'false');
+    foreign.dataset.kind = 'image';
+    foreign.dataset.id = 'x.png';
+    foreign.dataset.label = 'x.png';
+    el.append(foreign, document.createTextNode('\u200b'));
+    expect(() => h!.getSegments()).not.toThrow();
+  });
+
+  it('Backspace 删除 image pill 后补发 onInputText（提示行随 pill 删除刷新）', () => {
+    const onInputText = vi.fn();
+    const h = mount({ onInputText });
+    h!.setSegments([imagePill]);
+    onInputText.mockClear();
+    const pill = pillNodes()[0]!;
+    const zwsp = pill.nextSibling as Text;
+    setCaret(zwsp, 0);
+    fireEvent.keyDown(editor(), { key: 'Backspace' });
+    expect(pill.dataset.selected).toBe('1');
+    expect(onInputText).not.toHaveBeenCalled();
+    fireEvent.keyDown(editor(), { key: 'Backspace' });
+    expect(pillNodes()).toHaveLength(0);
+    // 删除即补发——上层（MentionInput 能力提示行）无需等下一次键入才感知
+    expect(onInputText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RichComposer 粘贴/拖入图片拦截（spec §10 paste/drop）', () => {
+  function imageFile(name = 'shot.png'): File {
+    return new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' });
+  }
+  /** 捕获 native paste/drop 事件，事后读 defaultPrevented（React 合成 preventDefault 在根容器派发时才落回原生——须延迟读取，同 onNavigate 用例的存事件后读法） */
+  function captureNative(el: HTMLElement, type: 'paste' | 'drop'): () => boolean {
+    let evt: Event | null = null;
+    el.addEventListener(type, (e) => {
+      evt = e;
+    });
+    return () => evt?.defaultPrevented ?? false;
+  }
+
+  it('粘贴 2 张图片 → onPasteImage 一次收齐两张 + 默认粘贴被阻止', () => {
+    const onPasteImage = vi.fn();
+    mount({ onPasteImage });
+    const el = editor();
+    const getPrevented = captureNative(el, 'paste');
+    const f1 = imageFile('a.png');
+    const f2 = imageFile('b.jpg');
+    fireEvent.paste(el, { clipboardData: { files: [f1, f2] } });
+    expect(onPasteImage).toHaveBeenCalledTimes(1);
+    expect(onPasteImage).toHaveBeenCalledWith([f1, f2]);
+    expect(getPrevented()).toBe(true);
+  });
+
+  it('纯文本粘贴 → onPasteImage 不调用 + 默认粘贴行为保留', () => {
+    const onPasteImage = vi.fn();
+    mount({ onPasteImage });
+    const el = editor();
+    const getPrevented = captureNative(el, 'paste');
+    fireEvent.paste(el, { clipboardData: { files: [], getData: () => '纯文本' } });
+    expect(onPasteImage).not.toHaveBeenCalled();
+    expect(getPrevented()).toBe(false);
+  });
+
+  it('混合文件粘贴（图片 + 非图片）→ 只上抛图片且默认行为阻止（非图片不重复处理）', () => {
+    const onPasteImage = vi.fn();
+    mount({ onPasteImage });
+    const el = editor();
+    const getPrevented = captureNative(el, 'paste');
+    const img = imageFile('a.png');
+    const txt = new File([new Uint8Array([1])], 'note.txt', { type: 'text/plain' });
+    fireEvent.paste(el, { clipboardData: { files: [txt, img] } });
+    expect(onPasteImage).toHaveBeenCalledTimes(1);
+    expect(onPasteImage).toHaveBeenCalledWith([img]);
+    expect(getPrevented()).toBe(true);
+  });
+
+  it('拖入 2 张图片 → onPasteImage 一次收齐 + 默认 drop 被阻止', () => {
+    const onPasteImage = vi.fn();
+    mount({ onPasteImage });
+    const el = editor();
+    const getPrevented = captureNative(el, 'drop');
+    const f1 = imageFile('a.png');
+    const f2 = imageFile('b.png');
+    fireEvent.drop(el, { dataTransfer: { files: [f1, f2] } });
+    expect(onPasteImage).toHaveBeenCalledTimes(1);
+    expect(onPasteImage).toHaveBeenCalledWith([f1, f2]);
+    expect(getPrevented()).toBe(true);
+  });
+
+  it('未提供 onPasteImage（可选 prop）→ 图片粘贴不拦截也不上抛，组件不炸', () => {
+    mount();
+    const el = editor();
+    const getPrevented = captureNative(el, 'paste');
+    expect(() =>
+      fireEvent.paste(el, { clipboardData: { files: [imageFile()] } }),
+    ).not.toThrow();
+    expect(getPrevented()).toBe(false);
   });
 });
