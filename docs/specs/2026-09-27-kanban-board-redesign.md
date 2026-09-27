@@ -126,7 +126,7 @@ export const BOARD_COLUMNS = [
 | pending | 仅列内/换泳道(同列,draft↔pending 互转无拖拽入口) | →assigned + notifyExecutor(手动放行) | ✗ | ✗ | →cancelled |
 | assigned / session_queued | ✗ | 仅列内 | **task.start()** 拉起执行会话 | ✗ | task.cancel() |
 | in_progress | ✗ | ✗ | 仅列内 | →completed(**先确认**:agent 可能仍在跑) | cancel()(**先确认**:终止运行) |
-| paused | ✗ | ✗ | **task.resume()** 断点续跑 | ✗ | cancel() |
+| paused | ✗ | ✗ | 仅列内(排序;**恢复走卡片/抽屉按钮**,不设拖拽入口——断点续跑是重副作用,不应被排序手势误触发) | ✗ 状态机拒 | cancel() |
 | completed / failed / cancelled | ✗ | ✗ | ✗ | 仅列内/换泳道/**可归档**(右键菜单) | 同左 |
 
 关键裁决:
@@ -134,6 +134,7 @@ export const BOARD_COLUMNS = [
 - **待办列只出不进**:状态机不允许任何状态转回 draft/pending;拖悬时该列禁用响应(dnd-kit droppable disabled + 视觉变暗)
 - **语义动作在主进程映射**:renderer 只发落点,不指定动作——start/resume/cancel/transition 的调用决策单点收敛在 task.move,防契约漂移(8 个 P0 中 4 个源于契约漂移的教训)
 - **两个确认框**(in_progress → 已完成/已关闭):松手时 renderer 弹确认,取消则卡片弹回原位零副作用;确认后才发 IPC
+- **同列拖动一律纯排序**(含 paused):恢复(resume)不设拖拽入口,只走卡片/抽屉按钮——spec 初版表格 paused×进行中格为设计笔误,已修订(brainstorm 方案一定案:恢复走按钮)
 - pending→assigned 手动放行复用 resume() 同款 notifyExecutor 机制触发现有 executor 评估
 - 同列跨泳道拖 = 换分组;同列同泳道拖 = 纯排序
 - **调度器、findNextAssignedTask、并发徽标计数一概不动**:board_position 纯视觉,调度排序仍是 priority DESC → scheduled_at ASC → created_at ASC
