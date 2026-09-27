@@ -92,6 +92,9 @@ describe('task_groups repo', () => {
   it('创建组默认活跃，position 自增', () => {
     const g1 = createGroup({ workspaceId: 'ws1', name: 'v2.1.0' });
     const g2 = createGroup({ workspaceId: 'ws1', name: 'LSP', color: 'violet' });
+    // G-<seq> 零填充 ≥3 位——#G mention 解析与下游任务的 id 契约（先例：tasks-repo.test.ts 的 T-\d{3,}）
+    expect(g1.id).toMatch(/^G-\d{3,}$/);
+    expect(g1.id).not.toBe(g2.id);
     expect(g1.archivedAt).toBeNull();
     expect(g2.color).toBe('violet');
     expect(g2.position).toBeGreaterThan(g1.position);
