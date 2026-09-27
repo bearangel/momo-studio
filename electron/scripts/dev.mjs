@@ -12,7 +12,7 @@
 //
 // 退出语义：任一子进程退出 → 杀掉全部（concurrently -k 等价）；Ctrl+C 信号转发。
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,8 @@ const VITE_URL = `http://localhost:${VITE_PORT}`;
 
 const isWin = process.platform === 'win32';
 const children = [];
+/** 编排器启动时刻（electron dist 新鲜度判定的基准） */
+const SCRIPT_START = Date.now();
 
 function log(tag, msg) {
   console.log(`\x1b[36m[${tag}]\x1b[0m ${msg}`);
@@ -112,8 +114,17 @@ async function waitForVite(timeoutMs = 60_000) {
 
 async function waitForElectronDist(timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
+  // 新鲜度判定：index.js 的 mtime 必须晚于编排器启动时刻——只查「存在」会在
+  // 上次构建残留 dist 时秒过，Electron 加载陈旧主进程跑旧契约（2026-09-25
+  // 实测：旧 getMessages 无 thinkingPendingIds，新 renderer 全会话空白）
   while (Date.now() < deadline) {
-    if (existsSync(ELECTRON_DIST_MAIN)) return true;
+    try {
+      if (existsSync(ELECTRON_DIST_MAIN) && statSync(ELECTRON_DIST_MAIN).mtimeMs > SCRIPT_START) {
+        return true;
+      }
+    } catch {
+      // 文件正被 tsc 重写——下轮再查
+    }
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
