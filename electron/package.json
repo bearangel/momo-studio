@@ -106,6 +106,7 @@
     "simple-git": "^3.36.0",
     "turndown": "7",
     "tweetnacl": "^1.0.3",
+    "undici": "^6.28.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

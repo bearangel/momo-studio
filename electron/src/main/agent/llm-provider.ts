@@ -7,6 +7,7 @@
 //   1. system 是请求体顶层字段，不在 messages 数组里
 //   2. tool_use 返回在 content 数组中（type: 'tool_use'），需扁平化为 LLMToolCall
 
+import { Agent as UndiciAgent } from 'undici';
 import type { ThinkingRequest } from '../llm/provider-presets';
 
 /** 对话消息（system / user / assistant / tool_result 四种角色的统一表示） */
@@ -60,6 +61,18 @@ export interface LLMProvider {
 
 /** 对 LLM API 的单次请求超时（毫秒）—— 复杂生成任务可能需要数分钟 */
 const LLM_REQUEST_TIMEOUT_MS = 300_000;
+
+/**
+ * LLM 专用 undici Agent（2026-09-26 terminated P0）：Node 全局 fetch 的 undici
+ * 默认 bodyTimeout=300s——body 两次数据块之间空闲超 5 分钟即掐流（实测 failed
+ * 回合最后字节→final 恰好 300.000s）。深度推理模型思考静默可超 5 分钟，属正常
+ * 流不是死流 → bodyTimeout=0 关闭空闲超时；headersTimeout 抬到 600s 防慢网关
+ * 误杀。仅作用于 LLM 请求（fetchWithRetry 单点注入），不影响其余全局 fetch。
+ */
+const llmFetchAgent = new UndiciAgent({ bodyTimeout: 0, headersTimeout: 600_000 });
+
+/** 测试钩子：断言 fetch 请求携带 LLM 专用 dispatcher（bodyTimeout=0 契约锁） */
+export const __llmFetchAgentForTest = llmFetchAgent;
 
 /** 最大重试次数（初次请求 + 重试 = maxRetries+1 次总尝试） */
 const MAX_LLM_RETRIES = 5;
@@ -125,7 +138,13 @@ async function fetchWithRetry(
       ? AbortSignal.any([callerSignal, timeoutCtrl.signal])
       : timeoutCtrl.signal;
     try {
-      const response = await fetch(url, { ...options, signal });
+      // dispatcher 为 undici 扩展字段（全局 fetch 透传读取）——类型层用交集断言，
+      // 不落入 any
+      const response = await fetch(url, {
+        ...options,
+        signal,
+        dispatcher: llmFetchAgent,
+      } as RequestInit & { dispatcher: UndiciAgent });
       clearTimeout(timer);
       if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
         return response;
