@@ -249,6 +249,8 @@ export interface TaskApiSurface {
     recurrenceRule?: string | null;
     scheduledAt?: number | null;
     deadlineAt?: number | null;
+    /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
+    groupId?: string;
   }): Promise<TaskRow>;
   list(opts: {
     workspaceId?: string;

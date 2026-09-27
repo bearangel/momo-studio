@@ -16,15 +16,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateTaskDialog } from './CreateTaskDialog';
+import { useGroupStore } from '../../stores/group.store';
+import type { GroupRow } from '../../ipc/types';
 
 // vi.hoisted 保证 mock fn 在 vi.mock 工厂（会被提升到文件顶部）执行时已存在，
 // 同时能在每个 test 内通过 mockResolvedValueOnce 精确控制返回值。
-const { mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList } = vi.hoisted(() => ({
-  mockTaskCreate: vi.fn(),
-  mockListAssignments: vi.fn(),
-  mockTeamList: vi.fn(),
-  mockSessionList: vi.fn(),
-}));
+const { mockTaskCreate, mockListAssignments, mockTeamList, mockSessionList, mockTaskGroupList } =
+  vi.hoisted(() => ({
+    mockTaskCreate: vi.fn(),
+    mockListAssignments: vi.fn(),
+    mockTeamList: vi.fn(),
+    mockSessionList: vi.fn(),
+    mockTaskGroupList: vi.fn(),
+  }));
 
 vi.mock('../../ipc/client', () => ({
   ipc: {
@@ -32,6 +36,7 @@ vi.mock('../../ipc/client', () => ({
     agent: { listMembers: mockListAssignments },
     team: { list: mockTeamList },
     session: { list: mockSessionList },
+    taskGroup: { list: mockTaskGroupList },
   },
 }));
 
@@ -41,12 +46,21 @@ describe('CreateTaskDialog', () => {
     mockListAssignments.mockReset();
     mockTeamList.mockReset();
     mockSessionList.mockReset();
+    mockTaskGroupList.mockReset();
     // 默认：创建成功返回 { id: 'T-100' }；指派/团队/会话列表
     // （形状与 Team / SessionSummary 契约的字段子集对齐，map 只消费 id/name/title）
     mockTaskCreate.mockResolvedValue({ id: 'T-100' });
     mockListAssignments.mockResolvedValue([]);
     mockTeamList.mockResolvedValue([{ id: 'team1', name: '写码组', members: [] }]);
     mockSessionList.mockResolvedValue([{ id: 'sess1', title: '既有会话' }]);
+    mockTaskGroupList.mockResolvedValue([]);
+    useGroupStore.setState({
+      groups: [],
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      selectedGroupId: null,
+    });
   });
 
   it('open=false 时不渲染', () => {
@@ -201,5 +215,51 @@ describe('CreateTaskDialog', () => {
     // 选中团队后恢复可用
     fireEvent.change(await screen.findByLabelText('委派目标'), { target: { value: 'team1' } });
     expect(screen.getByRole('button', { name: '创建' })).toBeEnabled();
+  });
+
+  // UX 修复：新建任务可选分组落组——选项=不分组(默认)+活跃组（group.store），
+  // 选中随 create 透传 groupId；主进程三重校验（存在/同 ws/未归档）
+  describe('分组选择（UX 修复）', () => {
+    function mkGroup(partial: Partial<GroupRow> & Pick<GroupRow, 'id' | 'name'>): GroupRow {
+      return {
+        workspaceId: 'ws1',
+        color: null,
+        position: 1024,
+        archivedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+        ...partial,
+      };
+    }
+
+    it('分组下拉列「不分组」+ 活跃组名；默认不分组提交不带 groupId', async () => {
+      mockTaskGroupList.mockResolvedValue([mkGroup({ id: 'g-1', name: '需求组' })]);
+      render(<CreateTaskDialog open onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
+
+      const groupSelect = (await screen.findByLabelText('分组')) as HTMLSelectElement;
+      expect(groupSelect.value).toBe('');
+      expect(screen.getByRole('option', { name: '不分组' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: '需求组' })).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '无组' } });
+      fireEvent.click(screen.getByRole('button', { name: '创建' }));
+      await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
+      const input = mockTaskCreate.mock.calls[0]![0] as { groupId?: string };
+      expect(input.groupId).toBeUndefined();
+    });
+
+    it('选组后提交 → create 调用参数含该组 groupId', async () => {
+      mockTaskGroupList.mockResolvedValue([mkGroup({ id: 'g-1', name: '需求组' })]);
+      const onCreated = vi.fn();
+      render(<CreateTaskDialog open onClose={() => {}} onCreated={onCreated} workspaceId="ws1" />);
+
+      fireEvent.change(screen.getByLabelText('标题*'), { target: { value: '落组' } });
+      fireEvent.change(await screen.findByLabelText('分组'), { target: { value: 'g-1' } });
+      fireEvent.click(screen.getByRole('button', { name: '创建' }));
+      await waitFor(() => expect(onCreated).toHaveBeenCalled());
+      expect(mockTaskCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ groupId: 'g-1' }),
+      );
+    });
   });
 });
