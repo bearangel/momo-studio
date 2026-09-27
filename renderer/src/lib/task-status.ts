@@ -19,15 +19,19 @@ const STATUS_LABEL: Record<TaskStatusKey, string> = {
   failed: '失败',
 };
 
-/** 规范 §3.6 任务状态语义映射 */
+/**
+ * 任务状态语义映射（UX 波 2 重映射：用户反馈 4 个灰无区分，目标列内零同色冲突）：
+ * 灰只留 draft/cancelled；等待系（pending/session_queued）统一琥珀；
+ * 活跃管线系（assigned/in_progress）统一蓝；completed 升绿、failed 保持红。
+ */
 const STATUS_TONE: Record<TaskStatusKey, BadgeTone> = {
   draft: 'neutral',
   pending: 'warning',
   assigned: 'accent',
-  session_queued: 'neutral',
-  in_progress: 'success',
+  session_queued: 'warning',
+  in_progress: 'accent',
   paused: 'violet',
-  completed: 'neutral',
+  completed: 'success',
   cancelled: 'neutral',
   failed: 'error',
 };
