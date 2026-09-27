@@ -161,4 +161,11 @@ describe('task_groups repo', () => {
     expect(next.name).toBe('y');
     expect(next.updatedAt).toBeGreaterThanOrEqual(before);
   });
+
+  it('错误路径：操作不存在的组抛错；空 reorder 是 no-op', () => {
+    expect(() => updateGroup('G-999', { name: 'z' })).toThrow(/G-999 不存在/);
+    expect(() => archiveGroup('G-999')).toThrow(/G-999 不存在/);
+    expect(() => unarchiveGroup('G-999')).toThrow(/G-999 不存在/);
+    expect(() => reorderGroups([])).not.toThrow();
+  });
 });
