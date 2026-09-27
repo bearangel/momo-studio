@@ -4,7 +4,8 @@
 //   - 渲染：position 升序、色点/组名/任务数（任务数从 task.store.tasks 实时按 groupId 计）
 //   - 新建组：内联输入回车调 taskGroup.create（契约锁 {workspaceId, name}）
 //   - 重命名：菜单触发行内编辑，回车调 taskGroup.update(id, {name})
-//   - 换色：色板固定 5 语义色 + 自定义 input type=color 存小写 hex（UX 波 2 #5）
+//   - 换色：色板固定 5 语义色 + 自定义取色三路确认（input→本地预览零 IPC、
+//     「应用」显式提交、change/onBlur 兜底等价提交；UX 波 2 #5 + 无处确认修复）
 //   - 菜单点外关闭：全屏遮罩点击关闭；再点触发按钮本身仍切换（UX 波 2 #4）
 //   - 归档组：确认文案含实时未完结数 N；确认后 taskGroup.archive + task.list 级联刷新
 //   - 取消归档：折叠区列归档组，点选调 taskGroup.unarchive + task.list 级联刷新
@@ -206,7 +207,7 @@ describe('GroupManageList', () => {
     });
   });
 
-  it('换色：自定义 input type=color 选色存小写 hex（UX 波 2 #5）', async () => {
+  it('换色：自定义原生 change（色板带选择关闭）兜底提交小写 hex（与「应用」等价）', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
@@ -219,7 +220,7 @@ describe('GroupManageList', () => {
     });
   });
 
-  it('换色：自定义色 input 事件（macOS 拖动连发）不提交不关菜单；原生 change（确认）才提交（修复秒关）', async () => {
+  it('换色：input 事件只更本地预览（hex 文本实时跟随、零 IPC、菜单不关）；change 兜底才提交', async () => {
     render(<GroupManageList />);
     await screen.findByLabelText('分组 组A');
 
@@ -227,10 +228,12 @@ describe('GroupManageList', () => {
     fireEvent.click(screen.getByRole('button', { name: '换色' }));
     const colorInput = screen.getByLabelText('自定义组色');
 
-    // 修复前根因：React onChange ≙ 原生 input 事件 → 首个事件即提交 + 关菜单。
-    // 现要求：拖动中间态连发 input——菜单不关、零 IPC
+    // 拖动中间态连发 input → 预览行 hex 实时跟随，零 IPC，菜单不关
     fireEvent.input(colorInput, { target: { value: '#00ff00' } });
+    expect(await screen.findByText('#00ff00')).toBeInTheDocument();
     fireEvent.input(colorInput, { target: { value: '#00cc00' } });
+    expect(await screen.findByText('#00cc00')).toBeInTheDocument();
+    expect(screen.queryByText('#00ff00')).not.toBeInTheDocument();
     expect(mockApi.taskGroup.update).not.toHaveBeenCalled();
     expect(screen.getByTestId('group-menu-overlay')).toBeInTheDocument();
 
@@ -239,6 +242,31 @@ describe('GroupManageList', () => {
     await waitFor(() => {
       expect(mockApi.taskGroup.update).toHaveBeenCalledTimes(1);
       expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#00cc00' });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();
+    });
+  });
+
+  it('换色：预览旁「应用」按钮以预览 hex 调 updateGroup 并关菜单（显式确认，大写转小写）', async () => {
+    render(<GroupManageList />);
+    await screen.findByLabelText('分组 组A');
+
+    openMenu('组A');
+    fireEvent.click(screen.getByRole('button', { name: '换色' }));
+    const colorInput = screen.getByLabelText('自定义组色');
+
+    // 未动原生色板前：无预览行、无「应用」按钮
+    expect(screen.queryByRole('button', { name: '应用' })).not.toBeInTheDocument();
+
+    fireEvent.input(colorInput, { target: { value: '#AB34CD' } });
+    // 预览行：hex 小写显示 + 「应用」出现
+    expect(await screen.findByText('#ab34cd')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '应用' }));
+
+    await waitFor(() => {
+      expect(mockApi.taskGroup.update).toHaveBeenCalledTimes(1);
+      expect(mockApi.taskGroup.update).toHaveBeenCalledWith('g-a', { color: '#ab34cd' });
     });
     await waitFor(() => {
       expect(screen.queryByTestId('group-menu-overlay')).not.toBeInTheDocument();
