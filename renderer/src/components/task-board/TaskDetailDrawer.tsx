@@ -47,10 +47,13 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
 
   return createPortal(
     <>
+      {/* 遮罩与抽屉均从 TitleBar(h-10) 下沿开始:顶部 40px 是
+          -webkit-app-region: drag 拖拽区,覆盖其上的元素若不设 no-drag,
+          点击会被拖拽区吞掉(抽屉头部的编辑/关闭按钮不可点的根因) */}
       <div
         data-testid="drawer-backdrop"
         aria-hidden
-        className="fixed inset-0 z-50 bg-backdrop"
+        className="fixed bottom-0 left-0 right-0 top-10 z-50 bg-backdrop"
         onClick={onClose}
       />
       <aside
@@ -59,7 +62,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
         aria-modal="true"
         aria-label="任务详情"
         className={cn(
-          'fixed bottom-0 right-0 top-0 z-50 flex w-[380px] flex-col border-l border-subtle bg-canvas shadow-2xl transition-transform duration-200 ease-out',
+          'fixed bottom-0 right-0 top-10 z-50 flex w-[380px] flex-col border-l border-subtle bg-canvas shadow-2xl transition-transform duration-200 ease-out',
           entered ? 'translate-x-0' : 'translate-x-full',
         )}
       >
