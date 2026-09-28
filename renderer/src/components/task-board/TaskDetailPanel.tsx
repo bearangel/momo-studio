@@ -28,15 +28,19 @@ import {
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useUiStore } from '../../stores/ui.store';
 import type { TaskRow } from '../../ipc/types';
-import { taskStatusStyle } from '../../lib/task-status';
+import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
+import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { Button } from '../ui/Button';
+import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
 import { TaskChangesPanel } from './TaskChangesPanel';
 import { useTaskEntityNames } from './useTaskEntityNames';
+import { usePendingWrapUp } from './usePendingWrapUp';
 
 interface TaskDetailPanelProps {
   taskId: string;
@@ -91,6 +95,8 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   }, [taskId]);
 
   const names = useTaskEntityNames(task?.workspaceId ?? null);
+  // 派生「待收尾」（spec §3.5）：徽标与催收尾按钮共用谓词
+  const pendingWrapUp = usePendingWrapUp(task);
 
   if (!task) {
     return <div className="flex-1 p-4 text-sm text-tertiary">加载中...</div>;
@@ -147,6 +153,25 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       });
   };
 
+  /**
+   * 催收尾（spec §3.6）：向宿主会话注入与 electron F1 同一模板文本（镜像逐字同步）。
+   * 点击瞬间从 store 快读取数（非响应式）——待办来自宿主会话最新带 todos 的流聚合；
+   * 拿不到待办数据时退化为不含列表项的版本（按钮 title 已说明）。
+   */
+  const handleUrgeWrapUp = (): void => {
+    const sessionId = task.executionSessionId;
+    if (!sessionId) return;
+    const messages = useSessionStore.getState().messagesBySession.get(sessionId);
+    const items = collectOpenTodoItems(messages, useStreamStore.getState().streams);
+    const body = buildTurnReconcileNotice(task.id, items ?? []);
+    ipc.session
+      .send(sessionId, body)
+      .then(() => showToast('已向执行会话发送收尾提醒'))
+      .catch((err: unknown) => {
+        showToast(`催收尾发送失败: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  };
+
   return (
     <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
       <div className="flex items-center justify-between p-3 border-b border-subtle">
@@ -171,6 +196,14 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         )}
         <div className="flex items-center gap-2">
           <span className={status.className}>{status.label}</span>
+          {pendingWrapUp && (
+            <span
+              className={PENDING_WRAP_UP_STYLE.className}
+              title="任务仍在进行，但宿主会话当前没有运行回合"
+            >
+              {PENDING_WRAP_UP_STYLE.label}
+            </span>
+          )}
           {task.status === 'assigned' && (
             <span className="text-xs text-status-warning">等待调度放行</span>
           )}
@@ -334,6 +367,16 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         {canPause && (
           <Button variant="ghost" onClick={handlePause} className="flex-1">
             暂停
+          </Button>
+        )}
+        {pendingWrapUp && (
+          <Button
+            variant="ghost"
+            onClick={handleUrgeWrapUp}
+            className="flex-1"
+            title="向执行会话发送回合收尾核对提醒；若当前拿不到待办数据，提醒将不含未清项列表"
+          >
+            催收尾
           </Button>
         )}
         {canResume && (

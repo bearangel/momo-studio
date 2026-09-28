@@ -13,8 +13,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BoardCard } from './BoardCard';
-import type { TaskRow } from '../../ipc/types';
+import type { ImMessage, TaskRow } from '../../ipc/types';
+import type { StreamState } from '../../stores/stream.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
 import { Toast, dismissToast } from '../ui/Toast';
 
@@ -255,5 +258,95 @@ describe('BoardCard 非终态卡右键编辑（UX 波 2 #1：入口可达性）'
     render(<BoardCard task={base} selected={false} onClick={() => {}} />);
     // EditTaskDialog open=false 不渲染（卡片自身的 useTaskEntityNames 兜底拉取不计入）
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+// === 派生徽标「待收尾」（turn reconciliation spec §3.5）===
+// 真实 store 语义：session.messagesBySession + stream.streams 联合推导。
+
+const wrapUpMsg = (id: string): ImMessage => ({
+  id,
+  sessionId: 'sess-exec',
+  sender: '@bot:x',
+  body: '',
+  eventType: 'm.room.message',
+  streamSessionId: null,
+  parentStreamSessionId: null,
+  segmentOf: null,
+  segmentIndex: null,
+  status: 'streaming',
+  source: 'local',
+  workspaceId: null,
+  taskId: null,
+  contextJson: null,
+  createdAt: 0,
+  updatedAt: 0,
+});
+
+const wrapUpStream = (status: StreamState['status']): StreamState => ({
+  thinking: '',
+  text: '',
+  toolCalls: [],
+  todos: [],
+  dispatches: [],
+  status,
+  events: [],
+  segments: [],
+  messageId: 'm-exec',
+  startedAt: 0,
+});
+
+describe('BoardCard 派生徽标「待收尾」（spec §3.5）', () => {
+  beforeEach(() => {
+    useSessionStore.setState({ messagesBySession: new Map() });
+    useStreamStore.setState({ streams: new Map() });
+  });
+
+  it('in_progress + 宿主会话无运行回合 → 与状态徽标并列显示「待收尾」（不替换进行中真相）', () => {
+    render(
+      <BoardCard
+        task={{ ...base, status: 'in_progress', executionSessionId: 'sess-exec' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.getByText('待收尾')).toBeInTheDocument();
+    expect(screen.getByText('进行中')).toBeInTheDocument();
+  });
+
+  it('会话正在流式输出 → 不显示（运行回合在场）', () => {
+    useSessionStore.setState({
+      messagesBySession: new Map([['sess-exec', [wrapUpMsg('m-exec')]]]),
+    });
+    useStreamStore.setState({
+      streams: new Map([['m-exec', wrapUpStream('streaming')]]),
+    });
+    render(
+      <BoardCard
+        task={{ ...base, status: 'in_progress', executionSessionId: 'sess-exec' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+    expect(screen.getByText('进行中')).toBeInTheDocument();
+  });
+
+  it('completed → 不显示（终态）', () => {
+    render(
+      <BoardCard
+        task={{ ...base, status: 'completed', executionSessionId: 'sess-exec' }}
+        selected={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+  });
+
+  it('无 executionSessionId 的 in_progress → 不显示（语义边界）', () => {
+    render(
+      <BoardCard task={{ ...base, status: 'in_progress' }} selected={false} onClick={() => {}} />,
+    );
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
   });
 });

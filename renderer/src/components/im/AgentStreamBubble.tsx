@@ -46,7 +46,9 @@ interface Props {
 
 const STATUS_TEXT: Record<StreamState['status'], string> = {
   streaming: '流式中',
-  done: '已完成',
+  // 词汇专用原则(turn reconciliation spec §3.7):「完成」全系统保留给任务状态机,
+  // 流式正常结束只说「已停笔」——措辞不得暗示工作已完成(T-060 割裂面之一)
+  done: '已停笔',
   failed: '出错',
   aborted: '已中断',
 };

@@ -13,13 +13,14 @@
 import { Archive, Bot, Calendar, Clock, MessagesSquare, Pencil, Repeat, Users } from 'lucide-react';
 import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
-import { taskStatusStyle } from '../../lib/task-status';
+import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { useTaskStore } from '../../stores/task.store';
 import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
 import { useTaskEntityNames } from './useTaskEntityNames';
+import { usePendingWrapUp } from './usePendingWrapUp';
 
 /** 优先级标签（0=无 / 1=低 / 5=中 / 10=高）——与 TaskCard 同源词表 */
 const PRIORITY_LABEL: Record<number, string> = { 0: '', 1: '低', 5: '中', 10: '高' };
@@ -52,6 +53,8 @@ function chipStyle(fg: string, bg: string): CSSProperties {
 
 export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps) {
   const status = taskStatusStyle(task.status);
+  // 派生「待收尾」（spec §3.5）：与状态徽标并列的提示，不替换 in_progress 真相
+  const pendingWrapUp = usePendingWrapUp(task);
   const priorityLabel = PRIORITY_LABEL[task.priority];
   const names = useTaskEntityNames(task.workspaceId);
   // 右键菜单定位（null=关）；全状态可开——非终态出「编辑」/ 终态出「归档」（UX 波 2 #1）
@@ -89,7 +92,14 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
           {priorityLabel && <span className="mr-0.5 text-status-warning">[{priorityLabel}]</span>}
           #{task.id.slice(0, 6)} · {task.title}
         </span>
-        <span className={status.className}>{status.label}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          <span className={status.className}>{status.label}</span>
+          {pendingWrapUp && (
+            <span className={PENDING_WRAP_UP_STYLE.className} title="任务仍在进行，但宿主会话当前没有运行回合">
+              {PENDING_WRAP_UP_STYLE.label}
+            </span>
+          )}
+        </span>
       </div>
       {(groupChip ||
         task.scheduledAt ||

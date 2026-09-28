@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { TaskStatus } from '../ipc/types';
 import {
   dispatchStatusStyle,
+  PENDING_WRAP_UP_STYLE,
   remoteStatusStyle,
   taskStatusStyle,
   type TaskStatusKey,
@@ -51,6 +52,13 @@ describe('task-status 统一状态映射', () => {
     const s = taskStatusStyle('session_queued');
     expect(s.label).toBe('排队中');
     expect(s.tone).toBe('warning');
+  });
+
+  it('PENDING_WRAP_UP_STYLE：派生「待收尾」徽标复用 warning tone（spec §3.5，禁新造色）', () => {
+    expect(PENDING_WRAP_UP_STYLE.label).toBe('待收尾');
+    expect(PENDING_WRAP_UP_STYLE.tone).toBe('warning');
+    expect(PENDING_WRAP_UP_STYLE.className).toContain('bg-status-warning-tint');
+    expect(PENDING_WRAP_UP_STYLE.className).toContain('text-status-warning');
   });
 });
 
