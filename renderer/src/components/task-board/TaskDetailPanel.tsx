@@ -177,7 +177,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         </div>
         {task.status === 'draft' && !hasTarget && (
           <div className="rounded bg-status-warning-tint px-3 py-2 text-xs text-status-warning">
-            任务尚未指派委派目标——点击右上角编辑按钮选择 agent / 团队 / 会话后即可启动。
+            任务尚未指派委派目标——点击「编辑」选择 agent / 团队 / 会话后即可启动。
           </div>
         )}
         {task.errorMessage && (
