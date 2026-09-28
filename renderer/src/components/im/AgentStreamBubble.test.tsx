@@ -110,8 +110,8 @@ describe('AgentStreamBubble', () => {
         message={makeMessage()}
       />,
     );
-    // spec §3.7 词汇专用:流式 done 渲染「已停笔」而非「已完成」
-    expect(screen.getByText(/已停笔/)).toBeInTheDocument();
+    // spec §3.7 词汇专用:流式 done 渲染「已回复」而非「已完成」
+    expect(screen.getByText(/已回复/)).toBeInTheDocument();
     expect(screen.queryByText(/已完成/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /停止/ })).not.toBeInTheDocument();
   });
@@ -639,6 +639,6 @@ describe('AgentStreamBubble — 变更 chip 挂载门控（v2.5）', () => {
     );
     await waitFor(() => expect(journalListMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
-    expect(screen.getByText(/已停笔/)).toBeInTheDocument();
+    expect(screen.getByText(/已回复/)).toBeInTheDocument();
   });
 });
