@@ -3,7 +3,8 @@
 // 分组菜单（看板重构 Task 14）：MoreHorizontal 触发的下拉菜单——重命名（菜单内
 // 联输入，或经 onRenameRequest 委托宿主行内编辑）/ 换色（GROUP_PALETTE 固定
 // 5 语义色色板 + react-colorful 应用内取色器自定义 hex）/ 归档组
-// （ConfirmDialog 确认，文案 N 实时算）。
+// （ConfirmDialog 确认，文案 N 实时算）/ 删除分组（Dialog 确认 + 转移目标
+// Select，默认未分组，组内任务转移不丢失）。
 //
 // 点外关闭（UX 波 2 #4）：菜单打开时渲染全屏透明遮罩（fixed inset-0，照
 // BoardCard 右键菜单先例）；details 本体 z 序抬高——再点触发按钮本身仍切换。
@@ -101,9 +102,8 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
   const [customColorPreview, setCustomColorPreview] = useState<string>(() =>
     groupColorHex(group.color),
   );
-  const { runRename, runSetColor, requestArchive, archiveConfirm } = useGroupActions(
-    group.workspaceId,
-  );
+  const { runRename, runSetColor, requestArchive, archiveConfirm, requestDelete, deleteConfirm } =
+    useGroupActions(group.workspaceId);
 
   const closeMenu = useCallback((): void => {
     setOpenMenuId(null);
@@ -274,6 +274,16 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
                 >
                   归档组
                 </button>
+                <button
+                  type="button"
+                  className="block w-full px-3 py-1 text-left text-secondary hover:bg-surface-2"
+                  onClick={() => {
+                    requestDelete(group);
+                    closeMenu();
+                  }}
+                >
+                  删除分组
+                </button>
               </>
             )}
             {mode === 'rename' && (
@@ -355,6 +365,8 @@ export function GroupMenu({ group, triggerLabel, onRenameRequest }: GroupMenuPro
         )}
       {/* 归档确认框（useGroupActions 持有文案与级联刷新逻辑） */}
       {archiveConfirm}
+      {/* 删除确认框（useGroupActions 持有转移 Select 与任务列表刷新逻辑） */}
+      {deleteConfirm}
     </>
   );
 }

@@ -42,6 +42,12 @@ interface GroupState {
   archive: (id: string) => Promise<void>;
   /** 解档组（主进程事务内组+组内归档任务一并恢复）；成功即把返回行按 position 塞回；调用方需自行刷新任务列表 */
   unarchive: (id: string) => Promise<void>;
+  /**
+   * 删除组（主进程事务：组内任务转移到目标组后删组，moveToGroupId=null 落未分组）；
+   * 成功即本地剔除 + 重拉组列表，被删组若正被选中过滤 → 置 null（回「全部」）；
+   * 任务列表刷新由调用方承接（照归档组级联承接模式）
+   */
+  delete: (id: string, moveToGroupId: string | null) => Promise<void>;
   reset: () => void;
 }
 
@@ -110,6 +116,18 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   unarchive: async (id) => {
     const restored = await ipc.taskGroup.unarchive(id);
     set((s) => ({ groups: sortByPosition([...s.groups, restored]) }));
+  },
+
+  delete: async (id, moveToGroupId) => {
+    await ipc.taskGroup.delete(id, moveToGroupId); // 组不存在/目标非法 → 本地不动，错误上抛
+    set((s) => ({
+      groups: s.groups.filter((g) => g.id !== id),
+      // 被删组若正被选中过滤 → 回「全部」（悬空防御兜底已有）
+      ...(s.selectedGroupId === id ? { selectedGroupId: null } : {}),
+    }));
+    // 删除是破坏性操作：重拉组列表取权威值（不做本地推演）
+    const ws = get().currentWorkspaceId;
+    if (ws) await get().load(ws);
   },
 
   reset: () =>

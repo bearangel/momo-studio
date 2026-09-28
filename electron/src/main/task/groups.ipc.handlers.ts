@@ -9,6 +9,7 @@
 //   - taskGroup:reorder     按入参顺序整段重写 position
 //   - taskGroup:archive     归档组（单事务级联：组内非终态任务 cancel + 全组 archived）
 //   - taskGroup:unarchive   解档组（只复活组本体，任务保持归档）
+//   - taskGroup:delete      删除组（删容器不删内容：组内任务转移到目标组后删组）
 //
 // 设计要点：
 //   - CRUD / 级联事务语义单点在 storage/task-groups/repo.ts（Task 1），handler 只做透传
@@ -17,10 +18,12 @@
 //     单个失败只 logger.warn，不阻断归档结果
 //   - 任务归档改变 task:list 默认可见性，archive 成功后广播 P2P 快照
 //     （与既有写通道惯例对齐；unarchive 只复活组本体不动任务，不广播）
+//   - delete 的任务转移改变任务行（group_id/updated_at）→ 同样广播快照
 import { ipcMain } from 'electron';
 import {
   archiveGroup,
   createGroup,
+  deleteGroup,
   listGroups,
   reorderGroups,
   unarchiveGroup,
@@ -70,6 +73,16 @@ export function registerTaskGroupHandlers(): void {
   });
 
   ipcMain.handle('taskGroup:unarchive', async (_evt, id: string) => unarchiveGroup(id));
+
+  ipcMain.handle(
+    'taskGroup:delete',
+    async (_evt, id: string, moveToGroupId: string | null) => {
+      const res = deleteGroup(id, moveToGroupId);
+      // 转移改变任务行归属 → 广播 P2P 快照（与既有写通道惯例对齐）
+      void broadcastLocalTaskSnapshot();
+      return res;
+    },
+  );
 
   logger.info('TaskGroup IPC handlers 已注册');
 }

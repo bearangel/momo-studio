@@ -8,6 +8,8 @@
 //   - unarchiveGroup（组与组内全部归档任务一并恢复；他组/未分组不受影响）
 //   - reorderGroups（按入参顺序重写 position）
 //   - updateGroup（改名 / 换色 + bump updated_at）
+//   - deleteGroup（删容器不删内容：组内任务转移到目标组后删组，单事务；
+//     归档任务保持归档态；目标非法四种拒绝 + 组不存在拒绝）
 //
 // 测试隔离：对齐 tasks-repo.test.ts 既有 fixture——每个 case 独立 tmp 目录 +
 // closeDb + AP_USER_DATA_DIR 重置，真实 SQLite 文件库 + 全量 migrations，禁 mock。
@@ -19,11 +21,13 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
   createGroup,
+  getGroup,
   listGroups,
   archiveGroup,
   unarchiveGroup,
   reorderGroups,
   updateGroup,
+  deleteGroup,
 } from '../../src/main/storage/task-groups/repo';
 import { insertTask, getTask, listTasks, updateTask } from '../../src/main/storage/tasks/repo';
 
@@ -163,5 +167,86 @@ describe('task_groups repo', () => {
     expect(() => archiveGroup('G-999')).toThrow(/G-999 不存在/);
     expect(() => unarchiveGroup('G-999')).toThrow(/G-999 不存在/);
     expect(() => reorderGroups([])).not.toThrow();
+  });
+
+  describe('deleteGroup（删容器不删内容）', () => {
+    it('转移到未分组：活跃任务保留状态、归档任务保持归档态，组行删除', () => {
+      const g = createGroup({ workspaceId: 'ws1', name: '待删' });
+      const running = insertTask({
+        workspaceId: 'ws1', title: '跑着', creatorUserId: 'owner', status: 'in_progress', groupId: g.id,
+      });
+      const done = insertTask({
+        workspaceId: 'ws1', title: '完了', creatorUserId: 'owner', status: 'completed', groupId: g.id,
+      });
+      // 组内归档任务：先归档一条（task.archive 同款落点）
+      const archived = insertTask({
+        workspaceId: 'ws1', title: '已归', creatorUserId: 'owner', status: 'completed', groupId: g.id,
+      });
+      updateTask(archived.id, { archivedAt: Date.now() });
+
+      const res = deleteGroup(g.id, null);
+
+      expect(res.movedCount).toBe(3);
+      expect(getGroup(g.id)).toBeNull();
+      expect(listGroups('ws1', { archived: 'all' })).toHaveLength(0);
+      // 活跃任务保留原状态、落到未分组（group_id NULL）
+      expect(getTask(running.id)?.status).toBe('in_progress');
+      expect(getTask(running.id)?.groupId).toBeNull();
+      expect(getTask(done.id)?.groupId).toBeNull();
+      // 归档任务保持归档态（只改归属不动 archived_at）
+      expect(getTask(archived.id)?.groupId).toBeNull();
+      expect(getTask(archived.id)?.archivedAt).not.toBeNull();
+      expect(listTasks({ workspaceId: 'ws1' }).map((t) => t.id).sort()).toEqual(
+        [running.id, done.id].sort(),
+      );
+    });
+
+    it('转移到指定组：组内活跃+归档任务全部改挂目标组', () => {
+      const victim = createGroup({ workspaceId: 'ws2', name: '待删' });
+      const keeper = createGroup({ workspaceId: 'ws2', name: '承接' });
+      const active = insertTask({
+        workspaceId: 'ws2', title: '活跃', creatorUserId: 'owner', status: 'pending', groupId: victim.id,
+      });
+      const archived = insertTask({
+        workspaceId: 'ws2', title: '已归', creatorUserId: 'owner', status: 'completed', groupId: victim.id,
+      });
+      updateTask(archived.id, { archivedAt: Date.now() });
+
+      const res = deleteGroup(victim.id, keeper.id);
+
+      expect(res.movedCount).toBe(2);
+      expect(getTask(active.id)?.groupId).toBe(keeper.id);
+      expect(getTask(archived.id)?.groupId).toBe(keeper.id);
+      expect(getTask(archived.id)?.archivedAt).not.toBeNull();
+      expect(listGroups('ws2').map((x) => x.id)).toEqual([keeper.id]);
+    });
+
+    it('空组删除：movedCount=0，组行删除', () => {
+      const g = createGroup({ workspaceId: 'ws2', name: '空组' });
+      expect(deleteGroup(g.id, null)).toEqual({ movedCount: 0 });
+      expect(getGroup(g.id)).toBeNull();
+    });
+
+    it('目标非法四种拒绝：不存在 / 跨 workspace / 已归档 / 指向自身', () => {
+      const g = createGroup({ workspaceId: 'ws3', name: '待删' });
+      const otherWs = createGroup({ workspaceId: 'ws4', name: '别家' });
+      const archivedTarget = createGroup({ workspaceId: 'ws3', name: '归档目标' });
+      archiveGroup(archivedTarget.id);
+      insertTask({
+        workspaceId: 'ws3', title: '占位', creatorUserId: 'owner', status: 'draft', groupId: g.id,
+      });
+
+      expect(() => deleteGroup(g.id, 'G-999')).toThrow(/G-999 不存在/);
+      expect(() => deleteGroup(g.id, otherWs.id)).toThrow(/不在同一 workspace/);
+      expect(() => deleteGroup(g.id, archivedTarget.id)).toThrow(/已归档/);
+      expect(() => deleteGroup(g.id, g.id)).toThrow(/自身/);
+      // 拒绝路径零副作用：组与任务原样保留
+      expect(getGroup(g.id)?.name).toBe('待删');
+      expect(listTasks({ workspaceId: 'ws3' })).toHaveLength(1);
+    });
+
+    it('组不存在拒绝（错误路径）', () => {
+      expect(() => deleteGroup('G-999', null)).toThrow(/G-999 不存在/);
+    });
   });
 });

@@ -400,6 +400,8 @@ const api: ApiSurface = {
     archive: (id) =>
       invoke<{ cancelledIds: string[]; archivedCount: number }>('taskGroup:archive', id),
     unarchive: (id) => invoke<GroupRow>('taskGroup:unarchive', id),
+    delete: (id, moveToGroupId) =>
+      invoke<{ movedCount: number }>('taskGroup:delete', id, moveToGroupId),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

@@ -211,3 +211,44 @@ describe('taskGroup:unarchive IPC', () => {
     );
   });
 });
+
+describe('taskGroup:delete IPC', () => {
+  it('转移到目标组并删除组行,返回 movedCount + 广播快照', async () => {
+    const victim = createGroup({ workspaceId: WS, name: '待删' });
+    const keeper = createGroup({ workspaceId: WS, name: '承接' });
+    const t1 = seed('draft', { groupId: victim.id });
+    seed('completed', { groupId: victim.id });
+
+    const res = (await handlers.get('taskGroup:delete')!(null, victim.id, keeper.id)) as {
+      movedCount: number;
+    };
+
+    expect(res).toEqual({ movedCount: 2 });
+    expect(listTasks({ workspaceId: WS }).every((t) => t.groupId === keeper.id)).toBe(true);
+    expect(listTasks({ workspaceId: WS }).map((t) => t.id)).toContain(t1.id);
+    expect((await handlers.get('taskGroup:list')!(null, WS)) as GroupRow[]).toHaveLength(1);
+    // 转移改变任务行 → 触发 P2P 快照广播(与既有写通道惯例对齐)
+    expect(broadcastSpy).toHaveBeenCalled();
+  });
+
+  it('moveToGroupId=null 转移到未分组', async () => {
+    const g = createGroup({ workspaceId: WS, name: '待删' });
+    const t = seed('draft', { groupId: g.id });
+
+    const res = (await handlers.get('taskGroup:delete')!(null, g.id, null)) as {
+      movedCount: number;
+    };
+
+    expect(res.movedCount).toBe(1);
+    expect(listTasks({ workspaceId: WS }).map((x) => x.id)).toEqual([t.id]);
+    expect(listTasks({ workspaceId: WS })[0]?.groupId).toBeNull();
+  });
+
+  it('目标非法 / 组不存在拒绝(错误路径)', async () => {
+    const g = createGroup({ workspaceId: WS, name: '待删' });
+    await expect(handlers.get('taskGroup:delete')!(null, g.id, g.id)).rejects.toThrow('自身');
+    await expect(handlers.get('taskGroup:delete')!(null, 'no-such-id', null)).rejects.toThrow(
+      '不存在',
+    );
+  });
+});

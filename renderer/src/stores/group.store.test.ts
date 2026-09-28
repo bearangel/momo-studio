@@ -19,6 +19,7 @@ const mockApi = {
     reorder: vi.fn().mockResolvedValue(undefined),
     archive: vi.fn(),
     unarchive: vi.fn(),
+    delete: vi.fn(),
   },
 };
 
@@ -50,6 +51,7 @@ describe('group.store（Task 10 任务组状态）', () => {
     mockApi.taskGroup.update.mockReset();
     mockApi.taskGroup.archive.mockReset();
     mockApi.taskGroup.unarchive.mockReset();
+    mockApi.taskGroup.delete.mockReset();
   });
 
   it('load 拉取组列表写入 store 且 loading 复位', async () => {
@@ -174,6 +176,54 @@ describe('group.store（Task 10 任务组状态）', () => {
     expect(mockApi.taskGroup.unarchive).toHaveBeenCalledWith('G-002');
     expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['G-001', 'G-002', 'G-003']);
     expect(useGroupStore.getState().groups[1]?.archivedAt).toBeNull(); // 解档后的返回行
+  });
+
+  it('delete 成功后本地剔除该组并重拉组列表（契约锁 (id, moveToGroupId) 入参）', async () => {
+    useGroupStore.setState({
+      currentWorkspaceId: 'ws1',
+      groups: [
+        mkGroup({ id: 'G-001', name: '一', position: 1024 }),
+        mkGroup({ id: 'G-002', name: '二', position: 2048 }),
+      ],
+    });
+    mockApi.taskGroup.delete.mockResolvedValue({ movedCount: 3 });
+    // 重拉返回权威值：只剩 G-002
+    mockApi.taskGroup.list.mockResolvedValue([mkGroup({ id: 'G-002', name: '二', position: 2048 })]);
+
+    await useGroupStore.getState().delete('G-001', null);
+
+    expect(mockApi.taskGroup.delete).toHaveBeenCalledWith('G-001', null);
+    expect(mockApi.taskGroup.list).toHaveBeenCalledWith('ws1');
+    expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['G-002']);
+  });
+
+  it('delete 被删组正被选中过滤 → selectedGroupId 置 null（回「全部」）', async () => {
+    useGroupStore.setState({
+      currentWorkspaceId: 'ws1',
+      groups: [mkGroup({ id: 'G-001', name: '一' }), mkGroup({ id: 'G-002', name: '二' })],
+      selectedGroupId: 'G-001',
+    });
+    mockApi.taskGroup.delete.mockResolvedValue({ movedCount: 0 });
+    mockApi.taskGroup.list.mockResolvedValue([mkGroup({ id: 'G-002', name: '二' })]);
+
+    await useGroupStore.getState().delete('G-001', 'G-002');
+
+    expect(useGroupStore.getState().selectedGroupId).toBeNull();
+    expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['G-002']);
+  });
+
+  it('delete 失败 rethrow 且本地不动（错误路径）', async () => {
+    useGroupStore.setState({
+      currentWorkspaceId: 'ws1',
+      groups: [mkGroup({ id: 'G-001', name: '一' })],
+      selectedGroupId: 'G-001',
+    });
+    mockApi.taskGroup.delete.mockRejectedValue(new Error('转移目标组已归档，不能作为转移目标'));
+
+    await expect(useGroupStore.getState().delete('G-001', 'G-009')).rejects.toThrow('已归档');
+    expect(useGroupStore.getState().groups.map((g) => g.id)).toEqual(['G-001']);
+    expect(useGroupStore.getState().selectedGroupId).toBe('G-001');
+    expect(mockApi.taskGroup.list).not.toHaveBeenCalled(); // 失败不重拉
   });
 
   it('reset 清空组列表与错误态', async () => {

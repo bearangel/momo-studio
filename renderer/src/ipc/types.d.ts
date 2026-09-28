@@ -358,6 +358,11 @@ export interface TaskGroupApiSurface {
   archive(id: string): Promise<{ cancelledIds: string[]; archivedCount: number }>;
   /** 解档组（只复活组本体，任务保持归档） */
   unarchive(id: string): Promise<GroupRow>;
+  /**
+   * 删除组（删容器不删内容）：单事务内组内全部任务（活跃+已归档，归档态保留）
+   * 转移到目标组后删组行。moveToGroupId=null 落未分组；返回转移任务数。
+   */
+  delete(id: string, moveToGroupId: string | null): Promise<{ movedCount: number }>;
 }
 
 export interface StartAgentInput {

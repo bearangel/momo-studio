@@ -8,6 +8,8 @@
 //   - 归档是单事务级联：组内非终态任务先 cancel，再全组任务 + 组本体置 archived_at，
 //     任一步失败整体回滚；cancelledIds 返回给 IPC 层补执行中断（abort 是进程级
 //     副作用，不入 DB 事务）
+//   - 删除是「删容器不删内容」：组内任务（活跃+已归档）转移到目标组（默认
+//     未分组）后删组行，单事务；三段式处置的终态（归档可逆 / 转移合并 / 删除打散）
 import { getDb } from '../db';
 import { transitionTaskStatus, listTasks } from '../tasks/repo';
 import { isTerminal } from '../tasks/state-machine';
@@ -177,4 +179,41 @@ export function unarchiveGroup(id: string): GroupRow {
     db.prepare('UPDATE task_groups SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
   })();
   return getGroup(id)!;
+}
+
+/**
+ * 删除组（删容器不删内容）：单事务内组内全部任务（活跃+已归档，归档态原样
+ * 保留）转移到目标组——moveToGroupId=null 落未分组——再删除组行。返回
+ * movedCount（转移的任务总数，含归档）。
+ *
+ * 目标校验（违反抛中文 Error，事务外先行拒绝）：moveToGroupId 非 null 时须
+ * ① 存在 ② 与被删组同 workspace ③ 未归档 ④ ≠ 被删组自身。被删组自身允许
+ * 已归档（三段式处置：归档组同样可删，组内归档任务随转移保留归档态）。
+ */
+export function deleteGroup(id: string, moveToGroupId: string | null): { movedCount: number } {
+  const db = getDb();
+  const group = getGroup(id);
+  if (!group) throw new Error(`task_group ${id} 不存在`);
+  if (moveToGroupId !== null) {
+    if (moveToGroupId === id) {
+      throw new Error('转移目标不能是被删除的组自身');
+    }
+    const target = getGroup(moveToGroupId);
+    if (!target) throw new Error(`task_group ${moveToGroupId} 不存在`);
+    if (target.workspaceId !== group.workspaceId) {
+      throw new Error('转移目标组与被删除组不在同一 workspace');
+    }
+    if (target.archivedAt != null) {
+      throw new Error('转移目标组已归档，不能作为转移目标');
+    }
+  }
+  const now = Date.now();
+  return db.transaction((): { movedCount: number } => {
+    // 只改归属不动 archived_at：归档任务保持归档态转移到目标组
+    const movedCount = db
+      .prepare('UPDATE tasks SET group_id = ?, updated_at = ? WHERE group_id = ?')
+      .run(moveToGroupId, now, id).changes;
+    db.prepare('DELETE FROM task_groups WHERE id = ?').run(id);
+    return { movedCount };
+  })();
 }
