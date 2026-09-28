@@ -152,16 +152,6 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       <div className="flex items-center justify-between p-3 border-b border-subtle">
         <span className="font-medium">#{task.id}</span>
         <div className="flex items-center gap-1">
-          {!terminal && (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label="编辑任务"
-              onClick={() => setEditOpen(true)}
-            >
-              编辑
-            </Button>
-          )}
           <button
             type="button"
             aria-label="关闭"
@@ -326,6 +316,16 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         )}
       </div>
       <div className="p-3 border-t border-subtle flex gap-2">
+        {!terminal && (
+          <Button
+            variant="secondary"
+            aria-label="编辑任务"
+            onClick={() => setEditOpen(true)}
+            className="flex-none px-4"
+          >
+            编辑
+          </Button>
+        )}
         {canStart && (
           <Button variant="primary" onClick={handleStart} className="flex-1">
             启动
@@ -342,7 +342,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           </Button>
         )}
         {!terminal && (
-          <Button variant="ghost" onClick={handleCancel} className="flex-none px-4">
+          <Button variant="danger" onClick={handleCancel} className="flex-1">
             取消任务
           </Button>
         )}
