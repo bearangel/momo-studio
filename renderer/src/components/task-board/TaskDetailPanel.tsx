@@ -321,7 +321,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             variant="secondary"
             aria-label="编辑任务"
             onClick={() => setEditOpen(true)}
-            className="flex-none px-4"
+            className="flex-1"
           >
             编辑
           </Button>
@@ -332,7 +332,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           </Button>
         )}
         {canPause && (
-          <Button variant="ghost" onClick={handlePause} className="flex-none px-4">
+          <Button variant="ghost" onClick={handlePause} className="flex-1">
             暂停
           </Button>
         )}
