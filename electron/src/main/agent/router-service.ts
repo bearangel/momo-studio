@@ -247,6 +247,11 @@ export class RouterService {
 
     const task: TaskConfig = {
       taskId: null,
+      // 任务宿主回合标记（turn reconciliation spec §6）：kickoff 来源任务 ID
+      // 沿既有 sourceTaskId 透传链织入（executor sendKickoff → sendUserMessage →
+      // 此处）。不走 taskId 通道——taskId 非空会触发 agent-runner 的 task-driven
+      // 生命周期语义（task-end 终态自动转换），kickoff 流必须保持 ephemeral。
+      ...(input.sourceTaskId ? { hostTaskId: input.sourceTaskId } : {}),
       executionSessionId: input.sessionId,
       body: input.body,
       streamSessionId: input.streamSessionId ?? randomUUID(),

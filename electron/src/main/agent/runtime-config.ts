@@ -149,6 +149,16 @@ export interface RuntimeConfig {
    * 的 taskId 来源，由 stream-relay 落到该流全部消息行的 task_id 列。
    */
   chainTaskId?: string;
+  /**
+   * 任务宿主回合标记（turn reconciliation spec 2026-09-28 §6 前置小改）：
+   * kickoff 委派注入触发的回合所宿主的任务板任务 ID（runTaskChatLoop 织入）。
+   * 与 currentTaskId 分属两个语义（boundary-rules 一义一名）——currentTaskId =
+   * task-driven 生命周期任务（mandate 门控 / 账本挂靠 / task-end 终态转换全套）；
+   * hostTaskId 仅标记「本回合由任务简报触发」，供终文前收尾对账门禁与 sweep
+   * 门控消费，不改变 ephemeral chat 生命周期。ID 单点仍是 executor 放行链的
+   * 任务主键（sourceTaskId 透传），本字段只是其回合级载体，禁止中途再生成。
+   */
+  hostTaskId?: string;
   // === 压缩重构（spec 2026-09-09 §2.3）===
   /** 模型上下文窗口（token）；0=未知（auto 阈值压缩 fail-safe 跳过） */
   contextWindow: number;
@@ -238,6 +248,13 @@ export interface TaskConfig {
   type: 'task-config';
   /** task 主键；null = ephemeral chat（非 task 调度的即时对话） */
   taskId: string | null;
+  /**
+   * 任务宿主回合标记（turn reconciliation spec 2026-09-28 §6）：kickoff 来源
+   * 任务 ID（RouteService 从 sourceTaskId 透传）。与 taskId 语义分立——taskId
+   * 非空 = task-driven 生命周期（task-end 终态自动转换），hostTaskId 仅供
+   * runtime 收尾对账门禁消费，ephemeral 生命周期不变。缺省 = 手输消息回合。
+   */
+  hostTaskId?: string;
   /** 执行房间 ID（agent 在此房间输出流式回复 + 持久化最终 m.room.message） */
   executionSessionId: string;
   /** 用户输入的正文（替代 v1 的 Matrix event body） */
