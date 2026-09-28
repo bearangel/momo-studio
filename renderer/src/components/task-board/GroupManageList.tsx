@@ -283,7 +283,7 @@ export function GroupManageList() {
   return (
     <section aria-label="分组管理" className="flex flex-col gap-1 px-3 py-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-tertiary">分组</span>
+        <span className="text-xs font-medium text-tertiary">任务分组</span>
         <button
           type="button"
           aria-label="新建组"

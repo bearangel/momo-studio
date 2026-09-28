@@ -110,10 +110,7 @@ export function TaskSidebarPanel() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="px-3 pt-3 pb-1 shrink-0">
-        <span className="text-sm font-medium text-primary">任务</span>
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pt-1">
         <GroupManageList />
       </div>
       {/* 归档入口：计数 = 当前 workspace 归档任务数 */}
