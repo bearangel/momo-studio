@@ -28,6 +28,11 @@ const mockApi = {
     getMessages: getMessagesMock,
     deleteMessages: deleteMessagesMock,
   },
+  // 撤回联动取消（G3）：弹窗 load 即调 task.list 预检关联任务；默认无关联
+  task: {
+    list: vi.fn().mockResolvedValue([]),
+    cancel: vi.fn().mockResolvedValue(undefined),
+  },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 
