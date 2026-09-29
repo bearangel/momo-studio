@@ -31,6 +31,8 @@ beforeEach(() => {
   // store 动作已被 setState 覆写不会真正触达 IPC——此桩仅保 import 期安全
   (globalThis as unknown as { window: { api: Record<string, unknown> } }).window.api = {};
   useUiStore.setState({ setActiveView: vi.fn() } as never);
+  // loadOlderError 复位：错误路径用例经 spy 写入后跨用例残留会污染后续循环判定
+  useSessionStore.setState({ loadOlderError: null } as never);
 });
 
 afterEach(() => {
@@ -101,10 +103,75 @@ describe('locateMessage', () => {
     useSessionStore.setState({
       activeSessionId: null,
       messagesBySession: new Map(),
-      selectSession: vi.fn().mockResolvedValue(undefined),
+      // 真实语义对齐：selectSession 成功必写 messagesBySession key（空数组也写），
+      // 否则会命中 ensureSession 的吞错 post-check
+      selectSession: vi.fn().mockImplementation(async () => {
+        useSessionStore.setState({
+          activeSessionId: 'ses-1',
+          messagesBySession: new Map([['ses-1', []]]),
+        } as never);
+      }),
       loadOlder: vi.fn(),
     } as never);
     expect(await locateMessage('ses-1', null)).toBe('entered');
+  });
+
+  it('selectSession reject → toast 吞错并返回 message-missing', async () => {
+    useSessionStore.setState({
+      activeSessionId: null,
+      messagesBySession: new Map(),
+      selectSession: vi.fn().mockRejectedValue(new Error('IPC 断开')),
+      loadOlder: vi.fn(),
+    } as never);
+    expect(await locateMessage('ses-1', 'm-1')).toBe('message-missing');
+  });
+
+  it('selectSession 吞错（resolve 但不写 messagesBySession key，生产行为）→ post-check 降级 message-missing，不进翻页循环', async () => {
+    const loadOlder = vi.fn();
+    useSessionStore.setState({
+      activeSessionId: null,
+      messagesBySession: new Map(),
+      // 模拟真实 selectSession 吞错：getMessages 失败只 set({error})，
+      // 不 reject 也不写 messagesBySession key（session.store.ts:257-259）
+      selectSession: vi.fn().mockImplementation(async () => {
+        useSessionStore.setState({ activeSessionId: 'ses-1' } as never);
+      }),
+      loadOlder,
+      // 显式置 true：防前序用例残留 false 让循环被 hasMore 短路（污染假绿）——
+      // post-check 必须在「有更多历史」的前提下仍然拦住
+      hasMoreBySession: new Map([['ses-1', true]]),
+    } as never);
+    expect(await locateMessage('ses-1', 'm-1')).toBe('message-missing');
+    expect(loadOlder).not.toHaveBeenCalled();
+  });
+
+  it('loadOlder 持续失败（store 吞错 set loadOlderError，hasMore 恒 true）→ 本轮即如实中止，不空转 50 批', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-1',
+      messagesBySession: new Map([['ses-1', [makeMsg({ id: 'm-other' })]]]),
+      hasMoreBySession: new Map([['ses-1', true]]),
+      selectSession: vi.fn(),
+      // 模拟真实 loadOlder catch 行为：set loadOlderError，不动 hasMoreBySession
+      loadOlder: vi.fn().mockImplementation(async () => {
+        useSessionStore.setState({ loadOlderError: '加载更早消息失败：boom' } as never);
+      }),
+    } as never);
+    expect(await locateMessage('ses-1', 'm-gone')).toBe('message-missing');
+    expect(useSessionStore.getState().loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it('无进展守卫（空消息列表 + hasMore 恒 true + loadOlder no-op）→ 首轮 break 降级，不自旋', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-1',
+      // selectSession 成功写入空数组（空会话），loadOlder 空列表守卫即刻 return
+      messagesBySession: new Map([['ses-1', []]]),
+      hasMoreBySession: new Map([['ses-1', true]]),
+      loadOlderError: null,
+      selectSession: vi.fn(),
+      loadOlder: vi.fn().mockResolvedValue(undefined),
+    } as never);
+    expect(await locateMessage('ses-1', 'm-gone')).toBe('message-missing');
+    expect(useSessionStore.getState().loadOlder).toHaveBeenCalledTimes(1);
   });
 });
 

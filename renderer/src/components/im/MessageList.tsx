@@ -15,6 +15,7 @@ import { useBotNameMap } from '../../lib/useBotNames';
 import { MessageBubble } from './MessageBubble';
 import { EmptyState } from '../ui/EmptyState';
 import { MessageFlashStyle } from '../common/MessageFlash';
+import { isTopLevelMessage } from '../../lib/locate-message';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -139,13 +140,9 @@ export function MessageList() {
   // 全挂父 messageId；旧 groupBySegment 用分段行替换父消息会让富信息在
   // 实时/切回/重启三路全部丢失。父消息是唯一显示主体（end 时 body 已是
   // 全部 text_delta 聚合，内容无损）。
-  const visibleMessages = (messages ?? []).filter((msg) => {
-    if (msg.eventType === 'io.momo-studio.dispatch') return false;
-    if (msg.eventType === 'io.momo-studio.task_reply') return false;
-    if (msg.parentStreamSessionId) return false;
-    if (msg.segmentOf !== null) return false;
-    return true;
-  });
+  // G2 spec §4.2 单源：顶层渲染口径统一消费 isTopLevelMessage（与定位链路
+  // 同源），消除此处原内联副本与定位口径的微差（真值判断 vs !== null）
+  const visibleMessages = (messages ?? []).filter(isTopLevelMessage);
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden py-4">
