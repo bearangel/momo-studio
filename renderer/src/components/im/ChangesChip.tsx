@@ -7,10 +7,11 @@
 // 挂载即懒查一次（终态消息的条目在挂载前已全部落账）；失败 warn 留痕不弹错。
 // workspaceId null（旧数据）/ 查询失败 / 空账 → 不渲染。
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, FileDiff } from 'lucide-react';
+import { FileDiff } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import type { ImMessage, JournalEntryView } from '../../ipc/types';
-import { DiffBlock, FileChangeGroup, groupByPath } from '../common/JournalChangeViews';
+import { FileChangeGroup, groupByPath } from '../common/JournalChangeViews';
+import { JournalFileChangesList } from '../common/JournalFileChangesList';
 
 export interface ChangesChipProps {
   message: ImMessage;
@@ -54,39 +55,9 @@ export function ChangesChip({ message }: ChangesChipProps) {
       </button>
       {open && (
         <div className="space-y-1 border-t border-subtle px-2 py-1.5">
-          {fileGroups.map((g) => (
-            <FileRow key={g.path} group={g} />
-          ))}
+          <JournalFileChangesList entries={entries} />
         </div>
       )}
-    </div>
-  );
-}
-
-function FileRow({ group }: { group: FileChangeGroup }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const renameFrom = group.first.oldPath;
-  return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full cursor-pointer items-center gap-1 py-0.5 text-left font-mono text-[11px] text-primary hover:text-accent-500"
-      >
-        <span className="shrink-0 text-tertiary" aria-hidden>
-          {open ? (
-            <ChevronDown size={11} strokeWidth={1.75} />
-          ) : (
-            <ChevronRight size={11} strokeWidth={1.75} />
-          )}
-        </span>
-        <span className="truncate">
-          {renameFrom !== null ? `${renameFrom} → ${group.path}` : group.path}
-        </span>
-        <span className="shrink-0 text-tertiary">{group.entries.length} 条</span>
-      </button>
-      {open && <DiffBlock beforeText={group.first.beforeText} afterText={group.last.afterText} />}
     </div>
   );
 }
