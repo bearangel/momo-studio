@@ -14,6 +14,7 @@ import { useStreamStore } from '../../stores/stream.store';
 import { useBotNameMap } from '../../lib/useBotNames';
 import { MessageBubble } from './MessageBubble';
 import { EmptyState } from '../ui/EmptyState';
+import { MessageFlashStyle } from '../common/MessageFlash';
 
 export function MessageList() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -154,13 +155,17 @@ export function MessageList() {
       {activeSessionId && !hasMore && !loadingOlder && (messages?.length ?? 0) > 0 && (
         <div className="text-center text-xs text-tertiary py-2">— 已到顶部 —</div>
       )}
+      {/* 消息锚点归一（G2 spec §4.2）：全部顶层可见行由包装 div 提供 `msg-<id>` 锚点
+          （owner 静态气泡此前无锚点）；闪烁 keyframes 常驻挂载，供定位视觉共用 */}
+      <MessageFlashStyle />
       {visibleMessages.map((msg) => (
-        <MessageBubble
-          key={msg.id}
-          message={msg}
-          isSelf={msg.sender === currentUserId}
-          senderName={botNameByUserId.get(msg.sender)}
-        />
+        <div key={msg.id} id={`msg-${msg.id}`}>
+          <MessageBubble
+            message={msg}
+            isSelf={msg.sender === currentUserId}
+            senderName={botNameByUserId.get(msg.sender)}
+          />
+        </div>
       ))}
     </div>
   );
