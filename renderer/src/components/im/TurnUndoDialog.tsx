@@ -7,7 +7,7 @@
 //     漂移黄标、no-op 计数）+ 全局强制勾选；确认 = revert（组内全部 id，
 //     整体原子）→ 零 failed 才删气泡（deleteMessages）→ reloadMessages
 //   - 组内无变更 → 弹窗 B：仅删除确认
-//   - G3 联动（spec §5）：并行预检组内消息关联任务；未启动默认勾选撤回后一并取消，
+//   - G3 联动（spec §5）：加载阶段预检组内消息关联任务；未启动默认勾选撤回后一并取消，
 //     进行中/终态明示不自动处置；cancel 失败逐条呈现，已撤回对话不回滚
 //   - 失败路径：revert 出现 failed 或任一 IPC 抛错 → 停在弹窗内呈现错误，
 //     气泡保留（错误不静默；重试走再次点击撤回）
@@ -61,7 +61,7 @@ export function TurnUndoDialog({ workspaceId, sessionId, onClose }: Props) {
         }
         const all = await ipc.journal.list({ workspaceId, sessionId });
         const groupEntries = all.filter((e) => seg.streamIds.includes(e.streamSessionId));
-        // G3：并行预检受影响任务（sourceMessageId ∈ 组内消息 id）
+        // G3：加载阶段预检受影响任务（sourceMessageId ∈ 组内消息 id）
         const tasks = await ipc.task.list({
           workspaceId,
           sourceMessageIds: seg.messageIds,

@@ -1,7 +1,7 @@
 // renderer/src/components/im/TurnUndoDialog.test.tsx
 //
 // 撤回联动取消测试（G3 spec §5）：
-//   - 预检并行 task.list({sourceMessageIds: turn.messageIds})
+//   - task.list 预检（sourceMessageIds: turn.messageIds）
 //   - 分层矩阵：未启动默认勾选 / 进行中无勾选框 / 终态灰显
 //   - 确认序：journal.revert → session.deleteMessages → reload → task.cancel（勾选集）
 //   - cancel 失败 → error phase 逐条呈现（对话已撤回事实保留）
@@ -123,6 +123,14 @@ describe('TurnUndoDialog — 确认执行联动', () => {
     // 默认勾选语义：两个未启动任务都被取消
     await waitFor(() => expect(taskCancelMock).toHaveBeenCalledWith('task-1'));
     await waitFor(() => expect(taskCancelMock).toHaveBeenCalledWith('task-2'));
+    // 顺序锁：先撤后取消（spec §5.2——反向是「任务取消了但对话没撤掉」脏状态）
+    const cancelOrder = taskCancelMock.mock.invocationCallOrder[0];
+    const deleteOrder = deleteMessagesMock.mock.invocationCallOrder[0];
+    // 前面的 waitFor 已保证各至少调用一次，这里只做窄化
+    if (cancelOrder === undefined || deleteOrder === undefined) {
+      throw new Error('invocationCallOrder 缺失：deleteMessages 或 task.cancel 未被调用');
+    }
+    expect(cancelOrder).toBeGreaterThan(deleteOrder);
   });
 
   it('取消勾选的任务不被 cancel', async () => {
