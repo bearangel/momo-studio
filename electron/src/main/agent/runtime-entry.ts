@@ -2208,8 +2208,14 @@ export async function doExecuteTool(
       // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
       readTracker,
       // v2.5 变更账本：task-driven 派发的任务 id（快速会话无任务 → undefined，
-      // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红
-      taskId: config.currentTaskId,
+      // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红。
+      // 2026-09-29 归因回填：kickoff ephemeral 流（f36f1a2a 起 taskId=null 只带
+      // hostTaskId）的文件变更也归因到宿主任务——回退链 currentTaskId → hostTaskId。
+      // 仅影响记账归因：toolCtx.taskId 消费面只有 change-journal 记账层，
+      // task-driven 生命周期语义读 config.currentTaskId，不受此回退影响。
+      // 双缺省保持 undefined（ToolContext.taskId 类型 string | undefined），
+      // 记账层 buildRecordCtx 归一为 null——与快速会话既有语义一致。
+      taskId: config.currentTaskId ?? config.hostTaskId,
       // 归属制：AGENT_CONFIG 已强校验携带 agentAssignmentId（runtime-config parse）
       agentInstanceId: config.agentAssignmentId,
       // 子进程落盘基准（apply_patch 备份）：主进程经 AGENT_CONFIG 定型注入；

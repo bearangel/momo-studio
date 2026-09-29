@@ -321,6 +321,19 @@ describe('变更账本生产接线回归锁（doExecuteTool 真实路由，Task 
     expect(entries[0]?.taskId).toBeNull();
   });
 
+  it('6b) currentTaskId 缺省但 hostTaskId 有值（kickoff ephemeral 流）→ 归因到宿主任务', async () => {
+    // 2026-09-29 归因回填：f36f1a2a 起 kickoff 流 taskId=null 只带 hostTaskId——
+    // 记账归因回退 hostTaskId（生命周期语义不受影响，消费面仅记账层）
+    await doExecuteTool(
+      call('write_file', { path: 'kickoff.ts', content: 'kickoff' }),
+      ctx,
+      makeConfig({ hostTaskId: 'T-77' }),
+    );
+    const entries = entriesOfThisStream();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.taskId).toBe('T-77');
+  });
+
   it('7) 降级：store 未注入 → 记账跳过但工具执行成功（安全网不变故障点）', async () => {
     __setJournalStoreForTest(null);
     await expect(
