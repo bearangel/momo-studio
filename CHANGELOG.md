@@ -6,6 +6,15 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 会话与任务联动优化（G1 变更显示统一 / G2 双锚点定位 / G3 撤回联动取消）
+
+设计依据：`docs/specs/2026-09-29-session-task-linkage-design.md`；实施计划：`docs/plans/2026-09-29-session-task-linkage.md`。上游：任务详情与来源会话之间「变更摘要不常显 / 消息定位无处落 / 撤回殃及任务」三处断链的收口。
+
+### 新增
+- **G1 任务变更显示统一**：抽取 `JournalFileChangesList` 共享文件行渲染件——任务详情「变更与回滚」摘要常显（journal.list 挂载即查，scan 保持懒执行），ChangesChip 薄壳化（同款视觉单源）
+- **G2 任务双锚点定位**：任务详情新增来源消息定位（分页循环查找 + 悬空/非顶层消息如实降级）与执行会话全状态回看；消息锚点归一 MessageList 行包装 + `msg-flash` 共享闪烁件
+- **G3 撤回联动取消**：TurnUndoDialog 撤回前预检关联任务（`listTasks` 新增 `sourceMessageIds` 集合过滤），未启动任务默认勾选一并取消——先撤后取消顺序锁（invocationCallOrder 回归锁），失败逐条呈现不中断
+
 ## [未发布] — v2.9 事件驱动 dispatch 与回执结果完整性（两轮 5-agent review 修复闭环）
 
 设计依据：`docs/specs/2026-09-24-v2.9-event-driven-dispatch.md`。上游：主机会话实测（followup 盲等 9 分钟 + 子 agent 长报告回执截断丢失）+ opencode/oh-my-openagent 契约调研。
