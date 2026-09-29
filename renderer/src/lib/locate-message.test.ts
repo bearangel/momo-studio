@@ -1,0 +1,166 @@
+// renderer/src/lib/locate-message.test.ts
+//
+// 定位链路测试（G2）：分页循环 / 悬空降级 / 非顶层行降级 / 执行会话锚点。
+// store 用真实模块 + setState 覆写动作（selectSession/loadOlder 为 spy）；
+// DOM 锚点用 jsdom 真实元素；scrollIntoView jsdom 未实现——prototype 桩。
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useSessionStore } from '../stores/session.store';
+import { useUiStore } from '../stores/ui.store';
+import { locateMessage, locateTaskExecution, isTopLevelMessage } from './locate-message';
+import type { ImMessage } from '../ipc/types';
+
+function makeMsg(overrides: Partial<ImMessage> = {}): ImMessage {
+  return {
+    id: 'm-1', sessionId: 'ses-1', sender: 'owner', body: '', eventType: 'm.room.message',
+    streamSessionId: null, parentStreamSessionId: null, segmentOf: null, segmentIndex: null,
+    status: 'done', source: 'local', workspaceId: 'ws-1', taskId: null, contextJson: null,
+    createdAt: 1, updatedAt: 1, ...overrides,
+  };
+}
+
+let anchorEl: HTMLDivElement;
+let scrollIntoView: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  scrollIntoView = vi.fn();
+  anchorEl = document.createElement('div');
+  anchorEl.id = 'msg-m-1';
+  anchorEl.scrollIntoView = scrollIntoView;
+  document.body.appendChild(anchorEl);
+  // 最小 window.api 桩：session.store 顶层 import ipc client（Proxy 透传），
+  // store 动作已被 setState 覆写不会真正触达 IPC——此桩仅保 import 期安全
+  (globalThis as unknown as { window: { api: Record<string, unknown> } }).window.api = {};
+  useUiStore.setState({ setActiveView: vi.fn() } as never);
+});
+
+afterEach(() => {
+  anchorEl.remove();
+});
+
+describe('locateMessage', () => {
+  it('已激活会话 + 消息已加载 → 直接定位（scrollIntoView + flash + 切 im 视图）', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-1',
+      messagesBySession: new Map([['ses-1', [makeMsg()]]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    const r = await locateMessage('ses-1', 'm-1');
+    expect(r).toBe('located');
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(useUiStore.getState().setActiveView).toHaveBeenCalledWith('im');
+  });
+
+  it('未激活会话 → 先 selectSession 再定位', async () => {
+    useSessionStore.setState({
+      activeSessionId: null,
+      messagesBySession: new Map([['ses-1', [makeMsg()]]]),
+      selectSession: vi.fn().mockImplementation(async () => {
+        useSessionStore.setState({ activeSessionId: 'ses-1' } as never);
+      }),
+      loadOlder: vi.fn(),
+    } as never);
+    const r = await locateMessage('ses-1', 'm-1');
+    expect(r).toBe('located');
+    expect(useSessionStore.getState().selectSession).toHaveBeenCalledWith('ses-1');
+  });
+
+  it('消息不在已加载窗口 → loadOlder 循环直到命中', async () => {
+    let olderLoaded = false;
+    useSessionStore.setState({
+      activeSessionId: 'ses-1',
+      messagesBySession: new Map([['ses-1', [makeMsg({ id: 'm-new' })]]]),
+      hasMoreBySession: new Map([['ses-1', true]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn().mockImplementation(async () => {
+        if (olderLoaded) return;
+        olderLoaded = true;
+        useSessionStore.setState({
+          messagesBySession: new Map([['ses-1', [makeMsg(), makeMsg({ id: 'm-new' })]]]),
+        } as never);
+      }),
+    } as never);
+    const r = await locateMessage('ses-1', 'm-1');
+    expect(r).toBe('located');
+    expect(useSessionStore.getState().loadOlder).toHaveBeenCalled();
+  });
+
+  it('到底仍未见（悬空 sourceMessageId）→ toast + message-missing（撤回降级路径）', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-1',
+      messagesBySession: new Map([['ses-1', [makeMsg({ id: 'm-other' })]]]),
+      hasMoreBySession: new Map([['ses-1', false]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    const r = await locateMessage('ses-1', 'm-gone');
+    expect(r).toBe('message-missing');
+  });
+
+  it('messageId null → 只切会话返回 entered', async () => {
+    useSessionStore.setState({
+      activeSessionId: null,
+      messagesBySession: new Map(),
+      selectSession: vi.fn().mockResolvedValue(undefined),
+      loadOlder: vi.fn(),
+    } as never);
+    expect(await locateMessage('ses-1', null)).toBe('entered');
+  });
+});
+
+describe('locateTaskExecution', () => {
+  it('锚点 = 已加载消息中 taskId 命中的最后一条顶层消息', async () => {
+    document.getElementById('msg-m-t2')?.remove();
+    const el2 = document.createElement('div');
+    el2.id = 'msg-m-t2';
+    el2.scrollIntoView = scrollIntoView;
+    document.body.appendChild(el2);
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([
+        ['ses-exec', [
+          makeMsg({ id: 'm-t1', taskId: 'task-1', sender: 'agent' }),
+          makeMsg({ id: 'm-t2', taskId: 'task-1', sender: 'agent' }),
+        ]],
+      ]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    const r = await locateTaskExecution('task-1', 'ses-exec');
+    expect(r).toBe('located');
+    expect(scrollIntoView).toHaveBeenCalled();
+    el2.remove();
+  });
+
+  it('命中行是非顶层（task_reply 被过滤）→ 降级 entered，不 toast 失败', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([
+        ['ses-exec', [makeMsg({ id: 'm-tr', taskId: 'task-1', eventType: 'io.momo-studio.task_reply' })]],
+      ]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    expect(await locateTaskExecution('task-1', 'ses-exec')).toBe('entered');
+  });
+
+  it('无 taskId 命中 → 只切会话 entered', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([['ses-exec', [makeMsg({ id: 'm-x' })]]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    expect(await locateTaskExecution('task-1', 'ses-exec')).toBe('entered');
+  });
+});
+
+describe('isTopLevelMessage', () => {
+  it('dispatch / task_reply / 嵌套行 / 分段行 → false；普通行 → true', () => {
+    expect(isTopLevelMessage(makeMsg())).toBe(true);
+    expect(isTopLevelMessage(makeMsg({ eventType: 'io.momo-studio.dispatch' }))).toBe(false);
+    expect(isTopLevelMessage(makeMsg({ eventType: 'io.momo-studio.task_reply' }))).toBe(false);
+    expect(isTopLevelMessage(makeMsg({ parentStreamSessionId: 's-1' }))).toBe(false);
+    expect(isTopLevelMessage(makeMsg({ segmentOf: 'm-0' }))).toBe(false);
+  });
+});
