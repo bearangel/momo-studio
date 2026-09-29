@@ -76,6 +76,8 @@ interface ListOpts {
   assigneeAgentId?: string;
   executionSessionId?: string;
   sourceSessionId?: string;
+  /** 按 source_message_id 集合过滤（会话任务联动 G3：撤回时命中受影响任务）；空数组跳过条件 */
+  sourceMessageIds?: string[];
   /** 归档三态透传（看板重构 Task 6）：'exclude' 默认 / 'only' 只回归档 / 'all' 全回 */
   archived?: 'exclude' | 'only' | 'all';
   orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';

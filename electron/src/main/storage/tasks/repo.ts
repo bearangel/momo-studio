@@ -327,6 +327,7 @@ export function getTask(id: string): TaskRow | null {
  * 多维过滤 + 排序的任务列表。
  *
  * 过滤：workspaceId / status（单个或数组）/ assigneeAgentId / executionSessionId / sourceSessionId /
+ *       sourceMessageIds（集合，空数组跳过）/
  *       archived（三态，默认 'exclude' 排除归档行）/ groupId（组过滤，null=只查未分组）。
  * 排序：priority（高优先 + created_at 升序兜底）/ scheduled_at（升序，NULLS LAST + created_at 兜底）/
  *       created_at（默认升序）/ created_at_desc（降序，配合 limit 截断保留最新 N 条——任务看板
@@ -339,6 +340,8 @@ export function listTasks(opts: {
   assigneeAgentId?: string;
   executionSessionId?: string;
   sourceSessionId?: string;
+  /** 按 source_message_id 集合过滤（会话任务联动 G3：撤回时命中受影响任务）；空数组跳过条件 */
+  sourceMessageIds?: string[];
   /** 归档三态：'exclude'（默认）只回活跃行；'only' 只回归档行；'all' 全回 */
   archived?: 'exclude' | 'only' | 'all';
   /** 看板分组过滤；null = 只查未分组（group_id IS NULL） */
@@ -374,6 +377,11 @@ export function listTasks(opts: {
   if (opts.sourceSessionId) {
     where.push('source_session_id = ?');
     params.push(opts.sourceSessionId);
+  }
+  if (opts.sourceMessageIds !== undefined && opts.sourceMessageIds.length > 0) {
+    const placeholders = opts.sourceMessageIds.map(() => '?').join(',');
+    where.push(`source_message_id IN (${placeholders})`);
+    params.push(...opts.sourceMessageIds);
   }
   const archivedMode = opts.archived ?? 'exclude';
   if (archivedMode === 'exclude') where.push('archived_at IS NULL');

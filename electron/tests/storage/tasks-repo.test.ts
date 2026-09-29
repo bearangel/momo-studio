@@ -284,3 +284,25 @@ describe('tasks repo', () => {
     expect(next).toBeNull();
   });
 });
+
+describe('listTasks sourceMessageIds 过滤（会话任务联动 G3）', () => {
+  // 注：brief 原文用 workspaceId 'ws-1'，本文件 bootstrap 的 FK seed 是 'ws1'，据此适配。
+  it('按 source_message_id IN 精确命中', () => {
+    insertTask({ workspaceId: 'ws1', title: 'A', creatorUserId: 'owner', sourceSessionId: 'ses-1', sourceMessageId: 'm-1' });
+    insertTask({ workspaceId: 'ws1', title: 'B', creatorUserId: 'owner', sourceSessionId: 'ses-1', sourceMessageId: 'm-2' });
+    insertTask({ workspaceId: 'ws1', title: 'C', creatorUserId: 'owner' });
+    const rows = listTasks({ workspaceId: 'ws1', sourceMessageIds: ['m-1'] });
+    expect(rows.map((r) => r.sourceMessageId)).toEqual(['m-1']);
+  });
+
+  it('空数组 → 跳过条件返回全量（不得变成空集——SQLite IN () 陷阱）', () => {
+    insertTask({ workspaceId: 'ws1', title: 'A', creatorUserId: 'owner', sourceMessageId: 'm-1' });
+    insertTask({ workspaceId: 'ws1', title: 'B', creatorUserId: 'owner' });
+    expect(listTasks({ workspaceId: 'ws1', sourceMessageIds: [] })).toHaveLength(2);
+  });
+
+  it('不传参数 → 行为不变（回归锁）', () => {
+    insertTask({ workspaceId: 'ws1', title: 'A', creatorUserId: 'owner', sourceMessageId: 'm-1' });
+    expect(listTasks({ workspaceId: 'ws1' })).toHaveLength(1);
+  });
+});
