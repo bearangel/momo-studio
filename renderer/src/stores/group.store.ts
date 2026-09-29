@@ -32,6 +32,18 @@ interface GroupState {
   /** 看板组过滤（UX 修复）：null=不过滤；不持久化，reset / 切 ws 清空 */
   selectedGroupId: string | null;
   setSelectedGroupId: (id: string | null) => void;
+  /**
+   * 归档组过滤（只读看板视图）：null=未选中；点击侧边栏归档组行置位，
+   * 主区看板切换为该组归档任务只读泳道。不持久化，reset / 切 ws 清空。
+   *
+   * 契约（单点在 store，调用方不做双清）：
+   *   - 消费者：侧边栏 ArchivedGroupSection 写、TaskBoardView 读
+   *   - 与 selectedGroupId 互斥：任一 setter 置位时强制清另一侧
+   *     （镜像活跃组 toggleSelect 的 `selected ? null : id` toggle 语义由调用方组装）
+   *   - unarchive 命中正查看的归档组时清除（组已回活跃集合，只读视图失效）
+   */
+  selectedArchivedGroupId: string | null;
+  setSelectedArchivedGroupId: (id: string | null) => void;
 
   load: (workspaceId: string) => Promise<void>;
   create: (input: Parameters<typeof ipc.taskGroup.create>[0]) => Promise<GroupRow>;
@@ -57,12 +69,14 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   error: null,
   currentWorkspaceId: null,
   selectedGroupId: null,
-  setSelectedGroupId: (id) => set({ selectedGroupId: id }),
+  selectedArchivedGroupId: null,
+  setSelectedGroupId: (id) => set({ selectedGroupId: id, selectedArchivedGroupId: null }),
+  setSelectedArchivedGroupId: (id) => set({ selectedArchivedGroupId: id, selectedGroupId: null }),
 
   load: async (workspaceId) => {
     if (get().currentWorkspaceId !== workspaceId) {
-      // 切 ws 连带清空组过滤——旧 ws 的选中组在新 ws 无意义
-      set({ currentWorkspaceId: workspaceId, groups: [], selectedGroupId: null });
+      // 切 ws 连带清空两组过滤——旧 ws 的选中组在新 ws 无意义
+      set({ currentWorkspaceId: workspaceId, groups: [], selectedGroupId: null, selectedArchivedGroupId: null });
     }
     set({ loading: true, error: null });
     try {
@@ -115,7 +129,11 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 
   unarchive: async (id) => {
     const restored = await ipc.taskGroup.unarchive(id);
-    set((s) => ({ groups: sortByPosition([...s.groups, restored]) }));
+    set((s) => ({
+      groups: sortByPosition([...s.groups, restored]),
+      // 正查看的归档组被解档 → 只读视图失效（组已回活跃集合）
+      ...(s.selectedArchivedGroupId === id ? { selectedArchivedGroupId: null } : {}),
+    }));
   },
 
   delete: async (id, moveToGroupId) => {
@@ -131,5 +149,12 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   },
 
   reset: () =>
-    set({ groups: [], loading: false, error: null, currentWorkspaceId: null, selectedGroupId: null }),
+    set({
+      groups: [],
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      selectedGroupId: null,
+      selectedArchivedGroupId: null,
+    }),
 }));

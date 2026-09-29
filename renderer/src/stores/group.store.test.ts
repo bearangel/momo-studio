@@ -44,6 +44,8 @@ describe('group.store（Task 10 任务组状态）', () => {
       loading: false,
       error: null,
       currentWorkspaceId: null,
+      selectedGroupId: null,
+      selectedArchivedGroupId: null,
     });
     mockApi.taskGroup.list.mockClear().mockResolvedValue([]);
     // 动作类 mock 每例自行配置返回值（mockReset 撤掉默认实现，忘配则响亮失败）
@@ -234,5 +236,61 @@ describe('group.store（Task 10 任务组状态）', () => {
 
     expect(useGroupStore.getState().groups).toEqual([]);
     expect(useGroupStore.getState().currentWorkspaceId).toBeNull();
+  });
+
+  // —— 归档组过滤（selectedArchivedGroupId）：互斥与清除单点在 store 动作内强制 ——
+
+  it('setSelectedGroupId 置位时清除 selectedArchivedGroupId（选中互斥单点强制）', () => {
+    useGroupStore.setState({ selectedGroupId: null, selectedArchivedGroupId: 'G-Z1' });
+
+    useGroupStore.getState().setSelectedGroupId('G-001');
+
+    expect(useGroupStore.getState().selectedGroupId).toBe('G-001');
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBeNull();
+  });
+
+  it('setSelectedArchivedGroupId 置位时清除 selectedGroupId（反向互斥）', () => {
+    useGroupStore.setState({ selectedGroupId: 'G-001', selectedArchivedGroupId: null });
+
+    useGroupStore.getState().setSelectedArchivedGroupId('G-Z1');
+
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBe('G-Z1');
+    expect(useGroupStore.getState().selectedGroupId).toBeNull();
+  });
+
+  it('unarchive 命中正查看的归档组 → selectedArchivedGroupId 清空', async () => {
+    useGroupStore.setState({ selectedArchivedGroupId: 'G-Z1' });
+    mockApi.taskGroup.unarchive.mockResolvedValue(mkGroup({ id: 'G-Z1', name: '归档组' }));
+
+    await useGroupStore.getState().unarchive('G-Z1');
+
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBeNull();
+  });
+
+  it('unarchive 不命中当前查看的归档组 → selectedArchivedGroupId 不动', async () => {
+    useGroupStore.setState({ selectedArchivedGroupId: 'G-Z2' });
+    mockApi.taskGroup.unarchive.mockResolvedValue(mkGroup({ id: 'G-Z1', name: '归档组一' }));
+
+    await useGroupStore.getState().unarchive('G-Z1');
+
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBe('G-Z2');
+  });
+
+  it('load 切 workspace 时连带清空 selectedArchivedGroupId（旧 ws 的选中无意义）', async () => {
+    useGroupStore.setState({ currentWorkspaceId: 'ws1', selectedArchivedGroupId: 'G-Z1' });
+    mockApi.taskGroup.list.mockResolvedValue([]);
+
+    await useGroupStore.getState().load('ws2');
+
+    expect(useGroupStore.getState().currentWorkspaceId).toBe('ws2');
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBeNull();
+  });
+
+  it('reset 清空 selectedArchivedGroupId', () => {
+    useGroupStore.setState({ selectedArchivedGroupId: 'G-Z1' });
+
+    useGroupStore.getState().reset();
+
+    expect(useGroupStore.getState().selectedArchivedGroupId).toBeNull();
   });
 });

@@ -7,8 +7,11 @@
 //     ArchivePanel）/ 新建任务（CreateTaskDialog）
 //   - BoardCanvas：DndContext 拖拽画板（泳道 splitLanes / 平铺单道；拖拽三分支
 //     语义与 DragOverlay 见 BoardCanvas 头注）
+//   - 归档视图分支（selectedArchivedGroupId 非 null）：ArchivedBoardSection 只读
+//     泳道替换 BoardCanvas（数据本组件拉取；组行点击入口在侧边栏
+//     ArchivedGroupSection，选中互斥契约单点在 group.store）
 //   - selectedTaskId → TaskDetailDrawer 右侧滑入抽屉叠加（主区互斥渲染退役，
-//     Task 12 起画板常驻）
+//     Task 12 起画板常驻；进入归档视图时清空防可编辑抽屉叠在只读视图上）
 //
 // 数据流（保持不变）：
 //   - mount 时 task.store.load(workspaceId) 全生命周期拉取 + 每 5s 轮询
@@ -23,7 +26,7 @@
 // workspace 切换由父层（MiddlePanel）控制，本组件按 workspaceId prop 重 load。
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ipc } from '../../ipc/client';
-import type { GlobalSettings } from '../../ipc/types';
+import type { GlobalSettings, GroupRow, TaskRow } from '../../ipc/types';
 import { filterBoardTasks } from '../../lib/board';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
@@ -32,6 +35,7 @@ import { SidebarRestoreButton } from '../layout/SidebarRestoreButton';
 import { CreateTaskDialog } from '../im/CreateTaskDialog';
 import { BoardToolbar, type BoardConcurrency } from './BoardToolbar';
 import { BoardCanvas } from './BoardCanvas';
+import { ArchivedBoardSection } from './ArchivedBoardSection';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { ArchivePanel } from './ArchivePanel';
 
@@ -43,6 +47,18 @@ const MAX_CONCURRENCY_FALLBACK = 3;
 const REFRESH_INTERVAL_MS = 5000;
 
 type LaneMode = 'flat' | 'lanes';
+
+/**
+ * 归档视图数据（selectedArchivedGroupId 非 null 时拉取）：
+ *   - loading：拉取中（不闪「不可用」空态）
+ *   - ok：组行 + 该组归档任务行
+ *   - missing：组不在归档组列表（选中悬空）或拉取失败 → 静默空态提示
+ */
+type ArchivedViewData =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'missing' }
+  | { phase: 'ok'; group: GroupRow; rows: TaskRow[] };
 
 /** 读持久化泳道偏好；非法值/存储不可用 → null（走派生默认） */
 function readStoredLaneMode(): LaneMode | null {
@@ -65,6 +81,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const setSelectedTaskId = useTaskStore((s) => s.setSelectedTaskId);
   const groups = useGroupStore((s) => s.groups);
   const selectedGroupId = useGroupStore((s) => s.selectedGroupId);
+  const selectedArchivedGroupId = useGroupStore((s) => s.selectedArchivedGroupId);
   const loadGroups = useGroupStore((s) => s.load);
   const members = useAgentStore((s) => s.members);
 
@@ -75,6 +92,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
   const [laneModePref, setLaneModePref] = useState<LaneMode | null>(() => readStoredLaneMode());
   const [createOpen, setCreateOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archivedView, setArchivedView] = useState<ArchivedViewData>({ phase: 'idle' });
 
   const laneMode: LaneMode = laneModePref ?? (groups.length > 0 ? 'lanes' : 'flat');
 
@@ -105,6 +123,39 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     setText('');
     setAssignee('all');
   }, [workspaceId]);
+
+  // 归档视图数据（selectedArchivedGroupId 非 null 时）：并行拉归档任务 + 归档组列表
+  // （ArchivePanel 同款参数）；进入清旧详情抽屉选中（防可编辑抽屉叠在只读视图上），
+  // 退出清本地数据。拉取失败 / 组不在归档组列表 → missing 空态（不炸不回退）
+  useEffect(() => {
+    if (selectedArchivedGroupId === null) {
+      setArchivedView({ phase: 'idle' });
+      return;
+    }
+    setSelectedTaskId(null);
+    setArchivedView({ phase: 'loading' });
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [rows, archivedGroups] = await Promise.all([
+          ipc.task.list({ workspaceId, archived: 'only', orderBy: 'created_at_desc', limit: 500 }),
+          ipc.taskGroup.list(workspaceId, { archived: 'only' }),
+        ]);
+        if (cancelled) return;
+        const group = archivedGroups.find((g) => g.id === selectedArchivedGroupId);
+        if (group === undefined) {
+          setArchivedView({ phase: 'missing' });
+          return;
+        }
+        setArchivedView({ phase: 'ok', group, rows });
+      } catch {
+        if (!cancelled) setArchivedView({ phase: 'missing' }); // 静默空态（错误路径）
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedArchivedGroupId, workspaceId, setSelectedTaskId]);
 
   // mount 拉一次全局并发上限——失败/字段缺失都走兜底，用户改设置下次 mount 生效
   useEffect(() => {
@@ -166,6 +217,17 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
     [groups, activeGroupId],
   );
 
+  // 归档视图可见任务：rows 按 groupId 客户端过滤 + 工具栏搜索/指派人过滤
+  // （filterBoardTasks 同款——工具栏过滤对归档行同样生效）
+  const archivedVisibleTasks = useMemo(() => {
+    if (archivedView.phase !== 'ok' || selectedArchivedGroupId === null) return [];
+    const groupRows = archivedView.rows.filter((t) => t.groupId === selectedArchivedGroupId);
+    return filterBoardTasks(groupRows, {
+      text,
+      assigneeId: assignee === 'all' ? null : assignee,
+    });
+  }, [archivedView, selectedArchivedGroupId, text, assignee]);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* 顶部标题栏（收起时首位停靠恢复按钮） */}
@@ -185,13 +247,39 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         concurrency={concurrency}
         onCreateTask={() => setCreateOpen(true)}
       />
-      <BoardCanvas
-        tasks={visibleTasks}
-        groups={visibleGroups}
-        laneMode={laneMode}
-        selectedId={selectedTaskId}
-        onSelect={setSelectedTaskId}
-      />
+      {/* 主区：归档视图（selectedArchivedGroupId 非 null）替换 BoardCanvas；
+          BoardToolbar/抽屉/弹窗等兄弟不动。组 id 不匹配（选中刚切换、effect 未跑）
+          一律按 loading 渲染——防首帧闪错误文案/旧组数据 */}
+      {selectedArchivedGroupId !== null ? (
+        archivedView.phase === 'ok' && archivedView.group.id === selectedArchivedGroupId ? (
+          <ArchivedBoardSection
+            group={archivedView.group}
+            tasks={archivedVisibleTasks}
+            selectedId={selectedTaskId}
+            onSelect={setSelectedTaskId}
+          />
+        ) : archivedView.phase === 'missing' ? (
+          <div
+            role="status"
+            aria-label="归档分组不可用"
+            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center text-xs text-tertiary"
+          >
+            无法加载该归档分组——分组可能已被取消归档或加载失败，请在侧边栏重新选择
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-tertiary">
+            正在加载归档任务…
+          </div>
+        )
+      ) : (
+        <BoardCanvas
+          tasks={visibleTasks}
+          groups={visibleGroups}
+          laneMode={laneMode}
+          selectedId={selectedTaskId}
+          onSelect={setSelectedTaskId}
+        />
+      )}
       {/* 详情抽屉叠加层：画板常驻，selectedTaskId 驱动滑入 */}
       {selectedTaskId !== null && (
         <TaskDetailDrawer taskId={selectedTaskId} onClose={() => setSelectedTaskId(null)} />

@@ -386,6 +386,66 @@ describe('GroupManageList', () => {
     expect(mockApi.taskGroup.archive).not.toHaveBeenCalled();
   });
 
+  describe('风琴化：任务分组分区（默认展开、与已归档分区非互斥）', () => {
+    it('默认展开：风琴头 aria-expanded=true，「全部」行与组列表可见', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      const header = screen.getByLabelText('任务分组');
+      expect(header).toHaveAttribute('aria-expanded', 'true');
+      // 风琴头结构与「已归档分组」分区头统一：chevron + Folder 图标 + 标题 + 计数 span
+      expect(within(header).getByText(/\(\d+\)/)).toBeInTheDocument();
+      expect(header.querySelectorAll('svg').length).toBe(2);
+      expect(screen.getByLabelText('筛选全部分组')).toBeInTheDocument();
+      expect(screen.getByLabelText('分组 组A')).toBeInTheDocument();
+    });
+
+    it('点风琴头折叠：隐藏「全部」行/组列表/新建输入；[+] 按钮仍可见', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('任务分组'));
+      expect(screen.getByLabelText('任务分组')).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByLabelText('筛选全部分组')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('分组 组A')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('新组名称')).not.toBeInTheDocument();
+      // 折叠时 + 按钮常驻可见（设计约定）
+      expect(screen.getByLabelText('新建组')).toBeInTheDocument();
+    });
+
+    it('折叠态点 +：连带展开分区并进入新建输入态（按钮折叠时仍可用）', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('任务分组'));
+      fireEvent.click(screen.getByLabelText('新建组'));
+      expect(screen.getByLabelText('任务分组')).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByLabelText('新组名称')).toBeInTheDocument();
+    });
+
+    it('再点风琴头：重新展开恢复「全部」行与组列表', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('任务分组'));
+      fireEvent.click(screen.getByLabelText('任务分组'));
+      expect(screen.getByLabelText('任务分组')).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByLabelText('筛选全部分组')).toBeInTheDocument();
+      expect(screen.getByLabelText('分组 组A')).toBeInTheDocument();
+    });
+
+    it('两分区非互斥：任务分组保持展开的同时已归档分组也可展开', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      fireEvent.click(screen.getByLabelText('已归档分组'));
+      expect(screen.getByLabelText('已归档分组')).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByLabelText('任务分组')).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByLabelText('筛选全部分组')).toBeInTheDocument();
+      expect(await screen.findByText('已归档组Z')).toBeInTheDocument();
+    });
+  });
+
   describe('分组点击过滤看板（UX 修复：selectedGroupId）', () => {
     it('「全部」行默认选中（aria-pressed），计数=活跃任务总数', async () => {
       useTaskStore.setState({
@@ -425,6 +485,23 @@ describe('GroupManageList', () => {
       expect(useGroupStore.getState().selectedGroupId).toBe('g-b');
       fireEvent.click(screen.getByLabelText('筛选全部分组'));
       expect(useGroupStore.getState().selectedGroupId).toBeNull();
+    });
+
+    it('选中归档组时「全部」不高亮（selectedGroupId 互斥为 null 不得误判为选中）', async () => {
+      render(<GroupManageList />);
+      await screen.findByLabelText('分组 组A');
+
+      // 走真实用户路径：展开已归档分区 → 点归档组行（store 互斥：selectedGroupId 清 null）
+      fireEvent.click(await screen.findByLabelText('已归档分组'));
+      fireEvent.click(screen.getByLabelText('查看归档分组 已归档组Z'));
+      expect(useGroupStore.getState().selectedArchivedGroupId).toBe('g-z');
+      expect(useGroupStore.getState().selectedGroupId).toBeNull();
+      expect(screen.getByLabelText('筛选全部分组')).toHaveAttribute('aria-pressed', 'false');
+
+      // 取消归档组选中 → 「全部」恢复选中
+      fireEvent.click(screen.getByLabelText('查看归档分组 已归档组Z'));
+      expect(useGroupStore.getState().selectedArchivedGroupId).toBeNull();
+      expect(screen.getByLabelText('筛选全部分组')).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('拖动手柄点击不触发选中也不调 reorder（结构隔离 + 点击≠拖动）：selectedGroupId 不动', async () => {

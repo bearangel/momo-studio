@@ -8,7 +8,7 @@
 //     返回 5 生效 / IPC 抛错兜底
 // mock 边界：仅 mock IPC（window.api），store 用真实实现（momo-test-rules #5）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { TaskBoardView } from './TaskBoardView';
 import { useTaskStore } from '../../stores/task.store';
 import { useGroupStore } from '../../stores/group.store';
@@ -85,6 +85,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
       error: null,
       currentWorkspaceId: null,
       selectedGroupId: null,
+      selectedArchivedGroupId: null,
     });
     useAgentStore.setState({ members: [], teams: [] });
     mockApi.task.list.mockClear().mockResolvedValue([]);
@@ -272,5 +273,128 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     // × 字形已 lucide 化（X + aria-label），语义查询按可访问名走
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(useTaskStore.getState().selectedTaskId).toBeNull();
+  });
+
+  // —— 归档视图分支（归档组点击 → 主区只读看板改造）——
+
+  /** 归档视图 fixture：归档组 + 该组归档任务（taskGroup.list / task.list 两态 mock） */
+  function setupArchivedView(): void {
+    const archivedGroup = {
+      id: 'g-z1',
+      workspaceId: 'ws-1',
+      name: '归档组一',
+      color: null,
+      position: 1024,
+      archivedAt: 111,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const archivedTasks = [
+      mkTask({
+        id: 'tz1',
+        title: '归档任务甲',
+        status: 'completed',
+        priority: 5,
+        groupId: 'g-z1',
+        archivedAt: 999,
+      }),
+      mkTask({
+        id: 'tz2',
+        title: '归档任务乙',
+        status: 'pending',
+        priority: 5,
+        groupId: 'g-z1',
+        archivedAt: 888,
+      }),
+    ];
+    const activeTask = mkTask({ id: 't9', title: '活跃任务九', status: 'pending', priority: 5 });
+    mockApi.taskGroup.list.mockImplementation(
+      async (_ws: string, opts?: { archived?: 'exclude' | 'only' | 'all' }) =>
+        opts?.archived === 'only' ? [archivedGroup] : [],
+    );
+    // task.list 两态：archived:'only' → 归档任务；活跃拉取（5s 轮询/mount）→ 活跃任务
+    mockApi.task.list.mockImplementation(
+      async (opts?: { archived?: string }) =>
+        opts?.archived === 'only' ? archivedTasks : [activeTask],
+    );
+    useTaskStore.setState({ tasks: [activeTask], currentWorkspaceId: 'ws-1' });
+    useGroupStore.setState({ currentWorkspaceId: 'ws-1', selectedArchivedGroupId: 'g-z1' });
+  }
+
+  it('选中归档组 → BoardCanvas 不渲染、ArchivedBoardSection 出现（精确参数双拉取）', async () => {
+    setupArchivedView();
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    // 归档泳道出现：组名 heading + 「已归档 · 只读」标识
+    expect(await screen.findByRole('heading', { name: /归档组一/ })).toBeInTheDocument();
+    expect(screen.getByText('已归档 · 只读')).toBeInTheDocument();
+    // 两个拉取按 ArchivePanel 同款精确参数发起
+    expect(mockApi.task.list).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      archived: 'only',
+      orderBy: 'created_at_desc',
+      limit: 500,
+    });
+    expect(mockApi.taskGroup.list).toHaveBeenCalledWith('ws-1', { archived: 'only' });
+    // BoardCanvas 不渲染：活跃任务（task.store.tasks）不出现在归档视图
+    expect(screen.queryByText(/活跃任务九/)).not.toBeInTheDocument();
+    // 归档任务按状态进对列
+    expect(screen.getByText(/归档任务甲/)).toBeInTheDocument();
+    expect(screen.getByText(/归档任务乙/)).toBeInTheDocument();
+  });
+
+  it('归档视图下搜索框输入过滤归档行（工具栏过滤对归档行同样生效）', async () => {
+    setupArchivedView();
+    render(<TaskBoardView workspaceId="ws-1" />);
+    await screen.findByRole('heading', { name: /归档组一/ });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+      target: { value: '甲' },
+    });
+    expect(screen.getByText(/归档任务甲/)).toBeInTheDocument();
+    expect(screen.queryByText(/归档任务乙/)).not.toBeInTheDocument();
+  });
+
+  it('进入归档视图 → selectedTaskId 清空（旧详情抽屉不叠加）；退出 → 恢复正常看板', async () => {
+    setupArchivedView();
+    useTaskStore.setState({ selectedTaskId: 't9' });
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    // 进入即清：可编辑抽屉不叠加在只读视图上
+    await screen.findByRole('heading', { name: /归档组一/ });
+    expect(useTaskStore.getState().selectedTaskId).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭' })).not.toBeInTheDocument();
+
+    // 退出（侧边栏 toggle 写 null）→ 活跃画板恢复（活跃任务可见、归档泳道消失）
+    act(() => {
+      useGroupStore.getState().setSelectedArchivedGroupId(null);
+    });
+    expect(await screen.findByText(/活跃任务九/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /归档组一/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('已归档 · 只读')).not.toBeInTheDocument();
+  });
+
+  it('归档任务拉取失败 → 静默空态提示（不炸、不回退活跃画板）', async () => {
+    setupArchivedView();
+    mockApi.task.list.mockImplementation(async (opts?: { archived?: string }) => {
+      if (opts?.archived === 'only') throw new Error('IPC 异常');
+      return [];
+    });
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    expect(await screen.findByText(/无法加载该归档分组/)).toBeInTheDocument();
+    expect(useTaskStore.getState().selectedTaskId).toBeNull();
+  });
+
+  it('selectedArchivedGroupId 指向的组不在归档组列表 → 无效选中空态（不炸）', async () => {
+    setupArchivedView();
+    // 归档组列表返回空（组已被解档等）：选中悬空
+    mockApi.taskGroup.list.mockImplementation(
+      async (_ws: string, opts?: { archived?: 'exclude' | 'only' | 'all' }) =>
+        opts?.archived === 'only' ? [] : [],
+    );
+    render(<TaskBoardView workspaceId="ws-1" />);
+
+    expect(await screen.findByText(/无法加载该归档分组/)).toBeInTheDocument();
   });
 });
