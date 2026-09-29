@@ -41,7 +41,7 @@ vi.mock('../../stores/ui.store', () => ({
 }));
 
 import { TaskDetailPanel } from './TaskDetailPanel';
-import type { ImMessage, TaskRow } from '../../ipc/types';
+import type { ImMessage, JournalEntryView, TaskRow } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { TURN_RECONCILE_NOTICE_PREFIX } from '../../lib/turn-reconcile';
@@ -65,6 +65,14 @@ const mockApi = {
   session: {
     list: vi.fn().mockRejectedValue(new Error('no ipc in test')),
     send: vi.fn(),
+  },
+  // 变更与回滚分区常驻挂载（G1）：TaskChangesPanel 挂载即调 journal.list
+  journal: {
+    list: vi.fn(),
+    revert: vi.fn(),
+    scan: vi.fn(),
+    rollbackFileBefore: vi.fn(),
+    preview: vi.fn(),
   },
 };
 
@@ -117,6 +125,11 @@ beforeEach(() => {
   mockApi.task.resume.mockReset().mockResolvedValue(makeTask({ status: 'in_progress' }));
   mockApi.task.update.mockReset().mockResolvedValue(undefined);
   mockApi.session.send.mockReset().mockResolvedValue({ readOnly: false });
+  mockApi.journal.list.mockReset().mockResolvedValue([]);
+  mockApi.journal.scan.mockReset();
+  mockApi.journal.revert.mockReset().mockResolvedValue([]);
+  mockApi.journal.preview.mockReset().mockResolvedValue([]);
+  mockApi.journal.rollbackFileBefore.mockReset().mockResolvedValue([]);
   useStreamStore.setState({ streams: new Map() });
   dismissToast(); // toast 单例复位，防跨用例串扰
 });
@@ -420,5 +433,51 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
       expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
       expect(screen.queryByText('已归档 · 只读')).not.toBeInTheDocument();
     });
+  });
+});
+
+// === 变更与回滚分区常驻挂载（会话任务联动 G1：分区头移入 TaskChangesPanel）===
+
+/** 构造完整 JournalEntryView（真实形状——types.d.ts 契约，不用简化占位） */
+function makeJournalEntry(overrides: Partial<JournalEntryView>): JournalEntryView {
+  return {
+    id: 'je-1',
+    workspaceId: 'ws-1',
+    taskId: 'task-1',
+    sessionId: 'ses-1',
+    streamSessionId: 'ss-1',
+    toolName: 'write_file',
+    path: 'src/app.ts',
+    op: 'modify',
+    beforeHash: 'hash-before',
+    afterHash: 'hash-after',
+    oldPath: null,
+    createdAt: 1757000001000,
+    beforeText: 'a\nb',
+    afterText: 'a\nb\nc',
+    ...overrides,
+  };
+}
+
+describe('TaskDetailPanel 变更与回滚分区常驻挂载（G1）', () => {
+  it('面板无条件挂载：空账面时分区头 summary「无变更记录」直接可见，无需点击', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-changes-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('task-changes-summary')).toHaveTextContent('无变更记录');
+    expect(mockApi.journal.list).toHaveBeenCalledWith({ workspaceId: 'ws-1', taskId: 'task-1' });
+  });
+
+  it('分区头含计数：有账面时显示「N 处变更 · M 个文件」且文件行常显', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    mockApi.journal.list.mockResolvedValue([
+      makeJournalEntry({ id: 'je-1', path: 'src/app.ts' }),
+      makeJournalEntry({ id: 'je-2', path: 'docs/guide.md', op: 'create' }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-changes-summary')).toHaveTextContent(
+      '2 处变更 · 2 个文件',
+    );
+    expect(screen.getByRole('button', { name: /src\/app\.ts/ })).toBeInTheDocument();
   });
 });
