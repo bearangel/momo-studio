@@ -14,7 +14,8 @@
 //       paused → 恢复（task:resume——K7-5 后端转 in_progress + kickoff 重注入）
 //       非终态 → 取消 + 编辑（EditTaskDialog）
 //       已归档（archivedAt 非 null）→ 只读：操作栏/编辑入口整体隐藏
-//   - "进入执行会话"：selectSession(executionSessionId) + setActiveView('im')
+//   - "进入执行会话"（G2）：locateTaskExecution——全状态可用，完结任务也能回看执行记录
+//   - "来源消息定位"（G2）：locateMessage——跳回来源会话并锚定创建任务的原始消息
 import { useEffect, useState } from 'react';
 import {
   Bot,
@@ -28,11 +29,11 @@ import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
-import { useUiStore } from '../../stores/ui.store';
 import type { TaskRow } from '../../ipc/types';
 import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
 import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
+import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
@@ -140,16 +141,17 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
     });
   };
 
+  /** G2：执行会话定位（全状态可用——完结任务也能回看执行记录） */
   const handleEnterSession = (): void => {
     const sessionId = task.executionSessionId;
-    if (!sessionId) return;
-    useSessionStore
-      .getState()
-      .selectSession(sessionId)
-      .then(() => useUiStore.getState().setActiveView('im'))
-      .catch((err: unknown) => {
-        console.error('进入执行会话失败', err);
-      });
+    if (sessionId === null) return;
+    void locateTaskExecution(task.id, sessionId);
+  };
+
+  /** G2：来源消息定位（悬空时 locateMessage 内部 toast 降级） */
+  const handleLocateSource = (): void => {
+    if (task.sourceSessionId === null) return;
+    void locateMessage(task.sourceSessionId, task.sourceMessageId);
   };
 
   /**
@@ -291,6 +293,18 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               </button>
             </div>
           )}
+          {task.sourceSessionId && (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-tertiary">来源</span>
+              <button
+                type="button"
+                onClick={handleLocateSource}
+                className="text-left text-accent-600 hover:underline dark:text-accent-300"
+              >
+                来源消息定位
+              </button>
+            </div>
+          )}
           <div className="flex flex-col gap-0.5">
             <span className="text-tertiary">创建时间</span>
             <span className="text-secondary">{formatTime(task.createdAt)}</span>
@@ -327,7 +341,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         <div className="pt-1">
           <TaskChangesPanel workspaceId={task.workspaceId} taskId={taskId} />
         </div>
-        {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (
+        {task.executionSessionId && (
           <button
             type="button"
             onClick={handleEnterSession}

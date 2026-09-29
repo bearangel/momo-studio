@@ -1,6 +1,8 @@
 // renderer/src/components/task-board/TaskDetailPanel.test.tsx
 //
-// P3 Task 4：进入执行会话接线（selectSession → setActiveView 顺序 + 失败不切视图）
+// 会话任务联动 G2：双锚点入口接线（来源消息定位 + 执行会话全状态回看）。
+// 定位链路语义（selectSession 顺序 / 翻页 / 降级）已移入 locate-message.test，
+// 此处只锁「UI 入口 → lib 调用」接线。
 // K4/K6 重写回归锁：
 //   - 状态徽标中文（不裸显 draft/in_progress 枚举）+ 优先级中文
 //   - 指派 agent 显示名称（useTaskEntityNames 解析，非 ID 片段）
@@ -38,6 +40,15 @@ vi.mock('../../stores/ui.store', () => ({
     (sel: (s: typeof uiState) => unknown) => sel(uiState),
     { getState: () => uiState },
   ),
+}));
+
+const { locateMessageMock, locateTaskExecutionMock } = vi.hoisted(() => ({
+  locateMessageMock: vi.fn().mockResolvedValue('located'),
+  locateTaskExecutionMock: vi.fn().mockResolvedValue('located'),
+}));
+vi.mock('../../lib/locate-message', () => ({
+  locateMessage: locateMessageMock,
+  locateTaskExecution: locateTaskExecutionMock,
 }));
 
 import { TaskDetailPanel } from './TaskDetailPanel';
@@ -131,51 +142,50 @@ beforeEach(() => {
   mockApi.journal.preview.mockReset().mockResolvedValue([]);
   mockApi.journal.rollbackFileBefore.mockReset().mockResolvedValue([]);
   useStreamStore.setState({ streams: new Map() });
+  locateMessageMock.mockClear();
+  locateTaskExecutionMock.mockClear();
   dismissToast(); // toast 单例复位，防跨用例串扰
 });
 
-describe('TaskDetailPanel 进入执行会话', () => {
-  it('executionSessionId 存在时渲染跳转按钮', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({}));
+describe('TaskDetailPanel 进入执行会话（全状态 + 定位接线）', () => {
+  it('executionSessionId 存在时渲染跳转按钮（含终态 completed）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'completed' }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     expect(await screen.findByText('进入执行会话 →')).toBeInTheDocument();
   });
 
   it('executionSessionId 缺失时不渲染跳转按钮', async () => {
-    mockApi.task.get.mockResolvedValue(
-      makeTask({ status: 'pending', executionSessionId: null }),
-    );
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'pending', executionSessionId: null }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     expect(await screen.findByText('#task-1')).toBeInTheDocument();
     expect(screen.queryByText('进入执行会话 →')).not.toBeInTheDocument();
   });
 
-  it('点击按钮 → selectSession(executionSessionId) 然后 setActiveView("im")', async () => {
-    const order: string[] = [];
-    sessionState.selectSession = vi.fn().mockImplementation(async () => {
-      order.push('selectSession');
-    });
-    uiState.setActiveView = vi.fn().mockImplementation(() => {
-      order.push('setActiveView');
-    });
+  it('点击按钮 → locateTaskExecution(taskId, executionSessionId)', async () => {
     mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-abc' }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByText('进入执行会话 →'));
-    await waitFor(() => expect(sessionState.selectSession).toHaveBeenCalledWith('sess-abc'));
-    await waitFor(() => expect(uiState.setActiveView).toHaveBeenCalledWith('im'));
-    expect(order).toEqual(['selectSession', 'setActiveView']);
+    await waitFor(() =>
+      expect(locateTaskExecutionMock).toHaveBeenCalledWith('task-1', 'sess-abc'),
+    );
+  });
+});
+
+describe('TaskDetailPanel 来源消息入口', () => {
+  it('sourceSessionId 存在 → 信息网格渲染「来源消息」行；点击 → locateMessage(来源会话, 消息 id)', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({ sourceSessionId: 'ses-src', sourceMessageId: 'm-origin' }),
+    );
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByText('来源消息定位'));
+    await waitFor(() => expect(locateMessageMock).toHaveBeenCalledWith('ses-src', 'm-origin'));
   });
 
-  it('selectSession 失败时控制台报错且不切视图', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    sessionState.selectSession = vi.fn().mockRejectedValue(new Error('会话不存在'));
-    mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-bad' }));
+  it('sourceSessionId null（手建任务）→ 不渲染来源行', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ sourceSessionId: null }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-    fireEvent.click(await screen.findByText('进入执行会话 →'));
-    await waitFor(() => expect(sessionState.selectSession).toHaveBeenCalledWith('sess-bad'));
-    await waitFor(() => expect(consoleError).toHaveBeenCalled());
-    expect(uiState.setActiveView).not.toHaveBeenCalled();
-    consoleError.mockRestore();
+    await screen.findByText('#task-1');
+    expect(screen.queryByText('来源消息定位')).not.toBeInTheDocument();
   });
 });
 
