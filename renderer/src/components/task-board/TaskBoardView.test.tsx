@@ -30,6 +30,14 @@ const mockApi = {
   agent: { listMembers: vi.fn().mockRejectedValue(new Error('no ipc')) },
   team: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
   session: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
+  // 变更与回滚分区常驻挂载（G1）：详情面板内 TaskChangesPanel 挂载即调 journal.list
+  journal: {
+    list: vi.fn().mockResolvedValue([]),
+    revert: vi.fn(),
+    scan: vi.fn(),
+    rollbackFileBefore: vi.fn(),
+    preview: vi.fn(),
+  },
 };
 
 function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'status' | 'priority'>): TaskRow {
