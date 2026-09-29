@@ -27,6 +27,7 @@ import { getDb } from '../storage/db';
 import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/repo';
 import { insertSession, addSessionMember, getSession } from '../storage/sessions/repo';
 import { teamExists, expandTeamMembers, getTeamLeaderInstanceId } from '../agent/team';
+import { captureTaskScanBaseline } from '../journal/baseline';
 import { logger } from '../logger';
 
 export interface StartTaskResult {
@@ -147,6 +148,17 @@ export async function startTask(
 
     return { task: updated, executionSessionId, createdNewRoom };
   })(opts ?? {});
+
+  // 任务起点基线捕获（未入账误归因根治，2026-09-29）：事务提交后、返回前同步
+  // await——所有新启动路径（executor.launch / startTaskAndKickoff /
+  // conflict-executor）都经本函数，单点覆盖全部 →in_progress 生产流量。
+  // 必须先于 kickoff 派发：调用方在 startTask 返回后才注入 kickoff，异步捕获
+  // 会让 agent 自己的写入污染基线（归因假阴性）。刻意放在事务外：git spawn
+  // 耗时不确定，进事务会拉长 SQLite 写锁。capture 内部 best-effort 全路径
+  // warn 不抛——捕获失败绝不阻塞任务启动（回退：无 meta 行 → 扫描走累计
+  // 差集 + baselineAvailable=false）。workspaceDir 由 capture 经 workspaces
+  // 存储自查（startTask 入参没有）。
+  await captureTaskScanBaseline(task.workspaceId, taskId);
 
   logger.info('Task 已启动', {
     taskId,

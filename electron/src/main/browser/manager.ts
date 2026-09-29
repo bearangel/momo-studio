@@ -53,6 +53,9 @@ import type { BrowserState, TabInfo } from './types';
  */
 export const ABOUT_BLANK = 'about:blank';
 
+/** 纯隐藏语义的全零 bounds（spec §6.3——视图存活不销毁，bounds 置零即不可见） */
+const HIDDEN_BOUNDS: SidebarRect = { x: 0, y: 0, width: 0, height: 0 };
+
 /** 每 tab console 环形缓冲上限（spec §3.1）。slice 移除截断，简单可靠 */
 const CONSOLE_RING_SIZE = 50;
 
@@ -293,11 +296,10 @@ export class BrowserManager {
 
   /** IPC browser:setSidebarBounds 消费点——renderer 占位区 rect 上报（DPR 换算在 T10 接线层）。缓存供任何后续成为 current 的视图立即套用（browser:state 推送不一定触发 renderer ResizeObserver 重报） */
   setSidebarBounds(rect: SidebarRect): void {
-    this.lastRect = rect; // 隐藏期仍缓存（显示时恢复用），但不施加
+    this.lastRect = rect; // 隐藏期仍缓存（显示时恢复用）
     const ws = this.active;
-    if (!ws || ws.viewsHidden) return;
-    const tab = ws.tabs[ws.current];
-    if (tab) tab.view.bounds.setBounds(rect);
+    if (!ws) return;
+    this.syncViewBounds(ws); // 卸载零报时经不变量清零全部视图
   }
 
   /** IPC browser:setSidebarVisible 消费点——收起 = 纯隐藏（bounds 全零，视图存活，spec §6.3）；显示 = 恢复可见 tab */
@@ -306,11 +308,7 @@ export class BrowserManager {
     if (!ws || ws.workspaceId !== wsId) return;
     if (ws.viewsHidden === !visible) return;
     ws.viewsHidden = !visible;
-    if (!visible) {
-      for (const t of ws.tabs) t.view.bounds.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-    } else {
-      this.applyLastRect(ws);
-    }
+    this.syncViewBounds(ws);
     // 不推送状态：可见性真相源在 renderer（per-session），main 无折叠语义
   }
 
@@ -389,7 +387,7 @@ export class BrowserManager {
           ws.ownerCurrent.delete(ctx.ownerId);
           this.reindexOwnerCursors(ws, idx); // 他方光标随 splice 移位（I-1：否则同 owner 校验通过不触发自愈，静默漂移）
           this.fixCurrentAfterRemoval(ws);
-          this.applyLastRect(ws);
+          this.syncViewBounds(ws);
           this.emitState(ws);
           return [];
         }
@@ -405,7 +403,7 @@ export class BrowserManager {
         else if (idx === ws.current) ws.current = Math.min(ws.current, ws.tabs.length - 1);
         // 其他 owner 的光标/缓存随 splice 修正（全局下标移位）
         this.reindexOwnerCursors(ws, idx);
-        this.applyLastRect(ws); // 关闭致 current 迁移时，新 current 视图（此前无 bounds）立即套用
+        this.syncViewBounds(ws); // 关闭致 current 迁移时，新 current 视图（此前无 bounds）立即套用
         this.emitState(ws);
         return this.tabInfos(ws, source === 'agent' ? ctx.ownerId : null);
       }
@@ -421,7 +419,7 @@ export class BrowserManager {
           throw new RangeError(`tab 下标 ${idx} 越界（现有 ${ws.tabs.length} 个 tab）`);
         }
         ws.current = idx;
-        this.applyLastRect(ws); // 切换后的 current 视图此前未持 bounds——立即套用
+        this.syncViewBounds(ws); // 切换后的 current 视图此前未持 bounds——立即套用
         this.emitState(ws);
         return this.tabInfos(ws, null);
       }
@@ -444,7 +442,7 @@ export class BrowserManager {
       }
       ws.ownerCurrent.delete(ctx.ownerId);
       this.fixCurrentAfterRemoval(ws);
-      this.applyLastRect(ws);
+      this.syncViewBounds(ws);
       this.emitState(ws);
       return;
     }
@@ -579,7 +577,7 @@ export class BrowserManager {
     let tab = ws.tabs[ws.current];
     if (!tab) {
       tab = this.createTab(ws, 'user'); // tabs 为空时新视图落在 idx 0 == current
-      this.applyLastRect(ws);
+      this.syncViewBounds(ws);
     }
     await this.loadChecked(tab, url);
     this.emitState(ws);
@@ -863,7 +861,7 @@ export class BrowserManager {
     const hit = ctx.ownerId !== 'user' && ctx.sessionId !== '' && ctx.sessionId === this.activeSessionId;
     if (hit) {
       ws.current = ownerTabIdx;
-      this.applyLastRect(ws); // viewsHidden 时内部 no-op——仅记录 ws.current，显示时恢复
+      this.syncViewBounds(ws); // viewsHidden 时内部 no-op——仅记录 ws.current，显示时恢复
       this.emitState(ws, { expandHint: true });
     } else {
       this.emitState(ws);
@@ -908,7 +906,7 @@ export class BrowserManager {
     ws.ownerCurrent.set(owner, idx);
     if (focusVisible) {
       ws.current = idx;
-      this.applyLastRect(ws); // 新可见视图立即套用缓存 rect
+      this.syncViewBounds(ws); // 新可见视图立即套用缓存 rect
     }
     void this.loadForNotice(record, initialUrl ?? ABOUT_BLANK, ws.workspaceId);
     return record;
@@ -929,20 +927,36 @@ export class BrowserManager {
       void this.loadForNotice(record, url, ws.workspaceId);
     });
     ws.current = Math.min(Math.max(stash.current, 0), Math.max(ws.tabs.length - 1, 0));
-    this.applyLastRect(ws); // 恢复后的 current 视图立即套用缓存 rect
+    this.syncViewBounds(ws); // 恢复后的 current 视图立即套用缓存 rect
   }
 
   /**
-   * 把缓存的 sidebar rect 套用到「刚成为 current」的视图：真实 WebContentsView 默认
-   * bounds 0,0,0,0（不可见），新视图不等 renderer 重报——browser:state 推送不一定触发
-   * 其 ResizeObserver。lastRect 为 null（从未上报）时 no-op。隐藏期（viewsHidden）
-   * no-op（spec §6.3）——仅记录 ws.current，显示时恢复。
+   * 视图 bounds 不变量单点：仅 current 视图可持非零 rect，其余一律全零。
+   * WebContentsView 按 addChildView 附加序叠放（后挂在上）且原生视图层恒在
+   * renderer DOM 之上——曾经 current 的视图残留旧 rect 会盖住新 current（切
+   * 页签渲染不切换）或盖住功能视图（切设置后网页仍显示）。全部 bounds 变更点
+   * （rect 上报 / 折叠展开 / 打开 / 切换 / 关闭 / 恢复 / 自动切换）收敛经此。
+   *
+   * 施加顺序：先清零全部非 current、最后套 current——view-factory 的 onBounds
+   * 包装使每个视图的 setBounds 都驱动 overlay 跟随与 rect 缓存，current 落在
+   * 最后才能让 overlay / 缓存收敛到正确值。
+   *
+   * 隐藏期（viewsHidden）无条件清零（不依赖 lastRect——折叠先于首次 rect 上报
+   * 也成立）。lastRect 为 null（从未上报）时可见路径 no-op：真实 WebContentsView
+   * 默认 bounds 即 0,0,0,0，无残留可清。
    */
-  private applyLastRect(ws: ActiveWorkspace): void {
-    if (ws.viewsHidden) return;
+  private syncViewBounds(ws: ActiveWorkspace): void {
+    if (ws.viewsHidden) {
+      // 隐藏态无条件清零（不依赖 lastRect——折叠先于首次 rect 上报也成立）
+      for (const t of ws.tabs) t.view.bounds.setBounds(HIDDEN_BOUNDS);
+      return;
+    }
     if (!this.lastRect) return;
-    const tab = ws.tabs[ws.current];
-    if (tab) tab.view.bounds.setBounds(this.lastRect);
+    ws.tabs.forEach((t, i) => {
+      if (i !== ws.current) t.view.bounds.setBounds(HIDDEN_BOUNDS);
+    });
+    const cur = ws.tabs[ws.current];
+    if (cur) cur.view.bounds.setBounds(this.lastRect);
   }
 
   /**

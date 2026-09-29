@@ -41,6 +41,10 @@ vi.mock('../../src/main/git/repos', () => ({
 const fakeStore = {
   listByWorkspace: () => [{ path: 'a\\b.txt' }],
   listByTask: () => [],
+  // 基线面（迁移 049 后 scan 的追加消费面）：null = 无基线 → 回退累计差集，
+  // 与本文件「路径归一」的被测对象无关，保持最小只读 fake
+  getBaselineMeta: () => null,
+  listBaselinePaths: () => [],
 } as unknown as JournalStore;
 
 function okRunner(stdout: string): GitRunner {

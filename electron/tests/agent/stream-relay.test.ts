@@ -46,6 +46,8 @@ import {
   listMessagesBySession,
 } from '../../src/main/storage/messages/repo';
 import { listEventsByMessage } from '../../src/main/storage/messages/events-repo';
+import { insertSession } from '../../src/main/storage/sessions/repo';
+import { createWorkspace } from '../../src/main/workspace/crud';
 
 // === DB 测试夹具 ===
 
@@ -97,6 +99,37 @@ describe('routeChunkToBuffer: chunk → SQLite 映射', () => {
     const statusEvent = events.find((e) => e.eventType === 'status_change');
     expect(statusEvent).toBeDefined();
     expect(statusEvent!.payload.status).toBe('streaming');
+  });
+
+  it('start chunk 消息行带 workspace_id（经会话归属解析）；未知会话降级 NULL（回归锁：ChangesChip 依赖）', async () => {
+    // 真实生产链：workspace（真实目录）→ session → start chunk → messages 行
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-relay-ws-'));
+    try {
+      const ws = await createWorkspace({ name: 'relay-ws', directoryPath: dir }, 'owner');
+      const sess = insertSession({ workspaceId: ws.id, title: '回滚测试会话' });
+
+      __routeChunkToBufferForTest({
+        type: 'start',
+        streamSessionId: 'ss-ws-1',
+        sessionId: sess.id,
+        senderAgentId: 'agent-coder-x',
+      });
+      __routeChunkToBufferForTest({
+        type: 'start',
+        streamSessionId: 'ss-ws-404',
+        sessionId: 'no-such-session',
+        senderAgentId: 'agent-coder-x',
+      });
+      __flushEventBufferForTest();
+
+      const msg = getMessageByStreamSessionId('ss-ws-1');
+      expect(msg!.workspaceId).toBe(ws.id);
+      // 未知会话：不炸，降级 NULL（与旧行为一致）
+      const orphan = getMessageByStreamSessionId('ss-ws-404');
+      expect(orphan!.workspaceId).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('regression：start chunk INSERT 后推 session:message 给 renderer（实时气泡可见性）', () => {

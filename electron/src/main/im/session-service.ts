@@ -38,7 +38,7 @@ import { activateMentionedTasks } from '../task/activation';
 import { listTasks, getTask } from '../storage/tasks/repo';
 import { applyFirstMessageTitle } from './session-naming';
 import { getSessionMembersInfo, type SessionMemberInfo } from './session-ops';
-import { SESSION_COMMANDS, isKnownSessionCommand } from './commands';
+import { SESSION_COMMANDS, isKnownSessionCommand, COMPACT_ACK_EVENT_TYPE } from './commands';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
 import type { BrowserWindow } from 'electron';
 import { logger } from '../logger';
@@ -283,7 +283,13 @@ export async function handleSessionCommand(input: {
   if (isSessionRunning(input.sessionId)) {
     throw new Error('会话正在执行中，请先停止或等待完成后再压缩');
   }
-  const history = listRecentMessagesBySession(input.sessionId, COMPACT_WINDOW);
+  // compact ack（本命令/历史命令的确认通知，sender='owner'）是 UI 呈现物，不是
+  // 对话内容：不进序列化、不进计数、不参与「最近一轮」尾部锚定——ack 会被
+  // lastUserIdx 误当最后一条 user 消息（锚点漂移），且其 body 携带的旧摘要
+  // 全文会二次进入本次压缩输入
+  const history = listRecentMessagesBySession(input.sessionId, COMPACT_WINDOW).filter(
+    (m) => m.eventType !== COMPACT_ACK_EVENT_TYPE,
+  );
   if (history.length === 0) throw new Error('会话暂无消息，无内容可压缩');
 
   // 尾部保留（spec §4.5）：最近一轮（最后一条 user 消息起）verbatim 排除在序列化
@@ -314,20 +320,25 @@ export async function handleSessionCommand(input: {
   // head 非空已由上方 throw 保证）
   upsertSessionCompaction(input.sessionId, summary, head[head.length - 1]!.createdAt);
 
+  // ack 落库：eventType 文本协议见 commands.ts COMPACT_ACK_EVENT_TYPE——统计行 +
+  // 空行 + 摘要正文，renderer CompactNotice 按首个空行切分（统计行常显、摘要折叠）
+  const statsLine = `已压缩 ${history.length} 条历史消息（摘要自下轮生效）`;
   const ack = insertMessage({
     sessionId: input.sessionId,
     sender: 'owner',
-    eventType: 'm.room.message',
-    body: `[系统] 会话已压缩：${history.length} 条消息 → 摘要（下轮生效）`,
+    eventType: COMPACT_ACK_EVENT_TYPE,
+    body: `${statsLine}\n\n${summary}`,
     workspaceId: session.workspaceId,
   });
   touchSessionLastMessage(input.sessionId);
   pushMessageRow(ack);
+  // LAN 只读镜像只广播统计行（eventType 原样——对端 renderer 同款 CompactNotice
+  // 渲染为无摘要通知行）；摘要全文是本机折叠卡载荷，不进镜像
   void broadcastLocalMessage({
     roomId: input.sessionId,
     sender: 'owner',
-    body: ack.body,
-    eventType: 'm.room.message',
+    body: statsLine,
+    eventType: COMPACT_ACK_EVENT_TYPE,
   });
-  return { ok: true, message: ack.body };
+  return { ok: true, message: statsLine };
 }

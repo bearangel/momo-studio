@@ -26,7 +26,7 @@ import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { createJournalStore } from '../../src/main/journal/store';
-import { __setJournalStoreForTest } from '../../src/main/journal/recorder';
+import { __setJournalStoreForTest, hashContent } from '../../src/main/journal/recorder';
 import { discoverRepos } from '../../src/main/git/repos';
 import { scanUnjournaled, defaultGitRunner } from '../../src/main/journal/detector';
 import type { GitRunner } from '../../src/main/journal/detector';
@@ -241,7 +241,7 @@ describe('scanUnjournaled：账外变更对账', () => {
     expect(result.unjournaled).toEqual([]);
   });
 
-  it('git ENOENT → degraded=true + 空结果（spec：本机无 git 无法交叉核对）', async () => {
+  it('git ENOENT → degraded=true + 空结果（spec：本机无 git 无法交叉核对）；baselineAvailable=false', async () => {
     const ws = mkWorkspace();
     const runner: GitRunner = async () => ({
       code: null,
@@ -251,7 +251,13 @@ describe('scanUnjournaled：账外变更对账', () => {
       truncated: false,
     });
     const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result).toEqual({ journaled: [], unjournaled: [], repos: [], degraded: true });
+    expect(result).toEqual({
+      journaled: [],
+      unjournaled: [],
+      repos: [],
+      degraded: true,
+      baselineAvailable: false,
+    });
   });
 
   it('git 非零退出（非 ENOENT，如仓库损坏 128）→ 同样 degraded（不半真半假）', async () => {
@@ -298,7 +304,178 @@ describe('scanUnjournaled：账外变更对账', () => {
       unjournaled: [],
       repos: [ws, path.join(ws, 'inner')],
       degraded: false,
+      baselineAvailable: false, // T-1 无基线（本用例未捕获）→ 回退累计差集语义
     });
+  });
+});
+
+describe('scanUnjournaled：任务起点基线差集归因 + 应用内部目录豁免（2026-09-29 误归因根治）', () => {
+  /** 直插基线（照 baseline.ts 生产语义：path = workspace 根相对 POSIX，
+   *  hash = 真实文件内容 sha256 或 null = 捕获时不可读） */
+  function seedBaseline(
+    workspaceId: string,
+    taskId: string,
+    paths: Array<{ path: string; contentHash: string | null }>,
+    opts: { degraded?: boolean } = {},
+  ): void {
+    const store = createJournalStore(getDb());
+    store.insertBaseline(
+      { workspaceId, taskId, capturedAt: Date.now(), degraded: opts.degraded === true },
+      paths,
+    );
+  }
+
+  it('历史脏同 hash 被剔除 / 任务期间新脏列入 / baselineAvailable=true', async () => {
+    const ws = mkWorkspace();
+    // 历史脏：任务开始前 demo/index.html 就已脏，内容自捕获后未动
+    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
+    seedBaseline('ws-A', 'T-1', [
+      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
+    ]);
+
+    // git 侧（fake runner）：历史脏仍在 + 任务期间 bash 新建 test.txt
+    const { runner } = fakeRunnerByRepo({
+      [ws]: ' M demo/index.html\n?? test.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+
+    expect(result.degraded).toBe(false);
+    expect(result.baselineAvailable).toBe(true);
+    // 历史脏同 hash → 剔除（不再误归因到本任务）；新脏 → 列入
+    expect(result.unjournaled).toEqual(['test.txt']);
+  });
+
+  it('历史脏任务期间再改动（hash 漂移）→ 列入', async () => {
+    const ws = mkWorkspace();
+    // 基线记录的是旧内容 hash；任务期间文件被改写
+    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'changed-during-task', 'utf-8');
+    seedBaseline('ws-A', 'T-1', [
+      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
+    ]);
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: ' M demo/index.html\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.baselineAvailable).toBe(true);
+    expect(result.unjournaled).toEqual(['demo/index.html']);
+  });
+
+  it('基线有 hash、当前已删除 → 列入（任务期间删除）', async () => {
+    const ws = mkWorkspace();
+    // 基线记录了当时可读的 hash；扫描时文件已被删除（磁盘上不存在）
+    seedBaseline('ws-A', 'T-1', [
+      { path: 'deleted-during-task.txt', contentHash: hashContent('once-existed') },
+    ]);
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: ' D deleted-during-task.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.unjournaled).toEqual(['deleted-during-task.txt']);
+  });
+
+  it('基线 null（捕获时不可读）且当前仍不可读 → 剔除（两侧同态视为未动）', async () => {
+    const ws = mkWorkspace();
+    // 捕获时文件就已不可读（基线 null）；扫描时仍不可读——porcelain 仍报出该路径
+    seedBaseline('ws-A', 'T-1', [{ path: 'ghost.txt', contentHash: null }]);
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: '?? ghost.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.baselineAvailable).toBe(true);
+    expect(result.unjournaled).toEqual([]);
+  });
+
+  it('应用内部目录豁免：.momo / .momo-scratch（目录本身 + 子路径）不进未入账清单（taskId 非 null）', async () => {
+    const ws = mkWorkspace();
+    seedBaseline('ws-A', 'T-1', []); // 有基线（空）→ baselineAvailable=true
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: '?? .momo\n?? .momo/assets/abc012345678.png\n?? .momo-scratch\n?? .momo-scratch/demo/run.sh\n?? real-dirty.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.baselineAvailable).toBe(true);
+    // 四条应用内部路径全部剔除，只余真实工程变更
+    expect(result.unjournaled).toEqual(['real-dirty.txt']);
+  });
+
+  it('taskId=null（快速会话）：豁免照用 + baselineAvailable=true（基线概念不适用）', async () => {
+    const ws = mkWorkspace();
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: '?? .momo/assets/abc012345678.png\n?? .momo-scratch/demo/run.sh\n?? quick-dirty.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, null, { runner });
+    expect(result.baselineAvailable).toBe(true);
+    expect(result.unjournaled).toEqual(['quick-dirty.txt']);
+  });
+
+  it('无基线 → 回退累计差集 + baselineAvailable=false（历史脏重新出现在清单中）', async () => {
+    const ws = mkWorkspace();
+    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: ' M demo/index.html\n?? test.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.baselineAvailable).toBe(false);
+    // 回退语义 = 现行累计差集：历史脏也列入（UI 会提示「累计账外状态」）
+    expect(result.unjournaled).toEqual(['demo/index.html', 'test.txt']);
+  });
+
+  it('degraded 基线（捕获时 git 异常）→ 同样回退累计差集 + baselineAvailable=false', async () => {
+    const ws = mkWorkspace();
+    fs.writeFileSync(path.join(ws, 'old.txt'), 'dirty-before-feature', 'utf-8');
+    seedBaseline('ws-A', 'T-1', [], { degraded: true });
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: '?? old.txt\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.baselineAvailable).toBe(false);
+    expect(result.unjournaled).toEqual(['old.txt']);
+  });
+
+  it('journaled 优先级高于基线剔除：已入账路径恒进 journaled 列（既有分类语义不变）', async () => {
+    const ws = mkWorkspace();
+    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
+    const store = createJournalStore(getDb());
+    // 该路径既在账本（T-1 记账）又在基线（同 hash）→ 归 journaled，不进任何剔除分支
+    store.insert(entry({ path: 'demo/index.html', op: 'modify' }));
+    seedBaseline('ws-A', 'T-1', [
+      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
+    ]);
+
+    const { runner } = fakeRunnerByRepo({
+      [ws]: ' M demo/index.html\n',
+      [path.join(ws, 'inner')]: '',
+    });
+
+    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
+    expect(result.journaled).toEqual(['demo/index.html']);
+    expect(result.unjournaled).toEqual([]);
   });
 });
 

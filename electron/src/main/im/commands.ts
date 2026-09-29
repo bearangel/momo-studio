@@ -16,6 +16,14 @@ export const SESSION_COMMANDS: readonly SessionCommandDef[] = [
   { name: 'compact', description: '压缩会话历史，释放上下文窗口' },
 ];
 
+/**
+ * /compact 确认消息的 eventType（io.momo-studio.* 家族，与 dispatch/task_reply 同式）。
+ * renderer MessageBubble 按它分流到 CompactNotice 卡片渲染。
+ * body 文本协议：首行 = 统计行（如「已压缩 3 条历史消息（摘要自下轮生效）」），
+ * 首个空行后 = 摘要正文（可无——LAN 镜像广播只含统计行）。
+ */
+export const COMPACT_ACK_EVENT_TYPE = 'io.momo-studio.compact';
+
 export function isKnownSessionCommand(name: string): boolean {
   return SESSION_COMMANDS.some((c) => c.name === name);
 }

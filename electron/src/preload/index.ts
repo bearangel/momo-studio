@@ -147,13 +147,14 @@ const api: ApiSurface = {
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
   },
-  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚
+  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚/干跑预检
   journal: {
     list: (scope) => invoke('journal:list', scope),
     revert: (workspaceId, ids, opts) => invoke('journal:revert', workspaceId, ids, opts),
     scan: (workspaceId, taskId) => invoke('journal:scan', workspaceId, taskId),
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
+    preview: (workspaceId, ids) => invoke('journal:preview', workspaceId, ids),
   },
   // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 16 invoke 通道 + 两推送逐一对应）
   browser: {
@@ -233,6 +234,8 @@ const api: ApiSurface = {
     // 命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；commands.ts 单一真相源
     listCommands: () => invoke<Array<{ name: string; description: string }>>('session:listCommands'),
     getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
+    deleteMessages: (sessionId: string, ids: string[]) =>
+      invoke('session:deleteMessages', sessionId, ids),
     loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
       invoke('session:loadOlder', sessionId, beforeTs, count),
     exportMessages: (sessionId: string, limit: number) =>

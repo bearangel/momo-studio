@@ -393,4 +393,32 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
     fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
     expect(await screen.findByTestId('ui-toast')).toHaveTextContent('催收尾发送失败: 会话已只读');
   });
+
+  describe('归档任务只读（archivedAt 非 null → 操作栏/编辑入口整体隐藏）', () => {
+    it('归档的 in_progress 任务：无启动/暂停/编辑/取消按钮，显示只读标识与归档时间', async () => {
+      // 归档+非终态（数据异常形态）：只读不受状态机按钮资格影响，一律隐藏
+      mockApi.task.get.mockResolvedValue(
+        makeTask({ status: 'in_progress', archivedAt: 1700000000000 }),
+      );
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      await screen.findByText('示例任务');
+
+      expect(screen.getByText('已归档 · 只读')).toBeInTheDocument();
+      expect(screen.getByText('归档时间')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '编辑任务' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument();
+    });
+
+    it('非归档任务不受影响：in_progress 仍有暂停/编辑/取消（对照组，防误伤）', async () => {
+      mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress', archivedAt: null }));
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      await screen.findByText('进行中');
+
+      expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '编辑任务' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
+      expect(screen.queryByText('已归档 · 只读')).not.toBeInTheDocument();
+    });
+  });
 });

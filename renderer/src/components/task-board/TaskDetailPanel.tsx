@@ -13,6 +13,7 @@
 //       in_progress → 暂停（transition paused；K7-4 后端联动中断 agent 流）
 //       paused → 恢复（task:resume——K7-5 后端转 in_progress + kickoff 重注入）
 //       非终态 → 取消 + 编辑（EditTaskDialog）
+//       已归档（archivedAt 非 null）→ 只读：操作栏/编辑入口整体隐藏
 //   - "进入执行会话"：selectSession(executionSessionId) + setActiveView('im')
 import { useEffect, useState } from 'react';
 import {
@@ -63,7 +64,7 @@ function formatTime(ms: number | null): string {
 export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   const [task, setTask] = useState<TaskRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  // 变更审查分区默认折叠——展开才挂载 TaskChangesPanel（scan 懒执行，spec §5.5）
+  // 变更与回滚分区默认折叠——展开才挂载 TaskChangesPanel（scan 懒执行，spec §5.5）
   const [changesOpen, setChangesOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const refreshTask = (): void => {
@@ -104,6 +105,9 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   const status = taskStatusStyle(task.status);
   const priorityLabel = PRIORITY_LABEL[task.priority] ?? String(task.priority);
+  // 只读模式：归档任务详情一律只读（archivedAt 单源派生，不依赖调用方传参——
+  // 任何入口打开归档任务都自动只读）；隐藏全部任务操作按钮与编辑入口
+  const readOnly = task.archivedAt !== null;
   const hasTarget =
     task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
   const terminal = TERMINAL_STATUSES.has(task.status);
@@ -196,6 +200,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         )}
         <div className="flex items-center gap-2">
           <span className={status.className}>{status.label}</span>
+          {readOnly && <span className="text-xs text-tertiary">已归档 · 只读</span>}
           {pendingWrapUp && (
             <span
               className={PENDING_WRAP_UP_STYLE.className}
@@ -307,6 +312,12 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               <span className="text-secondary">{formatTime(task.completedAt)}</span>
             </div>
           )}
+          {task.archivedAt && (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-tertiary">归档时间</span>
+              <span className="text-secondary">{formatTime(task.archivedAt)}</span>
+            </div>
+          )}
           {task.status === 'in_progress' && task.startedAt && (
             <div className="flex flex-col gap-0.5">
               <span className="text-tertiary">执行进度</span>
@@ -325,7 +336,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             className="flex w-full cursor-pointer items-center gap-1.5 rounded border border-strong bg-surface-3 px-2 py-1 text-left text-xs transition-colors"
           >
             <FileDiff size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-500" />
-            <span className="text-primary">变更审查</span>
+            <span className="text-primary">变更与回滚</span>
             <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
               {changesOpen ? (
                 <ChevronDown size={16} strokeWidth={1.75} />
@@ -348,49 +359,52 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           </button>
         )}
       </div>
-      <div className="p-3 border-t border-subtle flex gap-2">
-        {!terminal && (
-          <Button
-            variant="secondary"
-            aria-label="编辑任务"
-            onClick={() => setEditOpen(true)}
-            className="flex-1"
-          >
-            编辑
-          </Button>
-        )}
-        {canStart && (
-          <Button variant="primary" onClick={handleStart} className="flex-1">
-            启动
-          </Button>
-        )}
-        {canPause && (
-          <Button variant="ghost" onClick={handlePause} className="flex-1">
-            暂停
-          </Button>
-        )}
-        {pendingWrapUp && (
-          <Button
-            variant="ghost"
-            onClick={handleUrgeWrapUp}
-            className="flex-1"
-            title="向执行会话发送回合收尾核对提醒；若当前拿不到待办数据，提醒将不含未清项列表"
-          >
-            催收尾
-          </Button>
-        )}
-        {canResume && (
-          <Button variant="primary" onClick={handleResume} className="flex-1">
-            恢复
-          </Button>
-        )}
-        {!terminal && (
-          <Button variant="danger" onClick={handleCancel} className="flex-1">
-            取消任务
-          </Button>
-        )}
-      </div>
-      {!terminal && (
+      {/* 操作栏：归档任务（readOnly）整栏隐藏——只能查看，不能编辑/启动等操作 */}
+      {!readOnly && (
+        <div className="p-3 border-t border-subtle flex gap-2">
+          {!terminal && (
+            <Button
+              variant="secondary"
+              aria-label="编辑任务"
+              onClick={() => setEditOpen(true)}
+              className="flex-1"
+            >
+              编辑
+            </Button>
+          )}
+          {canStart && (
+            <Button variant="primary" onClick={handleStart} className="flex-1">
+              启动
+            </Button>
+          )}
+          {canPause && (
+            <Button variant="ghost" onClick={handlePause} className="flex-1">
+              暂停
+            </Button>
+          )}
+          {pendingWrapUp && (
+            <Button
+              variant="ghost"
+              onClick={handleUrgeWrapUp}
+              className="flex-1"
+              title="向执行会话发送回合收尾核对提醒；若当前拿不到待办数据，提醒将不含未清项列表"
+            >
+              催收尾
+            </Button>
+          )}
+          {canResume && (
+            <Button variant="primary" onClick={handleResume} className="flex-1">
+              恢复
+            </Button>
+          )}
+          {!terminal && (
+            <Button variant="danger" onClick={handleCancel} className="flex-1">
+              取消任务
+            </Button>
+          )}
+        </div>
+      )}
+      {!terminal && !readOnly && (
         <EditTaskDialog
           open={editOpen}
           onClose={() => setEditOpen(false)}

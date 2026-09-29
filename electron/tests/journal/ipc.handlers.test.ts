@@ -124,11 +124,12 @@ function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 describe('journal/ipc.handlers 通道注册 + boot 冒烟', () => {
-  it('注册 journal:list / revert / scan / rollbackFileBefore 四通道', () => {
+  it('注册 journal:list / revert / scan / rollbackFileBefore / preview 五通道', () => {
     expect(ipcHandlers.has('journal:list')).toBe(true);
     expect(ipcHandlers.has('journal:revert')).toBe(true);
     expect(ipcHandlers.has('journal:scan')).toBe(true);
     expect(ipcHandlers.has('journal:rollbackFileBefore')).toBe(true);
+    expect(ipcHandlers.has('journal:preview')).toBe(true);
   });
 
   it('boot 冒烟回归锁（T4 移交）：registerJournalIpc() 注册即注入主进程 store——getJournalStore() 非 null', () => {
@@ -187,6 +188,21 @@ describe('journal:list', () => {
     expect(views[0]!.afterText).toBe('xx');
   });
 
+  it('session scope（rollback spec §5.2）：聚合该 session 全部条目，含子 agent dispatch 写入（同 session 不同 stream）', async () => {
+    const { ws, dir } = await mkWorkspace('ws-list-session');
+    journaledCreate(rcOf(ws.id, { sessionId: 'sess-9', streamSessionId: 'stream-parent' }), dir, 'p.md', 'pp');
+    journaledCreate(rcOf(ws.id, { sessionId: 'sess-9', streamSessionId: 'stream-child' }), dir, 'c.md', 'cc');
+    journaledCreate(rcOf(ws.id, { sessionId: 'sess-8', streamSessionId: 'stream-parent' }), dir, 'o.md', 'oo');
+
+    const views = await call<JournalEntryView[]>('journal:list', {
+      workspaceId: ws.id,
+      sessionId: 'sess-9',
+    });
+
+    expect(views).toHaveLength(2);
+    expect(views.map((v) => v.path).sort()).toEqual(['c.md', 'p.md']);
+  });
+
   it('错误路径：taskId 与 streamSessionId 皆缺 → 空数组（不猜全量）', async () => {
     const { ws } = await mkWorkspace('ws-list-empty');
     const views = await call<JournalEntryView[]>('journal:list', { workspaceId: ws.id });
@@ -220,6 +236,25 @@ describe('journal:list', () => {
     expect(del).toBeDefined();
     expect(del!.beforeText).toBe('will-delete');
     expect(del!.afterText).toBeNull();
+  });
+});
+
+describe('journal:preview', () => {
+  it('干跑预测（rollback spec §5.1）：链式全绿预测 + 不写盘不记账', async () => {
+    const { ws, dir } = await mkWorkspace('ws-preview');
+    const rc = rcOf(ws.id);
+    const c = journaledCreate(rc, dir, 'a.md', 'v0');
+    const m = journaledModify(rc, dir, 'a.md', 'v0', 'v1');
+    const countBefore = getDb().prepare('SELECT COUNT(*) AS n FROM journal_entries').get() as { n: number };
+
+    const preview = await call<RevertOutcome[]>('journal:preview', ws.id, [c.id, m.id]);
+
+    expect(preview.map((o) => o.result)).toEqual(['reverted', 'reverted']);
+    expect(preview.map((o) => o.id)).toEqual([m.id, c.id]);
+    // 干跑：盘面与账面均不动
+    expect(fsSync.readFileSync(path.join(dir, 'a.md'), 'utf8')).toBe('v1');
+    const countAfter = getDb().prepare('SELECT COUNT(*) AS n FROM journal_entries').get() as { n: number };
+    expect(countAfter.n).toBe(countBefore.n);
   });
 });
 

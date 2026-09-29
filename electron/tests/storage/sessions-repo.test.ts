@@ -23,6 +23,7 @@ import {
   insertSession,
   getSession,
   listSessionsByWorkspace,
+  listAllSessions,
   renameSession,
   deleteSession,
   touchSessionLastMessage,
@@ -100,10 +101,11 @@ describe('sessions repo', () => {
     expect(row.title_auto).toBe(0);
   });
 
-  it('listSessionsByWorkspace 按 lastMessageAt 倒序（NULL 最后）且按 workspace 隔离', () => {
-    const s1 = insertSession({ workspaceId: 'ws1', title: 'a' });
-    const s2 = insertSession({ workspaceId: 'ws1', title: 'b' });
-    const s3 = insertSession({ workspaceId: 'ws1', title: 'c-untouched' });
+  it('listSessionsByWorkspace 排序键 = COALESCE(last_message_at, created_at)：空会话按创建时间居首（IM 惯例），且按 workspace 隔离', () => {
+    const sA = insertSession({ workspaceId: 'ws1', title: 'a' });
+    const sB = insertSession({ workspaceId: 'ws1', title: 'b' });
+    const sC = insertSession({ workspaceId: 'ws1', title: 'c' });
+    const sNew = insertSession({ workspaceId: 'ws1', title: '新建空会话' });
     getDb()
       .prepare(
         `INSERT INTO workspaces
@@ -112,15 +114,56 @@ describe('sessions repo', () => {
       )
       .run('ws-other', 'Other', '', '/tmp/other', 0, '@owner:s', '📁');
     insertSession({ workspaceId: 'ws-other', title: '别的 ws' });
-    // 直接写 last_message_at 保证时间戳严格递增（Date.now() 并发插入可能同值）
+
+    // 时间轴严格受控（Date.now() 并发插入可能同值），created_at / last_message_at 双写：
+    //   sA   created=1000, msg=9000 → 有效时间 9000
+    //   sB   created=5000, 无消息   → 有效时间 5000
+    //   sC   created=7000, 无消息   → 有效时间 7000
+    //   sNew created=9500, 无消息   → 有效时间 9500（主机 bug 场景：刚建的快速会话）
+    // 期望：sNew(9500) → sA(9000) → sC(7000) → sB(5000)
+    // 旧契约（NULL 直接 DESC 垫底）为 sA → sC → sB → sNew——新建会话乐观置顶后
+    // 切走切回即跳到列表末尾（2026-09-28 主机反馈）
     const db = getDb();
-    db.prepare('UPDATE sessions SET last_message_at = 1000 WHERE id = ?').run(s1.id);
-    db.prepare('UPDATE sessions SET last_message_at = 2000 WHERE id = ?').run(s2.id);
+    db.prepare('UPDATE sessions SET created_at = ?, last_message_at = ? WHERE id = ?').run(1000, 9000, sA.id);
+    db.prepare('UPDATE sessions SET created_at = ? WHERE id = ?').run(5000, sB.id);
+    db.prepare('UPDATE sessions SET created_at = ? WHERE id = ?').run(7000, sC.id);
+    db.prepare('UPDATE sessions SET created_at = ? WHERE id = ?').run(9500, sNew.id);
 
     const list = listSessionsByWorkspace('ws1');
-    // last_message_at DESC：s2(2000) → s1(1000) → s3(NULL 排最后)
-    expect(list.map((s) => s.id)).toEqual([s2.id, s1.id, s3.id]);
+    expect(list.map((s) => s.id)).toEqual([sNew.id, sA.id, sC.id, sB.id]);
     expect(list.every((s) => s.workspaceId === 'ws1')).toBe(true);
+  });
+
+  it('消息到达重排：旧会话收到更新的消息 → 反超新建空会话（微信语义）', () => {
+    const sNew = insertSession({ workspaceId: 'ws1', title: '新建空会话' });
+    const sOld = insertSession({ workspaceId: 'ws1', title: '旧会话' });
+    const db = getDb();
+    db.prepare('UPDATE sessions SET created_at = ? WHERE id = ?').run(9500, sNew.id);
+    db.prepare('UPDATE sessions SET created_at = ?, last_message_at = ? WHERE id = ?').run(1000, 9000, sOld.id);
+
+    // 初始：空会话（9500）居首
+    expect(listSessionsByWorkspace('ws1').map((s) => s.id)).toEqual([sNew.id, sOld.id]);
+
+    // 旧会话来了 9600 的消息 → 有效时间反超
+    db.prepare('UPDATE sessions SET last_message_at = ? WHERE id = ?').run(9600, sOld.id);
+    expect(listSessionsByWorkspace('ws1').map((s) => s.id)).toEqual([sOld.id, sNew.id]);
+  });
+
+  it('listAllSessions 跨 workspace 全量列表，排序契约与 listSessionsByWorkspace 同源', () => {
+    const sEmpty = insertSession({ workspaceId: 'ws1', title: 'ws1 空会话' });
+    getDb()
+      .prepare(
+        `INSERT INTO workspaces
+           (id, name, description, directory_path, git_initialized, owner_id, icon_emoji)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('ws2', 'WS2', '', '/tmp/2', 0, '@owner:s', '📁');
+    const sMessaged = insertSession({ workspaceId: 'ws2', title: 'ws2 有消息' });
+    const db = getDb();
+    db.prepare('UPDATE sessions SET created_at = ? WHERE id = ?').run(9000, sEmpty.id);
+    db.prepare('UPDATE sessions SET created_at = ?, last_message_at = ? WHERE id = ?').run(1000, 8000, sMessaged.id);
+
+    expect(listAllSessions().map((s) => s.id)).toEqual([sEmpty.id, sMessaged.id]);
   });
 
   it('touchSessionLastMessage 刷新排序键', () => {

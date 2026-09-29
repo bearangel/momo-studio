@@ -130,6 +130,44 @@ export function updateMessageStatus(id: string, status: MessageRow['status'], bo
   }
 }
 
+/**
+ * 逐层撤回（turn undo）：物理删除指定消息行。message_events 经 FK
+ * ON DELETE CASCADE 随删；message_compact_events 无 FK 需显式清理。
+ * 删除后重算受影响会话的 last_message_at（会话列表排序/预览依据）。
+ * opts.sessionId 提供时按会话归属过滤（防跨会话误删）。
+ * 返回实际删除的 id 与受影响会话——ids 中不存在的行静默跳过。
+ */
+export function deleteMessages(
+  ids: string[],
+  opts?: { sessionId?: string },
+): { deletedIds: string[]; affectedSessions: string[] } {
+  if (ids.length === 0) return { deletedIds: [], affectedSessions: [] };
+  const db = getDb();
+  const unique = [...new Set(ids)];
+  const selectClause = opts?.sessionId !== undefined ? ` AND session_id = ?` : '';
+  const rows = db
+    .prepare(`SELECT id, session_id FROM messages WHERE id IN (${unique.map(() => '?').join(',')})${selectClause}`)
+    .all(...unique, ...(opts?.sessionId !== undefined ? [opts.sessionId] : [])) as Array<
+    { id: string; session_id: string }
+  >;
+  if (rows.length === 0) return { deletedIds: [], affectedSessions: [] };
+
+  const rowIds = rows.map((r) => r.id);
+  const inClause = rowIds.map(() => '?').join(',');
+  db.prepare(`DELETE FROM message_compact_events WHERE message_id IN (${inClause})`).run(...rowIds);
+  db.prepare(`DELETE FROM messages WHERE id IN (${inClause})`).run(...rowIds);
+
+  const affected = [...new Set(rows.map((r) => r.session_id))];
+  const recompute = db.prepare(
+    `UPDATE sessions SET last_message_at = (SELECT MAX(created_at) FROM messages WHERE session_id = ?), updated_at = ? WHERE id = ?`,
+  );
+  const now = Date.now();
+  for (const sessionId of affected) {
+    recompute.run(sessionId, now, sessionId);
+  }
+  return { deletedIds: rowIds, affectedSessions: affected };
+}
+
 export function getMessage(id: string): MessageRow | null {
   const db = getDb();
   const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as SqlRow | undefined;

@@ -25,6 +25,7 @@ import {
   deleteSession,
   addSessionMember,
   listSessionsByWorkspace,
+  listAllSessions,
   type SessionRow,
 } from '../storage/sessions/repo';
 import { getWorkspace } from '../workspace/crud';
@@ -231,27 +232,6 @@ export function getSessionsForWorkspace(workspaceId?: string): SessionSummary[] 
     kind: s.kind,
     lastMessageAt: s.lastMessageAt,
     members: getSessionMembersInfo(s.id),
-  }));
-}
-
-/** 不过滤 workspace 的全量会话列表；内部辅助。 */
-function listAllSessions(): SessionRow[] {
-  const rows = getDb()
-    .prepare('SELECT * FROM sessions ORDER BY last_message_at DESC, created_at DESC')
-    .all() as Array<{
-    id: string; workspace_id: string; title: string; title_auto: number; kind: string;
-    settings_json: string | null; created_at: number; updated_at: number; last_message_at: number | null;
-  }>;
-  return rows.map((r) => ({
-    id: r.id,
-    workspaceId: r.workspace_id,
-    title: r.title,
-    titleAuto: r.title_auto === 1,
-    kind: r.kind as SessionRow['kind'],
-    settingsJson: r.settings_json,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    lastMessageAt: r.last_message_at,
   }));
 }
 

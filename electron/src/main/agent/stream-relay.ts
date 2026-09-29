@@ -32,6 +32,23 @@ import {
 } from '../storage/messages/repo';
 import { aggregateTextDeltas } from '../storage/messages/events-repo';
 import { writeCompactSnapshot } from '../storage/messages/event-compaction';
+import { getSession } from '../storage/sessions/repo';
+
+/**
+ * sessionId → workspaceId 解析缓存（start 插入消息行 workspace_id 用）。
+ * 消息级消费面（ChangesChip 的 workspaceId 守卫等）依赖该字段路由查询——
+ * start 插入不写则 segment/roll 的「继承父行」永远继承到 NULL，chip 永不渲染。
+ * 会话归属 workspace 不可变，缓存恒有效；会话不存在 → null（旧降级语义）。
+ */
+const sessionWorkspaceCache = new Map<string, string | null>();
+function workspaceOfSession(sessionId: string): string | null {
+  let wsId = sessionWorkspaceCache.get(sessionId);
+  if (wsId === undefined) {
+    wsId = getSession(sessionId)?.workspaceId ?? null;
+    sessionWorkspaceCache.set(sessionId, wsId);
+  }
+  return wsId;
+}
 
 /**
  * 终态点写压缩快照（C 方案，2026-09-25）：final 事件落盘后调用——事件流压缩
@@ -304,6 +321,8 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
           streamSessionId: chunk.streamSessionId,
           parentStreamSessionId: chunk.parentStreamSessionId ?? null,
           status: 'streaming',
+          // 消息行归属 workspace（经会话归属解析）——segment/roll 行继承本值
+          workspaceId: workspaceOfSession(chunk.sessionId),
           // v2.8.0 链路打标（Task 5）：undefined → NULL（普通 chat 流零变化）
           taskId: chunk.taskId,
         });

@@ -22,7 +22,7 @@ import { createJournalStore } from './store';
 import type { JournalStore } from './store';
 import { getJournalStore, setJournalStore } from './recorder';
 import type { RecordCtx } from './recorder';
-import { revertEntries } from './revert';
+import { revertEntries, previewRevert } from './revert';
 import type { RevertOutcome } from './revert';
 import { scanUnjournaled } from './detector';
 import type { JournalEntry, JournalEntryView } from './types';
@@ -86,20 +86,33 @@ export function registerJournalIpc(): void {
 
   ipcMain.handle(
     'journal:list',
-    async (_e, scope: { workspaceId: string; taskId?: string; streamSessionId?: string }) => {
+    async (
+      _e,
+      scope: { workspaceId: string; taskId?: string; streamSessionId?: string; sessionId?: string },
+    ) => {
       const store = requireStore();
       let entries: JournalEntry[];
       if (typeof scope.taskId === 'string') {
         entries = store.listByTask(scope.workspaceId, scope.taskId);
       } else if (typeof scope.streamSessionId === 'string') {
         entries = store.listByStream(scope.workspaceId, scope.streamSessionId);
+      } else if (typeof scope.sessionId === 'string') {
+        // 会话级聚合（rollback spec §5.2）：该 session 全部条目，含子 agent dispatch 写入
+        entries = store.listBySession(scope.workspaceId, scope.sessionId);
       } else {
-        // 两键皆空：无归组语义 → 空数组（显式 scope 才有显式结果，不猜全量）
+        // 三键皆空：无归组语义 → 空数组（显式 scope 才有显式结果，不猜全量）
         entries = [];
       }
       return entries.map((e) => toView(scope.workspaceId, e));
     },
   );
+
+  // 干跑预检（rollback spec §5.1）：与 revert 同序 classify + 链式虚拟状态模拟，
+  // 不写盘不记账；预测恒按 force=false，执行时守卫仍生效
+  ipcMain.handle('journal:preview', async (_e, workspaceId: string, ids: string[]) => {
+    const workspaceDir = requireWorkspaceDir(workspaceId);
+    return previewRevert(workspaceId, workspaceDir, ids);
+  });
 
   ipcMain.handle(
     'journal:revert',

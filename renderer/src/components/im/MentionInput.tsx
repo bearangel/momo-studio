@@ -35,7 +35,7 @@
 //   - Kimi 式单一容器（v2.11.1 F3→v3）：RichComposer 无边框置于容器内，
 //     框内底行仅剩 📎 左下角（chips 已由编辑器内联 pill 取代）
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Bot, EyeOff, FileText, Image as ImageIcon, Lock, Paperclip, Pin, Terminal, Zap } from 'lucide-react';
+import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, Paperclip, Pin, Terminal, Zap } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -118,6 +118,21 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 /** 内联图片提示自动消失间隔（毫秒） */
 const IMAGE_HINT_TIMEOUT_MS = 4000;
 
+/** pending 已耗时（秒）：active 上升沿复位归零，1s tick 给「仍在执行」信号 */
+function useElapsedSeconds(active: boolean): number {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    setSec(0);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      setSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return sec;
+}
+
 export function MentionInput() {
   const [menuType, setMenuType] = useState<MenuKind | null>(null);
   const [query, setQuery] = useState('');
@@ -152,6 +167,12 @@ export function MentionInput() {
   // 斜杠命令提示（spec §5.4）：成功 message 或失败 Error.message；下一次正常
   // 发消息时 store 自动置 null
   const commandHint = useSessionStore((s) => s.commandHint);
+  // 命令执行中（按会话键控）：pending 期间显示进度提示并禁用发送（防压缩中
+  // 并发开新回合破坏「摘要下轮生效」语义）
+  const commandPending = useSessionStore((s) =>
+    s.activeSessionId ? s.commandPendingBySession.get(s.activeSessionId) : undefined,
+  );
+  const pendingElapsed = useElapsedSeconds(commandPending !== undefined);
   const workspace = useWorkspaceStore((s) => s.getActive());
   const { tasks, load: loadTasks } = useTaskStore();
 
@@ -557,6 +578,9 @@ export function MentionInput() {
     // 空 body + context 是合法消息（spec §7.1：skill 正文即 prompt）
     const hasContext = !!payload.context;
     if ((!trimmed && !hasContext) || !activeSessionId) return;
+    // 命令执行中（如 /compact 的 LLM 摘要调用）禁发——并发开新回合会破坏
+    // 「摘要下轮生效」语义；pending 提示条已向用户说明原因
+    if (commandPending !== undefined) return;
     composerRef.current?.clear();
     syncImageHint();
     setMenuType(null);
@@ -615,6 +639,27 @@ export function MentionInput() {
         <div className="mb-2 text-xs text-tertiary inline-flex items-center gap-1">
           <Lock size={12} strokeWidth={1.75} aria-hidden className="inline-block align-[-1px]" />
           <span>会话成员已全部移出，会话只读（历史可查看）</span>
+        </div>
+      )}
+
+      {commandPending !== undefined && (
+        <div className="mb-2 flex justify-center" data-testid="command-pending-hint">
+          {/* 与 CompactNotice 结果卡同族的居中进度卡（pending ↔ result 对称）：
+              主行 + 已耗时计时器给「还活着」信号，副行说明耗时预期与发送暂停 */}
+          <div className="inline-flex flex-col gap-0.5 rounded-lg border border-subtle bg-surface-2 px-3 py-2">
+            <div className="flex items-center gap-2 text-sm text-primary">
+              <Loader2 size={14} strokeWidth={1.75} aria-hidden className="animate-spin" />
+              <span>
+                {commandPending === 'compact'
+                  ? '正在压缩会话历史…'
+                  : `正在执行 /${commandPending}…`}
+              </span>
+              <span className="text-xs tabular-nums text-tertiary">已进行 {pendingElapsed}s</span>
+            </div>
+            <div className="text-xs text-tertiary">
+              模型正在生成会话摘要，通常需要数秒到几十秒；期间发送已暂停
+            </div>
+          </div>
         </div>
       )}
 

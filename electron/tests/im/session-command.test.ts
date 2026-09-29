@@ -83,6 +83,7 @@ import {
   upsertSessionCompaction,
 } from '../../src/main/compaction/service';
 import { insertMessage, listRecentMessagesBySession } from '../../src/main/storage/messages/repo';
+import { broadcastLocalMessage } from '../../src/main/p2p';
 
 describe('handleSessionCommand(compact)', () => {
   beforeEach(() => {
@@ -101,19 +102,55 @@ describe('handleSessionCommand(compact)', () => {
     });
     // covered_until = 最后一条被覆盖消息（头部末条 m0）的 createdAt
     expect(upsertSessionCompaction).toHaveBeenCalledWith('s1', '测试摘要', 1000);
-    // ack 字段回归锁（审查 Minor）：eventType / workspaceId 是 renderer 渲染与
-    // workspace 归属的依赖字段，防漂移
+    // ack 契约（eventType 文本协议）：专用 eventType +「统计行 \n\n 摘要正文」body
+    // 协议——renderer CompactNotice 按首个空行切分（统计行 / 折叠摘要），此处锁
+    // 生产者侧形状（momo-boundary-rules 铁律 4：生产/消费成对 + 契约测试）
     expect(insertMessage).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's1',
-      body: expect.stringContaining('[系统] 会话已压缩'),
-      eventType: 'm.room.message' as const,
+      body: '已压缩 3 条历史消息（摘要自下轮生效）\n\n测试摘要',
+      eventType: 'io.momo-studio.compact',
       workspaceId: 'w1',
     }));
+    // LAN 广播只传统计行（同 eventType——对端 renderer 同款 CompactNotice 渲染为
+    // 无摘要通知行）；摘要全文不进只读镜像
+    expect(broadcastLocalMessage).toHaveBeenCalledWith({
+      roomId: 's1',
+      sender: 'owner',
+      body: '已压缩 3 条历史消息（摘要自下轮生效）',
+      eventType: 'io.momo-studio.compact',
+    });
+    // IPC 返回 message = 统计行（renderer 成功路径不展示它，但保持人类可读）
+    expect(r).toEqual({ ok: true, message: '已压缩 3 条历史消息（摘要自下轮生效）' });
   });
 
   it('运行中回查拒绝', async () => {
     await expect(handleSessionCommand({ sessionId: 'busy', command: 'compact' }))
       .rejects.toThrow('正在执行中');
+  });
+
+  // 历史中的 compact ack（上一轮压缩的 UI 通知，sender='owner'）不是对话内容：
+  // 不进序列化、不进计数、不参与「最近一轮」尾部锚定（否则 ack 会被误当
+  // 最后一条 user 消息，头部切分漂移 + 旧摘要全文二次进入压缩输入）
+  it('历史中的 compact ack 被过滤：不进序列化 / 计数 / 尾部锚定', async () => {
+    vi.mocked(listRecentMessagesBySession).mockReturnValueOnce([
+      historyFixture[0]!, // m0 agent（1000）
+      historyFixture[1]!, // m1 owner（1001）
+      {
+        ...historyFixture[0]!,
+        id: 'ack-prev',
+        sender: 'owner',
+        eventType: 'io.momo-studio.compact',
+        body: '已压缩 2 条历史消息（摘要自下轮生效）\n\n旧摘要全文',
+        createdAt: 1002,
+      },
+      { ...historyFixture[2]!, createdAt: 1003 }, // m2 agent
+    ]);
+    const r = await handleSessionCommand({ sessionId: 's1', command: 'compact' });
+    // 过滤后 history = [m0, m1, m2]：最后 user = m1 → head = [m0]；
+    // 若未过滤，ack 会被当最后 user → head = [m0, m1]（conversation 多一条 + 游标漂移）
+    expect(generateCompaction).toHaveBeenCalledWith({ sessionId: 's1', conversation: '[助手]: 消息0' });
+    expect(upsertSessionCompaction).toHaveBeenCalledWith('s1', '测试摘要', 1000);
+    expect(r.message).toBe('已压缩 3 条历史消息（摘要自下轮生效）');
   });
 
   it('未知命令拒绝', async () => {

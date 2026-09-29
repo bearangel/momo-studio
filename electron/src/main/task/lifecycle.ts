@@ -17,6 +17,7 @@ import { getTask, transitionTaskStatus, type TaskRow } from '../storage/tasks/re
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor, buildKickoffBody } from './executor';
 import { startTask, type StartTaskOpts, type StartTaskResult } from './starter';
+import { captureTaskScanBaseline } from '../journal/baseline';
 import { abortTasksBySessionEverywhere } from '../agent/runtime-registry';
 import { abortTaskStreamByLane } from '../agent/session-lane';
 import { sendUserMessage, broadcastSessionListChanged } from '../im/session-service';
@@ -94,6 +95,12 @@ export async function startTaskAndKickoff(
 export async function resumePausedTask(id: string): Promise<TaskRow> {
   // K7-5 既有行为逐字节保持：transition + kickoff 重注入
   const row = transitionTaskStatus(id, 'in_progress');
+  // paused→in_progress 补基线捕获（未入账误归因根治，2026-09-29）：幂等守卫下
+  // 首次 startTask 已建基线则 no-op；仅防「首次启动早于本功能上线的 paused
+  // 任务 resume」漏网（此时任务已暂停多时，补建的是当前瞬时基线，best-effort）。
+  // 必须先于下方 kickoff 重注入——agent 恢复执行后的写入会污染基线。捕获失败
+  // 内部 warn 不抛，不阻塞恢复。
+  await captureTaskScanBaseline(row.workspaceId, id);
   if (row.executionSessionId) {
     await sendUserMessage({
       sessionId: row.executionSessionId,

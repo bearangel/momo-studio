@@ -22,6 +22,8 @@ import { migration044 } from './044_session_file_reads';
 import { migration045 } from './045_provider_models_vision';
 import { migration046 } from './046_provider_models_vision_tri_state';
 import { migration047 } from './047_kanban_groups_archive';
+import { migration048 } from './048_journal_session_index';
+import { migration049 } from './049_task_scan_baseline';
 
 export interface Migration {
   version: number;
@@ -1001,6 +1003,20 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 047_kanban_groups_archive.ts（约定同 032-046）。
     version: migration047.version,
     sql: migration047.sql,
+  },
+  {
+    // journal_entries 会话级索引（变更回滚重构 spec 2026-09-28 §5.2——
+    // journal:list scope sessionId 查询支撑）。SQL 住在独立模块
+    // 048_journal_session_index.ts（约定同 032-047）。
+    version: migration048.version,
+    sql: migration048.up,
+  },
+  {
+    // 任务起点扫描基线两表（未入账变更误归因根治，2026-09-29）：meta 行
+    // （task_scan_baseline）+ 脏路径行（task_scan_baseline_path）。SQL 住
+    // 在独立模块 049_task_scan_baseline.ts（约定同 032-048）。
+    version: migration049.version,
+    sql: migration049.up,
   },
 ];
 

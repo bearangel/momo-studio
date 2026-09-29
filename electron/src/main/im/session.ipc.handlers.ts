@@ -34,6 +34,7 @@ import {
   listOlderMessages,
   countOwnerMessages,
   listMessagesByStreamSessionId,
+  deleteMessages,
   type MessageRow,
 } from '../storage/messages/repo';
 import {
@@ -229,6 +230,20 @@ export function registerSessionIpcHandlers(): void {
   ipcMain.handle('session:getMessages', async (_evt, sessionId: string) => {
     return withEvents(listMessagesBySession(sessionId));
   });
+
+  // 逐层撤回（turn undo）的消息删除面：按会话归属过滤物理删除（事件级联 +
+  // 压缩快照清理 + last_message_at 重算在 repo 内）。返回实际删除的 id——
+  // renderer 据此判断删除是否生效（部分 id 不属于本会话时静默跳过）。
+  ipcMain.handle(
+    'session:deleteMessages',
+    async (_evt, sessionId: string, ids: string[]): Promise<{ deletedIds: string[] }> => {
+      if (typeof sessionId !== 'string' || !Array.isArray(ids) || ids.some((i) => typeof i !== 'string')) {
+        throw new Error('session:deleteMessages 参数非法：需要 (sessionId: string, ids: string[])');
+      }
+      const { deletedIds } = deleteMessages(ids, { sessionId });
+      return { deletedIds };
+    },
+  );
 
   // 向前翻页：created_at < beforeTs 的消息；满批 hasMore=true（与 im:loadOlderMessages 同法）。
   // 翻页消息天然比已加载的更早 → 全部走压缩快照（fullRecentCount=0）。

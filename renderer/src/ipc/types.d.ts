@@ -1218,6 +1218,13 @@ export interface SessionApiSurface {
   getMessages(
     sessionId: string,
   ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+  /**
+   * 逐层撤回（turn undo）的消息删除面：按会话归属过滤物理删除消息行
+   * （message_events FK 级联 + message_compact_events 清理 + 会话
+   * last_message_at 重算均主进程侧完成）。返回实际删除的 id——不属于
+   * 该会话的 id 静默跳过。
+   */
+  deleteMessages(sessionId: string, ids: string[]): Promise<{ deletedIds: string[] }>;
   /** 斜杠命令（spec §5.4）：/compact 等确定性命令。未知命令/运行中/无模型配置时 reject（Error.message 中文提示） */
   command(sessionId: string, command: string): Promise<{ ok: true; message: string }>;
   /** 会话命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；主进程 commands.ts 单一真相源 */
@@ -1416,6 +1423,11 @@ export interface JournalScanResult {
   unjournaled: string[];
   repos: string[];
   degraded: boolean;
+  /** 任务起点基线归因是否可用（与 electron 端 ScanResult.baselineAvailable 对齐）：
+   *  false = 无基线 / 降级基线（旧任务或捕获失败），unjournaled 为工作区累计
+   *  账外状态而非本任务专属（UI 据此显示提示行）；taskId=null（快速会话，
+   *  基线概念不适用）恒 true；degraded=true 时恒 false（三列恒空，无提示意义）。 */
+  baselineAvailable: boolean;
 }
 
 /**
@@ -1426,19 +1438,27 @@ export interface JournalScanResult {
  */
 export interface JournalApiSurface {
   /**
-   * 列条目视图。两 scope：taskId（任务组）/ streamSessionId（消息行流）；
-   * 两键皆空返回空数组。
+   * 列条目视图。三 scope（优先级从高到低）：taskId（任务组）/ streamSessionId
+   * （消息行流）/ sessionId（会话级聚合——该 session 全部条目，含子 agent
+   * dispatch 写入，rollback spec 2026-09-28 §5.2）；三键皆空返回空数组。
    */
   list(scope: {
     workspaceId: string;
     taskId?: string;
     streamSessionId?: string;
+    sessionId?: string;
   }): Promise<JournalEntryView[]>;
   /**
    * 撤销指定条目（按 id 批量）；执行序 = 全局 created_at 逆序。
    * force=true 在 hash 漂移时强制写回（会丢失其后变更，UI 需明确警告）。
    */
   revert(workspaceId: string, ids: string[], opts?: { force?: boolean }): Promise<RevertOutcome[]>;
+  /**
+   * 干跑预检（rollback spec 2026-09-28 §5.1）：与 revert 同序逐条预测，链式
+   * 虚拟状态模拟；不写盘不记账，预测恒按 force=false（执行时守卫仍生效，
+   * UI 文案需标注「以执行时守卫为准」）。
+   */
+  preview(workspaceId: string, ids: string[]): Promise<RevertOutcome[]>;
   /**
    * 账外变更扫描：与 journaled 取差集（taskId=null 取全 workspace 路径并集，
    * 否则取该任务组路径子集）；degraded=true 时三列恒空。

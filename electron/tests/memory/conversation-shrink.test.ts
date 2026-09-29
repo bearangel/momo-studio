@@ -246,3 +246,39 @@ describe('prune 微压缩（spec §8）', () => {
     expect(ctx.messages[0]!.content).toBe('[此前对话压缩摘要]\n组合摘要');
   });
 });
+
+// ─── ④ compact ack 排除（B 档反馈改造：UI 通知不进 prompt） ────────────────────
+// /compact 的确认消息（eventType io.momo-studio.compact，sender='owner'，
+// body 含摘要全文）是 UI 呈现物，不是对话内容——不排除则它以 user 消息形态
+// 进入后续每轮上下文，body 里的摘要全文与注入条重复（每轮双份摘要噪声）。
+
+describe('compact ack 排除（UI 通知不进上下文）', () => {
+  const provider = new SQLiteMemoryProvider();
+
+  it('有 compaction 行：ack 不进拉取集合——摘要只经注入条出现一次', async () => {
+    const rows = seedMessages([
+      { sender: 'owner', body: 'q1' }, // m1 user（覆盖游标锚定到此）
+      { sender: 'agent-coder-a1b2c3', body: 'a1' }, // m2
+      { sender: 'owner', body: '已压缩 2 条历史消息（摘要自下轮生效）\n\n旧摘要全文', eventType: 'io.momo-studio.compact' }, // m3 ack → 排除
+      { sender: 'owner', body: 'q2' }, // m4 user
+      { sender: 'agent-coder-a1b2c3', body: 'a2' }, // m5
+    ]);
+    upsertSessionCompaction(SESSION_ID, '真实摘要', rows[1]!.createdAt);
+
+    const ctx = await provider.getConversationContext(SESSION_ID);
+    // 注入条 + m4 + m5（m3 ack 不在）
+    expect(ctx.messages.map((m) => m.content)).toEqual(
+      ['[此前对话压缩摘要]\n真实摘要', 'q2', 'a2'],
+    );
+  });
+
+  it('无 compaction 行：ack 同样排除（不依赖 compaction 触发）', async () => {
+    seedMessages([
+      { sender: 'owner', body: 'q1' },
+      { sender: 'owner', body: '已压缩 1 条历史消息（摘要自下轮生效）\n\n摘要', eventType: 'io.momo-studio.compact' },
+    ]);
+
+    const ctx = await provider.getConversationContext(SESSION_ID);
+    expect(ctx.messages.map((m) => m.content)).toEqual(['q1']);
+  });
+});

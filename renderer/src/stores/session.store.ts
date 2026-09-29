@@ -67,6 +67,12 @@ interface SessionState {
    * 正常发消息时置 null 自动消失。
    */
   commandHint: string | null;
+  /**
+   * 斜杠命令执行中——sessionId → 命令名。/compact 的主进程执行含真实 LLM 摘要
+   * 调用（秒级），期间 UI 显示「正在压缩…」并禁用发送（防压缩中并发开新回合，
+   * 破坏「摘要下轮生效」语义）。按会话键控：A 会话压缩中可切到 B 会话正常操作。
+   */
+  commandPendingBySession: Map<string, string>;
 
   /**
    * 拉取会话列表，默认激活第一个会话并加载其消息。
@@ -125,6 +131,12 @@ interface SessionState {
   ) => Promise<boolean>;
   /** 向前翻页加载更早历史（用户滚到顶部触发；防抖 + 到底短路） */
   loadOlder: (sessionId: string) => Promise<void>;
+  /**
+   * 无条件重拉会话消息（逐层撤回删除气泡后的刷新——与 selectSession 的
+   * 首载分支同语义：覆写 messagesBySession 并清掉已删消息的 events 缓存与
+   * stream 聚合态）
+   */
+  reloadMessages: (sessionId: string) => Promise<void>;
   /** 递增 fileTriggerTick（MentionInput 容器内 📎 按钮，v2.11.1 起移入；Task 10 信号机制不变） */
   bumpFileTrigger: () => void;
   /** 重置全部状态（登出时调用） */
@@ -149,6 +161,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loadOlderError: null,
   membersError: null,
   commandHint: null,
+  commandPendingBySession: new Map(),
   thinkingPendingBySession: new Map(),
 
   loadSessions: async (workspaceId) => {
@@ -304,6 +317,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  reloadMessages: async (sessionId) => {
+    try {
+      const { messages, eventsByMessage } = await ipc.session.getMessages(sessionId);
+      // 与 selectSession 首载同语义：events 灌入 stream.store 重建聚合态
+      const bodyById = new Map(messages.map((m) => [m.id, m.body]));
+      for (const [msgId, evs] of Object.entries(eventsByMessage)) {
+        useStreamStore.getState().hydrateFromEvents(msgId, evs, bodyById.get(msgId));
+      }
+      set((state) => {
+        const msgMap = new Map(state.messagesBySession);
+        const prevIds = new Set((msgMap.get(sessionId) ?? []).map((m) => m.id));
+        const nextIds = new Set(messages.map((m) => m.id));
+        const evMap = new Map(state.eventsByMessage);
+        // 已删消息的 events 缓存同步清除（防幽灵行供后续消费）
+        for (const id of prevIds) if (!nextIds.has(id)) evMap.delete(id);
+        msgMap.set(sessionId, messages);
+        for (const [msgId, evs] of Object.entries(eventsByMessage)) {
+          evMap.set(msgId, evs);
+        }
+        return { messagesBySession: msgMap, eventsByMessage: evMap };
+      });
+    } catch (err) {
+      set({ error: `重载会话消息失败：${(err as Error).message}` });
+    }
+  },
+
   loadMembers: async (sessionId) => {
     // 触发重试前清空旧错误——避免前一次失败提示在成功后仍然残留
     set({ membersError: null });
@@ -334,16 +373,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       map.set(msg.sessionId, [...existing, msg]);
       // 列表实时性（2026-09-08 主机 bug）：非当前打开会话来消息（如任务在
       // 其他会话执行）时列表毫无动静——切走切回重拉才更新。顺带同步目标
-      // 会话的 lastMessageAt 并按主进程排序契约（lastMessageAt DESC,
-      // createdAt DESC，NULL 最后）重排。sessionId 不在列表（未加载会话）
-      // 时跳过——新会话列表同步由 K10 的 pullSessionList 承担
+      // 会话的 lastMessageAt 并上浮置顶。sessionId 不在列表（未加载会话）
+      // 时跳过——新会话列表同步由 K10 的 pullSessionList 承担。
+      // 2026-09-28：只上浮、禁全量 sort——主进程排序键已是 COALESCE
+      // (last_message_at, created_at)（空会话按创建时间居首），且
+      // SessionSummary 无 createdAt，全量 sort 必把空会话压底、与主进程
+      // 契约打架。收到最新消息的会话有效时间最大，上浮即正确位置。
       const sIdx = state.sessions.findIndex((s) => s.id === msg.sessionId);
       if (sIdx === -1) return { messagesBySession: map };
-      const sessions = [...state.sessions];
-      sessions[sIdx] = { ...sessions[sIdx]!, lastMessageAt: msg.createdAt };
-      // tie-break：SessionSummary 无 createdAt（renderer 契约字段），同值时
-      // 依赖 sort 稳定性保持原相对序，下次 loadSessions 权威重排
-      sessions.sort((a, b) => (b.lastMessageAt ?? -Infinity) - (a.lastMessageAt ?? -Infinity));
+      const updated = { ...state.sessions[sIdx]!, lastMessageAt: msg.createdAt };
+      const sessions = state.sessions.filter((s) => s.id !== msg.sessionId);
+      sessions.unshift(updated);
       return { messagesBySession: map, sessions };
     });
     // A 子系统：流式→持久化由 MessageList 通过 streamSessionId 去重处理，
@@ -378,11 +418,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       body = body.slice(1);
     } else if (/^\/([A-Za-z0-9-]+)\s*$/.test(body)) {
       const command = body.slice(1).trim();
+      // pending 先于 await 置位（按会话键控）：命令执行含秒级 LLM 调用，期间
+      // MentionInput 显示「正在压缩…」并禁用发送；同时清掉上一条 hint 防残留
+      set((s) => ({
+        commandPendingBySession: new Map(s.commandPendingBySession).set(activeSessionId, command),
+        commandHint: null,
+      }));
       try {
-        const r = await ipc.session.command(activeSessionId, command);
-        set({ commandHint: r.message });
+        await ipc.session.command(activeSessionId, command);
+        // 成功：结果以消息卡片经 session:message 推进消息流（compact →
+        // CompactNotice），hint 条不重复展示返回 message
+        set((s) => {
+          const next = new Map(s.commandPendingBySession);
+          next.delete(activeSessionId);
+          return { commandPendingBySession: next, commandHint: null };
+        });
       } catch (err) {
-        set({ commandHint: err instanceof Error ? err.message : String(err) });
+        set((s) => {
+          const next = new Map(s.commandPendingBySession);
+          next.delete(activeSessionId);
+          return { commandPendingBySession: next, commandHint: err instanceof Error ? err.message : String(err) };
+        });
       }
       return undefined;
     }
@@ -450,6 +506,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       loadOlderError: null,
       membersError: null,
       commandHint: null,
+      commandPendingBySession: new Map(),
     });
   },
 }));

@@ -1,7 +1,7 @@
 // renderer/src/components/common/JournalChangeViews.tsx
 //
 // 变更账本共享呈现件（v2.5 Task 8 首建于 ChangesChip，Task 9 提取共享）：
-// 消息流 chip（im/ChangesChip）与任务卡「变更审查」面板（task-board/TaskChangesPanel）
+// 消息流 chip（im/ChangesChip）与任务卡「变更与回滚」面板（task-board/TaskChangesPanel）
 // 两个入口共用同一套行级 diff 渲染与撤回五态结果列表，避免平行实现漂移。
 //
 //   - groupByPath：同 path 链式条目归组，净 diff 语义 = 组内首条 before → 末条 after
