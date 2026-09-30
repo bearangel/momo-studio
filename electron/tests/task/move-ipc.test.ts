@@ -98,6 +98,32 @@ describe('task:move IPC', () => {
   });
 });
 
+describe('task:setPinned IPC（迁移 050 顶置开关）', () => {
+  it('pin → pinned_at 置当前时间;unpin → 置空;均广播快照', async () => {
+    const t = seed('draft');
+    const handler = handlers.get('task:setPinned');
+    expect(handler).toBeDefined();
+
+    const pinned = (await handler!(null, t.id, true)) as TaskRow;
+    expect(pinned.pinnedAt).not.toBeNull();
+
+    const unpinned = (await handler!(null, t.id, false)) as TaskRow;
+    expect(unpinned.pinnedAt).toBeNull();
+    expect(broadcastSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('重复 pin 刷新时间戳（重新压顶语义）+ 不存在的任务拒绝', async () => {
+    const t = seed('draft');
+    const handler = handlers.get('task:setPinned')!;
+    const first = (await handler(null, t.id, true)) as TaskRow;
+    await new Promise((r) => setTimeout(r, 2)); // 隔开时间戳粒度
+    const again = (await handler(null, t.id, true)) as TaskRow;
+    expect(again.pinnedAt!).toBeGreaterThan(first.pinnedAt!);
+
+    await expect(handler(null, 'no-such-id', true)).rejects.toThrow('不存在');
+  });
+});
+
 describe('task:archive IPC', () => {
   it('终态任务归档成功置 archived_at', async () => {
     const done = seed('completed');
@@ -153,9 +179,9 @@ describe('task:list archived 三态透传', () => {
 
 describe('task:update 受保护字段剥离（看板重构 Task 8 契约洞加固）', () => {
   // Task 7 review：通用 update 通道可绕过 task:move / task:archive 的不变式
-  // （boardPosition 排序、archivedAt 归档域、groupId 落组）——patch 携带三字段
+  // （pinnedAt 顶置、archivedAt 归档域、groupId 落组）——patch 携带三字段
   // 必须静默剥离（落库保持 NULL 不生效）且不抛错，合法字段照常应用
-  it('patch 携带 boardPosition/archivedAt/groupId → 不生效且不抛错,合法字段照常应用', async () => {
+  it('patch 携带 pinnedAt/archivedAt/groupId → 不生效且不抛错,合法字段照常应用', async () => {
     const g = createGroup({ workspaceId: WS, name: 'g1' });
     const t = seed('draft');
     const handler = handlers.get('task:update');
@@ -164,7 +190,7 @@ describe('task:update 受保护字段剥离（看板重构 Task 8 契约洞加�
     await expect(
       handler!(null, t.id, {
         title: '改名',
-        boardPosition: 512,
+        pinnedAt: 512,
         archivedAt: 12345,
         groupId: g.id,
       }),
@@ -172,7 +198,7 @@ describe('task:update 受保护字段剥离（看板重构 Task 8 契约洞加�
 
     const row = getTask(t.id)!;
     expect(row.title).toBe('改名');
-    expect(row.boardPosition).toBeNull();
+    expect(row.pinnedAt).toBeNull();
     expect(row.archivedAt).toBeNull();
     expect(row.groupId).toBeNull();
     expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(

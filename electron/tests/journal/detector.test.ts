@@ -1,51 +1,30 @@
 // electron/tests/journal/detector.test.ts
 //
-// git 探测器测试（v2.5 变更账本 Task 5）：多仓发现 + 未入账扫描。
+// git 探测管道件测试：多仓发现（../git/repos）+ porcelain v1 解析
+// （detector.parsePorcelain——baseline.ts 基线捕获消费的管道件）。
+// 2026-09-30 scan IPC 退役：scanUnjournaled 对账用例随之移除（可从 git
+// 历史找回）；porcelain 解析的边界语义（rename/引号 CJK/短行）改为直接
+// 单测锁定，不再经 scan 间接覆盖。
 //
-// fixture 照 tests/journal/store.test.ts：AP_USER_DATA_DIR 注入临时目录 +
-// runMigrations 真实建库 + __setJournalStoreForTest 注入真实 store——
-// journal 对账走真实 SQLite（momo-test-rules 铁律 1）。
-// 仓库发现用真实 `git init` fixture（外层 repo + inner/ 内层 repo + inner2/
-// 普通目录）；git 命令执行用 fake GitRunner 注入 porcelain 输出——探测的
-// 对象是「解析 + 对账」逻辑，不是 git 本身。
-//
-// 断言清单（task brief Step 1）：
-//   discoverRepos：根仓 + 内层仓发现 / 深度限制（默认 3 层）/ 跳过
-//     node_modules 与隐藏目录 / 缓存 mtime 命中与失效 / 目录不存在
-//   scanUnjournaled：差集正确（journaled=git变更∩账本、unjournaled=差集）/
-//     untracked 计入 / rename 取新路径 / 引号八进制 CJK 路径还原 /
-//     taskId=null 用全 workspace 并集（设计裁定）/ 账本路径反斜杠 POSIX 对齐 /
-//     ENOENT 与非零退出与截断均 degraded / store 未注入 fail-fast
-//
+// 仓库发现用真实 `git init` fixture（外层 repo + inner/ 内层 repo +
+// inner2/ 普通目录）。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { createJournalStore } from '../../src/main/journal/store';
-import { __setJournalStoreForTest, hashContent } from '../../src/main/journal/recorder';
 import { discoverRepos } from '../../src/main/git/repos';
-import { scanUnjournaled, defaultGitRunner } from '../../src/main/journal/detector';
-import type { GitRunner } from '../../src/main/journal/detector';
-import type { JournalEntry } from '../../src/main/journal/types';
+import { parsePorcelain } from '../../src/main/journal/detector';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-journal-detector-${Date.now()}`);
 
 beforeEach(() => {
   fs.mkdirSync(tmpRoot, { recursive: true });
-  process.env.AP_USER_DATA_DIR = tmpRoot;
-  runMigrations();
-  __setJournalStoreForTest(createJournalStore(getDb()));
 });
 
 afterEach(() => {
-  __setJournalStoreForTest(null);
-  closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
-  delete process.env.AP_USER_DATA_DIR;
 });
 
 function gitInit(dir: string): void {
@@ -66,42 +45,6 @@ function mkWorkspace(): string {
   mkRepo(path.join(ws, 'inner'));
   fs.mkdirSync(path.join(ws, 'inner2'));
   return ws;
-}
-
-/** 生产语义条目构造器（照 store.test.ts 模式） */
-function entry(overrides: Partial<JournalEntry> = {}): JournalEntry {
-  return {
-    id: `je_${randomUUID()}`,
-    workspaceId: 'ws-A',
-    taskId: 'T-1',
-    sessionId: 'sess-1',
-    streamSessionId: 'stream-1',
-    toolName: 'write_file',
-    path: 'README.md',
-    op: 'create',
-    beforeHash: null,
-    afterHash: null,
-    oldPath: null,
-    createdAt: 1_000,
-    ...overrides,
-  };
-}
-
-/**
- * fake runner：按 `-C <repo>` 的 repo 根分发表；记录每次调用参数。
- * 输出壳（code/stderr/errCode/truncated）默认成功形态，失败场景单独构造。
- */
-function fakeRunnerByRepo(
-  table: Record<string, string>,
-): { runner: GitRunner; calls: string[][] } {
-  const calls: string[][] = [];
-  const runner: GitRunner = async (args) => {
-    calls.push(args);
-    // 约定：args = ['-C', repo, 'status', ...]，repo 恒在第二位
-    const repo = args[1] ?? '';
-    return { code: 0, stdout: table[repo] ?? '', stderr: '', errCode: null, truncated: false };
-  };
-  return { runner, calls };
 }
 
 describe('discoverRepos：多仓发现', () => {
@@ -165,326 +108,26 @@ describe('discoverRepos：多仓发现', () => {
   });
 });
 
-describe('scanUnjournaled：账外变更对账', () => {
-  it('差集正确 + untracked 计入 + rename 取新路径 + 引号八进制 CJK 路径还原 + runner 参数形态', async () => {
-    const ws = mkWorkspace();
-    // 账本：T-1 记了两笔（内层仓相对 workspace 根的路径 + 根仓路径）
-    const store = createJournalStore(getDb());
-    store.insert(entry({ path: 'inner/src/a.ts', op: 'modify' }));
-    store.insert(entry({ path: 'README.md', op: 'create' }));
-
-    // porcelain 输出按 repo 分发：根仓有 M + 未跟踪；内层仓有 M + rename + 引号 CJK 未跟踪
-    // \346\226\207 = 文（E6 96 87）、\346\234\253 = 末（E6 9C AB）——git 对非 ASCII 路径的八进制转义形态
-    const { runner, calls } = fakeRunnerByRepo({
-      [ws]: ' M README.md\n?? notes.md\n',
-      [path.join(ws, 'inner')]:
-        ' M src/a.ts\nR  src/old.ts -> src/new.ts\n?? "spa ce/\\346\\226\\207\\346\\234\\253.txt"\n',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-
-    expect(result.degraded).toBe(false);
-    expect(result.repos).toEqual([ws, path.join(ws, 'inner')]);
-    // journaled = git 变更 ∩ 账本路径（POSIX、相对 workspace 根、排序）
-    expect(result.journaled).toEqual(['README.md', 'inner/src/a.ts']);
-    // unjournaled = git 变更 − 账本路径：rename 取新路径、untracked 计入、CJK 路径还原
-    expect(result.unjournaled).toEqual([
-      'inner/spa ce/文末.txt',
-      'inner/src/new.ts',
-      'notes.md',
-    ]);
-    // runner 收到的参数形态：-C <repo> status --porcelain=v1 --untracked-files=all
-    expect(calls).toEqual([
-      ['-C', ws, 'status', '--porcelain=v1', '--untracked-files=all'],
-      ['-C', path.join(ws, 'inner'), 'status', '--porcelain=v1', '--untracked-files=all'],
-    ]);
+describe('parsePorcelain：porcelain v1 解析（baseline 捕获消费）', () => {
+  it('M / untracked / A 行 → 路径列表；CRLF 行尾兼容', () => {
+    const out = ' M README.md\n?? notes.md\nA  staged.ts\r\n';
+    expect(parsePorcelain(out)).toEqual(['README.md', 'notes.md', 'staged.ts']);
   });
 
-  it('taskId=null → journaled 集为全 workspace 条目并集（跨任务条目算已入账）；指定 taskId 时归未入账', async () => {
-    const ws = mkWorkspace();
-    const store = createJournalStore(getDb());
-    store.insert(entry({ taskId: 'T-1', path: 'README.md', createdAt: 100 }));
-    store.insert(entry({ taskId: 'T-2', path: 'shared.md', createdAt: 200 }));
-    store.insert(entry({ taskId: null, sessionId: null, path: 'quick.md', createdAt: 300 }));
-
-    // 根仓变更：shared.md（T-2 记的）+ quick2.md（未记账）；内层仓无变更
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' M shared.md\n?? quick2.md\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    // taskId=null：对账基线是全 workspace 并集——shared.md 虽属 T-2 也算已入账
-    const nullScan = await scanUnjournaled('ws-A', ws, null, { runner });
-    expect(nullScan.degraded).toBe(false);
-    expect(nullScan.journaled).toEqual(['shared.md']);
-    expect(nullScan.unjournaled).toEqual(['quick2.md']);
-
-    // 指定 T-1：T-1 只记了 README.md，shared.md 归未入账
-    const t1Scan = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(t1Scan.journaled).toEqual([]);
-    expect(t1Scan.unjournaled).toEqual(['quick2.md', 'shared.md']);
+  it('rename/copy（R/C）行取 `旧 -> 新` 的新路径（现行存在位）', () => {
+    const out = 'R  old-name.ts -> new-name.ts\nC  copy-a.ts -> copy-b.ts\n';
+    expect(parsePorcelain(out)).toEqual(['new-name.ts', 'copy-b.ts']);
   });
 
-  it('Windows 对齐：账本路径含反斜杠 → 统一 POSIX 后对齐命中', async () => {
-    const ws = mkWorkspace();
-    const store = createJournalStore(getDb());
-    // 模拟 Windows 记账侧落库路径形态 inner\src\a.ts
-    store.insert(entry({ path: 'inner\\src\\a.ts', op: 'modify' }));
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: '',
-      [path.join(ws, 'inner')]: ' M src/a.ts\n',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.journaled).toEqual(['inner/src/a.ts']);
-    expect(result.unjournaled).toEqual([]);
+  it('引号包裹的八进制转义 CJK 路径还原（\\346\\226\\207 = 文）', () => {
+    // git core.quotePath 默认形态：非 ASCII 路径引号包裹 + 八进制字节转义
+    // 「文档记」= E6 96 87 / E6 A1 A3 / E8 AE B0
+    const out = '?? "\\346\\226\\207\\346\\241\\243\\350\\256\\260.md"\n';
+    expect(parsePorcelain(out)).toEqual(['文档记.md']);
   });
 
-  it('git ENOENT → degraded=true + 空结果（spec：本机无 git 无法交叉核对）；baselineAvailable=false', async () => {
-    const ws = mkWorkspace();
-    const runner: GitRunner = async () => ({
-      code: null,
-      stdout: '',
-      stderr: 'spawn git ENOENT',
-      errCode: 'ENOENT',
-      truncated: false,
-    });
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result).toEqual({
-      journaled: [],
-      unjournaled: [],
-      repos: [],
-      degraded: true,
-      baselineAvailable: false,
-    });
-  });
-
-  it('git 非零退出（非 ENOENT，如仓库损坏 128）→ 同样 degraded（不半真半假）', async () => {
-    const ws = mkWorkspace();
-    const runner: GitRunner = async () => ({
-      code: 128,
-      stdout: '',
-      stderr: 'fatal: not a git repository',
-      errCode: null,
-      truncated: false,
-    });
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.degraded).toBe(true);
-    expect(result.unjournaled).toEqual([]);
-  });
-
-  it('输出截断 → degraded（porcelain 不完整不可对账）', async () => {
-    const ws = mkWorkspace();
-    const runner: GitRunner = async () => ({
-      code: 0,
-      stdout: ' M README.md',
-      stderr: '',
-      errCode: null,
-      truncated: true,
-    });
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.degraded).toBe(true);
-    expect(result.journaled).toEqual([]);
-  });
-
-  it('store 未注入 → fail-fast 抛错（接线缺陷不该静默降级）', async () => {
-    const ws = mkWorkspace();
-    __setJournalStoreForTest(null);
-    const { runner } = fakeRunnerByRepo({ [ws]: '' });
-    await expect(scanUnjournaled('ws-A', ws, 'T-1', { runner })).rejects.toThrow(/未注入/);
-  });
-
-  it('porcelain 空输出 → 双空列表 + degraded=false；路径顺序排序稳定', async () => {
-    const ws = mkWorkspace();
-    const { runner } = fakeRunnerByRepo({ [ws]: '', [path.join(ws, 'inner')]: '' });
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result).toEqual({
-      journaled: [],
-      unjournaled: [],
-      repos: [ws, path.join(ws, 'inner')],
-      degraded: false,
-      baselineAvailable: false, // T-1 无基线（本用例未捕获）→ 回退累计差集语义
-    });
-  });
-});
-
-describe('scanUnjournaled：任务起点基线差集归因 + 应用内部目录豁免（2026-09-29 误归因根治）', () => {
-  /** 直插基线（照 baseline.ts 生产语义：path = workspace 根相对 POSIX，
-   *  hash = 真实文件内容 sha256 或 null = 捕获时不可读） */
-  function seedBaseline(
-    workspaceId: string,
-    taskId: string,
-    paths: Array<{ path: string; contentHash: string | null }>,
-    opts: { degraded?: boolean } = {},
-  ): void {
-    const store = createJournalStore(getDb());
-    store.insertBaseline(
-      { workspaceId, taskId, capturedAt: Date.now(), degraded: opts.degraded === true },
-      paths,
-    );
-  }
-
-  it('历史脏同 hash 被剔除 / 任务期间新脏列入 / baselineAvailable=true', async () => {
-    const ws = mkWorkspace();
-    // 历史脏：任务开始前 demo/index.html 就已脏，内容自捕获后未动
-    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
-    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
-    seedBaseline('ws-A', 'T-1', [
-      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
-    ]);
-
-    // git 侧（fake runner）：历史脏仍在 + 任务期间 bash 新建 test.txt
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' M demo/index.html\n?? test.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-
-    expect(result.degraded).toBe(false);
-    expect(result.baselineAvailable).toBe(true);
-    // 历史脏同 hash → 剔除（不再误归因到本任务）；新脏 → 列入
-    expect(result.unjournaled).toEqual(['test.txt']);
-  });
-
-  it('历史脏任务期间再改动（hash 漂移）→ 列入', async () => {
-    const ws = mkWorkspace();
-    // 基线记录的是旧内容 hash；任务期间文件被改写
-    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
-    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'changed-during-task', 'utf-8');
-    seedBaseline('ws-A', 'T-1', [
-      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
-    ]);
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' M demo/index.html\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.baselineAvailable).toBe(true);
-    expect(result.unjournaled).toEqual(['demo/index.html']);
-  });
-
-  it('基线有 hash、当前已删除 → 列入（任务期间删除）', async () => {
-    const ws = mkWorkspace();
-    // 基线记录了当时可读的 hash；扫描时文件已被删除（磁盘上不存在）
-    seedBaseline('ws-A', 'T-1', [
-      { path: 'deleted-during-task.txt', contentHash: hashContent('once-existed') },
-    ]);
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' D deleted-during-task.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.unjournaled).toEqual(['deleted-during-task.txt']);
-  });
-
-  it('基线 null（捕获时不可读）且当前仍不可读 → 剔除（两侧同态视为未动）', async () => {
-    const ws = mkWorkspace();
-    // 捕获时文件就已不可读（基线 null）；扫描时仍不可读——porcelain 仍报出该路径
-    seedBaseline('ws-A', 'T-1', [{ path: 'ghost.txt', contentHash: null }]);
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: '?? ghost.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.baselineAvailable).toBe(true);
-    expect(result.unjournaled).toEqual([]);
-  });
-
-  it('应用内部目录豁免：.momo / .momo-scratch（目录本身 + 子路径）不进未入账清单（taskId 非 null）', async () => {
-    const ws = mkWorkspace();
-    seedBaseline('ws-A', 'T-1', []); // 有基线（空）→ baselineAvailable=true
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: '?? .momo\n?? .momo/assets/abc012345678.png\n?? .momo-scratch\n?? .momo-scratch/demo/run.sh\n?? real-dirty.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.baselineAvailable).toBe(true);
-    // 四条应用内部路径全部剔除，只余真实工程变更
-    expect(result.unjournaled).toEqual(['real-dirty.txt']);
-  });
-
-  it('taskId=null（快速会话）：豁免照用 + baselineAvailable=true（基线概念不适用）', async () => {
-    const ws = mkWorkspace();
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: '?? .momo/assets/abc012345678.png\n?? .momo-scratch/demo/run.sh\n?? quick-dirty.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, null, { runner });
-    expect(result.baselineAvailable).toBe(true);
-    expect(result.unjournaled).toEqual(['quick-dirty.txt']);
-  });
-
-  it('无基线 → 回退累计差集 + baselineAvailable=false（历史脏重新出现在清单中）', async () => {
-    const ws = mkWorkspace();
-    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
-    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' M demo/index.html\n?? test.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.baselineAvailable).toBe(false);
-    // 回退语义 = 现行累计差集：历史脏也列入（UI 会提示「累计账外状态」）
-    expect(result.unjournaled).toEqual(['demo/index.html', 'test.txt']);
-  });
-
-  it('degraded 基线（捕获时 git 异常）→ 同样回退累计差集 + baselineAvailable=false', async () => {
-    const ws = mkWorkspace();
-    fs.writeFileSync(path.join(ws, 'old.txt'), 'dirty-before-feature', 'utf-8');
-    seedBaseline('ws-A', 'T-1', [], { degraded: true });
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: '?? old.txt\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.baselineAvailable).toBe(false);
-    expect(result.unjournaled).toEqual(['old.txt']);
-  });
-
-  it('journaled 优先级高于基线剔除：已入账路径恒进 journaled 列（既有分类语义不变）', async () => {
-    const ws = mkWorkspace();
-    fs.mkdirSync(path.join(ws, 'demo'), { recursive: true });
-    fs.writeFileSync(path.join(ws, 'demo', 'index.html'), 'historical-dirty', 'utf-8');
-    const store = createJournalStore(getDb());
-    // 该路径既在账本（T-1 记账）又在基线（同 hash）→ 归 journaled，不进任何剔除分支
-    store.insert(entry({ path: 'demo/index.html', op: 'modify' }));
-    seedBaseline('ws-A', 'T-1', [
-      { path: 'demo/index.html', contentHash: hashContent('historical-dirty') },
-    ]);
-
-    const { runner } = fakeRunnerByRepo({
-      [ws]: ' M demo/index.html\n',
-      [path.join(ws, 'inner')]: '',
-    });
-
-    const result = await scanUnjournaled('ws-A', ws, 'T-1', { runner });
-    expect(result.journaled).toEqual(['demo/index.html']);
-    expect(result.unjournaled).toEqual([]);
-  });
-});
-
-describe('defaultGitRunner 真实冒烟（T5 移交：锁 runner 边界本体）', () => {
-  it('真实跑 git --version：code 0 + stdout 含版本号（spawn/超时/截断壳层之外的真实执行面）', async () => {
-    const r = await defaultGitRunner(['--version']);
-    expect(r.code).toBe(0);
-    expect(r.errCode).toBeNull();
-    expect(r.truncated).toBe(false);
-    expect(r.stdout).toMatch(/git version \d+\.\d+/);
+  it('空输出 / 短行（<4 字符）→ 跳过不产出（防御）', () => {
+    expect(parsePorcelain('')).toEqual([]);
+    expect(parsePorcelain('?? \nXY \n\n')).toEqual([]);
   });
 });

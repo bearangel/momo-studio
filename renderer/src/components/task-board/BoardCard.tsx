@@ -7,14 +7,16 @@
 //   - 元信息行复用 TaskCard 内容：日程/截止/指派 agent/循环/委派目标
 //   - 平铺模式补显 groupChip（组色低透明底 + 组色文字，UX 波 2 #7；fg/bg 由
 //     BoardCanvas 用 lib/board.groupChipColor 解析传入）；泳道模式组即道省略
-//   - 右键菜单全状态（UX 波 2 #1：原入口太隐蔽）：非终态出「编辑」（内嵌
-//     EditTaskDialog，props 照 TaskDetailPanel 先例）；终态保留「归档」（spec
+//   - 右键菜单全状态（UX 波 2 #1：原入口太隐蔽）：可编辑态（draft/pending，
+//     isEditableStatus 单源）出「编辑」（内嵌 EditTaskDialog，props 照
+//     TaskDetailPanel 先例）；执行管线中间态（assigned/session_queued/
+//     in_progress/paused）无编辑无归档——仅顶置；终态保留「归档」（spec
 //     §5.2）：调 task.store.archive（成功即本地剔除，卡片消失）；失败 toast
-import { Archive, Bot, Calendar, Clock, MessagesSquare, Pencil, Repeat, Users } from 'lucide-react';
+import { Archive, Bot, Calendar, Clock, MessagesSquare, Pencil, Pin, PinOff, Repeat, Users } from 'lucide-react';
 import { useState, type CSSProperties } from 'react';
 import type { TaskRow } from '../../ipc/types';
 import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
-import { isTerminalStatus } from '../../lib/board';
+import { isEditableStatus, isTerminalStatus } from '../../lib/board';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { useTaskStore } from '../../stores/task.store';
 import { showToast } from '../ui/Toast';
@@ -57,11 +59,12 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
   const pendingWrapUp = usePendingWrapUp(task);
   const priorityLabel = PRIORITY_LABEL[task.priority];
   const names = useTaskEntityNames(task.workspaceId);
-  // 右键菜单定位（null=关）；全状态可开——非终态出「编辑」/ 终态出「归档」（UX 波 2 #1）
+  // 右键菜单定位（null=关）；全状态可开——可编辑态出「编辑」/ 终态出「归档」（UX 波 2 #1）
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  // 非终态卡的内嵌编辑对话框开关（打开瞬间的 task 快照喂给 EditTaskDialog）
+  // 可编辑态卡的内嵌编辑对话框开关（打开瞬间的 task 快照喂给 EditTaskDialog）
   const [editOpen, setEditOpen] = useState(false);
   const canArchive = isTerminalStatus(task.status);
+  const canEdit = isEditableStatus(task.status);
 
   const handleArchive = async (): Promise<void> => {
     try {
@@ -69,6 +72,15 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
       await useTaskStore.getState().archive(task.id);
     } catch (err) {
       showToast(`归档失败: ${(err as Error).message}`);
+    }
+  };
+
+  const handlePin = async (pinned: boolean): Promise<void> => {
+    try {
+      // store.pin：乐观置 pinnedAt（排序即时生效），失败回滚 + toast
+      await useTaskStore.getState().pin(task.id, pinned);
+    } catch (err) {
+      showToast(`顶置失败: ${(err as Error).message}`);
     }
   };
 
@@ -93,6 +105,16 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
           #{task.id.slice(0, 6)} · {task.title}
         </span>
         <span className="flex shrink-0 items-center gap-1">
+          {task.pinnedAt !== null && (
+            <Pin
+              size={12}
+              strokeWidth={1.75}
+              fill="currentColor"
+              fillOpacity={0.25}
+              aria-label="已顶置"
+              className="shrink-0 text-accent-500"
+            />
+          )}
           <span className={status.className}>{status.label}</span>
           {pendingWrapUp && (
             <span className={PENDING_WRAP_UP_STYLE.className} title="任务仍在进行，但宿主会话当前没有运行回合">
@@ -183,6 +205,24 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
             className="fixed z-50 min-w-[120px] rounded border border-subtle bg-surface-1 py-1 text-sm text-secondary shadow-lg"
             style={{ left: menu.x, top: menu.y }}
           >
+            {/* 顶置开关（迁移 050）：全状态可用；重复 pin 刷新时间戳=重新压顶 */}
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenu(null);
+                  void handlePin(task.pinnedAt === null);
+                }}
+                className="flex w-full items-center gap-1.5 px-3 py-1 text-left hover:bg-surface-3"
+              >
+                {task.pinnedAt === null ? (
+                  <Pin size={12} strokeWidth={1.75} aria-hidden />
+                ) : (
+                  <PinOff size={12} strokeWidth={1.75} aria-hidden />
+                )}
+                {task.pinnedAt === null ? '顶置' : '取消顶置'}
+              </button>
+            </li>
             {canArchive ? (
               <li>
                 <button
@@ -197,7 +237,7 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
                   归档
                 </button>
               </li>
-            ) : (
+            ) : canEdit ? (
               <li>
                 <button
                   type="button"
@@ -211,11 +251,11 @@ export function BoardCard({ task, selected, onClick, groupChip }: BoardCardProps
                   编辑
                 </button>
               </li>
-            )}
+            ) : null}
           </ul>
         </>
       )}
-      {!canArchive && (
+      {canEdit && (
         <EditTaskDialog
           open={editOpen}
           onClose={() => setEditOpen(false)}

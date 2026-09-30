@@ -2,7 +2,7 @@
 //
 // nextRun 纯函数 + spawnNextInstanceIfRecurring 测试。
 // 时间全部注入固定值，不依赖真实时钟（防 flaky）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -62,7 +62,9 @@ describe('nextRun 纯函数', () => {
 });
 
 describe('spawnNextInstanceIfRecurring', () => {
-  it('completed + every:30m → 生成 pending 下一实例（字段复制 + scheduledAt + 母链）', () => {
+  // 泳道语义重构（2026-09-30 §4.3）：续期实例落 assigned（建即入队），下次
+  // 时间由 executor 闸门管——旧「pending 待 scheduler 升级」中转退役
+  it('completed + every:30m → 生成 assigned 下一实例（字段复制 + scheduledAt + 母链）', () => {
     const now = Date.now();
     insertTask({
       workspaceId: 'ws1', title: '日报', description: '写日报', creatorUserId: 'owner',
@@ -77,13 +79,34 @@ describe('spawnNextInstanceIfRecurring', () => {
     spawnNextInstanceIfRecurring('T-001');
 
     const next = listTasks({ workspaceId: 'ws1' }).find((t) => t.id !== 'T-001')!;
-    expect(next.status).toBe('pending');
+    expect(next.status).toBe('assigned');
     expect(next.recurrenceParentId).toBe('T-001');
     expect(next.recurrenceRule).toBe('every:30m');
     expect(next.assigneeAgentId).toBe('inst1');
     expect(next.scheduledAt).toBe(now + 30 * 60_000);
     expect(next.title).toBe('日报');
     expect(next.deadlineAt).toBeNull(); // deadline 不复制（spec §7.2）
+  });
+
+  it('续期实例未来 scheduledAt → executor 闸门不捞（等下个周期自动跑）', async () => {
+    const now = Date.now();
+    insertTask({
+      workspaceId: 'ws1', title: '每时', creatorUserId: 'owner',
+      assigneeAgentId: 'inst1', recurrenceRule: 'every:1h',
+      status: 'in_progress', startedAt: now - 60_000,
+    });
+    getDb().prepare(
+      `UPDATE tasks SET status='completed', completed_at=? WHERE id='T-001'`,
+    ).run(now);
+    spawnNextInstanceIfRecurring('T-001');
+
+    // executor 评估一轮：未来时间（now+1h）被闸门拦下，留排队中
+    const { TaskExecutor } = await import('../../src/main/task/executor');
+    const ex = new TaskExecutor();
+    ex.init({ sendKickoff: vi.fn().mockResolvedValue(undefined), getGlobalMax: () => 3 });
+    await ex.admitOnce();
+    const next = listTasks({ workspaceId: 'ws1' }).find((t) => t.id !== 'T-001')!;
+    expect(next.status).toBe('assigned'); // 排队中等到点
   });
 
   it('failed / 无规则 / 非 completed → 不生成', () => {

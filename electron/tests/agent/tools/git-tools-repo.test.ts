@@ -7,9 +7,8 @@
 // （副作用/输出归属内层仓断言）+ GitPolicy 跨仓（总开关关 / 分支保护读目标仓
 // 当前分支）+ repo 未命中 9 工具统一报错附清单 + inputSchema 契约。
 // v2.9 多仓 git Task 5 扩展：接线锁红绿变异（三组，记录见 task-5-report-git.md）
-// + 集成场景（FileTools 写内层仓 → git_status/add/commit(repo) →
-// scanUnjournaled 真实 runner 对账——journal workspace 相对路径与 git 侧
-// `-C 内层仓` porcelain 的 workspace 相对化两形态零漂移）+ T4 Minor schema 补句。
+// + T4 Minor schema 补句（Task 5 的 scanUnjournaled 集成场景已随 2026-09-30
+// scan IPC 退役移除，可从 git 历史找回）。
 // 设计要点：
 //   - 真 tmp fixture：workspace 根仓 + `services/api` 内层仓（各自独立 git init），
 //     走 discoverRepos 真实发现路径——其模块级缓存按 workspaceDir 入键，每用例
@@ -41,7 +40,6 @@ import { runMigrations, closeDb, getDb } from '../../../src/main/storage/db';
 import { setGitPolicy, getGitPolicy } from '../../../src/main/workspace/git-policy';
 import { createJournalStore } from '../../../src/main/journal/store';
 import { __setJournalStoreForTest } from '../../../src/main/journal/recorder';
-import { scanUnjournaled } from '../../../src/main/journal/detector';
 
 /** 在指定目录执行 git 命令并返回输出（测试 fixture 播种用）。*/
 function git(cwd: string, cmd: string): string {
@@ -547,14 +545,15 @@ describe('git_commit + GitPolicy 跨仓（Task 4）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Task 5：集成场景——内层仓改动 → repo 工具链 → scanUnjournaled 对账
+// Task 5：集成场景——内层仓改动 → repo 工具链（FileTools 记账 + git 提交流）
 // ---------------------------------------------------------------------------
 
-describe('集成：内层仓改动 → repo 工具链 → scanUnjournaled 对账（Task 5，v2.5 联动零漂移）', () => {
+describe('集成：内层仓改动 → repo 工具链（Task 5，v2.5 联动零漂移）', () => {
   beforeEach(() => {
     process.env.AP_USER_DATA_DIR = tmpRoot;
     runMigrations();
     // journal store 注入照 detector.test.ts 模式：真实 SQLite + 真实 store
+    // （FileTools 写入走生产记账路径，需要 store 就绪）
     __setJournalStoreForTest(createJournalStore(getDb()));
     setGitPolicy('test-ws', {
       allowAgentCommits: true,
@@ -574,9 +573,7 @@ describe('集成：内层仓改动 → repo 工具链 → scanUnjournaled 对账
         trailers: [],
       },
     });
-    // 根仓 .gitignore 忽略 services/：真仓嵌套在根仓 porcelain（含
-    // --untracked-files=all）中折叠为 `?? services/api/` 单行——committed
-    // .gitignore 让对账断言聚焦内层仓路径形态本身。
+    // 根仓 .gitignore 忽略 services/：内层仓改动不污染根仓状态断言。
     git(tmpDir, 'commit --allow-empty -m "init root"');
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'services/\n');
     git(tmpDir, 'add .gitignore');
@@ -591,7 +588,7 @@ describe('集成：内层仓改动 → repo 工具链 → scanUnjournaled 对账
     delete process.env.AP_USER_DATA_DIR;
   });
 
-  it('FileTools 写内层仓 → git_status(repo) 可见 → git_add+git_commit(repo) → 对账 journaled 正确', async () => {
+  it('FileTools 写内层仓 → git_status(repo) 可见 → git_add+git_commit(repo) 落 fallback 分支', async () => {
     const gitTools = new GitTools();
     const fileTools = new FileTools();
 
@@ -610,19 +607,12 @@ describe('集成：内层仓改动 → repo 工具链 → scanUnjournaled 对账
     expect(git(apiDir, 'rev-parse --abbrev-ref HEAD').trim()).toBe('agent/agent/test-stream');
     expect(git(apiDir, 'log -1 --oneline')).toContain('feat: inner work');
 
-    // 4. 提交后再造两类状态：wip.txt 走 FileTools（journaled 且仍 dirty）；
-    //    manual.txt 直接写（bash 式账外改动，journal 无条目）。
-    await fileTools.execute('write_file', { path: 'services/api/wip.txt', content: 'wip' }, ctx);
+    // 4. 提交后再造账外状态：manual.txt 直接写（bash 式账外改动，journal 无
+    //    条目）——git_status(repo) 仍可见，工具链与记账边界清晰。
     await fs.promises.writeFile(path.join(apiDir, 'manual.txt'), 'out-of-journal');
-
-    // 5. scanUnjournaled 真实 runner 对账（不注入 fake）：git 侧 `-C 内层仓`
-    //    porcelain 相对仓路径 → workspace 相对化 = services/api/wip.txt；journal
-    //    侧 workspace 相对路径同形态——两侧零漂移时 wip 归 journaled、
-    //    manual 归 unjournaled；任一侧形态漂移（如漏做仓相对化）即错分。
-    const scan = await scanUnjournaled('test-ws', tmpDir, null);
-    expect(scan.degraded).toBe(false);
-    expect(scan.journaled).toEqual(['services/api/wip.txt']);
-    expect(scan.unjournaled).toEqual(['services/api/manual.txt']);
-    // 已提交的 feature.txt 已被工具链消化：不出现在任何一侧（提交即对账清零）。
+    const status2 = await gitTools.execute('git_status', { repo: 'services/api' }, ctx);
+    expect(status2).toContain('manual.txt');
+    // 已提交的 feature.txt 已被工具链消化：不再出现在 status。
+    expect(status2).not.toContain('feature.txt');
   });
 });

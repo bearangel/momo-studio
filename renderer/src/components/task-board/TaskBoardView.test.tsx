@@ -30,11 +30,9 @@ const mockApi = {
   agent: { listMembers: vi.fn().mockRejectedValue(new Error('no ipc')) },
   team: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
   session: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
-  // 变更与回滚分区常驻挂载（G1）：详情面板内 TaskChangesPanel 挂载即调 journal.list
   journal: {
     list: vi.fn().mockResolvedValue([]),
     revert: vi.fn(),
-    scan: vi.fn(),
     rollbackFileBefore: vi.fn(),
     preview: vi.fn(),
   },
@@ -67,7 +65,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...partial,
   };
@@ -118,7 +116,7 @@ describe('TaskBoardView 主区（看板重构 Task 11）', () => {
     expect(laneToggle).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: /归档/ })).toBeEnabled();
     // 五列（BOARD_COLUMNS 契约）
-    for (const label of ['待办', '已分配', '进行中', '已完成', '已关闭']) {
+    for (const label of ['待办', '排队中', '进行中', '已完成', '已关闭']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     // pending → 待办列

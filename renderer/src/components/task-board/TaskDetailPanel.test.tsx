@@ -10,7 +10,7 @@
 //   - 操作矩阵：draft 无目标无启动按钮+引导文案；draft 有目标可启动；
 //     paused 可恢复（transition in_progress）；终态无任何操作按钮
 //   - 启动失败显示错误条（不再静默吞 unhandled rejection）
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化。
@@ -52,7 +52,8 @@ vi.mock('../../lib/locate-message', () => ({
 }));
 
 import { TaskDetailPanel } from './TaskDetailPanel';
-import type { ImMessage, JournalEntryView, TaskRow } from '../../ipc/types';
+import { useTaskStore } from '../../stores/task.store';
+import type { ImMessage, SessionSummary, TaskRow } from '../../ipc/types';
 import type { StreamState } from '../../stores/stream.store';
 import { useStreamStore } from '../../stores/stream.store';
 import { TURN_RECONCILE_NOTICE_PREFIX } from '../../lib/turn-reconcile';
@@ -62,6 +63,7 @@ const mockApi = {
   task: {
     get: vi.fn(),
     start: vi.fn(),
+    move: vi.fn(),
     cancel: vi.fn(),
     transition: vi.fn(),
     resume: vi.fn(),
@@ -77,11 +79,9 @@ const mockApi = {
     list: vi.fn().mockRejectedValue(new Error('no ipc in test')),
     send: vi.fn(),
   },
-  // 变更与回滚分区常驻挂载（G1）：TaskChangesPanel 挂载即调 journal.list
   journal: {
-    list: vi.fn(),
+    list: vi.fn().mockResolvedValue([]),
     revert: vi.fn(),
-    scan: vi.fn(),
     rollbackFileBefore: vi.fn(),
     preview: vi.fn(),
   },
@@ -118,7 +118,7 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...overrides,
   };
@@ -131,16 +131,14 @@ beforeEach(() => {
   uiState.setActiveView = vi.fn();
   mockApi.task.get.mockReset();
   mockApi.task.start.mockReset().mockResolvedValue(undefined);
+  mockApi.task.move.mockReset().mockResolvedValue(makeTask({ status: 'assigned' }));
   mockApi.task.cancel.mockReset().mockResolvedValue(undefined);
   mockApi.task.transition.mockReset().mockResolvedValue(makeTask({}));
   mockApi.task.resume.mockReset().mockResolvedValue(makeTask({ status: 'in_progress' }));
   mockApi.task.update.mockReset().mockResolvedValue(undefined);
   mockApi.session.send.mockReset().mockResolvedValue({ readOnly: false });
+  mockApi.session.list.mockReset().mockRejectedValue(new Error('no ipc in test'));
   mockApi.journal.list.mockReset().mockResolvedValue([]);
-  mockApi.journal.scan.mockReset();
-  mockApi.journal.revert.mockReset().mockResolvedValue([]);
-  mockApi.journal.preview.mockReset().mockResolvedValue([]);
-  mockApi.journal.rollbackFileBefore.mockReset().mockResolvedValue([]);
   useStreamStore.setState({ streams: new Map() });
   locateMessageMock.mockClear();
   locateTaskExecutionMock.mockClear();
@@ -168,6 +166,78 @@ describe('TaskDetailPanel 进入执行会话（全状态 + 定位接线）', () 
     await waitFor(() =>
       expect(locateTaskExecutionMock).toHaveBeenCalledWith('task-1', 'sess-abc'),
     );
+  });
+});
+
+// === 执行会话删除态（useTaskEntityNames.sessionExists 判定）===
+
+function makeSessionSummary(id: string): SessionSummary {
+  return {
+    id,
+    workspaceId: 'ws-1',
+    title: `会话 ${id}`,
+    titleAuto: false,
+    kind: 'chat',
+    lastMessageAt: null,
+    members: [],
+  };
+}
+
+describe('TaskDetailPanel 执行会话已删除态', () => {
+  it('会话列表不含 executionSessionId → 按钮置灰「执行会话已删除」且不触发定位', async () => {
+    mockApi.session.list.mockResolvedValue([makeSessionSummary('ses-other')]);
+    mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-exec' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    const btn = await screen.findByRole('button', { name: '执行会话已删除' });
+    expect(btn).toBeDisabled();
+    expect(screen.queryByText('进入执行会话 →')).not.toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(locateTaskExecutionMock).not.toHaveBeenCalled();
+  });
+
+  it('会话列表含 executionSessionId → 按钮可点并定位', async () => {
+    mockApi.session.list.mockResolvedValue([makeSessionSummary('sess-exec')]);
+    mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-exec' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByText('进入执行会话 →'));
+    await waitFor(() =>
+      expect(locateTaskExecutionMock).toHaveBeenCalledWith('task-1', 'sess-exec'),
+    );
+  });
+});
+
+describe('TaskDetailPanel 变更查看分区（TaskChangesView 挂载）', () => {
+  it('面板挂载即按 taskId 查账本，有账显示「N 处变更 · M 个文件」', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    mockApi.journal.list.mockResolvedValue([
+      {
+        id: 'je-1',
+        workspaceId: 'ws-1',
+        taskId: 'task-1',
+        sessionId: 'ses-1',
+        streamSessionId: 'ss-1',
+        toolName: 'write_file',
+        path: 'src/app.ts',
+        op: 'modify',
+        beforeHash: 'hb',
+        afterHash: 'ha',
+        oldPath: null,
+        createdAt: 1757000001000,
+        beforeText: 'a',
+        afterText: 'a\nb',
+      },
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-changes-view')).toBeInTheDocument();
+    expect(mockApi.journal.list).toHaveBeenCalledWith({ workspaceId: 'ws-1', taskId: 'task-1' });
+    expect(screen.getByText('1 处变更 · 1 个文件')).toBeInTheDocument();
+  });
+
+  it('空账 → 分区不渲染（面板其余部分正常）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('进行中');
+    expect(screen.queryByTestId('task-changes-view')).not.toBeInTheDocument();
   });
 });
 
@@ -214,7 +284,7 @@ describe('TaskDetailPanel 人性化展示（K4）', () => {
   it('assigned 状态显示等待调度提示', async () => {
     mockApi.task.get.mockResolvedValue(makeTask({ status: 'assigned', executionSessionId: null }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-    expect(await screen.findByText('已分配')).toBeInTheDocument();
+    expect(await screen.findByText('排队中')).toBeInTheDocument();
     expect(screen.getByText('等待调度放行')).toBeInTheDocument();
   });
 });
@@ -232,11 +302,23 @@ describe('TaskDetailPanel 操作矩阵（K6）', () => {
     expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
   });
 
-  it('draft 有目标 → 显示启动按钮，点击调 task.start', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'draft' }));
+  it('draft 有目标 → 启动按钮改道 move 入队（spec §4.2：不再直调 start）', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({ status: 'draft', groupId: 'G-009', assigneeAgentId: 'inst-pm' }),
+    );
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '启动' }));
-    await waitFor(() => expect(mockApi.task.start).toHaveBeenCalledWith('task-1', {}));
+    await waitFor(() =>
+      expect(mockApi.task.move).toHaveBeenCalledWith('task-1', { column: 'assigned', groupId: 'G-009' }),
+    );
+    expect(mockApi.task.start).not.toHaveBeenCalled();
+  });
+
+  it('assigned 已在队列 → 无启动按钮（放行由 executor 管，spec §4.2）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'assigned', assigneeAgentId: 'inst-pm' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('排队中');
+    expect(screen.queryByRole('button', { name: '启动' })).not.toBeInTheDocument();
   });
 
   it('paused → 恢复按钮调 task:resume（K7-5：转 in_progress + kickoff 重注入）', async () => {
@@ -272,8 +354,8 @@ describe('TaskDetailPanel 操作矩阵（K6）', () => {
   });
 
   it('启动失败 → 显示错误条（不静默吞异常）', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'assigned', executionSessionId: null }));
-    mockApi.task.start.mockRejectedValue(new Error('任务已被并发调度'));
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'draft', executionSessionId: null }));
+    mockApi.task.move.mockRejectedValue(new Error('任务已被并发调度'));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '启动' }));
     expect(await screen.findByText(/任务已被并发调度/)).toBeInTheDocument();
@@ -433,61 +515,45 @@ describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6�
       expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument();
     });
 
-    it('非归档任务不受影响：in_progress 仍有暂停/编辑/取消（对照组，防误伤）', async () => {
+    it('非归档任务不受影响：in_progress 仍有暂停/取消，但编辑已锁定（执行管线）', async () => {
       mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress', archivedAt: null }));
       render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
       await screen.findByText('进行中');
 
       expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '编辑任务' })).toBeInTheDocument();
+      // 编辑资格收敛（2026-09-30）：in_progress 进入执行管线，编辑入口隐藏
+      expect(screen.queryByRole('button', { name: '编辑任务' })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
       expect(screen.queryByText('已归档 · 只读')).not.toBeInTheDocument();
     });
   });
-});
 
-// === 变更与回滚分区常驻挂载（会话任务联动 G1：分区头移入 TaskChangesPanel）===
+  describe('首帧初值：task.store 命中行防空白（2026-09-30 切视图回看板修复）', () => {
+    afterEach(() => {
+      // 真实 store（本文件不 mock task.store）——用例喂入的行必须清空，防串扰
+      useTaskStore.setState({ tasks: [] });
+    });
 
-/** 构造完整 JournalEntryView（真实形状——types.d.ts 契约，不用简化占位） */
-function makeJournalEntry(overrides: Partial<JournalEntryView>): JournalEntryView {
-  return {
-    id: 'je-1',
-    workspaceId: 'ws-1',
-    taskId: 'task-1',
-    sessionId: 'ses-1',
-    streamSessionId: 'ss-1',
-    toolName: 'write_file',
-    path: 'src/app.ts',
-    op: 'modify',
-    beforeHash: 'hash-before',
-    afterHash: 'hash-after',
-    oldPath: null,
-    createdAt: 1757000001000,
-    beforeText: 'a\nb',
-    afterText: 'a\nb\nc',
-    ...overrides,
-  };
-}
+    it('store 已有该行 → fetch 未返回前首帧即渲染行内容（不出现「加载中...」）', () => {
+      useTaskStore.setState({ tasks: [makeTask({ status: 'in_progress' })] });
+      // get 永不 resolve：证明首帧内容完全来自 store 命中行，而非 IPC 返回
+      mockApi.task.get.mockReturnValue(new Promise(() => {}) as ReturnType<typeof mockApi.task.get>);
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      expect(screen.getByText('示例任务')).toBeInTheDocument();
+      expect(screen.queryByText('加载中...')).not.toBeInTheDocument();
+    });
 
-describe('TaskDetailPanel 变更与回滚分区常驻挂载（G1）', () => {
-  it('面板无条件挂载：空账面时分区头 summary「无变更记录」直接可见，无需点击', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
-    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-    expect(await screen.findByTestId('task-changes-toggle')).toBeInTheDocument();
-    expect(screen.getByTestId('task-changes-summary')).toHaveTextContent('无变更记录');
-    expect(mockApi.journal.list).toHaveBeenCalledWith({ workspaceId: 'ws-1', taskId: 'task-1' });
-  });
-
-  it('分区头含计数：有账面时显示「N 处变更 · M 个文件」且文件行常显', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
-    mockApi.journal.list.mockResolvedValue([
-      makeJournalEntry({ id: 'je-1', path: 'src/app.ts' }),
-      makeJournalEntry({ id: 'je-2', path: 'docs/guide.md', op: 'create' }),
-    ]);
-    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-    expect(await screen.findByTestId('task-changes-summary')).toHaveTextContent(
-      '2 处变更 · 2 个文件',
-    );
-    expect(screen.getByRole('button', { name: /src\/app\.ts/ })).toBeInTheDocument();
+    it('store 无该行（冷启动直开）→ 「加载中...」，fetch 返回后渲染（回退路径）', async () => {
+      let resolveGet!: (t: TaskRow) => void;
+      mockApi.task.get.mockReturnValue(
+        new Promise<TaskRow>((res) => {
+          resolveGet = res;
+        }),
+      );
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      expect(screen.getByText('加载中...')).toBeInTheDocument();
+      resolveGet(makeTask({ status: 'draft' }));
+      expect(await screen.findByText('示例任务')).toBeInTheDocument();
+    });
   });
 });

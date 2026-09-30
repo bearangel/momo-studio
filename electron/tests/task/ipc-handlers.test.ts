@@ -400,9 +400,9 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
     expect(created.recurrenceRule).toBeNull();
   });
 
-  // C1 修复 1：create 入口是定时管线起点——带 scheduledAt 必须落 pending
-  // （spec §4.4「pending = 定时未到」），否则 scheduler 永远扫不到（旧实现恒落 draft）
-  it('task:create 带 scheduledAt → 落 pending（定时管线入口）', async () => {
+  // 泳道语义重构（2026-09-30 §4.1）：表单路径一律 draft——带定时也停待办，
+  // 「启动」时 scheduledAt 由 executor 闸门消费（旧 C1「落 pending 定时管线」退役）
+  it('task:create 带 scheduledAt → 落 draft（表单定时=草稿，启动时闸门接管）', async () => {
     const handler = handlers.get('task:create')!;
     const created = (await handler(null, {
       workspaceId: 'ws1',
@@ -411,14 +411,14 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       assigneeAgentId: 'inst1',
       scheduledAt: Date.now() + 60_000,
     })) as TaskRow;
-    expect(created.status).toBe('pending');
+    expect(created.status).toBe('draft');
   });
 
-  // K1 回归锁（P0 修复）：带委派目标但无 scheduledAt 的任务旧实现落 draft，
-  // 而 scheduler 只消费 pending、executor 只消费 assigned——draft 任务被两个
-  // 调度器同时无视，指派了 agent 也永远不会自动执行（用户主机验收报告）。
-  // 新行为：有目标 + 无计划时间 → 直接入队 assigned，executor 立即评估放行。
-  it('K1: task:create 带 assigneeAgentId 不带 scheduledAt → 落 assigned（立即入队）', async () => {
+  // K1 回归锁（P0 修复 → 2026-09-30 §4.1 语义反转）：表单创建一律 draft——
+  // 「创建即入队」退役（旧 P0 是 draft 被调度器无视，解法是创建即 assigned；
+  // 新模型下 draft 草稿本来就不该自动跑，启动是唯一入队动作）。三类目标
+  // 各锁一条，防回退到创建即执行。
+  it('K1: task:create 带 assigneeAgentId → 落 draft（表单不自动入队）', async () => {
     const handler = handlers.get('task:create')!;
     const created = (await handler(null, {
       workspaceId: 'ws1',
@@ -426,10 +426,10 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       creatorUserId: 'owner',
       assigneeAgentId: 'inst1',
     })) as TaskRow;
-    expect(created.status).toBe('assigned');
+    expect(created.status).toBe('draft');
   });
 
-  it('K1: task:create 带 targetTeamId 不带 scheduledAt → 落 assigned', async () => {
+  it('K1: task:create 带 targetTeamId → 落 draft', async () => {
     const handler = handlers.get('task:create')!;
     const created = (await handler(null, {
       workspaceId: 'ws1',
@@ -437,10 +437,10 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       creatorUserId: 'owner',
       targetTeamId: 'team1',
     })) as TaskRow;
-    expect(created.status).toBe('assigned');
+    expect(created.status).toBe('draft');
   });
 
-  it('K1: task:create 带 targetSessionId 不带 scheduledAt → 落 assigned', async () => {
+  it('K1: task:create 带 targetSessionId → 落 draft', async () => {
     const handler = handlers.get('task:create')!;
     const created = (await handler(null, {
       workspaceId: 'ws1',
@@ -448,7 +448,7 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       creatorUserId: 'owner',
       targetSessionId: 'sess-1',
     })) as TaskRow;
-    expect(created.status).toBe('assigned');
+    expect(created.status).toBe('draft');
   });
 
   // 无目标 = 用户暂存草稿（「不指派」语义），保持 draft 等待手动编辑指派
@@ -464,7 +464,9 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
 
   // 无目标 + 带 scheduledAt：维持 C1 语义落 pending（到点 scheduler 因无目标
   // 不升级，用户可手动启动——pending 允许 startTask）
-  it('K1: task:create 无委派目标但带 scheduledAt → 落 pending（C1 语义保持）', async () => {
+  // 无目标 + 带定时：同样一律 draft（旧 C1「落 pending」随 pending 退役；
+  // 用户启动时由闸门消费 scheduledAt）
+  it('K1: task:create 无委派目标但带 scheduledAt → 落 draft', async () => {
     const handler = handlers.get('task:create')!;
     const created = (await handler(null, {
       workspaceId: 'ws1',
@@ -472,7 +474,7 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       creatorUserId: 'owner',
       scheduledAt: Date.now() + 60_000,
     })) as TaskRow;
-    expect(created.status).toBe('pending');
+    expect(created.status).toBe('draft');
   });
 });
 

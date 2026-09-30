@@ -113,7 +113,7 @@ function mkTaskRow(id: string, status: TaskRow['status']): TaskRow {
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
   };
 }

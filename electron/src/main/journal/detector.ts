@@ -1,31 +1,20 @@
 // electron/src/main/journal/detector.ts
 //
-// git 探测器（v2.5 变更账本 Task 5，spec §5.5）：bash 账外变更的事后核对。
+// git 探测管道件（v2.5 变更账本 Task 5 建立；2026-09-30 scan IPC 退役后仅存
+// 共享管道）：spawn 型 git runner + porcelain v1 解析 + 文件内容 hash。
+// 现行唯一消费方 = baseline.ts（任务起点基线捕获，starter/lifecycle 调用）。
 //
-// 职责：scanUnjournaled——对每个仓跑 `git status --porcelain=v1
-//      --untracked-files=all`，与账本路径集做差，产出未入账变更清单。
-//      多仓发现（discoverRepos + mtime 缓存）已上提共享模块 ../git/repos.ts
-//      （v2.9 多仓 git Task 1 纯搬家，detector 与 git 工具层双方引用），
-//      此处 import 消费。
+// 多仓发现（discoverRepos + mtime 缓存）在共享模块 ../git/repos.ts
+// （v2.9 多仓 git Task 1 自本模块上提，git 工具层与 baseline 双方引用）。
 //
-// 铁律：只读不写、绝不产生 commit；git 不可用 / 执行失败 / 输出截断一律
-// degraded 空结果（无法核对绝不半真半假）。runGit 形态参照 v2.4
+// 铁律：只读不写、绝不产生 commit；git 不可用 / 执行失败 / 输出截断由
+// 消费方降级处理（baseline 写 degraded 基线）。runGit 形态参照 v2.4
 // sandbox/probe.ts defaultRunner（spawn + 超时 + 输出截断 + 可注入），
-// 但本模块自持、不 import sandbox。
-//
-// 存储注入：与 revert 层同源，消费 recorder 模块单例 getJournalStore()。
-// 单例是模块级状态、每进程各一份——生产每进程恰一个注入点：子进程侧
-// agent/runtime-entry.ts（boot 链 setJournalStore，服务工具记账路径）与
-// 主进程侧 journal/ipc.handlers.ts（registerJournalIpc 注册即注入，服务
-// detector / revert / quota / IPC）。detector 只在主进程运行，store 就绪
-// 由主进程注入保证——下方 fail-fast 报错的指引亦指向主进程注入点。
+// 本模块自持、不 import sandbox。
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
-import { discoverRepos } from '../git/repos';
-import { toPosixRelPath } from '../platform/paths';
-import { getJournalStore, hashContent } from './recorder';
+import { hashContent } from './recorder';
 
 /** 单次 git 命令执行结果。errCode 承载 spawn error event 的底层错误码
  *  （'ENOENT' = 本机无 git），避免从 stderr 字符串猜测 */
@@ -34,7 +23,7 @@ export interface GitRunResult {
   stdout: string;
   stderr: string;
   errCode: string | null;
-  /** 输出是否触顶截断——截断的 porcelain 不完整，扫描方必须降级 */
+  /** 输出是否触顶截断——截断的 porcelain 不完整，消费方必须降级 */
   truncated: boolean;
 }
 
@@ -95,38 +84,8 @@ export const defaultGitRunner: GitRunner = (args) =>
     });
   });
 
-/** 探测结果：journaled/unjournaled 均为 git 变更路径子集（workspace 根相对、
- *  POSIX 分隔符、字典序）；degraded=true 时三列表恒空 */
-export interface ScanResult {
-  journaled: string[];
-  unjournaled: string[];
-  /** 发现的仓根绝对路径（workspace 根仓在前） */
-  repos: string[];
-  degraded: boolean;
-  /** 任务起点基线归因是否可用（2026-09-29 误归因根治）：taskId 非 null 且有
-   *  非降级基线（迁移 049，baseline.ts 捕获）时 true；无基线 / 降级基线
-   *  （回退累计差集）或整体 degraded 时 false；taskId=null（快速会话，基线
-   *  概念不适用）恒 true。UI 据此提示「累计账外状态，非本任务专属」。 */
-  baselineAvailable: boolean;
-}
-
-/** 应用内部目录（workspace 根相对 POSIX）豁免清单——根治「应用产物混入未入账
- *  清单」：贴图缓存 `.momo/`（files/asset-ipc.ts 的 saveImage 落盘）与 agent
- *  草稿区 `.momo-scratch/`（dispatch 全文 / 演示产物，prompt-hints 约定）。
- *  这些是应用自身产物而非用户/agent 的工程变更，git status 报出后一律剔除。
- *  单点常量：目录本身（'.momo'）与任意子路径（'.momo/…'）两种形态都命中。 */
-const APP_INTERNAL_DIR_PREFIXES = ['.momo', '.momo-scratch'] as const;
-
-function isAppInternalPath(wsRelPath: string): boolean {
-  for (const dir of APP_INTERNAL_DIR_PREFIXES) {
-    if (wsRelPath === dir || wsRelPath.startsWith(`${dir}/`)) return true;
-  }
-  return false;
-}
-
-/** 读工作区文件当前内容并算 sha256 hex——基线捕获（baseline.ts）与扫描归因
- *  （本模块 scanUnjournaled）两侧共用的单点。不可读（已删除 / 权限等）返回
- *  null，与基线行 contentHash=null 同语义（null = 不可读 ≠ 空内容，空文件有
+/** 读工作区文件当前内容并算 sha256 hex——基线捕获（baseline.ts）消费。
+ *  不可读（已删除 / 权限等）返回 null（null = 不可读 ≠ 空内容，空文件有
  *  确定 sha256）。Buffer 直读，二进制文件保真（hashContent v2.1 契约）。 */
 export function hashFileOrNull(absPath: string): string | null {
   try {
@@ -134,116 +93,6 @@ export function hashFileOrNull(absPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// scanUnjournaled：账外变更对账
-// ---------------------------------------------------------------------------
-
-/**
- * 对 workspace 内每个发现的仓跑 git status，与账本路径集做差。
- *
- * journaled 基线（设计裁定）：
- *   - taskId 非 null → 该任务组条目（listByTask）
- *   - taskId null（快速会话）→ 全 workspace 条目并集（listByWorkspace）——
- *     快速会话无任务边界，全量基线更诚实：账本里出现过的路径不算「账外」
- *
- * 路径对齐：git 侧 relativize 到 workspace 根后统一 POSIX '/'；账本侧
- * 反斜杠归一（T2 review 预警的 Windows 对齐问题在此收口）。
- *
- * 应用内部目录豁免（2026-09-29 误归因根治 B）：`.momo/` 与 `.momo-scratch/`
- * 前缀路径直接从变更集剔除——无论有无任务基线、无论 taskId 是否为 null。
- *
- * 任务起点基线差集归因（2026-09-29 误归因根治 A，迁移 049）：taskId 非 null
- * 且有非降级基线时，对每个「changed 且非 journaled」候选三分：
- *   - 不在基线 → 列入（任务期间新脏）
- *   - 在基线且当前内容 hash 与捕获时相同 → 剔除（历史脏未动——自上次 commit
- *     累计的旧脏，与本任务无关）
- *   - 在基线但 hash 不同（含当前已不可读而基线有 hash）→ 列入（任务期间
- *     再改动/删除）
- * 无基线 / 降级基线 → 回退现行累计差集，baselineAvailable=false（UI 提示
- * 「累计账外状态，非本任务专属」）。taskId=null 基线概念不适用，
- * baselineAvailable 恒 true。
- *
- * 并发边界（已知可接受）：多任务共享 worktree 时，A 任务在 B 任务捕获基线
- * 之后的写入会落进 B 的「任务期间新脏」——基线是瞬时快照，不区分写入者。
- *
- * 降级（degraded=true + 空结果）：git ENOENT / 任意仓执行非零退出 / 输出截断。
- * store 未注入属接线缺陷 → fail-fast 抛错，不静默降级。
- */
-export async function scanUnjournaled(
-  workspaceId: string,
-  workspaceDir: string,
-  taskId: string | null,
-  opts?: { runner?: GitRunner },
-): Promise<ScanResult> {
-  const runner = opts?.runner ?? defaultGitRunner;
-  const store = getJournalStore();
-  if (!store) {
-    throw new Error('journal store 未注入（探测器无法对账；生产：主进程 registerJournalIpc 注册即注入；测试：__setJournalStoreForTest）');
-  }
-
-  const repos = discoverRepos(workspaceDir);
-  const degradedEmpty: ScanResult = { journaled: [], unjournaled: [], repos: [], degraded: true, baselineAvailable: false };
-
-  const changed = new Set<string>();
-  for (const repo of repos) {
-    const r = await runner(['-C', repo, 'status', '--porcelain=v1', '--untracked-files=all']);
-    if (r.code !== 0 || r.errCode !== null || r.truncated) return degradedEmpty;
-    for (const rel of parsePorcelain(r.stdout)) {
-      const abs = path.resolve(repo, rel);
-      // toPosixRelPath：relative 到 workspace 根后统一 POSIX '/'（win32 反斜杠
-      // 相对段与账本侧归一同口径对齐）
-      const wsRel = toPosixRelPath(workspaceDir, abs);
-      if (wsRel === '') continue;
-      changed.add(wsRel);
-    }
-  }
-
-  // 应用内部目录豁免：从副本迭代再删（Set 迭代中删除当前项虽是定义行为，
-  // 副本形态更直白且不依赖读者知道该边缘规则）
-  for (const p of [...changed]) {
-    if (isAppInternalPath(p)) changed.delete(p);
-  }
-
-  const entries =
-    taskId === null ? store.listByWorkspace(workspaceId) : store.listByTask(workspaceId, taskId);
-  const journaledPaths = new Set(entries.map((e) => e.path.replace(/\\/g, '/')));
-
-  // 基线差集归因的基线装载：taskId 非 null 且有非降级基线（meta 行存在且
-  // degraded=0）才装载；否则保持 null = 全体候选走累计差集回退。
-  // 键契约与捕获侧（baseline.ts）单点对齐：path = workspace 根相对 POSIX，
-  // contentHash = sha256 hex（null = 捕获时不可读）
-  let baseline: Map<string, string | null> | null = null;
-  if (taskId !== null) {
-    const meta = store.getBaselineMeta(workspaceId, taskId);
-    if (meta && !meta.degraded) {
-      baseline = new Map(
-        store.listBaselinePaths(workspaceId, taskId).map((r) => [r.path, r.contentHash]),
-      );
-    }
-  }
-
-  const journaled: string[] = [];
-  const unjournaled: string[] = [];
-  for (const p of changed) {
-    if (journaledPaths.has(p)) {
-      journaled.push(p);
-      continue;
-    }
-    if (baseline !== null && baseline.has(p)) {
-      const baseHash = baseline.get(p) ?? null;
-      const curHash = hashFileOrNull(path.join(workspaceDir, p));
-      // 历史脏未动（含捕获时与现在都不可读）→ 剔除；hash 漂移（含基线有
-      // hash 而当前已删除）→ 任务期间再改动，列入
-      if (baseHash === curHash) continue;
-    }
-    unjournaled.push(p);
-  }
-  journaled.sort();
-  unjournaled.sort();
-  const baselineAvailable = taskId === null ? true : baseline !== null;
-  return { journaled, unjournaled, repos, degraded: false, baselineAvailable };
 }
 
 /**

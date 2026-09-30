@@ -200,3 +200,57 @@ describe('TaskExecutor.admitOnce', () => {
     expect(kickoff.mock.calls[0][0].sessionId).toBe(low.executionSessionId);
   });
 });
+
+describe('TaskExecutor.admitOnce scheduled_at 闸门（spec 2026-09-30 §3.2）', () => {
+  it('NULL 计划时间 → 立即有放行资格', async () => {
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: 'now', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', scheduledAt: null });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress');
+  });
+
+  it('计划时间已过（< now）→ 立即有放行资格', async () => {
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: 'overdue', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', scheduledAt: Date.now() - 60_000 });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress');
+  });
+
+  it('计划时间未来 → 留排队中不捞；到点后（scheduled_at 推回过去）再放行', async () => {
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: 'future', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', scheduledAt: Date.now() + 3_600_000 });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    const ex = mkExecutor(3, kickoff);
+
+    await ex.admitOnce();
+    expect(getTask('T-001')!.status).toBe('assigned'); // 未来：排队中
+    expect(kickoff).not.toHaveBeenCalled();
+
+    // 模拟到点：scheduler due-wakeup 后的兜底路径——时间推回过去再评估
+    getDb().prepare('UPDATE tasks SET scheduled_at = ? WHERE id = ?').run(Date.now() - 1, 'T-001');
+    await ex.admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress');
+    expect(kickoff).toHaveBeenCalledTimes(1);
+  });
+
+  it('未来时间任务不阻塞同池 NULL 任务放行（闸门按行过滤，非整池熔断）', async () => {
+    seedAgentMember('inst1');
+    insertTask({ workspaceId: 'ws1', title: 'future', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 10, scheduledAt: Date.now() + 3_600_000 });
+    insertTask({ workspaceId: 'ws1', title: 'ready', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', priority: 1 });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('assigned'); // 高优但未到点：跳过
+    expect(getTask('T-002')!.status).toBe('in_progress'); // 低优但已就绪：放行
+  });
+
+  it('边界：scheduled_at == now → 有放行资格（<= 语义）', async () => {
+    seedAgentMember('inst1');
+    const now = Date.now();
+    insertTask({ workspaceId: 'ws1', title: 'edge', creatorUserId: 'o', assigneeAgentId: 'inst1', status: 'assigned', scheduledAt: now });
+    const kickoff = vi.fn().mockResolvedValue(undefined);
+    await mkExecutor(3, kickoff).admitOnce();
+    expect(getTask('T-001')!.status).toBe('in_progress');
+  });
+});

@@ -35,19 +35,24 @@ interface CreateTaskDialogProps {
     sourceMessageId?: string;
     assigneeAgentId?: string;
   };
+  /**
+   * 分组默认值（看板选中分组时传入，TaskBoardView 的 activeGroupId 已带
+   * 悬空守卫）；'' / null / 未传 = 默认「不分组」。primitive 入 deps——
+   * 不放 preset（对象身份每渲染变，会连带重置其余表单字段）
+   */
+  defaultGroupId?: string | null;
 }
 
 type Priority = 'low' | 'medium' | 'high';
 type TargetKind = 'none' | 'agent' | 'team' | 'session';
 type RecurrenceKind = 'once' | 'every' | 'daily' | 'weekly';
 
-export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset }: CreateTaskDialogProps) {
+export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset, defaultGroupId }: CreateTaskDialogProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [assigneeAgentId, setAssigneeAgentId] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState<string>('');
-  const [deadlineAt, setDeadlineAt] = useState<string>('');
   const [assignments, setAssignments] = useState<Array<{ instanceId: string; agentName: string }>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [targetKind, setTargetKind] = useState<TargetKind>('none');
@@ -71,7 +76,6 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setAssigneeAgentId(preset?.assigneeAgentId ?? null);
     setPriority('medium');
     setScheduledAt('');
-    setDeadlineAt('');
     // preset.assigneeAgentId 预填时目标类型直接进 agent 分支，保持旧预填体验
     setTargetKind(preset?.assigneeAgentId ? 'agent' : 'none');
     setTargetTeamId('');
@@ -81,7 +85,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setEveryUnit('m');
     setRecTime('09:00');
     setWeekday('1');
-    setGroupId('');
+    setGroupId(defaultGroupId ?? '');
     // 分组选项与 taskGroup.list 'exclude' 口径一致（只列活跃组）；失败静默——
     // 下拉只剩「不分组」，不阻塞建任务
     void loadGroups(workspaceId).catch(() => {});
@@ -92,7 +96,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     });
     ipc.team.list(workspaceId).then((list) => setTeams(list.map((t) => ({ id: t.id, name: t.name }))));
     ipc.session.list(workspaceId).then((list) => setSessions(list.map((s) => ({ id: s.id, title: s.title }))));
-  }, [open, preset, workspaceId, loadGroups]);
+  }, [open, preset, workspaceId, loadGroups, defaultGroupId]);
 
   if (!open) return null;
 
@@ -129,7 +133,6 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
         targetSessionId: targetKind === 'session' ? targetSessionId || null : null,
         recurrenceRule,
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
-        deadlineAt: deadlineAt ? new Date(deadlineAt).getTime() : null,
         groupId: groupId === '' ? undefined : groupId,
       });
       onCreated(created.id);
@@ -279,12 +282,6 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
           type="datetime-local"
           value={scheduledAt}
           onChange={(e) => setScheduledAt(e.target.value)}
-        />
-        <Input
-          label="截止时间"
-          type="datetime-local"
-          value={deadlineAt}
-          onChange={(e) => setDeadlineAt(e.target.value)}
         />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>

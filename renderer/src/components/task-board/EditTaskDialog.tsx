@@ -57,7 +57,6 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
   const [targetTeamId, setTargetTeamId] = useState(task.targetTeamId ?? '');
   const [targetSessionId, setTargetSessionId] = useState(task.targetSessionId ?? '');
   const [scheduledAt, setScheduledAt] = useState(toDatetimeLocal(task.scheduledAt));
-  const [deadlineAt, setDeadlineAt] = useState(toDatetimeLocal(task.deadlineAt));
   const preset = parseRecurrence(task.recurrenceRule);
   const [recurrenceKind, setRecurrenceKind] = useState<RecurrenceKind>(preset.kind);
   const [everyN, setEveryN] = useState(String(preset.everyN ?? 30));
@@ -86,7 +85,6 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
     setTargetTeamId(task.targetTeamId ?? '');
     setTargetSessionId(task.targetSessionId ?? '');
     setScheduledAt(toDatetimeLocal(task.scheduledAt));
-    setDeadlineAt(toDatetimeLocal(task.deadlineAt));
     const p = parseRecurrence(task.recurrenceRule);
     setRecurrenceKind(p.kind);
     setEveryN(String(p.everyN ?? 30));
@@ -133,7 +131,6 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
         targetSessionId: targetKind === 'session' ? targetSessionId : null,
         recurrenceRule: serializeRecurrence(rulePreset),
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
-        deadlineAt: deadlineAt ? new Date(deadlineAt).getTime() : null,
       });
       onSaved();
       onClose();
@@ -258,12 +255,6 @@ export function EditTaskDialog({ open, onClose, onSaved, task, workspaceId }: Ed
           type="datetime-local"
           value={scheduledAt}
           onChange={(e) => setScheduledAt(e.target.value)}
-        />
-        <Input
-          label="截止时间"
-          type="datetime-local"
-          value={deadlineAt}
-          onChange={(e) => setDeadlineAt(e.target.value)}
         />
         {error && <div className="text-xs text-status-error">{error}</div>}
         <div className="flex justify-end gap-2">

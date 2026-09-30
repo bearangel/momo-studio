@@ -24,6 +24,8 @@ import { migration046 } from './046_provider_models_vision_tri_state';
 import { migration047 } from './047_kanban_groups_archive';
 import { migration048 } from './048_journal_session_index';
 import { migration049 } from './049_task_scan_baseline';
+import { migration050 } from './050_task_pin_drop_board_position';
+import { migration051 } from './051_lane_semantics_pending_to_draft';
 
 export interface Migration {
   version: number;
@@ -1017,6 +1019,20 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 在独立模块 049_task_scan_baseline.ts（约定同 032-048）。
     version: migration049.version,
     sql: migration049.up,
+  },
+  {
+    // 看板顶置字段 + 手动排序退役（2026-09-30）：pinned_at 增列 +
+    // board_position 删列（排序模型收敛为顶置组/创建时间倒序，详见
+    // 050_task_pin_drop_board_position.ts 头注释）。
+    version: migration050.version,
+    sql: migration050.up,
+  },
+  {
+    // 泳道语义重构（2026-09-30）：pending 退役转 draft + 补删 board_position
+    // （050 上线事故：其 up 中 DROP 语句丢失且已按 ADD-only 应用，DROP 收敛
+    // 到本迁移统一愈合。详见 051_lane_semantics_pending_to_draft.ts 头注释）。
+    version: migration051.version,
+    sql: migration051.up,
   },
 ];
 

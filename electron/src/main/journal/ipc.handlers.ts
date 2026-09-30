@@ -1,8 +1,9 @@
 // electron/src/main/journal/ipc.handlers.ts
 //
-// journal 命名空间 IPC（v2.5 变更账本 Task 7）：list / revert / scan /
-// rollbackFileBefore 四通道，通道面与 renderer types.d.ts 的 JournalApiSurface
-// 双端逐字对齐（momo-boundary-rules：preload ↔ ipcMain 通道名逐一对应）。
+// journal 命名空间 IPC（v2.5 变更账本 Task 7）：list / revert /
+// rollbackFileBefore / preview 四通道，通道面与 renderer types.d.ts 的
+// JournalApiSurface 双端逐字对齐（momo-boundary-rules：preload ↔ ipcMain
+// 通道名逐一对应）。
 //
 // 主进程 store 注入（T3 移交）：IPC 层天然运行在主进程——registerJournalIpc()
 // 注册即注入 setJournalStore(createJournalStore(getDb()))，通道与 store 生命周期
@@ -24,7 +25,6 @@ import { getJournalStore, setJournalStore } from './recorder';
 import type { RecordCtx } from './recorder';
 import { revertEntries, previewRevert } from './revert';
 import type { RevertOutcome } from './revert';
-import { scanUnjournaled } from './detector';
 import type { JournalEntry, JournalEntryView } from './types';
 
 /** list 通道 blob 文本截断上限（100KB）：视图不做全量透传，防巨文件撑爆 IPC */
@@ -124,11 +124,6 @@ export function registerJournalIpc(): void {
       });
     },
   );
-
-  ipcMain.handle('journal:scan', async (_e, workspaceId: string, taskId: string | null) => {
-    const workspaceDir = requireWorkspaceDir(workspaceId);
-    return scanUnjournaled(workspaceId, workspaceDir, taskId);
-  });
 
   ipcMain.handle(
     'journal:rollbackFileBefore',

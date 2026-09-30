@@ -171,9 +171,10 @@ describe('create_task', () => {
     expect(t.description).toBe('desc');
   });
 
-  // C1 修复 1：agent 建任务同样接通定时管线——带 scheduledAt 落 pending，
-  // 不带时保持 repo 单点默认 draft（不硬编码 'draft' 字面量）
-  it('带 scheduledAt → 落 pending（定时任务由 scheduler 接管）', async () => {
+  // 泳道语义重构（2026-09-30 §4.1）：agent 建的带目标任务「建即入队」assigned；
+  // 带 scheduledAt（未来）同样入队，由 executor 闸门等到点（旧 C1「落 pending」
+  // 随 pending 退役）。不带目标时保持 repo 单点默认 draft（不硬编码字面量）。
+  it('带 scheduledAt → 落 assigned（建即入队，未来时间由闸门管）', async () => {
     const at = Date.now() + 60_000; // 单点取值：断言与入参同源，防毫秒翻转 flaky
     const t = await createTask({
       workspaceId: 'ws1',
@@ -182,7 +183,7 @@ describe('create_task', () => {
       assigneeAgentId: 'inst1',
       scheduledAt: at,
     });
-    expect(t.status).toBe('pending');
+    expect(t.status).toBe('assigned');
     expect(t.scheduledAt).toBe(at);
   });
 });

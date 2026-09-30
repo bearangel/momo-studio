@@ -148,7 +148,7 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...overrides,
   };

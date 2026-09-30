@@ -76,7 +76,7 @@ export function spawnNextInstanceIfRecurring(taskId: string): void {
     targetSessionId: task.targetSessionId,
     priority: task.priority,
     recurrenceRule: task.recurrenceRule,
-    status: 'pending',
+    status: 'assigned', // 泳道语义重构 §4.3：续期即入队，下次时间由闸门管——pending 中转退役
     scheduledAt: at,
     recurrenceParentId: task.id,
     // deadline 不复制（spec §7.2：绝对截止时间对下次运行无意义）

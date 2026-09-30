@@ -40,6 +40,86 @@ vi.mock('../../ipc/client', () => ({
   },
 }));
 
+describe('CreateTaskDialog 截止时间退役（2026-09-30 §4.4）', () => {
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue([]);
+    useGroupStore.setState({ groups: [], loading: false, error: null, currentWorkspaceId: 'ws1', selectedGroupId: null });
+  });
+
+  it('不含截止时间字段；提交 payload 无 deadlineAt', async () => {
+    render(<CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
+    expect(screen.queryByLabelText('截止时间')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '无截止任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(mockTaskCreate).toHaveBeenCalled());
+    const call = mockTaskCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect('deadlineAt' in call).toBe(false);
+  });
+});
+
+describe('CreateTaskDialog 分组默认值（看板选中分组透传，2026-09-30）', () => {
+  const groups: GroupRow[] = [
+    { id: 'G-001', workspaceId: 'ws1', name: '需求组', color: null, position: 1024, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    { id: 'G-002', workspaceId: 'ws1', name: '缺陷组', color: null, position: 2048, archivedAt: null, createdAt: 2, updatedAt: 2 },
+  ];
+
+  beforeEach(() => {
+    mockTaskCreate.mockReset().mockResolvedValue({ id: 'T-100' });
+    mockListAssignments.mockReset().mockResolvedValue([]);
+    mockTeamList.mockReset().mockResolvedValue([]);
+    mockSessionList.mockReset().mockResolvedValue([]);
+    mockTaskGroupList.mockReset().mockResolvedValue(groups);
+    // currentWorkspaceId 对齐 ws1：防 effect 里 loadGroups 因 ws 切换判定同步清空
+    // groups（受控 select 无匹配 option → value 显示 ''，同步断言误判）
+    useGroupStore.setState({ groups, loading: false, error: null, currentWorkspaceId: 'ws1', selectedGroupId: null });
+  });
+
+  it('defaultGroupId 传入 → 打开即默认选中该分组', () => {
+    render(
+      <CreateTaskDialog
+        open={true}
+        onClose={() => {}}
+        onCreated={() => {}}
+        workspaceId="ws1"
+        defaultGroupId="G-002"
+      />,
+    );
+    const sel = screen.getByLabelText('分组') as HTMLSelectElement;
+    expect(sel.value).toBe('G-002');
+    expect(sel.selectedOptions[0]?.textContent).toBe('缺陷组');
+  });
+
+  it('未传 defaultGroupId → 默认「不分组」', () => {
+    render(<CreateTaskDialog open={true} onClose={() => {}} onCreated={() => {}} workspaceId="ws1" />);
+    const sel = screen.getByLabelText('分组') as HTMLSelectElement;
+    expect(sel.value).toBe('');
+    expect(sel.selectedOptions[0]?.textContent).toBe('不分组');
+  });
+
+  it('默认分组随表单提交落库（create 携带 groupId）', async () => {
+    render(
+      <CreateTaskDialog
+        open={true}
+        onClose={() => {}}
+        onCreated={() => {}}
+        workspaceId="ws1"
+        defaultGroupId="G-001"
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/标题/), { target: { value: '组内新任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => {
+      expect(mockTaskCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ title: '组内新任务', groupId: 'G-001' }),
+      );
+    });
+  });
+});
+
 describe('CreateTaskDialog', () => {
   beforeEach(() => {
     mockTaskCreate.mockReset();

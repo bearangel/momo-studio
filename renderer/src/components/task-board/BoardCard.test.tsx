@@ -8,7 +8,9 @@
 //     UX 波 2 #7）；未知/无色 → 中性回退；null / 不传 → 不渲染
 //   - 点击回调 + selected 的 aria-pressed 语义
 //   - 右键菜单全状态（UX 波 2 #1）：终态出「归档」（spec §5.2，调 task.store.archive
-//     成功即本地剔除 / 失败 toast）；非终态出「编辑」打开内嵌 EditTaskDialog
+//     成功即本地剔除 / 失败 toast）；可编辑态（draft/pending，isEditableStatus
+//     单源）出「编辑」打开内嵌 EditTaskDialog；执行管线中间态无编辑无归档；
+//     全状态首位「顶置/取消顶置」（迁移 050，调 task.store.pin 乐观更新）
 // mock 边界对齐 TaskCard.test：仅 mock IPC（window.api），store 用真实实现。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -25,7 +27,7 @@ const mockApi = {
   agent: { listMembers: vi.fn().mockRejectedValue(new Error('no ipc')) },
   team: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
   session: { list: vi.fn().mockRejectedValue(new Error('no ipc')) },
-  task: { archive: vi.fn() },
+  task: { archive: vi.fn(), setPinned: vi.fn() },
 };
 
 const base: TaskRow = {
@@ -35,13 +37,16 @@ const base: TaskRow = {
   priority: 0, scheduledAt: null, recurrenceRule: null, deadlineAt: null, queuePosition: null,
   runtimeInstanceId: null, estimatedTokens: null, actualTokens: null, toolCallsUsed: 0,
   errorMessage: null, sourceNodeId: null, createdAt: 0, updatedAt: 0, startedAt: null, completedAt: null,
-  groupId: null, boardPosition: null, archivedAt: null,
+  groupId: null, pinnedAt: null, archivedAt: null,
 };
 
 beforeEach(() => {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   mockApi.agent.listMembers.mockClear();
   mockApi.task.archive.mockReset().mockResolvedValue(undefined);
+  mockApi.task.setPinned.mockReset().mockImplementation(async (_id: string, pinned: boolean) =>
+    ({ ...base, pinnedAt: pinned ? 12345 : null }),
+  );
   useAgentStore.setState({ members: [], teams: [] });
   useTaskStore.setState({ tasks: [], selectedTaskId: null, loading: false, error: null });
   dismissToast(); // toast 单例复位，防跨用例串扰
@@ -52,7 +57,7 @@ describe('BoardCard 基础渲染', () => {
     const onClick = vi.fn();
     render(<BoardCard task={base} selected={false} onClick={onClick} />);
     expect(screen.getByText(/#T-001 · 任务A/)).toBeInTheDocument();
-    expect(screen.getByText('已分配')).toBeInTheDocument();
+    expect(screen.getByText('排队中')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /任务A/ }));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
@@ -221,21 +226,29 @@ describe('BoardCard 终态卡右键归档（spec §5.2）', () => {
   });
 });
 
-describe('BoardCard 非终态卡右键编辑（UX 波 2 #1：入口可达性）', () => {
-  it('非终态（assigned）右键 → 出「编辑」菜单（不再放行原生菜单）', () => {
-    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+describe('BoardCard 右键菜单编辑资格（isEditableStatus 单源，2026-09-30 收敛）', () => {
+  it('可编辑态（draft）右键 → 出「编辑」菜单（不放行原生菜单）', () => {
+    render(<BoardCard task={{ ...base, status: 'draft' }} selected={false} onClick={() => {}} />);
     fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
     expect(screen.getByRole('button', { name: /^编辑$/ })).toBeInTheDocument();
-    // 非终态不出归档项（主进程同样 reject）
+    // 可编辑态非终态，不出归档项（主进程同样 reject）
     expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
   });
 
-  it.each(['draft', 'pending', 'session_queued', 'in_progress', 'paused'] as const)(
-    '非终态 %s 右键 → 出「编辑」菜单',
+  it.each(['draft', 'pending'] as const)('可编辑态 %s 右键 → 出「编辑」菜单', (status) => {
+    render(<BoardCard task={{ ...base, status }} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    expect(screen.getByRole('button', { name: /^编辑$/ })).toBeInTheDocument();
+  });
+
+  it.each(['assigned', 'session_queued', 'in_progress', 'paused'] as const)(
+    '执行管线 %s 右键 → 无「编辑」（顶置入口保留，归档仍不出）',
     (status) => {
       render(<BoardCard task={{ ...base, status }} selected={false} onClick={() => {}} />);
       fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
-      expect(screen.getByRole('button', { name: /^编辑$/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^顶置$/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^归档$/ })).not.toBeInTheDocument();
     },
   );
 
@@ -244,7 +257,7 @@ describe('BoardCard 非终态卡右键编辑（UX 波 2 #1：入口可达性）'
     mockApi.agent.listMembers.mockResolvedValue([]);
     mockApi.team.list.mockResolvedValue([]);
     mockApi.session.list.mockResolvedValue([]);
-    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    render(<BoardCard task={{ ...base, status: 'draft' }} selected={false} onClick={() => {}} />);
     fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
     fireEvent.click(screen.getByRole('button', { name: /^编辑$/ }));
 
@@ -254,8 +267,8 @@ describe('BoardCard 非终态卡右键编辑（UX 波 2 #1：入口可达性）'
     expect(screen.queryByRole('button', { name: /^编辑$/ })).not.toBeInTheDocument();
   });
 
-  it('非终态卡不挂 EditTaskDialog 于关闭态（open=false 渲染 null，无对话框副作用）', () => {
-    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+  it('可编辑卡不挂 EditTaskDialog 于关闭态（open=false 渲染 null，无对话框副作用）', () => {
+    render(<BoardCard task={{ ...base, status: 'draft' }} selected={false} onClick={() => {}} />);
     // EditTaskDialog open=false 不渲染（卡片自身的 useTaskEntityNames 兜底拉取不计入）
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -348,5 +361,67 @@ describe('BoardCard 派生徽标「待收尾」（spec §3.5）', () => {
       <BoardCard task={{ ...base, status: 'in_progress' }} selected={false} onClick={() => {}} />,
     );
     expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+  });
+});
+
+// ── 顶置（迁移 050）：图钉标识 + 右键菜单开关 ──────────────────────────────
+describe('BoardCard 顶置', () => {
+  it('pinnedAt 非 null → 状态徽标左侧渲染图钉（aria-label 已顶置）', () => {
+    render(<BoardCard task={{ ...base, pinnedAt: 999 }} selected={false} onClick={() => {}} />);
+    expect(screen.getByLabelText('已顶置')).toBeInTheDocument();
+  });
+
+  it('pinnedAt null → 无图钉', () => {
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    expect(screen.queryByLabelText('已顶置')).not.toBeInTheDocument();
+  });
+
+  it('未顶置右键 → 首位「顶置」项，点击调 store.pin(id, true)', async () => {
+    useTaskStore.setState({ tasks: [base], selectedTaskId: null, loading: false, error: null });
+    render(<BoardCard task={base} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^顶置$/ }));
+
+    await waitFor(() => {
+      expect(mockApi.task.setPinned).toHaveBeenCalledWith('T-001', true);
+    });
+    // 真实 store.pin：成功后权威行覆盖（mock 返回 pinnedAt=12345）
+    await waitFor(() => {
+      expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBe(12345);
+    });
+  });
+
+  it('已顶置右键 → 「取消顶置」项，点击调 store.pin(id, false)；终态卡同样可用', async () => {
+    const done = { ...base, status: 'completed' as const, pinnedAt: 999 };
+    useTaskStore.setState({ tasks: [done], selectedTaskId: null, loading: false, error: null });
+    render(<BoardCard task={done} selected={false} onClick={() => {}} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    // 终态卡菜单同时含「取消顶置」与「归档」
+    fireEvent.click(screen.getByRole('button', { name: /取消顶置/ }));
+
+    await waitFor(() => {
+      expect(mockApi.task.setPinned).toHaveBeenCalledWith('T-001', false);
+    });
+    await waitFor(() => {
+      expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBeNull();
+    });
+  });
+
+  it('pin 失败（IPC reject）→ toast 显示错误，store 回滚乐观值（错误路径）', async () => {
+    mockApi.task.setPinned.mockRejectedValue(new Error('任务不存在'));
+    useTaskStore.setState({ tasks: [base], selectedTaskId: null, loading: false, error: null });
+    render(
+      <>
+        <BoardCard task={base} selected={false} onClick={() => {}} />
+        <Toast />
+      </>,
+    );
+    fireEvent.contextMenu(screen.getByRole('button', { name: /任务A/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^顶置$/ }));
+
+    expect(await screen.findByTestId('ui-toast')).toHaveTextContent('顶置失败: 任务不存在');
+    await waitFor(() => {
+      expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBeNull();
+    });
   });
 });

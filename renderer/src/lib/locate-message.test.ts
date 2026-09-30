@@ -199,22 +199,70 @@ describe('locateTaskExecution', () => {
     el2.remove();
   });
 
-  it('命中行是非顶层（task_reply 被过滤）→ 降级 entered，不 toast 失败', async () => {
+  it('锚点在首屏窗口之外 → loadOlder 翻页直到命中（kickoff 行语义）', async () => {
+    document.getElementById('msg-m-kick')?.remove();
+    const elKick = document.createElement('div');
+    elKick.id = 'msg-m-kick';
+    elKick.scrollIntoView = scrollIntoView;
+    document.body.appendChild(elKick);
+    let olderLoaded = false;
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([['ses-exec', [makeMsg({ id: 'm-new' })]]]),
+      hasMoreBySession: new Map([['ses-exec', true]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn().mockImplementation(async () => {
+        if (olderLoaded) return;
+        olderLoaded = true;
+        useSessionStore.setState({
+          messagesBySession: new Map([
+            ['ses-exec', [makeMsg({ id: 'm-kick', taskId: 'task-1' }), makeMsg({ id: 'm-new' })]],
+          ]),
+        } as never);
+      }),
+    } as never);
+    const r = await locateTaskExecution('task-1', 'ses-exec');
+    expect(r).toBe('located');
+    expect(useSessionStore.getState().loadOlder).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalled();
+    elKick.remove();
+  });
+
+  it('翻页穷尽无锚点（撤回 / 旧任务）→ 切 im 视图 + toast 说明，返回 entered', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([['ses-exec', [makeMsg({ id: 'm-x' })]]]),
+      hasMoreBySession: new Map([['ses-exec', false]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn(),
+    } as never);
+    const r = await locateTaskExecution('task-1', 'ses-exec');
+    expect(r).toBe('entered');
+    expect(useUiStore.getState().setActiveView).toHaveBeenCalledWith('im');
+    expect(useSessionStore.getState().loadOlder).not.toHaveBeenCalled();
+  });
+
+  it('loadOlder 持续失败（store 吞错 set loadOlderError）→ 如实降级 message-missing', async () => {
+    useSessionStore.setState({
+      activeSessionId: 'ses-exec',
+      messagesBySession: new Map([['ses-exec', [makeMsg({ id: 'm-x' })]]]),
+      hasMoreBySession: new Map([['ses-exec', true]]),
+      selectSession: vi.fn(),
+      loadOlder: vi.fn().mockImplementation(async () => {
+        useSessionStore.setState({ loadOlderError: '加载更早消息失败：boom' } as never);
+      }),
+    } as never);
+    expect(await locateTaskExecution('task-1', 'ses-exec')).toBe('message-missing');
+    expect(useSessionStore.getState().loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it('命中行是非顶层（task_reply 被过滤）→ 翻页穷尽后 entered + toast（不误报失败）', async () => {
     useSessionStore.setState({
       activeSessionId: 'ses-exec',
       messagesBySession: new Map([
         ['ses-exec', [makeMsg({ id: 'm-tr', taskId: 'task-1', eventType: 'io.momo-studio.task_reply' })]],
       ]),
-      selectSession: vi.fn(),
-      loadOlder: vi.fn(),
-    } as never);
-    expect(await locateTaskExecution('task-1', 'ses-exec')).toBe('entered');
-  });
-
-  it('无 taskId 命中 → 只切会话 entered', async () => {
-    useSessionStore.setState({
-      activeSessionId: 'ses-exec',
-      messagesBySession: new Map([['ses-exec', [makeMsg({ id: 'm-x' })]]]),
+      hasMoreBySession: new Map([['ses-exec', false]]),
       selectSession: vi.fn(),
       loadOlder: vi.fn(),
     } as never);

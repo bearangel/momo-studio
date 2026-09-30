@@ -1,10 +1,10 @@
 // electron/tests/storage/tasks-repo-board.test.ts
 //
-// tasks repo 看板三新列（group_id / board_position / archived_at）映射 + listTasks
+// tasks repo 看板三新列（group_id / pinned_at / archived_at；board_position 已随迁移 050 退役）映射 + listTasks
 // archived 三态 / groupId 过滤测试（看板重构 Task 2）。
 // 测试覆盖（brief Step 1 用例原样）：
-//   - insert 默认三新列为 NULL；显式传入 groupId / boardPosition 可落值
-//   - updateTask 可 patch archivedAt / boardPosition（group_id 同列清单机械覆盖）
+//   - insert 默认三新列为 NULL；显式传入 groupId / pinnedAt 可落值
+//   - updateTask 可 patch archivedAt / pinnedAt + setTaskPinned 顶置开关（group_id 同列清单机械覆盖）
 //   - listTasks archived 三态（exclude 默认 / only / all）+ groupId 精确过滤
 //
 // 测试隔离：对齐 tasks-repo.test.ts 既有 fixture——每个 case 独立 tmp 目录 +
@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
-import { insertTask, listTasks, updateTask, getTask } from '../../src/main/storage/tasks/repo';
+import { insertTask, listTasks, updateTask, getTask, setTaskPinned } from '../../src/main/storage/tasks/repo';
 
 const tmpRoot = path.join(
   os.tmpdir(),
@@ -58,18 +58,23 @@ describe('tasks 看板字段', () => {
   it('insert 默认三新列为 NULL;显式传入可落值', () => {
     const t = insertTask({ workspaceId: 'ws', title: 'a', creatorUserId: 'owner' });
     expect(t.groupId).toBeNull();
-    expect(t.boardPosition).toBeNull();
+    expect(t.pinnedAt).toBeNull();
     expect(t.archivedAt).toBeNull();
-    const g = insertTask({ workspaceId: 'ws', title: 'b', creatorUserId: 'owner', groupId: 'G-001', boardPosition: 2048 });
+    const g = insertTask({ workspaceId: 'ws', title: 'b', creatorUserId: 'owner', groupId: 'G-001', pinnedAt: 2048 });
     expect(g.groupId).toBe('G-001');
-    expect(g.boardPosition).toBe(2048);
+    expect(g.pinnedAt).toBe(2048);
   });
 
   it('updateTask 可 patch 三新列', () => {
     const t = insertTask({ workspaceId: 'ws', title: 'c', creatorUserId: 'owner' });
-    updateTask(t.id, { archivedAt: 123, boardPosition: 100 });
+    updateTask(t.id, { archivedAt: 123, pinnedAt: 100 });
     expect(getTask(t.id)?.archivedAt).toBe(123);
-    expect(getTask(t.id)?.boardPosition).toBe(100);
+    expect(getTask(t.id)?.pinnedAt).toBe(100);
+    // setTaskPinned 顶置开关：pin 置时间戳、unpin 置空
+    const pinned = setTaskPinned(t.id, true);
+    expect(pinned.pinnedAt).not.toBeNull();
+    const unpinned = setTaskPinned(t.id, false);
+    expect(unpinned.pinnedAt).toBeNull();
   });
 
   it('listTasks archived 三态 + groupId 过滤', async () => {

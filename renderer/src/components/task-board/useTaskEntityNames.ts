@@ -20,6 +20,12 @@ export interface TaskEntityNames {
   agentName: (instanceId: string) => string;
   teamName: (teamId: string) => string;
   sessionTitle: (sessionId: string) => string;
+  /**
+   * 会话存在性（执行会话跳转按钮的删除态判定）：
+   * 两源合并后查询；数据未就绪（兜底拉取未返回且 store 空）→ 乐观 true
+   * （点击时 ensureSession 的 toast 降级兜底竞态），就绪后按真实存在性。
+   */
+  sessionExists: (sessionId: string) => boolean;
 }
 
 const FALLBACK_SLICE = 8;
@@ -30,7 +36,7 @@ export function useTaskEntityNames(workspaceId: string | null): TaskEntityNames 
   const storeSessions = useSessionStore((s) => s.sessions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
   const loadTeams = useAgentStore((s) => s.loadTeams);
-  const [fetchedSessions, setFetchedSessions] = useState<SessionSummary[]>([]);
+  const [fetchedSessions, setFetchedSessions] = useState<SessionSummary[] | null>(null);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -46,7 +52,7 @@ export function useTaskEntityNames(workspaceId: string | null): TaskEntityNames 
         const list = await ipc.session.list(workspaceId);
         if (!cancelled) setFetchedSessions(list);
       } catch {
-        // 同上：静默回退
+        // 同上：静默回退（拉取失败时存在性保持乐观，点击链路兜底）
       }
     })();
     return () => {
@@ -59,12 +65,15 @@ export function useTaskEntityNames(workspaceId: string | null): TaskEntityNames 
     const teamMap = new Map(teams.map((t) => [t.id, t.name]));
     // store 会话（IM 已加载）优先，本地拉取兜底——两源按 id 去重合并
     const sessionMap = new Map<string, string>();
-    for (const s of fetchedSessions) sessionMap.set(s.id, s.title);
+    for (const s of fetchedSessions ?? []) sessionMap.set(s.id, s.title);
     for (const s of storeSessions) sessionMap.set(s.id, s.title);
+    // 存在性数据是否就绪：兜底拉取已返回，或 store 已有会话（IM 加载过）
+    const sessionsKnown = fetchedSessions !== null || storeSessions.length > 0;
     return {
       agentName: (id: string): string => agentMap.get(id) ?? id.slice(0, FALLBACK_SLICE),
       teamName: (id: string): string => teamMap.get(id) ?? id.slice(0, FALLBACK_SLICE),
       sessionTitle: (id: string): string => sessionMap.get(id) ?? id.slice(0, FALLBACK_SLICE),
+      sessionExists: (id: string): boolean => (sessionsKnown ? sessionMap.has(id) : true),
     };
   }, [members, teams, storeSessions, fetchedSessions]);
 }

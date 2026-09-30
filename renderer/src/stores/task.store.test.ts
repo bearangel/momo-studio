@@ -16,6 +16,7 @@ const mockApi = {
   task: {
     list: vi.fn().mockResolvedValue([]),
     move: vi.fn(),
+    setPinned: vi.fn(),
     archive: vi.fn(),
     unarchive: vi.fn(),
   },
@@ -50,7 +51,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title' | 'stat
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...partial,
   };
@@ -179,6 +180,60 @@ describe('task.store — workspace 切换重置（看板隔离回归锁）', () 
 //   3. pendingMoveCount 守卫：move 在途时 load 直接返回（防 5s 轮询覆盖在途乐观态）
 //   4. dragging 守卫：拖拽手持中 load 跳过（松手后恢复轮询生效）
 // 另覆盖 archive 本地剔除 / unarchive 塞回（Task 10 增量动作）及各自错误路径。
+describe('task.store pin（顶置乐观更新 + 回滚，迁移 050）', () => {
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    useTaskStore.setState({
+      tasks: [],
+      selectedTaskId: null,
+      loading: false,
+      error: null,
+      currentWorkspaceId: null,
+      pendingMoveCount: 0,
+      dragging: false,
+    });
+    mockApi.task.setPinned.mockReset();
+  });
+
+  it('pin 乐观更新：本地 pinnedAt 先置，IPC 成功后用权威行覆盖', async () => {
+    const t = mkTask({ id: 'T-001', title: '任务', status: 'draft', pinnedAt: null });
+    let resolvePin!: (v: TaskRow) => void;
+    mockApi.task.setPinned.mockReturnValue(
+      new Promise<TaskRow>((r) => {
+        resolvePin = r;
+      }),
+    );
+    useTaskStore.setState({ tasks: [t] });
+
+    const p = useTaskStore.getState().pin('T-001', true);
+    // 乐观阶段：pinnedAt 已非空（排序即时生效），未等 IPC
+    expect(useTaskStore.getState().tasks[0]!.pinnedAt).not.toBeNull();
+    resolvePin({ ...t, pinnedAt: 424242 });
+    await p;
+    expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBe(424242);
+    expect(mockApi.task.setPinned).toHaveBeenCalledWith('T-001', true);
+  });
+
+  it('unpin → pinnedAt 置空透传 false', async () => {
+    const t = mkTask({ id: 'T-001', title: '任务', status: 'draft', pinnedAt: 999 });
+    mockApi.task.setPinned.mockResolvedValue({ ...t, pinnedAt: null });
+    useTaskStore.setState({ tasks: [t] });
+    await useTaskStore.getState().pin('T-001', false);
+    expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBeNull();
+  });
+
+  it('pin 失败：回滚目标行 + rethrow（错误路径）', async () => {
+    const t = mkTask({ id: 'T-001', title: '任务', status: 'draft', pinnedAt: null });
+    const other = mkTask({ id: 'T-002', title: '任务二', status: 'draft', pinnedAt: 1 });
+    mockApi.task.setPinned.mockRejectedValue(new Error('任务不存在'));
+    useTaskStore.setState({ tasks: [t, other] });
+    await expect(useTaskStore.getState().pin('T-001', true)).rejects.toThrow('任务不存在');
+    // 行级回滚：T-001 恢复 null，T-002 不受影响
+    expect(useTaskStore.getState().tasks[0]!.pinnedAt).toBeNull();
+    expect(useTaskStore.getState().tasks[1]!.pinnedAt).toBe(1);
+  });
+});
+
 describe('task.store move（乐观更新 + 回滚 + 轮询守卫，Task 10）', () => {
   beforeEach(() => {
     (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -195,6 +250,7 @@ describe('task.store move（乐观更新 + 回滚 + 轮询守卫，Task 10）', 
     // move/archive/unarchive 每例自行配置返回值（mockReset 撤掉默认实现，
     // 忘配则测试响亮失败而非静默通过）
     mockApi.task.move.mockReset();
+    mockApi.task.setPinned.mockReset();
     mockApi.task.archive.mockReset();
     mockApi.task.unarchive.mockReset();
   });

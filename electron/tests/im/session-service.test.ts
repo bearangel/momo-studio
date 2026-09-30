@@ -479,6 +479,34 @@ describe('sendUserMessage 全链', () => {
     expect(mockBroadcast).toHaveBeenCalledTimes(1);
   });
 
+  // kickoff 行 task_id 落库（2026-09-30 定位修复）：sourceTaskId 是 executor
+  // 放行链唯一携带者——落库后 renderer locateTaskExecution 才有 T-xxx 锚点。
+  // 对照组锁死：用户手输（无 sourceTaskId）恒 null，行为不变。
+  it('sourceTaskId 落 messages.task_id；用户手输消息 task_id 恒 null', async () => {
+    const db = getDb();
+    seedWorkspace(db, 'ws1');
+    seedAgentDef(db, 'def-a', 'A');
+    seedMember(db, 'inst-a', 'def-a');
+    const s = insertSession({ workspaceId: 'ws1', title: '执行会话' });
+    addSessionMember(s.id, 'inst-a', true);
+    setSessionRouter(makeSpyRouter().router);
+
+    await sendUserMessage({
+      sessionId: s.id,
+      body: '【任务启动】#T-900',
+      systemKickoff: true,
+      sourceTaskId: 'T-900',
+    });
+    await sendUserMessage({ sessionId: s.id, body: '用户手输' });
+
+    const rows = db
+      .prepare('SELECT task_id FROM messages WHERE session_id = ? ORDER BY rowid')
+      .all(s.id) as Array<{ task_id: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.task_id).toBe('T-900');
+    expect(rows[1]?.task_id).toBeNull();
+  });
+
   // 对照组（同一 seed 不带 systemKickoff）：冲突推送与激活钩子正常生效——
   // 锁死 systemKickoff 只关掉两个钩子，而非全局副作用
   it('对照组：同消息不带 systemKickoff → 冲突推送 + 两任务被激活到本会话', async () => {

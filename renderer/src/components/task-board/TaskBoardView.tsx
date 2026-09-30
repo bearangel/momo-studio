@@ -278,6 +278,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
           laneMode={laneMode}
           selectedId={selectedTaskId}
           onSelect={setSelectedTaskId}
+          workspaceId={workspaceId}
         />
       )}
       {/* 详情抽屉叠加层：画板常驻，selectedTaskId 驱动滑入 */}
@@ -295,6 +296,7 @@ export function TaskBoardView({ workspaceId }: TaskBoardViewProps) {
         onClose={() => setCreateOpen(false)}
         onCreated={(taskId) => setSelectedTaskId(taskId)}
         workspaceId={workspaceId}
+        defaultGroupId={activeGroupId}
       />
     </div>
   );

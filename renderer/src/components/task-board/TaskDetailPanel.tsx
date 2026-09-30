@@ -6,13 +6,14 @@
 //   - 展示：状态徽标（taskStatusStyle，不再裸显 draft 枚举）/ 优先级中文 /
 //     指派 agent·团队·会话名称（useTaskEntityNames，不再显示 ID 片段）/
 //     errorMessage 错误条 / 创建·开始·结束时间
-//   - 操作（按状态机合法转换全集，旧实现只有 pending/assigned 启动 +
-//     in_progress 取消，draft/paused 是无按钮死任务）：
-//       draft(有目标)/pending/assigned → 启动（startTask 支持有目标 draft）
-//       draft(无目标) → 提示条引导编辑指派
+//   - 操作（2026-09-30 泳道语义重构 §4.2：启动=入队走 store.move 单点）：
+//       draft(有目标) → 启动（move 排队中；executor 闸门决定何时真正跑）
+//       draft(无目标) → 提示条引导编辑指派（无启动按钮，与拖拽弹框路径区分）
+//       assigned/session_queued → 在队列由 executor 管，无启动按钮
 //       in_progress → 暂停（transition paused；K7-4 后端联动中断 agent 流）
 //       paused → 恢复（task:resume——K7-5 后端转 in_progress + kickoff 重注入）
-//       非终态 → 取消 + 编辑（EditTaskDialog）
+//       非终态 → 取消；编辑仅 draft/pending（isEditableStatus 单源——进入
+//       执行管线即锁定，2026-09-30 用户反馈收敛；pending 随迁移 051 退役）
 //       已归档（archivedAt 非 null）→ 只读：操作栏/编辑入口整体隐藏
 //   - "进入执行会话"（G2）：locateTaskExecution——全状态可用，完结任务也能回看执行记录
 //   - "来源消息定位"（G2）：locateMessage——跳回来源会话并锚定创建任务的原始消息
@@ -31,13 +32,14 @@ import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
 import type { TaskRow } from '../../ipc/types';
 import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
+import { hasDelegationTarget, isEditableStatus } from '../../lib/board';
 import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
 import { Button } from '../ui/Button';
 import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
-import { TaskChangesPanel } from './TaskChangesPanel';
+import { TaskChangesView } from './TaskChangesView';
 import { useTaskEntityNames } from './useTaskEntityNames';
 import { usePendingWrapUp } from './usePendingWrapUp';
 
@@ -60,7 +62,12 @@ function formatTime(ms: number | null): string {
 }
 
 export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
-  const [task, setTask] = useState<TaskRow | null>(null);
+  // 首帧初值：task.store 命中行（zustand 单例跨视图保留——切执行会话再切回
+  // 看板时抽屉重开，列表已有该行，零等待渲染，消除「空白一段时间」）；
+  // fetch 权威行回来再覆盖，轮询语义不变
+  const storeTask = useTaskStore((s) => s.tasks.find((t) => t.id === taskId) ?? null);
+  const move = useTaskStore((s) => s.move);
+  const [task, setTask] = useState<TaskRow | null>(storeTask);
   const [editOpen, setEditOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const refreshTask = (): void => {
@@ -76,7 +83,8 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   useEffect(() => {
     let cancelled = false;
-    setTask(null);
+    // taskId 切换时先落 store 命中行（同上：零等待防空白），无命中才显示加载中
+    setTask(storeTask);
     setActionError(null);
     void ipc.task.get(taskId).then((t) => {
       if (!cancelled) setTask(t);
@@ -104,12 +112,16 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   // 只读模式：归档任务详情一律只读（archivedAt 单源派生，不依赖调用方传参——
   // 任何入口打开归档任务都自动只读）；隐藏全部任务操作按钮与编辑入口
   const readOnly = task.archivedAt !== null;
-  const hasTarget =
-    task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
+  // 编辑资格与 BoardCard 菜单同源（isEditableStatus 单源）：
+  // 进入执行管线（assigned/session_queued/in_progress/paused）即锁定编辑
+  const canEdit = isEditableStatus(task.status);
+  // 谓词单源 lib/board.hasDelegationTarget（与 AssignTargetDialog/拖拽拦截同源）
+  const hasTarget = hasDelegationTarget(task);
   const terminal = TERMINAL_STATUSES.has(task.status);
-  // 启动资格：pending/assigned，或有委派目标的 draft（K2 后端快捷路径）
-  const canStart =
-    task.status === 'pending' || task.status === 'assigned' || (task.status === 'draft' && hasTarget);
+  // 启动资格（2026-09-30 §4.2 收敛）：draft 且有委派目标——「启动」= move 入队
+  // （executeMove 单点：目标校验/转 assigned/notify/保组原子）。pending 已随
+  // 迁移 051 退役；assigned/session_queued 已在队列由 executor 管，不再显示
+  const canStart = task.status === 'draft' && hasTarget;
   const canPause = task.status === 'in_progress';
   const canResume = task.status === 'paused';
 
@@ -122,8 +134,10 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       });
   };
 
+  // 启动 = 入队（§4.2）：走 task.store.move（乐观更新 + 失败回滚内置），
+  // 落点排队中列、保持当前组；错误经 runAction 进 actionError
   const handleStart = (): void => {
-    runAction(() => ipc.task.start(taskId, {}));
+    runAction(() => move(taskId, { column: 'assigned', groupId: task.groupId }));
   };
 
   const handlePause = (): void => {
@@ -337,24 +351,35 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             </div>
           )}
         </div>
-        {/* 变更与回滚分区常驻挂载（G1）：分区头与摘要计数由 TaskChangesPanel 自持 */}
-        <div className="pt-1">
-          <TaskChangesPanel workspaceId={task.workspaceId} taskId={taskId} />
-        </div>
-        {task.executionSessionId && (
-          <button
-            type="button"
-            onClick={handleEnterSession}
-            className="text-accent-600 hover:underline dark:text-accent-300"
-          >
-            进入执行会话 →
-          </button>
-        )}
+        {/* 变更查看（2026-09-30 预览确认）：纯只读分区替代旧「变更与回滚」——
+            视觉与气泡 ChangesChip 同款，回滚统一走气泡右下角 TurnUndoButton
+            （仅最后气泡渲染），任务面板不感知回滚资格。会话已删除（悬空
+            executionSessionId）→ 置灰不可点（点击链路 toast 降级兜底竞态） */}
+        <TaskChangesView workspaceId={task.workspaceId} taskId={taskId} />
+        {task.executionSessionId &&
+          (names.sessionExists(task.executionSessionId) ? (
+            <button
+              type="button"
+              onClick={handleEnterSession}
+              className="text-accent-600 hover:underline dark:text-accent-300"
+            >
+              进入执行会话 →
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title="该任务的执行会话已被删除"
+              className="cursor-not-allowed text-tertiary"
+            >
+              执行会话已删除
+            </button>
+          ))}
       </div>
       {/* 操作栏：归档任务（readOnly）整栏隐藏——只能查看，不能编辑/启动等操作 */}
       {!readOnly && (
         <div className="p-3 border-t border-subtle flex gap-2">
-          {!terminal && (
+          {canEdit && (
             <Button
               variant="secondary"
               aria-label="编辑任务"
@@ -396,7 +421,7 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           )}
         </div>
       )}
-      {!terminal && !readOnly && (
+      {canEdit && !readOnly && (
         <EditTaskDialog
           open={editOpen}
           onClose={() => setEditOpen(false)}

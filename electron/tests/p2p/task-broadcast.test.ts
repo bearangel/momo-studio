@@ -16,7 +16,7 @@
 // 不依赖真实 DB / 网络 / 文件 IO。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { ipcHandlers, taskRepoMocks, starterMocks, conflictMocks, dbAll, dbRun } = vi.hoisted(() => ({
+const { ipcHandlers, taskRepoMocks, starterMocks, conflictMocks, dbAll, dbGet, dbRun } = vi.hoisted(() => ({
   // ipcMain.handle 注册表——capture 真实注册的 handler 后按通道调用
   ipcHandlers: new Map<string, (...args: unknown[]) => unknown>(),
   // storage/tasks/repo 桩（ipc.handlers 与 task-broadcast 共用同一 mock 实例）
@@ -38,6 +38,7 @@ const { ipcHandlers, taskRepoMocks, starterMocks, conflictMocks, dbAll, dbRun } 
   },
   // scheduler.checkOnce 走原生 SQL（不走 repo）——mock getDb 的 prepare().all/run
   dbAll: vi.fn(),
+  dbGet: vi.fn(),
   dbRun: vi.fn(),
 }));
 
@@ -67,7 +68,7 @@ vi.mock('../../src/main/task/conflict-executor', () => conflictMocks);
 
 vi.mock('../../src/main/storage/db', () => ({
   getDb: () => ({
-    prepare: (_sql: string) => ({ all: dbAll, run: dbRun }),
+    prepare: (_sql: string) => ({ all: dbAll, get: dbGet, run: dbRun }),
   }),
 }));
 
@@ -156,7 +157,7 @@ function makeFullTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     startedAt: 3000,
     completedAt: 4000,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...overrides,
   };
@@ -178,6 +179,8 @@ beforeEach(() => {
   conflictMocks.executeConflictResolution.mockReset();
   dbAll.mockReset();
   dbAll.mockReturnValue([]);
+  dbGet.mockReset();
+  dbGet.mockReturnValue(undefined);
   dbRun.mockReset();
   clearTaskBroadcastDeps();
 });
@@ -358,23 +361,22 @@ describe('task IPC 写路径触发接线', () => {
   });
 });
 
-describe('scheduler 自动升级触发', () => {
-  it('④ checkOnce 有 pending→assigned 升级 → 整批合并广播一次', () => {
+describe('scheduler due-wakeup 触发（2026-09-30 §4.3：升级扫描退役）', () => {
+  it('④ checkOnce 命中到点 assigned → 只唤醒 executor，零转态零广播', () => {
     const sync = useFakeSync();
-    dbAll.mockReturnValueOnce([
-      { id: 'T-1', assignee_agent_id: 'inst-1' },
-      { id: 'T-2', assignee_agent_id: 'inst-2' },
-    ]);
+    // 到点 assigned（scheduled_at 已过）——dbGet mock 对应 checkOnce 的
+    // due 探测查询（LIMIT 1 存在性探测，不再逐条返回）
+    dbGet.mockReturnValueOnce({ id: 'T-1' });
     const scanPickup = vi.fn().mockResolvedValue(true);
 
     new TaskScheduler({ scanPickup }).checkOnce();
 
-    expect(scanPickup).toHaveBeenCalledTimes(2);
-    // 两条升级合并为一次全量快照广播（快照本身是全量扫描，无需逐条广播）
-    expect(sync.broadcastTaskSnapshot).toHaveBeenCalledTimes(1);
+    // due-wakeup：唤醒恰好一次；转态/广播归 executor 放行链（此处零调用）
+    expect(scanPickup).toHaveBeenCalledTimes(1);
+    expect(sync.broadcastTaskSnapshot).not.toHaveBeenCalled();
   });
 
-  it('④ 无到期任务 → 不广播', () => {
+  it('④ 无到期任务 → 不唤醒不广播', () => {
     const sync = useFakeSync();
     const scanPickup = vi.fn().mockResolvedValue(true);
 

@@ -60,11 +60,12 @@ export interface JournalStore {
   /** ===== 任务起点扫描基线（未入账误归因根治，迁移 049）=====
    *  生产者：task/starter.ts startTask + task/lifecycle.ts resumePausedTask →
    *  journal/baseline.ts captureTaskScanBaseline（任务事务提交后、kickoff 派发前）。
-   *  消费者：journal/detector.ts scanUnjournaled 的基线差集归因。
-   *  键契约（跨模块单点）：path = workspace 根相对 POSIX 形态（与 detector 变更
-   *  集同口径）；contentHash = sha256 hex（recorder.hashContent），null = 捕获时
-   *  文件不可读。meta 行存在即「有基线」——零脏工作区的合法空基线也有 meta 行
-   *  （path 行为空数组），与「无基线」（getBaselineMeta 返回 null）可区分。 */
+   *  注：2026-09-30 scan IPC 退役后基线暂无读取方（捕获链路保留，数据与
+   *  迁移兼容）；曾由 journal/detector.ts scanUnjournaled 差集归因消费。
+   *  键契约（跨模块单点）：path = workspace 根相对 POSIX 形态；contentHash =
+   *  sha256 hex（recorder.hashContent），null = 捕获时文件不可读。meta 行存在
+   *  即「有基线」——零脏工作区的合法空基线也有 meta 行（path 行为空数组），
+   *  与「无基线」（getBaselineMeta 返回 null）可区分。 */
   /** 基线原子写入：meta 行 + 全部 path 行单事务 all-or-nothing（中途失败整笔回滚，
    *  与 insertMany 同语义——半份基线会让扫描归因半真半假） */
   insertBaseline(meta: BaselineMetaRow, paths: BaselinePathRow[]): void;

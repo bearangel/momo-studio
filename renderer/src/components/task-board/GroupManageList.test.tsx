@@ -83,7 +83,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status' | 'gro
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...partial,
   };
