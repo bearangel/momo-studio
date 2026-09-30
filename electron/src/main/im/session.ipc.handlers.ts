@@ -52,6 +52,7 @@ import type {
   SkillContextItem,
   FileContextItem,
   ImageContextItem,
+  SessionContextItem,
 } from '../../../../renderer/src/ipc/types';
 
 /** 单条消息图片上限（spec 2026-09-26 §6：renderer 拦截 + sanitize 双层防线） */
@@ -73,7 +74,7 @@ const MAX_CONTEXT_IMAGES = 6;
  */
 export function sanitizeMessageContext(v: unknown): MessageContext | undefined {
   if (typeof v !== 'object' || v === null) return undefined;
-  const c = v as { skills?: unknown; files?: unknown; images?: unknown };
+  const c = v as { skills?: unknown; files?: unknown; images?: unknown; sessions?: unknown };
   if (!Array.isArray(c.skills) || !Array.isArray(c.files)) return undefined;
   const skills = c.skills.filter(
     (s): s is SkillContextItem =>
@@ -101,10 +102,28 @@ export function sanitizeMessageContext(v: unknown): MessageContext | undefined {
         )
         .slice(0, MAX_CONTEXT_IMAGES)
     : undefined;
+  // sessions（跨会话引用 spec 2026-09-30 §6，可选字段）：元素级过滤
+  // （sessionId 非空 string + title string）；非数组 → 字段剔除为缺省。
+  const sessions = Array.isArray(c.sessions)
+    ? c.sessions.filter(
+        (s): s is SessionContextItem =>
+          typeof s === 'object' &&
+          s !== null &&
+          typeof (s as SessionContextItem).sessionId === 'string' &&
+          (s as SessionContextItem).sessionId !== '' &&
+          typeof (s as SessionContextItem).title === 'string',
+      )
+    : undefined;
   // spread 保留外层未知字段（透传宽容：未来扩展字段不因清洗被剥掉）；
-  // images 单独处理——非数组时剔除字段（spread 会把垃圾形状原样透传）
-  const { images: _rawImages, ...rest } = c;
-  return images !== undefined ? { ...rest, skills, files, images } : { ...rest, skills, files };
+  // images / sessions 单独处理——非数组时剔除字段（spread 会把垃圾形状原样透传）
+  const { images: _rawImages, sessions: _rawSessions, ...rest } = c;
+  return {
+    ...rest,
+    skills,
+    files,
+    ...(images !== undefined ? { images } : {}),
+    ...(sessions !== undefined ? { sessions } : {}),
+  };
 }
 
 /** SessionRow → SessionSummary（createQuick/createCollab 返回形状；members 现查） */
