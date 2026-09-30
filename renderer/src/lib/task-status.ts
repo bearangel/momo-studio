@@ -10,7 +10,7 @@ export type TaskStatusKey = TaskStatus;
 const STATUS_LABEL: Record<TaskStatusKey, string> = {
   draft: '草稿',
   pending: '待分配',
-  assigned: '已分配',
+  assigned: '排队中',
   session_queued: '排队中',
   in_progress: '进行中',
   paused: '已暂停',

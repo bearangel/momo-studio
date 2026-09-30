@@ -55,7 +55,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'title'>): Task
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...partial,
   };
@@ -89,7 +89,7 @@ describe('BoardColumn 列头与卡片', () => {
     render(
       <BoardColumn column={backlog} tasks={[]} selectedId={null} onSelect={() => {}} />,
     );
-    expect(screen.getByText('草稿+待分配')).toBeInTheDocument();
+    expect(screen.getByText('草稿')).toBeInTheDocument();
   });
 
   it('空列 → 显示「暂无」空态', () => {
@@ -115,15 +115,15 @@ describe('BoardColumn 列头与卡片', () => {
 });
 
 describe('BoardColumn 列内排序（sortColumn 内部生效）', () => {
-  it('boardPosition 升序渲染；NULL 垫底（createdAt 兜底）', () => {
+  it('顶置组在前（pin 时间倒序）→ 未顶置（createdAt 倒序）；两组间渲染「顶置以上」分隔线', () => {
     render(
       <BoardColumn
         column={backlog}
         tasks={[
-          mkTask({ id: 'T-null-new', title: '无位新卡', boardPosition: null, createdAt: 2000 }),
-          mkTask({ id: 'T-2048', title: '乙位', boardPosition: 2048 }),
-          mkTask({ id: 'T-1024', title: '甲位', boardPosition: 1024 }),
-          mkTask({ id: 'T-null-old', title: '无位老卡', boardPosition: null, createdAt: 1000 }),
+          mkTask({ id: 'T-pin-old', title: '早置卡', pinnedAt: 1000 }),
+          mkTask({ id: 'T-new', title: '新卡', pinnedAt: null, createdAt: 2000 }),
+          mkTask({ id: 'T-pin-new', title: '晚置卡', pinnedAt: 3000 }),
+          mkTask({ id: 'T-old', title: '老卡', pinnedAt: null, createdAt: 1000 }),
         ]}
         selectedId={null}
         onSelect={() => {}}
@@ -131,15 +131,31 @@ describe('BoardColumn 列内排序（sortColumn 内部生效）', () => {
     );
     const cards = screen.getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') !== null);
     expect(cards.map((b) => b.textContent)).toEqual([
-      expect.stringContaining('甲位'),
-      expect.stringContaining('乙位'),
-      expect.stringContaining('无位老卡'),
-      expect.stringContaining('无位新卡'),
+      expect.stringContaining('晚置卡'),
+      expect.stringContaining('早置卡'),
+      expect.stringContaining('新卡'),
+      expect.stringContaining('老卡'),
     ]);
+    // 分隔线一条，位于未顶置首卡（新卡）之前
+    const dividers = screen.getAllByTestId('pinned-divider');
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]!.nextElementSibling?.textContent).toContain('新卡');
+  });
+
+  it('全列未顶置 / 全列顶置 → 无分隔线（边界）', () => {
+    const { unmount } = render(
+      <BoardColumn column={backlog} tasks={[mkTask({ id: 'T-a', title: '甲', pinnedAt: null })]} />,
+    );
+    expect(screen.queryByTestId('pinned-divider')).toBeNull();
+    unmount();
+    render(
+      <BoardColumn column={backlog} tasks={[mkTask({ id: 'T-b', title: '乙', pinnedAt: 1 })]} />,
+    );
+    expect(screen.queryByTestId('pinned-divider')).toBeNull();
   });
 });
 
-// ── 拖拽视觉反馈(看板重构 Task 13:禁投变暗 / 合法虚线 / 插入指示线)──────────
+// ── 拖拽视觉反馈(看板重构 Task 13:禁投变暗 / 合法虚线 / 目标列高亮)──────────
 describe('BoardColumn 拖拽视觉反馈', () => {
   const assigned: BoardColumnDef = BOARD_COLUMNS[1]!;
 
@@ -155,7 +171,7 @@ describe('BoardColumn 拖拽视觉反馈', () => {
   it('拖拽中合法列 → accent 虚线边框,无禁投标注', () => {
     // draft → assigned 合法
     render(<BoardColumn column={assigned} tasks={[]} dropFromStatus="draft" />);
-    const section = screen.getByRole('region', { name: '已分配' });
+    const section = screen.getByRole('region', { name: '排队中' });
     expect(section).toHaveAttribute('data-drop-state', 'ok');
     expect(section.className).toContain('border-dashed');
     expect(section.className).toContain('border-focus');
@@ -170,48 +186,31 @@ describe('BoardColumn 拖拽视觉反馈', () => {
     expect(section.className).not.toContain('border-dashed');
   });
 
-  it('指示线:dropIndicatorBeforeTaskId → 该卡上方 2px accent 线,其余卡无', () => {
+  it('dropTargetActive=true → data-drop-state=over（拖悬目标列高亮，悬卡片时列容器 isOver 不触发的补位）', () => {
     render(
       <BoardColumn
-        column={backlog}
-        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 }), mkTask({ id: 'T-002', title: '乙', boardPosition: 2048 })]}
-        dropIndicatorBeforeTaskId="T-002"
+        column={assigned}
+        tasks={[mkTask({ id: 'T-001', title: '甲', status: 'assigned' })]}
+        dropFromStatus="assigned"
+        dropTargetActive
       />,
     );
-    const lines = screen.getAllByTestId('drop-indicator');
-    expect(lines).toHaveLength(1);
-    const line = lines[0]!;
-    expect(line.className).toContain('bg-focus');
-    // 线紧贴 T-002 之前(其后继文本含乙卡)
-    expect(line.nextElementSibling?.textContent).toContain('乙');
+    const section = screen.getByRole('region');
+    expect(section.getAttribute('data-drop-state')).toBe('over');
+    expect(section.className).toContain('bg-surface-2');
   });
 
-  it('指示线:dropIndicatorAfterTaskId → 该卡下方 2px accent 线', () => {
+  it('dropTargetActive=false → 维持可投 idle/ok 态（不高亮）', () => {
     render(
       <BoardColumn
-        column={backlog}
-        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 }), mkTask({ id: 'T-002', title: '乙', boardPosition: 2048 })]}
-        dropIndicatorAfterTaskId="T-001"
+        column={assigned}
+        tasks={[mkTask({ id: 'T-001', title: '甲', status: 'assigned' })]}
+        dropFromStatus="assigned"
+        dropTargetActive={false}
       />,
     );
-    const lines = screen.getAllByTestId('drop-indicator');
-    expect(lines).toHaveLength(1);
-    // 线在 T-001 之后(其前驱文本含甲卡)
-    expect(lines[0]!.previousElementSibling?.textContent).toContain('甲');
-  });
-
-  it('指示线:空列尾线(showTailDropIndicator)→ 列表尾部 2px accent 线', () => {
-    render(
-      <BoardColumn
-        column={backlog}
-        tasks={[mkTask({ id: 'T-001', title: '甲', boardPosition: 1024 })]}
-        showTailDropIndicator
-      />,
-    );
-    const lines = screen.getAllByTestId('drop-indicator');
-    expect(lines).toHaveLength(1);
-    // 尾线是列内最后一个元素(其前驱含甲卡、无后继)
-    expect(lines[0]!.previousElementSibling?.textContent).toContain('甲');
-    expect(lines[0]!.nextElementSibling).toBeNull();
+    const section = screen.getByRole('region');
+    expect(section.getAttribute('data-drop-state')).toBe('ok');
+    expect(section.className).not.toContain('bg-surface-2');
   });
 });

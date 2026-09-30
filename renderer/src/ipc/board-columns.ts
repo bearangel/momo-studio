@@ -30,8 +30,8 @@ export interface BoardColumnDef {
 
 export const BOARD_COLUMNS: readonly BoardColumnDef[] = [
   // hint 中文与 lib/task-status STATUS_LABEL 词表一致（UX 修复：列头副标不再英文化）
-  { key: 'backlog', label: '待办', statuses: ['draft', 'pending'], hint: '草稿+待分配' },
-  { key: 'assigned', label: '已分配', statuses: ['assigned', 'session_queued'], hint: '已分配+排队中' },
+  { key: 'backlog', label: '待办', statuses: ['draft', 'pending'], hint: '草稿' },
+  { key: 'assigned', label: '排队中', statuses: ['assigned', 'session_queued'], hint: '等并发/等计划时间/等车道' },
   { key: 'active', label: '进行中', statuses: ['in_progress', 'paused'], hint: '进行中+已暂停' },
   { key: 'done', label: '已完成', statuses: ['completed'], hint: '' },
   { key: 'closed', label: '已关闭', statuses: ['failed', 'cancelled'], hint: '失败+已取消' },
