@@ -372,6 +372,26 @@ async function main(): Promise<void> {
 
 
 /**
+ * v2.x 白名单修复（spec §4.1）：把动态工具（非 ToolModule 注册的虚拟 / MCP /
+ * dispatch / builtin loop 工具，即 Tier 0 平台机制）并入 allowedTools 白名单。
+ *
+ * v1.7.1 的实现把 getAllToolDefs 的全部内置工具也并了进来，导致白名单被扩成
+ * 全集、per-agent 工具配置完全失效（任何 agent 实际都能调全部工具，P0）。
+ * 本函数只放行 Tier 0；内置工具是否可用完全由 def/workspace/delta 三层配置决定。
+ */
+export function unionDynamicToolNames(
+  allowedTools: string[],
+  allTools: LLMToolDef[],
+  builtinNames: ReadonlySet<string>,
+): string[] {
+  if (allowedTools.length === 0) return allowedTools;
+  const dynamic = allTools
+    .filter((t) => !builtinNames.has(t.name))
+    .map((t) => t.name);
+  return [...new Set([...allowedTools, ...dynamic])];
+}
+
+/**
  * 构建运行时上下文：初始化 SkillRegistry、发现 MCP 工具定义、合并全部工具列表、
  * 把 skill 索引注入 system prompt、构建工具模块注册表（v1.5）。单个 skill 注册失败或
  * MCP 发现失败均不致命——记录日志后跳过，保证 agent 仍能以剩余能力上线。
@@ -438,17 +458,20 @@ ${skillIndex}`
     ...getBuiltinLoopToolDefs(),
   ];
 
-  // v1.7.1 修复：把动态注册的工具（loadSkill / readResource / dispatch:* / mcp:*
-  // / task_complete / compact）加进 allowedTools 白名单。
-  // 否则 v1.6 T4 修复 allowedTools 真正生效后，这些虚拟/动态工具虽暴露给 LLM
-  // 但调用时被 permission.ts 拒绝（"工具 X 不在允许列表中"）。
-  // 这些工具的暴露本身已受控（有 skill 才暴露 loadSkill；main 才暴露 dispatch:*；
-  // 配置 MCP 才暴露 mcp:*），故加入白名单不削弱安全模型——它们是 agent 能力配置的
-  // 直接体现，与 read_file/bash 等内置工具同等地位。
-  if (config.allowedTools.length > 0) {
-    const dynamicNames = tools.map((t) => t.name);
-    config.allowedTools = [...new Set([...config.allowedTools, ...dynamicNames])];
-  }
+  // v2.x 白名单修复（spec §4.1）：把动态工具（非 ToolModule 注册的虚拟 / MCP /
+  // dispatch / builtin loop 工具，即 Tier 0 平台机制）并入 allowedTools 白名单。
+  // 这些工具的暴露本身已受控（有 skill 才暴露 loadSkill；leader 才有 dispatch:*；
+  // 配置 MCP 才有 mcp:*），并入不削弱安全模型；内置工具一律按三层配置白名单执行。
+  //
+  // 历史背景：v1.7.1 把 `tools.map(t => t.name)` 整体并入（`tools` 首项是全部
+  // 内置工具），结果白名单永远被扩成全集，per-agent 工具配置完全失效——任何 agent
+  // 实际都能调全部工具（P0）。本函数只放行 Tier 0；内置工具是否可用完全由
+  // def/workspace/delta 三层配置决定。
+  config.allowedTools = unionDynamicToolNames(
+    config.allowedTools,
+    tools,
+    new Set(getAllToolDefs(toolModules).map((t) => t.name)),
+  );
 
   return {
     wsFs,
