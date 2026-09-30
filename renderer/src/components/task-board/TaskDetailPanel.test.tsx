@@ -63,6 +63,7 @@ const mockApi = {
   task: {
     get: vi.fn(),
     start: vi.fn(),
+    move: vi.fn(),
     cancel: vi.fn(),
     transition: vi.fn(),
     resume: vi.fn(),
@@ -130,6 +131,7 @@ beforeEach(() => {
   uiState.setActiveView = vi.fn();
   mockApi.task.get.mockReset();
   mockApi.task.start.mockReset().mockResolvedValue(undefined);
+  mockApi.task.move.mockReset().mockResolvedValue(makeTask({ status: 'assigned' }));
   mockApi.task.cancel.mockReset().mockResolvedValue(undefined);
   mockApi.task.transition.mockReset().mockResolvedValue(makeTask({}));
   mockApi.task.resume.mockReset().mockResolvedValue(makeTask({ status: 'in_progress' }));
@@ -300,11 +302,23 @@ describe('TaskDetailPanel 操作矩阵（K6）', () => {
     expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
   });
 
-  it('draft 有目标 → 显示启动按钮，点击调 task.start', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'draft' }));
+  it('draft 有目标 → 启动按钮改道 move 入队（spec §4.2：不再直调 start）', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({ status: 'draft', groupId: 'G-009', assigneeAgentId: 'inst-pm' }),
+    );
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '启动' }));
-    await waitFor(() => expect(mockApi.task.start).toHaveBeenCalledWith('task-1', {}));
+    await waitFor(() =>
+      expect(mockApi.task.move).toHaveBeenCalledWith('task-1', { column: 'assigned', groupId: 'G-009' }),
+    );
+    expect(mockApi.task.start).not.toHaveBeenCalled();
+  });
+
+  it('assigned 已在队列 → 无启动按钮（放行由 executor 管，spec §4.2）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'assigned', assigneeAgentId: 'inst-pm' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('排队中');
+    expect(screen.queryByRole('button', { name: '启动' })).not.toBeInTheDocument();
   });
 
   it('paused → 恢复按钮调 task:resume（K7-5：转 in_progress + kickoff 重注入）', async () => {
@@ -340,8 +354,8 @@ describe('TaskDetailPanel 操作矩阵（K6）', () => {
   });
 
   it('启动失败 → 显示错误条（不静默吞异常）', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({ status: 'assigned', executionSessionId: null }));
-    mockApi.task.start.mockRejectedValue(new Error('任务已被并发调度'));
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'draft', executionSessionId: null }));
+    mockApi.task.move.mockRejectedValue(new Error('任务已被并发调度'));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '启动' }));
     expect(await screen.findByText(/任务已被并发调度/)).toBeInTheDocument();
