@@ -56,6 +56,7 @@ import {
   setAssignmentDeltas,
   type AssignmentDeltas,
 } from './assignment-capabilities';
+import { buildToolCatalog } from './tools/catalog';
 import type { WorkspaceAgentMember } from './types';
 import type { ThinkingConfig } from '../llm/provider-presets';
 
@@ -299,6 +300,11 @@ export function registerAgentHandlers(): void {
   // 返回 builtin 建议 Map（UI 添加 builtin 时预填 platform）
   ipcMain.handle('agent:getBuiltinSuggestions', async () => {
     return getBuiltinSuggestionsMap();
+  });
+
+  // v2.x 工具目录下发（单一真相源，spec §4.3）：renderer 创建/编辑界面据此渲染
+  ipcMain.handle('tools:getCatalog', () => {
+    return buildToolCatalog();
   });
 
   // 读取某成员的能力 delta（Layer 3）。无 delta 时返回全空对象。

@@ -404,6 +404,18 @@ export interface EnablePresetResult {
   member: WorkspaceAgentMember | null;
 }
 
+/** v2.x 工具目录条目（tools:getCatalog 返回项；electron 侧 catalog-entry.ts 的镜像契约） */
+export interface ToolCatalogEntry {
+  name: string;
+  description: string;
+  category: string;
+  categoryEmoji: string;
+  /** Tier 1 公共默认集 = true */
+  defaultOn: boolean;
+  riskNote?: string;
+  conditional?: string;
+}
+
 /**
  * A 子系统：IM 消息（SQLite messages 表 row）。
  *
@@ -1757,6 +1769,11 @@ export interface ApiSurface {
     addMember(teamId: string, instanceId: string): Promise<{ ok: true }>;
     /** 移除成员（leader 走守卫 reject；不存在的成员/团队幂等 no-op） */
     removeMember(teamId: string, instanceId: string): Promise<{ ok: true }>;
+  };
+  /** v2.x：工具目录（注册中心自描述，单一真相源）——agent 创建/编辑界面据此渲染 */
+  tools: {
+    /** 工具目录（注册中心自描述，单一真相源） */
+    getCatalog(): Promise<ToolCatalogEntry[]>;
   };
   provider: {
     list(): Promise<ModelProvider[]>;

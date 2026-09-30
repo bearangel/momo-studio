@@ -119,6 +119,10 @@ const api: ApiSurface = {
     addMember: (teamId, instanceId) => invoke('team:addMember', teamId, instanceId),
     removeMember: (teamId, instanceId) => invoke('team:removeMember', teamId, instanceId),
   },
+  // v2.x：工具目录（注册中心自描述，单一真相源）——renderer 创建/编辑 agent 据此渲染
+  tools: {
+    getCatalog: () => invoke('tools:getCatalog'),
+  },
   provider: {
     list: () => invoke('provider:list'),
     get: (id) => invoke('provider:get', id),
