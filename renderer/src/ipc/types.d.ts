@@ -217,16 +217,17 @@ export interface RemoteNodeTasks {
 export type ConflictStrategy = 'ask' | 'queue' | 'preempt' | 'fork' | 'reject';
 
 /**
- * v2.6.0 启动恢复卡条目（spec §5.6 IPC 面）：
- *   - taskId / title / status：透传任务行（status 仅可恢复三态）
+ * v2.6.0 启动恢复卡条目（spec §5.6 IPC 面；2026-09-30 语义修正后仅 in_progress
+ * ——assigned/session_queued 由 executor boot 自愈，不再进卡，主进程 detectInterrupted 同步收窄）：
+ *   - taskId / title / status：透传任务行
  *   - agentName：JOIN agent_definitions.name；取不到时降级空串
  *   - journalCount：v2.5 变更账本条目数（store 未注入时 0）
- *   - streamSessionId：断点流 base id（剥 #roll 后缀）；assigned 时空串
+ *   - streamSessionId：断点流 base id（剥 #roll 后缀）；无断点流时空串
  */
 export interface InterruptedTaskInfo {
   taskId: string;
   title: string;
-  status: 'in_progress' | 'assigned' | 'session_queued';
+  status: 'in_progress';
   agentName: string;
   journalCount: number;
   streamSessionId: string;
@@ -308,8 +309,9 @@ export interface TaskApiSurface {
    */
   resume(id: string): Promise<TaskRow & { streamSessionId?: string }>;
   /**
-   * v2.6.0 启动恢复卡数据源（spec §5.2）：列出 in_progress / assigned / session_queued
-   * 任务供 renderer 渲染 ResumeNotice。D6 检测时不改任务状态。
+   * v2.6.0 启动恢复卡数据源（spec §5.2；2026-09-30 语义修正后仅列 in_progress
+   * ——排队任务由 executor boot 自愈，不进卡）供 renderer 渲染 ResumeNotice。
+   * D6 检测时不改任务状态。
    */
   listInterrupted(): Promise<InterruptedTaskInfo[]>;
   /** B9：任务冲突处理——ConflictDialog 选完策略后调此通道，main process 执行副作用 */

@@ -46,16 +46,16 @@ import type { TaskConfig as AgentTaskConfig } from '../agent/agent-runner';
  */
 export const STALE_STREAM_ERROR = '进程中断';
 
-/** detectInterrupted 返回条目（spec §5.6） */
+/** detectInterrupted 返回条目（spec §5.6；2026-09-30 语义修正后仅 in_progress） */
 export interface InterruptedTaskInfo {
   taskId: string;
   title: string;
-  status: 'in_progress' | 'assigned' | 'session_queued';
+  status: 'in_progress';
   /** agent 显示名；workspace_agent_members JOIN agent_definitions.name */
   agentName: string;
   /** v2.5 变更账本条目数（journalEntries where task_id = X） */
   journalCount: number;
-  /** 断点流 base id（剥 #roll 后缀）；assigned/session_queued 无流时为空串 */
+  /** 断点流 base id（剥 #roll 后缀）；无断点流时为空串 */
   streamSessionId: string;
 }
 
@@ -188,7 +188,15 @@ function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): stri
 }
 
 /**
- * 启动恢复卡数据源：列出全部可恢复任务（in_progress / assigned / session_queued）。
+ * 启动恢复卡数据源：只列 in_progress（2026-09-30 语义修正）。
+ *
+ * 原三态（in_progress / assigned / session_queued）是 v2.6.0 spec §5.6 的假设：
+ * assigned/session_queued = 「退出前等待 pickup」。2026-09-30 泳道语义重构后
+ * assigned 语义扩展为「等并发/等计划时间/等车道」——未来定时的任务会以
+ * assigned 长期停留，把它们当「重启时被中断」是误报（恢复按钮也只会被
+ * executor 的 scheduled_at 闸门静默跳过，形成每次重启都再现的幽灵卡）。
+ * 排队任务本就由 executor boot notify + 30s 兜底扫描自愈，无需用户决策；
+ * 真正需要断点续跑决策的只有 in_progress。
  *
  * 字段语义：
  *   - taskId / title / status：直接透传任务行
@@ -196,13 +204,12 @@ function resolveAssignmentId(task: TaskRow, breakpointSsId: string | null): stri
  *     （罕见：def 被删 / builtin YAML 加载失败）
  *   - journalCount：v2.5 变更账本条目数（journal_entries.task_id = X 计数）；
  *     store 未注入时降级 0（不阻断检测）
- *   - streamSessionId：in_progress 才定位断点流；assigned/session_queued 空串
- *     （无 execution_session / 无流事件）
+ *   - streamSessionId：定位断点流 base id；无 execution_session / 无流事件时空串
  *
  * D6：检测时**不改任务状态**——卡片是唯一闸门；scheduler 边界回归锁在测试侧固化。
  */
 export function detectInterrupted(): InterruptedTaskInfo[] {
-  const rows = listTasks({ status: ['in_progress', 'assigned', 'session_queued'] });
+  const rows = listTasks({ status: ['in_progress'] });
   const store = getJournalStore();
   const result: InterruptedTaskInfo[] = [];
   for (const task of rows) {

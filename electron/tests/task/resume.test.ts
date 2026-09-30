@@ -5,8 +5,10 @@
 // 编排锁（detectInterrupted / resumeTask）：
 //   - fixture 经真实生产路径写库（routeChunkToBuffer 真实落库 + 真实
 //     journal_entries 行 + workspace_agent_members JOIN agent_definitions）
-//   - 断言：listInterrupted 命中 in_progress/assigned、字段齐（含 #roll 剥离、
-//     agentName 解析、journalCount 准确）；resumeTask → 真实 AgentRunner.executeTask
+//   - 断言：listInterrupted 只命中 in_progress（2026-09-30 语义修正：assigned/
+//     session_queued 由 executor boot notify + 30s 兜底自愈，重启卡对它们是
+//     误报——「重启时被中断」只对真正跑过的 in_progress 成立）、字段齐（含
+//     #roll 剥离、agentName 解析、journalCount 准确）；resumeTask → 真实 AgentRunner.executeTask
 //     派发 TaskConfig（含 resume 载荷 + streamSessionId 复用）→ 消息行翻回 streaming
 //   - 状态机合法性：in_progress → cancelled 放弃链独立工作（不经 resumeTask）
 //   - scheduler 边界回归锁：scheduler.checkOnce 对 in_progress/assigned 零触碰
@@ -139,6 +141,7 @@ function seedTask(opts: {
   workspaceId: string;
   executionSessionId: string | null;
   assigneeAgentId?: string | null;
+  scheduledAt?: number | null;
 }): void {
   insertTask({
     id: opts.id,
@@ -149,6 +152,7 @@ function seedTask(opts: {
     status: opts.status,
     assigneeAgentId: opts.assigneeAgentId ?? null,
     executionSessionId: opts.executionSessionId,
+    scheduledAt: opts.scheduledAt ?? null,
   });
 }
 
@@ -246,9 +250,10 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     teardownDb();
   });
 
-  it('命中 in_progress 与 assigned；跳过 done / failed / draft / pending', () => {
+  it('只命中 in_progress；跳过 assigned / session_queued / 终态 / draft（2026-09-30 语义修正）', () => {
     seedTask({ id: 'T-1', status: 'in_progress', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     seedTask({ id: 'T-2', status: 'assigned', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst2' });
+    seedTask({ id: 'T-SQ', status: 'session_queued', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
     seedTask({ id: 'T-3', status: 'completed', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     seedTask({ id: 'T-4', status: 'failed', workspaceId: 'ws1', executionSessionId: 'sess-task1', assigneeAgentId: 'inst1' });
     seedTask({ id: 'T-5', status: 'draft', workspaceId: 'ws1', executionSessionId: null });
@@ -256,7 +261,7 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
 
     const list = detectInterrupted();
     const ids = list.map((x) => x.taskId).sort();
-    expect(ids).toEqual(['T-1', 'T-2']);
+    expect(ids).toEqual(['T-1']);
   });
 
   it('字段齐：taskId/title/status/agentName/journalCount/streamSessionId', () => {
@@ -323,19 +328,26 @@ describe('detectInterrupted（v2.6.0 启动恢复检测）', () => {
     expect(map.get('T-B')).toBe('Coder');
   });
 
-  it('assigned 任务 streamSessionId 为空（无断点流）', () => {
+  it('assigned 不再命中（排队任务由 executor boot notify 自愈，非「重启中断」）', () => {
     seedTask({ id: 'T-2', status: 'assigned', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
-    const item = detectInterrupted()[0]!;
-    expect(item.streamSessionId).toBe('');
-    expect(item.status).toBe('assigned');
+    expect(detectInterrupted()).toEqual([]);
   });
 
-  it('session_queued 任务命中（executor 放行池语义——锁定既有行为）', () => {
+  it('assigned + 未来 scheduled_at 不再命中（T-075 误报回归锁：定时未到点 ≠ 被中断）', () => {
+    seedTask({
+      id: 'T-FUT',
+      status: 'assigned',
+      workspaceId: 'ws1',
+      executionSessionId: null,
+      assigneeAgentId: 'inst1',
+      scheduledAt: Date.now() + 86_400_000,
+    });
+    expect(detectInterrupted()).toEqual([]);
+  });
+
+  it('session_queued 不再命中（车道排队由 executor 30s 兜底扫描自愈）', () => {
     seedTask({ id: 'T-SQ', status: 'session_queued', workspaceId: 'ws1', executionSessionId: null, assigneeAgentId: 'inst1' });
-    const item = detectInterrupted()[0]!;
-    expect(item.taskId).toBe('T-SQ');
-    expect(item.status).toBe('session_queued');
-    expect(item.streamSessionId).toBe('');
+    expect(detectInterrupted()).toEqual([]);
   });
 
   it('journal store 未注入时 journalCount 降级为 0（不阻断检测）', () => {
