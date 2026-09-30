@@ -63,7 +63,7 @@ function mkTask(
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...partial,
   };

@@ -44,7 +44,7 @@ function makeTask(overrides: Partial<TaskRow> = {}): TaskRow {
     deadlineAt: null, queuePosition: null, runtimeInstanceId: null, estimatedTokens: null,
     actualTokens: null, toolCallsUsed: 0, errorMessage: null, sourceNodeId: null,
     createdAt: 1, updatedAt: 1, startedAt: null, completedAt: null,
-    groupId: null, boardPosition: null, archivedAt: null, ...overrides,
+    groupId: null, pinnedAt: null, archivedAt: null, ...overrides,
   };
 }
 

@@ -58,6 +58,11 @@ interface TaskState {
    * groupId），IPC 成功用返回行覆盖，失败回滚目标行并 rethrow（上层 toast）。
    */
   move: (id: string, target: Parameters<typeof ipc.task.move>[1]) => Promise<void>;
+  /**
+   * 顶置开关（迁移 050）：乐观置 pinnedAt（本地 Date.now() 即时生效排序），
+   * IPC 成功用权威行覆盖，失败回滚目标行并 rethrow（上层 toast）。
+   */
+  pin: (id: string, pinned: boolean) => Promise<void>;
   /** 归档：成功即本地剔除（load 默认排除归档行，与之对齐）；失败 rethrow 本地不动 */
   archive: (id: string) => Promise<void>;
   /** 解档：成功即把返回行塞回 tasks */
@@ -136,6 +141,23 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     } finally {
       // Math.max 防 reset 交错产生负计数（reset 清零后本 move 的 finally 再减）
       set((s) => ({ pendingMoveCount: Math.max(0, s.pendingMoveCount - 1) }));
+    }
+  },
+
+  pin: async (id, pinned) => {
+    const snapshotRow = get().tasks.find((t) => t.id === id) ?? null;
+    // 乐观值与服务端同源语义（Date.now()）；排序即时生效
+    set((s) => ({
+      tasks: s.tasks.map((t) => (t.id === id ? { ...t, pinnedAt: pinned ? Date.now() : null } : t)),
+    }));
+    try {
+      const updated = await ipc.task.setPinned(id, pinned);
+      set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? updated : t)) }));
+    } catch (err) {
+      if (snapshotRow) {
+        set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? snapshotRow : t)) }));
+      }
+      throw err; // 上层 toast
     }
   },
 

@@ -57,7 +57,7 @@ function mkTask(partial: Partial<TaskRow> & Pick<TaskRow, 'id' | 'status'>): Tas
     startedAt: null,
     completedAt: null,
     groupId: 'g-z1',
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: 999,
     ...partial,
   };

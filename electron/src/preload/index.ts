@@ -147,11 +147,10 @@ const api: ApiSurface = {
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
   },
-  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚/干跑预检
+  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/组合回滚/干跑预检
   journal: {
     list: (scope) => invoke('journal:list', scope),
     revert: (workspaceId, ids, opts) => invoke('journal:revert', workspaceId, ids, opts),
-    scan: (workspaceId, taskId) => invoke('journal:scan', workspaceId, taskId),
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
     preview: (workspaceId, ids) => invoke('journal:preview', workspaceId, ids),
@@ -391,6 +390,8 @@ const api: ApiSurface = {
     resolveConflict: (input) => invoke('task:resolveConflict', input),
     // 看板重构 Task 6：拖拽换列 / 归档域（动作裁决单点在主进程 move.ts）
     move: (id, target) => invoke<TaskRow>('task:move', id, target),
+    // 顶置开关（迁移 050，语义单点在主进程 repo.setTaskPinned）
+    setPinned: (id, pinned) => invoke<TaskRow>('task:setPinned', id, pinned),
     archive: (id) => invoke<TaskRow>('task:archive', id),
     unarchive: (id) => invoke<TaskRow>('task:unarchive', id),
   },

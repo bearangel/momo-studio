@@ -3,18 +3,20 @@
 // 看板列（看板重构 Task 11 建立，Task 12 拖拽升级）：
 //   - 独立圆角卡容器：bg-surface-1 + border-subtle，固定列宽 ~232px（mockup 基线）
 //   - 列头：列名 + 卡片计数 + hint 灰字（BOARD_COLUMNS 契约的 statuses 标注）
-//   - 列体：sortColumn 内部排序（boardPosition 升序 NULL 垫底）→ 卡片列表；
+//   - 列体：sortColumn 内部排序（顶置组 pin 时间倒序 → 未顶置创建时间倒序，
+//     2026-09-30 排序收敛）→ 卡片列表；两组之间渲染「顶置以上」分隔线；
 //     空列显示「暂无」空态
 //   - Task 12 拖拽接线：
-//     * droppableId 传入 → useDroppable 列容器（空列/列尾落点）；缺省静态渲染
+//     * droppableId 传入 → useDroppable 列容器（跨列/跨泳道落点）；缺省静态渲染
 //       仍安全（dnd-kit 默认 context dispatch=noop，不炸独立渲染）
 //     * dropFromStatus（拖拽手持卡源状态）→ canDropIntoColumn 禁投预判：
-//       droppable disabled + 列变暗（spec §4「待办只出不进」等列级投影）；
-//       可投列拖悬高亮 border-focus
+//       droppable disabled + 列变暗（spec §4「待办只出不进」等列级投影）
+//     * dropTargetActive（排序退役后的拖悬反馈）：resolveDrop 产出的目标列
+//       高亮（悬卡片时列容器 isOver 不触发，经 Lane 匹配透传补位）
 //     * renderCard 注入（BoardCanvas 的 SortableBoardCard + SortableContext）；
 //       缺省渲染静态 BoardCard（Task 11 行为，selectedId/onSelect 走旧通道）
 import { Fragment, type ReactNode } from 'react';
-import { Ban } from 'lucide-react';
+import { Ban, Pin } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { canDropIntoColumn, type BoardColumnDef } from '../../ipc/board-columns';
@@ -38,17 +40,19 @@ interface BoardColumnProps {
   dropFromStatus?: TaskStatus | null;
   /** 卡片渲染注入（SortableBoardCard）；缺省静态 BoardCard */
   renderCard?: (task: TaskRow) => ReactNode;
-  /** 插入指示线：画在该卡上方（Task 13 拖悬落点下边界锚） */
-  dropIndicatorBeforeTaskId?: string | null;
-  /** 插入指示线：画在该卡下方 */
-  dropIndicatorAfterTaskId?: string | null;
-  /** 插入指示线：空列尾线（落点无锚卡时） */
-  showTailDropIndicator?: boolean;
+  /** 拖悬目标列高亮（Lane 按 dropHint 匹配透传；false=常规亮度） */
+  dropTargetActive?: boolean;
 }
 
-/** 插入指示线（2px accent）：落槽位置的视觉占位 */
-function DropIndicatorLine(): ReactNode {
-  return <div data-testid="drop-indicator" aria-hidden className="h-0.5 shrink-0 rounded-full bg-focus" />;
+/** 顶置分区线（图钉 + 「顶置以上」+ 细线）——pinned 组与未 pin 组的分界 */
+function PinnedDivider(): ReactNode {
+  return (
+    <div data-testid="pinned-divider" className="flex items-center gap-1 text-[10px] text-tertiary">
+      <Pin size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      顶置以上
+      <span aria-hidden className="h-px flex-1 bg-border-subtle" />
+    </div>
+  );
 }
 
 export function BoardColumn({
@@ -60,9 +64,7 @@ export function BoardColumn({
   droppableId,
   dropFromStatus = null,
   renderCard,
-  dropIndicatorBeforeTaskId = null,
-  dropIndicatorAfterTaskId = null,
-  showTailDropIndicator = false,
+  dropTargetActive = false,
 }: BoardColumnProps) {
   const sorted = sortColumn(tasks);
   const dropForbidden = dropFromStatus !== null && !canDropIntoColumn(dropFromStatus, column.key);
@@ -70,11 +72,12 @@ export function BoardColumn({
     id: droppableId ?? `static-col:${column.key}`,
     disabled: dropForbidden,
   });
-  // 拖拽视觉三态(Task 13):forbidden 禁投变暗 / over 拖悬升级 / ok 可投虚线 / idle 常规
+  // 拖拽视觉三态(Task 13):forbidden 禁投变暗 / over 拖悬升级 / ok 可投虚线 / idle 常规；
+  // dropTargetActive 把悬停在卡片上的目标列也纳入 over 态（列容器自身 isOver 不触发）
   const dropState = dropForbidden
     ? 'forbidden'
     : dropFromStatus !== null
-      ? isOver
+      ? isOver || dropTargetActive
         ? 'over'
         : 'ok'
       : 'idle';
@@ -86,6 +89,8 @@ export function BoardColumn({
         : dropState === 'ok'
           ? 'border-dashed border-focus'
           : 'border-subtle';
+  // 顶置分界：排序后首个未顶置卡的位置（≤0=无顶置卡不画线；=length=全顶置不画线）
+  const firstUnpinnedIdx = sorted.findIndex((t) => t.pinnedAt === null);
 
   return (
     <section
@@ -108,36 +113,29 @@ export function BoardColumn({
         )}
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
-        {sorted.length === 0 && !showTailDropIndicator ? (
+        {sorted.length === 0 ? (
           <div className="py-6 text-center text-xs text-tertiary">暂无</div>
+        ) : renderCard ? (
+          <SortableContext items={sorted.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+            {sorted.map((task, idx) => (
+              <Fragment key={task.id}>
+                {idx === firstUnpinnedIdx && firstUnpinnedIdx > 0 && <PinnedDivider />}
+                {renderCard(task)}
+              </Fragment>
+            ))}
+          </SortableContext>
         ) : (
-          <>
-            {renderCard ? (
-              <SortableContext items={sorted.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                {sorted.map((task) => (
-                  <Fragment key={task.id}>
-                    {dropIndicatorBeforeTaskId === task.id && <DropIndicatorLine />}
-                    {renderCard(task)}
-                    {dropIndicatorAfterTaskId === task.id && <DropIndicatorLine />}
-                  </Fragment>
-                ))}
-              </SortableContext>
-            ) : (
-              sorted.map((task) => (
-                <Fragment key={task.id}>
-                  {dropIndicatorBeforeTaskId === task.id && <DropIndicatorLine />}
-                  <BoardCard
-                    task={task}
-                    selected={task.id === selectedId}
-                    onClick={() => onSelect?.(task.id)}
-                    groupChip={groupChipOf ? groupChipOf(task) : null}
-                  />
-                  {dropIndicatorAfterTaskId === task.id && <DropIndicatorLine />}
-                </Fragment>
-              ))
-            )}
-            {showTailDropIndicator && <DropIndicatorLine />}
-          </>
+          sorted.map((task, idx) => (
+            <Fragment key={task.id}>
+              {idx === firstUnpinnedIdx && firstUnpinnedIdx > 0 && <PinnedDivider />}
+              <BoardCard
+                task={task}
+                selected={task.id === selectedId}
+                onClick={() => onSelect?.(task.id)}
+                groupChip={groupChipOf ? groupChipOf(task) : null}
+              />
+            </Fragment>
+          ))
         )}
       </div>
     </section>

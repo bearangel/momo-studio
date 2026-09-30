@@ -173,8 +173,8 @@ export interface TaskRow {
   completedAt: number | null;
   /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2） */
   groupId: string | null;
-  /** 组/列内排序位（1024 间隔尾插），NULL=未入板 */
-  boardPosition: number | null;
+  /** 顶置时间戳（ms），NULL=未顶置；看板列内排序键（迁移 050，boardPosition 退役） */
+  pinnedAt: number | null;
   /** 归档时间戳（ms），NULL=活跃；task.list 默认排除归档行 */
   archivedAt: number | null;
 }
@@ -279,19 +279,22 @@ export interface TaskApiSurface {
   }>;
   cancel(id: string): Promise<void>;
   /**
-   * 看板重构 Task 6：拖拽换列/换组/排序单一通道——renderer 只发落点
-   * （column/groupId/before/after），动作裁决（start/complete/cancel/纯排序）
-   * 全部在主进程 executeMove 单点
+   * 看板重构 Task 6 → 2026-09-30 排序退役：拖拽换列/换组单一通道——renderer
+   * 只发目标（column/groupId），动作裁决（start/complete/cancel/换组/no-op）
+   * 全部在主进程 executeMove 单点；列内顺序由 pinned/创建时间决定（无落点锚）
    */
   move(
     id: string,
     target: {
       column: BoardColumnKey;
       groupId: string | null;
-      beforeTaskId?: string;
-      afterTaskId?: string;
     },
   ): Promise<TaskRow>;
+  /**
+   * 顶置开关（迁移 050）：全状态可用；pin 写当前时间（排序键，重复 pin 刷新
+   * = 重新压顶），unpin 置空。语义单点在主进程 repo.setTaskPinned
+   */
+  setPinned(id: string, pinned: boolean): Promise<TaskRow>;
   /** 看板重构 Task 6：归档（仅终态任务可归档，非终态 reject） */
   archive(id: string): Promise<TaskRow>;
   /** 看板重构 Task 6：取消归档 */
@@ -424,6 +427,11 @@ export interface ImMessage {
   status: 'streaming' | 'done' | 'failed' | 'aborted';
   source: 'local' | 'lan' | 'hub' | 'matrix';
   workspaceId: string | null;
+  /**
+   * 任务板任务 id（T-xxx）：kickoff 用户消息行携带（executor 放行注入，
+   * locateTaskExecution 的定位锚点）；agent 回复行落 dispatch 链 id
+   * （chainTaskId，另一 ID 空间）；其余消息 null。
+   */
   taskId: string | null;
   /**
    * 输入框上下文序列化（v2.11 spec 2026-09-16 §5.3）：renderer ↔ main 契约 + messages.context_json 落库字段。
@@ -1419,19 +1427,6 @@ export interface RevertOutcome {
   detail?: string;
 }
 
-/** 未入账扫描结果。与 electron 端 journal/detector.ts 的 ScanResult 对齐。 */
-export interface JournalScanResult {
-  journaled: string[];
-  unjournaled: string[];
-  repos: string[];
-  degraded: boolean;
-  /** 任务起点基线归因是否可用（与 electron 端 ScanResult.baselineAvailable 对齐）：
-   *  false = 无基线 / 降级基线（旧任务或捕获失败），unjournaled 为工作区累计
-   *  账外状态而非本任务专属（UI 据此显示提示行）；taskId=null（快速会话，
-   *  基线概念不适用）恒 true；degraded=true 时恒 false（三列恒空，无提示意义）。 */
-  baselineAvailable: boolean;
-}
-
 /**
  * v2.5 变更账本通道（IPC 命名空间 journal:*，journal/ipc.handlers.ts）。
  * 与 preload 的 invoke 通道名逐一对应；revert / rollbackFileBefore 由
@@ -1461,11 +1456,6 @@ export interface JournalApiSurface {
    * UI 文案需标注「以执行时守卫为准」）。
    */
   preview(workspaceId: string, ids: string[]): Promise<RevertOutcome[]>;
-  /**
-   * 账外变更扫描：与 journaled 取差集（taskId=null 取全 workspace 路径并集，
-   * 否则取该任务组路径子集）；degraded=true 时三列恒空。
-   */
-  scan(workspaceId: string, taskId: string | null): Promise<JournalScanResult>;
   /**
    * 组合回滚到 beforeEntryId 之前状态：服务端取该 path 上 created_at > 锚点的全部
    * 条目 + 锚点自身，逆序 revert。锚点缺失或 path 不一致 → no-op outcome。

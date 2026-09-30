@@ -56,8 +56,8 @@ export interface TaskRow {
   completedAt: number | null;
   /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2，迁移 047） */
   groupId: string | null;
-  /** 组/列内排序位（1024 间隔尾插），NULL=未入板 */
-  boardPosition: number | null;
+  /** 顶置时间戳（ms），NULL=未顶置；看板列内排序键（迁移 050，boardPosition 退役） */
+  pinnedAt: number | null;
   /** 归档时间戳（ms），NULL=活跃；listTasks 默认排除归档行 */
   archivedAt: number | null;
 }
@@ -93,7 +93,7 @@ type SqlRow = {
   started_at: number | null;
   completed_at: number | null;
   group_id: string | null;
-  board_position: number | null;
+  pinned_at: number | null;
   archived_at: number | null;
 };
 
@@ -128,7 +128,7 @@ function rowToCamel(r: SqlRow): TaskRow {
     startedAt: r.started_at,
     completedAt: r.completed_at,
     groupId: r.group_id,
-    boardPosition: r.board_position,
+    pinnedAt: r.pinned_at,
     archivedAt: r.archived_at,
   };
 }
@@ -196,7 +196,7 @@ export function insertTask(
       priority, scheduled_at, recurrence_rule, deadline_at,
       queue_position, runtime_instance_id, estimated_tokens, actual_tokens, tool_calls_used, error_message, source_node_id,
       created_at, updated_at, started_at, completed_at,
-      group_id, board_position, archived_at
+      group_id, pinned_at, archived_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
@@ -228,7 +228,7 @@ export function insertTask(
     input.startedAt,
     input.completedAt,
     input.groupId ?? null,
-    input.boardPosition ?? null,
+    input.pinnedAt ?? null,
     input.archivedAt ?? null,
   );
   return getTask(id)!;
@@ -257,7 +257,7 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
       target_team_id=?, target_session_id=?, recurrence_parent_id=?,
       priority=?, scheduled_at=?, recurrence_rule=?, deadline_at=?,
       queue_position=?, runtime_instance_id=?, estimated_tokens=?, actual_tokens=?, tool_calls_used=?, error_message=?, source_node_id=?,
-      group_id=?, board_position=?, archived_at=?,
+      group_id=?, pinned_at=?, archived_at=?,
       updated_at=?, started_at=?, completed_at=?
     WHERE id=?`,
   ).run(
@@ -285,13 +285,23 @@ export function updateTask(id: string, patch: Partial<Omit<TaskRow, 'id' | 'crea
     next.errorMessage,
     next.sourceNodeId,
     next.groupId,
-    next.boardPosition,
+    next.pinnedAt,
     next.archivedAt,
     next.updatedAt,
     next.startedAt,
     next.completedAt,
     id,
   );
+}
+
+/**
+ * 看板顶置开关（迁移 050）：pin 写当前时间（排序键 = pin 时间倒序，最近
+ * pin 的最顶）；unpin 写 NULL。幂等——重复 pin 刷新时间戳（语义：重新顶置
+ * 压顶），重复 unpin 无害。
+ */
+export function setTaskPinned(id: string, pinned: boolean): TaskRow {
+  updateTask(id, { pinnedAt: pinned ? Date.now() : null });
+  return getTask(id)!;
 }
 
 /**

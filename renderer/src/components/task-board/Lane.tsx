@@ -8,7 +8,8 @@
 //   - 折叠态只留 header；展开态 5 列横排（BoardColumn × BOARD_COLUMNS）
 //   - 卡片渲染由 BoardCanvas 注入（SortableBoardCard）；拖拽手持源状态
 //     透传 BoardColumn 做禁投预判（canDropIntoColumn → droppable disabled + 变暗）；
-//     拖悬指示线定位（Task 13 dropHint）按列 droppableId 匹配透传
+//     拖悬目标列高亮按 dropHint（column+groupId）匹配透传（排序退役后
+//     替代插入指示线的落点反馈）
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { BOARD_COLUMNS } from '../../ipc/board-columns';
@@ -25,7 +26,7 @@ interface LaneProps {
   renderCard: (task: TaskRow) => ReactNode;
   /** 拖拽手持卡的源状态（null=无拖拽）；透传 BoardColumn 做禁投预判 */
   activeDragStatus: TaskStatus | null;
-  /** 拖悬插入指示线定位（Task 13，null=无拖拽/禁投） */
+  /** 拖悬目标列（null=无拖拽/禁投/同列同组 no-op） */
   dropHint?: DropHint | null;
 }
 
@@ -37,6 +38,7 @@ export function Lane({ lane, laneMode, renderCard, activeDragStatus, dropHint = 
   // 组色点：语义色 token（设计系统唯一豁免的 inline 色），未知/无色回退中性
   const colorStyle = groupColorStyle(lane.group?.color ?? null);
   const dotStyle: CSSProperties = { backgroundColor: colorStyle ?? 'rgb(var(--text-tertiary))' };
+  const laneGroupId = lane.group?.id ?? null;
 
   return (
     <section aria-label={laneMode === 'flat' ? '任务泳道' : `泳道 ${name}`} className="flex flex-col gap-1.5">
@@ -71,6 +73,12 @@ export function Lane({ lane, laneMode, renderCard, activeDragStatus, dropHint = 
         <div className="flex gap-3 overflow-x-auto pb-1">
           {BOARD_COLUMNS.map((column) => {
             const droppableId = `col:${laneKey}:${column.key}`;
+            // 目标列匹配：泳道模式列+组双匹配；平铺单道只比列（groupId 是
+            // active 现组，与本道无关）
+            const dropTargetActive =
+              dropHint !== null &&
+              dropHint.column === column.key &&
+              (laneMode === 'flat' || dropHint.groupId === laneGroupId);
             return (
               <BoardColumn
                 key={column.key}
@@ -79,9 +87,7 @@ export function Lane({ lane, laneMode, renderCard, activeDragStatus, dropHint = 
                 droppableId={droppableId}
                 dropFromStatus={activeDragStatus}
                 renderCard={renderCard}
-                dropIndicatorBeforeTaskId={dropHint?.beforeTaskId ?? null}
-                dropIndicatorAfterTaskId={dropHint?.afterTaskId ?? null}
-                showTailDropIndicator={dropHint?.tailOf === droppableId}
+                dropTargetActive={dropTargetActive}
               />
             );
           })}

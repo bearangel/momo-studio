@@ -10,6 +10,7 @@ import {
   sortColumn,
   splitLanes,
 } from './board';
+import { isEditableStatus } from './board';
 
 /** 构造最小 TaskRow 测试行（仅本文件关注字段，其余填安全默认值） */
 function mkTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
@@ -43,7 +44,7 @@ function mkTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...overrides,
   };
@@ -65,22 +66,32 @@ function mkGroup(id: string, overrides: Partial<GroupRow> = {}): GroupRow {
 }
 
 describe('sortColumn', () => {
-  it('有值在前升序，NULL 垫底按 createdAt', () => {
-    const mk = (id: string, pos: number | null, createdAt: number): TaskRow =>
-      mkTask(id, { boardPosition: pos, createdAt });
+  it('顶置组在前（pin 时间倒序）→ 未顶置 createdAt 倒序（后创建的排前面）', () => {
+    const mk = (id: string, pinnedAt: number | null, createdAt: number): TaskRow =>
+      mkTask(id, { pinnedAt, createdAt });
     const out = sortColumn([
       mk('a', null, 300),
       mk('b', 2000, 1),
       mk('c', 1000, 2),
       mk('d', null, 100),
     ]);
-    expect(out.map((t) => t.id)).toEqual(['c', 'b', 'd', 'a']); // NULL 之间 createdAt 升序
+    // b/c 顶置（2000 > 1000 倒序）；a/d 未顶置（300 > 100 倒序）
+    expect(out.map((t) => t.id)).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it('全未顶置 → 纯 createdAt 倒序（新建任务天然可见）', () => {
+    const mk = (id: string, createdAt: number): TaskRow => mkTask(id, { pinnedAt: null, createdAt });
+    expect(sortColumn([mk('old', 1), mk('new', 99), mk('mid', 50)]).map((t) => t.id)).toEqual([
+      'new',
+      'mid',
+      'old',
+    ]);
   });
 
   it('不修改输入数组（纯函数）', () => {
     const input = [
-      mkTask('x', { boardPosition: 5, createdAt: 1 }),
-      mkTask('y', { boardPosition: 1, createdAt: 2 }),
+      mkTask('x', { pinnedAt: 5, createdAt: 1 }),
+      mkTask('y', { pinnedAt: 1, createdAt: 2 }),
     ];
     const snapshot = [...input];
     sortColumn(input);
@@ -230,5 +241,23 @@ describe('groupChipColor（UX 波 2 #7：平铺组 chip 配色）', () => {
     expect(groupChipColor(null)).toBeNull();
     expect(groupChipColor('magenta')).toBeNull();
     expect(groupChipColor('#FFF')).toBeNull();
+  });
+});
+
+describe('isEditableStatus（编辑资格单源：进入执行管线即锁定，2026-09-30）', () => {
+  it('draft / pending 可编辑', () => {
+    expect(isEditableStatus('draft')).toBe(true);
+    expect(isEditableStatus('pending')).toBe(true);
+  });
+
+  it.each(['assigned', 'session_queued', 'in_progress', 'paused'] as const)(
+    '执行管线 %s 锁定编辑',
+    (status) => {
+      expect(isEditableStatus(status)).toBe(false);
+    },
+  );
+
+  it.each(['completed', 'failed', 'cancelled'] as const)('终态 %s 不可编辑（走归档）', (status) => {
+    expect(isEditableStatus(status)).toBe(false);
   });
 });
