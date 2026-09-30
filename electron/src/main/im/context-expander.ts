@@ -189,7 +189,11 @@ function buildSessionMeta(sessionId: string): SessionMetaInput | null {
       memberNames: names,
       messageCount: countMessagesBySession(sessionId),
     };
-  } catch {
+  } catch (err) {
+    logger.warn('context-expander：会话元信息构建失败，降级 missing', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

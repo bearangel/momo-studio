@@ -228,7 +228,109 @@ describe('read_session', () => {
       insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: `消息 ${i} `.repeat(100) });
     }
     const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
-    expect(out.length).toBeLessThanOrEqual(OUTPUT_LIMITS.read_session + 100); // 截断标记尾行容差
+    // FIX-1：footer 改为截断后追加——总长 = 截断正文（上限 + ~30B 标记行）+ ~110B 双游标
+    // footer，容差由 +100 放宽到 +300（字节上限对 .length 同样成立：CJK 1 unit ≤ 3 bytes）
+    expect(out.length).toBeLessThanOrEqual(OUTPUT_LIMITS.read_session + 300);
     expect(out).toContain('截断');
+    // FIX-1 核心回归锁：截断发生时翻页游标仍必须完整存活（footer 挤不丢）
+    expect(out).toMatch(/beforeTs=\d+/);
+    expect(out).toMatch(/afterTs=\d+/);
+  });
+});
+
+// spec §8 明列的三个测试锁（终审 FIX-2）：limit 边界 / 未配对 tool_call_start / afterTs-only 翻页
+describe('spec §8 锁：limit 边界 / 未配对 tool_call / afterTs 翻页', () => {
+  it('list_sessions limit：数值 clamp 与非法值回落，均不抛错且行为确定', async () => {
+    const wsA = seedWorkspace();
+    const cur = insertSession({ workspaceId: wsA, title: '当前' });
+    insertSession({ workspaceId: wsA, title: '会话甲' });
+    await new Promise((r) => setTimeout(r, 5)); // created_at 严格递增保排序确定（ORDER BY ... DESC）
+    insertSession({ workspaceId: wsA, title: '会话乙' });
+    await new Promise((r) => setTimeout(r, 5));
+    insertSession({ workspaceId: wsA, title: '会话丙' });
+    const tools = new SessionTools();
+
+    // limit=2 → 只列最近 2 个（丙乙）；甲（最旧）被截
+    const out2 = await tools.execute('list_sessions', { limit: 2 }, mkCtx(wsA, cur.id));
+    expect(out2).toContain('共 2 个会话');
+    expect(out2).toContain('会话丙');
+    expect(out2).not.toContain('会话甲');
+
+    // limit=0 / 负数 → clamp 到 1（确定性回落，不抛错）
+    const out0 = await tools.execute('list_sessions', { limit: 0 }, mkCtx(wsA, cur.id));
+    expect(out0).toContain('共 1 个会话');
+    const outNeg = await tools.execute('list_sessions', { limit: -3 }, mkCtx(wsA, cur.id));
+    expect(outNeg).toContain('共 1 个会话');
+
+    // 非数字（string / NaN）→ 回落默认 20 → 全列
+    const outStr = await tools.execute('list_sessions', { limit: 'abc' }, mkCtx(wsA, cur.id));
+    expect(outStr).toContain('共 3 个会话');
+    const outNan = await tools.execute('list_sessions', { limit: Number.NaN }, mkCtx(wsA, cur.id));
+    expect(outNan).toContain('共 3 个会话');
+  });
+
+  it('read_session limit：999 clamp 到上限 200 不抛错 / 0 → 1 条 / 非数字 → 默认 50', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '限值会话' });
+    for (const body of ['第一条', '第二条', '第三条']) {
+      insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body });
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const tools = new SessionTools();
+
+    // limit=999 → clamp 上限 200；库存 3 → 返回条数 = min(请求 999, 上限 200, 库存 3)
+    const outMax = await tools.execute('read_session', { sessionId: s.id, limit: 999 }, mkCtx(wsA, 'room-x'));
+    expect(outMax).toContain('本页 3 条');
+    expect(outMax).toContain('第三条');
+
+    // limit=0 → clamp 到 1：只返回最新一条
+    const outZero = await tools.execute('read_session', { sessionId: s.id, limit: 0 }, mkCtx(wsA, 'room-x'));
+    expect(outZero).toContain('本页 1 条');
+    expect(outZero).toContain('第三条');
+    expect(outZero).not.toContain('第一条');
+
+    // limit 非数字 → 默认 50 路径不抛错（库存 3 < 50 → 全返回）
+    const outStr = await tools.execute('read_session', { sessionId: s.id, limit: 'abc' }, mkCtx(wsA, 'room-x'));
+    expect(outStr).toContain('本页 3 条');
+  });
+
+  it('未配对 tool_call_start（无 result）→ 🔧 行 + 参数摘要 + … + (结果未回传)', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '未回传会话' });
+    const agentMsg = insertMessage({ sessionId: s.id, sender: 'coder-1', eventType: 'm.room.message', body: '调用中' });
+    // 只挂 start、不挂 result 也不挂 final 事件——终态收敛仅在流终态后把 null 改写为
+    // (未返回结果)/✗，此处锁「流进行中 / 事件缺失」时 result 与 success 双 null 的诚实渲染
+    insertEventBatch([
+      { messageId: agentMsg.id, seq: 0, eventType: 'tool_call_start', payload: { callId: 'c-unpaired', toolName: 'read_file', args: { path: 'src/y.ts' } } },
+    ]);
+
+    const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
+    expect(out).toContain('🔧 read_file(');
+    expect(out).toContain('src/y.ts');
+    expect(out).toContain('…'); // FIX-3：success===null 用 …，不得伪装成功 ✓
+    expect(out).toContain('(结果未回传)');
+    expect(out).not.toContain('✓');
+  });
+
+  it('afterTs-only 向更新翻页：只含更新消息，footer 带 afterTs=<latest> 游标', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '向后翻页会话' });
+    const m1 = insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第一条' });
+    await new Promise((r) => setTimeout(r, 5));
+    insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第二条' });
+    await new Promise((r) => setTimeout(r, 5));
+    const m3 = insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第三条' });
+
+    const out = await new SessionTools().execute(
+      'read_session',
+      { sessionId: s.id, afterTs: m1.createdAt },
+      mkCtx(wsA, 'room-x'),
+    );
+    expect(out).not.toContain('第一条');
+    expect(out).toContain('第二条');
+    expect(out).toContain('第三条');
+    expect(out).toContain('本页 2 条');
+    // FIX-1：footer 截断后追加——afterTs 游标必须指向本页最新一条
+    expect(out).toContain(`afterTs=${m3.createdAt}`);
   });
 });

@@ -122,7 +122,8 @@ function renderToolSummaryLines(events: MessageEventRow[]): string[] {
     if (seg.kind === 'tool') {
       const argsStr = truncateString(JSON.stringify(seg.args ?? {}), SUMMARY_ARG_CHARS);
       const resultStr = seg.result === null ? '(结果未回传)' : truncateString(seg.result, SUMMARY_RESULT_CHARS);
-      lines.push(`    🔧 ${seg.toolName}(${argsStr}) → ${seg.success === false ? '✗' : '✓'} ${resultStr}`);
+      // success===null（未配对 result）用 …，与 ✓/✗ 区分「未知」而非「成功」
+      lines.push(`    🔧 ${seg.toolName}(${argsStr}) → ${seg.success === false ? '✗' : seg.success === null ? '…' : '✓'} ${resultStr}`);
     } else if (seg.kind === 'dispatch') {
       lines.push(`    📤 dispatch→${seg.subAgentName}: ${truncateString(seg.task, SUMMARY_TASK_CHARS)} (${seg.status})`);
     }
@@ -158,10 +159,13 @@ async function executeReadSession(args: Record<string, unknown>, ctx: ToolContex
     const summary = renderToolSummaryLines(eventsByMsg.get(m.id) ?? []);
     lines.push(...summary);
   }
+  // FIX(终审)：footer 必须在截断之后追加——truncateString 保头切尾，若随正文一起截断，
+  // 翻页游标恰在最需要翻页时丢失。bodyText 截断标记（含「截断」二字）仅超限时出现。
+  const bodyText = truncateString(lines.join('\n'), OUTPUT_LIMITS.read_session);
   const earliest = messages[0]!.createdAt;
-  const footer = `本页 ${messages.length} 条（时间升序）。更早消息：read_session 工具传 beforeTs=${earliest}`;
-  // 截断提示仅超限时由 truncateString 追加（标记文案含「截断」二字），正常路径零截断文案
-  return truncateString(`${lines.join('\n')}\n${footer}`, OUTPUT_LIMITS.read_session);
+  const latest = messages[messages.length - 1]!.createdAt;
+  const footer = `本页 ${messages.length} 条（时间升序）。翻页游标：更早用 beforeTs=${earliest}，更新用 afterTs=${latest}`;
+  return `${bodyText}\n${footer}`;
 }
 
 /** SessionTools：跨会话引用工具模块（spec 2026-09-30 §4） */
