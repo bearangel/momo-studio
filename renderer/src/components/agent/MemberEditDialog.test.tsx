@@ -20,7 +20,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemberEditDialog } from './MemberEditDialog';
 import { useAgentStore } from '../../stores/agent.store';
 import { useProviderStore } from '../../stores/provider.store';
-import type { WorkspaceAgentMember, AgentDefinition, AssignmentDeltas, WorkspaceAllocation, Workspace } from '../../ipc/types';
+import type { WorkspaceAgentMember, AgentDefinition, AssignmentDeltas, WorkspaceAllocation, Workspace, ToolCatalogEntry } from '../../ipc/types';
 
 // ---- mock IPC 桩（capability tabs / allocation / workspace.get / provider / agent 直接走 ipc） ----
 const allocationGet = vi.fn();
@@ -28,6 +28,14 @@ const workspaceGet = vi.fn();
 const resourceList = vi.fn();
 const providerListModels = vi.fn();
 const updateDefinition = vi.fn();
+const getCatalog = vi.fn();
+
+/** mock 工具目录（v2.x 切源：CapabilityTabs 经 useToolCatalog 拉 IPC，缺通道会让 effect 同步抛错炸渲染树） */
+const MOCK_CATALOG: ToolCatalogEntry[] = [
+  { name: 'read_file', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'grep', description: '搜索', category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+  { name: 'bash', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
+];
 
 // store action 桩（组件经 useAgentStore / useProviderStore 调用）
 const getMemberDeltasMock = vi.fn();
@@ -42,6 +50,7 @@ const mockApi = {
   resource: { list: resourceList },
   provider: { listModels: providerListModels },
   agent: { updateDefinition },
+  tools: { getCatalog },
 };
 
 const EMPTY_DELTAS: AssignmentDeltas = {
@@ -59,6 +68,7 @@ beforeEach(() => {
   resourceList.mockReset();
   providerListModels.mockReset();
   updateDefinition.mockReset();
+  getCatalog.mockReset();
   getMemberDeltasMock.mockReset();
   setMemberDeltasMock.mockReset();
   stopMemberMock.mockReset();
@@ -68,6 +78,7 @@ beforeEach(() => {
   allocationGet.mockResolvedValue({ workspaceId: 'ws-1', tools: [], mcps: [], skills: [] } satisfies WorkspaceAllocation);
   workspaceGet.mockResolvedValue(null);
   resourceList.mockResolvedValue([]);
+  getCatalog.mockResolvedValue(MOCK_CATALOG);
   // 默认返回 p1 的两个已启用模型（与 buildDef.modelProviderId='p1' / modelName='m' 对齐）
   providerListModels.mockResolvedValue([
     { providerId: 'p1', modelId: 'm', enabled: true, addedAt: 0 },

@@ -2,7 +2,7 @@
 // def 创建/编辑/配置 builtin 对话框
 //
 // v1.6 Task 9：底部加「能力配置」区，复用 CapabilityTabs。
-// - create 模式：默认勾选 SAFE_MINIMUM_TOOLS，提交时把 capabilities 转为 ToolRef/McpRef/SkillRef 传 IPC
+// - create 模式：目录就绪后默认勾选 Tier 1（目录 defaultOn 集），提交时把 capabilities 转为 ToolRef/McpRef/SkillRef 传 IPC
 // - edit 模式：从 def.defaultTools/Mcps/Skills 初始化
 // - configure（builtin）模式：CapabilityTabs mode='readonly'，提交按钮不传 default*
 //
@@ -22,7 +22,7 @@ import { Input } from '../ui/Input';
 import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
-import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
+import { useToolCatalog } from '../../lib/useToolCatalog';
 import { defToCapabilities } from '../../lib/capability-helpers';
 import type { AgentDefinition, ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
@@ -47,14 +47,24 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
   const [modelName, setModelName] = useState('');
   const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
   const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
-  // create 模式默认 = SAFE_MINIMUM_TOOLS；edit/configure 模式从 def.defaultTools/Mcps/Skills 加载
-  const [capabilities, setCapabilities] = useState<Capabilities>(
-    mode === 'create'
-      ? { tools: [...SAFE_MINIMUM_TOOLS], mcps: [], skills: [] }
-      : def
-        ? defToCapabilities(def)
-        : { tools: [...SAFE_MINIMUM_TOOLS], mcps: [], skills: [] },
-  );
+  // v2.x 切源：工具目录来自 IPC（useToolCatalog 单一真相源）。
+  // create 模式默认勾选目录 defaultOn 集（Tier 1）；edit/configure 模式从
+  // def.defaultTools/Mcps/Skills 加载（下方既有 useEffect，不依赖目录）。
+  const { data: catalog } = useToolCatalog();
+  const [capabilities, setCapabilities] = useState<Capabilities>({
+    tools: [],
+    mcps: [],
+    skills: [],
+  });
+  // create 模式：目录就绪后默认勾选 Tier 1（仅一次——用户已手动改动则不覆盖）
+  useEffect(() => {
+    if (mode !== 'create' || !catalog) return;
+    setCapabilities((cur) =>
+      cur.tools.length === 0
+        ? { tools: [...catalog.safeMinimum], mcps: [], skills: [] }
+        : cur,
+    );
+  }, [mode, catalog]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 

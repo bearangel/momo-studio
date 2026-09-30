@@ -5,20 +5,32 @@
 // - edit 模式：从 def.defaultTools/Mcps/Skills 加载初始勾选
 // - configure（builtin）模式：CapabilityTabs readonly，提交按钮不传 default*
 //
-// Mock 策略：与 CreateWorkspaceDialog 测试一致——通过 (globalThis).window.api 注入桩。
+// Mock 策略：与 CreateWorkspaceDialog 测试一致——通过 (globalThis).window.api 注入桩
+// （ipc client 是读 window.api 的 Proxy，等价于 mock '../../ipc/client' 生产路径）。
+// v2.x 切源：tools.getCatalog 提供小目录（read_file/write_file defaultOn + bash 关），
+// create 模式默认工具断言改用该 mock 目录的 defaultOn 集。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DefinitionEditor } from './DefinitionEditor';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
-import { SAFE_MINIMUM_TOOLS } from '../../lib/tool-catalog';
-import type { AgentDefinition } from '../../ipc/types';
+import type { AgentDefinition, ToolCatalogEntry } from '../../ipc/types';
 
 const createCustom = vi.fn();
 const updateDefinition = vi.fn();
 const resourceList = vi.fn();
 const listModels = vi.fn();
+const getCatalog = vi.fn();
+
+/** mock 工具目录：2 个 defaultOn + 1 个 defaultOn=false（与 CapabilityTabs 测试同规格） */
+const MOCK_CATALOG: ToolCatalogEntry[] = [
+  { name: 'read_file', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'write_file', description: '写文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'bash', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
+];
+/** mock 目录 defaultOn 集——create 模式默认勾选的 Tier 1 */
+const MOCK_DEFAULT_ON = ['read_file', 'write_file'];
 
 const mockApi = {
   agent: {
@@ -28,6 +40,7 @@ const mockApi = {
   },
   resource: { list: resourceList },
   provider: { listModels },
+  tools: { getCatalog },
 };
 
 beforeEach(() => {
@@ -36,6 +49,7 @@ beforeEach(() => {
   createCustom.mockResolvedValue({});
   updateDefinition.mockResolvedValue({ definition: {}, stoppedInstanceIds: [] });
   resourceList.mockResolvedValue([]);
+  getCatalog.mockReset().mockResolvedValue(MOCK_CATALOG);
   listModels.mockReset().mockResolvedValue([
     { providerId: 'prov-1', modelId: 'gpt-4o', enabled: true, addedAt: 0 },
   ]);
@@ -113,15 +127,15 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     expect(screen.getByText('能力配置')).toBeInTheDocument();
   });
 
-  it('create 模式默认勾选安全最小集（read_file 已勾，bash 未勾）', async () => {
+  it('create 模式目录就绪后默认勾选 defaultOn 集（read_file 已勾，bash 未勾）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
+    expect((await screen.findByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(false);
   });
 
   it('create 模式 checkbox 可交互（非 readonly）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect(screen.getByLabelText('bash')).not.toBeDisabled();
+    expect(await screen.findByLabelText('bash')).not.toBeDisabled();
   });
 
   it('模型字段为 ProviderModelPicker 下拉（非手填 Input）', async () => {
@@ -129,8 +143,10 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     expect(screen.getByLabelText('模型名').tagName).toBe('SELECT');
   });
 
-  it('提交时 IPC.createCustom 收到 defaultTools = 安全最小集', async () => {
+  it('提交时 IPC.createCustom 收到 defaultTools = 目录 defaultOn 集', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    // 等 Tier 1 回填完成（目录就绪 → capabilities 回填 → read_file 勾选）
+    await screen.findByLabelText('read_file');
     // 填必填字段
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -149,7 +165,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     });
     const arg = createCustom.mock.calls[0][0];
     expect(arg.defaultTools).toEqual(
-      SAFE_MINIMUM_TOOLS.map((ref) => ({ kind: 'builtin', ref })),
+      MOCK_DEFAULT_ON.map((ref) => ({ kind: 'builtin', ref })),
     );
     expect(arg.defaultMcps).toEqual([]);
     expect(arg.defaultSkills).toEqual([]);
@@ -157,6 +173,8 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
 
   it('勾选 bash 后提交，IPC.createCustom.defaultTools 含 bash', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    // 等 Tier 1 回填完成再操作（否则空集起勾会覆盖回填语义）
+    await screen.findByLabelText('read_file');
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: 'A' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'a' } });
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), {
@@ -176,7 +194,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     const arg = createCustom.mock.calls[0][0];
     expect(arg.defaultTools).toEqual(
       expect.arrayContaining([
-        ...SAFE_MINIMUM_TOOLS.map((ref) => ({ kind: 'builtin', ref })),
+        ...MOCK_DEFAULT_ON.map((ref) => ({ kind: 'builtin', ref })),
         { kind: 'builtin', ref: 'bash' },
       ]),
     );
@@ -189,21 +207,21 @@ describe('DefinitionEditor — edit 模式加载现有 def 能力', () => {
       defaultTools: [{ kind: 'builtin', ref: 'bash' }],
     });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(true);
+    expect((await screen.findByLabelText('bash') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(false);
   });
 
   it('edit 模式 checkbox 可交互', async () => {
     const def = buildDef();
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect(screen.getByLabelText('bash')).not.toBeDisabled();
+    expect(await screen.findByLabelText('bash')).not.toBeDisabled();
   });
 
   it('edit 模式提交时 IPC.updateDefinition 收到 defaultTools（含修改后值）', async () => {
     const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    // 勾上 bash
-    fireEvent.click(screen.getByLabelText('bash'));
+    // 勾上 bash（等目录渲染出 checkbox）
+    fireEvent.click(await screen.findByLabelText('bash'));
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => {
@@ -229,7 +247,7 @@ describe('DefinitionEditor — configure（builtin）模式只读', () => {
   it('configure 模式 CapabilityTabs checkbox disabled', async () => {
     const def = buildDef({ source: 'builtin', defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="configure" def={def} onClose={() => {}} />);
-    expect(screen.getByLabelText('read_file')).toBeDisabled();
+    expect(await screen.findByLabelText('read_file')).toBeDisabled();
     expect(screen.getByLabelText('bash')).toBeDisabled();
   });
 });

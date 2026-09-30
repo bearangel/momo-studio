@@ -11,16 +11,14 @@
 //
 // 设计依据：docs/plans/2026-08-11-v1.6-capability-config.md「CapabilityTabs」块。
 // 被 DefinitionEditor（edit / readonly 模式）和 MemberEditDialog（override 模式）复用。
-// v2.1 P3：token 全量语义化（tab / 分组标签 / 快捷按钮 / 空态提示）；
-// 类别 emoji 来自 tool-catalog 静态目录数据，按数据豁免保留。
+// v2.1 P3：token 全量语义化（tab / 分组标签 / 快捷按钮 / 空态提示）。
+// v2.x 工具目录切源：分组/全集/最小集来自 IPC tools:getCatalog（useToolCatalog，
+// 单一真相源）；类别 emoji 为目录数据字段，按数据豁免保留。目录未就绪或失败时
+// 工具 Tab 顶部显示加载/错误提示，MCP / Skill Tab 不受影响。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
-import {
-  ALL_BUILTIN_TOOLS,
-  SAFE_MINIMUM_TOOLS,
-  TOOL_CATEGORIES,
-} from '../../lib/tool-catalog';
+import { useToolCatalog } from '../../lib/useToolCatalog';
 // Capabilities 类型自 v1.6 Task 11 起抽到 capability-helpers 共享 lib；本地 import 供组件
 // 自身 props 使用，同时 re-export 保持现有 `import { type Capabilities } from './CapabilityTabs'` 不破。
 import { type Capabilities } from '../../lib/capability-helpers';
@@ -51,6 +49,7 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export function CapabilityTabs({ mode, defaultValue, value, onChange }: CapabilityTabsProps) {
   const [tab, setTab] = useState<Tab>('tools');
+  const { data: catalog, error: catalogError } = useToolCatalog();
   // v1.7：mcps / skills 拉取自统一 ipc.resource.list；filter installed 只展示已安装项。
   const [mcps, setMcps] = useState<ResourceItem[]>([]);
   const [skills, setSkills] = useState<ResourceItem[]>([]);
@@ -101,7 +100,13 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
       {/* 工具 Tab */}
       {tab === 'tools' && (
         <div className="flex flex-col gap-2">
-          {TOOL_CATEGORIES.map((cat) => (
+          {/* 目录加载态与错误态（不阻塞表单其余字段） */}
+          {(catalogError || !catalog) && (
+            <div className="text-xs text-status-error">
+              {catalogError ? `工具目录加载失败：${catalogError}` : '工具目录加载中…'}
+            </div>
+          )}
+          {(catalog?.categories ?? []).map((cat) => (
             <div key={cat.label}>
               <div className="text-xs text-tertiary mb-1">
                 {cat.emoji} {cat.label}
@@ -129,13 +134,14 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
             </div>
           ))}
 
-          {/* edit 模式：三个快捷按钮 */}
+          {/* edit 模式：三个快捷按钮（全选/安全最小集依赖目录数据，未就绪时 disabled） */}
           {mode === 'edit' && (
             <div className="flex gap-1 mt-1">
               <button
                 type="button"
+                disabled={!catalog}
                 className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
-                onClick={() => onChange({ ...value, tools: [...ALL_BUILTIN_TOOLS] })}
+                onClick={() => onChange({ ...value, tools: [...(catalog?.allTools ?? [])] })}
               >
                 全选
               </button>
@@ -148,8 +154,9 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
               </button>
               <button
                 type="button"
+                disabled={!catalog}
                 className="text-xs px-2 py-0.5 rounded bg-surface-2 hover:bg-surface-3"
-                onClick={() => onChange({ ...value, tools: [...SAFE_MINIMUM_TOOLS] })}
+                onClick={() => onChange({ ...value, tools: [...(catalog?.safeMinimum ?? [])] })}
               >
                 安全最小集
               </button>
