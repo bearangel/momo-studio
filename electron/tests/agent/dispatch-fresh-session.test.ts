@@ -296,6 +296,9 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
         updatedAt: 1000,
         startedAt: null,
         completedAt: null,
+        groupId: null,
+        boardPosition: null,
+        archivedAt: null,
       },
       events: [
         { seq: 1, eventType: 'tool_call_start', summary: '调用工具 read_file (src/App.tsx)' },

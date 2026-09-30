@@ -13,8 +13,12 @@ import {
   listRecentMessagesBySession,
   listOlderMessages,
   listMessagesByStreamSessionId,
+  deleteMessages,
   type MessageRow,
 } from '../../src/main/storage/messages/repo';
+import { insertEvent } from '../../src/main/storage/messages/events-repo';
+import { writeCompactSnapshot } from '../../src/main/storage/messages/event-compaction';
+import { insertSession, getSession } from '../../src/main/storage/sessions/repo';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-msg-repo-${Date.now()}`);
 
@@ -194,5 +198,81 @@ describe('listRecentMessagesBySession opts（A1 最近窗口过滤）', () => {
     seed5();
     const rows = listRecentMessagesBySession('r-window', 10, { afterTs: 1000, beforeTs: 4000 });
     expect(rows.map((r) => r.body)).toEqual(['m2', 'm3']);
+  });
+});
+
+describe('deleteMessages（逐层撤回的消息删除面）', () => {
+  function seedWsAndSession(sessionKey: string): { sessionId: string } {
+    getDb()
+      .prepare(
+        `INSERT INTO workspaces
+           (id, name, description, directory_path, git_initialized, owner_id, icon_emoji,
+            default_agent_instance_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(`ws-${sessionKey}`, 'WS', '', '/tmp', 0, '@owner:s', '📁', null);
+    const sess = insertSession({ workspaceId: `ws-${sessionKey}`, title: `t-${sessionKey}` });
+    return { sessionId: sess.id };
+  }
+
+  it('删除行 + message_events FK 级联 + compact 快照清理 + last_message_at 重算', () => {
+    const { sessionId } = seedWsAndSession('s-del');
+    const owner = insertMessage({ sessionId, sender: 'owner', eventType: 'm.room.message', body: '问' });
+    const agent = insertMessage({
+      sessionId,
+      sender: 'agent-x',
+      eventType: 'm.room.message',
+      body: '',
+      streamSessionId: 'ss-del-1',
+      status: 'streaming',
+    });
+    insertEvent({ messageId: agent.id, seq: 0, eventType: 'text_delta', payload: { delta: '答' } });
+    writeCompactSnapshot(agent.id);
+    expect(listMessagesBySession(sessionId)).toHaveLength(2);
+    expect(getSession(sessionId)!.lastMessageAt).toBeNull();
+
+    const { deletedIds, affectedSessions } = deleteMessages([owner.id, agent.id], { sessionId });
+
+    expect(deletedIds.sort()).toEqual([owner.id, agent.id].sort());
+    expect(affectedSessions).toEqual([sessionId]);
+    expect(listMessagesBySession(sessionId)).toHaveLength(0);
+    // 事件与压缩快照随行清理
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM message_events WHERE message_id = ?').get(agent.id)).toEqual({ n: 0 });
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM message_compact_events WHERE message_id = ?').get(agent.id)).toEqual({ n: 0 });
+    // 会话清空 → last_message_at 归 NULL
+    expect(getSession(sessionId)!.lastMessageAt).toBeNull();
+  });
+
+  it('部分删除 → last_message_at 重算为剩余最新消息时间', () => {
+    const { sessionId } = seedWsAndSession('s-part');
+    const m1 = insertMessage({ sessionId, sender: 'owner', eventType: 'm.room.message', body: 'a' });
+    const m2 = insertMessage({ sessionId, sender: 'agent-x', eventType: 'm.room.message', body: 'b' });
+    const m3 = insertMessage({ sessionId, sender: 'owner', eventType: 'm.room.message', body: 'c' });
+
+    const { deletedIds } = deleteMessages([m3.id], { sessionId });
+
+    expect(deletedIds).toEqual([m3.id]);
+    expect(listMessagesBySession(sessionId).map((r) => r.id)).toEqual([m1.id, m2.id]);
+    expect(getSession(sessionId)!.lastMessageAt).toBe(m2.createdAt);
+  });
+
+  it('sessionId 过滤：他会话同 id 请求不误删（防跨会话误删）', () => {
+    const mine = seedWsAndSession('s-mine');
+    const other = seedWsAndSession('s-other');
+    const mineMsg = insertMessage({ sessionId: mine.sessionId, sender: 'owner', eventType: 'm.room.message', body: 'x' });
+    const otherMsg = insertMessage({ sessionId: other.sessionId, sender: 'owner', eventType: 'm.room.message', body: 'y' });
+
+    const { deletedIds } = deleteMessages([otherMsg.id], { sessionId: mine.sessionId });
+
+    expect(deletedIds).toEqual([]);
+    expect(getMessage(otherMsg.id)).not.toBeNull();
+    expect(getMessage(mineMsg.id)).not.toBeNull();
+  });
+
+  it('错误路径：空 ids 与不存在 id 均空结果不抛错', () => {
+    const { sessionId } = seedWsAndSession('s-empty');
+    expect(deleteMessages([], { sessionId })).toEqual({ deletedIds: [], affectedSessions: [] });
+    expect(deleteMessages(['no-such-id'], { sessionId })).toEqual({ deletedIds: [], affectedSessions: [] });
+    expect(deleteMessages(['no-such-id'])).toEqual({ deletedIds: [], affectedSessions: [] });
   });
 });

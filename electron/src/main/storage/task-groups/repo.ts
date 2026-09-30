@@ -1,0 +1,219 @@
+// electron/src/main/storage/task-groups/repo.ts
+//
+// task_groups 表 CRUD + 归档级联事务（任务看板重构 spec 2026-09-27 §2/§3.1）。
+//
+// 设计要点：
+//   - ID 沿用 tasks 的 T-<seq> 同款 G-<seq> 序列（^G-(\d+)$ 严格匹配，零填充 ≥3 位）
+//   - position 采用 1024 间隔（新建尾插 / reorder 整段重写），拖拽排序无需频繁重平衡
+//   - 归档是单事务级联：组内非终态任务先 cancel，再全组任务 + 组本体置 archived_at，
+//     任一步失败整体回滚；cancelledIds 返回给 IPC 层补执行中断（abort 是进程级
+//     副作用，不入 DB 事务）
+//   - 删除是「删容器不删内容」：组内任务（活跃+已归档）转移到目标组（默认
+//     未分组）后删组行，单事务；三段式处置的终态（归档可逆 / 转移合并 / 删除打散）
+import { getDb } from '../db';
+import { transitionTaskStatus, listTasks } from '../tasks/repo';
+import { isTerminal } from '../tasks/state-machine';
+
+export interface GroupRow {
+  id: string;
+  workspaceId: string;
+  name: string;
+  /** 语义色名（'accent'/'violet'/'success'/'warning'…），NULL=默认 */
+  color: string | null;
+  position: number;
+  archivedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+type SqlRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  color: string | null;
+  position: number;
+  archived_at: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+function rowToCamel(r: SqlRow): GroupRow {
+  return {
+    id: r.id,
+    workspaceId: r.workspace_id,
+    name: r.name,
+    color: r.color,
+    position: r.position,
+    archivedAt: r.archived_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+/**
+ * 生成下一个 `G-<seq>` 组 id。
+ *
+ * 与 tasks 的 nextTaskId 同款：seq = max(已有 G-<n> 的 n) + 1，至少 3 位零填充
+ * （G-001 … G-999，超出自然增长）；非 G- 前缀行（legacy UUID）跳过不计。
+ * better-sqlite3 同步单连接，无并发 TOCTOU 场景。
+ */
+function nextGroupId(db: ReturnType<typeof getDb>): string {
+  const rows = db.prepare("SELECT id FROM task_groups WHERE id LIKE 'G-%'").all() as Array<{
+    id: string;
+  }>;
+  let max = 0;
+  for (const r of rows) {
+    const m = /^G-(\d+)$/.exec(r.id);
+    if (m && m[1]) max = Math.max(max, parseInt(m[1], 10));
+  }
+  const next = max + 1;
+  return `G-${next < 1000 ? String(next).padStart(3, '0') : String(next)}`;
+}
+
+export function getGroup(id: string): GroupRow | null {
+  const row = getDb().prepare('SELECT * FROM task_groups WHERE id = ?').get(id) as
+    | SqlRow
+    | undefined;
+  return row ? rowToCamel(row) : null;
+}
+
+/**
+ * 按 workspace 列组，position 升序 + created_at 兜底。
+ *
+ * archived 三态：'exclude'（默认）只回活跃组；'only' 只回归档组；'all' 全回。
+ */
+export function listGroups(
+  workspaceId: string,
+  opts?: { archived?: 'exclude' | 'only' | 'all' },
+): GroupRow[] {
+  const mode = opts?.archived ?? 'exclude';
+  const cond =
+    mode === 'all'
+      ? 'WHERE workspace_id = ?'
+      : mode === 'only'
+        ? 'WHERE workspace_id = ? AND archived_at IS NOT NULL'
+        : 'WHERE workspace_id = ? AND archived_at IS NULL';
+  const rows = getDb()
+    .prepare(`SELECT * FROM task_groups ${cond} ORDER BY position ASC, created_at ASC`)
+    .all(workspaceId) as SqlRow[];
+  return rows.map(rowToCamel);
+}
+
+export function createGroup(input: { workspaceId: string; name: string; color?: string }): GroupRow {
+  const db = getDb();
+  const id = nextGroupId(db);
+  const now = Date.now();
+  const maxPos = db
+    .prepare('SELECT MAX(position) AS p FROM task_groups WHERE workspace_id = ?')
+    .get(input.workspaceId) as { p: number | null };
+  db.prepare(
+    'INSERT INTO task_groups (id, workspace_id, name, color, position, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+  ).run(id, input.workspaceId, input.name, input.color ?? null, (maxPos.p ?? 0) + 1024, now, now);
+  return getGroup(id)!;
+}
+
+export function updateGroup(id: string, patch: { name?: string; color?: string }): GroupRow {
+  const current = getGroup(id);
+  if (!current) throw new Error(`task_group ${id} 不存在`);
+  getDb()
+    .prepare('UPDATE task_groups SET name = ?, color = ?, updated_at = ? WHERE id = ?')
+    .run(patch.name ?? current.name, patch.color ?? current.color, Date.now(), id);
+  return getGroup(id)!;
+}
+
+/** 按入参顺序整段重写 position（(i+1)*1024），单事务。未列入的组 position 不动。 */
+export function reorderGroups(orderedIds: string[]): void {
+  const db = getDb();
+  const stmt = db.prepare('UPDATE task_groups SET position = ?, updated_at = ? WHERE id = ?');
+  const now = Date.now();
+  db.transaction(() => {
+    orderedIds.forEach((gid, i) => stmt.run((i + 1) * 1024, now, gid));
+  })();
+}
+
+/**
+ * 归档组（spec §3.1）：单事务内——组内非终态任务先 cancel（级联），全组任务置
+ * archived_at，组置 archived_at。返回 cancelledIds 供 IPC 层对 in_progress 来源
+ * 补执行中断（abort 是进程级副作用，不入 DB 事务）。任一步失败整体回滚。
+ * 已归档组幂等：直接返回零值，不重复写。
+ */
+export function archiveGroup(id: string): { cancelledIds: string[]; archivedCount: number } {
+  const db = getDb();
+  const group = getGroup(id);
+  if (!group) throw new Error(`task_group ${id} 不存在`);
+  if (group.archivedAt != null) return { cancelledIds: [], archivedCount: 0 };
+  const now = Date.now();
+  return db.transaction((): { cancelledIds: string[]; archivedCount: number } => {
+    // 组内任务清点走 tasks repo 统一入口（archived: 'all' + groupId 精确过滤）
+    const rows = listTasks({ workspaceId: group.workspaceId, archived: 'all', groupId: id });
+    const cancelledIds: string[] = [];
+    for (const r of rows) {
+      if (!isTerminal(r.status)) {
+        transitionTaskStatus(r.id, 'cancelled');
+        cancelledIds.push(r.id);
+      }
+    }
+    const mark = db.prepare(
+      'UPDATE tasks SET archived_at = ?, updated_at = ? WHERE group_id = ? AND archived_at IS NULL',
+    );
+    const archivedCount = mark.run(now, now, id).changes;
+    db.prepare('UPDATE task_groups SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
+    return { cancelledIds, archivedCount };
+  })();
+}
+
+/**
+ * 解档组：组与组内全部归档任务一并恢复（2026-09-27 用户反馈语义修订，spec §3.1
+ * 「组与任务同进退」）——单事务内组内归档任务 archived_at 清空 + 组本体恢复，
+ * 他组/未分组任务不受影响。返回类型不变（GroupRow），任务恢复是副作用。
+ */
+export function unarchiveGroup(id: string): GroupRow {
+  const db = getDb();
+  const group = getGroup(id);
+  if (!group) throw new Error(`task_group ${id} 不存在`);
+  const now = Date.now();
+  db.transaction(() => {
+    db.prepare(
+      'UPDATE tasks SET archived_at = NULL, updated_at = ? WHERE group_id = ? AND archived_at IS NOT NULL',
+    ).run(now, id);
+    db.prepare('UPDATE task_groups SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
+  })();
+  return getGroup(id)!;
+}
+
+/**
+ * 删除组（删容器不删内容）：单事务内组内全部任务（活跃+已归档，归档态原样
+ * 保留）转移到目标组——moveToGroupId=null 落未分组——再删除组行。返回
+ * movedCount（转移的任务总数，含归档）。
+ *
+ * 目标校验（违反抛中文 Error，事务外先行拒绝）：moveToGroupId 非 null 时须
+ * ① 存在 ② 与被删组同 workspace ③ 未归档 ④ ≠ 被删组自身。被删组自身允许
+ * 已归档（三段式处置：归档组同样可删，组内归档任务随转移保留归档态）。
+ */
+export function deleteGroup(id: string, moveToGroupId: string | null): { movedCount: number } {
+  const db = getDb();
+  const group = getGroup(id);
+  if (!group) throw new Error(`task_group ${id} 不存在`);
+  if (moveToGroupId !== null) {
+    if (moveToGroupId === id) {
+      throw new Error('转移目标不能是被删除的组自身');
+    }
+    const target = getGroup(moveToGroupId);
+    if (!target) throw new Error(`task_group ${moveToGroupId} 不存在`);
+    if (target.workspaceId !== group.workspaceId) {
+      throw new Error('转移目标组与被删除组不在同一 workspace');
+    }
+    if (target.archivedAt != null) {
+      throw new Error('转移目标组已归档，不能作为转移目标');
+    }
+  }
+  const now = Date.now();
+  return db.transaction((): { movedCount: number } => {
+    // 只改归属不动 archived_at：归档任务保持归档态转移到目标组
+    const movedCount = db
+      .prepare('UPDATE tasks SET group_id = ?, updated_at = ? WHERE group_id = ?')
+      .run(moveToGroupId, now, id).changes;
+    db.prepare('DELETE FROM task_groups WHERE id = ?').run(id);
+    return { movedCount };
+  })();
+}

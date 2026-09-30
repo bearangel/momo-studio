@@ -119,7 +119,7 @@ docs/       — 设计文档(specs) + 实施计划(plans) + 开发指南(dev)
 - **回归锁必须仿真真实运行时语义**（this 绑定 / ID 唯一性）；「方便测试」的 mock 简化 = 生产事故
 - **跨模块 ID 单点生成沿线透传**；「等待某事件」的代码必须先验证该事件有生产者；路由目标用当前上下文不用配置默认值
 - **错误路径与空输入必须有专项测试用例**；禁止错误处理里硬编码吞状态
-- 场景化规则由 skills 自动加载：修 bug → `momo-debug-rules`；写测试/mock → `momo-test-rules`；改 IPC/跨模块/协议 → `momo-boundary-rules`。完整案例复盘：`docs/dev/rules/engineering.md`
+- 场景化规则由 skills 自动加载：修 bug → `momo-debug-rules`；写测试/mock → `momo-test-rules`；改 IPC/跨模块/协议 → `momo-boundary-rules`；改 UI/样式/布局 → `momo-ui-preview-rules`（静态预览门禁：P1 布局/新组件/模糊视觉诉求须预览确认后实现，P2 用户指定确切值的单组件小改豁免）。完整案例复盘：`docs/dev/rules/engineering.md`
 
 ## 开发环境
 

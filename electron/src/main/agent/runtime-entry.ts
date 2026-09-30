@@ -76,6 +76,10 @@ import { getMemoryProvider, type TaskContext } from '../memory';
 import { getTodosForSession, completeInProgressTodos } from './tools/todo-tools';
 import type { TodoItem } from './tools/todo-types';
 import { getDb } from '../storage/db';
+// 任务回合对账门禁（spec 2026-09-28 §3.1）：子进程直读任务行开态——文件级
+// WAL 多进程访问是 memory 工具 / 变更账本既有先例；查询包 try/catch 降级
+//（钩子是软提醒，绝不因存储故障阻塞回合终止路径）
+import { getTask } from '../storage/tasks/repo';
 import { setJournalStore } from '../journal/recorder';
 import { reprobeSandbox } from '../sandbox/probe';
 import { createJournalStore } from '../journal/store';
@@ -149,6 +153,7 @@ const COMPACTION_SYNTHETIC_USER_PREFIXES = [
   '[历史压缩摘要]',       // 本回合内压缩产出的摘要条
   '[系统] 上下文已自动压缩', // auto 压缩后的续行合成条（spec §6.2）
   '[系统] 待办收尾校验',  // F1 收尾校验轮注入的合成条（见 buildTodoReconcileNotice）
+  '[系统] 回合收尾核对',  // 任务回合对账门禁注入的合成条（见 buildTurnReconcileNotice）
 ] as const;
 
 /** mandate 锚点/序列化共用的合成条判定：role=user 且 content 命中任一前缀 */
@@ -179,6 +184,61 @@ function buildTodoReconcileNotice(items: Array<{ subject: string }>): string {
     '请核对实际进度：确已完成的项立即用 todowrite 标记 completed；确未完成的项保留状态并在总结中说明原因。' +
     '随后输出最终总结结束本轮。这是状态核对提醒，不是新的任务请求——严禁重复执行已完成的工作。'
   );
+}
+
+/**
+ * 任务回合对账门禁合成条前缀（turn reconciliation spec 2026-09-28 §3.2）。
+ * 导出供 renderer「一键催」镜像同步测试按文件路径引用（board-columns 双镜像
+ * TS6059 先例）——措辞改动必须双侧同步，本前缀同时登记在
+ * COMPACTION_SYNTHETIC_USER_PREFIXES（防成为压缩锚点）。
+ */
+export const TURN_RECONCILE_NOTICE_PREFIX = '[系统] 回合收尾核对';
+
+/** 未清项状态中文标注（仅未清项 + 当前状态进入提醒列表，spec §3.2） */
+const TODO_STATUS_LABEL: Record<TodoItem['status'], string> = {
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
+};
+
+/**
+ * 任务回合收尾核对合成条全文（spec §3.2 逐字，双逃生门措辞）。
+ * 覆盖 T-060 割裂面：pending 未清 / complete_task 0 次调用均在旧 F1 覆盖外。
+ * items 为空（待办全 completed 但任务未闭合）时列表行降级为占位说明——
+ * 闭合言语行为缺失单独触发是 spec §3.1 明确要求的触发分支。
+ */
+export function buildTurnReconcileNotice(
+  taskId: string,
+  items: Array<{ subject: string; status: TodoItem['status'] }>,
+): string {
+  const list =
+    items.length > 0
+      ? items.map((t) => `  - ${t.subject}（${TODO_STATUS_LABEL[t.status]}）`).join('\n')
+      : '  （无未清待办——但任务尚未调用 complete_task / fail_task 关闭）';
+  return (
+    `${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 ${taskId} 仍处于 in_progress，待办存在未清项：\n` +
+    `${list}\n` +
+    '请二选一：\n' +
+    '(a) 完成剩余项，调用 todowrite 如实更新，并调用 complete_task 关闭任务；\n' +
+    '(b) 确认剩余项不应/不能现在完成：调用 todowrite 如实更新状态，在终文中说明原因，\n' +
+    '    任务保持 in_progress 留待用户处理。\n' +
+    '严禁重复执行已完成的事项。本提醒一次性，不会再触发。'
+  );
+}
+
+/**
+ * 任务行开态读取（spec §3.1 / §3.4 共用谓词的数据源）：仍 in_progress 时
+ * 返回该 id。DB 不可读 / 任务行缺失 / 已闭合一律返回 undefined——门禁是软
+ * 提醒，绝不因存储故障阻塞回合终止路径（与入场 journal store 同降级纪律）。
+ */
+function readOpenTaskId(config: RuntimeConfig): string | undefined {
+  const taskId = config.hostTaskId;
+  if (taskId === undefined) return undefined;
+  try {
+    return getTask(taskId)?.status === 'in_progress' ? taskId : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -998,6 +1058,13 @@ export async function runChatLoop(
   const recentToolCallSignatures: string[] = [];
   const MAX_DUPLICATE_TOOLS = 3;
 
+  // 任务回合对账门禁（spec 2026-09-28 §3.1）：本回合是否调用过宿主任务的闭合
+  // 言语行为（complete_task / fail_task 且 taskId 参数指向 hostTaskId）——
+  // 终文前触发判定第二条件的数据源。闭合他任务不算（宿主任务仍未关闭，提醒
+  // 语义成立）；只记调用意图不判成功（失败的工具结果已回显模型，提醒措辞
+  // 本身会引导其核对状态）。
+  let taskClosureInvoked = false;
+
   /**
    * v2 dispatch 并行（docs/specs/2026-08-25-dispatch-parallel-design.md §4.1）：
    * 单个 dispatch 工具调用的执行体——并发批次的成员。
@@ -1284,6 +1351,10 @@ export async function runChatLoop(
     streamRetries = 0;
 
     if (finishReason === 'stop' || toolCalls.length === 0) {
+      // 任务宿主回合开态前置判定：旧 F1 与任务回合对账门禁的分界——任务 open 的
+      // 宿主回合未清项（含 in_progress）统一由新门接管（旧模板无闭合义务措辞，
+      // 先跑会占掉一次性闩）；任务已闭合 / 非任务回合回落旧行为。
+      const hostOpenTaskId = readOpenTaskId(config);
       // F1（mandate 死锁）收尾校验轮：终文前仍有 user-source in_progress 待办时，
       // 注入一次性合成校验消息，让模型先 todowrite 对齐状态再收尾。否则 mandate
       // 每轮都宣称「用户请求未完成」，模型会把滞留状态误读为新请求并整轮重跑
@@ -1293,6 +1364,7 @@ export async function runChatLoop(
       if (
         !todoReconciled &&
         staleUserItems.length > 0 &&
+        hostOpenTaskId === undefined &&
         parentStreamSessionId == null &&
         config.currentTaskId === undefined &&
         budgetRemaining > 0
@@ -1307,6 +1379,36 @@ export async function runChatLoop(
         accumulatedText = '';
         continue;
       }
+      // 任务回合对账门禁（turn reconciliation spec 2026-09-28 §3.1）：任务宿主
+      // 回合（kickoff 注入触发）且任务行仍 in_progress 时，终文前注入一次性
+      // 收尾核对合成条。触发三条件任一命中即注入：① user-source 待办存在未清项
+      // （pending 此前在旧 F1 覆盖外，T-060 割裂面）② 本回合未调用过闭合言语
+      // 行为（complete_task / fail_task 且 taskId 指向宿主任务）。拒绝硬续跑
+      // （仓库 P0：同一指令重复执行两遍），软提醒双逃生门措辞见
+      // buildTurnReconcileNotice。与旧 F1 共用 todoReconciled 一次性门（同流
+      // 不重复，防循环）；任务已闭合（complete_task 已生效 / 行缺失 / DB 降级）
+      // 不注入，非任务回合不注入。
+      const uncleanUserItems = pendingUserItems();
+      if (
+        !todoReconciled &&
+        hostOpenTaskId !== undefined &&
+        (uncleanUserItems.length > 0 || !taskClosureInvoked) &&
+        parentStreamSessionId == null &&
+        budgetRemaining > 0
+      ) {
+        todoReconciled = true;
+        messages.push({
+          role: 'assistant',
+          content: accumulatedText,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        });
+        messages.push({
+          role: 'user',
+          content: buildTurnReconcileNotice(hostOpenTaskId, uncleanUserItems),
+        });
+        accumulatedText = '';
+        continue;
+      }
       process.off('message', abortListener);
       const finalText = buildFinalText('(空回复)');
       // 回合收尾 todo 收敛（P0「最后一项永不完成」）：LLM 的 todowrite 是转移
@@ -1315,7 +1417,14 @@ export async function runChatLoop(
       // message_events 按 seq 重放（后写胜出），实时面板与重载还原都拿到终态。
       // pending 不动（未启动 ≠ 完成）；强停路径（interrupted / error /
       // budget_exhausted / 重复检测截断）不经此块，in_progress 保持原状供断点续跑。
-      const reconciled = completeInProgressTodos(streamSessionId);
+      // sweep 门控（turn reconciliation spec §3.4）：任务宿主回合且任务未关闭时
+      // 跳过机械清——「终文即交付」前提在任务未关闭时不成立，机械清会制造
+      // 「todo 说完成 / 任务说没完成」的四态割裂（T-060）。任务已关闭（模型在
+      // 核对轮调了 complete_task）或非任务回合时行为不变，照旧机械清。
+      const reconciled =
+        hostOpenTaskId !== undefined
+          ? { changed: false, todos: getTodosForSession(streamSessionId) }
+          : completeInProgressTodos(streamSessionId);
       if (reconciled.changed) {
         sendStreamChunk({
           type: 'todo_update',
@@ -1345,6 +1454,16 @@ export async function runChatLoop(
     let ti = 0;
     while (ti < toolCalls.length) {
       const tc = toolCalls[ti]!;
+      // 闭合言语行为标记（spec §3.1）：工具游标统一收口点——task_complete /
+      // compact / dispatch / 串行工具各执行路径都经此游标，前置标记零路径遗漏
+      if (
+        !taskClosureInvoked &&
+        config.hostTaskId !== undefined &&
+        (tc.name === 'complete_task' || tc.name === 'fail_task') &&
+        tc.arguments.taskId === config.hostTaskId
+      ) {
+        taskClosureInvoked = true;
+      }
       // v1.5.6: 循环检测——同名 + 同参数连续重复 MAX_DUPLICATE_TOOLS 次强制终止。
       // 防 LLM 上下文爆炸后失忆，每轮重复相同操作（如反复 list_files 同一目录）。
       const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
@@ -1629,7 +1748,6 @@ export async function runChatLoop(
           return finalText;
         }
 
-        const errMsg = err instanceof Error ? err.message : String(err);
         // P2 修复：McpToolError 文本即服务端语义文案（含错误码），原样回填——
         // 加「工具执行失败:」前缀会破坏模型对错误码/重试提示的解析
         result = toolFailureText(err);
@@ -1845,10 +1963,13 @@ export async function runTaskChatLoop(
 ): Promise<void> {
   await ensureSandboxProbed();
   ensureBrowserToolsBridged();
-  const { taskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix, context } = cfg;
+  const { taskId, hostTaskId, executionSessionId: roomId, body, streamSessionId, dispatchContext, resume, historyPrefix, context } = cfg;
 
   // 1. 构造 task-driven 专用的 RuntimeConfig：
   //    - currentTaskId：taskId 非空时设置（runChatLoop 据此向 MemoryProvider 拉 task 上下文注入 system prompt）
+  //    - hostTaskId：kickoff 委派回合的宿主任务标记（turn reconciliation spec
+  //      §6——与 currentTaskId 语义分立见 runtime-config 字段注释），收尾对账
+  //      门禁与 sweep 门控的唯一任务开态数据源
   //    - chainTaskId：dispatchContext 设置时织入链 ID（Task 5 链路打标——start chunk 据此
   //      把 dispatch 链 ID 落到该流全部消息行的 task_id；与 currentTaskId 语义分立，见
   //      runtime-config 字段注释）
@@ -1858,6 +1979,7 @@ export async function runTaskChatLoop(
   const taskConfig: RuntimeConfig = {
     ...config,
     ...(taskId ? { currentTaskId: taskId } : {}),
+    ...(hostTaskId ? { hostTaskId } : {}),
     ...(dispatchContext ? { chainTaskId: dispatchContext.task_id } : {}),
     ...(dispatchContext?.tool_budget !== undefined
       ? { maxToolCalls: dispatchContext.tool_budget }
@@ -2086,8 +2208,14 @@ export async function doExecuteTool(
       // v2.3 Read-before-Edit：进程级单例注入（终审 C1——缺此字段守门静默失效）
       readTracker,
       // v2.5 变更账本：task-driven 派发的任务 id（快速会话无任务 → undefined，
-      // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红
-      taskId: config.currentTaskId,
+      // 记账层归一为 null）。删此注入 → journal-wiring 接线锁的 taskId 用例变红。
+      // 2026-09-29 归因回填：kickoff ephemeral 流（f36f1a2a 起 taskId=null 只带
+      // hostTaskId）的文件变更也归因到宿主任务——回退链 currentTaskId → hostTaskId。
+      // 仅影响记账归因：toolCtx.taskId 消费面只有 change-journal 记账层，
+      // task-driven 生命周期语义读 config.currentTaskId，不受此回退影响。
+      // 双缺省保持 undefined（ToolContext.taskId 类型 string | undefined），
+      // 记账层 buildRecordCtx 归一为 null——与快速会话既有语义一致。
+      taskId: config.currentTaskId ?? config.hostTaskId,
       // 归属制：AGENT_CONFIG 已强校验携带 agentAssignmentId（runtime-config parse）
       agentInstanceId: config.agentAssignmentId,
       // 子进程落盘基准（apply_patch 备份）：主进程经 AGENT_CONFIG 定型注入；

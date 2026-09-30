@@ -19,15 +19,19 @@ const STATUS_LABEL: Record<TaskStatusKey, string> = {
   failed: '失败',
 };
 
-/** 规范 §3.6 任务状态语义映射 */
+/**
+ * 任务状态语义映射（UX 波 2 重映射：用户反馈 4 个灰无区分，目标列内零同色冲突）：
+ * 灰只留 draft/cancelled；等待系（pending/session_queued）统一琥珀；
+ * 活跃管线系（assigned/in_progress）统一蓝；completed 升绿、failed 保持红。
+ */
 const STATUS_TONE: Record<TaskStatusKey, BadgeTone> = {
   draft: 'neutral',
   pending: 'warning',
   assigned: 'accent',
-  session_queued: 'neutral',
-  in_progress: 'success',
+  session_queued: 'warning',
+  in_progress: 'accent',
   paused: 'violet',
-  completed: 'neutral',
+  completed: 'success',
   cancelled: 'neutral',
   failed: 'error',
 };
@@ -76,6 +80,17 @@ export function dispatchStatusStyle(status: DispatchStatus): TaskStatusStyle {
     className: `inline-flex h-5 items-center gap-1 rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES[tone]}`,
   };
 }
+
+/**
+ * 派生徽标「待收尾」（turn reconciliation spec §3.5）：任务 in_progress 且宿主会话
+ * 无运行回合时的纯状态推导提示——不是状态机成员，仅与状态徽标并列展示
+ * （状态仍是 in_progress 真相）。色值复用 warning tone（等待系语义），禁新造色。
+ */
+export const PENDING_WRAP_UP_STYLE: TaskStatusStyle = {
+  label: '待收尾',
+  tone: 'warning',
+  className: `inline-flex h-5 items-center rounded px-2 text-xs font-medium ${BADGE_TONE_CLASSES.warning}`,
+};
 /**
  * 远端任务状态的安全展示（跨版本对端可能送来 TaskStatus 之外的枚举）：
  * 已知状态走 taskStatusStyle；未知回退 neutral tone + 原样文案。

@@ -2,11 +2,13 @@
 //
 // 任务创建弹窗（B 子系统 B7；v29 扩展目标三选 + 循环预设）。
 //   - 表单字段：标题（必填）/ 描述 / 委派目标（none/agent/team/session 四选 + 联动目标）
-//     / 优先级 / 循环规则（单次/固定间隔/每天/每周 + 联动控件）/ 计划开始 / 截止时间
+//     / 分组（不分组 + group.store 活跃组，UX 修复）/ 优先级 / 循环规则（单次/
+//     固定间隔/每天/每周 + 联动控件）/ 计划开始 / 截止时间
 //   - preset 预填：从 agent inline 建议或会话内按钮触发时传入已知的 title/desc/source/assignee
 //     （assigneeAgentId 预填时 targetKind 初值置 'agent'）
-//   - 提交走 ipc.task.create（v29 扩展入参 targetTeamId/targetSessionId/recurrenceRule），
-//     循环规则经 serializeRecurrence 序列化；成功后回调 onCreated(taskId) + onClose
+//   - 提交走 ipc.task.create（v29 扩展入参 targetTeamId/targetSessionId/recurrenceRule；
+//     UX 修复新增 groupId），循环规则经 serializeRecurrence 序列化；成功后回调
+//     onCreated(taskId) + onClose
 //   - 校验：team/session 目标已选类型但未选具体对象时禁用创建按钮
 //   - open=false 时 return null（hooks 仍在调用顺序中，符合 React 规则）
 // v2.1：外壳收敛 Dialog 原子件；表单控件换 Input/Select；textarea 无原子件走 token 类。
@@ -14,6 +16,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import type { WorkspaceAgentMember } from '../../ipc/types';
 import { serializeRecurrence, type RecurrencePreset } from '../../lib/recurrence';
+import { useGroupStore } from '../../stores/group.store';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -57,6 +60,9 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
   const [weekday, setWeekday] = useState('1');
   const [teams, setTeams] = useState<Array<{ id: string; name: string }>>([]);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
+  const [groupId, setGroupId] = useState('');
+  const groups = useGroupStore((s) => s.groups);
+  const loadGroups = useGroupStore((s) => s.load);
 
   useEffect(() => {
     if (!open) return;
@@ -75,6 +81,10 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     setEveryUnit('m');
     setRecTime('09:00');
     setWeekday('1');
+    setGroupId('');
+    // 分组选项与 taskGroup.list 'exclude' 口径一致（只列活跃组）；失败静默——
+    // 下拉只剩「不分组」，不阻塞建任务
+    void loadGroups(workspaceId).catch(() => {});
     ipc.agent.listMembers(workspaceId).then((list: WorkspaceAgentMember[]) => {
       setAssignments(
         list.map((a) => ({ instanceId: a.instanceId, agentName: a.agentName })),
@@ -82,7 +92,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
     });
     ipc.team.list(workspaceId).then((list) => setTeams(list.map((t) => ({ id: t.id, name: t.name }))));
     ipc.session.list(workspaceId).then((list) => setSessions(list.map((s) => ({ id: s.id, title: s.title }))));
-  }, [open, preset, workspaceId]);
+  }, [open, preset, workspaceId, loadGroups]);
 
   if (!open) return null;
 
@@ -120,6 +130,7 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
         recurrenceRule,
         scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : null,
         deadlineAt: deadlineAt ? new Date(deadlineAt).getTime() : null,
+        groupId: groupId === '' ? undefined : groupId,
       });
       onCreated(created.id);
       onClose();
@@ -196,6 +207,18 @@ export function CreateTaskDialog({ open, onClose, onCreated, workspaceId, preset
             ))}
           </Select>
         )}
+        <Select
+          label="分组"
+          value={groupId}
+          onChange={(e) => setGroupId(e.target.value)}
+        >
+          <option value="">不分组</option>
+          {groups.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </Select>
         <Select
           label="优先级"
           value={priority}

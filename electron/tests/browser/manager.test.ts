@@ -771,7 +771,9 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const v1 = factory.views[1]!;
     const rect = { x: 10, y: 20, width: 380, height: 600 };
     manager.setSidebarBounds(rect);
-    expect(v0.view.bounds.setBounds).not.toHaveBeenCalled();
+    // bounds 不变量：非 current 一律清零（旧契约「不动非 current」即切页签/切功能
+    // 两症状的根因——残留 rect 的视图按挂载序叠放且恒在 renderer DOM 之上）
+    expect(v0.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
     expect(v1.view.bounds.setBounds).toHaveBeenCalledWith(rect);
   });
 
@@ -801,11 +803,11 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // current=1（user 源：新 tab 成为可见）
     const v0 = factory.views[0]!;
     const rect = { x: 5, y: 6, width: 200, height: 100 };
-    manager.setSidebarBounds(rect); // 透传到当前 v1；v0 尚无 bounds
-    expect(v0.view.bounds.setBounds).not.toHaveBeenCalled();
+    manager.setSidebarBounds(rect); // 透传到当前 v1；v0 作为非 current 被清零
+    expect(v0.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
     await manager.tabsAction('ws1', 'switch', 0, undefined, 'user');
     expect(v0.view.bounds.setBounds).toHaveBeenCalledWith(rect);
-    expect(v0.view.bounds.setBounds).toHaveBeenCalledTimes(1);
+    expect(v0.view.bounds.setBounds).toHaveBeenCalledTimes(2); // 清零 → 套用 rect
   });
 
   it('lastRect 缓存：deactivate → activate（stash 恢复）→ 恢复后的 current 视图收到 setBounds(rect)', async () => {
@@ -820,7 +822,7 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     const v2 = factory.views[2]!;
     const v3 = factory.views[3]!;
     expect(v3.view.bounds.setBounds).toHaveBeenCalledWith(rect); // current 视图立即套用
-    expect(v2.view.bounds.setBounds).not.toHaveBeenCalled(); // 只套用 newly-current——非当前视图不动
+    expect(v2.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 }); // 非 current 清零（bounds 不变量）
   });
 
   it('从未 setSidebarBounds → 新建/切换/恢复的视图一律不收 setBounds（null 缓存不误用）', async () => {
@@ -833,6 +835,38 @@ describe('sidebar bounds / 折叠 / 生命周期', () => {
     manager.onWorkspaceActivated('ws1', '/ws/ws1'); // stash 恢复
     for (const h of factory.views) {
       expect(h.view.bounds.setBounds).not.toHaveBeenCalled();
+    }
+  });
+
+  // ---- 症状回归锁（视图 bounds 不变量：仅 current 持非零 rect）----
+  // WebContentsView 按 addChildView 附加序叠放（后挂在上）且原生视图层恒在
+  // renderer DOM 之上：曾经 current 的视图残留旧 rect 时，会盖住新 current
+  // （切页签渲染不切换）或盖住功能视图（切设置后网页仍显示）。
+
+  it('多 tab switch：旧 current 视图 bounds 清零（切页签渲染必须跟随切换）', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/'); // tab0 current=0
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user'); // tab1 current=1
+    const v0 = factory.views[0]!;
+    const v1 = factory.views[1]!;
+    manager.setSidebarBounds({ x: 5, y: 6, width: 200, height: 100 });
+    await manager.tabsAction('ws1', 'switch', 0, undefined, 'user'); // 切回 tab0
+    expect(v0.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 5, y: 6, width: 200, height: 100 });
+    expect(v1.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it('多 tab 卸载零报：setSidebarBounds(零 rect) 清零全部视图（功能视图切换后网页不得残留）', async () => {
+    const { manager, factory } = mkManager();
+    manager.onWorkspaceActivated('ws1', '/ws/ws1');
+    await manager.navigate('ws1', 'http://localhost:5173/');
+    await manager.tabsAction('ws1', 'open', undefined, 'http://localhost:3000/', 'user');
+    manager.setSidebarBounds({ x: 5, y: 6, width: 200, height: 100 });
+    await manager.tabsAction('ws1', 'switch', 0, undefined, 'user'); // 两 tab 都曾任 current（均持过 rect）
+    // renderer 卸载路径（BrowserSidebar unmount effect）上报零 rect
+    manager.setSidebarBounds({ x: 0, y: 0, width: 0, height: 0 });
+    for (const h of factory.views) {
+      expect(h.view.bounds.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
     }
   });
 

@@ -38,6 +38,9 @@ function mkTask(overrides: Partial<TaskRow> = {}): TaskRow {
     updatedAt: 1,
     startedAt: null,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...overrides,
   };
 }

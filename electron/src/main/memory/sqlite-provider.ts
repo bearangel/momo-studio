@@ -32,6 +32,7 @@ import {
   touchMemoryUsed,
 } from '../storage/memories/repo';
 import { searchMemories } from '../storage/memories/search';
+import { COMPACT_ACK_EVENT_TYPE } from '../im/commands';
 import { buildPinnedView, CATALOG_MAX_ROWS, type PinnedParts, type PinnedMemoryView } from './injection';
 import { messageToContext } from './context-map';
 import { logger } from '../logger';
@@ -170,6 +171,11 @@ export class SQLiteMemoryProvider implements MemoryProvider {
         ...(compaction ? { afterTs: compaction.coveredUntil } : {}),
         ...(opts?.beforeTs !== undefined ? { beforeTs: opts.beforeTs } : {}),
       },
+    ).filter(
+      // compact ack 是 UI 通知不是对话内容（commands.ts 文本协议）：sender='owner'
+      // 会被 messageToContext 映射成 user 消息，body 携带的摘要全文会与注入条
+      // 重复进 prompt。拉取后过滤（而非 SQL 下推）：ack 稀少，不值得扩 repo API
+      (m) => m.eventType !== COMPACT_ACK_EVENT_TYPE,
     );
     const ctx: ContextMessage[] = rows.map((m) => {
       const c = messageToContext(m);

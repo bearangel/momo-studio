@@ -49,6 +49,14 @@ import {
 export interface TaskConfig {
   /** task 主键；null = ephemeral chat（非 task 调度的即时对话） */
   taskId: string | null;
+  /**
+   * 任务宿主回合标记（turn reconciliation spec 2026-09-28 §6）：kickoff 来源
+   * 任务 ID。与 taskId 语义分立（boundary-rules 一义一名）——taskId 非空触发
+   * task-driven 生命周期（end 不 kill / task-end 终态自动转换 / 崩溃转 failed），
+   * kickoff 流刻意保持 ephemeral（见本文件「kickoff 驱动的执行流是 ephemeral」
+   * 注释），hostTaskId 仅随 task-config 下发供 runtime 收尾对账门禁消费。
+   */
+  hostTaskId?: string;
   /** 执行房间 ID（agent 在此房间输出流式回复） */
   executionSessionId: string;
   /** 用户输入的正文 */
@@ -357,6 +365,9 @@ export class AgentRunner {
     child.send({
       type: 'task-config',
       taskId: task.taskId,
+      // 任务宿主回合标记（turn reconciliation spec §6）：kickoff 来源任务 ID
+      // 同型条件透传（摘掉即断链——收尾对账门禁静默失效）
+      ...(task.hostTaskId ? { hostTaskId: task.hostTaskId } : {}),
       executionSessionId: task.executionSessionId,
       body: task.body,
       streamSessionId: task.streamSessionId,

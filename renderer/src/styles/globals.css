@@ -220,3 +220,22 @@ html.dark .md-codeblock .shiki span {
   font-weight: var(--shiki-dark-font-weight) !important;
   text-decoration: var(--shiki-dark-text-decoration) !important;
 }
+
+/* ── 组菜单自定义取色（react-colorful，GroupMenu 换色面板）─────────────
+    react-colorful 自带样式随 JS 运行时注入（构建 --css inline），选择器特异性
+    (0,1,0)；此处作用域覆写特异性 (0,2,0) 稳定胜出。尺寸 232×150（换色面板
+    w-[260px] − px-3×2 内边距后无裁切；GroupMenu 容器居中兜底），圆角/边框
+    对齐设计系统（border-subtle / rounded-md 量级） */
+.group-menu-picker .react-colorful {
+  width: 232px;
+  height: 150px;
+  border: 1px solid rgb(var(--border-subtle));
+  border-radius: 6px;
+}
+.group-menu-picker .react-colorful__saturation {
+  border-radius: 5px 5px 0 0;
+}
+.group-menu-picker .react-colorful__hue {
+  height: 12px;
+  border-radius: 0 0 5px 5px;
+}

@@ -44,6 +44,9 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
     activeSessionReadOnly: false,
     inputFocusTick: 0,
     fileTriggerTick: 0,
+    // 斜杠命令提示 + 命令执行中键控 Map（仿真真实 store 字段形状）
+    commandHint: null as string | null,
+    commandPendingBySession: new Map<string, string>(),
     // 仿真真实 store 的 bumpFileTrigger 语义（fileTriggerTick +1）；
     // 箭头体在调用时才执行，sessionState 届时已初始化
     bumpFileTrigger: vi.fn(() => {
@@ -144,6 +147,9 @@ function makeTask(overrides: Partial<TaskRow> & { id: string }): TaskRow {
     updatedAt: 0,
     startedAt: null,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...overrides,
   };
 }
@@ -256,6 +262,8 @@ function resetState(): void {
   sessionState.activeSessionReadOnly = false;
   sessionState.inputFocusTick = 0;
   sessionState.fileTriggerTick = 0;
+  sessionState.commandHint = null;
+  sessionState.commandPendingBySession = new Map();
   // 每用例还原 bumpFileTrigger 实现——防上个用例替换实现或跨用例残留影响递增语义
   sessionState.bumpFileTrigger = vi.fn(() => {
     sessionState.fileTriggerTick += 1;
@@ -1542,5 +1550,65 @@ it('发送后提示随 pill 清空消失', async () => {
     expect(screen.queryByText(/发送时图片将省略/)).toBeNull();
     // 混合提示行缺席（无「团队成员」措辞）
     expect(screen.queryByText(/团队成员/)).toBeNull();
+  });
+});
+
+// 13. 命令执行中（/compact B+C 档反馈）：pending 提示条渲染 + 键控隔离 + 禁发
+describe('MentionInput 命令执行中（pending 反馈 + 禁发）', () => {
+  it('pending 时渲染进度提示条（正在压缩文案）', () => {
+    sessionState.commandPendingBySession = new Map([['sess-1', 'compact']]);
+    render(<MentionInput />);
+    const hint = screen.getByTestId('command-pending-hint');
+    expect(hint).toHaveTextContent('正在压缩会话历史…');
+  });
+
+  it('pending 卡片含说明副行与耗时计时器（fake timers 推进后递增）', () => {
+    vi.useFakeTimers();
+    try {
+      sessionState.commandPendingBySession = new Map([['sess-1', 'compact']]);
+      render(<MentionInput />);
+      const hint = screen.getByTestId('command-pending-hint');
+      // 副行：耗时预期 + 发送暂停说明（用户曾反馈 pending 不易察觉——明细度回归锁）
+      expect(hint).toHaveTextContent('通常需要数秒到几十秒');
+      expect(hint).toHaveTextContent('期间发送已暂停');
+      expect(hint).toHaveTextContent('已进行 0s');
+      act(() => {
+        vi.advanceTimersByTime(2300);
+      });
+      expect(hint).toHaveTextContent('已进行 2s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('其他会话 pending 不影响当前会话（按会话键控隔离）', () => {
+    sessionState.commandPendingBySession = new Map([['sess-other', 'compact']]);
+    render(<MentionInput />);
+    expect(screen.queryByTestId('command-pending-hint')).toBeNull();
+  });
+
+  it('pending 时 Enter 不触发 sendMessage（禁发——防压缩中并发开新回合）', () => {
+    sessionState.commandPendingBySession = new Map([['sess-1', 'compact']]);
+    render(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, '压缩中补充一句');
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('pending 结束（Map 清空）后 Enter 恢复发送', async () => {
+    const { rerender } = render(<MentionInput />);
+    sessionState.commandPendingBySession = new Map([['sess-1', 'compact']]);
+    rerender(<MentionInput />);
+    const el = editor();
+    typeInEditor(el, 'hello');
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(sessionState.sendMessage).not.toHaveBeenCalled();
+    // 压缩完成：pending 清除 → 重渲染后 Enter 恢复发送
+    sessionState.commandPendingBySession = new Map();
+    rerender(<MentionInput />);
+    typeInEditor(el, 'hello');
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
   });
 });

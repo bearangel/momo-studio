@@ -15,12 +15,11 @@
 //   - segments 先经 groupToolSegments 分组（连续只读工具合并 context-group）
 //   - MessageFrame 补时间戳；终态显示消息级复制按钮（hover 气泡显形）
 import { useMemo } from 'react';
-import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2, Square } from 'lucide-react';
+import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import type { StreamState } from '../../stores/stream.store';
 import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore } from '../../stores/stream.store';
-import { ipc } from '../../ipc/client';
 import type { ImMessage } from '../../ipc/types';
 import { MessageFrame } from './MessageFrame';
 import { ThinkingSection } from './ThinkingSection';
@@ -28,11 +27,10 @@ import { ToolCallChip } from './ToolCallChip';
 import { ContextGroupChip } from './ContextGroupChip';
 import { MarkdownBody } from './MarkdownBody';
 import { TodoSection } from './TodoSection';
-import { CopyButton } from '../ui/CopyButton';
 import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
 import { ChangesChip } from './ChangesChip';
-import { Button } from '../ui/Button';
+import { BubbleToolbar } from './BubbleToolbar';
 import type { StreamSegment } from '../../stores/stream.store';
 import { groupToolSegments } from '../../lib/group-tool-segments';
 
@@ -45,8 +43,10 @@ interface Props {
 }
 
 const STATUS_TEXT: Record<StreamState['status'], string> = {
-  streaming: '流式中',
-  done: '已完成',
+  streaming: '处理中',
+  // 词汇专用原则(turn reconciliation spec §3.7):「完成」全系统保留给任务状态机,
+  // 流式正常结束只说「已结束」——措辞不得暗示工作已完成(T-060 割裂面之一)
+  done: '已结束',
   failed: '出错',
   aborted: '已中断',
 };
@@ -132,7 +132,6 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
     <MessageFrame
       sender={message.sender}
       isSelf={false}
-      id={`msg-${message.id}`}
       senderName={senderName}
       bubbleClassName="group bg-surface-2 text-primary border border-subtle"
       maxWidthPct={90}
@@ -204,7 +203,8 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
         </div>
       )}
 
-      {/* v2.5 变更 chip：终态（非 streaming 且非 aborted）才挂载懒查；无变更时组件自渲染 null */}
+      {/* v2.5 变更 chip：纯查看（diff 浏览），终态（非 streaming 且非 aborted）才挂载懒查；
+          无变更时组件自渲染 null。不进工具条——工具条是动作区，chip 是查看元素 */}
       {!isStreaming && stream.status !== 'aborted' && <ChangesChip message={message} />}
 
       <div className="mt-2 flex flex-col gap-1 border-t border-subtle pt-1.5 text-[11px]">
@@ -223,26 +223,11 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             />
             {statusText}
           </span>
-          {!isStreaming && (
-            <CopyButton
-              text={message.body}
-              className="ml-auto opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            />
-          )}
-          {isStreaming && (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="ml-auto"
-              onClick={() => {
-                if (message.streamSessionId) {
-                  void ipc.agent.abortStream(message.streamSessionId);
-                }
-              }}
-            >
-              <Square size={11} strokeWidth={1.75} aria-hidden /> 停止
-            </Button>
-          )}
+          <BubbleToolbar
+            message={message}
+            isStreaming={isStreaming}
+            canUndo={!isStreaming && stream.status !== 'aborted'}
+          />
         </div>
         {!isStreaming && stream.error && (
           <div className="whitespace-pre-wrap break-words rounded border border-status-error/40 bg-status-error-tint px-2 py-1.5 font-mono text-[11px] text-status-error">

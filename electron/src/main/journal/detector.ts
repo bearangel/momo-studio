@@ -21,10 +21,11 @@
 // 由主进程注入保证——下方 fail-fast 报错的指引亦指向主进程注入点。
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { discoverRepos } from '../git/repos';
 import { toPosixRelPath } from '../platform/paths';
-import { getJournalStore } from './recorder';
+import { getJournalStore, hashContent } from './recorder';
 
 /** 单次 git 命令执行结果。errCode 承载 spawn error event 的底层错误码
  *  （'ENOENT' = 本机无 git），避免从 stderr 字符串猜测 */
@@ -102,6 +103,37 @@ export interface ScanResult {
   /** 发现的仓根绝对路径（workspace 根仓在前） */
   repos: string[];
   degraded: boolean;
+  /** 任务起点基线归因是否可用（2026-09-29 误归因根治）：taskId 非 null 且有
+   *  非降级基线（迁移 049，baseline.ts 捕获）时 true；无基线 / 降级基线
+   *  （回退累计差集）或整体 degraded 时 false；taskId=null（快速会话，基线
+   *  概念不适用）恒 true。UI 据此提示「累计账外状态，非本任务专属」。 */
+  baselineAvailable: boolean;
+}
+
+/** 应用内部目录（workspace 根相对 POSIX）豁免清单——根治「应用产物混入未入账
+ *  清单」：贴图缓存 `.momo/`（files/asset-ipc.ts 的 saveImage 落盘）与 agent
+ *  草稿区 `.momo-scratch/`（dispatch 全文 / 演示产物，prompt-hints 约定）。
+ *  这些是应用自身产物而非用户/agent 的工程变更，git status 报出后一律剔除。
+ *  单点常量：目录本身（'.momo'）与任意子路径（'.momo/…'）两种形态都命中。 */
+const APP_INTERNAL_DIR_PREFIXES = ['.momo', '.momo-scratch'] as const;
+
+function isAppInternalPath(wsRelPath: string): boolean {
+  for (const dir of APP_INTERNAL_DIR_PREFIXES) {
+    if (wsRelPath === dir || wsRelPath.startsWith(`${dir}/`)) return true;
+  }
+  return false;
+}
+
+/** 读工作区文件当前内容并算 sha256 hex——基线捕获（baseline.ts）与扫描归因
+ *  （本模块 scanUnjournaled）两侧共用的单点。不可读（已删除 / 权限等）返回
+ *  null，与基线行 contentHash=null 同语义（null = 不可读 ≠ 空内容，空文件有
+ *  确定 sha256）。Buffer 直读，二进制文件保真（hashContent v2.1 契约）。 */
+export function hashFileOrNull(absPath: string): string | null {
+  try {
+    return hashContent(fs.readFileSync(absPath));
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +151,23 @@ export interface ScanResult {
  * 路径对齐：git 侧 relativize 到 workspace 根后统一 POSIX '/'；账本侧
  * 反斜杠归一（T2 review 预警的 Windows 对齐问题在此收口）。
  *
+ * 应用内部目录豁免（2026-09-29 误归因根治 B）：`.momo/` 与 `.momo-scratch/`
+ * 前缀路径直接从变更集剔除——无论有无任务基线、无论 taskId 是否为 null。
+ *
+ * 任务起点基线差集归因（2026-09-29 误归因根治 A，迁移 049）：taskId 非 null
+ * 且有非降级基线时，对每个「changed 且非 journaled」候选三分：
+ *   - 不在基线 → 列入（任务期间新脏）
+ *   - 在基线且当前内容 hash 与捕获时相同 → 剔除（历史脏未动——自上次 commit
+ *     累计的旧脏，与本任务无关）
+ *   - 在基线但 hash 不同（含当前已不可读而基线有 hash）→ 列入（任务期间
+ *     再改动/删除）
+ * 无基线 / 降级基线 → 回退现行累计差集，baselineAvailable=false（UI 提示
+ * 「累计账外状态，非本任务专属」）。taskId=null 基线概念不适用，
+ * baselineAvailable 恒 true。
+ *
+ * 并发边界（已知可接受）：多任务共享 worktree 时，A 任务在 B 任务捕获基线
+ * 之后的写入会落进 B 的「任务期间新脏」——基线是瞬时快照，不区分写入者。
+ *
  * 降级（degraded=true + 空结果）：git ENOENT / 任意仓执行非零退出 / 输出截断。
  * store 未注入属接线缺陷 → fail-fast 抛错，不静默降级。
  */
@@ -135,7 +184,7 @@ export async function scanUnjournaled(
   }
 
   const repos = discoverRepos(workspaceDir);
-  const degradedEmpty: ScanResult = { journaled: [], unjournaled: [], repos: [], degraded: true };
+  const degradedEmpty: ScanResult = { journaled: [], unjournaled: [], repos: [], degraded: true, baselineAvailable: false };
 
   const changed = new Set<string>();
   for (const repo of repos) {
@@ -151,19 +200,50 @@ export async function scanUnjournaled(
     }
   }
 
+  // 应用内部目录豁免：从副本迭代再删（Set 迭代中删除当前项虽是定义行为，
+  // 副本形态更直白且不依赖读者知道该边缘规则）
+  for (const p of [...changed]) {
+    if (isAppInternalPath(p)) changed.delete(p);
+  }
+
   const entries =
     taskId === null ? store.listByWorkspace(workspaceId) : store.listByTask(workspaceId, taskId);
   const journaledPaths = new Set(entries.map((e) => e.path.replace(/\\/g, '/')));
 
+  // 基线差集归因的基线装载：taskId 非 null 且有非降级基线（meta 行存在且
+  // degraded=0）才装载；否则保持 null = 全体候选走累计差集回退。
+  // 键契约与捕获侧（baseline.ts）单点对齐：path = workspace 根相对 POSIX，
+  // contentHash = sha256 hex（null = 捕获时不可读）
+  let baseline: Map<string, string | null> | null = null;
+  if (taskId !== null) {
+    const meta = store.getBaselineMeta(workspaceId, taskId);
+    if (meta && !meta.degraded) {
+      baseline = new Map(
+        store.listBaselinePaths(workspaceId, taskId).map((r) => [r.path, r.contentHash]),
+      );
+    }
+  }
+
   const journaled: string[] = [];
   const unjournaled: string[] = [];
   for (const p of changed) {
-    if (journaledPaths.has(p)) journaled.push(p);
-    else unjournaled.push(p);
+    if (journaledPaths.has(p)) {
+      journaled.push(p);
+      continue;
+    }
+    if (baseline !== null && baseline.has(p)) {
+      const baseHash = baseline.get(p) ?? null;
+      const curHash = hashFileOrNull(path.join(workspaceDir, p));
+      // 历史脏未动（含捕获时与现在都不可读）→ 剔除；hash 漂移（含基线有
+      // hash 而当前已删除）→ 任务期间再改动，列入
+      if (baseHash === curHash) continue;
+    }
+    unjournaled.push(p);
   }
   journaled.sort();
   unjournaled.sort();
-  return { journaled, unjournaled, repos, degraded: false };
+  const baselineAvailable = taskId === null ? true : baseline !== null;
+  return { journaled, unjournaled, repos, degraded: false, baselineAvailable };
 }
 
 /**

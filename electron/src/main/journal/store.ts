@@ -8,9 +8,26 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Database as DB } from 'better-sqlite3';
+import type { Database as DB, Statement } from 'better-sqlite3';
 import { resolveUserDataDir } from '../paths';
 import type { JournalEntry, JournalOp } from './types';
+
+/** 任务起点基线 meta 行（task_scan_baseline 表行的 camelCase 形态） */
+export interface BaselineMetaRow {
+  workspaceId: string;
+  taskId: string;
+  capturedAt: number;
+  /** true = 捕获时 git 异常的降级基线（无 path 行，扫描回退累计差集） */
+  degraded: boolean;
+}
+
+/** 任务起点基线脏路径行（task_scan_baseline_path 表行的 camelCase 形态） */
+export interface BaselinePathRow {
+  /** workspace 根相对 POSIX 路径（与 detector 变更集同口径——键契约单点） */
+  path: string;
+  /** sha256 hex（recorder.hashContent）；null = 捕获时文件不可读（已删除等） */
+  contentHash: string | null;
+}
 
 export interface JournalStore {
   insert(e: JournalEntry): void;
@@ -19,6 +36,10 @@ export interface JournalStore {
   insertMany(entries: JournalEntry[]): void;
   listByTask(workspaceId: string, taskId: string): JournalEntry[];
   listByStream(workspaceId: string, streamSessionId: string): JournalEntry[];
+  /** 会话级聚合（变更回滚重构 spec 2026-09-28 §5.2）：该 session 全部条目——
+   *  含子 agent dispatch 写入（同 sessionId 不同 streamSessionId）；
+   *  session_id 为 NULL 的条目不命中（等值查询语义） */
+  listBySession(workspaceId: string, sessionId: string): JournalEntry[];
   listByPath(workspaceId: string, path: string): JournalEntry[];
   /** 全 workspace 条目（created_at 升序）——探测器 taskId=null 对账基线（全量 path 并集） */
   listByWorkspace(workspaceId: string): JournalEntry[];
@@ -36,6 +57,21 @@ export interface JournalStore {
   readBlobBytes(workspaceId: string, hash: string): Buffer | null;
   /** 引用计数（before_hash/after_hash 命中该 hash 的总行数）归零时物理删除对象文件 */
   dropBlobIfUnreferenced(workspaceId: string, hash: string): void;
+  /** ===== 任务起点扫描基线（未入账误归因根治，迁移 049）=====
+   *  生产者：task/starter.ts startTask + task/lifecycle.ts resumePausedTask →
+   *  journal/baseline.ts captureTaskScanBaseline（任务事务提交后、kickoff 派发前）。
+   *  消费者：journal/detector.ts scanUnjournaled 的基线差集归因。
+   *  键契约（跨模块单点）：path = workspace 根相对 POSIX 形态（与 detector 变更
+   *  集同口径）；contentHash = sha256 hex（recorder.hashContent），null = 捕获时
+   *  文件不可读。meta 行存在即「有基线」——零脏工作区的合法空基线也有 meta 行
+   *  （path 行为空数组），与「无基线」（getBaselineMeta 返回 null）可区分。 */
+  /** 基线原子写入：meta 行 + 全部 path 行单事务 all-or-nothing（中途失败整笔回滚，
+   *  与 insertMany 同语义——半份基线会让扫描归因半真半假） */
+  insertBaseline(meta: BaselineMetaRow, paths: BaselinePathRow[]): void;
+  /** 取基线 meta 行；null = 无基线（未捕获或捕获链路整体失败） */
+  getBaselineMeta(workspaceId: string, taskId: string): BaselineMetaRow | null;
+  /** 基线 path 行列表（path 升序）；无基线时为空数组 */
+  listBaselinePaths(workspaceId: string, taskId: string): BaselinePathRow[];
 }
 
 /** blob 根目录：<userData>/journal/<workspaceId>/objects */
@@ -113,6 +149,11 @@ export function createJournalStore(db: DB): JournalStore {
     WHERE workspace_id = ? AND stream_session_id = ?
     ORDER BY created_at ASC, id ASC
   `);
+  const stmtListBySession = db.prepare(`
+    SELECT * FROM journal_entries
+    WHERE workspace_id = ? AND session_id = ?
+    ORDER BY created_at ASC, id ASC
+  `);
   const stmtListByPath = db.prepare(`
     SELECT * FROM journal_entries
     WHERE workspace_id = ? AND path = ?
@@ -137,6 +178,46 @@ export function createJournalStore(db: DB): JournalStore {
     SELECT COUNT(*) AS c FROM journal_entries
     WHERE workspace_id = ? AND (before_hash = ? OR after_hash = ?)
   `);
+  // 任务起点基线两表（迁移 049）语句——**惰性 prepare**：老夹具可能只建
+  // journal_entries 局部 schema 而不跑全量迁移（如 revert-binary / office-tools
+  // 测试库），构造期 prepare 会因 task_scan_baseline 缺表直接抛错。首次调用
+  // 基线三方法才编译，非基线消费方零影响
+  type SqliteStmt = Statement;
+  let baselineStmts: {
+    insertMeta: SqliteStmt;
+    insertPath: SqliteStmt;
+    getMeta: SqliteStmt;
+    listPaths: SqliteStmt;
+  } | null = null;
+  const ensureBaselineStmts = (): {
+    insertMeta: SqliteStmt;
+    insertPath: SqliteStmt;
+    getMeta: SqliteStmt;
+    listPaths: SqliteStmt;
+  } => {
+    if (baselineStmts === null) {
+      baselineStmts = {
+        insertMeta: db.prepare(`
+          INSERT INTO task_scan_baseline (workspace_id, task_id, captured_at, degraded)
+          VALUES (?, ?, ?, ?)
+        `),
+        insertPath: db.prepare(`
+          INSERT INTO task_scan_baseline_path (workspace_id, task_id, path, content_hash)
+          VALUES (?, ?, ?, ?)
+        `),
+        getMeta: db.prepare(`
+          SELECT captured_at, degraded FROM task_scan_baseline
+          WHERE workspace_id = ? AND task_id = ?
+        `),
+        listPaths: db.prepare(`
+          SELECT path, content_hash FROM task_scan_baseline_path
+          WHERE workspace_id = ? AND task_id = ?
+          ORDER BY path ASC
+        `),
+      };
+    }
+    return baselineStmts;
+  };
 
   return {
     insert(e: JournalEntry): void {
@@ -184,6 +265,9 @@ export function createJournalStore(db: DB): JournalStore {
       return (stmtListByStream.all(workspaceId, streamSessionId) as JournalEntryRow[]).map(
         rowToEntry,
       );
+    },
+    listBySession(workspaceId: string, sessionId: string): JournalEntry[] {
+      return (stmtListBySession.all(workspaceId, sessionId) as JournalEntryRow[]).map(rowToEntry);
     },
     listByPath(workspaceId: string, filePath: string): JournalEntry[] {
       return (stmtListByPath.all(workspaceId, filePath) as JournalEntryRow[]).map(rowToEntry);
@@ -234,6 +318,33 @@ export function createJournalStore(db: DB): JournalStore {
       if (c > 0) return;
       const file = resolveJournalDir(workspaceId, hash);
       if (fs.existsSync(file)) fs.rmSync(file);
+    },
+    insertBaseline(meta: BaselineMetaRow, paths: BaselinePathRow[]): void {
+      // 单事务原子写：meta 行 + 全部 path 行 all-or-nothing（path 行 PK 冲突等
+      // 中途失败时 meta 行一并回滚，杜绝「有 meta 无 path」的半份基线）
+      const tx = db.transaction((m: BaselineMetaRow, list: BaselinePathRow[]) => {
+        const stmts = ensureBaselineStmts();
+        stmts.insertMeta.run(m.workspaceId, m.taskId, m.capturedAt, m.degraded ? 1 : 0);
+        for (const p of list) {
+          stmts.insertPath.run(m.workspaceId, m.taskId, p.path, p.contentHash);
+        }
+      });
+      tx(meta, paths);
+    },
+    getBaselineMeta(workspaceId: string, taskId: string): BaselineMetaRow | null {
+      const row = ensureBaselineStmts().getMeta.get(workspaceId, taskId) as
+        | { captured_at: number; degraded: number }
+        | undefined;
+      return row
+        ? { workspaceId, taskId, capturedAt: row.captured_at, degraded: row.degraded === 1 }
+        : null;
+    },
+    listBaselinePaths(workspaceId: string, taskId: string): BaselinePathRow[] {
+      const rows = ensureBaselineStmts().listPaths.all(workspaceId, taskId) as Array<{
+        path: string;
+        content_hash: string | null;
+      }>;
+      return rows.map((r) => ({ path: r.path, contentHash: r.content_hash }));
     },
   };
 }

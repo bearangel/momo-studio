@@ -184,8 +184,9 @@ describe('session.store', () => {
   // 2026-09-08 主机 bug 回归锁：任务在非当前会话执行时，会话列表毫无动静
   // （预览时间戳不变、不置顶），切走切回触发 loadSessions 重拉才更新。
   // receiveMessage 只更新 messagesBySession，不同步 sessions 的 lastMessageAt——
-  // 修复：顺带更新 + 按主进程排序契约（lastMessageAt DESC, createdAt DESC，
-  // NULL 最后）重排，新消息所在会话实时置顶。
+  // 修复：顺带更新 + 目标会话上浮置顶。2026-09-28 排序契约对齐：上浮式
+  // （不全量 sort）——主进程排序键 COALESCE(last_message_at, created_at)
+  // DESC，空会话按创建时间居首；全量 sort 缺 createdAt 必把空会话压底。
   it('receiveMessage 同步会话列表：目标会话 lastMessageAt 更新并置顶', () => {
     const sA = { ...MOCK_SESSIONS_A[0]!, lastMessageAt: 1000 };
     const sB = { ...MOCK_SESSIONS_A[1]!, lastMessageAt: 2000 };
@@ -209,6 +210,26 @@ describe('session.store', () => {
     const sessions = useSessionStore.getState().sessions;
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.lastMessageAt).toBe(1000);
+  });
+
+  // 2026-09-28 排序契约回归锁（主机 bug：新建空会话切走切回跳到列表末尾）：
+  // 主进程排序键 COALESCE(last_message_at, created_at) DESC——空会话按创建
+  // 时间居首。receiveMessage 上浮式重排只动目标会话，lastMessageAt=null 的
+  // 空会话必须保持在较早有消息会话之前（旧全量 sort 会把它压到末尾）。
+  it('receiveMessage 上浮目标会话；空会话（lastMessageAt=null）相对序不被压底', () => {
+    const sNew = { ...MOCK_SESSIONS_A[0]!, title: '新建空会话' }; // lastMessageAt: null
+    const sOld1 = { ...MOCK_SESSIONS_A[1]!, id: 'sess-old1', title: '旧1', lastMessageAt: 1000 };
+    const sOld2 = { ...MOCK_SESSIONS_A[1]!, id: 'sess-old2', title: '旧2', lastMessageAt: 2000 };
+    // 主进程 COALESCE 序：sNew（刚创建，created_at 最新）→ sOld2(2000) → sOld1(1000)
+    useSessionStore.setState({ sessions: [sNew, sOld2, sOld1], currentWorkspaceId: 'ws-a' });
+
+    // sOld1 收到最新消息（3000）→ 上浮置顶；sNew 仍在 sOld2 之前，不垫底
+    useSessionStore.getState().receiveMessage(mk('m-1', '旧1 的新消息', 3000, 'sess-old1'));
+
+    const sessions = useSessionStore.getState().sessions;
+    expect(sessions.map((s) => s.id)).toEqual(['sess-old1', sNew.id, 'sess-old2']);
+    expect(sessions[0]!.lastMessageAt).toBe(3000);
+    expect(sessions[1]!.lastMessageAt).toBeNull();
   });
 
   it('selectSession loads messages + events for the session', async () => {
@@ -376,6 +397,36 @@ describe('session.store — / 命令拦截（spec §5.4）', () => {
     await useSessionStore.getState().sendMessage('/compact  ');
     expect(mockApi.session.command).toHaveBeenCalledWith('s1', 'compact');
     expect(mockApi.session.send).not.toHaveBeenCalled();
+  });
+
+  // === pending 生命周期（B+C 档反馈）：await 前置位 → 成功/失败两路清除 ===
+  it('命令执行中 pending 置位（按会话键控、先于 await），成功后清除且 commandHint 为 null', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    let release: (v: { ok: true; message: string }) => void = () => {};
+    mockApi.session.command.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const inflight = useSessionStore.getState().sendMessage('/compact');
+    // 飞行中：pending 已置位（先于 await——极快回执不得先于置位到达）；
+    // 键控按会话——其他会话不受影响
+    expect(useSessionStore.getState().commandPendingBySession.get('s1')).toBe('compact');
+    expect(useSessionStore.getState().commandPendingBySession.has('s2')).toBe(false);
+    expect(useSessionStore.getState().commandHint).toBeNull();
+    release({ ok: true, message: '已压缩 3 条历史消息（摘要自下轮生效）' });
+    await inflight;
+    expect(useSessionStore.getState().commandPendingBySession.has('s1')).toBe(false);
+    // 成功路径不展示 hint——结果卡经 session:message 推进消息流，hint 条不重复
+    expect(useSessionStore.getState().commandHint).toBeNull();
+  });
+
+  it('命令失败 → pending 清除 + 中文错误写入 commandHint', async () => {
+    useSessionStore.setState({ activeSessionId: 's1' });
+    mockApi.session.command.mockRejectedValueOnce(new Error('压缩请求超时（10s），请重试'));
+    await useSessionStore.getState().sendMessage('/compact');
+    expect(useSessionStore.getState().commandPendingBySession.has('s1')).toBe(false);
+    expect(useSessionStore.getState().commandHint).toContain('超时');
   });
 
   // 未知命令：renderer 不再做本地白名单判定，统一转发到主进程；主进程查表后

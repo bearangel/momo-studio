@@ -113,6 +113,22 @@ describe('journal store：条目 CRUD', () => {
     expect(store.listByWorkspace('ws-C')).toEqual([]);
   });
 
+  it('listBySession：同 session 跨 stream 聚合（子 agent dispatch 形态）；NULL session / 跨 session / 跨 workspace 不串', () => {
+    const store = createJournalStore(getDb());
+    // 会话 sess-1 内：父消息流 stream-1 与子 agent 流 stream-2 各有写入
+    const parent = entry({ sessionId: 'sess-1', streamSessionId: 'stream-1', createdAt: 100 });
+    const child = entry({ sessionId: 'sess-1', streamSessionId: 'stream-2', path: 'src/b.ts', createdAt: 101 });
+    const otherSession = entry({ sessionId: 'sess-2', streamSessionId: 'stream-1', createdAt: 102 });
+    const noSession = entry({ sessionId: null, streamSessionId: 'stream-1', createdAt: 103 });
+    const otherWs = entry({ workspaceId: 'ws-B', sessionId: 'sess-1', createdAt: 104 });
+    for (const e of [parent, child, otherSession, noSession, otherWs]) store.insert(e);
+
+    expect(store.listBySession('ws-A', 'sess-1')).toEqual([parent, child]);
+    expect(store.listBySession('ws-A', 'sess-2')).toEqual([otherSession]);
+    expect(store.listBySession('ws-A', 'sess-404')).toEqual([]);
+    expect(store.listBySession('ws-B', 'sess-1')).toEqual([otherWs]);
+  });
+
   it('错误路径：非法 op 被 CHECK 约束拒绝，不残留', () => {
     const store = createJournalStore(getDb());
     const bad = entry();

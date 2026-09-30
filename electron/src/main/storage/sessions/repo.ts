@@ -67,8 +67,16 @@ export function getSession(id: string): SessionRow | null {
 
 export function listSessionsByWorkspace(workspaceId: string): SessionRow[] {
   const rows = getDb().prepare(
-    'SELECT * FROM sessions WHERE workspace_id = ? ORDER BY last_message_at DESC, created_at DESC',
+    'SELECT * FROM sessions WHERE workspace_id = ? ORDER BY COALESCE(last_message_at, created_at) DESC, created_at DESC',
   ).all(workspaceId) as SqlRow[];
+  return rows.map(rowToCamel);
+}
+
+/** 不限 workspace 的全量会话列表（仅迁移/调试用）；排序契约与本文件唯一同源 */
+export function listAllSessions(): SessionRow[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM sessions ORDER BY COALESCE(last_message_at, created_at) DESC, created_at DESC')
+    .all() as SqlRow[];
   return rows.map(rowToCamel);
 }
 

@@ -75,7 +75,14 @@ taskGroup.archive(id: string): Promise<{ cancelledIds: string[]; archivedCount: 
   // cancelledIds 供 IPC 层对 in_progress 来源补执行中断(abort 是进程级副作用,不入 DB 事务)
   // 任一步失败整体回滚(组与任务都不动)
 taskGroup.unarchive(id: string): Promise<GroupRow>
-  // 仅组恢复活跃,组内任务保持归档(在归档面板单条/批量/按组捞回)
+  // 组恢复活跃,组内全部归档任务一并恢复(2026-09-27 用户实测反馈修订:
+  // 原设计「组恢复任务留档、按需捞回」的拆分反直觉——恢复组后任务不回来,
+  // 用户仍需逐条手工恢复;现改为组与任务同进退,「恢复」一词一个语义)
+taskGroup.delete(id: string, moveToGroupId: string | null): Promise<{ movedCount: number }>
+  // 删除分组 = 删容器不删内容(2026-09-27 用户实测后新增):组内全部任务
+  // (活跃+已归档,状态不动)转移到目标分组,默认未分组;单事务。目标须
+  // 存在/同 ws/未归档/≠被删组。三段式语义:归档=可逆收起,删除=拆除组织
+  // 维度但数据保留;确认框内提供转移目标下拉(Jira 删列表同款交互)
 ```
 
 ### 3.2 task 面扩展
@@ -126,7 +133,7 @@ export const BOARD_COLUMNS = [
 | pending | 仅列内/换泳道(同列,draft↔pending 互转无拖拽入口) | →assigned + notifyExecutor(手动放行) | ✗ | ✗ | →cancelled |
 | assigned / session_queued | ✗ | 仅列内 | **task.start()** 拉起执行会话 | ✗ | task.cancel() |
 | in_progress | ✗ | ✗ | 仅列内 | →completed(**先确认**:agent 可能仍在跑) | cancel()(**先确认**:终止运行) |
-| paused | ✗ | ✗ | **task.resume()** 断点续跑 | ✗ | cancel() |
+| paused | ✗ | ✗ | 仅列内(排序;**恢复走卡片/抽屉按钮**,不设拖拽入口——断点续跑是重副作用,不应被排序手势误触发) | ✗ 状态机拒 | cancel() |
 | completed / failed / cancelled | ✗ | ✗ | ✗ | 仅列内/换泳道/**可归档**(右键菜单) | 同左 |
 
 关键裁决:
@@ -134,6 +141,7 @@ export const BOARD_COLUMNS = [
 - **待办列只出不进**:状态机不允许任何状态转回 draft/pending;拖悬时该列禁用响应(dnd-kit droppable disabled + 视觉变暗)
 - **语义动作在主进程映射**:renderer 只发落点,不指定动作——start/resume/cancel/transition 的调用决策单点收敛在 task.move,防契约漂移(8 个 P0 中 4 个源于契约漂移的教训)
 - **两个确认框**(in_progress → 已完成/已关闭):松手时 renderer 弹确认,取消则卡片弹回原位零副作用;确认后才发 IPC
+- **同列拖动一律纯排序**(含 paused):恢复(resume)不设拖拽入口,只走卡片/抽屉按钮——spec 初版表格 paused×进行中格为设计笔误,已修订(brainstorm 方案一定案:恢复走按钮)
 - pending→assigned 手动放行复用 resume() 同款 notifyExecutor 机制触发现有 executor 评估
 - 同列跨泳道拖 = 换分组;同列同泳道拖 = 纯排序
 - **调度器、findNextAssignedTask、并发徽标计数一概不动**:board_position 纯视觉,调度排序仍是 priority DESC → scheduled_at ASC → created_at ASC
@@ -168,7 +176,7 @@ TaskList/TaskCard 平铺列表退役(已核实 TaskList 的 3 个调用方全在
 
 ### 5.2 卡片与视觉
 
-- BoardCard 从 TaskCard 派生:独立圆角卡片(bg-surface-2 + border-subtle),保留优先级徽标([高]/[中]/[低])、#短ID·标题、状态徽标、元信息行(agent/日程/循环/委派目标/排队名次)
+- BoardCard 从 TaskCard 派生:独立圆角卡片(底色 bg-canvas、hover bg-surface-1,落在 bg-surface-1 列上形成凹感层次——以用户确认的 UI 预览为准;border-subtle),保留优先级徽标([高]/[中]/[低])、#短ID·标题、状态徽标、元信息行(agent/日程/循环/委派目标/排队名次)
 - 中间态徽标:已分配列卡显「排队中」、进行中列卡显「已暂停」——不占列,复用 task-status.ts 词表
 - **平铺模式**下卡片补显所属组 chip(色点+组名);泳道模式下组即道,省略
 - 全部走语义 token + lucide-react(16px / stroke 1.75),状态色一律 task-status.ts 单源;ESLint 机械强制(v2.1 设计系统)
@@ -219,7 +227,7 @@ TaskList/TaskCard 平铺列表退役(已核实 TaskList 的 3 个调用方全在
 
 | 层 | 覆盖 |
 |---|---|
-| electron 单测 | 迁移测试(老库升列/默认 NULL/索引);**move 语义表逐格断言**(每个 from×列:合法动作调用/拒绝原因;start/resume/cancel 联动按 this 绑定与 ID 唯一性仿真,拒绝「方便测试」的简化 mock);board_position 中值/列首尾/精度重整;归档边界(非终态拒/终态成功/组归档事务含自动 cancel 计数/unarchive 不复活任务);group CRUD/reorder/list archived 三态;repo listTasks archived 过滤 |
+| electron 单测 | 迁移测试(老库升列/默认 NULL/索引);**move 语义表逐格断言**(每个 from×列:合法动作调用/拒绝原因;start/resume/cancel 联动按 this 绑定与 ID 唯一性仿真,拒绝「方便测试」的简化 mock);board_position 中值/列首尾/精度重整;归档边界(非终态拒/终态成功/组归档事务含自动 cancel 计数/**unarchive 组与组内归档任务事务内一并恢复**);group CRUD/reorder/list archived 三态;repo listTasks archived 过滤 |
 | renderer 单测 | lib/board.ts 纯函数(列映射/排序兜底/中值);task.store 乐观更新+失败回滚+轮询跳过窗口;group.store;BoardCanvas 拖拽组件测试(@dnd-kit 官方测试模式:传感器模拟);TaskDetailDrawer/ArchivePanel |
 | 一致性 | BOARD_COLUMNS 主进程与 renderer 引用同一常量——无两份定义可漂移 |
 | e2e | 拖拽换列冒烟一条(Playwright drag API,可选) |

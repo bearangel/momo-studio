@@ -1,6 +1,8 @@
 // renderer/src/components/task-board/TaskDetailPanel.test.tsx
 //
-// P3 Task 4：进入执行会话接线（selectSession → setActiveView 顺序 + 失败不切视图）
+// 会话任务联动 G2：双锚点入口接线（来源消息定位 + 执行会话全状态回看）。
+// 定位链路语义（selectSession 顺序 / 翻页 / 降级）已移入 locate-message.test，
+// 此处只锁「UI 入口 → lib 调用」接线。
 // K4/K6 重写回归锁：
 //   - 状态徽标中文（不裸显 draft/in_progress 枚举）+ 优先级中文
 //   - 指派 agent 显示名称（useTaskEntityNames 解析，非 ID 片段）
@@ -13,11 +15,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化。
 // session.store / ui.store mock 为「可调用 hook（selector）+ getState」双形态——
-// useTaskEntityNames 以 hook 形式订阅 sessions，跳转按钮以 getState 调 selectSession。
+// useTaskEntityNames 以 hook 形式订阅 sessions，跳转按钮以 getState 调 selectSession，
+// 派生「待收尾」hook 以 selector 读 messagesBySession。
+// stream.store 不 mock——真实实现（zustand），用例按需 setState 流聚合。
 const { sessionState, uiState } = vi.hoisted(() => ({
   sessionState: {
     sessions: [],
     selectSession: vi.fn(),
+    messagesBySession: new Map(),
   },
   uiState: {
     setActiveView: vi.fn(),
@@ -37,8 +42,21 @@ vi.mock('../../stores/ui.store', () => ({
   ),
 }));
 
+const { locateMessageMock, locateTaskExecutionMock } = vi.hoisted(() => ({
+  locateMessageMock: vi.fn().mockResolvedValue('located'),
+  locateTaskExecutionMock: vi.fn().mockResolvedValue('located'),
+}));
+vi.mock('../../lib/locate-message', () => ({
+  locateMessage: locateMessageMock,
+  locateTaskExecution: locateTaskExecutionMock,
+}));
+
 import { TaskDetailPanel } from './TaskDetailPanel';
-import type { TaskRow } from '../../ipc/types';
+import type { ImMessage, JournalEntryView, TaskRow } from '../../ipc/types';
+import type { StreamState } from '../../stores/stream.store';
+import { useStreamStore } from '../../stores/stream.store';
+import { TURN_RECONCILE_NOTICE_PREFIX } from '../../lib/turn-reconcile';
+import { Toast, dismissToast } from '../ui/Toast';
 
 const mockApi = {
   task: {
@@ -57,6 +75,15 @@ const mockApi = {
   },
   session: {
     list: vi.fn().mockRejectedValue(new Error('no ipc in test')),
+    send: vi.fn(),
+  },
+  // 变更与回滚分区常驻挂载（G1）：TaskChangesPanel 挂载即调 journal.list
+  journal: {
+    list: vi.fn(),
+    revert: vi.fn(),
+    scan: vi.fn(),
+    rollbackFileBefore: vi.fn(),
+    preview: vi.fn(),
   },
 };
 
@@ -90,6 +117,9 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     updatedAt: 1000,
     startedAt: null,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...overrides,
   };
 }
@@ -97,6 +127,7 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
 beforeEach(() => {
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   sessionState.selectSession = vi.fn().mockResolvedValue(undefined);
+  sessionState.messagesBySession = new Map();
   uiState.setActiveView = vi.fn();
   mockApi.task.get.mockReset();
   mockApi.task.start.mockReset().mockResolvedValue(undefined);
@@ -104,50 +135,57 @@ beforeEach(() => {
   mockApi.task.transition.mockReset().mockResolvedValue(makeTask({}));
   mockApi.task.resume.mockReset().mockResolvedValue(makeTask({ status: 'in_progress' }));
   mockApi.task.update.mockReset().mockResolvedValue(undefined);
+  mockApi.session.send.mockReset().mockResolvedValue({ readOnly: false });
+  mockApi.journal.list.mockReset().mockResolvedValue([]);
+  mockApi.journal.scan.mockReset();
+  mockApi.journal.revert.mockReset().mockResolvedValue([]);
+  mockApi.journal.preview.mockReset().mockResolvedValue([]);
+  mockApi.journal.rollbackFileBefore.mockReset().mockResolvedValue([]);
+  useStreamStore.setState({ streams: new Map() });
+  locateMessageMock.mockClear();
+  locateTaskExecutionMock.mockClear();
+  dismissToast(); // toast 单例复位，防跨用例串扰
 });
 
-describe('TaskDetailPanel 进入执行会话', () => {
-  it('executionSessionId 存在时渲染跳转按钮', async () => {
-    mockApi.task.get.mockResolvedValue(makeTask({}));
+describe('TaskDetailPanel 进入执行会话（全状态 + 定位接线）', () => {
+  it('executionSessionId 存在时渲染跳转按钮（含终态 completed）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'completed' }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     expect(await screen.findByText('进入执行会话 →')).toBeInTheDocument();
   });
 
   it('executionSessionId 缺失时不渲染跳转按钮', async () => {
-    mockApi.task.get.mockResolvedValue(
-      makeTask({ status: 'pending', executionSessionId: null }),
-    );
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'pending', executionSessionId: null }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     expect(await screen.findByText('#task-1')).toBeInTheDocument();
     expect(screen.queryByText('进入执行会话 →')).not.toBeInTheDocument();
   });
 
-  it('点击按钮 → selectSession(executionSessionId) 然后 setActiveView("im")', async () => {
-    const order: string[] = [];
-    sessionState.selectSession = vi.fn().mockImplementation(async () => {
-      order.push('selectSession');
-    });
-    uiState.setActiveView = vi.fn().mockImplementation(() => {
-      order.push('setActiveView');
-    });
+  it('点击按钮 → locateTaskExecution(taskId, executionSessionId)', async () => {
     mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-abc' }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
     fireEvent.click(await screen.findByText('进入执行会话 →'));
-    await waitFor(() => expect(sessionState.selectSession).toHaveBeenCalledWith('sess-abc'));
-    await waitFor(() => expect(uiState.setActiveView).toHaveBeenCalledWith('im'));
-    expect(order).toEqual(['selectSession', 'setActiveView']);
+    await waitFor(() =>
+      expect(locateTaskExecutionMock).toHaveBeenCalledWith('task-1', 'sess-abc'),
+    );
+  });
+});
+
+describe('TaskDetailPanel 来源消息入口', () => {
+  it('sourceSessionId 存在 → 信息网格渲染「来源消息」行；点击 → locateMessage(来源会话, 消息 id)', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({ sourceSessionId: 'ses-src', sourceMessageId: 'm-origin' }),
+    );
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByText('来源消息定位'));
+    await waitFor(() => expect(locateMessageMock).toHaveBeenCalledWith('ses-src', 'm-origin'));
   });
 
-  it('selectSession 失败时控制台报错且不切视图', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    sessionState.selectSession = vi.fn().mockRejectedValue(new Error('会话不存在'));
-    mockApi.task.get.mockResolvedValue(makeTask({ executionSessionId: 'sess-bad' }));
+  it('sourceSessionId null（手建任务）→ 不渲染来源行', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ sourceSessionId: null }));
     render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
-    fireEvent.click(await screen.findByText('进入执行会话 →'));
-    await waitFor(() => expect(sessionState.selectSession).toHaveBeenCalledWith('sess-bad'));
-    await waitFor(() => expect(consoleError).toHaveBeenCalled());
-    expect(uiState.setActiveView).not.toHaveBeenCalled();
-    consoleError.mockRestore();
+    await screen.findByText('#task-1');
+    expect(screen.queryByText('来源消息定位')).not.toBeInTheDocument();
   });
 });
 
@@ -248,5 +286,208 @@ describe('TaskDetailPanel 操作矩阵（K6）', () => {
     fireEvent.click(await screen.findByRole('button', { name: '取消任务' }));
     await waitFor(() => expect(mockApi.task.cancel).toHaveBeenCalledWith('task-1'));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+});
+
+// === 派生徽标「待收尾」+ 一键催（turn reconciliation spec §3.5/§3.6）===
+// session.store 为 mock（messagesBySession 可控）；stream.store 为真实实现。
+
+const hostMsg = (id: string): ImMessage => ({
+  id,
+  sessionId: 'sess-exec',
+  sender: '@bot:x',
+  body: '',
+  eventType: 'm.room.message',
+  streamSessionId: null,
+  parentStreamSessionId: null,
+  segmentOf: null,
+  segmentIndex: null,
+  status: 'done',
+  source: 'local',
+  workspaceId: null,
+  taskId: null,
+  contextJson: null,
+  createdAt: 0,
+  updatedAt: 0,
+});
+
+const hostStream = (overrides: Partial<StreamState>): StreamState => ({
+  thinking: '',
+  text: '',
+  toolCalls: [],
+  todos: [],
+  dispatches: [],
+  status: 'done',
+  events: [],
+  segments: [],
+  messageId: 'm-exec',
+  startedAt: 0,
+  ...overrides,
+});
+
+describe('TaskDetailPanel 待收尾徽标与催收尾按钮（spec §3.5/§3.6）', () => {
+  it('in_progress + 宿主会话无运行回合 → 徽标与「催收尾」按钮并列出现', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByText('待收尾')).toBeInTheDocument();
+    expect(screen.getByText('进行中')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '催收尾' })).toBeInTheDocument();
+  });
+
+  it('会话正在流式输出 → 徽标与按钮均不显示', async () => {
+    sessionState.messagesBySession = new Map([['sess-exec', [hostMsg('m-exec')]]]);
+    useStreamStore.setState({
+      streams: new Map([['m-exec', hostStream({ status: 'streaming' })]]),
+    });
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('进行中');
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '催收尾' })).not.toBeInTheDocument();
+  });
+
+  it('completed（终态）→ 徽标与按钮均不显示', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'completed' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('已完成');
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '催收尾' })).not.toBeInTheDocument();
+  });
+
+  it('无 executionSessionId 的 in_progress → 徽标与按钮均不显示', async () => {
+    mockApi.task.get.mockResolvedValue(
+      makeTask({ status: 'in_progress', executionSessionId: null }),
+    );
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    await screen.findByText('进行中');
+    expect(screen.queryByText('待收尾')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '催收尾' })).not.toBeInTheDocument();
+  });
+
+  it('点击催收尾 → session.send 发送含任务 id 与模板前缀的镜像文本（todo 源可见时含未清项）', async () => {
+    sessionState.messagesBySession = new Map([
+      ['sess-exec', [hostMsg('m-old'), hostMsg('m-exec')]],
+    ]);
+    useStreamStore.setState({
+      streams: new Map([
+        [
+          'm-exec',
+          hostStream({
+            todos: [
+              { id: 't1', subject: '修复登录', status: 'in_progress' },
+              { id: 't2', subject: '已做完的', status: 'completed' },
+            ],
+          }),
+        ],
+      ]),
+    });
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
+    await waitFor(() => expect(mockApi.session.send).toHaveBeenCalledTimes(1));
+    const [sessionId, body] = mockApi.session.send.mock.calls[0]!;
+    expect(sessionId).toBe('sess-exec');
+    expect(body.startsWith(`${TURN_RECONCILE_NOTICE_PREFIX}（非新任务请求）：任务 task-1 `)).toBe(
+      true,
+    );
+    expect(body).toContain('  - 修复登录（进行中）');
+    expect(body).not.toContain('已做完的');
+    expect(body).toContain('本提醒一次性，不会再触发。');
+  });
+
+  it('拿不到待办数据 → 退化为不含列表项的占位版本（错误路径）', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
+    await waitFor(() => expect(mockApi.session.send).toHaveBeenCalledTimes(1));
+    const [, body] = mockApi.session.send.mock.calls[0]!;
+    expect(body).toContain('（无未清待办——但任务尚未调用 complete_task / fail_task 关闭）');
+  });
+
+  it('发送失败 → toast 显示错误（不静默吞异常）', async () => {
+    mockApi.session.send.mockRejectedValue(new Error('会话已只读'));
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(
+      <>
+        <TaskDetailPanel taskId="task-1" onClose={() => {}} />
+        <Toast />
+      </>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: '催收尾' }));
+    expect(await screen.findByTestId('ui-toast')).toHaveTextContent('催收尾发送失败: 会话已只读');
+  });
+
+  describe('归档任务只读（archivedAt 非 null → 操作栏/编辑入口整体隐藏）', () => {
+    it('归档的 in_progress 任务：无启动/暂停/编辑/取消按钮，显示只读标识与归档时间', async () => {
+      // 归档+非终态（数据异常形态）：只读不受状态机按钮资格影响，一律隐藏
+      mockApi.task.get.mockResolvedValue(
+        makeTask({ status: 'in_progress', archivedAt: 1700000000000 }),
+      );
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      await screen.findByText('示例任务');
+
+      expect(screen.getByText('已归档 · 只读')).toBeInTheDocument();
+      expect(screen.getByText('归档时间')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '编辑任务' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument();
+    });
+
+    it('非归档任务不受影响：in_progress 仍有暂停/编辑/取消（对照组，防误伤）', async () => {
+      mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress', archivedAt: null }));
+      render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+      await screen.findByText('进行中');
+
+      expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '编辑任务' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
+      expect(screen.queryByText('已归档 · 只读')).not.toBeInTheDocument();
+    });
+  });
+});
+
+// === 变更与回滚分区常驻挂载（会话任务联动 G1：分区头移入 TaskChangesPanel）===
+
+/** 构造完整 JournalEntryView（真实形状——types.d.ts 契约，不用简化占位） */
+function makeJournalEntry(overrides: Partial<JournalEntryView>): JournalEntryView {
+  return {
+    id: 'je-1',
+    workspaceId: 'ws-1',
+    taskId: 'task-1',
+    sessionId: 'ses-1',
+    streamSessionId: 'ss-1',
+    toolName: 'write_file',
+    path: 'src/app.ts',
+    op: 'modify',
+    beforeHash: 'hash-before',
+    afterHash: 'hash-after',
+    oldPath: null,
+    createdAt: 1757000001000,
+    beforeText: 'a\nb',
+    afterText: 'a\nb\nc',
+    ...overrides,
+  };
+}
+
+describe('TaskDetailPanel 变更与回滚分区常驻挂载（G1）', () => {
+  it('面板无条件挂载：空账面时分区头 summary「无变更记录」直接可见，无需点击', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-changes-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('task-changes-summary')).toHaveTextContent('无变更记录');
+    expect(mockApi.journal.list).toHaveBeenCalledWith({ workspaceId: 'ws-1', taskId: 'task-1' });
+  });
+
+  it('分区头含计数：有账面时显示「N 处变更 · M 个文件」且文件行常显', async () => {
+    mockApi.task.get.mockResolvedValue(makeTask({ status: 'in_progress' }));
+    mockApi.journal.list.mockResolvedValue([
+      makeJournalEntry({ id: 'je-1', path: 'src/app.ts' }),
+      makeJournalEntry({ id: 'je-2', path: 'docs/guide.md', op: 'create' }),
+    ]);
+    render(<TaskDetailPanel taskId="task-1" onClose={() => {}} />);
+    expect(await screen.findByTestId('task-changes-summary')).toHaveTextContent(
+      '2 处变更 · 2 个文件',
+    );
+    expect(screen.getByRole('button', { name: /src\/app\.ts/ })).toBeInTheDocument();
   });
 });

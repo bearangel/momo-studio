@@ -10,6 +10,7 @@ import type {
   CollabTarget,
   DanglingMcpRef,
   GitImportResult,
+  GroupRow,
   ImMessage,
   McpConfigUpdateInput,
   McpConfigView,
@@ -146,13 +147,14 @@ const api: ApiSurface = {
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
   },
-  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚
+  // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/账外扫描/组合回滚/干跑预检
   journal: {
     list: (scope) => invoke('journal:list', scope),
     revert: (workspaceId, ids, opts) => invoke('journal:revert', workspaceId, ids, opts),
     scan: (workspaceId, taskId) => invoke('journal:scan', workspaceId, taskId),
     rollbackFileBefore: (workspaceId, filePath, beforeEntryId) =>
       invoke('journal:rollbackFileBefore', workspaceId, filePath, beforeEntryId),
+    preview: (workspaceId, ids) => invoke('journal:preview', workspaceId, ids),
   },
   // v2.7：浏览器通道（browser/ipc.ts——通道名与主进程 16 invoke 通道 + 两推送逐一对应）
   browser: {
@@ -232,6 +234,8 @@ const api: ApiSurface = {
     // 命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；commands.ts 单一真相源
     listCommands: () => invoke<Array<{ name: string; description: string }>>('session:listCommands'),
     getMessages: (sessionId: string) => invoke('session:getMessages', sessionId),
+    deleteMessages: (sessionId: string, ids: string[]) =>
+      invoke('session:deleteMessages', sessionId, ids),
     loadOlder: (sessionId: string, beforeTs: number, count?: number) =>
       invoke('session:loadOlder', sessionId, beforeTs, count),
     exportMessages: (sessionId: string, limit: number) =>
@@ -385,6 +389,22 @@ const api: ApiSurface = {
     listInterrupted: () => invoke('task:listInterrupted'),
     // B9：任务冲突处理（5 策略）
     resolveConflict: (input) => invoke('task:resolveConflict', input),
+    // 看板重构 Task 6：拖拽换列 / 归档域（动作裁决单点在主进程 move.ts）
+    move: (id, target) => invoke<TaskRow>('task:move', id, target),
+    archive: (id) => invoke<TaskRow>('task:archive', id),
+    unarchive: (id) => invoke<TaskRow>('task:unarchive', id),
+  },
+  // 看板重构 Task 7：任务组命名空间（组 CRUD + 归档级联，groups.ipc.handlers.ts）
+  taskGroup: {
+    list: (workspaceId, opts?) => invoke<GroupRow[]>('taskGroup:list', workspaceId, opts),
+    create: (input) => invoke<GroupRow>('taskGroup:create', input),
+    update: (id, patch) => invoke<GroupRow>('taskGroup:update', id, patch),
+    reorder: (orderedIds) => invoke<void>('taskGroup:reorder', orderedIds),
+    archive: (id) =>
+      invoke<{ cancelledIds: string[]; archivedCount: number }>('taskGroup:archive', id),
+    unarchive: (id) => invoke<GroupRow>('taskGroup:unarchive', id),
+    delete: (id, moveToGroupId) =>
+      invoke<{ movedCount: number }>('taskGroup:delete', id, moveToGroupId),
   },
   dialog: {
     pickDirectory: (opts) => invoke('dialog:pickDirectory', opts),

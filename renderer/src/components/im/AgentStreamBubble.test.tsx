@@ -91,14 +91,14 @@ describe('AgentStreamBubble', () => {
     useStreamStore.setState({ streams: new Map() });
   });
 
-  it('streaming 状态显示「流式中」和停止按钮', () => {
+  it('streaming 状态显示「处理中」和停止按钮', () => {
     render(
       <AgentStreamBubble
         stream={makeStream({ text: '生成中' })}
         message={makeMessage()}
       />,
     );
-    expect(screen.getByText(/流式中/)).toBeInTheDocument();
+    expect(screen.getByText(/处理中/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /停止/ })).toBeInTheDocument();
     expect(screen.getByText('生成中')).toBeInTheDocument();
   });
@@ -110,7 +110,9 @@ describe('AgentStreamBubble', () => {
         message={makeMessage()}
       />,
     );
-    expect(screen.getByText(/已完成/)).toBeInTheDocument();
+    // spec §3.7 词汇专用:流式 done 渲染「已结束」而非「已完成」
+    expect(screen.getByText(/已结束/)).toBeInTheDocument();
+    expect(screen.queryByText(/已完成/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /停止/ })).not.toBeInTheDocument();
   });
 
@@ -205,7 +207,7 @@ describe('AgentStreamBubble', () => {
         message={makeMessage()}
       />,
     );
-    expect(screen.getByText(/流式中/)).toBeInTheDocument();
+    expect(screen.getByText(/处理中/)).toBeInTheDocument();
     expect(container.firstChild).not.toBeNull();
   });
 
@@ -637,6 +639,6 @@ describe('AgentStreamBubble — 变更 chip 挂载门控（v2.5）', () => {
     );
     await waitFor(() => expect(journalListMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
-    expect(screen.getByText(/已完成/)).toBeInTheDocument();
+    expect(screen.getByText(/已结束/)).toBeInTheDocument();
   });
 });

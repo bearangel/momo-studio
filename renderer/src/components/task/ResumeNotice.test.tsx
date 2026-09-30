@@ -93,6 +93,9 @@ function makeTaskRow(overrides?: Partial<TaskRow>): TaskRow {
     updatedAt: 1757500100000,
     startedAt: 1757500005000,
     completedAt: null,
+    groupId: null,
+    boardPosition: null,
+    archivedAt: null,
     ...overrides,
   };
 }

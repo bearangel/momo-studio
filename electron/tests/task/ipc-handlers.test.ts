@@ -29,6 +29,7 @@ vi.mock('electron', () => ({
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertTask, transitionTaskStatus, getTask } from '../../src/main/storage/tasks/repo';
 import type { TaskRow } from '../../src/main/storage/tasks/repo';
+import { createGroup, archiveGroup } from '../../src/main/storage/task-groups/repo';
 import { registerTaskHandlers } from '../../src/main/task/ipc.handlers';
 import * as executorMod from '../../src/main/task/executor';
 import * as taskBroadcastMod from '../../src/main/p2p/task-broadcast';
@@ -472,5 +473,57 @@ describe('task:create（v29 委派目标三列 + 循环规则）', () => {
       scheduledAt: Date.now() + 60_000,
     })) as TaskRow;
     expect(created.status).toBe('pending');
+  });
+});
+
+// UX 修复：新建任务可指定分组落组——三重校验（存在/同 ws/未归档）与 agent
+// 工具 createTask 同款语义，错误路径中文文案直出（renderer 不做前置校验）
+describe('task:create 带 groupId（看板分组落组）', () => {
+  it('合法活跃组 → 任务落组成功（created.groupId 回填）', async () => {
+    const group = createGroup({ workspaceId: 'ws1', name: '落地组' });
+    const handler = handlers.get('task:create')!;
+    const created = (await handler(null, {
+      workspaceId: 'ws1',
+      title: '落组任务',
+      groupId: group.id,
+    })) as TaskRow;
+    expect(created.groupId).toBe(group.id);
+    expect(getTask(created.id)?.groupId).toBe(group.id);
+  });
+
+  it('groupId 组不存在 → 拒绝（中文错误）', async () => {
+    const handler = handlers.get('task:create')!;
+    await expect(
+      handler(null, { workspaceId: 'ws1', title: '孤儿', groupId: 'G-9999' }),
+    ).rejects.toThrow('任务分组 G-9999 不存在');
+  });
+
+  it('groupId 属于其他工作空间 → 拒绝跨 ws 落组', async () => {
+    getDb()
+      .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)`)
+      .run('ws2', 'Other', '/tmp2', '@owner:home');
+    const group = createGroup({ workspaceId: 'ws2', name: '外域组' });
+    const handler = handlers.get('task:create')!;
+    await expect(
+      handler(null, { workspaceId: 'ws1', title: '越界', groupId: group.id }),
+    ).rejects.toThrow('不属于当前工作空间');
+  });
+
+  it('groupId 已归档组 → 拒绝（归档组不可复活语义）', async () => {
+    const group = createGroup({ workspaceId: 'ws1', name: '旧组' });
+    archiveGroup(group.id);
+    const handler = handlers.get('task:create')!;
+    await expect(
+      handler(null, { workspaceId: 'ws1', title: '复活', groupId: group.id }),
+    ).rejects.toThrow('已归档');
+  });
+
+  it('不传 groupId → 基线不变（不落组）', async () => {
+    const handler = handlers.get('task:create')!;
+    const created = (await handler(null, {
+      workspaceId: 'ws1',
+      title: '无组任务',
+    })) as TaskRow;
+    expect(created.groupId).toBeNull();
   });
 });

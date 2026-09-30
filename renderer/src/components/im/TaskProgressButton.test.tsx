@@ -168,12 +168,12 @@ describe('TaskProgressButton', () => {
       fireEvent.click(screen.getByRole('button', { name: /定位到消息/ }));
       expect(getById).toHaveBeenCalledWith('msg-m1');
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(classList.add).toHaveBeenCalledWith('todo-flash');
+      expect(classList.add).toHaveBeenCalledWith('msg-flash');
       expect(screen.queryByTestId('task-progress-popover')).not.toBeInTheDocument();
       act(() => {
         vi.advanceTimersByTime(2500);
       });
-      expect(classList.remove).toHaveBeenCalledWith('todo-flash');
+      expect(classList.remove).toHaveBeenCalledWith('msg-flash');
     } finally {
       getById.mockRestore();
       vi.useRealTimers();

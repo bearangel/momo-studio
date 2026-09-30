@@ -13,31 +13,33 @@
 //       in_progress → 暂停（transition paused；K7-4 后端联动中断 agent 流）
 //       paused → 恢复（task:resume——K7-5 后端转 in_progress + kickoff 重注入）
 //       非终态 → 取消 + 编辑（EditTaskDialog）
-//   - "进入执行会话"：selectSession(executionSessionId) + setActiveView('im')
+//       已归档（archivedAt 非 null）→ 只读：操作栏/编辑入口整体隐藏
+//   - "进入执行会话"（G2）：locateTaskExecution——全状态可用，完结任务也能回看执行记录
+//   - "来源消息定位"（G2）：locateMessage——跳回来源会话并锚定创建任务的原始消息
 import { useEffect, useState } from 'react';
 import {
   Bot,
   Calendar,
-  ChevronDown,
-  ChevronRight,
   Clock,
-  FileDiff,
   MessagesSquare,
-  Pencil,
   Users,
   X,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
+import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
-import { useUiStore } from '../../stores/ui.store';
 import type { TaskRow } from '../../ipc/types';
-import { taskStatusStyle } from '../../lib/task-status';
+import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
+import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
+import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
 import { Button } from '../ui/Button';
+import { showToast } from '../ui/Toast';
 import { EditTaskDialog } from './EditTaskDialog';
 import { TaskChangesPanel } from './TaskChangesPanel';
 import { useTaskEntityNames } from './useTaskEntityNames';
+import { usePendingWrapUp } from './usePendingWrapUp';
 
 interface TaskDetailPanelProps {
   taskId: string;
@@ -60,8 +62,6 @@ function formatTime(ms: number | null): string {
 export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   const [task, setTask] = useState<TaskRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  // 变更审查分区默认折叠——展开才挂载 TaskChangesPanel（scan 懒执行，spec §5.5）
-  const [changesOpen, setChangesOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const refreshTask = (): void => {
     void ipc.task
@@ -92,6 +92,8 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   }, [taskId]);
 
   const names = useTaskEntityNames(task?.workspaceId ?? null);
+  // 派生「待收尾」（spec §3.5）：徽标与催收尾按钮共用谓词
+  const pendingWrapUp = usePendingWrapUp(task);
 
   if (!task) {
     return <div className="flex-1 p-4 text-sm text-tertiary">加载中...</div>;
@@ -99,6 +101,9 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
 
   const status = taskStatusStyle(task.status);
   const priorityLabel = PRIORITY_LABEL[task.priority] ?? String(task.priority);
+  // 只读模式：归档任务详情一律只读（archivedAt 单源派生，不依赖调用方传参——
+  // 任何入口打开归档任务都自动只读）；隐藏全部任务操作按钮与编辑入口
+  const readOnly = task.archivedAt !== null;
   const hasTarget =
     task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
   const terminal = TERMINAL_STATUSES.has(task.status);
@@ -136,15 +141,35 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
     });
   };
 
+  /** G2：执行会话定位（全状态可用——完结任务也能回看执行记录） */
   const handleEnterSession = (): void => {
     const sessionId = task.executionSessionId;
+    if (sessionId === null) return;
+    void locateTaskExecution(task.id, sessionId);
+  };
+
+  /** G2：来源消息定位（悬空时 locateMessage 内部 toast 降级） */
+  const handleLocateSource = (): void => {
+    if (task.sourceSessionId === null) return;
+    void locateMessage(task.sourceSessionId, task.sourceMessageId);
+  };
+
+  /**
+   * 催收尾（spec §3.6）：向宿主会话注入与 electron F1 同一模板文本（镜像逐字同步）。
+   * 点击瞬间从 store 快读取数（非响应式）——待办来自宿主会话最新带 todos 的流聚合；
+   * 拿不到待办数据时退化为不含列表项的版本（按钮 title 已说明）。
+   */
+  const handleUrgeWrapUp = (): void => {
+    const sessionId = task.executionSessionId;
     if (!sessionId) return;
-    useSessionStore
-      .getState()
-      .selectSession(sessionId)
-      .then(() => useUiStore.getState().setActiveView('im'))
+    const messages = useSessionStore.getState().messagesBySession.get(sessionId);
+    const items = collectOpenTodoItems(messages, useStreamStore.getState().streams);
+    const body = buildTurnReconcileNotice(task.id, items ?? []);
+    ipc.session
+      .send(sessionId, body)
+      .then(() => showToast('已向执行会话发送收尾提醒'))
       .catch((err: unknown) => {
-        console.error('进入执行会话失败', err);
+        showToast(`催收尾发送失败: ${err instanceof Error ? err.message : String(err)}`);
       });
   };
 
@@ -153,17 +178,6 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
       <div className="flex items-center justify-between p-3 border-b border-subtle">
         <span className="font-medium">#{task.id}</span>
         <div className="flex items-center gap-1">
-          {!terminal && (
-            <button
-              type="button"
-              aria-label="编辑任务"
-              title="编辑任务"
-              onClick={() => setEditOpen(true)}
-              className="text-tertiary hover:text-primary leading-none px-1 rounded"
-            >
-              <Pencil size={13} strokeWidth={1.75} aria-hidden />
-            </button>
-          )}
           <button
             type="button"
             aria-label="关闭"
@@ -183,13 +197,22 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
         )}
         <div className="flex items-center gap-2">
           <span className={status.className}>{status.label}</span>
+          {readOnly && <span className="text-xs text-tertiary">已归档 · 只读</span>}
+          {pendingWrapUp && (
+            <span
+              className={PENDING_WRAP_UP_STYLE.className}
+              title="任务仍在进行，但宿主会话当前没有运行回合"
+            >
+              {PENDING_WRAP_UP_STYLE.label}
+            </span>
+          )}
           {task.status === 'assigned' && (
             <span className="text-xs text-status-warning">等待调度放行</span>
           )}
         </div>
         {task.status === 'draft' && !hasTarget && (
           <div className="rounded bg-status-warning-tint px-3 py-2 text-xs text-status-warning">
-            任务尚未指派委派目标——点击右上角编辑按钮选择 agent / 团队 / 会话后即可启动。
+            任务尚未指派委派目标——点击「编辑」选择 agent / 团队 / 会话后即可启动。
           </div>
         )}
         {task.errorMessage && (
@@ -270,6 +293,18 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               </button>
             </div>
           )}
+          {task.sourceSessionId && (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-tertiary">来源</span>
+              <button
+                type="button"
+                onClick={handleLocateSource}
+                className="text-left text-accent-600 hover:underline dark:text-accent-300"
+              >
+                来源消息定位
+              </button>
+            </div>
+          )}
           <div className="flex flex-col gap-0.5">
             <span className="text-tertiary">创建时间</span>
             <span className="text-secondary">{formatTime(task.createdAt)}</span>
@@ -286,6 +321,12 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
               <span className="text-secondary">{formatTime(task.completedAt)}</span>
             </div>
           )}
+          {task.archivedAt && (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-tertiary">归档时间</span>
+              <span className="text-secondary">{formatTime(task.archivedAt)}</span>
+            </div>
+          )}
           {task.status === 'in_progress' && task.startedAt && (
             <div className="flex flex-col gap-0.5">
               <span className="text-tertiary">执行进度</span>
@@ -296,28 +337,11 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
             </div>
           )}
         </div>
+        {/* 变更与回滚分区常驻挂载（G1）：分区头与摘要计数由 TaskChangesPanel 自持 */}
         <div className="pt-1">
-          <button
-            type="button"
-            aria-expanded={changesOpen}
-            onClick={() => setChangesOpen((v) => !v)}
-            className="flex w-full cursor-pointer items-center gap-1.5 rounded border border-strong bg-surface-3 px-2 py-1 text-left text-xs transition-colors"
-          >
-            <FileDiff size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-500" />
-            <span className="text-primary">变更审查</span>
-            <span className="ml-auto shrink-0 text-tertiary" aria-hidden>
-              {changesOpen ? (
-                <ChevronDown size={16} strokeWidth={1.75} />
-              ) : (
-                <ChevronRight size={16} strokeWidth={1.75} />
-              )}
-            </span>
-          </button>
-          {changesOpen && (
-            <TaskChangesPanel workspaceId={task.workspaceId} taskId={taskId} />
-          )}
+          <TaskChangesPanel workspaceId={task.workspaceId} taskId={taskId} />
         </div>
-        {(task.status === 'in_progress' || task.status === 'paused') && task.executionSessionId && (
+        {task.executionSessionId && (
           <button
             type="button"
             onClick={handleEnterSession}
@@ -327,29 +351,52 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
           </button>
         )}
       </div>
-      <div className="p-3 border-t border-subtle flex gap-2">
-        {canStart && (
-          <Button variant="primary" onClick={handleStart} className="flex-1">
-            启动
-          </Button>
-        )}
-        {canPause && (
-          <Button variant="ghost" onClick={handlePause} className="flex-none px-4">
-            暂停
-          </Button>
-        )}
-        {canResume && (
-          <Button variant="primary" onClick={handleResume} className="flex-1">
-            恢复
-          </Button>
-        )}
-        {!terminal && (
-          <Button variant="ghost" onClick={handleCancel} className="flex-none px-4">
-            取消任务
-          </Button>
-        )}
-      </div>
-      {!terminal && (
+      {/* 操作栏：归档任务（readOnly）整栏隐藏——只能查看，不能编辑/启动等操作 */}
+      {!readOnly && (
+        <div className="p-3 border-t border-subtle flex gap-2">
+          {!terminal && (
+            <Button
+              variant="secondary"
+              aria-label="编辑任务"
+              onClick={() => setEditOpen(true)}
+              className="flex-1"
+            >
+              编辑
+            </Button>
+          )}
+          {canStart && (
+            <Button variant="primary" onClick={handleStart} className="flex-1">
+              启动
+            </Button>
+          )}
+          {canPause && (
+            <Button variant="ghost" onClick={handlePause} className="flex-1">
+              暂停
+            </Button>
+          )}
+          {pendingWrapUp && (
+            <Button
+              variant="ghost"
+              onClick={handleUrgeWrapUp}
+              className="flex-1"
+              title="向执行会话发送回合收尾核对提醒；若当前拿不到待办数据，提醒将不含未清项列表"
+            >
+              催收尾
+            </Button>
+          )}
+          {canResume && (
+            <Button variant="primary" onClick={handleResume} className="flex-1">
+              恢复
+            </Button>
+          )}
+          {!terminal && (
+            <Button variant="danger" onClick={handleCancel} className="flex-1">
+              取消任务
+            </Button>
+          )}
+        </div>
+      )}
+      {!terminal && !readOnly && (
         <EditTaskDialog
           open={editOpen}
           onClose={() => setEditOpen(false)}

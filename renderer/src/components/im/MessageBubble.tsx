@@ -3,6 +3,7 @@
 // 单条消息渲染入口。根据 eventType 分发：
 //   - io.momo-studio.dispatch   → DispatchCard（紫色，走 MessageFrame）
 //   - io.momo-studio.task_reply → TaskReplyCard（状态色，走 MessageFrame）
+//   - io.momo-studio.compact    → CompactNotice（居中系统通知，不归属对话角色）
 //   - m.room.message（含活跃 stream 或已完成带富信息） → AgentStreamBubble
 //   - 其余 → 普通气泡（走 MessageFrame，自己蓝/他人灰）
 //
@@ -36,6 +37,7 @@ import { loadAssetDataUrl } from '../../lib/asset-data-url';
 import { cn } from '../../lib/cn';
 import { DispatchCard } from './DispatchCard';
 import { TaskReplyCard } from './TaskReplyCard';
+import { CompactNotice } from './CompactNotice';
 import { MessageFrame } from './MessageFrame';
 import { AgentStreamBubble } from './AgentStreamBubble';
 import { MarkdownBody } from './MarkdownBody';
@@ -168,6 +170,9 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
   }
   if (message.eventType === 'io.momo-studio.task_reply') {
     return <TaskReplyCard message={message} isSelf={isSelf} senderName={senderName} />;
+  }
+  if (message.eventType === 'io.momo-studio.compact') {
+    return <CompactNotice message={message} />;
   }
 
   // 流式中 OR 已完成但带富信息 OR 失败带错误文本：用 AgentStreamBubble 渲染——

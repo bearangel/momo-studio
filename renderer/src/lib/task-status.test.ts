@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { TaskStatus } from '../ipc/types';
 import {
   dispatchStatusStyle,
+  PENDING_WRAP_UP_STYLE,
   remoteStatusStyle,
   taskStatusStyle,
   type TaskStatusKey,
@@ -30,26 +31,34 @@ describe('task-status 统一状态映射', () => {
     expect(labels.size).toBe(8);
   });
 
-  it('语义 tone 映射符合规范 §3.6', () => {
+  it('语义 tone 映射（UX 波 2：列内零同色冲突）', () => {
     expect(taskStatusStyle('draft').tone).toBe('neutral');
     expect(taskStatusStyle('pending').tone).toBe('warning');
     expect(taskStatusStyle('assigned').tone).toBe('accent');
-    expect(taskStatusStyle('in_progress').tone).toBe('success');
+    expect(taskStatusStyle('in_progress').tone).toBe('accent');
     expect(taskStatusStyle('paused').tone).toBe('violet');
-    expect(taskStatusStyle('completed').tone).toBe('neutral');
+    expect(taskStatusStyle('completed').tone).toBe('success');
     expect(taskStatusStyle('cancelled').tone).toBe('neutral');
     expect(taskStatusStyle('failed').tone).toBe('error');
   });
 
   it('className 与 Badge tone 类完全同源（不另造调色板）', () => {
     expect(taskStatusStyle('failed').className).toContain('bg-status-error-tint');
-    expect(taskStatusStyle('in_progress').className).toContain('bg-status-success-tint');
+    expect(taskStatusStyle('completed').className).toContain('bg-status-success-tint');
+    expect(taskStatusStyle('in_progress').className).toContain('bg-surface-active');
   });
 
-  it('session_queued：文案「排队中」+ neutral tone（spec §3.3）', () => {
+  it('session_queued：文案「排队中」+ warning tone（等待系与 pending 同色）', () => {
     const s = taskStatusStyle('session_queued');
     expect(s.label).toBe('排队中');
-    expect(s.tone).toBe('neutral');
+    expect(s.tone).toBe('warning');
+  });
+
+  it('PENDING_WRAP_UP_STYLE：派生「待收尾」徽标复用 warning tone（spec §3.5，禁新造色）', () => {
+    expect(PENDING_WRAP_UP_STYLE.label).toBe('待收尾');
+    expect(PENDING_WRAP_UP_STYLE.tone).toBe('warning');
+    expect(PENDING_WRAP_UP_STYLE.className).toContain('bg-status-warning-tint');
+    expect(PENDING_WRAP_UP_STYLE.className).toContain('text-status-warning');
   });
 });
 

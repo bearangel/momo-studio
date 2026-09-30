@@ -5,7 +5,7 @@
 //   - 徽标 n/m = 最新「顶层 + 非用户」含清单消息进度；呼吸灯 = 会话内任一
 //     含待办流（含子 agent）streaming
 //   - 点击弹浮层：目标清单（实时刷新）+「定位到消息」；Esc / 点外部 / 再点收起；
-//     定位 = scrollIntoView + todo-flash 闪烁，浮层关闭
+//     定位 = scrollIntoView + msg-flash 闪烁（共享件 MessageFlash），浮层关闭
 //   - 动效 keyframes 按仓库惯例组件内 <style> 注入（先例 momo-stream-blink）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ListTodo, LocateFixed, X } from 'lucide-react';
@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/session.store';
 import { useStreamStore, type StreamState } from '../../stores/stream.store';
 import { useBotNameMap, resolveBotName } from '../../lib/useBotNames';
 import { cn } from '../../lib/cn';
+import { flashMessage } from '../common/MessageFlash';
 import { TodoList } from './TodoList';
 
 interface Props {
@@ -25,9 +26,6 @@ interface Target {
   sender: string;
   stream: StreamState;
 }
-
-/** 定位闪烁停留时长（ms）——0.8s × 3 次 */
-const FLASH_MS = 2400;
 
 export function TaskProgressButton({ sessionId }: Props) {
   const messages = useSessionStore((s) => s.messagesBySession.get(sessionId));
@@ -103,18 +101,16 @@ export function TaskProgressButton({ sessionId }: Props) {
     const el = document.getElementById(`msg-${target.messageId}`);
     if (el === null) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('todo-flash');
-    window.setTimeout(() => el.classList.remove('todo-flash'), FLASH_MS);
+    flashMessage(el);
   };
 
   return (
     <div ref={rootRef} className="relative">
-      {/* keyframes 组件内注入（仓库惯例，同 AgentStreamBubble momo-stream-blink） */}
+      {/* keyframes 组件内注入（仓库惯例，同 AgentStreamBubble momo-stream-blink）；
+          定位闪烁已归一共享件 MessageFlash（msg-flash） */}
       <style>{`
 @keyframes momo-todo-breath{0%,100%{opacity:.3;transform:scale(.75)}50%{opacity:1;transform:scale(1.2)}}
-@keyframes momo-todo-flash{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 2px rgb(var(--accent-500))}}
 .todo-breath-dot{display:inline-block;width:7px;height:7px;border-radius:9999px;animation:momo-todo-breath 1.6s ease-in-out infinite}
-.todo-flash{animation:momo-todo-flash .8s ease-in-out 3}
       `}</style>
       <button
         type="button"

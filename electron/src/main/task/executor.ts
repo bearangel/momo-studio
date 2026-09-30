@@ -236,7 +236,15 @@ function failQuietly(taskId: string, reason: string): void {
   }
 }
 
-/** kickoff 消息体（spec §5.4） */
+/**
+ * 入场闭合义务段（turn reconciliation spec 2026-09-28 §3.3）。
+ * 导出供委派简报契约测试直接断言。预防优于出口补救——T-060 的
+ * complete_task 0 次调用说明模型不知道闭合是义务。
+ */
+export const KICKOFF_CLOSURE_MANDATE =
+  '本回合由任务简报触发；结束时必须调用 complete_task 或 fail_task 关闭任务，或在终文中说明原因。';
+
+/** kickoff 消息体（spec §5.4；闭合义务段见 spec 2026-09-28 §3.3） */
 export function buildKickoffBody(task: TaskRow): string {
   const lines = [`【任务启动】#${task.id} · ${task.title}`];
   if (task.description) lines.push('', task.description);
@@ -244,6 +252,7 @@ export function buildKickoffBody(task: TaskRow): string {
   if (PRIORITY_LABEL[task.priority]) meta.push(`优先级:${PRIORITY_LABEL[task.priority]}`);
   if (task.deadlineAt) meta.push(`截止:${new Date(task.deadlineAt).toLocaleString('zh-CN')}`);
   if (meta.length > 0) lines.push('', meta.join('　'));
+  lines.push('', KICKOFF_CLOSURE_MANDATE);
   return lines.join('\n');
 }
 

@@ -1,4 +1,14 @@
 // renderer/src/ipc/types.d.ts
+//
+// BoardColumnKey 联合类型内联于此、不再 import board-columns.ts：electron 构建
+// （tsc -p tsconfig.json）会沿本文件的 type import 把 board-columns.ts 拖进
+// 编译图，在 renderer 源码树旁路产出 board-columns.js——vite 解析 .js 优先于
+// .ts，污染存在时 renderer build 必失败（Task 14 收尾发现）。列常量与该联合
+// 的双向等值由 board-columns.ts 编译期断言锁死。
+
+/** 看板五列 key（值域与 board-columns.ts 的 BOARD_COLUMN_KEYS 常量双向锁） */
+export type BoardColumnKey = 'backlog' | 'assigned' | 'active' | 'done' | 'closed';
+
 export interface SystemInfo {
   platform: string;
   arch: string;
@@ -161,6 +171,12 @@ export interface TaskRow {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 看板分组（task_groups.id，G-<seq>），NULL=未分组（看板重构 spec §2） */
+  groupId: string | null;
+  /** 组/列内排序位（1024 间隔尾插），NULL=未入板 */
+  boardPosition: number | null;
+  /** 归档时间戳（ms），NULL=活跃；task.list 默认排除归档行 */
+  archivedAt: number | null;
 }
 
 /**
@@ -233,6 +249,8 @@ export interface TaskApiSurface {
     recurrenceRule?: string | null;
     scheduledAt?: number | null;
     deadlineAt?: number | null;
+    /** 看板分组（UX 修复）：落组 id，缺省不分组；主进程三重校验（存在/同 ws/未归档） */
+    groupId?: string;
   }): Promise<TaskRow>;
   list(opts: {
     workspaceId?: string;
@@ -240,6 +258,10 @@ export interface TaskApiSurface {
     assigneeAgentId?: string;
     executionSessionId?: string;
     sourceSessionId?: string;
+    /** 按 source_message_id 集合过滤（会话任务联动 G3：撤回时命中受影响任务）；空数组跳过条件 */
+    sourceMessageIds?: string[];
+    /** 归档三态透传（看板重构 Task 6/7）：'exclude' 默认 / 'only' 只回归档 / 'all' 全回 */
+    archived?: 'exclude' | 'only' | 'all';
     orderBy?: 'priority' | 'scheduled_at' | 'created_at' | 'created_at_desc';
     limit?: number;
   }): Promise<TaskRow[]>;
@@ -256,6 +278,24 @@ export interface TaskApiSurface {
     createdNewRoom: boolean;
   }>;
   cancel(id: string): Promise<void>;
+  /**
+   * 看板重构 Task 6：拖拽换列/换组/排序单一通道——renderer 只发落点
+   * （column/groupId/before/after），动作裁决（start/complete/cancel/纯排序）
+   * 全部在主进程 executeMove 单点
+   */
+  move(
+    id: string,
+    target: {
+      column: BoardColumnKey;
+      groupId: string | null;
+      beforeTaskId?: string;
+      afterTaskId?: string;
+    },
+  ): Promise<TaskRow>;
+  /** 看板重构 Task 6：归档（仅终态任务可归档，非终态 reject） */
+  archive(id: string): Promise<TaskRow>;
+  /** 看板重构 Task 6：取消归档 */
+  unarchive(id: string): Promise<TaskRow>;
   /**
    * K7-5 + v2.6.0 多路恢复（spec §5.6 IPC 面）：
    *   - paused → 既有 K7-5：transition + kickoff 重注入（返回 TaskRow）
@@ -282,6 +322,49 @@ export interface TaskApiSurface {
     | { action: 'reject'; reason: string }
     | { action: 'ask' }
   >;
+}
+
+/**
+ * 任务组行（renderer 镜像，看板重构 Task 7）。
+ * 与 electron 端 storage/task-groups/repo.ts 的 GroupRow 对齐（跨进程独立定义，仅结构对齐）。
+ */
+export interface GroupRow {
+  id: string;
+  workspaceId: string;
+  name: string;
+  /** 语义色名（'accent'/'violet'/'success'/'warning'…），null=默认 */
+  color: string | null;
+  position: number;
+  archivedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 看板重构 Task 7：任务组通道面（IPC 命名空间 taskGroup:*，
+ * electron/src/main/task/groups.ipc.handlers.ts）。
+ */
+export interface TaskGroupApiSurface {
+  /** 按 workspace 列组；archived 三态：'exclude'（默认）活跃 / 'only' 只回归档 / 'all' 全回 */
+  list(workspaceId: string, opts?: { archived?: 'exclude' | 'only' | 'all' }): Promise<GroupRow[]>;
+  /** 新建组（尾插 position） */
+  create(input: { workspaceId: string; name: string; color?: string }): Promise<GroupRow>;
+  /** 改名/换色；省略字段保留原值 */
+  update(id: string, patch: { name?: string; color?: string }): Promise<GroupRow>;
+  /** 按入参顺序整段重写 position */
+  reorder(orderedIds: string[]): Promise<void>;
+  /**
+   * 归档组（单事务级联：组内非终态任务 cancel + 全组任务/组本体置 archived_at）。
+   * 返回级联取消的任务 id 列表与归档任务数；已归档组幂等返回零值。
+   */
+  archive(id: string): Promise<{ cancelledIds: string[]; archivedCount: number }>;
+  /** 解档组（只复活组本体，任务保持归档） */
+  unarchive(id: string): Promise<GroupRow>;
+  /**
+   * 删除组（删容器不删内容）：单事务内组内全部任务（活跃+已归档，归档态保留）
+   * 转移到目标组后删组行。moveToGroupId=null 落未分组；返回转移任务数。
+   */
+  delete(id: string, moveToGroupId: string | null): Promise<{ movedCount: number }>;
 }
 
 export interface StartAgentInput {
@@ -1137,6 +1220,13 @@ export interface SessionApiSurface {
   getMessages(
     sessionId: string,
   ): Promise<{ messages: ImMessage[]; eventsByMessage: Record<string, MessageEventRow[]> }>;
+  /**
+   * 逐层撤回（turn undo）的消息删除面：按会话归属过滤物理删除消息行
+   * （message_events FK 级联 + message_compact_events 清理 + 会话
+   * last_message_at 重算均主进程侧完成）。返回实际删除的 id——不属于
+   * 该会话的 id 静默跳过。
+   */
+  deleteMessages(sessionId: string, ids: string[]): Promise<{ deletedIds: string[] }>;
   /** 斜杠命令（spec §5.4）：/compact 等确定性命令。未知命令/运行中/无模型配置时 reject（Error.message 中文提示） */
   command(sessionId: string, command: string): Promise<{ ok: true; message: string }>;
   /** 会话命令注册表（v2.11，spec §6.1）——/ 菜单命令组数据源；主进程 commands.ts 单一真相源 */
@@ -1335,6 +1425,11 @@ export interface JournalScanResult {
   unjournaled: string[];
   repos: string[];
   degraded: boolean;
+  /** 任务起点基线归因是否可用（与 electron 端 ScanResult.baselineAvailable 对齐）：
+   *  false = 无基线 / 降级基线（旧任务或捕获失败），unjournaled 为工作区累计
+   *  账外状态而非本任务专属（UI 据此显示提示行）；taskId=null（快速会话，
+   *  基线概念不适用）恒 true；degraded=true 时恒 false（三列恒空，无提示意义）。 */
+  baselineAvailable: boolean;
 }
 
 /**
@@ -1345,19 +1440,27 @@ export interface JournalScanResult {
  */
 export interface JournalApiSurface {
   /**
-   * 列条目视图。两 scope：taskId（任务组）/ streamSessionId（消息行流）；
-   * 两键皆空返回空数组。
+   * 列条目视图。三 scope（优先级从高到低）：taskId（任务组）/ streamSessionId
+   * （消息行流）/ sessionId（会话级聚合——该 session 全部条目，含子 agent
+   * dispatch 写入，rollback spec 2026-09-28 §5.2）；三键皆空返回空数组。
    */
   list(scope: {
     workspaceId: string;
     taskId?: string;
     streamSessionId?: string;
+    sessionId?: string;
   }): Promise<JournalEntryView[]>;
   /**
    * 撤销指定条目（按 id 批量）；执行序 = 全局 created_at 逆序。
    * force=true 在 hash 漂移时强制写回（会丢失其后变更，UI 需明确警告）。
    */
   revert(workspaceId: string, ids: string[], opts?: { force?: boolean }): Promise<RevertOutcome[]>;
+  /**
+   * 干跑预检（rollback spec 2026-09-28 §5.1）：与 revert 同序逐条预测，链式
+   * 虚拟状态模拟；不写盘不记账，预测恒按 force=false（执行时守卫仍生效，
+   * UI 文案需标注「以执行时守卫为准」）。
+   */
+  preview(workspaceId: string, ids: string[]): Promise<RevertOutcome[]>;
   /**
    * 账外变更扫描：与 journaled 取差集（taskId=null 取全 workspace 路径并集，
    * 否则取该任务组路径子集）；degraded=true 时三列恒空。
@@ -1871,6 +1974,8 @@ export interface ApiSurface {
     listBuiltinPresets(type: ResourceType): Promise<BuiltinPresetItem[]>;
   };
   task: TaskApiSurface;
+  /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
+  taskGroup: TaskGroupApiSurface;
   /**
    * P2P 子系统 IPC（C 子系统 C8）——节点发现 + 信任管理。
    *
