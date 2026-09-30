@@ -67,6 +67,8 @@ const commandPill: PillSeg = { type: 'pill', kind: 'command', id: 'compact', lab
 const imagePill: PillSeg = {
   type: 'pill', kind: 'image', id: '.momo/assets/ab12cd34.png', label: '截图.png', w: 800, h: 600,
 };
+// 2026-09-30 跨会话引用 Task 10：会话 pill 视觉定稿（与 file 同底色，靠 @ 前缀区分）
+const sessionPill: PillSeg = { type: 'pill', kind: 'session', id: 's-abc', label: '设计讨论' };
 
 function editor(): HTMLElement {
   return screen.getByRole('textbox', { name: '消息输入框' }) as HTMLElement;
@@ -420,6 +422,36 @@ describe('RichComposer image pill 渲染（spec §10）', () => {
     expect(pillNodes()).toHaveLength(0);
     // 删除即补发——上层（MentionInput 能力提示行）无需等下一次键入才感知
     expect(onInputText).toHaveBeenCalledTimes(1);
+  });
+});
+
+// === session pill 视觉默认值锁定（2026-09-30 跨会话引用 Task 10）===
+describe('RichComposer session pill 视觉默认值', () => {
+  it('session pill DOM：data-kind/id/label + @ 前缀 + 视觉默认值（bg-surface-active text-secondary）', () => {
+    const h = mount();
+    h!.setSegments([sessionPill]);
+    const pills = pillNodes();
+    expect(pills).toHaveLength(1);
+    const p = pills[0]!;
+    expect(p.dataset.kind).toBe('session');
+    expect(p.dataset.id).toBe('s-abc');
+    expect(p.dataset.label).toBe('设计讨论');
+    expect(p.getAttribute('contenteditable')).toBe('false');
+    // 显示文本以 @ 前缀（spec §6 跨会话引用，与 agent pill 同形）
+    expect(p.textContent).toBe('@设计讨论');
+    // 视觉默认值：与 file 同底色，靠 @ 前缀区分（Task 10 预览门禁延后由 controller 真实 GUI 截图定稿）
+    expect(p.className).toContain('bg-surface-active');
+    expect(p.className).toContain('text-secondary');
+  });
+
+  it('session pill segments 往返：getSegments 深等于 setSegments 输入', () => {
+    const h = mount();
+    h!.setSegments([{ type: 'text', text: '看 ' }, sessionPill, { type: 'text', text: ' 续' }]);
+    expect(h!.getSegments()).toEqual([
+      { type: 'text', text: '看 ' },
+      sessionPill,
+      { type: 'text', text: ' 续' },
+    ]);
   });
 });
 

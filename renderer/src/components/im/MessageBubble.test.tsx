@@ -508,3 +508,41 @@ describe('MessageBubble context 缩略图（2026-09-26 多模态 Task 10）', ()
     });
   });
 });
+
+describe('MessageBubble 会话引用 chip（2026-09-30 跨会话引用 Task 10）', () => {
+  beforeEach(() => {
+    mockStreams.clear();
+    (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
+    mockApi.file.read.mockReset();
+    useEditorStore.setState({ tabs: [], activeTab: null });
+  });
+
+  it('owner 消息带 sessions → 渲染「引用会话」chip（标题）', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner',
+      body: '参考这个',
+      contextJson: JSON.stringify({
+        skills: [],
+        files: [],
+        sessions: [{ sessionId: 's1', title: '设计讨论' }],
+      }),
+    })} isSelf={true} />);
+    expect(screen.getByTestId('message-context-chips')).toBeInTheDocument();
+    expect(screen.getByText('设计讨论')).toBeInTheDocument();
+    expect(screen.getByText('参考这个')).toBeInTheDocument();
+  });
+
+  it('sessions 畸形（parse 剔除）→ 无 chip 行，正文照常', () => {
+    render(<MessageBubble message={makeMsg('m1', {
+      sender: 'owner',
+      body: '正文还在',
+      contextJson: JSON.stringify({
+        skills: [],
+        files: [],
+        sessions: [{ sessionId: 1 }],
+      }),
+    })} isSelf={true} />);
+    expect(screen.queryByTestId('message-context-chips')).not.toBeInTheDocument();
+    expect(screen.getByText('正文还在')).toBeInTheDocument();
+  });
+});

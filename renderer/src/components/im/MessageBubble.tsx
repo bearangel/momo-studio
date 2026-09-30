@@ -27,8 +27,8 @@
 //   - context_json.images 缩略图行：经 ipc.asset.readDataUrl 读 data URL，
 //     纯展示无点击；读取失败 / img 解码失败 → ImageOff「图片不可用」占位
 import { useEffect, useState } from 'react';
-import { Zap, FileText, ImageOff } from 'lucide-react';
-import type { ImMessage, SkillContextItem, FileContextItem, ImageContextItem } from '../../ipc/types';
+import { Zap, FileText, ImageOff, MessagesSquare } from 'lucide-react';
+import type { ImMessage, SkillContextItem, FileContextItem, ImageContextItem, SessionContextItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useStreamStore } from '../../stores/stream.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -56,6 +56,13 @@ function isRenderableFile(f: FileContextItem): boolean {
 
 function isRenderableImage(i: ImageContextItem): boolean {
   return typeof i?.path === 'string' && i.path.length > 0;
+}
+
+// 2026-09-30 跨会话引用 Task 10：会话引用 chip 渲染守卫。
+// shapeValidSessions 已校验 sessionId/title 均为 string，但本组件独立 filter
+// 一遍——防御未来 message-context.ts 放宽形状而本组件先假设（信任边界守恒）。
+function isRenderableSession(s: SessionContextItem): boolean {
+  return typeof s?.sessionId === 'string' && s.sessionId !== '' && typeof s?.title === 'string';
 }
 
 /**
@@ -163,7 +170,9 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
   const ctxFiles = ctx?.files.filter(isRenderableFile) ?? [];
   // images 已由 parseMessageContext 做过整体形状校验（元素均含 path/w/h），此处只滤 path
   const ctxImages = ctx?.images?.filter(isRenderableImage) ?? [];
-  const hasContextChips = ctxSkills.length > 0 || ctxFiles.length > 0;
+  // 2026-09-30 Task 10：会话引用 chip（指针级；agent 端用 read_session 按需读取完整内容）
+  const ctxSessions = ctx?.sessions?.filter(isRenderableSession) ?? [];
+  const hasContextChips = ctxSkills.length > 0 || ctxFiles.length > 0 || ctxSessions.length > 0;
 
   if (message.eventType === 'io.momo-studio.dispatch') {
     return <DispatchCard message={message} isSelf={isSelf} senderName={senderName} />;
@@ -232,6 +241,15 @@ export function MessageBubble({ message, isSelf, senderName }: Props) {
               <FileText size={11} strokeWidth={1.75} aria-hidden />
               {f.path.split('/').pop()}
             </button>
+          ))}
+          {ctxSessions.map((s) => (
+            <span
+              key={`session-${s.sessionId}`}
+              className="inline-flex items-center gap-1 rounded bg-surface-active px-2 py-0.5 text-xs text-secondary"
+            >
+              <MessagesSquare size={11} strokeWidth={1.75} aria-hidden />
+              {s.title}
+            </span>
           ))}
         </div>
       )}
