@@ -211,6 +211,18 @@ export interface ExpandedImageItem {
   h: number;
 }
 
+/** 主进程展开后的会话引用项——指针级（spec 2026-09-30 §6）；missing=true 为已删 / 跨 workspace 降级 */
+export interface ExpandedSessionItem {
+  sessionId: string;
+  /** @ 选择时快照标题（missing 时保留原值供回溯） */
+  title: string;
+  kind: 'chat' | 'task_execution';
+  memberNames: string[];
+  messageCount: number;
+  lastMessageAt: number | null;
+  missing: boolean;
+}
+
 /** task-config / steer 线协议的上下文载荷（不落库、不回 renderer） */
 export interface ExpandedContext {
   skills: ExpandedSkillItem[];
@@ -219,6 +231,8 @@ export interface ExpandedContext {
   images: ExpandedImageItem[];
   /** 被剔除图片的 path 清单（读取失败 / 超限 / 路径非法 / 未知扩展名）；runtime 注入 `[图片加载失败: path]` 占位（Task 8 消费） */
   droppedImages: string[];
+  /** 会话引用展开项（跨会话引用；旧载荷 / 无引用 → 缺省视为 []，消费方 `?? []`） */
+  sessions?: ExpandedSessionItem[];
 }
 
 /**
