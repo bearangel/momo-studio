@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 跨会话引用（@ 会话 pill + list_sessions / read_session 工具）
+
+设计依据：`docs/specs/2026-09-30-session-reference-design.md`；实施计划：`docs/plans/2026-09-30-session-reference.md`。上游：会话间彼此隔离，引用旧会话结论只能复制粘贴——双通道收敛于 read_session（用户 `@` 明确指定 + agent 自然语言发现消歧），指针轻注入 + 按需读（评审裁定 A/B 方案）。
+
+### 新增
+- **SessionTools 双工具**：`list_sessions`（本 workspace 发现与消歧：标题关键词不区分大小写子串 + 时间/成员/消息数/首条用户消息预览冗余元信息，排除当前会话）+ `read_session`（范围门三连：不存在/跨 workspace/读自己，先于任何内容查询；默认最近 50 条 + beforeTs/afterTs 严格不等式翻页 + 双游标 footer 截断后追加恒存活；B 颗粒度渲染：正文行（body 单一真相源）+ 🔧 工具调用摘要 + 📤 dispatch 段，段聚合复用 exportAggregateEvents；OUTPUT_LIMITS 30KiB 兜底）；严格只读零写路径，runtime 子进程直连 SQLite（TaskTools 同款既有模式）
+- **@ 会话引用（输入框）**：`@` 菜单第三组「引用会话」（agent→文件→会话组序，排除当前激活会话 + 标题过滤，数据源已加载 session store 零新 IPC）；session pill 七类 PillKind（`@标题` 正文锚点 + context.sessions 按 sessionId 去重保序——指针注入无双重曝光，异于 skill 正文透明）；消息气泡会话引用 chip（MessagesSquare 11px 纯展示）
+- **Context 契约链七层**：`MessageContext.sessions?`（SessionContextItem 指针级）→ sanitize 元素级校验（sessionId 非空 + title string，堵 spread 透传陷阱）→ parse 形状校验（畸形剔字段不牵连 skills/files）→ expander 指针展开（deps 注入可测、missing 降级、「永不抛错」契约）→ `ExpandedContext.sessions?` 可选字段（旧 steer/resume 线上载荷兼容，消费方 `?? []`）→ `<session>` 块渲染（元信息 + read_session 使用提示，missing 先判不消费占位字段）
+- **全路径可用**：快速会话 / 协作 leader / 被 dispatch 子 agent（per-run ctx `roomId=executionSessionId`，runtime-entry 单点注入），任务派发时自然语言「请参考 xx 会话」经 list_sessions 消歧后 read_session 直达
+
+### 已知遗留（oracle 终审裁定，择期）
+- read_session 上限 clamp（200）测试仅锁不抛错未锁 clamp 值（30KiB 截断独立兜底，风险极低）；存在性预言机（「不存在」vs「跨 workspace」双文案可探测他 workspace 会话 id 存在性——单用户桌面威胁模型接受，spec 既定取舍）；truncateString 多行截断标记嵌入行内的可读性微损（字节截断使 CJK 预览 ~26 字符，短于 spec 字面 80 字符）
+
 ## [未发布] — 看板泳道语义重构（待办=草稿 / 排队中=已启动队列）+ 看板顶置 + 变更视图收敛
 
 设计依据：`docs/specs/2026-09-30-board-lane-semantics-design.md`；实施计划：`docs/plans/2026-09-30-board-lane-semantics.md`。上游：泳道命名与心智模型错位（「已分配」实为排队池）、「创建即入队」违背草稿-启动两段式、计划时间对已入队任务失效三处断链的收口。
