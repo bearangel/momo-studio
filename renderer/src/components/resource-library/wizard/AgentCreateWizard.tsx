@@ -2,7 +2,11 @@
 //
 // 新建智能体 4 步向导（spec §4.1）：基础信息 → System Prompt → 能力绑定 → 模型与完成。
 // 提交复用 agent.createCustom（现成支持 defaultMcps/defaultSkills）。
-// MembersPanel 的 CreateAgentDialog 保留不动（收敛为后续迭代，spec §11）。
+//
+// v2.x 工具能力重构（Task 7）：能力步工具数据自 renderer 镜像常量切 IPC
+// tools:getCatalog 单一真相源（useToolCatalog，模块级缓存）；preset 三档换语义
+// standard / all / custom（对齐 CreateAgentDialog）；标准/全部档依赖目录数据——
+// 目录未就绪时提交被守卫拦截（提示稍候）。
 //
 // ProviderModelPicker / ThinkingOverrideControl 的 props 形状以
 // CreateAgentDialog.tsx 真实用法为准：picker 传 onModelInfo 回传模型行，
@@ -10,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import { ipc } from '../../../ipc/client';
 import type { ReasoningCapability, ResourceItem, ThinkingConfig } from '../../../ipc/types';
-import { ALL_BUILTIN_TOOLS, SAFE_MINIMUM_TOOLS, TOOL_CATEGORIES } from '../../../lib/tool-catalog';
+import { useToolCatalog } from '../../../lib/useToolCatalog';
 import { ProviderModelPicker } from '../../agent/ProviderModelPicker';
 import { ThinkingOverrideControl } from '../../agent/ThinkingOverrideControl';
 import { Button } from '../../ui/Button';
@@ -18,12 +22,12 @@ import { Input } from '../../ui/Input';
 import { Dialog } from '../../ui/Dialog';
 import { cn } from '../../../lib/cn';
 
-type ToolPreset = 'safe' | 'all' | 'custom';
+type ToolPreset = 'standard' | 'all' | 'custom';
 
 const PRESETS: Array<{ key: ToolPreset; label: string; hint: string }> = [
-  { key: 'safe', label: '安全最小集', hint: '读写 / 搜索 / todo，不含 Shell 与 Git 写操作' },
+  { key: 'standard', label: '标准（推荐）', hint: '公共默认集：只读 + 文件写，不含 Shell 与 Git 写操作' },
   { key: 'all', label: '全部工具', hint: '全部内置工具（含 bash 与 git 写操作）' },
-  { key: 'custom', label: '自选', hint: '手动勾选工具' },
+  { key: 'custom', label: '自定义', hint: '手动勾选工具' },
 ];
 
 const STEPS = ['基础信息', '提示词', '能力', '模型'] as const;
@@ -44,8 +48,9 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
   // 步 2：System Prompt
   const [prompt, setPrompt] = useState('');
   // 步 3：能力绑定
-  const [preset, setPreset] = useState<ToolPreset>('safe');
-  const [customTools, setCustomTools] = useState<string[]>([...SAFE_MINIMUM_TOOLS]);
+  const [preset, setPreset] = useState<ToolPreset>('standard');
+  // 「自定义」档的勾选集；目录就绪后初始化为 Tier 1（安全最小集）
+  const [customTools, setCustomTools] = useState<string[]>([]);
   const [mcps, setMcps] = useState<ResourceItem[]>([]);
   const [skills, setSkills] = useState<ResourceItem[]>([]);
   const [selectedMcps, setSelectedMcps] = useState<string[]>([]);
@@ -55,6 +60,14 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
   const [modelName, setModelName] = useState('');
   const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
   const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
+
+  const { data: catalog, error: catalogError } = useToolCatalog();
+
+  // 目录就绪后把空自选集初始化为 Tier 1（用户已手动改过则不覆盖，同 CreateAgentDialog）
+  useEffect(() => {
+    if (!catalog) return;
+    setCustomTools((cur) => (cur.length === 0 ? [...catalog.safeMinimum] : cur));
+  }, [catalog]);
 
   // 步 3 挂载时拉能力多选数据（已安装 mcp / skill；失败不阻断创建）
   useEffect(() => {
@@ -87,11 +100,16 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
   const handleSubmit = async (): Promise<void> => {
     const err = validateStep();
     if (err) { setError(err); return; }
+    const tools =
+      preset === 'standard' ? (catalog?.safeMinimum ?? []) : preset === 'all' ? (catalog?.allTools ?? []) : customTools;
+    // catalog 未就绪时禁止提交（标准/全部档依赖目录数据，对齐 CreateAgentDialog）
+    if (preset !== 'custom' && !catalog) {
+      setError('工具目录加载中，请稍候再提交');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      const tools =
-        preset === 'safe' ? SAFE_MINIMUM_TOOLS : preset === 'all' ? ALL_BUILTIN_TOOLS : customTools;
       await ipc.agent.createCustom({
         name: name.trim(),
         slug: name.trim().toLowerCase().replace(/\s+/g, '-'),
@@ -189,9 +207,12 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
               ))}
               {preset === 'custom' && (
                 <div className="flex flex-col gap-2 pl-5 pt-1">
-                  {TOOL_CATEGORIES.map((cat) => (
+                  {catalogError && (
+                    <div className="text-xs text-status-error">工具目录加载失败：{catalogError}</div>
+                  )}
+                  {(catalog?.categories ?? []).map((cat) => (
                     <div key={cat.label}>
-                      {/* cat.emoji 为 tool-catalog 数据字段（豁免，非 UI 硬编码图标） */}
+                      {/* cat.emoji 为 IPC 目录数据字段（豁免，非 UI 硬编码图标） */}
                       <div className="text-xs text-tertiary mb-1">{cat.emoji} {cat.label}</div>
                       <div className="flex flex-wrap gap-2">
                         {cat.tools.map((tool) => (

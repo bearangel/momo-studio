@@ -21,7 +21,7 @@
 // options 异步加载。
 // v2.x 工具能力重构（Task 6）：preset 语义换档（safe→standard），「自定义」档
 // 内嵌 CapabilityTabs（工具/MCP/Skill 三 tab），提交三字段（defaultTools/
-// defaultMcps/defaultSkills）；preset 断言不再 import tool-catalog 常量副本，
+// defaultMcps/defaultSkills）；preset 断言不再 import renderer 镜像常量副本，
 // 一律用 mock 目录（tools.getCatalog）派生集合。目录未就绪守卫用例走
 // vi.resetModules + 动态 import（useToolCatalog 模块级 cache=null 才能真实
 // 触发「加载中」路径，同 CapabilityTabs.test.tsx 的 importFresh 模式）。
