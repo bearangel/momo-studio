@@ -1,12 +1,16 @@
 // renderer/src/components/task-board/useBoardDrop.ts
 //
-// 看板拖拽落点协调 hook(看板重构 Task 13):
-//   - 拖拽生命周期:dragStart(轮询守卫 setDragging)/ dragOver(拖悬指示线)/
+// 看板拖拽落点协调 hook(看板重构 Task 13 → 2026-09-30 排序退役收敛):
+//   - 拖拽生命周期:dragStart(轮询守卫 setDragging)/ dragOver(目标列高亮)/
 //     dragEnd / dragCancel,入参一律原始 id——不依赖 dnd 事件形状,组件层只做
 //     事件适配,jsdom 下可经 renderHook 直驱组装链(Task 12 裁定的延续)
 //   - 落点组装链全真实:buildDropTarget → resolveDrop → task.store.move
 //     (乐观 + 回滚内置);requireConfirm 拦截 → pendingConfirm,确认才 move,
 //     取消零调用(乐观更新尚未发生,卡片天然在原位)
+//   - 列内排序退役:落点无卡级锚点(主进程 MoveTarget 只剩 column/groupId),
+//     dragOver 反馈从插入指示线改为目标列高亮(dropHint = column/groupId)
+//   - 泳道语义重构 §4.4:无目标 draft 拖入排队中 → 拦截进 pendingAssign,
+//     AssignTargetDialog(指派+可选计划时间)补齐目标后才 move;取消零副作用
 //   - move 失败 → ui/Toast 直出主进程中文原因(message 直出,主进程已保证文案)
 //   - wire 契约:requireConfirm 是 UI 决策字段,经 toMoveTarget 剥离,
 //     绝不泄入主进程 MoveTarget(momo-boundary-rules)
@@ -17,6 +21,7 @@ import type { TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { showToast } from '../ui/Toast';
 import { buildDropTarget, resolveDrop, type DropIndex, type DropResolution } from './BoardCanvas';
+import { hasDelegationTarget } from '../../lib/board';
 
 /** 主进程 wire 契约类型(task.move 的 target;不含 requireConfirm) */
 type TaskMoveTarget = Parameters<typeof ipc.task.move>[1];
@@ -27,11 +32,16 @@ export interface PendingDropConfirm {
   resolution: DropResolution;
 }
 
-/** 拖悬插入指示线:beforeTaskId=线画该卡上方 / afterTaskId=线画该卡下方 / tailOf=空列尾线 */
+/** 待指派入队(§4.4):无目标 draft 拖入排队中的拦截产物——弹框补齐目标后 move */
+export interface PendingAssign {
+  taskId: string;
+  groupId: string | null;
+}
+
+/** 拖悬目标列（排序退役后替代插入指示线的落点反馈） */
 export interface DropHint {
-  beforeTaskId?: string;
-  afterTaskId?: string;
-  tailOf: string | null;
+  column: BoardColumnKey;
+  groupId: string | null;
 }
 
 /** 确认弹窗文案(spec 裁定语义如实描述:done 不停 agent,closed 终止) */
@@ -60,10 +70,7 @@ export function dropConfirmContent(column: BoardColumnKey): {
 
 /** 落点决议 → wire target(requireConfirm 剥离,显式构造防字段漂移) */
 function toMoveTarget(resolution: DropResolution): TaskMoveTarget {
-  const target: TaskMoveTarget = { column: resolution.column, groupId: resolution.groupId };
-  if (resolution.beforeTaskId !== undefined) target.beforeTaskId = resolution.beforeTaskId;
-  if (resolution.afterTaskId !== undefined) target.afterTaskId = resolution.afterTaskId;
-  return target;
+  return { column: resolution.column, groupId: resolution.groupId };
 }
 
 export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes'; dropIndex: DropIndex }): {
@@ -75,6 +82,10 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
   pendingConfirm: PendingDropConfirm | null;
   confirmMove: () => void;
   cancelConfirm: () => void;
+  /** §4.4:待指派入队(无目标 draft 拖入排队中);弹框确定后调 performMove */
+  pendingAssign: PendingAssign | null;
+  /** 弹框取消:清拦截态零副作用(卡片归位) */
+  cancelAssign: () => void;
   dropHint: DropHint | null;
 } {
   const { tasks, laneMode, dropIndex } = opts;
@@ -82,6 +93,7 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
   const setDragging = useTaskStore((s) => s.setDragging);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingDropConfirm | null>(null);
+  const [pendingAssign, setPendingAssign] = useState<PendingAssign | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
 
   const performMove = useCallback(
@@ -110,14 +122,14 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
     setDropHint(null);
   }, [setDragging]);
 
-  /** 组装链共享段:overId → 落点决议;非法/禁投/自身 → null */
+  /** 组装链共享段:overId → 落点决议;非法/禁投/自身/同列同组 → null */
   const resolveOver = useCallback(
     (taskId: string, overId: string): DropResolution | null => {
       const activeRow = tasks.find((t) => t.id === taskId);
       if (!activeRow) return null;
-      const built = buildDropTarget(overId, activeRow, dropIndex, laneMode);
-      if (!built) return null;
-      return resolveDrop(taskId, built.over, { tasks, laneTaskIds: built.laneTaskIds });
+      const over = buildDropTarget(overId, activeRow, dropIndex, laneMode);
+      if (!over) return null;
+      return resolveDrop(taskId, over, { tasks });
     },
     [tasks, dropIndex, laneMode],
   );
@@ -130,23 +142,14 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
       }
       const resolution = resolveOver(taskId, overId);
       if (resolution === null) {
-        // 禁投列/自身原位:不画线(禁投视觉由列级 opacity 表达)
+        // 禁投列/自身原位/同列同组 no-op:不高亮(禁投视觉由列级 opacity 表达)
         setDropHint(null);
         return;
       }
-      const next: DropHint = {
-        beforeTaskId: resolution.beforeTaskId,
-        afterTaskId: resolution.afterTaskId,
-        tailOf:
-          resolution.beforeTaskId === undefined && resolution.afterTaskId === undefined
-            ? overId // 无锚 ⇒ 空列容器,overId 即列 droppableId
-            : null,
-      };
-      // 引用稳定比较:onDragOver 高频触发,同槽位不重建对象防无谓重渲染
+      // 引用稳定比较:onDragOver 高频触发,同目标列不重建对象防无谓重渲染
+      const next: DropHint = { column: resolution.column, groupId: resolution.groupId };
       setDropHint((prev) =>
-        prev !== null && prev.beforeTaskId === next.beforeTaskId && prev.afterTaskId === next.afterTaskId && prev.tailOf === next.tailOf
-          ? prev
-          : next,
+        prev !== null && prev.column === next.column && prev.groupId === next.groupId ? prev : next,
       );
     },
     [resolveOver],
@@ -163,9 +166,21 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
         setPendingConfirm({ taskId, resolution });
         return;
       }
+      // §4.4:无目标 draft 拖入排队中 → 指派弹框接管(不发 move,取消零副作用);
+      // 有目标直接 move 入队。谓词单源 lib/board.hasDelegationTarget
+      const activeRow = tasks.find((t) => t.id === taskId);
+      if (
+        resolution.column === 'assigned' &&
+        activeRow !== undefined &&
+        activeRow.status === 'draft' &&
+        !hasDelegationTarget(activeRow)
+      ) {
+        setPendingAssign({ taskId, groupId: resolution.groupId });
+        return;
+      }
       void performMove(taskId, resolution);
     },
-    [clearDrag, resolveOver, performMove],
+    [clearDrag, resolveOver, performMove, tasks],
   );
 
   const dragCancel = useCallback((): void => {
@@ -182,6 +197,10 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
     setPendingConfirm(null);
   }, []);
 
+  const cancelAssign = useCallback((): void => {
+    setPendingAssign(null);
+  }, []);
+
   return {
     activeDragId,
     dragStart,
@@ -191,6 +210,8 @@ export function useBoardDrop(opts: { tasks: TaskRow[]; laneMode: 'flat' | 'lanes
     pendingConfirm,
     confirmMove,
     cancelConfirm,
+    pendingAssign,
+    cancelAssign,
     dropHint,
   };
 }

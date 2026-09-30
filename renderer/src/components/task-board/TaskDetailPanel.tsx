@@ -32,7 +32,7 @@ import { useStreamStore } from '../../stores/stream.store';
 import { useTaskStore } from '../../stores/task.store';
 import type { TaskRow } from '../../ipc/types';
 import { PENDING_WRAP_UP_STYLE, taskStatusStyle } from '../../lib/task-status';
-import { isEditableStatus } from '../../lib/board';
+import { hasDelegationTarget, isEditableStatus } from '../../lib/board';
 import { buildTurnReconcileNotice, collectOpenTodoItems } from '../../lib/turn-reconcile';
 import { humanizeRecurrence } from '../../lib/recurrence';
 import { locateMessage, locateTaskExecution } from '../../lib/locate-message';
@@ -115,8 +115,8 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps) {
   // 编辑资格与 BoardCard 菜单同源（isEditableStatus 单源）：
   // 进入执行管线（assigned/session_queued/in_progress/paused）即锁定编辑
   const canEdit = isEditableStatus(task.status);
-  const hasTarget =
-    task.assigneeAgentId != null || task.targetTeamId != null || task.targetSessionId != null;
+  // 谓词单源 lib/board.hasDelegationTarget（与 AssignTargetDialog/拖拽拦截同源）
+  const hasTarget = hasDelegationTarget(task);
   const terminal = TERMINAL_STATUSES.has(task.status);
   // 启动资格（2026-09-30 §4.2 收敛）：draft 且有委派目标——「启动」= move 入队
   // （executeMove 单点：目标校验/转 assigned/notify/保组原子）。pending 已随

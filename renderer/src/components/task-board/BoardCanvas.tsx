@@ -40,12 +40,13 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
 import { BOARD_COLUMNS, canDropIntoColumn, columnOf, type BoardColumnKey } from '../../ipc/board-columns';
-import { groupChipColor, splitLanes, sortColumn, type BoardLane } from '../../lib/board';
+import { groupChipColor, splitLanes, type BoardLane } from '../../lib/board';
 import type { GroupRow, TaskRow } from '../../ipc/types';
 import { useTaskStore } from '../../stores/task.store';
 import { BoardCard, type BoardGroupChip } from './BoardCard';
 import { Lane } from './Lane';
 import { useBoardDrop, dropConfirmContent } from './useBoardDrop';
+import { AssignTargetDialog } from './AssignTargetDialog';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { Toast } from '../ui/Toast';
 
@@ -54,36 +55,25 @@ const DRAG_ACTIVATION_DISTANCE_PX = 5;
 
 // ── 落点裁决纯函数 ────────────────────────────────────────────────────────────
 
-/** dnd over 目标：落卡片（带 taskId）或列容器（空列/列尾落点） */
+/**
+ * dnd over 目标：落卡片（带 taskId）或列容器（空列/列尾落点）
+ */
 export type DropOverTarget =
   | { type: 'card'; taskId: string; column: BoardColumnKey; groupId: string | null }
   | { type: 'column'; column: BoardColumnKey; groupId: string | null };
 
 /**
  * over.groupId 语义：目标组。泳道模式=落点泳道的组（未分组道 null，跨泳道拖=换组）；
- * 平铺模式由调用方传 active 任务现组——单道无组语义，纯排序不换组。
+ * 平铺模式由调用方传 active 任务现组——单道无组语义，同列即 no-op。
  */
 export interface DropCtx {
   tasks: TaskRow[];
-  /** 泳道模式：落点泳道的任务 id 集（可见序裁剪范围）；平铺模式省略=整列可见序 */
-  laneTaskIds?: Set<string>;
 }
 
 /** 落点决议:requireConfirm 之外的字段与 ipc.task.move 的 target 契约对齐 */
 export interface DropResolution {
   column: BoardColumnKey;
   groupId: string | null;
-  /**
-   * 落点下方位可见邻居(值大锚——移动卡落在其上方)。
-   * 主进程锁定的 wire 语义(move.test「锚点缺失」用例):单 beforeTaskId 锚
-   * → placeBetween(null, next) = next-GAP,即落该卡之上。
-   */
-  beforeTaskId?: string;
-  /**
-   * 落点上方位可见邻居(值小锚——移动卡落在其下方)。
-   * 单 afterTaskId 锚 → placeBetween(prev, null) = prev+GAP,即落该卡之下。
-   */
-  afterTaskId?: string;
   /**
    * in_progress → done/closed 松手需二次确认(Task 13:agent 可能仍在运行)。
    * UI 决策字段——useBoardDrop.toMoveTarget 剥离后才发 wire,
@@ -93,13 +83,10 @@ export interface DropResolution {
 }
 
 /**
- * 拖拽落点裁决（纯函数）：
+ * 拖拽落点裁决（纯函数，2026-09-30 排序退役后简化）：
  *   - active 不在 ctx.tasks / 目标列禁投（canDropIntoColumn 单源）/ over 卡=自身 → null
- *   - over 卡片：同列可见序中算落槽上下邻——同序下移落 over 卡之下、上移与跨源
- *     （跨列/跨泳道）默认插 over 卡之上；wire 字段方向按主进程契约：
- *     beforeTaskId=下方值大锚、afterTaskId=上方值小锚（见 DropResolution 字段注）
- *   - over 列容器：列尾（afterTaskId=泳道内末卡，空列无锚点）
- *   - over 卡片不在目标可见序（泳道外/数据不一致）→ null
+ *   - 同列同组 → null（列内顺序由 pinned/创建时间决定，拖拽无排序语义）
+ *   - 其余（跨列状态流转 / 同列跨泳道换组）→ { column, groupId }（无卡级锚点）
  */
 export function resolveDrop(activeId: string, over: DropOverTarget, ctx: DropCtx): DropResolution | null {
   const activeTask = ctx.tasks.find((t) => t.id === activeId);
@@ -107,40 +94,21 @@ export function resolveDrop(activeId: string, over: DropOverTarget, ctx: DropCtx
   if (!canDropIntoColumn(activeTask.status, over.column)) return null;
   if (over.type === 'card' && over.taskId === activeId) return null;
 
-  const inLaneScope = (t: TaskRow): boolean => ctx.laneTaskIds === undefined || ctx.laneTaskIds.has(t.id);
-  const fullSeq = sortColumn(ctx.tasks.filter((t) => columnOf(t.status) === over.column && inLaneScope(t)));
-  const activeIdx = fullSeq.findIndex((t) => t.id === activeId);
-  const seq = fullSeq.filter((t) => t.id !== activeId);
+  if (columnOf(activeTask.status) === over.column && activeTask.groupId === over.groupId) {
+    return null;
+  }
+
   // 确认拦截(Task 13):运行中任务移终态列(done/closed)松手先弹确认——
   // done 不停 agent、closed 终止,语义需用户二次拍板(spec §4 裁定)
   const requireConfirm =
     activeTask.status === 'in_progress' && (over.column === 'done' || over.column === 'closed');
-
-  if (over.type === 'column') {
-    const last = seq[seq.length - 1];
-    if (!last) return { column: over.column, groupId: over.groupId, requireConfirm };
-    return { column: over.column, groupId: over.groupId, afterTaskId: last.id, requireConfirm };
-  }
-
-  const overFullIdx = fullSeq.findIndex((t) => t.id === over.taskId);
-  const overIdx = seq.findIndex((t) => t.id === over.taskId);
-  if (overFullIdx < 0 || overIdx < 0) return null;
-  const dropBelow = activeIdx >= 0 && activeIdx < overFullIdx;
-  // 落槽上下邻(以除 active 的可见序计)：下移 → 槽在落卡之下（上=落卡，下=落卡下一位）；
-  // 上移/跨源 → 槽在落卡之上（上=落卡上一位，下=落卡）
-  const above = dropBelow ? seq[overIdx] : seq[overIdx - 1];
-  const below = dropBelow ? seq[overIdx + 1] : seq[overIdx];
-  const resolution: DropResolution = { column: over.column, groupId: over.groupId, requireConfirm };
-  if (below) resolution.beforeTaskId = below.id;
-  if (above) resolution.afterTaskId = above.id;
-  return resolution;
+  return { column: over.column, groupId: over.groupId, requireConfirm };
 }
 
 // ── dnd over.id 解析纯函数 ────────────────────────────────────────────────────
 
 interface DropLaneContext {
   groupId: string | null;
-  laneIds: Set<string>;
 }
 
 interface DropColumnContext extends DropLaneContext {
@@ -163,26 +131,17 @@ export function buildDropIndex(lanes: BoardLane[], laneMode: 'flat' | 'lanes'): 
   for (const lane of lanes) {
     const laneKey = laneMode === 'flat' ? 'flat' : (lane.group?.id ?? 'ungrouped');
     const groupId = lane.group?.id ?? null;
-    const laneIds = new Set(lane.tasks.map((t) => t.id));
     for (const col of BOARD_COLUMNS) {
-      columns.set(`col:${laneKey}:${col.key}`, { column: col.key, groupId, laneIds });
+      columns.set(`col:${laneKey}:${col.key}`, { column: col.key, groupId });
     }
-    for (const task of lane.tasks) taskLane.set(task.id, { groupId, laneIds, task });
+    for (const task of lane.tasks) taskLane.set(task.id, { groupId, task });
   }
   return { columns, taskLane };
 }
 
-/** 组装完成的落点目标：over 语义 + 可见序裁剪集 */
-export interface BuiltDropTarget {
-  over: DropOverTarget;
-  /** 泳道模式=落点泳道成员集；平铺模式省略（整列可见序） */
-  laneTaskIds?: Set<string>;
-}
-
-/**
- * dnd over.id → DropOverTarget 组装（纯函数）：
+/** dnd over.id → DropOverTarget 组装（纯函数）：
  *   - `col:` 前缀 → 列容器目标；其余视为任务 id → 卡片目标（columnOf(status) 定列）
- *   - 平铺模式：groupId 一律取 active 现组（纯排序不换组）、laneTaskIds 省略
+ *   - 平铺模式：groupId 一律取 active 现组（单道无换组语义，同列即 no-op）
  *   - 未注册 id（列容器不存在 / 任务不在板上）→ null
  */
 export function buildDropTarget(
@@ -190,21 +149,17 @@ export function buildDropTarget(
   activeTask: TaskRow,
   index: DropIndex,
   laneMode: 'flat' | 'lanes',
-): BuiltDropTarget | null {
+): DropOverTarget | null {
   if (overId.startsWith('col:')) {
     const entry = index.columns.get(overId);
     if (!entry) return null;
     const groupId = laneMode === 'flat' ? activeTask.groupId : entry.groupId;
-    const base: BuiltDropTarget = { over: { type: 'column', column: entry.column, groupId } };
-    return laneMode === 'lanes' ? { ...base, laneTaskIds: entry.laneIds } : base;
+    return { type: 'column', column: entry.column, groupId };
   }
   const entry = index.taskLane.get(overId);
   if (!entry) return null;
   const groupId = laneMode === 'flat' ? activeTask.groupId : entry.groupId;
-  const base: BuiltDropTarget = {
-    over: { type: 'card', taskId: overId, column: columnOf(entry.task.status), groupId },
-  };
-  return laneMode === 'lanes' ? { ...base, laneTaskIds: entry.laneIds } : base;
+  return { type: 'card', taskId: overId, column: columnOf(entry.task.status), groupId };
 }
 
 // ── 可排序卡片包装（原位虚线洞）──────────────────────────────────────────────
@@ -246,6 +201,8 @@ interface BoardCanvasProps {
   laneMode: 'flat' | 'lanes';
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** 指派弹框（§4.4 无目标 draft 拖入排队中）拉目标列表用 */
+  workspaceId: string;
 }
 
 /** 多容器碰撞策略（@dnd-kit 官方多列配方）：指针命中优先，无命中回退矩形相交 */
@@ -255,7 +212,7 @@ const collisionDetectionStrategy: CollisionDetection = (args) => {
   return rectIntersection(args);
 };
 
-export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: BoardCanvasProps) {
+export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect, workspaceId }: BoardCanvasProps) {
   const setDragging = useTaskStore((s) => s.setDragging);
   // 拖拽刚结束标志：pointerup 后浏览器仍会派发 click 到源卡（pointer capture），
   // capture 阶段拦截防止「拖完一张卡误开详情抽屉」
@@ -375,6 +332,16 @@ export function BoardCanvas({ tasks, groups, laneMode, selectedId, onSelect }: B
           {...dropConfirmContent(drop.pendingConfirm.resolution.column)}
           onConfirm={drop.confirmMove}
           onClose={drop.cancelConfirm}
+        />
+      )}
+      {/* §4.4 无目标 draft 拖入排队中 → 指派弹框(取消零副作用归位) */}
+      {drop.pendingAssign !== null && (
+        <AssignTargetDialog
+          open
+          taskId={drop.pendingAssign.taskId}
+          groupId={drop.pendingAssign.groupId}
+          workspaceId={workspaceId}
+          onCancel={drop.cancelAssign}
         />
       )}
       {/* move 失败 toast:文案由主进程中文消息直出 */}

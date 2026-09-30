@@ -14,17 +14,41 @@ export function isTerminalStatus(status: TaskStatus): boolean {
 }
 
 /**
- * boardPosition 升序排序，NULL 垫底（spec §3 NULLS-LAST）。
- * NULL 之间按 createdAt 升序兜底；返回新数组，不修改输入。
+ * 编辑资格（2026-09-30 用户反馈收敛）：仅 draft / pending 可编辑——任务一旦
+ * 进入执行管线（assigned / session_queued / in_progress / paused）即锁定，
+ * 防「已分配/进行中还能改字段」与 agent 已收到的任务简报漂移。
+ * BoardCard 菜单与 TaskDetailPanel 编辑入口共用本谓词（判定单源）。
+ */
+export function isEditableStatus(status: TaskStatus): boolean {
+  return status === 'draft' || status === 'pending';
+}
+
+/**
+ * 委派目标三列任一非空——与 electron starter.hasDelegationTarget 同义
+ * （spec §4.4 renderer 单源）。TaskDetailPanel / AssignTargetDialog /
+ * useBoardDrop 拖拽拦截共用，禁再内联三列判断（防同义判定漂移）。
+ */
+export function hasDelegationTarget(t: {
+  assigneeAgentId?: string | null;
+  targetTeamId?: string | null;
+  targetSessionId?: string | null;
+}): boolean {
+  return t.assigneeAgentId != null || t.targetTeamId != null || t.targetSessionId != null;
+}
+
+/**
+ * 列内排序（2026-09-30 排序模型收敛，迁移 050）：
+ *   1. 顶置组在前——pinnedAt 倒序（最近 pin 的最顶）
+ *   2. 未顶置组在后——createdAt 倒序（后创建的排前面，新建任务天然可见）
+ * 排序规则单点：boardPosition 退役后无跨端排序双实现（electron move 不再算落点）。
+ * 返回新数组，不修改输入。
  */
 export function sortColumn(tasks: TaskRow[]): TaskRow[] {
   return [...tasks].sort((a, b) => {
-    const pa = a.boardPosition;
-    const pb = b.boardPosition;
-    if (pa !== null && pb !== null) return pa - pb;
-    if (pa !== null) return -1; // 有值在前
-    if (pb !== null) return 1; // NULL 垫底
-    return a.createdAt - b.createdAt; // 双 NULL：createdAt 升序
+    if (a.pinnedAt !== null && b.pinnedAt !== null) return b.pinnedAt - a.pinnedAt;
+    if (a.pinnedAt !== null) return -1; // 顶置在前
+    if (b.pinnedAt !== null) return 1;
+    return b.createdAt - a.createdAt; // 未顶置：createdAt 倒序
   });
 }
 
