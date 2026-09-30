@@ -682,22 +682,24 @@ describe('TaskScheduler 边界回归锁（v2.6.0 spec §5.4 + D6）', () => {
     expect(getTask('T-AS')!.status).toBe('assigned');
   });
 
-  it('checkOnce 仅升级 pending → assigned（scheduler 既有职责）', async () => {
+  it('checkOnce due-wakeup：到点 assigned 只唤醒不转态（2026-09-30 §4.3 语义）', async () => {
     insertAgentDef('def1', 'X');
-    // pending 任务带 scheduled_at 已到点 + 有委派目标 → 升级
+    // 排队中任务带 scheduled_at 已到点 → 唤醒 executor（scanPickup），零转态；
+    // 原「pending→assigned 升级」随 pending 退役（迁移 051），转态归 executor 放行链
     getDb()
       .prepare(
         `INSERT INTO tasks (
            id, workspace_id, title, description, status, creator_user_id,
            assignee_agent_id, scheduled_at, tool_calls_used,
            created_at, updated_at
-         ) VALUES (?, 'ws1', '待升级', '', 'pending', 'owner', 'inst1', ?, 0, ?, ?)`,
+         ) VALUES (?, 'ws1', '到点排队中', '', 'assigned', 'owner', 'inst1', ?, 0, ?, ?)`,
       )
-      .run('T-PD', Date.now() - 1000, Date.now(), Date.now());
+      .run('T-DUE', Date.now() - 1000, Date.now(), Date.now());
     const { TaskScheduler } = await import('../../src/main/task/scheduler');
-    const sched = new TaskScheduler({ scanPickup: vi.fn().mockResolvedValue(true) });
-    sched.checkOnce();
-    expect(getTask('T-PD')!.status).toBe('assigned');
+    const scanPickup = vi.fn().mockResolvedValue(true);
+    new TaskScheduler({ scanPickup }).checkOnce();
+    expect(scanPickup).toHaveBeenCalledTimes(1);
+    expect(getTask('T-DUE')!.status).toBe('assigned'); // 零转态
   });
 });
 

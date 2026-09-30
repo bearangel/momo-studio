@@ -1,29 +1,22 @@
 // electron/src/main/task/scheduler.ts
 //
-// TaskScheduler —— 定时任务调度器（D 子系统 D6）。
+// TaskScheduler —— 到点唤醒加速器（D 子系统 D6 → 2026-09-30 泳道语义重构 §4.3）。
 //
 // 职责：
-//   - 每 intervalMs 扫描 tasks 表中 status='pending' 且 scheduled_at <= now 的记录
-//   - 把它们转到 'assigned'（pending → assigned 是合法转换，state-machine 已保证）
-//   - 对每条升级的任务调用 scanPickup（有 assignee 传 assignee id；team/session
-//     目标传空串）——注意：dispatcher pickup 链路已按 spec §9 砍除（留 2.1），
-//     runtime-init 注入的 scanPickup 只调 notifyExecutor 不看参数；任务终端状态
-//     由 AgentRunner 的 task-end 处理（agent-runner.ts）转换，不再由 dispatcher 接力
+//   - 每 intervalMs 扫描排队中（assigned/session_queued）且 scheduled_at <= now
+//     的任务；命中任意行 → 触发一次 scanPickup（runtime-init 注入的是
+//     notifyExecutor 包装），加速到点放行
+//   - 纯加速器：零转态、零广播——转态由 executor 放行链完成；executor 自身
+//     30s 兜底扫描天然覆盖本扫描缺失（丢了通知自愈）
 //
 // 设计要点：
 //   - checkOnce 是 public 方法，外部可以手动触发（测试 / 调试 / IPC "重试队列"）
 //   - start/stop 维护一个 setInterval 句柄；幂等（重复 start 不叠加定时器）
-//   - scanPickup 是 fire-and-forget（void 包装），不阻塞定时器 tick
-//   - 复杂定时（cron / recurrence_rule）在 v1 简化：仅支持一次性 scheduled_at；
-//     v2 加 cron 解析 + 自动续期
-//   - scheduler 不直接做并发检查——这是 dispatcher 的职责，分层清晰
-//     （scheduler = 触发器；dispatcher = 决策器；runner = 执行器）
-//   - P4 Task 2：checkOnce 内有状态升级时 fire-and-forget 广播任务快照
-//     （整批合并为一次广播——快照本身是全量扫描）。import 叶子模块
-//     task-broadcast 而非 p2p 门面，避免引入 electron / 传输层依赖。
+//   - scanPickup 是 fire-and-forget（void 包装），不阻塞定时器 tick；
+//     传参空串占位（runtime-init 注入的 scanPickup 只调 notifyExecutor 不看参数）
+//   - 原「pending→assigned 升级 + 快照广播」路径随 pending 退役（迁移 051）：
+//     定时任务现以 assigned + scheduled_at 落库，由 executor 闸门（§3.2）等到点
 import { getDb } from '../storage/db';
-import { transitionTaskStatus } from '../storage/tasks/repo';
-import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 
 export interface SchedulerOpts {
   /** 触发一次 dispatcher pickup（外部注入，便于测试和模块解耦） */
@@ -65,42 +58,23 @@ export class TaskScheduler {
   }
 
   /**
-   * 立即执行一次扫描。
+   * 立即执行一次扫描（2026-09-30 泳道语义重构，spec §4.3）。
    *
-   * 扫描条件：status='pending' AND scheduled_at <= now AND 有委派目标
-   * （assignee_agent_id / target_team_id / target_session_id 任一非空——C1：
-   * 旧实现只认 assignee，team/session 目标的定时任务永不到 assigned）。
-   * 对每条命中的记录：transitionTaskStatus(id, 'assigned')（状态机校验 + bump
-   * updated_at）；fire-and-forget 触发 scanPickup。
-   *
-   * 注意：scanPickup 不 await——它是后台异步工作；本函数只负责"升级状态 + 通知"，
-   * 并发检查 / 实际执行交给 executor 处理。Promise rejection 也不会影响本次扫描的
-   * 其他任务（每个 scanPickup 独立触发）。team/session 目标无 assignee——传空串
-   * 占位（runtime-init 注入的 scanPickup 只调 notifyExecutor 不看参数）。
+   * due-wakeup：排队中（assigned/session_queued）存在 scheduled_at <= now
+   * 的任务时触发一次 scanPickup（executor notify），加速到点放行。
+   * 纯加速器：零转态、零广播（转态由 executor 放行链完成；executor 自身
+   * 30s 兜底扫描天然覆盖本扫描缺失）。原「pending→assigned 升级 + 快照
+   * 广播」随 pending 退役（迁移 051）。
    */
   checkOnce(): void {
     const now = this.opts.now?.() ?? Date.now();
-    const db = getDb();
-    // 找 pending + scheduled_at <= now + 有任一委派目标的任务
-    const tasks = db
+    const due = getDb()
       .prepare(
-        `SELECT id, assignee_agent_id FROM tasks
-         WHERE status = 'pending' AND scheduled_at <= ?
-           AND (assignee_agent_id IS NOT NULL OR target_team_id IS NOT NULL OR target_session_id IS NOT NULL)`,
+        `SELECT 1 FROM tasks
+         WHERE status IN ('assigned', 'session_queued') AND scheduled_at <= ?
+         LIMIT 1`,
       )
-      .all(now) as Array<{ id: string; assignee_agent_id: string | null }>;
-
-    for (const t of tasks) {
-      // minor-5：走 repo 的状态机转换（断言 pending → assigned 合法 + 自动 bump
-      // updated_at），不再裸 SQL UPDATE 绕过状态机——行在 SELECT 与 UPDATE 之间
-      // 被并发改态时裸写会产出非法迁移，transitionTaskStatus 会显式抛错暴露竞态
-      transitionTaskStatus(t.id, 'assigned');
-      void this.opts.scanPickup(t.assignee_agent_id ?? '');
-    }
-
-    // 本 tick 有状态升级 → 广播一次任务快照（全量扫描天然覆盖整批，无升级不广播）
-    if (tasks.length > 0) {
-      void broadcastLocalTaskSnapshot();
-    }
+      .get(now);
+    if (due) void this.opts.scanPickup('');
   }
 }

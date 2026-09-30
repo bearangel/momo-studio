@@ -1,10 +1,11 @@
 // electron/tests/task/scheduled-pipeline.test.ts
 //
-// C1 定时执行管线接缝测试（spec §4.4）：create 入口落 pending → scheduler
-// 到点升级 assigned（认 assignee / team / session 三类目标）→ executor 放行
-// in_progress + kickoff 注入。全链真实函数（insertTask / checkOnce /
-// startTask / 状态机），仅 kickoff 走注入 fake（momo-test-rules：mock 收窄
-// 到进程边界——kickoff 在生产里经 runtime-init 注入 sendUserMessage）。
+// 定时执行管线接缝测试（C1 → 2026-09-30 泳道语义重构 §4.3）：定时任务以
+// assigned + scheduled_at 落库（pending 中转退役，迁移 051）→ scheduler
+// due-wakeup 只唤醒不转态 → executor 闸门到点放行 in_progress + kickoff 注入。
+// 全链真实函数（insertTask / checkOnce / admitOnce / startTask / 状态机），
+// 仅 kickoff 走注入 fake（momo-test-rules：mock 收窄到进程边界——kickoff 在
+// 生产里经 runtime-init 注入 sendUserMessage）。
 //
 // seed 参考 starter-team.test.ts：workspace + agent 定义/成员 + team。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -68,14 +69,14 @@ function mkExecutor(): { ex: TaskExecutor; kickoff: ReturnType<typeof vi.fn> } {
   return { ex, kickoff };
 }
 
-describe('定时执行管线（create pending → scheduler 升级 → executor 放行）', () => {
-  it('团队目标任务：到点 pending → checkOnce 升 assigned → admitOnce 放行 in_progress + kickoff 一次', async () => {
+describe('定时执行管线（assigned + scheduled_at → scheduler 唤醒 → executor 闸门放行）', () => {
+  it('团队目标任务：到点 assigned → checkOnce 唤醒（零转态）→ admitOnce 放行 in_progress + kickoff 一次', async () => {
     insertTask({
       workspaceId: 'ws1',
       title: '定时团队任务',
       creatorUserId: 'owner',
       targetTeamId: 'team1',
-      status: 'pending', // create 入口语义：带 scheduledAt 落 pending（spec §4.4）
+      status: 'assigned', // 新落态语义：定时任务直接入队（agent 路径建即入队）
       scheduledAt: Date.now() - 1000, // 已到点
     });
 
@@ -83,7 +84,7 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     const sched = new TaskScheduler({ scanPickup });
     sched.checkOnce();
 
-    // 接缝 1：scheduler 认 team 目标（旧实现 WHERE 只认 assignee_agent_id）
+    // 接缝 1：due-wakeup 只唤醒不转态（转态归 executor 放行链）
     expect(getTask('T-001')!.status).toBe('assigned');
     // team/session 目标无 assignee——scanPickup 收空串（runtime-init 注入的
     // 实现只调 notifyExecutor 不看参数，fire-and-forget 语义）
@@ -101,14 +102,14 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     expect(kickoff.mock.calls[0]![0]!.body).toContain('【任务启动】#T-001');
   });
 
-  it('会话目标任务：到点 pending → checkOnce 升 assigned → admitOnce 就地放行（不新建会话）', async () => {
+  it('会话目标任务：到点 assigned → checkOnce 唤醒 → admitOnce 就地放行（不新建会话）', async () => {
     const sess = insertSession({ workspaceId: 'ws1', title: '目标会话' });
     insertTask({
       workspaceId: 'ws1',
       title: '定时会话任务',
       creatorUserId: 'owner',
       targetSessionId: sess.id,
-      status: 'pending',
+      status: 'assigned',
       scheduledAt: Date.now() - 1000,
     });
 
@@ -128,14 +129,14 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     expect(kickoff.mock.calls[0]![0]!.sessionId).toBe(sess.id);
   });
 
-  it('未到点 / draft 任务：checkOnce 不升级，executor 不放行', async () => {
+  it('未到点 assigned / draft：checkOnce 不唤醒，executor 闸门不放行', async () => {
     insertTask({
       workspaceId: 'ws1',
       title: '未到点团队任务',
       creatorUserId: 'owner',
       targetTeamId: 'team1',
-      status: 'pending',
-      scheduledAt: Date.now() + 60_000, // 未到点
+      status: 'assigned',
+      scheduledAt: Date.now() + 60_000, // 未到点 → 闸门拦截
     });
     insertTask({
       workspaceId: 'ws1',
@@ -143,7 +144,7 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
       creatorUserId: 'owner',
       targetTeamId: 'team1',
       status: 'draft',
-      scheduledAt: Date.now() - 1000, // 到点但非 pending
+      scheduledAt: Date.now() - 1000, // 到点但未启动——草稿永不入队
     });
 
     const scanPickup = vi.fn().mockResolvedValue(true);
@@ -153,7 +154,7 @@ describe('定时执行管线（create pending → scheduler 升级 → executor 
     const { ex, kickoff } = mkExecutor();
     await ex.admitOnce();
     expect(kickoff).not.toHaveBeenCalled();
-    expect(getTask('T-001')!.status).toBe('pending');
+    expect(getTask('T-001')!.status).toBe('assigned');
     expect(getTask('T-002')!.status).toBe('draft');
   });
 });
