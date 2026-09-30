@@ -43,6 +43,7 @@ import { getDb } from '../../storage/db';
 import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
 import { hasDelegationTarget } from '../../task/starter';
+import { resolveCreateStatus } from '../../task/create-status';
 import { listMembers, listAgentDefinitions } from '../crud';
 import { listTeams } from '../team';
 import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
@@ -188,15 +189,19 @@ export async function createTask(input: CreateTaskInput): Promise<TaskRow> {
       throw new Error(`任务分组 ${input.groupId} 已归档，不可作为 create_task 目标`);
     }
   }
-  // 委派信息闭环 ④：与 IPC task:create 的 K1 落态决策对齐（决策表注释见
-  // task/ipc.handlers.ts）——scheduler 只消费 pending、executor 只消费
-  // assigned；agent 建的带目标任务此前落 draft 两个调度器都不认（死局换形态）。
+  // 委派信息闭环 ④→2026-09-30 泳道语义重构（spec §4.1）：agent 建的带目标
+  // 任务「建即入队」assigned（用户在会话中已授权）；scheduledAt 为未来时间时
+  // 由 executor 闸门等到点，pending 不再产出（迁移 051 退役）。决策单源
+  // create-status.ts（表单路径=一律 draft，见 task/ipc.handlers.ts）。
   // 谓词统一走 starter.hasDelegationTarget——四处同义判定收敛单点（终审 N1/M6）
   const hasTarget = hasDelegationTarget(input);
   const row = insertTask({
     workspaceId: input.workspaceId,
     title: input.title,
-    status: input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined,
+    status: resolveCreateStatus(
+      { hasDelegationTarget: hasTarget, scheduledAt: input.scheduledAt ?? null },
+      'agent',
+    ),
     description: input.description ?? '',
     creatorUserId: input.creatorUserId,
     priority: input.priority ?? 0,

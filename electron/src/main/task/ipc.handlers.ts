@@ -33,6 +33,7 @@ import {
   listTasks,
   getTask,
   updateTask,
+  setTaskPinned,
   transitionTaskStatus,
   type TaskRow,
   type TaskStatus,
@@ -42,6 +43,7 @@ import { getGroup } from '../storage/task-groups/repo';
 import { broadcastLocalTaskSnapshot } from '../p2p/task-broadcast';
 import { notifyExecutor } from './executor';
 import { hasDelegationTarget, type StartTaskOpts } from './starter';
+import { resolveCreateStatus } from './create-status';
 import { resolveConflict, type ConflictStrategy } from './conflict-resolver';
 import { executeConflictResolution } from './conflict-executor';
 import { startTaskAndKickoff, resumePausedTask, cancelTask, abortTaskExecution } from './lifecycle';
@@ -91,17 +93,13 @@ interface ListOpts {
 
 export function registerTaskHandlers(): void {
   ipcMain.handle('task:create', async (_evt, input: CreateInput): Promise<TaskRow> => {
-    // K1（P0 修复）：状态决策必须保证「已指派的任务会被自动调度」——
-    // scheduler 只消费 pending、executor 只消费 assigned，落 draft 的指派
-    // 任务两个调度器都不认（主机验收 P0）。决策表：
-    //   有委派目标 + 无 scheduledAt → assigned（executor 立即评估放行）
-    //   有委派目标 + 有 scheduledAt → pending（到点 scheduler 升 assigned，C1）
-    //   无目标 + 有 scheduledAt    → pending（C1 定时管线语义保持；scheduler
-    //                                因无目标不升级，用户可手动启动）
-    //   无目标 + 无 scheduledAt    → draft（repo 单点默认，草稿暂存）
-    const hasTarget = hasDelegationTarget(input);
-    const status =
-      input.scheduledAt != null ? 'pending' : hasTarget ? 'assigned' : undefined;
+    // K1（2026-09-30 泳道语义重构 §4.1）：表单路径一律 draft——「创建即入队」
+    // 退役，启动是唯一入队动作（拖拽/详情按钮，均走 executeMove 单点）；
+    // 决策单源 create-status.ts（agent 工具路径见 task-tools.createTask）
+    const status = resolveCreateStatus(
+      { hasDelegationTarget: hasDelegationTarget(input), scheduledAt: input.scheduledAt ?? null },
+      'form',
+    );
     // 分组三重校验（与 agent 工具 createTask 同款单源语义）：存在 / 同 ws / 未归档
     if (input.groupId != null) {
       const group = getGroup(input.groupId);
@@ -149,29 +147,30 @@ export function registerTaskHandlers(): void {
     'task:update',
     async (_evt, id: string, patch: Parameters<typeof updateTask>[1]): Promise<void> => {
       // minor-11 + 看板重构 Task 8 契约洞加固：task:update 是部分字段补丁通道，
-      // 但 status / boardPosition / archivedAt / groupId 四字段各有专属通道，
-      // 直接写会绕过 move / archive 的不变式（Task 7 review 发现通用 update
-      // 可绕过排序位与归档域校验）。状态变更强制走 task:transition / task:cancel
-      // （断言 + bump updated_at），列位/分组走 task:move，归档走 task:archive /
-      // task:unarchive，分组管理走 taskGroup 通道。renderer 误传时记 warn 帮助
-      // 定位，受保护字段静默丢弃
+      // 但 status / pinnedAt / archivedAt / groupId 四字段各有专属通道，
+      // 直接写会绕过 move / pin / archive 的不变式（Task 7 review 发现通用 update
+      // 可绕过分组位与归档域校验）。状态变更强制走 task:transition / task:cancel
+      // （断言 + bump updated_at），分组走 task:move，顶置走 task:setPinned，
+      // 归档走 task:archive / task:unarchive，分组管理走 taskGroup 通道。
+      // renderer 误传时记 warn 帮助定位，受保护字段静默丢弃
       let applied: Partial<TaskRow>;
       if (patch) {
         const {
           status: _status,
-          boardPosition: _boardPosition,
+          pinnedAt: _pinnedAt,
           archivedAt: _archivedAt,
           groupId: _groupId,
           ...rest
         } = patch;
         const protectedKeys = (
-          ['status', 'boardPosition', 'archivedAt', 'groupId'] as const
+          ['status', 'pinnedAt', 'archivedAt', 'groupId'] as const
         ).filter((k) => Object.prototype.hasOwnProperty.call(patch, k));
         if (protectedKeys.length > 0) {
           logger.warn(
             `task:update 携带受保护字段已剥离（${protectedKeys.join('/')}）——` +
-              '状态请用 task:transition / task:cancel，列位与分组请用 task:move，' +
-              '归档请用 task:archive / task:unarchive，分组管理请用 taskGroup 通道',
+              '状态请用 task:transition / task:cancel，分组请用 task:move，' +
+              '顶置请用 task:setPinned，归档请用 task:archive / task:unarchive，' +
+              '分组管理请走 taskGroup 通道',
             { id },
           );
         }
@@ -211,14 +210,26 @@ export function registerTaskHandlers(): void {
     await cancelTask(id);
   });
 
-  // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发落点（column/groupId/
-  // before/after），动作裁决（start/complete/cancel/纯排序）全部在 executeMove
-  // 单点；成功后广播快照，远端看板镜像即时同步
+  // 看板重构 Task 6：拖拽换列走单一通道——renderer 只发目标（column/groupId），
+  // 动作裁决（start/complete/cancel/换组/no-op）全部在 executeMove 单点；
+  // 成功后广播快照，远端看板镜像即时同步
   ipcMain.handle('task:move', async (_evt, id: string, target: MoveTarget): Promise<TaskRow> => {
     const row = await executeMove(id, target);
     void broadcastLocalTaskSnapshot();
     return row;
   });
+
+  // 顶置开关（迁移 050）：全状态可 pin；语义单点在 repo.setTaskPinned
+  // （重复 pin 刷新时间戳 = 重新压顶）。排序属本地看板视图域，但快照广播
+  // 保持远端镜像 TaskRow 一致
+  ipcMain.handle(
+    'task:setPinned',
+    async (_evt, id: string, pinned: boolean): Promise<TaskRow> => {
+      const row = setTaskPinned(id, pinned);
+      void broadcastLocalTaskSnapshot();
+      return row;
+    },
+  );
 
   // 归档域（看板重构 Task 6）：仅终态任务可归档（软删，archived_at 置时间戳）；
   // 非终态拒绝——运行中任务先 cancel/complete 再归档。归档改变 task:list 默认
