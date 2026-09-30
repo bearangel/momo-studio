@@ -61,7 +61,7 @@ function makeTask(overrides: Partial<TaskRow>): TaskRow {
     startedAt: null,
     completedAt: null,
     groupId: null,
-    boardPosition: null,
+    pinnedAt: null,
     archivedAt: null,
     ...overrides,
   };
@@ -181,7 +181,19 @@ describe('EditTaskDialog 快照语义（K8）', () => {
   });
 });
 
-describe('EditTaskDialog 提交', () => {  it('修改标题+优先级 → task.update 收到对应 patch（三互斥列按类型清空）', async () => {
+describe('EditTaskDialog 提交', () => {
+  it('不含截止时间字段；提交 patch 无 deadlineAt（2026-09-30 §4.4）', async () => {
+    renderDialog(makeTask({}), vi.fn());
+    expect(screen.queryByLabelText('截止时间')).not.toBeInTheDocument();
+    const titleInput = (await screen.findByDisplayValue('原始标题')) as HTMLInputElement;
+    fireEvent.change(titleInput, { target: { value: '新标题' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(mockApi.task.update).toHaveBeenCalled());
+    const [, patch] = mockApi.task.update.mock.calls[0] as [string, Record<string, unknown>];
+    expect('deadlineAt' in patch).toBe(false);
+  });
+
+  it('修改标题+优先级 → task.update 收到对应 patch（三互斥列按类型清空）', async () => {
     const onSaved = vi.fn();
     renderDialog(makeTask({}), onSaved);
 
