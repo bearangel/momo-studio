@@ -178,7 +178,8 @@ describe('executeMove 语义表——跨列动作映射', () => {
     await executeMove(t.id, { column: 'done', groupId: null });
     const children = listTasks({ workspaceId: WS }).filter((r) => r.recurrenceParentId === t.id);
     expect(children).toHaveLength(1);
-    expect(children[0]!.status).toBe('pending');
+    // 泳道语义重构 §4.3：续期实例落 assigned（建即入队，未来时间由闸门管）
+    expect(children[0]!.status).toBe('assigned');
   });
 
   it('in_progress→closed:走 cancelTask(确认框在 renderer,main 不再二次确认)', async () => {
