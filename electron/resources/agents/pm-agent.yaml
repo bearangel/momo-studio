@@ -76,3 +76,17 @@ spec:
       ref: lsp_diagnostics
     - kind: builtin
       ref: lsp_find_references
+    - kind: builtin
+      ref: list_sessions
+    - kind: builtin
+      ref: read_session
+    - kind: builtin
+      ref: memory_search
+    - kind: builtin
+      ref: read_task
+    - kind: builtin
+      ref: read_task_history
+    - kind: builtin
+      ref: read_task_progress
+    - kind: builtin
+      ref: list_tasks

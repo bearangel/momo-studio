@@ -50,11 +50,11 @@ describe('office-assistant.yaml', () => {
     }
   });
 
-  it('能被生产解析器 parseAgentManifestWithSuggestion 解析（defaultTools 14 项契约锁）', () => {
+  it('能被生产解析器 parseAgentManifestWithSuggestion 解析（defaultTools 27 项契约锁：办公 9 + 公共默认 5 + Tier 1 加法 13）', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'office-assistant.yaml'), 'utf-8');
     const { def } = parseAgentManifestWithSuggestion(content);
     expect(def.slug).toBe('office-assistant');
-    expect(def.defaultTools).toHaveLength(14);
+    expect(def.defaultTools).toHaveLength(27);
     const refs = def.defaultTools.map((t) => t.ref);
     for (const n of ['office_read', 'office_copy', 'office_create_pdf', 'office_fill_ppt_template', 'webfetch']) {
       expect(refs, n).toContain(n);

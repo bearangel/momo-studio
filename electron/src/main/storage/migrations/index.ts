@@ -26,6 +26,7 @@ import { migration048 } from './048_journal_session_index';
 import { migration049 } from './049_task_scan_baseline';
 import { migration050 } from './050_task_pin_drop_board_position';
 import { migration051 } from './051_lane_semantics_pending_to_draft';
+import { migration052 } from './052_agent_tools_tier1_backfill';
 
 export interface Migration {
   version: number;
@@ -1033,6 +1034,13 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 到本迁移统一愈合。详见 051_lane_semantics_pending_to_draft.ts 头注释）。
     version: migration051.version,
     sql: migration051.up,
+  },
+  {
+    // Tier 1 公共默认集加法回填（2026-09-30 工具分级 spec §4.5）：白名单
+    // 强执行后存量 def 的 default_tools 并入 Tier 1（只加不减、幂等）。
+    // SQL 住在独立模块 052_agent_tools_tier1_backfill.ts（约定同 032-051）。
+    version: migration052.version,
+    sql: migration052.sql,
   },
 ];
 

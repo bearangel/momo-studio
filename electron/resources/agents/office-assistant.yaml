@@ -64,3 +64,29 @@ spec:
       ref: webfetch
     - kind: builtin
       ref: todowrite
+    - kind: builtin
+      ref: write_file
+    - kind: builtin
+      ref: edit_file
+    - kind: builtin
+      ref: mkdir
+    - kind: builtin
+      ref: mv
+    - kind: builtin
+      ref: grep
+    - kind: builtin
+      ref: glob
+    - kind: builtin
+      ref: list_sessions
+    - kind: builtin
+      ref: read_session
+    - kind: builtin
+      ref: memory_search
+    - kind: builtin
+      ref: read_task
+    - kind: builtin
+      ref: read_task_history
+    - kind: builtin
+      ref: read_task_progress
+    - kind: builtin
+      ref: list_tasks
