@@ -30,6 +30,7 @@ import { parseStringArg } from './shared/arg-parse';
 import { hasUserTodos } from './todo-tools';
 import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 
 /** 合法 kind 白名单（与 memories 表 CHECK 约束同集） */
 const KINDS = ['rule', 'preference', 'knowledge', 'summary'] as const;
@@ -81,6 +82,15 @@ async function audited(
 }
 
 /** 记忆工具模块——v2.2 ToolModule 接口实现，经 tools/index.ts 注册中心登记。 */
+// 类外常量（Tier 划分见 spec §3）：
+const MEMORY_CATALOG_META: Record<string, ToolMeta> = {
+  memory_search: { category: '记忆', categoryEmoji: '🧠', defaultOn: true },
+  memory_save: { category: '记忆', categoryEmoji: '🧠', defaultOn: false, riskNote: '写入记忆库' },
+  // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
+  memory_get: { category: '记忆', categoryEmoji: '🧠', defaultOn: false },
+  memory_forget: { category: '记忆', categoryEmoji: '🧠', defaultOn: false, riskNote: '删除记忆数据' },
+};
+
 export class MemoryTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -150,6 +160,10 @@ export class MemoryTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), MEMORY_CATALOG_META);
   }
 
   handles(name: string): boolean {

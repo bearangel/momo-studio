@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 import { buildRecordCtx, recordChangeSafe, toJournalRelPath } from './shared/change-journal';
@@ -444,9 +445,26 @@ const OFFICE_CREATE_PDF_DEF: LLMToolDef = {
 
 // ── ToolModule 实现 ──
 
+// 类外常量（Tier 划分见 spec §3）：
+const OFFICE_CATALOG_META: Record<string, ToolMeta> = {
+  office_read: { category: '办公', categoryEmoji: '💼', defaultOn: false },
+  office_read_cells: { category: '办公', categoryEmoji: '💼', defaultOn: false },
+  office_create_excel: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_write_excel: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_doc: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_ppt: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_pdf: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_copy: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_fill_ppt_template: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+};
+
 export class OfficeTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [READ_DEF, READ_CELLS_DEF, CREATE_EXCEL_DEF, WRITE_EXCEL_DEF, OFFICE_CREATE_DOC_DEF, OFFICE_CREATE_PPT_DEF, OFFICE_FILL_PPT_DEF, OFFICE_CREATE_PDF_DEF, COPY_DEF];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), OFFICE_CATALOG_META);
   }
 
   handles(name: string): boolean {

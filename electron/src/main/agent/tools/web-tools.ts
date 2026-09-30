@@ -17,6 +17,7 @@ import * as cheerio from 'cheerio';
 import { logger } from '../../logger';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 
@@ -144,6 +145,11 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+// 类外常量（Tier 划分见 spec §3）：
+const WEB_CATALOG_META: Record<string, ToolMeta> = {
+  webfetch: { category: 'Web', categoryEmoji: '🌐', defaultOn: false, riskNote: '涉外网络请求' },
+};
+
 export class WebTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -170,6 +176,10 @@ export class WebTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), WEB_CATALOG_META);
   }
 
   handles(name: string): boolean {

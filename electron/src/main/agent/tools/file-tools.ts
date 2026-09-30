@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
 import { formatEditError } from './shared/edit-recovery';
 import {
@@ -315,9 +316,25 @@ export async function executeFileTool(
  * Task 5 会通过 tools/index.ts 的 buildToolRegistry() 注册到注册中心；
  * v2.3 起直接透传 ctx（Read-before-Edit 守门依赖 ctx.readTracker）。
  */
+// 类外常量（Tier 划分见 spec §3）：
+const FILE_CATALOG_META: Record<string, ToolMeta> = {
+  read_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  write_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  list_files: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  edit_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  mkdir: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  rm: { category: '文件', categoryEmoji: '📁', defaultOn: false, riskNote: '不可恢复删除' },
+  mv: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  exists: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+};
+
 export class FileTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return getFileToolDefs();
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), FILE_CATALOG_META);
   }
 
   handles(name: string): boolean {

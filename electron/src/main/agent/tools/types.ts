@@ -6,6 +6,7 @@ import type { WorkspaceFS } from '../../files/workspace-fs';
 import type { SkillRegistry } from '../../skill/registry';
 import type { LLMToolDef } from '../llm-provider';
 import type { StreamChunk } from '../stream-chunk';
+import type { ToolCatalogEntry } from './catalog-entry';
 import type { ToolPermissionConfig } from './shared/permission';
 import type { ReadTracker } from './shared/read-tracker';
 
@@ -61,6 +62,8 @@ export interface ToolContext {
 /** 工具模块统一接口。每个类别一个实现。 */
 export interface ToolModule {
   getDefs(): LLMToolDef[];
+  /** 目录自描述（v2.x 单一真相源）：与 getDefs() 一一对应的目录条目 */
+  getCatalog(): ToolCatalogEntry[];
   handles(name: string): boolean;
   execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
 }

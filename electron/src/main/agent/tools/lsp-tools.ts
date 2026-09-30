@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS, truncateArray } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 
@@ -584,6 +585,23 @@ const REFERENCES_DEF: LLMToolDef = {
   },
 };
 
+const LSP_CATALOG_META: Record<string, ToolMeta> = {
+  lsp_diagnostics: {
+    category: '代码', categoryEmoji: '🔧', defaultOn: false,
+    conditional: '仅 TS/JS workspace 可用（条件注册）',
+  },
+  lsp_find_references: {
+    category: '代码', categoryEmoji: '🔧', defaultOn: false,
+    conditional: '仅 TS/JS workspace 可用（条件注册）',
+  },
+};
+
+/** LspTools 私有构造——目录条目经此常量参与派生（与 DIAGNOSTICS_DEF/REFERENCES_DEF 一一对应） */
+export const LSP_CATALOG_ENTRIES: ToolCatalogEntry[] = buildCatalog(
+  [DIAGNOSTICS_DEF, REFERENCES_DEF],
+  LSP_CATALOG_META,
+);
+
 // ────────────────────────────────────────────────────────────────────────────
 // LspTools：ToolModule 实现
 // ────────────────────────────────────────────────────────────────────────────
@@ -603,6 +621,10 @@ export class LspTools implements ToolModule {
 
   getDefs(): LLMToolDef[] {
     return [DIAGNOSTICS_DEF, REFERENCES_DEF];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return LSP_CATALOG_ENTRIES;
   }
 
   handles(name: string): boolean {

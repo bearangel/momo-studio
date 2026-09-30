@@ -8,6 +8,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parsePatch, type PatchOp } from './apply-patch-parser';
 import type { RecordCtx } from '../../journal/recorder';
 import {
@@ -15,6 +16,11 @@ import {
   toJournalRelPath,
   recordChangeSafe,
 } from './shared/change-journal';
+
+// 类外常量（Tier 划分见 spec §3）：
+const APPLY_PATCH_CATALOG_META: Record<string, ToolMeta> = {
+  apply_patch: { category: '原子补丁', categoryEmoji: '🧩', defaultOn: false, riskNote: '多文件批量修改' },
+};
 
 export class ApplyPatchTools implements ToolModule {
   getDefs(): LLMToolDef[] {
@@ -34,6 +40,10 @@ export class ApplyPatchTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), APPLY_PATCH_CATALOG_META);
   }
 
   handles(name: string): boolean {

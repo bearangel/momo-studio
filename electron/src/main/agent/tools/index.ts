@@ -37,8 +37,9 @@ import { BrowserTools } from './browser-tools';
 import { OfficeTools } from './office-tools';
 import { SessionTools } from './session-tools';
 
-export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
-  const modules: ToolModule[] = [
+/** 13 个无条件注册模块（buildToolRegistry 与 catalog 派生共用——单一清单防漂移） */
+export function unconditionalModules(): ToolModule[] {
+  return [
     new FileTools(),
     new ApplyPatchTools(),
     new SearchTools(),
@@ -53,6 +54,10 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new OfficeTools(),
     new SessionTools(),
   ];
+}
+
+export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
+  const modules = unconditionalModules();
   const lsp = LspTools.create(ctx);
   if (lsp) modules.push(lsp);
   return modules;

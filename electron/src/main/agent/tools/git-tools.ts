@@ -39,6 +39,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import type { WorkspaceFS } from '../../files/workspace-fs';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
@@ -197,6 +198,20 @@ function assertGitRefArg(field: string, value: string): string {
  *   只读：git_status / git_diff / git_log / git_show
  *   写：git_add / git_commit / git_branch / git_checkout / git_stash
  */
+// 类外常量（Tier 划分见 spec §3）：
+const GIT_CATALOG_META: Record<string, ToolMeta> = {
+  git_repos: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_status: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_diff: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_log: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_show: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_add: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_commit: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_branch: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_checkout: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_stash: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+};
+
 export class GitTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -320,6 +335,10 @@ export class GitTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), GIT_CATALOG_META);
   }
 
   handles(name: string): boolean {

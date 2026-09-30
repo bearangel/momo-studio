@@ -49,6 +49,7 @@ import { listTeams } from '../team';
 import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
 import { hasPendingUserTodos } from './todo-tools';
 import { SIDEEFFECT_UNLINKED_WARNING } from './shared/mandate-warning';
@@ -358,6 +359,21 @@ const NO_ASSIGNMENT_WARNING =
  *
  * 结果通过 JSON.stringify 回给 LLM（message 数据天然是结构化的，JSON 表达最清晰）。
  */
+// 类外常量（Tier 划分见 spec §3）：
+const TASK_CATALOG_META: Record<string, ToolMeta> = {
+  // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
+  list_delegation_targets: { category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  read_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  read_task_history: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  read_task_progress: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  list_tasks: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
+  list_task_groups: { category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  create_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  complete_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  fail_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+};
+
 export class TaskTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -527,6 +543,10 @@ export class TaskTools implements ToolModule {
         inputSchema: { type: 'object', properties: {} },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), TASK_CATALOG_META);
   }
 
   handles(name: string): boolean {

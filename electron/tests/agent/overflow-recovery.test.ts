@@ -53,6 +53,7 @@ import { createLLMProvider } from '../../src/main/agent/llm-provider';
 import { runChatLoop, type RuntimeContext } from '../../src/main/agent/runtime-entry';
 import { __setTodosForTest } from '../../src/main/agent/tools/todo-tools';
 import type { ToolModule } from '../../src/main/agent/tools/types';
+import { buildCatalog, type ToolMeta } from '../../src/main/agent/tools/catalog-entry';
 import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { SkillRegistry } from '../../src/main/skill/registry';
 import {
@@ -168,10 +169,17 @@ function mkCtx(overrides: { toolModules?: ToolModule[] } = {}): RuntimeContext {
 }
 
 /** 测试专用工具模块：返回固定大结果（构造回合内消息预算边界用） */
+const BIG_TOOL_DEF: LLMToolDef = {
+  name: 'big_tool',
+  description: '测试专用：返回大结果',
+  inputSchema: { type: 'object', properties: {} },
+};
+const BIG_TOOL_CATALOG_META: Record<string, ToolMeta> = {
+  big_tool: { category: '测试', categoryEmoji: '🧪', defaultOn: false },
+};
 const bigToolModule: ToolModule = {
-  getDefs: () => [
-    { name: 'big_tool', description: '测试专用：返回大结果', inputSchema: { type: 'object', properties: {} } },
-  ],
+  getDefs: () => [BIG_TOOL_DEF],
+  getCatalog: () => buildCatalog([BIG_TOOL_DEF], BIG_TOOL_CATALOG_META),
   handles: (name) => name === 'big_tool',
   execute: async () => '果'.repeat(1_600),
 };

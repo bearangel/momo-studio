@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import type { LLMToolDef } from '../llm-provider';
 import type { StreamChunk } from '../stream-chunk';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import type { TodoItem } from './todo-types';
 import { parseStringArg } from './shared/arg-parse';
 
@@ -103,6 +104,11 @@ export function completeInProgressTodos(streamSessionId: string): {
  *   ```
  * 其中 status 图标：completed='x' / in_progress='>' / pending=' '；source 标注（spec §5.3）：'user'=[u] / 'agent'=[a]，未标注按 'agent' 解析。
  */
+// 类外常量（Tier 划分见 spec §3）：
+const TODO_CATALOG_META: Record<string, ToolMeta> = {
+  todowrite: { category: '任务清单', categoryEmoji: '✅', defaultOn: true },
+};
+
 export class TodoTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -143,6 +149,10 @@ export class TodoTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), TODO_CATALOG_META);
   }
 
   handles(name: string): boolean {

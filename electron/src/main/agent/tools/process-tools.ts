@@ -12,6 +12,14 @@
 import type { LLMToolDef } from '../llm-provider';
 import { requestProcessList, requestProcessKill, requestProcessKeep } from './process-bridge';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
+
+// 类外常量（Tier 划分见 spec §3）：
+const PROCESS_CATALOG_META: Record<string, ToolMeta> = {
+  process_list: { category: '进程', categoryEmoji: '⚙️', defaultOn: false },
+  process_keep: { category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
+  process_kill: { category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
+};
 
 export class ProcessTools implements ToolModule {
   getDefs(): LLMToolDef[] {
@@ -57,6 +65,10 @@ export class ProcessTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), PROCESS_CATALOG_META);
   }
 
   handles(name: string): boolean {

@@ -17,6 +17,7 @@ import { exportAggregateEvents } from '../../im/export-aggregator';
 import { listMembers } from '../crud';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
 import { OUTPUT_LIMITS, truncateString } from './shared/output-truncate';
 
@@ -169,9 +170,19 @@ async function executeReadSession(args: Record<string, unknown>, ctx: ToolContex
 }
 
 /** SessionTools：跨会话引用工具模块（spec 2026-09-30 §4） */
+// 类外常量（Tier 划分见 spec §3）：
+const SESSION_CATALOG_META: Record<string, ToolMeta> = {
+  list_sessions: { category: '会话', categoryEmoji: '💬', defaultOn: true },
+  read_session: { category: '会话', categoryEmoji: '💬', defaultOn: true },
+};
+
 export class SessionTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [LIST_SESSIONS_DEF, READ_SESSION_DEF];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), SESSION_CATALOG_META);
   }
 
   handles(name: string): boolean {

@@ -25,6 +25,7 @@
 import path from 'node:path';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { parseStringArg } from './shared/arg-parse';
 import { SCROLL_DEFAULT_AMOUNT } from '../../browser/actions';
 import type { TabInfo } from '../../browser/types';
@@ -189,6 +190,22 @@ function serializeEvalResult(result: unknown): string {
 // BrowserTools
 // =================================================================================
 
+// 类外常量（Tier 划分见 spec §3）：
+const BROWSER_CATALOG_META: Record<string, ToolMeta> = {
+  browser_navigate: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_snapshot: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_screenshot: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_click: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_type: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_press_key: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_hover: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_scroll: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_evaluate: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控，默认禁用）' },
+  browser_console_messages: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_tabs: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_close: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+};
+
 export class BrowserTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -325,6 +342,10 @@ export class BrowserTools implements ToolModule {
         inputSchema: { type: 'object', properties: {} },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), BROWSER_CATALOG_META);
   }
 
   handles(name: string): boolean {

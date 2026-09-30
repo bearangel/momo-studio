@@ -9,6 +9,7 @@ import ignore from 'ignore';
 import type { Ignore } from 'ignore';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS, truncateArray } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 
@@ -49,6 +50,12 @@ const DEFAULT_IGNORE: string[] = ['**/node_modules/**', '**/.git/**', '**/dist/*
  *   - 行截断：单行 >200 字符截断显示，避免单个超长行挤占 LLM 上下文。
  *   - 输出上限：从 OUTPUT_LIMITS 读 grep_matches=50 / glob_matches=200。
  */
+// 类外常量（Tier 划分见 spec §3）：
+const SEARCH_CATALOG_META: Record<string, ToolMeta> = {
+  grep: { category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+  glob: { category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+};
+
 export class SearchTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [
@@ -79,6 +86,10 @@ export class SearchTools implements ToolModule {
         },
       },
     ];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), SEARCH_CATALOG_META);
   }
 
   handles(name: string): boolean {

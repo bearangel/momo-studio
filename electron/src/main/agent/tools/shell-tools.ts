@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
+import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';
 import { OUTPUT_LIMITS } from './shared/output-truncate';
 import { parseStringArg } from './shared/arg-parse';
 import { resolveShellSpawn } from '../../sandbox';
@@ -112,6 +113,11 @@ function clamp(v: number, min: number, max: number): number {
  * 工具名：bash。参数：command（必填）、timeoutMs（可选，默认 30000，最大 120000）。
  * 返回格式：`exit_code: <code>` 开头，后接 stdout / stderr / 超时标记 / 截断标记。
  */
+// 类外常量（Tier 划分见 spec §3）：
+const SHELL_CATALOG_META: Record<string, ToolMeta> = {
+  bash: { category: 'Shell', categoryEmoji: '💻', defaultOn: false, riskNote: '任意代码执行' },
+};
+
 export class ShellTools implements ToolModule {
   getDefs(): LLMToolDef[] {
     return [{
@@ -126,6 +132,10 @@ export class ShellTools implements ToolModule {
         required: ['command'],
       },
     }];
+  }
+
+  getCatalog(): ToolCatalogEntry[] {
+    return buildCatalog(this.getDefs(), SHELL_CATALOG_META);
   }
 
   handles(name: string): boolean {
