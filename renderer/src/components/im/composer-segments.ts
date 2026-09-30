@@ -9,8 +9,8 @@ import type { MessageContext } from '../../ipc/types';
 // type-only 反向依赖（PillSeg），此处值导入不构成运行时环。
 import { IMAGE_PER_MESSAGE_CAP } from '../../lib/image-downscale';
 
-/** pill 六类：agent / 文件 / 任务 / 技能 / 命令 / 图片（spec §3 表 + 2026-09-26 多模态 §10） */
-export type PillKind = 'agent' | 'file' | 'task' | 'skill' | 'command' | 'image';
+/** pill 七类：agent / 文件 / 任务 / 技能 / 命令 / 图片 / 会话（spec §3 表 + 2026-09-26 多模态 §10 + 2026-09-30 跨会话引用 §5） */
+export type PillKind = 'agent' | 'file' | 'task' | 'skill' | 'command' | 'image' | 'session';
 
 /** 文本段（连续文字，含用户手敲的一切） */
 export interface TextSeg {
@@ -40,7 +40,7 @@ export interface ComposerPayload {
 }
 
 /**
- * 发送序列化（spec §3 规则表 + 2026-09-26 多模态 §5/§10）：
+ * 发送序列化（spec §3 规则表 + 2026-09-26 多模态 §5/§10 + 2026-09-30 跨会话引用 §5）：
  *   agent → body `@label` + mentions（按 instanceId 去重保序）
  *   file  → body `@path`   + context.files（按 path 去重）
  *   task  → body `#id`（conflict-detector 照旧解析正文）
@@ -48,6 +48,7 @@ export interface ComposerPayload {
  *   command → body `/name`（纯命令 pill 时序列化恰为 `/name`——整串拦截语义由形态保持）
  *   image → body 锚点 `[图片: label]` + context.images（按 path 去重保序、
  *           上限 6 张；w/h 非正整数不进 images——与主进程 sanitize 同规则防御）
+ *   session → body @label + context.sessions（按 sessionId 去重——指针注入，正文锚点无双重曝光，spec 2026-09-30 §5）
  *   重复 pill：body 保留全部出现（等价手敲两遍），结构化数组去重
  *   标记分隔（spec §3「标记分隔」行）：标记前（body 非空且末字符非空白时）与
  *   标记后各保证一个空格——永不叠加双空格（后续内容自带首空白时尾随空格让
@@ -62,6 +63,7 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
   const skills: Array<{ slug: string; name: string }> = [];
   const files: Array<{ path: string }> = [];
   const images: Array<{ path: string; w: number; h: number }> = [];
+  const sessions: Array<{ sessionId: string; title: string }> = [];
   const pushImage = (seg: PillSeg): void => {
     if (images.some((i) => i.path === seg.id)) return;
     if (images.length >= IMAGE_PER_MESSAGE_CAP) return;
@@ -111,6 +113,10 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
         body += `[图片: ${seg.label}]`;
         pushImage(seg);
         break;
+      case 'session':
+        body += `@${seg.label}`;
+        if (!sessions.some((s) => s.sessionId === seg.id)) sessions.push({ sessionId: seg.id, title: seg.label });
+        break;
     }
     pendingSpace = true;
   }
@@ -119,8 +125,13 @@ export function serializeSegments(segs: ComposerSegment[]): ComposerPayload {
     body,
     mentions: mentions.length > 0 ? mentions : undefined,
     context:
-      skills.length > 0 || files.length > 0 || images.length > 0
-        ? { skills, files, ...(images.length > 0 ? { images } : {}) }
+      skills.length > 0 || files.length > 0 || images.length > 0 || sessions.length > 0
+        ? {
+            skills,
+            files,
+            ...(images.length > 0 ? { images } : {}),
+            ...(sessions.length > 0 ? { sessions } : {}),
+          }
         : undefined,
   };
 }
@@ -130,7 +141,7 @@ export function segmentsToDraft(segs: ComposerSegment[]): string {
   return JSON.stringify(segs);
 }
 
-const PILL_KINDS: ReadonlyArray<PillKind> = ['agent', 'file', 'task', 'skill', 'command', 'image'];
+const PILL_KINDS: ReadonlyArray<PillKind> = ['agent', 'file', 'task', 'skill', 'command', 'image', 'session'];
 
 /** image pill 的 w/h 形状校验（正整数——与主进程 sanitizeMessageContext 同规则）；合法返回数值对，否则 null */
 function validImageDims(w: unknown, h: unknown): { w: number; h: number } | null {

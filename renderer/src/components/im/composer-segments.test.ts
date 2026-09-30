@@ -224,3 +224,39 @@ describe('草稿往返 image pill（draftToSegments 白名单 + w/h 校验）', 
     expect(draftToSegments(segmentsToDraft(segs))).toEqual(segs);
   });
 });
+
+// === session pill（2026-09-30 跨会话引用 spec §5/§6）===
+describe('session pill 序列化（跨会话引用）', () => {
+  const sessPill = { type: 'pill' as const, kind: 'session' as const, id: 'sess-9', label: '设计讨论' };
+
+  it('body 锚点 @标题 + context.sessions', () => {
+    const out = serializeSegments([{ type: 'text', text: '参考' }, sessPill, { type: 'text', text: '写计划' }]);
+    expect(out.body).toBe('参考 @设计讨论 写计划');
+    expect(out.context?.sessions).toEqual([{ sessionId: 'sess-9', title: '设计讨论' }]);
+  });
+
+  it('重复 session pill：body 保留两处，结构化数组去重', () => {
+    const out = serializeSegments([sessPill, { type: 'text', text: '和' }, sessPill]);
+    expect(out.body).toBe('@设计讨论 和 @设计讨论 ');
+    expect(out.context?.sessions).toEqual([{ sessionId: 'sess-9', title: '设计讨论' }]);
+  });
+
+  it('仅 session pill：context 携带 sessions（合法空 body 消息）', () => {
+    const out = serializeSegments([sessPill]);
+    expect(out.body).toBe('@设计讨论 ');
+    expect(out.context).toBeDefined();
+  });
+
+  it('草稿往返：session pill 不丢；旧版六类 pill 草稿不受影响', () => {
+    const round = draftToSegments(segmentsToDraft([sessPill, { type: 'text', text: 'hi' }]));
+    expect(round).toEqual([sessPill, { type: 'text', text: 'hi' }]);
+    const legacy = JSON.stringify([
+      { type: 'pill', kind: 'agent', id: 'a1', label: 'Coder' },
+      { type: 'text', text: '旧草稿' },
+    ]);
+    expect(draftToSegments(legacy)).toEqual([
+      { type: 'pill', kind: 'agent', id: 'a1', label: 'Coder' },
+      { type: 'text', text: '旧草稿' },
+    ]);
+  });
+});
