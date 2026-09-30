@@ -108,20 +108,24 @@ describe('CapabilityTabs — Tab 结构', () => {
 });
 
 describe('CapabilityTabs — 工具目录加载态与错误态', () => {
-  it('目录未就绪时工具 Tab 顶部显示加载提示', async () => {
+  it('目录未就绪时工具 Tab 顶部显示加载提示（text-tertiary，非错误色）', async () => {
     mockGetCatalog.mockReturnValue(new Promise(() => {}));
     const Fresh = await importFreshComponent();
     render(<Fresh {...defaultProps()} />);
-    expect(screen.getByText('工具目录加载中…')).toBeInTheDocument();
+    const loading = screen.getByText('工具目录加载中…');
+    expect(loading).toBeInTheDocument();
+    // 终审 Finding 3：加载≠错误——加载中用 text-tertiary，不得共用错误色
+    expect(loading).toHaveClass('text-tertiary');
+    expect(loading).not.toHaveClass('text-status-error');
   });
 
   it('目录加载失败时显示错误文案（分组区为空、不阻塞表单其余部分）', async () => {
     mockGetCatalog.mockRejectedValue(new Error('IPC 崩了'));
     const Fresh = await importFreshComponent();
     render(<Fresh {...defaultProps()} />);
-    await waitFor(() => {
-      expect(screen.getByText(/工具目录加载失败：IPC 崩了/)).toBeInTheDocument();
-    });
+    const err = await screen.findByText(/工具目录加载失败：IPC 崩了/);
+    expect(err).toBeInTheDocument();
+    expect(err).toHaveClass('text-status-error');
     expect(screen.queryByLabelText('read_file')).not.toBeInTheDocument();
   });
 

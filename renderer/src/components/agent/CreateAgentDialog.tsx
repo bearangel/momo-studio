@@ -108,6 +108,13 @@ export function CreateAgentDialog({ source, onClose }: Props) {
       setError('工具目录加载中，请稍候再提交');
       return;
     }
+    // 空工具集守卫（终审 Finding 1）：空数组非 nullish，会穿透后端
+    // SAFE_MINIMUM 兜底，运行时空 allowedTools 反而放行全部工具——在提交
+    // 边界直接拦截；运行时空数组语义（显式无工具）不动
+    if (preset === 'custom' && tools.length === 0) {
+      setError('至少勾选一个工具，或改用标准档');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -123,8 +130,11 @@ export function CreateAgentDialog({ source, onClose }: Props) {
         modelName: modelName.trim(),
         thinkingJson,
         defaultTools: tools.map((ref) => ({ kind: 'builtin' as const, ref })),
-        defaultMcps: caps.mcps.map((ref) => ({ kind: 'mcp' as const, ref })),
-        defaultSkills: caps.skills.map((ref) => ({ kind: 'skill' as const, ref })),
+        // 跨档残留收口（终审 Finding 2）：MCP/Skill 仅 custom 档可配；切回
+        // 标准/全部档后选择 UI 已隐藏，提交不得携带（mcp:* 是 Tier 0 恒放行
+        // 动态工具，残留即静默越界扩权）。caps 状态保留，切回 custom 不丢勾选
+        defaultMcps: preset === 'custom' ? caps.mcps.map((ref) => ({ kind: 'mcp' as const, ref })) : [],
+        defaultSkills: preset === 'custom' ? caps.skills.map((ref) => ({ kind: 'skill' as const, ref })) : [],
       });
       await loadDefinitions(workspace?.id ?? undefined);
       if (source === 'agentView' && workspace) {

@@ -378,6 +378,10 @@ async function main(): Promise<void> {
  * v1.7.1 的实现把 getAllToolDefs 的全部内置工具也并了进来，导致白名单被扩成
  * 全集、per-agent 工具配置完全失效（任何 agent 实际都能调全部工具，P0）。
  * 本函数只放行 Tier 0；内置工具是否可用完全由 def/workspace/delta 三层配置决定。
+ *
+ * 注意：MCP 工具名与内置工具同名时，会被保守排除出动态并集（deny 方向，
+ * 安全语义）——同名 MCP 工具不会借 Tier 0 放行规则绕过白名单。此处是有意
+ * 的保守取舍，勿「修」。
  */
 export function unionDynamicToolNames(
   allowedTools: string[],

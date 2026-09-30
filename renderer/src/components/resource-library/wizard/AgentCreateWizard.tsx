@@ -107,6 +107,12 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
       setError('工具目录加载中，请稍候再提交');
       return;
     }
+    // 空工具集守卫（终审 Finding 1）：空数组会穿透后端 SAFE_MINIMUM 兜底，
+    // 运行时空 allowedTools 反而放行全部工具——提交边界直接拦截
+    if (preset === 'custom' && tools.length === 0) {
+      setError('至少勾选一个工具，或改用标准档');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {

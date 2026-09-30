@@ -160,6 +160,23 @@ describe('AgentCreateWizard — 工具目录源（v2.x Task 7）', () => {
   });
 });
 
+describe('AgentCreateWizard — 空工具集提交守卫（终审 Finding 1）', () => {
+  it('自定义档清空全部工具后提交 → 拦截并提示，不调 createCustom', async () => {
+    render(<AgentCreateWizard onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    fireEvent.click(screen.getByLabelText('自定义'));
+    // 目录就绪 Tier 1 回填后取消唯一勾选项 → 自选集为空
+    fireEvent.click(await screen.findByLabelText('read_file'));
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
+    fireEvent.click(screen.getByRole('button', { name: '选模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    expect(await screen.findByText('至少勾选一个工具，或改用标准档')).toBeTruthy();
+    expect(createCustomMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('AgentCreateWizard — 目录未就绪提交守卫', () => {
   it('标准档 + 目录未就绪 → 提示「工具目录加载中」且不提交', async () => {
     getCatalogMock.mockReturnValue(new Promise(() => {})); // 永不 resolve

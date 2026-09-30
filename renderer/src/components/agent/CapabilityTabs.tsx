@@ -100,12 +100,13 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
       {/* 工具 Tab */}
       {tab === 'tools' && (
         <div className="flex flex-col gap-2">
-          {/* 目录加载态与错误态（不阻塞表单其余字段） */}
-          {(catalogError || !catalog) && (
+          {/* 目录加载态与错误态（不阻塞表单其余字段）；加载≠错误， tertiary / error 分色 */}
+          {catalogError && (
             <div className="text-xs text-status-error">
-              {catalogError ? `工具目录加载失败：${catalogError}` : '工具目录加载中…'}
+              {`工具目录加载失败：${catalogError}`}
             </div>
           )}
+          {!catalogError && !catalog && <div className="text-xs text-tertiary">工具目录加载中…</div>}
           {(catalog?.categories ?? []).map((cat) => (
             <div key={cat.label}>
               <div className="text-xs text-tertiary mb-1">

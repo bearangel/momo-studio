@@ -237,6 +237,39 @@ describe('DefinitionEditor — edit 模式加载现有 def 能力', () => {
   });
 });
 
+describe('DefinitionEditor — 空工具集提交守卫（终审 Finding 1）', () => {
+  // 空数组非 nullish，会穿透后端 SAFE_MINIMUM 兜底 → 运行时空 allowedTools
+  // 反而放行全部工具；create/edit 提交边界必须拦截（configure 只读不受影响）
+  it('create 模式清空工具集后提交 → 拦截并提示，不调 createCustom', async () => {
+    render(<DefinitionEditor mode="create" onClose={() => {}} />);
+    await screen.findByLabelText('read_file'); // Tier 1 回填完成
+    fireEvent.click(screen.getByText('清空')); // 快捷按钮把工具集置空
+    fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
+    fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
+    fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), { target: { value: '系统提示词' } });
+    fireEvent.change(screen.getByLabelText('模型供应商*'), { target: { value: 'prov-1' } });
+    await screen.findByRole('option', { name: 'gpt-4o' });
+    fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
+
+    fireEvent.click(screen.getByText('创建'));
+
+    expect(await screen.findByText('至少勾选一个工具')).toBeInTheDocument();
+    expect(createCustom).not.toHaveBeenCalled();
+  });
+
+  it('edit 模式清空工具集后保存 → 同样拦截，不调 updateDefinition', async () => {
+    const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
+    render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
+    await screen.findByLabelText('read_file');
+    fireEvent.click(screen.getByText('清空'));
+
+    fireEvent.click(screen.getByText('保存'));
+
+    expect(await screen.findByText('至少勾选一个工具')).toBeInTheDocument();
+    expect(updateDefinition).not.toHaveBeenCalled();
+  });
+});
+
 describe('DefinitionEditor — configure（builtin）模式只读', () => {
   it('configure 模式显示 builtin 提示文案', async () => {
     const def = buildDef({ source: 'builtin' });
@@ -286,8 +319,11 @@ describe('DefinitionEditor — brief 数据丢失回归锁：def.thinkingJson �
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
     await screen.findByRole('option', { name: 'glm-5.3' });
 
-    expect((screen.getByLabelText('思维模式') as HTMLSelectElement).value).toBe('on');
-    expect((screen.getByLabelText('思维档位') as HTMLSelectElement).value).toBe('high');
+    // 选项出现 ≠ 能力态已落定：onModelInfo → setModelCapability 需再一轮渲染，
+    // 同步查询在用例排序变化时会抢跑（HEAD 即存在的隐性竞态），find 等待控件挂出
+    const modeSelect = (await screen.findByLabelText('思维模式')) as HTMLSelectElement;
+    expect(modeSelect.value).toBe('on');
+    expect(((await screen.findByLabelText('思维档位')) as HTMLSelectElement).value).toBe('high');
 
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() => {

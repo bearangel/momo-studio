@@ -91,6 +91,13 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
       setError('模型供应商和模型名不能为空');
       return;
     }
+    // 空工具集守卫（终审 Finding 1）：空数组非 nullish，会穿透后端
+    // SAFE_MINIMUM 兜底，运行时空 allowedTools 反而放行全部工具。create/edit
+    // 均拦截（edit 不该能存成空集）；configure 只读不受影响
+    if ((mode === 'create' || mode === 'edit') && capabilities.tools.length === 0) {
+      setError('至少勾选一个工具');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {

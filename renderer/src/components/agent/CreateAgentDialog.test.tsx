@@ -318,6 +318,31 @@ describe('CreateAgentDialog — 默认工具集三档', () => {
     expect(input.defaultMcps).toEqual([{ kind: 'mcp', ref: 'filesystem' }]);
     expect(input.defaultSkills).toEqual([{ kind: 'skill', ref: 'code-review' }]);
   });
+
+  it('自定义档勾选 MCP 后切回标准档提交 → defaultMcps 不残留（终审 Finding 2）', async () => {
+    resourceList.mockImplementation(async (filter?: { type?: string }) => {
+      if (filter?.type === 'mcp') return [MCP_ITEM];
+      return [];
+    });
+    render(<CreateAgentDialog source="library" onClose={vi.fn()} />);
+    await fillRequired('越界侠');
+    fireEvent.click(screen.getByLabelText('自定义'));
+    await screen.findByLabelText('read_file');
+    // 自定义档勾选一个 MCP（caps.mcps 进入状态）
+    fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
+    fireEvent.click(await screen.findByLabelText('filesystem'));
+    // 切回标准档：选择 UI 已隐藏，提交不得携带残留
+    fireEvent.click(screen.getByLabelText('标准（推荐）'));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(createCustom).toHaveBeenCalled());
+    expect(createCustom).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultTools: MOCK_SAFE_MINIMUM.map((ref) => ({ kind: 'builtin', ref })),
+        defaultMcps: [],
+        defaultSkills: [],
+      }),
+    );
+  });
 });
 
 describe('CreateAgentDialog — 目录未就绪提交守卫', () => {
@@ -342,20 +367,33 @@ describe('CreateAgentDialog — 目录未就绪提交守卫', () => {
     expect(createCustom).not.toHaveBeenCalled();
   });
 
-  it('自定义档不依赖目录 → 目录未就绪仍可提交（工具空集，三字段齐全）', async () => {
+  it('自定义档不依赖目录但工具空集 → 拦截提交并提示，不调 createCustom（终审 Finding 1 翻转：空集=全放行反转漏洞）', async () => {
     getCatalog.mockReturnValue(new Promise(() => {}));
     const Fresh = await importFreshDialog();
     render(<Fresh source="library" onClose={vi.fn()} />);
     await fillRequired();
     fireEvent.click(screen.getByLabelText('自定义'));
-    // CapabilityTabs 工具区显示加载提示（目录未就绪），MCP/Skill 不受影响
+    // CapabilityTabs 工具区显示加载提示（目录未就绪 → 自选集保持空）
     expect(await screen.findByText('工具目录加载中…')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    expect(await screen.findByText('至少勾选一个工具，或改用标准档')).toBeInTheDocument();
+    expect(createCustom).not.toHaveBeenCalled();
+  });
+
+  it('自定义档勾选至少一个工具后可提交（目录就绪 Tier 1 回填即满足守卫）', async () => {
+    render(<CreateAgentDialog source="library" onClose={vi.fn()} />);
+    await fillRequired();
+    fireEvent.click(screen.getByLabelText('自定义'));
+    // 目录就绪后 Tier 1 回填 → 工具集非空，守卫放行
+    expect(await screen.findByLabelText('read_file')).toBeInTheDocument();
+    expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
     await waitFor(() => expect(createCustom).toHaveBeenCalled());
-    const input = createCustom.mock.calls[0]![0] as Record<string, unknown>;
-    expect(input.defaultTools).toEqual([]);
-    expect(input.defaultMcps).toEqual([]);
-    expect(input.defaultSkills).toEqual([]);
+    expect(createCustom).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultTools: MOCK_SAFE_MINIMUM.map((ref) => ({ kind: 'builtin', ref })),
+      }),
+    );
   });
 });
 
