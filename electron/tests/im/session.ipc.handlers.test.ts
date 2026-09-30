@@ -560,6 +560,34 @@ describe('sanitizeMessageContext 契约锁（I5 元素级）', () => {
   });
 });
 
+describe('sanitizeMessageContext sessions（跨会话引用）', () => {
+  it('合法 sessions 保留；畸形元素剔除；sessionId 空串剔除', () => {
+    const out = sanitizeMessageContext({
+      skills: [],
+      files: [],
+      sessions: [
+        { sessionId: 's1', title: '会话一' },
+        { sessionId: '', title: '空 id' },
+        { sessionId: 42, title: '坏 id' },
+        { title: '缺 id' },
+        null,
+      ],
+    });
+    expect(out?.sessions).toEqual([{ sessionId: 's1', title: '会话一' }]);
+  });
+
+  it('sessions 非数组 → 字段剔除（spread 透传陷阱回归锁）', () => {
+    const out = sanitizeMessageContext({ skills: [], files: [], sessions: 'garbage' });
+    expect(out?.sessions).toBeUndefined();
+    expect(out).toEqual({ skills: [], files: [] });
+  });
+
+  it('缺省 sessions → 不产生字段（旧载荷形状不变）', () => {
+    const out = sanitizeMessageContext({ skills: [], files: [] });
+    expect(out).toEqual({ skills: [], files: [] });
+  });
+});
+
 describe('session:getMessages handler', () => {
   it('返回 messages + 每条消息的 eventsByMessage（最近窗口走批量全量查询）', async () => {
     messagesRepoMocks.listMessagesBySession.mockReturnValueOnce([msgRow]);

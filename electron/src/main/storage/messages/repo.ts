@@ -302,3 +302,22 @@ export function countOwnerMessages(sessionId: string): number {
     .get(sessionId) as { n: number };
   return row.n;
 }
+
+/** 会话消息总数（跨会话引用 list_sessions 消费；不含其它会话） */
+export function countMessagesBySession(sessionId: string): number {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id = ?')
+    .get(sessionId) as { n: number };
+  return row?.n ?? 0;
+}
+
+/** 会话首条用户（sender='owner'）消息；无用户消息 / 会话不存在 → null（list_sessions 预览消费） */
+export function getFirstUserMessage(sessionId: string): MessageRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM messages WHERE session_id = ? AND sender = 'owner'
+       ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+    )
+    .get(sessionId) as SqlRow | undefined;
+  return row ? rowToCamel(row) : null;
+}

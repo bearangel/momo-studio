@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import {
   insertMessage,
@@ -14,6 +15,8 @@ import {
   listOlderMessages,
   listMessagesByStreamSessionId,
   deleteMessages,
+  countMessagesBySession,
+  getFirstUserMessage,
   type MessageRow,
 } from '../../src/main/storage/messages/repo';
 import { insertEvent } from '../../src/main/storage/messages/events-repo';
@@ -274,5 +277,47 @@ describe('deleteMessages（逐层撤回的消息删除面）', () => {
     expect(deleteMessages([], { sessionId })).toEqual({ deletedIds: [], affectedSessions: [] });
     expect(deleteMessages(['no-such-id'], { sessionId })).toEqual({ deletedIds: [], affectedSessions: [] });
     expect(deleteMessages(['no-such-id'])).toEqual({ deletedIds: [], affectedSessions: [] });
+  });
+});
+
+describe('countMessagesBySession / getFirstUserMessage（跨会话引用）', () => {
+  // sessions.workspace_id 外键真实存在（REFERENCES workspaces + foreign_keys=ON），
+  // brief 模板的 insertSession({ workspaceId: 'w1' }) 不建 workspace 会触发 FK 约束失败——
+  // 按本文件 deleteMessages 套件先例补 seed（其余断言与 brief 一致）。
+  // workspace id 用 randomUUID：同一用例内多次 seed（t / t2）不得撞主键
+  function seedWsAndSession(title: string): { sessionId: string } {
+    const workspaceId = `ws-${randomUUID()}`;
+    getDb()
+      .prepare(
+        `INSERT INTO workspaces
+           (id, name, description, directory_path, git_initialized, owner_id, icon_emoji,
+            default_agent_instance_id)
+         VALUES (?, 'WS', '', '/tmp', 0, '@owner:s', '📁', null)`,
+      )
+      .run(workspaceId);
+    const sess = insertSession({ workspaceId, title });
+    return { sessionId: sess.id };
+  }
+
+  it('countMessagesBySession：按会话计数，不含其它会话', () => {
+    const s = seedWsAndSession('t');
+    insertMessage({ sessionId: s.sessionId, sender: 'owner', eventType: 'm.room.message', body: 'a' });
+    insertMessage({ sessionId: s.sessionId, sender: 'coder-1', eventType: 'm.room.message', body: 'b' });
+    // messages.session_id 无外键（room_id RENAME 而来），可插不存在会话的行验证隔离
+    insertMessage({ sessionId: 'other', sender: 'owner', eventType: 'm.room.message', body: 'c' });
+    expect(countMessagesBySession(s.sessionId)).toBe(2);
+    expect(countMessagesBySession('nonexistent')).toBe(0);
+  });
+
+  it('getFirstUserMessage：取首条 sender=owner 消息；无用户消息 / 不存在 → null', () => {
+    const s = seedWsAndSession('t');
+    insertMessage({ sessionId: s.sessionId, sender: 'coder-1', eventType: 'm.room.message', body: 'agent 先说' });
+    const first = insertMessage({ sessionId: s.sessionId, sender: 'owner', eventType: 'm.room.message', body: '用户第一条' });
+    insertMessage({ sessionId: s.sessionId, sender: 'owner', eventType: 'm.room.message', body: '用户第二条' });
+    expect(getFirstUserMessage(s.sessionId)?.id).toBe(first.id);
+    expect(getFirstUserMessage('nonexistent')).toBeNull();
+    const s2 = seedWsAndSession('t2');
+    insertMessage({ sessionId: s2.sessionId, sender: 'coder-1', eventType: 'm.room.message', body: '只有 agent' });
+    expect(getFirstUserMessage(s2.sessionId)).toBeNull();
   });
 });

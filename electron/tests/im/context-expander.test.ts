@@ -2,7 +2,7 @@
 // context-expander：skill 展开（成功/不可用占位）+ 文件读取（内联/超大/总量/逃逸/不存在）。
 // momo-test-rules：文件系统用真实临时目录（不 mock fs）；skill 用真实 SKILL.md 文件；
 // 错误路径与空输入专项用例全覆盖（总量累计超限 / workspaceId=null / 空 context）。
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -141,9 +141,9 @@ describe('expandMessageContext', () => {
     expect(r.skills[0]!.body).toBe('[skill 已不可用]');
   });
 
-  it('空 context 返回空结构（images/droppedImages 恒为数组）', async () => {
+  it('空 context 返回空结构（images/droppedImages/sessions 恒为数组）', async () => {
     const r = await expandMessageContext(wsId, { skills: [], files: [] });
-    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [] });
+    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [], sessions: [] });
   });
 
   // === I4 回归锁（终审修复）：合法 dotfile 不再一刀切拒绝 ===
@@ -232,7 +232,7 @@ describe('expandMessageContext', () => {
       files: [{ path: ['evil'] }],
     } as unknown as MessageContext;
     const r = await expandMessageContext(wsId, malformed);
-    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [] });
+    expect(r).toEqual({ skills: [], files: [], images: [], droppedImages: [], sessions: [] });
   });
 
   // === 多模态 Task 5：images 展开（读文件→base64；一切失败剔除进 droppedImages） ===
@@ -349,5 +349,76 @@ describe('expandMessageContext', () => {
     ]);
     // 畸形元素不进 droppedImages（path 可能都不是字符串，无法构成占位）
     expect(r.droppedImages).toEqual([]);
+  });
+});
+
+// === 跨会话引用 Task 7（spec 2026-09-30 §6）：sessions 指针级展开 ===
+// 契约：存在 + 同 workspace → 附元信息的 ExpandedSessionItem；否则 missing
+// 降级（快照标题保留）。sessionMeta 为测试注入点（生产由 expander 从 repos
+// 构建）；任何查找异常 → missing，绝不阻塞消息派发（永不抛错契约）。
+describe('expandMessageContext sessions（跨会话引用）', () => {
+  const baseCtx: MessageContext = { skills: [], files: [] };
+  const metaOk = {
+    workspaceId: 'ws1', title: '设计讨论', kind: 'chat' as const,
+    lastMessageAt: 1_700_000_000_000, memberNames: ['用户', 'Coder'], messageCount: 12,
+  };
+
+  // 还原文件级 beforeAll 注入的 deps（不能置空——同文件其它 describe 依赖它）
+  afterEach(() =>
+    setExpanderDeps({
+      skillRoots: [path.join(tmpRoot, 'skills')],
+      workspaceDir: () => path.join(tmpRoot, 'ws1'),
+    }),
+  );
+
+  it('存在且同 workspace → 完整 ExpandedSessionItem', async () => {
+    setExpanderDeps({ sessionMeta: (id) => (id === 's1' ? { ...metaOk } : null) });
+    const out = await expandMessageContext('ws1', {
+      ...baseCtx,
+      sessions: [{ sessionId: 's1', title: '快照标题' }],
+    });
+    expect(out.sessions).toEqual([
+      { sessionId: 's1', title: '快照标题', kind: 'chat', memberNames: ['用户', 'Coder'], messageCount: 12, lastMessageAt: 1_700_000_000_000, missing: false },
+    ]);
+  });
+
+  it('不存在 / 跨 workspace → missing 降级（title 保留快照）', async () => {
+    setExpanderDeps({
+      sessionMeta: (id) => (id === 'gone' ? null : { ...metaOk, workspaceId: '别的' }),
+    });
+    const out = await expandMessageContext('ws1', {
+      ...baseCtx,
+      sessions: [
+        { sessionId: 'gone', title: '已删会话' },
+        { sessionId: 's2', title: '外来会话' },
+      ],
+    });
+    expect(out.sessions?.every((s) => s.missing === true)).toBe(true);
+    expect(out.sessions?.[0]?.title).toBe('已删会话');
+  });
+
+  it('sessionMeta 抛错 → missing 降级，永不抛错（expander 契约）', async () => {
+    setExpanderDeps({
+      sessionMeta: () => {
+        throw new Error('DB 炸了');
+      },
+    });
+    const out = await expandMessageContext('ws1', {
+      ...baseCtx,
+      sessions: [{ sessionId: 's3', title: '任意' }],
+    });
+    expect(out.sessions?.[0]?.missing).toBe(true);
+  });
+
+  it('sessions 缺省 / 元素畸形 → 空数组，不影响其余展开', async () => {
+    const out = await expandMessageContext('ws1', baseCtx);
+    expect(out.sessions).toEqual([]);
+    // 元素畸形（I5 元素级防御）：sessionId 非字符串 / 空串 / 缺 title → 跳过不产半截项
+    const malformed = {
+      ...baseCtx,
+      sessions: [123, null, { title: '无 id' }, { sessionId: '', title: '空 id' }],
+    } as unknown as MessageContext;
+    const out2 = await expandMessageContext('ws1', malformed);
+    expect(out2.sessions).toEqual([]);
   });
 });

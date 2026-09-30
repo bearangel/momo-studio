@@ -16,6 +16,7 @@ export const OUTPUT_LIMITS = {
   read_file: 200 * 1024,
   office_read: 20 * 1024,
   office_read_cells: 24 * 1024,
+  read_session: 30 * 1024,
 } as const;
 
 /** 截断字符串到 maxLen 字节，超长追加标记 */

@@ -4,6 +4,8 @@
 // （skill 正文 + 文件内容 + 图片 base64）。所有失败路径一律降级
 // （占位 / content=null / 剔除进 droppedImages），绝不阻塞消息派发——
 // 上下文是增强不是前提。
+// 会话引用（跨会话引用 spec 2026-09-30 §6）：指针级展开——存在性 + workspace
+// 归属校验通过则附元信息，失败降级 missing=true（快照标题保留）。
 //
 // skill 三源定位（对齐 skill/zip-uploader.ts listInstalled 的三源合并语义）：
 //   - custom：<userData>/skills/<slug>/SKILL.md（resolveSkillsDir）
@@ -17,10 +19,14 @@ import { getWorkspace } from '../workspace/crud';
 import { getDb } from '../storage/db';
 import { resolveBuiltinSkillsDir } from '../skill/zip-uploader';
 import { WorkspaceFS } from '../files/workspace-fs';
+import { getSession, listSessionMembers } from '../storage/sessions/repo';
+import { countMessagesBySession } from '../storage/messages/repo';
+import { listMembers } from '../agent/crud';
 import type {
   ExpandedContext,
   ExpandedFileItem,
   ExpandedImageItem,
+  ExpandedSessionItem,
   ExpandedSkillItem,
 } from '../agent/runtime-config';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
@@ -59,12 +65,24 @@ const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
 /** 匹配 --- 包围的 YAML frontmatter（兼容 \n 与 \r\n 行尾，与 zip-uploader 同款） */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 
+/** 会话元信息形状（sessionMeta 的返回契约；生产由本模块从 repos 构建） */
+export interface SessionMetaInput {
+  workspaceId: string;
+  title: string;
+  kind: 'chat' | 'task_execution';
+  lastMessageAt: number | null;
+  memberNames: string[];
+  messageCount: number;
+}
+
 /** 测试注入点：skill 根目录解析与 workspace 目录解析（生产路径依赖 app 环境 / SQLite，不进测试） */
 export interface ExpanderDeps {
   /** 注入即完全接管 skill 定位（仅扫这些目录，跳过 builtin 根与 marketplace 表） */
   skillRoots?: string[];
   /** 注入即绕过 getWorkspace 的 DB 查询 */
   workspaceDir?: (workspaceId: string) => string | null;
+  /** 会话元信息生产（测试注入即绕开 DB；生产由本模块从 repos 构建） */
+  sessionMeta?: (sessionId: string) => SessionMetaInput | null;
 }
 let deps: ExpanderDeps = {};
 export function setExpanderDeps(d: ExpanderDeps): void {
@@ -146,6 +164,34 @@ function workspaceDirOf(workspaceId: string | null): string | null {
   } catch (err) {
     logger.warn('context-expander：workspace 目录解析失败，降级', {
       workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/** 生产路径：从 repos 构建会话元信息；DB 不可用 / 查无 → null（调用方降级 missing）。
+ *  memberNames 取 WorkspaceAgentMember.agentName（v2.2 JOIN 展示名，缺名回退 agent_user_id），
+ *  session_members.instance_id 与 workspace 成员交集过滤（跨 workspace 定义不混入）。 */
+function buildSessionMeta(sessionId: string): SessionMetaInput | null {
+  try {
+    const s = getSession(sessionId);
+    if (s === null) return null;
+    const instIds = new Set(listSessionMembers(sessionId).map((m) => m.instanceId));
+    const names = listMembers(s.workspaceId)
+      .filter((m) => instIds.has(m.instanceId))
+      .map((m) => m.agentName);
+    return {
+      workspaceId: s.workspaceId,
+      title: s.title,
+      kind: s.kind,
+      lastMessageAt: s.lastMessageAt,
+      memberNames: names,
+      messageCount: countMessagesBySession(sessionId),
+    };
+  } catch (err) {
+    logger.warn('context-expander：会话元信息构建失败，降级 missing', {
+      sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -279,5 +325,41 @@ export async function expandMessageContext(
     }
   }
 
-  return { skills, files, images, droppedImages };
+  // 4. sessions（跨会话引用 spec 2026-09-30 §6）：指针级展开——存在性 + workspace
+  //    归属校验 → 元信息；失败降级 missing（永不抛错契约，元素级防御同 skills I5）。
+  //    workspaceId 为 null 时 meta.workspaceId === workspaceId 恒 false → 全部
+  //    missing（无 workspace 上下文不注入指针，范围门语义）。title 一律用选择时
+  //    快照（missing 时保留原值供回溯，meta.title 不覆盖用户所见）。
+  const sessions: ExpandedSessionItem[] = [];
+  if (Array.isArray(context.sessions)) {
+    for (const s of context.sessions) {
+      if (typeof s?.sessionId !== 'string' || s.sessionId === '' || typeof s?.title !== 'string') continue;
+      const meta = (() => {
+        try {
+          return deps.sessionMeta ? deps.sessionMeta(s.sessionId) : buildSessionMeta(s.sessionId);
+        } catch (err) {
+          logger.warn('context-expander：会话元信息查找失败，降级 missing', {
+            sessionId: s.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        }
+      })();
+      sessions.push(
+        meta !== null && meta.workspaceId === workspaceId
+          ? {
+              sessionId: s.sessionId,
+              title: s.title,
+              kind: meta.kind,
+              memberNames: meta.memberNames,
+              messageCount: meta.messageCount,
+              lastMessageAt: meta.lastMessageAt,
+              missing: false,
+            }
+          : { sessionId: s.sessionId, title: s.title, kind: 'chat', memberNames: [], messageCount: 0, lastMessageAt: null, missing: true },
+      );
+    }
+  }
+
+  return { skills, files, images, droppedImages, sessions };
 }

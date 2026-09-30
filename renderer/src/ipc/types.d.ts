@@ -465,6 +465,13 @@ export interface ImageContextItem {
   h: number;
 }
 
+/** 输入框上下文项——会话引用（指针级；完整内容由 agent 用 read_session 工具按需读取，spec 2026-09-30 §6） */
+export interface SessionContextItem {
+  sessionId: string;
+  /** 展示名（选择时从会话列表快照，chip 渲染不反查） */
+  title: string;
+}
+
 /**
  * 一条消息携带的输入框上下文（renderer ↔ main 契约 + messages.context_json 载荷）。
  * 解析收口在 renderer 端 src/lib/message-context.ts（防御性：null / 损坏 / 非法形状 → null）。
@@ -474,6 +481,8 @@ export interface MessageContext {
   files: FileContextItem[];
   /** 图片引用（可选：旧消息 / 无图消息缺省 = 无图，全链路按缺省兼容）；单条消息上限 6 张（renderer 拦截 + sanitize 双层） */
   images?: ImageContextItem[];
+  /** 会话引用（可选：旧消息 / 无引用缺省 = 无；指针级，内容由 read_session 按需读） */
+  sessions?: SessionContextItem[];
 }
 
 /** MCP 工具信息（tools/list 响应的单条工具，与 electron 端 McpToolInfo 对齐） */

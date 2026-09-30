@@ -19,11 +19,12 @@ const PILL_BASE_CLASS =
   'rounded px-1.5 text-xs leading-5 inline-flex items-center align-baseline select-none';
 
 /**
- * 六类 pill 语义底色（全语义 token，spec D-2 填充底色式）。
+ * 七类 pill 语义底色（全语义 token，spec D-2 填充底色式）。
  * image 与 file 同底色（bg-surface-active——图片本质也是 workspace 文件引用），
  * 区分度交给 text-accent + 前缀 Image 图标：四种 status tint 已被
  * skill/command/task 占用，剩 error-tint 语义是「错误」不适用（spec §10 缩略图
  * 属中性内容呈现，红色会误读为失败态）。
+ * session 临时值 = file 底色（Task 10 预览门禁定稿，2026-09-30 spec §6）。
  */
 const PILL_CLASS: Record<PillKind, string> = {
   agent: 'bg-accent-600/10 text-accent-600 dark:text-accent-300',
@@ -32,6 +33,7 @@ const PILL_CLASS: Record<PillKind, string> = {
   command: 'bg-status-warning-tint text-status-warning',
   task: 'bg-status-success-tint text-status-success',
   image: 'bg-surface-active text-accent-600 dark:text-accent-300',
+  session: 'bg-surface-active text-secondary',
 };
 
 /** 选中态追加（两段式 Backspace 高亮 / 点击选中；data-selected="1" 同时落 DOM） */
@@ -67,6 +69,8 @@ function pillDisplayText(pill: PillSeg): string {
       return `/${pill.id}`;
     case 'image':
       return pill.label; // label = 文件名（图标由 IMAGE_PILL_ICON 承担前缀标识）
+    case 'session':
+      return `@${pill.label}`;
   }
 }
 

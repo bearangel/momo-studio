@@ -75,4 +75,29 @@ describe('parseMessageContext', () => {
       files: [{ path: 'a' }],
     });
   });
+
+  // === 跨会话引用：sessions 可选字段（Task 6；畸形不牵连 skills/files——回归锁） ===
+
+  it('合法 sessions 解析', () => {
+    const out = parseMessageContext(
+      JSON.stringify({ skills: [], files: [], sessions: [{ sessionId: 's1', title: '会话一' }] }),
+    );
+    expect(out?.sessions).toEqual([{ sessionId: 's1', title: '会话一' }]);
+  });
+
+  it('sessions 畸形（含坏元素）→ 剔除字段，skills/files 不受牵连（回归锁）', () => {
+    const out = parseMessageContext(
+      JSON.stringify({
+        skills: [{ slug: 'x', name: 'X' }],
+        files: [{ path: 'a.ts' }],
+        sessions: [{ sessionId: 'ok', title: '好' }, { sessionId: 1 }],
+      }),
+    );
+    expect(out).toEqual({ skills: [{ slug: 'x', name: 'X' }], files: [{ path: 'a.ts' }] });
+  });
+
+  it('sessions 非数组 → 视为无引用', () => {
+    const out = parseMessageContext(JSON.stringify({ skills: [], files: [], sessions: 'bad' }));
+    expect(out?.sessions).toBeUndefined();
+  });
 });

@@ -24,7 +24,7 @@
 //      上限 6 拦截 + 失败不插 pill；全员 vision=false 时能力提示行
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import type { ResourceItem, SessionMemberInfo, TaskRow } from '../../ipc/types';
+import type { ResourceItem, SessionMemberInfo, SessionSummary, TaskRow } from '../../ipc/types';
 
 // 图片管线 canvas 边界 mock（jsdom 无 createImageBitmap/canvas.toBlob）：
 // 仅替换 downscaleImage——纯函数与常量经 importOriginal 保真（momo-test-rules：mock 收窄到边界）
@@ -39,6 +39,10 @@ const { sessionState, taskState, workspaceState } = vi.hoisted(() => ({
   sessionState: {
     activeSessionId: 'sess-1' as string | null,
     members: [] as SessionMemberInfo[],
+    // 跨会话引用（spec 2026-09-30 §5）：@ 菜单会话组数据源——已加载会话列表
+    // （含当前会话），MentionInput 侧过滤排除 activeSessionId。组件消费
+    // s.sessions 字段，注入同 store 既有 setter 形态（直接赋值）。
+    sessions: [] as SessionSummary[],
     sendMessage: vi.fn(),
     loadSessions: vi.fn(),
     activeSessionReadOnly: false,
@@ -257,6 +261,7 @@ function resetState(): void {
   workspaceState.getActive = () => ({ id: 'ws-1', name: 'ws' });
   sessionState.activeSessionId = 'sess-1';
   sessionState.members = [];
+  sessionState.sessions = [];
   sessionState.sendMessage = vi.fn().mockResolvedValue(undefined);
   sessionState.loadSessions = vi.fn().mockResolvedValue(undefined);
   sessionState.activeSessionReadOnly = false;
@@ -722,6 +727,116 @@ describe('MentionInput @ 统一菜单（v2.11.1 F2）', () => {
     fireEvent.keyDown(el, { key: 'Enter' });
     await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
     expect(hasPill(el, 'file', 'a.ts')).toBe(true);
+  });
+});
+
+// === @ 菜单会话组（跨会话引用 spec 2026-09-30 §5）：
+//   第三组「引用会话」——已加载会话列表排除当前会话，标题子串过滤，
+//   选中走 selectWithPill({ kind:'session', id, label })，context.sessions 透传。
+//   数据源 store.sessions（与 IPC 解耦——切会话已 loadSessions 拉过即可）。
+//   GROUP_LABEL '引用会话'，菜单图标 lucide-messages-square 12px / stroke 1.75。
+//   键盘导航跨组扁平序列：会话条目追加在 file 组之后（spec agent → file → session 顺序）。
+describe('MentionInput @ 菜单会话组（跨会话引用）', () => {
+  beforeEach(() => {
+    // 当前激活会话 sess-2 必须出现在 sessions 中（真实 store 行为）但渲染侧
+    // 排除——选择自身无意义（spec §5）；会话标题含「设计讨论」/「当前会话标题」
+    sessionState.sessions = [
+      { id: 'sess-1', title: '设计讨论' } as unknown as SessionSummary,
+      { id: 'sess-2', title: '当前会话标题' } as unknown as SessionSummary,
+      { id: 'sess-3', title: '实现笔记' } as unknown as SessionSummary,
+    ];
+    sessionState.activeSessionId = 'sess-2';
+  });
+
+  it('打 @ 出现「引用会话」组；当前会话不在列表；标题子串过滤', () => {
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    // 组标签（className 含 .text-tertiary 是渲染契约：<div className="px-3 py-1 text-xs text-tertiary">）
+    expect(screen.getByText('引用会话', { selector: '.text-tertiary' })).toBeInTheDocument();
+    // 会话条目（排除 sess-2 当前会话）
+    expect(screen.getByText('设计讨论')).toBeInTheDocument();
+    expect(screen.getByText('实现笔记')).toBeInTheDocument();
+    expect(screen.queryByText('当前会话标题')).not.toBeInTheDocument();
+
+    // 标题子串过滤：@设计 → 仅「设计讨论」命中
+    typeInEditor(editor(), '@设计');
+    expect(screen.getByText('设计讨论')).toBeInTheDocument();
+    expect(screen.queryByText('实现笔记')).not.toBeInTheDocument();
+  });
+
+  it('会话组在 agent + file 组之后渲染（spec agent → file → session 顺序）', async () => {
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-1', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    mockApi.file.list.mockResolvedValue([{ name: 'a.ts', isDirectory: false, size: 1 }]);
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    // 文件组需 file.list 异步返回——waitFor 等渲染
+    await waitFor(() => expect(screen.getByText('a.ts')).toBeInTheDocument());
+    // 三组标签按出现顺序断言：group label 在渲染序列的相对位置即文档顺序
+    const labels = Array.from(document.querySelectorAll('.text-tertiary'))
+      .map((n) => n.textContent)
+      .filter((t): t is string => t !== null);
+    const agentIdx = labels.indexOf('选择要 @ 的 agent');
+    const fileIdx = labels.indexOf('引用文件');
+    const sessionIdx = labels.indexOf('引用会话');
+    expect(agentIdx).toBeGreaterThanOrEqual(0);
+    expect(fileIdx).toBeGreaterThan(agentIdx);
+    expect(sessionIdx).toBeGreaterThan(fileIdx);
+  });
+
+  it('选中会话 → session pill（data-id=会话 id）+ 发送载荷 context.sessions', async () => {
+    render(<MentionInput />);
+    const el = editor();
+    // 跨会话引用常见形态：先有正文，再 @ 引用会话（spec §6 真实使用）。
+    // @ 触发需空白前缀锚定（spec `(?:^|\s)@`）——先整段建「参考」，再 append「 @设计」
+    typeInEditor(el, '参考');
+    typeAtEnd(el, ' @设计');
+    fireEvent.click(screen.getByText('设计讨论'));
+    expect(hasPill(el, 'session', 'sess-1')).toBe(true);
+    // 菜单关闭 + 显示文本含会话标题（pill 显示语义对齐其他五类）
+    expect(screen.queryByText('引用会话')).not.toBeInTheDocument();
+    expect(visibleText(el)).toContain('参考');
+    expect(visibleText(el)).toContain('设计讨论');
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    await waitFor(() => expect(sessionState.sendMessage).toHaveBeenCalled());
+    // composer-segments serializeSessions 收口：body 内 @label，context.sessions 含去重 sessionId + title
+    expect(sessionState.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('参考'),
+      undefined,
+      expect.objectContaining({
+        sessions: [{ sessionId: 'sess-1', title: '设计讨论' }],
+      }),
+    );
+  });
+
+  it('无其他会话时（仅当前会话）→ 会话组不渲染、不报错', () => {
+    sessionState.sessions = [
+      { id: 'sess-2', title: '当前会话标题' } as unknown as SessionSummary,
+    ];
+    sessionState.activeSessionId = 'sess-2';
+    // 菜单开需要至少一个非空组——seed 一名在线成员让 @ 菜单可渲染
+    sessionState.members = [
+      makeMember({ instanceId: 'inst-1', agentName: 'PM-agent', lastRunning: true }),
+    ];
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    // agent 组仍渲染（双源契约不变），会话组因排除后为空不出现
+    expect(screen.getByText('选择要 @ 的 agent')).toBeInTheDocument();
+    expect(screen.queryByText('引用会话')).not.toBeInTheDocument();
+  });
+
+  it('sessions 列表为空 → 会话组不渲染；其它组不受影响', async () => {
+    sessionState.sessions = [];
+    // seed 文件列表让文件组可渲染——验证会话组缺席不污染其它组
+    mockApi.file.list.mockResolvedValue([{ name: 'a.ts', isDirectory: false, size: 1 }]);
+    render(<MentionInput />);
+    typeInEditor(editor(), '@');
+    await waitFor(() => expect(screen.getByText('a.ts')).toBeInTheDocument());
+    // 等待文件组实际渲染后再断言——避免 file.list 异步未到前假阴性
+    expect(screen.queryByText('引用会话')).not.toBeInTheDocument();
+    expect(screen.getByText('引用文件')).toBeInTheDocument();
   });
 });
 
