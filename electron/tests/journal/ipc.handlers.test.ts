@@ -1,7 +1,7 @@
 // electron/tests/journal/ipc.handlers.test.ts
 //
-// journal 命名空间 4 通道（list / revert / scan / rollbackFileBefore）IPC 接线测试
-// （v2.5 变更账本 Task 7）。
+// journal 命名空间 4 通道（list / revert / rollbackFileBefore / preview）IPC
+// 接线测试（v2.5 变更账本 Task 7；2026-09-30 scan 通道随任务面板退役移除）。
 //
 // mock 形态照抄 tests/sandbox/ipc.handlers.test.ts（vi.hoisted + ipcMain.handle
 // Map 捕获 + logger 打桩）；数据面全真实（momo-test-rules 铁律 1/4/5）：
@@ -16,7 +16,7 @@
 //   四通道注册 / list 两 scope + 内容截断 100KB + null hash 侧文本 null /
 //   revert 透传 force + 合成 ctx 条目落账（toolName='undo' +
 //   streamSessionId='journal-revert-ui'）/ rollbackFileBefore 组合序（A、B 同文件
-//   → 逆序 B→A）/ scan 透传（真实 repo 差集 + 损坏 .git degraded）/
+//   → 逆序 B→A）/
 //   boot 冒烟：registerJournalIpc() 后 getJournalStore() 非 null（T4 移交）/
 //   boot enforceQuota 接线源码锁（T6 移交）/ 错误路径：workspace 不存在 /
 //   scope 两键皆空 / 锚点条目不存在 / 锚点 path 不一致
@@ -51,7 +51,6 @@ import { createWorkspace } from '../../src/main/workspace/crud';
 import type { Workspace } from '../../src/main/workspace/types';
 import type { JournalEntry, JournalEntryView } from '../../src/main/journal/types';
 import type { RevertOutcome } from '../../src/main/journal/revert';
-import type { ScanResult } from '../../src/main/journal/detector';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-journal-ipc-${process.pid}-${Date.now()}`);
 /** 每用例真实 workspace 目录（afterEach 统一清理） */
@@ -124,12 +123,12 @@ function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 describe('journal/ipc.handlers 通道注册 + boot 冒烟', () => {
-  it('注册 journal:list / revert / scan / rollbackFileBefore / preview 五通道', () => {
+  it('注册 journal:list / revert / rollbackFileBefore / preview 四通道', () => {
     expect(ipcHandlers.has('journal:list')).toBe(true);
     expect(ipcHandlers.has('journal:revert')).toBe(true);
-    expect(ipcHandlers.has('journal:scan')).toBe(true);
     expect(ipcHandlers.has('journal:rollbackFileBefore')).toBe(true);
     expect(ipcHandlers.has('journal:preview')).toBe(true);
+    expect(ipcHandlers.has('journal:scan')).toBe(false);
   });
 
   it('boot 冒烟回归锁（T4 移交）：registerJournalIpc() 注册即注入主进程 store——getJournalStore() 非 null', () => {
@@ -353,39 +352,5 @@ describe('journal:rollbackFileBefore', () => {
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]!.result).toBe('no-op');
     expect(outcomes[0]!.detail).toContain('不一致');
-  });
-});
-
-describe('journal:scan', () => {
-  it('透传真实扫描：untracked 差集正确（journaled 入账 / unjournaled 账外）', async () => {
-    const { ws, dir } = await mkWorkspace('ws-scan-ok');
-    // j.txt 记账（create）且真实存在 → git 变更 ∩ 账本；out.txt 手工写不记账 → 账外
-    journaledCreate(rcOf(ws.id), dir, 'j.txt', 'journaled');
-    fsSync.writeFileSync(path.join(dir, 'out.txt'), 'untracked', 'utf8');
-
-    const r = await call<ScanResult>('journal:scan', ws.id, null);
-
-    expect(r.degraded).toBe(false);
-    expect(r.journaled).toEqual(['j.txt']);
-    expect(r.unjournaled).toEqual(['out.txt']);
-    expect(r.repos[0]).toBe(dir);
-  });
-
-  it('透传 degraded：仓损坏（git status 非零退出）→ degraded=true + 三列空', async () => {
-    const { ws, dir } = await mkWorkspace('ws-scan-degraded');
-    // .git 存在（discoverRepos 会发现根仓）但 HEAD 损坏 → git status 非零 → 降级
-    fsSync.mkdirSync(path.join(dir, '.git'), { recursive: true });
-    fsSync.writeFileSync(path.join(dir, '.git', 'HEAD'), 'garbage-not-a-ref', 'utf8');
-
-    const r = await call<ScanResult>('journal:scan', ws.id, null);
-
-    expect(r.degraded).toBe(true);
-    expect(r.journaled).toEqual([]);
-    expect(r.unjournaled).toEqual([]);
-    expect(r.repos).toEqual([]);
-  });
-
-  it('错误路径：workspace 不存在 → invoke 拒绝', async () => {
-    await expect(call('journal:scan', 'ws-不存在', null)).rejects.toThrow('工作空间不存在');
   });
 });
