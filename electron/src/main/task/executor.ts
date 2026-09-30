@@ -178,7 +178,9 @@ function countInProgress(): number {
   return row.n;
 }
 
-/** 队首候选：assigned / session_queued 按放行序（v2.3 车道队列并入），排除本轮已处理过的失败候选 */
+/** 队首候选：assigned / session_queued 按放行序（v2.3 车道队列并入），排除本轮已处理过的失败候选。
+ * scheduled_at 闸门（spec 2026-09-30 §3.2）：NULL 或已到点（<= now）才有放行资格——
+ * 未来时间的任务停在排队中，由 executor 30s 兜底扫描 + scheduler due-wakeup 到点捞起。 */
 function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | null {
   const skipIds = [...skip];
   // 排除子句只拼接占位符（skip 内容是内部生成的任务 id，仍走参数绑定）
@@ -187,10 +189,11 @@ function peekNextAssigned(slots: number, skip: ReadonlySet<string>): TaskRow | n
   const rows = getDb()
     .prepare(
       `SELECT id FROM tasks WHERE status IN ('assigned', 'session_queued') ${excludeClause}
+       AND (scheduled_at IS NULL OR scheduled_at <= ?)
        ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC, created_at ASC
        LIMIT ?`,
     )
-    .all(...skipIds, Math.max(slots, 1)) as Array<{ id: string }>;
+    .all(...skipIds, Date.now(), Math.max(slots, 1)) as Array<{ id: string }>;
   for (const r of rows) {
     const t = getTask(r.id);
     if (t && (t.status === 'assigned' || t.status === 'session_queued')) return t; // SELECT 与读取间竞态防御
