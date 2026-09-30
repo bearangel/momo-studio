@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
-import { rowToMember, type WorkspaceMemberRow } from './crud';
+import { rowToMember, type WorkspaceMemberRow } from './agent-queries';
 import type { Team, WorkspaceAgentMember } from './types';
 
 /** teams 行的弱类型映射 */

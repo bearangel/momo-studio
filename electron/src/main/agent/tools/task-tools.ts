@@ -44,7 +44,9 @@ import { spawnNextInstanceIfRecurring } from '../../task/recurrence';
 import { notifyExecutor } from '../../task/executor';
 import { hasDelegationTarget } from '../../task/starter';
 import { resolveCreateStatus } from '../../task/create-status';
-import { listMembers, listAgentDefinitions } from '../crud';
+// agent 域只读查询走 agent-queries 叶子而非 crud——避免 crud → tools/catalog →
+// tools/index → 本模块 → crud 的循环依赖（Task 3 目录派生改造断环）
+import { listMembers, listAgentDefinitions } from '../agent-queries';
 import { listTeams } from '../team';
 import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
 import type { LLMToolDef } from '../llm-provider';

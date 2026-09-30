@@ -14,7 +14,9 @@ import {
 import { listEventsForMessages } from '../../storage/messages/events-repo';
 import type { MessageEventRow } from '../../storage/messages/events-repo';
 import { exportAggregateEvents } from '../../im/export-aggregator';
-import { listMembers } from '../crud';
+// agent 域只读查询走 agent-queries 叶子而非 crud——断 crud → catalog → index → 本模块
+// → crud 循环依赖（Task 3 目录派生改造）
+import { listMembers } from '../agent-queries';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
 import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-entry';

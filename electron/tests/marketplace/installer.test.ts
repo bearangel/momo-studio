@@ -19,7 +19,7 @@ import {
   uninstallPackage,
 } from '../../src/main/marketplace/installer';
 import { listAgentDefinitions } from '../../src/main/agent/crud';
-import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
+import { SAFE_MINIMUM_TOOLS, ALL_BUILTIN_TOOLS } from '../../src/main/agent/tools/catalog';
 import type { MarketplaceItem } from '../../src/main/marketplace/types';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-mp-installer-test-${Date.now()}`);
@@ -86,20 +86,18 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     expect(installed[0]!.cachePath).toBe(cachePath);
   });
 
-  it('agent 类型 manifest.yaml 含全部 34 个 builtin defaultTools（v2.3 +apply_patch / v2.1 +office 九工具）', async () => {
+  it('agent 类型 manifest.yaml 的 defaultTools = 派生 builtin 全集（不锁数字——随模块注册扩展）', async () => {
     const { cachePath } = await installPackage(makeItem());
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    expect(manifest.spec.defaultTools).toHaveLength(34);
+    // 目录派生改造（Task 3）：全集 = ALL_BUILTIN_TOOLS（含 v2.x 任务/记忆/浏览器/会话/进程/git_repos/LSP）
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
-    expect(refs).toContain('bash');
-    expect(refs).toContain('read_file');
-    expect(refs).toContain('git_commit');
-    expect(refs).toContain('lsp_diagnostics');
-    expect(refs).toContain('apply_patch');
-    expect(refs).toContain('office_read'); // v2.1 办公八工具入全集
+    expect(refs).toEqual([...ALL_BUILTIN_TOOLS].sort());
+    for (const probe of ['bash', 'read_file', 'git_commit', 'lsp_diagnostics', 'apply_patch', 'office_read']) {
+      expect(refs, probe).toContain(probe);
+    }
   });
 
   it('S3 回归锁：注册入库的 defaultTools 按安全最小集钳制——bash/git_commit 被剔除', async () => {
@@ -109,7 +107,7 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     const refs = def!.defaultTools.map((t) => t.ref);
     expect(refs).not.toContain('bash');
     expect(refs).not.toContain('git_commit');
-    // 全部落在安全最小集内（文件里仍是 33 工具全集，钳制只作用于注册结果）
+    // manifest 文件里仍是派生全集（钳制只作用于注册结果）
     const safe = new Set<string>(SAFE_MINIMUM_TOOLS);
     expect(refs.every((r) => safe.has(r))).toBe(true);
     expect(def!.source).toBe('marketplace');

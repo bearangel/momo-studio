@@ -23,7 +23,9 @@ import { OUTPUT_LIMITS } from '../../../src/main/agent/tools/shared/output-trunc
 import { SessionTools } from '../../../src/main/agent/tools/session-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
-vi.mock('../../../src/main/agent/crud', () => ({
+// mock 目标跟随生产消费路径：session-tools 的 listMembers 自 Task 3 断环起
+// import 自 agent-queries（原 crud 已改为 re-export，mock crud 不再拦截）
+vi.mock('../../../src/main/agent/agent-queries', () => ({
   listMembers: () => [
     { instanceId: 'inst-coder', agentUserId: 'coder-1', agentName: 'Coder', iconEmoji: null },
     { instanceId: 'inst-writer', agentUserId: 'writer-1', agentName: 'Writer', iconEmoji: null },

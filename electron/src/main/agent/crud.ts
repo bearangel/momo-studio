@@ -17,6 +17,18 @@ import { getGlobalSettings } from '../settings/crud';
 import { getProvider } from './provider-crud';
 import { parseThinkingConfig, type ThinkingConfig } from '../llm/provider-presets';
 import type { AgentDefinition, WorkspaceAgentMember, ToolRef, McpRef, SkillRef } from './types';
+import {
+  rowToMember,
+  getAgentDefinition,
+  listAgentDefinitions,
+  type WorkspaceMemberRow,
+} from './agent-queries';
+
+// 只读查询已下沉到 agent-queries.ts（Task 3 断环：tools 目录派生后 catalog → index
+// 与 tools 模块 → crud 的回边构成循环依赖，详见 agent-queries.ts 头注）。
+// 此处 re-export 保持既有导出面——21 个调用方零改动。
+export { rowToMember, getAgentDefinition, listAgentDefinitions, listMembers } from './agent-queries';
+export type { WorkspaceMemberRow } from './agent-queries';
 
 /** 规范化 slug：小写、连续非字母数字折叠为单短横线、去首尾短横线 */
 function slugify(input: string): string {
@@ -138,90 +150,9 @@ export function createCustomDef(workspaceId: string | null, input: CreateCustomD
   return def;
 }
 
-/** agent_definitions 行的弱类型映射（v1.3 schema） */
-interface AgentDefRow {
-  id: string;
-  name: string;
-  slug: string;
-  version: string;
-  runtime: string;
-  system_prompt: string;
-  default_tools: string;
-  default_mcps: string;
-  default_skills: string;
-  source: string;
-  description: string;
-  icon_emoji: string;
-  created_at: string;
-  model_provider_id: string | null;
-  model_name: string;
-  task_driven: number;
-  thinking_json: string | null;
-}
-
-/** workspace_agent_members 行的弱类型映射（v25 schema：无 role/parent/enabled）。
- *  导出供 team.ts 复用——WorkspaceAgentMember 行映射单点维护，防双映射漂移。
- *  v2.2：name/icon_emoji 为 JOIN agent_definitions 的可选展示列（单表 SELECT 路径无此二列）。 */
-export interface WorkspaceMemberRow {
-  instance_id: string;
-  workspace_id: string;
-  agent_definition_id: string;
-  agent_user_id: string;
-  api_key_override: number;
-  last_running: number;
-  created_at: string;
-  name?: string;
-  icon_emoji?: string;
-}
-
-/** 将 DB 行（snake_case + JSON 字符串）转换为强类型 AgentDefinition */
-function rowToDef(row: AgentDefRow): AgentDefinition {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    version: row.version,
-    runtime: row.runtime as AgentDefinition['runtime'],
-    systemPrompt: row.system_prompt,
-    defaultTools: JSON.parse(row.default_tools) as ToolRef[],
-    source: row.source as AgentDefinition['source'],
-    description: row.description,
-    iconEmoji: row.icon_emoji,
-    defaultMcps: JSON.parse(row.default_mcps) as AgentDefinition['defaultMcps'],
-    defaultSkills: JSON.parse(row.default_skills) as AgentDefinition['defaultSkills'],
-    // v25 定义全局化：workspace_id 列已 DROP（migration v25），映射恒 null。
-    // 字段保留是为 renderer 契约（types.d.ts），T12 起 UI 侧清理后可移除。
-    workspaceId: null,
-    modelProviderId: row.model_provider_id,
-    modelName: row.model_name,
-    createdAt: row.created_at,
-    taskDriven: row.task_driven === 1,
-    // v31：坏值容错读回 null（继承模型级），单行坏数据不炸列表
-    thinkingJson: (() => {
-      if (row.thinking_json === null) return null;
-      try {
-        return parseThinkingConfig(JSON.parse(row.thinking_json) as unknown);
-      } catch {
-        return null;
-      }
-    })(),
-  };
-}
-
-/** 将 DB 行转换为强类型 WorkspaceAgentMember（team.ts 复用，见 WorkspaceMemberRow 导出说明） */
-export function rowToMember(row: WorkspaceMemberRow): WorkspaceAgentMember {
-  return {
-    instanceId: row.instance_id,
-    workspaceId: row.workspace_id,
-    agentDefinitionId: row.agent_definition_id,
-    agentUserId: row.agent_user_id,
-    agentName: row.name ?? row.agent_user_id,
-    iconEmoji: row.icon_emoji ?? '',
-    hasApiKeyOverride: row.api_key_override === 1,
-    lastRunning: row.last_running === 1,
-    createdAt: row.created_at,
-  };
-}
+/** 行映射与只读查询（AgentDefRow / WorkspaceMemberRow / rowToDef / rowToMember /
+ *  listAgentDefinitions / getAgentDefinition / listMembers）已下沉 agent-queries.ts
+ *  （Task 3 断环），本文件顶部 re-export 保持既有符号稳定 */
 
 /** 新增或覆盖写入一条 agent 定义（以 id 为唯一键）。
  *  v25 定义全局化：workspace_id 列已退役，不再写入（修复前写死列必炸）。 */
@@ -252,29 +183,6 @@ export function saveAgentDefinition(def: AgentDefinition): void {
     task_driven: 1, // Task 13 起 v1 长存进程双轨已删，恒为 task-driven
     thinking_json: def.thinkingJson != null ? JSON.stringify(def.thinkingJson) : null,
   });
-}
-
-/**
- * 列出 agent 定义。v25 定义全局化后 workspace 过滤退役（列已 DROP）——
- * 无论 workspaceId 是否提供均返回全部定义；参数保留仅为调用方签名兼容
- * （renderer T12 清理后可移除）。
- */
-export function listAgentDefinitions(workspaceId?: string): AgentDefinition[] {
-  void workspaceId; // 兼容参数，语义退役
-  const db = getDb();
-  const rows = db
-    .prepare('SELECT * FROM agent_definitions ORDER BY source ASC, created_at DESC')
-    .all() as AgentDefRow[];
-  return rows.map(rowToDef);
-}
-
-/** 按 id 取单条 agent 定义，不存在返回 null */
-export function getAgentDefinition(id: string): AgentDefinition | null {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT * FROM agent_definitions WHERE id = ?')
-    .get(id) as AgentDefRow | undefined;
-  return row ? rowToDef(row) : null;
 }
 
 /**
@@ -438,19 +346,6 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
   db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
   logger.info('agent 定义已删除', { defId, stoppedCount: stopped.length });
   return { stoppedInstanceIds: stopped };
-}
-
-/** 列出某 workspace 下所有 agent 成员（v2.2：JOIN definitions 带出 agentName/iconEmoji） */
-export function listMembers(workspaceId: string): WorkspaceAgentMember[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT wam.*, d.name, d.icon_emoji FROM workspace_agent_members wam
-       JOIN agent_definitions d ON d.id = wam.agent_definition_id
-       WHERE wam.workspace_id = ?`,
-    )
-    .all(workspaceId) as WorkspaceMemberRow[];
-  return rows.map(rowToMember);
 }
 
 /** keychain 引用 key：agent.<instanceId>.llm_api_key（旧版兼容；v1.3 起优先用 api_key_override） */

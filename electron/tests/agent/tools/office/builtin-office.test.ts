@@ -35,8 +35,9 @@ describe('office-assistant.yaml', () => {
     expect(tools.length).toBeGreaterThan(0);
     const realDefs = new Set(new OfficeTools().getDefs().map((d) => d.name));
     for (const t of tools) {
+      // ALL_BUILTIN_TOOLS 派生后即 string[]，直接 includes 无需收窄 cast
       expect(
-        realDefs.has(t.ref) || ALL_BUILTIN_TOOLS.includes(t.ref as (typeof ALL_BUILTIN_TOOLS)[number]),
+        realDefs.has(t.ref) || ALL_BUILTIN_TOOLS.includes(t.ref),
         `defaultTools 引用了不存在的工具: ${t.ref}`,
       ).toBe(true);
     }
@@ -62,11 +63,14 @@ describe('office-assistant.yaml', () => {
 });
 
 describe('工具全集与分类', () => {
-  it('office 九工具全部进入全集（34 个）', () => {
-    expect(ALL_BUILTIN_TOOLS).toHaveLength(34);
-    expect(ALL_BUILTIN_TOOLS).toContain('office_read');
-    expect(ALL_BUILTIN_TOOLS).toContain('office_copy');
-    expect(ALL_BUILTIN_TOOLS).toContain('office_fill_ppt_template');
+  it('office 九工具全部进入派生全集（不锁总数——ALL_BUILTIN_TOOLS 随模块注册扩展）', () => {
+    for (const n of [
+      'office_read', 'office_read_cells', 'office_create_excel', 'office_write_excel',
+      'office_create_doc', 'office_create_ppt', 'office_create_pdf', 'office_copy',
+      'office_fill_ppt_template',
+    ]) {
+      expect(ALL_BUILTIN_TOOLS, n).toContain(n);
+    }
   });
   it('分类并集 == 全集（既有不变量）', () => {
     const union = new Set(TOOL_CATEGORIES.flatMap((c) => c.tools));
