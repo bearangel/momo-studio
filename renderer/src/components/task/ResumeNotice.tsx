@@ -32,7 +32,7 @@ interface RowUi {
 const ROW_UI_INIT: RowUi = { abandonExpanded: false, summary: null, error: null };
 
 /** 撤回结果计数：成功还原（reverted / restored-missing）计撤回，其余（漂移跳过 /
- * no-op / failed）计跳过——与账本面板 OUTCOME_META 的绿/非绿二分口径一致 */
+ * no-op / failed）计跳过——绿/非绿二分口径与 TurnUndoDialog 的结果呈现一致 */
 function countOutcomes(outcomes: RevertOutcome[]): { reverted: number; skipped: number } {
   let reverted = 0;
   for (const o of outcomes) {

@@ -297,7 +297,7 @@ describe('子 agent dispatch fresh session（B11：MemoryProvider 取代 loadRec
         startedAt: null,
         completedAt: null,
         groupId: null,
-        boardPosition: null,
+        pinnedAt: null,
         archivedAt: null,
       },
       events: [

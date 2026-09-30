@@ -170,6 +170,10 @@ export async function sendUserMessage(input: {
     eventType: 'm.room.message', // 事件类型字符串保留（renderer 渲染分支依赖；P2 收敛命名）
     body: input.body,
     workspaceId: session.workspaceId,
+    // kickoff 行携带来源任务 id（renderer locateTaskExecution 锚点）；用户手输
+    // 消息 sourceTaskId 恒缺省 → null，行为不变。与 agent 回复行的 chainTaskId
+    // 分属两个 ID 空间（boundary-rules），本列只落任务板任务 id。
+    taskId: input.sourceTaskId ?? null,
     ...(input.context ? { contextJson: JSON.stringify(input.context) } : {}),
   });
   touchSessionLastMessage(input.sessionId);
