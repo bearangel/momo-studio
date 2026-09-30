@@ -1,7 +1,9 @@
 // electron/tests/agent/tools/session-tools.test.ts
 //
-// SessionTools.list_sessions 回归锁（spec 2026-09-30 §4.1）：
-//   workspace 范围 / 排除当前会话 / 关键词过滤 / 消歧元信息（成员名、消息数、预览）。
+// SessionTools.list_sessions / read_session 回归锁（spec 2026-09-30 §4.1/§4.2）：
+//   list_sessions —— workspace 范围 / 排除当前会话 / 关键词过滤 / 消歧元信息。
+//   read_session —— 范围门三连 / 最近 N 条 + 工具摘要（B 颗粒度）/ beforeTs 翻页 /
+//     输出总量截断。
 // 核心读路径真 SQLite；listMembers（显示名富化）mock 收窄到边界。
 //
 // seeding 偏离 brief：sessions.workspace_id 外键真实存在（REFERENCES workspaces
@@ -16,6 +18,8 @@ import { randomUUID } from 'node:crypto';
 import { runMigrations, closeDb, getDb } from '../../../src/main/storage/db';
 import { insertSession, addSessionMember } from '../../../src/main/storage/sessions/repo';
 import { insertMessage } from '../../../src/main/storage/messages/repo';
+import { insertEventBatch } from '../../../src/main/storage/messages/events-repo';
+import { OUTPUT_LIMITS } from '../../../src/main/agent/tools/shared/output-truncate';
 import { SessionTools } from '../../../src/main/agent/tools/session-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
@@ -136,5 +140,95 @@ describe('list_sessions', () => {
       mkCtx(wsA, 'room-x'),
     );
     expect(miss).toContain('没有匹配的会话');
+  });
+});
+
+describe('read_session', () => {
+  it('范围门：不存在 / 跨 workspace / 读自己 → 明确文案，不做任何读取', async () => {
+    const wsA = seedWorkspace();
+    const wsB = seedWorkspace();
+    const tools = new SessionTools();
+    const out1 = await tools.execute('read_session', { sessionId: 'no-such' }, mkCtx(wsA, 'room-x'));
+    expect(out1).toContain('会话不存在');
+    const other = insertSession({ workspaceId: wsB, title: '别家' });
+    const out2 = await tools.execute('read_session', { sessionId: other.id }, mkCtx(wsA, 'room-x'));
+    expect(out2).toContain('不在当前 workspace');
+    const cur = insertSession({ workspaceId: wsA, title: '自己' });
+    const out3 = await tools.execute('read_session', { sessionId: cur.id }, mkCtx(wsA, cur.id));
+    expect(out3).toContain('已在你的上下文中');
+  });
+
+  it('默认最近 N 条 + 工具调用摘要（正文行 + 🔧 缩进行）+ 翻页提示', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '参考会话' });
+    const userMsg = insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '帮我重构 X' });
+    const agentMsg = insertMessage({ sessionId: s.id, sender: 'coder-1', eventType: 'm.room.message', body: '好的，完成重构' });
+    insertEventBatch([
+      { messageId: agentMsg.id, seq: 0, eventType: 'text_delta', payload: { delta: '好的' } },
+      { messageId: agentMsg.id, seq: 1, eventType: 'tool_call_start', payload: { callId: 'c1', toolName: 'read_file', args: { path: 'src/x.ts' } } },
+      { messageId: agentMsg.id, seq: 2, eventType: 'tool_call_result', payload: { callId: 'c1', toolName: 'read_file', result: 'export const a = 1;', success: true } },
+    ]);
+    void userMsg;
+
+    const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
+
+    expect(out).toContain('参考会话');
+    expect(out).toContain('用户: 帮我重构 X');       // sender='owner' → 「用户」
+    expect(out).toContain('Coder: 好的，完成重构');   // agentUserId → 显示名（mock listMembers）
+    expect(out).toContain('🔧 read_file');
+    expect(out).toContain('src/x.ts');
+    expect(out).toContain('beforeTs=');              // 翻页提示带本页最早时间戳
+    expect(out).not.toContain('截断');               // Ruling 1：未超限输出不得出现截断文案
+  });
+
+  it('beforeTs 向前翻页 + dispatch 段渲染', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '分页会话' });
+    const m1 = insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第一条' });
+    await new Promise((r) => setTimeout(r, 5)); // 保证 created_at 严格递增
+    insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第二条' });
+    await new Promise((r) => setTimeout(r, 5));
+    insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: '第三条' });
+    const boundary = m1.createdAt + 2; // 严格小于第二条、大于第一条的切点
+
+    const out = await new SessionTools().execute(
+      'read_session',
+      { sessionId: s.id, beforeTs: boundary },
+      mkCtx(wsA, 'room-x'),
+    );
+    expect(out).toContain('第一条');
+    expect(out).not.toContain('第二条');
+    expect(out).not.toContain('第三条');
+
+    const d = insertSession({ workspaceId: wsA, title: 'dispatch 会话' });
+    const lead = insertMessage({ sessionId: d.id, sender: 'pm-1', eventType: 'm.room.message', body: '派发' });
+    insertEventBatch([
+      { messageId: lead.id, seq: 0, eventType: 'tool_call_start', payload: { callId: 'c9', toolName: 'dispatch', args: { task: '写文档' }, isDispatch: true, subStreamSessionId: 'ss-sub', subAgentName: 'Writer' } },
+      { messageId: lead.id, seq: 1, eventType: 'tool_call_result', payload: { callId: 'c9', toolName: 'dispatch', result: '', success: true, subStatus: 'completed' } },
+    ]);
+    const out2 = await new SessionTools().execute('read_session', { sessionId: d.id }, mkCtx(wsA, 'room-x'));
+    expect(out2).toContain('📤 dispatch→Writer');
+    expect(out2).toContain('写文档');
+    expect(out2).toContain('completed');
+  });
+
+  it('空会话 → 元信息头 + 「会话无消息」', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '空的' });
+    const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
+    expect(out).toContain('会话无消息');
+  });
+
+  it('输出总量截断（OUTPUT_LIMITS.read_session）', async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '长会话' });
+    // Ruling 1 要求截断真实发生：brief 的 .repeat(50) 在默认 limit=50 下总量
+    // ~28.8KB 够不到 30KB 上限（恒不截断）；放大到 repeat(100)（~56KB）保证超限。
+    for (let i = 0; i < 200; i++) {
+      insertMessage({ sessionId: s.id, sender: 'owner', eventType: 'm.room.message', body: `消息 ${i} `.repeat(100) });
+    }
+    const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
+    expect(out.length).toBeLessThanOrEqual(OUTPUT_LIMITS.read_session + 100); // 截断标记尾行容差
+    expect(out).toContain('截断');
   });
 });

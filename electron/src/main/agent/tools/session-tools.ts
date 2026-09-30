@@ -5,13 +5,14 @@
 //   read_session  —— 范围门（不存在/跨 workspace/读自己）+ 最近 N 条 + 工具调用摘要
 // 严格只读：只 SELECT sessions / session_members / messages / message_events，
 // 不写任何表。数据访问全部走既有 repo（本文件不含 SQL）。
-import { listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
+import { getSession, listSessionsByWorkspace, listSessionMembers } from '../../storage/sessions/repo';
 import {
   countMessagesBySession,
   getFirstUserMessage,
   listRecentMessagesBySession,
 } from '../../storage/messages/repo';
 import { listEventsForMessages } from '../../storage/messages/events-repo';
+import type { MessageEventRow } from '../../storage/messages/events-repo';
 import { exportAggregateEvents } from '../../im/export-aggregator';
 import { listMembers } from '../crud';
 import type { LLMToolDef } from '../llm-provider';
@@ -88,10 +89,85 @@ async function executeListSessions(args: Record<string, unknown>, ctx: ToolConte
   return `${header}\n${lines.join('\n')}\n读取内容：read_session(sessionId=...)`;
 }
 
+/** read_session 默认 / 上限条数 */
+const READ_DEFAULT_LIMIT = 50;
+const READ_MAX_LIMIT = 200;
+/** 工具摘要行内截断（字符）：args / result / dispatch task */
+const SUMMARY_ARG_CHARS = 120;
+const SUMMARY_RESULT_CHARS = 200;
+const SUMMARY_TASK_CHARS = 80;
+
+const READ_SESSION_DEF: LLMToolDef = {
+  name: 'read_session',
+  description:
+    '读取当前 workspace 内另一会话的内容：每条消息一行（时间/发送者/正文），agent 消息附工具调用摘要行。' +
+    '默认返回最近 50 条；beforeTs / afterTs（毫秒时间戳，取自输出行时间对应值）可翻页。当前会话不可读。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sessionId: { type: 'string', description: '目标会话 id（list_sessions 获取）' },
+      limit: { type: 'number', description: `本页条数，默认 ${READ_DEFAULT_LIMIT}，最大 ${READ_MAX_LIMIT}` },
+      beforeTs: { type: 'number', description: '仅取 created_at 严格小于该值的消息（向更早翻页）' },
+      afterTs: { type: 'number', description: '仅取 created_at 严格大于该值的消息（向更新翻页）' },
+    },
+    required: ['sessionId'],
+  },
+};
+
+/** 单条 assistant 消息的工具摘要行（B 颗粒度；段聚合复用 export-aggregator，不重写配对逻辑） */
+function renderToolSummaryLines(events: MessageEventRow[]): string[] {
+  const { segments } = exportAggregateEvents(events);
+  const lines: string[] = [];
+  for (const seg of segments) {
+    if (seg.kind === 'tool') {
+      const argsStr = truncateString(JSON.stringify(seg.args ?? {}), SUMMARY_ARG_CHARS);
+      const resultStr = seg.result === null ? '(结果未回传)' : truncateString(seg.result, SUMMARY_RESULT_CHARS);
+      lines.push(`    🔧 ${seg.toolName}(${argsStr}) → ${seg.success === false ? '✗' : '✓'} ${resultStr}`);
+    } else if (seg.kind === 'dispatch') {
+      lines.push(`    📤 dispatch→${seg.subAgentName}: ${truncateString(seg.task, SUMMARY_TASK_CHARS)} (${seg.status})`);
+    }
+  }
+  return lines;
+}
+
+async function executeReadSession(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  const sessionId = parseStringArg(args.sessionId, 'sessionId');
+  // 范围门三连（spec §4.2，先于任何内容读取）
+  const session = getSession(sessionId);
+  if (session === null) return `会话不存在（可能已解散）：${sessionId}`;
+  if (session.workspaceId !== ctx.workspaceId) return `会话不在当前 workspace，拒绝读取：${sessionId}`;
+  if (sessionId === ctx.roomId) return '这是当前会话，内容已在你的上下文中，无需读取。';
+
+  const limitRaw = typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : READ_DEFAULT_LIMIT;
+  const limit = Math.max(1, Math.min(Math.floor(limitRaw), READ_MAX_LIMIT));
+  const opts: { beforeTs?: number; afterTs?: number } = {};
+  if (typeof args.beforeTs === 'number' && Number.isFinite(args.beforeTs)) opts.beforeTs = args.beforeTs;
+  if (typeof args.afterTs === 'number' && Number.isFinite(args.afterTs)) opts.afterTs = args.afterTs;
+
+  const messages = listRecentMessagesBySession(sessionId, limit, opts);
+  const header =
+    `会话《${session.title}》 [${session.kind}] 活跃=${formatTs(session.lastMessageAt ?? session.createdAt)}`;
+  if (messages.length === 0) return `${header}\n会话无消息。`;
+
+  const { byUserId } = buildNameMaps(ctx);
+  const eventsByMsg = listEventsForMessages(messages.map((m) => m.id));
+  const lines: string[] = [header];
+  for (const m of messages) {
+    const name = m.sender === 'owner' ? '用户' : (byUserId.get(m.sender) ?? m.sender);
+    lines.push(`[${formatTs(m.createdAt)}] ${name}: ${m.body}`);
+    const summary = renderToolSummaryLines(eventsByMsg.get(m.id) ?? []);
+    lines.push(...summary);
+  }
+  const earliest = messages[0]!.createdAt;
+  const footer = `本页 ${messages.length} 条（时间升序）。更早消息：read_session 工具传 beforeTs=${earliest}`;
+  // 截断提示仅超限时由 truncateString 追加（标记文案含「截断」二字），正常路径零截断文案
+  return truncateString(`${lines.join('\n')}\n${footer}`, OUTPUT_LIMITS.read_session);
+}
+
 /** SessionTools：跨会话引用工具模块（spec 2026-09-30 §4） */
 export class SessionTools implements ToolModule {
   getDefs(): LLMToolDef[] {
-    return [LIST_SESSIONS_DEF];
+    return [LIST_SESSIONS_DEF, READ_SESSION_DEF];
   }
 
   handles(name: string): boolean {
@@ -103,10 +179,4 @@ export class SessionTools implements ToolModule {
     if (name === 'read_session') return executeReadSession(args, ctx);
     throw new Error(`未知 session 工具: ${name}`);
   }
-}
-
-// executeReadSession 在 read_session 任务（Task 3）落地；先以占位实现保证模块完整可注册。
-async function executeReadSession(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
-  void args; void ctx;
-  return 'read_session 尚未实现';
 }
