@@ -35,7 +35,7 @@
 //   - Kimi 式单一容器（v2.11.1 F3→v3）：RichComposer 无边框置于容器内，
 //     框内底行仅剩 📎 左下角（chips 已由编辑器内联 pill 取代）
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, Paperclip, Pin, Terminal, Zap } from 'lucide-react';
+import { Bot, EyeOff, FileText, Image as ImageIcon, Loader2, Lock, MessagesSquare, Paperclip, Pin, Terminal, Zap } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useTaskStore } from '../../stores/task.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -54,12 +54,12 @@ import {
   IMAGE_MAX_EDGE,
   IMAGE_PER_MESSAGE_CAP,
 } from '../../lib/image-downscale';
-import type { SearchHit, SessionMemberInfo, TaskRow, TaskStatus } from '../../ipc/types';
+import type { SearchHit, SessionMemberInfo, SessionSummary, TaskRow, TaskStatus } from '../../ipc/types';
 
 type MenuKind = 'agent' | 'task' | 'command';
 
-/** 菜单条目分组（@ 菜单 agent+file 双组、/ 菜单 command+skill 双组、# 单组） */
-type MenuGroup = 'agent' | 'file' | 'task' | 'command' | 'skill';
+/** 菜单条目分组（@ 菜单 agent+file+session 三组、/ 菜单 command+skill 双组、# 单组） */
+type MenuGroup = 'agent' | 'file' | 'task' | 'command' | 'skill' | 'session';
 
 /** 扁平菜单条目：键盘高亮索引在跨组单序列上移动（组头仅渲染分隔） */
 interface MenuEntry {
@@ -81,6 +81,9 @@ const GROUP_LABEL: Record<MenuGroup, string> = {
   task: '选择要引用的任务',
   command: '命令',
   skill: '技能',
+  // 跨会话引用（spec 2026-09-30 §5）——@ 菜单第三组「引用会话」，
+  // 已加载会话列表排除当前会话后供选
+  session: '引用会话',
 };
 
 /** 组图标（emoji 缺席时）；16px 语义 token 体系外的 12px 行内图标与旧三块菜单一致 */
@@ -97,6 +100,8 @@ function GroupIcon({ group, emoji }: { group: MenuGroup; emoji?: string }) {
       return <Terminal size={12} strokeWidth={1.75} aria-hidden />;
     case 'skill':
       return <Zap size={12} strokeWidth={1.75} aria-hidden />;
+    case 'session':
+      return <MessagesSquare size={12} strokeWidth={1.75} aria-hidden />;
   }
 }
 
@@ -106,6 +111,8 @@ const MENU_STATUSES: ReadonlyArray<TaskStatus> = ['draft', 'pending', 'assigned'
 const MENU_LIMIT = 10;
 /** @ 统一菜单文件组最多展示条目数（searchNames 命中与 file.list 根目录默认列表共用此上限，renderer 端截取） */
 const FILE_MENU_LIMIT = 8;
+/** @ 菜单会话组最多展示条目数（会话列表通常较长，与文件组限额同量级；spec 2026-09-30 §5） */
+const SESSION_MENU_LIMIT = 8;
 /** / 菜单命令组 / 技能组各自最多展示条目数（与 @ 菜单分组限额对齐） */
 const COMMAND_MENU_LIMIT = 8;
 /** 文件搜索防抖间隔（毫秒），与 FileTree 的 SEARCH_DEBOUNCE_MS 对齐 */
@@ -157,6 +164,9 @@ export function MentionInput() {
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const members = useSessionStore((s) => s.members);
+  // 已加载会话列表（@ 菜单会话组数据源；store 加载 = 切会话 / 启动时拉取一次，
+  // 跨会话引用无需新 IPC——切到任意会话时 sessions 已在内存）
+  const sessions = useSessionStore((s) => s.sessions);
   const sendMessage = useSessionStore((s) => s.sendMessage);
   const loadSessions = useSessionStore((s) => s.loadSessions);
   // 只读态（有效成员全失效，spec §7）与聚焦信号（新建会话后聚焦，spec §6.2）
@@ -315,6 +325,18 @@ export function MentionInput() {
               s.name.toLowerCase().includes(query.toLowerCase()),
           )
           .slice(0, COMMAND_MENU_LIMIT)
+      : [];
+
+  // @ 菜单会话组（跨会话引用 spec 2026-09-30 §5）：
+  //   - 排除当前会话（读自己无意义）
+  //   - 标题子串过滤（与其它组同形态，零额外 IPC）
+  //   - SESSION_MENU_LIMIT 截取（会话列表通常较长）
+  const filteredSessions: SessionSummary[] =
+    menuType === 'agent'
+      ? sessions
+          .filter((s) => s.id !== activeSessionId)
+          .filter((s) => !query || s.title.toLowerCase().includes(query.toLowerCase()))
+          .slice(0, SESSION_MENU_LIMIT)
       : [];
 
   /**
@@ -512,6 +534,16 @@ export function MentionInput() {
         primary: f.path,
         image: IMAGE_EXT_RE.test(f.path),
         select: () => selectFile(f),
+      });
+    }
+    // 会话组追加在 file 之后（spec agent → file → session 顺序）——
+    // 选 session pill 走 selectWithPill，复用 replaceLen 局部替换 + focus 恢复
+    for (const s of filteredSessions) {
+      menuEntries.push({
+        key: `session:${s.id}`,
+        group: 'session',
+        primary: s.title,
+        select: () => selectWithPill({ kind: 'session', id: s.id, label: s.title }),
       });
     }
   } else if (menuType === 'task') {
