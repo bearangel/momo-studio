@@ -8,27 +8,33 @@
 //     勾选「设为默认会话 agent」则随后 setDefaultAgent（已有默认时副文案提示替换）
 //   - 'library'（资源库「+ 添加资源 → 创建 Agent」）：仅建全局定义，不动 ws 成员
 //
-// 默认工具集三档（spec §6.3）：安全最小集 / 全部 / 自选——沿用 renderer 端
-// tool-catalog 常量副本（与 electron 端 catalog.ts 手工同步，见该文件头注释）。
+// 默认工具集三档（spec §6.3）：标准（推荐）/ 全部 / 自定义——目录数据自 v2.x 起
+// 切 IPC tools:getCatalog 单一真相源（useToolCatalog，模块级缓存）。「自定义」档
+// 内嵌 CapabilityTabs（工具 / MCP / Skill 三 tab，spec §4.4），提交三字段：
+// defaultTools / defaultMcps / defaultSkills（electron 侧 createCustom 已支持）。
+// 标准/全部档依赖目录数据：目录未就绪时提交被守卫拦截（提示稍候）。
 //
 // v2.1 P3：手写 modal 外壳 → Dialog 原子件；供应商 select → Select、
-// 「设为默认会话 agent」→ Checkbox；工具三档 radio 与自选网格 checkbox 保留原生
+// 「设为默认会话 agent」→ Checkbox；工具三档 radio 保留原生
 // input（P3 Task 4 TeamDialog 先例：行内单/多选原生 + aria-label），仅 token 化；
 // 系统提示词 textarea 无原子件走 token 类；⚡ 说明文案去 emoji（语义不变）。
 // v2.2 fix：模型名由手填 Input 改为 ProviderModelPicker 联动下拉（Bug 1）——
 // picker 内部管供应商列表与模型 options（经 ipc.provider.listModels），换供应商
 // 联动清空模型；deprecated 的 provider.defaultModel 快填随之退役。
-import { useState, type FormEvent } from 'react';
+// v2.x 工具能力重构（Task 6）：safe→standard 换档，自选手写 checkbox 区块整体
+// 替换为 CapabilityTabs；defaultMcps/defaultSkills 随提交。
+import { useEffect, useState, type FormEvent } from 'react';
 import { ipc } from '../../ipc/client';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useAgentStore } from '../../stores/agent.store';
-import { ALL_BUILTIN_TOOLS, SAFE_MINIMUM_TOOLS, TOOL_CATEGORIES } from '../../lib/tool-catalog';
+import { useToolCatalog } from '../../lib/useToolCatalog';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Dialog } from '../ui/Dialog';
 import { Input } from '../ui/Input';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
+import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import type { ReasoningCapability, ThinkingConfig } from '../../ipc/types';
 
 interface Props {
@@ -37,12 +43,12 @@ interface Props {
   onClose: () => void;
 }
 
-type ToolPreset = 'safe' | 'all' | 'custom';
+type ToolPreset = 'standard' | 'all' | 'custom';
 
 const PRESETS: Array<{ key: ToolPreset; label: string; hint: string }> = [
-  { key: 'safe', label: '安全最小集', hint: '读写 / 搜索 / todo，不含 Shell 与 Git 写操作' },
-  { key: 'all', label: '全部工具', hint: '全部内置工具（含 bash 与 git 写操作）' },
-  { key: 'custom', label: '自选', hint: '手动勾选工具' },
+  { key: 'standard', label: '标准（推荐）', hint: '公共默认集：只读 + 文件写，不含 Shell / Git 写 / 网络' },
+  { key: 'all', label: '全部工具', hint: '全部内置工具（含 bash、git 写、浏览器）' },
+  { key: 'custom', label: '自定义', hint: '手动勾选 工具 / MCP / Skill' },
 ];
 
 export function CreateAgentDialog({ source, onClose }: Props) {
@@ -58,18 +64,24 @@ export function CreateAgentDialog({ source, onClose }: Props) {
   const [modelName, setModelName] = useState('');
   const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
   const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
-  const [preset, setPreset] = useState<ToolPreset>('safe');
-  // 「自选」档的勾选集合；初始 = 安全最小集，切档不重置（保留用户微调）
-  const [customTools, setCustomTools] = useState<string[]>([...SAFE_MINIMUM_TOOLS]);
+  const [preset, setPreset] = useState<ToolPreset>('standard');
+  // 「自定义」档的能力集合；目录就绪后初始化为 Tier 1（安全最小集）
+  const [caps, setCaps] = useState<Capabilities>({ tools: [], mcps: [], skills: [] });
   const [setAsDefault, setSetAsDefault] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const toggleCustomTool = (tool: string, checked: boolean): void => {
-    setCustomTools((cur) =>
-      checked ? [...cur, tool] : cur.filter((t) => t !== tool),
+  const { data: catalog, error: catalogError } = useToolCatalog();
+
+  // 目录就绪后把空工具集初始化为安全最小集（用户已手动改过则不覆盖）
+  useEffect(() => {
+    if (!catalog) return;
+    setCaps((cur) =>
+      cur.tools.length === 0
+        ? { tools: [...catalog.safeMinimum], mcps: [], skills: [] }
+        : cur,
     );
-  };
+  }, [catalog]);
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -86,11 +98,16 @@ export function CreateAgentDialog({ source, onClose }: Props) {
       return;
     }
     const tools =
-      preset === 'safe'
-        ? SAFE_MINIMUM_TOOLS
+      preset === 'standard'
+        ? (catalog?.safeMinimum ?? [])
         : preset === 'all'
-          ? ALL_BUILTIN_TOOLS
-          : customTools;
+          ? (catalog?.allTools ?? [])
+          : caps.tools;
+    // catalog 未就绪时禁止提交（标准/全部档依赖目录数据）
+    if (preset !== 'custom' && !catalog) {
+      setError('工具目录加载中，请稍候再提交');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -106,6 +123,8 @@ export function CreateAgentDialog({ source, onClose }: Props) {
         modelName: modelName.trim(),
         thinkingJson,
         defaultTools: tools.map((ref) => ({ kind: 'builtin' as const, ref })),
+        defaultMcps: caps.mcps.map((ref) => ({ kind: 'mcp' as const, ref })),
+        defaultSkills: caps.skills.map((ref) => ({ kind: 'skill' as const, ref })),
       });
       await loadDefinitions(workspace?.id ?? undefined);
       if (source === 'agentView' && workspace) {
@@ -187,28 +206,11 @@ export function CreateAgentDialog({ source, onClose }: Props) {
             </label>
           ))}
           {preset === 'custom' && (
-            <div className="flex flex-col gap-2 pl-5 pt-1">
-              {TOOL_CATEGORIES.map((cat) => (
-                <div key={cat.label}>
-                  {/* cat.emoji 为 tool-catalog 数据字段（豁免，非 UI 硬编码图标） */}
-                  <div className="text-xs text-tertiary mb-1">
-                    {cat.emoji} {cat.label}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {cat.tools.map((tool) => (
-                      <label key={tool} className="flex items-center gap-1 text-xs text-secondary">
-                        <input
-                          type="checkbox"
-                          aria-label={tool}
-                          checked={customTools.includes(tool)}
-                          onChange={(e) => toggleCustomTool(tool, e.target.checked)}
-                        />
-                        {tool}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            <div className="flex flex-col gap-2 pl-1 pt-1">
+              {catalogError && (
+                <div className="text-xs text-status-error">工具目录加载失败：{catalogError}</div>
+              )}
+              <CapabilityTabs mode="edit" value={caps} onChange={setCaps} />
             </div>
           )}
         </fieldset>

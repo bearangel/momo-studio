@@ -223,6 +223,12 @@ describe('MembersPanel — 创建 Agent 入口接线（Task 13）', () => {
       setDefault: vi.fn(),
       clear: vi.fn(),
     });
+    // v2.x Task 6：弹窗挂载还经 useToolCatalog 拉 tools:getCatalog——补最小
+    // window.api 桩（进程边界），目录返回空即可（本用例不开自定义档）
+    const getCatalog = vi.fn().mockResolvedValue([]);
+    (globalThis as unknown as { window: { api: unknown } }).window.api = {
+      tools: { getCatalog },
+    };
     await renderLoaded();
     fireEvent.click(screen.getByRole('button', { name: '+ 创建 Agent' }));
     expect(await screen.findByText('创建 Agent')).toBeInTheDocument();
