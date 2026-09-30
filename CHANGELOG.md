@@ -262,6 +262,9 @@ spec：`docs/specs/2026-09-16-composer-context-system-design.md`。输入框从�
 - **句中 / 触发（第四轮主机验收）**：`/` 从整串锚定（仅空 body）改为空白前缀锚定——句中空格后与 pill 之后均可弹出命令/技能菜单，与 `@`/`#` 对称；路径/分数/URL 的 `/` 与 `//` 转义仍不触发；命令整串拦截语义不变（句中命令 pill 按混排正文发送）
 - 已知边界：builtin 预置技能包不进子进程运行时 skill 索引——composer 注入路径不受影响；`<user-context>` 对内容零转义为设计取舍（与 file:read 等价暴露面）；selectSkill 光标居中会丢弃前段文本（低频边角）；e2e 打包路径待容器外验证
 
+### Agent 创建工具集重构（v2.19 账本，spec 2026-09-30）
+- **Agent 创建工具集重构**：修复 per-agent 工具白名单失效 P0（v1.7.1 并集误放行全部工具）；工具目录改为注册中心自描述单一真相源（`tools:getCatalog` IPC 下发，删除 renderer 镜像，24/33/60 三层漂移根除）；工具分级 Tier 0-3（平台机制恒注入 / Tier 1 公共默认 17 个 / 可选 / MCP+Skill 扩展）；创建入口（CreateAgentDialog + Wizard）支持 工具/MCP/Skill 三类能力配置；migration 052 存量 Tier 1 加法回填。spec：`docs/specs/2026-09-30-agent-tool-capability-redesign.md`
+
 ## [2.0.0] — 2026-09 Released
 
 五期重构：**单进程 Electron + 内置 SessionService + 进程内事件分发**，本地零外部依赖（Matrix/Tuwunel 全家移除，−54 文件 −3226 行）。

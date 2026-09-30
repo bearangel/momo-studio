@@ -67,7 +67,9 @@ chat loop 生命周期、多 agent 协作、skill 加载的运转部件。白名
 | 办公 | `office_read` `office_read_cells` `office_create_excel` `office_write_excel` `office_create_doc` `office_create_ppt` `office_create_pdf` `office_copy` `office_fill_ppt_template` | 文件覆盖 |
 | LSP | `lsp_diagnostics` `lsp_find_references` | conditional：仅 TS/JS workspace 注册 |
 | 记忆写 | `memory_save` `memory_forget` | forget 删除数据 |
+| 记忆读扩展 | `memory_get` | 单条记忆读取 |
 | 任务写 | `create_task` `complete_task` `fail_task` | 任务板状态变更 |
+| 任务组 | `list_delegation_targets` `list_task_groups` | 任务组的委派目标/分组列表，只读 |
 
 ### 3.4 Tier 3 · 扩展能力
 
