@@ -16,6 +16,7 @@
 //     office_create_excel / office_write_excel / office_create_doc /
 //     office_create_ppt / office_create_pdf / office_copy——xlsx/docx/pptx/pdf
 //     四格式读写全接线——无条件注册）。
+//   + SessionTools（跨会话引用：list_sessions / read_session）
 // 通用前置处理（权限 / 审计）仍在 runtime-entry 入口处，不在本注册中心做。
 
 import type { LLMToolDef } from '../llm-provider';
@@ -34,6 +35,7 @@ import { LspTools } from './lsp-tools';
 import { MemoryTools } from './memory-tools';
 import { BrowserTools } from './browser-tools';
 import { OfficeTools } from './office-tools';
+import { SessionTools } from './session-tools';
 
 export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
   const modules: ToolModule[] = [
@@ -49,6 +51,7 @@ export function buildToolRegistry(ctx: ToolContext): ToolModule[] {
     new MemoryTools(),
     new BrowserTools(),
     new OfficeTools(),
+    new SessionTools(),
   ];
   const lsp = LspTools.create(ctx);
   if (lsp) modules.push(lsp);
