@@ -173,4 +173,5 @@ v2.10 Windows 全平台化（spec：`docs/specs/2026-09-12-windows-platform-desi
 - 排查/修复流程 → `.opencode/skills/momo-debug-rules/SKILL.md`
 - 测试/mock 保真度 → `.opencode/skills/momo-test-rules/SKILL.md`
 - 跨模块/IPC/协议 → `.opencode/skills/momo-boundary-rules/SKILL.md`
+- UI 变更静态预览门禁 → `.opencode/skills/momo-ui-preview-rules/SKILL.md`
 - 核心红线（常驻）→ `AGENTS.md` 研发红线章节
