@@ -3,7 +3,7 @@
 // 错误路径铁律：content=null 的文件渲染为「按需读取」提示行，不是吞掉。
 import { describe, it, expect } from 'vitest';
 import { renderTurnBody, renderUserContext } from '../../src/main/agent/turn-context';
-import type { ExpandedContext } from '../../src/main/agent/runtime-config';
+import type { ExpandedContext, ExpandedSessionItem } from '../../src/main/agent/runtime-config';
 
 const ctx: ExpandedContext = {
   skills: [{ slug: 'code-review', name: '代码审查', body: '逐条审查变更' }],
@@ -45,5 +45,56 @@ describe('renderTurnBody', () => {
     expect(renderTurnBody('你好', ctx)).toContain('你好');
     expect(renderTurnBody('', ctx)).toContain('<user-context>');
     expect(renderTurnBody('', ctx).endsWith('\n\n')).toBe(false);
+  });
+});
+
+describe('renderUserContext sessions 块（跨会话引用）', () => {
+  const sess = (over: Partial<ExpandedSessionItem> = {}): ExpandedSessionItem => ({
+    sessionId: 's1',
+    title: '设计讨论',
+    kind: 'chat',
+    memberNames: ['用户', 'Coder'],
+    messageCount: 12,
+    lastMessageAt: 1_700_000_000_000,
+    missing: false,
+    ...over,
+  });
+
+  it('正常态：元信息 + read_session 提示（含 sessionId）', () => {
+    const out = renderUserContext({
+      skills: [],
+      files: [],
+      images: [],
+      droppedImages: [],
+      sessions: [sess()],
+    });
+    expect(out).toContain('<session id="s1" title="设计讨论">');
+    expect(out).toContain('成员=用户/Coder');
+    expect(out).toContain('消息数=12');
+    expect(out).toContain('read_session');
+    expect(out).toContain('sessionId="s1"');
+  });
+
+  it('missing 态：降级文案，不出现 read_session 提示', () => {
+    const out = renderUserContext({
+      skills: [],
+      files: [],
+      images: [],
+      droppedImages: [],
+      sessions: [sess({ missing: true })],
+    });
+    expect(out).toContain('该会话已删除或不可访问');
+    expect(out).not.toContain('read_session');
+  });
+
+  it('sessions 缺省（旧载荷）→ 无 session 块，skills/files 照常', () => {
+    const out = renderUserContext({
+      skills: [],
+      files: [{ path: 'a.ts', content: 'x' }],
+      images: [],
+      droppedImages: [],
+    });
+    expect(out).not.toContain('<session');
+    expect(out).toContain('<file path="a.ts">');
   });
 });
