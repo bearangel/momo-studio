@@ -10,6 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { ipcMain } from 'electron';
 import { routeLspOp, registerLspPanelIpc } from '../../src/main/lsp/ipc';
+import { OUTPUT_LIMITS } from '../../src/main/agent/tools/shared/output-truncate';
 import * as manager from '../../src/main/lsp/manager';
 import * as detect from '../../src/main/lsp/detect';
 import * as workspaceCrud from '../../src/main/workspace/crud';
@@ -101,6 +102,84 @@ describe('routeLspOp', () => {
       findReferences: ReturnType<typeof vi.fn>;
     };
     expect(mgr.findReferences).toHaveBeenCalledWith('/tmp/ws-x/src/a.ts', 3, 8);
+  });
+
+  it('OUTPUT_LIMITS 裁定契约锁：lsp_diagnostics=100 / lsp_references=64', () => {
+    // 数值来自 Task 7 控制器裁定（与 50/50 历史先例不同）——改动此处须有新裁定
+    expect(OUTPUT_LIMITS.lsp_diagnostics).toBe(100);
+    expect(OUTPUT_LIMITS.lsp_references).toBe(64);
+  });
+
+  it('diagnostics 超限输出被截断：150 条 → 行数 ≤ 上限 + 截断提示（防 LLM 上下文膨胀）', async () => {
+    const child = fakeChild();
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      severity: 1,
+      message: `类型错误${i}`,
+      range: { start: { line: i, character: 0 } },
+    }));
+    vi.mocked(manager.ensureLspManager).mockResolvedValue({
+      getDiagnostics: vi.fn().mockResolvedValue(many),
+      findReferences: vi.fn(),
+    } as unknown as manager.LspManager);
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-trunc1',
+      op: { kind: 'diagnostics', workspaceId: 'ws-x', path: 'src/a.ts', content: '' },
+    });
+    const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
+    expect(reply.ok).toBe(true);
+    const result = String(reply.result);
+    const lines = result.split('\n');
+    // 上限行 + 1 空行 + 1 提示行（truncateArray 尾部形状）
+    expect(lines.length).toBeLessThanOrEqual(OUTPUT_LIMITS.lsp_diagnostics + 2);
+    expect(result).toContain(`还有 ${150 - OUTPUT_LIMITS.lsp_diagnostics} 条未显示`);
+    // 边界精确性：保留 [0, limit)，丢弃 [limit, …)
+    expect(result).toContain(`类型错误${OUTPUT_LIMITS.lsp_diagnostics - 1}`);
+    expect(result).not.toContain(`类型错误${OUTPUT_LIMITS.lsp_diagnostics}`);
+  });
+
+  it('references 超限输出被截断：150 条 → 行数 ≤ 上限 + 截断提示', async () => {
+    const child = fakeChild();
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      uri: `file:///tmp/ws-x/src/mod${i}.ts`,
+      range: { start: { line: i, character: 0 } },
+    }));
+    vi.mocked(manager.ensureLspManager).mockResolvedValue({
+      getDiagnostics: vi.fn(),
+      findReferences: vi.fn().mockResolvedValue(many),
+    } as unknown as manager.LspManager);
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-trunc2',
+      op: { kind: 'references', workspaceId: 'ws-x', path: 'src/a.ts', line: 1, character: 0 },
+    });
+    const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
+    expect(reply.ok).toBe(true);
+    const result = String(reply.result);
+    expect(result.split('\n').length).toBeLessThanOrEqual(OUTPUT_LIMITS.lsp_references + 2);
+    expect(result).toContain(`还有 ${150 - OUTPUT_LIMITS.lsp_references} 条未显示`);
+    expect(result).toContain(`mod${OUTPUT_LIMITS.lsp_references - 1}.ts`);
+    expect(result).not.toContain(`mod${OUTPUT_LIMITS.lsp_references}.ts`);
+  });
+
+  it('恰好等于上限 → 全量输出无截断提示（边界语义锁）', async () => {
+    const child = fakeChild();
+    const exact = Array.from({ length: OUTPUT_LIMITS.lsp_diagnostics }, (_, i) => ({
+      severity: 2,
+      message: `警告${i}`,
+      range: { start: { line: i, character: 0 } },
+    }));
+    vi.mocked(manager.ensureLspManager).mockResolvedValue({
+      getDiagnostics: vi.fn().mockResolvedValue(exact),
+      findReferences: vi.fn(),
+    } as unknown as manager.LspManager);
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-trunc3',
+      op: { kind: 'diagnostics', workspaceId: 'ws-x', path: 'src/a.ts', content: '' },
+    });
+    const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
+    expect(reply.ok).toBe(true);
+    const result = String(reply.result);
+    expect(result.split('\n').length).toBe(OUTPUT_LIMITS.lsp_diagnostics);
+    expect(result).not.toMatch(/未显示/);
   });
 
   it('未知扩展名 → ok:false 中文错误', async () => {

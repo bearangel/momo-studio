@@ -11,6 +11,7 @@ import { REGISTRY, extensionToLanguageId } from './registry';
 import { ensureLspManager, fileUriToPath } from './manager';
 import { detectWorkspaceLanguages, redetectWorkspaceLanguages } from './detect';
 import { getWorkspace } from '../workspace/crud';
+import { OUTPUT_LIMITS, truncateArray } from '../agent/tools/shared/output-truncate';
 
 interface LspOpEnvelope {
   type: 'lsp:op';
@@ -104,22 +105,33 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
     const mgr = await ensureLspManager(op.workspaceId, ws.directoryPath, spec);
     if (op.kind === 'diagnostics') {
       const diags = await mgr.getDiagnostics(absPath, op.content ?? '');
+      // 输出截断（旧子进程 lsp-tools 语义回迁，Task 5 薄客户端化时丢失）：
+      // 超大诊断集全量回发会撑爆 LLM 上下文——按 OUTPUT_LIMITS 上限截断
       const text = diags.length === 0
         ? `✓ ${op.path} 无诊断`
-        : diags.map((d) => {
-            const sev = d.severity === 1 ? 'error' : d.severity === 2 ? 'warn' : 'info';
-            return `${op.path}:${(d.range.start.line ?? 0) + 1}:${(d.range.start.character ?? 0) + 1} - ${sev}: ${d.message}`;
-          }).join('\n');
+        : truncateArray(
+            diags.map((d) => {
+              const sev = d.severity === 1 ? 'error' : d.severity === 2 ? 'warn' : 'info';
+              return `${op.path}:${(d.range.start.line ?? 0) + 1}:${(d.range.start.character ?? 0) + 1} - ${sev}: ${d.message}`;
+            }),
+            OUTPUT_LIMITS.lsp_diagnostics,
+            (s) => s,
+          );
       reply(child, m.requestId, true, text);
     } else {
       // op.line 1-based → LSP 0-based；character 按协议 0-based 透传
       const locs = await mgr.findReferences(absPath, (op.line ?? 1) - 1, op.character ?? 0);
+      // 同上：引用列表超限截断，防 LLM 上下文膨胀
       const text = locs.length === 0
         ? '(无引用)'
-        : locs.map((l) => {
-            const rel = path.relative(ws.directoryPath, fileUriToPath(l.uri));
-            return `${rel}:${(l.range.start.line ?? 0) + 1}:${(l.range.start.character ?? 0) + 1}`;
-          }).join('\n');
+        : truncateArray(
+            locs.map((l) => {
+              const rel = path.relative(ws.directoryPath, fileUriToPath(l.uri));
+              return `${rel}:${(l.range.start.line ?? 0) + 1}:${(l.range.start.character ?? 0) + 1}`;
+            }),
+            OUTPUT_LIMITS.lsp_references,
+            (s) => s,
+          );
       reply(child, m.requestId, true, text);
     }
   } catch (err) {

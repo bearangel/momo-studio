@@ -11,8 +11,10 @@ export const OUTPUT_LIMITS = {
   git_show_diff: 30 * 1024,
   git_status: 20 * 1024,
   git_log: 100,
-  lsp_diagnostics: 50,
-  lsp_references: 50,
+  // lsp 两键为 Task 7 裁定契约（lsp/ipc.ts 消费）：诊断 100 行 / 引用 64 行——
+  // 超限由 truncateArray 追加「还有 N 条未显示」提示行
+  lsp_diagnostics: 100,
+  lsp_references: 64,
   read_file: 200 * 1024,
   office_read: 20 * 1024,
   office_read_cells: 24 * 1024,
