@@ -179,29 +179,39 @@ export class LspManager {
       }
     });
 
-    // initialize 请求：声明客户端能力。
-    // 关键：必须声明 textDocument.publishDiagnostics，否则 typescript-language-server
-    //   会判定 diagnosticsSupport=false，永远不推送诊断（server 源码显式检查此能力）。
-    await this.sendRequest('initialize', {
-      processId: process.pid,
-      clientName: 'momo-studio',
-      rootUri: pathToFileUri(this.workspaceDir),
-      capabilities: {
-        textDocument: {
-          synchronization: {
-            didOpen: true,
-            didChange: true,
-            willSave: false,
-            willSaveWaitUntil: false,
+    // initialize 握手失败（超时 / server 回 error / stdin 断）：SIGKILL 刚 spawn
+    // 的进程防孤儿——此刻单例即将被 ensureLspManager 驱逐出 Map，不 kill 则该
+    // 进程再无人可达；复位内部状态后原样上抛（下次调用重新尝试）。
+    try {
+      // initialize 请求：声明客户端能力。
+      // 关键：必须声明 textDocument.publishDiagnostics，否则 typescript-language-server
+      //   会判定 diagnosticsSupport=false，永远不推送诊断（server 源码显式检查此能力）。
+      await this.sendRequest('initialize', {
+        processId: process.pid,
+        clientName: 'momo-studio',
+        rootUri: pathToFileUri(this.workspaceDir),
+        capabilities: {
+          textDocument: {
+            synchronization: {
+              didOpen: true,
+              didChange: true,
+              willSave: false,
+              willSaveWaitUntil: false,
+            },
+            publishDiagnostics: { relatedInformation: true },
           },
-          publishDiagnostics: { relatedInformation: true },
         },
-      },
-      initializationOptions: this.spec.initOverrides ?? {},
-    });
+        initializationOptions: this.spec.initOverrides ?? {},
+      });
 
-    // initialized 通知——LSP 规范要求握手收尾，params 必须是空对象。
-    this.sendNotification('initialized', {});
+      // initialized 通知——LSP 规范要求握手收尾，params 必须是空对象。
+      this.sendNotification('initialized', {});
+    } catch (err) {
+      this.proc?.kill('SIGKILL');
+      this.proc = null;
+      this.resetState();
+      throw err;
+    }
 
     this.started = true;
     this.lastActivity = Date.now();

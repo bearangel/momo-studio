@@ -2,7 +2,7 @@
 // manager 泛化契约：per-language 键控 / binaries 顺序探测 / 并发上限 /
 // run-state 实装 / tsserver 真实冒烟（skip-if-binary-missing，沿用
 // 现有 lsp-tools.test 的真实 server 模式：30s 超时 + afterEach 强制清理）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -60,6 +60,36 @@ describe('run-state 实装（detect.ts 消费的模块路径不再恒 stopped）
     const spec = REGISTRY.find((s) => s.languageId === 'typescript')!;
     await ensureLspManager(ws, tmpDir, spec);
     expect(getRunStateFromModule(ws, 'typescript')).toBe('running');
+  }, LSP_TEST_TIMEOUT);
+});
+
+describe('握手失败孤儿进程回收（2026-10-01 Task 3 评审遗留）', () => {
+  it('initialize 握手失败（server 回 error）：SIGKILL 子进程 + 驱逐单例不毒化', async () => {
+    const ws = `ws-m5-${Date.now()}`;
+    // 伪 server：写 pid 文件后立即对 initialize 回 JSON-RPC error 并保持存活
+    //（15s 自退兜底：防测试自身失败时泄漏进程）。进程被正确 SIGKILL 时
+    // kill(pid, 0) 抛 ESRCH——未被 kill 则存活（孤儿）。
+    const pidFile = path.join(tmpDir, 'fake-server.pid');
+    const script = [
+      `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `const b = JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'boot failed' } });`,
+      `process.stdout.write('Content-Length: ' + Buffer.byteLength(b) + '\\r\\n\\r\\n' + b);`,
+      `setTimeout(() => process.exit(0), 15000);`,
+    ].join('\n');
+    const spec = {
+      ...REGISTRY.find((s) => s.languageId === 'typescript')!,
+      binaries: [process.execPath],
+      args: ['-e', script],
+    };
+    await expect(ensureLspManager(ws, tmpDir, spec)).rejects.toThrow(/LSP 错误|已关闭/);
+    // 失败单例被驱逐（ensureLspManager 既有语义——回归锁一并覆盖）
+    expect(getLspManager(ws, 'typescript')).toBeUndefined();
+    // 孤儿进程已回收：pid 不再存活（kill 信号送达 + libuv 收尸有微小竞态窗口，重试）
+    const pid = Number(fs.readFileSync(pidFile, 'utf-8'));
+    expect(Number.isFinite(pid)).toBe(true);
+    await vi.waitFor(() => {
+      expect(() => process.kill(pid, 0)).toThrow();
+    }, { timeout: 3000, interval: 50 });
   }, LSP_TEST_TIMEOUT);
 });
 
