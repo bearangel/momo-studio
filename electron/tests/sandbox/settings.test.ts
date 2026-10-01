@@ -6,6 +6,9 @@
 //     'allow'（双态时代新默认即 allow，两分支同值收敛）；全缺省（全新库）→
 //     'allow' 并写回新键；显式 'deny' 原样保留（不重写）
 //   - 新键非法值（脏库）→ 回退新默认 'allow' 不抛错
+// v2.5 工具链授权契约：kv 有 sandboxToolchainPolicy=allow + 自定义 dirs 透传
+// （crud 透传纪律锁——读侧不烤默认进 JSON，allow 显式写入才生效）；非法
+// toolchainPolicy 收敛 deny（不抛错）。
 // db fixture 复用 tests/settings/crud.test.ts 模式（AP_USER_DATA_DIR 临时目录）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -157,5 +160,23 @@ describe('sandbox/settings 既有行为保持（v2.4 基线）', () => {
     updateGlobalSettings({ sandboxMode: 'permissive' });
     __setSandboxSettingsForTest(null);
     expect(getSandboxSettings().mode).toBe('permissive');
+  });
+});
+
+describe('sandbox/settings 工具链授权契约（v2.5）', () => {
+  it('kv 有 sandboxToolchainPolicy=allow + 自定义 dirs → 透传（crud 不写默认进 JSON 锁）', () => {
+    writeRawGlobal({
+      sandboxToolchainPolicy: 'allow',
+      sandboxToolchainDirs: ['~/custom-tc'],
+    });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().toolchainPolicy).toBe('allow');
+    expect(getSandboxSettings().toolchainDirs).toEqual(['~/custom-tc']);
+  });
+
+  it('kv 非法 toolchainPolicy → 默认安全方向 deny（不抛错）', () => {
+    writeRawGlobal({ sandboxToolchainPolicy: 'bogus' });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().toolchainPolicy).toBe('deny');
   });
 });
