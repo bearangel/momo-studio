@@ -42,6 +42,8 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
     setError(null);
     try {
       setStatuses(await fn(workspaceId));
+      // 重检/加载成功即视为面板数据可信——上一轮安装的残留错误随之清除
+      setInstallError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

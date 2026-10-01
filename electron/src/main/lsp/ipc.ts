@@ -176,7 +176,13 @@ function resolveNpmDefault(): string | null {
  *  stdout 丢弃（进度条噪声），stderr 聚合供失败诊断 */
 function runInstallDefault(cmd: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // win32 必须 shell: true：Node ≥20.12（CVE-2024-27980 修复）起 spawn
+    // .cmd/.bat 无 shell 直接 EINVAL（error 事件），npm.cmd 分支会必挂——
+    // 仅 win32 开 shell，POSIX 保持无 shell（参数不经解释器，行为不变）
+    const child = spawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+    });
     let stderr = '';
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.stdout?.on('data', () => { /* 防 stdout 背压挂死 */ });

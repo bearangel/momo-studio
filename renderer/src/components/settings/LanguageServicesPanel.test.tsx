@@ -100,6 +100,18 @@ describe('LanguageServicesPanel', () => {
     expect(screen.getByText('Java')).toBeTruthy(); // 列表仍在
   });
 
+  it('安装失败后重新检测成功 → 旧「安装失败」文案清除（不残留）', async () => {
+    installMock.mockRejectedValue(new Error('npm 安装失败（退出码 1）'));
+    render(<LanguageServicesPanel workspaceId="ws-1" />);
+    await screen.findByText('Java');
+    fireEvent.click(screen.getByRole('button', { name: /安装/ }));
+    expect(await screen.findByText(/安装失败/)).toBeTruthy();
+    redetectMock.mockResolvedValue(STATUSES);
+    fireEvent.click(screen.getByRole('button', { name: '重新检测' }));
+    await waitFor(() => expect(redetectMock).toHaveBeenCalledWith('ws-1'));
+    await waitFor(() => expect(screen.queryByText(/安装失败/)).toBeNull());
+  });
+
   it('实验性徽标只出现在 experimental 行', async () => {
     render(<LanguageServicesPanel workspaceId="ws-1" />);
     await screen.findByText('Java');
