@@ -22,6 +22,11 @@ export function buildBwrapArgs(policy: ShellSandboxPolicy): string[] {
     else args.push('--tmpfs', dir);
   }
   args.push('--bind', policy.workspaceDir, policy.workspaceDir);
+  // 工具链目录授权（v2.5 spec §9）：每目录 RW bind 到原路径（包管理器在惯常
+  // 安装位置写入）；空数组零追加
+  for (const dir of policy.toolchainDirs) {
+    args.push('--bind', dir, dir);
+  }
   // tmp 用真实主机 tmp（bind RW）：npm 大构建中间产物落盘而非吃 RAM
   args.push('--bind', '/tmp', '/tmp');
   args.push('--dev', '/dev', '--proc', '/proc');

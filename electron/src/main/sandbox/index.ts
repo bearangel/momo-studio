@@ -9,6 +9,7 @@ import { getSandboxSettings } from './settings';
 import { buildPolicy } from './policy';
 import { buildBwrapArgs } from './linux';
 import { renderSeatbeltProfile } from './macos';
+import { expandToolchainDirs } from './toolchain-grant';
 import type { SpawnPlan } from './types';
 
 /** wrapped 模式缓存 env：npm/pip 缓存重定向到 tmp（写剖面自洽，spec §5.7） */
@@ -33,7 +34,7 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
 export function resolveShellSpawn(
   workspaceDir: string,
   command: string,
-  opts?: { networkEnabled?: boolean },
+  opts?: { networkEnabled?: boolean; toolchainEnabled?: boolean },
 ): SpawnPlan {
   const settings = getSandboxSettings();
   // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
@@ -42,7 +43,14 @@ export function resolveShellSpawn(
   //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
-  const policy = buildPolicy(workspaceDir, networkEnabled);
+  // 工具链目录授权（v2.5 spec §9）：展开在决策点做——授权态才展开设置字面
+  // 清单（~/ 前缀 + npm/pip 占位 → 归一绝对路径）；未授权/未传恒空数组
+  // （默认安全方向，既有调用方零破坏）。settings.toolchainPolicy 不在此判
+  // ——会话级「本会话允许」由 shell-tools 解析后经 opts 显式传入。
+  const toolchainDirs = opts?.toolchainEnabled
+    ? expandToolchainDirs(settings.toolchainDirs, os.homedir())
+    : [];
+  const policy = buildPolicy(workspaceDir, networkEnabled, toolchainDirs);
 
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';

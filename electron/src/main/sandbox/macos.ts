@@ -16,6 +16,12 @@ export function renderSeatbeltProfile(policy: ShellSandboxPolicy): string {
   // 网络开关语义 = 全网络（bind/inbound/outbound）——仅 outbound 时 agent 起不了
   // dev server（listen EPERM，macOS 主机实测）；关闭 = deny default 全禁
   const networkRule = policy.networkEnabled ? '(allow network*)\n' : '';
+  // 工具链目录授权（v2.5 spec §9）：每目录单独 allow file-write*。deny
+  // default 与 sensitiveDirs deny 的后置覆盖语义不变——授权只扩写维度，
+  // 不动读遮蔽；空数组时零行（不得污染 profile 结构）
+  const toolchainSection = policy.toolchainDirs.length > 0
+    ? `${policy.toolchainDirs.map((d) => `(allow file-write* (subpath ${escapeSeatbeltString(d)}))`).join('\n')}\n`
+    : '';
   // 已知边界（审查 F4 文档化，不改动行为）：下方 mach-lookup 为全放行——macOS
   // 关键服务（securityd / keychaind 等）经 Mach 端口而非文件系统访问 Keychain，
   // 上方 sensitiveDirs 的 file-deny 只挡文件系统直读、挡不住服务侧路径。收敛到
@@ -27,7 +33,7 @@ export function renderSeatbeltProfile(policy: ShellSandboxPolicy): string {
 ${denyRules}
 (allow file-write* (subpath ${escapeSeatbeltString(policy.workspaceDir)}) (subpath ${escapeSeatbeltString(policy.tmpDir)}) (subpath "/private/tmp"))
 (allow file-write* (literal "/dev/null"))
-(allow process-exec process-fork)
+${toolchainSection}(allow process-exec process-fork)
 (allow signal (target self))
 (allow file-ioctl sysctl-read mach-lookup)
 ${networkRule}`;

@@ -12,7 +12,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { resolveShellSpawn, sandboxInstallHint } from '../../src/main/sandbox';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
+import { DEFAULT_TOOLCHAIN_DIRS, expandToolchainDirs } from '../../src/main/sandbox/toolchain-grant';
+import { escapeSeatbeltString } from '../../src/main/sandbox/macos';
 
 /** 测试用 settings 构造器：网络态显式传、工具链字段用 v2.5 缺省 */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
@@ -196,6 +197,70 @@ describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 �
       expect(plan.reason).toContain('沙箱未探测');
       expect(plan.reason).toContain('内置');
       expect(plan.reason).not.toContain('apt install');
+    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+  });
+});
+
+// v2.5 工具链授权接线（spec §9）：resolveShellSpawn 的 opts.toolchainEnabled 决定
+// 目录展开——授权态把设置字面清单经 expandToolchainDirs 归一后注入 policy；
+// 未授权/未传恒空数组（默认安全方向）。darwin+seatbelt 分支可直接读 profile
+// 文件断言（真实生产者 renderSeatbeltProfile → 真实消费者 profile 文件，契约锁）。
+describe('resolveShellSpawn 工具链目录授权（v2.5）', () => {
+  const darwinAvail = { platform: 'darwin' as NodeJS.Platform, sandboxTool: 'seatbelt' as const, toolVersion: null,
+    available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 };
+
+  function readProfile(plan: Extract<ReturnType<typeof resolveShellSpawn>, { kind: 'wrapped' }>): string {
+    const profile = plan.args[plan.args.indexOf('-f') + 1]!;
+    const content = fs.readFileSync(profile, 'utf-8');
+    fs.rmSync(profile, { force: true });
+    return content;
+  }
+
+  it('opts.toolchainEnabled=true → profile 含设置清单展开（expandToolchainDirs 归一）后的 allow 规则', () => {
+    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      __setSandboxStateForTest(darwinAvail);
+      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
+        toolchainDirs: ['~/.rustup'] });
+      const plan = resolveShellSpawn(tmp, 'rustup component add x', { networkEnabled: true, toolchainEnabled: true });
+      expect(plan.kind).toBe('wrapped');
+      if (plan.kind !== 'wrapped') return;
+      expect(plan.tag).toBe('seatbelt/net-on');
+      // 契约锁：用真实 expandToolchainDirs 产出作期望（生产者真产出 → 消费者直消费）
+      const expanded = expandToolchainDirs(['~/.rustup'], os.homedir());
+      expect(expanded).toHaveLength(1);
+      expect(readProfile(plan)).toContain(`(allow file-write* (subpath ${escapeSeatbeltString(expanded[0]!)}))`);
+    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+  });
+
+  it('未传 toolchainEnabled（既有调用方）→ 目录集空，profile 无工具链行（向后兼容）', () => {
+    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      __setSandboxStateForTest(darwinAvail);
+      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
+        toolchainDirs: ['~/.rustup'] });
+      const plan = resolveShellSpawn(tmp, 'ls', {});
+      expect(plan.kind).toBe('wrapped');
+      if (plan.kind !== 'wrapped') return;
+      expect(plan.tag).toBe('seatbelt/net-on');
+      expect(readProfile(plan)).not.toContain('.rustup');
+    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+  });
+
+  it('toolchainEnabled=false 显式拒绝 → 与未传同义（空目录集）', () => {
+    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      __setSandboxStateForTest(darwinAvail);
+      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny',
+        toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] });
+      const plan = resolveShellSpawn(tmp, 'cargo build', { networkEnabled: true, toolchainEnabled: false });
+      expect(plan.kind).toBe('wrapped');
+      if (plan.kind !== 'wrapped') return;
+      expect(plan.tag).toBe('seatbelt/net-on');
+      expect(readProfile(plan)).not.toContain('.rustup');
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });

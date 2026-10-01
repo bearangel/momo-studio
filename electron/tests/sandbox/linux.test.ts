@@ -11,7 +11,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: tmp, tmpDir: os.tmpdir(),
-    sensitiveDirs: [], networkEnabled: false, ...over,
+    sensitiveDirs: [], networkEnabled: false, toolchainDirs: [], ...over,
   };
 }
 
@@ -70,6 +70,7 @@ describe('buildBwrapArgs', () => {
       tmpDir: '/tmp',
       sensitiveDirs: ['/home/u/.ssh'],
       networkEnabled: false,
+      toolchainDirs: [],
     };
     expect(buildBwrapArgs(p)).toMatchInlineSnapshot(`
       [
@@ -93,5 +94,16 @@ describe('buildBwrapArgs', () => {
         "--die-with-parent",
       ]
     `);
+  });
+
+  it('授权态：每目录追加 --bind <dir> <dir>；未授权零追加（默认安全）', () => {
+    const granted = buildBwrapArgs(mkPolicy({ toolchainDirs: ['/home/u/.rustup'] }));
+    expect(granted).toContain('--bind');
+    const idx = granted.indexOf('/home/u/.rustup');
+    expect(idx).toBeGreaterThan(0);
+    expect(granted[idx - 1]).toBe('--bind');
+    expect(granted[idx + 1]).toBe('/home/u/.rustup');
+    const none = buildBwrapArgs(mkPolicy({ toolchainDirs: [] }));
+    expect(none.filter((a) => a === '/home/u/.rustup')).toHaveLength(0);
   });
 });

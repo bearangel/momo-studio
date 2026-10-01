@@ -31,7 +31,7 @@ export function sensitiveCandidates(home: string): string[] {
   return base;
 }
 
-export function buildPolicy(workspaceDir: string, networkEnabled: boolean): ShellSandboxPolicy {
+export function buildPolicy(workspaceDir: string, networkEnabled: boolean, toolchainDirs: string[] = []): ShellSandboxPolicy {
   const home = realpath(os.homedir());
   return {
     workspaceDir: realpath(workspaceDir),
@@ -41,5 +41,8 @@ export function buildPolicy(workspaceDir: string, networkEnabled: boolean): Shel
     // 会直接报错；Windows 段（PowerShell 黑名单）不消费本清单，不受影响
     sensitiveDirs: sensitiveCandidates(home).filter((d) => fs.existsSync(d)),
     networkEnabled,
+    // 工具链目录（v2.5 spec §9）：调用方（resolveShellSpawn）已在授权态完成
+    // 展开；此处只做去重。缺省 [] = 未授权（既有两参调用方零破坏）
+    toolchainDirs: [...new Set(toolchainDirs)],
   };
 }
