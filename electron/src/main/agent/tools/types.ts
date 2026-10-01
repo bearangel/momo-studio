@@ -57,6 +57,11 @@ export interface ToolContext {
    * 以此为基准；缺省（测试直调 / 旧配置）由消费方回退 os.tmpdir()。
    */
   userDataDir?: string;
+  /**
+   * 多语言 LSP 检测快照（主进程 lsp/detect 检测、AGENT_CONFIG 透传）。
+   * LspTools.create 以「非空」为注册门控；缺省 = 不注册（旧测试直调兼容）。
+   */
+  lspLanguages?: string[];
 }
 
 /** 工具模块统一接口。每个类别一个实现。 */

@@ -90,6 +90,11 @@ export interface AgentRuntimeOpts {
    * 缺省时消费方回退 os.tmpdir()（旧 AGENT_CONFIG / 测试兼容）。
    */
   userDataDir?: string;
+  /**
+   * 多语言 LSP 检测快照（spawn 时主进程注入；缺省 = 不注册 LSP 工具）。
+   * 检测单点在主进程 lsp/detect（spec §7），子进程只消费不探测。
+   */
+  lspLanguages?: string[];
 }
 
 /** runtime-spawner 通过 AGENT_CONFIG 传入的完整配置 */
@@ -181,6 +186,12 @@ export interface RuntimeConfig {
   vision?: boolean;
   /** 主进程 userData 绝对路径（AGENT_CONFIG 定型）；缺省=消费方回退 os.tmpdir() */
   userDataDir?: string;
+  /**
+   * 多语言 LSP 检测快照（AGENT_CONFIG 定型，spec §7）。parseConfig 产物恒携带
+   * 解析值（缺省/非数组/非字符串项过滤 → []，旧 AGENT_CONFIG 兼容）；消费方
+   * LspTools.create 以「非空」为注册门控。
+   */
+  lspLanguages?: string[];
 }
 
 /** 主进程展开后下发给子进程的上下文项——skill（loadFull 正文） */
@@ -460,6 +471,11 @@ export function parseConfig(raw: unknown): RuntimeConfig {
       typeof r.userDataDir === 'string' && r.userDataDir.length > 0
         ? r.userDataDir
         : undefined,
+    // 多语言 LSP 检测快照：非数组/非字符串项过滤，缺省 []（= 不注册 LSP 工具，
+    // 旧 AGENT_CONFIG / 旧 spawn 站点兼容铁律）
+    lspLanguages: Array.isArray(r.lspLanguages)
+      ? r.lspLanguages.filter((x): x is string => typeof x === 'string')
+      : [],
   };
 }
 

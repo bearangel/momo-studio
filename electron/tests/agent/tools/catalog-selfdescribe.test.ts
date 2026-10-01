@@ -45,7 +45,7 @@ describe('ToolModule.getCatalog 自描述', () => {
   it('LSP 条目带 conditional 标注且 defaultOn=false', () => {
     expect(LSP_CATALOG_ENTRIES).toHaveLength(2);
     for (const e of LSP_CATALOG_ENTRIES) {
-      expect(e.conditional).toContain('TS/JS');
+      expect(e.conditional).toContain('自动检测');
       expect(e.defaultOn).toBe(false);
     }
   });

@@ -55,8 +55,8 @@ beforeEach(() => {
     permissionConfig: { allowedTools: [], deniedTools: [] },
     creatorUserId: '',
   };
-  // buildToolRegistry 内部按 workspaceDir 条件注册 LspTools；
-  // tmpDir 此时无 tsconfig/.ts/.js → shouldRegister=false → LSP 不注册（符合预期）
+  // buildToolRegistry 内部按 ctx.lspLanguages 检测快照门控注册 LspTools；
+  // 本 ctx 未注入快照 → 不注册（符合预期）
   modules = buildToolRegistry(ctx);
 });
 
@@ -133,7 +133,7 @@ describe('agent 完整工作流', () => {
     expect(names.has('webfetch')).toBe(true);
     // Todo 类
     expect(names.has('todowrite')).toBe(true);
-    // LSP 类：本测试 workspace 无 tsconfig → 不应注册（验证条件注册逻辑正确）
+    // LSP 类：本 ctx 无 lspLanguages 检测快照 → 不应注册（验证门控逻辑正确）
     expect(names.has('lsp_diagnostics')).toBe(false);
     expect(names.has('lsp_find_references')).toBe(false);
   }, 60000);

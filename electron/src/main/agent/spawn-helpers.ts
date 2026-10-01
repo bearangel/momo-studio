@@ -42,6 +42,8 @@ import {
 import type { AgentDefinition } from './types';
 import type { SubAgentRef, RuntimeSkillRef } from './builtin-tools';
 import type { AgentRuntimeOpts } from './runtime-config';
+// 多语言 LSP 检测（spec §7）：主进程单点检测，快照随 AGENT_CONFIG 注入子进程
+import { activeLanguageIds, detectWorkspaceLanguages } from '../lsp/detect';
 
 /** buildDispatchSnapshot 的产出：dispatch 注入条件 + subAgents 快照（spec §4.7） */
 export interface DispatchSnapshot {
@@ -379,6 +381,9 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     subAgents,
     // v1.6 修复：allowedTools 来自三层合并后的 merged.tools（非 undefined）
     allowedTools: merged.tools,
+    // 多语言 LSP 检测快照（spec §7）：主进程单点检测，子进程只消费
+    //（AGENT_CONFIG 透传；缺省/空 = LspTools 不注册）
+    lspLanguages: activeLanguageIds(detectWorkspaceLanguages(workspaceId, workspaceDir)),
     skills: resolveSkillSlugs(merged.skills),
     mcpNames: merged.mcps,
     isLeader,
