@@ -29,7 +29,7 @@
 |---|---|---|
 | D1 | 总体方案 | 主进程 LSP 子系统 + IPC 桥（MCP host-manager / BrowserManager 同型第三例）；否决「子进程内泛化」（每任务冷启动致命）与「MCP 化」（LSP 原生语义被工具 schema 扭曲） |
 | D2 | 语言范围 | 16 门全进一期注册表，分两层：验证层 12 + 实验层 4（Java/Kotlin/PHP/Elixir，摩擦大，标注实验性——能力广告真实原则） |
-| D3 | 二进制策略 | PATH 探测 + 缺失时安装引导文案（Claude Code 式）；**不自动安装**（Momo 本地零外部依赖哲学） |
+| D3 | 二进制策略 | 用户自装（PATH）+ 面板一键装到 app 管理共享目录（`<userData>/lsp-bin`，仅 npm 分发语言），不自动安装（修正 2026-10-01：原文「PATH 探测 + 缺失时安装引导文案；不自动安装」——增设一键安装后修正表述；一键安装为用户显式点击，非自动安装） |
 | D4 | 工具面 | 保持 `lsp_diagnostics` + `lsp_find_references` 两工具、参数不变；语言由主进程按 path 扩展名路由，LLM 不指定语言 |
 | D5 | 默认档 | `lsp_*` 维持 Tier 2 defaultOn=false；注册门控 = 检测快照非空 |
 | D6 | 设置面板 | 本期交付（二进制自装策略下，无可见性面板则「工具没注册」无从排查） |
@@ -188,7 +188,7 @@ detect(workspaceId, workspaceDir): LanguageStatus[]
 └────────────────────────────────────────────────┘
 ```
 
-- 行元素：label / tier 徽标（实验性）/ toolchain ✓✗ / binary ✓✗ / running 状态 / installHint（可复制）
+- 行元素：label / tier 徽标（实验性）/ toolchain ✓✗ / binary ✓✗ / running 状态 / installHint（可复制）；installable 行（仅 npm 分发语言，D3 修正案）含「安装」按钮——一键装到 `<userData>/lsp-bin` 共享目录（busy 态禁用 + 「安装中…」，完成后以重探测 statuses 刷新；失败呈现含 stderr 末尾的中文错误）
 - UI 约束（momo-ui-preview-rules）：语义 token、lucide 16px/1.75 图标、状态色走语义类；P1 新交互面——**实现前静态预览确认**（本线框为基准）
 - 数据源唯一：`lsp:status` invoke；「重新检测」调 `lsp:redetect`（重算 + 返回新列表）
 

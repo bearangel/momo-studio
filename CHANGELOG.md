@@ -115,7 +115,7 @@
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
 ### 多语言 LSP 子系统（spec 2026-10-01）
-- **多语言 LSP 子系统**：LSP 工具多语言化（16 门语言注册表——验证层 12 + 实验层 4）；LspManager 迁移主进程 per (workspace × language) 单例（修复每任务冷启动 + 每 workspace 并发上限 3）；检测单一真相源（toolchain markers 根+一层子目录 glob，修复分体/monorepo 判据盲区；二进制 PATH 探测）；AGENT_CONFIG.lspLanguages 快照注入；lsp:op IPC 桥 + 设置页「语言服务」面板（三态 + 安装引导 + 重新检测）。spec：`docs/specs/2026-10-01-multi-language-lsp-subsystem.md`
+- **多语言 LSP 子系统**：LSP 工具多语言化（16 门语言注册表——验证层 12 + 实验层 4）；LspManager 迁移主进程 per (workspace × language) 单例（修复每任务冷启动 + 每 workspace 并发上限 3）；检测单一真相源（toolchain markers 根+一层子目录 glob，修复分体/monorepo 判据盲区；二进制 PATH 探测）；AGENT_CONFIG.lspLanguages 快照注入；lsp:op IPC 桥 + 设置页「语言服务」面板（三态 + 安装引导 + 重新检测）；语言服务面板支持一键安装（D3 修正案：仅 npm 分发语言装到 `<userData>/lsp-bin` 共享目录，TypeScript 锁 `typescript@^5` 防 TS 7 无经典 tsserver）。spec：`docs/specs/2026-10-01-multi-language-lsp-subsystem.md`
 
 ### Skill 从 Git 仓库导入（v2.18 账本，spec 2026-09-24 P2.6）
 skill 页新增「从 Git 仓库导入…」：输入仓库地址（如 https://github.com/obra/superpowers）即可全量导入仓库内所有技能。
