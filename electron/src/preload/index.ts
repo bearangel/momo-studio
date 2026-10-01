@@ -275,6 +275,11 @@ const api: ApiSurface = {
     get: (workspaceId) => invoke('gitPolicy:get', workspaceId),
     set: (workspaceId, policy) => invoke('gitPolicy:set', workspaceId, policy),
   },
+  // 多语言 LSP 子系统：设置页「语言服务」面板通道（主进程 lsp/ipc.ts registerLspPanelIpc）
+  lsp: {
+    status: (workspaceId) => invoke('lsp:status', workspaceId),
+    redetect: (workspaceId) => invoke('lsp:redetect', workspaceId),
+  },
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),
     // P2 Task 8：容量配额——读取 / 设置（null=回退全局）/ 立即清理

@@ -11,6 +11,7 @@ export type SettingsCategory =
   | 'sandbox'
   | 'browser'
   | 'git_policy'
+  | 'language_services'
   | 'audit_log'
   | 'p2p'
   | 'about';
