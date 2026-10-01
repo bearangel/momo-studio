@@ -25,7 +25,13 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
   {
     languageId: 'typescript', label: 'TypeScript / JavaScript',
     binaries: ['typescript-language-server'], args: ['--stdio'],
-    markers: ['tsconfig.json', 'jsconfig.json', '*/tsconfig.json', '*/jsconfig.json'],
+    // package.json 作为 JS 工程标志：纯 JS 项目（Vue/React/Node 脚本）常无
+    // tsconfig/jsconfig，而 typescript-language-server 同样服务 .js 文件
+    // （GUI 验收实证：纯 JS monorepo 全部语言 inactive 导致无安装入口）
+    markers: [
+      'tsconfig.json', 'jsconfig.json', '*/tsconfig.json', '*/jsconfig.json',
+      'package.json', '*/package.json',
+    ],
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'],
     tier: 'verified',
     // §A pin：TS 必须锁 ^5——npmmirror 等镜像默认装 TS 7（tsgo 时代）无经典

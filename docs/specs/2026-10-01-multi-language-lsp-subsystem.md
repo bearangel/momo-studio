@@ -85,7 +85,7 @@ export interface LanguageServerSpec {
 
 | languageId | label | binaries（args） | markers | extensions | tier |
 |---|---|---|---|---|---|
-| typescript | TypeScript / JavaScript | `typescript-language-server`（`--stdio`） | `tsconfig.json` `jsconfig.json` `*/tsconfig.json` `*/jsconfig.json` | .ts .tsx .js .jsx .mts .cts .mjs .cjs | verified |
+| typescript | TypeScript / JavaScript | `typescript-language-server`（`--stdio`） | `tsconfig.json` `jsconfig.json` `*/tsconfig.json` `*/jsconfig.json` `package.json` `*/package.json`（GUI 验收修正：纯 JS 项目无 tsconfig/jsconfig，server 同样服务 .js） | .ts .tsx .js .jsx .mts .cts .mjs .cjs | verified |
 | python | Python | `pyright-langserver`（`--stdio`） | `pyproject.toml` `requirements*.txt` `setup.py` `setup.cfg` | .py .pyi | verified |
 | go | Go | `gopls` | `go.mod` `*/go.mod` | .go | verified |
 | rust | Rust | `rust-analyzer` | `Cargo.toml` `*/Cargo.toml` | .rs | verified |

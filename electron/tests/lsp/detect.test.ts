@@ -47,6 +47,21 @@ describe('markers 求值', () => {
     expect(st.every((s) => !s.toolchain)).toBe(true);
     expect(activeLanguageIds(st)).toEqual([]);
   });
+
+  // GUI 验收回归锁：纯 JS 项目（无 tsconfig/jsconfig，仅 package.json）必须
+  // 激活 typescript——修复前此类 workspace 全语言 inactive，安装按钮无从出现
+  it('仅根 package.json（纯 JS 项目）→ typescript toolchain 命中', () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"js-only"}');
+    const st = detectWorkspaceLanguages('ws-d4b', tmpDir);
+    expect(st.find((s) => s.languageId === 'typescript')!.toolchain).toBe(true);
+  });
+
+  it('一层子目录 package.json（monorepo 包）→ typescript toolchain 命中', () => {
+    fs.mkdirSync(path.join(tmpDir, 'frontend'));
+    fs.writeFileSync(path.join(tmpDir, 'frontend', 'package.json'), '{"name":"fe"}');
+    const st = detectWorkspaceLanguages('ws-d4c', tmpDir);
+    expect(st.find((s) => s.languageId === 'typescript')!.toolchain).toBe(true);
+  });
 });
 
 describe('missing-binary 三态（伪 PATH 隔离）', () => {
