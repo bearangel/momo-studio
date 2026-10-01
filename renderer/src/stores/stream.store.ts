@@ -54,6 +54,9 @@ function detectNetBlocked(resultText: string): boolean {
  */
 const TOOLCHAIN_WRITE_BLOCKED_SNIPPET = '非工作空间路径写入被沙箱拦截';
 
+/** 失败命令预览截断上限（spec §8：截断 200 字符） */
+const TOOLCHAIN_COMMAND_PREVIEW_MAX = 200;
+
 /**
  * A 子系统 StreamState。
  *
@@ -90,6 +93,13 @@ interface StreamStoreState {
    * 与 netBlockedSeen 同语义：只置不清、reset 不清、hydrate 回放不触发。
    */
   toolchainWriteBlockedSeen: boolean;
+  /**
+   * v2.5 工具链拦截卡失败命令预览（spec §8 终审 F2）：检测命中批次从同批次
+   * tool_call_start（同 messageId + 同 callId 关联）提取的 args.command，截断
+   * 200 字符。检测不命中的批次不动它（保留最近一次值）；命中但同批次关联不到
+   * tool_call（理论上必先于 result）置 null。reset 不清（与一次性标志同语义）。
+   */
+  lastToolchainBlockedCommand: string | null;
   /**
    * 接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 累积到内部 eventLog 后重新聚合所有受影响的 messageId。
@@ -130,6 +140,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
   streams: new Map(),
   netBlockedSeen: false,
   toolchainWriteBlockedSeen: false,
+  lastToolchainBlockedCommand: null,
 
   applyEventBatch: (batch) => {
     if (batch.length === 0) return;
@@ -147,6 +158,34 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         typeof e.payload.result === 'string' &&
         e.payload.result.includes(TOOLCHAIN_WRITE_BLOCKED_SNIPPET),
     );
+    // 命令预览提取（spec §8）：命中时从同批次 tool_call_start 按 messageId+callId
+    // 关联取 args.command（截断 200）；未命中批次不动现值（undefined 哨兵区分
+    // 「本批不更新」与「命中但无命令 → null」两种语义）
+    let blockedCommand: string | null | undefined;
+    if (toolchainBlocked) {
+      blockedCommand = null;
+      for (const e of batch) {
+        if (e.eventType !== 'tool_call_result') continue;
+        if (typeof e.payload.result !== 'string') continue;
+        if (!e.payload.result.includes(TOOLCHAIN_WRITE_BLOCKED_SNIPPET)) continue;
+        const callId = e.payload.callId;
+        if (typeof callId !== 'string') continue;
+        const start = batch.find(
+          (s) =>
+            s.eventType === 'tool_call_start' &&
+            s.messageId === e.messageId &&
+            s.payload.callId === callId,
+        );
+        const args = (start?.payload.args as Record<string, unknown> | undefined) ?? {};
+        if (typeof args.command === 'string' && args.command !== '') {
+          blockedCommand =
+            args.command.length > TOOLCHAIN_COMMAND_PREVIEW_MAX
+              ? args.command.slice(0, TOOLCHAIN_COMMAND_PREVIEW_MAX)
+              : args.command;
+          break;
+        }
+      }
+    }
     // 累积到 eventLog（按 messageId 分桶 + 去重 + 按 seq 升序）
     for (const e of batch) {
       const list = eventLogByMessage.get(e.messageId) ?? [];
@@ -175,6 +214,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         // 一次性标志只置不清（netBlocked=false 时不写入，保持现值）
         ...(netBlocked ? { netBlockedSeen: true } : {}),
         ...(toolchainBlocked ? { toolchainWriteBlockedSeen: true } : {}),
+        ...(blockedCommand !== undefined ? { lastToolchainBlockedCommand: blockedCommand } : {}),
       };
     });
   },

@@ -536,7 +536,7 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
     grantToolchainMock.mockReset();
     // 真实 store 归位（不 mock store——与 netOff 套件同款：导航/授权断言走真实状态转移）
     act(() => {
-      useStreamStore.setState({ netBlockedSeen: false, toolchainWriteBlockedSeen: false });
+      useStreamStore.setState({ netBlockedSeen: false, toolchainWriteBlockedSeen: false, lastToolchainBlockedCommand: null });
       useUiStore.setState({ activeView: 'im' });
       useWorkspaceStore.setState({ activeWorkspaceId: null });
     });
@@ -555,6 +555,34 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
+  });
+
+  // —— 失败命令预览（终审 F2，spec §8 枚举内容）——
+  it('lastToolchainBlockedCommand 非空 → 卡体 <code> 预览展示（等宽 + 可选中）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({
+        toolchainWriteBlockedSeen: true,
+        lastToolchainBlockedCommand: 'rustup toolchain install stable-aarch64-apple-darwin',
+      });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    const code = screen.getByText('rustup toolchain install stable-aarch64-apple-darwin');
+    expect(code.tagName).toBe('CODE');
+    expect(code.className).toMatch(/font-mono/);
+    expect(code.className).toMatch(/select-all/);
+  });
+
+  it('lastToolchainBlockedCommand 为 null（关联不到命令）→ 卡片渲染但无预览行', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true, lastToolchainBlockedCommand: null });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 需要写入工具链目录')).toBeInTheDocument();
+    expect(container.querySelector('code')).toBeNull();
   });
 
   it('点击「本会话允许」→ grantToolchain(activeWorkspaceId) + 本地隐藏（卡片消失）', async () => {

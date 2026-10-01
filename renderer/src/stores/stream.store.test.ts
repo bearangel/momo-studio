@@ -284,6 +284,18 @@ describe('stream.store：工具链写拦截检测', () => {
   const WRITE_BLOCKED_HINT =
     '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录或工作区缓存绕过——那对系统工具注册不可见。';
 
+  /** bash tool_call_start 事件（payload 形态对齐 stream-aggregator 消费的 p.callId/p.args） */
+  function bashCallStart(seq: number, command: string, callId = 'c1'): MessageEventRow {
+    return {
+      id: `e${seq}`,
+      messageId: 'mt',
+      seq,
+      eventType: 'tool_call_start',
+      payload: { callId, toolName: 'bash', args: { command } },
+      createdAt: seq * 1000,
+    };
+  }
+
   /** 仿真真实 bash 结果文本：exit_code + sandbox tag + stderr + 尾部拦截提示（shell-tools parts 形态） */
   function toolchainBlockedOutput(): string {
     return ['exit_code: 1', 'sandbox: seatbelt/net-on', 'stderr:\nrustup: EPERM write ~/.rustup', WRITE_BLOCKED_HINT].join('\n\n');
@@ -292,7 +304,7 @@ describe('stream.store：工具链写拦截检测', () => {
   beforeEach(() => {
     useStreamStore.getState().reset();
     // reset 刻意不清一次性标志（生产语义）——测试隔离在此手动归位
-    useStreamStore.setState({ toolchainWriteBlockedSeen: false });
+    useStreamStore.setState({ toolchainWriteBlockedSeen: false, lastToolchainBlockedCommand: null });
   });
 
   it('结果尾部含固定子串（WRITE_BLOCKED_HINT 全文）→ 置 toolchainWriteBlockedSeen', () => {
@@ -346,6 +358,67 @@ describe('stream.store：工具链写拦截检测', () => {
   it('markToolchainWriteBlockedSeen 手动置位（与实时检测共用同一一次性语义，幂等不复位）', () => {
     useStreamStore.getState().markToolchainWriteBlockedSeen();
     expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(true);
+  });
+
+  // —— 命令预览提取（终审 F2，spec §8 枚举内容：失败命令预览截断 200 字符）——
+  // 检测命中时从同批次 tool_call_start 取 args.command（同 messageId + 同 callId
+  // 关联——生产链路 tool_call 必先于 result 落库，同批 flush 内成对出现）。
+  it('命中批次带 tool_call_start → 提取 args.command 存 lastToolchainBlockedCommand', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, 'rustup toolchain install stable-aarch64-apple-darwin'),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBe(
+      'rustup toolchain install stable-aarch64-apple-darwin',
+    );
+  });
+
+  it('command 超 200 字符 → 截断为前 200 字符', () => {
+    const longCmd = `rustup component add ${'x'.repeat(300)}`;
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, longCmd),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toHaveLength(200);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBe(longCmd.slice(0, 200));
+  });
+
+  it('检测不命中的批次不动 lastToolchainBlockedCommand（保留上次值——卡持续展示最近一次拦截命令）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, 'npm install -g typescript'),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(3, 'ls -la'),
+      bashResult(4, ['exit_code: 0', '(无输出)'].join('\n\n')),
+    ]);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBe('npm install -g typescript');
+  });
+
+  it('命中但同批次关联不到 tool_call_start（理论上不发生）→ 置 null 不残留旧值', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, 'npm install -g pnpm'),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    useStreamStore.getState().applyEventBatch([bashResult(3, toolchainBlockedOutput())]);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBeNull();
+  });
+
+  it('callId 不匹配的 tool_call_start 不误关联（按 callId 精确配对）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, 'cargo build --release', 'other-call'),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBeNull();
+  });
+
+  it('reset() 不清 lastToolchainBlockedCommand（与一次性标志同语义——卡片上下文跨 workspace 切换保留）', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashCallStart(1, 'rustup default stable'),
+      bashResult(2, toolchainBlockedOutput()),
+    ]);
+    useStreamStore.getState().reset();
+    expect(useStreamStore.getState().lastToolchainBlockedCommand).toBe('rustup default stable');
   });
 });
 

@@ -39,6 +39,8 @@ export function SandboxNotice() {
   // netOff / 工具链拦截一次性标志（stream.store 实时检测）；导航走真实 ui.store（不强求定位到安全沙箱分类）
   const netBlockedSeen = useStreamStore((s) => s.netBlockedSeen);
   const toolchainWriteBlockedSeen = useStreamStore((s) => s.toolchainWriteBlockedSeen);
+  // 失败命令预览（spec §8 终审 F2）：检测命中批次关联提取的命令（截断 200），null 不渲染
+  const lastToolchainBlockedCommand = useStreamStore((s) => s.lastToolchainBlockedCommand);
   const setActiveView = useUiStore((s) => s.setActiveView);
   // 授权按 workspace 键控（spec §4 grant 表）——「本会话允许」对当前激活 workspace 授予
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -171,6 +173,11 @@ export function SandboxNotice() {
           <p className="mb-3 leading-relaxed">
             bash 的工具链/依赖安装（如 rustup、npm -g）被沙箱拦截。可本会话放行（仅清单内目录），或到设置永久开启。
           </p>
+          {lastToolchainBlockedCommand ? (
+            <code className="block border border-subtle bg-canvas rounded px-2 py-1.5 font-mono text-xs text-secondary select-all break-all mb-3">
+              {lastToolchainBlockedCommand}
+            </code>
+          ) : null}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setActiveView('settings')}>
               去设置

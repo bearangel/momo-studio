@@ -6,6 +6,7 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { logger } from '../logger';
 
 /** 预置默认五项（spec D3）。npm/pip 为占位项，展开时探测解析 */
 export const DEFAULT_TOOLCHAIN_DIRS: string[] = [
@@ -31,9 +32,19 @@ let npmPrefixCache: string | null | undefined;
 function resolveNpmPrefix(): string | null {
   if (npmPrefixCache !== undefined) return npmPrefixCache;
   try {
-    npmPrefixCache = execSync('npm prefix -g', { encoding: 'utf-8', timeout: 10_000 }).trim() || null;
-  } catch {
-    npmPrefixCache = null; // npm 不可用：占位项静默跳过
+    // 打包 GUI 启动是 launchd 最小 PATH（无 /opt/homebrew/bin 等）——npm 不可见
+    // 会静默 null，授权后 npm -g 仍被拦且无信号（终审 F3）。显式补常见包管理器
+    // 位置候选；PATH 重复条目无害，去重不必
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: [process.env.PATH, '/opt/homebrew/bin', '/usr/local/bin'].join(path.delimiter),
+    };
+    npmPrefixCache = execSync('npm prefix -g', { encoding: 'utf-8', timeout: 10_000, env }).trim() || null;
+  } catch (err) {
+    npmPrefixCache = null; // npm 不可用：占位项跳过
+    logger.warn('npm 全局 prefix 探测失败（npm 不可见？）——npm:global-prefix 目录将被跳过', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
   return npmPrefixCache;
 }
@@ -52,7 +63,8 @@ function realpathOrResolve(p: string): string {
 export function expandToolchainDirs(
   raw: string[],
   home: string,
-  opts?: { npmPrefix?: string },
+  /** npmPrefix 注入（测试用）：显式 null = 探测失败语义（占位项跳过）；缺省走真实探测 */
+  opts?: { npmPrefix?: string | null },
 ): string[] {
   const out: string[] = [];
   for (const item of raw) {
@@ -60,7 +72,9 @@ export function expandToolchainDirs(
     if (s === '') continue;
     let abs: string | null = null;
     if (s === 'npm:global-prefix') {
-      abs = opts?.npmPrefix ?? resolveNpmPrefix();
+      // opts.npmPrefix 以「显式提供」判定注入（含 null=探测失败语义）——用 ??
+      // 会把显式 null 回退到真实探测，破坏测试注入契约（终审 F3）
+      abs = opts !== undefined && opts.npmPrefix !== undefined ? opts.npmPrefix : resolveNpmPrefix();
     } else if (s === 'pip:user') {
       abs = resolvePipUser(home);
     } else if (s === '~') {

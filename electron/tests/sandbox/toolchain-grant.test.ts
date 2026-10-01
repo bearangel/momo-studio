@@ -42,6 +42,11 @@ describe('expandToolchainDirs', () => {
     expect(out).toEqual(['/fake/npm-global']);
   });
 
+  it('opts.npmPrefix 显式 null → 占位项跳过且不抛错（终审 F3：null=探测失败注入语义——绕 execSync 直测 opts 契约）', () => {
+    const out = expandToolchainDirs(['npm:global-prefix', '~/.rustup'], home, { npmPrefix: null });
+    expect(out).toEqual([path.resolve(home, '.rustup')]);
+  });
+
   it('空串/空白行过滤；realpath 失败回退 path.resolve（不抛错）', () => {
     const out = expandToolchainDirs(['', '   ', '~/.not-exist-dir-xyz'], home);
     expect(out).toEqual([path.resolve(home, '.not-exist-dir-xyz')]);
@@ -51,5 +56,20 @@ describe('expandToolchainDirs', () => {
     expect(DEFAULT_TOOLCHAIN_DIRS).toEqual([
       '~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user',
     ]);
+  });
+
+  // —— pip:user 平台分支（终审 F4：skipIf 互补——任一平台至少跑一条，CI linux 与主机 darwin 各覆盖其一）——
+  describe.skipIf(process.platform !== 'darwin')('pip:user 展开（darwin 分支）', () => {
+    it('pip:user → ~/Library/Python（版本号目录的父目录，宽匹配）', () => {
+      expect(expandToolchainDirs(['pip:user'], home)).toEqual([
+        path.join(home, 'Library', 'Python'),
+      ]);
+    });
+  });
+
+  describe.skipIf(process.platform === 'darwin')('pip:user 展开（非 darwin 分支）', () => {
+    it('pip:user → ~/.local', () => {
+      expect(expandToolchainDirs(['pip:user'], home)).toEqual([path.join(home, '.local')]);
+    });
   });
 });

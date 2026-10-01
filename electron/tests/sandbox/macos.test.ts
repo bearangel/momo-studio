@@ -96,4 +96,9 @@ describe('renderSeatbeltProfile', () => {
     expect(prof).not.toContain('.rustup');
     expect(prof).not.toContain('.cargo');
   });
+
+  it('授权目录不存在仍渲染 allow 行（终审 F1：macOS 全量渲染语义——pip:user 首装前 ~/Library/Python 不存在，安装动作会创建它，spec §9「授权即生效」）', () => {
+    const prof = renderSeatbeltProfile(mkPolicy({ toolchainDirs: ['/Users/dev/Library/Python'] }));
+    expect(prof).toContain('(allow file-write* (subpath "/Users/dev/Library/Python"))');
+  });
 });
