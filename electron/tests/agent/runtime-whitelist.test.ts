@@ -69,8 +69,11 @@ describe('unionDynamicToolNames（纯函数）', () => {
 });
 
 describe('buildRuntimeContext 集成（真实链路回归锁）', () => {
-  it('allowedTools=[read_file] 的 agent：task_complete 放行、bash 拒绝', async () => {
-    const opts = {
+  function buildOpts(overrides: Partial<Record<'allowedTools' | 'deniedTools', string[]>> = {
+    allowedTools: ['read_file'],
+    deniedTools: [],
+  }) {
+    return {
       agentAssignmentId: 'inst-1',
       agentUserId: '@agent:local',
       systemPrompt: 'p',
@@ -82,15 +85,17 @@ describe('buildRuntimeContext 集成（真实链路回归锁）', () => {
       subAgents: [],
       skills: [],
       mcpNames: [],
-      allowedTools: ['read_file'],
-      deniedTools: [],
       isLeader: false,
       devMode: false,
       maxToolCalls: -1,
       contextWindow: 0,
       outputTokens: 0,
+      ...overrides,
     };
-    const config = parseConfig(JSON.parse(JSON.stringify(opts)));
+  }
+
+  it('allowedTools=[read_file] 的 agent：task_complete 放行、bash 拒绝', async () => {
+    const config = parseConfig(JSON.parse(JSON.stringify(buildOpts())));
     await buildRuntimeContext(config);
     // 修复点：内置 bash 不被自动并入（修复前此断言失败——白名单被扩成全集）
     expect(config.allowedTools).not.toContain('bash');
@@ -104,5 +109,49 @@ describe('buildRuntimeContext 集成（真实链路回归锁）', () => {
     expect(() =>
       assertToolAllowed('bash', { allowedTools: config.allowedTools, deniedTools: [] }),
     ).toThrow(/不在允许列表中/);
+  });
+
+  // v2.x 展示层过滤（GUI 终验缺陷回归锁，spec 目标 2 的另一半）：
+  // ctx.tools（LLM 请求里的工具 schema，唯一消费点 chatStream）必须与白名单收敛——
+  // 否则 agent 自报工具与配置不符（用户实测定案：31 工具配置自报 65 全集），
+  // 且每个 agent 白白背负全量工具 schema 的 token。
+  describe('展示层过滤（LLM 工具面 = 所配即所得）', () => {
+    it('allowedTools=[read_file] → ctx.tools 只含所配 + Tier 0，不含未配的 bash/浏览器/办公', async () => {
+      const config = parseConfig(JSON.parse(JSON.stringify(buildOpts())));
+      const ctx = await buildRuntimeContext(config);
+      const names = ctx.tools.map((t) => t.name);
+      // 所配工具可见
+      expect(names).toContain('read_file');
+      // Tier 0 平台机制可见（并集先于过滤——顺序契约）
+      expect(names).toContain('task_complete');
+      expect(names).toContain('compact');
+      // 未配置的内置工具从展示面剔除（修复前此断言失败——ctx.tools 是全模块全集）
+      expect(names).not.toContain('bash');
+      expect(names).not.toContain('browser_navigate');
+      expect(names).not.toContain('office_read');
+      expect(names).not.toContain('memory_save');
+    });
+
+    it('deniedTools 命中的工具从展示面剔除（白名单空 = 其余全展示）', async () => {
+      const config = parseConfig(
+        JSON.parse(JSON.stringify(buildOpts({ allowedTools: [], deniedTools: ['bash'] }))),
+      );
+      const ctx = await buildRuntimeContext(config);
+      const names = ctx.tools.map((t) => t.name);
+      expect(names).not.toContain('bash');
+      expect(names).toContain('read_file');
+      expect(names).toContain('office_read');
+    });
+
+    it('allowedTools=[] 且无 denied → 全量展示（现状语义不变）', async () => {
+      const config = parseConfig(
+        JSON.parse(JSON.stringify(buildOpts({ allowedTools: [], deniedTools: [] }))),
+      );
+      const ctx = await buildRuntimeContext(config);
+      const names = ctx.tools.map((t) => t.name);
+      expect(names).toContain('bash');
+      expect(names).toContain('browser_navigate');
+      expect(names).toContain('office_read');
+    });
   });
 });

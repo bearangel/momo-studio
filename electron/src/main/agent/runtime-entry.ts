@@ -477,10 +477,26 @@ ${skillIndex}`
     new Set(getAllToolDefs(toolModules).map((t) => t.name)),
   );
 
+  // v2.x 展示层过滤（GUI 终验缺陷修复）：LLM 请求里的工具 schema（ctx.tools，
+  // 唯一消费点是 chatStream）按白名单收敛——「所配即所得」必须在模型可见面成立。
+  // 修复前：31 工具配置的 agent 自报 65 全集（模型看到什么报什么），且每个
+  // agent 白白背负全量工具 schema 的 token。
+  // 顺序契约：必须先并入 Tier 0 动态名（上文 unionDynamicToolNames）再过滤——
+  // 否则 loadSkill / mcp:* / dispatch:* / task_complete 会被先滤掉而进不了白名单。
+  // 执行期 assertToolAllowed（doExecuteTool 每次现读 config.allowedTools）仍是
+  // 独立兜底——两道闸互不依赖。
+  const deniedVisible = new Set(config.deniedTools);
+  const allowedVisible = new Set(config.allowedTools);
+  const visibleTools: LLMToolDef[] = tools.filter(
+    (t) =>
+      !deniedVisible.has(t.name) &&
+      (allowedVisible.size === 0 || allowedVisible.has(t.name)),
+  );
+
   return {
     wsFs,
     skillRegistry,
-    tools,
+    tools: visibleTools,
     systemPrompt,
     workspaceId: config.workspaceId,
     workspaceDir: config.workspaceDir,
