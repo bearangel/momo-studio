@@ -157,22 +157,31 @@ export function extensionToLanguageId(ext: string): string | null {
   return null;
 }
 
-/** PATH 探测：逐目录拼接 + X_OK 可执行检查；命中返回绝对路径 */
+/** X_OK 可执行检查（不抛错版） */
+function isExecutable(p: string): boolean {
+  try {
+    fs.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** PATH 探测：逐目录拼接 + 文件检查 + X_OK 可执行检查；命中返回绝对路径。
+ *  isFile 守卫不可省：POSIX 目录可遍历即过 X_OK，PATH 内同名子目录会被误报命中。 */
 export function findBinaryInPath(binaries: string[], envPath?: string): string | null {
   const dirs = (envPath ?? process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
   for (const bin of binaries) {
     if (bin.includes(path.sep)) {
       try {
-        fs.accessSync(bin, fs.constants.X_OK);
-        return bin;
-      } catch { /* 继续候选 */ }
+        if (fs.statSync(bin).isFile() && isExecutable(bin)) return bin;
+      } catch { /* 不存在或不可访问——继续候选 */ }
       continue;
     }
     for (const dir of dirs) {
       const full = path.join(dir, bin);
       try {
-        fs.accessSync(full, fs.constants.X_OK);
-        return full;
+        if (fs.statSync(full).isFile() && isExecutable(full)) return full;
       } catch { /* 下一目录 */ }
     }
   }
