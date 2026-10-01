@@ -111,6 +111,31 @@ describe('GUI 启动 PATH 兜底（macOS Finder/Dock launchd 环境修复）', (
   });
 });
 
+describe('一键安装元数据（D3 修正案：面板一键装到共享目录）', () => {
+  it('§A pin 回归锁：typescript 的 installHint 与 install.packages 均含 typescript@^5（npmmirror 默认装 TS 7 无经典 tsserver）', () => {
+    const ts = REGISTRY.find((s) => s.languageId === 'typescript')!;
+    expect(ts.installHint).toContain('typescript@^5');
+    expect(ts.install).toBeDefined();
+    expect(ts.install!.packages).toContain('typescript@^5');
+  });
+
+  it('仅 4 门确证 npm 分发的语言挂 install（kind=npm + 精确包清单），其余 12 门不挂（保持手动引导）', () => {
+    const expected: Record<string, string[]> = {
+      typescript: ['typescript-language-server', 'typescript@^5'],
+      python: ['pyright'], // 二进制 pyright-langserver 随包
+      shell: ['bash-language-server'],
+      php: ['intelephense'],
+    };
+    for (const s of REGISTRY) {
+      if (expected[s.languageId]) {
+        expect(s.install).toEqual({ kind: 'npm', packages: expected[s.languageId] });
+      } else {
+        expect(s.install).toBeUndefined();
+      }
+    }
+  });
+});
+
 describe('loginShellWhich 生产缺省实现（真实 login shell，宿主可复现）', () => {
   it('存在的系统命令命中绝对路径（login shell source profile 后 command -v）', () => {
     const hit = loginShellWhich('sh');

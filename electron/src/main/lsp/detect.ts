@@ -19,6 +19,8 @@ export interface LanguageStatus {
   binary: boolean;
   running: LspRunState;
   installHint: string;
+  /** 支持面板一键安装（spec.install 存在——仅 npm 分发语言；types.d.ts 镜像） */
+  installable: boolean;
 }
 
 /** 单段 glob 匹配（仅 `*`）：`a/*.csproj` / `*.sh` / `tsconfig.json` */
@@ -88,6 +90,7 @@ function buildStatuses(workspaceId: string, workspaceDir: string, envPath?: stri
     binary: findBinaryInPath(spec.binaries, envPath) !== null,
     running: getLspRunState(workspaceId, spec.languageId),
     installHint: spec.installHint,
+    installable: spec.install !== undefined,
   }));
 }
 

@@ -4,12 +4,14 @@
 // path 必须落在 workspace 内——不信子进程自报）。
 import path from 'node:path';
 import fs from 'node:fs';
-import { ipcMain } from 'electron';
+import { spawn } from 'node:child_process';
+import { app, ipcMain } from 'electron';
 import { logger } from '../logger';
 import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
-import { REGISTRY, extensionToLanguageId } from './registry';
+import { REGISTRY, extensionToLanguageId, findBinaryInPath } from './registry';
 import { ensureLspManager, fileUriToPath, getLspRunState } from './manager';
-import { detectWorkspaceLanguages, redetectWorkspaceLanguages } from './detect';
+import { detectWorkspaceLanguages, redetectWorkspaceLanguages, type LanguageStatus } from './detect';
+import { setSharedBinDir, getSharedBinDir } from './shared-bin';
 import { getWorkspace } from '../workspace/crud';
 import { OUTPUT_LIMITS, truncateArray } from '../agent/tools/shared/output-truncate';
 
@@ -153,11 +155,78 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
   }
 }
 
-/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测。
+/** 面板一键安装的注入缝（D3 修正案）：生产缺省真实实现；handler 三态测试注入桩。
+ *  仅 mock 进程/网络边界（npm 解析与 spawn），业务判定（元数据门控 / 重探测 /
+ *  running 覆写）始终走真实实现。 */
+export interface LspInstallDeps {
+  /** npm 可执行解析（null = 不可用）。缺省 PATH 探测全链（win32 试 npm.cmd） */
+  resolveNpm?: () => string | null;
+  /** npm install 执行（聚合 stderr，code 非 0 由调用方判失败）。缺省异步 spawn */
+  runInstall?: (cmd: string, args: string[]) => Promise<{ code: number | null; stderr: string }>;
+}
+
+/** npm 探测：win32 试 npm.cmd（无扩展名的 npm shim 非 .exe 不可执行）；
+ *  走 findBinaryInPath 全链——GUI PATH 兜底（homebrew/nvm 装的 npm 靠 login
+ *  shell 兜底命中）对 npm 同样必要 */
+function resolveNpmDefault(): string | null {
+  return findBinaryInPath([process.platform === 'win32' ? 'npm.cmd' : 'npm']);
+}
+
+/** 异步 spawn npm（非 spawnSync——安装可达分钟级，不许阻塞主进程事件循环）。
+ *  stdout 丢弃（进度条噪声），stderr 聚合供失败诊断 */
+function runInstallDefault(cmd: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.stdout?.on('data', () => { /* 防 stdout 背压挂死 */ });
+    child.on('error', (err) => reject(new Error(`npm 启动失败：${err.message}`)));
+    child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
+  });
+}
+
+/**
+ * 一键安装（lsp:install handler 本体）：npm install --prefix <sharedDir> 落
+ * app 管理共享目录，成功后 redetect 强制刷新并返回新 LanguageStatus[]（running
+ * 实时覆写，与 lsp:redetect 同型）。安装幂等——npm install 重跑即升级，不做
+ * 版本管理（YAGNI）。
+ */
+export async function installLanguageServer(
+  workspaceId: string,
+  languageId: string,
+  deps: LspInstallDeps = {},
+): Promise<LanguageStatus[]> {
+  const spec = REGISTRY.find((s) => s.languageId === languageId);
+  if (!spec) throw new Error(`未注册的语言：${languageId}`);
+  if (!spec.install) throw new Error(`该语言服务需手动安装：${spec.installHint}`);
+  const ws = getWorkspace(workspaceId);
+  if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
+  const sharedDir = getSharedBinDir();
+  if (sharedDir === null) throw new Error('LSP 共享安装目录未初始化（IPC 注册异常）');
+  const npm = deps.resolveNpm ? deps.resolveNpm() : resolveNpmDefault();
+  if (npm === null) throw new Error('未找到 npm——请先安装 Node.js（https://nodejs.org），安装后重试');
+  // --prefix 目录不存在时 npm 行为随版本漂移——显式建目录收口（幂等）
+  fs.mkdirSync(sharedDir, { recursive: true });
+  const run = deps.runInstall ?? runInstallDefault;
+  const { code, stderr } = await run(npm, ['install', '--prefix', sharedDir, ...spec.install.packages]);
+  if (code !== 0) {
+    const tail = stderr.trim().split('\n').slice(-5).join('\n');
+    throw new Error(`npm 安装失败（退出码 ${code}）\n${tail}`);
+  }
+  logger.info('LSP 一键安装完成', { languageId, sharedDir });
+  return redetectWorkspaceLanguages(workspaceId, ws.directoryPath).map((s) => ({
+    ...s,
+    running: getLspRunState(workspaceId, s.languageId),
+  }));
+}
+
+/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测 / 一键安装。
  *  running 列实时覆写：detect 结果按 workspace 缓存，running 是随 server
  *  生命周期变化的实时态——返回前复制数组并以 getLspRunState（纯内存查询）
  *  覆写，否则面板 running 列被缓存冻结。 */
-export function registerLspPanelIpc(): void {
+export function registerLspPanelIpc(deps: LspInstallDeps = {}): void {
+  // 共享目录接线（D3 修正案）：app ready 后注册，userData 可用；幂等
+  setSharedBinDir(path.join(app.getPath('userData'), 'lsp-bin'));
   ipcMain.handle('lsp:status', (_event, workspaceId: string) => {
     const ws = getWorkspace(workspaceId);
     if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
@@ -174,4 +243,6 @@ export function registerLspPanelIpc(): void {
       running: getLspRunState(workspaceId, s.languageId),
     }));
   });
+  ipcMain.handle('lsp:install', (_event, workspaceId: string, languageId: string) =>
+    installLanguageServer(workspaceId, languageId, deps));
 }

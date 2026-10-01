@@ -11,13 +11,18 @@ import os from 'node:os';
 import { ipcMain } from 'electron';
 import { routeLspOp, registerLspPanelIpc } from '../../src/main/lsp/ipc';
 import { OUTPUT_LIMITS } from '../../src/main/agent/tools/shared/output-truncate';
+import { setSharedBinDir, getSharedBinDir } from '../../src/main/lsp/shared-bin';
 import * as manager from '../../src/main/lsp/manager';
 import * as detect from '../../src/main/lsp/detect';
 import * as workspaceCrud from '../../src/main/workspace/crud';
 import type { Workspace } from '../../src/main/workspace/types';
 
-// 仓库标准 vi.mock('electron') 模式：捕获 ipcMain.handle 注册表
-vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
+// 仓库标准 vi.mock('electron') 模式：捕获 ipcMain.handle 注册表（app.getPath
+// 供 registerLspPanelIpc 接线共享目录——D3 修正案）
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => '/tmp/momo-lsp-userdata-fixture') },
+  ipcMain: { handle: vi.fn() },
+}));
 vi.mock('../../src/main/lsp/manager', () => ({
   ensureLspManager: vi.fn(),
   getLspRunState: vi.fn(() => 'stopped'),
@@ -368,5 +373,72 @@ describe('registerLspPanelIpc', () => {
       workspaceId: string,
     ) => unknown;
     expect(() => statusHandler(undefined, 'ws-gone')).toThrow(/工作区/);
+  });
+});
+
+describe('lsp:install handler（D3 修正案：面板一键安装）', () => {
+  /** 注册一次拿 install handler（deps 注入桩）+ 独立 sharedDir（绕过 userData fixture） */
+  function setupInstall(deps: Parameters<typeof registerLspPanelIpc>[0]): {
+    handler: (event: unknown, workspaceId: string, languageId: string) => Promise<unknown>;
+    sharedDir: string;
+  } {
+    registerLspPanelIpc(deps);
+    const handler = vi.mocked(ipcMain.handle).mock.calls
+      .find((c) => c[0] === 'lsp:install')![1] as unknown as (
+      event: unknown,
+      workspaceId: string,
+      languageId: string,
+    ) => Promise<unknown>;
+    const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-lsp-install-shared-'));
+    setSharedBinDir(sharedDir);
+    return { handler, sharedDir };
+  }
+
+  it('三态之一（成功）：spawn mock code=0 → redetect 刷新并以 running 覆写返回新列表；spawn 参数锁 --prefix 共享目录 + 包清单', async () => {
+    const runInstall = vi.fn().mockResolvedValue({ code: 0, stderr: '' });
+    const { handler, sharedDir } = setupInstall({ resolveNpm: () => '/fake/npm', runInstall });
+    const result = (await handler(undefined, 'ws-x', 'python')) as Array<Record<string, unknown>>;
+    expect(result).toEqual([{ languageId: 'go', running: 'stopped' }]);
+    expect(detect.redetectWorkspaceLanguages).toHaveBeenCalledWith('ws-x', '/tmp/ws-x');
+    expect(runInstall).toHaveBeenCalledTimes(1);
+    const [cmd, args] = runInstall.mock.calls[0] as unknown as [string, string[]];
+    expect(cmd).toBe('/fake/npm');
+    expect(args).toEqual(['install', '--prefix', sharedDir, 'pyright']);
+  });
+
+  it('三态之二（无 install 元数据）：go（非 npm 分发）→ 中文错误含 installHint，且不触 spawn', async () => {
+    const runInstall = vi.fn();
+    const { handler } = setupInstall({ resolveNpm: () => '/fake/npm', runInstall });
+    await expect(handler(undefined, 'ws-x', 'go')).rejects.toThrow(/该语言服务需手动安装/);
+    expect(runInstall).not.toHaveBeenCalled();
+  });
+
+  it('三态之三（npm 缺失）：resolveNpm null → 中文错误引导装 Node，不触 spawn', async () => {
+    const runInstall = vi.fn();
+    const { handler } = setupInstall({ resolveNpm: () => null, runInstall });
+    await expect(handler(undefined, 'ws-x', 'python')).rejects.toThrow(/Node/);
+    expect(runInstall).not.toHaveBeenCalled();
+  });
+
+  it('spawn 失败（code=1）→ 抛含 stderr 末尾的中文错误', async () => {
+    const runInstall = vi.fn().mockResolvedValue({
+      code: 1,
+      stderr: 'npm WARN deprecated x\nline2\nline3\nline4\nline5\nline6\nERR! 安装失败详情',
+    });
+    const { handler } = setupInstall({ resolveNpm: () => '/fake/npm', runInstall });
+    await expect(handler(undefined, 'ws-x', 'php')).rejects.toThrow(/npm 安装失败/);
+    await expect(handler(undefined, 'ws-x', 'php')).rejects.toThrow(/安装失败详情/);
+  });
+
+  it('未注册语言 / workspace 不存在 → 中文错误（错误路径专项）', async () => {
+    const { handler } = setupInstall({ resolveNpm: () => '/fake/npm', runInstall: vi.fn() });
+    await expect(handler(undefined, 'ws-x', 'haskell')).rejects.toThrow(/未注册的语言/);
+    vi.mocked(workspaceCrud.getWorkspace).mockReturnValueOnce(null);
+    await expect(handler(undefined, 'ws-gone', 'python')).rejects.toThrow(/工作区/);
+  });
+
+  it('registerLspPanelIpc 接线共享目录：set 为 <userData>/lsp-bin', () => {
+    registerLspPanelIpc();
+    expect(getSharedBinDir()).toBe('/tmp/momo-lsp-userdata-fixture/lsp-bin');
   });
 });

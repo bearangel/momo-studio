@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getSharedBinDir } from './shared-bin';
 
 export interface LanguageServerSpec {
   languageId: string;
@@ -15,6 +16,9 @@ export interface LanguageServerSpec {
   tier: 'verified' | 'experimental';
   installHint: string;
   initOverrides?: Record<string, unknown>;
+  /** 面板一键安装元数据（D3 修正案）：仅挂确证 npm 分发的语言（4 门）；
+   *  缺省 undefined = 手动引导（installHint）。LanguageStatus.installable 派生自此。 */
+  install?: { kind: 'npm'; packages: string[] };
 }
 
 export const REGISTRY: readonly LanguageServerSpec[] = [
@@ -24,7 +28,10 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
     markers: ['tsconfig.json', 'jsconfig.json', '*/tsconfig.json', '*/jsconfig.json'],
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'],
     tier: 'verified',
-    installHint: 'npm install -g typescript-language-server typescript',
+    // §A pin：TS 必须锁 ^5——npmmirror 等镜像默认装 TS 7（tsgo 时代）无经典
+    // tsserver.js，typescript-language-server 找不到 server 直接哑火
+    installHint: 'npm install -g typescript-language-server typescript@^5',
+    install: { kind: 'npm', packages: ['typescript-language-server', 'typescript@^5'] },
   },
   {
     languageId: 'python', label: 'Python',
@@ -33,6 +40,7 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
     extensions: ['.py', '.pyi'],
     tier: 'verified',
     installHint: 'pip install pyright（或 npm install -g pyright）',
+    install: { kind: 'npm', packages: ['pyright'] },
   },
   {
     languageId: 'go', label: 'Go',
@@ -90,6 +98,7 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
     extensions: ['.sh', '.bash'],
     tier: 'verified',
     installHint: 'npm install -g bash-language-server',
+    install: { kind: 'npm', packages: ['bash-language-server'] },
   },
   {
     languageId: 'csharp', label: 'C#',
@@ -138,6 +147,7 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
     extensions: ['.php'],
     tier: 'experimental',
     installHint: 'npm install -g intelephense（实验性）',
+    install: { kind: 'npm', packages: ['intelephense'] },
   },
   {
     languageId: 'elixir', label: 'Elixir',
@@ -223,6 +233,15 @@ export function findBinaryInPath(
     for (const p of COMMON_BIN_PREFIXES) {
       if (!dirs.includes(p) && fs.existsSync(p)) dirs.push(p);
     }
+  }
+  // 第三层（D3 修正案）：app 管理共享目录 <userData>/lsp-bin 的 .bin。与
+  // homebrew 前缀不同，这不是宿主环境启发而是 setSharedBinDir 注入的确定性
+  // app 状态——伪 PATH 隔离模式下同样生效（正是单测注入点）；仅要求目录
+  // 实际存在（未装过即跳过）。优先级：PATH / 前缀 > 共享目录 > login shell
+  const shared = getSharedBinDir();
+  if (shared !== null) {
+    const nmBin = path.join(shared, 'node_modules', '.bin');
+    if (!dirs.includes(nmBin) && fs.existsSync(nmBin)) dirs.push(nmBin);
   }
   for (const bin of binaries) {
     if (bin.includes(path.sep)) {

@@ -4,12 +4,13 @@
 //   - 数据源：invoke lsp:status(workspaceId) / lsp:redetect(workspaceId)（主进程
 //     detect.ts 单一真相源；本组件不做任何探测）
 //   - 每语言一行三态：ready（工程标志 ✓ + 二进制 ✓ + 运行态）/ missing-binary
-//     （工程标志 ✓ + 二进制 ✗ → 第二行「未安装 + installHint + 复制」）/
-//     inactive（工程标志 ✗ → 整行灰显「未检测到工程标志」）
+//     （工程标志 ✓ + 二进制 ✗ → 第二行「未安装 + installHint」；installable 行
+//     含一键「安装」按钮（D3 修正案——npm 分发语言装到 <userData>/lsp-bin），
+//     其余保持复制命令引导）/ inactive（工程标志 ✗ → 整行灰显「未检测到工程标志」）
 //   - 实验性徽标仅 experimental 行；「重新检测」busy 态禁用 + 图标旋转
 //   - 加载失败只渲染错误行，不抛错不阻塞设置页其余 section
 import { useCallback, useEffect, useState } from 'react';
-import { Check, RefreshCw, X } from 'lucide-react';
+import { Check, PackagePlus, RefreshCw, X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
 import { cn } from '../../lib/cn';
@@ -32,6 +33,9 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
   const [statuses, setStatuses] = useState<LanguageStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 一键安装（D3 修正案）：安装中语言（null = 空闲）；失败文案保留列表呈现
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const load = useCallback(async (fn: (id: string) => Promise<LanguageStatus[]>) => {
     setBusy(true);
@@ -42,6 +46,18 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }, [workspaceId]);
+
+  const install = useCallback(async (languageId: string) => {
+    setInstalling(languageId);
+    setInstallError(null);
+    try {
+      setStatuses(await ipc.lsp.install(workspaceId, languageId));
+    } catch (e) {
+      setInstallError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInstalling(null);
     }
   }, [workspaceId]);
 
@@ -70,6 +86,10 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
       </div>
 
       {error && <div className="text-sm text-status-error">加载失败：{error}</div>}
+
+      {installError && (
+        <div className="whitespace-pre-line text-xs text-status-error">安装失败：{installError}</div>
+      )}
 
       {statuses === null && !error && <div className="text-sm text-tertiary py-4">检测中…</div>}
 
@@ -124,7 +144,20 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
                   <code className="min-w-0 flex-1 truncate font-mono text-secondary">
                     {s.installHint}
                   </code>
-                  <CopyButton text={s.installHint} />
+                  {s.installable ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0"
+                      onClick={() => void install(s.languageId)}
+                      disabled={installing !== null}
+                    >
+                      <PackagePlus size={16} strokeWidth={1.75} aria-hidden />
+                      {installing === s.languageId ? '安装中…' : '安装'}
+                    </Button>
+                  ) : (
+                    <CopyButton text={s.installHint} />
+                  )}
                 </div>
               )}
             </li>

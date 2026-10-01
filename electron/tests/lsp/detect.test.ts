@@ -10,6 +10,7 @@ import {
   activeLanguageIds,
   markersHit,
 } from '../../src/main/lsp/detect';
+import { setSharedBinDir } from '../../src/main/lsp/shared-bin';
 
 let tmpDir: string;
 
@@ -80,6 +81,36 @@ describe('globSeg 尾部 end-anchor（F5 回归锁）', () => {
     fs.rmSync(path.join(tmpDir, 'requirements-dev.txt'));
     fs.writeFileSync(path.join(tmpDir, 'xrequirements-dev.txt'), '');
     expect(markersHit(tmpDir, ['requirements*.txt'])).toBe(false);
+  });
+});
+
+describe('installable 派生（D3 修正案：spec.install !== undefined）', () => {
+  it('仅挂 install 元数据的 4 门（typescript/python/shell/php）为 true，其余 12 门 false', () => {
+    const st = detectWorkspaceLanguages('ws-d9', tmpDir);
+    const installableIds = ['typescript', 'python', 'shell', 'php'];
+    for (const s of st) {
+      expect(s.installable).toBe(installableIds.includes(s.languageId));
+    }
+  });
+
+  it('共享目录内装好的 server 使 binary=true（面板一键安装 → redetect 闭环）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'go.mod'), 'module x');
+    const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-lsp-detect-shared-'));
+    const nmBin = path.join(shared, 'node_modules', '.bin');
+    fs.mkdirSync(nmBin, { recursive: true });
+    const gopls = path.join(nmBin, 'gopls');
+    fs.writeFileSync(gopls, '#!/bin/sh\n', 'utf-8');
+    fs.chmodSync(gopls, 0o755);
+    setSharedBinDir(shared);
+    try {
+      const st = redetectWorkspaceLanguages('ws-d10', tmpDir, '/nonexistent-lsp-path');
+      const go = st.find((s) => s.languageId === 'go')!;
+      expect(go.toolchain).toBe(true);
+      expect(go.binary).toBe(true); // 伪 PATH 隔离下仅共享目录可命中
+      expect(activeLanguageIds(st)).toContain('go');
+    } finally {
+      fs.rmSync(shared, { recursive: true, force: true });
+    }
   });
 });
 
