@@ -2,11 +2,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildPolicy, sensitiveCandidates } from '../../src/main/sandbox/policy';
 
 describe('buildPolicy', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-test-'));
+  // 每用例新建 tmp（原 describe 级单例 + afterEach 删除会让后续用例拿到已删
+  // 路径——新增用例需在磁盘上真实建目录，故改为 beforeEach 重建）
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-test-')); });
   afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
   it('workspace 路径 realpath 解析（符号链接归一）', () => {
@@ -42,5 +45,16 @@ describe('buildPolicy', () => {
 
   it('tmpDir 是 realpath（macOS /var → /private/var 归一）', () => {
     expect(buildPolicy(tmp, false).tmpDir).toBe(fs.realpathSync(os.tmpdir()));
+  });
+
+  it('工具链目录不存在的条目被过滤（bwrap 对不存在路径 --bind 硬失败——与 sensitiveDirs 同款同理由）', () => {
+    const ghost = path.join(tmp, 'toolchain-ghost');
+    expect(buildPolicy(tmp, false, [ghost]).toolchainDirs).toEqual([]);
+  });
+
+  it('工具链目录存在的条目保留（去重后原样透传）', () => {
+    const real = path.join(tmp, 'toolchain-real');
+    fs.mkdirSync(real);
+    expect(buildPolicy(tmp, false, [real]).toolchainDirs).toEqual([real]);
   });
 });

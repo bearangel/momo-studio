@@ -42,7 +42,9 @@ export function buildPolicy(workspaceDir: string, networkEnabled: boolean, toolc
     sensitiveDirs: sensitiveCandidates(home).filter((d) => fs.existsSync(d)),
     networkEnabled,
     // 工具链目录（v2.5 spec §9）：调用方（resolveShellSpawn）已在授权态完成
-    // 展开；此处只做去重。缺省 [] = 未授权（既有两参调用方零破坏）
-    toolchainDirs: [...new Set(toolchainDirs)],
+    // 展开；此处去重后只保留磁盘上真实存在的条目——与上方 sensitiveDirs 同款
+    // 同理由：bwrap 对不存在路径 --bind 硬失败（用户清单里手输/未安装的目录
+    // 静默剔除，绝不能让单条幽灵路径打挂整个会话的 spawn）
+    toolchainDirs: [...new Set(toolchainDirs)].filter((d) => fs.existsSync(d)),
   };
 }

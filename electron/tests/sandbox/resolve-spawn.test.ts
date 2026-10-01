@@ -217,21 +217,28 @@ describe('resolveShellSpawn 工具链目录授权（v2.5）', () => {
   }
 
   it('opts.toolchainEnabled=true → profile 含设置清单展开（expandToolchainDirs 归一）后的 allow 规则', () => {
+    // 目录须真实存在：buildPolicy 过滤不存在条目（bwrap --bind 硬失败）。
+    // 原 ~/.rustup 字面量依赖宿主机装过 rust——无 rust 机器上被过滤导致误红；
+    // 改用 tmp 真目录（~/ 展开分支已由 toolchain-grant.test 单测覆盖）
+    const toolchainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-toolchain-'));
     const desc = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     try {
       __setSandboxStateForTest(darwinAvail);
       __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
-        toolchainDirs: ['~/.rustup'] });
+        toolchainDirs: [toolchainDir] });
       const plan = resolveShellSpawn(tmp, 'rustup component add x', { networkEnabled: true, toolchainEnabled: true });
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;
       expect(plan.tag).toBe('seatbelt/net-on');
       // 契约锁：用真实 expandToolchainDirs 产出作期望（生产者真产出 → 消费者直消费）
-      const expanded = expandToolchainDirs(['~/.rustup'], os.homedir());
+      const expanded = expandToolchainDirs([toolchainDir], os.homedir());
       expect(expanded).toHaveLength(1);
       expect(readProfile(plan)).toContain(`(allow file-write* (subpath ${escapeSeatbeltString(expanded[0]!)}))`);
-    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+    } finally {
+      desc && Object.defineProperty(process, 'platform', desc);
+      fs.rmSync(toolchainDir, { recursive: true, force: true });
+    }
   });
 
   it('未传 toolchainEnabled（既有调用方）→ 目录集空，profile 无工具链行（向后兼容）', () => {
