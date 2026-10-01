@@ -673,4 +673,37 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
       expect(screen.queryByTestId('sandbox-notice')).toBeNull();
     });
   });
+
+  // Task 6 评审携带：grantNow 此前为裸 void 异步——grantToolchain reject 会成
+  // unhandled rejection，且进行中可双击重复授权。回归锁三要素：busy 禁用防双击、
+  // reject 在调用点被吞（无 unhandled rejection）、卡片保留且按钮恢复可用。
+  it('grantToolchain reject → busy 禁用防双击；卡片保留、按钮恢复可用（无 unhandled rejection）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    let rejectGrant: (e: Error) => void = () => {};
+    grantToolchainMock.mockReturnValue(
+      new Promise<void>((_, rej) => {
+        rejectGrant = rej;
+      }),
+    );
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
+
+    await waitFor(() => expect(grantToolchainMock).toHaveBeenCalledWith('ws-1'));
+    expect(screen.getByRole('button', { name: '授权中…' })).toBeDisabled();
+
+    await act(async () => {
+      rejectGrant(new Error('ipc 不可用'));
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '本会话允许' })).toBeEnabled();
+    });
+    expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument();
+    expect(dismissPromptMock).not.toHaveBeenCalled();
+  });
 });

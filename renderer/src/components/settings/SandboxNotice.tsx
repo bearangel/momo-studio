@@ -111,11 +111,17 @@ export function SandboxNotice() {
 
   // 本会话放行工具链写（spec §10）：grant 按当前激活 workspace 键控，主进程同步置
   // KV 一次性 flag（卡不再弹）；renderer 本地 setInfo 隐藏。无激活 workspace 时
-  // no-op（不误授权，卡保留待用户处理）。
+  // no-op（不误授权，卡保留待用户处理）。busy 复用安装按钮先例（防双击重复授权）；
+  // reject 在调用点 .catch 吞掉——卡片保留即用户可见的失败反馈，可重试或走「去设置」。
   const grantNow = async (): Promise<void> => {
     if (!activeWorkspaceId) return;
-    await ipc.sandbox.grantToolchain(activeWorkspaceId);
-    setInfo({ ...info, toolchainPromptDismissed: true });
+    setBusy(true);
+    try {
+      await ipc.sandbox.grantToolchain(activeWorkspaceId);
+      setInfo({ ...info, toolchainPromptDismissed: true });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -169,7 +175,9 @@ export function SandboxNotice() {
             <Button variant="ghost" onClick={() => setActiveView('settings')}>
               去设置
             </Button>
-            <Button onClick={() => void grantNow()}>本会话允许</Button>
+            <Button onClick={() => void grantNow().catch(() => {})} disabled={busy}>
+              {busy ? '授权中…' : '本会话允许'}
+            </Button>
           </div>
         </>
       ) : showBwrap ? (
