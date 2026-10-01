@@ -260,6 +260,95 @@ describe('stream.store：net-off 网络拦截检测', () => {
   });
 });
 
+// —— 工具链写拦截检测（v2.5 沙箱工具链授权，spec 2026-10-01 §7/§8）——
+// electron 侧 shell-tools.ts 在 HOME 写拦截命中时把 WRITE_BLOCKED_HINT 固定提示段
+// 追加到 bash 结果尾部（parts.join('\n\n')——置尾，LLM 最后看到的行动指引）。
+// renderer 侧硬编码同一子串检测（跨进程无共享模块，两端测试各自逐字锁）。
+describe('stream.store：工具链写拦截检测', () => {
+  /** bash tool_call_result 事件（payload 形状对齐 stream-aggregator 消费的 p.result/p.callId） */
+  function bashResult(seq: number, result: string): MessageEventRow {
+    return {
+      id: `e${seq}`,
+      messageId: 'mt',
+      seq,
+      eventType: 'tool_call_result',
+      payload: { callId: 'c1', result, success: false },
+      createdAt: seq * 1000,
+    };
+  }
+
+  /**
+   * electron 侧 WRITE_BLOCKED_HINT 全文逐字复制（sandbox-write-hint.ts，Task 4 逐字锁）。
+   * renderer 不能 import electron 源码——此处维护同一字面量，检测子串必须命中它。
+   */
+  const WRITE_BLOCKED_HINT =
+    '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录或工作区缓存绕过——那对系统工具注册不可见。';
+
+  /** 仿真真实 bash 结果文本：exit_code + sandbox tag + stderr + 尾部拦截提示（shell-tools parts 形态） */
+  function toolchainBlockedOutput(): string {
+    return ['exit_code: 1', 'sandbox: seatbelt/net-on', 'stderr:\nrustup: EPERM write ~/.rustup', WRITE_BLOCKED_HINT].join('\n\n');
+  }
+
+  beforeEach(() => {
+    useStreamStore.getState().reset();
+    // reset 刻意不清一次性标志（生产语义）——测试隔离在此手动归位
+    useStreamStore.setState({ toolchainWriteBlockedSeen: false });
+  });
+
+  it('结果尾部含固定子串（WRITE_BLOCKED_HINT 全文）→ 置 toolchainWriteBlockedSeen', () => {
+    useStreamStore.getState().applyEventBatch([bashResult(1, toolchainBlockedOutput())]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(true);
+  });
+
+  it('普通 bash 结果（无拦截提示段）→ 不置位', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, ['exit_code: 0', '(无输出)'].join('\n\n')),
+    ]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(false);
+  });
+
+  it('普通 EPERM 失败但无提示段（未命中主进程 detectHomeWriteBlocked）→ 不置位', () => {
+    useStreamStore.getState().applyEventBatch([
+      bashResult(1, ['exit_code: 1', 'sandbox: seatbelt/net-on', 'stderr:\nEPERM write /tmp/x'].join('\n\n')),
+    ]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(false);
+  });
+
+  it('text_delta 正文含固定子串 → 不置（仅 bash tool_call_result 参与检测）', () => {
+    useStreamStore.getState().applyEventBatch([
+      mkEvent('m4', 1, 'text_delta', { delta: `agent 转述：${WRITE_BLOCKED_HINT}` }),
+    ]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(false);
+  });
+
+  it('一次性标志：置位后的后续批次不复位（不自动清）', () => {
+    useStreamStore.getState().applyEventBatch([bashResult(1, toolchainBlockedOutput())]);
+    useStreamStore.getState().applyEventBatch([
+      bashResult(2, ['exit_code: 0', '(无输出)'].join('\n\n')),
+    ]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(true);
+  });
+
+  it('reset() 不清 toolchainWriteBlockedSeen（每 app 运行至多置一次）', () => {
+    useStreamStore.getState().applyEventBatch([bashResult(1, toolchainBlockedOutput())]);
+    useStreamStore.getState().reset();
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(true);
+  });
+
+  it('hydrateFromEvents 回放含拦截结果的历史 → 不置（重启自然消失：仅实时路径检测）', () => {
+    useStreamStore.getState().hydrateFromEvents('mt-replay', [
+      bashResult(1, toolchainBlockedOutput()),
+      mkEvent('mt-replay', 2, 'final', { status: 'done' }),
+    ]);
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(false);
+  });
+
+  it('markToolchainWriteBlockedSeen 手动置位（与实时检测共用同一一次性语义，幂等不复位）', () => {
+    useStreamStore.getState().markToolchainWriteBlockedSeen();
+    expect(useStreamStore.getState().toolchainWriteBlockedSeen).toBe(true);
+  });
+});
+
 // ====================================================================
 // 事件裁剪水合回退（工作空间切换卡顿修复，2026-09-25）
 // 新契约：getMessages 对非最近窗口消息只回结构事件（无 text/thinking delta），

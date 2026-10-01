@@ -14,12 +14,14 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { SandboxNotice } from './SandboxNotice';
 import { useStreamStore } from '../../stores/stream.store';
 import { useUiStore } from '../../stores/ui.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import type { SandboxInfo } from '../../ipc/types';
 
 const getStateMock = vi.fn();
 const reprobeMock = vi.fn();
 const installBwrapMock = vi.fn();
 const dismissPromptMock = vi.fn();
+const grantToolchainMock = vi.fn();
 
 // 桩 window.api（sandbox 命名空间；组件经 ipc Proxy 透传消费）
 const mockApi = {
@@ -28,6 +30,7 @@ const mockApi = {
     reprobe: reprobeMock,
     installBwrap: installBwrapMock,
     dismissPrompt: dismissPromptMock,
+    grantToolchain: grantToolchainMock,
   },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -516,5 +519,158 @@ describe('SandboxNotice：netOff 拦截卡', () => {
     expect(root.className).not.toMatch(/fixed/);
     expect(root.className).not.toMatch(/inset-0/);
     expect(root.className).toMatch(/pointer-events-auto/);
+  });
+});
+
+// —— 工具链写拦截引导卡（v2.5 沙箱工具链授权，spec 2026-10-01 §7/§8）——
+// 显隐 = !showNetOff && toolchainWriteBlockedSeen && !toolchainPromptDismissed
+// && toolchainPolicy === 'deny'（makeInfo 默认 deny 即本套件语义）；优先级排
+// netOff 之后、bwrap/winPolicy 之前。「本会话允许」= grantToolchain(activeWorkspaceId)
+// + 主进程同步置 KV 一次性 flag，renderer 本地 setInfo 隐藏；「去设置」只导航。
+describe('SandboxNotice：工具链写拦截引导卡', () => {
+  beforeEach(() => {
+    getStateMock.mockReset();
+    reprobeMock.mockReset();
+    installBwrapMock.mockReset();
+    dismissPromptMock.mockReset();
+    grantToolchainMock.mockReset();
+    // 真实 store 归位（不 mock store——与 netOff 套件同款：导航/授权断言走真实状态转移）
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: false, toolchainWriteBlockedSeen: false });
+      useUiStore.setState({ activeView: 'im' });
+      useWorkspaceStore.setState({ activeWorkspaceId: null });
+    });
+  });
+
+  it('检测标志 + 未 dismiss + deny 策略 → 渲染工具链卡（标题 + [去设置] + [本会话允许]）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 需要写入工具链目录')).toBeInTheDocument();
+    expect(
+      screen.getByText(/bash 的工具链\/依赖安装（如 rustup、npm -g）被沙箱拦截/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
+  });
+
+  it('点击「本会话允许」→ grantToolchain(activeWorkspaceId) + 本地隐藏（卡片消失）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    grantToolchainMock.mockResolvedValue(undefined);
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
+
+    await waitFor(() => expect(grantToolchainMock).toHaveBeenCalledWith('ws-1'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+    });
+  });
+
+  it('activeWorkspaceId 为 null → 「本会话允许」不调 grant、卡片保留（边界：无 workspace 不误授权）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: null });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
+
+    expect(grantToolchainMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument();
+  });
+
+  it('toolchainPromptDismissed=true → 不渲染', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ toolchainPromptDismissed: true }));
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('toolchainWriteBlockedSeen=false → 不渲染', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('toolchainPolicy=allow（永久放行）→ 不渲染（无引导诉求）', async () => {
+    getStateMock.mockResolvedValue(
+      makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'allow', toolchainDirs: [] } }),
+    );
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    const { container } = render(<SandboxNotice />);
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('优先级：netOff 与工具链条件同时满足 → 仅渲染 netOff 卡（工具链标题不在场）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ netBlockedSeen: true, toolchainWriteBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 的网络访问被沙箱拦截')).toBeInTheDocument();
+    expect(screen.queryByText('agent 需要写入工具链目录')).toBeNull();
+  });
+
+  it('优先级：工具链与 bwrap 条件同时满足 → 仅渲染工具链卡（bwrap 标题不在场）', async () => {
+    getStateMock.mockResolvedValue(makeBwrapInfo());
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByText('agent 需要写入工具链目录')).toBeInTheDocument();
+    expect(screen.queryByText('bash 沙箱需要 bubblewrap')).toBeNull();
+  });
+
+  it('点击「去设置」→ 仅导航（activeView=settings），不 grant、卡片保留', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '去设置' }));
+
+    expect(useUiStore.getState().activeView).toBe('settings');
+    expect(grantToolchainMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument();
+  });
+
+  it('点击 X 关闭（工具链卡）→ dismissPrompt(toolchain) + 卡片消失', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    dismissPromptMock.mockResolvedValue(undefined);
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+
+    expect(dismissPromptMock).toHaveBeenCalledWith('toolchain');
+    await waitFor(() => {
+      expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+    });
   });
 });

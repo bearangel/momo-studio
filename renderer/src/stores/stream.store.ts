@@ -47,6 +47,14 @@ function detectNetBlocked(resultText: string): boolean {
 }
 
 /**
+ * 工具链写拦截固定子串（spec 2026-10-01 §7/§8）。与 electron 侧 WRITE_BLOCKED_HINT
+ * （sandbox-write-hint.ts，Task 4 逐字锁）同源——跨进程无共享模块，renderer 硬编码
+ * 同一子串，两端测试各自逐字锁死。主进程 detectHomeWriteBlocked 命中时把完整提示段
+ * 追加到 bash 结果尾部，renderer 据此置引导卡标志。
+ */
+const TOOLCHAIN_WRITE_BLOCKED_SNIPPET = '非工作空间路径写入被沙箱拦截';
+
+/**
  * A 子系统 StreamState。
  *
  * extends AggregatedStream（A5 共用聚合函数输出）+ 补充会话上下文字段。
@@ -77,6 +85,12 @@ interface StreamStoreState {
    */
   netBlockedSeen: boolean;
   /**
+   * v2.5 工具链写拦截一次性标志（spec 2026-10-01 §7/§8）：实时批次检测到 bash 结果
+   * 尾部带 WRITE_BLOCKED_HINT 固定子串（agent 装工具链/依赖被沙箱拦截）即置位。
+   * 与 netBlockedSeen 同语义：只置不清、reset 不清、hydrate 回放不触发。
+   */
+  toolchainWriteBlockedSeen: boolean;
+  /**
    * 接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 累积到内部 eventLog 后重新聚合所有受影响的 messageId。
    */
@@ -95,6 +109,11 @@ interface StreamStoreState {
    * 负责，本标志由信任卡出现时一并置位——与实时批次检测共用同一一次性语义。
    */
   markNetBlockedSeen: () => void;
+  /**
+   * v2.5 工具链引导卡路径置位入口：检测链路以外的路径（如设置页引导）需要置位时用。
+   * 与实时批次检测共用同一一次性语义（只置不清）。
+   */
+  markToolchainWriteBlockedSeen: () => void;
   /** 清空所有 streams + 累积 events（切换 workspace / 登出时调用） */
   reset: () => void;
 }
@@ -110,6 +129,7 @@ const eventLogByMessage = new Map<string, MessageEventRow[]>();
 export const useStreamStore = create<StreamStoreState>((set) => ({
   streams: new Map(),
   netBlockedSeen: false,
+  toolchainWriteBlockedSeen: false,
 
   applyEventBatch: (batch) => {
     if (batch.length === 0) return;
@@ -119,6 +139,13 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         e.eventType === 'tool_call_result' &&
         typeof e.payload.result === 'string' &&
         detectNetBlocked(e.payload.result),
+    );
+    // 工具链写拦截检测同语义：仅实时批次的 bash 结果 + 固定子串（回放不触发）
+    const toolchainBlocked = batch.some(
+      (e) =>
+        e.eventType === 'tool_call_result' &&
+        typeof e.payload.result === 'string' &&
+        e.payload.result.includes(TOOLCHAIN_WRITE_BLOCKED_SNIPPET),
     );
     // 累积到 eventLog（按 messageId 分桶 + 去重 + 按 seq 升序）
     for (const e of batch) {
@@ -147,6 +174,7 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
         streams: newStreams,
         // 一次性标志只置不清（netBlocked=false 时不写入，保持现值）
         ...(netBlocked ? { netBlockedSeen: true } : {}),
+        ...(toolchainBlocked ? { toolchainWriteBlockedSeen: true } : {}),
       };
     });
   },
@@ -193,12 +221,18 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
 
   reset: () => {
     eventLogByMessage.clear();
-    // 刻意不清 netBlockedSeen：一次性标志每 app 运行至多置一次，workspace 切换不重置
+    // 刻意不清 netBlockedSeen / toolchainWriteBlockedSeen：一次性标志每 app 运行
+    // 至多置一次，workspace 切换不重置
     set({ streams: new Map() });
   },
 
   markNetBlockedSeen: () => {
     // 一次性标志只置不清（与 applyEventBatch 检测路径同一语义）
     set((state) => (state.netBlockedSeen ? {} : { netBlockedSeen: true }));
+  },
+
+  markToolchainWriteBlockedSeen: () => {
+    // 一次性标志只置不清（与 applyEventBatch 检测路径同一语义）
+    set((state) => (state.toolchainWriteBlockedSeen ? {} : { toolchainWriteBlockedSeen: true }));
   },
 }));
