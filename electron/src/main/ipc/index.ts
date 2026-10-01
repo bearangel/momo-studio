@@ -15,6 +15,8 @@ import { registerGitPolicyHandlers } from '../workspace/git-policy';
 import { registerAuditHandlers } from '../audit/ipc.handlers';
 import { registerProviderHandlers } from '../agent/provider-ipc';
 import { registerSettingsIpc } from '../settings/ipc.handlers';
+// 多语言 LSP 子系统（2026-10-01）：面板语言状态查询 / 重探测 invoke
+import { registerLspPanelIpc } from '../lsp/ipc';
 import { registerSandboxIpc } from '../sandbox/ipc.handlers';
 import { registerMemoryIpc } from '../memory/ipc.handlers';
 import { registerJournalIpc } from '../journal/ipc.handlers';
@@ -48,6 +50,8 @@ export function registerIpcHandlers(opts: WorkspaceIpcOpts = {}): void {
   registerAuditHandlers();
   registerProviderHandlers();
   registerSettingsIpc();
+  // 多语言 LSP 子系统（2026-10-01）：lsp:status / lsp:redetect（与 settings 面板同址接线）
+  registerLspPanelIpc();
   registerSandboxIpc();
   registerMemoryIpc();
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——list / revert / scan / 组合回滚

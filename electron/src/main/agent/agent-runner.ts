@@ -37,6 +37,9 @@ import { routeBrowserOp } from '../browser/op-router';
 // v2.4.x 网络信任门（spec 2026-09-13 §5）：子进程 net-trust-op 请求在此路由到
 // 主进程信任门（grants/等待表/推卡都活在主进程）；任务终态同步清理会话级授权
 import { handleNetTrustOp } from '../sandbox/network-trust';
+// 多语言 LSP 子系统（2026-10-01）：子进程 lsp:op 请求在此路由到主进程
+// LspManager（LSP server 进程与单例表只能活在主进程），见 lsp/ipc.ts
+import { routeLspOp } from '../lsp/ipc';
 import {
   reapProcessGroups,
   sweepRoundEscapes,
@@ -288,6 +291,12 @@ export class AgentRunner {
       // 关联先于流过滤；授权按消息自带 streamSessionId 在 registry 层校验
       if (m.type === 'process-op') {
         void this.routeProcessOpToChild(child, msg);
+        return;
+      }
+      // lsp-op（多语言 LSP 工具桥请求，2026-10-01）：同上——requestId 关联
+      // 先于流过滤分发；workspaceDir 主进程以 workspaceId 自查（不信子进程自报）
+      if (m.type === 'lsp:op') {
+        void routeLspOp(child, msg);
         return;
       }
       // 只处理本 task 的 chunk（同一 runtime 未来可能复用跑多 task）
