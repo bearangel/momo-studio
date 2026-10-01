@@ -3,8 +3,10 @@
 // 子进程 op 不带 workspaceDir（安全边界：主进程以 workspaceId 自查目录，
 // path 必须落在 workspace 内——不信子进程自报）。
 import path from 'node:path';
+import fs from 'node:fs';
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
+import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 import { REGISTRY, extensionToLanguageId } from './registry';
 import { ensureLspManager, fileUriToPath } from './manager';
 import { detectWorkspaceLanguages, redetectWorkspaceLanguages } from './detect';
@@ -69,10 +71,30 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
     if (!ws) {
       throw new Error(`工作区不存在：${op.workspaceId}`);
     }
-    const absPath = path.resolve(ws.directoryPath, op.path);
-    // 拼目录分隔符再比对：同级目录名前缀（/tmp/ws-x-evil）不得因字符串前缀误过
-    if (!absPath.startsWith(ws.directoryPath + path.sep)) {
+    const rootDir = path.resolve(ws.directoryPath);
+    const absPath = path.resolve(rootDir, op.path);
+    // 字符串边界：复用平台语义 helper（resolve 归一 + sep 边界前缀 + win32
+    // 大小写不敏感），同级目录名前缀（/tmp/ws-x-evil）不得因字符串前缀误过
+    if (!isInsideDir(rootDir, absPath, { win32: PATH_SEMANTICS_WIN32 })) {
       throw new Error(`路径越界：${op.path}`);
+    }
+    // 符号链接锚定（workspace-fs assertInWorkspace 同型补层——isInsideDir 纯
+    // 字符串运算不触 fs）：字符串边界内仍可能有中间段是指向外部的 symlink。
+    // 向上找真实存在的最近祖先 realpathSync，解析后脱离 realRoot 即拒绝；
+    // 逐级上溯以支持尚未创建的文件路径。root 本身不存在（离线配置/测试桩）
+    // 时跳过——磁盘上无内容即无链接可逃逸，字符串边界已足。
+    if (fs.existsSync(rootDir)) {
+      const realRoot = fs.realpathSync(rootDir);
+      let anchor = absPath;
+      while (anchor !== rootDir && !fs.existsSync(anchor)) {
+        anchor = path.dirname(anchor);
+      }
+      if (anchor !== rootDir) {
+        const realAnchor = fs.realpathSync(anchor);
+        if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
+          throw new Error(`路径越界（符号链接逃逸）：${op.path}`);
+        }
+      }
     }
     const languageId = extensionToLanguageId(path.extname(absPath));
     if (!languageId) {

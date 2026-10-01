@@ -5,11 +5,15 @@
 // （getWorkspace）、detect（面板 invoke 数据源）全部桩化——本文件只锁
 // 路由协议形状，不触真实 server / DB。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { ipcMain } from 'electron';
 import { routeLspOp, registerLspPanelIpc } from '../../src/main/lsp/ipc';
 import * as manager from '../../src/main/lsp/manager';
 import * as detect from '../../src/main/lsp/detect';
 import * as workspaceCrud from '../../src/main/workspace/crud';
+import type { Workspace } from '../../src/main/workspace/types';
 
 // 仓库标准 vi.mock('electron') 模式：捕获 ipcMain.handle 注册表
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
@@ -31,6 +35,19 @@ vi.mock('../../src/main/workspace/crud', () => ({
 function fakeChild(): { send: ReturnType<typeof vi.fn> } {
   return { send: vi.fn() };
 }
+
+/** 完整 Workspace 形状基座（getWorkspace 类型收窄——仅 directoryPath 参与路由） */
+const baseWorkspace: Workspace = {
+  id: 'ws-x',
+  name: 'ws-x',
+  description: '',
+  directoryPath: '/tmp/ws-x',
+  gitInitialized: false,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  ownerId: 'u1',
+  iconEmoji: '',
+  defaultAgentInstanceId: null,
+};
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -154,6 +171,34 @@ describe('routeLspOp', () => {
     const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
     expect(reply.ok).toBe(false);
     expect(String(reply.error)).toMatch(/工作区/);
+  });
+
+  it('workspace 内 symlink 指向外部 → ok:false 且不触 manager（realpath 锚定）', async () => {
+    // 真实临时目录（fs 不 mock）：字符串边界通过（link.ts 在 ws 内），但 realpath
+    // 锚定后落在 realRoot 之外——isInsideDir 纯字符串运算不含 symlink 防线，
+    // 本用例锁 ipc.ts 的逐级 realpath 补层
+    const child = fakeChild();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-lsp-ipc-symlink-'));
+    const wsDir = path.join(root, 'ws');
+    fs.mkdirSync(wsDir);
+    fs.writeFileSync(path.join(root, 'outside.ts'), 'export const x = 1;');
+    fs.symlinkSync(path.join(root, 'outside.ts'), path.join(wsDir, 'link.ts'));
+    vi.mocked(workspaceCrud.getWorkspace).mockReturnValueOnce({
+      ...baseWorkspace,
+      directoryPath: wsDir,
+    });
+    try {
+      await routeLspOp(child, {
+        type: 'lsp:op', requestId: 'r9',
+        op: { kind: 'diagnostics', workspaceId: 'ws-sym', path: 'link.ts', content: '' },
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
+    expect(reply.ok).toBe(false);
+    expect(String(reply.error)).toMatch(/越界/);
+    expect(vi.mocked(manager.ensureLspManager)).not.toHaveBeenCalled();
   });
 });
 
