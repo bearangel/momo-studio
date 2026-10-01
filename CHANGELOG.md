@@ -114,6 +114,9 @@
 
 以下条目为特性分组账本（非发布史）；spec 见 `docs/specs/` 对应文件。
 
+### 沙箱工具链安装授权（v2.20 账本，spec 2026-10-01）
+- **沙箱工具链安装授权**：bash 工具链/依赖全局安装（rustup / npm -g / go install / pip --user）遇沙箱写拦截时给出结构化提示并弹一次性引导卡——「本会话允许」grant 或设置页永久 allow（双态 + 可编辑目录清单，预置五项）；授权仅扩写目录集维度（seatbelt/bwrap profile 追加 allow），黑名单/敏感目录 deny/网络双态不变。spec：`docs/specs/2026-10-01-sandbox-toolchain-grant.md`
+
 ### Skill 从 Git 仓库导入（v2.18 账本，spec 2026-09-24 P2.6）
 skill 页新增「从 Git 仓库导入…」：输入仓库地址（如 https://github.com/obra/superpowers）即可全量导入仓库内所有技能。
 - 机制：HTTPS zip 归档下载（GitHub codeload / GitLab archive，HEAD 默认分支）——**零 git 依赖**（终端用户可能未装 git）、零新依赖（AdmZip 复用）；仅公开仓库；60s 超时 + 100MB 流式上限
