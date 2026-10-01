@@ -197,7 +197,7 @@ detect(workspaceId, workspaceDir): LanguageStatus[]
 - **electron 单测**（tests/lsp/ 镜像 src 结构）：
   - registry：16 条字段完备（tier/二进制/markers/extensions/installHint 非空）
   - detect：tmp fixtures——根 tsconfig / 子目录 go.mod / 无标志 / node_modules 内 marker 跳过 / missing-binary 三态；PATH 探测（注入伪 PATH 目录 + 可执行文件）
-  - manager：mock spawn 迁移现有 lsp-tools.test 模式——per-language 键控隔离、binaries 顺序探测、initOverrides 合并、并发上限第 4 门报错、闲置 shutdown、意外退出恢复
+  - manager：纯逻辑用例（per-language 键控隔离、binaries 顺序探测、initOverrides 合并、并发上限第 4 门报错、启动失败驱逐单例）不触 server；协议正确性沿用现有 lsp-tools.test 的真实 server 模式（tsserver 冒烟，30s 超时 + afterEach 强制清理防进程泄漏）；闲置 shutdown、意外退出恢复由迁移代码保留既有行为
   - ipc：envelope 解析 / reqId 匹配 / 超时 reject / 主进程路由按扩展名选语言
   - spawn 透传：AGENT_CONFIG.lspLanguages 注入与缺省兼容（buildSpawnOpts 单测）
 - **真实 server 冒烟**（skip-if-binary-missing）：tsserver（既有用例迁移）；gopls / pyright 各一条 diagnostics+references 冒烟（容器装了才跑）
