@@ -24,25 +24,31 @@ vi.mock('../../src/main/sandbox/settings', async (importOriginal) => {
 
 import { handleNetTrustOp } from '../../src/main/sandbox/network-trust';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
+
+/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+}
 
 const SSN = 'ssn-trust-1';
 
 describe('handleNetTrustOp（effective 单 op 路由，修订 B 双态）', () => {
   beforeEach(() => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
   });
   afterEach(() => {
     __setSandboxSettingsForTest(null);
   });
 
   it('policy=allow → { ok:true, payload:{ netOn:true } }', async () => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r1', op: 'effective', streamSessionId: SSN });
     expect(r).toEqual({ ok: true, payload: { netOn: true } });
   });
 
   it('policy=deny → { ok:true, payload:{ netOn:false } }', async () => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r2', op: 'effective', streamSessionId: SSN });
     expect(r).toEqual({ ok: true, payload: { netOn: false } });
   });

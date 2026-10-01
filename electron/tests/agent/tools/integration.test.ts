@@ -26,6 +26,12 @@ import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { assertToolAllowed } from '../../../src/main/agent/tools/shared/permission';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
+
+/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+}
 
 let tmpDir: string;
 let ctx: ToolContext;
@@ -34,7 +40,7 @@ let modules: ReturnType<typeof buildToolRegistry>;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-integration-'));
   // v2.4：bash 走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证 bash 用例可真实执行
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest(settings('permissive', 'deny'));
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,

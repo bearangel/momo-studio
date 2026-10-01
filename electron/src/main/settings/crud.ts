@@ -44,6 +44,18 @@ export interface GlobalSettings {
    * 会被 updateGlobalSettings 的读改写合并烤进 JSON，污染迁移判定。
    */
   sandboxNetworkPolicy?: 'deny' | 'ask' | 'allow';
+  /**
+   * v2.5：沙箱工具链目录写入策略（spec §4：deny 默认 / allow 永久允许）。
+   * 同 sandboxNetworkPolicy 注释纪律——读侧透传 undefined，由 sandbox/settings.ts
+   * 懒迁移并给默认安全方向（deny）；此处给默认值会污染 JSON。
+   */
+  sandboxToolchainPolicy?: 'deny' | 'allow';
+  /**
+   * v2.5：可授权写入的工具链目录清单（字面 ~/ 前缀 + 'npm:global-prefix'/'pip:user'
+   * 占位项；展开归一在消费侧 expandToolchainDirs）。缺省 undefined → 消费侧用
+   * DEFAULT_TOOLCHAIN_DIRS 兜底，不写默认进 JSON。
+   */
+  sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
   journalQuotaMb?: number;
 }
@@ -96,6 +108,8 @@ export function getGlobalSettings(): GlobalSettings {
     sandboxMode: parsed.sandboxMode ?? 'strict',
     sandboxNetwork: parsed.sandboxNetwork ?? false,
     sandboxNetworkPolicy: parsed.sandboxNetworkPolicy,
+    sandboxToolchainPolicy: parsed.sandboxToolchainPolicy,
+    sandboxToolchainDirs: parsed.sandboxToolchainDirs,
     journalQuotaMb: parsed.journalQuotaMb ?? DEFAULT_JOURNAL_QUOTA_MB,
   };
 }

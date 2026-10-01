@@ -54,6 +54,7 @@ import {
   type SandboxProbeState,
 } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-ipc-test-${Date.now()}`);
@@ -121,7 +122,12 @@ describe('sandbox:getState', () => {
 
     const info = (await handler()) as SandboxInfo;
 
-    expect(info.settings).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(info.settings).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+      toolchainPolicy: 'deny',
+      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
+    });
     expect(info.state).toBeNull();
     expect(info.installCommand).toBe('sudo apt install bubblewrap');
     expect(info.bwrapPromptDismissed).toBe(false);

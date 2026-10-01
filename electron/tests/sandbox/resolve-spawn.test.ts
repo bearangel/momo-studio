@@ -5,11 +5,19 @@
 //   - opts.networkEnabled 显式覆盖（shell-tools 经策略查询桥解析 netOn 后传入——
 //     接线锁：策略翻转后下一条 spawn 的 tag 随之变化）
 //   - 既有基线：平台分支 / strict 阻断 / permissive 降级
+// v2.5 工具链字段：注入器补全 toolchainPolicy/toolchainDirs（本测试关注网络态，
+// 工具链策略与目录用缺省 deny + DEFAULT_TOOLCHAIN_DIRS 兜底，行为不影响 spawn 决策）。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { resolveShellSpawn, sandboxInstallHint } from '../../src/main/sandbox';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
+
+/** 测试用 settings 构造器：网络态显式传、工具链字段用 v2.5 缺省 */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+}
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-spawn-'));
 const linuxAvail = { platform: 'linux' as NodeJS.Platform, sandboxTool: 'bwrap' as const, toolVersion: 'bubblewrap 0.10',
@@ -26,7 +34,7 @@ beforeEach(() => { __setSandboxSettingsForTest(null); __setSandboxStateForTest(n
 describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
   it('policy=allow → net-on（bwrap args 无 --unshare-net）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     const plan = resolveShellSpawn(tmp, 'x');
     if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
     expect(plan.tag).toBe('bwrap/net-on');
@@ -35,7 +43,7 @@ describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
 
   it('policy=deny → net-off（--unshare-net 在 args 里）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
     const plan = resolveShellSpawn(tmp, 'x');
     if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
     expect(plan.tag).toBe('bwrap/net-off');
@@ -44,7 +52,7 @@ describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
 
   it('接线锁：opts.networkEnabled 显式覆盖双态（deny 基线下显式 netOn 翻转下一条 spawn tag）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
     // 主进程策略查询解析 netOn 后显式传入（deny → false；allow → true）
     const beforeFlip = resolveShellSpawn(tmp, 'x', { networkEnabled: false });
     const afterFlip = resolveShellSpawn(tmp, 'x', { networkEnabled: true });
@@ -56,7 +64,7 @@ describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
 
   it('接线锁：opts 覆盖压过 allow 策略（显式 net-off 时代）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     const plan = resolveShellSpawn(tmp, 'x', { networkEnabled: false });
     if (plan.kind !== 'wrapped') throw new Error('应 wrapped');
     expect(plan.tag).toBe('bwrap/net-off');
@@ -66,7 +74,7 @@ describe('resolveShellSpawn 网络双态推导（修订 B）', () => {
 describe('resolveShellSpawn 平台分支（既有基线）', () => {
   it('linux + bwrap 可用 → wrapped：bwrap 前缀 + bash -c 收尾 + 缓存 env 注入', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
     const plan = resolveShellSpawn(tmp, 'echo hi');
     expect(plan.kind).toBe('wrapped');
     if (plan.kind !== 'wrapped') return;
@@ -80,9 +88,9 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
 
   it('网络开关驱动 bwrap args（关 → --unshare-net 在 args 里）', () => {
     __setSandboxStateForTest(linuxAvail);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
     const p1 = resolveShellSpawn(tmp, 'x');
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     const p2 = resolveShellSpawn(tmp, 'x');
     if (p1.kind !== 'wrapped' || p2.kind !== 'wrapped') throw new Error('应 wrapped');
     expect(p1.args).toContain('--unshare-net');
@@ -91,7 +99,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
 
   it('linux + 不可用 + strict → blocked（文案含安装指引 + permissive 逃生门）', () => {
     __setSandboxStateForTest(linuxMissing);
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     const plan = resolveShellSpawn(tmp, 'echo hi');
     expect(plan.kind).toBe('blocked');
     if (plan.kind !== 'blocked') return;
@@ -101,7 +109,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
 
   it('linux + 不可用 + permissive → plain + unsandboxed tag', () => {
     __setSandboxStateForTest(linuxMissing);
-    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest(settings('permissive', 'deny'));
     const plan = resolveShellSpawn(tmp, 'echo hi');
     expect(plan.kind).toBe('plain');
     if (plan.kind !== 'plain') return;
@@ -114,7 +122,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     try {
       __setSandboxStateForTest(winState);
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+      __setSandboxSettingsForTest(settings('strict', 'allow'));
       const plan = resolveShellSpawn(tmp, 'Write-Output hi');
       expect(plan.kind).toBe('plain');
       if (plan.kind !== 'plain') return;
@@ -144,7 +152,7 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     try {
       __setSandboxStateForTest({ platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: null,
         available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 });
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+      __setSandboxSettingsForTest(settings('strict', 'deny'));
       const plan = resolveShellSpawn(tmp, 'echo hi');
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;
@@ -181,7 +189,7 @@ describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 �
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     try {
       __setSandboxStateForTest(null);
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+      __setSandboxSettingsForTest(settings('strict', 'deny'));
       const plan = resolveShellSpawn(tmp, 'echo hi');
       expect(plan.kind).toBe('blocked');
       if (plan.kind !== 'blocked') return;

@@ -32,7 +32,13 @@ vi.mock('node:child_process', async (importOriginal) => {
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
+
+/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+}
 
 /** 构造 fake 子进程：capture spawn 后由测试驱动 close（带 stderr 网络 failure 签名） */
 function mkFakeChild(): ChildProcess & { emitClose: (code: number) => void } {
@@ -65,7 +71,7 @@ beforeEach(() => {
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => mkFakeChild());
   // bwrap 可用 + strict + deny：resolveShellSpawn 走 wrapped 分支（net-off）
-  __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest(settings('strict', 'deny'));
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: 'bwrap', toolVersion: 'bubblewrap 0.10',
     available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
@@ -139,7 +145,7 @@ describe('bash 网络态查询：spawn 前接线（修订 B）', () => {
   });
 
   it('effective 桥故障但设置 allow → 回退推导 net-on（回退读设置非硬编码）', async () => {
-    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow' });
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
     effectiveMock.mockRejectedValue(new Error('IPC 无响应'));
     const result = await runBashToCompletion();
     expect(lastSpawnArgs()).not.toContain('--unshare-net');

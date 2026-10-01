@@ -17,6 +17,7 @@ import {
   getSandboxSettings,
   __setSandboxSettingsForTest,
 } from '../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-settings-${Date.now()}`);
 
@@ -54,14 +55,29 @@ function writeRawGlobal(patch: Record<string, unknown>): void {
 
 describe('sandbox/settings（testOverride）', () => {
   it('testOverride 注入后优先生效（无需 DB 值，不触发迁移）', () => {
-    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
-    expect(getSandboxSettings()).toEqual({ mode: 'permissive', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest({
+      mode: 'permissive',
+      networkPolicy: 'deny',
+      toolchainPolicy: 'deny',
+      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
+    });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'permissive',
+      networkPolicy: 'deny',
+      toolchainPolicy: 'deny',
+      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
+    });
     expect(readRawGlobal().sandboxNetworkPolicy).toBeUndefined();
   });
 
   it('override 置 null 后走 DB，缺省 strict / allow（双态时代新默认）', () => {
     __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings()).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+      toolchainPolicy: 'deny',
+      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
+    });
   });
 });
 
@@ -76,7 +92,12 @@ describe('sandbox/settings kv 懒迁移（修订 B：双态收敛）', () => {
   it('旧布尔键 sandboxNetwork=true → allow，且写回新键、旧键留存（回滚安全）', () => {
     updateGlobalSettings({ sandboxNetwork: true });
     __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings()).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+      toolchainPolicy: 'deny',
+      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
+    });
     const raw = readRawGlobal();
     expect(raw.sandboxNetworkPolicy).toBe('allow'); // 新键已写
     expect(raw.sandboxNetwork).toBe(true); // 旧键留存不删

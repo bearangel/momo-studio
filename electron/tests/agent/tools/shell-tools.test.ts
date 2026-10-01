@@ -18,6 +18,12 @@ import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
+
+/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+}
 
 let tmpRoot: string;
 let tmpDir: string;
@@ -32,7 +38,7 @@ let ctx: ToolContext;
   wsFs = new WorkspaceFS(tmpDir);
   // v2.4：bash 走 resolveShellSpawn（默认 strict + 未探测 → blocked 抛错）。
   // 注入 permissive + linux 沙箱不可用状态 → plain 直跑 + unsandboxed 标记。
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest(settings('permissive', 'deny'));
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
