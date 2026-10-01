@@ -170,7 +170,7 @@ detect(workspaceId, workspaceDir): LanguageStatus[]
 ```
 
 - 检测结果 per-workspace 缓存于主进程；spawn 时取缓存（无则现算）；面板「重新检测」强制重算并刷新缓存
-- PATH 探测注意：解析 PATH 环境变量逐目录拼接 + `X_OK` 检查；Electron 主进程 GUI 启动的 PATH 可能缺 shell profile 注入（macOS launchd 环境）——探测失败时降级经 `/usr/bin/env which` shell 兜底（实现细节，测试覆盖）
+- PATH 探测注意：解析 PATH 环境变量逐目录拼接 + `X_OK` 检查；Electron 主进程 GUI 启动的 PATH 可能缺 shell profile 注入（macOS launchd 环境）——探测前追加 `/opt/homebrew/bin`、`/usr/local/bin` 常见前缀（存在才加、幂等），探测失败时降级经 login shell（macOS `/bin/zsh -lc`、Linux `/bin/bash -lc` 的 `command -v`）兜底，win32 跳过（实现细节，测试覆盖。勘误 2026-10-01：原文「经 `/usr/bin/env which` shell 兜底」不可行——`env` 继承同一 `process.env.PATH`，解析不到 profile 注入的目录）
 
 ## 10. 设置面板「语言服务」
 
