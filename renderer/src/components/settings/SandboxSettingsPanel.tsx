@@ -31,6 +31,9 @@ export function SandboxSettingsPanel() {
       settings: {
         mode: patch.sandboxMode ?? info.settings.mode,
         networkPolicy: patch.sandboxNetworkPolicy ?? info.settings.networkPolicy,
+        // 工具链两字段（spec §10）尚无面板交互入口，乐观合并保持原值
+        toolchainPolicy: info.settings.toolchainPolicy,
+        toolchainDirs: info.settings.toolchainDirs,
       },
     });
     void ipc.settings.updateGlobal(patch);

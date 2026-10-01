@@ -15,6 +15,7 @@ import {
 } from './probe';
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
+import { grantToolchainWorkspace } from './toolchain-grant';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -25,11 +26,26 @@ export interface SandboxInfo {
   winPolicyPromptDismissed: boolean;
   /** net-off 拦截提示卡是否已关闭（v2.4.x：agent bash 命令被沙箱断网拦截时的引导卡） */
   netPromptDismissed: boolean;
+  /** 工具链写拦截引导卡是否已关闭（spec §10——用户已通过 grant 行动后置位） */
+  toolchainPromptDismissed: boolean;
 }
 
 const KV_BWRAP = 'sandbox_bwrap_prompt_dismissed';
 const KV_WINPOLICY = 'sandbox_win_policy_prompt_dismissed';
 const KV_NETOFF = 'sandbox_net_prompt_dismissed';
+/** 工具链写授权引导卡一次性标记（spec §10）——用户行动卡不再弹的持久化状态 */
+export const KV_TOOLCHAIN = 'sandbox_toolchain_prompt_dismissed';
+
+/**
+ * dismissPrompt 的 kind → kv_store key 映射表（spec §10 四键）。
+ * 改用查表保证新加 kind 时编译期友好 + 隔离 case 隔离（双侧契约锁一致）。
+ */
+const PROMPT_KV: Record<'bwrap' | 'winPolicy' | 'netOff' | 'toolchain', string> = {
+  bwrap: KV_BWRAP,
+  winPolicy: KV_WINPOLICY,
+  netOff: KV_NETOFF,
+  toolchain: KV_TOOLCHAIN,
+};
 
 function readKvFlag(key: string): boolean {
   const row = getDb().prepare('SELECT value FROM kv_store WHERE key = ?').get(key) as
@@ -38,7 +54,7 @@ function readKvFlag(key: string): boolean {
   return row?.value === '1';
 }
 
-function buildInfo(): SandboxInfo {
+export function buildInfo(): SandboxInfo {
   return {
     state: getSandboxState(),
     settings: getSandboxSettings(),
@@ -46,6 +62,7 @@ function buildInfo(): SandboxInfo {
     bwrapPromptDismissed: readKvFlag(KV_BWRAP),
     winPolicyPromptDismissed: readKvFlag(KV_WINPOLICY),
     netPromptDismissed: readKvFlag(KV_NETOFF),
+    toolchainPromptDismissed: readKvFlag(KV_TOOLCHAIN),
   };
 }
 
@@ -99,15 +116,32 @@ export function registerSandboxIpc(): void {
     return buildInfo();
   });
   ipcMain.handle('sandbox:installBwrap', () => installBwrapViaPkexec());
-  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff') => {
-    const key =
-      kind === 'bwrap' ? KV_BWRAP : kind === 'winPolicy' ? KV_WINPOLICY : KV_NETOFF;
+  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff' | 'toolchain') => {
+    const key = PROMPT_KV[kind];
     getDb()
       .prepare(
         `INSERT INTO kv_store (key, value, updated_at) VALUES (?, '1', datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`,
       )
       .run(key);
+  });
+  /**
+   * 工具链写授权（spec §10）——本会话内将该 workspace 标记为允许写 ~/.rustup
+   * 等工具链目录（spec §4 grant 表）；同步置 KV_TOOLCHAIN 一次性 flag（用户已
+   * 行动，引导卡不再弹）。校验防 null/空串串写误授予其他 workspace。
+   */
+  ipcMain.handle('sandbox:grantToolchain', (_e, workspaceId: string) => {
+    if (typeof workspaceId !== 'string' || workspaceId === '') {
+      throw new Error('workspaceId 缺失');
+    }
+    grantToolchainWorkspace(workspaceId);
+    getDb()
+      .prepare(
+        `INSERT INTO kv_store (key, value, updated_at) VALUES (?, '1', datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`,
+      )
+      .run(KV_TOOLCHAIN);
+    logger.info('工具链写授权已授予（本会话）', { workspaceId });
   });
   logger.info('Sandbox IPC handlers 已注册');
 }

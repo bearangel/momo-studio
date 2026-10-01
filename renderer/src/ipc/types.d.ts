@@ -1380,6 +1380,9 @@ export type SandboxMode = 'strict' | 'permissive';
 /** 沙箱网络出站双态策略，与 electron 端 sandbox/settings.ts 的 NetworkPolicy 对齐（2026-09-13 修订 B） */
 export type NetworkPolicy = 'deny' | 'allow';
 
+/** 工具链目录写入双态，与 electron 端 sandbox/settings.ts 的 ToolchainPolicy 对齐（spec §10） */
+export type ToolchainPolicy = 'deny' | 'allow';
+
 /**
  * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
  * 与 electron 端 sandbox/ipc.handlers.ts 的 SandboxInfo 对齐。
@@ -1387,13 +1390,22 @@ export type NetworkPolicy = 'deny' | 'allow';
 export interface SandboxInfo {
   /** boot/上次 reprobe 的探测结果；应用启动早期可能为 null（探测未完成） */
   state: SandboxProbeState | null;
-  settings: { mode: SandboxMode; networkPolicy: NetworkPolicy };
+  settings: {
+    mode: SandboxMode;
+    networkPolicy: NetworkPolicy;
+    /** 工具链目录写入双态（spec §10）——deny 默认 / allow 永久允许 */
+    toolchainPolicy: ToolchainPolicy;
+    /** 可授权工具链目录字面清单（spec §10；归一展开由主进程 expandToolchainDirs 完成） */
+    toolchainDirs: string[];
+  };
   /** 手动安装指引命令（包管理器探测失败为 null） */
   installCommand: string | null;
   bwrapPromptDismissed: boolean;
   winPolicyPromptDismissed: boolean;
   /** net-off 拦截提示卡是否已关闭（v2.4.x：仅 deny 策略下展示的信息卡） */
   netPromptDismissed: boolean;
+  /** 工具链写拦截引导卡是否已关闭（spec §10——grant 行动后置位） */
+  toolchainPromptDismissed: boolean;
 }
 
 /**
@@ -1407,8 +1419,13 @@ export interface SandboxApiSurface {
   reprobe(): Promise<SandboxInfo>;
   /** pkexec 安装 bubblewrap（Linux）；pkexec 缺失/安装失败返回 ok:false + 输出摘要 */
   installBwrap(): Promise<{ ok: boolean; output: string }>;
-  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off 拦截引导） */
-  dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff'): Promise<void>;
+  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off / 工具链 拦截引导） */
+  dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff' | 'toolchain'): Promise<void>;
+  /**
+   * 工具链写授权（spec §10）——本会话内允许该 workspace 写 ~/.rustup 等工具链目录；
+   * 同步置 toolchainPromptDismissed 持久化标记，引导卡不再弹。空串/非字符串抛错。
+   */
+  grantToolchain(workspaceId: string): Promise<void>;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

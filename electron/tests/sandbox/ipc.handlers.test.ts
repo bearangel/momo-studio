@@ -47,6 +47,8 @@ vi.mock('../../src/main/sandbox/windows', () => ({
 import {
   registerSandboxIpc,
   installBwrapViaPkexec,
+  buildInfo,
+  KV_TOOLCHAIN,
   type SandboxInfo,
 } from '../../src/main/sandbox/ipc.handlers';
 import {
@@ -323,5 +325,25 @@ describe('sandbox:reprobe', () => {
     expect(reprobeMock).toHaveBeenCalledTimes(1);
     expect(info.state?.available).toBe(true);
     expect(info.state?.sandboxTool).toBe('bwrap');
+  });
+});
+
+// sandbox 工具链写授权（spec §10）：SandboxInfo 聚合新增 toolchainPromptDismissed
+// + settings 两新字段。该文件聚焦可单测的纯逻辑；ipcMain.handle 注册形态以
+// typecheck + renderer 侧集成测试兜底。
+describe('SandboxInfo 扩展（spec §10）', () => {
+  it('buildInfo 含 toolchainPromptDismissed 与 settings 两新字段', () => {
+    const info = buildInfo();
+
+    expect(info).toHaveProperty('toolchainPromptDismissed');
+    expect(info.settings).toHaveProperty('toolchainPolicy');
+    expect(info.settings).toHaveProperty('toolchainDirs');
+  });
+
+  it('KV_TOOLCHAIN 与既有三 KV key 同型（独立键名，dismissPrompt 查表不串写）', () => {
+    expect(KV_TOOLCHAIN).toBe('sandbox_toolchain_prompt_dismissed');
+    expect(KV_TOOLCHAIN).not.toBe(KV_BWRAP);
+    expect(KV_TOOLCHAIN).not.toBe(KV_WINPOLICY);
+    expect(KV_TOOLCHAIN).not.toBe(KV_NETOFF);
   });
 });

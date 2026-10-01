@@ -145,11 +145,13 @@ const api: ApiSurface = {
   },
   // v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts）——状态/重探测/装 bwrap/关提示卡
   //（2026-09-13 修订 B：answerNetworkTrust / onNetworkNotice 已随 ask 信任门下线）
+  //（spec §10：grantToolchain 本会话内授予 workspace 工具链目录写权限）
   sandbox: {
     getState: () => invoke('sandbox:getState'),
     reprobe: () => invoke('sandbox:reprobe'),
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
+    grantToolchain: (workspaceId: string) => invoke('sandbox:grantToolchain', workspaceId),
   },
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/组合回滚/干跑预检
   journal: {

@@ -45,11 +45,12 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'allow' },
+    settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: [] },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
     netPromptDismissed: false,
+    toolchainPromptDismissed: false,
     ...overrides,
   };
 }
@@ -199,7 +200,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络双态：deny 态点「永久允许（默认）」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
 
@@ -226,7 +227,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
@@ -246,7 +247,7 @@ describe('SandboxSettingsPanel', () => {
         executionPolicy: null,
         probedAt: 1757500001000,
       },
-      settings: { mode: 'permissive', networkPolicy: 'allow' },
+      settings: { mode: 'permissive', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: [] },
     });
     reprobeMock.mockResolvedValue(refreshed);
     render(<SandboxSettingsPanel />);
