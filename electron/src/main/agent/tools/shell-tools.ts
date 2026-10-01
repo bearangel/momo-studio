@@ -29,6 +29,7 @@ import {
   requestEffectiveNetwork,
   type EffectiveNetworkDecision,
 } from './net-trust-bridge';
+import { detectHomeWriteBlocked, WRITE_BLOCKED_HINT } from './sandbox-write-hint';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -158,7 +159,8 @@ export class ShellTools implements ToolModule {
     // resolveShellSpawn 的设置双态推导，bash 主路径绝不因查询故障挂死。
     let net: EffectiveNetworkDecision | null = null;
     try {
-      net = await requestEffectiveNetwork(ctx.streamSessionId);
+      // v2.5：带上 workspaceId（工具链会话 grant 键控；undefined 时桥载荷省略键）
+      net = await requestEffectiveNetwork(ctx.streamSessionId, ctx.workspaceId);
     } catch {
       net = null;
     }
@@ -168,7 +170,11 @@ export class ShellTools implements ToolModule {
     const plan = resolveShellSpawn(
       ctx.workspaceDir,
       command,
-      net === null ? undefined : { networkEnabled: net.netOn },
+      net === null ? undefined : {
+        networkEnabled: net.netOn,
+        // v2.5：工具链授权态（spec §4）——授权时 profile 展开工具链目录 RW bind
+        toolchainEnabled: net.toolchainOn,
+      },
     );
     if (plan.kind === 'blocked') throw new Error(plan.reason);
     // wrapped 模式叠加沙箱 env 增量（npm/pip 缓存重定向到 tmp，写剖面自洽）
@@ -313,6 +319,11 @@ export class ShellTools implements ToolModule {
           if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
           if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
           if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
+          // HOME 写拦截提示（spec §7）：三条件命中才追加，同服 LLM 与 renderer
+          // stream.store（固定子串检测置引导卡）。置尾——LLM 最后看到的行动指引
+          if (detectHomeWriteBlocked(plan.tag, command, stderr)) {
+            parts.push(WRITE_BLOCKED_HINT);
+          }
           const text = parts.join('\n\n');
           // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
           // （修订 B：ask 阻塞询问收尾已下线——net-off 失败结果原样返回，

@@ -8,8 +8,11 @@
 // （三态时代的 wait 阻塞询问 op 已随 ask 信任门机制全链下线。）
 //
 // 线协议（两端同 commit 修改——momo-boundary-rules 生产者消费者成对）：
-//   child → main: { type: 'net-trust-op', requestId, op: 'effective', streamSessionId }
+//   child → main: { type: 'net-trust-op', requestId, op: 'effective', streamSessionId, workspaceId? }
 //   main → child: { type: 'net-trust-op:result', requestId, ok, payload? | error }
+// v2.5（2026-10-01）：payload 扩展双字段 { netOn, toolchainOn }；请求载荷新增
+// 可选 workspaceId（undefined 时省略键——JSON 序列化自然丢，主进程按旧载荷
+// 处理：grant 按 false，向后兼容旧子进程）。只加字段，不改既有字段含义。
 //
 // 错误路径铁律（照抄 browser-ipc-bridge）：
 //   - 超时 reject 中文文案并清 pending（防泄漏 + 迟到结果安全 no-op）
@@ -27,9 +30,11 @@ const NO_SEND_MESSAGE = '网络策略 IPC 不可用（process.send 缺失：非 
 /** effective op 超时档（主进程同步计算，60s 远超所需；仅防主进程卡死） */
 const EFFECTIVE_BRIDGE_TIMEOUT_MS = 60_000;
 
-/** spawn 前有效网络态（主进程双态策略单点判定的镜像产物） */
+/** spawn 前有效网络态（主进程双态策略单点判定的镜像产物；v2.5 起含工具链授权态） */
 export interface EffectiveNetworkDecision {
   netOn: boolean;
+  /** v2.5 工具链目录写授权（spec §4）：永久 allow || 会话 grant（按 workspaceId 键控） */
+  toolchainOn: boolean;
 }
 
 interface PendingEntry {
@@ -47,7 +52,7 @@ const pending = new Map<string, PendingEntry>();
  */
 function sendNetTrustOp(
   op: 'effective',
-  payload: { streamSessionId: string },
+  payload: { streamSessionId: string; workspaceId?: string },
   timeoutMs: number,
 ): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
@@ -75,9 +80,16 @@ function sendNetTrustOp(
   });
 }
 
-/** spawn 前查询有效网络态（每条 bash 命令一次往返——IPC 开销远小于进程 spawn 本身） */
-export function requestEffectiveNetwork(streamSessionId: string): Promise<EffectiveNetworkDecision> {
-  return sendNetTrustOp('effective', { streamSessionId }, EFFECTIVE_BRIDGE_TIMEOUT_MS) as
+/**
+ * spawn 前查询有效网络态（每条 bash 命令一次往返——IPC 开销远小于进程 spawn 本身）。
+ * v2.5：可选 workspaceId——会话级工具链 grant 的键控 ID（跨模块 ID 单点透传，
+ * 来自 ToolContext.workspaceId）；undefined 时省略键，主进程按旧载荷处理。
+ */
+export function requestEffectiveNetwork(
+  streamSessionId: string,
+  workspaceId?: string,
+): Promise<EffectiveNetworkDecision> {
+  return sendNetTrustOp('effective', { streamSessionId, workspaceId }, EFFECTIVE_BRIDGE_TIMEOUT_MS) as
     Promise<EffectiveNetworkDecision>;
 }
 

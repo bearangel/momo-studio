@@ -19,6 +19,7 @@ import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
 import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
+import { WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
 
 /** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
@@ -172,6 +173,42 @@ describe('bash 输出截断', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: 'yes hello | head -2000' }, ctx);
     expect(result).toContain('截断');
+  });
+});
+
+// v2.5 HOME 写拦截提示层（spec §7）：真跑集成——bash 结果尾部追加固定提示，
+// 同服 LLM（知道该请求用户授权而非绕路）与 renderer stream.store（固定子串
+// 检测置引导卡）。提示判定纯函数的三条件矩阵（平台无关）见
+// sandbox-write-hint.test.ts；此处锁 shell-tools 结果组装层的真跑接线。
+// seatbelt 真跑仅 darwin（linux 容器无 bwrap 时 wrapped 分支不可达）——
+// itDarwin 门控跳过其余平台，非沙箱 tag 的负控制例两平台均可跑。
+const itDarwin = process.platform === 'darwin' ? it : it.skip;
+/** 与真实 rustup 失败同形的 stderr 签名（locale 无关——写死文案而非依赖 strerror） */
+const WRITE_BLOCKED_CMD = "echo 'error: could not write to ~/.rustup: Operation not permitted' >&2; exit 1";
+
+describe('bash HOME 写拦截提示层（spec §7）', () => {
+  itDarwin('沙箱 tag + EPERM 签名 + HOME 特征 → 结果尾部逐字追加 WRITE_BLOCKED_HINT', async () => {
+    // strict + seatbelt 可用 + 网络回退推导 allow（非 fork 环境桥不可用）→ wrapped seatbelt/net-on
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(result).toContain('sandbox: seatbelt/net-on');
+    // 提示逐字追加在结果尾部（最后一段——LLM 最后看到，行动指引优先级最高）
+    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+    expect(result).toContain('非工作空间路径写入被沙箱拦截');
+    expect(result).toContain('不要尝试下载到临时目录');
+  });
+
+  it('非沙箱 tag（permissive 降级 unsandboxed）→ 同签名不追加提示（负控制）', async () => {
+    // beforeEach 已注入 permissive + 不可用 → plain 直跑 unsandboxed:原因
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(result).toContain('sandbox: unsandboxed:bwrap 未安装');
+    expect(result).not.toContain('非工作空间路径写入被沙箱拦截');
   });
 });
 
