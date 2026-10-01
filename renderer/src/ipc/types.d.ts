@@ -730,6 +730,17 @@ export interface GlobalSettings {
    * （默认——三态时代的 ask 已并入 allow，读时懒迁移收敛）。
    */
   sandboxNetworkPolicy?: 'deny' | 'allow';
+  /**
+   * v2.5：沙箱工具链目录写入双态策略（spec §10：deny 默认拦截 / allow 永久允许
+   * 清单内目录）。与 electron 端 GlobalSettings 同名键镜像——读侧由主进程
+   * sandbox/settings.ts 懒迁移给默认 deny，此处不设默认值（写入会污染迁移判定）。
+   */
+  sandboxToolchainPolicy?: 'deny' | 'allow';
+  /**
+   * v2.5：可授权写入的工具链目录清单（每行一项；字面 ~/ 前缀 + 'npm:global-prefix'/
+   * 'pip:user' 占位项）。缺省 undefined → 主进程 DEFAULT_TOOLCHAIN_DIRS 五项兜底。
+   */
+  sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
   journalQuotaMb?: number;
 }
