@@ -138,6 +138,20 @@ describe('agent 完整工作流', () => {
     expect(names.has('lsp_find_references')).toBe(false);
   }, 60000);
 
+  it('lspLanguages 检测快照非空 → 注册 lsp_diagnostics / lsp_find_references（正向路径）', () => {
+    // 主进程 spawn 时注入 AGENT_CONFIG.lspLanguages 快照（如 ['typescript']）——
+    // 上面的默认 ctx 未注入 → 不注册；此处锁正向：注入后两工具必须出现在 defs
+    const lspCtx: ToolContext = { ...ctx, lspLanguages: ['typescript'] };
+    const lspModules = buildToolRegistry(lspCtx);
+    const names = new Set(getAllToolDefs(lspModules).map((d) => d.name));
+    expect(names.has('lsp_diagnostics')).toBe(true);
+    expect(names.has('lsp_find_references')).toBe(true);
+    // 空数组快照语义等同缺省 → 仍不注册（门控只认非空）
+    const emptyCtx: ToolContext = { ...ctx, lspLanguages: [] };
+    const emptyNames = new Set(getAllToolDefs(buildToolRegistry(emptyCtx)).map((d) => d.name));
+    expect(emptyNames.has('lsp_diagnostics')).toBe(false);
+  });
+
   it('权限白/黑名单生效：deniedTools 命中即拦截，默认放行', async () => {
     // 拦截路径：assertToolAllowed 是生产代码的权限闸口（runtime-entry.doExecuteTool
     // 入口处调用）。deniedTools 优先级高于 allowedTools——命中即抛「被禁止」。
