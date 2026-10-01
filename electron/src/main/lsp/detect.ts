@@ -30,12 +30,17 @@ function matchSegments(pattern: string[], target: string[]): boolean {
 }
 function globSeg(pat: string, s: string): boolean {
   const parts = pat.split('*');
+  // 尾部 end-anchor：模式不终于 `*` 时，最后一段必须终于字符串末尾——
+  // `*.sh` 不得命中 `notes.shop`（旧实现任意子串即命中）。模式终于 `*`
+  // （如 `build.gradle*`）则尾段无锚定，仍按 indexOf 游标推进。
+  const endAnchored = parts[parts.length - 1] !== '';
   let idx = 0;
   for (let i = 0; i < parts.length; i++) {
     if (parts[i] === '') continue;
     const at = s.indexOf(parts[i]!, idx);
     if (at < 0 || (i === 0 && at !== 0)) return false;
     idx = at + parts[i]!.length;
+    if (endAnchored && i === parts.length - 1 && idx !== s.length) return false;
   }
   return true;
 }

@@ -53,11 +53,12 @@ const baseWorkspace: Workspace = {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('routeLspOp', () => {
-  it('合法 diagnostics op：扩展名路由 typescript，结果格式化回发', async () => {
+  it('合法 diagnostics op：扩展名路由 typescript，结果格式化回发（code 透传 + severity 4 hint 单独映射）', async () => {
     const child = fakeChild();
     vi.mocked(manager.ensureLspManager).mockResolvedValue({
       getDiagnostics: vi.fn().mockResolvedValue([
-        { severity: 1, message: '类型错误', range: { start: { line: 0, character: 6 } } },
+        { severity: 1, code: 'TS2322', message: '类型错误', range: { start: { line: 0, character: 6 } } },
+        { severity: 4, message: '提示', range: { start: { line: 1, character: 0 } } },
       ]),
       findReferences: vi.fn(),
     } as unknown as manager.LspManager);
@@ -69,7 +70,11 @@ describe('routeLspOp', () => {
     expect(reply.type).toBe('lsp:op-result');
     expect(reply.requestId).toBe('r1');
     expect(reply.ok).toBe(true);
-    expect(String(reply.result)).toContain('类型错误');
+    const result = String(reply.result);
+    // 格式保真：severity 后附 ` <code>`（有 code 时）；hint 不折叠为 info
+    expect(result).toContain('类型错误');
+    expect(result).toContain('error TS2322: 类型错误');
+    expect(result).toContain('hint: 提示');
     // ensureLspManager(workspaceId, workspaceDir, spec)——目录主进程自查、语言在 spec.languageId（第 3 参）
     expect(vi.mocked(manager.ensureLspManager).mock.calls[0]![0]).toBe('ws-x');
     expect(vi.mocked(manager.ensureLspManager).mock.calls[0]![1]).toBe('/tmp/ws-x');
@@ -205,6 +210,27 @@ describe('routeLspOp', () => {
     expect(String(reply.error)).toContain('未安装');
   });
 
+  it('references 路径不存在（manager 内 readFile ENOENT）→ ok:false 中文「文件不存在」相对路径（F2 单点收口）', async () => {
+    const child = fakeChild();
+    // 仿真真实 Node fs 错误形状：Error + code=ENOENT（裸文案含英文与绝对路径）
+    const enoent = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/tmp/ws-x/missing.go'"),
+      { code: 'ENOENT' },
+    );
+    vi.mocked(manager.ensureLspManager).mockResolvedValue({
+      getDiagnostics: vi.fn(),
+      findReferences: vi.fn().mockRejectedValue(enoent),
+    } as unknown as manager.LspManager);
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-enoent',
+      op: { kind: 'references', workspaceId: 'ws-x', path: 'missing.go', line: 1, character: 0 },
+    });
+    const reply = child.send.mock.calls[0]![0] as Record<string, unknown>;
+    expect(reply.ok).toBe(false);
+    // 精确匹配：无 ENOENT 英文裸文案、无绝对路径泄露
+    expect(String(reply.error)).toBe('文件不存在: missing.go');
+  });
+
   it('非法 envelope（缺 requestId / 未知 kind / op 为 null / 字段类型错）静默忽略不崩', async () => {
     const child = fakeChild();
     await routeLspOp(child, { type: 'lsp:op' });
@@ -293,7 +319,8 @@ describe('registerLspPanelIpc', () => {
       event: unknown,
       workspaceId: string,
     ) => unknown;
-    expect(statusHandler(undefined, 'ws-x')).toEqual([{ languageId: 'typescript' }]);
+    // running 列已被 handler 覆写（缺省 mock 'stopped'）——不再是 detect 缓存值形状
+    expect(statusHandler(undefined, 'ws-x')).toEqual([{ languageId: 'typescript', running: 'stopped' }]);
     // 目录必须来自主进程自查（getWorkspace），不是 renderer 传入
     expect(detect.detectWorkspaceLanguages).toHaveBeenCalledWith('ws-x', '/tmp/ws-x');
 
@@ -301,8 +328,35 @@ describe('registerLspPanelIpc', () => {
       event: unknown,
       workspaceId: string,
     ) => unknown;
-    expect(redetectHandler(undefined, 'ws-x')).toEqual([{ languageId: 'go' }]);
+    expect(redetectHandler(undefined, 'ws-x')).toEqual([{ languageId: 'go', running: 'stopped' }]);
     expect(detect.redetectWorkspaceLanguages).toHaveBeenCalledWith('ws-x', '/tmp/ws-x');
+  });
+
+  it('running 列以 getLspRunState 实时三态覆写（不冻结在 detect 缓存值）', () => {
+    // F3 回归锁：detect 结果按 workspace 缓存，server 生命周期变化若只反映在
+    // 缓存外，面板 running 列会滞后——handler 返回前必须以纯内存查询覆写
+    vi.mocked(manager.getLspRunState).mockReturnValue('running');
+    try {
+      registerLspPanelIpc();
+      const handle = vi.mocked(ipcMain.handle);
+      const statusHandler = handle.mock.calls.find((c) => c[0] === 'lsp:status')![1] as unknown as (
+        event: unknown,
+        workspaceId: string,
+      ) => unknown;
+      expect(statusHandler(undefined, 'ws-x')).toEqual([{ languageId: 'typescript', running: 'running' }]);
+
+      const redetectHandler = handle.mock.calls.find((c) => c[0] === 'lsp:redetect')![1] as unknown as (
+        event: unknown,
+        workspaceId: string,
+      ) => unknown;
+      expect(redetectHandler(undefined, 'ws-x')).toEqual([{ languageId: 'go', running: 'running' }]);
+      // 覆写来源确系 getLspRunState（wsId + languageId 实时查询）
+      expect(vi.mocked(manager.getLspRunState)).toHaveBeenCalledWith('ws-x', 'typescript');
+      expect(vi.mocked(manager.getLspRunState)).toHaveBeenCalledWith('ws-x', 'go');
+    } finally {
+      // mockReturnValue 属实现级状态，clearAllMocks 不复位——显式还原防泄漏到后续用例
+      vi.mocked(manager.getLspRunState).mockReturnValue('stopped');
+    }
   });
 
   it('workspace 不存在 → handler 抛中文错误（renderer 收到 rejection）', () => {

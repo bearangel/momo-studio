@@ -8,6 +8,7 @@ import {
   detectWorkspaceLanguages,
   redetectWorkspaceLanguages,
   activeLanguageIds,
+  markersHit,
 } from '../../src/main/lsp/detect';
 
 let tmpDir: string;
@@ -57,6 +58,28 @@ describe('missing-binary 三态（伪 PATH 隔离）', () => {
     expect(go.binary).toBe(false);
     expect(activeLanguageIds(st)).not.toContain('go');
     delete process.env.MOMO_LSP_TEST_PATH;
+  });
+});
+
+describe('globSeg 尾部 end-anchor（F5 回归锁）', () => {
+  it('`*.sh` 不命中 notes.shop；仍命中 run.sh', () => {
+    fs.writeFileSync(path.join(tmpDir, 'notes.shop'), 'x');
+    expect(markersHit(tmpDir, ['*.sh'])).toBe(false);
+    fs.writeFileSync(path.join(tmpDir, 'run.sh'), 'x');
+    expect(markersHit(tmpDir, ['*.sh'])).toBe(true);
+  });
+
+  it('`*.csproj` 仍命中 a.csproj（修复不误伤既有通配）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'a.csproj'), '<Project />');
+    expect(markersHit(tmpDir, ['*.csproj'])).toBe(true);
+  });
+
+  it('头尾双锚定不回归：requirements*.txt 命中 requirements-dev.txt、不命中 xrequirements-dev.txt', () => {
+    fs.writeFileSync(path.join(tmpDir, 'requirements-dev.txt'), '');
+    expect(markersHit(tmpDir, ['requirements*.txt'])).toBe(true);
+    fs.rmSync(path.join(tmpDir, 'requirements-dev.txt'));
+    fs.writeFileSync(path.join(tmpDir, 'xrequirements-dev.txt'), '');
+    expect(markersHit(tmpDir, ['requirements*.txt'])).toBe(false);
   });
 });
 

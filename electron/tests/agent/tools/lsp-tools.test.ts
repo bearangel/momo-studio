@@ -4,6 +4,9 @@
 // 缺省兼容（AGENT_CONFIG 无 lspLanguages）。
 // 旧真实 typescript-language-server 用例已由 tests/lsp/manager.test.ts 冒烟承接。
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { LspTools } from '../../../src/main/agent/tools/lsp-tools';
 import {
   handleLspOpResult,
@@ -37,6 +40,37 @@ describe('execute 非 fork 环境', () => {
     await expect(
       tools.execute('lsp_find_references', { path: 'a.ts', line: 1, character: 0 }, ctxWith(['typescript'])),
     ).rejects.toThrow(/LSP IPC 不可用/);
+  });
+});
+
+describe('execute path 参数与文件存在性校验（F2 回归锁）', () => {
+  it('path 缺失 / 非字符串 / 空串 → 中文「参数缺失」文案（空串不得经 assertInWorkspace 解析成根目录后 EISDIR）', async () => {
+    const tools = LspTools.create(ctxWith(['typescript']))!;
+    const ctx = ctxWith(['typescript']);
+    await expect(tools.execute('lsp_diagnostics', {}, ctx)).rejects.toThrow('参数 "path" 缺失');
+    await expect(tools.execute('lsp_diagnostics', { path: '' }, ctx)).rejects.toThrow('参数 "path" 缺失');
+    await expect(tools.execute('lsp_find_references', {}, ctx)).rejects.toThrow('参数 "path" 缺失');
+    await expect(tools.execute('lsp_find_references', { path: 42 }, ctx)).rejects.toThrow('参数 "path" 缺失');
+  });
+
+  it('path 指向不存在的文件 → 中文「文件不存在」相对路径文案（不泄露 ENOENT 裸文案与绝对路径）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-lsp-tools-enoent-'));
+    const ctx = {
+      ...ctxWith(['typescript']),
+      // 真 tmp 目录基座：readFile 走真实 fs（ENOENT 路径可控）
+      wsFs: { assertInWorkspace: (p: string) => path.join(root, p) } as ToolContext['wsFs'],
+    } as ToolContext;
+    const tools = LspTools.create(ctxWith(['typescript']))!;
+    try {
+      const err = await tools.execute('lsp_diagnostics', { path: 'missing.ts' }, ctx).then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+      // 精确匹配：既无 ENOENT 英文裸文案，也无绝对路径泄露
+      expect(err?.message).toBe('文件不存在: missing.ts');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

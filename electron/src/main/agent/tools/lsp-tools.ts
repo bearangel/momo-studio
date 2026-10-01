@@ -68,14 +68,24 @@ export class LspTools implements ToolModule {
 
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (name === 'lsp_diagnostics') {
-      const relPath = typeof args.path === 'string' ? args.path : '';
+      const relPath = requirePath(args);
       const absPath = ctx.wsFs.assertInWorkspace(relPath);
-      // 内容子进程自读随 op 携带（主进程不做文件 IO——只做路由与语言服务）
-      const content = await fs.promises.readFile(absPath, 'utf-8');
+      // 内容子进程自读随 op 携带（主进程不做文件 IO——只做路由与语言服务）。
+      // ENOENT 单点收口：裸文案（英文 + 绝对路径泄露）对 LLM 不可读——
+      // 统一转写为中文相对路径文案（references 分支在主进程 ipc.ts 收口）
+      let content: string;
+      try {
+        content = await fs.promises.readFile(absPath, 'utf-8');
+      } catch (err) {
+        if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`文件不存在: ${relPath}`);
+        }
+        throw err;
+      }
       return sendLspOp({ kind: 'diagnostics', workspaceId: ctx.workspaceId, path: relPath, content });
     }
     if (name === 'lsp_find_references') {
-      const relPath = typeof args.path === 'string' ? args.path : '';
+      const relPath = requirePath(args);
       ctx.wsFs.assertInWorkspace(relPath);
       const line = typeof args.line === 'number' ? args.line : 1;
       const character = typeof args.character === 'number' ? args.character : 0;
@@ -83,4 +93,13 @@ export class LspTools implements ToolModule {
     }
     throw new Error(`未知 lsp 工具: ${name}`);
   }
+}
+
+/** path 参数前置校验：缺失 / 非字符串 / 空串统一中文报错——空串经
+ *  assertInWorkspace 会解析成 workspace 根目录，readFile 得到 EISDIR 裸文案 */
+function requirePath(args: Record<string, unknown>): string {
+  if (typeof args.path !== 'string' || args.path === '') {
+    throw new Error('参数 "path" 缺失');
+  }
+  return args.path;
 }

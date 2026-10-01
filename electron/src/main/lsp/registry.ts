@@ -3,6 +3,7 @@
 // 一层子目录内；`*.csproj` 根层通配。求值规则（跳过目录清单）见 detect.ts。
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 export interface LanguageServerSpec {
   languageId: string;
@@ -167,10 +168,62 @@ function isExecutable(p: string): boolean {
   }
 }
 
+// ── GUI 启动 PATH 兜底（macOS Finder/Dock 启动修复）────────────────────────
+// launchd 拉起的 GUI 应用 PATH 仅 /usr/bin:/bin:/usr/sbin:/sbin——homebrew 装
+// 的 gopls / rust-analyzer / zls 等全部误报 missing-binary（detect 快照不注册
+// + doInitialize spawn 失败双重命中）。兜底两层：常见 bin 前缀追加 + login
+// shell 解析。注意不能用 `/usr/bin/env which`：它继承同一 process.env.PATH，
+// 解析不到 profile 注入的目录（spec §9 勘误）。
+
+/** 常见包管理器 bin 前缀（存在才追加、幂等）：Apple Silicon / Intel homebrew */
+const COMMON_BIN_PREFIXES = ['/opt/homebrew/bin', '/usr/local/bin'];
+
+/** login shell 内 `command -v <bin>`（bin 来自受控 REGISTRY 标识符，无注入面）。
+ *  login shell 会 source profile 拿到 homebrew shellenv；导出供单测直连。 */
+export function loginShellWhich(bin: string): string | null {
+  if (process.platform === 'win32') return null;
+  const shell = process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
+  try {
+    const r = spawnSync(shell, ['-lc', `command -v ${bin}`], {
+      encoding: 'utf-8',
+      timeout: 10_000,
+    });
+    if (r.error || r.status !== 0) return null;
+    // profile 启动脚本可能向 stdout 打噪声：取最后一个非空行，且必须是绝对
+    // 路径 + 落盘为可执行文件（alias/函数名无 / 前缀，噪声行非路径，均被滤除）
+    const lines = (r.stdout ?? '').trim().split('\n').filter(Boolean);
+    const candidate = lines[lines.length - 1];
+    if (!candidate || !candidate.startsWith('/')) return null;
+    try {
+      if (!fs.statSync(candidate).isFile() || !isExecutable(candidate)) return null;
+    } catch {
+      return null;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 /** PATH 探测：逐目录拼接 + 文件检查 + X_OK 可执行检查；命中返回绝对路径。
- *  isFile 守卫不可省：POSIX 目录可遍历即过 X_OK，PATH 内同名子目录会被误报命中。 */
-export function findBinaryInPath(binaries: string[], envPath?: string): string | null {
+ *  isFile 守卫不可省：POSIX 目录可遍历即过 X_OK，PATH 内同名子目录会被误报命中。
+ *  GUI 兜底门控：显式注入 envPath = 伪 PATH 隔离模式（单测语义），整套 GUI
+ *  兜底（前缀追加 + login shell）禁用——否则用例结果随宿主安装内容漂移；
+ *  生产调用方一律不传 envPath（用真实 process.env.PATH），兜底全量生效。
+ *  显式 shellFallback 不受门控影响（兜底行为自身的注入测试）。 */
+export function findBinaryInPath(
+  binaries: string[],
+  envPath?: string,
+  shellFallback?: (bin: string) => string | null,
+): string | null {
+  const guiFallback = envPath === undefined;
   const dirs = (envPath ?? process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  if (guiFallback) {
+    // 第一层：常见包管理器前缀追加（存在才加、幂等）——多数场景在此直接命中
+    for (const p of COMMON_BIN_PREFIXES) {
+      if (!dirs.includes(p) && fs.existsSync(p)) dirs.push(p);
+    }
+  }
   for (const bin of binaries) {
     if (bin.includes(path.sep)) {
       try {
@@ -183,6 +236,15 @@ export function findBinaryInPath(binaries: string[], envPath?: string): string |
       try {
         if (fs.statSync(full).isFile() && isExecutable(full)) return full;
       } catch { /* 下一目录 */ }
+    }
+  }
+  // 第二层：全 miss 后降级 login shell 兜底（`zsh/bash -lc 'command -v'`）
+  const fallback = shellFallback !== undefined ? shellFallback : guiFallback ? loginShellWhich : null;
+  if (fallback !== null) {
+    for (const bin of binaries) {
+      if (bin.includes(path.sep)) continue; // 含分隔符候选已按绝对路径直查过
+      const hit = fallback(bin);
+      if (hit) return hit;
     }
   }
   return null;

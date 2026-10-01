@@ -8,7 +8,7 @@ import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { isInsideDir, PATH_SEMANTICS_WIN32 } from '../platform/paths';
 import { REGISTRY, extensionToLanguageId } from './registry';
-import { ensureLspManager, fileUriToPath } from './manager';
+import { ensureLspManager, fileUriToPath, getLspRunState } from './manager';
 import { detectWorkspaceLanguages, redetectWorkspaceLanguages } from './detect';
 import { getWorkspace } from '../workspace/crud';
 import { OUTPUT_LIMITS, truncateArray } from '../agent/tools/shared/output-truncate';
@@ -111,16 +111,30 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
         ? `✓ ${op.path} 无诊断`
         : truncateArray(
             diags.map((d) => {
-              const sev = d.severity === 1 ? 'error' : d.severity === 2 ? 'warn' : 'info';
-              return `${op.path}:${(d.range.start.line ?? 0) + 1}:${(d.range.start.character ?? 0) + 1} - ${sev}: ${d.message}`;
+              // 格式保真（F4）：severity 4（hint）单独映射；有 code 时附
+              // ` <code>`（如 `error TS2322:`——code 是 LLM 定位问题的关键线索）
+              const sev = d.severity === 1 ? 'error' : d.severity === 2 ? 'warn' : d.severity === 4 ? 'hint' : 'info';
+              const code =
+                d.code !== undefined && d.code !== null && String(d.code) !== '' ? ` ${d.code}` : '';
+              return `${op.path}:${(d.range.start.line ?? 0) + 1}:${(d.range.start.character ?? 0) + 1} - ${sev}${code}: ${d.message}`;
             }),
             OUTPUT_LIMITS.lsp_diagnostics,
             (s) => s,
           );
       reply(child, m.requestId, true, text);
     } else {
-      // op.line 1-based → LSP 0-based；character 按协议 0-based 透传
-      const locs = await mgr.findReferences(absPath, (op.line ?? 1) - 1, op.character ?? 0);
+      // op.line 1-based → LSP 0-based；character 按协议 0-based 透传。
+      // ENOENT 单点收口（references 分支）：文件读取在 manager.findReferences
+      // 内部（diagnostics 分支由工具层自读、已在 lsp-tools.ts 收口）——裸
+      // ENOENT 文案（英文 + 绝对路径泄露）在此转写为中文相对路径文案
+      const locs = await mgr.findReferences(absPath, (op.line ?? 1) - 1, op.character ?? 0).catch(
+        (err: unknown) => {
+          if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+            throw new Error(`文件不存在: ${op.path}`);
+          }
+          throw err;
+        },
+      );
       // 同上：引用列表超限截断，防 LLM 上下文膨胀
       const text = locs.length === 0
         ? '(无引用)'
@@ -139,16 +153,25 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
   }
 }
 
-/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测 */
+/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测。
+ *  running 列实时覆写：detect 结果按 workspace 缓存，running 是随 server
+ *  生命周期变化的实时态——返回前复制数组并以 getLspRunState（纯内存查询）
+ *  覆写，否则面板 running 列被缓存冻结。 */
 export function registerLspPanelIpc(): void {
   ipcMain.handle('lsp:status', (_event, workspaceId: string) => {
     const ws = getWorkspace(workspaceId);
     if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
-    return detectWorkspaceLanguages(workspaceId, ws.directoryPath);
+    return detectWorkspaceLanguages(workspaceId, ws.directoryPath).map((s) => ({
+      ...s,
+      running: getLspRunState(workspaceId, s.languageId),
+    }));
   });
   ipcMain.handle('lsp:redetect', (_event, workspaceId: string) => {
     const ws = getWorkspace(workspaceId);
     if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
-    return redetectWorkspaceLanguages(workspaceId, ws.directoryPath);
+    return redetectWorkspaceLanguages(workspaceId, ws.directoryPath).map((s) => ({
+      ...s,
+      running: getLspRunState(workspaceId, s.languageId),
+    }));
   });
 }
