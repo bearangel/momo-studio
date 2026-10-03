@@ -163,6 +163,8 @@ webContents.send('sandbox:writeBlocked', {
 
 ## 12. 有界阻塞等待（GUI 验收第五轮增补，2026-10-03 深夜）
 
+> **§12 已被 `docs/specs/2026-10-03-write-grant-hard-gate-design.md` §5 取代（2026-10-04）**：120s 有界预算与超时回退路径下线；本节 `toolchainOn ||` 覆盖公式已判定为缺陷（瞬断 bug）并修复，勿按本节实现。
+
 浏览器等待模式的移植（DEFAULT_AGENT_WAIT_MS=120s 先例）：**在场 = 无缝续跑；不在场 = 优雅回退**。
 
 - **等待循环（子进程 bash-write-wait.ts）**：bash 结果检测命中 → 上报 `{type:'write-blocked-report', streamSessionId, workspaceId, dirs, command}`（fire-and-forget，照 proc-group:register 形态）→ 等待总预算 `BASH_WRITE_WAIT_MS=120s`、tick 2s、监听 `ctx.abortSignal`（types.ts 既有约定）。
@@ -171,3 +173,4 @@ webContents.send('sandbox:writeBlocked', {
 - **卡触发时机迁移**：主信号 = 等待开始时的子进程上报（runtime-spawner messageHandler 新分支 → 解析 sessionId → 推 sandbox:writeBlocked）；stream-relay 的 inspectEventBatch 降级为迟到兜底（超时返回的被拦结果事件）。
 - **与注入唤醒的分工**：等待命中 = 同一工具调用内续跑（agent 无感）；超时后迟到的授权 = §11 唤醒注入（回合外拉起）。两者共用 KV 与卡。
 - **abort**：等待中被中止 → 立即返回「已中断」（abortSignal 监听，不占满预算）。
+（勘误 2026-10-04：deny 的 dirs 交集匹配不区分会话——跨会话同目录等待也会被一并解除，单卡 UX 下语义可接受）

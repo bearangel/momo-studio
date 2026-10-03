@@ -199,3 +199,4 @@ return last.dirs.some((d) => eff.extraDirs.includes(d));
 - **extra 根 `.git` 开放**：用户明示授权该目录的写，与 bash 授权后等权；git 元数据保护仅对 workspace 根生效——文档化越权面，验收观察
 - **错误消息 regex 提取路径**：依赖 WorkspaceFS 错误文案稳定（§11 文案锁测试兜底）；文案变更须双端同步
 - **迟到授权**：等待被 abort 后用户才授权 → `resumeSessionId` 唤醒注入（既有路径）兜底，不新增机制
+- **授权写的账本撤销缺口（终审发现）**：extra 根目标的写/删经 toJournalRelPath 产出 `../../..` 游走键，revert 侧 safeResolve 遏制必拒——授权写的条目可记账但不可一键撤销（写本身经用户明示授权，非数据丢失）。跟进项：revert 感知 grant 集或绝对路径记账。
