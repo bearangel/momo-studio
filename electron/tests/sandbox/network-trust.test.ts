@@ -175,3 +175,56 @@ describe('effective op 工具链双字段 + extraDirs（spec 2026-10-03 §6.1）
     expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false, extraDirs: [] } });
   });
 });
+
+describe('effective extraDirs 三层合成（spec hard-gate §4.1——bug ① 根因修复）', () => {
+  it('toolchainPolicy=allow + 预置清单 + ws 授权 → 预置层参与合成（去重归一）', async () => {
+    __setSandboxSettingsForTest({
+      mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'allow',
+      toolchainDirs: ['~/.cargo-test-l3'],
+    });
+    grantWriteDirs('workspace', 'ws-l3', ['/tmp/ws-grant-l3']);
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'l3-1', op: 'effective',
+      streamSessionId: SSN, workspaceId: 'ws-l3',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // 预置层（~ 展开归一）与 ws 层都 present
+      expect(r.payload.extraDirs).toContain(path.join(os.homedir(), '.cargo-test-l3'));
+      expect(r.payload.extraDirs).toContain('/tmp/ws-grant-l3');
+    }
+  });
+
+  it('toolchainPolicy=deny → 预置层不参与（仅动态两层）——回归锁：allow 开关不再被 isCovered 当覆盖用', async () => {
+    __setSandboxSettingsForTest({
+      mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
+      toolchainDirs: ['~/.cargo-test-l3'],
+    });
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'l3-2', op: 'effective',
+      streamSessionId: SSN, workspaceId: 'ws-l3',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload.extraDirs).not.toContain(path.join(os.homedir(), '.cargo-test-l3'));
+    }
+  });
+
+  it('同目录双源去重（预置 ∯ ws 授权同一路径 → 单条）', async () => {
+    const dual = path.join(os.tmpdir(), `dual-l3-${Date.now()}`);
+    fs.mkdirSync(dual, { recursive: true });
+    __setSandboxSettingsForTest({
+      mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'allow',
+      toolchainDirs: [dual],
+    });
+    grantWriteDirs('workspace', 'ws-l3', [dual]);
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'l3-3', op: 'effective',
+      streamSessionId: SSN, workspaceId: 'ws-l3',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload.extraDirs.filter((d) => d === fs.realpathSync(dual))).toHaveLength(1);
+    }
+  });
+});

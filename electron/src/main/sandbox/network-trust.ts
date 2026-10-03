@@ -10,15 +10,17 @@
 // v2.5 工具链授权 + 2026-10-03 通用写授权（spec §6.1）：effective payload 为
 // { netOn, toolchainOn, extraDirs } 三字段。toolchainOn 单点判定：永久开
 //（toolchainPolicy === 'allow'）——会话级 grants 布尔模型已随通用写授权下线。
-// extraDirs = session ∪ workspace 两层动态授权目录（write-grant KV），sessionId
+// extraDirs = 预置(allow 时) ∪ 会话 ∪ 工作空间 三层授权目录（write-grant KV），sessionId
 // 由主进程从请求载荷 streamSessionId 经 messages 表映射（子进程请求零改动）；
 // 旧子进程不传 workspaceId 时 extraDirs 恒空数组（向后兼容）。
 //
 // 本模块保留 effective 单 op 的子进程桥对端（线协议名与 op 名不变，payload
 // 形状扩展——线协议铁律：只加字段，不改既有字段含义）：ShellTools 在 runtime
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
+import os from 'node:os';
 import { getSandboxSettings } from './settings';
 import { getGrantedDirs } from './write-grant';
+import { expandToolchainDirs } from './toolchain-grant';
 import { getLatestMessageByStreamSessionId } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
@@ -77,7 +79,13 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
     } catch {
       sessionId = null;
     }
-    const extraDirs = getGrantedDirs(sessionId, parsed.workspaceId ?? null);
+    // extraDirs 三层合成（spec hard-gate §4.1）：预置层仅 allow 时展开参与——
+    // 此前只回传两层，shell-tools 的 isCovered 用 `toolchainOn ||` 布尔补偿缺失
+    // 层，导致 allow 开关下任何被拦目录瞬判 covered（bug ①）。字段形状不变。
+    const presetDirs = toolchainOn
+      ? expandToolchainDirs(settings.toolchainDirs, os.homedir())
+      : [];
+    const extraDirs = [...new Set([...presetDirs, ...getGrantedDirs(sessionId, parsed.workspaceId ?? null)])];
     return { ok: true, payload: { netOn, toolchainOn, extraDirs } };
   } catch (err) {
     return { ok: false, error: `网络策略读取失败: ${err instanceof Error ? err.message : String(err)}` };
