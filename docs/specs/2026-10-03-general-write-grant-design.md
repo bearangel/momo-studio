@@ -1,7 +1,7 @@
 # 通用工作空间外写授权（目录白名单）设计
 
 - 日期：2026-10-03
-- 状态：已评审（六节设计用户确认），待实施
+- 状态：已实施（2026-10-03，docs/plans/2026-10-03-general-write-grant.md 9 任务执行完毕）
 - 取代：`docs/specs/2026-10-01-sandbox-toolchain-grant.md` 的 grant 模型（§4 会话 grant 表 / §10 引导卡一次性 flag）；该 spec 的目录展开（expandToolchainDirs）、预置清单语义继续有效
 - 分支：feat/sandbox-toolchain-grant 延续（未合入主线）
 

@@ -381,3 +381,17 @@ describe('hydrateFromEvents 按 seq 归并（2026-09-26 P0：截断水合抹掉�
     expect(s?.toolCalls).toHaveLength(1);
   });
 });
+
+
+// ═══ 回归锁（spec 2026-10-03 §5.4）═══
+describe('stream.store：写拦截子串扫描防复活', () => {
+  it('源码不含任何写拦截提示子串扫描（事件驱动后旧链不得回归）', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    // jsdom 环境 import.meta.url 非 file 协议——用 cwd（renderer 根）拼贴源路径
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/stores/stream.store.ts'), 'utf-8');
+    expect(src).not.toContain('非工作空间路径写入被沙箱拦截');
+    expect(src).not.toContain('工作空间外路径写入被沙箱拦截');
+    expect(src).not.toContain('toolchainWriteBlockedSeen');
+  });
+});
