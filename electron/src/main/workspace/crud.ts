@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+import { clearWorkspaceGrants } from '../sandbox/write-grant';
 import type { Workspace, CreateWorkspaceInput } from './types';
 import { initGitRepo } from './git';
 
@@ -111,6 +112,8 @@ export function getWorkspace(id: string): Workspace | null {
 export function deleteWorkspace(id: string): void {
   const db = getDb();
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
+  // 工作空间持久授权随空间清理（spec 2026-10-03 §4）——防越权残留
+  clearWorkspaceGrants(id);
   logger.info('Workspace 已删除', { id });
 }
 
