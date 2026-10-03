@@ -1,12 +1,29 @@
 // electron/tests/sandbox/write-blocked-emit.test.ts
 // 主进程事件检测（spec 2026-10-03 §5.1/§5.3）：批次 tool_call_result 命中 →
 // 组装 writeBlocked 信号（command 跨批环形缓存关联；session/ws 经 messages 解析）。
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// electron API 假件（照 stream-relay.test 形态——进程边界 DI）
+const mockSend = vi.fn();
+import { __setElectronApisForTest } from '../../src/main/electron-access';
+
+beforeAll(() => {
+  __setElectronApisForTest({
+    BrowserWindow: {
+      getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
+    },
+    ipcMain: { handle: vi.fn() },
+  });
+});
+afterAll(() => {
+  __setElectronApisForTest(null);
+});
 import {
   inspectEventBatch,
+  writeBlockedFromChildMsg,
   __resetInspectStateForTest,
 } from '../../src/main/sandbox/write-blocked-emit';
 import type { MessageEventRow } from '../../src/main/storage/messages/events-repo';
@@ -104,5 +121,38 @@ describe('inspectEventBatch（spec §5.3）', () => {
     const longCmd = 'x'.repeat(500);
     const sig = inspectEventBatch([mkStart('c7', longCmd), mkResult('c7', CARGO_FAIL)]);
     expect(sig?.command).toHaveLength(200);
+  });
+});
+
+
+// ═══ 子进程上报消费（spec §12——等待开始即弹卡的主信号）═══
+describe('writeBlockedFromChildMsg（spec §12）', () => {
+  it('合法载荷 → 解析 sessionId（roll 语义）并推 sandbox:writeBlocked', () => {
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-rep', 's-rep', 'agent-x', 'message', '', 'ss-rep#roll1', 'w-rep', Date.now(), Date.now());
+    mockSend.mockClear();
+    const consumed = writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-rep',
+      workspaceId: 'w-rep',
+      dirs: [path.join(os.homedir(), '.cargo')],
+      command: 'cargo build',
+    });
+    expect(consumed).toBe(true);
+    expect(mockSend).toHaveBeenCalledWith('sandbox:writeBlocked', {
+      sessionId: 's-rep',
+      workspaceId: 'w-rep',
+      dirs: [path.join(os.homedir(), '.cargo')],
+      command: 'cargo build',
+    });
+  });
+
+  it('形状不符 → 返回 false（消息落回其他分支）；无窗口静默不抛', () => {
+    expect(writeBlockedFromChildMsg({ type: 'other' })).toBe(false);
+    expect(writeBlockedFromChildMsg('not-an-object')).toBe(false);
+    expect(writeBlockedFromChildMsg({ type: 'write-blocked-report', dirs: 42 })).toBe(false);
   });
 });

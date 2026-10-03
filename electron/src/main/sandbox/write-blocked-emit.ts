@@ -7,7 +7,8 @@
 // session 映射），解析失败降级 null——卡按钮据此禁用。
 import os from 'node:os';
 import type { MessageEventRow } from '../storage/messages/events-repo';
-import { getMessage, getMessageByStreamSessionId } from '../storage/messages/repo';
+import { getMessage, getLatestMessageByStreamSessionId } from '../storage/messages/repo';
+import { loadElectronApis } from '../electron-access';
 import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../agent/tools/sandbox-write-hint';
 
 const commandByCallId = new Map<string, string>();
@@ -65,7 +66,7 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
       if (msg) {
         workspaceId = msg.workspaceId ?? null;
         if (msg.streamSessionId !== null) {
-          sessionId = getMessageByStreamSessionId(msg.streamSessionId)?.sessionId ?? null;
+          sessionId = getLatestMessageByStreamSessionId(msg.streamSessionId)?.sessionId ?? null;
         }
       }
     } catch {
@@ -79,4 +80,41 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
     };
   }
   return null;
+}
+
+
+/**
+ * 子进程等待上报的消费入口（spec §12——runtime-spawner messageHandler 调用，
+ * 照 process-registry.registerFromChildMsg 形态）：bash 被拦进入有界等待时
+ * fire-and-forget 上报，此处解析聊天会话（roll 流族最新行语义）后立即推
+ * sandbox:writeBlocked——等待开始即弹卡（inspectEventBatch 降级为迟到兜底）。
+ * 载荷形状不符返回 false（消息原样落回其他分支）。
+ */
+export function writeBlockedFromChildMsg(msg: unknown): boolean {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as {
+    type?: unknown; streamSessionId?: unknown; workspaceId?: unknown;
+    dirs?: unknown; command?: unknown;
+  };
+  if (m.type !== 'write-blocked-report') return false;
+  if (typeof m.streamSessionId !== 'string' || m.streamSessionId === '') return false;
+  if (!Array.isArray(m.dirs) || m.dirs.some((d) => typeof d !== 'string')) return false;
+  if (typeof m.command !== 'string') return false;
+  let sessionId: string | null = null;
+  try {
+    sessionId = getLatestMessageByStreamSessionId(m.streamSessionId)?.sessionId ?? null;
+  } catch {
+    sessionId = null;
+  }
+  const { BrowserWindow } = loadElectronApis();
+  const win = BrowserWindow?.getAllWindows()[0];
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('sandbox:writeBlocked', {
+      sessionId,
+      workspaceId: typeof m.workspaceId === 'string' ? m.workspaceId : null,
+      dirs: m.dirs,
+      command: m.command.length > 200 ? m.command.slice(0, 200) : m.command,
+    });
+  }
+  return true;
 }

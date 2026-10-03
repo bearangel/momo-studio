@@ -17,6 +17,7 @@
 //     退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import type { LLMToolDef } from '../llm-provider';
 import type { ToolContext, ToolModule } from './types';
@@ -29,7 +30,13 @@ import {
   requestEffectiveNetwork,
   type EffectiveNetworkDecision,
 } from './net-trust-bridge';
-import { detectWriteBlocked, WRITE_BLOCKED_HINT } from './sandbox-write-hint';
+import {
+  detectWriteBlocked,
+  extractBlockedPaths,
+  normalizeGrantDirs,
+  WRITE_BLOCKED_HINT,
+} from './sandbox-write-hint';
+import { waitForWriteGrant } from './bash-write-wait';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -115,6 +122,23 @@ function clamp(v: number, min: number, max: number): number {
  * 返回格式：`exit_code: <code>` 开头，后接 stdout / stderr / 超时标记 / 截断标记。
  */
 // 类外常量（Tier 划分见 spec §3）：
+/** 测试钩子：等待循环替身（spec §12——单测注入受控 covered/timeout 序列） */
+type WriteWaitFn = typeof waitForWriteGrant;
+let writeWaitOverride: WriteWaitFn | null = null;
+export function __setBashWriteWaitForTest(o: { wait?: WriteWaitFn } | null): void {
+  writeWaitOverride = o?.wait ?? null;
+}
+
+/** 测试钩子：effective 桥替身（非 fork 环境桥不可达——IPC 边界替身非实现替身） */
+type NetQueryFn = typeof requestEffectiveNetwork;
+let netQueryOverride: NetQueryFn | null = null;
+export function __setNetQueryForTest(fn: NetQueryFn | null): void {
+  netQueryOverride = fn;
+}
+
+/** 等待轮次上限（防病态多目录逐个拦导致 N×120s 拉长；正常两轮内收敛） */
+const WRITE_WAIT_MAX_ROUNDS = 3;
+
 const SHELL_CATALOG_META: Record<string, ToolMeta> = {
   bash: { category: 'Shell', categoryEmoji: '💻', defaultOn: false, riskNote: '任意代码执行' },
 };
@@ -153,14 +177,59 @@ export class ShellTools implements ToolModule {
     // 黑名单拦截先于 spawn，命中即抛错（调用方转成 tool result 反馈给 LLM）。
     assertCommandAllowed(command);
 
+    // spec §12 有界阻塞等待：首轮被拦 → 上报主进程（弹授权卡）→ 等 covered
+    // 重执行（同一工具调用内无缝续跑）；timeout 回退既有「被拦结果 + 提示段」。
+    // queryNet 每轮现解析 override（等待回调里可能翻转替身——模拟授权落地）
+    let last = await this.bashOnce(command, timeoutMs, ctx);
+    for (let round = 0; last.blocked && round < WRITE_WAIT_MAX_ROUNDS; round += 1) {
+      // fire-and-forget 上报（proc-group:register 同形态；非 fork 环境 no-op）
+      process.send?.({
+        type: 'write-blocked-report',
+        streamSessionId: ctx.streamSessionId,
+        workspaceId: ctx.workspaceId,
+        dirs: last.dirs,
+        command,
+      });
+      const queryNet = netQueryOverride ?? requestEffectiveNetwork;
+      const doWait = writeWaitOverride ?? waitForWriteGrant;
+      const wait = await doWait({
+        dirs: last.dirs,
+        signal: ctx.abortSignal,
+        isCovered: async () => {
+          try {
+            const eff = await queryNet(ctx.streamSessionId, ctx.workspaceId);
+            return eff.toolchainOn || last.dirs.some((d) => eff.extraDirs.includes(d));
+          } catch {
+            return false;
+          }
+        },
+      });
+      if (wait.kind === 'aborted') {
+        const e = new Error('bash 被中断');
+        e.name = 'AbortError';
+        throw e;
+      }
+      if (wait.kind === 'timeout') break;
+      last = await this.bashOnce(command, timeoutMs, ctx);
+    }
+    return last.text;
+  }
+
+  /** 单次执行（spec §12 提取）：查询授权态 → spawn → 收集 → 拼装文本。
+   * blocked 时 dirs 为归一授权候选（供上报与覆盖判定）。abort 抛 AbortError 穿透。 */
+  private async bashOnce(
+    command: string,
+    timeoutMs: number,
+    ctx: ToolContext,
+  ): Promise<{ text: string; blocked: boolean; dirs: string[] }> {
+    const queryNet = netQueryOverride ?? requestEffectiveNetwork;
     // v2.4.x 网络态查询（2026-09-13 修订 B 双态化）：spawn 前经 IPC 桥问主进程
     // 有效策略 netOn = (networkPolicy === 'allow')——设置读取在主进程 DB 单例，
     // 子进程不可见。桥不可用（非 fork 环境直跑单测 / 主进程超时）回退
     // resolveShellSpawn 的设置双态推导，bash 主路径绝不因查询故障挂死。
     let net: EffectiveNetworkDecision | null = null;
     try {
-      // v2.5：带上 workspaceId（工具链会话 grant 键控；undefined 时桥载荷省略键）
-      net = await requestEffectiveNetwork(ctx.streamSessionId, ctx.workspaceId);
+      net = await queryNet(ctx.streamSessionId, ctx.workspaceId);
     } catch {
       net = null;
     }
@@ -183,7 +252,7 @@ export class ShellTools implements ToolModule {
     const env = { ...buildSandboxEnv(ctx), ...(plan.kind === 'wrapped' ? plan.envAdditions : {}) };
     const isWin = process.platform === 'win32';
 
-    return await new Promise((resolve, reject) => {
+    return await new Promise<{ text: string; blocked: boolean; dirs: string[] }>((resolve, reject) => {
       const child = spawn(plan.shell, plan.args, {
         cwd: ctx.workspaceDir,
         env,
@@ -270,7 +339,7 @@ export class ShellTools implements ToolModule {
             const parts = [`exit_code: null`, `(${reason}，进程组已杀 + 2s 兜底结束)`];
             if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(已截断)' : ''}`);
             if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(已截断)' : ''}`);
-            resolve(parts.join('\n\n'));
+            resolve({ text: parts.join('\n\n'), blocked: false, dirs: [] });
           });
         }, 2000);
       };
@@ -321,16 +390,21 @@ export class ShellTools implements ToolModule {
           if (stdout) parts.push(`stdout:\n${stdout}${truncated ? '\n…(stdout 已截断)' : ''}`);
           if (stderr) parts.push(`stderr:\n${stderr}${truncated ? '\n…(stderr 已截断)' : ''}`);
           if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
-          // HOME 写拦截提示（spec §7）：三条件命中才追加，同服 LLM 与 renderer
-          // stream.store（固定子串检测置引导卡）。置尾——LLM 最后看到的行动指引
-          if (detectWriteBlocked(plan.tag, command, stderr, stdout)) {
+          // 写拦截检测（spec §12）：命中则返回 blocked + 归一 dirs（execute 外层
+          // 负责上报与有界等待；hint 仍置尾——等待超时路径的 LLM 行动指引不变）
+          const blocked = detectWriteBlocked(plan.tag, command, stderr, stdout);
+          if (blocked) {
             parts.push(WRITE_BLOCKED_HINT);
           }
           const text = parts.join('\n\n');
           // 永远 resolve——退出码非 0 不抛错，让 LLM 看到 stderr 自我纠正。
-          // （修订 B：ask 阻塞询问收尾已下线——net-off 失败结果原样返回，
-          // renderer stream.store 检测负责 deny 态的一次性引导卡。）
-          resolve(text);
+          resolve({
+            text,
+            blocked,
+            dirs: blocked
+              ? normalizeGrantDirs(extractBlockedPaths(command, `${stderr}\n${stdout}`), os.homedir())
+              : [],
+          });
         });
       });
 
@@ -340,7 +414,7 @@ export class ShellTools implements ToolModule {
           clearTimeout(timer);
           if (fallbackTimer) clearTimeout(fallbackTimer);
           if (ctx.abortSignal) ctx.abortSignal.removeEventListener('abort', onAbort);
-          resolve(`shell 启动失败: ${err.message}`);
+          resolve({ text: `shell 启动失败: ${err.message}`, blocked: false, dirs: [] });
         });
       });
     });

@@ -18,6 +18,10 @@ import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
+import {
+  __setBashWriteWaitForTest,
+  __setNetQueryForTest,
+} from '../../../src/main/agent/tools/shell-tools';
 import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
 import { WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
 
@@ -240,5 +244,96 @@ describe('bash 进程组上报（proc-group:register）', () => {
     } finally {
       (process as { send?: (msg: unknown) => boolean }).send = origSend;
     }
+  });
+});
+
+
+// ═══ 有界阻塞等待（spec 2026-10-03 §12）═══
+describe('bash 有界阻塞等待（spec §12）', () => {
+  const HOME_TARGET = path.join(os.homedir(), `.momo-wait-verify-${process.pid}`);
+  const REAL_BLOCKED_CMD = `echo granted >> ${HOME_TARGET}`;
+
+  const capturedSends: Array<Record<string, unknown>> = [];
+  const realSend = process.send;
+
+  beforeEach(() => {
+    capturedSends.length = 0;
+    Object.defineProperty(process, 'send', {
+      value: (msg: unknown): boolean => {
+        capturedSends.push(msg as Record<string, unknown>);
+        return true;
+      },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, 'send', { value: realSend, configurable: true });
+    __setBashWriteWaitForTest(null);
+    __setNetQueryForTest(null);
+    try { fs.rmSync(HOME_TARGET, { force: true }); } catch { /* best-effort */ }
+  });
+
+  itDarwin('真被拦 → 上报 write-blocked-report → covered 后重执行成功（无缝续跑）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    // 桥替身：首查无授权（真拦截），等待回调翻转 extraDirs（= 用户点了授权卡）
+    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    __setBashWriteWaitForTest({
+      wait: async (o) => {
+        // 模拟授权落地：下一次 effective 返回已授权目录
+        __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))] }));
+        void o.isCovered();
+        return { kind: 'covered' as const };
+      },
+    });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: REAL_BLOCKED_CMD }, ctx);
+    // 上报形状（fire-and-forget，照 proc-group:register 形态）
+    const report = capturedSends.find((m) => m.type === 'write-blocked-report');
+    expect(report).toBeDefined();
+    expect(report?.dirs).toEqual([HOME_TARGET]);
+    expect(report?.command).toBe(REAL_BLOCKED_CMD);
+    // 重执行成功：exit 0、无提示段、文件真写入
+    expect(result).toContain('exit_code: 0');
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
+    expect(fs.existsSync(HOME_TARGET)).toBe(true);
+  });
+
+  itDarwin('timeout → 返回被拦结果 + hint（既有行为回归锁）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'timeout' as const }) });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+    expect(capturedSends.filter((m) => m.type === 'write-blocked-report')).toHaveLength(1);
+  });
+
+  itDarwin('covered 但重执行仍被拦（新目录）→ 循环再等待；轮次上限内收敛', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    let waitCalls = 0;
+    __setBashWriteWaitForTest({
+      wait: async () => {
+        waitCalls += 1;
+        return waitCalls <= 1 ? { kind: 'covered' as const } : { kind: 'timeout' as const };
+      },
+    });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(waitCalls).toBe(2);
+    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+    expect(capturedSends.filter((m) => m.type === 'write-blocked-report').length).toBeGreaterThanOrEqual(2);
   });
 });
