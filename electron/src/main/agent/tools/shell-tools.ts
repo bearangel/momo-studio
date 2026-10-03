@@ -36,7 +36,7 @@ import {
   normalizeGrantDirs,
   WRITE_BLOCKED_HINT,
 } from './sandbox-write-hint';
-import { waitForWriteGrant } from './bash-write-wait';
+import { waitForWriteGrant } from './write-grant-wait';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -209,7 +209,7 @@ export class ShellTools implements ToolModule {
         e.name = 'AbortError';
         throw e;
       }
-      if (wait.kind === 'timeout') break;
+      if (wait.kind !== 'covered') break;
       last = await this.bashOnce(command, timeoutMs, ctx);
     }
     return last.text;

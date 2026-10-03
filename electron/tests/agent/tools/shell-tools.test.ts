@@ -309,7 +309,7 @@ describe('bash 有界阻塞等待（spec §12）', () => {
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
     __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
-    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'timeout' as const }) });
+    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'denied' as const }) });
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
     expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
@@ -327,7 +327,7 @@ describe('bash 有界阻塞等待（spec §12）', () => {
     __setBashWriteWaitForTest({
       wait: async () => {
         waitCalls += 1;
-        return waitCalls <= 1 ? { kind: 'covered' as const } : { kind: 'timeout' as const };
+        return waitCalls <= 1 ? { kind: 'covered' as const } : { kind: 'denied' as const };
       },
     });
     const tools = new ShellTools();
