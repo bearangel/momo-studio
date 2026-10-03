@@ -73,3 +73,66 @@ describe('files/workspace-fs', () => {
     expect(await wsFs.exists('no.txt')).toBe(false);
   });
 });
+
+describe('extraRootDirs（spec hard-gate §6）', () => {
+  let root: string;
+  let extra: string;
+  let wfs: WorkspaceFS;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-root-'));
+    extra = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-extra-'));
+    wfs = new WorkspaceFS(root);
+  });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(extra, { recursive: true, force: true });
+  });
+
+  it('默认空 → 越界行为与文案不变', () => {
+    expect(() => wfs.assertInWorkspace(path.join(extra, 'f.txt'))).toThrow(
+      /路径越界: .+ 不在 workspace 内/,
+    );
+  });
+
+  it('setExtraRootDirs 后：extra 根内路径放行（读写在根外成功）', async () => {
+    wfs.setExtraRootDirs([extra]);
+    await wfs.writeFile(path.join(extra, 'f.txt'), 'x');
+    expect((await wfs.readFile(path.join(extra, 'f.txt'))).toString()).toBe('x');
+  });
+
+  it('extra 根内 symlink 指向两根之外 → 逃逸拒绝（逐根 realpath 判定）', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-outside-'));
+    try {
+      fs.symlinkSync(outside, path.join(extra, 'link'));
+      wfs.setExtraRootDirs([extra]);
+      expect(() => wfs.assertInWorkspace(path.join(extra, 'link', 'f.txt'))).toThrow(
+        /符号链接逃逸: .+/,
+      );
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('.git 保护仅 workspace 根：extra 根下 .git 路径放行（与 bash 授权后对齐）', () => {
+    wfs.setExtraRootDirs([extra]);
+    expect(wfs.assertInWorkspace(path.join(extra, '.git', 'config'))).toBe(
+      path.join(extra, '.git', 'config'),
+    );
+    expect(() => wfs.assertInWorkspace(path.join(root, '.git', 'config'))).toThrow(
+      /禁止操作 \.git 目录/,
+    );
+  });
+
+  it('越界错误文案锁（含空格路径——write-grant-tool regex 的消费契约）', () => {
+    const spaced = path.join(extra, 'My Dir With Spaces', 'f.txt');
+    try {
+      wfs.assertInWorkspace(spaced);
+      throw new Error('应越界');
+    } catch (err) {
+      const m = /路径越界: (.+) 不在 workspace 内/.exec((err as Error).message);
+      expect(m).not.toBeNull();
+      expect(m?.[1]).toBe(spaced); // 提取值必须完整还原带空格路径
+    }
+  });
+});

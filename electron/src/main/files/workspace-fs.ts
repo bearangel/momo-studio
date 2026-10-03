@@ -26,58 +26,67 @@ const SEARCH_TRAVERSAL_CAP_DEFAULT = 10_000;
  * 这是 OS 级沙箱（namespace / sandbox-exec）之外的应用层防线（M3 会加 OS 级）。
  */
 export class WorkspaceFS {
+  /** 写授权扩展根（spec 2026-10-03 hard-gate §6）：realpath 归一去重；默认空 = 既有行为 */
+  private extraRootDirs: string[] = [];
+
   constructor(private rootDir: string) {
     this.rootDir = path.resolve(rootDir);
   }
 
-  /** 验证路径在 workspace 内，返回绝对路径 */
+  /** 设置写授权扩展根（子进程工具侧 covered 后注入三层合成目录） */
+  setExtraRootDirs(dirs: string[]): void {
+    const norm = dirs.map((d) => {
+      try {
+        return fs.realpathSync(d);
+      } catch {
+        return path.resolve(d);
+      }
+    });
+    this.extraRootDirs = [...new Set(norm)];
+  }
+
+  /** 验证路径在 workspace 或任一 extra 根内，返回绝对路径 */
   assertInWorkspace(relativeOrAbsolutePath: string): string {
     const abs = path.isAbsolute(relativeOrAbsolutePath)
       ? relativeOrAbsolutePath
       : path.join(this.rootDir, relativeOrAbsolutePath);
 
     const normalized = path.normalize(abs);
-    const realRoot = fs.realpathSync(this.rootDir);
 
-    // 1) 字符串边界检查：path.normalize 已消除 "../" 穿越，仅需确认 normalized
-    //    落在 rootDir 之内。isInsideDir 统一承载（resolve 归一 + sep 边界前缀 +
-    //    win32 大小写不敏感 / 异盘语义）；显式 PATH_SEMANTICS_WIN32 使判定随
-    //    当前 path 模块语义分叉——生产与 process.platform 恒一致，win32 单测
-    //    mock node:path 后仍能进入正确分支。
-    const insideWorkspace = isInsideDir(this.rootDir, normalized, {
-      win32: PATH_SEMANTICS_WIN32,
-    });
-    if (!insideWorkspace) {
-      throw new Error(`路径越界: ${relativeOrAbsolutePath} 不在 workspace 内`);
-    }
+    // 1) 逐根判定（spec hard-gate §6）：workspace 根 + extra 根，命中任一根即通过
+    //    该根的三查。symlink 逃逸记录首个错误但不立即抛——其他根仍可能合法容纳
+    //    （如 extra 根恰为 symlink 目标所在）；全部根失败才抛逃逸。
+    let escapeErr: Error | null = null;
+    for (const root of [this.rootDir, ...this.extraRootDirs]) {
+      if (!isInsideDir(root, normalized, { win32: PATH_SEMANTICS_WIN32 })) continue;
 
-    // 2) 符号链接逃逸检查：normalized 落在 rootDir 字符串边界内，但中间某段可能是
-    //    指向 rootDir 之外的符号链接。向上找到真实存在的最近祖先并 realpathSync，
-    //    若该祖先解析后已脱离 realRoot 则判定为逃逸。逐级向上而非直接
-    //    realpathSync(normalized)，是为了支持尚未创建的文件路径。
-    let anchor = normalized;
-    while (anchor !== this.rootDir && !fs.existsSync(anchor)) {
-      anchor = path.dirname(anchor);
-    }
-    if (anchor !== this.rootDir) {
-      const realAnchor = fs.realpathSync(anchor);
-      if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
-        throw new Error(`符号链接逃逸: ${relativeOrAbsolutePath}`);
+      // 2) 符号链接逃逸检查（相对该根；逐级上溯支持尚未创建的文件路径）
+      let anchor = normalized;
+      while (anchor !== root && !fs.existsSync(anchor)) {
+        anchor = path.dirname(anchor);
       }
-    }
+      if (anchor !== root) {
+        const realRoot = fs.realpathSync(root);
+        const realAnchor = fs.realpathSync(anchor);
+        if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
+          escapeErr ??= new Error(`符号链接逃逸: ${relativeOrAbsolutePath}`);
+          continue;
+        }
+      }
 
-    // 3) 不允许操作 .git/（版本库元数据保护）。段精确匹配：仅 `.git` 目录本身
-    //    及其内部子路径；`.github` / `.gitignore` / `.gitattributes` 等同前缀
-    //    dotfile 是正常 workspace 内容，不因字符串前缀误伤（I4：旧实现
-    //    startsWith('.git') 把 .github/… 一并拒绝）。分隔符用 path.sep——
-    //    win32 下 path.relative 产反斜杠（`.git\config`），字面 '/'.startsWith 会放行。
-    //    比较用小写——macOS 默认大小写不敏感文件系统上 `.GIT/` 可绕过字面匹配
-    const rel = path.relative(this.rootDir, normalized).toLowerCase();
-    if (rel === '.git' || rel.startsWith(`.git${path.sep}`)) {
-      throw new Error(`禁止操作 .git 目录: ${relativeOrAbsolutePath}`);
-    }
+      // 3) .git 保护仅 workspace 根（spec hard-gate §6：授权目录与 bash 授权后
+      //    行为对齐）。段精确匹配语义与注释照旧（.github 等前缀 dotfile 不误伤）。
+      if (root === this.rootDir) {
+        const rel = path.relative(root, normalized).toLowerCase();
+        if (rel === '.git' || rel.startsWith(`.git${path.sep}`)) {
+          throw new Error(`禁止操作 .git 目录: ${relativeOrAbsolutePath}`);
+        }
+      }
 
-    return normalized;
+      return normalized;
+    }
+    if (escapeErr !== null) throw escapeErr;
+    throw new Error(`路径越界: ${relativeOrAbsolutePath} 不在 workspace 内`);
   }
 
   async readFile(relativePath: string): Promise<Buffer> {
