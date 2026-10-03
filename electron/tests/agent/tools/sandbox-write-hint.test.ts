@@ -1,46 +1,112 @@
 // electron/tests/agent/tools/sandbox-write-hint.test.ts
-// 提示层三条件矩阵（spec §7）：沙箱 tag × 写拒绝签名 × HOME 特征——缺一不触发。
+// 检测通用化（spec 2026-10-03 §5.2）：detectWriteBlocked（HOME 特征降级为提取辅助）
+// + extractBlockedPaths（实录语料）+ normalizeGrantDirs（显示即所授归一）+ 通用文案。
 import { describe, it, expect } from 'vitest';
-import { detectHomeWriteBlocked, WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  detectWriteBlocked,
+  extractBlockedPaths,
+  normalizeGrantDirs,
+  WRITE_BLOCKED_HINT,
+} from '../../../src/main/agent/tools/sandbox-write-hint';
 
-const EPERM_STDERR = 'error: could not write to /Users/u/.rustup: Operation not permitted';
+// 2026-10-03 hello-rust 会话实录（seq 964 形态）：cargo 错误全在 stdout、带完整路径
+const CARGO_STDOUT = [
+  '    Updating crates.io index',
+  'error: failed to download `fastrand v2.5.0`',
+  '',
+  'Caused by:',
+  '  failed to open /Users/tester/.cargo/registry/cache/index.crates.io-6f17d22bba15001f/fastrand-2.5.0.crate',
+  '',
+  'Caused by:',
+  '  Operation not permitted (os error 1)',
+].join('\n');
 
-describe('detectHomeWriteBlocked 三条件矩阵', () => {
-  it('全命中 → true（seatbelt tag + EPERM + ~/.rustup 命令特征）', () => {
-    expect(detectHomeWriteBlocked('seatbelt/net-on', 'rustup component add rust-analyzer', EPERM_STDERR)).toBe(true);
-  });
-  it('非沙箱 tag（win-powershell / unsandboxed）→ 永不触发（Review Focus 1）', () => {
-    expect(detectHomeWriteBlocked('win-powershell', 'npm install -g x', EPERM_STDERR)).toBe(false);
-    expect(detectHomeWriteBlocked('unsandboxed:reason', 'npm i -g', EPERM_STDERR)).toBe(false);
-  });
-  it('EPERM 但无 HOME 特征（workspace 内权限问题）→ 不触发（Review Focus 5）', () => {
-    expect(detectHomeWriteBlocked('seatbelt/net-on', 'cargo build', 'error: EPERM on /ws/target')).toBe(false);
-  });
-  it('HOME 特征但无写拒绝签名 → 不触发', () => {
-    expect(detectHomeWriteBlocked('seatbelt/net-on', 'ls ~/.rustup', 'no such directory')).toBe(false);
-  });
-  it('stderr 里的 HOME 展开路径也算特征（$HOME 未展开形态）', () => {
-    expect(detectHomeWriteBlocked('bwrap/net-on', 'echo hi', 'cp: /Users/u/.cargo/bin/x: Permission denied')).toBe(true);
-  });
-  it('WRITE_BLOCKED_HINT 逐字锁定（renderer 检测依赖固定子串）', () => {
-    expect(WRITE_BLOCKED_HINT).toContain('非工作空间路径写入被沙箱拦截');
-    expect(WRITE_BLOCKED_HINT).toContain('不要尝试下载到临时目录');
-    // GUI 验收（2026-10-03 cargo 实录）：缓存目录重定向绕过也须点名
-    expect(WRITE_BLOCKED_HINT).toContain('CARGO_HOME');
+describe('detectWriteBlocked（通用化，spec §5.2）', () => {
+  it('cargo 实录：stdout-only EPERM + 路径 → 触发（原 P0 形态回归锁）', () => {
+    expect(detectWriteBlocked('seatbelt/net-on', 'cargo build', '', CARGO_STDOUT)).toBe(true);
   });
 
-  // GUI 验收修复（2026-10-03）：cargo 等工具把错误打到 stdout（stderr 为空），
-  // 写拒绝签名与 HOME 特征必须扫两流——实录：fastrand 下载 EPERM 全在 stdout。
-  it('EPERM 与 HOME 路径仅在 stdout → 触发（cargo 实录形态）', () => {
-    expect(detectHomeWriteBlocked(
-      'seatbelt/net-on',
-      'cargo run',
-      '',
-      'error: failed to open `/Users/stbearangel/.cargo/registry/cache/index.crates.io-6f17d22bba15001f/fastrand-2.5.0.crate`\n\nCaused by:\n  Operation not permitted (os error 1)\n',
-    )).toBe(true);
+  it('cp stderr EPERM（非 HOME 路径）→ 触发（通用化：HOME 特征不再是必要条件）', () => {
+    expect(
+      detectWriteBlocked('bwrap/net-on', 'cp a.txt /opt/local/lib/x.txt', 'cp: /opt/local/lib/x.txt: Operation not permitted', ''),
+    ).toBe(true);
   });
 
-  it('stdout 有 EPERM 但无 HOME 特征（且 stderr 空）→ 不触发', () => {
-    expect(detectHomeWriteBlocked('seatbelt/net-on', 'cargo run', '', 'error: EPERM on /etc/hosts')).toBe(false);
+  it('非沙箱 tag 不触发；无写拒绝签名不触发', () => {
+    expect(detectWriteBlocked('win-powershell', 'cargo build', '', CARGO_STDOUT)).toBe(false);
+    expect(detectWriteBlocked('unsandboxed:reason', 'npm i -g', 'Operation not permitted', '')).toBe(false);
+    expect(detectWriteBlocked('seatbelt/net-on', 'ls ~', 'some noise', '')).toBe(false);
+  });
+
+  it('stderr 签名保持触发（seatbelt + EPERM）', () => {
+    expect(
+      detectWriteBlocked('seatbelt/net-off', 'rustup toolchain install stable', 'error: Permission denied (os error 13)', ''),
+    ).toBe(true);
+  });
+});
+
+describe('extractBlockedPaths（spec §5.2 路径提取器）', () => {
+  it('cargo 实录：提取 ~/.cargo/registry/... crate 路径', () => {
+    const paths = extractBlockedPaths('cargo build', '', CARGO_STDOUT);
+    expect(paths).toContain('/Users/tester/.cargo/registry/cache/index.crates.io-6f17d22bba15001f/fastrand-2.5.0.crate');
+  });
+
+  it('cp stderr：提取错误行路径', () => {
+    expect(extractBlockedPaths('cp a /opt/x', 'cp: /opt/x: Operation not permitted', ''))
+      .toContain('/opt/x');
+  });
+
+  it('无路径错误 → 空数组（降级路径语料）', () => {
+    expect(extractBlockedPaths('something', 'Operation not permitted', '')).toEqual([]);
+  });
+
+  it('去重 + 上限 3', () => {
+    const many = [
+      'failed to open /a/1: Operation not permitted',
+      'failed to open /b/2: denied',
+      'cannot create /c/3: error',
+      'failed /d/4: error',
+    ].join('\n');
+    const out = extractBlockedPaths('x', many, '');
+    expect(out).toHaveLength(3);
+    expect(new Set(out).size).toBe(3);
+  });
+});
+
+describe('normalizeGrantDirs（spec §5.2 归一：显示即所授）', () => {
+  const home = os.homedir();
+
+  it('HOME 下路径归并到 HOME 第一级（~/.cargo/registry/x → ~/.cargo）', () => {
+    expect(normalizeGrantDirs([path.join(home, '.cargo/registry/cache/a.crate')], home))
+      .toEqual([path.join(home, '.cargo')]);
+  });
+
+  it('非 HOME 路径取最近存在祖先（/tmp 必存在）', () => {
+    expect(normalizeGrantDirs(['/tmp/momo-sb-123/a/b/c.sb'], '/nonexistent-home'))
+      .toEqual(['/tmp']);
+  });
+
+  it('HOME 一级天然去重 + 上限 3', () => {
+    const out = normalizeGrantDirs([
+      path.join(home, '.cargo/registry/a'),
+      path.join(home, '.cargo/git/db/b'),
+      path.join(home, '.rustup/toolchains/c'),
+      path.join(home, '.go/d'),
+    ], home);
+    expect(out).toEqual([
+      path.join(home, '.cargo'),
+      path.join(home, '.rustup'),
+      path.join(home, '.go'),
+    ]);
+  });
+});
+
+describe('WRITE_BLOCKED_HINT 文案（spec §6.5 通用版）', () => {
+  it('新前缀句 + 授权卡指引 + 反绕过三要素', () => {
+    expect(WRITE_BLOCKED_HINT).toContain('工作空间外路径写入被沙箱拦截');
+    expect(WRITE_BLOCKED_HINT).toContain('授权');
+    expect(WRITE_BLOCKED_HINT).toContain('不要用临时目录或缓存重定向绕过');
   });
 });

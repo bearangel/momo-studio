@@ -29,7 +29,7 @@ import {
   requestEffectiveNetwork,
   type EffectiveNetworkDecision,
 } from './net-trust-bridge';
-import { detectHomeWriteBlocked, WRITE_BLOCKED_HINT } from './sandbox-write-hint';
+import { detectWriteBlocked, WRITE_BLOCKED_HINT } from './sandbox-write-hint';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -321,7 +321,7 @@ export class ShellTools implements ToolModule {
           if (!stdout && !stderr && code === 0 && !killed) parts.push('(无输出)');
           // HOME 写拦截提示（spec §7）：三条件命中才追加，同服 LLM 与 renderer
           // stream.store（固定子串检测置引导卡）。置尾——LLM 最后看到的行动指引
-          if (detectHomeWriteBlocked(plan.tag, command, stderr, stdout)) {
+          if (detectWriteBlocked(plan.tag, command, stderr, stdout)) {
             parts.push(WRITE_BLOCKED_HINT);
           }
           const text = parts.join('\n\n');

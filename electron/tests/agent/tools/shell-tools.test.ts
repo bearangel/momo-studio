@@ -199,8 +199,8 @@ describe('bash HOME 写拦截提示层（spec §7）', () => {
     expect(result).toContain('sandbox: seatbelt/net-on');
     // 提示逐字追加在结果尾部（最后一段——LLM 最后看到，行动指引优先级最高）
     expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
-    expect(result).toContain('非工作空间路径写入被沙箱拦截');
-    expect(result).toContain('不要尝试下载到临时目录');
+    expect(result).toContain('工作空间外路径写入被沙箱拦截');
+    expect(result).toContain('不要用临时目录或缓存重定向绕过');
   });
 
   it('非沙箱 tag（permissive 降级 unsandboxed）→ 同签名不追加提示（负控制）', async () => {
@@ -208,7 +208,7 @@ describe('bash HOME 写拦截提示层（spec §7）', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
     expect(result).toContain('sandbox: unsandboxed:bwrap 未安装');
-    expect(result).not.toContain('非工作空间路径写入被沙箱拦截');
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
   });
 });
 
