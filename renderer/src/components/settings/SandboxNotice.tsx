@@ -182,10 +182,24 @@ export function SandboxNotice() {
             <Button variant="ghost" onClick={() => setActiveView('settings')}>
               去设置
             </Button>
-            <Button onClick={() => void grantNow().catch(() => {})} disabled={busy}>
-              {busy ? '授权中…' : '本会话允许'}
+            {/* 空清单死路防护（GUI 验收 2026-10-03）：清单为空时 grant 是无操作
+                （授权通道开但无目录可写，重试仍失败）——禁用并指路设置 */}
+            <Button
+              onClick={() => void grantNow().catch(() => {})}
+              disabled={busy || info.settings.toolchainDirs.length === 0}
+            >
+              {info.settings.toolchainDirs.length === 0
+                ? '清单为空，去设置配置'
+                : busy
+                  ? '授权中…'
+                  : '本会话允许'}
             </Button>
           </div>
+          {info.settings.toolchainDirs.length === 0 && (
+            <p className="mt-2 text-xs text-status-warning">
+              目录清单为空——「本会话允许」无可放行目录。请到 设置→安全沙箱 配置清单后重试。
+            </p>
+          )}
         </>
       ) : showBwrap ? (
         <>

@@ -11,13 +11,16 @@ const WRITE_DENY_SIGNATURES: readonly RegExp[] = [
 ];
 const HOME_FEATURE = /(?:~\/|\$HOME\b|\/Users\/|\/home\/)/;
 
-export function detectHomeWriteBlocked(tag: string, command: string, stderr: string): boolean {
+export function detectHomeWriteBlocked(tag: string, command: string, stderr: string, stdout = ''): boolean {
   const sandboxed = /^(?:seatbelt|bwrap)\//.test(tag);
   if (!sandboxed) return false;
-  const writeDenied = WRITE_DENY_SIGNATURES.some((re) => re.test(stderr));
+  // cargo/rustup 等工具把错误打到 stdout（stderr 为空）——签名与 HOME 特征
+  // 必须扫两流合并文本（GUI 验收实录：fastrand 下载 EPERM 全在 stdout）
+  const combined = `${stderr}\n${stdout}`;
+  const writeDenied = WRITE_DENY_SIGNATURES.some((re) => re.test(combined));
   if (!writeDenied) return false;
-  return HOME_FEATURE.test(command) || HOME_FEATURE.test(stderr);
+  return HOME_FEATURE.test(command) || HOME_FEATURE.test(combined);
 }
 
 export const WRITE_BLOCKED_HINT =
-  '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录或工作区缓存绕过——那对系统工具注册不可见。';
+  '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录、也不要用 CARGO_HOME 等缓存目录重定向绕过——那对系统工具注册不可见。';

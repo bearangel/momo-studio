@@ -282,7 +282,7 @@ describe('stream.store：工具链写拦截检测', () => {
    * renderer 不能 import electron 源码——此处维护同一字面量，检测子串必须命中它。
    */
   const WRITE_BLOCKED_HINT =
-    '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录或工作区缓存绕过——那对系统工具注册不可见。';
+    '⚠ 非工作空间路径写入被沙箱拦截。若这是工具链/依赖的安装步骤：请让用户点击会话中的引导卡授权（本会话有效），或请用户在终端自行执行；用户操作后重试同一命令即可。不要尝试下载到临时目录、也不要用 CARGO_HOME 等缓存目录重定向绕过——那对系统工具注册不可见。';
 
   /** bash tool_call_start 事件（payload 形态对齐 stream-aggregator 消费的 p.callId/p.args） */
   function bashCallStart(seq: number, command: string, callId = 'c1'): MessageEventRow {

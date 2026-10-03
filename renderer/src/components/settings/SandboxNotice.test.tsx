@@ -48,7 +48,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] },
+    settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user'] },
     installCommand: 'sudo apt install bubblewrap',
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -555,6 +555,23 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
+  });
+
+  // GUI 验收修复（2026-10-03）：空清单 + deny + grant = 死路（授权通道开但无目录
+  // 可写，重试仍失败）——「本会话允许」在清单为空时必须禁用并指路设置。
+  it('目录清单为空 → 「本会话允许」禁用 + 空清单指路文案；「去设置」仍可用', async () => {
+    // 空清单（收紧特例，显式 override）
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    const grantBtn = screen.getByRole('button', { name: /本会话允许|清单为空/ });
+    expect(grantBtn).toBeDisabled();
+    expect(screen.getByText(/目录清单为空/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+    expect(grantToolchainMock).not.toHaveBeenCalled();
   });
 
   // —— 失败命令预览（终审 F2，spec §8 枚举内容）——
