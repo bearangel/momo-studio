@@ -257,8 +257,8 @@ describe('bash 进程组上报（proc-group:register）', () => {
 });
 
 
-// ═══ 有界阻塞等待（spec 2026-10-03 §12）═══
-describe('bash 有界阻塞等待（spec §12）', () => {
+// ═══ 写授权硬门控等待（spec 2026-10-03 hard-gate §5）═══
+describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
   const HOME_TARGET = path.join(os.homedir(), `.momo-wait-verify-${process.pid}`);
   const REAL_BLOCKED_CMD = `echo granted >> ${HOME_TARGET}`;
 

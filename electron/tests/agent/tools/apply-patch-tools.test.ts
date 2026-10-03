@@ -187,7 +187,7 @@ describe('execute — 多文件原子性', () => {
 });
 
 describe('execute — 沙箱协同', () => {
-  it('路径越界（../）抛错', async () => {
+  it('路径越界（../）→ 硬门控拒绝文案（spec §7）', async () => {
     const patch = `*** Add File: ../escape.ts
 +x
 `;

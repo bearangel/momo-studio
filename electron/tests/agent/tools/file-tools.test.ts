@@ -222,7 +222,7 @@ describe('agent/tools/file-tools 安全与错误', () => {
     ).rejects.toThrow();
   });
 
-  it('path traversal 被 WorkspaceFS 拒绝（write_file）', async () => {
+  it('path traversal → 硬门控拒绝文案（write_file，spec §7）', async () => {
     // spec hard-gate §7：非 fork 环境越界返回拒绝文案（等待短路 denied），不再抛错
     const r = await executeFileTool('write_file', { path: '../../evil.txt', content: 'x' }, ctx);
     expect(r).toContain('用户已拒绝授权');
@@ -276,7 +276,7 @@ describe('edit_file', () => {
       { path: 'no.txt', oldString: 'a', newString: 'b' }, ctx)).rejects.toThrow(/文件不存在/);
   });
 
-  it('路径越界抛错', async () => {
+  it('路径越界 → 硬门控拒绝文案（spec §7）', async () => {
     // spec hard-gate §7：非 fork 环境越界返回拒绝文案（等待短路 denied），不再抛错
     const r = await executeFileTool('edit_file',
       { path: '../../etc/passwd', oldString: 'a', newString: 'b' }, ctx);

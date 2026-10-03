@@ -118,7 +118,7 @@ export function SandboxNotice() {
   };
 
   // 拒绝即时解除（spec hard-gate §8）：本地记忆（同 dirs 不再弹）+ IPC 广播解除
-  // 子进程等待。fire-and-forget：广播失败只影响等待解除时延（下轮 abort 仍可终止）
+  // 子进程等待。fire-and-forget：广播失败则等待只能经停止按钮终止（无重试）
   const denyNow = (): void => {
     if (!writePending) return;
     void ipc.sandbox
