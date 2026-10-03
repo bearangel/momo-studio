@@ -75,13 +75,18 @@ describe('files/workspace-fs', () => {
 });
 
 describe('extraRootDirs（spec hard-gate §6）', () => {
+  // 测试 fixture realpath 归一（macOS /var → /private/var symlink 可移植性）：
+  // 生产 WorkspaceFS.setExtraRootDirs 对根做 realpath 归一去重，assertInWorkspace
+  // 不动输入——fixture 必须与生产同形（realpath 后）否则 macOS 下 isInsideDir 字符串
+  // 前缀比对失败。Linux 上 /var 非 symlink，realpath 是恒等映射无副作用。后人不要
+  // 「简化」掉——GUI 宿主（macOS）必须绿，后续 Task 7/8 也在宿主跑测试。
   let root: string;
   let extra: string;
   let wfs: WorkspaceFS;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-root-'));
-    extra = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-extra-'));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-root-')));
+    extra = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-extra-')));
     wfs = new WorkspaceFS(root);
   });
   afterEach(() => {
@@ -102,7 +107,7 @@ describe('extraRootDirs（spec hard-gate §6）', () => {
   });
 
   it('extra 根内 symlink 指向两根之外 → 逃逸拒绝（逐根 realpath 判定）', () => {
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-outside-'));
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-outside-')));
     try {
       fs.symlinkSync(outside, path.join(extra, 'link'));
       wfs.setExtraRootDirs([extra]);
