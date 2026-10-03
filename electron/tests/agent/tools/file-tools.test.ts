@@ -223,9 +223,11 @@ describe('agent/tools/file-tools 安全与错误', () => {
   });
 
   it('path traversal 被 WorkspaceFS 拒绝（write_file）', async () => {
-    await expect(
-      executeFileTool('write_file', { path: '../../evil.txt', content: 'x' }, ctx),
-    ).rejects.toThrow();
+    // spec hard-gate §7：非 fork 环境越界返回拒绝文案（等待短路 denied），不再抛错
+    const r = await executeFileTool('write_file', { path: '../../evil.txt', content: 'x' }, ctx);
+    expect(r).toContain('用户已拒绝授权');
+    // 副作用未发生：越界目标不落盘
+    expect(fs.existsSync(path.normalize(path.join(tmpDir, '../../evil.txt')))).toBe(false);
   });
 
   it('.git 目录操作被拒绝', async () => {
@@ -275,8 +277,12 @@ describe('edit_file', () => {
   });
 
   it('路径越界抛错', async () => {
-    await expect(executeFileTool('edit_file',
-      { path: '../../etc/passwd', oldString: 'a', newString: 'b' }, ctx)).rejects.toThrow(/路径越界/);
+    // spec hard-gate §7：非 fork 环境越界返回拒绝文案（等待短路 denied），不再抛错
+    const r = await executeFileTool('edit_file',
+      { path: '../../etc/passwd', oldString: 'a', newString: 'b' }, ctx);
+    expect(r).toContain('用户已拒绝授权');
+    // 副作用未发生：越界目标不存在
+    expect(fs.existsSync(path.normalize(path.join(tmpDir, '../../etc/passwd')))).toBe(false);
   });
 });
 

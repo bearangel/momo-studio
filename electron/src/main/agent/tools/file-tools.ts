@@ -25,6 +25,7 @@ import {
   recordDeleteTreeSafe,
   recordRenameTreeSafe,
 } from './shared/change-journal';
+import { runWithWriteGrant } from './write-grant-tool';
 
 /** 返回所有文件工具的声明（read_file / write_file / list_files / edit_file / mkdir / rm / mv / exists） */
 export function getFileToolDefs(): LLMToolDef[] {
@@ -185,27 +186,30 @@ export async function executeFileTool(
     case 'write_file': {
       const filePath = parseStringArg(args.path, 'path');
       const content = parseStringArg(args.content, 'content');
-      const abs = wsFs.assertInWorkspace(filePath);
-      const existed = fs.existsSync(abs);
-      // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
-      // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
-      if (existed) {
-        ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
-      }
-      // v2.5 变更账本：写前记账（write-ahead）——覆盖场景取旧内容为 before；
-      // 记账失败不阻塞工具执行（Safe 包装内部降级）
-      const before = existed ? await fs.promises.readFile(abs, 'utf-8') : null;
-      recordChangeSafe(
-        buildRecordCtx('write_file', ctx),
-        toJournalRelPath(ctx, filePath),
-        existed ? 'modify' : 'create',
-        before,
-        content,
-      );
-      await wsFs.writeFile(filePath, content);
-      // 写入成功后标记已读（让后续 edit_file 通过守门）
-      ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
-      return `文件已写入: ${filePath}`;
+      // 硬门控（spec hard-gate §7）：越界 → 弹卡等待；covered 刷新 extra 根后重执行本体
+      return runWithWriteGrant(ctx, 'write_file', filePath, async () => {
+        const abs = wsFs.assertInWorkspace(filePath);
+        const existed = fs.existsSync(abs);
+        // v2.3 Read-before-Edit：仅对已存在文件（覆盖场景）生效；新文件豁免。
+        // 键用 abs（归一化绝对路径，review M4）——与 read_file 的标记键一致
+        if (existed) {
+          ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
+        }
+        // v2.5 变更账本：写前记账（write-ahead）——覆盖场景取旧内容为 before；
+        // 记账失败不阻塞工具执行（Safe 包装内部降级）
+        const before = existed ? await fs.promises.readFile(abs, 'utf-8') : null;
+        recordChangeSafe(
+          buildRecordCtx('write_file', ctx),
+          toJournalRelPath(ctx, filePath),
+          existed ? 'modify' : 'create',
+          before,
+          content,
+        );
+        await wsFs.writeFile(filePath, content);
+        // 写入成功后标记已读（让后续 edit_file 通过守门）
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
+        return `文件已写入: ${filePath}`;
+      });
     }
     case 'list_files': {
       const dirPath = typeof args.path === 'string' ? args.path : '.';
@@ -219,88 +223,101 @@ export async function executeFileTool(
       const filePath = parseStringArg(args.path, 'path');
       const oldStr = parseStringArg(args.oldString, 'oldString');
       const newStr = parseStringArg(args.newString, 'newString');
-      if (oldStr === newStr) throw new Error('oldString 与 newString 相同，无操作');
+      // 硬门控（spec hard-gate §7）：越界 → 弹卡等待；covered 刷新 extra 根后重执行本体
+      return runWithWriteGrant(ctx, 'edit_file', filePath, async () => {
+        if (oldStr === newStr) throw new Error('oldString 与 newString 相同，无操作');
 
-      const abs = wsFs.assertInWorkspace(filePath);
-      if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
+        const abs = wsFs.assertInWorkspace(filePath);
+        if (!fs.existsSync(abs)) throw new Error(`文件不存在: ${filePath}`);
 
-      // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）
-      ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
+        // v2.3 Read-before-Edit：强阻塞守门。键用 abs（归一化绝对路径，review M4）
+        ctx.readTracker?.assertRead(ctx.roomId, ctx.parentStreamSessionId, abs);
 
-      const original = await fs.promises.readFile(abs, 'utf-8');
-      const firstIdx = original.indexOf(oldStr);
-      if (firstIdx === -1) {
-        // v2.3 失败信息增强：formatEditError 含原文 5KB 快照 + 首次不一致行号 + read_file 建议
-        throw formatEditError('not_found', filePath, oldStr, original);
-      }
-      const lastIdx = original.lastIndexOf(oldStr);
-      if (firstIdx !== lastIdx) {
-        const count = original.split(oldStr).length - 1;
-        throw formatEditError('not_unique', filePath, oldStr, original, count);
-      }
+        const original = await fs.promises.readFile(abs, 'utf-8');
+        const firstIdx = original.indexOf(oldStr);
+        if (firstIdx === -1) {
+          // v2.3 失败信息增强：formatEditError 含原文 5KB 快照 + 首次不一致行号 + read_file 建议
+          throw formatEditError('not_found', filePath, oldStr, original);
+        }
+        const lastIdx = original.lastIndexOf(oldStr);
+        if (firstIdx !== lastIdx) {
+          const count = original.split(oldStr).length - 1;
+          throw formatEditError('not_unique', filePath, oldStr, original, count);
+        }
 
-      const updated = original.slice(0, firstIdx) + newStr + original.slice(lastIdx + oldStr.length);
-      // v2.5 变更账本：全部校验通过后、写盘前记账（校验失败不产生孤儿条目；
-      // 写盘失败的孤儿由 revert 的 no-op 守卫兜底）
-      recordChangeSafe(
-        buildRecordCtx('edit_file', ctx),
-        toJournalRelPath(ctx, filePath),
-        'modify',
-        original,
-        updated,
-      );
-      await fs.promises.writeFile(abs, updated, 'utf-8');
-      // 写后注册新指纹（agent 知晓写后内容——后续编辑免重读）
-      ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
+        const updated = original.slice(0, firstIdx) + newStr + original.slice(lastIdx + oldStr.length);
+        // v2.5 变更账本：全部校验通过后、写盘前记账（校验失败不产生孤儿条目；
+        // 写盘失败的孤儿由 revert 的 no-op 守卫兜底）
+        recordChangeSafe(
+          buildRecordCtx('edit_file', ctx),
+          toJournalRelPath(ctx, filePath),
+          'modify',
+          original,
+          updated,
+        );
+        await fs.promises.writeFile(abs, updated, 'utf-8');
+        // 写后注册新指纹（agent 知晓写后内容——后续编辑免重读）
+        ctx.readTracker?.add(ctx.roomId, abs, ctx.parentStreamSessionId);
 
-      const beforeLines = original.slice(0, firstIdx).split('\n');
-      const startLine = Math.max(0, beforeLines.length - 2);
-      return `已编辑 ${filePath}（第 ${startLine + 1} 行附近）`;
+        const beforeLines = original.slice(0, firstIdx).split('\n');
+        const startLine = Math.max(0, beforeLines.length - 2);
+        return `已编辑 ${filePath}（第 ${startLine + 1} 行附近）`;
+      });
     }
     case 'mkdir': {
       const dirPath = parseStringArg(args.path, 'path');
-      await wsFs.createDir(dirPath);
-      return `目录已创建: ${dirPath}`;
+      // 硬门控（spec hard-gate §7）：越界 → 弹卡等待；covered 刷新 extra 根后重执行本体
+      return runWithWriteGrant(ctx, 'mkdir', dirPath, async () => {
+        await wsFs.createDir(dirPath);
+        return `目录已创建: ${dirPath}`;
+      });
     }
     case 'rm': {
       const targetPath = parseStringArg(args.path, 'path');
-      // v2.5 变更账本：删除前记账（删后内容不可再读，写前记账是唯一时机）。
-      // recordDeleteTree 自辨单文件/目录（单文件 1 条、目录逐文件 delete）；
-      // 目标不存在时 walker 短路返回空——实际删除仍由 deletePath 原样抛错
-      recordDeleteTreeSafe(
-        buildRecordCtx('rm', ctx),
-        ctx.workspaceDir,
-        toJournalRelPath(ctx, targetPath),
-      );
-      await wsFs.deletePath(targetPath);
-      return `已删除: ${targetPath}`;
+      // 硬门控（spec hard-gate §7）：越界抛在 toJournalRelPath 内的 assertInWorkspace，
+      // 先于记账——不越界记账铁律由包装 + 原语句顺序共同保证
+      return runWithWriteGrant(ctx, 'rm', targetPath, async () => {
+        // v2.5 变更账本：删除前记账（删后内容不可再读，写前记账是唯一时机）。
+        // recordDeleteTree 自辨单文件/目录（单文件 1 条、目录逐文件 delete）；
+        // 目标不存在时 walker 短路返回空——实际删除仍由 deletePath 原样抛错
+        recordDeleteTreeSafe(
+          buildRecordCtx('rm', ctx),
+          ctx.workspaceDir,
+          toJournalRelPath(ctx, targetPath),
+        );
+        await wsFs.deletePath(targetPath);
+        return `已删除: ${targetPath}`;
+      });
     }
     case 'mv': {
       const src = parseStringArg(args.src, 'src');
       const dst = parseStringArg(args.dst, 'dst');
-      // v2.5 变更账本：移动前记账。rename(2) 语义：目标文件已存在时被静默覆盖
-      // ——先为被覆盖目标叠一条 modify（before=目标旧内容, after=源内容）再记
-      // rename 本体；撤销逆序（created_at DESC）先逆 rename（目标移回源）再逆
-      // modify（重建目标旧内容），端态双文件均正确。目录移动逐文件记 rename
-      const rc = buildRecordCtx('mv', ctx);
-      const srcAbs = wsFs.assertInWorkspace(src);
-      const dstAbs = wsFs.assertInWorkspace(dst);
-      const srcRel = toJournalRelPath(ctx, src);
-      const dstRel = toJournalRelPath(ctx, dst);
-      if (!fs.existsSync(srcAbs)) {
-        // 源不存在：不记账，由 wsFs.rename 原样抛 ENOENT（既有行为不变）
-      } else if (fs.statSync(srcAbs).isDirectory()) {
-        recordRenameTreeSafe(rc, ctx.workspaceDir, srcRel, dstRel);
-      } else {
-        const srcContent = await fs.promises.readFile(srcAbs, 'utf-8');
-        if (fs.existsSync(dstAbs) && !fs.statSync(dstAbs).isDirectory()) {
-          const dstOld = await fs.promises.readFile(dstAbs, 'utf-8');
-          recordChangeSafe(rc, dstRel, 'modify', dstOld, srcContent);
+      // 硬门控（spec hard-gate §7）：src/dst 任一越界均捕获（pathArg 双路径合并展示）
+      return runWithWriteGrant(ctx, 'mv', `${src} → ${dst}`, async () => {
+        // v2.5 变更账本：移动前记账。rename(2) 语义：目标文件已存在时被静默覆盖
+        // ——先为被覆盖目标叠一条 modify（before=目标旧内容, after=源内容）再记
+        // rename 本体；撤销逆序（created_at DESC）先逆 rename（目标移回源）再逆
+        // modify（重建目标旧内容），端态双文件均正确。目录移动逐文件记 rename
+        const rc = buildRecordCtx('mv', ctx);
+        const srcAbs = wsFs.assertInWorkspace(src);
+        const dstAbs = wsFs.assertInWorkspace(dst);
+        const srcRel = toJournalRelPath(ctx, src);
+        const dstRel = toJournalRelPath(ctx, dst);
+        if (!fs.existsSync(srcAbs)) {
+          // 源不存在：不记账，由 wsFs.rename 原样抛 ENOENT（既有行为不变）
+        } else if (fs.statSync(srcAbs).isDirectory()) {
+          recordRenameTreeSafe(rc, ctx.workspaceDir, srcRel, dstRel);
+        } else {
+          const srcContent = await fs.promises.readFile(srcAbs, 'utf-8');
+          if (fs.existsSync(dstAbs) && !fs.statSync(dstAbs).isDirectory()) {
+            const dstOld = await fs.promises.readFile(dstAbs, 'utf-8');
+            recordChangeSafe(rc, dstRel, 'modify', dstOld, srcContent);
+          }
+          recordChangeSafe(rc, dstRel, 'rename', srcContent, null, srcRel);
         }
-        recordChangeSafe(rc, dstRel, 'rename', srcContent, null, srcRel);
-      }
-      await wsFs.rename(src, dst);
-      return `已移动: ${src} → ${dst}`;
+        await wsFs.rename(src, dst);
+        return `已移动: ${src} → ${dst}`;
+      });
     }
     case 'exists': {
       const checkPath = parseStringArg(args.path, 'path');
