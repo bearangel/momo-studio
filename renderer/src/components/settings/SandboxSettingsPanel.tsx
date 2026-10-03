@@ -4,6 +4,7 @@
 // 状态与重探测走 ipc.sandbox（Task 7）；设置保存走 ipc.settings.updateGlobal。
 // 2026-09-13 修订 B：网络出站三态收敛双态（永久允许（默认）/ 拒绝）——
 // ask 信任卡机制已下线，垂直单选列表 + 行内说明保持既有形态。
+// 2026-10-03 §8：新增「已授权目录」小节（工作空间持久授权列表 + 逐条撤销）。
 // v2.5 工具链授权（Task 7，spec §10）：网络出站区块后追加工具链目录写入双态
 // radio + 目录清单 textarea（显式「保存清单」/「恢复默认」按钮，失焦不自动存）。
 // 全语义 token；lucide ShieldCheck 图标由 SettingsNav 持有。
@@ -32,15 +33,23 @@ export const DEFAULT_TOOLCHAIN_DIRS: readonly string[] = [
   'pip:user',
 ];
 
+interface WorkspaceGrantEntry {
+  workspaceId: string;
+  dirs: string[];
+}
+
 export function SandboxSettingsPanel() {
   const [info, setInfo] = useState<SandboxInfo | null>(null);
   const [busy, setBusy] = useState(false);
   // 清单编辑态：dirty = 用户改过 textarea 且未保存——info 刷新（reprobe）不覆盖
   const [dirsText, setDirsText] = useState('');
   const [dirsDirty, setDirsDirty] = useState(false);
+  // 已授权目录（spec 2026-10-03 §8）：工作空间持久授权列表，删除走 revokeWrite
+  const [grants, setGrants] = useState<WorkspaceGrantEntry[]>([]);
 
   useEffect(() => {
     void ipc.sandbox.getState().then(setInfo);
+    void ipc.sandbox.listWriteGrants().then(setGrants).catch(() => {});
   }, []);
 
   // info 刷新（挂载 / reprobe / 保存乐观 setInfo）同步清单文本；dirty 时保留用户输入。
@@ -83,6 +92,16 @@ export function SandboxSettingsPanel() {
   const resetDirs = (): void => {
     setDirsDirty(false);
     save({ sandboxToolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] });
+  };
+
+  // 逐条撤销（spec §8 可撤销红线）：本地乐观移除 + revokeWrite；失败静默（下次挂载重拉）
+  const revokeGrant = (entry: WorkspaceGrantEntry, dir: string): void => {
+    setGrants((prev) =>
+      prev
+        .map((g) => (g.workspaceId === entry.workspaceId ? { ...g, dirs: g.dirs.filter((d) => d !== dir) } : g))
+        .filter((g) => g.dirs.length > 0),
+    );
+    void ipc.sandbox.revokeWrite({ scope: 'workspace', key: entry.workspaceId, dir }).catch(() => {});
   };
 
   const reprobe = async (): Promise<void> => {
@@ -195,6 +214,29 @@ export function SandboxSettingsPanel() {
           </Button>
         </div>
         <p className="text-xs text-tertiary">每行一个路径；支持 ~ 前缀；npm:global-prefix / pip:user 为自动探测项。</p>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium text-primary">已授权目录（工作空间持久）</legend>
+        {grants.length === 0 ? (
+          <p className="text-xs text-tertiary">暂无持久授权</p>
+        ) : (
+          grants.map((g) => (
+            <div key={g.workspaceId} className="flex flex-col gap-1">
+              {g.dirs.map((d) => (
+                <div key={`${g.workspaceId}:${d}`} className="flex items-center justify-between gap-2">
+                  <code className="border border-subtle bg-canvas rounded px-2 py-1 font-mono text-xs text-secondary select-all break-all">
+                    {d}
+                  </code>
+                  <Button variant="ghost" size="sm" onClick={() => revokeGrant(g, d)}>
+                    删除
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+        <p className="text-xs text-tertiary">会话级授权随会话删除自动清理，不在此展示。</p>
       </fieldset>
 
       <div className="rounded-lg border border-subtle bg-surface-2 p-3 flex flex-col gap-2">

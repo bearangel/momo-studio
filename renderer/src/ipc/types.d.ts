@@ -1438,6 +1438,8 @@ export interface SandboxApiSurface {
   grantWrite(arg: { scope: 'session' | 'workspace'; key: string; dirs: string[] }): Promise<void>;
   /** 撤销单条（设置页「已授权目录」） */
   revokeWrite(arg: { scope: 'session' | 'workspace'; key: string; dir: string }): Promise<void>;
+  /** 工作空间持久授权列表（设置页「已授权目录」小节） */
+  listWriteGrants(): Promise<Array<{ workspaceId: string; dirs: string[] }>>;
   /** 写拦截信号推送（主进程 stream-relay 检测命中即推；renderer 直弹授权卡） */
   onWriteBlocked(cb: (e: WriteBlockedEvent) => void): () => void;
 }

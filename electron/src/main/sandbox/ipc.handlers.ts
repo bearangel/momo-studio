@@ -15,7 +15,7 @@ import {
 } from './probe';
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
-import { grantWriteDirs, revokeWriteDir } from './write-grant';
+import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -134,6 +134,9 @@ export function registerSandboxIpc(): void {
     grantWriteDirs(a.scope, a.key, a.dirs);
     logger.info('写授权已授予', { scope: a.scope, key: a.key, count: a.dirs.length });
   });
+
+  /** 设置页「已授权目录」列表（spec §8） */
+  ipcMain.handle('sandbox:listWriteGrants', () => listWorkspaceGrants());
 
   /** 撤销单条（spec §8 设置页「已授权目录」） */
   ipcMain.handle('sandbox:revokeWrite', (_e, arg: unknown) => {
