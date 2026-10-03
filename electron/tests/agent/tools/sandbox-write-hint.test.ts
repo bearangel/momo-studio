@@ -142,10 +142,19 @@ describe('normalizeGrantDirs（spec §5.2 归一：显示即所授）', () => {
   });
 });
 
-describe('WRITE_BLOCKED_HINT 文案（spec §6.5 通用版）', () => {
-  it('新前缀句 + 授权卡指引 + 反绕过三要素', () => {
+describe('WRITE_BLOCKED_HINT 文案（spec hard-gate §9 三态文案）', () => {
+  it('新前缀句 + 授权卡指引 + 放行/拒绝双态交代 + 反绕过双要素', () => {
+    // 前缀句——开场警告 + 沙箱拦截措辞必须保留
+    expect(WRITE_BLOCKED_HINT).toContain('⚠');
     expect(WRITE_BLOCKED_HINT).toContain('工作空间外路径写入被沙箱拦截');
+    // 授权卡引导 + 放行后自动重试承诺（硬门控新增：自动重试非自由探索）
     expect(WRITE_BLOCKED_HINT).toContain('授权');
-    expect(WRITE_BLOCKED_HINT).toContain('不要用临时目录或缓存重定向绕过');
+    expect(WRITE_BLOCKED_HINT).toContain('用户放行后本命令会自动重试');
+    // 拒绝三态——明确告知 LLM 等待期间被拒会收到拒绝结果（避免 LLM 重试同一目标）
+    expect(WRITE_BLOCKED_HINT).toContain('用户拒绝时');
+    expect(WRITE_BLOCKED_HINT).toContain('拒绝结果');
+    // 反绕过双要素：禁止缓存重定向 + 禁止等待期间另寻写入路径
+    expect(WRITE_BLOCKED_HINT).toContain('请勿用临时目录或缓存重定向绕过');
+    expect(WRITE_BLOCKED_HINT).toContain('也勿在等待期间尝试其他写入路径');
   });
 });

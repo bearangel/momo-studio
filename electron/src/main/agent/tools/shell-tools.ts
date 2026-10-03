@@ -36,7 +36,7 @@ import {
   normalizeGrantDirs,
   WRITE_BLOCKED_HINT,
 } from './sandbox-write-hint';
-import { waitForWriteGrant } from './write-grant-wait';
+import { waitForWriteGrant, formatWriteDeniedResult } from './write-grant-wait';
 
 /**
  * 命令黑名单。每条 = 危险模式 + 命中后给 LLM 的理由。
@@ -177,8 +177,8 @@ export class ShellTools implements ToolModule {
     // 黑名单拦截先于 spawn，命中即抛错（调用方转成 tool result 反馈给 LLM）。
     assertCommandAllowed(command);
 
-    // spec §12 有界阻塞等待：首轮被拦 → 上报主进程（弹授权卡）→ 等 covered
-    // 重执行（同一工具调用内无缝续跑）；timeout 回退既有「被拦结果 + 提示段」。
+    // spec hard-gate §5 硬门控等待：首轮被拦 → 上报主进程（弹授权卡）→ 无限等待
+    // （covered 原地重执行 / denied 即时返回 / aborted 随停止按钮）。
     // queryNet 每轮现解析 override（等待回调里可能翻转替身——模拟授权落地）
     let last = await this.bashOnce(command, timeoutMs, ctx);
     for (let round = 0; last.blocked && round < WRITE_WAIT_MAX_ROUNDS; round += 1) {
@@ -198,7 +198,8 @@ export class ShellTools implements ToolModule {
         isCovered: async () => {
           try {
             const eff = await queryNet(ctx.streamSessionId, ctx.workspaceId);
-            return eff.toolchainOn || last.dirs.some((d) => eff.extraDirs.includes(d));
+            // spec hard-gate §4.2 纯成员判定：toolchainOn 与被拦目录是否放行无关
+            return last.dirs.some((d) => eff.extraDirs.includes(d));
           } catch {
             return false;
           }
@@ -209,7 +210,7 @@ export class ShellTools implements ToolModule {
         e.name = 'AbortError';
         throw e;
       }
-      if (wait.kind !== 'covered') break;
+      if (wait.kind === 'denied') return formatWriteDeniedResult(last.dirs);
       last = await this.bashOnce(command, timeoutMs, ctx);
     }
     return last.text;

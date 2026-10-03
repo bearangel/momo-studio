@@ -198,13 +198,22 @@ describe('bash HOME 写拦截提示层（spec §7）', () => {
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    const tools = new ShellTools();
-    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
-    expect(result).toContain('sandbox: seatbelt/net-on');
-    // 提示逐字追加在结果尾部（最后一段——LLM 最后看到，行动指引优先级最高）
-    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
-    expect(result).toContain('工作空间外路径写入被沙箱拦截');
-    expect(result).toContain('不要用临时目录或缓存重定向绕过');
+    // spec hard-gate §5 等待循环：非 fork 环境 process.send 缺省 → wait 短路 denied →
+    // 走 formatWriteDeniedResult 分支，bashOnce 文本不可见。此处注入 wait 替身返
+    // 回 covered 让等待循环正常推进；bashOnce 仍持续被拦 → MAX_ROUNDS 后落出，
+    // 末轮 last.text 仍带 sandbox tag + hint（bashOnce 自身负责追加 hint）。
+    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'covered' as const }) });
+    try {
+      const tools = new ShellTools();
+      const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+      expect(result).toContain('sandbox: seatbelt/net-on');
+      // 提示逐字追加在结果尾部（最后一段——LLM 最后看到，行动指引优先级最高）
+      expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+      expect(result).toContain('工作空间外路径写入被沙箱拦截');
+      expect(result).toContain('请勿用临时目录或缓存重定向绕过');
+    } finally {
+      __setBashWriteWaitForTest(null);
+    }
   });
 
   it('非沙箱 tag（permissive 降级 unsandboxed）→ 同签名不追加提示（负控制）', async () => {
@@ -302,7 +311,7 @@ describe('bash 有界阻塞等待（spec §12）', () => {
     expect(fs.existsSync(HOME_TARGET)).toBe(true);
   });
 
-  itDarwin('timeout → 返回被拦结果 + hint（既有行为回归锁）', async () => {
+  itDarwin('denied → 返回统一拒绝文案（无 hint、无重执行）', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
     __setSandboxStateForTest({
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
@@ -312,11 +321,13 @@ describe('bash 有界阻塞等待（spec §12）', () => {
     __setBashWriteWaitForTest({ wait: async () => ({ kind: 'denied' as const }) });
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
-    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+    // dirs 形态取决于 WRITE_BLOCKED_CMD 的路径提取——锁前缀语义，不锁具体目录
+    expect(result).toMatch(/^用户已拒绝授权（目录：.+）。请勿重试同一目标；如确需写入请与用户协商其他方案。$/);
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
     expect(capturedSends.filter((m) => m.type === 'write-blocked-report')).toHaveLength(1);
   });
 
-  itDarwin('covered 但重执行仍被拦（新目录）→ 循环再等待；轮次上限内收敛', async () => {
+  itDarwin('covered 但重执行仍被拦（新目录）→ 循环再等待；denied 收敛', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
     __setSandboxStateForTest({
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
@@ -333,7 +344,39 @@ describe('bash 有界阻塞等待（spec §12）', () => {
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
     expect(waitCalls).toBe(2);
-    expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+    expect(result).toContain('用户已拒绝授权');
     expect(capturedSends.filter((m) => m.type === 'write-blocked-report').length).toBeGreaterThanOrEqual(2);
+  });
+
+  itDarwin('回归锁 bug ①：toolchainOn=true 且被拦目录不在 extraDirs → isCovered 必须为 false（不瞬断）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    // 旧 bug 形态：allow 开关 + 非预置目录被拦——isCovered 曾恒 true
+    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: true, extraDirs: [] }));
+    let probe: boolean | undefined;
+    __setBashWriteWaitForTest({
+      wait: async (o) => {
+        probe = await o.isCovered();
+        return { kind: 'denied' as const };
+      },
+    });
+    const tools = new ShellTools();
+    await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(probe).toBe(false); // 旧代码此处为 true——瞬判 covered 零等待
+  });
+});
+
+// isCovered 源码锁（spec hard-gate §4.2）：防止 bug ① 复活——纯成员判定语义必须
+// 永久保留，旧实现 `eff.toolchainOn ||` 是已知瞬断形态（任何被拦目录都判覆盖）。
+describe('isCovered 源码锁（spec hard-gate §4.2）', () => {
+  it('不再以 eff.toolchainOn 作覆盖判定（bug ① 防复活）', () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../../src/main/agent/tools/shell-tools.ts'),
+      'utf-8',
+    );
+    expect(src).not.toContain('eff.toolchainOn ||');
   });
 });
