@@ -19,6 +19,7 @@ import type { SandboxInfo } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { DEFAULT_TOOLCHAIN_DIRS } from './SandboxSettingsPanel';
 import { Button } from '../ui/Button';
 
 /** PowerShell 授权命令（CurrentUser 作用域 + RemoteSigned）；卡片展示与复制单点对齐 */
@@ -126,6 +127,25 @@ export function SandboxNotice() {
     }
   };
 
+  // 空清单一键恢复（GUI 验收迭代 2026-10-03）：串联两个既有显式通道——恢复默认
+  // 五项（updateGlobal，与设置页「恢复默认」同款）+ 本会话授权（grant）。恢复
+  // 是持久写，警示行明示恢复了什么、可再收紧——知情透明，不引入新权限面。
+  const restoreAndGrant = async (): Promise<void> => {
+    if (!activeWorkspaceId) return;
+    setBusy(true);
+    try {
+      await ipc.settings.updateGlobal({ sandboxToolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] });
+      await ipc.sandbox.grantToolchain(activeWorkspaceId);
+      setInfo({
+        ...info,
+        settings: { ...info.settings, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] },
+        toolchainPromptDismissed: true,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div
       data-testid="sandbox-notice"
@@ -182,22 +202,23 @@ export function SandboxNotice() {
             <Button variant="ghost" onClick={() => setActiveView('settings')}>
               去设置
             </Button>
-            {/* 空清单死路防护（GUI 验收 2026-10-03）：清单为空时 grant 是无操作
-                （授权通道开但无目录可写，重试仍失败）——禁用并指路设置 */}
-            <Button
-              onClick={() => void grantNow().catch(() => {})}
-              disabled={busy || info.settings.toolchainDirs.length === 0}
-            >
-              {info.settings.toolchainDirs.length === 0
-                ? '清单为空，去设置配置'
-                : busy
-                  ? '授权中…'
-                  : '本会话允许'}
-            </Button>
+            {info.settings.toolchainDirs.length === 0 ? (
+              <Button
+                onClick={() => void restoreAndGrant().catch(() => {})}
+                disabled={busy || activeWorkspaceId === null}
+              >
+                {busy ? '处理中…' : '恢复默认清单并允许'}
+              </Button>
+            ) : (
+              <Button onClick={() => void grantNow().catch(() => {})} disabled={busy}>
+                {busy ? '授权中…' : '本会话允许'}
+              </Button>
+            )}
           </div>
           {info.settings.toolchainDirs.length === 0 && (
             <p className="mt-2 text-xs text-status-warning">
-              目录清单为空——「本会话允许」无可放行目录。请到 设置→安全沙箱 配置清单后重试。
+              目录清单为空。点击上方按钮将恢复默认五项（~/.rustup、~/.cargo、~/go、npm
+              全局、pip 用户目录）并在本会话放行；如需收紧可稍后在 设置→安全沙箱 调整。
             </p>
           )}
         </>

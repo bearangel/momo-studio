@@ -22,8 +22,9 @@ const reprobeMock = vi.fn();
 const installBwrapMock = vi.fn();
 const dismissPromptMock = vi.fn();
 const grantToolchainMock = vi.fn();
+const updateGlobalMock = vi.fn();
 
-// 桩 window.api（sandbox 命名空间；组件经 ipc Proxy 透传消费）
+// 桩 window.api（sandbox + settings 命名空间；组件经 ipc Proxy 透传消费）
 const mockApi = {
   sandbox: {
     getState: getStateMock,
@@ -31,6 +32,9 @@ const mockApi = {
     installBwrap: installBwrapMock,
     dismissPrompt: dismissPromptMock,
     grantToolchain: grantToolchainMock,
+  },
+  settings: {
+    updateGlobal: updateGlobalMock,
   },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -534,6 +538,7 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
     installBwrapMock.mockReset();
     dismissPromptMock.mockReset();
     grantToolchainMock.mockReset();
+    updateGlobalMock.mockReset();
     // 真实 store 归位（不 mock store——与 netOff 套件同款：导航/授权断言走真实状态转移）
     act(() => {
       useStreamStore.setState({ netBlockedSeen: false, toolchainWriteBlockedSeen: false, lastToolchainBlockedCommand: null });
@@ -557,20 +562,38 @@ describe('SandboxNotice：工具链写拦截引导卡', () => {
     expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
   });
 
-  // GUI 验收修复（2026-10-03）：空清单 + deny + grant = 死路（授权通道开但无目录
-  // 可写，重试仍失败）——「本会话允许」在清单为空时必须禁用并指路设置。
-  it('目录清单为空 → 「本会话允许」禁用 + 空清单指路文案；「去设置」仍可用', async () => {
-    // 空清单（收紧特例，显式 override）
+  // GUI 验收迭代（2026-10-03）：空清单 + deny 时「让用户手工去设置」不人性化——
+  // 主按钮变「恢复默认清单并允许」一键串联两个既有通道（恢复默认五项 + 本会话
+  // 授权），不再禁用指路；知情透明（警示行说明恢复了什么、可再收紧）。
+  it('目录清单为空 → 主按钮「恢复默认清单并允许」：恢复默认五项 + grant 串联、卡消失', async () => {
     getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    grantToolchainMock.mockResolvedValue(undefined);
     act(() => {
       useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: 'ws-1' });
     });
     render(<SandboxNotice />);
     await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
-    const grantBtn = screen.getByRole('button', { name: /本会话允许|清单为空/ });
-    expect(grantBtn).toBeDisabled();
     expect(screen.getByText(/目录清单为空/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /恢复默认清单并允许/ }));
+    // 恢复默认（updateGlobal）先于授权（grant）发生，两者都落在激活 workspace 会话
+    await waitFor(() => expect(updateGlobalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxToolchainDirs: ['~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user'] }),
+    ));
+    await waitFor(() => expect(grantToolchainMock).toHaveBeenCalledWith('ws-1'));
+    await waitFor(() => expect(screen.queryByTestId('sandbox-notice')).toBeNull());
+  });
+
+  it('目录清单为空 + 无激活 workspace → 一键按钮禁用（不误恢复不误授权）', async () => {
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    act(() => {
+      useStreamStore.setState({ toolchainWriteBlockedSeen: true });
+      useWorkspaceStore.setState({ activeWorkspaceId: null });
+    });
+    render(<SandboxNotice />);
+    await waitFor(() => expect(screen.getByTestId('sandbox-notice')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /恢复默认清单并允许/ })).toBeDisabled();
+    expect(updateGlobalMock).not.toHaveBeenCalled();
     expect(grantToolchainMock).not.toHaveBeenCalled();
   });
 

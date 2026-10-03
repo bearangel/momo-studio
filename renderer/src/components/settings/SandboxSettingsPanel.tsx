@@ -24,7 +24,7 @@ const TOOLCHAIN_POLICY_OPTIONS: readonly { value: ToolchainPolicy; label: string
 
 /** 默认五项清单——与 electron 端 toolchain-grant.ts DEFAULT_TOOLCHAIN_DIRS 对齐
  * （事实源在主进程，此处镜像供「恢复默认」写回；漂移由面板测试五项断言拦截）。 */
-const DEFAULT_TOOLCHAIN_DIRS: readonly string[] = [
+export const DEFAULT_TOOLCHAIN_DIRS: readonly string[] = [
   '~/.rustup',
   '~/.cargo',
   '~/go',
