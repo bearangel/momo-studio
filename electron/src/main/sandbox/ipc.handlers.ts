@@ -17,6 +17,7 @@ import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
 import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
 import { sendUserMessage } from '../im/session-service';
+import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -153,6 +154,14 @@ export function registerSandboxIpc(): void {
     }
   });
 
+  /**
+   * 写授权拒绝（spec hard-gate §4.3）：卡「拒绝」/「X 关闭」→ 广播解除等待中的
+   * 工具调用。无状态转发（匹配在子进程侧）；载荷校验风格照 grantWrite。
+   */
+  ipcMain.handle('sandbox:denyWrite', (_e, arg: unknown) => {
+    handleDenyWrite(arg, broadcastWriteGrantDenied);
+  });
+
   /** 设置页「已授权目录」列表（spec §8） */
   ipcMain.handle('sandbox:listWriteGrants', () => listWorkspaceGrants());
 
@@ -166,4 +175,16 @@ export function registerSandboxIpc(): void {
     logger.info('写授权已撤销', { scope: a.scope, key: a.key });
   });
   logger.info('Sandbox IPC handlers 已注册');
+}
+
+/** sandbox:denyWrite 载荷处理（纯函数——ipcMain 壳的测试面） */
+export function handleDenyWrite(
+  arg: unknown,
+  broadcast: (dirs: string[]) => void,
+): void {
+  const a = arg as { sessionId?: unknown; dirs?: unknown };
+  if (a.sessionId !== null && typeof a.sessionId !== 'string') throw new Error('sessionId 非法');
+  if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
+  broadcast(a.dirs as string[]);
+  logger.info('写授权已拒绝（广播解除等待）', { sessionId: a.sessionId, count: (a.dirs as string[]).length });
 }

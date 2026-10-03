@@ -1442,6 +1442,8 @@ export interface SandboxApiSurface {
     /** 授权成功后向该会话注入唤醒消息（agent 自动重试被拦命令；卡按钮携带） */
     resumeSessionId?: string;
   }): Promise<void>;
+  /** 写授权拒绝（spec 2026-10-03 hard-gate §4.3）：广播解除等待中的工具调用 */
+  denyWrite(arg: { sessionId: string | null; dirs: string[] }): Promise<void>;
   /** 撤销单条（设置页「已授权目录」） */
   revokeWrite(arg: { scope: 'session' | 'workspace'; key: string; dir: string }): Promise<void>;
   /** 工作空间持久授权列表（设置页「已授权目录」小节） */

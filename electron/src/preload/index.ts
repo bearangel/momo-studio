@@ -152,6 +152,8 @@ const api: ApiSurface = {
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
     grantWrite: (arg: { scope: 'session' | 'workspace'; key: string; dirs: string[]; resumeSessionId?: string }) =>
       invoke('sandbox:grantWrite', arg),
+    denyWrite: (arg: { sessionId: string | null; dirs: string[] }) =>
+      invoke('sandbox:denyWrite', arg),
     listWriteGrants: () => invoke('sandbox:listWriteGrants'),
     revokeWrite: (arg: { scope: 'session' | 'workspace'; key: string; dir: string }) =>
       invoke('sandbox:revokeWrite', arg),
