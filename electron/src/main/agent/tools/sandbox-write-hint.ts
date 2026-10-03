@@ -51,9 +51,28 @@ export function extractBlockedPaths(command: string, stderr: string, stdout = ''
 }
 
 /**
- * 归一（spec §5.2 显示即所授）：HOME 下路径归并到 HOME 第一级（授权粒度 =
- * ~/.cargo 这样的工具链根目录）；非 HOME 路径取最近存在祖先（fs 逐级上溯，
- * /tmp、/opt 等必命中）。卡上展示的就是最终授权目录。
+ * 永不接受为授权目录的系统根（精确命中；子路径不受限——/opt/homebrew 合法）。
+ * 终审 I4：错误行里的工具路径（/usr/bin/cc 等）上溯会到这些根——拒绝展示。
+ */
+const SYSTEM_ROOT_DENYLIST: ReadonlySet<string> = new Set([
+  '/', '/bin', '/sbin', '/etc', '/var', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib',
+  '/opt', '/System', '/Library', '/private/etc', '/private/var',
+]);
+
+/** realpath 优先、resolve 兜底（与授权存储侧 toolchain-grant.realpathOrResolve 同一归一） */
+function normalizeRealPath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p); // 词法消解 ..（不存在路径的真实语义）
+  }
+}
+
+/**
+ * 归一（spec §5.2 显示即所授）：HOME 下路径归并到 HOME 第一级；非 HOME 取最近
+ * 存在的**目录**祖先。产出统一走 realpath/resolve 归一——保证「卡上显示 ==
+ * KV 存储 == profile 生效」三者同一字符串（终审 C1：symlink/.. 伪装下显示 A
+ * 实授 realpath(A) 的欺骗面必须在此消灭）。系统根目录拒绝（终审 I4）。
  */
 export function normalizeGrantDirs(paths: string[], home: string): string[] {
   const out: string[] = [];
@@ -66,17 +85,23 @@ export function normalizeGrantDirs(paths: string[], home: string): string[] {
       let cur = raw;
       while (cur !== '/' && cur !== '') {
         try {
-          fs.statSync(cur);
-          dir = cur;
-          break;
+          const st = fs.statSync(cur);
+          if (st.isDirectory()) {
+            dir = cur; // 只接受目录（文件命中继续上溯——终审 I4）
+            break;
+          }
         } catch {
-          const next = path.dirname(cur);
-          if (next === cur) break;
-          cur = next;
+          // 不存在 → 继续上溯
         }
+        const next = path.dirname(cur);
+        if (next === cur) break;
+        cur = next;
       }
     }
-    if (dir !== null && dir !== '' && !out.includes(dir)) out.push(dir);
+    if (dir === null || dir === '') continue;
+    const normalized = normalizeRealPath(dir);
+    if (SYSTEM_ROOT_DENYLIST.has(normalized)) continue;
+    if (!out.includes(normalized)) out.push(normalized);
     if (out.length >= 3) break;
   }
   return out;

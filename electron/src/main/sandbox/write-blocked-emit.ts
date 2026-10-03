@@ -13,6 +13,9 @@ import { detectWriteBlocked, extractBlockedPaths, normalizeGrantDirs } from '../
 const commandByCallId = new Map<string, string>();
 const COMMAND_CACHE_MAX = 100;
 
+/** result 文本中的沙箱 tag 行（子进程 shell-tools 拼入 `sandbox: ${plan.tag}`）——主进程侧的沙箱化判定（终审 I2） */
+const SANDBOX_TAG_LINE = /^sandbox: (seatbelt|bwrap)\//m;
+
 /** 命令预览截断上限（spec §5.3，与旧 lastToolchainBlockedCommand 同档） */
 const COMMAND_PREVIEW_MAX = 200;
 
@@ -41,13 +44,15 @@ export function inspectEventBatch(events: MessageEventRow[]): WriteBlockedSignal
       commandByCallId.set(callId, cmd);
     }
   }
-  // 2) bash 结果检测——tag 前缀门在主进程侧放宽（bwrap/seatbelt 同语义，
-  //    事件行不携带平台 tag；win/unsandboxed 环境下工具名也非 bash 沙箱链路）
+  // 2) bash 结果检测——沙箱化判定取自 result 文本的 sandbox tag 行（终审 I2：
+  //    主进程无 plan.tag，硬编码恒过会让 permissive/unsandboxed 下的真实系统
+  //    权限错误误弹授权卡且授权无效循环——文本里有子进程拼入的权威 tag）
   for (const e of events) {
     if (e.eventType !== 'tool_call_result') continue;
     if (e.payload.toolName !== 'bash') continue;
     const result = e.payload.result;
     if (typeof result !== 'string') continue;
+    if (!SANDBOX_TAG_LINE.test(result)) continue;
     const callId = e.payload.callId;
     const command = typeof callId === 'string' ? commandByCallId.get(callId) ?? '' : '';
     if (!detectWriteBlocked('seatbelt/x', command, result)) continue;

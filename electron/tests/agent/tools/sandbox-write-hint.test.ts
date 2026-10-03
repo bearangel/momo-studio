@@ -2,6 +2,7 @@
 // 检测通用化（spec 2026-10-03 §5.2）：detectWriteBlocked（HOME 特征降级为提取辅助）
 // + extractBlockedPaths（实录语料）+ normalizeGrantDirs（显示即所授归一）+ 通用文案。
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -83,9 +84,47 @@ describe('normalizeGrantDirs（spec §5.2 归一：显示即所授）', () => {
       .toEqual([path.join(home, '.cargo')]);
   });
 
-  it('非 HOME 路径取最近存在祖先（/tmp 必存在）', () => {
+  it('非 HOME 路径取最近存在祖先（/tmp 必存在；realpath 一致化——darwin 为 /private/tmp）', () => {
     expect(normalizeGrantDirs(['/tmp/momo-sb-123/a/b/c.sb'], '/nonexistent-home'))
-      .toEqual(['/tmp']);
+      .toEqual([fs.realpathSync('/tmp')]);
+  });
+
+  it('安全归一（终审 C1）：symlink 候选解析为真实目标——显示=所授=存储', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-hint-sym-'));
+    try {
+      const realDir = path.join(tmp, 'real-target');
+      fs.mkdirSync(realDir);
+      const link = path.join(tmp, 'pass');
+      fs.symlinkSync(realDir, link);
+      const out = normalizeGrantDirs([path.join(link, 'x.crate')], home);
+      expect(out).toEqual([fs.realpathSync(realDir)]); // 不是 link 字面串
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('安全归一（终审 C1）：.. 段词法消解后再展示——不授含 .. 的原始串', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-hint-dot-'));
+    try {
+      const a = path.join(tmp, 'a');
+      fs.mkdirSync(a);
+      // tmp/a/../a 深路径 statSync 命中 tmp/a（含 ..）→ 归一后必须等于 realpath(tmp/a)
+      const out = normalizeGrantDirs([path.join(a, '..', 'a', 'f.crate')], '/nonexistent-home');
+      expect(out).toEqual([fs.realpathSync(a)]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('安全归一（终审 I4）：文件命中不算目录——上溯到目录；系统根目录拒绝', () => {
+    // /bin/ls 是存在文件：候选 /bin/ls 不应原样授权，上溯 /bin 是系统根 → 拒绝
+    const out1 = normalizeGrantDirs(['/bin/ls'], '/nonexistent-home');
+    expect(out1).toEqual([]);
+    // 系统根目录（/, /etc, /usr, /usr/bin 精确命中）拒绝
+    expect(normalizeGrantDirs(['/etc/hosts2/deep/x'], '/nonexistent-home')).toEqual([]);
+    // /usr/local（非系统根黑名单项）放行——homebrew 等合法场景
+    fs.mkdirSync('/usr/local', { recursive: true }); // 幂等（宿主已存在）
+    expect(normalizeGrantDirs(['/usr/local/foo/bar'], '/nonexistent-home')).toEqual(['/usr/local']);
   });
 
   it('HOME 一级天然去重 + 上限 3', () => {

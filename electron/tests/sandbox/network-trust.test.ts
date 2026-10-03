@@ -151,6 +151,24 @@ describe('effective op 工具链双字段 + extraDirs（spec 2026-10-03 §6.1）
     }
   });
 
+  it('extraDirs：#roll 后缀流映射最新行 → session 层仍参与（终审 I1，spec §5.3 前缀语义）', async () => {
+    grantWriteDirs('session', 's-roll', ['/tmp/roll-grant']);
+    // rename 模型：流 roll 时同一消息行的 stream_session_id 被改写为 #roll 后缀，
+    // base 形态的行不再存在——精确匹配必然落空（终审 I1 的真实形态）
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-rolled', 's-roll', 'agent-x', 'message', '', 'ss-roll#roll2', Date.now(), Date.now());
+    // 子进程持 base ssi——必须经 roll 语义拿到 session 层
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'e4', op: 'effective',
+      streamSessionId: 'ss-roll', workspaceId: 'ws-a',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.payload.extraDirs).toContain('/tmp/roll-grant');
+  });
+
   it('旧载荷（无 workspaceId）→ extraDirs 恒空数组不抛错（兼容铁律）', async () => {
     grantWriteDirs('workspace', 'ws-a', ['/tmp/ws-grant']);
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'e3', op: 'effective', streamSessionId: SSN });

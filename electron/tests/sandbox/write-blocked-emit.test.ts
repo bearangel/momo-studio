@@ -42,9 +42,17 @@ function mkResult(callId: string, result: string): MessageEventRow {
   };
 }
 
-// 语料用真实 home（emit 内部取 os.homedir()——HOME 一级归并分支）
+// 语料用真实 home（emit 内部取 os.homedir()——HOME 一级归并分支）。
+// result 为子进程拼好的完整形态：exit_code + sandbox tag 行（终审 I2 检测依据）+ stdout 错误段
 const HOME = os.homedir();
-const CARGO_FAIL = `error: failed to open ${HOME}/.cargo/registry/cache/a.crate\n\nCaused by:\n  Operation not permitted (os error 1)`;
+const CARGO_FAIL = `exit_code: 1
+
+sandbox: seatbelt/net-on
+
+error: failed to open ${HOME}/.cargo/registry/cache/a.crate
+
+Caused by:
+  Operation not permitted (os error 1)`;
 
 describe('inspectEventBatch（spec §5.3）', () => {
   it('start+result 同批：命中 → dirs 归一 + command 关联', () => {
@@ -75,6 +83,15 @@ describe('inspectEventBatch（spec §5.3）', () => {
     const sig = inspectEventBatch([mkStart('c5', 'x'), mkResult('c5', CARGO_FAIL)]);
     expect(sig?.sessionId).toBe('s-resolve');
     expect(sig?.workspaceId).toBe('w-resolve');
+  });
+
+
+  it('result 文本无沙箱 tag 行（permissive/unsandboxed）→ 不触发（终审 I2）', () => {
+    // 同样的 EPERM 文本但没有 sandbox: seatbelt|bwrap 行——真实系统权限错误不弹卡
+    const plainFail = 'error: cannot write /etc/hosts\nOperation not permitted';
+    expect(inspectEventBatch([mkStart('c-nb', 'touch /etc/hosts'), mkResult('c-nb', plainFail)])).toBeNull();
+    const unsandboxedFail = 'exit_code: 1\n\nsandbox: unsandboxed:测试降级\n\nerror: Operation not permitted';
+    expect(inspectEventBatch([mkStart('c-ns', 'x'), mkResult('c-ns', unsandboxedFail)])).toBeNull();
   });
 
   it('消息行缺失（无映射）→ sessionId/workspaceId null（卡按钮降级依据）', () => {

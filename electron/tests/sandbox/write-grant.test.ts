@@ -89,6 +89,26 @@ describe('write-grant 存储（spec §3/§4）', () => {
     expect(cnt.c).toBe(0);
   });
 
+  it('生命周期：deleteWorkspace 级联删 sessions（FK CASCADE）不绕过会话键清理（终审 I3）', () => {
+    grantWriteDirs('session', 's-ws-cas-1', ['/tmp/a']);
+    grantWriteDirs('session', 's-ws-cas-2', ['/tmp/b']);
+    grantWriteDirs('workspace', 'w-cas', ['/tmp/c']);
+    getDb()
+      .prepare('INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)')
+      .run('w-cas', '级联测试', '/tmp/none', 'u-test');
+    for (const sid of ['s-ws-cas-1', 's-ws-cas-2']) {
+      getDb()
+        .prepare('INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+        .run(sid, 'w-cas', 't', 'chat', Date.now(), Date.now());
+    }
+    deleteWorkspace('w-cas');
+    // ws 键 + 其下全部 session 键都消失（CASCADE 路径不残留）
+    const cnt = getDb()
+      .prepare("SELECT COUNT(*) c FROM kv_store WHERE key LIKE 'sandbox_write_grant_%'")
+      .get() as { c: number };
+    expect(cnt.c).toBe(0);
+  });
+
   it('生命周期：deleteWorkspace 挂接清理工作空间键', () => {
     grantWriteDirs('workspace', 'w-del', ['/tmp/a']);
     getDb()

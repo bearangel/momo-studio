@@ -19,7 +19,7 @@
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
 import { getSandboxSettings } from './settings';
 import { getGrantedDirs } from './write-grant';
-import { getMessageByStreamSessionId } from '../storage/messages/repo';
+import { getLatestMessageByStreamSessionId } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
 
@@ -68,10 +68,12 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
     // 写授权（2026-10-03）下线——动态目录走 extraDirs
     const toolchainOn = settings.toolchainPolicy === 'allow';
     // extraDirs（spec §6.1）：streamSessionId → 聊天会话映射在主进程单点解析
-    //（子进程请求载荷零改动）；#roll 后缀行映射不到按 null（保守安全方向）
+    //（子进程请求载荷零改动）。roll 语义（终审 I1）：流轮转时消息行的
+    // stream_session_id 被改写为 #roll{n} 后缀——用「流族 = base + #roll 取
+    // 最新行」（getLatestMessageByStreamSessionId），否则 rename 后授权失效。
     let sessionId: string | null = null;
     try {
-      sessionId = getMessageByStreamSessionId(parsed.streamSessionId)?.sessionId ?? null;
+      sessionId = getLatestMessageByStreamSessionId(parsed.streamSessionId)?.sessionId ?? null;
     } catch {
       sessionId = null;
     }
