@@ -128,10 +128,9 @@ describe('文案与接线锁', () => {
     );
   });
 
-  // 接线子串锁在 runtime-entry 接线前会 FAIL——按 Task 4 联动约定标记 todo。
-  // vitest 合法形式：it('...', fn) 配 { todo: true } 第三参——断言已写好，Task 4
-  // 去掉 todo 标记即转正。
-  it('runtime-entry 已路由 write-grant-denied（接线子串锁——防广播链断环）（Task 4 接线后启用）', { todo: true }, () => {
+  // 接线子串锁：runtime-entry 已路由 write-grant-denied → notifyWriteGrantDenied(msg)，
+  // Task 4 接好后此锁上线——防广播链断环（断环即子进程收到广播但无人消费）。
+  it('runtime-entry 已路由 write-grant-denied（接线子串锁——防广播链断环）', () => {
     const src = fs.readFileSync(
       path.resolve(__dirname, '../../../src/main/agent/runtime-entry.ts'),
       'utf-8',

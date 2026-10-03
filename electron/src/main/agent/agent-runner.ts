@@ -815,6 +815,17 @@ export class AgentRunner {
   }
 
   /**
+   * 写授权拒绝广播（spec 2026-10-03 hard-gate §4.4）：向全部活跃流的子进程推送
+   * write-grant-denied——等待中的 waitForWriteGrant 按 §4.4 匹配规则解除为
+   * denied；无等待的子进程侧 no-op。照 notifyTaskReply 形态（5 行同构）。
+   */
+  notifyWriteGrantDenied(dirs: string[]): void {
+    for (const active of this.activeTasks.values()) {
+      active.runtime.child.send({ type: 'write-grant-denied', dirs });
+    }
+  }
+
+  /**
    * 销毁 runner + 释放所有活跃 runtime。
    * 反注册所有 message handler + 清兜底计时器 + release 每个 runtime
    * （v1 = kill 子进程）+ 清空活跃表。

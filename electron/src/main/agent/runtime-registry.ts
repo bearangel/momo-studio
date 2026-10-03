@@ -300,6 +300,26 @@ export function abortTasksBySessionEverywhere(executionSessionId: string): boole
   return hit;
 }
 
+/**
+ * 写授权拒绝广播入口（spec 2026-10-03 hard-gate §4.4）：sandbox:denyWrite IPC →
+ * 遍历全部 runner 的活跃流推送。fire-and-forget：无活跃流返回 false。
+ */
+export function broadcastWriteGrantDenied(dirs: string[]): boolean {
+  let hit = false;
+  for (const runner of agentRunners.values()) {
+    if (runner.activeTaskCount() > 0) {
+      runner.notifyWriteGrantDenied(dirs);
+      hit = true;
+    }
+  }
+  return hit;
+}
+
+/** 测试用：直接注入 stub runner（广播链单测——绕过 startTask 重组件 fixture） */
+export function __pushRunnerForTest(runner: AgentRunner): void {
+  agentRunners.set(runner.assignmentId, runner);
+}
+
 /** 任一 runner 在该会话上有活跃回合（chat / task 执行统一判定） */
 export function isSessionRunning(sessionId: string): boolean {
   for (const runner of agentRunners.values()) {

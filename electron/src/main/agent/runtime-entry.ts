@@ -92,6 +92,10 @@ import { initBrowserTools } from './tools/browser-tools';
 // shell-tools 经此桥往返 effective / wait 两 op
 import { handleNetTrustOpResult } from './tools/net-trust-bridge';
 import { handleProcessOpResult } from './tools/process-bridge';
+// 写授权硬门控拒绝广播（spec 2026-10-03 hard-gate §4.4）：主进程经
+// runtime-registry.broadcastWriteGrantDenied → child.send(write-grant-denied) →
+// runtime-entry 此分支路由至 write-grant-wait 的通知器。
+import { notifyWriteGrantDenied } from './tools/write-grant-wait';
 // v2.11 输入框上下文（spec 2026-09-16 §5.5）：task-config.context / steer.context
 // 经 renderTurnBody 包装进本轮用户正文；isExpandedContext 收窄 steer 载荷形状
 import { renderTurnBody, isExpandedContext } from './turn-context';
@@ -349,6 +353,8 @@ async function main(): Promise<void> {
       handleBrowserOpResult(msg);
     } else if (m.type === 'net-trust-op:result') {
       handleNetTrustOpResult(msg);
+    } else if (m.type === 'write-grant-denied') {
+      notifyWriteGrantDenied(msg);
     } else if (m.type === 'process-op:result') {
       handleProcessOpResult(msg);
     } else if (m.type === 'compaction:result') {
