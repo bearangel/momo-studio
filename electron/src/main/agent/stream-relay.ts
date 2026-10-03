@@ -23,6 +23,7 @@ import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { MessageEventBuffer } from '../storage/messages/event-buffer';
 import { projectEventsForWire } from '../storage/messages/event-projection';
+import { inspectEventBatch } from '../sandbox/write-blocked-emit';
 import {
   insertMessage,
   updateMessageStatus,
@@ -85,6 +86,14 @@ export function getEventBuffer(): MessageEventBuffer {
         if (!BrowserWindow) return;
         const win = BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) return;
+        // 通用写拦截检测（spec 2026-10-03 §5.3）：命中即推 sandbox:writeBlocked
+        //（renderer 直弹授权卡）；检测异常不阻断消息主路径
+        try {
+          const signal = inspectEventBatch(events);
+          if (signal) win.webContents.send('sandbox:writeBlocked', signal);
+        } catch {
+          // 检测失败静默——批次推送照常
+        }
         // I2 egress 投影：steer 事件剥离 context 全文（DB 保留供 resume 重放）
         win.webContents.send('session:message_event_batch', projectEventsForWire(events));
       },
