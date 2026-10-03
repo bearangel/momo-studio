@@ -255,6 +255,33 @@ describe('sandbox:grantWrite / revokeWrite（spec 2026-10-03 §6.3）', () => {
     ).toEqual({ c: 0 });
   });
 
+  it('grantWrite 带 resumeSessionId → 注入授权完成唤醒消息（owner + 授权目录 + 重试指引）', () => {
+    // 夹具：目标会话行（消息落库需要；成员 JOIN 链不做——路由属 session-service 测试职责）
+    getDb()
+      .prepare('INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)')
+      .run('ws-wake', '唤醒夹具', '/tmp/none', 'u-test');
+    getDb()
+      .prepare('INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+      .run('sess-wake', 'ws-wake', '唤醒测试', 'chat', Date.now(), Date.now());
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'session', key: 'sess-wake', dirs: ['/tmp/wake-a'], resumeSessionId: 'sess-wake' });
+    const row = getDb()
+      .prepare("SELECT sender, body FROM messages WHERE session_id = 'sess-wake' ORDER BY created_at DESC LIMIT 1")
+      .get() as { sender: string; body: string };
+    expect(row.sender).toBe('owner');
+    expect(row.body).toContain('授权');
+    expect(row.body).toContain('/tmp/wake-a');
+    expect(row.body).toContain('重试');
+  });
+
+  it('grantWrite 无 resumeSessionId → 不注入唤醒消息（设置页/无会话上下文路径）', () => {
+    const before = getDb().prepare('SELECT COUNT(*) c FROM messages').get() as { c: number };
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'workspace', key: 'w-silent', dirs: ['/tmp/silent'] });
+    const after = getDb().prepare('SELECT COUNT(*) c FROM messages').get() as { c: number };
+    expect(after.c).toBe(before.c);
+  });
+
   it('sandbox:listWriteGrants 列出全部工作空间持久授权（spec §8）', () => {
     const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
     grant(null, { scope: 'workspace', key: 'w-1', dirs: ['/tmp/a'] });

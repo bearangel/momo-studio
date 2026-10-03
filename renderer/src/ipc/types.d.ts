@@ -1435,7 +1435,13 @@ export interface SandboxApiSurface {
    * 通用写授权（spec 2026-10-03 §6.3）：授权卡三按钮的两档写入。
    * session=单个聊天会话持久 / workspace=工作空间持久；dirs 为卡上展示的归一目录。
    */
-  grantWrite(arg: { scope: 'session' | 'workspace'; key: string; dirs: string[] }): Promise<void>;
+  grantWrite(arg: {
+    scope: 'session' | 'workspace';
+    key: string;
+    dirs: string[];
+    /** 授权成功后向该会话注入唤醒消息（agent 自动重试被拦命令；卡按钮携带） */
+    resumeSessionId?: string;
+  }): Promise<void>;
   /** 撤销单条（设置页「已授权目录」） */
   revokeWrite(arg: { scope: 'session' | 'workspace'; key: string; dir: string }): Promise<void>;
   /** 工作空间持久授权列表（设置页「已授权目录」小节） */

@@ -16,6 +16,7 @@ import {
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
 import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
+import { sendUserMessage } from '../im/session-service';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -125,14 +126,31 @@ export function registerSandboxIpc(): void {
    * KV 两键（session=单个聊天会话持久 / workspace=工作空间持久）；dirs 为卡上
    * 展示的归一目录（显示即所授）。载荷形状逐字段校验——防 scope 越界 / 空键
    * 串写其他实体。
+   * resumeSessionId（GUI 验收 2026-10-03 第四轮）：授权成功后向该会话注入一条
+   * owner 身份的系统唤醒消息（kickoff 语义：跳过冲突检测/#T 激活）——经
+   * sendUserChat 路由到接待 agent 自动重试被拦命令，用户无需手打「继续」。
+   * fire-and-forget：唤醒失败只留日志，不影响授权结果返回。
    */
   ipcMain.handle('sandbox:grantWrite', (_e, arg: unknown) => {
-    const a = arg as { scope?: unknown; key?: unknown; dirs?: unknown };
+    const a = arg as { scope?: unknown; key?: unknown; dirs?: unknown; resumeSessionId?: unknown };
     if (a.scope !== 'session' && a.scope !== 'workspace') throw new Error('scope 非法');
     if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
     if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
     grantWriteDirs(a.scope, a.key, a.dirs);
     logger.info('写授权已授予', { scope: a.scope, key: a.key, count: a.dirs.length });
+    if (typeof a.resumeSessionId === 'string' && a.resumeSessionId !== '') {
+      const scopeLabel = a.scope === 'session' ? '本会话' : '本工作空间（持久）';
+      void sendUserMessage({
+        sessionId: a.resumeSessionId,
+        body: `【授权完成】用户已通过授权卡放行以下目录（${scopeLabel}）：\n${a.dirs.map((d) => `- ${d}`).join('\n')}\n请重试此前被沙箱拦截的命令，继续完成任务。`,
+        systemKickoff: true,
+      }).catch((err: unknown) => {
+        logger.warn('授权唤醒消息注入失败（授权本身已生效）', {
+          sessionId: a.resumeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   });
 
   /** 设置页「已授权目录」列表（spec §8） */
