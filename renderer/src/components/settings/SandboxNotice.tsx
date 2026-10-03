@@ -19,7 +19,6 @@ import type { SandboxInfo } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { DEFAULT_TOOLCHAIN_DIRS } from './SandboxSettingsPanel';
 import { Button } from '../ui/Button';
 
 /** PowerShell 授权命令（CurrentUser 作用域 + RemoteSigned）；卡片展示与复制单点对齐 */
@@ -39,9 +38,6 @@ export function SandboxNotice() {
   const [busy, setBusy] = useState(false);
   // netOff / 工具链拦截一次性标志（stream.store 实时检测）；导航走真实 ui.store（不强求定位到安全沙箱分类）
   const netBlockedSeen = useStreamStore((s) => s.netBlockedSeen);
-  const toolchainWriteBlockedSeen = useStreamStore((s) => s.toolchainWriteBlockedSeen);
-  // 失败命令预览（spec §8 终审 F2）：检测命中批次关联提取的命令（截断 200），null 不渲染
-  const lastToolchainBlockedCommand = useStreamStore((s) => s.lastToolchainBlockedCommand);
   const setActiveView = useUiStore((s) => s.setActiveView);
   // 授权按 workspace 键控（spec §4 grant 表）——「本会话允许」对当前激活 workspace 授予
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
@@ -59,14 +55,8 @@ export function SandboxNotice() {
     netBlockedSeen &&
     !info.netPromptDismissed &&
     info.settings.networkPolicy === 'deny';
-  const showToolchain =
-    !showNetOff &&
-    toolchainWriteBlockedSeen &&
-    !info.toolchainPromptDismissed &&
-    info.settings.toolchainPolicy === 'deny';
   const showBwrap =
     !showNetOff &&
-    !showToolchain &&
     info.state !== null &&
     info.state.platform === 'linux' &&
     !info.state.available &&
@@ -74,24 +64,21 @@ export function SandboxNotice() {
     info.installCommand !== null;
   const showWinPolicy =
     !showNetOff &&
-    !showToolchain &&
     info.state !== null &&
     info.state.platform === 'win32' &&
     info.state.executionPolicy === 'Restricted' &&
     !info.winPolicyPromptDismissed;
-  if (!showNetOff && !showToolchain && !showBwrap && !showWinPolicy) return null;
+  if (!showNetOff && !showBwrap && !showWinPolicy) return null;
 
   // 忽略提示卡：kv 持久化（主进程）+ 本地立即隐藏
-  const dismiss = (kind: 'bwrap' | 'winPolicy' | 'netOff' | 'toolchain'): void => {
+  const dismiss = (kind: 'bwrap' | 'winPolicy' | 'netOff'): void => {
     void ipc.sandbox.dismissPrompt(kind);
     setInfo(
       kind === 'bwrap'
         ? { ...info, bwrapPromptDismissed: true }
         : kind === 'winPolicy'
           ? { ...info, winPolicyPromptDismissed: true }
-          : kind === 'netOff'
-            ? { ...info, netPromptDismissed: true }
-            : { ...info, toolchainPromptDismissed: true },
+          : { ...info, netPromptDismissed: true },
     );
   };
 
@@ -112,41 +99,7 @@ export function SandboxNotice() {
     setInfo(await ipc.sandbox.reprobe());
   };
 
-  // 本会话放行工具链写（spec §4 grant 表）：grant 按当前激活 workspace 键控（仅
-  // 内存，app 运行期）；卡的本会话隐藏由本地 setInfo 承担——主进程不再持久化
-  // dismissed（2026-10-03 修复：永久 flag 会比会话级 grant 活得久，压死后续弹卡）。
-  // 无激活 workspace 时 no-op（不误授权，卡保留待用户处理）。busy 复用安装按钮
-  // 先例（防双击重复授权）；reject 在调用点 .catch 吞掉——卡片保留即用户可见的
-  // 失败反馈，可重试或走「去设置」。
-  const grantNow = async (): Promise<void> => {
-    if (!activeWorkspaceId) return;
-    setBusy(true);
-    try {
-      await ipc.sandbox.grantToolchain(activeWorkspaceId);
-      setInfo({ ...info, toolchainPromptDismissed: true });
-    } finally {
-      setBusy(false);
-    }
-  };
 
-  // 空清单一键恢复（GUI 验收迭代 2026-10-03）：串联两个既有显式通道——恢复默认
-  // 五项（updateGlobal，与设置页「恢复默认」同款）+ 本会话授权（grant）。恢复
-  // 是持久写，警示行明示恢复了什么、可再收紧——知情透明，不引入新权限面。
-  const restoreAndGrant = async (): Promise<void> => {
-    if (!activeWorkspaceId) return;
-    setBusy(true);
-    try {
-      await ipc.settings.updateGlobal({ sandboxToolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] });
-      await ipc.sandbox.grantToolchain(activeWorkspaceId);
-      setInfo({
-        ...info,
-        settings: { ...info.settings, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] },
-        toolchainPromptDismissed: true,
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <div
@@ -157,18 +110,16 @@ export function SandboxNotice() {
         <h2 className="text-base font-semibold text-primary">
           {showNetOff
             ? 'agent 的网络访问被沙箱拦截'
-            : showToolchain
-              ? 'agent 需要写入工具链目录'
-              : showBwrap
-                ? 'bash 沙箱需要 bubblewrap'
-                : 'PowerShell 脚本执行未授权'}
+            : showBwrap
+              ? 'bash 沙箱需要 bubblewrap'
+              : 'PowerShell 脚本执行未授权'}
         </h2>
         <button
           type="button"
           aria-label="关闭"
           onClick={() =>
             dismiss(
-              showNetOff ? 'netOff' : showToolchain ? 'toolchain' : showBwrap ? 'bwrap' : 'winPolicy',
+              showNetOff ? 'netOff' : showBwrap ? 'bwrap' : 'winPolicy',
             )
           }
           className="text-tertiary hover:text-primary leading-none -mt-1"
@@ -189,40 +140,6 @@ export function SandboxNotice() {
             </Button>
             <Button onClick={() => dismiss('netOff')}>知道了</Button>
           </div>
-        </>
-      ) : showToolchain ? (
-        <>
-          <p className="mb-3 leading-relaxed">
-            bash 的工具链/依赖安装（如 rustup、npm -g）被沙箱拦截。可本会话放行（仅清单内目录），或到设置永久开启。
-          </p>
-          {lastToolchainBlockedCommand ? (
-            <code className="block border border-subtle bg-canvas rounded px-2 py-1.5 font-mono text-xs text-secondary select-all break-all mb-3">
-              {lastToolchainBlockedCommand}
-            </code>
-          ) : null}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setActiveView('settings')}>
-              去设置
-            </Button>
-            {info.settings.toolchainDirs.length === 0 ? (
-              <Button
-                onClick={() => void restoreAndGrant().catch(() => {})}
-                disabled={busy || activeWorkspaceId === null}
-              >
-                {busy ? '处理中…' : '恢复默认清单并允许'}
-              </Button>
-            ) : (
-              <Button onClick={() => void grantNow().catch(() => {})} disabled={busy}>
-                {busy ? '授权中…' : '本会话允许'}
-              </Button>
-            )}
-          </div>
-          {info.settings.toolchainDirs.length === 0 && (
-            <p className="mt-2 text-xs text-status-warning">
-              目录清单为空。点击上方按钮将恢复默认五项（~/.rustup、~/.cargo、~/go、npm
-              全局、pip 用户目录）并在本会话放行；如需收紧可稍后在 设置→安全沙箱 调整。
-            </p>
-          )}
         </>
       ) : showBwrap ? (
         <>

@@ -1415,8 +1415,6 @@ export interface SandboxInfo {
   winPolicyPromptDismissed: boolean;
   /** net-off 拦截提示卡是否已关闭（v2.4.x：仅 deny 策略下展示的信息卡） */
   netPromptDismissed: boolean;
-  /** 工具链写拦截引导卡是否已关闭（spec §10——grant 行动后置位） */
-  toolchainPromptDismissed: boolean;
 }
 
 /**
@@ -1430,13 +1428,30 @@ export interface SandboxApiSurface {
   reprobe(): Promise<SandboxInfo>;
   /** pkexec 安装 bubblewrap（Linux）；pkexec 缺失/安装失败返回 ok:false + 输出摘要 */
   installBwrap(): Promise<{ ok: boolean; output: string }>;
-  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off / 工具链 拦截引导） */
-  dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff' | 'toolchain'): Promise<void>;
+  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off）
+   * 2026-10-03：toolchain kind 随事件驱动授权卡退役 */
+  dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff'): Promise<void>;
   /**
-   * 工具链写授权（spec §10）——本会话内允许该 workspace 写 ~/.rustup 等工具链目录；
-   * 同步置 toolchainPromptDismissed 持久化标记，引导卡不再弹。空串/非字符串抛错。
+   * 通用写授权（spec 2026-10-03 §6.3）：授权卡三按钮的两档写入。
+   * session=单个聊天会话持久 / workspace=工作空间持久；dirs 为卡上展示的归一目录。
    */
-  grantToolchain(workspaceId: string): Promise<void>;
+  grantWrite(arg: { scope: 'session' | 'workspace'; key: string; dirs: string[] }): Promise<void>;
+  /** 撤销单条（设置页「已授权目录」） */
+  revokeWrite(arg: { scope: 'session' | 'workspace'; key: string; dir: string }): Promise<void>;
+  /** 写拦截信号推送（主进程 stream-relay 检测命中即推；renderer 直弹授权卡） */
+  onWriteBlocked(cb: (e: WriteBlockedEvent) => void): () => void;
+}
+
+/**
+ * sandbox:writeBlocked 事件载荷（spec 2026-10-03 §5.3）——主进程 write-blocked-emit
+ * 的 WriteBlockedSignal 镜像（跨进程独立定义，仅结构对齐）。sessionId/workspaceId
+ * 为 null = 消息映射失败，卡按钮据此禁用。
+ */
+export interface WriteBlockedEvent {
+  sessionId: string | null;
+  workspaceId: string | null;
+  dirs: string[];
+  command: string;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

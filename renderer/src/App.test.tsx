@@ -70,6 +70,7 @@ const mockApi = {
     reprobe: vi.fn(),
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
+    onWriteBlocked: vi.fn(() => () => {}),
   },
   // v2.6.0 Task 6：ResumeNotice 挂载拉取中断任务——默认空列表使恢复卡不渲染，
   // 既有分支断言不受影响

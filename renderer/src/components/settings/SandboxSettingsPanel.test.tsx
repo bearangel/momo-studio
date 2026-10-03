@@ -55,7 +55,6 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
     netPromptDismissed: false,
-    toolchainPromptDismissed: false,
     ...overrides,
   };
 }
