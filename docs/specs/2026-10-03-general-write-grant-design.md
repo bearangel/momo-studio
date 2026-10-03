@@ -160,3 +160,14 @@ webContents.send('sandbox:writeBlocked', {
 - **归一规则边缘**：`~/Library/Python/...` 归并到 `~/Library` 偏宽——卡上「显示即所授」保证用户知情，可拒绝改走设置。验收若高频出现再细化归并档位。
 - **会话授权滥用面**：会话内 agent 可引导用户反复授权新目录——每目录一张卡、用户逐次确认，风险与现状持平。
 - **writeBlocked 事件风暴**：agent 重试连发——renderer 覆盖式单卡 + 同 dirs 去重已覆盖；极端不同 dirs 轮换场景验收观察。
+
+## 12. 有界阻塞等待（GUI 验收第五轮增补，2026-10-03 深夜）
+
+浏览器等待模式的移植（DEFAULT_AGENT_WAIT_MS=120s 先例）：**在场 = 无缝续跑；不在场 = 优雅回退**。
+
+- **等待循环（子进程 bash-write-wait.ts）**：bash 结果检测命中 → 上报 `{type:'write-blocked-report', streamSessionId, workspaceId, dirs, command}`（fire-and-forget，照 proc-group:register 形态）→ 等待总预算 `BASH_WRITE_WAIT_MS=120s`、tick 2s、监听 `ctx.abortSignal`（types.ts 既有约定）。
+- **覆盖判定**：每 tick 经 net-trust 桥查 effective——`toolchainOn || dirs.some(d => extraDirs.includes(d))`（授权目录即归一产物，等值匹配）。
+- **重执行**：covered 后同一命令重新 spawn（extraDirs 每次查询自动生效）→ 新结果再检测：仍 blocked 且预算未尽 → 继续等待（多目录安装单预算内收敛）；成功/预算尽 → 返回最终结果（超时路径 = 原被拦结果 + 提示段，即 §5.1 既有行为）。
+- **卡触发时机迁移**：主信号 = 等待开始时的子进程上报（runtime-spawner messageHandler 新分支 → 解析 sessionId → 推 sandbox:writeBlocked）；stream-relay 的 inspectEventBatch 降级为迟到兜底（超时返回的被拦结果事件）。
+- **与注入唤醒的分工**：等待命中 = 同一工具调用内续跑（agent 无感）；超时后迟到的授权 = §11 唤醒注入（回合外拉起）。两者共用 KV 与卡。
+- **abort**：等待中被中止 → 立即返回「已中断」（abortSignal 监听，不占满预算）。
