@@ -24,6 +24,7 @@ const installBwrapMock = vi.fn();
 const dismissPromptMock = vi.fn();
 const updateGlobalMock = vi.fn();
 const grantWriteMock = vi.fn();
+const denyWriteMock = vi.fn();
 
 // 桩 window.api（sandbox + settings 命名空间；组件经 ipc Proxy 透传消费）
 const mockApi = {
@@ -33,6 +34,7 @@ const mockApi = {
     installBwrap: installBwrapMock,
     dismissPrompt: dismissPromptMock,
     grantWrite: grantWriteMock,
+    denyWrite: denyWriteMock,
   },
   settings: {
     updateGlobal: updateGlobalMock,
@@ -104,6 +106,7 @@ describe('SandboxNotice（v2.4 Task 9）', () => {
     installBwrapMock.mockReset();
     dismissPromptMock.mockReset();
     grantWriteMock.mockReset();
+    denyWriteMock.mockReset();
   });
 
   it('挂载时调 ipc.sandbox.getState', async () => {
@@ -538,6 +541,15 @@ describe('SandboxNotice：netOff 拦截卡', () => {
 describe('SandboxNotice：通用写授权卡', () => {
   const EVT: WriteBlockedEvent = { sessionId: 's-1', workspaceId: 'w-1', dirs: ['/Users/x/.cargo'], command: 'cargo build' };
 
+  // 本 describe 无既有 mock 重置先例，deny 断言用 toHaveBeenCalledWith 需防跨用例
+  // 调用累积误绿——补 beforeEach 单独重置 denyWriteMock；默认给 resolved：真实
+  // IPC 桥（ipcRenderer.invoke）恒返回 Promise，裸 vi.fn() 回 undefined 会让
+  // denyNow 里 .catch(undefined) 同步抛错（mock 保真度：仿真真实返回语义）
+  beforeEach(() => {
+    denyWriteMock.mockReset();
+    denyWriteMock.mockResolvedValue(undefined);
+  });
+
   function receive(e: typeof EVT): void {
     act(() => {
       // 隔离：netBlockedSeen 只置不清（一次性语义）——文件内早前 netOff 用例的
@@ -578,6 +590,37 @@ describe('SandboxNotice：通用写授权卡', () => {
     await waitFor(() =>
       expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dirs: ['/Users/x/.cargo'], resumeSessionId: 's-1' }),
     );
+  });
+
+  // —— 拒绝接线（spec hard-gate §8）：拒绝/X 关闭 → denyWrite 广播解除子进程等待 ——
+
+  it('拒绝 → denyWrite 广播（sessionId+dirs）+ 卡消失', async () => {
+    denyWriteMock.mockResolvedValue(undefined);
+    receive(EVT);
+    render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
+    await waitFor(() =>
+      expect(denyWriteMock).toHaveBeenCalledWith({ sessionId: 's-1', dirs: ['/Users/x/.cargo'] }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('sandbox-notice')).toBeNull());
+  });
+
+  it('X 关闭（writeBlocked 卡）→ 同 denyWrite（关闭即拒绝语义）', async () => {
+    denyWriteMock.mockResolvedValue(undefined);
+    receive(EVT);
+    render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    await waitFor(() =>
+      expect(denyWriteMock).toHaveBeenCalledWith({ sessionId: 's-1', dirs: ['/Users/x/.cargo'] }),
+    );
+  });
+
+  it('空 dirs 降级卡关闭 → denyWrite { sessionId, dirs: [] }（空对空匹配链路）', async () => {
+    denyWriteMock.mockResolvedValue(undefined);
+    receive({ ...EVT, dirs: [] });
+    render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    await waitFor(() => expect(denyWriteMock).toHaveBeenCalledWith({ sessionId: 's-1', dirs: [] }));
   });
 
   it('拒绝 → 卡消失 + 同 dirs 不再弹（拒绝记忆）', () => {

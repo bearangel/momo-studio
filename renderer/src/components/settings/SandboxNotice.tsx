@@ -117,6 +117,16 @@ export function SandboxNotice() {
     }
   };
 
+  // 拒绝即时解除（spec hard-gate §8）：本地记忆（同 dirs 不再弹）+ IPC 广播解除
+  // 子进程等待。fire-and-forget：广播失败只影响等待解除时延（下轮 abort 仍可终止）
+  const denyNow = (): void => {
+    if (!writePending) return;
+    void ipc.sandbox
+      .denyWrite({ sessionId: writePending.sessionId, dirs: writePending.dirs })
+      .catch(() => {});
+    denyPending();
+  };
+
   // 一键安装：pkexec 装包 → 重新探测刷新。装好（available=true）卡片自然消失；
   // 失败（ok:false）reprobe 后仍不可用，卡片保留——用户可改用展示中的手动命令。
   const install = async (): Promise<void> => {
@@ -160,7 +170,7 @@ export function SandboxNotice() {
             if (showNetOff) dismiss('netOff');
             else if (showBwrap) dismiss('bwrap');
             else if (showWinPolicy) dismiss('winPolicy');
-            else denyPending(); // writeBlocked 卡关闭 = 拒绝（记忆同 dirs）
+            else denyNow(); // writeBlocked 卡关闭 = 拒绝（记忆同 dirs + 广播解除等待）
           }}
           className="text-tertiary hover:text-primary leading-none -mt-1"
         >
@@ -208,7 +218,7 @@ export function SandboxNotice() {
             <Button variant="ghost" onClick={() => setActiveView('settings')}>
               去设置
             </Button>
-            <Button variant="ghost" onClick={() => denyPending()}>
+            <Button variant="ghost" onClick={() => denyNow()}>
               拒绝
             </Button>
             <Button
