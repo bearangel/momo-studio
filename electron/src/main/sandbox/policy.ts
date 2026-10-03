@@ -31,7 +31,7 @@ export function sensitiveCandidates(home: string): string[] {
   return base;
 }
 
-export function buildPolicy(workspaceDir: string, networkEnabled: boolean, toolchainDirs: string[] = []): ShellSandboxPolicy {
+export function buildPolicy(workspaceDir: string, networkEnabled: boolean, extraWriteDirs: string[] = []): ShellSandboxPolicy {
   const home = realpath(os.homedir());
   return {
     workspaceDir: realpath(workspaceDir),
@@ -47,6 +47,6 @@ export function buildPolicy(workspaceDir: string, networkEnabled: boolean, toolc
     // 到 linux.ts 消费点；macOS Seatbelt 对不存在路径的 allow 规则无害且必须
     // 保留——pip:user（~/Library/Python 首装前不存在）等场景依赖「授权即生效」
     //（spec §9：安装动作会创建它），全局过滤会让 grant 后写入仍 EPERM
-    toolchainDirs: [...new Set(toolchainDirs)],
+    extraWriteDirs: [...new Set(extraWriteDirs)],
   };
 }

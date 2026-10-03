@@ -172,8 +172,10 @@ export class ShellTools implements ToolModule {
       command,
       net === null ? undefined : {
         networkEnabled: net.netOn,
-        // v2.5：工具链授权态（spec §4）——授权时 profile 展开工具链目录 RW bind
+        // 预置清单授权态（toolchainPolicy 永久开）；动态授权目录（extraDirs）
+        // 恒参与——与预置开关独立（spec 2026-10-03 §6.2）
         toolchainEnabled: net.toolchainOn,
+        extraDirs: net.extraDirs,
       },
     );
     if (plan.kind === 'blocked') throw new Error(plan.reason);

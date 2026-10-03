@@ -168,6 +168,35 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
       fs.rmSync(profile, { force: true });
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
+
+  it('extraDirs 与预置清单并集进 profile（授权后下一次调用立即生效，spec §6.2）', () => {
+    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      __setSandboxStateForTest({ platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: null,
+        available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 });
+      __setSandboxSettingsForTest(settings('strict', 'deny'));
+      // 预置清单未授权（toolchainEnabled=false）+ 动态授权目录 → 后者仍进 profile
+      const plan = resolveShellSpawn(tmp, 'cargo build', { toolchainEnabled: false, extraDirs: ['/tmp/granted-dir'] });
+      expect(plan.kind).toBe('wrapped');
+      if (plan.kind !== 'wrapped') return;
+      const profile = fs.readFileSync(plan.args[1] as string, 'utf-8');
+      expect(profile).toContain('(allow file-write* (subpath "/tmp/granted-dir"))');
+      fs.rmSync(plan.args[1] as string, { force: true });
+      // 两来源并集去重：预置 + extraDirs 相同目录只出现一次
+      const plan2 = resolveShellSpawn(tmp, 'cargo build', {
+        toolchainEnabled: true,
+        extraDirs: [...expandToolchainDirs([...DEFAULT_TOOLCHAIN_DIRS], os.homedir())],
+      });
+      if (plan2.kind !== 'wrapped') return;
+      const profile2 = fs.readFileSync(plan2.args[1] as string, 'utf-8');
+      const count = (profile2.match(/allow file-write\* \(subpath/g) ?? []).length;
+      // 预置五项中 npm/pip 占位项本机可解析、~ 项归一——并集后写段条数应 ≤ 展开清单长（去重生效不翻倍）
+      const expanded = expandToolchainDirs([...DEFAULT_TOOLCHAIN_DIRS], os.homedir());
+      expect(count).toBeLessThanOrEqual(expanded.length + 2); // +2 = workspace/tmp 允许行（写段固定基线）
+      fs.rmSync(plan2.args[1] as string, { force: true });
+    } finally { desc && Object.defineProperty(process, 'platform', desc); }
+  });
 });
 
 describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 修复）', () => {

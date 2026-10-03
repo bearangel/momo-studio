@@ -34,7 +34,7 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
 export function resolveShellSpawn(
   workspaceDir: string,
   command: string,
-  opts?: { networkEnabled?: boolean; toolchainEnabled?: boolean },
+  opts?: { networkEnabled?: boolean; toolchainEnabled?: boolean; extraDirs?: string[] },
 ): SpawnPlan {
   const settings = getSandboxSettings();
   // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
@@ -43,14 +43,14 @@ export function resolveShellSpawn(
   //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
-  // 工具链目录授权（v2.5 spec §9）：展开在决策点做——授权态才展开设置字面
-  // 清单（~/ 前缀 + npm/pip 占位 → 归一绝对路径）；未授权/未传恒空数组
-  // （默认安全方向，既有调用方零破坏）。settings.toolchainPolicy 不在此判
-  // ——会话级「本会话允许」由 shell-tools 解析后经 opts 显式传入。
-  const toolchainDirs = opts?.toolchainEnabled
+  // 写授权目录（spec 2026-10-03 §6.2）：预置清单（授权态才展开字面清单 + 占位项）
+  // ∪ 动态授权（extraDirs——主进程三层合成的动态两层回传，恒参与：卡授权后
+  // 下一次 spawn 立即生效，与预置开关独立）。
+  const presetDirs = opts?.toolchainEnabled
     ? expandToolchainDirs(settings.toolchainDirs, os.homedir())
     : [];
-  const policy = buildPolicy(workspaceDir, networkEnabled, toolchainDirs);
+  const extraWriteDirs = [...new Set([...presetDirs, ...(opts?.extraDirs ?? [])])];
+  const policy = buildPolicy(workspaceDir, networkEnabled, extraWriteDirs);
 
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';

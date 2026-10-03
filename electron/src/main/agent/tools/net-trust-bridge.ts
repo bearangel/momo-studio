@@ -33,8 +33,11 @@ const EFFECTIVE_BRIDGE_TIMEOUT_MS = 60_000;
 /** spawn 前有效网络态（主进程双态策略单点判定的镜像产物；v2.5 起含工具链授权态） */
 export interface EffectiveNetworkDecision {
   netOn: boolean;
-  /** v2.5 工具链目录写授权（spec §4）：永久 allow || 会话 grant（按 workspaceId 键控） */
+  /** v2.5 工具链目录写授权：永久 allow（toolchainPolicy）；会话 grant 布尔已下线 */
   toolchainOn: boolean;
+  /** 通用写授权目录（spec 2026-10-03 §6.1）：主进程 session ∪ workspace 两层合成；
+   * 旧主进程应答缺该字段时按 [] 兜底（两端混跑安全） */
+  extraDirs: string[];
 }
 
 interface PendingEntry {
@@ -89,8 +92,18 @@ export function requestEffectiveNetwork(
   streamSessionId: string,
   workspaceId?: string,
 ): Promise<EffectiveNetworkDecision> {
-  return sendNetTrustOp('effective', { streamSessionId, workspaceId }, EFFECTIVE_BRIDGE_TIMEOUT_MS) as
-    Promise<EffectiveNetworkDecision>;
+  // 应答规范化（两端混跑安全）：旧主进程应答缺 extraDirs / 布尔字段异常时兜底
+  return sendNetTrustOp('effective', { streamSessionId, workspaceId }, EFFECTIVE_BRIDGE_TIMEOUT_MS)
+    .then((payload) => {
+      const p = payload as Partial<EffectiveNetworkDecision>;
+      return {
+        netOn: p.netOn === true,
+        toolchainOn: p.toolchainOn === true,
+        extraDirs: Array.isArray(p.extraDirs)
+          ? p.extraDirs.filter((d): d is string => typeof d === 'string')
+          : [],
+      };
+    });
 }
 
 /**

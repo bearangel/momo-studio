@@ -19,8 +19,8 @@ export function renderSeatbeltProfile(policy: ShellSandboxPolicy): string {
   // 工具链目录授权（v2.5 spec §9）：每目录单独 allow file-write*。deny
   // default 与 sensitiveDirs deny 的后置覆盖语义不变——授权只扩写维度，
   // 不动读遮蔽；空数组时零行（不得污染 profile 结构）
-  const toolchainSection = policy.toolchainDirs.length > 0
-    ? `${policy.toolchainDirs.map((d) => `(allow file-write* (subpath ${escapeSeatbeltString(d)}))`).join('\n')}\n`
+  const toolchainSection = policy.extraWriteDirs.length > 0
+    ? `${policy.extraWriteDirs.map((d) => `(allow file-write* (subpath ${escapeSeatbeltString(d)}))`).join('\n')}\n`
     : '';
   // 已知边界（审查 F4 文档化，不改动行为）：下方 mach-lookup 为全放行——macOS
   // 关键服务（securityd / keychaind 等）经 Mach 端口而非文件系统访问 Keychain，

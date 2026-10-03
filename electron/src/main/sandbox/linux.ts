@@ -27,7 +27,7 @@ export function buildBwrapArgs(policy: ShellSandboxPolicy): string[] {
   // 按磁盘类型分派同款先例——bwrap 特定顾虑在 bwrap 参数构造处解决）：
   // --bind 对不存在路径硬失败，绝不能让单条幽灵路径打挂整个会话的 spawn；
   // policy 层保持全量透传（macOS Seatbelt 对不存在路径 allow 无害）
-  for (const dir of policy.toolchainDirs) {
+  for (const dir of policy.extraWriteDirs) {
     if (!fs.existsSync(dir)) continue;
     args.push('--bind', dir, dir);
   }

@@ -7,16 +7,19 @@
 // 超时按拒绝收敛，等效于变相 deny。现行有效网络态 = settings kv 双态策略
 // 单点判定：netOn = (networkPolicy === 'allow')。
 //
-// v2.5 工具链授权（spec §4/§6）：effective payload 扩展为 { netOn, toolchainOn }
-// 双字段。toolchainOn 单点判定：永久开（toolchainPolicy === 'allow'）|| 会话 grant
-// 按 workspace 键控（hasToolchainGrant(workspaceId)）。请求载荷新增可选
-// workspaceId?: string——旧子进程不传该字段时 grant 按 false（向后兼容）。
+// v2.5 工具链授权 + 2026-10-03 通用写授权（spec §6.1）：effective payload 为
+// { netOn, toolchainOn, extraDirs } 三字段。toolchainOn 单点判定：永久开
+//（toolchainPolicy === 'allow'）——会话级 grants 布尔模型已随通用写授权下线。
+// extraDirs = session ∪ workspace 两层动态授权目录（write-grant KV），sessionId
+// 由主进程从请求载荷 streamSessionId 经 messages 表映射（子进程请求零改动）；
+// 旧子进程不传 workspaceId 时 extraDirs 恒空数组（向后兼容）。
 //
 // 本模块保留 effective 单 op 的子进程桥对端（线协议名与 op 名不变，payload
 // 形状扩展——线协议铁律：只加字段，不改既有字段含义）：ShellTools 在 runtime
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
 import { getSandboxSettings } from './settings';
-import { hasToolchainGrant } from './toolchain-grant';
+import { getGrantedDirs } from './write-grant';
+import { getMessageByStreamSessionId } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
 
@@ -25,12 +28,12 @@ interface NetTrustOpMsg {
   requestId: string;
   op: 'effective';
   streamSessionId: string;
-  /** v2.5：可选 workspaceId——grant 按该键查表；缺省按 false（向后兼容旧子进程） */
+  /** v2.5：可选 workspaceId——动态授权按该键查表；缺省按空（向后兼容旧子进程） */
   workspaceId?: string;
 }
 
 export type NetTrustOpResult =
-  | { ok: true; payload: { netOn: boolean; toolchainOn: boolean } }
+  | { ok: true; payload: { netOn: boolean; toolchainOn: boolean; extraDirs: string[] } }
   | { ok: false; error: string };
 
 function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
@@ -62,11 +65,19 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
   try {
     const settings = getSandboxSettings();
     const netOn = settings.networkPolicy === 'allow';
-    // 工具链写授权（spec §4 单点判定）：永久开 || 会话 grant（旧载荷无 workspaceId 按 false）
-    const toolchainOn =
-      settings.toolchainPolicy === 'allow' ||
-      (parsed.workspaceId !== undefined && hasToolchainGrant(parsed.workspaceId));
-    return { ok: true, payload: { netOn, toolchainOn } };
+    // 工具链写授权：永久开（toolchainPolicy）；会话级 grants 布尔模型已随通用
+    // 写授权（2026-10-03）下线——动态目录走 extraDirs
+    const toolchainOn = settings.toolchainPolicy === 'allow';
+    // extraDirs（spec §6.1）：streamSessionId → 聊天会话映射在主进程单点解析
+    //（子进程请求载荷零改动）；#roll 后缀行映射不到按 null（保守安全方向）
+    let sessionId: string | null = null;
+    try {
+      sessionId = getMessageByStreamSessionId(parsed.streamSessionId)?.sessionId ?? null;
+    } catch {
+      sessionId = null;
+    }
+    const extraDirs = getGrantedDirs(sessionId, parsed.workspaceId ?? null);
+    return { ok: true, payload: { netOn, toolchainOn, extraDirs } };
   } catch (err) {
     return { ok: false, error: `网络策略读取失败: ${err instanceof Error ? err.message : String(err)}` };
   }

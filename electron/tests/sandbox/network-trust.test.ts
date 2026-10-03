@@ -1,14 +1,11 @@
 // electron/tests/sandbox/network-trust.test.ts
-//
-// 网络出站策略查询测试（2026-09-13 修订 B 双态化 + 2026-10-01 v2.5 工具链授权）：
-//   - handleNetTrustOp（effective 单 op）：allow → netOn:true / deny → netOn:false
-//   - v2.5 新增：工具链写授权 toolchainOn（policy allow 永久 || 会话 grant 按 workspace 键控）
-//   - 旧载荷兼容：无 workspaceId → grant 按 false（向后兼容旧子进程）
-//   - 载荷形状防线：非对象 / 缺字段 / 非法 op → ok:false（中文错误，不裸抛）
-//   - 设置读取故障 → ok:false 降级（不挂死、不裸抛——子进程桥自有回退）
-// 三态时代的 gate / 等待协议 / 三值应答 / 超时收敛 / detectNetworkBlocked
-// 已随 ask 信任门机制全链下线（相关用例同批删除）。
+// handleNetTrustOp（effective 单 op，修订 B 双态 + v2.5 双字段 + 2026-10-03 extraDirs）。
+// 旧 grants 布尔模型已随通用写授权下线：toolchainOn 仅剩 toolchainPolicy==='allow'
+// 永久开关；动态授权目录经 extraDirs（session/ws 两层合成）回传。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // 设置读取故障分支注入点（其余用例走真实 testOverride 钩子，mock 收窄到单函数）
 const { settingsBoom } = vi.hoisted(() => ({ settingsBoom: { value: false } }));
@@ -26,11 +23,12 @@ vi.mock('../../src/main/sandbox/settings', async (importOriginal) => {
 
 import { handleNetTrustOp } from '../../src/main/sandbox/network-trust';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
+import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
 import {
-  DEFAULT_TOOLCHAIN_DIRS,
-  grantToolchainWorkspace,
-  __clearToolchainGrantsForTest,
-} from '../../src/main/sandbox/toolchain-grant';
+  grantWriteDirs,
+  __clearWriteGrantsForTest,
+} from '../../src/main/sandbox/write-grant';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
 /** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
@@ -38,26 +36,34 @@ function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow'
 }
 
 const SSN = 'ssn-trust-1';
+const tmpRoot = path.join(os.tmpdir(), `net-trust-test-${Date.now()}`);
+
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
+  __clearWriteGrantsForTest();
+  __setSandboxSettingsForTest(settings('strict', 'allow'));
+});
+afterEach(() => {
+  __setSandboxSettingsForTest(null);
+  __clearWriteGrantsForTest();
+  closeDb();
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  delete process.env.AP_USER_DATA_DIR;
+});
 
 describe('handleNetTrustOp（effective 单 op 路由，修订 B 双态）', () => {
-  beforeEach(() => {
-    __setSandboxSettingsForTest(settings('strict', 'allow'));
-  });
-  afterEach(() => {
-    __setSandboxSettingsForTest(null);
-  });
-
-  it('policy=allow → { ok:true, payload:{ netOn:true, toolchainOn:false } }', async () => {
-    // 旧载荷（无 workspaceId）：toolchainPolicy 默认 deny + 无 grant → toolchainOn=false
+  it('policy=allow → { ok:true, payload:{ netOn:true, toolchainOn:false, extraDirs:[] } }', async () => {
     __setSandboxSettingsForTest(settings('strict', 'allow'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r1', op: 'effective', streamSessionId: SSN });
-    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false } });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false, extraDirs: [] } });
   });
 
-  it('policy=deny → { ok:true, payload:{ netOn:false, toolchainOn:false } }', async () => {
+  it('policy=deny → { ok:true, payload:{ netOn:false, toolchainOn:false, extraDirs:[] } }', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r2', op: 'effective', streamSessionId: SSN });
-    expect(r).toEqual({ ok: true, payload: { netOn: false, toolchainOn: false } });
+    expect(r).toEqual({ ok: true, payload: { netOn: false, toolchainOn: false, extraDirs: [] } });
   });
 
   it('载荷非对象 → ok:false（中文错误，不裸抛）', async () => {
@@ -87,10 +93,8 @@ describe('handleNetTrustOp（effective 单 op 路由，修订 B 双态）', () =
   });
 
   it('设置读取抛错 → ok:false 降级（不挂死、不裸抛——错误路径专项）', async () => {
-    // 直接改写 testOverride 为一个读取即抛的形态不可行（钩子是纯值），改经
-    // vi.spyOn 临时替换 getSandboxSettings 抛错，验证 handleNetTrustOp 吸收异常。
-    const settings = await import('../../src/main/sandbox/settings');
-    const spy = vi.spyOn(settings, 'getSandboxSettings').mockImplementation(() => {
+    const settingsMod = await import('../../src/main/sandbox/settings');
+    const spy = vi.spyOn(settingsMod, 'getSandboxSettings').mockImplementation(() => {
       throw new Error('DB 异常');
     });
     const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'r6', op: 'effective', streamSessionId: SSN });
@@ -100,44 +104,16 @@ describe('handleNetTrustOp（effective 单 op 路由，修订 B 双态）', () =
   });
 });
 
-describe('effective op 工具链双字段（spec §6）', () => {
-  beforeEach(() => {
-    // 会话 grant 表跨用例需清理——避免前例置位泄露（testOverride 不影响 grants）
-    __clearToolchainGrantsForTest();
-    __setSandboxSettingsForTest(settings('strict', 'allow'));
-  });
-  afterEach(() => {
-    __setSandboxSettingsForTest(null);
-    __clearToolchainGrantsForTest();
-  });
-
-  it('默认 deny 且无 grant → toolchainOn=false（spec §6 Review Focus 4）', async () => {
-    __setSandboxSettingsForTest(settings('strict', 'allow'));
+describe('effective op 工具链双字段 + extraDirs（spec 2026-10-03 §6.1）', () => {
+  it('默认 deny → toolchainOn=false（永久开关关闭；grants 布尔模型已下线）', async () => {
     const r = await handleNetTrustOp({
       type: 'net-trust-op', requestId: 'r1', op: 'effective',
       streamSessionId: SSN, workspaceId: 'ws-a',
     });
-    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false } });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false, extraDirs: [] } });
   });
 
-  it('会话 grant 置位 → toolchainOn=true；跨 workspace 隔离（spec §6 Review Focus 3）', async () => {
-    grantToolchainWorkspace('ws-a');
-    const r = await handleNetTrustOp({
-      type: 'net-trust-op', requestId: 'r2a', op: 'effective',
-      streamSessionId: SSN, workspaceId: 'ws-a',
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.payload.toolchainOn).toBe(true);
-
-    const r2 = await handleNetTrustOp({
-      type: 'net-trust-op', requestId: 'r2b', op: 'effective',
-      streamSessionId: SSN, workspaceId: 'ws-b',
-    });
-    expect(r2.ok).toBe(true);
-    if (r2.ok) expect(r2.payload.toolchainOn).toBe(false);
-  });
-
-  it('policy=allow → 无 grant 也 true（永久开）', async () => {
+  it('policy=allow → 无动态授权也 true（永久开）', async () => {
     __setSandboxSettingsForTest({
       mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'allow', toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS],
     });
@@ -149,13 +125,35 @@ describe('effective op 工具链双字段（spec §6）', () => {
     if (r.ok) expect(r.payload.toolchainOn).toBe(true);
   });
 
-  it('旧载荷（无 workspaceId）→ grant 按 false 兼容（spec §6 Review Focus 4）', async () => {
-    // 即便 grant 已置位，旧载荷（无 workspaceId）按 false 处理——向后兼容旧子进程
-    grantToolchainWorkspace('ws-a');
+  it('extraDirs：workspace 授权参与合成（streamSessionId 无消息映射 → session 层缺省）', async () => {
+    grantWriteDirs('workspace', 'ws-a', ['/tmp/ws-grant']);
     const r = await handleNetTrustOp({
-      type: 'net-trust-op', requestId: 'r4', op: 'effective', streamSessionId: SSN,
+      type: 'net-trust-op', requestId: 'e1', op: 'effective',
+      streamSessionId: SSN, workspaceId: 'ws-a',
+    });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false, extraDirs: ['/tmp/ws-grant'] } });
+  });
+
+  it('extraDirs：streamSessionId 经 messages 映射命中 → session 层参与合成', async () => {
+    grantWriteDirs('session', 's-map', ['/tmp/session-grant']);
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-1', 's-map', 'agent-x', 'message', '', 'ss-map', Date.now(), Date.now());
+    const r = await handleNetTrustOp({
+      type: 'net-trust-op', requestId: 'e2', op: 'effective',
+      streamSessionId: 'ss-map', workspaceId: 'ws-a',
     });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.payload.toolchainOn).toBe(false);
+    if (r.ok) {
+      expect(r.payload.extraDirs).toContain('/tmp/session-grant');
+    }
+  });
+
+  it('旧载荷（无 workspaceId）→ extraDirs 恒空数组不抛错（兼容铁律）', async () => {
+    grantWriteDirs('workspace', 'ws-a', ['/tmp/ws-grant']);
+    const r = await handleNetTrustOp({ type: 'net-trust-op', requestId: 'e3', op: 'effective', streamSessionId: SSN });
+    expect(r).toEqual({ ok: true, payload: { netOn: true, toolchainOn: false, extraDirs: [] } });
   });
 });
