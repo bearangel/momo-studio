@@ -38,6 +38,7 @@ export function extractBlockedPaths(command: string, stderr: string, stdout = ''
       if (!ERROR_LINE.test(line)) continue;
       for (const m of line.matchAll(PATH_TOKEN)) {
         const p = m[1];
+        if (p === undefined) continue;
         if (!out.includes(p)) out.push(p);
         if (out.length >= 3) return;
       }
@@ -59,7 +60,8 @@ export function normalizeGrantDirs(paths: string[], home: string): string[] {
   for (const raw of paths) {
     let dir: string | null = null;
     if (raw.startsWith(`${home}/`)) {
-      dir = path.join(home, raw.slice(home.length + 1).split('/')[0]);
+      const firstSeg = raw.slice(home.length + 1).split('/')[0];
+      if (firstSeg !== undefined) dir = path.join(home, firstSeg);
     } else {
       let cur = raw;
       while (cur !== '/' && cur !== '') {

@@ -11,7 +11,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: tmp, tmpDir: os.tmpdir(),
-    sensitiveDirs: [], networkEnabled: false, toolchainDirs: [], ...over,
+    sensitiveDirs: [], networkEnabled: false, extraWriteDirs: [], ...over,
   };
 }
 
@@ -70,7 +70,7 @@ describe('buildBwrapArgs', () => {
       tmpDir: '/tmp',
       sensitiveDirs: ['/home/u/.ssh'],
       networkEnabled: false,
-      toolchainDirs: [],
+      extraWriteDirs: [],
     };
     expect(buildBwrapArgs(p)).toMatchInlineSnapshot(`
       [
@@ -102,13 +102,13 @@ describe('buildBwrapArgs', () => {
     createdTmpDirs.push(tmp);
     const real = path.join(tmp, '.rustup');
     fs.mkdirSync(real);
-    const granted = buildBwrapArgs(mkPolicy({ toolchainDirs: [real] }));
+    const granted = buildBwrapArgs(mkPolicy({ extraWriteDirs: [real] }));
     expect(granted).toContain('--bind');
     const idx = granted.indexOf(real);
     expect(idx).toBeGreaterThan(0);
     expect(granted[idx - 1]).toBe('--bind');
     expect(granted[idx + 1]).toBe(real);
-    const none = buildBwrapArgs(mkPolicy({ toolchainDirs: [] }));
+    const none = buildBwrapArgs(mkPolicy({ extraWriteDirs: [] }));
     expect(none.filter((a) => a === real)).toHaveLength(0);
   });
 
@@ -118,7 +118,7 @@ describe('buildBwrapArgs', () => {
     const ghost = path.join(tmp, 'toolchain-ghost');
     const real = path.join(tmp, 'toolchain-real');
     fs.mkdirSync(real);
-    const args = buildBwrapArgs(mkPolicy({ toolchainDirs: [ghost, real] }));
+    const args = buildBwrapArgs(mkPolicy({ extraWriteDirs: [ghost, real] }));
     // 幽灵目录：零出现（单条不存在路径不得打挂整个会话的 spawn）
     expect(args.filter((a) => a === ghost)).toHaveLength(0);
     // 存在目录：正常 bind（过滤只剔除幽灵，不影响其余授权）

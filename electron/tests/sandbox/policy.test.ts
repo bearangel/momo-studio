@@ -49,7 +49,7 @@ describe('buildPolicy', () => {
 
   it('工具链目录不存在的条目原样透传（终审 F1：存在性过滤下沉 linux.ts——bwrap 特定顾虑，macOS 侧 pip:user 首装前不存在也须「授权即生效」）', () => {
     const ghost = path.join(tmp, 'toolchain-ghost');
-    expect(buildPolicy(tmp, false, [ghost]).toolchainDirs).toEqual([ghost]);
+    expect(buildPolicy(tmp, false, [ghost]).extraWriteDirs).toEqual([ghost]);
   });
 
   it('工具链目录 Set 去重后原样透传（存在/不存在条目混排不剔除）', () => {
@@ -57,6 +57,6 @@ describe('buildPolicy', () => {
     fs.mkdirSync(real);
     const ghost = path.join(tmp, 'toolchain-ghost');
     const policy = buildPolicy(tmp, false, [real, real, ghost, ghost]);
-    expect(policy.toolchainDirs).toEqual([real, ghost]);
+    expect(policy.extraWriteDirs).toEqual([real, ghost]);
   });
 });
