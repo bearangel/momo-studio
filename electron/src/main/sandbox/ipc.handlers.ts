@@ -126,21 +126,18 @@ export function registerSandboxIpc(): void {
       .run(key);
   });
   /**
-   * 工具链写授权（spec §10）——本会话内将该 workspace 标记为允许写 ~/.rustup
-   * 等工具链目录（spec §4 grant 表）；同步置 KV_TOOLCHAIN 一次性 flag（用户已
-   * 行动，引导卡不再弹）。校验防 null/空串串写误授予其他 workspace。
+   * 工具链写授权（spec §4 grant 表）——本会话内将该 workspace 标记为允许写
+   * ~/.rustup 等工具链目录。只置内存 grant，不持久化 KV_TOOLCHAIN：dismissed
+   * 是永久 flag 而 grant 只活 app 运行期——授权时同步置 KV 会让 flag 比授权
+   * 活得久，重启后 agent 再被拦、提示照发、卡却被 flag 压死（GUI 验收 2026-10-03
+   * 实证修复）。卡的本会话隐藏由 renderer 本地 setInfo 承担；仅显式关闭（X →
+   * dismissPrompt）才持久化。校验防 null/空串串写误授予其他 workspace。
    */
   ipcMain.handle('sandbox:grantToolchain', (_e, workspaceId: string) => {
     if (typeof workspaceId !== 'string' || workspaceId === '') {
       throw new Error('workspaceId 缺失');
     }
     grantToolchainWorkspace(workspaceId);
-    getDb()
-      .prepare(
-        `INSERT INTO kv_store (key, value, updated_at) VALUES (?, '1', datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`,
-      )
-      .run(KV_TOOLCHAIN);
     logger.info('工具链写授权已授予（本会话）', { workspaceId });
   });
   logger.info('Sandbox IPC handlers 已注册');

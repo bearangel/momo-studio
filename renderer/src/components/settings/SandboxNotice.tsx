@@ -112,10 +112,12 @@ export function SandboxNotice() {
     setInfo(await ipc.sandbox.reprobe());
   };
 
-  // 本会话放行工具链写（spec §10）：grant 按当前激活 workspace 键控，主进程同步置
-  // KV 一次性 flag（卡不再弹）；renderer 本地 setInfo 隐藏。无激活 workspace 时
-  // no-op（不误授权，卡保留待用户处理）。busy 复用安装按钮先例（防双击重复授权）；
-  // reject 在调用点 .catch 吞掉——卡片保留即用户可见的失败反馈，可重试或走「去设置」。
+  // 本会话放行工具链写（spec §4 grant 表）：grant 按当前激活 workspace 键控（仅
+  // 内存，app 运行期）；卡的本会话隐藏由本地 setInfo 承担——主进程不再持久化
+  // dismissed（2026-10-03 修复：永久 flag 会比会话级 grant 活得久，压死后续弹卡）。
+  // 无激活 workspace 时 no-op（不误授权，卡保留待用户处理）。busy 复用安装按钮
+  // 先例（防双击重复授权）；reject 在调用点 .catch 吞掉——卡片保留即用户可见的
+  // 失败反馈，可重试或走「去设置」。
   const grantNow = async (): Promise<void> => {
     if (!activeWorkspaceId) return;
     setBusy(true);

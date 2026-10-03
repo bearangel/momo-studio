@@ -56,7 +56,11 @@ import {
   type SandboxProbeState,
 } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
+import {
+  DEFAULT_TOOLCHAIN_DIRS,
+  hasToolchainGrant,
+  __clearToolchainGrantsForTest,
+} from '../../src/main/sandbox/toolchain-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-ipc-test-${Date.now()}`);
@@ -76,6 +80,7 @@ beforeEach(() => {
   detectPkgMock.mockReturnValue({ manager: 'apt', installCommand: 'sudo apt install bubblewrap' });
   __setSandboxStateForTest(null);
   __setSandboxSettingsForTest(null);
+  __clearToolchainGrantsForTest();
   registerSandboxIpc();
 });
 
@@ -224,6 +229,31 @@ describe('sandbox:dismissPrompt', () => {
     await dismiss({}, 'netOff');
 
     expect(readKv(KV_NETOFF)).toBe('1');
+  });
+});
+
+describe('sandbox:grantToolchain', () => {
+  // 回归锁（GUI 验收 2026-10-03）：授权时持久写 KV_TOOLCHAIN 会让 dismissed
+  // （永久）比 grant（app 运行期）活得久——重启/换 workspace 后 agent 再被拦、
+  // 提示照发，卡却被 flag 压死，用户无路可走。授权只置内存 grant；卡的本会话
+  // 隐藏由 renderer 本地 setInfo 承担；仅显式关闭（X）才走 dismissPrompt 持久化。
+  it('授权置内存 grant，不持久化 KV_TOOLCHAIN（防生命周期错配）', () => {
+    const handler = ipcHandlers.get('sandbox:grantToolchain');
+    expect(handler).toBeDefined();
+    (handler as (e: unknown, wsId: string) => void)(null, 'ws-fix-1');
+    expect(hasToolchainGrant('ws-fix-1')).toBe(true);
+    expect(readKv(KV_TOOLCHAIN)).toBeNull();
+    expect(buildInfo().toolchainPromptDismissed).toBe(false);
+  });
+
+  it('workspaceId 缺失/非串 → 抛错不授予', () => {
+    const handler = ipcHandlers.get('sandbox:grantToolchain') as (
+      e: unknown,
+      wsId: unknown,
+    ) => void;
+    expect(() => handler(null, '')).toThrow();
+    expect(() => handler(null, 42)).toThrow();
+    expect(hasToolchainGrant('')).toBe(false);
   });
 });
 
