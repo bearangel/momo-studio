@@ -174,6 +174,24 @@ describe('sandbox/settings 工具链授权契约（v2.5）', () => {
     expect(getSandboxSettings().toolchainDirs).toEqual(['~/custom-tc']);
   });
 
+  // GUI 验收修复（2026-10-03）：显式空清单是合法收紧意图（= 不授权任何目录，
+  // 比 deny 更严），必须保留——读侧回落默认仅在「未设置/非法」时发生。
+  // 修复前：保存 [] → 读回落五项 → 面板弹回默认，被观测为「保存失效」。
+  it('kv 显式空数组 dirs → 透传空清单（合法收紧，不回落默认）', () => {
+    writeRawGlobal({ sandboxToolchainDirs: [] });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().toolchainDirs).toEqual([]);
+  });
+
+  it('kv 无 dirs 键（未设置）→ 默认五项；非数组脏值 → 默认五项', () => {
+    writeRawGlobal({ sandboxMode: 'strict' });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().toolchainDirs).toEqual(DEFAULT_TOOLCHAIN_DIRS);
+    writeRawGlobal({ sandboxToolchainDirs: 'not-an-array' });
+    __setSandboxSettingsForTest(null);
+    expect(getSandboxSettings().toolchainDirs).toEqual(DEFAULT_TOOLCHAIN_DIRS);
+  });
+
   it('kv 非法 toolchainPolicy → 默认安全方向 deny（不抛错）', () => {
     writeRawGlobal({ sandboxToolchainPolicy: 'bogus' });
     __setSandboxSettingsForTest(null);

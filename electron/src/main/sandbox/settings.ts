@@ -39,9 +39,10 @@ export function getSandboxSettings(): SandboxSettings {
   // （deny 即期望值，无需回写污染 JSON）。字面允许值才透传 allow。
   const toolchainPolicy: ToolchainPolicy =
     g.sandboxToolchainPolicy === 'allow' ? 'allow' : 'deny';
-  // 目录清单：合法数组才透传；非数组/空数组一律用默认五项兜底（用户清空
-  // 也视为「用默认」——保持最小授权集存在）。
-  const toolchainDirs: string[] = Array.isArray(g.sandboxToolchainDirs) && g.sandboxToolchainDirs.length > 0
+  // 目录清单：合法数组（含显式空数组）透传——空清单是合法收紧意图
+  // （= 不授权任何目录，比 deny 更严；GUI 验收实证：回落默认会被观测为
+  // 「保存失效」）。仅未设置/非数组脏值回落默认五项。
+  const toolchainDirs: string[] = Array.isArray(g.sandboxToolchainDirs)
     ? g.sandboxToolchainDirs
     : [...DEFAULT_TOOLCHAIN_DIRS];
   if (g.sandboxNetworkPolicy === 'deny') {
