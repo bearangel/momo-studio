@@ -140,4 +140,31 @@ describe('extraRootDirs（spec hard-gate §6）', () => {
       expect(m?.[1]).toBe(spaced); // 提取值必须完整还原带空格路径
     }
   });
+
+  // 终审 Important#1：授权根是 realpath 形态（/private/tmp/...），LLM 重试以别名
+  // 前缀原始形态（/tmp/...）到达——assertInWorkspace 经规范形态附加容纳弥合。
+  // Linux 无 /tmp 别名时 realpath 为恒等映射，断言退化为同串比对仍然成立。
+  it('别名前缀（symlink alias）路径经规范形态被 extra 根容纳（macOS /tmp→/private/tmp 同构）', () => {
+    const alias = path.join(os.tmpdir(), `wsfs-alias-${Date.now()}`);
+    fs.symlinkSync(extra, alias);
+    try {
+      wfs.setExtraRootDirs([extra]);
+      expect(wfs.assertInWorkspace(path.join(alias, 'f.txt'))).toBe(path.normalize(path.join(alias, 'f.txt')));
+    } finally {
+      fs.rmSync(alias, { force: true });
+    }
+  });
+
+  it('别名前缀指向两根之外 → 规范形态不命中任何根 → 仍拒（逃逸语义等价）', () => {
+    const outside2 = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-out2-'));
+    const alias = path.join(os.tmpdir(), `wsfs-alias2-${Date.now()}`);
+    fs.symlinkSync(outside2, alias);
+    try {
+      wfs.setExtraRootDirs([extra]);
+      expect(() => wfs.assertInWorkspace(path.join(alias, 'f.txt'))).toThrow(/路径越界|符号链接逃逸/);
+    } finally {
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(outside2, { recursive: true, force: true });
+    }
+  });
 });

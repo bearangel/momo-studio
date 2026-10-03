@@ -53,36 +53,66 @@ export class WorkspaceFS {
 
     const normalized = path.normalize(abs);
 
-    // 1) 逐根判定（spec hard-gate §6）：workspace 根 + extra 根，命中任一根即通过
-    //    该根的三查。symlink 逃逸记录首个错误但不立即抛——其他根仍可能合法容纳
-    //    （如 extra 根恰为 symlink 目标所在）；全部根失败才抛逃逸。
+    // 规范形态（终审 Important#1 / Ruling 8）：对 normalized 做最近存在祖先上溯
+    // （与逃逸检查的 anchor walk 同一逻辑），realpathSync 解析锚点后拼接剩余后缀
+    // 段。setExtraRootDirs 的根是 realpath 产物，而 LLM 重试常以别名前缀原始形态
+    // （macOS /tmp → /private/tmp）到达——词法 isInsideDir 前缀失配会让 covered
+    // 后的重执行再越界、ping-pong 烧完轮次。上溯到文件系统根仍不存在则退化保持
+    // normalized；realpath 异常（权限等极端态）同样退化——行为回落修复前。
+    let canonAnchor = normalized;
+    while (canonAnchor !== path.dirname(canonAnchor) && !fs.existsSync(canonAnchor)) {
+      canonAnchor = path.dirname(canonAnchor);
+    }
+    let canonical = normalized;
+    if (fs.existsSync(canonAnchor)) {
+      try {
+        canonical = path.join(fs.realpathSync(canonAnchor), normalized.slice(canonAnchor.length));
+      } catch {
+        // 退化保持 normalized
+      }
+    }
+
+    // 1) 逐根判定（spec hard-gate §6）：workspace 根 + extra 根，字符串形态或
+    //    规范形态命中任一即进入该根的后续检查。symlink 逃逸记录首个错误但不
+    //    立即抛——其他根仍可能合法容纳（如 extra 根恰为 symlink 目标所在）；
+    //    全部根失败才抛逃逸。
     let escapeErr: Error | null = null;
     for (const root of [this.rootDir, ...this.extraRootDirs]) {
-      if (!isInsideDir(root, normalized, { win32: PATH_SEMANTICS_WIN32 })) continue;
+      const viaString = isInsideDir(root, normalized, { win32: PATH_SEMANTICS_WIN32 });
+      const viaCanonical = isInsideDir(root, canonical, { win32: PATH_SEMANTICS_WIN32 });
+      if (!viaString && !viaCanonical) continue;
 
-      // 2) 符号链接逃逸检查（相对该根；逐级上溯支持尚未创建的文件路径）
-      let anchor = normalized;
-      while (anchor !== root && !fs.existsSync(anchor)) {
-        anchor = path.dirname(anchor);
-      }
-      if (anchor !== root) {
-        const realRoot = fs.realpathSync(root);
-        const realAnchor = fs.realpathSync(anchor);
-        if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
-          escapeErr ??= new Error(`符号链接逃逸: ${relativeOrAbsolutePath}`);
-          continue;
+      // 2) 符号链接逃逸检查（相对该根；逐级上溯支持尚未创建的文件路径）——仅
+      //    字符串形态命中时执行，语义与文案不变；规范形态命中时跳过：canonical
+      //    本身就是 realpath 解析产物（锚点已解析到根内），构造上无逃逸面。
+      if (viaString) {
+        let anchor = normalized;
+        while (anchor !== root && !fs.existsSync(anchor)) {
+          anchor = path.dirname(anchor);
+        }
+        if (anchor !== root) {
+          const realRoot = fs.realpathSync(root);
+          const realAnchor = fs.realpathSync(anchor);
+          if (realAnchor !== realRoot && !realAnchor.startsWith(realRoot + path.sep)) {
+            escapeErr ??= new Error(`符号链接逃逸: ${relativeOrAbsolutePath}`);
+            continue;
+          }
         }
       }
 
       // 3) .git 保护仅 workspace 根（spec hard-gate §6：授权目录与 bash 授权后
-      //    行为对齐）。段精确匹配语义与注释照旧（.github 等前缀 dotfile 不误伤）。
+      //    行为对齐）。段精确匹配语义照旧（.github 等前缀 dotfile 不误伤）；rel
+      //    取「命中的那个形态」——两形态都命中时查字符串形态（其在 workspace
+      //    内即受保护），仅规范形态命中时以 canonical 的 rel 判定。
       if (root === this.rootDir) {
-        const rel = path.relative(root, normalized).toLowerCase();
+        const rel = path.relative(root, viaString ? normalized : canonical).toLowerCase();
         if (rel === '.git' || rel.startsWith(`.git${path.sep}`)) {
           throw new Error(`禁止操作 .git 目录: ${relativeOrAbsolutePath}`);
         }
       }
 
+      // 返回值不变：仍返回 normalized（后续 fs 调用原生解析 symlink；不改
+      // readTracker / journal 的键形态，调用方零涟漪）
       return normalized;
     }
     if (escapeErr !== null) throw escapeErr;

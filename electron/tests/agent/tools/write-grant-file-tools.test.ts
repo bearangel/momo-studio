@@ -86,6 +86,26 @@ describe('write_file 硬门控（spec §7）', () => {
     const r = await new FileTools().execute('read_file', { path: src }, ctx);
     expect(r).toContain('content-读取');
   });
+
+  // 终审 Important#1 端到端锁（结构性不可见缺陷）：LLM 以别名前缀（symlink
+  // alias）原始形态发起，授权根是 realpath 形态——covered 后的重执行必须经
+  // assertInWorkspace 规范形态容纳收敛，而非 3 轮 ping-pong 后裸错。
+  it('别名前缀路径：covered（授权 realpath 形态）→ 重执行经规范形态收敛（macOS 终审回归）', async () => {
+    const alias = path.join(os.tmpdir(), `wgf-alias-${Date.now()}`);
+    fs.symlinkSync(outside, alias);
+    try {
+      __setWriteGrantToolForTest({
+        net: async () => ({ netOn: false, toolchainOn: false, extraDirs: [fs.realpathSync(outside)] }),
+        wait: async () => ({ kind: 'covered' as const }),
+      });
+      const target = path.join(alias, 'via-alias.txt');
+      const r = await new FileTools().execute('write_file', { path: target, content: 'alias' }, ctx);
+      expect(r).toBe(`文件已写入: ${target}`);
+      expect(fs.readFileSync(fs.realpathSync(path.join(outside, 'via-alias.txt')), 'utf-8')).toBe('alias');
+    } finally {
+      fs.rmSync(alias, { force: true });
+    }
+  });
 });
 
 describe('mkdir / mv / rm 硬门控', () => {
