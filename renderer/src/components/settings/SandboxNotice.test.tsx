@@ -13,15 +13,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { SandboxNotice } from './SandboxNotice';
 import { useStreamStore } from '../../stores/stream.store';
+import { useWriteGrantStore } from '../../stores/write-grant.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import type { SandboxInfo } from '../../ipc/types';
+import type { SandboxInfo, WriteBlockedEvent } from '../../ipc/types';
 
 const getStateMock = vi.fn();
 const reprobeMock = vi.fn();
 const installBwrapMock = vi.fn();
 const dismissPromptMock = vi.fn();
 const updateGlobalMock = vi.fn();
+const grantWriteMock = vi.fn();
 
 // 桩 window.api（sandbox + settings 命名空间；组件经 ipc Proxy 透传消费）
 const mockApi = {
@@ -30,6 +32,7 @@ const mockApi = {
     reprobe: reprobeMock,
     installBwrap: installBwrapMock,
     dismissPrompt: dismissPromptMock,
+    grantWrite: grantWriteMock,
   },
   settings: {
     updateGlobal: updateGlobalMock,
@@ -100,6 +103,7 @@ describe('SandboxNotice（v2.4 Task 9）', () => {
     reprobeMock.mockReset();
     installBwrapMock.mockReset();
     dismissPromptMock.mockReset();
+    grantWriteMock.mockReset();
   });
 
   it('挂载时调 ipc.sandbox.getState', async () => {
@@ -528,3 +532,90 @@ describe('SandboxNotice：netOff 拦截卡', () => {
 // && toolchainPolicy === 'deny'（makeInfo 默认 deny 即本套件语义）；优先级排
 // netOff 之后、bwrap/winPolicy 之前。「本会话允许」= grantToolchain(activeWorkspaceId)
 // + 主进程同步置 KV 一次性 flag，renderer 本地 setInfo 隐藏；「去设置」只导航。
+
+
+// ═══ 通用写授权卡（spec 2026-10-03 §7）═══
+describe('SandboxNotice：通用写授权卡', () => {
+  const EVT: WriteBlockedEvent = { sessionId: 's-1', workspaceId: 'w-1', dirs: ['/Users/x/.cargo'], command: 'cargo build' };
+
+  function receive(e: typeof EVT): void {
+    act(() => {
+      // 隔离：netBlockedSeen 只置不清（一次性语义）——文件内早前 netOff 用例的
+      // 残留 true 会让授权后 netOff 卡顶上，破坏本组显隐断言
+      useStreamStore.setState({ netBlockedSeen: false });
+      useWriteGrantStore.getState().__resetForTest();
+      useWriteGrantStore.getState().receiveWriteBlocked(e);
+    });
+  }
+
+  it('pending 事件 → 渲染卡：目录 + 命令 + 三按钮', () => {
+    receive(EVT);
+    render(<SandboxNotice />);
+    expect(screen.getByText(/agent 请求写入工作空间外的目录/)).toBeInTheDocument();
+    expect(screen.getByText('/Users/x/.cargo')).toBeInTheDocument();
+    expect(screen.getByText('cargo build')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeInTheDocument();
+  });
+
+  it('本会话允许 → grantWrite(session) + 卡消失', async () => {
+    grantWriteMock.mockResolvedValue(undefined);
+    receive(EVT);
+    render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
+    await waitFor(() =>
+      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'session', key: 's-1', dirs: ['/Users/x/.cargo'] }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('sandbox-notice')).toBeNull());
+  });
+
+  it('本工作空间始终允许 → grantWrite(workspace)', async () => {
+    grantWriteMock.mockResolvedValue(undefined);
+    receive(EVT);
+    render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '本工作空间始终允许' }));
+    await waitFor(() =>
+      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dirs: ['/Users/x/.cargo'] }),
+    );
+  });
+
+  it('拒绝 → 卡消失 + 同 dirs 不再弹（拒绝记忆）', () => {
+    receive(EVT);
+    const { unmount } = render(<SandboxNotice />);
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
+    expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+    unmount();
+    act(() => {
+      useWriteGrantStore.getState().receiveWriteBlocked({ ...EVT, command: 'cargo run' });
+    });
+    render(<SandboxNotice />);
+    expect(screen.queryByTestId('sandbox-notice')).toBeNull();
+  });
+
+  it('空 dirs（路径提取失败）→ 两授权按钮禁用 + 降级文案 + 去设置可用', () => {
+    receive({ ...EVT, dirs: [] });
+    render(<SandboxNotice />);
+    expect(screen.getByRole('button', { name: '本会话允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeDisabled();
+    expect(screen.getByText(/未能定位具体目录/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+  });
+
+  it('sessionId null（映射失败）→ 会话按钮禁用；workspace 按钮可用', () => {
+    receive({ ...EVT, sessionId: null });
+    render(<SandboxNotice />);
+    expect(screen.getByRole('button', { name: '本会话允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).not.toBeDisabled();
+  });
+
+  it('workspaceId null 且无激活 workspace → 工作空间按钮禁用；会话按钮可用', () => {
+    act(() => {
+      useWorkspaceStore.setState({ activeWorkspaceId: null });
+    });
+    receive({ ...EVT, workspaceId: null });
+    render(<SandboxNotice />);
+    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '本会话允许' })).not.toBeDisabled();
+  });
+});

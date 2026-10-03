@@ -19,6 +19,7 @@ import type { SandboxInfo } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { useUiStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useWriteGrantStore } from '../../stores/write-grant.store';
 import { Button } from '../ui/Button';
 
 /** PowerShell 授权命令（CurrentUser 作用域 + RemoteSigned）；卡片展示与复制单点对齐 */
@@ -36,27 +37,33 @@ const copyText = (text: string): void => {
 export function SandboxNotice() {
   const [info, setInfo] = useState<SandboxInfo | null>(null);
   const [busy, setBusy] = useState(false);
-  // netOff / 工具链拦截一次性标志（stream.store 实时检测）；导航走真实 ui.store（不强求定位到安全沙箱分类）
+  // netOff 一次性标志（stream.store 实时检测）；导航走真实 ui.store（不强求定位到安全沙箱分类）
   const netBlockedSeen = useStreamStore((s) => s.netBlockedSeen);
   const setActiveView = useUiStore((s) => s.setActiveView);
-  // 授权按 workspace 键控（spec §4 grant 表）——「本会话允许」对当前激活 workspace 授予
+  // 通用写授权卡（spec 2026-10-03 §7）：pending 事件驱动；workspace 键兜底用激活
+  // workspace（事件 workspaceId 为 null 时——消息行缺归属的边缘）
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const writePending = useWriteGrantStore((st) => st.pending);
+  const denyPending = useWriteGrantStore((st) => st.denyPending);
+  const resolvePending = useWriteGrantStore((st) => st.resolvePending);
 
   // 挂载一次性拉取聚合信息
   useEffect(() => {
     void ipc.sandbox.getState().then(setInfo);
   }, []);
 
-  // netOff 卡不依赖探测 state（tag 在场即证明沙箱当时在跑）；bwrap/授权卡仍需 state。
-  // 双态（修订 B）下本信息卡仅在 deny 策略展示（allow 全放行无引导诉求）。
-  if (!info) return null;
-
+  // writeBlocked 卡事件驱动（spec §7：数据全来自事件载荷，不等 info 拉取）；
+  // 其余三卡依赖 info。info 未到时仅 writeBlocked 可显示。
   const showNetOff =
+    info !== null &&
     netBlockedSeen &&
     !info.netPromptDismissed &&
     info.settings.networkPolicy === 'deny';
+  const showWriteBlocked = !showNetOff && writePending !== null;
   const showBwrap =
     !showNetOff &&
+    !showWriteBlocked &&
+    info !== null &&
     info.state !== null &&
     info.state.platform === 'linux' &&
     !info.state.available &&
@@ -64,14 +71,17 @@ export function SandboxNotice() {
     info.installCommand !== null;
   const showWinPolicy =
     !showNetOff &&
+    !showWriteBlocked &&
+    info !== null &&
     info.state !== null &&
     info.state.platform === 'win32' &&
     info.state.executionPolicy === 'Restricted' &&
     !info.winPolicyPromptDismissed;
-  if (!showNetOff && !showBwrap && !showWinPolicy) return null;
+  if (!showNetOff && !showWriteBlocked && !showBwrap && !showWinPolicy) return null;
 
   // 忽略提示卡：kv 持久化（主进程）+ 本地立即隐藏
   const dismiss = (kind: 'bwrap' | 'winPolicy' | 'netOff'): void => {
+    if (info === null) return;
     void ipc.sandbox.dismissPrompt(kind);
     setInfo(
       kind === 'bwrap'
@@ -82,9 +92,29 @@ export function SandboxNotice() {
     );
   };
 
+  // 两档授权（spec §7）：session=事件 sessionId / workspace=事件 workspaceId（null
+  // 兜底激活 workspace）。空 dirs 或键缺失 no-op（按钮已禁用，双保险防线）。
+  // reject 在调用点吞掉——卡保留即用户可见的失败反馈，可重试。
+  const grantNow = async (scope: 'session' | 'workspace'): Promise<void> => {
+    if (!writePending) return;
+    const key =
+      scope === 'session'
+        ? writePending.sessionId
+        : writePending.workspaceId ?? activeWorkspaceId;
+    if (key === null || key === undefined || writePending.dirs.length === 0) return;
+    setBusy(true);
+    try {
+      await ipc.sandbox.grantWrite({ scope, key, dirs: writePending.dirs });
+      resolvePending();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // 一键安装：pkexec 装包 → 重新探测刷新。装好（available=true）卡片自然消失；
   // 失败（ok:false）reprobe 后仍不可用，卡片保留——用户可改用展示中的手动命令。
   const install = async (): Promise<void> => {
+    if (info === null) return;
     setBusy(true);
     try {
       await ipc.sandbox.installBwrap();
@@ -96,6 +126,7 @@ export function SandboxNotice() {
 
   // 手动授权后重新检测：仅 reprobe 刷新（策略放开 → 卡片消失）
   const recheck = async (): Promise<void> => {
+    if (info === null) return;
     setInfo(await ipc.sandbox.reprobe());
   };
 
@@ -110,18 +141,21 @@ export function SandboxNotice() {
         <h2 className="text-base font-semibold text-primary">
           {showNetOff
             ? 'agent 的网络访问被沙箱拦截'
-            : showBwrap
-              ? 'bash 沙箱需要 bubblewrap'
-              : 'PowerShell 脚本执行未授权'}
+            : showWriteBlocked
+              ? 'agent 请求写入工作空间外的目录'
+              : showBwrap
+                ? 'bash 沙箱需要 bubblewrap'
+                : 'PowerShell 脚本执行未授权'}
         </h2>
         <button
           type="button"
           aria-label="关闭"
-          onClick={() =>
-            dismiss(
-              showNetOff ? 'netOff' : showBwrap ? 'bwrap' : 'winPolicy',
-            )
-          }
+          onClick={() => {
+            if (showNetOff) dismiss('netOff');
+            else if (showBwrap) dismiss('bwrap');
+            else if (showWinPolicy) dismiss('winPolicy');
+            else denyPending(); // writeBlocked 卡关闭 = 拒绝（记忆同 dirs）
+          }}
           className="text-tertiary hover:text-primary leading-none -mt-1"
         >
           <X size={16} strokeWidth={1.75} aria-hidden />
@@ -139,6 +173,54 @@ export function SandboxNotice() {
               去设置
             </Button>
             <Button onClick={() => dismiss('netOff')}>知道了</Button>
+          </div>
+        </>
+      ) : showWriteBlocked && writePending ? (
+        <>
+          <p className="mb-3 leading-relaxed">
+            agent 的 shell 命令被沙箱拦截（工作空间外写入）。可放行下列目录（本会话或本工作空间），或拒绝。
+          </p>
+          {writePending.dirs.length > 0 ? (
+            <ul className="mb-3 space-y-1">
+              {writePending.dirs.map((d) => (
+                <li key={d}>
+                  <code className="border border-subtle bg-canvas rounded px-2 py-1 font-mono text-xs text-secondary select-all break-all">
+                    {d}
+                  </code>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mb-3 text-xs text-status-warning">
+              未能定位具体目录（工具错误未带路径）。可到 设置→安全沙箱 手动配置预置清单。
+            </p>
+          )}
+          <code className="block border border-subtle bg-canvas rounded px-2 py-1.5 font-mono text-xs text-secondary select-all break-all mb-3">
+            {writePending.command}
+          </code>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setActiveView('settings')}>
+              去设置
+            </Button>
+            <Button variant="ghost" onClick={() => denyPending()}>
+              拒绝
+            </Button>
+            <Button
+              onClick={() => void grantNow('session').catch(() => {})}
+              disabled={busy || writePending.sessionId === null || writePending.dirs.length === 0}
+            >
+              本会话允许
+            </Button>
+            <Button
+              onClick={() => void grantNow('workspace').catch(() => {})}
+              disabled={
+                busy ||
+                writePending.dirs.length === 0 ||
+                (writePending.workspaceId === null && activeWorkspaceId === null)
+              }
+            >
+              本工作空间始终允许
+            </Button>
           </div>
         </>
       ) : showBwrap ? (
