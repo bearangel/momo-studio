@@ -255,6 +255,17 @@ describe('sandbox:grantWrite / revokeWrite（spec 2026-10-03 §6.3）', () => {
     ).toEqual({ c: 0 });
   });
 
+  it('sandbox:listWriteGrants 列出全部工作空间持久授权（spec §8）', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'workspace', key: 'w-1', dirs: ['/tmp/a'] });
+    grant(null, { scope: 'workspace', key: 'w-2', dirs: ['/tmp/b'] });
+    const list = ipcHandlers.get('sandbox:listWriteGrants') as () => Array<{ workspaceId: string; dirs: string[] }>;
+    expect(list().sort((x, y) => x.workspaceId.localeCompare(y.workspaceId))).toEqual([
+      { workspaceId: 'w-1', dirs: ['/tmp/a'] },
+      { workspaceId: 'w-2', dirs: ['/tmp/b'] },
+    ]);
+  });
+
   it('sandbox:grantToolchain 通道已下线（grants 布尔模型退役）', () => {
     expect(ipcHandlers.has('sandbox:grantToolchain')).toBe(false);
   });
