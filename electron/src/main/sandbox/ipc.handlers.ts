@@ -15,7 +15,7 @@ import {
 } from './probe';
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
-import { grantToolchainWorkspace } from './toolchain-grant';
+import { grantWriteDirs, revokeWriteDir } from './write-grant';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -26,25 +26,21 @@ export interface SandboxInfo {
   winPolicyPromptDismissed: boolean;
   /** net-off 拦截提示卡是否已关闭（v2.4.x：agent bash 命令被沙箱断网拦截时的引导卡） */
   netPromptDismissed: boolean;
-  /** 工具链写拦截引导卡是否已关闭（spec §10——用户已通过 grant 行动后置位） */
-  toolchainPromptDismissed: boolean;
 }
 
 const KV_BWRAP = 'sandbox_bwrap_prompt_dismissed';
 const KV_WINPOLICY = 'sandbox_win_policy_prompt_dismissed';
 const KV_NETOFF = 'sandbox_net_prompt_dismissed';
-/** 工具链写授权引导卡一次性标记（spec §10）——用户行动卡不再弹的持久化状态 */
-export const KV_TOOLCHAIN = 'sandbox_toolchain_prompt_dismissed';
 
 /**
- * dismissPrompt 的 kind → kv_store key 映射表（spec §10 四键）。
+ * dismissPrompt 的 kind → kv_store key 映射表。
  * 改用查表保证新加 kind 时编译期友好 + 隔离 case 隔离（双侧契约锁一致）。
+ * 2026-10-03：toolchain 键随事件驱动授权卡退役（写拦截卡不再用一次性 KV flag）。
  */
-const PROMPT_KV: Record<'bwrap' | 'winPolicy' | 'netOff' | 'toolchain', string> = {
+const PROMPT_KV: Record<'bwrap' | 'winPolicy' | 'netOff', string> = {
   bwrap: KV_BWRAP,
   winPolicy: KV_WINPOLICY,
   netOff: KV_NETOFF,
-  toolchain: KV_TOOLCHAIN,
 };
 
 function readKvFlag(key: string): boolean {
@@ -62,7 +58,6 @@ export function buildInfo(): SandboxInfo {
     bwrapPromptDismissed: readKvFlag(KV_BWRAP),
     winPolicyPromptDismissed: readKvFlag(KV_WINPOLICY),
     netPromptDismissed: readKvFlag(KV_NETOFF),
-    toolchainPromptDismissed: readKvFlag(KV_TOOLCHAIN),
   };
 }
 
@@ -116,7 +111,7 @@ export function registerSandboxIpc(): void {
     return buildInfo();
   });
   ipcMain.handle('sandbox:installBwrap', () => installBwrapViaPkexec());
-  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff' | 'toolchain') => {
+  ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff') => {
     const key = PROMPT_KV[kind];
     getDb()
       .prepare(
@@ -126,19 +121,28 @@ export function registerSandboxIpc(): void {
       .run(key);
   });
   /**
-   * 工具链写授权（spec §4 grant 表）——本会话内将该 workspace 标记为允许写
-   * ~/.rustup 等工具链目录。只置内存 grant，不持久化 KV_TOOLCHAIN：dismissed
-   * 是永久 flag 而 grant 只活 app 运行期——授权时同步置 KV 会让 flag 比授权
-   * 活得久，重启后 agent 再被拦、提示照发、卡却被 flag 压死（GUI 验收 2026-10-03
-   * 实证修复）。卡的本会话隐藏由 renderer 本地 setInfo 承担；仅显式关闭（X →
-   * dismissPrompt）才持久化。校验防 null/空串串写误授予其他 workspace。
+   * 通用写授权（spec 2026-10-03 §6.3）：授权卡三按钮的两档写入通道。scope 键控
+   * KV 两键（session=单个聊天会话持久 / workspace=工作空间持久）；dirs 为卡上
+   * 展示的归一目录（显示即所授）。载荷形状逐字段校验——防 scope 越界 / 空键
+   * 串写其他实体。
    */
-  ipcMain.handle('sandbox:grantToolchain', (_e, workspaceId: string) => {
-    if (typeof workspaceId !== 'string' || workspaceId === '') {
-      throw new Error('workspaceId 缺失');
-    }
-    grantToolchainWorkspace(workspaceId);
-    logger.info('工具链写授权已授予（本会话）', { workspaceId });
+  ipcMain.handle('sandbox:grantWrite', (_e, arg: unknown) => {
+    const a = arg as { scope?: unknown; key?: unknown; dirs?: unknown };
+    if (a.scope !== 'session' && a.scope !== 'workspace') throw new Error('scope 非法');
+    if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
+    if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
+    grantWriteDirs(a.scope, a.key, a.dirs);
+    logger.info('写授权已授予', { scope: a.scope, key: a.key, count: a.dirs.length });
+  });
+
+  /** 撤销单条（spec §8 设置页「已授权目录」） */
+  ipcMain.handle('sandbox:revokeWrite', (_e, arg: unknown) => {
+    const a = arg as { scope?: unknown; key?: unknown; dir?: unknown };
+    if (a.scope !== 'session' && a.scope !== 'workspace') throw new Error('scope 非法');
+    if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
+    if (typeof a.dir !== 'string') throw new Error('dir 缺失');
+    revokeWriteDir(a.scope, a.key, a.dir);
+    logger.info('写授权已撤销', { scope: a.scope, key: a.key });
   });
   logger.info('Sandbox IPC handlers 已注册');
 }

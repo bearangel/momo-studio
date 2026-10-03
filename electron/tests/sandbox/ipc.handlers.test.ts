@@ -48,7 +48,6 @@ import {
   registerSandboxIpc,
   installBwrapViaPkexec,
   buildInfo,
-  KV_TOOLCHAIN,
   type SandboxInfo,
 } from '../../src/main/sandbox/ipc.handlers';
 import {
@@ -58,8 +57,6 @@ import {
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 import {
   DEFAULT_TOOLCHAIN_DIRS,
-  hasToolchainGrant,
-  __clearToolchainGrantsForTest,
 } from '../../src/main/sandbox/toolchain-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
@@ -80,7 +77,6 @@ beforeEach(() => {
   detectPkgMock.mockReturnValue({ manager: 'apt', installCommand: 'sudo apt install bubblewrap' });
   __setSandboxStateForTest(null);
   __setSandboxSettingsForTest(null);
-  __clearToolchainGrantsForTest();
   registerSandboxIpc();
 });
 
@@ -232,28 +228,39 @@ describe('sandbox:dismissPrompt', () => {
   });
 });
 
-describe('sandbox:grantToolchain', () => {
-  // 回归锁（GUI 验收 2026-10-03）：授权时持久写 KV_TOOLCHAIN 会让 dismissed
-  // （永久）比 grant（app 运行期）活得久——重启/换 workspace 后 agent 再被拦、
-  // 提示照发，卡却被 flag 压死，用户无路可走。授权只置内存 grant；卡的本会话
-  // 隐藏由 renderer 本地 setInfo 承担；仅显式关闭（X）才走 dismissPrompt 持久化。
-  it('授权置内存 grant，不持久化 KV_TOOLCHAIN（防生命周期错配）', () => {
-    const handler = ipcHandlers.get('sandbox:grantToolchain');
-    expect(handler).toBeDefined();
-    (handler as (e: unknown, wsId: string) => void)(null, 'ws-fix-1');
-    expect(hasToolchainGrant('ws-fix-1')).toBe(true);
-    expect(readKv(KV_TOOLCHAIN)).toBeNull();
-    expect(buildInfo().toolchainPromptDismissed).toBe(false);
+describe('sandbox:grantWrite / revokeWrite（spec 2026-10-03 §6.3）', () => {
+  it('grantWrite 写 KV（归一后）+ revokeWrite 移除', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'session', key: 's-1', dirs: ['/tmp/grant-a'] });
+    const row = getDb()
+      .prepare("SELECT value FROM kv_store WHERE key='sandbox_write_grant_session_s-1'")
+      .get() as { value: string };
+    expect(JSON.parse(row.value)).toEqual(['/tmp/grant-a']);
+    const revoke = ipcHandlers.get('sandbox:revokeWrite') as (e: unknown, a: unknown) => void;
+    revoke(null, { scope: 'session', key: 's-1', dir: '/tmp/grant-a' });
+    // revoke 是数组过滤写回——行以 '[]' 残留（空行无害，授权读取语义等价空）
+    const after = getDb()
+      .prepare("SELECT value FROM kv_store WHERE key='sandbox_write_grant_session_s-1'")
+      .get() as { value: string };
+    expect(JSON.parse(after.value)).toEqual([]);
   });
 
-  it('workspaceId 缺失/非串 → 抛错不授予', () => {
-    const handler = ipcHandlers.get('sandbox:grantToolchain') as (
-      e: unknown,
-      wsId: unknown,
-    ) => void;
-    expect(() => handler(null, '')).toThrow();
-    expect(() => handler(null, 42)).toThrow();
-    expect(hasToolchainGrant('')).toBe(false);
+  it('非法载荷（scope 越界 / key 空 / dirs 非串数组）→ 抛错不写', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    expect(() => grant(null, { scope: 'global', key: 'k', dirs: ['/tmp/a'] })).toThrow();
+    expect(() => grant(null, { scope: 'session', key: '', dirs: ['/tmp/a'] })).toThrow();
+    expect(() => grant(null, { scope: 'session', key: 'k', dirs: ['/tmp/a', 42] })).toThrow();
+    expect(
+      getDb().prepare("SELECT COUNT(*) c FROM kv_store WHERE key LIKE 'sandbox_write_grant_%'").get(),
+    ).toEqual({ c: 0 });
+  });
+
+  it('sandbox:grantToolchain 通道已下线（grants 布尔模型退役）', () => {
+    expect(ipcHandlers.has('sandbox:grantToolchain')).toBe(false);
+  });
+
+  it('SandboxInfo 不再含 toolchainPromptDismissed（事件驱动卡）', () => {
+    expect('toolchainPromptDismissed' in buildInfo()).toBe(false);
   });
 });
 
@@ -361,19 +368,12 @@ describe('sandbox:reprobe', () => {
 // sandbox 工具链写授权（spec §10）：SandboxInfo 聚合新增 toolchainPromptDismissed
 // + settings 两新字段。该文件聚焦可单测的纯逻辑；ipcMain.handle 注册形态以
 // typecheck + renderer 侧集成测试兜底。
-describe('SandboxInfo 扩展（spec §10）', () => {
-  it('buildInfo 含 toolchainPromptDismissed 与 settings 两新字段', () => {
+describe('SandboxInfo 扩展', () => {
+  it('buildInfo 含 settings 两新字段（toolchainPromptDismissed 已随事件驱动卡退役）', () => {
     const info = buildInfo();
 
-    expect(info).toHaveProperty('toolchainPromptDismissed');
     expect(info.settings).toHaveProperty('toolchainPolicy');
     expect(info.settings).toHaveProperty('toolchainDirs');
   });
 
-  it('KV_TOOLCHAIN 与既有三 KV key 同型（独立键名，dismissPrompt 查表不串写）', () => {
-    expect(KV_TOOLCHAIN).toBe('sandbox_toolchain_prompt_dismissed');
-    expect(KV_TOOLCHAIN).not.toBe(KV_BWRAP);
-    expect(KV_TOOLCHAIN).not.toBe(KV_WINPOLICY);
-    expect(KV_TOOLCHAIN).not.toBe(KV_NETOFF);
-  });
 });

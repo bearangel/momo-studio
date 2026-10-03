@@ -1,6 +1,6 @@
 // electron/src/main/sandbox/toolchain-grant.ts
-// 会话 grant 表（spec §4）：「本会话允许」置位，app 运行期有效（重启自然失效）。
-// 非阻塞——与已下线的阻塞 sessionGrants 不同物（修订 B 教训：阻塞等待必超时）。
+// 会话级 grants 布尔模型已于 2026-10-03 随通用写授权（write-grant.ts）下线——
+// 本模块仅保留预置默认清单与目录展开归一（expandToolchainDirs）。
 // 目录展开：字面 ~/ 前缀 + npm/pip 占位项 → 归一绝对路径（realpath 优先，失败
 // resolve 兜底——目录未创建时 allow 不存在路径无害）。
 import { execSync } from 'node:child_process';
@@ -12,20 +12,6 @@ import { logger } from '../logger';
 export const DEFAULT_TOOLCHAIN_DIRS: string[] = [
   '~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user',
 ];
-
-const grants = new Set<string>();
-
-export function grantToolchainWorkspace(workspaceId: string): void {
-  grants.add(workspaceId);
-}
-
-export function hasToolchainGrant(workspaceId: string): boolean {
-  return grants.has(workspaceId);
-}
-
-export function __clearToolchainGrantsForTest(): void {
-  grants.clear();
-}
 
 /** npm 全局 prefix 探测（同步、模块级缓存一次） */
 let npmPrefixCache: string | null | undefined;

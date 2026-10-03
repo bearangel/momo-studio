@@ -1,31 +1,13 @@
 // electron/tests/sandbox/toolchain-grant.test.ts
 //
-// 授权状态层契约（spec §4）：grant 表 workspace 键控 + app 运行期语义（测试内
-// 显式清理）；目录展开归一（~/ 前缀 / realpath / 去重 / npm prefix 特殊项）。
-import { describe, it, expect, beforeEach } from 'vitest';
+// 目录展开归一契约（~/ 前缀 / realpath / 去重 / npm prefix 特殊项）。grant 表
+// 三函数已随通用写授权（write-grant.test.ts）退役——本文件只锁展开与默认清单。
+import { describe, it, expect } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  grantToolchainWorkspace, hasToolchainGrant, __clearToolchainGrantsForTest,
   expandToolchainDirs, DEFAULT_TOOLCHAIN_DIRS,
 } from '../../src/main/sandbox/toolchain-grant';
-
-beforeEach(() => __clearToolchainGrantsForTest());
-
-describe('grant 表', () => {
-  it('默认无授权；置位后命中；workspace 键控隔离（A 授权不波及 B）', () => {
-    expect(hasToolchainGrant('ws-a')).toBe(false);
-    grantToolchainWorkspace('ws-a');
-    expect(hasToolchainGrant('ws-a')).toBe(true);
-    expect(hasToolchainGrant('ws-b')).toBe(false); // Review Focus 3
-  });
-
-  it('重复置位幂等', () => {
-    grantToolchainWorkspace('ws-a');
-    grantToolchainWorkspace('ws-a');
-    expect(hasToolchainGrant('ws-a')).toBe(true);
-  });
-});
 
 describe('expandToolchainDirs', () => {
   const home = os.homedir();

@@ -53,7 +53,6 @@ function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
  * effective：spawn 前有效态查询，双字段单点判定——
  *   netOn      = (networkPolicy === 'allow')
  *   toolchainOn = (toolchainPolicy === 'allow') ||
- *                 (workspaceId !== undefined && hasToolchainGrant(workspaceId))
  * 设置读取失败（DB 异常等）降级 ok:false——子进程 shell-tools 自有回退路径，
  * 绝不因策略查询挂死 bash 主路径。
  */
