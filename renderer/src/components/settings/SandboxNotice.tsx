@@ -108,8 +108,6 @@ export function SandboxNotice() {
         scope,
         key,
         dirs: writePending.dirs,
-        // 唤醒注入：授权成功即向该会话发系统消息，agent 自动重试（GUI 验收第四轮）
-        resumeSessionId: writePending.sessionId ?? undefined,
       });
       resolvePending();
     } finally {

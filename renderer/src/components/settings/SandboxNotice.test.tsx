@@ -577,7 +577,7 @@ describe('SandboxNotice：通用写授权卡', () => {
     render(<SandboxNotice />);
     fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
     await waitFor(() =>
-      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'session', key: 's-1', dirs: ['/Users/x/.cargo'], resumeSessionId: 's-1' }),
+      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'session', key: 's-1', dirs: ['/Users/x/.cargo'] }),
     );
     await waitFor(() => expect(screen.queryByTestId('sandbox-notice')).toBeNull());
   });
@@ -588,7 +588,7 @@ describe('SandboxNotice：通用写授权卡', () => {
     render(<SandboxNotice />);
     fireEvent.click(screen.getByRole('button', { name: '本工作空间始终允许' }));
     await waitFor(() =>
-      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dirs: ['/Users/x/.cargo'], resumeSessionId: 's-1' }),
+      expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dirs: ['/Users/x/.cargo'] }),
     );
   });
 

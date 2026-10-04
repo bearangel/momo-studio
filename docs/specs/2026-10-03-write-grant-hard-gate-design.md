@@ -103,7 +103,7 @@ return last.dirs.some((d) => eff.extraDirs.includes(d));
 
 - `write-blocked-report`（child → main 弹卡信号）复用于文件工具
 - `sandbox:grantWrite` / `sandbox:revokeWrite` / `sandbox:writeBlocked` 推送
-- `grantWrite` 的 `resumeSessionId` 唤醒注入保留——服务「等待被 abort 后用户才从设置页补授权」的迟到路径
+- ~~`grantWrite` 的 `resumeSessionId` 唤醒注入~~（**2026-10-04 修订：移除**——硬门控下「等待中授权 → 轮询 covered → 原地重执行」是唯一恢复路径，旧注入与它并发会经 steer 诱发双重重试且污染会话记录；`resumeSessionId` 字段随契约废弃，载荷残留一律忽略。等待被 abort 后的补授权仅落 KV 服务后续写入，用户手动发消息即可继续）
 
 ## 5. 等待循环改造（`bash-write-wait.ts` → `write-grant-wait.ts`）
 
@@ -198,5 +198,5 @@ return last.dirs.some((d) => eff.extraDirs.includes(d));
 - **广播无定向的空对空误伤**：同刻多个空 dirs 等待流被一并解除——罕见（覆盖式单卡），且被解除流的用户同样无法授权（按钮禁用），语义可接受
 - **extra 根 `.git` 开放**：用户明示授权该目录的写，与 bash 授权后等权；git 元数据保护仅对 workspace 根生效——文档化越权面，验收观察
 - **错误消息 regex 提取路径**：依赖 WorkspaceFS 错误文案稳定（§11 文案锁测试兜底）；文案变更须双端同步
-- **迟到授权**：等待被 abort 后用户才授权 → `resumeSessionId` 唤醒注入（既有路径）兜底，不新增机制
+- **迟到授权**：等待被 abort 后用户才授权 → 仅落 KV（2026-10-04 修订：唤醒注入已移除，见 §4.5），用户手动发消息驱动 agent 重试——与「停止是用户显式意图」一致
 - **授权写的账本撤销缺口（终审发现）**：extra 根目标的写/删经 toJournalRelPath 产出 `../../..` 游走键，revert 侧 safeResolve 遏制必拒——授权写的条目可记账但不可一键撤销（写本身经用户明示授权，非数据丢失）。跟进项：revert 感知 grant 集或绝对路径记账。

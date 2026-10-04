@@ -150,7 +150,7 @@ const api: ApiSurface = {
     reprobe: () => invoke('sandbox:reprobe'),
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
-    grantWrite: (arg: { scope: 'session' | 'workspace'; key: string; dirs: string[]; resumeSessionId?: string }) =>
+    grantWrite: (arg: { scope: 'session' | 'workspace'; key: string; dirs: string[] }) =>
       invoke('sandbox:grantWrite', arg),
     denyWrite: (arg: { sessionId: string | null; dirs: string[] }) =>
       invoke('sandbox:denyWrite', arg),

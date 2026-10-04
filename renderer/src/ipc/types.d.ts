@@ -1439,8 +1439,6 @@ export interface SandboxApiSurface {
     scope: 'session' | 'workspace';
     key: string;
     dirs: string[];
-    /** 授权成功后向该会话注入唤醒消息（agent 自动重试被拦命令；卡按钮携带） */
-    resumeSessionId?: string;
   }): Promise<void>;
   /** 写授权拒绝（spec 2026-10-03 hard-gate §4.3）：广播解除等待中的工具调用 */
   denyWrite(arg: { sessionId: string | null; dirs: string[] }): Promise<void>;
