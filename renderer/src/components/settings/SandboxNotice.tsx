@@ -213,17 +213,14 @@ export function SandboxNotice() {
             {writePending.command}
           </code>
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setActiveView('settings')}>
-              去设置
-            </Button>
-            <Button variant="ghost" onClick={() => denyNow()}>
+            <Button variant="danger" onClick={() => denyNow()}>
               拒绝
             </Button>
             <Button
               onClick={() => void grantNow('session').catch(() => {})}
               disabled={busy || writePending.sessionId === null || writePending.dirs.length === 0}
             >
-              本会话允许
+              会话允许
             </Button>
             <Button
               onClick={() => void grantNow('workspace').catch(() => {})}
@@ -233,7 +230,7 @@ export function SandboxNotice() {
                 (writePending.workspaceId === null && activeWorkspaceId === null)
               }
             >
-              本工作空间始终允许
+              始终允许
             </Button>
           </div>
         </>

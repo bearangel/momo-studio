@@ -567,26 +567,26 @@ describe('SandboxNotice：通用写授权卡', () => {
     expect(screen.getByText('/Users/x/.cargo')).toBeInTheDocument();
     expect(screen.getByText('cargo build')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '本会话允许' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '会话允许' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '始终允许' })).toBeInTheDocument();
   });
 
-  it('本会话允许 → grantWrite(session) + 卡消失', async () => {
+  it('会话允许 → grantWrite(session) + 卡消失', async () => {
     grantWriteMock.mockResolvedValue(undefined);
     receive(EVT);
     render(<SandboxNotice />);
-    fireEvent.click(screen.getByRole('button', { name: '本会话允许' }));
+    fireEvent.click(screen.getByRole('button', { name: '会话允许' }));
     await waitFor(() =>
       expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'session', key: 's-1', dirs: ['/Users/x/.cargo'] }),
     );
     await waitFor(() => expect(screen.queryByTestId('sandbox-notice')).toBeNull());
   });
 
-  it('本工作空间始终允许 → grantWrite(workspace)', async () => {
+  it('始终允许 → grantWrite(workspace)', async () => {
     grantWriteMock.mockResolvedValue(undefined);
     receive(EVT);
     render(<SandboxNotice />);
-    fireEvent.click(screen.getByRole('button', { name: '本工作空间始终允许' }));
+    fireEvent.click(screen.getByRole('button', { name: '始终允许' }));
     await waitFor(() =>
       expect(grantWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dirs: ['/Users/x/.cargo'] }),
     );
@@ -636,20 +636,20 @@ describe('SandboxNotice：通用写授权卡', () => {
     expect(screen.queryByTestId('sandbox-notice')).toBeNull();
   });
 
-  it('空 dirs（路径提取失败）→ 两授权按钮禁用 + 降级文案 + 去设置可用', () => {
+  it('空 dirs（路径提取失败）→ 两授权按钮禁用 + 降级文案 + 无去设置按钮（2026-10-04 删）', () => {
     receive({ ...EVT, dirs: [] });
     render(<SandboxNotice />);
-    expect(screen.getByRole('button', { name: '本会话允许' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '会话允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '始终允许' })).toBeDisabled();
     expect(screen.getByText(/未能定位具体目录/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '去设置' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '去设置' })).toBeNull();
   });
 
   it('sessionId null（映射失败）→ 会话按钮禁用；workspace 按钮可用', () => {
     receive({ ...EVT, sessionId: null });
     render(<SandboxNotice />);
-    expect(screen.getByRole('button', { name: '本会话允许' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: '会话允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '始终允许' })).not.toBeDisabled();
   });
 
   it('workspaceId null 且无激活 workspace → 工作空间按钮禁用；会话按钮可用', () => {
@@ -658,7 +658,7 @@ describe('SandboxNotice：通用写授权卡', () => {
     });
     receive({ ...EVT, workspaceId: null });
     render(<SandboxNotice />);
-    expect(screen.getByRole('button', { name: '本工作空间始终允许' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '本会话允许' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: '始终允许' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '会话允许' })).not.toBeDisabled();
   });
 });
