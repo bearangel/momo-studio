@@ -295,6 +295,7 @@ const api: ApiSurface = {
     status: (workspaceId) => invoke('lsp:status', workspaceId),
     redetect: (workspaceId) => invoke('lsp:redetect', workspaceId),
     install: (workspaceId, languageId) => invoke('lsp:install', workspaceId, languageId),
+    start: (workspaceId, languageId) => invoke('lsp:start', workspaceId, languageId),
   },
   audit: {
     getToolCalls: (workspaceId, opts) => invoke('audit:getToolCalls', workspaceId, opts),

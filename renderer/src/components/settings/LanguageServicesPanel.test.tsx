@@ -16,12 +16,14 @@ import type { LanguageStatus } from '../../ipc/types';
 const statusMock = vi.fn();
 const redetectMock = vi.fn();
 const installMock = vi.fn();
+const startMock = vi.fn();
 
 const mockApi = {
   lsp: {
     status: statusMock,
     redetect: redetectMock,
     install: installMock,
+    start: startMock,
   },
 };
 (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
@@ -40,6 +42,7 @@ beforeEach(() => {
   statusMock.mockReset();
   redetectMock.mockReset();
   installMock.mockReset();
+  startMock.mockReset();
   statusMock.mockResolvedValue(STATUSES);
 });
 
@@ -116,6 +119,45 @@ describe('LanguageServicesPanel', () => {
     render(<LanguageServicesPanel workspaceId="ws-1" />);
     await screen.findByText('Java');
     expect(screen.getAllByText('实验').length).toBe(1);
+  });
+
+  // ─── 手动启动（lsp:start，2026-10-08）───
+  // stopped + binary 行才有「启动」；默认 fixture 无此形态——自备 stopped 版 ts 行
+  const STATUSES_STOPPED: LanguageStatus[] = STATUSES.map((s) =>
+    s.languageId === 'typescript' ? { ...s, running: 'stopped' as const } : s,
+  );
+
+  it('启动按钮仅出现在 stopped 且 binary ✓ 的行；running/idle/missing-binary 行无', async () => {
+    statusMock.mockResolvedValue(STATUSES_STOPPED);
+    render(<LanguageServicesPanel workspaceId="ws-1" />);
+    await screen.findByText('Java');
+    // ts（stopped+binary）一个启动按钮；go（running）/ python+java（stopped 但
+    // binary ✗）均无——另 rust inactive 整行不参与
+    expect(screen.getAllByRole('button', { name: /^启动$/ }).length).toBe(1);
+  });
+
+  it('点击启动：调用 start(workspaceId, languageId)，完成后以返回 statuses 刷新（running 文案翻转）', async () => {
+    statusMock.mockResolvedValue(STATUSES_STOPPED);
+    const after: LanguageStatus[] = STATUSES_STOPPED.map((s) =>
+      s.languageId === 'typescript' ? { ...s, running: 'running' as const } : s,
+    );
+    startMock.mockResolvedValue(after);
+    render(<LanguageServicesPanel workspaceId="ws-1" />);
+    await screen.findByText('Java');
+    fireEvent.click(screen.getByRole('button', { name: /^启动$/ }));
+    await waitFor(() => expect(startMock).toHaveBeenCalledWith('ws-1', 'typescript'));
+    // 返回列表 running 已覆写——「启动」按钮随 stopped 态消失
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^启动$/ })).toBeNull());
+  });
+
+  it('启动失败 → 错误提示呈现且列表保留', async () => {
+    statusMock.mockResolvedValue(STATUSES_STOPPED);
+    startMock.mockRejectedValue(new Error('未找到 npm'));
+    render(<LanguageServicesPanel workspaceId="ws-1" />);
+    await screen.findByText('Java');
+    fireEvent.click(screen.getByRole('button', { name: /^启动$/ }));
+    expect(await screen.findByText(/启动失败|未找到 npm/)).toBeTruthy();
+    expect(screen.getByText('Java')).toBeTruthy();
   });
 
   it('重新检测调用 redetect 并刷新列表', async () => {

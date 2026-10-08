@@ -442,3 +442,47 @@ describe('lsp:install handler（D3 修正案：面板一键安装）', () => {
     expect(getSharedBinDir()).toBe('/tmp/momo-lsp-userdata-fixture/lsp-bin');
   });
 });
+
+describe('lsp:start handler（2026-10-08：面板手动启动）', () => {
+  /** 注册一次拿 start handler（无 deps——注入缝是整模块 vi.mock(manager)） */
+  function setupStart(): (event: unknown, workspaceId: string, languageId: string) => Promise<unknown> {
+    registerLspPanelIpc();
+    return vi.mocked(ipcMain.handle).mock.calls
+      .find((c) => c[0] === 'lsp:start')![1] as unknown as (
+      event: unknown,
+      workspaceId: string,
+      languageId: string,
+    ) => Promise<unknown>;
+  }
+
+  it('正常：ensureLspManager 单例 + 显式 ensureStarted + detect 快照 running 覆写返回', async () => {
+    const ensureStarted = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(manager.ensureLspManager).mockResolvedValue({
+      ensureStarted,
+    } as unknown as manager.LspManager);
+    const handler = setupStart();
+    const result = (await handler(undefined, 'ws-x', 'typescript')) as Array<Record<string, unknown>>;
+    // detect 模块桩返回 [{languageId:'typescript'}] + getLspRunState 桩 'stopped'
+    expect(result).toEqual([{ languageId: 'typescript', running: 'stopped' }]);
+    expect(manager.ensureLspManager).toHaveBeenCalledWith(
+      'ws-x',
+      '/tmp/ws-x',
+      expect.objectContaining({ languageId: 'typescript' }),
+    );
+    // 与 agent 工具路径的隐式 ensureStarted 区分：本通道必须显式握手
+    expect(ensureStarted).toHaveBeenCalledTimes(1);
+    expect(detect.detectWorkspaceLanguages).toHaveBeenCalledWith('ws-x', '/tmp/ws-x');
+  });
+
+  it('未注册语言 → 中文错误，不触 manager（协议垃圾防御）', async () => {
+    const handler = setupStart();
+    await expect(handler(undefined, 'ws-x', 'cobol')).rejects.toThrow('未注册的语言：cobol');
+    expect(manager.ensureLspManager).not.toHaveBeenCalled();
+  });
+
+  it('工作区不存在 → 中文错误', async () => {
+    vi.mocked(workspaceCrud.getWorkspace).mockReturnValueOnce(null);
+    const handler = setupStart();
+    await expect(handler(undefined, 'ws-nope', 'typescript')).rejects.toThrow('工作区不存在');
+  });
+});

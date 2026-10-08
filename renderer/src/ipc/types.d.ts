@@ -1933,6 +1933,8 @@ export interface ApiSurface {
     redetect(workspaceId: string): Promise<LanguageStatus[]>;
     /** 一键安装（npm 分发语言）到 app 共享目录 <userData>/lsp-bin，成功后重探测并返回新列表 */
     install(workspaceId: string, languageId: string): Promise<LanguageStatus[]>;
+    /** 手动启动某语言 server（spawn + initialize 握手；面板「启动」按钮），返回实时覆写后的列表 */
+    start(workspaceId: string, languageId: string): Promise<LanguageStatus[]>;
   };
   audit: {
     /** 分页查询某 workspace 的工具调用审计记录（最新优先） */

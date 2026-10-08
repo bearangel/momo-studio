@@ -226,7 +226,31 @@ export async function installLanguageServer(
   }));
 }
 
-/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测 / 一键安装。
+/**
+ * 手动启动（lsp:start handler 本体，2026-10-08）：面板「启动」按钮触发——
+ * ensureLspManager 单例 + 显式 ensureStarted()（spawn + initialize 握手；agent
+ * 工具路径经 getDiagnostics/findReferences 内部隐式触发，本通道供用户预热/
+ * 验证安装）。注入缝走仓库标准 vi.mock(manager) 整模块——无需 deps 参数。
+ * 成功后返回 detect 快照 + running 实时覆写（与 lsp:redetect 同型）。
+ */
+export async function startLanguageServer(
+  workspaceId: string,
+  languageId: string,
+): Promise<LanguageStatus[]> {
+  const spec = REGISTRY.find((s) => s.languageId === languageId);
+  if (!spec) throw new Error(`未注册的语言：${languageId}`);
+  const ws = getWorkspace(workspaceId);
+  if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
+  const mgr = await ensureLspManager(workspaceId, ws.directoryPath, spec);
+  await mgr.ensureStarted();
+  logger.info('LSP 手动启动完成', { workspaceId, languageId });
+  return detectWorkspaceLanguages(workspaceId, ws.directoryPath).map((s) => ({
+    ...s,
+    running: getLspRunState(workspaceId, s.languageId),
+  }));
+}
+
+/** 面板 invoke 注册（settings IPC 注册处调用）：语言状态查询 / 重探测 / 一键安装 / 手动启动。
  *  running 列实时覆写：detect 结果按 workspace 缓存，running 是随 server
  *  生命周期变化的实时态——返回前复制数组并以 getLspRunState（纯内存查询）
  *  覆写，否则面板 running 列被缓存冻结。 */
@@ -251,4 +275,6 @@ export function registerLspPanelIpc(deps: LspInstallDeps = {}): void {
   });
   ipcMain.handle('lsp:install', (_event, workspaceId: string, languageId: string) =>
     installLanguageServer(workspaceId, languageId, deps));
+  ipcMain.handle('lsp:start', (_event, workspaceId: string, languageId: string) =>
+    startLanguageServer(workspaceId, languageId));
 }

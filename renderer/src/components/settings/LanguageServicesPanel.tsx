@@ -10,7 +10,7 @@
 //   - 实验性徽标仅 experimental 行；「重新检测」busy 态禁用 + 图标旋转
 //   - 加载失败只渲染错误行，不抛错不阻塞设置页其余 section
 import { useCallback, useEffect, useState } from 'react';
-import { Check, PackagePlus, RefreshCw, X } from 'lucide-react';
+import { Check, PackagePlus, Play, RefreshCw, X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { CopyButton } from '../ui/CopyButton';
 import { cn } from '../../lib/cn';
@@ -36,6 +36,8 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
   // 一键安装（D3 修正案）：安装中语言（null = 空闲）；失败文案保留列表呈现
   const [installing, setInstalling] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  // 手动启动（lsp:start）：启动中语言；失败文案与安装错误同位呈现
+  const [starting, setStarting] = useState<string | null>(null);
 
   const load = useCallback(async (fn: (id: string) => Promise<LanguageStatus[]>) => {
     setBusy(true);
@@ -60,6 +62,20 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
       setInstallError(e instanceof Error ? e.message : String(e));
     } finally {
       setInstalling(null);
+    }
+  }, [workspaceId]);
+
+  // 手动启动：仅 stopped 且可执行（toolchain ✓ + binary ✓）的行可见按钮；
+  // 成功以返回列表刷新（running 列已实时覆写）
+  const start = useCallback(async (languageId: string) => {
+    setStarting(languageId);
+    setInstallError(null);
+    try {
+      setStatuses(await ipc.lsp.start(workspaceId, languageId));
+    } catch (e) {
+      setInstallError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(null);
     }
   }, [workspaceId]);
 
@@ -135,6 +151,18 @@ export function LanguageServicesPanel({ workspaceId }: { workspaceId: string }):
                     <span className={cn('w-14 shrink-0 text-right text-xs', RUNNING_CLASS[s.running])}>
                       {RUNNING_LABEL[s.running]}
                     </span>
+                    {s.running === 'stopped' && s.binary && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0"
+                        onClick={() => void start(s.languageId)}
+                        disabled={starting !== null}
+                      >
+                        <Play size={16} strokeWidth={1.75} aria-hidden />
+                        {starting === s.languageId ? '启动中…' : '启动'}
+                      </Button>
+                    )}
                   </>
                 ) : (
                   <span className="shrink-0 text-xs text-disabled">未检测到工程标志</span>
