@@ -8,6 +8,8 @@
 //   - 超时用例 vitest 超时给 10s（远大于 timeoutMs=1000，避免 CI 抖动）。
 //   - 环境变量白名单用例：临时往 process.env 写 OPENAI_API_KEY，验证子进程不可见；
 //     用例末尾 delete 清理；afterEach 再兜底清理一次避免失败时泄漏。
+// v2.5 工具链机制整体移除（2026-10-04）：net-trust payload 仅 {netOn, extraDirs}
+// 两字段，toolchainOn 已从契约下线。__setNetQueryForTest 替身形状相应精简。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -22,12 +24,11 @@ import {
   __setBashWriteWaitForTest,
   __setNetQueryForTest,
 } from '../../../src/main/agent/tools/shell-tools';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
 import { WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
 
-/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+  return { mode, networkPolicy };
 }
 
 let tmpRoot: string;
@@ -289,11 +290,11 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
     // 桥替身：首查无授权（真拦截），等待回调翻转 extraDirs（= 用户点了授权卡）
-    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
     __setBashWriteWaitForTest({
       wait: async (o) => {
         // 模拟授权落地：下一次 effective 返回已授权目录
-        __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))] }));
+        __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))] }));
         void o.isCovered();
         return { kind: 'covered' as const };
       },
@@ -317,7 +318,7 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
     __setBashWriteWaitForTest({ wait: async () => ({ kind: 'denied' as const }) });
     const tools = new ShellTools();
     const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
@@ -333,7 +334,7 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: false, extraDirs: [] }));
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
     let waitCalls = 0;
     __setBashWriteWaitForTest({
       wait: async () => {
@@ -348,14 +349,16 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
     expect(capturedSends.filter((m) => m.type === 'write-blocked-report').length).toBeGreaterThanOrEqual(2);
   });
 
-  itDarwin('回归锁 bug ①：toolchainOn=true 且被拦目录不在 extraDirs → isCovered 必须为 false（不瞬断）', async () => {
+  itDarwin('回归锁 bug ①：被拦目录不在 extraDirs → isCovered 必须为 false（纯成员判定）', async () => {
     __setSandboxSettingsForTest(settings('strict', 'deny'));
     __setSandboxStateForTest({
       platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
       available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
     });
-    // 旧 bug 形态：allow 开关 + 非预置目录被拦——isCovered 曾恒 true
-    __setNetQueryForTest(async () => ({ netOn: false, toolchainOn: true, extraDirs: [] }));
+    // v2.5 工具链机制移除后 net-trust payload 仅 {netOn, extraDirs}——无 toolchainOn
+    // 字段。被拦目录不在 extraDirs 时 isCovered 必须为 false（纯成员判定），否则
+    // 任何被拦目录都会瞬判 covered 零询问用户（bug ① 的根因形态）。
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
     let probe: boolean | undefined;
     __setBashWriteWaitForTest({
       wait: async (o) => {
@@ -365,18 +368,21 @@ describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
     });
     const tools = new ShellTools();
     await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
-    expect(probe).toBe(false); // 旧代码此处为 true——瞬判 covered 零等待
+    expect(probe).toBe(false); // 旧代码此处为 true（toolchainOn || 短路）——瞬判 covered 零等待
   });
 });
 
 // isCovered 源码锁（spec hard-gate §4.2）：防止 bug ① 复活——纯成员判定语义必须
-// 永久保留，旧实现 `eff.toolchainOn ||` 是已知瞬断形态（任何被拦目录都判覆盖）。
+// 永久保留。v2.5 工具链机制移除后 toolchainOn 整字段已下线（任何形式的复活都属
+// 重新引入瞬断路径），因此本锁扩展为「源码不得再出现 eff.toolchainOn 这一整段」
+// ——既锁逻辑形态，又锁字段复活。
 describe('isCovered 源码锁（spec hard-gate §4.2）', () => {
-  it('不再以 eff.toolchainOn 作覆盖判定（bug ① 防复活）', () => {
+  it('不再以 eff.toolchainOn 作覆盖判定（bug ① 防复活 + toolchainOn 字段防复活）', () => {
     const src = fs.readFileSync(
       path.resolve(__dirname, '../../../src/main/agent/tools/shell-tools.ts'),
       'utf-8',
     );
     expect(src).not.toContain('eff.toolchainOn ||');
+    expect(src).not.toContain('eff.toolchainOn');
   });
 });

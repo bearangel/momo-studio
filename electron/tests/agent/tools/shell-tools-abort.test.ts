@@ -8,11 +8,10 @@ import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
 
-/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+  return { mode, networkPolicy };
 }
 
 describe('ShellTools abortSignal 响应', () => {

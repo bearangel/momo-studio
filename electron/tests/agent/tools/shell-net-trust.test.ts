@@ -1,13 +1,13 @@
 // electron/tests/agent/tools/shell-net-trust.test.ts
 //
-// bash 工具网络策略查询接线测试（2026-09-13 修订 B 双态化 + 2026-10-01 v2.5）：
+// bash 工具网络策略查询接线测试（2026-09-13 修订 B 双态化）：
 //   - spawn 前经 IPC 桥问主进程有效网络态（requestEffectiveNetwork），并按
 //     结果驱动 profile（netOn=false → net-off spawn；netOn=true → net-on spawn）
 //   - 查询桥故障（非 fork 环境 / 超时）→ 回退设置双态推导（deny → net-off）
 //   - bash 结果原样返回（ask 时代的阻塞询问/批准提示追加已下线——网络失败
 //     文本不经任何改写透传给 LLM）
-//   - v2.5：effective 双字段驱动 spawn——netOn 驱动网络态、toolchainOn 驱动
-//     工具链目录 RW bind；查询载荷带 ctx.workspaceId（会话 grant 键控）
+// v2.5 工具链机制整体移除（2026-10-04）：effective payload 仅 {netOn, extraDirs}
+// 两字段，toolchainOn 整字段下线——下游测试替身形状相应精简。
 //
 // 平台自适应（2026-10-01）：resolveShellSpawn 按真实 process.platform 分派
 // wrapped 分支——本文件原只注入 linux/bwrap 状态（macOS 主机上全红：plan
@@ -41,7 +41,6 @@ vi.mock('node:child_process', async (importOriginal) => {
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../../src/main/sandbox/toolchain-grant';
 import type { ToolContext } from '../../../src/main/agent/tools/types';
 
 /** 宿主平台是否 darwin（决定 wrapped 分支与断言形态——见文件头注释） */
@@ -49,9 +48,9 @@ const IS_DARWIN = process.platform === 'darwin';
 /** 当前平台 wrapped 分支名（结果 sandbox tag 前缀） */
 const WRAPPED = IS_DARWIN ? 'seatbelt' : 'bwrap';
 
-/** 测试用 settings 构造器：v2.5 起 toolchainPolicy/toolchainDirs 必填 */
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+  return { mode, networkPolicy };
 }
 
 /** 构造 fake 子进程：capture spawn 后由测试驱动 close（带 stderr 网络 failure 签名） */
@@ -86,21 +85,6 @@ function expectNet(expected: 'on' | 'off'): void {
     expect(lastProfile?.includes('(allow network*)')).toBe(expected === 'on');
   } else {
     expect(lastSpawnArgs().includes('--unshare-net')).toBe(expected === 'off');
-  }
-}
-
-/**
- * 断言工具链目录授权是否落到 spawn 产物：linux=bwrap `--bind dir dir`；
- * darwin=seatbelt profile `(allow file-write* (subpath "dir"))`。
- */
-function expectToolchain(dir: string, expected: 'granted' | 'absent'): void {
-  const want = expected === 'granted';
-  if (IS_DARWIN) {
-    expect(lastProfile?.includes(`(allow file-write* (subpath "${dir}"))`)).toBe(want);
-  } else {
-    const args = lastSpawnArgs();
-    const hasBind = args.some((a, i) => a === '--bind' && args[i + 1] === dir);
-    expect(hasBind).toBe(want);
   }
 }
 
@@ -160,9 +144,9 @@ async function runBashToCompletion(): Promise<string> {
   return p;
 }
 
-describe('bash 网络态查询：spawn 前接线（修订 B）', () => {
+describe('bash 网络态查询：spawn 前接线（修订 B + v2.5 两字段 payload）', () => {
   it('effective 桥以 ctx.streamSessionId + ctx.workspaceId 查询（跨模块 ID 单点透传；grant 键控）', async () => {
-    effectiveMock.mockResolvedValue({ netOn: false, toolchainOn: false });
+    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [] });
     const tools = new ShellTools();
     const p = tools.execute('bash', { command: 'echo hi' }, ctx);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
@@ -172,14 +156,14 @@ describe('bash 网络态查询：spawn 前接线（修订 B）', () => {
   });
 
   it('netOn=true → spawn net-on（无 --unshare-net）+ 结果 tag net-on', async () => {
-    effectiveMock.mockResolvedValue({ netOn: true, toolchainOn: false });
+    effectiveMock.mockResolvedValue({ netOn: true, extraDirs: [] });
     const result = await runBashToCompletion();
     expectNet('on');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-on`);
   });
 
   it('netOn=false → spawn net-off + 失败结果原样返回（含原始 stderr，无任何追加提示）', async () => {
-    effectiveMock.mockResolvedValue({ netOn: false, toolchainOn: false });
+    effectiveMock.mockResolvedValue({ netOn: false, extraDirs: [] });
     const result = await runBashToCompletion();
     expectNet('off');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-off`);
@@ -204,30 +188,13 @@ describe('bash 网络态查询：spawn 前接线（修订 B）', () => {
     expectNet('on');
     expect(result).toContain(`sandbox: ${WRAPPED}/net-on`);
   });
-});
 
-describe('effective 双字段 → spawn 接线（v2.5 工具链授权）', () => {
-  let toolchainDir: string;
-  beforeEach(() => {
-    // 真实存在的 tmp 目录（buildPolicy 过滤不存在条目——幽灵路径测不出接线）
-    toolchainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ap-toolchain-bind-'));
-    __setSandboxSettingsForTest({
-      mode: 'strict', networkPolicy: 'deny',
-      toolchainPolicy: 'deny', toolchainDirs: [toolchainDir],
-    });
-  });
-  afterEach(() => { fs.rmSync(toolchainDir, { recursive: true, force: true }); });
-
-  it('toolchainOn=true → 工具链目录 RW bind 进 spawn 产物', async () => {
-    effectiveMock.mockResolvedValue({ netOn: true, toolchainOn: true });
-    await runBashToCompletion();
-    // expandToolchainDirs 已 realpath 归一（/var → /private/var）——断言用归一后路径
-    expectToolchain(fs.realpathSync(toolchainDir), 'granted');
-  });
-
-  it('toolchainOn=false → 不 bind（默认安全方向）', async () => {
-    effectiveMock.mockResolvedValue({ netOn: true, toolchainOn: false });
-    await runBashToCompletion();
-    expectToolchain(fs.realpathSync(toolchainDir), 'absent');
+  it('payload 形状锁：effective 桥返回 {netOn, extraDirs} 两键（v2.5 toolchainOn 字段防复活）', async () => {
+    // mock 返回值含 toolchainOn 是契约违例——断言 mock 输入被消费者忽略：
+    // spawn 仍按 netOn 驱动、extraDirs 路径不受 toolchainOn 字段污染
+    effectiveMock.mockResolvedValue({ netOn: false, toolchainOn: false, extraDirs: [] });
+    const result = await runBashToCompletion();
+    expectNet('off');
+    expect(result).toContain(`sandbox: ${WRAPPED}/net-off`);
   });
 });

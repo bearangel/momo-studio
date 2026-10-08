@@ -55,9 +55,6 @@ import {
   type SandboxProbeState,
 } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
-import {
-  DEFAULT_TOOLCHAIN_DIRS,
-} from '../../src/main/sandbox/toolchain-grant';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-ipc-test-${Date.now()}`);
@@ -128,8 +125,6 @@ describe('sandbox:getState', () => {
     expect(info.settings).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
-      toolchainPolicy: 'deny',
-      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
     });
     expect(info.state).toBeNull();
     expect(info.installCommand).toBe('sudo apt install bubblewrap');
@@ -401,17 +396,4 @@ describe('sandbox:reprobe', () => {
     expect(info.state?.available).toBe(true);
     expect(info.state?.sandboxTool).toBe('bwrap');
   });
-});
-
-// sandbox 工具链写授权（spec §10）：SandboxInfo 聚合新增 toolchainPromptDismissed
-// + settings 两新字段。该文件聚焦可单测的纯逻辑；ipcMain.handle 注册形态以
-// typecheck + renderer 侧集成测试兜底。
-describe('SandboxInfo 扩展', () => {
-  it('buildInfo 含 settings 两新字段（toolchainPromptDismissed 已随事件驱动卡退役）', () => {
-    const info = buildInfo();
-
-    expect(info.settings).toHaveProperty('toolchainPolicy');
-    expect(info.settings).toHaveProperty('toolchainDirs');
-  });
-
 });

@@ -55,7 +55,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user'] },
+    settings: { mode: 'strict', networkPolicy: 'deny' },
     installCommand: 'sudo apt install bubblewrap',
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -447,7 +447,7 @@ describe('SandboxNotice：netOff 拦截卡', () => {
   });
 
   it('policy=allow + netBlockedSeen → 不渲染（全放行下无引导诉求）', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow' } }));
     act(() => {
       useStreamStore.setState({ netBlockedSeen: true });
     });

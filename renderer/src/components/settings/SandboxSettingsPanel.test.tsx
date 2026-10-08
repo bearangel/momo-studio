@@ -54,7 +54,7 @@ function makeInfo(overrides?: Partial<SandboxInfo>): SandboxInfo {
       executionPolicy: null,
       probedAt: 1757500000000,
     },
-    settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: [] },
+    settings: { mode: 'strict', networkPolicy: 'allow' },
     installCommand: null,
     bwrapPromptDismissed: false,
     winPolicyPromptDismissed: false,
@@ -210,7 +210,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络双态：deny 态点「永久允许（默认）」→ updateGlobal({ sandboxNetworkPolicy: allow }) + 乐观选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
 
@@ -237,7 +237,7 @@ describe('SandboxSettingsPanel', () => {
   });
 
   it('网络三态：deny 态挂载 → 「拒绝」初始选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny', toolchainDirs: [] } }));
+    getStateMock.mockResolvedValue(makeInfo({ settings: { mode: 'strict', networkPolicy: 'deny' } }));
     render(<SandboxSettingsPanel />);
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: '拒绝' })).toBeChecked();
@@ -257,7 +257,7 @@ describe('SandboxSettingsPanel', () => {
         executionPolicy: null,
         probedAt: 1757500001000,
       },
-      settings: { mode: 'permissive', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: [] },
+      settings: { mode: 'permissive', networkPolicy: 'allow' },
     });
     reprobeMock.mockResolvedValue(refreshed);
     render(<SandboxSettingsPanel />);
@@ -302,145 +302,6 @@ describe('SandboxSettingsPanel', () => {
 // —— 工具链目录写入双态 + 目录清单编辑（v2.5 沙箱工具链授权 Task 7，spec §10）——
 // radio 走既有 save 乐观模式；清单为显式「保存清单」按钮（编辑/失焦不自动保存）；
 // 「恢复默认」写回与 electron 端 toolchain-grant.ts DEFAULT_TOOLCHAIN_DIRS 对齐的五项。
-describe('SandboxSettingsPanel：工具链双态与目录清单', () => {
-  beforeEach(() => {
-    listWriteGrantsMock.mockReset();
-    listWriteGrantsMock.mockResolvedValue([]);
-    getStateMock.mockReset();
-    reprobeMock.mockReset();
-    updateGlobalMock.mockReset();
-    updateGlobalMock.mockReturnValue(new Promise(() => {}));
-  });
-
-  it('工具链双态 radio：deny 默认渲染；点「永久允许」→ updateGlobal({ sandboxToolchainPolicy: "allow" }) + 乐观选中', async () => {
-    getStateMock.mockResolvedValue(makeInfo());
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    expect(screen.getByRole('radio', { name: '拦截（默认）' })).toBeChecked();
-    const allowRadio = screen.getByRole('radio', { name: '永久允许' });
-    expect(allowRadio).not.toBeChecked();
-
-    fireEvent.click(allowRadio);
-
-    await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxToolchainPolicy: 'allow' });
-    });
-    // 乐观更新：保存挂起（默认 mock）但 radio 已切换
-    expect(allowRadio).toBeChecked();
-    expect(screen.getByRole('radio', { name: '拦截（默认）' })).not.toBeChecked();
-  });
-
-  it('工具链双态：allow 态点「拦截（默认）」→ updateGlobal({ sandboxToolchainPolicy: "deny" })', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'allow', toolchainDirs: [] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('radio', { name: '拦截（默认）' }));
-
-    await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxToolchainPolicy: 'deny' });
-    });
-    expect(screen.getByRole('radio', { name: '拦截（默认）' })).toBeChecked();
-  });
-
-  it('目录清单 textarea：初值为设置清单每行一项（join 换行）', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup', '~/go'] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-    expect(screen.getByLabelText('工具链目录清单')).toHaveValue('~/.rustup\n~/go');
-  });
-
-  it('编辑清单不自动保存；点「保存清单」→ updateGlobal({ sandboxToolchainDirs })（trim + 去空行）+ 归一化回显', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup'] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText('工具链目录清单'), {
-      target: { value: '~/.rustup\n  ~/extra  \n\n' },
-    });
-    expect(updateGlobalMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: '保存清单' }));
-
-    await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxToolchainDirs: ['~/.rustup', '~/extra'] });
-    });
-    await waitFor(() => {
-      expect(screen.getByLabelText('工具链目录清单')).toHaveValue('~/.rustup\n~/extra');
-    });
-  });
-
-  it('点「恢复默认」→ updateGlobal 写回 DEFAULT 五项 + textarea 同步', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup'] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: '恢复默认' }));
-
-    await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({
-        sandboxToolchainDirs: ['~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user'],
-      });
-    });
-    await waitFor(() => {
-      expect(screen.getByLabelText('工具链目录清单')).toHaveValue(
-        '~/.rustup\n~/.cargo\n~/go\nnpm:global-prefix\npip:user',
-      );
-    });
-  });
-
-  it('清空清单保存 → updateGlobal({ sandboxToolchainDirs: [] })（空输入边界）', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup'] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText('工具链目录清单'), { target: { value: '  \n\n' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存清单' }));
-
-    await waitFor(() => {
-      expect(updateGlobalMock).toHaveBeenCalledWith({ sandboxToolchainDirs: [] });
-    });
-  });
-
-  it('reprobe 刷新同步清单文本；未保存编辑（dirty）不被覆盖', async () => {
-    getStateMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.rustup'] } }),
-    );
-    reprobeMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/go'] } }),
-    );
-    render(<SandboxSettingsPanel />);
-    await waitFor(() => expect(screen.getByText('0.8.0 · 已启用')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: '重新探测' }));
-    await waitFor(() => {
-      expect(screen.getByLabelText('工具链目录清单')).toHaveValue('~/go');
-    });
-
-    fireEvent.change(screen.getByLabelText('工具链目录清单'), { target: { value: '~/custom' } });
-    reprobeMock.mockResolvedValue(
-      makeInfo({ settings: { mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny', toolchainDirs: ['~/.cargo'] } }),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '重新探测' }));
-
-    await waitFor(() => expect(reprobeMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText('工具链目录清单')).toHaveValue('~/custom');
-  });
-});
-
-
-// ═══ 已授权目录小节（spec 2026-10-03 §8）═══
 describe('SandboxSettingsPanel：已授权目录', () => {
   beforeEach(() => {
     listWriteGrantsMock.mockReset();

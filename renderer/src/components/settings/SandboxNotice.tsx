@@ -2,11 +2,11 @@
 //
 // v2.4 首启提示卡（spec §6.3）：Linux bwrap 安装引导 / Windows ExecutionPolicy 授权指引。
 // 非模态、可忽略（kv 记忆经主进程 dismissPrompt 持久化）；安装/授权后 reprobe 刷新，
-// 满足可用条件即自然消失。显隐条件（单卡容器，并存时 netOff > toolchain > bwrap/winPolicy
-// ——最可行动者优先）：
+// 满足可用条件即自然消失。显隐条件（单卡容器，并存时 netOff > writeBlocked > bwrap/winPolicy
+// ——最可行动者优先；v2.5 工具链卡已随 2026-10-03 事件驱动授权卡退役，
+// 2026-10-04 工具链设置机制整体移除）：
 //   - netOff 卡：netBlockedSeen（stream.store 实时检测标志）&& !netPromptDismissed
-//   - 工具链卡（v2.5 spec §7）：toolchainWriteBlockedSeen && !toolchainPromptDismissed
-//     && toolchainPolicy === 'deny'；动作「本会话允许」走 grantToolchain(activeWorkspaceId)
+//   - 写授权卡（hard-gate spec §7）：write-blocked-report / 结果文本检测驱动
 //   - bwrap 卡：linux && !available && !bwrapPromptDismissed && installCommand 存在
 //   - 授权卡：win32 && executionPolicy === 'Restricted' && !winPolicyPromptDismissed
 // NoticeStack 条目形态（spec 2026-09-15）：右下堆叠定位由容器锚定（安全区避让
@@ -206,7 +206,7 @@ export function SandboxNotice() {
             </ul>
           ) : (
             <p className="mb-3 text-xs text-status-warning">
-              未能定位具体目录（工具错误未带路径）。可到 设置→安全沙箱 手动配置预置清单。
+              未能定位具体目录（工具错误未带路径）。可拒绝后让 agent 改用工作空间内路径，或换用其他方式完成。
             </p>
           )}
           <code className="block border border-subtle bg-canvas rounded px-2 py-1.5 font-mono text-xs text-secondary select-all break-all mb-3">

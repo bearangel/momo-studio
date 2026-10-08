@@ -5,19 +5,18 @@
 //   - opts.networkEnabled 显式覆盖（shell-tools 经策略查询桥解析 netOn 后传入——
 //     接线锁：策略翻转后下一条 spawn 的 tag 随之变化）
 //   - 既有基线：平台分支 / strict 阻断 / permissive 降级
-// v2.5 工具链字段：注入器补全 toolchainPolicy/toolchainDirs（本测试关注网络态，
-// 工具链策略与目录用缺省 deny + DEFAULT_TOOLCHAIN_DIRS 兜底，行为不影响 spawn 决策）。
+// v2.5 工具链机制已整体移除（2026-10-04）：opts.toolchainEnabled 字段从契约下线，
+// SandboxSettings 形如 { mode, networkPolicy }。本测试仅关注网络态与追加写授权
+// 目录（extraDirs）两条接线。
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { resolveShellSpawn, sandboxInstallHint } from '../../src/main/sandbox';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS, expandToolchainDirs } from '../../src/main/sandbox/toolchain-grant';
-import { escapeSeatbeltString } from '../../src/main/sandbox/macos';
 
-/** 测试用 settings 构造器：网络态显式传、工具链字段用 v2.5 缺省 */
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
 function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
-  return { mode, networkPolicy, toolchainPolicy: 'deny' as const, toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] };
+  return { mode, networkPolicy };
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-spawn-'));
@@ -169,32 +168,20 @@ describe('resolveShellSpawn 平台分支（既有基线）', () => {
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 
-  it('extraDirs 与预置清单并集进 profile（授权后下一次调用立即生效，spec §6.2）', () => {
+  it('extraDirs 动态授权进 profile（授权后下一次调用立即生效，spec §6.2）', () => {
     const desc = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     try {
       __setSandboxStateForTest({ platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: null,
         available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 });
       __setSandboxSettingsForTest(settings('strict', 'deny'));
-      // 预置清单未授权（toolchainEnabled=false）+ 动态授权目录 → 后者仍进 profile
-      const plan = resolveShellSpawn(tmp, 'cargo build', { toolchainEnabled: false, extraDirs: ['/tmp/granted-dir'] });
+      // 动态授权目录 → 进 profile（v2.5 起无预置清单）
+      const plan = resolveShellSpawn(tmp, 'cargo build', { extraDirs: ['/tmp/granted-dir'] });
       expect(plan.kind).toBe('wrapped');
       if (plan.kind !== 'wrapped') return;
       const profile = fs.readFileSync(plan.args[1] as string, 'utf-8');
       expect(profile).toContain('(allow file-write* (subpath "/tmp/granted-dir"))');
       fs.rmSync(plan.args[1] as string, { force: true });
-      // 两来源并集去重：预置 + extraDirs 相同目录只出现一次
-      const plan2 = resolveShellSpawn(tmp, 'cargo build', {
-        toolchainEnabled: true,
-        extraDirs: [...expandToolchainDirs([...DEFAULT_TOOLCHAIN_DIRS], os.homedir())],
-      });
-      if (plan2.kind !== 'wrapped') return;
-      const profile2 = fs.readFileSync(plan2.args[1] as string, 'utf-8');
-      const count = (profile2.match(/allow file-write\* \(subpath/g) ?? []).length;
-      // 预置五项中 npm/pip 占位项本机可解析、~ 项归一——并集后写段条数应 ≤ 展开清单长（去重生效不翻倍）
-      const expanded = expandToolchainDirs([...DEFAULT_TOOLCHAIN_DIRS], os.homedir());
-      expect(count).toBeLessThanOrEqual(expanded.length + 2); // +2 = workspace/tmp 允许行（写段固定基线）
-      fs.rmSync(plan2.args[1] as string, { force: true });
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });
@@ -226,77 +213,6 @@ describe('sandboxInstallHint（blocked 文案按平台分支，主机验收 P0 �
       expect(plan.reason).toContain('沙箱未探测');
       expect(plan.reason).toContain('内置');
       expect(plan.reason).not.toContain('apt install');
-    } finally { desc && Object.defineProperty(process, 'platform', desc); }
-  });
-});
-
-// v2.5 工具链授权接线（spec §9）：resolveShellSpawn 的 opts.toolchainEnabled 决定
-// 目录展开——授权态把设置字面清单经 expandToolchainDirs 归一后注入 policy；
-// 未授权/未传恒空数组（默认安全方向）。darwin+seatbelt 分支可直接读 profile
-// 文件断言（真实生产者 renderSeatbeltProfile → 真实消费者 profile 文件，契约锁）。
-describe('resolveShellSpawn 工具链目录授权（v2.5）', () => {
-  const darwinAvail = { platform: 'darwin' as NodeJS.Platform, sandboxTool: 'seatbelt' as const, toolVersion: null,
-    available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0 };
-
-  function readProfile(plan: Extract<ReturnType<typeof resolveShellSpawn>, { kind: 'wrapped' }>): string {
-    const profile = plan.args[plan.args.indexOf('-f') + 1]!;
-    const content = fs.readFileSync(profile, 'utf-8');
-    fs.rmSync(profile, { force: true });
-    return content;
-  }
-
-  it('opts.toolchainEnabled=true → profile 含设置清单展开（expandToolchainDirs 归一）后的 allow 规则', () => {
-    // 目录须真实存在：buildPolicy 过滤不存在条目（bwrap --bind 硬失败）。
-    // 原 ~/.rustup 字面量依赖宿主机装过 rust——无 rust 机器上被过滤导致误红；
-    // 改用 tmp 真目录（~/ 展开分支已由 toolchain-grant.test 单测覆盖）
-    const toolchainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-toolchain-'));
-    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
-    try {
-      __setSandboxStateForTest(darwinAvail);
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
-        toolchainDirs: [toolchainDir] });
-      const plan = resolveShellSpawn(tmp, 'rustup component add x', { networkEnabled: true, toolchainEnabled: true });
-      expect(plan.kind).toBe('wrapped');
-      if (plan.kind !== 'wrapped') return;
-      expect(plan.tag).toBe('seatbelt/net-on');
-      // 契约锁：用真实 expandToolchainDirs 产出作期望（生产者真产出 → 消费者直消费）
-      const expanded = expandToolchainDirs([toolchainDir], os.homedir());
-      expect(expanded).toHaveLength(1);
-      expect(readProfile(plan)).toContain(`(allow file-write* (subpath ${escapeSeatbeltString(expanded[0]!)}))`);
-    } finally {
-      desc && Object.defineProperty(process, 'platform', desc);
-      fs.rmSync(toolchainDir, { recursive: true, force: true });
-    }
-  });
-
-  it('未传 toolchainEnabled（既有调用方）→ 目录集空，profile 无工具链行（向后兼容）', () => {
-    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
-    try {
-      __setSandboxStateForTest(darwinAvail);
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'allow', toolchainPolicy: 'deny',
-        toolchainDirs: ['~/.rustup'] });
-      const plan = resolveShellSpawn(tmp, 'ls', {});
-      expect(plan.kind).toBe('wrapped');
-      if (plan.kind !== 'wrapped') return;
-      expect(plan.tag).toBe('seatbelt/net-on');
-      expect(readProfile(plan)).not.toContain('.rustup');
-    } finally { desc && Object.defineProperty(process, 'platform', desc); }
-  });
-
-  it('toolchainEnabled=false 显式拒绝 → 与未传同义（空目录集）', () => {
-    const desc = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
-    try {
-      __setSandboxStateForTest(darwinAvail);
-      __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny', toolchainPolicy: 'deny',
-        toolchainDirs: [...DEFAULT_TOOLCHAIN_DIRS] });
-      const plan = resolveShellSpawn(tmp, 'cargo build', { networkEnabled: true, toolchainEnabled: false });
-      expect(plan.kind).toBe('wrapped');
-      if (plan.kind !== 'wrapped') return;
-      expect(plan.tag).toBe('seatbelt/net-on');
-      expect(readProfile(plan)).not.toContain('.rustup');
     } finally { desc && Object.defineProperty(process, 'platform', desc); }
   });
 });

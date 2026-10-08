@@ -1,17 +1,12 @@
 // electron/src/main/sandbox/toolchain-grant.ts
-// 会话级 grants 布尔模型已于 2026-10-03 随通用写授权（write-grant.ts）下线——
-// 本模块仅保留预置默认清单与目录展开归一（expandToolchainDirs）。
-// 目录展开：字面 ~/ 前缀 + npm/pip 占位项 → 归一绝对路径（realpath 优先，失败
-// resolve 兜底——目录未创建时 allow 不存在路径无害）。
+// v2.5 工具链授权机制（policy 开关 + 预置清单）已于 2026-10-04 随硬门控授权卡
+// 整体移除。本模块仅保留目录展开归一工具 expandToolchainDirs——通用写授权
+// （write-grant.ts）的目录归一化在用（~/ 前缀 + npm/pip 占位项 → realpath 归一
+// 绝对路径；realpath 优先，失败 resolve 兜底——目录未创建时无害）。
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger';
-
-/** 预置默认五项（spec D3）。npm/pip 为占位项，展开时探测解析 */
-export const DEFAULT_TOOLCHAIN_DIRS: string[] = [
-  '~/.rustup', '~/.cargo', '~/go', 'npm:global-prefix', 'pip:user',
-];
 
 /** npm 全局 prefix 探测（同步、模块级缓存一次） */
 let npmPrefixCache: string | null | undefined;

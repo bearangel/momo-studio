@@ -242,9 +242,7 @@ export class ShellTools implements ToolModule {
       command,
       net === null ? undefined : {
         networkEnabled: net.netOn,
-        // 预置清单授权态（toolchainPolicy 永久开）；动态授权目录（extraDirs）
-        // 恒参与——与预置开关独立（spec 2026-10-03 §6.2）
-        toolchainEnabled: net.toolchainOn,
+        // 动态授权目录（extraDirs，两层合成）——授权卡放行后下一次 spawn 立即生效
         extraDirs: net.extraDirs,
       },
     );

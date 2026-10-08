@@ -6,9 +6,9 @@
 //     'allow'（双态时代新默认即 allow，两分支同值收敛）；全缺省（全新库）→
 //     'allow' 并写回新键；显式 'deny' 原样保留（不重写）
 //   - 新键非法值（脏库）→ 回退新默认 'allow' 不抛错
-// v2.5 工具链授权契约：kv 有 sandboxToolchainPolicy=allow + 自定义 dirs 透传
-// （crud 透传纪律锁——读侧不烤默认进 JSON，allow 显式写入才生效）；非法
-// toolchainPolicy 收敛 deny（不抛错）。
+// v2.5 工具链授权契约已移除（2026-10-04）：旧键 sandboxToolchainPolicy /
+// sandboxToolchainDirs 在 crud 中以墓碑形式留存（不回滚，不读，不写），
+// 读路径不再合成任何工具链字段。SandboxSettings 形如 { mode, networkPolicy }。
 // db fixture 复用 tests/settings/crud.test.ts 模式（AP_USER_DATA_DIR 临时目录）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -20,7 +20,6 @@ import {
   getSandboxSettings,
   __setSandboxSettingsForTest,
 } from '../../src/main/sandbox/settings';
-import { DEFAULT_TOOLCHAIN_DIRS } from '../../src/main/sandbox/toolchain-grant';
 
 const tmpRoot = path.join(os.tmpdir(), `ap-sandbox-settings-${Date.now()}`);
 
@@ -61,14 +60,10 @@ describe('sandbox/settings（testOverride）', () => {
     __setSandboxSettingsForTest({
       mode: 'permissive',
       networkPolicy: 'deny',
-      toolchainPolicy: 'deny',
-      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
     });
     expect(getSandboxSettings()).toEqual({
       mode: 'permissive',
       networkPolicy: 'deny',
-      toolchainPolicy: 'deny',
-      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
     });
     expect(readRawGlobal().sandboxNetworkPolicy).toBeUndefined();
   });
@@ -78,8 +73,6 @@ describe('sandbox/settings（testOverride）', () => {
     expect(getSandboxSettings()).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
-      toolchainPolicy: 'deny',
-      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
     });
   });
 });
@@ -98,8 +91,6 @@ describe('sandbox/settings kv 懒迁移（修订 B：双态收敛）', () => {
     expect(getSandboxSettings()).toEqual({
       mode: 'strict',
       networkPolicy: 'allow',
-      toolchainPolicy: 'deny',
-      toolchainDirs: DEFAULT_TOOLCHAIN_DIRS,
     });
     const raw = readRawGlobal();
     expect(raw.sandboxNetworkPolicy).toBe('allow'); // 新键已写
@@ -163,38 +154,24 @@ describe('sandbox/settings 既有行为保持（v2.4 基线）', () => {
   });
 });
 
-describe('sandbox/settings 工具链授权契约（v2.5）', () => {
-  it('kv 有 sandboxToolchainPolicy=allow + 自定义 dirs → 透传（crud 不写默认进 JSON 锁）', () => {
-    writeRawGlobal({
-      sandboxToolchainPolicy: 'allow',
-      sandboxToolchainDirs: ['~/custom-tc'],
-    });
-    __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings().toolchainPolicy).toBe('allow');
-    expect(getSandboxSettings().toolchainDirs).toEqual(['~/custom-tc']);
+describe('sandbox/settings 形状锁（v2.5 工具链机制移除）', () => {
+  // 抗复活锁：v2.5 移除后 SandboxSettings 应严格保持两字段形状。任何回潮
+  // （如新增 toolchainPolicy/toolchainDirs/toolchainEnabled 等字段）会被
+  // toHaveProperty 截住。测试同时覆盖 testOverride 与 DB 两条读路径，确保
+  // 双源同形。
+  it('testOverride 注入的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    const s = getSandboxSettings();
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(s).not.toHaveProperty('toolchainPolicy');
+    expect(s).not.toHaveProperty('toolchainDirs');
   });
 
-  // GUI 验收修复（2026-10-03）：显式空清单是合法收紧意图（= 不授权任何目录，
-  // 比 deny 更严），必须保留——读侧回落默认仅在「未设置/非法」时发生。
-  // 修复前：保存 [] → 读回落五项 → 面板弹回默认，被观测为「保存失效」。
-  it('kv 显式空数组 dirs → 透传空清单（合法收紧，不回落默认）', () => {
-    writeRawGlobal({ sandboxToolchainDirs: [] });
+  it('DB 通路读出的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
     __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings().toolchainDirs).toEqual([]);
-  });
-
-  it('kv 无 dirs 键（未设置）→ 默认五项；非数组脏值 → 默认五项', () => {
-    writeRawGlobal({ sandboxMode: 'strict' });
-    __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings().toolchainDirs).toEqual(DEFAULT_TOOLCHAIN_DIRS);
-    writeRawGlobal({ sandboxToolchainDirs: 'not-an-array' });
-    __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings().toolchainDirs).toEqual(DEFAULT_TOOLCHAIN_DIRS);
-  });
-
-  it('kv 非法 toolchainPolicy → 默认安全方向 deny（不抛错）', () => {
-    writeRawGlobal({ sandboxToolchainPolicy: 'bogus' });
-    __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings().toolchainPolicy).toBe('deny');
+    const s = getSandboxSettings();
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(s).not.toHaveProperty('toolchainPolicy');
+    expect(s).not.toHaveProperty('toolchainDirs');
   });
 });

@@ -7,20 +7,17 @@
 // 超时按拒绝收敛，等效于变相 deny。现行有效网络态 = settings kv 双态策略
 // 单点判定：netOn = (networkPolicy === 'allow')。
 //
-// v2.5 工具链授权 + 2026-10-03 通用写授权（spec §6.1）：effective payload 为
-// { netOn, toolchainOn, extraDirs } 三字段。toolchainOn 单点判定：永久开
-//（toolchainPolicy === 'allow'）——会话级 grants 布尔模型已随通用写授权下线。
-// extraDirs = 预置(allow 时) ∪ 会话 ∪ 工作空间 三层授权目录（write-grant KV），sessionId
+// v2.5 工具链授权已移除（2026-10-04，机制随硬门控授权卡下线）；2026-10-03
+// 通用写授权（spec §6.1）：effective payload 为 { netOn, extraDirs } 两字段。
+// extraDirs = 会话 ∪ 工作空间 两层授权目录（write-grant KV），sessionId
 // 由主进程从请求载荷 streamSessionId 经 messages 表映射（子进程请求零改动）；
 // 旧子进程不传 workspaceId 时 extraDirs 恒空数组（向后兼容）。
 //
-// 本模块保留 effective 单 op 的子进程桥对端（线协议名与 op 名不变，payload
-// 形状扩展——线协议铁律：只加字段，不改既有字段含义）：ShellTools 在 runtime
+// 本模块保留 effective 单 op 的子进程桥对端（线协议名与 op 名不变——线协议
+// 铁律：只删字段需两端同 commit，本仓库单仓双端同发）：ShellTools 在 runtime
 // 子进程执行，策略读取必须代理回主进程（子进程不可见 DB 单例）。
-import os from 'node:os';
 import { getSandboxSettings } from './settings';
 import { getGrantedDirs } from './write-grant';
-import { expandToolchainDirs } from './toolchain-grant';
 import { getLatestMessageByStreamSessionId } from '../storage/messages/repo';
 
 export type { NetworkPolicy } from './settings';
@@ -35,7 +32,7 @@ interface NetTrustOpMsg {
 }
 
 export type NetTrustOpResult =
-  | { ok: true; payload: { netOn: boolean; toolchainOn: boolean; extraDirs: string[] } }
+  | { ok: true; payload: { netOn: boolean; extraDirs: string[] } }
   | { ok: false; error: string };
 
 function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
@@ -52,9 +49,8 @@ function parseNetTrustOpMsg(msg: unknown): NetTrustOpMsg | null {
 
 /**
  * 子进程 op 统一路由（永不抛异常——失败统一 { ok:false, error } 序列化回子进程）。
- * effective：spawn 前有效态查询，双字段单点判定——
- *   netOn      = (networkPolicy === 'allow')
- *   toolchainOn = (toolchainPolicy === 'allow') ||
+ * effective：spawn 前有效态查询，单点判定 netOn = (networkPolicy === 'allow')，
+ * extraDirs = 会话 ∪ 工作空间 两层授权目录合成。
  * 设置读取失败（DB 异常等）降级 ok:false——子进程 shell-tools 自有回退路径，
  * 绝不因策略查询挂死 bash 主路径。
  */
@@ -66,9 +62,6 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
   try {
     const settings = getSandboxSettings();
     const netOn = settings.networkPolicy === 'allow';
-    // 工具链写授权：永久开（toolchainPolicy）；会话级 grants 布尔模型已随通用
-    // 写授权（2026-10-03）下线——动态目录走 extraDirs
-    const toolchainOn = settings.toolchainPolicy === 'allow';
     // extraDirs（spec §6.1）：streamSessionId → 聊天会话映射在主进程单点解析
     //（子进程请求载荷零改动）。roll 语义（终审 I1）：流轮转时消息行的
     // stream_session_id 被改写为 #roll{n} 后缀——用「流族 = base + #roll 取
@@ -79,14 +72,11 @@ export async function handleNetTrustOp(msg: unknown): Promise<NetTrustOpResult> 
     } catch {
       sessionId = null;
     }
-    // extraDirs 三层合成（spec hard-gate §4.1）：预置层仅 allow 时展开参与——
-    // 此前只回传两层，shell-tools 的 isCovered 用 `toolchainOn ||` 布尔补偿缺失
-    // 层，导致 allow 开关下任何被拦目录瞬判 covered（bug ①）。字段形状不变。
-    const presetDirs = toolchainOn
-      ? expandToolchainDirs(settings.toolchainDirs, os.homedir())
-      : [];
-    const extraDirs = [...new Set([...presetDirs, ...getGrantedDirs(sessionId, parsed.workspaceId ?? null)])];
-    return { ok: true, payload: { netOn, toolchainOn, extraDirs } };
+    // extraDirs 两层合成（2026-10-04 修订：v2.5 预置层随工具链机制移除，自
+    // hard-gate §4.1 的三层合成回退两层——会话 ∪ 工作空间。授权卡按实际
+    // 被拦目录授权，预置机制无存在必要）。字段形状不变。
+    const extraDirs = getGrantedDirs(sessionId, parsed.workspaceId ?? null);
+    return { ok: true, payload: { netOn, extraDirs } };
   } catch (err) {
     return { ok: false, error: `网络策略读取失败: ${err instanceof Error ? err.message : String(err)}` };
   }

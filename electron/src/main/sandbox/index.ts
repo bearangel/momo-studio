@@ -9,7 +9,6 @@ import { getSandboxSettings } from './settings';
 import { buildPolicy } from './policy';
 import { buildBwrapArgs } from './linux';
 import { renderSeatbeltProfile } from './macos';
-import { expandToolchainDirs } from './toolchain-grant';
 import type { SpawnPlan } from './types';
 
 /** wrapped 模式缓存 env：npm/pip 缓存重定向到 tmp（写剖面自洽，spec §5.7） */
@@ -34,7 +33,7 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
 export function resolveShellSpawn(
   workspaceDir: string,
   command: string,
-  opts?: { networkEnabled?: boolean; toolchainEnabled?: boolean; extraDirs?: string[] },
+  opts?: { networkEnabled?: boolean; extraDirs?: string[] },
 ): SpawnPlan {
   const settings = getSandboxSettings();
   // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
@@ -43,13 +42,9 @@ export function resolveShellSpawn(
   //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
-  // 写授权目录（spec 2026-10-03 §6.2）：预置清单（授权态才展开字面清单 + 占位项）
-  // ∪ 动态授权（extraDirs——主进程三层合成的动态两层回传，恒参与：卡授权后
-  // 下一次 spawn 立即生效，与预置开关独立）。
-  const presetDirs = opts?.toolchainEnabled
-    ? expandToolchainDirs(settings.toolchainDirs, os.homedir())
-    : [];
-  const extraWriteDirs = [...new Set([...presetDirs, ...(opts?.extraDirs ?? [])])];
+  // 写授权目录（2026-10-04 修订：v2.5 预置清单随工具链机制移除，仅剩动态
+  // 授权层 extraDirs——主进程两层合成回传，卡授权后下一次 spawn 立即生效）。
+  const extraWriteDirs = opts?.extraDirs ?? [];
   const policy = buildPolicy(workspaceDir, networkEnabled, extraWriteDirs);
 
   if (process.platform === 'win32') {

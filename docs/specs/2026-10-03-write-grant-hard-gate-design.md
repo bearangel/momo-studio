@@ -28,7 +28,7 @@ GUI 验收反馈：授权卡弹出时 agent 不等待用户处置，直接推进
 **目标**
 
 - bash 与文件写工具统一硬门控：越界 → 弹卡 → 挂起等待 → `covered` 原地重执行 / `denied` 即时返回 / `aborted` 随停止按钮终止
-- 覆盖判定单点化：`effective.extraDirs` 补全三层合成，等待侧纯成员判定（删除 `toolchainOn ||`）
+- 覆盖判定单点化：`effective.extraDirs` 补全三层合成，等待侧纯成员判定（删除 `toolchainOn ||`）。（2026-10-04 修订：三层已随工具链机制移除回退两层——见 §4.1 修订横幅；纯成员判定语义不变）
 - 拒绝即时解除：新增 renderer→main IPC + main→child 线协议消息（只加通道，不改既有字段含义）
 
 **非目标**
@@ -57,6 +57,8 @@ GUI 验收反馈：授权卡弹出时 agent 不等待用户处置，直接推进
 ## 4. 信号链与线协议（momo-boundary-rules：只加通道 / 只加字段）
 
 ### 4.1 effective 三层合成（行为修复，字段形状不变）
+
+> **2026-10-04 修订：v2.5 工具链机制（policy 开关 + 预置清单）整体移除**——硬门控授权卡按实际被拦目录授权，预置机制无存在必要。`extraDirs` 自三层合成**回退两层**（会话 ∪ 工作空间）；`toolchainOn` 线协议字段删除（双端同 commit）；存量 JSON 键 `sandboxToolchainPolicy` / `sandboxToolchainDirs` 墓碑留存不读不写（回滚安全）。迁移裁定：不迁移——存量 allow 用户首次工具链写入弹一次卡、点一次「始终允许」即恢复。本节以下公式保留为历史记录。
 
 `network-trust.ts` `handleNetTrustOp`：
 

@@ -30,11 +30,9 @@ const NO_SEND_MESSAGE = '网络策略 IPC 不可用（process.send 缺失：非 
 /** effective op 超时档（主进程同步计算，60s 远超所需；仅防主进程卡死） */
 const EFFECTIVE_BRIDGE_TIMEOUT_MS = 60_000;
 
-/** spawn 前有效网络态（主进程双态策略单点判定的镜像产物；v2.5 起含工具链授权态） */
+/** spawn 前有效网络态（主进程双态策略单点判定的镜像产物） */
 export interface EffectiveNetworkDecision {
   netOn: boolean;
-  /** v2.5 工具链目录写授权：永久 allow（toolchainPolicy）；会话 grant 布尔已下线 */
-  toolchainOn: boolean;
   /** 通用写授权目录（spec 2026-10-03 §6.1）：主进程 session ∪ workspace 两层合成；
    * 旧主进程应答缺该字段时按 [] 兜底（两端混跑安全） */
   extraDirs: string[];
@@ -98,7 +96,6 @@ export function requestEffectiveNetwork(
       const p = payload as Partial<EffectiveNetworkDecision>;
       return {
         netOn: p.netOn === true,
-        toolchainOn: p.toolchainOn === true,
         extraDirs: Array.isArray(p.extraDirs)
           ? p.extraDirs.filter((d): d is string => typeof d === 'string')
           : [],

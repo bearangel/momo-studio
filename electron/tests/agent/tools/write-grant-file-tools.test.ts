@@ -50,10 +50,10 @@ afterEach(() => {
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
-/** covered 替身：授权 = outside 根（三层合成的动态层等价物） */
+/** covered 替身：授权 = outside 根（extraDirs 动态层） */
 function grantOutsideOnWait(): void {
   __setWriteGrantToolForTest({
-    net: async () => ({ netOn: false, toolchainOn: false, extraDirs: [fs.realpathSync(outside)] }),
+    net: async () => ({ netOn: false, extraDirs: [fs.realpathSync(outside)] }),
     wait: async () => ({ kind: 'covered' as const }),
   });
 }
@@ -95,7 +95,7 @@ describe('write_file 硬门控（spec §7）', () => {
     fs.symlinkSync(outside, alias);
     try {
       __setWriteGrantToolForTest({
-        net: async () => ({ netOn: false, toolchainOn: false, extraDirs: [fs.realpathSync(outside)] }),
+        net: async () => ({ netOn: false, extraDirs: [fs.realpathSync(outside)] }),
         wait: async () => ({ kind: 'covered' as const }),
       });
       const target = path.join(alias, 'via-alias.txt');

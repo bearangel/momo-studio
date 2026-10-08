@@ -731,14 +731,13 @@ export interface GlobalSettings {
    */
   sandboxNetworkPolicy?: 'deny' | 'allow';
   /**
-   * v2.5：沙箱工具链目录写入双态策略（spec §10：deny 默认拦截 / allow 永久允许
-   * 清单内目录）。与 electron 端 GlobalSettings 同名键镜像——读侧由主进程
-   * sandbox/settings.ts 懒迁移给默认 deny，此处不设默认值（写入会污染迁移判定）。
+   * v2.5：沙箱工具链目录写入策略。**2026-10-04 随工具链机制整体移除**（硬门控
+   * 授权卡取代）：本字段不再被生产消费；存量 JSON 键留存不读不写（回滚安全）。
    */
   sandboxToolchainPolicy?: 'deny' | 'allow';
   /**
-   * v2.5：可授权写入的工具链目录清单（每行一项；字面 ~/ 前缀 + 'npm:global-prefix'/
-   * 'pip:user' 占位项）。缺省 undefined → 主进程 DEFAULT_TOOLCHAIN_DIRS 五项兜底。
+   * v2.5：可授权写入的工具链目录清单。**2026-10-04 随工具链机制整体移除**：
+   * 本字段不再被生产消费；存量 JSON 键留存不读不写。
    */
   sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
@@ -1391,9 +1390,6 @@ export type SandboxMode = 'strict' | 'permissive';
 /** 沙箱网络出站双态策略，与 electron 端 sandbox/settings.ts 的 NetworkPolicy 对齐（2026-09-13 修订 B） */
 export type NetworkPolicy = 'deny' | 'allow';
 
-/** 工具链目录写入双态，与 electron 端 sandbox/settings.ts 的 ToolchainPolicy 对齐（spec §10） */
-export type ToolchainPolicy = 'deny' | 'allow';
-
 /**
  * v2.4 沙箱聚合信息（sandbox:getState / sandbox:reprobe 返回）。
  * 与 electron 端 sandbox/ipc.handlers.ts 的 SandboxInfo 对齐。
@@ -1404,10 +1400,6 @@ export interface SandboxInfo {
   settings: {
     mode: SandboxMode;
     networkPolicy: NetworkPolicy;
-    /** 工具链目录写入双态（spec §10）——deny 默认 / allow 永久允许 */
-    toolchainPolicy: ToolchainPolicy;
-    /** 可授权工具链目录字面清单（spec §10；归一展开由主进程 expandToolchainDirs 完成） */
-    toolchainDirs: string[];
   };
   /** 手动安装指引命令（包管理器探测失败为 null） */
   installCommand: string | null;

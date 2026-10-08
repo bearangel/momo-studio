@@ -45,15 +45,14 @@ export interface GlobalSettings {
    */
   sandboxNetworkPolicy?: 'deny' | 'ask' | 'allow';
   /**
-   * v2.5：沙箱工具链目录写入策略（spec §4：deny 默认 / allow 永久允许）。
-   * 同 sandboxNetworkPolicy 注释纪律——读侧透传 undefined，由 sandbox/settings.ts
-   * 懒迁移并给默认安全方向（deny）；此处给默认值会污染 JSON。
+   * v2.5：沙箱工具链目录写入策略。**2026-10-04 随工具链机制整体移除**（硬门控
+   * 授权卡取代）：本字段不再被生产消费；存量 JSON 键留存不读不写（同
+   * sandboxNetwork 墓碑先例，回滚安全）。
    */
   sandboxToolchainPolicy?: 'deny' | 'allow';
   /**
-   * v2.5：可授权写入的工具链目录清单（字面 ~/ 前缀 + 'npm:global-prefix'/'pip:user'
-   * 占位项；展开归一在消费侧 expandToolchainDirs）。缺省 undefined → 消费侧用
-   * DEFAULT_TOOLCHAIN_DIRS 兜底，不写默认进 JSON。
+   * v2.5：可授权写入的工具链目录清单。**2026-10-04 随工具链机制整体移除**：
+   * 本字段不再被生产消费；存量 JSON 键留存不读不写。
    */
   sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算）；默认 200。 */
