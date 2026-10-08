@@ -337,6 +337,39 @@ describe('CapabilityTabs — override 模式（Layer 3 弹窗）', () => {
     // 提示里应列出默认工具
     expect(screen.getByText(/read_file.*write_file|write_file.*read_file/)).toBeInTheDocument();
   });
+
+  it('override 模式：MCP Tab 显示默认 MCP 集合提示（2026-10-08 预设能力可见化）', () => {
+    render(
+      <CapabilityTabs
+        {...defaultProps({
+          mode: 'override',
+          defaultValue: { tools: ['read_file'], mcps: ['filesystem'], skills: [] },
+          value: { tools: ['read_file'], mcps: [], skills: [] },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByText('MCP'));
+    expect(screen.getByText(/默认（def \+ workspace）：filesystem/)).toBeInTheDocument();
+  });
+
+  it('override 模式：Skill Tab 显示默认 Skill 集合提示；空默认显示「无」', () => {
+    render(
+      <CapabilityTabs
+        {...defaultProps({
+          mode: 'override',
+          defaultValue: { tools: [], mcps: [], skills: ['prd-coauthoring', 'user-story-craft'] },
+          value: { tools: [], mcps: [], skills: [] },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByText('Skill'));
+    expect(
+      screen.getByText(/prd-coauthoring.*user-story-craft|user-story-craft.*prd-coauthoring/),
+    ).toBeInTheDocument();
+    // MCP Tab 空默认 → 「无」（同一提示组件的空态）
+    fireEvent.click(screen.getByText('MCP'));
+    expect(screen.getByText(/默认（def \+ workspace）：无/)).toBeInTheDocument();
+  });
 });
 
 describe('CapabilityTabs — MCP Tab 动态列表', () => {

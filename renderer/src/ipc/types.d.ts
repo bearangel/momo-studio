@@ -878,6 +878,25 @@ export interface BuiltinPresetItem {
 }
 
 /**
+ * 单个预置 agent 能力预览（resource:previewBuiltinPreset 返回形状，2026-10-08
+ * 预设可见化 + 薄 fork）。只读、恒为 YAML 最新版（不受已启用 DB 行版本影响）。
+ * 与 electron 端 agent/builtin.ts 的 BuiltinPresetPreview 对齐（renderer 端独立
+ * 定义，仅结构对齐——同 BuiltinPresetItem 惯例）。
+ */
+export interface BuiltinPresetPreview {
+  slug: string;
+  name: string;
+  iconEmoji: string;
+  description: string;
+  /** 全量系统提示词——展示层自行截断；「复制为自定义」预填需要全量 */
+  systemPrompt: string;
+  /** 工具 ref 列表（CapabilityTabs Capabilities.tools 同形） */
+  tools: string[];
+  mcps: string[];
+  skills: string[];
+}
+
+/**
  * v1.7 统一资源项——前端 UI/IPC 的核心数据结构。
  * 顶层字段对所有 source 通用；source 特有信息放在对应的可选 namespace 字段中。
  * 与 electron 端 resource/types.ts 的 ResourceItem 对齐（renderer 端独立定义，仅结构对齐）。
@@ -2065,6 +2084,11 @@ export interface ApiSurface {
      * 预置库弹窗数据源）。当前预置仅 agent 有「启用」管线，mcp/skill 固定空数组。
      */
     listBuiltinPresets(type: ResourceType): Promise<BuiltinPresetItem[]>;
+    /**
+     * 2026-10-08：单个预置 agent 能力预览（详情面板能力清单 + 薄 fork 预填）。
+     * 坏/空 slug 抛中文错；只读不落库。
+     */
+    previewBuiltinPreset(slug: string): Promise<BuiltinPresetPreview>;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */

@@ -7,9 +7,9 @@
 // 空清单（mcp/skill 类型面）空态文案。
 // Dialog 骨架照 UploadSkillDialog（ui/Dialog 原子件：Esc / 遮罩关闭）。
 import { useCallback, useEffect, useState } from 'react';
-import { PackageOpen } from 'lucide-react';
+import { Copy, PackageOpen } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import type { BuiltinPresetItem, ResourceType } from '../../ipc/types';
+import type { BuiltinPresetItem, BuiltinPresetPreview, ResourceType } from '../../ipc/types';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
 import { EmptyState } from '../ui/EmptyState';
@@ -20,13 +20,17 @@ interface Props {
   type: ResourceType;
   /** 选中预置（slug 是启用链路 resource key——EnablePresetDialog 消费） */
   onSelect: (slug: string) => void;
+  /** 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
+  onFork?: (preview: BuiltinPresetPreview) => void;
   onClose: () => void;
 }
 
-export function PresetLibraryDialog({ type, onSelect, onClose }: Props) {
+export function PresetLibraryDialog({ type, onSelect, onFork, onClose }: Props) {
   // null = 加载中；resolve 后 [] = 空态
   const [presets, setPresets] = useState<BuiltinPresetItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 能力摘要（2026-10-08）：slug → preview（null = 该行预览失败——无摘要、复制禁用）
+  const [previews, setPreviews] = useState<Record<string, BuiltinPresetPreview | null> | null>(null);
 
   const loadPresets = useCallback(async (): Promise<void> => {
     setError(null);
@@ -42,9 +46,37 @@ export function PresetLibraryDialog({ type, onSelect, onClose }: Props) {
     void loadPresets();
   }, [loadPresets]);
 
+  // 清单就绪后批量拉能力预览（本地直读 IPC，5 个预置一轮 Promise.all）；
+  // 单个失败不拖垮整弹窗——该行降级为无摘要/复制禁用。
+  useEffect(() => {
+    if (!presets) return;
+    let cancelled = false;
+    void Promise.all(
+      presets.map(async (p) => {
+        try {
+          return [p.slug, await ipc.resource.previewBuiltinPreset(p.slug)] as const;
+        } catch {
+          return [p.slug, null] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) setPreviews(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [presets]);
+
   // 选中：先通知父层（关预置库 + 打开 EnablePresetDialog），再自关（与父层关幂等）
   const handleSelect = (slug: string): void => {
     onSelect(slug);
+    onClose();
+  };
+
+  // fork：与选择同款自关契约（父层关弹窗与自关幂等叠加）
+  const handleFork = (preview: BuiltinPresetPreview): void => {
+    if (!onFork) return;
+    onFork(preview);
     onClose();
   };
 
@@ -72,24 +104,45 @@ export function PresetLibraryDialog({ type, onSelect, onClose }: Props) {
         />
       ) : (
         <ul className="flex flex-col">
-          {presets.map((preset) => (
-            <li
-              key={preset.slug}
-              className="flex items-center gap-3 border-b border-subtle py-2 last:border-b-0"
-            >
-              {/* iconEmoji 是清单数据展示（agent 定义元数据），原样渲染文本而非 UI 图标 */}
-              <span aria-hidden className="w-6 shrink-0 text-center text-base leading-none">
-                {preset.iconEmoji}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] text-primary">{preset.name}</span>
-                <span className="block truncate text-xs text-tertiary">{preset.description}</span>
-              </span>
-              <Button variant="secondary" size="sm" onClick={() => handleSelect(preset.slug)}>
-                选择
-              </Button>
-            </li>
-          ))}
+          {presets.map((preset) => {
+            const preview = previews?.[preset.slug] ?? undefined;
+            return (
+              <li
+                key={preset.slug}
+                className="flex items-center gap-3 border-b border-subtle py-2 last:border-b-0"
+              >
+                {/* iconEmoji 是清单数据展示（agent 定义元数据），原样渲染文本而非 UI 图标 */}
+                <span aria-hidden className="w-6 shrink-0 text-center text-base leading-none">
+                  {preset.iconEmoji}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] text-primary">{preset.name}</span>
+                  <span className="block truncate text-xs text-tertiary">{preset.description}</span>
+                  {preview && (
+                    <span className="block text-[11px] text-tertiary">
+                      {preview.tools.length} 工具 · {preview.skills.length} 技能
+                    </span>
+                  )}
+                </span>
+                {onFork && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!preview}
+                    onClick={() => preview && handleFork(preview)}
+                    className="inline-flex items-center gap-1"
+                    aria-label="复制"
+                  >
+                    <Copy size={12} strokeWidth={1.75} aria-hidden />
+                    复制
+                  </Button>
+                )}
+                <Button variant="secondary" size="sm" onClick={() => handleSelect(preset.slug)}>
+                  选择
+                </Button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Dialog>

@@ -12,8 +12,8 @@ const yamlDir = path.resolve(__dirname, '../../resources/agents');
 describe('builtin agent YAML ⊇ Tier 1', () => {
   const files = fs.readdirSync(yamlDir).filter((f) => f.endsWith('.yaml'));
 
-  it('resources/agents 下有 4 个 YAML', () => {
-    expect(files).toHaveLength(4);
+  it('resources/agents 下有 5 个 YAML', () => {
+    expect(files).toHaveLength(5);
   });
 
   for (const f of files) {

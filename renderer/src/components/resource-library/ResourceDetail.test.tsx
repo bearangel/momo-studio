@@ -11,9 +11,9 @@
 // 真实 jsdom window 上装 window.api 属性——ipc.client 是真实 Proxy，组件经
 // ipc.agent.list 反查 custom agent def 走真通道（momo-test-rules：mock 收窄到 IPC 边界）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ResourceDetail } from './ResourceDetail';
-import type { AgentDefinition, ResourceItem } from '../../ipc/types';
+import type { AgentDefinition, BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 
 /** 测试用基线 item，默认为 builtin agent */
 const baseItem = (overrides: Partial<ResourceItem> = {}): ResourceItem => ({
@@ -49,12 +49,17 @@ const baseDef = (overrides: Partial<AgentDefinition> = {}): AgentDefinition => (
   ...overrides,
 });
 
-// window.api 属性安装（ipc.client 是真实 Proxy，只装组件触达的 agent 命名空间）
+// window.api 属性安装（ipc.client 是真实 Proxy，装组件触达的 agent/resource 命名空间）
 const agentListMock = vi.fn();
+// 2026-10-08 能力预览：默认给最小可用形状（builtin agent 面板挂载即拉，老用例无感）
+const previewBuiltinPresetMock = vi.fn();
 
 const mockApi = {
   agent: {
     list: agentListMock,
+  },
+  resource: {
+    previewBuiltinPreset: previewBuiltinPresetMock,
   },
 };
 
@@ -62,6 +67,10 @@ beforeEach(() => {
   agentListMock.mockReset();
   // 默认空库：custom agent 反查不到 def → 不渲染定义预览（错误路径基线）
   agentListMock.mockResolvedValue([] as AgentDefinition[]);
+  previewBuiltinPresetMock.mockReset().mockResolvedValue({
+    slug: 'pm', name: '项目经理', iconEmoji: '👔', description: '',
+    systemPrompt: '协调', tools: ['read_file'], mcps: [], skills: [],
+  });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -518,5 +527,67 @@ describe('ResourceDetail - custom MCP 全字段编辑按钮（P2.5 Task 3）', (
       />,
     );
     expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument();
+  });
+});
+
+// ── 2026-10-08 预设可见化 + 薄 fork：builtin agent 能力清单 ──────────────
+// 挂载拉 resource:previewBuiltinPreset(slug)（恒 YAML 最新版），渲染能力三元组
+// 与 prompt 前 200 字；「复制为自定义」把全量 preview 交给 View 层预填创建向导。
+describe('ResourceDetail - builtin agent 能力清单 + 复制为自定义（2026-10-08）', () => {
+  const PREVIEW: BuiltinPresetPreview = {
+    slug: 'ui-designer',
+    name: 'UI 设计师',
+    iconEmoji: '🎨',
+    description: '设计规范守护者',
+    systemPrompt: '你是设计规范守护者——审查界面但不直接写产品代码。'.repeat(30),
+    tools: ['read_file', 'browser_screenshot'],
+    mcps: [],
+    skills: ['design-spec', 'design-critique'],
+  };
+
+  const forkItem = (): ResourceItem =>
+    baseItem({ id: 'builtin-agent-ui-designer', slug: 'ui-designer', builtin: { agentEnabled: false } });
+
+  it('挂载拉 previewBuiltinPreset(slug)；渲染能力三元组与 prompt 截断（200 字 + …）', async () => {
+    previewBuiltinPresetMock.mockResolvedValue(PREVIEW);
+    render(<ResourceDetail item={forkItem()} onClose={vi.fn()} />);
+    await waitFor(() => expect(previewBuiltinPresetMock).toHaveBeenCalledWith('ui-designer'));
+    const block = await screen.findByText(
+      /read_file.*browser_screenshot|browser_screenshot.*read_file/,
+    );
+    expect(block.textContent).toContain('design-spec');
+    expect(block.textContent).toContain('systemPrompt');
+    expect(block.textContent).toContain('…');
+    expect(block.textContent!.length).toBeLessThan(PREVIEW.systemPrompt.length);
+  });
+
+  it('「复制为自定义」→ onForkPreset 收到全量 preview 对象（fork 预填数据源）', async () => {
+    previewBuiltinPresetMock.mockResolvedValue(PREVIEW);
+    const onForkPreset = vi.fn();
+    render(<ResourceDetail item={forkItem()} onClose={vi.fn()} onForkPreset={onForkPreset} />);
+    const btn = await screen.findByRole('button', { name: /复制为自定义/ });
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(onForkPreset).toHaveBeenCalledWith(PREVIEW);
+  });
+
+  it('预览失败 → 红字含错误详情，fork 按钮 disabled（面板其余部分不受阻）', async () => {
+    previewBuiltinPresetMock.mockRejectedValue(new Error('YAML 解析失败'));
+    render(<ResourceDetail item={forkItem()} onClose={vi.fn()} onForkPreset={vi.fn()} />);
+    const err = await screen.findByText(/能力预览加载失败：YAML 解析失败/);
+    expect(err.className).toContain('text-status-error');
+    expect(screen.getByRole('button', { name: /复制为自定义/ })).toBeDisabled();
+  });
+
+  it('非 builtin agent 项不触发预览、不渲染 fork 按钮', () => {
+    render(
+      <ResourceDetail
+        item={baseItem({ id: 'builtin-skill-x', type: 'skill', slug: 'x' })}
+        onClose={vi.fn()}
+        onForkPreset={vi.fn()}
+      />,
+    );
+    expect(previewBuiltinPresetMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /复制为自定义/ })).toBeNull();
   });
 });

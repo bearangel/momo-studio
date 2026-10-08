@@ -13,7 +13,7 @@
 // ThinkingOverrideControl 需 capability 入参（能力由 picker 的 onModelInfo 驱动）。
 import { useEffect, useState } from 'react';
 import { ipc } from '../../../ipc/client';
-import type { ReasoningCapability, ResourceItem, ThinkingConfig } from '../../../ipc/types';
+import type { BuiltinPresetPreview, ReasoningCapability, ResourceItem, ThinkingConfig } from '../../../ipc/types';
 import { useToolCatalog } from '../../../lib/useToolCatalog';
 import { ProviderModelPicker } from '../../agent/ProviderModelPicker';
 import { ThinkingOverrideControl } from '../../agent/ThinkingOverrideControl';
@@ -35,26 +35,29 @@ const STEPS = ['基础信息', '提示词', '能力', '模型'] as const;
 interface Props {
   onClose: () => void;
   onSuccess: () => void;
+  /** 薄 fork 预填（2026-10-08 预设可见化）：预设能力预览全量带入——名称加「 副本」、
+   * prompt/图标/描述预填，能力步自动「自定义」档并勾选预填的 tools/mcps/skills */
+  initialDef?: BuiltinPresetPreview;
 }
 
-export function AgentCreateWizard({ onClose, onSuccess }: Props) {
+export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // 步 1：基础信息
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [iconEmoji, setIconEmoji] = useState('🤖');
+  // 步 1：基础信息（initialDef 存在时全量预填——薄 fork 语义）
+  const [name, setName] = useState(initialDef ? `${initialDef.name} 副本` : '');
+  const [description, setDescription] = useState(initialDef?.description ?? '');
+  const [iconEmoji, setIconEmoji] = useState(initialDef?.iconEmoji ?? '🤖');
   // 步 2：System Prompt
-  const [prompt, setPrompt] = useState('');
-  // 步 3：能力绑定
-  const [preset, setPreset] = useState<ToolPreset>('standard');
+  const [prompt, setPrompt] = useState(initialDef?.systemPrompt ?? '');
+  // 步 3：能力绑定（fork 恒 custom 档——预设能力集就是起点）
+  const [preset, setPreset] = useState<ToolPreset>(initialDef ? 'custom' : 'standard');
   // 「自定义」档的勾选集；目录就绪后初始化为 Tier 1（安全最小集）
-  const [customTools, setCustomTools] = useState<string[]>([]);
+  const [customTools, setCustomTools] = useState<string[]>([...(initialDef?.tools ?? [])]);
   const [mcps, setMcps] = useState<ResourceItem[]>([]);
   const [skills, setSkills] = useState<ResourceItem[]>([]);
-  const [selectedMcps, setSelectedMcps] = useState<string[]>([]);
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [selectedMcps, setSelectedMcps] = useState<string[]>([...(initialDef?.mcps ?? [])]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([...(initialDef?.skills ?? [])]);
   // 步 4：模型与完成
   const [providerId, setProviderId] = useState('');
   const [modelName, setModelName] = useState('');
@@ -143,7 +146,7 @@ export function AgentCreateWizard({ onClose, onSuccess }: Props) {
     setList(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   return (
-    <Dialog open onClose={onClose} title="新建智能体" width={520}>
+    <Dialog open onClose={onClose} title={initialDef ? '复制为自定义智能体' : '新建智能体'} width={520}>
       <div className="flex flex-col gap-4">
         {/* 步进条 */}
         <ol className="flex items-center gap-1.5 text-xs">

@@ -203,6 +203,14 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
               );
             })
           )}
+          {/* override 模式：提示默认集合（2026-10-08 预设能力可见化——与工具 Tab 同款） */}
+          {mode === 'override' && defaultValue && (
+            <div className="text-xs text-tertiary mt-1">
+              默认（def + workspace）：{defaultValue.mcps.join(', ') || '无'}
+              <br />
+              勾选 = 保留/添加；取消 = 移除
+            </div>
+          )}
         </div>
       )}
 
@@ -231,6 +239,14 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
                 </label>
               );
             })
+          )}
+          {/* override 模式：提示默认集合（2026-10-08 预设能力可见化——与工具 Tab 同款） */}
+          {mode === 'override' && defaultValue && (
+            <div className="text-xs text-tertiary mt-1">
+              默认（def + workspace）：{defaultValue.skills.join(', ') || '无'}
+              <br />
+              勾选 = 保留/添加；取消 = 移除
+            </div>
           )}
         </div>
       )}

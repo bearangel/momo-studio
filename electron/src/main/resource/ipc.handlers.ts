@@ -84,7 +84,7 @@ import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
 import { importGitRepoSkills, scanGitRepoSkills } from '../skill/git-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
-import { listBuiltinPresetAgents } from '../agent/builtin';
+import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import { requestResourceImport } from '../p2p/resource-transfer';
 
@@ -524,6 +524,16 @@ export function registerResourceHandlers(): void {
       throw new Error(`资源类型非法: ${String(type)}`);
     }
     return type === 'agent' ? listBuiltinPresetAgents() : [];
+  });
+
+  // resource:previewBuiltinPreset — 单个预置 agent 能力预览（2026-10-08 预设可见化 +
+  // 薄 fork）。只读不落库，数据恒为 YAML 最新版；坏/空 slug 由 previewBuiltinPresetAgent
+  // 内 readBuiltinManifestBySlug 抛中文错（renderer 详情面板红字）。
+  ipcMain.handle('resource:previewBuiltinPreset', async (_evt, slug: string) => {
+    if (typeof slug !== 'string' || slug === '') {
+      throw new Error('预置 slug 不能为空');
+    }
+    return previewBuiltinPresetAgent(slug);
   });
 
   // misc:openExternal — 外链转系统浏览器（P2.3 spec §6）。显式 https 校验
