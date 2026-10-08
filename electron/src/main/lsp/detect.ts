@@ -3,7 +3,7 @@
 //   消费方 B：lsp:status 面板
 import fs from 'node:fs';
 import path from 'node:path';
-import { REGISTRY, findBinaryInPath, type LanguageServerSpec } from './registry';
+import { REGISTRY, findBinaryInPath, invalidateBinaryValidatorCache, type LanguageServerSpec } from './registry';
 import { getLspRunState, type LspRunState } from './run-state';
 
 /** marker 求值跳过的目录名（依赖目录里遍地 go.mod/tsconfig） */
@@ -82,16 +82,20 @@ export function markersHit(workspaceDir: string, markers: string[]): boolean {
 const cache = new Map<string, LanguageStatus[]>();
 
 function buildStatuses(workspaceId: string, workspaceDir: string, envPath?: string): LanguageStatus[] {
-  return REGISTRY.map((spec: LanguageServerSpec) => ({
-    languageId: spec.languageId,
-    label: spec.label,
-    tier: spec.tier,
-    toolchain: markersHit(workspaceDir, spec.markers),
-    binary: findBinaryInPath(spec.binaries, envPath) !== null,
-    running: getLspRunState(workspaceId, spec.languageId),
-    installHint: spec.installHint,
-    installable: spec.install !== undefined,
-  }));
+  return REGISTRY.map((spec: LanguageServerSpec) => {
+    const bin = findBinaryInPath(spec.binaries, envPath);
+    return {
+      languageId: spec.languageId,
+      label: spec.label,
+      tier: spec.tier,
+      toolchain: markersHit(workspaceDir, spec.markers),
+      // binaryValidator 附验（rustup shim 空壳特判）：命中但校验不过 = 未安装
+      binary: bin !== null && (spec.binaryValidator?.(bin) ?? true),
+      running: getLspRunState(workspaceId, spec.languageId),
+      installHint: spec.installHint,
+      installable: spec.install !== undefined,
+    };
+  });
 }
 
 export function detectWorkspaceLanguages(
@@ -112,6 +116,9 @@ export function redetectWorkspaceLanguages(
   workspaceDir: string,
   envPath?: string,
 ): LanguageStatus[] {
+  // 「重新检测」必须真重探：失效二进制附验缓存（rustup 组件表等进程级缓存），
+  // 否则用户装完组件点重检仍是旧误报
+  invalidateBinaryValidatorCache();
   const c = buildStatuses(workspaceId, workspaceDir, envPath);
   cache.set(workspaceId, c);
   return c;

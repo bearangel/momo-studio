@@ -19,6 +19,10 @@ export interface LanguageServerSpec {
   /** 面板一键安装元数据（D3 修正案）：仅挂确证 npm 分发的语言（4 门）；
    *  缺省 undefined = 手动引导（installHint）。LanguageStatus.installable 派生自此。 */
   install?: { kind: 'npm'; packages: string[] };
+  /** 二进制附验钩子（可选，2026-10-08）：PATH 命中后二次校验可用性——rustup
+   *  shim 类「空壳可执行」存在性探测必误报。同步 + 模块级缓存（detect 是同步
+   *  函数）；返回 false = 按未安装处理（面板不给启动按钮，installHint 引导）。 */
+  binaryValidator?: (binPath: string) => boolean;
 }
 
 export const REGISTRY: readonly LanguageServerSpec[] = [
@@ -63,6 +67,11 @@ export const REGISTRY: readonly LanguageServerSpec[] = [
     extensions: ['.rs'],
     tier: 'verified',
     installHint: 'rustup component add rust-analyzer',
+    // rustup shim 特判（2026-10-08 GUI 验收）：~/.cargo/bin/rust-analyzer 在组件
+    // 未装时是「打印一行错误即退」的空壳——PATH 存在性探测必误报（面板给启动
+    // 按钮 → spawn 秒退「已关闭」）。附验 rustup 组件表；brew/系统真二进制
+    // （非 .cargo/bin 路径）不归 rustup 管，直接放行。
+    binaryValidator: validateRustAnalyzer,
   },
   {
     languageId: 'cpp', label: 'C / C++',
@@ -190,6 +199,37 @@ function isExecutable(p: string): boolean {
 // + doInitialize spawn 失败双重命中）。兜底两层：常见 bin 前缀追加 + login
 // shell 解析。注意不能用 `/usr/bin/env which`：它继承同一 process.env.PATH，
 // 解析不到 profile 注入的目录（spec §9 勘误）。
+
+/** rustup 组件表缓存（进程级——resolveNpmPrefix 同型先例）。redetect 时经
+ *  invalidateBinaryValidatorCache() 失效，保证「重新检测」真重探。 */
+let rustupComponentsCache: string[] | null = null;
+
+/** 失效二进制校验缓存（redetect 调用；测试复位复用同入口） */
+export function invalidateBinaryValidatorCache(): void {
+  rustupComponentsCache = null;
+}
+
+/** rustup shim 附验：路径不在 .cargo/bin 下 → 真二进制放行；在 → 查组件表
+ *  （sync spawn + 进程级缓存——detect 是同步函数，rustup 调用 ~50ms 仅首次）。
+ *  rustup 不可用/超时 → 放行（保守：宁误报可用也不把已装用户判成未装）。 */
+function validateRustAnalyzer(binPath: string): boolean {
+  if (!binPath.includes(`${path.sep}.cargo${path.sep}bin`)) return true;
+  if (rustupComponentsCache === null) {
+    try {
+      const r = spawnSync('rustup', ['component', 'list', '--installed'], {
+        encoding: 'utf-8',
+        timeout: 10_000,
+      });
+      // 查询不可得（ENOENT / 超时 / 非 0 退出）≠ 组件未装——保守放行且不缓存
+      // （下次调用重试；redetect 的 invalidate 亦触发重探）
+      if (r.error !== undefined || r.status !== 0 || typeof r.stdout !== 'string') return true;
+      rustupComponentsCache = r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    } catch {
+      return true;
+    }
+  }
+  return rustupComponentsCache.includes('rust-analyzer');
+}
 
 /** 常见包管理器 bin 前缀（存在才追加、幂等）：Apple Silicon / Intel homebrew */
 const COMMON_BIN_PREFIXES = ['/opt/homebrew/bin', '/usr/local/bin'];

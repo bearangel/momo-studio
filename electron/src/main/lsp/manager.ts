@@ -120,6 +120,9 @@ export class LspManager {
   private idleTimer: NodeJS.Timeout | null = null;
   /** 当前是否已计入 workspace 活跃计数（shutdown/意外退出幂等释放的守卫标记） */
   private slotCounted = false;
+  /** stderr 尾部环形缓冲（4KB）——exit 诊断保真：rustup shim 空壳 / 缺动态库等
+   *  「打印一行错误即退」场景，真实原因只在 stderr 里 */
+  private stderrTail = '';
 
   constructor(
     private readonly workspaceId: string,
@@ -166,8 +169,11 @@ export class LspManager {
     proc.stdout?.on('data', (chunk: Buffer) => {
       if (this.proc === proc) this.onStdoutData(chunk);
     });
-    proc.stderr?.on('data', () => {
-      // stderr 仅记录，不影响协议；常见输出是 tsserver 的日志/警告。
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      if (this.proc !== proc) return;
+      // 尾部 4KB 环形缓冲：正常 server 日志（tsserver 等）滚动丢弃，退出瞬间
+      // 的尾部即诊断金矿（shim 报错/崩溃栈），exit 路径拼进拒绝理由
+      this.stderrTail = (this.stderrTail + chunk.toString('utf-8')).slice(-4096);
     });
     proc.on('error', (err) => {
       if (this.proc === proc) this.handleUnexpectedExit(`spawn 失败: ${err.message}`);
@@ -175,7 +181,9 @@ export class LspManager {
     proc.on('exit', (code, signal) => {
       if (this.proc !== proc) return;
       if (!this.shuttingDown) {
-        this.handleUnexpectedExit(`进程退出 code=${code} signal=${signal}`);
+        const tail = this.stderrTail.trim();
+        const detail = tail !== '' ? `；stderr：${tail}` : '';
+        this.handleUnexpectedExit(`进程退出 code=${code} signal=${signal}${detail}`);
       }
     });
 
@@ -293,16 +301,21 @@ export class LspManager {
     }
   }
 
-  /** 清空所有内部状态（文档/诊断/请求），让下次 ensureStarted 干净重启 */
-  private resetState(): void {
+  /** 清空所有内部状态（文档/诊断/请求），让下次 ensureStarted 干净重启。
+   *  exitReason 透传（2026-10-08 错误保真）：意外退出路径携带真实原因
+   *  （exit code + stderr 尾部），pending 调用方拿到可行动的诊断而非泛化「已关闭」。 */
+  private resetState(exitReason?: string): void {
     this.openDocs.clear();
     this.docVersion.clear();
     this.diagCache.clear();
     this.diagGen.clear();
     this.recvBuf = Buffer.alloc(0);
+    this.stderrTail = '';
     for (const [, p] of this.pendingRequests) {
       clearTimeout(p.timer);
-      p.reject(new Error('LSP server 已关闭'));
+      p.reject(
+        new Error(exitReason !== undefined ? `LSP server 已关闭（${exitReason}）` : 'LSP server 已关闭'),
+      );
     }
     this.pendingRequests.clear();
   }
@@ -314,9 +327,7 @@ export class LspManager {
     this.proc = null;
     this.releaseSlotIfCounted();
     this.stopIdleTimer();
-    this.resetState();
-    // 不抛错——由 pending 请求的 reject 把错误传给调用方；这里只标记状态。
-    void reason;
+    this.resetState(reason);
   }
 
   // ── 活跃计数（workspace 级并发保险丝，spec §6） ──────────────────────────

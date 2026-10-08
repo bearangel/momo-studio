@@ -11,6 +11,7 @@ import {
   markersHit,
 } from '../../src/main/lsp/detect';
 import { setSharedBinDir } from '../../src/main/lsp/shared-bin';
+import { invalidateBinaryValidatorCache } from '../../src/main/lsp/registry';
 
 let tmpDir: string;
 
@@ -138,5 +139,41 @@ describe('缓存', () => {
       .toBe(first.find((s) => s.languageId === 'rust')!.toolchain); // 缓存未变
     const fresh = redetectWorkspaceLanguages('ws-d6', tmpDir);
     expect(fresh.find((s) => s.languageId === 'rust')!.toolchain).toBe(true); // 重算看到
+  });
+});
+describe('binaryValidator 集成（rust 行 shim 特判，2026-10-08）', () => {
+  it('shim 空壳（组件未装）→ binary=false + installHint 保留；装组件后 redetect → true（缓存失效链）', () => {
+    const cargoBin = path.join(tmpDir, 'home', '.cargo', 'bin');
+    fs.mkdirSync(cargoBin, { recursive: true });
+    fs.writeFileSync(path.join(cargoBin, 'rust-analyzer'), '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(path.join(cargoBin, 'rust-analyzer'), 0o755);
+    const rustupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-rustup-dv-'));
+    const mkRustup = (components: string): void => {
+      fs.writeFileSync(
+        path.join(rustupDir, 'rustup'),
+        `#!/bin/sh\nprintf '%s\\n' ${components.split('\n').map((c) => `'${c}'`).join(' ')}\n`,
+      );
+      fs.chmodSync(path.join(rustupDir, 'rustup'), 0o755);
+    };
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${rustupDir}${path.delimiter}${oldPath}`;
+    invalidateBinaryValidatorCache();
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'Cargo.toml'), '[package]\nname = "x"\n');
+      // 组件未装：PATH 命中 shim 但校验不过 → missing-binary（不再给启动按钮）
+      const st = detectWorkspaceLanguages('ws-dv1', tmpDir, cargoBin);
+      const rust = st.find((s) => s.languageId === 'rust')!;
+      expect(rust.toolchain).toBe(true);
+      expect(rust.binary).toBe(false);
+      expect(rust.installHint).toContain('rustup component add rust-analyzer');
+      // 装上组件 → 重新检测 → binary=true（redetect 失效校验缓存，真重探）
+      mkRustup('rust-analyzer');
+      const st2 = redetectWorkspaceLanguages('ws-dv1', tmpDir, cargoBin);
+      expect(st2.find((s) => s.languageId === 'rust')!.binary).toBe(true);
+    } finally {
+      process.env.PATH = oldPath;
+      invalidateBinaryValidatorCache();
+      fs.rmSync(rustupDir, { recursive: true, force: true });
+    }
   });
 });

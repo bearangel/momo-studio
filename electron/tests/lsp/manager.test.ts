@@ -108,3 +108,31 @@ describe.skipIf(!hasTsLs)('tsserver 真实冒烟（迁移后协议仍通）', ()
     expect(refs.length).toBeGreaterThanOrEqual(1);
   }, LSP_TEST_TIMEOUT);
 });
+
+describe('错误保真（2026-10-08：秒退二进制的 stderr 诊断透传）', () => {
+  it('rustup shim 形态（打印错误即退）：拒绝消息含 exit code + stderr 原文 + 失败驱逐', async () => {
+    const ws = `ws-m5-${Date.now()}`;
+    // 伪二进制 = 本机事故复现：stderr 一行错误后 exit 1（PATH 注入）
+    const fakeBin = path.join(tmpDir, 'fake-crash-ls');
+    fs.writeFileSync(
+      fakeBin,
+      '#!/bin/sh\necho "error: Unknown binary \'fake-crash-ls\' in official toolchain" >&2\nexit 1\n',
+    );
+    fs.chmodSync(fakeBin, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${tmpDir}${path.delimiter}${oldPath}`;
+    try {
+      const spec = {
+        ...REGISTRY.find((s) => s.languageId === 'typescript')!,
+        binaries: ['fake-crash-ls'],
+        args: [],
+      };
+      await expect(ensureLspManager(ws, tmpDir, spec)).rejects.toThrow(
+        /已关闭（进程退出 code=1 signal=null；stderr：[\s\S]*Unknown binary/s,
+      );
+      expect(getLspManager(ws, 'typescript')).toBeUndefined();
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  }, LSP_TEST_TIMEOUT);
+});

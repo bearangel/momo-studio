@@ -151,7 +151,15 @@ export async function routeLspOp(child: ChildSendPort, msg: unknown): Promise<vo
       reply(child, m.requestId, true, text);
     }
   } catch (err) {
-    reply(child, m.requestId, false, err instanceof Error ? err.message : String(err));
+    // 启动类失败附安装指引（2026-10-08 修复闭环）：真实原因（exit code + stderr
+    // 尾部）已由 manager 保真带出，此处补「怎么装」让 agent/用户形成行动闭环
+    let msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('LSP server 已关闭') || msg.includes('未安装')) {
+      const langId = extensionToLanguageId(path.extname(op.path));
+      const spec = langId !== null ? REGISTRY.find((s) => s.languageId === langId) : undefined;
+      if (spec) msg = `${msg}\n可尝试安装：${spec.installHint}`;
+    }
+    reply(child, m.requestId, false, msg);
   }
 }
 
@@ -241,8 +249,18 @@ export async function startLanguageServer(
   if (!spec) throw new Error(`未注册的语言：${languageId}`);
   const ws = getWorkspace(workspaceId);
   if (!ws) throw new Error(`工作区不存在：${workspaceId}`);
-  const mgr = await ensureLspManager(workspaceId, ws.directoryPath, spec);
-  await mgr.ensureStarted();
+  try {
+    const mgr = await ensureLspManager(workspaceId, ws.directoryPath, spec);
+    await mgr.ensureStarted();
+  } catch (err) {
+    // 安装指引透出（面板路径同 agent 路径——错误保真 + 行动闭环）。仅启动类
+    // 失败附指引；「活跃上限」等其他错误原样上抛不误导
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('LSP server 已关闭') || msg.includes('未安装') || msg.includes('spawn 失败')) {
+      throw new Error(`${msg}\n可尝试安装：${spec.installHint}`);
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  }
   logger.info('LSP 手动启动完成', { workspaceId, languageId });
   return detectWorkspaceLanguages(workspaceId, ws.directoryPath).map((s) => ({
     ...s,

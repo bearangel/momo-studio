@@ -1,5 +1,5 @@
 // 注册表完备性 + PATH 探测器契约（spec §5/§9）。
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,6 +8,7 @@ import {
   findBinaryInPath,
   loginShellWhich,
   extensionToLanguageId,
+  invalidateBinaryValidatorCache,
 } from '../../src/main/lsp/registry';
 
 describe('REGISTRY 数据完备性', () => {
@@ -147,5 +148,57 @@ describe('loginShellWhich 生产缺省实现（真实 login shell，宿主可复
     // 回归锁：兜底解析取末行且须为绝对路径 + 落盘可执行校验；宿主 profile
     // 即使向 stdout 打印噪声（含路径形态文本）也不得误报命中
     expect(loginShellWhich('momo-definitely-not-a-real-bin-xyz')).toBeNull();
+  });
+});
+
+describe('rust binaryValidator（rustup shim 特判，2026-10-08）', () => {
+  const rustSpec = REGISTRY.find((s) => s.languageId === 'rust')!;
+  const validator = rustSpec.binaryValidator!;
+  let rustupDir: string;
+  let oldPath: string = '';
+
+  /** 伪 rustup：`component list --installed` 输出给定组件行 */
+  function mkRustup(components: string): void {
+    fs.writeFileSync(
+      path.join(rustupDir, 'rustup'),
+      `#!/bin/sh\nprintf '%s\\n' ${components.split('\n').map((c) => `'${c}'`).join(' ')}\n`,
+    );
+    fs.chmodSync(path.join(rustupDir, 'rustup'), 0o755);
+  }
+
+  beforeEach(() => {
+    rustupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-rustup-'));
+    oldPath = process.env.PATH ?? '';
+    invalidateBinaryValidatorCache();
+  });
+  afterEach(() => {
+    process.env.PATH = oldPath;
+    invalidateBinaryValidatorCache();
+    fs.rmSync(rustupDir, { recursive: true, force: true });
+  });
+
+  it('非 .cargo/bin 路径 → 直接放行（brew/系统真二进制不查 rustup）', () => {
+    expect(validator('/opt/homebrew/bin/rust-analyzer')).toBe(true);
+  });
+
+  it('.cargo/bin shim + 组件表无 rust-analyzer → false（本机事故复现）', () => {
+    mkRustup('rust-src\nrust-std');
+    process.env.PATH = `${rustupDir}${path.delimiter}${oldPath}`;
+    expect(validator(`${rustupDir}/proj/.cargo/bin/rust-analyzer`)).toBe(false);
+  });
+
+  it('组件表含 rust-analyzer → true；缓存生效（改伪 rustup 不 invalidate 仍旧值）', () => {
+    mkRustup('rust-analyzer');
+    process.env.PATH = `${rustupDir}${path.delimiter}${oldPath}`;
+    expect(validator(`${rustupDir}/proj/.cargo/bin/rust-analyzer`)).toBe(true);
+    mkRustup('rust-src'); // 组件表变了——但缓存未失效，应保持 true
+    expect(validator(`${rustupDir}/proj/.cargo/bin/rust-analyzer`)).toBe(true);
+    invalidateBinaryValidatorCache();
+    expect(validator(`${rustupDir}/proj/.cargo/bin/rust-analyzer`)).toBe(false);
+  });
+
+  it('rustup 不可用（PATH 无）→ 保守放行 true（不把已装用户误判未装）', () => {
+    process.env.PATH = rustupDir; // 目录里没有 rustup
+    expect(validator(`${rustupDir}/proj/.cargo/bin/rust-analyzer`)).toBe(true);
   });
 });

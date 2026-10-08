@@ -486,3 +486,46 @@ describe('lsp:start handler（2026-10-08：面板手动启动）', () => {
     await expect(handler(undefined, 'ws-nope', 'typescript')).rejects.toThrow('工作区不存在');
   });
 });
+
+describe('安装指引透出（2026-10-08 修复闭环 C）', () => {
+  it('agent 路径：启动失败（已关闭+stderr 保真）→ ok:false 错误附 installHint', async () => {
+    const child = fakeChild();
+    vi.mocked(manager.ensureLspManager).mockRejectedValue(
+      new Error("LSP server 已关闭（进程退出 code=1 signal=null；stderr：error: Unknown binary 'rust-analyzer' in official toolchain）"),
+    );
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-hint1',
+      op: { kind: 'diagnostics', workspaceId: 'ws-x', path: 'src/main.rs', content: '' },
+    });
+    const replyMsg = child.send.mock.calls[0]![0] as { ok: boolean; error?: string };
+    expect(replyMsg.ok).toBe(false);
+    expect(replyMsg.error).toContain('Unknown binary');
+    expect(replyMsg.error).toContain('可尝试安装：rustup component add rust-analyzer');
+  });
+
+  it('agent 路径：非启动类错误（路径越界）→ 不附安装指引（不误导）', async () => {
+    const child = fakeChild();
+    await routeLspOp(child, {
+      type: 'lsp:op', requestId: 'r-hint2',
+      op: { kind: 'diagnostics', workspaceId: 'ws-x', path: '../outside.rs', content: '' },
+    });
+    const replyMsg = child.send.mock.calls[0]![0] as { ok: boolean; error?: string };
+    expect(replyMsg.ok).toBe(false);
+    expect(replyMsg.error).toContain('路径越界');
+    expect(replyMsg.error).not.toContain('可尝试安装');
+  });
+
+  it('面板路径：lsp:start 启动失败 → 错误附 installHint；上限类错误不附', async () => {
+    vi.mocked(manager.ensureLspManager).mockRejectedValue(new Error('LSP server 已关闭（进程退出 code=1）'));
+    registerLspPanelIpc();
+    const start = vi.mocked(ipcMain.handle).mock.calls
+      .find((c) => c[0] === 'lsp:start')![1] as unknown as (
+      event: unknown, workspaceId: string, languageId: string,
+    ) => Promise<unknown>;
+    await expect(start(undefined, 'ws-x', 'rust')).rejects.toThrow(
+      /已关闭（进程退出 code=1）\n可尝试安装：rustup component add rust-analyzer/,
+    );
+    vi.mocked(manager.ensureLspManager).mockRejectedValue(new Error('活跃语言服务已达上限（3）'));
+    await expect(start(undefined, 'ws-x', 'rust')).rejects.toThrow('活跃语言服务已达上限');
+  });
+});
