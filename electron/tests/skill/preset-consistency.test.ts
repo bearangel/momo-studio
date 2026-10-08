@@ -98,4 +98,22 @@ describe('预设内容库一致性（spec 2026-10-08）', () => {
       }
     }
   });
+
+  it('F. SKILL.md 内容不引用休眠 LSP 工具（防内容级悬挂引用，终审 Important 修复锁）', () => {
+    // 与测试 E 的 YAML 级豁免不同：skill 正文会指导模型调用工具，引用休眠工具
+    // 会导致 unknown-tool 错误。现有 3 个 YAML 的 lsp 引用是刻意休眠态，但 skill
+    // 内容不允许出现——LSP 恢复时可随恢复提交一并解除本锁。
+    const dormantPattern = /lsp_diagnostics|lsp_find_references/;
+    for (const slug of listSkillSlugs()) {
+      const files = [path.join(SKILLS_DIR, slug, 'SKILL.md')];
+      const refsDir = path.join(SKILLS_DIR, slug, 'references');
+      if (fs.existsSync(refsDir)) {
+        for (const r of fs.readdirSync(refsDir)) files.push(path.join(refsDir, r));
+      }
+      for (const file of files) {
+        const text = fs.readFileSync(file, 'utf-8');
+        expect(dormantPattern.test(text), `${file} 引用了休眠 LSP 工具`).toBe(false);
+      }
+    }
+  });
 });
