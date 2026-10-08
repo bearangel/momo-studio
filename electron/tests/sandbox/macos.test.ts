@@ -13,7 +13,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: '/Users/dev', tmpDir: '/private/var/folders/xx/T',
-    sensitiveDirs: ['/Users/dev/.ssh'], networkEnabled: false, ...over,
+    sensitiveDirs: ['/Users/dev/.ssh'], networkEnabled: false, extraWriteDirs: [], ...over,
   };
 }
 
@@ -63,6 +63,7 @@ describe('renderSeatbeltProfile', () => {
       tmpDir: '/private/var/folders/xx/T',
       sensitiveDirs: ['/Users/dev/.ssh'],
       networkEnabled: false,
+      extraWriteDirs: [],
     };
     expect(renderSeatbeltProfile(p)).toMatchInlineSnapshot(`
       "(version 1)
@@ -76,5 +77,28 @@ describe('renderSeatbeltProfile', () => {
       (allow file-ioctl sysctl-read mach-lookup)
       "
     `);
+  });
+
+  it('授权态：工具链目录逐个出现在 allow file-write*，deny default 语义不变', () => {
+    const p = mkPolicy({
+      networkEnabled: true,
+      extraWriteDirs: ['/Users/dev/.rustup', '/Users/dev/.cargo'],
+    });
+    const prof = renderSeatbeltProfile(p);
+    expect(prof).toContain('(allow file-write* (subpath "/Users/dev/.rustup"))');
+    expect(prof).toContain('(allow file-write* (subpath "/Users/dev/.cargo"))');
+    // 敏感 deny 不受授权影响（后置覆盖语义保留——授权只扩写维度，不动读遮蔽）
+    expect(prof).toContain('(deny file-read* (subpath "/Users/dev/.ssh"))');
+  });
+
+  it('未授权（空数组）：profile 无任何工具链目录行（默认安全方向）', () => {
+    const prof = renderSeatbeltProfile(mkPolicy({ extraWriteDirs: [] }));
+    expect(prof).not.toContain('.rustup');
+    expect(prof).not.toContain('.cargo');
+  });
+
+  it('授权目录不存在仍渲染 allow 行（终审 F1：macOS 全量渲染语义——pip:user 首装前 ~/Library/Python 不存在，安装动作会创建它，spec §9「授权即生效」）', () => {
+    const prof = renderSeatbeltProfile(mkPolicy({ extraWriteDirs: ['/Users/dev/Library/Python'] }));
+    expect(prof).toContain('(allow file-write* (subpath "/Users/dev/Library/Python"))');
   });
 });

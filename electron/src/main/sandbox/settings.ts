@@ -6,6 +6,11 @@
 // 双态（deny/allow，默认 allow）。读时懒迁移：遗留 'ask' 值与旧布尔键
 // sandboxNetwork（true/false 两值同向——双态新默认即 allow）一律重写为 'allow'
 // 并写回新键，旧键留存不删（回滚安全）。
+//
+// 2026-10-04：v2.5 工具链目录写入机制整体移除（policy 开关 + 预置清单）——
+// 硬门控授权卡按实际被拦目录授权（会话/工作空间持久 KV），预置机制无存在
+// 必要。存量 JSON 键 sandboxToolchainPolicy / sandboxToolchainDirs 留存不读
+// 不写（同 sandboxNetwork 墓碑先例，回滚安全）。
 import { getGlobalSettings, updateGlobalSettings } from '../settings/crud';
 import type { SandboxMode } from './types';
 
@@ -27,8 +32,12 @@ export function getSandboxSettings(): SandboxSettings {
   if (testOverride) return { ...testOverride };
   const g = getGlobalSettings();
   const mode: SandboxMode = g.sandboxMode === 'permissive' ? 'permissive' : 'strict';
-  if (g.sandboxNetworkPolicy === 'deny') return { mode, networkPolicy: 'deny' };
-  if (g.sandboxNetworkPolicy === 'allow') return { mode, networkPolicy: 'allow' };
+  if (g.sandboxNetworkPolicy === 'deny') {
+    return { mode, networkPolicy: 'deny' };
+  }
+  if (g.sandboxNetworkPolicy === 'allow') {
+    return { mode, networkPolicy: 'allow' };
+  }
   // 懒迁移（修订 B）：遗留 'ask'（三态时代值）/ 非法脏值 / 旧布尔键（true 与
   // false 均同向——旧语义 false→ask，而 ask 已并入 allow，故布尔两值殊途同归）/
   // 全缺省（新装）一律收敛 'allow'，写回新键、旧键留存（回滚安全）。写失败

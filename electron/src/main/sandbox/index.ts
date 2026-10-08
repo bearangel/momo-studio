@@ -33,7 +33,7 @@ export function sandboxInstallHint(platform: NodeJS.Platform): string {
 export function resolveShellSpawn(
   workspaceDir: string,
   command: string,
-  opts?: { networkEnabled?: boolean },
+  opts?: { networkEnabled?: boolean; extraDirs?: string[] },
 ): SpawnPlan {
   const settings = getSandboxSettings();
   // v2.4.x 网络态（2026-09-13 修订 B 双态化）：有效网络态 netOn =
@@ -42,7 +42,10 @@ export function resolveShellSpawn(
   //（既有调用方/单测）按设置双态推导：allow → 开，deny → 关。各平台 profile
   // builder 继续收布尔值（spec §7 平台矩阵）。
   const networkEnabled = opts?.networkEnabled ?? (settings.networkPolicy === 'allow');
-  const policy = buildPolicy(workspaceDir, networkEnabled);
+  // 写授权目录（2026-10-04 修订：v2.5 预置清单随工具链机制移除，仅剩动态
+  // 授权层 extraDirs——主进程两层合成回传，卡授权后下一次 spawn 立即生效）。
+  const extraWriteDirs = opts?.extraDirs ?? [];
+  const policy = buildPolicy(workspaceDir, networkEnabled, extraWriteDirs);
 
   if (process.platform === 'win32') {
     const shell = getSandboxState()?.windowsShell ?? 'powershell.exe';

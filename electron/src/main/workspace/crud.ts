@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+import { clearSessionGrants, clearWorkspaceGrants } from '../sandbox/write-grant';
 import type { Workspace, CreateWorkspaceInput } from './types';
 import { initGitRepo } from './git';
 
@@ -110,7 +111,15 @@ export function getWorkspace(id: string): Workspace | null {
 /** 按 ID 删除记录（注意：当前实现不删除磁盘上的 directory_path）。 */
 export function deleteWorkspace(id: string): void {
   const db = getDb();
+  // FK CASCADE 只删 sessions 行、不走 deleteSession 函数——会话授权 KV 键须在
+  // 级联前手动补清，否则残留且无任何清理路径（授权账本卫生红线）
+  const sessionIds = db
+    .prepare('SELECT id FROM sessions WHERE workspace_id = ?')
+    .all(id) as Array<{ id: string }>;
+  for (const row of sessionIds) clearSessionGrants(row.id);
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
+  // 工作空间持久授权随空间清理（spec 2026-10-03 §4）——防越权残留
+  clearWorkspaceGrants(id);
   logger.info('Workspace 已删除', { id });
 }
 

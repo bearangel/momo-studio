@@ -14,6 +14,9 @@ export interface ShellSandboxPolicy {
    * （目录 --tmpfs / 文件 --ro-bind /dev/null），darwin 用 file-read* deny 规则 */
   sensitiveDirs: string[];
   networkEnabled: boolean;
+  /** 写授权目录（spec 2026-10-03 §6.2）：预置清单 ∪ 动态授权并集——展开归一
+   * 后的绝对路径；空数组 = 仅工作空间/tmp 可写（默认安全方向） */
+  extraWriteDirs: string[];
 }
 
 /** resolveShellSpawn 产物：wrapped=OS 隔离 / plain=直跑（带原因 tag）/ blocked=strict 拒绝 */

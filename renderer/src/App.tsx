@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useWorkspaceStore } from './stores/workspace.store';
 import { subscribeSessionChannels, useSessionStore } from './stores/session.store';
+import { useWriteGrantStore } from './stores/write-grant.store';
 import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDialog';
 import { MainShell } from './routes/MainShell';
 import { TitleBar } from './components/layout/TitleBar';
@@ -40,6 +41,16 @@ export function App() {
   // stream.store.streams（UI 实时渲染用）。
   // 放在 App 顶层保证整个生命周期只订阅一次，避免视图切换重复注册。
   useEffect(() => subscribeSessionChannels(), []);
+
+  // 通用写拦截信号（spec 2026-10-03 §5.3）：主进程检测命中即推，直弹授权卡
+  //（取代旧的批次子串扫描链——见 write-grant.store）
+  useEffect(
+    () =>
+      ipc.sandbox.onWriteBlocked((e) =>
+        useWriteGrantStore.getState().receiveWriteBlocked(e),
+      ),
+    [],
+  );
 
   // 活跃会话上报（归属制 spec §5.4）：main 的自动展开判定（expandHint 只对活跃
   // 会话生效）输入；null = 非会话视图（安全缺省）。含启动后首次。

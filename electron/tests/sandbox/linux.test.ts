@@ -11,7 +11,7 @@ function mkPolicy(over: Partial<ShellSandboxPolicy> = {}): ShellSandboxPolicy {
   createdTmpDirs.push(tmp);
   return {
     workspaceDir: tmp, homeDir: tmp, tmpDir: os.tmpdir(),
-    sensitiveDirs: [], networkEnabled: false, ...over,
+    sensitiveDirs: [], networkEnabled: false, extraWriteDirs: [], ...over,
   };
 }
 
@@ -70,6 +70,7 @@ describe('buildBwrapArgs', () => {
       tmpDir: '/tmp',
       sensitiveDirs: ['/home/u/.ssh'],
       networkEnabled: false,
+      extraWriteDirs: [],
     };
     expect(buildBwrapArgs(p)).toMatchInlineSnapshot(`
       [
@@ -93,5 +94,34 @@ describe('buildBwrapArgs', () => {
         "--die-with-parent",
       ]
     `);
+  });
+
+  it('授权态：存在目录每目录追加 --bind <dir> <dir>；未授权零追加（默认安全）', () => {
+    // 终审 F1：存在性过滤下沉到本消费点——用磁盘真实目录断言 bind 形态
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bwrap-tc-'));
+    createdTmpDirs.push(tmp);
+    const real = path.join(tmp, '.rustup');
+    fs.mkdirSync(real);
+    const granted = buildBwrapArgs(mkPolicy({ extraWriteDirs: [real] }));
+    expect(granted).toContain('--bind');
+    const idx = granted.indexOf(real);
+    expect(idx).toBeGreaterThan(0);
+    expect(granted[idx - 1]).toBe('--bind');
+    expect(granted[idx + 1]).toBe(real);
+    const none = buildBwrapArgs(mkPolicy({ extraWriteDirs: [] }));
+    expect(none.filter((a) => a === real)).toHaveLength(0);
+  });
+
+  it('授权态：不存在目录被过滤（bwrap 对不存在路径 --bind 硬失败——终审 F1 过滤下沉本消费点，policy 层全量透传）', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bwrap-ghost-'));
+    createdTmpDirs.push(tmp);
+    const ghost = path.join(tmp, 'toolchain-ghost');
+    const real = path.join(tmp, 'toolchain-real');
+    fs.mkdirSync(real);
+    const args = buildBwrapArgs(mkPolicy({ extraWriteDirs: [ghost, real] }));
+    // 幽灵目录：零出现（单条不存在路径不得打挂整个会话的 spawn）
+    expect(args.filter((a) => a === ghost)).toHaveLength(0);
+    // 存在目录：正常 bind（过滤只剔除幽灵，不影响其余授权）
+    expect(args[args.indexOf(real) - 1]).toBe('--bind');
   });
 });

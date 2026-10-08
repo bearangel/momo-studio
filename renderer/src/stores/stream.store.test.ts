@@ -260,6 +260,11 @@ describe('stream.store：net-off 网络拦截检测', () => {
   });
 });
 
+// —— 工具链写拦截检测（v2.5 沙箱工具链授权，spec 2026-10-01 §7/§8）——
+// electron 侧 shell-tools.ts 在 HOME 写拦截命中时把 WRITE_BLOCKED_HINT 固定提示段
+// 追加到 bash 结果尾部（parts.join('\n\n')——置尾，LLM 最后看到的行动指引）。
+// renderer 侧硬编码同一子串检测（跨进程无共享模块，两端测试各自逐字锁）。
+
 // ====================================================================
 // 事件裁剪水合回退（工作空间切换卡顿修复，2026-09-25）
 // 新契约：getMessages 对非最近窗口消息只回结构事件（无 text/thinking delta），
@@ -374,5 +379,19 @@ describe('hydrateFromEvents 按 seq 归并（2026-09-26 P0：截断水合抹掉�
     const s = useStreamStore.getState().streams.get('m-h');
     expect(s?.text).toBe('az');
     expect(s?.toolCalls).toHaveLength(1);
+  });
+});
+
+
+// ═══ 回归锁（spec 2026-10-03 §5.4）═══
+describe('stream.store：写拦截子串扫描防复活', () => {
+  it('源码不含任何写拦截提示子串扫描（事件驱动后旧链不得回归）', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    // jsdom 环境 import.meta.url 非 file 协议——用 cwd（renderer 根）拼贴源路径
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/stores/stream.store.ts'), 'utf-8');
+    expect(src).not.toContain('非工作空间路径写入被沙箱拦截');
+    expect(src).not.toContain('工作空间外路径写入被沙箱拦截');
+    expect(src).not.toContain('toolchainWriteBlockedSeen');
   });
 });

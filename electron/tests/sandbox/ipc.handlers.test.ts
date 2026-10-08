@@ -47,6 +47,7 @@ vi.mock('../../src/main/sandbox/windows', () => ({
 import {
   registerSandboxIpc,
   installBwrapViaPkexec,
+  buildInfo,
   type SandboxInfo,
 } from '../../src/main/sandbox/ipc.handlers';
 import {
@@ -121,7 +122,10 @@ describe('sandbox:getState', () => {
 
     const info = (await handler()) as SandboxInfo;
 
-    expect(info.settings).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(info.settings).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+    });
     expect(info.state).toBeNull();
     expect(info.installCommand).toBe('sudo apt install bubblewrap');
     expect(info.bwrapPromptDismissed).toBe(false);
@@ -216,6 +220,80 @@ describe('sandbox:dismissPrompt', () => {
     await dismiss({}, 'netOff');
 
     expect(readKv(KV_NETOFF)).toBe('1');
+  });
+});
+
+describe('sandbox:grantWrite / revokeWrite（spec 2026-10-03 §6.3）', () => {
+  it('grantWrite 写 KV（归一后）+ revokeWrite 移除', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'session', key: 's-1', dirs: ['/tmp/grant-a'] });
+    const row = getDb()
+      .prepare("SELECT value FROM kv_store WHERE key='sandbox_write_grant_session_s-1'")
+      .get() as { value: string };
+    expect(JSON.parse(row.value)).toEqual(['/tmp/grant-a']);
+    const revoke = ipcHandlers.get('sandbox:revokeWrite') as (e: unknown, a: unknown) => void;
+    revoke(null, { scope: 'session', key: 's-1', dir: '/tmp/grant-a' });
+    // revoke 是数组过滤写回——行以 '[]' 残留（空行无害，授权读取语义等价空）
+    const after = getDb()
+      .prepare("SELECT value FROM kv_store WHERE key='sandbox_write_grant_session_s-1'")
+      .get() as { value: string };
+    expect(JSON.parse(after.value)).toEqual([]);
+  });
+
+  it('非法载荷（scope 越界 / key 空 / dirs 非串数组）→ 抛错不写', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    expect(() => grant(null, { scope: 'global', key: 'k', dirs: ['/tmp/a'] })).toThrow();
+    expect(() => grant(null, { scope: 'session', key: '', dirs: ['/tmp/a'] })).toThrow();
+    expect(() => grant(null, { scope: 'session', key: 'k', dirs: ['/tmp/a', 42] })).toThrow();
+    expect(
+      getDb().prepare("SELECT COUNT(*) c FROM kv_store WHERE key LIKE 'sandbox_write_grant_%'").get(),
+    ).toEqual({ c: 0 });
+  });
+
+  it('grantWrite 恒不注入唤醒消息——resumeSessionId 契约已废弃（硬门控修订）', () => {
+    // 硬门控下「等待中授权 → 等待循环 ≤2s 轮询 covered → 原地重执行」是唯一恢复
+    // 路径；旧【授权完成】唤醒注入与原地重执行双路径并发，会经 steer 让 LLM 把
+    // 已自动重试成功的命令再跑一遍（双重副作用）。载荷残留 resumeSessionId
+    // （旧 renderer 瞬态 / HMR 半更新）一律忽略——不注入，授权照常生效。
+    // 夹具：目标会话行必须存在——否则旧代码的注入会在 getSession 处同步抛错
+    // 被 .catch 吞掉，测试失去判别力（假绿）。
+    getDb()
+      .prepare('INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, ?, ?, ?)')
+      .run('ws-wake', '唤醒夹具', '/tmp/none', 'u-test');
+    getDb()
+      .prepare('INSERT INTO sessions (id, workspace_id, title, title_auto, kind, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+      .run('sess-wake', 'ws-wake', '唤醒测试', 'chat', Date.now(), Date.now());
+    const before = getDb().prepare('SELECT COUNT(*) c FROM messages').get() as { c: number };
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'session', key: 'sess-wake', dirs: ['/tmp/wake-a'], resumeSessionId: 'sess-wake' });
+    grant(null, { scope: 'workspace', key: 'w-silent', dirs: ['/tmp/silent'] });
+    const after = getDb().prepare('SELECT COUNT(*) c FROM messages').get() as { c: number };
+    expect(after.c).toBe(before.c);
+    // 授权本身照常落 KV（恢复路径交给等待循环轮询）
+    expect(
+      JSON.parse(
+        (getDb().prepare("SELECT value FROM kv_store WHERE key='sandbox_write_grant_session_sess-wake'").get() as { value: string }).value,
+      ),
+    ).toEqual(['/tmp/wake-a']);
+  });
+
+  it('sandbox:listWriteGrants 列出全部工作空间持久授权（spec §8）', () => {
+    const grant = ipcHandlers.get('sandbox:grantWrite') as (e: unknown, a: unknown) => void;
+    grant(null, { scope: 'workspace', key: 'w-1', dirs: ['/tmp/a'] });
+    grant(null, { scope: 'workspace', key: 'w-2', dirs: ['/tmp/b'] });
+    const list = ipcHandlers.get('sandbox:listWriteGrants') as () => Array<{ workspaceId: string; dirs: string[] }>;
+    expect(list().sort((x, y) => x.workspaceId.localeCompare(y.workspaceId))).toEqual([
+      { workspaceId: 'w-1', dirs: ['/tmp/a'] },
+      { workspaceId: 'w-2', dirs: ['/tmp/b'] },
+    ]);
+  });
+
+  it('sandbox:grantToolchain 通道已下线（grants 布尔模型退役）', () => {
+    expect(ipcHandlers.has('sandbox:grantToolchain')).toBe(false);
+  });
+
+  it('SandboxInfo 不再含 toolchainPromptDismissed（事件驱动卡）', () => {
+    expect('toolchainPromptDismissed' in buildInfo()).toBe(false);
   });
 });
 

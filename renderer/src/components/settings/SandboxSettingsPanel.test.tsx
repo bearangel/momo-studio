@@ -7,6 +7,11 @@
 //   - 网络双态单选（永久允许（默认）/ 拒绝）→ updateGlobal({ sandboxNetworkPolicy })
 //     + 分态说明文案切换
 //   - 重新探测 → ipc.sandbox.reprobe 被调 + 状态刷新 + busy 态禁用
+//   - 工具链双态单选（v2.5 Task 7，spec §10）：deny 默认渲染；allow/deny 互切
+//     → updateGlobal({ sandboxToolchainPolicy })
+//   - 目录清单 textarea（v2.5 Task 7）：初值 join('\n')；显式「保存清单」按钮
+//     （编辑不自动保存；trim + 去空行归一化回显）；「恢复默认」写回 DEFAULT 五项；
+//     空输入边界；reprobe 刷新同步 + dirty 保护
 // mock 形态照抄 ConversationSettings.test.tsx（window.api 桩 + ipc Proxy 透传）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
@@ -16,6 +21,8 @@ import type { SandboxInfo } from '../../ipc/types';
 const getStateMock = vi.fn();
 const reprobeMock = vi.fn();
 const updateGlobalMock = vi.fn();
+const listWriteGrantsMock = vi.fn();
+const revokeWriteMock = vi.fn();
 
 // 桩 window.api（sandbox + settings 两个命名空间）
 const mockApi = {
@@ -24,6 +31,8 @@ const mockApi = {
     reprobe: reprobeMock,
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
+    listWriteGrants: listWriteGrantsMock,
+    revokeWrite: revokeWriteMock,
   },
   settings: {
     getGlobal: vi.fn(),
@@ -59,6 +68,8 @@ describe('SandboxSettingsPanel', () => {
     getStateMock.mockReset();
     reprobeMock.mockReset();
     updateGlobalMock.mockReset();
+    listWriteGrantsMock.mockReset();
+    listWriteGrantsMock.mockResolvedValue([]);
     // 保存路径 fire-and-forget：默认挂起，验证乐观更新不等保存返回
     updateGlobalMock.mockReturnValue(new Promise(() => {}));
   });
@@ -285,5 +296,51 @@ describe('SandboxSettingsPanel', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '重新探测' })).toBeEnabled();
     });
+  });
+});
+
+// —— 工具链目录写入双态 + 目录清单编辑（v2.5 沙箱工具链授权 Task 7，spec §10）——
+// radio 走既有 save 乐观模式；清单为显式「保存清单」按钮（编辑/失焦不自动保存）；
+// 「恢复默认」写回与 electron 端 toolchain-grant.ts DEFAULT_TOOLCHAIN_DIRS 对齐的五项。
+describe('SandboxSettingsPanel：已授权目录', () => {
+  beforeEach(() => {
+    listWriteGrantsMock.mockReset();
+    revokeWriteMock.mockReset();
+    revokeWriteMock.mockResolvedValue(undefined);
+  });
+
+  it('列出工作空间持久授权 + 删除经确认弹窗后才调 revokeWrite（红色危险按钮）', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    listWriteGrantsMock.mockResolvedValue([{ workspaceId: 'w-1', dirs: ['/tmp/grant-a'] }]);
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    // 确认弹窗出现；未确认前不撤销
+    expect(screen.getByText(/确定撤销 \/tmp\/grant-a/)).toBeInTheDocument();
+    expect(revokeWriteMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '撤销授权' }));
+    await waitFor(() =>
+      expect(revokeWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dir: '/tmp/grant-a' }),
+    );
+    await waitFor(() => expect(screen.queryByText('/tmp/grant-a')).toBeNull());
+  });
+
+  it('确认弹窗取消 → 不调 revokeWrite、授权保留', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    listWriteGrantsMock.mockResolvedValue([{ workspaceId: 'w-1', dirs: ['/tmp/grant-a'] }]);
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(revokeWriteMock).not.toHaveBeenCalled();
+    expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument();
+    expect(screen.queryByText(/确定撤销/)).toBeNull();
+  });
+
+  it('空授权 → 空态文案', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    listWriteGrantsMock.mockResolvedValue([]);
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('暂无持久授权')).toBeInTheDocument());
   });
 });

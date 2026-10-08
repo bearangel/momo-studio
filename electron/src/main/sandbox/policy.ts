@@ -31,7 +31,7 @@ export function sensitiveCandidates(home: string): string[] {
   return base;
 }
 
-export function buildPolicy(workspaceDir: string, networkEnabled: boolean): ShellSandboxPolicy {
+export function buildPolicy(workspaceDir: string, networkEnabled: boolean, extraWriteDirs: string[] = []): ShellSandboxPolicy {
   const home = realpath(os.homedir());
   return {
     workspaceDir: realpath(workspaceDir),
@@ -41,5 +41,12 @@ export function buildPolicy(workspaceDir: string, networkEnabled: boolean): Shel
     // 会直接报错；Windows 段（PowerShell 黑名单）不消费本清单，不受影响
     sensitiveDirs: sensitiveCandidates(home).filter((d) => fs.existsSync(d)),
     networkEnabled,
+    // 工具链目录（v2.5 spec §9）：调用方（resolveShellSpawn）已在授权态完成
+    // 展开；此处仅 Set 去重后原样透传——刻意不做磁盘存在性过滤（终审 F1）。
+    // 过滤的理由（bwrap 对不存在路径 --bind 硬失败）是 Linux 特定顾虑，已下沉
+    // 到 linux.ts 消费点；macOS Seatbelt 对不存在路径的 allow 规则无害且必须
+    // 保留——pip:user（~/Library/Python 首装前不存在）等场景依赖「授权即生效」
+    //（spec §9：安装动作会创建它），全局过滤会让 grant 后写入仍 EPERM
+    extraWriteDirs: [...new Set(extraWriteDirs)],
   };
 }

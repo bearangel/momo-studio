@@ -144,12 +144,27 @@ const api: ApiSurface = {
     setModelVision: (id, modelId, vision) => invoke('provider:setModelVision', id, modelId, vision),
   },
   // v2.4：OS 沙箱通道（sandbox/ipc.handlers.ts）——状态/重探测/装 bwrap/关提示卡
-  //（2026-09-13 修订 B：answerNetworkTrust / onNetworkNotice 已随 ask 信任门下线）
+  //（2026-10-03：grantToolchain 退役；grantWrite/revokeWrite + writeBlocked 推送上线）
   sandbox: {
     getState: () => invoke('sandbox:getState'),
     reprobe: () => invoke('sandbox:reprobe'),
     installBwrap: () => invoke('sandbox:installBwrap'),
     dismissPrompt: (kind) => invoke('sandbox:dismissPrompt', kind),
+    grantWrite: (arg: { scope: 'session' | 'workspace'; key: string; dirs: string[] }) =>
+      invoke('sandbox:grantWrite', arg),
+    denyWrite: (arg: { sessionId: string | null; dirs: string[] }) =>
+      invoke('sandbox:denyWrite', arg),
+    listWriteGrants: () => invoke('sandbox:listWriteGrants'),
+    revokeWrite: (arg: { scope: 'session' | 'workspace'; key: string; dir: string }) =>
+      invoke('sandbox:revokeWrite', arg),
+    onWriteBlocked: (callback: (e: { sessionId: string | null; workspaceId: string | null; dirs: string[]; command: string }) => void) => {
+      type WriteBlockedPayload = Parameters<typeof callback>[0];
+      const handler = (_e: IpcRendererEvent, payload: WriteBlockedPayload): void => callback(payload);
+      ipcRenderer.on('sandbox:writeBlocked', handler);
+      return () => {
+        ipcRenderer.off('sandbox:writeBlocked', handler);
+      };
+    },
   },
   // v2.5：变更账本通道（journal/ipc.handlers.ts）——列表/撤销/组合回滚/干跑预检
   journal: {

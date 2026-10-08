@@ -73,3 +73,98 @@ describe('files/workspace-fs', () => {
     expect(await wsFs.exists('no.txt')).toBe(false);
   });
 });
+
+describe('extraRootDirs（spec hard-gate §6）', () => {
+  // 测试 fixture realpath 归一（macOS /var → /private/var symlink 可移植性）：
+  // 生产 WorkspaceFS.setExtraRootDirs 对根做 realpath 归一去重，assertInWorkspace
+  // 不动输入——fixture 必须与生产同形（realpath 后）否则 macOS 下 isInsideDir 字符串
+  // 前缀比对失败。Linux 上 /var 非 symlink，realpath 是恒等映射无副作用。后人不要
+  // 「简化」掉——GUI 宿主（macOS）必须绿，后续 Task 7/8 也在宿主跑测试。
+  let root: string;
+  let extra: string;
+  let wfs: WorkspaceFS;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-root-')));
+    extra = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-extra-')));
+    wfs = new WorkspaceFS(root);
+  });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(extra, { recursive: true, force: true });
+  });
+
+  it('默认空 → 越界行为与文案不变', () => {
+    expect(() => wfs.assertInWorkspace(path.join(extra, 'f.txt'))).toThrow(
+      /路径越界: .+ 不在 workspace 内/,
+    );
+  });
+
+  it('setExtraRootDirs 后：extra 根内路径放行（读写在根外成功）', async () => {
+    wfs.setExtraRootDirs([extra]);
+    await wfs.writeFile(path.join(extra, 'f.txt'), 'x');
+    expect((await wfs.readFile(path.join(extra, 'f.txt'))).toString()).toBe('x');
+  });
+
+  it('extra 根内 symlink 指向两根之外 → 逃逸拒绝（逐根 realpath 判定）', () => {
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-outside-')));
+    try {
+      fs.symlinkSync(outside, path.join(extra, 'link'));
+      wfs.setExtraRootDirs([extra]);
+      expect(() => wfs.assertInWorkspace(path.join(extra, 'link', 'f.txt'))).toThrow(
+        /符号链接逃逸: .+/,
+      );
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('.git 保护仅 workspace 根：extra 根下 .git 路径放行（与 bash 授权后对齐）', () => {
+    wfs.setExtraRootDirs([extra]);
+    expect(wfs.assertInWorkspace(path.join(extra, '.git', 'config'))).toBe(
+      path.join(extra, '.git', 'config'),
+    );
+    expect(() => wfs.assertInWorkspace(path.join(root, '.git', 'config'))).toThrow(
+      /禁止操作 \.git 目录/,
+    );
+  });
+
+  it('越界错误文案锁（含空格路径——write-grant-tool regex 的消费契约）', () => {
+    const spaced = path.join(extra, 'My Dir With Spaces', 'f.txt');
+    try {
+      wfs.assertInWorkspace(spaced);
+      throw new Error('应越界');
+    } catch (err) {
+      const m = /路径越界: (.+) 不在 workspace 内/.exec((err as Error).message);
+      expect(m).not.toBeNull();
+      expect(m?.[1]).toBe(spaced); // 提取值必须完整还原带空格路径
+    }
+  });
+
+  // 终审 Important#1：授权根是 realpath 形态（/private/tmp/...），LLM 重试以别名
+  // 前缀原始形态（/tmp/...）到达——assertInWorkspace 经规范形态附加容纳弥合。
+  // Linux 无 /tmp 别名时 realpath 为恒等映射，断言退化为同串比对仍然成立。
+  it('别名前缀（symlink alias）路径经规范形态被 extra 根容纳（macOS /tmp→/private/tmp 同构）', () => {
+    const alias = path.join(os.tmpdir(), `wsfs-alias-${Date.now()}`);
+    fs.symlinkSync(extra, alias);
+    try {
+      wfs.setExtraRootDirs([extra]);
+      expect(wfs.assertInWorkspace(path.join(alias, 'f.txt'))).toBe(path.normalize(path.join(alias, 'f.txt')));
+    } finally {
+      fs.rmSync(alias, { force: true });
+    }
+  });
+
+  it('别名前缀指向两根之外 → 规范形态不命中任何根 → 仍拒（逃逸语义等价）', () => {
+    const outside2 = fs.mkdtempSync(path.join(os.tmpdir(), 'wsfs-out2-'));
+    const alias = path.join(os.tmpdir(), `wsfs-alias2-${Date.now()}`);
+    fs.symlinkSync(outside2, alias);
+    try {
+      wfs.setExtraRootDirs([extra]);
+      expect(() => wfs.assertInWorkspace(path.join(alias, 'f.txt'))).toThrow(/路径越界|符号链接逃逸/);
+    } finally {
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(outside2, { recursive: true, force: true });
+    }
+  });
+});

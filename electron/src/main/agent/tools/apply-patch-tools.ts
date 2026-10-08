@@ -16,6 +16,7 @@ import {
   toJournalRelPath,
   recordChangeSafe,
 } from './shared/change-journal';
+import { runWithWriteGrant } from './write-grant-tool';
 
 // 类外常量（Tier 划分见 spec §3）：
 const APPLY_PATCH_CATALOG_META: Record<string, ToolMeta> = {
@@ -53,7 +54,14 @@ export class ApplyPatchTools implements ToolModule {
   async execute(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
     if (name !== 'apply_patch') throw new Error(`未知 apply_patch 工具: ${name}`);
     const patchText = typeof args.patch === 'string' ? args.patch : '';
-    return executePatch(patchText, ctx);
+    // 首个 op 路径作上报预览（解析失败留空——非法 patch 由 executePatch 原样抛）
+    let firstPath = '';
+    try {
+      firstPath = parsePatch(patchText).ops[0]?.path ?? '';
+    } catch {
+      /* 非法 patch：不进门控，直接走原执行路径抛解析错误 */
+    }
+    return runWithWriteGrant(ctx, 'apply_patch', firstPath, () => executePatch(patchText, ctx));
   }
 }
 

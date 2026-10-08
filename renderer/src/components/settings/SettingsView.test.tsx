@@ -76,6 +76,8 @@ const mockApi = {
     reprobe: vi.fn(),
     installBwrap: vi.fn(),
     dismissPrompt: vi.fn(),
+    listWriteGrants: vi.fn().mockResolvedValue([]),
+    revokeWrite: vi.fn(),
   },
   memory: {
     list: vi.fn().mockResolvedValue([]),

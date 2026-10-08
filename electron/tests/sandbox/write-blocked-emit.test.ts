@@ -1,0 +1,158 @@
+// electron/tests/sandbox/write-blocked-emit.test.ts
+// 主进程事件检测（spec 2026-10-03 §5.1/§5.3）：批次 tool_call_result 命中 →
+// 组装 writeBlocked 信号（command 跨批环形缓存关联；session/ws 经 messages 解析）。
+import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// electron API 假件（照 stream-relay.test 形态——进程边界 DI）
+const mockSend = vi.fn();
+import { __setElectronApisForTest } from '../../src/main/electron-access';
+
+beforeAll(() => {
+  __setElectronApisForTest({
+    BrowserWindow: {
+      getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
+    },
+    ipcMain: { handle: vi.fn() },
+  });
+});
+afterAll(() => {
+  __setElectronApisForTest(null);
+});
+import {
+  inspectEventBatch,
+  writeBlockedFromChildMsg,
+  __resetInspectStateForTest,
+} from '../../src/main/sandbox/write-blocked-emit';
+import type { MessageEventRow } from '../../src/main/storage/messages/events-repo';
+import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
+
+const tmpRoot = path.join(os.tmpdir(), `write-blocked-emit-test-${Date.now()}`);
+
+beforeEach(() => {
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  process.env.AP_USER_DATA_DIR = tmpRoot;
+  runMigrations();
+  __resetInspectStateForTest();
+});
+afterEach(() => {
+  closeDb();
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  delete process.env.AP_USER_DATA_DIR;
+});
+
+let seq = 0;
+function mkStart(callId: string, command: string): MessageEventRow {
+  seq += 1;
+  return {
+    id: `e-${callId}-s-${seq}`, messageId: 'm-1', seq, eventType: 'tool_call_start',
+    payload: { callId, toolName: 'bash', args: { command } }, createdAt: Date.now(),
+  };
+}
+function mkResult(callId: string, result: string): MessageEventRow {
+  seq += 1;
+  return {
+    id: `e-${callId}-r-${seq}`, messageId: 'm-1', seq, eventType: 'tool_call_result',
+    payload: { callId, toolName: 'bash', result, success: false }, createdAt: Date.now(),
+  };
+}
+
+// 语料用真实 home（emit 内部取 os.homedir()——HOME 一级归并分支）。
+// result 为子进程拼好的完整形态：exit_code + sandbox tag 行（终审 I2 检测依据）+ stdout 错误段
+const HOME = os.homedir();
+const CARGO_FAIL = `exit_code: 1
+
+sandbox: seatbelt/net-on
+
+error: failed to open ${HOME}/.cargo/registry/cache/a.crate
+
+Caused by:
+  Operation not permitted (os error 1)`;
+
+describe('inspectEventBatch（spec §5.3）', () => {
+  it('start+result 同批：命中 → dirs 归一 + command 关联', () => {
+    const sig = inspectEventBatch([mkStart('c1', 'cargo build'), mkResult('c1', CARGO_FAIL)]);
+    expect(sig).not.toBeNull();
+    expect(sig!.command).toBe('cargo build');
+    expect(sig!.dirs).toEqual([path.join(HOME, '.cargo')]); // HOME 一级归一
+  });
+
+  it('start 先批、result 后批：环形缓存跨批关联 command', () => {
+    expect(inspectEventBatch([mkStart('c2', 'cargo run')])).toBeNull();
+    const sig = inspectEventBatch([mkResult('c2', CARGO_FAIL)]);
+    expect(sig?.command).toBe('cargo run');
+  });
+
+  it('非 bash / 未命中签名批次 → null', () => {
+    const nonBash: MessageEventRow = { ...mkResult('c3', CARGO_FAIL), payload: { callId: 'c3', toolName: 'write_file', result: CARGO_FAIL } };
+    expect(inspectEventBatch([nonBash])).toBeNull();
+    expect(inspectEventBatch([mkResult('c4', 'ok output')])).toBeNull();
+  });
+
+  it('消息行在库：sessionId/workspaceId 经 messages 解析', () => {
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-1', 's-resolve', 'agent-x', 'message', '', 'ss-resolve', 'w-resolve', Date.now(), Date.now());
+    const sig = inspectEventBatch([mkStart('c5', 'x'), mkResult('c5', CARGO_FAIL)]);
+    expect(sig?.sessionId).toBe('s-resolve');
+    expect(sig?.workspaceId).toBe('w-resolve');
+  });
+
+
+  it('result 文本无沙箱 tag 行（permissive/unsandboxed）→ 不触发（终审 I2）', () => {
+    // 同样的 EPERM 文本但没有 sandbox: seatbelt|bwrap 行——真实系统权限错误不弹卡
+    const plainFail = 'error: cannot write /etc/hosts\nOperation not permitted';
+    expect(inspectEventBatch([mkStart('c-nb', 'touch /etc/hosts'), mkResult('c-nb', plainFail)])).toBeNull();
+    const unsandboxedFail = 'exit_code: 1\n\nsandbox: unsandboxed:测试降级\n\nerror: Operation not permitted';
+    expect(inspectEventBatch([mkStart('c-ns', 'x'), mkResult('c-ns', unsandboxedFail)])).toBeNull();
+  });
+
+  it('消息行缺失（无映射）→ sessionId/workspaceId null（卡按钮降级依据）', () => {
+    const sig = inspectEventBatch([mkStart('c6', 'x'), mkResult('c6', CARGO_FAIL)]);
+    expect(sig?.sessionId).toBeNull();
+    expect(sig?.workspaceId).toBeNull();
+  });
+
+  it('command 截断 200（超长命令预览上限）', () => {
+    const longCmd = 'x'.repeat(500);
+    const sig = inspectEventBatch([mkStart('c7', longCmd), mkResult('c7', CARGO_FAIL)]);
+    expect(sig?.command).toHaveLength(200);
+  });
+});
+
+
+// ═══ 子进程上报消费（spec §12——等待开始即弹卡的主信号）═══
+describe('writeBlockedFromChildMsg（spec §12）', () => {
+  it('合法载荷 → 解析 sessionId（roll 语义）并推 sandbox:writeBlocked', () => {
+    getDb()
+      .prepare(
+        'INSERT INTO messages (id, session_id, sender, event_type, body, stream_session_id, workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m-rep', 's-rep', 'agent-x', 'message', '', 'ss-rep#roll1', 'w-rep', Date.now(), Date.now());
+    mockSend.mockClear();
+    const consumed = writeBlockedFromChildMsg({
+      type: 'write-blocked-report',
+      streamSessionId: 'ss-rep',
+      workspaceId: 'w-rep',
+      dirs: [path.join(os.homedir(), '.cargo')],
+      command: 'cargo build',
+    });
+    expect(consumed).toBe(true);
+    expect(mockSend).toHaveBeenCalledWith('sandbox:writeBlocked', {
+      sessionId: 's-rep',
+      workspaceId: 'w-rep',
+      dirs: [path.join(os.homedir(), '.cargo')],
+      command: 'cargo build',
+    });
+  });
+
+  it('形状不符 → 返回 false（消息落回其他分支）；无窗口静默不抛', () => {
+    expect(writeBlockedFromChildMsg({ type: 'other' })).toBe(false);
+    expect(writeBlockedFromChildMsg('not-an-object')).toBe(false);
+    expect(writeBlockedFromChildMsg({ type: 'write-blocked-report', dirs: 42 })).toBe(false);
+  });
+});

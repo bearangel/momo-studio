@@ -8,8 +8,11 @@
 // （三态时代的 wait 阻塞询问 op 已随 ask 信任门机制全链下线。）
 //
 // 线协议（两端同 commit 修改——momo-boundary-rules 生产者消费者成对）：
-//   child → main: { type: 'net-trust-op', requestId, op: 'effective', streamSessionId }
+//   child → main: { type: 'net-trust-op', requestId, op: 'effective', streamSessionId, workspaceId? }
 //   main → child: { type: 'net-trust-op:result', requestId, ok, payload? | error }
+// v2.5（2026-10-01）：payload 扩展双字段 { netOn, toolchainOn }；请求载荷新增
+// 可选 workspaceId（undefined 时省略键——JSON 序列化自然丢，主进程按旧载荷
+// 处理：grant 按 false，向后兼容旧子进程）。只加字段，不改既有字段含义。
 //
 // 错误路径铁律（照抄 browser-ipc-bridge）：
 //   - 超时 reject 中文文案并清 pending（防泄漏 + 迟到结果安全 no-op）
@@ -30,6 +33,9 @@ const EFFECTIVE_BRIDGE_TIMEOUT_MS = 60_000;
 /** spawn 前有效网络态（主进程双态策略单点判定的镜像产物） */
 export interface EffectiveNetworkDecision {
   netOn: boolean;
+  /** 通用写授权目录（spec 2026-10-03 §6.1）：主进程 session ∪ workspace 两层合成；
+   * 旧主进程应答缺该字段时按 [] 兜底（两端混跑安全） */
+  extraDirs: string[];
 }
 
 interface PendingEntry {
@@ -47,7 +53,7 @@ const pending = new Map<string, PendingEntry>();
  */
 function sendNetTrustOp(
   op: 'effective',
-  payload: { streamSessionId: string },
+  payload: { streamSessionId: string; workspaceId?: string },
   timeoutMs: number,
 ): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
@@ -75,10 +81,26 @@ function sendNetTrustOp(
   });
 }
 
-/** spawn 前查询有效网络态（每条 bash 命令一次往返——IPC 开销远小于进程 spawn 本身） */
-export function requestEffectiveNetwork(streamSessionId: string): Promise<EffectiveNetworkDecision> {
-  return sendNetTrustOp('effective', { streamSessionId }, EFFECTIVE_BRIDGE_TIMEOUT_MS) as
-    Promise<EffectiveNetworkDecision>;
+/**
+ * spawn 前查询有效网络态（每条 bash 命令一次往返——IPC 开销远小于进程 spawn 本身）。
+ * v2.5：可选 workspaceId——会话级工具链 grant 的键控 ID（跨模块 ID 单点透传，
+ * 来自 ToolContext.workspaceId）；undefined 时省略键，主进程按旧载荷处理。
+ */
+export function requestEffectiveNetwork(
+  streamSessionId: string,
+  workspaceId?: string,
+): Promise<EffectiveNetworkDecision> {
+  // 应答规范化（两端混跑安全）：旧主进程应答缺 extraDirs / 布尔字段异常时兜底
+  return sendNetTrustOp('effective', { streamSessionId, workspaceId }, EFFECTIVE_BRIDGE_TIMEOUT_MS)
+    .then((payload) => {
+      const p = payload as Partial<EffectiveNetworkDecision>;
+      return {
+        netOn: p.netOn === true,
+        extraDirs: Array.isArray(p.extraDirs)
+          ? p.extraDirs.filter((d): d is string => typeof d === 'string')
+          : [],
+      };
+    });
 }
 
 /**

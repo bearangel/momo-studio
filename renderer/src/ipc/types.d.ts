@@ -751,6 +751,16 @@ export interface GlobalSettings {
    * （默认——三态时代的 ask 已并入 allow，读时懒迁移收敛）。
    */
   sandboxNetworkPolicy?: 'deny' | 'allow';
+  /**
+   * v2.5：沙箱工具链目录写入策略。**2026-10-04 随工具链机制整体移除**（硬门控
+   * 授权卡取代）：本字段不再被生产消费；存量 JSON 键留存不读不写（回滚安全）。
+   */
+  sandboxToolchainPolicy?: 'deny' | 'allow';
+  /**
+   * v2.5：可授权写入的工具链目录清单。**2026-10-04 随工具链机制整体移除**：
+   * 本字段不再被生产消费；存量 JSON 键留存不读不写。
+   */
+  sandboxToolchainDirs?: string[];
   /** v2.5：变更账本 workspace 级 blob 配额（MB，按 1024² 换算；超限滚动清理最旧任务组）。默认 200。 */
   journalQuotaMb?: number;
 }
@@ -1408,7 +1418,10 @@ export type NetworkPolicy = 'deny' | 'allow';
 export interface SandboxInfo {
   /** boot/上次 reprobe 的探测结果；应用启动早期可能为 null（探测未完成） */
   state: SandboxProbeState | null;
-  settings: { mode: SandboxMode; networkPolicy: NetworkPolicy };
+  settings: {
+    mode: SandboxMode;
+    networkPolicy: NetworkPolicy;
+  };
   /** 手动安装指引命令（包管理器探测失败为 null） */
   installCommand: string | null;
   bwrapPromptDismissed: boolean;
@@ -1428,8 +1441,38 @@ export interface SandboxApiSurface {
   reprobe(): Promise<SandboxInfo>;
   /** pkexec 安装 bubblewrap（Linux）；pkexec 缺失/安装失败返回 ok:false + 输出摘要 */
   installBwrap(): Promise<{ ok: boolean; output: string }>;
-  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off 拦截引导） */
+  /** 关闭提示卡（kv 一次性标记；kind 区分 bwrap 安装引导 / win32 策略提示 / net-off）
+   * 2026-10-03：toolchain kind 随事件驱动授权卡退役 */
   dismissPrompt(kind: 'bwrap' | 'winPolicy' | 'netOff'): Promise<void>;
+  /**
+   * 通用写授权（spec 2026-10-03 §6.3）：授权卡三按钮的两档写入。
+   * session=单个聊天会话持久 / workspace=工作空间持久；dirs 为卡上展示的归一目录。
+   */
+  grantWrite(arg: {
+    scope: 'session' | 'workspace';
+    key: string;
+    dirs: string[];
+  }): Promise<void>;
+  /** 写授权拒绝（spec 2026-10-03 hard-gate §4.3）：广播解除等待中的工具调用 */
+  denyWrite(arg: { sessionId: string | null; dirs: string[] }): Promise<void>;
+  /** 撤销单条（设置页「已授权目录」） */
+  revokeWrite(arg: { scope: 'session' | 'workspace'; key: string; dir: string }): Promise<void>;
+  /** 工作空间持久授权列表（设置页「已授权目录」小节） */
+  listWriteGrants(): Promise<Array<{ workspaceId: string; dirs: string[] }>>;
+  /** 写拦截信号推送（主进程 stream-relay 检测命中即推；renderer 直弹授权卡） */
+  onWriteBlocked(cb: (e: WriteBlockedEvent) => void): () => void;
+}
+
+/**
+ * sandbox:writeBlocked 事件载荷（spec 2026-10-03 §5.3）——主进程 write-blocked-emit
+ * 的 WriteBlockedSignal 镜像（跨进程独立定义，仅结构对齐）。sessionId/workspaceId
+ * 为 null = 消息映射失败，卡按钮据此禁用。
+ */
+export interface WriteBlockedEvent {
+  sessionId: string | null;
+  workspaceId: string | null;
+  dirs: string[];
+  command: string;
 }
 
 /** v2.5 变更操作四值域。与 electron 端 journal/types.ts 的 JournalOp 对齐（spec §5.2）。 */

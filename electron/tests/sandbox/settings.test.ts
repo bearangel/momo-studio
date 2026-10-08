@@ -6,6 +6,9 @@
 //     'allow'（双态时代新默认即 allow，两分支同值收敛）；全缺省（全新库）→
 //     'allow' 并写回新键；显式 'deny' 原样保留（不重写）
 //   - 新键非法值（脏库）→ 回退新默认 'allow' 不抛错
+// v2.5 工具链授权契约已移除（2026-10-04）：旧键 sandboxToolchainPolicy /
+// sandboxToolchainDirs 在 crud 中以墓碑形式留存（不回滚，不读，不写），
+// 读路径不再合成任何工具链字段。SandboxSettings 形如 { mode, networkPolicy }。
 // db fixture 复用 tests/settings/crud.test.ts 模式（AP_USER_DATA_DIR 临时目录）。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -54,14 +57,23 @@ function writeRawGlobal(patch: Record<string, unknown>): void {
 
 describe('sandbox/settings（testOverride）', () => {
   it('testOverride 注入后优先生效（无需 DB 值，不触发迁移）', () => {
-    __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
-    expect(getSandboxSettings()).toEqual({ mode: 'permissive', networkPolicy: 'deny' });
+    __setSandboxSettingsForTest({
+      mode: 'permissive',
+      networkPolicy: 'deny',
+    });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'permissive',
+      networkPolicy: 'deny',
+    });
     expect(readRawGlobal().sandboxNetworkPolicy).toBeUndefined();
   });
 
   it('override 置 null 后走 DB，缺省 strict / allow（双态时代新默认）', () => {
     __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings()).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+    });
   });
 });
 
@@ -76,7 +88,10 @@ describe('sandbox/settings kv 懒迁移（修订 B：双态收敛）', () => {
   it('旧布尔键 sandboxNetwork=true → allow，且写回新键、旧键留存（回滚安全）', () => {
     updateGlobalSettings({ sandboxNetwork: true });
     __setSandboxSettingsForTest(null);
-    expect(getSandboxSettings()).toEqual({ mode: 'strict', networkPolicy: 'allow' });
+    expect(getSandboxSettings()).toEqual({
+      mode: 'strict',
+      networkPolicy: 'allow',
+    });
     const raw = readRawGlobal();
     expect(raw.sandboxNetworkPolicy).toBe('allow'); // 新键已写
     expect(raw.sandboxNetwork).toBe(true); // 旧键留存不删
@@ -136,5 +151,27 @@ describe('sandbox/settings 既有行为保持（v2.4 基线）', () => {
     updateGlobalSettings({ sandboxMode: 'permissive' });
     __setSandboxSettingsForTest(null);
     expect(getSandboxSettings().mode).toBe('permissive');
+  });
+});
+
+describe('sandbox/settings 形状锁（v2.5 工具链机制移除）', () => {
+  // 抗复活锁：v2.5 移除后 SandboxSettings 应严格保持两字段形状。任何回潮
+  // （如新增 toolchainPolicy/toolchainDirs/toolchainEnabled 等字段）会被
+  // toHaveProperty 截住。测试同时覆盖 testOverride 与 DB 两条读路径，确保
+  // 双源同形。
+  it('testOverride 注入的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
+    __setSandboxSettingsForTest({ mode: 'strict', networkPolicy: 'deny' });
+    const s = getSandboxSettings();
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(s).not.toHaveProperty('toolchainPolicy');
+    expect(s).not.toHaveProperty('toolchainDirs');
+  });
+
+  it('DB 通路读出的 SandboxSettings 仅含 mode/networkPolicy 两键', () => {
+    __setSandboxSettingsForTest(null);
+    const s = getSandboxSettings();
+    expect(Object.keys(s).sort()).toEqual(['mode', 'networkPolicy']);
+    expect(s).not.toHaveProperty('toolchainPolicy');
+    expect(s).not.toHaveProperty('toolchainDirs');
   });
 });

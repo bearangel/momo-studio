@@ -95,6 +95,10 @@ import { handleProcessOpResult } from './tools/process-bridge';
 // LSP 工具 IPC 桥（多语言 LSP 子系统 Task 5）：真实 LspManager 只活在主进程，
 // 子进程 lsp-tools 经此桥往返（与 browser-ipc-bridge 同型第三例）
 import { handleLspOpResult } from './tools/lsp-ipc-bridge';
+// 写授权硬门控拒绝广播（spec 2026-10-03 hard-gate §4.4）：主进程经
+// runtime-registry.broadcastWriteGrantDenied → child.send(write-grant-denied) →
+// runtime-entry 此分支路由至 write-grant-wait 的通知器。
+import { notifyWriteGrantDenied } from './tools/write-grant-wait';
 // v2.11 输入框上下文（spec 2026-09-16 §5.5）：task-config.context / steer.context
 // 经 renderTurnBody 包装进本轮用户正文；isExpandedContext 收窄 steer 载荷形状
 import { renderTurnBody, isExpandedContext } from './turn-context';
@@ -355,6 +359,8 @@ async function main(): Promise<void> {
       handleLspOpResult(msg);
     } else if (m.type === 'net-trust-op:result') {
       handleNetTrustOpResult(msg);
+    } else if (m.type === 'write-grant-denied') {
+      notifyWriteGrantDenied(msg);
     } else if (m.type === 'process-op:result') {
       handleProcessOpResult(msg);
     } else if (m.type === 'compaction:result') {

@@ -6,6 +6,7 @@
 // （FK → workspace_agent_members）+ is_leader（快照记 leader，接待判定依据，spec §3.3）。
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
+import { clearSessionGrants } from '../../sandbox/write-grant';
 
 export interface SessionRow {
   id: string;
@@ -91,6 +92,9 @@ export function renameSession(id: string, title: string): void {
 
 export function deleteSession(id: string): void {
   getDb().prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  // 会话授权随会话清理（spec 2026-10-03 §4 生命周期）——write-grant 只依赖
+  // storage/db，import 方向无环
+  clearSessionGrants(id);
 }
 
 /** 消息写入路径调用：刷新 last_message_at（排序键） */

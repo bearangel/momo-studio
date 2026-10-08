@@ -47,6 +47,12 @@ function detectNetBlocked(resultText: string): boolean {
 }
 
 /**
+ * 工具链写拦截固定子串（spec 2026-10-01 §7/§8）。与 electron 侧 WRITE_BLOCKED_HINT
+ * （sandbox-write-hint.ts，Task 4 逐字锁）同源——跨进程无共享模块，renderer 硬编码
+ * 同一子串，两端测试各自逐字锁死。主进程 detectHomeWriteBlocked 命中时把完整提示段
+ * 追加到 bash 结果尾部，renderer 据此置引导卡标志。
+ */
+/**
  * A 子系统 StreamState。
  *
  * extends AggregatedStream（A5 共用聚合函数输出）+ 补充会话上下文字段。
@@ -79,6 +85,8 @@ interface StreamStoreState {
   /**
    * 接收主进程 MessageEventBuffer flush 推送的批量 events。
    * 累积到内部 eventLog 后重新聚合所有受影响的 messageId。
+   *（v2.5 工具链子串扫描链已于 2026-10-03 随事件驱动授权卡废除——写拦截信号
+   *  走 sandbox:writeBlocked 推送 + write-grant.store，见 spec §5.4）
    */
   applyEventBatch: (batch: MessageEventRow[]) => void;
   /**
@@ -201,4 +209,5 @@ export const useStreamStore = create<StreamStoreState>((set) => ({
     // 一次性标志只置不清（与 applyEventBatch 检测路径同一语义）
     set((state) => (state.netBlockedSeen ? {} : { netBlockedSeen: true }));
   },
+
 }));

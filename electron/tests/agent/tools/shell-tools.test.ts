@@ -8,6 +8,8 @@
 //   - 超时用例 vitest 超时给 10s（远大于 timeoutMs=1000，避免 CI 抖动）。
 //   - 环境变量白名单用例：临时往 process.env 写 OPENAI_API_KEY，验证子进程不可见；
 //     用例末尾 delete 清理；afterEach 再兜底清理一次避免失败时泄漏。
+// v2.5 工具链机制整体移除（2026-10-04）：net-trust payload 仅 {netOn, extraDirs}
+// 两字段，toolchainOn 已从契约下线。__setNetQueryForTest 替身形状相应精简。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -18,6 +20,16 @@ import type { ToolContext } from '../../../src/main/agent/tools/types';
 import { ShellTools } from '../../../src/main/agent/tools/shell-tools';
 import { __setSandboxStateForTest } from '../../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../../src/main/sandbox/settings';
+import {
+  __setBashWriteWaitForTest,
+  __setNetQueryForTest,
+} from '../../../src/main/agent/tools/shell-tools';
+import { WRITE_BLOCKED_HINT } from '../../../src/main/agent/tools/sandbox-write-hint';
+
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy };
+}
 
 let tmpRoot: string;
 let tmpDir: string;
@@ -32,7 +44,7 @@ let ctx: ToolContext;
   wsFs = new WorkspaceFS(tmpDir);
   // v2.4：bash 走 resolveShellSpawn（默认 strict + 未探测 → blocked 抛错）。
   // 注入 permissive + linux 沙箱不可用状态 → plain 直跑 + unsandboxed 标记。
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest(settings('permissive', 'deny'));
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,
@@ -169,6 +181,51 @@ describe('bash 输出截断', () => {
   });
 });
 
+// v2.5 HOME 写拦截提示层（spec §7）：真跑集成——bash 结果尾部追加固定提示，
+// 同服 LLM（知道该请求用户授权而非绕路）与 renderer stream.store（固定子串
+// 检测置引导卡）。提示判定纯函数的三条件矩阵（平台无关）见
+// sandbox-write-hint.test.ts；此处锁 shell-tools 结果组装层的真跑接线。
+// seatbelt 真跑仅 darwin（linux 容器无 bwrap 时 wrapped 分支不可达）——
+// itDarwin 门控跳过其余平台，非沙箱 tag 的负控制例两平台均可跑。
+const itDarwin = process.platform === 'darwin' ? it : it.skip;
+/** 与真实 rustup 失败同形的 stderr 签名（locale 无关——写死文案而非依赖 strerror） */
+const WRITE_BLOCKED_CMD = "echo 'error: could not write to ~/.rustup: Operation not permitted' >&2; exit 1";
+
+describe('bash HOME 写拦截提示层（spec §7）', () => {
+  itDarwin('沙箱 tag + EPERM 签名 + HOME 特征 → 结果尾部逐字追加 WRITE_BLOCKED_HINT', async () => {
+    // strict + seatbelt 可用 + 网络回退推导 allow（非 fork 环境桥不可用）→ wrapped seatbelt/net-on
+    __setSandboxSettingsForTest(settings('strict', 'allow'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    // spec hard-gate §5 等待循环：非 fork 环境 process.send 缺省 → wait 短路 denied →
+    // 走 formatWriteDeniedResult 分支，bashOnce 文本不可见。此处注入 wait 替身返
+    // 回 covered 让等待循环正常推进；bashOnce 仍持续被拦 → MAX_ROUNDS 后落出，
+    // 末轮 last.text 仍带 sandbox tag + hint（bashOnce 自身负责追加 hint）。
+    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'covered' as const }) });
+    try {
+      const tools = new ShellTools();
+      const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+      expect(result).toContain('sandbox: seatbelt/net-on');
+      // 提示逐字追加在结果尾部（最后一段——LLM 最后看到，行动指引优先级最高）
+      expect(result.endsWith(WRITE_BLOCKED_HINT)).toBe(true);
+      expect(result).toContain('工作空间外路径写入被沙箱拦截');
+      expect(result).toContain('请勿用临时目录或缓存重定向绕过');
+    } finally {
+      __setBashWriteWaitForTest(null);
+    }
+  });
+
+  it('非沙箱 tag（permissive 降级 unsandboxed）→ 同签名不追加提示（负控制）', async () => {
+    // beforeEach 已注入 permissive + 不可用 → plain 直跑 unsandboxed:原因
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(result).toContain('sandbox: unsandboxed:bwrap 未安装');
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
+  });
+});
+
 // 进程组上报（2026-09-25 生命周期立项）：spawn 成功后经 child IPC 上报 pgid，
 // 主进程 registry 是回合收割的唯一真相源。单测环境 process.send 缺省为
 // undefined——临时替换捕获载荷，finally 恢复。
@@ -197,5 +254,135 @@ describe('bash 进程组上报（proc-group:register）', () => {
     } finally {
       (process as { send?: (msg: unknown) => boolean }).send = origSend;
     }
+  });
+});
+
+
+// ═══ 写授权硬门控等待（spec 2026-10-03 hard-gate §5）═══
+describe('bash 写授权硬门控等待（spec hard-gate §5）', () => {
+  const HOME_TARGET = path.join(os.homedir(), `.momo-wait-verify-${process.pid}`);
+  const REAL_BLOCKED_CMD = `echo granted >> ${HOME_TARGET}`;
+
+  const capturedSends: Array<Record<string, unknown>> = [];
+  const realSend = process.send;
+
+  beforeEach(() => {
+    capturedSends.length = 0;
+    Object.defineProperty(process, 'send', {
+      value: (msg: unknown): boolean => {
+        capturedSends.push(msg as Record<string, unknown>);
+        return true;
+      },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, 'send', { value: realSend, configurable: true });
+    __setBashWriteWaitForTest(null);
+    __setNetQueryForTest(null);
+    try { fs.rmSync(HOME_TARGET, { force: true }); } catch { /* best-effort */ }
+  });
+
+  itDarwin('真被拦 → 上报 write-blocked-report → covered 后重执行成功（无缝续跑）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    // 桥替身：首查无授权（真拦截），等待回调翻转 extraDirs（= 用户点了授权卡）
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setBashWriteWaitForTest({
+      wait: async (o) => {
+        // 模拟授权落地：下一次 effective 返回已授权目录
+        __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [path.join(os.homedir(), path.basename(HOME_TARGET))] }));
+        void o.isCovered();
+        return { kind: 'covered' as const };
+      },
+    });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: REAL_BLOCKED_CMD }, ctx);
+    // 上报形状（fire-and-forget，照 proc-group:register 形态）
+    const report = capturedSends.find((m) => m.type === 'write-blocked-report');
+    expect(report).toBeDefined();
+    expect(report?.dirs).toEqual([HOME_TARGET]);
+    expect(report?.command).toBe(REAL_BLOCKED_CMD);
+    // 重执行成功：exit 0、无提示段、文件真写入
+    expect(result).toContain('exit_code: 0');
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
+    expect(fs.existsSync(HOME_TARGET)).toBe(true);
+  });
+
+  itDarwin('denied → 返回统一拒绝文案（无 hint、无重执行）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    __setBashWriteWaitForTest({ wait: async () => ({ kind: 'denied' as const }) });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    // dirs 形态取决于 WRITE_BLOCKED_CMD 的路径提取——锁前缀语义，不锁具体目录
+    expect(result).toMatch(/^用户已拒绝授权（目录：.+）。请勿重试同一目标；如确需写入请与用户协商其他方案。$/);
+    expect(result).not.toContain('工作空间外路径写入被沙箱拦截');
+    expect(capturedSends.filter((m) => m.type === 'write-blocked-report')).toHaveLength(1);
+  });
+
+  itDarwin('covered 但重执行仍被拦（新目录）→ 循环再等待；denied 收敛', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    let waitCalls = 0;
+    __setBashWriteWaitForTest({
+      wait: async () => {
+        waitCalls += 1;
+        return waitCalls <= 1 ? { kind: 'covered' as const } : { kind: 'denied' as const };
+      },
+    });
+    const tools = new ShellTools();
+    const result = await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(waitCalls).toBe(2);
+    expect(result).toContain('用户已拒绝授权');
+    expect(capturedSends.filter((m) => m.type === 'write-blocked-report').length).toBeGreaterThanOrEqual(2);
+  });
+
+  itDarwin('回归锁 bug ①：被拦目录不在 extraDirs → isCovered 必须为 false（纯成员判定）', async () => {
+    __setSandboxSettingsForTest(settings('strict', 'deny'));
+    __setSandboxStateForTest({
+      platform: 'darwin', sandboxTool: 'seatbelt', toolVersion: 'sandbox-exec',
+      available: true, unavailableReason: null, windowsShell: null, executionPolicy: null, probedAt: 0,
+    });
+    // v2.5 工具链机制移除后 net-trust payload 仅 {netOn, extraDirs}——无 toolchainOn
+    // 字段。被拦目录不在 extraDirs 时 isCovered 必须为 false（纯成员判定），否则
+    // 任何被拦目录都会瞬判 covered 零询问用户（bug ① 的根因形态）。
+    __setNetQueryForTest(async () => ({ netOn: false, extraDirs: [] }));
+    let probe: boolean | undefined;
+    __setBashWriteWaitForTest({
+      wait: async (o) => {
+        probe = await o.isCovered();
+        return { kind: 'denied' as const };
+      },
+    });
+    const tools = new ShellTools();
+    await tools.execute('bash', { command: WRITE_BLOCKED_CMD }, ctx);
+    expect(probe).toBe(false); // 旧代码此处为 true（toolchainOn || 短路）——瞬判 covered 零等待
+  });
+});
+
+// isCovered 源码锁（spec hard-gate §4.2）：防止 bug ① 复活——纯成员判定语义必须
+// 永久保留。v2.5 工具链机制移除后 toolchainOn 整字段已下线（任何形式的复活都属
+// 重新引入瞬断路径），因此本锁扩展为「源码不得再出现 eff.toolchainOn 这一整段」
+// ——既锁逻辑形态，又锁字段复活。
+describe('isCovered 源码锁（spec hard-gate §4.2）', () => {
+  it('不再以 eff.toolchainOn 作覆盖判定（bug ① 防复活 + toolchainOn 字段防复活）', () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../../src/main/agent/tools/shell-tools.ts'),
+      'utf-8',
+    );
+    expect(src).not.toContain('eff.toolchainOn ||');
+    expect(src).not.toContain('eff.toolchainOn');
   });
 });

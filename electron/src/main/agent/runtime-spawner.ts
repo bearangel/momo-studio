@@ -19,6 +19,7 @@ import { logger } from '../logger';
 import type { StreamChunk } from './stream-chunk';
 import { handleChildMessage } from './internal-event-bridge';
 import { registerFromChildMsg } from '../sandbox/process-registry';
+import { writeBlockedFromChildMsg } from '../sandbox/write-blocked-emit';
 import { insertToolCall } from '../audit/insert';
 import { enforceAuditQuota } from '../audit/quota';
 import { getOrStartMcp, getMcpConfig, listMcpTools, callMcpTool } from '../mcp/host-manager';
@@ -352,6 +353,8 @@ export async function spawnForAgent(opts: SpawnOpts): Promise<SpawnedRuntime> {
     // 沙箱进程组登记（2026-09-25 生命周期立项）：shell 工具 spawn 后上报 pgid，
     // 主进程 registry 是回合收割（finalizeActiveTask）的唯一真相源
     if (registerFromChildMsg(m)) return;
+    // 写拦截有界等待上报（spec 2026-10-03 §12）：bash 被拦进入等待即弹授权卡
+    if (writeBlockedFromChildMsg(m)) return;
     // P0 boot 握手：子进程监听器注册完毕的一次性信号——resolve readyGate
     if (m.type === 'runtime-ready') {
       readyGate.settle(null);

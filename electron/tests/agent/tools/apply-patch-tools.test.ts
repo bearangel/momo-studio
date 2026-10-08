@@ -187,11 +187,15 @@ describe('execute — 多文件原子性', () => {
 });
 
 describe('execute — 沙箱协同', () => {
-  it('路径越界（../）抛错', async () => {
+  it('路径越界（../）→ 硬门控拒绝文案（spec §7）', async () => {
     const patch = `*** Add File: ../escape.ts
 +x
 `;
-    await expect(tools.execute('apply_patch', { patch }, ctx)).rejects.toThrow(/越界|escape/);
+    // spec hard-gate §7：非 fork 环境越界返回拒绝文案（等待短路 denied），不再抛错
+    const r = await tools.execute('apply_patch', { patch }, ctx);
+    expect(r).toContain('用户已拒绝授权');
+    // 副作用未发生：越界目标未创建
+    expect(fs.existsSync(path.normalize(path.join(tmpDir, '../escape.ts')))).toBe(false);
   });
 });
 

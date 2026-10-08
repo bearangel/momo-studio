@@ -30,6 +30,11 @@ import type { RuntimeConfig } from '../../src/main/agent/runtime-config';
 import { __setSandboxStateForTest } from '../../src/main/sandbox/probe';
 import { __setSandboxSettingsForTest } from '../../src/main/sandbox/settings';
 
+/** 测试用 settings 构造器：v2.5 起 SandboxSettings 仅含 mode/networkPolicy */
+function settings(mode: 'strict' | 'permissive', networkPolicy: 'deny' | 'allow') {
+  return { mode, networkPolicy };
+}
+
 let tmpDir: string;
 let ctx: RuntimeContext;
 
@@ -96,7 +101,7 @@ beforeEach(() => {
     toolModules: buildToolRegistry(sharedToolCtxFields),
   };
   // v2.4：bash 路由用例走 resolveShellSpawn——注入 permissive + 沙箱不可用，保证真实 spawn 可达
-  __setSandboxSettingsForTest({ mode: 'permissive', networkPolicy: 'deny' });
+  __setSandboxSettingsForTest(settings('permissive', 'deny'));
   __setSandboxStateForTest({
     platform: 'linux', sandboxTool: null, toolVersion: null,
     available: false, unavailableReason: 'bwrap 未安装', windowsShell: null,

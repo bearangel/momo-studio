@@ -15,6 +15,8 @@ import {
 } from './probe';
 import { getSandboxSettings, type NetworkPolicy } from './settings';
 import { detectPackageManager } from './windows';
+import { grantWriteDirs, revokeWriteDir, listWorkspaceGrants } from './write-grant';
+import { broadcastWriteGrantDenied } from '../agent/runtime-registry';
 import type { SandboxMode } from './types';
 
 export interface SandboxInfo {
@@ -31,6 +33,17 @@ const KV_BWRAP = 'sandbox_bwrap_prompt_dismissed';
 const KV_WINPOLICY = 'sandbox_win_policy_prompt_dismissed';
 const KV_NETOFF = 'sandbox_net_prompt_dismissed';
 
+/**
+ * dismissPrompt 的 kind → kv_store key 映射表。
+ * 改用查表保证新加 kind 时编译期友好 + 隔离 case 隔离（双侧契约锁一致）。
+ * 2026-10-03：toolchain 键随事件驱动授权卡退役（写拦截卡不再用一次性 KV flag）。
+ */
+const PROMPT_KV: Record<'bwrap' | 'winPolicy' | 'netOff', string> = {
+  bwrap: KV_BWRAP,
+  winPolicy: KV_WINPOLICY,
+  netOff: KV_NETOFF,
+};
+
 function readKvFlag(key: string): boolean {
   const row = getDb().prepare('SELECT value FROM kv_store WHERE key = ?').get(key) as
     | { value: string }
@@ -38,7 +51,7 @@ function readKvFlag(key: string): boolean {
   return row?.value === '1';
 }
 
-function buildInfo(): SandboxInfo {
+export function buildInfo(): SandboxInfo {
   return {
     state: getSandboxState(),
     settings: getSandboxSettings(),
@@ -100,8 +113,7 @@ export function registerSandboxIpc(): void {
   });
   ipcMain.handle('sandbox:installBwrap', () => installBwrapViaPkexec());
   ipcMain.handle('sandbox:dismissPrompt', (_e, kind: 'bwrap' | 'winPolicy' | 'netOff') => {
-    const key =
-      kind === 'bwrap' ? KV_BWRAP : kind === 'winPolicy' ? KV_WINPOLICY : KV_NETOFF;
+    const key = PROMPT_KV[kind];
     getDb()
       .prepare(
         `INSERT INTO kv_store (key, value, updated_at) VALUES (?, '1', datetime('now'))
@@ -109,5 +121,55 @@ export function registerSandboxIpc(): void {
       )
       .run(key);
   });
+  /**
+   * 通用写授权（spec 2026-10-03 §6.3）：授权卡三按钮的两档写入通道。scope 键控
+   * KV 两键（session=单个聊天会话持久 / workspace=工作空间持久）；dirs 为卡上
+   * 展示的归一目录（显示即所授）。载荷形状逐字段校验——防 scope 越界 / 空键
+   * 串写其他实体。
+   * 恢复路径唯一化（硬门控修订）：不注入【授权完成】唤醒消息——等待中的工具
+   * 调用经等待循环 ≤2s 轮询 covered 原地重执行；旧注入与原地重执行并发会经
+   * steer 诱发双重重试。载荷残留 resumeSessionId 一律忽略（契约已废弃）。
+   */
+  ipcMain.handle('sandbox:grantWrite', (_e, arg: unknown) => {
+    const a = arg as { scope?: unknown; key?: unknown; dirs?: unknown };
+    if (a.scope !== 'session' && a.scope !== 'workspace') throw new Error('scope 非法');
+    if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
+    if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
+    grantWriteDirs(a.scope, a.key, a.dirs);
+    logger.info('写授权已授予', { scope: a.scope, key: a.key, count: a.dirs.length });
+  });
+
+  /**
+   * 写授权拒绝（spec hard-gate §4.3）：卡「拒绝」/「X 关闭」→ 广播解除等待中的
+   * 工具调用。无状态转发（匹配在子进程侧）；载荷校验风格照 grantWrite。
+   */
+  ipcMain.handle('sandbox:denyWrite', (_e, arg: unknown) => {
+    handleDenyWrite(arg, broadcastWriteGrantDenied);
+  });
+
+  /** 设置页「已授权目录」列表（spec §8） */
+  ipcMain.handle('sandbox:listWriteGrants', () => listWorkspaceGrants());
+
+  /** 撤销单条（spec §8 设置页「已授权目录」） */
+  ipcMain.handle('sandbox:revokeWrite', (_e, arg: unknown) => {
+    const a = arg as { scope?: unknown; key?: unknown; dir?: unknown };
+    if (a.scope !== 'session' && a.scope !== 'workspace') throw new Error('scope 非法');
+    if (typeof a.key !== 'string' || a.key === '') throw new Error('key 缺失');
+    if (typeof a.dir !== 'string') throw new Error('dir 缺失');
+    revokeWriteDir(a.scope, a.key, a.dir);
+    logger.info('写授权已撤销', { scope: a.scope, key: a.key });
+  });
   logger.info('Sandbox IPC handlers 已注册');
+}
+
+/** sandbox:denyWrite 载荷处理（纯函数——ipcMain 壳的测试面） */
+export function handleDenyWrite(
+  arg: unknown,
+  broadcast: (dirs: string[]) => void,
+): void {
+  const a = arg as { sessionId?: unknown; dirs?: unknown };
+  if (a.sessionId !== null && typeof a.sessionId !== 'string') throw new Error('sessionId 非法');
+  if (!Array.isArray(a.dirs) || a.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs 非法');
+  broadcast(a.dirs as string[]);
+  logger.info('写授权已拒绝（广播解除等待）', { sessionId: a.sessionId, count: (a.dirs as string[]).length });
 }
