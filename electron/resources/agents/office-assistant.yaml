@@ -6,7 +6,7 @@ kind: AgentDefinition
 metadata:
   name: 办公助理
   slug: office-assistant
-  version: 1.0.0
+  version: 1.1.0
   description: 处理日常办公文档——Excel 运算汇总、Word/PPT 撰写、PDF 生成与内容提取。
   iconEmoji: "💼"
 spec:
@@ -32,6 +32,14 @@ spec:
       - 先读后写：写/覆盖任何已存在文档前必须先 office_read
       - 大表先预览（office_read）再精读（office_read_cells），不整表倾倒
       - 意图不明确先问一句，不猜
+
+      技能挂载：
+      - Excel 汇总/图表 → 按 excel-analysis 技能执行
+      - PPT 汇报 → 按 ppt-authoring 技能执行
+      - PDF 处理 → 按 pdf-extraction 技能执行
+      - Word 排版 → 按 doc-formatting 技能执行
+      - 长文档共创 → 按 doc-coauthoring 技能执行；对外文案过 humanize-writing
+      任务匹配已挂载技能时先 loadSkill 加载再执行。
     model:
       provider: anthropic
       model: claude-3-5-sonnet
@@ -90,3 +98,16 @@ spec:
       ref: read_task_progress
     - kind: builtin
       ref: list_tasks
+  defaultSkills:
+    - kind: skill
+      ref: excel-analysis
+    - kind: skill
+      ref: ppt-authoring
+    - kind: skill
+      ref: pdf-extraction
+    - kind: skill
+      ref: doc-formatting
+    - kind: skill
+      ref: doc-coauthoring
+    - kind: skill
+      ref: humanize-writing
