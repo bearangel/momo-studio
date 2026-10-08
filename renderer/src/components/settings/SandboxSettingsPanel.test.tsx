@@ -448,16 +448,32 @@ describe('SandboxSettingsPanel：已授权目录', () => {
     revokeWriteMock.mockResolvedValue(undefined);
   });
 
-  it('列出工作空间持久授权 + 删除调 revokeWrite', async () => {
+  it('列出工作空间持久授权 + 删除经确认弹窗后才调 revokeWrite（红色危险按钮）', async () => {
     getStateMock.mockResolvedValue(makeInfo());
     listWriteGrantsMock.mockResolvedValue([{ workspaceId: 'w-1', dirs: ['/tmp/grant-a'] }]);
     render(<SandboxSettingsPanel />);
     await waitFor(() => expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    // 确认弹窗出现；未确认前不撤销
+    expect(screen.getByText(/确定撤销 \/tmp\/grant-a/)).toBeInTheDocument();
+    expect(revokeWriteMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '撤销授权' }));
     await waitFor(() =>
       expect(revokeWriteMock).toHaveBeenCalledWith({ scope: 'workspace', key: 'w-1', dir: '/tmp/grant-a' }),
     );
     await waitFor(() => expect(screen.queryByText('/tmp/grant-a')).toBeNull());
+  });
+
+  it('确认弹窗取消 → 不调 revokeWrite、授权保留', async () => {
+    getStateMock.mockResolvedValue(makeInfo());
+    listWriteGrantsMock.mockResolvedValue([{ workspaceId: 'w-1', dirs: ['/tmp/grant-a'] }]);
+    render(<SandboxSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(revokeWriteMock).not.toHaveBeenCalled();
+    expect(screen.getByText('/tmp/grant-a')).toBeInTheDocument();
+    expect(screen.queryByText(/确定撤销/)).toBeNull();
   });
 
   it('空授权 → 空态文案', async () => {

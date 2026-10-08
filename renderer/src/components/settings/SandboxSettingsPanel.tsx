@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { ipc } from '../../ipc/client';
 import type { SandboxInfo, SandboxMode, NetworkPolicy, ToolchainPolicy } from '../../ipc/types';
 import { Button } from '../ui/Button';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 const NETWORK_POLICY_OPTIONS: readonly { value: NetworkPolicy; label: string; hint: string }[] = [
   { value: 'allow', label: '永久允许（默认）', hint: '沙箱内 bash 全放行网络（含端口监听）' },
@@ -46,6 +47,8 @@ export function SandboxSettingsPanel() {
   const [dirsDirty, setDirsDirty] = useState(false);
   // 已授权目录（spec 2026-10-03 §8）：工作空间持久授权列表，删除走 revokeWrite
   const [grants, setGrants] = useState<WorkspaceGrantEntry[]>([]);
+  // 待撤销确认项（2026-10-04）：撤销是破坏性操作（该目录写入重新被拦）——红色按钮 + 二次确认
+  const [pendingRevoke, setPendingRevoke] = useState<{ entry: WorkspaceGrantEntry; dir: string } | null>(null);
 
   useEffect(() => {
     void ipc.sandbox.getState().then(setInfo);
@@ -228,7 +231,7 @@ export function SandboxSettingsPanel() {
                   <code className="border border-subtle bg-canvas rounded px-2 py-1 font-mono text-xs text-secondary select-all break-all">
                     {d}
                   </code>
-                  <Button variant="ghost" size="sm" onClick={() => revokeGrant(g, d)}>
+                  <Button variant="danger" size="sm" onClick={() => setPendingRevoke({ entry: g, dir: d })}>
                     删除
                   </Button>
                 </div>
@@ -238,6 +241,16 @@ export function SandboxSettingsPanel() {
         )}
         <p className="text-xs text-tertiary">会话级授权随会话删除自动清理，不在此展示。</p>
       </fieldset>
+
+      {pendingRevoke !== null && (
+        <ConfirmDialog
+          title="撤销目录授权"
+          message={`确定撤销 ${pendingRevoke.dir} 的写入授权？撤销后该目录的写入将重新被沙箱拦截。`}
+          confirmLabel="撤销授权"
+          onConfirm={() => revokeGrant(pendingRevoke.entry, pendingRevoke.dir)}
+          onClose={() => setPendingRevoke(null)}
+        />
+      )}
 
       <div className="rounded-lg border border-subtle bg-surface-2 p-3 flex flex-col gap-2">
         <div className="text-sm">
