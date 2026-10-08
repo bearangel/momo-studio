@@ -571,11 +571,12 @@ describe('formatDispatchHint 并行教学（spec §7.2）', () => {
   });
 });
 
-describe('pm-agent.yaml 并行教学文案（spec §7.1）', () => {
-  it('builtin PM systemPrompt 含同轮连发并发执行语义', () => {
+describe('pm-agent.yaml 定位文案（spec 2026-10-08 重定位）', () => {
+  it('builtin PM systemPrompt 为研发管理定位 + leader dispatch 用法；并行教学由 formatDispatchHint 运行时注入（上组用例锁定），不再静态重复', () => {
     const yamlPath = path.join(__dirname, '..', '..', 'resources', 'agents', 'pm-agent.yaml');
     const yaml = readFileSync(yamlPath, 'utf-8');
-    expect(yaml).toContain('在同一次回复中连续发出多个 dispatch 工具调用');
-    expect(yaml).toContain('它们会被并发执行');
+    expect(yaml).toContain('你是研发管理者');
+    expect(yaml).toContain('dispatch:<slug>');
+    expect(yaml).not.toContain('在同一次回复中连续发出多个 dispatch 工具调用');
   });
 });

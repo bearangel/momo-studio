@@ -37,6 +37,8 @@ spec:
     - kind: builtin
       ref: read_file
     - kind: builtin
+      ref: list_files
+    - kind: builtin
       ref: write_file
     - kind: builtin
       ref: edit_file
