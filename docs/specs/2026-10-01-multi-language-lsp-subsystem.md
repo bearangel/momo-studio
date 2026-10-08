@@ -1,7 +1,11 @@
 # 多语言 LSP 子系统重构 设计文档
 
+> **⚠️ 已下架（2026-10-08，GUI 验收）**：LSP 服务在真机验收中问题密度超预期（rust-analyzer rustup shim 空壳秒退、错误保真缺失、检测误报等——当日三连修见 commit 05e041b4 后仍决定整体下架，稳定后再复启）。
+> **下架面（代码全保留，休眠）**：① `spawn-helpers.ts` lspLanguages 注入摘除（LspTools 门控恒 null → agent 工具面无 lsp_*）；② `tools/catalog.ts` 目录项摘除（设置工具清单无 lsp 行）；③ 设置页「语言服务」导航 + 面板摘除（SettingsNav/SettingsView）。主进程 manager/detect/registry/ipc、lsp-tools、LanguageServicesPanel 及其测试全部保留。
+> **恢复路径**：还原上述三处 + 移除本横幅（本分支 git 历史可追溯）。
+
 - 日期：2026-10-01
-- 状态：设计已确认（十节经用户逐节确认），待 spec 审阅
+- 状态：设计已确认（十节经用户逐节确认），待 spec 审阅；**2026-10-08 起已下架（见顶部横幅）**
 - 上游依赖：`docs/specs/2026-09-30-agent-tool-capability-redesign.md`（消费其 ToolCatalogEntry 目录自描述与 Tier 2 分级基建）
 - 分支基线：实现应基于 `feat/agent-tool-capability`（消费 Task 2 的 catalog infra），独立特性分支 `feat/multi-language-lsp` 叠加
 

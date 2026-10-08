@@ -13,7 +13,6 @@ import { useSettingsStore } from '../../stores/settings.store';
 import { useUiStore } from '../../stores/ui.store';
 import { SettingsNav } from './SettingsNav';
 import { GitPolicySettings } from './GitPolicySettings';
-import { LanguageServicesPanel } from './LanguageServicesPanel';
 import { AuditLog } from './AuditLog';
 import { ProviderSettings } from './ProviderSettings';
 import { ConversationSettings } from './ConversationSettings';
@@ -76,7 +75,6 @@ export function SettingsView() {
           {active === 'sandbox' && <SandboxSettingsPanel />}
           {active === 'browser' && <BrowserSettings workspaceId={workspace.id} />}
           {active === 'git_policy' && <GitPolicySettings workspaceId={workspace.id} />}
-          {active === 'language_services' && <LanguageServicesPanel workspaceId={workspace.id} />}
           {active === 'audit_log' && <AuditLog workspaceId={workspace.id} />}
           {active === 'p2p' && <NodeDiscoveryPanel />}
           {active === 'about' && <About />}

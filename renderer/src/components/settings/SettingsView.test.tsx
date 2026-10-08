@@ -1,8 +1,8 @@
 // renderer/src/components/settings/SettingsView.test.tsx
 //
 // SettingsView 行为测试（P2 Task 4；v2.2 P1 记忆分类入列后为 9 分类；v2.4 安全沙箱入列后为 10 分类；
-// v2.7 浏览器入列后为 11 分类；多语言 LSP 子系统「语言服务」入列后为 12 分类）：
-// - 渲染 12 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/语言服务/审计日志/节点互联/关于）
+// v2.7 浏览器入列后为 11 分类；「语言服务」已随 LSP 子系统下架摘除（2026-10-08）回到 11 分类）：
+// - 渲染 11 个分类菜单项（顺序：模型服务/默认模型/会话设置/记忆/外观/安全沙箱/浏览器/Git 策略/审计日志/节点互联/关于）
 // - 已删除 account 分类
 // - 顶部「← 返回」按钮点击后 setActiveView('im')
 // - 全局 Esc 键返回 im 视图（仅 settings 视图挂载时生效）
@@ -41,11 +41,7 @@ const mockApi = {
   gitPolicy: {
     get: vi.fn().mockResolvedValue({}),
   },
-  // 多语言 LSP 子系统：「语言服务」面板挂载拉 lsp.status（空数组 = 无行渲染，仅断言挂载）
-  lsp: {
-    status: vi.fn().mockResolvedValue([]),
-    redetect: vi.fn().mockResolvedValue([]),
-  },
+  // 「语言服务」面板已随 LSP 子系统下架（2026-10-08）——lsp mock 随挂载点移除
   p2p: {
     getDiscoveredNodes: vi.fn().mockResolvedValue([]),
     addTrustedNode: vi.fn().mockResolvedValue(undefined),
@@ -115,11 +111,11 @@ describe('SettingsView', () => {
     vi.clearAllMocks();
   });
 
-  it('渲染 12 个分类菜单项且顺序符合规范（lucide 图标无 emoji）', () => {
+  it('渲染 11 个分类菜单项且顺序符合规范（lucide 图标无 emoji；语言服务已下架）', () => {
     render(<SettingsView />);
     const nav = screen.getByRole('navigation', { name: '设置分类' });
     const navButtons = Array.from(nav.querySelectorAll('button'));
-    expect(navButtons.length).toBe(12);
+    expect(navButtons.length).toBe(11);
     const labels = navButtons.map((b) => b.textContent ?? '');
     expect(labels).toEqual([
       '模型服务',
@@ -130,13 +126,12 @@ describe('SettingsView', () => {
       '安全沙箱',
       '浏览器',
       'Git 策略',
-      '语言服务',
       '审计日志',
       '节点互联',
       '关于',
     ]);
     // 分类图标均为 SVG（lucide），断言 nav 内不存在 emoji 文本
-    expect(nav.querySelectorAll('svg').length).toBe(12);
+    expect(nav.querySelectorAll('svg').length).toBe(11);
   });
 
   it('点击「记忆」分类切换 activeCategory 并渲染面板（拉 memory.list）', async () => {
@@ -176,14 +171,9 @@ describe('SettingsView', () => {
     expect(mockApi.browser.getSettings).toHaveBeenCalledWith('ws-test');
   });
 
-  it('点击「语言服务」分类切换 activeCategory 并渲染面板（拉 lsp.status）', async () => {
+  it('「语言服务」分类已下架（2026-10-08）——导航与面板均不渲染', () => {
     render(<SettingsView />);
-    fireEvent.click(screen.getByRole('button', { name: '语言服务' }));
-    expect(useSettingsStore.getState().activeCategory).toBe('language_services');
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: '语言服务' })).toBeInTheDocument();
-    });
-    expect(mockApi.lsp.status).toHaveBeenCalledWith('ws-test');
+    expect(screen.queryByRole('button', { name: '语言服务' })).not.toBeInTheDocument();
   });
 
   it('account 分类不存在', () => {

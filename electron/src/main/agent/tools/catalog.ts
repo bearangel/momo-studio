@@ -6,12 +6,13 @@
 //     crud.ts、p2p clamp、marketplace installer 等既有消费者零改动。
 // 工具名来源：各模块 getDefs() 的 name 字段（经 getCatalog 自描述聚合）。
 import { unconditionalModules } from './index';
-import { LSP_CATALOG_ENTRIES } from './lsp-tools';
 import type { ToolCatalogEntry } from './catalog-entry';
 
-/** 全部内置工具目录（含 LSP 条目；≈60 个，随模块注册自动扩展） */
+/** 全部内置工具目录（≈58 个，随模块注册自动扩展）。LSP 条目已随子系统下架
+ *  摘除（2026-10-08）——LSP_CATALOG_ENTRIES 仍从 lsp-tools.ts 导出（自描述
+ *  契约测试在册），恢复时拼回此处。 */
 export function buildToolCatalog(): ToolCatalogEntry[] {
-  return [...unconditionalModules().flatMap((m) => m.getCatalog()), ...LSP_CATALOG_ENTRIES];
+  return unconditionalModules().flatMap((m) => m.getCatalog());
 }
 
 /** 全部内置工具名全集（派生自 buildToolCatalog，模块注册顺序） */
