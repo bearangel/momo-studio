@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentCreateWizard } from './AgentCreateWizard';
-import type { ApiSurface, ResourceItem, ToolCatalogEntry } from '../../../ipc/types';
+import type { ApiSurface, BuiltinPresetPreview, ResourceItem, ToolCatalogEntry } from '../../../ipc/types';
 
 // ---- mock IPC 桩（向导触达 agent.createCustom / resource.list / tools.getCatalog 通道）----
 // 入参类型取真实 createCustom 签名（Parameters 提取），断言直接消费生产字段
@@ -190,5 +190,57 @@ describe('AgentCreateWizard — 目录未就绪提交守卫', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
     expect(await screen.findByText('工具目录加载中，请稍候再提交')).toBeTruthy();
     expect(createCustomMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentCreateWizard — 薄 fork 预填（2026-10-08 预设可见化）', () => {
+  const FORK_SEED: BuiltinPresetPreview = {
+    slug: 'ui-designer',
+    name: 'UI 设计师',
+    iconEmoji: '🎨',
+    description: '产出设计契约并走查界面',
+    systemPrompt: '你是设计规范守护者——审查界面但不直接写产品代码。',
+    tools: ['read_file', 'rm'],
+    mcps: [],
+    skills: ['pdf'],
+  };
+
+  it('initialDef：标题「复制为自定义智能体」，名称/描述/图标全预填（名称加「 副本」后缀）', () => {
+    render(<AgentCreateWizard initialDef={FORK_SEED} onClose={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.getByText('复制为自定义智能体')).toBeTruthy();
+    expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('UI 设计师 副本');
+    expect((screen.getByLabelText('描述') as HTMLInputElement).value).toBe(FORK_SEED.description);
+    expect((screen.getByLabelText('图标 emoji') as HTMLInputElement).value).toBe('🎨');
+  });
+
+  it('initialDef：提示词步预填；能力步自动「自定义」档且按预填勾选（非 Tier 1 回填）', async () => {
+    render(<AgentCreateWizard initialDef={FORK_SEED} onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '下一步' })); // 步 1 名称已预填 → 进步 2
+    expect((screen.getByLabelText('系统提示词') as HTMLTextAreaElement).value).toBe(FORK_SEED.systemPrompt);
+    fireEvent.click(screen.getByRole('button', { name: '下一步' })); // 进步 3 能力
+    expect((screen.getByLabelText('自定义') as HTMLInputElement).checked).toBe(true);
+    expect((await screen.findByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('rm') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /pdf/ }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('initialDef：四步直达提交，createCustom 携带全量预填（tools/skills = 预填集）', async () => {
+    render(<AgentCreateWizard initialDef={FORK_SEED} onClose={vi.fn()} onSuccess={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(screen.getByRole('button', { name: '下一步' })); // 能力 → 模型
+    fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
+    fireEvent.click(screen.getByRole('button', { name: '选模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(createCustomMock).toHaveBeenCalled());
+    const arg = createCustomMock.mock.calls[0]![0];
+    expect(arg.name).toBe('UI 设计师 副本');
+    expect(arg.systemPrompt).toBe(FORK_SEED.systemPrompt);
+    expect(arg.defaultTools).toEqual([
+      { kind: 'builtin', ref: 'read_file' },
+      { kind: 'builtin', ref: 'rm' },
+    ]);
+    expect(arg.defaultMcps).toEqual([]);
+    expect(arg.defaultSkills).toEqual([{ kind: 'skill', ref: 'pdf' }]);
   });
 });

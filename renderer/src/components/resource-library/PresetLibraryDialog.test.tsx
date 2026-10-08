@@ -12,14 +12,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PresetLibraryDialog } from './PresetLibraryDialog';
-import type { BuiltinPresetItem, ResourceType } from '../../ipc/types';
+import type { BuiltinPresetItem, BuiltinPresetPreview, ResourceType } from '../../ipc/types';
 
 // window.api 属性安装（只装组件触达的 resource 命名空间）
 const listBuiltinPresetsMock = vi.fn<[ResourceType], Promise<BuiltinPresetItem[]>>();
+const previewBuiltinPresetMock = vi.fn<[string], Promise<BuiltinPresetPreview>>();
 
 const mockApi = {
   resource: {
     listBuiltinPresets: listBuiltinPresetsMock,
+    previewBuiltinPreset: previewBuiltinPresetMock,
   },
 };
 
@@ -33,17 +35,32 @@ const PRESETS_FIXTURE: BuiltinPresetItem[] = [
 
 const onSelect = vi.fn<[string], void>();
 const onClose = vi.fn<[], void>();
+const onFork = vi.fn<[BuiltinPresetPreview], void>();
 
 const renderDialog = (type: ResourceType = 'agent'): void => {
-  render(<PresetLibraryDialog type={type} onSelect={onSelect} onClose={onClose} />);
+  render(<PresetLibraryDialog type={type} onSelect={onSelect} onClose={onClose} onFork={onFork} />);
 };
 
 beforeEach(() => {
   listBuiltinPresetsMock.mockReset();
   // 默认 4 预置（happy path 基线）；空态/失败路径在用例内覆盖
   listBuiltinPresetsMock.mockResolvedValue(PRESETS_FIXTURE);
+  // 能力预览：coder 3 工具 2 技能；其余 1 工具 0 技能（摘要行断言可区分）
+  previewBuiltinPresetMock.mockReset();
+  previewBuiltinPresetMock.mockImplementation(async (slug: string) =>
+    slug === 'coder'
+      ? ({
+          slug: 'coder', name: '程序员', iconEmoji: '💻', description: '',
+          systemPrompt: '你是实现工程师', tools: ['read_file', 'write_file', 'bash'], mcps: [], skills: ['a', 'b'],
+        } as BuiltinPresetPreview)
+      : ({
+          slug, name: slug, iconEmoji: '🤖', description: '',
+          systemPrompt: 'prompt', tools: ['read_file'], mcps: [], skills: [],
+        } as BuiltinPresetPreview),
+  );
   onSelect.mockClear();
   onClose.mockClear();
+  onFork.mockClear();
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
 });
 
@@ -118,5 +135,39 @@ describe('PresetLibraryDialog - ⑤ 加载中文案', () => {
     resolveList([]);
     expect(await screen.findByText('该类型暂无预置')).toBeTruthy();
     expect(screen.queryByText('加载中…')).toBeNull();
+  });
+});
+
+describe('PresetLibraryDialog - ⑥ 能力摘要 + 薄 fork（2026-10-08 预设可见化）', () => {
+  it('每个预置行渲染能力摘要（N 工具 · M 技能，来自批量 preview）', async () => {
+    renderDialog('agent');
+    expect(await screen.findByText('3 工具 · 2 技能')).toBeTruthy();
+    expect(screen.getAllByText('1 工具 · 0 技能').length).toBe(3);
+  });
+
+  it('点「复制」→ onFork(该预置全量 preview) + onClose；不触发 onSelect（启用流不被误触）', async () => {
+    renderDialog('agent');
+    const forkButtons = await screen.findAllByRole('button', { name: '复制' });
+    fireEvent.click(forkButtons[0]!);
+    expect(onFork).toHaveBeenCalledTimes(1);
+    const preview = onFork.mock.calls[0]![0];
+    expect(preview.slug).toBe('coder');
+    expect(preview.systemPrompt).toBe('你是实现工程师');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('preview 失败的预置行：无摘要行、「复制」disabled（清单本体不受影响）', async () => {
+    previewBuiltinPresetMock.mockImplementation(async (slug: string) => {
+      if (slug === 'coder') throw new Error('boom');
+      return { slug, name: slug, iconEmoji: '🤖', description: '', systemPrompt: 'p', tools: ['read_file'], mcps: [], skills: [] };
+    });
+    renderDialog('agent');
+    await screen.findByText('程序员');
+    const rows = screen.getAllByRole('listitem');
+    const forkButtons = screen.getAllByRole('button', { name: '复制' });
+    expect(forkButtons[0]!).toBeDisabled();
+    expect(forkButtons[1]!).not.toBeDisabled();
+    expect(rows[0]!.textContent).not.toContain('工具');
   });
 });

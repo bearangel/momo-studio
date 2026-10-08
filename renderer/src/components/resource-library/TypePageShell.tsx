@@ -3,7 +3,7 @@
 // + 右侧详情面板。三页同构，type 参数驱动。P2.3 Task 1 起恒「已安装」单态——
 // 网络获取模式已移除（原 Segmented 位的外部市场入口由后续任务接入）。
 import { useState } from 'react';
-import type { ResourceFilter, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
+import type { BuiltinPresetPreview, ResourceFilter, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
 import { useResourceStore } from '../../stores/resource.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
@@ -53,9 +53,11 @@ interface TypePageShellProps {
   onEditMcpConfig?: (item: ResourceItem) => void;
   /** 已装 custom MCP 全字段编辑入口（RegisterMcpDialog edit 模式挂载在 View 层；P2.5 Task 3） */
   onEditMcpEntry?: (item: ResourceItem) => void;
+  /** builtin agent 薄 fork 入口（AgentCreateWizard 预填挂载在 View 层；2026-10-08） */
+  onForkPreset?: (preview: BuiltinPresetPreview) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onForkPreset }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource,
@@ -168,6 +170,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
             onConfigure={onOpenPreset}
             onEditMcpConfig={onEditMcpConfig}
             onEditMcpEntry={onEditMcpEntry}
+            onForkPreset={onForkPreset}
           />
         )}
       </div>

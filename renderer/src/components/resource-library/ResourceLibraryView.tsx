@@ -26,7 +26,7 @@ import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import { PresetLibraryDialog } from './PresetLibraryDialog';
 import { GitImportDialog } from './GitImportDialog';
-import type { AgentDefinition, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
+import type { AgentDefinition, BuiltinPresetPreview, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
   const { activeType, setActiveType, items, installResource, load } = useResourceStore();
@@ -53,6 +53,8 @@ export function ResourceLibraryView() {
   const [configTarget, setConfigTarget] = useState<{ name: string; displayName: string } | null>(null);
   // P2.5：MCP 全字段编辑目标（null = 弹窗关）。值为 MCP 定义名（ResourceItem.slug）
   const [mcpEditTarget, setMcpEditTarget] = useState<string | null>(null);
+  // 2026-10-08 薄 fork：预置能力预览 → AgentCreateWizard 预填种子（null = 非 fork 模式）
+  const [forkSeed, setForkSeed] = useState<BuiltinPresetPreview | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
@@ -104,6 +106,13 @@ export function ResourceLibraryView() {
     } catch (err) {
       console.error('打开预设 agent 配置失败', { slug, error: err instanceof Error ? err.message : String(err) });
     }
+  };
+
+  // 2026-10-08 薄 fork：预置能力预览 → 预填创建向导（source='library' 语义——仅建全局
+  // 定义；名称自动加「 副本」，模型留给用户选）。
+  const handleForkPreset = (preview: BuiltinPresetPreview): void => {
+    setForkSeed(preview);
+    setCreateAgentOpen(true);
   };
 
   // 本地安装流（installed 列表 installable 项——p2p 导入）：直连 store.installResource，
@@ -171,6 +180,7 @@ export function ResourceLibraryView() {
         onOpenPreset={openPresetDialog}
         onEditMcpConfig={handleEditMcpConfig}
         onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
+        onForkPreset={handleForkPreset}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
@@ -198,7 +208,11 @@ export function ResourceLibraryView() {
         <ImportAgentYamlDialog onClose={() => setImportYamlOpen(false)} onSuccess={() => void load()} />
       )}
       {createAgentOpen && (
-        <AgentCreateWizard onClose={() => { setCreateAgentOpen(false); void load(); }} onSuccess={() => void load()} />
+        <AgentCreateWizard
+          initialDef={forkSeed ?? undefined}
+          onClose={() => { setCreateAgentOpen(false); setForkSeed(null); void load(); }}
+          onSuccess={() => void load()}
+        />
       )}
       {editingDef && (
         <DefinitionEditor mode="edit" def={editingDef} onClose={() => { setEditingDef(null); void load(); }} />
@@ -213,6 +227,10 @@ export function ResourceLibraryView() {
           onSelect={(slug) => {
             setPresetLibraryOpen(false);
             void openPresetBySlug(slug);
+          }}
+          onFork={(preview) => {
+            setPresetLibraryOpen(false);
+            handleForkPreset(preview);
           }}
           onClose={() => setPresetLibraryOpen(false)}
         />

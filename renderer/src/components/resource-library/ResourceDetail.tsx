@@ -24,8 +24,8 @@
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Package, Pencil, Puzzle, Settings2, Trash2, X } from 'lucide-react';
-import type { ResourceItem } from '../../ipc/types';
+import { Bot, Check, Copy, Package, Pencil, Puzzle, Settings2, Trash2, X } from 'lucide-react';
+import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
 import { SourceBadge } from './SourceBadge';
@@ -46,6 +46,8 @@ interface Props {
   onEditMcpConfig?: (item: ResourceItem) => void;
   /** 已装 custom MCP → 弹全字段编辑表单（stdio+远程通吃；P2.5 D4） */
   onEditMcpEntry?: (item: ResourceItem) => void;
+  /** builtin agent 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
+  onForkPreset?: (preview: BuiltinPresetPreview) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -61,7 +63,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onForkPreset }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -107,6 +109,33 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
       cancelled = true;
     };
   }, [item]);
+
+  // builtin agent 能力预览（2026-10-08 预设可见化）：恒 YAML 最新版（previewBuiltinPreset
+  // 直读内置目录，不受已启用 DB 行版本影响）；失败红字不阻塞面板其余部分。
+  const isBuiltinAgent = item.type === 'agent' && item.source === 'builtin';
+  const [presetPreview, setPresetPreview] = useState<BuiltinPresetPreview | null>(null);
+  const [presetPreviewError, setPresetPreviewError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isBuiltinAgent) {
+      setPresetPreview(null);
+      setPresetPreviewError(null);
+      return;
+    }
+    let cancelled = false;
+    setPresetPreview(null);
+    setPresetPreviewError(null);
+    ipc.resource
+      .previewBuiltinPreset(item.slug)
+      .then((preview) => {
+        if (!cancelled) setPresetPreview(preview);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setPresetPreviewError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isBuiltinAgent, item.slug]);
 
   return (
     <div className="w-80 border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
@@ -198,6 +227,29 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
               <pre className="text-xs text-secondary font-mono whitespace-pre-wrap">{defPreview}</pre>
             )}
 
+            {/* builtin Agent：能力清单（YAML 最新版；2026-10-08 预设可见化） */}
+            {isBuiltinAgent && (
+              <div>
+                <div className="text-xs text-tertiary mb-1">能力清单（YAML 最新版）</div>
+                {presetPreviewError !== null ? (
+                  <div className="text-xs text-status-error">
+                    能力预览加载失败：{presetPreviewError}
+                  </div>
+                ) : presetPreview !== null ? (
+                  <pre className="text-xs text-secondary font-mono whitespace-pre-wrap">
+                    {`tools: ${presetPreview.tools.join(', ') || '(空)'}\n` +
+                      `mcps: ${presetPreview.mcps.join(', ') || '(空)'}\n` +
+                      `skills: ${presetPreview.skills.join(', ') || '(空)'}\n\n` +
+                      `systemPrompt:\n${presetPreview.systemPrompt.slice(0, 200)}${
+                        presetPreview.systemPrompt.length > 200 ? '…' : ''
+                      }`}
+                  </pre>
+                ) : (
+                  <div className="text-xs text-tertiary">能力预览加载中…</div>
+                )}
+              </div>
+            )}
+
             {/* custom Agent：systemPromptHash */}
             {item.source === 'custom' && item.type === 'agent' && item.custom?.agentSystemPromptHash && (
               <div>
@@ -287,6 +339,19 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
         {item.type === 'agent' && item.source === 'builtin' && !item.builtin?.agentEnabled && onEnable && (
           <Button size="sm" onClick={() => onEnable(item.id)}>
             启用
+          </Button>
+        )}
+        {/* 复制为自定义（2026-10-08 薄 fork）：全量预填创建向导；预览未就绪/失败时禁用 */}
+        {item.type === 'agent' && item.source === 'builtin' && onForkPreset && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={presetPreview === null}
+            onClick={() => presetPreview !== null && onForkPreset(presetPreview)}
+            className="inline-flex items-center gap-1"
+          >
+            <Copy size={12} strokeWidth={1.75} aria-hidden />
+            复制为自定义
           </Button>
         )}
         {/* 配置按钮：builtin 已启用 / marketplace 已安装（def 已落库，可改模型） */}
