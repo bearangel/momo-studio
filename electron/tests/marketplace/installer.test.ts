@@ -91,11 +91,11 @@ describe('marketplace/installer installPackage（builtin 内联）', () => {
     const manifest = yamlLoad(
       fs.readFileSync(path.join(cachePath, 'manifest.yaml'), 'utf-8'),
     ) as { spec: { defaultTools: Array<{ kind: string; ref: string }> } };
-    // 目录派生改造（Task 3）：全集 = ALL_BUILTIN_TOOLS（含 v2.x 任务/记忆/浏览器/会话/进程/git_repos/LSP）
+    // 目录派生改造（Task 3）：全集 = ALL_BUILTIN_TOOLS（含 v2.x 任务/记忆/浏览器/会话/进程/git_repos；LSP 已随子系统下架摘除，2026-10-08）
     expect(manifest.spec.defaultTools.every((t) => t.kind === 'builtin')).toBe(true);
     const refs = manifest.spec.defaultTools.map((t) => t.ref).sort();
     expect(refs).toEqual([...ALL_BUILTIN_TOOLS].sort());
-    for (const probe of ['bash', 'read_file', 'git_commit', 'lsp_diagnostics', 'apply_patch', 'office_read']) {
+    for (const probe of ['bash', 'read_file', 'git_commit', 'apply_patch', 'office_read']) {
       expect(refs, probe).toContain(probe);
     }
   });
