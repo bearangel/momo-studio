@@ -97,6 +97,37 @@ export function setBuiltinSuggestion(defId: string, suggestion: BuiltinSuggestio
 }
 
 /**
+ * 预置 agent 能力预览（resource:previewBuiltinPreset 数据源，2026-10-08 预设可见化 + 薄 fork）。
+ * 只读不落库；复用启用链的 readBuiltinManifestBySlug（同一解析器 = 同一形状），
+ * 数据始终来自 YAML 最新版（不受已启用 DB 行版本影响）。
+ * systemPrompt 全量返回——截断由 renderer 展示层做，fork 预填需要全量。
+ */
+export interface BuiltinPresetPreview {
+  slug: string;
+  name: string;
+  iconEmoji: string;
+  description: string;
+  systemPrompt: string;
+  tools: string[];
+  mcps: string[];
+  skills: string[];
+}
+
+export function previewBuiltinPresetAgent(slug: string): BuiltinPresetPreview {
+  const { def } = readBuiltinManifestBySlug(slug);
+  return {
+    slug: def.slug,
+    name: def.name,
+    iconEmoji: def.iconEmoji,
+    description: def.description,
+    systemPrompt: def.systemPrompt,
+    tools: def.defaultTools.map((t) => t.ref),
+    mcps: def.defaultMcps.map((m) => m.ref),
+    skills: def.defaultSkills.map((s) => s.ref),
+  };
+}
+
+/**
  * 按 slug 读取单个内置 agent manifest（preset.ts 启用链路）。
  * 文件缺失抛错——按需启用是用户显式动作，缺文件必须可见
  * （区别于 registerBuiltinAgents 整目录扫描的静默跳过）。

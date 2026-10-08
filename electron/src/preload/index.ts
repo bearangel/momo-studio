@@ -7,6 +7,7 @@ import type {
   BrowserState,
   BundlePreview,
   BuiltinPresetItem,
+  BuiltinPresetPreview,
   CollabTarget,
   DanglingMcpRef,
   GitImportResult,
@@ -396,6 +397,9 @@ const api: ApiSurface = {
     // P2.3：预置清单只读（本地 resources/agents/*.yaml 直读零网络；mcp/skill 空数组）
     listBuiltinPresets: (type: ResourceType) =>
       invoke<BuiltinPresetItem[]>('resource:listBuiltinPresets', type),
+    // 2026-10-08：单个预置 agent 能力预览（详情面板能力清单 + 薄 fork 预填数据源）
+    previewBuiltinPreset: (slug: string) =>
+      invoke<BuiltinPresetPreview>('resource:previewBuiltinPreset', slug),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
