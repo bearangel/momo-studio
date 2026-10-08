@@ -6,6 +6,19 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 预设内容库：五角色 agent + skill 全覆盖
+
+设计依据：`docs/specs/2026-10-08-preset-agents-skills-design.md`；实施计划：`docs/plans/2026-10-08-preset-agents-skills.md`。上游：目标用户五类角色（需求/UI/全栈/管理/办公）的内置预设覆盖不足——UI 设计师缺失、pm-agent 编排定位与管理职能错位、builtin skill 仅 3 个开发向；选题全部来自跨生态装机量验证（Anthropic 官方 skills / superpowers / Vercel / oh-my-openagent 模式），内容原创中文零复制（license 纪律：Anthropic 文档 skill 私有协议、OmO SUL-1.0）。
+
+### 新增
+- **五角色 agent 阵容**：新增 `ui-designer`（设计契约产出 + 浏览器截图走查，最小权限工具集，Tier 1 全集）；升级 4 个为四段式 prompt（角色锚定→工作流→工具要点→NEVER/ALWAYS，OmO 模式原创转译）——`requirement-analyst` 更名需求分析师（三维追问 + [TBD] 纪律）、`coder` TDD 工作流化、`pm-agent` 重定位研发管理向（编排教学移交 formatDispatchHint 运行时注入）、`office-assistant` 追加技能挂载段（主体与 27 工具契约锁不动）
+- **20 个 builtin skill**（17 新增 + 3 规范化）：通用组（长文档共创/反 AI 腔中文写作/完成前验证）+ 需求组（PRD 渐进共创/用户故事与验收标准）+ UI 组（设计 spec 契约/前端审美规范含 18 条反模式清单/设计走查七项清单）+ 全栈组（TDD 工作流/前端最佳实践 + code-review/write-tests/debug-reproduce 升级 1.1.0）+ 管理组（任务分解与排期/技术方案评审九项清单/周报三段式）+ 办公组（Excel 公式实战含速查/PPT 汇报构建/PDF 提取问答/Word 长文档排版，全部对齐 office_* 工具）；四组带 `references/` 走三层渐进披露（description → loadSkill → readResource）
+- **一致性契约锁**（`tests/skill/preset-consistency.test.ts` 五项）：catalog builtin skill 条目 ≡ skills 目录（防双轨漂移回归）/ agent defaultSkills 引用存在 / frontmatter 完整含触发语 / manifest 生产解析器全过 / defaultTools 工具名真实（LSP 下架休眠豁免注释指回 9cc3407a）
+- **catalog 双轨对齐修复**：skill 条目与目录一一对齐（原仅 1 条 vs 目录 3 个）；终态 26 items（5 agent + 1 mcp + 20 skill），updatedAt 2026-10-08
+
+### 已知遗留
+- LSP 下架（9cc3407a）后 3 个内置 YAML 的 lsp 工具引用为刻意休眠态（测试 E 豁免，恢复时摘除）；macOS 宿主 vitest 1.6.1 runner 对 child-process 密集文件（dispatch-bg / runtime-entry×5 / tools×10）有既有 IPC 反序列化崩溃与 sandbox linux 分支 9 例既有失败（真 main 对照证实，容器环境不受影响）
+
 ## [未发布] — 跨会话引用（@ 会话 pill + list_sessions / read_session 工具）
 
 设计依据：`docs/specs/2026-09-30-session-reference-design.md`；实施计划：`docs/plans/2026-09-30-session-reference.md`。上游：会话间彼此隔离，引用旧会话结论只能复制粘贴——双通道收敛于 read_session（用户 `@` 明确指定 + agent 自然语言发现消歧），指针轻注入 + 按需读（评审裁定 A/B 方案）。
