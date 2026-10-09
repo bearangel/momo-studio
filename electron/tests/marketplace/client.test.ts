@@ -155,9 +155,9 @@ describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it('退避窗口过期后重试远程（网络恢复 → 拿到远程目录）', async () => {
+  it('退避窗口过期后重试远程（立即返回旧值，后台刷新后拿到远程目录）', async () => {
     fetchSpy.mockRejectedValueOnce(new Error('offline'));
-    await fetchCatalog('https://example.test/catalog.json'); // 失败进退避
+    await fetchCatalog('https://example.test/catalog.json'); // 失败进退避 + 本地结果记为已知
     __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -165,8 +165,13 @@ describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
       json: async () => fakeCatalog,
     } as Response);
     const catalog = await fetchCatalog('https://example.test/catalog.json');
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // 后台重试已发出（不阻塞调用方）
+    expect(catalog.version).toBe('1.0'); // 调用方立即拿已知旧值（本地）
+    // 等后台刷新落定（mock 链全微任务，setTimeout(0) 足够），下次调用命中 TTL 缓存
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const refreshed = await fetchCatalog('https://example.test/catalog.json');
+    expect(refreshed.version).toBe('9.9');
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(catalog.version).toBe('9.9');
   });
 
   it('不同 catalogUrl 的缓存互不干扰（按 URL 键控）', async () => {
@@ -174,6 +179,54 @@ describe('marketplace/client fetchCatalog TTL 缓存（I6）', () => {
     await fetchCatalog('https://a.test/catalog.json');
     await fetchCatalog('https://b.test/catalog.json');
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// === 回归锁（2026-10-08）：资源库切页不得阻塞在网络重试上（SWR） ===
+// 背景：远程 catalog URL 长期 404（实测 TLS 握手 + 往返 0.8~1.8s），成功缓存从未
+// 建立；旧实现「本地回退不缓存、退避窗口过期即同步重试远程」→ agent/mcp/skill
+// 切页每 60s 有一次吃到完整网络往返（用户观感「有时卡 1 秒」）。
+// 新语义：有已知结果（远程成功或本地回退）时立即返回旧值，重试转后台单飞。
+
+describe('marketplace/client fetchCatalog 切页不阻塞（SWR 回归锁）', () => {
+  const url = 'https://example.test/catalog.json';
+
+  it('退避过期 + 网络悬挂：调用方立即拿到本地结果（不等网络）', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('offline'));
+    await fetchCatalog(url); // 首次失败 → 本地回退 + 进退避 + 记为已知结果
+    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
+
+    // 网络悬挂（模拟慢 TLS / 挂起的远程往返）：旧实现在此同步吃满 3s abort
+    // 超时才回退本地；新实现必须立即返回（用例预算 2s，旧实现必超时）。
+    fetchSpy.mockImplementation(
+      () => new Promise(() => {}) as unknown as Promise<Response>,
+    );
+    const startedAt = Date.now();
+    const catalog = await fetchCatalog(url);
+    expect(catalog.version).toBe('1.0');
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+  }, 2000);
+
+  it('退避过期 + 并发两路调用：后台重试单飞（只发一次网络请求）', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('offline'));
+    await fetchCatalog(url);
+    __rewindFailureBackoffForTest(CATALOG_FAILURE_BACKOFF_MS + 1);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => fakeCatalog,
+    } as Response);
+
+    // 并发两路（模拟 CapabilityTabs 同时拉 mcp + skill 两个 list）
+    const [a, b] = await Promise.all([fetchCatalog(url), fetchCatalog(url)]);
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // 首败 1 + 后台单飞 1（旧实现阻塞式共 3）
+    expect(a.version).toBe('1.0'); // 两路都立即拿已知旧值，不阻塞
+    expect(b.version).toBe('1.0');
+
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等后台刷新落定
+    const third = await fetchCatalog(url);
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // TTL 缓存命中，零网络
+    expect(third.version).toBe('9.9');
   });
 });
 

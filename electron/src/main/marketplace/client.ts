@@ -114,55 +114,103 @@ export const CATALOG_FAILURE_BACKOFF_MS = 60 * 1000;
  * 缓存从未建立，若失败不记忆，resource.list（面板切换 / MentionInput 挂载等高频
  * 路径）每次都同步重试远程、吃满网络超时才回退本地。窗口内二次调用零网络请求；
  * 窗口过期后重试远程，网络恢复即可拿到新目录（最长延迟一个退避窗口）。
+ *
+ * SWR 已知结果（2026-10-08）：远程 URL 长期 404 / 网络慢（实测 TLS 握手 + 往返
+ * 0.8~1.8s）时成功缓存从未建立，「窗口过期即同步重试远程」会让资源库 agent/
+ * mcp/skill 切页每 60s 吃到一次完整网络往返。现改为：有已知结果（远程成功或本地
+ * 回退，lastGoodCatalog）时立即返回旧值，网络重试转后台单飞（inflightRefresh），
+ * 后台成功即建立 TTL 缓存 / 失败即续退避。仅进程内首次调用（无任何已知结果）
+ * 保留阻塞式远程优先语义。
  */
 const catalogCache = new Map<string, { expiresAt: number; catalog: Catalog }>();
 const catalogFailureBackoff = new Map<string, number>();
+const lastGoodCatalog = new Map<string, Catalog>();
+const inflightRefresh = new Map<string, Promise<void>>();
 
-/** 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
- *  远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6），失败进
- *  CATALOG_FAILURE_BACKOFF_MS 退避负缓存 */
+/**
+ * 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
+ * 远程成功结果按 URL 缓存 CATALOG_CACHE_TTL_MS（I6），失败进
+ * CATALOG_FAILURE_BACKOFF_MS 退避负缓存；已有已知结果时旧值直返 +
+ * 后台单飞刷新（SWR，切页路径零网络阻塞）
+ */
 export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   const url = catalogUrl ?? DEFAULT_CATALOG_URL;
 
   const hit = catalogCache.get(url);
   if (hit && hit.expiresAt > Date.now()) return hit.catalog;
 
+  // 退避窗口内零网络——现读本地（readFileSync 毫秒级，保持本地面新鲜）
   if ((catalogFailureBackoff.get(url) ?? 0) > Date.now()) {
     logger.info('远程 catalog 失败退避中，直接使用本地');
-  } else {
-    // 尝试远程（3s 超时，避免 UI 长时间卡住）
+    return readLocalCatalog(url);
+  }
+
+  // 进程内首次（无任何已知结果）：维持远程优先——唯一允许阻塞调用方的路径
+  const known = hit?.catalog ?? lastGoodCatalog.get(url);
+  if (!known) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (response.ok) {
-        const raw = (await response.json()) as unknown;
-        // 结构校验失败会 throw → 被 catch 捕获 → 回退本地
-        const catalog = validateCatalog(raw);
-        catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
-        catalogFailureBackoff.delete(url);
-        logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
-        return catalog;
-      }
-      logger.warn('远程 catalog 响应非 2xx，使用本地', { status: response.status });
-      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+      return await fetchRemoteCatalog(url);
     } catch (err) {
       logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
       catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+      return readLocalCatalog(url);
     }
   }
 
-  // 回退到本地（应用内置文件，同样过一遍校验作为纵深防御；不合法直接抛错）。
-  // 本地回退不进成功缓存——保持「失败不缓存」语义，退避窗口过期即重试远程
+  // 已有已知结果（过期成功缓存或本地回退）：立即返回旧值，后台单飞刷新——
+  // 切页路径不阻塞，网络恢复后下一次调用即可拿到新目录
+  void refreshInBackground(url);
+  return known;
+}
+
+/** 拉远程 catalog（3s 超时）：非 2xx / 校验失败一律 throw 由调用方处置 */
+async function fetchRemoteCatalog(url: string): Promise<Catalog> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+  if (!response.ok) throw new Error(`远程 catalog 响应非 2xx：${response.status}`);
+  const raw = (await response.json()) as unknown;
+  // 结构校验失败视为被篡改 → throw → 调用方回退本地
+  const catalog = validateCatalog(raw);
+  catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
+  lastGoodCatalog.set(url, catalog);
+  catalogFailureBackoff.delete(url);
+  logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
+  return catalog;
+}
+
+/** 读本地内置 catalog（过校验纵深防御；不合法直接抛错）并记为已知结果 */
+function readLocalCatalog(url: string): Catalog {
   const local = validateCatalog(
     JSON.parse(fs.readFileSync(resolveLocalCatalogPath(), 'utf-8')) as unknown,
   );
+  lastGoodCatalog.set(url, local);
   logger.info('Marketplace catalog 已加载（本地）', { items: local.items.length });
   return local;
+}
+
+/** 后台刷新（单飞）：成功建立 TTL 缓存 + 清退避；失败续退避。错误吞掉只记日志 */
+function refreshInBackground(url: string): void {
+  if (inflightRefresh.has(url)) return;
+  const task = (async () => {
+    try {
+      await fetchRemoteCatalog(url);
+    } catch (err) {
+      catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+      logger.warn('后台刷新远程 catalog 失败，续退避窗口', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      inflightRefresh.delete(url);
+    }
+  })();
+  inflightRefresh.set(url, task);
 }
 
 /** 测试用：清空 catalog 缓存（隔离用例间缓存副作用） */
 export function __resetCatalogCacheForTest(): void {
   catalogCache.clear();
   catalogFailureBackoff.clear();
+  lastGoodCatalog.clear();
+  inflightRefresh.clear();
 }
 
 /** 测试用：把缓存条目的过期时刻整体前移 ms（模拟 TTL 过期，不伪造系统时钟） */
