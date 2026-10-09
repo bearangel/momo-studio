@@ -89,12 +89,12 @@ describe('ExternalMarketplacePopover - ③ 预告卡不可点', () => {
 });
 
 describe('ExternalMarketplacePopover - ④ 底部两行常驻提示', () => {
-  it('spec §4 原文两行小字在面板内', () => {
+  it('两行小字在面板内；回流指引与实际菜单项同名（走查 A6：禁文案漂移）', () => {
     openPanel('skill');
     expect(screen.getByText('在浏览器打开 · 应用内不安装')).toBeTruthy();
     expect(
       screen.getByText(
-        '回来怎么装：MCP 用＋菜单「粘贴 MCP JSON / 导入 .dxt .mcpb」；Skill 用＋菜单上传 zip；Agent 用＋菜单新建或导入',
+        '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；Agent 用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」',
       ),
     ).toBeTruthy();
   });

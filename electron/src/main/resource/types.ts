@@ -13,7 +13,7 @@ export type ResourceType = 'agent' | 'mcp' | 'skill';
  * 资源来源：
  *   - builtin      系统预置（随应用分发，不可删除）
  *   - marketplace  网络资源（远程 catalog 下载安装）
- *   - custom       我的上传（用户本地注册 / 上传）
+ *   - custom       自定义（用户本地注册 / 上传）
  *   - p2p          P2P 共享（其他 peer 推送过来的资源，v2 引入）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
  *
@@ -90,12 +90,17 @@ export interface ResourceItem {
   };
   /** p2p 项的扩展元数据（来源 peer 标识） */
   p2p?: { peerId: string; peerName: string };
+  /**
+   * mcp_definitions DB 行派生项（custom / smithery 源）的启停态（组⑤）。
+   * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
+   */
+  mcp?: { enabled: boolean };
 };
 
-/** sourceLabel 的中文文案表，UI 列表 / Tab / 徽标共用 */
+/** sourceLabel 的中文文案表，UI 列表 / Tab / 徽标共用。custom 与来源筛选 chip 同名（2026-10-09 走查 A1 术语统一，旧名「我的上传」退役） */
 const SOURCE_LABELS: Record<ResourceSource, string> = {
   builtin: '系统预置',
-  custom: '我的上传',
+  custom: '自定义',
   marketplace: '网络资源',
   p2p: 'P2P 共享',
   smithery: 'Smithery',

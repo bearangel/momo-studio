@@ -1,7 +1,8 @@
 // renderer/src/lib/resource-helpers.test.ts
 // renderer 端 sourceLabel 契约锁——与 electron 端 resource/types.ts 的 SOURCE_LABELS
-// 保持文案一致（builtin=系统预置 / custom=我的上传 / marketplace=网络资源 /
-// p2p=P2P 共享 / smithery=Smithery）。
+// 保持文案一致（builtin=系统预置 / custom=自定义 / marketplace=网络资源 /
+// p2p=P2P 共享 / smithery=Smithery）。custom 2026-10-09 走查 A1 起统一叫「自定义」
+//（与来源筛选 chip 同名；旧名「我的上传」退役）。
 // 通过导出函数 sourceLabel 逐源断言，锁住「行为面」——不再依赖注释或内部表的手抄断言。
 import { describe, it, expect } from 'vitest';
 import { sourceLabel } from './resource-helpers';
@@ -9,7 +10,7 @@ import type { ResourceSource } from '../ipc/types';
 
 const ALL_SOURCES: ReadonlyArray<{ source: ResourceSource; label: string }> = [
   { source: 'builtin', label: '系统预置' },
-  { source: 'custom', label: '我的上传' },
+  { source: 'custom', label: '自定义' },
   { source: 'marketplace', label: '网络资源' },
   { source: 'p2p', label: 'P2P 共享' },
   { source: 'smithery', label: 'Smithery' },

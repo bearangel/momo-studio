@@ -90,6 +90,9 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     render(<ResourceDetail item={item} onClose={() => {}} />);
     expect(screen.getByText('momo-studio')).toBeInTheDocument();
     expect(screen.getByText(/协调子 agent 的内置角色/)).toBeInTheDocument();
+    // README Markdown 渲染（组③ B7）：'# PM' 解析为 h1，无裸 # 直出
+    expect(screen.getByRole('heading', { level: 1, name: 'PM' })).toBeInTheDocument();
+    expect(screen.queryByText(/^# PM/)).toBeNull();
   });
 
   it('marketplace: 显示 README + author + 校验状态 + downloadUrl + 安装按钮', () => {
@@ -115,11 +118,33 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     render(<ResourceDetail item={item} onClose={() => {}} onInstall={onInstall} />);
     expect(screen.getByText('open-creator')).toBeInTheDocument();
     expect(screen.getByText(/规范化 commit 流程/)).toBeInTheDocument();
-    expect(screen.getByText('verified')).toBeInTheDocument();
+    expect(screen.getByText('已验证')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/git-workflow.zip')).toBeInTheDocument();
     const installBtn = screen.getByRole('button', { name: /安装/ });
     fireEvent.click(installBtn);
     expect(onInstall).toHaveBeenCalledWith('marketplace-skill-git-workflow');
+  });
+
+  it('校验状态本地化徽章：official→官方 / unverified→未验证（走查 A4：禁原始枚举直出）', () => {
+    const mkVerifiedItem = (status: 'official' | 'unverified'): ResourceItem =>
+      baseItem({
+        marketplace: {
+          author: 'momo-studio',
+          readme: 'r',
+          downloadUrl: '',
+          checksum: '',
+          verificationStatus: status,
+          tags: [],
+          category: 'agent',
+        },
+      });
+    const { unmount } = render(<ResourceDetail item={mkVerifiedItem('official')} onClose={() => {}} />);
+    expect(screen.getByText('官方')).toBeInTheDocument();
+    expect(screen.queryByText('official')).toBeNull();
+    unmount();
+    render(<ResourceDetail item={mkVerifiedItem('unverified')} onClose={() => {}} />);
+    expect(screen.getByText('未验证')).toBeInTheDocument();
+    expect(screen.queryByText('unverified')).toBeNull();
   });
 
   it('custom MCP: 显示命令 + 参数 + 环境变量(KEY=***) + 安装时间', () => {
@@ -217,7 +242,26 @@ describe('ResourceDetail - 按 source 分支显示', () => {
     render(<ResourceDetail item={item} onClose={() => {}} />);
     expect(screen.getByText('smithery-community')).toBeInTheDocument();
     expect(screen.getByText(/走 Smithery 注册的 MCP/)).toBeInTheDocument();
-    expect(screen.getByText('community')).toBeInTheDocument();
+    expect(screen.getByText('社区')).toBeInTheDocument();
+  });
+
+  it('状态段文字行不重复来源词（走查 N3）：类型用中文标签，不带 source 前缀', () => {
+    const item = baseItem({
+      version: '1.1.0',
+      marketplace: {
+        author: 'momo-studio',
+        readme: 'r',
+        downloadUrl: '',
+        checksum: '',
+        verificationStatus: 'official',
+        tags: [],
+        category: 'agent',
+      },
+    });
+    render(<ResourceDetail item={item} onClose={() => {}} />);
+    // 来源已由 SourceBadge 表达；文字行只报类型 + 版本
+    expect(screen.getByText('智能体 · v1.1.0')).toBeInTheDocument();
+    expect(screen.queryByText(/系统预置 · agent/)).toBeNull();
   });
 
   it('p2p: 显示来源节点 + 「导入」按钮（走 onInstall；P4 Task 4）', () => {
@@ -405,6 +449,45 @@ describe('ResourceDetail - 三段式结构 + custom agent 定义预览（Task 15
     });
     render(<ResourceDetail item={item} onClose={vi.fn()} />);
     expect(screen.queryByText(/systemPrompt:/)).not.toBeInTheDocument();
+  });
+});
+
+// ── 组⑤：MCP 启停（详情面板 toggle + 禁用徽章）───────────────────────────
+describe('ResourceDetail - MCP 启停（组⑤）', () => {
+  const mkMcpItem = (enabled: boolean): ResourceItem =>
+    baseItem({
+      id: 'custom-mcp-github',
+      source: 'custom',
+      type: 'mcp',
+      name: 'GitHub MCP',
+      description: '本地 stdio MCP',
+      installed: true,
+      installable: false,
+      removable: true,
+      custom: { installedAt: '2026-10-09T00:00:00.000Z', transport: 'stdio' },
+      mcp: { enabled },
+    });
+
+  it('启用态：显示「禁用」按钮，点击透传 (item, false)', () => {
+    const onToggleMcp = vi.fn();
+    render(<ResourceDetail item={mkMcpItem(true)} onClose={() => {}} onToggleMcp={onToggleMcp} />);
+    fireEvent.click(screen.getByRole('button', { name: '禁用' }));
+    expect(onToggleMcp).toHaveBeenCalledWith(mkMcpItem(true), false);
+  });
+
+  it('禁用态：显示「启用」按钮 + 状态段 warning「已禁用」徽章', () => {
+    const onToggleMcp = vi.fn();
+    render(<ResourceDetail item={mkMcpItem(false)} onClose={() => {}} onToggleMcp={onToggleMcp} />);
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+    expect(onToggleMcp).toHaveBeenCalledWith(mkMcpItem(false), true);
+    const badge = screen.getByText('已禁用');
+    expect(badge.className).toContain('text-status-warning');
+  });
+
+  it('无 mcp 段的项（builtin catalog / skill / agent）不渲染 toggle', () => {
+    render(<ResourceDetail item={baseItem()} onClose={() => {}} onToggleMcp={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '禁用' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '启用' })).not.toBeInTheDocument();
   });
 });
 

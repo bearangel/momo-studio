@@ -845,7 +845,7 @@ export type ResourceType = 'agent' | 'mcp' | 'skill';
  * v1.7 资源来源：
  *   - builtin      系统预置（随应用分发，不可删除）
  *   - marketplace  网络资源（远程 catalog 下载安装）
- *   - custom       我的上传（用户本地注册 / 上传）
+ *   - custom       自定义（用户本地注册 / 上传）
  *   - p2p          P2P 共享（v2 引入）
  *   - smithery     Smithery registry 安装（P2 双轨·国际，spec 2026-09-22）
  * modelscope 已于 P2.1 移除（registry 100% hosted 后放弃；P3 若公开 API 落地再评估）。
@@ -949,6 +949,11 @@ export interface ResourceItem {
   };
   /** p2p 项的扩展元数据 */
   p2p?: { peerId: string; peerName: string };
+  /**
+   * mcp_definitions DB 行派生项（custom / smithery 源）的启停态（组⑤）。
+   * builtin catalog 项无 DB 行不带该段；禁用 = 定义保留、运行时切断。
+   */
+  mcp?: { enabled: boolean };
 }
 
 /**
@@ -1090,6 +1095,8 @@ export interface McpEditView {
   headers: Record<string, string>;
   /** 仅 stdio */
   cwd?: string;
+  /** 组⑤：启停态（编辑保存后据此决定是否跳过 mcp.start 预热） */
+  enabled: boolean;
 }
 
 /**
@@ -2074,6 +2081,11 @@ export interface ApiSurface {
      * + 池驱逐（旧连接立即失效，下回合 getOrStartMcp 按新定义重建）+ 目录广播。
      */
     updateMcpEntry(name: string, input: McpEntryUpdateInput): Promise<void>;
+    /**
+     * 组⑤：MCP 启停——写库 + 禁用时驱逐池内运行实例（正在跑的 agent 此后
+     * 调用即得「已禁用」错误）；启用不预热，下次使用惰性拉起。未注册 reject。
+     */
+    setMcpEnabled(name: string, enabled: boolean): Promise<void>;
     /**
      * P2.2 Task 6：悬空 MCP 引用扫描（MCP 标签页顶部提示卡数据源）。
      * 空数组 = 无悬空（含扫描异常降级），卡片不显示。

@@ -24,6 +24,7 @@ import {
   evictMcpByName,
   getMcpConfig,
   listRegistered,
+  setMcpEnabledDefinition,
   updateMcpEntryDefinition,
   updateRemoteMcpDefinition,
 } from '../mcp/host-manager';
@@ -230,6 +231,8 @@ export interface McpEditView {
   headers: Record<string, string>;
   /** 仅 stdio */
   cwd?: string;
+  /** 组⑤：启停态（编辑保存后据此决定是否跳过 mcp.start 预热） */
+  enabled: boolean;
 }
 
 /** 读全字段编辑视图（未注册抛中文错） */
@@ -246,6 +249,7 @@ export function getMcpEditView(name: string): McpEditView {
     url: def.url,
     headers: def.transport === 'streamable_http' ? (def.headers ?? {}) : {},
     cwd: def.cwd,
+    enabled: def.enabled,
   };
 }
 
@@ -254,4 +258,14 @@ export async function updateMcpEntry(name: string, input: McpEntryUpdateInput): 
   updateMcpEntryDefinition(name, input);
   await evictMcpByName(name);
   void broadcastLocalResourceCatalog();
+}
+
+/**
+ * 组⑤：MCP 启停——写库 + 驱逐池内运行实例（禁用即刻断开；启用不预热，
+ * 下次 getOrStartMcp 惰性拉起）。未注册抛中文错（透传 renderer）。
+ */
+export async function setMcpEnabled(name: string, enabled: boolean): Promise<void> {
+  if (!getMcpConfig(name)) throw new Error(`MCP ${name} 未注册`);
+  setMcpEnabledDefinition(name, enabled);
+  if (!enabled) await evictMcpByName(name);
 }

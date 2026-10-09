@@ -7,10 +7,10 @@ import type { ResourceSource } from '../../ipc/types';
 import type { BadgeTone } from '../ui/Badge';
 import { Badge } from '../ui/Badge';
 
-/** source × { 中文标签, Badge tone } */
+/** source × { 中文标签, Badge tone }。custom 与来源筛选 chip 同名（走查 A1 术语统一） */
 const SOURCE_BADGE: Record<ResourceSource, { label: string; tone: BadgeTone }> = {
   builtin:     { label: '系统预置', tone: 'accent' },
-  custom:      { label: '我的上传', tone: 'neutral' },
+  custom:      { label: '自定义', tone: 'neutral' },
   marketplace: { label: '网络资源', tone: 'violet' },
   p2p:         { label: 'P2P 共享', tone: 'success' },
   smithery:    { label: 'Smithery', tone: 'violet' },

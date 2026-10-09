@@ -2,6 +2,8 @@
 // 资源库紧凑行（spec §6.1）——取代卡片网格。结构：
 //   图标 + 名称 + 一行描述(截断) + 来源徽章 + 尾部操作槽（按 installed/installable/removable 条件渲染按钮）
 // 操作按钮点击 stopPropagation 防冒泡到行 onSelect。
+// 键盘可达（组④ C11）：行 role=button 可聚焦，Enter/Space 选中，↑/↓/Home/End 在行间移动焦点。
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Bot, Check, Package, Puzzle, Trash2 } from 'lucide-react';
 import type { ResourceItem, ResourceType } from '../../ipc/types';
@@ -31,18 +33,52 @@ export const TYPE_ICON: Record<ResourceType, LucideIcon> = {
   skill: Package,
 };
 
+/** 行间焦点移动（组④ C11）：pick 基于全量行数组与当前索引给出目标行 */
+function moveFocus(current: HTMLElement, pick: (rows: HTMLElement[], idx: number) => HTMLElement | undefined): void {
+  const rows = Array.from(
+    current.parentElement?.querySelectorAll<HTMLElement>('[data-testid^="resource-row-"]') ?? [],
+  );
+  const next = pick(rows, rows.indexOf(current));
+  next?.focus();
+}
+
 export function ResourceRow({
   item, selected, onSelect, onInstall, onDelete, onEnable, onEdit, onConfigure,
 }: ResourceRowProps) {
   const TypeIcon = TYPE_ICON[item.type];
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const el = e.currentTarget;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSelect(item.id);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveFocus(el, (rows, i) => rows[i + 1]);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveFocus(el, (rows, i) => rows[i - 1]);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      moveFocus(el, (rows) => rows[0]);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      moveFocus(el, (rows) => rows[rows.length - 1]);
+    }
+  };
+
   return (
     <div
       data-testid={`resource-row-${item.id}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${item.name}，${item.description}`}
       className={cn(
-        'flex items-center gap-2 px-3 h-11 rounded-lg border bg-surface-2 cursor-pointer transition-colors',
+        'group flex items-center gap-2 px-3 h-11 rounded-lg border bg-surface-2 cursor-pointer transition-colors',
         selected ? 'border-accent-500' : 'border-subtle hover:border-strong',
       )}
       onClick={() => onSelect(item.id)}
+      onKeyDown={onKeyDown}
     >
       {item.iconEmoji ? (
         <span className="text-xl leading-none shrink-0">{item.iconEmoji}</span>
@@ -54,14 +90,14 @@ export function ResourceRow({
       <SourceBadge source={item.source} />
 
       <span className="flex gap-1 items-center shrink-0">
-        {/* 安装：仅 installable 且未安装（registry 浏览 / marketplace 项） */}
+        {/* 安装/导入：仅 installable 且未安装；p2p 文案为「导入」（与详情面板口径一致，走查 A3） */}
         {item.installable && !item.installed && onInstall && (
           <button
             type="button"
             className="text-xs px-2 py-0.5 rounded bg-surface-active text-accent-600 dark:text-accent-300 hover:opacity-80"
             onClick={(e) => { e.stopPropagation(); onInstall(item.id); }}
           >
-            安装
+            {item.source === 'p2p' ? '导入' : '安装'}
           </button>
         )}
         {/* 编辑：custom agent 专属（定义编辑入口） */}
@@ -103,19 +139,28 @@ export function ResourceRow({
             已启用
           </span>
         )}
-        {/* 已安装静态标记：installed 且不可删的 builtin 非 agent 项（随应用分发语义） */}
-        {item.installed && !item.removable && !(item.type === 'agent' && item.source === 'builtin') && (
-          <span className="inline-flex items-center gap-1 text-xs text-status-success">
-            <Check size={12} strokeWidth={1.75} aria-hidden />
-            已安装
-          </span>
+        {/* 已安装静态标记：installed 且不可删的 builtin 非 agent 项（随应用分发语义）。
+            mcp DB 行派生项在禁用态改显「已禁用」（warning，组⑤） */}
+        {item.mcp && !item.mcp.enabled ? (
+          <span className="inline-flex items-center gap-1 text-xs text-status-warning">已禁用</span>
+        ) : (
+          item.installed &&
+          !item.removable &&
+          !(item.type === 'agent' && item.source === 'builtin') && (
+            <span className="inline-flex items-center gap-1 text-xs text-status-success">
+              <Check size={12} strokeWidth={1.75} aria-hidden />
+              已安装
+            </span>
+          )
         )}
-        {/* 删除：仅 installed 且 removable（custom 上传项） */}
+        {/* 删除：仅 installed 且 removable（custom 上传项）。低频危险操作——hover 行
+            或按钮聚焦键盘时才浮现（组③ B9 方案 A：不常驻制造误触焦虑；仍在 DOM
+            内保持 Tab 可达，focus-visible 同步显现） */}
         {item.installed && item.removable && onDelete && (
           <button
             type="button"
             aria-label={`删除 ${item.name}`}
-            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-status-error-tint text-status-error hover:opacity-80"
+            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-status-error-tint text-status-error hover:opacity-80 transition-opacity opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
             onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
           >
             <Trash2 size={12} strokeWidth={1.75} aria-hidden />

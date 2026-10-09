@@ -5,11 +5,12 @@
 // + 加载/错误状态。
 //
 // 行为约定：
-//   - load()：根据当前 typeFilter / sourceFilter 组装 ResourceFilter（'all' 不下发字段）
-//     调 ipc.resource.list，结果写 items
-//   - setTypeFilter / setSourceFilter：set 新值后立即触发 load（让后端按 AND 过滤）
-//   - setQuery：纯前端搜索（无 IPC）；View 层读 query 自行 filter items；filter 变化时
-//     清掉 installNotice（防止下一次 filter 切换仍显示陈旧的成功提示）
+//   - load()：按当前 typeFilter 组装 ResourceFilter 调 ipc.resource.list，结果写 items。
+//     来源筛选 2026-10-09 组③起改为前端过滤（工具栏来源下拉需对各来源计数——
+//     服务端过滤拿不到全量，同搜索 query 一样在 View 层内存过滤）
+//   - setTypeFilter：set 新值后立即触发 load（后端按 type 过滤）
+//   - setSourceFilter / setQuery：纯前端筛选状态（无 IPC）；变化时清掉
+//     installNotice（防止下一次切换仍显示陈旧的成功提示）
 //   - deleteResource / installResource：调对应 IPC 后立即 load 刷新
 //   - installResource：包 try/catch——p2p 导入失败（离线/未找到/超时）必须落到 error 字段，
 //     避免 unhandled rejection；成功后 set installNotice 给 View 渲染一次性成功横幅；
@@ -57,6 +58,11 @@ interface ResourceStore {
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
   /**
+   * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
+   * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
+   */
+  setMcpEnabled: (name: string, enabled: boolean) => Promise<void>;
+  /**
    * 安装某资源后刷新；返回成功布尔（false 时错误在 error 字段）——marketplace
    * agent 安装引导据此触发。P2.1 Task 3：smithery needsConfig:true 时原样透传
    * SmitheryInstallResult（对象对旧布尔消费方恒真，语义兼容）；横幅精修归 Task 6。
@@ -77,11 +83,10 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   load: async () => {
     set({ loading: true, error: null });
     try {
-      // 'all' 不下发字段，让后端返回全部
+      // 来源筛选在前端做（计数需要全量）——IPC filter 只下发 type 维度
       const filter: ResourceFilter = {};
-      const { typeFilter, sourceFilter } = get();
+      const { typeFilter } = get();
       if (typeFilter !== 'all') filter.type = typeFilter;
-      if (sourceFilter !== 'all') filter.source = sourceFilter;
       const items = await ipc.resource.list(filter);
       set({ items, loading: false });
     } catch (err) {
@@ -94,10 +99,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     void get().load();
   },
 
-  setSourceFilter: (f) => {
-    set({ sourceFilter: f, installNotice: null });
-    void get().load();
-  },
+  setSourceFilter: (f) => set({ sourceFilter: f, installNotice: null }),
 
   setQuery: (q) => set({ query: q, installNotice: null }),
 
@@ -108,12 +110,30 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     } catch {
       // 忽略
     }
-    set({ activeType: t, typeFilter: t, installNotice: null });
+    // 切类型页时重置来源筛选：筛选是页面上下文，跨页残留会让新页列表静默变空
+    // （2026-10-09 真机走查 N1：Agent 页点「网络」→ 切 MCP 页空列表被误读为空库）
+    set({ activeType: t, typeFilter: t, sourceFilter: 'all', installNotice: null });
     void get().load();
   },
 
   deleteResource: async (id) => {
     await ipc.resource.delete(id);
+    await get().load();
+  },
+
+  setMcpEnabled: async (name, enabled) => {
+    set({ error: null });
+    try {
+      await ipc.resource.setMcpEnabled(name, enabled);
+    } catch (err) {
+      set({ error: `启停失败：${(err as Error).message}` });
+      return;
+    }
+    set({
+      installNotice: enabled
+        ? `已启用「${name}」`
+        : `已禁用「${name}」，正在运行的连接已断开`,
+    });
     await get().load();
   },
 
@@ -127,8 +147,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         return result;
       }
       await get().load();
-      // 落地 ok → 设置成功横幅；item 在 load 后会出现在「我的上传」tab
-      set({ installNotice: '已导入至「我的上传」' });
+      // 落地 ok → 设置成功横幅；item 在 load 后会出现在「自定义」筛选下
+      set({ installNotice: '已导入至「自定义」' });
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

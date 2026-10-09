@@ -17,10 +17,10 @@ const PANEL_TITLE: Record<ResourceType, string> = {
   skill: 'Skill 市场',
 };
 
-/** 面板底部两行常驻小字（spec §4 原文，替代 toast 零新基建） */
+/** 面板底部两行常驻小字（回流指引与各页 AddMenu 实际菜单项同名——走查 A6 文案对齐） */
 const FOOTER_LINE_1 = '在浏览器打开 · 应用内不安装';
 const FOOTER_LINE_2 =
-  '回来怎么装：MCP 用＋菜单「粘贴 MCP JSON / 导入 .dxt .mcpb」；Skill 用＋菜单上传 zip；Agent 用＋菜单新建或导入';
+  '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；Agent 用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」';
 
 export function ExternalMarketplacePopover({ type }: { type: ResourceType }) {
   const [open, setOpen] = useState(false);

@@ -709,7 +709,7 @@ describe('resource:install p2p 分支端到端', () => {
 
     const result = await ipcHandlers.get('resource:install')!({} as never, 'p2p-agent-a1b2c3d4-uuid-1');
 
-    // preload install 返回 void——成功信号是列表刷新后条目出现在「我的上传」
+    // preload install 返回 void——成功信号是列表刷新后条目出现在「自定义」筛选下
     expect(result).toBeUndefined();
     // 请求携带完整 nodeId + 原始 slug（library p2p 映射的 slug 字段不掺节点前缀）
     expect(sendResourceRequest).toHaveBeenCalledWith(

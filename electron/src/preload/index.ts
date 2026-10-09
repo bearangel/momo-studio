@@ -392,6 +392,9 @@ const api: ApiSurface = {
     // P2.5 Task 2：MCP 全字段编辑提交（专用 UPDATE 保 id/source/installed_at + 池驱逐）
     updateMcpEntry: (name: string, input: McpEntryUpdateInput) =>
       invoke<void>('resource:updateMcpEntry', name, input),
+    // 组⑤：MCP 启停（写库 + 禁用时驱逐池内运行实例；未注册 reject）
+    setMcpEnabled: (name: string, enabled: boolean) =>
+      invoke<void>('resource:setMcpEnabled', name, enabled),
     // P2.2 Task 6：悬空 MCP 引用扫描（空数组 = 无悬空，卡片不显示）
     danglingMcpRefs: () => invoke<DanglingMcpRef[]>('resource:danglingMcpRefs'),
     // P2.3：预置清单只读（本地 resources/agents/*.yaml 直读零网络；mcp/skill 空数组）

@@ -57,6 +57,8 @@ export function listCustomResources(): ResourceItem[] {
         // P2.2 Task 6：只读 transport 透出（「配置」按钮显示条件消费，spec §6.1）
         transport: mcp.transport,
       },
+      // 组⑤：启停态透出（详情 toggle / 行「已禁用」标记消费）
+      mcp: { enabled: mcp.enabled },
     });
   }
 

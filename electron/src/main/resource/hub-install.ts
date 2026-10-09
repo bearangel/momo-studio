@@ -141,6 +141,8 @@ export function listHubInstalledResources(type?: ResourceType): ResourceItem[] {
       installable: false,
       removable: true,
       custom: { installedAt: m.installedAt, transport: m.transport },
+      // 组⑤：启停态透出（详情 toggle / 行「已禁用」标记消费）
+      mcp: { enabled: m.enabled },
     }));
 }
 

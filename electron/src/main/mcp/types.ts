@@ -41,6 +41,11 @@ export interface McpServerConfig {
   /** 来源标识。缺省按 'marketplace' 处理（modelscope 已于 P2.1 移除） */
   source?: 'marketplace' | 'custom' | 'smithery';
   installedAt?: string;
+  /**
+   * 组⑤ 启停开关（读侧守卫标志）：false 时 getOrStartMcp 拒绝拉起。
+   * 注册链不落该值（INSERT 走 DEFAULT 1）；仅 DB 行读取（rowToRegistered）赋值。
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -83,6 +88,8 @@ export interface RegisteredMcp {
   configSchema?: McpConfigSchema;
   source: 'marketplace' | 'custom' | 'smithery';
   installedAt: string;
+  /** 组⑤ 启停开关（DB 行 enabled 列；DEFAULT 1 → 恒有值） */
+  enabled: boolean;
 }
 
 /** MCP 工具信息（从 tools/list 响应解析） */

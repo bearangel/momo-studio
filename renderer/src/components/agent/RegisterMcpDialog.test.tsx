@@ -267,6 +267,7 @@ describe('RegisterMcpDialog — 编辑模式（P2.5 Task 3）', () => {
     env: { GITHUB_TOKEN: 'ghp_x' },
     headers: {},
     cwd: '/opt/wd',
+    enabled: true,
   };
 
   const HTTP_VIEW: McpEditView = {
@@ -278,6 +279,7 @@ describe('RegisterMcpDialog — 编辑模式（P2.5 Task 3）', () => {
     env: {},
     url: 'https://mcp.context7.com/mcp',
     headers: { Authorization: 'Bearer ctx7sk-x' },
+    enabled: true,
   };
 
   it('edit stdio 条目：mount 拉取视图并全字段预填（命令/参数按行 join/env 行/version 缺省留空/cwd；传输态 stdio）', async () => {

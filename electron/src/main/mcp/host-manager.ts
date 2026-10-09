@@ -39,6 +39,7 @@ interface McpDefinitionRow {
   config_schema: string;
   source: string;
   installed_at: string;
+  enabled: number;
 }
 
 /** transport 合法值集合——白名单外的行值（历史脏数据/未知形态）一律回退 'stdio' */
@@ -109,6 +110,7 @@ function rowToRegistered(row: McpDefinitionRow): RegisteredMcp {
     configSchema: parseConfigSchema(row.config_schema, row.name),
     source: row.source as RegisteredMcp['source'],
     installedAt: row.installed_at,
+    enabled: row.enabled !== 0,
   };
 }
 
@@ -141,6 +143,11 @@ export async function getOrStartMcp(
   workspaceId: string,
   config: McpServerConfig,
 ): Promise<PooledMcpClient> {
+  // 组⑤启停防线：禁用的 MCP 拒绝拉起（覆盖 mcp:start / spawner 桥 / callTool 池
+  // miss 重启全部路径——它们都以 DB 行 config 进入本函数）
+  if (config.enabled === false) {
+    throw new Error(`MCP ${config.name} 已禁用，请到资源库启用`);
+  }
   const key = poolKey(workspaceId, config.name);
   const existing = pool.get(key);
   if (existing) {
@@ -290,7 +297,7 @@ export function getMcpConfig(mcpName: string): McpServerConfig | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at FROM mcp_definitions WHERE name = ?',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at, enabled FROM mcp_definitions WHERE name = ?',
     )
     .get(mcpName) as McpDefinitionRow | undefined;
   if (!row) return null;
@@ -406,10 +413,24 @@ export function listRegistered(): RegisteredMcp[] {
   const db = getDb();
   const rows = db
     .prepare(
-      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at FROM mcp_definitions ORDER BY installed_at DESC',
+      'SELECT id, name, version, transport, command, args, env, url, headers_json, cwd, config_schema, source, installed_at, enabled FROM mcp_definitions ORDER BY installed_at DESC',
     )
     .all() as McpDefinitionRow[];
   return rows.map(rowToRegistered);
+}
+
+/**
+ * 组⑤：启停开关写库（仅 UPDATE enabled 列；池驱逐由资源层服务编排——
+ * host-manager 不做副作用编排，与 updateMcpEntryDefinition 同分层）。
+ * 未注册抛中文错（调用方直接透传给 renderer）。
+ */
+export function setMcpEnabledDefinition(mcpName: string, enabled: boolean): void {
+  const db = getDb();
+  const info = db
+    .prepare('UPDATE mcp_definitions SET enabled = ? WHERE name = ?')
+    .run(enabled ? 1 : 0, mcpName);
+  if (info.changes === 0) throw new Error(`MCP ${mcpName} 未注册`);
+  logger.info('MCP 启停已更新', { name: mcpName, enabled });
 }
 
 /**

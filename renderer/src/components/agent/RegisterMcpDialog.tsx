@@ -70,6 +70,8 @@ export function RegisterMcpDialog({
   const [submitting, setSubmitting] = useState(false);
   // 编辑视图加载中（mount 起，视图就位或失败止——期间表单体渲染占位）
   const [loadingEdit, setLoadingEdit] = useState<boolean>(Boolean(edit));
+  // 组⑤：编辑对象当前启停态（视图就位时捕获；禁用态保存后跳过 mcp.start 预热）
+  const [editEnabled, setEditEnabled] = useState<boolean>(true);
 
   // edit 模式 mount 预填：getMcpEditView 全字段回显（cancelled 防卸载后 setState）
   useEffect(() => {
@@ -89,6 +91,7 @@ export function RegisterMcpDialog({
         setUrl(view.url ?? '');
         setEnvRows(recordToRows(view.env));
         setHeaderRows(recordToRows(view.headers));
+        setEditEnabled(view.enabled);
       })
       .catch((err) => {
         if (!cancelled) setError(`读取 MCP 配置失败：${(err as Error).message}`);
@@ -156,6 +159,12 @@ export function RegisterMcpDialog({
         await ipc.resource.updateMcpEntry(edit.name, payload);
       } else {
         await ipc.resource.registerMcp({ name: trimmedName, ...payload });
+      }
+      // 组⑤：禁用态编辑保存后跳过预热（mcp.start 对禁用条目会抛「已禁用」）
+      if (edit && !editEnabled) {
+        onSuccess();
+        onClose();
+        return;
       }
       await ipc.mcp.start(activeWorkspaceId, edit ? edit.name : trimmedName);
       onSuccess();

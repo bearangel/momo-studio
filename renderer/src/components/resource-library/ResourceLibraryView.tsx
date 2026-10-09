@@ -29,7 +29,7 @@ import { GitImportDialog } from './GitImportDialog';
 import type { AgentDefinition, BuiltinPresetPreview, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
-  const { activeType, setActiveType, items, installResource, load } = useResourceStore();
+  const { activeType, setActiveType, items, installResource, load, setMcpEnabled } = useResourceStore();
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
@@ -179,7 +179,8 @@ export function ResourceLibraryView() {
         onEditAgent={handleEditAgent}
         onOpenPreset={openPresetDialog}
         onEditMcpConfig={handleEditMcpConfig}
-        onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
+          onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
+          onToggleMcp={(item, next) => void setMcpEnabled(item.slug, next)}
         onForkPreset={handleForkPreset}
       />
 

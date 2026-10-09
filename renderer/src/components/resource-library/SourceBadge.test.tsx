@@ -15,9 +15,9 @@ describe('SourceBadge', () => {
     expect(badge).toHaveClass('text-accent-600');
   });
 
-  it('custom 显示"我的上传" + neutral tone', () => {
+  it('custom 显示"自定义" + neutral tone（与筛选 chip 同名，走查 A1 术语统一）', () => {
     render(<SourceBadge source="custom" />);
-    expect(screen.getByText('我的上传')).toHaveClass('bg-surface-3');
+    expect(screen.getByText('自定义')).toHaveClass('bg-surface-3');
   });
 
   it('marketplace 显示"网络资源" + violet tone', () => {

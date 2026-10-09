@@ -1,6 +1,7 @@
 // renderer/src/components/resource-library/AddMenu.tsx
 // 类型专属「＋」下拉（spec §4，Cherry Studio MCP 模式）：命名路径 + 一句副文案。
-// 点击外部收起；菜单项点击后必收起。图标 lucide Plus（禁 emoji）。
+// 点击外部收起（2026-10-09 组③补 Esc 关闭——与 ExternalMarketplacePopover 同语义）；
+// 菜单项点击后必收起。图标 lucide Plus（禁 emoji）。
 // P2.3 Task 4：菜单项支持可选 lucide 前导图标（「启用预置库」项 Sparkles 16px）。
 import { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
@@ -28,7 +29,7 @@ export function AddMenu({ label, items }: AddMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 点击外部收起（挂卸成对）
+  // 点击外部 / Esc 收起（挂卸成对；Esc 与 ExternalMarketplacePopover 同语义）
   useEffect(() => {
     if (!open) return;
     const onDocMouseDown = (e: MouseEvent): void => {
@@ -36,8 +37,15 @@ export function AddMenu({ label, items }: AddMenuProps) {
         setOpen(false);
       }
     };
+    const onDocKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onDocKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onDocKeyDown);
+    };
   }, [open]);
 
   return (

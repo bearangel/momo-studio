@@ -17,7 +17,10 @@
   --surface-3: 233 233 236;
   --text-primary: 24 25 26;
   --text-secondary: 86 89 99;
-  --text-tertiary: 130 133 143;
+  /* tertiary 2026-10-09 组④ N5：130 133 143 在 surface-2/3 上仅 3.04–3.27:1
+     （WCAG AA 违约）。100 103 114 为保持浅于 secondary 层级前提下、在 tertiary
+     实际所在的全部底色（canvas/s1/s2/s3）上 ≥4.65:1 的取值 */
+  --text-tertiary: 100 103 114;
   --text-disabled: 194 196 202;
   --border-subtle: 232 232 236;
   --border-strong: 212 213 218;

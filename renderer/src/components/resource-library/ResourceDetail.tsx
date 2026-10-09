@@ -24,12 +24,14 @@
 // 与 View 层 handleEditAgent 同口径），YAML-ish 只读渲染 systemPrompt 前 200 字。
 import { useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Bot, Check, Copy, Package, Pencil, Puzzle, Settings2, Trash2, X } from 'lucide-react';
+import { Bot, Check, Copy, Package, Pencil, Power, Puzzle, Settings2, Trash2, X } from 'lucide-react';
 import type { BuiltinPresetPreview, ResourceItem } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
+import type { BadgeTone } from '../ui/Badge';
+import { MarkdownBody } from '../im/MarkdownBody';
 import { SourceBadge } from './SourceBadge';
-import { sourceLabel } from '../../lib/resource-helpers';
 
 interface Props {
   item: ResourceItem;
@@ -46,6 +48,8 @@ interface Props {
   onEditMcpConfig?: (item: ResourceItem) => void;
   /** 已装 custom MCP → 弹全字段编辑表单（stdio+远程通吃；P2.5 D4） */
   onEditMcpEntry?: (item: ResourceItem) => void;
+  /** 组⑤：MCP 启停（mcp DB 行派生项；View 层接 store.setMcpEnabled） */
+  onToggleMcp?: (item: ResourceItem, next: boolean) => void;
   /** builtin agent 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
 }
@@ -57,13 +61,31 @@ const TYPE_ICON: Record<ResourceItem['type'], LucideIcon> = {
   skill: Package,
 };
 
+/** 类型中文标签（状态段文字行用；来源已由 SourceBadge 表达，不再重复，走查 N3） */
+const TYPE_LABEL: Record<ResourceItem['type'], string> = {
+  agent: '智能体',
+  mcp: 'MCP',
+  skill: '技能',
+};
+
+/** 校验状态本地化（走查 A4：禁原始枚举直出；tone 对齐设计系统状态徽标） */
+const VERIFICATION: Record<
+  NonNullable<ResourceItem['marketplace']>['verificationStatus'],
+  { label: string; tone: BadgeTone }
+> = {
+  official: { label: '官方', tone: 'success' },
+  verified: { label: '已验证', tone: 'success' },
+  community: { label: '社区', tone: 'neutral' },
+  unverified: { label: '未验证', tone: 'warning' },
+};
+
 /** 兜底图标渲染件（16px 独立档） */
 function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   const Icon = TYPE_ICON[type];
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onForkPreset }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -138,7 +160,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
   }, [isBuiltinAgent, item.slug]);
 
   return (
-    <div className="w-80 border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
+    <div className="w-full border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-subtle flex items-center justify-between">
         <h3 className="text-sm font-semibold flex items-center gap-2 text-primary">
           {item.iconEmoji ? (
@@ -172,8 +194,10 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           <div className="flex gap-1 flex-wrap items-center">
             <SourceBadge source={item.source} />
             <span className="text-xs text-tertiary">
-              {sourceLabel(item.source)} · {item.type}{item.version && ` · v${item.version}`}
+              {TYPE_LABEL[item.type]}{item.version && ` · v${item.version}`}
             </span>
+            {/* 组⑤：禁用态徽章（mcp DB 行派生项） */}
+            {item.mcp && !item.mcp.enabled && <Badge tone="warning">已禁用</Badge>}
           </div>
         </section>
 
@@ -258,12 +282,12 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
               </div>
             )}
 
-            {/* builtin / marketplace / hub（smithery）：README 折叠（catalog 元数据在「元数据」段） */}
+            {/* builtin / marketplace / hub（smithery）：README Markdown 渲染（组③ B7：复用会话区 MarkdownBody，禁裸 # 直出） */}
             {hasMarketplaceMeta && item.marketplace && (
               <div>
                 <div className="text-xs text-tertiary mb-1">README</div>
-                <div className="text-secondary text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">
-                  {item.marketplace.readme}
+                <div className="max-h-60 overflow-y-auto text-secondary text-[13px]">
+                  <MarkdownBody>{item.marketplace.readme}</MarkdownBody>
                 </div>
               </div>
             )}
@@ -283,7 +307,9 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
                 </div>
                 <div>
                   <div className="text-xs text-tertiary mb-1">校验状态</div>
-                  <div className="text-secondary">{item.marketplace.verificationStatus}</div>
+                  <Badge tone={VERIFICATION[item.marketplace.verificationStatus].tone}>
+                    {VERIFICATION[item.marketplace.verificationStatus].label}
+                  </Badge>
                 </div>
                 {item.marketplace.downloadUrl && (
                   <div>
@@ -383,6 +409,18 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
           <Button size="sm" onClick={() => onEditMcpEntry(item)} className="inline-flex items-center gap-1">
             <Pencil size={12} strokeWidth={1.75} aria-hidden />
             编辑
+          </Button>
+        )}
+        {/* 组⑤：MCP 启停（mcp_definitions DB 行派生项）。禁用 = 定义保留、运行时切断 */}
+        {item.type === 'mcp' && item.installed && item.mcp && onToggleMcp && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onToggleMcp(item, !item.mcp?.enabled)}
+            className="inline-flex items-center gap-1"
+          >
+            <Power size={12} strokeWidth={1.75} aria-hidden />
+            {item.mcp.enabled ? '禁用' : '启用'}
           </Button>
         )}
         {/* 删除按钮：仅 installed 且 removable 时显示（custom 上传项） */}

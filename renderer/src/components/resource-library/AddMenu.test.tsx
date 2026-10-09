@@ -34,6 +34,13 @@ describe('AddMenu', () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByText('手动配置…')).toBeNull();
   });
+
+  it('Esc 收起（组③补齐——与 ExternalMarketplacePopover 同语义）', () => {
+    render(<AddMenu label="添加服务器" items={items} />);
+    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('手动配置…')).toBeNull();
+  });
 });
 
 describe('AddMenu - 菜单项图标（P2.3 Task 4）', () => {

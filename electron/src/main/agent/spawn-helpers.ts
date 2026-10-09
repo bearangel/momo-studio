@@ -26,6 +26,7 @@ import { getProvider, type ModelProvider } from './provider-crud';
 import { getSecret } from '../storage/keychain';
 import { getDb } from '../storage/db';
 import { logger } from '../logger';
+import { getMcpConfig } from '../mcp/host-manager';
 import {
   lookupModelLimits,
   lookupReasoningCapability,
@@ -317,6 +318,15 @@ export function resolveVisionCapability(providerId: string, modelId: string): bo
  * v25 Task 10：subAgents/isLeader 改由 buildDispatchSnapshot 会话快照计算
  *   （取代 v1 role==='main' + parent 链查询，spec §4.7）。
  */
+/**
+ * 组⑤启停：spawn 时过滤 mcpNames——已注册且 enabled=false 的排除（禁用 MCP
+ * 不进 agent 工具面）；未注册名保留（悬空引用语义归 listDanglingMcpRefs，
+ * 不在 spawn 层吞掉）。
+ */
+export function filterEnabledMcps(names: string[]): string[] {
+  return names.filter((name) => getMcpConfig(name)?.enabled !== false);
+}
+
 export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentRuntimeOpts> {
   const {
     instanceId,
@@ -385,7 +395,8 @@ export async function buildSpawnOpts(input: BuildSpawnOptsInput): Promise<AgentR
     // 全保留（manager/detect/registry/ipc/panel/工具），恢复 = 还原本行注入 +
     // catalog.ts 目录项 + 设置页导航三处（见 spec 头部下架横幅）。
     skills: resolveSkillSlugs(merged.skills),
-    mcpNames: merged.mcps,
+    // 组⑤启停：禁用的 MCP 不进 agent 工具面
+    mcpNames: filterEnabledMcps(merged.mcps),
     isLeader,
     // v1.4 嵌套：传 bot 展示信息，子 agent start chunk 据此填充 chip 头部
     botName: def.name,

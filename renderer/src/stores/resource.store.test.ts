@@ -16,11 +16,13 @@ import type { ResourceItem } from '../ipc/types';
 
 const resourceList = vi.fn();
 const resourceInstall = vi.fn();
+const resourceSetMcpEnabled = vi.fn();
 
 const mockApi = {
   resource: {
     list: resourceList,
     install: resourceInstall,
+    setMcpEnabled: resourceSetMcpEnabled,
   },
 };
 
@@ -49,7 +51,7 @@ describe('resource.store — install 反馈闭环', () => {
     await useResourceStore.getState().installResource('p2p-agent-x1y2-research');
 
     const state = useResourceStore.getState();
-    expect(state.installNotice).toBe('已导入至「我的上传」');
+    expect(state.installNotice).toBe('已导入至「自定义」');
     expect(state.error).toBeNull();
 
     // setQuery 清掉陈旧成功提示（前端搜索→主网格刷新，应一并隐藏横幅）
@@ -83,7 +85,7 @@ describe('resource.store — install 反馈闭环', () => {
 
     const state = useResourceStore.getState();
     expect(state.error).toBeNull();
-    expect(state.installNotice).toBe('已导入至「我的上传」');
+    expect(state.installNotice).toBe('已导入至「自定义」');
   });
 
   it('installResource 返回成功布尔值（true=成功；false=失败且 error 落位）——安装引导依据', async () => {
@@ -138,7 +140,7 @@ describe('resource.store — smithery needsConfig 两态透传（P2.1 Task 3）'
     const ok = await useResourceStore.getState().installResource('smithery-mcp-plain');
 
     expect(ok).toBe(true);
-    expect(useResourceStore.getState().installNotice).toBe('已导入至「我的上传」');
+    expect(useResourceStore.getState().installNotice).toBe('已导入至「自定义」');
   });
 
   it('旧路径返回 undefined（marketplace/p2p）→ 布尔语义不变', async () => {
@@ -170,6 +172,55 @@ describe('resource.store 资源库重设计（activeType 单态）', () => {
   it('setActiveType 持久化到 localStorage', () => {
     useResourceStore.getState().setActiveType('skill');
     expect(localStorage.getItem('momo.resourceLibrary.activeType')).toBe('skill');
+  });
+
+  it('setActiveType 重置 sourceFilter 为 all（跨类型页筛选残留防回归，2026-10-09 走查 N1）', () => {
+    // 复现路径：Agent 页点了来源 chip → 切到 MCP 页 → 残留 sourceFilter 让新页列表静默变空
+    useResourceStore.getState().setSourceFilter('custom');
+    expect(useResourceStore.getState().sourceFilter).toBe('custom');
+
+    useResourceStore.getState().setActiveType('mcp');
+    const state = useResourceStore.getState();
+    expect(state.sourceFilter).toBe('all');
+    expect(state.typeFilter).toBe('mcp');
+    // 'all' 不下发 source 字段——新页拉取不过滤来源
+    expect(resourceList).toHaveBeenLastCalledWith({ type: 'mcp' });
+  });
+
+  it('setSourceFilter 纯前端状态：不触发 load（组③——来源下拉计数需全量 items）', () => {
+    resourceList.mockClear();
+    useResourceStore.getState().setSourceFilter('p2p');
+    expect(useResourceStore.getState().sourceFilter).toBe('p2p');
+    expect(resourceList).not.toHaveBeenCalled();
+  });
+
+  it('load 只按 type 过滤——即使 sourceFilter 非 all 也不下发 source（组③ 前端化）', async () => {
+    resourceList.mockClear();
+    useResourceStore.setState({ typeFilter: 'skill', sourceFilter: 'p2p' });
+    await useResourceStore.getState().load();
+    expect(resourceList).toHaveBeenLastCalledWith({ type: 'skill' });
+  });
+
+  it('setMcpEnabled 成功：notice 带名称与禁用语义 + 列表刷新（组⑤）', async () => {
+    resourceSetMcpEnabled.mockResolvedValue(undefined);
+    await useResourceStore.getState().setMcpEnabled('github', false);
+    expect(resourceSetMcpEnabled).toHaveBeenCalledWith('github', false);
+    const state = useResourceStore.getState();
+    expect(state.installNotice).toContain('已禁用');
+    expect(state.installNotice).toContain('github');
+    expect(state.error).toBeNull();
+    expect(resourceList).toHaveBeenCalled();
+
+    await useResourceStore.getState().setMcpEnabled('github', true);
+    expect(useResourceStore.getState().installNotice).toContain('已启用');
+  });
+
+  it('setMcpEnabled 失败：error 带「启停失败：」前缀，不设 notice（组⑤）', async () => {
+    resourceSetMcpEnabled.mockRejectedValueOnce(new Error('MCP ghost 未注册'));
+    await useResourceStore.getState().setMcpEnabled('ghost', true);
+    const state = useResourceStore.getState();
+    expect(state.error).toBe('启停失败：MCP ghost 未注册');
+    expect(state.installNotice).toBeNull();
   });
 
   it('P2.3 Task 1 字段消亡回归：mode / registryProviderKey 及其 setter 不存在于 store', () => {

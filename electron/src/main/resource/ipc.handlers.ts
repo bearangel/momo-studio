@@ -65,6 +65,7 @@ import {
   listDanglingMcpRefs,
   getMcpEditView,
   updateMcpEntry,
+  setMcpEnabled,
   type McpConfigUpdateInput,
   type McpEntryUpdateInput,
 } from './mcp-config';
@@ -506,6 +507,15 @@ export function registerResourceHandlers(): void {
     async (_evt, name: string, input: McpEntryUpdateInput) => {
       assertMcpName(name);
       await updateMcpEntry(name, input);
+    },
+  );
+
+  // 组⑤：MCP 启停（写库 + 禁用时驱逐池内运行实例；业务在 mcp-config.setMcpEnabled）
+  ipcMain.handle(
+    'resource:setMcpEnabled',
+    async (_evt, name: string, enabled: boolean) => {
+      assertMcpName(name);
+      await setMcpEnabled(name, enabled);
     },
   );
 

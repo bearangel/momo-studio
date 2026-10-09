@@ -45,6 +45,32 @@ describe('ResourceRow', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('p2p 可导入项按钮文案为「导入」（与详情面板口径一致，走查 A3）', () => {
+    const onInstall = vi.fn();
+    render(
+      <ResourceRow
+        item={mkItem({ source: 'p2p', installable: true, installed: false, removable: false })}
+        selected={false} onSelect={noop} onInstall={onInstall}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '导入' }));
+    expect(onInstall).toHaveBeenCalledWith('custom-mcp-x');
+    expect(screen.queryByRole('button', { name: '安装' })).toBeNull();
+  });
+
+  it('禁用的 mcp DB 行派生项显示「已禁用」（warning）替代「已安装」（组⑤）', () => {
+    render(<ResourceRow item={mkItem({ removable: false, mcp: { enabled: false } })} selected={false} onSelect={noop} />);
+    const mark = screen.getByText('已禁用');
+    expect(mark.className).toContain('text-status-warning');
+    expect(screen.queryByText('已安装')).toBeNull();
+  });
+
+  it('启用的 mcp DB 行派生项保持「已安装」（组⑤）', () => {
+    render(<ResourceRow item={mkItem({ removable: false, mcp: { enabled: true } })} selected={false} onSelect={noop} />);
+    expect(screen.getByText('已安装')).toBeTruthy();
+    expect(screen.queryByText('已禁用')).toBeNull();
+  });
+
   it('builtin agent 未启用显示启用按钮；已启用显示已启用标记', () => {
     const { rerender } = render(
       <ResourceRow
@@ -62,9 +88,15 @@ describe('ResourceRow', () => {
     expect(screen.getByText('已启用')).toBeTruthy();
   });
 
-  it('已安装且可删项显示删除按钮（aria-label 含名称）', () => {
-    render(<ResourceRow item={mkItem({})} selected={false} onSelect={noop} onDelete={noop} />);
-    expect(screen.getByRole('button', { name: '删除 服务器X' })).toBeTruthy();
+  it('已安装且可删项显示删除按钮（aria-label 含名称；hover 行才浮现——组③ B9）', () => {
+    const { container } = render(<ResourceRow item={mkItem({})} selected={false} onSelect={noop} onDelete={noop} />);
+    const delBtn = screen.getByRole('button', { name: '删除 服务器X' });
+    expect(delBtn).toBeTruthy();
+    // 默认隐藏（opacity-0 + 不挡指针），hover 行（group）/键盘聚焦才显现
+    expect(delBtn).toHaveClass('opacity-0', 'pointer-events-none');
+    expect(delBtn).toHaveClass('group-hover:opacity-100', 'focus-visible:opacity-100');
+    // 行本身带 group（hover 作用域）
+    expect(container.firstChild).toHaveClass('group');
   });
 
   it('custom agent 显示编辑、marketplace 已装 agent 显示配置（传入回调时）', () => {
@@ -85,5 +117,24 @@ describe('ResourceRow', () => {
       />,
     );
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
+  });
+});
+
+// ── 组④ C11：行键盘可达 ──────────────────────────────────────────────────
+describe('ResourceRow - 键盘可达（组④ C11）', () => {
+  it('行 role=button、tabIndex=0、aria-label 含名称与描述', () => {
+    render(<ResourceRow item={mkItem({})} selected={false} onSelect={noop} />);
+    const row = screen.getByRole('button', { name: '服务器X，一行描述' });
+    expect(row.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('Enter / Space 触发 onSelect（div 无原生 Enter 语义，须显式处理）', () => {
+    const onSelect = vi.fn();
+    render(<ResourceRow item={mkItem({})} selected={false} onSelect={onSelect} />);
+    const row = screen.getByRole('button', { name: '服务器X，一行描述' });
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith('custom-mcp-x');
+    fireEvent.keyDown(row, { key: ' ' });
+    expect(onSelect).toHaveBeenCalledTimes(2);
   });
 });
