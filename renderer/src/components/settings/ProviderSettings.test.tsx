@@ -139,9 +139,11 @@ describe('ProviderSettings 两列布局', () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith('p1'));
   });
 
-  it('无供应商时右列显示引导文案', async () => {
+  it('无供应商时空态文案与按钮名「添加供应商」一致（D3 回归）', async () => {
     list.mockResolvedValue([]);
     render(<ProviderSettings />);
     await waitFor(() => expect(screen.getByText(/暂无供应商/)).toBeInTheDocument());
+    expect(screen.getByText(/点击右上角「添加供应商」创建/)).toBeInTheDocument();
+    expect(screen.getByText(/或点击「添加供应商」创建/)).toBeInTheDocument();
   });
 });
