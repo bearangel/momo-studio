@@ -30,7 +30,7 @@ description: Momo Studio UI/UX 变更的静态预览门禁规则。Use when 改 
 
 ## P2 事后验收
 
-实现完成后对真实 app 截图（`pnpm dev` + 浏览器截图；容器内 xvfb 截图），贴给用户对照指令确认。衔接内置 `visual-qa` 技能执行。
+实现完成后对真实 app 截图（`pnpm dev` + 浏览器截图；容器内 xvfb 截图），贴给用户对照指令确认。单点截图衔接内置 `visual-qa` 技能；整场景 / 多步骤的 App 级验收走 `momo-acceptance` 技能（启动编排 + 证据收集 + 稳定报告）。
 
 ## 反模式（禁止）
 

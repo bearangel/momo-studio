@@ -21,7 +21,7 @@ description: Momo Studio 修 bug / 排查异常行为的强制流程规则。Use
 3. **数据争议 SQLite 直查裁决**。UI 观感 ≠ 数据事实：「消息丢失」「没落库」先用 sqlite3 查 messages/message_events 表。WAL 数据在 -wal 文件——拷库要三件套或先 checkpoint。
 4. **运行时黑盒加探针**。UI/主进程状态不可见时，加诊断钩子（如 renderer 的 `__momoDebug()` 挂 globalThis，DevTools 一键导出 store 状态），让用户提供决定性输出。
 5. **跨层根因逐层断言**。在 harness 里对每一层单独 verify（DB 行字段 → 事件 payload → 查找键匹配），别只验最终现象。
-6. **修复必须带回归锁**：先写失败测试（红）→ 修（绿）。回归锁本身要遵守 momo-test-rules 的保真度规则。
+6. **修复必须带回归锁**：先写失败测试（红）→ 修（绿）。回归锁本身要遵守 momo-test-rules 的保真度规则；App 级修复的回归验收走 `momo-acceptance` 技能（隔离实例 + 稳定报告）。
 
 ## 案例摘要（症状 → 根因 → 规则）
 
