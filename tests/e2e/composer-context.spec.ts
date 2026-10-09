@@ -88,7 +88,7 @@ test('输入框支持文件引用与技能 chip：@ 文件 → / 技能 → 发�
 
     // ---- 1. 首启空态 → 创建 workspace（内嵌表单，同 browser.spec 先例） ----
     await win.getByLabel('名称').fill('E2E 上下文');
-    await win.getByPlaceholder('点击右侧按钮选择目录').fill(tmpWsDir);
+    await win.getByPlaceholder('选择或输入目录路径').fill(tmpWsDir);
     await win.getByRole('button', { name: '创建', exact: true }).click();
 
     // 主布局就绪标志：活动栏 Agent 入口可见

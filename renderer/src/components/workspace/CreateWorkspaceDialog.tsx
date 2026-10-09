@@ -68,7 +68,7 @@ export function CreateWorkspaceDialog({ onClose, embedded }: Props) {
           <Input
             value={dir}
             onChange={(e) => setDir(e.target.value)}
-            placeholder="点击右侧按钮选择目录"
+            placeholder="选择或输入目录路径"
             className="flex-1"
           />
           <Button

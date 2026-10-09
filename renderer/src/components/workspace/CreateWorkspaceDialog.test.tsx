@@ -40,6 +40,11 @@ describe('CreateWorkspaceDialog', () => {
     expect(screen.getByText('新建工作空间')).toBeTruthy();
   });
 
+  it('目录输入框 placeholder 提示可手输路径（D4 回归）', () => {
+    render(<CreateWorkspaceDialog onClose={() => {}} />);
+    expect(screen.getByPlaceholderText('选择或输入目录路径')).toBeTruthy();
+  });
+
   it('点击「选择目录」触发 dialog.pickDirectory 并回填路径', async () => {
     pickDirectory.mockResolvedValue('/home/user/projects/my-app');
     render(<CreateWorkspaceDialog onClose={() => {}} />);
@@ -51,7 +56,7 @@ describe('CreateWorkspaceDialog', () => {
     });
     await waitFor(() => {
       const input = screen.getByPlaceholderText(
-        '点击右侧按钮选择目录',
+        '选择或输入目录路径',
       ) as HTMLInputElement;
       expect(input.value).toBe('/home/user/projects/my-app');
     });
@@ -67,7 +72,7 @@ describe('CreateWorkspaceDialog', () => {
       expect(pickDirectory).toHaveBeenCalled();
     });
     const input = screen.getByPlaceholderText(
-      '点击右侧按钮选择目录',
+      '选择或输入目录路径',
     ) as HTMLInputElement;
     expect(input.value).toBe('');
   });
@@ -85,7 +90,7 @@ describe('CreateWorkspaceDialog', () => {
 
     await waitFor(() => {
       const input = screen.getByPlaceholderText(
-        '点击右侧按钮选择目录',
+        '选择或输入目录路径',
       ) as HTMLInputElement;
       expect(input.value).toBe('/tmp/proj');
     });

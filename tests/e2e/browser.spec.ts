@@ -185,7 +185,7 @@ test('v2.7 浏览器全链路：导航→user 态点击→popup 收编→下载�
 
     // ---- 1. 首启空态 → 创建 workspace → 激活（im 视图带浏览器侧栏） ----
     await win.getByLabel('名称').fill('E2E 浏览器');
-    await win.getByPlaceholder('点击右侧按钮选择目录').fill(tmpWsDir);
+    await win.getByPlaceholder('选择或输入目录路径').fill(tmpWsDir);
     await win.getByRole('button', { name: '创建', exact: true }).click();
 
     const sidebar = win.getByTestId('browser-sidebar');

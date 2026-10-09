@@ -56,7 +56,7 @@ test('看板拖拽冒烟：新建任务落待办列 → 拖到已关闭列 → �
 
     // 1. 首启空态：内嵌创建工作空间表单（smoke.spec 同款定位）
     await win.getByLabel('名称').fill('拖拽冒烟', { timeout: 15000 });
-    await win.getByPlaceholder('点击右侧按钮选择目录').fill(path.join(tmpUserData, 'ws'));
+    await win.getByPlaceholder('选择或输入目录路径').fill(path.join(tmpUserData, 'ws'));
     await win.getByRole('button', { name: '创建', exact: true }).click();
 
     // 2. 切看板视图（ActivityBar「看板」项）
