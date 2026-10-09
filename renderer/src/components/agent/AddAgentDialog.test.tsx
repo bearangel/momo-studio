@@ -196,8 +196,18 @@ describe('AddAgentDialog — 空态与取消', () => {
     ).toBeInTheDocument();
   });
 
-  it('点「取消」→ onClose', async () => {
+  it('定义目录为空（全新 profile）→ 引导去资源库，不误报「均已加入」（D1 回归）', async () => {
     seedStore([], []);
+    render(<AddAgentDialog onClose={() => {}} />);
+    expect(await screen.findByText('暂无可用 Agent 定义')).toBeInTheDocument();
+    expect(screen.getByText(/「资源库」启用系统预置/)).toBeInTheDocument();
+    expect(screen.queryByText('所有 agent 均已加入本工作空间')).not.toBeInTheDocument();
+  });
+
+  it('点「取消」→ onClose', async () => {
+    seedStore([def({ id: 'def-in', name: '已在工作空间的', slug: 'x' })], [
+      member('def-in', '已在工作空间的'),
+    ]);
     const onClose = vi.fn();
     render(<AddAgentDialog onClose={onClose} />);
     await screen.findByText('所有 agent 均已加入本工作空间');

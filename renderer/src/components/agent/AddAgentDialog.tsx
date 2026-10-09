@@ -66,11 +66,19 @@ export function AddAgentDialog({ onClose }: Props) {
         )}
 
         {addableDefs.length === 0 ? (
-          <EmptyState
-            icon={Bot}
-            title="所有 agent 均已加入本工作空间"
-            description="可到「资源库」创建新的 Agent 定义"
-          />
+          definitions.length === 0 ? (
+            <EmptyState
+              icon={Bot}
+              title="暂无可用 Agent 定义"
+              description="可到「资源库」启用系统预置 Agent，或创建新的 Agent 定义"
+            />
+          ) : (
+            <EmptyState
+              icon={Bot}
+              title="所有 agent 均已加入本工作空间"
+              description="可到「资源库」创建新的 Agent 定义"
+            />
+          )
         ) : (
           <div className="flex flex-col max-h-96 overflow-y-auto">
             {addableDefs.map((d) => (
