@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   ApiSurface,
   AssignmentDeltas,
+  ApplyOnboardingPlanInput,
   BrowserNotice,
   BrowserState,
   BundlePreview,
@@ -10,15 +11,20 @@ import type {
   BuiltinPresetPreview,
   CollabTarget,
   DanglingMcpRef,
+  GenerateOnboardingPlanInput,
+  GenerateOnboardingPlanResult,
   GitImportResult,
   GroupRow,
   ImMessage,
+  MarkOnboardingDoneInput,
   McpConfigUpdateInput,
   McpConfigView,
   McpEditView,
   McpEntryUpdateInput,
   MessageContext,
   MessageEventBatch,
+  OnboardingApplyResult,
+  OnboardingStatus,
   RegisterMcpInput,
   RegistryListEntry,
   RegistryProviderMeta,
@@ -223,6 +229,16 @@ const api: ApiSurface = {
         ipcRenderer.off('im:conflict', handler);
       };
     },
+  },
+  // 新装引导（spec 2026-10-10）：status 通道随状态服务接线；
+  // generatePlan / applyPlan 的 main handler 分别随 plan-generator / plan-applier 注册
+  onboarding: {
+    getStatus: () => invoke<{ status: OnboardingStatus }>('onboarding:getStatus'),
+    generatePlan: (input: GenerateOnboardingPlanInput) =>
+      invoke<GenerateOnboardingPlanResult>('onboarding:generatePlan', input),
+    applyPlan: (input: ApplyOnboardingPlanInput) =>
+      invoke<OnboardingApplyResult>('onboarding:applyPlan', input),
+    markDone: (input: MarkOnboardingDoneInput) => invoke<void>('onboarding:markDone', input),
   },
   mcp: {
     // P3 Task 7：register 收敛到 api.resource.registerMcp（mcp:register 通道已删除）

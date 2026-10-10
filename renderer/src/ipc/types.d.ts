@@ -2150,6 +2150,8 @@ export interface ApiSurface {
     isMaximized(): Promise<boolean>;
     onMaximizedChanged(callback: (maximized: boolean) => void): () => void;
   };
+  /** 新装引导（spec 2026-10-10）——main 侧 onboarding/ipc.handlers.ts */
+  onboarding: OnboardingApiSurface;
 }
 
 export interface DirEntry {
@@ -2166,4 +2168,86 @@ export interface SearchHit {
   /** 相对 workspace 根的全路径（含目录前缀，'/' 分隔） */
   path: string;
   isDirectory: boolean;
+}
+
+// ─── Onboarding（新装引导，spec 2026-10-10 §5）────────────────────────────
+
+/** 引导一次性状态（kv_store: onboarding.status） */
+export type OnboardingStatus = 'pending' | 'completed' | 'skipped';
+
+/** onboarding:generatePlan 入参 */
+export interface GenerateOnboardingPlanInput {
+  /** 用户需求描述；主进程截断至 4000 字符 */
+  requirement: string;
+  /** 第②步配好的供应商 + 模型（生成调用与 custom agent 落库共用） */
+  providerId: string;
+  modelId: string;
+}
+
+/** 方案 agent 项：预制启用（优先路线） */
+export interface OnboardingPlanPresetAgent {
+  kind: 'preset';
+  slug: string;
+  /** 给用户看的选择理由（中文一句话） */
+  reason: string;
+  /** LLM 追加挂载的 MCP 名（应用前过滤到已注册集） */
+  mcps: string[];
+  skills: string[];
+}
+
+/** 方案 agent 项：自定义生成（预制不满足时的降级路线） */
+export interface OnboardingPlanCustomAgent {
+  kind: 'custom';
+  name: string;
+  iconEmoji: string;
+  systemPrompt: string;
+  /** standard=安全最小集 / all=全部内置工具（引导期不暴露 custom 勾选档） */
+  toolPreset: 'standard' | 'all';
+  reason: string;
+  mcps: string[];
+  skills: string[];
+}
+
+export type OnboardingPlanAgent = OnboardingPlanPresetAgent | OnboardingPlanCustomAgent;
+
+/** LLM 生成 / 用户勾改后的配置方案 */
+export interface OnboardingPlan {
+  agents: OnboardingPlanAgent[];
+  /** 默认会话 agent 指向 agents[i]；应用时越界钳制到 0 */
+  defaultAgentIndex: number;
+}
+
+/** onboarding:applyPlan 入参 */
+export interface ApplyOnboardingPlanInput {
+  plan: OnboardingPlan;
+  workspaceId: string;
+  providerId: string;
+  modelId: string;
+}
+
+/** onboarding:applyPlan 返回 */
+export interface OnboardingApplyResult {
+  applied: Array<{ name: string; kind: 'preset' | 'custom'; instanceId: string }>;
+  /** 非致命警告（剔除的未注册引用等），预览页与结果页展示 */
+  warnings: string[];
+  defaultAgentName: string;
+}
+
+/** onboarding:markDone 入参 */
+export interface MarkOnboardingDoneInput {
+  skipped: boolean;
+}
+
+/** generatePlan 的返回（方案 + 生成侧过滤警告） */
+export interface GenerateOnboardingPlanResult {
+  plan: OnboardingPlan;
+  warnings: string[];
+}
+
+/** 新装引导通道面（spec 2026-10-10 §5：4 通道） */
+export interface OnboardingApiSurface {
+  getStatus(): Promise<{ status: OnboardingStatus }>;
+  generatePlan(input: GenerateOnboardingPlanInput): Promise<GenerateOnboardingPlanResult>;
+  applyPlan(input: ApplyOnboardingPlanInput): Promise<OnboardingApplyResult>;
+  markDone(input: MarkOnboardingDoneInput): Promise<void>;
 }
