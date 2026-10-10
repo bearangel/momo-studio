@@ -18,6 +18,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 export function MainLayout() {
   const loadSessions = useSessionStore((s) => s.loadSessions);
   const loadMembers = useAgentStore((s) => s.loadMembers);
+  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
   // 会话首屏预载（范围化）：workspace 就绪后带 id 拉取，ws 切换时自然重载；
@@ -30,10 +31,15 @@ export function MainLayout() {
 
   // 冷启动主动加载 members：RoomList 新建房间的邀请候选消费它——
   // 此前仅在 onRuntimeChanged 推送时加载，重启后直接新建房间会看到空邀请列表，
-  // 切到 Agent 视图（MembersPanel 挂载加载）再切回才恢复
+  // 切到 Agent 视图（MembersPanel 挂载加载）再切回才恢复。
+  // definitions 必须同载：useBotNameMap 需 members ∧ definitions 双源才能映射
+  // 配置名，此前仅 AddAgentDialog 打开才加载 → 作者位退化为内部 ID（CFO 走查 D3）
   useEffect(() => {
-    if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
-  }, [activeWorkspaceId, loadMembers]);
+    if (activeWorkspaceId) {
+      void loadMembers(activeWorkspaceId);
+      void loadDefinitions();
+    }
+  }, [activeWorkspaceId, loadMembers, loadDefinitions]);
 
   // 主进程在 agent 运行态变化（自动恢复完成/启停）时通知，重新加载 assignments，
   // 让 assignment.lastRunning 反映最新状态

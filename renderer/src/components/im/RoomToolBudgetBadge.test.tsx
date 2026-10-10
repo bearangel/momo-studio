@@ -68,7 +68,7 @@ describe('RoomToolBudgetBadge', () => {
     render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTitle('工具调用上限'));
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
     expect(screen.getByText(/继承全局/)).toBeInTheDocument();
     expect(screen.getByText('禁用工具 (0)')).toBeInTheDocument();
     expect(screen.getByText('无限制 (∞)')).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe('RoomToolBudgetBadge', () => {
     render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTitle('工具调用上限'));
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
     fireEvent.click(screen.getByText('禁用工具 (0)'));
     fireEvent.click(screen.getByText('保存'));
 
@@ -97,7 +97,7 @@ describe('RoomToolBudgetBadge', () => {
     render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('20次')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTitle('工具调用上限'));
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
     // popup 打开后，初始 draftChoice 应为 custom（因 roomValue=20）
     fireEvent.click(screen.getByText(/继承全局/));
     fireEvent.click(screen.getByText('保存'));
@@ -112,7 +112,7 @@ describe('RoomToolBudgetBadge', () => {
     render(<RoomToolBudgetBadge sessionId="sess-room" />);
     await waitFor(() => expect(screen.getByText('10次')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTitle('工具调用上限'));
+    fireEvent.click(screen.getByRole('button', { name: /工具调用上限/ }));
     expect(screen.getByText('无限制 (∞)')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('badge-backdrop'));

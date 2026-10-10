@@ -92,6 +92,37 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
 /** Retry-After 封顶：服务端给超大值时不无限等（60s） */
 const MAX_RETRY_AFTER_MS = 60_000;
 
+/**
+ * 流式错误消息的技术详情分段标记（renderer 据此切分主文案/技术详情双层呈现）。
+ * 主文案在人话层（用户可直接理解并获恢复指引），details 段为原始 HTTP 状态与
+ * 响应体（排障用）。
+ */
+export const STREAM_ERROR_DETAILS_SEP = '\n||details||\n';
+
+/** HTTP 状态码 → 用户态主文案（CFO 走查 D1：原始错误串不再裸露给用户） */
+function streamErrorUserMessage(status: number): string {
+  if (status === 401 || status === 403) return 'API Key 无效或无权限，请到设置中检查供应商密钥';
+  if (status === 404) return '模型或接口地址不存在，请检查模型名与 Base URL';
+  if (status === 429) return '服务繁忙（限流），请稍后重试';
+  if (status >= 500) return '模型服务暂时不可用';
+  return `请求被拒绝（HTTP ${status}）`;
+}
+
+/**
+ * 组装双层流式错误消息：主文案（人话 + 重试披露 + 断点恢复指引）+ details 段。
+ * retries 为 fetchWithRetry 实际消耗的重试次数（0 表示未及重试——如 401 直抛类）。
+ */
+export function buildStreamErrorMessage(
+  status: number,
+  details: string,
+  retries: number,
+): string {
+  const retryNote = retries > 0 ? `（已自动重试 ${retries} 次）` : '';
+  const main = `模型服务连接失败：${streamErrorUserMessage(status)}${retryNote}。本轮未完成，发送「继续」可从断点恢复`;
+  const trimmed = details.trim().slice(0, 2000);
+  return `${main}${STREAM_ERROR_DETAILS_SEP}HTTP ${status} ${trimmed}`;
+}
+
 /** 可中断退避睡眠：调用方 abort 时立即以 AbortError 拒绝（不睡完剩余时间） */
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -131,15 +162,23 @@ function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  opts?: { maxRetries?: number; timeoutMs?: number; signal?: AbortSignal },
+  opts?: {
+    maxRetries?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    /** 重试计数透出（引用传出）：耗尽返回 lastResponse 时调用方读 count 组装错误披露 */
+    observeRetries?: { count: number };
+  },
 ): Promise<Response> {
   const maxRetries = opts?.maxRetries ?? MAX_LLM_RETRIES;
   const timeoutMs = opts?.timeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
   const callerSignal = opts?.signal;
+  const retryCounter = opts?.observeRetries ?? { count: 0 };
   let lastError: Error | null = null;
   let lastResponse: Response | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    retryCounter.count = attempt;
     // 超时 controller 在响应头到达后 clear（见下）——只保护建连阶段
     const timeoutCtrl = new AbortController();
     const timer = setTimeout(() => timeoutCtrl.abort(), timeoutMs);
@@ -547,6 +586,7 @@ async function* chatStreamOpenAI(
   }
   applyOpenAIThinking(body, thinking);
 
+  const retryCounter = { count: 0 };
   const response = await fetchWithRetry(
     url,
     {
@@ -557,12 +597,12 @@ async function* chatStreamOpenAI(
       },
       body: JSON.stringify(body),
     },
-    { signal },
+    { signal, observeRetries: retryCounter },
   );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
-    throw new Error(`LLM 流式请求失败: HTTP ${response.status} ${errText}`);
+    throw new Error(buildStreamErrorMessage(response.status, errText, retryCounter.count));
   }
 
   // 非 SSE → 降级到非流式解析（整条 JSON 一次性返回）
@@ -706,6 +746,7 @@ async function* chatStreamAnthropic(
   }
 
   // 建立阶段重试语义与 OpenAI 路径一致（见 chatStreamOpenAI 注释）
+  const anthropicRetries = { count: 0 };
   const response = await fetchWithRetry(
     url,
     {
@@ -717,12 +758,12 @@ async function* chatStreamAnthropic(
       },
       body: JSON.stringify(body),
     },
-    { signal },
+    { signal, observeRetries: anthropicRetries },
   );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
-    throw new Error(`Anthropic 流式请求失败: HTTP ${response.status} ${errText}`);
+    throw new Error(buildStreamErrorMessage(response.status, errText, anthropicRetries.count));
   }
 
   // 非 SSE → 降级

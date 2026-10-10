@@ -101,10 +101,36 @@ function DispatchSegment({
   );
 }
 
+/** 主进程 llm-provider 的流式错误双层分隔符（契约：electron/src/main/agent/llm-provider.ts） */
+const STREAM_ERROR_DETAILS_SEP = '\n||details||\n';
+
+function StreamErrorBox({ error }: { error: string }) {
+  const sepIdx = error.indexOf(STREAM_ERROR_DETAILS_SEP);
+  const main = sepIdx > 0 ? error.slice(0, sepIdx) : error;
+  const details = sepIdx > 0 ? error.slice(sepIdx + STREAM_ERROR_DETAILS_SEP.length) : null;
+  return (
+    <div className="rounded border border-status-error/40 bg-status-error-tint px-2.5 py-1.5">
+      <p className="break-words text-xs text-status-error">{main}</p>
+      {details !== null && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none text-[11px] text-tertiary hover:text-secondary">
+            技术详情
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-tertiary">
+            {details}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function AgentStreamBubble({ stream, message, senderName }: Props) {
   const isStreaming = stream.status === 'streaming';
   const statusText = STATUS_TEXT[stream.status];
   const StatusIcon = STATUS_ICON[stream.status];
+  // 流式态进度线索：工具调用计数（长任务如 PPT 逐页生成时用户可感知推进，CFO 走查 D6）
+  const streamingLabel = stream.toolCalls.length > 0 ? `处理中 · 已调用工具 ${stream.toolCalls.length} 次` : '处理中';
 
   // 子 agent 流反查表：会话消息行的 streamSessionId → 消息 id（streams Map 的 key）。
   // 子 agent 消息行带 parentStreamSessionId，被 MessageList 过滤出顶层列表，
@@ -221,7 +247,7 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
               aria-hidden
               className={isStreaming ? 'animate-spin' : undefined}
             />
-            {statusText}
+            {isStreaming ? streamingLabel : statusText}
           </span>
           <BubbleToolbar
             message={message}
@@ -230,9 +256,7 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
           />
         </div>
         {!isStreaming && stream.error && (
-          <div className="whitespace-pre-wrap break-words rounded border border-status-error/40 bg-status-error-tint px-2 py-1.5 font-mono text-[11px] text-status-error">
-            {stream.error}
-          </div>
+          <StreamErrorBox error={stream.error} />
         )}
       </div>
 

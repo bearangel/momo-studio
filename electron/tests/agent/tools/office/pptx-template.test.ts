@@ -197,6 +197,9 @@ describe('fillPptTemplate 模板填充（spec §14.9-3）', () => {
     ps.addText('普通文本框', { x: 1, y: 1, w: 5, h: 1 });
     const plainBuf = Buffer.from((await plain.write({ outputType: 'nodebuffer' })) as Uint8Array);
     expect(() => fillPptTemplate(plainBuf, [{ title: 'x' }])).toThrow(/第 1 页无标题占位符/);
+    // D7 企业模板容忍：无 title 占位符但页内有 body 占位符且 fill 带 bullets →
+    // 跳过 title 只填 body（目录页形态：三 body 无 title）；不带 bullets 仍报错
+    expect(() => fillPptTemplate(plainBuf, [{ title: 'x', bullets: ['a'] }])).toThrow(/第 1 页无标题占位符/);
     // 母版只定义 title 占位符 → 页内无 body sp（pptxgenjs 会把母版占位符全量
     // 拷进 slide，故「无 body」只能由母版不定义来构造）
     const onlyTitle = new PptxGenJS();
@@ -211,6 +214,23 @@ describe('fillPptTemplate 模板填充（spec §14.9-3）', () => {
     os.addText('只有标题', { placeholder: 'title' });
     const otBuf = Buffer.from((await onlyTitle.write({ outputType: 'nodebuffer' })) as Uint8Array);
     expect(() => fillPptTemplate(otBuf, [{ title: 'x', bullets: ['a'] }])).toThrow(/第 1 页无正文占位符/);
+
+    // D7 容忍路径正向：仅 body 占位符（无 title）+ fill 带 bullets → 成功填 body
+    const bodyOnly = new PptxGenJS();
+    bodyOnly.layout = 'LAYOUT_16x9';
+    bodyOnly.defineSlideMaster({
+      title: 'BO',
+      objects: [
+        { placeholder: { options: { name: 'body', type: 'body', x: 0.5, y: 1.5, w: 9, h: 3 }, text: 'b' } },
+      ],
+    });
+    const bs = bodyOnly.addSlide({ masterName: 'BO' });
+    bs.addText('目录占位', { placeholder: 'body' });
+    const boBuf = Buffer.from((await bodyOnly.write({ outputType: 'nodebuffer' })) as Uint8Array);
+    const filled = fillPptTemplate(boBuf, [{ title: '（无处安放的标题）', bullets: ['条目一', '条目二'] }]);
+    const slideXml = new AdmZip(filled).readAsText('ppt/slides/slide1.xml');
+    expect(slideXml).toContain('<a:t>条目一</a:t>');
+    expect(slideXml).toContain('<a:t>条目二</a:t>');
   });
 });
 
@@ -227,5 +247,44 @@ describe('parsePptTemplateFills 入参窄化', () => {
     expect(() => parsePptTemplateFills([{ bullets: ['x'] }])).toThrow(/title/);
     expect(() => parsePptTemplateFills([{ title: 'a', bullets: 'x' }])).toThrow(/bullets/);
     expect(() => parsePptTemplateFills([{ title: 'a', bullets: ['x', 1] }])).toThrow(/bullets\[1\]/);
+  });
+});
+
+// ============ D7 修复：replaces 原文替换模式（企业模板正文非占位符场景） ============
+
+describe('fillPptTemplate replaces 模式（D7）', () => {
+  it('普通文本框（非占位符）原文被精确替换，转义正确', async () => {
+    const plain = new PptxGenJS();
+    plain.layout = 'LAYOUT_16x9';
+    const s = plain.addSlide();
+    s.addText('描述解决的痛点问题 & 示例', { x: 1, y: 1, w: 8, h: 1 });
+    const buf = Buffer.from((await plain.write({ outputType: 'nodebuffer' })) as Uint8Array);
+    const out = fillPptTemplate(buf, [{
+      title: 't',
+      replaces: [{ from: '描述解决的痛点问题 & 示例', to: '痛点一：手工制证 <效率低>' }],
+    }]);
+    const xml = new AdmZip(out).readAsText('ppt/slides/slide1.xml');
+    expect(xml).toContain('痛点一：手工制证 &lt;效率低&gt;');
+    expect(xml).not.toContain('描述解决的痛点问题');
+  });
+
+  it('from 未命中 → 明确报错（防静默丢内容）', async () => {
+    const plain = new PptxGenJS();
+    plain.layout = 'LAYOUT_16x9';
+    plain.addSlide().addText('实际原文', { x: 1, y: 1, w: 5, h: 1 });
+    const buf = Buffer.from((await plain.write({ outputType: 'nodebuffer' })) as Uint8Array);
+    expect(() => fillPptTemplate(buf, [{
+      title: 't',
+      replaces: [{ from: '不存在的原文', to: 'x' }],
+    }])).toThrow(/replaces 未命中/);
+  });
+
+  it('无任何占位符页 + replaces → 可填（容忍规则第三分支）', async () => {
+    const plain = new PptxGenJS();
+    plain.layout = 'LAYOUT_16x9';
+    plain.addSlide().addText('占位示例文本', { x: 1, y: 1, w: 5, h: 1 });
+    const buf = Buffer.from((await plain.write({ outputType: 'nodebuffer' })) as Uint8Array);
+    const out = fillPptTemplate(buf, [{ title: 't', replaces: [{ from: '占位示例文本', to: '替换成功' }] }]);
+    expect(new AdmZip(out).readAsText('ppt/slides/slide1.xml')).toContain('替换成功');
   });
 });

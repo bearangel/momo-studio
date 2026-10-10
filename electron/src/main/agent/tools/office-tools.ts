@@ -296,13 +296,13 @@ const OFFICE_CREATE_DOC_DEF: LLMToolDef = {
 const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   name: 'office_create_ppt',
   description:
-    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注；' +
-    '支持页级背景色（background，6 位 hex 如 1F3864）/插图（images，图先入 workspace、' +
-    '本工具只引用，扩展白名单 png/jpg/jpeg/gif/webp/bmp）/原生图表（chart，活图表非截图，' +
-    '数据由 agent 经 office_read_cells 取数提供）。' +
-    '简单版式（标题+内容），复杂排版不支持（spec 边界）。目标已存在时须先 office_read 读取后覆盖。' +
+    '生成专业版式 PPT（.pptx）：页型自动推断（首页封面/纯标题章节页/含图表图表页/末页空内容结尾页），' +
+    '常规内容页带主题色 title bar 与页脚页码；同页多项内容自动纵向编排不叠放，要点超 6 条自动双栏。' +
+    '支持页型显式指定（layout: cover/section/content/chart/closing）与主题色（accentColor，6 位 hex，' +
+    '缺省商务深蓝 1F4E79）；background 页底色（6 位 hex）/ images 插图（图先入 workspace）/' +
+    ' chart 原生图表（活图表非截图，数据由 agent 经 office_read_cells 取数提供；图表页正文要点建议 ≤2 条）。' +
     '用户提供 .pptx 模板要保留版式/主题/品牌时，改用 office_fill_ppt_template 按页填充；' +
-    '本页工具是基于 pptxgenjs 的全新生成，不继承模板样式。',
+    '本工具基于 pptxgenjs 全新生成，不继承模板样式。目标已存在时须先 office_read 读取后覆盖。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -314,6 +314,15 @@ const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
           type: 'object',
           properties: {
             title: { type: 'string' },
+            layout: {
+              type: 'string',
+              enum: ['cover', 'section', 'content', 'chart', 'closing'],
+              description: '页型（缺省自动推断：首页 cover、纯标题 section、含图表 chart、末页空内容 closing、其余 content）',
+            },
+            accentColor: {
+              type: 'string',
+              description: '本页主题强调色（6 位 hex，如 1F4E79；作用 title bar/色块/章节底色，缺省商务深蓝）',
+            },
             bullets: { type: 'array', items: { type: 'string' } },
             table: {
               type: 'object',
@@ -385,6 +394,8 @@ const OFFICE_FILL_PPT_DEF: LLMToolDef = {
     '以现有 .pptx 为模板填充标题与要点，产出新文件（另存语义——模板本身不动，字节零修改）。' +
     '公司模板的版式/主题/母版/品牌元素（背景/Logo/配色）全保留，只替换各页占位符文本。' +
     'slides 第 i 项填模板第 i 页：少于模板页数时多余页保持原样；某页不给 bullets 则该页正文不变；' +
+    '模板正文是普通文本框（非占位符，如示例句「描述解决的痛点问题」「演讲人：XXX」）时用 replaces ' +
+    '逐对原文替换——from 必须与模板原文精确一致（先用 office_read 读模板取原文），未命中报错防静默丢内容。' +
     '超出模板页数报错。输出已存在时须先 office_read 读取后覆盖。',
   inputSchema: {
     type: 'object',
@@ -397,11 +408,23 @@ const OFFICE_FILL_PPT_DEF: LLMToolDef = {
         items: {
           type: 'object',
           properties: {
-            title: { type: 'string', description: '新标题（保留模板标题样式）' },
+            title: { type: 'string', description: '新标题（保留模板标题样式；该页无标题占位符时可给占位值）' },
             bullets: {
               type: 'array',
               items: { type: 'string' },
               description: '要点列表（每条一段，保留模板正文样式；省略 = 正文不变）',
+            },
+            replaces: {
+              type: 'array',
+              description: '原文逐对替换（正文为非占位符文本框时用；from 精确匹配模板原文）',
+              items: {
+                type: 'object',
+                properties: {
+                  from: { type: 'string', description: '模板原文（精确一致）' },
+                  to: { type: 'string', description: '替换为的新文本' },
+                },
+                required: ['from', 'to'],
+              },
             },
           },
           required: ['title'],

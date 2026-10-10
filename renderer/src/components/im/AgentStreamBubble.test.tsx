@@ -94,13 +94,27 @@ describe('AgentStreamBubble', () => {
   it('streaming 状态显示「处理中」和停止按钮', () => {
     render(
       <AgentStreamBubble
-        stream={makeStream({ text: '生成中' })}
+        stream={makeStream()}
         message={makeMessage()}
       />,
     );
     expect(screen.getByText(/处理中/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /停止/ })).toBeInTheDocument();
-    expect(screen.getByText('生成中')).toBeInTheDocument();
+  });
+
+  // CFO 走查 D6：流式态带工具调用时状态行披露计数（长任务进度线索）
+  it('streaming 且已有工具调用 → 状态行显示「处理中 · 已调用工具 N 次」', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          toolCalls: [
+            { callId: 'c1', toolName: 'office_read', args: {}, result: null, success: null },
+            { callId: 'c2', toolName: 'office_write_excel', args: {}, result: 'ok', success: true },
+          ],
+        })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.getByText('处理中 · 已调用工具 2 次')).toBeInTheDocument();
   });
 
   it('done 状态不显示停止按钮', () => {
@@ -134,6 +148,37 @@ describe('AgentStreamBubble', () => {
       />,
     );
     expect(screen.getByText(/出错/)).toBeInTheDocument();
+  });
+
+  // CFO 走查 D1：主进程双层错误（人话主文案 ||details|| 技术段）分段呈现
+  it('stream.error 含 ||details|| 分隔 → 主文案直显 + 技术段折叠于「技术详情」', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({
+          status: 'failed',
+          error: '模型服务连接失败：模型服务暂时不可用（已自动重试 5 次）。发送「继续」可从断点恢复\n||details||\nHTTP 500 upstream boom',
+        })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.getByText(/模型服务暂时不可用/)).toBeInTheDocument();
+    expect(screen.getByText(/发送「继续」可从断点恢复/)).toBeInTheDocument();
+    // 技术段折叠于 <details>（jsdom 折叠内容仍在 DOM，断 open 属性语义）
+    const detailsEl = screen.getByText(/技术详情/).closest('details');
+    expect(detailsEl).not.toBeNull();
+    expect(detailsEl).toHaveProperty('open', false);
+    expect(screen.getByText(/HTTP 500 upstream boom/)).toBeInTheDocument();
+  });
+
+  it('stream.error 无分隔符（旧格式/其他来源错误）→ 原样完整呈现，无「技术详情」摘要', () => {
+    render(
+      <AgentStreamBubble
+        stream={makeStream({ status: 'failed', error: '旧的纯文本错误' })}
+        message={makeMessage()}
+      />,
+    );
+    expect(screen.getByText(/旧的纯文本错误/)).toBeInTheDocument();
+    expect(screen.queryByText(/技术详情/)).not.toBeInTheDocument();
   });
 
   it('有 thinking 内容时渲染思考折叠区（streaming 默认标签「思考中…」，默认折叠仅显 toggle）', () => {

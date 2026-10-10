@@ -364,4 +364,49 @@ describe('chatStream — 建立阶段指数退避重试', () => {
       vi.useRealTimers();
     }
   });
+
+  // CFO 走查 D1 回归锁：重试耗尽后错误消息为双层结构——主文案（人话转译 +
+  // 重试次数披露 + 断点恢复指引）+ ||details|| 技术段（原始状态码与响应体）
+  it('500 全程耗尽 → 错误双层：人话主文案 + 重试披露 + 恢复指引 + details 技术段', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValue({ ok: false, status: 500, text: async () => 'upstream boom' } as unknown as Response);
+
+      const provider = createLLMProvider({ model: 'glm-4' }, 'key');
+      const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+      const p = (async () => { for await (const _ of iter) void _; })();
+      p.catch(() => {});
+      await vi.advanceTimersByTimeAsync(35_000);
+      await expect(p).rejects.toThrow();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(6);
+      const err = (await p.catch((e: Error) => e.message)) as string;
+      expect(err).toContain('模型服务暂时不可用');
+      expect(err).toContain('已自动重试 5 次');
+      expect(err).toContain('发送「继续」可从断点恢复');
+      expect(err).toContain('\n||details||\n');
+      const details = err.split('\n||details||\n')[1] ?? '';
+      expect(details).toContain('HTTP 500');
+      expect(details).toContain('upstream boom');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('401（不可重试状态）→ 直抛人话「API Key 无效」且不披露重试次数', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ ok: false, status: 401, text: async () => '{"error":"bad key"}' } as unknown as Response);
+
+    const provider = createLLMProvider({ model: 'glm-4' }, 'key');
+    const iter = provider.chatStream!([{ role: 'user', content: 'hi' }], undefined, new AbortController().signal);
+    const p = (async () => { for await (const _ of iter) void _; })();
+    await expect(p).rejects.toThrow();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const err = (await p.catch((e: Error) => e.message)) as string;
+    expect(err).toContain('API Key 无效或无权限');
+    expect(err).not.toContain('已自动重试');
+    expect(err.split('\n||details||\n')[1] ?? '').toContain('HTTP 401');
+  });
 });
