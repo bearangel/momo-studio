@@ -394,6 +394,8 @@ const OFFICE_FILL_PPT_DEF: LLMToolDef = {
     '以现有 .pptx 为模板填充标题与要点，产出新文件（另存语义——模板本身不动，字节零修改）。' +
     '公司模板的版式/主题/母版/品牌元素（背景/Logo/配色）全保留，只替换各页占位符文本。' +
     'slides 第 i 项填模板第 i 页：少于模板页数时多余页保持原样；某页不给 bullets 则该页正文不变；' +
+    '模板正文是普通文本框（非占位符，如示例句「描述解决的痛点问题」「演讲人：XXX」）时用 replaces ' +
+    '逐对原文替换——from 必须与模板原文精确一致（先用 office_read 读模板取原文），未命中报错防静默丢内容。' +
     '超出模板页数报错。输出已存在时须先 office_read 读取后覆盖。',
   inputSchema: {
     type: 'object',
@@ -406,11 +408,23 @@ const OFFICE_FILL_PPT_DEF: LLMToolDef = {
         items: {
           type: 'object',
           properties: {
-            title: { type: 'string', description: '新标题（保留模板标题样式）' },
+            title: { type: 'string', description: '新标题（保留模板标题样式；该页无标题占位符时可给占位值）' },
             bullets: {
               type: 'array',
               items: { type: 'string' },
               description: '要点列表（每条一段，保留模板正文样式；省略 = 正文不变）',
+            },
+            replaces: {
+              type: 'array',
+              description: '原文逐对替换（正文为非占位符文本框时用；from 精确匹配模板原文）',
+              items: {
+                type: 'object',
+                properties: {
+                  from: { type: 'string', description: '模板原文（精确一致）' },
+                  to: { type: 'string', description: '替换为的新文本' },
+                },
+                required: ['from', 'to'],
+              },
             },
           },
           required: ['title'],

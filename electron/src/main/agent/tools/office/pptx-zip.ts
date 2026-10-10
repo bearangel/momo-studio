@@ -23,10 +23,13 @@ import AdmZip from 'adm-zip';
 import { asString, asStringArray } from './format';
 import { attrValue, normalizeOfficePath, parseRels } from './xlsx-zip';
 
-/** 填充指令（parse 后形态）：title 必填；bullets 非空数组才触发 body 填充（省略 = 正文保持原样） */
+/** 填充指令（parse 后形态）：title 必填；bullets 非空数组才触发 body 填充（省略 = 正文保持原样）；
+ *  replaces 逐对全文文本替换（D7：企业模板正文常为普通文本框而非占位符——
+ *  示例文本「描述解决的痛点问题」等只有 replaces 够得着；from/to 均经 xmlEscape） */
 export interface PptTemplateSlideFill {
   title: string;
   bullets?: string[];
+  replaces?: Array<{ from: string; to: string }>;
 }
 
 /** XML 文本转义（& 必须最先，防 &amp;lt; 二次转义）——title/bullets 写入 <a:t> 前统一过此关 */
@@ -138,26 +141,50 @@ function slideFilesInOrder(zip: AdmZip): string[] {
   return out;
 }
 
-/** 单页 slide XML 填充。占位符缺失/结构异常给「第 N 页」明确的中文错误。 */
+/** 单页 slide XML 填充。占位符缺失/结构异常给「第 N 页」明确的中文错误。
+ *  企业模板容忍（D7 修复第一步）：目录页等仅含 body 占位符、无 title 占位符的
+ *  页真实存在——该页 fill 带 bullets 时跳过 title 只填 body；页内 title 与 body
+ *  占位符全无（垃圾模板）仍给明确错误。 */
 function fillSlideXml(xml: string, fill: PptTemplateSlideFill, pageNo: number): string {
   const sps = scanAll(SP_RE, xml);
   const titleSp = sps.find((s) => {
     const ph = phInfoOf(s.xml);
     return ph !== null && (ph.type === 'title' || ph.type === 'ctrTitle');
   });
-  if (titleSp === undefined) {
-    throw new Error(`第 ${pageNo} 页无标题占位符（模板填充要求该页含 title 占位符）`);
+  const bodySp = sps.find((s) => {
+    const ph = phInfoOf(s.xml);
+    return ph !== null && ph.type === 'body';
+  });
+  const hasReplaces = (fill.replaces?.length ?? 0) > 0;
+  if (titleSp === undefined && !hasReplaces && (bodySp === undefined || !fill.bullets)) {
+    throw new Error(`第 ${pageNo} 页无标题占位符（模板填充要求该页含 title 占位符，或含 body 占位符且 slides 项带 bullets，或该页带 replaces）`);
   }
-  const titleTx = titleSp.xml.match(TXBODY_RE);
-  if (titleTx === null) throw new Error(`第 ${pageNo} 页标题占位符无文本体（txBody 缺失）`);
-  const newTitleTx = replaceFirstRun(titleTx[0] ?? '', xmlEscape(fill.title));
-  if (newTitleTx === null) throw new Error(`第 ${pageNo} 页标题占位符结构异常（无段落无 run）`);
-
   // 偏移基准统一取原始 xml；按 start 降序套用（后位先改不破坏前位偏移）
-  const titleStart = titleSp.start + (titleTx.index ?? 0);
-  const edits: Array<{ start: number; end: number; next: string }> = [
-    { start: titleStart, end: titleStart + (titleTx[0] ?? '').length, next: newTitleTx },
-  ];
+  const edits: Array<{ start: number; end: number; next: string }> = [];
+  if (titleSp !== undefined) {
+    const titleTx = titleSp.xml.match(TXBODY_RE);
+    if (titleTx === null) throw new Error(`第 ${pageNo} 页标题占位符无文本体（txBody 缺失）`);
+    const newTitleTx = replaceFirstRun(titleTx[0] ?? '', xmlEscape(fill.title));
+    if (newTitleTx === null) throw new Error(`第 ${pageNo} 页标题占位符结构异常（无段落无 run）`);
+    const titleStart = titleSp.start + (titleTx.index ?? 0);
+    edits.push({ start: titleStart, end: titleStart + (titleTx[0] ?? '').length, next: newTitleTx });
+  }
+  // replaces：全文（含占位符区）逐对替换。PowerPoint 编辑器常态单 run 单 <a:t>，
+  // from 命中率高；拆 run 场景（同一句被切成多个 <a:t>）不在此列——调用方给
+  // 完整句锚点即可，替换后未命中的 from 由调用方自查（此处不静默吞）。
+  for (const rep of fill.replaces ?? []) {
+    const from = xmlEscape(rep.from);
+    let idx = xml.indexOf(from);
+    let hit = false;
+    while (idx !== -1) {
+      edits.push({ start: idx, end: idx + from.length, next: xmlEscape(rep.to) });
+      hit = true;
+      idx = xml.indexOf(from, idx + from.length);
+    }
+    if (!hit) {
+      throw new Error(`第 ${pageNo} 页 replaces 未命中：模板页内找不到「${rep.from.slice(0, 30)}」（可能被拆分为多个文本 run）`);
+    }
+  }
 
   const bullets = fill.bullets ?? [];
   if (bullets.length > 0) {
@@ -208,6 +235,17 @@ export function parsePptTemplateFills(raw: unknown): PptTemplateSlideFill[] {
     const fill: PptTemplateSlideFill = { title: asString(rec.title, `slides[${i}].title`) };
     if (rec.bullets !== undefined && rec.bullets !== null) {
       fill.bullets = asStringArray(rec.bullets, `slides[${i}].bullets`);
+    }
+    if (rec.replaces !== undefined && rec.replaces !== null) {
+      if (!Array.isArray(rec.replaces)) throw new Error(`slides[${i}].replaces 不是数组`);
+      fill.replaces = rec.replaces.map((r, ri) => {
+        if (typeof r !== 'object' || r === null) throw new Error(`slides[${i}].replaces[${ri}] 不是对象`);
+        const rr = r as Record<string, unknown>;
+        return {
+          from: asString(rr.from, `slides[${i}].replaces[${ri}].from`),
+          to: asString(rr.to, `slides[${i}].replaces[${ri}].to`),
+        };
+      });
     }
     return fill;
   });
