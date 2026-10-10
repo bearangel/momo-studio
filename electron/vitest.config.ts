@@ -41,6 +41,7 @@ export default defineConfig({
       ['tests/sandbox/**', 'forks'],
       ['tests/marketplace/**', 'forks'],
       ['tests/git/**', 'forks'],
+      ['tests/onboarding/**', 'forks'],
     ],
     coverage: {
       provider: 'v8',
