@@ -51,7 +51,9 @@ test('v25 冒烟：应用启动 → 首启空态（创建工作空间表单）�
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
 
-    // 首启空态：TitleBar + 内嵌 CreateWorkspaceDialog（「名称」输入必现）
+    // 首启空态（spec 2026-10-10 §3.1）：引导 pending → 向导接管；跳过后落回
+    // 原空态（TitleBar + 内嵌 CreateWorkspaceDialog，「名称」输入必现）
+    await win.getByRole('button', { name: '跳过引导' }).click({ timeout: 15000 });
     await expect(win.getByLabel('名称')).toBeVisible({ timeout: 15000 });
 
     // SQLite 状态库已在隔离 userData 目录创建（主进程 boot 链完成迁移）

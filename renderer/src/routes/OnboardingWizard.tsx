@@ -3,7 +3,7 @@
 // 新装引导向导（spec 2026-10-10 §3/§8）：取代 App.tsx 首启空态分支。
 // 步骤状态本地持有（真实配置是唯一状态源——spec §3.2 幂等预填原则）。
 // 各步骤组件分任务接线：本文件先立骨架与欢迎页，其余为占位推进件。
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { TitleBar } from '../components/layout/TitleBar';
 import { WelcomeStep } from '../components/onboarding/WelcomeStep';
 import { ProviderStep } from '../components/onboarding/ProviderStep';
@@ -55,11 +55,8 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
   const [planWarnings, setPlanWarnings] = useState<string[]>([]);
   const [applyResult, setApplyResult] = useState<OnboardingApplyResult | null>(null);
 
-  useEffect(() => {
-    // 触发条件已在 App.tsx 判定（workspaces 空 + status pending）；
-    // 此处拉一次状态仅作防御，失败按 pending 处理不阻塞启动（Review Focus 5）
-    void ipc.onboarding.getStatus().catch(() => undefined);
-  }, []);
+  // 状态判定收敛在 App（workspaces 空 + status pending 才挂载本向导）——
+  // 此处不再重复查询（子 effect 先于父 effect 执行，双查会与 App 竞态消费）
 
   const ctx: WizardCtx = {
     route: route ?? 'manual',

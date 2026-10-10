@@ -63,6 +63,14 @@ const mockApi = {
     isMaximized: vi.fn().mockResolvedValue(false),
     onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
   },
+  // 新装引导（spec 2026-10-10）：默认 skipped——既有分支断言走原空态不变；
+  // 向导分支由专条用例覆盖（getStatus 回 pending）
+  onboarding: {
+    getStatus: vi.fn().mockResolvedValue({ status: 'skipped' as const }),
+    markDone: vi.fn().mockResolvedValue(undefined),
+    generatePlan: vi.fn(),
+    applyPlan: vi.fn(),
+  },
   // v2.4 Task 9：SandboxNotice 挂载拉取聚合信息——默认「已可用」使提示卡不渲染，
   // 既有分支断言不受影响
   sandbox: {
@@ -148,6 +156,14 @@ describe('App 启动分支（v2.0 P1 Task 11）', () => {
     render(<App />);
     expect(await screen.findByRole('heading', { name: '新建工作空间' })).toBeInTheDocument();
     expect(screen.queryByTestId('main-shell')).not.toBeInTheDocument();
+  });
+
+  it('无 workspace 且引导 pending → 向导接管空态（spec 2026-10-10 §3.1）', async () => {
+    mockApi.workspace.list.mockResolvedValue([]);
+    mockApi.onboarding.getStatus.mockResolvedValueOnce({ status: 'pending' });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: /AI 引导/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '新建工作空间' })).not.toBeInTheDocument();
   });
 
   it('首启空态也渲染 TitleBar（frameless 下可拖拽/关闭，P2 Task 3）', async () => {
