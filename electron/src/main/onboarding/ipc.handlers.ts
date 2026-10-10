@@ -6,6 +6,7 @@ import { ipcMain } from 'electron';
 import { logger } from '../logger';
 import { readOnboardingStatus, markOnboardingDone } from './status';
 import { generateOnboardingPlan } from './plan-generator';
+import { applyOnboardingPlan } from './plan-applier';
 
 export function registerOnboardingHandlers(): void {
   ipcMain.handle('onboarding:getStatus', () => ({ status: readOnboardingStatus() }));
@@ -19,6 +20,11 @@ export function registerOnboardingHandlers(): void {
     'onboarding:generatePlan',
     (_e, input: { requirement: string; providerId: string; modelId: string }) =>
       generateOnboardingPlan(input),
+  );
+
+  ipcMain.handle(
+    'onboarding:applyPlan',
+    (_e, input: Parameters<typeof applyOnboardingPlan>[0]) => applyOnboardingPlan(input),
   );
 
   logger.info('Onboarding IPC handlers 已注册');
