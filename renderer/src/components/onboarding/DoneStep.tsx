@@ -2,6 +2,7 @@
 //
 // 完成页（spec 2026-10-10 §8 + 预览帧⑥）：配置摘要（applyResult 缺省兜底）
 // + 开始使用 → markDone({skipped:false}) → finish（App 重拉 → MainShell）。
+import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { Button } from '../ui/Button';
@@ -14,10 +15,16 @@ interface Props {
 export function DoneStep({ ctx }: Props) {
   const r = ctx.applyResult;
   const agentNames = r ? r.applied.map((a) => a.name).join(' · ') : '';
+  const [error, setError] = useState<string | null>(null);
 
   const start = async (): Promise<void> => {
-    await ipc.onboarding.markDone({ skipped: false });
-    ctx.finish();
+    // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）
+    try {
+      await ipc.onboarding.markDone({ skipped: false });
+      ctx.finish();
+    } catch (e) {
+      setError(`保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`);
+    }
   };
 
   return (
@@ -46,6 +53,11 @@ export function DoneStep({ ctx }: Props) {
           <div className="py-1.5 text-xs text-secondary">配置已应用</div>
         )}
       </div>
+      {error && (
+        <p className="mt-2 text-xs text-status-error" role="alert">
+          {error}
+        </p>
+      )}
       <Button type="button" className="w-full" onClick={() => void start()}>
         开始使用
       </Button>

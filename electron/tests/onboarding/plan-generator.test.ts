@@ -166,6 +166,19 @@ describe('generateOnboardingPlan', () => {
     ).rejects.toThrow('供应商不存在');
   });
 
+  it('API key 为空 → 中文错误，不产生半配置（Review Focus 3 另一半）', async () => {
+    // 覆盖 keychain stub：prov-1 的 key 解析为 null
+    setKeychainImpl({
+      async getSecret() {
+        return null;
+      },
+      async setSecret() {},
+      async deleteSecret() {},
+    });
+    const deps: PlanDeps = { callLlm: async () => llmReply(VALID_PLAN_JSON) };
+    await expect(generateOnboardingPlan(baseInput, deps)).rejects.toThrow('API key 未配置');
+  });
+
   it('需求超 4000 字符截断（Review Focus 6）', async () => {
     let seen = '';
     const deps: PlanDeps = {

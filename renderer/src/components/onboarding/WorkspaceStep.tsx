@@ -15,13 +15,19 @@ interface Props {
 export function WorkspaceStep({ ctx }: Props) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
+  // I1（终审）：上一步回退重进时 ctx.workspaceId 已非空——直通路线下一步，
+  // 不再依赖 activeWorkspaceId 翻转（恰好落实 spec §3.2「已有 ws 防御性跳过③」）
   useEffect(() => {
-    if (!ctx.workspaceId && activeWorkspaceId) {
+    if (ctx.workspaceId) {
+      ctx.go(ctx.route === 'ai' ? 'requirement' : 'manualAgents');
+      return;
+    }
+    if (activeWorkspaceId) {
       ctx.setWorkspace(activeWorkspaceId);
       ctx.go(ctx.route === 'ai' ? 'requirement' : 'manualAgents');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在 ws 翻转时推进一次
-  }, [activeWorkspaceId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在 ws 语义变化时判定一次
+  }, [activeWorkspaceId, ctx.workspaceId]);
 
   return (
     <div className="w-[440px]">

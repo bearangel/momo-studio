@@ -11,7 +11,7 @@ import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
 import { applyOnboardingPlan } from '../../src/main/onboarding/plan-applier';
 import { getAgentDefinition, listMembers, listAgentDefinitions } from '../../src/main/agent/agent-queries';
 import { getWorkspace, createWorkspace } from '../../src/main/workspace/crud';
-import { SAFE_MINIMUM_TOOLS } from '../../src/main/agent/tools/catalog';
+import { SAFE_MINIMUM_TOOLS, ALL_BUILTIN_TOOLS } from '../../src/main/agent/tools/catalog';
 
 const tmpRoot = path.join(os.tmpdir(), `onboarding-apply-${Date.now()}`);
 
@@ -116,6 +116,18 @@ describe('applyOnboardingPlan', () => {
     expect(def?.modelProviderId).toBe('prov-1');
     expect(def?.modelName).toBe('glm-test');
     expect(def?.defaultTools.map((t) => t.ref).sort()).toEqual([...SAFE_MINIMUM_TOOLS].sort());
+  });
+
+  it('custom 项工具档映射 all → ALL_BUILTIN_TOOLS（映射另一半）', async () => {
+    await applyOnboardingPlan({
+      plan: { agents: [{ ...CUSTOM_AGENT, toolPreset: 'all' }], defaultAgentIndex: 0 },
+      workspaceId: wsId,
+      providerId: 'prov-1',
+      modelId: 'glm-test',
+    });
+    const member = listMembers(wsId)[0]!;
+    const def = getAgentDefinition(member.agentDefinitionId);
+    expect(def?.defaultTools.map((t) => t.ref).sort()).toEqual([...ALL_BUILTIN_TOOLS].sort());
   });
 
   it('幂等：整包重复应用无重复 def / 成员（Review Focus 2）', async () => {

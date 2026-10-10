@@ -39,6 +39,10 @@ export function App() {
   // ——跳过路径 workspaces 仍为空，须靠 status=skipped 防向导重现。
   const [obStatus, setObStatus] = useState<'pending' | 'completed' | 'skipped'>('pending');
   const [obCheck, setObCheck] = useState(0);
+  // C1 闩锁（终审）：向导一经挂载，进行期 store.create 使 workspaces 变非空也
+  // 不得卸载——判定收敛为 wizardOpen 单点，仅在本 effect（boot / 收尾重拉）与
+  // onWizardFinished 里翻转；向导中途任何 store 更新都碰不到它
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   // 全局会话通道订阅（session:message + session:message_event_batch；
   // Task 12 起全部发送方统一走 session:* 通道，无桥接）。
@@ -71,18 +75,26 @@ export function App() {
     void load().finally(() => setBootstrapped(true));
   }, [load]);
 
-  // 新装引导：bootstrapped 后（及向导每次收尾后）拉取一次性状态；失败静默按 pending
+  // 新装引导：bootstrapped 后（及向导每次收尾后）拉取一次性状态；失败静默按 pending。
+  // wizardOpen 只在此处置 true（boot 时 pending 且无 ws）或置 false（收尾重拉见终态）
   useEffect(() => {
     if (!bootstrapped) return;
     void ipc.onboarding
       .getStatus()
-      .then((r) => setObStatus(r.status))
-      .catch(() => undefined);
+      .then((r) => {
+        setObStatus(r.status);
+        setWizardOpen(r.status === 'pending' && useWorkspaceStore.getState().workspaces.length === 0);
+      })
+      .catch(() => {
+        setObStatus('pending');
+        setWizardOpen(useWorkspaceStore.getState().workspaces.length === 0);
+      });
   }, [bootstrapped, obCheck]);
 
-  // 向导收尾（完成或跳过）：重拉 status + workspaces——完成→ws 非空进 MainShell；
-  // 跳过→status=skipped 落回原空态表单
+  // 向导收尾（完成或跳过）：乐观收闩 + 重拉 status + workspaces——完成→ws 非空进
+  // MainShell；跳过→status=skipped 落回原空态表单
   const onWizardFinished = useCallback(() => {
+    setWizardOpen(false);
     setObCheck((n) => n + 1);
     void load();
   }, [load]);
@@ -109,14 +121,16 @@ export function App() {
 
   if (!bootstrapped) return null;
 
+  // 向导闩锁优先于 workspaces 判空（C1：进行期 ws 创建不得卸载向导）
+  if (wizardOpen) {
+    return <OnboardingWizard onFinished={onWizardFinished} />;
+  }
+
   if (workspaces.length === 0) {
-    // 首启空态（spec 2026-10-10 §3.1）：引导 pending → 向导接管；skipped/completed
-    // → 原空态（TitleBar + 内嵌创建表单）。创建成功后 store 写入 workspace →
-    // 分支翻转进 MainShell。onClose 重新拉取列表兜底（仍为空则表单保持）。
+    // 首启空态（spec 2026-10-10 §3.1）：skipped/completed → 原空态（TitleBar +
+    // 内嵌创建表单）。创建成功后 store 写入 workspace → 分支翻转进 MainShell。
+    // onClose 重新拉取列表兜底（仍为空则表单保持）。
     // 注：升级提示不在首启空态渲染——新装用户无标记；纯 2.0 新装命中此分支无需告知。
-    if (obStatus === 'pending') {
-      return <OnboardingWizard onFinished={onWizardFinished} />;
-    }
     return (
       <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
         <TitleBar />

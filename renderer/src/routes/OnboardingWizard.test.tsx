@@ -54,6 +54,17 @@ describe('OnboardingWizard', () => {
     expect(onFinished).toHaveBeenCalled();
   });
 
+  it('I2 回归：跳过时 markDone 失败 → 行内中文错误，向导不关（onFinished 不调）', async () => {
+    const onFinished = vi.fn();
+    mocked.markDone.mockRejectedValueOnce(new Error('kv write failed'));
+    render(<OnboardingWizard onFinished={onFinished} />);
+    fireEvent.click(await screen.findByRole('button', { name: /跳过引导/ }));
+    expect(await screen.findByText(/保存引导状态失败/)).toBeInTheDocument();
+    expect(onFinished).not.toHaveBeenCalled();
+    // 向导仍在（欢迎页按钮可见）
+    expect(screen.getByRole('button', { name: /AI 引导/ })).toBeInTheDocument();
+  });
+
   it('选择 AI 路线进入供应商步骤（第②步标题可见）', async () => {
     render(<OnboardingWizard onFinished={() => undefined} />);
     fireEvent.click(await screen.findByRole('button', { name: /AI 引导/ }));

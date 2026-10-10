@@ -61,6 +61,18 @@ describe('WorkspaceStep', () => {
     expect(screen.getByRole('button', { name: '选择目录' })).toBeInTheDocument();
   });
 
+  it('I1 回归：已建 workspace 重进本步（上一步回退）→ 直通路线下一步，不卡死', async () => {
+    const ctx = mkCtx('ai');
+    (ctx as unknown as { workspaceId: string }).workspaceId = 'ws-1';
+    render(<WorkspaceStep ctx={ctx} />);
+    await waitFor(() => expect(ctx.go).toHaveBeenCalledWith('requirement'));
+    // 手动路线分叉同样直通
+    const ctx2 = mkCtx('manual');
+    (ctx2 as unknown as { workspaceId: string }).workspaceId = 'ws-1';
+    render(<WorkspaceStep ctx={ctx2} />);
+    await waitFor(() => expect(ctx2.go).toHaveBeenCalledWith('manualAgents'));
+  });
+
   it('AI 路线：创建成功 → setWorkspace(ws-1) + go(requirement)', async () => {
     const ctx = mkCtx('ai');
     render(<WorkspaceStep ctx={ctx} />);

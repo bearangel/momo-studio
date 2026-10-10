@@ -54,6 +54,7 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
   const [plan, setPlan] = useState<OnboardingPlan | null>(null);
   const [planWarnings, setPlanWarnings] = useState<string[]>([]);
   const [applyResult, setApplyResult] = useState<OnboardingApplyResult | null>(null);
+  const [skipError, setSkipError] = useState<string | null>(null);
 
   // 状态判定收敛在 App（workspaces 空 + status pending 才挂载本向导）——
   // 此处不再重复查询（子 effect 先于父 effect 执行，双查会与 App 竞态消费）
@@ -87,16 +88,30 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
       <TitleBar />
       <div className="flex-1 min-h-0 flex items-center justify-center p-6">
         {step === 'welcome' && (
-          <WelcomeStep
-            onSelect={(r) => {
-              setRoute(r);
-              setStep('provider');
-            }}
-            onSkip={async () => {
-              await ipc.onboarding.markDone({ skipped: true });
-              onFinished();
-            }}
-          />
+          <>
+            <WelcomeStep
+              onSelect={(r) => {
+                setRoute(r);
+                setStep('provider');
+              }}
+              onSkip={async () => {
+                // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）
+                try {
+                  await ipc.onboarding.markDone({ skipped: true });
+                  onFinished();
+                } catch (e) {
+                  setSkipError(
+                    `保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`,
+                  );
+                }
+              }}
+            />
+            {skipError && (
+              <p className="mt-3 text-xs text-status-error" role="alert">
+                {skipError}
+              </p>
+            )}
+          </>
         )}
         {step === 'provider' && <ProviderStep ctx={ctx} />}
         {step === 'workspace' && <WorkspaceStep ctx={ctx} />}

@@ -72,4 +72,13 @@ describe('DoneStep', () => {
     await waitFor(() => expect(mockMarkDone).toHaveBeenCalledWith({ skipped: false }));
     expect(ctx.finish).toHaveBeenCalled();
   });
+
+  it('I2 回归：markDone 失败 → 行内中文错误呈现，向导不关（finish 不调）', async () => {
+    const ctx = mkCtx(APPLY_RESULT);
+    mockMarkDone.mockRejectedValueOnce(new Error('kv write failed'));
+    render(<DoneStep ctx={ctx} />);
+    fireEvent.click(await screen.findByRole('button', { name: /开始使用/ }));
+    expect(await screen.findByText(/保存引导状态失败/)).toBeInTheDocument();
+    expect(ctx.finish).not.toHaveBeenCalled();
+  });
 });
