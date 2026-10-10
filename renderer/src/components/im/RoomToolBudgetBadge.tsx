@@ -81,10 +81,12 @@ export function RoomToolBudgetBadge({ sessionId }: Props) {
       <button
         type="button"
         onClick={openPopup}
-        title="工具调用上限"
+        title="工具调用上限：单个 agent 回合内可调用工具的次数上限，点击修改"
+        aria-label={`工具调用上限 ${badgeLabel}，点击修改`}
         className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-secondary hover:bg-surface-3 hover:text-primary"
       >
         <Wrench size={12} strokeWidth={1.75} aria-hidden />
+        <span>工具上限</span>
         <span>{badgeLabel}</span>
       </button>
 

@@ -47,6 +47,7 @@ const mockApi = {
     onRuntimeChanged: vi.fn().mockReturnValue(() => {}),
     isRunning: vi.fn().mockResolvedValue(false),
     listMembers: vi.fn().mockResolvedValue([]),
+    list: vi.fn().mockResolvedValue([]),
   },
   task: {
     list: vi.fn().mockResolvedValue([]),
@@ -327,5 +328,19 @@ describe('MainLayout — loadMembers 冷启动（邀请列表回归锁）', () =
     render(<MainLayout />);
     await new Promise((r) => setTimeout(r, 0));
     expect(mockApi.agent.listMembers).not.toHaveBeenCalled();
+  });
+
+  // CFO 走查 D3 回归锁：useBotNameMap 需 definitions 才能把 agentUserId 映射为
+  // 配置名；definitions 不随 members 冷启动加载时，消息作者位退化为内部实例 ID
+  it('挂载加载 members 的同 effect 也加载 definitions（作者位配置名双源）', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [STUB_WORKSPACE],
+      activeWorkspaceId: STUB_WORKSPACE.id,
+    });
+    render(<MainLayout />);
+    await new Promise((r) => setTimeout(r, 0));
+    // ipc 代理层把无参调用序列化为显式 undefined（契约即如此）
+    expect(mockApi.agent.list).toHaveBeenCalledWith(undefined);
+    expect(mockApi.agent.listMembers).toHaveBeenCalledWith(STUB_WORKSPACE.id);
   });
 });

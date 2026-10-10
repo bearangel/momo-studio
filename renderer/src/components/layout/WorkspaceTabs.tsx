@@ -6,7 +6,7 @@
 // / 删除 confirm / 打开目录），Esc / 点击菜单外部关闭。整个 tab 条是交互区，
 // 整体标 no-drag。
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X, Plus, Folder } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
@@ -153,7 +153,7 @@ export function WorkspaceTabs() {
                 />
               ) : (
                 <>
-                  <span className="text-xs leading-none">{ws.iconEmoji}</span>
+                  <Folder size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-tertiary" />
                   <span className="truncate" style={{ maxWidth: 120 }}>
                     {ws.name}
                   </span>

@@ -79,7 +79,7 @@ export function MessageFrame({
           <span className="px-1 text-xs text-secondary">
             {senderName ?? shortName(sender)}
             {timestamp !== undefined && (
-              <span className="ml-1 text-[11px] text-tertiary">{formatHHmm(timestamp)}</span>
+              <span className="ml-2 text-[11px] text-tertiary">{formatHHmm(timestamp)}</span>
             )}
           </span>
         )}
