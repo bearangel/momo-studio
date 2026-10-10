@@ -10,6 +10,7 @@ import os from 'node:os';
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { setKeychainImpl } from '../../src/main/storage/keychain';
 import { setBuiltinAgentsDir } from '../../src/main/agent/builtin';
+import type { LLMResponse } from '../../src/main/agent/llm-provider';
 import {
   generateOnboardingPlan,
   buildPlanPrompt,
@@ -41,11 +42,7 @@ spec:
 `;
 
 /** LLMResponse 形状保真（mock 边界与真实一致） */
-function llmReply(content: string): {
-  content: string;
-  toolCalls: unknown[];
-  finishReason: 'stop' | 'tool_use';
-} {
+function llmReply(content: string): LLMResponse {
   return { content, toolCalls: [], finishReason: 'stop' };
 }
 
