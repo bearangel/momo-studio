@@ -245,3 +245,55 @@ describe('CollabSessionDialog — 失败路径', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe('CollabSessionDialog - 已启用未加入本空间的 agent（2026-10-10 走查反馈）', () => {
+  it('def 已启用但未加入本空间：分区显示「+ 加入」入口，点击调 addMember(workspaceId, defId)', () => {
+    const addMember = vi.fn();
+    useAgentStore.setState({
+      definitions: [DEF_1, DEF_2],
+      members: [MEMBER_1], // DEF_2 已启用但未加入
+      addMember,
+    });
+    render(<CollabSessionDialog onClose={() => {}} />);
+    // 未加入分区出现 DEF_2，且不是可选项（radio 不出现在该行）
+    const joinBtn = screen.getByRole('button', { name: '加入 评审员' });
+    expect(screen.getByText('已启用、未加入本工作空间（加入后可选）')).toBeInTheDocument();
+    fireEvent.click(joinBtn);
+    expect(addMember).toHaveBeenCalledWith('ws-1', 'def-2');
+  });
+
+  it('全部 def 均已加入：不渲染未加入分区', () => {
+    useAgentStore.setState({
+      definitions: [DEF_1, DEF_2],
+      members: [MEMBER_1, MEMBER_2],
+    });
+    render(<CollabSessionDialog onClose={() => {}} />);
+    expect(screen.queryByText('已启用、未加入本工作空间（加入后可选）')).not.toBeInTheDocument();
+  });
+});
+
+describe('CollabSessionDialog - 加入 pending 态（2026-10-10）', () => {
+  it('addMember 在途时按钮显示「加入中…」并禁用；完成后恢复并出现候选', async () => {
+    let resolveAdd: (m: WorkspaceAgentMember) => void = () => {};
+    const addMember = vi.fn(
+      () => new Promise<WorkspaceAgentMember>((r) => { resolveAdd = r; }),
+    );
+    useAgentStore.setState({
+      definitions: [DEF_1, DEF_2],
+      members: [MEMBER_1],
+      addMember,
+    });
+    render(<CollabSessionDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '加入 评审员' }));
+    expect(await screen.findByText('加入中…')).toBeInTheDocument();
+    // 在途期间禁用（防重复点击）
+    expect(screen.getByRole('button', { name: '加入 评审员' })).toBeDisabled();
+    // IPC 返回 → store append → 候选出现（真实 store append 语义：仿真 onSuccess 链）
+    resolveAdd(MEMBER_2);
+    await waitFor(() => {
+      useAgentStore.setState((s) => ({ members: [...s.members, MEMBER_2] }));
+    });
+    await waitFor(() => expect(screen.getByRole('radio', { name: '评审员' })).toBeInTheDocument());
+    expect(screen.queryByText('加入中…')).toBeNull();
+  });
+});

@@ -29,7 +29,8 @@ type TargetTab = 'agent' | 'team';
 
 export function CollabSessionDialog({ onClose }: Props) {
   const workspace = useWorkspaceStore((s) => s.getActive());
-  const { members, teams, loadMembers, loadTeams } = useAgentStore();
+  const { members, teams, definitions, loadMembers, loadTeams, loadDefinitions, addMember } =
+    useAgentStore();
   const createCollabSession = useSessionStore((s) => s.createCollabSession);
 
   const [title, setTitle] = useState('');
@@ -37,13 +38,22 @@ export function CollabSessionDialog({ onClose }: Props) {
   const [target, setTarget] = useState<CollabTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // 加入中的 def id——addMember IPC 含 agent 启动（秒级），按钮进 pending 态防重复点击/误解
+  const [joiningId, setJoiningId] = useState<string | null>(null);
 
   useEffect(() => {
     if (workspace) {
       void loadMembers(workspace.id);
       void loadTeams(workspace.id);
+      void loadDefinitions(workspace.id);
     }
-  }, [workspace, loadMembers, loadTeams]);
+  }, [workspace, loadMembers, loadTeams, loadDefinitions]);
+
+  // 已启用（def 在库）但未加入本空间的 agent——启用是全局的、成员是按空间的；
+  // 就近提供「加入」入口，免得用户去资源库停用重启用绕一圈（2026-10-10 走查反馈）
+  const notJoined = workspace
+    ? definitions.filter((d) => !members.some((m) => m.agentDefinitionId === d.id))
+    : [];
 
   // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出（members 数据面），
   // 不再依赖 definitions 的加载时序——此前 defMap 恒空时落到 agentUserId 显示 ID。
@@ -119,7 +129,7 @@ export function CollabSessionDialog({ onClose }: Props) {
         {tab === 'agent' ? (
           <fieldset className="flex flex-col gap-1.5">
             <legend className="text-sm text-secondary">选择成员</legend>
-            {members.length === 0 && (
+            {members.length === 0 && notJoined.length === 0 && (
               <div className="text-xs text-tertiary">
                 当前工作空间暂无 agent 成员，请先到「Agent 管理」添加
               </div>
@@ -152,6 +162,35 @@ export function CollabSessionDialog({ onClose }: Props) {
                 </span>
               </label>
             ))}
+            {notJoined.length > 0 && (
+              <div className="border-t border-subtle pt-2 mt-1 flex flex-col gap-1">
+                <div className="text-xs text-tertiary">已启用、未加入本工作空间（加入后可选）</div>
+                {notJoined.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center gap-2 text-sm text-secondary px-2 py-1 rounded hover:bg-surface-3"
+                  >
+                    <span>{d.iconEmoji || <Avatar name={d.name} bot size="sm" />}</span>
+                    <span className="truncate">{d.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`加入 ${d.name}`}
+                      disabled={joiningId !== null}
+                      className="ml-auto text-xs text-accent-600 dark:text-accent-300 hover:underline disabled:opacity-50"
+                      onClick={() => {
+                        if (!workspace) return;
+                        setJoiningId(d.id);
+                        void addMember(workspace.id, d.id)
+                          .catch(() => undefined)
+                          .finally(() => setJoiningId(null));
+                      }}
+                    >
+                      {joiningId === d.id ? '加入中…' : '+ 加入'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </fieldset>
         ) : (
           <fieldset className="flex flex-col gap-1.5">

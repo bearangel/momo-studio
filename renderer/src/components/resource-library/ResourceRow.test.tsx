@@ -88,13 +88,13 @@ describe('ResourceRow', () => {
     expect(screen.getByText('已启用')).toBeTruthy();
   });
 
-  it('已安装且可删项显示删除按钮（aria-label 含名称；hover 行才浮现——组③ B9）', () => {
+  it('已安装且可删项显示删除按钮（aria-label 含名称；常显——hover 浮现方案致点编辑时误点删除）', () => {
     const { container } = render(<ResourceRow item={mkItem({})} selected={false} onSelect={noop} onDelete={noop} />);
     const delBtn = screen.getByRole('button', { name: '删除 服务器X' });
     expect(delBtn).toBeTruthy();
-    // 默认隐藏（opacity-0 + 不挡指针），hover 行（group）/键盘聚焦才显现
-    expect(delBtn).toHaveClass('opacity-0', 'pointer-events-none');
-    expect(delBtn).toHaveClass('group-hover:opacity-100', 'focus-visible:opacity-100');
+    // 常显（不 hidden / 不 opacity 隐形占位）；误触由 danger 红色样式 + 二次确认兜底
+    expect(delBtn).not.toHaveClass('hidden');
+    expect(delBtn).not.toHaveClass('opacity-0');
     // 行本身带 group（hover 作用域）
     expect(container.firstChild).toHaveClass('group');
   });
@@ -136,5 +136,37 @@ describe('ResourceRow - 键盘可达（组④ C11）', () => {
     expect(onSelect).toHaveBeenCalledWith('custom-mcp-x');
     fireEvent.keyDown(row, { key: ' ' });
     expect(onSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ResourceRow - builtin agent 停用按钮（2026-10-10）', () => {
+  it('builtin 已启用 + 传 onDisable：显示「停用」按钮并触发回调', () => {
+    const onDisable = vi.fn();
+    render(
+      <ResourceRow
+        item={mkItem({ type: 'agent', source: 'builtin', installed: true, removable: false, builtin: { agentEnabled: true } })}
+        selected={false} onSelect={noop} onConfigure={noop} onDisable={onDisable}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '停用' }));
+    expect(onDisable).toHaveBeenCalledTimes(1);
+  });
+
+  it('builtin 未启用或未传 onDisable：无「停用」按钮', () => {
+    const { unmount } = render(
+      <ResourceRow
+        item={mkItem({ type: 'agent', source: 'builtin', installed: true, removable: false, builtin: { agentEnabled: false } })}
+        selected={false} onSelect={noop} onEnable={noop} onDisable={noop}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
+    unmount();
+    render(
+      <ResourceRow
+        item={mkItem({ type: 'agent', source: 'builtin', installed: true, removable: false, builtin: { agentEnabled: true } })}
+        selected={false} onSelect={noop} onConfigure={noop}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
   });
 });

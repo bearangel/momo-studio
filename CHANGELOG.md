@@ -6,6 +6,59 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 协作会话未加入分区 + 会话只读即时生效 + 行内停用（走查反馈第三轮）
+
+真机走查反馈闭环（2026-10-10 第二批）。三个问题：已启用预设不在协作会话候选（启用全局/成员按空间的模型不可发现）、停用/删除后会话要发一条消息才转只读、预设列表行无停用入口。
+
+### 新增
+- **协作会话「未加入」分区**：弹窗成员列表下新增「已启用、未加入本工作空间」区——启用是全局的、成员是按空间的，就近提供「+ 加入」入口（加入中 pending 态防秒级 IPC 空窗误判），免去去资源库停用重启用绕圈
+- **预设行内停用按钮**：ResourceRow builtin 已启用态显示「停用」（danger 样式，与详情面板对称；同样走影响面披露确认）
+
+### 修复
+- **会话只读即时生效**：停用/删除 agent 级联后，主进程 `broadcastSessionListChanged` 推送 + renderer 侧（停用确认流/删除确认流）主动 `pullSessionList + loadMembers(active)`——`activeSessionReadOnly` 的 loadMembers 权威层立即翻转，输入框置灰 + 只读提示条（锁图标），不再等发消息
+- 上轮验收探针误报修正记录：textarea 只读走 HTML readOnly/置灰态而非 disabled 属性，`isEnabled()` 恒真——验收须查只读提示条/输入框属性
+
+### 已知遗留
+- addMember IPC 含 agent 启动（WarmPool spawn，秒级）——加入按钮 pending 态已兜底 UX；启动异步化属 runtime 优化另行立项
+
+
+## [未发布] — 预设停用 + 删除披露式级联 + 资源库三处 UX 修复
+
+真机走查反馈闭环（2026-10-10）。上游分析：删除已入空间的 agent 现有链路存在「leader 团队 FK 级联静默解散无 UI 披露」与「deleteDefinition 非事务半状态不可重试」两处风险；用户裁定停用/删除均走**披露式级联**、停用语义 = **回到未启用态**。
+
+### 新增
+- **预设 agent 停用**：详情页已启用态新增「停用」按钮（与「启用」对称）；`agent:disablePreset` 删 builtin def 行回到未启用态（YAML 恒在，重启用走 enablePreset 既有 UPDATE 管线），成员/团队/会话级联与删除 custom 同内核
+- **删除/停用影响面预查**：`agent:definitionImpact` 只读返回五维影响（成员数/空间名/leader 团队名/只读会话数/默认 agent 空间名）；删除与停用确认框逐条披露（`buildImpactMessage` 非零项才列行），预查失败回落通用文案不阻断操作
+
+### 修复
+- **deleteDefinition 事务化**：DB 部分（置空 default + 删成员 + 删定义）单事务，修复旧版「keychain 已清/部分成员已删/def 残留」半状态重试死循环；keychain 清理挪到事务后 best-effort（失败仅孤儿 key 无引用风险）
+- **资源行删除按钮常显**：hover 浮现方案（上一轮改的 hidden/group-hover）实测导致「点编辑时删除恰好出现在指针处」误点——回退常显，误触由 danger 样式 + 披露确认框兜底
+- **来源徽章挪位**：「系统预置/自定义」标签从按钮簇旁挪到名称旁（中间以弹性描述区隔开），消除「误以为是按钮」
+- **详情面板溢出**（上一轮遗留补锁）：ResourceDetail 根节点补 `h-full`——内容区出滚动条、底栏按钮固定可操作
+
+### 已知遗留
+- `tasks.assignee_agent_id` 无 FK：删除 agent 后看板/详情对残留引用回退显示 ID 前 8 位（useTaskEntityNames 既有设计，加载期与悬空无法区分，暂不改为「已删除」文案）
+- 主进程改动需重启 dev 实例生效（tsc watch 不重载运行中进程）
+
+## [未发布] — 预设 agent 阵容全面重做（八角色 · 英文命名 · 领队重定义）
+
+上游：16 款主流工具内置 agent 阵容调研（Claude Code / OpenCode / oh-my-openagent / Roo / Kilocode / Amp / Gemini CLI / Factory Droid / Devin 等，一手来源核实）——三功能轴共识（调研→执行→验证）、review 是生态投入最重的角色、检索型 agent 是第二共识、description 即委派语义。Momo 原五角色阵容缺审查与调研两个生态位，pm-agent 定位（编排统领，v25 已废）与管理职能错位。
+
+### 新增
+- **八角色阵容（1 领队 + 1 通用 + 6 专家）**：新增 `code-reviewer` Hawk 🦅（只审不改：六步审查 + 分级发现 + 修复处方；git 只读四件套，无 git 写与 apply_patch）、`researcher` Sherlock 🕵️（网页+文档调研：webfetch + 浏览器组 11 工具 + office_read 消化，结论必附出处与置信度分级）、`general-assistant` Momo 🐾（品牌吉祥物当通用兜底，快速会话默认候选）
+- **英文身份名 + 纯委派语义 description**（属性→职能映射，参考 OmO Sisyphus 一派；slug 全部不变——catalog id / 资源 id / 存量启用行零破坏）：pm-agent→Architect 🏗️、coder→Smith 🔨、requirement-analyst→Socratic ❓、ui-designer→Muse 🎨、office-assistant→Butler 🤵；description 不带中文角色头衔前缀（列表展示干净），中文角色定位保留在 systemPrompt 身份句与 README 正文，同时服务 picker 副标题与 dispatch 快照注入
+- **Architect 领队重定义**（Sisyphus 生态位 × Momo 双会话）：带队工作流六步（接待→拆解→dispatch 派发→read_task_progress 盯进度→收拢核对证据→汇报）+ 单兵退化回管理专家（规划/评审/周报）；全阵容去掉 type/parentAgentId 层级残留（v25 去编排后不被消费，全员拉平）
+- **prompt v2 结构**：四段式骨架保留（身份/工作流/工具要点/NEVER-ALWAYS 硬规则），全阵容补「被派发时」成员回传礼仪（task_reply 三件事：做了什么/验证证据/未尽事项）；Smith/Hawk/Sherlock/Momo 挂 verification-before-done（证据化完成纪律）
+- **模型建议升当前代**（provider 白名单内、对照 provider-presets 校验）：Smith→openai gpt-5.2，其余→anthropic claude-opus-4-5（Architect）/ claude-sonnet-4-5（专家与通用）；原 gpt-4o / claude-3-5-sonnet 全部退役
+
+### 变更
+- catalog.json：8 agent 条目对齐（5 更新 + 3 新增），version→2.0.0，updatedAt 2026-10-09；终态 29 items（8 agent + 1 mcp + 20 skill）
+- 契约测试同步：builtin-yaml-tier1 文件数 5→8；preset-preview 锚点更新（Muse 名 + 新阵容三元组断言）；resource ipc-handlers 预置清单断言 8 slug + Butler/Smith 名称
+
+### 已知遗留
+- 存量已启用的 builtin agent 行不自动更新（无 hash 同步机制，v16/v32/v37/v52 先例从不用 migration 覆写 prompt）——新装/重新启用/预览/薄 fork 即得 2.0.0 内容；Butler 实战纪律段落逐字保留（踩坑沉淀不动）
+- Smith/Hawk 的 lsp_* 两项为 LSP 下架（9cc3407a）后的刻意休眠引用（preset-consistency 测试 E 豁免同先例），prompt 正文不提及休眠工具
+
 ## [未发布] — 预设内容库：五角色 agent + skill 全覆盖
 
 设计依据：`docs/specs/2026-10-08-preset-agents-skills-design.md`；实施计划：`docs/plans/2026-10-08-preset-agents-skills.md`。上游：目标用户五类角色（需求/UI/全栈/管理/办公）的内置预设覆盖不足——UI 设计师缺失、pm-agent 编排定位与管理职能错位、builtin skill 仅 3 个开发向；选题全部来自跨生态装机量验证（Anthropic 官方 skills / superpowers / Vercel / oh-my-openagent 模式），内容原创中文零复制（license 纪律：Anthropic 文档 skill 私有协议、OmO SUL-1.0）。

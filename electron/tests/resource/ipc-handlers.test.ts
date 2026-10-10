@@ -949,7 +949,7 @@ describe('registerResourceHandlers', () => {
       );
     });
 
-    it("resource:listBuiltinPresets('agent') 返回 5 个真 YAML 预置（含 office-assistant 与 ui-designer）", async () => {
+    it("resource:listBuiltinPresets('agent') 返回 8 个真 YAML 预置（v2.0.0 阵容，字母序）", async () => {
       const calls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls;
       const presetCall = calls.find((c: unknown[]) => c[0] === 'resource:listBuiltinPresets');
       const handler = presetCall![1] as (evt: unknown, type: string) => Promise<unknown>;
@@ -960,10 +960,13 @@ describe('registerResourceHandlers', () => {
         iconEmoji: string;
       }>;
       expect(presets.map((p) => p.slug)).toEqual([
+        'code-reviewer',
         'coder',
+        'general-assistant',
         'office-assistant',
         'pm-agent',
         'requirement-analyst',
+        'researcher',
         'ui-designer',
       ]);
       // 每条都是生产消费字段：四字段全为非空字符串（清单卡片直接渲染）
@@ -978,9 +981,9 @@ describe('registerResourceHandlers', () => {
         expect(p.iconEmoji.length).toBeGreaterThan(0);
       }
       const office = presets.find((p) => p.slug === 'office-assistant');
-      expect(office).toMatchObject({ name: '办公助理', iconEmoji: '💼' });
+      expect(office).toMatchObject({ name: 'Butler', iconEmoji: '🤵' });
       const coder = presets.find((p) => p.slug === 'coder');
-      expect(coder).toMatchObject({ name: '程序员', iconEmoji: '💻' });
+      expect(coder).toMatchObject({ name: 'Smith', iconEmoji: '🔨' });
     });
 
     it("resource:listBuiltinPresets('mcp') / ('skill') 返回空数组（当前预置仅 agent）", async () => {

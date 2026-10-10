@@ -17,7 +17,8 @@ export function ConfirmDialog({ title, message, confirmLabel = '删除', onConfi
   return (
     <Dialog open onClose={onClose} title={title} width={400}>
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-secondary">{message}</p>
+      {/* whitespace-pre-line：披露式级联等多行 message（\n 分隔）按行渲染 */}
+      <p className="text-sm text-secondary whitespace-pre-line">{message}</p>
         <div className="flex gap-2 justify-end">
           <Button variant="ghost" type="button" onClick={onClose}>取消</Button>
           {/* 先 onConfirm 后 onClose：消费方 onConfirm 闭包常读待删态（pendingDelete.id），先清空即崩 */}

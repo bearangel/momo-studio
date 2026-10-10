@@ -5,7 +5,9 @@
 // 工具栏改单行（原 chips 在窄窗折行 95px，走查 B10 方案 B）、来源筛选前端化
 // （下拉计数需全量数据）、详情面板 B8 方案 B 拖拽调宽、加载失败加重试按钮。
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { BuiltinPresetPreview, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
+import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
+import { ipc } from '../../ipc/client';
+import { useSessionStore } from '../../stores/session.store';
 import { useResourceStore } from '../../stores/resource.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
@@ -62,6 +64,26 @@ const DETAIL_WIDTH_DEFAULT = 384;
 
 const clampDetailWidth = (w: number): number => Math.min(DETAIL_WIDTH_MAX, Math.max(DETAIL_WIDTH_MIN, w));
 
+/** agent 删除/停用披露文案（2026-10-10 披露式级联）——影响面行只列非零项；
+ *  impact 为 null（预查失败）时仅返回 base。导出供单测锁文案契约。 */
+export function buildImpactMessage(base: string, impact: DefinitionImpact | null): string {
+  if (!impact) return base;
+  const lines: string[] = [];
+  if (impact.memberCount > 0) {
+    lines.push(`· 从 ${impact.memberCount} 个工作空间移出该 agent（${impact.workspaceNames.join('、')}）`);
+  }
+  if (impact.ledTeamNames.length > 0) {
+    lines.push(`· 解散 ${impact.ledTeamNames.length} 个团队（该 agent 为 leader：${impact.ledTeamNames.join('、')}）`);
+  }
+  if (impact.readOnlySessionCount > 0) {
+    lines.push(`· ${impact.readOnlySessionCount} 个会话的全部成员失效，将变为只读（消息历史保留）`);
+  }
+  if (impact.defaultForWorkspaceNames.length > 0) {
+    lines.push(`· 清空 ${impact.defaultForWorkspaceNames.length} 个工作空间的默认 agent 设置`);
+  }
+  return lines.length > 0 ? `${base}\n${lines.join('\n')}` : base;
+}
+
 /** 启动恢复上次详情面板宽度（失效值回退默认；隐私模式读写异常不影响内存态） */
 function readInitialDetailWidth(): number {
   try {
@@ -91,15 +113,19 @@ interface TypePageShellProps {
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
   /** builtin agent 薄 fork 入口（AgentCreateWizard 预填挂载在 View 层；2026-10-08） */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
+  /** builtin agent 停用入口（2026-10-10 披露式级联：View 层挂影响面确认框） */
+  onDisableAgent?: (id: string) => void;
 }
 
-export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset }: TypePageShellProps) {
+export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset, onDisableAgent }: TypePageShellProps) {
   const {
     items, loading, error, installNotice, sourceFilter, query,
     setSourceFilter, setQuery, deleteResource, load,
   } = useResourceStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
+  /** agent 删除的影响面（披露式级联确认文案）；null = 非 agent 或预查失败回落通用文案 */
+  const [deleteImpact, setDeleteImpact] = useState<DefinitionImpact | null>(null);
   const [detailWidth, setDetailWidth] = useState<number>(readInitialDetailWidth);
   const Icon = TYPE_ICON[type];
 
@@ -163,11 +189,30 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
     persistDetailWidth();
   };
 
-  /** 拦截行/详情删除 → 二次确认（P2.5 D5；三类型统一） */
+  /** 拦截行/详情删除 → 二次确认（P2.5 D5；三类型统一）。
+   *  agent 类型先做影响面预查（披露式级联），预查失败回落通用文案不阻断删除。 */
   const requestDelete = (id: string): void => {
     const item = items.find((i) => i.id === id);
-    if (item) setPendingDelete(item);
-    else void deleteResource(id); // 列表已无此行（竞态兜底）——直删
+    if (!item) {
+      void deleteResource(id); // 列表已无此行（竞态兜底）——直删
+      return;
+    }
+    if (item.type === 'agent') {
+      // defId 口径：custom agent 资源 slug = def.id（与 View 层 handleEditAgent 同口径）
+      void ipc.agent
+        .definitionImpact(item.slug)
+        .then((impact) => {
+          setDeleteImpact(impact);
+          setPendingDelete(item);
+        })
+        .catch(() => {
+          setDeleteImpact(null);
+          setPendingDelete(item);
+        });
+      return;
+    }
+    setDeleteImpact(null);
+    setPendingDelete(item);
   };
 
   // 前端过滤（搜索与来源筛选同语义，内存过滤——来源计数需全量 items）
@@ -275,17 +320,18 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           ) : (
             <div role="list" aria-label="资源列表" className="flex-1 overflow-auto p-4 flex flex-col gap-1.5">
               {filteredItems.map((item) => (
-                <ResourceRow
-                  key={item.id}
-                  item={item}
-                  selected={selectedId === item.id}
-                  onSelect={setSelectedId}
-                  onInstall={onInstall}
-                  onDelete={requestDelete}
-                  onEnable={onOpenPreset}
-                  onEdit={onEditAgent}
-                  onConfigure={onOpenPreset}
-                />
+            <ResourceRow
+              key={item.id}
+              item={item}
+              selected={selectedId === item.id}
+              onSelect={setSelectedId}
+              onInstall={onInstall}
+              onDelete={requestDelete}
+              onEnable={onOpenPreset}
+              onEdit={onEditAgent}
+              onConfigure={onOpenPreset}
+              onDisable={onDisableAgent}
+            />
               ))}
             </div>
           )}
@@ -315,23 +361,39 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
               onEditMcpEntry={onEditMcpEntry}
               onToggleMcp={onToggleMcp}
               onForkPreset={onForkPreset}
+              onDisable={onDisableAgent}
             />
           </div>
         )}
       </div>
 
-      {/* 删除二次确认弹窗（P2.5 D5）：确认才执行 deleteResource */}
+      {/* 删除二次确认弹窗（P2.5 D5）：确认才执行 deleteResource。
+          agent 类型带影响面披露（2026-10-10 披露式级联） */}
       {pendingDelete && (
         <ConfirmDialog
           title={`删除 ${pendingDelete.name}？`}
           message={
             pendingDelete.type === 'mcp'
               ? '此操作不可撤销。引用它的 agent 将出现悬空提示，需手动移除引用。'
-              : '此操作不可撤销。'
+              : pendingDelete.type === 'agent' && deleteImpact
+                ? buildImpactMessage('此操作不可撤销。将同时：', deleteImpact)
+                : '此操作不可撤销。'
           }
           confirmLabel="确认删除"
-          onConfirm={() => void deleteResource(pendingDelete.id)}
-          onClose={() => setPendingDelete(null)}
+          onConfirm={() => {
+            const wasAgent = pendingDelete.type === 'agent';
+            void deleteResource(pendingDelete.id).then(() => {
+              // agent 删除级联可能清空会话成员 → 刷新会话面（readOnly 不等发消息）
+              if (!wasAgent) return;
+              const ss = useSessionStore.getState();
+              ss.pullSessionList();
+              if (ss.activeSessionId) void ss.loadMembers(ss.activeSessionId);
+            });
+          }}
+          onClose={() => {
+            setPendingDelete(null);
+            setDeleteImpact(null);
+          }}
         />
       )}
     </div>

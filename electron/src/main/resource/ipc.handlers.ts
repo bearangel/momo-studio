@@ -85,6 +85,7 @@ import { deleteCustomSkill, uploadSkillZip } from '../skill/zip-uploader';
 import { createSkillFromForm, type SkillCreateInput } from '../skill/form-create';
 import { importGitRepoSkills, scanGitRepoSkills } from '../skill/git-import';
 import { deleteDefinition, removeMcpRefsFromAgents } from '../agent/crud';
+import { broadcastSessionListChanged } from '../im/session-service';
 import { listBuiltinPresetAgents, previewBuiltinPresetAgent } from '../agent/builtin';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import { requestResourceImport } from '../p2p/resource-transfer';
@@ -283,7 +284,11 @@ export function registerResourceHandlers(): void {
             }
           }
         } else if (item.type === 'skill') deleted = deleteCustomSkill(item.slug);
-        else if (item.type === 'agent') deleted = deleteDefinition(item.slug);
+        else if (item.type === 'agent') {
+          deleted = deleteDefinition(item.slug);
+          // 级联可能清空会话成员（FK CASCADE）→ 通知 renderer 刷新会话列表
+          broadcastSessionListChanged();
+        }
         else throw new Error(`未知 custom type: ${item.type}`);
         // 统一等待删除成功再广播（失败上抛时不广播旧目录）
         await deleted;

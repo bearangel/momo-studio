@@ -394,6 +394,20 @@ describe('ResourceDetail - 预设 agent 启用/配置（spec 2026-09-22）', () 
     render(<ResourceDetail item={item} onClose={() => {}} onConfigure={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '配置' })).not.toBeInTheDocument();
   });
+
+  it('builtin agent 已启用 + 传 onDisable：显示「停用」按钮并触发回调（2026-10-10 披露式级联）', () => {
+    const onDisable = vi.fn();
+    const item = baseItem({ builtin: { agentEnabled: true } });
+    render(<ResourceDetail item={item} onClose={() => {}} onConfigure={vi.fn()} onDisable={onDisable} />);
+    fireEvent.click(screen.getByRole('button', { name: '停用' }));
+    expect(onDisable).toHaveBeenCalledWith('builtin-agent-pm');
+  });
+
+  it('builtin agent 已启用但未传 onDisable：不显示「停用」按钮', () => {
+    const item = baseItem({ builtin: { agentEnabled: true } });
+    render(<ResourceDetail item={item} onClose={() => {}} onConfigure={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '停用' })).not.toBeInTheDocument();
+  });
 });
 
 describe('ResourceDetail - 三段式结构 + custom agent 定义预览（Task 15）', () => {
@@ -413,6 +427,18 @@ describe('ResourceDetail - 三段式结构 + custom agent 定义预览（Task 15
     expect(screen.getByText('状态')).toBeInTheDocument();
     expect(screen.getByText('配置预览')).toBeInTheDocument();
     expect(screen.getByText('元数据')).toBeInTheDocument();
+  });
+
+  it('根节点 h-full 约束高度（父级拉伸 block wrapper 不传高度——缺失则内容顶飞底栏按钮且无滚动）', () => {
+    // 回归锁：flex-1 overflow-y-auto 滚动体依赖列容器自身有界高度（h-full）；
+    // 父 wrapper（TypePageShell detail-pane）是拉伸定高的 block，不向子传递高度
+    const { container } = render(<ResourceDetail item={baseItem()} onClose={vi.fn()} />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveClass('h-full');
+    // 滚动体与固定底栏分工：body overflow-y-auto，footer 独立于滚动区
+    const body = root.children[1] as HTMLElement;
+    expect(body).toHaveClass('overflow-y-auto', 'flex-1');
+    expect(root.lastElementChild).not.toBe(body);
   });
 
   it('custom agent 反查 def 并展示 YAML 预览（slug=def.id 口径，非 def.slug）', async () => {

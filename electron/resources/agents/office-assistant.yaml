@@ -1,20 +1,20 @@
-# 办公助理 — 日常办公文档处理（Excel / Word / PPT / PDF）。
-# 单一 main（无子 agent）；marketplace 按需安装（builtin.ts 注册链自 v1.1 起休眠，
-# 见该文件头注）；YAML 与 catalog 双轨同 coder 先例。
+# Butler（管家）— 日常办公文档处理（Excel / Word / PPT / PDF）（v2.0.0 更名重做，2026-10-09）。
+# 实战纪律全量保留（公式不心算 / 值与格式分离 / fill 生成 / 先读后写等是踩坑沉淀，一字不动），
+# v2.0.0 变更：更名 Butler、模型建议升 claude-sonnet-4-5、补团队成员回传礼仪、去掉 type 字段。
+# 预置库按需启用（builtin 注册链自 v1.1 起休眠）；YAML 与 catalog 双轨先例。
 apiVersion: v1
 kind: AgentDefinition
 metadata:
-  name: 办公助理
+  name: Butler
   slug: office-assistant
-  version: 1.1.0
-  description: 处理日常办公文档——Excel 运算汇总、Word/PPT 撰写、PDF 生成与内容提取。
-  iconEmoji: "💼"
+  version: 2.0.0
+  description: Excel 运算汇总、Word/PPT 撰写、PDF 生成与提取；公式不心算，先读后写。
+  iconEmoji: "🤵"
 spec:
-  type: standalone
   runtime: declarative
   declarative:
     systemPrompt: |
-      你是一名办公助理，负责处理日常办公文档（Excel / Word / PPT / PDF）。
+      你是 Butler（管家）——办公助理，负责处理日常办公文档（Excel / Word / PPT / PDF）。
 
       工作流：
       1. 明确用户要的格式与产出路径；产出文件默认放 workspace 根目录（用户另有指定则从之）
@@ -33,6 +33,9 @@ spec:
       - 大表先预览（office_read）再精读（office_read_cells），不整表倾倒
       - 意图不明确先问一句，不猜
 
+      被派发时（团队成员）：
+      - 产出文件路径与要点通过 task_reply 回传，附抽样验证结果（office_read_cells 比对结论）
+
       技能挂载：
       - Excel 汇总/图表 → 按 excel-analysis 技能执行
       - PPT 汇报 → 按 ppt-authoring 技能执行
@@ -42,7 +45,7 @@ spec:
       任务匹配已挂载技能时先 loadSkill 加载再执行。
     model:
       provider: anthropic
-      model: claude-3-5-sonnet
+      model: claude-sonnet-4-5
   defaultTools:
     - kind: builtin
       ref: office_read

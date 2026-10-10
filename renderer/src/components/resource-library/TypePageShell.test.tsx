@@ -13,7 +13,7 @@
 // 崩溃（momo-test-rules：mock 收窄到 IPC 边界）。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
-import { TypePageShell } from './TypePageShell';
+import { TypePageShell, buildImpactMessage } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
 import type { ResourceItem } from '../../ipc/types';
 
@@ -440,3 +440,46 @@ describe('TypePageShell - 列表键盘导航（组④ C11）', () => {
   });
 });
 
+
+describe('buildImpactMessage — 披露式级联文案契约（2026-10-10）', () => {
+  // 纯函数直测：文案是用户确认依据，锁死行结构（· 前缀 + 非零项才出现）
+  const zeroImpact = {
+    memberCount: 0, workspaceNames: [], ledTeamNames: [],
+    readOnlySessionCount: 0, defaultForWorkspaceNames: [],
+  };
+
+  it('impact 为 null（预查失败）：仅返回 base，不追加任何披露行', () => {
+    expect(buildImpactMessage('此操作不可撤销。', null)).toBe('此操作不可撤销。');
+  });
+
+  it('全零影响：仅返回 base', () => {
+    expect(buildImpactMessage('此操作不可撤销。将同时：', zeroImpact)).toBe('此操作不可撤销。将同时：');
+  });
+
+  it('齐全影响：四行披露逐条列出（· 前缀、\n 分隔）', () => {
+    const msg = buildImpactMessage('将同时：', {
+      memberCount: 2,
+      workspaceNames: ['空间A', '空间B'],
+      ledTeamNames: ['冲锋队'],
+      readOnlySessionCount: 3,
+      defaultForWorkspaceNames: ['空间B'],
+    });
+    const lines = msg.split('\n');
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe('将同时：');
+    expect(lines[1]).toContain('从 2 个工作空间移出该 agent（空间A、空间B）');
+    expect(lines[2]).toContain('解散 1 个团队（该 agent 为 leader：冲锋队）');
+    expect(lines[3]).toContain('3 个会话的全部成员失效，将变为只读（消息历史保留）');
+    expect(lines[4]).toContain('清空 1 个工作空间的默认 agent 设置');
+  });
+
+  it('部分影响：只列非零项（有成员但无团队/会话/默认影响）', () => {
+    const msg = buildImpactMessage('将同时：', {
+      ...zeroImpact,
+      memberCount: 1,
+      workspaceNames: ['空间A'],
+    });
+    expect(msg.split('\n')).toHaveLength(2);
+    expect(msg).toContain('从 1 个工作空间移出该 agent（空间A）');
+  });
+});

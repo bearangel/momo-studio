@@ -30,6 +30,8 @@ import {
   type RemoveMemberResult,
   updateAssignmentApiKey as crudUpdateAssignmentApiKey,
   deleteDefinition as crudDeleteDefinition,
+  disablePreset as crudDisablePreset,
+  getDefinitionImpact,
   updateAgentDefinition,
   createCustomDef,
   stopRunningInstancesByDefinition,
@@ -50,6 +52,7 @@ import { startAgentRuntime, stopAgentRuntime } from './runtime-registry';
 import { buildSpawnOpts, resolveApiKey } from './spawn-helpers';
 import { getBuiltinSuggestionsMap } from './builtin';
 import { enablePresetWithJoin, type EnablePresetWithJoinInput } from './preset';
+import { broadcastSessionListChanged } from '../im/session-service';
 import { broadcastLocalResourceCatalog } from '../p2p/resource-share';
 import {
   getAssignmentDeltas,
@@ -248,16 +251,31 @@ export function registerAgentHandlers(): void {
     },
   );
 
-  // 删除自定义 agent 定义（builtin 不可删；级联清理 assignment）
+  // 删除自定义 agent 定义（builtin 不可删——停用走 agent:disablePreset；级联清理 assignment）
   ipcMain.handle(
     'agent:deleteDefinition',
     async (_evt, defId: string) => {
       const result = await crudDeleteDefinition(defId);
       // P4 Task 4：自定义 agent 删除成功 → 广播资源目录（fire-and-forget）
       void broadcastLocalResourceCatalog();
+      // 级联可能清空会话成员（FK CASCADE）→ 通知 renderer 刷新会话列表
+      broadcastSessionListChanged();
       return result;
     },
   );
+
+  // 定义删除/停用影响面预查（2026-10-10 披露式级联——确认框文案数据源，只读）
+  ipcMain.handle('agent:definitionImpact', (_evt, defId: string) => {
+    return getDefinitionImpact(defId);
+  });
+
+  // 停用预设 agent（回到未启用态；级联内核与 deleteDefinition 共用）
+  ipcMain.handle('agent:disablePreset', async (_evt, defId: string) => {
+    const result = await crudDisablePreset(defId);
+    void broadcastLocalResourceCatalog();
+    broadcastSessionListChanged();
+    return result;
+  });
 
   // 列出 agent 定义（v1.3：可选 workspaceId 过滤）
   ipcMain.handle('agent:list', async (_evt, workspaceId?: string) => {

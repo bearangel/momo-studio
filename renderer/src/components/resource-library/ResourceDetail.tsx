@@ -52,6 +52,8 @@ interface Props {
   onToggleMcp?: (item: ResourceItem, next: boolean) => void;
   /** builtin agent 薄 fork（2026-10-08 预设可见化）：全量 preview 交 View 层预填创建向导 */
   onForkPreset?: (preview: BuiltinPresetPreview) => void;
+  /** builtin agent 停用（2026-10-10）：View 层挂影响面披露确认框后走 disablePreset 级联 */
+  onDisable?: (id: string) => void;
 }
 
 /** 资源类型兜底图标（item.iconEmoji 优先——用户数据照渲染） */
@@ -85,7 +87,7 @@ function TypeIcon({ type }: { type: ResourceItem['type'] }) {
   return <Icon size={16} strokeWidth={1.75} aria-hidden />;
 }
 
-export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset }: Props) {
+export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onEnable, onConfigure, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset, onDisable }: Props) {
   const mcpEnv = item.custom?.mcpConfig?.env;
   const envEntries = mcpEnv ? Object.entries(mcpEnv) : [];
 
@@ -160,7 +162,7 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
   }, [isBuiltinAgent, item.slug]);
 
   return (
-    <div className="w-full border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
+    <div className="w-full h-full border-l border-subtle bg-surface-1 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-subtle flex items-center justify-between">
         <h3 className="text-sm font-semibold flex items-center gap-2 text-primary">
           {item.iconEmoji ? (
@@ -365,6 +367,13 @@ export function ResourceDetail({ item, onClose, onDelete, onInstall, onEdit, onE
         {item.type === 'agent' && item.source === 'builtin' && !item.builtin?.agentEnabled && onEnable && (
           <Button size="sm" onClick={() => onEnable(item.id)}>
             启用
+          </Button>
+        )}
+        {/* 停用按钮：builtin agent 已启用——回到未启用态（级联影响面由确认框披露）。
+            danger 变体与删除同级：级联会解散团队/移出成员，破坏面同样不可逆 */}
+        {item.type === 'agent' && item.source === 'builtin' && item.builtin?.agentEnabled && onDisable && (
+          <Button size="sm" variant="danger" onClick={() => onDisable(item.id)}>
+            停用
           </Button>
         )}
         {/* 复制为自定义（2026-10-08 薄 fork）：全量预填创建向导；预览未就绪/失败时禁用 */}

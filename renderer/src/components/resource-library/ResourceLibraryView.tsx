@@ -10,9 +10,11 @@ import { Sparkles } from 'lucide-react';
 import { useResourceStore } from '../../stores/resource.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useSessionStore } from '../../stores/session.store';
 import { ipc } from '../../ipc/client';
 import { TypeSidebar } from './TypeSidebar';
-import { TypePageShell } from './TypePageShell';
+import { TypePageShell, buildImpactMessage } from './TypePageShell';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import type { AddMenuItem } from './AddMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
@@ -26,7 +28,7 @@ import { SkillCreateDialog } from './SkillCreateDialog';
 import { ImportAgentYamlDialog } from './ImportAgentYamlDialog';
 import { PresetLibraryDialog } from './PresetLibraryDialog';
 import { GitImportDialog } from './GitImportDialog';
-import type { AgentDefinition, BuiltinPresetPreview, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
+import type { AgentDefinition, BuiltinPresetPreview, DefinitionImpact, McpConfigUpdateInput, ResourceItem, ResourceType } from '../../ipc/types';
 
 export function ResourceLibraryView() {
   const { activeType, setActiveType, items, installResource, load, setMcpEnabled } = useResourceStore();
@@ -55,6 +57,12 @@ export function ResourceLibraryView() {
   const [mcpEditTarget, setMcpEditTarget] = useState<string | null>(null);
   // 2026-10-08 薄 fork：预置能力预览 → AgentCreateWizard 预填种子（null = 非 fork 模式）
   const [forkSeed, setForkSeed] = useState<BuiltinPresetPreview | null>(null);
+  // 停用确认目标（2026-10-10 披露式级联；impact null = 预查失败回落通用文案）
+  const [disableTarget, setDisableTarget] = useState<{
+    defId: string;
+    name: string;
+    impact: DefinitionImpact | null;
+  } | null>(null);
 
   // 冷启动首拉（旧视图同语义；后续刷新由 setActiveType/setSourceFilter/store 写操作触发）
   useEffect(() => {
@@ -115,6 +123,39 @@ export function ResourceLibraryView() {
     setCreateAgentOpen(true);
   };
 
+  // 停用预设（2026-10-10 披露式级联）：详情页「停用」→ 影响面预查 → 确认框披露 →
+  // disablePreset 级联（回到未启用态，可随时重新启用）。预查失败不阻断——回落通用文案
+  const handleDisablePreset = (itemId: string): void => {
+    const item = items.find((i) => i.id === itemId);
+    if (!item || item.type !== 'agent' || item.source !== 'builtin') return;
+    const defId = `builtin-${item.slug}`;
+    void ipc.agent
+      .definitionImpact(defId)
+      .then((impact) => setDisableTarget({ defId, name: item.name, impact }))
+      .catch(() => setDisableTarget({ defId, name: item.name, impact: null }));
+  };
+
+  const confirmDisablePreset = (): void => {
+    if (!disableTarget) return;
+    const { defId, name } = disableTarget;
+    void ipc.agent
+      .disablePreset(defId)
+      .then(() => {
+        useResourceStore.setState({ installNotice: `已停用「${name}」，可随时重新启用` });
+        void load();
+        void loadDefinitions(activeWorkspaceId ?? undefined);
+        if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
+        // 停用级联可能清空会话成员 → 主动刷新会话列表与激活会话成员
+        // （activeSessionReadOnly 三层判定的 loadMembers 权威层；不发消息即只读）
+        refreshActiveSessionMembers();
+      })
+      .catch((err: unknown) => {
+        useResourceStore.setState({
+          error: `停用失败：${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+  };
+
   // 本地安装流（installed 列表 installable 项——p2p 导入）：直连 store.installResource，
   // 错误与成功横幅均由 store 落位（P2.3 Task 1 起 registry 安装包装流已移除）
   const handleInstall = (itemId: string): void => {
@@ -126,6 +167,13 @@ export function ResourceLibraryView() {
     void load();
     void loadDefinitions(activeWorkspaceId ?? undefined);
     if (activeWorkspaceId) void loadMembers(activeWorkspaceId);
+  };
+
+  /** agent 级联（删除/停用）后刷新会话面：列表 summaries + 激活会话成员（readOnly 权威重算） */
+  const refreshActiveSessionMembers = (): void => {
+    const ss = useSessionStore.getState();
+    ss.pullSessionList();
+    if (ss.activeSessionId) void ss.loadMembers(ss.activeSessionId);
   };
 
   // P2.2 Task 7：远程 MCP 配置编辑。ResourceDetail「配置」按钮触发——
@@ -182,6 +230,7 @@ export function ResourceLibraryView() {
           onEditMcpEntry={(item) => setMcpEditTarget(item.slug)}
           onToggleMcp={(item, next) => void setMcpEnabled(item.slug, next)}
         onForkPreset={handleForkPreset}
+        onDisableAgent={handleDisablePreset}
       />
 
       {/* 弹窗组（Task 10/12/13 的新弹窗接线后追加在此） */}
@@ -220,6 +269,20 @@ export function ResourceLibraryView() {
       )}
       {presetTarget && (
         <EnablePresetDialog slug={presetTarget.slug} name={presetTarget.name} def={presetTarget.def} onClose={closePresetDialog} />
+      )}
+      {/* 停用确认（2026-10-10 披露式级联）：影响面逐条披露后才可确认 */}
+      {disableTarget && (
+        <ConfirmDialog
+          title={`停用 ${disableTarget.name}？`}
+          message={
+            disableTarget.impact
+              ? buildImpactMessage('停用后该预设回到未启用状态，可随时重新启用。将同时：', disableTarget.impact)
+              : '停用后该预设回到未启用状态，可随时重新启用。'
+          }
+          confirmLabel="停用"
+          onConfirm={confirmDisablePreset}
+          onClose={() => setDisableTarget(null)}
+        />
       )}
       {/* P2.3 Task 4：预置库弹窗（选中 slug → 关预置库 → 复用 presetTarget 打开 EnablePresetDialog） */}
       {presetLibraryOpen && (

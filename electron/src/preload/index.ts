@@ -97,6 +97,8 @@ const api: ApiSurface = {
     setMemberApiKeyOverride: (instanceId: string, apiKey: string | null) =>
       invoke('agent:setMemberApiKeyOverride', instanceId, apiKey),
     deleteDefinition: (defId: string) => invoke('agent:deleteDefinition', defId),
+    definitionImpact: (defId: string) => invoke('agent:definitionImpact', defId),
+    disablePreset: (defId: string) => invoke('agent:disablePreset', defId),
     getBuiltinSuggestions: () => invoke('agent:getBuiltinSuggestions'),
     getMemberDeltas: (instanceId: string) => invoke('agent:getMemberDeltas', instanceId),
     setMemberDeltas: (instanceId: string, deltas: AssignmentDeltas) =>

@@ -13,7 +13,7 @@ describe('previewBuiltinPresetAgent（预置能力预览，只读不落库）', 
   it('真实 YAML 目录：返回 slug/名称/能力三元组/全量 prompt（fork 与展示共用）', () => {
     const preview = previewBuiltinPresetAgent('ui-designer');
     expect(preview.slug).toBe('ui-designer');
-    expect(preview.name).toBe('UI 设计师');
+    expect(preview.name).toBe('Muse');
     expect(typeof preview.iconEmoji).toBe('string');
     expect(typeof preview.description).toBe('string');
     // 能力三元组：ref 字符串数组（renderer CapabilityTabs 直接消费）
@@ -24,6 +24,24 @@ describe('previewBuiltinPresetAgent（预置能力预览，只读不落库）', 
     expect(preview.skills).toContain('design-critique');
     // systemPrompt 全量返回（截断由 renderer 展示层做——fork 需要全量）
     expect(preview.systemPrompt).toContain('设计规范守护者');
+  });
+
+  it('真实 YAML 目录：v2.0.0 新增阵容可预览（Hawk 只审不改 / Sherlock 浏览器组 / Momo 通用兜底）', () => {
+    const hawk = previewBuiltinPresetAgent('code-reviewer');
+    expect(hawk.name).toBe('Hawk');
+    expect(hawk.tools).toContain('git_diff');
+    expect(hawk.systemPrompt).toContain('从不直接改代码');
+
+    const sherlock = previewBuiltinPresetAgent('researcher');
+    expect(sherlock.name).toBe('Sherlock');
+    expect(sherlock.tools).toContain('browser_navigate');
+    expect(sherlock.tools).toContain('office_read');
+    expect(sherlock.systemPrompt).toContain('每个结论都附出处');
+
+    const momo = previewBuiltinPresetAgent('general-assistant');
+    expect(momo.name).toBe('Momo');
+    expect(momo.tools).toContain('webfetch');
+    expect(momo.systemPrompt).toContain('万能小助手');
   });
 
   it('skills 引用形如 slug 字符串（非 {kind,ref} 对象——出参形状锁）', () => {

@@ -398,6 +398,20 @@ export interface EnablePresetInput {
   setAsDefault?: boolean;
 }
 
+/** agent:definitionImpact 返回——删除/停用确认框的披露数据（2026-10-10 披露式级联） */
+export interface DefinitionImpact {
+  /** 将被移出的成员总数（跨全部工作空间） */
+  memberCount: number;
+  /** 涉及的工作空间名（去重） */
+  workspaceNames: string[];
+  /** 将随 FK 级联解散的团队名（该 agent 成员为 leader） */
+  ledTeamNames: string[];
+  /** 全部成员失效、将变为只读的会话数（消息历史保留） */
+  readOnlySessionCount: number;
+  /** 将被清空默认 agent 设置的工作空间名 */
+  defaultForWorkspaceNames: string[];
+}
+
 /** agent:enablePreset 返回 */
 export interface EnablePresetResult {
   def: AgentDefinition;
@@ -1823,6 +1837,10 @@ export interface ApiSurface {
     setMemberApiKeyOverride(instanceId: string, apiKey: string | null): Promise<{ ok: boolean }>;
     /** v1.3 新增：删除自定义 def（builtin 不可删；级联清理成员） */
     deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }>;
+    /** 2026-10-10 披露式级联：删除/停用前影响面预查（确认框文案数据源，只读） */
+    definitionImpact(defId: string): Promise<DefinitionImpact>;
+    /** 2026-10-10：停用预设 agent——回到未启用态（级联内核与 deleteDefinition 共用） */
+    disablePreset(defId: string): Promise<{ stoppedInstanceIds: string[] }>;
     /** v1.3 新增：返回 builtin 建议 Map（UI 添加 builtin 时预填 platform） */
     getBuiltinSuggestions(): Promise<BuiltinSuggestionMap>;
     /** v25：原 getAssignmentDeltas 平移更名（全空对象 = 无 delta） */

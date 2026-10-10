@@ -298,19 +298,84 @@ export async function updateAssignmentApiKey(
   }
 }
 
-/**
- * 删除自定义 agent 定义。builtin 不可删。
- * 级联：停止全部引用此 def 的运行中实例 →
- * 清除 API key override（keychain）→ 置空 default 引用 → 删成员行（FK 级联清
- * session_members/team_members）→ 删 def 行。
- * spec §7：默认 agent 被删除 → default 置 NULL；成员是团队 leader 时 FK CASCADE
- * 连带解散团队（绕过 removeMember 的 leader 守卫），logger.warn 留痕不阻断。
- */
-export async function deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
+/** 定义删除/停用的影响面预查（2026-10-10 披露式级联——确认框文案数据源）。
+ *  只读零副作用；def 不存在 throw。 */
+export interface DefinitionImpact {
+  /** 将被移出的成员总数（跨全部工作空间） */
+  memberCount: number;
+  /** 涉及的工作空间名（去重） */
+  workspaceNames: string[];
+  /** 将随 FK 级联解散的团队名（该 agent 成员为 leader） */
+  ledTeamNames: string[];
+  /** 全部成员失效、将变为只读的会话数（消息历史保留） */
+  readOnlySessionCount: number;
+  /** 将被清空默认 agent 设置的工作空间名 */
+  defaultForWorkspaceNames: string[];
+}
+
+export function getDefinitionImpact(defId: string): DefinitionImpact {
   const def = getAgentDefinition(defId);
   if (!def) throw new Error(`未找到 agent 定义: ${defId}`);
-  if (def.source === 'builtin') throw new Error('builtin agent 不可删除');
+  const db = getDb();
+  const memberRows = db
+    .prepare(
+      `SELECT wam.instance_id, w.name AS ws_name FROM workspace_agent_members wam
+       JOIN workspaces w ON w.id = wam.workspace_id
+       WHERE wam.agent_definition_id = ?`,
+    )
+    .all(defId) as Array<{ instance_id: string; ws_name: string }>;
+  const instanceIds = memberRows.map((r) => r.instance_id);
+  if (instanceIds.length === 0) {
+    return {
+      memberCount: 0, workspaceNames: [], ledTeamNames: [],
+      readOnlySessionCount: 0, defaultForWorkspaceNames: [],
+    };
+  }
+  const ph = instanceIds.map(() => '?').join(', ');
+  const ledTeamNames = (
+    db.prepare(`SELECT name FROM teams WHERE leader_instance_id IN (${ph})`).all(...instanceIds) as {
+      name: string;
+    }[]
+  ).map((r) => r.name);
+  // 全员失效会话：session 成员全在待删集合（COUNT = 命中数；GROUP BY 组恒非空）；
+  // 尚有存活成员的会话不计（继续可用，仅委派面收窄）
+  const readOnlySessionCount = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT sm.session_id FROM session_members sm GROUP BY sm.session_id
+           HAVING COUNT(*) = SUM(CASE WHEN sm.instance_id IN (${ph}) THEN 1 ELSE 0 END)
+         )`,
+      )
+      .get(...instanceIds) as { n: number }
+  ).n;
+  const defaultForWorkspaceNames = (
+    db
+      .prepare(`SELECT name FROM workspaces WHERE default_agent_instance_id IN (${ph})`)
+      .all(...instanceIds) as { name: string }[]
+  ).map((r) => r.name);
+  return {
+    memberCount: memberRows.length,
+    workspaceNames: [...new Set(memberRows.map((r) => r.ws_name))],
+    ledTeamNames,
+    readOnlySessionCount,
+    defaultForWorkspaceNames,
+  };
+}
 
+/**
+ * 级联移除 agent 定义（custom 删除与 builtin 停用共用内核，2026-10-10 披露式级联）：
+ *  1. 停止运行中实例（事务外——stopAgentRuntime 异步且含子进程清理）
+ *  2. 单事务：置空 default 引用 + 删成员行（session_members / team_members 由 FK
+ *     ON DELETE CASCADE 级联清理；成员是团队 leader 时其 teams 行随 FK CASCADE
+ *     一并解散——影响面已由前置确认框披露，logger.warn 留痕）+ 删定义行。
+ *     事务化修复旧版「半状态后重试永远失败」（keychain 已清/部分成员已删/def 残留）
+ *  3. 事务成功后 best-effort 清 keychain override（失败仅留孤儿 key——instanceId
+ *     已不存在无引用风险；抛错反而让 UI 误判失败触发重放）
+ */
+async function cascadeRemoveDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
+  const def = getAgentDefinition(defId);
+  if (!def) throw new Error(`未找到 agent 定义: ${defId}`);
   const db = getDb();
   const rows = db
     .prepare('SELECT * FROM workspace_agent_members WHERE agent_definition_id = ?')
@@ -322,30 +387,60 @@ export async function deleteDefinition(defId: string): Promise<{ stoppedInstance
       await stopAgentRuntime(row.instance_id);
       stopped.push(row.instance_id);
     }
-    // 清除 API key override
-    if (row.api_key_override === 1) {
-      await deleteSecret(`agent.${row.instance_id}.api_key_override`);
-    }
-    // 置空 default 引用（与 removeMember 事务内同款语句）。default FK 无 ON DELETE
-    // 动作，不先置空则 DELETE 命中即 FOREIGN KEY constraint failed；且本函数非事务，
-    // 半状态（前序成员已删/keychain 已清/def 行残留）后重试永远失败
-    db.prepare(
-      'UPDATE workspaces SET default_agent_instance_id = NULL WHERE default_agent_instance_id = ?',
-    ).run(row.instance_id);
-    // teams.leader FK CASCADE：删成员会连带解散其 leader 团队（removeMember 的
-    // leader 守卫在此路径不可用）——留痕不阻断
-    const ledTeams = db
-      .prepare('SELECT name FROM teams WHERE leader_instance_id = ?')
-      .all(row.instance_id) as { name: string }[];
-    for (const t of ledTeams) {
-      logger.warn('定义删除将解散团队（成员为 leader，FK 级联）', { team: t.name, defId });
-    }
-    db.prepare('DELETE FROM workspace_agent_members WHERE instance_id = ?').run(row.instance_id);
   }
 
-  db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
-  logger.info('agent 定义已删除', { defId, stoppedCount: stopped.length });
+  const instanceIds = rows.map((r) => r.instance_id);
+  const withOverride = rows.filter((r) => r.api_key_override === 1).map((r) => r.instance_id);
+
+  if (instanceIds.length > 0) {
+    const ph = instanceIds.map(() => '?').join(', ');
+    // leader 团队将随 FK 级联解散——留痕（确认框已披露，不阻断）
+    const ledTeams = db
+      .prepare(`SELECT name FROM teams WHERE leader_instance_id IN (${ph})`)
+      .all(...instanceIds) as { name: string }[];
+    for (const t of ledTeams) {
+      logger.warn('定义删除/停用将解散团队（成员为 leader，FK 级联）', { team: t.name, defId });
+    }
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE workspaces SET default_agent_instance_id = NULL WHERE default_agent_instance_id IN (${ph})`,
+      ).run(...instanceIds);
+      db.prepare('DELETE FROM workspace_agent_members WHERE agent_definition_id = ?').run(defId);
+      db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
+    })();
+  } else {
+    db.prepare('DELETE FROM agent_definitions WHERE id = ?').run(defId);
+  }
+
+  for (const instanceId of withOverride) {
+    try {
+      await deleteSecret(`agent.${instanceId}.api_key_override`);
+    } catch (err) {
+      logger.warn('keychain override 清理失败（孤儿 key 无引用风险）', { instanceId, err: String(err) });
+    }
+  }
+  logger.info('agent 定义已删除/停用', { defId, source: def.source, stoppedCount: stopped.length });
   return { stoppedInstanceIds: stopped };
+}
+
+/** 删除自定义 agent 定义（builtin 不可删——停用走 disablePreset）。级联内核见 cascadeRemoveDefinition。 */
+export async function deleteDefinition(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
+  const def = getAgentDefinition(defId);
+  if (!def) throw new Error(`未找到 agent 定义: ${defId}`);
+  if (def.source === 'builtin') throw new Error('builtin agent 不可删除（停用请使用 disablePreset）');
+  return cascadeRemoveDefinition(defId);
+}
+
+/**
+ * 停用预设 agent（2026-10-10）：删 builtin def 行 = 回到「未启用」态；
+ * 成员/团队/会话影响与删除 custom 同内核级联，影响面由确认框披露。
+ * YAML 定义随应用分发恒在——重新启用走 enablePreset 既有管线（UPDATE 语义）恢复。
+ */
+export async function disablePreset(defId: string): Promise<{ stoppedInstanceIds: string[] }> {
+  const def = getAgentDefinition(defId);
+  if (!def) throw new Error(`未找到 agent 定义: ${defId}`);
+  if (def.source !== 'builtin') throw new Error(`非 builtin 定义不支持停用: ${defId}`);
+  return cascadeRemoveDefinition(defId);
 }
 
 /** keychain 引用 key：agent.<instanceId>.llm_api_key（旧版兼容；v1.3 起优先用 api_key_override） */
