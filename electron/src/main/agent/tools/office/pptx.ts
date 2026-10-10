@@ -77,6 +77,12 @@ export interface PptxChartSpec {
   title?: string;
 }
 
+/** 页型（2026-10-10 PPT 质量专项）：cover 封面 / section 章节隔页 / content 常规内容 /
+ * chart 图表主体页 / closing 结尾页。缺省按内容自动推断（首页 cover、末页空内容
+ * closing、含图表 chart、纯标题 section、其余 content）——默认即有版式感，
+ * 不依赖 LLM 显式选型 */
+export type PptxSlideLayout = 'cover' | 'section' | 'content' | 'chart' | 'closing';
+
 export interface PptxSlideSpec {
   title: string;
   bullets?: string[];
@@ -85,6 +91,9 @@ export interface PptxSlideSpec {
   background?: string;
   images?: PptxImageSpec[];
   chart?: PptxChartSpec;
+  layout?: PptxSlideLayout;
+  /** 主题强调色（6 位 hex；作用于 title bar / 色块 / 章节底色），缺省商务深蓝 */
+  accentColor?: string;
 }
 
 /** 图片扩展白名单（spec §14.9-2）：ext（小写）→ base64 data URL 的 mime 前缀 */
@@ -112,6 +121,8 @@ const SERIES_FALLBACK_COLORS = ['4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5'
 const HEX_COLOR_RE = /^[0-9A-Fa-f]{6}$/;
 
 const CHART_TYPES: readonly PptxChartType[] = ['bar', 'bar_h', 'line', 'pie'];
+
+const SLIDE_LAYOUTS: readonly PptxSlideLayout[] = ['cover', 'section', 'content', 'chart', 'closing'];
 
 function asFiniteNumber(v: unknown, what: string): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`参数 ${what} 不是有限数字`);
@@ -232,63 +243,257 @@ export function parsePptxSlides(
     if (rec.chart !== undefined && rec.chart !== null) {
       spec.chart = parseSlideChart(rec.chart, `slides[${i}].chart`);
     }
+    if (rec.layout !== undefined && rec.layout !== null) {
+      if (typeof rec.layout !== 'string' || !SLIDE_LAYOUTS.includes(rec.layout as PptxSlideLayout)) {
+        throw new Error(`slides[${i}].layout 必须是 ${SLIDE_LAYOUTS.join(' / ')}`);
+      }
+      spec.layout = rec.layout as PptxSlideLayout;
+    }
+    if (rec.accentColor !== undefined && rec.accentColor !== null) {
+      spec.accentColor = parseHexColor(rec.accentColor, `slides[${i}].accentColor`);
+    }
     return spec;
   });
+}
+
+/** 主题缺省强调色：商务深蓝（PowerPoint Office 主题「深蓝，着色 1，深 50%」） */
+const DEFAULT_ACCENT = '1F4E79';
+/** 内容正文字色（近黑深灰，比纯黑柔和） */
+const BODY_TEXT_COLOR = '333333';
+const MUTED_TEXT_COLOR = '767171';
+
+/** 16:9 版面常量（英寸；pptxgenjs LAYOUT_16x9 = 10 × 5.625） */
+const PAGE_W = 10;
+const PAGE_H = 5.625;
+const TITLE_BAR_H = 0.85;
+const CONTENT_TOP = 1.15;
+/** 内容区下界（页脚带上方留 0.15 呼吸） */
+const CONTENT_BOTTOM = 5.25;
+const FOOTER_LINE_Y = 5.4;
+/** 编排器元素间纵向间隙 */
+const CONTENT_GAP = 0.18;
+
+function inferLayout(s: PptxSlideSpec, index: number, total: number): PptxSlideLayout {
+  if (s.layout) return s.layout;
+  // 实质内容元素优先于封面判定：单页图表/插图/表格的需求真实存在（快出一张图），
+  // 真封面页通常只有标题与少量 bullets
+  if (s.chart) return 'chart';
+  const hasHeavyContent = s.table !== undefined || (s.images?.length ?? 0) > 0;
+  if (index === 0 && !hasHeavyContent) return 'cover';
+  if (index === total - 1 && !s.bullets?.length && !s.table && !s.chart && !s.images?.length) {
+    return 'closing';
+  }
+  if (!s.bullets?.length && !s.table && !s.images?.length) return 'section';
+  return 'content';
+}
+
+/** bullets 分栏阈值：超过则双栏（content 版式内自动） */
+const TWO_COL_THRESHOLD = 6;
+
+interface ContentRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 内容区几何编排器（PPT 质量专项 A）：同页 table/bullets/images/chart 顺序纵向
+ * 分配，互不叠放。此前 bullets/table/chart 全部硬编码 y=1.6 同起点——图表页
+ * 文本与图表必然压盖（CFO 走查实测）。chart 在场时前置元素限高（图表是页面
+ * 主体）；bullets 超阈值自动双栏。
+ */
+function planContentRegions(s: PptxSlideSpec): {
+  table?: ContentRegion;
+  bullets?: ContentRegion;
+  bulletsTwoCol: boolean;
+  chart?: ContentRegion;
+  defaultImages: Array<{ img: PptxImageSpec; region: ContentRegion }>;
+} {
+  const plan = {
+    table: undefined as ContentRegion | undefined,
+    bullets: undefined as ContentRegion | undefined,
+    bulletsTwoCol: false,
+    chart: undefined as ContentRegion | undefined,
+    defaultImages: [] as Array<{ img: PptxImageSpec; region: ContentRegion }>,
+  };
+  const fullW = PAGE_W - 1.2;
+  const chartPresent = s.chart !== undefined;
+  let y = CONTENT_TOP;
+
+  const remaining = () => Math.max(CONTENT_BOTTOM - y, 0.6);
+
+  if (s.table) {
+    const rows = s.table.rows.length + 1;
+    const h = Math.min(rows * 0.32 + 0.4, chartPresent ? 1.8 : remaining());
+    plan.table = { x: 0.6, y, w: fullW, h };
+    y += h + CONTENT_GAP;
+  }
+
+  if (s.bullets && s.bullets.length > 0) {
+    const twoCol = !chartPresent && !s.table && s.bullets.length > TWO_COL_THRESHOLD;
+    const h = twoCol
+      ? Math.min(Math.ceil(s.bullets.length / 2) * 0.36 + 0.15, remaining())
+      : Math.min(s.bullets.length * 0.34 + 0.2, chartPresent ? 1.6 : remaining());
+    plan.bullets = { x: 0.8, y, w: fullW - 0.4, h };
+    plan.bulletsTwoCol = twoCol;
+    y += h + CONTENT_GAP;
+  }
+
+  for (const img of s.images ?? []) {
+    // 显式坐标的插图不参与编排（保留 LLM 精确定位能力）；仅缺省几何入队
+    if (img.x !== undefined || img.y !== undefined) continue;
+    const w = img.w ?? IMAGE_DEFAULT_W;
+    const h = Math.min(img.h ?? Number((w * IMAGE_DEFAULT_H_RATIO).toFixed(2)), remaining());
+    plan.defaultImages.push({ img, region: { x: 0.6, y, w: Math.min(w, fullW), h } });
+    y += h + CONTENT_GAP;
+  }
+
+  if (s.chart) {
+    const h = Math.max(remaining(), 1.2);
+    plan.chart = { x: 0.6, y, w: fullW, h: Math.min(h, CONTENT_BOTTOM - y) };
+  }
+  return plan;
+}
+
+function addTitleBar(slide: PptxGenJS.Slide, title: string, accent: string): void {
+  slide.addShape('rect', { x: 0, y: 0, w: PAGE_W, h: TITLE_BAR_H, fill: { color: accent } });
+  slide.addText(title, {
+    x: 0.5, y: 0.12, w: PAGE_W - 1, h: 0.62,
+    fontSize: 22, bold: true, color: 'FFFFFF',
+  });
+}
+
+function addFooter(slide: PptxGenJS.Slide, pageNo: number, accent: string): void {
+  slide.addShape('rect', { x: 0.5, y: FOOTER_LINE_Y, w: PAGE_W - 1, h: 0.012, fill: { color: accent } });
+  slide.addText(String(pageNo), {
+    x: PAGE_W - 0.9, y: FOOTER_LINE_Y + 0.03, w: 0.4, h: 0.18,
+    fontSize: 10, color: MUTED_TEXT_COLOR, align: 'right',
+  });
+}
+
+/** chart 中文/小字号适配：类目轴与数据标签字号固定档，避免默认 12-14pt 在
+ * 长中文类目（如「市场推广费执行率」）下溢出重叠 */
+function chartFontOpts(): Partial<PptxGenJS.IChartOpts> {
+  return {
+    catAxisLabelFontSize: 11,
+    valAxisLabelFontSize: 10,
+    legendFontSize: 11,
+    dataLabelFontSize: 10,
+    titleFontSize: 14,
+  };
 }
 
 export async function createPptx(slides: PptxSlideSpec[]): Promise<Buffer> {
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_16x9';
-  for (const s of slides) {
+  const total = slides.length;
+  for (const [index, s] of slides.entries()) {
     const slide = pptx.addSlide();
+    const layout = inferLayout(s, index, total);
+    const accent = s.accentColor ?? DEFAULT_ACCENT;
     if (s.background) slide.background = { color: s.background };
-    slide.addText(s.title, { x: 0.5, y: 0.4, w: 9, h: 0.9, fontSize: 28, bold: true });
-    if (s.bullets && s.bullets.length > 0) {
-      slide.addText(
-        s.bullets.map((b) => ({ text: b, options: { bullet: true } })),
-        { x: 0.8, y: 1.6, w: 8.4, h: 3.6, fontSize: 16 },
-      );
-    }
-    if (s.table) {
-      const header = s.table.header.map((h) => ({ text: h, options: { bold: true } }));
-      const rows = [header, ...s.table.rows.map((r) => r.map((c) => ({ text: c })))];
-      slide.addTable(rows, { x: 0.6, y: 1.6, w: 8.8, fontSize: 12 });
-    }
-    for (const img of s.images ?? []) {
-      const ext = path.extname(img.path).toLowerCase().replace('.', '');
-      const w = img.w ?? IMAGE_DEFAULT_W;
-      slide.addImage({
-        // 扩展白名单已在 parse 校验，mime 必中
-        data: `${IMAGE_MIME_BY_EXT[ext]!};base64,${fs.readFileSync(img.abs).toString('base64')}`,
-        x: img.x ?? IMAGE_DEFAULT_X,
-        y: img.y ?? IMAGE_DEFAULT_Y,
-        w,
-        h: img.h ?? Number((w * IMAGE_DEFAULT_H_RATIO).toFixed(2)),
+
+    if (layout === 'cover' || layout === 'closing') {
+      const isCover = layout === 'cover';
+      slide.addShape('rect', { x: 0, y: 0, w: 0.22, h: PAGE_H, fill: { color: accent } });
+      slide.addText(s.title, {
+        x: 0.85, y: isCover ? 1.7 : 2.1, w: 8.3, h: 1.1,
+        fontSize: isCover ? 34 : 30, bold: true, color: isCover ? accent : BODY_TEXT_COLOR,
       });
-    }
-    if (s.chart) {
-      const c = s.chart;
-      const data = c.series.map((ser) => ({ name: ser.name, labels: c.categories, values: ser.values }));
-      const opts: PptxGenJS.IChartOpts = {
-        x: 0.6, y: 1.6, w: 8.8, h: 3.6,
-        showLegend: c.series.length > 1,
-      };
-      // chartColors 按系列序取色（pptxgenjs bar/line 逐系列、pie 单系列同色）；
-      // 任一系列显式给色才启用，未给色的系列按 accent 序列补位对齐次序
-      if (c.series.some((ser) => ser.color)) {
-        opts.chartColors = c.series.map(
-          (ser, si) => ser.color ?? SERIES_FALLBACK_COLORS[si % SERIES_FALLBACK_COLORS.length]!,
-        );
+      if (s.bullets?.length) {
+        slide.addText(s.bullets.map((b) => ({ text: b, options: { breakLine: true } })), {
+          x: 0.9, y: isCover ? 2.95 : 3.2, w: 8, h: 1.4, fontSize: 15, color: MUTED_TEXT_COLOR,
+        });
       }
-      if (c.type === 'bar_h') opts.barDir = 'bar';
-      if (c.title) {
-        opts.showTitle = true;
-        opts.title = c.title;
+      slide.addShape('rect', { x: 0.85, y: isCover ? 1.5 : 1.95, w: 1.6, h: 0.045, fill: { color: accent } });
+    } else if (layout === 'section') {
+      slide.background = { color: accent };
+      slide.addText(s.title, {
+        x: 0.6, y: 2.05, w: 8.8, h: 0.9, fontSize: 30, bold: true, color: 'FFFFFF', align: 'center',
+      });
+      if (s.bullets?.length) {
+        slide.addText(s.bullets.join('　·　'), {
+          x: 0.6, y: 3.1, w: 8.8, h: 0.5, fontSize: 14, color: 'E8EDF4', align: 'center',
+        });
       }
-      // pptxgenjs 的 ChartType 枚举仅存在于类型层（CJS 运行时不导出），
-      // CHART_NAME 本就是字符串联合，直接传字面量
-      const kind: 'bar' | 'line' | 'pie' = c.type === 'pie' ? 'pie' : c.type === 'line' ? 'line' : 'bar';
-      slide.addChart(kind, data, opts);
+    } else {
+      // content / chart：title bar + 内容区编排 + 页脚
+      addTitleBar(slide, s.title, accent);
+      addFooter(slide, index + 1, accent);
+      const plan = planContentRegions(s);
+
+      if (s.table && plan.table) {
+        const header = s.table.header.map((h) => ({ text: h, options: { bold: true, color: 'FFFFFF', fill: { color: accent } } }));
+        const rows = [header, ...s.table.rows.map((r) => r.map((c) => ({ text: c })))];
+        slide.addTable(rows, { x: plan.table.x, y: plan.table.y, w: plan.table.w, fontSize: 12, color: BODY_TEXT_COLOR });
+      }
+
+      if (s.bullets?.length && plan.bullets) {
+        const region = plan.bullets;
+        if (plan.bulletsTwoCol) {
+          const half = Math.ceil(s.bullets.length / 2);
+          const colW = region.w / 2 - 0.15;
+          const toOpts = (b: string) => ({ text: b, options: { bullet: true } });
+          slide.addText(s.bullets.slice(0, half).map(toOpts), {
+            x: region.x, y: region.y, w: colW, h: region.h, fontSize: 15, color: BODY_TEXT_COLOR,
+          });
+          slide.addText(s.bullets.slice(half).map(toOpts), {
+            x: region.x + colW + 0.3, y: region.y, w: colW, h: region.h, fontSize: 15, color: BODY_TEXT_COLOR,
+          });
+        } else {
+          slide.addText(
+            s.bullets.map((b) => ({ text: b, options: { bullet: true } })),
+            { x: region.x, y: region.y, w: region.w, h: region.h, fontSize: 15, color: BODY_TEXT_COLOR },
+          );
+        }
+      }
+
+      for (const { img, region } of plan.defaultImages) {
+        slide.addImage({
+          // 扩展白名单已在 parse 校验，mime 必中
+          data: `${IMAGE_MIME_BY_EXT[path.extname(img.path).toLowerCase().replace('.', '')]!};base64,${fs.readFileSync(img.abs).toString('base64')}`,
+          x: region.x, y: region.y, w: region.w, h: region.h,
+        });
+      }
+      // 显式坐标插图（不参与编排）
+      for (const img of (s.images ?? [])) {
+        if (img.x === undefined && img.y === undefined) continue;
+        const w = img.w ?? IMAGE_DEFAULT_W;
+        slide.addImage({
+          data: `${IMAGE_MIME_BY_EXT[path.extname(img.path).toLowerCase().replace('.', '')]!};base64,${fs.readFileSync(img.abs).toString('base64')}`,
+          x: img.x ?? IMAGE_DEFAULT_X,
+          y: img.y ?? IMAGE_DEFAULT_Y,
+          w,
+          h: img.h ?? Number((w * IMAGE_DEFAULT_H_RATIO).toFixed(2)),
+        });
+      }
+
+      if (s.chart && plan.chart) {
+        const c = s.chart;
+        const data = c.series.map((ser) => ({ name: ser.name, labels: c.categories, values: ser.values }));
+        const opts: PptxGenJS.IChartOpts = {
+          x: plan.chart.x, y: plan.chart.y, w: plan.chart.w, h: plan.chart.h,
+          showLegend: c.series.length > 1,
+          ...chartFontOpts(),
+        };
+        // chartColors 按系列序取色（pptxgenjs bar/line 逐系列、pie 单系列同色）；
+        // 任一系列显式给色才启用，未给色的系列按 accent 序列补位对齐次序
+        if (c.series.some((ser) => ser.color)) {
+          opts.chartColors = c.series.map(
+            (ser, si) => ser.color ?? SERIES_FALLBACK_COLORS[si % SERIES_FALLBACK_COLORS.length]!,
+          );
+        }
+        if (c.type === 'bar_h') opts.barDir = 'bar';
+        if (c.title) {
+          opts.showTitle = true;
+          opts.title = c.title;
+        }
+        // pptxgenjs 的 ChartType 枚举仅存在于类型层（CJS 运行时不导出），
+        // CHART_NAME 本就是字符串联合，直接传字面量
+        const kind: 'bar' | 'line' | 'pie' = c.type === 'pie' ? 'pie' : c.type === 'line' ? 'line' : 'bar';
+        slide.addChart(kind, data, opts);
+      }
     }
     if (s.notes) slide.addNotes(s.notes);
   }

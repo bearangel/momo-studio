@@ -176,3 +176,113 @@ describe('pptx 图表（spec §14.9-4）', () => {
     expect(() => bad({ type: 'bar', categories: ['a'] })).toThrow(/series/);
   });
 });
+
+// ============ PPT 质量专项（2026-10-10）：几何互斥 + 版式引擎 ============
+
+/** 从 slide XML 提取全部形状几何（EMU→英寸），[{kind,x,y,w,h}] */
+function shapeGeometries(xml: string): Array<{ kind: string; x: number; y: number; w: number; h: number }> {
+  const out: Array<{ kind: string; x: number; y: number; w: number; h: number }> = [];
+  const re = /<(p:sp|p:graphicFrame)>.*?<\/\1>/gs;
+  for (const m of xml.matchAll(re)) {
+    const block = m[0];
+    const g = block.match(/<a:off x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<a:ext cx="(\d+)" cy="(\d+)"/s);
+    if (g) {
+      out.push({
+        kind: m[1] === 'p:graphicFrame' ? 'chart' : 'sp',
+        x: Number(g[1]) / 914400, y: Number(g[2]) / 914400,
+        w: Number(g[3]) / 914400, h: Number(g[4]) / 914400,
+      });
+    }
+  }
+  return out;
+}
+
+describe('pptx 几何编排器（PPT 质量专项 A：同页内容不叠放）', () => {
+  it('bullets + chart 同页 → chart 区域起点在 bullets 区域底部之下（修复前同起点 y=1.6 压盖）', async () => {
+    const zip = await generate([
+      { title: '费用预警', bullets: ['招聘费执行率 82.6%', '市场推广费年化预测超支'], chart: { type: 'bar', categories: ['招聘费', '推广费'], series: [{ name: '执行率%', values: [82.6, 76.3] }] } },
+    ]);
+    const xml = entryText(zip, 'ppt/slides/slide1.xml');
+    const geo = shapeGeometries(xml);
+    // 含 bullets 文本的文本框（y 在内容区、含多行文本）与 chart graphicFrame
+    const chart = geo.find((g) => g.kind === 'chart');
+    expect(chart).toBeDefined();
+    // bullets 区：内容区里 y 最小、非 title bar 的文本形状（title bar 文字 y≈0.12 排除，页码排除）
+    const textBlocks = geo.filter((g) => g.kind === 'sp' && g.y > 0.9 && g.y < 4.5 && g.h > 0.3);
+    expect(textBlocks.length).toBeGreaterThan(0);
+    const bulletsBottom = Math.max(...textBlocks.map((g) => g.y + g.h));
+    expect(chart!.y).toBeGreaterThanOrEqual(bulletsBottom - 0.01);
+  });
+
+  it('table + bullets 同页 → 纵向顺序排列不重叠', async () => {
+    const zip = await generate([
+      { title: '汇总', table: { header: ['季度', '营收'], rows: [['Q1', '100']] }, bullets: ['同比 +12%'] },
+    ]);
+    const geo = shapeGeometries(entryText(zip, 'ppt/slides/slide1.xml'));
+    // table 是 graphicFrame（无 chart 时唯一 graphicFrame）
+    const tableFrame = geo.find((g) => g.kind === 'chart');
+    expect(tableFrame).toBeDefined();
+    const textBlocks = geo.filter((g) => g.kind === 'sp' && g.y > 0.9 && g.h > 0.25 && g.y < 4.5);
+    const bulletsBlock = textBlocks.find((g) => g.y > tableFrame!.y);
+    expect(bulletsBlock).toBeDefined();
+    expect(bulletsBlock!.y).toBeGreaterThanOrEqual(tableFrame!.y + tableFrame!.h - 0.01);
+  });
+});
+
+describe('pptx 版式引擎（PPT 质量专项 B：默认即有版式感）', () => {
+  it('首页自动 cover：accent 竖条 + 大标题色字（非白底黑字标题框）', async () => {
+    const zip = await generate([{ title: '月度经营分析', bullets: ['2026 年 9 月 · 财务部'] }]);
+    const xml = entryText(zip, 'ppt/slides/slide1.xml');
+    expect(xml).toContain('1F4E79'); // 缺省 accent 色块存在
+    expect(xml).toContain('月度经营分析');
+  });
+  it('纯标题中间页自动 section：accent 整页底色', async () => {
+    const zip = await generate([
+      { title: '封面', bullets: ['副题'] },
+      { title: '第二章 数据洞察' },
+      { title: '结尾页', bullets: ['谢谢'] },
+    ]);
+    const sectionXml = entryText(zip, 'ppt/slides/slide2.xml');
+    expect(sectionXml).toContain('<p:bg>');
+    expect(sectionXml).toContain('1F4E79');
+  });
+  it('content 页带 title bar（accent 色块横带）与页脚页码', async () => {
+    const zip = await generate([
+      { title: '封面' },
+      { title: '要点页', bullets: ['要点一', '要点二'] },
+    ]);
+    const xml = entryText(zip, 'ppt/slides/slide2.xml');
+    expect(xml).toContain('1F4E79');
+    expect(xml).toMatch(/<a:t>2<\/a:t>/); // 页脚页码
+  });
+  it('accentColor 显式覆盖缺省主题色', async () => {
+    const zip = await generate([{ title: '封面' }, { title: '要点', bullets: ['x'], accentColor: 'C00000' }]);
+    expect(entryText(zip, 'ppt/slides/slide2.xml')).toContain('C00000');
+  });
+  it('bullets 超 6 条自动双栏（同 y 两个文本区左右分布）', async () => {
+    const zip = await generate([
+      { title: '封面' },
+      { title: '多维要点', bullets: ['一', '二', '三', '四', '五', '六', '七'] },
+    ]);
+    const geo = shapeGeometries(entryText(zip, 'ppt/slides/slide2.xml'))
+      .filter((g) => g.kind === 'sp' && g.y > 1.0 && g.h > 0.5);
+    const ys = [...new Set(geo.map((g) => Math.round(g.y * 10) / 10))];
+    expect(geo.length).toBeGreaterThanOrEqual(2);
+    expect(ys.length).toBe(1); // 双栏同起点
+    const xs = geo.map((g) => g.x).sort((a, b) => a - b);
+    expect(xs[1] - xs[0]).toBeGreaterThan(3); // 左右分栏间距
+  });
+  it('layout 显式指定与非法值校验', () => {
+    expect(() => parsePptxSlides([{ title: 'x', layout: 'fancy' }])).toThrow(/layout/);
+    const ok = parsePptxSlides([{ title: 'x', layout: 'section' }]);
+    expect(ok[0]!.layout).toBe('section');
+  });
+  it('chart 中文类目字号适配（catAxisLabelFontSize=11 落 chart XML）', async () => {
+    const zip = await generate([
+      { title: '封面' },
+      { title: '图', chart: { type: 'bar', categories: ['市场推广费执行率'], series: [{ name: '执行率', values: [76] }] } },
+    ]);
+    const chartXml = zip.getEntries().map((e) => /ppt\/charts\/chart\d+\.xml$/.test(e.entryName) ? e.getData().toString('utf-8') : '').join('');
+    expect(chartXml).toContain('sz="1100"');
+  });
+});

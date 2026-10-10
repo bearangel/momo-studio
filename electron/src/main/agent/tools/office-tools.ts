@@ -296,13 +296,13 @@ const OFFICE_CREATE_DOC_DEF: LLMToolDef = {
 const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
   name: 'office_create_ppt',
   description:
-    '生成 PPT（.pptx）：逐 slide 标题 + 要点列表或表格 + 备注；' +
-    '支持页级背景色（background，6 位 hex 如 1F3864）/插图（images，图先入 workspace、' +
-    '本工具只引用，扩展白名单 png/jpg/jpeg/gif/webp/bmp）/原生图表（chart，活图表非截图，' +
-    '数据由 agent 经 office_read_cells 取数提供）。' +
-    '简单版式（标题+内容），复杂排版不支持（spec 边界）。目标已存在时须先 office_read 读取后覆盖。' +
+    '生成专业版式 PPT（.pptx）：页型自动推断（首页封面/纯标题章节页/含图表图表页/末页空内容结尾页），' +
+    '常规内容页带主题色 title bar 与页脚页码；同页多项内容自动纵向编排不叠放，要点超 6 条自动双栏。' +
+    '支持页型显式指定（layout: cover/section/content/chart/closing）与主题色（accentColor，6 位 hex，' +
+    '缺省商务深蓝 1F4E79）；background 页底色（6 位 hex）/ images 插图（图先入 workspace）/' +
+    ' chart 原生图表（活图表非截图，数据由 agent 经 office_read_cells 取数提供；图表页正文要点建议 ≤2 条）。' +
     '用户提供 .pptx 模板要保留版式/主题/品牌时，改用 office_fill_ppt_template 按页填充；' +
-    '本页工具是基于 pptxgenjs 的全新生成，不继承模板样式。',
+    '本工具基于 pptxgenjs 全新生成，不继承模板样式。目标已存在时须先 office_read 读取后覆盖。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -314,6 +314,15 @@ const OFFICE_CREATE_PPT_DEF: LLMToolDef = {
           type: 'object',
           properties: {
             title: { type: 'string' },
+            layout: {
+              type: 'string',
+              enum: ['cover', 'section', 'content', 'chart', 'closing'],
+              description: '页型（缺省自动推断：首页 cover、纯标题 section、含图表 chart、末页空内容 closing、其余 content）',
+            },
+            accentColor: {
+              type: 'string',
+              description: '本页主题强调色（6 位 hex，如 1F4E79；作用 title bar/色块/章节底色，缺省商务深蓝）',
+            },
             bullets: { type: 'array', items: { type: 'string' } },
             table: {
               type: 'object',
