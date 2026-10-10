@@ -17,6 +17,11 @@ vi.mock('../ipc/client', () => ({
       isMaximized: vi.fn().mockResolvedValue(false),
       onMaximizedChanged: vi.fn(() => () => undefined),
     },
+    // ProviderStep 挂载即拉供应商与预设（失败静默空列表）
+    provider: {
+      list: vi.fn().mockResolvedValue([]),
+      listPresets: vi.fn().mockResolvedValue([]),
+    },
     onboarding: {
       getStatus: vi.fn(),
       markDone: vi.fn().mockResolvedValue(undefined),

@@ -12,7 +12,7 @@ import { RequirementStep } from '../components/onboarding/RequirementStep';
 import { PlanPreviewStep } from '../components/onboarding/PlanPreviewStep';
 import { ManualAgentStep } from '../components/onboarding/ManualAgentStep';
 import { DoneStep } from '../components/onboarding/DoneStep';
-import type { OnboardingPlan } from '../ipc/types';
+import type { OnboardingPlan, OnboardingApplyResult } from '../ipc/types';
 import { ipc } from '../ipc/client';
 
 export type WizardRoute = 'ai' | 'manual';
@@ -32,9 +32,13 @@ export interface WizardCtx {
   modelId: string;
   workspaceId: string;
   plan: OnboardingPlan | null;
+  planWarnings: string[];
+  applyResult: OnboardingApplyResult | null;
   setProvider: (providerId: string, modelId: string) => void;
   setWorkspace: (workspaceId: string) => void;
   setPlan: (plan: OnboardingPlan) => void;
+  setPlanWarnings: (warnings: string[]) => void;
+  setApplyResult: (result: OnboardingApplyResult) => void;
   go: (next: WizardStep) => void;
   /** 转手动：保留 provider/workspace 成果直达手动配置步（spec §8） */
   toManual: () => void;
@@ -48,6 +52,8 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
   const [modelId, setModelId] = useState('');
   const [workspaceId, setWorkspaceId] = useState('');
   const [plan, setPlan] = useState<OnboardingPlan | null>(null);
+  const [planWarnings, setPlanWarnings] = useState<string[]>([]);
+  const [applyResult, setApplyResult] = useState<OnboardingApplyResult | null>(null);
 
   useEffect(() => {
     // 触发条件已在 App.tsx 判定（workspaces 空 + status pending）；
@@ -61,12 +67,16 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
     modelId,
     workspaceId,
     plan,
+    planWarnings,
+    applyResult,
     setProvider: (p, m) => {
       setProviderId(p);
       setModelId(m);
     },
     setWorkspace: setWorkspaceId,
     setPlan,
+    setPlanWarnings,
+    setApplyResult,
     go: setStep,
     toManual: () => {
       setRoute('manual');
