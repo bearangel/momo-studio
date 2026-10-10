@@ -270,7 +270,7 @@ describe('pptx 版式引擎（PPT 质量专项 B：默认即有版式感）', ()
     expect(geo.length).toBeGreaterThanOrEqual(2);
     expect(ys.length).toBe(1); // 双栏同起点
     const xs = geo.map((g) => g.x).sort((a, b) => a - b);
-    expect(xs[1] - xs[0]).toBeGreaterThan(3); // 左右分栏间距
+    expect(xs[1]! - xs[0]!).toBeGreaterThan(3); // 左右分栏间距
   });
   it('layout 显式指定与非法值校验', () => {
     expect(() => parsePptxSlides([{ title: 'x', layout: 'fancy' }])).toThrow(/layout/);
