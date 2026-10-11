@@ -25,7 +25,10 @@ interface Props {
   onCopyPath?: () => void;
 }
 
-/** 单个菜单项：点击执行动作后统一关闭菜单 */
+/** 单个菜单项：点击执行动作后统一关闭菜单。hover 反馈走双通道
+ *  （surface-active 背景 + 文字提亮）——纯 surface-3 灰阶差（249→233）在
+ *  菜单小面积上下文里肉眼不可辨（真机实测），Button secondary 已有同款先例；
+ *  danger 项 hover 文字保持红，不被 text-primary 覆盖 */
 function MenuButton({
   label,
   onAction,
@@ -45,7 +48,10 @@ function MenuButton({
           onAction();
           onClose();
         }}
-        className={cn('w-full text-left px-3 py-1 hover:bg-surface-3', danger && 'text-status-error')}
+        className={cn(
+          'w-full text-left px-3 py-1 hover:bg-surface-active hover:text-primary',
+          danger && 'text-status-error hover:text-status-error',
+        )}
       >
         {label}
       </button>

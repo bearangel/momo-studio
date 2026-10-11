@@ -161,4 +161,36 @@ describe('FileContextMenu shell 组（功能优化 2026-10-11）', () => {
     expect(screen.getByText('重命名')).toBeInTheDocument();
     expect(screen.getByText(/删除（含子项）/)).toBeInTheDocument();
   });
+
+  it('菜单项 hover 反馈双通道：bg-surface-active 背景 + 文字提亮（真机 D 修复回归锁）', () => {
+    render(
+      <FileContextMenu
+        {...baseProps}
+        {...shellProps}
+        isDirectory={true}
+        onNewFile={() => {}}
+        onNewDir={() => {}}
+      />,
+    );
+    const normal = screen.getByText('重命名').closest('button');
+    expect(normal?.className).toContain('hover:bg-surface-active');
+    expect(normal?.className).toContain('hover:text-primary');
+    expect(normal?.className).not.toContain('hover:bg-surface-3');
+  });
+
+  it('danger 项 hover 文字保持红（不被 hover:text-primary 覆盖）', () => {
+    render(
+      <FileContextMenu
+        {...baseProps}
+        {...shellProps}
+        isDirectory={true}
+        onNewFile={() => {}}
+        onNewDir={() => {}}
+      />,
+    );
+    const danger = screen.getByText(/删除（含子项）/).closest('button');
+    expect(danger?.className).toContain('text-status-error');
+    expect(danger?.className).toContain('hover:text-status-error');
+    expect(danger?.className).not.toContain('hover:text-primary');
+  });
 });
