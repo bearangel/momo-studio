@@ -2,7 +2,7 @@
 // 类型专属「＋」下拉（spec §4，Cherry Studio MCP 模式）：命名路径 + 一句副文案。
 // 点击外部收起（2026-10-09 组③补 Esc 关闭——与 ExternalMarketplacePopover 同语义）；
 // 菜单项点击后必收起。图标 lucide Plus（禁 emoji）。
-// P2.3 Task 4：菜单项支持可选 lucide 前导图标（「启用预置库」项 Sparkles 16px）。
+// P2.3 Task 4：菜单项支持可选 lucide 前导图标（16px / stroke 1.75）。
 import { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
