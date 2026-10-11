@@ -24,6 +24,13 @@ export default {
       tertiary: 'rgb(var(--text-tertiary) / <alpha-value>)',
       disabled: 'rgb(var(--text-disabled) / <alpha-value>)',
       inverse: '#ffffff',
+      /* 文件树类型图标色（2026-10-11 方案 B）——仅图标着色用，见 design-system.md */
+      icon: {
+        code: 'rgb(var(--icon-code) / <alpha-value>)',
+        js: 'rgb(var(--icon-js) / <alpha-value>)',
+        md: 'rgb(var(--icon-md) / <alpha-value>)',
+        folder: 'rgb(var(--icon-folder) / <alpha-value>)',
+      },
       subtle: 'rgb(var(--border-subtle) / <alpha-value>)',
       strong: 'rgb(var(--border-strong) / <alpha-value>)',
       focus: 'rgb(var(--border-focus) / <alpha-value>)',

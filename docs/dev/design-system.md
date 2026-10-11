@@ -25,6 +25,7 @@ Tailwind class 经 `renderer/tailwind.config.js` 映射生成。**组件代码�
 | 强调 | `bg-accent-500`、`text-accent-600 dark:text-accent-300` | 主按钮 / 链接 |
 | 状态 | `text-status-success/warning/error/violet` + `bg-status-*-tint` | 徽标 / 状态提示 |
 | 遮罩 | `bg-backdrop` | 弹窗遮罩（形式二，禁 `/nn`） |
+| 文件图标 | `text-icon-code/js/md/folder` | **仅**文件树/搜索结果的类型图标着色（2026-10-11 方案 B）；其余类型复用 `text-status-*` 与 `text-tertiary`（未知扩展）。禁止挪作正文/边框色 |
 
 **`dark:` 前缀使用条件**：仅当明暗差异无法用 CSS 变量表达时（如 accent 文字亮模式用 600、暗模式用 300）。
 
