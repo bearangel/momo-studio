@@ -1749,6 +1749,14 @@ export interface ApiSurface {
     rename(workspaceId: string, srcPath: string, dstPath: string): Promise<void>;
     /** 文件名搜索（侧边栏搜索，spec §5.1）：主进程递归扫描，返回相对路径命中项 */
     searchNames(workspaceId: string, query: string): Promise<SearchHit[]>;
+    /** 文件区功能优化：相对路径 → OS 绝对路径（沙箱校验后返回；「复制路径」用） */
+    absolutePath(workspaceId: string, filePath: string): Promise<string>;
+    /** 文件区功能优化：在系统文件管理器中显示该文件/目录（所在目录内选中） */
+    revealInFolder(workspaceId: string, filePath: string): Promise<{ ok: boolean }>;
+    /** 文件区功能优化：用系统默认应用打开（失败抛中文错误，UI alert） */
+    openWithDefaultApp(workspaceId: string, filePath: string): Promise<{ ok: boolean }>;
+    /** 文件区功能优化：编辑器打开前读取——文本返回内容，二进制返回 kind='binary'（UI 转外部应用打开） */
+    readForEditor(workspaceId: string, filePath: string): Promise<EditorFileContent>;
   };
   /**
    * 2026-09-26 多模态（spec §5）：粘贴/拖入图片的资源通道。
@@ -2187,6 +2195,13 @@ export interface SearchHit {
   path: string;
   isDirectory: boolean;
 }
+
+/**
+ * file:readForEditor 返回（文件区功能优化）。
+ * 与 electron 端 files/ipc.handlers.ts 的 EditorFileContent 对齐（跨进程独立定义，
+ * 仅结构对齐）：text=可编辑文本；binary=非 utf-8（图片/PDF 等），UI 转外部应用打开。
+ */
+export type EditorFileContent = { kind: 'text'; content: string } | { kind: 'binary' };
 
 // ─── Onboarding（新装引导，spec 2026-10-10 §5）────────────────────────────
 

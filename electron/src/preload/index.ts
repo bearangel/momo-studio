@@ -74,6 +74,12 @@ const api: ApiSurface = {
     delete: (wsId, filePath) => invoke('file:delete', wsId, filePath),
     rename: (wsId, srcPath, dstPath) => invoke('file:rename', wsId, srcPath, dstPath),
     searchNames: (wsId, query) => invoke('file:searchNames', wsId, query),
+    // 文件区功能优化（2026-10-11）：四个 shell/路径通道——通道名与主进程
+    // files/ipc.handlers.ts 逐一对应
+    absolutePath: (wsId, path) => invoke('file:absolutePath', wsId, path),
+    revealInFolder: (wsId, path) => invoke('file:revealInFolder', wsId, path),
+    openWithDefaultApp: (wsId, path) => invoke('file:openWithDefaultApp', wsId, path),
+    readForEditor: (wsId, path) => invoke('file:readForEditor', wsId, path),
   },
   // 2026-09-26 多模态（spec §5）：粘贴/拖入降采样图片内容寻址落盘，路径返回相对路径
   asset: {
