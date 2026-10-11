@@ -22,6 +22,10 @@ const mockApi = {
     read: vi.fn(),
     write: vi.fn(),
     searchNames: vi.fn().mockResolvedValue([]),
+    absolutePath: vi.fn().mockResolvedValue('/tmp/ws/abs'),
+    revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
+    openWithDefaultApp: vi.fn().mockResolvedValue({ ok: true }),
+    readForEditor: vi.fn(),
   },
 };
 
@@ -64,6 +68,8 @@ beforeEach(() => {
   mockApi.file.list.mockResolvedValue(ROOT_ENTRIES);
   mockApi.file.searchNames.mockClear();
   mockApi.file.searchNames.mockResolvedValue([]);
+  mockApi.file.absolutePath.mockClear();
+  mockApi.file.absolutePath.mockResolvedValue('/tmp/ws/abs');
 });
 
 describe('FileTree 工具栏 selectedDir 集成', () => {
@@ -270,5 +276,121 @@ describe('FileTree 文件名搜索', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(screen.queryByText('search-hit.ts')).not.toBeInTheDocument();
+  });
+});
+
+describe('FileTree 排序（功能优化 2026-10-11：目录优先 + 自然排序）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('目录树渲染：目录排在文件之前，文件按名称排序', async () => {
+    mockApi.file.list.mockResolvedValue([
+      { name: 'z.txt', isDirectory: false, size: 1 },
+      { name: 'beta', isDirectory: true, size: 0 },
+      { name: 'a.txt', isDirectory: false, size: 1 },
+      { name: 'alpha', isDirectory: true, size: 0 },
+    ]);
+    render(<FileTree onSelectFile={() => {}} />);
+    await screen.findByText('z.txt');
+    // DOM 顺序断言：alpha → beta（目录）→ a.txt → z.txt（文件）
+    const order = ['alpha', 'beta', 'a.txt', 'z.txt'].map((n) => screen.getByText(n));
+    for (let i = 1; i < order.length; i++) {
+      const prev = order[i - 1]!;
+      const cur = order[i]!;
+      expect(prev.compareDocumentPosition(cur)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+  });
+
+  it('搜索结果渲染：目录命中排在文件命中之前', async () => {
+    vi.useFakeTimers();
+    // 主进程返回乱序（文件在前）——渲染层排序兜底
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'src/found.ts', isDirectory: false },
+      { path: 'docs', isDirectory: true },
+    ]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'o' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    const docs = screen.getByText('docs');
+    const found = screen.getByText('found.ts');
+    expect(docs.compareDocumentPosition(found)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+});
+
+describe('FileTree 类型图标（2026-10-11 方案 B）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('目录树：文件行按扩展名映射着色（.ts→code紫 / .png→violet），目录行琥珀', async () => {
+    mockApi.file.list.mockResolvedValue([
+      { name: 'src', isDirectory: true, size: 0 },
+      { name: 'app.tsx', isDirectory: false, size: 1 },
+      { name: 'logo.png', isDirectory: false, size: 8 },
+      { name: 'data.unknownext', isDirectory: false, size: 4 },
+    ]);
+    render(<FileTree onSelectFile={() => {}} />);
+    await screen.findByText('app.tsx');
+    expect(document.querySelector('svg.text-icon-code')).not.toBeNull();
+    expect(document.querySelector('svg.text-status-violet')).not.toBeNull();
+    expect(document.querySelector('svg.text-tertiary')).not.toBeNull(); // 未知扩展中性兜底
+    expect(document.querySelector('svg.text-icon-folder')).not.toBeNull();
+  });
+
+  it('搜索结果：命中行与文件树同套类型图标', async () => {
+    vi.useFakeTimers();
+    mockApi.file.searchNames.mockResolvedValue([
+      { path: 'docs', isDirectory: true },
+      { path: 'src/app.tsx', isDirectory: false },
+    ]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.change(screen.getByLabelText('搜索文件'), { target: { value: 'app' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText('app.tsx')).toBeInTheDocument();
+    expect(document.querySelector('svg.text-icon-folder')).not.toBeNull();
+    expect(document.querySelector('svg.text-icon-code')).not.toBeNull();
+  });
+});
+
+describe('FileTree 右键菜单 shell 组接线（功能优化 2026-10-11）', () => {
+  it('右键文件 → 复制路径：file.absolutePath + clipboard.writeText(绝对路径)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    mockApi.file.list.mockResolvedValue([{ name: 'note.md', isDirectory: false, size: 3 }]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText('note.md'));
+    fireEvent.click(screen.getByText('复制路径'));
+    await waitFor(() => {
+      expect(mockApi.file.absolutePath).toHaveBeenCalledWith('ws-1', 'note.md');
+      expect(writeText).toHaveBeenCalledWith('/tmp/ws/abs');
+    });
+  });
+
+  it('右键目录 → 打开所在目录：file.revealInFolder(相对路径)', async () => {
+    mockApi.file.list.mockResolvedValue([{ name: 'src', isDirectory: true, size: 0 }]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText('src'));
+    fireEvent.click(screen.getByText('打开所在目录'));
+    await waitFor(() => {
+      expect(mockApi.file.revealInFolder).toHaveBeenCalledWith('ws-1', 'src');
+    });
+  });
+
+  it('右键文件 → 用外部应用打开：file.openWithDefaultApp(相对路径)', async () => {
+    mockApi.file.list.mockResolvedValue([{ name: 'logo.png', isDirectory: false, size: 8 }]);
+    render(<FileTree onSelectFile={() => {}} />);
+    fireEvent.contextMenu(await screen.findByText('logo.png'));
+    fireEvent.click(screen.getByText('用外部应用打开'));
+    await waitFor(() => {
+      expect(mockApi.file.openWithDefaultApp).toHaveBeenCalledWith('ws-1', 'logo.png');
+    });
   });
 });

@@ -9,9 +9,12 @@
 // RoomList / FileTree / TaskSidebarPanel 用轻量桩替代——本文件聚焦分发与折叠逻辑，
 // 子组件自身行为由各自测试覆盖。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ViewSidebar } from './ViewSidebar';
 import { useUiStore } from '../../stores/ui.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import { useEditorStore } from '../../stores/editor.store';
+import type { Workspace } from '../../ipc/types';
 
 vi.mock('../im/RoomList', () => ({
   RoomList: () => <div data-testid="room-list-stub" />,
@@ -98,5 +101,85 @@ describe('ViewSidebar', () => {
     useUiStore.setState({ activeView: 'files' });
     render(<ViewSidebar />);
     expect(screen.getByTestId('view-sidebar').style.width).toBe('260px');
+  });
+});
+
+describe('ViewSidebar handleSelectFile（readForEditor 分流，功能优化 2026-10-11）', () => {
+  // FileTree 桩点击 → onSelectFile('a.ts')（文件顶部 vi.mock 已定义）
+  const fileApi = {
+    readForEditor: vi.fn(),
+    openWithDefaultApp: vi.fn(),
+  };
+
+  const buildWorkspace = (id: string): Workspace => ({
+    id,
+    name: 'ws',
+    description: '',
+    directoryPath: '/tmp/ws',
+    gitInitialized: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ownerId: '@user:localhost',
+    iconEmoji: '📁',
+    defaultAgentInstanceId: null,
+  });
+
+  beforeEach(() => {
+    (globalThis as unknown as { window: { api: unknown } }).window.api = { file: fileApi };
+    fileApi.readForEditor.mockReset();
+    fileApi.openWithDefaultApp.mockReset();
+    fileApi.openWithDefaultApp.mockResolvedValue({ ok: true });
+    useUiStore.setState({
+      activeView: 'files',
+      sidebarCollapsed: { im: false, files: false, tasks: false },
+      sidebarWidths: { im: 260, files: 260, tasks: 260 },
+    });
+    useWorkspaceStore.setState({
+      workspaces: [buildWorkspace('ws-1')],
+      activeWorkspaceId: 'ws-1',
+      loading: false,
+      error: null,
+    });
+    useEditorStore.setState({ tabs: [], activeTab: null });
+  });
+
+  it('文本文件 → readForEditor 返回内容，打开编辑器 tab', async () => {
+    fileApi.readForEditor.mockResolvedValue({ kind: 'text', content: 'hello' });
+    render(<ViewSidebar />);
+    fireEvent.click(screen.getByTestId('file-tree-stub'));
+    await waitFor(() => {
+      expect(useEditorStore.getState().tabs).toEqual([
+        { filePath: 'a.ts', content: 'hello', dirty: false },
+      ]);
+      expect(useEditorStore.getState().activeTab).toBe('a.ts');
+    });
+    expect(fileApi.openWithDefaultApp).not.toHaveBeenCalled();
+  });
+
+  it('二进制文件 → 不开编辑器 tab，自动转系统默认应用打开', async () => {
+    fileApi.readForEditor.mockResolvedValue({ kind: 'binary' });
+    render(<ViewSidebar />);
+    fireEvent.click(screen.getByTestId('file-tree-stub'));
+    await waitFor(() => {
+      expect(fileApi.openWithDefaultApp).toHaveBeenCalledWith('ws-1', 'a.ts');
+    });
+    expect(useEditorStore.getState().tabs).toEqual([]);
+  });
+
+  it('外部打开失败 → alert 剥净 IPC 包装后的单层中文文案（D1 回归锁）', async () => {
+    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    fileApi.readForEditor.mockResolvedValue({ kind: 'binary' });
+    // 真机实测形态（qa-reports/2026-10-11-file-area-real-acceptance cmd#128）：
+    // Electron 给 ipcMain.handle 的 throw 包两层前缀后 reject
+    fileApi.openWithDefaultApp.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'file:openWithDefaultApp': Error: 外部应用打开失败: Failed to open path",
+      ),
+    );
+    render(<ViewSidebar />);
+    fireEvent.click(screen.getByTestId('file-tree-stub'));
+    await waitFor(() => {
+      expect(alertMock).toHaveBeenCalledWith('外部应用打开失败: Failed to open path');
+    });
+    alertMock.mockRestore();
   });
 });

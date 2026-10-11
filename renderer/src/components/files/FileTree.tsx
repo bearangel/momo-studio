@@ -3,7 +3,7 @@
 // 工具栏新建按钮的落点跟随 selectedDir；切回 files 视图时刷新已缓存目录。
 // 点击空白区选中根目录；右键空白区弹出根级操作菜单（VS Code 风格）。
 import { useState, useEffect, useRef } from 'react';
-import { RefreshCw, FilePlus, FolderPlus, Search, X, FileText, Folder } from 'lucide-react';
+import { RefreshCw, FilePlus, FolderPlus, Search, X, Folder } from 'lucide-react';
 import { FileTreeView } from './FileTreeView';
 import { FileContextMenu } from './FileContextMenu';
 import { PromptDialog } from '../common/PromptDialog';
@@ -12,6 +12,9 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ipc } from '../../ipc/client';
 import type { SearchHit } from '../../ipc/types';
+import { sortSearchHits } from './sort-entries';
+import { fileIconFor, FOLDER_ICON_CLASS } from './file-icon';
+import { cn } from '../../lib/cn';
 
 /** 搜索防抖间隔（毫秒） */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -198,7 +201,7 @@ export function FileTree({ onSelectFile }: Props) {
             </div>
           ) : (
             <>
-              {results.map((hit) => {
+              {sortSearchHits(results).map((hit) => {
                 const name = hit.path.slice(hit.path.lastIndexOf('/') + 1);
                 const parentDir = hit.path.includes('/')
                   ? hit.path.slice(0, hit.path.lastIndexOf('/'))
@@ -212,7 +215,7 @@ export function FileTree({ onSelectFile }: Props) {
                     <Folder
                       size={14}
                       strokeWidth={1.75}
-                      className="text-tertiary shrink-0"
+                      className={cn('shrink-0', FOLDER_ICON_CLASS)}
                       aria-hidden
                     />
                     <span className="truncate">{name}</span>
@@ -220,26 +223,30 @@ export function FileTree({ onSelectFile }: Props) {
                       <span className="text-tertiary text-xs truncate">{parentDir}</span>
                     )}
                   </div>
-                ) : (
-                  <button
-                    key={hit.path}
-                    type="button"
-                    title={hit.path}
-                    onClick={() => onSelectFile(hit.path)}
-                    className="w-full flex items-center gap-1.5 px-1 py-1 text-sm text-secondary hover:bg-surface-3 text-left"
-                  >
-                    <FileText
-                      size={14}
-                      strokeWidth={1.75}
-                      className="text-tertiary shrink-0"
-                      aria-hidden
-                    />
-                    <span className="truncate">{name}</span>
-                    {parentDir !== '' && (
-                      <span className="text-tertiary text-xs truncate">{parentDir}</span>
-                    )}
-                  </button>
-                );
+                ) : (() => {
+                  // 搜索结果与文件树同套类型图标（方案 B）
+                  const { icon: FileIcon, className: iconCls } = fileIconFor(name);
+                  return (
+                    <button
+                      key={hit.path}
+                      type="button"
+                      title={hit.path}
+                      onClick={() => onSelectFile(hit.path)}
+                      className="w-full flex items-center gap-1.5 px-1 py-1 text-sm text-secondary hover:bg-surface-3 text-left"
+                    >
+                      <FileIcon
+                        size={14}
+                        strokeWidth={1.75}
+                        className={cn('shrink-0', iconCls)}
+                        aria-hidden
+                      />
+                      <span className="truncate">{name}</span>
+                      {parentDir !== '' && (
+                        <span className="text-tertiary text-xs truncate">{parentDir}</span>
+                      )}
+                    </button>
+                  );
+                })();
               })}
               {results.length >= SEARCH_RESULT_LIMIT && (
                 <div className="px-1 py-1 text-xs text-tertiary">

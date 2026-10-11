@@ -1,13 +1,17 @@
 // renderer/src/components/files/FileTreeView.tsx
 // 递归文件树视图：按目录路径加载条目，渲染子目录（可展开/折叠）与文件（可选中）
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import { useFileStore } from '../../stores/file.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { FileContextMenu } from './FileContextMenu';
 import { PromptDialog } from '../common/PromptDialog';
 import { cn } from '../../lib/cn';
+import { ipcErrorMessage } from '../../lib/ipc-error';
+import { sortDirEntries } from './sort-entries';
+import { fileIconFor, FOLDER_ICON_CLASS } from './file-icon';
+import { ipc } from '../../ipc/client';
 
 interface Props {
   // 当前要渲染的目录路径（相对 workspace 根，根目录为 '.'）
@@ -36,6 +40,38 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
 
   const entries = tree.get(dirPath);
   const expanded = expandedDirs.has(dirPath);
+  // 渲染用排序列表（目录优先 + 自然排序，sort-entries.ts）；effect 依赖仍用
+  // store 原始引用（sortDirEntries 每次返回新数组，进依赖会引发 effect 抖动）
+  const sorted = entries === undefined ? null : sortDirEntries(entries);
+
+  // shell 组动作（2026-10-11 功能优化）：失败 alert 经 ipcErrorMessage 剥净
+  // Electron IPC 包装后的单层中文错误（D1 修复）。openExternal 不再加本地前缀
+  // ——主进程消息本身已带「外部应用打开失败:」上下文。
+  const openExternal = async (path: string) => {
+    if (!workspace) return;
+    try {
+      await ipc.file.openWithDefaultApp(workspace.id, path);
+    } catch (e) {
+      alert(ipcErrorMessage(e));
+    }
+  };
+  const revealInFolder = async (path: string) => {
+    if (!workspace) return;
+    try {
+      await ipc.file.revealInFolder(workspace.id, path);
+    } catch (e) {
+      alert(`打开所在目录失败：${ipcErrorMessage(e)}`);
+    }
+  };
+  const copyPath = async (path: string) => {
+    if (!workspace) return;
+    try {
+      const abs = await ipc.file.absolutePath(workspace.id, path);
+      await navigator.clipboard.writeText(abs);
+    } catch (e) {
+      alert(`复制路径失败：${ipcErrorMessage(e)}`);
+    }
+  };
 
   // 目录条目未缓存时按需拉取（workspace 就绪且尚未加载过该目录）
   useEffect(() => {
@@ -70,7 +106,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           <span>工作区文件</span>
         </button>
       )}
-      {(!isRoot || expanded) && entries.map((entry) => {
+      {(!isRoot || expanded) && sorted !== null && sorted.map((entry) => {
         // 拼接全路径：根目录下直接用文件名，否则拼上父路径
         const fullPath = dirPath === '.' ? entry.name : `${dirPath}/${entry.name}`;
         const isSelected = selectedFile === fullPath;
@@ -102,9 +138,9 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
                   <ChevronRight size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
                 )}
                 {entryExpanded ? (
-                  <FolderOpen size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <FolderOpen size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', FOLDER_ICON_CLASS)} />
                 ) : (
-                  <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <Folder size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', FOLDER_ICON_CLASS)} />
                 )}
                 <span className="truncate">{entry.name}</span>
               </button>
@@ -119,7 +155,8 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
           );
         }
 
-        // 文件节点：点击时更新选中状态并通知外部
+        // 文件节点：点击时更新选中状态并通知外部；图标按扩展名映射（方案 B）
+        const { icon: FileIcon, className: iconCls } = fileIconFor(entry.name);
         return (
           <button
             key={fullPath}
@@ -137,7 +174,7 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
             )}
             style={{ paddingLeft: depth * 16 + 20 }}
           >
-            <File size={14} strokeWidth={1.75} aria-hidden />
+            <FileIcon size={14} strokeWidth={1.75} aria-hidden className={cn('shrink-0', iconCls)} />
             <span className="truncate">{entry.name}</span>
           </button>
         );
@@ -158,6 +195,9 @@ export function FileTreeView({ dirPath, depth, onSelectFile }: Props) {
               : undefined
           }
           onRename={() => setRenaming({ path: menu.path })}
+          onOpenExternal={() => void openExternal(menu.path)}
+          onReveal={() => void revealInFolder(menu.path)}
+          onCopyPath={() => void copyPath(menu.path)}
           onDelete={async () => {
             const scope = menu.isDirectory ? '目录及其全部内容' : '该文件';
             if (!confirm(`确定删除${scope}？\n${menu.path}`)) return;

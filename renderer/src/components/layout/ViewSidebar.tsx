@@ -10,6 +10,7 @@ import { useUiStore, SIDEBAR_VIEWS, SIDEBAR_WIDTH_DEFAULT, type SidebarViewKey }
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useEditorStore } from '../../stores/editor.store';
 import { ipc } from '../../ipc/client';
+import { ipcErrorMessage } from '../../lib/ipc-error';
 import { RoomList } from '../im/RoomList';
 import { SessionSidebarHeader } from '../im/SessionSidebarHeader';
 import { FileTree } from '../files/FileTree';
@@ -42,12 +43,23 @@ export function ViewSidebar() {
   const workspace = useWorkspaceStore((s) => s.getActive());
   const openFile = useEditorStore((s) => s.openFile);
 
-  // 与 MiddlePanel 原 files 分支逻辑一致：IPC 读文件 → 打开编辑器 tab
+  // 与 MiddlePanel 原 files 分支逻辑一致：IPC 读文件 → 打开编辑器 tab。
+  // 2026-10-11 功能优化：改走 readForEditor——二进制文件（图片/PDF 等非 utf-8）
+  // 自动转系统默认应用打开，不再以乱码文本进编辑器。失败 alert 经
+  // ipcErrorMessage 剥净 IPC 包装（主进程消息已带中文上下文，D1 修复）。
   const handleSelectFile = useCallback(
     async (filePath: string) => {
       if (!workspace) return;
-      const content = await ipc.file.read(workspace.id, filePath);
-      openFile(filePath, content);
+      const result = await ipc.file.readForEditor(workspace.id, filePath);
+      if (result.kind === 'binary') {
+        try {
+          await ipc.file.openWithDefaultApp(workspace.id, filePath);
+        } catch (e) {
+          alert(ipcErrorMessage(e));
+        }
+        return;
+      }
+      openFile(filePath, result.content);
     },
     [workspace, openFile],
   );
