@@ -20,6 +20,7 @@ import { ThinkingOverrideControl } from '../../agent/ThinkingOverrideControl';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Dialog } from '../../ui/Dialog';
+import { EmojiPicker } from '../../ui/EmojiPicker';
 import { cn } from '../../../lib/cn';
 
 type ToolPreset = 'standard' | 'all' | 'custom';
@@ -174,7 +175,7 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
           <div className="flex flex-col gap-3">
             <Input label="名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="如：代码审查员" autoFocus />
             <Input label="描述" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="一句话说明（可选）" />
-            <Input label="图标 emoji" value={iconEmoji} onChange={(e) => setIconEmoji(e.target.value)} placeholder="用户数据照渲染" />
+            <EmojiPicker label="图标" value={iconEmoji} onChange={setIconEmoji} />
           </div>
         )}
 

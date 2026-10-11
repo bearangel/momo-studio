@@ -210,7 +210,8 @@ describe('AgentCreateWizard — 薄 fork 预填（2026-10-08 预设可见化）'
     expect(screen.getByText('复制为自定义智能体')).toBeTruthy();
     expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('UI 设计师 副本');
     expect((screen.getByLabelText('描述') as HTMLInputElement).value).toBe(FORK_SEED.description);
-    expect((screen.getByLabelText('图标 emoji') as HTMLInputElement).value).toBe('🎨');
+    // v2.x 图标 Input → EmojiPicker：受控值显示在触发器按钮上（label「图标 emoji」并更为「图标」）
+    expect(screen.getByLabelText('图标').textContent).toContain('🎨');
   });
 
   it('initialDef：提示词步预填；能力步自动「自定义」档且按预填勾选（非 Tier 1 回填）', async () => {
