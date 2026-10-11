@@ -31,6 +31,7 @@ import { useToolCatalog } from '../../lib/useToolCatalog';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Dialog } from '../ui/Dialog';
+import { EmojiPicker } from '../ui/EmojiPicker';
 import { Input } from '../ui/Input';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { ThinkingOverrideControl } from './ThinkingOverrideControl';
@@ -161,11 +162,7 @@ export function CreateAgentDialog({ source, onClose }: Props) {
           placeholder="如：代码审查员"
           autoFocus
         />
-        <Input
-          label="图标"
-          value={iconEmoji}
-          onChange={(e) => setIconEmoji(e.target.value)}
-        />
+        <EmojiPicker label="图标" value={iconEmoji} onChange={setIconEmoji} />
         <ProviderModelPicker
           providerId={providerId}
           modelId={modelName}

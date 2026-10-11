@@ -256,7 +256,8 @@ describe('TeamDialog — 编辑模式', () => {
   it('回填现有团队：名称/图标/成员勾选/leader 单选', () => {
     render(<TeamDialog editing={EXISTING_TEAM} onClose={() => {}} />);
     expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('攻坚组');
-    expect((screen.getByLabelText('图标') as HTMLInputElement).value).toBe('🛠️');
+    // v2.x 图标 Input → EmojiPicker：受控值显示在触发器按钮上（aria-label 同名平移）
+    expect(screen.getByLabelText('图标').textContent).toContain('🛠️');
     expect((within(memberGroup()).getByLabelText('编码助手') as HTMLInputElement).checked).toBe(true);
     expect((within(memberGroup()).getByLabelText('评审员') as HTMLInputElement).checked).toBe(true);
     expect((within(memberGroup()).getByLabelText('测试员') as HTMLInputElement).checked).toBe(false);

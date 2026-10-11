@@ -18,6 +18,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useAgentStore } from '../../stores/agent.store';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
+import { EmojiPicker } from '../ui/EmojiPicker';
 import { Input } from '../ui/Input';
 import { CapabilityTabs, type Capabilities } from './CapabilityTabs';
 import { ProviderModelPicker } from './ProviderModelPicker';
@@ -182,13 +183,8 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
             className="rounded-md border border-subtle bg-surface-2 px-3 py-2 text-[13px] text-primary focus:border-focus focus:outline-none resize-y"
           />
         </div>
-        {/* 图标 emoji 为用户数据输入框（iconEmoji 字段值照渲染，豁免） */}
-        <Input
-          label="图标 emoji"
-          value={iconEmoji}
-          onChange={(e) => setIconEmoji(e.target.value)}
-          readOnly={readOnly}
-        />
+        {/* 图标 emoji 为用户数据（iconEmoji 字段值照渲染，豁免禁 emoji 规则） */}
+        <EmojiPicker label="图标" value={iconEmoji} onChange={setIconEmoji} disabled={readOnly} />
 
         <ProviderModelPicker
           providerId={providerId}

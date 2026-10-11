@@ -18,6 +18,7 @@ import { useWorkspaceStore } from '../../stores/workspace.store';
 import { Avatar } from '../ui/Avatar';
 import { Button } from '../ui/Button';
 import { Dialog } from '../ui/Dialog';
+import { EmojiPicker } from '../ui/EmojiPicker';
 import { Input } from '../ui/Input';
 import { cn } from '../../lib/cn';
 import type { Team, WorkspaceAgentMember } from '../../ipc/types';
@@ -124,7 +125,7 @@ export function TeamDialog({ editing, onClose }: Props) {
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <div className="flex gap-3">
           <div className="w-20">
-            <Input label="图标" value={iconEmoji} onChange={(e) => setIconEmoji(e.target.value)} />
+            <EmojiPicker label="图标" value={iconEmoji} onChange={setIconEmoji} />
           </div>
           <div className="flex-1">
             <Input
