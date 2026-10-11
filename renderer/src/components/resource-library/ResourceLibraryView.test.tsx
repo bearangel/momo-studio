@@ -32,8 +32,6 @@ const resourceInstall = vi.fn();
 const resourceDelete = vi.fn();
 // P2.2 Task 7：MCP 页 installed 模式挂载 DanglingRefsCard → mount 拉一次悬空引用
 const resourceDanglingMcpRefs = vi.fn();
-// P2.3 Task 4：预置库弹窗挂载拉预置清单
-const resourceListBuiltinPresets = vi.fn();
 const agentList = vi.fn();
 const agentBuiltinSuggestions = vi.fn();
 const providerList = vi.fn();
@@ -45,7 +43,6 @@ const mockApi = {
     install: resourceInstall,
     delete: resourceDelete,
     danglingMcpRefs: resourceDanglingMcpRefs,
-    listBuiltinPresets: resourceListBuiltinPresets,
   },
   agent: { list: agentList, getBuiltinSuggestions: agentBuiltinSuggestions },
   provider: { list: providerList },
@@ -72,7 +69,6 @@ beforeEach(() => {
   resourceInstall.mockReset().mockResolvedValue(undefined);
   resourceDelete.mockReset().mockResolvedValue(undefined);
   resourceDanglingMcpRefs.mockReset().mockResolvedValue([]);
-  resourceListBuiltinPresets.mockReset().mockResolvedValue([]);
   agentList.mockReset().mockResolvedValue([] as AgentDefinition[]);
   agentBuiltinSuggestions.mockReset().mockResolvedValue({});
   providerList.mockReset().mockResolvedValue([]);
@@ -179,32 +175,20 @@ describe('DXT/MCPB 导入入口', () => {
   });
 });
 
-// ── 预置库入口与接线（P2.3 Task 4）─────────────────────────────────────────
-// 链路：AddMenu「启用预置库」（仅 agent 页组装，Task 0 裁定：只有 agent 有
-// YAML→落库启用管线）→ PresetLibraryDialog（mount 拉 listBuiltinPresets）→
-// 选中 slug → 关预置库 + openPresetBySlug（builtin-<slug> def 反查，与
-// openPresetDialog 同形状）→ EnablePresetDialog（presetTarget 挂载位，enable 模式）。
-describe('预置库入口与接线（P2.3 Task 4）', () => {
-  it('Agent 页「＋」菜单含「启用预置库」；MCP / Skill 页无（仅 agent 有启用语义）', () => {
+// ── 预置启用链路（「启用预置库」菜单已删）───────────────────────────────────
+// AddMenu 入口与 PresetLibraryDialog 已删（与列表行启用路径完全重复）——预置启用
+// 收敛为：列表行「启用」按钮（ResourceRow 按 builtin.agentEnabled 渲染）→
+// openPresetDialog（builtin-<slug> def 反查）→ EnablePresetDialog。
+describe('预置启用链路（菜单入口已删）', () => {
+  it('Agent 页「＋」菜单无「启用预置库」；仅剩新建智能体 / 导入 YAML 两项', () => {
     render(<ResourceLibraryView />);
     fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
-    expect(screen.getByText('启用预置库')).toBeTruthy();
-    // 关菜单 → 切 MCP 页：下拉无该入口
-    fireEvent.mouseDown(document.body);
-    fireEvent.click(screen.getByRole('button', { name: 'MCP' }));
-    fireEvent.click(screen.getByRole('button', { name: '添加服务器' }));
     expect(screen.queryByText('启用预置库')).toBeNull();
-    // 切 Skill 页：同样无
-    fireEvent.mouseDown(document.body);
-    fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
-    fireEvent.click(screen.getByRole('button', { name: '添加技能' }));
-    expect(screen.queryByText('启用预置库')).toBeNull();
+    expect(screen.getByText('新建智能体…')).toBeTruthy();
+    expect(screen.getByText('导入 YAML 文件…')).toBeTruthy();
   });
 
-  it('入口打开预置库 → 选中 → 关预置库并打开 EnablePresetDialog（enable 模式）', async () => {
-    // 展示名来源：resource.list 返回的 builtin agent 清单项（真实语义：agent 页
-    // 已安装列表本就含 4 个预置 agent，catalog 是展示名权威——mount 首拉后 items
-    // 即为该清单）
+  it('builtin agent 行「启用」→ def 反查（agent.list）→ EnablePresetDialog（enable 模式）', async () => {
     resourceList.mockResolvedValueOnce([
       {
         id: 'agent-coder',
@@ -216,24 +200,15 @@ describe('预置库入口与接线（P2.3 Task 4）', () => {
         installed: true,
         installable: false,
         removable: false,
+        builtin: { agentEnabled: false },
       } as ResourceItem,
     ]);
-    resourceListBuiltinPresets.mockResolvedValueOnce([
-      { slug: 'coder', name: '程序员', description: '根据需求实现代码，支持多种编程语言', iconEmoji: '💻' },
-    ]);
     render(<ResourceLibraryView />);
-    fireEvent.click(screen.getByRole('button', { name: '新建 / 导入' }));
-    fireEvent.click(screen.getByText('启用预置库'));
-    // 预置库弹窗挂载并按当前 activeType 拉清单
-    await waitFor(() => expect(resourceListBuiltinPresets).toHaveBeenCalledWith('agent'));
-    const libDialog = await screen.findByRole('dialog', { name: '启用预置库' });
-    expect(within(libDialog).getByText('程序员')).toBeTruthy();
-    // 选中 → def 反查走 agent.list（builtin-<slug> ?? slug 形状）→ EnablePresetDialog
-    // 以 enable 模式打开（agent.list 返回空 = 未启用，def undefined；标题名取自
-    // store 同 slug 清单项）
-    fireEvent.click(within(libDialog).getByRole('button', { name: '选择' }));
+    // mount 首拉是异步——等行渲染再点
+    const row = await screen.findByTestId('resource-row-agent-coder');
+    fireEvent.click(within(row).getByRole('button', { name: '启用' }));
+    // agent.list 返回空 = 未启用 → def undefined → EnablePresetDialog 以 enable 模式挂载
     await screen.findByRole('dialog', { name: '启用预设 Agent：程序员' });
-    expect(screen.queryByRole('dialog', { name: '启用预置库' })).toBeNull();
     await waitFor(() => expect(agentList).toHaveBeenCalled());
   });
 });
