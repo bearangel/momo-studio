@@ -3,10 +3,16 @@
 // 文件读写 IPC handlers — 把 T5 的 WorkspaceFS 包装成 `file:read` /
 // `file:write` / `file:list` 三个 IPC 通道。每个 workspace 缓存一份
 // WorkspaceFS 实例，避免每次 IPC 调用都重建。
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
 import { logger } from '../logger';
 import { WorkspaceFS } from './workspace-fs';
 import { getWorkspace } from '../workspace/crud';
+
+/**
+ * file:readForEditor 返回形状（与 renderer types.d.ts 的 EditorFileContent
+ * 跨进程独立定义、仅结构对齐——本仓既有约定，如 JournalEntryView / GroupRow）。
+ */
+export type EditorFileContent = { kind: 'text'; content: string } | { kind: 'binary' };
 
 /** 缓存每个 workspace 的 WorkspaceFS 实例。 */
 export const fsCache = new Map<string, WorkspaceFS>();
@@ -88,6 +94,54 @@ export function registerFileHandlers(): void {
     async (_evt, workspaceId: string, query: string) => {
       const wsFs = getWorkspaceFs(workspaceId);
       return wsFs.searchNames(query);
+    },
+  );
+
+  // ── 文件区功能优化（2026-10-11）───────────────────────────────────────
+  // 以下四个通道全部先经 WorkspaceFS.assertInWorkspace 沙箱校验（越界 /
+  // 符号链接逃逸 / .git 保护全部生效）再触达 OS shell 或返回路径。
+
+  // 相对路径 → OS 绝对路径（renderer「复制路径」用；校验失败直接抛错）
+  ipcMain.handle('file:absolutePath', async (_evt, workspaceId: string, filePath: string) => {
+    const wsFs = getWorkspaceFs(workspaceId);
+    return wsFs.assertInWorkspace(filePath);
+  });
+
+  // 在系统文件管理器中显示该文件/目录（在其所在目录内选中；文件与目录通用）
+  ipcMain.handle('file:revealInFolder', async (_evt, workspaceId: string, filePath: string) => {
+    const wsFs = getWorkspaceFs(workspaceId);
+    const abs = wsFs.assertInWorkspace(filePath);
+    shell.showItemInFolder(abs);
+    return { ok: true };
+  });
+
+  // 用系统默认应用打开（编辑器无法呈现的二进制文件的外部打开入口）。
+  // shell.openPath 失败语义是返回非空错误字符串（而非 reject），与
+  // workspace:openDirectory 一致转为抛错让 renderer 提示。
+  ipcMain.handle(
+    'file:openWithDefaultApp',
+    async (_evt, workspaceId: string, filePath: string) => {
+      const wsFs = getWorkspaceFs(workspaceId);
+      const abs = wsFs.assertInWorkspace(filePath);
+      const errMessage = await shell.openPath(abs);
+      if (errMessage !== '') throw new Error(`外部应用打开失败: ${errMessage}`);
+      return { ok: true };
+    },
+  );
+
+  // 编辑器读取通道：文本返回内容；二进制返回 kind='binary'（UI 转外部应用打开）。
+  // 检测与 journal ipc.handlers 的 readTextCapped 同法：utf-8 解码再编码与
+  // 原字节不一致即二进制。不改 file:read 契约（MessageBubble 等既有消费者零影响）。
+  ipcMain.handle(
+    'file:readForEditor',
+    async (_evt, workspaceId: string, filePath: string): Promise<EditorFileContent> => {
+      const wsFs = getWorkspaceFs(workspaceId);
+      const buf = await wsFs.readFile(filePath);
+      const text = buf.toString('utf-8');
+      if (!Buffer.from(text, 'utf-8').equals(buf)) {
+        return { kind: 'binary' };
+      }
+      return { kind: 'text', content: text };
     },
   );
 
