@@ -44,8 +44,13 @@ export interface AggregatedStream {
   toolCalls: AggregatedToolCall[];
   todos: TodoItem[];
   dispatches: AggregatedDispatch[];
-  status: 'streaming' | 'done' | 'failed' | 'aborted';
-  /** final 事件携带的错误文本（status='failed' 时存在）；成功/中断流为 undefined */
+  status: 'streaming' | 'done' | 'failed' | 'aborted' | 'awaiting_renewal';
+  /**
+   * final 事件携带的错误文本（status='failed'/'awaiting_renewal' 时存在）；
+   * 成功/中断流为 undefined。
+   * awaiting_renewal（软续期）：预算耗尽的流 DB 行仍为 failed，但 final 事件
+   * 带 reason='budget_exhausted'——呈现层以待续期卡替代错误框。
+   */
   error?: string;
   events: Array<{ seq: number; type: string; content?: string }>;
   /**
@@ -265,6 +270,9 @@ export function aggregateEvents(events: MessageEventRow[]): AggregatedStream {
           // 旧形状 final（segment_boundary 落的 final{body}）无 status 字段——保持 done 兜底
           status = 'done';
         }
+        // 软续期（2026-10-10）：预算耗尽的 final 带 reason——呈现层覆盖为待续期
+        // （DB status 是 failed，此处仅改前端聚合态；旧事件无 reason 不受影响）
+        if (p.reason === 'budget_exhausted') status = 'awaiting_renewal';
         if (typeof p.error === 'string') streamError = p.error;
         break;
     }

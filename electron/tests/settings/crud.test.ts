@@ -48,6 +48,6 @@ describe('GlobalSettings 变更账本字段（v2.5 Task 6）', () => {
     updateGlobalSettings({ journalQuotaMb: 1 / 1024 });
     expect(getGlobalSettings().journalQuotaMb).toBe(1 / 1024);
     // 部分更新不殃及其他字段
-    expect(getGlobalSettings().maxToolCalls).toBe(10);
+    expect(getGlobalSettings().maxToolCalls).toBe(50);
   });
 });

@@ -65,7 +65,12 @@ export { getSessionSettings, updateSessionSettings } from '../storage/sessions/r
 export type { SessionSettings } from '../storage/sessions/repo';
 
 const GLOBAL_KEY = 'global_settings';
-const DEFAULT_MAX_TOOL_CALLS = 10;
+/**
+ * 工具调用上限默认值（2026-10-10 起 10 → 50）：两次真实走查实测多文件产出型
+ * 任务需求 ≈ 探测2 + N文件 + 走查2-3，10 次必撞墙；50 覆盖绝大多数且防失控
+ * 语义不变（耗尽时 UI 弹软续期卡）。存量库旧默认痕迹 10 由 migration 054 升级。
+ */
+const DEFAULT_MAX_TOOL_CALLS = 50;
 const DEFAULT_AUDIT_QUOTA_MB = 100;
 /** 变更账本 blob 配额默认值（MB）——导出供 quota 层非法值回退共用（单一事实源） */
 export const DEFAULT_JOURNAL_QUOTA_MB = 200;

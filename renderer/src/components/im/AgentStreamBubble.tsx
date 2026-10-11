@@ -15,7 +15,7 @@
 //   - segments 先经 groupToolSegments 分组（连续只读工具合并 context-group）
 //   - MessageFrame 补时间戳；终态显示消息级复制按钮（hover 气泡显形）
 import { useMemo } from 'react';
-import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2 } from 'lucide-react';
+import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2, PauseCircle } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import type { StreamState } from '../../stores/stream.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -31,6 +31,7 @@ import { DispatchChip } from './DispatchChip';
 import type { DispatchChild } from './DispatchChip';
 import { ChangesChip } from './ChangesChip';
 import { BubbleToolbar } from './BubbleToolbar';
+import { BudgetRenewalCard } from './BudgetRenewalCard';
 import type { StreamSegment } from '../../stores/stream.store';
 import { groupToolSegments } from '../../lib/group-tool-segments';
 
@@ -49,6 +50,8 @@ const STATUS_TEXT: Record<StreamState['status'], string> = {
   done: '已结束',
   failed: '出错',
   aborted: '已中断',
+  // 软续期：预算耗尽待用户决策（续期卡承载动作）
+  awaiting_renewal: '待续期',
 };
 
 /** 状态展示：tone class + lucide 图标（streaming 用旋转 Loader） */
@@ -57,6 +60,7 @@ const STATUS_TONE: Record<StreamState['status'], string> = {
   done: 'bg-status-success-tint text-status-success',
   failed: 'bg-status-error-tint text-status-error',
   aborted: 'bg-status-warning-tint text-status-warning',
+  awaiting_renewal: 'bg-status-warning-tint text-status-warning',
 };
 
 const STATUS_ICON: Record<StreamState['status'], typeof Loader2> = {
@@ -64,6 +68,7 @@ const STATUS_ICON: Record<StreamState['status'], typeof Loader2> = {
   done: CircleCheck,
   failed: CircleX,
   aborted: CircleSlash,
+  awaiting_renewal: PauseCircle,
 };
 
 /** AggregatedDispatch.status('timeout') → DispatchChild.status 无 timeout，归并到 'failed'；'aborted' 两端同名直通 */
@@ -255,7 +260,12 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             canUndo={!isStreaming && stream.status !== 'aborted'}
           />
         </div>
-        {!isStreaming && stream.error && (
+        {/* 软续期卡：预算耗尽待决策（错误框与卡片互斥——卡片自身承载完整语义） */}
+        {!isStreaming && stream.status === 'awaiting_renewal' && (
+          <BudgetRenewalCard sessionId={message.sessionId} toolCallsUsed={stream.toolCalls.length} />
+        )}
+
+        {!isStreaming && stream.error && stream.status !== 'awaiting_renewal' && (
           <StreamErrorBox error={stream.error} />
         )}
       </div>

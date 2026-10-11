@@ -22,6 +22,22 @@ describe('aggregateEvents：final 事件的 status/error 处理', () => {
     expect(result.error).toBe('LLM 请求无法连接 https://x/v1：ECONNREFUSED');
   });
 
+  it('软续期：final{failed, reason:"budget_exhausted"} → awaiting_renewal 且保留 error', () => {
+    const result = aggregateEvents([
+      ev(1, 'status_change', { status: 'streaming' }),
+      ev(2, 'final', { status: 'failed', error: '工具调用预算已耗尽', reason: 'budget_exhausted' }),
+    ]);
+    expect(result.status).toBe('awaiting_renewal');
+    expect(result.error).toBe('工具调用预算已耗尽');
+  });
+
+  it('软续期兼容：无 reason 的预算旧事件仍为 failed', () => {
+    const result = aggregateEvents([
+      ev(1, 'final', { status: 'failed', error: '工具调用预算已耗尽' }),
+    ]);
+    expect(result.status).toBe('failed');
+  });
+
   it('final{status:"aborted"} → 聚合为 aborted', () => {
     const result = aggregateEvents([
       ev(1, 'status_change', { status: 'streaming' }),

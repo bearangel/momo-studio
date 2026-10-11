@@ -28,6 +28,7 @@ import { migration050 } from './050_task_pin_drop_board_position';
 import { migration051 } from './051_lane_semantics_pending_to_draft';
 import { migration052 } from './052_agent_tools_tier1_backfill';
 import { migration053 } from './053_mcp_enabled';
+import { migration054 } from './054_global_tool_budget_default_50';
 
 export interface Migration {
   version: number;
@@ -1048,6 +1049,12 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // SQL 住在独立模块 053_mcp_enabled.ts（约定同 032-052）。
     version: migration053.version,
     sql: migration053.up,
+  },
+  {
+    // 全局工具预算默认 10 → 50（软续期配套）：kv_store 里旧默认痕迹 10 升 50，
+    // 显式自定义值不动。详见 054_global_tool_budget_default_50.ts 头注释。
+    version: migration054.version,
+    sql: migration054.up,
   },
 ];
 

@@ -527,10 +527,18 @@ export function routeChunkToBuffer(chunk: StreamChunk): void {
         // 读到的仍是 start 时落库的空 body（终态后需重启才能拿到正文）
         const updated = getMessage(messageId);
         if (updated) pushSessionMessage(updated);
+        // 软续期信号（2026-10-10）：预算耗尽的 final 附 reason，renderer 据此
+        // 呈现续期卡而非错误框（DB 行 status 仍 failed 零迁移；旧 renderer 忽略）
         buf.append({
           messageId,
           eventType: 'final',
-          payload: { status, ...(errorText !== undefined ? { error: errorText } : {}) },
+          payload: {
+            status,
+            ...(errorText !== undefined ? { error: errorText } : {}),
+            ...(chunk.finishReason === 'budget_exhausted'
+              ? { reason: 'budget_exhausted' as const }
+              : {}),
+          },
         });
         buf.flush();
         snapshotAtFinalize(messageId);

@@ -20,11 +20,13 @@ type Choice = 'inherit' | 'disabled' | 'unlimited' | 'custom';
 
 export function RoomToolBudgetBadge({ sessionId }: Props) {
   const [roomValue, setRoomValue] = useState<number | null>(null);
-  const [globalDefault, setGlobalDefault] = useState(10);
+  // fallback 与主进程 DEFAULT_MAX_TOOL_CALLS 同源（2026-10-10 起 50）——
+  // getGlobal 必回填实际值，此 fallback 仅 IPC 失败窗口兜底
+  const [globalDefault, setGlobalDefault] = useState(50);
   const [editing, setEditing] = useState(false);
   // popup 内的草稿状态，保存时才提交
   const [draftChoice, setDraftChoice] = useState<Choice>('inherit');
-  const [draftCustom, setDraftCustom] = useState('10');
+  const [draftCustom, setDraftCustom] = useState('50');
   const [saving, setSaving] = useState(false);
 
   // 房间切换时重新加载
