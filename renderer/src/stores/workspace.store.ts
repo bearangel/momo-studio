@@ -5,6 +5,9 @@
 // 通知是异步旁路，不阻塞本地激活状态。
 // 重启恢复：上次活跃 id 持久化到 localStorage['momo.activeWorkspace']——
 // 激活的单一真相源在 renderer 侧收敛于此键 + activeWorkspaceId，load 优先恢复。
+// D6 走查修复（关标签 ≠ 删除）：closedIds 记录已关闭标签的 workspace id，
+// 会话级状态刻意不持久化——重启后全部工作空间标签恢复显示；删除仍走 remove
+// （ipc.workspace.delete，毁灭性）。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
 import type { Workspace, CreateWorkspaceInput } from '../ipc/types';
@@ -42,6 +45,11 @@ interface WorkspaceState {
   activeWorkspaceId: string | null;
   loading: boolean;
   error: string | null;
+  /**
+   * 已关闭标签的 workspace id（D6：关闭 ≠ 删除）。会话级状态，刻意不持久化——
+   * 重启后全部工作空间标签恢复显示；可见标签 = workspaces 排除本列表。
+   */
+  closedIds: string[];
 
   // 拉取 workspace 列表，默认激活第一个
   load: () => Promise<void>;
@@ -49,6 +57,10 @@ interface WorkspaceState {
   create: (input: CreateWorkspaceInput) => Promise<void>;
   // 切换激活的 workspace
   select: (id: string) => void;
+  // 关闭标签（非删除）：加入 closedIds；关闭激活项时切到剩余可见首个（无则置 null）
+  closeTab: (id: string) => void;
+  // 重新打开已关闭的标签：移出 closedIds 并激活（select 语义）
+  reopenTab: (id: string) => void;
   // 获取当前激活的 workspace（无则 null）
   getActive: () => Workspace | null;
   // 设为/取消默认会话 agent（instanceId=null 表示取消），完成后刷新 workspaces
@@ -64,6 +76,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeWorkspaceId: null,
   loading: false,
   error: null,
+  closedIds: [],
 
   load: async () => {
     set({ loading: true, error: null });
@@ -101,6 +114,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     notifySwitch(id); // 用户切换 tab——main 侧切走旧 ws / 激活新 ws
   },
 
+  closeTab: (id) => {
+    const state = get();
+    // 未知 id / 已关闭 id：幂等 no-op
+    if (!state.workspaces.some((w) => w.id === id) || state.closedIds.includes(id)) return;
+    const closedIds = [...state.closedIds, id];
+    let activeWorkspaceId = state.activeWorkspaceId;
+    if (activeWorkspaceId === id) {
+      // 关闭激活标签 → 切到剩余可见首个；全部关闭 → null（App 渲染重开面板）
+      const next = state.workspaces.find((w) => !closedIds.includes(w.id));
+      activeWorkspaceId = next ? next.id : null;
+    }
+    set({ closedIds, activeWorkspaceId });
+    // 切换旁路与 select 对齐（持久化 + 通知 main）；置 null 无旁路——
+    // 持久键保留原值，下次启动 load 据此恢复该 workspace（重启恢复语义的一部分）
+    if (activeWorkspaceId !== null && activeWorkspaceId !== state.activeWorkspaceId) {
+      persistActive(activeWorkspaceId);
+      notifySwitch(activeWorkspaceId);
+    }
+  },
+
+  reopenTab: (id) => {
+    set((state) => ({ closedIds: state.closedIds.filter((cid) => cid !== id) }));
+    get().select(id);
+  },
+
   getActive: () => {
     const { workspaces, activeWorkspaceId } = get();
     return workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
@@ -123,6 +161,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ error: null });
     try {
       await ipc.workspace.delete(id);
+      // 同步清掉该 id 的关闭标记，防 closedIds 残留死 id
+      set((state) => ({ closedIds: state.closedIds.filter((cid) => cid !== id) }));
       await get().load();
     } catch (err) {
       set({ error: (err as Error).message });

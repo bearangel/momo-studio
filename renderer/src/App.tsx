@@ -17,6 +17,7 @@ import { CreateWorkspaceDialog } from './components/workspace/CreateWorkspaceDia
 import { MainShell } from './routes/MainShell';
 import { OnboardingWizard } from './routes/OnboardingWizard';
 import { TitleBar } from './components/layout/TitleBar';
+import { ClosedWorkspacesPanel } from './components/layout/WorkspaceTabs';
 import { UpgradeNotice } from './components/upgrade/UpgradeNotice';
 import { SandboxNotice } from './components/settings/SandboxNotice';
 import { ResumeNotice } from './components/task/ResumeNotice';
@@ -29,6 +30,7 @@ import { ipc } from './ipc/client';
 
 export function App() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const closedIds = useWorkspaceStore((s) => s.closedIds);
   const load = useWorkspaceStore((s) => s.load);
   // 首次列表返回前不渲染首启对话框，避免加载期间闪现（store 初始态 workspaces=[]）
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -137,6 +139,18 @@ export function App() {
         <div className="flex-1 min-h-0 flex items-center justify-center p-6">
           <CreateWorkspaceDialog onClose={() => void load()} embedded />
         </div>
+      </div>
+    );
+  }
+
+  // D6（关标签 ≠ 删除）：workspaces 非空但可见标签全部关闭 → 重开面板
+  //（TitleBar 下方占满内容区，与首启空态同构；判定只看可见标签，不影响上方
+  // 首启空态的 workspaces 总数判定）。重开 / 新建后自动回到 MainShell。
+  if (workspaces.every((ws) => closedIds.includes(ws.id))) {
+    return (
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
+        <TitleBar />
+        <ClosedWorkspacesPanel />
       </div>
     );
   }

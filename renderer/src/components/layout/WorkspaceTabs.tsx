@@ -2,17 +2,22 @@
 //
 // TitleBar 内的 workspace tab 条（P2 Task 2）：每个 workspace 一个 tab
 // （图标 + 名称 + hover 关闭 lucide X），激活 tab 高亮 + 底部 accent 条；
-// lucide Plus 打开新建对话框；tab 右键弹自绘轻量浮层菜单（重命名 inline input
-// / 删除 confirm / 打开目录），Esc / 点击菜单外部关闭。整个 tab 条是交互区，
-// 整体标 no-drag。
+// lucide Plus 打开新建对话框；tab 右键弹自绘轻量浮层菜单，Esc / 点击菜单
+// 外部关闭。整个 tab 条是交互区，整体标 no-drag。
+//
+// D6 走查修复（关标签 ≠ 删除）：X 与菜单「关闭标签」只把 tab 加入
+// store.closedIds（会话级，重启后恢复全部标签），绝不触发删除；毁灭性删除
+// 收敛到右键菜单「删除工作空间…」的 PromptDialog 输名确认（流程不变）。
+// 全部标签关闭时内容由同文件导出的 ClosedWorkspacesPanel 承接重开。
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, Folder } from 'lucide-react';
+import { X, Plus, Folder, Pencil, FolderOpen, Trash2 } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { CreateWorkspaceDialog } from '../workspace/CreateWorkspaceDialog';
 import { cn } from '../../lib/cn';
 import { noDragStyle } from '../../lib/platform';
 import { PromptDialog } from '../common/PromptDialog';
+import { Button } from '../ui/Button';
 
 /** 右键菜单状态：目标 workspace + 弹出坐标（fixed 定位） */
 interface TabMenu {
@@ -24,9 +29,14 @@ interface TabMenu {
 export function WorkspaceTabs() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const closedIds = useWorkspaceStore((s) => s.closedIds);
+  const closeTab = useWorkspaceStore((s) => s.closeTab);
   const select = useWorkspaceStore((s) => s.select);
   const remove = useWorkspaceStore((s) => s.remove);
   const rename = useWorkspaceStore((s) => s.rename);
+
+  // 可见标签 = 未关闭的 workspace（关闭 ≠ 删除，工作空间本体保留在磁盘）
+  const visibleWorkspaces = workspaces.filter((ws) => !closedIds.includes(ws.id));
 
   const [showCreate, setShowCreate] = useState(false);
   const [menu, setMenu] = useState<TabMenu | null>(null);
@@ -54,7 +64,7 @@ export function WorkspaceTabs() {
   }, [menu]);
 
   /**
-   * 删除 workspace（tab 上的 lucide X 按钮与右键菜单共用）：弹 PromptDialog
+   * 删除 workspace（仅右键菜单「删除工作空间…」入口）：弹 PromptDialog
    * 二次确认后走 store.remove。
    *
    * 为防止误删，破坏性确认采用「输入工作空间名称一致」二次确认模式：
@@ -109,7 +119,7 @@ export function WorkspaceTabs() {
   return (
     <div className="flex items-center gap-1 h-full min-w-0" style={noDragStyle}>
       <div role="tablist" className="flex items-center gap-1 h-full">
-        {workspaces.map((ws) => {
+        {visibleWorkspaces.map((ws) => {
           const active = ws.id === activeWorkspaceId;
           const renaming = ws.id === renamingId;
           return (
@@ -159,11 +169,12 @@ export function WorkspaceTabs() {
                   </span>
                   <button
                     type="button"
-                    aria-label={`关闭 ${ws.name}`}
+                    aria-label={`关闭标签 ${ws.name}`}
+                    title="关闭标签（工作空间保留）"
                     className="opacity-0 group-hover:opacity-100 px-0.5 text-tertiary hover:text-primary"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleDelete(ws.id);
+                      closeTab(ws.id);
                     }}
                   >
                     <X size={12} strokeWidth={1.75} aria-hidden />
@@ -194,37 +205,52 @@ export function WorkspaceTabs() {
         <div
           ref={menuRef}
           className="fixed z-50 py-1 rounded-lg border border-subtle bg-surface-1 shadow-xl"
-          style={{ ...noDragStyle, left: menu.x, top: menu.y, minWidth: 140 }}
+          style={{ ...noDragStyle, left: menu.x, top: menu.y, minWidth: 160 }}
         >
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
             onClick={() => {
               startRename(menu.id);
               setMenu(null);
             }}
           >
+            <Pencil size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
             重命名
           </button>
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
             onClick={() => {
               handleOpenDirectory(menu.id);
               setMenu(null);
             }}
           >
+            <FolderOpen size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
             打开目录
+          </button>
+          <div className="my-1 border-t border-subtle" aria-hidden="true" />
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-secondary hover:bg-surface-3"
+            onClick={() => {
+              closeTab(menu.id);
+              setMenu(null);
+            }}
+          >
+            <X size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
+            关闭标签
           </button>
           <button
             type="button"
-            className="block w-full text-left px-3 py-1.5 text-xs text-status-error hover:bg-surface-3"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-status-error hover:bg-surface-3"
             onClick={() => {
               handleDelete(menu.id);
               setMenu(null);
             }}
           >
-            删除
+            <Trash2 size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
+            删除工作空间…
           </button>
         </div>
       )}
@@ -242,6 +268,43 @@ export function WorkspaceTabs() {
           />
         );
       })()}
+    </div>
+  );
+}
+
+/**
+ * 全部工作空间标签关闭后的重开面板（D6 走查修复）：workspaces 非空但可见标签
+ * 为空时由 App.tsx 渲染（TitleBar 下方占满内容区，与首启空态同构）。列出全部
+ * workspace 各带「重新打开」按钮——reopenTab 移出 closedIds 并激活。
+ */
+export function ClosedWorkspacesPanel() {
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const reopenTab = useWorkspaceStore((s) => s.reopenTab);
+
+  return (
+    <div className="flex flex-1 min-h-0 items-center justify-center bg-canvas p-6">
+      <div className="w-full max-w-md rounded-lg border border-subtle bg-surface-1 p-5">
+        <h2 className="text-sm font-semibold text-primary">已关闭全部工作空间标签</h2>
+        <p className="mt-1.5 text-xs leading-relaxed text-tertiary">
+          工作空间仍保留在磁盘，可随时重新打开：
+        </p>
+        <ul className="mt-2">
+          {workspaces.map((ws) => (
+            <li
+              key={ws.id}
+              className="flex items-center justify-between gap-2 border-b border-subtle py-2 last:border-b-0"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-sm text-primary">
+                <Folder size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-tertiary" />
+                <span className="truncate">{ws.name}</span>
+              </span>
+              <Button variant="ghost" size="sm" className="shrink-0" onClick={() => reopenTab(ws.id)}>
+                重新打开
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

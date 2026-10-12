@@ -35,8 +35,13 @@ beforeEach(() => {
   Object.assign(globalThis, { window: { api: mockApi } });
   // 持久化用例先例（theme.store）：每个用例前清空 localStorage，隔离持久键
   localStorage.clear();
-  // 重置 store 状态，保证测试间隔离
-  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, error: null });
+  // 重置 store 状态，保证测试间隔离（closedIds 会话级状态一并复位）
+  useWorkspaceStore.setState({
+    workspaces: [],
+    activeWorkspaceId: null,
+    closedIds: [],
+    error: null,
+  });
   mockApi.workspace.list.mockResolvedValue([MOCK_WS]);
   mockApi.workspace.create.mockResolvedValue(MOCK_WS_2);
   mockApi.workspace.setDefaultAgent.mockResolvedValue({ ok: true });
@@ -136,6 +141,86 @@ describe('workspace.store remove/rename（P2 Task 2）', () => {
 
     expect(useWorkspaceStore.getState().error).toBe('重命名失败');
     expect(useWorkspaceStore.getState().workspaces[0]!.name).toBe('测试工作区');
+  });
+});
+
+describe('workspace.store closeTab/reopenTab（D6 关标签 ≠ 删除）', () => {
+  it('closeTab 把 id 加入 closedIds，不调 ipc.workspace.delete', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().closeTab('ws-1');
+
+    expect(useWorkspaceStore.getState().closedIds).toEqual(['ws-1']);
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(2);
+    expect(mockApi.workspace.delete).not.toHaveBeenCalled();
+  });
+
+  it('closeTab 关闭激活项 → active 切到剩余可见首个，并按 select 语义持久化 + 通知 main', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().closeTab('ws-1');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-2');
+  });
+
+  it('closeTab 关闭非激活项 → active 不变、不触发切换通知', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS, MOCK_WS_2], activeWorkspaceId: 'ws-1' });
+
+    useWorkspaceStore.getState().closeTab('ws-2');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+    expect(mockApi.workspace.switch).not.toHaveBeenCalled();
+  });
+
+  it('closeTab 关闭到全部不可见 → active 置 null，但持久键保留（重启恢复的依据）', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS], activeWorkspaceId: 'ws-1' });
+    localStorage.setItem('momo.activeWorkspace', 'ws-1');
+
+    useWorkspaceStore.getState().closeTab('ws-1');
+
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull();
+    expect(useWorkspaceStore.getState().closedIds).toEqual(['ws-1']);
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-1');
+  });
+
+  it('closeTab 对未知 id / 已关闭 id 幂等 no-op（错误路径）', () => {
+    useWorkspaceStore.setState({ workspaces: [MOCK_WS], activeWorkspaceId: 'ws-1', closedIds: ['ws-2'] });
+
+    useWorkspaceStore.getState().closeTab('ws-gone');
+    useWorkspaceStore.getState().closeTab('ws-2');
+
+    expect(useWorkspaceStore.getState().closedIds).toEqual(['ws-2']);
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-1');
+  });
+
+  it('reopenTab 移出 closedIds 并激活（含持久化 + 通知）', () => {
+    useWorkspaceStore.setState({
+      workspaces: [MOCK_WS, MOCK_WS_2],
+      activeWorkspaceId: 'ws-1',
+      closedIds: ['ws-2'],
+    });
+
+    useWorkspaceStore.getState().reopenTab('ws-2');
+
+    expect(useWorkspaceStore.getState().closedIds).toEqual([]);
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('ws-2');
+    expect(localStorage.getItem('momo.activeWorkspace')).toBe('ws-2');
+    expect(mockApi.workspace.switch).toHaveBeenCalledWith('ws-2');
+  });
+
+  it('remove 真删 workspace 后同步清理 closedIds 中的死 id', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [MOCK_WS, MOCK_WS_2],
+      activeWorkspaceId: 'ws-1',
+      closedIds: ['ws-1'],
+    });
+    mockApi.workspace.list.mockResolvedValue([MOCK_WS_2]);
+
+    await useWorkspaceStore.getState().remove('ws-1');
+
+    expect(useWorkspaceStore.getState().closedIds).toEqual([]);
   });
 });
 
