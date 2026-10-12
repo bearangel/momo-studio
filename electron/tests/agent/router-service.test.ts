@@ -134,6 +134,75 @@ describe('RouterService', () => {
     });
   });
 
+  // D2（走查 2026-10-12）：spawn 失败不再静默——复刻 finalizeStreamOnCrash 落库
+  // 契约（failed 消息行 + final{status:'failed',error} 事件），renderer 经既有
+  // StreamErrorBox 渲染。锁三态：成员存在写气泡 / 无 runner 写气泡 / 身份反查
+  // 落空保持 warn-only。
+  describe('routeUserChat spawn 失败 → 错误气泡（D2）', () => {
+    function readAgentErrorRow(): {
+      row: { id: string; status: string; workspace_id: string; stream_session_id: string; body: string } | undefined;
+      finalPayload: { status: string; error: string } | undefined;
+    } {
+      const row = getDb()
+        .prepare(
+          "SELECT id, status, workspace_id, stream_session_id, body FROM messages WHERE session_id = '!room:home' AND sender = '@pm:home'",
+        )
+        .get() as { id: string; status: string; workspace_id: string; stream_session_id: string; body: string } | undefined;
+      if (!row) return { row: undefined, finalPayload: undefined };
+      const ev = getDb()
+        .prepare("SELECT payload_json FROM message_events WHERE message_id = ? AND event_type = 'final'")
+        .get(row.id) as { payload_json: string } | undefined;
+      return { row, finalPayload: ev ? (JSON.parse(ev.payload_json) as { status: string; error: string }) : undefined };
+    }
+
+    it('自动拉起失败（成员存在）→ 写 failed 消息行 + final 错误事件', async () => {
+      const runners = new Map<string, AgentRunner>();
+      const ensureRunner = vi.fn().mockRejectedValue(new Error('供应商 API key 丢失，请检查设置 → 供应商'));
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never, ensureRunner });
+
+      await svc.routeUserChat({ sessionId: '!room:home', assignmentId: 'inst-pm', body: '你好' });
+
+      const { row, finalPayload } = readAgentErrorRow();
+      expect(row).toBeDefined();
+      expect(row!.status).toBe('failed');
+      expect(row!.workspace_id).toBe('ws');
+      expect(row!.stream_session_id).toBeTruthy();
+      expect(row!.body).toBe('');
+      expect(finalPayload).toBeDefined();
+      expect(finalPayload!.status).toBe('failed');
+      expect(finalPayload!.error).toContain('智能体未能启动');
+      expect(finalPayload!.error).toContain('\n||details||\n');
+      expect(finalPayload!.error).toContain('供应商 API key 丢失');
+    });
+
+    it('无 runner 且无 ensureRunner（成员存在）→ 同样写错误气泡', async () => {
+      const runners = new Map<string, AgentRunner>();
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never });
+
+      await svc.routeUserChat({ sessionId: '!room:home', assignmentId: 'inst-pm', body: 'hi' });
+
+      const { row, finalPayload } = readAgentErrorRow();
+      expect(row).toBeDefined();
+      expect(row!.status).toBe('failed');
+      expect(finalPayload!.error).toContain('runner 未找到');
+    });
+
+    it('成员身份反查落空（assignment 不在 workspace_agent_members）→ 保持静默不写行', async () => {
+      const runners = new Map<string, AgentRunner>();
+      const ensureRunner = vi.fn().mockRejectedValue(new Error('拉起失败'));
+      const svc = new RouterService({ runners, dispatcher: { tryPickup: vi.fn() } as never, ensureRunner });
+
+      await svc.routeUserChat({ sessionId: '!room:home', assignmentId: 'ghost', body: 'hi' });
+
+      const { row } = readAgentErrorRow();
+      expect(row).toBeUndefined();
+      const count = getDb()
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = '!room:home'")
+        .get() as { n: number };
+      expect(count.n).toBe(0);
+    });
+  });
+
   describe('routeEvent（按 Matrix event 类型分流）', () => {
     it('m.room.message → 路由到目标 agent → executeTask', async () => {
       const mockRunner = { executeTask: vi.fn().mockResolvedValue({ streamSessionId: 'ss-1' }) };

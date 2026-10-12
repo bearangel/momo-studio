@@ -27,6 +27,7 @@ import {
 } from './dispatch-registry';
 import { insertMessage } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
+import { writeStreamStartFailure } from './stream-relay';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
@@ -195,12 +196,14 @@ export class RouterService {
           assignmentId: input.assignmentId,
           error: err instanceof Error ? err.message : String(err),
         });
+        this.writeSpawnFailureBubble(input, err instanceof Error ? err.message : String(err));
         return;
       }
       runner = this.opts.runners.get(input.assignmentId);
     }
     if (!runner) {
       logger.warn('routeUserChat 未找到 runner', { assignmentId: input.assignmentId });
+      this.writeSpawnFailureBubble(input, `runner 未找到（assignmentId=${input.assignmentId}）`);
       return;
     }
 
@@ -271,6 +274,34 @@ export class RouterService {
       },
       { kickoff: input.systemKickoff === true },
     );
+  }
+
+  /**
+   * spawn 失败的用户可见错误气泡（D2 走查 2026-10-12）：用户消息已落库但 agent
+   * 无法启动——写 failed 消息行 + final 事件（形状与运行时 LLM 失败一致，renderer
+   * 经 StreamErrorBox 渲染）。成员身份反查落空（instance 已删 / DB 异常）时无
+   * sender 可用，保持原 warn-only 行为。streamSessionId 一律新生成——不复用
+   * 调用方入参 id，防重试同 id 与错误行碰撞。
+   */
+  private writeSpawnFailureBubble(input: RouteUserChatInput, detailText: string): void {
+    let agentUserId: string | undefined;
+    try {
+      agentUserId = (
+        getDb()
+          .prepare('SELECT agent_user_id FROM workspace_agent_members WHERE instance_id = ?')
+          .get(input.assignmentId) as { agent_user_id: string } | undefined
+      )?.agent_user_id;
+    } catch {
+      // DB 不可用——降级为 warn-only
+    }
+    if (!agentUserId) return;
+    writeStreamStartFailure({
+      sessionId: input.sessionId,
+      senderAgentUserId: agentUserId,
+      workspaceId: this.resolveWorkspaceId(input.sessionId),
+      streamSessionId: randomUUID(),
+      errorText: `智能体未能启动：模型服务不可用（供应商已删除或密钥丢失）。请到 设置 → 模型服务 检查配置后重发\n||details||\n${detailText}`,
+    });
   }
 
   /**

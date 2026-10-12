@@ -259,6 +259,55 @@ export function finalizeStreamOnCrash(streamSessionId: string, exitCode: number 
 }
 
 /**
+ * 流启动失败错误气泡（D2，走查 2026-10-12）：agent spawn 失败（供应商被删 /
+ * 密钥丢失等）时流从未开始——此前 routeUserChat 只 warn 放弃派发，用户消息
+ * 落库后零反馈（无回复/无错误/无加载态）。本函数复刻 finalizeStreamOnCrash
+ * 的落库契约（消息行 + final{status:'failed',error} 事件），让 renderer 以
+ * 既有 StreamErrorBox 渲染错误气泡——事件形状与运行时失败完全一致，renderer
+ * 零改动（aggregator 已解析 final/failed）。
+ *
+ * 直接以 status='failed' 插行（不经 streaming 中间态）：无任何 delta 事件可
+ * 聚合，一次推送即终态；sweepStaleStreaming 只扫 'streaming' 行，不受影响。
+ */
+export function writeStreamStartFailure(input: {
+  sessionId: string;
+  /** agent 成员身份（workspace_agent_members.agent_user_id），消息行 sender */
+  senderAgentUserId: string;
+  workspaceId: string | null;
+  /** 新流 id（调用方生成；不复用任何既有流） */
+  streamSessionId: string;
+  /** 用户可读主文案（StreamErrorBox 按 \n||details||\n 分隔主文案与技术详情） */
+  errorText: string;
+}): void {
+  try {
+    const buf = getEventBuffer();
+    const msg = insertMessage({
+      sessionId: input.sessionId,
+      sender: input.senderAgentUserId,
+      eventType: 'm.room.message',
+      body: '',
+      streamSessionId: input.streamSessionId,
+      status: 'failed',
+      workspaceId: input.workspaceId,
+    });
+    pushSessionMessage(msg);
+    buf.append({
+      messageId: msg.id,
+      eventType: 'final',
+      payload: { status: 'failed', error: input.errorText },
+    });
+    buf.flush();
+    snapshotAtFinalize(msg.id);
+  } catch (err) {
+    // 气泡写入自身失败不得向上传播（调用方在派发链里）——记 error 后放行
+    logger.error('启动失败错误气泡写入失败', {
+      sessionId: input.sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * 把单个 StreamChunk 转换为 MessageEventBuffer.append 调用（A 子系统写入路径）。
  *
  * 映射关系：
