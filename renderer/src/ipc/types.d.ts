@@ -732,6 +732,8 @@ export interface ModelProvider {
   platform: ProviderPlatform;
   /** 来源预设 key；null=自定义供应商（v31 起） */
   presetKey: string | null;
+  /** 最近一次「检查连接」成功时间（ISO）；null/缺省 = 未验证（D7 徽标依据，主进程透传） */
+  lastVerifiedAt?: string | null;
 }
 
 /** 默认模型引用：指向某供应商模型列表中的一个模型（v2.0 P2 起） */
@@ -2129,6 +2131,11 @@ export interface ApiSurface {
      * 坏/空 slug 抛中文错；只读不落库。
      */
     previewBuiltinPreset(slug: string): Promise<BuiltinPresetPreview>;
+    /**
+     * 2026-10-12 D9：市场目录健康状态（主进程探测 catalog 源可达性；离线/网络
+     * 受限时 degraded=true）。资源库 agent 页据此显示「当前显示本地目录」降级提示。
+     */
+    getCatalogStatus(): Promise<{ degraded: boolean }>;
   };
   task: TaskApiSurface;
   /** 看板重构 Task 7：任务组通道面（taskGroup:*，groups.ipc.handlers.ts） */
