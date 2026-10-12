@@ -12,6 +12,7 @@ import {
   ONBOARDING_STATUS_KEY,
   readOnboardingStatus,
   markOnboardingDone,
+  selfHealOnboardingStatus,
 } from '../../src/main/onboarding/status';
 
 const tmpRoot = path.join(os.tmpdir(), `onboarding-status-${Date.now()}`);
@@ -57,5 +58,32 @@ describe('onboarding status kv', () => {
       .prepare(`INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, datetime('now'))`)
       .run(ONBOARDING_STATUS_KEY, 'not-json{');
     expect(readOnboardingStatus()).toBe('pending');
+  });
+});
+
+// D8（走查 2026-10-12）：僵尸引导自愈——pending 且已有工作空间 → 读时终态化。
+describe('onboarding 状态自愈（D8）', () => {
+  function insertWorkspace(id: string): void {
+    getDb()
+      .prepare(`INSERT INTO workspaces (id, name, directory_path, owner_id) VALUES (?, 'T', '/tmp', '@o')`)
+      .run(id);
+  }
+
+  it('pending + 已有工作空间 → 自愈为 completed 并落库', () => {
+    insertWorkspace('ws-1');
+    expect(selfHealOnboardingStatus()).toBe('completed');
+    // 落库持久——后续读取（无需自愈条件）直接 completed
+    expect(readOnboardingStatus()).toBe('completed');
+  });
+
+  it('pending + 无工作空间 → 保持 pending（新装用户正常出引导）', () => {
+    expect(selfHealOnboardingStatus()).toBe('pending');
+    expect(readOnboardingStatus()).toBe('pending');
+  });
+
+  it('终态（skipped/completed）不触发自愈重写', () => {
+    markOnboardingDone(true);
+    expect(selfHealOnboardingStatus()).toBe('skipped');
+    expect(readOnboardingStatus()).toBe('skipped');
   });
 });

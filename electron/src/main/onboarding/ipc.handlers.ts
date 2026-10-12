@@ -4,12 +4,12 @@
 // 分别在 plan-generator / plan-applier 就绪后注册（分任务接线）。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
-import { readOnboardingStatus, markOnboardingDone } from './status';
+import { markOnboardingDone, selfHealOnboardingStatus } from './status';
 import { generateOnboardingPlan } from './plan-generator';
 import { applyOnboardingPlan } from './plan-applier';
 
 export function registerOnboardingHandlers(): void {
-  ipcMain.handle('onboarding:getStatus', () => ({ status: readOnboardingStatus() }));
+  ipcMain.handle('onboarding:getStatus', () => ({ status: selfHealOnboardingStatus() }));
 
   ipcMain.handle('onboarding:markDone', (_e, input: { skipped: boolean }) => {
     markOnboardingDone(input.skipped);
