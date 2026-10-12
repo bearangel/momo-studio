@@ -72,7 +72,7 @@ import {
 import { HUB_PROVIDERS } from './hub';
 import { isSmitheryDegraded } from './hub/smithery';
 import { installPackage, uninstallPackage } from '../marketplace/installer';
-import { fetchCatalog } from '../marketplace/client';
+import { fetchCatalog, isCatalogDegraded } from '../marketplace/client';
 import { deleteRegistered, registerMcpDefinition } from '../mcp/host-manager';
 import {
   parseMcpBundle,
@@ -529,6 +529,12 @@ export function registerResourceHandlers(): void {
   ipcMain.handle('resource:danglingMcpRefs', async () => {
     return listDanglingMcpRefs();
   });
+
+  // resource:getCatalogStatus — 远程目录降级态（走查 D9）。renderer 资源库据此
+  // 显示「网络目录暂时不可达」提示条，区分「离线降级」与「目录为空」。
+  ipcMain.handle('resource:getCatalogStatus', () => ({
+    degraded: isCatalogDegraded(),
+  }));
 
   // resource:listBuiltinPresets — 预置清单只读（P2.3 spec §5）。本地直读
   // resources/agents/*.yaml（agent/builtin.ts 现有解析链），零网络——刻意不走

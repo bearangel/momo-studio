@@ -126,6 +126,13 @@ const catalogCache = new Map<string, { expiresAt: number; catalog: Catalog }>();
 const catalogFailureBackoff = new Map<string, number>();
 const lastGoodCatalog = new Map<string, Catalog>();
 const inflightRefresh = new Map<string, Promise<void>>();
+/**
+ * D9（走查 2026-10-12）：远程目录降级态（URL → 正在用本地回退）。
+ * true = 远程获取失败过且尚未恢复（退避中 / lastGood 为本地副本）；
+ * 远程成功即翻 false。resource:getCatalogStatus 透传给 renderer，
+ * 资源库显示「网络目录暂时不可达」提示条。
+ */
+const catalogDegraded = new Map<string, boolean>();
 
 /**
  * 获取 catalog：优先远程（结构校验失败视为被篡改），失败回退本地内置；
@@ -142,6 +149,7 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
   // 退避窗口内零网络——现读本地（readFileSync 毫秒级，保持本地面新鲜）
   if ((catalogFailureBackoff.get(url) ?? 0) > Date.now()) {
     logger.info('远程 catalog 失败退避中，直接使用本地');
+    catalogDegraded.set(url, true);
     return readLocalCatalog(url);
   }
 
@@ -153,6 +161,7 @@ export async function fetchCatalog(catalogUrl?: string): Promise<Catalog> {
     } catch (err) {
       logger.warn('远程 catalog 获取或校验失败，使用本地', { error: (err as Error).message });
       catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+      catalogDegraded.set(url, true);
       return readLocalCatalog(url);
     }
   }
@@ -173,6 +182,7 @@ async function fetchRemoteCatalog(url: string): Promise<Catalog> {
   catalogCache.set(url, { expiresAt: Date.now() + CATALOG_CACHE_TTL_MS, catalog });
   lastGoodCatalog.set(url, catalog);
   catalogFailureBackoff.delete(url);
+  catalogDegraded.set(url, false);
   logger.info('Marketplace catalog 已加载（远程）', { items: catalog.items.length });
   return catalog;
 }
@@ -195,6 +205,7 @@ function refreshInBackground(url: string): void {
       await fetchRemoteCatalog(url);
     } catch (err) {
       catalogFailureBackoff.set(url, Date.now() + CATALOG_FAILURE_BACKOFF_MS);
+      catalogDegraded.set(url, true);
       logger.warn('后台刷新远程 catalog 失败，续退避窗口', {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -205,12 +216,18 @@ function refreshInBackground(url: string): void {
   inflightRefresh.set(url, task);
 }
 
+/** D9：远程目录当前是否降级（本地回退在役）——resource:getCatalogStatus 消费 */
+export function isCatalogDegraded(catalogUrl?: string): boolean {
+  return catalogDegraded.get(catalogUrl ?? DEFAULT_CATALOG_URL) === true;
+}
+
 /** 测试用：清空 catalog 缓存（隔离用例间缓存副作用） */
 export function __resetCatalogCacheForTest(): void {
   catalogCache.clear();
   catalogFailureBackoff.clear();
   lastGoodCatalog.clear();
   inflightRefresh.clear();
+  catalogDegraded.clear();
 }
 
 /** 测试用：把缓存条目的过期时刻整体前移 ms（模拟 TTL 过期，不伪造系统时钟） */
