@@ -6,6 +6,23 @@
 > 特性分组账本，不是发布史；研发期产品版本停在 `2.1.0-alpha.N`，发正式版才定终号。策略全文见
 > `docs/dev/release.md`「研发期版本号策略」。上一正式版：**v2.0.0**。
 
+## [未发布] — 智能体命名统一 + 创建表单收敛 + 工具名中文化
+
+UX 一致性批（2026-10-12）。三件事：同一实体两套叫法（智能体管理视图=英文 Agent / 资源库=中文智能体，交叉引用混乱）、两份字段几乎相同的创建表单（单屏 Dialog vs 四步向导，preset/守卫逻辑已双份漂移维护）、能力列表 ~60 个工具全是英文 id 对中文用户不友好。
+
+### 变更
+- **命名统一「智能体」**：UI 英文 Agent 文案全量归一（活动栏 / 智能体成员 Tab / 「+ 新建智能体」「+ 添加智能体」/ AddAgentDialog / 资源库 TypeSidebar / 智能体市场 / 快速与协作会话引导 / onboarding / 删除披露文案），动词统一「新建」；代码标识符（`agents` 路由、IPC 通道、类型名）不动
+- **创建表单收敛为 AgentCreateWizard 单表单**：向导迁至 agent 域并加 `source='agentView'`（步 4「设为默认会话智能体」勾选 + 无工作空间守卫，提交链 `createCustom→addMember→setDefaultAgent→loadDefinitions` 平移自 CreateAgentDialog）；CreateAgentDialog 删除（含 `source='library'` 死代码路径），向导成为唯一创建入口，资源库 fork 预填不变
+- **工具名中文化**：目录条目（`ToolCatalogEntry`）加 `displayName`（`read_file`→读取文件、`git_stash`→贮藏管理…14 模块全量），能力列表**中文主名 + 英文小字副注**；勾选值与提交 ref 仍为英文 name；TS 必填 + `buildCatalog` fail-fast + 契约测试三保险防新工具漏译
+
+### 设计取舍
+- displayName 挂主进程目录（单一真相源）而非 renderer 映射表——防漂移，与 v2.x 目录切源同构；i18n 预留——将来主进程按 locale 返回 displayName 即可，renderer 零改动
+- ResourceDetail 的 YAML 能力预览保留英文 ref（展示的是定义原文，非 UI 命名面）
+
+### 已知遗留
+- CollabSessionDialog.test 的 addMember mock 不仿真 Promise（既有 unhandled error，测试仍绿，另行处理）
+- 外围域（SandboxNotice / About / ProviderSettings 等 ~8 处）散文残留小写 agent，是否专项清扫待定
+
 ## [未发布] — 工具预算软续期 + 默认上限 50
 
 预算治理改进（2026-10-10，CFO 办公与 DevKanban 编码两次真实走查驱动）。走查实测：多文件产出型任务的工具需求 ≈ 探测 2 + N 文件 + 走查 2-3 次，旧默认 10 次必撞墙且以「出错 · 工具调用预算已耗尽」硬终局，任务报废需手动调上限重发。
