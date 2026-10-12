@@ -83,29 +83,26 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
     finish: onFinished,
   };
 
+  // 跳过链（欢迎页与供应商步共用，D1a 提取）：markDone({skipped:true}) 落库 →
+  // onFinished 收闩；失败显式呈现错误，向导不关（I2 终审 / spec §9）
+  const handleSkip = async (): Promise<void> => {
+    try {
+      await ipc.onboarding.markDone({ skipped: true });
+      onFinished();
+    } catch (e) {
+      setSkipError(
+        `保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`,
+      );
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-canvas">
       <TitleBar />
       <div className="flex-1 min-h-0 flex items-center justify-center p-6">
         {step === 'welcome' && (
           <>
-            <WelcomeStep
-              onSelect={(r) => {
-                setRoute(r);
-                setStep('provider');
-              }}
-              onSkip={async () => {
-                // I2（终审）：markDone 失败显式呈现，向导不关（spec §9）
-                try {
-                  await ipc.onboarding.markDone({ skipped: true });
-                  onFinished();
-                } catch (e) {
-                  setSkipError(
-                    `保存引导状态失败（${e instanceof Error ? e.message : String(e)}），请重试`,
-                  );
-                }
-              }}
-            />
+            <WelcomeStep onSelect={(r) => { setRoute(r); setStep('provider'); }} onSkip={handleSkip} />
             {skipError && (
               <p className="mt-3 text-xs text-status-error" role="alert">
                 {skipError}
@@ -113,7 +110,16 @@ export function OnboardingWizard({ onFinished }: { onFinished: () => void }) {
             )}
           </>
         )}
-        {step === 'provider' && <ProviderStep ctx={ctx} />}
+        {step === 'provider' && (
+          <>
+            <ProviderStep ctx={ctx} onSkip={handleSkip} />
+            {skipError && (
+              <p className="mt-3 text-xs text-status-error" role="alert">
+                {skipError}
+              </p>
+            )}
+          </>
+        )}
         {step === 'workspace' && <WorkspaceStep ctx={ctx} />}
         {step === 'requirement' && <RequirementStep ctx={ctx} />}
         {step === 'preview' && <PlanPreviewStep ctx={ctx} />}

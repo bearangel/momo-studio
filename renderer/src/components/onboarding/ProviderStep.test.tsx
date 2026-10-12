@@ -146,3 +146,22 @@ describe('ProviderStep', () => {
     expect(screen.getByLabelText(/模型名/)).toBeInTheDocument();
   });
 });
+
+describe('ProviderStep — 跳过出口（D1a，预览 S1）', () => {
+  it('onSkip 注入时渲染跳过链接（chips 模式同样可见），点击调 onSkip', async () => {
+    const ctx = mkCtx();
+    const onSkip = vi.fn();
+    render(<ProviderStep ctx={ctx} onSkip={onSkip} />);
+    fireEvent.click(await screen.findByRole('button', { name: '跳过，稍后在设置中配置' }));
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(ctx.go).not.toHaveBeenCalled();
+    expect(ctx.setProvider).not.toHaveBeenCalled();
+  });
+
+  it('未注入 onSkip 时不渲染跳过链接（组件可独立使用）', async () => {
+    const ctx = mkCtx();
+    render(<ProviderStep ctx={ctx} />);
+    await screen.findByText('+ 自定义供应商');
+    expect(screen.queryByRole('button', { name: '跳过，稍后在设置中配置' })).not.toBeInTheDocument();
+  });
+});

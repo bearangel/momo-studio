@@ -71,6 +71,27 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('配置模型服务')).toBeInTheDocument();
   });
 
+  it('D1a：供应商步的跳过链接 → markDone({skipped:true}) + onFinished', async () => {
+    const onFinished = vi.fn();
+    render(<OnboardingWizard onFinished={onFinished} />);
+    fireEvent.click(await screen.findByRole('button', { name: /AI 引导/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '跳过，稍后在设置中配置' }));
+    await waitFor(() => expect(mocked.markDone).toHaveBeenCalledWith({ skipped: true }));
+    expect(onFinished).toHaveBeenCalled();
+  });
+
+  it('D1a 回归：供应商步跳过时 markDone 失败 → 行内中文错误，向导不关', async () => {
+    const onFinished = vi.fn();
+    mocked.markDone.mockRejectedValueOnce(new Error('kv write failed'));
+    render(<OnboardingWizard onFinished={onFinished} />);
+    fireEvent.click(await screen.findByRole('button', { name: /AI 引导/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '跳过，稍后在设置中配置' }));
+    expect(await screen.findByText(/保存引导状态失败/)).toBeInTheDocument();
+    expect(onFinished).not.toHaveBeenCalled();
+    // 向导仍在（供应商步标题可见）
+    expect(screen.getByText('配置模型服务')).toBeInTheDocument();
+  });
+
   it('getStatus 失败 → 视为 pending 照常走向导，不崩溃（Review Focus 5）', async () => {
     mocked.getStatus.mockRejectedValue(new Error('ipc down'));
     render(<OnboardingWizard onFinished={() => undefined} />);

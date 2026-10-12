@@ -4,6 +4,8 @@
 // ① 已有供应商快捷路径（半程重来幂等预填）② 预设 chips（预填可改）
 // ③ 自定义供应商手填（对齐 ProviderDialog 语义）。验证走 testConnection
 // （先验证后落库——失败零副作用），成功才 create 并推进。
+// D1a（预览 S1）：底部左侧加「跳过，稍后在设置中配置」——无 key 用户可跳过
+// 本步；markDone/收闩/错误呈现由向导层 handleSkip 拥有（WelcomeStep 同模式）。
 import { useEffect, useState } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
@@ -15,9 +17,11 @@ import type { WizardCtx } from '../../routes/OnboardingWizard';
 
 interface Props {
   ctx: WizardCtx;
+  /** 跳过本步（D1a）：由向导层注入——markDone({skipped:true}) 后收闩；失败在向导层显错 */
+  onSkip?: () => void;
 }
 
-export function ProviderStep({ ctx }: Props) {
+export function ProviderStep({ ctx, onSkip }: Props) {
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [mode, setMode] = useState<'chips' | 'existing' | 'preset' | 'custom'>('chips');
@@ -246,8 +250,21 @@ export function ProviderStep({ ctx }: Props) {
             <p className="text-[11px] text-disabled">Key 仅存系统钥匙串，不会上传 · 验证通过才会创建供应商</p>
           )}
           {error && <div className="text-xs text-status-error">{error}</div>}
-          {mode !== 'chips' && (
-            <div className="flex justify-end">
+          {/* 底部行（预览 S1）：跳过链接居左；主按钮居右。chips 模式无待提交
+              动作，仅渲染跳过出口（预览中的禁用态按钮是线稿示意，不设死按钮） */}
+          <div className="flex items-center justify-between mt-1">
+            {onSkip ? (
+              <button
+                type="button"
+                onClick={onSkip}
+                className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
+              >
+                跳过，稍后在设置中配置
+              </button>
+            ) : (
+              <span aria-hidden />
+            )}
+            {mode !== 'chips' && (
               <Button type="button" onClick={() => void submitNew()} disabled={busy}>
                 {busy ? (
                   <span className="inline-flex items-center gap-1.5">
@@ -257,8 +274,8 @@ export function ProviderStep({ ctx }: Props) {
                   '验证并继续'
                 )}
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
