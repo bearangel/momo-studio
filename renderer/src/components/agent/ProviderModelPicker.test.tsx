@@ -14,6 +14,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { ProviderModelPicker } from './ProviderModelPicker';
 import { useProviderStore } from '../../stores/provider.store';
+import { useSettingsStore } from '../../stores/settings.store';
+import { useUiStore } from '../../stores/ui.store';
 import type { ProviderModel } from '../../ipc/types';
 
 const listModels = vi.fn();
@@ -258,6 +260,39 @@ describe('ProviderModelPicker — 缓存', () => {
     });
     // p1 只在首次挂载调过一次
     expect(listModels.mock.calls.filter((c) => c[0] === 'p1')).toHaveLength(1);
+  });
+});
+
+describe('ProviderModelPicker — 空供应商指引（D5，预览 S3 after）', () => {
+  it('providers 为空 → 双下拉禁用（供应商显示「暂无供应商」）+ warning 提示块 + 去设置链接', () => {
+    useProviderStore.setState({ providers: [], loading: false });
+    renderPicker();
+    const providerSelect = screen.getByLabelText('模型供应商*') as HTMLSelectElement;
+    const modelSelect = screen.getByLabelText('模型名') as HTMLSelectElement;
+    expect(providerSelect).toBeDisabled();
+    expect(modelSelect).toBeDisabled();
+    expect(providerSelect.options[0]!.textContent).toBe('暂无供应商');
+    expect(screen.getByTestId('provider-empty-guide')).toBeInTheDocument();
+    expect(
+      screen.getByText('暂无模型供应商。请先到 设置 → 模型服务 创建（如 GLM / DeepSeek / OpenAI）。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去设置创建供应商 →' })).toBeInTheDocument();
+  });
+
+  it('点击「去设置创建供应商」→ 切设置视图并定位模型服务分类', () => {
+    useUiStore.setState({ activeView: 'agents' });
+    useSettingsStore.setState({ activeCategory: 'memory' });
+    useProviderStore.setState({ providers: [], loading: false });
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: '去设置创建供应商 →' }));
+    expect(useUiStore.getState().activeView).toBe('settings');
+    expect(useSettingsStore.getState().activeCategory).toBe('model_provider');
+  });
+
+  it('providers 非空 → 不渲染指引块（回归：正常路径不受影响）', () => {
+    renderPicker();
+    expect(screen.queryByTestId('provider-empty-guide')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('模型供应商*')).toBeEnabled();
   });
 });
 

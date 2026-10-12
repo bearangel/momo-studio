@@ -13,10 +13,14 @@
 //     （fetchModels → addModel 逐个幂等入库 → listModels 刷新），模式与
 //     settings/ProviderModelList.handleFetchAll 一致
 //   - 模型列表按 providerId 缓存在 ref（弹窗内来回切供应商不重复拉取）
+//   - D5（预览 S3 after）：providers 为空 → 双下拉禁用（供应商显示「暂无供应商」）
+//     + warning 提示块 + 底部「去设置创建供应商」链接（openProviderSettings 切
+//     视图即卸载宿主弹窗——EnablePresetDialog / AgentCreateWizard 均在视图分支内）
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Info, RefreshCw } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useProviderStore } from '../../stores/provider.store';
+import { openProviderSettings } from '../../lib/open-provider-settings';
 import { Select } from '../ui/Select';
 import type { ProviderModel } from '../../ipc/types';
 
@@ -90,6 +94,37 @@ export function ProviderModelPicker({
   useEffect(() => {
     onModelInfo?.(models.find((m) => m.modelId === modelId && m.enabled) ?? null);
   }, [models, modelId, onModelInfo]);
+
+  // D5（预览 S3 after）：无供应商 → 空下拉不再裸奔，给出原因与出路。
+  // 必须置于全部 hook 之后（提前 return 不影响 hook 顺序）
+  if (providers.length === 0) {
+    return (
+      <div className="flex flex-col gap-3" data-testid="provider-empty-guide">
+        <Select label="模型供应商*" value="" onChange={() => undefined} disabled>
+          <option value="">暂无供应商</option>
+        </Select>
+        <Select label="模型名" value="" onChange={() => undefined} disabled>
+          <option value="">请先选择供应商</option>
+        </Select>
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-md bg-status-warning-tint px-3 py-2 text-xs text-status-warning"
+        >
+          <Info size={16} strokeWidth={1.75} className="shrink-0" aria-hidden />
+          <span>暂无模型供应商。请先到 设置 → 模型服务 创建（如 GLM / DeepSeek / OpenAI）。</span>
+        </div>
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={openProviderSettings}
+            className="text-xs text-accent-600 dark:text-accent-300 underline underline-offset-2"
+          >
+            去设置创建供应商 →
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const handleProviderChange = (id: string): void => {
     onProviderChange(id);
