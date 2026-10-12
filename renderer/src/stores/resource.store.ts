@@ -22,6 +22,7 @@
 // 关键词搜索在前端 in-memory 完成（name/description/slug 模糊匹配，见 View 层）。
 import { create } from 'zustand';
 import { ipc } from '../ipc/client';
+import type { ViewKey } from './ui.store';
 import type {
   ResourceItem,
   ResourceFilter,
@@ -29,12 +30,24 @@ import type {
   SmitheryInstallResult,
 } from '../ipc/types';
 
+/**
+ * 一次性成功横幅载荷（D13 扩展）：纯文本（旧形态，存量写入点不变）或带 CTA
+ * 的对象——actionView 为 ui.store 的目标视图 key（会话视图 = 'im'），横幅据此
+ * 渲染「去会话」按钮。
+ */
+export type InstallNotice = string | { text: string; actionView?: ViewKey };
+
 interface ResourceStore {
   items: ResourceItem[];
   loading: boolean;
   error: string | null;
-  /** 安装成功提示横幅文本（null = 无；下一次 filter/type 切换清掉，load 不清） */
-  installNotice: string | null;
+  /** 安装成功提示横幅（null = 无；下一次 filter/type 切换清掉，load 不清） */
+  installNotice: InstallNotice | null;
+  /**
+   * D9：市场目录降级标志（agent 预置目录的远程 catalog 部分不可达时 true）。
+   * 查询失败按 false——宁可漏报不误报降级。
+   */
+  catalogDegraded: boolean;
   /** 当前 type tab，'all' = 不限 */
   typeFilter: ResourceFilter['type'] | 'all';
   /** 当前 source tab，'all' = 不限 */
@@ -57,6 +70,8 @@ interface ResourceStore {
   setActiveType: (t: ResourceType) => void;
   /** 删除/卸载某资源后刷新 */
   deleteResource: (id: string) => Promise<void>;
+  /** D9：拉取市场目录健康状态（degraded 写 catalogDegraded；失败静默回 false） */
+  loadCatalogStatus: () => Promise<void>;
   /**
    * 组⑤：MCP 启停——写库 + 禁用时断开运行实例；成功横幅 + 列表刷新，
    * 失败落 error 字段（红色横幅）。name 为 MCP 注册名（item.slug）。
@@ -75,6 +90,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   loading: false,
   error: null,
   installNotice: null,
+  catalogDegraded: false,
   typeFilter: 'all',
   sourceFilter: 'all',
   query: '',
@@ -119,6 +135,16 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   deleteResource: async (id) => {
     await ipc.resource.delete(id);
     await get().load();
+  },
+
+  loadCatalogStatus: async () => {
+    try {
+      const r = await ipc.resource.getCatalogStatus();
+      set({ catalogDegraded: r.degraded });
+    } catch {
+      // 通道未就绪（主进程并行接线）或查询失败——不误报降级
+      set({ catalogDegraded: false });
+    }
   },
 
   setMcpEnabled: async (name, enabled) => {

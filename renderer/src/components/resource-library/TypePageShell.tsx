@@ -5,10 +5,12 @@
 // 工具栏改单行（原 chips 在窄窗折行 95px，走查 B10 方案 B）、来源筛选前端化
 // （下拉计数需全量数据）、详情面板 B8 方案 B 拖拽调宽、加载失败加重试按钮。
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { TriangleAlert } from 'lucide-react';
 import type { BuiltinPresetPreview, DefinitionImpact, ResourceItem, ResourceSource, ResourceType } from '../../ipc/types';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/session.store';
 import { useResourceStore } from '../../stores/resource.store';
+import { useUiStore } from '../../stores/ui.store';
 import { EmptyState } from '../ui/EmptyState';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -119,15 +121,21 @@ interface TypePageShellProps {
 
 export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPreset, onEditMcpConfig, onEditMcpEntry, onToggleMcp, onForkPreset, onDisableAgent }: TypePageShellProps) {
   const {
-    items, loading, error, installNotice, sourceFilter, query,
-    setSourceFilter, setQuery, deleteResource, load,
+    items, loading, error, installNotice, catalogDegraded, sourceFilter, query,
+    setSourceFilter, setQuery, deleteResource, load, loadCatalogStatus,
   } = useResourceStore();
+  const setActiveView = useUiStore((s) => s.setActiveView);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ResourceItem | null>(null);
   /** agent 删除的影响面（披露式级联确认文案）；null = 非 agent 或预查失败回落通用文案 */
   const [deleteImpact, setDeleteImpact] = useState<DefinitionImpact | null>(null);
   const [detailWidth, setDetailWidth] = useState<number>(readInitialDetailWidth);
   const Icon = TYPE_ICON[type];
+
+  // D9：catalog 只影响 agent 预置目录的远程部分——仅 agent 页探测降级状态
+  useEffect(() => {
+    if (type === 'agent') void loadCatalogStatus();
+  }, [type, loadCatalogStatus]);
 
   // ── 详情面板拖宽（组③ B8 方案 B）：手柄在面板左缘，鼠标左移 = 变宽 ──────
   const widthRef = useRef(detailWidth);
@@ -278,10 +286,30 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
         </div>
       </div>
 
-      {/* 一次性成功横幅（本地导入/安装反馈） */}
+      {/* 一次性成功横幅（本地导入/安装反馈）。D13：对象形态带「去会话」CTA
+          （actionView=目标视图 key；当前唯一写入方 EnablePresetDialog 传 'im'） */}
       {installNotice && (
         <div data-testid="install-notice" className="mx-4 mt-3 px-3 py-2 rounded-md border border-subtle bg-status-success-tint text-status-success text-sm inline-flex items-center gap-1.5 self-start">
-          {installNotice}
+          <span>{typeof installNotice === 'string' ? installNotice : installNotice.text}</span>
+          {(() => {
+            const view = typeof installNotice === 'object' ? installNotice.actionView : undefined;
+            return view ? (
+              <Button size="sm" onClick={() => setActiveView(view)}>
+                去会话
+              </Button>
+            ) : null;
+          })()}
+        </div>
+      )}
+
+      {/* D9：市场目录降级细横幅——仅 agent 页（catalog 只影响 agent 预置目录的远程部分） */}
+      {catalogDegraded && type === 'agent' && (
+        <div
+          data-testid="catalog-degraded-notice"
+          className="mx-4 mt-2 px-3 py-1.5 rounded-md bg-status-warning-tint text-status-warning text-xs inline-flex items-center gap-1.5 self-start"
+        >
+          <TriangleAlert size={14} strokeWidth={1.75} aria-hidden />
+          网络目录暂时不可达（离线或网络受限），当前显示本地目录。
         </div>
       )}
 

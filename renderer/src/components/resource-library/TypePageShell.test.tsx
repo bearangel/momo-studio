@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { TypePageShell, buildImpactMessage } from './TypePageShell';
 import { useResourceStore } from '../../stores/resource.store';
+import { useUiStore } from '../../stores/ui.store';
 import type { ResourceItem } from '../../ipc/types';
 
 const listMock = vi.fn();
@@ -22,12 +23,15 @@ const listMock = vi.fn();
 const danglingMcpRefsMock = vi.fn();
 // P2.5 Task 4：删除确认流的 ipc delete 桩（store.deleteResource → ipc.resource.delete）
 const deleteMock = vi.fn();
+// D9：agent 页挂载时经 store.loadCatalogStatus 拉目录健康状态
+const getCatalogStatusMock = vi.fn();
 
 const mockApi = {
   resource: {
     list: listMock,
     danglingMcpRefs: danglingMcpRefsMock,
     delete: deleteMock,
+    getCatalogStatus: getCatalogStatusMock,
   },
 };
 
@@ -48,14 +52,18 @@ beforeEach(() => {
   danglingMcpRefsMock.mockResolvedValue([]);
   deleteMock.mockReset();
   deleteMock.mockResolvedValue(undefined);
+  getCatalogStatusMock.mockReset();
+  getCatalogStatusMock.mockResolvedValue({ degraded: false });
   (globalThis as unknown as { window: { api: typeof mockApi } }).window.api = mockApi;
   localStorage.clear();
 
   useResourceStore.setState({
     items: [], loading: false, error: null, installNotice: null,
+    catalogDegraded: false,
     typeFilter: 'mcp', sourceFilter: 'all', query: '',
     activeType: 'mcp',
   });
+  useUiStore.setState({ activeView: 'marketplace' });
 });
 
 describe('TypePageShell（已安装单态，P2.3 Task 1）', () => {
@@ -440,6 +448,90 @@ describe('TypePageShell - 列表键盘导航（组④ C11）', () => {
   });
 });
 
+
+// ── D13：installNotice 对象形态（带「去会话」CTA）──────────────────────────
+describe('TypePageShell - installNotice CTA（D13）', () => {
+  it('string 旧形态完全兼容：无按钮，仅文本（存量写入点回归锁）', () => {
+    useResourceStore.setState({ installNotice: '已导入至「自定义」' });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByTestId('install-notice')).toBeTruthy();
+    expect(screen.getByText('已导入至「自定义」')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '去会话' })).not.toBeInTheDocument();
+  });
+
+  it('object 形态带 actionView → 渲染「去会话」按钮，点击切到会话视图', () => {
+    useResourceStore.setState({
+      installNotice: { text: '🐾 Momo 已启用并加入当前工作空间，可开始快速会话。', actionView: 'im' },
+    });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByText(/已启用并加入当前工作空间/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '去会话' }));
+    expect(useUiStore.getState().activeView).toBe('im');
+  });
+
+  it('object 形态无 actionView → 仅文本，无按钮', () => {
+    useResourceStore.setState({ installNotice: { text: '纯文本对象' } });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByText('纯文本对象')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '去会话' })).not.toBeInTheDocument();
+  });
+});
+
+// ── D9：市场目录降级提示（仅 agent 页）────────────────────────────────────
+describe('TypePageShell - 目录降级提示（D9）', () => {
+  it('degraded=true 且 agent 页 → 显示 warning 细横幅', () => {
+    useResourceStore.setState({ catalogDegraded: true });
+    render(
+      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.getByTestId('catalog-degraded-notice')).toBeInTheDocument();
+    expect(screen.getByText('网络目录暂时不可达（离线或网络受限），当前显示本地目录。')).toBeInTheDocument();
+  });
+
+  it('degraded=true 但非 agent 页（mcp）→ 不显示（catalog 只影响 agent 目录）', () => {
+    useResourceStore.setState({ catalogDegraded: true });
+    render(
+      <TypePageShell type="mcp" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
+  });
+
+  it('degraded=false → 不显示', () => {
+    render(
+      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
+  });
+
+  it('agent 页挂载即探测目录状态（loadCatalogStatus → ipc.resource.getCatalogStatus）', async () => {
+    getCatalogStatusMock.mockResolvedValue({ degraded: true });
+    render(
+      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    await waitFor(() => expect(getCatalogStatusMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(useResourceStore.getState().catalogDegraded).toBe(true),
+    );
+  });
+
+  it('探测通道失败 → 不误报降级（catalogDegraded 保持 false）', async () => {
+    getCatalogStatusMock.mockRejectedValue(new Error('channel not ready'));
+    render(
+      <TypePageShell type="agent" addItems={[]} onInstall={vi.fn()} onEditAgent={vi.fn()} onOpenPreset={vi.fn()} />,
+    );
+    await waitFor(() => expect(getCatalogStatusMock).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(useResourceStore.getState().catalogDegraded).toBe(false);
+    });
+    expect(screen.queryByTestId('catalog-degraded-notice')).not.toBeInTheDocument();
+  });
+});
 
 describe('buildImpactMessage — 披露式级联文案契约（2026-10-10）', () => {
   // 纯函数直测：文案是用户确认依据，锁死行结构（· 前缀 + 非零项才出现）
