@@ -174,8 +174,8 @@ async function executeReadSession(args: Record<string, unknown>, ctx: ToolContex
 /** SessionTools：跨会话引用工具模块（spec 2026-09-30 §4） */
 // 类外常量（Tier 划分见 spec §3）：
 const SESSION_CATALOG_META: Record<string, ToolMeta> = {
-  list_sessions: { category: '会话', categoryEmoji: '💬', defaultOn: true },
-  read_session: { category: '会话', categoryEmoji: '💬', defaultOn: true },
+  list_sessions: { displayName: '会话列表', category: '会话', categoryEmoji: '💬', defaultOn: true },
+  read_session: { displayName: '读取会话', category: '会话', categoryEmoji: '💬', defaultOn: true },
 };
 
 export class SessionTools implements ToolModule {

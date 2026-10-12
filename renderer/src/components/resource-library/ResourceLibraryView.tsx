@@ -17,7 +17,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog';
 import type { AddMenuItem } from './AddMenu';
 import { RegisterMcpDialog } from '../agent/RegisterMcpDialog';
 import { UploadSkillDialog } from '../agent/UploadSkillDialog';
-import { AgentCreateWizard } from './wizard/AgentCreateWizard';
+import { AgentCreateWizard } from '../agent/AgentCreateWizard';
 import { DefinitionEditor } from '../agent/DefinitionEditor';
 import { EnablePresetDialog } from '../agent/EnablePresetDialog';
 import { McpConfigDialog } from './McpConfigDialog';

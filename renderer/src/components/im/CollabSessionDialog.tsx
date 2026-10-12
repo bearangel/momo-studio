@@ -131,7 +131,7 @@ export function CollabSessionDialog({ onClose }: Props) {
             <legend className="text-sm text-secondary">选择成员</legend>
             {members.length === 0 && notJoined.length === 0 && (
               <div className="text-xs text-tertiary">
-                当前工作空间暂无 agent 成员，请先到「Agent 管理」添加
+                当前工作空间暂无智能体成员，请先到「智能体」页添加
               </div>
             )}
             {members.map((m) => (
@@ -197,7 +197,7 @@ export function CollabSessionDialog({ onClose }: Props) {
             <legend className="text-sm text-secondary">选择团队</legend>
             {teams.length === 0 && (
               <div className="text-xs text-tertiary">
-                暂无团队，请先到「Agent 管理 → 团队」组建
+                暂无团队，请先到「智能体 → 团队」组建
               </div>
             )}
             {teams.map((t) => (

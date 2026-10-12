@@ -65,7 +65,7 @@ describe('DanglingRefsCard — 非空渲染', () => {
     render(<DanglingRefsCard />);
     expect(await screen.findByText('程序员、研究员 引用了未安装的 MCP：filesystem')).toBeInTheDocument();
     expect(
-      screen.getByText('去 Smithery 搜索安装（注册名需与引用名一致），或编辑 agent 引用'),
+      screen.getByText('去 Smithery 搜索安装（注册名需与引用名一致），或编辑智能体引用'),
     ).toBeInTheDocument();
   });
 

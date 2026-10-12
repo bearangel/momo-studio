@@ -244,7 +244,7 @@ describe('TypePageShell - 删除二次确认（P2.5 Task 4）', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '删除 甲' }));
     expect(
-      screen.getByText('此操作不可撤销。引用它的 agent 将出现悬空提示，需手动移除引用。'),
+      screen.getByText('此操作不可撤销。引用它的智能体将出现悬空提示，需手动移除引用。'),
     ).toBeInTheDocument();
   });
 
@@ -467,10 +467,10 @@ describe('buildImpactMessage — 披露式级联文案契约（2026-10-10）', (
     const lines = msg.split('\n');
     expect(lines).toHaveLength(5);
     expect(lines[0]).toBe('将同时：');
-    expect(lines[1]).toContain('从 2 个工作空间移出该 agent（空间A、空间B）');
-    expect(lines[2]).toContain('解散 1 个团队（该 agent 为 leader：冲锋队）');
+  expect(lines[1]).toContain('从 2 个工作空间移出该智能体（空间A、空间B）');
+  expect(lines[2]).toContain('解散 1 个团队（该智能体为 leader：冲锋队）');
     expect(lines[3]).toContain('3 个会话的全部成员失效，将变为只读（消息历史保留）');
-    expect(lines[4]).toContain('清空 1 个工作空间的默认 agent 设置');
+    expect(lines[4]).toContain('清空 1 个工作空间的默认智能体设置');
   });
 
   it('部分影响：只列非零项（有成员但无团队/会话/默认影响）', () => {
@@ -480,6 +480,6 @@ describe('buildImpactMessage — 披露式级联文案契约（2026-10-10）', (
       workspaceNames: ['空间A'],
     });
     expect(msg.split('\n')).toHaveLength(2);
-    expect(msg).toContain('从 1 个工作空间移出该 agent（空间A）');
+    expect(msg).toContain('从 1 个工作空间移出该智能体（空间A）');
   });
 });

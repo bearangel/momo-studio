@@ -57,7 +57,7 @@ export function AddAgentDialog({ onClose }: Props) {
   };
 
   return (
-    <Dialog open onClose={onClose} title="添加 Agent 到工作空间" width={448}>
+    <Dialog open onClose={onClose} title="添加智能体到工作空间" width={448}>
       <div className="flex flex-col gap-2">
         {error && (
           <div className="text-status-error text-sm" role="alert">
@@ -69,14 +69,14 @@ export function AddAgentDialog({ onClose }: Props) {
           definitions.length === 0 ? (
             <EmptyState
               icon={Bot}
-              title="暂无可用 Agent 定义"
-              description="可到「资源库」启用系统预置 Agent，或创建新的 Agent 定义"
+              title="暂无可用智能体定义"
+              description="可到「资源库」启用系统预置智能体，或新建智能体定义"
             />
           ) : (
             <EmptyState
               icon={Bot}
-              title="所有 agent 均已加入本工作空间"
-              description="可到「资源库」创建新的 Agent 定义"
+              title="所有智能体均已加入本工作空间"
+              description="可到「资源库」新建智能体定义"
             />
           )
         ) : (

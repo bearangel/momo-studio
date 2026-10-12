@@ -164,7 +164,7 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
     <Dialog
       open
       onClose={handleDialogClose}
-      title={isEdit ? `配置 Agent：${def.iconEmoji} ${def.name}` : `启用预设 Agent：${name}`}
+      title={isEdit ? `配置智能体：${def.iconEmoji} ${def.name}` : `启用预设智能体：${name}`}
       width={448}
     >
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -204,7 +204,7 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
             )}
             {join && workspace && (
               <Checkbox
-                label="设为默认会话 agent"
+                label="设为默认会话智能体"
                 checked={setAsDefault}
                 onChange={(e) => setSetAsDefault(e.target.checked)}
               />
@@ -225,7 +225,7 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
         {pendingRestartMember && (
           <div className="border-t border-subtle pt-3 flex flex-col gap-2">
             <div className="text-sm text-secondary">
-              已保存。该 agent 正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
+              已保存。该智能体正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" type="button" onClick={onClose} disabled={saving}>

@@ -106,7 +106,7 @@ export function completeInProgressTodos(streamSessionId: string): {
  */
 // 类外常量（Tier 划分见 spec §3）：
 const TODO_CATALOG_META: Record<string, ToolMeta> = {
-  todowrite: { category: '任务清单', categoryEmoji: '✅', defaultOn: true },
+  todowrite: { displayName: '任务清单', category: '任务清单', categoryEmoji: '✅', defaultOn: true },
 };
 
 export class TodoTools implements ToolModule {

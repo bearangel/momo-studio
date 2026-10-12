@@ -18,7 +18,7 @@ const MAIN_ITEMS: ActivityItem[] = [
   { key: 'im', icon: MessageSquare, label: '会话' },
   { key: 'files', icon: Folder, label: '文件' },
   { key: 'tasks', icon: SquareKanban, label: '看板' },
-  { key: 'agents', icon: Bot, label: 'Agent' },
+  { key: 'agents', icon: Bot, label: '智能体' },
   { key: 'marketplace', icon: Library, label: '资源库' },
 ];
 

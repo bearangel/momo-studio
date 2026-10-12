@@ -46,7 +46,7 @@ export function DanglingRefsCard() {
           <AlertTriangle size={16} strokeWidth={1.75} aria-hidden className="shrink-0 mt-0.5" />
           <div className="flex flex-col gap-0.5">
             <div>{ref.agents.map((a) => a.name).join('、')} 引用了未安装的 MCP：{ref.refName}</div>
-            <div className="text-xs">去 Smithery 搜索安装（注册名需与引用名一致），或编辑 agent 引用</div>
+            <div className="text-xs">去 Smithery 搜索安装（注册名需与引用名一致），或编辑智能体引用</div>
           </div>
         </div>
       ))}

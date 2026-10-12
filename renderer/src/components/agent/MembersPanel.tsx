@@ -1,12 +1,13 @@
 // renderer/src/components/agent/MembersPanel.tsx
-// AgentsView Tab 1「Agent 成员」（spec §6.1）：当前 workspace 的 agent 成员列表，
+// AgentsView Tab 1「智能体成员」（spec §6.1）：当前 workspace 的 agent 成员列表，
 // 拆自 WorkspaceAgentsPanel（v25 去编排退役）。成员行 = icon emoji + 名称 + 模型 +
 // Star 默认会话标记 + 在线状态 + 行内操作（启动/停止、设为默认会话、编辑、
 // 移出工作空间）。移出被 leader 守卫拦截时 alert blockedTeams 团队名。
 // 「编辑」→ MemberEditDialog（API key + 能力覆盖统一弹窗；关闭时刷新成员列表，
 // 因 setMemberDeltas 不像 updateMemberApiKey 那样内部刷新）。
-// 「+ 创建 Agent」→ CreateAgentDialog（source='agentView'，创建成功自动加入当前 ws）。
-// 「+ 添加 Agent」→ AddAgentDialog（Bug 3：移出后可重新加入）。
+// 「+ 新建智能体」→ AgentCreateWizard（source='agentView'，创建成功自动加入当前 ws；
+// 2026-10-12 表单统一——原 CreateAgentDialog 已删除，向导是唯一创建表单）。
+// 「+ 添加智能体」→ AddAgentDialog（Bug 3：移出后可重新加入）。
 // v2.1 P3：token 全量语义化；🤖/⭐/▶/⏸ → Bot/Star/Play/Pause lucide（iconEmoji 用户数据豁免）。
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, Pause, Play, Star } from 'lucide-react';
@@ -14,7 +15,7 @@ import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSessionStore } from '../../stores/session.store';
 import { MemberEditDialog } from './MemberEditDialog';
-import { CreateAgentDialog } from './CreateAgentDialog';
+import { AgentCreateWizard } from './AgentCreateWizard';
 import { AddAgentDialog } from './AddAgentDialog';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
@@ -67,14 +68,14 @@ export function MembersPanel() {
       <div className="px-4 py-3 flex items-center gap-2 border-b border-subtle shrink-0">
         <span className="inline-flex items-center gap-1.5 text-lg font-semibold">
           <Bot size={16} strokeWidth={1.75} aria-hidden />
-          Agent 成员
+          智能体成员
         </span>
         <div className="ml-auto flex gap-2">
           <Button type="button" variant="secondary" onClick={() => setAddOpen(true)}>
-            + 添加 Agent
+            + 添加智能体
           </Button>
           <Button type="button" onClick={() => setCreateOpen(true)}>
-            + 创建 Agent
+            + 新建智能体
           </Button>
         </div>
       </div>
@@ -97,13 +98,13 @@ export function MembersPanel() {
         {members.length === 0 && (
           <EmptyState
             icon={Bot}
-            title="本工作空间暂无 agent 成员"
-            description="点击右上角「+ 创建 Agent」添加成员"
+            title="本工作空间暂无智能体成员"
+            description="点击右上角「+ 新建智能体」添加成员"
           />
         )}
       </div>
 
-      {createOpen && <CreateAgentDialog source="agentView" onClose={() => setCreateOpen(false)} />}
+      {createOpen && <AgentCreateWizard source="agentView" onClose={() => setCreateOpen(false)} />}
       {addOpen && <AddAgentDialog onClose={() => setAddOpen(false)} />}
       {editingMember && (
         <MemberEditDialog
@@ -152,7 +153,7 @@ function MemberRow({
         <span className="text-xs text-tertiary truncate">{def.modelName}</span>
       )}
       {isDefault && (
-        <span className="inline-flex items-center" title="默认会话 agent">
+        <span className="inline-flex items-center" title="默认会话智能体">
           <Star
             size={12}
             strokeWidth={1.75}

@@ -152,7 +152,7 @@ export function ManualAgentStep({ ctx }: Props) {
                       checked={effectiveDefaultKey === `preset:${p.slug}`}
                       onChange={() => setDefaultKey(`preset:${p.slug}`)}
                     />
-                    默认会话 agent
+                    默认会话智能体
                   </label>
                 )}
               </div>
@@ -228,7 +228,7 @@ export function ManualAgentStep({ ctx }: Props) {
                   checked={effectiveDefaultKey === 'custom:0'}
                   onChange={() => setDefaultKey('custom:0')}
                 />
-                默认会话 agent：{customName.trim()}
+                默认会话智能体：{customName.trim()}
               </label>
             )}
           </div>

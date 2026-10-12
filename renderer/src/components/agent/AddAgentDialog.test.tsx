@@ -181,7 +181,7 @@ describe('AddAgentDialog — 加入动作', () => {
 
     expect(await screen.findByText(/不可重复添加/)).toBeInTheDocument();
     // 弹窗不关闭
-    expect(screen.getByText('添加 Agent 到工作空间')).toBeInTheDocument();
+    expect(screen.getByText('添加智能体到工作空间')).toBeInTheDocument();
   });
 });
 
@@ -192,16 +192,16 @@ describe('AddAgentDialog — 空态与取消', () => {
     ]);
     render(<AddAgentDialog onClose={() => {}} />);
     expect(
-      await screen.findByText('所有 agent 均已加入本工作空间'),
+      await screen.findByText('所有智能体均已加入本工作空间'),
     ).toBeInTheDocument();
   });
 
   it('定义目录为空（全新 profile）→ 引导去资源库，不误报「均已加入」（D1 回归）', async () => {
     seedStore([], []);
     render(<AddAgentDialog onClose={() => {}} />);
-    expect(await screen.findByText('暂无可用 Agent 定义')).toBeInTheDocument();
+    expect(await screen.findByText('暂无可用智能体定义')).toBeInTheDocument();
     expect(screen.getByText(/「资源库」启用系统预置/)).toBeInTheDocument();
-    expect(screen.queryByText('所有 agent 均已加入本工作空间')).not.toBeInTheDocument();
+    expect(screen.queryByText('所有智能体均已加入本工作空间')).not.toBeInTheDocument();
   });
 
   it('点「取消」→ onClose', async () => {
@@ -210,7 +210,7 @@ describe('AddAgentDialog — 空态与取消', () => {
     ]);
     const onClose = vi.fn();
     render(<AddAgentDialog onClose={onClose} />);
-    await screen.findByText('所有 agent 均已加入本工作空间');
+    await screen.findByText('所有智能体均已加入本工作空间');
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

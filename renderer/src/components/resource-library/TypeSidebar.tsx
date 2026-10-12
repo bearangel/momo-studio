@@ -1,5 +1,5 @@
 // renderer/src/components/resource-library/TypeSidebar.tsx
-// 资源库二级侧边菜单（spec §2.1 决策①）：Agent / MCP / Skill 三项，无总览。
+// 资源库二级侧边菜单（spec §2.1 决策①）：智能体 / MCP / Skill 三项，无总览。
 // 选中态 = bg-surface-active + accent 文字（设计系统导航选中态规范）。
 import type { ResourceType } from '../../ipc/types';
 import { cn } from '../../lib/cn';
@@ -7,7 +7,7 @@ import { TYPE_ICON } from './ResourceRow';
 
 /** 三页菜单配置（与 store.activeType 的 ResourceType 对齐，无 'all'） */
 const TYPES: Array<{ key: ResourceType; label: string }> = [
-  { key: 'agent', label: 'Agent' },
+  { key: 'agent', label: '智能体' },
   { key: 'mcp', label: 'MCP' },
   { key: 'skill', label: 'Skill' },
 ];

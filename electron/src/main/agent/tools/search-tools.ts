@@ -52,8 +52,8 @@ const DEFAULT_IGNORE: string[] = ['**/node_modules/**', '**/.git/**', '**/dist/*
  */
 // 类外常量（Tier 划分见 spec §3）：
 const SEARCH_CATALOG_META: Record<string, ToolMeta> = {
-  grep: { category: '搜索', categoryEmoji: '🔍', defaultOn: true },
-  glob: { category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+  grep: { displayName: '内容搜索', category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+  glob: { displayName: '文件名搜索', category: '搜索', categoryEmoji: '🔍', defaultOn: true },
 };
 
 export class SearchTools implements ToolModule {

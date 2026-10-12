@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 describe('AgentsView — 双 Tab 切换（spec §6.1）', () => {
-  it('默认激活「Agent 成员」Tab：渲染 MembersPanel，无 L2 共享能力区', async () => {
+  it('默认激活「智能体成员」Tab：渲染 MembersPanel，无 L2 共享能力区', async () => {
     render(<AgentsView />);
 
     await waitFor(() => {
@@ -75,7 +75,7 @@ describe('AgentsView — 双 Tab 切换（spec §6.1）', () => {
     expect(screen.queryByTestId('members-panel')).not.toBeInTheDocument();
   });
 
-  it('「团队」Tab 切回「Agent 成员」→ MembersPanel 恢复渲染', async () => {
+  it('「团队」Tab 切回「智能体成员」→ MembersPanel 恢复渲染', async () => {
     render(<AgentsView />);
 
     await waitFor(() => {
@@ -86,7 +86,7 @@ describe('AgentsView — 双 Tab 切换（spec §6.1）', () => {
       expect(screen.getByTestId('teams-panel')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agent 成员' }));
+    fireEvent.click(screen.getByRole('button', { name: '智能体成员' }));
 
     await waitFor(() => {
       expect(screen.getByTestId('members-panel')).toBeInTheDocument();

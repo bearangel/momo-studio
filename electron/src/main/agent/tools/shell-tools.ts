@@ -140,7 +140,7 @@ export function __setNetQueryForTest(fn: NetQueryFn | null): void {
 const WRITE_WAIT_MAX_ROUNDS = 3;
 
 const SHELL_CATALOG_META: Record<string, ToolMeta> = {
-  bash: { category: 'Shell', categoryEmoji: '💻', defaultOn: false, riskNote: '任意代码执行' },
+  bash: { displayName: '终端命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false, riskNote: '任意代码执行' },
 };
 
 export class ShellTools implements ToolModule {

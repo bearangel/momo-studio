@@ -32,9 +32,9 @@ const getCatalog = vi.fn();
 
 /** mock 工具目录（v2.x 切源：CapabilityTabs 经 useToolCatalog 拉 IPC，缺通道会让 effect 同步抛错炸渲染树） */
 const MOCK_CATALOG: ToolCatalogEntry[] = [
-  { name: 'read_file', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
-  { name: 'grep', description: '搜索', category: '搜索', categoryEmoji: '🔍', defaultOn: true },
-  { name: 'bash', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
+  { name: 'read_file', displayName: '读取文件', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'grep', displayName: '内容搜索', description: '搜索', category: '搜索', categoryEmoji: '🔍', defaultOn: true },
+  { name: 'bash', displayName: '终端命令', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
 ];
 
 // store action 桩（组件经 useAgentStore / useProviderStore 调用）
@@ -177,12 +177,12 @@ describe('MemberEditDialog — 加载', () => {
     );
     // 等待加载完成（checkbox 出现）
     await waitFor(() => {
-      expect(screen.getByLabelText('read_file')).toBeInTheDocument();
+      expect(screen.getByLabelText('读取文件（read_file）')).toBeInTheDocument();
     });
-    expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('grep') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('内容搜索（grep）') as HTMLInputElement).checked).toBe(true);
     // bash 既不在 def 也不在 allocation → 未勾
-    expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('应用已存 deltas 反推 value（addedTools + removedTools）', async () => {
@@ -196,10 +196,10 @@ describe('MemberEditDialog — 加载', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('override 模式显示默认值提示（让用户知道 def+ws 默认是什么）', async () => {
@@ -226,9 +226,9 @@ describe('MemberEditDialog — 改 added', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
@@ -249,9 +249,9 @@ describe('MemberEditDialog — 改 removed', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('read_file')).toBeInTheDocument();
+      expect(screen.getByLabelText('读取文件（read_file）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('read_file'));
+    fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
@@ -270,10 +270,10 @@ describe('MemberEditDialog — 保存全量', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
-    fireEvent.click(screen.getByLabelText('read_file'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
+    fireEvent.click(screen.getByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
@@ -290,7 +290,7 @@ describe('MemberEditDialog — 保存全量', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(setMemberDeltasMock).not.toHaveBeenCalled();
@@ -305,9 +305,9 @@ describe('MemberEditDialog — 重启提示', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
@@ -350,9 +350,9 @@ describe('MemberEditDialog — 重启提示', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '立即重启' })).toBeInTheDocument();
@@ -378,9 +378,9 @@ describe('MemberEditDialog — 重启提示', () => {
       <MemberEditDialog member={buildMember({ lastRunning: false })} def={buildDef()} onClose={onClose} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
@@ -397,9 +397,9 @@ describe('MemberEditDialog — 重启提示', () => {
       <MemberEditDialog member={buildMember()} def={buildDef()} onClose={onClose} />,
     );
     await waitFor(() => {
-      expect(screen.getByLabelText('bash')).toBeInTheDocument();
+      expect(screen.getByLabelText('终端命令（bash）')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '稍后' })).toBeInTheDocument();
@@ -414,7 +414,7 @@ describe('MemberEditDialog — 重启提示', () => {
 describe('MemberEditDialog — 模型区（全局定义）', () => {
   it('显示全局影响提示文案与初始模型（def 的 provider/model）', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    expect(screen.getByText(/定义全局共享，模型修改对所有工作空间的同名 agent 生效/)).toBeInTheDocument();
+    expect(screen.getByText(/定义全局共享，模型修改对所有工作空间的同名智能体生效/)).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText('模型名')).toHaveValue('m');
     });
@@ -422,8 +422,8 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('模型未变化保存 → updateDefinition 不被调用', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('bash');
-    fireEvent.click(screen.getByLabelText('bash')); // 只改能力
+    await screen.findByLabelText('终端命令（bash）');
+    fireEvent.click(screen.getByLabelText('终端命令（bash）')); // 只改能力
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
@@ -445,8 +445,8 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('模型未变保存 → 不刷新 definitions（避免无谓 IPC）', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('bash');
-    fireEvent.click(screen.getByLabelText('bash'));
+    await screen.findByLabelText('终端命令（bash）');
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(setMemberDeltasMock).toHaveBeenCalledTimes(1);
@@ -480,7 +480,7 @@ describe('MemberEditDialog — 模型区（全局定义）', () => {
 
   it('API Key 区已移除（无 key 输入框）', async () => {
     render(<MemberEditDialog member={buildMember()} def={buildDef()} onClose={() => {}} />);
-    await screen.findByLabelText('bash');
+    await screen.findByLabelText('终端命令（bash）');
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
     expect(screen.queryByText(/当前使用独立 API key override/)).not.toBeInTheDocument();
   });

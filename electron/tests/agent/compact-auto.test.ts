@@ -173,7 +173,7 @@ const BIG_TOOL_DEF: LLMToolDef = {
   inputSchema: { type: 'object', properties: {} },
 };
 const BIG_TOOL_CATALOG_META: Record<string, ToolMeta> = {
-  big_tool: { category: '测试', categoryEmoji: '🧪', defaultOn: false },
+  big_tool: { displayName: '测试大工具', category: '测试', categoryEmoji: '🧪', defaultOn: false },
 };
 const bigToolModule: ToolModule = {
   getDefs: () => [BIG_TOOL_DEF],

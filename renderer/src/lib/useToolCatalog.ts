@@ -17,6 +17,8 @@ export interface ToolCatalogData {
   categories: ToolCatalogGroup[];
   safeMinimum: string[];
   allTools: string[];
+  /** 工具英文名 → 中文显示名；目录未含的名字回退英文名（勾选值/提交仍是英文 name） */
+  displayName: (name: string) => string;
 }
 
 let cache: ToolCatalogData | null = null;
@@ -25,6 +27,7 @@ let inFlight: Promise<ToolCatalogData> | null = null;
 function derive(entries: ToolCatalogEntry[]): ToolCatalogData {
   const order: string[] = [];
   const byCat = new Map<string, ToolCatalogGroup>();
+  const displayByTool = new Map<string, string>(entries.map((e) => [e.name, e.displayName]));
   for (const e of entries) {
     let g = byCat.get(e.category);
     if (!g) {
@@ -39,6 +42,7 @@ function derive(entries: ToolCatalogEntry[]): ToolCatalogData {
     categories: order.map((c) => byCat.get(c)!),
     safeMinimum: entries.filter((e) => e.defaultOn).map((e) => e.name),
     allTools: entries.map((e) => e.name),
+    displayName: (name: string) => displayByTool.get(name) ?? name,
   };
 }
 

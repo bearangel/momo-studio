@@ -1,6 +1,6 @@
 // renderer/src/components/agent/MembersPanel.test.tsx
 //
-// v25 Task 12：AgentsView Tab 1「Agent 成员」面板测试（spec §6.1）。
+// v25 Task 12：AgentsView Tab 1「智能体成员」面板测试（spec §6.1）。
 // 成员行 = icon emoji + 名称 + 模型 + ⭐默认会话标记 + 在线状态 + 行内操作
 // （启动/停止、设为默认会话、编辑、移出工作空间）。
 // 移出被 leader 守卫拦截时 alert blockedTeams 团队名（spec §7）。
@@ -14,7 +14,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { AgentDefinition, Team, Workspace, WorkspaceAgentMember } from '../../ipc/types';
-import { useProviderStore } from '../../stores/provider.store';
 
 // ---- 子弹窗桩：占位渲染 + 暴露 onClose 触发点 ----
 const editDialogMock = vi.fn();
@@ -79,7 +78,7 @@ const DEF_2: AgentDefinition = {
   modelName: 'claude-sonnet',
 };
 
-/** 默认会话 agent（inst-1，运行中） */
+/** 默认会话智能体（inst-1，运行中） */
 const MEMBER_DEFAULT: WorkspaceAgentMember = {
   instanceId: 'inst-1',
   workspaceId: 'ws-1',
@@ -191,49 +190,38 @@ describe('MembersPanel — 成员行渲染', () => {
     expect(screen.getByText('已停止')).toBeInTheDocument();
   });
 
-  it('仅默认会话 agent 显示 Star 标记；非默认成员提供「设为默认」按钮', async () => {
+  it('仅默认会话智能体显示 Star 标记；非默认成员提供「设为默认」按钮', async () => {
     await renderLoaded();
     // Star 标记唯一（inst-1 是 defaultAgentInstanceId，title 语义不变）
-    expect(screen.getAllByTitle('默认会话 agent')).toHaveLength(1);
+    expect(screen.getAllByTitle('默认会话智能体')).toHaveLength(1);
     // 非默认成员才有「设为默认」
     expect(screen.getByText('设为默认')).toBeInTheDocument();
   });
 
-  it('空态：无成员时显示空态提示与「+ 创建 Agent」入口', async () => {
+  it('空态：无成员时显示空态提示与「+ 新建智能体」入口', async () => {
     useAgentStore.setState({ members: [] });
     render(<MembersPanel />);
     await waitFor(() => {
       expect(loadMembersMock).toHaveBeenCalledWith('ws-1');
     });
-    expect(screen.getByText('本工作空间暂无 agent 成员')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '+ 创建 Agent' })).toBeInTheDocument();
+    expect(screen.getByText('本工作空间暂无智能体成员')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ 新建智能体' })).toBeInTheDocument();
   });
 });
 
-describe('MembersPanel — 创建 Agent 入口接线（Task 13）', () => {
-  it('点「+ 创建 Agent」→ 渲染 CreateAgentDialog（agentView：含设默认勾选）', async () => {
-    // 弹窗挂载即拉取 provider 列表——桩化 store action，不触达 ipc
-    useProviderStore.setState({
-      providers: [],
-      loading: false,
-      loadProviders: vi.fn(),
-      createProvider: vi.fn(),
-      updateProvider: vi.fn(),
-      deleteProvider: vi.fn(),
-      setDefault: vi.fn(),
-      clear: vi.fn(),
-    });
-    // v2.x Task 6：弹窗挂载还经 useToolCatalog 拉 tools:getCatalog——补最小
-    // window.api 桩（进程边界），目录返回空即可（本用例不开自定义档）
+describe('MembersPanel — 新建智能体入口接线（2026-10-12 表单统一）', () => {
+  it('点「+ 新建智能体」→ 渲染 AgentCreateWizard（source=agentView）', async () => {
+    // 向导挂载即经 useToolCatalog 拉 tools:getCatalog——补最小 window.api 桩
+    // （进程边界），目录返回空即可（本用例不走到能力步）
     const getCatalog = vi.fn().mockResolvedValue([]);
     (globalThis as unknown as { window: { api: unknown } }).window.api = {
       tools: { getCatalog },
     };
     await renderLoaded();
-    fireEvent.click(screen.getByRole('button', { name: '+ 创建 Agent' }));
-    expect(await screen.findByText('创建 Agent')).toBeInTheDocument();
-    // source='agentView' 的可观察差异：设为默认勾选可见（library 入口无此勾选）
-    expect(screen.getByLabelText('设为默认会话 agent')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '+ 新建智能体' }));
+    // 向导挂载：标题 + 步进条第 1 步（基础信息）
+    expect(await screen.findByText('新建智能体')).toBeInTheDocument();
+    expect(screen.getByText('基础信息')).toBeInTheDocument();
   });
 });
 

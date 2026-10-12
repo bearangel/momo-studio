@@ -7,6 +7,8 @@ import type { LLMToolDef } from '../llm-provider';
 /** 目录条目：IPC tools:getCatalog 的载荷单元，renderer 据此渲染分组勾选 */
 export interface ToolCatalogEntry {
   name: string;
+  /** 中文显示名（UI 主名，2026-10-12 工具名中文化）；name 保留为提交 ref 与日志对照 */
+  displayName: string;
   description: string;
   category: string;
   categoryEmoji: string;

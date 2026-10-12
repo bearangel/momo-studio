@@ -192,18 +192,18 @@ function serializeEvalResult(result: unknown): string {
 
 // 类外常量（Tier 划分见 spec §3）：
 const BROWSER_CATALOG_META: Record<string, ToolMeta> = {
-  browser_navigate: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_snapshot: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_screenshot: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_click: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_type: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_press_key: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_hover: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_scroll: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_evaluate: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控，默认禁用）' },
-  browser_console_messages: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_tabs: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
-  browser_close: { category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_navigate: { displayName: '打开网页', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_snapshot: { displayName: '页面快照', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_screenshot: { displayName: '页面截图', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_click: { displayName: '点击元素', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_type: { displayName: '输入文字', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_press_key: { displayName: '按键操作', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_hover: { displayName: '悬停', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_scroll: { displayName: '滚动页面', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_evaluate: { displayName: '执行脚本', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控，默认禁用）' },
+  browser_console_messages: { displayName: '控制台日志', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_tabs: { displayName: '标签页管理', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
+  browser_close: { displayName: '关闭页面', category: '浏览器', categoryEmoji: '🖥️', defaultOn: false, riskNote: '浏览器操作（受信任门管控）' },
 };
 
 export class BrowserTools implements ToolModule {

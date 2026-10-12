@@ -12,7 +12,7 @@ import { MARKETPLACES } from './external-marketplaces';
 
 /** 面板标题（spec §4：按类型命名） */
 const PANEL_TITLE: Record<ResourceType, string> = {
-  agent: 'Agent 市场',
+  agent: '智能体市场',
   mcp: 'MCP 市场',
   skill: 'Skill 市场',
 };
@@ -20,7 +20,7 @@ const PANEL_TITLE: Record<ResourceType, string> = {
 /** 面板底部两行常驻小字（回流指引与各页 AddMenu 实际菜单项同名——走查 A6 文案对齐） */
 const FOOTER_LINE_1 = '在浏览器打开 · 应用内不安装';
 const FOOTER_LINE_2 =
-  '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；Agent 用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」';
+  '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；智能体用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」';
 
 export function ExternalMarketplacePopover({ type }: { type: ResourceType }) {
   const [open, setOpen] = useState(false);

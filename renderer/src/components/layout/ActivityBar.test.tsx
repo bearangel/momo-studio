@@ -21,7 +21,7 @@ describe('ActivityBar', () => {
     expect(screen.getByLabelText('会话')).toBeInTheDocument();
     expect(screen.getByLabelText('文件')).toBeInTheDocument();
     expect(screen.getByLabelText('看板')).toBeInTheDocument();
-    expect(screen.getByLabelText('Agent')).toBeInTheDocument();
+    expect(screen.getByLabelText('智能体')).toBeInTheDocument();
     expect(screen.getByLabelText('资源库')).toBeInTheDocument();
     expect(screen.getByLabelText('设置')).toBeInTheDocument();
   });

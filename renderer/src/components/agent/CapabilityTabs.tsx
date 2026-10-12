@@ -115,6 +115,8 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
               <div className="flex flex-wrap gap-2">
                 {cat.tools.map((tool) => {
                   const checked = value.tools.includes(tool);
+                  // 2026-10-12 工具名中文化：中文主名 + 英文小字副注（勾选值/提交仍是英文 name）
+                  const display = catalog?.displayName(tool) ?? tool;
                   return (
                     <label
                       key={tool}
@@ -122,12 +124,13 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
                     >
                       <input
                         type="checkbox"
-                        aria-label={tool}
+                        aria-label={`${display}（${tool}）`}
                         checked={checked}
                         disabled={readonly}
                         onChange={(e) => toggleItem('tools', tool, e.target.checked)}
                       />
-                      {tool}
+                      {display}
+                      <span className="text-tertiary">{tool}</span>
                     </label>
                   );
                 })}
@@ -164,10 +167,11 @@ export function CapabilityTabs({ mode, defaultValue, value, onChange }: Capabili
             </div>
           )}
 
-          {/* override 模式：提示默认值（delta 由调用方在保存时计算） */}
+          {/* override 模式：提示默认值（delta 由调用方在保存时计算）；工具名用中文显示名 */}
           {mode === 'override' && defaultValue && (
             <div className="text-xs text-tertiary mt-1">
-              默认（def + workspace）：{defaultValue.tools.join(', ') || '无'}
+              默认（def + workspace）：
+              {defaultValue.tools.map((t) => catalog?.displayName(t) ?? t).join(', ') || '无'}
               <br />
               勾选 = 保留/添加；取消 = 移除
             </div>

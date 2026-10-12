@@ -1,5 +1,5 @@
 // renderer/src/components/agent/AgentsView.tsx
-// Agent 管理容器：双 Tab「Agent 成员」/「团队」（spec §6.1，v25 去编排）。
+// 智能体管理容器：双 Tab「智能体成员」/「团队」（spec §6.1，v25 去编排）。
 // 旧「本工作空间 / Agent 库」双 Tab 退役——Agent 定义管理由资源库承接，
 // 成员/团队以 workspace 为维度在此管理。原成员 Tab 底部 L2 工作空间共享
 // 能力面板已废弃拆除（L2 管理入口已废弃）——allocation 后端与 IPC 通道保留
@@ -36,7 +36,7 @@ export function AgentsView() {
               : 'border-transparent text-secondary hover:text-primary',
           )}
         >
-          Agent 成员
+          智能体成员
         </button>
         <button
           type="button"

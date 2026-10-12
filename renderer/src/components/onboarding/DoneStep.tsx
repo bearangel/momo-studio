@@ -42,7 +42,7 @@ export function DoneStep({ ctx }: Props) {
               <span>{agentNames}</span>
             </div>
             <div className="flex justify-between border-b border-border-subtle py-1.5 text-xs text-secondary">
-              <b className="font-medium text-primary">默认会话 agent</b>
+              <b className="font-medium text-primary">默认会话智能体</b>
               <span>{r.defaultAgentName}</span>
             </div>
             {r.warnings.length > 0 && (

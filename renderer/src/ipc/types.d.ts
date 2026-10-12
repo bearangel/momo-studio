@@ -421,6 +421,8 @@ export interface EnablePresetResult {
 /** v2.x 工具目录条目（tools:getCatalog 返回项；electron 侧 catalog-entry.ts 的镜像契约） */
 export interface ToolCatalogEntry {
   name: string;
+  /** 中文显示名（UI 主名）；name 保留为提交 ref 与日志对照 */
+  displayName: string;
   description: string;
   category: string;
   categoryEmoji: string;

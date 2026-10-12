@@ -151,7 +151,7 @@ export function DefaultModelSettings() {
   return (
     <div className="space-y-4 max-w-[560px]">
       <h2 className="text-base text-primary">默认模型</h2>
-      <p className="text-sm text-secondary">Agent 未显式配置模型时的 fallback 与系统内部用途。四类各选「供应商 + 模型」。</p>
+      <p className="text-sm text-secondary">智能体未显式配置模型时的 fallback 与系统内部用途。四类各选「供应商 + 模型」。</p>
 
       {error && <p className="text-xs text-status-error" role="alert">{error}</p>}
 

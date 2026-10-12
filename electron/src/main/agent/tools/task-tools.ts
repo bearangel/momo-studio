@@ -364,16 +364,16 @@ const NO_ASSIGNMENT_WARNING =
 // 类外常量（Tier 划分见 spec §3）：
 const TASK_CATALOG_META: Record<string, ToolMeta> = {
   // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
-  list_delegation_targets: { category: '任务', categoryEmoji: '🗃️', defaultOn: false },
-  read_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
-  read_task_history: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
-  read_task_progress: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
-  list_tasks: { category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  list_delegation_targets: { displayName: '可派发成员', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  read_task: { displayName: '读取任务', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  read_task_history: { displayName: '任务历史', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  read_task_progress: { displayName: '任务进度', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
+  list_tasks: { displayName: '任务列表', category: '任务', categoryEmoji: '🗃️', defaultOn: true },
   // brief/spec Tier 表未及的既有工具（getDefs 一一对应契约强制补齐；只读、不入 Tier 1）：
-  list_task_groups: { category: '任务', categoryEmoji: '🗃️', defaultOn: false },
-  create_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
-  complete_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
-  fail_task: { category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  list_task_groups: { displayName: '任务分组', category: '任务', categoryEmoji: '🗃️', defaultOn: false },
+  create_task: { displayName: '创建任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  complete_task: { displayName: '完成任务', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
+  fail_task: { displayName: '标记失败', category: '任务', categoryEmoji: '🗃️', defaultOn: false, riskNote: '任务板状态变更' },
 };
 
 export class TaskTools implements ToolModule {

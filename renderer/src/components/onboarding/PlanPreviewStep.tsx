@@ -140,7 +140,7 @@ export function PlanPreviewStep({ ctx }: Props) {
                     checked={effectiveDefault === i}
                     onChange={() => setDefaultIdx(i)}
                   />
-                  默认会话 agent
+                  默认会话智能体
                 </label>
               )}
             </div>
@@ -179,7 +179,7 @@ export function PlanPreviewStep({ ctx }: Props) {
       <div className="flex justify-between items-center mt-3">
         <span className="text-xs text-secondary">
           {effectiveDefault >= 0 && (
-            <>默认会话 agent：{agentLabel(plan.agents[effectiveDefault]!)}（快速会话直达）</>
+            <>默认会话智能体：{agentLabel(plan.agents[effectiveDefault]!)}（快速会话直达）</>
           )}
         </span>
         <div className="flex gap-2">

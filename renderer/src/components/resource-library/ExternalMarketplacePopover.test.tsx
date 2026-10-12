@@ -54,9 +54,9 @@ describe('ExternalMarketplacePopover - ① 三类型清单渲染', () => {
     expect(screen.getAllByRole('button', { name: /打开/ })).toHaveLength(2);
   });
 
-  it('Agent 页：标题「Agent 市场」+ momo hub 预告卡（描述标注「即将上线」）', () => {
+  it('Agent 页：标题「智能体市场」+ momo hub 预告卡（描述标注「即将上线」）', () => {
     openPanel('agent');
-    expect(screen.getByText('Agent 市场')).toBeTruthy();
+    expect(screen.getByText('智能体市场')).toBeTruthy();
     expect(screen.getByText('momo hub')).toBeTruthy();
     expect(screen.getByText('官方统一市场 · 即将上线')).toBeTruthy();
   });
@@ -94,7 +94,7 @@ describe('ExternalMarketplacePopover - ④ 底部两行常驻提示', () => {
     expect(screen.getByText('在浏览器打开 · 应用内不安装')).toBeTruthy();
     expect(
       screen.getByText(
-        '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；Agent 用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」',
+        '回来怎么装：MCP 用「＋」菜单的「导入 JSON…」或「导入 DXT / MCPB 包」；Skill 用「＋」菜单的「导入 zip 包…」；智能体用「＋」菜单的「新建智能体…」或「导入 YAML 文件…」',
       ),
     ).toBeTruthy();
   });

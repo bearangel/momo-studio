@@ -200,16 +200,16 @@ function assertGitRefArg(field: string, value: string): string {
  */
 // 类外常量（Tier 划分见 spec §3）：
 const GIT_CATALOG_META: Record<string, ToolMeta> = {
-  git_repos: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
-  git_status: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
-  git_diff: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
-  git_log: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
-  git_show: { category: 'Git', categoryEmoji: '📋', defaultOn: false },
-  git_add: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
-  git_commit: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
-  git_branch: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
-  git_checkout: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
-  git_stash: { category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_repos: { displayName: '发现仓库', category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_status: { displayName: '仓库状态', category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_diff: { displayName: '查看差异', category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_log: { displayName: '提交历史', category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_show: { displayName: '提交详情', category: 'Git', categoryEmoji: '📋', defaultOn: false },
+  git_add: { displayName: '暂存文件', category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_commit: { displayName: '提交改动', category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_branch: { displayName: '分支管理', category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_checkout: { displayName: '切换分支', category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
+  git_stash: { displayName: '贮藏管理', category: 'Git', categoryEmoji: '📋', defaultOn: false, riskNote: '改仓库历史' },
 };
 
 export class GitTools implements ToolModule {

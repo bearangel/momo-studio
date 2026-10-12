@@ -19,7 +19,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentCreateWizard } from './AgentCreateWizard';
-import type { ApiSurface, BuiltinPresetPreview, ResourceItem, ToolCatalogEntry } from '../../../ipc/types';
+import type {
+  ApiSurface,
+  BuiltinPresetPreview,
+  ResourceItem,
+  ToolCatalogEntry,
+  Workspace,
+  WorkspaceAgentMember,
+} from '../../ipc/types';
+import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 
 // ---- mock IPC 桩（向导触达 agent.createCustom / resource.list / tools.getCatalog 通道）----
 // 入参类型取真实 createCustom 签名（Parameters 提取），断言直接消费生产字段
@@ -36,8 +45,8 @@ const listMock = vi.fn(async (filter?: { type?: string }): Promise<ResourceItem[
 });
 /** 模拟 IPC 工具目录：两工具同属「文件」类，且该组只有这两项（旧镜像「文件」组有 8 项）——write_file 缺席即分组来源判别器 */
 const MOCK_CATALOG: ToolCatalogEntry[] = [
-  { name: 'read_file', description: '', category: '文件', categoryEmoji: '📁', defaultOn: true },
-  { name: 'rm', description: '', category: '文件', categoryEmoji: '📁', defaultOn: false },
+  { name: 'read_file', displayName: '读取文件', description: '', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'rm', displayName: '删除文件', description: '', category: '文件', categoryEmoji: '📁', defaultOn: false },
 ];
 /** mock 目录派生：Tier 1（defaultOn 集）——标准档提交断言用 */
 const MOCK_TIER1 = ['read_file'];
@@ -49,7 +58,7 @@ const mockApi = {
   tools: { getCatalog: getCatalogMock },
 };
 
-vi.mock('../../agent/ProviderModelPicker', () => ({
+vi.mock('./ProviderModelPicker', () => ({
   ProviderModelPicker: ({ onProviderChange, onModelChange }: { onProviderChange: (v: string) => void; onModelChange: (v: string) => void }) => (
     <div aria-label="model-picker-stub">
       <button type="button" onClick={() => onProviderChange('openai')}>选供应商</button>
@@ -57,7 +66,7 @@ vi.mock('../../agent/ProviderModelPicker', () => ({
     </div>
   ),
 }));
-vi.mock('../../agent/ThinkingOverrideControl', () => ({
+vi.mock('./ThinkingOverrideControl', () => ({
   ThinkingOverrideControl: () => <div aria-label="thinking-stub" />,
 }));
 
@@ -143,15 +152,15 @@ describe('AgentCreateWizard — 工具目录源（v2.x Task 7）', () => {
     // 切「自定义」档展开工具分组（分组标题 = 目录 categoryEmoji + category）
     fireEvent.click(screen.getByLabelText('自定义'));
     expect(await screen.findByText('📁 文件')).toBeTruthy();
-    const readFile = screen.getByLabelText('read_file') as HTMLInputElement;
-    const rm = screen.getByLabelText('rm') as HTMLInputElement;
+    const readFile = screen.getByLabelText('读取文件（read_file）') as HTMLInputElement;
+    const rm = screen.getByLabelText('删除文件（rm）') as HTMLInputElement;
     expect(readFile).toBeTruthy();
     expect(rm).toBeTruthy();
     // 自选档初始勾选 = 目录 defaultOn 集（Tier 1 回填），rm 未默认勾选
     expect(readFile.checked).toBe(true);
     expect(rm.checked).toBe(false);
     // 分组来源判别：mock 目录「文件」组只有 read_file/rm——write_file 在场即仍是镜像常量
-    expect(screen.queryByLabelText('write_file')).toBeNull();
+    expect(screen.queryByLabelText(/write_file/)).toBeNull();
     // 回标准档继续到模型步，本用例不触发提交
     fireEvent.click(screen.getByLabelText('标准（推荐）'));
     fireEvent.click(screen.getByRole('button', { name: '下一步' }));
@@ -167,7 +176,7 @@ describe('AgentCreateWizard — 空工具集提交守卫（终审 Finding 1）',
     fillStep2AndNext();
     fireEvent.click(screen.getByLabelText('自定义'));
     // 目录就绪 Tier 1 回填后取消唯一勾选项 → 自选集为空
-    fireEvent.click(await screen.findByLabelText('read_file'));
+    fireEvent.click(await screen.findByLabelText('读取文件（read_file）'));
     fireEvent.click(screen.getByRole('button', { name: '下一步' }));
     fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
     fireEvent.click(screen.getByRole('button', { name: '选模型' }));
@@ -220,8 +229,8 @@ describe('AgentCreateWizard — 薄 fork 预填（2026-10-08 预设可见化）'
     expect((screen.getByLabelText('系统提示词') as HTMLTextAreaElement).value).toBe(FORK_SEED.systemPrompt);
     fireEvent.click(screen.getByRole('button', { name: '下一步' })); // 进步 3 能力
     expect((screen.getByLabelText('自定义') as HTMLInputElement).checked).toBe(true);
-    expect((await screen.findByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('rm') as HTMLInputElement).checked).toBe(true);
+    expect((await screen.findByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('删除文件（rm）') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole('checkbox', { name: /pdf/ }) as HTMLInputElement).checked).toBe(true);
   });
 
@@ -243,5 +252,97 @@ describe('AgentCreateWizard — 薄 fork 预填（2026-10-08 预设可见化）'
     ]);
     expect(arg.defaultMcps).toEqual([]);
     expect(arg.defaultSkills).toEqual([{ kind: 'skill', ref: 'pdf' }]);
+  });
+});
+
+describe('AgentCreateWizard — source=agentView（2026-10-12 表单统一：智能体成员入口）', () => {
+  const WS: Workspace = {
+    id: 'ws-1',
+    name: '测试空间',
+    description: '',
+    directoryPath: '/tmp/ws',
+    gitInitialized: true,
+    createdAt: '',
+    ownerId: 'u',
+    iconEmoji: '📁',
+    defaultAgentInstanceId: null,
+  };
+  /** createCustom 桩返回 def.id='u1'（见文件头 createCustomMock） */
+  const NEW_MEMBER: WorkspaceAgentMember = {
+    instanceId: 'inst-new',
+    workspaceId: 'ws-1',
+    agentDefinitionId: 'u1',
+    agentUserId: '@reviewer:local',
+    agentName: '审查员',
+    iconEmoji: '🤖',
+    hasApiKeyOverride: false,
+    lastRunning: false,
+    createdAt: '',
+  };
+  const addMemberMock = vi.fn(async () => NEW_MEMBER);
+  const setDefaultAgentMock = vi.fn(async () => undefined);
+  const loadDefinitionsMock = vi.fn(async () => undefined);
+
+  beforeEach(() => {
+    addMemberMock.mockClear();
+    setDefaultAgentMock.mockClear();
+    loadDefinitionsMock.mockClear();
+    useWorkspaceStore.setState({
+      workspaces: [WS],
+      activeWorkspaceId: 'ws-1',
+      setDefaultAgent: setDefaultAgentMock,
+    });
+    useAgentStore.setState({ addMember: addMemberMock, loadDefinitions: loadDefinitionsMock });
+  });
+
+  it('步 4 显示「设为默认会话智能体」勾选与直达提示（library 入口无此区块）', async () => {
+    render(<AgentCreateWizard source="agentView" onClose={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    expect(screen.getByLabelText('model-picker-stub')).toBeTruthy();
+    expect(screen.getByLabelText('设为默认会话智能体')).toBeTruthy();
+    expect(screen.getByText('默认智能体是快速会话的直达目标')).toBeTruthy();
+  });
+
+  it('提交链：createCustom → addMember(ws, def.id) → 勾选时 setDefaultAgent；loadDefinitions 刷新', async () => {
+    render(<AgentCreateWizard source="agentView" onClose={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(screen.getByLabelText('设为默认会话智能体'));
+    fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
+    fireEvent.click(screen.getByRole('button', { name: '选模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => expect(addMemberMock).toHaveBeenCalled());
+    expect(addMemberMock).toHaveBeenCalledWith('ws-1', 'u1');
+    expect(setDefaultAgentMock).toHaveBeenCalledWith('ws-1', 'inst-new');
+    expect(loadDefinitionsMock).toHaveBeenCalledWith('ws-1');
+    expect(createCustomMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('已有默认智能体时提示「将替换现有默认」', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [{ ...WS, defaultAgentInstanceId: 'inst-old' }],
+    });
+    render(<AgentCreateWizard source="agentView" onClose={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    expect(screen.getByText('将替换现有默认')).toBeTruthy();
+  });
+
+  it('无激活工作空间（agentView）：提交被守卫拦截，不调 createCustom', async () => {
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null });
+    render(<AgentCreateWizard source="agentView" onClose={vi.fn()} />);
+    fillStep1AndNext();
+    fillStep2AndNext();
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(screen.getByRole('button', { name: '选供应商' }));
+    fireEvent.click(screen.getByRole('button', { name: '选模型' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建' }));
+    expect(await screen.findByText('无激活工作空间，无法加入成员')).toBeTruthy();
+    expect(createCustomMock).not.toHaveBeenCalled();
+    expect(addMemberMock).not.toHaveBeenCalled();
   });
 });

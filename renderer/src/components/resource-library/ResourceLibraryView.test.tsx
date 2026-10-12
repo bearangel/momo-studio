@@ -90,7 +90,8 @@ describe('ResourceLibraryView（三页壳）', () => {
   it('渲染二级侧边菜单与默认 Agent 页', () => {
     render(<ResourceLibraryView />);
     expect(screen.getByRole('navigation', { name: '资源类型' })).toBeTruthy();
-    expect(screen.getByText('智能体')).toBeTruthy();
+    // 侧边导航项 + 页标题各一处「智能体」（2026-10-12 命名统一后同词两现）
+    expect(screen.getAllByText('智能体')).toHaveLength(2);
   });
 
   it('切到 MCP 页标题与添加按钮文案切换', () => {
@@ -208,7 +209,7 @@ describe('预置启用链路（菜单入口已删）', () => {
     const row = await screen.findByTestId('resource-row-agent-coder');
     fireEvent.click(within(row).getByRole('button', { name: '启用' }));
     // agent.list 返回空 = 未启用 → def undefined → EnablePresetDialog 以 enable 模式挂载
-    await screen.findByRole('dialog', { name: '启用预设 Agent：程序员' });
+    await screen.findByRole('dialog', { name: '启用预设智能体：程序员' });
     await waitFor(() => expect(agentList).toHaveBeenCalled());
   });
 });

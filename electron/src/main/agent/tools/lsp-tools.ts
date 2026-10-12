@@ -37,11 +37,11 @@ const REFERENCES_DEF: LLMToolDef = {
 
 const LSP_CATALOG_META: Record<string, ToolMeta> = {
   lsp_diagnostics: {
-    category: '代码', categoryEmoji: '🔧', defaultOn: false,
+    displayName: '代码诊断', category: '代码', categoryEmoji: '🔧', defaultOn: false,
     conditional: '按 workspace toolchain 自动检测激活（16 门语言，4 门实验性）；server 需已安装',
   },
   lsp_find_references: {
-    category: '代码', categoryEmoji: '🔧', defaultOn: false,
+    displayName: '查找引用', category: '代码', categoryEmoji: '🔧', defaultOn: false,
     conditional: '按 workspace toolchain 自动检测激活（16 门语言，4 门实验性）；server 需已安装',
   },
 };

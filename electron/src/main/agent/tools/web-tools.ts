@@ -147,7 +147,7 @@ function clamp(v: number, min: number, max: number): number {
 
 // 类外常量（Tier 划分见 spec §3）：
 const WEB_CATALOG_META: Record<string, ToolMeta> = {
-  webfetch: { category: 'Web', categoryEmoji: '🌐', defaultOn: false, riskNote: '涉外网络请求' },
+  webfetch: { displayName: '网页抓取', category: 'Web', categoryEmoji: '🌐', defaultOn: false, riskNote: '涉外网络请求' },
 };
 
 export class WebTools implements ToolModule {

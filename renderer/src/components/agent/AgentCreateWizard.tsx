@@ -12,16 +12,19 @@
 // CreateAgentDialog.tsx 真实用法为准：picker 传 onModelInfo 回传模型行，
 // ThinkingOverrideControl 需 capability 入参（能力由 picker 的 onModelInfo 驱动）。
 import { useEffect, useState } from 'react';
-import { ipc } from '../../../ipc/client';
-import type { BuiltinPresetPreview, ReasoningCapability, ResourceItem, ThinkingConfig } from '../../../ipc/types';
-import { useToolCatalog } from '../../../lib/useToolCatalog';
-import { ProviderModelPicker } from '../../agent/ProviderModelPicker';
-import { ThinkingOverrideControl } from '../../agent/ThinkingOverrideControl';
-import { Button } from '../../ui/Button';
-import { Input } from '../../ui/Input';
-import { Dialog } from '../../ui/Dialog';
-import { EmojiPicker } from '../../ui/EmojiPicker';
-import { cn } from '../../../lib/cn';
+import { ipc } from '../../ipc/client';
+import type { BuiltinPresetPreview, ReasoningCapability, ResourceItem, ThinkingConfig } from '../../ipc/types';
+import { useToolCatalog } from '../../lib/useToolCatalog';
+import { useAgentStore } from '../../stores/agent.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
+import { ProviderModelPicker } from './ProviderModelPicker';
+import { ThinkingOverrideControl } from './ThinkingOverrideControl';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { Input } from '../ui/Input';
+import { Dialog } from '../ui/Dialog';
+import { EmojiPicker } from '../ui/EmojiPicker';
+import { cn } from '../../lib/cn';
 
 type ToolPreset = 'standard' | 'all' | 'custom';
 
@@ -35,13 +38,20 @@ const STEPS = ['基础信息', '提示词', '能力', '模型'] as const;
 
 interface Props {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess?: () => void;
   /** 薄 fork 预填（2026-10-08 预设可见化）：预设能力预览全量带入——名称加「 副本」、
    * prompt/图标/描述预填，能力步自动「自定义」档并勾选预填的 tools/mcps/skills */
   initialDef?: BuiltinPresetPreview;
+  /** 入口来源：agentView=智能体成员面板（创建成功自动加入当前 ws，可选设默认）；
+   * library=资源库（仅建全局定义，onSuccess 由调用方刷新列表）。默认 library。 */
+  source?: 'agentView' | 'library';
 }
 
-export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
+export function AgentCreateWizard({ onClose, onSuccess, initialDef, source = 'library' }: Props) {
+  const workspace = useWorkspaceStore((s) => s.getActive());
+  const setDefaultAgent = useWorkspaceStore((s) => s.setDefaultAgent);
+  const addMember = useAgentStore((s) => s.addMember);
+  const loadDefinitions = useAgentStore((s) => s.loadDefinitions);
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -64,6 +74,8 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
   const [modelName, setModelName] = useState('');
   const [modelCapability, setModelCapability] = useState<ReasoningCapability | null>(null);
   const [thinkingJson, setThinkingJson] = useState<ThinkingConfig | null>(null);
+  // agentView 专用：创建后把新成员设为当前 workspace 的默认会话智能体
+  const [setAsDefault, setSetAsDefault] = useState(false);
 
   const { data: catalog, error: catalogError } = useToolCatalog();
 
@@ -91,6 +103,7 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
     if (step === 0 && !name.trim()) return '名称不能为空';
     if (step === 1 && !prompt.trim()) return '系统提示词不能为空';
     if (step === 3 && (!providerId || !modelName.trim())) return '请选择模型供应商与模型';
+    if (step === 3 && source === 'agentView' && !workspace) return '无激活工作空间，无法加入成员';
     return null;
   };
 
@@ -120,10 +133,10 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
     setSaving(true);
     setError(null);
     try {
-      await ipc.agent.createCustom({
+      const def = await ipc.agent.createCustom({
         name: name.trim(),
         slug: name.trim().toLowerCase().replace(/\s+/g, '-'),
-        description: description.trim() || `自定义 agent: ${name.trim()}`,
+        description: description.trim() || `自定义智能体: ${name.trim()}`,
         systemPrompt: prompt.trim(),
         iconEmoji,
         scope: 'global',
@@ -134,7 +147,17 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
         defaultMcps: selectedMcps.map((ref) => ({ kind: 'mcp' as const, ref })),
         defaultSkills: selectedSkills.map((ref) => ({ kind: 'skill' as const, ref })),
       });
-      onSuccess();
+      // agentView（智能体成员面板入口，2026-10-12 表单统一）：创建成功自动加入
+      // 当前 workspace；勾选「设为默认」再写默认会话（链路平移自 CreateAgentDialog
+      // source='agentView'——该弹窗已删除，本向导是唯一创建表单）
+      if (source === 'agentView' && workspace) {
+        const member = await addMember(workspace.id, def.id);
+        if (setAsDefault) {
+          await setDefaultAgent(workspace.id, member.instanceId);
+        }
+        await loadDefinitions(workspace.id);
+      }
+      onSuccess?.();
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -225,17 +248,22 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
                       {/* cat.emoji 为 IPC 目录数据字段（豁免，非 UI 硬编码图标） */}
                       <div className="text-xs text-tertiary mb-1">{cat.emoji} {cat.label}</div>
                       <div className="flex flex-wrap gap-2">
-                        {cat.tools.map((tool) => (
-                          <label key={tool} className="flex items-center gap-1 text-xs text-secondary">
-                            <input
-                              type="checkbox"
-                              aria-label={tool}
-                              checked={customTools.includes(tool)}
-                              onChange={() => toggle(customTools, setCustomTools, tool)}
-                            />
-                            {tool}
-                          </label>
-                        ))}
+                        {cat.tools.map((tool) => {
+                          // 2026-10-12 工具名中文化：中文主名 + 英文小字副注（勾选值仍是英文 name）
+                          const display = catalog?.displayName(tool) ?? tool;
+                          return (
+                            <label key={tool} className="flex items-center gap-1 text-xs text-secondary">
+                              <input
+                                type="checkbox"
+                                aria-label={`${display}（${tool}）`}
+                                checked={customTools.includes(tool)}
+                                onChange={() => toggle(customTools, setCustomTools, tool)}
+                              />
+                              {display}
+                              <span className="text-tertiary">{tool}</span>
+                            </label>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -295,7 +323,24 @@ export function AgentCreateWizard({ onClose, onSuccess, initialDef }: Props) {
               value={thinkingJson}
               onChange={setThinkingJson}
             />
-            <p className="text-xs text-tertiary">仅创建全局 Agent 定义；加入具体工作空间请从「Agent 管理 → 成员」添加</p>
+            {source === 'agentView' ? (
+              <div className="flex flex-col gap-1 border-t border-subtle pt-3">
+                <Checkbox
+                  label="设为默认会话智能体"
+                  checked={setAsDefault}
+                  onChange={(e) => setSetAsDefault(e.target.checked)}
+                />
+                {workspace?.defaultAgentInstanceId ? (
+                  <div className="text-xs text-status-warning mt-1 ml-6">将替换现有默认</div>
+                ) : (
+                  <div className="text-xs text-tertiary mt-1 ml-6">默认智能体是快速会话的直达目标</div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-tertiary">
+                仅创建全局智能体定义；加入具体工作空间请在「智能体成员」面板点「+ 添加智能体」
+              </p>
+            )}
           </div>
         )}
 

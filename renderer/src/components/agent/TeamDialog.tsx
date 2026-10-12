@@ -142,7 +142,7 @@ export function TeamDialog({ editing, onClose }: Props) {
           <legend className="text-sm text-secondary">成员（当前工作空间，至少 2 名）</legend>
           {members.length === 0 && (
             <div className="text-xs text-tertiary">
-              当前工作空间暂无 agent 成员，请先在「Agent 成员」Tab 添加
+              当前工作空间暂无智能体成员，请先在「智能体成员」Tab 添加
             </div>
           )}
           {members.map((m) => (

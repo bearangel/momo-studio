@@ -147,7 +147,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
     }
   };
 
-  const title = mode === 'create' ? '新建 agent 定义' : mode === 'edit' ? '编辑 agent 定义' : '配置 builtin agent';
+  const title = mode === 'create' ? '新建智能体定义' : mode === 'edit' ? '编辑智能体定义' : '配置预置智能体';
 
   return (
     <Dialog open onClose={onClose} title={title} width={448}>
@@ -208,7 +208,7 @@ export function DefinitionEditor({ mode, def, onClose }: Props) {
 
         {mode === 'create' && (
           <div className="text-xs text-tertiary">
-            定义全局共享（v25 起无工作空间私有 agent）；加入哪个工作空间由「加入到当前工作空间」决定
+            定义全局共享（v25 起无工作空间私有智能体）；加入哪个工作空间由「加入到当前工作空间」决定
           </div>
         )}
 

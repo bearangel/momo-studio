@@ -8,7 +8,7 @@ import { TypeSidebar } from './TypeSidebar';
 describe('TypeSidebar', () => {
   it('渲染三个菜单项（Agent/MCP/Skill），无总览', () => {
     render(<TypeSidebar activeType="agent" onSelect={vi.fn()} />);
-    expect(screen.getByRole('button', { name: /Agent/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /智能体/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /MCP/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Skill/ })).toBeTruthy();
     expect(screen.getAllByRole('button').length).toBe(3);
@@ -24,7 +24,7 @@ describe('TypeSidebar', () => {
   it('选中项带 aria-current="page"，未选中项不带', () => {
     render(<TypeSidebar activeType="mcp" onSelect={vi.fn()} />);
     const mcpBtn = screen.getByRole('button', { name: /MCP/ });
-    const agentBtn = screen.getByRole('button', { name: /Agent/ });
+    const agentBtn = screen.getByRole('button', { name: /智能体/ });
     expect(mcpBtn.getAttribute('aria-current')).toBe('page');
     expect(agentBtn.getAttribute('aria-current')).toBeNull();
   });

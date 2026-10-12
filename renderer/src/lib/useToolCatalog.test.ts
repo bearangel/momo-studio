@@ -22,15 +22,20 @@ vi.mock('../ipc/client', () => ({
   },
 }));
 
-function entry(name: string, category: string, defaultOn: boolean): ToolCatalogEntry {
-  return { name, description: `${name} 描述`, category, categoryEmoji: '📁', defaultOn };
+function entry(
+  name: string,
+  displayName: string,
+  category: string,
+  defaultOn: boolean,
+): ToolCatalogEntry {
+  return { name, displayName, description: `${name} 描述`, category, categoryEmoji: '📁', defaultOn };
 }
 
 const fakeCatalog: ToolCatalogEntry[] = [
-  entry('read_file', '文件', true),
-  entry('write_file', '文件', true),
-  entry('rm', '文件', false),
-  entry('bash', 'Shell', false),
+  entry('read_file', '读取文件', '文件', true),
+  entry('write_file', '写入文件', '文件', true),
+  entry('rm', '删除文件', '文件', false),
+  entry('bash', '终端命令', 'Shell', false),
 ];
 
 describe('useToolCatalog', () => {
@@ -39,7 +44,7 @@ describe('useToolCatalog', () => {
     vi.clearAllMocks();
   });
 
-  it('成功：派生 categories / safeMinimum / allTools', async () => {
+  it('成功：派生 categories / safeMinimum / allTools / displayName 映射', async () => {
     mockGetCatalog.mockResolvedValue(fakeCatalog);
     const { useToolCatalog } = await import('./useToolCatalog');
     const { result } = renderHook(() => useToolCatalog());
@@ -48,6 +53,9 @@ describe('useToolCatalog', () => {
     expect(result.current.data?.allTools).toHaveLength(4);
     expect(result.current.data?.safeMinimum.sort()).toEqual(['read_file', 'write_file']);
     expect(result.current.data?.categories.map((c) => c.label)).toEqual(['文件', 'Shell']);
+    // 2026-10-12 工具名中文化：英文名 → 中文显示名；目录未含的名字回退英文原名
+    expect(result.current.data?.displayName('bash')).toBe('终端命令');
+    expect(result.current.data?.displayName('not_in_catalog')).toBe('not_in_catalog');
   });
 
   it('失败：error 置位、data 为 null（不抛出——表单其余部分不受阻塞）', async () => {

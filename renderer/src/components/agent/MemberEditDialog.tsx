@@ -181,7 +181,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
     >
       <div className="flex flex-col gap-3">
         <div className="text-xs text-tertiary">
-          更新模型与能力覆盖。模型为全局定义属性，修改对所有工作空间的同名 agent 生效。
+          更新模型与能力覆盖。模型为全局定义属性，修改对所有工作空间的同名智能体生效。
         </div>
 
         {/* 模型区（全局定义属性——写入 agent_definitions）；与能力区解耦，
@@ -190,7 +190,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
           <section className="flex flex-col gap-2">
             <div className="text-sm text-secondary">模型</div>
             <div className="text-xs text-tertiary">
-              定义全局共享，模型修改对所有工作空间的同名 agent 生效
+              定义全局共享，模型修改对所有工作空间的同名智能体生效
             </div>
             <ProviderModelPicker
               providerId={modelProviderId}
@@ -240,7 +240,7 @@ export function MemberEditDialog({ member, def, onClose }: Props) {
         {!loading && pendingRestart && (
           <>
             <div className="text-sm text-secondary">
-              已保存。该 agent 正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
+              已保存。该智能体正在运行，<span className="text-accent-600 dark:text-accent-300">需重启</span>才能生效。
             </div>
             {error && <div className="text-status-error text-sm">{error}</div>}
             <div className="flex gap-2 justify-end">

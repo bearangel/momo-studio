@@ -25,9 +25,9 @@ const getCatalog = vi.fn();
 
 /** mock 工具目录：2 个 defaultOn + 1 个 defaultOn=false（与 CapabilityTabs 测试同规格） */
 const MOCK_CATALOG: ToolCatalogEntry[] = [
-  { name: 'read_file', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
-  { name: 'write_file', description: '写文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
-  { name: 'bash', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
+  { name: 'read_file', displayName: '读取文件', description: '读文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'write_file', displayName: '写入文件', description: '写文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  { name: 'bash', displayName: '终端命令', description: '执行命令', category: 'Shell', categoryEmoji: '💻', defaultOn: false },
 ];
 /** mock 目录 defaultOn 集——create 模式默认勾选的 Tier 1 */
 const MOCK_DEFAULT_ON = ['read_file', 'write_file'];
@@ -129,13 +129,13 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
 
   it('create 模式目录就绪后默认勾选 defaultOn 集（read_file 已勾，bash 未勾）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect((await screen.findByLabelText('read_file') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('bash') as HTMLInputElement).checked).toBe(false);
+    expect((await screen.findByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('create 模式 checkbox 可交互（非 readonly）', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    expect(await screen.findByLabelText('bash')).not.toBeDisabled();
+    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('模型字段为 ProviderModelPicker 下拉（非手填 Input）', async () => {
@@ -146,7 +146,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
   it('提交时 IPC.createCustom 收到 defaultTools = 目录 defaultOn 集', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     // 等 Tier 1 回填完成（目录就绪 → capabilities 回填 → read_file 勾选）
-    await screen.findByLabelText('read_file');
+    await screen.findByLabelText('读取文件（read_file）');
     // 填必填字段
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -174,7 +174,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
   it('勾选 bash 后提交，IPC.createCustom.defaultTools 含 bash', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
     // 等 Tier 1 回填完成再操作（否则空集起勾会覆盖回填语义）
-    await screen.findByLabelText('read_file');
+    await screen.findByLabelText('读取文件（read_file）');
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: 'A' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'a' } });
     fireEvent.change(screen.getByPlaceholderText('你是一名资深审查员...'), {
@@ -184,7 +184,7 @@ describe('DefinitionEditor — create 模式能力配置区', () => {
     await screen.findByRole('option', { name: 'gpt-4o' });
     fireEvent.change(screen.getByLabelText('模型名'), { target: { value: 'gpt-4o' } });
     // 勾 bash
-    fireEvent.click(screen.getByLabelText('bash'));
+    fireEvent.click(screen.getByLabelText('终端命令（bash）'));
 
     fireEvent.click(screen.getByText('创建'));
 
@@ -207,21 +207,21 @@ describe('DefinitionEditor — edit 模式加载现有 def 能力', () => {
       defaultTools: [{ kind: 'builtin', ref: 'bash' }],
     });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect((await screen.findByLabelText('bash') as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText('read_file') as HTMLInputElement).checked).toBe(false);
+    expect((await screen.findByLabelText('终端命令（bash）') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('读取文件（read_file）') as HTMLInputElement).checked).toBe(false);
   });
 
   it('edit 模式 checkbox 可交互', async () => {
     const def = buildDef();
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    expect(await screen.findByLabelText('bash')).not.toBeDisabled();
+    expect(await screen.findByLabelText('终端命令（bash）')).not.toBeDisabled();
   });
 
   it('edit 模式提交时 IPC.updateDefinition 收到 defaultTools（含修改后值）', async () => {
     const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
     // 勾上 bash（等目录渲染出 checkbox）
-    fireEvent.click(await screen.findByLabelText('bash'));
+    fireEvent.click(await screen.findByLabelText('终端命令（bash）'));
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => {
@@ -242,7 +242,7 @@ describe('DefinitionEditor — 空工具集提交守卫（终审 Finding 1）', 
   // 反而放行全部工具；create/edit 提交边界必须拦截（configure 只读不受影响）
   it('create 模式清空工具集后提交 → 拦截并提示，不调 createCustom', async () => {
     render(<DefinitionEditor mode="create" onClose={() => {}} />);
-    await screen.findByLabelText('read_file'); // Tier 1 回填完成
+    await screen.findByLabelText('读取文件（read_file）'); // Tier 1 回填完成
     fireEvent.click(screen.getByText('清空')); // 快捷按钮把工具集置空
     fireEvent.change(screen.getByPlaceholderText('如：代码审查员'), { target: { value: '测试 agent' } });
     fireEvent.change(screen.getByPlaceholderText('如：code-reviewer'), { target: { value: 'test-agent' } });
@@ -260,7 +260,7 @@ describe('DefinitionEditor — 空工具集提交守卫（终审 Finding 1）', 
   it('edit 模式清空工具集后保存 → 同样拦截，不调 updateDefinition', async () => {
     const def = buildDef({ defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="edit" def={def} onClose={() => {}} />);
-    await screen.findByLabelText('read_file');
+    await screen.findByLabelText('读取文件（read_file）');
     fireEvent.click(screen.getByText('清空'));
 
     fireEvent.click(screen.getByText('保存'));
@@ -280,8 +280,8 @@ describe('DefinitionEditor — configure（builtin）模式只读', () => {
   it('configure 模式 CapabilityTabs checkbox disabled', async () => {
     const def = buildDef({ source: 'builtin', defaultTools: [{ kind: 'builtin', ref: 'read_file' }] });
     render(<DefinitionEditor mode="configure" def={def} onClose={() => {}} />);
-    expect(await screen.findByLabelText('read_file')).toBeDisabled();
-    expect(screen.getByLabelText('bash')).toBeDisabled();
+    expect(await screen.findByLabelText('读取文件（read_file）')).toBeDisabled();
+    expect(screen.getByLabelText('终端命令（bash）')).toBeDisabled();
   });
 });
 

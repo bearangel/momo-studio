@@ -335,14 +335,14 @@ export async function executeFileTool(
  */
 // 类外常量（Tier 划分见 spec §3）：
 const FILE_CATALOG_META: Record<string, ToolMeta> = {
-  read_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  write_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  list_files: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  edit_file: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  mkdir: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  rm: { category: '文件', categoryEmoji: '📁', defaultOn: false, riskNote: '不可恢复删除' },
-  mv: { category: '文件', categoryEmoji: '📁', defaultOn: true },
-  exists: { category: '文件', categoryEmoji: '📁', defaultOn: true },
+  read_file: { displayName: '读取文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  write_file: { displayName: '写入文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  list_files: { displayName: '列出文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  edit_file: { displayName: '编辑文件', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  mkdir: { displayName: '创建目录', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  rm: { displayName: '删除文件', category: '文件', categoryEmoji: '📁', defaultOn: false, riskNote: '不可恢复删除' },
+  mv: { displayName: '移动重命名', category: '文件', categoryEmoji: '📁', defaultOn: true },
+  exists: { displayName: '存在检查', category: '文件', categoryEmoji: '📁', defaultOn: true },
 };
 
 export class FileTools implements ToolModule {

@@ -116,13 +116,13 @@ describe('DefaultAgentPickerDialog — 渲染与数据加载', () => {
     expect(screen.getByLabelText('评审员')).toBeInTheDocument();
   });
 
-  it('无成员 → 显示引导去 Agent 管理，不渲染选择列表与确认按钮', async () => {
+  it('无成员 → 显示引导去智能体页，不渲染选择列表与确认按钮', async () => {
     useAgentStore.setState({ members: [] });
     render(
       <DefaultAgentPickerDialog workspaceId="ws-1" onContinue={() => {}} onClose={() => {}} />,
     );
-    expect(await screen.findByText('当前工作空间暂无 agent 成员')).toBeInTheDocument();
-    expect(screen.getByText(/请先到 Agent 管理/)).toBeInTheDocument();
+    expect(await screen.findByText('当前工作空间暂无智能体成员')).toBeInTheDocument();
+    expect(screen.getByText(/请先到「智能体」页添加智能体成员/)).toBeInTheDocument();
     expect(screen.queryByLabelText('编码助手')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '设为默认并继续' })).not.toBeInTheDocument();
   });

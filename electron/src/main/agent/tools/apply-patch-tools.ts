@@ -20,7 +20,7 @@ import { runWithWriteGrant } from './write-grant-tool';
 
 // 类外常量（Tier 划分见 spec §3）：
 const APPLY_PATCH_CATALOG_META: Record<string, ToolMeta> = {
-  apply_patch: { category: '原子补丁', categoryEmoji: '🧩', defaultOn: false, riskNote: '多文件批量修改' },
+  apply_patch: { displayName: '结构化补丁', category: '原子补丁', categoryEmoji: '🧩', defaultOn: false, riskNote: '多文件批量修改' },
 };
 
 export class ApplyPatchTools implements ToolModule {

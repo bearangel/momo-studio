@@ -16,9 +16,9 @@ import { buildCatalog, type ToolCatalogEntry, type ToolMeta } from './catalog-en
 
 // 类外常量（Tier 划分见 spec §3）：
 const PROCESS_CATALOG_META: Record<string, ToolMeta> = {
-  process_list: { category: '进程', categoryEmoji: '⚙️', defaultOn: false },
-  process_keep: { category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
-  process_kill: { category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
+  process_list: { displayName: '进程列表', category: '进程', categoryEmoji: '⚙️', defaultOn: false },
+  process_keep: { displayName: '进程保活', category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
+  process_kill: { displayName: '终止进程', category: '进程', categoryEmoji: '⚙️', defaultOn: false, riskNote: '进程控制' },
 };
 
 export class ProcessTools implements ToolModule {

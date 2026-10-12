@@ -70,16 +70,16 @@ export function buildImpactMessage(base: string, impact: DefinitionImpact | null
   if (!impact) return base;
   const lines: string[] = [];
   if (impact.memberCount > 0) {
-    lines.push(`· 从 ${impact.memberCount} 个工作空间移出该 agent（${impact.workspaceNames.join('、')}）`);
+    lines.push(`· 从 ${impact.memberCount} 个工作空间移出该智能体（${impact.workspaceNames.join('、')}）`);
   }
   if (impact.ledTeamNames.length > 0) {
-    lines.push(`· 解散 ${impact.ledTeamNames.length} 个团队（该 agent 为 leader：${impact.ledTeamNames.join('、')}）`);
+    lines.push(`· 解散 ${impact.ledTeamNames.length} 个团队（该智能体为 leader：${impact.ledTeamNames.join('、')}）`);
   }
   if (impact.readOnlySessionCount > 0) {
     lines.push(`· ${impact.readOnlySessionCount} 个会话的全部成员失效，将变为只读（消息历史保留）`);
   }
   if (impact.defaultForWorkspaceNames.length > 0) {
-    lines.push(`· 清空 ${impact.defaultForWorkspaceNames.length} 个工作空间的默认 agent 设置`);
+    lines.push(`· 清空 ${impact.defaultForWorkspaceNames.length} 个工作空间的默认智能体设置`);
   }
   return lines.length > 0 ? `${base}\n${lines.join('\n')}` : base;
 }
@@ -374,7 +374,7 @@ export function TypePageShell({ type, addItems, onInstall, onEditAgent, onOpenPr
           title={`删除 ${pendingDelete.name}？`}
           message={
             pendingDelete.type === 'mcp'
-              ? '此操作不可撤销。引用它的 agent 将出现悬空提示，需手动移除引用。'
+              ? '此操作不可撤销。引用它的智能体将出现悬空提示，需手动移除引用。'
               : pendingDelete.type === 'agent' && deleteImpact
                 ? buildImpactMessage('此操作不可撤销。将同时：', deleteImpact)
                 : '此操作不可撤销。'

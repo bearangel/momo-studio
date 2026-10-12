@@ -161,7 +161,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
 
     await waitFor(() => expect(mockApi.session.createQuick).toHaveBeenCalledWith('ws-1'));
     // 免弹窗：一次性选择弹窗不出现
-    expect(screen.queryByText('选择默认会话 agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('选择默认会话智能体')).not.toBeInTheDocument();
     // 建会成功 → 输入框聚焦请求信号递增（MentionInput 订阅）
     await waitFor(() => expect(useSessionStore.getState().inputFocusTick).toBe(1));
   });
@@ -173,7 +173,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     fireEvent.click(screen.getByLabelText('快速会话'));
 
     // 真实 DefaultAgentPickerDialog 渲染 + 拉取成员
-    await waitFor(() => expect(screen.getByText('选择默认会话 agent')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('选择默认会话智能体')).toBeInTheDocument());
     expect(mockApi.session.createQuick).not.toHaveBeenCalled();
   });
 
@@ -182,7 +182,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     render(<SessionSidebarHeader />);
 
     fireEvent.click(screen.getByLabelText('快速会话'));
-    await waitFor(() => expect(screen.getByText('选择默认会话 agent')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('选择默认会话智能体')).toBeInTheDocument());
 
     // 单选成员并提交（真实 Picker 交互）
     fireEvent.click(screen.getByLabelText('编码助手'));
@@ -194,7 +194,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     );
     await waitFor(() => expect(mockApi.session.createQuick).toHaveBeenCalledWith('ws-1'));
     await waitFor(() =>
-      expect(screen.queryByText('选择默认会话 agent')).not.toBeInTheDocument(),
+      expect(screen.queryByText('选择默认会话智能体')).not.toBeInTheDocument(),
     );
   });
 
@@ -206,7 +206,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     fireEvent.click(screen.getByLabelText('快速会话'));
 
     await waitFor(() =>
-      expect(screen.getByText(/请先到 Agent 管理添加 agent 成员/)).toBeInTheDocument(),
+      expect(screen.getByText(/请先到「智能体」页添加智能体成员/)).toBeInTheDocument(),
     );
     // 无成员不渲染选择列表与提交按钮
     expect(screen.queryByText('设为默认并继续')).not.toBeInTheDocument();
@@ -218,7 +218,7 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     useSessionStore.setState({ needsDefaultAgent: true });
     render(<SessionSidebarHeader />);
 
-    await waitFor(() => expect(screen.getByText('选择默认会话 agent')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('选择默认会话智能体')).toBeInTheDocument());
   });
 
   it('onContinue 消费方自 catch：createQuickSession 抛错不产生未处理 rejection，弹窗已关闭', async () => {
@@ -230,14 +230,14 @@ describe('SessionSidebarHeader — ⚡ 快速会话入口', () => {
     render(<SessionSidebarHeader />);
 
     fireEvent.click(screen.getByLabelText('快速会话'));
-    await waitFor(() => expect(screen.getByText('选择默认会话 agent')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('选择默认会话智能体')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('编码助手'));
     fireEvent.click(screen.getByText('设为默认并继续'));
 
     await waitFor(() => expect(rejectingCreateQuick).toHaveBeenCalledWith('ws-1'));
     // 消费方先关弹窗再建会：Picker 不因消费方错误滞留/误显
     await waitFor(() =>
-      expect(screen.queryByText('选择默认会话 agent')).not.toBeInTheDocument(),
+      expect(screen.queryByText('选择默认会话智能体')).not.toBeInTheDocument(),
     );
     consoleSpy.mockRestore();
   });

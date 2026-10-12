@@ -470,15 +470,15 @@ const OFFICE_CREATE_PDF_DEF: LLMToolDef = {
 
 // 类外常量（Tier 划分见 spec §3）：
 const OFFICE_CATALOG_META: Record<string, ToolMeta> = {
-  office_read: { category: '办公', categoryEmoji: '💼', defaultOn: false },
-  office_read_cells: { category: '办公', categoryEmoji: '💼', defaultOn: false },
-  office_create_excel: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_write_excel: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_create_doc: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_create_ppt: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_create_pdf: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_copy: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
-  office_fill_ppt_template: { category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_read: { displayName: '读取文档', category: '办公', categoryEmoji: '💼', defaultOn: false },
+  office_read_cells: { displayName: '读取表格数据', category: '办公', categoryEmoji: '💼', defaultOn: false },
+  office_create_excel: { displayName: '创建表格', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_write_excel: { displayName: '写入表格', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_doc: { displayName: '创建文档', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_ppt: { displayName: '创建演示文稿', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_create_pdf: { displayName: '创建 PDF', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_copy: { displayName: '复制文档', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
+  office_fill_ppt_template: { displayName: '填充演示模板', category: '办公', categoryEmoji: '💼', defaultOn: false, riskNote: '文件覆盖' },
 };
 
 export class OfficeTools implements ToolModule {

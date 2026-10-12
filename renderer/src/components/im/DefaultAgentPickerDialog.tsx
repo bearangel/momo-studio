@@ -55,17 +55,17 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
   };
 
   return (
-    <Dialog open onClose={onClose} title="选择默认会话 agent" width={448}>
+    <Dialog open onClose={onClose} title="选择默认会话智能体" width={448}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <p className="text-xs text-tertiary">
-          快速会话需要一个默认 agent 直达；本次设置后续可随时在「Agent 管理」更换
+          快速会话需要一个默认智能体直达；本次设置后续可随时在「智能体」页更换
         </p>
 
         {members.length === 0 ? (
           <EmptyState
             icon={Bot}
-            title="当前工作空间暂无 agent 成员"
-            description="请先到 Agent 管理添加 agent 成员，再使用快速会话"
+            title="当前工作空间暂无智能体成员"
+            description="请先到「智能体」页添加智能体成员，再使用快速会话"
             action={
               <div className="flex justify-center mt-2">
                 <Button variant="ghost" type="button" onClick={onClose}>

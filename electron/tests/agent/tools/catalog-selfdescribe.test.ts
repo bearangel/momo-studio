@@ -1,7 +1,7 @@
 // electron/tests/agent/tools/catalog-selfdescribe.test.ts
 // 目录自描述契约（spec §4.2）：
 //   1. 每个模块 getCatalog() 与 getDefs() 名字一一对应
-//   2. 每个条目 category 非空、defaultOn 为 boolean
+//   2. 每个条目 category 非空、defaultOn 为 boolean、displayName（中文显示名）非空
 //   3. 缺 meta 的工具在 buildCatalog 处 fail-fast（防将来新模块漏写）
 //   4. LSP 条目带 conditional 标注
 //   5. Tier 1（defaultOn=true）全集 = 17 个，与 spec §3.2 逐名核对
@@ -29,6 +29,8 @@ describe('ToolModule.getCatalog 自描述', () => {
       for (const e of m.getCatalog()) {
         expect(e.category.length).toBeGreaterThan(0);
         expect(typeof e.defaultOn).toBe('boolean');
+        // 2026-10-12 工具名中文化：displayName 必须非空（TS 必填 + 契约测试双保险）
+        expect(e.displayName.length).toBeGreaterThan(0);
       }
     }
   });

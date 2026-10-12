@@ -121,7 +121,7 @@ describe('EnablePresetDialog — 启用模式', () => {
     render(<EnablePresetDialog slug="coder" name="程序员" onClose={() => {}} />);
     const joinBox = await screen.findByRole('checkbox', { name: /加入当前工作空间/ });
     fireEvent.click(joinBox); // 取消勾选
-    expect(screen.queryByRole('checkbox', { name: /设为默认会话 agent/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /设为默认会话智能体/ })).not.toBeInTheDocument();
     await pickModel('p1', 'm-1');
     fireEvent.click(screen.getByRole('button', { name: /启用$/ }));
     await waitFor(() => expect(enablePreset).toHaveBeenCalledTimes(1));
