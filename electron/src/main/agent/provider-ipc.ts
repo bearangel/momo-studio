@@ -10,11 +10,17 @@ import {
   deleteProvider, setDefaultProvider, getProviderApiKey,
   fetchRemoteModels, listProviderModels, upsertProviderModel,
   setProviderModelEnabled, removeProviderModel, setProviderModelWindow,
-  setProviderModelThinking, setProviderModelVision,
+  setProviderModelThinking, setProviderModelVision, markProviderVerified,
 } from './provider-crud';
 import { listProviderPresets } from '../llm/provider-presets';
 
-interface TestConnectionInput { baseUrl: string; apiKey: string; model: string; }
+interface TestConnectionInput {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** 存量供应商验证（配置卡「检查连接」）：成功时回写 last_verified_at */
+  providerId?: string;
+}
 interface TestConnectionResult { ok: boolean; error?: string; }
 
 /** 本机回环域名（允许 http，如本地 Ollama）；非本机必须 https 防 MITM/凭据外泄 */
@@ -54,6 +60,17 @@ export async function testProviderConnection(input: TestConnectionInput): Promis
     // 不回传远端响应体（消除 SSRF 读出通道），仅回状态码
     if (!resp.ok) {
       return { ok: false, error: `HTTP ${resp.status}` };
+    }
+    // D7（走查 2026-10-12）：存量供应商验证成功 → 记录时刻（UI「未验证」徽标消除）
+    if (input.providerId) {
+      try {
+        markProviderVerified(input.providerId);
+      } catch (err) {
+        logger.warn('验证时刻回写失败（不影响验证结果）', {
+          providerId: input.providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     return { ok: true };
   } catch (err) {

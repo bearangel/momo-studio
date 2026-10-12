@@ -27,6 +27,8 @@ export interface ModelProviderRow {
   created_at: string;
   platform: string;
   preset_key: string | null;
+  /** migration 055：最近一次验证成功时刻（ISO）；NULL = 从未验证 */
+  last_verified_at: string | null;
 }
 
 export interface ModelProvider {
@@ -40,6 +42,8 @@ export interface ModelProvider {
   platform: ProviderPlatform;
   /** 来源预设 key（provider-presets）；NULL=自定义供应商 */
   presetKey: string | null;
+  /** migration 055：最近一次验证成功时刻（ISO）；null = 从未验证（UI「未验证」徽标） */
+  lastVerifiedAt: string | null;
 }
 
 /** 供应商协议平台：决定请求体/鉴权头/流式解析格式 */
@@ -88,6 +92,7 @@ function rowToProvider(row: ModelProviderRow): ModelProvider {
     createdAt: row.created_at,
     platform: row.platform === 'anthropic' ? 'anthropic' : 'openai',
     presetKey: row.preset_key ?? null,
+    lastVerifiedAt: row.last_verified_at ?? null,
   };
 }
 
@@ -138,6 +143,8 @@ export async function createProvider(input: {
   name: string; baseUrl: string; apiKey: string;
   defaultModel?: string; isDefault?: boolean; platform?: ProviderPlatform;
   presetKey?: string;
+  /** 创建前刚验证过同一配置（引导页「验证并继续」/对话框先测后存）→ 直接记为已验证 */
+  verifiedAtCreation?: boolean;
 }): Promise<ModelProvider> {
   // 未知预设 key 在写库前拒绝（否则种子阶段抛错会留下孤儿 provider 行 + keychain 密钥）
   if (input.presetKey && !getProviderPreset(input.presetKey)) {
@@ -147,13 +154,14 @@ export async function createProvider(input: {
   const apiKeyRef = providerApiKeyRef(id);
   const db = getDb();
   db.prepare(
-    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, platform, preset_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO model_providers (id, name, base_url, api_key_ref, default_model, is_default, platform, preset_key, last_verified_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, input.name, input.baseUrl, apiKeyRef,
     input.defaultModel ?? null, input.isDefault ? 1 : 0,
     input.platform ?? 'openai',
     input.presetKey ?? null,
+    input.verifiedAtCreation === true ? new Date().toISOString() : null,
   );
   // keychain 写入与 DB 无法跨存储原子化：失败时回滚 DB 行，避免留下无密钥的孤儿供应商
   try {
@@ -201,6 +209,18 @@ export async function updateProvider(input: {
 
 export async function deleteProvider(id: string): Promise<void> {
   const db = getDb();
+  // D3（走查 2026-10-12）：删除前列引用阻断——悬空 model_provider_id 会让相关
+  // agent 的 spawn 全部失败（ghost provider）。列出引用方交还用户决策，而非静默
+  // 留下断链定义。
+  const referrers = db
+    .prepare('SELECT name FROM agent_definitions WHERE model_provider_id = ?')
+    .all(id) as Array<{ name: string }>;
+  if (referrers.length > 0) {
+    const names = referrers.map((r) => r.name).join('、');
+    throw new Error(
+      `供应商正在被 ${referrers.length} 个智能体使用：${names}。请先在这些智能体中更换模型（智能体页 → 配置），或删除相关智能体后再删除供应商。`,
+    );
+  }
   db.prepare('DELETE FROM model_providers WHERE id = ?').run(id);
   await deleteSecret(providerApiKeyRef(id));
   logger.info('供应商已删除', { id });
@@ -210,6 +230,15 @@ export async function deleteProvider(id: string): Promise<void> {
 export function setDefaultProvider(id: string): void {
   const db = getDb();
   db.prepare('UPDATE model_providers SET is_default = (id = ?)').run(id);
+}
+
+/** 记录验证成功时刻（migration 055；testConnection ok 且携带 providerId 时调用） */
+export function markProviderVerified(id: string): void {
+  const db = getDb();
+  db.prepare('UPDATE model_providers SET last_verified_at = ? WHERE id = ?').run(
+    new Date().toISOString(),
+    id,
+  );
 }
 
 // ─── provider_models CRUD（v24 起）──────────────────────────────────────────
@@ -227,7 +256,7 @@ export function listProviderModels(providerId: string): ProviderModel[] {
   const provider = getProvider(providerId);
   const platform = provider?.platform ?? 'openai';
   const preset = provider?.presetKey ? getProviderPreset(provider.presetKey) : null;
-  return rows.map((row) => {
+  const mapped = rows.map((row) => {
     const presetModel = preset?.models.find((m) => m.id === row.model_id) ?? null;
     const catalog = lookupModelLimits(platform, row.model_id);
     return {
@@ -237,6 +266,21 @@ export function listProviderModels(providerId: string): ProviderModel[] {
         row.context_window ?? presetModel?.contextWindow ?? catalog?.contextWindow ?? null,
     };
   });
+  // D12（走查 2026-10-12）：预设来源供应商按 preset 数组序（人工策展，新模型在
+  // 前）排序，用户自添模型（不在 preset 内）排后按加入序——否则 DB added_at
+  // 插入序会让默认选中落到旧模型（如 glm-4.5 而非 glm-5.3）。
+  if (preset) {
+    const order = new Map(preset.models.map((m, i) => [m.id, i] as const));
+    mapped.sort((a, b) => {
+      const ai = order.get(a.modelId);
+      const bi = order.get(b.modelId);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return a.addedAt - b.addedAt;
+    });
+  }
+  return mapped;
 }
 
 /**

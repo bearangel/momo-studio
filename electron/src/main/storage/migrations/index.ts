@@ -29,6 +29,7 @@ import { migration051 } from './051_lane_semantics_pending_to_draft';
 import { migration052 } from './052_agent_tools_tier1_backfill';
 import { migration053 } from './053_mcp_enabled';
 import { migration054 } from './054_global_tool_budget_default_50';
+import { migration055 } from './055_provider_last_verified_at';
 
 export interface Migration {
   version: number;
@@ -1055,6 +1056,11 @@ ALTER TABLE agent_definitions ADD COLUMN thinking_json TEXT;
     // 显式自定义值不动。详见 054_global_tool_budget_default_50.ts 头注释。
     version: migration054.version,
     sql: migration054.up,
+  },
+  {
+    // 供应商最近验证时刻（走查 D7）：NULL = 从未验证，UI「未验证」徽标依据。
+    version: migration055.version,
+    sql: migration055.up,
   },
 ];
 
