@@ -427,6 +427,8 @@ const api: ApiSurface = {
     // 2026-10-08：单个预置 agent 能力预览（详情面板能力清单 + 薄 fork 预填数据源）
     previewBuiltinPreset: (slug: string) =>
       invoke<BuiltinPresetPreview>('resource:previewBuiltinPreset', slug),
+    // 走查 D9：远程目录降级态（资源库「网络目录暂时不可达」提示条数据源）
+    getCatalogStatus: () => invoke<{ degraded: boolean }>('resource:getCatalogStatus'),
   },
   task: {
     create: (input) => invoke<TaskRow>('task:create', input),
