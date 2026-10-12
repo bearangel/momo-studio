@@ -128,6 +128,36 @@ describe('DefaultAgentPickerDialog — 渲染与数据加载', () => {
   });
 });
 
+describe('DefaultAgentPickerDialog — 单成员预选（D13）', () => {
+  it('仅一名成员 → radio 默认选中且「设为默认并继续」直接可用', async () => {
+    useAgentStore.setState({ members: [MEMBER_1] });
+    const onContinue = vi.fn();
+    render(
+      <DefaultAgentPickerDialog workspaceId="ws-1" onContinue={onContinue} onClose={() => {}} />,
+    );
+
+    const radio = screen.getByLabelText('编码助手') as HTMLInputElement;
+    await waitFor(() => expect(radio.checked).toBe(true));
+    const submit = screen.getByRole('button', { name: '设为默认并继续' });
+    expect(submit).not.toBeDisabled();
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith('inst-1'));
+    expect(setDefaultAgent).toHaveBeenCalledWith('ws-1', 'inst-1');
+  });
+
+  it('多名成员 → 不预选、按钮禁用（避免替用户做选择）', async () => {
+    render(
+      <DefaultAgentPickerDialog workspaceId="ws-1" onContinue={() => {}} onClose={() => {}} />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText('编码助手')).toBeInTheDocument());
+    expect((screen.getByLabelText('编码助手') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('评审员') as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole('button', { name: '设为默认并继续' })).toBeDisabled();
+  });
+});
+
 describe('DefaultAgentPickerDialog — 提交路径', () => {
   it('未选择成员时确认按钮禁用', () => {
     render(

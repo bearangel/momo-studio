@@ -5,7 +5,7 @@
 // 成员身份信息在会话面板成员区查看）。悬停操作按钮（重命名/解散）保留。
 // 入口已迁 SessionSidebarHeader（双常驻按钮）：列表不再渲染「+ 新建会话」。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { SessionMemberInfo, SessionSummary } from '../../ipc/types';
 
 // vi.hoisted：mock store 状态在 vi.mock 工厂注册前完成初始化
@@ -137,6 +137,61 @@ describe('RoomList — 列表项不渲染图标（v2.2 移除）', () => {
     render(<RoomList />);
     fireEvent.click(screen.getByText('目标会话'));
     expect(sessionState.selectSession).toHaveBeenCalledWith('s1');
+  });
+});
+
+describe('RoomList — 解散会话确认（D10：原生 confirm → ConfirmDialog）', () => {
+  it('点「解散」→ 弹「解散会话」ConfirmDialog（含成员移除说明），未确认不调 delete', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    render(<RoomList />);
+    fireEvent.click(screen.getByLabelText('解散'));
+
+    const dialog = screen.getByRole('dialog', { name: '解散会话' });
+    expect(within(dialog).getByText(/确定解散会话「会话A」/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/所有成员将被移除/)).toBeInTheDocument();
+    expect((window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete).not.toHaveBeenCalled();
+  });
+
+  it('确认「解散」→ 调 ipc.session.delete + 刷新列表', async () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
+    del.mockResolvedValue(undefined);
+    render(<RoomList />);
+    fireEvent.click(screen.getByLabelText('解散'));
+
+    fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '解散' }));
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith('s1'));
+    expect(sessionState.refreshSessionList).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '解散会话' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('点「取消」→ 不调 delete 且对话框关闭', () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
+    render(<RoomList />);
+    fireEvent.click(screen.getByLabelText('解散'));
+
+    fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '取消' }));
+
+    expect(del).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: '解散会话' })).not.toBeInTheDocument();
+  });
+
+  it('确认后 delete 失败 → alert 错误（错误路径回归锁）', async () => {
+    sessionState.sessions = [makeSession({ id: 's1', title: '会话A' })];
+    const del = (window as unknown as { api: { session: { delete: ReturnType<typeof vi.fn> } } }).api.session.delete;
+    del.mockRejectedValue(new Error('会话不存在'));
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    render(<RoomList />);
+    fireEvent.click(screen.getByLabelText('解散'));
+
+    fireEvent.click(within(screen.getByRole('dialog', { name: '解散会话' })).getByRole('button', { name: '解散' }));
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('解散失败：会话不存在'));
+    alertSpy.mockRestore();
   });
 });
 

@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/session.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { ipc } from '../../ipc/client';
 import { PromptDialog } from '../common/PromptDialog';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { cn } from '../../lib/cn';
 import { MessageSquare, Pencil, Trash2, Search, X } from 'lucide-react';
@@ -27,6 +28,8 @@ export function RoomList() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
 
   const [renaming, setRenaming] = useState<{ sessionId: string; oldTitle: string } | null>(null);
+  // 等待 ConfirmDialog 二次确认的解散目标（null = 对话框未开）
+  const [dissolving, setDissolving] = useState<{ sessionId: string; title: string } | null>(null);
 
   // 标题搜索过滤（spec §3）：瞬态本地态；空输入 = 不过滤
   const [filter, setFilter] = useState('');
@@ -50,8 +53,8 @@ export function RoomList() {
     }
   };
 
-  const handleDissolve = async (sessionId: string, title: string) => {
-    if (!confirm(`确定解散会话「${title}」？\n所有成员将被移除。`)) return;
+  /** ConfirmDialog 确认后的实际解散：删会话 + 刷新列表；失败 alert（语义与替换前一致） */
+  const handleDissolve = async (sessionId: string) => {
     try {
       await ipc.session.delete(sessionId);
       refreshSessionList();
@@ -157,7 +160,7 @@ export function RoomList() {
                   title="解散"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void handleDissolve(session.id, session.title);
+                    setDissolving({ sessionId: session.id, title: session.title });
                   }}
                   className="text-tertiary hover:text-status-error"
                   aria-label="解散"
@@ -175,6 +178,15 @@ export function RoomList() {
           defaultValue={renaming.oldTitle}
           onSubmit={submitRename}
           onClose={() => setRenaming(null)}
+        />
+      )}
+      {dissolving && (
+        <ConfirmDialog
+          title="解散会话"
+          message={`确定解散会话「${dissolving.title}」？\n所有成员将被移除。`}
+          confirmLabel="解散"
+          onConfirm={() => void handleDissolve(dissolving.sessionId)}
+          onClose={() => setDissolving(null)}
         />
       )}
     </div>

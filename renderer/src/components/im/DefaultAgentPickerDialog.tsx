@@ -36,6 +36,14 @@ export function DefaultAgentPickerDialog({ workspaceId, onContinue, onClose }: P
     void loadMembers(workspaceId);
   }, [workspaceId, loadMembers]);
 
+  // D13：仅一名成员时自动预选——唯一选项无需用户手动点选即可直接继续；
+  // 多成员不预选（避免替用户做选择）
+  useEffect(() => {
+    if (members.length === 1 && selectedId === null) {
+      setSelectedId(members[0]!.instanceId);
+    }
+  }, [members, selectedId]);
+
   // v2.2：agentName/iconEmoji 由后端 JOIN definitions 产出，不依赖 definitions 加载时序
   const memberLabel = (m: WorkspaceAgentMember): string => m.agentName;
 
