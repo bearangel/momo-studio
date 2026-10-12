@@ -14,7 +14,8 @@ import type { ModelProvider } from '../../ipc/types';
 
 const PROVIDERS: ModelProvider[] = [
   { id: 'p1', name: 'P1', baseUrl: 'https://a.example.com/v1', defaultModel: null, isDefault: true, createdAt: '', platform: 'openai', presetKey: null },
-  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic', presetKey: null },
+  { id: 'p2', name: 'P2', baseUrl: 'https://b.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'anthropic', presetKey: null, lastVerifiedAt: '2026-10-01T00:00:00Z' },
+  { id: 'p3', name: 'P3', baseUrl: 'https://c.example.com', defaultModel: null, isDefault: false, createdAt: '', platform: 'openai', presetKey: null, lastVerifiedAt: null },
 ];
 const P1_MODELS = [
   // thinking 三字段为 v31 数据形状升级（Task 9）；断言语义不变
@@ -78,6 +79,28 @@ describe('ProviderSettings 两列布局', () => {
     expect(row2.textContent).toContain('0');
   });
 
+  describe('D7：未验证徽标', () => {
+    it('lastVerifiedAt 缺省（undefined）→ 名称旁挂「未验证」warning 徽标', async () => {
+      render(<ProviderSettings />);
+      const row1 = await screen.findByRole('button', { name: /^P1/ });
+      const badge = within(row1).getByText('未验证');
+      expect(badge).toBeInTheDocument();
+      expect(badge.className).toContain('text-status-warning');
+    });
+
+    it('lastVerifiedAt 显式为 null → 同样挂「未验证」徽标', async () => {
+      render(<ProviderSettings />);
+      const row3 = await screen.findByRole('button', { name: /^P3/ });
+      expect(within(row3).getByText('未验证')).toBeInTheDocument();
+    });
+
+    it('lastVerifiedAt 非空（已验证）→ 不渲染「未验证」徽标', async () => {
+      render(<ProviderSettings />);
+      const row2 = await screen.findByRole('button', { name: /^P2/ });
+      expect(within(row2).queryByText('未验证')).not.toBeInTheDocument();
+    });
+  });
+
   it('挂载自动选中默认供应商 → 右列配置卡回显（名称/平台/BaseURL）+ 模型列表', async () => {
     render(<ProviderSettings />);
     await waitFor(() => expect((screen.getByLabelText('名称') as HTMLInputElement).value).toBe('P1'));
@@ -129,14 +152,30 @@ describe('ProviderSettings 两列布局', () => {
     expect(screen.queryByText(/默认模型/)).not.toBeInTheDocument();
   });
 
-  it('删除供应商（confirm 确认后调用 delete）', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('删除供应商：点「删除」弹 ConfirmDialog，确认后调用 delete（D10：替换原生 confirm）', async () => {
     render(<ProviderSettings />);
-    await screen.findByRole('button', { name: /P1/ });
+    await screen.findByRole('button', { name: /^P1/ });
     // 自动选中是行渲染后的下一个 effect tick，先等配置卡挂载再点删除
     await waitFor(() => expect(screen.getByLabelText('名称')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    const dialog = screen.getByRole('dialog', { name: '删除供应商' });
+    expect(within(dialog).getByText(/若有智能体正在使用该供应商，删除将被阻止/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除' }));
+
     await waitFor(() => expect(del).toHaveBeenCalledWith('p1'));
+  });
+
+  it('删除供应商：ConfirmDialog 点取消 → 不调 delete 且对话框关闭', async () => {
+    render(<ProviderSettings />);
+    await screen.findByRole('button', { name: /^P1/ });
+    await waitFor(() => expect(screen.getByLabelText('名称')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(del).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: '删除供应商' })).not.toBeInTheDocument();
   });
 
   it('无供应商时空态文案与按钮名「添加供应商」一致（D3 回归）', async () => {

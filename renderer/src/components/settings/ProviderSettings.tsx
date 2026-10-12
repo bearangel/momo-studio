@@ -4,10 +4,12 @@
 // defaultModel 字段已从 UI 移除（类型保留 deprecated，agent 定义快捷填充仍读旧列）。
 // v2.1 P1：token 化 + emoji 清零 + 测试结果结构化状态（cn 驱动状态色）。
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Star, Plus } from 'lucide-react';
+import { Star, Plus, CircleAlert } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { cn } from '../../lib/cn';
 import { useProviderStore } from '../../stores/provider.store';
+import { Badge } from '../ui/Badge';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { ProviderDialog } from './ProviderDialog';
 import { ProviderModelList } from './ProviderModelList';
 import type { ModelProvider, ProviderPlatform } from '../../ipc/types';
@@ -49,7 +51,13 @@ export function ProviderSettings() {
   };
 
   const handleDeleted = async (target: ModelProvider): Promise<void> => {
-    await deleteProvider(target.id);
+    try {
+      await deleteProvider(target.id);
+    } catch (err) {
+      // D3 阻断（供应商被智能体引用）等删除失败必须可见——与保存失败同通道
+      alert(`删除失败：${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     setSelectedId(null);
     await refreshCounts();
   };
@@ -83,6 +91,13 @@ export function ProviderSettings() {
                 </span>
               )}
               <span className="truncate flex-1">{p.name}</span>
+              {/* D7：从未通过「检查连接」验证的供应商挂 warning 徽标（风险可见，不禁保存） */}
+              {!p.lastVerifiedAt && (
+                <Badge tone="warning" className="shrink-0" aria-label="未验证">
+                  <CircleAlert size={12} strokeWidth={1.75} aria-hidden />
+                  未验证
+                </Badge>
+              )}
               <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-secondary" title="模型数">
                 {modelCounts[p.id] ?? 0}
               </span>
@@ -134,6 +149,7 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const handleTest = async (): Promise<void> => {
     setTesting(true);
@@ -169,8 +185,7 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
   };
 
   const handleDelete = (): void => {
-    if (!confirm(`确定删除供应商「${provider.name}」？\n已使用该供应商的 agent 不受影响（持有副本）。`)) return;
-    onDeleted();
+    setConfirmingDelete(true);
   };
 
   return (
@@ -223,6 +238,16 @@ function ProviderConfigCard({ provider, onSaved, onDeleted, onSetDefault }: {
           </button>
         </div>
       </form>
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="删除供应商"
+          message={`确定删除供应商「${provider.name}」？\n若有智能体正在使用该供应商，删除将被阻止并提示。`}
+          confirmLabel="删除"
+          onConfirm={() => onDeleted()}
+          onClose={() => setConfirmingDelete(false)}
+        />
+      )}
     </div>
   );
 }
