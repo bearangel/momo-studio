@@ -15,6 +15,7 @@ import { ipc } from '../../ipc/client';
 import { useAgentStore } from '../../stores/agent.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useProviderStore } from '../../stores/provider.store';
+import { useResourceStore } from '../../stores/resource.store';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
 import { Dialog } from '../ui/Dialog';
@@ -117,6 +118,16 @@ export function EnablePresetDialog({ slug, name, def, onClose }: Props) {
           modelName: modelName.trim(),
           thinkingJson,
           ...(join && workspace ? { joinWorkspaceId: workspace.id, setAsDefault } : {}),
+        });
+        // D4：勾「设为默认」会写 workspaces.default_agent_instance_id——立即重载
+        // workspace store，快速会话入口即刻生效，不再重复弹默认 agent 选择器
+        await useWorkspaceStore.getState().load();
+        // D13：启用成功反馈（带「去会话」CTA；🐾 是文案内容的一部分）
+        useResourceStore.setState({
+          installNotice: {
+            text: `🐾 ${name} 已启用并加入当前工作空间，可开始快速会话。`,
+            actionView: 'im',
+          },
         });
         onClose();
       } else {

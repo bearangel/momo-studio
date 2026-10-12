@@ -4,6 +4,8 @@
 //   - 启用模式：必填拦截；保存调用 enablePreset（含 joinWorkspaceId/setAsDefault 联动）
 //   - 编辑模式：预填 def 模型；保存调用 updateDefinition（仅模型字段）
 //   - 默认模型预填（defaultChatModel）
+//   - D4：enable 成功后重载 workspace store（真实 load → ipc.workspace.list）
+//   - D13：enable 成功写 installNotice（对象形态带「去会话」CTA）
 //
 // Mock 策略（momo-test-rules，对齐邻近 ProviderModelPicker/DefinitionEditor 测试）：
 // mock 收窄到 window.api 进程边界（ipc client 是运行时读 window.api 的 Proxy，
@@ -17,6 +19,7 @@ import { EnablePresetDialog } from './EnablePresetDialog';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useProviderStore } from '../../stores/provider.store';
 import { useAgentStore } from '../../stores/agent.store';
+import { useResourceStore } from '../../stores/resource.store';
 import type { AgentDefinition } from '../../ipc/types';
 
 const getGlobal = vi.fn();
@@ -27,6 +30,9 @@ const updateDefinition = vi.fn();
 const agentList = vi.fn();
 const listMembers = vi.fn();
 const getBuiltinSuggestions = vi.fn();
+// D4：真实 workspace.load() 重载链的 IPC 桩
+const workspaceList = vi.fn();
+const workspaceSwitch = vi.fn();
 
 const DEF: AgentDefinition = {
   id: 'builtin-coder', name: '程序员', slug: 'coder', version: '1.0.0',
@@ -57,10 +63,13 @@ beforeEach(() => {
   agentList.mockResolvedValue([]);
   listMembers.mockResolvedValue([]);
   getBuiltinSuggestions.mockResolvedValue({});
+  workspaceList.mockResolvedValue([]);
+  workspaceSwitch.mockResolvedValue(undefined);
   (globalThis as unknown as { window: { api: unknown } }).window.api = {
     settings: { getGlobal },
     provider: { list: providerList, listModels },
     agent: { enablePreset, updateDefinition, list: agentList, listMembers, getBuiltinSuggestions },
+    workspace: { list: workspaceList, switch: workspaceSwitch },
   };
   useProviderStore.setState({
     providers: [
@@ -77,6 +86,7 @@ beforeEach(() => {
   });
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null });
   useAgentStore.setState({ builtinSuggestions: {} });
+  useResourceStore.setState({ installNotice: null });
 });
 
 describe('EnablePresetDialog — 启用模式', () => {
@@ -128,6 +138,44 @@ describe('EnablePresetDialog — 启用模式', () => {
     expect(enablePreset).toHaveBeenCalledWith({
       slug: 'coder', modelProviderId: 'p1', modelName: 'm-1', thinkingJson: null,
     });
+  });
+});
+
+describe('EnablePresetDialog — D4/D13 启用成功链', () => {
+  it('D4：enable 成功 → 重载 workspace store（真实 load → ipc.workspace.list）→ onClose', async () => {
+    const onClose = vi.fn();
+    render(<EnablePresetDialog slug="coder" name="程序员" onClose={onClose} />);
+    await pickModel('p1', 'm-1');
+    fireEvent.click(await screen.findByRole('button', { name: /启用$/ }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(enablePreset).toHaveBeenCalledTimes(1);
+    // 真实 workspace.load() 已跑（IPC 边界桩收到调用）——「设为默认」写入的
+    // default_agent_instance_id 经此对 store 可见
+    expect(workspaceList).toHaveBeenCalled();
+  });
+
+  it('D4 回归：enable 失败 → 不重载 workspace、不 onClose、错误行内可见', async () => {
+    const onClose = vi.fn();
+    // Once 形态：clearAllMocks 不清实现，持久 rejection 会泄漏到后续用例
+    enablePreset.mockRejectedValueOnce(new Error('写入失败'));
+    render(<EnablePresetDialog slug="coder" name="程序员" onClose={onClose} />);
+    await pickModel('p1', 'm-1');
+    fireEvent.click(await screen.findByRole('button', { name: /启用$/ }));
+    expect(await screen.findByText('写入失败')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(workspaceList).not.toHaveBeenCalled();
+  });
+
+  it('D13：enable 成功 → installNotice 对象形态（文案含名称 + actionView=im）', async () => {
+    render(<EnablePresetDialog slug="coder" name="Momo" onClose={() => {}} />);
+    await pickModel('p1', 'm-1');
+    fireEvent.click(await screen.findByRole('button', { name: /启用$/ }));
+    await waitFor(() =>
+      expect(useResourceStore.getState().installNotice).toEqual({
+        text: '🐾 Momo 已启用并加入当前工作空间，可开始快速会话。',
+        actionView: 'im',
+      }),
+    );
   });
 });
 
