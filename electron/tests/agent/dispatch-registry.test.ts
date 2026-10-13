@@ -10,6 +10,7 @@
 //      delivered 一次性 take / 非 followup 未快照不投递
 //   6. sweepDead：阈值内不误杀；超阈值判死（fake clock 推进）
 //   7. settled 容量驱逐（CHAIN_SETTLED_CAP）：最旧 settled 逐出、in_flight 永不逐出
+//   8. markConsumed：内联消费置 delivered（settle 不覆盖）；takeNextDeliverable 不再取走
 import { describe, it, expect } from 'vitest';
 import {
   DispatchRegistry,
@@ -138,6 +139,31 @@ describe('DispatchRegistry 投递语义（markPmIdle / takeDeliverable）', () =
     reg.markPmIdle('inst-other');
     expect(reg.get('T-1')?.awaitWake).toBe(false);
     expect(reg.get('T-o')?.awaitWake).toBe(true);
+  });
+});
+
+describe('DispatchRegistry markConsumed（spec §6.1 内联消费 = 已投递）', () => {
+  it('在途链 markConsumed → delivered=true；settle 不覆盖该标志；不存在句柄 no-op 不抛错', () => {
+    const { reg } = mkRegistry();
+    expect(reg.register({ ...CHAIN_INPUT })).toBe(true);
+    reg.markConsumed('T-1'); // 在途即可置（settle 不覆盖 delivered）
+    expect(reg.get('T-1')?.delivered).toBe(true);
+    reg.settle('T-1', 'completed', 'done', 5);
+    expect(reg.get('T-1')?.delivered).toBe(true);
+    reg.markConsumed('T-1'); // 已结算链重复消费幂等
+    expect(reg.get('T-1')?.delivered).toBe(true);
+    expect(() => reg.markConsumed('t-evicted')).not.toThrow(); // 迟到/被驱逐 no-op
+  });
+
+  it('已消费链 takeNextDeliverable 不再取走；未消费 followup 链仍可取（对照锁）', () => {
+    const { reg } = mkRegistry();
+    reg.register({ ...CHAIN_INPUT, isFollowupRound: true }); // 已消费链
+    reg.register({ ...CHAIN_INPUT, taskId: 'T-2', isFollowupRound: true }); // 对照：未消费
+    reg.markConsumed('T-1');
+    reg.settle('T-1', 'completed', 'done', 5);
+    reg.settle('T-2', 'completed', 'done', 5);
+    expect(reg.takeNextDeliverable('inst-pm')?.taskId).toBe('T-2');
+    expect(reg.takeNextDeliverable('inst-pm')).toBeUndefined();
   });
 });
 

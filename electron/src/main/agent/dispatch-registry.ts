@@ -188,6 +188,18 @@ export class DispatchRegistry {
   }
 
   /**
+   * 消费确认（task_reply_ack 消费，spec §6.1）：PM 子进程已内联消费该链结果
+   * （waitForTaskReply resolve / gather 收割）——等同已投递，永不自动送达。
+   * 幂等；句柄不存在（被容量驱逐 / 迟到）no-op。
+   * 顺序保证：settle 先于子进程转发（routeTaskReply 内 applyRegistryReply 先于
+   * notifyTaskReply），ack 必然到达于 settle 之后，无需预缓存分支。
+   */
+  markConsumed(taskId: string): void {
+    const h = this.chains.get(taskId);
+    if (h) h.delivered = true;
+  }
+
+  /**
    * 取消在途链（abort_dispatch / dispatch_cancel 消费）：cancelled 恒不投递、
    * 迟到回执经 settle 幂等忽略。非在途 → undefined（幂等取消）。
    */
