@@ -28,6 +28,13 @@
 //      命中缓存：超时非错误（句柄保留），迟到 reply 翻转句柄后二次 gather
 //      同步首扫立即收割缓存结果
 //
+//   4. forcedExit 补投幂等（spec 2026-10-13 §11.2-10 L2 场景）：
+//      链 A 同步消费（executeDispatch resolve → 真 task_reply_ack 路径 →
+//      registry.markConsumed）；链 B 后台终态（bg 派发 + 子终态直达桥 settle，
+//      PM 已 idle 无消费零 ack）；随后 PM forcedExit（onPmIdle(id, true,
+//      roundStartedAt)）。断言：链 A 零回执行零唤醒；链 B 恰一条
+//      sender='system' 回执行 + 恰一次唤醒；重复 forcedExit 零增量。
+//
 // fixture 保真度（momo-test-rules 铁律 5「mock 收窄」）：
 //   - 真实 SQLite（tmp + AP_USER_DATA_DIR + runMigrations + seed ws /
 //     agent 链 / 会话成员——会话边界校验的真实数据域）
@@ -57,6 +64,7 @@ vi.mock('electron', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
+import { hasReceiptRow } from '../../src/main/storage/messages/repo';
 import {
   executeDispatch,
   executeFollowup,
@@ -65,7 +73,14 @@ import {
   handleTaskReply,
   __resetBgStateForTest,
 } from '../../src/main/agent/dispatch-wait';
-import { __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
+import {
+  dispatchRegistry,
+  __resetDispatchRegistryForTest,
+} from '../../src/main/agent/dispatch-registry';
+import {
+  TASK_REPLY_EVENT_TYPE,
+  TASK_REPLY_ACK_EVENT_TYPE,
+} from '../../src/main/agent/dispatch';
 import {
   __routeChunkToBufferForTest,
   __resetEventBufferForTest,
@@ -337,27 +352,22 @@ describe('followup 端到端（dispatch 派发 → 回复落库 → followup 续
     const cfg3 = capturedConfigs[2]!;
     expect(cfg3.taskId).toBe(CHAIN);
     expect(cfg3.body).toBe('再问一句');
-    // v2.9 自动送达 + B4(ii) 复用前补投：二轮 settle 经真 routeTaskReply →
-    // followup 轮恒投递（第 3 条）；三轮 followup 复用链时二轮回执若未投递
-    // 则先补投（第 4 条）。行均 sender=system（spec §5.2，重建时映射为 user
-    // 轮）+ taskId=链 ID → 进链历史，重建器聚合进前缀（结果随链历史进入后续轮次）
+    // A7 后语义（spec 2026-10-13 §6.1）：本场景两轮均被 PM 同步内联消费——
+    // 首轮 executeDispatch resolve、二轮 followup pending resolve，各自经真
+    // task_reply_ack 路径 markConsumed（delivered=true）→ 内联消费的链永不
+    // 自动送达：三轮重建前缀只有真实对话行（assistant → user → assistant），
+    // 零回执行注入（旧「followup 轮恒投递 + 复用前补投」语义随 A7 收紧废弃）
     expect(cfg3.historyPrefix).toEqual([
       { role: 'assistant', content: '首轮结论' },
       { role: 'user', content: '把结论展开成表格' },
-      expect.objectContaining({
-        role: 'user',
-        content: expect.stringContaining('【dispatch 回执自动送达】'),
-      }),
       { role: 'assistant', content: '二轮结论' },
-      expect.objectContaining({
-        role: 'user',
-        content: expect.stringContaining('【dispatch 回执自动送达】'),
-      }),
     ]);
-    // 注入行正文含对应轮次的结果全文（第 1/3 条首轮、第 4/5 条二轮）
+    // 链历史零回执行（上文 toEqual 已锁形状；此处显式锁「无 system 注入行」，
+    // 与场景 4 的「后台无消费链恰一条」互为镜像——消费/无消费的分水岭）
     const prefixText = JSON.stringify(cfg3.historyPrefix);
     expect(prefixText).toContain('首轮结论');
     expect(prefixText).toContain('二轮结论');
+    expect(prefixText).not.toContain('【dispatch 回执自动送达】');
 
     // 末轮收尾：清除追问在途标记（下一轮 followup 可用）
     handleTaskReply({ task_id: CHAIN, status: 'completed', body: '三轮结论', tool_calls_used: 0 });
@@ -433,5 +443,145 @@ describe('bg → gather(any, 短超时) pending → 迟到 reply → 二次 gath
     expect(r2.done).toEqual([{ taskId, status: 'done', outcome: 'completed', body: '迟到结果', toolCallsUsed: 2 }]);
     expect(r2.pending).toEqual([]);
     expect(r2.notes).toEqual([]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 场景 4：forcedExit 补投幂等（spec 2026-10-13 §11.2-10）——同步消费链零重投，
+// 后台终态链恰一次送达；重复 forcedExit 零增量
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('forcedExit 补投幂等：同步消费链零重投零唤醒，后台终态链恰一次送达', () => {
+  it('链 A 同步消费（真 ack 路径）→ forcedExit 后零回执行零唤醒；链 B 后台终态无消费 → 恰一条 system 回执行 + 恰一次唤醒；重复 forcedExit 无增量', async () => {
+    const cfg = makeConfig();
+    const roundStartedAt = Date.now();
+
+    // 本场景私有路由服务：sub + PM 双真实 runner——PM runner 在位使投递循环
+    // 完整走 routeUserChat(systemKickoff) → executeTask（唤醒即 PM 收到
+    // kickoff task-config，与生产「唤醒 PM 新回合」同构）
+    const pmKickoffs: CapturedTaskConfig[] = [];
+    const mkPmChild = (): ChildProcess => ({
+      pid: 4303,
+      on: vi.fn(),
+      off: vi.fn(),
+      connected: true,
+      exitCode: null,
+      kill: vi.fn(),
+      send: vi.fn((msg: unknown): boolean => {
+        const m = msg as { type?: string };
+        if (m?.type === 'task-config') pmKickoffs.push(msg as CapturedTaskConfig);
+        return true;
+      }),
+    }) as unknown as ChildProcess;
+    const subRunner = new AgentRunner({
+      agentAssignmentId: 'inst-sub',
+      agentUserId: 'agent-inst-sub',
+      workspaceId: 'ws',
+      warmPool: new WarmPool({ spawn: vi.fn().mockResolvedValue(mkSubChild()) }),
+    });
+    const pmRunner = new AgentRunner({
+      agentAssignmentId: 'inst-pm',
+      agentUserId: 'agent-inst-pm',
+      workspaceId: 'ws',
+      warmPool: new WarmPool({ spawn: vi.fn().mockResolvedValue(mkPmChild()) }),
+    });
+    const svc = new RouterService({ runners: new Map([['inst-sub', subRunner], ['inst-pm', pmRunner]]) });
+    const wakeSpy = vi.spyOn(svc, 'routeUserChat');
+    setBridgeRouter(svc);
+
+    // ── 链 A：同步消费——executeDispatch → 子终态 → 双路 settle（resolve 分支
+    //    自动经真 process.send → 桥 → applyRegistryAck → markConsumed）──
+    const pA = executeDispatch('ui', '同步任务A', cfg, 1, 'ss-a', 'ss-pm-a', sessChatId);
+    await waitForCapture(1);
+    const chainA = capturedConfigs[0]!.taskId;
+    if (typeof chainA !== 'string') throw new Error('链 A TaskConfig 缺 taskId——派发链未闭合');
+    seedSubRound(chainA, 'ss-a', 'ss-pm-a', '同步结论A');
+    settleBoth(chainA, '同步结论A', 1);
+    await expect(pA).resolves.toEqual({ body: '同步结论A', toolCallsUsed: 1 });
+    // ack 真路径落注册表：delivered=true（A7 判别点——无消费确认时恒 false）
+    await vi.waitFor(() => expect(dispatchRegistry.get(chainA)?.delivered).toBe(true));
+    expect(
+      sentEvents.some(
+        (e) => e.eventType === TASK_REPLY_ACK_EVENT_TYPE && e.content.task_id === chainA,
+      ),
+    ).toBe(true);
+
+    // ── 链 B：后台派发 + 子终态直达桥（生产路径：子 runtime 子进程 →
+    //    handleChildMessage → routeTaskReply settle）——PM 已 idle 不调
+    //    handleTaskReply，bg 句柄无人收割 → 零 ack，链停在 done/未投递/未消费 ──
+    const bg = await executeDispatchBg('ui', '后台任务B', cfg, undefined, 'ss-b', 'ss-pm-b', sessChatId);
+    await waitForCapture(2);
+    expect(capturedConfigs[1]?.taskId).toBe(bg.taskId);
+    process.send?.({
+      type: INTERNAL_EVENT_MSG,
+      eventType: TASK_REPLY_EVENT_TYPE,
+      sessionId: sessChatId,
+      sender: 'agent-inst-sub',
+      content: { task_id: bg.taskId, status: 'completed', body: '后台结论B', tool_calls_used: 2, reply_to: 'inst-pm' },
+    });
+    await vi.waitFor(() => expect(dispatchRegistry.get(bg.taskId)?.status).toBe('done'));
+    expect(dispatchRegistry.get(bg.taskId)).toMatchObject({
+      delivered: false,
+      awaitWake: false,
+      isFollowupRound: false,
+    });
+    expect(
+      sentEvents.some(
+        (e) => e.eventType === TASK_REPLY_ACK_EVENT_TYPE && e.content.task_id === bg.taskId,
+      ),
+    ).toBe(false);
+    // settle 时刻零即时投递（bg 链非 followup 轮、未过 PM 空闲快照——不属恒投递类）
+    expect(wakeSpy).toHaveBeenCalledTimes(0);
+    expect(pmKickoffs).toHaveLength(0);
+
+    // ── PM forcedExit（A8：roundStartedAt 窗口内 settle 的链补投）──
+    svc.onPmIdle('inst-pm', true, roundStartedAt);
+
+    // 链 B：恰一次唤醒（deliverChainResult → routeUserChat(systemKickoff)）
+    await vi.waitFor(() => expect(wakeSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pmKickoffs).toHaveLength(1));
+    expect(wakeSpy.mock.calls[0]![0]).toMatchObject({
+      sessionId: sessChatId,
+      assignmentId: 'inst-pm',
+      systemKickoff: true,
+    });
+    expect(wakeSpy.mock.calls[0]![0].body).toContain(bg.taskId);
+    expect(pmKickoffs[0]?.executionSessionId).toBe(sessChatId);
+    expect(String(pmKickoffs[0]?.body)).toContain('后台结论B');
+
+    // 链 B：恰一条 sender='system' 回执行（hasReceiptRow 生产查重口径 + 计数）
+    expect(hasReceiptRow(sessChatId, bg.taskId)).toBe(true);
+    const receiptRows = getDb()
+      .prepare(
+        `SELECT body FROM messages
+         WHERE session_id = ? AND task_id = ? AND sender = 'system' AND segment_of IS NULL`,
+      )
+      .all(sessChatId, bg.taskId) as { body: string }[];
+    expect(receiptRows).toHaveLength(1);
+    expect(receiptRows[0]!.body).toContain('【dispatch 回执自动送达】');
+    expect(receiptRows[0]!.body).toContain('后台结论B');
+
+    // 链 A：零回执行零唤醒（全局唤醒恰 1 次且属链 B；无 A 的 system 行）
+    expect(hasReceiptRow(sessChatId, chainA)).toBe(false);
+    const totalSystemRows = getDb()
+      .prepare(`SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND sender = 'system'`)
+      .get(sessChatId) as { n: number };
+    expect(totalSystemRows.n).toBe(1);
+    // 链 A 终态保持已消费：forcedExit 补投窗口未命中它（delivered 挡板）
+    expect(dispatchRegistry.get(chainA)).toMatchObject({ status: 'done', delivered: true, awaitWake: false });
+
+    // ── 重复 forcedExit：零增量（take 语义已标 delivered + PM 占线双层挡板）──
+    svc.onPmIdle('inst-pm', true, roundStartedAt);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
+    expect(pmKickoffs).toHaveLength(1);
+    expect(
+      getDb()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages
+           WHERE session_id = ? AND sender = 'system' AND segment_of IS NULL`,
+        )
+        .get(sessChatId) as { n: number },
+    ).toEqual({ n: 1 });
   });
 });
