@@ -77,7 +77,7 @@ import {
 } from '../../src/main/agent/dispatch-registry';
 import { RouterService } from '../../src/main/agent/router-service';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
-import { registerLane, __clearLaneForTest } from '../../src/main/agent/session-lane';
+import { registerLane, getLane, __clearLaneForTest } from '../../src/main/agent/session-lane';
 import { setAbortResolver } from '../../src/main/agent/stream-relay';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { setBridgeRouter, handleChildMessage } from '../../src/main/agent/internal-event-bridge';
@@ -632,4 +632,65 @@ describe('B3 三级中断级联：abortTurn / stopAll / cancelChain', () => {
     expect(routerSvc!.cancelChain({ taskId: 't-c3' })).toEqual({ status: 'not_found' }); // 已终态
     expect(routerSvc!.cancelChain({})).toEqual({ status: 'not_found' }); // 空参
   }, 10_000);
+
+  // ── B6 补齐（spec §11.3-12 主进程侧 / §11.3-15 两分支）────────────────────
+  // 上方 cancelChain 用例锁「双入口 + not_found 幂等」，但 t-c2 随即被自身
+  // 调用取消——从未断言「停止单链时兄弟链与 PM 流不受影响」。下方两用例补齐：
+  //   1. 链级隔离（§11.3-12）：单链 cancelChain 后兄弟链仍 in_flight、PM 车道
+  //      与 PM 流零触碰（renderer 侧 DispatchChip 行为由 B5 测试覆盖，此处锁
+  //      主进程 cancelChain 的隔离语义）
+  //   2. abortTurn 错误路径（§11.3-15）：车道空已有专项——此处补「runner 缺失」
+  //      （runners 空 Map——用户停掉全部 agent / 重启中）与「本 PM 流名下链
+  //      已终态」两分支的幂等 no-op
+
+  it('cancelChain 单链停止：兄弟链仍 in_flight + PM 流/车道零触碰（spec §11.3-12 主进程侧）', async () => {
+    // 同一 PM 流名下两条在途链——DispatchChip「停止单链」的主进程侧形态
+    registerLane(sessChatId, { taskId: null, streamSessionId: 'ss-pm-chips', assignmentId: 'inst-pm' });
+    seedChain({ taskId: 't-x1', subStreamSessionId: 'ss-sub-x1', pmStreamSessionId: 'ss-pm-chips' });
+    seedChain({ taskId: 't-x2', subStreamSessionId: 'ss-sub-x2', pmStreamSessionId: 'ss-pm-chips' });
+    await seedActiveStream('ss-sub-x1');
+    await seedActiveStream('ss-sub-x2');
+    // PM 流中止解析器探针——cancelChain 不得触碰 PM 流（生产链 abortStreamBySessionId）
+    const pmAbortProbe = vi.fn(() => false);
+    setAbortResolver(pmAbortProbe);
+
+    expect(routerSvc!.cancelChain({ subStreamSessionId: 'ss-sub-x1' })).toEqual({ status: 'cancelled' });
+
+    // 单链：aborted + cancelled
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-x1')).toBe(true);
+    expect(dispatchRegistry.get('t-x1')?.status).toBe('cancelled');
+
+    // 兄弟链不受影响：仍 in_flight、零 abort 下发
+    expect(dispatchRegistry.get('t-x2')?.status).toBe('in_flight');
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-x2')).toBe(false);
+
+    // PM 流不受影响：车道仍占（PM chat loop 继续在 dispatch-wait 等兄弟回执）+
+    // PM 流中止解析器从未被调用 + 无 PM ssi 的 abort 下发
+    expect(getLane(sessChatId)?.streamSessionId).toBe('ss-pm-chips');
+    expect(pmAbortProbe).not.toHaveBeenCalled();
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-pm-chips')).toBe(false);
+  }, 10_000);
+
+  it('abortTurn 错误路径：runner 缺失 / 链已终态——幂等 no-op 不抛错（spec §11.3-15）', () => {
+    // 车道占 + 本 PM 流名下：一条已终态链（completed）+ 一条在途孤儿链（其子
+    // agent 无 runner 持有）。runner 缺失 = runners 空 Map（用户停掉全部 agent /
+    // 进程重启中的 boot 形态）——构造专用 RouterService，registry 与 lane 为
+    // 模块级共享态，与生产单实例视角一致
+    registerLane(sessChatId, { taskId: null, streamSessionId: 'ss-pm-err', assignmentId: 'inst-pm' });
+    seedChain({ taskId: 't-done', subStreamSessionId: 'ss-sub-done', pmStreamSessionId: 'ss-pm-err' });
+    dispatchRegistry.settle('t-done', 'completed', '已终态回执');
+    seedChain({ taskId: 't-orphan', subStreamSessionId: 'ss-sub-orphan', pmStreamSessionId: 'ss-pm-err' });
+    const noRunnerSvc = new RouterService({ runners: new Map() });
+
+    // 不抛错；PM 流未停（abort 解析器未注入 → abortStreamBySessionId false）
+    expect(noRunnerSvc.abortTurn(sessChatId)).toEqual({ stoppedStream: false });
+
+    // 链已终态：cancelByPmStream 跳过非在途链——保持 done 不被翻转（settle 将
+    // completed/failed 统一收敛为内部态 'done'）
+    expect(dispatchRegistry.get('t-done')?.status).toBe('done');
+    // 在途孤儿链：registry 层仍取消（迟到回执不再唤醒 PM）——广播空循环无害
+    expect(dispatchRegistry.get('t-orphan')?.status).toBe('cancelled');
+    // 零 abort 下发（无 runner 持有流）
+    expect(subChildAborts.length).toBe(0);
+  });
 });
