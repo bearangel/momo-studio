@@ -9,6 +9,7 @@ import {
   DISPATCH_EVENT_TYPE,
   TASK_REPLY_EVENT_TYPE,
   ABORT_DISPATCH_EVENT_TYPE,
+  TASK_REPLY_ACK_EVENT_TYPE,
 } from './dispatch';
 
 export const INTERNAL_EVENT_MSG = 'momo-internal-event';
@@ -37,4 +38,7 @@ export function sendTaskReplyEvent(sessionId: string, from: string, content: Rec
 }
 export function sendAbortDispatchEvent(sessionId: string, from: string, content: Record<string, unknown>): void {
   sendInternalEvent({ eventType: ABORT_DISPATCH_EVENT_TYPE, sessionId, sender: from, content });
+}
+export function sendTaskReplyAckEvent(sessionId: string, from: string, content: Record<string, unknown>): void {
+  sendInternalEvent({ eventType: TASK_REPLY_ACK_EVENT_TYPE, sessionId, sender: from, content });
 }

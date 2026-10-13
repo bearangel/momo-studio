@@ -69,6 +69,9 @@ export const TASK_REPLY_EVENT_TYPE = 'io.momo-studio.task_reply';
  */
 export const ABORT_DISPATCH_EVENT_TYPE = 'io.momo-studio.abort_dispatch';
 
+/** v2.x 消费确认（spec 2026-10-13 §6.1）：PM 子进程内联消费 task_reply 后回执主进程 */
+export const TASK_REPLY_ACK_EVENT_TYPE = 'io.momo-studio.task_reply_ack';
+
 /** 构造一条 abort_dispatch 消息（PM 中断时通知子 agent 终止） */
 export function buildAbortDispatchMessage(opts: {
   taskId: string;

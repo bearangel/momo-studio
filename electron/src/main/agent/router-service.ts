@@ -18,6 +18,7 @@ import {
   DISPATCH_EVENT_TYPE,
   TASK_REPLY_EVENT_TYPE,
   ABORT_DISPATCH_EVENT_TYPE,
+  TASK_REPLY_ACK_EVENT_TYPE,
   parseHistoryPrefix,
 } from './dispatch';
 import {
@@ -343,6 +344,9 @@ export class RouterService {
           break;
         case ABORT_DISPATCH_EVENT_TYPE:
           await this.routeAbortDispatch(event);
+          break;
+        case TASK_REPLY_ACK_EVENT_TYPE:
+          this.applyRegistryAck(event.getContent());
           break;
       }
     } catch (err) {
@@ -758,6 +762,16 @@ export class RouterService {
     if (handle && (handle.isFollowupRound || handle.awaitWake)) {
       this.tryDeliver(handle.pmAssignmentId);
     }
+  }
+
+  /**
+   * task_reply_ack 消费（spec 2026-10-13 §6.1）：PM 已内联消费 → 等同已投递，幂等。
+   * 非法载荷（task_id 缺失 / 非字符串）no-op 不抛错——ack 是优化路径而非关键路径。
+   */
+  applyRegistryAck(content: Record<string, unknown>): void {
+    const taskId = content.task_id;
+    if (typeof taskId !== 'string') return;
+    dispatchRegistry.markConsumed(taskId);
   }
 
   /**

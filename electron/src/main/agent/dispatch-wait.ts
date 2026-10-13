@@ -22,7 +22,7 @@ import {
   parseTaskReply,
 } from './dispatch';
 import type { DispatchContent } from './dispatch';
-import { sendDispatchEvent, sendAbortDispatchEvent } from './internal-event';
+import { sendDispatchEvent, sendAbortDispatchEvent, sendTaskReplyAckEvent } from './internal-event';
 import type { RuntimeConfig } from './runtime-config';
 import type { SubAgentRef } from './builtin-tools';
 import { getDb } from '../storage/db';
@@ -66,6 +66,13 @@ interface PendingReply {
    * pending.onAbort 重复发 abort_dispatch 事件
    */
   abortCleanup?: () => void;
+  /**
+   * task_reply_ack 回执身份（spec 2026-10-13 §6.1）：该链 dispatch / abort_dispatch
+   * 事件发出的会话与发送者快照（waitForTaskReply 注册时定格）——消费回执与
+   * 派发事件同源，B2 桥身份绑定据此放行。
+   */
+  ackSessionId: string;
+  ackAgentUserId: string;
 }
 
 /** pending dispatch 回执：task_id → 等待中的 Promise（主 agent 发出 dispatch 后注册） */
@@ -94,6 +101,12 @@ export interface BgHandle {
    * 传递——gather 回链 dispatch chip 终态时据此区分 ✅/❌，避免失败子任务被显示为完成。
    */
   outcome?: 'completed' | 'failed';
+  /**
+   * task_reply_ack 回执身份（spec 2026-10-13 §6.1）：dispatch_bg 派发时快照——
+   * 翻转 done 即回执主进程置 delivered。可选：仅测试种子 / 旧句柄缺省（缺省不发 ack）。
+   */
+  ackSessionId?: string;
+  ackAgentUserId?: string;
 }
 
 /** 同 PM 在途 bg 句柄上限（spec §4.2：在途数 ≥ 8 → 工具报错含清单；T4 executeDispatchBg 强制） */
@@ -337,6 +350,8 @@ function waitForTaskReply(
       timer: setTimeout(() => {}, 0), // 占位，armDispatchTimer 会替换
       stage: 0,
       subSlug,
+      ackSessionId: executionSessionId ?? '',
+      ackAgentUserId: config.agentUserId,
     });
     armDispatchTimer(taskId);
 
@@ -625,6 +640,22 @@ function armDispatchTimer(taskId: string): void {
   }
 
 /**
+ * task_reply_ack 消费回执（spec 2026-10-13 §6.1）：PM 内联消费（waitForTaskReply
+ * resolve/reject 于回执到达 / gather waiter 被 wakeGatherWaiters 唤醒收割）后发往
+ * 主进程，registry 据此置 delivered——杜绝 forcedExit 补投把已消费结果重投 PM。
+ * 身份取该链注册时快照（与 dispatch / abort_dispatch 事件同源）；身份缺失
+ * （测试种子 / 非派发来源句柄）不发——宁可漏 ack 回退既有补投语义，不伪造身份。
+ */
+function sendTaskReplyAckForEntry(
+  taskId: string,
+  sessionId: string | undefined,
+  agentUserId: string | undefined,
+): void {
+  if (agentUserId === undefined) return;
+  sendTaskReplyAckEvent(sessionId ?? '', agentUserId, { task_id: taskId });
+}
+
+/**
  * 处理收到的 task_reply：若匹配某个 pending dispatch 则 resolve/reject 其 Promise。
  * in_progress → 进度通知，保持 pending（子 agent 处理中途合法地先发此状态）；
  * completed → resolve(body)；failed/needs_input → reject。
@@ -659,6 +690,8 @@ export function handleTaskReply(content: Record<string, unknown>): void {
         wakeGatherWaiters(reply.task_id, bg);
         // settled 超限驱逐（审查 C2）——唤醒后再驱逐：waiter 已拿到句柄快照/引用
         enforceSettledCap();
+        // spec §6.1：gather 收割消费确认——waiter 唤醒即 PM 可收割，等同已投递
+        sendTaskReplyAckForEntry(reply.task_id, bg.ackSessionId, bg.ackAgentUserId);
       }
       // 非 in_flight（cancelled / done）→ cancel 后或已收割后的迟到 reply：保留既有终态、忽略 body（幂等）
       return;
@@ -688,6 +721,9 @@ export function handleTaskReply(content: Record<string, unknown>): void {
   } else {
     pending.reject(new Error(`子 agent 回复状态 "${reply.status}": ${reply.body}`));
   }
+  // spec §6.1：内联消费确认——resolve / 因回执 reject 都是 PM 已收到结果的真实消费
+  // （区别于超时 reject / abort reject——那些 PM 未收到 body，不回执，保留补投语义）
+  sendTaskReplyAckForEntry(reply.task_id, pending.ackSessionId, pending.ackAgentUserId);
 }
 
 /**
@@ -750,7 +786,14 @@ export async function executeDispatchBg(
     traceLabel: '→ dispatch_bg',
     onBuilt: (tid) => {
       // 先注册句柄，再发送——与同步路径 pendingReplies 同防竞态纪律
-      bgHandles.set(tid, { slug: subSlug, status: 'in_flight', startedAt: Date.now(), subStreamSessionId });
+      bgHandles.set(tid, {
+        slug: subSlug,
+        status: 'in_flight',
+        startedAt: Date.now(),
+        subStreamSessionId,
+        ackSessionId: executionSessionId ?? '',
+        ackAgentUserId: config.agentUserId,
+      });
     },
   });
   return { taskId };

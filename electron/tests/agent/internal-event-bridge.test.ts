@@ -29,6 +29,7 @@ import {
   DISPATCH_EVENT_TYPE,
   TASK_REPLY_EVENT_TYPE,
   ABORT_DISPATCH_EVENT_TYPE,
+  TASK_REPLY_ACK_EVENT_TYPE,
 } from '../../src/main/agent/dispatch';
 
 /** 与 RouterService.routeEvent 签名兼容的 mock router */
@@ -75,8 +76,8 @@ describe('主进程侧：handleChildMessage（child IPC → RouterService）', (
     expect(targetAssignmentId).toBe(null);
   });
 
-  it('task_reply / abort_dispatch 内部事件同样转发（eventType 透传）', () => {
-    for (const eventType of [TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE]) {
+  it('task_reply / abort_dispatch / task_reply_ack 内部事件同样转发（eventType 透传）', () => {
+    for (const eventType of [TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE, TASK_REPLY_ACK_EVENT_TYPE]) {
       expect(handleChildMessage({
         type: INTERNAL_EVENT_MSG,
         eventType,
@@ -85,9 +86,9 @@ describe('主进程侧：handleChildMessage（child IPC → RouterService）', (
         content: { task_id: 'task-1', status: 'completed', body: 'done' },
       })).toBe(true);
     }
-    expect(router.routeEvent).toHaveBeenCalledTimes(2);
+    expect(router.routeEvent).toHaveBeenCalledTimes(3);
     const types = vi.mocked(router.routeEvent).mock.calls.map(([e]) => e.getType());
-    expect(types).toEqual([TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE]);
+    expect(types).toEqual([TASK_REPLY_EVENT_TYPE, ABORT_DISPATCH_EVENT_TYPE, TASK_REPLY_ACK_EVENT_TYPE]);
   });
 
   it('StreamChunk / task-end / 非法消息 → 返回 false 不消费', () => {
