@@ -61,9 +61,10 @@ export async function ensureRouterService(
   setSessionRouter(currentRouterService);
   setFinalListener(onLeaderFinal);
   // v2.9 事件驱动 dispatch：runner 空闲边沿 → PM 空闲快照 + 投递自动送达结果
-  // （B4(i)：forcedExit = 强制截断——Router 据此补投已翻转未投递的链）
-  setRunnerIdleHandler((assignmentId, forcedExit) =>
-    currentRouterService?.onPmIdle(assignmentId, forcedExit),
+  // （B4(i)：forcedExit = 强制截断——Router 据此补投已翻转未投递的链；
+  //  A8：roundStartedAt = 本回合起点——补投窗口收紧，ack 丢失兜底不轰炸陈年链）
+  setRunnerIdleHandler((assignmentId, forcedExit, roundStartedAt) =>
+    currentRouterService?.onPmIdle(assignmentId, forcedExit, roundStartedAt),
   );
   logger.info('RouterService lazy 启动', { runnerCount: runners.size });
 }

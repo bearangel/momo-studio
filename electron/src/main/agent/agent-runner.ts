@@ -161,8 +161,11 @@ export interface AgentRunnerOpts {
    * 日志，绝不影响收尾链路。
    * B4(i)：forcedExit 标记回合是被强制截断（预算/中断/错误/崩溃）——Router
    * 据此对已翻转未投递的链补投。
+   * A8（spec §6.2）：roundStartedAt = 本回合 executeTask 入口时刻——Router
+   * 据此把 forcedExit 补投收紧到「本回合窗口内 settle 的链」（ack 丢失兜底
+   * 不放大为陈年链重复轰炸）。
    */
-  onIdle?: (assignmentId: string, forcedExit: boolean) => void;
+  onIdle?: (assignmentId: string, forcedExit: boolean, roundStartedAt: number) => void;
 }
 
 /** 活跃 task 记录——keyed by streamSessionId */
@@ -213,6 +216,11 @@ export class AgentRunner {
   /** streamSessionId → 活跃 task */
   private readonly activeTasks = new Map<string, ActiveTask>();
   private readonly taskEndGraceMs: number;
+  /**
+   * A8（spec §6.2）：最近一次 executeTask 入口时刻——onIdle 第三参的数据源。
+   * 每回合流派发入口刷新；空闲边沿读它做 forcedExit 补投的窗口起点。
+   */
+  private lastRoundStartedAt = 0;
 
   constructor(opts: AgentRunnerOpts) {
     this.opts = opts;
@@ -237,7 +245,7 @@ export class AgentRunner {
     if (this.activeTasks.size > 0) return;
     if (!this.opts.onIdle) return;
     try {
-      this.opts.onIdle(this.opts.agentAssignmentId, forcedExit);
+      this.opts.onIdle(this.opts.agentAssignmentId, forcedExit, this.lastRoundStartedAt);
     } catch (err) {
       logger.warn('onIdle 回调抛错（不影响收尾链路）', {
         assignmentId: this.opts.agentAssignmentId,
@@ -260,6 +268,8 @@ export class AgentRunner {
    *     触发任务行终态转换 + runtime 回收
    */
   async executeTask(task: TaskConfig): Promise<{ streamSessionId: string }> {
+    // A8：回合起点记在流派发入口——本回合内所有 idle 边沿共用同一窗口锚点
+    this.lastRoundStartedAt = Date.now();
     const runtime = await this.opts.warmPool.acquire(this.opts.agentAssignmentId);
 
     // 注册 message handler：过滤本 task 的 streamSessionId，按消息类型收尾

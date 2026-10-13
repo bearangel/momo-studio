@@ -167,6 +167,48 @@ describe('DispatchRegistry markConsumed（spec §6.1 内联消费 = 已投递）
   });
 });
 
+describe('DispatchRegistry markPmIdle 补投窗口（spec §6.2，A8 ack 丢失兜底）', () => {
+  // 窗口语义：deliverSettledUndelivered 补投只翻「本回合窗口内」（completedAt >=
+  // roundStartedAt）settle 的链——老回合遗留链零补投（修复 spring-mcp 重复轰炸：
+  // forcedExit 补投把陈年 settled 链再次唤醒）。mkRegistry 的注入 clock 等价表达
+  // brief 的 fake timers 方案（settle 用 this.nowFn()，clock.advance 即时间推进）。
+  it('roundStartedAt 窗口：只翻本回合内 settle 的链——老链零补投、新链补投', () => {
+    const { reg, clock } = mkRegistry();
+    // 老回合链：completedAt = 1_000_000（早于窗口起点）
+    reg.register({ taskId: 't-old', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's', isFollowupRound: false });
+    reg.settle('t-old', 'completed', 'old');
+    const roundStartedAt = clock.now() + 30_000; // 窗口起点：两条链 settle 时刻之间
+    clock.advance(60_000);
+    reg.register({ taskId: 't-new', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's', isFollowupRound: false });
+    reg.settle('t-new', 'completed', 'new'); // completedAt = 1_060_000，窗口内
+    reg.markPmIdle('pm', { deliverSettledUndelivered: true, roundStartedAt });
+    expect(reg.get('t-old')?.awaitWake).toBe(false); // 老链零补投
+    expect(reg.get('t-new')?.awaitWake).toBe(true); // 本回合链补投
+  });
+
+  it('roundStartedAt 缺省（0）保持 B4(i) 全量补投兼容；边界 completedAt === roundStartedAt 计入窗口（>=）', () => {
+    const { reg } = mkRegistry();
+    // 缺省窗口：不传 roundStartedAt → 全量补投（旧调用方语义不变）
+    reg.register({ taskId: 't-a', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's', isFollowupRound: false });
+    reg.settle('t-a', 'completed', 'a');
+    reg.markPmIdle('pm', { deliverSettledUndelivered: true });
+    expect(reg.get('t-a')?.awaitWake).toBe(true);
+
+    // 边界：completedAt 恰等于 roundStartedAt → 计入（>=，窗口留在安全侧）
+    reg.register({ taskId: 't-b', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's', isFollowupRound: false });
+    reg.settle('t-b', 'completed', 'b'); // completedAt = 1_000_000
+    reg.markPmIdle('pm', { deliverSettledUndelivered: true, roundStartedAt: 1_000_000 });
+    expect(reg.get('t-b')?.awaitWake).toBe(true);
+  });
+
+  it('窗口只收紧 else-if 补投分支：in_flight → awaitWake 主路径不受窗口影响', () => {
+    const { reg } = mkRegistry();
+    reg.register({ taskId: 't-flight', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's', isFollowupRound: false });
+    reg.markPmIdle('pm', { deliverSettledUndelivered: true, roundStartedAt: 9_999_999 }); // 远期窗口
+    expect(reg.get('t-flight')?.awaitWake).toBe(true); // 在途链照常置 awaitWake
+  });
+});
+
 describe('DispatchRegistry sweepDead（fake clock）', () => {
   it('阈值内不误杀；超阈值判死（outcome=failed + reason 文案）', () => {
     const { reg, clock } = mkRegistry();

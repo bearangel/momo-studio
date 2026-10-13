@@ -188,6 +188,58 @@ describe('AgentRunner', () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
+  it('A8 回归锁：onIdle 第三参 roundStartedAt = executeTask 入口时刻，每回合刷新', async () => {
+    const child = mkMockChild();
+    const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
+    await warmPool.warm('inst1');
+    const onIdle = vi.fn();
+    const runner = new AgentRunner({
+      agentAssignmentId: 'inst1',
+      agentUserId: 'agent-bot-x1',
+      workspaceId: 'ws1',
+      warmPool,
+      onIdle,
+    });
+    // 双回合共用同一 mock child：executeTask 各自注册 message handler（后者覆盖
+    // handlers 表），断言前取「最新」handler——共享 helper getMessageHandler 取
+    // 首个（单回合用例语义），会按旧 streamSessionId 过滤掉第二回合的 end chunk
+    const lastMessageHandler = (): ((msg: unknown) => void) => {
+      const onCalls = (child.on as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const handler = onCalls.filter((c) => c[0] === 'message').at(-1)?.[1] as
+        | ((msg: unknown) => void)
+        | undefined;
+      if (!handler) throw new Error('message handler 未注册');
+      return handler;
+    };
+
+    // 第一回合：记录点 = executeTask 调用瞬间的 Date.now()
+    const round1Start = Date.now();
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'x',
+      streamSessionId: 'ss-a8-r1',
+    });
+    lastMessageHandler()({ type: 'end', streamSessionId: 'ss-a8-r1', finishReason: 'error', error: 'boom' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    const round1Reported = (onIdle.mock.calls[0] as unknown[])[2] as number;
+    expect(round1Reported).toBeGreaterThanOrEqual(round1Start);
+    expect(round1Reported).toBeLessThanOrEqual(Date.now());
+
+    // 第二回合：记录点刷新（窗口不滞留在老回合——否则老链窗口误放大）
+    await new Promise((r) => setTimeout(r, 25)); // 拉开墙钟，保证严格递增可断言
+    await runner.executeTask({
+      taskId: null,
+      executionSessionId: '!r:home',
+      body: 'y',
+      streamSessionId: 'ss-a8-r2',
+    });
+    lastMessageHandler()({ type: 'end', streamSessionId: 'ss-a8-r2', finishReason: 'error', error: 'boom' });
+    expect(onIdle).toHaveBeenCalledTimes(2);
+    const round2Reported = (onIdle.mock.calls[1] as unknown[])[2] as number;
+    expect(round2Reported).toBeGreaterThan(round1Reported);
+  });
+
   it('notifyTaskReply 转发给活跃 ephemeral task 的子进程（PM 等待 dispatch 场景）', async () => {
     const child = mkMockChild();
     const warmPool = new WarmPool({ spawn: vi.fn().mockResolvedValue(child) });
@@ -629,7 +681,8 @@ describe('AgentRunner child exit 清理链（C2）', () => {
       runner.handleChildExit(child, 1);
       expect(runner.activeTaskCount()).toBe(0);
       expect(onIdle).toHaveBeenCalledTimes(1);
-      expect(onIdle).toHaveBeenCalledWith('inst1', true); // 崩溃 = forcedExit
+      // 崩溃 = forcedExit；第三参 roundStartedAt（A8 窗口锚点）随行透传
+      expect(onIdle).toHaveBeenCalledWith('inst1', true, expect.any(Number));
     }
 
     // (b) 例行退出（活跃表已空——正常收尾后 warmPool.release kill 到达）→ 不触发

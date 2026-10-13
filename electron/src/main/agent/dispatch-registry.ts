@@ -220,8 +220,15 @@ export class DispatchRegistry {
    * B4(i)（质量 review 2026-09-24）：deliverSettledUndelivered = 回合被强制截断
    * （预算耗尽/中断/错误/崩溃）——PM 没有公平机会 gather，已翻转未投递的链
    * 一并置 awaitWake 补投；正常收尾不补投（gather 契约）。
+   * A8（spec §6.2）：roundStartedAt 窗口收紧补投面——只补「本回合窗口内」
+   * （completedAt >= roundStartedAt）settle 的链。老回合遗留的 settled 链即便
+   * 未投递也不翻（子进程重启等场景状态已失，强行唤醒 = 重复轰炸 ack 丢失前
+   * 已消费的结果）。缺省 0 = 全量补投（B4(i) 原语义，兼容无窗口的调用方）。
    */
-  markPmIdle(pmAssignmentId: string, opts?: { deliverSettledUndelivered?: boolean }): void {
+  markPmIdle(
+    pmAssignmentId: string,
+    opts?: { deliverSettledUndelivered?: boolean; roundStartedAt?: number },
+  ): void {
     for (const h of this.chains.values()) {
       if (h.pmAssignmentId !== pmAssignmentId) continue;
       if (h.status === 'in_flight') {
@@ -229,8 +236,10 @@ export class DispatchRegistry {
       } else if (
         opts?.deliverSettledUndelivered &&
         h.status === 'done' &&
+        h.completedAt !== undefined &&
         !h.delivered &&
-        !h.isFollowupRound
+        !h.isFollowupRound &&
+        h.completedAt >= (opts.roundStartedAt ?? 0) // spec §6.2：仅本回合窗口内翻转的链
       ) {
         h.awaitWake = true;
       }

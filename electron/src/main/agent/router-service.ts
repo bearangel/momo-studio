@@ -45,18 +45,22 @@ import type { MessageContext } from '../../../../renderer/src/ipc/types';
 // runtime-registry → RouterService 的构造期循环依赖。
 
 /** 模块级空闲处理器（ensureRouterService 注入 / destroyRouterService 置空） */
-let runnerIdleHandler: ((assignmentId: string, forcedExit: boolean) => void) | null = null;
+let runnerIdleHandler:
+  | ((assignmentId: string, forcedExit: boolean, roundStartedAt: number) => void)
+  | null = null;
 
 export function setRunnerIdleHandler(
-  handler: ((assignmentId: string, forcedExit: boolean) => void) | null,
+  handler:
+    | ((assignmentId: string, forcedExit: boolean, roundStartedAt: number) => void)
+    | null,
 ): void {
   runnerIdleHandler = handler;
 }
 
 /** AgentRunner onIdle 回调的注入目标（回调抛错只记日志——不拖垮收尾链路） */
-export function notifyRunnerIdle(assignmentId: string, forcedExit = false): void {
+export function notifyRunnerIdle(assignmentId: string, forcedExit = false, roundStartedAt = 0): void {
   try {
-    runnerIdleHandler?.(assignmentId, forcedExit);
+    runnerIdleHandler?.(assignmentId, forcedExit, roundStartedAt);
   } catch (err) {
     logger.warn('runner 空闲通知处理失败', { assignmentId, error: String(err) });
   }
@@ -877,9 +881,14 @@ export class RouterService {
    * B4(i)（质量 review）：forcedExit = 回合被强制截断（预算耗尽 / 中断 /
    * 错误 / 子进程崩溃）——此时 PM 没有公平机会 gather，已翻转未投递的链
    * 一并置 awaitWake 补投；正常收尾（stop）维持 gather 契约不补投。
+   * A8（spec §6.2）：roundStartedAt 随 forcedExit 补投透传——补投窗口收紧
+   * 到本回合内 settle 的链（ack 丢失兜底，不放大为陈年链重复轰炸）。
    */
-  onPmIdle(assignmentId: string, forcedExit = false): void {
-    dispatchRegistry.markPmIdle(assignmentId, forcedExit ? { deliverSettledUndelivered: true } : undefined);
+  onPmIdle(assignmentId: string, forcedExit = false, roundStartedAt = 0): void {
+    dispatchRegistry.markPmIdle(
+      assignmentId,
+      forcedExit ? { deliverSettledUndelivered: true, roundStartedAt } : undefined,
+    );
     this.tryDeliver(assignmentId);
   }
 
