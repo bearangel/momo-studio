@@ -87,6 +87,18 @@ export interface DeadChain {
   reason: string;
 }
 
+/** 在途链视图（在途面板 / 回合级联预检，spec §9）——DispatchChainHandle 的对外投影 */
+export interface InFlightChain {
+  taskId: string;
+  round: number;
+  sessionId: string;
+  pmAssignmentId: string;
+  subAssignmentId: string;
+  subStreamSessionId?: string;
+  pmStreamSessionId?: string;
+  startedAt: number;
+}
+
 /**
  * 主进程 dispatch 链注册表。moduleId 级单例 dispatchRegistry 供生产使用；
  * 测试可 new DispatchRegistry({ now }) 注入 fake clock。
@@ -210,6 +222,60 @@ export class DispatchRegistry {
     h.completedAt = this.nowFn();
     this.enforceSettledCap();
     return { ...h };
+  }
+
+  /** 回合级级联（spec §7.3）：取消某 PM 流派生的全部在途链，返回 taskId 清单（幂等：终态/跨流不动） */
+  cancelByPmStream(pmStreamSessionId: string): string[] {
+    const out: string[] = [];
+    for (const h of this.chains.values()) {
+      if (h.pmStreamSessionId !== pmStreamSessionId || h.status !== 'in_flight') continue;
+      h.status = 'cancelled';
+      h.completedAt = this.nowFn();
+      out.push(h.taskId);
+    }
+    if (out.length > 0) this.enforceSettledCap();
+    return out;
+  }
+
+  /** 会话级级联（spec §7.5）：取消该会话全部在途链，返回 taskId 清单（与 cancelByPmStream 同构） */
+  cancelBySession(sessionId: string): string[] {
+    const out: string[] = [];
+    for (const h of this.chains.values()) {
+      if (h.sessionId !== sessionId || h.status !== 'in_flight') continue;
+      h.status = 'cancelled';
+      h.completedAt = this.nowFn();
+      out.push(h.taskId);
+    }
+    if (out.length > 0) this.enforceSettledCap();
+    return out;
+  }
+
+  /** 按 subStreamSessionId 反查链（链级取消入口——renderer 只有该键，spec §7.6；不限状态，调用方判 status） */
+  findBySubStream(subStreamSessionId: string): DispatchChainHandle | undefined {
+    for (const h of this.chains.values()) {
+      if (h.subStreamSessionId === subStreamSessionId) return h;
+    }
+    return undefined;
+  }
+
+  /** 在途链视图（在途面板 / 回合级联预检，spec §9）：只列 in_flight，可选按 session 过滤 */
+  listInFlight(sessionId?: string): InFlightChain[] {
+    const out: InFlightChain[] = [];
+    for (const h of this.chains.values()) {
+      if (h.status !== 'in_flight') continue;
+      if (sessionId !== undefined && h.sessionId !== sessionId) continue;
+      out.push({
+        taskId: h.taskId,
+        round: h.round,
+        sessionId: h.sessionId,
+        pmAssignmentId: h.pmAssignmentId,
+        subAssignmentId: h.subAssignmentId,
+        ...(h.subStreamSessionId !== undefined ? { subStreamSessionId: h.subStreamSessionId } : {}),
+        ...(h.pmStreamSessionId !== undefined ? { pmStreamSessionId: h.pmStreamSessionId } : {}),
+        startedAt: h.startedAt,
+      });
+    }
+    return out;
   }
 
   /**

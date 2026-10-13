@@ -11,6 +11,8 @@
 //   6. sweepDead：阈值内不误杀；超阈值判死（fake clock 推进）
 //   7. settled 容量驱逐（CHAIN_SETTLED_CAP）：最旧 settled 逐出、in_flight 永不逐出
 //   8. markConsumed：内联消费置 delivered（settle 不覆盖）；takeNextDeliverable 不再取走
+//   9. 级联原语（P0-B1）：cancelByPmStream / cancelBySession 回合·会话级联取消 /
+//      listInFlight 在途视图（可选 session 过滤）/ findBySubStream 链级反查
 import { describe, it, expect } from 'vitest';
 import {
   DispatchRegistry,
@@ -253,5 +255,80 @@ describe('DispatchRegistry settled 容量驱逐', () => {
     expect(reg.get('T-settled-000')).toBeUndefined();
     expect(reg.get(`T-settled-${String(CHAIN_SETTLED_CAP).padStart(3, '0')}`)).toBeDefined();
     expect(reg.get('T-keep-inflight')?.status).toBe('in_flight');
+  });
+});
+
+describe('DispatchRegistry 级联原语（P0-B1，spec §7.3/§7.5/§7.6/§9）', () => {
+  it('cancelByPmStream：取消该 PM 流派生的全部在途链，返回清单；跨流/终态链不动', () => {
+    const { reg } = mkRegistry();
+    reg.register({ taskId: 't-a', pmAssignmentId: 'pm', subAssignmentId: 'sub1', sessionId: 's1', isFollowupRound: false, pmStreamSessionId: 'pm-ssi-1' });
+    reg.register({ taskId: 't-b', pmAssignmentId: 'pm', subAssignmentId: 'sub2', sessionId: 's1', isFollowupRound: false, pmStreamSessionId: 'pm-ssi-2' });
+    // 同流但已终态（done）——级联不动终态链
+    reg.register({ taskId: 't-done', pmAssignmentId: 'pm', subAssignmentId: 'sub3', sessionId: 's1', isFollowupRound: false, pmStreamSessionId: 'pm-ssi-1' });
+    reg.settle('t-done', 'completed', 'done', 0);
+
+    expect(reg.cancelByPmStream('pm-ssi-1')).toEqual(['t-a']);
+    expect(reg.get('t-a')?.status).toBe('cancelled');
+    expect(reg.get('t-b')?.status).toBe('in_flight'); // 跨流不动
+    expect(reg.get('t-done')?.status).toBe('done'); // 终态不动
+    // 幂等：已取消 / 无匹配 → 空清单
+    expect(reg.cancelByPmStream('pm-ssi-1')).toEqual([]);
+    expect(reg.cancelByPmStream('pm-ssi-none')).toEqual([]);
+  });
+
+  it('cancelBySession：session 维度同构取消；幂等；cancelled 恒不投递、迟到回执不覆盖', () => {
+    const { reg } = mkRegistry();
+    reg.register({ taskId: 't-s1a', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's1', isFollowupRound: true });
+    reg.register({ taskId: 't-s1b', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's1', isFollowupRound: false });
+    reg.register({ taskId: 't-s2', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's2', isFollowupRound: false });
+
+    expect(reg.cancelBySession('s1').sort()).toEqual(['t-s1a', 't-s1b']);
+    expect(reg.get('t-s1a')?.status).toBe('cancelled');
+    expect(reg.get('t-s1b')?.status).toBe('cancelled');
+    expect(reg.get('t-s2')?.status).toBe('in_flight'); // 跨会话不动
+    // 幂等：非在途不重复取消
+    expect(reg.cancelBySession('s1')).toEqual([]);
+    // cancelled 恒不投递（followup 轮也拦下）+ 迟到回执不覆盖 cancelled
+    expect(reg.takeDeliverable('pm')).toEqual([]);
+    expect(reg.settle('t-s1a', 'completed', '迟到', 0)).toBeUndefined();
+    expect(reg.get('t-s1a')?.outcome).toBeUndefined();
+  });
+
+  it('listInFlight：只列 in_flight；可选按 session 过滤；快照仅含视图字段（内部态不外泄）', () => {
+    const { reg } = mkRegistry();
+    reg.register({ taskId: 't-1', pmAssignmentId: 'pm', subAssignmentId: 'sub1', sessionId: 's1', isFollowupRound: false, subStreamSessionId: 'sub-ssi-1', pmStreamSessionId: 'pm-ssi-1' });
+    reg.register({ taskId: 't-2', pmAssignmentId: 'pm', subAssignmentId: 'sub2', sessionId: 's2', isFollowupRound: false });
+    reg.settle('t-2', 'completed', 'done', 0);
+    reg.register({ taskId: 't-3', pmAssignmentId: 'pm', subAssignmentId: 'sub3', sessionId: 's2', isFollowupRound: false });
+    reg.cancel('t-3');
+
+    const all = reg.listInFlight();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toEqual({
+      taskId: 't-1',
+      round: 1,
+      sessionId: 's1',
+      pmAssignmentId: 'pm',
+      subAssignmentId: 'sub1',
+      subStreamSessionId: 'sub-ssi-1',
+      pmStreamSessionId: 'pm-ssi-1',
+      startedAt: expect.any(Number),
+    });
+
+    expect(reg.listInFlight('s1')).toHaveLength(1);
+    expect(reg.listInFlight('s2')).toEqual([]); // s2 仅剩 settled/cancelled
+    expect(reg.listInFlight('s-none')).toEqual([]);
+  });
+
+  it('findBySubStream：命中返回链句柄；未命中 undefined；链 settled 后仍可反查（调用方判状态）', () => {
+    const { reg } = mkRegistry();
+    reg.register({ taskId: 't-1', pmAssignmentId: 'pm', subAssignmentId: 'sub', sessionId: 's1', isFollowupRound: false, subStreamSessionId: 'sub-ssi-1' });
+    const hit = reg.findBySubStream('sub-ssi-1');
+    expect(hit?.taskId).toBe('t-1');
+    expect(hit?.sessionId).toBe('s1');
+    expect(reg.findBySubStream('sub-ssi-none')).toBeUndefined();
+
+    reg.settle('t-1', 'completed', 'done', 0);
+    expect(reg.findBySubStream('sub-ssi-1')?.status).toBe('done');
   });
 });
