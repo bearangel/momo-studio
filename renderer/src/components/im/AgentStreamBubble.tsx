@@ -14,6 +14,9 @@
 //   - 正文经 MarkdownBody 统一入口（SafeAnchor/CodeBlock/表格滚动容器一致）
 //   - segments 先经 groupToolSegments 分组（连续只读工具合并 context-group）
 //   - MessageFrame 补时间戳；终态显示消息级复制按钮（hover 气泡显形）
+// v2.1 D4 计数聚合（spec 2026-10-13 §8.2）：
+//   - 状态行计数族化：流式「处理中 · 已调用工具 X 次（含子链 Y）· Z 个子任务在途」，
+//     终态保留「工具 X 次（含子链 Y）」摘要（数据来自 stream-family，roll 不归零）
 import { useMemo } from 'react';
 import { Hourglass, CircleCheck, CircleX, CircleSlash, Loader2, PauseCircle } from 'lucide-react';
 import { cn } from '../../lib/cn';
@@ -34,6 +37,7 @@ import { BubbleToolbar } from './BubbleToolbar';
 import { BudgetRenewalCard } from './BudgetRenewalCard';
 import type { StreamSegment } from '../../stores/stream.store';
 import { groupToolSegments } from '../../lib/group-tool-segments';
+import { countFamilyToolCalls } from '../../lib/stream-family';
 
 interface Props {
   stream: StreamState;
@@ -134,13 +138,14 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
   const isStreaming = stream.status === 'streaming';
   const statusText = STATUS_TEXT[stream.status];
   const StatusIcon = STATUS_ICON[stream.status];
-  // 流式态进度线索：工具调用计数（长任务如 PPT 逐页生成时用户可感知推进，CFO 走查 D6）
-  const streamingLabel = stream.toolCalls.length > 0 ? `处理中 · 已调用工具 ${stream.toolCalls.length} 次` : '处理中';
 
   // 子 agent 流反查表：会话消息行的 streamSessionId → 消息 id（streams Map 的 key）。
   // 子 agent 消息行带 parentStreamSessionId，被 MessageList 过滤出顶层列表，
   // 但仍留在 messagesBySession——此处全量取用。
   const sessionMessages = useSessionStore((s) => s.messagesBySession.get(message.sessionId));
+  // 族计数数据源：streams 整表。Map 引用在 store set 时才换新——无事件批次时
+  // selector 返回同一引用，不触发多余渲染（沿用 store 换新 Map 的现状语义）
+  const rawStreams = useStreamStore((s) => s.streams);
   const streamIdToMessageId = useMemo(() => {
     const map = new Map<string, string>();
     for (const m of sessionMessages ?? []) {
@@ -149,12 +154,38 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
     return map;
   }, [sessionMessages]);
 
+  // spec §8 族计数：own 含 roll 族（roll 不归零），sub 为直接子链求和（裁剪行
+  // 如实降级 0）。streamSessionId 为空 → 无族概念，降级显示本行可见值
+  // （spec §8.2 降级条款：不伪造合计）
+  const familyCount = useMemo(
+    () =>
+      message.streamSessionId
+        ? countFamilyToolCalls(sessionMessages ?? [], rawStreams, message.streamSessionId)
+        : { own: stream.toolCalls.length, sub: 0 },
+    [sessionMessages, message.streamSessionId, rawStreams, stream.toolCalls.length],
+  );
+  const familyTotal = familyCount.own + familyCount.sub;
+
   const dispatchTotal = stream.dispatches.length;
   // aborted（用户停止收敛）与 completed/failed/timeout 同为终态——不再计入「等待完成」
   const dispatchCompleted = stream.dispatches.filter(
     (d) => d.status === 'completed' || d.status === 'failed' || d.status === 'timeout' || d.status === 'aborted',
   ).length;
-  const showProgress = dispatchTotal > 0 && dispatchCompleted < dispatchTotal;
+  // spec §8.1 在途子任务 Z：非终态派单数（复用 dispatchTotal/dispatchCompleted）
+  const inFlightSubs = dispatchTotal - dispatchCompleted;
+  const showProgress = inFlightSubs > 0;
+
+  // 流式态进度线索（spec §8.2，D6 计数的族化扩展）：计数含子链 + 在途数。
+  // sub=0 不拼「含子链」段（单 agent 无子链不加噪声，保留 D6 旧文案形态）；
+  // 零工具降级纯「处理中」
+  const countText =
+    familyCount.sub > 0
+      ? `已调用工具 ${familyCount.own} 次（含子链 ${familyCount.sub}）`
+      : `已调用工具 ${familyCount.own} 次`;
+  const streamingLabel =
+    familyTotal > 0
+      ? `处理中 · ${countText}` + (inFlightSubs > 0 ? `· ${inFlightSubs} 个子任务在途` : '')
+      : '处理中';
 
   // v2.1：渲染前分段分组（连续只读工具合并为 context-group / todowrite 去冗余）
   const renderSegments = useMemo(() => groupToolSegments(stream.segments), [stream.segments]);
@@ -254,6 +285,12 @@ export function AgentStreamBubble({ stream, message, senderName }: Props) {
             />
             {isStreaming ? streamingLabel : statusText}
           </span>
+          {/* spec §8.2 终态摘要：计数不随流式结束消失（roll/子链工作量留痕） */}
+          {!isStreaming && familyTotal > 0 && (
+            <span className="text-tertiary">
+              工具 {familyCount.own} 次{familyCount.sub > 0 ? `（含子链 ${familyCount.sub}）` : ''}
+            </span>
+          )}
           <BubbleToolbar
             message={message}
             isStreaming={isStreaming}

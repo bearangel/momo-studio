@@ -11,7 +11,7 @@
 //   - status 枚举改为 streaming/done/failed/aborted
 //   - dispatches 替代旧 dispatchChildren（AggregatedDispatch 结构）
 //   - subStream 查找留给 A9（本 task 不测嵌套子 agent 正文）
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { StreamState, StreamSegment } from '../../stores/stream.store';
 import type { ImMessage, JournalEntryView } from '../../ipc/types';
@@ -690,5 +690,107 @@ describe('AgentStreamBubble — 变更 chip 挂载门控（v2.5）', () => {
     await waitFor(() => expect(journalListMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/处变更/)).not.toBeInTheDocument();
     expect(screen.getByText(/已结束/)).toBeInTheDocument();
+  });
+});
+
+describe('AgentStreamBubble — 流族计数接线（spec §8.2 D4）', () => {
+  // 动态导入同既有 subStream 接线 describe：session.store 模块链引用 window.api，
+  // 需在本文件模块求值（window.api 桩第 35 行就位）之后加载
+  let useSessionStore: typeof import('../../stores/session.store').useSessionStore;
+
+  beforeEach(async () => {
+    useSessionStore = (await import('../../stores/session.store')).useSessionStore;
+    useStreamStore.setState({ streams: new Map() });
+    useSessionStore.setState({ messagesBySession: new Map() });
+  });
+
+  afterEach(() => {
+    useStreamStore.setState({ streams: new Map() });
+    useSessionStore.setState({ messagesBySession: new Map() });
+  });
+
+  /** 批量工具调用（只喂计数源 toolCalls，卡片渲染由显式 segments 控制） */
+  const mkTools = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      callId: `c-${i}`,
+      toolName: 'read_file',
+      args: {},
+      result: 'ok',
+      success: true,
+    }));
+
+  /**
+   * 种入真实 store（无新增 mock）：PM 流行（95 工具）+ 3 条直接子行（32/30/54，
+   * 其中 0 号终态），streams 按 messageId 键入——与生产数据面同构。
+   * 返回 { pmStream, pmMsg } 供 render。
+   */
+  function seedFamily(
+    pmStatus: StreamState['status'],
+    dispatchStatuses: Array<'completed' | 'executing'>,
+  ): { pmStream: StreamState; pmMsg: ImMessage } {
+    const pmMsg = makeMessage({ id: 'm-pm', streamSessionId: 'pm-1' });
+    const dispatches = dispatchStatuses.map((status, i) => ({
+      callId: `d-${i}`,
+      toolName: `dispatch:子agent${i}`,
+      subStreamSessionId: `sub-${i}`,
+      subAgentName: `子agent${i}`,
+      task: '',
+      status,
+    }));
+    const pmStream = makeStream({
+      messageId: 'm-pm',
+      status: pmStatus,
+      toolCalls: mkTools(95),
+      dispatches,
+      // 只渲染派单段：95 工具不铺卡片（计数断言不受渲染面干扰）
+      segments: dispatches.map((d) => ({ kind: 'dispatch' as const, ...d })),
+    });
+    const subToolCounts = [32, 30, 54];
+    const subMsgs = subToolCounts.map((_, i) =>
+      makeMessage({
+        id: `m-sub-${i}`,
+        sender: '@sub:server',
+        streamSessionId: `sub-${i}`,
+        parentStreamSessionId: 'pm-1',
+      }),
+    );
+    const subStreams = subToolCounts.map((n, i) =>
+      makeStream({
+        messageId: `m-sub-${i}`,
+        status: i === 0 ? 'done' : 'streaming',
+        toolCalls: mkTools(n),
+        segments: [{ kind: 'text' as const, text: `子链 ${i} 工作中` }],
+      }),
+    );
+    useSessionStore.setState({
+      messagesBySession: new Map([[pmMsg.sessionId, [pmMsg, ...subMsgs]]]),
+    });
+    useStreamStore.setState({
+      streams: new Map([
+        ['m-pm', pmStream],
+        ...subStreams.map((s) => [s.messageId, s] as const),
+      ]),
+    });
+    return { pmStream, pmMsg };
+  }
+
+  it('流式态计数含子链与在途数（spec §8.2）：own 95 + sub 116 + 2 在途', () => {
+    // 3 派单 1 终态（completed）→ 在途 = 3-1 = 2；子链 32+30+54 = 116
+    const { pmStream, pmMsg } = seedFamily('streaming', ['completed', 'executing', 'executing']);
+    render(<AgentStreamBubble stream={pmStream} message={pmMsg} />);
+    expect(
+      screen.getByText(/处理中 · 已调用工具 95 次（含子链 116）· 2 个子任务在途/),
+    ).toBeInTheDocument();
+  });
+
+  it('终态保留计数摘要：完成后仍显示 工具 N 次（含子链 M）', () => {
+    const { pmStream, pmMsg } = seedFamily('done', ['completed', 'completed', 'completed']);
+    render(<AgentStreamBubble stream={pmStream} message={pmMsg} />);
+    // 状态徽标照常（词汇专用：「已结束」），计数摘要留在状态行区域不随流式结束消失
+    expect(screen.getByText('已结束')).toBeInTheDocument();
+    expect(screen.getByText(/工具 \d+ 次（含子链 \d+）/)).toBeInTheDocument();
+    expect(screen.getByText('工具 95 次（含子链 116）')).toBeInTheDocument();
+    // 终态无「在途」段
+    expect(screen.queryByText(/个子任务在途/)).not.toBeInTheDocument();
   });
 });
