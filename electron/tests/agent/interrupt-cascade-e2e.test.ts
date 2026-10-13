@@ -31,12 +31,13 @@
 //   - H3 成立（生产 DB 实证 dispatch_bg:researcher + 场景 2 红点复现：PM abort 后
 //     bg 链零 abort_dispatch、零广播、registry 恒 in_flight——22 分钟病理的实验室版）
 //
-// 场景 2 红点用 it.fails 标注：红点锁的是病理机制（bg 链零级联）而非 B3 修复入口。
-// abortPmStream 注入只覆盖生产链最后一跳（runner → PM 子进程内 abortListener）；
-// B3 的修复全在主进程（agent:abortTurn → cancelByPmStream → routeAbortDispatch 广播），
-// 本 harness 的 PM 是进程内 runChatLoop、无 PM runner、从不调主进程 abort 入口 →
-// B3 正确落地后红点仍红、it.fails 静默通过。转正须按 findings §5.3 手工把
-// abort 入口改接主进程级联 API。
+// 场景 2 红点原为 it.fails（锁病理机制）。B3 落地后已按 findings §5.3 转正：
+// abort 入口改接主进程级联 API routerSvc.abortTurn(sessionId)（harness 的 PM 是
+// 进程内 runChatLoop、不经 routeUserChat——车道由测试手工 registerLane 补注册，
+// 与生产 routeUserChat 占道语义一致）+ 保留 abortPmStream 进程内注入停 PM 本流
+// （两注入并存即贴近生产全链：主进程级联断子链 + IPC 尾段停 PM 本流）。
+// 场景 2 机制用例同步改写：T0 时代的「零级联」断言翻转为「级联到达 + cancelled」
+//（历史病理机制对照表保留在 findings §4.3）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -72,9 +73,12 @@ import {
 import {
   dispatchRegistry,
   __resetDispatchRegistryForTest,
+  type DispatchChainHandle,
 } from '../../src/main/agent/dispatch-registry';
 import { RouterService } from '../../src/main/agent/router-service';
 import { AgentRunner } from '../../src/main/agent/agent-runner';
+import { registerLane, __clearLaneForTest } from '../../src/main/agent/session-lane';
+import { setAbortResolver } from '../../src/main/agent/stream-relay';
 import { WarmPool } from '../../src/main/agent/warm-pool';
 import { setBridgeRouter, handleChildMessage } from '../../src/main/agent/internal-event-bridge';
 import { INTERNAL_EVENT_MSG, type InternalEventMsg } from '../../src/main/agent/internal-event';
@@ -133,6 +137,8 @@ let sessChatId = '';
 const originalSend = process.send;
 /** 本测试构造的 RouterService（afterEach stop——清扫计时器防迟触发重开 DB） */
 let routerSvc: RouterService | null = null;
+/** beforeEach 构造的子 agent runner（B3 用例在其上种活跃流观察级联交付） */
+let subRunner: AgentRunner | null = null;
 
 /** seed agent 定义 + workspace 成员行（sender 反查键 agent-<inst>） */
 function seedAgentInstance(instanceId: string): void {
@@ -302,12 +308,13 @@ beforeEach(() => {
   // ── 真实路由链：bridge → RouterService → AgentRunner → mock 子进程壳 ──
   __resetBgStateForTest();
   __resetDispatchRegistryForTest();
+  __clearLaneForTest();
   __setMemoryProviderForTest(stubMemoryProvider);
   sentMsgs.length = 0;
   capturedConfigs.length = 0;
   subChildAborts.length = 0;
   vi.mocked(createLLMProvider).mockReset();
-  const subRunner = new AgentRunner({
+  subRunner = new AgentRunner({
     agentAssignmentId: 'inst-researcher',
     agentUserId: 'agent-inst-researcher',
     workspaceId: 'ws',
@@ -325,17 +332,23 @@ beforeEach(() => {
   }) as NonNullable<typeof process.send>;
 });
 
-afterEach(() => {
+afterEach(async () => {
   process.send = originalSend;
   setBridgeRouter(null);
   routerSvc?.stop();
   routerSvc = null;
+  subRunner = null;
+  setAbortResolver(null);
+  __clearLaneForTest();
   // 兜底清理在途 dispatch（失败注入幂等——已 settle 的走 miss 路径仅 warn）
   for (const cfg of capturedConfigs) {
     if (cfg.taskId) handleTaskReply({ task_id: cfg.taskId, status: 'failed', body: '测试清理' });
   }
   __resetBgStateForTest();
   __resetMemoryProviderForTest();
+  // 等清理注入驱动的仍在途 PM chat loop 落幕（用例中适数抛错时 loopDone 未 await）——
+  // 否则 straggler 在 closeDb 后懒重开 DB，下一用例 beforeEach 撞 UNIQUE workspaces.id
+  await new Promise((resolve) => setTimeout(resolve, 50));
   closeDb();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   delete process.env.AP_USER_DATA_DIR;
@@ -407,8 +420,8 @@ describe('T0 场景 1：同步 dispatch——中止 PM 后级联到达子 runner
 //（spring-mcp 病理实验室版：researcher 22 分钟无视中断）
 // ══════════════════════════════════════════════════════════════════════════
 
-describe('T0 场景 2：dispatch_bg——中止 PM 后子流无人中断（H3 裁决，spring-mcp 复现）', () => {
-  it('机制记录（绿）：bg 链在 PM 中止后零 abort_dispatch / 零广播 / registry 恒 in_flight——与同批同步链形成对照', async () => {
+describe('场景 2（H3 病理 · B3 已修复）：dispatch_bg 链——abortTurn 级联全覆盖', () => {
+  it('机制（B3 改写）：abortTurn 后 bg 与同步双链子流 abort 均到达 + 双链 cancelled（T0「零级联」病理已翻转）', async () => {
     // PM 首轮：先派 bg（即时返回句柄），再同步 dispatch（阻塞等待）——PM 停止时
     // 两条链同时在途，恰为 spring-mcp 会话形态（bg 链 + PM 在另一任务中被停）
     mockProviderMultiRound([
@@ -437,35 +450,29 @@ describe('T0 场景 2：dispatch_bg——中止 PM 后子流无人中断（H3 �
     if (typeof bgChain !== 'string' || typeof syncChain !== 'string') {
       throw new Error('TaskConfig 缺 taskId——派发链未闭合');
     }
+    const realPmSsi = pmStreamIdFromStartChunk();
 
-    // PM 在同步 dispatch 等待中被用户停止
-    abortPmStream(pmStreamIdFromStartChunk());
+    // 生产停止入口（findings §5.3）：主进程级联断链广播（车道手工补注册——
+    // 生产由 routeUserChat 占道）+ IPC 尾段停 PM 本流
+    registerLane(sessChatId, { taskId: null, streamSessionId: realPmSsi, assignmentId: 'inst-pm' });
+    routerSvc!.abortTurn(sessChatId);
+    abortPmStream(realPmSsi);
     await loopDone;
 
-    // 同步链：级联到达（场景 1 已详证，此处对照存在性）
+    // 同步链：级联到达（场景 1 详证的 dispatch-wait onAbort 链路 + cancelByPmStream 主进程级联）
     expect(subChildAborts.some((a) => a.streamSessionId === syncCfg.streamSessionId)).toBe(true);
 
-    // ── H3 裁决点：bg 链零级联（当前实现的机制事实——这就是 22 分钟病理）──
-    expect(internalEvents('io.momo-studio.abort_dispatch').some(
-      (e) => e.content.task_id === bgChain,
-    )).toBe(false);
-    // 等 500ms 确认非异步迟到（广播是同步链路，实际即时）
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(subChildAborts.some((a) => a.streamSessionId === bgCfg.streamSessionId)).toBe(false);
-    // 链注册表恒 in_flight（未 cancel——唯一取消入口是 PM 主动 dispatch_cancel，
-    // PM 进程已随中止退出，句柄随之蒸发——生产 DB 16:29:41 gather 报「句柄不存在」同源）
-    expect(dispatchRegistry.get(bgChain)?.status).toBe('in_flight');
+    // ── H3 修复裁决点：bg 链级联到达（T0 病理三特征——零 abort_dispatch /
+    //    零广播 / registry 恒 in_flight——已全部翻转）──
+    expect(subChildAborts.some((a) => a.streamSessionId === bgCfg.streamSessionId)).toBe(true);
+    expect(dispatchRegistry.get(bgChain)?.status).toBe('cancelled');
     expect(dispatchRegistry.get(syncChain)?.status).toBe('cancelled');
   }, 10_000);
 
-  // T0 红点（it.fails：当前实现下必然红——abortPmStream 注入只达 PM 子进程尾段，
-  // bg 链在此路径下无任何 abort 生产者）：
+  // B3 转正（原 T0 红点 it.fails，按 findings §5.3 摘除）：
   // spec §11.3-11——中止 PM 后本回合派生的全部在途链（含 bg）≤2s aborted。
-  // ⚠️ B3 转正操作（findings §5.3）：B3 在主进程落地 abortTurn 级联后，本用例
-  // 注入入口须改调 routerSvc.abortTurn(...)（或 cancelByPmStream + 逐链
-  // routeAbortDispatch + abortStreamBySessionId 等价序列）——级联经真实 subRunner
-  // 到达子壳后摘除 .fails，断言保持原样（bg 子流 abort ≤2s 交付 + registry cancelled）
-  it.fails('T0 红点：中止 PM 流后 dispatch_bg 子 agent 流应 ≤2s aborted（spec §11.3-11）', async () => {
+  // 级联经真实 subRunner（activeTasks 键命中）到达子壳；断言与红点时代原样。
+  it('B3 转正：abortTurn 中止 PM 流后 dispatch_bg 子 agent 流应 ≤2s aborted（spec §11.3-11）', async () => {
     mockProviderMultiRound([
       [
         {
@@ -487,8 +494,12 @@ describe('T0 场景 2：dispatch_bg——中止 PM 后子流无人中断（H3 �
     if (typeof bgCfg.taskId !== 'string' || typeof bgCfg.streamSessionId !== 'string') {
       throw new Error('TaskConfig 缺字段——派发链未闭合');
     }
+    const realPmSsi = pmStreamIdFromStartChunk();
 
-    abortPmStream(pmStreamIdFromStartChunk());
+    // 主进程级联（B3 abortTurn）+ IPC 尾段停 PM 本流（harness 无 PM runner）
+    registerLane(sessChatId, { taskId: null, streamSessionId: realPmSsi, assignmentId: 'inst-pm' });
+    routerSvc!.abortTurn(sessChatId);
+    abortPmStream(realPmSsi);
     await loopDone;
 
     // 子流 ≤2s 内被中止——观察点 = 子 runner 收到 abort 下发（activeTasks 键命中
@@ -498,5 +509,127 @@ describe('T0 场景 2：dispatch_bg——中止 PM 后子流无人中断（H3 �
       { timeout: 2000 },
     );
     expect(dispatchRegistry.get(bgCfg.taskId)?.status).toBe('cancelled');
+  }, 10_000);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// B3 三级中断级联单测（spec 2026-10-13 §7.3 / §7.5 / §7.6）：
+// abortTurn / stopAll / cancelChain——seed 车道 + 链注册表 + subRunner 活跃流，
+// 直接驱动主进程 API（IPC 接线是 B2 范畴，此处锁 RouterService 语义）
+// ══════════════════════════════════════════════════════════════════════════
+
+/** pendingDeliveries 私有态的类型安全观察口（无公共访问器——直测唯一途径） */
+function pendingDeliveriesView(svc: RouterService): Map<string, DispatchChainHandle[]> {
+  return (svc as unknown as { pendingDeliveries: Map<string, DispatchChainHandle[]> }).pendingDeliveries;
+}
+
+function seedChain(input: {
+  taskId: string;
+  subStreamSessionId?: string;
+  pmStreamSessionId?: string;
+  sessionId?: string;
+}): void {
+  dispatchRegistry.register({
+    taskId: input.taskId,
+    pmAssignmentId: 'inst-pm',
+    subAssignmentId: 'inst-researcher',
+    sessionId: input.sessionId ?? sessChatId,
+    ...(input.subStreamSessionId !== undefined ? { subStreamSessionId: input.subStreamSessionId } : {}),
+    ...(input.pmStreamSessionId !== undefined ? { pmStreamSessionId: input.pmStreamSessionId } : {}),
+    isFollowupRound: false,
+  });
+}
+
+/** 在 subRunner 上种一条活跃流（观察 broadcastAbortDispatch 的 abort 交付） */
+async function seedActiveStream(streamSessionId: string, executionSessionId = sessChatId): Promise<void> {
+  await subRunner!.executeTask({
+    taskId: `task-${streamSessionId}`,
+    executionSessionId,
+    body: `子任务 ${streamSessionId}`,
+    streamSessionId,
+  });
+}
+
+describe('B3 三级中断级联：abortTurn / stopAll / cancelChain', () => {
+  it('abortTurn：先 cancel 本回合链再 abort PM 流——零补投零新唤醒（spec §7.3 / §11.3-11）', async () => {
+    registerLane(sessChatId, { taskId: null, streamSessionId: 'ss-pm-turn', assignmentId: 'inst-pm' });
+    seedChain({ taskId: 't-a', subStreamSessionId: 'ss-sub-a', pmStreamSessionId: 'ss-pm-turn' });
+    seedChain({ taskId: 't-old', pmStreamSessionId: 'ss-pm-ancient' });
+    dispatchRegistry.settle('t-old', 'completed', '陈年回执');
+    await seedActiveStream('ss-sub-a');
+    await new Promise((resolve) => setTimeout(resolve, 3)); // 保证 t-old.completedAt < 本回合窗口锚点
+
+    // 执行序观察：PM 流 abort 解析器触发时捕捉链态——须已 cancelled（先断链再断流）
+    const chainStatusAtPmAbort: string[] = [];
+    setAbortResolver((streamSessionId) => {
+      if (streamSessionId === 'ss-pm-turn') {
+        chainStatusAtPmAbort.push(dispatchRegistry.get('t-a')?.status ?? 'missing');
+      }
+      return true;
+    });
+    const routeChatSpy = vi.spyOn(routerSvc!, 'routeUserChat');
+
+    const r = routerSvc!.abortTurn(sessChatId);
+    expect(r).toEqual({ stoppedStream: true });
+    expect(chainStatusAtPmAbort).toEqual(['cancelled']);
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-a')).toBe(true);
+    expect(dispatchRegistry.get('t-a')?.status).toBe('cancelled');
+
+    // PM forcedExit 空闲边沿：老链在补投窗口外不被唤醒 + cancelled 链迟到回执幂等忽略
+    routerSvc!.onPmIdle('inst-pm', true, Date.now());
+    expect(dispatchRegistry.settle('t-a', 'completed', '迟到回执')).toBeUndefined();
+    expect(dispatchRegistry.get('t-a')?.status).toBe('cancelled');
+    routerSvc!.tryDeliver('inst-pm');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(routeChatSpy).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it('abortTurn 车道空闲 → 幂等 no-op', () => {
+    expect(routerSvc!.abortTurn('sess-no-lane')).toEqual({ stoppedStream: false });
+    expect(subChildAborts.length).toBe(0);
+  });
+
+  it('stopAll：全部流 aborted + 全链 cancelled + pendingDeliveries 清空（spec §7.5）', async () => {
+    seedChain({ taskId: 't-s1', subStreamSessionId: 'ss-sub-s1', pmStreamSessionId: 'ss-pm-x' });
+    seedChain({ taskId: 't-s2', pmStreamSessionId: 'ss-pm-x' }); // 无 subStreamSessionId——只取消不广播
+    seedChain({ taskId: 't-q' });
+    const queued = dispatchRegistry.settle('t-q', 'completed', '排队回执');
+    pendingDeliveriesView(routerSvc!).set('inst-pm', [queued!]);
+    await seedActiveStream('ss-sub-s1');
+    await seedActiveStream('ss-sub-other', 'sess-other'); // 他会话活跃流——不误杀
+    const routeChatSpy = vi.spyOn(routerSvc!, 'routeUserChat');
+
+    const r = routerSvc!.stopAll(sessChatId);
+    expect(r).toEqual({ stoppedStreams: 1, cancelledChains: 2 });
+    expect(dispatchRegistry.get('t-s1')?.status).toBe('cancelled');
+    expect(dispatchRegistry.get('t-s2')?.status).toBe('cancelled');
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-s1')).toBe(true);
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-other')).toBe(false);
+
+    // 待投递队列已清空——下一 idle 边沿不再投递排队回执
+    expect(pendingDeliveriesView(routerSvc!).size).toBe(0);
+    routerSvc!.onPmIdle('inst-pm');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(routeChatSpy).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it('cancelChain：subStreamSessionId / taskId 双入口 → cancelled + 广播；查无 / 已终态 / 空参 → not_found（spec §7.6）', async () => {
+    seedChain({ taskId: 't-c1', subStreamSessionId: 'ss-sub-c1' });
+    seedChain({ taskId: 't-c2', subStreamSessionId: 'ss-sub-c2' });
+    seedChain({ taskId: 't-c3', subStreamSessionId: 'ss-sub-c3' });
+    dispatchRegistry.settle('t-c3', 'failed', '已终态');
+    await seedActiveStream('ss-sub-c1');
+
+    expect(routerSvc!.cancelChain({ subStreamSessionId: 'ss-sub-c1' })).toEqual({ status: 'cancelled' });
+    expect(dispatchRegistry.get('t-c1')?.status).toBe('cancelled');
+    expect(subChildAborts.some((a) => a.streamSessionId === 'ss-sub-c1')).toBe(true);
+
+    expect(routerSvc!.cancelChain({ taskId: 't-c2' })).toEqual({ status: 'cancelled' });
+    expect(dispatchRegistry.get('t-c2')?.status).toBe('cancelled');
+
+    expect(routerSvc!.cancelChain({ subStreamSessionId: 'ss-sub-c1' })).toEqual({ status: 'not_found' }); // 已终态（幂等）
+    expect(routerSvc!.cancelChain({ subStreamSessionId: 'ss-none' })).toEqual({ status: 'not_found' }); // 查无
+    expect(routerSvc!.cancelChain({ taskId: 't-c3' })).toEqual({ status: 'not_found' }); // 已终态
+    expect(routerSvc!.cancelChain({})).toEqual({ status: 'not_found' }); // 空参
   }, 10_000);
 });

@@ -28,7 +28,7 @@ import {
 } from './dispatch-registry';
 import { insertMessage, hasReceiptRow } from '../storage/messages/repo';
 import { getDb } from '../storage/db';
-import { writeStreamStartFailure, pushSessionMessage } from './stream-relay';
+import { writeStreamStartFailure, pushSessionMessage, abortStreamBySessionId } from './stream-relay';
 import type { AgentRunner, TaskConfig } from './agent-runner';
 import type { TaskDispatcher } from '../task/dispatcher';
 import { registerLane, getLane } from './session-lane';
@@ -709,6 +709,18 @@ export class RouterService {
       });
       return;
     }
+    this.broadcastAbortDispatch(taskId, subStreamSessionId);
+  }
+
+  // === 三级中断级联（spec 2026-10-13-dispatch-receipt §7.3 / §7.5 / §7.6）===
+
+  /**
+   * abort_dispatch 广播内核——事件路由（routeAbortDispatch）与三级中断级联
+   * （abortTurn / stopAll / cancelChain）的事件无关共用段：对全部 runner 广播
+   * runner.abortStream(subStreamSessionId)，各 runner 的 activeTasks 活跃表
+   * 自然过滤，只有持有该子流的 runner 真正下发 abort IPC。
+   */
+  private broadcastAbortDispatch(taskId: string, subStreamSessionId: string): void {
     for (const runner of this.opts.runners.values()) {
       runner.abortStream(subStreamSessionId);
     }
@@ -717,6 +729,57 @@ export class RouterService {
       subStreamSessionId,
       runnerCount: this.opts.runners.size,
     });
+  }
+
+  /**
+   * 回合级中断（spec §7.3，IPC agent:abortTurn）。
+   * 执行序关键——先断链再断流：链先转 cancelled，PM 流 abort 后的 forcedExit
+   * 补投与迟到 task_reply（settle 幂等忽略）双路全部落空，杜绝「停止触发新唤醒」。
+   */
+  abortTurn(sessionId: string): { stoppedStream: boolean } {
+    const lane = getLane(sessionId);
+    if (!lane) return { stoppedStream: false };
+    for (const taskId of dispatchRegistry.cancelByPmStream(lane.streamSessionId)) {
+      const h = dispatchRegistry.get(taskId);
+      if (h?.subStreamSessionId) this.broadcastAbortDispatch(taskId, h.subStreamSessionId);
+    }
+    const stopped = abortStreamBySessionId(lane.streamSessionId);
+    logger.info('abortTurn 完成', { sessionId, stoppedStream: stopped });
+    return { stoppedStream: stopped };
+  }
+
+  /** 会话级急停（spec §7.5，IPC session:stopAll）：全部流 + 全链 + 待投递队列 */
+  stopAll(sessionId: string): { stoppedStreams: number; cancelledChains: number } {
+    const cancelled = dispatchRegistry.cancelBySession(sessionId);
+    for (const taskId of cancelled) {
+      const h = dispatchRegistry.get(taskId);
+      if (h?.subStreamSessionId) this.broadcastAbortDispatch(taskId, h.subStreamSessionId);
+    }
+    let stoppedStreams = 0;
+    for (const runner of this.opts.runners.values()) {
+      if (runner.abortTasksBySession(sessionId)) stoppedStreams += 1;
+    }
+    this.pendingDeliveries.clear(); // 排队回执不再于下一 idle 边沿投递
+    logger.info('stopAll 完成', { sessionId, stoppedStreams, cancelledChains: cancelled.length });
+    return { stoppedStreams, cancelledChains: cancelled.length };
+  }
+
+  /**
+   * 链级取消（spec §7.6，IPC dispatch:cancelChain）——renderer 只持
+   * subStreamSessionId（chip 查找键），taskId 入口留给主进程内部调用。
+   * 查无 / 已终态 → not_found（幂等：取消一条非在途链没有可观察效果）。
+   */
+  cancelChain(arg: { taskId?: string; subStreamSessionId?: string }): { status: 'cancelled' | 'not_found' } {
+    const chain =
+      arg.taskId !== undefined
+        ? dispatchRegistry.get(arg.taskId)
+        : arg.subStreamSessionId !== undefined
+          ? dispatchRegistry.findBySubStream(arg.subStreamSessionId)
+          : undefined;
+    if (!chain || chain.status !== 'in_flight') return { status: 'not_found' };
+    dispatchRegistry.cancel(chain.taskId);
+    if (chain.subStreamSessionId) this.broadcastAbortDispatch(chain.taskId, chain.subStreamSessionId);
+    return { status: 'cancelled' };
   }
 
   // === v2.9 事件驱动 dispatch：链注册表联动 + 自动投递 ===
