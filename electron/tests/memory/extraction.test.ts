@@ -716,3 +716,30 @@ describe('runExtraction —— 解析容错续扫（M-1）', () => {
     expect(countMemoriesBySource('auto')).toBe(0); // 扫描无可提取候选（外层对象无 kind）
   });
 });
+
+// ─── A12：system 行不入记忆提取（spec §5.5）──────────────────────────────────
+
+describe('runExtraction —— system 行不入记忆提取（spec §5.5）', () => {
+  it('窗口内 sender=system 行：不进入提取 prompt 转录（提取入口分流跳过，共享映射不动）', async () => {
+    const sid = seedSession({ userMsgs: 2, agentMsgs: 1 });
+    // 系统管道噪声行（dispatch 回执等），时间戳置于窗口最新——旧实现下
+    // messageToContext 会把它映射成 assistant 行进入转录（红点）
+    const sysMsg = insertMessage({
+      sessionId: sid,
+      sender: 'system',
+      eventType: 'm.room.message',
+      body: '系统管道噪声甲乙丙丁戊',
+      workspaceId: WORKSPACE_ID,
+    });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(99_000, sysMsg.id);
+
+    chatMock.mockResolvedValueOnce(llmResp(JSON.stringify({ memories: [] })));
+    await runExtraction(sid);
+
+    expect(chatMock).toHaveBeenCalledTimes(1); // user 消息数 ≥2 不受 system 行影响，正常进入 LLM
+    const promptMessages = chatMock.mock.calls[0]?.[0] as LLMMessage[] | undefined;
+    const userPrompt = promptMessages?.find((m) => m.role === 'user')?.content ?? '';
+    expect(userPrompt).toContain('用户消息 2'); // 非 system 行正常在转录中（非空跑自检）
+    expect(userPrompt).not.toContain('系统管道噪声'); // system 行不入提取
+  });
+});

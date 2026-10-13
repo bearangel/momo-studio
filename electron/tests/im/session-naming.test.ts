@@ -425,4 +425,26 @@ describe('scheduleLlmTitle —— LLM 异步替换 + 竞态锁（spec §4.5）',
     await flushMicrotasks();
     expect(chatMock).not.toHaveBeenCalled();
   });
+
+  it('A12 回归锁：首条 owner 之前有 system 行 → 命名素材仍取 owner 行（find(sender===owner) 天然跳过 system）', async () => {
+    const session = seedAutoSessionWithDialogue(); // owner@1000 + reply@2000
+    // system 行插到首条 owner 之前：若实现改成取 messages[0] 当素材，此锁立即红
+    const sysMsg = insertMessage({
+      sessionId: session.id,
+      sender: 'system',
+      eventType: 'm.room.message',
+      body: '系统管道噪声——不应成为标题素材',
+    });
+    getDb().prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(500, sysMsg.id);
+
+    applyFirstMessageTitle(session.id, USER_BODY_LONG);
+    chatMock.mockResolvedValueOnce(llmResp('登录页实现'));
+    scheduleLlmTitle(session.id);
+
+    await vi.waitFor(() => expect(getSession(session.id)?.title).toBe('登录页实现'));
+
+    const promptMessages = chatMock.mock.calls[0]?.[0] as LLMMessage[] | undefined;
+    const userPrompt = promptMessages?.find((m) => m.role === 'user')?.content ?? '';
+    expect(userPrompt.startsWith('用户消息：帮我写一个登录页面')).toBe(true);
+  });
 });

@@ -25,4 +25,8 @@ describe('messageToContext（共享映射）', () => {
   it("sender='@bot:home'（v1 旧身份）→ role assistant", () => {
     expect(messageToContext({ sender: '@bot:home', body: 'hi', createdAt: 1 }).role).toBe('assistant');
   });
+
+  it("sender='system'（v2.1 系统管道行）→ 仍映射 assistant（A12 裁定：跳过在提取入口分流，共享映射不动）", () => {
+    expect(messageToContext({ sender: 'system', body: '管道噪声', createdAt: 1 }).role).toBe('assistant');
+  });
 });

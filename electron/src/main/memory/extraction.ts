@@ -529,6 +529,8 @@ export function upsertSessionSummary(sessionId: string, summary: string, covered
  * 实现：直接 SQL `ORDER BY created_at DESC LIMIT WINDOW_LIMIT` 取最新 N 条，
  * 再反转保 ASC 与 provider getConversationContext 同款形态。sender → role 映射
  * 复用 context-map.messageToContext 共享启发式（P3 M-7：与 sqlite-provider 单点同源）。
+ * system 行（spec §5.5 系统管道噪声）在行循环处跳过——A12 调用点分流：
+ * messageToContext 被 provider 上下文与 /compact 序列化共用，不能在共享映射里改。
  */
 async function fetchLatestWindow(sessionId: string): Promise<ConversationContext> {
   const rows = getDb()
@@ -537,6 +539,9 @@ async function fetchLatestWindow(sessionId: string): Promise<ConversationContext
        ORDER BY created_at DESC, id DESC LIMIT ?`,
     )
     .all(sessionId, WINDOW_LIMIT) as Array<{ sender: string; body: string; createdAt: number }>;
-  const messages = rows.reverse().map(messageToContext);
+  const messages = rows
+    .reverse()
+    .filter((r) => r.sender !== 'system')
+    .map(messageToContext);
   return { messages };
 }

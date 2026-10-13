@@ -214,6 +214,18 @@ describe('read_session', () => {
     expect(out2).toContain('completed');
   });
 
+  it("sender='system' 行渲染名『系统』（A12：先于 owner/agent 判定，不冒充 agent 身份）", async () => {
+    const wsA = seedWorkspace();
+    const s = insertSession({ workspaceId: wsA, title: '系统行会话' });
+    insertMessage({ sessionId: s.id, sender: 'system', eventType: 'm.room.message', body: '已派发回执：任务 T-1 完成' });
+    insertMessage({ sessionId: s.id, sender: 'coder-1', eventType: 'm.room.message', body: '收到回执' });
+
+    const out = await new SessionTools().execute('read_session', { sessionId: s.id }, mkCtx(wsA, 'room-x'));
+
+    expect(out).toContain('系统: 已派发回执');
+    expect(out).toContain('Coder: 收到回执'); // agent 行不受 system 判定影响
+  });
+
   it('空会话 → 元信息头 + 「会话无消息」', async () => {
     const wsA = seedWorkspace();
     const s = insertSession({ workspaceId: wsA, title: '空的' });

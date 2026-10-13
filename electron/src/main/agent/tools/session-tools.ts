@@ -157,7 +157,9 @@ async function executeReadSession(args: Record<string, unknown>, ctx: ToolContex
   const eventsByMsg = listEventsForMessages(messages.map((m) => m.id));
   const lines: string[] = [header];
   for (const m of messages) {
-    const name = m.sender === 'owner' ? '用户' : (byUserId.get(m.sender) ?? m.sender);
+    // system 行最先判定（A12）：系统管道行展示名『系统』，不得落 agent 名映射或原样 id
+    const name =
+      m.sender === 'system' ? '系统' : m.sender === 'owner' ? '用户' : (byUserId.get(m.sender) ?? m.sender);
     lines.push(`[${formatTs(m.createdAt)}] ${name}: ${m.body}`);
     const summary = renderToolSummaryLines(eventsByMsg.get(m.id) ?? []);
     lines.push(...summary);
