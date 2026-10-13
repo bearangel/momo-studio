@@ -43,6 +43,7 @@ import {
   rebuildSubConversation,
 } from '../../src/main/agent/sub-history-reconstructor';
 import { INTERRUPTED_TOOL_RESULT } from '../../src/main/agent/turn-reconstructor';
+import { appendFollowupQuestionRow } from '../../src/main/agent/chain-writer';
 
 // === DB 测试夹具（global-defaults 模式） ===
 
@@ -312,6 +313,32 @@ describe('sub-history-reconstructor：链重建场景矩阵', () => {
     // 两行是同一条流的延续：合并为单条完整 assistant 消息，不拆成两条
     expect(sub.messages).toEqual([{ role: 'assistant', content: 'Hello World' }]);
     expect(sub.rounds).toBe(0);
+    expect(sub.degraded).toBe(false);
+  });
+
+  it('8. system followup 行（chain-writer 生产写入链）→ 重建为 user 轮（A5 映射锁）', () => {
+    // 追问行经真实生产写入链 appendFollowupQuestionRow 落库（sender='system' +
+    // parent_stream_session_id + taskId 双键），锁「system followup → user 轮」
+    // 与 sender→role 单点映射（spec 2026-10-13 §5.4）的接线不回退。
+    const taskId = 'T-chain-system-followup';
+    startStream('ss-sub-sys-r1');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-sub-sys-r1', delta: '首轮结论' });
+    __flushEventBufferForTest();
+    tagStreamRow('ss-sub-sys-r1', taskId);
+    appendFollowupQuestionRow(taskId, EXEC_SESSION, 'ss-pm-base', '把结果按表格展开');
+    startStream('ss-sub-sys-r2');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-sub-sys-r2', delta: '表格如下' });
+    __flushEventBufferForTest();
+    tagStreamRow('ss-sub-sys-r2', taskId);
+
+    const sub = rebuildSubConversation(taskId, EXEC_SESSION);
+
+    expect(sub.messages).toEqual([
+      { role: 'assistant', content: '首轮结论' },
+      { role: 'user', content: '把结果按表格展开' },
+      { role: 'assistant', content: '表格如下' },
+    ]);
+    expect(sub.rounds).toBe(1);
     expect(sub.degraded).toBe(false);
   });
 });

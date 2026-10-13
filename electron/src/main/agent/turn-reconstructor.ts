@@ -44,6 +44,7 @@ import {
 } from '../storage/messages/repo';
 import { TOOL_RESULT_MAX_LEN, TRUNCATED_MARKER } from '../compaction/serialize';
 import { listEventsByMessage, type MessageEventRow } from '../storage/messages/events-repo';
+import { mapsToUserRole } from './sender-role';
 import type { MessageContext } from '../../../../renderer/src/ipc/types';
 
 /** 孤儿 tool_call（中断时未回 result）的合成 tool result 文案 */
@@ -551,7 +552,7 @@ const SESSION_ROW_FETCH_MARGIN = 200;
 /** 默认窗口单位数 */
 const DEFAULT_LIMIT_TURNS = 20;
 
-/** 回合单位：owner 消息 | agent 流族（base + #roll，#seg 排除） */
+/** 回合单位：user 轮消息行（owner / system 等，kind 名沿用 owner）| agent 流族（base + #roll，#seg 排除） */
 type SessionUnit =
   | { kind: 'owner'; row: MessageRow }
   | { kind: 'family'; baseSsi: string; startTs: number; endTs: number; messages: LLMMessage[] };
@@ -594,11 +595,11 @@ export function rebuildSessionContext(
     const seenFamilies = new Set<string>();
     for (const row of rows) {
       if (row.segmentOf !== null) continue; // #seg 快照行：事件在父行，快照无增量信息
-      const isOwnerRow = row.sender === 'owner';
+      const mapsToUser = mapsToUserRole(row.sender); // spec §5.4：owner/system/remote → user 轮
       // 子 agent 流行跳过（父流 dispatch 工具结果已携带其回复）；
-      // owner 行带 parent（dispatch_followup 追问行）保留为 user 单位
-      if (row.parentStreamSessionId !== null && !isOwnerRow) continue;
-      if (isOwnerRow && !row.streamSessionId) {
+      // user 轮行（owner 手输 / system 追问行）带 parent（dispatch_followup）保留为 user 单位
+      if (row.parentStreamSessionId !== null && !mapsToUser) continue;
+      if (mapsToUser && !row.streamSessionId) {
         units.push({ kind: 'owner', row });
         continue;
       }

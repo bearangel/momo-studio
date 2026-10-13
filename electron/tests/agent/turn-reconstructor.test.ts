@@ -627,6 +627,41 @@ describe('turn-reconstructor：九场景矩阵', async () => {
     expect(turnSupplement!.content.endsWith('补充说明 Z')).toBe(true);
     expect(turn.steers).toEqual([]);
   });
+
+  // === A5（spec 2026-10-13 §5.4）：system 行经 sender→role 单点映射入 user 轮 ===
+
+  it('17b. system 行（dispatch followup 追问行生产形态）→ 会话重建为 user 轮且正文原样', async () => {
+    // 生产形态照抄 chain-writer.appendFollowupQuestionRow 的 insertMessage 调用：
+    // sender='system' + parent_stream_session_id（PM 流 id）+ 自身无 streamSessionId。
+    insertOwnerMessage(SESSION_ID, '派发子任务');
+    // owner 行必须严格早于流行毫秒（同毫秒会落入族时间窗被 steer 去重剔除，
+    // 同场景 1 的 waitMsPast 消竞态手法）
+    waitMsPast(Date.now());
+    startStream('ss-a5-agent');
+    __routeChunkToBufferForTest({ type: 'text', streamSessionId: 'ss-a5-agent', delta: '子任务完成' });
+    __flushEventBufferForTest();
+    // system 行必须严格晚于族末事件毫秒（同毫秒会落入族时间窗被 steer 去重剔除，
+    // 同场景 1 的 waitMsPast 消竞态手法）
+    waitMsPast(getMessageByStreamSessionId('ss-a5-agent')!.createdAt);
+    insertMessage({
+      sessionId: SESSION_ID,
+      sender: 'system',
+      eventType: 'm.room.message',
+      body: '【dispatch 回执】追问正文原样',
+      taskId: 'T-a5',
+      parentStreamSessionId: 'ss-pm-base',
+    });
+
+    const sess = rebuildSessionContext(SESSION_ID);
+
+    // 修复前（owner-only 判定）：system 行在「parent 非空且非 owner」分支被跳过，
+    // 重建序列缺失该 user 轮 → 红；修复后经 mapsToUserRole 映射为 user 轮 → 绿。
+    expect(sess.messages).toEqual([
+      { role: 'user', content: '派发子任务' },
+      { role: 'assistant', content: '子任务完成' },
+      { role: 'user', content: '【dispatch 回执】追问正文原样' },
+    ]);
+  });
 });
 
 // === I1 回归锁（终审修复）：resume 主消息 context 重放——与 steer 语义对称 ===
