@@ -3,7 +3,7 @@
 // AgentStreamBubble 渲染行为测试（v2.0 A 子系统重写后）：
 //   - 各状态（streaming/done/failed/aborted）的状态文案
 //   - thinking / toolCalls / dispatches / text 渲染分支
-//   - streaming 时显示停止按钮且点击触发 ipc.agent.abortStream(message.sessionId)
+//   - streaming 时显示停止按钮且点击触发 ipc.agent.abortTurn(message.sessionId)（回合级级联）
 //
 // v2.0 A 子系统变化：
 //   - StreamState extends AggregatedStream（按字段渲染，不再按 events 时间线）
@@ -18,12 +18,13 @@ import type { ImMessage, JournalEntryView } from '../../ipc/types';
 import { useStreamStore } from '../../stores/stream.store';
 import { AgentStreamBubble } from './AgentStreamBubble';
 
+const abortTurnMock = vi.fn().mockResolvedValue({ stoppedStream: true });
 const abortStreamMock = vi.fn().mockResolvedValue(undefined);
 const journalListMock = vi.fn().mockResolvedValue([]);
 
 // 桩 window.api（保留 jsdom window；journal.list 供 v2.5 ChangesChip 懒查，默认空）
 const mockApi = {
-  agent: { abortStream: abortStreamMock },
+  agent: { abortTurn: abortTurnMock, abortStream: abortStreamMock },
   journal: {
     list: journalListMock,
     revert: vi.fn(),
@@ -87,6 +88,7 @@ function makeMessage(overrides: Partial<ImMessage> = {}): ImMessage {
 
 describe('AgentStreamBubble', () => {
   beforeEach(() => {
+    abortTurnMock.mockClear();
     abortStreamMock.mockClear();
     useStreamStore.setState({ streams: new Map() });
   });
@@ -213,7 +215,7 @@ describe('AgentStreamBubble', () => {
     expect(screen.getByText('read_file')).toBeInTheDocument();
   });
 
-  it('点击停止按钮调用 ipc.agent.abortStream(message.streamSessionId)', () => {
+  it('点击停止按钮调用 ipc.agent.abortTurn(message.sessionId)（回合级级联）', () => {
     render(
       <AgentStreamBubble
         stream={makeStream()}
@@ -221,7 +223,10 @@ describe('AgentStreamBubble', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /停止/ }));
-    expect(abortStreamMock).toHaveBeenCalledWith('ss-stop-1');
+    // sessionId='!room:server' ≠ streamSessionId='ss-stop-1'——锁死回合级参数语义
+    expect(abortTurnMock).toHaveBeenCalledTimes(1);
+    expect(abortTurnMock).toHaveBeenCalledWith('!room:server');
+    expect(abortStreamMock).not.toHaveBeenCalled();
   });
 
   it('streaming 时渲染流式光标', () => {
