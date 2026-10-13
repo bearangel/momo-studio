@@ -31,8 +31,12 @@
 //   - H3 成立（生产 DB 实证 dispatch_bg:researcher + 场景 2 红点复现：PM abort 后
 //     bg 链零 abort_dispatch、零广播、registry 恒 in_flight——22 分钟病理的实验室版）
 //
-// 场景 2 红点用 it.fails 标注：B3 修复分支（cancelByPmStream + abortTurn 级联）落地后
-// 本用例转绿 → it.fails 报「expected to fail but passed」→ 届时改回 it 即转正回归锁。
+// 场景 2 红点用 it.fails 标注：红点锁的是病理机制（bg 链零级联）而非 B3 修复入口。
+// abortPmStream 注入只覆盖生产链最后一跳（runner → PM 子进程内 abortListener）；
+// B3 的修复全在主进程（agent:abortTurn → cancelByPmStream → routeAbortDispatch 广播），
+// 本 harness 的 PM 是进程内 runChatLoop、无 PM runner、从不调主进程 abort 入口 →
+// B3 正确落地后红点仍红、it.fails 静默通过。转正须按 findings §5.3 手工把
+// abort 入口改接主进程级联 API。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -454,9 +458,13 @@ describe('T0 场景 2：dispatch_bg——中止 PM 后子流无人中断（H3 �
     expect(dispatchRegistry.get(syncChain)?.status).toBe('cancelled');
   }, 10_000);
 
-  // T0 红点（it.fails：当前实现下必然红——B3 修复分支落地后转绿，届时报
-  // 「expected to fail but passed」，改回 it 即转正回归锁）：
-  // spec §11.3-11——中止 PM 后本回合派生的全部在途链（含 bg）≤2s aborted
+  // T0 红点（it.fails：当前实现下必然红——abortPmStream 注入只达 PM 子进程尾段，
+  // bg 链在此路径下无任何 abort 生产者）：
+  // spec §11.3-11——中止 PM 后本回合派生的全部在途链（含 bg）≤2s aborted。
+  // ⚠️ B3 转正操作（findings §5.3）：B3 在主进程落地 abortTurn 级联后，本用例
+  // 注入入口须改调 routerSvc.abortTurn(...)（或 cancelByPmStream + 逐链
+  // routeAbortDispatch + abortStreamBySessionId 等价序列）——级联经真实 subRunner
+  // 到达子壳后摘除 .fails，断言保持原样（bg 子流 abort ≤2s 交付 + registry cancelled）
   it.fails('T0 红点：中止 PM 流后 dispatch_bg 子 agent 流应 ≤2s aborted（spec §11.3-11）', async () => {
     mockProviderMultiRound([
       [
