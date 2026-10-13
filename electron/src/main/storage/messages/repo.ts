@@ -184,6 +184,11 @@ export function getMessageByStreamSessionId(streamSessionId: string): MessageRow
  * 取流会话的「当前行」——base 精确命中或 `#roll{n}` 后缀命中中 created_at
  * 最新的一行（排除 `#seg` 分段快照行与 dispatch 子流行）。
  *
+ * A4（spec §5.5/§5.6）加固：WHERE 显式限定 `AND sender LIKE 'agent-%'`——
+ * dispatch 回执行（sender='system'）可能与 agent 流行同 ssi 共存，若仅靠
+ * ORDER BY created_at DESC, rowid DESC，「当前行」会被更晚落库的回执行抢占。
+ * 两分支（base 精确命中 / LIKE 前缀命中）同受该过滤约束，消除顺序依赖。
+ *
  * v2.6.0 断点续跑三处共用「流族 = base + #roll，当前行 = 最新一行」语义，
  * 单点收口防契约漂移：
  *   - task/resume.ts flipMessageBackToStreaming——恢复时把当前行翻回 streaming
@@ -200,6 +205,7 @@ export function getLatestMessageByStreamSessionId(streamSessionId: string): Mess
     .prepare(
       `SELECT * FROM messages
        WHERE (stream_session_id = ? OR stream_session_id LIKE ? || '#%')
+         AND sender LIKE 'agent-%'
          AND segment_of IS NULL
          AND parent_stream_session_id IS NULL
        ORDER BY created_at DESC, rowid DESC

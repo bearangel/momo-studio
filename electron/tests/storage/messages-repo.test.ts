@@ -10,6 +10,7 @@ import {
   updateMessageStatus,
   getMessage,
   getMessageByStreamSessionId,
+  getLatestMessageByStreamSessionId,
   listMessagesBySession,
   listRecentMessagesBySession,
   listOlderMessages,
@@ -319,5 +320,33 @@ describe('countMessagesBySession / getFirstUserMessage（跨会话引用）', ()
     const s2 = seedWsAndSession('t2');
     insertMessage({ sessionId: s2.sessionId, sender: 'coder-1', eventType: 'm.room.message', body: '只有 agent' });
     expect(getFirstUserMessage(s2.sessionId)).toBeNull();
+  });
+});
+
+// === A4（spec §5.5/§5.6）：流「当前行」解析恒返 agent 行 ===
+// 根因：getLatestMessageByStreamSessionId 靠 ORDER BY created_at DESC, rowid DESC，
+// 在「system dispatch 回执行 + agent 流行」双行同 ssi 时只是碰巧返回 agent 行；
+// 加固为 WHERE 显式限定 AND sender LIKE 'agent-%'，消除顺序依赖。
+// 时序用 setCreatedAt 钉死（复现真实险情：回执行 created_at 晚于流行）——
+// 不钉死则 agent 行因插入顺序在后碰巧胜出，测试加固前不红。
+describe('getLatestMessageByStreamSessionId（A4 双行同 ssi 恒返 agent 行）', () => {
+  it('同 ssi 双行（system 回执行 + agent 流行）恒返 agent 行（spec §5.6 契约）', () => {
+    const agent = insertMessage({ sessionId: 's-x', sender: 'agent-pm-1', eventType: 'm.room.message', body: '', taskId: 't-9', streamSessionId: 'ssi-dual-1' });
+    const receipt = insertMessage({ sessionId: 's-x', sender: 'system', eventType: 'm.room.message', body: '【dispatch 回执自动送达】…', taskId: 't-9', streamSessionId: 'ssi-dual-1' });
+    // 回执行更新（真实场景：派发回执晚于流行落库）→ 顺序依赖下 system 抢占「当前行」
+    setCreatedAt(agent.id, 1000);
+    setCreatedAt(receipt.id, 2000);
+    const row = getLatestMessageByStreamSessionId('ssi-dual-1');
+    expect(row?.sender).toBe('agent-pm-1');
+  });
+
+  it('#roll 后缀行（LIKE 分支）双行同 ssi 同样恒返 agent 行', () => {
+    const agent = insertMessage({ sessionId: 's-x', sender: 'agent-pm-1', eventType: 'm.room.message', body: '', streamSessionId: 'ssi-dual-2#roll2' });
+    const receipt = insertMessage({ sessionId: 's-x', sender: 'system', eventType: 'm.room.message', body: '【dispatch 回执自动送达】…', streamSessionId: 'ssi-dual-2#roll2' });
+    setCreatedAt(agent.id, 1000);
+    setCreatedAt(receipt.id, 2000);
+    // 按 base ssi 查询命中 #roll 后缀行（LIKE 分支）
+    const row = getLatestMessageByStreamSessionId('ssi-dual-2');
+    expect(row?.sender).toBe('agent-pm-1');
   });
 });
