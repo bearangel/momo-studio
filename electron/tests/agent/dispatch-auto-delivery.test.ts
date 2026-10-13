@@ -35,6 +35,7 @@ vi.mock('electron', () => ({
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession } from '../../src/main/storage/sessions/repo';
 import { listMessagesBySession, insertMessage, type MessageRow } from '../../src/main/storage/messages/repo';
+import { appendFollowupQuestionRow } from '../../src/main/agent/chain-writer';
 import { __setElectronApisForTest } from '../../src/main/electron-access';
 import { RouterService } from '../../src/main/agent/router-service';
 import { dispatchRegistry, __resetDispatchRegistryForTest } from '../../src/main/agent/dispatch-registry';
@@ -381,6 +382,48 @@ describe('A9 投递前查重兜底', () => {
     // §6.4 反向锁：查重跳过也不推送（预置行为测试直插 DB，不经投递路径——
     // 推送账本里出现该 taskId 行 = 守卫失效或推送越界）
     expect(sentSessionMessages().filter((m) => m.taskId === 'T-dup-rct')).toHaveLength(0);
+  });
+
+  it('N-1 回归锁：同链已有 followup 追问行（生产写入链落库）→ 投递放行（落行 + 唤醒照常）', async () => {
+    // 终审 N-1：追问行（appendFollowupQuestionRow）与回执行同为 sender='system' +
+    // taskId（仅多 parent_stream_session_id 非空），且时序上恒先于 followup 第二轮
+    // 投递落库——若 hasReceiptRow 查重只按 system+taskId 无 parent 特征，追问行
+    // 会被误判为已投递回执 → followup 补投（PM 中断/渐进超时/forcedExit）整条被
+    // 吞，结果永不送达且零提示，与渐进超时文案「结果会在完成后作为新输入自动
+    // 送达，不会丢失」直接矛盾。本用例经生产写入链（真实 chain-writer）预置
+    // 追问行，锁死查重必须区分两行形态。
+    appendFollowupQuestionRow('T-fu-q', sessChatId, 'ss-pm-cur', '追问正文');
+    dispatchRegistry.register({
+      taskId: 'T-fu-q',
+      pmAssignmentId: 'inst-pm',
+      subAssignmentId: 'inst-sub',
+      sessionId: sessChatId,
+      isFollowupRound: true, // followup 恒投递——放行是唯一正确结局
+    });
+    const { runner, spies } = mkRunner(false);
+    const svc = new RouterService({ runners: new Map([['inst-pm', runner]]) });
+
+    await svc.routeEvent(
+      mkEvent('io.momo-studio.task_reply', {
+        task_id: 'T-fu-q', status: 'completed', body: '追问的答复正文', reply_to: 'inst-pm',
+      }, sessChatId),
+      'owner', null, 'inst-pm',
+    );
+
+    // 投递放行：唤醒照常发生（PM 收到自动送达输入）
+    await vi.waitFor(() => { expect(spies.executeTask).toHaveBeenCalledTimes(1); });
+    const task = spies.executeTask.mock.calls[0]![0] as { body: string };
+    expect(task.body).toContain('【dispatch 回执自动送达】');
+    expect(task.body).toContain('追问的答复正文');
+
+    // 落行照常：同 taskId 现有 2 行（预置追问行 + 新回执行），互不挤占
+    const rows = listMessagesBySession(sessChatId).filter((r) => r.taskId === 'T-fu-q');
+    expect(rows).toHaveLength(2);
+    const receipt = rows.find((r) => r.body.includes('【dispatch 回执自动送达】'));
+    expect(receipt).toBeDefined();
+    expect(receipt?.body).toContain('追问的答复正文');
+    // §6.4 推送回归锁：回执行随落库实时推送 renderer
+    expect(sentSessionMessages().some((m) => m.id === receipt?.id)).toBe(true);
   });
 });
 

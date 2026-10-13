@@ -232,13 +232,21 @@ export function listMessagesByStreamSessionId(streamSessionId: string): MessageR
   return rows.map(rowToCamel);
 }
 
-/** 是否已存在该链回执行（投递前查重兜底，spec §6.3）——system 行 + 同 taskId */
+/**
+ * 是否已存在该链回执行（投递前查重兜底，spec §6.3）——system 行 + 同 taskId。
+ * 回执行无 parent（deliverChainResult 落库不带 parentStreamSessionId）；
+ * followup 追问行（appendFollowupQuestionRow）同为 system + taskId 但
+ * parent_stream_session_id 非空，且时序上恒先于 followup 补投落库——必须用
+ * parent IS NULL 排除，否则追问行误命中查重，followup 补投整条被吞
+ * （结果永不送达且零提示，终审 N-1）。
+ */
 export function hasReceiptRow(sessionId: string, taskId: string): boolean {
   const db = getDb();
   const row = db
     .prepare(
       `SELECT 1 FROM messages
        WHERE session_id = ? AND task_id = ? AND sender = 'system' AND segment_of IS NULL
+         AND parent_stream_session_id IS NULL
        LIMIT 1`,
     )
     .get(sessionId, taskId);

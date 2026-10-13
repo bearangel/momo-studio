@@ -173,7 +173,15 @@ function seedFirstRoundWithToolPair(taskId: string): void {
   __flushEventBufferForTest();
 }
 
-/** 该链已落库的 followup 追问行（chain-writer 落 system 行——spec §5.2） */
+/**
+ * 该链已落库的 followup 追问行（chain-writer 落 system 行——spec §5.2）。
+ * 特征依赖（终审 N-1 连带审视）：仅按 system+taskId 过滤、无 parent 特征——
+ * 本文件 DB 中 system+taskId 行恒为追问行（parent 非空）成立，因为回执行
+ * （parent NULL）唯一生产者是 RouterService.deliverChainResult，而本文件的
+ * RouterService 仅用于 dispatch 事件路由捕获（routeDispatchCapture），无
+ * task_reply 终态投递路径。若未来在本文件引入投递路径，须加
+ * parentStreamSessionId 非空过滤，否则回执行会混入计数。
+ */
 function followupRows(taskId: string): Array<{ body: string; parentStreamSessionId: string | null }> {
   return listMessagesBySession(sessChatId)
     .filter((r) => r.taskId === taskId && r.sender === 'system')

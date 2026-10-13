@@ -64,7 +64,7 @@ vi.mock('electron', () => ({
 
 import { runMigrations, closeDb, getDb } from '../../src/main/storage/db';
 import { insertSession, addSessionMember } from '../../src/main/storage/sessions/repo';
-import { hasReceiptRow } from '../../src/main/storage/messages/repo';
+import { hasReceiptRow, listMessagesBySession } from '../../src/main/storage/messages/repo';
 import {
   executeDispatch,
   executeFollowup,
@@ -345,29 +345,47 @@ describe('followup 端到端（dispatch 派发 → 回复落库 → followup 续
     seedSubRound(CHAIN, 'ss-r2', 'ss-pm-r2', '二轮结论');
     settleBoth(CHAIN, '二轮结论', 2);
 
-    // ── 再 followup：重建器读到两轮完整链（assistant → user → assistant） ──
+    // ── N-1 修复后语义：二轮是 followup 轮——executeFollowup 异步不注册
+    //    pendingReplies、无 ack 消费路径（spec §6.1 ack 仅同步消费 / gather
+    //    收割）→ settle 即恒投递（v2.9 语义），回执行落库进链历史。投递在
+    //    异步 tryDeliver 循环——三轮 followup 前先等回执行可见，否则重建
+    //    前缀存在缺回执行 user 轮的竞态 ──
+    await vi.waitFor(() => {
+      const receipts = listMessagesBySession(sessChatId).filter(
+        (r) => r.taskId === CHAIN && r.sender === 'system' && r.parentStreamSessionId === null,
+      );
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]?.body).toContain('二轮结论');
+    });
+
+    // ── 再 followup：重建器读到两轮完整链（assistant → user → assistant）+
+    //    二轮回执行（sender=system 映射 user 轮——deliverChainResult 设计：
+    //    回执行进链历史，后续 followup 重建天然聚合本轮结果） ──
     const ack3 = executeFollowup(CHAIN, '再问一句', cfg, sessChatId, 'ss-pm-r3', 'ss-r3');
     expect(ack3).toContain('追问已送达');
     await waitForCapture(3);
     const cfg3 = capturedConfigs[2]!;
     expect(cfg3.taskId).toBe(CHAIN);
     expect(cfg3.body).toBe('再问一句');
-    // A7 后语义（spec 2026-10-13 §6.1）：本场景两轮均被 PM 同步内联消费——
-    // 首轮 executeDispatch resolve、二轮 followup pending resolve，各自经真
-    // task_reply_ack 路径 markConsumed（delivered=true）→ 内联消费的链永不
-    // 自动送达：三轮重建前缀只有真实对话行（assistant → user → assistant），
-    // 零回执行注入（旧「followup 轮恒投递 + 复用前补投」语义随 A7 收紧废弃）
+    // 消费/投递分水岭（A7 + N-1 修复后）：首轮同步内联消费——executeDispatch
+    // resolve 经真 task_reply_ack 路径 markConsumed（delivered=true）→ 首轮
+    // 零回执行；二轮 followup 轮无 ack 路径 → settle 恒投递 → 恰一条回执行。
+    // （旧期望「零回执行注入」绿在 N-1 bug 上：hasReceiptRow 误命中追问行，
+    // 二轮投递被整条吞掉——结果永不送达，与渐进超时文案承诺直接矛盾）
     expect(cfg3.historyPrefix).toEqual([
       { role: 'assistant', content: '首轮结论' },
       { role: 'user', content: '把结论展开成表格' },
       { role: 'assistant', content: '二轮结论' },
+      // 回执行作为第 4 轮 user 输入（含结果全文 + followup 指引——模板含链
+      // UUID，stringContaining 锁形态不锁随机值）
+      { role: 'user', content: expect.stringContaining('【dispatch 回执自动送达】') },
     ]);
-    // 链历史零回执行（上文 toEqual 已锁形状；此处显式锁「无 system 注入行」，
-    // 与场景 4 的「后台无消费链恰一条」互为镜像——消费/无消费的分水岭）
+    // 链历史恰一条回执行且承载结果正文（上文 toEqual 已锁形状；此处显式锁
+    // 回执行内容——与场景 4 的「后台无消费链恰一条」互为镜像）
     const prefixText = JSON.stringify(cfg3.historyPrefix);
     expect(prefixText).toContain('首轮结论');
     expect(prefixText).toContain('二轮结论');
-    expect(prefixText).not.toContain('【dispatch 回执自动送达】');
+    expect(prefixText).toContain('【dispatch 回执自动送达】');
 
     // 末轮收尾：清除追问在途标记（下一轮 followup 可用）
     handleTaskReply({ task_id: CHAIN, status: 'completed', body: '三轮结论', tool_calls_used: 0 });
