@@ -1,15 +1,17 @@
 // electron/src/main/agent/interrupt-ipc.ts
 //
 // 三级中断 IPC（spec §7.2）：回合级 / 会话级 / 链级 + 在途查询。
-// 通道面与 renderer/src/ipc/types.d.ts 逐字对齐（boundary 规则 4）。
+// 通道面与 renderer/src/ipc/types.d.ts 逐字对齐（boundary 规则 4）——
+// listInFlight 返回值类型直接引用 InFlightChainView（编译期锁契约形状）。
 import { ipcMain } from 'electron';
 import { logger } from '../logger';
+import type { InFlightChainView } from '../../../../renderer/src/ipc/types';
 
 export function registerInterruptIpc(deps: {
   abortTurn: (sessionId: string) => { stoppedStream: boolean };
   stopAll: (sessionId: string) => { stoppedStreams: number; cancelledChains: number };
   cancelChain: (arg: { taskId?: string; subStreamSessionId?: string }) => { status: string };
-  listInFlight: (sessionId?: string) => Array<Record<string, unknown>>;
+  listInFlight: (sessionId?: string) => InFlightChainView[];
 }): void {
   ipcMain.handle('agent:abortTurn', (_e, arg: unknown) => {
     const a = arg as { sessionId?: unknown };
